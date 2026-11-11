@@ -17,7 +17,8 @@
 # refused before anything is written; and a move that fails while
 # publishing puts the previous outputs back. With mkfs.ext4
 # and debugfs on the host, the same on a real ext4 image whose registry
-# belongs to root, and a copy that a file size limit cuts short. EVF=path
+# belongs to root, work and output paths with a space and a double quote
+# in them, and a copy that a file size limit cuts short. EVF=path
 # runs another copy of the tool (a negative control), so every check runs
 # and the failures are counted rather than stopping at the first.
 set -euo pipefail
@@ -43,6 +44,7 @@ cat > "$t/bin/debugfs" <<'EOF'
 set -u
 echo "debugfs 1.47.2 (stand-in)" >&2
 read -r cmd src out <<<"$2"
+out=${out#\"}; out=${out%\"}; out=${out//\"\"/\"}   # debugfs's quoting
 if [[ -f $FAKE_VENDOR/.fail-dump && $src == "/$(cat "$FAKE_VENDOR/.fail-dump")" ]] ||
    [[ $cmd == rdump && -f $FAKE_VENDOR/.fail-rdump ]]; then
   if [[ $cmd == dump ]]; then
@@ -336,6 +338,14 @@ if realdfs=$(command -v debugfs) && mkfs.ext4 -q -F -d "$t/v2" "$t/real.img" 8M 
     pass "real ext4: a second run keeps nothing from the earlier generation"
   else
     cat "$t/log"; fail "real ext4: a second run keeps nothing from the earlier generation"
+  fi
+  sp=$t/'a "spaced" dir'
+  if "$EVF" -w "$sp/work" -o "$sp/out" "$t/real.img" > "$t/log" 2>&1 &&
+     grep -cF "Vendor partition: fictional/gen2" "$t/log" >/dev/null &&
+     [[ $(listed "$sp/out") == "$CHEETAH_FILES" && $(cat "$sp/out/$FW/aoc.bin") == "aoc gen2" ]]; then
+    pass "real ext4: work and output paths with a space and a quote"
+  else
+    cat "$t/log"; fail "real ext4: work and output paths with a space and a quote"
   fi
   before=$(snap "$o")
   if "$EVF" -w "$t/work" -o "$o" "$t/real-missing.img" > "$t/log" 2>&1; then

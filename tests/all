@@ -67,3 +67,9 @@ fi
 
 echo "# tests/phone-ssh"
 tests/phone-ssh
+echo "# tests/module-load-once"
+tests/module-load-once
+# One suite per line from here on, so two pull requests that each add one
+# don't meet in the same line
+echo "# tests/factory-index"   # the build index of Google's factory images, against a made-up zip
+tests/factory-index

@@ -241,8 +241,11 @@ pass "an image the owner's key makes too large for its partition is refused befo
 
 # Each step of the append that fails (a stand-in that exits 1 on that call)
 # stops the install with a message, rather than flashing the ramdisk without
-# the key: copying the key, cpio packing it, lz4 recompressing
+# the key: copying the key, cpio packing it, lz4 decompressing the shipped
+# ramdisk, cpio listing it, lz4 recompressing
 for step in "install 600 can't stage the owner's key" "cpio -o cpio couldn't pack the owner's key" \
+            "lz4 -dc lz4 couldn't decompress vendor_kernel_boot.img's ramdisk" \
+            "cpio -it cpio couldn't list vendor_kernel_boot.img's ramdisk" \
             "lz4 -l lz4 couldn't recompress vendor_kernel_boot.img's ramdisk"; do
   read -r tool arg why <<<"$step"
   mkdir -p "$t/bad-$tool"
@@ -250,7 +253,7 @@ for step in "install 600 can't stage the owner's key" "cpio -o cpio couldn't pac
   chmod +x "$t/bad-$tool/$tool"
   PATH=$t/bad-$tool:$PATH refused "a failing $tool $arg in the key's append" "$why"
 done
-pass "a failing step of the key's append (install, cpio or lz4) stops the install before anything is flashed"
+pass "a failing step of the key's append (install, cpio -o, lz4 -dc, cpio -it or lz4 -l) stops the install before anything is flashed"
 
 # The ramdisk image under an AVB footer can't take the key: refused
 printf 'AVB_FOOTERS="vendor_kernel_boot:0x4000000"\nAVB_ROLLBACK_INDEX=1\nAVB_SECURITY_PATCH=2026-07-05\n' >> "$BUNDLE/device.conf"

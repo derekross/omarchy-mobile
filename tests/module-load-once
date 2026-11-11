@@ -1,0 +1,92 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Exercise the real loader with the module syscall intercepted. No modules load.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+cat >"$scratch/syscall.c" <<'C'
+#include <assert.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
+long __wrap_syscall(long number, ...)
+{
+    va_list ap;
+    int fd, flags;
+    const char *parameters;
+    char byte;
+    FILE *log;
+
+    assert(number == SYS_finit_module);
+    va_start(ap, number);
+    fd = va_arg(ap, int);
+    parameters = va_arg(ap, const char *);
+    flags = va_arg(ap, int);
+    va_end(ap);
+    assert(fcntl(fd, F_GETFD) & FD_CLOEXEC);
+    assert(read(fd, &byte, 1) == 1 && byte == 'x');
+    assert(flags == 0);
+    log = fopen(getenv("CALL_LOG"), "a");
+    assert(log);
+    fprintf(log, "%s\n", parameters);
+    assert(fclose(log) == 0);
+    errno = atoi(getenv("LOAD_ERRNO"));
+    return errno ? -1 : 0;
+}
+
+int __real_close(int fd);
+int __wrap_close(int fd)
+{
+    int result = __real_close(fd);
+    errno = EBADF; /* Closing must not hide the loading error. */
+    return result;
+}
+C
+${CC:-cc} -Wall -Wextra -Werror tools/module-load-once.c "$scratch/syscall.c" \
+  -Wl,--wrap=syscall,--wrap=close -o "$scratch/module-load-once"
+python3 - "$scratch" <<'PY'
+import errno
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+work = Path(sys.argv[1])
+module = work / 'test.ko'
+module.write_bytes(b'x: deliberately not a kernel module')
+log = work / 'calls'
+
+def run(args, error=0):
+    log.unlink(missing_ok=True)
+    env = dict(os.environ, CALL_LOG=str(log), LOAD_ERRNO=str(error), LC_ALL='C')
+    result = subprocess.run([str(work / 'module-load-once'), *map(str, args)],
+                            env=env, capture_output=True, text=True, timeout=2)
+    calls = log.read_text().splitlines() if log.exists() else []
+    return result, calls
+
+for parameters in [[], ['count=1 label="two words"']]:
+    for error in [0, errno.EIO, errno.ENOSYS, errno.EOPNOTSUPP]:
+        result, calls = run([module, *parameters], error)
+        assert result.returncode == bool(error), result
+        assert calls == [parameters[0] if parameters else ''], calls
+        if error:
+            assert os.strerror(error) in result.stderr, result.stderr
+
+empty = work / 'empty.ko'
+empty.touch()
+fifo = work / 'fifo.ko'
+os.mkfifo(fifo)
+for path in [work / 'missing.ko', empty, work, fifo]:
+    result, calls = run([path])
+    assert result.returncode == 1 and calls == [], (path, result, calls)
+for args in [[], [module, 'one', 'two']]:
+    result, calls = run(args)
+    assert result.returncode == 2 and calls == [], (result, calls)
+print('ok - module loader calls once, preserves parameters/errors and rejects invalid input without loading')
+PY

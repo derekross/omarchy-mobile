@@ -21,6 +21,7 @@ packaged yet. What is here is what runs on in-tree drivers.
 | `bin/omamobile-setup-system` | `/usr/bin` | System setup for Omarchy's lifecycle (omamobile-firstboot runs it): UTF-8 locale, timezone, NTP, and enables the sensor proxy and the NFC link opener (`omamobile-nfc-open`). Not the fingerprint service, speaker protection or the GNSS socket yet (see the script) |
 | `vendor/systemd/system-sleep/omamobile-tegu-wifi` | `/usr/lib/systemd/system-sleep` | Keeps Wi-Fi loaded across s2idle when `/etc/omamobile/wifi-keep-across-sleep` exists (the chip reloads its firmware on resume and iwd reconnects; the hook checks that from a transient unit, `omamobile-tegu-wifi-check`, so the lock screen doesn't wait for it), otherwise unloads and reloads brcmfmac around the sleep; after a sleep that lost Wi-Fi it unloads for the rest of the boot. It reloads the in-tree `brcmfmac`; a phone still running an out-of-tree build of it keeps its own hook until the Wi-Fi series lands |
 | `vendor/systemd/system-sleep/omamobile-tegu-nfc` | `/usr/lib/systemd/system-sleep` | Stops neard's poll loop before a sleep (polling through s2idle reset the palmtop; with it stopped, 35 of 35 cycles woke), reads `Polling` back and logs it, and starts the loop again after the wake if it was on. Powering the ST54L off as well, the workaround for a controller that did not answer on I2C after a wake (issue #132; fixed by linux-omarchy-mobile #131), runs only while `/etc/omamobile/nfc-power-off-across-sleep` exists: off by default, since its record is one wake that needed the power key and one that worked. Log: `/var/log/omamobile/nfc-sleep.log` |
+| `vendor/systemd/system-sleep/omamobile-tegu-cpuidle` | `/usr/lib/systemd/system-sleep` | Keeps the cores out of the core power-down state (C2) through a sleep: with every core in C2 during s2idle the palmtop sometimes never woke (6 to 135 sleeps), and with C2 off for the sleep 300 of 300 came back. Disables every idle state deeper than state0 before the sleep and enables the ones it disabled after the wake, so the cores still power down while awake; does nothing on a kernel without deeper states, or while `/etc/omamobile/cpuidle-keep-across-sleep` exists (for testing C2 in the sleep). A sleep written straight to `/sys/power/state` skips it. [SLEEP-PLAN](../../device/tegu/SLEEP-PLAN.md) S1 |
 | `vendor/systemd/system/linux-modules-cleanup.service.d/10-omamobile-tegu.conf` | `/usr/lib/systemd/system` | Holds off Arch's old-module cleanup: our kernels come as module tarballs, not pacman packages, and the next-boot and rollback trees must stay |
 | `vendor/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf`, `sleep.conf.d/10-omamobile.conf` | `/usr/lib/systemd` | A hung shutdown resets the phone after a minute; suspend means s2idle (no SoC sleep sequence yet, and `deep` does not wake) |
 | `vendor/udev/rules.d/10-omamobile-storage.rules` | `/usr/lib/udev/rules.d` | Continues the initramfs storage guard: Android partitions stay hidden and the whole-disk node unusable |
@@ -149,6 +150,86 @@ that loaded them, from its own staged copies, not the package: the package
 blacklists both and starts neither.
 
 Licence: MIT.
+
+## The modem at boot (opt-in)
+
+`omamobile-tegu-modem-up` starts the CP once per boot: the kernel's own
+drivers when it carries them (`cpif`, `pcie_gs201_cp` and the device tree's
+`cpif` node), else the bring-up modules in `/var/lib/omamobile-tegu/modem`.
+In order, it:
+
+1. takes a sleep inhibitor (suspend with the CP up isn't qualified on the
+   9a, so nothing sleeps until the reboot);
+2. writes and syncs a latch, `/var/lib/omamobile/modem-bringup-started`;
+3. loads the drivers (refusing a `pcie_gs201_cp` already loaded without
+   `allow_hw`);
+4. runs the modem profile's read-only NV check, which needs CPIF loaded;
+5. starts the profile and waits for CP ONLINE;
+6. with `--phone`, starts `omamobile-sitd` and, when installed,
+   `omamobile-mmd` for Phone and Messages.
+
+The latch stays from step 2 until the profile's unit stops at shutdown
+with the evidence of a clean stop. The latch names the profile unit's
+invocation once the CP is ONLINE. At the stop, the profile's ExecStop
+(`omamobile-vendor-chroot modem stop`, from `omamobile-modem` 0.1.18 on)
+powers the CP off and, once it has seen it OFFLINE, writes its invocation ID
+to `/run/omamobile-modem/stop-<invocation>`, the stop witness; the unit's
+ExecStopPost (`omamobile-tegu-modem-up --stopped`) removes the latch only
+when it finds that witness for the invocation the latch names and systemd's
+result is success. A stop that failed or timed out, a hang, a reset or a held
+power key leaves the latch (the witness lives in `/run`, so a reset leaves
+none). The starter refuses to load anything when the installed
+`omamobile-modem` lacks the witness
+(`/usr/lib/omamobile-vendor/modem/stop-witness-version`, 1), since no stop
+could then remove the latch.
+
+A start that never reached ONLINE leaves the latch, and every later start
+refuses until you've read `/var/log/omamobile/modem.log` and that boot's
+journal and removed it. A boot that ended with the modem up and no
+confirmed stop had a working bring-up, so the next boot moves its latch
+aside (`modem-bringup-started.unclean-<time>`) and starts the modem; only a
+second unclean end in a row, with that copy still there, holds until you've
+looked (`rm /var/lib/omamobile/modem-bringup-started*`, then
+`systemctl start omamobile-tegu-modem-boot`). A confirmed clean stop removes
+the copies. It also refuses a second start in a boot that already loaded
+CPIF. Never stop the modem by hand; the reboot's shutdown stops it.
+
+With #403, a `reboot-to` (and so `bin/omamobile push`) with the CP ONLINE
+notes the boot it ends, and the next boot clears that boot's latch and
+starts the modem on its own: a deliberate restart, asked for and recorded
+before the reboot, isn't the reset loop the latch guards against, and the
+reboot takes the CP down with the SoC. On the 9a that path passed once, on
+2026-11-03 (TELEPHONY-PLAN 2.7).
+
+The in-tree driver branch (the kernel's `cpif` and `pcie_gs201_cp`) hasn't
+run through this script yet; the in-tree drivers have run from the
+bring-up runners.
+
+### Starting it at boot
+
+`omamobile-tegu-modem-boot.service` runs `omamobile-tegu-modem-up --phone
+--gnss` at boot. The package installs it disabled. Before enabling it:
+
+- **Slot B marked successful.** Otherwise every reset spends one of ABL's
+  three tries, and at zero it boots stock on slot A, which has overwritten
+  `userdata`.
+- **A kernel with linux-omarchy-mobile#172** (the PERIC0 GPIO bus clock
+  kept on). Without it the modem's GPIO writes hang the palmtop within
+  minutes.
+- **The charger in** for the first boots.
+
+Then `systemctl enable omamobile-tegu-modem-boot`. With it on the battery
+drains as if awake, since the palmtop no longer suspends.
+
+**Rollback:** `systemctl disable omamobile-tegu-modem-boot`, then reboot.
+If the palmtop resets before you can log in, the latch does the work: the
+boot after a reset with the modem up starts it once more, and the boot
+after a second reset in a row finds the latch and its copy and doesn't
+start the modem, so log in then, disable the unit and remove both. On a 9a
+whose slot B isn't marked successful, disable the unit after the first reset
+instead of letting the retry run: every reset spends one of ABL's three
+tries, and the retry would spend a second. If it still doesn't come up, hold
+Volume Down + Power for fastboot and boot a known-good image set.
 
 ## Optional Phone and Messages attachment
 

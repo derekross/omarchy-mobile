@@ -23,18 +23,20 @@ reported the screen off, but the CRTC never turned off. See
   last frame until every mapped layer surface has drawn at its new size
   (its buffer too, and a second buffer or 50 ms more), or 500 ms; layers
   and the active workspaces get their frame callbacks once per refresh
-  meanwhile. Then the new frame turns in over 283 ms on Android's
-  (0.2, 0, 0, 1) curve, and the old one, kept where it was on the glass,
-  turns with it and fades out over 116 ms. On a Pixel 7 the holds took
+  meanwhile. Then the new frame turns in on Android's (0.2, 0, 0, 1) curve,
+  over 283 ms for a quarter turn and 383 ms for a half turn, and the old one,
+  kept where it was on the glass, turns with it and fades out over 116 ms on
+  Android's alpha-out curve (0.57, 0, 0.71, 0.43). On a Pixel 7 the holds took
   106 to 228 ms; without the patch the old buffers showed stretched for
   200 ms to a second. It is off unless `OMAMOBILE_ROTATION_HOLD=1` is in
   Hyprland's environment (read once at startup): `omamobile-device-panther`
   sets it in `environment.d`, and the other phones rotate as before until
   it has run on them.
-- `pkgrel=3.2`: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
+- `pkgrel=3.3`: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
   (`extra/hyprland` 0.57.0-3, a rebuild for aquamarine 0.16.0 and
   hyprgraphics 0.6.0) release, plus `.1`, so it sorts above both; `.2` for
-  the rotation hold, since 3.1 is published.
+  the rotation hold, since 3.1 is published; `.3` for the half turn's
+  383 ms and the alpha-out curve, since 3.2 is published.
 - `arch=(aarch64)` only.
 - `build()` runs the two cmake steps of `make release` itself:
   - with Arch's `-DCMAKE_SKIP_RPATH=ON` (Arch's PKGBUILD seds it into the

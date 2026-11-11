@@ -7,9 +7,23 @@
 # install the modem's board id and NV checksums). Runs as root on the phone
 # over tools/phone-ssh. Every step is idempotent and prints what it wrote.
 #
-#   tools/phone-provision [options] FACTORY.zip
-#   tools/phone-provision [options] --skip-extract     (backup only)
-#   tools/phone-provision [options] --nv-backup DIR FACTORY.zip   (a first install)
+#   tools/phone-provision [options] --first-install --nv-backup DIR FACTORY.zip
+#   tools/phone-provision [options] --restore DIR FACTORY.zip
+#   tools/phone-provision [options] --restore DIR --skip-extract   (backup only)
+#
+# Cheetah's run is one of two, and you say which; nothing is guessed from
+# what happens to be on this computer, and no backup directory is assumed:
+#   --first-install   no earlier Omarchy Mobile system's data to put back: the
+#                     modem's board id from the phone itself, its NV checksums
+#                     from --nv-backup DIR (required). What docs/INSTALL.md
+#                     runs, and a later reinstall too unless you kept a
+#                     phone-config.tar
+#   --restore DIR     DIR holds a phone-config.tar (the backup taken before a
+#                     reinstall, device/cheetah/REINSTALL-RUNBOOK.md): the
+#                     board id, NV checksums and the options under "From the
+#                     backup" come from it. --backup DIR is the older spelling
+# With neither, the run stops before anything is staged or the phone is
+# contacted.
 #
 # From the factory image (tools/extract-*; nothing Google's leaves the laptop
 # except into this phone):
@@ -22,8 +36,8 @@
 #                python with unicorn and pyelftools, ~/.cache/omamobile-venv;
 #                without it, the backup's copies are used, and a first
 #                install has none)
-# From the backup (default ~/android/reference/phone-backup-20261013, made
-# before the rename: its paths use the old names and are mapped to the new):
+# From the backup (--restore DIR; the one in use was made before the rename:
+# its paths use the old names and are mapped to the new):
 #   always       the modem's board id (var/lib/omamobile-vendor/modem/props.conf)
 #                and NV checksums (etc/omamobile/modem-nv.sha256)
 #   --restore-config  /etc/omamobile speaker, gnss, modem-sit, speaker-tuning settings
@@ -44,10 +58,10 @@
 #                     backup and now: Trusty's RPMB anchors TD, so an older TD
 #                     mounts but its files can't be read (FINGERPRINT-PLAN F19,
 #                     the 2026-11-02 reinstall). Never restore an old one
-# A first install (cheetah with no phone-config.tar in the backup directory;
-# nothing here makes one, only the backup taken before the rename has it, so
-# a later reinstall counts too) has no backup to restore from, so
-# --nv-backup DIR is required, as on raven:
+# A first install (--first-install; nothing here makes a phone-config.tar,
+# only the backup taken before the rename has one, so a later reinstall is
+# one too) has no backup to restore from, so --nv-backup DIR is required, as
+# on raven:
 # the owner's read-only backup of the modem's partitions, taken and stored
 # off the repository by the owner with tools/nv-backup (docs/INSTALL.md
 # step 6; device/cheetah/REINSTALL-RUNBOOK.md section 4a). Its SHA256SUMS
@@ -61,11 +75,11 @@
 # the phone; if it is missing, empty or not 0x and hex digits, the run stops
 # before it writes anything. The camera data then comes from the
 # factory extraction only. --restore-config, --restore-wifi, --import-home,
-# --fingerprint, --force and --backup restore from a phone-config.tar and
-# are refused there, and --nv-backup is refused when there is a
-# phone-config.tar.
+# --fingerprint and --force restore from a phone-config.tar and are refused
+# there, --first-install and --restore together are refused, and so is
+# --nv-backup with --restore.
 # Options:
-#   --backup DIR   the backup directory      --user NAME   the phone's user
+#   --user NAME    the phone's user
 #   --work DIR     local staging (default ~/.cache/omamobile-provision; it holds
 #                  Google's files and per-phone data, removed afterwards unless --keep)
 #   --force        replace fingerprint state that differs from the backup
@@ -79,11 +93,12 @@
 #                  (props.conf, from --getprop) and NV checksums (from
 #                  --nv-backup); then the services cheetah's setup step
 #                  enables, but speaker protection. No fingerprint or camera
-#                  yet
+#                  yet. Its run is always a first install's: --first-install
+#                  is accepted and --restore refused
 #   --getprop FILE raven: stock Android's getprop capture (default
 #                  ~/android/reference/raven-stock/getprop.txt)
-#   --nv-backup DIR  the read-only NV backup with SHA256SUMS. Cheetah: a
-#                  first install only (no default). Raven: default the
+#   --nv-backup DIR  the read-only NV backup with SHA256SUMS. Cheetah: with
+#                  --first-install only (no default). Raven: default the
 #                  newest ~/android/reference/raven-backup-*
 # Test seams: PHONE_SSH, the command that runs a shell command on the phone
 # (default tools/phone-ssh), and PHONE_BOOTCONFIG, the file on the phone
@@ -96,11 +111,11 @@ say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 
-backup=$HOME/android/reference/phone-backup-20261013
+backup=""
 work=${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-provision
 getprop=$HOME/android/reference/raven-stock/getprop.txt
 nv_backup=""
-dry=0 skip_extract=0 fingerprint=0 restore_td=0 import_home=0 restore_config=0 restore_wifi=0 waves=0 keep=0 force=0 backup_given=0
+dry=0 skip_extract=0 fingerprint=0 restore_td=0 import_home=0 restore_config=0 restore_wifi=0 waves=0 keep=0 force=0 backup_given=0 first_given=0
 user="" factory="" device=cheetah
 PHONE_SSH=${PHONE_SSH:-$ROOT/tools/phone-ssh}
 bootconfig=${PHONE_BOOTCONFIG:-/proc/bootconfig}
@@ -116,7 +131,10 @@ while (($#)); do
     --with-waves) waves=1 ;;
     --keep) keep=1 ;;
     --force) force=1 ;;
-    --backup) backup=${2:?} backup_given=1; shift ;;
+    --first-install) first_given=1 ;;
+    --restore|--backup)
+      ((backup_given == 0)) || die "one backup directory only (--restore DIR; --backup is its older spelling)"
+      backup=${2:?} backup_given=1; shift ;;
     --work) work=${2:?}; shift ;;
     --user) user=${2:?}; shift ;;
     -d) device=${2:?}; shift ;;
@@ -145,7 +163,7 @@ if [[ $device == raven ]]; then
   ((restore_wifi)) && unsupported+=(--restore-wifi)
   ((waves)) && unsupported+=(--with-waves)
   ((force)) && unsupported+=(--force)
-  ((backup_given)) && unsupported+=(--backup)
+  ((backup_given)) && unsupported+=(--restore)
   ((${#unsupported[@]} == 0)) || die "-d raven doesn't support ${unsupported[*]} (cheetah only)"
 fi
 
@@ -186,15 +204,29 @@ SH
 }
 
 # --- Inputs ------------------------------------------------------------------
-# A first install (cheetah, no phone-config.tar): the NV checksums come from
-# the owner's read-only backup (--nv-backup, as on raven), the board id from
-# the phone itself. The backup is checked here, before the phone is
-# contacted; the board id as soon as the phone answers, before any push.
+# Which run this is comes from the command line alone (--first-install or
+# --restore DIR), never from what is on this computer: a default backup
+# directory made a first install on the maintainer's machine a restore, and
+# every install elsewhere a first install (INSTALL-EXPERIENCE-PLAN G1).
+# A first install: the NV checksums come from the owner's read-only backup
+# (--nv-backup, as on raven), the board id from the phone itself. The backup
+# is checked here, before the phone is contacted; the board id as soon as
+# the phone answers, before any push.
 first_install=0
 nv_images=(modem_a modem_b efs efs_backup modem_userdata persist)
-if [[ $device == cheetah && ! -f $backup/phone-config.tar ]]; then
+if [[ $device == cheetah ]]; then
+  # --nv-backup DIR alone is a first install too: only a first install takes
+  # an NV backup, so it names the run by itself, and it is the command the
+  # 2026.11.08 bundle's instructions print
+  ((first_given || backup_given)) || [[ -z $nv_backup ]] || first_given=1
+  ((first_given == 0 || backup_given == 0)) ||
+    die "--first-install and --restore DIR are two different runs: give one (--first-install takes nothing from a phone-config.tar)"
+  ((first_given || backup_given)) ||
+    die "say which run this is. A first install (docs/INSTALL.md; also a reinstall with no phone-config.tar): --first-install --nv-backup DIR, where DIR is the read-only backup of the modem's partitions from tools/nv-backup DIR. A reinstall that puts an earlier system's data back: --restore DIR, where DIR holds its phone-config.tar (device/cheetah/REINSTALL-RUNBOOK.md). Nothing was staged and the phone wasn't contacted"
+fi
+if [[ $device == cheetah ]] && ((first_given)); then
   [[ -n $nv_backup ]] ||
-    die "no $backup/phone-config.tar. Without one (a first install, or a reinstall with no such backup), take the read-only backup of the modem's partitions with tools/nv-backup DIR (docs/INSTALL.md step 6) and give it with --nv-backup DIR"
+    die "--first-install needs --nv-backup DIR: take the read-only backup of the modem's partitions with tools/nv-backup DIR (docs/INSTALL.md step 6) and give it with --nv-backup DIR"
   first_install=1
   unsupported=()
   ((fingerprint)) && unsupported+=(--fingerprint)
@@ -203,9 +235,8 @@ if [[ $device == cheetah && ! -f $backup/phone-config.tar ]]; then
   ((restore_config)) && unsupported+=(--restore-config)
   ((restore_wifi)) && unsupported+=(--restore-wifi)
   ((force)) && unsupported+=(--force)
-  ((backup_given)) && unsupported+=(--backup)
   ((${#unsupported[@]} == 0)) ||
-    die "a first install (--nv-backup, no phone-config.tar) doesn't support ${unsupported[*]} (a restore from a phone-config.tar)"
+    die "--first-install doesn't support ${unsupported[*]} (a restore from a phone-config.tar: --restore DIR)"
   [[ $bootconfig =~ ^/[A-Za-z0-9_./-]+$ ]] || die "PHONE_BOOTCONFIG must be an absolute path of letters, digits and _ . / -"
   say "Checking the NV backup in $nv_backup"
   nv_sums=$nv_backup/SHA256SUMS
@@ -223,7 +254,9 @@ fi
 
 if [[ $device == cheetah ]] && ((first_install == 0)); then
 [[ -z $nv_backup ]] ||
-  die "--nv-backup is for a first install, with no phone-config.tar: $backup/phone-config.tar already holds this phone's board id and NV checksums (leave out --nv-backup)"
+  die "--nv-backup goes with --first-install: with --restore, $backup/phone-config.tar holds this phone's board id and NV checksums (leave out --nv-backup, or run --first-install --nv-backup DIR instead)"
+[[ -f $backup/phone-config.tar ]] ||
+  die "no $backup/phone-config.tar (--restore DIR: the backup taken before a reinstall). Without one this is a first install: --first-install --nv-backup DIR"
 say "Checking the backup in $backup"
 config_tar=$backup/phone-config.tar fp_tar=$backup/var-lib-omandroid-fp.tar
 for f in "$config_tar" $( ((fingerprint)) && echo "$fp_tar"); do
@@ -369,9 +402,12 @@ if [[ $device == raven ]]; then
   say "Enabling the services cheetah's setup step enables, but speaker protection"
   units="omamobile-sensor-proxy.service omamobile-gnss-nmea.socket omamobile-gnss-lto.timer"
   if ((dry)); then
-    note "would enable $units"
+    note "would enable $units, and omamobile-geoclue-agent.service for every user"
   else
     phone "for u in $units; do systemctl cat \$u >/dev/null 2>&1 && systemctl enable \$u >/dev/null 2>&1 && echo enabled \$u; done; true" |
+      while read -r l; do note "$l"; done
+    # with the socket goes GeoClue's agent, or Location reads "on" and no app gets a position
+    phone "systemctl is-enabled -q omamobile-gnss-nmea.socket 2>/dev/null && systemctl --global enable omamobile-geoclue-agent.service >/dev/null 2>&1 && echo enabled omamobile-geoclue-agent.service '(every user)'; true" |
       while read -r l; do note "$l"; done
   fi
   say "Done (raven)"
@@ -426,7 +462,7 @@ fi
 
 # --- A first install: the modem's per-phone files ------------------------------
 if ((first_install)); then
-  say "Writing this phone's modem files (a first install: no phone-config.tar)"
+  say "Writing this phone's modem files (--first-install: no phone-config.tar)"
   ((skip_extract)) && note "camera data: none from this run (--skip-extract, and no phone-config.tar to take it from); camera files already on the phone stay"
   mkdir -p "$W/modem-stage/etc/omamobile"
   nv_re=$(IFS='|'; echo "${nv_images[*]}")

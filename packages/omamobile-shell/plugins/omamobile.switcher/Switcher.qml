@@ -253,7 +253,9 @@ Item {
       anchors.fill: parent
       focus: root.opened
       Keys.onEscapePressed: {
-        if (root.actionsOpen) root.closeActions()
+        // One level: "Show with…" back to the window's menu, as its Back row.
+        if (root.actionsOpen && root.actionPage === "pick") root.actionPage = "menu"
+        else if (root.actionsOpen) root.closeActions()
         else root.dismiss()
       }
     }
