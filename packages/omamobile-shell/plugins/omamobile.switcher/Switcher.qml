@@ -10,7 +10,7 @@ import qs.Ui
 import "Readable.js" as Readable
 import "SwitcherModel.js" as SwitcherModel
 
-// Recent apps, after Android: every open window as a card with a
+// Recent apps, after Android: every open window as a card with a live
 // preview. Swipe sideways through them, tap one to switch to it, flick it up
 // to close it. Home shows the home screen (an empty workspace) and leaves the
 // apps open. Summoned by swiping up on the dock (omamobile.launcher).
@@ -20,12 +20,10 @@ import "SwitcherModel.js" as SwitcherModel
 // app's screen, where the two tile as Omarchy tiles them, and "Move to its
 // own screen" gives it one back.
 //
-// The card in the middle copies its window live, the others one frame each.
-// Each card also keeps its window's last picture (a still, at the card's
-// size) and shows it until its capture has a frame: an app sits on a screen
-// of its own, and one that draws nothing there gives Hyprland nothing to
-// copy, so its card stayed empty, and so did every card rebuilt after
-// another window closed.
+// A capture Hyprland fails ends for good, and the card stayed empty: each
+// card starts it again, and keeps its window's last picture (a still, at the
+// card's size) to show until its capture has a frame, also when the card is
+// rebuilt after another window closed.
 //
 // On its side (TOUCH-PLAN 2.4: 1040x480) a card keeps the screen's shape,
 // so its preview isn't stretched, and the bottom actions keep their row.
@@ -431,7 +429,7 @@ Item {
             anchors.fill: parent
             anchors.margins: card.border.width
             captureSource: root.opened && !slot.resting ? slot.modelData : null
-            live: slot.ListView.isCurrentItem
+            live: true
             onHasContentChanged: if (hasContent) Qt.callLater(slot.keepStill)
             onStopped: {
               if (!root.opened || slot.resting || slot.retries >= 3) return

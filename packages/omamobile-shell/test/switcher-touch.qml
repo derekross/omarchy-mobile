@@ -341,9 +341,8 @@ Item {
       return null
     }
 
-    // Only the card in the middle copies live; a card whose window gives no
-    // frame shows the still from its last frame, and a window that closes
-    // takes its still with it.
+    // A card whose capture has no frame shows the still from its window's
+    // last one, and a window that closes takes its still with it.
     function test_cards_keep_a_still_until_the_capture_has_a_frame() {
       var a = fakeWindow.createObject(top, { appId: "a" }), b = fakeWindow.createObject(top, { appId: "b" })
       openWith([a, b])                        // newest first: b, a
@@ -351,8 +350,6 @@ Item {
       tryVerify(function() { return cards.count === 2 && captures().length === 2 })
       var caps = captures()
       compare(caps[0].captureSource, b)
-      verify(caps[0].live, "the centred card is live")
-      verify(!caps[1].live, "its neighbour copies one frame")
       verify(!stillOf(caps[0]).visible, "no still yet")
 
       caps[0].hasContent = true
