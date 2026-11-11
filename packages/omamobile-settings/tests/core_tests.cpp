@@ -29,6 +29,13 @@ private slots:
         backend.back();
         QCOMPARE(backend.page(), QString("root"));
     }
+    void displayPageGoesBackToRoot() {
+        Backend backend;
+        QVERIFY(backend.navigate("display"));
+        QCOMPARE(backend.page(), QString("display"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("root"));
+    }
     void searchHasOnlyImplementedRoutesAndBackClearsIt() {
         Backend backend;
         backend.search("STORAGE");

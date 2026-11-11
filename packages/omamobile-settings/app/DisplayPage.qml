@@ -17,7 +17,8 @@ ColumnLayout {
         if (r.error) { status = r.error; return }
         if (r.brightness === undefined || r.refresh === undefined) { status = qsTr("The display backend gave no values."); return }
         brightness = r.brightness; refresh = r.refresh; rates = r.rates || []
-        status = qsTr("Tap a value; it applies at once.")
+        status = rates.length > 1 ? qsTr("Tap a value; it applies at once. The refresh rate lasts until the phone is turned or the session restarts.")
+                                  : qsTr("Tap a value; it applies at once.")
     }
     Connections { target: actions; function onFinished(tool, r, id) { if (tool === "display" && id === page.reqId) page.apply(r) } }
     Component.onCompleted: reqId = actions.run("display", ["get"])

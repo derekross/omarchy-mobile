@@ -7,8 +7,9 @@
 #   display.sh get                 {"brightness":50,"refresh":120,"rates":[60,120]}
 #   display.sh set brightness N    N is 10, 25, 50, 75 or 100 (never below 10, so the screen cannot go black)
 #   display.sh set refresh N       N must be one of the rates the monitor lists at its current size
-# The rates are the monitor's own availableModes at its current width and height. The change is live only: a
-# restart of the session or a reload of Hyprland's config sets the configured mode again. The monitor is the
+# The rates are the monitor's own availableModes at its current width and height. The change is live only: turning the phone
+# (omamobile-sensors' auto-rotate applies the monitor's preferred mode again each time), a restart of the
+# session or a reload of Hyprland's config sets the configured mode again. The monitor is the
 # built-in panel (DSI-* or eDP-*), else the only one, else the focused one. Without a monitor the brightness
 # still works and "refresh" reads -1 with no rates.
 # The test runs a copy of this script with `fake` set to a file holding the brightness (a number) and the monitor
