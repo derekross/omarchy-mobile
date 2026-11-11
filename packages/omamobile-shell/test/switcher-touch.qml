@@ -324,6 +324,74 @@ Item {
       tryVerify(function() { return test.offCentre(cards) < 1 }, 2000, "centred")
     }
 
+    // Every card's capture, newest window first.
+    function captures() {
+      var out = []
+      function walk(item) {
+        if (item.objectName === "cardCapture") out.push(item)
+        for (var i = 0; i < item.children.length; i++) walk(item.children[i])
+      }
+      walk(cardsList().contentItem)
+      return out.sort(function(p, q) { return sw.windows.indexOf(p.captureSource) - sw.windows.indexOf(q.captureSource) })
+    }
+
+    function stillOf(capture) {
+      var kids = capture.parent.children
+      for (var i = 0; i < kids.length; i++) if (kids[i].objectName === "cardStill") return kids[i]
+      return null
+    }
+
+    // Only the card in the middle copies live; a card whose window gives no
+    // frame shows the still from its last frame, and a window that closes
+    // takes its still with it.
+    function test_cards_keep_a_still_until_the_capture_has_a_frame() {
+      var a = fakeWindow.createObject(top, { appId: "a" }), b = fakeWindow.createObject(top, { appId: "b" })
+      openWith([a, b])                        // newest first: b, a
+      var cards = cardsList()
+      tryVerify(function() { return cards.count === 2 && captures().length === 2 })
+      var caps = captures()
+      compare(caps[0].captureSource, b)
+      verify(caps[0].live, "the centred card is live")
+      verify(!caps[1].live, "its neighbour copies one frame")
+      verify(!stillOf(caps[0]).visible, "no still yet")
+
+      caps[0].hasContent = true
+      tryVerify(function() { return sw.stillUrl(b) !== "" }, 3000, "b's frame kept as its still")
+      compare(sw.stillUrl(a), "", "a gave no frame")
+
+      // Next time b's window gives nothing (it drew nothing off screen): its still.
+      sw.close()
+      tryVerify(function() { return !overlay.visible })
+      openWith([a, b])
+      tryVerify(function() { return captures().length === 2 })
+      var again = captures()[0]
+      compare(again.captureSource, b)
+      verify(!again.hasContent)
+      tryVerify(function() { return stillOf(again).visible }, 3000, "b's still while its capture has no frame")
+      again.hasContent = true
+      tryVerify(function() { return !stillOf(again).visible }, 2000, "the live frame once there is one")
+
+      top.drop(b)
+      tryVerify(function() { return sw.stills.length === 0 }, 2000, "a closed window loses its still")
+    }
+
+    // A failed capture starts again a second later, three times at most.
+    function test_a_failed_capture_starts_again() {
+      var a = fakeWindow.createObject(top, { appId: "a" })
+      openWith([a])
+      tryVerify(function() { return captures().length === 1 })
+      var cap = captures()[0]
+      var first = cap.starts
+      cap.stopped()
+      tryVerify(function() { return cap.captureSource === null }, 1000, "resting after the failure")
+      tryVerify(function() { return cap.captureSource === a && cap.starts === first + 1 }, 3000, "started again")
+      cap.stopped(); tryVerify(function() { return cap.starts === first + 2 }, 3000)
+      cap.stopped(); tryVerify(function() { return cap.starts === first + 3 }, 3000)
+      cap.stopped(); wait(1500)
+      compare(cap.starts, first + 3, "no fourth try")
+      compare(cap.captureSource, a, "and the capture stays on its window")
+    }
+
     // A window that gets its size after it is shown still opens centred.
     function test_centred_after_a_resize() {
       var a = fakeWindow.createObject(top), b = fakeWindow.createObject(top, { appId: "chromium" })

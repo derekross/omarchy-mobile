@@ -10,7 +10,7 @@ import qs.Ui
 import "Readable.js" as Readable
 import "SwitcherModel.js" as SwitcherModel
 
-// Recent apps, after Android: every open window as a card with a live
+// Recent apps, after Android: every open window as a card with a
 // preview. Swipe sideways through them, tap one to switch to it, flick it up
 // to close it. Home shows the home screen (an empty workspace) and leaves the
 // apps open. Summoned by swiping up on the dock (omamobile.launcher).
@@ -19,6 +19,13 @@ import "SwitcherModel.js" as SwitcherModel
 // card for the two ways to change that: "Show with…" puts the app on another
 // app's screen, where the two tile as Omarchy tiles them, and "Move to its
 // own screen" gives it one back.
+//
+// The card in the middle copies its window live, the others one frame each.
+// Each card also keeps its window's last picture (a still, at the card's
+// size) and shows it until its capture has a frame: an app sits on a screen
+// of its own, and one that draws nothing there gives Hyprland nothing to
+// copy, so its card stayed empty, and so did every card rebuilt after
+// another window closed.
 //
 // On its side (TOUCH-PLAN 2.4: 1040x480) a card keeps the screen's shape,
 // so its preview isn't stretched, and the bottom actions keep their row.
@@ -47,6 +54,18 @@ Item {
     var list = ToplevelManager.toplevels.values.slice()
     list.reverse()
     return list
+  }
+
+  // Each open window's last picture (SwitcherModel's stills); a window that
+  // closed takes its still with it.
+  property var stills: []
+  onWindowsChanged: stills = SwitcherModel.prunedStills(stills, windows)
+  function keepStill(toplevel, result) {
+    if (windows.indexOf(toplevel) >= 0) stills = SwitcherModel.withStill(stills, toplevel, result)
+  }
+  function stillUrl(toplevel) {
+    var still = SwitcherModel.stillOf(stills, toplevel)
+    return still && still.url ? still.url : ""
   }
 
   // Host lifecycle (`shell summon` / `shell hide`).
@@ -339,6 +358,30 @@ Item {
         width: cards.cardWidth
         height: cards.height
 
+        // A capture Hyprland fails ends for good ("Ending recording due to
+        // screencopy failure"): start it again a second later, three times
+        // at most while recent apps are open.
+        property bool resting: false
+        property int retries: 0
+        Timer {
+          id: retry
+          interval: 1000
+          onTriggered: slot.resting = false
+        }
+        Connections {
+          target: root
+          function onOpenedChanged() { slot.retries = 0; slot.resting = false }
+        }
+
+        // The capture's frame as this window's still, at the card's size.
+        function keepStill() {
+          if (!capture.hasContent || capture.width <= 0 || capture.height <= 0) return
+          var w = slot.modelData
+          capture.grabToImage(function(result) { root.keepStill(w, result) },
+                              Qt.size(Math.round(capture.width * Screen.devicePixelRatio),
+                                      Math.round(capture.height * Screen.devicePixelRatio)))
+        }
+
         // The app's name, one line, centred over the card.
         Text {
           id: title
@@ -372,11 +415,30 @@ Item {
           border.color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.25)
           opacity: 1 - Math.min(0.8, Math.abs(drag.lift) / height)
 
-          ScreencopyView {
+          // The window's still from an earlier frame, until the capture has one.
+          Image {
+            objectName: "cardStill"
             anchors.fill: parent
             anchors.margins: card.border.width
-            captureSource: root.opened ? slot.modelData : null
-            live: true
+            visible: !capture.hasContent && status === Image.Ready
+            source: root.stillUrl(slot.modelData)
+            cache: false
+          }
+
+          ScreencopyView {
+            id: capture
+            objectName: "cardCapture"
+            anchors.fill: parent
+            anchors.margins: card.border.width
+            captureSource: root.opened && !slot.resting ? slot.modelData : null
+            live: slot.ListView.isCurrentItem
+            onHasContentChanged: if (hasContent) Qt.callLater(slot.keepStill)
+            onStopped: {
+              if (!root.opened || slot.resting || slot.retries >= 3) return
+              slot.retries++
+              slot.resting = true
+              retry.restart()
+            }
           }
 
           // Tap to switch; hold for "Show with…" and "Move to its own screen".
