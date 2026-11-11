@@ -198,12 +198,14 @@ panel_dark() {
   [[ -z $source ]] && screen_off
 }
 
-# At most 2 s by the clock, so a compositor that never answers cannot hold the
-# key handler.
+# At most 1 s by the clock (the panel took 0.35 s on the Pixel 8 Pro), so a
+# compositor that never answers cannot hold the key handler. Milliseconds from
+# `now`, not bash's microsecond clock variable: that one is written with the
+# locale's decimal separator, and under a comma locale the arithmetic breaks.
 wait_screen_off() {
   local end
-  end=$(( ${EPOCHREALTIME/./} + 2000000 ))
-  while (( ${EPOCHREALTIME/./} < end )); do
+  end=$(( $(now) + 1000 ))
+  while (( $(now) < end )); do
     panel_dark "$1" && return 0
     sleep 0.05
   done

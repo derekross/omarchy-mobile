@@ -128,13 +128,15 @@ before "brightnessctl -q -d panel set 0" "omarchy-system-lock" || fail "flash: t
 before "panel-off" "brightnessctl -q -d panel set 2083" || fail "flash: the saved brightness goes back only after the panel is off"
 before "panel-off" "omamobile-sleepd now" || fail "flash: sleep is asked for after the panel is off"
 # The panel never goes off: the key handler still puts the brightness back and
-# asks for sleep, after at most about 2 s.
+# asks for sleep, after at most about 1 s.
 rm -f "$t/async-off"; panel_on
 reset; start=$(date +%s%N); keys power-down; keys power-up
 for _ in $(seq 60); do grep -q "brightnessctl -q -d panel set 2083" "$log" && break; sleep 0.1; done
+# The limit is read from `date`, never from EPOCHREALTIME (a comma locale writes it with a comma).
+grep -q EPOCHREALTIME "$here/bin/omamobile-keys" && fail "flash: the wait's clock doesn't depend on the locale"
 took=$(( ($(date +%s%N) - start) / 1000000 ))
 grep -q "brightnessctl -q -d panel set 2083" "$log" || fail "flash: with a panel that never goes off the brightness still goes back"
-(( took >= 1800 && took < 3500 )) || fail "flash: with a panel that never goes off the wait lasts about 2 s ($took ms)"
+(( took >= 900 && took < 2500 )) || fail "flash: with a panel that never goes off the wait lasts about 1 s ($took ms)"
 # No panel files at all (another machine): Hyprland's answer is all there is.
 rm -rf "$t/sys/class/drm/card0-DSI-1" "$t/sys/class/backlight/panel"; : >"$t/async-off"
 reset; start=$(date +%s%N); keys power-down; keys power-up
@@ -147,7 +149,7 @@ reset; keys power-down; keys power-up; sleep 1
 before "panel-off" "brightnessctl -q -d panel set 2083" || fail "flash: an unconnected connector's Off does not end the wait"
 rm -rf "$t/sys/class/drm/card0-DSI-2"; panel_on
 cp "$t"/orig/omarchy-hw-display "$t"/orig/brightnessctl "$t"/orig/omarchy-brightness-display "$t/bin/"
-echo "ok - power press unlocked and lit: the brightness comes back only after the panel is off (and still after 2 s if it never is)"
+echo "ok - power press unlocked and lit: the brightness comes back only after the panel is off (and still after 1 s if it never is)"
 echo false >"$t/locked"; echo false >"$t/dpms"
 press; grep -q "omarchy-brightness-display on" "$log" || fail "unlocked and dark: a press lights the screen"
 grep -q "omarchy-system-lock" "$log" && fail "unlocked and dark: a press does not lock"
