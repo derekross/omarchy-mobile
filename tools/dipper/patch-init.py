@@ -17,7 +17,7 @@ hostname omamobile
     ("dropbear -R -E -p 22",
      """usb_addr=$(ip -o -4 addr show dev usb0 scope global | awk '{ sub(/\\/.*/, "", $4); print $4; exit }')
 if [ -n "$usb_addr" ]; then
-  dropbear -E -s -p "$usb_addr:22" -r /etc/dropbear/dropbear_ed25519_host_key
+  dropbear -E -s -p "$usb_addr:22" -r /etc/dropbear/dropbear_ed25519_host_key && say "ssh: root@$usb_addr"
 fi""", "dropbear anchor"),
     ("no USB host, crashing in 20 s so ABL falls back to slot A",
      "no USB host; RAM-only probe will reboot in 20 s",

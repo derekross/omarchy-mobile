@@ -27,17 +27,18 @@ intended handset's serial, `BACKUP_CHECKSUMS` to the locally held stock
 partition manifest, and `USERDATA_BACKUP_CHECKSUMS` to the private userdata
 archive's checksum file. Do not boot if either backup is missing or fails.
 
-1. **Backup gate** — Expect: the verified 84-partition stock backup and
-   checksum manifests and the userdata archive are available off-device. Pass: both
+1. **Backup gate** — Expect: the verified backup of the installed system's 84
+   non-userdata GPT partitions, both checksum manifests, and the userdata archive
+   are available off-device. Pass: both
    `sha256sum -c "$BACKUP_CHECKSUMS"` and
    `sha256sum -c "$USERDATA_BACKUP_CHECKSUMS"` report every entry OK (run each
    from the directory containing its manifest). The userdata archive is a live
    file-level copy, not a raw partition image or an atomic snapshot. Stop: any
-   missing or mismatched entry. Rollback: restore the verified stock backup
-   using the device recovery procedure. Risk: an unverified backup cannot
-   recover a damaged single-slot phone.
+   missing or mismatched entry. Rollback: do not boot; there is no reviewed
+   restore procedure yet, and nothing in this runbook writes UFS. Risk: an
+   unverified backup cannot recover a damaged single-slot phone.
 2. **Fastboot gate** — Enter fastboot with **Volume Down + Power**; the §3.1
-   entry is in [PR #499](https://github.com/derekross/omarchy-mobile/pull/499).
+   entry is in [CONTRIBUTING.md §3.1](../../CONTRIBUTING.md#phones-without-ab-slots).
    Run `fastboot -s "$FASTBOOT_SERIAL" getvar product` and
    `fastboot -s "$FASTBOOT_SERIAL" getvar unlocked`. Expect `dipper` and `yes`.
    Pass: exactly one device is listed, both values match, and the serial pins
@@ -102,7 +103,8 @@ repository; the SSH public key and generated host key stay in the local output.
 ## What remains
 
 - Do not flash until there is a reviewed, device-specific recovery plan and a
-  verified stock backup. This PR deliberately adds no persistent writer.
+  verified backup of the installed system. This PR deliberately adds no
+  persistent writer.
 - The initramfs has no Arch root yet. A later hard NFS-root mount can freeze the
   root session if the host drops; use it only for a RAM-only probe. NFS-root
   needs a root with `RuntimeWatchdogSec=60s`, because `kill -9 -1` stops the
@@ -119,12 +121,12 @@ repository; the SSH public key and generated host key stay in the local output.
   marking them supported.
 
 From this rescue image, an SSH session can return to fastboot with
-`reboot-to bootloader`. The stock `recovery` image was verified from its
-4.9.337 kernel header, but recovery-mode reboot was not tested; this runbook
+`reboot-to bootloader`. The installed ROM's `recovery` image was verified from
+its 4.9.337 kernel header, but recovery-mode reboot was not tested; this runbook
 uses only the verified bootloader path. The helper asks the PMIC reboot-mode
-driver to select the bootloader and writes no UFS partition. The PMIC reset path was verified on
-the handset on 2026-11-09. The packaged helper returned the running image to
-fastboot on 2026-11-09 without writing UFS.
+driver to select the bootloader and writes no UFS partition. The PMIC reset path
+was verified on the handset on 2026-11-09. The packaged helper returned the
+running image to fastboot on 2026-11-09 without writing UFS.
 
 [panel #218]: https://github.com/derekross/linux-omarchy-mobile/pull/218
 [touch #219]: https://github.com/derekross/linux-omarchy-mobile/pull/219

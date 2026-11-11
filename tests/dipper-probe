@@ -30,10 +30,11 @@ with tempfile.TemporaryDirectory() as tmp:
     init = Path(tmp) / 'init'
     init.write_bytes(Path('initramfs/init').read_bytes())
     subprocess.run(['python3', 'tools/dipper/patch-init.py', str(init)], check=True)
+    subprocess.run(['sh', '-n', str(init)], check=True)
     patched = init.read_text()
     assert 'modprobe qcom_wdt' in patched
     assert 'watchdog -t 5 -T 30 /dev/watchdog0' in patched
-    assert 'dropbear -E -s -p "$usb_addr:22" -r /etc/dropbear/dropbear_ed25519_host_key' in patched
+    assert 'dropbear -E -s -p "$usb_addr:22" -r /etc/dropbear/dropbear_ed25519_host_key && say "ssh: root@$usb_addr"' in patched
     assert 'no USB host; RAM-only probe will reboot in 20 s' in patched
 print('ok - Dipper patch step applies to the checked-in shared init')
 PY

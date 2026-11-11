@@ -45,7 +45,11 @@ tar --zstd -xf "$KERNEL_OUT/modules-$release.tar.zst" -C "$mods/lib/modules"
 
 echo "building the initramfs in $ALPINE (linux/arm64)"
 docker run --rm --platform linux/arm64 \
-  -v "$repo:/src:ro" -v "$mods:/modules:ro" -v "$SSH_PUBKEY:/input/key.pub:ro" \
+  -v "$repo/initramfs/init:/input/init:ro" \
+  -v "$repo/tools/dipper/prune-modules.py:/input/prune-modules.py:ro" \
+  -v "$repo/tools/dipper/patch-init.py:/input/patch-init.py:ro" \
+  -v "$repo/packages/omamobile-device-cheetah/src/reboot-to.c:/input/reboot-to.c:ro" \
+  -v "$mods:/modules:ro" -v "$SSH_PUBKEY:/input/key.pub:ro" \
   -v "$OUT:/out" \
   -e "KERNEL_RELEASE=$release" -e "OUT_UID=$(id -u)" -e "OUT_GID=$(id -g)" \
   -e "OMAMOBILE_NFSROOT=${OMAMOBILE_NFSROOT:-}" \

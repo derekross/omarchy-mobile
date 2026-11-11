@@ -47,7 +47,7 @@ depmod -b "$stage" "$KERNEL_RELEASE"
 # refuses a boot image that grows too large. Everything else belongs in the
 # root filesystem, not here. The pruner reads modules.dep and fails loudly
 # rather than silently emptying the tree.
-python3 /src/tools/dipper/prune-modules.py \
+python3 /input/prune-modules.py \
   "$stage/usr/lib/modules/$KERNEL_RELEASE" qcom_wdt
 depmod -b "$stage" "$KERNEL_RELEASE"
 
@@ -59,8 +59,8 @@ for module in qcom_wdt; do
     echo "module $module does not match $KERNEL_RELEASE" >&2; exit 1; }
 done
 
-cp /src/initramfs/init "$stage/init"
-python3 /src/tools/dipper/patch-init.py "$stage/init"
+cp /input/init "$stage/init"
+python3 /input/patch-init.py "$stage/init"
 chmod 755 "$stage/init"
 
 echo xiaomi,dipper > "$stage/etc/omamobile-compatible"
@@ -76,7 +76,7 @@ fi
 echo 'Xiaomi Mi 8 Omarchy' > "$stage/etc/omamobile-usb-product"
 
 gcc -Os -static -o "$stage/usr/local/bin/reboot-to" \
-  /src/packages/omamobile-device-cheetah/src/reboot-to.c
+  /input/reboot-to.c
 
 # Prove the packaged userspace actually runs on ARM before shipping it.
 chroot "$stage" /bin/busybox true
