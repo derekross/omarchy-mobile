@@ -18,6 +18,10 @@ assert 'modules_install' not in builder
 assert 'FIRMWARE_DIR' not in builder
 assert 'fastboot -s <serial> boot boot.img' in builder
 assert 'panel-samsung-ea8074' not in script
+for path in ('init', 'prune-modules.py', 'patch-init.py', 'initramfs-inside.sh',
+             'reboot-to.c', 'key.pub'):
+    assert f':/input/{path}:ro' in builder, f'missing read-only container mount for /input/{path}'
+assert 'sh /input/initramfs-inside.sh' in builder
 print('ok - Dipper initramfs patch anchors and RAM-only builder inputs')
 PY
 
@@ -34,7 +38,8 @@ with tempfile.TemporaryDirectory() as tmp:
     patched = init.read_text()
     assert 'modprobe qcom_wdt' in patched
     assert 'watchdog -t 5 -T 30 /dev/watchdog0' in patched
-    assert 'dropbear -E -s -p "$usb_addr:22" -r /etc/dropbear/dropbear_ed25519_host_key && say "ssh: root@$usb_addr"' in patched
+    assert 'dropbear -E -s -p "$usb_addr:22" -r /etc/dropbear/dropbear_ed25519_host_key 2>/dev/null && say "ssh: root@$usb_addr"' in patched
+    assert 'dropbear -R -E -p 22 2>/dev/null && say "ssh: root@172.16.42.1"' not in patched
     assert 'no USB host; RAM-only probe will reboot in 20 s' in patched
 print('ok - Dipper patch step applies to the checked-in shared init')
 PY
