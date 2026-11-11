@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 
 PACKAGE = Path(__file__).resolve().parent.parent
-NAMED = ['1789764927', '1791367434', '1791125650', '1791403310']
+NAMED = ['1789764927', '1791367434', '1791125650', '1791403310', '1790042972']
 # Reviewed and released: Omarchy's own file, so a change of its text that
 # would match a hold pattern shows here
 RELEASED = ['1792648436']

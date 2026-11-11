@@ -1019,6 +1019,17 @@ lua=$(command -v lua || command -v lua5.4 || command -v luajit || true)
 if [[ -n $lua ]]; then
   out=$("$lua" test/phone-rules.lua) || { grep -v '^ok' <<<"$out"; fail "phone.lua window rules"; }
   pass "phone.lua: edge to edge, opaque, dialogs, picture-in-picture"
+  # Dictation keys under Omarchy 4.5's helpers: four homes, four bindings.lua
+  dk=$(mktemp -d)
+  mkdir -p "$dk/plain/.config/hypr" "$dk/migrated/.config/hypr" "$dk/own/.config/hypr"
+  printf 'o.bind("SUPER + X", "x", "y")\n' > "$dk/plain/.config/hypr/bindings.lua"
+  printf 'if o.dictation_installed and o.dictation_installed() then\n  o.bind_hold("F9", "Start dictation (push-to-talk)", "omarchy-dictation start", "Stop dictation (push-to-talk)", "omarchy-dictation stop")\nend\n' > "$dk/migrated/.config/hypr/bindings.lua"
+  printf 'o.bind("F9", "My own key", "my-own-command")\n' > "$dk/own/.config/hypr/bindings.lua"
+  for sc in installed:plain migrated:migrated own-f9:own none:plain; do
+    out=$(SCENARIO=${sc%%:*} HOME=$dk/${sc##*:} "$lua" test/phone-dictation.lua) || { grep -v '^ok' <<<"$out"; rm -rf "$dk"; fail "phone.lua dictation keys (${sc%%:*})"; }
+  done
+  rm -rf "$dk"
+  pass "phone.lua on Omarchy 4.5: Alt + Space and the migration's F9 are for hardware keyboards; the owner's own F9 is left alone"
 else
   pass "phone.lua window rules # SKIP no lua"
 fi
