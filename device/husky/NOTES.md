@@ -10,6 +10,26 @@ Sources:
 - `P/`: postmarketOS pmaports `device/testing` (2026-10-21).
 - `G/`: Google's GPL kernel for this phone, `android-gs-shusky-6.1-android16` ([source.android.com: Build Pixel kernels](https://source.android.com/docs/setup/build/building-pixel-kernels)).
 
+## 2026-11-09: NFC on the 8 Pro: the pad clock and the controller, two boots on the head of kernel #209
+
+My phone (the Kioxia unit), slot B. Kernel PR [#209](https://github.com/derekross/linux-omarchy-mobile/pull/209) (the `exynos-clkout` match for zuma, plus the `nfc@8` node from #208) was tested at its head, `e9c3fa348` (a8087e225 plus the two optional edits Derek suggested, a DTS comment and a commit message line); the kernel is `7.3.0-rc6-omamobile-push1-ge9c3fa348c8a`, built with my test kernel's config. That head has no HK3 display driver and no PCIe PHY symbol, so these boots had a simple framebuffer, no Wi-Fi and no sound; the phone was driven over USB ssh. Each boot spent one slot B try; the count was refilled to 3 with `fastboot set_active b` before each flash.
+
+The overlay of boot 1 was one local file, `nfc-test.dtso`, not in the repository, added to the usual battery, panel and gauge overlays of my image set (the plain set of boot 2 is the same without it):
+
+```
+/dts-v1/;
+/plugin/;
+
+&nfc {
+	status = "okay";
+};
+```
+
+- **Boot 1, with the overlay** [V] (uptime 213 s): `nxp_nci_i2c` bound on `2-0008`, `nfc0` present, `pmu-clkout0` enable count 1 and prepare count 1 in `clk_summary`, and a Type 2 (MIFARE) tag read through neard with one URI record (only the shape of the record was looked at, not its content). The one failed unit was my local thermal script, which wants a cpufreq policy this kernel doesn't have.
+- **Boot 2, the same kernel with the plain image set (no overlay)** [V] (uptime 205 s): no `2-0008` device and no `nfc0` (the node is in the device tree, disabled), the `exynos-clkout` device bound with its clock registered, `pmu-clkout0` enable count 0 and prepare count 0: nothing is enabled.
+- **After the two boots** [V]: the phone went back to the usual image set and was fine (AoC card up, 94 services, Wi-Fi, Hyprland).
+- **Not done** [U]: **s2idle with the clkout driver bound** is still open and has to be tested before NFC is turned on in the device package (Derek's note on #209). It is a hang-class test, so it needs someone with the buttons in reach. Card emulation was not tested, and the eSE side (spi_12) is not described and was not touched.
+
 ## 2026-11-08: a third phone: Samsung 128 GB, UFS 3.1, still locked
 
 A third retail Pixel 8 Pro, offered in [#1](https://github.com/derekross/omarchy-mobile/issues/1). `R3/` below means read-only queries of this phone (`adb shell getprop` while booted, `fastboot getvar all` on the locked bootloader), facts only, no serial, IMEI or MACs. Nothing has been unlocked, flashed or booted on it yet.
@@ -35,7 +55,7 @@ Lef's phone (Kioxia unit), slot B, while looking for the cause of a ~520 mA idle
 
 ## 2026-10-31: Wi-Fi
 
-Wi-Fi works on a test kernel, [kernel #156](https://github.com/derekross/linux-omarchy-mobile/pull/156) (a draft, stacked on #153, #143 and #56), at `f47c5bd34` on greenbrettmichael/linux-omarchy-mobile `omamobile-zuma-husky-wifi`, with the repository's husky config (`CONFIG_PHY_ZUMA_PCIE=m` is in #214), `modules-push` and the firmware from [#214](https://github.com/derekross/omarchy-mobile/pull/214). The phone joins its network at boot through NetworkManager. #156 has since been rebased to `717fba4f`; the only change is #143's join-parameter struct (`chanspec_list[1]` to `chanspec_list[]`). The phone joined at boot on that head too, as part of the display test kernel (tag `husky-test-20261031-d3`, which contains `717fba4f`), on 2026-10-31.
+Wi-Fi works on a test kernel, [kernel #156](https://github.com/derekross/linux-omarchy-mobile/pull/156) (it was a draft, stacked on #153, #143 and #56; closed on 2026-11-09 because its commits landed through [#187](https://github.com/derekross/linux-omarchy-mobile/pull/187), and the open gaps below stay in these notes), at `f47c5bd34` on greenbrettmichael/linux-omarchy-mobile `omamobile-zuma-husky-wifi`, with the repository's husky config (`CONFIG_PHY_ZUMA_PCIE=m` is in #214), `modules-push` and the firmware from [#214](https://github.com/derekross/omarchy-mobile/pull/214). The phone joins its network at boot through NetworkManager. #156 has since been rebased to `717fba4f`; the only change is #143's join-parameter struct (`chanspec_list[1]` to `chanspec_list[]`). The phone joined at boot on that head too, as part of the display test kernel (tag `husky-test-20261031-d3`, which contains `717fba4f`), on 2026-10-31.
 
 - **The chip** [V]: a BCM4398 D0 (chip `0x4398` rev 3, PCI `14e4:4444`) on pcie_1, one Gen3 lane, as on stock.
   - Its backplane is Broadcom's newer NCI interconnect (socitype 6), not AI. #156 ports enough of Google's `nciutils.c` to brcmfmac to find the cores and run the ARM.
