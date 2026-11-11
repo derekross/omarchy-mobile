@@ -142,7 +142,7 @@ Usage: extract-vendor-firmware [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
   -w DIR   scratch directory for the ~1 GB vendor.img (default: a temp dir in \$TMPDIR)
   -d DEV   cheetah (default), panther, raven, tegu or husky
   -s SKU   husky: the hardware SKU (androidboot.hardware.sku), which picks the NVRAM
-  -f       skip the android-info.txt board=$DEVICE check
+  -f       skip the device checks (android-info.txt board=$DEVICE, the vendor build.prop)
   -c FILE  also copy the camera HAL APEX (/vendor/apex/com.google.pixel.camera.hal.apex)
            to FILE, for tools/extract-camera-data --apex (tools/phone-provision uses it)
 
@@ -394,6 +394,8 @@ if get_file build.prop "$WORK/build.prop"; then
   [[ "$dev" == "$DEVICE" || -n "$FORCE" ]] ||
     die "vendor partition is for '${dev:-unknown}', not $DEVICE; use -f to override"
   say "Vendor partition: $(sed -n 's/^ro.vendor.build.fingerprint=//p' "$WORK/build.prop" | head -1)"
+else
+  [[ -n "$FORCE" ]] || die "vendor.img has no build.prop; use -f to override"
 fi
 
 # The new generation: everything below is written into $new, which starts

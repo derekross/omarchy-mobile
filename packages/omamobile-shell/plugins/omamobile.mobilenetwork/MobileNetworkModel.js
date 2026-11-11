@@ -4,7 +4,7 @@
 // runs it under Node through the module.exports below.
 
 var STATUS_ARGV = ["omamobile-mobile-network", "status"]
-var REBOOT_ARGV = ["omarchy-system-reboot"]
+var REBOOT_ARGV = ["omamobile-reboot"]
 var APN = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*$/
 
 function parseJson(text) {

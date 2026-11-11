@@ -126,6 +126,41 @@ python3 -I $h config "$r" > /dev/null || fail "config"
 python3 -I $h config "$r" > /dev/null || fail "config, second run"
 python3 -I $h verify "$r" > /dev/null || fail "verify after hardening"
 [[ $(grep -c 'lxc-omamobile.conf' "$r/var/lib/waydroid/lxc/waydroid/config") == 1 ]] || fail "include added twice"
+# A hand-opened config fails closed: Waydroid writes no device allow rule in
+# its generated files, so any uncommented one refuses the start, whatever its
+# value (the "allow = a" of #465, a block device, "c *:*", an absolute path,
+# a value in quotes as LXC's parser accepts it, or a harmless-looking one),
+# wherever the line sits.
+lx=$r/var/lib/waydroid/lxc/waydroid
+for f in config config_nodes config_session; do
+  [[ -e $lx/$f ]] || : > "$lx/$f"
+  for rule in 'a' 'a *:* rwm' 'b *:* rwm' 'b 7:0 rwm' 'b' 'c *:* rwm' 'c  *:*  rwm' '  c *:* rwm' '/dev/sda rwm' '/dev/sda' '/dev/null rwm' '/dev/binderfs/binder rwm' '"a"' "'a'" "'/dev/sda rwm'" "'b 8:0 rwm'" '"c *:* rwm"' 'c 1:1 rwm' 'c 10:200 rwm' 'c 5:* rwm'; do
+    cp "$lx/$f" "$t/saved"
+    printf 'lxc.cgroup2.devices.allow = %s\n' "$rule" >> "$lx/$f"
+    if python3 -I $h verify "$r" > "$t/open.log"; then fail "verify accepts '$rule' in $f"; fi
+    grep -q "FAIL .*$f:[0-9]*: a device allow rule" "$t/open.log" || fail "verify does not name '$rule' in $f: $(cat "$t/open.log")"
+    cp "$t/saved" "$lx/$f"
+  done
+done
+cp "$lx/config" "$t/config.good"
+printf 'lxc.cgroup.devices.allow=a\n' >> "$lx/config"
+if python3 -I $h verify "$r" > "$t/open.log"; then fail "verify accepts the older allow spelling"; fi
+grep -q 'a device allow rule' "$t/open.log" || fail "verify does not name the older allow spelling"
+cp "$t/config.good" "$lx/config"
+# ... and one placed before our include, not only after it
+sed -i '/^lxc.include = \/usr\/share\/omamobile-waydroid\//i lxc.cgroup2.devices.allow = a' "$lx/config"
+grep -qx 'lxc.cgroup2.devices.allow = a' "$lx/config" || fail "test setup: the allow went in"
+if python3 -I $h verify "$r" > "$t/open.log"; then fail "verify accepts an allow = a placed before the include"; fi
+grep -q 'a device allow rule' "$t/open.log" || fail "verify does not name an allow = a before the include: $(cat "$t/open.log")"
+cp "$t/config.good" "$lx/config"
+python3 -I $h verify "$r" > /dev/null || fail "verify fails after the test rules are removed"
+# what stays accepted: commented-out rules and a deny rule
+printf '# lxc.cgroup2.devices.allow = a\n' >> "$lx/config_nodes"
+printf '  # lxc.cgroup2.devices.allow = /dev/sda rwm\n' >> "$lx/config_session"
+printf 'lxc.cgroup2.devices.deny = b *:* rwm\n' >> "$lx/config_session"
+python3 -I $h verify "$r" > /dev/null || fail "verify refuses a commented-out allow or a deny rule"
+: > "$lx/config_session"
+python3 -I $h verify "$r" > /dev/null || fail "verify fails after removing the test rules"
 grep -q 'dev/null' "$r/var/lib/waydroid/lxc/waydroid/config_nodes" || fail "dropped a harmless node"
 grep -q 'renderD128' "$r/var/lib/waydroid/lxc/waydroid/config_nodes" || fail "dropped the render node"
 if grep -Eq 'video|fb0|kernel/debug' "$r/var/lib/waydroid/lxc/waydroid/config_nodes"; then fail "hardware binds left"; fi
