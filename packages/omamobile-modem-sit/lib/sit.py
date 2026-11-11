@@ -66,6 +66,10 @@ MANIFEST = 0x4600
 
 
 def check(ident, *, sms=False, calls=False, manifest=False, isim_pcscf=False, payload=b''):
+    if ident == 0x093f:
+        if type(payload) is not bytes or payload != b'\x00':
+            raise ValueError('Only the single-modem configuration is supported')
+        return
     if manifest and ident == MANIFEST:
         return
     # SIM_IO (0x0208) is outside the allow-list; the one exception, for an
