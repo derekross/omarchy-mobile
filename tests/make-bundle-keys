@@ -5,6 +5,8 @@
 # signs only with the release key (keys/gnupg.release, which omamobile-keyring
 # trusts), carries a calendar version, and holds a root image that follows
 # the stable channel. Nothing here signs: every case stops before that.
+# A refusal, or a failure later in the build, leaves a bundle already built
+# under the same name as it was.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 for tool in cpio lz4 sha256sum; do
@@ -98,3 +100,28 @@ sed -i '/^omamobile channel:/d' "$r/out/omamobile-rootfs-test-aarch64.MANIFEST"
 expect_refusal 'built before channels'
 expect_refusal 'holds images for' --unsigned
 echo 'ok - a signed release needs a root image on the stable channel'
+
+# A refused rebuild leaves the bundle already built under that name as it was
+prior=$r/out/bundle/omamobile-testdev-2026.11.01
+mkdir -p "$prior" "$t/kernel/images" "$t/kernel/arch/arm64/boot"
+echo prior > "$prior/SHA256SUMS"
+kept() {
+  [[ $(cat "$prior/SHA256SUMS" 2>/dev/null) == prior ]] || { echo "not ok - $1 removed the prior bundle" >&2; exit 1; }
+}
+echo otherdev > "$t/kernel/images/DEVICE"
+expect_refusal 'holds images for' --unsigned
+kept 'images for another device'
+echo testdev > "$t/kernel/images/DEVICE"
+expect_refusal 'images/boot.img (bin/omamobile images)' --unsigned
+kept 'a missing image'
+touch -d '1 hour ago' "$t/kernel/images/boot.img"
+: > "$t/kernel/arch/arm64/boot/Image"
+expect_refusal 'is older than' --unsigned
+kept 'images older than the kernel'
+echo 'ok - a refused rebuild keeps the prior bundle'
+# A failure after the checks: this device.conf has no UFS_RW for manifest.json
+touch "$t/kernel/images/boot.img"
+expect_refusal 'writing manifest.json failed' --unsigned
+kept 'a failed rebuild'
+[[ $(ls -A "$r/out/bundle") == "${prior##*/}" ]] || { echo "not ok - a failed rebuild left files in out/bundle" >&2; exit 1; }
+echo 'ok - a rebuild that fails part way keeps the prior bundle and leaves nothing beside it'

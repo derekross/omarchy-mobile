@@ -450,6 +450,27 @@ Item {
     }
   }
 
+  // Back (omamobile.back's BackLink.js): the screen never takes the keyboard,
+  // so Escape went to the app under it. Back is the screen's own way out:
+  // Done after an enrollment, Cancel everywhere else (which stops one that
+  // is running).
+  function back() {
+    if (!screenOpen) return false
+    if (page === "done") closeScreen()
+    else cancelEnroll()
+    return true
+  }
+
+  Loader {
+    source: Qt.resolvedUrl("../omamobile.back/BackLinkClient.qml")
+    onLoaded: {
+      item.name = "fingerprint setup"
+      item.handler = function() { return root.back() }
+      // Not while polkit asks: its prompt has the keyboard and takes Escape.
+      item.active = Qt.binding(function() { return root.screenOpen && !root.authPending })
+    }
+  }
+
   function closeScreen() {
     if (enrollProc.running) {
       userCanceled = true

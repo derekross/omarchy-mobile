@@ -74,7 +74,8 @@ Item {
       padding: root.pad
 
       focus: root.opened
-      Keys.onEscapePressed: root.close()
+      // Back to quick settings, as the header's back button.
+      Keys.onEscapePressed: root.backRequested()
 
       // Swallow taps so they don't reach the scrim.
       MouseArea { anchors.fill: parent }
