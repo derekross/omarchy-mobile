@@ -50,13 +50,25 @@ case $1 in
 esac
 echo "$*" >> "$TEST_LOG"
 EOF
+# systemctl: never the real one. ActiveState is BACKLIGHT_STATE (the
+# restore's state as the start finds it), a start fails with
+# BACKLIGHT_START_FAILS; every call is logged to its own file.
+export TEST_SYSTEMCTL=$tmp/systemctl
+cat > "$tmp/bin/systemctl" <<'EOF'
+#!/bin/bash
+echo "$*" >> "$TEST_SYSTEMCTL"
+case $1 in
+  show) echo "${BACKLIGHT_STATE:-inactive}" ;;
+  start) [[ -z ${BACKLIGHT_START_FAILS:-} ]] ;;
+esac
+EOF
 printf '#!/bin/bash\necho synced >> "$TEST_LOG"\n' > "$tmp/bin/sync"
 printf '#!/bin/bash\nexit 0\n' > "$tmp/bin/sleep"
 chmod +x "$tmp/bin/"*
 # The command line the bootloader built, with its panel name
 cmdline() { mkdir -p "$OMAMOBILE_TEGU_ROOT/proc"; echo "console=null panic=10 ${1:+exynos_drm.panel_name=$1 }mem_sleep_default=s2idle" > "$OMAMOBILE_TEGU_ROOT/proc/cmdline"; }
 reset() {
-  : > "$TEST_LOG"
+  : > "$TEST_LOG"; : > "$TEST_SYSTEMCTL"
   rm -rf "$marker" "$devices/1f000000.gpu/driver" "$devices/19470000.display-controller/driver" \
     "$OMAMOBILE_TEGU_ROOT/sys/class" "$OMAMOBILE_TEGU_ROOT/sys/module" "$OMAMOBILE_TEGU_ROOT/run"
   cmdline google-tg4c
@@ -212,4 +224,34 @@ reset; rm -rf "$OMAMOBILE_TEGU_ROOT/sys/bus/pci"; out=$(FAIL_MODULE=phy_zuma_pci
 [[ $out == *"phy_zuma_pcie failed"* && $(loads) != *pcie_gs201* && ! -e $marker ]] || fail "a failed PHY load skips the host: $out"
 rm -rf "$dt/soc/pcie@13120000"
 rm -rf "$devices/13120000.pcie" "$dt/reserved-memory" "$OMAMOBILE_TEGU_ROOT/usr/lib/firmware" "$OMAMOBILE_TEGU_ROOT/sys/bus/pci"
-echo 'ok - graphics-start: marker first, order kept, failures skipped and named, allow_tx for google-tg4c only, --retry works'
+
+# The panel's backlight restore (#512): udev ran systemd-backlight@ before
+# allow_tx and it failed; after allow_tx it is reset and started again
+bl=$OMAMOBILE_TEGU_ROOT/sys/class/backlight/19440000.dsi.0
+unit='systemd-backlight@backlight:19440000.dsi.0.service'
+reset; mkdir -p "$bl"
+out=$(BACKLIGHT_STATE=failed "$script")
+grep -qx "reset-failed $unit" "$TEST_SYSTEMCTL" && grep -qx "start $unit" "$TEST_SYSTEMCTL" \
+  || fail "a failed restore was not run again: $(cat "$TEST_SYSTEMCTL")"
+[[ $(grep -n '^reset-failed' "$TEST_SYSTEMCTL" | cut -d: -f1) -lt $(grep -n '^start' "$TEST_SYSTEMCTL" | cut -d: -f1) ]] \
+  || fail "start before reset-failed (the start limit would refuse it)"
+[[ $out == *"19440000.dsi.0: the saved brightness"*"is restored"* ]] || fail "the restore is not logged: $out"
+[[ $(loads) == "$all" && ! -e $marker ]] || fail "the restore changed the start: $(loads)"
+# a restore that worked, or one udev hasn't started yet, is left alone
+for st in active inactive; do
+  reset; mkdir -p "$bl"
+  BACKLIGHT_STATE=$st "$script" >/dev/null
+  ! grep -qE '^(start|reset-failed)' "$TEST_SYSTEMCTL" || fail "a $st restore was started again"
+done
+# another panel: allow_tx stays off, so a write would still be refused
+reset; cmdline google-xyz9; mkdir -p "$bl"
+BACKLIGHT_STATE=failed "$script" >/dev/null
+! grep -qE '^(start|reset-failed)' "$TEST_SYSTEMCTL" || fail "the restore ran without allow_tx"
+# a second failure is logged and is not one of the start's failures
+reset; mkdir -p "$bl"
+out=$(BACKLIGHT_STATE=failed BACKLIGHT_START_FAILS=1 "$script") || fail "a failed restore failed the start"
+[[ $out == *"restoring the saved brightness failed again"* ]] || fail "the second failure is not logged: $out"
+# no backlight at all: systemctl is not asked
+reset; "$script" >/dev/null
+[[ ! -s $TEST_SYSTEMCTL ]] || fail "systemctl was called without a backlight: $(cat "$TEST_SYSTEMCTL")"
+echo 'ok - graphics-start: marker first, order kept, failures skipped and named, allow_tx for google-tg4c only, --retry works, a refused backlight restore runs again'
