@@ -9,6 +9,8 @@ url="https://github.com/derekross/omarchy-mobile"
 license=(MIT GPL-3.0-or-later)  # GPL: the squeekboard layout
 depends=(omarchy omamobile-apps 'omamobile-omarchy>=0.1.11' 'omamobile-owl-widgets>=0.1.2' bash squeekboard bluez wf-recorder python python-dbus python-gobject
          which  # voice input: voxtype finds wtype and wl-copy with which
+         wtype  # the back gesture's Escape (a virtual keyboard: Hyprland's send_key_state
+                # is answered "ok" and never reaches the app); voice input types with it too
          pipewire-audio pipewire-pulse pipewire-alsa wireplumber
          inotify-tools qt6-declarative
          iproute2 jq  # omamobile-sleepd: ss for SSH sessions; jq also for omamobile-keys

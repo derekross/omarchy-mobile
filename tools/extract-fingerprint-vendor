@@ -179,11 +179,15 @@ fetch_images() {
 
 is_ext4() { [[ "$(od -An -tx2 -j 1080 -N2 "$1" | tr -d ' ')" == ef53 ]]; }
 
+# debugfs splits its command at blanks: a host path goes in double quotes,
+# with any double quote in it doubled
+dq() { printf '"%s"' "${1//\"/\"\"}"; }
+
 # rdump one path ($2, no leading /) from ext4 image $1 into directory $3.
 # Symlinks are kept as symlinks.
 rdump() {
   mkdir -p "$3"
-  debugfs -R "rdump /$2 $3" "$1" 2>&1 |
+  debugfs -R "rdump /$2 $(dq "$3")" "$1" 2>&1 |
     grep -v -e '^debugfs ' -e 'Operation not permitted while changing ownership' >&2 || true
 }
 
@@ -195,7 +199,7 @@ done
 
 # The vendor partition says which device it was built for.
 mkdir -p "$WORK/v"
-debugfs -R "dump /build.prop $WORK/v/build.prop" "$WORK/vendor.img" 2>/dev/null
+debugfs -R "dump /build.prop $(dq "$WORK/v/build.prop")" "$WORK/vendor.img" 2>/dev/null
 [[ -s "$WORK/v/build.prop" ]] || die "vendor.img has no build.prop"
 dev=$(sed -n 's/^ro.product.vendor.device=//p' "$WORK/v/build.prop" | head -1)
 [[ "$dev" == "$DEVICE" || -n "$FORCE" ]] ||
@@ -211,11 +215,11 @@ say "Reading the system partition"
 mkdir -p "$WORK/s/system"
 for d in bin lib64 etc apex; do
   [[ $d == apex ]] && { mkdir -p "$WORK/s/system/apex"
-    debugfs -R "dump /system/apex/com.android.runtime.apex $WORK/s/system/apex/com.android.runtime.apex" \
+    debugfs -R "dump /system/apex/com.android.runtime.apex $(dq "$WORK/s/system/apex/com.android.runtime.apex")" \
       "$WORK/system.img" 2>/dev/null; continue; }
   rdump "$WORK/system.img" "system/$d" "$WORK/s/system"
 done
-debugfs -R "dump /system/build.prop $WORK/s/system/build.prop" "$WORK/system.img" 2>/dev/null
+debugfs -R "dump /system/build.prop $(dq "$WORK/s/system/build.prop")" "$WORK/system.img" 2>/dev/null
 [[ -s "$WORK/s/$RUNTIME_APEX" ]] || die "no $RUNTIME_APEX in system.img"
 
 say "Reading com.android.runtime"

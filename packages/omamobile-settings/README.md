@@ -11,6 +11,11 @@ continue to provide settings changes. Network, wallpaper, app management and
 recording controls are separate future contributions with their own runtime
 contracts and tests; this catalog does not offer those routes.
 
+Back (Escape, which the phone shell's edge swipe sends, and the Back button)
+leaves a search, then goes up one page. At the top level Escape shows the home
+screen through the shell's `omamobile-home` and Settings stays open; it used to
+close the app. Without that command nothing happens.
+
 Build with `bin/build`, test with `test/all`, and stage with `install DESTDIR`.
 Checked-in application sources live in `app/`; `src/` remains makepkg’s
 extracted-source directory.

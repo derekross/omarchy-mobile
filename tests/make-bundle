@@ -82,7 +82,7 @@ for p in ["INSTALL.md"] + ["tools/" + t for t in tools]:
 PY
 pass "SHA256SUMS and manifest.json cover the new files"
 
-grep -c 'tools/phone-provision --nv-backup DIR FACTORY.zip' "$b/README.txt" >/dev/null || fail "README.txt gives the provisioning command"
+grep -c 'tools/phone-provision --first-install --nv-backup DIR FACTORY.zip' "$b/README.txt" >/dev/null || fail "README.txt gives the provisioning command"
 grep -c 'from this directory' "$b/README.txt" >/dev/null || fail "README.txt says to run it from the bundle"
 if grep -c 'from the repository' "$b/README.txt" >/dev/null; then fail "README.txt no longer sends the user to the repository"; fi
 grep -c 'INSTALL.md' "$b/README.txt" >/dev/null || fail "README.txt points to INSTALL.md"
@@ -102,7 +102,7 @@ for p in modem_a modem_b efs efs_backup modem_userdata persist; do
 done
 : > "$t/factory.zip"
 out=$(cd "$t" && HOME=$t/home PHONE_SSH=false "$b/tools/phone-provision" --dry-run --work "$t/work" \
-  --nv-backup "$nv" "$t/factory.zip" 2>&1) || fail "the bundled phone-provision's dry run: $out"
+  --first-install --nv-backup "$nv" "$t/factory.zip" 2>&1) || fail "the bundled phone-provision's dry run: $out"
 grep -c 'would run: tools/extract-vendor-firmware' <<<"$out" >/dev/null || fail "the dry run names the extract tools: $out"
 pass "the bundled phone-provision runs from the bundle"
 
