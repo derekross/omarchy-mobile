@@ -347,7 +347,7 @@ cat <<EOF
   control (a second copy there is a good idea), and never share, post,
   upload or attach it, not even in a bug report.
 
-  Next: tools/phone-provision --nv-backup $dir FACTORY.zip
+  Next: tools/phone-provision --first-install --nv-backup $dir FACTORY.zip
   Later: tools/nv-backup --check $dir compares the phone with it.
   After any stock Android boot, take a new backup into a new directory.
 EOF

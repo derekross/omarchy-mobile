@@ -32,6 +32,13 @@
 #                    carries the local key. Never the maintainer's keys/ or
 #                    out/repo
 #
+# Upstream packages pinned in rootfs/packages.pinned (Omarchy 4.0.6 while our
+# patches don't apply to 4.5) are added by every maintainer's run: fetched
+# once, checked against the SHA-256 listed there, and signed with the release
+# key like our own; out/repo keeps them, and a line removed there takes its
+# package out at the next run. A --local repository gets them from
+# tools/fetch-published instead.
+#
 # Mesa, Hyprland and libcamera are large C/C++ builds: under qemu-user on a
 # laptop they take hours (Mesa the longest). They're built only when named or
 # with --all, and only once per version, since out/repo keeps them.
@@ -76,7 +83,7 @@ while (($#)); do
     --resign) resign=1 ;;
     --import) imports+=("${2:?--import needs a directory}"); shift ;;
     --local) local_name=${2:?--local needs a device codename}; shift ;;
-    -h|--help) sed -n '3,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) source tools/lib/usage.sh; usage_from_header "$0" 2; exit 0 ;;
     -*) alarm_die "unknown option $1" ;;
     *) dirs+=("${1%/}") ;;
   esac
@@ -206,6 +213,62 @@ for dir in "${imports[@]}"; do
   add_to_repo "${files[@]}"
 done
 
+# Pinned upstream packages (rootfs/packages.pinned): what that file lists is
+# in out/repo with its listed checksum, and what it listed before and no
+# longer does (out/repo/.pinned) is taken out. Each line is a SHA-256 and one
+# or more URLs of the same file, tried in order (Omarchy's, then our
+# published copy, for when upstream prunes it). A pin never takes the name
+# of a package we build: add_to_repo would replace ours with it.
+pinlist=rootfs/packages.pinned
+pinstate=$(dirname "$repo")/.pinned
+pins_changed=0
+our_names() {
+  local d
+  for d in packages/*/PKGBUILD; do pkg_names "${d%/PKGBUILD}"; done | tr ' ' '\n' | sed '/^$/d' | sort -u
+}
+sync_pins() {
+  local sum urls url base name want=() f tmp ours="" got
+  while read -r sum urls; do
+    base=
+    [[ $sum =~ ^[0-9a-f]{64}$ && -n $urls ]] || alarm_die "$pinlist: not \"<sha256> <url>...\": $sum $urls"
+    for url in $urls; do
+      [[ $url =~ ^(https|file)://[^[:space:]]+/[^/[:space:]]+\.pkg\.tar\.(zst|xz)$ ]] ||
+        alarm_die "$pinlist: not the URL of a package file: $url"
+      [[ -z $base || ${url##*/} == "$base" ]] || alarm_die "$pinlist: one line's URLs name different files: $urls"
+      base=${url##*/}
+    done
+    want+=("$base")
+    if [[ -f $repo/$base && $(sha256sum < "$repo/$base" | cut -d' ' -f1) == "$sum" ]]; then continue; fi
+    alarm_say "Pinned: $base"
+    tmp=$(mktemp -d) got=0
+    for url in $urls; do
+      if curl -fsSL --retry 3 --connect-timeout 30 --max-time 1800 -o "$tmp/$base" "$url" &&
+         [[ $(sha256sum < "$tmp/$base" | cut -d' ' -f1) == "$sum" ]]; then got=1; break; fi
+      echo "    $url: not fetched, or not the listed SHA-256" >&2
+    done
+    ((got)) || { rm -rf "$tmp"; alarm_die "$pinlist: no URL gave $base with its SHA-256; nothing added"; }
+    [[ $(pkginfo "$tmp/$base" | sed -n 's/^arch = //p') =~ ^(aarch64|any)$ ]] ||
+      { rm -rf "$tmp"; alarm_die "$pinlist: $base is not an aarch64 package"; }
+    name=$(pkginfo "$tmp/$base" | sed -n 's/^pkgname = //p')
+    [[ -n $ours ]] || ours=$(our_names)
+    ! grep -qxF "$name" <<<"$ours" ||
+      { rm -rf "$tmp"; alarm_die "$pinlist: $base is $name, which packages/ builds: a pin never replaces our own package"; }
+    add_to_repo "$tmp/$base"
+    rm -rf "$tmp"
+    pins_changed=1
+  done < <(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$pinlist" 2>/dev/null || true)
+  if [[ -f $pinstate ]]; then
+    while read -r f; do
+      [[ -n $f && " ${want[*]} " != *" $f "* && -e $repo/$f ]] || continue
+      rm -f "$repo/$f" "$repo/$f.sig"
+      echo "    unpinned: $f"
+      pins_changed=1
+    done < "$pinstate"
+  fi
+  printf '%s\n' ${want[@]+"${want[@]}"} | sed '/^$/d' > "$pinstate"
+}
+if [[ -z $local_name ]] && ((resign == 0)); then sync_pins; fi
+
 build=()
 for d in "${dirs[@]}"; do
   if ((force == 0)) && up_to_date "$d"; then
@@ -256,12 +319,26 @@ sign_and_index() {
     (cd "$repo" && repo-add --quiet --sign --key "$key" omamobile.db.tar.gz "${packages[@]}")
   else
     # Not an Arch machine: pacman's repo-add from the Arch Linux ARM image,
-    # as this user, with the same key.
-    docker run --rm --platform linux/arm64 -u "$(id -u):$(id -g)" \
+    # with the same key. It runs as the container's root and hands /repo
+    # back to the owner it arrived with, as the build does: under rootless
+    # Docker the container's root is this user and a container uid such as
+    # this user's is a subordinate uid on the host, which can't read the
+    # keyring (mode 700), so `-u $(id -u)` failed there with "The key ...
+    # does not exist in your keyring"; under rootful Docker root reads it
+    # and the chown keeps the index this user's.
+    docker run --rm --platform linux/arm64 \
       -v "$ROOT/$repo:/repo" -v "$GNUPGHOME:/gnupg" -e GNUPGHOME=/gnupg -e HOME=/tmp -w /repo \
-      "$(alarm_base_image)" repo-add --quiet --sign --key "$key" omamobile.db.tar.gz "${packages[@]}"
+      "$(alarm_base_image)" bash -c 'owner=$(stat -c %u:%g /repo); trap "chown -R $owner /repo" EXIT
+        repo-add --quiet --sign --key "$0" omamobile.db.tar.gz "$@"' "$key" "${packages[@]}"
   fi
 }
+
+# A changed pin is in the index before the first build, which resolves its
+# dependencies from it (omamobile-omarchy depends on omarchy)
+if ((pins_changed)); then
+  alarm_say "Indexing the pinned packages"
+  sign_and_index
+fi
 
 if ((resign)); then
   [[ -f $repo/omamobile.db ]] || alarm_die "$repo has no index to sign again"

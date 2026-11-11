@@ -1,0 +1,2 @@
+#!/bin/bash
+echo "omarchy-system-lock" >> "$FAKE_LOG"; echo true > "$FAKE_STATE/locked"

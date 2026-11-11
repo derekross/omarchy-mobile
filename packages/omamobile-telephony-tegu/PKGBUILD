@@ -6,7 +6,7 @@ pkgdesc="Opt-in Pixel 9a Phone/Messages bridge attachment to an already running 
 arch=(any)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
-depends=(python systemd sudo 'omamobile-device-tegu>=0.2.9'
+depends=(python systemd sudo 'omamobile-device-tegu>=0.2.10'
          'omamobile-modem-sit>=0.3.12' 'omamobile-mmd>=0.1.1' 'omatel-agent>=0.2.4')
 install=omamobile-telephony-tegu.install
 
