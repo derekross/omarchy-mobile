@@ -28,7 +28,8 @@ trap 'chown -R "$out_owner" /out 2>/dev/null; chown -R "$cache_owner" /var/cache
 # [omamobile] first, from the repository being shipped
 sed -i "0,/^\[omarchy\]/s//[omamobile]\nServer = file:\/\/\/repo\/\$arch\n\n[omarchy]/" /etc/pacman.conf
 pacman -Sy >/dev/null
-available() { pacman -Sp --print-format %n "$1" >/dev/null 2>&1; }
+# shellcheck source=resolve.sh
+source /src/rootfs/resolve.sh
 
 mapfile -t base < <(list /src/rootfs/packages.base)
 mapfile -t ours < <(list /src/rootfs/packages.omamobile)
@@ -40,8 +41,10 @@ ours+=("${board[@]}")
 # so pacstrap's run of it leaves everything alone)
 [[ ${KERNEL_PACKAGE:-0} != 1 ]] || ours+=(omamobile-boot-update linux-omamobile)
 missing=() skipped_ours=()
-for p in "${base[@]}"; do available "$p" || missing+=("$p"); done
-((${#missing[@]} == 0)) || die "not in any repository: ${missing[*]}"
+resolve_all "${base[@]}"
+((${#absent_pkgs[@]} == 0)) || printf 'error: not in any repository: %s\n' "${absent_pkgs[*]}" >&2
+((${#unmet_pkgs[@]} == 0)) || printf 'error: in a repository, but pacman cannot meet their dependencies: %s\n%s\n' "${unmet_pkgs[*]}" "$unmet_why" >&2
+((${#absent_pkgs[@]} + ${#unmet_pkgs[@]} == 0)) || exit 1
 # Every package of ours must come from [omamobile], not a same-named one
 # elsewhere (Mesa, Hyprland, libcamera are in Arch Linux ARM and [omarchy]
 # too). One allowed to be missing is left to whatever depends on it.
@@ -73,11 +76,18 @@ pacstrap -C /etc/pacman.conf -c -M "$T" "${base[@]}" >/var/log/pacstrap-base.log
 omarchy_list=$T/usr/share/omarchy/install/omarchy-base.packages
 [[ -f $omarchy_list ]] || die "no $omarchy_list in the omarchy package"
 mapfile -t skip < <(list /src/rootfs/packages.omarchy-skip)
-want=() unavailable=()
+listed=()
 while read -r p; do
-  [[ " ${skip[*]} " == *" $p "* ]] && continue
-  if available "$p"; then want+=("$p"); else unavailable+=("$p"); fi
+  [[ " ${skip[*]} " == *" $p "* ]] || listed+=("$p")
 done < <(list "$omarchy_list")
+# Only a package no repository has is "not built for aarch64"; one that is
+# there but can't be installed is repository skew, and stops the build
+resolve_all "${listed[@]}"
+want=("${ok_pkgs[@]}") unavailable=("${absent_pkgs[@]}")
+((${#unmet_pkgs[@]} == 0)) || {
+  printf '%s\n' "$unmet_why" >&2
+  die "in Omarchy's list and in a repository, but pacman cannot meet their dependencies: ${unmet_pkgs[*]} (pacman's reasons above; if one can never work on a phone, list it in rootfs/packages.omarchy-skip)"
+}
 say "Omarchy's package list: ${#want[@]} packages (${#unavailable[@]} not built for aarch64, ${#skip[@]} skipped)"
 pacstrap -C /etc/pacman.conf -c -M "$T" --needed "${want[@]}" >/var/log/pacstrap-omarchy.log 2>&1 || { tail -40 /var/log/pacstrap-omarchy.log; die "pacstrap (Omarchy's list) failed"; }
 
@@ -188,7 +198,7 @@ echo omamobile > "$T/etc/hostname"
 say "Removing per-machine state"
 # No account but root, and root locked: the user comes from firstboot.conf
 grep -q '^alarm:' "$T/etc/passwd" && die "an alarm account in the image"
-awk -F: '$3 >= 1000 && $3 != 65534 {print $1}' "$T/etc/passwd" | grep -q . && die "a user account in the image"
+awk -F: '$3 >= 1000 && $3 != 65534 {print $1}' "$T/etc/passwd" | grep -c . >/dev/null && die "a user account in the image"
 sed -i 's/^root:[^:]*:/root:!*:/' "$T/etc/shadow"
 rm -rf "$T/etc/pacman.d/gnupg"                 # firstboot makes the phone's own keyring
 rm -f "$T"/etc/ssh/ssh_host_*                  # sshd makes the phone's own host keys

@@ -73,6 +73,12 @@ Keeping stock on slot A is how we avoid bricking phones during development, not 
 - **The initramfs's no-USB-host panic needs a review for the phone.** On an A/B phone it hands over to stock on slot A; on a single-slot phone it would restart into the same image. The device's descriptor and plan say what happens instead (stay up with the screen lit, or reboot into fastboot) before the first boot.
 - **Everything else in this section still applies:** never relock with a non-stock image, never flash an older factory image, the backup rules, the hang safety nets.
 
+Phones with an entry:
+
+| Device | Boot partition the installer may write | Fastboot by buttons | Forced restart |
+| --- | --- | --- | --- |
+| Xiaomi Mi 8 (`dipper`) | `boot` only; stock `dtbo` stays untouched | Power off, then hold Volume Down + Power until FASTBOOT appears. | Hold Power alone for 10 seconds; confirmed to restart into Android under the Omarchy Mobile kernel. |
+
 ### 3.2 The read-only storage guard
 
 UFS holds the per-device calibration. The initramfs ([`initramfs/init`](initramfs/init)) guards it before anything else runs:
@@ -141,7 +147,7 @@ tools/build-packages           # [omamobile] for aarch64 into out/repo, signed
 tools/build-rootfs             # out/omamobile-rootfs-<device>-<date>-aarch64.img.zst
 tools/install-phone --dry-run  # checks, questions, the exact commands; then without --dry-run
 # after the first boot: a read-only backup of the modem's partitions into DIR (REINSTALL-RUNBOOK 4a)
-tools/phone-provision --nv-backup DIR FACTORY.zip   # firmware and per-phone data
+tools/phone-provision --first-install --nv-backup DIR FACTORY.zip   # firmware and per-phone data
 
 # Phone in fastboot (developer loop, or when Linux won't boot)
 bin/omamobile fastboot         # get there without buttons, if possible

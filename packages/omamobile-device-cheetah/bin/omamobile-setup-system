@@ -24,3 +24,11 @@ for unit in omamobile-sensor-proxy.service omamobile-speaker-protection.service 
     omamobile-nfc-open.service omamobile-gnss-nmea.socket omamobile-gnss-lto.timer; do
   systemctl cat "$unit" >/dev/null 2>&1 && systemctl enable "$unit" >/dev/null 2>&1 || true
 done
+
+# Location's third piece: GeoClue answers no app until an authorization agent
+# runs for the user, so a socket enabled without it shows Location "on" while
+# nothing can get a position (2026.11.08: the tile had to be switched off and
+# on once). The same three things "omamobile-gnss on" turns on.
+if systemctl is-enabled -q omamobile-gnss-nmea.socket 2>/dev/null; then
+  systemctl --global enable omamobile-geoclue-agent.service >/dev/null 2>&1 || true
+fi

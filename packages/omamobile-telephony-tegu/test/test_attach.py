@@ -286,8 +286,9 @@ class UnitPolicy(unittest.TestCase):
                 self.assertNotIn(key, fields)
         self.assertNotIn('Conflicts', base)
         self.assertEqual(policy['Requisite'], [a.SITD])
-        self.assertEqual(policy['ExecStartPre'], ['/usr/bin/omamobile-tegu-mmd-attach', '--service-check'])
-        self.assertEqual(policy['RestartPreventExitStatus'], [str(a.REFUSED_SERVICE)])
+        self.assertEqual(policy['ExecCondition'], ['/usr/bin/omamobile-tegu-mmd-attach', '--service-check'])
+        self.assertNotIn('ExecStartPre', policy)
+        self.assertNotIn('RestartPreventExitStatus', policy)
 
     def test_ril_requires_device_policy_and_dependency_fix(self):
         pkg = self.repo / 'packages/omamobile-modem-sit/PKGBUILD'

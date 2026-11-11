@@ -1,0 +1,120 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Start the AoC (audio DSP) and the speaker amplifiers on the Pixel 8 Pro
+# (husky), hang-safe: the same shape as the Pixel 7 Pro's omamobile-aoc-start
+# (device-cheetah), with husky's own module list and node.
+#
+# Order, as tested on the phone (device/husky/AOC-PLAN.md):
+#   1. Trusty (trusty_core, trusty_log, trusty_ipc, then trusty_virtio).
+#   2. The GSA mailbox (gsa), which authenticates the AoC image.
+#   3. The AoC System MMU (gs201_aoc_sysmmu, which also drives zuma's v9
+#      block until a zuma file of its own lands), the mailbox and the AoC core,
+#      with the firmware load off until everything is bound.
+#   4. The service front ends and the sound card's driver, then the two
+#      CS35L41 amplifiers (the card waits for both).
+#   5. The firmware load (aoc.bin from the firmware search path), then wait
+#      for the sound card.
+# A marker is written and synced before any of it and removed at the end. If a
+# boot hangs here, the next one finds the marker and leaves the AoC off;
+# "omamobile-husky-aoc-start --retry" tries again. A second marker in /run
+# (gone at reboot) is written just before the firmware write and never removed
+# by a failure: the AoC starts once per boot, so a start after a failed one
+# (systemctl start, a hand run, --retry) is refused until the next reboot. A kernel without the AoC
+# node does nothing. The speaker levels are not set here: the UCM profile
+# stays at the 7 Pro's "media" stage (digital 737, analog 10).
+#   omamobile-husky-aoc-start [--retry]
+set -uo pipefail
+
+state=/var/lib/omamobile
+marker=$state/aoc-bringup-started
+# Set right before the firmware load, gone after a reboot (tmpfs)
+loaded=${OMAMOBILE_AOC_LOADED:-/run/omamobile/aoc-firmware-loaded}
+node=${OMAMOBILE_AOC_NODE:-/sys/bus/platform/devices/154b0000.aoc}
+cards=${OMAMOBILE_ASOUND_CARDS:-/proc/asound/cards}
+# The Trusty node sits at the device-tree root on some boards and under soc@0 on
+# the 8 Pro (zuma): use the first status file that exists.
+dt=${OMAMOBILE_DT_ROOT:-/proc/device-tree}
+trusty_status=${OMAMOBILE_TRUSTY_STATUS:-}
+if [[ -z $trusty_status ]]; then
+  for t in "$dt/trusty/status" "$dt/soc@0/trusty/status"; do
+    [[ -e $t ]] && trusty_status=$t && break
+  done
+fi
+
+log() { echo "omamobile-husky-aoc: $*"; }
+
+for arg; do
+  case $arg in
+    --retry) rm -f "$marker" ;;
+    *) log "unknown argument $arg"; exit 2 ;;
+  esac
+done
+
+if [[ -e $marker ]]; then
+  log "the last bring-up ($(cat "$marker" 2>/dev/null)) never finished; the AoC stays off this boot."
+  log "after checking the previous boot's log, retry with: omamobile-husky-aoc-start --retry"
+  exit 0
+fi
+if [[ ! -e $node ]]; then
+  log "the AoC is not enabled in this kernel's device tree; nothing to do"
+  exit 0
+fi
+# The AoC starts once per boot: a second firmware load would take the running
+# one down. Its services file starts with "Services : N" only while the AoC is
+# online (services_show in the driver prints nothing otherwise), the same test
+# as the 7 Pro's start. The card being listed is a second sign, not the only one.
+if grep -q '^Services : [1-9]' "$node/services" 2>/dev/null; then
+  log "already online: $(head -1 "$node/services")"
+  exit 0
+fi
+if grep -q aoc-snd-card "$cards" 2>/dev/null; then
+  log "the sound card is already up"
+  exit 0
+fi
+# A start that got as far as the firmware write but has no online AoC (for
+# instance the card never appeared): do not write aoc.bin to it again.
+if [[ -e $loaded ]]; then
+  log "the AoC was already started this boot but is not online; reboot to start it again"
+  exit 1
+fi
+if ! grep -q okay "$trusty_status" 2>/dev/null; then
+  log "Trusty is not enabled in this device tree; the AoC cannot be started"
+  exit 1
+fi
+fw=
+for d in /usr/lib/firmware/updates /usr/lib/firmware; do
+  [[ -e $d/aoc.bin ]] && fw=$d/aoc.bin && break
+done
+if [[ -z $fw ]]; then
+  log "no aoc.bin (install it from the phone's own vendor partition: tools/extract-vendor-firmware)"
+  exit 1
+fi
+
+mkdir -p "$state"
+date -Is > "$marker"
+sync -f "$marker" 2>/dev/null || sync
+
+finish() { rm -f "$marker"; sync -f "$state" 2>/dev/null || sync; }
+fail() { log "$*"; finish; exit 1; }
+
+load() { modprobe -i "$@" || fail "modprobe $* failed"; }
+
+modprobe snd-soc-core
+modprobe snd-soc-wm-adsp
+for m in trusty_core trusty_log trusty_ipc trusty_virtio; do load "$m"; done
+for _ in $(seq 50); do [[ -c /dev/trusty-ipc-dev0 ]] && break; sleep 0.2; done
+[[ -c /dev/trusty-ipc-dev0 ]] || fail "no /dev/trusty-ipc-dev0"
+for m in gsa gs201_aoc_sysmmu mailbox_wc; do load "$m"; done
+# the firmware load waits until the service front ends are bound
+load aoc_core aoc_autoload_firmware=0
+for m in aoc_char_dev aoc_channel_dev aoc_alsa_dev_util \
+         snd-soc-cs35l41-lib snd-soc-cs35l41 snd-soc-cs35l41-spi aoc_alsa_dev; do
+  load "$m"
+done
+[[ -e $node/firmware ]] || fail "no firmware node in $node"
+mkdir -p "${loaded%/*}" && date -Is > "$loaded"
+echo aoc.bin > "$node/firmware" || fail "the firmware load failed"
+for _ in $(seq 40); do grep -q aoc-snd-card "$cards" 2>/dev/null && break; sleep 0.5; done
+grep -q aoc-snd-card "$cards" 2>/dev/null || fail "the sound card did not appear"
+log "the sound card is up"
+finish

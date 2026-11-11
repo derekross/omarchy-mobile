@@ -1,0 +1,99 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/repo-publish --from-main's copy of the gitignored prebuilt binaries
+# (packages/*/…/prebuilt/) into out/publish-tree, in a fixture repository
+# (no network, no keys, nothing built or published). The real git lists the
+# inventory and the real rsync copies it; a stand-in git answers everything
+# that would touch origin or create the worktree, git and rsync fail on
+# request, and a stand-in publisher in the fixture's out/publish-tree
+# records what it was handed. An empty inventory is a no-op, names with
+# spaces and newlines are copied, and a failing inventory or copy stops
+# before the publisher runs.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+command -v rsync >/dev/null || { pass "# skip: no rsync"; exit 0; }
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null   # never the user's git config
+export REAL_GIT REAL_RSYNC STUB_LOG=$t/git.log
+REAL_GIT=$(command -v git) REAL_RSYNC=$(command -v rsync)
+
+R=$t/repo wt=$t/repo/out/publish-tree
+mkdir -p "$R/tools" "$R/packages/a" "$R/packages/b/bionic" "$t/bin" "$wt/.git" "$wt/tools"
+cp tools/repo-publish "$R/tools/"
+echo /out > "$R/.gitignore"
+echo 'prebuilt/' > "$R/packages/a/.gitignore"
+printf '*.log\nbionic/prebuilt/\n' > "$R/packages/b/.gitignore"
+git -C "$R" init -q
+git -C "$R" add -A
+git -C "$R" -c user.name=test -c user.email=test@invalid commit -qm fixture
+
+# Only the inventory reaches the real git; fetch, checkout, clean and the
+# worktree are stood in for, so nothing outside the fixture is touched.
+cat > "$t/bin/git" <<'EOF'
+#!/bin/bash
+if [[ " $* " == *" ls-files "* ]]; then
+  # FAIL_GIT_MIDWAY: one good name, then a failure, as a read error would
+  [[ -z ${FAIL_GIT_MIDWAY-} ]] || { printf 'packages/a/prebuilt/with space.bin\0'; exit 128; }
+  exec "$REAL_GIT" "$@"
+fi
+echo "git $*" >> "$STUB_LOG"
+[[ " $* " != *" rev-parse "* ]] || echo 0000000
+EOF
+# The copy fails on request with rsync's status, after reading its list,
+# so the failure isn't a SIGPIPE upstream.
+cat > "$t/bin/rsync" <<'EOF'
+#!/bin/bash
+[[ -z ${FAIL_RSYNC-} ]] || { cat > /dev/null; echo "rsync: (stand-in) No space left on device" >&2; exit 23; }
+exec "$REAL_RSYNC" "$@"
+EOF
+printf '#!/bin/sh\nexit 0\n' > "$t/bin/bsdtar"   # checked for, never run on this path
+cat > "$wt/tools/repo-publish" <<EOF
+#!/bin/bash
+printf '%s\n' "\$@" > "$t/exec.args"
+EOF
+chmod +x "$t/bin/"* "$wt/tools/repo-publish"
+
+run() {  # run [ENV=…]: tools/repo-publish --from-main --dry-run in the fixture
+  rm -f "$t/exec.args"
+  (cd "$R" && env PATH="$t/bin:$PATH" "$@" tools/repo-publish --from-main --dry-run) > "$t/log" 2>&1
+}
+published() {  # published WHAT [ENV=…]: the publisher ran, given all but --from-main
+  run "${@:2}" || { cat "$t/log"; fail "$1: the publisher runs"; }
+  [[ $(cat "$t/exec.args") == --dry-run ]] || fail "$1: the publisher gets the arguments but --from-main"
+}
+stopped() {  # stopped WHAT [ENV=…]: the run failed before the publisher ran
+  if run "${@:2}"; then fail "$1: the run stops"; fi
+  [[ ! -e $t/exec.args ]] || fail "$1: the publisher doesn't run"
+}
+
+# --- an empty inventory is a no-op ---
+published "nothing ignored"
+grep -c '^git fetch ' "$STUB_LOG" > /dev/null || fail "the fetch went to the stand-in git"
+if grep -c ' worktree ' "$STUB_LOG" > /dev/null; then fail "the fixture's publish tree is used, no new worktree"; fi
+echo "build output" > "$R/packages/b/build.log"
+published "ignored files, none under prebuilt/"
+[[ ! -e $wt/packages ]] || fail "an empty inventory copies nothing"
+pass "an empty prebuilt inventory is a no-op, and the clean tree is published"
+
+# --- a populated inventory is copied, names with spaces and newlines too ---
+mkdir -p "$R/packages/a/prebuilt" "$R/packages/b/bionic/prebuilt"
+echo one > "$R/packages/a/prebuilt/with space.bin"
+echo two > "$R/packages/b/bionic/prebuilt/new"$'\n'"line"
+published "prebuilt files"
+[[ $(cat "$wt/packages/a/prebuilt/with space.bin") == one ]] || fail "a name with a space is copied"
+[[ $(cat "$wt/packages/b/bionic/prebuilt/new"$'\n'"line") == two ]] || fail "a name with a newline is copied"
+[[ ! -e $wt/packages/b/build.log ]] || fail "ignored files outside prebuilt/ stay behind"
+pass "prebuilt files are copied by NUL-separated name, and nothing else"
+
+# --- failures stop before the publisher runs ---
+echo "not an index" > "$t/bad-index"   # the real git ls-files fails on it
+stopped "a failing git ls-files" GIT_INDEX_FILE="$t/bad-index"
+grep -c 'fatal:' "$t/log" > /dev/null || { cat "$t/log"; fail "git's own error is shown"; }
+stopped "a git ls-files that fails after some names" FAIL_GIT_MIDWAY=1
+pass "a failing inventory stops before publishing, also after some names"
+
+stopped "a failing rsync" FAIL_RSYNC=1
+pass "a failing copy stops before publishing"

@@ -1,0 +1,73 @@
+# Notifications: forget one notification by IPC. Omarchy Mobile's quick
+# settings list the toasts on screen and the history under the sheet, and a
+# sideways swipe on a row there takes away that one notification. The
+# service has calls for all toasts (dismissAll), all history (clear) and
+# toasts by summary text, but none for one entry, and every way a toast
+# leaves the screen moves its file into history, so a toast swiped away in
+# the shade would come straight back as a history row. Deleting a history
+# file from outside isn't safe either: archives, trims and replays run on the
+# service's serialized file queue, and a move still queued for that
+# notification would put the file back. `forget <timestamp>-<id>.json` now
+# closes a toast with that file name (a history replay of it too) at its
+# sender without archiving it, then deletes the history entry and its image
+# copies on the same queue, after anything already queued. A name that isn't
+# a notification file name does nothing.
+#
+# Against Omarchy 4.0.6 (edge 4.0.6-1) with 0015 and 0017 applied.
+diff --git i/shell/plugins/notifications/Service.qml w/shell/plugins/notifications/Service.qml
+--- i/shell/plugins/notifications/Service.qml
++++ w/shell/plugins/notifications/Service.qml
+@@ -376,9 +376,11 @@
+     // The popup is leaving the screen — for any reason — so its file must not
+     // survive to the next shell restart. It becomes the newest history entry
+     // instead. Rows that never had a file (a history replay, the empty-history
+-    // placeholder) archive to nothing, which the move tolerates.
++    // placeholder) archive to nothing, which the move tolerates. A forgotten
++    // popup (forgetNotification) leaves no history entry: its file goes.
+     if (entry) {
+-      archivePopupFileFor(entry)
++      if (reason === "forget") deletePopupFileFor(entry)
++      else archivePopupFileFor(entry)
+       if (restored) delete restoredPopups[NotificationLogic.popupFileName(entry)]
+     }
+     popupModel.remove(index)
+@@ -398,6 +400,26 @@
+     while (popupModel.count > 0) dismissPopup(0)
+   }
+ 
++  // Forget one notification for good, named by its file (<timestamp>-<id>.json,
++  // popupFileName): a toast on screen with that name, a history replay of it
++  // included, closes at its sender without moving into history, and the
++  // history entry and its image copies are deleted. The delete runs on the
++  // file queue, after any archive already queued for the same notification,
++  // so a toast that has just left the screen can't come back as history.
++  function forgetNotification(name) {
++    var file = String(name || "")
++    if (!/^[0-9]+-[0-9]+\.json$/.test(file)) return "none"
++    for (var i = popupModel.count - 1; i >= 0; i--) {
++      var row = popupModel.get(i)
++      if (row && row.originalId >= 0 && NotificationLogic.popupFileName(row) === file)
++        removePopup(i, "forget")
++    }
++    enqueuePopupFileJob(["bash", "-c",
++      "rm -f \"$1/$3\" \"$2/${3%.json}\"-*", "--",
++      historyDir, imagesDir, file])
++    return "ok"
++  }
++
+   // Run the popup's click action, then dismiss. Omarchy's own toasts carry the
+   // action as an argv vector in the `execArgv` role (see execArgvFromHints),
+   // which the persistence files preserve, so restored toasts stay clickable.
+@@ -993,6 +1015,12 @@
+       return hit ? "ok" : "none"
+     }
+ 
++    // Forget one notification, toast or history entry, by its file name
++    // (`forget 1760000000000-3.json`); the rest of the history stays.
++    function forget(name: string): string {
++      return service.forgetNotification(name)
++    }
++
+     function ping(): string { return "ok" }
+   }
+ 

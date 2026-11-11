@@ -22,7 +22,7 @@ logical at scale 3).
 | `omamobile.update` | `panel` (keepLoaded) | The update sheet: Omarchy's update for a phone, in place of its terminal update |
 | `omamobile.voice` | `panel` (keepLoaded) | The voice bar, through Voxtype: hold the pill, or the keyboard's Mic key; it types, sends to an agent, or asks it |
 | `omamobile.access` | `panel` (keepLoaded) | The permission sheet: xdg-desktop-portal's "Allow Camera to use the camera?", in place of GTK's desktop dialog |
-| `omamobile.back` | `panel` (keepLoaded) | The back gesture: swipe in from the left or right edge for Escape |
+| `omamobile.back` | `panel` (keepLoaded) | The back gesture: swipe in from the left or right edge for Escape; an app at its top level then asks for home (`omamobile-home`) |
 | `omamobile.mobilenetwork` | `panel` (keepLoaded) | The Mobile network page: carrier, signal, mobile data, data roaming, the APN and (under Advanced) the attach APN, the SIM PIN lock; Setup > Mobile network or the Mobile data tile's chevron. "No modem" without the modem stack (docs/TELEPHONY-APPS-PLAN.md 7.6) |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
 
@@ -219,8 +219,8 @@ comes last.
 toggles the radio; the chevron at the tile's right edge, or a long-press
 anywhere on it, swaps the sheet for the picker. It is its own window on the
 top layer with normal exclusion (like the launcher's drawer), so it sits
-between the status bar and the on-screen keyboard. The back glyph returns to
-quick settings; tapping outside or Escape closes it.
+between the status bar and the on-screen keyboard. The back glyph, and Back
+(Escape), return to quick settings; tapping outside closes it.
 
 * **Use Wi-Fi** switch, then the connected network, then everything in range
   strongest first, with a signal glyph and a lock on secured networks. Saved
@@ -843,9 +843,9 @@ go once the arrow fills in (about 56 px in, more across than along the edge).
 Back is Escape, sent through Hyprland's own dispatcher
 (`hl.dsp.send_key_state`, a key down and a key up 50 ms later, as Omarchy's
 clipboard bindings send keys) to whatever has the keyboard focus: an app's
-dialog, menu or popover, a terminal app, or a shell sheet or the drawer. A
-sheet that doesn't take the keyboard (the home screen's Widgets and Pages
-sheets) closes with a tap outside it instead.
+dialog, menu or popover, a terminal app, or a shell sheet or the drawer.
+Before that it puts the on-screen keyboard away, or closes the topmost shell
+surface that doesn't take the keyboard (below).
 
 Each edge is a 14 px strip on the overlay layer, masked like the home pill,
 in a window wide enough to draw the arrow that follows the finger. Normal
@@ -856,8 +856,52 @@ real fullscreen window, as the home pill does, and aren't shown over the
 lock. A page swipe on the home screen that starts in the outer 14 px goes
 back instead; start it further in.
 
+**One Back does one thing, in this order** (`BackLink.js`):
+
+1. **The on-screen keyboard.** While it is up, Back hides it (squeekboard's
+   `SetVisible`, as the pill's double tap; never the `screen-keyboard-enabled`
+   setting, which turns the keyboard off) and sends nothing else. The next
+   Back does what it would have done. The keyboard's language sheet sits on
+   the keyboard and goes first: "Add a language" back to the list, then closed.
+2. **The topmost shell surface on Back's list**, the one that opened last. A
+   surface that doesn't take the keyboard never saw Escape: the key went to
+   the app under it. These register while they are open and take themselves
+   off the list as they close:
+
+   | Surface | Back |
+   | --- | --- |
+   | Permission sheet (`omamobile.access`) | Closes the request unanswered: nothing is remembered and the app asks again. Only a button allows or refuses for good |
+   | Fingerprint setup (`omamobile.fingerprint`) | Its Cancel (stops a running enrollment), or Done after one. Not while polkit asks |
+   | Voice settings; the voice bar's check before Ask, and its error (`omamobile.voice`) | Closes; the check's text is discarded, as its Discard |
+   | Home screen (`omamobile.home`), only while it shows with nothing open over it | A sheet goes back one sheet or closes (a widget's unsaved settings are asked about first: Save, or Discard changes), then edit mode ends, then the pages go to the home page |
+   | A widget's opened screen (`OwlCell.qml`) | Closes, as a tap on its title |
+
+3. **Escape, to whatever has the keyboard focus**: an app, or a shell sheet
+   that takes the keyboard (quick settings and its panels, the drawer,
+   recent apps, the update sheet, Mobile network). Those go one level on it:
+   a Wi-Fi, Bluetooth or Record panel back to quick settings, "Show with…"
+   back to the window's menu.
+
+A new surface that doesn't take the keyboard joins the list with a `Loader`
+of `../omamobile.back/BackLinkClient.qml` (the file's header shows how), as
+the home screen reaches the drawer through `DrawerLink.js`: both are one
+`.pragma library` script shared by every plugin in the shell's one engine.
+`shell call omamobile.back state ''` lists who would be asked now (`asks`).
+
+**Back is phone-wide.** An app goes back one level on Escape while it has
+somewhere to go back to (a page, a sheet, a dialog, a search), and at its top
+level it shows the home screen, as Back at an app's first screen does on
+Android. The shell can't do the second part itself: Escape is only a key, and
+nothing tells the shell whether the app used it. So an app at its top level
+runs `omamobile-home` (`bin/omamobile-home`): an empty workspace and the home
+screens' home page, the same two calls as the home pill and the switcher's
+Home. The app keeps running and stays in recents. An app must not ask for
+home while that would end something (a recording that stops when its window
+is hidden) and needs no Hyprland call of its own. Without Hyprland the
+command exits 1 and nothing happens.
+
 IPC: `omarchy-shell shell call omamobile.back back ''` (the same as the
-gesture) and `state ''`.
+gesture), `home ''` (runs `omamobile-home`) and `state ''`.
 
 ## omamobile.update
 
