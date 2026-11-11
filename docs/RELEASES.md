@@ -83,7 +83,7 @@ Bring-up tools (`*-stage`, `display-hz`, `usbc-deadman`) stay per plan: they pok
 | `UFS_RW_LUNS` | (unset) | Optional. The LUNs besides `sda` that hold `UFS_RW` partitions, as disk names `sdb` to `sdz`, packed as `/etc/omamobile-ufs-rw-luns`. The init guards each as it guards `sda`: the whole-disk node removed, the disk left writable, and only its `UFS_RW` partitions left writable. Absent (every descriptor so far), malformed, or with a closed allowlist: every LUN but `sda` stays read-only at the disk level. Boot-image writers on the phone (`omamobile-boot-update`) still look only on `sda` |
 | `INITRAMFS_INIT` | `/initramfs/init` | The init script. A leading `/` is relative to the repo root, so devices share one script. Any other value is relative to the descriptor |
 | `INITRAMFS_ROOT_LABEL` | (unset) | Optional: `omamobile-root` enables read-only label/header checks before ext4 repair or mounting; only `e2fsck -p` statuses 0 and 1 proceed. Omitted: existing root handling, including unlabelled hand-installed roots, is unchanged |
-| `INITRAMFS_ROOT_MODE` | (unset) | Optional: `persistent-development` or `ram-rescue`, requiring `INITRAMFS_ROOT_LABEL=omamobile-root`. The former skips growth and writes `/var/lib/omamobile/root-boot-pending` before handover; an installed, enabled SSH-ready helper must clear it after USB SSH is ready, or the next boot stays in RAM. The latter always stays in RAM. Omitted: existing handover behavior |
+| `INITRAMFS_ROOT_MODE` | (unset) | Optional: `persistent-development` or `ram-rescue`, requiring `INITRAMFS_ROOT_LABEL=omamobile-root`. The former skips growth and writes `/var/lib/omamobile/root-boot-pending` before handover; an installed, enabled SSH-ready helper must clear it after USB SSH is ready, or subsequent boots stay in RAM until the marker is cleared. The latter always stays in RAM. Omitted: existing handover behavior |
 | `INITRAMFS_USB_RECOVERY` | (unset) | Optional: `yes` or `no`; `no` disables the separate 45-second no-host crash for an attended development/recovery policy. Omitted or `yes`: existing USB recovery behavior. Independent of root mode; retain watchdog and buttons/fastboot recovery |
 | `INITRAMFS_MODULES` | (unset) | Optional: kernel modules the initramfs carries in `/lib/modules/omamobile/`, listed in load order in `/lib/modules/omamobile/order`, from this kernel build's `lib/modules/$(kernel_release)` (`omamobile modules` first). The shared init loads them before any other step, and only on a board whose first compatible is `COMPATIBLE`. For drivers the boot needs before the Arch root, such as the PMIC rails a `simple-framebuffer` waits for; `images` refuses an initramfs whose modules come from another build |
 | `INITRAMFS_I2C_TOOLS` | (unset) | `1`: `i2cget` and `i2cset` (and `libi2c`) from Alpine's i2c-tools in the initramfs, for an init that talks to a chip before any driver runs (raven closes the MAX77759 USB switch). Nothing else from the package |
@@ -114,8 +114,8 @@ Existing descriptors retain their current boot path. A descriptor may opt in:
   skip initramfs growth, and persist `/var/lib/omamobile/root-boot-pending` before
   systemd handover. Install and enable the matching SSH-ready service on the
   root before using this mode; it must clear the marker after USB SSH is ready.
-  Without that helper, every second boot stays in RAM because the preceding
-  handover leaves the marker behind. A stale marker holds the next boot in RAM.
+  Without that helper, the first boot hands over and leaves the marker behind;
+  every subsequent boot stays in RAM until the marker is cleared manually.
   `ram-rescue` always stays in RAM.
 - `INITRAMFS_USB_RECOVERY=no`: disable the separate 45-second no-host crash.
   Development roots may finish booting without a USB host, and a failed root
@@ -127,6 +127,32 @@ Existing descriptors retain their current boot path. A descriptor may opt in:
 These keys change image construction only; no shipped descriptor opts in here.
 Unknown root-mode files fail closed in RAM. This change has offline test evidence,
 not a fresh phone boot.
+
+`INITRAMFS_ROOT_MODE` and `INITRAMFS_USB_RECOVERY=no` are local development
+settings and are refused by `initramfs --release`. With USB recovery left on,
+each held boot without a USB host still spends a slot try when it restarts.
+The handover marker is written only after the final storage-guard check passes.
+
+After investigating the failure, clear the marker from the RAM rescue shell
+to permit one more handover attempt. Find userdata by its partition name,
+confirm it is the installed root, then mount it, remove the marker and unmount:
+
+```sh
+userdata=
+for part in /sys/class/block/sd*; do
+  [ -r "$part/partition" ] || continue
+  if grep -qx PARTNAME=userdata "$part/uevent"; then userdata=/dev/${part##*/}; fi
+done
+mkdir -p /newroot
+if [ -n "$userdata" ] && mount -t ext4 -o rw "$userdata" /newroot; then
+  rm -f /newroot/var/lib/omamobile/root-boot-pending
+  sync
+  umount /newroot
+fi
+```
+
+Clearing the marker does not repair the failed startup or replace the SSH-ready
+helper. A further failed handover sets it again and holds subsequent boots.
 
 ### 3.2 Keys to add later
 

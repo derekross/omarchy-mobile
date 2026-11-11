@@ -649,6 +649,12 @@ cmd_initramfs() {
   [[ -f $init ]] || die "no init script $init"
   # Every per-device value is checked before anything is downloaded or built
   initramfs_config
+  if ((release)); then
+    [[ -z ${DEV_INITRAMFS_ROOT_MODE+x} ]] ||
+      die "INITRAMFS_ROOT_MODE is for local bring-up only, not --release"
+    [[ ${DEV_INITRAMFS_USB_RECOVERY:-yes} != no ]] ||
+      die "INITRAMFS_USB_RECOVERY=no is for local bring-up only, not --release"
+  fi
   if [[ -n ${OMAMOBILE_NFSROOT:-} ]]; then
     ((release == 0)) || die "OMAMOBILE_NFSROOT is for local bring-up only, not --release"
     [[ $OMAMOBILE_NFSROOT =~ ^[A-Za-z0-9.-]+:/[A-Za-z0-9._/-]+$ && $OMAMOBILE_NFSROOT != *..* && $OMAMOBILE_NFSROOT != *//* ]] ||

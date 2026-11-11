@@ -544,9 +544,6 @@ boot_arch() {
       umount /newroot
       return 1
     fi
-    mkdir -p /newroot/var/lib/omamobile || { umount /newroot; return 1; }
-    cat /proc/sys/kernel/random/boot_id > "$pending" || { umount /newroot; return 1; }
-    sync
   fi
   # The guard loop dies below and nothing in Arch sets a partition read-only,
   # so make one last pass and check, while SSH still runs: anything outside
@@ -559,6 +556,13 @@ boot_arch() {
     say "arch: writable outside the allowlist: $(echo "$open" | tr "\n" " ")(staying in the initramfs)"
     umount /newroot
     return 1
+  fi
+  if [ "$(cat /etc/omamobile-root-mode 2>/dev/null)" = persistent-development ]; then
+    # Record an attempted handover only after the final guard passes. A guard
+    # refusal must not be reported as a root that failed to reach SSH next boot.
+    mkdir -p /newroot/var/lib/omamobile || { umount /newroot; return 1; }
+    cat /proc/sys/kernel/random/boot_id > "$pending" || { umount /newroot; return 1; }
+    sync
   fi
   say "arch: switching to Arch Linux on $dev"
   # Stop the initramfs helpers (dropbear, getty, guards); the kernel keeps

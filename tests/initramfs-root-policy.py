@@ -48,6 +48,33 @@ with tempfile.TemporaryDirectory() as tmp:
         pack(bad, 'bad-' + str(i), False)
     print('ok - default packing is unchanged; explicit policies validated before output')
 
+    (fixture / 'initramfs').mkdir()
+    (fixture / 'initramfs/init').write_text('#!/bin/sh\n')
+    for i, (extra, message) in enumerate((
+        ('INITRAMFS_ROOT_LABEL=omamobile-root\nINITRAMFS_ROOT_MODE=persistent-development\n', 'INITRAMFS_ROOT_MODE'),
+        ('INITRAMFS_ROOT_LABEL=omamobile-root\nINITRAMFS_ROOT_MODE=ram-rescue\n', 'INITRAMFS_ROOT_MODE'),
+        ('INITRAMFS_USB_RECOVERY=no\n', 'INITRAMFS_USB_RECOVERY=no'),
+    )):
+        conf.write_text(descriptor + '\n' + extra)
+        output = p / ('release-' + str(i))
+        result = subprocess.run([str(fixture / 'bin/omamobile'), 'initramfs', '--release'],
+                                env={**os.environ, 'DEVICE': 'six', 'KERNEL_OUT': str(output), 'WORK': str(p / 'work')},
+                                capture_output=True, text=True)
+        assert result.returncode != 0 and message in result.stderr and 'not --release' in result.stderr, result
+        assert not output.exists() and not (p / 'work').exists()
+    print('ok - development root mode and disabled USB recovery refuse release builds before downloads')
+
+    nfsfile = p / 'nfsroot'
+    dispatch = source.rsplit('# A requested NFS root must not silently fall through', 1)[1].split('\nfi', 1)[0].split('\n', 1)[1] + '\nfi\n'
+    assert len(dispatch.splitlines()) == 6 and dispatch.count('boot_nfs') == 1 and dispatch.count('boot_root') == 1
+    assert all(word not in dispatch for word in ('/sys/', 'mount', 'kill', 'blockdev', 'devmem'))
+    for requested in (False, True):
+        nfsfile.write_text('host:/export\n' if requested else '')
+        spies = 'say() { :; }; boot_nfs() { echo nfs; return 1; }; boot_root() { echo userdata; return 1; }\n'
+        result = subprocess.run(['/bin/sh', '-c', spies + dispatch.replace('/etc/omamobile-nfsroot', str(nfsfile))], capture_output=True, text=True)
+        assert result.stdout.strip() == ('nfs' if requested else 'userdata'), result
+    print('ok - requested NFS failure never falls through to userdata policy')
+
     modefile = p / 'mode'
     for value, calls_arch in ((None, True), ('persistent-development', True),
                               ('ram-rescue', False), ('unknown', False), ('', False)):
