@@ -22,7 +22,7 @@ case "$*" in
   *) true ;;
 esac'
 fake systemd-run 'echo "systemd-run $*" >> "$T/calls"; [[ "$*" == *"--unit=omamobile-tegu-modem "* ]] && touch "$T/profile"; true'
-fake modinfo 'echo "modinfo $*" >> "$T/calls"; [[ -n ${IN_TREE:-} ]]'
+fake modinfo 'echo "modinfo $*" >> "$T/calls"; [[ -n ${IN_TREE:-} ]] && [[ -z ${NO_PHY:-} || "$*" != *phy_zuma_pcie* ]]'
 # The drivers record whether the latch was already on disk when they loaded
 fake modprobe 'echo "modprobe $* latch=$([[ -e $OMAMOBILE_MODEM_LATCH ]] && echo yes || echo no)" >> "$T/calls"'
 fake insmod 'echo "insmod $* latch=$([[ -e $OMAMOBILE_MODEM_LATCH ]] && echo yes || echo no)" >> "$T/calls"'
@@ -53,8 +53,16 @@ run_tree k2 IN_TREE=1 MMD=1 || { cat "$t/k2/out"; fail "a start with the kernel'
 c=$t/k2/calls
 grep -qx 'modprobe pcie_gs201_cp allow_hw=1 latch=yes' "$c" || fail "the kernel's link driver is loaded with its hardware steps allowed, after the latch is on disk"
 grep -q 'latch=no' "$c" && fail "no driver loads before the latch is written"
+# The link driver's PHY is loaded by the start itself, first: the guards keep
+# it from autoloading, and the Wi-Fi start loads it only with Wi-Fi's firmware
+n_phy=$(grep -n '^modprobe phy_zuma_pcie' "$c" | cut -d: -f1)
+[[ -n $n_phy && $n_phy -lt $(grep -n '^modprobe pcie_gs201_cp' "$c" | cut -d: -f1) ]] || fail "the PCIe PHY's driver is loaded before the link driver"
 grep -q '^insmod' "$c" && fail "no bring-up module is loaded when the kernel has the drivers"
 grep -q 'drivers: the running kernel' "$t/k2/out" || fail "the start says which drivers it used"
+run_tree k2p IN_TREE=1 NO_PHY=1 && fail "a kernel without the PCIe PHY's driver must be refused"
+grep -q "not the PCIe PHY's" "$t/k2p/out" || fail "the refusal names the missing PHY driver: $(cat "$t/k2p/out")"
+[[ ! -e $t/k2p/latch ]] || fail "the missing PHY driver is refused before the latch is written"
+grep -qE '^(modprobe|insmod|systemd-run)' "$t/k2p/calls" && fail "nothing loads or starts without the PHY driver"
 n_inhibit=$(grep -n 'unit=omamobile-tegu-modem-nosleep' "$c" | cut -d: -f1)
 n_driver=$(grep -n '^modprobe pcie_gs201_cp' "$c" | cut -d: -f1)
 n_check=$(grep -n '^chroot modem check' "$c" | cut -d: -f1)
