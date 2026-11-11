@@ -20,6 +20,11 @@ import "SwitcherModel.js" as SwitcherModel
 // app's screen, where the two tile as Omarchy tiles them, and "Move to its
 // own screen" gives it one back.
 //
+// A capture Hyprland fails ends for good, and the card stayed empty: each
+// card starts it again, and keeps its window's last picture (a still, at the
+// card's size) to show until its capture has a frame, also when the card is
+// rebuilt after another window closed.
+//
 // On its side (TOUCH-PLAN 2.4: 1040x480) a card keeps the screen's shape,
 // so its preview isn't stretched, and the bottom actions keep their row.
 //
@@ -47,6 +52,18 @@ Item {
     var list = ToplevelManager.toplevels.values.slice()
     list.reverse()
     return list
+  }
+
+  // Each open window's last picture (SwitcherModel's stills); a window that
+  // closed takes its still with it.
+  property var stills: []
+  onWindowsChanged: stills = SwitcherModel.prunedStills(stills, windows)
+  function keepStill(toplevel, result) {
+    if (windows.indexOf(toplevel) >= 0) stills = SwitcherModel.withStill(stills, toplevel, result)
+  }
+  function stillUrl(toplevel) {
+    var still = SwitcherModel.stillOf(stills, toplevel)
+    return still && still.url ? still.url : ""
   }
 
   // Host lifecycle (`shell summon` / `shell hide`).
@@ -339,6 +356,39 @@ Item {
         width: cards.cardWidth
         height: cards.height
 
+        // Hyprland fails a capture now and then, most often while its window
+        // changes size (the keyboard closing as recent apps open), and
+        // Quickshell then just ends it ("Ending recording due to screencopy
+        // failure"): no frame, and no stopped signal either, which 0.3.2
+        // declares but never emits. So a card still without a frame a second
+        // on starts its capture again, three times at most while recent apps
+        // are open.
+        property bool resting: false
+        property int retries: 0
+        Timer {
+          interval: 1000
+          repeat: true
+          running: root.opened && !capture.hasContent && slot.retries < 3
+          onTriggered: {
+            slot.retries++
+            slot.resting = true                // the capture drops its context
+            slot.resting = false               // and makes a new one
+          }
+        }
+        Connections {
+          target: root
+          function onOpenedChanged() { slot.retries = 0; slot.resting = false }
+        }
+
+        // The capture's frame as this window's still, at the card's size.
+        function keepStill() {
+          if (!capture.hasContent || capture.width <= 0 || capture.height <= 0) return
+          var w = slot.modelData
+          capture.grabToImage(function(result) { root.keepStill(w, result) },
+                              Qt.size(Math.round(capture.width * Screen.devicePixelRatio),
+                                      Math.round(capture.height * Screen.devicePixelRatio)))
+        }
+
         // The app's name, one line, centred over the card.
         Text {
           id: title
@@ -372,11 +422,24 @@ Item {
           border.color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.25)
           opacity: 1 - Math.min(0.8, Math.abs(drag.lift) / height)
 
-          ScreencopyView {
+          // The window's still from an earlier frame, until the capture has one.
+          Image {
+            objectName: "cardStill"
             anchors.fill: parent
             anchors.margins: card.border.width
-            captureSource: root.opened ? slot.modelData : null
+            visible: !capture.hasContent && status === Image.Ready
+            source: root.stillUrl(slot.modelData)
+            cache: false
+          }
+
+          ScreencopyView {
+            id: capture
+            objectName: "cardCapture"
+            anchors.fill: parent
+            anchors.margins: card.border.width
+            captureSource: root.opened && !slot.resting ? slot.modelData : null
             live: true
+            onHasContentChanged: if (hasContent) Qt.callLater(slot.keepStill)
           }
 
           // Tap to switch; hold for "Show with…" and "Move to its own screen".

@@ -72,6 +72,23 @@ test("no entry: the title, then the class, then App", () => {
   assert.strictEqual(M.appName("x", "t", [{ id: "x", name: "" }]), "t", "an entry with no name")
 })
 
+test("stills: one per window, replaced, and gone with the window", () => {
+  const a = { title: "a" }, b = { title: "b" }
+  let stills = []
+  assert.strictEqual(M.stillOf(stills, a), null)
+  stills = M.withStill(stills, a, "a1")
+  stills = M.withStill(stills, b, "b1")
+  stills = M.withStill(stills, a, "a2")
+  assert.strictEqual(stills.length, 2, "a's newer still replaces its older one")
+  assert.strictEqual(M.stillOf(stills, a), "a2")
+  assert.strictEqual(M.stillOf(stills, b), "b1")
+  assert.strictEqual(M.stillOf(stills, { title: "a" }), null, "by the window itself, not by its title")
+  stills = M.prunedStills(stills, [b])
+  assert.deepStrictEqual(stills.map(s => s.still), ["b1"], "a closed window loses its still")
+  assert.deepStrictEqual(M.prunedStills(null, [a]), [])
+  assert.strictEqual(M.stillOf(undefined, a), null)
+})
+
 let failed = 0
 for (const [name, fn] of tests) {
   try { fn(); console.log("ok - switcher model: " + name) } catch (e) { failed++; console.log("not ok - switcher model: " + name + "\n  " + (e.stack || e)) }

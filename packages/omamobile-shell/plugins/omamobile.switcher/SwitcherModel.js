@@ -127,6 +127,27 @@ function appName(appId, title, entries) {
   return c || "App"
 }
 
+// Recent apps' stills: the last picture of each open window, as a list of
+// { window, still } pairs (a window is the toplevel object itself, so the
+// pair goes when the window does). A card shows its window's still until its
+// own capture has a frame.
+function stillOf(stills, w) {
+  for (var i = 0; i < (stills || []).length; i++)
+    if (stills[i].window === w) return stills[i].still
+  return null
+}
+
+function withStill(stills, w, still) {
+  var out = (stills || []).filter(function(s) { return s.window !== w })
+  out.push({ window: w, still: still })
+  return out
+}
+
+function prunedStills(stills, windows) {
+  return (stills || []).filter(function(s) { return (windows || []).indexOf(s.window) >= 0 })
+}
+
 if (typeof module !== "undefined") {
-  module.exports = { entryFor: entryFor, appName: appName, webAppKey: webAppKey, webAppUrl: webAppUrl }
+  module.exports = { entryFor: entryFor, appName: appName, webAppKey: webAppKey, webAppUrl: webAppUrl,
+                     stillOf: stillOf, withStill: withStill, prunedStills: prunedStills }
 }
