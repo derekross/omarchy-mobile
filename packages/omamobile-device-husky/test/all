@@ -40,6 +40,11 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
     ../omamobile-device-cheetah/omamobile-device-cheetah.install \
     || fail "the pacman install script drifted from the cheetah package"
   pass "the pacman install script matches the cheetah package"
+  # Its comment names zuma, cheetah's gs201: the settings are what must match
+  sleep=vendor/systemd/sleep.conf.d/10-omamobile.conf
+  [[ $(grep -v '^#' "$sleep") == "$(grep -v '^#' "../omamobile-device-cheetah/$sleep")" ]] \
+    || fail "the sleep drop-in's settings drifted from the cheetah package"
+  pass "the sleep drop-in's settings match the cheetah package"
 fi
 grep -q 'omamobile-keyring' PKGBUILD || fail "pacman needs omamobile-keyring"
 grep -q '^install=omamobile-device-husky.install$' PKGBUILD \
@@ -63,6 +68,7 @@ for f in usr/bin/reboot-to \
          usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
+         usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
          usr/lib/modprobe.d/omamobile-husky-clk-acpm.conf \
          usr/lib/modprobe.d/omamobile-husky-display.conf \
          usr/lib/systemd/system/omamobile-husky-display.service \
@@ -77,6 +83,10 @@ for f in usr/bin/reboot-to \
          etc/pacman.d/omamobile-mirrorlist; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
+grep -qx 'MemorySleepMode=s2idle' "$tmp/root/usr/lib/systemd/sleep.conf.d/10-omamobile.conf" \
+  || fail "suspend must use s2idle: the kernel's default is deep, which zuma can't wake from yet"
+grep -qx 'AllowHibernation=no' "$tmp/root/usr/lib/systemd/sleep.conf.d/10-omamobile.conf" \
+  || fail "there is no swap to hibernate to"
 grep -q 'KERNEL=="sda", MODE="0000"' "$tmp/root/usr/lib/udev/rules.d/10-omamobile-storage.rules" \
   || fail "the whole-disk node is made inaccessible"
 grep -q 'ID_PART_ENTRY_NAME}!="userdata"' "$tmp/root/usr/lib/udev/rules.d/10-omamobile-storage.rules" \
