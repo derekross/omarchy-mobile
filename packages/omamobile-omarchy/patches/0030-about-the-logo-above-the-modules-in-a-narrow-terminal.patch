@@ -1,0 +1,132 @@
+# About: the logo above the modules, or none, where they don't fit side by
+# side. omarchy-launch-about shows the logo (about.txt, 54 columns) beside
+# fastfetch's module boxes (54 columns), 118 columns in all with the
+# config's padding, and the config turns line wrapping off. A phone's About
+# window is the width of the screen, 63 columns at Omarchy's terminal font
+# on a Pixel 7 Pro, so the logo filled it and every module line was cut to
+# a single character. A terminal narrower than the side-by-side layout now
+# gets the logo above the modules (56 columns and 57 rows with Omarchy's
+# logo), and one too small for that as well, such as a phone with its
+# on-screen keyboard up, gets the modules alone. The room comes from the
+# same measurement fit_window makes (the logo file and fastfetch --logo
+# none), so a window fit_window has sized, as on a desktop, renders as
+# before, and a user's own fastfetch config is left alone. Candidate for
+# upstream Omarchy.
+#
+# Omarchy 4.5's About draws a sheen over the logo, on the cells where it
+# finds the logo in fastfetch's own output. It finds them in the layout that
+# was drawn: the fit still measures the side-by-side layout it sizes a
+# desktop window for, and the sheen then measures again with the options the
+# render used, so a logo above the modules is animated where it is, and
+# with no logo there is no sheen.
+#
+# Against Omarchy 4.5.0 (4.5.0-3).
+diff --git i/bin/omarchy-launch-about w/bin/omarchy-launch-about
+index 0a4a920..99ec53e 100755
+--- i/bin/omarchy-launch-about
++++ w/bin/omarchy-launch-about
+@@ -208,6 +208,8 @@ fit_window() {
+   # logo and the module column: once the logo is the taller of the two, fastfetch
+   # writes a row more than that arithmetic expects, and a window sized by it
+   # scrolls the top padding away.
++  measure_args=()
++  LAYOUT_ROWS=""
+   measure_layout || return 1
+ 
+   # Mirror the logo block in the fastfetch config: 2 columns of padding left of
+@@ -250,6 +252,45 @@ fit_window() {
+   return 1
+ }
+ 
++# The room each layout needs, from the same measurement fit_window makes: the
++# columns for the logo beside the modules (what fit_window sizes the window
++# for), then the columns and rows for the logo above them, where the modules
++# start at the left edge and the cursor takes a row. Nothing where fit_window
++# measures nothing either: a user's own fastfetch config, or no logo file.
++layout_room() {
++  custom_fastfetch_config && return 1
++
++  local logo_w logo_h modules module_w module_h
++  read -r logo_w logo_h <<<"$(logo_dimensions)"
++  [[ -n ${logo_w:-} ]] || return 1
++
++  modules=$(about_fastfetch --logo none | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g'; printf X)
++  modules=${modules%X}
++  module_w=$(printf '%s' "$modules" | display_columns)
++  module_h=$(printf '%s' "$modules" | wc -l)
++
++  printf '%s %s %s\n' $(( LOGO_PAD_LEFT + logo_w + LOGO_PAD_RIGHT + module_w + LOGO_PAD_LEFT )) \
++    $(( LOGO_PAD_LEFT + logo_w > module_w ? LOGO_PAD_LEFT + logo_w : module_w )) \
++    $(( LOGO_PAD_TOP + logo_h + module_h + 1 ))
++}
++
++# The config turns line wrapping off, so a terminal narrower than the logo and
++# the modules side by side, such as a phone's full-width window, cuts every
++# module line short. It gets the logo above the modules instead, and one too
++# small for that as well, such as a phone with its keyboard up, gets the
++# modules without the logo. A terminal wide enough renders as before.
++logo_options() {
++  local rows=$1 cols=$2 side_c top_c top_r
++  read -r side_c top_c top_r <<<"$room"
++  [[ -n ${side_c:-} ]] && (( cols < side_c )) || return 0
++
++  if (( cols >= top_c && rows >= top_r )); then
++    echo "--logo-position top"
++  else
++    echo "--logo none"
++  fi
++}
++
+ # One run answers both questions the sheen has to ask first. How tall the layout
+ # is, because a window too small for it scrolls, which moves the logo off the rows
+ # the frames address. And what colour fastfetch drew the logo in, because the
+@@ -258,11 +299,14 @@ fit_window() {
+ measure_layout() {
+   [[ -n ${LAYOUT_ROWS:-} ]] && return 0
+ 
++  # Without a logo there is nothing to find, and nothing for the sheen to draw.
++  [[ " ${measure_args[*]} " != *" none "* ]] || return 1
++
+   local rendered plain needle offset found row
+ 
+   # --pipe false because fastfetch drops its colours when it is not writing to a
+   # terminal, and it is writing to this substitution.
+-  rendered=$(about_fastfetch --pipe false 2>/dev/null; printf X)
++  rendered=$(about_fastfetch "${measure_args[@]}" --pipe false 2>/dev/null; printf X)
+   rendered=${rendered%X}
+   LAYOUT_ROWS=$(printf '%s' "$rendered" | wc -l)
+   (( LAYOUT_ROWS > 0 )) || return 1
+@@ -395,13 +439,15 @@ if [[ ${1:-} == "--render" ]]; then
+ 
+   fitted=false
+   passes=0
++  room=$(layout_room)
+   while :; do
+     grid=$(stty size)
+     logo_stamp=$(stat -c %Y "$LOGO_FILE" 2>/dev/null)
+     resized=false
+     LAYOUT_ROWS=""
+     clear
+-    about_fastfetch
++    read -ra logo_args <<<"$(logo_options $grid)"
++    about_fastfetch "${logo_args[@]}"
+     # A second pass picks up a fit that could not measure the window the first
+     # time. Beyond that, a window that will not settle would be fitted again on
+     # every repaint.
+@@ -410,12 +456,16 @@ if [[ ${1:-} == "--render" ]]; then
+     fi
+     # An empty frame list plays nothing, so a logo that cannot be animated waits
+     # here exactly as the still one did, and there is one loop rather than two.
++    # The sheen follows the layout that was drawn, not the one the fit measured.
++    measure_args=("${logo_args[@]}")
++    LAYOUT_ROWS=""
+     build_sheen
+     while play_sheen && rest_sheen; do :; done
+     # A rebranded logo changes the content dimensions, so measure again.
+     if [[ $(stat -c %Y "$LOGO_FILE" 2>/dev/null) != $logo_stamp ]]; then
+       fitted=false
+       passes=0
++      room=$(layout_room)
+     fi
+   done
+ fi
