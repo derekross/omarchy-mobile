@@ -204,6 +204,26 @@ for dev in "twelve gs201 0x9855001 0x800 vendor_kernel_boot" "six gs101 0x984500
   pass "$cn: the bundle's install flashes the hook's own $rimg.img (the owner's key appended) and the hook's other images"
 done
 
+# An install waiting at "Type the phone's codename" has its images staged in
+# --work. A --verify-only run on the same --work, or a second install refused
+# before the owner's answers (here another phone's --serial), reads the
+# ramdisk in a directory of its own: it leaves those files as they were and
+# nothing of its own behind
+stage() { mkdir -p "$t/work/ramdisk" && echo staged > "$t/work/root.simg" && echo staged > "$t/work/ramdisk/vendor_kernel_boot.img"; }
+still_staged() { # what ran
+  [[ $(cat "$t/work/root.simg" "$t/work/ramdisk/vendor_kernel_boot.img" 2>/dev/null) == $'staged\nstaged' ]] ||
+    fail "$1 leaves another install's root.simg and ramdisk/ in --work"
+  [[ $(cd "$t/work" && find . -mindepth 1 | LC_ALL=C sort | tr '\n' ' ') == "./ramdisk ./ramdisk/vendor_kernel_boot.img ./root.simg " ]] ||
+    fail "$1 leaves nothing of its own in --work"
+}
+stage
+install six --verify-only || { cat "$t/out"; fail "--verify-only passes the bundle"; }
+still_staged --verify-only
+refused "another phone's --serial" 'not the one this install was started for' --serial OTHER999
+still_staged "an install refused for another phone's --serial"
+rm -r "$t/work"
+pass "--verify-only, and an install refused before the answers, leave another install's staged files in --work alone"
+
 # The hook's first run after the install: slot B already holds its images.
 # Slot B as the bundle's images left it (before this change) still needed
 # the rewrite #564 found.
