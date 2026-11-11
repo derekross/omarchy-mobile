@@ -6,13 +6,13 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
 import "BackModel.js" as BackModel
-import "BackLink.js" as BackLink
 
 // The back gesture, as on Android (TOUCH-PLAN 1.2): swipe in from the left
 // or right edge of the screen and let go to go back. "Back" is Escape, sent
 // to whatever has the keyboard focus (BackModel.js has how): it closes app
 // dialogs, menus and popovers that have no other way out on a touch screen,
-// and the shell's own sheets and drawer, which all close on Escape. An app
+// and the shell's own sheets and drawer. After native handling, an activated
+// Chrome/Chromium window goes back in browser history from either edge. An app
 // goes back one level on it, and at its top level asks for the home screen
 // (omamobile-home), as Back at an app's first screen does on Android.
 //
@@ -39,17 +39,32 @@ Item {
   }
   function close() {}
 
+  // Use the packaged URL from personal clones as well as the packaged plugin.
+  Loader {
+    id: backLink
+    source: Qt.resolvedUrl("../omamobile.back/BackLinkClient.qml")
+  }
+
   // `shell call omamobile.back back ''`: the same as the gesture. One Back
   // does one thing (BackLink.js): the on-screen keyboard is put away, or
   // else the topmost shell surface that registered closes, or else Escape
-  // goes to the focused window. Returns what used it.
-  function back() {
-    var used = BackLink.back()
+  // goes to the focused window, with history Back for a coherent browser.
+  // Returns what used it.
+  function back(payloadJson, startedToplevel) {
+    var client = backLink.item
+    var ready = !!client && typeof client.back === "function"
+    var used = ready ? client.back() : ""
     if (used !== "") {
       console.log("omamobile-back:", used)
       return used
     }
-    Quickshell.execDetached(BackModel.ESCAPE_ARGV)
+    var active = ToplevelManager.activeToplevel
+    var started = startedToplevel === undefined ? active : startedToplevel
+    var hypr = Hyprland.activeToplevel
+    var browser = ready && !!active && active === started
+      && active.activated === true && !active.parent
+      && !!hypr && hypr.wayland === active && BackModel.isBrowser(active.appId)
+    Quickshell.execDetached(browser ? BackModel.BROWSER_BACK_ARGV : BackModel.ESCAPE_ARGV)
     return "ok"
   }
 
@@ -68,7 +83,7 @@ Item {
   // `shell call omamobile.back state ''`
   function state() {
     return JSON.stringify({ fullscreen: fullscreenOnScreen, strips: !fullscreenOnScreen, edge: edge, threshold: BackModel.THRESHOLD,
-                            asks: BackLink.names() })
+                            asks: backLink.item ? backLink.item.names() : [] })
   }
 
   // The touchable strip at each edge, and the width its window draws in.
@@ -170,6 +185,7 @@ Item {
           readonly property bool armed: BackModel.fires(inward, across, BackModel.THRESHOLD)
           property real atY: 0
           property bool wasArmed: false
+          property var startedToplevel: null
           onCentroidChanged: if (active) atY = centroid.position.y
           // One threshold tick per gesture, even if the finger crosses back.
           property bool feedbackSent: false
@@ -182,9 +198,9 @@ Item {
             }
           }
           onActiveChanged: {
-            if (active) { atY = centroid.position.y; wasArmed = false; feedbackSent = false; return }
+            if (active) { startedToplevel = ToplevelManager.activeToplevel; atY = centroid.position.y; wasArmed = false; feedbackSent = false; return }
             console.log("omamobile-back: swipe", win.rightEdge ? "right" : "left", wasArmed ? "back" : "")
-            if (wasArmed) root.back()
+            if (wasArmed) root.back("", startedToplevel)
           }
         }
       }

@@ -52,6 +52,36 @@ Item {
   property var manifest: null
 
   property bool opened: false
+
+  Loader {
+    source: Qt.resolvedUrl("../omamobile.back/BackLinkClient.qml")
+    onLoaded: {
+      item.name = "quick settings"
+      item.handler = function() { return root.navigationBack() }
+      item.active = Qt.binding(function() { return root.navigationOpen })
+    }
+  }
+
+  readonly property bool navigationOpen: opened || wifiPicker.opened || bluetoothPanelItem.opened || recordPanelItem.opened
+
+  function navigationBack() {
+    if (wifiPicker.opened) {
+      if (wifiPicker.sheet) wifiPicker.cancelSheet()
+      else wifiPicker.backRequested()
+      return true
+    }
+    if (bluetoothPanelItem.opened) {
+      if (bluetoothPanelItem.activeSheet) bluetoothPanelItem.cancelSheet()
+      else bluetoothPanelItem.backRequested()
+      return true
+    }
+    if (recordPanelItem.opened) { recordPanelItem.backRequested(); return true }
+    if (!opened) return false
+    if (editing) finishEditing()
+    else dismiss()
+    return true
+  }
+
   readonly property string pluginId: (manifest && manifest.id) || "omamobile.quicksettings"
 
   // ---------------------------------------------------------------- lifecycle

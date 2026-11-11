@@ -58,6 +58,44 @@ test("a terminal gets no Escape: Back goes home; every other window gets the vir
   assert.ok(M.isTerminal("foot") && M.isTerminal("org.omarchy.terminal") && !M.isTerminal("") && !M.isTerminal("Foot"))
 })
 
+test("browser history uses the virtual keyboard with the ordered Alt+Left dispatch fallback", () => {
+  const [sh, c, script, name, down, up] = M.BROWSER_BACK_ARGV
+  assert.deepStrictEqual([sh, c, name], ["sh", "-c", "sh"])
+  assert.strictEqual(down, 'hl.dsp.send_key_state({ mods = "ALT", key = "code:113", state = "down" })')
+  assert.strictEqual(up, down.replace('"down"', '"up"'))
+  assert.ok(script.indexOf("exec wtype -M alt -k Left -m alt") < script.indexOf('hyprctl dispatch "$1"'))
+  assert.ok(script.indexOf('hyprctl dispatch "$1"') < script.indexOf("sleep 0.05"))
+  assert.ok(script.indexOf("sleep 0.05") < script.indexOf('hyprctl dispatch "$2"'))
+})
+
+test("browser Back releases Alt and runs only the selected key path", () => {
+  const fs = require("fs"), os = require("os"), cp = require("child_process")
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "back-browser-"))
+  const log = path.join(dir, "log")
+  const stub = (name, body) => fs.writeFileSync(path.join(dir, name), "#!/bin/sh\n" + body + "\n", { mode: 0o755 })
+  try {
+    const sleep = cp.execSync("command -v sleep", { shell: "/bin/sh" }).toString().trim()
+    fs.symlinkSync(sleep, path.join(dir, "sleep"))
+    stub("hyprctl", 'echo "hyprctl $*" >> "$LOG"')
+    stub("wtype", 'echo "wtype $*" >> "$LOG"')
+    const run = () => {
+      fs.writeFileSync(log, "")
+      cp.execFileSync("/bin/sh", M.BROWSER_BACK_ARGV.slice(1), { env: { PATH: dir, LOG: log } })
+      return fs.readFileSync(log, "utf8").trim().split("\n")
+    }
+    assert.deepStrictEqual(run(), ["wtype -M alt -k Left -m alt"])
+    fs.rmSync(path.join(dir, "wtype"))
+    assert.deepStrictEqual(run(), ["hyprctl dispatch " + M.BROWSER_BACK_ARGV[4], "hyprctl dispatch " + M.BROWSER_BACK_ARGV[5]])
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test("browser matching includes installed apps without matching helpers or prompts", () => {
+  for (const id of ["google-chrome", "chromium", "chromium-browser", "chrome-mail.google.com__-Default", "chrome-abcdef-Profile_1"])
+    assert.ok(M.isBrowser(id), id)
+  for (const id of [null, "", "foot", "polkit", "chrome-password-dialog", "chromium-prompt", "google-chrome-helper"])
+    assert.ok(!M.isBrowser(id), id)
+})
+
 test("home is the shell's one command, with nothing of Hyprland in it", () => {
   assert.deepStrictEqual(M.HOME_ARGV, ["omamobile-home"])
 })

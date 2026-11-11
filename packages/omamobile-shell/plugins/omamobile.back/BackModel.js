@@ -47,6 +47,20 @@ var ESCAPE_ARGV = ["sh", "-c",
 // asks. `shell call omamobile.back home ''` runs it too.
 var HOME_ARGV = ["omamobile-home"]
 
+// Browser history is chosen in QML after native Back handlers. Use the same
+// virtual keyboard as Escape; retain the ordered dispatch pair as fallback.
+var BROWSER_BACK_ARGV = ["sh", "-c",
+  'if command -v wtype >/dev/null 2>&1; then exec wtype -M alt -k Left -m alt; fi; ' +
+  'hyprctl dispatch "$1" >/dev/null; sleep 0.05; hyprctl dispatch "$2" >/dev/null', "sh",
+  'hl.dsp.send_key_state({ mods = "ALT", key = "code:113", state = "down" })',
+  'hl.dsp.send_key_state({ mods = "ALT", key = "code:113", state = "up" })']
+
+function isBrowser(appId) {
+  var id = String(appId || "")
+  return ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "org.chromium.Chromium", "com.google.Chrome"].indexOf(id) !== -1
+    || /^chrome-.+-(?:Default|Profile(?:_\d+)?)$/.test(id)
+}
+
 // How far the finger has to come in from the edge (logical px), and how far
 // a swipe may wander along the edge for each pixel it comes in: a mostly
 // vertical drag that starts on the strip is not a back.
@@ -73,7 +87,7 @@ function inwardFor(rightEdge, translationX) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { TERMINALS: TERMINALS, isTerminal: isTerminal,
+  module.exports = { BROWSER_BACK_ARGV: BROWSER_BACK_ARGV, isBrowser: isBrowser, TERMINALS: TERMINALS, isTerminal: isTerminal,
     ESCAPE_DOWN: ESCAPE_DOWN, ESCAPE_UP: ESCAPE_UP, ESCAPE_ARGV: ESCAPE_ARGV, HOME_ARGV: HOME_ARGV, THRESHOLD: THRESHOLD,
     progress: progress, fires: fires, inwardFor: inwardFor
   }

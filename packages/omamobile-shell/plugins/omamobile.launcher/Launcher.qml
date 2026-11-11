@@ -51,6 +51,23 @@ Item {
 
   // `opened` is the drawer; the dock is always on screen.
   property bool opened: false
+
+  Loader {
+    source: Qt.resolvedUrl("../omamobile.back/BackLinkClient.qml")
+    onLoaded: {
+      item.name = "app drawer"
+      item.handler = function() { return root.navigationBack() }
+      item.active = Qt.binding(function() { return root.opened })
+    }
+  }
+
+  function navigationBack() {
+    if (!opened) return false
+    if (input.activeFocus && query) query = ""
+    else dismiss(0)
+    return true
+  }
+
   property string query: ""
   property var apps: []
   property int appsRevision: 0
