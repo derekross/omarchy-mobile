@@ -3,6 +3,43 @@
 
 Findings from real hardware, newest first. Tracking issue: #36.
 
+## devinfo 3.11 read-only evidence (2026-11-06)
+
+The Android 15 unit reports `devinfo` version 3.11. With slot B active,
+not marked successful, the eight bytes at `0x30-0x37` were:
+
+```
+03 00 00 00 00 0c 00 00
+```
+
+The same bytes and the same fastboot state were read after one unmarked
+boot through the bootloader:
+
+```
+slot-successful:b   no
+slot-unbootable:b   no
+slot-retry-count:b  1
+current-slot:       b
+```
+
+`devinfo` is read-only (`blockdev --getro` = 1) on this unit, and no
+write was forced while 3.11 is not in the merged table. A marked-state
+row still needs either the maintainer's approval to write 3.11 or a
+bootloader action that marks the slot itself.
+
+Both slots on this unit carry bootloader `lynx-15.2`.
+
+These bytes and the fastboot lines above were taken at different moments
+(Linux after a boot; `getvar` from the bootloader in a separate cycle), so
+this is **provisional**, not a same-state row: the retry byte reads 0 where
+`getvar` reports 1, and slot A's flags differ from the 3.15 table. A
+same-moment table still has to be captured.
+
+
+Stock Android on 11-06 was a deliberate restore, not a fallback: the
+factory images were flashed to slot B and Android booted from it. No
+radio work followed, so no fresh `persist`/`efs` backup was needed.
+
 ## 2026-10-30: published kernel on an Android 15 unit; devinfo 3.11
 
 - **The published `omamobile` kernel brings up lynx touch on this unit.** With
@@ -13,15 +50,15 @@ Findings from real hardware, newest first. Tracking issue: #36.
 - **This unit's bootloader reports devinfo 3.11, not 3.15.** It is still on the
   Android 15 factory build (`BP1A.250505.005.B1`, bootloader `lynx-15.2`).
   `omamobile-device-lynx` 0.2.0 only accepted 3.15, so
-  `omamobile-boot-success` refused to write and the slot was left unmarked.
+  `omamobile-boot-success` refused to write; whether the slot was later
+  marked by hand is not recorded.
 - **The A/B bytes are readable at the same offsets in 3.11 and 3.15.** A
   read-only `omamobile-bootctl dump` decoded slot a and b on 3.11; layout
   equivalence is not yet confirmed (see the provisional table below).
-- **The earlier write, 2026-10-30.** `omamobile-bootctl` from
-  `omamobile-device-lynx` 0.2.0 changed slot B's flag at `0x35` from `0x04`
-  to `0x06`; only that byte was recorded, not the full eight, and no
-  read-only `devinfo` backup was taken first. Treat it as a 3.15-layout
-  observation until re-read.
+- **The earlier write is not recorded.** The `0x04` -> `0x06` figure came
+  from the 3.15 test and table, not from a phone reading. 0.2.0 refuses a
+  3.11 header, and the binary that wrote slot B on 10-30 is not recorded;
+  no read-only `devinfo` backup was taken before it.
 - **Fix:** the shared source has the `#ifdef` for 3.11 and the 7 Pro's
   3.15 condition. lynx's build does not pass the define yet, so 3.11
   writes stay off until the table is confirmed; the package test builds
@@ -190,35 +227,3 @@ Findings from real hardware, newest first. Tracking issue: #36.
 | `vendor_boot` page size | 0x800, header v4 | [V] stock image header |
 | Panel | `sdc-s6e3fc5`, 1080x2400, on DECON0 and DSIM0 | [V] `exynos_drm.panel_name`, `dumpsys display`, stock dmesg |
 | Storage | 128 GB SK hynix UFS 3.1 | [V] `fastboot getvar` |
-
-## devinfo 3.11 read-only evidence (2026-11-06)
-
-The Android 15 unit reports `devinfo` version 3.11. With slot B active,
-not marked successful, the eight bytes at `0x30-0x37` were:
-
-```
-03 00 00 00 00 0c 00 00
-```
-
-The same bytes and the same fastboot state were read after one unmarked
-boot through the bootloader:
-
-```
-slot-successful:b   no
-slot-unbootable:b   no
-slot-retry-count:b  1
-current-slot:       b
-```
-
-`devinfo` is read-only (`blockdev --getro` = 1) on this unit, and no
-write was forced while 3.11 is not in the merged table. A marked-state
-row still needs either the maintainer's approval to write 3.11 or a
-bootloader action that marks the slot itself.
-
-Both slots on this unit carry bootloader `lynx-15.2`.
-
-These bytes and the fastboot lines above were taken at different moments
-(Linux after a boot; `getvar` from the bootloader in a separate cycle), so
-this is **provisional**, not a same-state row: the retry byte reads 0 where
-`getvar` reports 1, and slot A's flags differ from the 3.15 table. A
-same-moment table still has to be captured.

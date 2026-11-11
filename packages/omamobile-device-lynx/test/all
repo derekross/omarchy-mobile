@@ -97,7 +97,7 @@ PY3
 cc -O2 -DOMAMOBILE_DEVINFO_EXTRA_MINOR=11 -o "$tmp/bootctl311" \
   src/omamobile-bootctl.c
 cp "$tmp/devinfo311" "$tmp/devinfo311.orig"
-"$tmp/bootctl311" dump "$tmp/devinfo311" | grep -q 'version: 3.11' \
+"$tmp/bootctl311" dump "$tmp/devinfo311" | grep -c 'version: 3.11' >/dev/null \
   || fail "bootctl decodes devinfo 3.11"
 plan=$("$tmp/bootctl311" mark-successful "$tmp/devinfo311" b 2>&1 || true)
 grep -q '0x35: 0c -> 0e' <<<"$plan" || fail "3.11 mark-successful plans one byte"
@@ -112,10 +112,19 @@ buf[0:4] = b"DEVI"
 struct.pack_into("<HH", buf, 4, 3, 14)
 open(sys.argv[1], "wb").write(buf)
 PY4
-if "$tmp/build/omamobile-bootctl" mark-successful "$tmp/devinfo314" b >/dev/null 2>&1; then
-  fail "an unverified 3.14 layout was accepted"
+out=$("$tmp/build/omamobile-bootctl" mark-successful "$tmp/devinfo314" b 2>&1 || true)
+grep -c 'refusing to write' <<<"$out" >/dev/null \
+  || fail "an unverified 3.14 layout was not refused"
+if grep -q 'bytes to change' <<<"$out"; then
+  fail "an unverified 3.14 layout was planned"
 fi
-pass "bootctl refuses an unverified devinfo layout"
+out=$("$tmp/build/omamobile-bootctl" mark-successful "$tmp/devinfo311" b --i-understand 2>&1 || true)
+grep -c 'refusing to write' <<<"$out" >/dev/null \
+  || fail "the shipped build accepted 3.11"
+if grep -q 'OMAMOBILE_DEVINFO_EXTRA_MINOR' build; then
+  fail "build still passes the 3.11 define"
+fi
+pass "bootctl refuses 3.14 and the shipped build refuses 3.11"
 
 ./install "$tmp/root" "$tmp/build"
 for f in usr/bin/reboot-to usr/bin/omamobile-bootctl usr/bin/omamobile-boot-success \
