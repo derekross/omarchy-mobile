@@ -812,8 +812,8 @@ binary: a single-module `make` had rebuilt nothing):
   93-minute link death may have been the same thing before the dead-link
   check existed.
 - **Fixes:**
-  - omamobile-modem 0.1.17: a crash raises a notification ("Cellular
-    stopped") with the crash record's path;
+  - omamobile-modem, in the release #389 lands in: a crash raises a
+    notification ("Cellular stopped") with the crash record's path;
   - omamobile-modem-sit, in the release #389 lands in: when the CP is
     gone, sitd exits with one line ("the modem went away ...") instead of
     a traceback.
