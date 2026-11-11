@@ -64,7 +64,8 @@ Priorities: **P1** broken, unsafe, or a dead end on a phone; **P2** noticeably a
 
 ## Shared Chromium and Grok Bot fitting revision, 2026-11-10 (3.1)
 
-Candidate only; no new phone result. Both apps now share the established
+The combined package passed the Pixel 6a checks recorded below. Both apps
+share the established
 578 px layout target and internal geometry detection, including simpledrm.
 The 7 Pro's 480 logical px retains 0.83, the 9a's 405 gets 0.70, and the
 6a's 360 gets 0.62 for a fresh default. The owner's custom 0.70 and site
@@ -96,8 +97,30 @@ Runbook (low risk, userspace only):
 4. Rollback: restore the prior package, flags, done markers and shell profile
    and plugins, restart the shell if needed and reopen the apps normally.
 
-Full-package 6a checks and the 9a owner's migration check remain required;
-the maintainer will validate the 7 Pro. No kernel or boot image is involved.
+### Pixel 6a verification, 2026-11-11
+
+The exact tested combined package is `omamobile-shell 0.2.119-1`, integration
+`83326ed6d09684ae80f38c9360e8c4e864d32614`, SHA-256
+`02e0acadd2568bf167946a87c740626fffb59068918271bdb2026fac799e0270`, on
+`7.3.0-rc6-omamobile-bluejay-input-gated0`. Installation and cold shell restart
+were performed while unlocked. All six required phone-smoke checks passed;
+package verification found 370 files and none altered.
+
+The installed helper wrote UA/IME/first-run defaults in an isolated home
+without geometry, then obtained actual live monitor geometry for a computed
+Lua scale and fitted both apps to 0.62. Removing UA/IME flags before that retry
+left them removed. Normal Chromium launch with an isolated profile and the
+owner's existing 0.70 gave equal viewport/client/scroll widths of 515 and a
+complete mobile UA. Personal browser flags, saved Chrome zoom and the clock
+were preserved. Only main's expected remote-session disable was added to the
+shell profile. Temporary fixtures were removed and the phone returned home.
+
+Policy, the complete combined shell suite and independent review passed;
+both published UX heads passed repository and every-package CI. These runtime
+results qualify the exact combined package above, not a later kernel or an
+unrelated subsequently merged shell change. The 9a owner's one-time migration
+and the maintainer's existing/fresh-user 7 Pro checks remain before merge.
+No kernel or boot image was changed for this userspace verification.
 
 
 ## Omarchy patches this needs (upstreamable)
