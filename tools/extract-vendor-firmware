@@ -45,6 +45,8 @@
 #   vendor/firmware/bcmdhd_clm.blob_4383_a3   -> brcm/brcmfmac4383-pcie.<board>.clm_blob    (regulatory)
 #   vendor/firmware/bcmdhd_txcap.blob_4383_a3 -> brcm/brcmfmac4383-pcie.<board>.txcap_blob  (TX capabilities)
 #   vendor/firmware/brcm/BCM.hcd              -> brcm/BCM.<board>.hcd                       (btbcm)
+#   vendor/etc/aoc/{uplink_{speaker,handset}_aec_{on,off},downlink_{speaker,handset}}_config.pb
+#                                            -> omamobile/tegu/aoc/ (call tuning, unchanged owner files)
 #   vendor/firmware/aoc.bin                   -> aoc-tegu.bin            (the AoC DSP, under the 9a's own name)
 #   vendor/etc/sensors/registry/              -> /usr/share/omamobile/sensors/registry/
 #   vendor/firmware/cs40l26*.{wmfw,bin}       -> the same five files as cheetah's
@@ -220,6 +222,12 @@ case $DEVICE_OPT in
       "firmware/bcmdhd_txcap.blob_4383_a3|brcm/$FW_BASE.$BOARD.txcap_blob"
       "firmware/brcm/BCM.hcd|brcm/BCM.$BOARD.hcd"
       "firmware/aoc.bin|aoc-tegu.bin"
+      "etc/aoc/uplink_speaker_aec_on_config.pb|omamobile/tegu/aoc/uplink_speaker_aec_on_config.pb"
+      "etc/aoc/uplink_speaker_aec_off_config.pb|omamobile/tegu/aoc/uplink_speaker_aec_off_config.pb"
+      "etc/aoc/downlink_speaker_config.pb|omamobile/tegu/aoc/downlink_speaker_config.pb"
+      "etc/aoc/uplink_handset_aec_on_config.pb|omamobile/tegu/aoc/uplink_handset_aec_on_config.pb"
+      "etc/aoc/uplink_handset_aec_off_config.pb|omamobile/tegu/aoc/uplink_handset_aec_off_config.pb"
+      "etc/aoc/downlink_handset_config.pb|omamobile/tegu/aoc/downlink_handset_config.pb"
       "firmware/cs40l26.wmfw|cs40l26.wmfw"
       "firmware/cs40l26.bin|cs40l26.bin"
       "firmware/cs40l26-svc.bin|cs40l26-svc.bin"

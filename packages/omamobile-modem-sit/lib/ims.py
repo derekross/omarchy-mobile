@@ -13,6 +13,7 @@ import time
 
 from data_call import paths, call_ids, entries, ims_capable, modem_owned_ids, pcscf_addresses, private_write, summary
 from paths import RUN
+from sit import ModemError
 
 REGISTRATION = RUN / 'ims-registration.json'
 
@@ -203,6 +204,19 @@ def register(client, *, pcscf_required=True, pcscf_fallback=None, attach=None):
     client.request(0x0d08, body, timeout=30)
     private_write(REGISTRATION, b'{"outcome":"ADD_PDN accepted; awaiting registration"}')
     print('IMS PDN information accepted; awaiting registration indication', flush=True)
+
+
+def withdraw_stale(client):
+    """An earlier sitd in this boot registered IMS on a bearer the modem has
+    since dropped: tell the modem's IMS stack that PDN is gone, as stock's
+    DelPdnInfo does, so the next ADD_PDN_INFO registers again. Without it a
+    restarted sitd's ADD_PDN_INFO was accepted and no registration came
+    (the 9a, 2026-11-02). A refusal is logged and the start goes on."""
+    try:
+        client.request(0x0d38, bytes([1, 2, 0]), timeout=30)
+        print('IMS PDN of the earlier start withdrawn', flush=True)
+    except ModemError as error:
+        print(f'IMS PDN of the earlier start not withdrawn ({error}); registering anyway', flush=True)
 
 
 def unregister(client):

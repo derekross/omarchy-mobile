@@ -52,8 +52,13 @@ Two packages:
 Units (`systemd/`), none enabled by the package:
 
 - `omamobile-sitd.service`: `Type=notify`, `Requires=`/`After=omamobile-modem.service`,
-  `ExecStart=omamobile-sitd --bringup`, `Restart=no` (a second start-up on
-  the same CP is not supported: reboot), `TimeoutStartSec=15min`.
+  `ExecStart=omamobile-sitd --bringup`, `Restart=no` (it never restarts on
+  its own), `TimeoutStartSec=15min`. A second start-up on the same CP after
+  a clean stop clears the earlier start's bearer records whose setup was
+  confirmed (a reservation with no confirmed outcome stays, and the start
+  refuses), withdraws the old IMS PDN with DelPdnInfo, and sets up again.
+  On the 9a this brought data back (2026-11-02); IMS after the withdrawal
+  hasn't run yet. After a failed start-up, reboot.
 - `omamobile-sit-data.service`: after the RIL is ready; `omamobile-sit data
   on|off` starts and stops it.
 - `/usr/lib/NetworkManager/conf.d/90-omamobile-rmnet.conf`: `rmnet*` unmanaged.

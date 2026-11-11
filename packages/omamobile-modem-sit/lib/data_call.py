@@ -190,6 +190,38 @@ def owned_ids():
     return result
 
 
+def clear_stale(client):
+    """At start-up, an ownership record the modem doesn't list is left from an
+    earlier sitd in this boot: its bearers, and the IMS registration on them,
+    ended when that sitd stopped. Clear the records only when the modem lists
+    no bearer at all, and only those whose setup had a confirmed outcome (the
+    response was saved). A reservation written before a setup that never got
+    an answer stays, with the IMS registration on it, so activate() refuses
+    and the start waits for an attended reboot, as for any unknown outcome."""
+    if call_ids(client.request(0x0602)):
+        return 0
+    stale, uncertain = [], []
+    for cid in (INTERNET_CID, IMS_CID):
+        state, response = paths(cid)
+        if state.exists() and not response.exists():
+            uncertain.append(cid)
+        else:
+            stale += [p for p in (state, response) if p.exists()]
+    registration = paths(IMS_CID)[0].with_name('ims-registration.json')
+    if registration.exists() and IMS_CID not in uncertain:
+        stale.append(registration)
+    # The modem's own bearers ended too.
+    if MODEM_OWNED.exists():
+        stale.append(MODEM_OWNED)
+    for path in stale:
+        path.unlink()
+    if stale:
+        print(f'cleared {len(stale)} bearer record(s) from an earlier start', flush=True)
+    if uncertain:
+        print(f'kept the reservation for CID(s) {uncertain}: their setup never had a confirmed outcome', flush=True)
+    return len(stale)
+
+
 def private_write(path, data):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_CLOEXEC, 0o600)
     with os.fdopen(fd, 'wb') as out:
