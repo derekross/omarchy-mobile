@@ -1,0 +1,366 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/dts-v1/;
+/plugin/;
+
+/*
+ * Pixel 9a: Google's modem interface driver (CPIF, the Pixel 7 Pro's port)
+ * on the S5300, for the published device tree (MODEM-PLAN M3, M5).
+ *
+ * The board's device tree describes the modem under its PCIe link
+ * (pcie@12100000/modem: the control lines and the memory it shares with the
+ * host), and the link driver (pcie-gs201-cp) drives the lines while that
+ * node is enabled. This overlay disables the node for the link driver, which
+ * then leaves the lines alone, and adds CPIF's two nodes, which take the
+ * lines and the memory from it: stock tegu's cpif and cp_shmem nodes
+ * (Google's GPL zumapro-board-cp-s5300-sit.dtsi and the 9a's board overlay),
+ * as the Pixel 7 Pro's modem-cpif-test.dtso with the 9a's differences
+ * (MODEM-PLAN F4): link_attrs 0x37c8 (the GNSS firmware in DRAM), no
+ * offset_boot_indicator, mif_off_during_volte, umts_ipc attrs 0x6000, the
+ * gnss_boot and gnss_dump devices and the GNSS_FW region, and the packet
+ * processor. Left out: the throughput monitor, SPI boot, the S5910 and the
+ * AoC voice window.
+ *
+ * Binding CPIF powers nothing: it drives the ap2cp outputs low and waits
+ * for cbd, which the modem profile starts (omamobile-tegu-modem-up).
+ *
+ * Stock maps IPC and GNSS_FW cached because its link is I/O coherent (IOCC
+ * through SYSREG_HSI1). The link driver doesn't set IOCC up yet, so both are
+ * uncached here: with them cached, the ROM read a stale boot image and
+ * stopped at boot_stage 0x1FF, err_report 0x2000 (M5, 2026-10-27).
+ *
+ * Applied with fdtoverlay; paths, not labels, and no references to base
+ * nodes, so it needs nothing of the base DTB's __symbols__.
+ */
+&{/soc/pcie@12100000/modem} {
+	status = "disabled";
+};
+
+&{/} {
+	cp-shmem {
+		compatible = "samsung,exynos-cp-shmem";
+		cp_num = <0>;
+		use_mem_map_on_cp = <0>;
+
+		/* region,rmem: the modem node's memory-region entries */
+		regions {
+			ipc {
+				region,name = "IPC";
+				region,index = <3>;
+				region,rmem = <0>;
+				region,offset = <0>;
+				region,size = <0x800000>;
+				region,cached = <0>;	/* no IOCC yet: write-combine */
+			};
+
+			msi {
+				region,name = "MSI";
+				region,index = <11>;
+				region,rmem = <1>;
+				region,offset = <0>;
+				region,size = <0x1000>;
+				region,cached = <0>;
+			};
+
+			pktproc {
+				region,name = "PKTPROC";
+				region,index = <7>;
+				region,rmem = <2>;
+				region,offset = <0>;
+				region,size = <0x1c00000>;
+			};
+
+			pktproc-ul {
+				region,name = "PKTPROC_UL";
+				region,index = <8>;
+				region,rmem = <2>;
+				region,offset = <0x1c00000>;
+				region,size = <0x400000>;
+			};
+
+			/* the Kepler GNSS core's firmware, loaded by gnssd */
+			gnss-fw {
+				region,name = "GNSS_FW";
+				region,index = <13>;
+				region,rmem = <0>;
+				region,offset = <0x800000>;
+				region,size = <0x400000>;
+				region,cached = <0>;	/* as IPC */
+			};
+		};
+	};
+
+	cpif {
+		compatible = "samsung,exynos-cp";
+		pci_ch_num = <0>;
+		pci_db_addr = <0x14e60000>;
+		mif,name = "s5300";
+		mif,cp_num = <0>;
+		mif,modem_type = <1>;
+		mif,protocol = <1>;
+		mif,ipc_version = <0x32>;
+		mif,link_type = <1>;
+		mif,link_name = "PCIE";
+		mif,link_attrs = <0x37c8>;	/* + bit 13: GNSS firmware in DRAM */
+		mif,interrupt_types = <1>;
+		mif,capability_check = <1>;
+		mif,int_ap2cp_msg = <0>;
+		mif,int_ap2cp_wakeup = <1>;
+		mif,int_ap2cp_status = <2>;
+		mif,int_ap2cp_active = <3>;
+		mif,int_ap2cp_lcd_status = <4>;
+		mif,int_ap2cp_pcie_link_ack = <14>;
+		mif,int_ap2cp_uart_noti = <15>;
+		mif,irq_cp2ap_msg = <0>;
+		mif,irq_cp2ap_status = <2>;
+		mif,irq_cp2ap_active = <3>;
+		mif,irq_cp2ap_wakelock = <8>;
+		mif,irq_cp2ap_ratmode = <9>;
+		mif,cp2ap_active_not_alive = <0>;
+		legacy_fmt_head_tail_offset = <0x8>;
+		legacy_fmt_buffer_offset = <0x1000>;
+		legacy_fmt_txq_size = <0x1000>;
+		legacy_fmt_rxq_size = <0x1000>;
+		legacy_raw_head_tail_offset = <0x18>;
+		legacy_raw_buffer_offset = <0x3000>;
+		legacy_raw_txq_size = <0x1fd000>;
+		legacy_raw_rxq_size = <0x200000>;
+		legacy_raw_rx_buffer_cached = <0>;
+		offset_srinfo_offset = <0x64>;
+		offset_capability_offset = <0x70>;
+		srinfo_offset = <0x400000>;
+		srinfo_size = <0x300000>;
+		capability_offset = <0xa0>;
+		ap_capability_0 = <0>;
+		ap_capability_1 = <0>;
+		ap2cp_msg = <2 0x800>;
+		cp2ap_msg = <2 0x804>;
+		ap2cp_united_status = <2 0x808>;
+		cp2ap_united_status = <2 0x80c>;
+		ap2cp_kerneltime = <2 0x824>;
+		ap2cp_handover_block_info = <2 0x82c>;
+		sbi_lcd_status_mask = <0x1>;
+		sbi_lcd_status_pos = <27>;
+		sbi_crash_type_mask = <0xf>;
+		sbi_crash_type_pos = <23>;
+		sbi_uart_noti_mask = <0x1>;
+		sbi_uart_noti_pos = <16>;
+		sbi_ds_det_mask = <0x3>;
+		sbi_ds_det_pos = <14>;
+		sbi_pda_active_mask = <0x1>;
+		sbi_pda_active_pos = <5>;
+		sbi_ap_status_mask = <0xf>;
+		sbi_ap_status_pos = <1>;
+		sbi_cp_rat_mode_mask = <0x3f>;
+		sbi_cp_rat_mode_pos = <26>;
+		sbi_cp2ap_wakelock_mask = <0x1>;
+		sbi_cp2ap_wakelock_pos = <6>;
+		sbi_lte_active_mask = <0x1>;
+		sbi_lte_active_pos = <5>;
+		sbi_cp_status_mask = <0xf>;
+		sbi_cp_status_pos = <1>;
+		sbi_ap2cp_kerneltime_sec_mask = <0xfff>;
+		sbi_ap2cp_kerneltime_sec_pos = <20>;
+		sbi_ap2cp_kerneltime_usec_mask = <0xfffff>;
+		sbi_ap2cp_kerneltime_usec_pos = <0>;
+		pktproc_use_36bit_addr = <0>;
+		/*
+		 * The packet processor, stock tegu's values (as cheetah's
+		 * modem-cpif-pktproc.dtso) except the cache flags: no IOCC on
+		 * this link yet, so every region uncached and use_hw_iocc 0.
+		 * Without it the AP advertises capability 0x2, not stock's 0x3,
+		 * and the CP's IPC never started (G2, 2026-10-27).
+		 */
+		pktproc_cp_base = <0x0 0x20000000>;
+		pktproc_dl_support = <1>;
+		pktproc_dl_version = <2>;
+		pktproc_dl_info_rgn_offset = <0x0>;
+		pktproc_dl_info_rgn_size = <0x1000>;
+		pktproc_dl_desc_rgn_offset = <0x1000>;
+		pktproc_dl_desc_rgn_size = <0xff000>;
+		pktproc_dl_buff_rgn_offset = <0x100000>;
+		pktproc_dl_buff_rgn_size = <0x1b00000>;
+		pktproc_dl_info_rgn_cached = <0>;
+		pktproc_dl_desc_rgn_cached = <0>;
+		pktproc_dl_buff_rgn_cached = <0>;
+		pktproc_dl_desc_mode = <1>;
+		pktproc_dl_num_queue = <4>;
+		pktproc_dl_use_exclusive_irq = <1>;
+		pktproc_dl_use_hw_iocc = <0>;
+		pktproc_dl_max_packet_size = <0x630>;
+		pktproc_dl_use_dedicated_baaw = <0>;
+		pktproc_ul_support = <1>;
+		pktproc_ul_info_rgn_offset = <0x1c00000>;
+		pktproc_ul_info_rgn_size = <0x1000>;
+		pktproc_ul_desc_rgn_offset = <0x1c01000>;
+		pktproc_ul_desc_rgn_size = <0x8f000>;
+		pktproc_ul_buff_rgn_offset = <0x1c90000>;
+		pktproc_ul_buff_rgn_size = <0x370000>;
+		pktproc_ul_padding_required = <1>;
+		pktproc_ul_num_queue = <2>;
+		pktproc_ul_max_packet_size = <0x800>;
+		pktproc_ul_hiprio_ack_only = <1>;
+		pktproc_ul_info_rgn_cached = <0>;
+		pktproc_ul_desc_rgn_cached = <0>;
+		pktproc_ul_buff_rgn_cached = <0>;
+		pktproc_ul_use_hw_iocc = <0>;
+		mif_off_during_volte = <1>;
+
+		iodevs {
+			io_device_0 {
+				iod,name = "umts_ipc";
+				iod,ch = <0xf5>;
+				iod,format = <0>;
+				iod,io_type = <1>;
+				iod,link_type = <1>;
+				iod,attrs = <0x6000>;
+				iod,ch_count = <2>;
+			};
+
+			io_device_1 {
+				iod,name = "umts_rfs0";
+				iod,ch = <0x29>;
+				iod,format = <1>;
+				iod,io_type = <1>;
+				iod,link_type = <1>;
+				iod,attrs = <0>;
+			};
+
+			io_device_2 {
+				iod,name = "umts_router";
+				iod,ch = <0x15>;
+				iod,format = <1>;
+				iod,io_type = <1>;
+				iod,link_type = <1>;
+				iod,attrs = <0>;
+			};
+
+			io_device_3 {
+				iod,name = "umts_dm0";
+				iod,ch = <0x51>;
+				iod,format = <1>;
+				iod,io_type = <1>;
+				iod,link_type = <1>;
+				iod,attrs = <0x4000>;
+			};
+
+			io_device_4 {
+				iod,name = "umts_loopback";
+				iod,ch = <0x52>;
+				iod,format = <1>;
+				iod,io_type = <1>;
+				iod,link_type = <1>;
+				iod,attrs = <0>;
+			};
+
+			io_device_5 {
+				iod,name = "rmnet";
+				iod,ch = <0xb5>;
+				iod,format = <1>;
+				iod,io_type = <2>;
+				iod,link_type = <1>;
+				iod,attrs = <0x2000>;
+				iod,ch_count = <30>;
+			};
+
+			io_device_6 {
+				iod,name = "umts_dummy";
+				iod,ch = <0xd3>;
+				iod,format = <1>;
+				iod,io_type = <2>;
+				iod,link_type = <1>;
+				iod,attrs = <0>;
+			};
+
+			io_device_7 {
+				iod,name = "multipdp";
+				iod,ch = <0>;
+				iod,format = <3>;
+				iod,io_type = <3>;
+				iod,link_type = <1>;
+				iod,attrs = <0>;
+			};
+
+			io_device_8 {
+				iod,name = "umts_boot0";
+				iod,ch = <0xf1>;
+				iod,format = <4>;
+				iod,io_type = <0>;
+				iod,link_type = <1>;
+				iod,attrs = <0x200>;
+			};
+
+			io_device_9 {
+				iod,name = "umts_rcs0";
+				iod,ch = <0x5b>;
+				iod,format = <0>;
+				iod,io_type = <1>;
+				iod,link_type = <1>;
+				iod,attrs = <0>;
+			};
+
+			io_device_10 {
+				iod,name = "umts_rcs1";
+				iod,ch = <0x5c>;
+				iod,format = <1>;
+				iod,io_type = <1>;
+				iod,link_type = <1>;
+				iod,attrs = <0>;
+			};
+
+			io_device_11 {
+				iod,name = "umts_wfc0";
+				iod,ch = <0x5d>;
+				iod,format = <0>;
+				iod,io_type = <1>;
+				iod,link_type = <1>;
+				iod,attrs = <0>;
+			};
+
+			io_device_12 {
+				iod,name = "umts_wfc1";
+				iod,ch = <0x5e>;
+				iod,format = <1>;
+				iod,io_type = <1>;
+				iod,link_type = <1>;
+				iod,attrs = <0>;
+			};
+
+			io_device_13 {
+				iod,name = "oem_ipc";
+				iod,ch = <0x81>;
+				iod,format = <0>;
+				iod,io_type = <1>;
+				iod,link_type = <1>;
+				iod,attrs = <0x2000>;
+				iod,ch_count = <8>;
+			};
+
+			io_device_14 {
+				iod,name = "oem_test";
+				iod,ch = <0x89>;
+				iod,format = <1>;
+				iod,io_type = <1>;
+				iod,link_type = <1>;
+				iod,attrs = <0>;
+			};
+
+			io_device_15 {
+				iod,name = "gnss_boot";
+				iod,ch = <0xf0>;
+				iod,format = <1>;
+				iod,io_type = <1>;
+				iod,link_type = <1>;
+				iod,attrs = <0x4200>;
+			};
+
+			io_device_16 {
+				iod,name = "gnss_dump";
+				iod,ch = <0xef>;
+				iod,format = <1>;
+				iod,io_type = <1>;
+				iod,link_type = <1>;
+				iod,attrs = <0x200>;
+			};
+		};
+	};
+};

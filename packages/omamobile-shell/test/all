@@ -523,6 +523,7 @@ pass "PIN or password"
 python3 -c 'import json; assert {"id": "omamobile.home"} in json.load(open("profile/shell.json"))["plugins"]' \
   || fail "the phone profile enables the home screens"
 grep -c 'add_plugin omamobile.home' bin/omamobile-setup-user >/dev/null || fail "existing users get the home screens"
+grep -c 'omarchy-done ensure omamobile-no-remote-session' bin/omamobile-setup-user >/dev/null || fail "no remote-session service on a phone (its probes stalled recent apps)"
 if command -v node >/dev/null; then
   for type in $(node -e 'console.log(Object.keys(require("./plugins/omamobile.home/HomeModel.js").REGISTRY).filter((t) => !t.startsWith("owl:")).join(" "))'); do
     [[ -f plugins/omamobile.home/${type^}Widget.qml ]] || fail "widget $type has ${type^}Widget.qml"

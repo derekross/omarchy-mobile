@@ -454,3 +454,22 @@ he=$t/no-keyring-step; mkdir -p "$he/.config/hypr" "$t/empty-omarchy"; cp "$H"/.
 RUN_HOME=$he RUN_OMARCHY_PATH=$t/empty-omarchy run
 [[ ! -e $he/.local/share/keyrings/default ]] || fail "no keyring is made without Omarchy's step"
 pass "without Omarchy's keyring step the setup still succeeds"
+
+# Omarchy's remote-session service (a gliff remote desktop, probed at every
+# screencast event): off on every phone, once, gliff installed or not
+off() { python3 -I -c 'import json, sys; print(" ".join(json.load(open(sys.argv[1])).get("disabledPlugins", [])))' "$1/.config/omarchy/shell.json"; }
+[[ $(off "$H") == omarchy.remote-session ]] || fail "a new user's disabledPlugins has omarchy.remote-session once, after several logins"
+python3 -I -c 'import json, sys; p = sys.argv[1]; d = json.load(open(p)); d["disabledPlugins"] = []; json.dump(d, open(p, "w"))' "$H/.config/omarchy/shell.json"
+run
+[[ -z $(off "$H") ]] || fail "a user who takes the remote session out of disabledPlugins keeps it on"
+for gliff in no yes; do
+  hg=$t/remote-$gliff; mkdir -p "$hg/.config/hypr" "$hg/.config/omarchy/extensions" "$hg/.local/state/omarchy/done"
+  cp "$H"/.config/hypr/*.lua "$hg/.config/hypr/"
+  touch "$hg/.local/state/omarchy/done/omamobile-shell-profile"
+  echo '{"version": 1, "plugins": [], "disabledPlugins": ["mine"]}' >"$hg/.config/omarchy/shell.json"
+  rm -f "$F/gliff-server"; [[ $gliff == no ]] || fake gliff-server 'exit 0'
+  RUN_HOME=$hg run; RUN_HOME=$hg run
+  [[ $(off "$hg") == 'mine omarchy.remote-session' ]] || fail "an earlier user gets the remote session off once, and keeps their own entries (gliff-server: $gliff)"
+done
+rm -f "$F/gliff-server"
+pass "Omarchy's remote session is off on every phone, once, with or without gliff, and a user can turn it back on"
