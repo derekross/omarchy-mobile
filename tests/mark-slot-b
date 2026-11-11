@@ -1,0 +1,120 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/mark-slot-b against a synthetic GPT with 4096-byte sectors behind a
+# fake phone-ssh: the dry run writes nothing, --write sets bit 54 on boot_b
+# alone and changes exactly the four named sectors, and every refusal holds.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+command -v sfdisk >/dev/null || { echo "ok - # skip: no sfdisk for tests/mark-slot-b"; exit 0; }
+fail() { echo "not ok - $*"; exit 1; }
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+mkdir -p "$t/repo/tools" "$t/repo/device/probe" "$t/bin" "$t/run" "$t/sys/block/sde/queue"
+cp tools/mark-slot-b "$t/repo/tools/"
+
+# The phone: a 16384-sector LUN, 40 partitions, boot_b the 39th (entry 38, in
+# the second entry sector, as on the real sde), active with priority 2 and 7 tries.
+truncate -s $((16384 * 4096)) "$t/disk.img"
+{ echo "label: gpt"; echo "table-length: 96"
+  for i in $(seq 1 40); do
+    case $i in
+      11) echo 'size=8, name=boot_a, attrs="GUID:48,49,50,52"' ;;
+      39) echo 'size=8, name=boot_b, attrs="GUID:49,50,51,52,53"' ;;
+      *) echo "size=8, name=p$i" ;;
+    esac
+  done; } | sfdisk -q --sector-size 4096 "$t/disk.img"
+echo 8:64 > "$t/sys/block/sde/dev"
+echo $((16384 * 8)) > "$t/sys/block/sde/size"
+echo 4096 > "$t/sys/block/sde/queue/logical_block_size"
+echo "console=tty0 androidboot.slot_suffix=_b" > "$t/cmdline"
+printf 'acme,probe\0qcom,sdm845\0' > "$t/compatible"
+printf '#!/bin/sh\nln -s "%s/disk.img" "$1"\n' "$t" > "$t/bin/mknod"
+cat > "$t/ssh" <<EOF
+#!/bin/bash
+c=\$1; c=\${c//\/proc\/cmdline/$t/cmdline}; c=\${c//\/proc\/device-tree\/compatible/$t/compatible}; c=\${c//\/sys\/block\//$t/sys/block/}; c=\${c//\/run\//$t/run/}
+printf '%s\n' "\$c" >> "$t/log"
+# CUT=1 cuts every write's transfer short, as a dropped SSH link would
+[[ -n \${CUT:-} && \$c == *'cat > '* ]] && { head -c 100 | PATH="$t/bin:\$PATH" sh -c "\$c"; exit; }
+PATH="$t/bin:\$PATH" exec sh -c "\$c"
+EOF
+chmod +x "$t/ssh" "$t/bin/mknod"
+export OMAMOBILE_MARK_SSH=$t/ssh
+
+# The four LBAs, read from the image as the §3.1 entry would record them
+lbas=$(/usr/bin/python3 - "$t/disk.img" <<'EOF'
+import struct, sys
+f = open(sys.argv[1], "rb")
+def hdr(lba):
+    f.seek(lba * 4096); h = f.read(92)
+    return struct.unpack_from("<QQ", h, 24)[1], struct.unpack_from("<Q", h, 72)[0]
+alt, pent = hdr(1)
+_, bent = hdr(alt)
+sec = 38 * 128 // 4096
+print(1, pent + sec, bent + sec, alt)
+EOF
+)
+conf() { printf 'CODENAME=probe\nCOMPATIBLE="acme,probe"\nSLOT_B_MARK="sde boot_b %s"\n' "$1" > "$t/repo/device/probe/device.conf"; }
+conf "$lbas"
+mark() { "$t/repo/tools/mark-slot-b" --device probe "$@"; }
+sum() { sha256sum "$t/disk.img" | cut -d' ' -f1; }
+before=$(sum); cp "$t/disk.img" "$t/disk.orig"
+
+mark > "$t/out" 2>&1 || { cat "$t/out"; fail "dry run fails"; }
+grep -q "would set bit 54: 0x007e000000000000" "$t/out" || { cat "$t/out"; fail "dry run does not plan bit 54"; }
+grep -q "dry run: nothing written" "$t/out" || fail "dry run does not say so"
+[[ $(sum) == "$before" ]] || fail "dry run changed the disk"
+grep -c 'dd of=' "$t/log" >/dev/null && fail "dry run ran a write"
+[[ -z $(ls -A "$t/run") ]] || fail "the private node was left behind"
+
+echo "yes" | mark --write > "$t/out" 2>&1 && fail "--write takes a wrong confirmation"
+grep -q "not confirmed; nothing written" "$t/out" || fail "wrong confirmation fails for the wrong reason"
+[[ $(sum) == "$before" ]] || fail "a refused --write changed the disk"
+
+echo "mark boot_b" | CUT=1 mark --write > "$t/out" 2>&1 && fail "--write takes a sector cut short"
+grep -q "arrived damaged on the phone; nothing written" "$t/out" || { cat "$t/out"; fail "a cut transfer fails for the wrong reason"; }
+[[ $(sum) == "$before" ]] || fail "a cut transfer reached the disk"
+[[ -z $(ls -A "$t/run") ]] || fail "the private directory was left behind after a cut transfer"
+: > "$t/log"
+echo "mark boot_b" | mark --write > "$t/out" 2>&1 || { cat "$t/out"; fail "--write fails"; }
+grep 'dd of=' "$t/log" | grep -vc 'dd if="$d/sector" of="$n"' >/dev/null && fail "--write pipes into the disk instead of writing from the checked file"
+grep -q "boot_b marked successful" "$t/out" || fail "--write does not report the mark"
+[[ -z $(ls -A "$t/run") ]] || fail "the private node was left behind after --write"
+changed=$(cmp -l "$t/disk.orig" "$t/disk.img" | awk '{print int(($1 - 1) / 4096)}' | sort -nu | xargs)
+[[ $changed == "$lbas" ]] || fail "--write changed sectors '$changed', not '$lbas'"
+sfdisk -q --sector-size 4096 -V "$t/disk.img" > "$t/verify" 2>&1 || { cat "$t/verify"; fail "sfdisk rejects the marked GPT"; }
+sfdisk --sector-size 4096 -d "$t/disk.img" > "$t/dump" 2>&1
+grep 'name="boot_b"' "$t/dump" | grep -c 'GUID:49,50,51,52,53,54' >/dev/null || { grep boot "$t/dump"; fail "boot_b is not marked in the dump"; }
+grep 'name="boot_a"' "$t/dump" | grep -c 'attrs="GUID:48,49,50,52"$' >/dev/null || fail "boot_a changed"
+mark > "$t/out" 2>&1 || fail "the marked GPT fails its own check"
+grep -q "already marked successful" "$t/out" || fail "a second run does not see the mark"
+
+cp "$t/disk.orig" "$t/disk.img"
+: > "$t/log"
+printf 'acme,other\0qcom,sdm845\0' > "$t/compatible"
+mark > "$t/out" 2>&1 && fail "marks another phone"
+grep -q "not device/probe" "$t/out" || { cat "$t/out"; fail "another phone refused for the wrong reason"; }
+grep -c 'mknod' "$t/log" >/dev/null && fail "made a node before checking which phone answered"
+printf 'acme,probe\0qcom,sdm845\0' > "$t/compatible"
+echo "console=tty0 androidboot.slot_suffix=_a" > "$t/cmdline"
+mark > "$t/out" 2>&1 && fail "marks from a boot of slot A"
+grep -q "did not boot slot B" "$t/out" || fail "slot A boot refused for the wrong reason"
+echo "console=tty0 androidboot.slot_suffix=_b" > "$t/cmdline"
+
+read -r a b c d <<<"$lbas"; conf "$a $((b + 1)) $c $d"
+mark > "$t/out" 2>&1 && fail "takes a GPT the entry does not name"
+grep -q "not the descriptor's" "$t/out" || fail "wrong LBAs refused for the wrong reason"
+conf "$lbas"
+
+printf '\xff' | dd of="$t/disk.img" bs=1 seek=$((c * 4096 + 100)) count=1 conv=notrunc status=none
+mark > "$t/out" 2>&1 && fail "takes differing entry arrays"
+grep -q "entry arrays differ" "$t/out" || { cat "$t/out"; fail "differing arrays refused for the wrong reason"; }
+
+cp "$t/disk.orig" "$t/disk.img"
+sfdisk -q --sector-size 4096 --part-attrs "$t/disk.img" 39 "GUID:49,51,52,53"
+mark > "$t/out" 2>&1 && fail "marks an inactive boot_b"
+grep -q "not active" "$t/out" || fail "inactive boot_b refused for the wrong reason"
+
+printf 'CODENAME=probe\n' > "$t/repo/device/probe/device.conf"
+mark > "$t/out" 2>&1 && fail "runs without a §3.1 entry"
+grep -q "no CONTRIBUTING §3.1 entry" "$t/out" || fail "missing entry refused for the wrong reason"
+
+echo "ok - mark-slot-b: phone check, dry run, confirmation, checked sector files, bit 54 on boot_b in exactly LBA ${lbas// /,}, and its refusals"
