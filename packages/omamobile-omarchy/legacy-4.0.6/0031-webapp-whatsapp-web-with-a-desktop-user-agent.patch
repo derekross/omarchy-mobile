@@ -1,0 +1,51 @@
+# Web apps: WhatsApp Web with a desktop user agent in its own browser
+# process. On a phone, omamobile-setup-user gives Chromium an Android user
+# agent (chromium-flags.conf) so sites send their phone versions; WhatsApp
+# Web answers that with "Use WhatsApp Web by going to web.whatsapp.com from
+# a browser on your computer" and no sign-in code, so its web app was no
+# use (docs/TOUCH-PLAN.md 3.1 expected this). A user agent is per browser
+# process, so the web app gets its own profile
+# (~/.local/share/omamobile/webapps/<host>), which also keeps it out of the
+# hand-off to a running browser; its window class stays
+# chrome-<host>__-Default. The profile is under omamobile/, not omarchy/:
+# Omarchy's upgrade tools still treat ~/.local/share/omarchy as its old
+# checkout and move it aside, which would take the WhatsApp sign-in with
+# it. The user agent names x86_64, as desktop Chromium on Linux does on
+# every CPU. Every other web app launches as before. Google Messages for
+# Web looks the same with either user agent, so it is not listed. Not for
+# upstream Omarchy: a desktop has no phone user agent.
+#
+# Against Omarchy 4.0.6 (edge 4.0.6-1).
+diff --git i/bin/omarchy-launch-webapp w/bin/omarchy-launch-webapp
+--- i/bin/omarchy-launch-webapp
++++ w/bin/omarchy-launch-webapp
+@@ -12,6 +12,29 @@ esac
+ 
+ browser_exec=$(sed -n 's/^Exec=\([^ ]*\).*/\1/p' {~/.local,~/.nix-profile,/usr}/share/applications/$browser 2>/dev/null | head -1)
+ 
++# A web app whose site refuses a phone's browser gets a desktop user agent.
++# On a phone, omamobile-setup-user gives Chromium an Android user agent so
++# sites send their phone versions, and WhatsApp Web answers it with "Use
++# WhatsApp Web by going to web.whatsapp.com from a browser on your
++# computer" instead of its sign-in code. A user agent is set per browser
++# process, so the web app gets a process of its own: its own profile under
++# ~/.local/share/omamobile/webapps/<host>, which also skips the hand-off to
++# a running browser. That directory is ours: Omarchy's upgrade tools still
++# treat ~/.local/share/omarchy as its old checkout and move it aside. Its
++# window class stays chrome-<host>__-Default. The user agent names x86_64,
++# as desktop Chromium on Linux does on every CPU.
++case $1 in
++https://web.whatsapp.com | https://web.whatsapp.com/*)
++  site=${1#https://}
++  site=${site%%/*}
++  major=$("$browser_exec" --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
++  exec setsid uwsm-app -- $browser_exec \
++    --user-data-dir="${XDG_DATA_HOME:-$HOME/.local/share}/omamobile/webapps/$site" \
++    "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major:-150}.0.0.0 Safari/537.36" \
++    --app="$1" "${@:2}"
++  ;;
++esac
++
+ if ! omarchy-cmd-browser-handoff "$browser_exec" --app="$1" "${@:2}"; then
+   exec setsid uwsm-app -- $browser_exec --app="$1" "${@:2}"
+ fi
