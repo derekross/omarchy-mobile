@@ -25,9 +25,9 @@ start_series() {
   for i in $(seq 40); do $PS --fresh true 2>/dev/null && break; sleep 10; done
   timeout 30 $PS --fresh "cat $L 2>/dev/null" > $H/series-before-run$run.log 2>/dev/null
   $PS --fresh 'cat > /root/sleep-linkwait.sh' < device/tegu/bringup/sleep-series.sh
-  # A block inhibitor left by the push scripts (x-awake) would refuse every sleep of the
-  # series. The series releases it itself once its first alarm is armed (sleep-series.sh);
-  # it is not released here, so a start that fails leaves the palmtop held awake.
+  # A block inhibitor left by the push scripts (x-awake) is left alone: the series holds one
+  # of its own and sleeps past both (sleep-series.sh), so a start that fails leaves the
+  # palmtop held awake, and the shell's auto-sleep can't take it between two cycles.
   # The first sleep waits for the graphical session: a suspend while the
   # shell is still starting after a boot left the session closed and the
   # splash on the screen (2026-11-07 13:16).
