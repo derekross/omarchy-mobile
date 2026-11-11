@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Marsel Nenaj
+#include "actionrunner.h"
 #include "backend.h"
 #include "deviceinfocontroller.h"
 #include <QtTest>
@@ -35,6 +36,42 @@ private slots:
         QCOMPARE(backend.page(), QString("display"));
         backend.back();
         QCOMPARE(backend.page(), QString("root"));
+    }
+    void pinPageGoesBackToRoot() {
+        Backend backend;
+        QVERIFY(backend.navigate("pin"));
+        QCOMPARE(backend.page(), QString("pin"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("root"));
+    }
+    // The PIN change finishes whether or not its page is still there: leaving the page while the stand-in for the
+    // backend is still running (it hangs for a moment after reading its input), nobody listens for the result, and
+    // the page that is opened again finds the outcome in the runner, once.
+    void aPinResultOutlivesThePage() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QFile f(dir.filePath("pin.sh"));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("#!/bin/bash\nread -r a; read -r b; read -r c\nsleep 0.7\nprintf '{\"changed\":true}\\n'\n");
+        f.close();
+        ActionRunner runner(nullptr, dir.path());
+        QVERIFY(!runner.pending("pin"));
+        runner.run("pin", {"change"}, "1111\n2222\n2222\n");
+        QVERIFY(runner.pending("pin"));
+        // the page is left here: there is no listener, and the script is still running
+        QVERIFY(runner.takeLastResult("pin").isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(!runner.pending("pin"), 5000);
+        const QVariantMap r = runner.takeLastResult("pin");
+        QCOMPARE(r.value("changed").toBool(), true);
+        QVERIFY(runner.takeLastResult("pin").isEmpty());
+    }
+    void inputIsForThePinToolOnly() {
+        QTemporaryDir dir;
+        ActionRunner runner(nullptr, dir.path());
+        QSignalSpy spy(&runner, &ActionRunner::finished);
+        runner.run("display", {"get"}, "secret\n");
+        QTRY_COMPARE(spy.count(), 1);
+        QCOMPARE(spy.at(0).at(1).toMap().value("error").toString(), QString("unexpected input"));
     }
     void searchHasOnlyImplementedRoutesAndBackClearsIt() {
         Backend backend;

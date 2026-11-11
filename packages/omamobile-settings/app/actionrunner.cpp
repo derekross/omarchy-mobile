@@ -11,6 +11,7 @@
 
 // finished() is always emitted from the event loop, never before run() has returned its id.
 void ActionRunner::post(const QString &tool, const QVariantMap &result, int id) {
+    m_last.insert(tool, result);
     QMetaObject::invokeMethod(this, [this, tool, result, id] { emit finished(tool, result, id); }, Qt::QueuedConnection);
 }
 
@@ -22,7 +23,9 @@ int ActionRunner::run(const QString &tool, const QStringList &args, const QStrin
     if (!tools.contains(tool) || args.size() > 3) return fail("unknown action");
     for (const auto &a : args) if (!word.match(a).hasMatch()) return fail("bad argument");
     if (input.size() > 256) return fail("input too long");
-    const QString dir = "/usr/lib/omamobile-settings/backends";
+    if (!input.isEmpty() && tool != "pin") return fail("unexpected input");
+    const QString &dir = m_dir;
+    m_pending.insert(tool);
     auto *p = new QProcess(this);
     // bash would run a startup file named by these
     auto env = QProcessEnvironment::systemEnvironment();
@@ -37,11 +40,12 @@ int ActionRunner::run(const QString &tool, const QStringList &args, const QStrin
         auto obj = QJsonDocument::fromJson(raw).object();
         if (obj.isEmpty() || st != QProcess::NormalExit)
             obj = QJsonObject{{"error", QStringLiteral("the backend failed (exit %1)").arg(code)}};
+        m_pending.remove(tool);
         post(tool, obj.toVariantMap(), id);
         p->deleteLater();
     });
     connect(p, &QProcess::errorOccurred, this, [this, p, tool, id](QProcess::ProcessError e) {
-        if (e == QProcess::FailedToStart) { post(tool, {{"error", "cannot start the backend"}}, id); p->deleteLater(); }
+        if (e == QProcess::FailedToStart) { m_pending.remove(tool); post(tool, {{"error", "cannot start the backend"}}, id); p->deleteLater(); }
     });
     p->start();
     if (!input.isEmpty()) p->write(input.toUtf8());
