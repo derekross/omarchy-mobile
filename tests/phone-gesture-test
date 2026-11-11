@@ -1,0 +1,134 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/phone-gesture-test without a phone: its scenario list and --help,
+# and its arithmetic, imported as a module: the upward shift between two row
+# profiles (a list that scrolled with the finger), the rule that turns that
+# shift into evidence (with the numbers the 9a measured), the touch points
+# taken from the output and the page's window, the preconditions that keep a
+# test to the screen it claims (home, over an app, no on-screen keyboard),
+# and how many fictional notifications fit in the history.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+
+list=$(tools/phone-gesture-test --list)
+[[ $(grep -c '' <<<"$list") == 13 ]] || fail "phone-gesture-test lists 13 scenarios"
+for id in 01 07 11 13; do grep -cE "^$id " <<<"$list" >/dev/null || fail "scenario $id is listed"; done
+pass "phone-gesture-test lists its 13 scenarios"
+tools/phone-gesture-test --help | grep -c 'usage:' >/dev/null || fail "phone-gesture-test --help prints its usage"
+pass "phone-gesture-test --help"
+
+python3 -I - tools/phone-gesture-test <<'EOF'
+import importlib.machinery, importlib.util, random, sys
+
+loader = importlib.machinery.SourceFileLoader("pgt", sys.argv[1])
+spec = importlib.util.spec_from_loader("pgt", loader)
+m = importlib.util.module_from_spec(spec)
+loader.exec_module(m)
+
+
+def check(ok, what):
+    if not ok:
+        print("not ok - " + what, file=sys.stderr)
+        sys.exit(1)
+    print("ok - " + what)
+
+
+# A list that moved up by 200 rows lines up with itself at a shift of 200
+# (grey values 0..65535, as magick's 16-bit profiles give them).
+rng = random.Random(7)
+a = [rng.uniform(0, 65535) for _ in range(2000)]
+s, rb, r0, alts = m.shift_up(a, a[200:] + [0.0] * 200, 600)
+check(s == 200 and rb == 0 and r0 > m.STABLE and alts == [], "a profile moved up 200 rows is found at a shift of 200")
+s, rb, r0, alts = m.shift_up(a, list(a), 600)
+check(s == 0 and r0 == 0, "an unmoved profile has no shift")
+
+# Look-alike rows (network names of one length) repeat every 170 panel rows
+# (64 logical px at 8/3) and line up as well a whole number of rows apart:
+# the shift nearest the drag is taken, the others are logged, and every one
+# of them must be a real move.
+row = [rng.uniform(0, 65535) for _ in range(170)]
+rows = (row * 20)[:3000]
+found = m.shift_up(rows[:2000], rows[755:2755], 1067, near=701)
+check(found[0] == 755 and sorted(found[3]) == [75, 245, 415, 585, 925],
+      "look-alike rows: of the shifts that line up as well, the one nearest the drag")
+ok, ev = m.scroll_evidence(found, 8 / 3, 263)
+check(ok and ev["moved"] == 283 and ev["also_lines_up_at"] == [28, 92, 156, 219, 347],
+      "and it is evidence when every one of them is a move of 20 px or more")
+ok, ev = m.scroll_evidence(m.shift_up(rows[:2000], rows[710:2710], 1067, near=701), 8 / 3, 263)
+check(not ok and 11 in ev["also_lines_up_at"], "not when one of them is a move of 11 px")
+ok, ev = m.scroll_evidence(m.shift_up(a, a[200:] + [0.0] * 200, 1067, near=701), 8 / 3, 263)
+check(ok and ev["moved"] == 75 and "also_lines_up_at" not in ev, "rows that differ give one shift, whatever the drag")
+
+# The evidence rule, with the 9a's numbers (logical px moved, and the
+# profiles' difference at that shift and unmoved).
+check(m.scrolled_with(279, 270, 3173), "a list that followed the finger is evidence (06 on the 9a)")
+check(m.scrolled_with(78, 286, 3172), "so is a short list that stopped at its end")
+check(m.scrolled_with(111, 189, 2915), "and one whose touch arrived late, in a burst")
+check(not m.scrolled_with(0, 227, 227), "rows a Wi-Fi scan added are not a scroll")
+check(not m.scrolled_with(0, 0, 0), "an unchanged screen is no evidence")
+check(not m.scrolled_with(12, 100, 3000), "nor a shift under 20 px")
+check(m.scrolled_with(200, 30, 2464), "a screenshot shifted by 200 px is")
+
+# The fictional notifications differ in length, and one is long enough to
+# wrap: identical rows make the row profile periodic, and a shift then reads
+# a row short.
+titles, bodies = zip(*m.NOTE_TEXTS)
+check(len(m.NOTE_TEXTS) >= m.NOTIFICATIONS and len(set(titles)) == len(titles)
+      and len({len(b) for b in bodies}) == len(bodies) and max(len(b) for b in bodies) > 80,
+      "the fictional notifications all differ in length, and one wraps")
+
+
+class Geo:  # the Pixel 9a: 1080x2424 at 8/3, 405x909 logical
+    pw, ph, scale, w, h = 1080, 2424, 8 / 3, 405, 909
+    px = m.Geometry.px
+
+
+geo = Geo()
+check(geo.px(202.5, 896) == (540, 2389), "logical points map to panel pixels")
+over_app = {"x": 0, "y": 44, "w": 405, "h": 821}  # the page ends above the home strip
+t = {tid["id"]: tid for tid in m.TESTS}
+check(m.gesture_points(t["01"], geo, over_app, None)[:4] == (202.5, 896, 202.5, 621),
+      "the edge swipe starts 13 px above the screen's bottom")
+check(m.gesture_points(t["09"], geo, over_app, None)[:4] == (202.5, 849, 202.5, 586),
+      "the page-strip swipe starts 16 px above the page's bottom")
+check(m.gesture_points(t["11"], geo, over_app, None)[1] == 869,
+      "the band-top swipe starts 40 px above the edge, inside a 44 px home strip")
+
+# Preconditions, with hyprctl's answers made up.
+home_page = {"level": 2, "ns": "omamobile-wifi", "x": 0, "y": 44, "w": 405, "h": 865}
+strip = {"level": 1, "ns": "omamobile-home-strip", "x": 0, "y": 865, "w": 405, "h": 44}
+app_page = dict(home_page, h=821)
+osk = {"level": 2, "ns": "osk", "x": 0, "y": 623, "w": 405, "h": 242}
+open_wifi = {"wifiPanel": True}
+m.clients_on = lambda ws: []
+check(m.precondition(t["01"], open_wifi, [home_page], "9", geo) == [], "home: no window, no strip, the page reaches the bottom")
+check(m.precondition(t["01"], open_wifi, [home_page, strip], "9", geo) != [], "home: a home strip is refused")
+check(m.precondition(t["01"], {"wifiPanel": False}, [home_page], "9", geo) != [], "a page that isn't open is refused")
+check(m.precondition(t["01"], open_wifi, [home_page, osk], "9", geo) != [], "the on-screen keyboard is refused")
+m.clients_on = lambda ws: [{"class": "gesture-test"}]
+check(m.precondition(t["07"], open_wifi, [app_page, strip], "8", geo) == [], "over an app: the page ends where the home strip begins")
+check(m.precondition(t["07"], open_wifi, [home_page, strip], "8", geo) != [], "over an app: a page over the strip is refused")
+check(m.precondition(t["07"], open_wifi, [app_page], "8", geo) != [], "over an app: no home strip is refused")
+m.clients_on = lambda ws: []
+sheet = {"opened": True, "media": None}
+check(m.precondition(t["06"], dict(sheet, notifications=3), [], "9", geo) != [], "the list scroll needs 6 notifications")
+check(m.precondition(t["06"], dict(sheet, notifications=8), [], "9", geo) == [], "and runs with 8")
+recents = {"level": 3, "ns": "omamobile-switcher", "x": 0, "y": 0, "w": 405, "h": 909}
+check(m.precondition(t["01"], open_wifi, [home_page, recents], "9", geo) != [], "a test doesn't start with Recents open")
+
+# A page that closed passes only if Recents stayed shut: Recents means the
+# touch reached the home strip.
+check(m.gesture_result(t["07"], {"wifiPanel": False}, [strip]) == ("PASS", False),
+      "over an app: the page closed and Recents stayed shut")
+check(m.gesture_result(t["07"], {"wifiPanel": False}, [strip, recents]) == ("FAIL", True),
+      "a page that closed while Recents opened fails")
+check(m.gesture_result(t["07"], {"wifiPanel": True}, [app_page, strip, recents]) == ("FAIL", True),
+      "and so does Recents over a page that stayed open (the bug 07 is about)")
+
+# Fictional notifications never push the user's out of the history.
+check(m.notes_to_post(8, 10, 2) == 6, "with 2 of 10 taken, 6 fit and 2 stay free")
+check(m.notes_to_post(8, 10, 0) == 8, "with an empty history, all 8")
+check(m.notes_to_post(8, 10, 9) == 0 and m.notes_to_post(8, 10, 12) == 0, "with a full history, none")
+EOF
