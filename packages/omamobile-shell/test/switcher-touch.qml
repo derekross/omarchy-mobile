@@ -372,21 +372,33 @@ Item {
       tryVerify(function() { return sw.stills.length === 0 }, 2000, "a closed window loses its still")
     }
 
-    // A failed capture starts again a second later, three times at most.
+    // A capture with no frame a second on (Hyprland failed it) starts again,
+    // three times at most while recent apps are open; one with a frame stays.
     function test_a_failed_capture_starts_again() {
       var a = fakeWindow.createObject(top, { appId: "a" })
       openWith([a])
       tryVerify(function() { return captures().length === 1 })
       var cap = captures()[0]
       var first = cap.starts
-      cap.stopped()
-      tryVerify(function() { return cap.captureSource === null }, 1000, "resting after the failure")
-      tryVerify(function() { return cap.captureSource === a && cap.starts === first + 1 }, 3000, "started again")
-      cap.stopped(); tryVerify(function() { return cap.starts === first + 2 }, 3000)
-      cap.stopped(); tryVerify(function() { return cap.starts === first + 3 }, 3000)
-      cap.stopped(); wait(1500)
+      tryVerify(function() { return cap.starts === first + 1 }, 2000, "started again after a second")
+      compare(cap.captureSource, a, "on its window")
+      tryVerify(function() { return cap.starts === first + 3 }, 3000, "and twice more")
+      wait(1500)
       compare(cap.starts, first + 3, "no fourth try")
       compare(cap.captureSource, a, "and the capture stays on its window")
+
+      // A frame stops the retries; losing it later starts them again.
+      sw.close()
+      tryVerify(function() { return !overlay.visible })
+      openWith([a])
+      tryVerify(function() { return captures().length === 1 })
+      cap = captures()[0]
+      cap.hasContent = true
+      first = cap.starts
+      wait(1500)
+      compare(cap.starts, first, "a capture with a frame is left alone")
+      cap.hasContent = false
+      tryVerify(function() { return cap.starts === first + 1 }, 2000, "a lost frame starts it again")
     }
 
     // A window that gets its size after it is shown still opens centred.

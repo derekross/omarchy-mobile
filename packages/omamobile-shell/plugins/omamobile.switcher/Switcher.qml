@@ -356,15 +356,24 @@ Item {
         width: cards.cardWidth
         height: cards.height
 
-        // A capture Hyprland fails ends for good ("Ending recording due to
-        // screencopy failure"): start it again a second later, three times
-        // at most while recent apps are open.
+        // Hyprland fails a capture now and then, most often while its window
+        // changes size (the keyboard closing as recent apps open), and
+        // Quickshell then just ends it ("Ending recording due to screencopy
+        // failure"): no frame, and no stopped signal either, which 0.3.2
+        // declares but never emits. So a card still without a frame a second
+        // on starts its capture again, three times at most while recent apps
+        // are open.
         property bool resting: false
         property int retries: 0
         Timer {
-          id: retry
           interval: 1000
-          onTriggered: slot.resting = false
+          repeat: true
+          running: root.opened && !capture.hasContent && slot.retries < 3
+          onTriggered: {
+            slot.retries++
+            slot.resting = true                // the capture drops its context
+            slot.resting = false               // and makes a new one
+          }
         }
         Connections {
           target: root
@@ -431,12 +440,6 @@ Item {
             captureSource: root.opened && !slot.resting ? slot.modelData : null
             live: true
             onHasContentChanged: if (hasContent) Qt.callLater(slot.keepStill)
-            onStopped: {
-              if (!root.opened || slot.resting || slot.retries >= 3) return
-              slot.retries++
-              slot.resting = true
-              retry.restart()
-            }
           }
 
           // Tap to switch; hold for "Show with…" and "Move to its own screen".

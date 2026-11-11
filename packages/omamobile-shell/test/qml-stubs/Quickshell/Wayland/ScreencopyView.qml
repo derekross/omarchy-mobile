@@ -8,8 +8,8 @@ Item {
   property var captureSource: null
   property bool live: false
   property bool hasContent: false
-  // Quickshell's ends a recording Hyprland fails and says so.
-  signal stopped()
+  // A recording Hyprland fails just never gets a frame, as Quickshell's
+  // (0.3.2) ends it without emitting its stopped signal.
   property int starts: 0
   function captureFrame() {}
   onCaptureSourceChanged: if (!captureSource) hasContent = false; else starts++
