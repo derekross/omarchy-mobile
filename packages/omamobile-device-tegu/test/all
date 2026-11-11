@@ -40,11 +40,16 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
     ../omamobile-device-cheetah/omamobile-device-cheetah.install \
     || fail "the pacman install script drifted from the cheetah package"
   pass "the pacman install script matches the cheetah package"
-  cmp -s vendor/systemd/sleep.conf.d/10-omamobile.conf \
-    ../omamobile-device-cheetah/vendor/systemd/sleep.conf.d/10-omamobile.conf \
-    || fail "the sleep drop-in drifted from the cheetah package"
-  pass "the sleep drop-in matches the cheetah package"
 fi
+# The sleep drop-in: suspend-to-idle only, one state so a refused sleep isn't
+# tried a second time (#619), and nothing that hibernates. Checked by its
+# settings: the 7 Pro's copy gets SuspendState in a change of its own.
+sleepconf=vendor/systemd/sleep.conf.d/10-omamobile.conf
+[[ $(grep -v '^#' "$sleepconf" | grep -c .) -eq 6 && $(grep -v '^#' "$sleepconf" | head -1) == "[Sleep]" ]] || fail "the sleep drop-in has other lines than its five settings"
+for line in SuspendState=freeze MemorySleepMode=s2idle AllowHibernation=no AllowHybridSleep=no AllowSuspendThenHibernate=no; do
+  grep -qx "$line" "$sleepconf" || fail "the sleep drop-in lacks $line"
+done
+pass "the sleep drop-in: one sleep state (freeze), s2idle, no hibernation"
 grep -q 'omamobile-keyring' PKGBUILD || fail "pacman needs omamobile-keyring"
 grep -q '^install=omamobile-device-tegu.install$' PKGBUILD \
   || fail "the pacman install script is not named"

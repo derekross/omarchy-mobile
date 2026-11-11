@@ -1701,6 +1701,19 @@ the CP is idle when a sleep starts; one sleep state in the device's
 `sleep.conf`; then the qualification itself (RTC wakes, a call and a text
 waking the palmtop).
 
+The sleep state is in `omamobile-device-tegu` 0.2.15: `SuspendState=freeze`
+in its `sleep.conf` drop-in, so systemd writes `/sys/power/state` once per
+sleep (omarchy-mobile#619). Tested on 2026-11-10 with the modem off, the
+line coming from a drop-in in `/run/systemd/sleep.conf.d` (removed after
+the test), on `7.3.0-rc6-omamobile-push1-dbg-gff4fdf58035e`:
+`systemd-analyze cat-config systemd/sleep.conf` showed
+`MemorySleepMode=s2idle` and `SuspendState=freeze`, and one
+`systemctl suspend` with a 25 s RTC alarm logged
+`PM: suspend entry (s2idle)`, lasted 30 s by the RTC and woke on the alarm
+(wake irq 53), with `suspend_stats` success 0 to 1, fail 0 to 0 and no UFS
+error lines. It doesn't settle the Wi-Fi loss above, which also happened
+with one state.
+
 ### M2: the link only (modem link driver, `allow_hw=1`; risk: medium)
 
 One step per run, the CPIF overlay not applied, the link overlay applied
