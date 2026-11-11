@@ -101,6 +101,63 @@ tree and goes away if stock is restored.
 20 s and panics, and `panic=10` reboots the phone. ABL then starts the
 active slot, A, which is the rescue.
 
+## 2026-11-11: `sde`'s GPT, and what marking `boot_b` would reach
+
+Groundwork for this phone's [CONTRIBUTING](../../CONTRIBUTING.md) §3.1
+entry, which the maintainer writes. `tools/mark-slot-b` exists, but the
+descriptor sets neither `UFS_RW_LUNS` nor `SLOT_B_MARK` yet, so it refuses
+this phone. Nothing here has written to the phone.
+
+**`sde`'s GPT**, read on 2026-11-09 from the slot-A rescue (`sfdisk --dump`
+and the raw sectors of both copies, read-only):
+
+- 4096-byte sectors, 786432 of them (last LBA 786431); 96 entries of 128
+  bytes. The primary header is at LBA 1 with entries in LBA 2-4; the backup
+  entries are in LBA 786427-786429, with its header at 786431.
+- `boot_b` is `sde39`, entry 38, at byte 768 of LBA 3 and of LBA 786428. So
+  setting its bit 54 changes LBA 1, 3, 786428 and 786431, not the
+  first entry sector.
+- Before any install its attributes read `0x003a000000000000`: priority 2,
+  not active, 7 tries, not successful, not unbootable. The CRCs then were
+  entries `0x0a9fe94a`, primary header `0xb62ccea8`, backup header
+  `0x619c2dc8`. `set-active b` rewrites all three, so the tool checks the
+  live values, not these.
+
+**What `sde` holds** (`PARTNAME`, 72 partitions), so what a whole-disk node
+for it reaches:
+
+- for each slot, `_a` and `_b`: `aop`, `tz`, `hyp`, `modem`, `bluetooth`,
+  `mdtpsecapp`, `mdtp`, `abl`, `dsp`, `keymaster`, `boot`, `cmnlib`,
+  `cmnlib64`, `devcfg`, `qupfw`, `vendor`, `vbmeta`, `dtbo`, `storsec`,
+  `LOGO`, `fw_4j1ed`, `fw_4u1ea`, `fw_ufs3` to `fw_ufs8`;
+- unslotted: `minidump`, `aging`, `op1`, `sec`, `devinfo`, `dip`, `apdp`,
+  `msadp`, `spunvm`, `splash`, `limits`, `toolsfv`, `logfs`, `sti`,
+  `logdump`, `ImageFv`.
+
+`xbl` and `xbl_config` are not on `sde`. Which LUN holds them has not been
+read yet.
+
+**If both GPT copies on `sde` became invalid**, the phone could not load
+`abl` from either slot, because `abl_a` and `abl_b` are on `sde`. Then there
+is no fastboot, no `fastboot boot` and no slot-A rescue. The buttons would
+not help either. The only way in would be Qualcomm's emergency download mode
+(EDL, USB `05c6:9008`), with a programmer that matches this phone, to write
+back the two read-only copies. A copy of `sde`'s LBA 0-5 and 786426-786431
+(both GPT copies whole) and its `sfdisk --dump` were taken read-only on
+2026-11-09, and their SHA-256 matched the phone's. They are kept off the
+repository because they hold the disk's GUIDs. `tools/mark-slot-b` writes
+the primary pair and reads it back before it touches the backup pair, so a
+valid copy exists at every moment. The owner's acceptance on #432 has to
+cover the EDL case in so many words before anything writes this table.
+
+**The bit layout** is Qualcomm's ABL (`QcomModulePkg/Include/Library/PartitionTableUpdate.h`
+in the `abl/tianocore/edk2` tree): `PART_ATT_PRIORITY_BIT` 48 (two bits),
+`PART_ATT_ACTIVE_BIT` 50, `PART_ATT_MAX_RETRY_CNT_BIT` 51 (three bits),
+`PART_ATT_SUCCESS_BIT` 54, `PART_ATT_UNBOOTABLE_BIT` 55. This phone's `abl`
+is OnePlus's build of it, and bits 54 and 55 have never been seen set
+here. Only `fastboot getvar slot-successful:b` reading `yes` after a write
+would prove that bit 54 means "successful" to this bootloader.
+
 ## 2026-11-08: the LUN-aware guard, booted RAM-only
 
 `fastboot boot` of an initramfs built from commit 2331a85 (the
