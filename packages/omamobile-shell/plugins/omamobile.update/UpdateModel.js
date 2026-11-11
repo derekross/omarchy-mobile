@@ -8,7 +8,7 @@ var START_ARGV = ["omamobile-update", "start"]
 var STATUS_ARGV = ["omamobile-update", "status", "--json"]
 var ACK_ARGV = ["omamobile-update", "ack"]
 var NOTIFY_ARGV = ["omamobile-update", "notify-check"]
-var REBOOT_ARGV = ["omarchy-system-reboot"]
+var REBOOT_ARGV = ["omamobile-reboot"]
 var MAX_DETAIL_LINES = 400
 
 function parseJson(text) {

@@ -1080,6 +1080,7 @@ bash test/osk-guard.sh || fail "omamobile-osk-guard"
 bash -n bin/omamobile-onboarding || fail "omamobile-onboarding parses"
 bash test/onboarding-fingerprint.sh || fail "omamobile-onboarding's fingerprint offer"
 bash test/onboarding-mobile.sh || fail "omamobile-onboarding's SIM line"
+bash test/onboarding-identity.sh || fail "omamobile-onboarding's name and email"
 
 # The Mobile network page (omamobile.mobilenetwork): on for new and existing
 # users, Setup > Mobile network only where the modem stack is, the Mobile
@@ -1204,6 +1205,7 @@ pass "install stages the package"
 
 test/keys.sh || fail "omamobile-keys volume keys"
 test/home-command.sh || fail "omamobile-home"
+test/reboot-command.sh || fail "omamobile-reboot"
 
 # Every surface on Back's list, and the order, in Qt.
 rc=0; out=$(python3 -B test/back-surfaces.py 2>&1) || rc=$?
