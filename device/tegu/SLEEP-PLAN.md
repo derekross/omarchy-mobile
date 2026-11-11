@@ -97,6 +97,8 @@ by a poll that could report, which is not what the rule asks):
 | the same sources, build #2 with `CONFIG_PHY_ZUMA_PCIE=m` (#274) | the same with Wi-Fi up and kept across the sleeps | WFI | **36 of 36**, wlan0 passing traffic after | the start yes, then the loop |
 | published `2f890a533` (11-10) + #224 + #236 + #237 (`push1-gff4fdf58035e`, build #4), modules installed, Wi-Fi kept, the hook of #591 installed | the newest tip, overnight | WFI | a 27-minute sleep ended by the Power key, then 212 woke and the 213th never did: CPU 7 stopped answering, the console kept | no (the owner asleep; his reset in the morning) |
 | the same sources with the function tracer built in (`push1-dbg-gff4fdf58035e`, build #5), `pm_print_times`, `pm_debug_messages` and `kernel.panic_on_rcu_stall=1` on, modules installed, Wi-Fi kept, the hook of #591 installed | whether the no-wake comes back, with a console that would place it | WFI | 96 sleeps entered, no hang: 94 woke on the alarm (a test sleep, 90 with a 10 s alarm, three with a 35 s one); one, the shell's auto-sleep between two cycles with no alarm, lasted 9 h 33 min until the Power key; the 96th was cut by a button reset asked for in error | the first run yes, the owner at the palmtop; he left as the second began, and the long sleep was overnight |
+| the same build, 11-11, `sleep-series.sh` holding its own sleep inhibitor (first form, before its review) | the inhibitor, and whether the auto-sleep stays out | WFI | **90 of 90** with a 35 s alarm (33.8 to 34.9 s, `pm_wakeup_irq` 53, no UFS line), stopped by hand for the review's changes | no (the owner out) |
+| the same build, 11-11, the script as reviewed (`PMDEBUG=1 TRACE=1`, 60 s alarm) | the count with the PM switches on | WFI | **313 of 313** (3 in the script's first run, then 310 from 08:43 to 16:20; 58.8 to 60.0 s, `pm_wakeup_irq` 53 each, no UFS line, no stall, `suspend_stats` 313 and 0) | no: nobody at the palmtop for the first cycles; the owner saw it cycling through the day and watched a few cycles at about 11:25 |
 
 Before #96, one wake in 15 to 215 lost the storage; before #98, C2 in the
 sleep lost the palmtop after 6 to 135 cycles.
@@ -113,9 +115,9 @@ missing pull, NFC polling (stopped by the hook throughout), the modem
 
 **What is left.**
 
-1. The no-wake on the published kernel. On that tree 402 sleeps have woken
-   (21, 36, 36, two ended by the Power key, 212, and the 95 of the evening
-   of 11-10) and two have not: the 22nd of 11-09's first run, with no
+1. The no-wake on the published kernel. On that tree 805 sleeps have woken
+   (21, 36, 36, two ended by the Power key, 212, the 95 of the evening of
+   11-10, and 90 and 313 on 11-11) and two have not: the 22nd of 11-09's first run, with no
    console, and the 213th of 11-10's, whose console shows CPU 7 not
    answering while the rest of the kernel runs (failure 3 above). It hasn't
    come back since. What is set up for it, in place of the pseudo-NMI build
@@ -125,12 +127,11 @@ missing pull, NFC polling (stopped by the hook throughout), the modem
    `kernel.panic_on_rcu_stall=1`, so the stall becomes a panic, a reboot
    through `panic=10` and a console in pstore with no buttons; and, on a
    build with the function tracer, each core's last calls in the panic's
-   dump (`PMDEBUG=1` and `TRACE=1` in `sleep-series.sh`). The first evening
-   that way, 11-10, was 93 alarm wakes with the switches on and no hang
-   (the last note below). Next: more series the same way, to about 400
-   wakes with the switches on, which is what the maintainer asks for before
-   #224 merges if the hang stays away; if it comes back, the console says
-   where it stopped.
+   dump (`PMDEBUG=1` and `TRACE=1` in `sleep-series.sh`). With them on,
+   406 sleeps have woken on the alarm and none has hung: 93 on the evening
+   of 11-10 and 313 of 60 s on 11-11 (the last two notes below), which is
+   the count the maintainer asked for before #224 merges if the hang
+   stayed away. If it comes back, the same switches say where it stopped.
 2. The sleep hook ([omarchy-mobile#591](https://github.com/derekross/omarchy-mobile/pull/591)): merged on 2026-11-10 as
    `omamobile-device-tegu` 0.2.11; its series is the 40 of 40 in the notes
    below.
@@ -4879,5 +4880,8 @@ What it doesn't say: what CPU 7 was doing. The backtrace IPI is an ordinary inte
   ```
 
   After it only `linkwait` was left. systemd's journal has "Watchdog running with a hardware timeout of 1min." at the start and "of 10s." at the end, so the driver takes 60 s. The "before" and "after" lines were read by hand around the run; the rest is the series' log.
+- **The series for the count: 310 of 310 (2026-11-11, 08:43 to 16:20 MST).** The same boot and script, `N=310 S=60 PMDEBUG=1 TRACE=1`. Every sleep lasted 58.8 to 60.0 s by the kernel log and was woken by the alarm (`pm_wakeup_irq` 53), with no UFS line, no ACPM timeout and no oops; five cycles logged an RTC difference that doesn't fit (three about 20 s short, one 7 s and one about 40 s long; not looked into), while the kernel's clock has those sleeps at 60 s like the rest. The boot's kernel journal agrees with the series' log: 313 `PM: suspend entry` and 313 `PM: suspend exit` (the first run's three included), 313 `PM: Triggering wakeup from IRQ 53` and none from another interrupt, no `link startup failed`, `Host init failed`, `I/O error` or `ufshcd_err_handler` line, no RCU stall, no panic; `suspend_stats` 313 and 0. The auto-sleep asked for no sleep in that boot. At the end the "restored:" lines read as after the first run (the switches off, the tracer `nop`, the watchdog back at 10 s), and only `x-awake` held a block inhibitor. The owner wasn't at the palmtop when it began; he saw the screen cycling at several points through the day and watched a few cycles at about 11:25.
 
-What it adds to the count: 93 sleeps woken by the alarm with the PM switches on, and one of nine and a half hours on this tree ended by the Power key, which the two Power-key presses of the morning of 11-10 could not do for the sleep that hung.
+What the two days add to the count: with the PM switches on, 406 sleeps woken by the alarm (93 on 11-10, 313 on 11-11) and none hung; without counting toward that, 90 more with a 35 s alarm on 11-11.
+
+The long sleep of 11-10, nine and a half hours on this tree, ended at the first press of the Power key, which the two presses of the morning of 11-10 could not do for the sleep that hung.
