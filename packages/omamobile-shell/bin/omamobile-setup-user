@@ -81,6 +81,34 @@ if omarchy-done ensure omamobile-home-plugin; then
   add_plugin omamobile.home
 fi
 
+# Omarchy's remote-session service watches for a gliff remote desktop: at
+# every screencast event it runs a probe (bash, id, pgrep over /proc). Recent
+# apps' cards are screen captures, so each swipe to recent apps ran about
+# 13 probes, a third of the shell's CPU, and the app's motion stalled (Pixel 7,
+# 8-nov). The service only feeds the remote-session indicator of Omarchy's
+# own bar, which the phone's bar doesn't have, so it is off on every phone,
+# gliff installed or not, through shell.json's disabledPlugins, once. It
+# doesn't stop gliff-server itself; a user who wants the service back takes
+# the entry out again.
+if omarchy-done ensure omamobile-no-remote-session; then
+  python3 - "$config/shell.json" <<'PY'
+import json, os, sys
+path = sys.argv[1]
+try:
+    with open(path) as f:
+        config = json.load(f)
+except FileNotFoundError:
+    sys.exit(0)
+off = config.setdefault("disabledPlugins", [])
+if "omarchy.remote-session" not in off:
+    off.append("omarchy.remote-session")
+    with open(path + ".new", "w") as f:
+        json.dump(config, f, indent=2)
+        f.write("\n")
+    os.replace(path + ".new", path)
+PY
+fi
+
 # Developer tools that packages pull in but a phone's app drawer shouldn't
 # list (v4l-utils comes with ffmpeg): hidden for this user with the usual
 # NoDisplay override in ~/.local/share/applications, which Omarchy's app

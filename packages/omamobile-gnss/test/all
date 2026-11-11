@@ -10,12 +10,12 @@ for f in bin/omamobile-gnss lib/omamobile-vendor-chroot lib/omamobile-gnss-start
   bash -n "$f" || fail "syntax: $f"
 done
 python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/omamobile-gnss-nmea || fail "python: omamobile-gnss-nmea"
+bash test/install-hook.sh || fail "the upgrade hook and the Location switch"
 # The Pixel 9a's path: gnss-slsi from the start script, its FIFO in the bridge and the units.
 grep -c 'gnss-slsi start' lib/omamobile-gnss-start >/dev/null || fail "the 9a starts gnss-slsi"
-# the 9a writes the hang marker before its session and clears it only in --stop
+# The 9a writes the hang marker before its session and clears it after a clean stop.
 s=lib/omamobile-gnss-start
 [[ $(grep -n 'date -Is > "\$MARK"' $s | head -1 | cut -d: -f1) -lt $(grep -n 'gnss-slsi start' $s | head -1 | cut -d: -f1) ]] || fail "the 9a's marker goes down before gnss-slsi start"
-[[ $(grep -n 'rm -f "\$MARK" "\$SESSION"' $s | head -1 | cut -d: -f1) -lt $(grep -n 'profile.*stop' $s | head -1 | cut -d: -f1) ]] || fail "--stop clears the marker"
 grep -c 'OMAMOBILE_DT:-/proc/device-tree' $s >/dev/null || fail "the compatible is read through an overridable path"
 # both branches, with a fake device tree and a stub chroot: the 9a path writes
 # the marker and runs gnss-slsi, the 7 Pro path neither (no SPI5 node here)
@@ -24,14 +24,17 @@ printf 'google,zumapro-tegu\0google,zumapro\0' > "$tmp/dt/compatible"
 cat > "$tmp/stub" <<'EOF'
 #!/bin/sh
 echo "chroot $*" >> "${STUB_LOG}"
+[ "${STUB_FAIL:-0}" != 1 ] || [ "$2" != stop ]
 EOF
 chmod +x "$tmp/stub"
 run_start() { # $1 dt dir, $2 fake unix table
-  STUB_LOG="$tmp/log" OMAMOBILE_DT="$1" bash -c '
+  STUB_LOG="$tmp/log" OMAMOBILE_DT="$1" INVOCATION_ID="${TEST_INVOCATION_ID-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" \
+    SERVICE_RESULT="${TEST_SERVICE_RESULT:-success}" MAINPID="${TEST_MAINPID-123}" STUB_FAIL="${TEST_STUB_FAIL:-0}" bash -c '
     MARKDIR='"$tmp"'/var/lib/omamobile
     sed -e "s|/var/lib/omamobile/gnss-bringup-started|'"$tmp"'/var/lib/omamobile/gnss-bringup-started|" \
         -e "s|/proc/net/unix|'"$2"'|" \
         -e "s|/run/omamobile-gnss/session|'"$tmp"'/run/omamobile-gnss/session|" \
+        -e "s|/run/omamobile-gnss/stop-request|'"$tmp"'/run/omamobile-gnss/stop-request|" \
         -e "s|/sys/firmware/devicetree/base/soc@0/usi@109400c0/spi@10940000/status|'"$tmp"'/no-spi5|" \
         -e "s|/usr/lib/omamobile-vendor/omamobile-vendor-chroot|'"$tmp"'/stub|" lib/omamobile-gnss-start > '"$tmp"'/start
     bash '"$tmp"'/start "$@"' _ "${3:-}" 2>/dev/null
@@ -48,21 +51,48 @@ rm -rf "$tmp/run"
 run_start "$tmp/dt" "$tmp/unix" --stop
 [[ -e "$tmp/var/lib/omamobile/gnss-bringup-started" ]] || fail "a stop after a skipped start cleared the leftover marker"
 grep -c 'chroot gnss-slsi stop' "$tmp/log" >/dev/null || fail "9a branch: --stop stops gnss-slsi"
-# a session of this boot: --stop clears the marker and the session file
+# A clean stop keeps the marker until the processes have actually stopped.
 run_start "$tmp/dt" "$tmp/unix" --retry
 [[ -e "$tmp/run/omamobile-gnss/session" ]] || fail "9a branch: the session file is written with the marker"
 run_start "$tmp/dt" "$tmp/unix" --stop
-[[ ! -e "$tmp/var/lib/omamobile/gnss-bringup-started" && ! -e "$tmp/run/omamobile-gnss/session" ]] || fail "--stop after a session clears the marker"
+[[ -e "$tmp/var/lib/omamobile/gnss-bringup-started" ]] || fail "--stop cleared the marker before service exit"
+run_start "$tmp/dt" "$tmp/unix" --stopped
+[[ ! -e "$tmp/var/lib/omamobile/gnss-bringup-started" && ! -e "$tmp/run/omamobile-gnss/session" ]] || fail "clean stop did not clear the marker"
+# A timeout or an unexpected exit leaves the marker, including on the next start.
+run_start "$tmp/dt" "$tmp/unix"
+run_start "$tmp/dt" "$tmp/unix" --stop
+TEST_SERVICE_RESULT=timeout run_start "$tmp/dt" "$tmp/unix" --stopped
+[[ -e "$tmp/var/lib/omamobile/gnss-bringup-started" ]] || fail "timed-out stop cleared the marker"
+TEST_INVOCATION_ID=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb run_start "$tmp/dt" "$tmp/unix"
+TEST_INVOCATION_ID=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb run_start "$tmp/dt" "$tmp/unix" --stop
+TEST_INVOCATION_ID=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb run_start "$tmp/dt" "$tmp/unix" --stopped
+[[ -e "$tmp/var/lib/omamobile/gnss-bringup-started" ]] || fail "a later skipped start cleared the marker"
+run_start "$tmp/dt" "$tmp/unix" --retry
+TEST_MAINPID= run_start "$tmp/dt" "$tmp/unix" --stop
+run_start "$tmp/dt" "$tmp/unix" --stopped
+[[ -e "$tmp/var/lib/omamobile/gnss-bringup-started" ]] || fail "an unexpected exit cleared the marker"
+run_start "$tmp/dt" "$tmp/unix" --retry
+if TEST_STUB_FAIL=1 run_start "$tmp/dt" "$tmp/unix" --stop; then fail "failed profile stop succeeded"; fi
+TEST_SERVICE_RESULT=exit-code run_start "$tmp/dt" "$tmp/unix" --stopped
+[[ -e "$tmp/var/lib/omamobile/gnss-bringup-started" ]] || fail "a failed profile stop cleared the marker"
+# --retry by hand on the 9a (no invocation ID) only clears the marker; the
+# next location request starts GNSS in its unit, so nothing starts here.
+: > "$tmp/log"
+TEST_INVOCATION_ID= run_start "$tmp/dt" "$tmp/unix" --retry || fail "9a branch: --retry by hand failed"
+[[ ! -e "$tmp/var/lib/omamobile/gnss-bringup-started" ]] || fail "9a branch: --retry by hand left the marker"
+grep -c 'gnss-slsi start' "$tmp/log" >/dev/null && fail "9a branch: --retry by hand started GNSS outside its unit"
+rm -f "$tmp/var/lib/omamobile/gnss-bringup-started"
 : > "$tmp/log"; printf 'google,gs201-cheetah\0google,gs201\0' > "$tmp/dt/compatible"
 run_start "$tmp/dt" "$tmp/unix"
 grep -c 'gnss-slsi' "$tmp/log" >/dev/null && fail "7 Pro branch: must not touch gnss-slsi"
 [[ ! -e "$tmp/var/lib/omamobile/gnss-bringup-started" ]] || fail "7 Pro branch: no SPI5 node here, so no marker"
 rm -rf "$tmp"
-echo "ok - the 9a's start writes the marker, --stop clears it, both branches behave"
+echo "ok - the 9a's marker survives failed stops and clears only after a clean stop"
 grep -c 'OMAMOBILE_GNSS_NMEA_OUT=fifo' lib/omamobile-gnss-start >/dev/null || fail "the 9a's NMEA goes to the FIFO"
 grep -c 'gnss-slsi/data/vendor/gps/nmea_out' lib/omamobile-gnss-nmea >/dev/null || fail "the bridge reads the 9a's FIFO"
 grep -c '^ConditionPathExists=|/usr/lib/omamobile-vendor/gnss-slsi/root$' vendor/systemd/system/omamobile-gnss.service >/dev/null || fail "the service runs with the 9a's image"
 grep -c '^ExecStop=/usr/lib/omamobile-vendor/omamobile-gnss-start --stop$' vendor/systemd/system/omamobile-gnss.service >/dev/null || fail "stop picks the profile"
+grep -qx '^ExecStopPost=/usr/lib/omamobile-vendor/omamobile-gnss-start --stopped$' vendor/systemd/system/omamobile-gnss.service || fail "post-stop checks the marker"
 grep -c 'gnss-slsi/data/vendor/gps' vendor/systemd/system/omamobile-gnss-nmea.service >/dev/null || fail "the bridge may open the 9a's FIFO"
 # --stop comes before the hang marker, so a leftover marker never skips a stop
 [[ $(grep -n -- '--stop' lib/omamobile-gnss-start | head -1 | cut -d: -f1) -lt $(grep -n 'elif \[\[ -e \$MARK' lib/omamobile-gnss-start | cut -d: -f1) ]] || fail "--stop before the marker"

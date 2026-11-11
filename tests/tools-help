@@ -53,3 +53,16 @@ for f in "${tools[@]}"; do
     || fail "$f --help doesn't follow its header when it grows by a line"
 done
 echo "ok - ${#tools[@]} tools print their header comment as --help, however long it grows, and no code"
+
+# The same --help, output and exit code, run by a relative path from the
+# repository's parent and from tools/: a tool that cds to the repository
+# first must not look for its header at "$0" from the directory it left
+# (#559).
+help_from() { (cd -- "$1" && "$2" --help 2>&1; echo "exit $?"); }
+repo=$PWD
+for f in "${tools[@]}"; do
+  out=$(help_from "$repo" "$f")
+  [[ $(help_from "$repo/.." "${repo##*/}/$f") == "$out" ]] || fail "$f --help differs run from the repository's parent"
+  [[ $(help_from "$repo/tools" "./${f#tools/}") == "$out" ]] || fail "$f --help differs run from tools/"
+done
+echo "ok - ${#tools[@]} tools print the same --help by a relative path from another directory"

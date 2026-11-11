@@ -842,7 +842,11 @@ def serve_one(service, connection, clients):
 def probe():
     """Read-only first contact (MODEM-PLAN M4.1): SIM card and application
     states, radio state, packet registration, NR mode, whether an SMSC is
-    set. No identifiers are printed; nothing is changed."""
+    set. No identifiers are printed; nothing is changed.
+
+    A failed/empty SMSC reply with a present SIM leaves SMS configuration
+    unverified; SMSC error 11 is expected only when no SIM is present.
+    """
     client = Sit()
     failed = False
     try:
@@ -937,6 +941,12 @@ def main():
             SOCKET.chmod(0o660)
         notify('READY=1\nSTATUS=registered')
         print('Calls and SMS service ready', flush=True)
+        # Set by a device whose modem sends signal reports only after it's
+        # told the screen is on (the Pixel 9a's drop-in), while nothing else
+        # sends the screen state yet. Never set on the 7 Pro.
+        if args.bringup and os.environ.get('OMAMOBILE_SIT_SCREEN_ON_AT_START') == '1' \
+                and service.screen_on is None:
+            service.dispatch(dict(action='screen-state', on=True))
         next_cp_check = 0
         while not stopping:
             service.pump()

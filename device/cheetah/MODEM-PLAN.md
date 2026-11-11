@@ -2717,6 +2717,11 @@ What the packages now do, opt-in and nothing enabled by them:
   with the modem on has never run on this phone, 6.3). The start script
   refuses to load a driver until the lock shows in `systemd-inhibit
   --list`. With the stack at boot the phone never sleeps.
+  Since 2026-11-10 (#424) a start that refuses with none of the modem's
+  drivers loaded (a stale `modem-up` marker, the bring-up latch, a link
+  driver that didn't load) kills the lock, so the phone sleeps that boot
+  as it would without a modem; once a driver has loaded, the lock stays
+  until the reboot.
 - **`omamobile-modem.service` is `Type=notify`**: ready once CPIF's ports
   exist and the profile's read-only check has passed, before the CP is
   powered on. The device's sitd drop-in
@@ -2878,6 +2883,24 @@ it can't or shouldn't start the modem.
   all boot), and only `omamobile-mmd` runs, logging once that sitd isn't
   reachable and retrying quietly. The start script checks the same three
   paths first, for a start by hand or `--retry`.
+- **From `omamobile-modem` 0.1.19 (2026-11-10) one unclean end no longer
+  costs a boot's modem.** The paragraph below describes 0.1.13 to 0.1.18,
+  where the first stale `modem-up` refused that boot. An owner whose phone
+  froze and who held the keys came back to a phone that couldn't call, with
+  nothing on the screen saying why, and a normal restart was the only way
+  to get the modem back. Now the first stale marker is counted (moved to
+  `modem-up.refused-<time>-<pid>`, as before) and the modem starts on that
+  boot all the same; the second unclean end in a row holds, exactly as
+  below. The cost: a phone that hangs because the modem is up hangs twice
+  before the hold, not once. The bring-up latch is unchanged, so a hang in
+  the bring-up itself still stops at the first. Seen on the 7 Pro the same
+  day: a reset forced with Volume Down + Power boots with
+  `androidboot.bootreason = "reboot", "longkey", "master_dc"`. The guard
+  doesn't read it: an owner holds the keys precisely when the phone has
+  hung, so "longkey" can't clear the modem of having caused it. The
+  runbook steps further down that expect a refusal after the first unclean
+  end record the earlier behaviour and need a re-run before they are
+  quoted for 0.1.19.
 - **The modem-up guard allows one automatic retry, then holds.** A boot
   that finds a stale `modem-up` still refuses (the previous boot ended
   with the modem up and no clean stop: a hang or a reset), logs

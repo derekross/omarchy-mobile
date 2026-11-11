@@ -180,7 +180,7 @@ short_press() {
   # brightness of 0, which left the phone dark on the next wake. A press a
   # few seconds later must still count: it is the wake.
   local now last
-  now=$(date +%s%3N); last=$(cat "$state/last-press" 2>/dev/null || echo 0)
+  now=$1; last=$(cat "$state/last-press" 2>/dev/null || echo 0)
   echo "$now" >"$state/last-press"
   (( now - last < 800 )) && return 0
   # The press that woke the phone from sleep, if it gets here at all:
@@ -312,7 +312,17 @@ case "${1:-}" in
     elif [[ -f $state/long ]]; then
       rm -f "$state/long"
     else
-      short_press
+      # Let a second press observe the finished off transition before it
+      # decides whether to wake. Keep the lock out of background helpers.
+      released_at=$(now)
+      exec {short_lock}>"$state/short.lock"
+      # A stuck action must not queue every later press forever. Drop this
+      # press after five seconds rather than overlap display transitions.
+      if ! flock -w 5 "$short_lock"; then
+        echo 'omamobile-keys: short-press lock wait failed; dropping press' >&2
+        exit 0
+      fi
+      ( short_press "$released_at" ) {short_lock}>&-
     fi
     ;;
   wake)

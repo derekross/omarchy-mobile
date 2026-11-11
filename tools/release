@@ -38,8 +38,13 @@
 #   rootfs        the root image, stable channel, from the pinned repository
 #   bundle        the bundle, signed with the release key (ARGS: --unsigned
 #                 for a development proof; such a bundle is never released)
-#   test-install  [6] the attended install (Derek). Prints the steps; then
-#                 `test-install --passed "UNAME"` records the result
+#   test-install  [6] the attended install (Derek). First asks the server
+#                 whether stable has an index: the installed phone follows
+#                 stable, so its first `omarchy update` needs one. With none
+#                 (only before the first release to a server), it prints the
+#                 one-time promotion of the pinned index and stops; later
+#                 releases find the previous release there. Then prints the
+#                 steps; `test-install --passed "UNAME"` records the result
 #   identifiers   [7] MAC addresses, serials, SSIDs, account names and home
 #                 paths over the bundle, the root image's file list and
 #                 configuration, the MANIFESTs and the release notes; no file
@@ -565,6 +570,16 @@ st_bundle() {
   put bundle_done "$(basename "$dir")$( ((unsigned)) && echo ' (unsigned)')"
 }
 
+# Whether stable has an index on the server: yes, no (the server answers
+# 404: nothing was ever promoted) or the HTTP status it gave instead (000:
+# no answer)
+STABLE_INDEX_URL=https://pkgs.omamobile.org/stable/aarch64/omamobile.db
+stable_index() {
+  local code
+  code=$(curl -sS -o /dev/null -I -m 30 -w '%{http_code}' "$STABLE_INDEX_URL" 2>/dev/null) || code=${code:-000}
+  case $code in 200) echo yes ;; 404) echo no ;; *) echo "${code:-000}" ;; esac
+}
+
 st_test_install() {
   local dir krel
   dir=$(need bundle bundle)
@@ -576,6 +591,27 @@ st_test_install() {
     put test_install_done "passed on $DEVICE, uname -r $got, $(date -u +%Y-%m-%d)"
     note "recorded; write the result in device/$DEVICE/NOTES.md too (§11.6)"
     return 0
+  fi
+  # The root image follows stable (rootfs stage), and `promote` comes after
+  # this stage, so before the first release the installed phone's first
+  # `omarchy update` found no stable index (INSTALL-EXPERIENCE-PLAN G2).
+  # Promote the pinned index once, then; no phone follows stable before a
+  # first release, and the promote stage publishes the same index again.
+  if ((dry)); then
+    note "would ask $STABLE_INDEX_URL whether stable has an index (none: the pinned index is promoted once first)"
+  else
+    local have index
+    have=$(stable_index)
+    case $have in
+      yes) note "stable has an index: the installed phone's first update finds the previous release there" ;;
+      no)
+        index=$(need repo_index packages)
+        say "stable has no index yet: the first release to this server"
+        derek "tools/repo-publish --dry-run stable --expect-index $index" \
+              "tools/repo-publish stable --expect-index $index"
+        die "promote index ${index:0:12} to stable once (above), then run test-install again: the installed phone follows stable, and its first update needs an index there. Stage promote still runs after the test, on the same index" ;;
+      *) die "can't tell whether stable has an index ($STABLE_INDEX_URL: HTTP $have): the attended install needs the server, so check the connection and run test-install again" ;;
+    esac
   fi
   say "§11.6: the attended test install (this gates the release, §12.10)"
   derek "# Before: stock on slot A boots, and the read-only backup of efs, efs_backup," \

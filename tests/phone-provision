@@ -8,7 +8,10 @@
 # under the new names owned by root (tar --no-same-owner), the fingerprint
 # tree keeps its Android owners, the home import belongs to the user, a
 # second run is idempotent, and differing fingerprint state is never replaced
-# without --force. A first install (no phone-config.tar) with a stand-in NV
+# without --force. The run is named on the command line (--restore DIR or
+# --first-install), never guessed: with neither it is refused, also on a
+# machine whose home holds the old default backup, and --first-install there
+# takes nothing from that backup. A first install with a stand-in NV
 # backup (made-up sums): its dry run, its refusals (no --nv-backup, one of
 # the six NV lines missing or not in sha256sum's format, no SHA256SUMS, an
 # option that needs phone-config.tar, an unsafe PHONE_BOOTCONFIG); without
@@ -65,7 +68,7 @@ echo "ssh called: $*" >> "$T/ssh.calls"; exit 1
 EOF
 chmod +x "$t/no-ssh"
 export T=$t
-out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --backup "$B" --work "$t/work" \
+out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --restore "$B" --work "$t/work" \
       --user alice --import-home --restore-config --restore-wifi --fingerprint 2>&1) || { echo "$out"; fail "the dry run succeeds"; }
 [[ ! -e $t/ssh.calls ]] || fail "a dry run never contacts the phone"
 for line in \
@@ -84,13 +87,13 @@ done
 grep -q 'pacnew' <<<"$out" && fail "never restores .pacnew files"
 grep -q 'never starts omamobile-fp' <<<"$out" || fail "says it never starts the fingerprint service"
 grep -q 'data/vendor' <<<"$out" && fail "without --restore-td, no TD or Gatekeeper secret is restored"
-out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --backup "$B" --work "$t/work" \
+out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --restore "$B" --work "$t/work" \
       --user alice --fingerprint --restore-td 2>&1) || { echo "$out"; fail "the --restore-td dry run succeeds"; }
 grep -qF "/var/lib/omandroid-fp/data/vendor/omandroid-fp/secret -> /var/lib/omamobile-fp/data/vendor/omamobile-fp/secret" <<<"$out" ||
   fail "--restore-td restores the Gatekeeper secret"
 grep -qF "/var/lib/omandroid-fp/data/vendor/ss/0 -> /var/lib/omamobile-fp/data/vendor/ss/0" <<<"$out" || fail "--restore-td restores TD"
 grep -q 'no storageproxyd ran' <<<"$out" || fail "--restore-td states the no-run-in-between rule"
-out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --backup "$B" --work "$t/work" --restore-td 2>&1) &&
+out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --restore "$B" --work "$t/work" --restore-td 2>&1) &&
   fail "--restore-td without --fingerprint is refused"
 [[ -z $(ls -A "$t/work") ]] || fail "the staging (per-phone data) is removed"
 pass "dry run: old paths mapped to new names and the user's home, phone untouched; fingerprint: calibration and persist:/ss only, TD only with --restore-td"
@@ -100,38 +103,77 @@ pass "dry run: old paths mapped to new names and the user's home, phone untouche
 # ssh records any call, so a call made before the refusal is caught even
 # if the tool ignores its failure
 : > "$t/factory.zip"
-for o in --fingerprint "--fingerprint --restore-td" --import-home --restore-config --restore-wifi --with-waves --force "--backup $t"; do
-  # shellcheck disable=SC2086 # the --backup case is two words on purpose
+for o in --fingerprint "--fingerprint --restore-td" --import-home --restore-config --restore-wifi --with-waves --force "--restore $t" "--backup $t"; do
+  # shellcheck disable=SC2086 # the --restore and --backup cases are two words on purpose
   if out=$(PHONE_SSH=$t/no-ssh tools/phone-provision -d raven --dry-run --work "$t/work" $o "$t/factory.zip" 2>&1); then
     fail "-d raven refuses $o"
   fi
-  grep -qF -- "-d raven doesn't support ${o%% *}" <<<"$out" || { echo "$out"; fail "says it refuses $o"; }
+  named=${o%% *}; [[ $named == --backup ]] && named=--restore
+  grep -qF -- "-d raven doesn't support $named" <<<"$out" || { echo "$out"; fail "says it refuses $o"; }
   [[ ! -e $t/ssh.calls ]] || { cat "$t/ssh.calls"; fail "-d raven refuses $o without contacting the phone"; }
 done
 pass "-d raven refuses cheetah's backup and fingerprint options"
 
-out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --backup "$B" --work "$t/work" --user alice 2>&1)
+out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --restore "$B" --work "$t/work" --user alice 2>&1)
 grep -q 'speaker.conf\|nmconnection\|home.json\|omamobile-fp' <<<"$out" && fail "config, Wi-Fi, home and fingerprint stay opt-in"
 cp "$B/phone-config.tar.sha256" "$t/sum"
 echo "0000  phone-config.tar" > "$B/phone-config.tar.sha256"
-PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --backup "$B" --work "$t/work" --user alice >/dev/null 2>&1 &&
+PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --restore "$B" --work "$t/work" --user alice >/dev/null 2>&1 &&
   fail "refuses a backup that doesn't match its checksum"
 cp "$t/sum" "$B/phone-config.tar.sha256"
-tools/phone-provision --dry-run --backup "$B" --work "$t/work" >/dev/null 2>&1 && fail "needs a factory image or --skip-extract"
+tools/phone-provision --dry-run --restore "$B" --work "$t/work" >/dev/null 2>&1 && fail "needs a factory image or --skip-extract"
 pass "opt-in steps stay off by default; a bad backup checksum or a missing factory image is refused"
+
+# --backup DIR is --restore DIR's older spelling: the same run
+old=$(PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --backup "$B" --work "$t/work" --user alice --restore-config 2>&1) ||
+  { echo "$old"; fail "--backup DIR still runs a restore"; }
+new=$(PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --restore "$B" --work "$t/work" --user alice --restore-config 2>&1)
+[[ $(sed -E 's|/run\.[A-Za-z0-9]{6}|/run.X|g' <<<"$old") == "$(sed -E 's|/run\.[A-Za-z0-9]{6}|/run.X|g' <<<"$new")" ]] || { diff <(echo "$old") <(echo "$new") || true; fail "--backup DIR and --restore DIR do the same"; }
+grep -c 'etc/omandroid/speaker.conf -> /etc/omamobile/speaker.conf' <<<"$old" >/dev/null || fail "--backup DIR restores from DIR"
+pass "--backup DIR is still accepted, as --restore DIR"
+
+# The run is never guessed (INSTALL-EXPERIENCE-PLAN G1). M is a home like the
+# maintainer's, with a phone-config.tar where the tool used to look by
+# default; H (below) is an empty one, like everyone else's. In both, a run
+# that names neither --first-install nor --restore is refused before the
+# phone is contacted or anything is staged, and says what to give
+M=$t/maintainer-home H=$t/home
+mkdir -p "$M/android/reference" "$H"
+cp -r "$B" "$M/android/reference/phone-backup-20261013"
+for home in "$M" "$H"; do
+  for args in "--user alice $t/factory.zip" "--skip-extract" "--skip-extract --fingerprint" "--dry-run --user alice $t/factory.zip"; do
+    # shellcheck disable=SC2086 # args is several words on purpose
+    if out=$(HOME=$home PHONE_SSH=$t/no-ssh tools/phone-provision --work "$t/work" $args 2>&1); then
+      echo "$out"; fail "a run with neither --first-install nor --restore is refused ($args, HOME ${home##*/})"
+    fi
+    grep -cF -- "say which run this is" <<<"$out" >/dev/null || { echo "$out"; fail "says to name the run ($args)"; }
+    grep -cF -- "--first-install --nv-backup DIR" <<<"$out" >/dev/null || { echo "$out"; fail "names --first-install --nv-backup DIR ($args)"; }
+    grep -cF -- "--restore DIR" <<<"$out" >/dev/null || { echo "$out"; fail "names --restore DIR ($args)"; }
+    if grep -cF 'phone-backup-20261013' <<<"$out" >/dev/null; then echo "$out"; fail "no default backup directory is looked at or named ($args)"; fi
+    [[ ! -e $t/ssh.calls ]] || fail "the refusal never contacts the phone ($args)"
+    [[ ! -e $t/work || -z $(ls -A "$t/work") ]] || fail "the refusal stages nothing ($args)"
+  done
+done
+if grep -n 'android/reference/phone-backup' tools/phone-provision; then fail "tools/phone-provision carries no default backup directory"; fi
+pass "with neither --first-install nor --restore the run is refused, with or without the old default backup in the home"
 
 # A first install on cheetah: no phone-config.tar, so the owner's read-only
 # NV backup instead. A stand-in SHA256SUMS with made-up sums, devinfo
-# included as in a real one. HOME is an empty directory, so there is no
-# default backup (~/android/reference/phone-backup-20261013) either
-N=$t/nv-backup H=$t/home
-mkdir -p "$N" "$H" "$t/nv-short"
+# included as in a real one. HOME is an empty directory
+N=$t/nv-backup
+mkdir -p "$N" "$t/nv-short"
 for p in persist modem_a modem_b efs efs_backup modem_userdata devinfo; do
   printf '%s  %s.img\n' "$(printf 'made up %s' "$p" | sha256sum | cut -d' ' -f1)" "$p"
 done > "$N/SHA256SUMS"
 grep -v ' devinfo\.img$' "$N/SHA256SUMS" > "$t/nv-six"
-fresh() { HOME=$H PHONE_SSH=$t/no-ssh tools/phone-provision --work "$t/work" "$@" 2>&1; }
+fresh() { HOME=${FRESH_HOME:-$H} PHONE_SSH=$t/no-ssh tools/phone-provision --work "$t/work" --first-install "$@" 2>&1; }
 out=$(fresh --dry-run --user alice --nv-backup "$N" "$t/factory.zip") || { echo "$out"; fail "a first install's dry run succeeds"; }
+# the same run on a machine whose home holds the old default backup: still
+# a first install, nothing from that backup (it used to become a restore)
+out_m=$(FRESH_HOME=$M fresh --dry-run --user alice --nv-backup "$N" "$t/factory.zip") || { echo "$out_m"; fail "a first install's dry run succeeds beside an old backup"; }
+same() { sed -E 's|/run\.[A-Za-z0-9]{6}|/run.X|g' <<<"$1"; }   # the staging directory's name differs per run
+[[ $(same "$out_m") == "$(same "$out")" ]] || { diff <(same "$out") <(same "$out_m") || true; fail "--first-install does the same whatever backup this computer holds"; }
+if grep -cF 'from the backup' <<<"$out_m" >/dev/null; then echo "$out_m"; fail "--first-install takes nothing from a backup in the home"; fi
 [[ ! -e $t/ssh.calls ]] || fail "a first install's dry run never contacts the phone"
 for line in \
   "Checking the NV backup in $N" \
@@ -152,8 +194,26 @@ pass "first install, dry run: the six NV lines and props.conf from the phone's b
 
 # Refusals, all before the phone is contacted (these runs aren't dry runs)
 if out=$(fresh --user alice "$t/factory.zip"); then fail "a first install without --nv-backup is refused"; fi
-grep -qF -- "no $H/android/reference/phone-backup-20261013/phone-config.tar. Without one (a first install, or a reinstall with no such backup), take the read-only backup of the modem's partitions with tools/nv-backup DIR (docs/INSTALL.md step 6) and give it with --nv-backup DIR" <<<"$out" ||
+grep -qF -- "--first-install needs --nv-backup DIR: take the read-only backup of the modem's partitions with tools/nv-backup DIR (docs/INSTALL.md step 6)" <<<"$out" ||
   { echo "$out"; fail "says to give --nv-backup"; }
+# --nv-backup alone is the published 2026.11.08 command: a first install,
+# the same as with --first-install, also beside an old backup in the home
+out_old=$(HOME=$M PHONE_SSH=$t/no-ssh tools/phone-provision --work "$t/work" --dry-run --user alice --nv-backup "$N" "$t/factory.zip" 2>&1) ||
+  { echo "$out_old"; fail "--nv-backup alone runs as a first install"; }
+out_new=$(FRESH_HOME=$M fresh --dry-run --user alice --nv-backup "$N" "$t/factory.zip") || { echo "$out_new"; fail "the explicit first install runs"; }
+[[ $(same "$out_old") == "$(same "$out_new")" ]] || { diff <(same "$out_new") <(same "$out_old") || true; fail "--nv-backup alone does what --first-install --nv-backup does"; }
+for o in "--restore $B" "--backup $B"; do
+  # shellcheck disable=SC2086 # two words on purpose
+  if out=$(fresh --user alice --nv-backup "$N" $o "$t/factory.zip"); then fail "--first-install with $o is refused"; fi
+  grep -qF -- "--first-install and --restore DIR are two different runs" <<<"$out" || { echo "$out"; fail "says they are two runs ($o)"; }
+done
+if out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --skip-extract --restore "$H" --work "$t/work" --user alice 2>&1); then
+  fail "--restore DIR without a phone-config.tar is refused"
+fi
+grep -qF -- "no $H/phone-config.tar (--restore DIR" <<<"$out" || { echo "$out"; fail "says DIR has no phone-config.tar"; }
+if out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --skip-extract --restore "$B" --restore "$H" --work "$t/work" --user alice 2>&1); then
+  fail "two backup directories are refused"
+fi
 for p in modem_a modem_b efs efs_backup modem_userdata persist; do
   grep -v "  $p\\.img\$" "$N/SHA256SUMS" > "$t/nv-short/SHA256SUMS"
   if out=$(fresh --user alice --nv-backup "$t/nv-short" "$t/factory.zip"); then fail "refuses an NV backup without $p.img"; fi
@@ -162,17 +222,16 @@ done
 cat "$N/SHA256SUMS" <(grep ' modem_a\.img$' "$N/SHA256SUMS") > "$t/nv-short/SHA256SUMS"
 if out=$(fresh --user alice --nv-backup "$t/nv-short" "$t/factory.zip"); then fail "refuses an NV backup with modem_a.img twice"; fi
 grep -qE 'none or more than one for modem_a\.img$' <<<"$out" || { echo "$out"; fail "names the repeated modem_a.img"; }
-for o in --fingerprint --import-home --restore-config --restore-wifi --force "--backup $H"; do
-  # shellcheck disable=SC2086 # the --backup case is two words on purpose
+for o in --fingerprint --import-home --restore-config --restore-wifi --force; do
   if out=$(fresh --user alice --nv-backup "$N" $o "$t/factory.zip"); then fail "a first install refuses $o"; fi
-  grep -qF -- "doesn't support ${o%% *} (a restore from a phone-config.tar)" <<<"$out" || { echo "$out"; fail "says it refuses $o"; }
+  grep -qF -- "--first-install doesn't support $o (a restore from a phone-config.tar: --restore DIR)" <<<"$out" || { echo "$out"; fail "says it refuses $o"; }
 done
-if out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --skip-extract --backup "$B" --work "$t/work" --user alice --nv-backup "$N" 2>&1); then
-  fail "--nv-backup beside a phone-config.tar is refused"
+if out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --skip-extract --restore "$B" --work "$t/work" --user alice --nv-backup "$N" 2>&1); then
+  fail "--nv-backup with --restore is refused"
 fi
-grep -qF -- "--nv-backup is for a first install, with no phone-config.tar" <<<"$out" || { echo "$out"; fail "says --nv-backup is for a first install"; }
+grep -qF -- "--nv-backup goes with --first-install" <<<"$out" || { echo "$out"; fail "says --nv-backup goes with --first-install"; }
 [[ ! -e $t/ssh.calls ]] || fail "a refused first install never contacts the phone"
-pass "first install: refused without --nv-backup, with one of the six NV lines missing or repeated, with an option that needs phone-config.tar, and --nv-backup beside a phone-config.tar"
+pass "first install: refused without --nv-backup, together with --restore, with one of the six NV lines missing or repeated, with an option that needs phone-config.tar; --restore refused without a phone-config.tar or with --nv-backup"
 
 # The SHA256SUMS file and its line format (sha256sum's own: lower-case hex,
 # two spaces), PHONE_BOOTCONFIG (it goes into the command run on the phone)
@@ -219,7 +278,7 @@ EOF
 chmod +x "$t/check-ssh"
 check_run() {
   HOME=$H PHONE_SSH=$t/check-ssh PHONE_BOOTCONFIG=$t/bootconfig tools/phone-provision --skip-extract --user alice \
-    --nv-backup "$N" --work "$t/work" "$@" < /dev/null 2>&1
+    --first-install --nv-backup "$N" --work "$t/work" "$@" < /dev/null 2>&1
 }
 for how in missing absent empty blank no-0x not-hex; do
   rm -f "$t/pushes" "$t/bootconfig"
@@ -276,7 +335,7 @@ cat > "$t/phone-ssh" <<EOF
 HOME=$(printf %q "$HOME") exec docker exec -i $container bash -c "\$*"
 EOF
 chmod +x "$t/phone-ssh"
-prov() { PHONE_SSH=$t/phone-ssh tools/phone-provision --skip-extract --backup "$B" --work "$t/work" "$@" > "$t/out" 2>&1; }
+prov() { PHONE_SSH=$t/phone-ssh tools/phone-provision --skip-extract --restore "$B" --work "$t/work" "$@" > "$t/out" 2>&1; }
 prov --import-home --restore-config --fingerprint || { cat "$t/out"; fail "a run against the stand-in phone succeeds"; }
 on() { docker exec "$container" bash -c "$*"; }
 [[ $(on 'cat /var/lib/omamobile-vendor/modem/props.conf') == 'ro.boot.cdt_hwid=0xTEST' ]] || fail "props.conf restored"
@@ -317,7 +376,7 @@ pass "--restore-td restores TD and the secret, and never over a TD already there
 # laptop's staging
 on 'rm -rf /var/lib/omamobile-vendor /etc/omamobile/modem-nv.sha256'
 bootconfig() { docker exec -i "$container" sh -c 'cat > /run/test-bootconfig'; }
-fresh_on() { HOME=$H PHONE_SSH=$t/phone-ssh PHONE_BOOTCONFIG=/run/test-bootconfig tools/phone-provision --skip-extract --nv-backup "$N" --work "$t/work" "$@" > "$t/out" 2>&1; }
+fresh_on() { HOME=$H PHONE_SSH=$t/phone-ssh PHONE_BOOTCONFIG=/run/test-bootconfig tools/phone-provision --skip-extract --first-install --nv-backup "$N" --work "$t/work" "$@" > "$t/out" 2>&1; }
 for how in missing absent empty not-hex; do
   why="no androidboot.cdt_hwid in the phone's /run/test-bootconfig, or an empty one"
   case $how in
@@ -337,7 +396,7 @@ pass "first install: a missing, empty or malformed androidboot.cdt_hwid is refus
 printf 'androidboot.mode = "normal"\nandroidboot.cdt_hwid = "%s"\nandroidboot.slot_suffix = "_b"\n' "$hwid" | bootconfig
 # under bash -x, so the trace is checked for the value too; --keep leaves
 # the staging to look at
-HOME=$H PHONE_SSH=$t/phone-ssh PHONE_BOOTCONFIG=/run/test-bootconfig bash -x tools/phone-provision --skip-extract --nv-backup "$N" \
+HOME=$H PHONE_SSH=$t/phone-ssh PHONE_BOOTCONFIG=/run/test-bootconfig bash -x tools/phone-provision --skip-extract --first-install --nv-backup "$N" \
   --work "$t/work" --keep > "$t/out" 2>&1 || { cat "$t/out"; fail "a first install against the stand-in phone succeeds"; }
 # props_ok LABEL [LINES]: props.conf is root's, mode 600, and holds LINES
 # (other lines kept from before), then both keys set to the board id

@@ -125,6 +125,20 @@ if ((unsigned == 0)); then
   fi
 fi
 
+# The boot images are checked before the bundle of the same name is removed
+# below, so a refused rebuild leaves that bundle as it was.
+# bin/omamobile images records the device it built for
+built_for=$(cat "$KERNEL_OUT/images/DEVICE" 2>/dev/null || true)
+[[ $built_for == "$DEVICE" ]] || die "$KERNEL_OUT/images holds images for '${built_for:-an unknown device}', not $DEVICE"
+for p in $boot_images; do
+  [[ -f $KERNEL_OUT/images/$p.img ]] || die "missing $KERNEL_OUT/images/$p.img (bin/omamobile images)"
+done
+# Images must be newer than the kernel and initramfs they were packed from
+for f in arch/arm64/boot/Image initramfs.cpio.lz4; do
+  [[ $KERNEL_OUT/images/boot.img -nt $KERNEL_OUT/$f || ! -e $KERNEL_OUT/$f ]] ||
+    die "$KERNEL_OUT/images is older than $f: run bin/omamobile images"
+done
+
 name=omamobile-$DEVICE-$version
 out=out/bundle
 dir=$out/$name
@@ -141,17 +155,8 @@ mkdir -p "$dir/tools"
 for f in $provision_tools; do
   install -m755 "tools/$f" "$dir/tools/$f"
 done
-# bin/omamobile images records the device it built for
-built_for=$(cat "$KERNEL_OUT/images/DEVICE" 2>/dev/null || true)
-[[ $built_for == "$DEVICE" ]] || die "$KERNEL_OUT/images holds images for '${built_for:-an unknown device}', not $DEVICE"
 for p in $boot_images; do
-  [[ -f $KERNEL_OUT/images/$p.img ]] || die "missing $KERNEL_OUT/images/$p.img (bin/omamobile images)"
   install -m644 "$KERNEL_OUT/images/$p.img" "$dir/images/$p.img"
-done
-# Images must be newer than the kernel and initramfs they were packed from
-for f in arch/arm64/boot/Image initramfs.cpio.lz4; do
-  [[ $KERNEL_OUT/images/boot.img -nt $KERNEL_OUT/$f || ! -e $KERNEL_OUT/$f ]] ||
-    die "$KERNEL_OUT/images is older than $f: run bin/omamobile images"
 done
 
 for f in "$rootfs" "$rootfs.sha256" "${rootfs%.img.zst}.MANIFEST"; do
@@ -197,8 +202,8 @@ download lost the file's execute bit). $rootname must be next to
 this directory: unpacking $name.tar (the one-file download, checked
 with "sha256sum -c $name.tar.sha256") puts both side by side. If
 you downloaded this directory file by file, run "chmod +x tools/*" in it
-once. It needs fastboot (android-tools), e2fsprogs, zstd, openssl,
-gpg and python3 on this computer. The installer checks the phone first, asks for your user
+once. It needs fastboot (android-tools), e2fsprogs, zstd, lz4, cpio,
+openssl, gpg and python3 on this computer. The installer checks the phone first, asks for your user
 name, password, Wi-Fi and SSH key, shows exactly what it will write, and
 waits for you to type "$DEVICE".
 
@@ -211,7 +216,7 @@ into a new directory DIR with tools/nv-backup (INSTALL.md, "Back up"), then
 run tools/phone-provision from this directory with that backup and your own
 factory image for $DEVICE:
   bash tools/nv-backup DIR
-  bash tools/phone-provision --nv-backup DIR FACTORY.zip
+  bash tools/phone-provision --first-install --nv-backup DIR FACTORY.zip
 The backup holds this phone's IMEI and calibration: keep it, never share
 it. phone-provision puts the firmware for Wi-Fi, Bluetooth, haptics,
 speakers and the camera on the phone, extracted on this computer; nothing

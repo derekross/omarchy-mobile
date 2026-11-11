@@ -3,13 +3,17 @@
 # unlocks. The session lock hides every other surface, on-screen keyboards
 # included, so a phone needs its own digits; a PIN is a numeric password.
 #
-# Against Omarchy 4.0.4 (the edge channel's aarch64 omarchy 4.0.4-2, the same
-# files as tag v4.0.4) with 0000 (Commons.Color) applied. 4.0.4 has no
-# "Fingerprint reader unavailable" notice, so the hunk that moved it above
-# the field is gone and the hint shows whenever fingerprints are set up.
-diff --git i/shell/plugins/lock/Keypad.qml w/shell/plugins/lock/Keypad.qml
-new file mode 100644
-index 0000000..98ad1ad
+# Omarchy 4.5 port (from the 4.0.6 series): same pad, toggle, layout and
+# 10 s blank as before. 4.5 changed the lock under it, and the port follows:
+# the placeholder is the i18n catalog's "Enter Password" unless the pad is
+# shown ("Enter PIN" stays English, as the series' strings always were: the
+# catalogs ship outside the patched package); 4.5's held-key guard
+# (dropsAutoRepeat) also covers keys typed into the pad; 4.5's focus restore
+# after a VT switch gives focus back to the pad's keys, not the field; the
+# idle blank timer's 4.5 idleMs carries the 10 s. 4.5's "Fingerprint reader
+# unavailable" notice moves above the field with the pad (below it is the
+# pad) and replaces the "either unlocks" hint while it shows.
+
 --- /dev/null
 +++ w/shell/plugins/lock/Keypad.qml
 @@ -0,0 +1,73 @@
@@ -86,14 +90,14 @@ index 0000000..98ad1ad
 +    }
 +  }
 +}
-diff --git i/shell/plugins/lock/LockView.qml w/shell/plugins/lock/LockView.qml
-index 3c5f65d..53eef73 100644
 --- i/shell/plugins/lock/LockView.qml
 +++ w/shell/plugins/lock/LockView.qml
-@@ -17,8 +17,16 @@ Item {
+@@ -19,8 +19,18 @@
    property bool loadBackground: true
    property string passwordText: ""
    property bool syncingPasswordText: false
+-
+-  readonly property string placeholderText: Commons.I18n.t("lock.enterPassword")
 +  // Touch-only devices: a number pad under the field (the lock-keypad toggle).
 +  property bool keypad: false
 +  // A phone with a fingerprint sensor under the display has it in the lower
@@ -102,14 +106,15 @@ index 3c5f65d..53eef73 100644
 +  // third clear, and a hint above the field says either works, as on Android.
 +  readonly property bool keypadClearsSensor: keypad && fingerprintConfigured
 +  readonly property int keypadBottomMargin: Math.round(height * (keypadClearsSensor ? 0.34 : 0.08))
- 
--  readonly property string placeholderText: "Enter Password"
-+  readonly property string placeholderText: keypad ? "Enter PIN" : "Enter Password"
++  // Whichever line sits above the field with the number pad, for its room.
++  readonly property Item keypadLineAbove: keypadHint.visible || !unavailableNotice.visible ? keypadHint : unavailableNotice
++
++  readonly property string placeholderText: keypad ? "Enter PIN" : Commons.I18n.t("lock.enterPassword")
    readonly property int fieldWidth: 381
    readonly property int fieldHeight: 67
    readonly property int outlineThickness: 3
-@@ -54,7 +62,8 @@ Item {
-   }
+@@ -50,7 +60,8 @@
+   signal wakeRequested()
  
    function forcePasswordFocus() {
 -    passwordInput.forceActiveFocus()
@@ -118,7 +123,18 @@ index 3c5f65d..53eef73 100644
    }
  
    function clearPassword() {
-@@ -115,16 +124,58 @@ Item {
+@@ -75,7 +86,9 @@
+   // The field loses focus while a password is checked (it is disabled then),
+   // and forcing focus onto it would not stick until the check ends.
+   function restorePasswordFocus() {
+-    if (inputEnabled && passwordInput.enabled && !passwordInput.activeFocus) forcePasswordFocus()
++    if (!inputEnabled || !passwordInput.enabled) return
++    // With the number pad the keys hold focus, not the field.
++    if (keypad ? !keypadKeys.activeFocus : !passwordInput.activeFocus) forcePasswordFocus()
+   }
+ 
+   onPasswordTextChanged: syncPasswordText()
+@@ -134,16 +147,64 @@
  
      MouseArea {
        anchors.fill: parent
@@ -126,12 +142,18 @@ index 3c5f65d..53eef73 100644
 +      hoverEnabled: !root.keypad
        onClicked: { root.wakeRequested(); root.forcePasswordFocus() }
        onPositionChanged: root.wakeRequested()
-     }
- 
++    }
++
 +    Item {
 +      id: keypadKeys
 +      Keys.onPressed: function(event) {
 +        if (!numberPad.enabled) return
++        root.wakeRequested()
++        // As in the field: a held key types nothing (Omarchy 4.5's guard).
++        if (event.isAutoRepeat && root.dropsAutoRepeat(event.key)) {
++          event.accepted = true
++          return
++        }
 +        if (event.text.length === 1 && event.text >= "0" && event.text <= "9") numberPad.digit(event.text)
 +        else if (event.key === Qt.Key_Backspace) numberPad.backspace()
 +        else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) numberPad.enter()
@@ -148,9 +170,9 @@ index 3c5f65d..53eef73 100644
 +      anchors.horizontalCenter: parent.horizontalCenter
 +      anchors.bottom: parent.bottom
 +      anchors.bottomMargin: root.keypadBottomMargin
-+      // what is left above it for the field, the hint and a margin
++      // what is left above it for the field, the line over it and a margin
 +      maxHeight: parent.height - root.keypadBottomMargin - root.fieldHeight - Style.space(40)
-+        - (root.keypadClearsSensor ? keypadHint.height + Style.space(18) : 0) - Style.space(48)
++        - (root.keypadLineAbove.visible ? root.keypadLineAbove.height + Style.space(18) : 0) - Style.space(48)
 +      onDigit: function(value) {
 +        root.wakeRequested()
 +        if (root.failureMessage.length > 0) root.clearFailureRequested()
@@ -165,8 +187,8 @@ index 3c5f65d..53eef73 100644
 +        root.passwordTextEdited("")
 +        if (submitted.length > 0) root.submitPassword(submitted)
 +      }
-+    }
-+
+     }
+ 
      BorderSurface {
        id: inputField
        width: root.fieldWidth
@@ -179,7 +201,7 @@ index 3c5f65d..53eef73 100644
        color: Commons.Color.lock.background
        borderSpec: root.inputBorderSpec
        radius: Style.cornerRadius
-@@ -141,7 +192,7 @@ Item {
+@@ -160,7 +221,7 @@
          anchors.leftMargin: inputField.borderLeft + 18 + root.fingerprintReserve
          verticalAlignment: TextInput.AlignVCenter
          horizontalAlignment: TextInput.AlignHCenter
@@ -188,12 +210,34 @@ index 3c5f65d..53eef73 100644
          clip: true
          enabled: root.inputEnabled && !root.authenticatingPassword
          readOnly: root.authenticatingPassword
-@@ -216,5 +267,23 @@ Item {
-         verticalAlignment: Text.AlignVCenter
-       }
+@@ -246,11 +307,18 @@
+     // The crossed-out icon has no meaning to a user who has never seen it — it
+     // is not intuitive that it signals a broken reader — so the words carry the
+     // explanation and the icon only reinforces it.
++    // With the number pad, the space under the field is the pad's, so the
++    // notice goes above the field, where the hint below would otherwise be.
+     Text {
++      id: unavailableNotice
+       objectName: "fingerprintUnavailableNotice"
+       textFormat: Text.PlainText
+-      anchors.top: inputField.bottom
+-      anchors.topMargin: 18
++      anchors.top: root.keypad ? undefined : inputField.bottom
++      anchors.topMargin: root.keypad ? 0 : 18
++      anchors.bottom: root.keypad ? inputField.top : undefined
++      anchors.bottomMargin: root.keypad ? Style.space(18) : 0
++      width: parent.width - Style.space(32)
++      wrapMode: root.keypad ? Text.WordWrap : Text.NoWrap
+       anchors.horizontalCenter: inputField.horizontalCenter
+       visible: root.fingerprintConfigured && root.fingerprintUnavailable
+       text: Commons.I18n.t("lock.fingerprintUnavailable")
+@@ -260,5 +328,24 @@
+       font.italic: true
+       horizontalAlignment: Text.AlignHCenter
      }
 +
-+    // Touch-only devices with fingerprints: say that either unlocks.
++    // Touch-only devices with fingerprints: say that either unlocks. Not
++    // while the reader is unavailable: the notice above says so instead.
 +    Text {
 +      id: keypadHint
 +      objectName: "keypadFingerprintHint"
@@ -202,7 +246,7 @@ index 3c5f65d..53eef73 100644
 +      anchors.bottomMargin: Style.space(18)
 +      anchors.horizontalCenter: inputField.horizontalCenter
 +      width: parent.width - Style.space(32)
-+      visible: root.keypadClearsSensor
++      visible: root.keypadClearsSensor && !root.fingerprintUnavailable
 +      text: "Touch the fingerprint sensor or enter your PIN"
 +      color: Commons.Color.lock.text
 +      font.family: Style.font.family
@@ -212,19 +256,17 @@ index 3c5f65d..53eef73 100644
 +    }
    }
  }
-diff --git i/shell/plugins/lock/Service.qml w/shell/plugins/lock/Service.qml
-index 65fcb19..95726eb 100644
 --- i/shell/plugins/lock/Service.qml
 +++ w/shell/plugins/lock/Service.qml
-@@ -23,6 +23,7 @@ Item {
+@@ -24,6 +24,7 @@
    property bool fingerprintAuthenticating: false
    property bool passwordPamConfigured: false
    property bool fingerprintConfigured: false
 +  property bool keypad: false
-   property bool previewVisible: false
-   property string enteredPassword: ""
-   property string pendingPassword: ""
-@@ -127,6 +128,7 @@ Item {
+   property int fingerprintUnreachedStreak: 0
+   property bool fingerprintAttemptReachedDevice: false
+   property bool fingerprintAttemptFastError: false
+@@ -215,6 +216,7 @@
    }
  
    function beginLock() {
@@ -232,36 +274,38 @@ index 65fcb19..95726eb 100644
      if (!passwordPamConfigured) {
        logEvent("lock-denied: missing-pam")
        return false
-@@ -267,6 +269,7 @@ Item {
-       color: Commons.Color.background
+@@ -507,6 +509,7 @@
  
        LockView {
-+        keypad: root.keypad
          id: lockView
++        keypad: root.keypad
          anchors.fill: parent
          backgroundPath: root.backgroundPath
-@@ -298,6 +301,7 @@ Item {
+         videoPosterPath: root.videoPosterPath
+@@ -543,6 +546,7 @@
      exclusionMode: ExclusionMode.Ignore
  
      LockView {
 +      keypad: root.keypad
        anchors.fill: parent
        backgroundPath: root.backgroundPath
-       backgroundVersion: root.backgroundVersion
-@@ -414,7 +418,8 @@ Item {
+       videoPosterPath: root.videoPosterPath
+@@ -766,7 +770,8 @@
  
    Timer {
      id: idleBlankTimer
--    interval: 5000
+-    readonly property int idleMs: 5000
 +    // Touch-only devices (the number pad) get longer to find and use it.
-+    interval: root.keypad ? 10000 : 5000
-     repeat: false
-     property double armedAt: 0
-     onTriggered: {
-@@ -482,6 +487,17 @@ Item {
++    readonly property int idleMs: root.keypad ? 10000 : 5000
+     // A resume reaches this as soon as the kernel thaws, seconds before the
+     // panel lights (on NVIDIA it waits out a VT switch and a modeset), so the
+     // idle run-up blanked the lock just as it appeared.
+@@ -843,6 +848,17 @@
+     if (!lockRequested) return
+     if (authenticatingPassword) idleBlankTimer.stop()
      else armBlankTimer()
-   }
- 
++  }
++
 +  // Touch-only devices opt into the number pad: omarchy-toggle lock-keypad.
 +  FileView {
 +    id: keypadToggle
@@ -271,8 +315,6 @@ index 65fcb19..95726eb 100644
 +    onLoaded: root.keypad = true
 +    onLoadFailed: root.keypad = false
 +    onFileChanged: reload()
-+  }
-+
+   }
+ 
    FileView {
-     path: "/etc/pam.d/omarchy-lock-password"
-     watchChanges: true
