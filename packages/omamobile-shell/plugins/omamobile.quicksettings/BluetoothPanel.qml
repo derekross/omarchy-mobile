@@ -529,6 +529,32 @@ Item {
       onClicked: root.close()
     }
 
+    // Swipe up from the bottom edge closes the panel. Full screen on the
+    // home screen, it covers the dock that takes that swipe there, so
+    // without this only the back arrow got out. The page's body ends
+    // above the strip, so it never lies over the end of the list, where a
+    // scroll would close the page instead. (The panel's bottom inset alone
+    // was too thin to hit: the phone has no outer gap.) The strip is as
+    // tall as the launcher's home strip (Launcher.qml's touch), so the
+    // band that closes the page is the same with the home strip up or not.
+    Item {
+      id: swipeStrip
+      z: 100
+      anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+      height: Math.max(44, Style.space(44))
+
+      DragHandler {
+        target: null
+        xAxis.enabled: false
+        property real swipeY: 0
+        onActiveTranslationChanged: swipeY = activeTranslation.y
+        onActiveChanged: {
+          if (active) swipeY = 0
+          else if (swipeY < -24) root.close()
+        }
+      }
+    }
+
     BorderSurface {
       id: panel
 
@@ -558,7 +584,7 @@ Item {
         anchors.fill: parent
         anchors.topMargin: panel.contentTopInset
         anchors.rightMargin: panel.contentRightInset
-        anchors.bottomMargin: panel.contentBottomInset
+        anchors.bottomMargin: Math.max(panel.contentBottomInset, swipeStrip.height)
         anchors.leftMargin: panel.contentLeftInset
 
         // ---------- Header: back, title, rescan
@@ -1019,6 +1045,48 @@ Item {
               onTapped: root.cancelSheet()
             }
           }
+        }
+      }
+    }
+  }
+
+  // Over an app the window above fits inside the home strip's reserved zone
+  // (ExclusionMode.Normal), so the bottommost rows of the screen still
+  // belonged to the strip: a swipe up there opened Recents over the page
+  // instead of closing it. While the page is up this window ignores that
+  // zone and takes the same band as the page's strip at the true bottom
+  // edge, and closes the page the same way. The strip is the home strip's
+  // own height, so over an app this window covers all of the zone the home
+  // strip reserves; on the home screen, where the page already reaches the
+  // bottom, it lies right over the page's own strip and never reaches the
+  // end of the list. While a sheet is up it
+  // steps back: the pairing and rename sheets bring the on-screen
+  // keyboard, and the home strip is the keyboard's strip then.
+  PanelWindow {
+    visible: root.opened && root.activeSheet === ""
+    anchors { left: true; right: true; bottom: true }
+    implicitHeight: swipeStrip.height
+    exclusionMode: ExclusionMode.Ignore
+    color: "transparent"
+    WlrLayershell.namespace: "omamobile-bluetooth-edge"
+    WlrLayershell.layer: WlrLayer.Top
+    WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+
+    // On an Item: pointer handlers straight on a window get no events.
+    Item {
+      anchors.fill: parent
+
+      // A tap out here is a tap outside the panel: close, like the scrim.
+      MouseArea { anchors.fill: parent; onClicked: root.close() }
+
+      DragHandler {
+        target: null
+        xAxis.enabled: false
+        property real swipeY: 0
+        onActiveTranslationChanged: swipeY = activeTranslation.y
+        onActiveChanged: {
+          if (active) swipeY = 0
+          else if (swipeY < -24) root.close()
         }
       }
     }

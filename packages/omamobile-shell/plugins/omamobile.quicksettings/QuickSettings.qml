@@ -1989,7 +1989,20 @@ Item {
       padding: root.pad
 
       // Taps on the card stay off the scrim, which would close the sheet.
-      MouseArea { anchors.fill: parent }
+      // A swipe up on the card moves both cards with the finger and puts
+      // them away, as the sheet's own swipe does: drag.offset moves the
+      // sheet, and this card hangs under it.
+      MouseArea {
+        anchors.fill: parent
+        property real startY: 0
+        onPressed: function(mouse) { startY = mouse.y; drag.offset = 0 }
+        onPositionChanged: function(mouse) { drag.offset = Math.min(0, mouse.y - startY) }
+        onReleased: {
+          if (drag.offset < -Style.space(60)) root.dismiss()
+          drag.offset = 0
+        }
+        onCanceled: drag.offset = 0
+      }
 
       Column {
         id: shadeColumn
@@ -2062,6 +2075,9 @@ Item {
           height: Math.max(0, shade.height - shade.insets - shade.mediaRoom - shadeHeader.height - shadeColumn.spacing)
           contentWidth: width
           contentHeight: shadeRows.implicitHeight
+          // Only when the list is longer than the card: a short list leaves
+          // the swipe up to the card, which closes the shade.
+          interactive: contentHeight > height + 1
           boundsBehavior: Flickable.StopAtBounds
           clip: true
 
