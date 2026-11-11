@@ -932,7 +932,8 @@ Omarchy's update).
   update doesn't either: the new shell's instance reopens the sheet on the
   run's progress or result.
 * **Result:** updated; updated with a restart needed (Restart now runs
-  `omarchy-system-reboot`); updated but the phone patches failed (the PIN pad
+  `omamobile-reboot`, Omarchy's own restart under either of its names);
+  updated but the phone patches failed (the PIN pad
   may be missing; the log's path); refused; or stopped, with the log's path
   (`~/.local/state/omamobile/update/update.log`). Migrations held for review
   are listed.

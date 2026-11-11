@@ -1,0 +1,34 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-reboot: restart the phone the way Omarchy does (an on-screen
+# note, the open apps closed, then systemd's reboot, which stops every unit:
+# the modem gets its clean stop).
+#
+# The shell's Restart buttons (the update sheet, the mobile network page) run
+# this, so they don't carry the name of Omarchy's command, which changed:
+# Omarchy 4.0 has omarchy-system-reboot, Omarchy 4.5 has "omarchy-system
+# reboot". With neither, systemd is asked directly.
+#
+#   omamobile-reboot
+#   omamobile-reboot --help
+#
+# OMAMOBILE_SYSTEMCTL names another systemctl, for the tests.
+
+case ${1:-} in
+  -h|--help)
+    sed -n '3,13s/^# \{0,1\}//p' "$0"
+    exit 0
+    ;;
+  "") ;;
+  *)
+    echo "omamobile-reboot: unknown option $1" >&2
+    exit 2
+    ;;
+esac
+
+if command -v omarchy-system >/dev/null 2>&1; then
+  exec omarchy-system reboot
+elif command -v omarchy-system-reboot >/dev/null 2>&1; then
+  exec omarchy-system-reboot
+fi
+exec "${OMAMOBILE_SYSTEMCTL:-systemctl}" reboot --no-wall

@@ -105,7 +105,7 @@ test("start's exit codes", () => {
 test("commands: omamobile-update's, the PIN never in argv", () => {
   assert.deepStrictEqual(M.START_ARGV, ["omamobile-update", "start"])
   assert.deepStrictEqual(M.CHECK_ARGV, ["omamobile-update", "check", "--json"])
-  assert.deepStrictEqual(M.REBOOT_ARGV, ["omarchy-system-reboot"])
+  assert.deepStrictEqual(M.REBOOT_ARGV, ["omamobile-reboot"])
 })
 
 let failed = 0
