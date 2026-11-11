@@ -28,6 +28,8 @@ assert.strictEqual(M.idOf("00112233aabbccdd"), "00112233aabbccdd")
 assert.deepStrictEqual(M.answerArgv("ab12", true), ["busctl", "--user", "call", "org.freedesktop.impl.portal.desktop.omamobile",
   "/org/omamobile/AccessSheet", "org.omamobile.AccessSheet", "Answer", "ss", "ab12", "allow"])
 assert.strictEqual(M.answerArgv("ab12", false).slice(-1)[0], "deny")
+// Back: the request ends unanswered (nothing is stored), never as "deny".
+assert.deepStrictEqual(M.dismissArgv("ab12"), M.answerArgv("ab12", true).slice(0, -1).concat(["dismiss"]))
 assert.strictEqual(M.initial(" camera"), "C")
 assert.strictEqual(M.initial(""), "?")
 console.log("ok - access model")

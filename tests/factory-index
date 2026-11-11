@@ -1,0 +1,166 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/factory-index, the build index of Google's factory images
+# (docs/INSTALL-EXPERIENCE-PLAN.md §6.1), against a made-up factory zip built here (no
+# file of Google's, no network): add reads the zip's name, size, SHA-256
+# and android-info.txt; a zip for another board, with another name or with
+# files that disagree is refused; tested and untested change the mark; the
+# reader refuses an index that breaks any rule (an address or page that
+# isn't Google's, a name without the digest, a tested build without its
+# release, another format or device, a build listed twice); match picks the
+# build with the phone's bootloader and baseband and no other (never a build
+# with the same bootloader alone), and names the builds that share both; and
+# sign makes a detached signature gpg verifies.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+command -v python3 >/dev/null || { echo "ok - # skip: no python3"; exit 0; }
+t=$(mktemp -d)
+cleanup() {
+  [[ ! -d $t/repo/keys/gnupg.release ]] || gpgconf --homedir "$t/repo/keys/gnupg.release" --kill gpg-agent 2>/dev/null || true
+  rm -rf "$t"
+}
+trap cleanup EXIT
+r=$t/repo
+mkdir -p "$r/tools/lib" "$r/device/testdev" "$r/packages/omamobile-keyring"
+cp tools/factory-index "$r/tools/"
+cp tools/lib/signing.sh "$r/tools/lib/"
+printf 'CODENAME=testdev\n' > "$r/device/testdev/device.conf"
+fx() { python3 -I -B "$r/tools/factory-index" "$@"; }
+idx=$r/device/testdev/factory-builds.json
+
+# factory BUILD BOARD BOOTLOADER BASEBAND [RADIO-FILE-VERSION]: a zip laid out
+# as Google's, named with the first eight digits of its SHA-256
+factory() {
+  python3 -I -B - "$t" "$@" <<'PY'
+import hashlib, io, os, sys, zipfile
+t, build, board, bl, bb = sys.argv[1:6]
+radio = sys.argv[6] if len(sys.argv) > 6 else bb
+top = "testdev-%s" % build
+inner = io.BytesIO()
+with zipfile.ZipFile(inner, "w") as z:
+    z.writestr("android-info.txt", "require board=%s\n\nrequire version-bootloader=%s\nrequire version-baseband=%s\n" % (board, bl, bb))
+    z.writestr("boot.img", b"not an image")
+tmp = os.path.join(t, "tmp.zip")
+with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+    z.writestr(top + "/flash-all.sh", "#!/bin/sh\n")
+    z.writestr(top + "/bootloader-testdev-%s.img" % bl, b"bl")
+    z.writestr(top + "/radio-testdev-%s.img" % radio, b"radio")
+    z.writestr(top + "/image-testdev-%s.zip" % build, inner.getvalue())
+digest = hashlib.sha256(open(tmp, "rb").read()).hexdigest()
+out = os.path.join(t, "testdev-%s-factory-%s.zip" % (build, digest[:8]))
+os.replace(tmp, out)
+print(out)
+PY
+}
+
+z1=$(factory ab1c.230101.001 testdev testloader-1.0-111 testband-9.9-222)
+out=$(fx add -d testdev "$z1") || fail "add takes a factory zip"
+sum=$(sha256sum < "$z1" | cut -d' ' -f1)
+grep -cF "$sum" <<<"$out" >/dev/null || fail "add prints the SHA-256 to compare with Google's page"
+python3 -I -B - "$idx" "$z1" "$sum" <<'PY' || fail "the entry holds the build, both versions, the name, size, SHA-256, Google's address and page"
+import json, os, sys
+m = json.load(open(sys.argv[1])); b = m["builds"][0]; name = os.path.basename(sys.argv[2])
+assert m["format"] == 1 and m["codename"] == "testdev" and len(m["builds"]) == 1
+assert b == {"build": "AB1C.230101.001", "bootloader": "testloader-1.0-111", "baseband": "testband-9.9-222",
+             "zip": name, "url": "https://dl.google.com/dl/android/aosp/" + name,
+             "page": "https://developers.google.com/android/images#testdev",
+             "sha256": sys.argv[3], "size": os.path.getsize(sys.argv[2]), "tested": False}, b
+PY
+[[ ! -e $r/device/testdev/$(basename "$z1") ]] && [[ $(find "$r" -name '*.zip' | wc -l) == 0 ]] || fail "nothing of the zip is kept"
+pass "add: the build's metadata from a factory zip, and nothing of the zip"
+
+if fx add -d testdev "$z1" 2>/dev/null; then fail "a build is added once"; fi
+z2=$(factory ab1c.230201.002 testdev testloader-1.0-111 otherband-1.0-333)
+fx add -d testdev --tested 2026.11.01 "$z2" >/dev/null || fail "add --tested"
+[[ $(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["builds"][0]["build"])' "$idx") == AB1C.230201.002 ]] || fail "the newest build is first"
+bad=$(factory ab1c.230301.003 otherboard testloader-1.0-111 testband-9.9-222)
+if fx add -d testdev "$bad" 2>"$t/err"; then fail "a zip for another board is refused"; fi
+grep -c 'is for board otherboard' "$t/err" >/dev/null || fail "says which board the zip is for"
+bad=$(factory ab1c.230301.003 testdev testloader-1.0-111 testband-9.9-222 anotherband-2)
+if fx add -d testdev "$bad" 2>"$t/err"; then fail "a zip whose radio image disagrees with android-info.txt is refused"; fi
+# The same bytes under another build's name: the eight digits are right, so
+# only the look inside the zip can tell
+other=$t/testdev-ab1c.230101.009-factory-${sum:0:8}.zip
+cp "$z1" "$other"
+if fx add -d testdev "$other" 2>"$t/err"; then fail "a zip that holds another build than its name says is refused"; fi
+grep -c 'holds testdev-ab1c.230101.001, not the build its name says' "$t/err" >/dev/null || { cat "$t/err" >&2; fail "says which build the zip holds"; }
+! grep -c '230101.009' "$idx" >/dev/null || fail "the build a zip's name claims is not added"
+cp "$z1" "$t/testdev-ab1c.230101.001-factory-00000000.zip"
+if fx add -d testdev "$t/testdev-ab1c.230101.001-factory-00000000.zip" 2>"$t/err"; then fail "a zip whose name carries other digits than its SHA-256 is refused"; fi
+grep -c "first eight digits" "$t/err" >/dev/null || fail "says the name's digits aren't the file's"
+cp "$z1" "$t/renamed.zip"
+if fx add -d testdev "$t/renamed.zip" 2>/dev/null; then fail "a zip not named as Google names it is refused"; fi
+if fx add -d testdev --tested latest "$z1" 2>/dev/null; then fail "--tested takes a release version"; fi
+[[ $(fx check -d testdev | grep -c 'bootloader') == 2 ]] || fail "refused zips add nothing"
+pass "add refuses a second copy, another board, files that disagree, another build inside, another name"
+
+m() { fx match --index "$idx" --codename testdev --bootloader "$1" --baseband "$2"; }
+out=$(m testloader-1.0-111 testband-9.9-222)
+grep -cx 'match=exact' <<<"$out" >/dev/null && grep -cx 'build=AB1C.230101.001' <<<"$out" >/dev/null && grep -cx "sha256=$sum" <<<"$out" >/dev/null &&
+  grep -cx 'tested=false' <<<"$out" >/dev/null || fail "the exact build is used, tested or not"
+# A tested build with the same bootloader and another baseband is no match:
+# its mark was earned with its own baseband
+[[ $(m testloader-1.0-111 unknownband) == match=none* ]] || fail "the same bootloader with another baseband matches nothing, tested or not"
+! grep -c '^build=' <<<"$(m testloader-1.0-111 unknownband)" >/dev/null || fail "no build is offered without an exact match"
+fx untested -d testdev AB1C.230201.002 >/dev/null
+grep -cx 'tested=false' <<<"$(m testloader-1.0-111 otherband-1.0-333)" >/dev/null || fail "untested takes the mark back"
+fx tested -d testdev AB1C.230201.002 2026.11.08 >/dev/null
+grep -c 'tested with 2026.11.08' <<<"$(fx check -d testdev)" >/dev/null || fail "tested marks a build with its release"
+[[ $(m otherloader-2 testband-9.9-222) == match=none* ]] || fail "another bootloader matches nothing"
+! grep -c '^url=' <<<"$(m testloader-1.0-111 testband-9.9-222)" >/dev/null || fail "match doesn't hand out the download address"
+grep -cx 'builds=2' <<<"$(fx info --index "$idx" --codename testdev)" >/dev/null || fail "info counts the builds"
+grep -cx 'same_pair=' <<<"$(m testloader-1.0-111 testband-9.9-222)" >/dev/null || fail "a build alone with its versions shares them with none"
+! grep -c 'share a bootloader' <<<"$(fx check -d testdev)" >/dev/null || fail "check notes nothing while every pair is one build's"
+cp "$idx" "$t/good.json"   # the two-build index the reader's refusals below start from
+# A carrier variant: another build with the same bootloader and baseband
+z3=$(factory ab1c.230101.001.a1 testdev testloader-1.0-111 testband-9.9-222)
+fx add -d testdev "$z3" >/dev/null || fail "add takes a build that shares another's versions"
+out=$(m testloader-1.0-111 testband-9.9-222)
+grep -cx 'build=AB1C.230101.001.A1' <<<"$out" >/dev/null && grep -cx 'same_pair=AB1C.230101.001' <<<"$out" >/dev/null ||
+  fail "of builds that share both versions the first listed is printed and the others are named"
+grep -c 'note: AB1C.230101.001.A1, AB1C.230101.001 share a bootloader and baseband' <<<"$(fx check -d testdev)" >/dev/null ||
+  fail "check names the builds a phone can't tell apart"
+pass "match: the build with the phone's bootloader and baseband, never one with the bootloader alone; shared pairs named"
+
+refuse() {  # WHY PYTHON-EDIT
+  python3 -I -c "import json, sys; m = json.load(open(sys.argv[1])); b = m['builds'][0]; $2; json.dump(m, open(sys.argv[2], 'w'))" "$t/good.json" "$t/bad.json"
+  if fx info --index "$t/bad.json" --codename testdev >/dev/null 2>&1; then fail "the reader refuses $1"; fi
+}
+refuse "a download address that isn't Google's" 'b["url"] = "https://example.org/" + b["zip"]'
+refuse "an address for another file" 'b["url"] = "https://dl.google.com/dl/android/aosp/other.zip"'
+refuse "a page that isn't Google's" 'b["page"] = "https://developers.google.com.example.org/android/images"'
+refuse "a name without the SHA-256's digits" 'b["sha256"] = "0" * 64'
+refuse "a tested build without its release" 'del b["tested_with"]'
+refuse "an untested build with a release" 'm["builds"][1]["tested_with"] = "2026.11.01"'
+refuse "a string for true" 'b["tested"] = "true"'
+refuse "a size that isn't one" 'b["size"] = -1'
+refuse "a zip named for another device" 'b["zip"] = b["zip"].replace("testdev", "other")'
+refuse "another format" 'm["format"] = 2'
+refuse "another device's index" 'm["codename"] = "other"'
+refuse "a date that isn't one" 'm["updated"] = "yesterday"'
+refuse "a build listed twice" 'm["builds"].append(dict(m["builds"][0]))'
+refuse "a build that isn't an object" 'm["builds"].append("x")'
+echo '{' > "$t/bad.json"
+if fx info --index "$t/bad.json" --codename testdev 2>/dev/null; then fail "the reader refuses a file that isn't JSON"; fi
+fx info --index "$t/good.json" --codename testdev >/dev/null || fail "the unchanged index still reads"
+pass "the reader refuses an index that breaks any rule"
+
+# sign: a detached signature by the release key's layout (tools/lib/signing.sh)
+if command -v gpg >/dev/null; then
+  G=$r/keys/gnupg.release; mkdir -p -m700 "$G"
+  gpg --homedir "$G" -q --batch --passphrase '' --quick-gen-key 'Test Release <test@example.org>' ed25519 sign never 2>/dev/null
+  fpr=$(gpg --homedir "$G" --with-colons --list-keys 2>/dev/null | awk -F: '$1 == "fpr" { print $10; exit }')
+  echo "$fpr" > "$r/keys/fingerprint.release"
+  echo "$fpr:4:" > "$r/packages/omamobile-keyring/omamobile-trusted"
+  : > "$r/packages/omamobile-keyring/omamobile-revoked"
+  fx sign -d testdev --out "$t/signed" >/dev/null || fail "sign writes a signed copy"
+  cmp -s "$t/signed/factory-builds.json" "$idx" || fail "the signed copy is the index"
+  gpg --homedir "$G" --batch --verify "$t/signed/factory-builds.json.sig" "$t/signed/factory-builds.json" 2>/dev/null || fail "the signature verifies"
+  rm -rf "$r/keys"
+  if fx sign -d testdev --out "$t/signed2" 2>/dev/null; then fail "sign needs the release key"; fi
+  pass "sign: a detached signature by the release key, and none without it"
+else
+  echo "ok - # skip: no gpg for sign"
+fi
