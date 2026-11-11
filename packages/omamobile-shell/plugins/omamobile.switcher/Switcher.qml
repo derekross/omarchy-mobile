@@ -42,6 +42,24 @@ Item {
 
   property bool opened: false
 
+  Loader {
+    source: Qt.resolvedUrl("../omamobile.back/BackLinkClient.qml")
+    onLoaded: {
+      item.name = "recent apps"
+      item.handler = function() { return root.navigationBack() }
+      item.active = Qt.binding(function() { return root.opened })
+    }
+  }
+
+  function navigationBack() {
+    if (!opened) return false
+    if (actionsOpen && actionPage === "pick") actionPage = "menu"
+    else if (actionsOpen) closeActions()
+    else dismiss()
+    return true
+  }
+
+
   // Newest first, like Android's recents.
   readonly property var windows: {
     var list = ToplevelManager.toplevels.values.slice()

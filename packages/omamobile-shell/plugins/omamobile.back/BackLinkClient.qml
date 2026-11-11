@@ -22,6 +22,10 @@ import "BackLink.js" as BackLink
 Item {
   id: client
 
+  // A reader uses this same packaged URL to share publishers from clones.
+  function back() { return BackLink.back() }
+  function names() { return BackLink.names() }
+
   property bool active: false
   property var handler: null
   property string tier: "surface"

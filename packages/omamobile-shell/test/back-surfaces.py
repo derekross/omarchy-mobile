@@ -31,6 +31,9 @@ EXPECT = {
     "omamobile.voice/Voice.qml": ["voice settings", "voice result"],
     "omamobile.home/Home.qml": ["home screen"],
     "omamobile.home/OwlCell.qml": ["widget screen"],
+    "omamobile.quicksettings/QuickSettings.qml": ["quick settings"],
+    "omamobile.launcher/Launcher.qml": ["app drawer"],
+    "omamobile.switcher/Switcher.qml": ["recent apps"],
 }
 
 
@@ -73,7 +76,7 @@ for name, wanted in EXPECT.items():
 # Nothing else loads the client unseen by this test.
 for path in plugins.glob("*/*.qml"):
     rel = str(path.relative_to(plugins))
-    if rel not in EXPECT and rel != "omamobile.back/BackLinkClient.qml":
+    if rel not in EXPECT and rel not in ("omamobile.back/BackLinkClient.qml", "omamobile.back/Back.qml"):
         assert MARK not in path.read_text(), "%s registers with Back but isn't tested here" % rel
 
 FAKES = '''
@@ -86,6 +89,7 @@ FAKES = '''
     property bool oskOpen: false
     property bool languagesOpen: false
     property bool opened: false
+    property bool navigationOpen: false
     property bool screenOpen: false
     property bool authPending: false
     property string phase: "idle"
@@ -94,6 +98,7 @@ FAKES = '''
     property var layersOver: ({})
     property var calls: []
     function note(n) { calls = calls.concat([n]) }
+    function navigationBack() { note("navigationBack"); opened = false; navigationOpen = false; return true }
     function hideKeyboard() { note("hideKeyboard"); oskOpen = false }
     function closeLanguages() { note("closeLanguages"); languagesOpen = false }
     function back() { note("back"); opened = false; screenOpen = false; return true }
@@ -119,7 +124,8 @@ FAKES = '''
 '''
 
 back_source = (plugins / "omamobile.back/Back.qml").read_text()
-back_fn = body_of(back_source, "  function back() {")
+back_fn = body_of(back_source, "  function back(payloadJson, startedToplevel) {")
+back_fn = back_fn.replace("ToplevelManager.activeToplevel", "manager.activeToplevel").replace("Hyprland.activeToplevel", "hyprSource.activeToplevel")
 
 TEST = r'''import QtQuick
 import QtTest
@@ -133,7 +139,11 @@ TestCase {
   name: "BackSurfaces"
 
   // Back.qml's own back(), as written.
-  function back() BACK_FN
+  function back(payloadJson, startedToplevel) BACK_FN
+  QtObject { id: manager; property var activeToplevel: null }
+  QtObject { id: hyprSource; property var activeToplevel: null }
+  Loader { id: backLink; source: "omamobile.back/BackLinkClient.qml" }
+  function initTestCase() { tryVerify(function() { return backLink.item !== null }) }
 
   function names() { return BackLink.names().join(",") }
   function sent() { return Quickshell.executed.length }
@@ -147,6 +157,9 @@ TestCase {
   Component { id: home; SurfHomeScreen {} }
   Component { id: wscreen; SurfWidgetScreen {} }
   Component { id: plain; BackLinkClient {} }
+  Component { id: quick; SurfQuickSettings {} }
+  Component { id: drawer; SurfAppDrawer {} }
+  Component { id: recents; SurfRecentApps {} }
 
   function init() { BackLink.clear(); Quickshell.executed = [] }
 
@@ -167,6 +180,9 @@ TestCase {
     compare(JSON.stringify(Quickshell.executed[0]), JSON.stringify(BackModel.ESCAPE_ARGV))
   }
 
+  function test_quickSettings() { alone(make(quick), "quick settings", function(o) { o.fake.navigationOpen = true }, "navigationBack") }
+  function test_appDrawer() { alone(make(drawer), "app drawer", function(o) { o.fake.opened = true }, "navigationBack") }
+  function test_recentApps() { alone(make(recents), "recent apps", function(o) { o.fake.opened = true }, "navigationBack") }
   function test_keyboard() { alone(make(kb), "keyboard", function(o) { o.fake.oskOpen = true }, "hideKeyboard") }
   function test_permissionSheet() { alone(make(perm), "permission sheet", function(o) { o.fake.opened = true }, "back") }
   function test_fingerprintSetup() { alone(make(finger), "fingerprint setup", function(o) { o.fake.screenOpen = true }, "back") }

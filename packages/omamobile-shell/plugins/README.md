@@ -1193,3 +1193,11 @@ What upstream needs instead, smallest first:
   `omarchy.notifications` only to full bars. Quick settings calls the
   `notifications` IPC target on its own shell instance (`qs ipc -p
   Quickshell.shellDir`) instead.
+
+Browser history follows the native Back handlers. Both edges use Alt+Left for
+an activated Chrome/Chromium window whose current Wayland and Hyprland handles
+agree with the window captured at gesture start. Modal, changed or uncertain
+focus uses the existing Escape/Home path. Quick settings, drawer and recents
+register active handlers with BackLink so navigation stays in their topmost
+surface. A cloned Back plugin reads through the packaged BackLinkClient URL,
+sharing the same registry as native publishers.
