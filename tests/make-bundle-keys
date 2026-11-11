@@ -5,7 +5,8 @@
 # signs only with the release key (keys/gnupg.release, which omamobile-keyring
 # trusts), carries a calendar version, and holds a root image that follows
 # the stable channel. Nothing here signs: every case stops before that.
-# A refusal leaves a bundle already built under the same name as it was.
+# A refusal, or a failure later in the build, leaves a bundle already built
+# under the same name as it was.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 for tool in cpio lz4 sha256sum; do
@@ -118,3 +119,9 @@ touch -d '1 hour ago' "$t/kernel/images/boot.img"
 expect_refusal 'is older than' --unsigned
 kept 'images older than the kernel'
 echo 'ok - a refused rebuild keeps the prior bundle'
+# A failure after the checks: this device.conf has no UFS_RW for manifest.json
+touch "$t/kernel/images/boot.img"
+expect_refusal 'writing manifest.json failed' --unsigned
+kept 'a failed rebuild'
+[[ $(ls -A "$r/out/bundle") == "${prior##*/}" ]] || { echo "not ok - a failed rebuild left files in out/bundle" >&2; exit 1; }
+echo 'ok - a rebuild that fails part way keeps the prior bundle and leaves nothing beside it'
