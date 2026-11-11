@@ -130,6 +130,12 @@ class BridgeTests(unittest.TestCase):
     def modem(self, name='State', interface=mm.MODEM):
         return self.client.prop(MODEM0, interface, name)
 
+    def signals(self, name, wanted, message):
+        """This client's signals called `name`, once `wanted` says they are all there. A property
+        read can show a change before the main loop has handed this client the signals sent with
+        it (seen on a phone, where the tests run slower), so reading them is a wait, not a look."""
+        return wait_until(lambda: wanted(self.client.named(name)) and self.client.named(name), 5, message)
+
     def error_of(self, path, interface, method, signature=None, args=()):
         with self.assertRaises(GLib.Error) as caught:
             self.client.call(path, interface, method, signature, args)
@@ -173,9 +179,12 @@ class NoSim(BridgeTests):
         self.assertIn(mm.MESSAGING, objects[MODEM0])
         sim = objects[MODEM0][mm.MODEM]['Sim']
         self.assertEqual(sim, ROOT + '/SIM/0')
-        added = [sorted(s[3][1]) for s in self.client.named('InterfacesAdded') if s[3][0] == MODEM0]
+        def of_modem(signals):
+            return [sorted(s[3][1]) for s in signals if s[3][0] == MODEM0]
+        added = of_modem(self.signals('InterfacesAdded', lambda got: len(of_modem(got)) >= 4, 'four InterfacesAdded'))
         self.assertEqual(added, [sorted(bridge.BASE_INTERFACES), [mm.MESSAGING], [mm.SIGNAL], [mm.SIMPLE]])
-        changed = self.client.named('StateChanged')
+        changed = self.signals('StateChanged', lambda got: got and got[-1][3][1] == mm.STATE_REGISTERED,
+                               'StateChanged to registered')
         self.assertEqual(changed[-1][3], (mm.STATE_FAILED, mm.STATE_REGISTERED, mm.CHANGE_UNKNOWN))
 
 
@@ -242,7 +251,9 @@ class Registered(BridgeTests):
         self.assertEqual(self.sitd.requests, [dict(action='radio', on=False)])
         self.push(radio='off', registration='not-registered')
         wait_until(lambda: self.modem() == mm.STATE_DISABLED, 5, 'disabled')
-        self.assertEqual(self.client.named('StateChanged')[-1][3], (8, 3, mm.CHANGE_USER_REQUESTED))
+        changed = self.signals('StateChanged', lambda got: got and got[-1][3][1] == mm.STATE_DISABLED,
+                               'StateChanged to disabled')
+        self.assertEqual(changed[-1][3], (8, 3, mm.CHANGE_USER_REQUESTED))
         self.sitd.handlers['radio'] = lambda r: (_ for _ in ()).throw(FakeRefusal('Call in progress'))
         self.assertEqual(self.error_of(MODEM0, mm.MODEM, 'Enable', 'b', (True,)), mm.ERROR_PREFIX + 'Failed')
 
@@ -692,7 +703,8 @@ class Registered(BridgeTests):
         wait_until(lambda: self.client.named('CallAdded'), 5, 'call')
         self.sitd.stop()
         wait_until(lambda: self.client.objects() == {}, 10, 'the modem to go')
-        removed = self.client.named('InterfacesRemoved')[-1][3]
+        removed = self.signals('InterfacesRemoved', lambda got: got and got[-1][3][0] == MODEM0,
+                               'InterfacesRemoved for the modem')[-1][3]
         self.assertEqual(removed[0], MODEM0)
         self.assertEqual(sorted(removed[1]), sorted(bridge.FULL_INTERFACES))
         self.sitd.start()
