@@ -123,6 +123,40 @@ correction passed physical dialog checks with keyboard hidden and visible,
 and normal typing afterward. That Escape mechanism is now supplied by main.
 These observations do not qualify this new integration's native ordering.
 
+### Pixel 6a verification, 2026-11-11
+
+The revised combined package was subsequently installed and physically tested:
+`omamobile-shell 0.2.119-1`, integration
+`83326ed6d09684ae80f38c9360e8c4e864d32614`, SHA-256
+`02e0acadd2568bf167946a87c740626fffb59068918271bdb2026fac799e0270`, on
+`7.3.0-rc6-omamobile-bluejay-input-gated0`. Installation and cold shell restart
+were gated on an unlocked session. No new QML/config errors appeared; all six
+required smoke checks passed and package verification found 370 files, none
+altered. Policy, the complete combined shell suite, independent review and
+published-head repository/every-package CI passed.
+
+The owner confirmed both physical browser edges return Page two to Page one.
+With text entered and the keyboard visible, first Back hid the keyboard and
+left Page two; next Back navigated. The final DOM reports Page one,
+`back_forward` navigation and Escape count zero. The actual Qt Controls dialog
+also passed physically: five typed characters, first swipe hides only the
+keyboard, next swipe delivers Qt Escape16777216 and rejects/closes the dialog.
+Normal idle lock, input-gate refusal while locked and owner unlock were observed.
+
+Running-shell calls also verified quick settings, Wi-Fi, Bluetooth, recorder,
+drawer and recents without changing the underlying browser's history or Escape
+count. A real Access backend request was dismissed unanswered. Those surface
+and permission observations are handler/dispatch checks; the physical results
+above belong to the browser and Qt dialog. No formal physical release-to-frame
+latency was measured. Maintainer Pixel 7 Pro qualification remains before merge.
+
+Task browsers, server, fixtures and CDP tunnel were stopped and task-only data
+removed. The personal clock, flags and saved zoom were preserved, with only
+main's expected remote-session disable added to the profile. The phone returned
+home. These results belong to the exact combined artifact, not a later kernel
+or an unrelated subsequently merged shell change.
+
+
 Userspace runbook (low risk):
 
 1. Run policy, complete shell suite, current native-surface/routing/model and
