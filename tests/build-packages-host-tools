@@ -1,0 +1,100 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/build-packages and a package's test/host-tools: the commands its
+# test/all needs on the machine that runs it. With all of them here the
+# test runs natively, as every test/all does; with one missing (the publish
+# machine has no Qt tools) the package's check() runs in the container
+# instead, and the run goes on. No Docker, no network: a copy of the
+# repository with stand-ins for the container and repo-add, and a throwaway
+# local key (as tests/stage-boot-files).
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+command -v gpg >/dev/null && command -v zstd >/dev/null || { pass "# skip: no gpg or zstd"; exit 0; }
+t=$(mktemp -d)
+export GNUPGHOME=$t/home && mkdir -m 700 "$GNUPGHOME"  # never the user's ~/.gnupg
+R=$t/repo
+trap 'gpgconf --homedir "$R/keys/testdev/gnupg" --kill gpg-agent 2>/dev/null || true; rm -rf "$t"' EXIT
+
+mkdir -p "$R/tools/lib" "$R/device/testdev" "$R/packages" "$t/bin" "$t/tmp"
+cp tools/build-packages tools/stage-boot-files "$R/tools/" && cp omamobile.conf "$R/"
+mkdir -p "$R/packages/omamobile-boot-update/lib" && cp packages/omamobile-boot-update/lib/descriptor.sh "$R/packages/omamobile-boot-update/lib/"
+printf 'CODENAME=testdev\n' > "$R/device/testdev/device.conf"
+cat > "$R/tools/lib/alarm.sh" <<'A'
+alarm_die() { echo "error: $*" >&2; exit 1; }
+alarm_say() { echo "==> $*"; }
+alarm_fetch() { :; }
+alarm_build_image() { echo fixture; }
+alarm_base_image() { echo fixture; }
+ALARM_CACHE=$ALARM_TEST_CACHE ALARM_KEYSERVER=none
+A
+# here: every tool it names exists. lacking: one doesn't, and its test/all
+# would fail if it ran on this machine. plain: no host-tools file at all
+for p in here lacking plain; do
+  mkdir -p "$R/packages/$p/test"
+  echo 1 > "$R/packages/$p/version"
+  printf 'pkgname=%s\npkgver=$(cat "${startdir:-.}/version")\npkgrel=1\narch=(any)\n' "$p" > "$R/packages/$p/PKGBUILD"
+  printf '#!/bin/bash\necho %s >> "$NATIVE_LOG"\necho "ok - ran"\n' "$p" > "$R/packages/$p/test/all"
+done
+printf '#!/bin/bash\necho lacking >> "$NATIVE_LOG"\nexit 1\n' > "$R/packages/lacking/test/all"
+chmod +x "$R"/packages/*/test/all
+printf '# a comment\nbash\ntar\n' > "$R/packages/here/test/host-tools"
+printf '# a comment\nbash\nomamobile-no-such-tool\n' > "$R/packages/lacking/test/host-tools"
+# The container: makepkg's result, and whether check() was asked for
+cat > "$t/bin/docker" <<'D'
+#!/bin/bash
+[[ $1 == run ]] || exit 0
+work="" name="" incheck=""
+while (($#)); do
+  case $1 in
+    -v) [[ $2 != *:/work ]] || work=${2%:/work}; shift ;;
+    -e) case $2 in NAME=*) name=${2#NAME=} ;; INCHECK=*) incheck=${2#INCHECK=} ;; esac; shift ;;
+  esac
+  shift
+done
+[[ -n $work && -n $name ]] || exit 0
+d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; printf 'pkgname = %s\npkgver = 1-1\narch = any\n' "$name" > "$d/.PKGINFO"
+tar --zstd -cf "$work/out/$name-1-1-any.pkg.tar.zst" -C "$d" .PKGINFO
+echo "$name check=$incheck" >> "$BUILT_LOG"
+D
+printf '#!/bin/bash\nwhile [[ $1 == -* ]]; do [[ $1 == --key ]] && shift; shift; done\ntouch "$1"; ln -sf "$1" omamobile.db\n' > "$t/bin/repo-add"
+chmod +x "$t/bin/"*
+kd=$R/keys/testdev && mkdir -p -m 700 "$kd/gnupg"
+GNUPGHOME=$kd/gnupg gpg --batch --quiet --passphrase '' --quick-generate-key "test <t@invalid>" ed25519 sign never 2>/dev/null
+GNUPGHOME=$kd/gnupg gpg --with-colons --list-keys 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}' > "$kd/fingerprint"
+GNUPGHOME=$kd/gnupg gpg --batch --armor --export > "$kd/public.asc"
+( cd "$R" && git init -q && git add -A )
+build() {  # build LOGNAME [options]: the three packages, with the stand-ins
+  local log=$1; shift
+  : > "$t/native-$log"
+  (cd "$R" && PATH=$t/bin:$PATH TMPDIR=$t/tmp ALARM_TEST_CACHE=$t/cache BUILT_LOG=$t/built-$log NATIVE_LOG=$t/native-$log \
+     tools/build-packages --force --local testdev "$@" packages/here packages/lacking packages/plain) > "$t/$log.log" 2>&1
+}
+
+build default || { cat "$t/default.log"; fail "a package whose test needs a tool this machine lacks doesn't fail the run"; }
+[[ $(sort "$t/native-default" | tr '\n' ' ') == "here plain " ]] \
+  || { cat "$t/default.log"; fail "test/all runs natively with its tools here or none named, and not with one missing (ran: $(tr '\n' ' ' < "$t/native-default"))"; }
+[[ $(sort "$t/built-default" | tr '\n' ' ') == "here check=0 lacking check=1 plain check=0 " ]] \
+  || { cat "$t/default.log"; fail "only the package lacking a tool has check() in the container (got: $(tr '\n' ' ' < "$t/built-default"))"; }
+grep -c 'this machine lacks omamobile-no-such-tool: check() runs in the container' "$t/default.log" >/dev/null \
+  || { cat "$t/default.log"; fail "the missing tool is named"; }
+pass "a test/all whose host-tools are all here runs natively; with one missing, check() runs in the container and the tool is named"
+
+build nocheck --nocheck || { cat "$t/nocheck.log"; fail "--nocheck builds"; }
+[[ ! -s $t/native-nocheck && $(grep -c 'check=0' "$t/built-nocheck") == 3 ]] \
+  || { cat "$t/nocheck.log"; fail "--nocheck runs no test, natively or in the container"; }
+pass "--nocheck still skips every test"
+
+build container --check-in-container || { cat "$t/container.log"; fail "--check-in-container builds"; }
+[[ ! -s $t/native-container && $(grep -c 'check=1' "$t/built-container") == 3 ]] \
+  || { cat "$t/container.log"; fail "--check-in-container runs every check() in the container"; }
+pass "--check-in-container still moves every check into the container"
+
+# The one package that names its tools today names what its test/all calls
+for tool in $(grep -v '^#' packages/omamobile-settings/test/host-tools); do
+  [[ $tool == g++ ]] || grep -c -- "$tool" packages/omamobile-settings/test/all packages/omamobile-settings/bin/build >/dev/null \
+    || fail "omamobile-settings names $tool, which its test doesn't call"
+done
+grep -c '^qmake6$' packages/omamobile-settings/test/host-tools >/dev/null || fail "omamobile-settings names qmake6"
+pass "omamobile-settings names qmake6 and the other commands its test calls"
