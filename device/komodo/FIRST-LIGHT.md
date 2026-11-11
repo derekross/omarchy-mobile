@@ -6,8 +6,9 @@ This reduced target has not completed a full public-kernel image build or an
 attended boot qualification. No installation or peripheral support is claimed.
 The phone has already run a richer local development kernel; the retained
 installation/fallback/boot-success history and unresolved evidence are recorded
-in [NOTES](NOTES.md). Do not boot a new kernel/image set until that history,
-stock provenance and the maintainer's recovery decision are complete.
+in [NOTES](NOTES.md). The maintainer selected the existing booted footer policy on 2026-11-11.
+New image builds and boots remain held until the disabled-node kernel series
+is merged and its public PR and exact head replace the pending dependency below.
 Follow [CONTRIBUTING](../../CONTRIBUTING.md) sections 3 and 6 throughout.
 
 ## Required kernel source
@@ -43,11 +44,11 @@ security-patch property `2026-10-05`. Their Android v4 headers are 1584 bytes
 and both encode OS version `17.0.0`, patch level `2026-10`. The software
 provenance properties identify vendor/software base `CP3A.261005.005`; this is
 not an attestation of the whole Android system or Google factory signing.
-The descriptor now uses the observed slot-A rollback index `0`. This is the
-corrected source value, not permission to build or boot with it: the currently
-booted B cohort has index `1791158400` and has been marked successful. The
-maintainer must resolve that transition and select the intended index before
-any new image build, as detailed below.
+The descriptor retains rollback index `1791158400`, following the already
+booted B cohort rather than the slot-A footer value. The maintainer selected
+this policy on 2026-11-11 so that the public kernel is the only change in the
+first new cohort. Both vbmeta partitions list all five images as hash
+descriptors, with none chained; see the dated table in [NOTES](NOTES.md).
 
 Current read-only sysfs discovery gives these partition sizes:
 
@@ -68,22 +69,20 @@ bootloader transition was made to collect it.
 
 The retained working development cohort and a separate offline development
 build used footers on all five images, AOSP's public RSA-4096 test key,
-`SHA256_RSA4096`, rollback index `1791158400` and location `0`. That old index
-is **not** the slot-A value and is no longer copied into the descriptor. The
-working phone has not been rewritten to the new descriptor policy. Historical
+`SHA256_RSA4096`, rollback index `1791158400` and location `0`. That index
+is **not** the slot-A footer value. It is retained in the descriptor solely
+to match the booted cohort for the first public-kernel boot. Historical
 development image verification does not qualify a new rollback policy or image
 cohort and is not evidence of factory image signing.
 
-A descriptor-index-0 cohort would be the first lower-index footer set after a
-successful marked boot at `1791158400`. Its acceptance by ABL is unknown. The
-Pixel 9a's footer-less images do not establish this phone's behavior. This is
-an explicit open point for the maintainer to decide before building or booting
-new images; neither index is selected by this history as a safe experiment.
+The maintainer's decision is footers on all five images with rollback index
+`1791158400` for the first public-kernel cohort. Index 0 or footer-less images
+remain separate, later attended experiments, one change at a time. Neither
+the vbmeta descriptor layout nor another phone qualifies their acceptance here.
 
 The historical early trials do not establish that all five images require
 footers: other boot/board changes occurred during bring-up. The all-five footer
-list remains an explicitly unresolved policy, not a necessity claim. The
-maintainer must review the intended owner's chained VBMeta/rollback behavior,
+list is a selected continuity policy, not a necessity claim. Recheck the
 actual bootloader versions, footer geometry and recovery path before any new
 kernel/image boot. Do not change `vbmeta`, bootloader or slot-success metadata
 to resolve uncertainty. See [NOTES](NOTES.md) for the prior fallback, lost Linux
@@ -101,14 +100,15 @@ phone's module directory or another subsystem's build output.
    dependency above and record exact Mobile and kernel commits. Confirm the
    stock slot-A recovery path, matching slot bootloaders, this board's partition
    names and sizes, and a complete retained known-good slot-B image/module set.
-   Obtain the maintainer's rollback-index decision for the first index-0 footer
-   cohort after the marked `1791158400` boot; do not begin step 2 without it.
+   Confirm footers on all five images and rollback index `1791158400`, matching
+   the already booted set and the maintainer's 2026-11-11 decision. Do not begin
+   step 2 until the disabled-node kernel PR is merged and cited above.
    Check protected-partition backup checksums off-repository; a stock boot
    requires a fresh read-only backup before radio/PMIC/Trusty work.
    **Pass:** every prerequisite has dated evidence and a recoverable image set.
    **Stop:** missing public source, mismatched firmware, unknown slot state,
-   unresolved higher-to-zero rollback-index transition, unexplained backup
-   changes or no recovery path. **Rollback:** no change.
+   any footer policy differing from the already booted set, unexplained
+   backup changes or no recovery path. **Rollback:** no change.
 
 2. **Descriptor and build (laptop only; low risk).** With `KERNEL_DIR` set to
    the reviewed worktree and `KERNEL_OUT` to its dedicated output, run:
@@ -127,7 +127,8 @@ phone's module directory or another subsystem's build output.
    against that kernel's schemas, and record all five image sizes and AVB
    `info_image`/`verify_image` results. Check `/chosen/bootargs`, DT selectors,
    reserved memory and watchdogs in the final DTB, not just the source.
-   **Stop:** no explicit maintainer rollback-index decision, any missing output,
+   **Stop:** kernel dependency not merged/cited, any footer policy differing
+   from the booted set, any missing output,
    new compiler/schema diagnostic, unexpected
    hardware enablement, absent guard, wrong footer or incompatible metadata.
    **Rollback:** discard only this dedicated build output; the phone is unchanged.
@@ -158,15 +159,15 @@ phone's module directory or another subsystem's build output.
    userdata and lose the Linux root before any recovery prompt is answered.
    **Pass:** the maintainer resolves the starting state, writer, remaining
    attempts, exact recovery set, backup chronology and rollback-index policy.
-   **Stop:** any unknown or conflicting state, including no decision on whether
-   to retain `1791158400` or first boot index-0 footers after a marked higher-
-   index B. Neither slot-A index 0 nor the 9a's footer-less policy qualifies
-   that transition. **Rollback:** no change; never clear/repair flags as a test.
+   **Stop:** any unknown or conflicting state, or an image set whose footers
+   differ from the booted all-five/index-`1791158400` cohort.
+   **Rollback:** no change; never clear/repair flags as a test.
 
 5. **One attended slot-B boot (medium risk; not yet qualified).** The human
    first approves the exact reviewed image cohort, writer and recovery path.
-   Only `DEVICE=komodo bin/omamobile push` or `flash` may write boot images;
-   neither is authorized by these instructions. The recovery choice depends
+   For this marked development phone, only the separately approved
+   `DEVICE=komodo bin/omamobile push` may write the five slot-B images.
+   No `flash`, fastboot write or `devinfo` write is authorized here. The recovery choice depends
    on the verified slot state: do not guess, unmark a slot experimentally or
    write `devinfo`. Announce the reboot and keep the cable attached. Arm the
    reviewed log stream, hang marker and hardware watchdog as the board runbook
@@ -177,8 +178,12 @@ phone's module directory or another subsystem's build output.
    **Stop:** no fresh SSH within the reviewed timeout, unexpected fallback,
    storage changes or kernel fault. Do not send more commands to a hung phone.
    **Rollback:** allow the watchdog/shutdown timeout to finish, then use the
-   human's verified button recovery and separately approved canonical writer
-   with the retained known-good slot-B set. Never write slot A, choose a
+   human's button recovery and separately approved canonical writer with the
+   retained known-good slot-B set. The successful button combination has not
+   been confirmed from the retained Komodo record. The proposed combination
+   to try is Volume Down + Power held about 20 seconds for fastboot, and
+   Power + Volume Up for a reset, following the recorded Pixel 9a/8 Pro
+   combinations; these are not claimed as verified on this Komodo. Never write slot A, choose a
    factory reset or lift the storage guard to recover. Any stock boot means
    stop and take a fresh read-only backup after returning safely to Linux.
 

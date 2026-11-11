@@ -164,16 +164,11 @@ location **0** for both slot-A boot and init_boot. Both contain OS property
 1584 bytes and encode `17.0.0` / `2026-10`. Software provenance properties
 identify base `CP3A.261005.005`. Algorithm NONE is the observed footer metadata,
 not proof of a factory signing chain or the complete Android system build.
-The descriptor's rollback index is corrected to the observed slot-A `0`; its
-OS/security fields now have actual slot-A evidence. None of this changes the
-currently installed development images, whose older test-key/index policy is
-separately described in FIRST-LIGHT. The currently booted slot-B images carry index
-`1791158400` and were marked successful. A new set built with the descriptor's
-`0` would therefore be the first index-0 footer cohort after that marked higher-
-index boot. Whether ABL accepts that transition is unqualified, not established
-by slot A's metadata or the Pixel 9a's footer-less images. The maintainer must
-choose the intended rollback-index policy before any new image set is built
-or booted; do not experimentally spend a retry to find out.
+The OS/security fields have actual slot-A evidence. The slot-A footer index
+`0` differs from the booted development cohort's index `1791158400`. The
+maintainer's 2026-11-11 decision below retains the booted cohort's policy for
+the first public-kernel images; no image has been built or booted to test an
+index-0 transition. Whether ABL accepts that transition remains unqualified.
 
 The actual devinfo header is DEVI version 3.15. Applying only the documented
 public 3.15 byte-offset interpretation yields A and B successful, B active,
@@ -185,6 +180,52 @@ the writer nor authorizes a new success/active write. A literal retry count of
 remains unresolved. No bootctl binary was executed for this inspection.
 
 The exact first writer transcript, backup chronology, whole slot-A OS identity,
-bootloader-side partition-size evidence, all-five footer necessity, public
-kernel source and maintainer resolution remain explicit merge/boot
-prerequisites. **Do not boot any new kernel/image set until these are resolved.**
+bootloader-side partition-size evidence and all-five footer necessity remain
+limitations of this record. The selected first-public-kernel footer policy
+and remaining kernel merge/build/boot hold are recorded below.
+
+
+## 2026-11-11: read-only vbmeta layout and selected first-kernel policy
+
+The read-only Linux capture ran under
+`7.3.0-rc6-omamobile-komodo-gnss-km4`. Each vbmeta partition was selected by
+unique PARTNAME, reported read-only, and matched an independent second read
+on the same boot. AOSP `avbtool info_image` gives:
+
+| Partition | Flags | Own rollback index | Own rollback index location |
+| --- | ---: | ---: | ---: |
+| `vbmeta_a` | 0 | 1791158400 | 0 |
+| `vbmeta_b` | 0 | 1785888000 | 0 |
+
+For both slots, `boot`, `init_boot`, `vendor_boot`, `vendor_kernel_boot` and
+`dtbo` are all hash descriptors, each with descriptor flags 0. None of those
+five is a chain partition descriptor; there are no corresponding chain
+rollback index locations to report. This establishes metadata layout, not
+bootloader acceptance of a changed footer cohort. No keys or digests are
+published.
+
+The same boot's read-only Linux inventory includes these exact labels:
+
+```
+PARTNAME=metadata
+PARTNAME=trusty_persist
+PARTNAME=trusty_userdata
+```
+
+All three reported read-only. This confirms label presence, not a protected
+checksum comparison, backup completeness or permission to write them.
+
+The [maintainer's decision of 2026-11-11](https://github.com/derekross/omarchy-mobile/pull/567#issuecomment-6799963620)
+selects the already booted policy for the first public-kernel cohort:
+footers on all five images, rollback index `1791158400`. Slot A's own
+`boot`/`init_boot` footer index remains 0; the descriptor follows the booted
+development set so that the kernel is the only change in the first cohort.
+Index 0 or no footers are separate later attended experiments. This does
+not claim that every footer is necessary or that a new image has booted.
+
+New image builds and boots remain on hold until the public kernel binding
+and board DTS series, with new nodes disabled, is merged and FIRST-LIGHT
+names its actual PR and exact head. After that, this marked development
+phone uses separately approved canonical `push` only: no `flash`, fastboot
+slot-B write or repeat `devinfo` operation. The historical bootloader mismatch
+is retained; no stock boot or bootloader write is proposed to equalize it.

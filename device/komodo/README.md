@@ -7,10 +7,13 @@ builder, including all five AVB hash footers. The board selector overlay leaves
 hardware description to the corresponding kernel board DTS.
 
 The boot-image geometry was checked against the retained working image set.
-The descriptor's rollback index and OS/security metadata instead come from
-read-only slot-A boot/init_boot captures; the working B images retain their
-older test-key/index policy. [FIRST-LIGHT](FIRST-LIGHT.md) records that difference
-and the maintainer's pending decision before any new image build or boot.
+The descriptor retains the booted all-five-footer/index-`1791158400` policy
+for the first public-kernel cohort, following the maintainer's 2026-11-11
+decision. Read-only slot-A boot/init_boot captures establish the OS/security
+metadata and their different footer index 0; both vbmeta partitions list all
+five images as hash descriptors, none chained. [FIRST-LIGHT](FIRST-LIGHT.md)
+records the remaining hold on new image builds and boots until the disabled-node
+kernel series is merged and its public PR and exact head are cited.
 USB SSH and the storage guard have run on development hardware. The minimal descriptor in this change still needs its own complete
 image-build and boot qualification against the public kernel prerequisites.
 
