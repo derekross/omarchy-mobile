@@ -18,7 +18,7 @@ done
 python3 -I -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' bin/omamobile-tegu-mmd-attach
 # Read the dependency declarations, not a grep that can match an optdepend.
 deps=$(startdir=$PWD bash -c 'source PKGBUILD; printf "%s\n" "${depends[@]}"')
-for dep in 'omamobile-device-tegu>=0.2.9' 'omamobile-modem-sit>=0.3.12' 'omamobile-mmd>=0.1.1' 'omatel-agent>=0.2.4'; do
+for dep in 'omamobile-device-tegu>=0.2.10' 'omamobile-modem-sit>=0.3.12' 'omamobile-mmd>=0.1.1' 'omatel-agent>=0.2.4'; do
   grep -qxF "$dep" <<<"$deps"
 done
 ! grep -qx omamobile-device-cheetah <<<"$deps"

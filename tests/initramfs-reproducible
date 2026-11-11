@@ -40,8 +40,8 @@ list=$(lz4 -dc "$t/a.lz4" | cpio -itv --quiet)
 listing() { lz4 -dc "$1" | cpio -itv --quiet | awk '{ n = ""; for (i = 9; i <= NF; i++) n = n " " $i; print $1, $3, $4, $5, n }' | LC_ALL=C sort; }
 (cd "$t/b" && find . | cpio -o -H newc --owner=0:0 --quiet) | lz4 -l -9 -q > "$t/old.lz4"
 diff <(listing "$t/old.lz4") <(listing "$t/a.lz4") || fail "the cpio -itv listing (modes, owners, sizes, names) matches the old packing's"
-listing "$t/a.lz4" | grep -qE '^drwxr-xr-x root root [0-9]+  \.$' || fail "the root entry is a 0755 directory owned by root"
-awk '{print $3, $4}' <<<"$list" | sort -u | grep -qvx 'root root' && fail "every entry owned by 0:0"
+listing "$t/a.lz4" | grep -cE '^drwxr-xr-x root root [0-9]+  \.$' >/dev/null || fail "the root entry is a 0755 directory owned by root"
+awk '{print $3, $4}' <<<"$list" | sort -u | grep -cvx 'root root' >/dev/null && fail "every entry owned by 0:0"
 grep -qF 'initramfs_pack "$stage" "$KERNEL_OUT/initramfs.cpio.lz4"' bin/omamobile || fail "bin/omamobile initramfs packs with initramfs_pack"
 grep -qF 'umask 022' bin/omamobile || fail "bin/omamobile initramfs stages under umask 022"
 echo "ok - the initramfs packs reproducibly (sorted names, owner 0:0, fixed mtimes, no inode numbers), with the same entries and modes as before, / at 0755"

@@ -36,11 +36,11 @@ signing_key_load() {
     echo "error: keys/fingerprint.release does not hold a 40-digit fingerprint" >&2
     return 1
   fi
-  if ! cut -d: -f1 "$keyring/omamobile-trusted" 2>/dev/null | grep -qx "$fpr"; then
+  if ! cut -d: -f1 "$keyring/omamobile-trusted" 2>/dev/null | grep -cx "$fpr" >/dev/null; then
     echo "error: omamobile-keyring does not trust $fpr (keys/fingerprint.release): phones would refuse what it signs" >&2
     return 1
   fi
-  if cut -d: -f1 "$keyring/omamobile-revoked" 2>/dev/null | grep -qx "$fpr"; then
+  if cut -d: -f1 "$keyring/omamobile-revoked" 2>/dev/null | grep -cx "$fpr" >/dev/null; then
     echo "error: $fpr (keys/fingerprint.release) is revoked in omamobile-keyring" >&2
     return 1
   fi

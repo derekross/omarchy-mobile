@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Settings
+Comment=System and device information for Omarchy Mobile
+Exec=omamobile-settings
+Icon=org.omamobile.Settings
+Categories=Settings;System;
+StartupNotify=true
+StartupWMClass=org.omamobile.Settings
+Keywords=System;Storage;About;
