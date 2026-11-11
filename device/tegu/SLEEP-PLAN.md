@@ -125,10 +125,16 @@ missing pull, NFC polling (stopped by the hook throughout), the modem
    core doesn't answer an NMI either, it is stuck below the kernel or
    stopped, and the series goes on with the PMIC commits alone, without
    #224's two.
-2. The sleep hook ([omarchy-mobile#591](https://github.com/derekross/omarchy-mobile/pull/591)): its series is in (the
-   last note below, 40 of 40); it waits for its merge.
-3. Sleep with the modem up (M6): never run with the fixes; the one try
-   before them (10-27) also had NFC polling.
+2. The sleep hook ([omarchy-mobile#591](https://github.com/derekross/omarchy-mobile/pull/591)): merged on 2026-11-10 as
+   `omamobile-device-tegu` 0.2.11; its series is the 40 of 40 in the notes
+   below.
+3. Sleep with the modem up (M6): run with the fixes on 2026-11-09, five
+   boots, and it neither hung nor reset, but one attempt costs the phone
+   service until a reboot. The record is [MODEM-PLAN](MODEM-PLAN.md), "Suspend
+   with the modem on, with the sleep fixes"; what is open is in
+   [#618](https://github.com/derekross/omarchy-mobile/issues/618),
+   [#619](https://github.com/derekross/omarchy-mobile/issues/619) and
+   [#620](https://github.com/derekross/omarchy-mobile/issues/620).
 4. The root cause under the masks: zuma's PMU data without `pmu_cpuhp`,
    compared with gs101/gs201 before idle states come to a PR.
 5. The DEVICES cell to "works" once item 1's no-wake is found and fixed,

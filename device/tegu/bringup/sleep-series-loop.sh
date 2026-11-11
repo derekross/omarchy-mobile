@@ -31,12 +31,13 @@ start_series() {
   # The first sleep waits for the graphical session: a suspend while the
   # shell is still starting after a boot left the session closed and the
   # splash on the screen (2026-11-07 13:16).
-  $PS --fresh 'systemctl unmask sleep.target suspend.target >/dev/null 2>&1; for i in $(seq 36); do [ -d /run/user/1000/hypr ] && pgrep -x Hyprland >/dev/null && break; sleep 5; done; echo "hyprland after boot: $(pgrep -x Hyprland >/dev/null && echo up || echo not up), uptime $(cut -d. -f1 /proc/uptime) s"; systemd-run --unit=x-audio-loop --wait -p TimeoutStartSec=300 /usr/local/bin/omamobile-tegu-audio-up >/dev/null 2>&1; systemctl reset-failed x-sleep-linkwait 2>/dev/null; sleep 30; systemd-run --unit=x-sleep-linkwait -E WFI='"$WFI"' -E RPM='"${RPM:-}"' -E N='"$N"' -E S='"$S"' bash /root/sleep-linkwait.sh; sleep 0.3; echo "series unit: $(systemctl is-active x-sleep-linkwait)"' >> $H/loop.log 2>&1
+  $PS --fresh 'systemctl unmask sleep.target suspend.target >/dev/null 2>&1; for i in $(seq 36); do [ -d /run/user/1000/hypr ] && pgrep -x Hyprland >/dev/null && break; sleep 5; done; echo "hyprland after boot: $(pgrep -x Hyprland >/dev/null && echo up || echo not up), uptime $(cut -d. -f1 /proc/uptime) s"; systemd-run --unit=x-audio-loop --wait -p TimeoutStartSec=300 /usr/local/bin/omamobile-tegu-audio-up >/dev/null 2>&1; systemctl reset-failed x-sleep-linkwait 2>/dev/null; sleep 30; systemd-run --unit=x-sleep-linkwait -E WFI='"$WFI"' -E RPM='"${RPM:-}"' -E N='"$N"' -E S='"$S"' bash /root/sleep-linkwait.sh; sleep 0.3; echo "series unit, run '"$run"': $(systemctl is-active x-sleep-linkwait)"' >> $H/loop.log 2>&1
   # A unit that failed at its start (once: the script's path given as the command, with no
   # execute bit) stops the loop here. The check runs in the start's own command, because the
   # first sleep begins within a second or two; no line at all means the palmtop was already
-  # going to sleep, and the poll below judges that.
-  st=$(grep -o 'series unit: [a-z]*' $H/loop.log | tail -1 | cut -d' ' -f3)
+  # going to sleep, and the poll below judges that. The line carries the run number, since
+  # the log grows across runs and a start that printed none would read the run before's.
+  st=$(grep -o "series unit, run $run: [a-z]*" $H/loop.log | tail -1 | awk '{print $NF}')
   if [[ $st == failed || $st == inactive ]]; then log "the series unit is '$st' after its start: stop (a keep-awake inhibitor, if any, is still held)"; send "Palmtop sleep series: the series did not start ($st). Nothing is running; the palmtop is as it was."; exit 1; fi
   log "series started (run $run, WFI=$WFI)"
 }
