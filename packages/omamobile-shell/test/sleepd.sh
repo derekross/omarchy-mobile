@@ -32,7 +32,7 @@ fake omarchy-shell '[[ "$*" == "lock status" ]] && printf "{\"locked\":true,\"se
 true'
 fake ss 'cat "$T/ssh"'
 fake busctl '# the resume listener (busctl wait): a FIFO stands in for the logind signals; none: it fails and the poll carries on
-if [[ " $* " == *" wait "* ]]; then [[ -p $T/evt ]] || exit 1; exec cat "$T/evt"; fi
+if [[ " $* " == *" wait "* ]]; then echo "$*" >"$T/wait-args"; [[ -p $T/evt ]] || exit 1; exec cat "$T/evt"; fi
 printf "{\"type\":\"a(ssssuu)\",\"data\":[[%s]]}\n" "$(cat "$T/inhibitors")"'
 fake pactl 'cat "$T/sinks"'
 fake omamobile-keys 'echo "omamobile-keys $* at $(cat "$T/clock")" >>"$T/log"'
@@ -199,6 +199,7 @@ pkey() { reset; mkfifo "$t/evt"; echo 111 >"$t/wake_irq"; printf "$lit" "$t/sys/
 # PrepareForSleep(false) ends the wait at once.
 pkey false; watchto 700 || fail "event: PrepareForSleep(false) ends the sleeping watcher's wait (timed out)"
 grep -c '^omamobile-keys wake' "$t/log" >/dev/null || fail "event: the power-key wake lights the PIN pad"
+[[ $(<"$t/wait-args") == *"wait org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager PrepareForSleep"* ]] || fail "event: the listener names logind as the sender ($(<"$t/wait-args"))"
 rm -f "$t/evt"
 # A true ahead of the false (the signal before a sleep) is read and ignored: the false after it still arrives.
 pkey "true false"; watchto 700 || fail "event: only the false signal ends the wait (timed out)"

@@ -143,10 +143,13 @@ pause() {
 
 # Kills a process and everything under it: the listener runs busctl inside a
 # command substitution, and killing only its own pid would leave busctl waiting.
+# The process goes first, its children's pids are taken before that, so the
+# listener can't log its "no more events" line because busctl died under it.
 kill_tree() {
-  local c
-  for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c"; done
+  local c kids
+  kids=$(pgrep -P "$1" 2>/dev/null)
   kill "$1" 2>/dev/null
+  for c in $kids; do kill_tree "$c"; done
 }
 # Only a listener that is still our job: its pid may have been reused since it ended.
 stop_listener() { [[ -n $mon && " $(jobs -p | tr '\n' ' ') " == *" $mon "* ]] && kill_tree "$mon"; return 0; }
@@ -164,7 +167,7 @@ stop_listener() { [[ -n $mon && " $(jobs -p | tr '\n' ' ') " == *" $mon "* ]] &&
 # listener subscribes again for the next one.
 listen() {
   local out
-  while out=$(busctl --system --json=short wait /org/freedesktop/login1 \
+  while out=$(busctl --system --json=short wait org.freedesktop.login1 /org/freedesktop/login1 \
                 org.freedesktop.login1.Manager PrepareForSleep 2>/dev/null); do
     case $out in
       *'[false]'*) kill -USR2 $$ 2>/dev/null || return ;;
