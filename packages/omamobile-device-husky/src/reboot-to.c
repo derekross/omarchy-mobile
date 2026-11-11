@@ -43,7 +43,10 @@ static int marker_names_boot(const char *path, const char *id)
 	n = fread(buf, 1, sizeof(buf) - 1, f);
 	fclose(f);
 	buf[n] = '\0';
-	snprintf(want, sizeof(want), "boot %s", id);
+	/* No printf family here: the initramfs links this file against musl
+	 * without compiler builtins, and musl's vfprintf needs them. */
+	strcpy(want, "boot ");
+	strcat(want, id);
 	for (p = strstr(buf, want); p; p = strstr(p + 1, want)) {
 		char end = p[strlen(want)];
 
