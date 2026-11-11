@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Mark slot B successful in a Qualcomm GPT: the CONTRIBUTING §3.1 write.
+
+  tools/mark-slot-b --device CODENAME [--write]
+
+For a device whose descriptor has SLOT_B_MARK="LUN PART P_HDR P_ENT B_ENT B_HDR"
+(its §3.1 entry: the LUN, the slot-B boot partition, and the four LBAs:
+primary header, primary entry sector holding PART, backup entry sector,
+backup header). Over tools/phone-ssh it reads both GPT copies of the LUN
+through a private block node (the init removes the whole-disk node), checks
+both headers and both entry arrays (signature, sizes, CRCs, copies equal),
+finds PART by name exactly once, and refuses unless the phone's first
+/proc/device-tree/compatible string is the descriptor's COMPATIBLE (checked
+before any node is made), its sectors are the four
+LBAs above, the phone booted slot B (androidboot.slot_suffix=_b) and B is
+active and not unbootable. Then it sets attribute bit 54 (successful) on PART
+and nothing else, recomputes the entry-array CRC and both header CRCs, and
+checks that exactly the four sectors change.
+
+Without --write it only prints the plan (read-only). With --write, after the
+human types the confirmation on stdin, it re-reads the four sectors (they
+must not have changed since the check), then writes the primary entry sector and header,
+reads them back by SHA-256, then the backup pair, and removes the node. Each
+sector is copied to a file in the private directory and its SHA-256 checked on
+the phone before dd writes it from that file.
+
+By hand, once per install of slot B's boot image, never from a service or at
+boot (AGENTS.md §1). The rollback for a corrupted GPT is the device's NOTES.
+"""
+import argparse
+import hashlib
+import os
+import re
+import struct
+import subprocess
+import sys
+import zlib
+
+SUCCESSFUL, ACTIVE, UNBOOTABLE = 54, 50, 55
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# The phone side: a private node for the LUN, removed on exit whatever happens.
+# $1 is the LUN (sd[b-z]); every command runs as `phone-ssh sh -c ... `.
+NODE = ('set -e; l=$1; shift; d=/run/omamobile-mark-slot-b; '
+        'rm -rf "$d"; mkdir -m 700 "$d"; trap \'rm -rf "$d"\' EXIT; '
+        'IFS=: read -r ma mi < /sys/block/$l/dev; mknod "$d/$l" b "$ma" "$mi"; n="$d/$l"; ')
+
+
+def die(msg):
+    print("mark-slot-b: " + msg, file=sys.stderr)
+    sys.exit(1)
+
+
+def descriptor(path):
+    """KEY="value" or KEY=value lines, never sourced (as tools/bundle-manifest)."""
+    d = {}
+    with open(path) as f:
+        for n, line in enumerate(f, 1):
+            line = line.rstrip("\n")
+            if re.match(r"^\s*(#.*)?$", line):
+                continue
+            m = re.match(r'^([A-Z][A-Z0-9_]*)="([^"$`\\]*)"$', line) or \
+                re.match(r"^([A-Z][A-Z0-9_]*)=([^\"$`\\'\s]*)$", line)
+            if not m:
+                die("%s:%d: not a KEY=value line" % (path, n))
+            d[m.group(1)] = m.group(2)
+    return d
+
+
+class Phone:
+    def __init__(self, ssh, lun):
+        self.ssh, self.lun = ssh, lun
+
+    def run(self, script, data=None):
+        r = subprocess.run([self.ssh, "sh -c '%s' sh %s" % ((NODE + script).replace("'", "'\\''"), self.lun)],
+                           input=data, stdout=subprocess.PIPE)
+        if r.returncode:
+            die("phone command failed (exit %d)" % r.returncode)
+        return r.stdout
+
+    def text(self, cmd):
+        r = subprocess.run([self.ssh, cmd], stdout=subprocess.PIPE, text=True)
+        if r.returncode:
+            die("cannot run on the phone: " + cmd)
+        return r.stdout.strip()
+
+    def read(self, lba, count, ss):
+        out = self.run('dd if="$n" bs=%d skip=%d count=%d 2>/dev/null' % (ss, lba, count))
+        if len(out) != count * ss:
+            die("short read at LBA %d (%d bytes)" % (lba, len(out)))
+        return out
+
+    def write(self, lba, data, ss):
+        # Never pipe SSH into the disk: a transfer cut short would write part of a sector.
+        # The sector lands in a file in the private directory first, and only a file
+        # with the expected SHA-256 is written.
+        self.run('cat > "$d/sector"; '
+                 '[ "$(sha256sum < "$d/sector" | cut -d" " -f1)" = %s ] || '
+                 '{ echo "mark-slot-b: LBA %d arrived damaged on the phone; nothing written" >&2; exit 3; }; '
+                 'dd if="$d/sector" of="$n" bs=%d seek=%d count=1 conv=notrunc,fsync 2>/dev/null'
+                 % (hashlib.sha256(data).hexdigest(), lba, ss, lba), data)
+
+
+def header(raw, lba):
+    """Check a GPT header sector; return its fields."""
+    if raw[:8] != b"EFI PART":
+        die("no GPT header at LBA %d" % lba)
+    size, crc = struct.unpack_from("<II", raw, 12)
+    if size != 92:
+        die("LBA %d: header size %d, expected 92" % (lba, size))
+    if zlib.crc32(raw[:16] + b"\0\0\0\0" + raw[20:size]) != crc:
+        die("LBA %d: header CRC does not match" % lba)
+    my, alt = struct.unpack_from("<QQ", raw, 24)
+    ent_lba, = struct.unpack_from("<Q", raw, 72)
+    num, esize, ecrc = struct.unpack_from("<III", raw, 80)
+    if my != lba or esize != 128 or not 0 < num <= 1024:
+        die("LBA %d: unexpected header (my LBA %d, %d entries of %d bytes)" % (lba, my, num, esize))
+    return {"alt": alt, "ent": ent_lba, "num": num, "ecrc": ecrc}
+
+
+def with_crcs(raw, ecrc):
+    """The header sector with a new entry-array CRC and its own CRC recomputed."""
+    h = bytearray(raw)
+    struct.pack_into("<I", h, 88, ecrc)
+    struct.pack_into("<I", h, 16, 0)
+    struct.pack_into("<I", h, 16, zlib.crc32(bytes(h[:92])))
+    return bytes(h)
+
+
+def bits(a):
+    return "priority %d, active %s, retry %d, successful %s, unbootable %s" % (
+        a >> 48 & 3, "yes" if a >> ACTIVE & 1 else "no", a >> 51 & 7,
+        "yes" if a >> SUCCESSFUL & 1 else "no", "yes" if a >> UNBOOTABLE & 1 else "no")
+
+
+def plan(prim_hdr, prim_ent, back_hdr, back_ent, part, ss, want):
+    """Check both copies and build the four new sectors: {lba: (old, new)}."""
+    p, b = header(prim_hdr, want[0]), header(back_hdr, want[3])
+    if p["alt"] != want[3] or b["alt"] != want[0] or (p["num"], p["ecrc"]) != (b["num"], b["ecrc"]):
+        die("the primary and backup headers do not describe each other")
+    arr = p["num"] * 128
+    if prim_ent[:arr] != back_ent[:arr]:
+        die("the primary and backup entry arrays differ")
+    if zlib.crc32(prim_ent[:arr]) != p["ecrc"]:
+        die("the entry-array CRC does not match")
+    hits = [i for i in range(p["num"])
+            if prim_ent[i * 128 + 56:i * 128 + 128].decode("utf-16-le", "replace").rstrip("\0") == part]
+    if len(hits) != 1:
+        die("%s found %d times in the GPT" % (part, len(hits)))
+    i = hits[0]
+    off = i * 128
+    sec = off // ss
+    if (p["ent"] + sec, b["ent"] + sec) != (want[1], want[2]):
+        die("%s (entry %d) is at LBA %d and %d, not the descriptor's %d and %d: the GPT is not the one "
+            "the §3.1 entry names; refusing" % (part, i, p["ent"] + sec, b["ent"] + sec, want[1], want[2]))
+    attrs, = struct.unpack_from("<Q", prim_ent, off + 48)
+    new = bytearray(prim_ent)
+    struct.pack_into("<Q", new, off + 48, attrs | 1 << SUCCESSFUL)
+    ecrc = zlib.crc32(bytes(new[:arr]))
+    s0 = sec * ss
+    out = {
+        want[0]: (prim_hdr, with_crcs(prim_hdr, ecrc)),
+        want[1]: (prim_ent[s0:s0 + ss], bytes(new[s0:s0 + ss])),
+        want[2]: (back_ent[s0:s0 + ss], bytes(new[s0:s0 + ss])),
+        want[3]: (back_hdr, with_crcs(back_hdr, ecrc)),
+    }
+    for lba, (old, nw) in out.items():
+        changed = [k for k in range(ss) if old[k] != nw[k]]
+        allowed = (list(range(16, 20)) + list(range(88, 92)) if lba in (want[0], want[3])
+                   else range(off % ss + 48, off % ss + 56))
+        if any(k not in allowed for k in changed):
+            die("internal: LBA %d would change outside its CRC/attribute fields" % lba)
+    return i, attrs, ecrc, p["ecrc"], out
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Mark slot B successful in a Qualcomm GPT (CONTRIBUTING §3.1).")
+    ap.add_argument("--device", required=True)
+    ap.add_argument("--write", action="store_true", help="write the four sectors (default: print the plan)")
+    a = ap.parse_args()
+    if not re.match(r"^[a-z0-9_-]+$", a.device):
+        die("bad device name")
+    conf = os.path.join(ROOT, "device", a.device, "device.conf")
+    if not os.path.isfile(conf):
+        die("no " + conf)
+    conf_vals = descriptor(conf)
+    f = conf_vals.get("SLOT_B_MARK", "").split()
+    if len(f) != 6 or not re.match(r"^sd[b-z]$", f[0]) or not re.match(r"^[a-z0-9_]+_b$", f[1]) or \
+            not all(x.isdigit() for x in f[2:]):
+        die("device/%s has no CONTRIBUTING §3.1 entry (SLOT_B_MARK=\"LUN PART P_HDR P_ENT B_ENT B_HDR\")" % a.device)
+    lun, part, want = f[0], f[1], [int(x) for x in f[2:]]
+    compatible = conf_vals.get("COMPATIBLE", "")
+    if not compatible:
+        die("device/%s has no COMPATIBLE" % a.device)
+    ph = Phone(os.environ.get("OMAMOBILE_MARK_SSH", os.path.join(ROOT, "tools", "phone-ssh")), lun)
+
+    # Which phone answered, before anything makes a node (as the init checks it)
+    got = ph.text("tr '\\0' '\\n' < /proc/device-tree/compatible | head -n 1")
+    if got != compatible:
+        die("the phone is %r, not device/%s (%s); refusing" % (got, a.device, compatible))
+
+    cmdline = ph.text("cat /proc/cmdline").split()
+    if "androidboot.slot_suffix=_b" not in cmdline:
+        die("the phone did not boot slot B (no androidboot.slot_suffix=_b): mark B only from a boot of B")
+    ss = int(ph.text("cat /sys/block/%s/queue/logical_block_size" % lun))
+    sectors = int(ph.text("cat /sys/block/%s/size" % lun)) * 512 // ss
+    if ss not in (512, 4096) or sectors - 1 != want[3]:
+        die("%s: %d-byte sectors, last LBA %d; the §3.1 entry says last LBA %d" % (lun, ss, sectors - 1, want[3]))
+    prim_hdr = ph.read(want[0], 1, ss)
+    p = header(prim_hdr, want[0])
+    n = -(-p["num"] * 128 // ss)
+    prim_ent = ph.read(p["ent"], n, ss)
+    back_hdr = ph.read(want[3], 1, ss)
+    back_ent = ph.read(header(back_hdr, want[3])["ent"], n, ss)
+    i, attrs, ecrc, old_ecrc, out = plan(prim_hdr, prim_ent, back_hdr, back_ent, part, ss, want)
+
+    print("%s: %s is entry %d; attributes 0x%016x (%s)" % (lun, part, i, attrs, bits(attrs)))
+    if attrs >> SUCCESSFUL & 1:
+        print("%s is already marked successful; nothing to write" % part)
+        return
+    if not attrs >> ACTIVE & 1 or attrs >> UNBOOTABLE & 1:
+        die("%s is not active, or is unbootable: run fastboot --set-active=b first" % part)
+    new = attrs | 1 << SUCCESSFUL
+    print("would set bit %d: 0x%016x (%s)" % (SUCCESSFUL, new, bits(new)))
+    print("entry-array CRC 0x%08x -> 0x%08x; header CRCs recomputed" % (old_ecrc, ecrc))
+    print("sectors to write (%d bytes each): LBA %s" % (ss, ", ".join(str(x) for x in want)))
+    if not a.write:
+        print("dry run: nothing written (add --write)")
+        return
+    sys.stderr.write("Type 'mark %s' to write these four sectors: " % part)
+    sys.stderr.flush()
+    if sys.stdin.readline().strip() != "mark " + part:
+        die("not confirmed; nothing written")
+    if any(ph.read(lba, 1, ss) != out[lba][0] for lba in want):
+        die("the GPT changed since it was checked; nothing written")
+    for pair in ((want[1], want[0]), (want[2], want[3])):
+        for lba in pair:
+            ph.write(lba, out[lba][1], ss)
+        for lba in pair:
+            if hashlib.sha256(ph.read(lba, 1, ss)).digest() != hashlib.sha256(out[lba][1]).digest():
+                die("read-back of LBA %d does not match: restore from the NOTES rollback copies" % lba)
+        print("LBA %d and %d written and read back" % pair)
+    print("%s marked successful" % part)
+
+
+if __name__ == "__main__":
+    main()
