@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0
+"""Pull 16 exact 2 MiB zero streams over an explicitly selected USB SSH link.
+
+Example: tools/ncm-transfer --peer root@<usb-ip> --interface <host-usb-interface>
+The peer needs head and SSH. No device files or partitions are modified.
+No retries: the first timeout, SSH error, size or digest mismatch stops the run.
+Run only after the device's read-only identity and storage-guard checks pass.
+This reproduces the transfer profile; use USB tracing separately to establish
+whether a full request pool exercised the aggregation retry.
+"""
+import argparse
+import hashlib
+import re
+import subprocess
+import time
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--peer')
+parser.add_argument('--interface')
+args = parser.parse_args()
+if not args.peer or not args.interface:
+    print('SKIP: --peer and --interface required for an authorized USB test')
+    raise SystemExit(4)
+if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.:@-]*', args.peer):
+    parser.error('invalid SSH peer')
+if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.:-]*', args.interface):
+    parser.error('invalid host interface')
+size = 2 * 1024 * 1024
+expected = hashlib.sha256(bytes(size)).digest()
+deadline = time.monotonic() + 20
+for index in range(16):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise SystemExit('FAIL: 20-second stage deadline; stopped without retry')
+    try:
+        result = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectionAttempts=1',
+                                 '-o', 'ConnectTimeout=5', '-o', 'ControlMaster=no',
+                                 '-o', 'ControlPath=none', '-o', 'ProxyCommand=none',
+                                 '-o', 'ProxyJump=none', '-o', 'BindInterface=' + args.interface,
+                                 args.peer, 'head -c 2097152 /dev/zero'],
+                                capture_output=True, timeout=remaining)
+    except subprocess.TimeoutExpired:
+        raise SystemExit('FAIL: transfer timeout; stopped without retry') from None
+    if result.returncode or len(result.stdout) != size or hashlib.sha256(result.stdout).digest() != expected:
+        raise SystemExit('FAIL: SSH, size or digest check; stopped without retry')
+    print(f'ok - transfer {index + 1}/16: {size} bytes, SHA-256 verified', flush=True)

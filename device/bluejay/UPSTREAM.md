@@ -18,6 +18,8 @@ PR. Source-only instructions are not authority to run a phone operation.
 | Disabled Wi-Fi DT | [#230](https://github.com/derekross/linux-omarchy-mobile/pull/230) | Merge after both #227 and #228, then rebase to its own two commits |
 | Trusty trace API | [#231](https://github.com/derekross/linux-omarchy-mobile/pull/231) | Merged 2026-11-09; no Trusty runtime claimed |
 
+The attended USB SSH transfer profile is `tools/ncm-transfer --peer root@<usb-ip> --interface <host-usb-interface>`. It performs sixteen SHA-256-verified 2 MiB zero transfers with a shared 20-second deadline and no retry. Run it only after the device identity and storage checks pass; USB tracing is separately required to establish that aggregation retry was exercised. It does not test laptop sleep or USB replug.
+
 All seven submitted heads passed CI. That is build/policy evidence, not
 runtime qualification of the rebased stack. The tested source is the
 contributor's `bringup/bluejay-tested-20261108`, commit `c934e316b`, based on
