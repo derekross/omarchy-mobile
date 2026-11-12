@@ -61,7 +61,8 @@ class LinkTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0 if value == 'Y' else 7)
             self.assertEqual('load-reached' in result.stdout, value == 'Y')
 
-    def run_starter(self, config, loaded=None, fail_module=None, inhibitor=False):
+    def run_starter(self, config, loaded=None, fail_module=None, inhibitor=False,
+                    lock=True, suspend_enable=False, runbook=True):
         """Run actual starter with only paths redirected and inert external tools."""
         config_path = self.root / 'link.conf'
         if config is not None:
@@ -84,7 +85,8 @@ class LinkTests(unittest.TestCase):
         tools = self.root / 'bin'
         tools.mkdir()
         for name, body in {
-            'systemd-inhibit': 'echo inhibitor >> "$TRACE"; echo "omamobile-modem held"',
+            'systemd-inhibit': 'echo inhibitor >> "$TRACE"; [[ -n ${NO_LOCK:-} ]] || echo "omamobile-modem held"',
+            'sleep': ':',
             'sync': ':',
             'modprobe': 'test -f "$OMAMOBILE_MODEM_LATCH" || exit 23; echo "load:$*" >> "$TRACE"; '
                         '[[ $1 != "${FAIL_MODULE:-}" ]] || exit 1; mkdir -p "$SYSMODULE/${1//-/_}"',
@@ -110,7 +112,16 @@ class LinkTests(unittest.TestCase):
                    OMAMOBILE_MODEM_REFUSED=str(self.root / 'refused'),
                    OMAMOBILE_MODEM_CHROOT=str(provision),
                    OMAMOBILE_MODEM_NV_SUMS=str(provision),
-                   OMAMOBILE_MODEM_PROPS=str(provision))
+                   OMAMOBILE_MODEM_PROPS=str(provision),
+                   # Never the machine's own file: on a phone running the M6
+                   # runbook it exists, and the starter would skip the lock.
+                   OMAMOBILE_MODEM_SUSPEND_ENABLE=str(self.root / 'suspend-enable'),
+                   OMAMOBILE_MODEM_SUSPEND_RUNBOOK=str(self.root / 'suspend-runbook'),
+                   NO_LOCK='' if lock else '1')
+        if suspend_enable:
+            (self.root / 'suspend-enable').touch()
+        if runbook:
+            (self.root / 'suspend-runbook').touch()
         modules = self.root / 'loaded'
         modules.mkdir()
         if inhibitor:
@@ -147,6 +158,42 @@ class LinkTests(unittest.TestCase):
         self.assertEqual(trace, ['inhibitor', 'inhibitor', 'load:first allow_hw=1',
                                  'load:second cpif=1'])
         self.assertEqual((self.root / 'refused').read_text().strip(), "Off: second didn't load")
+
+    def test_no_enable_file_and_no_lock_refuses_before_loading(self):
+        result, trace = self.run_starter('first allow_hw=1\nsecond cpif=1\n', 'Y', lock=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn('load:first allow_hw=1', trace)
+        self.assertEqual(trace[-1], 'inhibitor')
+        self.assertEqual((self.root / 'refused').read_text().strip(), 'Off: no sleep inhibitor')
+        self.assertFalse((self.root / 'latch').exists())
+
+    def test_enable_file_and_no_lock_loads_without_waiting(self):
+        result, trace = self.run_starter('first allow_hw=1\nsecond cpif=1\n', 'Y', lock=False,
+                                         suspend_enable=True)
+        self.assertEqual(result.returncode, 1)  # inert profile check deliberately refuses
+        self.assertNotIn('inhibitor', trace)
+        self.assertEqual(trace, ['load:first allow_hw=1', 'load:second cpif=1',
+                                 'load:shm_ipc', 'load:cpif', 'profile-check'])
+        self.assertIn('the phone may sleep with the modem up', result.stderr)
+
+    def test_enable_file_without_runbook_keeps_the_inhibitor(self):
+        # A phone whose device package ships no M6 runbook (the 9a, the 6 Pro):
+        # the owner's file alone changes nothing, and no lock still refuses.
+        result, trace = self.run_starter('first allow_hw=1\nsecond cpif=1\n', 'Y', lock=False,
+                                         suspend_enable=True, runbook=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn('load:first allow_hw=1', trace)
+        self.assertEqual(trace[-1], 'inhibitor')
+        self.assertEqual((self.root / 'refused').read_text().strip(), 'Off: no sleep inhibitor')
+        self.assertFalse((self.root / 'latch').exists())
+        self.assertIn('ignored: this phone has no M6 runbook', result.stderr)
+
+    def test_enable_file_without_runbook_with_lock_loads_as_before(self):
+        result, trace = self.run_starter('first allow_hw=1\nsecond cpif=1\n', 'Y',
+                                         suspend_enable=True, runbook=False)
+        self.assertEqual(result.returncode, 1)  # inert profile check deliberately refuses
+        self.assertEqual(trace, ['inhibitor', 'inhibitor', 'load:first allow_hw=1',
+                                 'load:second cpif=1', 'load:shm_ipc', 'load:cpif', 'profile-check'])
 
     def test_no_config_preserves_real_default_load(self):
         result, trace = self.run_starter(None)

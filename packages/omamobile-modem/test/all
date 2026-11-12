@@ -279,6 +279,34 @@ done
 grep -q 'CHROOT=\${OMAMOBILE_MODEM_CHROOT:-\$LIB/modem/root}' $s && grep -q 'NV_SUMS=\${OMAMOBILE_MODEM_NV_SUMS:-/etc/omamobile/modem-nv.sha256}' $s &&
   grep -q 'PROPS=\${OMAMOBILE_MODEM_PROPS:-/var/lib/omamobile-vendor/modem/props.conf}' $s || fail "the script checks the same three paths as the units"
 pass "a phone that isn't provisioned is refused quietly, by the units' conditions and by the script"
+# M6 (MODEM-PLAN section 7): the owner's file lifts the inhibitor only beside
+# the device's runbook marker (device-cheetah ships it), in the unit and in
+# the script alike; the script's behaviour is in test_link.py. The unit's
+# conditions are evaluated by systemd itself, with the two paths moved
+# under $m: it runs (holds the lock) unless both files exist.
+unit=systemd/omamobile-modem-inhibit.service
+[[ $(grep -c '^ConditionPathExists=|!' $unit) == 2 ]] &&
+  grep -qx 'ConditionPathExists=|!/etc/omamobile/modem-suspend-enable' $unit &&
+  grep -qx 'ConditionPathExists=|!/usr/lib/omamobile-modem/suspend-runbook' $unit ||
+  fail "the inhibitor unit is skipped only with modem-suspend-enable and suspend-runbook"
+if command -v systemd-analyze >/dev/null && systemd-analyze condition 'ConditionPathExists=/' >/dev/null 2>&1; then
+  mapfile -t conds < <(grep '^ConditionPathExists=|!' $unit |
+    sed -e "s|/etc/omamobile/modem-suspend-enable|$m/m6-enable|" -e "s|/usr/lib/omamobile-modem/suspend-runbook|$m/m6-runbook|")
+  rm -f "$m/m6-enable" "$m/m6-runbook"
+  systemd-analyze condition "${conds[@]}" >/dev/null 2>&1 || fail "neither file: the inhibitor runs"
+  touch "$m/m6-enable"
+  systemd-analyze condition "${conds[@]}" >/dev/null 2>&1 || fail "the enable file alone: the inhibitor still runs"
+  touch "$m/m6-runbook"; rm "$m/m6-enable"
+  systemd-analyze condition "${conds[@]}" >/dev/null 2>&1 || fail "the runbook marker alone: the inhibitor runs"
+  touch "$m/m6-enable"
+  systemd-analyze condition "${conds[@]}" >/dev/null 2>&1 && fail "both files: the inhibitor is skipped"
+  rm -f "$m/m6-enable" "$m/m6-runbook"
+fi
+grep -q 'SUSPEND_ENABLE=\${OMAMOBILE_MODEM_SUSPEND_ENABLE:-/etc/omamobile/modem-suspend-enable}' $s &&
+  grep -q 'SUSPEND_RUNBOOK=\${OMAMOBILE_MODEM_SUSPEND_RUNBOOK:-/usr/lib/omamobile-modem/suspend-runbook}' $s ||
+  fail "the script follows the same two files"
+[[ $(lineof 'if \[\[ -e \$SUSPEND_ENABLE && -e \$SUSPEND_RUNBOOK \]\]') -lt $l_inhibit ]] || fail "the files are checked before the inhibitor refusal"
+pass "modem-suspend-enable lifts the sleep inhibitor only beside the device's M6 runbook, in the unit and the script alike"
 # The bring-up latch: refused until --retry (a hang in the bring-up never repeats on its own).
 printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$m/latch"
 out=$(start) && fail "a bring-up latch is refused"
