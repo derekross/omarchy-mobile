@@ -106,7 +106,9 @@ class Sit:
         os.close(self.lock)
 
     def read_packet(self, timeout):
-        deadline = time.monotonic() + timeout
+        # Linux BOOTTIME includes suspend; MONOTONIC excludes it. This is
+        # deadline accounting, not a wake alarm or permission to suspend.
+        deadline = time.clock_gettime(time.CLOCK_BOOTTIME) + timeout
         while True:
             if len(self.buffer) >= 6:
                 kind, _, _, length = struct.unpack_from('<BBHH', self.buffer)
@@ -116,7 +118,7 @@ class Sit:
                     packet = bytes(self.buffer[:length])
                     del self.buffer[:length]
                     return packet
-            remaining = deadline - time.monotonic()
+            remaining = deadline - time.clock_gettime(time.CLOCK_BOOTTIME)
             if remaining <= 0:
                 return None
             ready, _, _ = select.select([self.fd], [], [], remaining)
@@ -141,9 +143,9 @@ class Sit:
         data = struct.pack('<BBHHIBB', 0, 0, ident, 12 + len(payload), self.token, 0, 0) + payload
         if os.write(self.fd, data) != len(data):
             raise RuntimeError('short SIT write')
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            packet = self.read_packet(deadline - time.monotonic())
+        deadline = time.clock_gettime(time.CLOCK_BOOTTIME) + timeout
+        while time.clock_gettime(time.CLOCK_BOOTTIME) < deadline:
+            packet = self.read_packet(deadline - time.clock_gettime(time.CLOCK_BOOTTIME))
             if packet is None:
                 break
             kind, _, message, length = struct.unpack_from('<BBHH', packet)
@@ -161,6 +163,10 @@ class Sit:
                     raise RuntimeError('unprocessed indication limit exceeded')
                 self.indications.append(packet)
             elif message == ident and struct.unpack_from('<I', packet, 6)[0] == self.token:
+                # A read (or scheduling delay) can cross the deadline. A late
+                # response cannot turn an expired transaction into success.
+                if time.clock_gettime(time.CLOCK_BOOTTIME) >= deadline:
+                    break
                 print(f'SIT {name(ident)}: error={packet[10]} length={length}', flush=True)
                 if packet[10]:
                     raise ModemError(packet[10], packet[12:])
@@ -170,9 +176,9 @@ class Sit:
     def next_indication(self, timeout=1):
         if self.indications:
             return self.indications.popleft()
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            packet = self.read_packet(deadline - time.monotonic())
+        deadline = time.clock_gettime(time.CLOCK_BOOTTIME) + timeout
+        while time.clock_gettime(time.CLOCK_BOOTTIME) < deadline:
+            packet = self.read_packet(deadline - time.clock_gettime(time.CLOCK_BOOTTIME))
             if packet is None or packet[0] == 2:
                 return packet
         return None
