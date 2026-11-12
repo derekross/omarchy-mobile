@@ -65,8 +65,10 @@
 #                            (the guided installer) passes it, so the phone
 #                            it looked at is the one that is written
 #     --verify-only          check the files (a bundle's signature, checksums,
-#                            manifest.json and root image) and stop before
-#                            the phone is contacted
+#                            manifest.json, root image and slot B's ramdisk,
+#                            read in a directory of its own in --work that
+#                            it removes) and stop before the phone is
+#                            contacted
 #
 # Answers are read from standard input, so they can be piped for tests and by
 # the guided installer, which sets OMAMOBILE_INSTALL_GUIDED=1: the questions
@@ -402,6 +404,75 @@ if [[ -f $manifest ]]; then
   fi
   if [[ -n $modules_release && -n $images_release ]]; then note "kernel $images_release, its modules in the root image"; fi
 fi
+
+# --- Slot B's shipped ramdisk ------------------------------------------------
+# Read and listed before the phone is contacted, so --verify-only checks it
+# too; the owner's key is appended to it further down. The read has a
+# directory of its own in --work that only this run removes: another install
+# may be waiting there for its answers, with its images staged.
+work=${work:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-install}
+verify_dir=""
+# vendor_ramdisk get IMG OUT, or vendor_ramdisk set IMG RAMDISK OUT (inline,
+# because a bundle ships this script alone)
+vendor_ramdisk() {
+  python3 -I - "$@" <<'PY'
+import struct, sys
+
+def bad(why):
+    print("%s: %s" % (sys.argv[2], why), file=sys.stderr)
+    sys.exit(1)
+
+img = open(sys.argv[2], "rb").read()
+# vendor_boot_img_hdr_v4: magic, header_version, page_size, kernel_addr,
+# ramdisk_addr, vendor_ramdisk_size (offset 24), cmdline[2048], tags_addr,
+# name[16], header_size (2096), dtb_size, dtb_addr (u64),
+# vendor_ramdisk_table_size (2112), _entry_num, _entry_size, bootconfig_size
+if len(img) < 2128 or img[:8] != b"VNDRBOOT":
+    bad("not an Android vendor boot image")
+version, page, _, _, rd_size = struct.unpack_from("<5I", img, 8)
+hdr_size, dtb_size = struct.unpack_from("<2I", img, 2096)
+table_size, entries, entry_size, bootconfig_size = struct.unpack_from("<4I", img, 2112)
+if version != 4 or hdr_size != 2128:
+    bad("not a v4 vendor boot image")
+if page < 2048 or page & (page - 1):
+    bad("odd page size %d" % page)
+if (entries, entry_size, table_size) != (1, 108, 108):
+    bad("expected one vendor ramdisk, as bin/omamobile images builds")
+pad = lambda n: -(-n // page) * page
+o_rd = pad(2128)
+o_dtb = o_rd + pad(rd_size)
+o_table = o_dtb + pad(dtb_size)
+if len(img) != o_table + pad(table_size) + pad(bootconfig_size):
+    bad("its sections don't add up to its size (a footer?)")
+if struct.unpack_from("<2I", img, o_table) != (rd_size, 0):
+    bad("its ramdisk table doesn't match its header")
+if sys.argv[1] == "get":
+    open(sys.argv[3], "wb").write(img[o_rd:o_rd + rd_size])
+    sys.exit(0)
+ramdisk = open(sys.argv[3], "rb").read()
+head, tail = bytearray(img[:o_rd]), bytearray(img[o_dtb:])
+struct.pack_into("<I", head, 24, len(ramdisk))
+struct.pack_into("<I", tail, o_table - o_dtb, len(ramdisk))
+with open(sys.argv[4], "wb") as f:
+    f.write(head + ramdisk + bytes(pad(len(ramdisk)) - len(ramdisk)) + tail)
+PY
+}
+ramdisk_image=""
+if [[ " $BOOT_IMAGES " == *" vendor_kernel_boot "* ]]; then ramdisk_image=vendor_kernel_boot
+elif [[ " $BOOT_IMAGES " == *" vendor_boot "* ]]; then ramdisk_image=vendor_boot; fi
+if [[ -n $ramdisk_image ]]; then
+  [[ -z ${avb_size[$ramdisk_image]:-} ]] || die "$conf: AVB_FOOTERS names $ramdisk_image, which carries the ramdisk: the owner's key can't be added to a signed image"
+  mkdir -p "$work"
+  verify_dir=$(mktemp -d "$work/verify.XXXXXX")
+  trap 'rm -rf "$verify_dir"' EXIT
+  vendor_ramdisk get "$images/$ramdisk_image.img" "$verify_dir/shipped.cpio.lz4" || die "can't read the ramdisk of $ramdisk_image.img"
+  lz4 -dc "$verify_dir/shipped.cpio.lz4" > "$verify_dir/shipped.cpio" || die "lz4 couldn't decompress $ramdisk_image.img's ramdisk"
+  # With --quiet, cpio -it says nothing when it lists the archive; given bytes
+  # that aren't one, it prints a line for every offset it tries and then its
+  # reason, so the message carries only that last line.
+  listing=$(cpio -it --quiet < "$verify_dir/shipped.cpio" 2> "$verify_dir/cpio.err") ||
+    die "cpio couldn't list $ramdisk_image.img's ramdisk: $(tail -n 1 "$verify_dir/cpio.err")"
+fi
 if ((verify_only)); then
   say "The files check out (the phone was not contacted)"
   exit 0
@@ -519,13 +590,12 @@ done
 ssh_key=$(head -1 "$key_file")
 
 # --- A local copy of the root image, with the owner's first-boot file -------
-work=${work:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-install}
 mkdir -p "$work"
 chmod 700 "$work"
 copy=$work/root.img sparse=$work/root.simg conf_file=$work/firstboot.conf keys_file=$work/authorized_keys
 boot_conf=$work/boot-update.conf ramdisk_dir=$work/ramdisk
 # The copy holds the password hash (and any Wi-Fi password): never left behind
-cleanup() { rm -f "$conf_file" "$keys_file" "$boot_conf" "$copy" "$sparse"; rm -rf "$ramdisk_dir"; }
+cleanup() { rm -f "$conf_file" "$keys_file" "$boot_conf" "$copy" "$sparse"; rm -rf "$ramdisk_dir" "$verify_dir"; }
 trap cleanup EXIT
 (
   umask 077
@@ -610,73 +680,18 @@ fi
 # the copy's v4 header and ramdisk table, where mkbootimg puts it. With the
 # phone's lz4 and cpio that is the hook's image byte for byte, under any umask
 # (tests/install-phone-initramfs).
-# Inline, because a bundle ships this script alone. A ramdisk that already
-# holds authorized_keys (a development initramfs) is left as built.
+# A ramdisk that already holds authorized_keys (a development initramfs) is
+# left as built.
 declare -A image_file=()
 for p in $BOOT_IMAGES; do image_file[$p]=$images/$p.img; done
-# vendor_ramdisk get IMG OUT, or vendor_ramdisk set IMG RAMDISK OUT
-vendor_ramdisk() {
-  python3 -I - "$@" <<'PY'
-import struct, sys
-
-def bad(why):
-    print("%s: %s" % (sys.argv[2], why), file=sys.stderr)
-    sys.exit(1)
-
-img = open(sys.argv[2], "rb").read()
-# vendor_boot_img_hdr_v4: magic, header_version, page_size, kernel_addr,
-# ramdisk_addr, vendor_ramdisk_size (offset 24), cmdline[2048], tags_addr,
-# name[16], header_size (2096), dtb_size, dtb_addr (u64),
-# vendor_ramdisk_table_size (2112), _entry_num, _entry_size, bootconfig_size
-if len(img) < 2128 or img[:8] != b"VNDRBOOT":
-    bad("not an Android vendor boot image")
-version, page, _, _, rd_size = struct.unpack_from("<5I", img, 8)
-hdr_size, dtb_size = struct.unpack_from("<2I", img, 2096)
-table_size, entries, entry_size, bootconfig_size = struct.unpack_from("<4I", img, 2112)
-if version != 4 or hdr_size != 2128:
-    bad("not a v4 vendor boot image")
-if page < 2048 or page & (page - 1):
-    bad("odd page size %d" % page)
-if (entries, entry_size, table_size) != (1, 108, 108):
-    bad("expected one vendor ramdisk, as bin/omamobile images builds")
-pad = lambda n: -(-n // page) * page
-o_rd = pad(2128)
-o_dtb = o_rd + pad(rd_size)
-o_table = o_dtb + pad(dtb_size)
-if len(img) != o_table + pad(table_size) + pad(bootconfig_size):
-    bad("its sections don't add up to its size (a footer?)")
-if struct.unpack_from("<2I", img, o_table) != (rd_size, 0):
-    bad("its ramdisk table doesn't match its header")
-if sys.argv[1] == "get":
-    open(sys.argv[3], "wb").write(img[o_rd:o_rd + rd_size])
-    sys.exit(0)
-ramdisk = open(sys.argv[3], "rb").read()
-head, tail = bytearray(img[:o_rd]), bytearray(img[o_dtb:])
-struct.pack_into("<I", head, 24, len(ramdisk))
-struct.pack_into("<I", tail, o_table - o_dtb, len(ramdisk))
-with open(sys.argv[4], "wb") as f:
-    f.write(head + ramdisk + bytes(pad(len(ramdisk)) - len(ramdisk)) + tail)
-PY
-}
-ramdisk_image=""
-if [[ " $BOOT_IMAGES " == *" vendor_kernel_boot "* ]]; then ramdisk_image=vendor_kernel_boot
-elif [[ " $BOOT_IMAGES " == *" vendor_boot "* ]]; then ramdisk_image=vendor_boot; fi
 if [[ -n $ramdisk_image ]]; then
-  [[ -z ${avb_size[$ramdisk_image]:-} ]] || die "$conf: AVB_FOOTERS names $ramdisk_image, which carries the ramdisk: the owner's key can't be added to a signed image"
-  rm -rf "$ramdisk_dir" && mkdir -p "$ramdisk_dir"
-  vendor_ramdisk get "$images/$ramdisk_image.img" "$ramdisk_dir/shipped.cpio.lz4" || die "can't read the ramdisk of $ramdisk_image.img"
-  lz4 -dc "$ramdisk_dir/shipped.cpio.lz4" > "$ramdisk_dir/shipped.cpio" || die "lz4 couldn't decompress $ramdisk_image.img's ramdisk"
-  # With --quiet, cpio -it says nothing when it lists the archive; given bytes
-  # that aren't one, it prints a line for every offset it tries and then its
-  # reason, so the message carries only that last line.
-  listing=$(cpio -it --quiet < "$ramdisk_dir/shipped.cpio" 2> "$ramdisk_dir/cpio.err") ||
-    die "cpio couldn't list $ramdisk_image.img's ramdisk: $(tail -n 1 "$ramdisk_dir/cpio.err")"
   if grep -qE '^(\./)?root/\.ssh/authorized_keys$' <<<"$listing"; then
     note "$ramdisk_image.img's initramfs already holds SSH keys (a development build): left as built"
   else
     # omamobile-boot-images' commands. The hook runs under pacman's umask
     # (022), so root/ is 0755; its mode is set here because not every
     # install(1) ignores the umask for parents (uutils' follows it).
+    rm -rf "$ramdisk_dir" && mkdir -p "$ramdisk_dir"
     extra=$ramdisk_dir/extra
     install -d -m 755 "$extra/root" && install -d -m 700 "$extra/root/.ssh" &&
       install -m 600 "$keys_file" "$extra/root/.ssh/authorized_keys" &&
@@ -685,7 +700,7 @@ if [[ -n $ramdisk_image ]]; then
     cpio --help 2>/dev/null | grep -c -- --reproducible >/dev/null && reproducible=(--reproducible)
     (cd "$extra" && find . -mindepth 1 | LC_ALL=C sort | cpio -o -H newc --owner=0:0 --quiet "${reproducible[@]}") > "$ramdisk_dir/extra.cpio" ||
       die "cpio couldn't pack the owner's key for the initramfs"
-    cat "$ramdisk_dir/shipped.cpio" "$ramdisk_dir/extra.cpio" | lz4 -l -9 -q > "$ramdisk_dir/initramfs.cpio.lz4" ||
+    cat "$verify_dir/shipped.cpio" "$ramdisk_dir/extra.cpio" | lz4 -l -9 -q > "$ramdisk_dir/initramfs.cpio.lz4" ||
       die "lz4 couldn't recompress $ramdisk_image.img's ramdisk with the owner's key"
     vendor_ramdisk set "$images/$ramdisk_image.img" "$ramdisk_dir/initramfs.cpio.lz4" "$ramdisk_dir/$ramdisk_image.img" ||
       die "rewriting $ramdisk_image.img with the new ramdisk failed"
