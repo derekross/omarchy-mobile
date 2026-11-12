@@ -44,8 +44,9 @@ done
 echo 'ok - all six tegu call tuning files copied unchanged and checksummed'
 rm "$t/vendor/etc/aoc/uplink_handset_aec_off_config.pb"
 mkfs.ext4 -q -F -d "$t/vendor" "$t/vendor.img"
-if tools/extract-vendor-firmware -d tegu -o "$t/missing" "$t/vendor.img" > "$t/log" 2>&1; then
-  echo 'not ok - missing AEC-off cleanup file accepted' >&2; exit 1
-fi
-grep -qF '/vendor/etc/aoc/uplink_handset_aec_off_config.pb is missing' "$t/log"
-echo 'ok - missing cleanup tuning fails extraction'
+tools/extract-vendor-firmware -d tegu -o "$t/missing" "$t/vendor.img" > "$t/log" 2>&1 || { cat "$t/log"; exit 1; }
+grep -qF 'warning: /vendor/etc/aoc/uplink_handset_aec_off_config.pb is missing' "$t/log"
+[[ ! -e $t/missing/usr/lib/firmware/updates/omamobile/tegu/aoc ]] || { echo 'not ok - part of the call tuning set was kept' >&2; exit 1; }
+[[ -s $t/missing/usr/lib/firmware/updates/aoc-tegu.bin ]] || { echo 'not ok - the other files were not extracted' >&2; exit 1; }
+(cd "$t/missing/usr/lib/firmware/updates" && sha256sum -c "$t/missing/vendor-firmware.sha256" >/dev/null)
+echo 'ok - a missing call tuning file is a warning: the set is left out whole and the rest is extracted'
