@@ -46,6 +46,9 @@ ok "omaphone and omamessages are dependencies"
 ! grep -qxE 'omamobile-(mmd|modem|modem-sit)' <<<"$deps" || fail "no modem package in depends"
 ok "no modem package in depends"
 grep -qE '^ +loupe +#' "$here/PKGBUILD" && ok "Loupe is a dependency"
+# Settings is in no image list of its own: this dependency is what puts it on a
+# new image and on a phone that updates (a fresh 2026.11.08 install had none)
+grep -qE '^ +omamobile-settings +#' "$here/PKGBUILD" && ok "Settings is a dependency"
 m=$here/mimeapps.list
 for type in png jpeg gif webp bmp tiff; do
   grep -qx "image/$type=org.gnome.Loupe.desktop;imv.desktop;" "$m" || fail "image/$type opens in Loupe, then imv"
