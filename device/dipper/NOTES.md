@@ -143,12 +143,11 @@ Volume Up produced `KEY_VOLUMEUP` (code 115, value 1). The current kernel
 image's button events have not yet been rechecked. The owner reported seeing
 the console during the first boot.
 
-An earlier test record attributed removal of `/dev/sda` to the PR #505 image,
-but the recorded image hash is the `e2cdb765…` artifact checked above, where
-`/dev/sda` was present and writable. The earlier whole-disk-removal result
-cannot be tied to this artifact. The final #505 image and its successful
-disk-node check are recorded below. The `e2cdb765…` boot did report all 85 UFS
-partition flags read-only; no UFS writes were made.
+The table above records `/dev/sda` absent on the earlier `93484a91…` and
+`f2f5cb2e…` boots. Those results are separate from the `e2cdb765…` artifact
+checked above, where `/dev/sda` was present and writable. The final #505 image
+and its successful disk-node check are recorded below. The `e2cdb765…` boot did
+report all 85 UFS partition flags read-only; no UFS writes were made.
 `/proc/iomem` reports `0x86200000–0x88efffff` as System RAM and
 `0x88f00000–0x890fffff` as reserved, so the TZ range is not reserved in this
 RAM boot's map. A separate EA8074 panel test used a RAM-only overlay on

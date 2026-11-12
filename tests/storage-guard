@@ -181,10 +181,14 @@ guard
 [[ $(cat "$B/sys/block/sdb/ro") == 1 && $(cat "$B/sys/block/sdb/sdb1/ro") == 1 ]] || fail "NFS root marks boot LUNs read-only"
 grep -q 'NFS root requested: every UFS partition read-only' "$B/dev/kmsg" || fail "NFS mode is selected before first guard pass"
 [[ -z $(unguarded) ]] || fail "NFS root handover has no writable UFS device"
+echo 0 > "$B/sys/block/sda/ro"
+[[ $(unguarded) == "sda" ]] || fail "NFS mode reports a writable main UFS disk"
 pass "NFS-root mode protects the main disk and every partition on the first guard pass"
 
 awk '/^boot_nfs\(\) \{/ {on = 1} on && /omamobile.initramfs/ {marker = NR} on && /switch_root/ {handover = NR} on && /^}/ {exit} END {exit !(marker && handover && marker < handover)}' initramfs/init \
   || fail "boot_nfs honors omamobile.initramfs before switching roots"
+awk '/^boot_nfs\(\) \{/ {on = 1} on && /ufs_unguarded/ {u = NR} on && /kill -9 -1/ {k = NR} on && /^}/ {exit} END {exit !(u && k && u < k)}' initramfs/init \
+  || fail "boot_nfs checks ufs_unguarded before it stops the initramfs's processes"
 grep -q 'busybox mount -t nfs' initramfs/init || fail "NFS root uses BusyBox mount on minimal initramfs images"
 awk '/^if \[ -s \/etc\/omamobile-nfsroot \]; then/ {on = 1} on && /^else$/ {exit} on && /boot_nfs/ {nfs = 1} on && /boot_arch/ {arch = 1} END {exit !(nfs && !arch)}' initramfs/init \
   || fail "a failed requested NFS mount cannot fall through to boot_arch"
