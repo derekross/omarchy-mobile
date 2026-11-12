@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Install link plan: the phone finishes its setup with the installer, over USB
 
-Status (2026-11-12): **design only. Nothing here has been built or run on a
+Status (2026-11-12): **design accepted by the maintainer, with its twelve decisions (§12). Nothing here has been built or run on a
 phone, and no code, package, image or partition has changed.** This is
 milestone M2 of [INSTALL-EXPERIENCE-PLAN](INSTALL-EXPERIENCE-PLAN.md): the
 USB channel a freshly installed phone offers at its first start, and what
@@ -713,9 +713,11 @@ draws on the screen or stops the display manager is announced first.
 A release may carry the marker only after R8 to R10 have passed with that
 release's packages.
 
-## 12. Open questions and decisions for the maintainer
+## 12. Decisions
 
-| | Question | Recommendation |
+**Decided by the maintainer on 2026-11-12: every recommendation below is accepted, Q1 to Q12.** The right-hand column is therefore what the design does. Three of them change a rule written elsewhere, and that text changes in the same pull request as the code that needs it, not before: Q3 (AGENTS §1 and CONTRIBUTING §3.1 name `tools/install-phone` as the only writer of `AUTO_WRITE=yes`), Q2 (`tools/install-phone` gains `--install-link`) and Q6 (the release composition, only after R7).
+
+| | Question | Decided |
 | --- | --- | --- |
 | Q1 | The link runs in the root's first start, not the initramfs (§3). INSTALL-EXPERIENCE-PLAN §5.3 pictured the initramfs's gadget | Accept. No boot image changes for M2; setup mode gets the same binary later (§3.4) |
 | Q2 | R7 needs a way to flash a release unmodified. The Rust installer's write path has never run on a phone, and the Pixel 7 Pro stops in it at the bootloader-slot rule | `tools/install-phone --install-link`: today's checks and writes, minus `firstboot.conf`, the key and the image copy. Then the link is the only new thing in R7, and the Rust write path gets its own first run |
