@@ -54,8 +54,8 @@ phone.
 | --- | --- | --- | --- | --- | --- |
 | 1 | Preflight | every program a later step runs (below), the SSH public key, free space (`INSTALL_FREE_GB`), the download through `install-phone --verify-only` (signature, checksums, `manifest.json`, root image) | nothing | nothing | always runs |
 | 2 | The warning | the release's label | nothing | `warning` (date, release) | skipped once acknowledged |
-| 3 | The phone | the build index; `fastboot devices`, `getvar all` (the model, the slots, the partition sizes, the bootloader and baseband) and the sizes of slot B's image files; then `get_unlock_ability`; `adb devices -l` | `adb reboot bootloader` after Enter | `phone` (SHA-256 of the serial) | runs until the phone is written; then skipped |
-| 4 | Factory image | the build step 3 found, the saved zip | opens Google's page | `factory_*` (build, name, page, size, SHA-256, path) | skipped while the file is there with its size; taken again from the record otherwise |
+| 3 | The phone | the build index, on every run; `fastboot devices`, `getvar all` (the model, the slots, the partition sizes, the bootloader and baseband) and the sizes of slot B's image files; then `get_unlock_ability`; `adb devices -l` | `adb reboot bootloader` after Enter | `phone` (SHA-256 of the serial) | runs until the phone is written; then skipped |
+| 4 | Factory image | the build step 3 found, the saved zip | opens Google's page | `factory_*` (build, its bootloader and baseband, name, page, size, SHA-256, path) | skipped while the file is there with its size; taken again from the record otherwise; forgotten at step 3 when the phone's bootloader or baseband are no longer the recorded ones (§2a) |
 | 5 | Write | whether anything answers at the phone's USB address; the owner's answers (memory only) | `install-phone --dry-run --serial S`, then `install-phone --serial S`: slot B and `userdata` | `write=started`, then `done` | skipped when `done`; `started` runs it again, whole |
 | 6 | USB connection | `phone-ssh true`, `nmcli connection show` | `nmcli connection add …` after Enter (§5a) | `network` | skipped |
 | 7 | First start | the phone: `/var/lib/omamobile/firstboot/done`, then which phone it is | nothing | `first_start` | waits again |
@@ -188,6 +188,18 @@ goes on):
 7. the phone tells its bootloader and baseband, and the build index has a
    build with both, marked tested (§5).
 
+**Every run judges again** (decided 2026-11-12), also one that goes on
+from a record in which the factory image is already taken: until the
+phone is written, each run reads the index and the phone and goes through
+1 to 7. Between two runs the phone's Android can change (an Android
+update, or the factory flash that puts it back on slot A), and the build
+it has now is the one that has to be listed and tested. And if the phone
+passes but its bootloader or baseband are no longer the ones the recorded
+factory image was taken for (`factory_bootloader`, `factory_baseband`),
+that file is not used: the run stops, names both builds, says why, and
+the record forgets the file (the file stays where it is), so the next run
+takes the image for the build the phone has now.
+
 A stop for a locked phone adds: "Its bootloader is still locked: leave it
 locked for now, because unlocking erases the phone." Whether "OEM
 unlocking" is on (`get_unlock_ability`) is read only after all of that,
@@ -264,6 +276,8 @@ warning=acknowledged 2026-11-15T14:02Z for release 2026.11.15
 phone=<sha256 of the fastboot serial>
 factory=done
 factory_build=CP2A.260705.006
+factory_bootloader=<the bootloader version that build requires>
+factory_baseband=<the baseband version that build requires>
 factory_name=cheetah-cp2a.260705.006-factory-<8 hex>.zip
 factory_page=https://developers.google.com/android/images#cheetah
 factory_size=<bytes>

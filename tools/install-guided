@@ -510,8 +510,10 @@ step_phone() {
       "It is written again from the start: the same things, whole."
   fi
   # The list of Google's builds, before anything is asked of the owner or
-  # the phone: a download without one can't install any phone
-  is_done factory || choose_index
+  # the phone: a download without one can't install any phone. On every
+  # run, also one that has the factory image already: the phone is judged
+  # against the list each time (judge_phone)
+  choose_index
   while true; do
     mapfile -t found < <(fastboot_serials)
     ((${#found[@]} <= 1)) ||
@@ -684,11 +686,40 @@ other_phone_in_fastboot() {
 # out is stopped, not shown the unlock steps: each of the four is asked for
 # by the check that reads it (phone_checks, find_build, slots_check,
 # images_fit), and a test deletes each in turn.
+# The build is judged on every run, also when the factory image was taken
+# on an earlier one (decided 2026-11-12): between two runs the phone's
+# Android can change (an update, or the factory flash that puts it back on
+# slot A), and the build it has now is the one that has to be tested.
 judge_phone() {
   phone_checks
   images_fit
-  is_done factory || find_build
+  find_build
+  recorded_factory_fits
   judging_locked=0
+}
+# The factory image an earlier run took was the one for the phone's
+# bootloader and baseband then. If the phone reports others now, that file
+# is not the one for this phone any more: it is not used, and the run stops
+# and says why. The record forgets it, so the next run takes the file for
+# the build the phone has now (the build was judged just above).
+recorded_factory_fits() {
+  local bl bb then forgot
+  is_done factory || return 0
+  bl=$(var version-bootloader) bb=$(var version-baseband)
+  [[ ${S[factory_bootloader]:-} != "$bl" || ${S[factory_baseband]:-} != "$bb" ]] || return 0
+  then="bootloader ${S[factory_bootloader]:-not recorded}, baseband ${S[factory_baseband]:-not recorded}"
+  forgot="The installer has forgotten that file (it is left where it is:"
+  ((!dry)) || forgot="A dry run records nothing; the install would forget that file (it is left where it is:"
+  put factory ""
+  stop "The factory image taken earlier doesn't match this phone any more." \
+    "    taken for: Google's build ${S[factory_build]:-unknown} ($then)" \
+    "    the phone now: bootloader $bl, baseband $bb (Google's build ${B[build]})" \
+    "The phone's Android has changed since that file was taken (an Android update," \
+    "or Android put back with Google's own tools). A factory image goes with one" \
+    "bootloader and baseband, so the file taken earlier is not used for this phone." \
+    "$forgot" \
+    "${S[factory_zip]:-unknown})." \
+    "Run this command again, and it takes the factory image for build ${B[build]}."
 }
 phone_checks() {
   local slot
@@ -901,6 +932,7 @@ choose_index() {
       "matches this phone. Check the internet connection and run this again."
 }
 declare -A B=()
+said_match=""
 find_build() {
   local out line bl bb not_tested unknown update_yes update_no
   bl=$(var version-bootloader) bb=$(var version-baseband)
@@ -953,6 +985,9 @@ find_build() {
   # Fastboot tells those two versions, not the build, so "match" is all that
   # is claimed.
   if [[ ${B[match]:-} == exact && -n ${B[build]:-} && ${B[tested]:-} == true ]]; then
+    # Said once per build, however often the phone is looked at
+    [[ $said_match != "${B[build]}" ]] || return 0
+    said_match=${B[build]}
     note "this phone's bootloader and baseband match Google's build ${B[build]}, which Omarchy Mobile was tested with"
     [[ -z ${B[same_pair]:-} ]] ||
       note "(${B[same_pair]//,/, } carry the same two versions and can't be told apart from here; ${B[build]} is the one used)"
@@ -1071,7 +1106,7 @@ step_factory() {
     title factory
     note "the factory image taken earlier (${S[factory_zip]:-}) is gone or changed: it is needed again"
     B=()
-    for k in build size sha256 page name; do B[$k]=${S[factory_$k]:-}; done
+    for k in build bootloader baseband size sha256 page name; do B[$k]=${S[factory_$k]:-}; done
     B[zip]=${B[name]}
     [[ ${B[sha256]} =~ ^[0-9a-f]{64}$ && ${B[size]} =~ ^[0-9]+$ && -n ${B[zip]} && ${B[page]} == https://developers.google.com/* ]] ||
       die "$state_file doesn't name the factory image (--start-over forgets it)"
@@ -1090,6 +1125,9 @@ step_factory() {
   [[ -n $zip ]] || return 0
   note "Google's factory image for build ${B[build]} is the right file"
   put factory_build "${B[build]}"
+  # The pair the file is for: a later run compares it with the phone's
+  put factory_bootloader "${B[bootloader]:-}"
+  put factory_baseband "${B[baseband]:-}"
   put factory_name "${B[zip]}"
   put factory_page "${B[page]}"
   put factory_size "${B[size]}"

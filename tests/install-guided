@@ -799,6 +799,48 @@ locked_stop "a build that isn't tested, with the newest one tested" "The newest 
 fresh; vars no; index_list 2026-11-01 "AB1C.230301.004 newband-3 false" "AB1C.230201.002 otherband-2 true" "AB1C.230101.001 $BB false" > "$R/device/testdev/factory-builds.json"
 locked_stop "a build that isn't tested, with an untested newest one" "Don't update Android to get past this."
 vars; echo 1 > "$t/ability"
+# A run that goes on from an earlier one judges the phone's build again,
+# also when the factory image is already taken: the phone's Android can
+# change between two runs. Here the factory step is done, then the phone
+# reports another baseband
+fresh; index_two 2026-11-01 true true > "$R/device/testdev/factory-builds.json"
+if guided "yes\n"; then fail "setup: an install stopped at the owner's questions"; fi
+[[ $(record factory) == "done" && $(record factory_build) == AB1C.230101.001 && $(record factory_bootloader) == "$BL" && $(record factory_baseband) == "$BB" ]] ||
+  fail "the record names the build and the bootloader and baseband the factory image is for"
+[[ $(grep -c "match Google's build" "$t/out") == 1 ]] || fail "the match is said once, however often the phone is looked at"
+sed -i 's/^version-baseband:.*/version-baseband:newband-7/' "$t/vars"   # a build the list doesn't have
+if guided "$REST"; then fail "a phone whose Android changed to an unlisted build stops, with the factory image already taken"; fi
+says "isn't one Omarchy Mobile knows yet" && ! says "user name on the phone" && [[ -z $(writes) ]] || fail "the build is judged again on a rerun: an unlisted one stops before the write"
+[[ $(record factory) == "done" ]] || fail "a stop for the build leaves the record of the factory image alone"
+index_list 2026-11-01 "AB1C.230201.002 otherband-2 true" "AB1C.230101.001 $BB true" "AB1C.221201.003 newband-7 false" > "$R/device/testdev/factory-builds.json"
+if guided "$REST"; then fail "a phone whose Android changed to an untested build stops, with the factory image already taken"; fi
+says "This phone's Android is not tested yet." && says "Google's build AB1C.221201.003:" && [[ -z $(writes) ]] || fail "the build is judged again on a rerun: an untested one stops before the write"
+# Another tested build: the phone passes, but the file taken earlier is for
+# the other bootloader and baseband, so it is not used
+sed -i 's/^version-baseband:.*/version-baseband:otherband-2/' "$t/vars"
+if guided "$REST" --dry-run; then fail "a dry run stops for a factory image taken for another build"; fi
+says "doesn't match this phone any more" && says "A dry run records nothing; the install would forget that file" && [[ $(record factory) == "done" ]] ||
+  fail "a dry run says the same and leaves the record as it is"
+if guided "$REST"; then fail "a factory image taken for another build than the phone has now is not used"; fi
+says "The factory image taken earlier doesn't match this phone any more." && says "taken for: Google's build AB1C.230101.001 (bootloader $BL, baseband $BB)" &&
+  says "the phone now: bootloader $BL, baseband otherband-2 (Google's build AB1C.230201.002)" && says "The installer has forgotten that file" &&
+  says "$t/home/Downloads/$zipname" && says "it takes the factory image for build AB1C.230201.002" || fail "the stop names both builds, why the file isn't used, and what the next run does"
+! says "user name on the phone" && [[ -z $(writes) && $(grep -c '^phone-provision' "$t/events") == 0 ]] || fail "nothing is asked, written or provisioned with the other build's file"
+[[ -z $(record factory) && -f $t/home/Downloads/$zipname ]] || fail "the record forgets the file, and the file is left where it is"
+zip2=${zipname/ab1c.230101.001/ab1c.230201.002}; cp "$t/factory.src" "$t/home/Downloads/$zip2"
+guided "$REST" || fail "the next run takes the factory image for the build the phone has now, and finishes"
+[[ $(record factory_build) == AB1C.230201.002 && $(record factory_baseband) == otherband-2 && $(record factory_zip) == "$t/home/Downloads/$zip2" ]] || fail "the record names the new build's file"
+grep -c "^phone-provision .* $t/home/Downloads/$zip2\$" "$t/events" >/dev/null || fail "the firmware comes from the new build's factory image"
+once "after the phone's Android changed"
+# The same for a locked phone: stopped before the unlock steps
+fresh; index_two 2026-11-01 true true > "$R/device/testdev/factory-builds.json"
+if guided "yes\n"; then fail "setup: an install stopped at the owner's questions"; fi
+vars no; sed -i 's/^version-baseband:.*/version-baseband:otherband-2/' "$t/vars"
+if guided "\n\n"; then fail "a locked phone whose build changed stops"; fi
+says "The factory image taken earlier doesn't match this phone any more." && ! says "fastboot flashing unlock" || fail "a locked phone whose build changed: stopped before the unlock steps"
+vars
+pass "a rerun judges the phone's build again: an unlisted or untested build stops, and a factory image taken for another build is not used"
+
 fresh; python3 -I -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m["builds"][0]["page"]="https://example.org/x"; json.dump(m,open(p,"w"))' "$R/device/testdev/factory-builds.json"
 if guided "$ALL"; then fail "an index that sends the owner somewhere else is refused"; fi
 [[ $(events '^xdg-open') == 0 && -z $(writes) ]] || fail "a page that isn't Google's is never opened"
