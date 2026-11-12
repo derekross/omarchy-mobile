@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Japanese input (omamobile-ime on): at login, once fcitx5 holds the input
+# method, restart squeekboard so it doesn't keep it. Inert while off.
+[Unit]
+Description=Omarchy Mobile: squeekboard after fcitx5 for Japanese input
+ConditionPathExists=%h/.config/omamobile/fcitx5
+After=graphical-session.target omarchy-fcitx5.service
+Wants=omarchy-fcitx5.service
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-ime session
+
+[Install]
+WantedBy=graphical-session.target

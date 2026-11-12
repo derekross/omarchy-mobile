@@ -1,0 +1,103 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-ime: Japanese input (fcitx5 with Mozc) on or off, for the user.
+#
+#   omamobile-ime status   on or off, and whether fcitx5 and Mozc are there
+#   omamobile-ime on       fcitx5 (Mozc) takes the input method, from now on
+#   omamobile-ime off      squeekboard takes it back, as before
+#   omamobile-ime session  at login (omamobile-ime.service): restart
+#                          squeekboard once fcitx5 is up
+#
+# Hyprland gives the input method to one client. squeekboard holds it by
+# default and shows itself when a text field takes focus. With this on,
+# fcitx5 holds it and converts what squeekboard types (its keys reach fcitx5
+# through the keyboard grab; hyprland 0.57.0-3.4 resends squeekboard's
+# keymap there), but squeekboard no longer sees text fields: double-tap the
+# home strip to show or hide it. Romaji only: the Kana layout needs more
+# keycodes than a keymap has. Space converts, Enter commits; candidates
+# appear in fcitx5's own window, which takes no taps. The switch is
+# ~/.config/omamobile/fcitx5 (the drop-in on omarchy-fcitx5.service reads
+# it too).
+set -euo pipefail
+
+CONF=${XDG_CONFIG_HOME:-$HOME/.config}
+FLAG=$CONF/omamobile/fcitx5
+FCITX=$CONF/fcitx5
+SYSTEMCTL=${OMAMOBILE_SYSTEMCTL:-systemctl}
+MOZC=${OMAMOBILE_MOZC_ADDON:-/usr/share/fcitx5/addon/mozc.conf}
+
+die() { echo "omamobile-ime: $*" >&2; exit 1; }
+
+# squeekboard as Omarchy's autostart starts it, through Hyprland's exec:
+# started straight from a script it didn't come back (omamobile-keyboard-theme).
+restart_squeekboard() {
+  [[ -n ${OMAMOBILE_IME_NO_OSK:-} ]] && return 0
+  pkill -x squeekboard 2>/dev/null || true
+  for _ in $(seq 30); do pgrep -x squeekboard >/dev/null || break; sleep 0.1; done
+  local sig=${HYPRLAND_INSTANCE_SIGNATURE:-}
+  [[ -n $sig ]] || sig=$(ls "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr" 2>/dev/null | head -1)
+  [[ -n $sig ]] || die "no Hyprland session to start squeekboard in"
+  HYPRLAND_INSTANCE_SIGNATURE=$sig hyprctl dispatch 'hl.dsp.exec_cmd("uwsm-app -- squeekboard")' >/dev/null
+}
+
+# Mozc in fcitx5's profile, active in every field from the start. Only
+# written when the user has no profile or config of their own.
+write_config() {
+  mkdir -p "$FCITX"
+  if [[ ! -e $FCITX/profile ]]; then
+    cat > "$FCITX/profile" <<'EOF'
+[Groups/0]
+Name=Default
+Default Layout=us
+DefaultIM=mozc
+
+[Groups/0/Items/0]
+Name=keyboard-us
+Layout=
+
+[Groups/0/Items/1]
+Name=mozc
+Layout=
+
+[GroupOrder]
+0=Default
+EOF
+  fi
+  if [[ ! -e $FCITX/config ]]; then
+    printf '[Behavior]\nActiveByDefault=True\nShareInputState=All\n' > "$FCITX/config"
+  fi
+}
+
+status() {
+  local state=off mozc=no
+  [[ -e $FLAG ]] && state=on
+  [[ -e $MOZC ]] && mozc=yes
+  echo "japanese input: $state"
+  echo "mozc installed: $mozc"
+  echo "fcitx5: $("$SYSTEMCTL" --user is-active omarchy-fcitx5.service 2>/dev/null || true)"
+}
+
+case ${1:-} in
+  status) status ;;
+  on)
+    [[ -e $MOZC ]] || die "fcitx5-mozc isn't installed (sudo pacman -S fcitx5-mozc)"
+    write_config
+    mkdir -p "${FLAG%/*}"; : > "$FLAG"
+    "$SYSTEMCTL" --user restart omarchy-fcitx5.service
+    restart_squeekboard
+    echo "Japanese input on: double-tap the home strip for the keyboard"
+    ;;
+  off)
+    rm -f "$FLAG"
+    "$SYSTEMCTL" --user stop omarchy-fcitx5.service 2>/dev/null || true
+    restart_squeekboard
+    echo "Japanese input off"
+    ;;
+  session)
+    # Hyprland's autostart may start squeekboard before fcitx5 is up, and
+    # then squeekboard keeps the input method: wait for it, then restart it.
+    for _ in $(seq 100); do pgrep -x squeekboard >/dev/null && break; sleep 0.2; done
+    restart_squeekboard
+    ;;
+  *) die "usage: omamobile-ime status|on|off" ;;
+esac
