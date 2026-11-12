@@ -418,9 +418,11 @@ order:
    against an older bootloader and radio is untested **[I]**; the camera
    extraction gave the same five files from CP2A and CP3A builds **[V]**.
    Allowed only for builds the index marks tested with that pair.
-3. **Otherwise:** the installer stops and explains that stock Android needs
+3. **Otherwise:** the installer stops. It explains that stock Android needs
    updating first (Settings > System > System update in Android, then come
-   back), and why. An Android update moves stock to slot B, and the
+   back), and why, but only when the newest build in the index is tested
+   (D12): Android's updater goes to Google's newest build and can't go
+   back, so with an untested newest build the phone is told not to update. An Android update moves stock to slot B, and the
    installer now refuses a phone running from slot B unless `--reinstall`
    is given (G5, #352), so the user then has to bring stock back to slot A
    first.
@@ -855,7 +857,14 @@ never offered: that write stays a manual, named exception.
   bootloader and baseband both equal the phone's, and only when the index
   marks it tested (§6.2's first case with that condition; D3 still says
   which builds earn the mark). A phone whose exact build is listed and not
-  tested is told that it is not tested yet. It is told to update Android
-  to a named build only when a newer build in the index is tested; when
-  none is, updating would not help, and the installer doesn't advise it
-  ([INSTALL-GUIDED](INSTALL-GUIDED.md) §5).
+  tested is told that it is not tested yet. **Narrowed 2026-11-12, after
+  the review of #645:** it is told to update Android only when the newest
+  build in the index is tested. Android's updater offers Google's newest
+  build and nothing older, and Android doesn't go back, so advice to
+  update is sound only when the update lands on a tested build. When the
+  newest build isn't tested, a phone is told not to update, also when its
+  own build isn't listed and also when some build between its own and the
+  newest is tested, and to wait or ask in an issue. The index is kept
+  newest first by the tool, and read by the builds' dates. A tested mark
+  covers the builds that share its bootloader and baseband, as a stated
+  assumption ([INSTALL-GUIDED](INSTALL-GUIDED.md) §5).

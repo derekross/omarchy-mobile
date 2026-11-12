@@ -463,29 +463,67 @@ checks that each question above is in this file.
   `tested` mark per build, earned with that build's own baseband. A
   fallback can come back when the index records tested pairs. Each of the
   stops below comes at step 3, before any unlock step (§2a):
-  - **The pair isn't listed:** "This phone's Android version isn't one
-    Omarchy Mobile knows yet". The owner is asked to update Android first,
-    or, if it is up to date, to open an issue so the build can be added.
-  - **The build is listed, not marked tested, and a newer build in the
-    list is tested:** "This phone's Android is not tested yet", then
-    "A newer build has been tested: <build>. Update Android to <build>",
-    with how, and that an update can move Android to slot B. A rerun goes
-    on after the update. `factory-index match` names that build
-    (`newer_tested`): the newest tested one listed above every build that
-    has the phone's pair.
-  - **The build is listed, not marked tested, and no newer build is
-    tested:** "This phone's Android is not tested yet", then "No newer
-    build in the list has been tested either, so updating Android would
-    not help." It is not told to update Android: that advice could not
-    work. A rerun stops again until the build is tested, and the stop
-    gives the issue address. A tested build that is older than the phone's
-    changes nothing here: Android doesn't update backwards.
+  **"Update Android" is advised only when the update lands on a tested
+  build** (decided 2026-11-12, after the review of #645). Android's own
+  updater offers Google's newest build and nothing older, and Android
+  doesn't go back, so the advice is given only when the newest build in
+  the list is itself covered by a tested mark (`factory-index match`
+  prints `newest=` and `newest_tested=`: every build of the newest date
+  has a bootloader and baseband that a tested build carries). Otherwise
+  no phone is told to update, even when some build between its own and
+  the newest is tested: the updater would take it past that one, for
+  good.
+  - **The pair isn't listed, and the newest build is tested:** "This
+    phone's Android version isn't one Omarchy Mobile knows yet", then
+    the update advice below, and to open an issue if Android says it is
+    up to date. A rerun goes on after the update.
+  - **The pair isn't listed, and the newest build isn't tested:** the
+    same first sentence, then "Don't update Android to get past this.
+    Android's own updater offers only Google's newest build, and the
+    newest build in the list (<build>) is not tested either: updating now
+    would move this phone to a build that is also not tested, and an
+    Android update cannot be undone." Then to wait, or to open an issue so
+    the phone's build can be added. A rerun stops again.
+  - **The build is listed, not marked tested, and the newest build is
+    tested:** "This phone's Android is not tested yet", then the update
+    advice. A rerun goes on after the update.
+  - **The build is listed, not marked tested, and the newest build isn't
+    tested either:** "This phone's Android is not tested yet", then the
+    same "Don't update Android to get past this" paragraph, and to wait
+    until its build or the newest one has been tested, or to ask in an
+    issue. When the phone's own build is the newest in the list it says
+    instead "Updating Android would not help: this is the newest build in
+    the list, so there is no tested build that an update could bring this
+    phone to, and an Android update cannot be undone." A rerun stops
+    again.
+
+  The update advice names the newest build, says how (Settings > System >
+  System update, until it says the system is up to date), and says what
+  can still go wrong, because the list can be older than Google's page:
+  it gives the list's date, says that if Google has published a newer
+  build since, the update lands on that one, the installer will say it is
+  not tested yet and Android cannot go back, and gives Google's page to
+  look at first. It also says that an update can move Android to slot B,
+  and that putting it back (INSTALL.md step 3) needs the bootloader
+  unlocked, which erases the phone, as the install does anyway. What it
+  can't close: a build Google publishes between the look at the page and
+  the update.
 - **A match is of two versions, not of a build.** Fastboot tells the
   bootloader and the baseband; builds that share both (carrier variants)
   can't be told apart. The installer says "match", uses the first such
   build in the file that is marked tested, and names the others (when none
   of them is tested, the stop names the first); `factory-index check`
   lists such groups for the maintainer.
+- **A tested mark covers the builds that share its bootloader and
+  baseband: a stated assumption** (the maintainer's ruling of 2026-11-12).
+  The same pair is taken to mean the same firmware: the variants differ in
+  carrier files, not in the files Linux loads or the bootloader and radio
+  the phone runs. So a phone that may be running the untested variant is
+  treated as tested, and the factory image used for it is the tested
+  variant's, the one a release was tested with. The same assumption is
+  under `newest_tested`. If two builds that share a pair are ever found to
+  differ in a file the install uses, the index has to record what each
+  mark covers, and this rule goes.
 
 `tools/factory-index add [-d CODENAME] [--tested RELEASE] FACTORY.zip` adds
 a build from a factory zip on the maintainer's computer: the name, size and
@@ -611,8 +649,10 @@ unlocking" on and off, for which no unlock step is ever printed; a phone swapped
 Mode (both of the installer's checks and `install-phone --serial`);
 another phone at the USB address before the write; a stale record and
 another phone at each step after it; the index (both versions, marked
-tested, or a stop; "not tested yet" with and without a newer tested build,
-an older tested build, and for a locked phone) and the factory image; a failure at each step followed by a
+tested, or a stop; "not tested yet" and an unlisted build, each with the
+newest build tested (update advice) and not (told not to update, also with
+a tested build in between); an older tested build; a list that isn't
+newest first; and each for a locked phone) and the factory image; a failure at each step followed by a
 rerun; what each kind of stop says; the record; the camera's modules
 (consent, `no`, a failed fetch, a list without digests); a missing program
 at step 1; the real `tools/phone-provision` given the installer's exact

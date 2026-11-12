@@ -229,6 +229,20 @@ index_two() {
   if [[ ${4:-} == older ]]; then printf '%s,\n%s\n]}\n' "$phone" "$entry"; else printf '%s,\n%s\n]}\n' "$entry" "$phone"; fi
 }
 
+# index_list UPDATED "BUILD BASEBAND TESTED"...: the builds as given (the
+# caller lists them newest first)
+index_list() {
+  local updated=$1 spec build bb tested sep=""
+  shift
+  printf '{"format": 1, "codename": "testdev", "updated": "%s", "builds": [\n' "$updated"
+  for spec; do
+    read -r build bb tested <<<"$spec"
+    printf '%s' "$sep"; sep=$',\n'
+    index "$updated" "$bb" "$tested" | sed -n '2,/^ *"sha256"/p' | sed "s/AB1C\.230101\.001/$build/; s/ab1c\.230101\.001/${build,,}/g"
+  done
+  printf '\n]}\n'
+}
+
 STATE=$t/home/.local/state/omamobile-install/testdev
 # ssh_phone SERIAL [bootconfig|cmdline|dt|none]: the phone that answers over
 # USB SSH, and where its kernel shows its serial number
@@ -536,6 +550,7 @@ fresh; vars no; sed -i '/^version-baseband:/d' "$t/vars"
 locked_stop "no baseband version" "doesn't tell its bootloader version or its baseband version"
 fresh; vars no; index 2026-11-01 otherband-1 > "$R/device/testdev/factory-builds.json"
 locked_stop "an Android build that isn't in the index" "no build in the"
+says "The newest build in the list has been tested: AB1C.230101.001." || fail "a locked phone with an unlisted build is told to update only because the newest build is tested"
 [[ $(events '^xdg-open') == 0 ]] || fail "a locked phone with a build that isn't listed: no page opened"
 fresh; vars no; rm "$R/device/testdev/factory-builds.json"
 NO_LOCKED_LINE=1 locked_stop "no build index in the download" "no list of Google's builds"
@@ -691,12 +706,39 @@ fresh
 if guided "$ALL" --factory-zip "$t/home/Downloads/nothing.zip"; then fail "--factory-zip with no such file is refused"; fi
 # No nearest build: the same bootloader with another baseband is not a
 # match, whether that build is marked tested or not (decision D-a)
+update_advice() {  # WHAT NEWEST: update Android, with what can still go wrong
+  says "The newest build in the list has been tested: $2." && says "so update Android: start Android, then" && says "Settings > System > System update" ||
+    fail "$1: update Android, since the newest build is tested"
+  says "The list is from 2026-11-01." && says "the update lands on that one" && says "Android cannot go back" && says "https://developers.google.com/android/images#testdev" ||
+    fail "$1: says the list's date and what happens when Google has published a newer build since"
+  says "moves Android to slot B" && says "that way needs the bootloader" && says "unlocked, which erases the phone" || fail "$1: says what an update does to the slots, and what putting it back needs"
+  says "Run this command again to go on from here." && ! says "Don't update Android" || fail "$1: a rerun goes on after the update"
+}
+no_update_advice() {  # WHAT NEWEST|"": never told to update, and why
+  if [[ -n $2 ]]; then
+    says "Don't update Android to get past this." && says "offers only Google's" && says "the newest build in the list ($2) is not tested" &&
+      says "updating now would move this phone to a build that is also not tested," && says "and an Android update cannot be undone." ||
+      fail "$1: told not to update: the update lands on $2, which isn't tested either, and can't be undone"
+  else
+    says "Updating Android would not help: this is the newest build in the list" && says "update cannot be undone." || fail "$1: says that updating Android would not help"
+  fi
+  ! says "System update" && ! says "so update Android" && ! says "The newest build in the list has been tested" || fail "$1: not told to update Android"
+  says "Wait until a release of Omarchy Mobile has been tested with" && says "https://github.com/derekross/omarchy-mobile/issues" || fail "$1: to wait, or to ask in an issue"
+  says "Running this again will stop here again until then." && ! says "Run this command again to go on" || fail "$1: a rerun stops again"
+}
 for tested in true false; do
   fresh; index 2026-11-01 otherband-1 $tested > "$R/device/testdev/factory-builds.json"
   if guided "$ALL"; then fail "a build with the same bootloader and another baseband is not used (tested: $tested)"; fi
-  says "no build in the" && says "Settings > System > System update" && [[ -z $(writes) && -z $(record factory) ]] ||
-    fail "no build with both versions: update Android first, nothing taken or written (tested: $tested)"
+  says "no build in the" && says "isn't one Omarchy Mobile knows yet" && [[ -z $(writes) && -z $(record factory) ]] ||
+    fail "no build with both versions: nothing taken or written (tested: $tested)"
   [[ $(events '^xdg-open') == 0 ]] || fail "no page is opened for a build that doesn't match"
+  if [[ $tested == true ]]; then
+    update_advice "a phone whose build isn't listed, the newest build tested" AB1C.230101.001
+    says "If Android says it is up to date, open an issue so that this phone's build can" || fail "an unlisted build: an issue when Android is up to date"
+  else
+    no_update_advice "a phone whose build isn't listed, the newest build untested" AB1C.230101.001
+    says "open an issue so that this phone's build can be added" || fail "an unlisted build: an issue so it can be added"
+  fi
 done
 fresh
 guided "$ALL" || fail "the exact build is used"
@@ -704,8 +746,10 @@ says "this phone's bootloader and baseband match Google's build AB1C.230101.001"
   fail "the match is said as a match of the two versions, not as the build the phone runs"
 says "which Omarchy Mobile was tested with" || fail "a tested build is said to be tested"
 # The exact build, marked tested, or the install stops (decided 2026-11-12).
-# A build that is listed and not tested is "not tested yet"; "update
-# Android" is said only when a newer build in the list was tested
+# A build that is listed and not tested is "not tested yet". "Update
+# Android" is said only when the update lands on a tested build: Android's
+# updater offers Google's newest build and nothing older, and doesn't go
+# back, so only when the newest build in the list is tested
 not_tested() {  # WHAT: the stand-in's index holds the phone's build, untested
   if guided "$ALL"; then fail "$1: a build that isn't marked tested is not used"; fi
   says "This phone's Android is not tested yet." && says "Google's build AB1C.230101.001:" && says "bootloader: $BL" && says "baseband:   $BB" &&
@@ -714,33 +758,46 @@ not_tested() {  # WHAT: the stand-in's index holds the phone's build, untested
   [[ -z $(writes) && -z $(record factory) && $(events '^xdg-open') == 0 ]] || fail "$1: nothing taken, opened or written"
   ! says "user name on the phone" && ! says "Google's factory image for this phone" || fail "$1: stopped at the phone step"
 }
-no_update_advice() {
-  says "No newer build in the list has been tested either, so updating Android would" && says "not help." || fail "$1: says that updating Android would not help"
-  ! says "System update" && ! says "Update Android to" || fail "$1: not told to update Android"
-  says "will stop here again until build AB1C.230101.001" && ! says "Run this command again to go on" && says "https://github.com/derekross/omarchy-mobile/issues" ||
-    fail "$1: a rerun stops again, and where to ask"
-}
 fresh; index 2026-11-01 "$BB" false > "$R/device/testdev/factory-builds.json"
-not_tested "the only build, untested"; no_update_advice "the only build, untested"
+not_tested "the only build, untested"; no_update_advice "the only build, untested" ""
 fresh; index_two 2026-11-01 false false > "$R/device/testdev/factory-builds.json"
-not_tested "a newer build that isn't tested either"; no_update_advice "a newer build that isn't tested either"
+not_tested "a newer build that isn't tested either"; no_update_advice "a newer build that isn't tested either" AB1C.230201.002
 fresh; index_two 2026-11-01 false true older > "$R/device/testdev/factory-builds.json"
-not_tested "an older build that is tested"; no_update_advice "an older build that is tested"
+not_tested "an older build that is tested"; no_update_advice "an older build that is tested" ""
 fresh; index_two 2026-11-01 false true > "$R/device/testdev/factory-builds.json"
-not_tested "a newer build that is tested"
-says "A newer build has been tested: AB1C.230201.002. Update Android to AB1C.230201.002:" && says "Settings > System > System update" && says "slot B" ||
-  fail "a newer tested build: update Android to it, how, and what an update does to the slots"
-! says "would" || fail "a newer tested build: no word that updating would not help"
-says "Run this command again to go on from here." || fail "a newer tested build: a rerun goes on after the update"
+not_tested "the newest build tested"; update_advice "the newest build tested" AB1C.230201.002
+# The dead end the review found: a build newer than the phone's is tested,
+# and the newest one isn't. The updater would take the phone past the
+# tested build to the newest, for good, so no update is advised
+fresh; index_list 2026-11-01 "AB1C.230301.004 newband-3 false" "AB1C.230201.002 otherband-2 true" "AB1C.230101.001 $BB false" > "$R/device/testdev/factory-builds.json"
+not_tested "a tested build between the phone's and an untested newest one"
+no_update_advice "a tested build between the phone's and an untested newest one" AB1C.230301.004
+! says "AB1C.230201.002" || fail "the tested build in between is not named as somewhere an update could stop"
+# The same list for a phone whose build isn't in it (the shape of the first
+# real index), and for that phone after an update: both stop for good, and
+# neither was told to update
+fresh; sed -i 's/^version-baseband:.*/version-baseband:oldband-1/' "$t/vars"
+index_list 2026-11-01 "AB1C.230301.004 newband-3 false" "AB1C.230201.002 otherband-2 true" > "$R/device/testdev/factory-builds.json"
+if guided "$ALL"; then fail "an unlisted build with an untested newest build stops"; fi
+says "isn't one Omarchy Mobile knows yet" || fail "an unlisted build is said to be unknown"
+no_update_advice "an unlisted build, the newest build untested, an older one tested" AB1C.230301.004
+# An index in which an older build stands above a newer one is refused
+# whole: nothing is read from an order nobody kept
+fresh; index_list 2026-11-01 "AB1C.221201.003 otherband-2 true" "AB1C.230101.001 $BB false" > "$R/device/testdev/factory-builds.json"
+if guided "$ALL"; then fail "an index that isn't newest first is refused"; fi
+says "is not a valid build index" && ! says "Update Android" && ! says "System update" && [[ $(events '^fastboot') == 0 ]] ||
+  fail "an index that isn't newest first: refused before the phone is looked for, with no advice drawn from it"
 fresh; index_two 2026-11-01 true true > "$R/device/testdev/factory-builds.json"
 guided "$ALL" || fail "the exact tested build is used, whatever is listed above it"
 [[ $(record factory_build) == AB1C.230101.001 ]] || fail "the phone's own build is the one taken, not the newer one"
 # For a locked phone both come before the unlock steps
 fresh; vars no; index 2026-11-01 "$BB" false > "$R/device/testdev/factory-builds.json"
 locked_stop "a build that isn't tested" "This phone's Android is not tested yet."
-no_update_advice "a locked phone, the only build untested"
+no_update_advice "a locked phone, the only build untested" ""
 fresh; vars no; index_two 2026-11-01 false true > "$R/device/testdev/factory-builds.json"
-locked_stop "a build that isn't tested, with a newer tested one" "Update Android to AB1C.230201.002:"
+locked_stop "a build that isn't tested, with the newest one tested" "The newest build in the list has been tested: AB1C.230201.002."
+fresh; vars no; index_list 2026-11-01 "AB1C.230301.004 newband-3 false" "AB1C.230201.002 otherband-2 true" "AB1C.230101.001 $BB false" > "$R/device/testdev/factory-builds.json"
+locked_stop "a build that isn't tested, with an untested newest one" "Don't update Android to get past this."
 vars; echo 1 > "$t/ability"
 fresh; python3 -I -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m["builds"][0]["page"]="https://example.org/x"; json.dump(m,open(p,"w"))' "$R/device/testdev/factory-builds.json"
 if guided "$ALL"; then fail "an index that sends the owner somewhere else is refused"; fi
@@ -752,7 +809,7 @@ says "no list of Google's builds" || fail "no index: said plainly"
 fresh
 guided "$ALL" --offline || fail "--offline installs from the bundle's index"
 [[ $(events '^curl') == 0 ]] || fail "--offline fetches nothing"
-pass "the index: the build with the phone's bootloader and baseband, marked tested, and no other; 'not tested yet', with 'update Android' only for a newer tested build; only Google's page; --offline"
+pass "the index: the build with the phone's bootloader and baseband, marked tested, and no other; 'not tested yet', with 'update Android' only when the newest build is tested; newest first or refused; only Google's page; --offline"
 
 # A published index counts only with the release key's signature, and only when newer
 G=$t/gnupg; mkdir -m700 "$G"
