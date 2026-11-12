@@ -98,15 +98,18 @@ phone's module directory or another subsystem's build output.
 
 1. **Source and recovery preflight (read-only; low risk).** Resolve the public
    dependency above and record exact Mobile and kernel commits. Confirm the
-   stock slot-A recovery path, matching slot bootloaders, this board's partition
-   names and sizes, and a complete retained known-good slot-B image/module set.
+   stock slot-A recovery path, this board's partition names and sizes, and a
+   complete retained known-good slot-B image/module set. The recorded bootloader
+   pair, A `ripcurrentpro-17.0-15819938` and B `ripcurrentpro-17.0-15199480`,
+   is the accepted state; keep both versions unchanged.
    Confirm footers on all five images and rollback index `1791158400`, matching
    the already booted set and the maintainer's 2026-11-11 decision. Do not begin
    step 2 until the disabled-node kernel PR is merged and cited above.
    Check protected-partition backup checksums off-repository; a stock boot
    requires a fresh read-only backup before radio/PMIC/Trusty work.
    **Pass:** every prerequisite has dated evidence and a recoverable image set.
-   **Stop:** missing public source, mismatched firmware, unknown slot state,
+   **Stop:** missing public source, any bootloader pair other than the accepted
+   recorded pair, unknown slot state,
    any footer policy differing from the already booted set, unexplained
    backup changes or no recovery path. **Rollback:** no change.
 
@@ -154,8 +157,10 @@ phone's module directory or another subsystem's build output.
    automatically mark B successful. An unmarked B has only three ABL attempts;
    count every boot including watchdog resets and **stop before the third
    unmarked attempt**. Unknown remaining attempts, an already unmarked
-   development B, or the recorded bootloader mismatch means stop and ask the
-   maintainer, not one more experimental boot. Fallback to A can overwrite
+   development B, or any bootloader pair other than the accepted recorded pair
+   means stop and ask the maintainer, not one more experimental boot. A suspected
+   firmware-dependent kernel workaround also needs maintainer review first.
+   Fallback to A can overwrite
    userdata and lose the Linux root before any recovery prompt is answered.
    **Pass:** the maintainer resolves the starting state, writer, remaining
    attempts, exact recovery set, backup chronology and rollback-index policy.
@@ -178,8 +183,12 @@ phone's module directory or another subsystem's build output.
    **Stop:** no fresh SSH within the reviewed timeout, unexpected fallback,
    storage changes or kernel fault. Do not send more commands to a hung phone.
    **Rollback:** allow the watchdog/shutdown timeout to finish, then use the
-   human's button recovery and separately approved canonical writer with the
-   retained known-good slot-B set. The successful button combination has not
+   human's button recovery. If a pushed image does not boot, recovery requires
+   fastboot by the buttons and a canonical `flash` of the retained known-good
+   slot-B set, with the maintainer's go at that moment. On the Pixel 9a a flash
+   cleared B's successful mark, leaving three tries; keep subsequent reboots
+   few and stop before the third unmarked attempt. The successful button
+   combination has not
    been confirmed from the retained Komodo record. The proposed combination
    to try is Volume Down + Power held about 20 seconds for fastboot, and
    Power + Volume Up for a reset, following the recorded Pixel 9a/8 Pro

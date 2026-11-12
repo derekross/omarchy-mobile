@@ -86,7 +86,11 @@ after private files also confirms 8192 bytes each, DEVI version 3.15 and that
 single-byte change. Slot A's four devinfo slot-metadata bytes are unchanged;
 this is not an attestation of slot-A boot images or proof that the public 3.15
 layout is independently qualified on G4. Current state must be read again
-without writing. Maintainer review of the historical operation remains open.
+without writing. In the [maintainer's 2026-11-10 decision](https://github.com/derekross/omarchy-mobile/pull/567#issuecomment-6771360898),
+the operation was recorded as one backed-up, byte-compared write on this phone,
+not to be repeated. Tensor G4 slot-success policy remains open in #252; that
+decision will also apply to Komodo. Until then, use separately approved `push`
+only, with no `flash` or fastboot slot-B write.
 
 The same notes record bootloader versions A `15819938` (the earlier Android
 capture) and B `15199480` (the later fastboot capture). The recovered command
@@ -99,8 +103,11 @@ current slot `b`, current bootloader `ripcurrentpro-17.0-15199480` and an empty
 copy also changed development automatic boot writes to `AUTO_WRITE=no`.
 This was a local installer preflight exception, not a bootloader update or a
 public supported installation path; no bootloader write is recorded. The
-mismatch remains a stop condition until the maintainer resolves recovery and
-anti-rollback implications. Do not reuse that exception, change the public
+recorded pair is the accepted state under the [same 2026-11-10 decision](https://github.com/derekross/omarchy-mobile/pull/567#issuecomment-6771360898):
+leave both versions unchanged, since equalizing them requires a stock boot
+that can cost `userdata`. Any different pair or a suspected firmware-dependent
+kernel workaround requires maintainer review first. Do not reuse that exception,
+change the public
 installer's check, or write bootloaders to make them agree.
 
 ## Backups and later local development source
