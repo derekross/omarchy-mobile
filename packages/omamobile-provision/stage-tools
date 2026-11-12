@@ -1,0 +1,36 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copy the tools this package ships from the repository's tools/ into
+# tools-staged/ (gitignored), with their checksums, so a build that sees
+# only this directory (tools/build-packages, tools/phone-install-package and
+# tools/repo-build copy the package directory alone) packages the very
+# files the laptop runs. There is one source: tools/. Nothing here is
+# edited, and ./install refuses a staged copy that fails its checksums.
+#
+#   ./stage-tools            copy them (the builders and ./install do this
+#                            whenever the repository is there)
+#   ./stage-tools --check    exit 0 if tools-staged/ matches tools/
+#   ./stage-tools --list     the files, one per line
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+FILES=(extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data
+       phone-smoke lib/usage.sh)
+src=../../tools
+case ${1:-} in
+  --list) printf '%s\n' "${FILES[@]}"; exit 0 ;;
+  --check)
+    for f in "${FILES[@]}"; do cmp -s "$src/$f" "tools-staged/$f" || { echo "tools-staged/$f is not tools/$f" >&2; exit 1; }; done
+    (cd tools-staged && sha256sum --quiet --strict -c SHA256SUMS) || exit 1
+    exit 0 ;;
+  "") ;;
+  *) echo "usage: ./stage-tools [--check|--list]" >&2; exit 2 ;;
+esac
+for f in "${FILES[@]}"; do
+  [[ -f $src/$f ]] || { echo "stage-tools: no $src/$f (run it in a checkout of the repository)" >&2; exit 1; }
+done
+rm -rf tools-staged.new
+mkdir -p tools-staged.new/lib
+for f in "${FILES[@]}"; do cp -- "$src/$f" "tools-staged.new/$f"; done
+(cd tools-staged.new && sha256sum -- "${FILES[@]}" > SHA256SUMS)
+rm -rf tools-staged
+mv tools-staged.new tools-staged
