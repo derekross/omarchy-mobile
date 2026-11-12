@@ -14,6 +14,7 @@ install -Dm755 lib/omamobile-sit-config "$d/usr/lib/omamobile-sit/omamobile-sit-
 install -Dm644 polkit/org.omamobile.modem-sit.policy "$d/usr/share/polkit-1/actions/org.omamobile.modem-sit.policy"
 install -Dm644 share/apn-overrides.conf "$d/usr/share/omamobile/modem-sit/apn-overrides.conf"
 for f in systemd/*.service; do install -Dm644 "$f" "$d/usr/lib/systemd/system/${f#systemd/}"; done
+install -Dm755 systemd/system-sleep/omamobile-modem-sit "$d/usr/lib/systemd/system-sleep/omamobile-modem-sit"
 install -Dm644 networkmanager/90-omamobile-rmnet.conf "$d/usr/lib/NetworkManager/conf.d/90-omamobile-rmnet.conf"
 install -Dm644 etc/omamobile/modem-sit.conf "$d/etc/omamobile/modem-sit.conf"
 install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-modem-sit/LICENSE"

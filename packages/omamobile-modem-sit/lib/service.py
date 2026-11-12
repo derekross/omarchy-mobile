@@ -39,6 +39,7 @@ import sqlite3
 import struct
 import subprocess
 import time
+from pathlib import Path
 
 import cp
 import paths
@@ -58,6 +59,8 @@ STATES = {0: 'active', 1: 'held', 2: 'dialing', 3: 'ringing-out', 4: 'ringing-in
 RATS = {0: '', 1: 'GPRS', 2: 'EDGE', 3: 'UMTS', 9: 'HSDPA', 10: 'HSUPA', 11: 'HSPA',
         14: 'LTE', 15: 'HSPA+', 16: 'GSM', 20: 'LTE-CA', 21: 'NR', 22: 'NR'}
 SOCKET = paths.RUN / 'socket'
+# The panel's power, which the shell drives (bl_power 4 = off, 0 = on).
+BACKLIGHT = Path(os.environ.get('OMAMOBILE_SIT_BACKLIGHT', '/sys/class/backlight'))
 # GET_RADIO_POWER / IND_RADIO_STATE_CHANGED (MODEM-SIT-RESEARCH 3.1):
 # INITIALIZED and STOP_NETWORK are off, START_NETWORK on, POWER_OFF is the
 # state without a SIM (M4.1i), RESET is unavailable. GET_RADIO_POWER answers
@@ -219,6 +222,13 @@ class Service:
         self.hangup_deadline = None
         self.release_unconfirmed = False
         self.screen_on = None
+        self.next_screen_check = 0
+        # [control] follow_screen: off by default until calls with the
+        # screen dark are tested (MODEM-PLAN 7.4).
+        try:
+            self.follow = self.settings['control'].getboolean('follow_screen', False)
+        except ValueError:
+            self.follow = False
         self.indication_counts = {}
         self.net = dict(reg='unknown', rat='', operator='', plmn='')
         self.last_registration = None
@@ -642,12 +652,50 @@ class Service:
         tmp.chmod(0o644)
         tmp.replace(path)
 
+    def follow_screen(self, now=None):
+        """Tell the modem when the panel goes off or on, as stock's RIL does:
+        with the screen off it sends the optional signal and dormancy reports
+        no more (calls, SMS and registration changes still come), so it wakes
+        the AP less. Off only when a backlight positively reads off; never
+        during a call (stock keeps the reports then, and screen-state refuses
+        it), and a failed request waits 30 s before the next try. Only with
+        [control] follow_screen = yes in modem-sit.conf."""
+        if not self.follow:
+            return
+        now = time.monotonic() if now is None else now
+        if now < self.next_screen_check:
+            return
+        self.next_screen_check = now + 2
+        states = []
+        for power in sorted(BACKLIGHT.glob('*/bl_power')):
+            try:
+                states.append(power.read_text().strip() != '0')
+            except OSError:
+                pass
+        if not states:
+            return
+        on = not any(states)
+        if on == self.screen_on or (not on and self.live()):
+            return
+        try:
+            self.dispatch(dict(action='screen-state', on=on))
+            print('Screen', 'on' if on else 'off', 'told to the modem', flush=True)
+        except (OSError, RuntimeError, ValueError) as e:
+            print('Screen state not sent:', e, flush=True)
+            self.next_screen_check = now + 30
+
     def dispatch(self, request):
         action = request.get('action')
         if action == 'screen-state':
             on = request.get('on')
             if type(on) is not bool:
                 raise ValueError('Screen state must be boolean')
+            hold = request.get('hold', 0)
+            if type(hold) is not int or not 0 <= hold <= 60:
+                raise ValueError('Screen hold must be 0 to 60 s')
+            if hold and not self.follow:
+                # The sleep hook, on a phone that doesn't follow the screen.
+                return dict(screen_on=self.screen_on, following=False)
             if not on and self.live():
                 raise RuntimeError('Call in progress')
             if on != self.screen_on:
@@ -661,6 +709,10 @@ class Service:
                 # reporting. Cache only after both replies succeed.
                 self.client.request(0x0928, struct.pack('<I', 0xffffffff if on else 0), timeout=5)
                 self.screen_on = on
+            if hold:
+                # The sleep hook's "off" with the panel still lit: keep
+                # follow_screen from taking it back before the freeze.
+                self.next_screen_check = time.monotonic() + hold
             return dict(screen_on=self.screen_on)
         if action == 'radio':
             # The rollback for a running registration short of a reboot:
@@ -942,8 +994,11 @@ def main():
         notify('READY=1\nSTATUS=registered')
         print('Calls and SMS service ready', flush=True)
         # Set by a device whose modem sends signal reports only after it's
-        # told the screen is on (the Pixel 9a's drop-in), while nothing else
-        # sends the screen state yet. Never set on the 7 Pro.
+        # told the screen is on (the Pixel 9a's drop-in). Nothing else sends
+        # the screen state unless the owner sets [control] follow_screen =
+        # yes (off by default; MODEM-PLAN section 7, M6, on the 7 Pro only
+        # so far), which then follows the panel from here on. Never set on
+        # the 7 Pro.
         if args.bringup and os.environ.get('OMAMOBILE_SIT_SCREEN_ON_AT_START') == '1' \
                 and service.screen_on is None:
             service.dispatch(dict(action='screen-state', on=True))
@@ -951,6 +1006,8 @@ def main():
         while not stopping:
             service.pump()
             service.poll()
+            if args.bringup:  # without it the service writes nothing to the modem
+                service.follow_screen()
             if time.monotonic() >= next_cp_check:
                 if not cp.online():
                     raise RuntimeError('CP left ONLINE; the modem unit keeps its crash record')
