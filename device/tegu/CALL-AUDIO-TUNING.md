@@ -203,7 +203,37 @@ the owner's iPhone, which the owner answered:
 So the uploads and the DSP mode take effect, but the cancellation doesn't
 hold yet. The earpiece route hasn't been tried.
 
+## Results on the palmtop, 2026-11-03 and 2026-11-11
+
+Two more changes, each tried on calls to the owner's iPhone on the
+speakerphone, the owner listening on the far end, `tegu_aec = yes`,
+`tegu_route = speaker`, the same six files, the daily kernel as above:
+
+4. 2026-11-03, `AoC Modem Mixer ASP Mode` set to `ASP_ON` before the
+   uploads (and, in another call, stock's microphone gain): no echo for
+   2 to 3 s, then the echo again, in both.
+5. 2026-11-11, the tuning sent after both voice streams have started
+   instead of before, with the DSP mode and `ASP_ON` as in 4 (sitd built
+   on the palmtop from this stack's head merged onto that day's main, as
+   0.3.37): two calls, 25 s and 14 s. The owner heard no echo for about
+   the first 2 s of each and his own voice for the rest. sitd logged
+   "AoC tegu speakerphone prepared at conservative TAS gain" at each
+   call's start and "AoC call routes restored" at its end, and no refusal,
+   so both uploads were acknowledged (an unconfirmed one keeps the call
+   silent).
+
+So nothing tried so far makes the cancellation hold: with the tuning
+before or after the streams' start, with ASP on or off, it works for about
+2 s and then stops. What changes in the AoC at that point isn't known: the
+controls and the AoC's own log weren't read during these calls.
+
 ## Next for the echo
+
+First, from the results above: read the AoC's own log (`/dev/acd-logging`)
+and the three controls (`Audio DSP Mode`, `AoC Modem Mixer ASP Mode`, the
+microphone's gain) every half second through a call, to see what changes
+about 2 s in. That needs a call but no listener.
+
 
 From our kernel's AoC driver and the owner's stock configuration
 (`vendor/etc/audio_platform_configuration.xml`, `mixer_paths_aidl.xml`):

@@ -15,14 +15,15 @@
 # files' times). A rebuild replaces the bundle directory and leaves nothing
 # else in out/bundle, and one that fails moving the new directory in puts
 # the old one back; after a run killed there, the next run puts it back,
-# even one an input check refuses. The bundled nv-backup reads the bundle's
-# device.conf.
+# even one an input check refuses. A second run for the same bundle while
+# one runs is refused, and the first one completes. The bundled nv-backup
+# reads the bundle's device.conf.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 SRC=$PWD
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
-command -v python3 >/dev/null || { echo "ok - # skip: no python3"; exit 0; }
+for tool in python3 flock; do command -v "$tool" >/dev/null || { echo "ok - # skip: no $tool"; exit 0; }; done
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
 r=$t/repo k=$t/kernel
@@ -180,6 +181,30 @@ out=$(DEVICE=testdev KERNEL_OUT=$k KERNEL_DIR=$r "$r/tools/make-bundle" --unsign
   fail "the bundle assembles after a killed run: $out"
 [[ ! -e $b/SHA256SUMS.sig ]] && intact || fail "a run after a killed one starts from an empty build directory: $(ls -A "$b" "$r/out/bundle")"
 pass "after a run killed between the renames, the next run puts the old bundle back, refused or not"
+
+# Two runs for the same bundle at once: the second (here one an input check
+# refuses) is refused before its start-up cleanup, so the first one's build
+# directory stays and the first build completes; a run for another version
+# builds meanwhile. A stand-in install holds the first build at its first
+# copy until the FIFO $t/hold is written.
+mkdir "$t/slow"
+mkfifo "$t/hold"
+printf '#!/bin/sh\nif [ -p "$HOLD" ]; then echo held; read -r _ < "$HOLD"; rm -f "$HOLD"; fi\nPATH=${PATH#*:} exec install "$@"\n' > "$t/slow/install"
+chmod +x "$t/slow/install"
+HOLD=$t/hold PATH=$t/slow:$PATH DEVICE=testdev KERNEL_OUT=$k KERNEL_DIR=$r "$r/tools/make-bundle" --unsigned --version 2026.11.01 --rootfs "$root" > "$t/first" 2>&1 &
+pid=$!
+timeout 30 sh -c 'until grep -c held "$1" >/dev/null; do sleep 0.1; done' - "$t/first" || held=no
+second=$(DEVICE=testdev KERNEL_OUT=$t/no-kernel timeout 30 "$r/tools/make-bundle" --unsigned --version 2026.11.01 --rootfs "$root" 2>&1) || true
+other=$(DEVICE=testdev KERNEL_OUT=$k KERNEL_DIR=$r timeout 30 "$r/tools/make-bundle" --unsigned --version 2026.11.02 --rootfs "$root" 2>&1) || other="failed: $other"
+[[ ! -p $t/hold ]] || timeout 5 sh -c 'echo go > "$1"' - "$t/hold" || true
+wait "$pid" && first=ok || first=$(cat "$t/first")
+[[ -z ${held:-} ]] || fail "the stand-in install holds the first build: $(cat "$t/first")"
+grep -c "already building omamobile-testdev-2026.11.01 in out/bundle" <<<"$second" >/dev/null || fail "a second run for the same bundle is refused: $second"
+[[ $other != failed:* ]] || fail "a run for another version builds while the first one runs: $other"
+[[ $first == ok ]] || fail "the first build completes after a second run was refused: $first"
+rm -rf "$r/out/bundle/omamobile-testdev-2026.11.02" "$r/out/bundle/omamobile-testdev-2026.11.02.tar" "$r/out/bundle/omamobile-testdev-2026.11.02.tar.sha256"
+intact || fail "the first build is in place, nothing else: $(ls -A "$r/out/bundle")"
+pass "a second run for the same bundle is refused and the first one completes; another version builds meanwhile"
 
 # The bundled nv-backup runs from the bundle with the bundle's descriptor
 # (testdev names no NV_PARTS, so it says so and contacts no phone)

@@ -403,7 +403,7 @@ if get_file build.prop "$WORK/build.prop"; then
     die "vendor partition is for '${dev:-unknown}', not $DEVICE; use -f to override"
   say "Vendor partition: $(sed -n 's/^ro.vendor.build.fingerprint=//p' "$WORK/build.prop" | head -1)"
 else
-  [[ -n "$FORCE" ]] || die "vendor.img has no build.prop; use -f to override"
+  [[ -n "$FORCE" ]] || die "build.prop can't be read from vendor.img; use -f to override"
 fi
 
 # The new generation: everything below is written into $new, which starts

@@ -33,7 +33,12 @@ directory of stand-ins first on PATH (/usr/lib/omamobile-omarchy/update-bin):
              root), omarchy-update-aur-pkgs (no AUR builds on the phone),
              omarchy-update-orphan-pkgs (listed, never removed),
              omarchy-update-restart (no gum, no false "kernel updated":
-             a restart is asked for when omamobile-boot-update wrote slot B),
+             a restart is asked for when omamobile-boot-update wrote slot B;
+             Omarchy 4.5 runs it as two halves, --services-only then
+             --reboot-only, and each does only its half),
+             omarchy-update-boot (4.5's boot verification is for a
+             computer's boot files; slot B's images are checked by
+             omamobile-boot-update),
              omarchy-migrate (boot-related migrations held), sudo
              (non-interactive from the sheet)
 
@@ -720,7 +725,7 @@ def run(args):
             print()
             print("omamobile-update: %s" % result["message"])
             if result["needs_reboot"]:
-                print("Restart the phone to finish (%s): omarchy-system-reboot" % "; ".join(result["reasons"]))
+                print("Restart the phone to finish (%s): omarchy reboot" % "; ".join(result["reasons"]))
             for h in result["held"]:
                 print("Held migration %s (%s): omamobile-update run-migration %s" % (h[0], h[1], h[0]))
         return code
