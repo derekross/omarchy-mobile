@@ -35,19 +35,23 @@ board falls back to the existing best-effort AT radio-off. An uncertain SIT
 radio-off does not switch to another transport. Neither accepted command proves
 call release; the service preserves the modem for an attended recovery.
 
-## Unresolved configuration payload and hardware evidence
+## Configuration payload and dated evidence
 
-`SET_MODEM_CONFIG` (`0x093f`) currently proposes the single byte `0x00`.
-Its Komodo-specific meaning, stock-builder provenance and persistence across
-boots remain unresolved. The name `configure_single_modem` does not establish
-that byte zero means one active stack. Other recorded Tensor modem starts use
-different values; those records must not be silently generalized to Komodo.
-This is a merge blocker requiring the maintainer's review, not permission to
-test configuration writes or compare values on a live modem.
+`SET_MODEM_CONFIG` (`0x093f`) uses one byte, `0x00`. The owned base-vendor
+S5400 builder maps API integer 1 to wire byte 0 and API integer 2 to wire
+byte 1. A bounded replay executed the original builder and header/ModemData
+constructors with modeled allocation, copying and single-thread locking.
+This establishes the encoding in that capture, not a complete Android RIL
+execution or association with the currently merged Android OTA snapshot.
 
-A future hardware entry must supply the actual date and `uname -r`, the six
-off-repository NV-backup comparisons and protected partitions' read-only state
-before cbd/rfsd, what the default startup showed, and the result of the proposed
-order including registration after the SIT cycle. Keep identifiers, subscriber
-details, raw logs, partition images and vendor binaries private. No such result
-is invented by the simulator tests or by this documentation.
+The dated [Komodo bring-up record in #567](https://github.com/marselnenaj/omarchy-mobile/blob/6aa3136ea51c506711fff29bec686b9525142f43/device/komodo/MODEM-BRINGUP.md)
+records the actual kernel, protected-backup/read-only checks before modem
+startup, absent SIM observations before native radio-on, configuration ACK,
+USIM READY after native radio-on and emergency registration after the later
+SIT off/on cycle. These were separate guarded component operations; the full
+public startup profile and ordinary post-cycle registration remain unqualified.
+
+Wire byte one was not tested on the phone by this work. Firmware persistence
+across CP restarts or phone boots remains unknown. An ACK and unchanged
+protected partition hashes do not establish volatility. The maintainer's
+review of this limit and the public board-kernel dependency remain outstanding.
