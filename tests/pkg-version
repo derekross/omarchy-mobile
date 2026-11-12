@@ -93,7 +93,7 @@ echo 0.4 > packages/demo/version; commit "demo 0.4 on a branch"
 v=$(pv demo)
 [[ $v =~ ^0\.4\.0pre3\.g[0-9a-f]{7}$ ]] || fail "a new series on a branch: got $v"
 ok "a new series on a branch builds below main's first of it ($v)"
-pv --main other demo | grep -qx 0.4.0 || fail "--main names the line to count on"
+[[ $(pv --main other demo) == 0.4.0 ]] || fail "--main names the line to count on"
 ok "--main names the line to count on"
 git checkout -q main
 
@@ -111,6 +111,13 @@ rm -rf "$t/copy2" && mkdir "$t/copy2"
 (source tools/lib/pkg-tar.sh; pkg_tar packages/demo | tar xf - -C "$t/copy2")
 is "$(cat "$t/copy2/demo/.pkgver")" 0.3.4 "a stale .pkgver in the directory loses to the fresh one"
 rm packages/demo/.pkgver
+
+# A version file that doesn't parse is refused, not built under the
+# number before it.
+git checkout -q -b badfile; echo 0.3-beta > packages/demo/version; commit "demo: a bad version file"
+pv --main badfile demo >/dev/null && fail "a version file that doesn't parse is refused"
+ok "a version file that doesn't parse is refused"
+git checkout -q main
 
 # Without the history: refuse, never guess.
 git clone -q --depth 1 "file://$r" "$t/shallow"

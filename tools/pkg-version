@@ -138,6 +138,9 @@ case $mode in
 esac
 
 [[ -n $(git ls-tree "$rev" -- "$path/version") ]] || die "$path/version doesn't exist at $rev"
+# The history skips a version file that doesn't parse, so without this its
+# commit would build under the number before it
+parse "$(file_at "$rev")" >/dev/null || die "$path/version doesn't hold a version (0.2 or 0.2.5) at $rev"
 if git merge-base --is-ancestor "$rev" "$main"; then
   v=$(walk "$rev" | tail -1 | cut -d' ' -f2)
   [[ -n $v ]] || die "$path/version doesn't hold a version (0.2 or 0.2.5) at $rev"
