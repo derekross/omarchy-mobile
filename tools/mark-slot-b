@@ -12,18 +12,26 @@ through a private block node (the init removes the whole-disk node), checks
 both headers and both entry arrays (signature, sizes, CRCs, copies equal),
 finds PART by name exactly once, and refuses unless the phone's first
 /proc/device-tree/compatible string is the descriptor's COMPATIBLE (checked
-before any node is made), its sectors are the four
-LBAs above, the phone booted slot B (androidboot.slot_suffix=_b) and B is
-active and not unbootable. Then it sets attribute bit 54 (successful) on PART
+before any node is made), the LUN is in the descriptor's UFS_RW_LUNS and its
+/sys/block/<lun>/ro reads 0, its last LBA is the fourth above, the phone
+booted slot B (androidboot.slot_suffix=_b) and B is active and not
+unbootable. Then it sets attribute bit 54 (successful) on PART
 and nothing else, recomputes the entry-array CRC and both header CRCs, and
 checks that exactly the four sectors change.
 
 Without --write it only prints the plan (read-only). With --write, after the
-human types the confirmation on stdin, it re-reads the four sectors (they
-must not have changed since the check), then writes the primary entry sector and header,
-reads them back by SHA-256, then the backup pair, and removes the node. Each
-sector is copied to a file in the private directory and its SHA-256 checked on
-the phone before dd writes it from that file.
+human types the confirmation on stdin, it saves the four old and the four new
+sectors on the laptop with a SHA256SUMS (~/android/reference/<device>/
+mark-slot-b-<lun>/, off the repository: they hold the disk's GUID), re-reads the four sectors (they must
+not have changed since the check), then writes the primary entry sector and
+header, reads them back from the disk (O_DIRECT), then the backup pair, and
+removes the node. Each sector is copied to a file in the private directory and
+its SHA-256 checked on the phone before dd writes it from that file.
+
+A --write cut off part way leaves each of the four sectors old or new. The next
+run recognises that against the saved sectors and offers, under the typed
+confirmation, to finish the write ('mark PART') or put the old sectors back
+('restore PART'), in the same order and with the same checks.
 
 By hand, once per install of slot B's boot image, never from a service or at
 boot (AGENTS.md §1). The rollback for a corrupted GPT is the device's NOTES.
@@ -32,6 +40,7 @@ import argparse
 import hashlib
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -85,7 +94,8 @@ class Phone:
         return r.stdout.strip()
 
     def read(self, lba, count, ss):
-        out = self.run('dd if="$n" bs=%d skip=%d count=%d 2>/dev/null' % (ss, lba, count))
+        # iflag=direct: the disk, not the page cache, so a read-back sees what landed
+        out = self.run('dd if="$n" bs=%d skip=%d count=%d iflag=direct 2>/dev/null' % (ss, lba, count))
         if len(out) != count * ss:
             die("short read at LBA %d (%d bytes)" % (lba, len(out)))
         return out
@@ -173,6 +183,73 @@ def plan(prim_hdr, prim_ent, back_hdr, back_ent, part, ss, want):
     return i, attrs, ecrc, p["ecrc"], out
 
 
+def saved_dir(device, lun):
+    return os.path.join(os.path.expanduser("~/android/reference"), device, "mark-slot-b-" + lun)
+
+
+def load(path, want, ss):
+    """The saved {lba: (old, new)}, or None when there is no whole set."""
+    try:
+        sums = dict(l.split()[::-1] for l in open(os.path.join(path, "SHA256SUMS")))
+    except FileNotFoundError:
+        return None
+    out = {}
+    for lba in want:
+        try:
+            pair = tuple(open(os.path.join(path, "%d.%s" % (lba, k)), "rb").read() for k in ("old", "new"))
+        except FileNotFoundError:
+            return None
+        if any(len(x) != ss for x in pair):
+            return None
+        if [sums.get("%d.%s" % (lba, k)) for k in ("old", "new")] != [hashlib.sha256(x).hexdigest() for x in pair]:
+            die("the sectors saved in %s do not match their SHA256SUMS; refusing" % path)
+        out[lba] = pair
+    return out
+
+
+def save(path, out, ss):
+    """Keep the old and new sectors on the laptop before anything is written."""
+    tmp = path + ".tmp"
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(tmp, mode=0o700)
+    files = {"%d.%s" % (lba, kind): data for lba, pair in out.items() for kind, data in zip(("old", "new"), pair)}
+    # SHA256SUMS last, as CONTRIBUTING §3.3 asks of every backup; load() checks it
+    files["SHA256SUMS"] = "".join("%s  %s\n" % (hashlib.sha256(d).hexdigest(), n) for n, d in files.items()).encode()
+    for name, data in files.items():
+        with open(os.open(os.path.join(tmp, name), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
+            f.write(data)
+            os.fsync(f.fileno())
+    shutil.rmtree(path, ignore_errors=True)
+    os.rename(tmp, path)
+    fd = os.open(os.path.dirname(path), os.O_RDONLY)
+    os.fsync(fd)
+    os.close(fd)
+    if load(path, list(out), ss) != out:
+        die("the sectors saved in %s do not read back; nothing written" % path)
+    print("old and new sectors saved in " + path)
+
+
+def apply(ph, cur, target, want, ss, path):
+    """Write target over cur: the primary pair (entries, then header), then the backup
+    pair, each pair read back from the disk. Sectors already right are not rewritten."""
+    if any(ph.read(lba, 1, ss) != cur[lba] for lba in want):
+        die("the GPT changed since it was checked; nothing written")
+    for pair in ((want[1], want[0]), (want[2], want[3])):
+        for lba in pair:
+            if cur[lba] != target[lba]:
+                ph.write(lba, target[lba], ss)
+        for lba in pair:
+            if ph.read(lba, 1, ss) != target[lba]:
+                die("read-back of LBA %d does not match; run again to finish or restore (saved in %s)" % (lba, path))
+        print("LBA %d and %d written and read back" % pair)
+
+
+def confirm(prompt):
+    sys.stderr.write(prompt)
+    sys.stderr.flush()
+    return sys.stdin.readline().strip()
+
+
 def main():
     ap = argparse.ArgumentParser(description="Mark slot B successful in a Qualcomm GPT (CONTRIBUTING §3.1).")
     ap.add_argument("--device", required=True)
@@ -189,6 +266,8 @@ def main():
             not all(x.isdigit() for x in f[2:]):
         die("device/%s has no CONTRIBUTING §3.1 entry (SLOT_B_MARK=\"LUN PART P_HDR P_ENT B_ENT B_HDR\")" % a.device)
     lun, part, want = f[0], f[1], [int(x) for x in f[2:]]
+    if lun not in conf_vals.get("UFS_RW_LUNS", "").split():
+        die("%s is not in device/%s's UFS_RW_LUNS; refusing" % (lun, a.device))
     compatible = conf_vals.get("COMPATIBLE", "")
     if not compatible:
         die("device/%s has no COMPATIBLE" % a.device)
@@ -202,15 +281,34 @@ def main():
     cmdline = ph.text("cat /proc/cmdline").split()
     if "androidboot.slot_suffix=_b" not in cmdline:
         die("the phone did not boot slot B (no androidboot.slot_suffix=_b): mark B only from a boot of B")
+    if ph.text("cat /sys/block/%s/ro" % lun) != "0":
+        die("%s is read-only (the storage guard has not left it writable); refusing" % lun)
     ss = int(ph.text("cat /sys/block/%s/queue/logical_block_size" % lun))
     sectors = int(ph.text("cat /sys/block/%s/size" % lun)) * 512 // ss
     if ss not in (512, 4096) or sectors - 1 != want[3]:
         die("%s: %d-byte sectors, last LBA %d; the §3.1 entry says last LBA %d" % (lun, ss, sectors - 1, want[3]))
-    prim_hdr = ph.read(want[0], 1, ss)
+    cur = {lba: ph.read(lba, 1, ss) for lba in want}
+    path = saved_dir(a.device, lun)
+    saved = load(path, want, ss)
+    if saved and all(cur[x] in saved[x] for x in want) and \
+            len({cur[x] == saved[x][1] for x in want}) == 2:
+        print("an interrupted --write left LBA %s; saved sectors in %s" % (
+            ", ".join("%d %s" % (x, "new" if cur[x] == saved[x][1] else "old") for x in want), path))
+        if not a.write:
+            print("dry run: nothing written (add --write to finish the mark or restore the old sectors)")
+            return
+        got = confirm("Type 'mark %s' to finish the write, or 'restore %s' to put the old sectors back: "
+                      % (part, part))
+        if got not in ("mark " + part, "restore " + part):
+            die("not confirmed; nothing written")
+        k = 1 if got.startswith("mark") else 0
+        apply(ph, cur, {x: saved[x][k] for x in want}, want, ss, path)
+        print("%s %s" % (part, "marked successful" if k else "restored to its old sectors"))
+        return
+    prim_hdr, back_hdr = cur[want[0]], cur[want[3]]
     p = header(prim_hdr, want[0])
     n = -(-p["num"] * 128 // ss)
     prim_ent = ph.read(p["ent"], n, ss)
-    back_hdr = ph.read(want[3], 1, ss)
     back_ent = ph.read(header(back_hdr, want[3])["ent"], n, ss)
     i, attrs, ecrc, old_ecrc, out = plan(prim_hdr, prim_ent, back_hdr, back_ent, part, ss, want)
 
@@ -227,19 +325,10 @@ def main():
     if not a.write:
         print("dry run: nothing written (add --write)")
         return
-    sys.stderr.write("Type 'mark %s' to write these four sectors: " % part)
-    sys.stderr.flush()
-    if sys.stdin.readline().strip() != "mark " + part:
+    if confirm("Type 'mark %s' to write these four sectors: " % part) != "mark " + part:
         die("not confirmed; nothing written")
-    if any(ph.read(lba, 1, ss) != out[lba][0] for lba in want):
-        die("the GPT changed since it was checked; nothing written")
-    for pair in ((want[1], want[0]), (want[2], want[3])):
-        for lba in pair:
-            ph.write(lba, out[lba][1], ss)
-        for lba in pair:
-            if hashlib.sha256(ph.read(lba, 1, ss)).digest() != hashlib.sha256(out[lba][1]).digest():
-                die("read-back of LBA %d does not match: restore from the NOTES rollback copies" % lba)
-        print("LBA %d and %d written and read back" % pair)
+    save(path, out, ss)
+    apply(ph, {x: out[x][0] for x in want}, {x: out[x][1] for x in want}, want, ss, path)
     print("%s marked successful" % part)
 
 
