@@ -44,6 +44,11 @@ pass "rfsd's exit ends the profile except during this invocation's orderly stop"
 python3 test/power-off.py || fail "omamobile-modem-cp power-off"
 pass "power-off confirms OFFLINE from the device, never from its absence"
 
+# The crash notice: not during this invocation's orderly stop (its intent
+# file, as rfsd's job tests it), once otherwise (#389 review)
+python3 test/watch-stop.py || fail "omamobile-modem-cp watch through a stop"
+pass "no crash notice during this invocation's stop"
+
 # The stop witness: profile_stop, with a stand-in CP helper and capture. A
 # failed power-off still captures the NV but fails the stop and leaves no
 # witness; a confirmed one writes its invocation's witness once; no main

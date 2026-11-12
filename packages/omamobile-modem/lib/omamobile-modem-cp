@@ -14,7 +14,8 @@
                            date and boot id, which the unit's clean stop
                            removes); when it leaves ONLINE afterwards, record
                            the crash once and keep running (nothing restarts
-                           or powers off the CP)
+                           or powers off the CP); the user is told unless
+                           this invocation's stop intent is in place
   baseband-version FILE    the firmware version in a modem.bin's TOC
   nv-check EFS EFS_BACKUP  the stock salted MD5 of the three NV files in the
                            RAM copies; exit 1 on a mismatch
@@ -28,6 +29,7 @@ import fcntl
 import hashlib
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -277,6 +279,22 @@ def watch_seconds():
     return seconds
 
 
+def stop_intended():
+    """This unit invocation's orderly stop is under way: profile_stop wrote
+    $RUN/intent-<INVOCATION_ID>, holding that ID, before the power-off. The
+    same test as rfsd's job in the profile (spawn_modem_rfsd): a 32-hex ID, a
+    regular file that isn't a symlink, its content the ID."""
+    invocation = os.environ.get('INVOCATION_ID', '')
+    if not re.fullmatch(r'[0-9a-f]{32}', invocation):
+        return False
+    intent = RUN / f'intent-{invocation}'
+    try:
+        return (not intent.is_symlink() and intent.is_file()
+                and intent.read_text().rstrip('\n') == invocation)
+    except OSError:
+        return False
+
+
 def watch(marker=None):
     seconds = watch_seconds()
     was_online = False
@@ -316,11 +334,17 @@ def watch(marker=None):
             record_crash()
             RUN.mkdir(parents=True, exist_ok=True)
             (RUN / 'crashed').write_text(STATES.get(now, str(now)) + '\n')
-            say('the CP left ONLINE: crash recorded; nothing restarts it. '
-                'Reboot to recover (the reboot powers it off).')
-            notify('Cellular stopped',
-                   'The modem crashed: no calls, texts or mobile data until the phone restarts. '
-                   f'Details: {CRASH_LOG}')
+            # A stop powers the CP off while this still polls: no notice
+            # then (#389 review). The record stays for now (#532).
+            if stop_intended():
+                say("the CP left ONLINE during this invocation's stop: the modem was stopped, "
+                    'nothing sent')
+            else:
+                say('the CP left ONLINE: crash recorded; nothing restarts it. '
+                    'Reboot to recover (the reboot powers it off).')
+                notify('Cellular stopped',
+                       'The modem crashed: no calls, texts or mobile data until the phone restarts. '
+                       f'Details: {CRASH_LOG}')
         time.sleep(seconds)
 
 
