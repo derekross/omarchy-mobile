@@ -106,12 +106,16 @@ die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 #                message itself says what has to change, or who to ask
 #   stop_erased  the write itself failed partway (step 5)
 # While a locked phone is being judged (judge_phone), a stop also says to
-# leave it locked: the reader may have come for the unlock steps.
-judging_locked=0
+# leave it locked: the reader may have come for the unlock steps. One stop
+# can't say that, because its own way on needs the unlock (a locked phone
+# on slot B): it sets locked_must_unlock and says so itself.
+judging_locked=0 locked_must_unlock=0
 phone_fact() {
   case ${S[write]:-} in
     "")
-      if ((judging_locked)); then
+      if ((judging_locked && locked_must_unlock)); then
+        printf '    Nothing has been written to the phone, and its bootloader is locked.'
+      elif ((judging_locked)); then
         printf '    Nothing has been written to the phone. Its bootloader is still locked:\n    leave it locked for now, because unlocking erases the phone.'
       else
         printf '    Nothing has been written to the phone.'
@@ -675,7 +679,9 @@ other_phone_in_fastboot() {
 # Not checked on a phone yet: that a locked bootloader answers "getvar all"
 # with the same lines as an unlocked one (current-slot, version-baseband,
 # the per-slot versions, partition-size). A locked phone that leaves one
-# out is stopped, not shown the unlock steps.
+# out is stopped, not shown the unlock steps: each of the four is asked for
+# by the check that reads it (phone_checks, find_build, slots_check,
+# images_fit), and a test deletes each in turn.
 judge_phone() {
   phone_checks
   images_fit
@@ -685,6 +691,33 @@ judge_phone() {
 phone_checks() {
   local slot
   slot=$(var current-slot)
+  # Slot B is refused below, so a phone that doesn't say which slot it runs
+  # from can't be let through as if it had said slot A: a locked one would
+  # be shown the unlock steps and stopped for slot B once it was erased
+  [[ $slot == a || $slot == b ]] ||
+    stop_final "The phone doesn't tell which of its two system copies it is running from (slot A" \
+      "or slot B). Omarchy Mobile is written to slot B, and the installer goes on only" \
+      "when it knows that Android runs from slot A." \
+      "It stops here, and running it again will stop here again." \
+      "Please open an issue: https://github.com/derekross/omarchy-mobile/issues"
+  if [[ $slot == b ]] && ! has_pass --reinstall && ((judging_locked)); then
+    # The way back to slot A needs the unlock, and the unlock erases the
+    # phone: "leave it locked" would be untrue here (decided 2026-11-12)
+    locked_must_unlock=1
+    stop_final "This phone is running from its second system copy (slot B), where an Android" \
+      "system update leaves it. Omarchy Mobile is written to slot B, and Android must" \
+      "stay on the first copy (slot A) as your way back, so Android has to be put back" \
+      "on slot A before Omarchy Mobile can be installed." \
+      "" \
+      "That can't be done while the bootloader is locked: putting Android on slot A" \
+      "needs an unlocked bootloader, and unlocking erases the phone. So if you go on," \
+      "everything on this phone is lost either way. Copy off what you want to keep" \
+      "first: photos, messages, two-factor codes." \
+      "" \
+      "Then INSTALL.md has the steps: step 1 unlocks the bootloader (this is what" \
+      "erases the phone), and step 3 says how to put Android on slot A. After that," \
+      "run this command again."
+  fi
   if [[ $slot == b ]] && ! has_pass --reinstall; then
     stop_final "This phone is running from its second system copy (slot B)." \
       "Omarchy Mobile is written there, and Android must stay on the first copy (slot A)" \

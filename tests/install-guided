@@ -481,7 +481,10 @@ locked_stop() {
       fail "a locked phone with $1 (unlock ability $ability): the unlock steps are never printed"
     [[ $(events 'flashing') == 0 ]] || fail "a locked phone with $1: not even asked whether it can be unlocked"
     [[ -z $(writes) && $(events FORBIDDEN) == 0 ]] || fail "a locked phone with $1: nothing written"
-    if [[ -z ${NO_LOCKED_LINE:-} ]]; then
+    if [[ -n ${MUST_UNLOCK:-} ]]; then
+      says "Nothing has been written to the phone, and its bootloader is locked." && ! says "leave it locked" ||
+        fail "a locked phone with $1: the stop doesn't say to leave it locked, since its way on needs the unlock"
+    elif [[ -z ${NO_LOCKED_LINE:-} ]]; then
       says "Its bootloader is still locked:" && says "leave it locked for now, because unlocking erases the phone." ||
         fail "a locked phone with $1: the stop says to leave it locked"
     fi
@@ -490,8 +493,24 @@ locked_stop() {
 }
 fresh; vars no a otherphone
 locked_stop "another model" "this download is for the Test Phone"
+# A locked phone on slot B is told the truth: the way back to slot A needs
+# the unlock, the unlock erases the phone, so its data is lost either way
 fresh; vars no b
-locked_stop "Android on slot B" "running from its second system copy (slot B)"
+MUST_UNLOCK=1 locked_stop "Android on slot B" "running from its second system copy (slot B)"
+says "That can't be done while the bootloader is locked" && says "needs an unlocked bootloader, and unlocking erases the phone" &&
+  says "everything on this phone is lost either way" && says "Copy off what you want to keep" && says "step 1 unlocks the bootloader" && says "step 3 says how to put Android on slot A" ||
+  fail "a locked phone on slot B: the way back needs the unlock, which erases the phone, so back up first"
+! says "--reinstall" && ! says "Run this command again to go on" || fail "a locked phone on slot B: no reinstall is offered (a locked phone can't be running Omarchy Mobile), and no promise of a rerun"
+# A phone that doesn't say which slot it runs from, or says something else,
+# is stopped: it is not taken for slot A (the phone here is on slot B)
+for line in "" "current-slot:" "current-slot:_b"; do
+  fresh; vars no b; sed -i '/^current-slot:/d' "$t/vars"; [[ -z $line ]] || echo "$line" >> "$t/vars"
+  locked_stop "no current slot (${line:-no line})" "doesn't tell which of its two system copies it is running from"
+  says "running it again will stop here again" && ! says "Run this command again to go on" || fail "no current slot: a rerun stops again"
+done
+fresh; sed -i '/^current-slot:/d' "$t/vars"
+if guided "$ALL"; then fail "an unlocked phone that tells no current slot stops"; fi
+says "doesn't tell which of its two system copies" && ! says "user name on the phone" && [[ -z $(writes) ]] || fail "no current slot on an unlocked phone: stopped at the phone step"
 fresh; SLOTS="" vars no
 locked_stop "one bootloader version only" "only tells the version of the copy"
 # The option that vouches for the other slot is compared with the phone
@@ -561,7 +580,7 @@ if guided "yes\n\n"; then fail "a locked phone stops the install"; fi
 ! says "leave it locked" || fail "a locked phone that can be installed is not told to leave it locked"
 fresh; vars no b
 if guided "yes\n" --dry-run; then fail "a dry run stops for a locked phone on slot B"; fi
-says "running from its second system copy (slot B)" && ! says "fastboot flashing unlock" && [[ ! -e $STATE ]] ||
+says "running from its second system copy (slot B)" && ! says "fastboot flashing unlock" && ! says "leave it locked" && [[ ! -e $STATE ]] ||
   fail "a dry run judges a locked phone before the unlock steps too, and records nothing"
 vars; echo 1 > "$t/ability"
 pass "a locked phone: every stop (model, phone, slots, a file's fit, the build index) comes before the unlock steps, which are then never shown"

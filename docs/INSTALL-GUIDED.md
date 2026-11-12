@@ -175,7 +175,9 @@ goes on):
    before the phone is even looked for;
 2. one phone only, and it is the download's model (`product`);
 3. it is the phone the record was started on;
-4. it doesn't run from slot B (unless `--reinstall`);
+4. it tells which slot it runs from (`current-slot` is `a` or `b`; a phone
+   that leaves the line out is not taken for slot A), and that isn't slot
+   B (unless `--reinstall`);
 5. the two bootloader slots: both versions reported and equal (reported
    and different stops; one reported stops, G4 above, and with
    `--bootloader-slots-match VERSION` it stops unless VERSION is the
@@ -190,6 +192,19 @@ A stop for a locked phone adds: "Its bootloader is still locked: leave it
 locked for now, because unlocking erases the phone." Whether "OEM
 unlocking" is on (`get_unlock_ability`) is read only after all of that,
 for the unlock steps themselves.
+
+**A locked phone on slot B is the one stop that can't say "leave it
+locked"** (decided 2026-11-12). Its way on is to put Android back on slot
+A ([INSTALL.md](INSTALL.md) step 3: `fastboot --set-active=a` and Google's
+`flash-all`), and that needs an unlocked bootloader, which erases the
+phone. So the stop says that plainly: Android has to go back to slot A
+first; that can't be done while the bootloader is locked; unlocking erases
+the phone, so everything on it is lost either way if the owner goes on,
+and what is to be kept is copied off first; then INSTALL.md step 1 (the
+unlock) and step 3. It prints no unlock command and offers no
+`--reinstall`: a phone with a locked bootloader can't be running Omarchy
+Mobile. Its footer is "Nothing has been written to the phone, and its
+bootloader is locked."
 
 **What can't be judged before the unlock**, and why:
 
@@ -215,8 +230,8 @@ for the unlock steps themselves.
 all` with the same lines as an unlocked one (`current-slot`,
 `version-baseband`, the per-slot bootloader versions, `partition-size`).
 The order above rests on it. A locked phone that leaves one of them out is
-stopped (5, 6 or 7 above) and is not shown the unlock steps, which is the
-safe side; if a real locked phone does that, the stop is what has to
+stopped (4, 5, 6 or 7 above; a test deletes each line in turn) and is not
+shown the unlock steps, which is the safe side; if a real locked phone does that, the stop is what has to
 change, not the order. §8 step 2a is the read-only look.
 
 **What each stop says.** No stop ends with a fixed reassurance. Each ends
@@ -225,8 +240,8 @@ nothing has been written; an earlier write began and didn't finish, so
 what was on the phone may already be erased; or Omarchy Mobile is written
 and what was done stays done. A stop that a rerun can get past adds "Run
 this command again to go on from here"; one that a rerun can't get past as
-things are (another model, another phone than the record's, slot B, the
-bootloader slots, a file that doesn't fit, a phone that tells no
+things are (another model, another phone than the record's, no current
+slot, slot B, the bootloader slots, a file that doesn't fit, a phone that tells no
 bootloader or baseband version, another release's record, a phone that
 tells no serial, a failed required check) doesn't, and its own text says
 what has to change. A write that fails partway has its own message: the data may be
