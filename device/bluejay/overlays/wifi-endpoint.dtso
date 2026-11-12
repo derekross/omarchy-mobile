@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* Requires wifi-pool + wifi-controller and passed stages 0-4 on separate boots.
+ * Link/attachment inspection only; brcmfmac stays blocked until its own gates.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target-path = "/soc@0/pcie@14520000/pcie@0,0/wifi@0,0";
+		__overlay__ {
+			status = "okay";
+		};
+	};
+};

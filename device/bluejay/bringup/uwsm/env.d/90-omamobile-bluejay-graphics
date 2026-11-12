@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Retained simpledrm display; software fallback if guarded GPU startup is held.
+export AQ_DRM_DEVICES=/dev/dri/card0
+if [ -e /run/omamobile-bluejay-gpu-ready ] && [ -c /dev/dri/renderD128 ]; then
+  export LIBGL_ALWAYS_SOFTWARE=0
+  export GALLIUM_DRIVER=panfrost
+  export QT_QUICK_BACKEND=rhi
+else
+  export LIBGL_ALWAYS_SOFTWARE=1
+  export GALLIUM_DRIVER=llvmpipe
+  export QT_QUICK_BACKEND=software
+fi
+export AQ_SIMPLEDRM_NO_AUX_RENDERER=1
+export LD_LIBRARY_PATH=/usr/local/lib/bluejay${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}

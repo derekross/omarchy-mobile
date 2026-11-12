@@ -26,7 +26,7 @@ for f in usr/bin/omamobile-omarchy-patches usr/bin/omamobile-update usr/lib/omam
   [[ -e $t/stage/$f ]] || fail "not staged: $f"
 done
 for f in omarchy-snapshot omarchy-update-aur-pkgs omarchy-update-orphan-pkgs omarchy-update-confirm \
-         omarchy-update-firmware omarchy-update-restart omarchy-migrate sudo; do
+         omarchy-update-firmware omarchy-update-restart omarchy-update-boot omarchy-migrate sudo; do
   [[ -x $t/stage/usr/lib/omamobile-omarchy/update-bin/$f ]] || fail "stand-in not staged: $f"
 done
 [[ $(ls "$t/stage/usr/share/omamobile/omarchy/patches" | wc -l) == $(ls patches/*.patch | wc -l) ]] || fail "every patch staged"

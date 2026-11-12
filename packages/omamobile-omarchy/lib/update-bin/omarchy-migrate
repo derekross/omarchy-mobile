@@ -26,12 +26,16 @@ pattern='limine|mkinitcpio|initcpio|efibootmgr|sbctl|snapper|grub-|bootctl|fwupd
 # These releases contain concrete unreviewed phone regressions; a broad
 # generic-hold override must not silently enable them.
 mobile_pattern='omarchy-hyprland-titlebars|owedvideo|fcitx|omarchy-apply-lock|/etc/pam\.d/|system-sleep/fprintd'
+# Not held: 1792648436.sh (4.5) removes the 4.0 notification engine's files
+# (one per notification, history/, images/) and carries Do Not Disturb over.
+# The 4.5 shell never reads them, the phone's shade reads the 4.5 store, and
+# they hold old message text, so the phone runs it as a computer does.
 mobile_hold_reason() {
   case $1 in
     1791403310.sh) echo 'installs titlebars pinned to a different Hyprland build' ;;
+    1790042972.sh) echo 'adds a world clock to the bar (the phone has its own status bar)' ;;
     1789764927.sh) echo 'starts owedvideo (unreviewed mobile video pipeline)' ;;
     1791367434.sh) echo 'replaces input method with Fcitx defaults' ;;
-    1792648436.sh) echo 'deletes notification history/images (backup and review required)' ;;
     1791125650.sh) echo 'changes fprintd resume/stop lifecycle (preserve mobile PAM/claim policy)' ;;
   esac
 }

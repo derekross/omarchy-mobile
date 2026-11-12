@@ -441,6 +441,17 @@ s_user_setup() {
   uid=$(id -u "$U") home=$ROOT$(home_of "$U")
   systemctl start "user@$uid.service" || echo "    no user manager; continuing without it"
   as_user omarchy-provision-user --force --first-install || { echo "    omarchy-provision-user failed"; failed=1; }
+  # git's name and email. Omarchy 4.0's user setup wrote them from the two
+  # variables as_user passes; Omarchy 4.5's writes only the Compose shortcuts
+  # (its git setup is a command the owner runs). Written here, so the
+  # installer's answers reach git under either; a blank one stays unset, and
+  # a failure is said but doesn't fail the first boot.
+  if [[ -n ${C[FULL_NAME]//[[:space:]]/} ]]; then
+    as_user git config --global user.name "${C[FULL_NAME]}" || echo "    git's user.name could not be set"
+  fi
+  if [[ -n ${C[EMAIL]//[[:space:]]/} ]]; then
+    as_user git config --global user.email "${C[EMAIL]}" || echo "    git's user.email could not be set"
+  fi
   if command -v omamobile-setup-user >/dev/null; then
     as_user omamobile-setup-user || { echo "    omamobile-setup-user failed"; failed=1; }
   fi

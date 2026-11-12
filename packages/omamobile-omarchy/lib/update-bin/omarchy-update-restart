@@ -9,8 +9,42 @@
 # wrote slot B during this update; a kernel package it could not write is a
 # warning. Services Omarchy marked are restarted and the shell too, as on a
 # desktop. Nothing reboots here: the update sheet offers the restart.
-out=${OMAMOBILE_UPDATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/omamobile-update}/restart.json
+#
+# Omarchy 4.5 runs this step twice: --services-only after the migrations
+# (the marked services and the shell), then --reboot-only at the very end
+# (whether a restart is needed). Each does its half here too, so services
+# and the shell restart once; a service that failed to restart in the first
+# half is kept for the second's warnings. Without an argument (Omarchy 4.0)
+# it does both, as before.
+dir=${OMAMOBILE_UPDATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/omamobile-update}
+out=$dir/restart.json
+kept=$dir/restart-warnings
 reasons=() warnings=()
+services=1 verdict=1
+case ${1:-} in
+  --services-only) verdict=0 ;;
+  --reboot-only) services=0 ;;
+  "") ;;
+  *) echo "omarchy-update-restart (phone): unknown option $1" >&2; exit 2 ;;
+esac
+
+if (( services )); then
+  mkdir -p "$dir"
+  : > "$kept"
+  for file in "$HOME"/.local/state/omarchy/restart-*-required; do
+    [[ -f $file ]] || continue
+    name=${file##*/}
+    service=${name#restart-}
+    service=${service%-required}
+    echo "Restarting $service"
+    omarchy-state clear "$name" || rm -f "$file"
+    "omarchy-restart-$service" || echo "Restarting $service failed" >> "$kept"
+  done
+
+  echo -e "\e[32m\nRestarting shell\e[0m"
+  omarchy-restart-shell || true
+fi
+(( verdict )) || exit 0
 
 modules=${OMAMOBILE_MODULES_DIR:-/usr/lib/modules}/$(uname -r)
 [[ -d $modules ]] || warnings+=("No modules for the running kernel in $modules")
@@ -53,20 +87,13 @@ if [[ -n $pid ]] && [[ $(readlink "/proc/$pid/exe" 2>/dev/null) == *"(deleted)"*
   reasons+=("Hyprland was updated")
 fi
 
-for file in "$HOME"/.local/state/omarchy/restart-*-required; do
-  [[ -f $file ]] || continue
-  name=${file##*/}
-  service=${name#restart-}
-  service=${service%-required}
-  echo "Restarting $service"
-  omarchy-state clear "$name" || rm -f "$file"
-  "omarchy-restart-$service" || warnings+=("Restarting $service failed")
-done
+if [[ -s $kept ]]; then
+  mapfile -t failed < "$kept"
+  warnings+=("${failed[@]}")
+fi
+rm -f "$kept"
 
-echo -e "\e[32m\nRestarting shell\e[0m"
-omarchy-restart-shell || true
-
-mkdir -p "${out%/*}"
+mkdir -p "$dir"
 python3 -I - "$out" "${#reasons[@]}" "${reasons[@]}" "${warnings[@]}" <<'PY'
 import json, sys
 out, n = sys.argv[1], int(sys.argv[2])

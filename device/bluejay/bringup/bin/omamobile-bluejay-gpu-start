@@ -1,0 +1,40 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Qualified development GPU path, restricted to the G1 DT and exact kernel.
+set -euo pipefail
+pending=/var/lib/omamobile/bluejay-gpu-pending
+ready=/run/omamobile-bluejay-gpu-ready
+[[ ! -e $ready ]] || exit 0
+if [[ -e $pending ]]; then
+  echo 'bluejay: previous GPU startup failed; retaining software rendering'
+  exit 0
+fi
+mkdir -p /var/lib/omamobile
+(set -o noclobber; cat /proc/sys/kernel/random/boot_id > "$pending")
+sync "$pending"
+[[ $(tr '\0' '\n' < /proc/device-tree/compatible | head -1) == google,gs101-bluejay ]]
+[[ $(uname -r) == 7.3.0-rc6-omamobile-bluejay-input-gated0 ]]
+[[ $(cat /sys/class/watchdog/watchdog0/state) == active ]]
+modules=/usr/lib/modules/$(uname -r)/kernel
+[[ $(sha256sum "$modules/drivers/clk/samsung/clk-acpm.ko" | cut -d' ' -f1) == 14e24a36e81acdc3e4c2ce9aa4e52c3f687efb2ec6a4619aae7ead19634dc0f6 ]]
+[[ $(sha256sum "$modules/drivers/gpu/drm/panfrost/panfrost.ko" | cut -d' ' -f1) == af7ca03ed2224a4d6e0ea723929681df3033da94d17dc10f4a5a305c164b662b ]]
+[[ $(sha256sum "$modules/drivers/gpu/drm/scheduler/gpu-sched.ko" | cut -d' ' -f1) == 4c91a6f4693601d7364b58f9ccf7bcf6a295a673d914a93a2186477ae868d80f ]]
+# Registering the ACPM provider also makes CPU clocks available. Hold its
+# unrelated deferred consumer until CPU DVFS has its own qualification.
+[[ ! -e /sys/bus/platform/devices/cpufreq-dt/driver ]]
+echo omamobile-gpu-only > /sys/bus/platform/devices/cpufreq-dt/driver_override
+modprobe clk_acpm
+[[ -L /sys/bus/platform/devices/gs101-acpm-clk/driver ]]
+modprobe panfrost
+udevadm settle --timeout=5
+[[ -c /dev/dri/renderD128 ]]
+[[ $(basename "$(readlink /sys/bus/platform/devices/1c500000.gpu/driver)") == panfrost ]]
+[[ $(cat /sys/class/devfreq/1c500000.gpu/available_frequencies) == 151000000 ]]
+[[ $(cat /sys/class/devfreq/1c500000.gpu/cur_freq) == 151000000 ]]
+[[ ! -e /sys/bus/platform/devices/cpufreq-dt/driver ]]
+[[ $(cat /sys/bus/spi/devices/spi0.0/statistics/errors) == 0 ]]
+[[ $(cat /sys/bus/spi/devices/spi0.0/statistics/timedout) == 0 ]]
+touch "$ready"
+rm "$pending"
+sync /var/lib/omamobile
+echo 'bluejay: Mali-G78 render node ready at 151 MHz'

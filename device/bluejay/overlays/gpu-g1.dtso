@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/dts-v1/;
+/plugin/;
+
+/* Manual Panfrost qualification only; keep the module blacklisted at boot.
+ * Limit ACPM to its lowest existing shader/L2 pair (151/302 MHz).
+ * Supply wiring follows gs101-pmic.dtsi, also included by stock Bluejay.
+ */
+&{/} {
+	bluejay_gpu_opp: opp-table-bluejay {
+		compatible = "operating-points-v2";
+		opp-151000000 {
+			opp-hz = /bits/ 64 <151000000>;
+		};
+	};
+};
+
+&gpu {
+	mali-supply = <&s2mpg11_buck2s>;
+	g3d-l2-supply = <&s2mpg11_buck8s>;
+	g3d-m-supply = <&s2mpg11_ldo1s>;
+	int-m-supply = <&s2mpg10_buck7m>;
+	operating-points-v2 = <&bluejay_gpu_opp>;
+	status = "okay";
+};
