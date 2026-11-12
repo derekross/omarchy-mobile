@@ -4,10 +4,11 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+package_dir=$PWD
 
-bash -n build install || fail "package scripts parse"
+bash -n build install omamobile-device-dipper.install || fail "package scripts parse"
 ./build "$tmp/build"
-./install "$tmp/root" "$tmp/build"
+(cd "$tmp" && "$package_dir/install" "$tmp/root" "$tmp/build")
 [[ -x "$tmp/root/usr/bin/reboot-to" ]] || fail "reboot-to is staged"
 aliases=(adsp.mbn adspua.jsn adspr.jsn a630_zap.mbn cdsp.mbn cdspr.jsn ipa_fws.mbn mba.mbn modem.mbn modemr.jsn modemuw.mbn slpir.jsn slpius.jsn wlanmdsp.mbn)
 for firmware in "${aliases[@]}"; do
@@ -15,5 +16,27 @@ for firmware in "${aliases[@]}"; do
   [[ $(readlink "$link") == "../../dipper/$firmware" ]] || fail "firmware alias $firmware"
 done
 [[ -f "$tmp/root/usr/share/omamobile/device-dipper/version" ]] || fail "device version is staged"
-grep -q 'depends=(bash systemd linux-firmware-qcom mesa qrtr pd-mapper tqftpserv rmtfs)' PKGBUILD || fail "runtime dependencies are declared"
+grep -q 'depends=(bash systemd omamobile-keyring linux-firmware-qcom mesa qrtr pd-mapper tqftpserv rmtfs)' PKGBUILD || fail "runtime dependencies are declared"
+grep -q '^install=omamobile-device-dipper.install$' PKGBUILD || fail "repository hook is declared"
+grep -q '^backup=(etc/pacman.d/omamobile-mirrorlist)$' PKGBUILD || fail "mirrorlist is preserved across upgrades"
+for path in \
+  usr/lib/udev/rules.d/10-omamobile-storage.rules \
+  usr/lib/systemd/network/20-usb-gadget.network \
+  usr/lib/systemd/system.conf.d/10-omamobile-watchdog.conf \
+  usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
+  usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
+  etc/pacman.d/omamobile-mirrorlist \
+  usr/share/omamobile/device.conf \
+  usr/share/licenses/omamobile-device-dipper/LICENSE; do
+  [[ -f "$tmp/root/$path" ]] || fail "install stages $path"
+done
+cmp -s device.conf ../../device/dipper/device.conf || fail "packaged descriptor matches the device descriptor"
+grep -q '^post_install()' omamobile-device-dipper.install || fail "package install adds the [omamobile] repo"
+grep -q '^post_upgrade()' omamobile-device-dipper.install || fail "package upgrade keeps the [omamobile] repo"
+grep -q 'KERNEL=="sd\[a-f\]", MODE="0000"' "$tmp/root/usr/lib/udev/rules.d/10-omamobile-storage.rules" || fail "all UFS whole-disk nodes are inaccessible"
+grep -q 'ID_PART_ENTRY_NAME}!="userdata"' "$tmp/root/usr/lib/udev/rules.d/10-omamobile-storage.rules" || fail "only userdata is visible to desktop tools"
+grep -q '^Address=172.16.42.1/24$' "$tmp/root/usr/lib/systemd/network/20-usb-gadget.network" || fail "usb0 keeps the initramfs address"
+grep -q '^RuntimeWatchdogSec=60s$' "$tmp/root/usr/lib/systemd/system.conf.d/10-omamobile-watchdog.conf" || fail "systemd keeps the tested watchdog timeout"
+[[ ! -e "$tmp/root/usr/lib/systemd/system/omamobile-dipper-identity.service" ]] || fail "identity service stays disabled"
+[[ ! -e "$tmp/root/usr/lib/systemd/system/omamobile-tailscale-join.service" ]] || fail "tailnet service is not included"
 printf 'ok - Dipper firmware aliases and dependencies\n'
