@@ -203,7 +203,103 @@ the owner's iPhone, which the owner answered:
 So the uploads and the DSP mode take effect, but the cancellation doesn't
 hold yet. The earpiece route hasn't been tried.
 
+## Results on the palmtop, 2026-11-03 and 2026-11-11
+
+Two more changes, each tried on calls to the owner's iPhone on the
+speakerphone, the owner listening on the far end, `tegu_aec = yes`,
+`tegu_route = speaker`, the same six files, the daily kernel as above:
+
+4. 2026-11-03, `AoC Modem Mixer ASP Mode` set to `ASP_ON` before the
+   uploads (and, in another call, stock's microphone gain): no echo for
+   2 to 3 s, then the echo again, in both.
+5. 2026-11-11, the tuning sent after both voice streams have started
+   instead of before, with the DSP mode and `ASP_ON` as in 4 (sitd built
+   on the palmtop from this stack's head merged onto that day's main, as
+   0.3.37): two calls, 25 s and 14 s. The owner heard no echo for about
+   the first 2 s of each and his own voice for the rest. sitd logged
+   "AoC tegu speakerphone prepared at conservative TAS gain" at each
+   call's start and "AoC call routes restored" at its end, and no refusal,
+   so both uploads were acknowledged (an unconfirmed one keeps the call
+   silent).
+
+So nothing tried so far makes the cancellation hold: with the tuning
+before or after the streams' start, with ASP on or off, the far end hears
+no echo for about 2 s and then hears it. Results 3 to 5 read those first
+seconds as cancellation that then stopped. The calls of 2026-11-12 below
+show they are not that.
+
+## Results on the palmtop, 2026-11-12: the first seconds are a silent uplink
+
+The same setup (the daily kernel, sitd 0.3.37 built from this stack's
+head, `tegu_aec = yes`, `tegu_route = speaker`), with
+`bringup/call-audio-watch.py` running on the palmtop through each call. It
+is read-only: it prints the AoC's own log (`/dev/acd-logging`) as it
+arrives and, unless `CTL=0`, reads fifteen of the call's mixer controls
+every half second and prints the changes. `bringup/call-levels.py` reads
+its output on the laptop.
+
+6. Four calls to the owner's iPhone, the owner in another room, and in
+   the last in a far one; the watcher ran through the first three. He
+   heard no echo for 3 to 4 s after answering and then his own voice, as
+   before.
+   - **The controls are set once and stay.** At the call's start:
+     `Audio DSP Mode` `Telephony_APMG3`, `AoC Modem Mixer ASP Mode`
+     `ASP_ON`, `FT AEC Reference Source` `SPEAKER`, `MIC HW Gain (cB)` 130,
+     microphones 0 and 1 on. Nothing changed until the hang-up.
+   - **The AoC has the tuning.** Its log has both uploads right after
+     "PCIe Modem Telephony Started" (command 0x00d2 on the tuning service,
+     rc 0, then "APMG3 uplink config received" and "APMG3 downlink config
+     received"), with "Telephony Voice Processor enabled" and "Mixer 0
+     active (APMg3)" just before. Nothing in the log changes a few
+     seconds into the call.
+   - **The answer is a new session.** The audio path first gets one modem
+     session (the ringing; its configuration arrives about 2 s after the
+     path starts, with "Modem Path Active but no configuration received"
+     until then), and at the answer a second one: "Session ID changed but
+     no handoff performed. Forcing FadeOut!", a new "PCIe Modem
+     Configuration" with the next session number, both resamplers reset.
+   - **The uplink is silent for the first 5 s of the answered session.**
+     The AoC prints one uplink and one downlink sample about three times
+     a second ("PCIe Session N ... Tx: ... Rx: ..."). In the first 5 s
+     after each answer all sixteen uplink samples were below 80 (16-bit
+     values), in the three calls, while the downlink carried the owner's voice
+     at several thousand; after that the uplink had samples in the
+     hundreds and thousands.
+7. The same with a voice next to the palmtop: the laptop beside it counted
+   aloud through the call while the owner, in the far room, said nothing.
+   He heard the counting only in the room at first and through the phone
+   a few counts later. The uplink samples agree: below 80 for the first
+   5 s after the answer with the counting going on, then up to 2,560. So
+   the uplink carries nothing in those seconds, the palmtop's own side
+   included, and the "no echo" of results 3 to 6 is that silence.
+8. A call with no listener: the palmtop dialled a talking clock (NIST's
+   time line), nobody near it, 80 s. In the 50 s of ticks alone the uplink
+   stayed below 100 in all but 5 of 156 samples; in the two voice
+   announcements, a minute apart, it had samples of 21,188 and 27,913. So the echo is in the uplink the AoC sends, and it can be seen
+   without anyone listening.
+
+What this says: the APMg3 processor runs and has stock's tuning, and the
+echo still passes. What it doesn't say is why, or what the 5 s of silence
+are. One sample every 0.32 s is a rough level and no more.
+
 ## Next for the echo
+
+A call to a talking clock with `call-audio-watch.py` running is now the
+test, with no listener: the uplink's samples during the announcements
+against those during the ticks. To do, each on a fresh boot since the
+configuration is read at sitd's start:
+
+- The same call with `tegu_aec = no`, for the echo's level without the
+  tuning. If it is the same, the processor is passing the echo untouched.
+- A better level than one sample in 0.32 s: stock's in-call capture
+  (`Incall Capture Stream0` at `UL_DL`, the `audio_incall_cap_0` PCM),
+  which nothing here has opened during a call yet.
+- The speaker tuning's own layout, read from the owner's file with
+  `protoc --decode_raw`: it declares a two-channel reference and three
+  capture channels (the handset one a one-channel reference). Whether the
+  reference the processor gets on our route is what that layout expects,
+  both speakers and in step with the microphones, isn't checked.
+
 
 From our kernel's AoC driver and the owner's stock configuration
 (`vendor/etc/audio_platform_configuration.xml`, `mixer_paths_aidl.xml`):
