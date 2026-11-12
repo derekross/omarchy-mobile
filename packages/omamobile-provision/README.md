@@ -170,6 +170,16 @@ neither in what they write:
   working directory; the tools get that (they accept it, and each of them
   would otherwise unpack it for itself).
 
+- **The camera tool's emulator is `omamobile-unicorn`'s.**
+  `extract-camera-data` runs with `/usr/lib/omamobile-unicorn/python` as
+  its `PYTHONPATH`, so the `unicorn` it imports is that package's private
+  copy, built as upstream's own wheel is, whether or not the distribution's
+  `python-unicorn` is installed: that one (2.1.4-2) ends the tool with an
+  assertion in its first SVE instruction
+  ([omamobile-unicorn](../omamobile-unicorn/README.md)). `pyelftools` is
+  the distribution's. On a laptop that directory doesn't exist and the
+  Python that runs the tool finds its own `unicorn`, as before.
+
 They run under `LC_ALL=C`. The tools sort `MANIFEST` and
 `vendor-firmware.sha256` with the locale's collation, so a laptop in
 another locale (`en_US.UTF-8`) writes the same lines in another order.

@@ -124,7 +124,9 @@ expect() {
     test/fake-tools/extract-vendor-chroot -p gnss -o "$e/chroot-gnss" -w "$e/w" "$t/$2.inner.zip"
     test/fake-tools/extract-vendor-chroot -p modem -o "$e/chroot-modem" -w "$e/w" "$t/$2.inner.zip"
     test/fake-tools/extract-fingerprint-vendor -o "$e/fp-vendor" -w "$e/w" "$t/$2.inner.zip"
-    test/fake-tools/extract-camera-data --apex "$e/camera.apex" -d "$e/camera" )
+    # as the worker runs the camera tool: omamobile-unicorn's copy first
+    PYTHONPATH=/usr/lib/omamobile-unicorn/python PYTHONDONTWRITEBYTECODE=1 \
+      test/fake-tools/extract-camera-data --apex "$e/camera.apex" -d "$e/camera" )
 }
 for g in gen1 gen2; do
   python3 -I -B -c 'import sys, zipfile; z = zipfile.ZipFile(sys.argv[1]); open(sys.argv[2], "wb").write(z.read(z.namelist()[0]))' "$t/$g.zip" "$t/$g.inner.zip"

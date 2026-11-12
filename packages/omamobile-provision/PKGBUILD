@@ -10,10 +10,13 @@ license=(MIT)
 # What the extraction tools run (tools/extract-*): unzip; simg2img and
 # lpunpack from android-tools; debugfs from e2fsprogs; fsck.erofs from
 # erofs-utils; readelf from binutils; od, sha256sum and the rest from
-# coreutils; and for the camera step Python with unicorn and pyelftools.
+# coreutils; and for the camera step Python with pyelftools and unicorn.
+# unicorn is omamobile-unicorn's private copy (/usr/lib/omamobile-unicorn/python,
+# put first on the tool's module path): Arch Linux ARM's python-unicorn
+# 2.1.4-2 aborts in the tool's first SVE instruction (packages/omamobile-unicorn).
 # phone-smoke: systemd, pacman, util-linux (runuser), python.
 depends=(bash coreutils findutils grep sed gawk util-linux unzip android-tools e2fsprogs erofs-utils binutils
-         python python-unicorn python-pyelftools systemd pacman)
+         python omamobile-unicorn python-pyelftools systemd pacman)
 checkdepends=(e2fsprogs unzip binutils python)
 
 check() {

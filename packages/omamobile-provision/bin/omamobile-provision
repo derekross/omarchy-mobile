@@ -101,6 +101,11 @@ ROOT = os.environ.get("OMAMOBILE_PROVISION_ROOT", "")
 SCRATCH = bool(ROOT)
 TOOLS = os.environ.get("OMAMOBILE_PROVISION_TOOLS", "/usr/lib/omamobile-provision")
 PYTHON = os.environ.get("OMAMOBILE_PROVISION_PYTHON", sys.executable or "/usr/bin/python3")
+# omamobile-unicorn's private copy of the emulator extract-camera-data runs
+# in: first on that tool's module path, so it is the one imported whether or
+# not the distribution's python-unicorn (whose library aborts on the tool's
+# first SVE instruction) is installed. pyelftools is the distribution's.
+UNICORN_PATH = "/usr/lib/omamobile-unicorn/python"
 AS_ROOT = os.geteuid() == 0
 
 O_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -846,7 +851,7 @@ with open(src.fileno(), "rb", closefd=False) as f:
 """
 
 
-def run_tool(argv, work, stdin=None):
+def run_tool(argv, work, stdin=None, more_env=None):
     """One extraction program, unprivileged when this runs as root, with
     its temporary files in the working directory. Raises Fail with the end
     of its output."""
@@ -858,6 +863,7 @@ def run_tool(argv, work, stdin=None):
         for k in os.environ:
             if k.startswith("OMAMOBILE_PROVISION_FAKE_"):
                 env[k] = os.environ[k]
+    env.update(more_env or {})
     kw = {}
     if AS_ROOT:
         kw = {"user": EXTRACT_USER, "group": EXTRACT_USER, "extra_groups": []}
@@ -937,7 +943,10 @@ class Extraction:
         w = self.work
         # a second try starts from nothing
         run_tool(["rm", "-rf", w + "/camera"], w)
-        run_tool([PYTHON, self.tool("extract-camera-data"), "--apex", w + "/camera.apex", "-d", w + "/camera"], w)
+        # The tool runs as nobody, which can't write bytecode beside the
+        # private modules; as root (a test) it must not
+        run_tool([PYTHON, self.tool("extract-camera-data"), "--apex", w + "/camera.apex", "-d", w + "/camera"], w,
+                 more_env={"PYTHONPATH": UNICORN_PATH, "PYTHONDONTWRITEBYTECODE": "1"})
 
 
 def new_work(base, owner_dir=None):

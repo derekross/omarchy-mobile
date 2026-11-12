@@ -17,7 +17,10 @@
 #   --container PKG   run the phone side in the project's aarch64 build
 #                     container (Arch Linux ARM under qemu-user, as
 #                     tools/build-packages uses it) with PKG installed by
-#                     pacman, dependencies and all. Needs Docker and the
+#                     pacman, dependencies and all. omamobile-unicorn,
+#                     which no public repository has, is taken from PKG's
+#                     directory (a repository tools/build-packages built
+#                     has both). Needs Docker and the
 #                     build image (tools/build-packages makes it), and
 #                     pacman's access to the package servers. Slow. For a
 #                     package from `build-packages --local NAME`, set
@@ -95,13 +98,18 @@ else
   alarm_require_binfmt
   image=$(alarm_build_image "$repo")
   mkdir -p "$P" && chmod 777 "$t" "$P"
+  unicorn=$(ls "$(dirname "$container")"/omamobile-unicorn-*.pkg.tar.zst 2>/dev/null | head -n 1) || true
+  [[ -n $unicorn ]] || die "--container needs omamobile-unicorn's package beside $(basename "$container") (tools/build-packages packages/omamobile-unicorn)"
   docker run --rm --platform linux/arm64 -v "$factory:/factory.zip:ro" -v "$container:/pkg.pkg.tar.zst:ro" -v "$P:/out" \
+    -v "$unicorn:/omamobile-unicorn.pkg.tar.zst:ro" \
     -v "$ALARM_CACHE/pkg:/var/cache/pacman/pkg" "$image" bash -c '
       set -euo pipefail
       owner=$(stat -c %u:%g /out) cache_owner=$(stat -c %u:%g /var/cache/pacman/pkg)
       trap "chown -R $owner /out; chown -R $cache_owner /var/cache/pacman/pkg" EXIT
       pacman -Sy >/dev/null
-      pacman -U --noconfirm --needed /pkg.pkg.tar.zst >/dev/null
+      pacman -U --noconfirm --needed /pkg.pkg.tar.zst /omamobile-unicorn.pkg.tar.zst >/dev/null
+      # the camera step must pass with the private copy alone
+      ! pacman -Qq python-unicorn unicorn 2>/dev/null | grep -c . >/dev/null || { echo "error: the distribution unicorn is installed"; exit 1; }
       uname -m
       # as root: the extraction itself then runs as nobody, as on the phone
       omamobile-provision extract -o /out/x /factory.zip

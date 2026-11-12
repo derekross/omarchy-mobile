@@ -4,6 +4,10 @@
 # by the worker: OMAMOBILE_PROVISION_PYTHON is bash in these tests.
 source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 [[ $1 == --apex && $3 == -d ]] || { echo "stand-in camera: unexpected arguments" >&2; exit 2; }
+# The worker runs the real tool with omamobile-unicorn's private copy first
+# (and alone) on the module path, and with no other library named
+[[ ${PYTHONPATH:-} == /usr/lib/omamobile-unicorn/python && ${PYTHONDONTWRITEBYTECODE:-} == 1 && -z ${LIBUNICORN_PATH:-} ]] ||
+  { echo "stand-in camera: the private unicorn is not what the tool would import" >&2; exit 2; }
 fake_start camera ""
 [[ -s $2 ]] || { echo "stand-in camera: no APEX" >&2; exit 1; }
 GEN=$(cut -d' ' -f2 "$2")

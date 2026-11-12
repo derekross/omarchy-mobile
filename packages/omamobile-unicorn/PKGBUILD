@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: 0BSD
+#
+# Unicorn 2.1.4 (the CPU emulator tools/extract-camera-data runs the camera
+# HAL's tables in), built from upstream's source the way upstream's own
+# Python wheel is built, and installed where only omamobile-provision looks:
+# /usr/lib/omamobile-unicorn/python. It replaces, shadows and conflicts with
+# nothing: Arch Linux ARM's unicorn and python-unicorn can be installed
+# beside it, and nothing finds this copy unless it puts that directory on
+# its Python path.
+#
+# Why not the distribution's python-unicorn: its library is built with
+# CMAKE_BUILD_TYPE=None, which leaves assert() in, and Unicorn 2.1.4 never
+# fills the emulated CPU's table of SVE vector lengths (arm_cpu_sve_finalize
+# is commented out in qemu/target/arm/cpu.h), so the first SVE instruction
+# ends the process in sve_zcr_get_valid_len's assert (helper.c:5686).
+# Upstream's wheel is built by bindings/python/setup.py with
+# CMAKE_BUILD_TYPE=Release, CMake's -O3 -DNDEBUG: the assert is compiled
+# out and the vector length is ZCR_EL1's. README.md has the evidence.
+#  - -DCMAKE_BUILD_TYPE=Release: that one difference. test/all refuses a
+#    PKGBUILD without it, and build() ends by running the checks on what it
+#    built, so a library with the abort is never packaged, --nocheck or not.
+#  - -DUNICORN_ARCH=aarch64: the tool emulates AArch64 only; the other nine
+#    targets are most of a full build's time under qemu-user.
+#  - The binding is bindings/python/unicorn as it is in the tarball (pure
+#    Python over ctypes, the same files as in the wheel), with the library
+#    in its lib/ directory, where the binding looks before the system's.
+#    No Python version is in the path, so a Python upgrade needs no rebuild.
+
+pkgname=omamobile-unicorn
+pkgver=2.1.4
+pkgrel=1
+pkgdesc="Omarchy Mobile: the Unicorn CPU emulator (AArch64 target) and its Python binding, built as upstream's wheel is and kept private to omamobile-provision's camera step"
+arch=(aarch64)
+url='https://github.com/unicorn-engine/unicorn'
+license=(GPL-2.0-only)
+depends=(glibc python)
+makedepends=(cmake python-pyelftools)
+source=("unicorn-$pkgver.tar.gz::https://github.com/unicorn-engine/unicorn/archive/refs/tags/$pkgver.tar.gz")
+sha256sums=('ea8863f095a0136388694e5a6063afd9bb7650e30243dd6251af59c5ce5601f4')
+_private=usr/lib/omamobile-unicorn/python
+
+_stage() {
+  # The private tree, as package() installs it: $1 is its root
+  local src=$srcdir/unicorn-$pkgver d=$1/$_private/unicorn f
+  rm -rf "$1"
+  install -d "$d/lib" "$d/unicorn_py3/arch"
+  for f in "$src"/bindings/python/unicorn/*.py "$src"/bindings/python/unicorn/py.typed; do install -m644 "$f" "$d/"; done
+  install -m644 "$src"/bindings/python/unicorn/unicorn_py3/*.py "$d/unicorn_py3/"
+  install -m644 "$src"/bindings/python/unicorn/unicorn_py3/arch/*.py "$d/unicorn_py3/arch/"
+  install -m755 "$srcdir/build/libunicorn.so.2" "$d/lib/libunicorn.so.2"
+}
+
+build() {
+  cmake -S "unicorn-$pkgver" -B build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DUNICORN_ARCH=aarch64 \
+    -DUNICORN_BUILD_TESTS=OFF \
+    -DUNICORN_LEGACY_STATIC_ARCHIVE=OFF \
+    -DUNICORN_INSTALL=OFF \
+    -Wno-dev
+  cmake --build build --target unicorn
+  _stage "$srcdir/stage"
+  "$startdir/test/all" --built "$srcdir/stage/$_private"
+}
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  _stage "$srcdir/stage"
+  cp -a "$srcdir/stage/usr" "$pkgdir/"
+  cd "unicorn-$pkgver"
+  install -Dm644 COPYING COPYING.LGPL2 COPYING_GLIB AUTHORS.TXT CREDITS.TXT -t "$pkgdir/usr/share/licenses/$pkgname/"
+  install -Dm644 "$startdir/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
