@@ -82,3 +82,5 @@ echo "# tests/review-lessons"
 tests/review-lessons
 echo "# tests/factory-index"   # the build index of Google's factory images, against a made-up zip
 tests/factory-index
+echo "# tests/phone-demo-notes"
+tests/phone-demo-notes
