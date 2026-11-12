@@ -97,6 +97,30 @@ ok "a new series on a branch builds below main's first of it ($v)"
 ok "--main names the line to count on"
 git checkout -q main
 
+# Edits not committed yet: their own version, one per edit, between the
+# commit's and the next.
+change code; v1=$(pv demo)
+[[ $v1 =~ ^0\.3\.4\.d[0-9a-f]{7}$ ]] || fail "an uncommitted edit: got $v1"
+ok "an uncommitted edit builds above the commit ($v1)"
+change code; v2=$(pv demo)
+[[ $v2 =~ ^0\.3\.4\.d[0-9a-f]{7}$ && $v2 != "$v1" ]] || fail "a second edit: got $v2 after $v1"
+ok "each edit is a new version ($v2)"
+is "$(pv --rev HEAD demo)" 0.3.4 "--rev names the commit alone"
+git checkout -q -- packages/demo
+is "$(pv demo)" 0.3.4 "undone edits build the commit's version"
+change new-file; v1=$(pv demo)
+[[ $v1 =~ \.d[0-9a-f]{7}$ ]] || fail "a new file not added yet: got $v1"
+ok "a new file counts before git add ($v1)"
+rm packages/demo/new-file
+mkdir -p packages/demo/src && echo x > packages/demo/src/ignored && printf '%s\n' src/ .pkgver > packages/.gitignore
+git add packages/.gitignore && commit "ignore makepkg's src and .pkgver, as this repository does"
+is "$(pv demo)" 0.3.4 "a gitignored file (makepkg's src/) doesn't"
+mkdir -p packages/newpkg && echo 0.1 > packages/newpkg/version
+v=$(pv newpkg)
+[[ $v =~ ^0\.1\.0pre0\.d[0-9a-f]{7}$ ]] || fail "an uncommitted package: got $v"
+ok "a package not committed yet builds below its first commit ($v)"
+rm -rf packages/newpkg packages/demo/src
+
 # The copy a build container or the phone gets: .pkgver, and the PKGBUILD
 # reads it there without git.
 (
@@ -135,6 +159,9 @@ if command -v vercmp >/dev/null; then
   lt() { [[ $(vercmp "$1" "$2") == -1 ]] || fail "vercmp $1 < $2"; }
   lt 0.3.4 0.3.4.1.gabc1234; lt 0.3.4.1.gfffffff 0.3.4.2.g0000000; lt 0.3.4.2.g0000000 0.3.5
   lt 0.1.0pre1.gabc1234 0.1.0; lt 0.1.0pre9.gabc1234 0.1.0pre10.gabc1234; lt 0.4.0pre3.gabc1234 0.4.0
+  lt 0.3.4 0.3.4.dabc1234; lt 0.3.4.dfff1234 0.3.5; lt 0.3.4.dfff1234 0.3.4.1.g0000000
+  lt 0.3.4.1.gabc1234 0.3.4.1.gabc1234.d0000000; lt 0.3.4.1.gfff1234.dfff1234 0.3.4.2.g0000000
+  lt 0.1.0pre0.dfff1234 0.1.0pre1.g0000000
   ok "pacman orders branch builds between main's builds"
 else
   ok "# skip: no vercmp for pacman's order"

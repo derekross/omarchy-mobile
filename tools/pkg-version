@@ -28,6 +28,12 @@
 # touch the package builds main's version. A package (or a series) that main
 # doesn't have yet builds as 0.1.0pre1.g4f2a9c1, below main's first 0.1.0.
 #
+# Edits not committed yet (without --rev) add the package's tree as it
+# stands: 0.2.130.d5e0b7a2, a new version for each edit, above the commit's
+# and below the next one, so build-packages builds them and pacman takes
+# them over the commit's build. A package not committed at all builds as
+# 0.1.0pre0.d5e0b7a2.
+#
 # It needs the history: in a shallow clone or a copy without .git it refuses
 # rather than guess. Tools that build from a copy (build-packages,
 # repo-build, phone-install-package) run it here first and put the result in
@@ -38,11 +44,11 @@
 set -euo pipefail
 die() { echo "pkg-version: $*" >&2; exit 1; }
 
-main=${OMAMOBILE_MAIN_REF:-} rev=HEAD mode=version want=
+main=${OMAMOBILE_MAIN_REF:-} rev=HEAD explicit_rev='' mode=version want=
 while (($#)); do
   case $1 in
     --main) main=${2:?--main needs a ref}; shift 2 ;;
-    --rev) rev=${2:?--rev needs a commit}; shift 2 ;;
+    --rev) rev=${2:?--rev needs a commit} explicit_rev=1; shift 2 ;;
     --history) mode=history; shift ;;
     --commit) mode=commit; shift ;;
     -h|--help) source "$(dirname -- "${BASH_SOURCE[0]}")/lib/usage.sh"; usage_from_header "$0"; exit 0 ;;
@@ -137,24 +143,57 @@ case $mode in
     die "$pkg $want was never built on $main" ;;
 esac
 
-[[ -n $(git ls-tree "$rev" -- "$path/version") ]] || die "$path/version doesn't exist at $rev"
-# The history skips a version file that doesn't parse, so without this its
-# commit would build under the number before it
-parse "$(file_at "$rev")" >/dev/null || die "$path/version doesn't hold a version (0.2 or 0.2.5) at $rev"
-if git merge-base --is-ancestor "$rev" "$main"; then
-  v=$(walk "$rev" | tail -1 | cut -d' ' -f2)
-  [[ -n $v ]] || die "$path/version doesn't hold a version (0.2 or 0.2.5) at $rev"
-  echo "$v"
+# The package as it stands in the working tree, when that isn't HEAD's: a
+# tree id over its tracked and new files (gitignored ones left out, as git
+# leaves them), so each edit is its own version and a build of it is never
+# taken for the commit's
+worktree() {
+  local idx t
+  idx=$(mktemp -u)
+  if ! { GIT_INDEX_FILE=$idx git read-tree HEAD && GIT_INDEX_FILE=$idx git add -A -- "$path" &&
+    t=$(GIT_INDEX_FILE=$idx git write-tree); }; then
+    rm -f "$idx"
+    die "can't read the working tree of $path"
+  fi
+  rm -f "$idx"
+  t=$(git rev-parse -q --verify "$t:$path") || return 0
+  [[ $t == "$(git rev-parse -q --verify "HEAD:$path" || true)" ]] || echo "${t:0:7}"
+}
+local_edits=
+[[ -n $explicit_rev ]] || local_edits=$(worktree)
+
+# The version REV builds at, from the history alone
+committed() {
+  [[ -n $(git ls-tree "$rev" -- "$path/version") ]] || die "$path/version doesn't exist at $rev"
+  # The history skips a version file that doesn't parse, so without this its
+  # commit would build under the number before it
+  parse "$(file_at "$rev")" >/dev/null || die "$path/version doesn't hold a version (0.2 or 0.2.5) at $rev"
+  if git merge-base --is-ancestor "$rev" "$main"; then
+    v=$(walk "$rev" | tail -1 | cut -d' ' -f2)
+    [[ -n $v ]] || die "$path/version doesn't hold a version (0.2 or 0.2.5) at $rev"
+    echo "$v"
+    return 0
+  fi
+
+  base=$(git merge-base "$rev" "$main") || die "$rev shares no history with $main"
+  n=$(git rev-list --count --first-parent "$base..$rev" -- "$path")
+  v=$(walk "$base" | tail -1 | cut -d' ' -f2)
+  if ((n == 0)) && [[ -n $v ]]; then echo "$v"; return 0; fi
+  read -r s z < <(parse "$(file_at "$rev")") || die "$path/version doesn't hold a version (0.2 or 0.2.5) at $rev"
+  sha=$(git rev-parse --short=7 "$rev")
+  # A new package, or a branch that starts a new series: main's first build
+  # of it will be S.Z, and pacman orders 0.1.0pre1 below 0.1.0.
+  if [[ -z $v || ${v%.*} != "$s" ]]; then echo "$s.${z:-0}pre$n.g$sha"; return 0; fi
+  echo "$v.$n.g$sha"
+}
+
+if [[ -n $local_edits && -z $(git ls-tree HEAD -- "$path/version") ]]; then
+  # A package not committed yet: below its first commit's 0.1.0pre1
+  read -r s z < <(parse "$(cat "$path/version" 2>/dev/null)") ||
+    die "$path/version doesn't hold a version (0.2 or 0.2.5)"
+  echo "$s.${z:-0}pre0.d$local_edits"
   exit 0
 fi
-
-base=$(git merge-base "$rev" "$main") || die "$rev shares no history with $main"
-n=$(git rev-list --count --first-parent "$base..$rev" -- "$path")
-v=$(walk "$base" | tail -1 | cut -d' ' -f2)
-if ((n == 0)) && [[ -n $v ]]; then echo "$v"; exit 0; fi
-read -r s z < <(parse "$(file_at "$rev")") || die "$path/version doesn't hold a version (0.2 or 0.2.5) at $rev"
-sha=$(git rev-parse --short=7 "$rev")
-# A new package, or a branch that starts a new series: main's first build
-# of it will be S.Z, and pacman orders 0.1.0pre1 below 0.1.0.
-if [[ -z $v || ${v%.*} != "$s" ]]; then echo "$s.${z:-0}pre$n.g$sha"; exit 0; fi
-echo "$v.$n.g$sha"
+v=$(committed)
+# Edits not committed yet: above the commit's version, below the next commit's
+echo "$v${local_edits:+.d$local_edits}"
