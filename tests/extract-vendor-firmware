@@ -13,7 +13,7 @@
 # short write, also under a file size limit, a failed sanity check, a
 # missing camera APEX) leaves the previous outputs and the -c file byte
 # for byte, so an older file can't pass for a missing one; an image whose
-# build.prop is missing or empty is refused, as its device can't be
+# build.prop is missing, empty or not copied is refused, as it can't be
 # checked, and staged with -f; a -c that is a directory or inside the
 # outputs is refused; an -o that resolves to / is refused before anything
 # is written; and a move that fails while publishing puts the previous
@@ -238,9 +238,11 @@ pass_since "$n" "a registry short write under a file size limit: refused, the pr
 # Without a readable build.prop the device check can't run: refused, unless -f
 rm -rf "$t/v2-noprop"; cp -r "$t/v2" "$t/v2-noprop"; rm "$t/v2-noprop/build.prop"
 rm -rf "$t/v2-emptyprop"; cp -r "$t/v2" "$t/v2-emptyprop"; : > "$t/v2-emptyprop/build.prop"
-refuses "no build.prop (ext4)" "vendor.img has no build.prop" "$t/v2-noprop" "$t/ext4.img"
-refuses "no build.prop (EROFS)" "vendor.img has no build.prop" "$t/v2-noprop" "$t/erofs.img"
-refuses "an empty build.prop" "vendor.img has no build.prop" "$t/v2-emptyprop" "$t/ext4.img"
+rm -rf "$t/v2-propfail"; cp -r "$t/v2" "$t/v2-propfail"; echo build.prop > "$t/v2-propfail/.fail-dump"
+refuses "no build.prop (ext4)" "build.prop can't be read from vendor.img" "$t/v2-noprop" "$t/ext4.img"
+refuses "no build.prop (EROFS)" "build.prop can't be read from vendor.img" "$t/v2-noprop" "$t/erofs.img"
+refuses "an empty build.prop" "build.prop can't be read from vendor.img" "$t/v2-emptyprop" "$t/ext4.img"
+refuses "a build.prop whose copy fails" "build.prop can't be read from vendor.img" "$t/v2-propfail" "$t/ext4.img"
 o=$t/noprop-forced
 seed "$o"
 if run "$t/v2-noprop" "$t/ext4.img" -f -o "$o" && [[ $(listed "$o") == "$CHEETAH_FILES" ]]; then
@@ -377,7 +379,7 @@ if realdfs=$(command -v debugfs) && mkfs.ext4 -q -F -d "$t/v2" "$t/real.img" 8M 
   before=$(snap "$o")
   if "$EVF" -w "$t/work" -o "$o" "$t/real-noprop.img" > "$t/log" 2>&1; then
     fail "real ext4: an image without build.prop is refused"
-  elif ! grep -qF "vendor.img has no build.prop" "$t/log" || [[ $(snap "$o") != "$before" ]]; then
+  elif ! grep -qF "build.prop can't be read from vendor.img" "$t/log" || [[ $(snap "$o") != "$before" ]]; then
     cat "$t/log"; fail "real ext4: an image without build.prop is refused, the previous outputs untouched"
   else
     pass "real ext4: an image without build.prop is refused, the previous outputs untouched"
