@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Maintainer: Martin Lund <mrlund@hotmail.com>
 pkgname=omamobile-device-dodge
-pkgver=$(cat "${startdir:-.}/version")
+pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")
 pkgrel=1
 pkgdesc="Omarchy Mobile support for the OnePlus 13 (dodge): reboot-to-fastboot and USB networking"
 arch=(aarch64)

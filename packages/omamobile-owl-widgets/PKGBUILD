@@ -5,7 +5,7 @@
 # conformance suite (status.json), and an index built with our compiler.
 # No previews (docs/WIDGET-INTEROP-PLAN.md Q10).
 pkgname=omamobile-owl-widgets
-pkgver=$(cat "${startdir:-.}/version")
+pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")
 pkgrel=1
 _commit=b63886b
 pkgdesc="Omarchy Mobile: OWL home-screen widgets from the omarchy-widgets store (the built-ins and the Store tab), checked against our runtime"

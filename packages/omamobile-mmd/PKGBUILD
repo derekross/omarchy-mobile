@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Maintainer: Derek Ross <derekross@gmail.com>
 pkgname=omamobile-mmd
-pkgver=$(cat "${startdir:-.}/version")
+pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")
 pkgrel=1
 pkgdesc="Omarchy Mobile ModemManager-compatible bridge: org.freedesktop.ModemManager1 served from omamobile-sitd"
 arch=(aarch64)

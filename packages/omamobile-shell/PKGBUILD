@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Maintainer: Derek Ross <derekross@gmail.com>
 pkgname=omamobile-shell
-pkgver=$(cat "${startdir:-.}/version")
+pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")
 pkgrel=1
 pkgdesc="Omarchy Mobile's phone profile for the Omarchy shell: status bar, quick settings, launcher"
 arch=(any)

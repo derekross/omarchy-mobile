@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Maintainer: Derek Ross <derekross@gmail.com>
 pkgname=omamobile-audio
-pkgver=$(cat "${startdir:-.}/version")
+pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")
 pkgrel=1
 pkgdesc="Omarchy Mobile audio for the Pixel 7 Pro, Pixel 6 Pro and Pixel 9a: UCM profiles and PipeWire rules for the AoC sound card, Pixel 7 Pro speaker protection with the factory calibration"
 arch=(any)

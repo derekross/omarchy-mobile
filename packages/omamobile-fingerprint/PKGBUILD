@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Maintainer: Derek Ross <derekross@gmail.com>
 pkgname=omamobile-fingerprint
-pkgver=$(cat "${startdir:-.}/version")
+pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")
 pkgrel=1
 pkgdesc="Omarchy Mobile fingerprint for the Pixel 7 Pro: Google's HAL in a chroot, bridged to fprintd"
 arch=(aarch64)

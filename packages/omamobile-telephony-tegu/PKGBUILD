@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 pkgname=omamobile-telephony-tegu
-pkgver=$(cat "${startdir:-.}/version")
+pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")
 pkgrel=1
 pkgdesc="Opt-in Pixel 9a Phone/Messages bridge attachment to an already running sitd"
 arch=(any)
