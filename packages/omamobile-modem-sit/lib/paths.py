@@ -43,7 +43,7 @@ DEFAULTS = {
     # Extra modem-managed data profiles, one per line (data_call.parse_profile).
     'profiles': {},
     'data': {'route': 'yes', 'metric': '700', 'roaming': 'yes'},
-    'control': {'group': 'wheel'},
+    'control': {'group': 'wheel', 'follow_screen': 'no'},
     'audio': {'card': 'none', 'mic_boost_db': '6', 'earpiece': 'yes'},
 }
 
