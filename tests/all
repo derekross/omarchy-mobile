@@ -25,7 +25,8 @@
 # against stand-ins for docker and repo, tools/repo-publish --from-main's
 # copy of the prebuilt binaries into a fixture's publish tree,
 # tools/repo-publish's staging, tools/extract-vendor-firmware's output
-# generations (made-up files, no factory image), the callers of
+# generations (made-up files, no factory image), the two chroot
+# extractors' message when build.prop can't be read, the callers of
 # tools/alpine-fetch.py stopping when it fails, and its dependency
 # resolution against synthetic indexes, and the tools' --help from their
 # header comments (tools/lib/usage.sh).
@@ -78,3 +79,5 @@ tests/module-load-once
 # don't meet in the same line
 echo "# tests/factory-index"   # the build index of Google's factory images, against a made-up zip
 tests/factory-index
+echo "# tests/chroot-extractors"
+tests/chroot-extractors
