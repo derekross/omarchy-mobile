@@ -7,6 +7,9 @@
 #   tools/pkg-version --history PACKAGE              "<commit> <version>" for every
 #                                                    commit on main's line that
 #                                                    touched the package
+#   tools/pkg-version --history --count-from C PACKAGE  the same, as if every
+#                                                    commit from C counted (tests
+#                                                    replay history with it)
 #   tools/pkg-version --commit PACKAGE VERSION       the commit that version was built from
 #
 # PACKAGE is a name (omamobile-shell) or its directory (packages/omamobile-shell).
@@ -17,9 +20,16 @@
 # main (the first-parent line of REF, default origin/main) every commit that
 # touches packages/<name> is the next number in the series, so two merges can
 # never ship one number with different contents, and a merge needs no version
-# change at all. The count starts at the commit that added this tool, from the
-# version file as it stood then, so no number already published comes back.
-# Writing a new series (0.3) starts it at 0 (or at its third number, if given).
+# change at all. Writing a new series (0.3) starts it at 0 (or at its third
+# number, if given).
+#
+# A commit counts only when its PKGBUILD reads .pkgver, the version this tool
+# hands a build: the package opts in, not the tool. Before that the version
+# file is the version, as it was published, and the first commit that opts in
+# is the next number after it, so no published number comes back. Where this
+# tool lives doesn't matter (moving it can't restart a count), and a package
+# that keeps a written version (the kernel, the keyring, a device package that
+# ships boot files) never counts.
 #
 # Off main, a build is main's version at the merge base, then the branch's
 # own commits that touch the package and the commit: 0.2.130.1.g4f2a9c1.
@@ -39,17 +49,20 @@
 # repo-build, phone-install-package) run it here first and put the result in
 # the copy as .pkgver, which the PKGBUILDs read before asking git.
 #
-# OMAMOBILE_PKGVER_SINCE=<commit> moves the start of the count (tests replay
-# history with it); OMAMOBILE_MAIN_REF sets REF like --main.
+# OMAMOBILE_MAIN_REF sets REF like --main. On a fork, point it at this
+# repository's main (git fetch upstream; OMAMOBILE_MAIN_REF=upstream/main):
+# a fork's own main that is behind gives branch builds that sort below the
+# published packages.
 set -euo pipefail
 die() { echo "pkg-version: $*" >&2; exit 1; }
 
-main=${OMAMOBILE_MAIN_REF:-} rev=HEAD explicit_rev='' mode=version want=
+main=${OMAMOBILE_MAIN_REF:-} rev=HEAD explicit_rev='' mode=version want= count_from=
 while (($#)); do
   case $1 in
     --main) main=${2:?--main needs a ref}; shift 2 ;;
     --rev) rev=${2:?--rev needs a commit} explicit_rev=1; shift 2 ;;
     --history) mode=history; shift ;;
+    --count-from) count_from=${2:?--count-from needs a commit}; shift 2 ;;
     --commit) mode=commit; shift ;;
     -h|--help) source "$(dirname -- "${BASH_SOURCE[0]}")/lib/usage.sh"; usage_from_header "$0"; exit 0 ;;
     -*) die "unknown option $1" ;;
@@ -59,6 +72,8 @@ done
 (($# >= 1)) || die "usage: tools/pkg-version [--main REF] [--rev REV] PACKAGE"
 pkg=${1%/}; pkg=${pkg##*/}
 [[ $mode != commit ]] || want=${2:?--commit needs PACKAGE VERSION}
+# Only for a listing: a build's version never depends on it
+[[ -z $count_from || $mode == history ]] || die "--count-from goes with --history only"
 [[ $pkg =~ ^[a-z0-9][a-z0-9.+_-]*$ ]] || die "not a package name: $1"
 
 # The repository: the package directory's, else this tool's.
@@ -69,7 +84,6 @@ cd -- "$top"
 [[ $(git rev-parse --is-shallow-repository) == false ]] ||
   die "a shallow clone can't count versions: git fetch --unshallow"
 path=packages/$pkg
-self=tools/pkg-version
 
 if [[ -z $main ]]; then
   for main in origin/main main ''; do
@@ -89,47 +103,42 @@ parse() {
 }
 file_at() { git show "$1:$path/version" 2>/dev/null; }
 
-# Where the count starts on C's first-parent line: the commit that added this
-# tool (or OMAMOBILE_PKGVER_SINCE), empty if C comes before it.
-since() {
-  local c=$1 k
-  if [[ -n ${OMAMOBILE_PKGVER_SINCE:-} ]]; then
-    k=$(git rev-parse --verify "$OMAMOBILE_PKGVER_SINCE^{commit}") || die "no such commit $OMAMOBILE_PKGVER_SINCE"
-    git merge-base --is-ancestor "$k" "$c" && echo "$k"
-    return 0
+# Does commit F's PKGBUILD read .pkgver (its version counted)? With
+# --count-from, every commit in FROM (filled by walk) counts instead.
+counts() {
+  if [[ -n $count_from ]]; then
+    [[ -n ${from[$1]:-} ]]
+    return
   fi
-  git rev-list --first-parent "$c" -- "$self" | tail -1   # tail: head would SIGPIPE git under pipefail
+  git show "$1:$path/PKGBUILD" 2>/dev/null | grep -c -F '/.pkgver"' >/dev/null
 }
 
 # "<commit> <version>" for each commit on C's first-parent line touching the
-# package, oldest first. Before the start of the count the version file is
-# the version, as it was published.
+# package, oldest first. A commit that doesn't count has its version file's
+# number, as it was published.
 walk() {
-  local c=$1 k s z S="" v=-1 f
-  k=$(since "$c")
-  local -a before=() after=()
-  if [[ -z $k ]]; then
-    mapfile -t before < <(git rev-list --first-parent --reverse "$c" -- "$path")
-  else
-    mapfile -t before < <(git rev-list --first-parent --reverse "$k^" -- "$path" 2>/dev/null)
-    mapfile -t after < <(git rev-list --first-parent --reverse "$k^..$c" -- "$path" 2>/dev/null ||
-      git rev-list --first-parent --reverse "$c" -- "$path")
+  local c=$1 f s z S="" v=-1
+  local -A from=()
+  if [[ -n $count_from ]]; then
+    local k
+    k=$(git rev-parse --verify "$count_from^{commit}") || die "no such commit $count_from"
+    if git merge-base --is-ancestor "$k" "$c"; then
+      while read -r f; do
+        from[$f]=1
+        [[ $f != "$k" ]] || break
+      done < <(git rev-list --first-parent "$c")
+    fi
   fi
-  for f in "${before[@]}"; do
+  while read -r f; do
     read -r s z < <(parse "$(file_at "$f")") || continue
-    S=$s v=${z:-0}
-    echo "$f $S.$v"
-  done
-  for f in "${after[@]}"; do
-    read -r s z < <(parse "$(file_at "$f")") || continue
-    if [[ $s != "$S" ]]; then
-      S=$s v=${z:-0}
-    else
+    if [[ $s == "$S" ]] && counts "$f"; then
       v=$((v + 1))
       [[ -z $z ]] || ((z <= v)) || v=$z
+    else
+      S=$s v=${z:-0}
     fi
     echo "$f $S.$v"
-  done
+  done < <(git rev-list --first-parent --reverse "$c" -- "$path")
 }
 
 case $mode in

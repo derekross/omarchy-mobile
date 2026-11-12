@@ -1,12 +1,13 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # tools/pkg-version (and tools/lib/pkg-tar.sh) against a throwaway repository:
-# the count from the commit that added the tool, a third number as a floor
-# only, two PRs that wrote the same number, a new series, branch builds, and
-# the refusals without history. Then a replay of this repository's own
-# history as if the count had started at its first commit: no package may
-# keep or lower its version across a commit that touched it, or fall below
-# the number its version file gave.
+# the count from the commit whose PKGBUILD opts in, a third number as a floor
+# only, two PRs that wrote the same number, a new series, branch builds, a
+# package that keeps a written version, a moved tool, and the refusals
+# without history. Then this repository's own rules (boot-file packages keep
+# written versions) and a replay of its history as if the count had started
+# at its first commit: no package may keep or lower its version across a
+# commit that touched it, or fall below the number its version file gave.
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 t=$(mktemp -d)
@@ -32,19 +33,23 @@ change code; commit "demo: a change that forgot its bump"
 cp "$here/tools/lib/pkg-tar.sh" tools/lib/
 echo "pkgname=demo" > packages/demo/PKGBUILD
 cat >> packages/demo/PKGBUILD <<'EOF'
-pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")
+pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
 EOF
 commit "demo: a PKGBUILD"
 is "$(git show HEAD~1:packages/demo/version)" 0.2.5 "fixture"
+cp -r packages/demo packages/kept; commit "kept: a package that keeps its written version"
 
-# The tool lands: the count starts here, from the file as it stood.
+# The tool lands; nothing counts until a PKGBUILD reads .pkgver.
 cp "$here/tools/pkg-version" tools/; commit "tools/pkg-version"
 is "$(pv demo)" 0.2.5 "the commit that adds the tool doesn't change a package's version"
+sed -i 's|^pkgver=.*|pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null \|\| "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")|' packages/demo/PKGBUILD
+commit "demo: read the counted version"
+is "$(pv demo)" 0.2.6 "the commit that opts in is the next number after the published one"
 change code; commit "demo: a change, no bump"
-is "$(pv demo)" 0.2.6 "a commit touching the package is the next number"
+is "$(pv demo)" 0.2.7 "a commit touching the package is the next number"
 echo 0.2.6 > packages/demo/version; change code; commit "demo 0.2.6: an old-style bump to a taken number"
-is "$(pv demo)" 0.2.7 "a third number at or below the count changes nothing"
+is "$(pv demo)" 0.2.8 "a third number at or below the count changes nothing"
 echo 0.2.20 > packages/demo/version; commit "demo 0.2.20: a jump"
 is "$(pv demo)" 0.2.20 "a higher third number is a floor"
 c20=$(git rev-parse HEAD)
@@ -56,9 +61,16 @@ change code; commit "demo: a change"
 is "$(pv demo)" 0.3.1 "and counts on"
 is "$(pv --commit demo 0.2.20)" "$c20" "--commit finds the commit a version was built from"
 is "$(pv --commit demo 0.2.5)" "$(git rev-list --max-parents=0 HEAD)" "--commit finds a version from before the tool"
-is "$(pv --history demo | wc -l)" 9 "--history lists every commit that touched the package"
+is "$(pv --history demo | wc -l)" 10 "--history lists every commit that touched the package"
 pv --commit demo 0.9.9 >/dev/null && fail "an unknown version is refused"
 ok "an unknown version is refused"
+change code kept; commit "kept: a change, no bump"
+is "$(pv kept)" 0.2.5 "a package whose PKGBUILD doesn't read .pkgver keeps its written version"
+echo 0.2.6 > packages/kept/version; commit "kept 0.2.6"
+is "$(pv kept)" 0.2.6 "and takes the next one when it is written"
+is "$(OMAMOBILE_PKGVER_SINCE=$(git rev-list --max-parents=0 HEAD) pv demo)" 0.3.1 "the old start override in the environment changes nothing"
+pv --count-from HEAD demo >/dev/null && fail "--count-from is refused without --history"
+ok "--count-from is refused without --history"
 
 # Two PRs both write 0.3.2, squash-merged one after the other: the merge
 # shows no conflict, and each lands with its own number.
@@ -77,6 +89,16 @@ ok "a branch build is main's version at the base, its own commits and the commit
 git checkout -q -b pr-c; change c; commit "c1"; change c; commit "c2"
 git checkout -q main; git merge -q --no-ff -m "Merge pr-c" pr-c
 is "$(pv demo)" 0.3.4 "a merge commit counts once, not per commit it brings"
+
+# The tool moves (and its PKGBUILD line with it): one more number, never a
+# restart from the stale version file.
+git checkout -q -b moved
+mkdir -p tools/bin && git mv tools/pkg-version tools/bin/pkg-version
+sed -i 's|tools/pkg-version|tools/bin/pkg-version|' packages/demo/PKGBUILD; commit "tools: move pkg-version"
+is "$(tools/bin/pkg-version --main moved demo)" 0.3.5 "moving the tool is one more number"
+change code; commit "demo: after the move"
+is "$(tools/bin/pkg-version --main moved demo)" 0.3.6 "and the count goes on"
+git checkout -q main
 
 # Branch builds against main.
 git checkout -q -b other; echo x > README.md; commit "elsewhere"
@@ -193,6 +215,18 @@ done
 ((ran >= 5)) || fail "only $ran of $shipped installs ran here"
 ok "the $shipped packages that ship a version file hand it pkgver, and the $ran installs that run here write it"
 
+# A package that ships boot files keeps a written version (they reach
+# release phones' slot B only after the maintainer has booted them).
+boot=0
+for i in packages/*/install; do
+  grep -c OMAMOBILE_BOOT_FILES "$i" >/dev/null || continue
+  p=$(basename "$(dirname "$i")")
+  grep -c -F '/.pkgver"' "packages/$p/PKGBUILD" >/dev/null && fail "$p ships boot files and counts its version"
+  boot=$((boot + 1))
+done
+((boot >= 1)) || fail "no package ships boot files: the pattern no longer matches"
+ok "the $boot package(s) that ship boot files keep a written version"
+
 # This repository's own history, replayed from its first commit.
 if [[ $(git rev-parse --is-shallow-repository) == true ]]; then
   ok "# skip: a shallow clone has no history to replay"
@@ -201,7 +235,7 @@ fi
 first=$(git rev-list --max-parents=0 HEAD | tail -1)
 checked=0 commits=0
 for f in packages/*/PKGBUILD; do
-  grep -qF tools/pkg-version "$f" || continue
+  grep -c -F '/.pkgver"' "$f" >/dev/null || continue
   p=$(basename "$(dirname "$f")")
   prev=
   while read -r c v; do
@@ -214,7 +248,7 @@ for f in packages/*/PKGBUILD; do
       [[ $(printf '%s\n' "$file" "$v" | sort -V | tail -1) == "$v" ]] || fail "$p: $v at $c is below its file's $file"
     fi
     prev=$v commits=$((commits + 1))
-  done < <(OMAMOBILE_PKGVER_SINCE=$first tools/pkg-version --main HEAD --history "$p")
+  done < <(tools/pkg-version --main HEAD --history --count-from "$first" "$p")
   checked=$((checked + 1))
 done
 ok "replayed $checked packages over $commits commits from the first one: every commit a new number, none below its file's"

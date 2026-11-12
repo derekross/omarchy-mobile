@@ -4,7 +4,7 @@
 # history (the build container, the phone): the directory as it is
 # (including gitignored prebuilt files the PKGBUILDs install), minus
 # makepkg's work directories and old packages, plus .pkgver with the version
-# tools/pkg-version works out here, for PKGBUILDs that ask it.
+# tools/pkg-version works out here, for PKGBUILDs that read it.
 #
 #   source tools/lib/pkg-tar.sh
 #   pkg_tar packages/<name> | tar xf - -C DEST
@@ -14,7 +14,7 @@
 pkg_tar() {
   local dir=${1%/} name tmp v='' extra=()
   name=$(basename "$dir")
-  if grep -qF 'tools/pkg-version' "$dir/PKGBUILD"; then
+  if grep -c -F '/.pkgver"' "$dir/PKGBUILD" >/dev/null; then
     v=$("$(dirname -- "${BASH_SOURCE[0]}")/../pkg-version" "$dir") || return 1
   fi
   tmp=$(mktemp -d)
