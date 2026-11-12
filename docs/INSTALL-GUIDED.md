@@ -261,10 +261,15 @@ what was on the phone may already be erased; or Omarchy Mobile is written
 and what was done stays done. A stop that a rerun can get past adds "Run
 this command again to go on from here"; one that a rerun can't get past as
 things are (another model, another phone than the record's, no current
-slot, slot B, the bootloader slots, a file that doesn't fit, a phone that tells no
-bootloader or baseband version, another release's record, a phone that
-tells no serial, a failed required check) doesn't, and its own text says
-what has to change. A write that fails partway has its own message: the data may be
+slot, slot B, the bootloader slots or a `--bootloader-slots-match` that
+isn't the phone's version, a file that doesn't fit, a phone that tells no
+bootloader or baseband version, a build that isn't tested or isn't listed
+while the newest build isn't tested either, another release's record, a
+phone that tells no serial, a failed required check) doesn't, and its own
+text says what has to change. The stops of the factory image step (a
+download that is too large or has another SHA-256, a recorded image that
+is for another build) are of the first kind: the next run downloads or
+takes the file again. A write that fails partway has its own message: the data may be
 gone, Android on slot A is untouched but may ask for a factory data reset,
 and running the command again writes the same things again, whole.
 
