@@ -40,7 +40,7 @@ done
 pass "scripts parse"
 
 t=$(mktemp -d)
-trap 'chmod -R u+rwX "$t" 2>/dev/null; rm -rf "$t"' EXIT
+trap 'chmod -R u+rwX "$t" 2>/dev/null || true; rm -rf "$t" || true' EXIT
 PROV=(python3 -I -B "$PKG/bin/omamobile-provision")
 
 # --- What the package installs ------------------------------------------------

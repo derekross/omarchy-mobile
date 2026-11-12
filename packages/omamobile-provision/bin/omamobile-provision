@@ -73,12 +73,12 @@ process at its Nth checkpoint).
 """
 
 import ctypes
-import errno
 import fcntl
 import hashlib
 import json
 import os
 import re
+import resource
 import shutil
 import signal
 import stat
@@ -811,9 +811,11 @@ def first_start_state(nv_data):
 # --- The extraction ----------------------------------------------------------
 
 def _preexec():
-    # die with the worker (a kill of it must not leave a tool writing)
+    # die with the worker (a kill of it must not leave a tool writing), and
+    # leave no core file of a tool that crashed
     try:
         _libc.prctl(1, signal.SIGKILL)   # PR_SET_PDEATHSIG
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     except Exception:   # noqa: BLE001
         pass
 
@@ -1311,9 +1313,11 @@ def extract_only(args):
     if rc:
         rmtree(work)
         return rc
-    for n in sorted(os.listdir(work)):
-        os.rename(os.path.join(work, n), os.path.join(out, n))
-    os.rmdir(work)
+    # the outputs and nothing else (not, say, what a crashed tool left)
+    for n in ("fw", "chroot-gnss", "chroot-modem", "fp-vendor", "camera"):
+        if os.path.isdir(os.path.join(work, n)) and not os.path.islink(os.path.join(work, n)):
+            os.rename(os.path.join(work, n), os.path.join(out, n))
+    rmtree(work)
     log(f"==> Extracted into {out}; nothing was installed")
     return 0
 

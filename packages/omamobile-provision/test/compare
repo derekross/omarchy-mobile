@@ -59,7 +59,7 @@ done
 base=${COMPARE_WORK:-${TMPDIR:-/tmp}}
 mkdir -p "$base"
 t=$(mktemp -d "$base/provision-compare.XXXXXX")
-trap 'chmod -R u+rwX "$t" 2>/dev/null; rm -rf "$t"' EXIT
+trap 'chmod -R u+rwX "$t" 2>/dev/null || true; rm -rf "$t" || true' EXIT
 
 ./install "$t/stage" >/dev/null
 lib=$t/stage/usr/lib/omamobile-provision

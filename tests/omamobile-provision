@@ -22,7 +22,7 @@ pass() { printf 'ok - %s\n' "$1"; }
 skip() { printf 'ok - # skip: %s\n' "$1"; }
 P=packages/omamobile-provision
 t=$(mktemp -d)
-trap 'chmod -R u+rwX "$t" 2>/dev/null; rm -rf "$t"' EXIT
+trap 'chmod -R u+rwX "$t" 2>/dev/null || true; rm -rf "$t" || true' EXIT
 export PATH=$PATH:/usr/sbin:/sbin
 
 "$P/install" "$t/stage"
