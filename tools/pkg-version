@@ -1,0 +1,157 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# A package's version, worked out from git: nobody writes the last number.
+#
+#   tools/pkg-version [--main REF] PACKAGE           the version to build HEAD at
+#   tools/pkg-version [--main REF] --rev REV PACKAGE the version to build REV at
+#   tools/pkg-version --history PACKAGE              "<commit> <version>" for every
+#                                                    commit on main's line that
+#                                                    touched the package
+#   tools/pkg-version --commit PACKAGE VERSION       the commit that version was built from
+#
+# PACKAGE is a name (omamobile-shell) or its directory (packages/omamobile-shell).
+#
+# packages/<name>/version gives the series: its first two numbers (0.2). A
+# third number, which PRs used to bump by hand, is read only as a floor: a
+# version never goes below it, and a lower or equal one changes nothing. On
+# main (the first-parent line of REF, default origin/main) every commit that
+# touches packages/<name> is the next number in the series, so two merges can
+# never ship one number with different contents, and a merge needs no version
+# change at all. The count starts at the commit that added this tool, from the
+# version file as it stood then, so no number already published comes back.
+# Writing a new series (0.3) starts it at 0 (or at its third number, if given).
+#
+# Off main, a build is main's version at the merge base, then the branch's
+# own commits that touch the package and the commit: 0.2.130.1.g4f2a9c1.
+# pacman orders that above 0.2.130 and below main's next 0.2.131, so a phone
+# with a test build upgrades to the next published one. A branch that doesn't
+# touch the package builds main's version. A package (or a series) that main
+# doesn't have yet builds as 0.1.0pre1.g4f2a9c1, below main's first 0.1.0.
+#
+# It needs the history: in a shallow clone or a copy without .git it refuses
+# rather than guess. Tools that build from a copy (build-packages,
+# repo-build, phone-install-package) run it here first and put the result in
+# the copy as .pkgver, which the PKGBUILDs read before asking git.
+#
+# OMAMOBILE_PKGVER_SINCE=<commit> moves the start of the count (tests replay
+# history with it); OMAMOBILE_MAIN_REF sets REF like --main.
+set -euo pipefail
+die() { echo "pkg-version: $*" >&2; exit 1; }
+
+main=${OMAMOBILE_MAIN_REF:-} rev=HEAD mode=version want=
+while (($#)); do
+  case $1 in
+    --main) main=${2:?--main needs a ref}; shift 2 ;;
+    --rev) rev=${2:?--rev needs a commit}; shift 2 ;;
+    --history) mode=history; shift ;;
+    --commit) mode=commit; shift ;;
+    -h|--help) source "$(dirname -- "${BASH_SOURCE[0]}")/lib/usage.sh"; usage_from_header "$0"; exit 0 ;;
+    -*) die "unknown option $1" ;;
+    *) break ;;
+  esac
+done
+(($# >= 1)) || die "usage: tools/pkg-version [--main REF] [--rev REV] PACKAGE"
+pkg=${1%/}; pkg=${pkg##*/}
+[[ $mode != commit ]] || want=${2:?--commit needs PACKAGE VERSION}
+[[ $pkg =~ ^[a-z0-9][a-z0-9.+_-]*$ ]] || die "not a package name: $1"
+
+# The repository: the package directory's, else this tool's.
+if [[ -d $1 ]]; then dir=$1; else dir=$(dirname -- "$(readlink -f "${BASH_SOURCE[0]}")"); fi
+top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) ||
+  die "$1 is not in a git checkout: build from a clone, or pass the version as .pkgver"
+cd -- "$top"
+[[ $(git rev-parse --is-shallow-repository) == false ]] ||
+  die "a shallow clone can't count versions: git fetch --unshallow"
+path=packages/$pkg
+self=tools/pkg-version
+
+if [[ -z $main ]]; then
+  for main in origin/main main ''; do
+    [[ -z $main ]] || git rev-parse -q --verify "$main^{commit}" >/dev/null && break
+  done
+  [[ -n $main ]] || main=$rev
+fi
+git rev-parse -q --verify "$rev^{commit}" >/dev/null || die "no such commit $rev"
+git rev-parse -q --verify "$main^{commit}" >/dev/null || die "no such ref $main"
+
+# "S Z" from a version file's text (Z empty when it gives only a series).
+parse() {
+  local v
+  v=$(tr -d '[:space:]' <<<"$1")
+  [[ $v =~ ^([0-9]+\.[0-9]+)(\.([0-9]+))?$ ]] || return 1
+  echo "${BASH_REMATCH[1]} ${BASH_REMATCH[3]}"
+}
+file_at() { git show "$1:$path/version" 2>/dev/null; }
+
+# Where the count starts on C's first-parent line: the commit that added this
+# tool (or OMAMOBILE_PKGVER_SINCE), empty if C comes before it.
+since() {
+  local c=$1 k
+  if [[ -n ${OMAMOBILE_PKGVER_SINCE:-} ]]; then
+    k=$(git rev-parse --verify "$OMAMOBILE_PKGVER_SINCE^{commit}") || die "no such commit $OMAMOBILE_PKGVER_SINCE"
+    git merge-base --is-ancestor "$k" "$c" && echo "$k"
+    return 0
+  fi
+  git rev-list --first-parent "$c" -- "$self" | tail -1   # tail: head would SIGPIPE git under pipefail
+}
+
+# "<commit> <version>" for each commit on C's first-parent line touching the
+# package, oldest first. Before the start of the count the version file is
+# the version, as it was published.
+walk() {
+  local c=$1 k s z S="" v=-1 f
+  k=$(since "$c")
+  local -a before=() after=()
+  if [[ -z $k ]]; then
+    mapfile -t before < <(git rev-list --first-parent --reverse "$c" -- "$path")
+  else
+    mapfile -t before < <(git rev-list --first-parent --reverse "$k^" -- "$path" 2>/dev/null)
+    mapfile -t after < <(git rev-list --first-parent --reverse "$k^..$c" -- "$path" 2>/dev/null ||
+      git rev-list --first-parent --reverse "$c" -- "$path")
+  fi
+  for f in "${before[@]}"; do
+    read -r s z < <(parse "$(file_at "$f")") || continue
+    S=$s v=${z:-0}
+    echo "$f $S.$v"
+  done
+  for f in "${after[@]}"; do
+    read -r s z < <(parse "$(file_at "$f")") || continue
+    if [[ $s != "$S" ]]; then
+      S=$s v=${z:-0}
+    else
+      v=$((v + 1))
+      [[ -z $z ]] || ((z <= v)) || v=$z
+    fi
+    echo "$f $S.$v"
+  done
+}
+
+case $mode in
+  history) walk "$main"; exit 0 ;;
+  commit)
+    # The whole walk first: leaving its pipe early would SIGPIPE it.
+    mapfile -t lines < <(walk "$main")
+    for l in "${lines[@]}"; do
+      [[ ${l#* } != "$want" ]] || { echo "${l%% *}"; exit 0; }
+    done
+    die "$pkg $want was never built on $main" ;;
+esac
+
+[[ -n $(git ls-tree "$rev" -- "$path/version") ]] || die "$path/version doesn't exist at $rev"
+if git merge-base --is-ancestor "$rev" "$main"; then
+  v=$(walk "$rev" | tail -1 | cut -d' ' -f2)
+  [[ -n $v ]] || die "$path/version doesn't hold a version (0.2 or 0.2.5) at $rev"
+  echo "$v"
+  exit 0
+fi
+
+base=$(git merge-base "$rev" "$main") || die "$rev shares no history with $main"
+n=$(git rev-list --count --first-parent "$base..$rev" -- "$path")
+v=$(walk "$base" | tail -1 | cut -d' ' -f2)
+if ((n == 0)) && [[ -n $v ]]; then echo "$v"; exit 0; fi
+read -r s z < <(parse "$(file_at "$rev")") || die "$path/version doesn't hold a version (0.2 or 0.2.5) at $rev"
+sha=$(git rev-parse --short=7 "$rev")
+# A new package, or a branch that starts a new series: main's first build
+# of it will be S.Z, and pacman orders 0.1.0pre1 below 0.1.0.
+if [[ -z $v || ${v%.*} != "$s" ]]; then echo "$s.${z:-0}pre$n.g$sha"; exit 0; fi
+echo "$v.$n.g$sha"

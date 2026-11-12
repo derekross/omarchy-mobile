@@ -1,0 +1,161 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/pkg-version (and tools/lib/pkg-tar.sh) against a throwaway repository:
+# the count from the commit that added the tool, a third number as a floor
+# only, two PRs that wrote the same number, a new series, branch builds, and
+# the refusals without history. Then a replay of this repository's own
+# history as if the count had started at its first commit: no package may
+# keep or lower its version across a commit that touched it, or fall below
+# the number its version file gave.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+n=0
+ok() { n=$((n + 1)); echo "ok $n - $1"; }
+fail() { echo "not ok - $*" >&2; exit 1; }
+is() { [[ $1 == "$2" ]] || fail "$3: got '$1', expected '$2'"; ok "$3"; }
+
+r=$t/repo
+mkdir -p "$r/packages/demo" "$r/tools/lib"
+cd "$r"
+git init -q -b main
+git config user.name Tester
+git config user.email tester@example.org
+pv() { tools/pkg-version "$@" 2>&1; }
+change() { mkdir -p "$(dirname "packages/${2:-demo}/$1")" && echo "$RANDOM $*" >> "packages/${2:-demo}/$1"; }
+commit() { git add -A && git commit -q -m "$1"; }
+
+# Before the tool: the version file is the version, as it was published.
+echo 0.2.5 > packages/demo/version; change code; commit "demo 0.2.5"
+change code; commit "demo: a change that forgot its bump"
+cp "$here/tools/lib/pkg-tar.sh" tools/lib/
+echo "pkgname=demo" > packages/demo/PKGBUILD
+cat >> packages/demo/PKGBUILD <<'EOF'
+pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")
+pkgrel=1
+EOF
+commit "demo: a PKGBUILD"
+is "$(git show HEAD~1:packages/demo/version)" 0.2.5 "fixture"
+
+# The tool lands: the count starts here, from the file as it stood.
+cp "$here/tools/pkg-version" tools/; commit "tools/pkg-version"
+is "$(pv demo)" 0.2.5 "the commit that adds the tool doesn't change a package's version"
+change code; commit "demo: a change, no bump"
+is "$(pv demo)" 0.2.6 "a commit touching the package is the next number"
+echo 0.2.6 > packages/demo/version; change code; commit "demo 0.2.6: an old-style bump to a taken number"
+is "$(pv demo)" 0.2.7 "a third number at or below the count changes nothing"
+echo 0.2.20 > packages/demo/version; commit "demo 0.2.20: a jump"
+is "$(pv demo)" 0.2.20 "a higher third number is a floor"
+c20=$(git rev-parse HEAD)
+change test/all; commit "demo: tests only"
+is "$(pv demo)" 0.2.21 "every commit under the package counts"
+echo 0.3 > packages/demo/version; commit "demo: a new series"
+is "$(pv demo)" 0.3.0 "a new series starts at 0"
+change code; commit "demo: a change"
+is "$(pv demo)" 0.3.1 "and counts on"
+is "$(pv --commit demo 0.2.20)" "$c20" "--commit finds the commit a version was built from"
+is "$(pv --commit demo 0.2.5)" "$(git rev-list --max-parents=0 HEAD)" "--commit finds a version from before the tool"
+is "$(pv --history demo | wc -l)" 9 "--history lists every commit that touched the package"
+pv --commit demo 0.9.9 >/dev/null && fail "an unknown version is refused"
+ok "an unknown version is refused"
+
+# Two PRs both write 0.3.2, squash-merged one after the other: the merge
+# shows no conflict, and each lands with its own number.
+git checkout -q -b pr-a; echo 0.3.2 > packages/demo/version; change a; commit "demo 0.3.2: A"
+a=$(pv demo)
+git checkout -q main; git checkout -q -b pr-b; echo 0.3.2 > packages/demo/version; change b; commit "demo 0.3.2: B"
+git checkout -q main; git merge -q --squash pr-a >/dev/null; commit "demo 0.3.2: A (#1)"
+is "$(pv demo)" 0.3.2 "the first PR lands as 0.3.2"
+git merge -q --squash pr-b >/dev/null 2>&1
+commit "demo 0.3.2: B (#2)"
+is "$(pv demo)" 0.3.3 "the second PR, with the same number in its file, lands as 0.3.3"
+[[ $a =~ ^0\.3\.1\.1\.g[0-9a-f]{7}$ ]] || fail "a branch build: got $a"
+ok "a branch build is main's version at the base, its own commits and the commit ($a)"
+
+# A merge commit on main (not squashed) is one commit on main's line.
+git checkout -q -b pr-c; change c; commit "c1"; change c; commit "c2"
+git checkout -q main; git merge -q --no-ff -m "Merge pr-c" pr-c
+is "$(pv demo)" 0.3.4 "a merge commit counts once, not per commit it brings"
+
+# Branch builds against main.
+git checkout -q -b other; echo x > README.md; commit "elsewhere"
+is "$(pv demo)" 0.3.4 "a branch that doesn't touch the package builds main's version"
+change code; commit "demo on a branch"; change code; commit "again"
+v=$(pv demo)
+[[ $v == 0.3.4.2.g$(git rev-parse --short=7 HEAD) ]] || fail "two branch commits: got $v"
+ok "two branch commits: $v"
+mkdir -p packages/fresh; echo 0.1 > packages/fresh/version; commit "fresh"
+v=$(pv fresh)
+[[ $v =~ ^0\.1\.0pre1\.g[0-9a-f]{7}$ ]] || fail "a new package on a branch: got $v"
+ok "a new package on a branch builds below main's first ($v)"
+echo 0.4 > packages/demo/version; commit "demo 0.4 on a branch"
+v=$(pv demo)
+[[ $v =~ ^0\.4\.0pre3\.g[0-9a-f]{7}$ ]] || fail "a new series on a branch: got $v"
+ok "a new series on a branch builds below main's first of it ($v)"
+pv --main other demo | grep -qx 0.4.0 || fail "--main names the line to count on"
+ok "--main names the line to count on"
+git checkout -q main
+
+# The copy a build container or the phone gets: .pkgver, and the PKGBUILD
+# reads it there without git.
+(
+  source tools/lib/pkg-tar.sh
+  mkdir "$t/copy"
+  pkg_tar packages/demo | tar xf - -C "$t/copy"
+)
+is "$(cat "$t/copy/demo/.pkgver")" 0.3.4 "pkg_tar puts the version in the copy"
+is "$(cd "$t/copy/demo" && startdir=$PWD bash -c 'source ./PKGBUILD; echo $pkgver')" 0.3.4 "the PKGBUILD reads it there"
+echo 9.9.9 > packages/demo/.pkgver
+rm -rf "$t/copy2" && mkdir "$t/copy2"
+(source tools/lib/pkg-tar.sh; pkg_tar packages/demo | tar xf - -C "$t/copy2")
+is "$(cat "$t/copy2/demo/.pkgver")" 0.3.4 "a stale .pkgver in the directory loses to the fresh one"
+rm packages/demo/.pkgver
+
+# Without the history: refuse, never guess.
+git clone -q --depth 1 "file://$r" "$t/shallow"
+(cd "$t/shallow" && tools/pkg-version demo) >/dev/null 2>&1 && fail "a shallow clone is refused"
+ok "a shallow clone is refused"
+mkdir -p "$t/nogit-tree/packages" "$t/nogit-tree/tools" && cp -r packages/demo "$t/nogit-tree/packages/" && cp tools/pkg-version "$t/nogit-tree/tools/"
+(cd "$t/nogit-tree/packages/demo" && startdir=$PWD bash -c 'source ./PKGBUILD; [[ -z $pkgver ]]') 2>/dev/null ||
+  fail "a copy without .git gets no version"
+ok "a copy without .git gets no version (makepkg stops on an empty pkgver)"
+(source tools/lib/pkg-tar.sh; cd "$t/nogit-tree" && pkg_tar packages/demo >/dev/null 2>&1) && fail "pkg_tar refuses without a version"
+ok "pkg_tar refuses without a version"
+
+# pacman's order, where pacman is (CI's Arch container).
+if command -v vercmp >/dev/null; then
+  lt() { [[ $(vercmp "$1" "$2") == -1 ]] || fail "vercmp $1 < $2"; }
+  lt 0.3.4 0.3.4.1.gabc1234; lt 0.3.4.1.gfffffff 0.3.4.2.g0000000; lt 0.3.4.2.g0000000 0.3.5
+  lt 0.1.0pre1.gabc1234 0.1.0; lt 0.1.0pre9.gabc1234 0.1.0pre10.gabc1234; lt 0.4.0pre3.gabc1234 0.4.0
+  ok "pacman orders branch builds between main's builds"
+else
+  ok "# skip: no vercmp for pacman's order"
+fi
+
+# This repository's own history, replayed from its first commit.
+cd "$here"
+if [[ $(git rev-parse --is-shallow-repository) == true ]]; then
+  ok "# skip: a shallow clone has no history to replay"
+  exit 0
+fi
+first=$(git rev-list --max-parents=0 HEAD | tail -1)
+checked=0 commits=0
+for f in packages/*/PKGBUILD; do
+  grep -qF tools/pkg-version "$f" || continue
+  p=$(basename "$(dirname "$f")")
+  prev=
+  while read -r c v; do
+    file=$(git show "$c:packages/$p/version" | tr -d '[:space:]')
+    if [[ -n $prev && ${prev%.*} == "${v%.*}" ]]; then
+      [[ $(printf '%s\n' "$prev" "$v" | sort -V | tail -1) == "$v" && $prev != "$v" ]] ||
+        fail "$p: $v at $c does not follow $prev"
+    fi
+    if [[ $file =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      [[ $(printf '%s\n' "$file" "$v" | sort -V | tail -1) == "$v" ]] || fail "$p: $v at $c is below its file's $file"
+    fi
+    prev=$v commits=$((commits + 1))
+  done < <(OMAMOBILE_PKGVER_SINCE=$first tools/pkg-version --main HEAD --history "$p")
+  checked=$((checked + 1))
+done
+ok "replayed $checked packages over $commits commits from the first one: every commit a new number, none below its file's"

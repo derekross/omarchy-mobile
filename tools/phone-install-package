@@ -22,9 +22,10 @@ phone_home=$("$ssh" "getent passwd '$phone_user' | cut -d: -f6")
 build=$phone_home/build/pkgs
 
 "$ssh" "rm -rf $build/$name && mkdir -p $build && chown '$phone_user': $build"
-# makepkg's own work dirs (pkg/, src/ at the top) and old packages stay home.
-tar cf - --exclude="./$name/pkg" --exclude="./$name/src/build" --exclude="*.pkg.tar.*" \
-  -C "$(dirname "$dir")" "./$name" | "$ssh" "tar xf - -C $build --no-same-owner && chown -R '$phone_user': $build/$name"
+# makepkg's own work dirs (pkg/, src/ at the top) and old packages stay home;
+# the version is worked out here, since the phone gets no git history.
+source tools/lib/pkg-tar.sh
+pkg_tar "$dir" | "$ssh" "tar xf - -C $build --no-same-owner && chown -R '$phone_user': $build/$name"
 # Build-only dependencies (makedepends, checkdepends) that aren't installed
 # yet go in for the build and out again afterwards, like makepkg -s -r
 # (makepkg runs as the user, so pacman runs here as root). Runtime

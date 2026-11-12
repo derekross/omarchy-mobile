@@ -62,6 +62,7 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
 source tools/lib/alarm.sh
+source tools/lib/pkg-tar.sh
 
 SLOW=(mesa hyprland libcamera)
 # Packed from a staged kernel build: built only when named (see above)
@@ -363,10 +364,9 @@ for dir in "${build[@]}"; do
   name=$(basename "$dir")
   alarm_say "$name $(pkg_version "$dir")"
   work=$(mktemp -d)
-  # The package directory as it is (including gitignored prebuilt files the
-  # PKGBUILDs install), minus makepkg's work directories and old packages.
-  tar cf - --exclude="./$name/pkg" --exclude="./$name/src/build" --exclude='*.pkg.tar.*' \
-    -C "$(dirname "$dir")" "./$name" | tar xf - -C "$work"
+  # The package directory as it is, with its version worked out here
+  # (tools/lib/pkg-tar.sh): the container has no git history.
+  pkg_tar "$dir" | tar xf - -C "$work" || { rm -rf "$work"; alarm_die "$name: no version (tools/pkg-version)"; }
   out=$work/out && mkdir -p "$out"
   incheck=0
   if ((nocheck == 0)); then

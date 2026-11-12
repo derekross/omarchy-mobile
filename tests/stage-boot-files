@@ -55,7 +55,7 @@ pass "repo-publish carries boot-files/; build-packages checks them, verifies the
 # a throwaway local key.
 if command -v gpg >/dev/null && command -v zstd >/dev/null; then
   R=$t/repo && mkdir -p "$R/tools/lib" "$R/device/testdev" "$R/packages" "$t/bin" "$t/tmp"
-  cp tools/build-packages tools/stage-boot-files "$R/tools/" && cp omamobile.conf "$R/"
+  cp tools/build-packages tools/stage-boot-files tools/pkg-version "$R/tools/" && cp tools/lib/pkg-tar.sh "$R/tools/lib/" && cp omamobile.conf "$R/"
   mkdir -p "$R/packages/omamobile-boot-update/lib" && cp packages/omamobile-boot-update/lib/descriptor.sh "$R/packages/omamobile-boot-update/lib/"
   printf 'CODENAME=testdev\n' > "$R/device/testdev/device.conf"
   cat > "$R/tools/lib/alarm.sh" <<'A'

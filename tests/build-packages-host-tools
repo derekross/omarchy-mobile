@@ -18,7 +18,7 @@ R=$t/repo
 trap 'gpgconf --homedir "$R/keys/testdev/gnupg" --kill gpg-agent 2>/dev/null || true; rm -rf "$t"' EXIT
 
 mkdir -p "$R/tools/lib" "$R/device/testdev" "$R/packages" "$t/bin" "$t/tmp"
-cp tools/build-packages tools/stage-boot-files "$R/tools/" && cp omamobile.conf "$R/"
+cp tools/build-packages tools/stage-boot-files tools/pkg-version "$R/tools/" && cp tools/lib/pkg-tar.sh "$R/tools/lib/" && cp omamobile.conf "$R/"
 mkdir -p "$R/packages/omamobile-boot-update/lib" && cp packages/omamobile-boot-update/lib/descriptor.sh "$R/packages/omamobile-boot-update/lib/"
 printf 'CODENAME=testdev\n' > "$R/device/testdev/device.conf"
 cat > "$R/tools/lib/alarm.sh" <<'A'
