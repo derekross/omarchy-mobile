@@ -207,6 +207,20 @@ pkg_info() {
     echo "${epoch:+$epoch:}$pkgver-$pkgrel ${pkgname[*]}"
   )
 }
+# The first line Derek is shown when a device package needs a new version
+# for new boot files: tools/pkg-version counts any commit under the
+# package, and with nothing else to change, writing its next number into
+# version (read as a floor) is such a commit
+new_version_hint() {
+  local v
+  v=$(pkg_info "$1" | cut -d' ' -f1)
+  v=${v%-*}
+  if [[ $v =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+    echo "# commit a change under packages/$1 (tools/pkg-version counts it; with nothing else to change: echo ${v%.*}.$((${v##*.} + 1)) > packages/$1/version), then:"
+  else
+    echo "# commit a change under packages/$1 (tools/pkg-version counts it as a new version), then:"
+  fi
+}
 # "name version" for every package an index lists
 db_versions() {
   bsdtar -xOf "$1" --include='*/desc' |
@@ -349,10 +363,10 @@ st_images() {
       [[ ! -f out/repo/aarch64/omamobile.db.tar.gz ]] ||
         have_v=$(db_versions out/repo/aarch64/omamobile.db.tar.gz | awk -v n="$dpkg" '$1 == n { print $2 }')
       if [[ $have_v == "$want_v" ]]; then
-        derek "# bump packages/$dpkg/version (a new version for new boot files), commit it, then:" \
+        derek "$(new_version_hint "$dpkg")" \
               "tools/release --version $version images     # stages them" \
               "tools/build-packages packages/$dpkg"
-        die "$bf is stale or missing and out/repo already has $dpkg $want_v: a device-package version bump is needed"
+        die "$bf is stale or missing and out/repo already has $dpkg $want_v: a new device-package version is needed"
       fi
       KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run tools/stage-boot-files
       note "staged for $dpkg $want_v (out/repo: ${have_v:-none}); next: tools/build-packages packages/$dpkg"
@@ -386,7 +400,7 @@ st_images() {
   # The device package's dtbo is the bundle's, as its initramfs is
   if ((kept)) && ships_boot_files; then
     cmp -s "$bf/dtbo.img" "$RELEASE_KERNEL_OUT/images/dtbo.img" ||
-      die "$bf/dtbo.img differs from the bundle's dtbo.img: the device package and the bundle would boot different dtbos (bump packages/$dpkg/version, then run this stage again)"
+      die "$bf/dtbo.img differs from the bundle's dtbo.img: the device package and the bundle would boot different dtbos (commit a change under packages/$dpkg for a new version, then run this stage again)"
     note "the bundle's dtbo.img is the device package's ($bf)"
   fi
   # The release initramfs has no builder keys (make-bundle checks it again)
@@ -488,7 +502,7 @@ st_packages() {
     want_sum=$(awk '$2 == "initramfs.cpio.lz4" { print $1 }' "$bf")
     got_sum=$({ bsdtar -xOf "out/repo/aarch64/$pf" "usr/lib/omamobile/$DEVICE/initramfs.cpio.lz4" 2>/dev/null || true; } | sha256sum | cut -d' ' -f1)
     [[ -n $want_sum && $got_sum == "$want_sum" ]] || {
-      derek "# bump packages/$dpkg/version (same version, other boot files), commit it, then:" \
+      derek "$(new_version_hint "$dpkg")" \
             "tools/release --version $version images    # restages the boot files" \
             "tools/build-packages packages/$dpkg"
       die "$pf does not carry the staged release initramfs (packages/$dpkg/boot-files): it was built from other boot files at the same version"

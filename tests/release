@@ -14,7 +14,7 @@
 # (none: the one-time promotion; no answer: stop),
 # the test-install record, the tag stage refusing notes with placeholders,
 # the images stage keeping current boot files and asking for a device-package
-# version bump before restaging stale ones (a stand-in stage-boot-files),
+# new version before restaging stale ones (a stand-in stage-boot-files),
 # the bundle check against a bundle laid out as make-bundle builds it
 # (INSTALL.md and make-bundle's provision tools allowed, nothing else), and
 # the upload stage running the real tools/release-upload --dry-run on a
@@ -233,7 +233,7 @@ if run --version "$V" tag; then fail "notes with placeholders are refused"; fi
 grep -q 'placeholders' "$t/log" || fail "says the notes have placeholders"
 pass "test-install records only the release kernel on a signed bundle; tag refuses unfinished notes"
 
-# --- images: current boot files are kept; stale ones need a version bump ---
+# --- images: current boot files are kept; stale ones need a new version ---
 # A stand-in for #320's tools/stage-boot-files: --check passes when
 # $t/bf-current exists; staging is only printed in a dry run
 mkdir -p "$R/packages/omamobile-boot-update" "$R/packages/omamobile-device-testdev" "$RELEASE_KERNEL_OUT/include/config"
@@ -260,16 +260,17 @@ printf 'pkgname = omamobile-device-testdev\npkgbase = omamobile-device-testdev\n
   repo-add -q omamobile.db.tar.gz omamobile-device-testdev-0.1.5-1-any.pkg.tar.zst) >/dev/null 2>&1 || fail "a repository fixture"
 mv "$R/out/repo" "$t/repo.saved" && mkdir -p "$R/out/repo" && cp -a "$t/repo2" "$R/out/repo/aarch64"
 if run --version "$V" --dry-run images; then fail "stale boot files at a version out/repo already has are refused"; fi
-grep -q 'a device-package version bump is needed' "$t/log" || fail "says a version bump is needed"
-grep -q 'bump packages/omamobile-device-testdev/version' "$t/log" || fail "prints the bump and the rebuild"
-# a bumped version (out/repo doesn't have it yet): stage, then build it
+grep -q 'a new device-package version is needed' "$t/log" || fail "says a new version is needed"
+grep -q 'commit a change under packages/omamobile-device-testdev' "$t/log" || fail "says a commit under the package gives the new version"
+grep -q 'echo 0.1.6 > packages/omamobile-device-testdev/version' "$t/log" || fail "prints the next number to write when nothing else changes"
+# a new version (out/repo doesn't have it yet): stage, then build it
 sed -i 's/pkgver=0.1.5/pkgver=0.1.6/' "$R/packages/omamobile-device-testdev/PKGBUILD"
 run --version "$V" --dry-run images || fail "stale boot files for a new device-package version are staged"
 grep -q 'would run: tools/stage-boot-files' "$t/log" || fail "stages the boot files for the new version"
 grep -q 'next: tools/build-packages packages/omamobile-device-testdev' "$t/log" || fail "names the device package to build next"
 rm -rf "$R/out/repo" && mv "$t/repo.saved" "$R/out/repo"
 rm -rf "$R/packages/omamobile-boot-update" "$R/packages/omamobile-device-testdev" "$R/tools/stage-boot-files" "$RELEASE_KERNEL_OUT"
-pass "images keeps current boot files and builds from their initramfs, and asks for a device-package version bump before restaging stale ones"
+pass "images keeps current boot files and builds from their initramfs, and asks for a new device-package version before restaging stale ones"
 
 # --- upload: the real tools/release-upload --dry-run on a signed bundle ---
 for tool in rsync sha256sum; do
