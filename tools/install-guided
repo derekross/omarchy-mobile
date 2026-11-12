@@ -13,10 +13,16 @@
 #    1. checks this computer and the download (tools/install-phone --verify-only)
 #    2. shows the one warning, acknowledged once and recorded. It comes
 #       before the unlock steps, because unlocking already erases the phone
-#    3. finds the phone (one phone, of this model) and shows only the unlock
-#       steps that are left
-#    4. finds the phone's build in the build index, opens Google's factory
-#       image page and takes the file the owner saved, checked by SHA-256
+#    3. finds the phone (one phone, of this model), judges it, and only then
+#       shows the unlock steps that are left. Every stop that the phone's
+#       fastboot answers and this download can settle comes before the
+#       unlock steps (decided 2026-11-12): another model, another phone than
+#       the record's, slot B, the two bootloader slots, a file that doesn't
+#       fit its partition, and the phone's build in the build index. Nobody
+#       is shown how to unlock, and so erase, a phone that could not be
+#       installed anyway (judge_phone says what can't be judged that early)
+#    4. opens Google's factory image page for the build step 3 found and
+#       takes the file the owner saved, checked by SHA-256
 #    5. asks the owner's answers, runs tools/install-phone --dry-run, then
 #       tools/install-phone once the phone's codename is typed, each time
 #       with --serial, so only the phone step 3 looked at can be written
@@ -97,9 +103,17 @@ die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 #   stop_final   running it again as things are stops here again; the
 #                message itself says what has to change, or who to ask
 #   stop_erased  the write itself failed partway (step 5)
+# While a locked phone is being judged (judge_phone), a stop also says to
+# leave it locked: the reader may have come for the unlock steps.
+judging_locked=0
 phone_fact() {
   case ${S[write]:-} in
-    "") printf '    Nothing has been written to the phone.' ;;
+    "")
+      if ((judging_locked)); then
+        printf '    Nothing has been written to the phone. Its bootloader is still locked:\n    leave it locked for now, because unlocking erases the phone.'
+      else
+        printf '    Nothing has been written to the phone.'
+      fi ;;
     started) printf '    An earlier try began writing the phone and did not finish, so what was on\n    it may already be erased.' ;;
     *) printf '    Omarchy Mobile is written to the phone, and what the install has done so\n    far stays done.' ;;
   esac
@@ -178,6 +192,17 @@ else
   release=development label="development build"
 fi
 [[ -f $conf ]] || die "no device descriptor $conf"
+# The images written to slot B, where tools/install-phone looks for them
+images_dir() {
+  local i base
+  if [[ $mode == bundle ]]; then printf '%s' "$here/images"; return 0; fi
+  for ((i = 0; i + 1 < ${#pass[@]}; i++)); do
+    [[ ${pass[i]} != --images ]] || { printf '%s' "${pass[i + 1]}"; return 0; }
+  done
+  base=${KERNEL_BASE:-$HOME/omamobile-kernel}
+  [[ -n ${KERNEL_BASE:-} || -d $base || ! -d $HOME/android/mainline ]] || base=$HOME/android/mainline
+  printf '%s' "${KERNEL_OUT:-$base/out-int}/images"
+}
 [[ ${release:-} =~ ^[A-Za-z0-9._-]+$ ]] || release=unknown
 [[ ${label:-} =~ ^[A-Za-z0-9\ ._-]+$ ]] || label="developer preview"
 # The camera's Python modules, by exact version and SHA-256 (step 9)
@@ -458,6 +483,9 @@ step_phone() {
       "Fastboot Mode: $keys_fastboot." \
       "It is written again from the start: the same things, whole."
   fi
+  # The list of Google's builds, before anything is asked of the owner or
+  # the phone: a download without one can't install any phone
+  is_done factory || choose_index
   while true; do
     mapfile -t found < <(fastboot_serials)
     ((${#found[@]} <= 1)) ||
@@ -466,6 +494,10 @@ step_phone() {
     if ((${#found[@]} == 1)); then
       serial=${found[0]}
       vars=$("$FASTBOOT" -s "$serial" getvar all 2>&1 | sed -E 's/^\(bootloader\) //')
+      # From here to the end of judge_phone, a stop for a locked phone says
+      # to leave it locked
+      judging_locked=0
+      [[ $(var unlocked) == yes ]] || judging_locked=1
       [[ $(var product) == "$CODENAME" ]] ||
         stop_final "The phone that is connected is a '$(var product)', and this download is for the $NAME ($CODENAME)." \
           "Connect the $NAME, or get the download for this phone from https://omamobile.org/download"
@@ -475,6 +507,7 @@ step_phone() {
       # phone, so the record is private like the radio backup.
       id=$(printf '%s' "$serial" | sha256sum | cut -d' ' -f1)
       [[ -z ${S[phone]:-} || ${S[phone]} == "$id" ]] || other_phone_in_fastboot
+      judge_phone
       if [[ $(var unlocked) == yes ]]; then
         note "found the $NAME in Fastboot Mode, and its bootloader is unlocked"
         put phone "$id"
@@ -557,7 +590,6 @@ step_phone() {
     ((dry)) && stop "A dry run only looks. Follow the steps above, then run the dry run again."
     ask "    Press Enter when that is done, to check the phone again: "
   done
-  phone_checks
 }
 # The phone in Fastboot Mode is not the one the record is for. Two phones
 # are in play, so the words say which is which, and the usual footer ("the
@@ -593,8 +625,43 @@ other_phone_in_fastboot() {
   printf '\n'
   exit 1
 }
-# What tools/install-phone will refuse, said early and in plain words. It
-# stays the one that decides: these only save the owner a 3 GB download.
+# judge_phone: every reason this phone can't be installed that its fastboot
+# answers ("getvar all") and this download can settle, in one order: slot B,
+# the two bootloader slots, each file against its partition, the build
+# index. step_phone has already refused another model and another phone than
+# the record's. It runs at every look at a phone in Fastboot Mode, locked or
+# unlocked, and before the unlock steps are shown (decided 2026-11-12):
+# unlocking erases the phone, so nobody is shown how to unlock one that
+# would be stopped afterwards. tools/install-phone stays the one that
+# decides at the write; these are its refusals, said early and in plain
+# words.
+#
+# What can't be judged from a locked phone, and so comes after the unlock:
+#   - whether the phone can be unlocked at all. "OEM unlocking" is read
+#     ("flashing get_unlock_ability") and is part of the unlock steps; a
+#     phone locked to its carrier shows only as a switch that stays grey in
+#     Android.
+#   - tools/install-phone's own dry run, which refuses a locked phone. Its
+#     checks of the phone are the ones made here, plus one that needs the
+#     owner's answers: the ramdisk image with the owner's SSH key added
+#     still has to fit its partition (the image as shipped is checked here).
+#   - that nothing else answers at the phone's USB address (step 5): asked
+#     over SSH just before the write, and passed by unplugging the other
+#     phone.
+#   - Google's factory image: the owner saves it in step 4, and a wrong
+#     file is asked for again, never a stop.
+#   - what only happens later: a write that fails, the first start, the
+#     radio backup, the firmware, the check.
+# Not checked on a phone yet: that a locked bootloader answers "getvar all"
+# with the same lines as an unlocked one (current-slot, version-baseband,
+# the per-slot versions, partition-size). A locked phone that leaves one
+# out is stopped, not shown the unlock steps.
+judge_phone() {
+  phone_checks
+  images_fit
+  is_done factory || find_build
+  judging_locked=0
+}
 phone_checks() {
   local slot
   slot=$(var current-slot)
@@ -623,7 +690,20 @@ slots_check() {
   bl=$(var version-bootloader)
   bl_a=$(sed -nE 's/^version-bootloader[-_:]a:[ ]*//p' <<<"$vars" | head -1)
   bl_b=$(sed -nE 's/^version-bootloader[-_:]b:[ ]*//p' <<<"$vars" | head -1)
-  [[ -z $bl_a || -z $bl_b ]] || return 0
+  if [[ -n $bl_a && -n $bl_b ]]; then
+    [[ $bl_a != "$bl_b" ]] || return 0
+    stop_final "The phone keeps two copies of its system (slot A and slot B), each with its own" \
+      "bootloader. Omarchy Mobile starts from slot B, so slot B's bootloader has to be" \
+      "the same version as slot A's, and on this phone they differ:" \
+      "    slot A: $bl_a" \
+      "    slot B: $bl_b" \
+      "" \
+      "The installer stops here, and running it again will stop here again until the" \
+      "two are the same. Don't write a bootloader by hand: a wrong one can leave the" \
+      "phone unable to start. Ask in an issue, and we will find the safe way for this" \
+      "phone together with you:" \
+      "https://github.com/derekross/omarchy-mobile/issues"
+  fi
   ! has_pass --bootloader-slots-match || return 0
   stop_final "The phone keeps two copies of its system (slot A and slot B), each with its own" \
     "bootloader. Omarchy Mobile starts from slot B, so slot B's bootloader has to be" \
@@ -640,6 +720,36 @@ slots_check() {
     "  https://github.com/derekross/omarchy-mobile/issues" \
     "Don't tell the installer a version that nobody has read from this phone: if the" \
     "two copies differ, the phone may not start from slot B."
+}
+# Each image against the slot B partition it is written to, as
+# tools/install-phone checks it in its dry run: no larger, and for an image
+# with an AVB footer (the descriptor's AVB_FOOTERS) exactly the size the
+# footer was made for. The sizes are the phone's own ("partition-size" in
+# getvar all) and the files are this download's, so it is settled here.
+images_fit() {
+  local dir p e psize isize avb
+  dir=$(images_dir)
+  for p in ${D[BOOT_IMAGES]:-}; do
+    # Step 1 (install-phone --verify-only) has refused a bad name or a missing file
+    [[ $p =~ ^[a-z_]+$ && -f $dir/$p.img ]] || continue
+    psize=$(sed -nE "s/^partition-size:${p}_b:[ ]*(0x[0-9a-fA-F]{1,12})\$/\1/p" <<<"$vars" | head -1)
+    [[ -n $psize ]] ||
+      stop_final "The phone doesn't tell the size of one of the areas Omarchy Mobile is written" \
+        "to (${p}_b), so the installer can't check that this download fits this phone." \
+        "It stops here, and running it again will stop here again." \
+        "Please open an issue: https://github.com/derekross/omarchy-mobile/issues"
+    psize=$((psize)) isize=$(stat -c %s "$dir/$p.img") avb=""
+    for e in ${D[AVB_FOOTERS]:-}; do
+      [[ $e =~ ^([a-z_]+):(0x[0-9a-f]{1,10}|[1-9][0-9]{0,11})$ && ${BASH_REMATCH[1]} == "$p" ]] || continue
+      avb=$((BASH_REMATCH[2]))
+    done
+    if ((isize > psize)) || [[ -n $avb && $avb != "$psize" ]]; then
+      stop_final "This download doesn't fit this phone. One of its files, $p.img, is $isize bytes" \
+        "${avb:+(made for an area of exactly $avb bytes), }and the area it is written to on this phone (${p}_b) is $psize bytes." \
+        "The installer stops here, and running it again will stop here again." \
+        "Please open an issue: https://github.com/derekross/omarchy-mobile/issues"
+    fi
+  done
 }
 
 # --- Step 2: the one warning -------------------------------------------------
@@ -722,7 +832,12 @@ declare -A B=()
 find_build() {
   local out line bl bb
   bl=$(var version-bootloader) bb=$(var version-baseband)
-  [[ -n $bl && -n $bb ]] || die "the phone reports no bootloader or baseband version"
+  [[ -n $bl && -n $bb ]] ||
+    stop_final "The phone doesn't tell its bootloader version or its baseband version. Those" \
+      "two say which of Google's builds its Android is, so without them the installer" \
+      "can't tell whether this release was tested with this phone's Android." \
+      "It stops here, and running it again will stop here again." \
+      "Please open an issue: https://github.com/derekross/omarchy-mobile/issues"
   out=$(index_tool match --index "$index" --codename "$CODENAME" --bootloader "$bl" --baseband "$bb") ||
     die "reading the build index failed"
   B=()
@@ -831,8 +946,9 @@ step_factory() {
       "Omarchy Mobile never ships them: you download the image from Google, and the" \
       "installer copies what the phone needs out of it, on this computer."
     printf '\n'
-    choose_index
-    find_build
+    # Step 3 found the build (judge_phone), before any unlock step was shown
+    [[ -n ${B[build]:-} ]] || die "the phone step found no build for this phone"
+    note "the build for this phone is ${B[build]}"
   fi
   take_factory
   [[ -n $zip ]] || return 0

@@ -8,7 +8,8 @@
 # are also handed to the real tools/phone-provision in --dry-run. Covered: a
 # whole install in order; the dry run (nothing written, added or recorded,
 # nothing sent over adb or SSH); the unlock guidance for each state of the
-# phone, with no unlock command ever sent; one phone only, on adb as in
+# phone, with no unlock command ever sent; a locked phone judged before the
+# unlock steps, so that each stop keeps them from being shown; one phone only, on adb as in
 # Fastboot Mode, and only the phone that was looked at written (the serial
 # handed to install-phone); every step after the write refused for a phone
 # other than the one written; what each kind of stop says about the phone;
@@ -453,6 +454,82 @@ guided "$REST" --bootloader-slots-match "$BL" || fail "--bootloader-slots-match 
 once "with the other slot confirmed"
 vars
 pass "another model, two phones, slot B and an unreadable bootloader slot stop it early, in plain words, with no shortcut offered"
+
+# --- Every stop comes before the unlock steps ---------------------------------------
+# Unlocking erases the phone, so a locked phone is judged first (decided
+# 2026-11-12): whatever stops the install is said before any unlock step is
+# shown, whether "OEM unlocking" is on or off.
+# locked_stop WHAT SAYS: the stand-in is set up; the phone in it is locked
+locked_stop() {
+  local ability
+  for ability in 1 0; do
+    echo $ability > "$t/ability"
+    if guided "yes\n\n\n" ${LOCKED_ARGS:-}; then fail "a locked phone with $1 stops the install"; fi
+    says "$2" || fail "a locked phone with $1: the stop says so"
+    ! says "fastboot flashing unlock" && ! says "OEM unlocking" && ! says "its bootloader is still locked." && ! says "can't be unlocked yet" ||
+      fail "a locked phone with $1 (unlock ability $ability): the unlock steps are never printed"
+    [[ $(events 'flashing') == 0 ]] || fail "a locked phone with $1: not even asked whether it can be unlocked"
+    [[ -z $(writes) && $(events FORBIDDEN) == 0 ]] || fail "a locked phone with $1: nothing written"
+    if [[ -z ${NO_LOCKED_LINE:-} ]]; then
+      says "Its bootloader is still locked:" && says "leave it locked for now, because unlocking erases the phone." ||
+        fail "a locked phone with $1: the stop says to leave it locked"
+    fi
+    ! says "user name on the phone" || fail "a locked phone with $1: no question about the owner"
+  done
+}
+fresh; vars no a otherphone
+locked_stop "another model" "this download is for the Test Phone"
+fresh; vars no b
+locked_stop "Android on slot B" "running from its second system copy (slot B)"
+fresh; SLOTS="" vars no
+locked_stop "one bootloader version only" "only tells the version of the copy"
+fresh; SLOTS=$'version-bootloader-a:testloader-1.0-111\nversion-bootloader-b:testloader-0.9-000' vars no
+locked_stop "two different bootloaders" "on this phone they differ"
+says "slot A: testloader-1.0-111" && says "slot B: testloader-0.9-000" && says "running it again will stop here again" && ! says "Run this command again to go on" ||
+  fail "different bootloaders: both versions named, and no promise of a rerun"
+fresh; vars no; sed -i 's/^partition-size:dtbo_b:.*/partition-size:dtbo_b: 0x4/' "$t/vars"
+locked_stop "a file larger than its partition" "This download doesn't fit this phone"
+says "dtbo.img" && says "(dtbo_b) is 4 bytes" || fail "a file that doesn't fit: the file and the area are named"
+fresh; vars no; sed -i '/^partition-size:boot_b:/d' "$t/vars"
+locked_stop "no size for a partition" "doesn't tell the size of one of the areas"
+fresh; vars no; sed -i '/^version-baseband:/d' "$t/vars"
+locked_stop "no baseband version" "doesn't tell its bootloader version or its baseband version"
+fresh; vars no; index 2026-11-01 otherband-1 > "$R/device/testdev/factory-builds.json"
+locked_stop "an Android build that isn't in the index" "no build in the"
+[[ $(events '^xdg-open') == 0 ]] || fail "a locked phone with a build that isn't listed: no page opened"
+fresh; vars no; rm "$R/device/testdev/factory-builds.json"
+NO_LOCKED_LINE=1 locked_stop "no build index in the download" "no list of Google's builds"
+[[ $(events '^fastboot') == 0 ]] || fail "without a build index the phone isn't even looked for"
+# Another phone than the one the install was started on, and two phones
+fresh
+if guided "yes\n"; then fail "an install with no answers stops"; fi
+[[ -n $(record phone) ]] || fail "the phone is recorded once it is found unlocked"
+echo OTHER999 > "$t/fb-devices"; vars no
+NO_LOCKED_LINE=1 locked_stop "another phone than the record's" "is not the phone this install was started on"
+fresh; vars no; printf 'FAKE123\nFAKE456\n' > "$t/fb-devices"
+NO_LOCKED_LINE=1 locked_stop "a second phone beside it" "More than one phone in Fastboot Mode"
+# The same stops for an unlocked phone, which is not told to stay locked
+fresh; SLOTS=$'version-bootloader-a:testloader-1.0-111\nversion-bootloader-b:testloader-0.9-000' vars
+if guided "$ALL"; then fail "an unlocked phone with two different bootloaders stops"; fi
+says "on this phone they differ" && ! says "leave it locked" && ! says "user name on the phone" && [[ -z $(writes) ]] ||
+  fail "different bootloaders on an unlocked phone: stopped before the owner's questions, with no word about the lock"
+fresh; sed -i 's/^partition-size:dtbo_b:.*/partition-size:dtbo_b: 0x4/' "$t/vars"
+if guided "$ALL"; then fail "an unlocked phone with a file that doesn't fit stops"; fi
+says "This download doesn't fit this phone" && ! says "Google's factory image for this phone" && [[ -z $(writes) ]] ||
+  fail "a file that doesn't fit: stopped at the phone step, before the factory image is asked for"
+# A locked phone that passes every check is shown the unlock steps, after
+# the checks; and a dry run judges the same way
+fresh; vars no
+if guided "yes\n\n"; then fail "a locked phone stops the install"; fi
+[[ $(grep -n "this phone's bootloader and baseband match Google's build" "$t/out" | head -1 | cut -d: -f1) -lt $(grep -n 'fastboot flashing unlock' "$t/out" | head -1 | cut -d: -f1) ]] ||
+  fail "the build is found in the index before the unlock steps are shown"
+! says "leave it locked" || fail "a locked phone that can be installed is not told to leave it locked"
+fresh; vars no b
+if guided "yes\n" --dry-run; then fail "a dry run stops for a locked phone on slot B"; fi
+says "running from its second system copy (slot B)" && ! says "fastboot flashing unlock" && [[ ! -e $STATE ]] ||
+  fail "a dry run judges a locked phone before the unlock steps too, and records nothing"
+vars; echo 1 > "$t/ability"
+pass "a locked phone: every stop (model, phone, slots, a file's fit, the build index) comes before the unlock steps, which are then never shown"
 
 # The install belongs to one phone: another one of the same model is refused
 fresh; touch "$t/fail-flash"

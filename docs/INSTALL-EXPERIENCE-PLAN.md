@@ -840,3 +840,13 @@ never offered: that write stays a manual, named exception.
   the install needs the phone to reach the internet through the cable
   (checked by reading, INSTALL-GUIDED §5a); [INSTALL.md](INSTALL.md) step 5
   gives the same profile.
+- **D11. Every stop before the unlock steps: decided 2026-11-12.** A
+  locked phone is judged before it is shown how to unlock, since the
+  unlock erases it: the model, the phone the install was started on, slot
+  B, the two bootloader slots, each image against its partition and the
+  build index are all settled from the
+  phone's fastboot answers and the download first, and a phone that fails
+  one is stopped without seeing the unlock steps. What can't be judged
+  that early is listed, with the reason, in
+  [INSTALL-GUIDED](INSTALL-GUIDED.md) §2a; that a locked bootloader
+  answers like an unlocked one is still to be seen on a phone.

@@ -54,8 +54,8 @@ phone.
 | --- | --- | --- | --- | --- | --- |
 | 1 | Preflight | every program a later step runs (below), the SSH public key, free space (`INSTALL_FREE_GB`), the download through `install-phone --verify-only` (signature, checksums, `manifest.json`, root image) | nothing | nothing | always runs |
 | 2 | The warning | the release's label | nothing | `warning` (date, release) | skipped once acknowledged |
-| 3 | The phone | `fastboot devices`, `getvar all`, `get_unlock_ability`, `adb devices -l` | `adb reboot bootloader` after Enter | `phone` (SHA-256 of the serial) | runs until the phone is written; then skipped |
-| 4 | Factory image | the build index, the phone's bootloader and baseband, the saved zip | opens Google's page | `factory_*` (build, name, page, size, SHA-256, path) | skipped while the file is there with its size; taken again from the record otherwise |
+| 3 | The phone | the build index; `fastboot devices`, `getvar all` (the model, the slots, the partition sizes, the bootloader and baseband) and the sizes of slot B's image files; then `get_unlock_ability`; `adb devices -l` | `adb reboot bootloader` after Enter | `phone` (SHA-256 of the serial) | runs until the phone is written; then skipped |
+| 4 | Factory image | the build step 3 found, the saved zip | opens Google's page | `factory_*` (build, name, page, size, SHA-256, path) | skipped while the file is there with its size; taken again from the record otherwise |
 | 5 | Write | whether anything answers at the phone's USB address; the owner's answers (memory only) | `install-phone --dry-run --serial S`, then `install-phone --serial S`: slot B and `userdata` | `write=started`, then `done` | skipped when `done`; `started` runs it again, whole |
 | 6 | USB connection | `phone-ssh true`, `nmcli connection show` | `nmcli connection add …` after Enter (§5a) | `network` | skipped |
 | 7 | First start | the phone: `/var/lib/omamobile/firstboot/done`, then which phone it is | nothing | `first_start` | waits again |
@@ -86,10 +86,8 @@ Details that matter:
   unlocked. One phone only, on adb as in Fastboot Mode; a phone on adb is
   named (model, codename, the last four characters of its serial) before
   the question that restarts it, and another model is not restarted. It
-  stops early, in plain words, for what `install-phone` would refuse later:
-  another model, two phones, a phone running from slot B without
-  `--reinstall`, and a bootloader that reports one slot's version only
-  (below). `install-phone` stays the one that decides.
+  stops early, in plain words, for what `install-phone` would refuse later
+  (§2a). `install-phone` stays the one that decides.
 - **The bootloader's two slots (G4).** Decided 2026-11-10 (plan D4): on a
   first install the installer measures the other slot itself, in
   `tools/install-phone`; that is being built separately. Until the
@@ -153,6 +151,62 @@ Details that matter:
   errors" row quotes the phone's messages, and the installer says to read
   that row before posting the file.
 
+### 2a. Every stop comes before the unlock steps
+
+Decided 2026-11-12 (plan D11). Unlocking the bootloader erases the phone,
+so a locked phone is judged before it is shown how to unlock: nobody
+erases a phone that could not be installed anyway. Each time step 3 finds
+a phone in Fastboot Mode, locked or unlocked, it settles everything that
+the phone's `getvar all` and the download can answer, in this order, and
+only a phone that passes all of it sees the unlock steps (or, unlocked,
+goes on):
+
+1. the build index is there (the download's, or a newer signed one),
+   before the phone is even looked for;
+2. one phone only, and it is the download's model (`product`);
+3. it is the phone the record was started on;
+4. it doesn't run from slot B (unless `--reinstall`);
+5. the two bootloader slots: both versions reported and equal (reported
+   and different stops; one reported stops, G4 below);
+6. each of slot B's image files fits the partition it is written to
+   (`partition-size`), and an image with an AVB footer (`AVB_FOOTERS`) is
+   made for exactly that size;
+7. the phone tells its bootloader and baseband, and the build index has a
+   build with both (§5).
+
+A stop for a locked phone adds: "Its bootloader is still locked: leave it
+locked for now, because unlocking erases the phone." Whether "OEM
+unlocking" is on (`get_unlock_ability`) is read only after all of that,
+for the unlock steps themselves.
+
+**What can't be judged before the unlock**, and why:
+
+- **Whether the phone can be unlocked at all.** `get_unlock_ability` tells
+  whether "OEM unlocking" is on, and that is part of the unlock steps. A
+  phone locked to its carrier shows only in Android, as a switch that
+  stays grey.
+- **`install-phone --dry-run`.** It refuses a locked phone, so it runs
+  after the unlock. Its checks of the phone are the ones above, and one
+  more that needs the owner's answers: slot B's ramdisk image, with the
+  owner's SSH key added, still has to fit its partition (the image as
+  shipped is checked in 6).
+- **That nothing else answers at the phone's USB address** (step 5). It is
+  asked over SSH at the moment of the write, and it is passed by
+  unplugging the other phone; it says nothing about the phone being
+  installed.
+- **Google's factory image.** The owner saves it in step 4. A wrong or
+  partial file is asked for again and is never a stop.
+- **What only happens later:** a write that fails, the first start, the
+  radio backup, the firmware, the check.
+
+**Not checked on a phone yet:** that a locked bootloader answers `getvar
+all` with the same lines as an unlocked one (`current-slot`,
+`version-baseband`, the per-slot bootloader versions, `partition-size`).
+The order above rests on it. A locked phone that leaves one of them out is
+stopped (5, 6 or 7 above) and is not shown the unlock steps, which is the
+safe side; if a real locked phone does that, the stop is what has to
+change, not the order. §8 step 2a is the read-only look.
+
 **What each stop says.** No stop ends with a fixed reassurance. Each ends
 with what is true of the phone at that moment, read from the record:
 nothing has been written; an earlier write began and didn't finish, so
@@ -160,9 +214,10 @@ what was on the phone may already be erased; or Omarchy Mobile is written
 and what was done stays done. A stop that a rerun can get past adds "Run
 this command again to go on from here"; one that a rerun can't get past as
 things are (another model, another phone than the record's, slot B, the
-bootloader slots, another release's record, a phone that tells no serial,
-a failed required check) doesn't, and its own text says what has to
-change. A write that fails partway has its own message: the data may be
+bootloader slots, a file that doesn't fit, a phone that tells no
+bootloader or baseband version, another release's record, a phone that
+tells no serial, a failed required check) doesn't, and its own text says
+what has to change. A write that fails partway has its own message: the data may be
 gone, Android on slot A is untouched but may ask for a factory data reset,
 and running the command again writes the same things again, whole.
 
@@ -371,8 +426,8 @@ checks that each question above is in this file.
   and another baseband: the plan's §6.2 allows one "only for builds the
   index marks tested with that pair", and the index has one `tested` mark
   per build, earned with that build's own baseband. A phone whose pair
-  isn't listed stops and is asked to update Android first (or to open an
-  issue so the build can be added). A fallback can come back when the
+  isn't listed stops at step 3, before any unlock step (§2a), and is asked
+  to update Android first (or to open an issue so the build can be added). A fallback can come back when the
   index records tested pairs.
 - **A match is of two versions, not of a build.** Fastboot tells the
   bootloader and the baseband; builds that share both (carrier variants)
@@ -498,7 +553,8 @@ called, and any call fails the test. The stand-in phone runs the
 installer's own "which phone are you" script on files that stand in for
 `/proc`. It covers a whole install in order; the dry run and exactly what
 it calls; each state of the phone, the warning before the unlock steps,
-one phone on adb; a phone swapped between each pair of looks in Fastboot
+one phone on adb; a locked phone with each stop of §2a, with "OEM
+unlocking" on and off, for which no unlock step is ever printed; a phone swapped between each pair of looks in Fastboot
 Mode (both of the installer's checks and `install-phone --serial`);
 another phone at the USB address before the write; a stale record and
 another phone at each step after it; the index (both versions or
@@ -528,6 +584,7 @@ against the current backup passes. Steps 0 and 1 change nothing.
 | 0 (done, below) | With the phone running Omarchy Mobile on USB: `tools/phone-ssh 'grep -c androidboot.serialno /proc/bootconfig; tr " " "\n" < /proc/cmdline \| grep -c "^androidboot.serialno="; test -e /proc/device-tree/serial-number && echo dt'`. Then compare digests, printing neither serial: on the phone `sed -n 's/^androidboot\.serialno[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' /proc/bootconfig \| tr -d '\n' \| sha256sum`, and later, in Fastboot Mode, `fastboot devices \| awk '{printf "%s", $1}' \| sha256sum` | at least one of the three places has the serial; the two digests are equal | none of the three has it, or the digests differ: §3a's assumption is wrong, and the install would stop at step 7. Don't start it; fix the script first | none needed (read-only) | none |
 | 1 | `tools/factory-index add -d cheetah --tested <release> <the phone's factory zip>`, then `tools/factory-index check -d cheetah` | one build, with the bootloader and baseband `fastboot getvar` reports; the printed SHA-256 equals Google's page | the tool refuses the zip | `git checkout device/cheetah/factory-builds.json` | none (laptop only) |
 | 2 | `tools/install-guided --dry-run` with the phone in Fastboot Mode | the warning first; steps 1 to 5 pass; the `would run` lines are slot B's five images and `userdata`, each with `-s` and the phone's serial; the connection it would add is §5a's; "nothing was written" | any other partition in the plan; the phone step misreads the phone's state; it stops at the bootloader slots (expected on the 7 Pro until `install-phone` measures them: then this runbook waits for that, or the maintainer reads the other slot and passes `--bootloader-slots-match`) | none needed (read-only) | low |
+| 2a | only if a locked phone of the model is at hand (never lock a phone for this): `fastboot getvar all 2>&1 \| sed -E 's/:.*//' \| sort -u` on it and on an unlocked one, comparing the names only | the locked phone's names include `current-slot`, `version-baseband`, `version-bootloader` and `partition-size` | one is missing on the locked phone: §2a's order then stops every locked phone there; the stop has to change before a locked phone is installed | none needed (read-only) | none |
 | 3 | `tools/install-guided` (with `--reinstall` if the phone runs Omarchy Mobile) | the warning once; nothing answering at 172.16.42.1; the zip found in Downloads; the codename asked after the dry run; then the writes | `install-phone` stops: read its message, the phone stays in fastboot. "Something already answers at the phone's USB address": unplug the other phone | `fastboot --set-active=a`, as INSTALL.md | medium (erases `userdata`, as every install) |
 | 4 | at the connection question, read the command and its description, press Enter. This is the first time this profile meets a real NetworkManager. On a computer that already has `omamobile-phone` saved the question doesn't come: to try the new profile there, `nmcli connection delete omamobile-phone` before step 3 | `nmcli connection show omamobile-phone` has `ipv4.method manual`, `ipv4.never-default yes`, priority -100; `nmcli device` shows it on the phone's link; the phone answers; `sysctl net.ipv4.ip_forward` and the firewall's rules are as before | another saved connection takes the phone's link (the phone then doesn't answer); this computer's network changes in any other way | `nmcli connection delete omamobile-phone` | low |
 | 5 | let it run: first start, backup, firmware | "the first start has finished" within minutes, with no internet on the phone but its Wi-Fi; `verified against the phone` per partition; each push `verified` | the first start doesn't finish and `/var/log/omamobile/firstboot.log` shows a step waiting for the network (§5a's reading is then wrong: say so, and the profile goes back to the maintainer); "is not the phone this install wrote" or "doesn't tell its serial number" (step 0 should have caught it); the backup names a writable or mounted partition; provisioning fails twice | rerun `tools/install-guided`; the backup only reads | low |
@@ -554,6 +611,9 @@ hardware address in them.
   lands, `install-phone` asks one more question in a first install, and
   the guided installer has to ask it and feed the answer; `slots_check`
   then stops only where `install-phone` still asks for the option.
+- **A locked bootloader's answers.** §2a judges a locked phone from
+  `getvar all`; that a locked bootloader gives the same lines as an
+  unlocked one has not been seen on a phone (§8 step 2a).
 - **D3.** An exact build not marked tested is used with a note. The
   fallback to another baseband is off (§5) until the index records pairs.
 - **D6.** The index is looked for at
