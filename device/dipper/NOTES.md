@@ -9,6 +9,7 @@ the facts needed for review.
 
 | Date | `boot.img` SHA-256 | Source, as recorded | `/dev/sda` and UFS partitions | Checks and gaps |
 | --- | --- | --- | --- | --- |
+| 2026-11-12 | `ac93a5d9f6787153cf620704f192c22da91cf2041789f16f4214111b8458d226` | RAM image with the FTS5 node enabled directly in the Dipper kernel DTS | `/dev/sda` absent; all 85 UFS partition flags `ro=1` | Full reserved range, kernel `7.3.0-rc6-omamobile-push1`, `stmfts` on `event2`, no Oops/BUG/panic/WARN. No physical touch event captured on this boot; no UFS write. |
 | 2026-11-12 | `1bf0ffd5302fff7fa75f49382567063d7e03bd52083baa81a88107a47dcbdbd2` | Corrected RAM-only FTS5 overlay, rebuilt from the current preprocessed Dipper DTS | `/dev/sda` absent; all 85 UFS partition flags `ro=1` | `0x85fc0000–0x8a8fffff` reserved; `stmfts` exposed `event2` on I2C14, and physical input included contact, changing X/Y coordinates and `ABS_MT_TRACKING_ID=-1` release; `qcom_wdt` bound. No UFS write. |
 | 2026-11-12 (superseded) | `e37196952fca14d5a9152871927039b2ac1d311ec500710f8611f9ac6eff8072` | FTS5 overlay applied to a stale `base-panel.dtb` | `/dev/sda` absent; all 85 UFS partition flags `ro=1` | Touch events worked, but the DTB omitted `removed-region@86200000` and `removed-region@89100000`; `/proc/iomem` exposed those areas as System RAM. Replaced by the corrected image above. No UFS write. |
 | 2026-11-11 | `665fcbd682cd8e64b3ffec1ff7f4ab9ca33a26b9b47b11073be7a3c267abf2b1` | #505 `2d67708e07728b13b5d2a9eda299ace8a1608163`; kernel/DTS #220 `26aa77c317cd029d16e58890c532562ca275c9f0` | Node absent, disk `ro=0`; all 85 partitions `ro=1`; `sdb`–`sdf` `ro=1` | `uname -r` `7.3.0-rc6-omamobile-push1`; `qcom_wdt` bound and feeder running; simpledrm fb0, USB/SSH and reserved `0x85fc0000–0x8a8fffff` passed. Physical screen, keys, touch, GPU and Wi-Fi not tested. RAM boot only; no UFS write. |
@@ -50,6 +51,16 @@ event (`ABS_MT_TRACKING_ID=-1`). No UFS partition was written. The test overlay
 still defines the touchscreen node itself; per CONTRIBUTING §6.1, that node
 must first be added disabled to the kernel DTS before a repository overlay can
 enable it.
+
+Then booted a RAM image with the same FTS5 node enabled directly in the kernel
+DTS. Image SHA-256:
+`ac93a5d9f6787153cf620704f192c22da91cf2041789f16f4214111b8458d226`.
+`stmfts` registered on `event2`; all 85 UFS partitions remained read-only,
+`/dev/sda` was absent, and `/proc/iomem` retained the complete
+`0x85fc0000–0x8a8fffff` reserved range. No Oops, BUG, panic or WARN appeared.
+A physical touch event was not captured during this direct-DTS boot; the
+preceding overlay boot with identical node properties captured contact,
+changing X/Y and release. No UFS partition was written.
 
 ## 2026-11-11 — rebuilt #505 RAM image
 
