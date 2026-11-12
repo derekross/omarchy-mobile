@@ -9,7 +9,7 @@ the facts needed for review.
 
 | Date | `boot.img` SHA-256 | Source, as recorded | `/dev/sda` and UFS partitions | Checks and gaps |
 | --- | --- | --- | --- | --- |
-| 2026-11-12 | `1bf0ffd5302fff7fa75f49382567063d7e03bd52083baa81a88107a47dcbdbd2` | Corrected RAM-only FTS5 overlay, rebuilt from the current preprocessed Dipper DTS | `/dev/sda` absent; all 85 UFS partition flags `ro=1` | `0x85fc0000–0x8a8fffff` reserved; `stmfts` exposed `event2` on I2C14 and physical touch produced `EV_ABS/ABS_MT_TRACKING_ID`; `qcom_wdt` bound. No UFS write. Coordinates and release were not captured. |
+| 2026-11-12 | `1bf0ffd5302fff7fa75f49382567063d7e03bd52083baa81a88107a47dcbdbd2` | Corrected RAM-only FTS5 overlay, rebuilt from the current preprocessed Dipper DTS | `/dev/sda` absent; all 85 UFS partition flags `ro=1` | `0x85fc0000–0x8a8fffff` reserved; `stmfts` exposed `event2` on I2C14, and physical input included contact, changing X/Y coordinates and `ABS_MT_TRACKING_ID=-1` release; `qcom_wdt` bound. No UFS write. |
 | 2026-11-12 (superseded) | `e37196952fca14d5a9152871927039b2ac1d311ec500710f8611f9ac6eff8072` | FTS5 overlay applied to a stale `base-panel.dtb` | `/dev/sda` absent; all 85 UFS partition flags `ro=1` | Touch events worked, but the DTB omitted `removed-region@86200000` and `removed-region@89100000`; `/proc/iomem` exposed those areas as System RAM. Replaced by the corrected image above. No UFS write. |
 | 2026-11-11 | `665fcbd682cd8e64b3ffec1ff7f4ab9ca33a26b9b47b11073be7a3c267abf2b1` | #505 `2d67708e07728b13b5d2a9eda299ace8a1608163`; kernel/DTS #220 `26aa77c317cd029d16e58890c532562ca275c9f0` | Node absent, disk `ro=0`; all 85 partitions `ro=1`; `sdb`–`sdf` `ro=1` | `uname -r` `7.3.0-rc6-omamobile-push1`; `qcom_wdt` bound and feeder running; simpledrm fb0, USB/SSH and reserved `0x85fc0000–0x8a8fffff` passed. Physical screen, keys, touch, GPU and Wi-Fi not tested. RAM boot only; no UFS write. |
 | 2026-11-10 | `540b5d31ea73a31ade9a8d8cb5152cf701dc3c2ad8256734790b0ef2db6dbdd0` | Combined #503/#505; kernel/DTS #220 `055a4019998f22cc0e2a8afef7650274a6ce0657` | Node absent, disk `ro=0`; all 85 partitions `ro=1`; `sdb`–`sdf` `ro=1` | Watchdog/feeder, simpledrm, USB/SSH, reserved TZ range, pinned host key and `reboot-to bootloader` passed; physical keys not captured. |
@@ -44,10 +44,12 @@ the same FTS5 overlay. The corrected RAM image
 kernel `7.3.0-rc6-omamobile-push1`. `/proc/iomem` showed
 `0x85fc0000–0x8a8fffff` reserved; all 85 UFS partition flags were `ro=1`,
 `/dev/sda` was absent, and `stmfts` plus `qcom_wdt` bound. The kernel reported
-no Oops, BUG, panic or WARN. A physical touch produced
-`EV_ABS/ABS_MT_TRACKING_ID` on `/dev/input/event2`; coordinates and release
-were not captured. No UFS partition was written. The overlay still has not
-been added as a packaged device artifact.
+no Oops, BUG, panic or WARN. Physical touch on `/dev/input/event2` produced
+`ABS_MT_TRACKING_ID`, changing `ABS_MT_POSITION_X/Y` values, and a release
+event (`ABS_MT_TRACKING_ID=-1`). No UFS partition was written. The test overlay
+still defines the touchscreen node itself; per CONTRIBUTING §6.1, that node
+must first be added disabled to the kernel DTS before a repository overlay can
+enable it.
 
 ## 2026-11-11 — rebuilt #505 RAM image
 
