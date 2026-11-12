@@ -14,7 +14,7 @@
 # handed to install-phone); every step after the write refused for a phone
 # other than the one written; what each kind of stop says about the phone;
 # the warning, acknowledged once and recorded; the build index (the exact
-# build and no other, a published
+# build, marked tested, and no other; "not tested yet" for one that isn't; a published
 # index with a good and a bad signature) and the factory image taken from
 # the Downloads folder or a typed path, refused unless its size and SHA-256
 # are the index's, and never downloaded; the USB network connection shown
@@ -216,6 +216,17 @@ index() {  # index UPDATED [BASEBAND [TESTED]]
    "sha256": "$fsum", "size": 3000, "tested": $tested$([[ $tested == true ]] && echo ', "tested_with": "2026.11.01"')}
 ]}
 EOF
+}
+# index_two UPDATED PHONE_TESTED OTHER_TESTED [older]: the phone's build
+# (AB1C.230101.001) and another one with another baseband, listed above it
+# (newer, AB1C.230201.002) or with "older" below it (AB1C.221201.003)
+index_two() {
+  local other=AB1C.230201.002 phone entry
+  [[ ${4:-} != older ]] || other=AB1C.221201.003
+  phone=$(index "$1" "$BB" "$2" | sed -n '2,/^ *"sha256"/p')
+  entry=$(sed "s/AB1C\.230101\.001/$other/; s/ab1c\.230101\.001/${other,,}/g; s/\"baseband\": \"[^\"]*\"/\"baseband\": \"otherband-2\"/" <<<"$(index "$1" "$BB" "$3" | sed -n '2,/^ *"sha256"/p')")
+  printf '{"format": 1, "codename": "testdev", "updated": "%s", "builds": [\n' "$1"
+  if [[ ${4:-} == older ]]; then printf '%s,\n%s\n]}\n' "$phone" "$entry"; else printf '%s,\n%s\n]}\n' "$entry" "$phone"; fi
 }
 
 STATE=$t/home/.local/state/omamobile-install/testdev
@@ -648,9 +659,46 @@ fresh
 guided "$ALL" || fail "the exact build is used"
 says "this phone's bootloader and baseband match Google's build AB1C.230101.001" && ! says "this phone runs" ||
   fail "the match is said as a match of the two versions, not as the build the phone runs"
+says "which Omarchy Mobile was tested with" || fail "a tested build is said to be tested"
+# The exact build, marked tested, or the install stops (decided 2026-11-12).
+# A build that is listed and not tested is "not tested yet"; "update
+# Android" is said only when a newer build in the list was tested
+not_tested() {  # WHAT: the stand-in's index holds the phone's build, untested
+  if guided "$ALL"; then fail "$1: a build that isn't marked tested is not used"; fi
+  says "This phone's Android is not tested yet." && says "Google's build AB1C.230101.001:" && says "bootloader: $BL" && says "baseband:   $BB" &&
+    says "No release of Omarchy Mobile has been tested with that build" || fail "$1: said to be not tested yet, with the build"
+  ! says "isn't one Omarchy Mobile knows yet" || fail "$1: not said to be unknown"
+  [[ -z $(writes) && -z $(record factory) && $(events '^xdg-open') == 0 ]] || fail "$1: nothing taken, opened or written"
+  ! says "user name on the phone" && ! says "Google's factory image for this phone" || fail "$1: stopped at the phone step"
+}
+no_update_advice() {
+  says "No newer build in the list has been tested either, so updating Android would" && says "not help." || fail "$1: says that updating Android would not help"
+  ! says "System update" && ! says "Update Android to" || fail "$1: not told to update Android"
+  says "will stop here again until build AB1C.230101.001" && ! says "Run this command again to go on" && says "https://github.com/derekross/omarchy-mobile/issues" ||
+    fail "$1: a rerun stops again, and where to ask"
+}
 fresh; index 2026-11-01 "$BB" false > "$R/device/testdev/factory-builds.json"
-guided "$ALL" || fail "the exact build is used even when not marked tested"
-says "hasn't been tested with that build's firmware yet" || fail "an untested exact build is said to be untested"
+not_tested "the only build, untested"; no_update_advice "the only build, untested"
+fresh; index_two 2026-11-01 false false > "$R/device/testdev/factory-builds.json"
+not_tested "a newer build that isn't tested either"; no_update_advice "a newer build that isn't tested either"
+fresh; index_two 2026-11-01 false true older > "$R/device/testdev/factory-builds.json"
+not_tested "an older build that is tested"; no_update_advice "an older build that is tested"
+fresh; index_two 2026-11-01 false true > "$R/device/testdev/factory-builds.json"
+not_tested "a newer build that is tested"
+says "A newer build has been tested: AB1C.230201.002. Update Android to AB1C.230201.002:" && says "Settings > System > System update" && says "slot B" ||
+  fail "a newer tested build: update Android to it, how, and what an update does to the slots"
+! says "would" || fail "a newer tested build: no word that updating would not help"
+says "Run this command again to go on from here." || fail "a newer tested build: a rerun goes on after the update"
+fresh; index_two 2026-11-01 true true > "$R/device/testdev/factory-builds.json"
+guided "$ALL" || fail "the exact tested build is used, whatever is listed above it"
+[[ $(record factory_build) == AB1C.230101.001 ]] || fail "the phone's own build is the one taken, not the newer one"
+# For a locked phone both come before the unlock steps
+fresh; vars no; index 2026-11-01 "$BB" false > "$R/device/testdev/factory-builds.json"
+locked_stop "a build that isn't tested" "This phone's Android is not tested yet."
+no_update_advice "a locked phone, the only build untested"
+fresh; vars no; index_two 2026-11-01 false true > "$R/device/testdev/factory-builds.json"
+locked_stop "a build that isn't tested, with a newer tested one" "Update Android to AB1C.230201.002:"
+vars; echo 1 > "$t/ability"
 fresh; python3 -I -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m["builds"][0]["page"]="https://example.org/x"; json.dump(m,open(p,"w"))' "$R/device/testdev/factory-builds.json"
 if guided "$ALL"; then fail "an index that sends the owner somewhere else is refused"; fi
 [[ $(events '^xdg-open') == 0 && -z $(writes) ]] || fail "a page that isn't Google's is never opened"
@@ -661,7 +709,7 @@ says "no list of Google's builds" || fail "no index: said plainly"
 fresh
 guided "$ALL" --offline || fail "--offline installs from the bundle's index"
 [[ $(events '^curl') == 0 ]] || fail "--offline fetches nothing"
-pass "the index: the build with the phone's bootloader and baseband, and no other; only Google's page; --offline"
+pass "the index: the build with the phone's bootloader and baseband, marked tested, and no other; 'not tested yet', with 'update Android' only for a newer tested build; only Google's page; --offline"
 
 # A published index counts only with the release key's signature, and only when newer
 G=$t/gnupg; mkdir -m700 "$G"

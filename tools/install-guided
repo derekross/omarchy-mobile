@@ -18,7 +18,8 @@
 #       fastboot answers and this download can settle comes before the
 #       unlock steps (decided 2026-11-12): another model, another phone than
 #       the record's, slot B, the two bootloader slots, a file that doesn't
-#       fit its partition, and the phone's build in the build index. Nobody
+#       fit its partition, and the phone's build in the build index, which
+#       has to be there and marked tested. Nobody
 #       is shown how to unlock, and so erase, a phone that could not be
 #       installed anyway (judge_phone says what can't be judged that early)
 #    4. opens Google's factory image page for the build step 3 found and
@@ -125,6 +126,8 @@ stop() {
   phone_fact
   if [[ ${S[write]:-} == started ]]; then
     printf ' Run this command again to write it again, whole,\n    and go on.\n'
+  elif [[ -z ${S[write]:-} ]] && ((judging_locked)); then
+    printf '\n    Run this command again to go on from here.\n'
   else
     printf ' Run this command again to go on from here.\n'
   fi
@@ -830,7 +833,7 @@ choose_index() {
 }
 declare -A B=()
 find_build() {
-  local out line bl bb
+  local out line bl bb not_tested
   bl=$(var version-bootloader) bb=$(var version-baseband)
   [[ -n $bl && -n $bb ]] ||
     stop_final "The phone doesn't tell its bootloader version or its baseband version. Those" \
@@ -844,16 +847,41 @@ find_build() {
   while IFS= read -r line; do
     if [[ $line == *=* ]]; then B[${line%%=*}]=${line#*=}; fi
   done <<<"$out"
-  # The phone's bootloader and baseband, both, or nothing: there is no
-  # "nearest" build (decision D-a, docs/INSTALL-GUIDED.md §5). Fastboot
-  # tells those two versions, not the build, so "matches" is all that is
-  # claimed.
-  if [[ ${B[match]:-} == exact && -n ${B[build]:-} ]]; then
-    note "this phone's bootloader and baseband match Google's build ${B[build]}"
+  # The phone's bootloader and baseband, both, in a build marked tested, or
+  # the install stops: there is no "nearest" build (decision D-a,
+  # docs/INSTALL-GUIDED.md §5), and a build nobody tested is not used.
+  # Fastboot tells those two versions, not the build, so "match" is all that
+  # is claimed.
+  if [[ ${B[match]:-} == exact && -n ${B[build]:-} && ${B[tested]:-} == true ]]; then
+    note "this phone's bootloader and baseband match Google's build ${B[build]}, which Omarchy Mobile was tested with"
     [[ -z ${B[same_pair]:-} ]] ||
       note "(${B[same_pair]//,/, } carry the same two versions and can't be told apart from here; ${B[build]} is the one used)"
-    [[ ${B[tested]:-} == true ]] ||
-      note "(this release hasn't been tested with that build's firmware yet; it is expected to work)"
+  elif [[ ${B[match]:-} == exact && -n ${B[build]:-} ]]; then
+    # Decided 2026-11-12: "not tested yet", and "update Android" only when
+    # the list has a newer build that was tested. Advice that can't work
+    # (an update to a build that isn't tested either) is not given.
+    not_tested=("This phone's Android is not tested yet. Its bootloader and baseband match"
+      "Google's build ${B[build]}:"
+      "    bootloader: $bl"
+      "    baseband:   $bb"
+      "No release of Omarchy Mobile has been tested with that build, and the installer"
+      "only uses a build that was tested, so it stops here."
+      "")
+    if [[ -n ${B[newer_tested]:-} ]]; then
+      stop "${not_tested[@]}" \
+        "A newer build has been tested: ${B[newer_tested]}. Update Android to ${B[newer_tested]}:" \
+        "start Android, then Settings > System > System update. Then run this again." \
+        "Android may offer a build newer than that one; the installer then says whether" \
+        "that build is tested." \
+        "If an update moves Android to slot B, the installer will say so and" \
+        "INSTALL.md, step 3, has the way to put it back on slot A."
+    else
+      stop_final "${not_tested[@]}" \
+        "No newer build in the list has been tested either, so updating Android would" \
+        "not help. Running this again will stop here again until build ${B[build]}" \
+        "has been tested. To ask for that, open an issue:" \
+        "https://github.com/derekross/omarchy-mobile/issues"
+    fi
   else
     stop "This phone's Android version isn't one Omarchy Mobile knows yet: no build in the" \
       "list has both its bootloader ($bl) and its baseband ($bb)." \

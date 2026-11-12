@@ -844,9 +844,18 @@ never offered: that write stays a manual, named exception.
   locked phone is judged before it is shown how to unlock, since the
   unlock erases it: the model, the phone the install was started on, slot
   B, the two bootloader slots, each image against its partition and the
-  build index are all settled from the
+  build index (D12) are all settled from the
   phone's fastboot answers and the download first, and a phone that fails
   one is stopped without seeing the unlock steps. What can't be judged
   that early is listed, with the reason, in
   [INSTALL-GUIDED](INSTALL-GUIDED.md) §2a; that a locked bootloader
   answers like an unlocked one is still to be seen on a phone.
+- **D12. A build that isn't tested: decided 2026-11-12, the install stops
+  and says "not tested yet".** The installer uses the build whose
+  bootloader and baseband both equal the phone's, and only when the index
+  marks it tested (§6.2's first case with that condition; D3 still says
+  which builds earn the mark). A phone whose exact build is listed and not
+  tested is told that it is not tested yet. It is told to update Android
+  to a named build only when a newer build in the index is tested; when
+  none is, updating would not help, and the installer doesn't advise it
+  ([INSTALL-GUIDED](INSTALL-GUIDED.md) §5).

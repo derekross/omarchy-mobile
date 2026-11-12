@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # The guided install: design of milestone M1
 
-Status (2026-11-10): **built and tested against stand-ins; not yet run on a
+Status (2026-11-12): **built and tested against stand-ins; not yet run on a
 phone, and not in any release bundle.** This is the design of M1 in the
 [install experience plan](INSTALL-EXPERIENCE-PLAN.md) §11: one command that
 runs the whole install with today's tools. The code is
@@ -172,7 +172,7 @@ goes on):
    (`partition-size`), and an image with an AVB footer (`AVB_FOOTERS`) is
    made for exactly that size;
 7. the phone tells its bootloader and baseband, and the build index has a
-   build with both (§5).
+   build with both, marked tested (§5).
 
 A stop for a locked phone adds: "Its bootloader is still locked: leave it
 locked for now, because unlocking erases the phone." Whether "OEM
@@ -419,21 +419,38 @@ checks that each question above is in this file.
   installer uses it only when the signature is by a key `install-phone`
   pins and its `updated` is later than the local one. `--offline` skips the
   lookup. A missing or refused published copy is not an error.
-- **The match: both versions, or nothing** (decision D-a, applied as the
-  safe default). The build whose bootloader and baseband both equal the
-  phone's is used; an exact build that isn't marked tested is used with a
-  line saying so. There is no fallback to a build with the same bootloader
-  and another baseband: the plan's §6.2 allows one "only for builds the
-  index marks tested with that pair", and the index has one `tested` mark
-  per build, earned with that build's own baseband. A phone whose pair
-  isn't listed stops at step 3, before any unlock step (§2a), and is asked
-  to update Android first (or to open an issue so the build can be added). A fallback can come back when the
-  index records tested pairs.
+- **The match: the exact pair, marked tested, or the install stops**
+  (decision D-a, and the maintainer's word of 2026-11-12, plan D12). The
+  build whose bootloader and baseband both equal the phone's is used, and
+  only when it is marked tested. There is no fallback to a build with the
+  same bootloader and another baseband: the plan's §6.2 allows one "only
+  for builds the index marks tested with that pair", and the index has one
+  `tested` mark per build, earned with that build's own baseband. A
+  fallback can come back when the index records tested pairs. Each of the
+  stops below comes at step 3, before any unlock step (§2a):
+  - **The pair isn't listed:** "This phone's Android version isn't one
+    Omarchy Mobile knows yet". The owner is asked to update Android first,
+    or, if it is up to date, to open an issue so the build can be added.
+  - **The build is listed, not marked tested, and a newer build in the
+    list is tested:** "This phone's Android is not tested yet", then
+    "A newer build has been tested: <build>. Update Android to <build>",
+    with how, and that an update can move Android to slot B. A rerun goes
+    on after the update. `factory-index match` names that build
+    (`newer_tested`): the newest tested one listed above every build that
+    has the phone's pair.
+  - **The build is listed, not marked tested, and no newer build is
+    tested:** "This phone's Android is not tested yet", then "No newer
+    build in the list has been tested either, so updating Android would
+    not help." It is not told to update Android: that advice could not
+    work. A rerun stops again until the build is tested, and the stop
+    gives the issue address. A tested build that is older than the phone's
+    changes nothing here: Android doesn't update backwards.
 - **A match is of two versions, not of a build.** Fastboot tells the
   bootloader and the baseband; builds that share both (carrier variants)
-  can't be told apart. The installer says "matches", uses the first such
-  build in the file, and names the others; `factory-index check` lists
-  such groups for the maintainer.
+  can't be told apart. The installer says "match", uses the first such
+  build in the file that is marked tested, and names the others (when none
+  of them is tested, the stop names the first); `factory-index check`
+  lists such groups for the maintainer.
 
 `tools/factory-index add [-d CODENAME] [--tested RELEASE] FACTORY.zip` adds
 a build from a factory zip on the maintainer's computer: the name, size and
@@ -557,8 +574,9 @@ one phone on adb; a locked phone with each stop of §2a, with "OEM
 unlocking" on and off, for which no unlock step is ever printed; a phone swapped between each pair of looks in Fastboot
 Mode (both of the installer's checks and `install-phone --serial`);
 another phone at the USB address before the write; a stale record and
-another phone at each step after it; the index (both versions or
-nothing) and the factory image; a failure at each step followed by a
+another phone at each step after it; the index (both versions, marked
+tested, or a stop; "not tested yet" with and without a newer tested build,
+an older tested build, and for a locked phone) and the factory image; a failure at each step followed by a
 rerun; what each kind of stop says; the record; the camera's modules
 (consent, `no`, a failed fetch, a list without digests); a missing program
 at step 1; the real `tools/phone-provision` given the installer's exact
@@ -614,7 +632,10 @@ hardware address in them.
 - **A locked bootloader's answers.** §2a judges a locked phone from
   `getvar all`; that a locked bootloader gives the same lines as an
   unlocked one has not been seen on a phone (§8 step 2a).
-- **D3.** An exact build not marked tested is used with a note. The
+- **D3.** Which builds are marked tested, and how a build earns the
+  mark, is still the maintainer's to say. The rule that uses the mark is
+  decided (2026-11-12, §5): the exact build, marked tested, or the install
+  stops, so until builds are marked no phone gets past step 3. The
   fallback to another baseband is off (§5) until the index records pairs.
 - **D6.** The index is looked for at
   `releases/<codename>/factory-builds.json`; nothing uploads it there yet

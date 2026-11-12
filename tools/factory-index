@@ -19,13 +19,18 @@ For an installer (the reader; it needs no repository):
   factory-index info  --index FILE --codename C
       checks FILE and prints  updated=YYYY-MM-DD  and  builds=N
   factory-index match --index FILE --codename C --bootloader V --baseband V
-      prints the build to use as KEY=value lines: match=exact when a build
+      prints the phone's build as KEY=value lines: match=exact when a build
       carries both the phone's bootloader and its baseband, else match=none.
       There is no nearest build: the "tested" mark is one per build, so it
       says nothing about that build's files on a phone with another
-      baseband. Fastboot can't tell apart builds that share both versions
-      (carrier variants do); the first in the file is printed, and the
-      others are named in  same_pair=BUILD,BUILD
+      baseband. tested=true or false is that build's mark; an installer uses
+      a tested build only. Fastboot can't tell apart builds that share both
+      versions (carrier variants do); the first of them marked tested is
+      printed (the first in the file when none is), and the others are named
+      in  same_pair=BUILD,BUILD
+      For a build that isn't tested,  newer_tested=BUILD  names the newest
+      tested build listed above it (the file is newest first), or is empty:
+      an Android update can only help when there is one
 
 For the maintainer, in the repository (-d CODENAME, default cheetah):
 
@@ -268,7 +273,7 @@ def cmd_check(a):
             "tested with " + b["tested_with"] if b["tested"] else "not tested"))
     for group in same_pairs(idx):
         print("  note: %s share a bootloader and baseband; a phone can't be told to run one or the "
-              "other, and the first listed is the one an installer asks for" % ", ".join(group))
+              "other, and an installer asks for the first of them that is marked tested" % ", ".join(group))
 
 
 def cmd_info(a):
@@ -284,11 +289,16 @@ def cmd_match(a):
     print("match=" + ("exact" if found else "none"))
     print("updated=" + idx["updated"])
     if found:
-        b = found[0]
+        # Of builds a phone can't tell apart, a tested one wherever it is listed
+        b = next((o for o in found if o["tested"]), found[0])
         for key in ("build", "bootloader", "baseband", "zip", "page", "sha256", "size"):
             print("%s=%s" % (key, b[key]))
         print("tested=" + ("true" if b["tested"] else "false"))
-        print("same_pair=" + ",".join(o["build"] for o in found[1:]))
+        print("same_pair=" + ",".join(o["build"] for o in found if o is not b))
+        # Newer than every build the phone may be running: listed above the first of them
+        above = idx["builds"][:idx["builds"].index(found[0])]
+        newer = "" if b["tested"] else next((o["build"] for o in above if o["tested"]), "")
+        print("newer_tested=" + newer)
 
 
 def cmd_sign(a):

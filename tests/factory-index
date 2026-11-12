@@ -99,13 +99,19 @@ pass "add refuses a second copy, another board, files that disagree, another bui
 m() { fx match --index "$idx" --codename testdev --bootloader "$1" --baseband "$2"; }
 out=$(m testloader-1.0-111 testband-9.9-222)
 grep -cx 'match=exact' <<<"$out" >/dev/null && grep -cx 'build=AB1C.230101.001' <<<"$out" >/dev/null && grep -cx "sha256=$sum" <<<"$out" >/dev/null &&
-  grep -cx 'tested=false' <<<"$out" >/dev/null || fail "the exact build is used, tested or not"
+  grep -cx 'tested=false' <<<"$out" >/dev/null || fail "the exact build is named, with its mark"
+grep -cx 'newer_tested=AB1C.230201.002' <<<"$out" >/dev/null || fail "for a build that isn't tested, the newest tested build above it is named"
+grep -cx 'newer_tested=' <<<"$(m testloader-1.0-111 otherband-1.0-333)" >/dev/null || fail "a tested build needs no newer one"
 # A tested build with the same bootloader and another baseband is no match:
 # its mark was earned with its own baseband
 [[ $(m testloader-1.0-111 unknownband) == match=none* ]] || fail "the same bootloader with another baseband matches nothing, tested or not"
 ! grep -c '^build=' <<<"$(m testloader-1.0-111 unknownband)" >/dev/null || fail "no build is offered without an exact match"
 fx untested -d testdev AB1C.230201.002 >/dev/null
 grep -cx 'tested=false' <<<"$(m testloader-1.0-111 otherband-1.0-333)" >/dev/null || fail "untested takes the mark back"
+grep -cx 'newer_tested=' <<<"$(m testloader-1.0-111 testband-9.9-222)" >/dev/null || fail "no newer build is named when none above is tested"
+fx tested -d testdev AB1C.230101.001 2026.11.08 >/dev/null
+grep -cx 'newer_tested=' <<<"$(m testloader-1.0-111 otherband-1.0-333)" >/dev/null || fail "a tested build below is older: it is never named as the one to update to"
+fx untested -d testdev AB1C.230101.001 >/dev/null
 fx tested -d testdev AB1C.230201.002 2026.11.08 >/dev/null
 grep -c 'tested with 2026.11.08' <<<"$(fx check -d testdev)" >/dev/null || fail "tested marks a build with its release"
 [[ $(m otherloader-2 testband-9.9-222) == match=none* ]] || fail "another bootloader matches nothing"
@@ -119,10 +125,15 @@ z3=$(factory ab1c.230101.001.a1 testdev testloader-1.0-111 testband-9.9-222)
 fx add -d testdev "$z3" >/dev/null || fail "add takes a build that shares another's versions"
 out=$(m testloader-1.0-111 testband-9.9-222)
 grep -cx 'build=AB1C.230101.001.A1' <<<"$out" >/dev/null && grep -cx 'same_pair=AB1C.230101.001' <<<"$out" >/dev/null ||
-  fail "of builds that share both versions the first listed is printed and the others are named"
+  fail "of builds that share both versions the first listed is printed when none is tested, and the others are named"
+fx tested -d testdev AB1C.230101.001 2026.11.08 >/dev/null
+out=$(m testloader-1.0-111 testband-9.9-222)
+grep -cx 'build=AB1C.230101.001' <<<"$out" >/dev/null && grep -cx 'tested=true' <<<"$out" >/dev/null && grep -cx 'same_pair=AB1C.230101.001.A1' <<<"$out" >/dev/null &&
+  grep -cx 'newer_tested=' <<<"$out" >/dev/null || fail "of builds that share both versions the tested one is printed, wherever it is listed"
+fx untested -d testdev AB1C.230101.001 >/dev/null
 grep -c 'note: AB1C.230101.001.A1, AB1C.230101.001 share a bootloader and baseband' <<<"$(fx check -d testdev)" >/dev/null ||
   fail "check names the builds a phone can't tell apart"
-pass "match: the build with the phone's bootloader and baseband, never one with the bootloader alone; shared pairs named"
+pass "match: the build with the phone's bootloader and baseband, never one with the bootloader alone; shared pairs named, a tested one first; the newer tested build for one that isn't"
 
 refuse() {  # WHY PYTHON-EDIT
   python3 -I -c "import json, sys; m = json.load(open(sys.argv[1])); b = m['builds'][0]; $2; json.dump(m, open(sys.argv[2], 'w'))" "$t/good.json" "$t/bad.json"
