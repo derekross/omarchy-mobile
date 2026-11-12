@@ -3,6 +3,62 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-185. A rule can change between our comment and the contributor's
+  push.** AGENTS' `userdata`-through-`install-phone` exception (`10daf5f`)
+  landed after our follow-up on #25 and before its next push, so a PR that
+  did everything asked now broke a rule its author never saw. *Check:* `git
+  log --since=<our last comment> -- AGENTS.md CONTRIBUTING.md` before judging
+  a re-push, and say in the comment which rule is new. Extends L-31 and
+  L-124. *From:* #25, round 20.
+- **L-196. A stack of N PRs is gated once at its top and read N times.**
+  Kernel #73-#79 are one linear chain on today's base; `kernel-pr-check
+  --build --merge` on each head rebuilt the same objects seven times, while
+  the per-commit builds (L-179) and the parent-name audit (L-193) on the top
+  head covered everything in one pass. *Check:* `git log base..headN` for
+  each PR to prove the chain, gate the top head, build the chain commit by
+  commit, and give one merge plan (merge the top PR, close the rest) next to
+  the one-by-one order. *From:* kernel #73-#79, round 21.
+- **L-197. A status word we ask for is checked against the legend and the
+  site's parser before we post it.** Our "the matrix row says 'in review'"
+  on #52 produced a row whose every cell the website renders as "no"
+  (`devices.ts` `parseCell`). *Check:* `grep` the legend in DEVICES.md and
+  `STATUS_WORDS` in `omamobile-website/src/lib/devices.ts` for any status
+  wording we prescribe. Extends L-31 and L-66. *From:* #52, round 21.
+- **L-198. When the contributor says the record doesn't exist, the file
+  records that it doesn't, and a baseline taken over an unexplained change
+  is downgraded, not adopted.** #35's reply gave a negative record (no date,
+  tool, partition list or boot list) and accepted the hold, while the plan
+  still said "the new baseline" and "a Linux slot A boot does not run the
+  modem stack". *Check:* the negative facts land in NOTES and Risks in the
+  contributor's words; the unexplained copy is "current contents, cause
+  unknown"; the baseline becomes the backup after the next stock boot.
+  Extends L-34, L-168 and L-186. *From:* #35, round 21.
+- **L-199. A read point we prescribe is named relative to the driver's last
+  write, not to a phase.** "Right after link-up, before MHI power-up" under
+  ath11k is after `ath11k_pci_soc_global_reset()`, and the read hung; the
+  same phase on stock (`linkup`, no reset) read fine six times. *Check:*
+  before asking for a register read, list the driver's writes to the block
+  up to that point in both trees, and name the read as "after write X,
+  before write Y". Extends L-135 and C-7. *From:* issue #36, round 21.
+- **L-215. A vendor-kernel A/B outranks host-side hypotheses.** On issue
+  #36 the stock kernel stalled exactly like mainline, retiring every
+  host-driver difference at once, while we were still asking for host-side
+  changes. *Check:* before asking for one, ask whether the stock kernel ran in
+  the failing shape, and list what differs between the stock run that works
+  and the one that doesn't. Extends L-204. *From:* issue #36, round 22.
+  (Corrected 2026-10-28, C-12: "a vendor-kernel A/B" means a one-variable
+  A/B; a stock run that differs in host and timing at once rules out
+  neither.)
+- **L-216. A re-push that answers our requests is trailer-checked on every
+  commit.** #77's re-push appended our sentence below its `Link:`, turning
+  the trailer into body text. *Check:* `git interpret-trailers --parse` on
+  each commit of the new head against the old head's. Extends L-119 and
+  L-183. *From:* kernel #77, round 22.
+- **L-217. A version we ask a contributor to take can be taken by main
+  first.** We asked #78 for 0.2.30; #90 shipped it an hour after his push.
+  *Check:* list the maintainer's open and local branches' versions of the
+  package and ask for the first free one, or say "the next free version at
+  merge" and set it ourselves. Extends L-12. *From:* #78, round 22.
 - **L-353. A same-day notes PR on one device conflicts with its sibling.**
   Both add their section at the top of NOTES (#208, #209). *Check:*
   merge-tree the second PR onto the first one's squash and plan the order
@@ -52,7 +108,6 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   packages at once. The rule since: the maintainer sets every version by hand
   at merge (file and squash subject), and each review lists the collisions it
   found rather than asking the contributor to renumber.
-
 - **L-427. A change under a boot-files device package's `src/` makes its
   staged boot files stale, and that strands a sibling's new dependency on
   it.** `tools/stage-boot-files` hashes `packages/<device>/src`, so #403's
@@ -183,7 +238,6 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   CI skips (L-548). For each file main added under the repurposed directory
   since the PR's base, run `test/all` with `OMARCHY_PKG` for each family on
   the resolved tree.
-
 - **L-551. A version we write into "I'll title it X" goes stale like any other
   promise; check it again when merging.** On 11-05 we promised #421 the title
   `shell 0.2.101`; #464 shipped 0.2.101 two days later, and the branch's

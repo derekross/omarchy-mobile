@@ -3,6 +3,118 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-760. A new `syscon`-only node in a shared SoC dtsi is neutral on sibling
+  boards, because a syscon regmap is made on first lookup, not at boot; say
+  that rather than asking for `disabled`.** L-465's request is for nodes that
+  bind a driver and touch registers at probe; kernel #243's
+  `google,zuma-vgpio2ap-sysreg` binds none. *Check:* the compatible list ends
+  in `syscon` and `git grep '"<compatible>"' drivers/` is empty, nothing on
+  the sibling references the label, and `clk-<soc>.c` has no gate for the
+  block. Narrows L-465. *From:* kernel #243, round 52, 2026-11-11.
+- **L-759. When the image's package list follows upstream's, every package a
+  new upstream version adds is read for its licence and against our held
+  migrations.** Omarchy 4.5's composed list adds `superwhisper-bin`
+  (`LicenseRef-proprietary`), and `owe` and Fcitx add-ons whose migrations we
+  hold on updated phones, so a fresh image would differ from an updated phone.
+  *Check:* compose both versions' lists with `omarchy_packages`, `comm` them,
+  `pacman -Si` each addition for `Licenses`, and grep `omarchy-migrate`'s hold
+  list; additions go to `rootfs/packages.omarchy-skip` or get a line saying
+  why not. Extends L-233 and L-584. *From:* #665 with #670 (commit review),
+  round 52, 2026-11-11.
+- **L-758. A fix for a base-system requirement that a new upstream version
+  enforces is checked for what delivers it to each phone before the pin
+  moves.** #437 fixed `/run`'s mode in the initramfs, which reaches a phone
+  only with new boot images and a reboot, and only the 7 Pro's device package
+  carries boot files; #670 then moved every phone to Omarchy 4.5, whose sudo
+  migration exits 1 on `/run` 1777 (issue #447). *Check:* for each such
+  requirement, name what delivers the fix to a release-installed phone and to
+  each device without packaged boot files; prefer a fix inside the transaction
+  (tmpfiles.d, the update's preflight). Extends L-500, L-442 and L-415.
+  *From:* #670 with #437 and #673 (commit review), round 52, 2026-11-11.
+- **L-732. A table keyed on the bootloader's scanout size is checked for a second board of that size on the same SoC, open PRs included.** Kernel #181 picks gs201's modes by 1080x2400, which is also the Pixel 7a's size (kernel #202). *Check:* list the panel sizes of every board on the SoC, merged and open, before accepting size as a key. Extends L-464 and L-104. *From:* kernel #181 with kernel #202, round 51, 2026-11-11.
+- **L-731. An opt-in shell feature is checked for the surfaces it maps with the option off.** #612's setting gates the dock tap, but its two full-screen Top-layer windows are `visible: true` on every phone. *Check:* grep the diff for `PanelWindow` and read each `visible:`; with the option off, `hyprctl layers` matches main's. Extends L-608 and L-491. *From:* #612, round 51, 2026-11-11.
+- **L-730. An unchanged open PR is re-read each round against what the base gained under it: new compatibles in its driver's match table, and merged code that touches its open points.** Kernel #232's sleep callbacks bound one SoC until the base gave `pcie-gs201-cp` the Pixel 9a's compatible; #556's "screen state runs on every phone" was a caution until main got the 9a's own start-up "screen on" and a modem unit that can start at boot. Neither diff had changed. *Check:* `git log <old base>..<base> -- <each touched file>`, `git grep -n compatible <base>:<file>`, and grep main for what each open point names. Extends L-423, L-206 and L-608. *From:* kernel #232, #556, round 51, 2026-11-11.
+- **L-705. A switch named after one feature that flips a shared daemon's
+  profile is read for what else the profile governs.** #629's "keyboard
+  haptics: off" set feedbackd's `silent` profile, which drops sound and
+  vibration for every event, and omatel rings calls through feedbackd.
+  *Check:* `git grep -n feedbackd origin/main -- 'packages/*/PKGBUILD'
+  packages/omamobile-shell`, and the app repositories, for the other consumers
+  before accepting a profile change. Extends L-462. *From:* #629, round 50.
+- **L-704. A new file directly under `device/<codename>/` is checked against
+  the names the build tools read by convention.** #565 added
+  `device/bluejay/kernel.config` as the record of one build; `bin/omamobile
+  kernel` merges that file into every non-release build, so its fixed
+  `CONFIG_LOCALVERSION` would have named every Bluejay kernel after the tested
+  one, defeating the helpers' `uname -r` pin. *Check:* `git grep -n
+  'device/\$DEVICE/' bin tools` for the file's name, and grep any fragment for
+  `LOCALVERSION`. Extends L-149 and L-337. *From:* #565, round 50.
+- **L-703. A once-only step keyed on a default value reaches every device that
+  still has the default, and "unchanged on the 7 Pro" covers the result, not
+  the mechanism.** #635's step matches scale `= 3` or `"auto"`, so the 8 Pro
+  would rescale at its next login; on the 7 Pro the scale stays 3 (71x155 mm,
+  also at ±2 mm) but the session gains a rewritten user file and a module run
+  at every reload. *Check:* a table of DEVICES.md's devices with each one's
+  input and result, and a list of the side effects that don't depend on the
+  result. Extends L-608 and L-299. *From:* #635, round 50.
+- **L-702. A status key rewritten for one phone's new capability is evaluated
+  with the other phones' object.** #626 changed `speaker` from "is the tegu
+  route" to `output == 'speaker'`, and `output` defaults to `speaker`
+  everywhere, so a 7 Pro earpiece call would report the loudspeaker; the test
+  used `MagicMock(tegu=True, …)` throughout. *Check:* build the reference
+  phone's object (`VoiceAudio.__new__` with `tegu = False`), diff `status()`
+  at base and head, and `git grep` the key's readers. Extends L-206 and L-608.
+  *From:* #626, round 50.
+- **L-701. Two starters that read one signal are compared for what each
+  clears.** #403's 7 Pro branch removes the counted `.refused-*` copies when
+  it finds the reboot note; the 9a's `omamobile-tegu-modem-up` (#372) removes
+  only the latch and the note, so a hang, a push and a second hang starts the
+  modem on one phone and holds it on the other. *Check:* `git grep` the
+  signal's path (`/var/lib/omamobile/deliberate-restart`) across `packages/`
+  and lay each reader's `rm` line side by side. Extends L-492 and L-444.
+  *From:* #403 with #372, round 50.
+- **L-669. A build-time switch that changes what an initramfs boots is checked
+  at the next consumer of the cached file.** #503's `OMAMOBILE_NFSROOT` is
+  validated in `cmd_initramfs`, but `images`, `flash` and `push` read
+  `initramfs.cpio.lz4` from `KERNEL_OUT` without knowing how it was built.
+  *Check:* for each new build input, name the cached artifact it lands in and
+  every command that reads it later, and ask for a visible line or a refusal
+  there. Extends L-282. *From:* #503, round 49, 2026-11-10.
+- **L-668. A fix that lets a new kind of input through the installer is
+  followed to the first boot.** #609 lets a lived-in root pass
+  `tools/install-phone`'s image check; the installer still writes
+  `firstboot.conf` into it, and firstboot's answer to an existing user is to
+  refuse and keep the file. *Check:* for each input an installer newly
+  accepts, name what each first-boot unit does with it
+  (`omamobile-firstboot`'s `validate`, the fingerprint runner's TD) and ask
+  for that boot's log. Extends L-451. *From:* #609, round 49, 2026-11-10.
+- **L-667. A new app is checked against the plan row for the app it
+  duplicates.** #611 added a Files app without mentioning that
+  `docs/TELEPHONY-APPS-PLAN.md` records "Files: reuse Nautilus", which sits in
+  Home's dock and serves the portal chooser. *Check:* `git grep -n -i "<the
+  app's role>" docs/*PLAN.md
+  packages/omamobile-shell/plugins/omamobile.home/HomeModel.js`, and the
+  `.desktop` `Name=` of what's installed; a duplicate name or a contradicted
+  plan row is the maintainer's decision before any code review. *From:* #611,
+  round 49, 2026-11-10.
+- **L-666. `~/.local/share/omarchy` is Omarchy's legacy root, not a free data
+  directory.** #610 put a browser profile (a login) under it;
+  `omarchy-upgrade-to-quattro` moves that directory to a `.bak` and replaces
+  it with a link to `/usr/share/omarchy`, and `omarchy-nvim-setup` reads it as
+  `OMARCHY_PATH`. *Check:* grep a PR's added lines for `share/omarchy`,
+  `config/omarchy` and `state/omarchy` paths it creates, then the signed
+  Omarchy package's `usr/bin` for the same path (`mv`, `rm`, `ln -sfn`, `-d`
+  tests); our own data goes under `omamobile/`. Extends L-32, L-227 and L-498.
+  *From:* #610, round 49, 2026-11-10.
+- **L-665. A shared-driver change accepted "by reading" in an early round is
+  re-checked against CONTRIBUTING §6.2 at the merge round, and "rare" is
+  traced to every caller.** Kernel #116's MIF restore passed round 29 as "one
+  ACPM read" when leaving 120 Hz; `gs_decon_crtc_atomic_disable` drops to 60
+  Hz first, so on the 7 Pro it runs at every screen-off, and it has never run
+  there. *Check:* list each ungated hunk on a reference-phone path, the
+  callers of its function and the user events that reach them, `git grep` the
+  clone's branches for its symbol, then run it or record the waiver. Extends
+  L-229, L-326 and L-342. *From:* kernel #116, round 49, 2026-11-10.
 - **L-328. Moving a CPIF watcher from open-per-poll to a held fd changes the
   node's open count for the CP's lifetime; read open and release before
   calling it neutral.** On our CPIF, `bootdump_open` runs `init_comm` (which
@@ -164,7 +276,6 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   the reference phone's AoC; a stage the PR's own notes say aborts the SoC
   unless another ran first must enforce that order (a per-boot marker).
   *From:* #22.
-
 - **L-32. Know what Omarchy already sets before claiming a userspace
   default.** `omarchy-settings` ships `/etc/systemd/logind.conf.d` drop-ins
   (`HandlePowerKey=ignore`), and Omarchy's Hyprland config binds the
@@ -177,7 +288,6 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   policy is harmful (logind suspending a folded phone) waits for the
   omarchy-mobile change that handles it, so no build ever has one without
   the other. *From:* kernel #12 with #29.
-
 - **L-49. "Disabled" means disabled in the DTB the phone runs: the DTS plus
   its `DTB_OVERLAYS`.** Cheetah's DTS has `pmic-1` disabled, but its
   `suspend-pmic-test` overlay enables it, so a new S2MPG12 cell binds on
@@ -212,66 +322,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   gs201 value next to the constant it replaced, each new branch's gs201
   condition, then one boot with before/after reads of the driver's own
   counters. *From:* kernel #46.
-- **L-112. A core change that makes a reserved value valid updates the
-  binding that reserved it, and names the boards that change.** reboot-mode
-  has skipped a zero magic since 2016 and its binding says "non-zero".
-  *Check:* `git log -S` on the binding for the rule's origin, `git grep` for
-  the value across all DTs (`da850-lego-ev3`'s zero `mode-normal`, written `<0x00000000>`), and both
-  in the commit message. *From:* kernel #45.
-- **L-136. A probe's default pin or register is a per-board fact.**
-  `bt-uart-test --wake` defaulted to cheetah's gpp16:3 on every phone; on
-  gs101 that is a USI8 pin. *Check:* a tool that drives a GPIO or register
-  on the phone takes its default from the board's compatible, or refuses an
-  unknown board without an explicit value. Extends L-13. *From:* #22,
-  round 12.
-- **L-137. A device package's wants links can override another package's
-  "installed, not enabled" policy.** raven's package enabled the modem and
-  SIM units at boot. *Check:* for each `vendor/systemd/**/*.wants/*` link,
-  find the package that owns the unit and read its install message and unit
-  comments; turning a radio on by default is the maintainer's call. *From:*
-  #41, round 12.
-- **L-160. Hiding a shell surface removes every gesture on it, and a new
-  edge surface is checked against the keyboard and fullscreen windows.** #43
-  hid the dock over apps, its swipe-up the switcher's only entry point; its
-  new full-width pill sat on the Overlay layer with no input mask. *Check:*
-  `git grep` the surface's handlers; for a new layer surface, its layer,
-  input region, the keyboard's layer and fullscreen apps. *From:* #43,
-  round 14.
-- **L-161. A lock-path check that fails open is a finding.** `jq -e
-  'all(.dpmsStatus)'` read a failed `hyprctl` query as "screen off", so Power
-  would stop locking. Test for the positive state, failing towards locking.
-  *From:* #43, round 14.
-- **L-162. A per-board audio file is only as safe as the shared fallback,
-  and node-name filters apply to every board with that name.** If tegu's card
-  name changed, alsa-ucm-conf would fall back to cheetah's profile, whose mic
-  list takes tegu's AoC down; cheetah's loudness filter matches any sink named
-  `sound-aoc`. "Stage ceilings" are cheetah's CS35L41 bound: a new amplifier
-  needs its own. *From:* #44, round 14.
-- **L-172. An NFC core change is a cheetah change: the Pixel 7 Pro polls
-  through neard at boot.** `omamobile-nfc-open` is enabled by
-  `omamobile-setup-system` and starts a poll loop, so every `net/nfc`
-  behaviour tied to polling (rfkill block, poll ownership, proprietary
-  notifications) runs on the reference phone at every boot; the NFC tile's
-  "Off" had been a no-op there too. *Check:* `git grep -n nfc-open
-  packages/omamobile-device-cheetah` before saying "cheetah unaffected" for
-  an NFC change. Extends L-51. *From:* kernel #71 with #78, round 20.
-- **L-173. A shared `initramfs/init` change is cheetah-neutral by its
-  gates, not by a byte comparison.** The init text changes for every device,
-  so the packed image differs by construction. *Check:* list each new path's
-  marker file, show that `bin/omamobile initramfs-config` packs none of them
-  for cheetah and felix (byte-identical `etc`), read each path's early
-  return, and let the next routine cheetah push be the boot. Extends L-8 and
-  L-134. *From:* #41, round 20.
-- **L-206. Shared drivers leave the Pixel 7 Pro unchanged by construction
-  (CONTRIBUTING §6.2).** New behaviour sits behind the contributor's own match
-  data; a deliberate cheetah change needs a reason that holds on cheetah and a
-  run on the maintainer's phone before merge. Where a flag is tested inside a
-  shared function (#57's `UNGATE_POST_CHANGE` in `exynos_ufs_setup_clocks()`),
-  the object can't be byte-identical: accept a per-function object diff plus a
-  flag table showing cheetah's path unchanged (L-111). Per-SoC data also
-  reaches every board that binds it through a fallback compatible (#83's
-  `zumapro_ufs_drvs` is zuma's too). *Check:* cheetah's objects before and
-  after, function by function where they differ; `git grep '"<compatible>"'
-  arch/` for every board listing the data's compatible, fallbacks included,
-  and those boards' plans for statements the change falsifies. Extends L-151.
-  *From:* kernel #57, #82, #83, #88, round 22.

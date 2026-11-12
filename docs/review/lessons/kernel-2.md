@@ -3,6 +3,24 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-141. A gs101 power domain turned off without its DTZPC save needs the
+  save before anything powers it back on.** André's driver skips the EL3
+  save and restore for a `google,gs101-pd` without `samsung,dtzpc`, so the
+  first consumer finds the block's TrustZone settings reset, and its
+  registers SError. *Check:* a new `power-domains = <&pd_…>` on gs101 comes
+  with `samsung,dtzpc` and the block's CMU in the same series. *From:*
+  kernel #9, round 12.
+- **L-142. An enable commit before the fix for a known-bad first version is
+  a bisect hazard.** #7's raven enable commit came before the tuning that
+  stopped boot-time thermal power-offs (3 of 4 boots). *Check:* when a body
+  says "the first version did X on the phone", find that commit and ask for
+  the board enable to land last. Extends L-123. *From:* kernel #7,
+  round 12.
+- **L-143. A Kconfig guard is checked by building with the guarded symbol
+  off.** `kernel-pr-check` builds with our config (SPI on), and a
+  single-object build compiles even a driver whose symbol is off. *Check:*
+  `scripts/config -d SPI`, build the object, and `llvm-nm | grep -i spi` is
+  empty. Extends L-20. *From:* kernel #8, round 12.
 - **L-144. A vendor kernel may program what our read-only driver leaves
   alone.** Google's `gs_tmu_v2.c` sends every non-passive DT trip to ACPM as
   a TMU threshold; under our driver the hardware trip is whatever the
@@ -98,7 +116,6 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   survived reboot, and probe's "auto" default made `auto` a no-op. *Check:*
   for every write path, what the next boot finds and how userspace undoes it.
   *From:* kernel #92, round 22.
-
 - **L-350. A flag that hands off ownership is set under the lock its
   consumer holds, after rechecking completion.** #152's first "abandon" flag
   was set outside `rx_lock`, so an answer drained just before the timeout
