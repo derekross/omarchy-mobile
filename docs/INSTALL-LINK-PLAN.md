@@ -1572,9 +1572,9 @@ plan did not hold or said nothing. Each is corrected above.
 | P6 | `reopen` takes effect at the next boot | Nothing kept a daemon started in the same boot from offering the link at once, a gadget change in a running session | §2.8: `reopen` records its boot id; a start in that boot exits |
 | P7 | `restart` is taken once | "Once" can only be once per run of the daemon in `boot` 1: a daemon killed between `restarting` and the reboot takes it again, and must, to finish the job | Said here; §2.7's rule is unchanged in what an owner sees: one restart |
 
-P3 and P4 change what an owner sees and are the maintainer's to confirm;
-until then the crate has P3 as written here and sends `open` where P4's
-`locked` line will be.
+P3 and P4 change what an owner sees; the maintainer accepted both on
+2026-11-12. The crate has P3 as written here; until it has P4 it sends
+`open` where the `locked` line will be.
 
 **Left for the crate:** the `locked` line (P4). **Left for L2:** `reopen`'s
 boot id (P6), and the daemon's own reading of the phone into what the
