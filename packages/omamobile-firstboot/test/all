@@ -207,6 +207,10 @@ pass "running again is safe"
 good | sed '/^WIFI_/d; /^FULL_NAME=/d; /^EMAIL=/d' > "$R/etc/omamobile/firstboot.conf"
 run || { cat "$t/run.out"; fail "a run without a name and email succeeds"; }
 grep -c ' git config ' "$CALLS" >/dev/null && fail "without a name and email git's config is not written"
+# ... and the rest of user setup still runs: the step is optional, so a death
+# in it (an unset key under set -u, 0.1.4) left the run's exit status at 0.
+grep -c 'unbound variable' "$t/run.out" >/dev/null && { cat "$t/run.out"; fail "a run without a name and email reads no unset key"; }
+grep -c 'with warnings' "$t/run.out" >/dev/null && { cat "$t/run.out"; fail "a run without a name and email ends without warnings"; }
 pass "the installer's name and email reach git; without them git is left alone"
 
 : > "$CALLS"
