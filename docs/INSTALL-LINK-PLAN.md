@@ -1390,9 +1390,10 @@ SECURITY-PLAN §5.4 streams over the USB network.
 
 ## 13. Decisions from building L1
 
-Section 12 stands as decided. Building stage L1 raised four points that
-are the maintainer's to decide; the document above is written as if each
-recommendation were accepted, and says where. Everything else this
+**Decided by the maintainer on 2026-11-12: all four recommendations below
+are accepted, N1 to N4.** Section 12 stands as decided. Building stage L1
+raised four points that were the maintainer's to decide; the document
+above is written with each recommendation in place, and says where. Everything else this
 revision changed is a design choice made here and written down in its
 place (§15 and §11.3 list them).
 
