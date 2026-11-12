@@ -327,8 +327,8 @@ short_press() {
     # takes it down about 0.4 s after the dispatch on a Pixel 7 (bl_power goes
     # to 4 then), and putting the level back before that lit the lock screen
     # for a moment (Ángel, 6-nov: "vuelve a la pantalla de bloqueo antes de
-    # apagar la pantalla"). At most 1.5 s, for a panel whose bl_power never
-    # says so.
+    # apagar la pantalla"). At most 1 s (wait_screen_off), for a panel that
+    # never says so.
     wait_screen_off "$device"
     if [[ -n $device ]]; then
       [[ -n $level ]] && brightnessctl -q -d "$device" set "$level" || brightnessctl -q -d "$device" set 40%
