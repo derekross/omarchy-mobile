@@ -1669,11 +1669,14 @@ code=$(grep -v '^[[:space:]]*#' tools/install-guided)
 # Google's host is reached from one place, by a curl that follows no
 # redirect by itself, speaks https only and is told the file's size; every
 # address is judged against one pattern, anchored on the host
-dl=$(grep -A1 -E '^[[:space:]]*curl -f -# ' <<<"$code" | tr -d '\\\n')
-[[ $(grep -cE '^[[:space:]]*curl -f -# ' <<<"$code") == 1 && $dl == *" -L --max-redirs 0 --proto =https --proto-redir =https "* && $dl == *' --max-filesize "${B[size]}" '* ]] ||
+dl=$(grep -A1 -E '^[[:space:]]*curl -q -f -# ' <<<"$code" | tr -d '\\\n')
+[[ $(grep -cE '^[[:space:]]*curl -q -f -# ' <<<"$code") == 1 && $dl == *" -L --max-redirs 0 --proto =https --proto-redir =https "* && $dl == *' --max-filesize "${B[size]}" '* ]] ||
   fail "one curl downloads from Google: no redirect followed, https only, the size given"
 [[ $(grep -cE '(^|[^a-z_])(curl|wget) -' <<<"$code") == 2 ]] || fail "curl is run from two places: the look for a newer index, and the download"
 ! grep -E '(^|[^a-z_])curl -[^|]*' <<<"$code" | grep -E ' (-L|--location) ' | grep -v -- '--max-redirs 0' || fail "no curl follows redirects"
+# -q comes first on every curl, so curl reads no ~/.curlrc: a "url" or
+# "location" line there would add an address or a redirect nothing here checked
+[[ $(grep -oE '(^|[^a-z_])curl -[a-zA-Z#]+' <<<"$code" | grep -cv 'curl -q$') == 0 ]] || fail "every curl starts with -q (no ~/.curlrc)"
 grep -cFx "GOOGLE_DL='^https://dl\.google\.com/[A-Za-z0-9._~%/?&=+:,;@!-]*\$'" <<<"$code" >/dev/null || fail "the one pattern for Google's download host is anchored on https://dl.google.com/"
 [[ $(grep -c 'fetch_factory' <<<"$code") == 2 && $(grep -c 'google_terms' <<<"$code") == 2 ]] && grep -B3 'if fetch_factory; then' <<<"$code" | grep -c 'elif google_terms; then' >/dev/null ||
   fail "the download has one caller, and it is reached only through the terms"

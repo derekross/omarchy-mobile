@@ -928,7 +928,9 @@ find_index() {
     index=$local_index
   fi
   if ((!offline)) && command -v curl >/dev/null; then
-    if curl -fsS --max-time 30 -o "$got" "$url" 2>/dev/null && curl -fsS --max-time 30 -o "$got.sig" "$url.sig" 2>/dev/null; then
+    # -q first: curl then reads no ~/.curlrc, where a "url" or "location" line
+    # would add an address or a redirect this tool never checked
+    if curl -q -fsS --max-time 30 -o "$got" "$url" 2>/dev/null && curl -q -fsS --max-time 30 -o "$got.sig" "$url.sig" 2>/dev/null; then
       if signed_by_release_key "$got" "$got.sig" &&
         got_date=$(index_tool info --index "$got" --codename "$CODENAME" 2>/dev/null | sed -n 's/^updated=//p') &&
         [[ -n $got_date ]]; then
@@ -1131,7 +1133,7 @@ fetch_dir() {
 fetch_run() {
   local resume=()
   (($2 == 0)) || resume=(-C "$2")
-  curl -f -# -L --max-redirs 0 --proto =https --proto-redir =https --connect-timeout 30 \
+  curl -q -f -# -L --max-redirs 0 --proto =https --proto-redir =https --connect-timeout 30 \
     --speed-limit 1024 --speed-time 120 --max-filesize "${B[size]}" -D "$4" "${resume[@]}" "$1" |
     head -c "$((B[size] - $2 + 1))" >> "$3"
   printf '%s\n' "${PIPESTATUS[0]}" > "$scratch/curl.rc"
