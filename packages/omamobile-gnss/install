@@ -38,3 +38,6 @@ install -Dm644 etc/geoclue/conf.d/90-omamobile-gnss.conf "$d/etc/geoclue/conf.d/
 install -Dm644 etc/omamobile/gnss.conf "$d/etc/omamobile/gnss.conf"
 install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-gnss/LICENSE"
 install -Dm644 version "$d/usr/share/omamobile/gnss/version"
+# The package's own version (tools/pkg-version), which the file's
+# series doesn't give
+[[ -z ${OMAMOBILE_PKGVER:-} ]] || echo "$OMAMOBILE_PKGVER" > "$d/usr/share/omamobile/gnss/version"

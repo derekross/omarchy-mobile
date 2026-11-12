@@ -16,5 +16,5 @@ check() {
 }
 
 package() {
-  "$startdir/install" "$pkgdir"
+  OMAMOBILE_PKGVER=$pkgver "$startdir/install" "$pkgdir"
 }

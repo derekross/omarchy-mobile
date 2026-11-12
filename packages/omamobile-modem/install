@@ -32,3 +32,6 @@ install -Dm644 udev/61-omamobile-vendor-udisks-ignore.rules "$d/usr/lib/udev/rul
 install -Dm644 README.md "$d/usr/share/doc/omamobile-modem/README.md"
 install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-modem/LICENSE"
 install -Dm644 version "$d/usr/share/omamobile/modem/version"
+# The package's own version (tools/pkg-version), which the file's
+# series doesn't give
+[[ -z ${OMAMOBILE_PKGVER:-} ]] || echo "$OMAMOBILE_PKGVER" > "$d/usr/share/omamobile/modem/version"

@@ -16,4 +16,4 @@ backup=(etc/UPower/UPower.conf.d/20-omamobile-critical-power.conf etc/pacman.d/o
 
 build() { "$startdir/build" "$srcdir/build"; }
 check() { "$startdir/test/all"; }
-package() { "$startdir/install" "$pkgdir" "$srcdir/build"; }
+package() { OMAMOBILE_PKGVER=$pkgver "$startdir/install" "$pkgdir" "$srcdir/build"; }

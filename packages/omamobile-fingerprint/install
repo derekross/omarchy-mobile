@@ -34,3 +34,6 @@ install -Dm755 vendor/systemd/system-sleep/omamobile-fprintd-resume "$d/usr/lib/
 install -Dm644 vendor/modprobe.d/omamobile-fingerprint-lhbm.conf "$d/usr/lib/modprobe.d/omamobile-fingerprint-lhbm.conf"
 install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-fingerprint/LICENSE"
 install -Dm644 version "$d/usr/share/omamobile/fingerprint/version"
+# The package's own version (tools/pkg-version), which the file's
+# series doesn't give
+[[ -z ${OMAMOBILE_PKGVER:-} ]] || echo "$OMAMOBILE_PKGVER" > "$d/usr/share/omamobile/fingerprint/version"

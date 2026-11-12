@@ -26,7 +26,7 @@ backup=(etc/xdg/xdg-desktop-portal/hyprland-portals.conf)
 install=omamobile-shell.install
 
 package() {
-  "$startdir/install" "$pkgdir"
+  OMAMOBILE_PKGVER=$pkgver "$startdir/install" "$pkgdir"
 }
 
 check() {

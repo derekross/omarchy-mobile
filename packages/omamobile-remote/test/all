@@ -19,7 +19,7 @@ export OMAMOBILE_REMOTE_PROC=$tmp/noproc
 
 # --- the printed version is the package's: install puts pkgver in
 mkdir -p "$tmp/dest"
-./install "$tmp/dest" 0.1.7.2.gabc1234 >/dev/null
+OMAMOBILE_PKGVER=0.1.7.2.gabc1234 ./install "$tmp/dest" >/dev/null
 check "omamobile-remote version prints the version install was given" \
   test "$("$tmp/dest/usr/bin/omamobile-remote" version)" = "omamobile-remote 0.1.7.2.gabc1234"
 

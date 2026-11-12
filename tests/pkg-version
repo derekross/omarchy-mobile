@@ -140,8 +140,33 @@ else
   ok "# skip: no vercmp for pacman's order"
 fi
 
-# This repository's own history, replayed from its first commit.
+# Every package that puts its version file on the phone writes the
+# package's version there, not the file's series: its PKGBUILD hands pkgver
+# to install, and install writes it (run here for the packages whose install
+# needs no build).
 cd "$here"
+shipped=0 ran=0
+for i in packages/*/install; do
+  p=$(basename "$(dirname "$i")")
+  [[ $p != linux-omamobile ]] || continue   # pkgrel only, its pkgver is the kernel's
+  grep -c -E 'install -Dm644 (version|"\$here/version") ' "$i" >/dev/null || continue
+  grep -c 'OMAMOBILE_PKGVER=$pkgver "$startdir/install"' "packages/$p/PKGBUILD" >/dev/null ||
+    fail "$p: its PKGBUILD doesn't hand pkgver to install"
+  rm -rf "$t/inst"
+  # Some installs need a build first (prebuilt/, a source tree): those that
+  # run here are checked, and enough of them must run
+  if OMAMOBILE_PKGVER=9.8.7.6.gabc1234 "$i" "$t/inst" >/dev/null 2>&1; then
+    [[ -n $(grep -rlx 9.8.7.6.gabc1234 "$t/inst/usr/share/omamobile" 2>/dev/null) ]] ||
+      fail "$p: install writes the version it is given"
+    ran=$((ran + 1))
+  fi
+  shipped=$((shipped + 1))
+done
+((shipped >= 20)) || fail "only $shipped packages ship a version file: the pattern no longer matches"
+((ran >= 5)) || fail "only $ran of $shipped installs ran here"
+ok "the $shipped packages that ship a version file hand it pkgver, and the $ran installs that run here write it"
+
+# This repository's own history, replayed from its first commit.
 if [[ $(git rev-parse --is-shallow-repository) == true ]]; then
   ok "# skip: a shallow clone has no history to replay"
   exit 0
