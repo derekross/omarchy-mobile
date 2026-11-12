@@ -1,0 +1,19 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+
+bash -n build install || fail "package scripts parse"
+./build "$tmp/build"
+./install "$tmp/root" "$tmp/build"
+[[ -x "$tmp/root/usr/bin/reboot-to" ]] || fail "reboot-to is staged"
+aliases=(adsp.mbn adspua.jsn adspr.jsn a630_zap.mbn cdsp.mbn cdspr.jsn ipa_fws.mbn mba.mbn modem.mbn modemr.jsn modemuw.mbn slpir.jsn slpius.jsn wlanmdsp.mbn)
+for firmware in "${aliases[@]}"; do
+  link="$tmp/root/usr/lib/firmware/qcom/sdm845/Xiaomi/dipper/$firmware"
+  [[ $(readlink "$link") == "../../dipper/$firmware" ]] || fail "firmware alias $firmware"
+done
+[[ -f "$tmp/root/usr/share/omamobile/device-dipper/version" ]] || fail "device version is staged"
+grep -q 'depends=(bash systemd linux-firmware-qcom mesa qrtr pd-mapper tqftpserv rmtfs)' PKGBUILD || fail "runtime dependencies are declared"
+printf 'ok - Dipper firmware aliases and dependencies\n'

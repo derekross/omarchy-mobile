@@ -1,0 +1,17 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage the Dipper firmware path aliases; firmware itself comes from linux-firmware-qcom.
+set -euo pipefail
+destination=${1:?Usage: ./install ABSOLUTE_DESTDIR}
+build=${2:-build}
+[[ $destination == /* && $destination != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+
+install -Dm755 "$build/reboot-to" "$destination/usr/bin/reboot-to"
+firmware_dir="$destination/usr/lib/firmware/qcom/sdm845"
+aliases=(adsp.mbn adspua.jsn adspr.jsn a630_zap.mbn cdsp.mbn cdspr.jsn ipa_fws.mbn mba.mbn modem.mbn modemr.jsn modemuw.mbn slpir.jsn slpius.jsn wlanmdsp.mbn)
+for firmware in "${aliases[@]}"; do
+  install -d "$firmware_dir/Xiaomi/dipper"
+  ln -sfn "../../dipper/$firmware" "$firmware_dir/Xiaomi/dipper/$firmware"
+done
+install -Dm644 "$(dirname -- "${BASH_SOURCE[0]}")/version" \
+  "$destination/usr/share/omamobile/device-dipper/version"
