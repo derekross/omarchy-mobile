@@ -87,6 +87,15 @@
 #
 # Output is a tree rooted at /, under usr/lib/firmware/updates (searched before
 # linux-firmware's files, and not owned by any package). Nothing touches the phone.
+# Each run builds a whole new generation in a staging directory inside OUTDIR,
+# checks every file and the checksum list, and only then replaces the paths
+# this script owns there (usr/lib/firmware/updates, usr/share/omamobile/sensors,
+# vendor-firmware.sha256 and the -c file). A failed run, a failed replacement
+# included, leaves the previous outputs as they were (if putting them back
+# fails too, the error names the directory holding them), and a reused OUTDIR
+# keeps no file from an earlier run (another device's firmware, an old sensor
+# registry); the rest of OUTDIR is left alone. An OUTDIR that is / (or
+# resolves to it) is refused before anything is written.
 #
 # Needs: unzip, debugfs (e2fsprogs); simg2img if vendor.img is sparse;
 # lpunpack if the image only has super.img; fsck.erofs (erofs-utils) if vendor is EROFS.
@@ -128,11 +137,12 @@ Usage: extract-vendor-firmware [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
 
   SOURCE   Google factory zip (<device>-*-factory-*.zip), the image-<device>-*.zip
            inside it, or a raw/sparse vendor.img
-  -o DIR   staging root to write into (default: ./out/vendor-firmware)
+  -o DIR   staging root to write into (default: ./out/vendor-firmware); a
+           successful run replaces this script's earlier outputs there
   -w DIR   scratch directory for the ~1 GB vendor.img (default: a temp dir in \$TMPDIR)
   -d DEV   cheetah (default), panther, raven, tegu or husky
   -s SKU   husky: the hardware SKU (androidboot.hardware.sku), which picks the NVRAM
-  -f       skip the android-info.txt board=$DEVICE check
+  -f       skip the device checks (android-info.txt board=$DEVICE, the vendor build.prop)
   -c FILE  also copy the camera HAL APEX (/vendor/apex/com.google.pixel.camera.hal.apex)
            to FILE, for tools/extract-camera-data --apex (tools/phone-provision uses it)
 
@@ -247,6 +257,15 @@ SRC=$(readlink -f "$1")
 [[ -f "$SRC" ]] || die "no such file: $1"
 # Absolute, because the checksum step runs from inside the staging dir
 OUT=$(realpath -m -- "$OUT")
+# Publishing replaces whole directories under OUT, so OUT=/ would replace this
+# machine's own; refuse before anything is written (WORK included)
+[[ $OUT != / ]] || die "-o resolves to /: publishing would replace this machine's own directories"
+[[ -z $CAMERA_APEX || ( -d $(dirname -- "$CAMERA_APEX") && ! -d $CAMERA_APEX ) ]] ||
+  die "-c needs a file name in an existing directory: $CAMERA_APEX"
+case $CAMERA_APEX in
+  "$OUT/$DEST_REL"/*|"$OUT/usr/share/omamobile/sensors"/*|"$OUT/vendor-firmware.sha256")
+    die "-c must not be inside the outputs this script replaces in $OUT" ;;
+esac
 
 if [[ -n "$WORK" ]]; then
   mkdir -p "$WORK"
@@ -254,7 +273,25 @@ if [[ -n "$WORK" ]]; then
 else
   WORK=$(mktemp -d "${TMPDIR:-/tmp}/xvf.XXXXXX")
 fi
-trap 'rm -rf "$WORK"' EXIT
+stage="" cam_new="" publishing="" aside=() published=()
+# A failed publish puts the previous outputs back (restore); only if that
+# fails too does the staging directory stay, holding them.
+restore() {
+  local p
+  for p in "${published[@]}"; do rm -rf -- "${OUT:?}/$p" || return 1; done
+  for p in "${aside[@]}"; do mv -T -- "$stage/old/$p" "$OUT/$p" || return 1; done
+}
+cleanup() {
+  [[ -z $cam_new ]] || rm -f -- "$cam_new"
+  if [[ -n $publishing ]] && ! restore; then
+    printf 'error: publishing failed; the previous outputs are in %s\n' "$stage/old" >&2
+  else
+    [[ -z $publishing ]] || printf 'error: publishing failed; the previous outputs are back in place\n' >&2
+    [[ -z $stage ]] || rm -rf "$stage"
+  fi
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
 
 # Read 4 bytes at an offset as a little-endian hex word.
 magic_at() { od -An -tx4 -j "$2" -N4 "$1" | tr -d ' \n'; }
@@ -279,7 +316,7 @@ fetch_vendor() {
   fi
   m=$(zip_member "$src" "android-info\.txt")
   if [[ -n "$m" && -z "$FORCE" ]]; then
-    unzip -p "$src" "$m" | grep -qE "^require board=(.*\|)?$DEVICE(\|.*)?\$" ||
+    unzip -p "$src" "$m" | grep -cE "^require board=(.*\|)?$DEVICE(\|.*)?\$" >/dev/null ||
       die "this image is not for $DEVICE (android-info.txt); use -f to override"
   fi
   m=$(zip_member "$src" "vendor\.img")
@@ -316,11 +353,30 @@ fi
 if [[ "$(od -An -tx2 -j 1080 -N2 "$img" | tr -d ' ')" == ef53 ]]; then
   need debugfs "install e2fsprogs"
   say "vendor.img is ext4; reading it with debugfs (no mount)"
-  get_file() {
-    debugfs -R "dump /$1 $2" "$img" 2>/dev/null
-    [[ -s "$2" ]]
+  # debugfs exits 0 when a copy fails (a missing file, a short write on a
+  # full disk) and says so on stderr: anything there but its banner, or
+  # rdump's notes that it can't give the files the image's owners (as a
+  # user), fails the copy. The copy goes to a new path, so no older file
+  # can stand in for it.
+  dfs() {
+    local err line
+    err=$(debugfs -R "$1" "$img" 2>&1 >/dev/null) || return 1
+    while [[ -n $err ]]; do   # line by line in the shell: nothing here can fail
+      line=${err%%$'\n'*}
+      if [[ $err == *$'\n'* ]]; then err=${err#*$'\n'}; else err=""; fi
+      case $line in
+        "" | "debugfs "[0-9]*) ;;
+        "dump_file: Operation not permitted while changing ownership of "*) ;;
+        "rdump: Operation not permitted while changing ownership of "*) ;;
+        *) return 1 ;;
+      esac
+    done
   }
-  get_dir() { mkdir -p "$2" && debugfs -R "rdump /$1 $2" "$img" 2>/dev/null && [[ -d "$2/$(basename "$1")" ]]; }
+  # debugfs splits its command at blanks: a host path goes in double
+  # quotes, with any double quote in it doubled
+  dq() { printf '"%s"' "${1//\"/\"\"}"; }
+  get_file() { dfs "dump /$1 $(dq "$2")" && [[ -s "$2" ]]; }
+  get_dir() { mkdir -p "$2" && dfs "rdump /$1 $(dq "$2")" && [[ -d "$2/$(basename "$1")" ]]; }
 elif [[ "$(magic_at "$img" 1024)" == e0f5e1e2 ]]; then
   need fsck.erofs "install erofs-utils"
   say "vendor.img is EROFS; extracting it with fsck.erofs"
@@ -338,13 +394,20 @@ if get_file build.prop "$WORK/build.prop"; then
   [[ "$dev" == "$DEVICE" || -n "$FORCE" ]] ||
     die "vendor partition is for '${dev:-unknown}', not $DEVICE; use -f to override"
   say "Vendor partition: $(sed -n 's/^ro.vendor.build.fingerprint=//p' "$WORK/build.prop" | head -1)"
+else
+  [[ -n "$FORCE" ]] || die "build.prop can't be read from vendor.img; use -f to override"
 fi
 
-dest="$OUT/$DEST_REL"
+# The new generation: everything below is written into $new, which starts
+# empty, so no file from an earlier run can stand in for a missing one.
+mkdir -p "$OUT"
+stage=$(mktemp -d "$OUT/.extract-vendor-firmware.XXXXXX")
+new="$stage/new"
+dest="$new/$DEST_REL"
 for entry in "${MAP[@]}"; do
   from=${entry%%|*} to=${entry#*|}
   mkdir -p "$dest/$(dirname "$to")"
-  get_file "$from" "$dest/$to" || die "/vendor/$from is missing from this image"
+  get_file "$from" "$dest/$to" || die "/vendor/$from is missing from this image or could not be copied"
   chmod 0644 "$dest/$to"
   printf '  /vendor/%-28s -> /%s/%s\n' "$from" "$DEST_REL" "$to"
 done
@@ -353,16 +416,19 @@ done
 # settings), read by omamobile-sensor-proxy; without it only virtual sensors.
 # husky has no AoC driver yet, so it skips the registry.
 if [[ $DEVICE != husky ]]; then
-  reg="$OUT/usr/share/omamobile/sensors"
-  get_dir etc/sensors/registry "$reg" || die "/vendor/etc/sensors/registry is missing from this image"
+  reg="$new/usr/share/omamobile/sensors"
+  get_dir etc/sensors/registry "$reg" ||
+    die "/vendor/etc/sensors/registry is missing from this image or could not be copied"
   chmod -R u=rwX,go=rX "$reg"
   printf '  /vendor/%-28s -> /%s\n' "etc/sensors/registry/" "usr/share/omamobile/sensors/registry/"
 fi
 
+# The camera APEX goes to a new file beside -c, renamed into place below
 if [[ -n $CAMERA_APEX ]]; then
-  get_file apex/com.google.pixel.camera.hal.apex "$CAMERA_APEX" ||
-    die "/vendor/apex/com.google.pixel.camera.hal.apex is missing from this image"
-  say "Camera HAL APEX copied to $CAMERA_APEX"
+  cam_new=$(mktemp "$CAMERA_APEX.XXXXXX")
+  get_file apex/com.google.pixel.camera.hal.apex "$cam_new" ||
+    die "/vendor/apex/com.google.pixel.camera.hal.apex is missing from this image or could not be copied"
+  chmod 0644 "$cam_new"
 fi
 
 # Sanity checks: right chip, text NVRAM, Cirrus file formats.
@@ -417,7 +483,12 @@ fi
 ver=$(grep -ao 'Version=[0-9.]* ([^)]*)' "$brcm/$FW_BASE.$BOARD.bin" | head -1)
 bt=""
 [[ -z $BT_CHIP ]] || bt=$(grep -ao "$BT_CHIP [^[]*" "$brcm/BCM.$BOARD.hcd" | head -1)
-(cd "$dest" && find . -type f -printf '%P\n' | sort | xargs sha256sum -- > "$OUT/vendor-firmware.sha256")
+(cd "$dest" && find . -type f -printf '%P\n' | sort | xargs sha256sum -- > "$new/vendor-firmware.sha256")
+# The checksum list names exactly the mapped files
+for entry in "${MAP[@]}"; do printf '%s\n' "${entry#*|}"; done | sort > "$stage/expected"
+cut -c67- "$new/vendor-firmware.sha256" | cmp -s - "$stage/expected" ||
+  die "the staged firmware is not exactly the mapped files"
+
 say "Wi-Fi firmware: ${ver:-unknown version}"
 if [[ $DEVICE == husky ]]; then
   say "NVRAM: /vendor/firmware/$nvram${SKU:+ (SKU $SKU)}"
@@ -430,5 +501,26 @@ fi
   say "AoC firmware: aoc-tegu.bin ($(stat -c %s "$dest/aoc-tegu.bin") bytes)"
 [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == raven ]] &&
   say "Speaker protection: cs35l41-dsp1-spk-prot-$DEVICE.wmfw and the top and bottom tunings"
+# Publish: move the previous outputs aside, then the new ones into place, all
+# renames within OUTDIR, then the -c file. A failed move puts it all back.
+publishing=1
+for p in "$DEST_REL" usr/share/omamobile/sensors vendor-firmware.sha256; do
+  if [[ -e $OUT/$p || -L $OUT/$p ]]; then   # -L: a dangling symlink too
+    mkdir -p "$stage/old/$(dirname "$p")"
+    mv -T -- "$OUT/$p" "$stage/old/$p"
+    aside+=("$p")
+  fi
+  if [[ -e $new/$p ]]; then
+    mkdir -p "$OUT/$(dirname "$p")"
+    mv -T -- "$new/$p" "$OUT/$p"
+    published+=("$p")
+  fi
+done
+if [[ -n $CAMERA_APEX ]]; then
+  mv -fT -- "$cam_new" "$CAMERA_APEX"
+  cam_new=""
+fi
+publishing=""   # published: nothing below may undo it
+[[ -z $CAMERA_APEX ]] || say "Camera HAL APEX copied to $CAMERA_APEX"
 say "Staged in $OUT (checksums in $OUT/vendor-firmware.sha256)"
 echo "This is Google's proprietary firmware from your own factory image. Do not redistribute it."

@@ -19,4 +19,5 @@ ExecStart=/usr/bin/systemd-inhibit --what=sleep --mode=block "--who=Omarchy Mobi
 # Before the stop signal: ask gpsd to end its request, so it saves its
 # state (gldata.sto) for the next start. Bounded at ~4 s.
 ExecStop=/usr/lib/omamobile-vendor/omamobile-gnss-start --stop
+ExecStopPost=/usr/lib/omamobile-vendor/omamobile-gnss-start --stopped
 TimeoutStopSec=15

@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Double tap to wake, as on Android: two short taps close together, in time
+and place, on the touchscreen of a dark phone wake it as a short press of
+the power key does (omamobile-keys double-tap, which leaves a lit screen
+alone). A single touch no longer lights the screen: hypr/phone.lua turns
+Hyprland's misc:mouse_move_enables_dpms off, and the lock ignores touches
+while its display is dark (patches/omarchy/0029), so the double tap seen
+here is the only touch that wakes it.
+
+Runs for every user's graphical session (omamobile-doubletap.service); the
+user is in the input group, so it reads the touchscreen's evdev node
+without grabbing it (the shell and the fingerprint bridge keep reading it).
+The touchscreen is the first input device with INPUT_PROP_DIRECT, BTN_TOUCH
+and ABS_MT_POSITION_X, whatever its driver; with none it waits for one.
+
+In a pocket, as Android does: when the phone has a proximity sensor
+(iio-sensor-proxy's net.hadess.SensorProxy, HasProximity; omamobile-sensors
+on the AoC phones), the first touch on a dark screen claims it, and a double
+tap while it reads near is ignored. The sensor runs only from that touch
+until RELEASE_AFTER of no touches. Without the service or the sensor
+nothing changes.
+"""
+
+import fcntl
+import glob
+import os
+import select
+import struct
+import subprocess
+import sys
+import time
+
+try:
+    from gi.repository import Gio, GLib
+except ImportError:      # no python-gobject: no proximity guard
+    Gio = GLib = None
+
+TAP_MAX = 0.30     # s, a finger down to up for a tap
+GAP_MAX = 0.40     # s, the first tap's lift to the second's touch
+DIST_MAX = 0.14    # of the touchscreen's width between the taps (150 px of 1080)
+WAIT = 5           # s between looks for a touchscreen
+FRESH = 0.3        # s after the claim before ProximityNear counts (the sensor reports every 0.2 s)
+RELEASE_AFTER = 2  # s of no touches before the proximity claim ends
+DBUS_TIMEOUT = 200 # ms for each call to the sensor proxy
+
+EV_KEY, EV_ABS = 0x01, 0x03
+BTN_TOUCH = 0x14a
+ABS_MT_POSITION_X, ABS_MT_POSITION_Y = 0x35, 0x36
+INPUT_PROP_DIRECT = 0x01
+EVENT = struct.Struct("llHHi")   # struct input_event: timeval, type, code, value
+LONG_BITS = struct.calcsize("l") * 8
+
+
+def bitmask(text):
+    """A sysfs capability bitmask (hex words, the most significant first)."""
+    value = 0
+    for word in text.split():
+        value = (value << LONG_BITS) | int(word, 16)
+    return value
+
+
+def has(mask, bit):
+    return bool(mask >> bit & 1)
+
+
+def find_touchscreen(sysfs="/sys"):
+    """The /dev/input node of the first direct (on-screen) multi-touch
+    device, or None."""
+    def number(path):
+        return int(path.rsplit("event", 1)[1])
+    for event in sorted(glob.glob(sysfs + "/class/input/event*"), key=number):
+        caps = event + "/device/"
+        try:
+            props = bitmask(open(caps + "properties").read())
+            keys = bitmask(open(caps + "capabilities/key").read())
+            abs_ = bitmask(open(caps + "capabilities/abs").read())
+        except (OSError, ValueError):
+            continue
+        if has(props, INPUT_PROP_DIRECT) and has(keys, BTN_TOUCH) and has(abs_, ABS_MT_POSITION_X):
+            return "/dev/input/" + os.path.basename(event)
+    return None
+
+
+def x_range(fd):
+    """The touchscreen's X span (EVIOCGABS(ABS_MT_POSITION_X)), or 1080."""
+    try:
+        size = struct.calcsize("6i")
+        request = (2 << 30) | (size << 16) | (ord("E") << 8) | (0x40 + ABS_MT_POSITION_X)
+        _, low, high, _, _, _ = struct.unpack("6i", fcntl.ioctl(fd, request, bytes(size)))
+        return high - low if high > low else 1080
+    except OSError:
+        return 1080
+
+
+class DoubleTap:
+    """Fed input events; feed() answers True on the second tap of a double
+    tap. Coordinates are the slot's last reported ones (pointer emulation
+    reports BTN_TOUCH for the first finger down and the last one up)."""
+
+    def __init__(self, dist_max):
+        self.dist_max = dist_max
+        self.x = self.y = 0
+        self.down_at = None
+        self.down_xy = (0, 0)
+        self.last_tap = None    # (lifted at, where)
+
+    def feed(self, t, type_, code, value):
+        if type_ == EV_ABS and code == ABS_MT_POSITION_X:
+            self.x = value
+        elif type_ == EV_ABS and code == ABS_MT_POSITION_Y:
+            self.y = value
+        elif type_ == EV_KEY and code == BTN_TOUCH:
+            if value == 1:
+                self.down_at, self.down_xy = t, (self.x, self.y)
+            elif self.down_at is not None:
+                down_at, self.down_at = self.down_at, None
+                if t - down_at > TAP_MAX:
+                    self.last_tap = None
+                    return False
+                last, self.last_tap = self.last_tap, (t, self.down_xy)
+                if last and down_at - last[0] <= GAP_MAX and \
+                        abs(self.down_xy[0] - last[1][0]) + abs(self.down_xy[1] - last[1][1]) <= self.dist_max:
+                    self.last_tap = None
+                    return True
+        return False
+
+
+def screen_dark(sysfs="/sys"):
+    """Whether the panel is off: a DSI connector's DPMS isn't On (the state
+    omamobile-sensor-proxy sends the AoC). With no DSI connector it can't
+    tell, and says dark: the claim is then only made on touches."""
+    states = []
+    for path in glob.glob(sysfs + "/class/drm/*-DSI-*/dpms"):
+        try:
+            states.append(open(path).read().strip())
+        except OSError:
+            pass
+    return not states or any(s != "On" for s in states)
+
+
+class Proximity:
+    """iio-sensor-proxy's proximity on the system bus. claim() starts the
+    sensor (once), near() says whether it reads near, release() stops it.
+    Any failure (no python-gobject, no service, no sensor) reads as far."""
+
+    NAME = "net.hadess.SensorProxy"
+    PATH = "/net/hadess/SensorProxy"
+
+    def __init__(self):
+        self.bus = None
+        self.claimed_at = None   # time.monotonic() of the claim
+
+    def _call(self, iface, method, args=None):
+        if Gio is None:
+            raise OSError("no python-gobject")
+        if self.bus is None:
+            self.bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        # NO_AUTO_START: never start a sensor service for this.
+        return self.bus.call_sync(self.NAME, self.PATH, iface, method, args, None,
+                                  Gio.DBusCallFlags.NO_AUTO_START, DBUS_TIMEOUT, None).unpack()
+
+    def _get(self, prop):
+        return self._call("org.freedesktop.DBus.Properties", "Get",
+                          GLib.Variant("(ss)", (self.NAME, prop)))[0]
+
+    def claim(self):
+        if self.claimed_at is not None:
+            return
+        try:
+            if self._get("HasProximity"):
+                self._call(self.NAME, "ClaimProximity")
+                self.claimed_at = time.monotonic()
+        except Exception:   # noqa: BLE001 - GLib.Error, OSError: as today
+            pass
+
+    def near(self):
+        if self.claimed_at is None:
+            return False
+        # Give the sensor its first reading (a fast double tap is ~0.25 s).
+        left = FRESH - (time.monotonic() - self.claimed_at)
+        if left > 0:
+            time.sleep(left)
+        try:
+            return bool(self._get("ProximityNear"))
+        except Exception:   # noqa: BLE001
+            return False
+
+    def release(self):
+        if self.claimed_at is None:
+            return
+        self.claimed_at = None
+        try:
+            self._call(self.NAME, "ReleaseProximity")
+        except Exception:   # noqa: BLE001 - the proxy also drops it when we leave the bus
+            pass
+
+
+def wake():
+    subprocess.run(["omamobile-keys", "double-tap"], check=False)
+
+
+def lock_dark_unlocked():
+    """The screen just went dark: omamobile-keys locks it if it is unlocked
+    (a dark phone is a locked one, as on Android)."""
+    subprocess.run(["omamobile-keys", "dark-unlocked"], check=False)
+
+
+def has_dsi(sysfs="/sys"):
+    """Whether screen_dark() can tell: a phone with no DSI connector reads as
+    dark for the proximity claim, but must not be locked for it."""
+    return bool(glob.glob(sysfs + "/class/drm/*-DSI-*/dpms"))
+
+
+# How often the screen's state is looked at for the dark-and-unlocked lock:
+# a sysfs read; at 1 s the lock came 0.7 s after the screen went dark, a
+# window in which a touch still reached the app.
+DARK_POLL = 0.25
+
+
+def watch(fd, prox):
+    try:
+        taps = DoubleTap(DIST_MAX * x_range(fd))
+        last_touch = 0.0
+        can_tell = has_dsi()
+        was_dark = screen_dark() if can_tell else False
+        while True:
+            # The screen went dark: lock it if unlocked, before a touch on it
+            # can reach the app underneath.
+            if can_tell:
+                dark = screen_dark()
+                if dark and not was_dark:
+                    lock_dark_unlocked()
+                was_dark = dark
+            # Nothing to read for a moment: the proximity claim ends after
+            # RELEASE_AFTER of no touches, and the screen is looked at again.
+            if not select.select([fd], [], [], DARK_POLL)[0]:
+                if prox.claimed_at is not None and time.monotonic() - last_touch >= RELEASE_AFTER:
+                    prox.release()
+                continue
+            data = os.read(fd, EVENT.size * 64)
+            if not data:
+                return
+            for i in range(0, len(data) - EVENT.size + 1, EVENT.size):
+                sec, usec, type_, code, value = EVENT.unpack_from(data, i)
+                if type_ == EV_KEY and code == BTN_TOUCH and value == 1:
+                    last_touch = time.monotonic()
+                    if prox.claimed_at is None and screen_dark():
+                        prox.claim()
+                if taps.feed(sec + usec / 1e6, type_, code, value):
+                    if prox.near():
+                        print("omamobile-doubletap: proximity near, double tap ignored", flush=True)
+                    else:
+                        wake()
+    finally:
+        prox.release()
+        os.close(fd)
+
+
+def main():
+    said = ""
+    prox = Proximity()
+
+    def say(text):
+        # Once per change, not every WAIT seconds into the journal.
+        nonlocal said
+        if text != said:
+            print("omamobile-doubletap: " + text, flush=True)
+            said = text
+
+    while True:
+        path = find_touchscreen()
+        if not path:
+            say("no touchscreen yet")
+            time.sleep(WAIT)
+            continue
+        try:
+            fd = os.open(path, os.O_RDONLY)
+        except OSError as e:
+            # Not readable (the user isn't in the input group) or just gone.
+            say("%s: %s" % (path, e))
+            time.sleep(WAIT)
+            continue
+        say("watching " + path)
+        try:
+            watch(fd, prox)
+        except OSError as e:
+            # Gone (the driver reloaded): look again.
+            say("%s: %s" % (path, e))
+        time.sleep(WAIT)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(0)

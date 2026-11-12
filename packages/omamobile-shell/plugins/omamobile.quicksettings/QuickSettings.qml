@@ -73,17 +73,58 @@ Item {
     expanded = payload.expanded === true
     if (payload.page === "edit") startEditing()
     opened = true
-    refreshProbe()
-    refreshDnd()
-    brightness.refresh()
-    torch.refresh()
-    rotationLock.refresh()
-    location.refresh()
-    nfc.refresh()
-    fingerprint.refresh()
-    keyboard.refresh()
-    refreshNotifications()
-    clockFormatRead.running = true
+    scheduleOpenRefresh()
+  }
+
+  // Open-time reads wait for presentation to settle. Action confirmation
+  // reads remain immediate; closing cancels only work not started yet.
+  property int openRefreshIndex: -1
+  readonly property bool openRefreshMoving: revealAnimation.running || drag.pressed
+    || sheetFlick.moving || pager.moving || editFlick.moving || shadeList.moving
+
+  function scheduleOpenRefresh() {
+    if (openRefreshIndex < 0) openRefreshIndex = 0
+    resumeOpenRefresh()
+  }
+
+  function resumeOpenRefresh() {
+    openRefreshTimer.stop()
+    if (opened && !openRefreshMoving && openRefreshIndex >= 0)
+      openRefreshTimer.start()
+  }
+
+  function cancelOpenRefresh() {
+    openRefreshTimer.stop()
+    openRefreshIndex = -1
+  }
+
+  function runOpenRefresh() {
+    if (!opened || openRefreshMoving || openRefreshIndex < 0) return
+    var index = openRefreshIndex++
+    switch (index) {
+      // Prioritize what is visible immediately on the first screen.
+      case 0: refreshNotifications(); break
+      case 1: refreshDnd(); break
+      case 2: brightness.refresh(); break
+      case 3: refreshProbe(); break
+      case 4: torch.refresh(); break
+      case 5: rotationLock.refresh(); break
+      case 6: location.refresh(); break
+      case 7: nfc.refresh(); break
+      case 8: fingerprint.refresh(); break
+      case 9: keyboard.refresh(); break
+      case 10: if (!clockFormatRead.running) clockFormatRead.running = true; break
+    }
+    if (openRefreshIndex >= 11) openRefreshIndex = -1
+    else resumeOpenRefresh()
+  }
+
+  onOpenRefreshMovingChanged: resumeOpenRefresh()
+  onOpenedChanged: { if (!opened) cancelOpenRefresh() }
+  Timer {
+    id: openRefreshTimer
+    interval: 48
+    onTriggered: root.runOpenRefresh()
   }
 
   // Host-initiated close (`shell hide`).
@@ -797,11 +838,17 @@ Item {
   // Clear all goes through the service's own IPC, on this shell instance like
   // the DND tile: dismissAll moves the toasts on screen into history, then
   // clear empties history (both run in order on the service's file queue).
+  // Omarchy 4.5 keeps them in live.json and history.json in the same
+  // directory instead, and has no clear: where history.json exists, the
+  // shade reads those two files, and Clear all forgets every notification
+  // it read once dismissAll has closed the toasts (they keep their keys).
   readonly property string notificationsDir: Quickshell.env("HOME") + "/.local/state/omarchy/notifications"
   // Where the bar's unread count starts from: the newest notification the
   // shade has shown (omamobile.bar reads it at start and hears it by IPC).
   readonly property string stateDir: Quickshell.env("HOME") + "/.local/state/omamobile"
   property var notifications: []
+  // The forget name of every notification the last read found.
+  property var notificationFiles: []
   property double nowMs: Date.now()
   property double seenStamp: 0
   property double seenWritten: 0
@@ -856,13 +903,16 @@ Item {
 
   Process {
     id: notificationsRead
-    command: ["sh", "-c", "for f in \"$1\"/*.json \"$1\"/history/*.json; do [ -f \"$f\" ] && awk 1 \"$f\"; done; exit 0",
+    command: ["sh", "-c",
+              "if [ -e \"$1/history.json\" ]; then for f in \"$1/live.json\" \"$1/history.json\"; do [ -f \"$f\" ] && awk 1 \"$f\"; done; "
+              + "else for f in \"$1\"/*.json \"$1\"/history/*.json; do [ -f \"$f\" ] && awk 1 \"$f\"; done; fi; exit 0",
               "sh", root.notificationsDir]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
         var view = NotificationsModel.shown(text, root.hiddenNotifications, Date.now())
         root.hiddenNotifications = view.hidden
+        root.notificationFiles = view.files
         // Only a change replaces the rows: a new list rebuilds every row, and
         // one being swiped would be dropped from under the finger.
         if (JSON.stringify(view.entries) !== JSON.stringify(root.notifications))
@@ -923,8 +973,10 @@ Item {
     notifications = []
     if (clearProc.running) return
     clearProc.command = ["sh", "-c",
-      "qs ipc -p \"$1\" call notifications dismissAll; qs ipc -p \"$1\" call notifications clear",
-      "sh", Quickshell.shellDir]
+      "if [ -e \"$2/history.json\" ]; then shell=$1; shift 2; qs ipc -p \"$shell\" call notifications dismissAll; "
+      + "for name; do qs ipc -p \"$shell\" call notifications forget \"$name\"; done; "
+      + "else qs ipc -p \"$1\" call notifications dismissAll; qs ipc -p \"$1\" call notifications clear; fi; exit 0",
+      "sh", Quickshell.shellDir, root.notificationsDir].concat(notificationFiles)
     clearProc.running = true
   }
 
@@ -1374,7 +1426,7 @@ Item {
   // 0 = tucked above the screen, 1 = fully down. Driving the window's
   // visibility from this lets the sheet finish sliding up before it unmaps.
   property real reveal: opened ? 1 : 0
-  Behavior on reveal { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+  Behavior on reveal { NumberAnimation { id: revealAnimation; duration: 220; easing.type: Easing.OutCubic } }
 
   readonly property color foreground: Commons.Color.popups.text
   readonly property int pad: Style.spacing.panelPadding
@@ -1557,7 +1609,7 @@ Item {
               anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
               text: root.hasBattery
-                ? (UPower.onBattery ? "󰁹 " : "󰂄 ") + Math.round(root.battery.percentage * 100) + "%"
+                ? (root.battery.state === UPowerDeviceState.Charging ? "󰂄 " : "󰁹 ") + Math.round(root.battery.percentage * 100) + "%"
                 : ""
               color: root.foreground
               font.family: Style.font.family
@@ -1926,7 +1978,10 @@ Item {
       // Not "top": every Item already has a FINAL top anchor line, and
       // Qt 6.12 refuses to load a file that redeclares it.
       readonly property real shadeTop: root.wide ? sheet.y : sheet.y + sheet.height + Style.spacing.lg
-      readonly property real room: window.height - shadeTop - Style.gapsOut
+      // Sliding changes position, not the settled notification viewport.
+      // Expansion still updates the available room through sheet.height.
+      readonly property real restingTop: root.wide ? Style.gapsOut : Style.gapsOut + sheet.height + Style.spacing.lg
+      readonly property real room: window.height - restingTop - Style.gapsOut
       readonly property real insets: shade.contentTopInset + shade.contentBottomInset
       readonly property real listHeight: root.notifications.length > 0 ? shadeList.contentHeight : shadeEmpty.implicitHeight
       // The media card and the gap under it, when a player is up.

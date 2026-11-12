@@ -2,30 +2,35 @@
 # to a narrow screen, and hold the desktop for the Style menu (there is no
 # right button or keyboard shortcut on a phone).
 #
-# Against Omarchy 4.0.4 (edge 4.0.4-2; tag v4.0.4) with 0000 (Commons.Color)
-# applied: only the context of the picker's size properties differs from
-# upstream main.
+# Omarchy 4.5 port: 4.5 renamed the menu's "style" route to "appearance"
+# ("style" stays an alias), so the hold summons "appearance" by its id. The
+# swipe follows 4.5's right-to-left reading (Util.readingKey flips the arrow
+# keys; the swipe flips the same way) and waits for the picker's reveal
+# (layoutSettled), as 4.5's keys do. 4.5's hold-to-preview (PreviewHold) is
+# a separate handler and untouched.
+
 diff --git i/shell/plugins/background/Background.qml w/shell/plugins/background/Background.qml
-index 0a53b20..546aaaf 100644
 --- i/shell/plugins/background/Background.qml
 +++ w/shell/plugins/background/Background.qml
-@@ -105,6 +105,15 @@ Item {
+@@ -218,6 +218,17 @@
      if (!bgSwitchProc.running) bgSwitchProc.running = true
    }
  
++  // Touch screens: hold the desktop for the Appearance menu (4.0's "style"
++  // route; a phone has no right button or keyboard shortcut).
 +  function openStyleMenu() {
 +    if (!styleMenuProc.running) styleMenuProc.running = true
 +  }
 +
 +  Process {
 +    id: styleMenuProc
-+    command: ["omarchy-menu", "summon", "style"]
++    command: ["omarchy-menu", "summon", "appearance"]
 +  }
 +
    function openThemeSwitcher() {
-     if (!themeSwitchProc.running) themeSwitchProc.running = true
-   }
-@@ -313,6 +322,10 @@ Item {
+     var payload = JSON.stringify({ source: "themes" })
+ 
+@@ -521,6 +532,10 @@
        MouseArea {
          anchors.fill: parent
          acceptedButtons: Qt.LeftButton | Qt.RightButton
@@ -37,11 +42,10 @@ index 0a53b20..546aaaf 100644
            if (mouse.button === Qt.RightButton) root.openThemeSwitcher()
            else root.openSelector()
 diff --git i/shell/plugins/image-picker/ImagePicker.qml w/shell/plugins/image-picker/ImagePicker.qml
-index b0554f5..0f735f6 100644
 --- i/shell/plugins/image-picker/ImagePicker.qml
 +++ w/shell/plugins/image-picker/ImagePicker.qml
-@@ -39,10 +39,11 @@ Item {
-   property color scrim: Commons.Color.imagePicker.scrim
+@@ -55,10 +55,11 @@
+   property color foreground: Commons.Color.imagePicker.text
    property color selectedBorder: Commons.Color.imagePicker.selectedBorder
    property color unselectedBorder: Commons.Color.imagePicker.unselectedBorder
 -  property int expandedWidth: 768
@@ -55,22 +59,29 @@ index b0554f5..0f735f6 100644
    property int sliceSpacing: -30
    property int skewOffset: 28
    property int bottomChromeHeight: showLabels ? (filterable ? 104 : 74) : (filterable ? 60 : 30)
-@@ -435,6 +436,18 @@ Item {
+@@ -728,6 +729,25 @@
  
            Component.onCompleted: forceActiveFocus()
  
-+          // Swipe left or right to move through the images on touch screens.
++          // Swipe to move through the images on touch screens: toward the
++          // reading start for the next one, as the arrow keys read.
 +          DragHandler {
 +            target: null
 +            yAxis.enabled: false
++            enabled: root.layoutSettled
 +            property real swipeX: 0
 +            onActiveTranslationChanged: swipeX = activeTranslation.x
 +            onActiveChanged: {
-+              if (active) swipeX = 0
-+              else if (Math.abs(swipeX) > 40) root.selectAdjacent(swipeX < 0 ? 1 : -1)
++              if (active) {
++                swipeX = 0
++              } else if (Math.abs(swipeX) > 40) {
++                var next = swipeX < 0
++                if (Commons.I18n.rightToLeft) next = !next
++                root.selectAdjacent(next ? 1 : -1)
++              }
 +            }
 +          }
 +
            Repeater {
-             model: root.imageArray.length
- 
+             id: imageCards
+             model: visibleImages

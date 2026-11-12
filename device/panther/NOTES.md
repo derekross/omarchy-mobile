@@ -5,6 +5,16 @@ Findings from real hardware, newest first. [BRINGUP-M1.md](BRINGUP-M1.md) is the
 
 The board file (`gs201-panther.dts`) was merged as [linux-omarchy-mobile#108](https://github.com/derekross/linux-omarchy-mobile/pull/108), and the FT3658 driver as [#109](https://github.com/derekross/linux-omarchy-mobile/pull/109); the test kernels below add one local commit each on top.
 
+## 2026-11-03: a second unit (angelrenefm)
+
+A stock factory Pixel 7 (CP3A.261005.002.A1 on both slots), offered on [#342](https://github.com/derekross/omarchy-mobile/issues/342). It booted Arch on slot B once the boot images carried AVB footers ([#396](https://github.com/derekross/omarchy-mobile/pull/396)); `tools/phone-smoke` passed everything required. What differs from the first unit, all read-only:
+
+- **devinfo is version 3.15** (the first unit's is 3.19). In the same state, Linux read slot bytes `01 08 00 00 01 04 00 00` and `fastboot getvar` said A retry 1, B retry 1, none successful, current B; they agreed again after ABL's own change (B 2 to 1). After `fastboot --set-active=b` and one boot: `01 08 00 00 02 0c 00 00` (B gained bit 3, fastboot_ok).
+- **The pack is Lishen 3 kOhm, not Coslight 1 kOhm.** The gauge reads DesignCap 0x0891 (4386 mAh), stock's `lsn-a1-3k` value (Coslight's is 0x0873); TempCo reads 0x1402 (Lishen's stock value is 0x1802, so not an exact match). POR was clear (Status 0x2000) and DesignCap isn't the Coslight model's, so it looks like the kernel never loaded its Coslight model here and the gauge keeps what stock wrote (inferred from those two reads). After a POR (a flat or disconnected battery) it would load the Coslight model onto this Lishen pack: keep this unit from running flat until the model is picked by the pack's ID.
+- **Stock's PANTHER MP overlay against CHEETAH MP** (from this unit's OTA `dtbo`, board ids 0x30406 and 0x30306): the MAX77759 PMIC interrupt (gpa9-4), the Wi-Fi lines (WL_REG_ON gph2-4, WL_DEV_WAKE gph2-5, WL_HOST_WAKE gpa6-1) and the Bluetooth lines (BT_REG_ON gpp16-2, BT_DEV_WAKE gpp16-3, BT_HOST_WAKE gpa6-6) are the same; `google,chg-temp-limits`, `chg-cv-limits` and `chg-cc-limits` are identical; `google,chg-battery-capacity` differs (0x10b5 = 4277 mAh against 0x133e = 4926 mAh).
+- **Radio backup:** with this descriptor's `NV_PARTS` (cheetah's list, each partition found once by PARTNAME), `tools/nv-backup` took a read-only backup and `--check` read every partition as SAME.
+- **Haptics:** with `cs40l26.wmfw` and `cs40l26.bin` from this unit's OTA (`tools/extract-vendor-firmware -d panther`), the CS40L26 firmware runs (7.2.91) and vibrates.
+
 ## 2026-11-02: AVB footers on boot and init_boot
 
 A second Pixel 7 (issue #342), with stock CP3A.261005.002.A1 sideloaded as a full OTA on both slots, never started slot B. The screen stayed black, no USB gadget appeared, and after about 72 s it was back in stock recovery on slot A. This was the case with the published kernel too. It's the Pixel 7 Pro's issue #11 (device/cheetah/NOTES.md, 2026-10-28):

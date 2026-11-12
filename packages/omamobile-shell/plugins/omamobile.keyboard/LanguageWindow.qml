@@ -22,6 +22,14 @@ PanelWindow {
   Behavior on reveal { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
   onOpenedChanged: if (opened) languageSheet.reset()
 
+  // Back: from "Add a language" to the list (true), else nothing (false) and
+  // the caller closes the sheet.
+  function back() {
+    if (languageSheet.page === "languages") return false
+    languageSheet.page = "languages"
+    return true
+  }
+
   visible: opened || reveal > 0
   anchors { top: true; bottom: true; left: true; right: true }
   exclusionMode: ExclusionMode.Ignore

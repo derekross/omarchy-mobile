@@ -7,6 +7,8 @@
 # opening squeekboard's popover. Made by
 # squeekboard/generate (change the generator, not this file). The row
 # sums to the widest row's 356.571: 2 x 106.971 + 2 x 71.314.
+# Greek, also: a row of accented vowels under the action row (capitals and
+# the quotes « » with shift), one key each.
 # omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
 # Language: Greek
 # Greek layout originally created by Antonis Tsolomitis
@@ -27,16 +29,19 @@ outlines:
     paste:            { width: 106.971, height: 40 }
     emoji:            { width: 71.314, height: 40 }
     hide:             { width: 71.314, height: 40 }
+    accent:           { width: 32.416, height: 32 }
 
 views:
     base:
         - "Mic Paste Emoji Hide"
+        - "ά-accent έ-accent ή-accent ί-accent ό-accent ύ-accent ώ-accent ϊ-accent ϋ-accent ΐ-accent ΰ-accent"
         - "; ς ε ρ τ υ θ ι ο π-fill"
         - "α σ δ φ γ η ξ κ λ show_accented"
         - "show_upper ζ χ ψ ω β ν μ BackSpace"
         - "show_numbers preferences space . ,-subtle-highlight Return"
     upper:
         - "Mic Paste Emoji Hide"
+        - "Ά-accent Έ-accent Ή-accent Ί-accent Ό-accent Ύ-accent Ώ-accent Ϊ-accent Ϋ-accent «-accent »-accent"
         - ": ! Ε Ρ Τ Υ Θ Ι Ο Π"
         - "Α Σ Δ Φ Γ Η Ξ Κ Λ show_accented"
         - "show_upper Ζ Χ Ψ Ω Β Ν Μ BackSpace"
@@ -156,3 +161,70 @@ buttons:
         outline: "hide"
         keysym: "XF86Keyboard"
         label: "󰌏 Hide"
+    # Greek: the accented vowels, one key each (the accents view stays for the rest)
+    ά-accent:
+        outline: "accent"
+        text: "ά"
+    έ-accent:
+        outline: "accent"
+        text: "έ"
+    ή-accent:
+        outline: "accent"
+        text: "ή"
+    ί-accent:
+        outline: "accent"
+        text: "ί"
+    ό-accent:
+        outline: "accent"
+        text: "ό"
+    ύ-accent:
+        outline: "accent"
+        text: "ύ"
+    ώ-accent:
+        outline: "accent"
+        text: "ώ"
+    ϊ-accent:
+        outline: "accent"
+        text: "ϊ"
+    ϋ-accent:
+        outline: "accent"
+        text: "ϋ"
+    ΐ-accent:
+        outline: "accent"
+        text: "ΐ"
+    ΰ-accent:
+        outline: "accent"
+        text: "ΰ"
+    Ά-accent:
+        outline: "accent"
+        text: "Ά"
+    Έ-accent:
+        outline: "accent"
+        text: "Έ"
+    Ή-accent:
+        outline: "accent"
+        text: "Ή"
+    Ί-accent:
+        outline: "accent"
+        text: "Ί"
+    Ό-accent:
+        outline: "accent"
+        text: "Ό"
+    Ύ-accent:
+        outline: "accent"
+        text: "Ύ"
+    Ώ-accent:
+        outline: "accent"
+        text: "Ώ"
+    Ϊ-accent:
+        outline: "accent"
+        text: "Ϊ"
+    Ϋ-accent:
+        outline: "accent"
+        text: "Ϋ"
+    «-accent:
+        outline: "accent"
+        text: "«"
+    »-accent:
+        outline: "accent"
+        text: "»"

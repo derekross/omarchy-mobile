@@ -47,22 +47,30 @@ grep -c 'PANEL=1080x2424 PANEL_HZ=120 PANEL_STATE="On: 1080x2424@120" LHBM_FIRST
 grep -c -- '--lhbm-first "\$LHBM_FIRST"' lib/omamobile-fp-chroot >/dev/null || fail "the runner passes the circle order"
 # Under set -u, each phone's case sets every value the spawn line uses.
 cases=$(sed -n '/^case \$DEVICE in/,/^esac/p' lib/omamobile-fp-chroot)
-for d in cheetah tegu; do
-  DEVICE=$d bash -uc "$cases"'
-    [[ -n $PANEL && -n $PANEL_HZ && -n $PANEL_STATE && -n $LHBM_FIRST ]]' ||
+for d in cheetah tegu panther; do
+  DEVICE=$d TOUCH_NAME=x bash -uc "$cases"'
+    [[ -n $PANEL && -n $PANEL_HZ && -n $PANEL_STATE && -n $LHBM_FIRST && -n $TOUCH_NAME ]]' ||
     fail "$d: the case leaves a panel value unset"
 done
 grep -c '^ro.hardware=tegu$' lib/props-tegu.conf >/dev/null || fail "props-tegu.conf"
 grep -c '^ro.hardware=cheetah$' lib/props-cheetah.conf >/dev/null || fail "props-cheetah.conf"
+grep -c '^ro.hardware=panther$' lib/props-panther.conf >/dev/null || fail "props-panther.conf"
+# The Pixel 7: found by its board, the 7 Pro's TA, its own panel and touchscreen.
+grep -c '\*google,gs201-panther\*) echo panther' lib/omamobile-fp-chroot >/dev/null || fail "panther not detected"
+DEVICE=panther bash -uc "$cases"'
+  [[ $TA == g7.app && $PANEL == 1080x2400 && $PANEL_NAME == sdc-s6e3fc3-p10 && $TOUCH_NAME == "FocalTech FT3658" && $MAP_STORES == 0 ]]' ||
+  fail "panther's TA, panel and touchscreen"
 grep -c '^ro.hardware=' lib/props.conf >/dev/null && fail "props.conf keeps a phone's ro.hardware"
 for f in lib/omamobile-tipc-probe lib/omamobile-fp-ctl; do
   python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$f" || fail "python: $f"
 done
-# both panels keep their allow_lhbm line (the 7 Pro's s6e3hc4, the 9a's tg4c),
+# the panels keep their allow_lhbm line (the 7 Pro's s6e3hc4, the 9a's tg4c,
+# the 7's s6e3fc3),
 # read from the file the package ships, so CI checks it without the prebuilts
 lhbm=vendor/modprobe.d/omamobile-fingerprint-lhbm.conf
 [[ $(grep -c '^options panel_samsung_s6e3hc4 allow_lhbm=1$' "$lhbm") == 1 ]] || fail "s6e3hc4 allow_lhbm line missing"
 [[ $(grep -c '^options panel_google_tg4c allow_lhbm=1$' "$lhbm") == 1 ]] || fail "tg4c allow_lhbm line missing"
+[[ $(grep -c '^options panel_samsung_s6e3fc3 allow_lhbm=1$' "$lhbm") == 1 ]] || fail "s6e3fc3 allow_lhbm line missing"
 # The bionic prebuilts are built on the computer with the Android toolchain
 # and never committed; a checkout without them (CI) checks the rest only.
 # The resume hook restarts fprintd after a wake, and stands aside where
@@ -98,7 +106,7 @@ grep -c 'ln -sfn ../omamobile-fp.service "$d/usr/lib/systemd/system/multi-user.t
 # a die in the namespace still stops in order, and the marker is taken
 # atomically
 st=$(sed -n '/^start() {/,/^}/p' lib/omamobile-fp-chroot)
-grep -A1 '^  say "stage \$stage running"$' <<<"$st" | grep -qx '  rm -f "\$PENDING"' ||
+grep -A1 '^  say "stage \$stage running"$' <<<"$st" | grep -cx '  rm -f "\$PENDING"' >/dev/null ||
   fail "start clears start-pending right after the stack runs"
 grep -qx "  trap 'stop \$?' EXIT" <<<"$st" || fail "the namespace's EXIT trap keeps the stop order on a die"
 grep -c 'set -o noclobber; umask 077; echo .* > "\$MARKER"' lib/omamobile-fp-chroot >/dev/null ||
@@ -172,6 +180,7 @@ for f in usr/lib/omamobile-fp/omamobile-fp-chroot usr/lib/omamobile-fp/omamobile
          usr/lib/omamobile-fp/omamobile-fp-ctl \
          usr/lib/omamobile-fp/props.conf usr/lib/omamobile-fp/omamobile-fp-shim.so \
          usr/lib/omamobile-fp/props-cheetah.conf usr/lib/omamobile-fp/props-tegu.conf \
+         usr/lib/omamobile-fp/props-panther.conf \
          usr/lib/omamobile-fp/omamobile-fp-bridge usr/lib/systemd/system/omamobile-fp.service \
          usr/lib/systemd/system/fprintd.service.d/omamobile-udfps.conf; do
   [[ -e $stage/$f ]] || fail "not staged: $f"
