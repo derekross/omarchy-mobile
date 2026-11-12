@@ -1,0 +1,157 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# compare: the byte for byte comparison of docs/INSTALL-LINK-PLAN.md section
+# 6.2. For one factory image, the laptop's run (the commands
+# tools/phone-provision runs, on the factory zip, with the repository's
+# tools/) and the phone side's run (`omamobile-provision extract` from the
+# installed package) must give the same tree: every file's SHA-256, mode and
+# symlink target, the chroots' MANIFEST and SOURCE included.
+#
+#   test/compare [--container PACKAGE.pkg.tar.zst] [--laptop-locale] FACTORY.zip
+#
+# It prints "equal (N files)" and exits 0, or the names of the files that
+# differ (never their contents) and exits 1. With a real factory image
+# nothing of it is printed or kept: both outputs are in a temporary
+# directory that is removed.
+#
+#   --container PKG   run the phone side in the project's aarch64 build
+#                     container (Arch Linux ARM under qemu-user, as
+#                     tools/build-packages uses it) with PKG installed by
+#                     pacman, dependencies and all. Needs Docker and the
+#                     build image (tools/build-packages makes it), and
+#                     pacman's access to the package servers. Slow. For a
+#                     package from `build-packages --local NAME`, set
+#                     ALARM_LOCAL_KEY=keys/NAME/public.asc (an absolute
+#                     path), so the image is the one that build used
+#   --laptop-locale   run the laptop side in this shell's locale. The
+#                     default is LC_ALL=C, which is what the phone side
+#                     runs under: the tools sort MANIFEST and
+#                     vendor-firmware.sha256 with the locale's collation,
+#                     so a laptop in another locale writes the same lines in
+#                     another order (reported as such)
+#
+# The camera step needs Python with unicorn and pyelftools on both sides
+# (~/.cache/omamobile-venv/bin/python when it is there, as
+# tools/phone-provision looks for it); where they are missing or the step
+# fails, it fails on both sides and the comparison says so.
+# COMPARE_WORK=DIR: where the two outputs go (default a temporary directory;
+# several GB for a real image).
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+PKG=$PWD
+die() { printf 'error: %s\n' "$*" >&2; exit 2; }
+export PATH=$PATH:/usr/sbin:/sbin
+
+container="" locale_c=1 factory=""
+while (($#)); do
+  case $1 in
+    --container) container=$(readlink -f "${2:?--container needs the built package}"); shift ;;
+    --laptop-locale) locale_c=0 ;;
+    -h|--help) awk 'NR > 2 && !/^#/ { exit } NR > 2 { sub(/^# ?/, ""); print }' "$0"; exit 0 ;;
+    -*) die "unknown option $1" ;;
+    *) [[ -z $factory ]] || die "one factory image only"; factory=$(readlink -f "$1") ;;
+  esac
+  shift
+done
+[[ -f $factory ]] || die "give the factory image"
+[[ -z $container || -f $container ]] || die "no package $container"
+
+base=${COMPARE_WORK:-${TMPDIR:-/tmp}}
+mkdir -p "$base"
+t=$(mktemp -d "$base/provision-compare.XXXXXX")
+trap 'chmod -R u+rwX "$t" 2>/dev/null; rm -rf "$t"' EXIT
+
+./install "$t/stage" >/dev/null
+lib=$t/stage/usr/lib/omamobile-provision
+tools=$lib
+[[ -f ../../tools/extract-vendor-firmware ]] && tools=$(cd ../../tools && pwd)
+py=python3
+[[ -x $HOME/.cache/omamobile-venv/bin/python ]] && py=$HOME/.cache/omamobile-venv/bin/python
+PROV=(python3 -I -B "$t/stage/usr/bin/omamobile-provision")
+
+# --- The laptop's run: tools/phone-provision's extraction, command for command
+L=$t/laptop; mkdir -p "$L" "$t/lw"
+laptop() {
+  "$tools/extract-vendor-firmware" -o "$L/fw" -c "$L/camera.apex" -w "$t/lw" "$factory"
+  for p in gnss modem; do "$tools/extract-vendor-chroot" -p "$p" -o "$L/chroot-$p" -w "$t/lw" "$factory"; done
+  "$tools/extract-fingerprint-vendor" -o "$L/fp-vendor" -w "$t/lw" "$factory"
+  "$py" "$tools/extract-camera-data" --apex "$L/camera.apex" -d "$L/camera" || { rm -rf "$L/camera"; echo "camera: failed" > "$t/laptop.camera"; }
+}
+if ((locale_c)); then (export LC_ALL=C; umask 022; laptop) > "$t/laptop.log" 2>&1
+else (umask 022; laptop) > "$t/laptop.log" 2>&1; fi ||
+  { echo "the laptop's run failed (its last lines name files of the image; not shown)" >&2; exit 2; }
+rm -rf "$L/camera.apex" "$t/lw"
+
+# --- The phone side's run
+P=$t/phone
+if [[ -z $container ]]; then
+  OMAMOBILE_PROVISION_TOOLS=$lib OMAMOBILE_PROVISION_PYTHON=$py "${PROV[@]}" extract -o "$P" "$factory" > "$t/phone.log" 2>&1 ||
+    { echo "the phone side's run failed" >&2; exit 2; }
+else
+  repo=$(cd ../.. && pwd)
+  [[ -f $repo/tools/lib/alarm.sh ]] || die "--container needs the repository (tools/lib/alarm.sh)"
+  # shellcheck source=/dev/null
+  source "$repo/tools/lib/alarm.sh"
+  alarm_require_binfmt
+  image=$(alarm_build_image "$repo")
+  mkdir -p "$P" && chmod 777 "$t" "$P"
+  docker run --rm --platform linux/arm64 -v "$factory:/factory.zip:ro" -v "$container:/pkg.pkg.tar.zst:ro" -v "$P:/out" \
+    -v "$ALARM_CACHE/pkg:/var/cache/pacman/pkg" "$image" bash -c '
+      set -euo pipefail
+      owner=$(stat -c %u:%g /out) cache_owner=$(stat -c %u:%g /var/cache/pacman/pkg)
+      trap "chown -R $owner /out; chown -R $cache_owner /var/cache/pacman/pkg" EXIT
+      pacman -Sy >/dev/null
+      pacman -U --noconfirm --needed /pkg.pkg.tar.zst >/dev/null
+      uname -m
+      # as root: the extraction itself then runs as nobody, as on the phone
+      omamobile-provision extract -o /out/x /factory.zip
+    ' > "$t/phone.log" 2>&1 || { echo "the phone side's run in the container failed:" >&2; grep -E '^(error|camera|::)' "$t/phone.log" | head -n 12 >&2 || true; exit 2; }
+  grep -cx aarch64 "$t/phone.log" >/dev/null || die "the container is not aarch64"
+  P=$P/x
+fi
+grep -c '^camera: failed' "$t/phone.log" >/dev/null && echo "camera: failed" > "$t/phone.camera"
+
+"${PROV[@]}" listing "$L" > "$t/laptop.list"
+"${PROV[@]}" listing "$P" > "$t/phone.list"
+python3 -I -B - "$t/laptop.list" "$t/phone.list" "$L" "$P" "$([[ -e $t/laptop.camera ]] && echo 1 || echo 0)" \
+  "$([[ -e $t/phone.camera ]] && echo 1 || echo 0)" <<'PY'
+import sys
+
+
+def load(path):
+    out = {}
+    with open(path, errors="surrogateescape") as f:
+        for line in f.read().splitlines():
+            kind, mode, what, name = line.split("\t", 3)
+            out[name] = (kind, mode, what)
+    return out
+
+
+a, b = load(sys.argv[1]), load(sys.argv[2])
+laptop, phone = sys.argv[3], sys.argv[4]
+diff = []
+for name in sorted(set(a) | set(b)):
+    if name not in b:
+        diff.append(f"only in the laptop's run: {name}")
+    elif name not in a:
+        diff.append(f"only in the phone side's run: {name}")
+    elif a[name] != b[name]:
+        note = ""
+        if a[name][0] == b[name][0] == "f" and a[name][1] == b[name][1]:
+            with open(f"{laptop}/{name}", "rb") as x, open(f"{phone}/{name}", "rb") as y:
+                if sorted(x.read().splitlines()) == sorted(y.read().splitlines()):
+                    note = " (the same lines in another order)"
+        elif a[name][1] != b[name][1]:
+            note = " (the mode)"
+        diff.append(f"differs: {name}{note}")
+cam = {("1", "1"): "the camera step failed on both sides: no camera data to compare",
+       ("1", "0"): "the camera step failed in the laptop's run only", ("0", "1"): "the camera step failed on the phone side only",
+       ("0", "0"): ""}[(sys.argv[5], sys.argv[6])]
+if cam:
+    print(cam)
+if diff:
+    print("\n".join(diff))
+    sys.exit(1)
+files = sum(1 for v in a.values() if v[0] == "f")
+print(f"equal ({files} files, {sum(1 for v in a.values() if v[0] == 'l')} symlinks)")
+PY

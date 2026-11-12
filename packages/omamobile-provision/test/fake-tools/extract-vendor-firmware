@@ -1,0 +1,17 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stand-in for tools/extract-vendor-firmware (see common.sh)
+source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
+while getopts "o:c:w:d:f" o; do case $o in o) OUT=$OPTARG ;; c) APEX=$OPTARG ;; *) ;; esac; done
+shift $((OPTIND - 1))
+fake_start firmware "$1"
+u=$OUT/usr/lib/firmware/updates r=$OUT/usr/share/omamobile/sensors/registry
+rm -rf "$OUT/usr" && mkdir -p "$u/brcm" "$u/cirrus" "$r"
+echo "aoc $GEN" > "$u/aoc.bin"
+echo "wifi $GEN" > "$u/brcm/wifi.fict.bin"
+echo "bt $GEN" > "$u/brcm/BCM.fict.hcd"
+echo "amp $GEN" > "$u/cirrus/amp.wmfw"
+echo "{\"accel\": \"$GEN\"}" > "$r/accel.json"
+echo "{\"only\": \"$GEN\"}" > "$r/only-$GEN.json"
+(cd "$u" && find . -type f -printf '%P\n' | LC_ALL=C sort | xargs sha256sum -- > "$OUT/vendor-firmware.sha256")
+echo "apex $GEN" > "$APEX"

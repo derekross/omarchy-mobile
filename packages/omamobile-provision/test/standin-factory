@@ -1,0 +1,160 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""standin-factory: a made-up factory image for the extraction tools.
+
+  test/standin-factory OUT.zip [GENERATION]
+
+Writes a zip laid out like Google's factory zip for the Pixel 7 Pro (an
+image-*.zip inside, with android-info.txt, vendor.img and system.img as
+ext4 images) whose every file is made up here: text with the few words the
+tools' sanity checks look for, and ELF files that hold only a dynamic
+section (their DT_NEEDED lists), so the tools' library closure walk has
+something to follow. Nothing in it is Google's, and nothing in it runs.
+GENERATION goes into every file, so two generations differ everywhere.
+
+Needs mke2fs (e2fsprogs). The camera APEX is not a camera HAL:
+extract-camera-data fails on it, as it must.
+"""
+
+import os
+import struct
+import subprocess
+import sys
+import tempfile
+import zipfile
+
+
+def elf(needed, text=b""):
+    """A minimal AArch64 ELF64 shared object: one PT_LOAD, one PT_DYNAMIC
+    with DT_NEEDED entries, DT_STRTAB and DT_STRSZ, then TEXT."""
+    strtab = b"\0"
+    offs = []
+    for n in needed:
+        offs.append(len(strtab))
+        strtab += n.encode() + b"\0"
+    ehsize, phsize = 64, 56
+    dyn_off = ehsize + 2 * phsize
+    ndyn = len(needed) + 3
+    str_off = dyn_off + ndyn * 16
+    dyn = b"".join(struct.pack("<QQ", 1, o) for o in offs)
+    dyn += struct.pack("<QQ", 5, str_off) + struct.pack("<QQ", 10, len(strtab)) + struct.pack("<QQ", 0, 0)
+    body = dyn + strtab + text
+    total = dyn_off + len(body)
+    eh = b"\x7fELF" + bytes([2, 1, 1, 0]) + b"\0" * 8
+    eh += struct.pack("<HHIQQQIHHHHHH", 3, 183, 1, 0, ehsize, 0, 0, ehsize, phsize, 2, 0, 0, 0)
+    load = struct.pack("<IIQQQQQQ", 1, 6, 0, 0, 0, total, total, 0x1000)
+    dynph = struct.pack("<IIQQQQQQ", 2, 6, dyn_off, dyn_off, dyn_off, ndyn * 16, ndyn * 16, 8)
+    return eh + load + dynph + body
+
+
+def put(root, path, data, mode=0o644):
+    full = os.path.join(root, path)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "wb") as f:
+        f.write(data if isinstance(data, bytes) else data.encode())
+    os.chmod(full, mode)
+
+
+def mkext4(tree, img, megabytes):
+    subprocess.run(["mke2fs", "-q", "-t", "ext4", "-O", "^has_journal", "-E", "root_owner=0:0", "-d", tree,
+                    img, f"{megabytes}M"], check=True, stdout=subprocess.DEVNULL)
+
+
+def halo(text):
+    return b"WMFW\0\0\0\0\0\0\x04 " + text.encode()
+
+
+def main():
+    if len(sys.argv) not in (2, 3):
+        sys.exit(__doc__.strip())
+    out = os.path.abspath(sys.argv[1])
+    g = sys.argv[2] if len(sys.argv) == 3 else "gen1"
+    with tempfile.TemporaryDirectory() as t:
+        v, s, r = (os.path.join(t, n) for n in ("vendor", "system", "runtime"))
+
+        # --- vendor: what extract-vendor-firmware maps (tests/extract-vendor-firmware)
+        put(v, "build.prop", f"ro.product.vendor.device=cheetah\nro.vendor.build.fingerprint=fictional/cheetah/{g}\n")
+        put(v, "firmware/fw_bcmdhd.bin", f"fictional 4389c1-roml Version=1.0.1 ({g})\n")
+        put(v, "firmware/bcmdhd.cal", f"NVRAMRev={g}\n")
+        put(v, "firmware/bcmdhd_clm.blob", f"clm {g}\n")
+        put(v, "firmware/brcm/BCM.hcd", f"BCM4389C1 fictional {g}\n")
+        put(v, "firmware/aoc.bin", f"aoc {g}\n")
+        put(v, "firmware/cs40l26.wmfw", halo(f"FIRMWARE_CS40L26 BUZZ_EFFECTS2_BUZZ_LEVEL {g}"))
+        put(v, "firmware/cs40l26-calib.wmfw", halo(f"calib {g}"))
+        for f in ("cs40l26.bin", "cs40l26-svc.bin", "cs40l26-dvl.bin"):
+            put(v, "firmware/" + f, f"WMDR {f} {g}\n")
+        put(v, "firmware/cs35l41-dsp1-spk-prot.wmfw", halo(f"FIRMWARE_HALO_CSPL CAL_CHECKSUM {g}"))
+        put(v, "firmware/cs35l41-dsp1-spk-prot.bin", f"WMDR top {g}\n")
+        put(v, "firmware/R-cs35l41-dsp1-spk-prot.bin", f"WMDR bottom {g}\n")
+        put(v, "firmware/fast_switch3.txt", "3,1,2\n")
+        put(v, "firmware/fast_switch4.txt", "3,1,3\n")
+        put(v, "etc/sensors/registry/fictional_accel.json", f'{{"accel": "{g}"}}\n')
+        put(v, "etc/sensors/registry/Fictional_light.json", f'{{"light": "{g}"}}\n')
+        put(v, "apex/com.google.pixel.camera.hal.apex", f"not a camera HAL ({g})\n")
+
+        # --- vendor: the gnss and modem profiles and the fingerprint tree
+        put(v, "bin/hw/lhd", elf(["libvfoo.so", "libc.so"], f"LheBbdPacket {g}".encode()), 0o755)
+        put(v, "bin/hw/gpsd", elf(["libbinder_ndk.so", "libcom.android.tethering.connectivity_native.so", "libdl.so"],
+                                 f"gpsd {g}".encode()), 0o755)
+        put(v, "firmware/SensorHub.patch", f"patch {g}\n")
+        put(v, "etc/gnss/lhd.conf", f"LhePatch=/vendor/firmware/SensorHub.patch\n# {g}\n")
+        put(v, "etc/gnss/gps.xml", f'<gll NmeaOutName="/data/vendor/gps/nmea_out" gen="{g}"/>\n')
+        put(v, "etc/gnss/gps.cer", f"made-up certificate {g}\n")
+        put(v, "etc/vintf/manifest.xml", f"<manifest gen='{g}'/>\n")
+        put(v, "etc/vintf/manifest/Upper.xml", f"<manifest gen='{g}'/>\n")
+        put(v, "bin/cbd", elf(["libvfoo.so", "libm.so"], f"CP Boot Daemon {g}".encode()), 0o755)
+        put(v, "bin/rfsd", elf(["libVBar.so"], f"/dev/umts_rfs0 {g}".encode()), 0o755)
+        put(v, "etc/init/cbd.rc", f"service cbd /vendor/bin/cbd # {g}\n")
+        put(v, "etc/init/rfsd.rc", f"service rfsd /vendor/bin/rfsd # {g}\n")
+        put(v, "etc/fstab.modem", f"/dev/block/modem_img /mnt/vendor/modem_img ext4 ro # {g}\n")
+        put(v, "firmware/carrierconfig/cfg.pb", f"carrier {g}\n")
+        hal = "bin/hw/android.hardware.biometrics.fingerprint-service.goodix"
+        put(v, hal, elf(["libvfoo.so", "libbinder_ndk.so", "libc.so"], f"g7_trusty {g}".encode()), 0o755)
+        for b in ("bin/hw/android.hardware.gatekeeper-service.trusty",
+                  "bin/hw/android.hardware.security.keymint-service.trusty", "bin/storageproxyd",
+                  "bin/trusty_apploader", "bin/vndservicemanager"):
+            put(v, b, elf(["libVBar.so", "libc.so"], f"{b} {g}".encode()), 0o755)
+        put(v, "firmware/g7.app", b"TrustyApp made up " + g.encode() + b"\n")
+        put(v, "lib64/libvfoo.so", elf(["libVBar.so", "libc.so"], f"vfoo {g}".encode()))
+        put(v, "lib64/libVBar.so", elf(["libc.so"], f"VBar {g}".encode()))
+        put(v, "lib64/hw/unused.so", elf([], b"unused"))
+
+        # --- system
+        put(s, "system/build.prop", f"ro.system.build.fingerprint=fictional/cheetah/{g}\n")
+        put(s, "system/bin/servicemanager", elf(["libsfoo.so", "libc.so"], f"servicemanager {g}".encode()), 0o755)
+        put(s, "system/bin/sh", elf(["libc.so"], f"sh {g}".encode()), 0o755)
+        put(s, "system/bin/toybox", elf(["libsfoo.so", "libm.so"], f"toybox {g}".encode()), 0o755)
+        put(s, "system/lib64/libsfoo.so", elf(["libc.so", "libdl_android.so"], f"sfoo {g}".encode()))
+        put(s, "system/lib64/libbinder_ndk.so", elf(["libsfoo.so"], f"binder_ndk {g}".encode()))
+        put(s, "system/etc/vintf/manifest.xml", f"<manifest gen='{g}'/>\n")
+        put(s, "system/etc/vintf/compatibility_matrix.1.xml", f"<matrix gen='{g}'/>\n")
+        put(s, "system/etc/security/cacerts/0a1b2c3d.0", f"made-up CA {g}\n")
+        put(s, "system/etc/security/cacerts/Ffffffff.0", f"made-up CA 2 {g}\n")
+
+        # --- the runtime APEX: bionic
+        put(r, "bin/linker64", elf([], f"linker64 {g}".encode()), 0o755)
+        for n in ("libc.so", "libm.so", "libdl.so", "libdl_android.so"):
+            put(r, "lib64/bionic/" + n, elf([], f"{n} {g}".encode()))
+        payload = os.path.join(t, "apex_payload.img")
+        mkext4(r, payload, 2)
+        apex = os.path.join(s, "system/apex/com.android.runtime.apex")
+        os.makedirs(os.path.dirname(apex))
+        with zipfile.ZipFile(apex, "w", zipfile.ZIP_STORED) as z:
+            z.write(payload, "apex_payload.img")
+            z.writestr("apex_manifest.pb", "made up")
+
+        vimg, simg = os.path.join(t, "vendor.img"), os.path.join(t, "system.img")
+        mkext4(v, vimg, 4)
+        mkext4(s, simg, 4)
+        inner = os.path.join(t, "image.zip")
+        with zipfile.ZipFile(inner, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("android-info.txt", "require board=cheetah|panther\n")
+            z.write(vimg, "vendor.img")
+            z.write(simg, "system.img")
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as z:
+            z.writestr(f"cheetah-fict.{g}/flash-all.sh", "#!/bin/sh\n# made up\n")
+            z.write(inner, f"cheetah-fict.{g}/image-cheetah-fict.{g}.zip")
+
+
+if __name__ == "__main__":
+    main()
