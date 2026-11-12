@@ -128,7 +128,8 @@ that would land wrong.
   cited; Google's copyright kept on imported code; SPDX headers.
 - **Conventions:** area prefixes (this repo) or subsystem prefixes from
   `git log --oneline <file>` (kernel); bodies that say why with evidence;
-  package `version` bumped with the version in the subject; a human
+  no package `version` bump (`tools/pkg-version` counts it; a new series
+  only on purpose); a human
   Signed-off-by on kernel commits and never an AI one; the plan updated with
   a gated runbook (Expect/Pass, stop condition, rollback, risk) for anything
   run on a phone.

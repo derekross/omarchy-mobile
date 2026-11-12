@@ -66,6 +66,6 @@ Do not edit a generated file. Every file but the two hand-made terminal ones is 
 3. Run `squeekboard/generate --check`. It strips the generator's additions from each file, regenerates and compares (lines 170-189, 201-211).
 4. Run the tests from `packages/omamobile-shell/`: `test/all` runs `python3 -B test/keyboard-layouts.py` (every layout as squeekboard 1.43.1 parses it, the action row in every view, the globe keysym, known keysyms when libxkbcommon is installed; it exits 77, a skip, without PyYAML) and, only when that passes, `squeekboard/generate --check`; then `bash test/keyboard-languages.sh` (`omamobile-keyboard-languages` against a fake `gsettings`) (`test/all` lines 428-436, 463). Each can also be run on its own.
 5. From the repository root, run `tools/pr-check` and `tests/packages` before pushing (see the tools table in `AGENTS.md`).
-6. Bump `version` and note the change in the package `README.md` and this page.
+6. Note the change in the package `README.md` and this page.
 
 A new language is selectable once the package is installed with its portrait file in `squeekboard/keyboards/`: `omamobile-keyboard-languages list` then offers every top-level portrait file in the installed directory, and `omamobile-setup-user` links it at the next login. To try one before packaging, set `OMAMOBILE_KEYBOARDS_DIR` to the source directory for the list.
