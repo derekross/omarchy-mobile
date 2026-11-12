@@ -1,14 +1,14 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Xiaomi Mi 8 (dipper): RAM-only first light
 
-**Status (2026-11-11):** the newest RAM boot is the 2026-11-11 one in [NOTES.md]: #505's rebuilt image `665fcbd682cd8e64b3ffec1ff7f4ab9ca33a26b9b47b11073be7a3c267abf2b1` on kernel/DTS #220's final head, with every UFS partition read-only. Before it, on 2026-11-10, the combined #503/#505 non-NFS image `540b5d31ea73a31ade9a8d8cb5152cf701dc3c2ad8256734790b0ef2db6dbdd0` booted by RAM on the Xiaomi Mi 8 with kernel/DTS PR #220 at `055a4019998f22cc0e2a8afef7650274a6ce0657`. Its initramfs root had all 85 UFS partition flags at `ro=1`. `/sys/block/sda/ro` was `0`, but `/dev/sda` was absent; `sdb`–`sdf` were `ro=1`. The guard confirmed this state. `qcom_wdt` and its feeder ran, simpledrm registered `fb0`, USB/SSH worked, and `/proc/iomem` reserved `0x85fc0000–0x8a8fffff`, covering the former TZ range. The pinned rescue SSH key matched, and `reboot-to` returned the phone to fastboot. Physical input events were not captured on this exact image.
+**Status (2026-11-12):** the newest RAM boot is the corrected FTS5 image in [NOTES.md], rebuilt from the current preprocessed Dipper DTS. The previous FTS5 test image used a stale base DTB and is superseded. On the corrected image, the full `0x85fc0000–0x8a8fffff` region remained reserved, all 85 UFS partition flags were read-only, `/dev/sda` was absent, `stmfts` and `qcom_wdt` bound, and a physical touch produced an `ABS_MT_TRACKING_ID` event. No UFS partition was written. Earlier boots, including #505's rebuilt image `665fcbd682cd8e64b3ffec1ff7f4ab9ca33a26b9b47b11073be7a3c267abf2b1`, are recorded in [NOTES.md].
 
 A separate RAM NFS-root run used image `a2d435a7430e7e4c145c61cdb9866d16929731859d91c7105e6bfcaf9e3e9dd7` with the rebased #503 init. BusyBox `mount` switched to the test NFS root; all six disk flags and all 85 partition flags were `ro=1`. Systemd reached the multi-user target with `RuntimeWatchdogSec=60s`, and SSH remained available. `reboot-to bootloader` returned the phone to fastboot. The exported root was a generic Arch base; this did not test the Omarchy desktop or link-loss recovery. Full results are in [NOTES.md].
 The FTS5 driver from [touch #219] is merged into linux-omarchy-mobile. The
 Dipper board DTS from [DTS #220] is merged too (2026-11-11), and the EA8074
 panel driver is under review in [panel #218].
-The EA8074 panel test is recorded in [NOTES.md]. The FTS5 touchscreen
-still needs a hardware test.
+The EA8074 panel test and the corrected FTS5 touchscreen hardware test are
+recorded in [NOTES.md]. Both used RAM boots; no UFS partition was written.
 On 2026-11-09, a guarded RAM boot was used to capture all 84 GPT partitions
 other than `userdata` (the phone has no `super`); source and compressed-image
 checksums passed. The separate live userdata archive also passed its checksum
