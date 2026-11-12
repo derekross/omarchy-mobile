@@ -3,6 +3,71 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **C-43 (2026-11-11). Round 50 told #226's author that the sampler test sat
+  "on its own line in `tests/all`, clear of the loop that everyone else
+  appends to".** It sits directly above that loop line, git merges adjacent
+  changed lines as one hunk, and `git merge-tree` with #374 conflicts there.
+  *Lesson:* before calling a placement conflict-free, run `git merge-tree`
+  against one open PR that edits the hot line, and point new suites at the
+  "one suite per line" block at the end of `tests/all`. Extends L-549.
+  *From:* #226 against #374, round 52.
+- **C-42 (2026-11-11). We merged #670, the move of the Omarchy pin to
+  4.5.0-3, on an update test from a Pixel 7 Pro that had been pushed a new
+  boot image first.** A phone still on an older boot image has `/run` at mode
+  1777, which Omarchy 4.5's sudo migration refuses (issue #447), so the
+  development channel carried a broken update for a few hours, until #673's
+  tmpfiles.d rule set `/run` to 0755. *Lesson:* an update test starts from the
+  state a user's phone is in (the last release's install and boot images, no
+  pushes), not the state the test phone was prepared into. See L-433 and
+  L-500. *From:* #670 with #437 and #673, round 52.
+- **C-41 (2026-11-10). Round 49 asked #562 to document that without the
+  SSH-ready helper "every second boot stays in RAM".** A held boot never
+  removes `/var/lib/omamobile/root-boot-pending` (the PR's own test asserts
+  it), so it is every boot after the first, until the marker is removed by
+  hand; the wrong sentence went into RELEASES twice. *Lesson:* for every
+  behaviour sentence in a draft comment, find the line that makes it true or
+  the test that asserts it before the contributor copies it. Extends C-4.
+  *From:* #562, round 50.
+- **C-40 (2026-11-10). Our 11-09 comment on #330 credited "the first boot of
+  #505's own image, `/dev/sda` removed"; the image behind it was a different
+  build, with `/dev/sda` present and writable.** The contributor found it by
+  booting it again. *Lesson:* before crediting a boot to a PR's image, ask for
+  the tie between its hash and the PR head (the builder's
+  `BOOT-MANIFEST.json`, the commit); for a mislabelled image that still
+  exists, ask for its ramdisk's `init` diffed against `initramfs/init`,
+  readable without a phone; then take the earlier claim back. Extends L-645
+  and L-600. *From:* #330 with #505, round 49.
+- **C-39 (2026-11-10). Round 48 told #567's author that the 9a ships no AVB
+  footers, so there was no precedent, from `device/tegu/device.conf`.**
+  `device/tegu/NOTES.md` records a second 9a that stopped in fastboot without
+  footers and booted with index-0 footers. *Lesson:* `git grep -n -i footer
+  device/<sibling>/` (the notes and plans, not only the descriptor) before
+  writing what a sibling does. Extends L-31 and L-187. *From:* #567, round 49.
+- **C-38 (2026-11-10). Round 48 asked #567 to take `AVB_ROLLBACK_INDEX` from
+  stock's `boot` footer; komodo's reads "Algorithm NONE, rollback index 0",
+  which says the partition isn't chained.** The request produced a lower index
+  than the phone had already booted marked, while its siblings' stock footers
+  carry the patch date. *Lesson:* when asking for stock AVB values, ask first
+  for `avbtool info_image` on `vbmeta_<slot>` (chain or hash descriptors,
+  rollback locations, flags), and take the index from the structure the
+  bootloader verifies. Extends L-225 and L-169. *From:* #567, round 49.
+- **C-37 (2026-11-10). Our round 46 request on #553 named the panel's bottom
+  inset and `Style.gapsOut` as the swipe strip's size; `hypr/phone.lua` sets
+  `gaps_out = 0`, so the strip built from them was too thin to hit.** Only the
+  owner's hand try found it, though L-619 used that value in the same review.
+  *Lesson:* before suggesting a size "from the inset and the gap", compute it
+  with `phone.lua`'s values and compare it with the 28 px floor the shell's
+  other strips use. Extends L-619 and L-229. *From:* #553, round 49.
+- **C-36 (2026-11-10). Round 48 told #571's author to turn
+  `omarchy.remote-session` off on every phone because "a remote desktop
+  listening on a phone shouldn't be the default"; the plugin only detects a
+  gliff session for Omarchy's bar indicator.** Nothing listens unless someone
+  starts `gliff-server` (the package ships no unit), and the contributor
+  copied our reason into a shipped comment. *Lesson:* before a draft gives a
+  security reason for a switch, read the component's manifest and list its
+  consumers (`grep -rn '<id>'` over Omarchy's shell and ours); name what
+  actually listens and what starts it. Extends L-31 and L-229. *From:* #571,
+  round 49.
 - **C-1 (2026-10-22). We blamed the 30 s unused-regulator cleanup for the
   felix cover touch's dead rails (issue #3).** We have no S2MPG12 regulator
   driver at all (cheetah's `s2mpg12-pmic` node is RTC and interrupt masks

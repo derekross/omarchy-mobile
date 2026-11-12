@@ -3,13 +3,75 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-112. A core change that makes a reserved value valid updates the
+  binding that reserved it, and names the boards that change.** reboot-mode
+  has skipped a zero magic since 2016 and its binding says "non-zero".
+  *Check:* `git log -S` on the binding for the rule's origin, `git grep` for
+  the value across all DTs (`da850-lego-ev3`'s zero `mode-normal`, written `<0x00000000>`), and both
+  in the commit message. *From:* kernel #45.
+- **L-136. A probe's default pin or register is a per-board fact.**
+  `bt-uart-test --wake` defaulted to cheetah's gpp16:3 on every phone; on
+  gs101 that is a USI8 pin. *Check:* a tool that drives a GPIO or register
+  on the phone takes its default from the board's compatible, or refuses an
+  unknown board without an explicit value. Extends L-13. *From:* #22,
+  round 12.
+- **L-137. A device package's wants links can override another package's
+  "installed, not enabled" policy.** raven's package enabled the modem and
+  SIM units at boot. *Check:* for each `vendor/systemd/**/*.wants/*` link,
+  find the package that owns the unit and read its install message and unit
+  comments; turning a radio on by default is the maintainer's call. *From:*
+  #41, round 12.
+- **L-160. Hiding a shell surface removes every gesture on it, and a new
+  edge surface is checked against the keyboard and fullscreen windows.** #43
+  hid the dock over apps, its swipe-up the switcher's only entry point; its
+  new full-width pill sat on the Overlay layer with no input mask. *Check:*
+  `git grep` the surface's handlers; for a new layer surface, its layer,
+  input region, the keyboard's layer and fullscreen apps. *From:* #43,
+  round 14.
+- **L-161. A lock-path check that fails open is a finding.** `jq -e
+  'all(.dpmsStatus)'` read a failed `hyprctl` query as "screen off", so Power
+  would stop locking. Test for the positive state, failing towards locking.
+  *From:* #43, round 14.
+- **L-162. A per-board audio file is only as safe as the shared fallback,
+  and node-name filters apply to every board with that name.** If tegu's card
+  name changed, alsa-ucm-conf would fall back to cheetah's profile, whose mic
+  list takes tegu's AoC down; cheetah's loudness filter matches any sink named
+  `sound-aoc`. "Stage ceilings" are cheetah's CS35L41 bound: a new amplifier
+  needs its own. *From:* #44, round 14.
+- **L-172. An NFC core change is a cheetah change: the Pixel 7 Pro polls
+  through neard at boot.** `omamobile-nfc-open` is enabled by
+  `omamobile-setup-system` and starts a poll loop, so every `net/nfc`
+  behaviour tied to polling (rfkill block, poll ownership, proprietary
+  notifications) runs on the reference phone at every boot; the NFC tile's
+  "Off" had been a no-op there too. *Check:* `git grep -n nfc-open
+  packages/omamobile-device-cheetah` before saying "cheetah unaffected" for
+  an NFC change. Extends L-51. *From:* kernel #71 with #78, round 20.
+- **L-173. A shared `initramfs/init` change is cheetah-neutral by its
+  gates, not by a byte comparison.** The init text changes for every device,
+  so the packed image differs by construction. *Check:* list each new path's
+  marker file, show that `bin/omamobile initramfs-config` packs none of them
+  for cheetah and felix (byte-identical `etc`), read each path's early
+  return, and let the next routine cheetah push be the boot. Extends L-8 and
+  L-134. *From:* #41, round 20.
+- **L-206. Shared drivers leave the Pixel 7 Pro unchanged by construction
+  (CONTRIBUTING §6.2).** New behaviour sits behind the contributor's own match
+  data; a deliberate cheetah change needs a reason that holds on cheetah and a
+  run on the maintainer's phone before merge. Where a flag is tested inside a
+  shared function (#57's `UNGATE_POST_CHANGE` in `exynos_ufs_setup_clocks()`),
+  the object can't be byte-identical: accept a per-function object diff plus a
+  flag table showing cheetah's path unchanged (L-111). Per-SoC data also
+  reaches every board that binds it through a fallback compatible (#83's
+  `zumapro_ufs_drvs` is zuma's too). *Check:* cheetah's objects before and
+  after, function by function where they differ; `git grep '"<compatible>"'
+  arch/` for every board listing the data's compatible, fallbacks included,
+  and those boards' plans for statements the change falsifies. Extends L-151.
+  *From:* kernel #57, #82, #83, #88, round 22.
 - **L-207. A gs101/gs201 device package carries the s2idle drop-in.** Cheetah
   and raven ship `sleep.conf.d/10-omamobile.conf`; felix and lynx don't, so
   Omarchy's Suspend enters `deep`, which never wakes on gs201. *Check:* `git
   ls-tree -r origin/main packages/ | grep sleep.conf` for every such device
   package, and `mem_sleep_default` in the board's bootargs. *From:* #88,
   round 22.
-
 - **L-348. A shared driver's change is judged against every user of it on
   `omamobile-int`, not only on `omamobile`.** Kernel #150 (spi-s3c64xx) has
   one SPI user on the published base (touch) but three on the integration
