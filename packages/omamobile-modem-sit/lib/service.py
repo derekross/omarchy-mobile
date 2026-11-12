@@ -43,7 +43,7 @@ import time
 import cp
 import paths
 from at import radio
-from radio_power import set_radio
+from radio_power import SIT_RADIO_BEFORE_SIM, native_radio, profile, set_radio
 from calls import call_status, dial_payload, ring
 import data_call
 from data_call import paths as bearer_paths
@@ -105,11 +105,18 @@ def unconfirmed_release(client, reason, settings=None):
     Keep call ownership and the modem/NV server for an attended reboot.
     """
     print('Call release not confirmed:', reason, flush=True)
+    selected_profile = 'default'
+    if settings is not None:
+        try:
+            selected_profile = profile(settings)
+        except (OSError, RuntimeError, ValueError) as error:
+            print('Recovery profile unavailable:', type(error).__name__,
+                  '; attempting AT radio-off', flush=True)
     try:
-        if settings is None:
-            radio(False)
+        if selected_profile == SIT_RADIO_BEFORE_SIM:
+            native_radio(client, False)
         else:
-            set_radio(client, settings, False, radio)
+            radio(False)
         print('Recovery radio-off command accepted', flush=True)
     except (OSError, RuntimeError, ValueError) as error:
         print('Recovery radio-off failed:', type(error).__name__, flush=True)

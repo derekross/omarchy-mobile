@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""Exercise the actual SIT framing against the qualified S5400 request bytes."""
+"""Exercise the actual SIT framing against the proposed S5400 request bytes."""
 import sys
 from pathlib import Path
 import env  # noqa: F401
@@ -14,7 +14,7 @@ from sit import Sit
 
 
 class NativeRadioWire(unittest.TestCase):
-    def test_power_frame_matches_the_executed_s5400_protocol(self):
+    def test_power_frame_matches_the_proposed_s5400_payload(self):
         for enabled, payload in ((True, bytes.fromhex('020000000000')),
                                  (False, bytes.fromhex('010000000000'))):
             with self.subTest(enabled=enabled):

@@ -45,7 +45,7 @@ running with data only, unless [network] ims_required = yes.
 import time
 
 from at import radio, radio_state
-from radio_power import KOMODO, profile, native_radio, configure_single_modem
+from radio_power import SIT_RADIO_BEFORE_SIM, profile, native_radio, configure_single_modem
 import carrier_apn
 from data_call import APN_TYPES, activate, attach_bearer, configured_profiles, entries, initial_attach
 from data_call import owned_ids, provision_profiles, record_modem_owned, summary
@@ -368,12 +368,12 @@ def start(service, settings, stopped=lambda: False):
     net = settings['network']
     ip_type = net.get('ip_type', 'ipv4v6')
     selected_profile = profile(settings)
-    if selected_profile == KOMODO:
+    if selected_profile == SIT_RADIO_BEFORE_SIM:
         validate_startup_inputs(net)
     def radio_control(enabled):
-        if stopped():
-            raise InterruptedError('Modem startup stopped')
-        if selected_profile == KOMODO:
+        if selected_profile == SIT_RADIO_BEFORE_SIM:
+            if stopped():
+                raise InterruptedError('Modem startup stopped')
             native_radio(client, enabled)
         else:
             radio(enabled)
@@ -383,7 +383,7 @@ def start(service, settings, stopped=lambda: False):
         configured_profiles(settings, '')
     except ValueError as error:
         raise RuntimeError(f'Bad data profile in /etc/omamobile/modem-sit.conf: {error}') from None
-    if selected_profile == KOMODO:
+    if selected_profile == SIT_RADIO_BEFORE_SIM:
         if stopped():
             raise InterruptedError('Modem startup stopped')
         service.stage('radio')
@@ -445,8 +445,8 @@ def start(service, settings, stopped=lambda: False):
                        attach_source=chosen['attach_source'] if chosen['attach_apn'] else 'same')
     began = time.monotonic()
     service.stage('attach')
-    if selected_profile == KOMODO:
-        # Deliberate qualified attach cycle; never interpret AT state as SIT.
+    if selected_profile == SIT_RADIO_BEFORE_SIM:
+        # Explicit opt-in attach cycle; never interpret AT state as SIT.
         radio_control(False)
         level = 0
     else:
