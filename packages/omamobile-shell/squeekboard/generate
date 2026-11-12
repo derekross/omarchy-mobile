@@ -56,7 +56,10 @@ HEADER_END = "# omamobile-setup-user links it into ~/.local/share/squeekboard/ke
 # The globe key: squeekboard's popover out, our language sheet in
 GLOBE_UPSTREAM = 'action: "show_prefs"'
 GLOBE = 'keysym: "XF86MediaLanguageMenu"'
-HAND_MADE = {"terminal/us.yaml", "terminal/us_wide.yaml"}
+HAND_MADE = {"terminal/us.yaml", "terminal/us_wide.yaml",
+             # Japanese (romaji) for omamobile-ime: copies of the US layouts
+             "jp+romaji.yaml", "jp+romaji_wide.yaml",
+             "terminal/jp+romaji.yaml", "terminal/jp+romaji_wide.yaml"}
 # Greek (gr, gr_wide): a row of its own under the action row with the accented
 # vowels, one key each, so ά is one tap and not two (open the accents view,
 # then tap; it closes itself after one key). The accents view stays for the rest of what is only there.

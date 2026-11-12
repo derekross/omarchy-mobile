@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Japanese input (omamobile-ime on): once fcitx5 holds the input method,
+# restart squeekboard so it doesn't keep it, then turn Mozc on or off with
+# the keyboard's language. Inert while off.
+[Unit]
+Description=Omarchy Mobile: Japanese input follows the keyboard's language
+ConditionPathExists=%h/.config/omamobile/fcitx5
+After=graphical-session.target omarchy-fcitx5.service
+Wants=omarchy-fcitx5.service
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/omamobile-ime session
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
