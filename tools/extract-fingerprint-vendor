@@ -348,7 +348,7 @@ head -c 64 "$root/vendor/firmware/$ta" | grep -ac TrustyApp >/dev/null ||
 grep -aq 'g7_trusty' "$root/vendor/bin/hw/android.hardware.biometrics.fingerprint-service.goodix" ||
   die "the fingerprint HAL is not the Goodix G7 one"
 
-(cd "$root" && find . -type f -printf '%m %P\n' | sort -k2 |
+(cd "$root" && find . -type f -printf '%m %P\n' | LC_ALL=C sort -k2 |
   while read -r mode path; do
     printf '%s %s %s\n' "$(sha256sum "$path" | cut -d' ' -f1)" "$mode" "$path"
   done) > "$OUT/MANIFEST"
