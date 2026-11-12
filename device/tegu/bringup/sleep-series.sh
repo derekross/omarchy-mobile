@@ -18,8 +18,8 @@ modem_up && { echo "the modem is up: stop" >> $L; exit 1; }
 # With the debug switches a stall is a panic, and a panic has to end in a reboot.
 [ $DBG = 1 ] && [ "$(cat /proc/sys/kernel/panic)" = 0 ] && { echo "kernel.panic is 0, a panic would wait for the buttons: stop" >> $L; exit 1; }
 # Only a run that starts gets a fresh log: a refusal above is appended to the log that is there, and the
-# previous run's log is kept beside the new one.
-[ -s $L ] && mv -f $L $L.prev
+# previous run's log is kept beside the new one, under the time of its last line.
+[ -s $L ] && mv -f $L $L.$(date -r $L +%Y%m%d-%H%M%S)
 : > $L
 uid=$(id -u mobile)
 hy() { runuser -u mobile -- env XDG_RUNTIME_DIR=/run/user/$uid HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/$uid/hypr | head -1) hyprctl dispatch "hl.dsp.dpms({ action = \"$1\" })" >/dev/null 2>&1; }
