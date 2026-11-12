@@ -92,6 +92,12 @@ machine: the model comes from a pinned commit of whisper.cpp's model
 repository with a pinned sha256, and makepkg keeps it in its source cache
 afterwards.
 
+## Japanese input
+
+`omamobile-ime on` (with `fcitx5-mozc` installed) hands the input method to fcitx5 with Mozc, and `omamobile-ime off` gives it back to squeekboard. Hyprland gives it to one client, so with it on squeekboard no longer sees text fields: double-tap the home strip to show it. Type romaji, Space converts, Enter commits. It needs hyprland 0.57.0-3.4, which resends squeekboard's keymap to fcitx5. At login `omamobile-ime.service` restarts squeekboard once fcitx5 holds the input method.
+
+Not yet: picking a candidate by tap (fcitx5's window takes no taps; a candidate bar above the keyboard, through fcitx5's kimpanel, would), showing the keyboard when a field takes focus, and the Kana layout (it needs more keycodes than a keymap has).
+
 ## File dialogs
 
 Open, save and choose-a-folder requests through the portal (Qt, GTK, Electron and Flatpak apps alike) get Nautilus's libadwaita file chooser from xdg-desktop-portal-gnome, not xdg-desktop-portal-gtk's GTK 3 desktop chooser, whose Places sidebar took half of the 480 px width. Nautilus's chooser folds its sidebar away at phone width and has touch-sized rows; `hypr/phone.lua` tiles it, even when it has a parent window, so it fills the screen between the bar and the on-screen keyboard. Only FileChooser goes to the gnome backend: its other interfaces need gnome-shell. It runs without gnome-shell (its Mutter service channel is missing, so it falls back to a plain Wayland connection). xdg-desktop-portal-gtk stays as the fallback and for its other interfaces. GTK apps that would draw their own chooser in-process are sent to the portal too (`GTK_USE_PORTAL=1` for GTK 3, `GDK_DEBUG=portals` for GTK 4, in `environment.d/20-omamobile-osk.conf`); Qt Widgets apps keep Omarchy's `QT_QPA_PLATFORMTHEME=gtk3` for now.

@@ -49,6 +49,9 @@ ln -sfn ../omamobile-setup-user.service "$destination/usr/lib/systemd/user/graph
 install -Dm644 systemd/user/omamobile-osk-guard.service "$destination/usr/lib/systemd/user/omamobile-osk-guard.service"
 install -d "$destination/usr/lib/systemd/user/graphical-session.target.wants"
 ln -sfn ../omamobile-osk-guard.service "$destination/usr/lib/systemd/user/graphical-session.target.wants/omamobile-osk-guard.service"
+# Japanese input (omamobile-ime on): squeekboard after fcitx5 at login; inert while off.
+install -Dm644 systemd/user/omamobile-ime.service "$destination/usr/lib/systemd/user/omamobile-ime.service"
+ln -sfn ../omamobile-ime.service "$destination/usr/lib/systemd/user/graphical-session.target.wants/omamobile-ime.service"
 # Sleep on screen-off, for every user's graphical session; it does nothing
 # until the user turns the omamobile-sleep toggle on.
 install -Dm644 systemd/user/omamobile-sleepd.service "$destination/usr/lib/systemd/user/omamobile-sleepd.service"
