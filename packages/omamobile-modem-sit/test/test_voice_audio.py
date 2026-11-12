@@ -422,6 +422,34 @@ class TeguAudioTests(unittest.TestCase):
             audio.__exit__(None, None, None)
         self.assertEqual(controls['Incall Sink Mute'], '1')
 
+    def test_set_output_switches_the_loudspeaker_and_the_earpiece_and_restores(self):
+        audio, events, controls, original = self.fixture()
+        with audio:
+            self.assertEqual(audio.output, 'speaker')
+            audio.set_output('earpiece')
+            self.assertEqual(audio.output, 'earpiece')
+            self.assertEqual(controls['Bottom Speaker Digital Volume'], '0')   # loudspeaker muted
+            self.assertEqual(controls['Top Speaker Digital Volume'], voice_audio.TEGU_GAIN)
+            self.assertEqual(controls['Incall Sink Mute'], '0')                 # unmuted after the switch
+            audio.set_output('speaker')
+            self.assertEqual(controls['Bottom Speaker Digital Volume'], voice_audio.TEGU_GAIN)
+        self.assertEqual(controls, original)   # the call's end restores the pre-call gains
+        with self.assertRaises(ValueError):
+            audio.set_output('headset')
+
+    def test_a_configured_earpiece_output_starts_the_call_on_the_earpiece(self):
+        audio, events, controls, original = self.fixture()
+        audio.output = 'earpiece'
+        with audio:
+            self.assertEqual(controls['Bottom Speaker Digital Volume'], '0')
+            self.assertEqual(audio.output, 'earpiece')
+        self.assertEqual(controls, original)
+
+    def test_set_output_needs_a_running_route(self):
+        audio, _, _, _ = self.fixture()   # pcms not opened yet
+        with self.assertRaisesRegex(RuntimeError, 'no call audio is running'):
+            audio.set_output('earpiece')
+
 class EarpieceUnitTests(unittest.TestCase):
     def test_the_mode_goes_through_the_units_when_installed(self):
         audio = VoiceAudio.__new__(VoiceAudio)

@@ -13,6 +13,7 @@ it. No radio, NV, SIM or raw-request command is exposed.
   {"action": "accept"|"hangup"|"delete-call", "id": "..."}
   {"action": "dtmf", "id": "...", "keys": "12#"}
   {"action": "audio", "what": "mute", "value": "on"|"off"}
+  {"action": "audio", "what": "speaker", "value": "on"|"off"}  loudspeaker | earpiece (tegu)
   {"action": "sms-send", "request_id": <32 hex>, "number": "...", "text": "..."}
   {"action": "sms-status", "request_id": ...} | {"action": "sms-list"}
   {"action": "sms-delete", "id": "..."}
@@ -274,7 +275,8 @@ class Service:
             # in the status's audio error, as with [audio] card = none.
             try:
                 self.audio = VoiceAudio(mic_boost_db=audio.getint('mic_boost_db', 6), card=card,
-                                        earpiece=audio.getboolean('earpiece', True))
+                                        earpiece=audio.getboolean('earpiece', True),
+                                        output=audio.get('output', 'speaker'))
                 self.audio.__enter__()
             except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
                 self.audio = None
@@ -580,7 +582,9 @@ class Service:
         received = [r[0] for r in self.db.execute('SELECT id FROM received WHERE consumed=0 ORDER BY rowid')]
         return dict(modem=modem, calls=calls, sms=dict(received=['sit:' + i for i in received]),
                     audio=dict(available=True, running=self.audio is not None, mute=self.muted,
-                               speaker=getattr(self.audio, 'tegu', False) is True, speaker_available=False, error=self.audio_error))
+                               speaker=self.audio is not None and getattr(self.audio, 'output', 'speaker') == 'speaker',
+                               speaker_available=getattr(self.audio, 'tegu', False) is True,
+                               error=self.audio_error))
 
     def subscribe(self, connection):
         """Keep an authorised connection for status events; refuse beyond
@@ -753,7 +757,10 @@ class Service:
             if self.audio is None:
                 raise RuntimeError('No call audio is running')
             if request.get('what') == 'speaker':
-                raise RuntimeError('Speakerphone routing is not configured yet')
+                if request.get('value') not in ('on', 'off'):
+                    raise ValueError('Invalid audio command')
+                self.audio.set_output('speaker' if request['value'] == 'on' else 'earpiece')
+                return self.status()['audio']
             if request.get('what') != 'mute' or request.get('value') not in ('on', 'off'):
                 raise ValueError('Invalid audio command')
             self.muted = request['value'] == 'on'
