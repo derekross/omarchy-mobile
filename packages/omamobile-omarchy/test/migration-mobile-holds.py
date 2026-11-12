@@ -8,7 +8,10 @@ import subprocess
 import tempfile
 
 PACKAGE = Path(__file__).resolve().parent.parent
-NAMED = ['1789764927', '1791367434', '1792648436', '1791125650', '1791403310']
+NAMED = ['1789764927', '1791367434', '1791125650', '1791403310', '1790042972']
+# Reviewed and released: Omarchy's own file, so a change of its text that
+# would match a hold pattern shows here
+RELEASED = ['1792648436']
 SEMANTIC = ['9999999999', '9999999997']
 
 with tempfile.TemporaryDirectory(prefix='omamobile-migration-holds-') as tmp:
@@ -21,6 +24,8 @@ with tempfile.TemporaryDirectory(prefix='omamobile-migration-holds-') as tmp:
     migrations.mkdir(parents=True)
     for name in NAMED:
         (migrations / f'{name}.sh').write_text('echo "Named migration"\ntrue\n')
+    for name in RELEASED:
+        shutil.copy(PACKAGE / f'test/upstream45/migrations/{name}.sh', migrations / f'{name}.sh')
     (migrations / '9999999999.sh').write_text('omarchy-apply-lock\n')
     (migrations / '9999999997.sh').write_text('omarchy-pkg-add omarchy-hyprland-titlebars\n')
     (migrations / '9999999998.sh').write_text('echo "Harmless fixture"\ntrue\n')
@@ -71,6 +76,9 @@ with tempfile.TemporaryDirectory(prefix='omamobile-migration-holds-') as tmp:
         assert marker.exists()
         assert (password.read_bytes(), fingerprint.read_bytes()) == before
         assert not (state / '9999999998.sh').exists()
+        for name in RELEASED:
+            assert not (state / f'{name}.sh').exists(), name
+            assert f'{name}.sh\t' not in text, name
         assert (state / '9999999996.sh').exists() == (flag != '0')
         assert 'it mentions starts' not in result.stdout
         assert 'installs titlebars pinned to a different Hyprland build.' in result.stdout

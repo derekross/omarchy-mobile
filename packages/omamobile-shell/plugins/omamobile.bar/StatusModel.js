@@ -120,6 +120,22 @@ function unreadCount(names, seen) {
   return count
 }
 
+// Omarchy 4.5 keeps its history in one file, history.json: a JSON array of
+// rows, each with `ts`, when it arrived, in seconds. The shade's mark is in
+// milliseconds, rounded as its NotificationsModel.storeEntry rounds them.
+function unreadStored(text, seen) {
+  var rows = null
+  try { rows = JSON.parse(String(text === undefined || text === null ? "" : text)) } catch (error) { return 0 }
+  if (!Array.isArray(rows)) return 0
+  var since = parseStamp(seen)
+  var count = 0
+  for (var i = 0; i < rows.length; i++) {
+    var ts = rows[i] && typeof rows[i] === "object" ? Number(rows[i].ts) : 0
+    if (isFinite(ts) && ts > 0 && Math.round(ts * 1000) > since) count++
+  }
+  return count
+}
+
 function batteryIcon(percent, charging, full) {
   if (percent < 0) return ""
   if (full) return "󰁹"
@@ -134,6 +150,6 @@ if (typeof module !== "undefined") {
     findDevice: findDevice, connectedNetwork: connectedNetwork, wifiIcon: wifiIcon, networkIcon: networkIcon,
     cellularIcon: cellularIcon, cellGlyph: cellGlyph, cellText: cellText, parseCell: parseCell,
     callChip: callChip, elapsed: elapsed, batteryIcon: batteryIcon,
-    stampOf: stampOf, parseStamp: parseStamp, unreadCount: unreadCount
+    stampOf: stampOf, parseStamp: parseStamp, unreadCount: unreadCount, unreadStored: unreadStored
   }
 }

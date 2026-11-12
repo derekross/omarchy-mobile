@@ -98,12 +98,16 @@ for id in update.channel update.channel.stable update.channel.rc update.channel.
           learn.keybindings learn.tmux-keybindings learn.herdr-keybindings \
           style.bar.position.left style.bar.position.right style.bar.position.bottom \
           trigger.toggle.top-bar trigger.toggle.one-window-ratio trigger.toggle.workspace-layout \
+          appearance.top-bar.position.left appearance.top-bar.position.right appearance.top-bar.position.bottom \
+          appearance.top-bar.hide appearance.top-bar.show appearance.windows.one-window-ratio-on \
+          appearance.windows.one-window-ratio-off appearance.workspace-layout appearance.workspace-layout.floating \
+          appearance.unlock appearance.dock appearance.dock.position.left update.kernel \
           install.windows install.browser.chrome install.gaming.steam; do
   grep -qx "$id false" <<<"$menu" || fail "Menu row $id is hidden"
   [[ $(grep -c "\"$id\"" "$ext") == 1 ]] || fail "Menu row $id is named once after two logins"
 done
 grep -qx 'system.logout true' <<<"$menu" || fail "a row the user set is left as they set it"
-for id in style.bar.position.top update.omarchy install.gaming.retroarch; do
+for id in style.bar.position.top appearance.top-bar.position.top appearance.top-bar.indicators update.omarchy install.gaming.retroarch; do
   grep -q "^$id false" <<<"$menu" && fail "Menu row $id stays"
 done
 pass "menu rows that break the phone are hidden once, by content, and a user's own entry is kept"
@@ -317,6 +321,7 @@ vc "$hn" | grep -cx 'model = "base.en"' >/dev/null || fail "Omarchy's Voxtype co
 vc "$hn" | grep -cx 'context_window_optimization = true' >/dev/null || fail "the new config gets the context cut too"
 [[ $(grep -cx 'systemctl --user enable voxtype.service' "$hn/calls") == 1 ]] || fail "voxtype.service is enabled once"
 [[ -e $hn/.local/state/omarchy/done/voxtype-install-invitation ]] || fail "Omarchy's Install Dictation invitation is marked done"
+[[ $(cat "$hn/.config/omarchy/defaults/dictation") == voxtype ]] || fail "Voxtype is recorded as the dictation default (Omarchy 4.5 asks)"
 if grep -c '^voxtype ' "$hn/calls" >/dev/null 2>&1; then fail "nothing is downloaded (no voxtype setup)"; fi
 rm "$hn/.local/share/voxtype/models/ggml-base.en.bin"
 RUN_HOME=$hn RUN_VOICE_MODELS=$VM run
@@ -324,10 +329,15 @@ RUN_HOME=$hn RUN_VOICE_MODELS=$VM run
 [[ $(grep -cx 'systemctl --user enable voxtype.service' "$hn/calls") == 1 ]] || fail "voxtype.service is enabled only once"
 # A user with Voxtype set up already: config and downloaded model stay
 ho=$t/voice-own; vhome "$ho"; echo own >"$ho/.local/share/voxtype/models/ggml-base.en.bin"
+mkdir -p "$ho/.config/omarchy/defaults"; echo superwhisper >"$ho/.config/omarchy/defaults/dictation"
 printf '[whisper]\nmodel = "tiny.en"\n' >"$ho/.config/voxtype/config.toml"
 RUN_HOME=$ho RUN_VOICE_MODELS=$VM run
 [[ ! -L $ho/.local/share/voxtype/models/ggml-base.en.bin && $(cat "$ho/.local/share/voxtype/models/ggml-base.en.bin") == own ]] || fail "a downloaded model stays"
 vc "$ho" | grep -cx 'model = "tiny.en"' >/dev/null || fail "the user's Voxtype config stays"
+[[ $(cat "$ho/.config/omarchy/defaults/dictation") == superwhisper ]] || fail "a dictation default the owner chose stays"
+rm "$hn/.config/omarchy/defaults/dictation"
+RUN_HOME=$hn RUN_VOICE_MODELS=$VM run
+[[ ! -e $hn/.config/omarchy/defaults/dictation ]] || fail "a dictation default the owner removed is not written again"
 # A failed enable (firstboot without a user manager) is tried again at the
 # next login, and only until it works; the once-only parts don't repeat
 hr=$t/voice-retry; vhome "$hr"; rm -rf "$hr/.config/voxtype" "$hr/.local/share/voxtype"; touch "$hr/systemctl-fails"
@@ -354,6 +364,7 @@ for case in novox nomodel; do
   if [[ $case == novox ]]; then RUN_HOME=$hx RUN_VOICE_MODELS=$VM RUN_VOXTYPE=$t/no-voxtype run; else RUN_HOME=$hx run; fi
   [[ ! -e $hx/.local/share/voxtype && ! -e $hx/.config/voxtype && ! -e $hx/.local/state/omarchy/done/omamobile-voxtype-setup ]] ||
     fail "$case: Voxtype is left alone"
+  [[ ! -e $hx/.config/omarchy/defaults/dictation ]] || fail "$case: no dictation default is recorded"
   if grep -c 'enable voxtype' "$hx/calls" >/dev/null 2>&1; then fail "$case: voxtype.service isn't enabled"; fi
 done
 rm "$F/voxtype"

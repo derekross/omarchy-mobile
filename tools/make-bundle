@@ -79,6 +79,14 @@ base_url=${base_url:-https://pkgs.omamobile.org/releases/$DEVICE/$version/}
 [[ $base_url =~ ^https://[A-Za-z0-9./_-]+/$ ]] || die "--base-url is an https:// URL ending in /"
 name=omamobile-$DEVICE-$version
 bundles=out/bundle
+# One run per bundle at a time, or a second run's put_back below would
+# remove the first one's build directory. The lock file is in out/, where
+# put_back can't remove it; keep it: unlinking it could let two callers
+# lock different inodes.
+command -v flock >/dev/null || die "flock not found (util-linux)"
+mkdir -p out
+exec {lock}>"out/.$name.lock"
+flock -n "$lock" || die "already building $name in $bundles"
 # Everything is built in $out, beside the bundles (the same file system), and
 # moved into place at the end, once all of it, signing included, has worked:
 # a build that fails part way leaves the bundle already built under this

@@ -20,7 +20,8 @@
 #
 # Then the refusals, each before anything is flashed: an image the key makes
 # larger than its partition, a failing step of the key's append, a ramdisk
-# image under an AVB footer, an image that isn't a v4 vendor boot image; and
+# image under an AVB footer, an image that isn't a v4 vendor boot image (the
+# ones in reading the shipped ramdisk also by --verify-only, with no phone); and
 # a ramdisk that already holds SSH keys (a development initramfs) is flashed
 # as built. The hook runs under pacman's umask, 022, and install under 077:
 # its images must not depend on the owner's umask (uutils' install(1) gives
@@ -144,13 +145,19 @@ install() { # codename [args]; RAMDISK_PART_SIZE: vendor_kernel_boot_b's size
     done
   } > "$t/vars"
   # user, password twice, host, time zone, name, email, Wi-Fi, key, confirmation
-  printf '%s\n' alice 1234 1234 "" UTC "" "" "" "$t/owner.pub" "$cn" |
-    (umask 077; HOME=$t/home PATH="$t/fbin:$PATH" "$BUNDLE/install" --unsigned --work "$t/work" "$@") > "$t/out" 2>&1
+  # (read from the fifo HOLD when set); output to OUT, the install's PID to OUT.pid
+  { printf '%s\n' alice 1234 1234 "" UTC "" "" "" "$t/owner.pub"; if [[ -n ${HOLD:-} ]]; then cat "$HOLD"; else echo "$cn"; fi; } |
+    (umask 077; echo "$BASHPID" > "${OUT:-$t/out}.pid"
+     HOME=$t/home PATH="$t/fbin:$PATH" exec "$BUNDLE/install" --unsigned --work "$t/work" "$@") > "${OUT:-$t/out}" 2>&1
 }
-refused() { # why message: install refused, said why, flashed nothing
-  if install twelve; then fail "refuses $1"; fi
+refused() { # why message [args]: install refused, said why, flashed nothing
+  if install twelve "${@:3}"; then fail "refuses $1"; fi
   grep -cF -- "$2" "$t/out" >/dev/null || { cat "$t/out"; fail "says why it refuses $1"; }
   [[ -z $(ls -A "$t/flashed") ]] || fail "nothing is flashed when it refuses $1"
+}
+verify_refused() { # why message [args]: --verify-only refuses it too, and contacts no phone
+  refused "$1 with --verify-only" "$2" --verify-only "${@:3}"
+  [[ ! -s $t/fastboot.log ]] || fail "--verify-only contacts no phone when it refuses $1"
 }
 # slot_b root images: the stand-in phone's slot B partitions hold those
 # images, padded to 16 MiB, as fastboot leaves them
@@ -198,6 +205,75 @@ for dev in "twelve gs201 0x9855001 0x800 vendor_kernel_boot" "six gs101 0x984500
   cp -r "$t/flashed" "$t/installed-$cn"
   pass "$cn: the bundle's install flashes the hook's own $rimg.img (the owner's key appended) and the hook's other images"
 done
+
+# A run killed outright leaves its verify.XXXXXX in --work. While another
+# run is live nothing is removed: here --verify-only beside an install waiting
+# at the codename, which then appends the key from its own directory. The
+# next run with no other live removes the killed one's, but never a directory
+# no run marked (as the installer before the sweep left them, whose run may
+# still be live).
+held() { # name fd: an install of six waiting at the codename, which fd gives
+  mkfifo "$t/$1.fifo" && eval "exec $2<>\"\$t/$1.fifo\""
+  HOLD=$t/$1.fifo OUT=$t/$1.out install six 7>&- 8>&- &
+  for _ in $(seq 600); do grep -c "Type the phone's codename" "$t/$1.out" >/dev/null 2>&1 && return; sleep 0.1; done
+  cat "$t/$1.out"; fail "an install waits at the codename prompt"
+}
+verify_dirs() { (cd "$t/work" && ls -d verify.* | LC_ALL=C sort | tr '\n' ' '); }
+mkdir -p "$t/work/verify.unmarked"
+held live 7
+live=$!
+held killed 8
+kill -KILL "$(cat "$t/killed.out.pid")"
+exec 8>&-
+{ wait $!; } 2>/dev/null || true
+both=$(verify_dirs)
+[[ $(wc -w <<<"$both") == 3 ]] || fail "a second install, killed, leaves its directory and the waiting one's (got: $both)"
+install six --verify-only || { cat "$t/out"; fail "--verify-only passes while an install waits"; }
+[[ $(verify_dirs) == "$both" ]] || fail "--verify-only beside a waiting install removes nothing (had: $both; now: $(verify_dirs))"
+echo six >&7
+exec 7>&-
+wait $live || { cat "$t/live.out"; fail "the waiting install goes ahead after --verify-only"; }
+cmp -s "$t/flashed/vendor_boot_b" "$t/hook-images-six/vendor_boot.img" ||
+  fail "the waiting install appends the key from its own directory after --verify-only"
+[[ $(wc -w <<<"$(verify_dirs)") == 2 ]] || fail "the install removes its own directory and no other"
+install six --verify-only || { cat "$t/out"; fail "--verify-only passes after a killed install"; }
+[[ $(verify_dirs) == 'verify.unmarked ' ]] ||
+  fail "a run with no other live removes a killed install's directory, and nothing unmarked (left: $(verify_dirs))"
+rm -r "$t/work"
+pass "a killed install's verify directory is removed by the next run alone; a live install's and an unmarked one stay"
+
+# An install waiting at "Type the phone's codename" has its images staged in
+# --work. A --verify-only run on the same --work, or a second install refused
+# before the owner's answers (here another phone's --serial), reads the
+# ramdisk in a directory of its own: it leaves those files as they were and
+# nothing of its own behind
+stage() { mkdir -p "$t/work/ramdisk" && echo staged > "$t/work/root.simg" && echo staged > "$t/work/ramdisk/vendor_kernel_boot.img"; }
+still_staged() { # what ran
+  [[ $(cat "$t/work/root.simg" "$t/work/ramdisk/vendor_kernel_boot.img" 2>/dev/null) == $'staged\nstaged' ]] ||
+    fail "$1 leaves another install's root.simg and ramdisk/ in --work"
+  [[ $(cd "$t/work" && find . -mindepth 1 | LC_ALL=C sort | tr '\n' ' ') == "./ramdisk ./ramdisk/vendor_kernel_boot.img ./root.simg " ]] ||
+    fail "$1 leaves nothing of its own in --work"
+}
+stage
+install six --verify-only || { cat "$t/out"; fail "--verify-only passes the bundle"; }
+still_staged --verify-only
+refused "another phone's --serial" 'not the one this install was started for' --serial OTHER999
+still_staged "an install refused for another phone's --serial"
+rm -r "$t/work"
+pass "--verify-only, and an install refused before the answers, leave another install's staged files in --work alone"
+
+# A work directory that can't be created or written (as under a read-only
+# home) stops with the installer's message, before the phone
+if ((EUID != 0)); then
+  mkdir -p "$t/locked" && chmod 555 "$t/locked"
+  why="can't create or write to the work directory"
+  verify_refused "a --work that can't be created" "$why $t/locked/work (give one you can write to with --work DIR)" --work "$t/locked/work"
+  verify_refused "a --work that can't be written" "$why $t/locked (give one you can write to with --work DIR)" --work "$t/locked"
+  refused "a full install with a --work that can't be written" "$why $t/locked " --work "$t/locked"
+  [[ ! -s $t/fastboot.log ]] || fail "a full install with a --work that can't be written contacts no phone"
+  chmod 755 "$t/locked"
+  pass "a --work that can't be created or written stops with the installer's message, before the phone"
+fi
 
 # The hook's first run after the install: slot B already holds its images.
 # Slot B as the bundle's images left it (before this change) still needed
@@ -252,14 +328,17 @@ for step in "install 600 can't stage the owner's key" "cpio -o cpio couldn't pac
   printf '#!/bin/bash\nfor a; do [[ $a == %q ]] && exit 1; done\nexec %q "$@"\n' "$arg" "$(type -P "$tool")" > "$t/bad-$tool/$tool"
   chmod +x "$t/bad-$tool/$tool"
   PATH=$t/bad-$tool:$PATH refused "a failing $tool $arg in the key's append" "$why"
+  # Reading the shipped ramdisk comes before the phone, so --verify-only does it too
+  [[ $arg != -dc && $arg != -it ]] || PATH=$t/bad-$tool:$PATH verify_refused "a failing $tool $arg" "$why"
 done
-pass "a failing step of the key's append (install, cpio -o, lz4 -dc, cpio -it or lz4 -l) stops the install before anything is flashed"
+pass "a failing step of the key's append (install, cpio -o, lz4 -dc, cpio -it or lz4 -l) stops the install before anything is flashed; --verify-only stops at lz4 -dc and cpio -it too"
 
 # The ramdisk image under an AVB footer can't take the key: refused
 printf 'AVB_FOOTERS="vendor_kernel_boot:0x4000000"\nAVB_ROLLBACK_INDEX=1\nAVB_SECURITY_PATCH=2026-07-05\n' >> "$BUNDLE/device.conf"
 seal
 refused "a ramdisk image with an AVB footer" "AVB_FOOTERS names vendor_kernel_boot, which carries the ramdisk"
-pass "a ramdisk image the descriptor signs is refused before anything is flashed"
+verify_refused "a ramdisk image with an AVB footer" "AVB_FOOTERS names vendor_kernel_boot, which carries the ramdisk"
+pass "a ramdisk image the descriptor signs is refused before anything is flashed, and by --verify-only"
 
 # A development initramfs that already holds SSH keys (bin/omamobile
 # initramfs without --release): the hook refuses it, so its builder packs
@@ -279,4 +358,5 @@ pass "a ramdisk that already holds SSH keys is flashed as built"
 echo 'vendor_kernel_boot image' > "$BUNDLE/images/vendor_kernel_boot.img"
 seal
 refused "a ramdisk image that isn't a vendor boot image" 'not an Android vendor boot image'
-pass "an image that isn't a v4 vendor boot image is refused before anything is flashed"
+verify_refused "a ramdisk image that isn't a vendor boot image" 'not an Android vendor boot image'
+pass "an image that isn't a v4 vendor boot image is refused before anything is flashed, and by --verify-only"

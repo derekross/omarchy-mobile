@@ -9,6 +9,7 @@ the facts needed for review.
 
 | Date | `boot.img` SHA-256 | Source, as recorded | `/dev/sda` and UFS partitions | Checks and gaps |
 | --- | --- | --- | --- | --- |
+| 2026-11-11 | `665fcbd682cd8e64b3ffec1ff7f4ab9ca33a26b9b47b11073be7a3c267abf2b1` | #505 `2d67708e07728b13b5d2a9eda299ace8a1608163`; kernel/DTS #220 `26aa77c317cd029d16e58890c532562ca275c9f0` | Node absent, disk `ro=0`; all 85 partitions `ro=1`; `sdb`–`sdf` `ro=1` | `uname -r` `7.3.0-rc6-omamobile-push1`; `qcom_wdt` bound and feeder running; simpledrm fb0, USB/SSH and reserved `0x85fc0000–0x8a8fffff` passed. Physical screen, keys, touch, GPU and Wi-Fi not tested. RAM boot only; no UFS write. |
 | 2026-11-10 | `540b5d31ea73a31ade9a8d8cb5152cf701dc3c2ad8256734790b0ef2db6dbdd0` | Combined #503/#505; kernel/DTS #220 `055a4019998f22cc0e2a8afef7650274a6ce0657` | Node absent, disk `ro=0`; all 85 partitions `ro=1`; `sdb`–`sdf` `ro=1` | Watchdog/feeder, simpledrm, USB/SSH, reserved TZ range, pinned host key and `reboot-to bootloader` passed; physical keys not captured. |
 | 2026-11-10 | `a2d435a7430e7e4c145c61cdb9866d16929731859d91c7105e6bfcaf9e3e9dd7` | Rebased #503 NFS image with #220 `055a4019998f22cc0e2a8afef7650274a6ce0657` | `/dev/sda` present, set `ro=1`; six disks and all 85 partitions read back `ro=1` | `uname`, NFS root, multi-user systemd, watchdog and SSH passed; generic Arch test root only; link-loss recovery and Omarchy desktop untested. |
 | 2026-11-10 | `0ee4f11d1973085c434e741a2e9dd73af5a9cd157296c25801ed5a92a6b9e9d9` | #505 `994944d7ecbacd69444221e6951153cb329a374e`; kernel/DTS #220 `055a4019998f22cc0e2a8afef7650274a6ce0657` | Node absent, disk `ro=0`; all 85 partitions `ro=1`; `sdb`–`sdf` `ro=1` | Watchdog/feeder, framebuffer, USB/SSH, reserved TZ range and `reboot-to` passed; physical keys not captured. |
@@ -25,6 +26,21 @@ The original 10-29 count of 92 `/dev/block/by-name/` entries was not saved as a
 name list. The retained backup and kernel records cover 84 non-userdata GPT
 partitions plus `userdata`; the other seven names cannot be identified from the
 retained artifacts and remain unknown.
+
+## 2026-11-11 — rebuilt #505 RAM image
+
+Built and booted `boot.img` SHA-256
+`665fcbd682cd8e64b3ffec1ff7f4ab9ca33a26b9b47b11073be7a3c267abf2b1` with
+`fastboot boot` from #505 `2d67708e07728b13b5d2a9eda299ace8a1608163` and
+kernel/DTS #220 `26aa77c317cd029d16e58890c532562ca275c9f0`. `uname -r` was
+`7.3.0-rc6-omamobile-push1`. The `/dev/sda` whole-disk node was absent; its
+sysfs flag remained `ro=0`. Nodes `/dev/sdb`–`/dev/sdf` were present with
+`ro=1`; all 85 partition flags were `ro=1`, and `ufs-ro` logged the guard for
+each. `qcom_wdt` was bound and the watchdog feeder was running. simpledrm
+registered `fb0`; authenticated USB SSH worked. `/proc/iomem` reserved
+`0x85fc0000–0x8a8fffff`, including the former TZ range. The physical screen,
+keys, touch, GPU rendering and Wi-Fi were not tested in this run. Only
+`fastboot boot` was used; no UFS partition was written.
 
 ## 2026-11-10 — final PR #505 RAM image
 
@@ -127,12 +143,11 @@ Volume Up produced `KEY_VOLUMEUP` (code 115, value 1). The current kernel
 image's button events have not yet been rechecked. The owner reported seeing
 the console during the first boot.
 
-An earlier test record attributed removal of `/dev/sda` to the PR #505 image,
-but the recorded image hash is the `e2cdb765…` artifact checked above, where
-`/dev/sda` was present and writable. The earlier whole-disk-removal result
-cannot be tied to this artifact. The final #505 image and its successful
-disk-node check are recorded below. The `e2cdb765…` boot did report all 85 UFS
-partition flags read-only; no UFS writes were made.
+The table above records `/dev/sda` absent on the earlier `93484a91…` and
+`f2f5cb2e…` boots. Those results are separate from the `e2cdb765…` artifact
+checked above, where `/dev/sda` was present and writable. The final #505 image
+and its successful disk-node check are recorded below. The `e2cdb765…` boot did
+report all 85 UFS partition flags read-only; no UFS writes were made.
 `/proc/iomem` reports `0x86200000–0x88efffff` as System RAM and
 `0x88f00000–0x890fffff` as reserved, so the TZ range is not reserved in this
 RAM boot's map. A separate EA8074 panel test used a RAM-only overlay on
