@@ -1228,6 +1228,7 @@ pass "install stages the package"
 test/keys.sh || fail "omamobile-keys volume keys"
 test/home-command.sh || fail "omamobile-home"
 test/reboot-command.sh || fail "omamobile-reboot"
+bash test/dnd-state.sh || fail "the Do Not Disturb read on Omarchy 4.5 and 4.0"
 
 # Every surface on Back's list, and the order, in Qt.
 rc=0; out=$(python3 -B test/back-surfaces.py 2>&1) || rc=$?

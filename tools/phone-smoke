@@ -164,6 +164,12 @@ counted_errors=(
   # shows in the 9a's resumes, device/tegu/SLEEP-PLAN.md S1). Storage that
   # really doesn't come back is ufs_dead below, never known.
   '|UFS dme-set 0x4021 (s2idle)|exynos-ufshc [0-9a-f]+\.ufs: dme-set: attr-id 0x4021 val 0x[0-9a-f]+ failed [0-9]+ retries'
+  # The modem sends on channels nothing on the phone opens (the second SIM's
+  # stack, the OEM channels, the router), and CPIF logs three lines for each
+  # message it drops: a few dozen per boot, on every 7 Pro boot with the modem
+  # up (2026-11-11: 43 in ten minutes). umts_ipc0 is not here on purpose: that
+  # is the phone service's own channel, and a message dropped there is new.
+  '|cpif message for a channel nobody opened|cpif: (rx_demux|io_dev_recv_skb_single_from_link_dev|pass_skb_to_demux): .*(oem_ipc[0-9]+|umts_ipc[1-9][0-9]*|umts_router)([^0-9a-z_].*)?(is not opened|rx_demux fail|recv_skb fail)'
 )
 # A UFS link that doesn't come back from a sleep (device/tegu/SLEEP-PLAN.md
 # S1): any match fails kernel health, whatever the lists above say. Anchored

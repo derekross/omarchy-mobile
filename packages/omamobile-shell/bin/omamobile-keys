@@ -40,7 +40,13 @@ set -u
 state="${XDG_RUNTIME_DIR:-/tmp}/omamobile-keys"
 mkdir -p "$state"
 
-now() { date +%s%3N; }
+# Milliseconds, from date's whole seconds and nanoseconds. Not the three-digit
+# form of %N (a 3 between the percent sign and the N; test/keys.sh refuses it):
+# uutils' date (0.10.0, the build machine's) drops the nanoseconds' leading
+# zeros before it takes three digits, so 3 ms into a second reads as 365, one
+# reading in ten is wrong by up to 900 ms, and a wait measured with it can end
+# early. %N is nine digits on both.
+now() { local t; t=$(date +%s%N); echo $((t / 1000000)); }
 
 # Keys count as pressed together within this many milliseconds.
 window=500

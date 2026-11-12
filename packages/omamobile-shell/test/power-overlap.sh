@@ -78,10 +78,11 @@ done
 [[ -e $t/locking ]] || { echo 'not ok - slow action never started' >&2; exit 1; }
 last=$(cat "$t/run/omamobile-keys/last-press")
 keys power-down; sleep 0.1
-start=$(date +%s%3N)
+ms() { local t; t=$(date +%s%N); echo $((t / 1000000)); }   # not %3N: uutils' date gets it wrong (bin/omamobile-keys)
+start=$(ms)
 rc=0
 timeout 7 bash "$here/bin/omamobile-keys" power-up 2>"$t/timeout-log" || rc=$?
-elapsed=$(( $(date +%s%3N) - start ))
+elapsed=$(( $(ms) - start ))
 if [[ $rc != 0 || $elapsed -lt 4500 || $elapsed -ge 7000 ]] ||
    ! grep -q 'short-press lock wait failed; dropping press' "$t/timeout-log" ||
    [[ $(cat "$t/run/omamobile-keys/last-press") != "$last" ||

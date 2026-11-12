@@ -77,7 +77,13 @@ echo "# tests/module-load-once"
 tests/module-load-once
 # One suite per line from here on, so two pull requests that each add one
 # don't meet in the same line
+echo "# tests/power-ab/samples.py"
+python3 tests/power-ab/samples.py
+echo "# tests/review-lessons"
+tests/review-lessons
 echo "# tests/factory-index"   # the build index of Google's factory images, against a made-up zip
 tests/factory-index
+echo "# tests/phone-demo-notes"
+tests/phone-demo-notes
 echo "# tests/chroot-extractors"
 tests/chroot-extractors
