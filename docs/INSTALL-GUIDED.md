@@ -659,7 +659,9 @@ installer's own "which phone are you" script on files that stand in for
 `/proc`. It covers a whole install in order; the dry run and exactly what
 it calls; each state of the phone, the warning before the unlock steps,
 one phone on adb; a locked phone with each stop of §2a, with "OEM
-unlocking" on and off, for which no unlock step is ever printed; a phone swapped between each pair of looks in Fastboot
+unlocking" on and off, for which no unlock step is ever printed (each of
+the four `getvar` lines deleted in turn, an AVB footer made for another
+size, a wrong `--bootloader-slots-match`, a repeated option); a phone swapped between each pair of looks in Fastboot
 Mode (both of the installer's checks and `install-phone --serial`);
 another phone at the USB address before the write; a stale record and
 another phone at each step after it; the index (both versions, marked
@@ -672,6 +674,12 @@ rerun; what each kind of stop says; the record; the camera's modules
 at step 1; the real `tools/phone-provision` given the installer's exact
 arguments in `--dry-run`; a bundle layout; and the script's own shape.
 `tests/factory-index` covers the maintainer tool and the reader's refusals.
+
+The suite needs `unzip` and a few other tools, and skips whole without
+one. CI's workflow installed no `unzip` until 2026-11-12, so every run
+before that skipped all of it and stayed green. The workflow now installs
+it, and in CI a missing tool fails the suite; elsewhere the skip is said
+on both streams.
 
 A stub for one of our own tools hides an option the real tool doesn't
 have: the reviewed version of this installer passed a `phone-provision`

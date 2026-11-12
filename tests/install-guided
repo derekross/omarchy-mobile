@@ -26,8 +26,20 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 SRC=$PWD
 fail() { printf 'not ok - %s\n' "$1" >&2; [[ ! -f ${t:-}/out ]] || sed 's/^/    | /' "$t/out" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
+# Without one of these the whole suite can't run. In CI that is a failure,
+# never a skip: the workflow is what installs them, and a green run that
+# skipped every case here (as every run did while the workflow installed no
+# unzip) says nothing. Elsewhere the skip is said on both streams, with
+# what it leaves unchecked.
 for tool in debugfs mkfs.ext4 zstd openssl lz4 cpio gpg unzip python3; do
-  command -v $tool >/dev/null || { echo "ok - # skip: no $tool"; exit 0; }
+  command -v $tool >/dev/null && continue
+  if [[ -n ${CI:-}${GITHUB_ACTIONS:-} ]]; then
+    echo "not ok - tests/install-guided can't run in CI: no $tool (add it to .github/workflows/checks.yml)" >&2
+    exit 1
+  fi
+  echo "ok - # skip: no $tool"
+  echo "tests/install-guided: SKIPPED, no $tool: none of its cases ran, the locked-phone stops included" >&2
+  exit 0
 done
 t=$(mktemp -d)
 cleanup() {
@@ -544,6 +556,16 @@ says "slot A: testloader-1.0-111" && says "slot B: testloader-0.9-000" && says "
 fresh; vars no; sed -i 's/^partition-size:dtbo_b:.*/partition-size:dtbo_b: 0x4/' "$t/vars"
 locked_stop "a file larger than its partition" "This download doesn't fit this phone"
 says "dtbo.img" && says "(dtbo_b) is 4 bytes" || fail "a file that doesn't fit: the file and the area are named"
+# An image with an AVB footer is made for one partition size: another
+# size, even a larger one that the file fits, stops (boot_b is 0x4000000)
+fresh; vars no; { descriptor; echo 'AVB_FOOTERS="boot:0x2000000"'; } > "$R/device/testdev/device.conf"
+locked_stop "an AVB footer made for another partition size" "This download doesn't fit this phone"
+says "boot.img" && says "(made for an area of exactly 33554432 bytes)" && says "(boot_b) is 67108864 bytes" ||
+  fail "an AVB footer for another size: the file, the size it was made for and the area's size are named"
+fresh; vars no; { descriptor; echo 'AVB_FOOTERS="boot:0x4000000 dtbo:16777216"'; } > "$R/device/testdev/device.conf"
+if guided "yes\n\n"; then fail "a locked phone stops the install"; fi
+says "fastboot flashing unlock" && ! says "doesn't fit" || fail "AVB footers made for exactly the phone's partition sizes pass (hex and decimal)"
+descriptor > "$R/device/testdev/device.conf"
 fresh; vars no; sed -i '/^partition-size:boot_b:/d' "$t/vars"
 locked_stop "no size for a partition" "doesn't tell the size of one of the areas"
 fresh; vars no; sed -i '/^version-baseband:/d' "$t/vars"
@@ -1315,6 +1337,17 @@ fresh
 if bguided "$ALL" --unsigned; then fail "a bundle whose build index changed is refused"; fi
 says "didn't pass its checks" || fail "the bundle's checksums cover its build index"
 pass "a bundle: install at its top runs tools/install-phone, checked first; its build index is under its checksums"
+
+# --- A run that can't run says so --------------------------------------------------------
+# With a tool missing the suite skips whole; in CI that fails
+mkdir "$t/bare"; ln -s "$(command -v dirname)" "$t/bare/dirname"
+bash_bin=$(command -v bash) env_bin=$(command -v env)
+if "$env_bin" -i CI=true PATH="$t/bare" "$bash_bin" "$SRC/tests/install-guided" >"$t/skip.out" 2>&1; then fail "in CI a missing tool fails the suite"; fi
+grep -c "^not ok - tests/install-guided can't run in CI: no debugfs" "$t/skip.out" >/dev/null || { cat "$t/skip.out" >&2; fail "in CI the suite names the tool it lacks"; }
+"$env_bin" -i PATH="$t/bare" "$bash_bin" "$SRC/tests/install-guided" >"$t/skip.out" 2>"$t/skip.err" || fail "outside CI a missing tool skips the suite"
+grep -c '^ok - # skip: no debugfs' "$t/skip.out" >/dev/null && grep -c 'SKIPPED, no debugfs: none of its cases ran' "$t/skip.err" >/dev/null ||
+  fail "outside CI the skip is said on both streams"
+pass "a suite that can't run: a failure in CI, a loud skip elsewhere"
 
 # --- The script itself ------------------------------------------------------------------
 code=$(grep -v '^[[:space:]]*#' tools/install-guided)
