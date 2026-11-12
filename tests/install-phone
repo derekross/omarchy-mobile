@@ -162,6 +162,24 @@ OMAMOBILE_FIRSTBOOT_ROOT=$t/fbroot "$SRC/packages/omamobile-firstboot/bin/omamob
 [[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -v '^#') == AUTO_WRITE=yes ]] \
   || fail "a release install turns the boot hook on (boot-update.conf AUTO_WRITE=yes)"
 debugfs -R 'stat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -c 'User:     0   Group:     0' >/dev/null || fail "boot-update.conf belongs to root"
+# Development devices keep the hook off in the actual prepared image.
+echo 'BOOT_UPDATE_AUTO_WRITE=no' >> "$R/device/testdev/device.conf"
+install || { cat "$t/out"; fail "a development install succeeds"; }
+policy_image=$t/userdata.flashed
+if command -v simg2img >/dev/null && [[ $(head -c4 "$policy_image" | od -An -tx1 | tr -d ' ') == 3aff26ed ]]; then
+  simg2img "$policy_image" "$t/policy.img"; policy_image=$t/policy.img
+fi
+[[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$policy_image" 2>/dev/null | grep -v '^#') == AUTO_WRITE=no ]] ||
+  fail "the development image must disable automatic boot writes"
+pass "development descriptor keeps automatic boot writes off in the image"
+for value in '' YES true maybe; do
+  descriptor > "$R/device/testdev/device.conf"
+  printf 'BOOT_UPDATE_AUTO_WRITE=%s\n' "$value" >> "$R/device/testdev/device.conf"
+  if install --dry-run; then fail "invalid boot-update policy accepted: $value"; fi
+  [[ ! -s $t/fastboot.log ]] || fail 'invalid boot-update policy reached fastboot'
+done
+descriptor > "$R/device/testdev/device.conf"
+pass "invalid boot-update policies refuse before any phone query"
 pass "the image copy gets a root-only firstboot.conf (hash, not password) and root's key, which firstboot accepts"
 
 # A root that already has /etc/omamobile and /root/.ssh (a restored or
@@ -181,6 +199,20 @@ fi
 e2fsck -fn "$flashed" >/dev/null 2>&1 || fail "the flashed copy of a lived-in root checks clean"
 [[ $(debugfs -R 'cat /root/.ssh/authorized_keys' "$flashed" 2>/dev/null) == "$(cat "$t/home/.ssh/id_ed25519.pub")" ]] || fail "the old authorized_keys is replaced"
 pass "a root that already has /etc/omamobile and /root/.ssh installs clean"
+
+# debugfs splits its commands at blanks: a --work path with a space and a
+# double quote in it still gets the three files into the image copy
+w=$t/'a "spaced" dir'/work
+install --work "$w" || { cat "$t/out"; fail "a --work path with a space and a quote installs"; }
+flashed=$t/userdata.flashed
+if command -v simg2img >/dev/null && [[ $(head -c4 "$flashed" | od -An -tx1 | tr -d ' ') == 3aff26ed ]]; then
+  simg2img "$flashed" "$t/flashed.img"; flashed=$t/flashed.img
+fi
+debugfs -R 'cat /etc/omamobile/firstboot.conf' "$flashed" 2>/dev/null | grep -cx 'USERNAME=alice' >/dev/null || fail "firstboot.conf from a spaced --work"
+[[ $(debugfs -R 'cat /root/.ssh/authorized_keys' "$flashed" 2>/dev/null) == "$(cat "$t/home/.ssh/id_ed25519.pub")" ]] || fail "authorized_keys from a spaced --work"
+[[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -v '^#') == AUTO_WRITE=yes ]] || fail "boot-update.conf from a spaced --work"
+[[ -z $(ls "$w") ]] || fail "the spaced --work copy is removed"
+pass "a --work path with a space and a quote gets the three files into the image"
 
 refuse() {
   local why=$1; shift

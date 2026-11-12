@@ -1,0 +1,40 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Development startup using the tested input modules and retained framebuffer.
+set -euo pipefail
+pending=/var/lib/omamobile/bluejay-hardware-pending
+ready=/run/omamobile-bluejay-hardware-ready
+[[ ! -e $ready ]] || exit 0
+if [[ -e $pending ]]; then
+  echo 'bluejay: previous hardware startup failed; leaving USB rescue available'
+  exit 0
+fi
+mkdir -p /var/lib/omamobile
+(set -o noclobber; cat /proc/sys/kernel/random/boot_id > "$pending")
+sync "$pending"
+[[ $(tr '\0' '\n' < /proc/device-tree/compatible | head -1) == google,gs101-bluejay ]]
+[[ $(uname -r) == 7.3.0-rc6-omamobile-bluejay-input-gated0 ]]
+[[ $(cat /sys/class/watchdog/watchdog0/state) == active ]]
+[[ $(cat /sys/module/exynos_usi/parameters/probe_hold_base) == 282329280 ]]
+[[ ! -e /sys/bus/platform/devices/10d400c0.usi/driver ]]
+modules=/usr/lib/modules/$(uname -r)/kernel
+spi=$modules/drivers/spi/spi-s3c64xx.ko
+touch=$modules/drivers/input/touchscreen/salixp.ko
+[[ $(sha256sum "$spi" | cut -d' ' -f1) == 656acf10f708d54616a3a1920f15e4d13d744b35cb20c3507c8c845ad18393a2 ]]
+[[ $(sha256sum "$touch" | cut -d' ' -f1) == dd8344256203e50680e0c9ec44460cd2cd4bc1e8c8d0c8ab077e2d575dcc1267 ]]
+echo 0 > /sys/module/exynos_usi/parameters/probe_hold_base
+echo 10d400c0.usi > /sys/bus/platform/drivers/exynos-usi/bind
+insmod "$spi"
+insmod "$touch" alix_stage=3
+[[ $(cat /sys/bus/spi/devices/spi0.0/statistics/errors) == 0 ]]
+[[ $(cat /sys/bus/spi/devices/spi0.0/statistics/timedout) == 0 ]]
+shopt -s nullglob
+inputs=(/sys/bus/spi/devices/spi0.0/input/input*/name)
+[[ ${#inputs[@]} == 1 && $(cat "${inputs[0]}") == 'ALIX Touchscreen' ]]
+# The shared init has already applied the descriptor's SIMPLEFB_TRIG_CON.
+# Refresh must be confirmed visually during the next gated hardware trial.
+[[ -e /dev/fb0 ]]
+touch "$ready"
+rm "$pending"
+sync /var/lib/omamobile
+echo 'bluejay: touch initialized and framebuffer available; visually verify refresh'

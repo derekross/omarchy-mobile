@@ -73,13 +73,15 @@ fi
 say "Base system and Omarchy (${#base[@]} packages)"
 pacstrap -C /etc/pacman.conf -c -M "$T" "${base[@]}" >/var/log/pacstrap-base.log 2>&1 || { tail -40 /var/log/pacstrap-base.log; die "pacstrap failed"; }
 
-omarchy_list=$T/usr/share/omarchy/install/omarchy-base.packages
-[[ -f $omarchy_list ]] || die "no $omarchy_list in the omarchy package"
+# Omarchy's own list for a plain aarch64 computer (4.5 composes it from
+# several files; rootfs/resolve.sh)
+omarchy_lists=$T/usr/share/omarchy/install
+[[ -f $omarchy_lists/omarchy-base.packages ]] || die "no $omarchy_lists/omarchy-base.packages in the omarchy package"
 mapfile -t skip < <(list /src/rootfs/packages.omarchy-skip)
 listed=()
 while read -r p; do
   [[ " ${skip[*]} " == *" $p "* ]] || listed+=("$p")
-done < <(list "$omarchy_list")
+done < <(omarchy_packages "$omarchy_lists")
 # Only a package no repository has is "not built for aarch64"; one that is
 # there but can't be installed is repository skew, and stops the build
 resolve_all "${listed[@]}"

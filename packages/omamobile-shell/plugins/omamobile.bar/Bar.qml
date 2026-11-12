@@ -127,6 +127,12 @@ Item {
   // FolderListModel's file system watcher rather than polled. The shade
   // writes its mark to notifications-seen and tells this bar by IPC.
   readonly property string notificationsHistory: Quickshell.env("HOME") + "/.local/state/omarchy/notifications/history"
+  // Omarchy 4.5 keeps the history in one file in the directory above,
+  // history.json (StatusModel.unreadStored); while it exists, it is what
+  // the count reads. The service replaces it with rename(2), which a watch
+  // can miss, so it is also re-read now and then.
+  readonly property string notificationsStore: Quickshell.env("HOME") + "/.local/state/omarchy/notifications/history.json"
+  property bool storeLayout: false
   property double seenStamp: 0
   property int unread: 0
 
@@ -151,7 +157,23 @@ Item {
     function onDataChanged() { Qt.callLater(root.countUnread) }
   }
 
+  FileView {
+    id: historyStore
+    path: root.notificationsStore
+    printErrors: false
+    watchChanges: true
+    onFileChanged: reload()
+    onLoaded: { root.storeLayout = true; Qt.callLater(root.countUnread) }
+    onLoadFailed: { root.storeLayout = false; Qt.callLater(root.countUnread) }
+  }
+
+  Timer { interval: 30000; repeat: true; running: root.storeLayout; onTriggered: historyStore.reload() }
+
   function countUnread() {
+    if (storeLayout) {
+      unread = StatusModel.unreadStored(historyStore.text(), seenStamp)
+      return
+    }
     var names = []
     for (var i = 0; i < historyFiles.count; i++) names.push(historyFiles.get(i, "fileName"))
     unread = StatusModel.unreadCount(names, seenStamp)
@@ -160,6 +182,7 @@ Item {
   // The notification service makes the directory when it starts; if the
   // bar got there first, watch it again once it can exist.
   function rewatchHistory() {
+    historyStore.reload()
     if (historyFiles.count > 0) return
     historyFiles.folder = ""
     historyFiles.folder = "file://" + root.notificationsHistory

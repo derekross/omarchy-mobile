@@ -69,7 +69,7 @@ cat >"$fake/omarchy-update" <<EOF
 #!/bin/bash
 echo "omarchy-update \$* OMARCHY_UPDATE_LOGGED=\$OMARCHY_UPDATE_LOGGED OMAMOBILE_UPDATE=\$OMAMOBILE_UPDATE" >>"$calls"
 echo "omarchy-update OMARCHY_PATH=\${OMARCHY_PATH-unset}" >>"$calls"
-for c in omarchy-snapshot omarchy-update-aur-pkgs omarchy-update-orphan-pkgs omarchy-migrate omarchy-update-restart sudo; do
+for c in omarchy-snapshot omarchy-update-aur-pkgs omarchy-update-orphan-pkgs omarchy-migrate omarchy-update-restart omarchy-update-boot sudo; do
   echo "resolve \$c \$(command -v \$c)" >>"$calls"
 done
 omarchy-snapshot create; echo "snapshot rc \$?" >>"$calls"
@@ -350,7 +350,7 @@ ok "the PIN reached sudo -S on stdin, never argv" 'grep -c "^sudo -S -p  -v$" "$
 ok "no password file left behind" '[[ ! -e $XDG_RUNTIME_DIR/omamobile-update/auth ]]'
 ok "the unit runs as omamobile-update" 'grep -c -- "--unit=omamobile-update" "$calls" >/dev/null'
 ok "omarchy-update -y, unlogged (script is ours), OMAMOBILE_UPDATE=1" 'grep -c "^omarchy-update -y OMARCHY_UPDATE_LOGGED=1 OMAMOBILE_UPDATE=1" "$calls" >/dev/null'
-for c in omarchy-snapshot omarchy-update-aur-pkgs omarchy-update-orphan-pkgs omarchy-migrate omarchy-update-restart sudo; do
+for c in omarchy-snapshot omarchy-update-aur-pkgs omarchy-update-orphan-pkgs omarchy-migrate omarchy-update-restart omarchy-update-boot sudo; do
   ok "stand-in on PATH: $c" 'grep -c "^resolve $c $PKG/lib/update-bin/$c$" "$calls" >/dev/null'
 done
 ok "snapshot: skipped with 127, real Snapper never called" 'grep -c "^snapshot rc 127$" "$calls" >/dev/null && ! grep -c real-snapshot "$calls" >/dev/null'
@@ -444,6 +444,34 @@ ok "restart: a kernel the hook could not write is a warning, not a restart" 'pyt
 printf '{"result": "skipped", "release": "", "message": "AUTO_WRITE is off", "time": %d}\n' "$now" >"$t/bu.json"
 out=$(rs $((now - 5)))
 ok "restart: a skipped write (development phone) asks for nothing" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert not d[\"needs_reboot\"] and not any(\"kernel\" in w for w in d[\"warnings\"]), d" "$out"'
+
+# Omarchy 4.5 runs the restart step in two halves. The first restarts the
+# marked services and the shell and decides nothing; the second decides and
+# restarts nothing, and still knows which service failed to restart
+half() { OMAMOBILE_UPDATE_DIR=$t/rs OMAMOBILE_BOOT_UPDATE_STATUS=$t/bu.json OMAMOBILE_UPDATE_STARTED=$((now - 5)) bash lib/update-bin/omarchy-update-restart "$@" >/dev/null 2>&1; }
+printf '{"result": "written", "release": "7.3.0-rc6-omamobile-g0123456789ab", "kernel_changed": true, "message": "x", "time": %d}\n' "$now" >"$t/bu.json"
+mkdir -p "$HOME/.local/state/omarchy"
+touch "$HOME/.local/state/omarchy/restart-waybar-required" "$HOME/.local/state/omarchy/restart-broken-required"
+rm -rf "$t/rs"; : >"$calls"
+half --services-only
+ok "restart, first half: the marked service and the shell restart, once each" '[[ $(grep -c "^restart-waybar$" "$calls") == 1 && $(grep -c "^restart-shell$" "$calls") == 1 ]]'
+ok "restart, first half: no verdict yet" '[[ ! -e $t/rs/restart.json ]]'
+: >"$calls"
+half --reboot-only
+ok "restart, second half: nothing restarts again" '! grep -c "^restart-" "$calls" >/dev/null'
+ok "restart, second half: the verdict, with the first half's failed service as a warning" 'python3 -c "import json; d=json.load(open(\"$t/rs/restart.json\")); assert d[\"needs_reboot\"] and \"kernel was updated\" in d[\"reasons\"][0] and d[\"warnings\"] == [\"Restarting broken failed\"], d"'
+half --reboot-only
+ok "restart, second half alone: no warning left over from an earlier run" 'python3 -c "import json; d=json.load(open(\"$t/rs/restart.json\")); assert d[\"warnings\"] == [], d"'
+rc=0; half --sideways || rc=$?
+ok "restart: an option it doesn't know is refused" '[[ $rc == 2 ]]'
+: >"$calls"; rm -rf "$t/rs"
+half
+ok "restart, no argument (Omarchy 4.0): both halves in one run" 'grep -c "^restart-shell$" "$calls" >/dev/null && [[ -e $t/rs/restart.json ]]'
+rc=0; out=$(bash lib/update-bin/omarchy-update-boot 2>&1) || rc=$?
+ok "boot check (Omarchy 4.5): the phone's stand-in passes, silently, without sudo" '[[ $rc == 0 && -z $out ]]'
+rc=0; bash lib/update-bin/omarchy-update-boot extra 2>/dev/null || rc=$?
+ok "boot check: an argument is refused as Omarchy's is" '[[ $rc == 2 ]]'
+printf 'omarchy 4.0.5-1\nmesa 26.1-1\n' >"$t/plan"
 
 # Low battery and wrong repository order: refused before the PIN is used
 battery 12 Discharging 0

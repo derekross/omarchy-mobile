@@ -370,6 +370,36 @@ out=$(start) && fail "the second unclean boot in a row is refused"
 [[ $(cat "$m/run/refused") == "Off after a hang or reset (held)" ]] || fail "the held reason for the tile: $(cat "$m/run/refused")"
 out=$(start) && fail "the held marker refuses the boot after too"
 [[ $out == *"no clean stop since the last refusal"* && -e $m/up && $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] || fail "held: the marker and the one copy stay: $out"
+# reboot-to's note (in a directory of its own, so the state above is kept):
+# a modem-up marker from the boot the note names ended on purpose (push, a
+# reboot to the bootloader) and isn't counted: the marker and the note go and
+# the start gets past the markers, also where an unclean end is already
+# counted. That counted copy stays: the note doesn't end a streak, so a hang,
+# a push and a second hang are held. A note naming another boot changes
+# nothing: the marker is counted as an unclean end as above, and with one
+# already counted it is held.
+n=$t/note-markers; mkdir -p "$n/run"
+nstart() { OMAMOBILE_MODEM_LATCH=$n/latch OMAMOBILE_MODEM_UP_MARK=$n/up OMAMOBILE_MODEM_HOLD=$n/hold OMAMOBILE_MODEM_REFUSED=$n/run/refused \
+  OMAMOBILE_DELIBERATE_RESTART=$n/note OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS=1 timeout 20 bash $s 2>&1; }
+printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$n/up"
+printf '%s\n' 11111111-1111-1111-1111-111111111111 > "$n/note"
+out=$(nstart) || fail "a note from another boot leaves the first unclean end to start as without it (rc=$?): $out"
+[[ -e $n/note && $out == *"ended without a clean stop"* && $out != *"ended with reboot-to"* ]] || fail "a note from another boot clears nothing: $out"
+[[ ! -e $n/up && $(ls "$n"/up.refused-* | wc -l) -eq 1 ]] || fail "a note from another boot: the marker is counted as an unclean end: $(ls "$n")"
+printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$n/up"
+out=$(nstart) && fail "a note from another boot doesn't save the second unclean end from the hold: $out"
+[[ -e $n/note && -e $n/up && $out == *"no clean stop since the last refusal"* && $out != *"ended with reboot-to"* ]] || fail "a note from another boot, a second unclean end: held: $out"
+rm -f "$n"/up* "$n/note" "$n/run/refused"
+printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$n/up"
+: > "$n/up.refused-x"
+printf '%s\n' 00000000-0000-0000-0000-000000000000 > "$n/note"
+out=$(nstart) || fail "a deliberate restart gets past the markers (rc=$?): $out"
+[[ $out == *"ended with reboot-to"* && $out == *"$stop_line"* && $out != *"ended without a clean stop"* ]] || fail "a deliberate restart isn't a hang: $out"
+[[ ! -e $n/up && ! -e $n/note && ! -e $n/latch ]] || fail "the note clears the marker and itself, and writes no latch: $(ls "$n")"
+[[ -e $n/up.refused-x ]] || fail "the note keeps an unclean end already counted: $(ls "$n")"
+printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 22222222-2222-2222-2222-222222222222 > "$n/up"
+out=$(nstart) && fail "a hang, a deliberate restart and a second hang are held: $out"
+[[ -e $n/up && $out == *"no clean stop since the last refusal"* ]] || fail "the streak outlives a deliberate restart: $out"
 printf '%s boot %s\n' "$(date -Is)" "$(cat /proc/sys/kernel/random/boot_id)" > "$m/up"
 out=$(SERVICE_RESULT=success bash $s --stopped 2>&1) || fail "--stopped exits 0"
 [[ ! -e $m/up && -z $(ls "$m"/up.refused-* 2>/dev/null) ]] || fail "a clean stop of this boot's marker removes the refused copies: $(ls "$m")"

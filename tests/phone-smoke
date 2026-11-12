@@ -39,6 +39,17 @@ has 'ok|1|kernel health|' && has '(14 known, of them UFS dme-set 0x4021 (s2idle)
   && ! has 'new dmesg errors' || fail "the s2idle UFS dme-set lines are known and stay counted"
 pass "the s2idle UFS dme-set lines are known and stay counted"
 
+cp1='[   15.088089] cpif: rx_demux: PCIE: ERR! umts_ipc1 is not opened'
+cp2='[   15.088401] cpif: io_dev_recv_skb_single_from_link_dev: umts_ipc1<-PCIE: ERR! rx_demux fail (err -19)'
+cp3='[   15.088670] cpif: pass_skb_to_demux: PCIE: umts_ipc1<-s5300: ERR! umts_ipc1->recv_skb fail (-19)'
+run "$cp1" "$cp2" "$cp3" "${cp1/umts_ipc1/oem_ipc0}" "${cp1/umts_ipc1/umts_router}"
+has 'ok|1|kernel health|' && has '(5 known, of them cpif message for a channel nobody opened x5, 0 new)' \
+  && ! has 'new dmesg errors' || fail "CPIF's lines for channels nothing opens are known and stay counted"
+pass "CPIF's lines for channels nothing opens are known and stay counted"
+run "${cp1/umts_ipc1/umts_ipc0}" "${cp2//umts_ipc1/umts_ipc0}" "${cp3//umts_ipc1/umts_ipc0}"
+has '0 known, 3 new' && has 'new dmesg errors' || fail "a message dropped on the phone service's own channel (umts_ipc0) is new"
+pass "a message dropped on the phone service's own channel (umts_ipc0) is new"
+
 run "${ufs/0x4021/0x1561}"
 has '0 known, 1 new' && has 'new dmesg errors' || fail "a dme-set of another attribute is new"
 pass "a dme-set of another attribute is new"

@@ -1,0 +1,15 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile (on PATH only during omamobile-update): Omarchy 4.5's boot
+# verification, which asks the platform's boot package whether the files the
+# update left will boot (a UKI, limine, an initramfs on a computer). A phone
+# has none of those: its boot images are slot B's, written and read back by
+# linux-omamobile's hook (omamobile-boot-update), and a write that was
+# refused or failed is reported by the restart step that follows, as a
+# warning with the command that finishes it. So there is nothing to verify
+# here, and nothing here may fail the update or ask for sudo.
+if (( $# )); then
+  echo "Usage: omarchy-update-boot" >&2
+  exit 2
+fi
+exit 0
