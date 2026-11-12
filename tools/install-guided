@@ -1767,7 +1767,10 @@ step_restart() {
     note "the restart was already sent; waiting for the phone"
   fi
   while true; do
-    now=$(boot_id)
+    # While it restarts the phone doesn't answer, and under "set -e" an
+    # assignment from a failed command ends the script without a word: the
+    # first real install stopped here, silently, its last two steps undone
+    now=$(boot_id) || now=""
     [[ -n $now && $now != "$before" ]] && break
     ((SECONDS - began < wait_restart)) ||
       stop "The phone hasn't come back $((wait_restart / 60)) minutes after its restart." \

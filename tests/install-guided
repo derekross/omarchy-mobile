@@ -121,11 +121,18 @@ case $1 in
     echo "phone WHICH" >> "$T/events"
     printf '%s\n' "$1" | sed "s|/proc/bootconfig|$T/proc/bootconfig|g; s|/proc/cmdline|$T/proc/cmdline|g; s|/proc/device-tree/serial-number|$T/proc/serial-number|g" | sh ;;
   "test -e /var/lib/omamobile/firstboot/done") [[ -e $T/firstboot-done ]] || exit 1 ;;
-  "cat /proc/sys/kernel/random/boot_id") cat "$T/boot-id" ;;
+  "cat /proc/sys/kernel/random/boot_id")
+    # A phone that is restarting answers nothing for a while
+    if [[ -s $T/down-left ]]; then
+      n=$(cat "$T/down-left"); ((n > 1)) && echo $((n - 1)) > "$T/down-left" || rm -f "$T/down-left"
+      echo "phone DOWN" >> "$T/events"; exit 255
+    fi
+    cat "$T/boot-id" ;;
   "systemctl is-system-running") echo running ;;
   *reboot-to\ omamobile*)
     echo "phone RESTART: $1" >> "$T/events"
     [[ ! -e $T/fail-restart ]] || exit 1
+    [[ ! -e $T/down-for ]] || cp "$T/down-for" "$T/down-left"
     [[ -e $T/no-comeback ]] || printf "b007-%04x%04x\n" $RANDOM $RANDOM > "$T/boot-id" ;;
   *) echo "phone UNEXPECTED: $*" >> "$T/events"; exit 1 ;;
 esac
@@ -1345,6 +1352,12 @@ if guided "$ALL"; then fail "a failed restart stops the install"; fi
 rm "$t/fail-restart"
 guided "" || fail "the install goes on once the restart works"
 RESTARTS=2 once "after the restart"
+fresh; echo 1 > "$t/down-for"   # one silent answer: the suite waits 2 s for a restart
+guided "$ALL" || fail "a phone that answers nothing while it restarts doesn't end the install"
+[[ $(events '^phone DOWN') == 1 ]] && says "the phone is back" || fail "the installer keeps asking a silent phone until it is back"
+once "after a restart with the phone silent"
+rm -f "$t/down-for" "$t/down-left"
+pass "the restart: a phone that doesn't answer while it restarts is waited for"
 fresh; touch "$t/no-comeback"
 if guided "$ALL"; then fail "a phone that doesn't come back stops the install"; fi
 says "hasn't come back" && [[ $(record restart_from) == aaaa-0001 ]] || fail "a restart that was sent is recorded"
