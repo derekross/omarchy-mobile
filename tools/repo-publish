@@ -195,6 +195,15 @@ stage() {
   mkdir -p "$to"
   local new current="" previous
   new=$(db_files "$from")
+  # A branch build (.g<commit>) or a build of edits not committed yet
+  # (.d<tree>) is a test build, never published: tools/pkg-version gives
+  # main's commits plain numbers
+  local test_builds
+  test_builds=$(grep -E '\.[gd][0-9a-f]{7}-[^-]+-[^-]+\.pkg\.tar\.' <<<"$new" || true)
+  if [[ -n $test_builds ]]; then
+    echo "$from holds test builds, not built from main (tools/repo-publish --from-main builds main's): $(tr '\n' ' ' <<<"$test_builds")" >&2
+    return 1
+  fi
   if [[ -f $to.sets ]]; then
     current=$(sed -n 's/^current //p' "$to.sets")
     previous=$(sed -n 's/^previous //p' "$to.sets")
