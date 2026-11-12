@@ -7,7 +7,7 @@
 # boot. Records each sleep's RTC length, dmesg length, wake IRQ, UFS and ACPM
 # errors, and the link-wait lines (a slow wake rather than a dead one).
 N=${N:-300}; S=${S:-60}; W=${W:-20}; L=${L:-/var/log/omamobile/sleep-linkwait-20261107.log}; U=/sys/devices/platform/soc/13200000.ufs
-mkdir -p /var/log/omamobile; : > $L
+mkdir -p /var/log/omamobile
 DBG=0; { [ "${PMDEBUG:-0}" = 1 ] || [ "${TRACE:-0}" = 1 ]; } && DBG=1
 # Refusals come first, before anything is changed.
 modem_up() { systemctl is-active -q omamobile-modem omamobile-tegu-modem-boot 2>/dev/null || [ -d /sys/module/cpif ]; }
@@ -17,6 +17,10 @@ modem_up && { echo "the modem is up: stop" >> $L; exit 1; }
 [ "$S" -ge 30 ] || { echo "S=$S: an alarm under 30 s can fire before the sleep begins: stop" >> $L; exit 1; }
 # With the debug switches a stall is a panic, and a panic has to end in a reboot.
 [ $DBG = 1 ] && [ "$(cat /proc/sys/kernel/panic)" = 0 ] && { echo "kernel.panic is 0, a panic would wait for the buttons: stop" >> $L; exit 1; }
+# Only a run that starts gets a fresh log: a refusal above is appended to the log that is there, and the
+# previous run's log is kept beside the new one.
+[ -s $L ] && mv -f $L $L.prev
+: > $L
 uid=$(id -u mobile)
 hy() { runuser -u mobile -- env XDG_RUNTIME_DIR=/run/user/$uid HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/$uid/hypr | head -1) hyprctl dispatch "hl.dsp.dpms({ action = \"$1\" })" >/dev/null 2>&1; }
 cs_before=$(cat /sys/module/printk/parameters/console_suspend)
@@ -37,12 +41,16 @@ T=/sys/kernel/tracing; WD=org.freedesktop.systemd1; EV="sched/sched_switch irq/i
 wd() { busctl "$1"-property $WD /org/freedesktop/systemd1 $WD.Manager RuntimeWatchdogUSec ${2:+t $2}; }
 if [ $DBG = 1 ]; then
   ppt_before=$(cat /sys/power/pm_print_times); pdm_before=$(cat /sys/power/pm_debug_messages)
+  kmsg_before=$(cat /proc/sys/kernel/printk_devkmsg)
   stall_before=$(cat /proc/sys/kernel/panic_on_rcu_stall); wd_before=$(wd get | awk '{print $2}')
 fi
 if [ "${TRACE:-0}" = 1 ] && [ -d $T ]; then
   mountpoint -q $T || mount -t tracefs nodev $T
   dump_before=$(cat /proc/sys/kernel/ftrace_dump_on_oops); tr_before=$(cat $T/current_tracer); on_before=$(cat $T/tracing_on)
-  kb_before=$(awk '{print $1}' $T/buffer_size_kb); ev_before=$(for e in $EV; do echo "$e=$(cat $T/events/$e/enable)"; done)
+  # Before tracing is first used the size reads "7 (expanded: 1408)": 7 KB now, 1408 on first use. Writing 7
+  # back would leave a tiny buffer for the rest of the boot, so the size it would have grown to is put back.
+  kb_before=$(sed -E 's/^[0-9]+ \(expanded: ([0-9]+)\)$/\1/' $T/buffer_size_kb)
+  ev_before=$(for e in $EV; do echo "$e=$(cat $T/events/$e/enable)"; done)
 fi
 restore() {
   [ -n "$INH" ] && kill $INH 2>/dev/null
@@ -54,6 +62,7 @@ restore() {
   if [ $DBG = 1 ]; then
     echo "$stall_before" > /proc/sys/kernel/panic_on_rcu_stall
     echo "$ppt_before" > /sys/power/pm_print_times; echo "$pdm_before" > /sys/power/pm_debug_messages
+    echo "$kmsg_before" > /proc/sys/kernel/printk_devkmsg 2>/dev/null
     [ -n "$wd_before" ] && wd set "$wd_before"
     echo "restored: pm_print_times $(cat /sys/power/pm_print_times), pm_debug_messages $(cat /sys/power/pm_debug_messages), panic_on_rcu_stall $(cat /proc/sys/kernel/panic_on_rcu_stall), ftrace_dump_on_oops $(cat /proc/sys/kernel/ftrace_dump_on_oops), tracer $(cat $T/current_tracer 2>/dev/null || echo none), runtime watchdog $(wd get | awk '{print $2}') (was $wd_before)" >> $L
   fi
@@ -99,15 +108,20 @@ echo "debug: pm_print_times $(cat /sys/power/pm_print_times), pm_debug_messages 
 # hours, until the Power key, which from the laptop looked like a no-wake. So the series holds a block
 # inhibitor of its own for the whole run (a push script's x-awake has a time limit) and sleeps past it
 # with "systemctl suspend -i". That passes every block inhibitor, so before each sleep the series looks
-# again: the modem up, or any block-mode sleep inhibitor other than its own and x-awake's, ends the run.
+# again: the modem up, any block-mode sleep inhibitor other than its own and x-awake's, or a list that
+# can't be read, ends the run.
 systemd-inhibit --what=sleep --who=sleep-series --why="only the series' own sleeps, each with an alarm" --mode=block sleep infinity &
 INH=$!
 others() {
-  busctl --json=short call org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager ListInhibitors | python3 -c '
+  local j
+  j=$(busctl --json=short call org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager ListInhibitors) \
+    || { echo "the inhibitor list could not be read"; return; }
+  printf '%s' "$j" | python3 -c '
 import json, sys
 mine = set(sys.argv[1:])
 print(" ".join("%s(pid %s)" % (i[1], i[5]) for i in json.load(sys.stdin)["data"][0]
-               if "sleep" in i[0].split(":") and i[3] == "block" and str(i[5]) not in mine))' $INH $(systemctl show -p MainPID --value x-awake 2>/dev/null)
+               if "sleep" in i[0].split(":") and i[3] == "block" and str(i[5]) not in mine))' $INH $(systemctl show -p MainPID --value x-awake 2>/dev/null) \
+    || echo "the inhibitor list could not be read"
 }
 st1 ${WFI:-1}
 echo 5 > $U/spm_lvl
@@ -117,7 +131,7 @@ echo "$(uname -v): rpm_lvl $(cat $U/rpm_lvl) (was $rpm_before), ufs-vcc always-o
 for c in $(seq 1 $N); do
   [ -e /run/sleep-series.stop ] && { rm -f /run/sleep-series.stop; echo "stop file: stop after $((c - 1)) cycles" >> $L; break; }
   modem_up && { echo "cycle $c: the modem is up: stop" >> $L; exit 1; }
-  o=$(others); [ -z "$o" ] || { echo "cycle $c: another block-mode sleep inhibitor is held ($o): stop" >> $L; exit 1; }
+  o=$(others); [ -z "$o" ] || { echo "cycle $c: another block-mode sleep inhibitor is held, or the list could not be read ($o): stop" >> $L; exit 1; }
   dmesg -C
   hy disable
   r0=$(cat /sys/class/rtc/rtc0/since_epoch)
