@@ -78,5 +78,7 @@ tests/module-load-once
 # don't meet in the same line
 echo "# tests/power-ab/samples.py"
 python3 tests/power-ab/samples.py
+echo "# tests/review-lessons"
+tests/review-lessons
 echo "# tests/factory-index"   # the build index of Google's factory images, against a made-up zip
 tests/factory-index

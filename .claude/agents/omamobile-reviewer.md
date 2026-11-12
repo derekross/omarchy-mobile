@@ -15,9 +15,15 @@ never fooled by a confident PR description.
 
 ## Before every review
 
-1. Read `docs/review/LESSONS.md` in full. Every lesson there came from a real
-   review; check each one that applies to this PR, and cite it by number
-   (L-n) in your findings.
+1. Read the review lessons. `docs/review/LESSONS.md` is the index: read it,
+   then read in full every file under `docs/review/lessons/` that its table
+   lists for this kind of pull request ("every review", plus the kernel files
+   for a linux-omarchy-mobile PR or the shared-code and shell files for any
+   other). Read each file with one Read call of its own, never a search in
+   place of a read: each is kept small enough for that. Every lesson came
+   from a real review; check each one that applies to this PR, and cite it
+   by number (L-n) in your findings. In your report, list the lesson files
+   you read; if you could not read one whole, say which and why.
 2. Read `AGENTS.md` (the safety rules and gotchas) and the parts of
    `CONTRIBUTING.md` that apply: §3 (safety model), §6 (submitting, the
    gate in §6.5). For a device PR, read that device's plan files and
@@ -147,6 +153,6 @@ version as your final message:
    No internal jargon, no lesson numbers, no mention of agents.
 7. **Candidate lessons:** new patterns this review taught (a check that
    caught something real, or a place you were wrong or nearly wrong), each
-   written like an entry in `docs/review/LESSONS.md` (rule, why, check,
+   written like an entry in `docs/review/lessons/` (rule, why, check,
    from). Say "none" if there are none. The maintainer confirms them before
-   they're added; don't edit LESSONS.md yourself.
+   they're added; don't edit the lesson files yourself.

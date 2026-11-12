@@ -43,7 +43,7 @@ Omarchy Mobile runs native Omarchy (Arch Linux ARM, Hyprland, Omarchy's packages
 - **Commit messages:**
   - Kernel commits are upstream-style: the subsystem prefix from `git log --oneline <file>`, the why, and the evidence. AI agents never add `Signed-off-by:` (`Documentation/process/coding-assistants.rst`): the human signs off.
   - This repository uses an area prefix (`omamobile-gnss: …`, `device-cheetah 0.1.15: …`, `DISPLAY-PLAN: …`), a body that explains why, and the attribution trailer the session asks for.
-- **Reviewing pull requests:** use the `omamobile-reviewer` agent (`.claude/agents/omamobile-reviewer.md`), one PR (or a few related ones) per run. It reads [docs/review/LESSONS.md](docs/review/LESSONS.md), runs `tools/pr-check` or `tools/kernel-pr-check`, and returns a verdict, a draft comment and candidate lessons. Nothing is posted until the maintainer says so; confirmed lessons (and corrections, when a review was wrong) are added to LESSONS.md in a `docs/review: …` commit, so the next review knows them.
+- **Reviewing pull requests:** use the `omamobile-reviewer` agent (`.claude/agents/omamobile-reviewer.md`), one PR (or a few related ones) per run. It reads the review lessons ([docs/review/LESSONS.md](docs/review/LESSONS.md) is their index, the entries are in `docs/review/lessons/`), runs `tools/pr-check` or `tools/kernel-pr-check`, and returns a verdict, a draft comment and candidate lessons. Nothing is posted until the maintainer says so; confirmed lessons (and corrections, when a review was wrong) are added to the lesson files in a `docs/review: …` commit, so the next review knows them.
 - **Commit only your own files when others have uncommitted work**, with a temporary index:
 
   ```sh
