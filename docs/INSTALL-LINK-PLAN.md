@@ -491,7 +491,9 @@ local installs.
   `e2fsprogs` (`debugfs`), `erofs-utils` (`fsck.erofs`), `binutils`
   (`readelf`), Python with `unicorn` and `pyelftools` for the camera step.
   **[I]**: that Arch Linux ARM carries all of them for aarch64, the Python
-  `unicorn` module included; stage L4.
+  `unicorn` module included; stage L4. (It carries them, but its `unicorn`
+  aborts in the camera tool: the module comes from `omamobile-unicorn`,
+  stage L4's first finding.)
 - **Per-phone inputs come from the phone itself:** the board id from
   `androidboot.cdt_hwid` in `/proc/bootconfig`, written to `props.conf`
   (root's, mode 600) and never printed, exactly as `phone-provision`'s
@@ -758,6 +760,36 @@ Found, each needing a decision before L5:
    `tests/extract-camera-sve.py` on aarch64 is in `[omamobile]` (or the
    camera step runs natively, §6.2), every install over the link ends
    "Cameras: not set up", and by §6.6 such a build is not offered.
+
+   **Answered on 2026-11-12, offline: `packages/omamobile-unicorn`.** The
+   **[I]** above is now checked. The distribution's library is configured
+   with `-DCMAKE_BUILD_TYPE=None` (its PKGBUILD), which keeps `assert()`;
+   upstream's wheel is a `Release` build (`bindings/python/setup.py`),
+   which compiles it out: the distribution's library imports
+   `__assert_fail` and holds the assertion's text, the wheel's does
+   neither. Built twice in the aarch64 container from upstream's 2.1.4
+   tarball with only the build type changed, `None` aborts in
+   `tests/extract-camera-sve.py` with that line and `Release` passes all
+   five checks. Behind the assertion is a gap in Unicorn 2.1.4 itself (the
+   emulated CPU's table of SVE vector lengths is never filled), which no
+   setting of the tool reaches. `omamobile-unicorn` 2.1.4-1 is that
+   `Release` build, AArch64 target only, with the binding, under
+   `/usr/lib/omamobile-unicorn/python`: it provides and conflicts with
+   nothing, and the distribution's packages install beside it.
+   `omamobile-provision` 0.1.1 depends on it in place of `python-unicorn`
+   and runs `extract-camera-data` with that directory as its
+   `PYTHONPATH`. In the container, with both packages installed by pacman
+   and no distribution `unicorn`: `tests/extract-camera-sve.py` passes as
+   `nobody`; with the distribution's packages added beside them it still
+   passes on the private copy and still aborts on theirs.
+   The byte for byte comparison with the phone side in the container, the
+   two packages installed and the extraction run as `nobody`, is now equal
+   with the camera data included, for CP3A.261005.002.A1 (1761 files, 27
+   symlinks) and CP2A.260705.006 (1778 files, 27 symlinks).
+   Not run on a phone: R1 now also checks this package's library there
+   (`packages/omamobile-unicorn/test/all --installed`). Unicorn is
+   GPL-2.0-only: the package's README says what publishing it asks for,
+   and finding 3 below holds for it too.
 2. **`MANIFEST` and `vendor-firmware.sha256` depend on the locale.** The
    three tools sort them with the locale's collation. The worker runs the
    tools under `LC_ALL=C`; a laptop in `en_US.UTF-8` writes the same lines
