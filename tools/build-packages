@@ -363,6 +363,10 @@ for dir in "${build[@]}"; do
   name=$(basename "$dir")
   alarm_say "$name $(pkg_version "$dir")"
   work=$(mktemp -d)
+  # A package that ships files from tools/ (omamobile-provision: the
+  # extraction tools, unchanged) copies them into its directory first: the
+  # build below sees the package directory alone
+  if [[ -x $dir/stage-tools ]]; then "$dir/stage-tools" || { rm -rf "$work"; alarm_die "$name: stage-tools failed"; }; fi
   # The package directory as it is (including gitignored prebuilt files the
   # PKGBUILDs install), minus makepkg's work directories and old packages.
   tar cf - --exclude="./$name/pkg" --exclude="./$name/src/build" --exclude='*.pkg.tar.*' \

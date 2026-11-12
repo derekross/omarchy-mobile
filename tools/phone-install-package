@@ -22,6 +22,9 @@ phone_home=$("$ssh" "getent passwd '$phone_user' | cut -d: -f6")
 build=$phone_home/build/pkgs
 
 "$ssh" "rm -rf $build/$name && mkdir -p $build && chown '$phone_user': $build"
+# A package that ships files from tools/ copies them into its directory
+# first (omamobile-provision/stage-tools): the phone gets that directory alone
+if [[ -x $dir/stage-tools ]]; then "$dir/stage-tools"; fi
 # makepkg's own work dirs (pkg/, src/ at the top) and old packages stay home.
 tar cf - --exclude="./$name/pkg" --exclude="./$name/src/build" --exclude="*.pkg.tar.*" \
   -C "$(dirname "$dir")" "./$name" | "$ssh" "tar xf - -C $build --no-same-owner && chown -R '$phone_user': $build/$name"
