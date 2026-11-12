@@ -187,14 +187,16 @@ left:
   says whether OEM unlocking is on. If it reads 0, back to the previous
   screen. If 1, the installer explains the wipe in one sentence ("Unlocking
   erases everything on this phone. Copy off photos, messages and two-factor
-  codes first.") and asks the user to confirm in the installer, then sends
-  `fastboot flashing unlock`; the user confirms again on the phone with the
-  volume keys and Power. The phone erases itself and restarts.
+  codes first.") and shows the command for the owner to type,
+  `fastboot flashing unlock`; the installer doesn't send it (D8). The user
+  confirms on the phone with the volume keys and Power. The phone erases
+  itself and restarts.
 - **Fastboot, unlocked:** on to the checks.
 
 `flashing unlock` is a request the bootloader asks the person to confirm on
-the phone, and it writes nothing of ours; it is the one `flashing` command
-the installer sends, and only from this screen. After the unlock the phone
+the phone, and it writes nothing of ours. The installer still doesn't send
+it (D8, decided 2026-11-10): this screen shows the command, and the owner
+types it. After the unlock the phone
 has to start Android once and be put back into fastboot; the installer
 walks through that.
 
@@ -204,8 +206,10 @@ Today: `tools/install-phone`, "Checking the phone" **[V]**.
 
 The same checks, read from `manifest.json` as data: one phone, product
 equals the bundle's codename, unlocked, each image fits its `_b` partition
-(an AVB footer image exactly). One check needs work before it can be
-automated without the user's help: the bootloader slots (gap G4, §10).
+(an AVB footer image exactly). One check needed work before it could be
+automated without the user's help: the bootloader slots (gap G4, §10). The
+installer can now read the other slot itself on a first install, for a
+device whose descriptor turns that on (D4); none does yet.
 Which slot stock Android lives on is already checked: `install-phone`
 refuses a phone running from slot B unless `--reinstall` is given (#352).
 
@@ -651,7 +655,43 @@ else.
   and trusts Google's flashing tools to have written both slots **[I]**;
   (c) it reads both versions from Android before the reboot to fastboot, if
   Android exposes the other slot's **[I]**. Option (a) is the only one that
-  measures.
+  measures, and it measures by doing the thing the check guards: it starts
+  the other slot's bootloader before its version is known. Google's factory
+  images page (https://developers.google.com/android/images, read
+  2026-11-10) says of the Pixel 6 and Pixel 8 families after their May 2025
+  update, and of the Pixel 10 family after May 2026: "The inactive slot
+  contains an older bootloader whose anti-rollback version has not been
+  incremented" and "Since the inactive slot contains the older bootloader,
+  the device enters an unbootable state" **[D]**. For those families
+  Google's own remedy, the full OTA sideloaded from stock (CONTRIBUTING
+  §3.1), is the safer road. **Decided 2026-11-10 (D4): option (a), on a
+  first install only; built into `tools/install-phone` off by default**
+  (tests in `tests/install-phone`). A device gets it by
+  `BOOTLOADER_SLOT_PROBE=yes` in its descriptor, which the maintainer adds
+  after an attended run on that device is in its notes; no device has it,
+  so every phone still stops and asks for `--bootloader-slots-match`. Where
+  it is on: with the owner's yes (typed on a terminal, or
+  `--measure-other-slot` from a calling tool) the installer sets the other
+  slot active, reads `current-slot` once more, restarts into the
+  bootloader, reads the version, sets the first slot active again, restarts
+  and checks. The first slot is set active again if a step fails while the
+  phone answers; a phone not seen to leave the bus and come back gets
+  nothing more; both slots' `slot-successful`, `slot-unbootable`,
+  `slot-retry-count` and `slot-fastboot-ok` are printed before and after.
+  Nothing is flashed or erased, but the bootloader writes the flags to its
+  own storage (`devinfo`). It is refused with `--reinstall`, and when slot
+  B reads as started and still startable (an installed Omarchy Mobile sent
+  back to slot A looks like that from fastboot, and so does stock after a
+  system update): the round trip clears slot B's successful mark, which on
+  some phones (the Pixel 9a) costs boot tries and can end in a fallback
+  that wipes `userdata`. Not run on a phone yet, so these are **[I]**:
+  that `reboot bootloader` after `--set-active` starts the other slot's
+  bootloader and reports its version; that `current-slot` names the running
+  bootloader's slot, not the active flag (the installer stops if it sees
+  otherwise); what the round trip does to each flag, stock's slot A
+  included, and whether stock's slot earns its successful mark back; what
+  `slot-fastboot-ok: no` on the other slot means for restarting into it;
+  how long the restarts take.
 - **G5. Done (#352).** Found while writing this plan, not in the test
   install: **no check that stock lives on slot A.** `install-phone` read
   `current-slot` and printed it but didn't refuse slot B. After an Android
@@ -676,7 +716,10 @@ real users.
 - **Needs:** small changes to `tools/phone-provision`, `tools/release`,
   `omamobile-update`, the root image and `tools/install-phone`, with tests
   in `tests/`.
-- **Open:** G4 (D4).
+- **Open:** G4's slot check is built (D4), off for every device, and has
+  not run on a phone: an attended run on a Pixel 7 Pro in first-install
+  state comes first, and its record decides whether the 7 Pro's descriptor
+  turns it on.
 
 ### M1. A guided CLI, end to end
 
@@ -721,13 +764,12 @@ real users.
   link, the build index) used by both front ends. The Omarchy Mobile
   Installer app for Omarchy first (an Omarchy package with its udev rule),
   then other Linux distributions; macOS and Windows later.
-- **Needs:** a language that builds both to WebAssembly and to a native
-  binary (Rust is the obvious candidate; TypeScript with a native USB
-  backend is the other) and one UI shared by the app and the web page (a
-  web UI in a native window, so the two look and behave the same). The CLI
-  from M1 stays as the scriptable front end of the same core.
-- **Open:** language and UI toolkit (D5); signing and distributing the app
-  outside Omarchy.
+- **Needs:** the core in Rust, built natively and to WebAssembly, and one
+  web UI shared by the app and the web page (a web UI in a native window,
+  so the two look and behave the same), as decided (D5). The CLI from M1
+  stays as the scriptable front end of the same core.
+- **Open:** signing and distributing the app outside Omarchy. The language
+  and the UI are decided (D5): Rust, and one web UI.
 
 ### M4. The web flasher
 
@@ -797,10 +839,25 @@ never offered: that write stays a manual, named exception.
 - **D3. Tested builds:** which factory builds the index marks tested, and
   how a build earns it (a `phone-smoke` pass on the reference phone with
   that build's firmware is the proposal).
-- **D4. The other bootloader slot (G4):** switch slots in fastboot to read
-  it (measured, but the installer changes slot flags twice), or trust a
-  factory flash and the user's word.
-- **D5. Core language and UI** for M3.
+- **D4. The other bootloader slot (G4): decided 2026-11-10, the installer
+  measures it itself, on a first install only.** It switches slots in
+  fastboot to read the other slot's version and switches back (G4's option
+  (a)), undone if a step fails. On a reinstall (`--reinstall`, where slot B
+  is ours and current) the round trip is refused, because it clears slot
+  B's successful mark, which on some phones (the Pixel 9a) costs boot tries
+  and can end in a fallback that wipes `userdata`; a reinstall keeps the
+  earlier behaviour and asks for `--bootloader-slots-match VERSION`. As
+  built after review (2026-11-10): off by default and turned on per device
+  (`BOOTLOADER_SLOT_PROBE=yes`) once an attended run on that device is in
+  its notes, because the round trip starts the other slot's bootloader
+  before its version is known (G4). Open for the maintainer: whether Pixel
+  6, Pixel 8 and Pixel 10 family phones may ever get it, given Google's
+  warning; and whether the cost to stock's slot is accepted, once measured.
+- **D5. Core language and UI: decided 2026-11-10, Rust and one web UI.**
+  The shared installer core (M3) is written in Rust, built natively for
+  Linux, Windows and macOS and to WebAssembly for the web flasher, with one
+  web UI shared by the site and the desktop app, in its own repository
+  (https://github.com/derekross/omamobile-installer).
 - **D6. The build index's home:** beside `latest.json` on our server,
   inside a package in `[omamobile]`, or both; signed by the release key
   either way.
@@ -809,3 +866,6 @@ never offered: that write stays a manual, named exception.
   Google for written permission to redistribute the vendor files, or get a
   lawyer's opinion first. Nothing is bundled or hosted unless one of those
   says it may be.
+- **D8. Unlocking: decided 2026-11-10, the owner types the command.** The
+  guided installer does not send `fastboot flashing unlock` itself; it
+  shows the command for the owner to type (§4.2).
