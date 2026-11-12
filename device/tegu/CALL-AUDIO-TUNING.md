@@ -278,9 +278,38 @@ its output on the laptop.
    announcements, a minute apart, it had samples of 21,188 and 27,913. So the echo is in the uplink the AoC sends, and it can be seen
    without anyone listening.
 
-What this says: the APMg3 processor runs and has stock's tuning, and the
-echo still passes. What it doesn't say is why, or what the 5 s of silence
-are. One sample every 0.32 s is a rough level and no more.
+9. The same call without the tuning (`tegu_aec = no`, a fresh boot; the
+   AoC logs "PostProcessing Config: BYPASS" and "Mixer 0 active
+   (bypass)"), 110 s. While the clock's tone played, at 700 to 2,100 on
+   the downlink, the uplink's median per 5 s window was 113 to 144 from
+   5 s to 35 s and 4 to 66 later, and no sample in the call was above 460. (The tone lands on nearly the
+   same phase at every sample, so these follow the tone's phase as much
+   as its level.)
+10. With the tuning again, twice (110 s each; in the second the uplink
+    tuning had one field changed, 2.8.2 set to 0, and the owner's file was
+    put back afterwards): in the windows with the tone the uplink's median
+    was 90 and 65, as low as without the tuning, but one sample in ten was
+    over 4,000 and the largest were 8,868 and 6,680. The changed field made no difference. So with stock's
+    tuning the uplink is quiet most of the time and breaks through in
+    bursts far louder than anything the unprocessed uplink had.
+11. The same call with both speakers' volume at 0 for 14 s in the middle
+    (180 before and after), the tone at about 2,000 on the downlink
+    throughout: all 32 uplink samples of the two whole 5 s windows inside
+    those seconds were below 70; in the windows before and after the largest were 821 to
+    7,309. So the echo is sound from the speakers reaching the
+    microphones, and nothing passes inside the AoC.
+12. The processor's reference, recorded during a call from the AoC's
+    `audio_android_aec` capture (`hw:0,27`): it delivers 32-bit stereo
+    whatever format is asked for, and both channels carried the clock.
+    The recording had gaps and ended in a read error ("Bad address"), and
+    the call ended 48 s in, so it says the reference is there and no more:
+    not its level, and not whether it is in step with the microphones.
+
+What this says: the APMg3 processor runs and has stock's tuning, the echo
+is acoustic, and with the tuning it comes through in bursts rather than
+being cancelled; the processor has a reference signal. What it doesn't say
+is why the cancellation doesn't hold, or what the 5 s of silence are. One
+sample every 0.32 s is a rough level and no more.
 
 ## Next for the echo
 
@@ -289,11 +318,15 @@ test, with no listener: the uplink's samples during the announcements
 against those during the ticks. To do, each on a fresh boot since the
 configuration is read at sitd's start:
 
-- The same call with `tegu_aec = no`, for the echo's level without the
-  tuning. If it is the same, the processor is passing the echo untouched.
 - A better level than one sample in 0.32 s: stock's in-call capture
-  (`Incall Capture Stream0` at `UL_DL`, the `audio_incall_cap_0` PCM),
-  which nothing here has opened during a call yet.
+  (`Incall Capture Stream0` at `UL_DL`, the `audio_incall_cap_0` PCM).
+  One try during a call ended in a read error (EIO) with no audio; the
+  kernel log wasn't kept, so the next try reads it.
+- A clean recording of the reference (result 12), with a period small
+  enough for the AoC's ring, beside the speakers' own output: its level
+  and its delay against the microphones.
+- The uplink tuning with one part off at a time (the canceller's switch, field
+  1.6.1; the blocks at 1.4 and 1.5), for which part makes the bursts.
 - The speaker tuning's own layout, read from the owner's file with
   `protoc --decode_raw`: it declares a two-channel reference and three
   capture channels (the handset one a one-channel reference). Whether the
