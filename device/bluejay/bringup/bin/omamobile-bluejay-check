@@ -1,0 +1,24 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Passive first-root gate. Never changes storage flags, modules, or registers.
+set -euo pipefail
+fail() { echo "bluejay-check: $*" >&2; exit 1; }
+[[ $(tr '\0' '\n' < /proc/device-tree/compatible | head -1) == google,gs101-bluejay ]] || fail 'wrong board'
+[[ ! -e /dev/sda ]] || fail 'whole-disk node present'
+[[ $(sed -n 's/^androidboot.slot_suffix = "_\([ab]\)"$/\1/p' /proc/bootconfig) == b ]] || fail 'not slot B'
+count=0
+for f in /sys/class/block/*/uevent; do
+  name=$(sed -n 's/^PARTNAME=//p' "$f")
+  [[ -n $name ]] || continue
+  p=${f%/uevent}
+  case $name in boot_b|vendor_boot_b|dtbo_b|userdata) expected=0 ;; *) expected=1 ;; esac
+  [[ $(cat "$p/ro") == "$expected" ]] || fail "unexpected storage guard for $name"
+  count=$((count + 1))
+done
+[[ $count == 49 ]] || fail 'partition inventory changed'
+while read -r device mount rest; do
+  [[ $device != /dev/sd* || $mount == / ]] || fail 'Android partition mounted'
+done < /proc/mounts
+[[ $(grep -v '^#' /etc/omamobile/boot-update.conf) == AUTO_WRITE=no ]] || fail 'automatic boot writes enabled'
+[[ $(readlink /usr/lib/systemd/system/omamobile-boot-success.service) == /dev/null ]] || fail 'boot-success unit is not masked'
+echo 'bluejay-check: board, slot, 49 guards, mounts and development boot policy pass'

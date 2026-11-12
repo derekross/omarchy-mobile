@@ -10,7 +10,7 @@ mount -t sysfs sysfs /sys || exit 1
 mount -t devtmpfs devtmpfs /dev || exit 1
 mkdir -p /dev/pts /run
 mount -t devpts devpts /dev/pts || exit 1
-mount -t tmpfs tmpfs /run || exit 1
+mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run || exit 1
 mount -t configfs configfs /sys/kernel/config || exit 1
 
 say() {

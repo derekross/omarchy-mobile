@@ -182,6 +182,8 @@ grep -qx pin "$R/home/alice/.config/omamobile/credential" || fail "the credentia
 [[ -e $R/home/alice/.local/state/omarchy/toggles/lock-on-start ]] || fail "the phone locks after boot"
 grep -qF "$PSK" "$R/var/log/omamobile/firstboot.log" "$t/run.out" && fail "the log never has the passphrase"
 grep -qF "$HASH" "$R/var/log/omamobile/firstboot.log" "$t/run.out" && fail "the log never has the hash"
+grep -c ' git config --global user.name Alice Example$' "$CALLS" >/dev/null || fail "git gets the owner's name, whatever Omarchy's user setup does"
+grep -c ' git config --global user.email alice@example.org$' "$CALLS" >/dev/null || fail "git gets the owner's email"
 pass "a run sets everything up and deletes the conf"
 
 [[ -e $R/ran-other-leaf ]] || fail "Omarchy's setup leaves run"
@@ -199,6 +201,17 @@ grep -q '^clock-set' "$CALLS" && fail "an accurate clock is never moved backward
 grep -q '^usermod -aG wheel,audio,video,input' "$CALLS" || fail "a second run updates the user it made"
 [[ $(grep -cxF "$KEY" "$R/home/alice/.ssh/authorized_keys") == 1 ]] || fail "a second run doesn't duplicate the key"
 pass "running again is safe"
+
+# The name and email are optional: without them git is left alone
+: > "$CALLS"
+good | sed '/^WIFI_/d; /^FULL_NAME=/d; /^EMAIL=/d' > "$R/etc/omamobile/firstboot.conf"
+run || { cat "$t/run.out"; fail "a run without a name and email succeeds"; }
+grep -c ' git config ' "$CALLS" >/dev/null && fail "without a name and email git's config is not written"
+# ... and the rest of user setup still runs: the step is optional, so a death
+# in it (an unset key under set -u, 0.1.4) left the run's exit status at 0.
+grep -c 'unbound variable' "$t/run.out" >/dev/null && { cat "$t/run.out"; fail "a run without a name and email reads no unset key"; }
+grep -c 'with warnings' "$t/run.out" >/dev/null && { cat "$t/run.out"; fail "a run without a name and email ends without warnings"; }
+pass "the installer's name and email reach git; without them git is left alone"
 
 : > "$CALLS"
 rm "$R/usr/share/pacman/keyrings/"*.gpg

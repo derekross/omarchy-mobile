@@ -34,8 +34,8 @@
 #                    carries the local key. Never the maintainer's keys/ or
 #                    out/repo
 #
-# Upstream packages pinned in rootfs/packages.pinned (Omarchy 4.0.6 while our
-# patches don't apply to 4.5) are added by every maintainer's run: fetched
+# Upstream packages pinned in rootfs/packages.pinned (the Omarchy version
+# our patches were checked against) are added by every maintainer's run: fetched
 # once, checked against the SHA-256 listed there, and signed with the release
 # key like our own; out/repo keeps them, and a line removed there takes its
 # package out at the next run. A --local repository gets them from
