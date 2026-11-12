@@ -459,7 +459,7 @@ done < <(find "$root" -type l)
 
 profile_check "$root"
 
-(cd "$root" && find . -type f -printf '%m %P\n' | sort -k2 |
+(cd "$root" && find . -type f -printf '%m %P\n' | LC_ALL=C sort -k2 |
   while read -r mode path; do
     printf '%s %s %s\n' "$(sha256sum "$path" | cut -d' ' -f1)" "$mode" "$path"
   done) > "$OUT/MANIFEST"
