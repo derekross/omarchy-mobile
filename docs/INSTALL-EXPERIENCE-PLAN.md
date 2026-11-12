@@ -76,10 +76,11 @@ What the person does:
    itself.
 5. Chooses a user name, a PIN or password, the phone's name, the time zone
    and optionally a Wi-Fi network, in the installer window.
-6. Clicks one button that opens Google's download page at the phone's
-   build, accepts Google's terms there and saves the factory image; the
-   installer picks the saved file up (§6.3; D2: the installer doesn't
-   download it itself until Google's terms have been checked). Then waits.
+6. Reads Google's terms for the factory image in the installer, accepts
+   them, and the installer downloads the image from Google's own server
+   for the phone's build (§6.3; D2, re-decided 2026-11-12). Someone who
+   would rather not accept them there clicks through to Google's page,
+   saves the file, and the installer picks it up. Then waits.
    The installer downloads the release, checks everything, writes the
    phone, waits for its first start, backs up the radio partitions to the
    computer, puts the firmware on the phone and restarts it.
@@ -92,15 +93,16 @@ sensors and the cameras work, and the modem's per-phone data (board id, NV
 checksums) is in place, so the modem can start without any further step.
 After that the phone updates itself through the Updater (the update sheet
 in the shell, `omamobile-update` underneath, RELEASES §5.4). Its firmware
-updates there too, with the factory image fetched from Google's page by
-the owner, as at install (§9).
+updates there too, with the factory image fetched from Google as at
+install (§9).
 
 What the person never does: install `fastboot` or Android's tools, open a
 terminal, find Google's factory image page, match a build number, set up a
 USB network connection, run a backup or a provisioning tool by hand, or
 download anything from a site other than omamobile.org and Google's own
-servers. The installer opens Google's page at the right build; the one
-download the person starts by hand is the factory image there (D2).
+servers. The installer downloads the factory image from Google itself,
+once the person has accepted Google's terms in it (D2); only someone who
+declines that screen starts that download by hand, on Google's page.
 
 ## 2. What stays fixed
 
@@ -108,8 +110,9 @@ download the person starts by hand is the factory image there (D2).
   in a bundle, not in a package, not on `pkgs.omamobile.org`, not through a
   proxy or cache of ours. The user's own phone's factory image comes
   straight from Google's servers to the user's machine (or to the phone,
-  §9), after the user has accepted Google's terms on Google's own page
-  (§6.3, D2: the user saves it there and the installer takes the file), and
+  §9), after the user has accepted Google's terms (§6.3, D2: in the
+  installer, which then downloads from Google on the user's behalf; or on
+  Google's own page, where the user saves the file), and
   the files the phone needs are extracted locally. No byte of Google's
   passes through a server of ours.
 - **The factory image is the one that matches the phone**: the build whose
@@ -315,8 +318,9 @@ image reaches it.
 
 ### 5.1 Option A: extract on the computer
 
-What today's tools do. The factory image is on the computer (saved from
-Google's page by the user, §6.3), and the installer runs the extraction there and either writes the result into the
+What today's tools do. The factory image is on the computer (downloaded
+from Google by the installer, or saved from Google's page by the user,
+§6.3), and the installer runs the extraction there and either writes the result into the
 local root image copy before flashing (RELEASES §6 step 2-3, designed but
 not built) or pushes it after the first start (today's `phone-provision`).
 
@@ -352,7 +356,7 @@ code later serves firmware updates (§9).
 
 ### 5.3 Recommendation: B, with the image carried over an install link
 
-The factory image is saved on the computer from Google's page (§6.3; it
+The factory image is downloaded to the computer from Google (§6.3; it
 is the only side with a network at that point), and the installer hands it
 to the phone over USB at first
 boot; the phone checks its SHA-256 and extracts it. The channel is an
@@ -433,20 +437,31 @@ is an open question (D3).
 ### 6.3 Google's terms
 
 Google's page asks the visitor to acknowledge terms before it shows the
-download links **[D]**. Whether a third-party installer may present that
-acknowledgement itself and download on the user's behalf, or must send the
-user to Google's page to click through, hasn't been checked. Until it is
-(D2, decided 2026-11-09), the installer does neither. It shows a button
-that opens Google's page at the right build; the user accepts the terms
-there and saves the zip; a file picker (or a watched Downloads folder)
-takes the saved file, and the installer checks its SHA-256 against the
-signed index before using it. That is honest and still simple, and the
-Updater does the same for a later firmware update (§9).
+download links **[D]**.
 
-If the check allows it, the design to return to is this: the installer
-shows Google's terms, linked to Google's own page, with a checkbox the user
-must tick before the download starts, and records that it was ticked (on
-the computer only).
+**Re-decided 2026-11-12 (D2):** the installer presents that acknowledgement
+itself and downloads on the owner's behalf. It shows Google's own
+sentences as Google's, with Google's links (the Terms of Service, the
+Privacy Policy, the note on third-party terms) and the link to Google's
+page for the build; says in our own words that the files are for the
+owner's own Pixel and may not be redistributed, so they come straight from
+Google to the owner's computer and the project neither hosts them nor
+passes them on; and takes a clear yes, which it records with the build and
+the time (on the computer only). Then it downloads the file from Google's
+own server, from the address in the signed index and from no other host,
+and checks its size and SHA-256 against the index before using it
+([INSTALL-GUIDED](INSTALL-GUIDED.md) §5b). Whether a third-party tool may
+present that acceptance remains the project's own risk judgement; it is
+recorded as that, not as something Google has confirmed.
+
+**The fallback stays** (the rule of 2026-11-09 and 2026-11-10): when the
+owner doesn't accept the terms in the installer, when the download can't
+be made, or when the owner hands in a file, the installer opens Google's
+page at the right build; the owner accepts the terms there and saves the
+zip; a file picker (or a watched Downloads folder) takes the saved file,
+and the installer checks its SHA-256 against the signed index before using
+it. The Updater's firmware offers follow the same rule when they are built
+(§9).
 
 ### 6.4 Downloading in a browser
 
@@ -469,15 +484,16 @@ Terms of Service **[D]**.
 
 - **So the design stays as it is:** the user's own machine (or the user's
   own phone, §9) downloads the factory image from Google, for that user's
-  own Pixel (by the user's own click on Google's page while D2's check is
-  open), and the files the phone needs are extracted locally. That is
+  own Pixel (after that user has accepted Google's terms, in the installer
+  or on Google's page, D2), and the files the phone needs are extracted
+  locally. That is
   the most defensible reading of those terms we have. It isn't spotless:
   "modified" makes any extraction a grey area, one that every system other
   than Google's running on a Pixel shares.
-- **Bundling or hosting Google's vendor files ourselves is out**, in a
-  bundle, a package or anywhere on our servers, unless Google gives written
-  permission, or a lawyer's opinion says otherwise. The maintainer may ask
-  Google (D7).
+- **Bundling or hosting Google's vendor files ourselves is not done**, in
+  a bundle, a package or anywhere on our servers. Whether it ever could be
+  (the files as extracted, with Google's written permission or on a
+  lawyer's opinion) is not decided and will be revisited (D7).
 - **If permission came,** the provisioning step shrinks: the release would
   carry the device's firmware and vendor files itself (a firmware package
   per device in `[omamobile]`, installed in the root image), so the install
@@ -565,18 +581,18 @@ Updater:
    are compatible with the phone's (read on the phone; the phone's
    bootloader and radio never change under Linux, because nothing of ours
    writes them).
-3. **It offers the update and the owner fetches the image,** as at install
-   (§6.3, D2): the Updater says a newer firmware set is ready and opens
-   Google's page at that build, in the phone's browser or as a link for a
-   computer. The owner accepts Google's terms there and saves the zip, and
-   the Updater takes the saved file (a file picker, or the Downloads
-   folder). With enough free space (the zip plus room to unpack, several GB
+3. **It offers the update and fetches the image as the installer does**
+   (§6.3, D2, re-decided 2026-11-12; not built yet): the Updater says a
+   newer firmware set is ready, shows Google's terms for the owner to
+   accept, and then downloads the image from Google's own server. An owner
+   who doesn't accept them there gets the fallback: Google's page at that
+   build, in the phone's browser or as a link for a computer, where the
+   owner accepts the terms and saves the zip, and the Updater takes the
+   saved file (a file picker, or the Downloads folder). With enough free space (the zip plus room to unpack, several GB
    **[I]**), on the charger or above a battery level, it checks the SHA-256
    from the signed index and extracts the image with the same
    `omamobile-provision` code as the install (§5.2). The Updater downloads
-   no firmware itself until Google's terms have been checked; a phone is
-   never held on old firmware for that reason, because the owner can
-   always fetch the image.
+   no firmware before the owner has accepted Google's terms for it.
 4. **It installs the new firmware set beside the old one**
    (`/usr/lib/firmware/updates` and the vendor chroots in versioned
    directories with a link to the current one, instead of overwritten in
@@ -602,9 +618,9 @@ Constraints:
   Updater then keeps the old set and reports it.
 - On a secure phone the firmware lives inside the encrypted root, so nothing
   changes for the verified boot chain.
-- Whether automatic downloads on the owner's behalf are acceptable under
-  Google's terms is part of D2; until that is checked, step 3 is the
-  owner's download.
+- A download on the owner's behalf follows the owner's acceptance of
+  Google's terms (D2). A download with no acceptance at all, fully
+  automatic, is not part of that decision.
 
 ## 10. Gaps found in the 2026-11-02 test install
 
@@ -623,8 +639,9 @@ else.
   fetched by the tool itself (§6) when none is given. **The modes are
   done:** the tool has no default backup directory, refuses a cheetah run
   that names neither mode, and `--backup DIR` stays as `--restore DIR`'s
-  older spelling. The fetch is not built: by D2 the owner saves the image
-  from Google's page and the tool takes the file, as it does today.
+  older spelling. The fetch is the guided installer's
+  (`tools/install-guided`, D2 as re-decided 2026-11-12), which hands
+  `phone-provision` the file; `phone-provision` itself still takes a zip.
 - **G2. The stable channel must exist before a release's first update.**
   `tools/release`'s `test-install` stage runs before `promote`, and a
   release install follows `stable`, so the test-installed phone's first
@@ -690,8 +707,10 @@ real users.
   whole install with today's tools: preflight, the one warning of §1 step 3 (wipe, new operating
   system and what it means day to day, the way back) acknowledged once before the unlock guidance and any write (D9) and recorded with
   the install's state, with no further prompts about it, unlock guidance from the
-  phone's state (§4.2), the build index lookup, Google's page opened at the
-  right build and the saved factory image taken and checked (§6.3, D2), the checks and writes
+  phone's state (§4.2), the build index lookup, Google's terms shown and
+  the factory image downloaded from Google and checked, or Google's page
+  opened at the right build and the saved file taken and checked (§6.3,
+  D2), the checks and writes
   (`install-phone`), the USB network connection set up with the user's
   consent (a NetworkManager profile for `cdc_ncm`, shown before it is
   added), waiting for the first start, `nv-backup` into a named folder,
@@ -710,7 +729,7 @@ real users.
   (INSTALL-GUIDED §1). It has no fallback to a build with
   the same bootloader and another baseband (§6.2) until the index records
   tested pairs.
-- **Open:** Google's terms in a third-party tool (D2: M1 uses the fallback); still Linux only,
+- **Open:** how Google's server really answers the download (redirects, resume; INSTALL-GUIDED §5b); still Linux only,
   still a terminal; what the index marks as tested (D3).
 
 ### M2. Install mode and the install link on the phone
@@ -763,14 +782,15 @@ real users.
 
 ### M5. Firmware updates through the Updater
 
-- **What:** §9: the build index in the Updater, the owner's download of
-  the new factory image from Google's page (§9 step 3) and its extraction
-  on the phone, versioned firmware sets with rollback.
+- **What:** §9: the build index in the Updater, Google's terms and the
+  download of the new factory image from Google (§9 step 3, with the
+  owner's own download as the fallback) and its extraction on the phone,
+  versioned firmware sets with rollback.
 - **Needs:** M2's `omamobile-provision` on the phone; the index process
   with a tested flag per build and device; a health check after the
   restart that can roll back.
 - **Open:** compatibility between newer firmware and older bootloaders and
-  radios (§6.2); D2 for automatic downloads.
+  radios (§6.2).
 
 ### M6. Secure installs
 
@@ -800,15 +820,24 @@ never offered: that write stays a manual, named exception.
   the install link at first boot; the phone checks and extracts it. Until
   the install link exists (M2), M1 does the same steps over USB SSH with
   option A's extraction on the computer.
-- **D2. Google's terms: decided 2026-11-09, the fallback until they are
-  checked.** M1 opens Google's page at the right build and takes the zip
-  the user saved (a file picker or a watched Downloads folder); the
-  installer doesn't present Google's acknowledgement itself or download on
-  the user's behalf, and the Updater downloads no firmware automatically:
-  it offers a firmware update the same way, opening Google's page for the
-  owner to save the zip (§9 step 3), so no phone waits on this check.
-  Whether a third-party installer may do either stays open, to be checked
-  against Google's terms before anything changes.
+- **D2. Google's terms: re-decided 2026-11-12. The installer downloads
+  from Google on the owner's behalf, after the owner accepts Google's
+  terms in the installer.** It shows Google's own sentences and links, and
+  in plain words that the files are for the owner's own Pixel, come
+  straight from Google to the owner's computer and are neither hosted nor
+  passed on by the project; the owner types a clear yes, recorded with the
+  build and the time; then the installer downloads the factory image from
+  Google's own server, from the address in the signed index and no other
+  host, and checks it before use (§6.3, [INSTALL-GUIDED](INSTALL-GUIDED.md)
+  §5b). The Updater's firmware offers follow the same rule when they are
+  built (§9 step 3). Whether a third-party tool may present that
+  acceptance remains the project's own risk judgement, and is recorded
+  here as that: it has not been confirmed by Google. This reverses the
+  decision of 2026-11-09, confirmed on 2026-11-10 ("option B": open
+  Google's page at the right build and take the zip the owner saved, with
+  the installer neither presenting the acknowledgement nor downloading).
+  That way stays as the fallback: when the owner declines the terms
+  screen, when the download fails, or when a file is handed in.
 - **D3. Tested builds:** which factory builds the index marks tested, and
   how a build earns it (a `phone-smoke` pass on the reference phone with
   that build's firmware is the proposal).
@@ -819,11 +848,11 @@ never offered: that write stays a manual, named exception.
 - **D6. The build index's home:** beside `latest.json` on our server,
   inside a package in `[omamobile]`, or both; signed by the release key
   either way.
-- **D7. Shipping Google's files ourselves (§6.5):** keep fetching from
-  Google and extracting locally (the plan's design), and optionally ask
-  Google for written permission to redistribute the vendor files, or get a
-  lawyer's opinion first. Nothing is bundled or hosted unless one of those
-  says it may be.
+- **D7. Shipping Google's files ourselves (§6.5): not decided, and to be
+  revisited.** Today nothing of Google's is bundled or hosted: the image
+  is fetched from Google and the files are extracted locally (D2). Whether
+  the project could ever ship the extracted files itself, and on what
+  footing (Google's written permission, a lawyer's opinion), is open.
 - **D9. Where the warning sits: decided 2026-11-10, before the unlock
   guidance.** Unlocking the bootloader already wipes the phone, so the one
   warning (§1 step 3) is read and acknowledged before the unlock steps are

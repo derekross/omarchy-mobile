@@ -22,8 +22,11 @@
 #       has to be there and marked tested. Nobody
 #       is shown how to unlock, and so erase, a phone that could not be
 #       installed anyway (judge_phone says what can't be judged that early)
-#    4. opens Google's factory image page for the build step 3 found and
-#       takes the file the owner saved, checked by SHA-256
+#    4. gets Google's factory image for the build step 3 found: shows
+#       Google's terms and, when the owner accepts them, downloads the file
+#       from Google's own server (https://dl.google.com/ only), checked by
+#       size and SHA-256 against the build index; otherwise opens Google's
+#       page and takes the file the owner saved, checked the same way
 #    5. asks the owner's answers, runs tools/install-phone --dry-run, then
 #       tools/install-phone once the phone's codename is typed, each time
 #       with --serial, so only the phone step 3 looked at can be written
@@ -47,21 +50,32 @@
 # is tools/install-phone's:
 # slot B's boot images and userdata, after its own checks and a dry run. It
 # never sends "fastboot flashing unlock": it shows that command for the owner
-# to run. It never downloads Google's factory image and never shows Google's
-# terms: the owner accepts them on Google's page and saves the file there.
+# to run.
+#
+# What it downloads: a newer build index from omamobile.org when there is
+# one; the camera's two Python modules from pypi.org, after Enter; and
+# Google's factory image, from Google's own server to this computer, after
+# the owner has read Google's terms here and typed yes (decided 2026-11-12,
+# plan D2). The address comes from the build index and is on
+# https://dl.google.com/, as is every address Google's server sends the
+# download on to, or nothing is fetched. The project hosts none of Google's
+# files and passes none on.
 #
 #   tools/install-guided [options]
 #     --dry-run        go as far as tools/install-phone --dry-run and stop:
 #                      nothing is written to the phone, nothing is added to
-#                      this computer, nothing is recorded. It reads the
+#                      this computer, nothing is recorded, and Google's
+#                      factory image is not downloaded (it says what would
+#                      be, and its size). It reads the
 #                      phone in Fastboot Mode (the three queries above),
 #                      sends nothing over adb or USB SSH, and looks for a
 #                      newer build index on omamobile.org unless --offline
 #     --status         show how far the install got, and stop
 #     --start-over     forget how far the install got (the radio backup and
 #                      the factory image stay where they are)
-#     --factory-zip FILE  Google's factory image, already saved (it is still
-#                      checked against the build index)
+#     --factory-zip FILE  Google's factory image, already saved: the installer
+#                      then shows no terms and downloads nothing (the file is
+#                      still checked against the build index)
 #     --offline        use the build index in the bundle, don't look for a
 #                      newer one
 #     --ssh-key FILE   the SSH public key the phone will accept from this
@@ -676,8 +690,9 @@ other_phone_in_fastboot() {
 #   - that nothing else answers at the phone's USB address (step 5): asked
 #     over SSH just before the write, and passed by unplugging the other
 #     phone.
-#   - Google's factory image: the owner saves it in step 4, and a wrong
-#     file is asked for again, never a stop.
+#   - Google's factory image: it is fetched or handed in at step 4. A
+#     wrong file of the owner's is asked for again; a wrong download is
+#     removed and stops that run. Neither says anything about the phone.
 #   - what only happens later: a write that fails, the first start, the
 #     radio backup, the firmware, the check.
 # Not checked on a phone yet: that a locked bootloader answers "getvar all"
@@ -904,7 +919,7 @@ signed_by_release_key() {
 # The index to trust: the bundle's copy (its signed checksums cover it), or
 # a published copy with its own signature when that one is newer.
 index=""
-choose_index() {
+find_index() {
   local url=${OMAMOBILE_INDEX_URL:-https://pkgs.omamobile.org/releases/$CODENAME/factory-builds.json}
   local got=$scratch/published.json local_date="" got_date
   if [[ -f $local_index ]]; then
@@ -926,6 +941,9 @@ choose_index() {
       fi
     fi
   fi
+}
+choose_index() {
+  find_index
   [[ -n $index ]] ||
     stop "This download has no list of Google's builds for the $NAME, and none could be" \
       "fetched from omamobile.org, so the installer can't tell which factory image" \
@@ -1051,29 +1069,222 @@ check_factory() {
     return 1
   fi
 }
-# take_factory: the file for the build in B, from --factory-zip, the
-# Downloads folder, or the owner after Google's page was opened. Sets zip,
-# or leaves it empty in a dry run that found no file.
-zip=""
+gb() { printf '%s' "$((($1 + 536870912) / 1073741824))"; }
+
+# Google's terms, before the installer downloads anything of Google's
+# (decided 2026-11-12, plan D2). Google's own sentences are quoted as
+# Google's, from its factory images page; what follows them is ours. Shown
+# once per build and recorded with the build and the time. Only a typed
+# "yes" accepts: anything else means the installer downloads nothing, and
+# the owner gets the file from Google's page (0 accepted, 1 not).
+google_terms() {
+  if [[ ${S[factory_terms]:-} == "accepted "*" for build ${B[build]}" ]]; then
+    note "Google's terms for this download were accepted earlier (${S[factory_terms]#accepted })"
+    return 0
+  fi
+  guide "The installer can download this file for you, straight from Google's server." \
+    "Google asks everyone who downloads it to agree to its terms first. On its page" \
+    "for these files, Google says:" \
+    "" \
+    "    \"Downloading of the system image and use of the device software is subject" \
+    "    to the Google Terms of Service\"" \
+    "        https://policies.google.com/terms" \
+    "    \"By continuing, you agree to the Google Terms of Service and Privacy Policy\"" \
+    "        https://policies.google.com/privacy" \
+    "    and that your download and use \"may also be subject to certain third-party" \
+    "    terms of service, which can be found in Settings > About phone > Legal" \
+    "    information\"" \
+    "" \
+    "In our own words: Google's page says these files are for use only on your own" \
+    "Pixel and may not be redistributed. So the installer downloads this one straight" \
+    "from Google to this computer, for this phone. Omarchy Mobile does not host" \
+    "Google's files and does not pass them on." \
+    "" \
+    "Google's page for this build, with the terms in full:" \
+    "    ${B[page]}" \
+    "The file: ${B[zip]} (about $(gb "${B[size]}") GB), from" \
+    "    ${B[url]}"
+  printf '\n'
+  ask "    Type yes to accept Google's terms and download the file, or press Enter to get it yourself from Google's page: "
+  [[ $REPLY == yes ]] || return 1
+  put factory_terms "accepted $(date -u +%Y-%m-%dT%H:%MZ) for build ${B[build]}"
+}
+
+# The one address the installer downloads Google's files from. The index's
+# entry is checked against it (tools/factory-index does too), and so is
+# every address Google's server sends the download on to: curl follows no
+# redirect by itself (--max-redirs 0), and one that leaves this host, or
+# https, is refused. Nothing after the host's "/" can name another host.
+GOOGLE_DL='^https://dl\.google\.com/[A-Za-z0-9._~%/?&=+:,;@!-]*$'
+# Where a downloaded factory image is kept: a folder of its own in the work
+# directory tools/install-phone uses (it touches only its own files there)
+fetch_dir() {
+  local work
+  work=$(pass_value --work) || work=${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-install
+  printf '%s' "$work/factory"
+}
+# fetch_run URL HAVE PART HEADERS: one request, appended to PART from byte
+# HAVE. Never more than the bytes still missing plus one are read: head
+# closes the pipe there, whatever the server's Content-Length says (and
+# --max-filesize refuses a larger Content-Length before the first byte).
+# curl's exit status goes to $scratch/curl.rc; call it with "|| true".
+fetch_run() {
+  local resume=()
+  (($2 == 0)) || resume=(-C "$2")
+  curl -f -# -L --max-redirs 0 --proto =https --proto-redir =https --connect-timeout 30 \
+    --speed-limit 1024 --speed-time 120 --max-filesize "${B[size]}" -D "$4" "${resume[@]}" "$1" |
+    head -c "$((B[size] - $2 + 1))" >> "$3"
+  printf '%s\n' "${PIPESTATUS[0]}" > "$scratch/curl.rc"
+}
+# can_fetch: whether the installer can offer the download at all, said
+# before Google's terms are shown: the index's address has to be on
+# Google's download host and end in the file's name
+can_fetch() {
+  if [[ -z ${B[url]:-} ]]; then
+    note "the list no longer names this build, so the installer can't download its file"
+  elif [[ ! ${B[url]} =~ $GOOGLE_DL || ${B[url]} != */"${B[zip]}" ]]; then
+    note "the list names no address on Google's server (https://dl.google.com/) for this file, so the installer can't download it"
+  elif ! command -v curl >/dev/null; then
+    note "this computer has no curl, so the installer can't download the file"
+  else
+    return 0
+  fi
+  return 1
+}
+# fetch_factory: downloads the file for the build in B into fetch_dir.
+# 0: there, whole, its SHA-256 the index's (sets zip). 1: not downloaded,
+# for a reason that the owner's own download can get past (said above); a
+# part that arrived is kept, and the next run goes on from it. A file that
+# is larger than the index says, or whose SHA-256 differs, is removed and
+# the install stops: nothing of it is used.
+fetch_factory() {
+  local url=${B[url]} dir part final have rc loc hops=0 sum
+  dir=$(fetch_dir) final=$dir/${B[zip]} part=$dir/${B[zip]}.part
+  (umask 077; mkdir -p "$dir"; [[ -e $part ]] || : > "$part")
+  chmod 600 "$part"
+  have=$(stat -c %s "$part")
+  if ((have > B[size])); then : > "$part"; have=0; fi
+  if ((have > 0)); then
+    note "going on with the download where it stopped: $have of ${B[size]} bytes are here"
+  else
+    note "downloading ${B[zip]} from Google (${B[size]} bytes, about $(gb "${B[size]}") GB)"
+  fi
+  while ((have < B[size])); do
+    : > "$scratch/dl.headers"
+    fetch_run "$url" "$have" "$part" "$scratch/dl.headers" || true
+    rc=$(cat "$scratch/curl.rc" 2>/dev/null || echo 1)
+    have=$(stat -c %s "$part")
+    case $rc in
+      0|23) break ;;   # 23: head closed the pipe at the size's end; judged below
+      47)
+        # Google's server sends the download on. curl followed nothing and
+        # kept nothing; the new address is judged here
+        loc=$(awk 'tolower($1) == "location:" { v = $2 } END { print v }' "$scratch/dl.headers" | tr -d '\r')
+        [[ $loc != /* || $loc == //* ]] || loc=https://dl.google.com$loc
+        hops=$((hops + 1))
+        if [[ ! $loc =~ $GOOGLE_DL ]] || ((hops > 5)); then
+          note "Google's server sent the download on to another address, and the installer only"
+          note "downloads from https://dl.google.com/: ${loc:-no address}"
+          note "Nothing was fetched from there."
+          return 1
+        fi
+        note "Google's server sent the download on to another address on the same host (curl's"
+        note "line above says it followed no redirect: the installer asks there itself): $loc"
+        url=$loc ;;
+      33)
+        : > "$part"
+        note "Google's server would not go on from where the download stopped. The part that"
+        note "was here is removed, and the next download starts from the first byte."
+        return 1 ;;
+      63) have=$((B[size] + 1)); break ;;
+      *)
+        note "The download stopped before the end (curl's message is above): $have of ${B[size]} bytes are here."
+        note "They are kept, and running this command again goes on from there."
+        return 1 ;;
+    esac
+  done
+  if ((have > B[size])); then
+    rm -f "$part"
+    stop "Google's server offered more than the ${B[size]} bytes the list names for" \
+      "${B[zip]}, so the installer stopped reading and removed" \
+      "what it had. Nothing of it was used." \
+      "Run this command again to try once more. If it happens again, the list or the" \
+      "download is wrong: open an issue, https://github.com/derekross/omarchy-mobile/issues" \
+      "You can also save the file yourself from Google's page (${B[page]})" \
+      "and give it with --factory-zip FILE; it is checked the same way."
+  fi
+  if ((have < B[size])); then
+    note "The download ended early: $have of ${B[size]} bytes are here."
+    note "They are kept, and running this command again goes on from there."
+    return 1
+  fi
+  # The whole file, from its first byte, however many runs it came in
+  note "checking the file (a few seconds)"
+  sum=$(sha256sum < "$part" | cut -d' ' -f1)
+  if [[ $sum != "${B[sha256]}" ]]; then
+    rm -f "$part"
+    stop "The file downloaded from Google is not the file the list names for build" \
+      "${B[build]}: its SHA-256 differs." \
+      "    expected:   ${B[sha256]}" \
+      "    downloaded: $sum" \
+      "It has been removed, and nothing of it was used." \
+      "Run this command again to download it again. If it differs again, the list or" \
+      "the download is wrong: open an issue, https://github.com/derekross/omarchy-mobile/issues" \
+      "You can also save the file yourself from Google's page (${B[page]})" \
+      "and give it with --factory-zip FILE; it is checked the same way."
+  fi
+  mv -f "$part" "$final"
+  zip=$final
+}
+# take_factory: the file for the build in B. A file the owner already has
+# is taken first (--factory-zip, or one with Google's name in the Downloads
+# folder), then one an earlier run downloaded. Otherwise the installer
+# shows Google's terms and, when the owner accepts them, downloads the file
+# from Google. When the owner doesn't accept, or the download can't be
+# made, the owner gets it from Google's page and the installer takes the
+# saved file. Sets zip and from, or leaves zip empty in a dry run that
+# found no file.
+zip="" from=""
 take_factory() {
-  local downloads
-  zip=""
+  local downloads kept
+  zip="" from="a file saved by the owner"
   downloads=$(xdg-user-dir DOWNLOAD 2>/dev/null || true)
   [[ -n $downloads && -d $downloads ]] || downloads=$HOME/Downloads
+  kept=$(fetch_dir)/${B[zip]}
   if [[ -n $factory_given ]]; then
     check_factory "$factory_given" || stop "The file given with --factory-zip can't be used (above)."
     zip=$(readlink -f "$factory_given")
   elif [[ -f $downloads/${B[zip]} ]] && check_factory "$downloads/${B[zip]}"; then
     zip=$downloads/${B[zip]}
     note "found it in $downloads"
+  elif [[ -f $kept ]] && check_factory "$kept"; then
+    zip=$kept from="downloaded from Google by the installer"
+    note "found the file an earlier run downloaded ($kept)"
   elif ((dry)); then
-    note "a dry run doesn't open Google's page; the install would open ${B[page]}"
-    note "and take ${B[zip]} from $downloads"
+    note "a dry run downloads nothing and opens no page. The install would show Google's terms and,"
+    note "once you accept them, download ${B[zip]}"
+    note "(${B[size]} bytes, about $(gb "${B[size]}") GB) from ${B[url]:-the page above}"
+    note "into $(fetch_dir); or take that file from $downloads or --factory-zip"
   else
+    if ! can_fetch; then
+      guide "You can get the file yourself from Google's page."
+    elif google_terms; then
+      if fetch_factory; then
+        from="downloaded from Google by the installer"
+        note "downloaded, and kept in $(fetch_dir)"
+        return 0
+      fi
+      guide "The installer could not download the file (above). You can get it yourself" \
+        "from Google's page now, or run this command again later to try the download" \
+        "again."
+    else
+      guide "Not accepted, so the installer downloads nothing. You can get the file yourself" \
+        "from Google's page, where Google shows its terms."
+    fi
     guide "The installer now opens Google's download page. On that page:" \
       "1. Accept Google's terms (the button at the bottom of their notice)." \
       "2. Find the row for build ${B[build]} in the list for \"$CODENAME\"." \
-      "3. Click \"Link\" in that row and save the file. It is about $(((B[size] + 536870912) / 1073741824)) GB:" \
+      "3. Click \"Link\" in that row and save the file. It is about $(gb "${B[size]}") GB:" \
       "   ${B[zip]}"
     printf '\n'
     ask "    Press Enter to open Google's page: "
@@ -1096,7 +1307,7 @@ take_factory() {
   [[ $zip != *$'\n'* ]] || die "the factory image's path has a line break in it"
 }
 step_factory() {
-  local k
+  local k out line
   if is_done factory; then
     if [[ -f ${S[factory_zip]:-} && $(stat -c %s "${S[factory_zip]}") == "${S[factory_size]:-}" ]]; then
       skip factory "taken earlier (build ${S[factory_build]:-}, ${S[factory_zip]})"
@@ -1110,12 +1321,22 @@ step_factory() {
     B[zip]=${B[name]}
     [[ ${B[sha256]} =~ ^[0-9a-f]{64}$ && ${B[size]} =~ ^[0-9]+$ && -n ${B[zip]} && ${B[page]} == https://developers.google.com/* ]] ||
       die "$state_file doesn't name the factory image (--start-over forgets it)"
+    # The download address is never the record's: it comes from the signed
+    # index, for the same build and the same file, or there is none and the
+    # owner's own download is the way
+    [[ -n $index ]] || find_index
+    if [[ -n $index && ${B[build]} =~ ^[A-Z0-9.]+$ ]] &&
+      out=$(index_tool entry --index "$index" --codename "$CODENAME" --build "${B[build]}" 2>/dev/null) &&
+      [[ $(sed -n 's/^sha256=//p' <<<"$out") == "${B[sha256]}" && $(sed -n 's/^zip=//p' <<<"$out") == "${B[zip]}" ]]; then
+      B[url]=$(sed -n 's/^url=//p' <<<"$out")
+    fi
   else
     title factory
     guide "The phone's Wi-Fi, Bluetooth, sound, camera and modem need files that only" \
       "Google may hand out. They are in Google's \"factory image\" for the phone." \
-      "Omarchy Mobile never ships them: you download the image from Google, and the" \
-      "installer copies what the phone needs out of it, on this computer."
+      "Omarchy Mobile never ships them and never hosts them: the image comes from" \
+      "Google's own server to this computer, and the installer copies what the phone" \
+      "needs out of it, here."
     printf '\n'
     # Step 3 found the build (judge_phone), before any unlock step was shown
     [[ -n ${B[build]:-} ]] || die "the phone step found no build for this phone"
@@ -1133,6 +1354,7 @@ step_factory() {
   put factory_size "${B[size]}"
   put factory_sha256 "${B[sha256]}"
   put factory_zip "$zip"
+  put factory_from "$from"
   put factory "done"
 }
 

@@ -12,8 +12,9 @@
 # with the same bootloader alone), and names the builds that share both; the
 # list is kept newest first by the date in the build id, whatever order the
 # builds are added in, and a list that isn't is refused; match says whether
-# an Android update would land on a tested build (the newest one); and sign
-# makes a detached signature gpg verifies.
+# an Android update would land on a tested build (the newest one); match and
+# entry name the build's address on Google's server, which is Google's or
+# the index is refused; and sign makes a detached signature gpg verifies.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -118,7 +119,13 @@ fx untested -d testdev AB1C.230101.001 >/dev/null
 fx tested -d testdev AB1C.230201.002 2026.11.08 >/dev/null
 grep -c 'tested with 2026.11.08' <<<"$(fx check -d testdev)" >/dev/null || fail "tested marks a build with its release"
 [[ $(m otherloader-2 testband-9.9-222) == match=none* ]] || fail "another bootloader matches nothing"
-! grep -c '^url=' <<<"$(m testloader-1.0-111 testband-9.9-222)" >/dev/null || fail "match doesn't hand out the download address"
+grep -cx "url=https://dl.google.com/dl/android/aosp/$(basename "$z1")" <<<"$(m testloader-1.0-111 testband-9.9-222)" >/dev/null || fail "match names the build's address on Google's server"
+! grep -c '^url=' <<<"$(m testloader-1.0-111 unknownband)" >/dev/null || fail "no address is named without an exact match"
+# entry: one build by its id, for an installer that recorded it
+out=$(fx entry --index "$idx" --codename testdev --build AB1C.230101.001) || fail "entry prints a build by its id"
+grep -cx 'build=AB1C.230101.001' <<<"$out" >/dev/null && grep -cx "sha256=$sum" <<<"$out" >/dev/null && grep -cx "zip=$(basename "$z1")" <<<"$out" >/dev/null &&
+  grep -cx "url=https://dl.google.com/dl/android/aosp/$(basename "$z1")" <<<"$out" >/dev/null || fail "entry names the file, its SHA-256 and its address"
+if fx entry --index "$idx" --codename testdev --build AB1C.990101.001 >/dev/null 2>&1; then fail "entry fails for a build the list doesn't have"; fi
 grep -cx 'builds=2' <<<"$(fx info --index "$idx" --codename testdev)" >/dev/null || fail "info counts the builds"
 grep -cx 'same_pair=' <<<"$(m testloader-1.0-111 testband-9.9-222)" >/dev/null || fail "a build alone with its versions shares them with none"
 ! grep -c 'share a bootloader' <<<"$(fx check -d testdev)" >/dev/null || fail "check notes nothing while every pair is one build's"

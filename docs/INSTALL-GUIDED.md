@@ -32,10 +32,16 @@ today's tools in turn. It adds no way to write a phone:
 - **It never sends `fastboot flashing unlock`** (decided 2026-11-10): it
   shows the command, and the owner types it. The unlock erases the phone,
   and no tool of ours sends a `flashing` command.
-- **It never downloads Google's factory image and never shows Google's
-  terms** (plan D2). It opens Google's page; the owner accepts the terms
-  there and saves the file; the installer takes the saved file and checks
-  its SHA-256 against the signed build index.
+- **It downloads Google's factory image for the owner, from Google's own
+  server, after the owner has accepted Google's terms in the installer**
+  (plan D2, re-decided 2026-11-12; §5b). The address comes from the signed
+  build index and is on `https://dl.google.com/`, the file's size and
+  SHA-256 are checked against the index before it is used, and it stays on
+  this computer. The project hosts none of Google's files and passes none
+  on. When the owner doesn't accept the terms here, when the download
+  can't be made, or with `--factory-zip FILE`, the earlier way is used:
+  Google's page is opened, the owner accepts the terms there and saves the
+  file, and the installer takes the saved file, checked the same way.
 - **After the write, every step is for the phone that was written.** Steps
   7 to 11 talk to whatever answers at the phone's USB address, so each
   first asks that phone which one it is (§3a) and stops unless it is the
@@ -55,7 +61,7 @@ phone.
 | 1 | Preflight | every program a later step runs (below), the SSH public key, free space (`INSTALL_FREE_GB`), the download through `install-phone --verify-only` (signature, checksums, `manifest.json`, root image) | nothing | nothing | always runs |
 | 2 | The warning | the release's label | nothing | `warning` (date, release) | skipped once acknowledged |
 | 3 | The phone | the build index, on every run; `fastboot devices`, `getvar all` (the model, the slots, the partition sizes, the bootloader and baseband) and the sizes of slot B's image files; then `get_unlock_ability`; `adb devices -l` | `adb reboot bootloader` after Enter | `phone` (SHA-256 of the serial) | runs until the phone is written; then skipped |
-| 4 | Factory image | the build step 3 found, the saved zip | opens Google's page | `factory_*` (build, its bootloader and baseband, name, page, size, SHA-256, path) | skipped while the file is there with its size; taken again from the record otherwise; forgotten at step 3 when the phone's bootloader or baseband are no longer the recorded ones (§2a) |
+| 4 | Factory image | the build step 3 found; a file the owner has (`--factory-zip`, Downloads) or one downloaded earlier | after `yes` to Google's terms, downloads the file from `https://dl.google.com/` into `<work>/factory/` (§5b); otherwise opens Google's page | `factory_terms` (time, build), `factory_*` (build, its bootloader and baseband, name, page, size, SHA-256, path, where it came from) | skipped while the file is there with its size; taken again from the record otherwise; forgotten at step 3 when the phone's bootloader or baseband are no longer the recorded ones (§2a) |
 | 5 | Write | whether anything answers at the phone's USB address; the owner's answers (memory only) | `install-phone --dry-run --serial S`, then `install-phone --serial S`: slot B and `userdata` | `write=started`, then `done` | skipped when `done`; `started` runs it again, whole |
 | 6 | USB connection | `phone-ssh true`, `nmcli connection show` | `nmcli connection add …` after Enter (§5a) | `network` | skipped |
 | 7 | First start | the phone: `/var/lib/omamobile/firstboot/done`, then which phone it is | nothing | `first_start` | waits again |
@@ -233,8 +239,10 @@ bootloader is locked."
   asked over SSH at the moment of the write, and it is passed by
   unplugging the other phone; it says nothing about the phone being
   installed.
-- **Google's factory image.** The owner saves it in step 4. A wrong or
-  partial file is asked for again and is never a stop.
+- **Google's factory image.** It is downloaded or handed in at step 4. A
+  wrong or partial file of the owner's is asked for again; a download
+  whose size or SHA-256 is wrong is removed and stops that run (§5b). None
+  of that says anything about the phone.
 - **What only happens later:** a write that fails, the first start, the
   radio backup, the firmware, the check.
 
@@ -282,7 +290,9 @@ factory_name=cheetah-cp2a.260705.006-factory-<8 hex>.zip
 factory_page=https://developers.google.com/android/images#cheetah
 factory_size=<bytes>
 factory_sha256=<64 hex>
-factory_zip=/home/alex/Downloads/cheetah-cp2a.260705.006-factory-<8 hex>.zip
+factory_terms=accepted 2026-11-15T14:05Z for build CP2A.260705.006
+factory_zip=/home/alex/.cache/omamobile-install/factory/cheetah-cp2a.260705.006-factory-<8 hex>.zip
+factory_from=downloaded from Google by the installer
 write=done
 network=done (added omamobile-phone)
 first_start=done
@@ -330,7 +340,9 @@ Beside it, `report.json` is the last `phone-smoke --json`.
 `install-phone --dry-run`, shows the connection it would add, and records
 nothing. A dry run reads the phone in Fastboot Mode (the three queries),
 sends nothing over adb or USB SSH, and looks for a newer build index on
-omamobile.org unless `--offline`.
+omamobile.org unless `--offline`. It shows no terms and downloads nothing
+of Google's: it says which file the install would download, its size and
+the address.
 
 ### 3a. Which phone answers
 
@@ -374,7 +386,8 @@ without changing anything.
 | 2 | `Type yes to go on, or press Enter to stop:` | `yes` only |
 | 3 | `Press Enter when that is done, to check the phone again:` | Enter |
 | 3 | `Press Enter to restart the phone into Fastboot Mode:` | Enter; then `adb reboot bootloader` |
-| 4 | `Press Enter to open Google's page:` | Enter |
+| 4 | `Type yes to accept Google's terms and download the file, or press Enter to get it yourself from Google's page:` | `yes` only: the terms are accepted and recorded, and the download starts; anything else downloads nothing and goes on to the next question. Asked once per build; not asked when the owner's file is already there |
+| 4 | `Press Enter to open Google's page:` | Enter; only when the terms weren't accepted here or the download couldn't be made |
 | 4 | `Press Enter when the download has finished, or type where you saved the file:` | Enter (looks in Downloads) or a path; asked again until the file's size and SHA-256 match |
 | 5 | `Your user name on the phone (lower-case, for example alex):` | `install-phone`'s `USERNAME_RE`, not reserved |
 | 5 | `A PIN or password to unlock the phone (digits only gives a PIN pad):` | not empty; not shown |
@@ -413,9 +426,39 @@ What this release lacks is a link, not text taken from the release notes:
 the notes' "Known issues" are written for developers, and a list for this
 screen needs writing first (§9).
 
-**On Google's page** (step 4) the installer says: accept Google's terms,
-find the row for the build, click "Link" and save the file, with the
-build id, the file's name and its size.
+**Google's terms** (step 4), shown before anything of Google's is
+downloaded, once per build. The three quoted sentences are Google's own,
+from its factory images page; the rest is ours:
+
+```
+The installer can download this file for you, straight from Google's server.
+Google asks everyone who downloads it to agree to its terms first. On its page
+for these files, Google says:
+
+    "Downloading of the system image and use of the device software is subject
+    to the Google Terms of Service"
+        https://policies.google.com/terms
+    "By continuing, you agree to the Google Terms of Service and Privacy Policy"
+        https://policies.google.com/privacy
+    and that your download and use "may also be subject to certain third-party
+    terms of service, which can be found in Settings > About phone > Legal
+    information"
+
+In our own words: Google's page says these files are for use only on your own
+Pixel and may not be redistributed. So the installer downloads this one straight
+from Google to this computer, for this phone. Omarchy Mobile does not host
+Google's files and does not pass them on.
+
+Google's page for this build, with the terms in full:
+    https://developers.google.com/android/images#<codename>
+The file: <codename>-<build>-factory-<8 hex>.zip (about <n> GB), from
+    https://dl.google.com/dl/android/aosp/<codename>-<build>-factory-<8 hex>.zip
+```
+
+**On Google's page** (step 4, when the terms weren't accepted in the
+installer or the download couldn't be made) the installer says: accept
+Google's terms, find the row for the build, click "Link" and save the
+file, with the build id, the file's name and its size.
 
 Every other message is in `tools/install-guided`; `tests/install-guided`
 checks that each question above is in this file.
@@ -454,8 +497,10 @@ checks that each question above is in this file.
   one. `match` reads "newer" and "newest" from the dates themselves, so
   neither depends on a position nobody kept. The assumption under it: for
   one phone, Google's build ids carry later dates for later builds.
-- **Metadata only.** `url` is recorded for the day D2 allows a download; the
-  installer never fetches it. `page` is what it opens.
+- **Metadata only.** `url` is the one address the installer downloads the
+  file from, after the owner has accepted Google's terms (§5b); `page` is
+  Google's page for the build, shown with the terms and opened for the
+  owner's own download.
 - **Read as data, every field against a pattern.** `url` must be on
   `dl.google.com` and end in the zip's name; `page` must be Google's factory
   images page; the zip's name must be `<codename>-<build>-factory-<8 hex>`
@@ -554,7 +599,7 @@ the bootloader and radio image names agree with them; and for one of the
 two the versions equal a saved `getvar all` of a phone on that build. Not
 checked: Google's page itself (the `#<codename>` anchor, the "Link"
 column) and the download address `https://dl.google.com/dl/android/aosp/<name>`,
-which were not fetched.
+which were not fetched (§5b lists what that leaves open for the download).
 
 ### 5a. The USB connection
 
@@ -637,6 +682,81 @@ at the lowest priority. A connection saved from the earlier guide keeps
 sharing until its owner replaces it; the installer leaves it alone and
 says what it is.
 
+### 5b. Downloading the factory image
+
+Decided 2026-11-12 (plan D2, which reverses the decision of 2026-11-10):
+the installer downloads Google's factory image on the owner's behalf, from
+Google's own server, once the owner has accepted Google's terms in the
+installer. Whether a third-party tool may present that acceptance is the
+project's own risk judgement, recorded as such in the plan. The project
+hosts none of Google's files, and no byte of them passes through a server
+of ours.
+
+- **What is tried first.** A file the owner already has: `--factory-zip
+  FILE`, or one with Google's name in the Downloads folder. Then a file an
+  earlier run downloaded (`<work>/factory/`). Each is checked by size and
+  SHA-256. None of these shows terms or downloads anything.
+- **The terms step** comes before any download (§4 has the text). It is
+  shown once per build; `yes` is recorded as `factory_terms=accepted <time>
+  for build <build>`, and a later run for the same build doesn't ask again.
+  Anything but a typed `yes` is not an acceptance: the installer downloads
+  nothing and goes on to the owner's own download from Google's page. An
+  answer that wasn't `yes` is not recorded, so the next run shows the terms
+  again.
+- **The address** comes only from the build index (`url`), never from the
+  record or the command line. It must be on `https://dl.google.com/` and
+  end in the file's name: `factory-index` refuses an index that names
+  another host, and the installer checks again before it shows the terms.
+  When a factory image that went missing is needed again after the write,
+  the address is looked up in the index by the recorded build
+  (`factory-index entry`), and used only if that entry still names the
+  recorded file and SHA-256.
+- **Redirects.** curl follows none by itself (`-L --max-redirs 0`, with
+  `--proto =https --proto-redir =https`): a redirect makes it stop without
+  keeping anything, and the installer reads the `Location` it was given.
+  One that stays on `https://dl.google.com/` is followed, by a new request,
+  at most five times. One to any other host or port, to plain `http`, or
+  to a look-alike name is refused, with the address shown, and nothing is
+  asked of that address. The installer then offers the owner's own
+  download.
+- **The size.** The index's `size` is the limit. curl is told it
+  (`--max-filesize`), and the body goes through `head -c`, which stops
+  reading one byte past what is still missing, whatever the server's
+  headers say. A body that runs past the size is removed and the run
+  stops.
+- **The SHA-256** is taken over the whole file, from its first byte, when
+  the last byte is there, however many runs the download took. A file
+  whose SHA-256 isn't the index's is removed, nothing of it is used, and
+  the run stops with both digests; the next run downloads again.
+- **An interrupted download** keeps what arrived (`<name>.part`), and the
+  next run goes on from there (curl's `-C <bytes>`, a `Range` request). A
+  server that won't resume makes the installer drop the part, and the run
+  after that starts from the first byte.
+- **Progress** is curl's own bar.
+- **Where it is kept:** `<work>/factory/<name>`, mode 600 in a folder of
+  mode 700 (`<work>` is `--work`, by default `~/.cache/omamobile-install`,
+  the folder `install-phone` uses for its own files and leaves the rest of
+  alone). The record names it (`factory_zip`, `factory_from`). It stays
+  after the install and after `--start-over`; step 9 checks its SHA-256
+  again before unpacking it.
+- **`--dry-run`** shows no terms and downloads nothing; it says which file
+  the install would download, its size in bytes and the address.
+- **When the download can't be made** (no curl, no address in the index,
+  a refused redirect, an HTTP error, a transfer that stops), the reason
+  is said, and the installer goes on to the owner's own download: Google's
+  page is opened, and the saved file is taken and checked.
+
+**Not verified against Google's server** (no test contacts Google, and
+nothing was fetched from it while this was built): that
+`https://dl.google.com/dl/android/aosp/<name>` answers a plain GET without
+a redirect to another host. Large downloads from that host are sometimes
+handed on to other hosts of Google's; if this one is, the installer
+refuses it by the rule above and every owner gets the fallback, and the
+rule has to be decided again with the hosts named. Also not verified: that
+the server honours `Range` (resume then starts over each time), that it
+sends a `Content-Length`, and how it answers many requests in a row. §8
+step 3a is the first real download.
+
 ## 6. Descriptor keys
 
 | Key | Example | Meaning |
@@ -665,7 +785,13 @@ size, a wrong `--bootloader-slots-match`, a repeated option); a phone swapped be
 Mode (both of the installer's checks and `install-phone --serial`);
 another phone at the USB address before the write; a stale record and
 another phone at each step after it; the index (both versions, marked
-tested, or a stop; "not tested yet" and an unlisted build, each with the
+tested, or a stop; the factory image downloaded from a stand-in server on
+the test's own computer through the real curl (the terms first and only
+`yes` accepting, a wrong SHA-256, an oversized body with and without a
+stated length, redirects within and away from Google's host, a resume by
+`Range`, a server that won't resume, a 404, a dry run), with the curl
+stand-in refusing every other address, Google's included; "not tested
+yet" and an unlisted build, each with the
 newest build tested (update advice) and not (told not to update, also with
 a tested build in between); an older tested build; a list that isn't
 newest first; and each for a locked phone) and the factory image; a failure at each step followed by a
@@ -702,6 +828,7 @@ against the current backup passes. Steps 0 and 1 change nothing.
 | 2 | `tools/install-guided --dry-run` with the phone in Fastboot Mode | the warning first; steps 1 to 5 pass; the `would run` lines are slot B's five images and `userdata`, each with `-s` and the phone's serial; the connection it would add is §5a's; "nothing was written" | any other partition in the plan; the phone step misreads the phone's state; it stops at the bootloader slots (expected on the 7 Pro until `install-phone` measures them: then this runbook waits for that, or the maintainer reads the other slot and passes `--bootloader-slots-match`) | none needed (read-only) | low |
 | 2a | only if a locked phone of the model is at hand (never lock a phone for this): `fastboot getvar all 2>&1 \| sed -E 's/:.*//' \| sort -u` on it and on an unlocked one, comparing the names only | the locked phone's names include `current-slot`, `version-baseband`, `version-bootloader` and `partition-size` | one is missing on the locked phone: §2a's order then stops every locked phone there; the stop has to change before a locked phone is installed | none needed (read-only) | none |
 | 3 | `tools/install-guided` (with `--reinstall` if the phone runs Omarchy Mobile) | the warning once; nothing answering at 172.16.42.1; the zip found in Downloads; the codename asked after the dry run; then the writes | `install-phone` stops: read its message, the phone stays in fastboot. "Something already answers at the phone's USB address": unplug the other phone | `fastboot --set-active=a`, as INSTALL.md | medium (erases `userdata`, as every install) |
+| 3a | at step 4 of that run, with no factory image in Downloads: read the terms step, type `yes`. This is the first real download from Google's server | the three quoted sentences are the ones on Google's page today; curl's progress bar; "downloaded, and kept in …"; the file is 600 under `~/.cache/omamobile-install/factory/`; `sha256sum` of it equals Google's page | "Google's server sent the download on to another address" (note the host it names: §5b's rule then needs deciding again); a size or SHA-256 stop; the sentences on Google's page differ from the quoted ones (the text has to change before anyone else sees it) | the file is only on the computer: delete it, or go on with the fallback (Google's page, `--factory-zip`) | low (nothing is sent to the phone) |
 | 4 | at the connection question, read the command and its description, press Enter. This is the first time this profile meets a real NetworkManager. On a computer that already has `omamobile-phone` saved the question doesn't come: to try the new profile there, `nmcli connection delete omamobile-phone` before step 3 | `nmcli connection show omamobile-phone` has `ipv4.method manual`, `ipv4.never-default yes`, priority -100; `nmcli device` shows it on the phone's link; the phone answers; `sysctl net.ipv4.ip_forward` and the firewall's rules are as before | another saved connection takes the phone's link (the phone then doesn't answer); this computer's network changes in any other way | `nmcli connection delete omamobile-phone` | low |
 | 5 | let it run: first start, backup, firmware | "the first start has finished" within minutes, with no internet on the phone but its Wi-Fi; `verified against the phone` per partition; each push `verified` | the first start doesn't finish and `/var/log/omamobile/firstboot.log` shows a step waiting for the network (§5a's reading is then wrong: say so, and the profile goes back to the maintainer); "is not the phone this install wrote" or "doesn't tell its serial number" (step 0 should have caught it); the backup names a writable or mounted partition; provisioning fails twice | rerun `tools/install-guided`; the backup only reads | low |
 | 6 | the restart and the check | the phone comes back; every required row `[ok]`; "Your phone is ready" | the phone doesn't come back in ten minutes (Power held 30 s); `journalctl -b -1 -u omamobile-modem` shows the modem was up and not stopped | rerun `tools/install-guided` (it only checks again) | low |
@@ -723,6 +850,12 @@ hardware address in them.
 
 ## 9. Open for the maintainer
 
+- **Google's server, for real.** §5b's download has only met a stand-in:
+  whether Google's host redirects to another host, honours `Range` and
+  states a length is unknown until §8 step 3a. And the three sentences
+  quoted as Google's were given by the maintainer on 2026-11-12, not read
+  from Google's page by this tool or its tests; they have to be compared
+  with the page before a release shows them.
 - **G4.** Decided (D4), not yet in `tools/install-phone`; see §2. When it
   lands, `install-phone` asks one more question in a first install, and
   the guided installer has to ask it and feed the answer; `slots_check`

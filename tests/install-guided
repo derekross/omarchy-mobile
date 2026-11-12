@@ -15,9 +15,14 @@
 # other than the one written; what each kind of stop says about the phone;
 # the warning, acknowledged once and recorded; the build index (the exact
 # build, marked tested, and no other; "not tested yet" for one that isn't; a published
-# index with a good and a bad signature) and the factory image taken from
-# the Downloads folder or a typed path, refused unless its size and SHA-256
-# are the index's, and never downloaded; the USB network connection shown
+# index with a good and a bad signature) and the factory image: downloaded
+# by the installer from a stand-in for Google's server on this computer
+# (Google's terms shown and accepted first, only "yes" accepting; the size
+# and SHA-256 checked; a wrong or oversized file removed; a redirect to
+# another host refused; an interrupted transfer resumed; nothing downloaded
+# in a dry run), or taken from the Downloads folder, a typed path or
+# --factory-zip, refused unless its size and SHA-256 are the index's. No
+# test contacts Google: the curl stand-in refuses. The USB network connection shown
 # before it is added, and only with consent; each later step; and a resume
 # after a failure at every step, which goes on from that step and repeats
 # no write, no connection, no backup, no provisioning and no restart.
@@ -31,7 +36,7 @@ pass() { printf 'ok - %s\n' "$1"; }
 # skipped every case here (as every run did while the workflow installed no
 # unzip) says nothing. Elsewhere the skip is said on both streams, with
 # what it leaves unchecked.
-for tool in debugfs mkfs.ext4 zstd openssl lz4 cpio gpg unzip python3; do
+for tool in debugfs mkfs.ext4 zstd openssl lz4 cpio gpg unzip python3 curl; do
   command -v $tool >/dev/null && continue
   if [[ -n ${CI:-}${GITHUB_ACTIONS:-} ]]; then
     echo "not ok - tests/install-guided can't run in CI: no $tool (add it to .github/workflows/checks.yml)" >&2
@@ -43,6 +48,7 @@ for tool in debugfs mkfs.ext4 zstd openssl lz4 cpio gpg unzip python3; do
 done
 t=$(mktemp -d)
 cleanup() {
+  [[ ! -f $t/dl/pid ]] || kill "$(cat "$t/dl/pid")" 2>/dev/null || true
   [[ ! -d $t/gnupg ]] || gpgconf --homedir "$t/gnupg" --kill gpg-agent 2>/dev/null || true
   [[ -n ${KEEP:-} ]] || rm -rf "$t"
 }
@@ -125,16 +131,127 @@ case $1 in
 esac
 EOF
 for c in ssh rsync; do printf '#!/bin/sh\necho "FORBIDDEN %s $*" >> "$T/events"\nexit 255\n' "$c" > "$t/bin/$c"; done
+# curl: omamobile.org's index is a file here. Google's download host is the
+# stand-in server on this computer (below), and only while it runs: the
+# installer's own command line is handed to the real curl with the host's
+# name swapped for the stand-in's address (and https for http, which is all
+# a local server speaks), and the address is swapped back in the headers
+# the installer reads. So the real curl's redirects, resume and limits are
+# what is tested, and no request can leave this computer: any other
+# address, and Google's when no stand-in runs, is refused here.
 cat > "$t/bin/curl" <<'EOF'
 #!/bin/bash
 echo "curl $*" >> "$T/events"
+args=("$@")
 url=${@: -1} out=""
 while (($#)); do [[ $1 == -o ]] && out=$2; shift; done
 case $url in
   */factory-builds.json) [[ -f $T/published.json ]] && cp "$T/published.json" "$out" || exit 22 ;;
   */factory-builds.json.sig) [[ -f $T/published.json.sig ]] && cp "$T/published.json.sig" "$out" || exit 22 ;;
+  https://dl.google.com/*)
+    port=$(cat "$T/dl/port" 2>/dev/null || true)
+    [[ -n $port && -e $T/dl/on ]] || { echo "FORBIDDEN curl $url (no stand-in for Google's server)" >> "$T/events"; exit 7; }
+    # What keeps the real download on Google's host and on https
+    for need in "--proto =https" "--proto-redir =https" "--max-redirs 0"; do
+      [[ " ${args[*]} " == *" $need "* ]] || { echo "FORBIDDEN curl to Google's host without $need" >> "$T/events"; exit 2; }
+    done
+    # With $T/dl/old-curl the size limit is not handed on, as a curl that
+    # doesn't enforce --max-filesize during a transfer would behave: the
+    # installer's own cap on the bytes it reads is then what is tested
+    new=() headers="" prev=""
+    for a in "${args[@]}"; do
+      [[ $prev != -D ]] || headers=$a
+      if [[ -e $T/dl/old-curl && ($a == --max-filesize || $prev == --max-filesize) ]]; then prev=$a; continue; fi
+      prev=$a
+      case $a in
+        =https) a="=http" ;;
+        https://dl.google.com/*) a=http://127.0.0.1:$port/${a#https://dl.google.com/} ;;
+      esac
+      new+=("$a")
+    done
+    rc=0
+    "$REAL_CURL" -q --noproxy '*' "${new[@]}" || rc=$?
+    [[ -z $headers || ! -f $headers ]] || sed -i "s|http://127.0.0.1:$port/|https://dl.google.com/|g" "$headers"
+    exit $rc ;;
   *) echo "FORBIDDEN curl $url" >> "$T/events"; exit 22 ;;
 esac
+EOF
+# The stand-in for Google's download server: it serves the file "$T/dl/body"
+# names at any path, with Range, and does what the files beside it say:
+#   redirect  answer 302 with this Location (PORT is its own port), except
+#             for paths under /moved/
+#   cut       send only this many bytes of the body, then close (once)
+#   nolength  send the body with no Content-Length, and log how much went
+#   norange   ignore Range
+# Every request is logged to "$T/dl/log" with its Range header.
+cat > "$t/dl-server.py" <<'EOF'
+import http.server, os, sys
+D = sys.argv[1]
+def ctl(name):
+    try:
+        return open(os.path.join(D, name)).read().strip()
+    except OSError:
+        return None
+def log(line):
+    with open(os.path.join(D, "log"), "a") as f:
+        f.write(line + "\n")
+class H(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def log_message(self, *a):
+        pass
+    def do_GET(self):
+        rng = self.headers.get("Range", "")
+        log("GET %s range=%s" % (self.path, rng))
+        to = ctl("redirect")
+        if to and not self.path.startswith("/moved/"):
+            body = b"this is not the file\n"
+            self.send_response(302)
+            self.send_header("Location", to.replace("PORT", str(self.server.server_port)))
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        path = ctl("body")
+        if not path or not os.path.isfile(path):
+            self.send_error(404)
+            return
+        data = open(path, "rb").read()
+        start = 0
+        if rng and ctl("norange") is None:
+            start = int(rng.split("=")[1].split("-")[0])
+            self.send_response(206)
+            self.send_header("Content-Range", "bytes %d-%d/%d" % (start, len(data) - 1, len(data)))
+        else:
+            self.send_response(200)
+        out = data[start:]
+        self.close_connection = True
+        if ctl("nolength") is not None:
+            self.send_header("Connection", "close")
+            self.end_headers()
+            sent = 0
+            try:
+                while sent < len(out):
+                    self.wfile.write(out[sent:sent + 65536])
+                    sent += 65536
+            except OSError:
+                pass
+            log("sent %d of %d" % (min(sent, len(out)), len(out)))
+            return
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        cut = ctl("cut")
+        if cut:
+            os.remove(os.path.join(D, "cut"))
+            out = out[:int(cut)]
+        try:
+            self.wfile.write(out)
+        except OSError:
+            pass
+s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+with open(os.path.join(D, "port.new"), "w") as f:
+    f.write(str(s.server_port))
+os.replace(os.path.join(D, "port.new"), os.path.join(D, "port"))
+s.serve_forever()
 EOF
 printf '#!/bin/sh\necho "xdg-open $*" >> "$T/events"\n' > "$t/bin/xdg-open"
 printf '#!/bin/sh\necho "$HOME/Downloads"\n' > "$t/bin/xdg-user-dir"
@@ -165,6 +282,7 @@ exit "$(cat "$T/smoke-rc")"
 EOF
 chmod +x "$t/bin/"* "$t/home/.cache/omamobile-venv/bin/python"
 BASE_PATH=$PATH
+REAL_CURL=$(command -v curl); export REAL_CURL
 export PATH="$t/bin:$t/extract-bin:$PATH"
 for c in fastboot adb nmcli ssh rsync curl xdg-open xdg-user-dir; do
   [[ $(command -v $c) == "$t/bin/$c" ]] || fail "the stand-in for $c is first on PATH"
@@ -273,6 +391,8 @@ fresh() {  # a phone in Fastboot Mode, unlocked, stock on slot A; nothing instal
   rm -rf "$STATE" "$t/home/omamobile-backup" "$t/home/Downloads/"* "$t/work"
   rm -f "$t"/fail-* "$t/no-firstboot" "$t/no-comeback" "$t/firstboot-done" "$t/published.json" "$t/published.json.sig"
   rm -f "$t/swap-after" "$t/fb-count" "$t/keep-ssh-down" "$t/ssh-slow"
+  rm -rf "$t/dl/on" "$t/dl/redirect" "$t/dl/cut" "$t/dl/nolength" "$t/dl/norange" "$t/dl/log" "$t/dl/old-curl"
+  [[ ! -d $t/dl ]] || echo "$t/factory.src" > "$t/dl/body"
   : > "$t/events"; : > "$t/nm-profiles"; : > "$t/adb-devices"; echo manual > "$t/nm-method"
   echo FAKE123 > "$t/fb-devices"; echo 1 > "$t/ability"; echo aaaa-0001 > "$t/boot-id"; touch "$t/ssh-down"
   ssh_phone FAKE123   # the phone that answers over USB is the one in Fastboot Mode
@@ -383,7 +503,7 @@ says "Your phone is ready, with 1 thing(s) not working" && says "or a fault" && 
   fail "a row that failed is counted, and not all put down to the release"
 [[ -f $STATE/report.json ]] || fail "the phone's report is kept"
 [[ $(events '^xdg-open') == 0 ]] || fail "Google's page isn't opened when the file is already in Downloads"
-[[ $(events 'dl.google.com') == 0 ]] || fail "the factory image is never downloaded"
+[[ $(events 'dl.google.com') == 0 ]] && ! says "Type yes to accept Google's terms" || fail "with the file already in Downloads, nothing is downloaded and no terms are asked"
 pass "a whole install: every step in order, one set of writes, the record private and free of secrets"
 
 cp "$t/events" "$t/events.finished"
@@ -708,18 +828,208 @@ fresh; rm "$t/home/Downloads/$zipname"
 head -c 3000 /dev/zero > "$t/home/Downloads/wrong.zip"       # the right size, other bytes
 head -c 100 "$t/factory.src" > "$t/home/Downloads/partial.zip"
 cp "$t/factory.src" "$t/elsewhere.zip"
-if guided "yes\n\n\n$t/home/Downloads/partial.zip\n$t/home/Downloads/wrong.zip\n"; then fail "no factory image, no install"; fi
+if guided "yes\n\n\n\n$t/home/Downloads/partial.zip\n$t/home/Downloads/wrong.zip\n"; then fail "no factory image, no install"; fi
 [[ $(events '^xdg-open https://developers.google.com/android/images#testdev$') == 1 ]] || fail "Google's page is opened, once, after Enter"
 says "Accept Google's terms" && says "build AB1C.230101.001" && says "$zipname" || fail "it says what to do on Google's page: the terms, the build, the file"
 says "isn't in $t/home/Downloads yet" && says "the download isn't complete" && says "is not the file Google publishes" ||
   fail "a missing, a partial and a wrong file are each refused, with the reason"
 [[ -z $(record factory) && -z $(writes) ]] || fail "without the right file nothing is recorded or written"
-[[ $(events 'dl.google.com') == 0 && $(events 'FORBIDDEN') == 0 ]] || fail "the installer never downloads the factory image"
-guided "\n$t/elsewhere.zip\n${OWNER}testdev\n\n" || fail "the install goes on with the right file, typed"
+[[ $(events 'dl.google.com') == 0 && $(events 'FORBIDDEN') == 0 ]] || fail "with Google's terms not accepted, the installer downloads nothing"
+says "Not accepted, so the installer downloads nothing." && [[ -z $(record factory_terms) ]] || fail "Enter at the terms: said plainly, and no acceptance recorded"
+guided "\n\n$t/elsewhere.zip\n${OWNER}testdev\n\n" || fail "the install goes on with the right file, typed"
+[[ $(grep -c "Type yes to accept Google's terms" "$t/out") == 1 ]] || fail "terms that weren't accepted are shown again on the next run"
+[[ $(record factory_from) == "a file saved by the owner" ]] || fail "the record says the file is one the owner saved"
 ! says "Type yes to go on" || fail "the warning isn't asked again"
 [[ $(record factory_zip) == "$t/elsewhere.zip" && $(record factory_sha256) == "$fsum" && $(record factory_build) == AB1C.230101.001 ]] || fail "the file, its SHA-256 and the build are recorded"
 once "after the factory image"
-pass "the factory image: Google's page opened, the saved file taken, refused unless size and SHA-256 match; resumes"
+pass "the factory image without accepting the terms: Google's page opened, the saved file taken, refused unless size and SHA-256 match; resumes"
+
+# --- The factory image, downloaded by the installer -------------------------------------
+# Decided 2026-11-12 (plan D2): the installer downloads Google's factory
+# image for the owner, from Google's own server, after showing Google's
+# terms. "Google's server" here is the stand-in on this computer; nothing
+# in this suite can reach Google (the curl stand-in refuses).
+mkdir -p "$t/dl"
+python3 -I "$t/dl-server.py" "$t/dl" >/dev/null 2>"$t/dl/err" &
+echo $! > "$t/dl/pid"
+for _ in $(seq 100); do [[ -s $t/dl/port ]] && break; sleep 0.1; done
+[[ -s $t/dl/port ]] || fail "the stand-in for Google's server starts"
+# nofile: a fresh install with no factory image on this computer, and the
+# stand-in server answering for Google's
+nofile() { fresh; rm "$t/home/Downloads/$zipname"; touch "$t/dl/on"; }
+dl_calls() { events '^curl .*https://dl\.google\.com/'; }
+KEPT=$t/work/factory/$zipname
+URL=https://dl.google.com/dl/android/aosp/$zipname
+
+nofile
+guided "yes\nyes\n${OWNER}testdev\n\n" || fail "an install that downloads the factory image succeeds"
+# Google's own sentences, as Google's, each with its address
+says "\"Downloading of the system image and use of the device software is subject" && says "to the Google Terms of Service\"" && says "https://policies.google.com/terms" &&
+  says "\"By continuing, you agree to the Google Terms of Service and Privacy Policy\"" && says "https://policies.google.com/privacy" &&
+  says "\"may also be subject to certain third-party" && says "terms of service, which can be found in Settings > About phone > Legal" && says "information\"" && says "Google says:" ||
+  fail "the terms step quotes Google's three sentences, with Google's addresses"
+says "In our own words: Google's page says these files are for use only on your own" && says "Pixel and may not be redistributed." &&
+  says "from Google to this computer, for this phone. Omarchy Mobile does not host" && says "Google's files and does not pass them on." ||
+  fail "the terms step says in our own words what Google's page asks, and that the project hosts and passes on nothing"
+says "https://developers.google.com/android/images#testdev" && says "$URL" && says "The file: $zipname" || fail "the terms step shows Google's page for the build, the file and where it comes from"
+[[ $(grep -n "Type yes to accept Google's terms and download the file" "$t/out" | cut -d: -f1) -lt $(grep -n "downloading $zipname from Google" "$t/out" | cut -d: -f1) ]] ||
+  fail "the terms are shown and accepted before the download starts"
+[[ $(dl_calls) == 1 ]] && grep -cFx "GET /dl/android/aosp/$zipname range=" "$t/dl/log" >/dev/null || fail "one request, for the address the index names"
+grep -c "^curl .*--max-redirs 0 .*--proto =https .*--proto-redir =https .*--max-filesize 3000 .* $URL\$" "$t/events" >/dev/null ||
+  { grep '^curl' "$t/events" >&2; fail "the download follows no redirect by itself, is https only, and is told the file's size"; }
+[[ -f $KEPT && ! -e $KEPT.part ]] && cmp -s "$KEPT" "$t/factory.src" || fail "the file is kept under the work directory, whole"
+[[ $(stat -c %a "$KEPT") == 600 && $(stat -c %a "$t/work/factory") == 700 ]] || fail "the downloaded file is the owner's alone (600, in a 700 folder)"
+[[ $(record factory_zip) == "$KEPT" && $(record factory_from) == "downloaded from Google by the installer" && $(record factory_sha256) == "$fsum" ]] || fail "the record names the downloaded file"
+[[ $(record factory_terms) =~ ^accepted\ 20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}Z\ for\ build\ AB1C\.230101\.001$ ]] || fail "the acceptance is recorded with the time and the build: $(record factory_terms)"
+[[ $(events '^xdg-open') == 0 ]] || fail "no page is opened when the installer downloads the file"
+grep -cFx "phone-provision -d testdev --first-install --nv-backup $(record backup_dir) $KEPT" "$t/events" >/dev/null || fail "the firmware comes from the downloaded file"
+once "with the factory image downloaded"
+pass "the factory image downloaded: Google's terms shown and accepted first, one https request to the index's address, the file checked, kept private and recorded"
+
+# Only a typed "yes" accepts: anything else is the owner's own download, never ours
+for answer in y Yes YES "yes please" no accept; do
+  nofile
+  if guided "yes\n$answer\n"; then fail "'$answer' at the terms doesn't go on by itself"; fi
+  says "Not accepted, so the installer downloads nothing." && says "Press Enter to open Google's page" || fail "'$answer' at the terms: not accepted, and the owner's own download is offered"
+  [[ $(dl_calls) == 0 && -z $(record factory_terms) && ! -e $t/work/factory ]] || fail "'$answer' at the terms: nothing downloaded, nothing recorded as accepted"
+done
+pass "the terms: only 'yes' accepts; anything else downloads nothing and falls back to Google's page"
+
+# A dry run downloads nothing, and says what the install would download
+nofile
+guided "yes\n${OWNER}" --dry-run || fail "a dry run without the factory image succeeds"
+says "a dry run downloads nothing and opens no page" && says "once you accept them, download $zipname" && says "(3000 bytes, about 0 GB) from $URL" ||
+  fail "a dry run says what it would download, its size and from where"
+! says "Type yes to accept Google's terms" && [[ $(dl_calls) == 0 && $(events '^xdg-open') == 0 && ! -e $t/work/factory && ! -e $STATE ]] ||
+  fail "a dry run asks no terms, downloads nothing, opens nothing and records nothing"
+pass "dry run: no terms, no download, and what the install would download"
+
+# A wrong file: removed, and the install stops
+nofile; head -c 3000 /dev/zero > "$t/wrong.bin"; echo "$t/wrong.bin" > "$t/dl/body"
+if guided "yes\nyes\n$REST"; then fail "a download whose SHA-256 differs stops the install"; fi
+says "The file downloaded from Google is not the file the list names for build" && says "AB1C.230101.001: its SHA-256 differs." && says "expected:   $fsum" &&
+  says "downloaded: $(sha256sum < "$t/wrong.bin" | cut -d' ' -f1)" && says "It has been removed, and nothing of it was used." || fail "a wrong download: said plainly, with both digests"
+[[ ! -e $KEPT && ! -e $KEPT.part && -z $(record factory) && -z $(writes) ]] && ! says "user name on the phone" && ! says "Press Enter to open Google's page" ||
+  fail "a wrong download is removed, and nothing goes on: no record, no question, no write"
+echo "$t/factory.src" > "$t/dl/body"
+guided "$REST" || fail "the next run downloads again and goes on"
+! says "Type yes to accept Google's terms" && says "Google's terms for this download were accepted earlier" || fail "terms accepted once are not asked again for the same build"
+once "after a wrong download"
+pass "a download with another SHA-256 is removed and stops the install; the terms are asked once"
+
+# More than the index's size: reading stops, whatever the server says
+nofile; head -c 5000 /dev/zero > "$t/big.bin"; echo "$t/big.bin" > "$t/dl/body"
+if guided "yes\nyes\n$REST"; then fail "a larger file than the list names stops the install"; fi
+says "Google's server offered more than the 3000 bytes the list names for" && says "stopped reading and removed" || fail "a larger file: said plainly"
+[[ ! -e $KEPT && ! -e $KEPT.part && -z $(record factory) && -z $(writes) ]] || fail "a larger file: nothing kept, recorded or written"
+nofile; head -c $((64 << 20)) /dev/zero > "$t/big.bin"; echo "$t/big.bin" > "$t/dl/body"; touch "$t/dl/nolength"
+if guided "yes\nyes\n$REST"; then fail "a body with no stated length that runs past the size stops the install"; fi
+says "Google's server offered more than the 3000 bytes" && [[ ! -e $KEPT && ! -e $KEPT.part && -z $(record factory) ]] || fail "an unannounced larger body: stopped, nothing kept"
+for _ in $(seq 50); do grep -c '^sent ' "$t/dl/log" >/dev/null && break; sleep 0.1; done
+sent=$(sed -n 's/^sent \([0-9]*\) of .*/\1/p' "$t/dl/log" | tail -1)
+[[ -n $sent ]] && ((sent < 64 << 20)) || fail "the installer stops reading past the size: the server got rid of $sent of $((64 << 20)) bytes"
+# The same with a curl that doesn't stop by itself: the installer's own cap
+# (one byte past what is missing) ends the reading
+nofile; touch "$t/dl/nolength" "$t/dl/old-curl"; echo "$t/big.bin" > "$t/dl/body"
+if guided "yes\nyes\n$REST"; then fail "a body that runs past the size stops the install, also when curl doesn't stop it"; fi
+says "Google's server offered more than the 3000 bytes" && [[ ! -e $KEPT && ! -e $KEPT.part && -z $(record factory) ]] || fail "past the size with a curl that reads on: stopped by the installer, nothing kept"
+for _ in $(seq 50); do grep -c '^sent ' "$t/dl/log" >/dev/null && break; sleep 0.1; done
+sent=$(sed -n 's/^sent \([0-9]*\) of .*/\1/p' "$t/dl/log" | tail -1)
+[[ -n $sent ]] && ((sent < 64 << 20)) || fail "the installer's own cap stops the reading: the server got rid of $sent of $((64 << 20)) bytes"
+rm -f "$t/big.bin"
+pass "a body larger than the index's size is not read to its end, and nothing of it is kept"
+
+# A redirect is never followed by curl. One that leaves Google's host, or
+# https, is refused; nothing is asked of the other address
+for to in "https://example.org/dl/$zipname" "http://dl.google.com/dl/$zipname" "https://dl.google.com.example.org/$zipname" "https://dl.google.com:8443/$zipname" \
+  "https://dl.google.com@example.org/$zipname" "//example.org/$zipname" "http://localhost:PORT/moved/$zipname"; do
+  nofile; echo "$to" > "$t/dl/redirect"
+  if guided "yes\nyes\n"; then fail "a redirect to $to doesn't go on by itself"; fi
+  says "Google's server sent the download on to another address, and the installer only" && says "downloads from https://dl.google.com/: ${to/PORT/$(cat "$t/dl/port")}" && says "Nothing was fetched from there." ||
+    fail "a redirect to $to: refused, and the address is named"
+  [[ $(grep -c '^curl ' "$t/events") == 2 && $(dl_calls) == 1 && $(events FORBIDDEN) == 0 ]] || { grep '^curl' "$t/events" >&2; fail "a redirect to $to: one request to Google's host and none anywhere else"; }
+  [[ $(grep -c '^GET ' "$t/dl/log") == 1 ]] || fail "a redirect to $to: the stand-in saw one request"
+  [[ ! -e $KEPT && $(stat -c %s "$KEPT.part") == 0 ]] || fail "a redirect to $to: the redirect's own body is not kept"
+  says "The installer could not download the file (above). You can get it yourself" && says "Press Enter to open Google's page" || fail "a redirect to $to: the owner's own download is offered"
+done
+# One that stays on https://dl.google.com/ is followed, by the installer, one step at a time
+for to in "/moved/$zipname" "http://127.0.0.1:PORT/moved/deeper/$zipname?from=test"; do   # the second reaches the installer as https://dl.google.com/moved/...
+  nofile; echo "$to" > "$t/dl/redirect"
+  guided "yes\nyes\n${OWNER}testdev\n\n" || fail "a redirect within Google's host ($to) is followed"
+  [[ $(dl_calls) == 2 ]] && grep -c "^curl .* https://dl\.google\.com/moved/" "$t/events" >/dev/null && cmp -s "$KEPT" "$t/factory.src" || fail "a redirect within Google's host: a second request, to the new address on the same host"
+done
+pass "redirects: curl follows none; another host, another port, plain http and a look-alike host are refused unasked; one within https://dl.google.com/ is followed"
+
+# An interrupted download goes on from where it stopped on the next run,
+# and the whole file is still hashed from its first byte
+nofile; echo 1000 > "$t/dl/cut"
+if guided "yes\nyes\n"; then fail "an interrupted download doesn't go on by itself"; fi
+says "The download stopped before the end" && says "1000 of 3000 bytes are here." && says "They are kept, and running this command again goes on from there." &&
+  says "The installer could not download the file (above). You can get it yourself" || fail "an interrupted download: said plainly, with both ways on"
+[[ $(stat -c %s "$KEPT.part") == 1000 && $(stat -c %a "$KEPT.part") == 600 && ! -e $KEPT && -z $(record factory) && -n $(record factory_terms) ]] ||
+  fail "an interrupted download: the part is kept, private, and nothing is recorded as taken"
+guided "${OWNER}testdev\n\n" || fail "the next run goes on with the download and finishes"
+says "going on with the download where it stopped: 1000 of 3000 bytes are here" && ! says "Type yes to accept Google's terms" || fail "the next run says it goes on, and asks no terms again"
+grep -cFx "GET /dl/android/aosp/$zipname range=bytes=1000-" "$t/dl/log" >/dev/null && [[ $(grep -c '^GET ' "$t/dl/log") == 2 ]] || { cat "$t/dl/log" >&2; fail "the second request asks for the rest only"; }
+cmp -s "$KEPT" "$t/factory.src" && [[ ! -e $KEPT.part ]] || fail "the two parts make the whole file"
+once "after an interrupted download"
+nofile; echo 1000 > "$t/dl/cut"
+if guided "yes\nyes\n"; then fail "an interrupted download doesn't go on by itself"; fi
+python3 -I -c 'import sys; f = open(sys.argv[1], "r+b"); b = f.read(1); f.seek(0); f.write(bytes([b[0] ^ 255]))' "$KEPT.part"   # the first byte, changed between the runs
+if guided "$REST"; then fail "a resumed download whose first part changed stops the install"; fi
+grep -cFx "GET /dl/android/aosp/$zipname range=bytes=1000-" "$t/dl/log" >/dev/null && says "its SHA-256 differs" && says "It has been removed" && [[ ! -e $KEPT && ! -e $KEPT.part && -z $(record factory) && -z $(writes) ]] ||
+  fail "a resumed download is hashed from its first byte: a changed first part is caught, and the file removed"
+# A server that won't resume: the part is dropped, and the next run starts over
+nofile; echo 1000 > "$t/dl/cut"
+if guided "yes\nyes\n"; then fail "an interrupted download doesn't go on by itself"; fi
+touch "$t/dl/norange"
+if guided ""; then fail "a download that can't be resumed doesn't go on by itself"; fi
+says "Google's server would not go on from where the download stopped" && [[ $(stat -c %s "$KEPT.part") == 0 ]] || fail "a server without resume: said plainly, the part dropped"
+rm "$t/dl/norange"
+guided "${OWNER}testdev\n\n" || fail "the run after that downloads from the first byte"
+cmp -s "$KEPT" "$t/factory.src" || fail "the file downloaded again is whole"
+pass "an interrupted download resumes on the next run (Range), is hashed whole, and starts over when the server won't resume"
+
+# When the download can't be made, the owner's own download is the way on
+nofile; echo "$t/no-such-file" > "$t/dl/body"   # the stand-in answers 404
+guided "yes\nyes\n\n$t/elsewhere.zip\n${OWNER}testdev\n\n" || fail "after a download that failed, the owner's own file is taken"
+says "The installer could not download the file (above). You can get it yourself" && [[ $(events '^xdg-open https://developers.google.com/android/images#testdev$') == 1 ]] ||
+  fail "a failed download falls back to Google's page"
+[[ $(record factory_zip) == "$t/elsewhere.zip" && $(record factory_from) == "a file saved by the owner" ]] || fail "the owner's file is the one recorded"
+# The address is the index's, and only Google's host: an index tool that
+# names another one gets no download and no terms screen that shows it
+cat > "$t/fi-other.py" <<EOF
+import re, subprocess, sys
+r = subprocess.run([sys.executable, "-I", "-B", "$R/tools/factory-index"] + sys.argv[1:], capture_output=True, text=True)
+sys.stdout.write(re.sub(r"(?m)^url=.*\$", "url=https://example.org/dl/android/aosp/$zipname", r.stdout))
+sys.stderr.write(r.stderr)
+sys.exit(r.returncode)
+EOF
+nofile
+if FACTORY_INDEX=$t/fi-other.py guided "yes\nyes\n"; then fail "an address that isn't on Google's host doesn't go on by itself"; fi
+says "the list names no address on Google's server (https://dl.google.com/) for this file" && ! says "Type yes to accept Google's terms" && ! says "example.org" &&
+  [[ $(grep -c '^curl ' "$t/events") == 1 && $(events FORBIDDEN) == 0 ]] || fail "an address on another host: no terms, no request, the owner's own download offered"
+# --factory-zip hands in a file: no terms, no download
+nofile
+guided "$ALL" --factory-zip "$t/factory.src" || fail "--factory-zip takes a file already saved"
+! says "Type yes to accept Google's terms" && [[ $(dl_calls) == 0 && $(events '^xdg-open') == 0 ]] || fail "--factory-zip: no terms, no download, no page"
+# A file the installer downloaded is found again after --start-over, with
+# nothing fetched a second time
+nofile
+if guided "yes\nyes\n"; then fail "setup: an install stopped after the download"; fi
+guided "" --start-over --status >/dev/null; : > "$t/events"; rm -f "$t/dl/log"
+guided "$ALL" || fail "an install after --start-over finishes"
+says "found the file an earlier run downloaded" && ! says "Type yes to accept Google's terms" && [[ $(dl_calls) == 0 && ! -e $t/dl/log ]] || fail "the file downloaded earlier is used again, checked, with no second download"
+# After the write, a file that went missing is downloaded again: the
+# address comes from the index (by the recorded build), never the record
+fresh; touch "$t/fail-provision"
+if guided "$ALL"; then fail "setup: failed provisioning stops the install"; fi
+rm "$t/fail-provision" "$t/home/Downloads/$zipname"; touch "$t/dl/on"
+echo "factory_url=https://example.org/$zipname" >> "$STATE/state"
+guided "yes\n" || fail "a factory image that went missing after the write is downloaded again"
+[[ $(dl_calls) == 1 && $(events 'example\.org') == 0 && $(record factory_zip) == "$KEPT" ]] || fail "the address is the index's for the recorded build, and the file is recorded"
+PROVISIONS=2 once "after downloading the factory image again"
+pass "the fallbacks: a failed download, an address that isn't Google's, --factory-zip, a file already downloaded, and a file gone after the write"
 
 fresh; rm "$t/home/Downloads/$zipname"
 guided "$ALL" --factory-zip "$t/factory.src" || fail "--factory-zip takes a file already saved"
@@ -1026,7 +1336,7 @@ rm "$t/fail-provision"; head -c 3000 /dev/zero > "$t/home/Downloads/$zipname"
 if guided ""; then fail "a factory image changed since it was checked is refused"; fi
 says "changed since it was checked" && [[ $(grep -c '^phone-provision' "$t/events") == 1 ]] || fail "a changed factory image is never handed to phone-provision"
 rm "$t/home/Downloads/$zipname"
-guided "\n$t/factory.src\n" || fail "the install takes the factory image again, without the phone in Fastboot Mode"
+guided "\n\n$t/factory.src\n" || fail "the install takes the factory image again, without the phone in Fastboot Mode"
 PROVISIONS=2 once "after taking the factory image again"
 pass "resume: a factory image that changed or went missing is refused and taken again"
 
@@ -1356,7 +1666,17 @@ code=$(grep -v '^[[:space:]]*#' tools/install-guided)
   fail "three fastboot calls (devices, getvar all, flashing get_unlock_ability), and the check that it is installed"
 [[ $(grep -cE '"\$FASTBOOT".* flashing ' <<<"$code") == 1 && $(grep -cE '"\$FASTBOOT" -s "\$serial" flashing get_unlock_ability' <<<"$code") == 1 ]] ||
   fail "the one flashing command is the read-only get_unlock_ability"
-! grep -nE '(curl|wget)[^#]*(B\[url\]|dl\.google)' <<<"$code" || fail "nothing fetches from Google's download host"
+# Google's host is reached from one place, by a curl that follows no
+# redirect by itself, speaks https only and is told the file's size; every
+# address is judged against one pattern, anchored on the host
+dl=$(grep -A1 -E '^[[:space:]]*curl -f -# ' <<<"$code" | tr -d '\\\n')
+[[ $(grep -cE '^[[:space:]]*curl -f -# ' <<<"$code") == 1 && $dl == *" -L --max-redirs 0 --proto =https --proto-redir =https "* && $dl == *' --max-filesize "${B[size]}" '* ]] ||
+  fail "one curl downloads from Google: no redirect followed, https only, the size given"
+[[ $(grep -cE '(^|[^a-z_])(curl|wget) -' <<<"$code") == 2 ]] || fail "curl is run from two places: the look for a newer index, and the download"
+! grep -E '(^|[^a-z_])curl -[^|]*' <<<"$code" | grep -E ' (-L|--location) ' | grep -v -- '--max-redirs 0' || fail "no curl follows redirects"
+grep -cFx "GOOGLE_DL='^https://dl\.google\.com/[A-Za-z0-9._~%/?&=+:,;@!-]*\$'" <<<"$code" >/dev/null || fail "the one pattern for Google's download host is anchored on https://dl.google.com/"
+[[ $(grep -c 'fetch_factory' <<<"$code") == 2 && $(grep -c 'google_terms' <<<"$code") == 2 ]] && grep -B3 'if fetch_factory; then' <<<"$code" | grep -c 'elif google_terms; then' >/dev/null ||
+  fail "the download has one caller, and it is reached only through the terms"
 [[ $(grep -c 'run_provision' <<<"$code") == 2 ]] || fail "one place knows phone-provision's command line, called once"
 ! grep -n 'Nothing is lost' <<<"$code" || fail "no stop carries a fixed reassurance"
 # tools/release's identifier scan reads every file of a bundle, and takes a
@@ -1365,7 +1685,7 @@ code=$(grep -v '^[[:space:]]*#' tools/install-guided)
 [[ $(grep -cE '^[[:space:]]*written_phone$' <<<"$code") == 6 ]] || fail "six places ask the phone which one it is: the first start, the backup, provisioning, the restart (before and after) and the check"
 [[ $(grep -c -- '--serial "\$serial"' <<<"$code") == 1 && $(grep -c 'bash "\$INSTALL_PHONE"' <<<"$code") == 2 ]] ||
   fail "install-phone is run from two places: the file check, and the one that always hands it the phone's serial"
-pass "install-guided: read-only fastboot only, no download of Google's image, one phone-provision call"
+pass "install-guided: read-only fastboot only, Google's image downloaded from one guarded place behind the terms, one phone-provision call"
 
 # What it shares with the other files stays the same as theirs
 nm=$(sed -n '/^nmcli connection add/,/[^\\]$/p' docs/INSTALL.md | tr -d '\\\n' | tr -s ' ')

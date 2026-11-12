@@ -7,9 +7,10 @@ docs/INSTALL-GUIDED.md §5).
 One file per device, device/<codename>/factory-builds.json. It holds
 metadata only, never a file of Google's: for each factory build its build
 id, the bootloader and baseband versions its android-info.txt requires, the
-zip's name, size and SHA-256, its address on Google's servers, the page the
-installer opens for the owner, and whether a release was tested with that
-build's firmware. A guided installer (plan M1) trusts the SHA-256 it finds
+zip's name, size and SHA-256, its address on Google's servers (an installer
+downloads from it only after the owner has accepted Google's terms), Google's
+page for the build, and whether a release was tested with that build's
+firmware. A guided installer (plan M1) trusts the SHA-256 it finds
 here (tools/install-guided), so it reads the index only from a source the
 release key signed: a bundle's copy covered by the signed SHA256SUMS, or a
 published copy with a detached signature.
@@ -28,6 +29,8 @@ For an installer (the reader; it needs no repository):
       versions (carrier variants do); the first of them marked tested is
       printed (the first in the file when none is), and the others are named
       in  same_pair=BUILD,BUILD
+      url=  is that build's address on Google's server, which an installer
+      downloads from only after the owner has accepted Google's terms.
       With or without a match,  newest=BUILD  is the newest build in the
       list and  newest_tested=true  or false says whether an Android update
       would land on a tested build: true only when every build of the newest
@@ -37,6 +40,10 @@ For an installer (the reader; it needs no repository):
       isn't tested,  newer_tested=BUILD  names the newest tested build that
       is newer than every build the phone may be running (by the date in
       the build id), or is empty
+  factory-index entry --index FILE --codename C --build BUILD
+      prints one build by its id, as match prints a match (for an installer
+      that recorded the build and needs its file again); fails when the
+      list no longer has it
 
 The list is newest first, by the date in the build id (the six digits of
 CP2A.260705.006): add puts a build where its date belongs, and every reader
@@ -313,7 +320,7 @@ def cmd_info(a):
 
 
 def print_build(b):
-    for key in ("build", "bootloader", "baseband", "zip", "page", "sha256", "size"):
+    for key in ("build", "bootloader", "baseband", "zip", "url", "page", "sha256", "size"):
         print("%s=%s" % (key, b[key]))
     print("tested=" + ("true" if b["tested"] else "false"))
 
@@ -352,6 +359,15 @@ def cmd_match(a):
         newer = "" if b["tested"] else next(
             (o["build"] for o in idx["builds"] if o["tested"] and build_date(o) > latest), "")
         print("newer_tested=" + newer)
+
+
+def cmd_entry(a):
+    path, codename = index_path(a)
+    idx = load(path, codename)
+    hit = [b for b in idx["builds"] if b["build"] == a.build]
+    if not hit:
+        die("%s is not in %s" % (a.build, path))
+    print_build(hit[0])
 
 
 def cmd_sign(a):
@@ -397,6 +413,9 @@ def main():
     p.add_argument("--bootloader", required=True)
     p.add_argument("--baseband", required=True)
     p.set_defaults(fn=cmd_match)
+    p = sub.add_parser("entry"); where(p)
+    p.add_argument("--build", required=True)
+    p.set_defaults(fn=cmd_entry)
     p = sub.add_parser("sign"); where(p); p.add_argument("--out"); p.set_defaults(fn=cmd_sign)
     a = ap.parse_args()
     if getattr(a, "tested", None) and a.cmd == "add":
