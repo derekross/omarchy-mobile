@@ -96,8 +96,18 @@ Details that matter:
   again, offers two safe ways on (the next release, or an issue) and
   prints no option and no command: `--bootloader-slots-match VERSION`
   stays an option of the tool, for a version someone has read from the
-  phone, and the stop doesn't hand it out. `slots_check` is the one
-  function to change when `install-phone` measures.
+  phone, and the stop doesn't hand it out. A version given with the option
+  is compared with the phone's `version-bootloader` at step 3, as
+  `install-phone` compares it at the write: one that differs stops a
+  locked phone before the unlock steps, naming both, and not after the
+  unlock has erased it. `slots_check` is the one function to change when
+  `install-phone` measures.
+- **An option that takes a value is given once** (`--images`,
+  `--bootloader-slots-match`, `--work`, `--rootfs`, `--device`,
+  `--factory-zip`, `--ssh-key`, `--backup-dir`, `--state`); a second one is
+  refused before anything is looked at. `install-phone` takes the last of
+  two, so with two `--images` the early check of slot B's files (§2a, 6)
+  read one folder and the write would have used the other.
 - **Step 5** first looks whether anything already answers at the phone's
   USB address: the phone being installed is in Fastboot Mode and can't, so
   whatever does is another phone, and the install stops until it is
@@ -167,7 +177,9 @@ goes on):
 3. it is the phone the record was started on;
 4. it doesn't run from slot B (unless `--reinstall`);
 5. the two bootloader slots: both versions reported and equal (reported
-   and different stops; one reported stops, G4 below);
+   and different stops; one reported stops, G4 above, and with
+   `--bootloader-slots-match VERSION` it stops unless VERSION is the
+   phone's `version-bootloader`);
 6. each of slot B's image files fits the partition it is written to
    (`partition-size`), and an image with an AVB footer (`AVB_FOOTERS`) is
    made for exactly that size;

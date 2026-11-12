@@ -291,7 +291,7 @@ guided() {
     PHONE_SSH="$t/bin/phone" NV_BACKUP="$t/bin/nv-backup" PHONE_PROVISION="$t/bin/phone-provision" \
     PHONE_SMOKE="$t/bin/phone-smoke" INSTALL_POLL="${POLL:-1}" INSTALL_WAIT_FIRST_START="${WAIT_FIRST:-2}" INSTALL_WAIT_RESTART=2 \
     INSTALL_WAIT_SETTLE=2 INSTALL_WAIT_FASTBOOT=2 \
-    bash "${INSTALLER:-$R/tools/install-guided}" --device testdev --images "$t/images" --work "$t/work" "$@" > "$t/out" 2>&1
+    bash "${INSTALLER:-$R/tools/install-guided}" $([[ -n ${INSTALLER_ARGS_ONLY:-} ]] || printf '%s ' --device testdev --images "$t/images" --work "$t/work") "$@" > "$t/out" 2>&1
 }
 events() { grep -c -- "$1" "$t/events" || true; }
 says() { grep -cF -- "$1" "$t/out" >/dev/null; }
@@ -494,6 +494,16 @@ fresh; vars no b
 locked_stop "Android on slot B" "running from its second system copy (slot B)"
 fresh; SLOTS="" vars no
 locked_stop "one bootloader version only" "only tells the version of the copy"
+# The option that vouches for the other slot is compared with the phone
+# here, not only by install-phone after the unlock
+fresh; SLOTS="" vars no
+LOCKED_ARGS="--bootloader-slots-match wrongloader-9" locked_stop "a --bootloader-slots-match that isn't the phone's version" "copy in use has another version:"
+says "given with the option: wrongloader-9" && says "the phone reports:     $BL" && says "If the version was mistyped" && ! says "Run this command again to go on" ||
+  fail "a wrong --bootloader-slots-match: both versions named, and what to do in either case"
+fresh; SLOTS="" vars
+if guided "$ALL" --bootloader-slots-match wrongloader-9; then fail "an unlocked phone with a wrong --bootloader-slots-match stops"; fi
+says "copy in use has another version:" && ! says "user name on the phone" && ! says "The dry run stopped" && [[ -z $(writes) ]] ||
+  fail "a wrong --bootloader-slots-match on an unlocked phone: stopped at the phone step, before the owner's questions and install-phone"
 fresh; SLOTS=$'version-bootloader-a:testloader-1.0-111\nversion-bootloader-b:testloader-0.9-000' vars no
 locked_stop "two different bootloaders" "on this phone they differ"
 says "slot A: testloader-1.0-111" && says "slot B: testloader-0.9-000" && says "running it again will stop here again" && ! says "Run this command again to go on" ||
@@ -528,6 +538,20 @@ fresh; sed -i 's/^partition-size:dtbo_b:.*/partition-size:dtbo_b: 0x4/' "$t/vars
 if guided "$ALL"; then fail "an unlocked phone with a file that doesn't fit stops"; fi
 says "This download doesn't fit this phone" && ! says "Google's factory image for this phone" && [[ -z $(writes) ]] ||
   fail "a file that doesn't fit: stopped at the phone step, before the factory image is asked for"
+# An option with a value is given once, so the early check of slot B's
+# files and install-phone read the same folder. Here the second folder's
+# dtbo is too large for its partition: with two folders accepted, the early
+# check read the first and install-phone would have written from the last
+fresh; vars no; mkdir -p "$t/images2"; cp "$t/images/"* "$t/images2/"; head -c $((0x1000001)) /dev/zero > "$t/images2/dtbo.img"
+if guided "yes\n\n" --images "$t/images2"; then fail "--images given twice is refused"; fi
+says "--images is given twice: give it once" && ! says "fastboot flashing unlock" && [[ $(events '^fastboot') == 0 ]] ||
+  fail "--images twice: refused before the phone is looked for, and no unlock step is shown"
+if guided "yes\n\n" --bootloader-slots-match "$BL" --bootloader-slots-match other-1; then fail "--bootloader-slots-match given twice is refused"; fi
+says "--bootloader-slots-match is given twice" || fail "two versions for the other slot: refused, since nobody can tell which was read"
+INSTALLER_ARGS_ONLY=1 guided "yes\n\n" --device testdev --work "$t/work" --images "$t/images2" && fail "a locked phone stops the install" || true
+says "This download doesn't fit this phone" && says "dtbo.img" && ! says "fastboot flashing unlock" ||
+  fail "the one --images folder is the one the early fit check reads"
+rm -rf "$t/images2"
 # A locked phone that passes every check is shown the unlock steps, after
 # the checks; and a dry run judges the same way
 fresh; vars no

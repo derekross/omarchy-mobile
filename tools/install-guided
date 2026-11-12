@@ -76,6 +76,7 @@
 #                      passed to tools/install-phone (see its --help)
 #     --device CODENAME, --images DIR, --rootfs FILE
 #                      repository mode only, passed to tools/install-phone
+#   An option that takes a value is given once; a second one is refused.
 #
 # Test seams: FASTBOOT, ADB, PHONE_SSH (the command that runs a command on
 # the phone, default tools/phone-ssh), INSTALL_PHONE, NV_BACKUP,
@@ -154,8 +155,16 @@ ask_secret() {
 
 dry=0 status_only=0 start_over=0 offline=0 factory_given="" key_file="" backup_parent="" state_dir=""
 device="" pass=()
+# An option that takes a value is given once: with two, the installer's own
+# early checks and tools/install-phone (which takes the last) could read
+# different values, and for a version that someone read from the phone
+# there is no telling which of the two was read
+declare -A given=()
 while (($#)); do
   case $1 in
+    --factory-zip|--ssh-key|--backup-dir|--state|--bootloader-slots-match|--work|--images|--rootfs|--device)
+      [[ -z ${given[$1]:-} ]] || die "$1 is given twice: give it once"
+      given[$1]=1 ;;&
     --dry-run) dry=1 ;;
     --status) status_only=1 ;;
     --start-over) start_over=1 ;;
@@ -173,6 +182,14 @@ while (($#)); do
   shift
 done
 has_pass() { local a; for a in "${pass[@]}"; do [[ $a == "$1" ]] && return 0; done; return 1; }
+# pass_value OPTION: the value handed on to tools/install-phone with it
+pass_value() {
+  local i
+  for ((i = 0; i + 1 < ${#pass[@]}; i++)); do
+    [[ ${pass[i]} != "$1" ]] || { printf '%s' "${pass[i + 1]}"; return 0; }
+  done
+  return 1
+}
 
 # --- Where things are: a release bundle, or this repository ------------------
 if [[ -f $here/device.conf && -d $here/images ]]; then
@@ -197,11 +214,11 @@ fi
 [[ -f $conf ]] || die "no device descriptor $conf"
 # The images written to slot B, where tools/install-phone looks for them
 images_dir() {
-  local i base
+  local base
   if [[ $mode == bundle ]]; then printf '%s' "$here/images"; return 0; fi
-  for ((i = 0; i + 1 < ${#pass[@]}; i++)); do
-    [[ ${pass[i]} != --images ]] || { printf '%s' "${pass[i + 1]}"; return 0; }
-  done
+  # The one --images there can be (a second is refused), so this is the
+  # folder tools/install-phone writes from
+  ! pass_value --images || return 0
   base=${KERNEL_BASE:-$HOME/omamobile-kernel}
   [[ -n ${KERNEL_BASE:-} || -d $base || ! -d $HOME/android/mainline ]] || base=$HOME/android/mainline
   printf '%s' "${KERNEL_OUT:-$base/out-int}/images"
@@ -688,8 +705,11 @@ phone_checks() {
 # to --bootloader-slots-match is a statement that someone read it from the
 # phone. This function is the one place to change when install-phone
 # measures: the stop then goes, for first installs.
+# The option's value is compared with the phone here, as tools/install-phone
+# compares it at the write: a wrong one must stop a locked phone before the
+# unlock steps, not after the unlock has erased it.
 slots_check() {
-  local bl bl_a bl_b
+  local bl bl_a bl_b said
   bl=$(var version-bootloader)
   bl_a=$(sed -nE 's/^version-bootloader[-_:]a:[ ]*//p' <<<"$vars" | head -1)
   bl_b=$(sed -nE 's/^version-bootloader[-_:]b:[ ]*//p' <<<"$vars" | head -1)
@@ -707,7 +727,21 @@ slots_check() {
       "phone together with you:" \
       "https://github.com/derekross/omarchy-mobile/issues"
   fi
-  ! has_pass --bootloader-slots-match || return 0
+  if said=$(pass_value --bootloader-slots-match); then
+    [[ $said != "$bl" ]] || return 0
+    stop_final "The option --bootloader-slots-match says which bootloader version was read from" \
+      "this phone's other system copy, and that it is the same as the copy in use. The" \
+      "copy in use has another version:" \
+      "    given with the option: $said" \
+      "    the phone reports:     $bl" \
+      "" \
+      "If the version was mistyped, run this again with the version that was read." \
+      "If $said is what was read from the other copy, the two copies" \
+      "differ, and Omarchy Mobile can't be installed on this phone as it is. Don't" \
+      "write a bootloader by hand: a wrong one can leave the phone unable to start." \
+      "Ask in an issue, and we will find the safe way for this phone together with you:" \
+      "https://github.com/derekross/omarchy-mobile/issues"
+  fi
   stop_final "The phone keeps two copies of its system (slot A and slot B), each with its own" \
     "bootloader. Omarchy Mobile starts from slot B, so slot B's bootloader has to be" \
     "the same version as slot A's, and this phone only tells the version of the copy" \
