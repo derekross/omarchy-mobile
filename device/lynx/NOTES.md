@@ -37,8 +37,9 @@ same-moment table still has to be captured.
 
 
 Stock Android on 11-06 was a deliberate restore, not a fallback: the
-factory images were flashed to slot B and Android booted from it. No
-radio work followed, so no fresh `persist`/`efs` backup was needed.
+factory images were flashed to slot B and Android booted from it. Stock
+rewrites `efs`, `persist` and `modem_userdata`, so a fresh read-only
+backup is required before any radio work.
 
 ## 2026-10-30: published kernel on an Android 15 unit; devinfo 3.11
 
