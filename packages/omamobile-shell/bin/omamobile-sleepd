@@ -243,13 +243,7 @@ watch() {
         request "$cause"
       fi
     fi
-    # Asked to sleep and not yet seen to wake: every 0.2 s. The phone freezes
-    # this loop mid-pause while it sleeps, and the pause's clock doesn't count
-    # the sleep, so a 2 s pause left up to 2 s between a power-key wake and the
-    # lit lock screen (Ángel, 6-nov: slow to light after a while off). Only
-    # until a retry is due, so a refused sleep doesn't keep it spinning. With
-    # the power key as Android's (OMAMOBILE_POWER_KEY_ANDROID=1, omamobile-keys).
-    if [[ ${OMAMOBILE_POWER_KEY_ANDROID:-} == 1 ]] && ((requested >= 0 && t - requested < retry)); then pause 0.2; else pause "$poll"; fi
+    pause "$poll"
   done
 }
 

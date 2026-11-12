@@ -1142,8 +1142,7 @@ sys.exit(1 if bad else 0)
 PY
 pass "Mobile network page"
 bash -n bin/omamobile-sleepd || fail "omamobile-sleepd parses"
-env -u OMAMOBILE_POWER_KEY_ANDROID bash test/sleepd.sh || fail "omamobile-sleepd"
-OMAMOBILE_POWER_KEY_ANDROID=1 bash test/sleepd.sh || fail "omamobile-sleepd, with the power key as Android's"
+bash test/sleepd.sh || fail "omamobile-sleepd"
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-doubletap || fail "omamobile-doubletap parses"
 python3 -B test/doubletap.py >/dev/null || { python3 -B test/doubletap.py | grep -v '^ok'; fail "omamobile-doubletap"; }
 pass "omamobile-doubletap: double taps and the touchscreen by its capabilities"
