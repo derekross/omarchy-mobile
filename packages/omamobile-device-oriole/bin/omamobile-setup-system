@@ -1,0 +1,18 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Oriole's system setup: locale and time only, with no hardware services.
+set -euo pipefail
+
+[[ $(id -u) == 0 ]] || { echo "Run as root" >&2; exit 1; }
+if [[ -n ${1:-} ]]; then
+  [[ $1 =~ ^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$ && $1 != *..* &&
+     -f /usr/share/zoneinfo/$1 ]] || { echo "Invalid time zone" >&2; exit 1; }
+fi
+
+sed -i 's/^#\(en_US.UTF-8 UTF-8\)/\1/' /etc/locale.gen
+locale-gen >/dev/null
+printf 'LANG=en_US.UTF-8\n' > /etc/locale.conf
+if [[ -n ${1:-} ]]; then
+  ln -sfn "/usr/share/zoneinfo/$1" /etc/localtime
+fi
+systemctl enable systemd-timesyncd.service >/dev/null

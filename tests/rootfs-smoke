@@ -26,7 +26,7 @@ if [[ $img == *.zst ]]; then
 fi
 d() { debugfs -R "$1" "$img" 2>/dev/null; }
 cat_() { d "cat $1"; }
-exists() { d "stat $1" | grep -q '^Inode:'; }
+exists() { d "stat $1" | grep -c '^Inode:' >/dev/null; }
 
 [[ $(dumpe2fs -h "$img" 2>/dev/null | sed -n 's/^Filesystem volume name: *//p') == omamobile-root ]] || fail "label omamobile-root"
 pass "ext4, label omamobile-root"
@@ -34,7 +34,7 @@ pass "ext4, label omamobile-root"
 passwd=$(cat_ /etc/passwd)
 grep -q '^root:' <<<"$passwd" || fail "/etc/passwd readable"
 grep -q '^alarm:' <<<"$passwd" && fail "no alarm account"
-awk -F: '$3 >= 1000 && $3 != 65534' <<<"$passwd" | grep -q . && fail "no user account"
+awk -F: '$3 >= 1000 && $3 != 65534' <<<"$passwd" | grep -c . >/dev/null && fail "no user account"
 [[ $(cat_ /etc/shadow | awk -F: '$1 == "root" {print substr($2, 1, 1)}') == '!' ]] || fail "root is locked"
 pass "no account but root, and root is locked"
 
@@ -66,8 +66,8 @@ exists /usr/bin/omamobile-firstboot || fail "omamobile-firstboot installed"
 exists /usr/lib/systemd/system/multi-user.target.wants/omamobile-firstboot.service || fail "the first-boot unit is enabled"
 exists /etc/omamobile/firstboot.conf && fail "no firstboot.conf in the image (the installer writes it)"
 for unit in sshd NetworkManager systemd-networkd sddm; do
-  d "ls -l /etc/systemd/system/multi-user.target.wants" | grep -q "$unit.service" ||
-    d "ls -l /etc/systemd/system" | grep -q "display-manager.service" || fail "$unit enabled"
+  d "ls -l /etc/systemd/system/multi-user.target.wants" | grep -c "$unit.service" >/dev/null ||
+    d "ls -l /etc/systemd/system" | grep -c "display-manager.service" >/dev/null || fail "$unit enabled"
 done
 pass "first boot unit, sshd, NetworkManager, networkd and SDDM enabled"
 
@@ -127,16 +127,16 @@ fi
 # MODEM-PLAN M4.6's step (each boot powers the modem, each reboot costs one
 # recovered UFS error-handler pass), never the image's.
 for unit in omamobile-modem omamobile-sitd omamobile-sit-data omamobile-mmd; do
-  d "ls -l /etc/systemd/system/multi-user.target.wants" | grep -q "$unit\.service" && fail "$unit is not enabled in the image"
-  d "ls -l /etc/systemd/system/omamobile-sitd.service.wants" | grep -q "$unit\.service" && fail "$unit is not enabled in the image"
+  d "ls -l /etc/systemd/system/multi-user.target.wants" | grep -c "$unit\.service" >/dev/null && fail "$unit is not enabled in the image"
+  d "ls -l /etc/systemd/system/omamobile-sitd.service.wants" | grep -c "$unit\.service" >/dev/null && fail "$unit is not enabled in the image"
 done
 pass "no modem unit enabled at boot"
 
 exists /etc/pacman.d/gnupg && fail "no pacman keyring (it holds a private key)"
-d "ls /etc/ssh" | grep -q ssh_host_ && fail "no SSH host keys"
+d "ls /etc/ssh" | grep -c ssh_host_ >/dev/null && fail "no SSH host keys"
 [[ $(cat_ /etc/machine-id) == uninitialized ]] || fail "machine id uninitialized"
 exists /root/.ssh && fail "no root SSH keys"
-d "ls -p /etc/NetworkManager/system-connections" | grep -q 'nmconnection' && fail "no Wi-Fi connections"
+d "ls -p /etc/NetworkManager/system-connections" | grep -c 'nmconnection' >/dev/null && fail "no Wi-Fi connections"
 pass "no per-machine state: keyring, host keys, machine id, SSH keys, Wi-Fi"
 
 for p in /usr/lib/firmware/updates /usr/lib/omamobile-fp/root /usr/lib/omamobile-vendor/gnss/root \

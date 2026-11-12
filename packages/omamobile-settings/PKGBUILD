@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+pkgname=omamobile-settings
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Native mobile Settings framework and device information"
+arch=(aarch64 x86_64)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+depends=(omarchy bash brightnessctl python qt6-base qt6-declarative qt6-svg)
+makedepends=(gcc make)
+checkdepends=(dbus python)
+
+build() { "$startdir/bin/build"; }
+check() { "$startdir/test/all"; }
+package() { "$startdir/install" "$pkgdir"; }

@@ -1,0 +1,21 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Modem link bring-up, stage S1, never default (device/husky/
+ * MODEM-PLAN.md): turns on the modem PCIe controller node
+ * (pcie_0, ch0) and its PHY (pcie_0_phy) and nothing else. The `modem`
+ * child stays disabled, so the controller driver takes no modem line, and
+ * the pins are not touched (pcie_0 has only an "active" pinctrl state, which
+ * only link_up selects). Both drivers only map their registers at probe.
+ * The controller module is blacklisted and loaded by hand after the boot.
+ * The modem power lines are not described as enabled anywhere in this file.
+ */
+/dts-v1/;
+/plugin/;
+
+&pcie_0_phy {
+	status = "okay";
+};
+
+&pcie_0 {
+	status = "okay";
+};

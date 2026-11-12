@@ -13,6 +13,126 @@ hash/build ID; this dirty release is not a published kernel package.
 `[V]` marks verified observations; `[I]` marks an inference still to test.
 Raw captures, recordings, backups and vendor files remain off repository.
 
+## 2026-11-08: swap on zram
+
+Kernel `7.3.0-rc6-omamobile-push1-ge8d722982099`, a local build, with the
+zram options of `kernel/configs/omamobile.config` (set in the device's
+`kernel.config` for the test). They build only modules, so `zram.ko` and
+`zsmalloc.ko` went onto the running release with `bin/omamobile
+modules-push`, without a new boot image. Omarchy 4.0.6 on the phone.
+
+- [V] **Before:** no swap (`CONFIG_ZRAM` not set; Omarchy 4.0.6 ships no
+  zram-generator on aarch64). A `cargo build` of squeekboard on the phone,
+  next to Brave and the shell, left 177 MB available: memory PSI `full`
+  about 50 %, load 13, the session stuttering and SSH timing out in the
+  banner exchange. The OOM killer ended `rustc` (1.2 GB anonymous), and
+  systemd stopped the app scope it ran in, the terminal with it.
+- [V] **Setup**, as a newer Omarchy does it on aarch64 (Omarchy v4.5.0):
+  `zram-generator` 1.2.1 from Arch, Omarchy's `90-omarchy.conf` (zstd,
+  `swap-priority = 100`) and the `vm.*` lines of its
+  `99-omarchy-sysctl.conf` (`swappiness=150`, `vfs_cache_pressure=50`,
+  `page-cluster=0`, the watermark and dirty settings). zram-generator
+  loads the module itself.
+- [V] **`zram-size = ram / 2` (3.6 GB), 5 GB more allocated** on top of
+  about 4 GB in use: no OOM kill, PSI `full` peaked at 32 % and fell below
+  10 %, and SSH answered throughout. zram held 3.2 GB in 1.7 GB; the test
+  data compresses about 2:1, ordinary app memory closer to 3:1.
+- [V] **`zram-size = ram` (Omarchy's default, 7.3 GB), 6 GB more
+  allocated:** the phone stopped answering, ping included, and came back
+  after a restart about six minutes later. The journal has no oops or
+  panic and no OOM kill for this run; its last lines are the CP's PCIe
+  link going down and brcmfmac failing to allocate RX buffers. [I] RAM ran
+  out before zram filled, and reclaim spun instead of killing. Not a
+  like-for-like comparison (5 GB against 6 GB), so this says only that a
+  RAM-sized zram is not a safe default here yet.
+- [V] **Stock Android on the 9a** (BP3A.250905.014 vendor image):
+  `vendor.zram.size=50p` selects `fstab.zram.50p` (`zramsize=50%`, plus a
+  1 GB `zram_backingdev_size` writeback file for idle pages), started at
+  `sys.boot_completed` by `init.zumapro.board.rc` with `page-cluster 0`;
+  no swap partition.
+- [V] **After the hang:** `tools/nv-backup -d tegu --check`: every NV
+  partition the same. `omamobile-tegu-modem-boot` refused to start (its
+  latch for a boot that didn't shut down cleanly), as designed; the modem
+  came up ONLINE once the logs were read and the latch removed.
+- **By hand, until the image ships it:** build with the options, install
+  `zram-generator`, put `[zram0]` with `zram-size = ram / 2`,
+  `compression-algorithm = zstd` and `swap-priority = 100` in
+  `/etc/systemd/zram-generator.conf`, then `systemctl daemon-reload` and
+  `systemctl start systemd-zram-setup@zram0.service`. `zramctl` and
+  `swapon --show` show it. Resize only while it is empty: stopping the unit
+  removes `/dev/zram0`, and `cat /sys/class/zram-control/hot_add` brings
+  it back.
+
+## 2026-11-07: the main camera's autofocus (LC898129)
+
+Kernel `7.3.0-rc6-omamobile-push1-gd00d9fd2272f`, a local build: `omamobile`
+with kernel #178, #103 and #164's camera device tree merged, the lc898129
+driver ([kernel #213](https://github.com/derekross/linux-omarchy-mobile/pull/213)) and a lens node for it (below).
+
+- [V] **The controller:** the main module's focus and OIS controller is an
+  onsemi LC898129 at `0x24` on the main camera's bus (`hsi2c_5`, i2c-3),
+  stock's `act-nessie` / `ois-nessie`. 16-bit register addresses, 32-bit
+  big-endian values. It shares the sensor's supplies and reset and NACKs
+  unless the sensor is powered (a read while the camera is stopped gives
+  ENXIO or a timeout).
+- [V] **Where the register map comes from:** no public datasheet or driver
+  for the part. The register numbers and the form of a move came from
+  disassembling the LC898129 actuator code in Google's camera HAL,
+  `liblyric_hwl.so` in the `com.google.pixel.camera.hal` APEX on the vendor
+  partition of factory image BP3A.250905.014: it reads `0xf010` and
+  `0x0548` and writes `0xf01a` as `0x0002` in the upper half and the
+  target in the lower. No code was copied. What the registers do, the
+  usable range and the direction below were measured on the phone.
+- [V] **What was written while working it out:** only `0xf01a`, always
+  `0x0002` in the upper half, with lower halves from 0 to 32000 (those
+  above 4095 are the tries with the upper bits set). Every other access
+  was a register read (the two-byte address, then a 4-byte read):
+  `0x0000`, `0xf010`, `0xf01a`, `0xf01f`, `0xe00d`, `0xf000`, `0xf001`,
+  `0xf008`, `0xf00a`, `0xf100`, `0x0538` and `0x0548`. Finding the
+  address took only read probes: `i2cdetect -r` on the bus and a read of
+  `0x0000` at four other candidate addresses. The module's calibration
+  EEPROM, which stock puts at the same address, was never written, and
+  the driver writes only `0xf01a`.
+- [V] **Its focus registers:** after power-up it reads `0xf010` = 7 (servo
+  on) and `0xf01a` = `0x00000fff` (focus target). Writing `0x0002xxxx` to
+  `0xf01a` moves the lens. The corrected Hall position at `0x0548` (upper
+  16 bits, signed) is `0xc005 + 8 * (target & 0xfff)`: linear from -16379
+  at 0 to 16381 at 4095, the same up and down. Targets with bits above the
+  low 12 also changed the framing and sharpness in ways that don't follow
+  the Hall position, so the driver never sets them.
+- [V] **Direction:** sweeping 0-4095 with a can at about 25 cm, sharpness
+  rose steadily towards 0 and fell towards 4095; the picture before the
+  first write matched 4095. So 0 is the near end and 4095 the far end
+  [I: the far end not yet checked on a distant scene].
+- [V] **The driver:** `lc898129` ([kernel #213](https://github.com/derekross/linux-omarchy-mobile/pull/213)) is a V4L2 lens subdev,
+  `V4L2_CID_FOCUS_ABSOLUTE` 0-4095 with higher values closer (it writes
+  4095 minus the value). The `s5kgn1` driver powers it through
+  `lens-focus` while streaming, as for the 7 Pro's SEM1215SA. The node:
+
+  ```dts
+  main_lens: lens@24 {
+  	compatible = "onnn,lc898129";
+  	reg = <0x24>;
+  	vio-supply = <&cam_1v8>;
+  };
+  ```
+
+  with `lens-focus = <&main_lens>;` in `cam_main`. It isn't in #164; it
+  can go there or follow it.
+- [V] **Autofocus in omacam:** the phone ran libcamera 0.7.2-4.22 with the
+  `Af` lines added by hand to its S5KGN8 tuning file, the same lines
+  0.7.2-4.23's 0057 adds. libcamera's contrast autofocus scans and settles
+  on the can in a little over a second, and a full-size photo (3000x3992)
+  is sharp on it.
+- [V] **2026-11-08, the driver as reviewed** (supplies `vio`, `vm`,
+  `vdda`; kernel `7.3.0-rc6-omamobile-push1-ge8d722982099`, `lc898129.c`
+  blob `50cce3a5f4c0`, the kernel #213 head): while the main camera
+  streams, `focus_absolute` 0, 1024, 2048, 3072, 4095, 2048, 0 settles at
+  Hall 16371, 8179, -7, -8197, -16383, -4, 16369, and the lens is
+  runtime-suspended after the stream. libcamera's autofocus (still
+  4.22 with the lines by hand) sweeps 8 coarse steps over the range,
+  then finely around the peak, and settles there.
+
 ## 2026-11-03: the radio backup check with tools/nv-backup
 
 - [V] **NV partitions unchanged (`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`):**

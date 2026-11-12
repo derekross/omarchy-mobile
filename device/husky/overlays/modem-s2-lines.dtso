@@ -1,0 +1,24 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Modem link bring-up, stage S2, never default (device/husky/
+ * MODEM-PLAN.md): S1 (pcie_0 and pcie_0_phy) plus the `modem`
+ * child of pcie_0, so the controller driver requests the eleven modem lines
+ * as the bootloader left them (GPIOD_ASIS: no direction or level change at
+ * probe). Only the debugfs `status` file reads them. There is no cpif node
+ * (samsung,exynos-cp) in the tree, so cpif and shm_ipc cannot bind and must
+ * not be loaded. No pin state is selected and no line is driven by hand.
+ */
+/dts-v1/;
+/plugin/;
+
+&pcie_0_phy {
+	status = "okay";
+};
+
+&pcie_0 {
+	status = "okay";
+
+	modem {
+		status = "okay";
+	};
+};

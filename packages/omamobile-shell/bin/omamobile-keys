@@ -16,6 +16,12 @@
 #   power + volume down together: screenshot (Omarchy's, full screen)
 #   wake                omamobile-sleepd, after Power woke the phone from
 #                       sleep: the PIN pad, as the lost press would have
+#   double-tap          omamobile-doubletap, after a double tap on the
+#                       touchscreen: a dark screen wakes as a short press
+#                       wakes it (locked or not); a lit one is left alone
+#   dark-unlocked       omamobile-doubletap, when the screen has gone dark
+#                       while unlocked: it locks, so a dark phone is a
+#                       locked one, as on Android
 #   volume down alone   lowers the volume after a 0.15 s wait for power
 #   volume up           raises the volume
 #   power + volume up held together, when turned on in the voice settings
@@ -34,7 +40,13 @@ set -u
 state="${XDG_RUNTIME_DIR:-/tmp}/omamobile-keys"
 mkdir -p "$state"
 
-now() { date +%s%3N; }
+# Milliseconds, from date's whole seconds and nanoseconds. Not the three-digit
+# form of %N (a 3 between the percent sign and the N; test/keys.sh refuses it):
+# uutils' date (0.10.0, the build machine's) drops the nanoseconds' leading
+# zeros before it takes three digits, so 3 ms into a second reads as 365, one
+# reading in ten is wrong by up to 900 ms, and a wait measured with it can end
+# early. %N is nine digits on both.
+now() { local t; t=$(date +%s%N); echo $((t / 1000000)); }
 
 # Keys count as pressed together within this many milliseconds.
 window=500
@@ -98,6 +110,19 @@ wake_locked() {
   [[ $(brightnessctl -d "$device" get 2>/dev/null || echo 1) -gt 0 ]] || brightnessctl -q -d "$device" set 40%
 }
 
+# Light an unlocked but dark display (the lock didn't engage, or the panel
+# was powered off by hand). A saved brightness of 0 would wake to a black
+# panel.
+wake_unlocked() {
+  omarchy-brightness-display on
+  local device
+  device=$(omarchy-hw-display 2>/dev/null)
+  sleep 0.3
+  if [[ -n $device ]]; then
+    [[ $(brightnessctl -d "$device" get 2>/dev/null || echo 1) -gt 0 ]] || brightnessctl -q -d "$device" set 40%
+  fi
+}
+
 # The panel is off when its backlight's bl_power says so (4), or when Hyprland
 # has the display powered off: on tegu a DPMS-off panel keeps bl_power at 0,
 # and judging by bl_power alone made every Power press lock a dark phone
@@ -155,13 +180,51 @@ long_press() {
   fi
 }
 
+# omarchy-brightness-display off only asks Hyprland to switch the display off.
+# Hyprland reports it off at once (dpmsStatus), but the panel itself goes off
+# only when the compositor commits it, 0.3 s later on the Pixel 8 Pro
+# (measured: dpmsStatus false at +0.09 s, bl_power 4 and the DRM connector's
+# dpms Off at +0.35 s), and where bl_power is not writable by the user the panel
+# follows only then. Put the brightness back before that and the panel shows
+# the lock screen for an instant at full brightness, then goes black.
+# So wait for what the panel reports: the backlight's bl_power, or a connected
+# internal connector's dpms; Hyprland's answer only on a machine with neither.
+# panel_dark takes the backlight device name (may be empty).
+panel_dark() {
+  local sys=${OMAMOBILE_KEYS_SYSFS:-/sys} device=$1 f source=
+  if [[ -n $device && -r $sys/class/backlight/$device/bl_power ]]; then
+    source=1
+    [[ $(<"$sys/class/backlight/$device/bl_power") != 0 ]] && return 0
+  fi
+  for f in "$sys"/class/drm/card*-{DSI,eDP,LVDS}-*; do
+    [[ -r $f/dpms && -r $f/status && $(<"$f/status") == connected ]] || continue
+    source=1
+    [[ $(<"$f/dpms") == Off ]] && return 0
+  done
+  [[ -z $source ]] && screen_off
+}
+
+# At most 1 s by the clock (the panel took 0.35 s on the Pixel 8 Pro), so a
+# compositor that never answers cannot hold the key handler. Milliseconds from
+# `now`, not bash's microsecond clock variable: that one is written with the
+# locale's decimal separator, and under a comma locale the arithmetic breaks.
+wait_screen_off() {
+  local end
+  end=$(( $(now) + 1000 ))
+  while (( $(now) < end )); do
+    panel_dark "$1" && return 0
+    sleep 0.05
+  done
+  return 0
+}
+
 short_press() {
   # Debounce: a second press within 0.8 s of the first, while it was still
   # locking and powering the panel off, read the screen as on and saved a
   # brightness of 0, which left the phone dark on the next wake. A press a
   # few seconds later must still count: it is the wake.
   local now last
-  now=$(date +%s%3N); last=$(cat "$state/last-press" 2>/dev/null || echo 0)
+  now=$1; last=$(cat "$state/last-press" 2>/dev/null || echo 0)
   echo "$now" >"$state/last-press"
   (( now - last < 800 )) && return 0
   # The press that woke the phone from sleep, if it gets here at all:
@@ -180,14 +243,7 @@ short_press() {
   elif screen_off; then
     # Unlocked but dark (the lock didn't engage, or the panel was powered
     # off by hand): a press wakes it instead of locking into the dark again.
-    omarchy-brightness-display on
-    local device
-    device=$(omarchy-hw-display 2>/dev/null)
-    # A saved brightness of 0 would wake to a black panel.
-    sleep 0.3
-    if [[ -n $device ]]; then
-      [[ $(brightnessctl -d "$device" get 2>/dev/null || echo 1) -gt 0 ]] || brightnessctl -q -d "$device" set 40%
-    fi
+    wake_unlocked
   else
     # Dark at once, as on Android, but only by the backlight: Omarchy's lock
     # waits for a working screen ("screen-stabilizing"), so powering the panel
@@ -208,7 +264,8 @@ short_press() {
     lock_dark
     omarchy-brightness-display off
     # The brightness the next wake lights up with: the saved level, or 40 % when
-    # the press caught the panel at 0.
+    # the press caught the panel at 0. Only once the panel is really off.
+    wait_screen_off "$device"
     if [[ -n $device ]]; then
       [[ -n $level ]] && brightnessctl -q -d "$device" set "$level" || brightnessctl -q -d "$device" set 40%
     fi
@@ -300,7 +357,17 @@ case "${1:-}" in
     elif [[ -f $state/long ]]; then
       rm -f "$state/long"
     else
-      short_press
+      # Let a second press observe the finished off transition before it
+      # decides whether to wake. Keep the lock out of background helpers.
+      released_at=$(now)
+      exec {short_lock}>"$state/short.lock"
+      # A stuck action must not queue every later press forever. Drop this
+      # press after five seconds rather than overlap display transitions.
+      if ! flock -w 5 "$short_lock"; then
+        echo 'omamobile-keys: short-press lock wait failed; dropping press' >&2
+        exit 0
+      fi
+      ( short_press "$released_at" ) {short_lock}>&-
     fi
     ;;
   wake)
@@ -309,8 +376,27 @@ case "${1:-}" in
     now >"$state/power-wake"
     if locked && screen_off; then wake_locked; fi
     ;;
+  double-tap)
+    # omamobile-doubletap: a double tap on the touchscreen. Only a dark
+    # screen wakes; the lock ignores touches while dark (patches/omarchy/0029),
+    # so this is the double tap's only wake, and it lights the panel too.
+    screen_off || exit 0
+    if locked; then wake_locked; else wake_unlocked; fi
+    ;;
+  dark-unlocked)
+    # omamobile-doubletap: the screen went dark while unlocked (an idle
+    # blank, or the panel powered off by hand). Hyprland sends a touch to the
+    # window under it whatever the screen's state, so a tap on a dark
+    # unlocked phone reached an app no one could see. As on Android, a dark
+    # phone is a locked one: lock now, behind the dark panel, and the lock's
+    # surface takes those touches (derekross/omarchy-mobile#420's review).
+    locked && exit 0
+    screen_off || exit 0
+    omarchy-system-lock
+    lock_dark
+    ;;
   *)
-    echo "Usage: omamobile-keys power-down|power-up|volume-down|volume-up|volume-up-release|wake" >&2
+    echo "Usage: omamobile-keys power-down|power-up|volume-down|volume-up|volume-up-release|wake|double-tap|dark-unlocked" >&2
     exit 1
     ;;
 esac
