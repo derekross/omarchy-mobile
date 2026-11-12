@@ -17,6 +17,8 @@
 #                    run the PKGBUILDs' check() under emulation instead of the
 #                    package's test/all natively on this laptop (the default:
 #                    the tests are the same, and some time out under qemu)
+#                    A package whose test/host-tools names a command this
+#                    machine lacks runs its check() in the container anyway
 #     --import DIR   copy prebuilt *.pkg.tar.{zst,xz} from DIR into the repository
 #                    (for example Mesa from an earlier build), then sign it
 #     --list         print what would be built and what is up to date
@@ -32,8 +34,8 @@
 #                    carries the local key. Never the maintainer's keys/ or
 #                    out/repo
 #
-# Upstream packages pinned in rootfs/packages.pinned (Omarchy 4.0.6 while our
-# patches don't apply to 4.5) are added by every maintainer's run: fetched
+# Upstream packages pinned in rootfs/packages.pinned (the Omarchy version
+# our patches were checked against) are added by every maintainer's run: fetched
 # once, checked against the SHA-256 listed there, and signed with the release
 # key like our own; out/repo keeps them, and a line removed there takes its
 # package out at the next run. A --local repository gets them from
@@ -368,8 +370,22 @@ for dir in "${build[@]}"; do
   out=$work/out && mkdir -p "$out"
   incheck=0
   if ((nocheck == 0)); then
+    # test/host-tools names the commands a package's test/all needs beyond
+    # a shell (Settings compiles its tests with Qt's qmake6). A builder
+    # without one of them, such as the publish machine on Ubuntu, runs that
+    # package's check() in the container, where its dependencies are
+    # installed, instead of failing the whole run
+    lacking=
+    if [[ -f $dir/test/host-tools ]]; then
+      for tool in $(grep -v '^#' "$dir/test/host-tools"); do
+        command -v "$tool" >/dev/null 2>&1 || lacking+=" $tool"
+      done
+    fi
     if ((container_check)) || [[ ! -x $dir/test/all ]]; then
       incheck=1
+    elif [[ -n $lacking ]]; then
+      incheck=1
+      echo "    this machine lacks$lacking: check() runs in the container"
     else
       "$dir/test/all" > "$work/test.log" 2>&1 || { tail -20 "$work/test.log"; rm -rf "$work"; alarm_die "$name: test/all failed"; }
       echo "    test/all passed ($(grep -c '^ok' "$work/test.log") checks, natively)"

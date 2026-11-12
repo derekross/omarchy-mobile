@@ -24,11 +24,19 @@ for good in 'x | grep -c y >/dev/null' 'x || grep -q y f' 'grep -q y <<<"$x"'; d
   grep -cE "$pattern" <<<"$good" >/dev/null && fail "the pattern leaves '$good' alone"
 done
 
-mapfile -t scripts < <({ git grep -l 'set -[a-z]*o pipefail' -- tests 'packages/*/test/*' bin tools rootfs \
-  ':(exclude)tests/grep-q-pipes' ':(exclude)packages/omamobile-modem/test/nv-overlay' \
-  ':(exclude)tools/'{acpm-stage,aoc-stage,fingerprint-capture,husky-deadman,wifi-w1-capture}
-  git ls-files tools/lib; } | sort -u)
-[[ ${#scripts[@]} -gt 0 ]] || fail "found the pipefail scripts"
+# A git pathspec with a wildcard matches whole paths, so 'packages/*/test'
+# matched no file and the scan passed without reading a package test (#587):
+# each pathspec has to add a script to the scan.
+scan=(tests 'packages/*/test/*' bin tools rootfs)
+skip=(':(exclude)tests/grep-q-pipes' ':(exclude)packages/omamobile-modem/test/nv-overlay'
+  ':(exclude)tools/'{acpm-stage,aoc-stage,fingerprint-capture,husky-deadman,wifi-w1-capture})
+pipefail_scripts() { git grep -l 'set -[a-z]*o pipefail' -- "$@" "${skip[@]}"; }
+for spec in "${scan[@]}"; do
+  [[ -n $(pipefail_scripts "$spec") ]] || fail "the pathspec '$spec' matches a pipefail script"
+done
+[[ -n $(git ls-files tools/lib) ]] || fail "the pathspec 'tools/lib' matches a file"
+
+mapfile -t scripts < <({ pipefail_scripts "${scan[@]}"; git ls-files tools/lib; } | sort -u)
 if hits=$(git grep -nE "$pattern" -- "${scripts[@]}" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#'); then
   printf '%s\n' "$hits" >&2
   fail "no script under pipefail pipes into grep -q (use grep -c ... >/dev/null)"

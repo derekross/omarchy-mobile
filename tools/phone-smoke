@@ -9,6 +9,10 @@
 #   tools/phone-smoke --here       on the phone itself, as root
 #   tools/phone-smoke --json       the same report as JSON
 #
+# From a release bundle's tools/ it runs the same way: the device is then
+# the bundle's one device.conf. PHONE_SSH is the command that reaches the
+# phone (default tools/phone-ssh beside this file).
+#
 # Read-only, and safe on a phone in use: it reads sysfs, procfs, systemd,
 # pacman and D-Bus properties only. No register reads, no writes, no sound,
 # no vibration, no torch, no display changes, no radio changes. The report
@@ -36,17 +40,23 @@ done
 
 if ((!here)); then
   repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-  # The device: the phone's first compatible against the descriptors.
-  compat=$("$repo/tools/phone-ssh" "tr '\\0' '\\n' < /proc/device-tree/compatible | head -1") \
+  # Through bash, so a bundle whose files lost their execute bit still works
+  phone() { if [[ -n ${PHONE_SSH:-} ]]; then "$PHONE_SSH" "$@"; else bash "$repo/tools/phone-ssh" "$@"; fi; }
+  # The device: the phone's first compatible against the descriptors (the
+  # repository's, or a bundle's one device.conf).
+  compat=$(phone "tr '\\0' '\\n' < /proc/device-tree/compatible | head -1") \
     || { echo "phone-smoke: the phone doesn't answer over tools/phone-ssh" >&2; exit 2; }
   device=unknown
-  for conf in "$repo"/device/*/device.conf; do
+  shopt -s nullglob
+  for conf in "$repo"/device/*/device.conf "$repo"/device.conf; do
+    [[ -f $conf ]] || continue   # the repository has no device.conf at its top
     want=$(sed -n 's/^COMPATIBLE="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$conf" | awk '{print $1}')
-    [[ -n $want && $want == "$compat" ]] && device=$(basename "$(dirname "$conf")")
+    [[ -n $want && $want == "$compat" ]] || continue
+    device=$(sed -n 's/^CODENAME="\{0,1\}\([a-z0-9]*\)"\{0,1\}$/\1/p' "$conf")
   done
   rev=$(git -C "$repo" rev-parse --short HEAD 2>/dev/null || echo unknown)
   args="--here"; ((json)) && args+=" --json"
-  "$repo/tools/phone-ssh" "SMOKE_DEVICE=$device SMOKE_REPO=$rev bash -s -- $args" < "$0"
+  phone "SMOKE_DEVICE=${device:-unknown} SMOKE_REPO=$rev bash -s -- $args" < "$0"
   exit $?
 fi
 
@@ -154,6 +164,12 @@ counted_errors=(
   # shows in the 9a's resumes, device/tegu/SLEEP-PLAN.md S1). Storage that
   # really doesn't come back is ufs_dead below, never known.
   '|UFS dme-set 0x4021 (s2idle)|exynos-ufshc [0-9a-f]+\.ufs: dme-set: attr-id 0x4021 val 0x[0-9a-f]+ failed [0-9]+ retries'
+  # The modem sends on channels nothing on the phone opens (the second SIM's
+  # stack, the OEM channels, the router), and CPIF logs three lines for each
+  # message it drops: a few dozen per boot, on every 7 Pro boot with the modem
+  # up (2026-11-11: 43 in ten minutes). umts_ipc0 is not here on purpose: that
+  # is the phone service's own channel, and a message dropped there is new.
+  '|cpif message for a channel nobody opened|cpif: (rx_demux|io_dev_recv_skb_single_from_link_dev|pass_skb_to_demux): .*(oem_ipc[0-9]+|umts_ipc[1-9][0-9]*|umts_router)([^0-9a-z_].*)?(is not opened|rx_demux fail|recv_skb fail)'
 )
 # A UFS link that doesn't come back from a sleep (device/tegu/SLEEP-PLAN.md
 # S1): any match fails kernel health, whatever the lists above say. Anchored

@@ -25,18 +25,21 @@
 #  - modem-up: written by the watcher at ONLINE, removed by --stopped when
 #    the unit stops (the reboot's shutdown, or a stop by hand) and the
 #    marker is this boot's. A boot that ends with the modem up and no stop,
-#    a hang or a reset, leaves it, and the next boot refuses once: it moves
-#    the marker aside (modem-up.refused-<time>-<pid>) and the boot after
-#    that starts the modem again. One automatic retry, then the hold: the
-#    refused copy is the counter. If that retry's boot ends unclean too,
-#    the next boot finds the stale marker with a copy beside it (no clean
-#    stop since the last refusal), keeps the marker and refuses "(held)",
-#    and every boot refuses until a human has looked (--retry). A clean
-#    stop of this boot's marker removes the copies: the streak is over. So
-#    a flat battery or one forced reset costs one boot's modem; a phone
-#    that hangs or resets because the modem is up stops after the second,
-#    and each refused boot's journal says so. An owner who wants the hard
-#    stop from the first unclean end (the modem off until --retry) makes
+#    a hang or a reset, leaves it. The next boot counts it and starts the
+#    modem all the same: it moves the marker aside
+#    (modem-up.refused-<time>-<pid>; the copy is the counter, and keeps its
+#    name from when this boot was refused) and goes on. If that boot ends
+#    unclean too, the boot after it finds the stale marker with a copy
+#    beside it (no clean stop since the last count), keeps the marker and
+#    refuses "(held)", and every boot refuses until a human has looked
+#    (--retry). A clean stop of this boot's marker removes the copies: the
+#    streak is over. So a flat battery or one forced reset costs nothing (an
+#    owner whose phone froze and who held the keys comes back to a phone
+#    that can call); a phone that hangs or resets because the modem is up
+#    stops after the second, and each of those boots' journals says so.
+#    Until 0.1.19 the first unclean end cost the next boot its modem, with
+#    nothing on the screen saying why. An owner who wants the hard stop
+#    from the first unclean end (the modem off until --retry) makes
 #    /etc/omamobile/modem-hold.
 #
 # Either way the recovery is the same once a human has looked at the last
@@ -61,6 +64,7 @@ MARK=${OMAMOBILE_MODEM_LATCH:-/var/lib/omamobile/modem-bringup-started}
 UP=${OMAMOBILE_MODEM_UP_MARK:-/var/lib/omamobile/modem-up}
 HOLD=${OMAMOBILE_MODEM_HOLD:-/etc/omamobile/modem-hold}
 REFUSED=${OMAMOBILE_MODEM_REFUSED:-/run/omamobile/modem-refused}
+NOTE=${OMAMOBILE_DELIBERATE_RESTART:-/var/lib/omamobile/deliberate-restart}
 LIB=/usr/lib/omamobile-vendor
 # What tools/phone-provision puts on the phone (the unit's conditions name
 # the same three): without them the modem can't start, so nothing is
@@ -72,14 +76,38 @@ PROPS=${OMAMOBILE_MODEM_PROPS:-/var/lib/omamobile-vendor/modem/props.conf}
 # for it. Suspend with the modem on has never run on this phone (MODEM-PLAN
 # section 6.3), so nothing may sleep once they are loaded.
 INHIBITOR=omamobile-modem
+# Where a refusal looks for the modem's drivers, and what releases the
+# inhibitor (overridden by the test).
+SYSMODULE=${OMAMOBILE_MODEM_SYSMODULE:-/sys/module}
+SYSTEMCTL=${OMAMOBILE_MODEM_SYSTEMCTL:-systemctl}
 say() { printf 'omamobile-modem: %s\n' "$*" >&2; }
 boot_id() { cat /proc/sys/kernel/random/boot_id; }
 
 # A refusal's one-line reason for the shell (short: it is a tile's status
-# line), then exit 1. Nothing else is written by a refusal.
+# line), then exit 1. Nothing else is written by a refusal. A refusal with
+# none of the modem's drivers loaded never touched the modem, so the sleep
+# block has nothing to guard this boot: release it (a kill, since the
+# inhibitor refuses a manual stop). Once a driver has loaded, it stays until
+# the reboot, as before.
 refuse() {
   mkdir -p "$(dirname "$REFUSED")" 2>/dev/null && printf '%s\n' "$1" > "$REFUSED" 2>/dev/null || true
+  release_inhibitor
   exit 1
+}
+release_inhibitor() {
+  local m entry mods=(pcie_gs201_cp shm_ipc cpif)
+  # The device's link stack too, once link.conf is read (refusals come
+  # before it as well).
+  for entry in ${LINK_MODULES[@]+"${LINK_MODULES[@]}"}; do
+    mods+=("${entry%%[[:blank:]]*}")
+  done
+  for m in "${mods[@]}"; do
+    [[ -d $SYSMODULE/${m//-/_} ]] && return 0
+  done
+  "$SYSTEMCTL" is-active -q omamobile-modem-inhibit.service 2>/dev/null || return 0
+  "$SYSTEMCTL" kill omamobile-modem-inhibit.service >/dev/null 2>&1 &&
+    say "no modem driver loaded: sleep is no longer blocked this boot"
+  return 0
 }
 
 # The refused copies a stale marker leaves (the retry counter), as words.
@@ -99,14 +127,14 @@ stopped() {
   say "modem stopped (${SERVICE_RESULT:-result unknown}): $UP removed"
 }
 
-# The stale modem-up marker: refuse this boot. The first time, move the
-# marker aside and let the next boot start again; with a refused copy
-# already there (that retry's boot ended unclean too), or with the owner's
+# The stale modem-up marker. The first time, count it (move the marker
+# aside) and start the modem all the same; with a copy already there (the
+# boot after the first unclean end ended unclean too), or with the owner's
 # hold flag, keep the marker and hold until a human has looked.
 refuse_unclean() {
   local refused
-  say "the last boot with the modem up ($(cat "$UP")) ended without a clean stop: a hang or a reset; skipping the modem on this boot."
-  say "Read that boot's journal first: journalctl -b -1 -u omamobile-modem, and its kernel log, journalctl -b -1 -k"
+  say "the last boot with the modem up ($(cat "$UP")) ended without a clean stop: a hang or a reset."
+  say "That boot's journal: journalctl -b -1 -u omamobile-modem, and its kernel log, journalctl -b -1 -k"
   if [[ -e $HOLD ]]; then
     say "$HOLD exists: the modem stays off until omamobile-modem-start --retry, or rm $UP and systemctl start omamobile-modem"
     refuse "Off after a hang or reset (held)"
@@ -118,8 +146,7 @@ refuse_unclean() {
   refused=$UP.refused-$(date +%Y%m%dT%H%M%S)-$$
   mv -f "$UP" "$refused"
   sync
-  say "$UP moved to $refused: the next boot starts the modem again, once (a second unclean end holds; for the hard stop from the first, touch $HOLD)"
-  refuse "Off after a hang or reset"
+  say "$UP moved to $refused: one unclean end, so the modem starts on this boot all the same (a second in a row holds it off; for the hard stop from the first, touch $HOLD)"
 }
 
 case ${1:-} in
@@ -139,6 +166,20 @@ done
 if [[ -e $MARK ]]; then
   say "the last bring-up ($(cat "$MARK")) never reached ONLINE; skipping the modem (omamobile-modem-start --retry)"
   refuse "Off: last bring-up hung"
+fi
+# reboot-to notes the boot it ends (/var/lib/omamobile/deliberate-restart),
+# since it skips systemd's shutdown and so the unit's stop: a modem-up marker
+# from that very boot ended on purpose (bin/omamobile push, a reboot to the
+# bootloader), not in a hang or a reset, so it isn't counted as an unclean
+# end (two of those in a row hold the modem off). It doesn't end a streak
+# either: an unclean end already counted stays counted, as on the 9a, since
+# the note only says a restart was asked for, where a clean stop has seen
+# the CP powered off with the phone alive. A hang in the restart itself is
+# the same gap a clean systemctl reboot has.
+if [[ -e $UP && -s $NOTE ]] && grep -q "boot $(head -c 64 "$NOTE" | tr -d '\n')\$" "$UP"; then
+  say "the last boot with the modem up ($(cat "$UP")) ended with reboot-to, on purpose: $UP removed, not counted as an unclean end"
+  rm -f "$UP" "$NOTE"
+  sync
 fi
 [[ -e $UP ]] && refuse_unclean
 
@@ -221,13 +262,15 @@ sync
 
 # CPIF and the regions are blacklisted by the device's modem policy (the
 # package providing omamobile-modem-policy): only this loads them. Never
-# unload cpif (it is permanent by design).
+# unload cpif (it is permanent by design). A module that doesn't load is a
+# refusal: with none of them loaded the sleep block goes, and one that
+# loaded before it keeps the block (refuse()). The latch stays either way.
 for entry in "${LINK_MODULES[@]}"; do
   read -r -a words <<< "$entry"
-  modprobe "${words[@]}"
+  modprobe "${words[@]}" || refuse "Off: ${words[0]} didn't load"
 done
-modprobe shm_ipc
-modprobe cpif
+modprobe shm_ipc || refuse "Off: shm_ipc didn't load"
+modprobe cpif || refuse "Off: cpif didn't load"
 # The link to the modem with ASPM off, as every link test so far ran
 # (M3.1); the endpoint's own L1 substates are never enabled (the link API's
 # l1ss control is a no-op).

@@ -12,12 +12,15 @@
 # files; a failed run (a missing file or registry, debugfs reporting a
 # short write, also under a file size limit, a failed sanity check, a
 # missing camera APEX) leaves the previous outputs and the -c file byte
-# for byte, so an older file can't pass for a missing one; a -c that is a
-# directory or inside the outputs is refused; an -o that resolves to / is
-# refused before anything is written; and a move that fails while
-# publishing puts the previous outputs back. With mkfs.ext4
-# and debugfs on the host, the same on a real ext4 image whose registry
-# belongs to root, and a copy that a file size limit cuts short. EVF=path
+# for byte, so an older file can't pass for a missing one; an image whose
+# build.prop is missing, empty or not copied is refused, as it can't be
+# checked, and staged with -f; a -c that is a directory or inside the
+# outputs is refused; an -o that resolves to / is refused before anything
+# is written; and a move that fails while publishing puts the previous
+# outputs back. With mkfs.ext4 and debugfs on the host, the same on a real
+# ext4 image whose registry belongs to root, work and output paths with a
+# space and a double quote in them, a copy that a file size limit cuts
+# short, and an image without build.prop. EVF=path
 # runs another copy of the tool (a negative control), so every check runs
 # and the failures are counted rather than stopping at the first.
 set -euo pipefail
@@ -43,6 +46,7 @@ cat > "$t/bin/debugfs" <<'EOF'
 set -u
 echo "debugfs 1.47.2 (stand-in)" >&2
 read -r cmd src out <<<"$2"
+out=${out#\"}; out=${out%\"}; out=${out//\"\"/\"}   # debugfs's quoting
 if [[ -f $FAKE_VENDOR/.fail-dump && $src == "/$(cat "$FAKE_VENDOR/.fail-dump")" ]] ||
    [[ $cmd == rdump && -f $FAKE_VENDOR/.fail-rdump ]]; then
   if [[ $cmd == dump ]]; then
@@ -231,6 +235,22 @@ elif [[ $(snap "$o") != "$before" ]]; then
 fi
 pass_since "$n" "a registry short write under a file size limit: refused, the previous outputs untouched"
 
+# Without a readable build.prop the device check can't run: refused, unless -f
+rm -rf "$t/v2-noprop"; cp -r "$t/v2" "$t/v2-noprop"; rm "$t/v2-noprop/build.prop"
+rm -rf "$t/v2-emptyprop"; cp -r "$t/v2" "$t/v2-emptyprop"; : > "$t/v2-emptyprop/build.prop"
+rm -rf "$t/v2-propfail"; cp -r "$t/v2" "$t/v2-propfail"; echo build.prop > "$t/v2-propfail/.fail-dump"
+refuses "no build.prop (ext4)" "build.prop can't be read from vendor.img" "$t/v2-noprop" "$t/ext4.img"
+refuses "no build.prop (EROFS)" "build.prop can't be read from vendor.img" "$t/v2-noprop" "$t/erofs.img"
+refuses "an empty build.prop" "build.prop can't be read from vendor.img" "$t/v2-emptyprop" "$t/ext4.img"
+refuses "a build.prop whose copy fails" "build.prop can't be read from vendor.img" "$t/v2-propfail" "$t/ext4.img"
+o=$t/noprop-forced
+seed "$o"
+if run "$t/v2-noprop" "$t/ext4.img" -f -o "$o" && [[ $(listed "$o") == "$CHEETAH_FILES" ]]; then
+  pass "no build.prop with -f: staged"
+else
+  cat "$t/log"; fail "no build.prop with -f: staged"
+fi
+
 rm -rf "$t/v2-same"; cp -r "$t/v2" "$t/v2-same"
 cp "$t/v2-same/firmware/cs35l41-dsp1-spk-prot.bin" "$t/v2-same/firmware/R-cs35l41-dsp1-spk-prot.bin"
 refuses "a sanity check failing after every copy" "the top and bottom speaker tunings are the same file" "$t/v2-same" "$t/ext4.img"
@@ -324,6 +344,7 @@ rm -rf "$t/v2-big"; cp -r "$t/v2" "$t/v2-big"; head -c 9216 /dev/zero | tr '\0' 
 if realdfs=$(command -v debugfs) && mkfs.ext4 -q -F -d "$t/v2" "$t/real.img" 8M >/dev/null 2>&1 &&
    mkfs.ext4 -q -F -d "$t/v2-missing" "$t/real-missing.img" 8M >/dev/null 2>&1 &&
    mkfs.ext4 -q -F -d "$t/v2-big" "$t/real-big.img" 8M >/dev/null 2>&1 &&
+   mkfs.ext4 -q -F -d "$t/v2-noprop" "$t/real-noprop.img" 8M >/dev/null 2>&1 &&
    debugfs -w -R "sif /etc/sensors/registry uid 0" "$t/real.img" >/dev/null 2>&1 &&
    debugfs -w -R "sif /etc/sensors/registry/fictional_accel.json uid 0" "$t/real.img" >/dev/null 2>&1; then
   mkdir -p "$t/limited"
@@ -337,6 +358,14 @@ if realdfs=$(command -v debugfs) && mkfs.ext4 -q -F -d "$t/v2" "$t/real.img" 8M 
   else
     cat "$t/log"; fail "real ext4: a second run keeps nothing from the earlier generation"
   fi
+  sp=$t/'a "spaced" dir'
+  if "$EVF" -w "$sp/work" -o "$sp/out" "$t/real.img" > "$t/log" 2>&1 &&
+     grep -cF "Vendor partition: fictional/gen2" "$t/log" >/dev/null &&
+     [[ $(listed "$sp/out") == "$CHEETAH_FILES" && $(cat "$sp/out/$FW/aoc.bin") == "aoc gen2" ]]; then
+    pass "real ext4: work and output paths with a space and a quote"
+  else
+    cat "$t/log"; fail "real ext4: work and output paths with a space and a quote"
+  fi
   before=$(snap "$o")
   if "$EVF" -w "$t/work" -o "$o" "$t/real-missing.img" > "$t/log" 2>&1; then
     fail "real ext4: a missing file with an older copy in OUT is refused"
@@ -346,6 +375,14 @@ if realdfs=$(command -v debugfs) && mkfs.ext4 -q -F -d "$t/v2" "$t/real.img" 8M 
     fail "real ext4: a refused run leaves the previous outputs"
   else
     pass "real ext4: a missing file with an older copy in OUT is refused, the previous outputs untouched"
+  fi
+  before=$(snap "$o")
+  if "$EVF" -w "$t/work" -o "$o" "$t/real-noprop.img" > "$t/log" 2>&1; then
+    fail "real ext4: an image without build.prop is refused"
+  elif ! grep -qF "build.prop can't be read from vendor.img" "$t/log" || [[ $(snap "$o") != "$before" ]]; then
+    cat "$t/log"; fail "real ext4: an image without build.prop is refused, the previous outputs untouched"
+  else
+    pass "real ext4: an image without build.prop is refused, the previous outputs untouched"
   fi
   before=$(snap "$o")
   if PATH=$t/limited:$PATH "$EVF" -w "$t/work" -o "$o" "$t/real-big.img" > "$t/log" 2>&1; then

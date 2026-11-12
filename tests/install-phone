@@ -162,7 +162,57 @@ OMAMOBILE_FIRSTBOOT_ROOT=$t/fbroot "$SRC/packages/omamobile-firstboot/bin/omamob
 [[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -v '^#') == AUTO_WRITE=yes ]] \
   || fail "a release install turns the boot hook on (boot-update.conf AUTO_WRITE=yes)"
 debugfs -R 'stat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -c 'User:     0   Group:     0' >/dev/null || fail "boot-update.conf belongs to root"
+# Development devices keep the hook off in the actual prepared image.
+echo 'BOOT_UPDATE_AUTO_WRITE=no' >> "$R/device/testdev/device.conf"
+install || { cat "$t/out"; fail "a development install succeeds"; }
+policy_image=$t/userdata.flashed
+if command -v simg2img >/dev/null && [[ $(head -c4 "$policy_image" | od -An -tx1 | tr -d ' ') == 3aff26ed ]]; then
+  simg2img "$policy_image" "$t/policy.img"; policy_image=$t/policy.img
+fi
+[[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$policy_image" 2>/dev/null | grep -v '^#') == AUTO_WRITE=no ]] ||
+  fail "the development image must disable automatic boot writes"
+pass "development descriptor keeps automatic boot writes off in the image"
+for value in '' YES true maybe; do
+  descriptor > "$R/device/testdev/device.conf"
+  printf 'BOOT_UPDATE_AUTO_WRITE=%s\n' "$value" >> "$R/device/testdev/device.conf"
+  if install --dry-run; then fail "invalid boot-update policy accepted: $value"; fi
+  [[ ! -s $t/fastboot.log ]] || fail 'invalid boot-update policy reached fastboot'
+done
+descriptor > "$R/device/testdev/device.conf"
+pass "invalid boot-update policies refuse before any phone query"
 pass "the image copy gets a root-only firstboot.conf (hash, not password) and root's key, which firstboot accepts"
+
+# A root that already has /etc/omamobile and /root/.ssh (a restored or
+# lived-in one): debugfs's mkdir on an existing directory leaves an
+# unconnected inode, so the installer makes only the missing ones.
+mkdir -p "$t/lived/etc/omamobile" "$t/lived/root/.ssh"
+cp "$t/rootdir/etc/passwd" "$t/lived/etc/passwd"
+echo "ssh-ed25519 AAAA old" > "$t/lived/root/.ssh/authorized_keys"
+mkfs.ext4 -q -L omamobile-root -d "$t/lived" "$t/lived.img" 16M
+lived=$t/omamobile-rootfs-lived-aarch64.img.zst
+zstd -q "$t/lived.img" -o "$lived" && (cd "$t" && sha256sum "$(basename "$lived")" > "$(basename "$lived").sha256")
+install --rootfs "$lived" || { cat "$t/out"; fail "a root that already has the directories installs"; }
+flashed=$t/userdata.flashed
+if command -v simg2img >/dev/null && [[ $(head -c4 "$flashed" | od -An -tx1 | tr -d ' ') == 3aff26ed ]]; then
+  simg2img "$flashed" "$t/flashed.img"; flashed=$t/flashed.img
+fi
+e2fsck -fn "$flashed" >/dev/null 2>&1 || fail "the flashed copy of a lived-in root checks clean"
+[[ $(debugfs -R 'cat /root/.ssh/authorized_keys' "$flashed" 2>/dev/null) == "$(cat "$t/home/.ssh/id_ed25519.pub")" ]] || fail "the old authorized_keys is replaced"
+pass "a root that already has /etc/omamobile and /root/.ssh installs clean"
+
+# debugfs splits its commands at blanks: a --work path with a space and a
+# double quote in it still gets the three files into the image copy
+w=$t/'a "spaced" dir'/work
+install --work "$w" || { cat "$t/out"; fail "a --work path with a space and a quote installs"; }
+flashed=$t/userdata.flashed
+if command -v simg2img >/dev/null && [[ $(head -c4 "$flashed" | od -An -tx1 | tr -d ' ') == 3aff26ed ]]; then
+  simg2img "$flashed" "$t/flashed.img"; flashed=$t/flashed.img
+fi
+debugfs -R 'cat /etc/omamobile/firstboot.conf' "$flashed" 2>/dev/null | grep -cx 'USERNAME=alice' >/dev/null || fail "firstboot.conf from a spaced --work"
+[[ $(debugfs -R 'cat /root/.ssh/authorized_keys' "$flashed" 2>/dev/null) == "$(cat "$t/home/.ssh/id_ed25519.pub")" ]] || fail "authorized_keys from a spaced --work"
+[[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -v '^#') == AUTO_WRITE=yes ]] || fail "boot-update.conf from a spaced --work"
+[[ -z $(ls "$w") ]] || fail "the spaced --work copy is removed"
+pass "a --work path with a space and a quote gets the three files into the image"
 
 refuse() {
   local why=$1; shift
@@ -376,6 +426,48 @@ if command -v gpg >/dev/null; then
 fi
 [[ -z $(flashing_calls) ]] || fail "a refused bundle flashes nothing"
 pass "bundle mode: signature required (pinned key), checksums checked, its own images used"
+
+# In a bundle that keeps its tools in tools/ this script is
+# tools/install-phone: it finds the bundle from there. --verify-only checks
+# the files and never contacts the phone.
+mkdir -p "$BD/tools"
+mv "$BD/install" "$BD/tools/install-phone"
+printf '#!/bin/bash\n' > "$BD/install"
+manifest
+(cd "$BD" && find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.sig -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS)
+rm -f "$BD/SHA256SUMS.sig"
+tinstall() {
+  : > "$t/fastboot.log"
+  answers | HOME=$t/home PATH="$t/bin:$PATH" "$BD/tools/install-phone" --work "$t/work" "$@" > "$t/out" 2>&1
+}
+tinstall --dry-run --unsigned || { cat "$t/out"; fail "install-phone in a bundle's tools/ installs that bundle"; }
+grep -q "would run: fastboot -s FAKE123 flash boot_b $BD/images/boot.img" "$t/out" || fail "from tools/ it uses the bundle's images"
+tinstall --verify-only --unsigned || { cat "$t/out"; fail "--verify-only passes a good bundle"; }
+[[ ! -s $t/fastboot.log ]] || fail "--verify-only never runs fastboot"
+grep -q 'the phone was not contacted' "$t/out" || fail "--verify-only says the phone was not contacted"
+echo tampered >> "$BD/images/dtbo.img"
+if tinstall --verify-only --unsigned; then fail "--verify-only refuses a bundle file that doesn't match"; fi
+[[ ! -s $t/fastboot.log ]] || fail "a refused --verify-only never runs fastboot"
+pass "as a bundle's tools/install-phone: finds the bundle, and --verify-only checks it with no phone"
+
+# The guided installer has asked the questions: they aren't printed again,
+# the answers are still read and checked, and the closing hints stay out
+OMAMOBILE_INSTALL_GUIDED=1 install --dry-run || { cat "$t/out"; fail "a dry run for the guided installer succeeds"; }
+grep -q 'User name\|Password or PIN\|tools/phone-provision' "$t/out" && fail "the guided installer's run prints no question and no hint"
+grep -q 'user:      alice (pin)' "$t/out" || fail "the piped answers are used"
+CONFIRM=nope OMAMOBILE_INSTALL_GUIDED=1 install && fail "the codename is still required from the guided installer"
+[[ -z $(flashing_calls) ]] || fail "a wrong codename from the guided installer writes nothing"
+pass "run by the guided installer: no questions printed, the answers and the codename still checked"
+
+# --serial pins the phone: another one in fastboot mode is refused before it
+# is asked anything, and the named one installs as ever
+install --dry-run --serial FAKE123 || { cat "$t/out"; fail "--serial with the connected phone's serial succeeds"; }
+grep -c 'would run: fastboot -s FAKE123 flash userdata' "$t/out" >/dev/null || fail "--serial installs on the phone it names"
+if install --serial OTHER999; then fail "--serial refuses another phone"; fi
+grep -c 'not the one this install was started for' "$t/out" >/dev/null || fail "--serial says the phone is another one"
+[[ $(cat "$t/fastboot.log") == devices ]] || { cat "$t/fastboot.log"; fail "a phone --serial doesn't name gets no command at all"; }
+if install --serial 'two words'; then fail "--serial refuses a value with a space"; fi
+pass "--serial: only the named phone is read or written"
 
 # The script itself: one write path, and none of the forbidden fastboot forms
 code=$(grep -v '^[[:space:]]*#' tools/install-phone)

@@ -12,13 +12,18 @@
 # the installer expects, matches its .tar.sha256, has no signature when the
 # bundle is unsigned, and is the same bytes when the bundle is made again
 # (sorted names, fixed mtime, owner and modes, whatever the umask and the
-# files' times); the bundled nv-backup reads the bundle's device.conf.
+# files' times). A rebuild replaces the bundle directory and leaves nothing
+# else in out/bundle, and one that fails moving the new directory in puts
+# the old one back; after a run killed there, the next run puts it back,
+# even one an input check refuses. A second run for the same bundle while
+# one runs is refused, and the first one completes. The bundled nv-backup
+# reads the bundle's device.conf.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 SRC=$PWD
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
-command -v python3 >/dev/null || { echo "ok - # skip: no python3"; exit 0; }
+for tool in python3 flock; do command -v "$tool" >/dev/null || { echo "ok - # skip: no $tool"; exit 0; }; done
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
 r=$t/repo k=$t/kernel
@@ -82,7 +87,7 @@ for p in ["INSTALL.md"] + ["tools/" + t for t in tools]:
 PY
 pass "SHA256SUMS and manifest.json cover the new files"
 
-grep -c 'tools/phone-provision --nv-backup DIR FACTORY.zip' "$b/README.txt" >/dev/null || fail "README.txt gives the provisioning command"
+grep -c 'tools/phone-provision --first-install --nv-backup DIR FACTORY.zip' "$b/README.txt" >/dev/null || fail "README.txt gives the provisioning command"
 grep -c 'from this directory' "$b/README.txt" >/dev/null || fail "README.txt says to run it from the bundle"
 if grep -c 'from the repository' "$b/README.txt" >/dev/null; then fail "README.txt no longer sends the user to the repository"; fi
 grep -c 'INSTALL.md' "$b/README.txt" >/dev/null || fail "README.txt points to INSTALL.md"
@@ -102,7 +107,7 @@ for p in modem_a modem_b efs efs_backup modem_userdata persist; do
 done
 : > "$t/factory.zip"
 out=$(cd "$t" && HOME=$t/home PHONE_SSH=false "$b/tools/phone-provision" --dry-run --work "$t/work" \
-  --nv-backup "$nv" "$t/factory.zip" 2>&1) || fail "the bundled phone-provision's dry run: $out"
+  --first-install --nv-backup "$nv" "$t/factory.zip" 2>&1) || fail "the bundled phone-provision's dry run: $out"
 grep -c 'would run: tools/extract-vendor-firmware' <<<"$out" >/dev/null || fail "the dry run names the extract tools: $out"
 pass "the bundled phone-provision runs from the bundle"
 
@@ -129,10 +134,77 @@ pass "the .tar holds the bundle and the root image side by side, 0/0, one mtime,
 first=$(cat "$tarball.sha256")
 touch -d '2001-02-03 04:05' "$r/docs/INSTALL.md" "$root"
 chmod 600 "$root.sha256"
+: > "$b/left-over"
 out=$(umask 077 && DEVICE=testdev KERNEL_OUT=$k KERNEL_DIR=$r "$r/tools/make-bundle" --unsigned --version 2026.11.01 --rootfs "$root" 2>&1) ||
   fail "the bundle assembles again: $out"
 [[ $(cat "$tarball.sha256") == "$first" ]] || fail "the tar is the same bytes when made again with another umask and file times"
 pass "the .tar is deterministic"
+[[ ! -e $b/left-over ]] || fail "the rebuild replaces the bundle directory"
+listing=$(printf '%s\n' omamobile-rootfs-testdev-2026.11.01-aarch64.MANIFEST omamobile-rootfs-testdev-2026.11.01-aarch64.img.zst \
+  omamobile-rootfs-testdev-2026.11.01-aarch64.img.zst.sha256 omamobile-testdev-2026.11.01 omamobile-testdev-2026.11.01.tar \
+  omamobile-testdev-2026.11.01.tar.sha256)
+[[ $(LC_ALL=C ls -A "$r/out/bundle") == "$listing" ]] || fail "the rebuild leaves the bundle, its .tar and the root image, nothing else: $(ls -A "$r/out/bundle")"
+pass "a rebuild replaces the bundle directory and leaves nothing else in out/bundle"
+# The bundle checks out and out/bundle holds what it held after the rebuild
+intact() { (cd "$b" && sha256sum -c --quiet SHA256SUMS) && [[ $(LC_ALL=C ls -A "$r/out/bundle") == "$listing" ]]; }
+
+# A stand-in mv that fails the move of the new directory into place
+mkdir "$t/failmv"
+printf '#!/bin/sh\ncase "$*" in *".new/omamobile-testdev-2026.11.01 "*) exit 1 ;; esac\nPATH=${PATH#*:} exec mv "$@"\n' > "$t/failmv/mv"
+chmod +x "$t/failmv/mv"
+out=$(PATH=$t/failmv:$PATH DEVICE=testdev KERNEL_OUT=$k KERNEL_DIR=$r "$r/tools/make-bundle" --unsigned --version 2026.11.01 --rootfs "$root" 2>&1) &&
+  fail "a rebuild whose move into place fails says so: $out"
+intact || fail "a failed move into place puts the old bundle back: $(ls -A "$r/out/bundle")"
+pass "a rebuild that fails moving the new bundle in puts the old one back"
+
+# A run killed (SIGKILL, no trap) between the two renames leaves the old
+# bundle in the build directory; the next run puts it back, even one that an
+# input check refuses, and a run that goes on starts from an empty build
+# directory (here the killed run's SHA256SUMS.sig, from a signed build)
+mkdir "$t/killmv"
+printf '#!/bin/sh\ncase "$*" in *".new/omamobile-testdev-2026.11.01 "*) kill -KILL $PPID; exit 1 ;; esac\nPATH=${PATH#*:} exec mv "$@"\n' > "$t/killmv/mv"
+chmod +x "$t/killmv/mv"
+kill_between_renames() {
+  { PATH=$t/killmv:$PATH DEVICE=testdev KERNEL_OUT=$k KERNEL_DIR=$r "$r/tools/make-bundle" --unsigned --version 2026.11.01 --rootfs "$root" >/dev/null 2>&1; } 2>/dev/null &&
+    fail "the stand-in mv kills the rebuild"
+  [[ ! -e $b && -d $r/out/bundle/.omamobile-testdev-2026.11.01.new/old ]] || fail "the killed rebuild left the old bundle aside"
+}
+kill_between_renames
+echo otherdev > "$k/images/DEVICE"
+out=$(DEVICE=testdev KERNEL_OUT=$k KERNEL_DIR=$r "$r/tools/make-bundle" --unsigned --version 2026.11.01 --rootfs "$root" 2>&1) &&
+  fail "a rebuild with another device's images is refused: $out"
+echo testdev > "$k/images/DEVICE"
+intact || fail "a refused run after a killed one puts the old bundle back: $(ls -A "$r/out/bundle")"
+kill_between_renames
+: > "$r/out/bundle/.omamobile-testdev-2026.11.01.new/omamobile-testdev-2026.11.01/SHA256SUMS.sig"
+out=$(DEVICE=testdev KERNEL_OUT=$k KERNEL_DIR=$r "$r/tools/make-bundle" --unsigned --version 2026.11.01 --rootfs "$root" 2>&1) ||
+  fail "the bundle assembles after a killed run: $out"
+[[ ! -e $b/SHA256SUMS.sig ]] && intact || fail "a run after a killed one starts from an empty build directory: $(ls -A "$b" "$r/out/bundle")"
+pass "after a run killed between the renames, the next run puts the old bundle back, refused or not"
+
+# Two runs for the same bundle at once: the second (here one an input check
+# refuses) is refused before its start-up cleanup, so the first one's build
+# directory stays and the first build completes; a run for another version
+# builds meanwhile. A stand-in install holds the first build at its first
+# copy until the FIFO $t/hold is written.
+mkdir "$t/slow"
+mkfifo "$t/hold"
+printf '#!/bin/sh\nif [ -p "$HOLD" ]; then echo held; read -r _ < "$HOLD"; rm -f "$HOLD"; fi\nPATH=${PATH#*:} exec install "$@"\n' > "$t/slow/install"
+chmod +x "$t/slow/install"
+HOLD=$t/hold PATH=$t/slow:$PATH DEVICE=testdev KERNEL_OUT=$k KERNEL_DIR=$r "$r/tools/make-bundle" --unsigned --version 2026.11.01 --rootfs "$root" > "$t/first" 2>&1 &
+pid=$!
+timeout 30 sh -c 'until grep -c held "$1" >/dev/null; do sleep 0.1; done' - "$t/first" || held=no
+second=$(DEVICE=testdev KERNEL_OUT=$t/no-kernel timeout 30 "$r/tools/make-bundle" --unsigned --version 2026.11.01 --rootfs "$root" 2>&1) || true
+other=$(DEVICE=testdev KERNEL_OUT=$k KERNEL_DIR=$r timeout 30 "$r/tools/make-bundle" --unsigned --version 2026.11.02 --rootfs "$root" 2>&1) || other="failed: $other"
+[[ ! -p $t/hold ]] || timeout 5 sh -c 'echo go > "$1"' - "$t/hold" || true
+wait "$pid" && first=ok || first=$(cat "$t/first")
+[[ -z ${held:-} ]] || fail "the stand-in install holds the first build: $(cat "$t/first")"
+grep -c "already building omamobile-testdev-2026.11.01 in out/bundle" <<<"$second" >/dev/null || fail "a second run for the same bundle is refused: $second"
+[[ $other != failed:* ]] || fail "a run for another version builds while the first one runs: $other"
+[[ $first == ok ]] || fail "the first build completes after a second run was refused: $first"
+rm -rf "$r/out/bundle/omamobile-testdev-2026.11.02" "$r/out/bundle/omamobile-testdev-2026.11.02.tar" "$r/out/bundle/omamobile-testdev-2026.11.02.tar.sha256"
+intact || fail "the first build is in place, nothing else: $(ls -A "$r/out/bundle")"
+pass "a second run for the same bundle is refused and the first one completes; another version builds meanwhile"
 
 # The bundled nv-backup runs from the bundle with the bundle's descriptor
 # (testdev names no NV_PARTS, so it says so and contacts no phone)

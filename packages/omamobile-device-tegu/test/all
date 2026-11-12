@@ -40,11 +40,16 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
     ../omamobile-device-cheetah/omamobile-device-cheetah.install \
     || fail "the pacman install script drifted from the cheetah package"
   pass "the pacman install script matches the cheetah package"
-  cmp -s vendor/systemd/sleep.conf.d/10-omamobile.conf \
-    ../omamobile-device-cheetah/vendor/systemd/sleep.conf.d/10-omamobile.conf \
-    || fail "the sleep drop-in drifted from the cheetah package"
-  pass "the sleep drop-in matches the cheetah package"
 fi
+# The sleep drop-in: suspend-to-idle only, one state so a refused sleep isn't
+# tried a second time (#619), and nothing that hibernates. Checked by its
+# settings: the 7 Pro's copy gets SuspendState in a change of its own.
+sleepconf=vendor/systemd/sleep.conf.d/10-omamobile.conf
+[[ $(grep -v '^#' "$sleepconf" | grep -c .) -eq 6 && $(grep -v '^#' "$sleepconf" | head -1) == "[Sleep]" ]] || fail "the sleep drop-in has other lines than its five settings"
+for line in SuspendState=freeze MemorySleepMode=s2idle AllowHibernation=no AllowHybridSleep=no AllowSuspendThenHibernate=no; do
+  grep -qx "$line" "$sleepconf" || fail "the sleep drop-in lacks $line"
+done
+pass "the sleep drop-in: one sleep state (freeze), s2idle, no hibernation"
 grep -q 'omamobile-keyring' PKGBUILD || fail "pacman needs omamobile-keyring"
 grep -q '^install=omamobile-device-tegu.install$' PKGBUILD \
   || fail "the pacman install script is not named"
@@ -84,6 +89,7 @@ for f in usr/bin/reboot-to usr/bin/tegu-tcpc-switch \
          usr/lib/modprobe.d/omamobile-tegu-guards.conf usr/lib/modprobe.d/omamobile-tegu-aoc.conf \
          usr/lib/modprobe.d/omamobile-tegu-display.conf usr/lib/modprobe.d/omamobile-tegu-clk-acpm.conf \
          usr/lib/systemd/system-sleep/omamobile-tegu-wifi usr/lib/systemd/system-sleep/omamobile-tegu-nfc \
+         usr/lib/systemd/system-sleep/omamobile-tegu-cpuidle \
          usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-tegu.conf \
          usr/lib/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
@@ -98,12 +104,28 @@ for f in usr/bin/reboot-to usr/bin/tegu-tcpc-switch \
          etc/pacman.d/omamobile-mirrorlist; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
-[[ -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-wifi && -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-nfc ]] \
+[[ -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-wifi && -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-nfc &&
+   -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-cpuidle ]] \
   || fail "the sleep hooks are not executable"
 for unit in omamobile-tegu-graphics omamobile-tegu-usb-rescue; do
   [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/$unit.service") == ../$unit.service ]] \
     || fail "$unit is enabled by a vendor wants link"
 done
+# The modem's boot start is opt-in: installed, never enabled by the package.
+# Enabled by the owner, it is skipped, not failed, on a phone without the
+# provisioning or the CP drivers
+[[ -f $tmp/root/usr/lib/systemd/system/omamobile-tegu-modem-boot.service ]] || fail "install stages the modem's boot start"
+[[ -e $tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-tegu-modem-boot.service ]] \
+  && fail "the modem's boot start is enabled by the package (it must be opt-in)"
+grep -q 'omamobile-tegu-modem-boot' omamobile-device-tegu.install && fail "the install scriptlet must not enable the modem's boot start"
+for c in /usr/lib/omamobile-vendor/modem/root /etc/omamobile/modem-nv.sha256 /var/lib/omamobile-vendor/modem/props.conf; do
+  grep -qx "ConditionPathExists=$c" vendor/systemd/system/omamobile-tegu-modem-boot.service || fail "the boot start is skipped without $c"
+done
+grep -qx 'ConditionPathExists=|/proc/device-tree/cpif' vendor/systemd/system/omamobile-tegu-modem-boot.service &&
+  grep -qx 'ConditionPathExists=|/var/lib/omamobile-tegu/modem/cpif.ko' vendor/systemd/system/omamobile-tegu-modem-boot.service \
+  || fail "the boot start is skipped without CP drivers, the kernel's or the bring-up modules"
+grep -qx 'ExecStart=/usr/bin/omamobile-tegu-modem-up --phone --gnss' vendor/systemd/system/omamobile-tegu-modem-boot.service \
+  || fail "the boot start brings gnssd up with the modem, for the Location switch"
 # The AoC start runs at every boot (its condition skips a DTB without the
 # node), and answers to omamobile-aoc.service for the sensor and fp units.
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-tegu-aoc.service") == ../omamobile-tegu-aoc.service ]] \
@@ -151,9 +173,13 @@ done
 [[ -f $tmp/root/usr/lib/systemd/system/omamobile-sitd.service.d/10-device-modem.conf ]] \
   || fail "the device sitd policy is staged"
 grep -q 'omamobile-sitd-policy' PKGBUILD || fail "the package provides its sitd policy capability"
+grep -qx 'Environment=OMAMOBILE_SIT_SCREEN_ON_AT_START=1' vendor/systemd/system/omamobile-sitd.service.d/10-device-modem.conf \
+  || fail "the 9a's sitd tells its modem the screen is on at start-up (signal reports)"
+! grep -rq OMAMOBILE_SIT_SCREEN_ON_AT_START ../omamobile-device-cheetah ../omamobile-device-raven \
+  || fail "only the 9a sets the start-up screen-on"
 pass "install stages the package, enables only the guards, and nothing that marks a slot"
 
-for m in cpif shm_ipc pcie_gs201_cp; do
+for m in cpif shm_ipc pcie_gs201_cp gnss_spi gnssif; do
   grep -qx "blacklist $m" "$tmp/root/usr/lib/modprobe.d/omamobile-tegu-guards.conf" \
     || fail "the modem policy must prevent $m from autoloading"
 done
@@ -192,7 +218,7 @@ pass "the Bluetooth address is read at run time"
 
 grep -c '^for unit in omamobile-sensor-proxy.service omamobile-nfc-open.service; do$' bin/omamobile-setup-system >/dev/null || fail "setup-system enables the sensor proxy and the NFC opener"
 grep -qE 'omamobile-(fp|gnss-nmea|speaker-protection)' <(grep '^for unit' bin/omamobile-setup-system) && fail "setup-system must not enable fingerprint, GNSS or speaker protection on the 9a"
-for t in test/graphics-start test/aoc-start test/usb-rescue test/sleep-hooks test/charge-limit; do
+for t in test/graphics-start test/aoc-start test/usb-rescue test/sleep-hooks test/charge-limit test/modem-up; do
   "$t" || fail "$t"
 done
 pass "the scripts behave in a scratch root"

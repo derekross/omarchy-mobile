@@ -3,7 +3,8 @@
 # Stage omamobile-omarchy into DESTDIR. The pacman hook applies the patch
 # series after the package transaction; the module-tree cleanup's timer is
 # enabled by the wants link staged here, and Arch's linux-modules-cleanup is
-# held off by a drop-in (lib/modules-cleanup says why).
+# held off by a drop-in (lib/modules-cleanup says why). zram/91-omamobile.conf
+# caps Omarchy's swap on zram at half the RAM.
 #   ./install DESTDIR
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
@@ -26,6 +27,8 @@ ln -sfn ../omamobile-modules-cleanup.timer "$u/timers.target.wants/omamobile-mod
 for f in patches/*.patch; do
   install -Dm644 "$f" "$d/usr/share/omamobile/omarchy/patches/${f##*/}"
 done
+install -Dm644 zram/91-omamobile.conf "$d/usr/lib/systemd/zram-generator.conf.d/91-omamobile.conf"
+install -Dm644 tmpfiles/omamobile-run.conf "$d/usr/lib/tmpfiles.d/omamobile-run.conf"
 install -Dm644 libalpm/95-omamobile-omarchy-patches.hook "$d/usr/share/libalpm/hooks/95-omamobile-omarchy-patches.hook"
 install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-omarchy/LICENSE"
 install -Dm644 LICENSE.omarchy "$d/usr/share/licenses/omamobile-omarchy/omarchy-MIT"

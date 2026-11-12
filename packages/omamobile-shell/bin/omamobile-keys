@@ -40,7 +40,13 @@ set -u
 state="${XDG_RUNTIME_DIR:-/tmp}/omamobile-keys"
 mkdir -p "$state"
 
-now() { date +%s%3N; }
+# Milliseconds, from date's whole seconds and nanoseconds. Not the three-digit
+# form of %N (a 3 between the percent sign and the N; test/keys.sh refuses it):
+# uutils' date (0.10.0, the build machine's) drops the nanoseconds' leading
+# zeros before it takes three digits, so 3 ms into a second reads as 365, one
+# reading in ten is wrong by up to 900 ms, and a wait measured with it can end
+# early. %N is nine digits on both.
+now() { local t; t=$(date +%s%N); echo $((t / 1000000)); }
 
 # Keys count as pressed together within this many milliseconds.
 window=500
@@ -136,19 +142,6 @@ screen_off() {
   hyprctl monitors -j 2>/dev/null | jq -e 'any(.[]; .dpmsStatus == false)' >/dev/null
 }
 
-# The quick check for the press that wakes: the panel's own bl_power (4 is
-# off) is a file read, where screen_off and locked ask Hyprland and the
-# shell (about 100 ms before the wake could start). Where bl_power stays 0
-# with the panel off (tegu), screen_off decides.
-panel_dark() {
-  local p
-  for p in /sys/class/backlight/*/bl_power; do
-    [[ -r $p ]] || continue
-    [[ $(<"$p") == 4 ]] && return 0
-  done
-  screen_off
-}
-
 # The chord marker is cleared on power's release, but Hyprland drops that
 # release once another key went down, so a marker older than this is stale.
 in_chord() {
@@ -203,6 +196,44 @@ serially() {
     flock -w 4 9 || true
     "$@"
   ) 9>"$state/action.lock"
+}
+
+# omarchy-brightness-display off only asks Hyprland to switch the display off.
+# Hyprland reports it off at once (dpmsStatus), but the panel itself goes off
+# only when the compositor commits it, 0.3 s later on the Pixel 8 Pro
+# (measured: dpmsStatus false at +0.09 s, bl_power 4 and the DRM connector's
+# dpms Off at +0.35 s), and where bl_power is not writable by the user the panel
+# follows only then. Put the brightness back before that and the panel shows
+# the lock screen for an instant at full brightness, then goes black.
+# So wait for what the panel reports: the backlight's bl_power, or a connected
+# internal connector's dpms; Hyprland's answer only on a machine with neither.
+# panel_dark takes the backlight device name (may be empty).
+panel_dark() {
+  local sys=${OMAMOBILE_KEYS_SYSFS:-/sys} device=$1 f source=
+  if [[ -n $device && -r $sys/class/backlight/$device/bl_power ]]; then
+    source=1
+    [[ $(<"$sys/class/backlight/$device/bl_power") != 0 ]] && return 0
+  fi
+  for f in "$sys"/class/drm/card*-{DSI,eDP,LVDS}-*; do
+    [[ -r $f/dpms && -r $f/status && $(<"$f/status") == connected ]] || continue
+    source=1
+    [[ $(<"$f/dpms") == Off ]] && return 0
+  done
+  [[ -z $source ]] && screen_off
+}
+
+# At most 1 s by the clock (the panel took 0.35 s on the Pixel 8 Pro), so a
+# compositor that never answers cannot hold the key handler. Milliseconds from
+# `now`, not bash's microsecond clock variable: that one is written with the
+# locale's decimal separator, and under a comma locale the arithmetic breaks.
+wait_screen_off() {
+  local end
+  end=$(( $(now) + 1000 ))
+  while (( $(now) < end )); do
+    panel_dark "$1" && return 0
+    sleep 0.05
+  done
+  return 0
 }
 
 short_press() {
@@ -298,12 +329,7 @@ short_press() {
     # for a moment (Ángel, 6-nov: "vuelve a la pantalla de bloqueo antes de
     # apagar la pantalla"). At most 1.5 s, for a panel whose bl_power never
     # says so.
-    if [[ -n $device && -r /sys/class/backlight/$device/bl_power ]]; then
-      for _ in $(seq 30); do
-        [[ $(</sys/class/backlight/$device/bl_power) == 4 ]] && break
-        sleep 0.05
-      done
-    fi
+    wait_screen_off "$device"
     if [[ -n $device ]]; then
       [[ -n $level ]] && brightnessctl -q -d "$device" set "$level" || brightnessctl -q -d "$device" set 40%
     fi
@@ -395,7 +421,8 @@ short_press() {
     lock_dark
     omarchy-brightness-display off
     # The brightness the next wake lights up with: the saved level, or 40 % when
-    # the press caught the panel at 0.
+    # the press caught the panel at 0. Only once the panel is really off.
+    wait_screen_off "$device"
     if [[ -n $device ]]; then
       [[ -n $level ]] && brightnessctl -q -d "$device" set "$level" || brightnessctl -q -d "$device" set 40%
     fi
@@ -424,7 +451,7 @@ case "${1:-}" in
       # (it wakes on the press, not the release), so the screen answers the
       # press itself. The release then has nothing left to do (short_press
       # sees the mark).
-      elif [[ $android_power == 1 ]] && panel_dark; then
+      elif [[ $android_power == 1 ]] && { panel_dark "$(omarchy-hw-display 2>/dev/null)" || screen_off; }; then
         echo "$press" >"$state/woke-on-press"
         serially wake_locked >/dev/null 2>&1 &
       fi
@@ -525,7 +552,7 @@ case "${1:-}" in
     if [[ $android_power != 1 ]]; then
       if locked && screen_off; then wake_locked; fi
     # The quick check (a file read), as the press's own wake.
-    elif panel_dark; then serially wake_locked; fi
+    elif panel_dark "$(omarchy-hw-display 2>/dev/null)" || screen_off; then serially wake_locked; fi
     ;;
   double-tap)
     # omamobile-doubletap: a double tap on the touchscreen. Only a dark

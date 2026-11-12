@@ -33,7 +33,12 @@ directory of stand-ins first on PATH (/usr/lib/omamobile-omarchy/update-bin):
              root), omarchy-update-aur-pkgs (no AUR builds on the phone),
              omarchy-update-orphan-pkgs (listed, never removed),
              omarchy-update-restart (no gum, no false "kernel updated":
-             a restart is asked for when omamobile-boot-update wrote slot B),
+             a restart is asked for when omamobile-boot-update wrote slot B;
+             Omarchy 4.5 runs it as two halves, --services-only then
+             --reboot-only, and each does only its half),
+             omarchy-update-boot (4.5's boot verification is for a
+             computer's boot files; slot B's images are checked by
+             omamobile-boot-update),
              omarchy-migrate (boot-related migrations held), sudo
              (non-interactive from the sheet)
 
@@ -71,6 +76,14 @@ development (every day's build, for builders) or local (the repository on the
 phone, /var/lib/omamobile/repo, filled by tools/repo-push). "channel NAME"
 turns that one Server line on and the others off, and drops pacman's copy of
 the old channel's index, which may be newer than the new channel's.
+
+A channel with nothing published yet (stable before a first release, local
+before the first tools/repo-push) is a normal state, not a failure: when the
+check for updates fails and the channel's server says its index isn't there
+(HTTP 404; for local, no file), check reports "no updates yet" with no
+blocker and exit 0, and an update ends as done with nothing to do. pacman
+needs every repository's index, so Omarchy's and Arch's updates wait with it.
+Any other failure (offline, a server error, a custom Server line) stays one.
 """
 import datetime
 import glob
@@ -85,6 +98,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 
 HOME = os.path.expanduser("~")
 RUNTIME = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp/omamobile-update-%d" % os.getuid(), "omamobile-update")
@@ -123,6 +138,9 @@ CHANNELS = {
     "local": "Server = file:///var/lib/omamobile/repo/$arch",
 }
 SERVER_LINE = re.compile(r"^\s*Server\s*=\s*(\S+)\s*$")
+ARCH = "aarch64"  # pacman's $arch on every phone
+INDEX = "omamobile.db"
+SYNC_FAILED = "could not check for updates"
 
 # Packages a phone update must not install: other kernels and boot-image
 # tools (the phone boots from boot_b, which linux-omamobile's hook or
@@ -253,6 +271,36 @@ def channel_info(path=None):
     return {"name": name, "server": servers[0], "error": ""}
 
 
+def index_missing(url):
+    """Whether the server answers and says this index isn't there (HTTP 404).
+
+    False whenever that can't be told: offline, a timeout, any other answer."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=15):
+            return False
+    except urllib.error.HTTPError as e:
+        return e.code == 404
+    except (OSError, ValueError):
+        return False
+
+
+def channel_empty(chan):
+    """Whether the channel the phone follows has no index yet: nothing was
+    published there so far. Only our own channels are asked; a custom Server
+    line that answers 404 is a mistake in the file, not an empty channel."""
+    if chan.get("error") or chan.get("name") not in CHANNELS:
+        return False
+    if chan["name"] == "local":
+        return not os.path.isfile(os.path.join(LOCAL_REPO, ARCH, INDEX))
+    return index_missing(chan["server"].replace("$arch", ARCH).rstrip("/") + "/" + INDEX)
+
+
+def empty_message(chan):
+    return ("The %s channel has no updates yet: nothing is published there so far, so there is nothing to "
+            "update. Omarchy's and Arch's own updates wait with it (pacman needs every repository's index)"
+            % chan["name"])
+
+
 def set_channel(name, path=None):
     """Make CHANNELS[name] the mirrorlist's one active Server line: "" or an error.
 
@@ -262,7 +310,7 @@ def set_channel(name, path=None):
     as unchanged (and updates with the package)."""
     path = path or MIRRORLIST
     want = CHANNELS[name]
-    if name == "local" and not os.path.isfile(os.path.join(LOCAL_REPO, "aarch64", "omamobile.db")):
+    if name == "local" and not os.path.isfile(os.path.join(LOCAL_REPO, ARCH, INDEX)):
         return ("there is no repository at %s/aarch64: push one from a build machine first "
                 "(tools/repo-push), or pick stable or development" % LOCAL_REPO)
     try:
@@ -412,7 +460,7 @@ def pending_updates(offline=False):
     except (OSError, subprocess.TimeoutExpired) as e:
         return [], [], "checkupdates: %s" % e
     if out.returncode not in (0, 2):  # 2: nothing to update
-        return [], [], "could not check for updates (offline?): %s" % (out.stderr.strip()[-200:] or out.returncode)
+        return [], [], "%s (offline?): %s" % (SYNC_FAILED, out.stderr.strip()[-200:] or out.returncode)
     lines = [l for l in out.stdout.splitlines() if l.strip()]
     db = os.environ.get("CHECKUPDATES_DB") or os.path.join(os.environ.get("TMPDIR") or "/tmp", "checkup-db-%d" % os.getuid())
     targets = []
@@ -494,6 +542,12 @@ def check(offline=False, allow_boot=False):
     if 0 <= free < MIN_FREE:
         blockers.append("Only %.1f GiB free; Omarchy's update needs 10 GiB" % (free / 1024 ** 3))
     lines, targets, err = pending_updates(offline)
+    # A channel with nothing published yet: asked only when the check failed,
+    # so a working check costs no extra request
+    empty = err.startswith(SYNC_FAILED) and channel_empty(chan)
+    if empty:
+        err = ""
+    chan = dict(chan, empty=empty, note=empty_message(chan) if empty else "")
     boot = sorted({n for n, _ in targets if BOOT_PACKAGES.match(n)})
     if boot and not allow_boot:
         blockers.append("This update would install %s, which the phone doesn't use (its kernel is linux-omamobile, "
@@ -634,7 +688,7 @@ def run(args):
         f.write("running\n")
     with open(os.path.join(RUNTIME, "pid"), "w") as f:
         f.write("%d\n" % os.getpid())
-    for leftover in ("restart.json", "held"):
+    for leftover in ("restart.json", "held", "channel-empty"):
         try:
             os.unlink(os.path.join(RUNTIME, leftover))
         except OSError:
@@ -671,7 +725,7 @@ def run(args):
             print()
             print("omamobile-update: %s" % result["message"])
             if result["needs_reboot"]:
-                print("Restart the phone to finish (%s): omarchy-system-reboot" % "; ".join(result["reasons"]))
+                print("Restart the phone to finish (%s): omarchy reboot" % "; ".join(result["reasons"]))
             for h in result["held"]:
                 print("Held migration %s (%s): omamobile-update run-migration %s" % (h[0], h[1], h[0]))
         return code
@@ -703,6 +757,10 @@ def run(args):
     code = proc.wait()
     if code == 0:
         return finish("ok", "Updated", 0)
+    empty = read_sys(os.path.join(RUNTIME, "channel-empty"))
+    if code == 6 and empty:
+        result["channel_empty"] = True
+        return finish("ok", empty, 0)
     if code == 3:
         return finish("auth-failed", "Wrong PIN or password", 3)
     if code == 5:
@@ -753,6 +811,13 @@ def inner(args):
         lines, targets, err = pending_updates()
         boot = sorted({n for n, _ in targets if BOOT_PACKAGES.match(n)})
         refusal = ""
+        if err.startswith(SYNC_FAILED):
+            chan = channel_info()
+            if channel_empty(chan):
+                print(empty_message(chan) + ".", flush=True)
+                with open(os.path.join(RUNTIME, "channel-empty"), "w") as f:
+                    f.write(empty_message(chan) + "\n")
+                return 6
         if err:
             refusal = err
         elif boot and not allow_boot:
@@ -930,6 +995,8 @@ def main(argv):
             print("Battery: %s" % ("%d%%%s" % (bat["percent"], ", charging" if bat["charging"] else "") if bat["present"] else "none"))
             chan = result["channel"]
             print("Channel: %s%s" % (chan["name"], " (%s)" % chan["server"] if chan["server"] else ""))
+            if chan["empty"]:
+                print("No updates yet: " + chan["note"])
             print("Phone patches: %s" % result["patches"]["result"])
             for b in result["blockers"]:
                 print("Blocked: " + b)

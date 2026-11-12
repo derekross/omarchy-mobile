@@ -22,6 +22,7 @@ install -Dm755 lib/omamobile-modem-nv-overlay "$v/omamobile-modem-nv-overlay"
 install -Dm755 bin/omamobile-modem "$d/usr/bin/omamobile-modem"
 install -Dm644 profiles/modem.conf "$v/profiles/modem.conf"
 install -Dm644 modem/props.conf "$v/modem/props.conf"
+install -Dm644 modem/stop-witness-version "$v/modem/stop-witness-version"
 for u in omamobile-modem.service omamobile-modem-inhibit.service omamobile-modem-boot.target \
          omamobile-modem-nv-overlay.service omamobile-modem-nv-overlay.timer; do
   install -Dm644 "systemd/$u" "$d/usr/lib/systemd/system/$u"

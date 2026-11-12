@@ -79,9 +79,13 @@ Bring-up tools (`*-stage`, `display-hz`, `usbc-deadman`) stay per plan: they pok
 | `BOOT_METHOD` | `android-v4` (default when omitted) | Generic images, flash, push and installer accept only `android-v4`; other methods are refused before phone access. `ram-only` marks a probe with no persistent install support. `android-v0` (enchilada) is a header-v0 phone: `images` packs one `boot.img` for `fastboot boot`, and fastboot, flash, push and the installer refuse it |
 | `PAGESIZE`, `BASE`, `KERNEL_OFFSET`, `RAMDISK_OFFSET`, `SECOND_OFFSET`, `TAGS_OFFSET` | (enchilada: `4096`, `0x00000000`, `0x00008000`, `0x01000000`, `0x00f00000`, `0x00000100`) | `android-v0` only, all required: the header-v0 page size and load offsets, numbers in decimal or lower-case hex. `images` packs the gzip `Image` with the `DTB` appended as the kernel, the initramfs as the ramdisk and `CMDLINE` as the command line. `BOOT_IMAGES` is `boot` alone and `boot_b` must be on `UFS_RW` |
 | `BOOT_IMAGES` | `boot init_boot vendor_boot vendor_kernel_boot dtbo` | The images written to slot B (the `_b` suffix is added by the tools and is not configurable). `boot`, `vendor_boot` and `dtbo` are always there. Without `init_boot`, `boot` carries the empty generic ramdisk and the OS version; without `vendor_kernel_boot`, `vendor_boot` carries the DTB and the initramfs (the Pixel 6: `boot vendor_boot dtbo`) |
+| `BOOT_UPDATE_AUTO_WRITE` | (unset; defaults to `yes`) | Optional: `yes` or `no`. The installer records it as `AUTO_WRITE` in `/etc/omamobile/boot-update.conf`; `no` keeps an installed development root from writing slot B through package updates. It does not change the installer's own allowed writes |
 | `UFS_RW` | `boot_b … dtbo_b userdata` | The storage guard's allowlist, packed into the initramfs as `/etc/omamobile-ufs-rw`. Only slot B's boot images (`boot_b`, `init_boot_b`, `vendor_boot_b`, `vendor_kernel_boot_b`, `dtbo_b`) and `userdata` are accepted, `userdata` and every `BOOT_IMAGES` entry must be on it, and each name only once. The init fails closed: a missing, empty or malformed file, or any other name in it, leaves every partition read-only |
 | `UFS_RW_LUNS` | (unset) | Optional. The LUNs besides `sda` that hold `UFS_RW` partitions, as disk names `sdb` to `sdz`, packed as `/etc/omamobile-ufs-rw-luns`. The init guards each as it guards `sda`: the whole-disk node removed, the disk left writable, and only its `UFS_RW` partitions left writable. Absent (every descriptor so far), malformed, or with a closed allowlist: every LUN but `sda` stays read-only at the disk level. Boot-image writers on the phone (`omamobile-boot-update`) still look only on `sda` |
 | `INITRAMFS_INIT` | `/initramfs/init` | The init script. A leading `/` is relative to the repo root, so devices share one script. Any other value is relative to the descriptor |
+| `INITRAMFS_ROOT_LABEL` | (unset) | Optional: `omamobile-root` enables read-only label/header checks before ext4 repair or mounting; only `e2fsck -p` statuses 0 and 1 proceed. Omitted: existing root handling, including unlabelled hand-installed roots, is unchanged |
+| `INITRAMFS_ROOT_MODE` | (unset) | Optional: `persistent-development` or `ram-rescue`, requiring `INITRAMFS_ROOT_LABEL=omamobile-root`. The former skips growth and writes `/var/lib/omamobile/root-boot-pending` before handover; an installed, enabled SSH-ready helper must clear it after USB SSH is ready, or subsequent boots stay in RAM until the marker is cleared. The latter always stays in RAM. Omitted: existing handover behavior |
+| `INITRAMFS_USB_RECOVERY` | (unset) | Optional: `yes` or `no`; `no` disables the separate 45-second no-host crash for an attended development/recovery policy. Omitted or `yes`: existing USB recovery behavior. Independent of root mode; retain watchdog and buttons/fastboot recovery |
 | `INITRAMFS_MODULES` | (unset) | Optional: kernel modules the initramfs carries in `/lib/modules/omamobile/`, listed in load order in `/lib/modules/omamobile/order`, from this kernel build's `lib/modules/$(kernel_release)` (`omamobile modules` first). The shared init loads them before any other step, and only on a board whose first compatible is `COMPATIBLE`. For drivers the boot needs before the Arch root, such as the PMIC rails a `simple-framebuffer` waits for; `images` refuses an initramfs whose modules come from another build |
 | `INITRAMFS_I2C_TOOLS` | (unset) | `1`: `i2cget` and `i2cset` (and `libi2c`) from Alpine's i2c-tools in the initramfs, for an init that talks to a chip before any driver runs (raven closes the MAX77759 USB switch). Nothing else from the package |
 | `INITRAMFS_FB_WAIT` | (unset) | `1`: the init draws the early splash once `/dev/fb0` exists (waiting up to 3 s in the background) rather than at once, for a phone whose `simple-framebuffer` registers only after `INITRAMFS_MODULES` give it its rails (raven) |
@@ -98,6 +102,58 @@ The Pixel 4 (`flame`, SM8150) is a separate RAM-only first-light probe.
 Its `ram-only` descriptor has empty `BOOT_IMAGES` and `UFS_RW`; build it with
 `tools/build-flame-probe`, following [its runbook](../device/flame/BRINGUP-M1.md).
 It does not use the generic Tensor image builder or installer.
+
+### Optional initramfs root policy
+
+Existing descriptors retain their current boot path. A descriptor may opt in:
+
+- `INITRAMFS_ROOT_LABEL=omamobile-root`: inspect userdata read-only before
+  repair or mounting; refuse another label or a failed ext4 header read. Only
+  `e2fsck -p` statuses 0 and 1 may proceed. Old hand-installed, unlabelled roots
+  are unaffected until their descriptor explicitly opts in.
+- `INITRAMFS_ROOT_MODE=persistent-development`: require the label protection,
+  skip initramfs growth, and persist `/var/lib/omamobile/root-boot-pending` before
+  systemd handover. Install and enable the matching SSH-ready service on the
+  root before using this mode; it must clear the marker after USB SSH is ready.
+  Without that helper, the first boot hands over and leaves the marker behind;
+  every subsequent boot stays in RAM until the marker is cleared manually.
+  `ram-rescue` always stays in RAM.
+- `INITRAMFS_USB_RECOVERY=no`: disable the separate 45-second no-host crash.
+  Development roots may finish booting without a USB host, and a failed root
+  handover must remain available in RAM instead of consuming slot retries.
+  This is an explicit choice, independent of root mode; the existing recovery
+  behavior remains the default. Retain a hardware-watchdog and buttons/fastboot
+  recovery runbook before using a development image.
+
+These keys change image construction only; no shipped descriptor opts in here.
+Unknown root-mode files fail closed in RAM. This change has offline test evidence,
+not a fresh phone boot.
+
+`INITRAMFS_ROOT_MODE` and `INITRAMFS_USB_RECOVERY=no` are local development
+settings and are refused by `initramfs --release`. With USB recovery left on,
+each held boot without a USB host still spends a slot try when it restarts.
+The handover marker is written only after the final storage-guard check passes.
+
+After investigating the failure, clear the marker from the RAM rescue shell
+to permit one more handover attempt. Find userdata by its partition name,
+confirm it is the installed root, then mount it, remove the marker and unmount:
+
+```sh
+userdata=
+for part in /sys/class/block/sd*; do
+  [ -r "$part/partition" ] || continue
+  if grep -qx PARTNAME=userdata "$part/uevent"; then userdata=/dev/${part##*/}; fi
+done
+mkdir -p /newroot
+if [ -n "$userdata" ] && mount -t ext4 -o rw "$userdata" /newroot; then
+  rm -f /newroot/var/lib/omamobile/root-boot-pending
+  sync
+  umount /newroot
+fi
+```
+
+Clearing the marker does not repair the failed startup or replace the SSH-ready
+helper. A further failed handover sets it again and holds subsequent boots.
 
 ### 3.2 Keys to add later
 
@@ -206,7 +262,7 @@ The same Alpine-based initramfs, with release differences:
 
 `omamobile-omarchy` (in every image built from 2026-10-13 on, and a dependency of `omamobile-shell`, so `omarchy update` brings it to older phones) owns both halves; the details are in the headers of its `bin/omamobile-update` and `bin/omamobile-omarchy-patches`.
 
-**The patches survive upgrades.** Two series families ship in the package, selected by the installed Omarchy version: `packages/omamobile-omarchy/legacy-4.0.6/` for today's 4.0.6 phones, and `packages/omamobile-omarchy/patches/` for 4.5 (`patches/omarchy` links only to the latter). Fixes for today's phones must go in `legacy-4.0.6/`, and also in `patches/` when applicable to 4.5. Its pacman hook (`95-omamobile-omarchy-patches.hook`, PostTransaction on `omarchy`, `omarchy-dev` and itself) re-applies it after every transaction that replaces Omarchy's files, and `rootfs/build-inside` runs the same tool, so image builds and upgrades take one code path. Every run starts from Omarchy's own files (checked against the package's mtree), applies the series in a scratch tree with `--fuzz=0`, verifies it by reversing it back to Omarchy's files, and only then swaps the files in. A patch whose reverse applies is already in Omarchy (a backport that landed): it is skipped and reported, and should be dropped from the series. Any other failure leaves Omarchy's files exactly as shipped, logs to `/var/log/omamobile/omarchy-patches.log` and notifies the user (the lock's PIN pad may be missing until a fixed series ships). A file that matches neither Omarchy's copy nor the last patched one was changed by something else and is never overwritten.
+**The patches survive upgrades.** Two series families ship in the package, selected by the installed Omarchy version: `packages/omamobile-omarchy/patches/` for 4.5 (`patches/omarchy` links only to it), and `packages/omamobile-omarchy/legacy-4.0.6/` for a phone still on 4.0.6, until its next update. Fixes go in `patches/`. Its pacman hook (`95-omamobile-omarchy-patches.hook`, PostTransaction on `omarchy`, `omarchy-dev` and itself) re-applies it after every transaction that replaces Omarchy's files, and `rootfs/build-inside` runs the same tool, so image builds and upgrades take one code path. Every run starts from Omarchy's own files (checked against the package's mtree), applies the series in a scratch tree with `--fuzz=0`, verifies it by reversing it back to Omarchy's files, and only then swaps the files in. A patch whose reverse applies is already in Omarchy (a backport that landed): it is skipped and reported, and should be dropped from the series. Any other failure leaves Omarchy's files exactly as shipped, logs to `/var/log/omamobile/omarchy-patches.log` and notifies the user (the lock's PIN pad may be missing until a fixed series ships). A file that matches neither Omarchy's copy nor the last patched one was changed by something else and is never overwritten.
 
 **The update takes the phone's path.** Patch 0012 hands `omarchy update` to `omamobile-update`, which runs Omarchy's own `omarchy-update -y` unchanged, with stand-ins first on `PATH` for the steps that don't belong on a phone. Step by step:
 
@@ -230,9 +286,11 @@ The same Alpine-based initramfs, with release differences:
 
 **The kernel** reaches a phone as `linux-omamobile` through this same update (from `omamobile-omarchy` 0.1.28): before anything is downloaded, an update that brings it asks `omamobile-boot-update preflight` (read-only), and refuses when the hook would refuse the write, so a phone never holds a kernel package its slot B doesn't match. With `AUTO_WRITE` off (a development phone) the package installs and slot B stays `bin/omamobile push`'s. The battery rule covers the write, and the hook checks the battery again itself; the result asks for a restart when slot B was written (the restart stand-in reads `/run/omamobile/boot-update.json`). Nothing reboots by itself. `OMAMOBILE_UPDATE=1 omarchy-update` runs Omarchy's flow unwrapped (an escape hatch, not for normal use); `pacman -Syu` stays blocked by Omarchy's guard.
 
+**A channel with nothing published yet is a normal state.** When the check for updates fails and the `[omamobile]` channel's server says its index isn't there (HTTP 404; for `local`, no repository pushed yet), `omamobile-update check` reports `channel.empty` with no blocker and exit 0 ("The stable channel has no updates yet"), and an update ends as done with nothing to do. pacman needs every repository's index, so Omarchy's and Arch's updates wait with it. Any other failure (offline, a server error, a custom `Server` line answering 404) stays an error. Stable has had an index since the 2026.11.08 release, so today this is `local` before its first `tools/repo-push`, or a new server.
+
 **The phone follows Omarchy's stable channel.** Phones installed before 2026-10-20 take `[omarchy]` from edge, which then carried 4.5.0rc1, a release candidate the phone's patches don't apply to. Switch before the next update, because the update would fetch the candidate in the same transaction as the fixed patches: `sudo sed -i 's|pkgs.omarchy.org/edge/|pkgs.omarchy.org/stable/|' /etc/pacman.conf && sudo rm -f /var/lib/pacman/sync/omarchy.db* /tmp/checkup-db-*/sync/omarchy.db*`. Removing edge's cached database matters: it is newer than stable's, so pacman's refresh keeps it and still offers the candidate. `omamobile-omarchy` 0.1.3's `omamobile-update` refuses an edge or rc `[omarchy]` and prints that line. Don't use Omarchy's own `omarchy-channel-set` or `omarchy-refresh-pacman` on the phone: they copy Omarchy's x86 `pacman.conf` and mirrorlist over the phone's (no `[omamobile]`, no Arch Linux ARM) and then upgrade everything.
 
-**`[omamobile]` can hold Omarchy at a version the patches support.** `rootfs/packages.pinned` lists upstream package files by SHA-256 and URL (upstream's first, then our published copy, for when upstream prunes it); `tools/build-packages` adds them to `out/repo` unchanged, signed with the release key, so the daily publish carries them too; it refuses a pin with the name of a package we build, and `tools/release`'s packages stage refuses an index without every pin. `[omamobile]` comes first, so its copy wins over the newer one in `[omarchy]`: `omarchy update` (and `checkupdates`, behind the update toast) offers no newer Omarchy, and images install the pinned one. Since 2026-11-06 it holds `omarchy` and `omarchy-settings` at 4.0.6, while the 4.5 companion changes and update validation remain pending (#433, #434); 4.5's migrations can install packages that replace ours. Once the new series and its companions are accepted, the maintainer moves the pins to the reviewed package versions and phones move on at their next update. A phone that already took the newer Omarchy keeps it: pacman doesn't downgrade on `-Syu`.
+**`[omamobile]` can hold Omarchy at a version the patches support.** `rootfs/packages.pinned` lists upstream package files by SHA-256 and URL (upstream's first, then our published copy, for when upstream prunes it); `tools/build-packages` adds them to `out/repo` unchanged, signed with the release key, so the daily publish carries them too; it refuses a pin with the name of a package we build, and `tools/release`'s packages stage refuses an index without every pin. `[omamobile]` comes first, so its copy wins over the newer one in `[omarchy]`: `omarchy update` (and `checkupdates`, behind the update toast) offers no newer Omarchy, and images install the pinned one. From 2026-11-06 it held `omarchy` and `omarchy-settings` at 4.0.6, because the series didn't apply to 4.5 and 4.5's migrations could install packages that replace ours (#433, #434). Since 2026-11-11 it holds them at 4.5.0-3, the version the 4.5 series, the update's stand-ins and the held migrations were checked against (a rehearsal image, then the 7 Pro's own update from 4.0.6); phones on 4.0.6 move to it at their next `omarchy update`. For a later Omarchy the maintainer moves the pins once the series is checked against it. A phone that already took the newer Omarchy keeps it: pacman doesn't downgrade on `-Syu`.
 
 **Recovering a phone that took Omarchy 4.0.6 with `omamobile-omarchy` 0.1.0.** Its migration 1791403252 ran: `[omarchy]` sits above `[omamobile]`, Omarchy's Hyprland replaced the phone's, and no phone patch applies (no PIN pad on the lock screen, `omarchy update` no longer handed over). `omamobile-update` then refuses on the repository order, so the fix goes in by hand, over SSH or in a terminal on the phone:
 
@@ -339,6 +397,18 @@ The bundle's signed `SHA256SUMS` covers its `MANIFEST`, which names the exact ro
 - **Server:** `tools/server/releases-nginx.sh`, run once by the maintainer with sudo on the server, adds a `location ^~ /releases/` to the `pkgs.omamobile.org` vhost. The vhost already serves `/releases/` as plain files: a missing file is a 404, and byte ranges and `Content-Length` work. The script adds `Access-Control-Allow-Origin: *` with the exposed range headers and an answer to `OPTIONS` preflights, `Cross-Origin-Resource-Policy: cross-origin`, MIME types for `.json`, `.zst`, `.img`, `.sig` and `.sha256`, no gzip (so sizes stay exact), a year's immutable cache on version directories (but not on their 404s), `no-cache` on `latest.json`, a 403 for the upload's staging directories, and the security-headers snippet in every location. It does a dry run first, `nginx -t`, a verified reload and live checks, and it rolls back on any failure (`revert` undoes it).
 - **Bandwidth:** each install downloads about 2.8 GB (a 2.7 GB root image plus about 80 MB of boot images, from the `.tar` or file by file; the `.tar` doubles the storage a release takes on the server, not the transfer), so 1 TB of transfer is about 350 installs. GitHub's per-file limit is 2 GiB, so a root image there would have to be split and joined again, which a browser flasher and the signed manifest would both have to know about. Our own server stays the one source; check the VPS plan's monthly transfer allowance before announcing a release.
 
+### Development installer policy
+
+A device descriptor may set `BOOT_UPDATE_AUTO_WRITE=no` to keep an installed
+development root from writing boot images through package updates. The
+installer records that value in `/etc/omamobile/boot-update.conf`; descriptors
+that omit the key retain `AUTO_WRITE=yes`. Only `yes` and `no` are accepted.
+This does not change which partitions the installer itself writes.
+
+Use `tools/install-phone --serial <SERIAL>` to pin the phone for an install;
+this is the installer's existing command-line check, independent of the
+automatic boot-update policy.
+
 ## 7. Versions and tags
 
 | Thing | Version | Where it is recorded |
@@ -413,7 +483,7 @@ Per release, in order. Stop at any failed step. `tools/release` runs the checkli
 3. **Build** [`build`] the kernel from the tag in the pinned container with the pinned clang (the stage checks `toolchain.txt`), release `LOCALVERSION` (`bin/omamobile kernel --release`), into the fixed `$KERNEL_BASE/out-kernel-release` (byte-identical builds need the same paths; the stage refuses that directory when it holds anything but a release build); stage `linux-omamobile` from it (`packages/linux-omamobile/stage`, §4).
 4. **Images** [`images`] for every device: `DEVICE=<codename> bin/omamobile initramfs --release`, then `DEVICE=<codename> bin/omamobile images`, twice, checksums equal; then the device package's boot files (§5), for a device package whose `install` ships them (`OMAMOBILE_BOOT_FILES`): kept when `tools/stage-boot-files --check` finds them current, since the device package in `out/repo` was built from them, and then the boot images are built from their initramfs, so the bundle boots the bytes every phone's hook writes later; when they are stale, staged again only for a new device-package version (the stage asks for the bump when `out/repo` already has the current one), then `tools/build-packages packages/<device package>`.
 5. **Packages** [`packages`]: every changed package has a bumped `version`, its `test/all` passes, `tools/build-packages` builds and signs them and the database on the laptop (`tools/repo-build` on a phone only as an opt-in shortcut). The stage checks that `out/repo` is signed by the release key, holds every package the image installs at this checkout's version, and that development publishes exactly it (`tools/repo-publish --no-build development`); it pins that index. `linux-omamobile` and `omamobile-boot-update` are among the image's packages (decision 10); `tools/build-packages` builds `linux-omamobile` only when named (`tools/build-packages packages/linux-omamobile`), and the stage checks the device package carries the staged boot files' initramfs. Then [`rootfs`] the root image on the stable channel from the pinned index, carrying both, and [`bundle`] the signed bundle.
-6. **Test install** [`test-install`] on each released device, attended (this gates the release, §12.10): the signed bundle's `install` on a phone whose stock slot A and backups are known good; first boot, device package installed, `omarchy update` clean, then a package-hook kernel update and a reboot into it; on the Pixel 7 Pro with a SIM, after `tools/phone-provision` and the carrier settings, the modem stack comes up at boot on its own ([MODEM-PLAN](../device/cheetah/MODEM-PLAN.md) M4.6b) and the phone registers. The bundle is signed before this step, so the bytes tested are the bytes released; `test-install --passed "<uname -r>"` records it.
+6. **Test install** [`test-install`] on each released device, attended (this gates the release, §12.10): the signed bundle's `install` on a phone whose stock slot A and backups are known good; first boot, device package installed, `omarchy update` clean (the installed phone follows stable, and `promote` comes after this step: the stage first asks the server whether stable has an index, and with none, which can only be before the first release to a server, prints the one-time promotion of the pinned index and stops; later releases find the previous release there), then a package-hook kernel update and a reboot into it; on the Pixel 7 Pro with a SIM, after `tools/phone-provision` and the carrier settings, the modem stack comes up at boot on its own ([MODEM-PLAN](../device/cheetah/MODEM-PLAN.md) M4.6b) and the phone registers. The bundle is signed before this step, so the bytes tested are the bytes released; `test-install --passed "<uname -r>"` records it.
 7. **Identifiers** [`identifiers`]: grep the bundle, the root image's file list, `MANIFEST` and the release notes for MAC addresses (`[0-9a-f]{2}(:[0-9a-f]{2}){5}`), serial numbers, SSIDs and account names; confirm no file from a factory image is in any artifact. The stage also reads the root image's `/etc`, `/root` and our own directories and the release initramfs; serials, SSIDs and account names come from a private list outside the repository (`~/.config/omamobile/release-identifiers`, one per line). `tools/release scan FILE...` checks any file the same way.
 8. **Verify** [`verify`] the release's signature from a clean keyring: the bundle's `SHA256SUMS.sig` by the release key, every file against `SHA256SUMS`, and the root image against the SHA-256 the signed `MANIFEST` names (the bundle stage signed it; the root image needs no signature of its own, since the installer and `manifest.json` authorise it only through that signed record); upload [`upload`] them to `pkgs.omamobile.org/releases/` (§6) with `tools/release-upload --dry-run out/bundle/omamobile-<codename>-<date>`, then `tools/release-upload --full --latest out/bundle/omamobile-<codename>-<date>`, files before the index (`upload --done` reads them back with `--verify-only`); promote [`promote`] the release's packages to `stable`: `tools/repo-publish stable --expect-index <sha256>` promotes development's index and files unchanged, signatures included, and only if development's index is still the one the release was built and tested from.
 9. **Tag** [`tag`] `release-<date>` in this repository; publish the repository, the bundles and the notes (`docs/release-notes/<date>.md`: what changed, the kernel tag and its `uname -r`, known issues, how to go back to stock).

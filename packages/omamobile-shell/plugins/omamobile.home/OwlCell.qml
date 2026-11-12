@@ -62,6 +62,18 @@ Item {
     }
   }
 
+  // Back (omamobile.back's BackLink.js) closes the widget's screen, as a tap
+  // on its title does, while the home screen shows.
+  Loader {
+    source: Qt.resolvedUrl("../omamobile.back/BackLinkClient.qml")
+    onLoaded: {
+      item.name = "widget screen"
+      item.handler = function() { owl.closeScreen() }
+      item.active = Qt.binding(function() { return owl.screenOpen && !owlCell.editing && !!owlCell.home
+                                                         && owlCell.home.homeShown && Object.keys(owlCell.home.layersOver).length === 0 })
+    }
+  }
+
   // The screen's title and the way back, as our built-ins show their
   // longer view in place ("‹" goes back). Back also comes from close().
   Item {

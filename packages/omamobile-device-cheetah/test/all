@@ -17,6 +17,17 @@ pass "build stays inside the package directory"
 ./build "$tmp/build" || fail "C tools compile"
 pass "C tools compile"
 
+# reboot-to.c is also linked into the initramfs, and for a phone without
+# bootctl that link is against musl with no compiler builtins
+# (bin/omamobile initramfs). musl's vfprintf needs those builtins
+# (__addtf3, __extenddftf2 and others, for long double), so one printf-family
+# call stops that build with "reboot-to failed to link", and CI doesn't build
+# that path. The other device packages hold their copy to this one.
+if grep -nE '\<v?(f|s|sn|d|as)?printf[[:space:]]*\(' src/reboot-to.c; then
+  fail "reboot-to.c calls the printf family, which doesn't link in the initramfs of a phone without bootctl"
+fi
+pass "reboot-to.c calls nothing from the printf family"
+
 # omamobile-bootctl against a synthetic devinfo: dump works, and a dry run
 # of mark-successful plans exactly one flag byte and writes nothing
 python3 - "$tmp/devinfo" <<'PY'
@@ -188,3 +199,180 @@ pass "sitd waits for the CP; the modem stack is on by default through the target
   || fail "the device sitd policy is staged"
 grep -q 'omamobile-sitd-policy' PKGBUILD || fail "the package provides its sitd policy capability"
 pass "the device sitd policy is staged and provided"
+# The USB gadget's MAC addresses stay the same across boots (omamobile-usb-mac),
+# against a fake gadget: plain directories and files stand in for configfs.
+for f in usr/bin/omamobile-usb-mac usr/lib/systemd/system/omamobile-usb-mac.service; do
+  [[ -e $tmp/root/$f ]] || fail "install stages $f"
+done
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-mac.service") == ../omamobile-usb-mac.service ]] \
+  || fail "the USB address unit is enabled by a vendor wants link"
+grep -qx 'WantedBy=multi-user.target' vendor/systemd/system/omamobile-usb-mac.service || fail "the link matches the unit's own [Install]"
+grep -qx 'Before=network-pre.target' vendor/systemd/system/omamobile-usb-mac.service || fail "the addresses change before the network is configured"
+grep -v '^[[:space:]]*#' bin/omamobile-usb-mac | grep -Ec 'serial|/proc/cpuinfo|ro\.serialno|androidboot|/proc/cmdline|device-tree' >/dev/null && fail "the USB addresses never come from an identifier of the phone"
+
+mkgadget() {	# mkgadget DIR: a gadget like the initramfs makes it, bound to a UDC
+  local g=$1
+  mkdir -p "$g/configs/c.1" "$g/functions/ncm.usb0" "$g/functions/acm.GS0"
+  printf '02:00:00:00:00:a1 \n' > "$g/functions/ncm.usb0/host_addr"
+  printf '02:00:00:00:00:b1 \n' > "$g/functions/ncm.usb0/dev_addr"
+  ln -s "$g/functions/ncm.usb0" "$g/configs/c.1/ncm.usb0"
+  ln -s "$g/functions/acm.GS0" "$g/configs/c.1/acm.GS0"
+  echo 11210000.usb > "$g/UDC"
+}
+# ln and rm are logged, so the order the functions come back in is checked
+mkdir -p "$tmp/fakebin"
+for c in ln; do
+  printf '#!/bin/bash\necho "$(cat "$USB_GADGET/UDC" 2>/dev/null)|$(ls "$(dirname "$USB_MAC_FILE")/usb-mac-cycle-started" 2>/dev/null)|$*" >> "$USB_OPS"\nexec /usr/bin/%s "$@"\n' "$c" > "$tmp/fakebin/$c"
+  chmod +x "$tmp/fakebin/$c"
+done
+usbmac() { PATH=$tmp/fakebin:$PATH USB_OPS=$tmp/ops USB_GADGET=$tmp/g1 USB_MAC_FILE=$tmp/state/mac USB_IFACE=nosuch0 bin/omamobile-usb-mac; }
+
+mkgadget "$tmp/g1"; : > "$tmp/ops"
+usbmac > "$tmp/usbmac.log" || { cat "$tmp/usbmac.log"; fail "omamobile-usb-mac runs"; }
+host=$(sed -n 's/^host=//p' "$tmp/state/mac"); dev=$(sed -n 's/^dev=//p' "$tmp/state/mac")
+for m in "$host" "$dev"; do
+  [[ $m =~ ^[0-9a-f]{2}(:[0-9a-f]{2}){5}$ ]] || fail "the saved address $m is six hex pairs"
+  (( (16#${m:0:2} & 3) == 2 )) || fail "the saved address $m is unicast and locally administered"
+done
+[[ $host != "$dev" ]] || fail "the host and phone addresses differ"
+[[ $(stat -c %a "$tmp/state/mac") == 600 ]] || fail "the saved addresses are private to root"
+read -r a _ < "$tmp/g1/functions/ncm.usb0/host_addr"; read -r b _ < "$tmp/g1/functions/ncm.usb0/dev_addr"
+[[ $a == "$host" && $b == "$dev" ]] || fail "the gadget got the saved addresses"
+[[ $(cat "$tmp/g1/UDC") == 11210000.usb ]] || fail "the UDC is bound again"
+[[ -L $tmp/g1/configs/c.1/ncm.usb0 && -L $tmp/g1/configs/c.1/acm.GS0 ]] || fail "both functions are linked again"
+# NCM is linked before ACM, and both while the UDC was unbound (empty before the bar)
+[[ $(cut -d'|' -f1 "$tmp/ops" | sort -u) == "" ]] || fail "the functions were linked while the UDC was unbound"
+# The hang marker was there while the gadget was apart, and is gone now
+[[ $(cut -d'|' -f2 "$tmp/ops" | sort -u) == "$tmp/state/usb-mac-cycle-started" ]] || fail "the hang marker exists while the gadget is taken apart"
+[[ ! -e $tmp/state/usb-mac-cycle-started ]] || fail "the hang marker is removed once the gadget is back together"
+# The addresses are never printed in the log
+grep -qiE '([0-9a-f]{2}:){5}[0-9a-f]{2}' "$tmp/usbmac.log" && fail "the log carries no MAC address"
+[[ $(grep -n 'ncm.usb0' "$tmp/ops" | head -1) == 1:* ]] || fail "NCM is linked first"
+[[ $(grep -n 'acm.GS0' "$tmp/ops" | head -1) == 2:* ]] || fail "ACM is linked second"
+
+# A second boot: the kernel made new random addresses, the saved ones go back on
+printf '02:00:00:00:00:c1 \n' > "$tmp/g1/functions/ncm.usb0/host_addr"
+cp "$tmp/state/mac" "$tmp/mac.before"
+usbmac > /dev/null || fail "omamobile-usb-mac runs on a second boot"
+cmp -s "$tmp/mac.before" "$tmp/state/mac" || fail "the saved addresses are kept across boots"
+read -r a _ < "$tmp/g1/functions/ncm.usb0/host_addr"
+[[ $a == "$host" ]] || fail "the second boot gets the same host address"
+
+# Already right: nothing is taken apart
+: > "$tmp/ops"
+usbmac > "$tmp/usbmac.log" || fail "omamobile-usb-mac runs when nothing changed"
+[[ ! -s $tmp/ops ]] || fail "a gadget with the right addresses is left alone"
+grep -q 'already has' "$tmp/usbmac.log" || fail "it says nothing changed"
+grep -qiE '([0-9a-f]{2}:){5}[0-9a-f]{2}' "$tmp/usbmac.log" && fail "the log carries no MAC address when nothing changed"
+
+# The previous boot hung inside the unbind or the bind: the marker is still
+# there, so this boot leaves the gadget as the initramfs made it and removes it
+printf '02:00:00:00:00:c1 \n' > "$tmp/g1/functions/ncm.usb0/host_addr"
+date -Is > "$tmp/state/usb-mac-cycle-started"; : > "$tmp/ops"
+cp "$tmp/state/mac" "$tmp/mac.before"
+usbmac > "$tmp/usbmac.log" 2>&1 || { cat "$tmp/usbmac.log"; fail "omamobile-usb-mac stands aside when the last boot did not finish"; }
+[[ ! -s $tmp/ops ]] || fail "a found marker means the gadget is not touched"
+[[ $(cat "$tmp/g1/UDC") == 11210000.usb ]] || fail "a found marker leaves the UDC bound"
+read -r a _ < "$tmp/g1/functions/ncm.usb0/host_addr"
+[[ $a == "02:00:00:00:00:c1" ]] || fail "a found marker leaves the gadget as the initramfs made it"
+grep -q 'did not finish' "$tmp/usbmac.log" || fail "a found marker is reported"
+[[ ! -e $tmp/state/usb-mac-cycle-started ]] || fail "a found marker is removed"
+cmp -s "$tmp/mac.before" "$tmp/state/mac" || fail "a found marker keeps the saved addresses"
+# ... and the boot after that tries again
+usbmac > /dev/null || fail "omamobile-usb-mac runs again after the marker was removed"
+read -r a _ < "$tmp/g1/functions/ncm.usb0/host_addr"
+[[ $a == "$host" ]] || fail "the boot after a found marker puts the saved addresses back"
+
+# A saved file that is damaged is replaced, never half-used
+printf 'host=nonsense\ndev=%s\n' "$dev" > "$tmp/state/mac"
+usbmac > /dev/null || fail "omamobile-usb-mac runs with a damaged file"
+host2=$(sed -n 's/^host=//p' "$tmp/state/mac")
+[[ $host2 =~ ^[0-9a-f]{2}(:[0-9a-f]{2}){5}$ ]] || fail "a damaged file is replaced"
+printf 'host=%s\ndev=%s\n' "$host2" "$host2" > "$tmp/state/mac"
+usbmac > /dev/null || fail "omamobile-usb-mac runs with equal addresses"
+[[ $(sed -n 's/^host=//p' "$tmp/state/mac") != $(sed -n 's/^dev=//p' "$tmp/state/mac") ]] || fail "equal addresses are replaced"
+
+# The kernel refuses an address: the gadget is put back together anyway
+rm -rf "$tmp/g2" "$tmp/state2"; mkgadget "$tmp/g2"
+rm "$tmp/g2/functions/ncm.usb0/host_addr"; mkdir "$tmp/g2/functions/ncm.usb0/host_addr"	# a write to a directory fails, even as root
+if PATH=$tmp/fakebin:$PATH USB_OPS=$tmp/ops USB_GADGET=$tmp/g2 USB_MAC_FILE=$tmp/state2/mac USB_IFACE=nosuch0 bin/omamobile-usb-mac > "$tmp/usbmac.log" 2>&1; then
+  fail "a refused address is an error"
+fi
+[[ $(cat "$tmp/g2/UDC") == 11210000.usb ]] || fail "the UDC is bound again after a refused address"
+[[ -L $tmp/g2/configs/c.1/ncm.usb0 && -L $tmp/g2/configs/c.1/acm.GS0 ]] || fail "both functions are linked again after a refused address"
+grep -q 'refused host_addr' "$tmp/usbmac.log" || fail "the refusal is logged"
+[[ ! -e $tmp/state2/usb-mac-cycle-started ]] || fail "a refused address is a failure, not a hang: no marker is left"
+
+# The trap path (a start timeout's SIGTERM while the cycle is in progress):
+# the gadget is put back together, but the marker stays, so a hang that systemd
+# interrupts does not repeat at every boot. A fake rm sends the SIGTERM when
+# the functions are unlinked.
+rm -rf "$tmp/g7" "$tmp/state7"; mkgadget "$tmp/g7"
+printf '#!/bin/bash\ncase "$*" in *configs*) kill -TERM $PPID; sleep 1;; esac\nexec /usr/bin/rm "$@"\n' > "$tmp/fakebin/rm"
+chmod +x "$tmp/fakebin/rm"
+{ PATH=$tmp/fakebin:$PATH USB_OPS=$tmp/ops USB_GADGET=$tmp/g7 USB_MAC_FILE=$tmp/state7/mac USB_IFACE=nosuch0 bin/omamobile-usb-mac > "$tmp/usbmac.log" 2>&1; } 2>/dev/null || true
+rm -f "$tmp/fakebin/rm"
+[[ -e $tmp/state7/usb-mac-cycle-started ]] || fail "a start interrupted by SIGTERM keeps the hang marker"
+[[ $(cat "$tmp/g7/UDC") == 11210000.usb ]] || fail "the UDC is bound again after SIGTERM"
+[[ -L $tmp/g7/configs/c.1/ncm.usb0 && -L $tmp/g7/configs/c.1/acm.GS0 ]] || fail "both functions are linked again after SIGTERM"
+PATH=$tmp/fakebin:$PATH USB_OPS=$tmp/ops USB_GADGET=$tmp/g7 USB_MAC_FILE=$tmp/state7/mac USB_IFACE=nosuch0 bin/omamobile-usb-mac > "$tmp/usbmac.log" 2>&1 || true
+grep -q 'did not finish' "$tmp/usbmac.log" || fail "the boot after SIGTERM reports the marker"
+[[ ! -e $tmp/state7/usb-mac-cycle-started ]] || fail "the boot after SIGTERM removes the marker"
+
+# usb0 gets the phone address too, and the kernel refuses that on a link that
+# is up: a fake ip refuses until the link is down, then takes it and brings it up
+rm -rf "$tmp/g5" "$tmp/net" "$tmp/ipstate"; mkgadget "$tmp/g5"; mkdir -p "$tmp/net/usb0" "$tmp/ipstate"
+echo 02:00:00:00:00:b1 > "$tmp/net/usb0/address"; : > "$tmp/ipstate/up"
+cat > "$tmp/fakebin/ip" <<'IP'
+#!/bin/bash
+echo "$*" >> "$IP_LOG"
+case $* in
+  "link set dev usb0 down") rm -f "$IP_STATE/up" ;;
+  "link set dev usb0 up") : > "$IP_STATE/up" ;;
+  "link set dev usb0 address "*)
+    [[ -e $IP_STATE/up ]] && { echo "RTNETLINK answers: Device or resource busy" >&2; exit 2; }
+    echo "${@: -1}" > "$USB_NETDIR/usb0/address" ;;
+esac
+IP
+chmod +x "$tmp/fakebin/ip"
+IP_LOG=$tmp/iplog IP_STATE=$tmp/ipstate USB_NETDIR=$tmp/net PATH=$tmp/fakebin:$PATH USB_OPS=$tmp/ops USB_GADGET=$tmp/g5 \
+  USB_MAC_FILE=$tmp/state5/mac USB_IFACE=usb0 bin/omamobile-usb-mac > "$tmp/usbmac.log" 2>&1 || { cat "$tmp/usbmac.log"; fail "omamobile-usb-mac sets usb0"; }
+dev5=$(sed -n 's/^dev=//p' "$tmp/state5/mac")
+[[ $(cat "$tmp/net/usb0/address") == "$dev5" ]] || fail "usb0 got the phone address"
+[[ -e $tmp/ipstate/up ]] || fail "usb0 is brought up again"
+grep -q 'could not set' "$tmp/usbmac.log" && fail "setting usb0 does not report a failure"
+
+# No NCM function, an unsaveable file, no gadget: it stands aside
+rm -rf "$tmp/g3"; mkdir -p "$tmp/g3/configs/c.1"; echo 11210000.usb > "$tmp/g3/UDC"
+PATH=$tmp/fakebin:$PATH USB_OPS=$tmp/ops USB_GADGET=$tmp/g3 USB_MAC_FILE=$tmp/state3/mac USB_IFACE=nosuch0 bin/omamobile-usb-mac > /dev/null || fail "a gadget without NCM is left alone"
+[[ $(cat "$tmp/g3/UDC") == 11210000.usb ]] || fail "a gadget without NCM keeps its UDC"
+rm -rf "$tmp/g4"; mkgadget "$tmp/g4"; : > "$tmp/blocker"
+if PATH=$tmp/fakebin:$PATH USB_OPS=$tmp/ops USB_GADGET=$tmp/g4 USB_MAC_FILE=$tmp/blocker/mac USB_IFACE=nosuch0 bin/omamobile-usb-mac > /dev/null 2>&1; then
+  fail "an address that cannot be saved is not applied"
+fi
+read -r a _ < "$tmp/g4/functions/ncm.usb0/host_addr"
+[[ $a == "02:00:00:00:00:a1" ]] || fail "an address that cannot be saved leaves the gadget alone"
+# A marker that cannot be written: the gadget is not taken apart
+rm -rf "$tmp/g6" "$tmp/state6"; mkgadget "$tmp/g6"; mkdir -p "$tmp/state6"
+printf 'host=02:00:00:00:00:d1\ndev=02:00:00:00:00:e1\n' > "$tmp/state6/mac"
+cat > "$tmp/fakebin/date" <<'DATE'
+#!/bin/bash
+exit 1
+DATE
+chmod +x "$tmp/fakebin/date"
+if PATH=$tmp/fakebin:$PATH USB_OPS=$tmp/ops USB_GADGET=$tmp/g6 USB_MAC_FILE=$tmp/state6/mac USB_IFACE=nosuch0 bin/omamobile-usb-mac > "$tmp/usbmac.log" 2>&1; then
+  fail "a hang marker that cannot be written is an error"
+fi
+rm -f "$tmp/fakebin/date"
+[[ $(cat "$tmp/g6/UDC") == 11210000.usb ]] || fail "without a marker the UDC is not unbound"
+read -r a _ < "$tmp/g6/functions/ncm.usb0/host_addr"
+[[ $a == "02:00:00:00:00:a1" ]] || fail "without a marker the gadget is left alone"
+grep -q 'cannot write' "$tmp/usbmac.log" || fail "a marker that cannot be written is reported"
+pass "the USB gadget keeps one pair of addresses across boots, is put back together when anything fails, and a hang leaves a marker that keeps the next boot from repeating it"
+
+
+# Location's agent goes with its socket (2026.11.08 enabled only the socket)
+grep -A1 -F 'systemctl is-enabled -q omamobile-gnss-nmea.socket' bin/omamobile-setup-system |
+  grep -cF -- '--global enable omamobile-geoclue-agent.service' >/dev/null ||
+  fail "omamobile-setup-system enables GeoClue's agent with the Location socket"
+pass "the setup step turns GeoClue's agent on with the Location socket"

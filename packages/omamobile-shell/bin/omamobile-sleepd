@@ -127,13 +127,56 @@ request() {
   systemctl suspend 2>&1 | sed 's/^/omamobile-sleepd: systemctl: /'
 }
 
-# Waits, but a USR1 (omamobile-sleepd now) ends the wait early.
+# Waits, but a USR1 (omamobile-sleepd now) ends the wait early, and so does a
+# USR2 (logind says the phone just resumed, see listen).
+resumed_evt=0 mon=
 pause() {
+  # The event came while the loop was busy: don't sleep on it.
+  if ((resumed_evt)); then resumed_evt=0; return 0; fi
   sleep "$1" &
   local pid=$!
   wait "$pid" 2>/dev/null
   kill "$pid" 2>/dev/null
+  resumed_evt=0
   return 0
+}
+
+# Kills a process and everything under it: the listener runs busctl inside a
+# command substitution, and killing only its own pid would leave busctl waiting.
+# The process goes first, its children's pids are taken before that, so the
+# listener can't log its "no more events" line because busctl died under it.
+kill_tree() {
+  local c kids
+  kids=$(pgrep -P "$1" 2>/dev/null)
+  kill "$1" 2>/dev/null
+  for c in $kids; do kill_tree "$c"; done
+}
+# Only a listener that is still our job: its pid may have been reused since it ended.
+stop_listener() { [[ -n $mon && " $(jobs -p | tr '\n' ' ') " == *" $mon "* ]] && kill_tree "$mon"; return 0; }
+
+# The watcher is frozen inside its sleep while the phone sleeps, so after a
+# resume it only noticed it (and lit the PIN pad for a power-key wake) when
+# the rest of that sleep ran out: 4.9 s with the toggle off (the 5 s poll),
+# up to 2 s with it on. logind announces the end of a sleep with
+# PrepareForSleep(false); that ends the wait at once and the loop reads
+# suspend_stats right away. The poll stays: a raw `echo freeze >
+# /sys/power/state` never sends the signal, and anything unexpected here just
+# stops the listener. PrepareForSleep(true) is ignored: it comes before a
+# sleep this watcher did not ask for. busctl wait needs no monitor rights,
+# which a user service doesn't have; it returns after each message, so the
+# listener subscribes again for the next one.
+listen() {
+  local out
+  while out=$(busctl --system --json=short wait org.freedesktop.login1 /org/freedesktop/login1 \
+                org.freedesktop.login1.Manager PrepareForSleep 2>/dev/null); do
+    case $out in
+      *'[false]'*) kill -USR2 $$ 2>/dev/null || return ;;
+      *'[true]'*) ;;
+      *) break ;;
+    esac
+  done
+  # No trace otherwise: the watcher would quietly be back on the poll.
+  log "no more resume events from logind: back to polling every ${poll}-${idle_poll} s"
 }
 
 want_now=0
@@ -142,6 +185,9 @@ watch() {
   last_ok=$(count success)
   last_fail=$(count fail)
   trap 'want_now=1' USR1
+  trap 'resumed_evt=1' USR2
+  listen & mon=$!
+  trap 'stop_listener' EXIT
   log "watching: sleep ${after_off} s after the screen goes off behind a secure lock, ${grace} s after a dark resume (toggle omamobile-sleep)"
   while :; do
     t=$(clock)

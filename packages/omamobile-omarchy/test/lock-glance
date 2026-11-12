@@ -10,7 +10,7 @@
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 shell=${1:?usage: lock-glance SHELL_DIR}
-runner=$(command -v qmltestrunner6 || command -v /usr/lib/qt6/bin/qmltestrunner || command -v qmltestrunner || true)
+runner=$(command -v qmltestrunner6 || command -v /usr/lib/qt6/bin/qmltestrunner || command -v /usr/lib64/qt6/bin/qmltestrunner || command -v qmltestrunner || true)
 [[ -n $runner ]] || { echo "lock-glance: no qmltestrunner" >&2; exit 77; }
 
 work=$(mktemp -d)

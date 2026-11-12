@@ -35,6 +35,55 @@ out=$(bash -c '
 [[ $out == alive ]] || fail "a daemon exiting 3 leaves spawn_optional's job alive (got: $out)"
 pass "spawn_optional survives a failing daemon"
 
+# rfsd's job: an exit is a crash (the supervisor stops the profile) unless
+# this invocation's stop intent is in place; then it stays open for systemd.
+python3 test/rfsd-lifecycle.py || fail "rfsd's job through an orderly stop"
+pass "rfsd's exit ends the profile except during this invocation's orderly stop"
+
+# power-off: 0 only on the boot device's own OFFLINE
+python3 test/power-off.py || fail "omamobile-modem-cp power-off"
+pass "power-off confirms OFFLINE from the device, never from its absence"
+
+# The stop witness: profile_stop, with a stand-in CP helper and capture. A
+# failed power-off still captures the NV but fails the stop and leaves no
+# witness; a confirmed one writes its invocation's witness once; no main
+# process, or no invocation, means no witness.
+w=$(mktemp -d)
+cat > "$w/fake-cp" <<'EOF'
+#!/bin/bash
+[[ $1 == power-off ]] || exit 2
+exit "$CP_RESULT"
+EOF
+chmod +x "$w/fake-cp"
+stop_function=$(sed -n '/^profile_stop() {$/,/^}$/p' profiles/modem.conf)
+[[ -n $stop_function ]] || fail "profile_stop found in modem.conf"
+run_profile_stop() { # CP_RESULT INVOCATION [MAINPID]
+  CP_RESULT=$1 INVOCATION_ID=$2 MAINPID=${3:-$$} SERVICE_RESULT=success OMAMOBILE_MODEM_RUN=$w/run MODEM_CP=$w/fake-cp \
+    CAPTURE_LOG=$w/capture bash -c '
+      set -euo pipefail
+      say() { :; }
+      modem_nv_capture() { printf "%s\n" "$1" >> "$CAPTURE_LOG"; }
+      eval "$1"
+      profile_stop
+    ' _ "$stop_function"
+}
+id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+run_profile_stop 1 "$id" && fail "a failed CP power-off fails the stop"
+[[ $(cat "$w/capture") == stop && ! -e $w/run/stop-$id ]] || fail "a failed stop still captures the NV, and writes no witness"
+rm -f "$w/run/intent-$id"
+run_profile_stop 0 "$id" || fail "a confirmed power-off is a clean stop"
+[[ $(cat "$w/run/stop-$id") == "$id" ]] || fail "a confirmed stop writes its invocation's witness"
+run_profile_stop 0 "$id" 2>/dev/null && fail "a witness is never overwritten"
+[[ $(cat "$w/run/stop-$id") == "$id" ]] || fail "the witness is intact"
+rm -f "$w/run/stop-$id" "$w/run/intent-$id"
+run_profile_stop 0 "$id" 0 || fail "a stop after the main process is gone succeeds"
+[[ ! -e $w/run/stop-$id ]] || fail "no main process, no witness"
+run_profile_stop 0 invalid || fail "a stop by hand, without a unit invocation, succeeds"
+[[ ! -e $w/run/stop-invalid ]] || fail "no invocation, no witness"
+[[ $(cat modem/stop-witness-version) == 1 ]] || fail "the stop witness contract file says 1"
+rm -rf "$w"
+pass "profile_stop witnesses only a confirmed power-off, once, for a running unit invocation"
+
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
 # A made-up modem.bin: TOC, BOOT, INFO entries (32 bytes each; the TOC
 # entry's last word is the last entry's index), the version 20 bytes into
@@ -199,6 +248,11 @@ pass "start script: markers before the drivers, the check after them, READY befo
 m=$t/markers; mkdir -p "$m/root"; : > "$m/nv.sha256"; printf 'ro.boot.cdt_hwid=TESTID\n' > "$m/props.conf"
 export OMAMOBILE_MODEM_LATCH=$m/latch OMAMOBILE_MODEM_UP_MARK=$m/up OMAMOBILE_MODEM_HOLD=$m/hold OMAMOBILE_MODEM_REFUSED=$m/run/refused
 export OMAMOBILE_MODEM_CHROOT=$m/root OMAMOBILE_MODEM_NV_SUMS=$m/nv.sha256 OMAMOBILE_MODEM_PROPS=$m/props.conf
+# What a refusal releases: a fake systemctl that logs its arguments, and an
+# empty module directory (no modem driver loaded) unless a test adds one.
+mkdir -p "$m/sysmodule"
+printf '#!/bin/sh\ncase $1 in is-active) [ -e %s/inhibit-active ];; *) echo "$*" >> %s/systemctl.log;; esac\n' "$m" "$m" > "$m/systemctl"; chmod +x "$m/systemctl"
+export OMAMOBILE_MODEM_SYSMODULE=$m/sysmodule OMAMOBILE_MODEM_SYSTEMCTL=$m/systemctl
 start() { timeout 20 bash $s "$@" 2>&1; }
 past() { OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS=1 start "$@"; }
 stop_line='past the marker checks, stopping here (test only)'
@@ -232,27 +286,46 @@ out=$(start) && fail "a bring-up latch is refused"
 [[ -e $m/latch && $(cat "$m/run/refused") == "Off: last bring-up hung" ]] || fail "the latch stays, with its reason for the tile"
 out=$(start) && fail "the latch refuses the boot after too"
 rm -f "$m/latch"
+# A refusal before any modem driver loads releases the sleep block; with a
+# driver loaded (here cpif) it stays until the reboot, and an inhibitor that
+# isn't running (an unprovisioned phone skips it) is left alone.
+rm -f "$m/systemctl.log"; printf 'x boot y\n' > "$m/latch"
+out=$(start) && fail "a latch refusal fails"
+[[ ! -e $m/systemctl.log ]] || fail "no inhibitor running: nothing to release"
+: > "$m/inhibit-active"
+out=$(start) && fail "a latch refusal fails"
+[[ $(cat "$m/systemctl.log" 2>/dev/null) == "kill omamobile-modem-inhibit.service" && $out == *"sleep is no longer blocked"* ]] ||
+  fail "a refusal with no modem driver loaded kills the inhibitor: $(cat "$m/systemctl.log" 2>/dev/null) / $out"
+rm -f "$m/systemctl.log"; mkdir -p "$m/sysmodule/cpif"
+out=$(start) && fail "a latch refusal fails"
+[[ ! -e $m/systemctl.log && $out != *"no longer blocked"* ]] || fail "with a modem driver loaded the inhibitor stays: $(cat "$m/systemctl.log" 2>/dev/null)"
+rmdir "$m/sysmodule/cpif"; mkdir -p "$m/sysmodule/pcie_gs201_cp"
+out=$(start) && fail "a latch refusal fails"
+[[ ! -e $m/systemctl.log ]] || fail "with the link driver loaded (pcie-gs201-cp as pcie_gs201_cp) the inhibitor stays"
+rmdir "$m/sysmodule/pcie_gs201_cp"; rm -f "$m/latch" "$m/systemctl.log" "$m/inhibit-active"
+# A driver that doesn't load is a refusal too (so it can release the block),
+# not an exit through set -e.
+[[ $(grep -c '^[[:space:]]*modprobe .*|| refuse "Off: ' $s) -eq 3 ]] || fail "every modprobe refuses when it fails"
+grep -q 'release_inhibitor$' $s && [[ $(grep -c 'release_inhibitor' $s) -eq 2 ]] || fail "only refuse() releases the inhibitor"
+pass "a refusal before any modem driver loads releases the sleep block; after one, it stays"
 # A stale modem-up marker (a boot that ended with the modem up and no clean
-# stop) refuses once: the marker moves aside, named by the time, and the
-# next boot gets past the markers (here: to the test stop point, with the
-# refused copy still beside the marker's place and no latch written). The
-# earlier refusal's reason stays until the inhibitor check has passed, which
-# the stop point comes before.
+# stop: a flat battery, or an owner who held the keys on a frozen phone) is
+# counted and the modem starts all the same (0.1.19; before, it cost that
+# boot its modem with nothing on the screen saying why): the marker moves
+# aside, named by the time, and the start gets past the markers (here: to
+# the test stop point, with the copy beside the marker's place, no latch
+# written and no refusal for the tile).
 stale() { printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$m/up"; }
+rm -f "$m/run/refused"
 stale
-out=$(start) && fail "a modem-up marker is refused"
-[[ $out == *"ended without a clean stop"* && $out == *"journalctl -b -1"* ]] || fail "the modem-up refusal says where to look: $out"
-[[ $out == *"the next boot starts the modem again"* ]] || fail "the refusal says the next boot starts: $out"
+out=$(past) || fail "one unclean end doesn't cost the next boot its modem (rc=$?): $out"
+[[ $out == *"ended without a clean stop"* && $out == *"journalctl -b -1"* ]] || fail "the start says what it found and where to look: $out"
+[[ $out == *"the modem starts on this boot all the same"* && $out == *"$stop_line"* && $out != *"never reached ONLINE"* ]] ||
+  fail "after one unclean end the start goes on: $out"
 [[ ! -e $m/up && ! -e $m/latch ]] || fail "the stale marker is moved aside, nothing else written"
-[[ $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] || fail "the refused marker is kept beside the marker's place: $(ls "$m")"
-grep -q "0000-000000000000" "$m"/up.refused-* || fail "the kept copy is the stale marker's content"
-[[ $(cat "$m/run/refused") == "Off after a hang or reset" ]] || fail "the reason for the tile: $(cat "$m/run/refused")"
-out=$(past) || fail "the boot after a refused one gets past the markers (rc=$?): $out"
-[[ $out == *"$stop_line"* && $out != *"ended without a clean stop"* && $out != *"never reached ONLINE"* ]] ||
-  fail "the boot after a refused one starts the modem again: $out"
-[[ ! -e $m/up && ! -e $m/latch && $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] ||
-  fail "a start past the markers writes nothing before the stop point and keeps the refused copy: $(ls "$m")"
-[[ $(cat "$m/run/refused") == "Off after a hang or reset" ]] || fail "the reason stays until every refusal has passed: $(cat "$m/run/refused")"
+[[ $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] || fail "the counted marker is kept beside the marker's place: $(ls "$m")"
+grep -c "0000-000000000000" "$m"/up.refused-* >/dev/null || fail "the kept copy is the stale marker's content"
+[[ ! -e $m/run/refused ]] || fail "one unclean end leaves no refusal for the tile: $(cat "$m/run/refused")"
 # The second refusal holds: the retry's boot ended unclean too (a stale
 # marker with the refused copy still beside it), so the marker stays, no
 # second copy is made, and every boot refuses until --retry. A clean stop of
@@ -266,12 +339,42 @@ out=$(start) && fail "the second unclean boot in a row is refused"
 [[ $(cat "$m/run/refused") == "Off after a hang or reset (held)" ]] || fail "the held reason for the tile: $(cat "$m/run/refused")"
 out=$(start) && fail "the held marker refuses the boot after too"
 [[ $out == *"no clean stop since the last refusal"* && -e $m/up && $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] || fail "held: the marker and the one copy stay: $out"
+# reboot-to's note (in a directory of its own, so the state above is kept):
+# a modem-up marker from the boot the note names ended on purpose (push, a
+# reboot to the bootloader) and isn't counted: the marker and the note go and
+# the start gets past the markers, also where an unclean end is already
+# counted. That counted copy stays: the note doesn't end a streak, so a hang,
+# a push and a second hang are held. A note naming another boot changes
+# nothing: the marker is counted as an unclean end as above, and with one
+# already counted it is held.
+n=$t/note-markers; mkdir -p "$n/run"
+nstart() { OMAMOBILE_MODEM_LATCH=$n/latch OMAMOBILE_MODEM_UP_MARK=$n/up OMAMOBILE_MODEM_HOLD=$n/hold OMAMOBILE_MODEM_REFUSED=$n/run/refused \
+  OMAMOBILE_DELIBERATE_RESTART=$n/note OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS=1 timeout 20 bash $s 2>&1; }
+printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$n/up"
+printf '%s\n' 11111111-1111-1111-1111-111111111111 > "$n/note"
+out=$(nstart) || fail "a note from another boot leaves the first unclean end to start as without it (rc=$?): $out"
+[[ -e $n/note && $out == *"ended without a clean stop"* && $out != *"ended with reboot-to"* ]] || fail "a note from another boot clears nothing: $out"
+[[ ! -e $n/up && $(ls "$n"/up.refused-* | wc -l) -eq 1 ]] || fail "a note from another boot: the marker is counted as an unclean end: $(ls "$n")"
+printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$n/up"
+out=$(nstart) && fail "a note from another boot doesn't save the second unclean end from the hold: $out"
+[[ -e $n/note && -e $n/up && $out == *"no clean stop since the last refusal"* && $out != *"ended with reboot-to"* ]] || fail "a note from another boot, a second unclean end: held: $out"
+rm -f "$n"/up* "$n/note" "$n/run/refused"
+printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$n/up"
+: > "$n/up.refused-x"
+printf '%s\n' 00000000-0000-0000-0000-000000000000 > "$n/note"
+out=$(nstart) || fail "a deliberate restart gets past the markers (rc=$?): $out"
+[[ $out == *"ended with reboot-to"* && $out == *"$stop_line"* && $out != *"ended without a clean stop"* ]] || fail "a deliberate restart isn't a hang: $out"
+[[ ! -e $n/up && ! -e $n/note && ! -e $n/latch ]] || fail "the note clears the marker and itself, and writes no latch: $(ls "$n")"
+[[ -e $n/up.refused-x ]] || fail "the note keeps an unclean end already counted: $(ls "$n")"
+printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 22222222-2222-2222-2222-222222222222 > "$n/up"
+out=$(nstart) && fail "a hang, a deliberate restart and a second hang are held: $out"
+[[ -e $n/up && $out == *"no clean stop since the last refusal"* ]] || fail "the streak outlives a deliberate restart: $out"
 printf '%s boot %s\n' "$(date -Is)" "$(cat /proc/sys/kernel/random/boot_id)" > "$m/up"
 out=$(SERVICE_RESULT=success bash $s --stopped 2>&1) || fail "--stopped exits 0"
 [[ ! -e $m/up && -z $(ls "$m"/up.refused-* 2>/dev/null) ]] || fail "a clean stop of this boot's marker removes the refused copies: $(ls "$m")"
 stale
-out=$(start) && fail "after a clean stop a stale marker is refused once again"
-[[ $out == *"the next boot starts the modem again"* && ! -e $m/up && $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] ||
+out=$(past) || fail "after a clean stop one unclean end starts the modem again (rc=$?): $out"
+[[ $out == *"the modem starts on this boot all the same"* && ! -e $m/up && $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] ||
   fail "the streak starts over after a clean stop: $out $(ls "$m")"
 rm -f "$m"/up.refused-*
 # The owner's hard stop: with the hold flag the marker stays, and every

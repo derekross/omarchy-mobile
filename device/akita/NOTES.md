@@ -11,6 +11,16 @@ Sources:
 - `S/`: Google's GPL zuma SoC device tree, [kernel/devices/google/zuma](https://android.googlesource.com/kernel/devices/google/zuma/+/refs/tags/android-16.0.0_r0.10/dts/) at the same tag.
 - `H/`: [husky's notes](../husky/NOTES.md) and [descriptor](../husky/device.conf), for what the two zuma phones share.
 
+## 2026-11-11: buttons and touch (M3)
+
+The buttons (gate f) and touch (gate g), so the phone is usable by hand. The steps and results are in [BRINGUP-M3](BRINGUP-M3.md). The kernel side is linux-omarchy-mobile#238 (the buttons and `mem_sleep_default=s2idle`, merged), #240 (the S2MPG14 supply setter) and #241 (the touch supplies, the touchscreen and the panel size).
+
+- **The buttons are wired as on husky** [V]: volume down `gpa4-1`, volume up `gpa6-2`, power `gpa4-0` (G/ `zuma-common.dtsi`; R/ `/proc/interrupts`).
+- **The touchscreen is a Goodix GT9895** [V], the Pixel 7a's chip, on husky's bus and lines (USI2_HSI0 SPI, interrupt `gpn0-0` falling, reset `gpp21-2`). Both of stock's firmware files (`goodix_firmware_ak3a.bin`, `_ak3b.bin`, in F/'s vendor image) carry `9895` in their Berlin header.
+- **ABL leaves the touch supplies off, with LDO4M at 3.3 V** [V]. Stock runs it at 3.0 V (R/ live tree), and so does the 7a. The S2MPG14 LDOs couldn't set a voltage, so #240 adds a setter for LDO4M and LDO25M.
+- **The S2MPG14's RTC keeps time** [V]. Once the PMIC is described, `rtc-s5m` registers it as `rtc0` and sets the clock at boot, so the clock is right after a reboot. With no PMIC interrupt, it has no alarm.
+- **No GPU and no cpufreq yet**, so the session renders in software at ABL's CPU rates and is slow.
+
 ## 2026-11-06: storage and the Arch root (M2)
 
 UFS with the storage guard (gate c) and Arch on `userdata` (gate d). The steps and results are in [BRINGUP-M2](BRINGUP-M2.md). The kernel side is linux-omarchy-mobile#206, merged as `75b9c0b73`.
@@ -53,7 +63,7 @@ Our kernel booted from slot B with the first-light board file, which has USB and
 
   All three are husky's values (H/, [BRINGUP-M1](../husky/BRINGUP-M1.md) test 20). ABL's splash is at 0xfac00000, and the trigger is masked: `HW_TRIG_MASK_DECON` (bit 4) is set and `HW_TRIG_EN` (bit 0) clear.
 - **The panel runs in DSI command mode** [V]. No mode in Google's driver (`display/panel-google-ak3b.c`, in the same repository as G/) sets `MIPI_DSI_MODE_VIDEO`; its modes set only `MIPI_DSI_CLOCK_NON_CONTINUOUS`. So, as on husky, frames reach the panel only once DECON0's trigger is unmasked. 0x3061 clears bit 4 and sets bit 0, hence `SIMPLEFB_TRIG_CON="0x19470030 0x3061"`.
-- **The same driver gives the panel as 70 × 149 mm** (`width_mm`, `height_mm`) [V], which is where stock's reported DPI comes from. That is larger than a 6.1-inch 20:9 panel (about 64 × 141 mm), so no size goes into the board file yet.
+- **The same driver gives the panel as 70 × 149 mm** (`width_mm`, `height_mm`) [V], which is where stock's reported DPI comes from: `dumpsys display` reads xDpi 391.885 and yDpi 409.127 for 1080x2400, which is 70.0 × 149.0 mm. That is larger than the glass: a 6.1-inch 20:9 panel is about 64 × 141 mm, and Google's touch node says `goodix,panel-height-mm = <141>`. The lit area measures 64 × 141 mm with a ruler [V], and that's what the board file carries since M3 (linux-omarchy-mobile#241), with stock's 70 × 149 named in its comment.
 - **There is no `/sys/devices/soc0`** [V]: our kernel has no chip-id driver for zuma, so the silicon revision (B0 or B1) is still open.
 
 ## 2026-11-02: stage 0: a retail Pixel 8a (stock, rooted, bootloader unlocked)

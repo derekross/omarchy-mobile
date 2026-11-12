@@ -81,6 +81,34 @@ if omarchy-done ensure omamobile-home-plugin; then
   add_plugin omamobile.home
 fi
 
+# Omarchy's remote-session service watches for a gliff remote desktop: at
+# every screencast event it runs a probe (bash, id, pgrep over /proc). Recent
+# apps' cards are screen captures, so each swipe to recent apps ran about
+# 13 probes, a third of the shell's CPU, and the app's motion stalled (Pixel 7,
+# 8-nov). The service only feeds the remote-session indicator of Omarchy's
+# own bar, which the phone's bar doesn't have, so it is off on every phone,
+# gliff installed or not, through shell.json's disabledPlugins, once. It
+# doesn't stop gliff-server itself; a user who wants the service back takes
+# the entry out again.
+if omarchy-done ensure omamobile-no-remote-session; then
+  python3 - "$config/shell.json" <<'PY'
+import json, os, sys
+path = sys.argv[1]
+try:
+    with open(path) as f:
+        config = json.load(f)
+except FileNotFoundError:
+    sys.exit(0)
+off = config.setdefault("disabledPlugins", [])
+if "omarchy.remote-session" not in off:
+    off.append("omarchy.remote-session")
+    with open(path + ".new", "w") as f:
+        json.dump(config, f, indent=2)
+        f.write("\n")
+    os.replace(path + ".new", path)
+PY
+fi
+
 # Developer tools that packages pull in but a phone's app drawer shouldn't
 # list (v4l-utils comes with ffmpeg): hidden for this user with the usual
 # NoDisplay override in ~/.local/share/applications, which Omarchy's app
@@ -509,6 +537,17 @@ if command -v "${OMAMOBILE_VOXTYPE:-voxtype}" >/dev/null && [[ -f $voxmodels/ggm
         echo "omamobile-setup-user: could not link ${model##*/}" >&2
     done
   fi
+  # Omarchy 4.5 asks which dictation backend is the default
+  # (~/.config/omarchy/defaults/dictation) and ships two; its migration
+  # answers "voxtype" for someone who had Voxtype before, and a new user on a
+  # 4.5 image has no answer. The phone's is Voxtype, the one the voice bar
+  # drives, unless the owner has chosen. Omarchy 4.0 never reads the file.
+  dictation_default=~/.config/omarchy/defaults/dictation
+  if omarchy-done check omamobile-voxtype-setup && [[ ! -e $dictation_default ]] &&
+     omarchy-done ensure omamobile-dictation-default; then
+    mkdir -p "${dictation_default%/*}" && printf 'voxtype\n' >"$dictation_default" ||
+      echo "omamobile-setup-user: could not record Voxtype as the dictation default" >&2
+  fi
   if omarchy-done check omamobile-voxtype-setup && ! omarchy-done check omamobile-voxtype-enabled; then
     if systemctl --user enable voxtype.service; then
       omarchy-done mark omamobile-voxtype-enabled
@@ -616,6 +655,25 @@ menu_hide "no keyboard to learn bindings for" learn.keybindings learn.tmux-keybi
 menu_hide "the phone's status bar stays at the top" \
   style.bar.position.left style.bar.position.right style.bar.position.bottom \
   trigger.toggle.top-bar trigger.toggle.one-window-ratio trigger.toggle.workspace-layout
+# The same rows under the ids Omarchy 4.5 gave them when Style became
+# Appearance (a row the installed Omarchy doesn't have is an entry nothing
+# reads), and its disk-unlock row, which the once-only block above hid under
+# its 4.0 id.
+menu_hide "the phone's status bar stays at the top (Omarchy 4.5's ids)" \
+  appearance.top-bar.position.left appearance.top-bar.position.right appearance.top-bar.position.bottom \
+  appearance.top-bar.hide appearance.top-bar.show \
+  appearance.windows.one-window-ratio-on appearance.windows.one-window-ratio-off \
+  appearance.workspace-layout appearance.workspace-layout.dwindle appearance.workspace-layout.scrolling \
+  appearance.workspace-layout.floating
+menu_hide "no disk-unlock screen on the phone (Omarchy 4.5's id)" appearance.unlock
+# New in Omarchy 4.5: a dock for floating workspaces, which a phone never has
+# (one maximized app per workspace), and a kernel update that would install a
+# kernel the phone can't boot (the phone's kernel is linux-omamobile, written
+# to slot B by its own hook).
+menu_hide "no dock and no other kernel on a phone (Omarchy 4.5)" \
+  appearance.dock appearance.dock.always-on appearance.dock.autohide appearance.dock.position \
+  appearance.dock.position.bottom appearance.dock.position.left appearance.dock.position.right appearance.dock.position.top \
+  update.kernel
 menu_hide "x86_64-only installers" \
   install.windows install.browser.chrome install.browser.edge \
   install.service.dropbox install.service.spotify install.service.nordvpn \

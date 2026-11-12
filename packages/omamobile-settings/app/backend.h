@@ -38,7 +38,12 @@ public:
     Q_INVOKABLE bool navigate(const QString &page);
     Q_INVOKABLE void search(const QString &query);
     Q_INVOKABLE void activate(const QString &id);
+    // Back, as the shell's edge swipe sends it (Escape): out of a search,
+    // then up one page, and at the top level the home screen.
     Q_INVOKABLE void back();
+    // The command that shows the home screen (omamobile-shell's); the tests
+    // name a stand-in, or nothing.
+    void setHomeCommand(const QStringList &command) { m_homeCommand = command; }
     Q_INVOKABLE QString icon(const QString &name) const;
     Q_INVOKABLE QStringList catalogProblems() const;
     Q_SCRIPTABLE bool Open(const QString &page);
@@ -46,7 +51,7 @@ signals:
     void rowsChanged();
     void pageChanged();
     void themeChanged();
-    void closeRequested();
+    void homeRequested();
     void raiseRequested();
 private:
     void rebuild();
@@ -55,6 +60,7 @@ private:
     QVariantList m_rows;
     QString m_page = "root", m_query, m_themeFile;
     QStringList m_history;
+    QStringList m_homeCommand{"omamobile-home"};
     QFileSystemWatcher m_watcher;
     QProcess m_roundingQuery;
     quint64 m_roundingGeneration = 0;

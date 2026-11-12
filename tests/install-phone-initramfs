@@ -20,7 +20,8 @@
 #
 # Then the refusals, each before anything is flashed: an image the key makes
 # larger than its partition, a failing step of the key's append, a ramdisk
-# image under an AVB footer, an image that isn't a v4 vendor boot image; and
+# image under an AVB footer, an image that isn't a v4 vendor boot image (the
+# ones in reading the shipped ramdisk also by --verify-only, with no phone); and
 # a ramdisk that already holds SSH keys (a development initramfs) is flashed
 # as built. The hook runs under pacman's umask, 022, and install under 077:
 # its images must not depend on the owner's umask (uutils' install(1) gives
@@ -147,10 +148,14 @@ install() { # codename [args]; RAMDISK_PART_SIZE: vendor_kernel_boot_b's size
   printf '%s\n' alice 1234 1234 "" UTC "" "" "" "$t/owner.pub" "$cn" |
     (umask 077; HOME=$t/home PATH="$t/fbin:$PATH" "$BUNDLE/install" --unsigned --work "$t/work" "$@") > "$t/out" 2>&1
 }
-refused() { # why message: install refused, said why, flashed nothing
-  if install twelve; then fail "refuses $1"; fi
+refused() { # why message [args]: install refused, said why, flashed nothing
+  if install twelve "${@:3}"; then fail "refuses $1"; fi
   grep -cF -- "$2" "$t/out" >/dev/null || { cat "$t/out"; fail "says why it refuses $1"; }
   [[ -z $(ls -A "$t/flashed") ]] || fail "nothing is flashed when it refuses $1"
+}
+verify_refused() { # why message: --verify-only refuses it too, and contacts no phone
+  refused "$1 with --verify-only" "$2" --verify-only
+  [[ ! -s $t/fastboot.log ]] || fail "--verify-only contacts no phone when it refuses $1"
 }
 # slot_b root images: the stand-in phone's slot B partitions hold those
 # images, padded to 16 MiB, as fastboot leaves them
@@ -199,6 +204,26 @@ for dev in "twelve gs201 0x9855001 0x800 vendor_kernel_boot" "six gs101 0x984500
   pass "$cn: the bundle's install flashes the hook's own $rimg.img (the owner's key appended) and the hook's other images"
 done
 
+# An install waiting at "Type the phone's codename" has its images staged in
+# --work. A --verify-only run on the same --work, or a second install refused
+# before the owner's answers (here another phone's --serial), reads the
+# ramdisk in a directory of its own: it leaves those files as they were and
+# nothing of its own behind
+stage() { mkdir -p "$t/work/ramdisk" && echo staged > "$t/work/root.simg" && echo staged > "$t/work/ramdisk/vendor_kernel_boot.img"; }
+still_staged() { # what ran
+  [[ $(cat "$t/work/root.simg" "$t/work/ramdisk/vendor_kernel_boot.img" 2>/dev/null) == $'staged\nstaged' ]] ||
+    fail "$1 leaves another install's root.simg and ramdisk/ in --work"
+  [[ $(cd "$t/work" && find . -mindepth 1 | LC_ALL=C sort | tr '\n' ' ') == "./ramdisk ./ramdisk/vendor_kernel_boot.img ./root.simg " ]] ||
+    fail "$1 leaves nothing of its own in --work"
+}
+stage
+install six --verify-only || { cat "$t/out"; fail "--verify-only passes the bundle"; }
+still_staged --verify-only
+refused "another phone's --serial" 'not the one this install was started for' --serial OTHER999
+still_staged "an install refused for another phone's --serial"
+rm -r "$t/work"
+pass "--verify-only, and an install refused before the answers, leave another install's staged files in --work alone"
+
 # The hook's first run after the install: slot B already holds its images.
 # Slot B as the bundle's images left it (before this change) still needed
 # the rewrite #564 found.
@@ -241,22 +266,28 @@ pass "an image the owner's key makes too large for its partition is refused befo
 
 # Each step of the append that fails (a stand-in that exits 1 on that call)
 # stops the install with a message, rather than flashing the ramdisk without
-# the key: copying the key, cpio packing it, lz4 recompressing
+# the key: copying the key, cpio packing it, lz4 decompressing the shipped
+# ramdisk, cpio listing it, lz4 recompressing
 for step in "install 600 can't stage the owner's key" "cpio -o cpio couldn't pack the owner's key" \
+            "lz4 -dc lz4 couldn't decompress vendor_kernel_boot.img's ramdisk" \
+            "cpio -it cpio couldn't list vendor_kernel_boot.img's ramdisk" \
             "lz4 -l lz4 couldn't recompress vendor_kernel_boot.img's ramdisk"; do
   read -r tool arg why <<<"$step"
   mkdir -p "$t/bad-$tool"
   printf '#!/bin/bash\nfor a; do [[ $a == %q ]] && exit 1; done\nexec %q "$@"\n' "$arg" "$(type -P "$tool")" > "$t/bad-$tool/$tool"
   chmod +x "$t/bad-$tool/$tool"
   PATH=$t/bad-$tool:$PATH refused "a failing $tool $arg in the key's append" "$why"
+  # Reading the shipped ramdisk comes before the phone, so --verify-only does it too
+  [[ $arg != -dc && $arg != -it ]] || PATH=$t/bad-$tool:$PATH verify_refused "a failing $tool $arg" "$why"
 done
-pass "a failing step of the key's append (install, cpio or lz4) stops the install before anything is flashed"
+pass "a failing step of the key's append (install, cpio -o, lz4 -dc, cpio -it or lz4 -l) stops the install before anything is flashed; --verify-only stops at lz4 -dc and cpio -it too"
 
 # The ramdisk image under an AVB footer can't take the key: refused
 printf 'AVB_FOOTERS="vendor_kernel_boot:0x4000000"\nAVB_ROLLBACK_INDEX=1\nAVB_SECURITY_PATCH=2026-07-05\n' >> "$BUNDLE/device.conf"
 seal
 refused "a ramdisk image with an AVB footer" "AVB_FOOTERS names vendor_kernel_boot, which carries the ramdisk"
-pass "a ramdisk image the descriptor signs is refused before anything is flashed"
+verify_refused "a ramdisk image with an AVB footer" "AVB_FOOTERS names vendor_kernel_boot, which carries the ramdisk"
+pass "a ramdisk image the descriptor signs is refused before anything is flashed, and by --verify-only"
 
 # A development initramfs that already holds SSH keys (bin/omamobile
 # initramfs without --release): the hook refuses it, so its builder packs
@@ -276,4 +307,5 @@ pass "a ramdisk that already holds SSH keys is flashed as built"
 echo 'vendor_kernel_boot image' > "$BUNDLE/images/vendor_kernel_boot.img"
 seal
 refused "a ramdisk image that isn't a vendor boot image" 'not an Android vendor boot image'
-pass "an image that isn't a v4 vendor boot image is refused before anything is flashed"
+verify_refused "a ramdisk image that isn't a vendor boot image" 'not an Android vendor boot image'
+pass "an image that isn't a v4 vendor boot image is refused before anything is flashed, and by --verify-only"

@@ -1,13 +1,13 @@
 <!-- SPDX-License-Identifier: MIT -->
 # akita M2: storage (UFS behind the guard, then the Arch root)
 
-**Status (2026-11-08):** M2.1-M2.6 are done and merged (#456); M2.7 waits for the signed package. M1 is complete and merged ([BRINGUP-M1](BRINGUP-M1.md)):
+**Status (2026-11-10):** **M2 is complete.** M2.1-M2.6 are done and merged (#456), and **M2.7 passed gate (e)** on 2026-11-10: Omarchy's image runs from `userdata` with the session, the lock and the guard, `reboot-to bootloader` works from it, and a second boot comes up clean ([Results](#2026-11-10-omarchys-image-m27-gate-e)). M1 is complete and merged ([BRINGUP-M1](BRINGUP-M1.md)):
 - derekross/linux-omarchy-mobile#192 was rebase-merged on 2026-11-05, so its three commits are on `omamobile` under new ids, with the same patches: `cb2cd5e4b` (binding), `c7eb44543` (first light) and `0e2739a92` (framebuffer).
 - #414 was squash-merged as `905aa91`.
 
-M2.1 is done and **M2.3 passed gate (c)** on 2026-11-06: UFS runs at HS-G4 on two lanes behind the guard ([Results](#results)). M2.1's kernel change is derekross/linux-omarchy-mobile#206, rebase-merged on 2026-11-07 as `75b9c0b73`. Its `zuma-akita.dts` is blob `bfa8b6f54e0e`, the DTS that booted in M2.3. M2.4 is done: a fresh backup from our kernel, verified and copied offline. M2.5 is done: `omamobile-device-akita` 0.1.0 and `build-u3-root`. **M2.6 passed gate (d)** on 2026-11-06: Arch Linux ARM runs from `userdata`, behind the guard, and comes up the same on a second boot. M2.7, Omarchy's image, needs `omamobile-device-akita` in the signed `[omamobile]` repository. A second retail 8a passed M2.3, M2.4 and M2.6 as well ([#456](https://github.com/derekross/omarchy-mobile/pull/456)).
+M2.1 is done and **M2.3 passed gate (c)** on 2026-11-06: UFS runs at HS-G4 on two lanes behind the guard ([Results](#results)). M2.1's kernel change is derekross/linux-omarchy-mobile#206, rebase-merged on 2026-11-07 as `75b9c0b73`. Its `zuma-akita.dts` is blob `bfa8b6f54e0e`, the DTS that booted in M2.3. M2.4 is done: a fresh backup from our kernel, verified and copied offline. M2.5 is done: `omamobile-device-akita` 0.1.0 and `build-u3-root`. **M2.6 passed gate (d)** on 2026-11-06: Arch Linux ARM runs from `userdata`, behind the guard, and comes up the same on a second boot. M2.7 used `omamobile-device-akita` 0.1.1 from the signed `[omamobile]` repository's development channel. A second retail 8a passed M2.3, M2.4 and M2.6 as well ([#456](https://github.com/derekross/omarchy-mobile/pull/456)).
 - **Kernel:** linux-omarchy-mobile#206 (branch `omamobile-zuma-akita-ufs`), merged. Its builds used the worktree `~/omamobile-kernel/wt-zuma-akita-dts` (reused, so the build stays incremental) and `~/omamobile-kernel/out-zuma-akita-dts`.
-- **This repository:** branch `device-akita-m2`.
+- **This repository:** branch `device-akita-m2` (M2.1-M2.6), then `device-akita-m27` (M2.7's results).
 
 ## Goal
 
@@ -182,16 +182,17 @@ As husky's U4:
 
 The install needs the human's go, since it erases `userdata` again.
 
-- **Needs:** `omamobile-device-akita` in the signed `[omamobile]` repository. Only the maintainer can publish it.
+- **Needs:** `omamobile-device-akita` in the signed `[omamobile]` repository. Only the maintainer can publish it (0.1.1 was, in the development channel).
 - **Pass:**
   - the user logs in over ssh;
-  - `systemctl --failed` is empty;
+  - `systemctl --failed` is empty from the second boot on (`systemd-firstboot` fails once on the first, as on lynx and panther: below);
   - the guard's flags hold;
   - `reboot-to bootloader` works;
   - `tools/phone-smoke`'s report goes to the pull request, naming what doesn't apply yet (no GPU or touch driver).
 - **Watch for:**
   - **The clock.** With no RTC driver and no network time, the clock starts early, and gpg can skip a new release key as "created in the future" (husky's U4 finding). Set it from the laptop over ssh before `pacman-key --populate`.
   - **Suspend.** Don't use it in M2.7. The package's drop-in makes Suspend mean s2idle, and that has never run on Tensor G3. It waits for the Pixel 8 Pro's U6, so the session test doesn't turn into a suspend test.
+  - **The screen.** The lock blanks the display after 10 s without input, and nothing on the phone can wake it yet: there is no touch driver, and the power key isn't an input device. Wake it over SSH as the user with `omarchy-shell lock wake`.
 - **Risk:** low for the hardware. The trap is the fallback to stock after three boots (above).
 
 ## Risks
@@ -294,3 +295,33 @@ Findings:
 - **The kernel's default sleep is `deep`.** `/sys/power/mem_sleep` reads `s2idle [deep]` under Arch, and Linux has no zuma SoC sleep sequence to wake from it. `omamobile-device-akita` now carries the suspend-to-idle drop-in, with the Pixel 7 Pro's settings (`MemorySleepMode=s2idle`), so Omarchy's Suspend won't enter `deep`. The test image on the phone predates it. Suspend itself is still untested on Tensor G3 (husky's U6).
 - **The test image had no module indexes.** There was no `modules.dep`, so `modprobe` found nothing. The kernel build installs its modules without depmod, and the image runs no pacman, whose kmod hook would make them. A second tester found this on #456, and this phone showed the same. Nothing at boot needs a module, which is why Arch still came up clean. `build-u3-root` now installs `kmod`, runs `depmod` for the slot B kernel's release, and fails the build if no `modules.dep` results. The rebuilt image has the full index set (`modules.dep` lists all 1820 modules) and the suspend drop-in.
 - The logs are private (`~/android/reference/akita-m2-arch-20261106/`). The images and modules are kept as `~/omamobile-kernel/known-good/akita-m2.6-g31d8b229d0d0`.
+
+### 2026-11-10: Omarchy's image (M2.7, gate e)
+
+- **Kernel:** `7.3.0-rc6-omamobile-push1-gabcd6aac51cf`, built clean from `omamobile` at `abcd6aac5` (#206 and #214 merged), with no overlay.
+- **The image:** `DEVICE=akita tools/build-rootfs --channel development` made `omamobile-rootfs-akita-2026.11.09-aarch64`. Its MANIFEST names repository commit `43facd88b986`: `main` at `b5207b8` plus one commit that changes only `tools/phone-smoke` and its test, so nothing in the image. It also names the Arch Linux ARM base `42a4eeaa…`, this kernel's modules and `omamobile-device-akita` 0.1.1-1 from the signed development channel. It took 96 min on the laptop, under emulation.
+- **The install:** `tools/install-phone --device akita --bootloader-slots-match akita-17.0-15681527 --reinstall`, run by the owner after a dry run.
+
+| # | Test | Seen | Meaning |
+| --- | --- | --- | --- |
+| 19 | `tools/build-rootfs` | Exit 0. Its own checks pass: no per-machine state, no Google firmware or per-phone data, no old project name. Omarchy's list: 146 packages, none missing for aarch64, 2 skipped by design. All 20 `[omamobile]` packages are in. The checksum and `zstd -t` pass | The image is the one the runbook asks for |
+| 20 | `tools/install-phone --dry-run`, then the install | The dry run printed the five `*_b` flashes, then `userdata`, `--set-active=b` and `reboot`, and wrote nothing. The install did the same. The USB link was up 5 s after the reboot | The installer's plan is exactly the runbook's |
+| 21 | First boot | `omamobile-firstboot` succeeds after 2 min 59 s. Userspace takes 3 min 3 s on this boot, all but a few seconds of it first-boot setup. The release key `2056 7593 566E EEE2 DD88 6460 8632 C807 5EB9 4673` is in pacman's keyring with full trust. The clock read Oct 26 and was set from the laptop afterwards | First-boot setup completes on akita |
+| 22 | Logins | Root and the user log in over SSH with the installed key. `usb0` is 172.16.42.1/24 | **The user logs in over SSH** |
+| 23 | The guard under Omarchy | 62 partitions, exactly `UFS_RW` writable (`boot_b` … `dtbo_b`, `userdata`); `sdb`-`sdd` `ro`; no `/dev/sda`. `/` is `sda34`, ext4, 107.8 G | The guard's flags hold under the full image |
+| 24 | `tools/phone-smoke` | Required rows all ok: boot (slot B), storage guard, root, kernel health (no oops or BUG, 0 WARN), USB gadget, **session (Hyprland and the Omarchy shell)**. The display is ok at 1080x2400, and the lock is ok (PAM present, the shell can lock). Not ok: GPU (no render node) and touch (no driver), as expected; `systemd units` (`systemd-firstboot`, below). Skip: buttons, Wi-Fi, Bluetooth, battery, sound, sensors, cameras. Its new dmesg lines are the two `exynos-clkout` lines and the preset line (below) | **The session runs on akita** |
+| 25 | `bin/omamobile fastboot` from Omarchy | `reboot-to bootloader` reached fastboot in 27 s. `getvar`: slot B `slot-successful:no` with 2 tries, slot A unchanged | **`reboot-to bootloader` works from Omarchy** |
+| 26 | `fastboot --set-active=b` (B back to 3 tries), then `fastboot reboot` | Ping and SSH at 25-26 s. `systemd-analyze`: 2.0 s kernel and initramfs plus 3.2 s userspace. `systemctl is-system-running` reads `running`, with no failed units and 45 running. The guard's flags and `usb0` as before. ext4 mounted cleanly. The clock came up at the last shutdown's time. `tools/phone-smoke` (at `main`'s `a51ef02`): required rows ok, `systemd units` ok, 4 error lines: 2 known, and the 2 `exynos-clkout` lines as new | **Gate (e) passed:** a second boot comes up the same, and clean |
+
+Findings:
+
+- **`systemd-firstboot.service` fails on the first boot only** (status 208/STDIN). With ABL's `console=null` it has no console. `omamobile-firstboot` already sets the host name, time zone and locale. lynx's NOTES and panther's BRINGUP-M1 record the same. It doesn't run again, so `systemctl --failed` is empty from the second boot on (test 26).
+- **One new journal line:** `Failed to preset all unit: Unit /etc/systemd/system/systemd-networkd-wait-online.service is masked`. It came once in first boot's preset, for a unit the image masks on purpose. It isn't recorded for other phones yet, and is harmless here.
+- **The two `exynos-clkout` lines stay "new" on purpose.** The driver had no `google,zuma-pmu` entry in this kernel. linux-omarchy-mobile#209 adds it (merged 2026-11-10, after this kernel was built), so akita's next kernel should stop printing them. `phone-smoke`'s known list is shared by every phone, and on the Pixel 7 Pro and the 9a the same lines mean NFC's clock is missing, so they aren't listed there (#584, closed).
+- **The other error lines are known:** `unable to open an initial console`, `systemd-gpt-auto-generator` exiting with 1, and `gkr-pam: couldn't unlock the login keyring` (auto-login).
+- **The lock screen blanks the display after 10 s without input,** whatever `omarchy-toggle-idle` says. That's the lock's own timer, by design. With no touch or key input yet, the screen can only be woken over SSH (`omarchy-shell lock wake`, run as the user). The power key isn't an input device yet: a short press does nothing, and a long press is the PMIC reset.
+- **The USB link didn't come back after the host lost power.** The laptop crashed and restarted while the phone ran the M2.6 root. After that, the phone never appeared on USB again, even on a replug, while the display stayed up. Volume Down + Power reached fastboot, which enumerated at once on the same cable and port. This is probably the same as on the Pixel 7 Pro and the 9a, not checked on akita: there the charger IC opens the USB2 data switch when VBUS drops, and with no Type-C driver yet nothing closes it again. A laptop losing power looks like an unplug to the phone. Until that's fixed, the way back is the button combination.
+- **The clock:** first boot read Oct 26 (not today, but not before the release key's creation date, 2026-10-26), so the keyring imported the release key with full trust, and no gpg line says "created in the future". The clock was set from the laptop over SSH afterwards. From then on it survives a reboot: systemd stores the time at shutdown (`/var/lib/systemd/timesync/clock`), so the second boot came up at the last shutdown's time, behind only by the time the phone was off.
+- **`/sys/power/mem_sleep` still reads `s2idle [deep]`** (the kernel's default). The package's drop-in (`MemorySleepMode=s2idle`) applies when systemd suspends. Suspend wasn't tried, and the auto-sleep toggle (`omamobile-sleep`) is off.
+- The logs are private (`~/android/reference/akita-m2.7-omarchy-20261110/`). The images, modules and root image are kept as `~/omamobile-kernel/known-good/akita-m2.7-gabcd6aac51cf`.
+- **Slot B ended the session with 2 tries**: test 26's `--set-active=b`, then that one boot.

@@ -77,6 +77,27 @@ done
 [[ $label =~ ^[A-Za-z0-9\ ._-]+$ ]] || die "the label is letters, digits, spaces, dots and dashes"
 base_url=${base_url:-https://pkgs.omamobile.org/releases/$DEVICE/$version/}
 [[ $base_url =~ ^https://[A-Za-z0-9./_-]+/$ ]] || die "--base-url is an https:// URL ending in /"
+name=omamobile-$DEVICE-$version
+bundles=out/bundle
+# One run per bundle at a time, or a second run's put_back below would
+# remove the first one's build directory. The lock file is in out/, where
+# put_back can't remove it; keep it: unlinking it could let two callers
+# lock different inodes.
+command -v flock >/dev/null || die "flock not found (util-linux)"
+mkdir -p out
+exec {lock}>"out/.$name.lock"
+flock -n "$lock" || die "already building $name in $bundles"
+# Everything is built in $out, beside the bundles (the same file system), and
+# moved into place at the end, once all of it, signing included, has worked:
+# a build that fails part way leaves the bundle already built under this
+# name, its .tar and the root image beside it as they were. put_back, on
+# exit and at the start (after a killed run), returns the bundle moved aside
+# for that swap if the new one never got in.
+out=$bundles/.$name.new
+dir=$out/$name
+put_back() { [[ -e $bundles/$name || ! -e $out/old ]] || mv -T -- "$out/old" "$bundles/$name"; rm -rf "$out"; }
+put_back
+trap put_back EXIT
 if ((unsigned == 0)); then
   # The key first, so a missing one is said before any work
   source tools/lib/signing.sh
@@ -125,12 +146,22 @@ if ((unsigned == 0)); then
   fi
 fi
 
-name=omamobile-$DEVICE-$version
-out=out/bundle
-dir=$out/$name
-rm -rf "$dir"
+# The boot images are checked before the bundle of the same name is removed
+# below, so a refused rebuild leaves that bundle as it was.
+# bin/omamobile images records the device it built for
+built_for=$(cat "$KERNEL_OUT/images/DEVICE" 2>/dev/null || true)
+[[ $built_for == "$DEVICE" ]] || die "$KERNEL_OUT/images holds images for '${built_for:-an unknown device}', not $DEVICE"
+for p in $boot_images; do
+  [[ -f $KERNEL_OUT/images/$p.img ]] || die "missing $KERNEL_OUT/images/$p.img (bin/omamobile images)"
+done
+# Images must be newer than the kernel and initramfs they were packed from
+for f in arch/arm64/boot/Image initramfs.cpio.lz4; do
+  [[ $KERNEL_OUT/images/boot.img -nt $KERNEL_OUT/$f || ! -e $KERNEL_OUT/$f ]] ||
+    die "$KERNEL_OUT/images is older than $f: run bin/omamobile images"
+done
+
 mkdir -p "$dir/images"
-say "Assembling $dir"
+say "Assembling $bundles/$name"
 install -m755 tools/install-phone "$dir/install"
 install -m644 "$conf" "$dir/device.conf"
 install -m644 packages/omamobile-keyring/omamobile.gpg "$dir/omamobile.gpg"
@@ -141,17 +172,8 @@ mkdir -p "$dir/tools"
 for f in $provision_tools; do
   install -m755 "tools/$f" "$dir/tools/$f"
 done
-# bin/omamobile images records the device it built for
-built_for=$(cat "$KERNEL_OUT/images/DEVICE" 2>/dev/null || true)
-[[ $built_for == "$DEVICE" ]] || die "$KERNEL_OUT/images holds images for '${built_for:-an unknown device}', not $DEVICE"
 for p in $boot_images; do
-  [[ -f $KERNEL_OUT/images/$p.img ]] || die "missing $KERNEL_OUT/images/$p.img (bin/omamobile images)"
   install -m644 "$KERNEL_OUT/images/$p.img" "$dir/images/$p.img"
-done
-# Images must be newer than the kernel and initramfs they were packed from
-for f in arch/arm64/boot/Image initramfs.cpio.lz4; do
-  [[ $KERNEL_OUT/images/boot.img -nt $KERNEL_OUT/$f || ! -e $KERNEL_OUT/$f ]] ||
-    die "$KERNEL_OUT/images is older than $f: run bin/omamobile images"
 done
 
 for f in "$rootfs" "$rootfs.sha256" "${rootfs%.img.zst}.MANIFEST"; do
@@ -211,7 +233,7 @@ into a new directory DIR with tools/nv-backup (INSTALL.md, "Back up"), then
 run tools/phone-provision from this directory with that backup and your own
 factory image for $DEVICE:
   bash tools/nv-backup DIR
-  bash tools/phone-provision --nv-backup DIR FACTORY.zip
+  bash tools/phone-provision --first-install --nv-backup DIR FACTORY.zip
 The backup holds this phone's IMEI and calibration: keep it, never share
 it. phone-provision puts the firmware for Wi-Fi, Bluetooth, haptics,
 speakers and the camera on the phone, extracted on this computer; nothing
@@ -243,12 +265,23 @@ fi
 # one deterministic tar (tools/lib/bundle-tar.sh). It holds SHA256SUMS.sig,
 # so no checksum inside the bundle can cover it: its .sha256 gets its own
 # signature by the same key instead.
-say "Writing $out/$name.tar (the bundle and the root image, one download)"
+say "Writing $bundles/$name.tar (the bundle and the root image, one download)"
 source tools/lib/bundle-tar.sh
-rm -f "$out/$name.tar.sha256.sig"
-bundle_tar "$out" "$name" "$rootname" "$version" || die "writing $out/$name.tar failed"
+bundle_tar "$out" "$name" "$rootname" "$version" || die "writing $bundles/$name.tar failed"
 if ((unsigned == 0)); then
   gpg --batch --yes --local-user "$SIGNING_KEY" --detach-sign -o "$out/$name.tar.sha256.sig" "$out/$name.tar.sha256"
   say "Signed $name.tar.sha256 with the release key $SIGNING_KEY"
 fi
-ls -l "$dir" "$out"
+# Into place. A file's move replaces the old one in one rename. The
+# directory takes two, the old one into $out (removed with it on exit) and
+# the new one in, so between them there is none under the name; and until
+# the last rename the new directory sits beside the old .tar.
+if [[ -e $bundles/$name ]]; then mv -T -- "$bundles/$name" "$out/old"; fi
+mv -T -- "$dir" "$bundles/$name"
+((unsigned == 0)) || rm -f "$bundles/$name.tar.sha256.sig"
+for f in "$rootname" "$rootname.sha256" "${rootname%.img.zst}.MANIFEST" "$name.tar" "$name.tar.sha256" "$name.tar.sha256.sig"; do
+  if [[ -e $out/$f && ! $out/$f -ef $bundles/$f ]]; then mv -f "$out/$f" "$bundles/"; fi
+done
+# Now rather than on exit, so the listing shows what stays
+put_back
+ls -l "$bundles/$name" "$bundles"

@@ -217,7 +217,31 @@ not_from_osk("ALT + SHIFT + TAB", {
 })
 not_from_osk("CTRL + ALT + TAB", { { "Focus on next monitor", hl.dsp.focus({ monitor = "+1" }) } })
 not_from_osk("CTRL + ALT + SHIFT + TAB", { { "Focus on previous monitor", hl.dsp.focus({ monitor = "-1" }) } })
-if o.cmd_present("voxtype") then
+-- Dictation keys. Omarchy 4.0 binds F9 to Voxtype (voxtype.lua). Omarchy 4.5
+-- binds Alt + Space to its dictation command when a backend is installed
+-- (dictation.lua, which defines o.dictation_installed), and its migration
+-- keeps F9 in the bindings.lua of someone who had dictation before. Either
+-- way squeekboard's own F9 and Alt + Space belong to the app in front, and
+-- the phone's way to dictate is the keyboard's Mic key and the Dictation
+-- tile. An F9 line in bindings.lua that isn't that migration's is the
+-- owner's and is left alone.
+local function migrated_f9()
+  local file = io.open((os.getenv("HOME") or "") .. "/.config/hypr/bindings.lua", "r")
+  if not file then return false end
+  local text = file:read("*a")
+  file:close()
+  return text:find('o.bind_hold("F9", "Start dictation (push-to-talk)", "omarchy-dictation start"', 1, true) ~= nil
+end
+if o.dictation_installed then
+  if o.dictation_installed() then
+    not_from_osk("ALT + SPACE", { { "Toggle dictation", "omarchy-dictation toggle" } })
+    if migrated_f9() then
+      hl.unbind("F9")
+      o.bind_hold("F9", "Start dictation (push-to-talk)", "omarchy-dictation start",
+        "Stop dictation (push-to-talk)", "omarchy-dictation stop", { device = not_osk })
+    end
+  end
+elseif o.cmd_present("voxtype") then
   not_from_osk("F9", {
     { "Start dictation (push-to-talk)", "voxtype record start" },
     { "Stop dictation (push-to-talk)", "voxtype record stop", { release = true } },

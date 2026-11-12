@@ -338,6 +338,12 @@ def real_package(t):
     if version.startswith("4.5.0-"):
         import port45
         port45.actual(t, ex, version, make_root, run, ok, read, selected_series, PKG, qml_parse)
+        # About's layouts by terminal size (0030), run on the patched 4.5
+        # files (port45 ends by restoring its own root)
+        root45, _ = make_root("real45-about", os.path.join(ex, ".MTREE"))
+        rc, out = run(root45, "apply", series=selected_series)
+        ok(rc == 0, "real4.5: the series applies to a second root (%s)" % out.strip().splitlines()[-1])
+        about_layout(t, root45, tools=os.path.join(root45, "usr/bin"))
         return
 
     root, _ = make_root("real", os.path.join(ex, ".MTREE"))
@@ -448,7 +454,8 @@ def real_package(t):
 def qml_parse(root, series=None):
     """Every QML file the series touches still parses, when qmlformat is at
     hand (it reports syntax errors without needing the shell's imports)."""
-    tool = shutil.which("qmlformat") or ("/usr/lib/qt6/bin/qmlformat" if os.path.isfile("/usr/lib/qt6/bin/qmlformat") else "")
+    tool = shutil.which("qmlformat") or next(
+        (p for p in ("/usr/lib/qt6/bin/qmlformat", "/usr/lib64/qt6/bin/qmlformat") if os.path.isfile(p)), "")
     if not tool:
         print("ok - real omarchy: the patched QML parses # SKIP no qmlformat")
         return
@@ -810,7 +817,7 @@ def show_logo(t, root):
     ok(out.decode("utf-8", "replace").count("█" * 81) == 9, "0028: no terminal: the wide logo, as before")
 
 
-def about_layout(t, root):
+def about_layout(t, root, tools=None):
     """Patch 0030: the About layout by terminal size. A stand-in fastfetch
     whose modules are as big as Omarchy's on a phone (54 columns, 28 rows
     with the closing break) and a 54x26 logo, as Omarchy's about.txt is: side
@@ -843,7 +850,8 @@ def about_layout(t, root):
         return h
 
     def env(h):
-        return {"PATH": stub + ":/usr/bin:/bin", "HOME": h, "TERM": "xterm",
+        # tools: the package's own commands the launcher sources or calls (4.5)
+        return {"PATH": stub + (":" + tools if tools else "") + ":/usr/bin:/bin", "HOME": h, "TERM": "xterm",
                 "FASTFETCH_LOG": os.path.join(h, "fastfetch.log")}
 
     sizes = [(61, 63), (57, 63), (56, 63), (41, 63), (61, 56), (61, 55), (61, 117), (29, 118), (26, 136)]

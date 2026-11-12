@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: MIT
 # tools/phone-smoke's dmesg error classification, against saved error logs
 # (--errors-from; no phone): known lines, counted lines with and without a
-# ceiling, and a UFS link that doesn't come back failing kernel health.
+# ceiling, and a UFS link that doesn't come back failing kernel health; and
+# from the laptop side, against a stand-in for the phone (PHONE_SSH): the
+# device named from the repository's descriptors, or in a release bundle
+# from its one device.conf.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
@@ -36,6 +39,17 @@ has 'ok|1|kernel health|' && has '(14 known, of them UFS dme-set 0x4021 (s2idle)
   && ! has 'new dmesg errors' || fail "the s2idle UFS dme-set lines are known and stay counted"
 pass "the s2idle UFS dme-set lines are known and stay counted"
 
+cp1='[   15.088089] cpif: rx_demux: PCIE: ERR! umts_ipc1 is not opened'
+cp2='[   15.088401] cpif: io_dev_recv_skb_single_from_link_dev: umts_ipc1<-PCIE: ERR! rx_demux fail (err -19)'
+cp3='[   15.088670] cpif: pass_skb_to_demux: PCIE: umts_ipc1<-s5300: ERR! umts_ipc1->recv_skb fail (-19)'
+run "$cp1" "$cp2" "$cp3" "${cp1/umts_ipc1/oem_ipc0}" "${cp1/umts_ipc1/umts_router}"
+has 'ok|1|kernel health|' && has '(5 known, of them cpif message for a channel nobody opened x5, 0 new)' \
+  && ! has 'new dmesg errors' || fail "CPIF's lines for channels nothing opens are known and stay counted"
+pass "CPIF's lines for channels nothing opens are known and stay counted"
+run "${cp1/umts_ipc1/umts_ipc0}" "${cp2//umts_ipc1/umts_ipc0}" "${cp3//umts_ipc1/umts_ipc0}"
+has '0 known, 3 new' && has 'new dmesg errors' || fail "a message dropped on the phone service's own channel (umts_ipc0) is new"
+pass "a message dropped on the phone service's own channel (umts_ipc0) is new"
+
 run "${ufs/0x4021/0x1561}"
 has '0 known, 1 new' && has 'new dmesg errors' || fail "a dme-set of another attribute is new"
 pass "a dme-set of another attribute is new"
@@ -67,3 +81,26 @@ run "$dais" "$ufs" "$ufs" 'some driver: something new broke'
 has 'of them ASoC no backend DAIs (PipeWire probe) x1, UFS dme-set 0x4021 (s2idle) x2, 1 new)' \
   && has 'new dmesg errors|some driver: something new broke x1' || fail "counted and new lines together"
 pass "counted and new lines together"
+
+# From the laptop: PHONE_SSH stands in for the phone. It answers the
+# compatible question and records what the smoke run was started with.
+printf '%s\n' '#!/bin/bash' 'case $1 in' '  tr*) echo "$COMPAT" ;;' \
+  '  *) cat >/dev/null; echo "$1" > "$LOG"; echo "{}" ;;' 'esac' > "$t/phone"
+chmod +x "$t/phone"
+conf=device/cheetah/device.conf
+codename=$(sed -n 's/^CODENAME="\{0,1\}\([a-z0-9]*\)"\{0,1\}$/\1/p' "$conf")
+compat=$(sed -n 's/^COMPATIBLE="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$conf" | awk '{print $1}')
+out=$(COMPAT=$compat LOG=$t/started PHONE_SSH=$t/phone tools/phone-smoke --json 2>"$t/err") || fail "the laptop side runs through PHONE_SSH"
+[[ ! -s $t/err ]] || { cat "$t/err" >&2; fail "the laptop side prints no error of its own (no descriptor that isn't there is read)"; }
+grep -c "SMOKE_DEVICE=$codename .*bash -s -- --here --json" "$t/started" >/dev/null || fail "the device is named from the repository's descriptors"
+pass "from the laptop, through PHONE_SSH, the device comes from the descriptors"
+
+# A release bundle: tools/phone-smoke beside the bundle's one device.conf
+mkdir -p "$t/bundle/tools"
+cp tools/phone-smoke "$t/bundle/tools/"
+printf 'CODENAME=bundledev\nCOMPATIBLE="vendor,bundle-board"\n' > "$t/bundle/device.conf"
+out=$(COMPAT=vendor,bundle-board LOG=$t/started PHONE_SSH=$t/phone bash "$t/bundle/tools/phone-smoke" --json) || fail "phone-smoke runs from a bundle"
+grep -c 'SMOKE_DEVICE=bundledev ' "$t/started" >/dev/null || fail "in a bundle the device is its device.conf's"
+out=$(COMPAT=vendor,other-board LOG=$t/started PHONE_SSH=$t/phone bash "$t/bundle/tools/phone-smoke" --json) || fail "phone-smoke runs for an unknown board"
+grep -c 'SMOKE_DEVICE=unknown ' "$t/started" >/dev/null || fail "a board that isn't the bundle's is unknown"
+pass "in a release bundle the device is the bundle's device.conf"

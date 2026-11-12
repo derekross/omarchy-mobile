@@ -142,7 +142,7 @@ Usage: extract-vendor-firmware [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
   -w DIR   scratch directory for the ~1 GB vendor.img (default: a temp dir in \$TMPDIR)
   -d DEV   cheetah (default), panther, raven, tegu or husky
   -s SKU   husky: the hardware SKU (androidboot.hardware.sku), which picks the NVRAM
-  -f       skip the android-info.txt board=$DEVICE check
+  -f       skip the device checks (android-info.txt board=$DEVICE, the vendor build.prop)
   -c FILE  also copy the camera HAL APEX (/vendor/apex/com.google.pixel.camera.hal.apex)
            to FILE, for tools/extract-camera-data --apex (tools/phone-provision uses it)
 
@@ -372,8 +372,11 @@ if [[ "$(od -An -tx2 -j 1080 -N2 "$img" | tr -d ' ')" == ef53 ]]; then
       esac
     done
   }
-  get_file() { dfs "dump /$1 $2" && [[ -s "$2" ]]; }
-  get_dir() { mkdir -p "$2" && dfs "rdump /$1 $2" && [[ -d "$2/$(basename "$1")" ]]; }
+  # debugfs splits its command at blanks: a host path goes in double
+  # quotes, with any double quote in it doubled
+  dq() { printf '"%s"' "${1//\"/\"\"}"; }
+  get_file() { dfs "dump /$1 $(dq "$2")" && [[ -s "$2" ]]; }
+  get_dir() { mkdir -p "$2" && dfs "rdump /$1 $(dq "$2")" && [[ -d "$2/$(basename "$1")" ]]; }
 elif [[ "$(magic_at "$img" 1024)" == e0f5e1e2 ]]; then
   need fsck.erofs "install erofs-utils"
   say "vendor.img is EROFS; extracting it with fsck.erofs"
@@ -391,6 +394,8 @@ if get_file build.prop "$WORK/build.prop"; then
   [[ "$dev" == "$DEVICE" || -n "$FORCE" ]] ||
     die "vendor partition is for '${dev:-unknown}', not $DEVICE; use -f to override"
   say "Vendor partition: $(sed -n 's/^ro.vendor.build.fingerprint=//p' "$WORK/build.prop" | head -1)"
+else
+  [[ -n "$FORCE" ]] || die "build.prop can't be read from vendor.img; use -f to override"
 fi
 
 # The new generation: everything below is written into $new, which starts
