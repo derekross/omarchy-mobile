@@ -9,8 +9,11 @@
 # isn't Google's, a name without the digest, a tested build without its
 # release, another format or device, a build listed twice); match picks the
 # build with the phone's bootloader and baseband and no other (never a build
-# with the same bootloader alone), and names the builds that share both; and
-# sign makes a detached signature gpg verifies.
+# with the same bootloader alone), and names the builds that share both; the
+# list is kept newest first by the date in the build id, whatever order the
+# builds are added in, and a list that isn't is refused; match says whether
+# an Android update would land on a tested build (the newest one); and sign
+# makes a detached signature gpg verifies.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -135,6 +138,54 @@ grep -c 'note: AB1C.230101.001.A1, AB1C.230101.001 share a bootloader and baseba
   fail "check names the builds a phone can't tell apart"
 pass "match: the build with the phone's bootloader and baseband, never one with the bootloader alone; shared pairs named, a tested one first; the newer tested build for one that isn't"
 
+# Newest first is a property the tool keeps, not a habit of whoever adds:
+# "newer" is read from it. The newest build added first, then an older one,
+# then one in between: each lands where its date belongs
+ord=$t/order.json
+ox() { fx "$1" --index "$ord" --codename testdev "${@:2}"; }
+order() { python3 -I -c 'import json,sys; print(" ".join(b["build"] for b in json.load(open(sys.argv[1]))["builds"]))' "$ord"; }
+om() { ox match --bootloader "$1" --baseband "$2"; }
+n1=$(factory ab1c.230201.002 testdev testloader-1.0-111 otherband-1.0-333)
+o1=$(factory ab1c.221201.003 testdev testloader-0.9-000 oldband-0.1-111)
+ox add "$n1" >/dev/null || fail "add takes the newest build first"
+ox add --tested 2026.11.01 "$o1" >/dev/null || fail "add takes an older build after a newer one"
+[[ $(order) == "AB1C.230201.002 AB1C.221201.003" ]] || fail "an older build added later is listed below the newer one: $(order)"
+ox add "$z1" >/dev/null
+[[ $(order) == "AB1C.230201.002 AB1C.230101.001 AB1C.221201.003" ]] || fail "a build is put where its date belongs, between a newer and an older one: $(order)"
+ox add "$z3" >/dev/null
+[[ $(order) == "AB1C.230201.002 AB1C.230101.001.A1 AB1C.230101.001 AB1C.221201.003" ]] || fail "builds of one date stay together, the one added last first: $(order)"
+ox check >/dev/null || fail "check accepts the list add keeps"
+# The review's case: an older tested build and a newer untested one. The
+# older one is never "newer", wherever it was added
+out=$(om testloader-1.0-111 testband-9.9-222)
+grep -cx 'newer_tested=' <<<"$out" >/dev/null || fail "a tested build that is older is never named as newer"
+grep -cx 'newest=AB1C.230201.002' <<<"$out" >/dev/null && grep -cx 'newest_tested=false' <<<"$out" >/dev/null ||
+  fail "the newest build is named, and an update is said not to land on a tested build while it isn't tested"
+out=$(om nobody-1 nothing-2)
+grep -cx 'match=none' <<<"$out" >/dev/null && grep -cx 'newest=AB1C.230201.002' <<<"$out" >/dev/null && grep -cx 'newest_tested=false' <<<"$out" >/dev/null ||
+  fail "without a match the newest build and its mark are still printed"
+grep -c 'newest: AB1C.230201.002. An Android update lands on a build that isn.t tested' <<<"$(ox check)" >/dev/null || fail "check says where an Android update lands"
+ox tested AB1C.230201.002 2026.11.08 >/dev/null
+out=$(om testloader-1.0-111 testband-9.9-222)
+grep -cx 'newer_tested=AB1C.230201.002' <<<"$out" >/dev/null && grep -cx 'newest_tested=true' <<<"$out" >/dev/null || fail "with the newest build tested, an update lands on a tested build"
+# Another build of the newest date (a carrier variant) with versions no
+# tested build carries: which of the two a phone gets isn't known, so an
+# update is no longer said to land on a tested build
+n2=$(factory ab1c.230201.002.b1 testdev testloader-1.0-111 carrierband-7)
+ox add "$n2" >/dev/null
+grep -cx 'newest_tested=false' <<<"$(om testloader-1.0-111 testband-9.9-222)" >/dev/null || fail "an untested variant of the newest date with other versions: an update may land on it"
+grep -cx 'newest=AB1C.230201.002' <<<"$(om testloader-1.0-111 testband-9.9-222)" >/dev/null || fail "of the newest date's builds the tested one is named"
+ox untested AB1C.230201.002 >/dev/null; ox tested AB1C.230201.002.B1 2026.11.08 >/dev/null
+grep -cx 'newest_tested=false' <<<"$(om nobody-1 nothing-2)" >/dev/null || fail "one tested variant of the newest date doesn't cover the other"
+# A list in another order is refused by every reader, check and match included
+python3 -I -c 'import json,sys; m=json.load(open(sys.argv[1])); m["builds"].reverse(); json.dump(m,open(sys.argv[2],"w"))' "$ord" "$t/reversed.json"
+for sub in check info "match --bootloader testloader-1.0-111 --baseband testband-9.9-222"; do
+  # shellcheck disable=SC2086 # the subcommand and its options are words
+  if fx $sub --index "$t/reversed.json" --codename testdev >/dev/null 2>"$t/err"; then fail "$sub refuses a list that isn't newest first"; fi
+  grep -c 'is listed below .*, which is older; the list is newest first' "$t/err" >/dev/null || { cat "$t/err" >&2; fail "$sub says which build is out of place"; }
+done
+pass "newest first by the build's date: add keeps it, every reader refuses another order, and 'newer' and 'newest' are read from the dates"
+
 refuse() {  # WHY PYTHON-EDIT
   python3 -I -c "import json, sys; m = json.load(open(sys.argv[1])); b = m['builds'][0]; $2; json.dump(m, open(sys.argv[2], 'w'))" "$t/good.json" "$t/bad.json"
   if fx info --index "$t/bad.json" --codename testdev >/dev/null 2>&1; then fail "the reader refuses $1"; fi
@@ -151,6 +202,7 @@ refuse "a zip named for another device" 'b["zip"] = b["zip"].replace("testdev", 
 refuse "another format" 'm["format"] = 2'
 refuse "another device's index" 'm["codename"] = "other"'
 refuse "a date that isn't one" 'm["updated"] = "yesterday"'
+refuse "a newer build listed below an older one" 'm["builds"].reverse()'
 refuse "a build listed twice" 'm["builds"].append(dict(m["builds"][0]))'
 refuse "a build that isn't an object" 'm["builds"].append("x")'
 echo '{' > "$t/bad.json"

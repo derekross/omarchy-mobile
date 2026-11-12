@@ -28,9 +28,21 @@ For an installer (the reader; it needs no repository):
       versions (carrier variants do); the first of them marked tested is
       printed (the first in the file when none is), and the others are named
       in  same_pair=BUILD,BUILD
-      For a build that isn't tested,  newer_tested=BUILD  names the newest
-      tested build listed above it (the file is newest first), or is empty:
-      an Android update can only help when there is one
+      With or without a match,  newest=BUILD  is the newest build in the
+      list and  newest_tested=true  or false says whether an Android update
+      would land on a tested build: true only when every build of the newest
+      date has a bootloader and baseband that a tested build carries.
+      Android's updater offers Google's newest build and nothing older, so
+      an installer advises "update Android" only then. For a build that
+      isn't tested,  newer_tested=BUILD  names the newest tested build that
+      is newer than every build the phone may be running (by the date in
+      the build id), or is empty
+
+The list is newest first, by the date in the build id (the six digits of
+CP2A.260705.006): add puts a build where its date belongs, and every reader
+refuses a list in which a build stands above a newer one, so "newer" is
+never read from a position that nobody kept. Builds of one date are equally
+new.
 
 For the maintainer, in the repository (-d CODENAME, default cheetah):
 
@@ -90,6 +102,12 @@ def text(v, kind, what):
     return v
 
 
+def build_date(b):
+    """The date in a build id (YYMMDD, the six digits of CP2A.260705.006):
+    what "newer" means everywhere in this tool."""
+    return b["build"].split(".")[1]
+
+
 def check_build(b, codename):
     """One entry, every field checked; returns it with only the known keys."""
     if not isinstance(b, dict):
@@ -145,6 +163,10 @@ def load(path, codename):
     ids = [b["build"] for b in builds]
     if len(set(ids)) != len(ids):
         die("a build is listed twice")
+    for above, below in zip(builds, builds[1:]):
+        if build_date(below) > build_date(above):
+            die("%s: %s is listed below %s, which is older; the list is newest first, by the date in "
+                "the build id" % (path, below["build"], above["build"]))
     return {"format": FORMAT, "codename": codename, "updated": idx["updated"], "builds": builds}
 
 
@@ -242,7 +264,10 @@ def cmd_add(a):
     entry = check_build(entry, codename)
     if any(b["build"] == build for b in idx["builds"]):
         die("%s is already in %s (tested/untested change its mark)" % (build, path))
-    idx["builds"].insert(0, entry)
+    # Newest first, by the build's date, whenever it is added: above the
+    # first build that is no newer (so above the others of its own date)
+    at = next((i for i, b in enumerate(idx["builds"]) if build_date(b) <= build_date(entry)), len(idx["builds"]))
+    idx["builds"].insert(at, entry)
     save(path, idx)
     print("added %s to %s: bootloader %s, baseband %s, %s" % (
         build, path, bootloader, baseband, "tested with " + a.tested if a.tested else "not marked tested"))
@@ -267,10 +292,15 @@ def cmd_check(a):
     path, codename = index_path(a)
     idx = load(path, codename)
     print("%s: %d builds, updated %s" % (path, len(idx["builds"]), idx["updated"]))
+    name, lands_tested = newest(idx)
     for b in idx["builds"]:
         print("  %-22s bootloader %s, baseband %s, %s" % (
             b["build"], b["bootloader"], b["baseband"],
             "tested with " + b["tested_with"] if b["tested"] else "not tested"))
+    if name:
+        print("  newest: %s. An Android update lands on %s" % (
+            name, "a tested build, so an installer may advise one" if lands_tested else
+            "a build that isn't tested, so an installer advises none"))
     for group in same_pairs(idx):
         print("  note: %s share a bootloader and baseband; a phone can't be told to run one or the "
               "other, and an installer asks for the first of them that is marked tested" % ", ".join(group))
@@ -282,22 +312,45 @@ def cmd_info(a):
     print("updated=%s\nbuilds=%d" % (idx["updated"], len(idx["builds"])))
 
 
+def print_build(b):
+    for key in ("build", "bootloader", "baseband", "zip", "page", "sha256", "size"):
+        print("%s=%s" % (key, b[key]))
+    print("tested=" + ("true" if b["tested"] else "false"))
+
+
+def newest(idx):
+    """The newest build's id, and whether an Android update lands on a tested
+    build. Android's updater offers Google's newest build and nothing older,
+    and which of the builds of the newest date a phone gets isn't known
+    (carrier variants), so all of them have to be covered: each with a
+    bootloader and baseband that a tested build carries."""
+    if not idx["builds"]:
+        return "", False
+    top = [b for b in idx["builds"] if build_date(b) == build_date(idx["builds"][0])]
+    tested = {(b["bootloader"], b["baseband"]) for b in idx["builds"] if b["tested"]}
+    name = next((b for b in top if b["tested"]), top[0])["build"]
+    return name, all((b["bootloader"], b["baseband"]) in tested for b in top)
+
+
 def cmd_match(a):
     path, codename = index_path(a)
     idx = load(path, codename)
     found = match(idx, a.bootloader, a.baseband)
     print("match=" + ("exact" if found else "none"))
     print("updated=" + idx["updated"])
+    name, lands_tested = newest(idx)
+    print("newest=" + name)
+    print("newest_tested=" + ("true" if lands_tested else "false"))
     if found:
         # Of builds a phone can't tell apart, a tested one wherever it is listed
         b = next((o for o in found if o["tested"]), found[0])
-        for key in ("build", "bootloader", "baseband", "zip", "page", "sha256", "size"):
-            print("%s=%s" % (key, b[key]))
-        print("tested=" + ("true" if b["tested"] else "false"))
+        print_build(b)
         print("same_pair=" + ",".join(o["build"] for o in found if o is not b))
-        # Newer than every build the phone may be running: listed above the first of them
-        above = idx["builds"][:idx["builds"].index(found[0])]
-        newer = "" if b["tested"] else next((o["build"] for o in above if o["tested"]), "")
+        # Newer than every build the phone may be running, by the builds'
+        # own dates (the list's order is checked, and not relied on here)
+        latest = max(build_date(o) for o in found)
+        newer = "" if b["tested"] else next(
+            (o["build"] for o in idx["builds"] if o["tested"] and build_date(o) > latest), "")
         print("newer_tested=" + newer)
 
 

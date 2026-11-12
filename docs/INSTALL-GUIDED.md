@@ -432,6 +432,14 @@ checks that each question above is in this file.
 }
 ```
 
+- **Newest first, and kept so.** "Newer" is the date in the build id (the
+  six digits of `CP2A.260705.006`); builds of one date are equally new.
+  `factory-index add` puts a build where its date belongs, whenever it is
+  added, and every reader (`check`, `info`, `match`, so the installer too,
+  on a signed index) refuses a list in which a build stands above a newer
+  one. `match` reads "newer" and "newest" from the dates themselves, so
+  neither depends on a position nobody kept. The assumption under it: for
+  one phone, Google's build ids carry later dates for later builds.
 - **Metadata only.** `url` is recorded for the day D2 allows a download; the
   installer never fetches it. `page` is what it opens.
 - **Read as data, every field against a pattern.** `url` must be on
@@ -482,7 +490,8 @@ checks that each question above is in this file.
 `tools/factory-index add [-d CODENAME] [--tested RELEASE] FACTORY.zip` adds
 a build from a factory zip on the maintainer's computer: the name, size and
 SHA-256, and the board, bootloader and baseband from `android-info.txt`
-inside its `image-<codename>-<build>.zip`. `tested`, `untested`, `check`
+inside its `image-<codename>-<build>.zip`. It is listed by its date, above
+the first build that is no newer. `tested`, `untested`, `check`
 and `sign` do what they say.
 
 Checked against two real cheetah factory zips (2026-11-10): the zip's name
