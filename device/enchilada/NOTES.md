@@ -147,7 +147,10 @@ back the two read-only copies. A copy of `sde`'s LBA 0-5 and 786426-786431
 2026-11-09, and their SHA-256 matched the phone's. They are kept off the
 repository because they hold the disk's GUIDs. `tools/mark-slot-b` writes
 the primary pair and reads it back before it touches the backup pair, so a
-valid copy exists at every moment. The owner's acceptance on #432 has to
+valid copy exists at every moment. It saves the four old sectors on the
+laptop first (`~/android/reference/enchilada/mark-slot-b-sde/`), so after a
+cut cable the next run sees the half-written table and offers to finish the
+write or put the old sectors back. The owner's acceptance on #432 has to
 cover the EDL case in so many words before anything writes this table.
 
 **The bit layout** is Qualcomm's ABL (`QcomModulePkg/Include/Library/PartitionTableUpdate.h`
