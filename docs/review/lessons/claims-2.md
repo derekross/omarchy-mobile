@@ -3,6 +3,77 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-130. Before putting a bootloader requirement down to the SoC,
+  compare the reference phone's stock images.** Cheetah's stock vbmeta chains
+  `boot` and `init_boot` with the same rollback index and ABL build as lynx,
+  yet boots footerless images: lynx's AVB footers are its ABL's
+  configuration. *Check:* `avbtool info_image` on the stock vbmeta in
+  `~/android/reference` (read-only). *From:* #37.
+  (Corrected 2026-10-28, C-14: the comparison used the factory vbmeta, not
+  the phone's non-stock `vbmeta_b`; a stock `vbmeta_b` needs footers on
+  cheetah too.)
+- **L-131. Evidence cites the tested file's blob id, not a commit id.**
+  `git rev-parse <commit>:<path>` survives the folds and rebases we ask for,
+  and ties an out-of-tree module to its source. Extends L-45. *From:* kernel
+  #38 with #39.
+- **L-132. A device can appear twice on DEVICES.md (matrix row and Wanted
+  list); an edit to one must agree with the other**, and the plain words that
+  say the evidence isn't public must survive. *Check:* `grep -n <codename>
+  docs/DEVICES.md`. Extends L-28, L-66 and L-107. *From:* #39.
+- **L-149. A descriptor's overlays and config symbols must exist in the
+  published kernel or an open kernel PR.** raven's targeted nodes and
+  options in neither, so its images can't be built from our trees. *Check:*
+  `git grep` each overlay target and `CONFIG_` symbol against
+  `github/omamobile` and the open PR heads; whatever is missing means the
+  matrix cells name the port branch. Extends L-28 and L-61. *From:* #41,
+  round 12.
+- **L-150. Read every plan in the PR before quoting one plan's status.**
+  raven's BLUETOOTH-PLAN said "broken" while a later POWER-PLAN result said it
+  "works again". *Check:* `git grep -n` the subsystem across the PR's plans
+  and go by the newest dated result. *From:* #41, round 12.
+- **L-186. A slot A fallback record without Android symptoms makes "what is
+  on slot A?" the first question.** #35's answer to "did the lock screen
+  appear, did it offer to reset `userdata`" was "slot A is another Omarchy
+  install", which the notes on main contradicted and which means the phone
+  has no Android fallback and that slot A's images were written. *Check:*
+  whenever a fallback is reported, ask for the OS on slot A, when and how it
+  got there, and whether its initramfs has the storage guard; a Linux slot A
+  is a §3.1 event (L-135) even when nothing else went wrong. *From:* #35,
+  round 20.
+- **L-187. Check a plan's prose against the descriptor at the same head.**
+  #38's `BRINGUP-M1.md` still said `SIMPLEFB_TRIG_CON` is unset while the
+  same commit's `device.conf` set it. *Check:* `grep -n <KEY>
+  device/<x>/*.md device/<x>/device.conf` for every descriptor key a PR adds
+  or removes. *From:* #38, round 20.
+- **L-188. An AGENTS.md gotcha is checked against the plan it cites, in the
+  same PR.** #72 added "on the 9a it never woke" to a shared gotcha with no
+  plan line about suspend anywhere in its 1,220 lines. *Check:* `grep -i` the
+  gotcha's key words over the PR's plans; a gotcha without a dated result and
+  `uname -r` waits for them. Extends L-109. *From:* #72, round 20.
+- **L-189. A supplier-based property's evidence names the supplier driver,
+  and that driver's PR.** #66's "Charging / Full / Not charging" came from a
+  MAX77779 charger driver that is in no tree or PR of ours; on our tree the
+  property stays Unknown until it lands. *Check:* `git grep` the supplier's
+  compatible or driver name across the base and the open heads before
+  quoting the result. Extends L-61. *From:* kernel #66, round 20.
+- **L-190. Before accepting a plan's "next" step, check the plan's own
+  negative results and the device package for it.** Issue #77 proposed a
+  longer `BT_REG_ON` hold and a boot-time power-cycle retry; raven's
+  BLUETOOTH-PLAN had already held the line low for seconds without effect,
+  and `omamobile-bt-addr` already rebinds the driver up to three times a
+  boot. The vendor driver's own number (30 ms) is what kernel #6 copied; the
+  HAL's 100 ms is a different step. *Check:* grep the plan's result tables
+  and the package's `bin/` for the mechanism, and the vendor driver for the
+  number, before asking for or agreeing to a change. Extends L-61 and L-147.
+  *From:* issue #77, round 20.
+- **L-191. A PR's premise about a phone is checked against that device's
+  plans and the author's own words elsewhere.** #69 said husky "already shows
+  the Omarchy clock" and kernel #64 that an `ioremap` "reset the phone",
+  while DEVICES.md and UFS-PLAN show no session has run and the author said
+  on the device's issue that nothing was flashed; #69 also hard-coded
+  another contributor's kernel release. *Check:* grep the release string and
+  the claims in `device/<codename>/*`, and read the author's comments on the
+  device's issue. Extends L-61 and L-109. *From:* kernel #64, #69, round 20.
 - **L-192. "The builder's keys give root on every installation" is checked
   against the init and the installer.** The initramfs `authorized_keys`
   never reaches the Arch root (`install-phone` writes the owner's key
@@ -71,7 +142,6 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   the reference phone's driver for the same role.** #72 blamed nxp-nci's
   missing PM ops, but st-nci on cheetah has none and suspends. *Check:* `git
   grep dev_pm_ops` across sibling drivers. *From:* #72, round 22.
-
 - **L-358. A smoke report's package list is evidence about the tree.**
   Versions not on main, `*-<codename>` packages or a rebuilt keyring mean an
   unpublished stack (#200). *Check:* diff the list against
@@ -201,7 +271,6 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   continue:** `script && ! grep -q '^<<<<<<<' f && git add f && git
   cherry-pick --continue`. A reviewer committed conflict markers once.
   Extends L-254. *From:* the 2026-11-01 round.
-
 - **L-390. A dmesg delta across s2idle is not a sleep length:** the kernel
   log's clock stops while the SoC is suspended, so the delta reads about
   1.5 s whatever the real sleep was. *Check:* take sleep lengths from the RTC
@@ -247,7 +316,6 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   `<board>-display.dtsi` and `-pmic.dtsi`,** and a driver that follows a
   sibling is compared with the sibling's current version. *From:* kernel
   #177, 2026-11-01.
-
 - **L-402. Before asking for a phone run of a DT node whose driver is a
   module, check the device package's `modprobe.d` for a blacklist of that
   driver or its provider;** a blacklisted provider leaves the consumer
@@ -279,27 +347,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   `/sys/firmware/devicetree` (or any real hardware path):** on a phone build
   it takes the real branch. Stub every such path. *From:* #114 (a 7 Pro
   build ran the real `modprobe`), 2026-11-01.
-- **L-411. A runbook that turns a supply on from userspace says what holds
-  that state across a SoC reset and undoes it early in the next boot, and
-  its register sequence is checked against Google's GPL driver.** Extends
-  C-3. *From:* issue #272, 2026-11-01.
-- **L-412. For stock DT values, ask for Google's GPL board source before a
-  decompiled image.** *From:* #249, 2026-11-01.
-- **L-425. Staging a non-reproducible artifact on two machines under one version makes two packages.** cheetah's boot-file initramfs (`find | cpio`, unpinned order and mtimes) would be staged by the nightly machine and again by #324's release `images` stage. *Check:* build any staged input twice and compare bytes; if they differ, name the one machine and step that produces it. Extends L-268 and L-310. *From:* #320 with #324, round 38, 2026-11-02.
-- **L-433. A shipped default that a working feature needs is checked on a
-  fresh install, not on the reference phone.** modem-sit shipped `[audio]
-  card = none` in its packaged `/etc` file and its built-in default, and
-  pacman keeps an edited `backup=` file, so the maintainer's hand-set `auto`
-  made "calls work" true on one phone only; the release notes and DEVICES
-  said it for everyone. *Check:* for each "works" claim in release notes or
-  DEVICES, `git show origin/main:<package>/etc/...` for the keys the feature
-  needs, and `git grep` the test that pins the default. Extends L-46.
-  *From:* #387 and #405 (commit review), fixed by #416, round 39,
-  2026-11-03.
-- **L-434. "It didn't happen at shutdown" can't be read from the next boot's
-  `dmesg`.** The modem-off UFS error-handler pass follows the CP power-off
-  in the unit's stop, and each check grepped the next boot's fresh log, so a
-  count of 0 was certain. *Check:* for any "count 0 across reboots", find
-  when the event would fire and ask for `journalctl -b -1 -k` (if journald
-  outlives the unit) or pstore. Extends L-85 and L-414. *From:* #398 and
-  #405 (commit review), round 39, 2026-11-03.

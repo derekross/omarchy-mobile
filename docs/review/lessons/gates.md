@@ -3,6 +3,111 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-771. `tools/pr-check` doesn't read licence headers, so a file moved in
+  from the kernel tree is checked for the SPDX line it brought along.**
+  #666's `tools/ncm-transfer` arrived as `GPL-2.0` in an MIT repository.
+  *Check:* `git diff --diff-filter=A base...head | grep -n 'SPDX'` against
+  CONTRIBUTING §7. Extends L-221. *From:* #666, round 52, 2026-11-11.
+- **L-770. Nothing in CI reads Markdown reference links, so a docs diff that
+  changes a `[label]` is checked for its definition line.** #505 changed
+  BRINGUP-M1's `[the notes PR #330]` to `[NOTES.md]` and deleted the old
+  definition without adding one, so the link renders as bracketed text.
+  *Check:* for each `[label]` without parentheses that a diff adds, `grep -n
+  '^\[label\]:' <file>` at the head. Extends L-262. *From:* #505, round 52,
+  2026-11-11.
+- **L-769. A lint that lands on main turns open PRs written before it red at
+  their next rebase, and a red `tests/all` hides the package suites.** #346's
+  package was unchanged, yet its rebase failed on `tests/grep-q-pipes`, and
+  CI stopped before `tests/packages`, so the package's own test never ran.
+  *Check:* when a new lint merges, run it on each open PR's merge with main
+  and hand each author the line; when `tests/all` fails, say that
+  `tests/packages` didn't run, and run the touched package's `test/all` by
+  hand. Extends L-195 and L-103. *From:* #346, round 52, 2026-11-11.
+- **L-768. A non-passing CI check is read down to the step that ended it.**
+  `gh pr checks` showed kernel #241's job as "fail" after an hour; the run
+  was `cancelled` in its "Tools" step, before `tools/kernel-pr-check`
+  started, so there was neither a failure of the PR nor a `dtbs_check` result
+  for the new head. *Check:* `gh run view <id> --json conclusion,jobs` and
+  name the step; when the gate step never ran, say "CI did not run on this
+  head", list what stays unchecked locally (dtschema), and re-run instead of
+  holding the PR to it. Extends L-30 and L-38. *From:* kernel #241, round 52,
+  2026-11-11.
+- **L-767. A known-failure feed for a new compatible needs `dt-validate
+  -m`.** On kernel #243 the head DTB against the base's schemas printed
+  nothing for `"google,zuma-vgpio2ap-sysreg", "syscon"`: an unknown compatible
+  selects no schema, and without `-m` dt-validate is silent about such a
+  node, so the feed read as "the validator doesn't bite". *Check:* for a
+  binding commit that only adds a compatible to an enum, run the feed with
+  `-m` and grep for the node's unit address ("failed to match any schema with
+  compatible" at the base, gone at the head). Extends L-102, L-178 and L-293.
+  *From:* kernel #243, round 52 (a near miss), 2026-11-11.
+- **L-744. A CI run we approve after posting a review is read at the next round, even when the head hasn't moved.** #555's run was approved after our comment and failed on shellcheck (SC2206), which the local test run didn't have; nobody told the contributor. *Check:* every round, `gh pr checks N`, and compare each run's `headSha` with the head; for package tests run locally, note whether shellcheck was installed. Extends L-480 and L-281. *From:* #555, round 51, 2026-11-11.
+- **L-743. A commit message is read to its last line after every rebase: a diff pasted into it passes every gate.** Kernel #181's rebased enable commit carried 77 lines of `diff --git` between `Assisted-by:` and `Signed-off-by:`; `kernel-pr-check` said "signed off" and checkpatch was clean. *Check:* `git log --format=%B base..head | grep -n '^diff --git\|^@@ \|^index [0-9a-f]'` is empty, and `git interpret-trailers --parse` lists the sign-off for every commit; `kernel-pr-check` could refuse both. Extends L-475 and L-585. *From:* kernel #181, round 51, 2026-11-11.
+- **L-742. A mutation that changes a shared constant can be caught by an earlier test and prove nothing about the new one.** Setting `VERIFIED_VER_MINOR` to 14 failed lynx's suite at the `cmp` against cheetah's copy and, with both copies changed, at the 3.15 dry run, before #436's new 3.14 refusal ever ran. *Check:* read which `not ok` line a mutation produces; if it isn't the test under review, mutate the condition that test names (here an extra accepted minor in both pinned copies). Extends L-419 and L-454. *From:* #436, round 51, 2026-11-11.
+- **L-717. A PR pushed while it conflicted can read "mergeable, clean" with no
+  CI run at all.** #610's second commit came while `version` conflicted (no
+  workflow); #632 then took the same 0.1.41, both sides became identical, and
+  GitHub showed CLEAN with "no checks reported". *Check:* for a mergeable PR
+  with no checks, `gh api "repos/<r>/actions/runs?head_sha=<head>"`; a count
+  of 0 means run the touched suites on a scratch merge, compare `version` with
+  main's, and grep the PR's docs for the old number. Extends L-405 and L-404.
+  *From:* #610 with #632, round 50.
+- **L-685. A fake phone encodes its author's assumptions about the bootloader;
+  write the opposite fake.** #639's fake kept `current-slot` and the active
+  flag apart and always left the bus at the first poll, so two mutations of
+  the wait passed; with a fake whose `current-slot` follows the active flag
+  and whose restart never happens, the installer reported a measured match for
+  a slot that differed. *Check:* list each bootloader behaviour the fake
+  models, find the note that measured it, and flip each unmeasured one in a
+  scratch copy and rerun the happy path. Extends L-419 and L-454. *From:*
+  #639, round 49, 2026-11-10.
+- **L-684. "Each assertion fails when its code is broken" is extended to the
+  lines no assertion names.** Round 48 told #503 that all three NFS assertions
+  bite, which was true, but two new NFS-only lines (`ufs_unguarded`'s `sda`
+  exemption, `boot_nfs`'s check before `kill -9 -1`) had no assertion at all.
+  *Check:* list every line a mode adds inside the guard and hand-over
+  functions (`git diff | grep '^+'`) and mutate each once. Extends L-587.
+  *From:* #503, round 49, 2026-11-10.
+- **L-683. A lint that collects its inputs by pathspec checks each pathspec
+  separately, with its exclusions applied.** `tests/grep-q-pipes`' single
+  "found some files" test passed while `'packages/*/test'` matched nothing,
+  because the other pathspecs filled the list. *Check:* misspell each pathspec
+  in turn and run the lint; each must fail with its name. Extends L-635 and
+  L-419. *From:* #597 with #587, round 49, 2026-11-10.
+- **L-682. Review media committed under `docs/` is asked out of the commit;
+  `tools/pr-check`'s blob check passes images.** #612 and #614 added
+  `docs/review-evidence/` (PNG and WebP captures) so the PR body could link
+  them, and a squash keeps the blobs for good. *Check:* `git diff --stat
+  base...head | grep -E '\.(png|webp|jpg|gif|mp4)'`; evidence for the review
+  goes into the PR as an attachment. *From:* #612 and #614, round 49,
+  2026-11-10.
+- **L-681. A package test is run on the review laptop only after every command
+  and sysfs path it reaches is faked.** `test/keys.sh` puts its fakes before
+  the host's `PATH`, and `omamobile-keys` calls `omarchy-menu` and
+  `omarchy-capture-screenshot`, real on an Omarchy laptop; #577's `panel_dark`
+  also reads `/sys/class/backlight/*/bl_power`. *Check:* list the script's
+  external commands and `/sys` reads against the test's fakes and `command -v`
+  the rest; if any is real, leave the test to CI or run it under `env -i` with
+  a scratch `HOME` and a `PATH` of fakes, and say which tests didn't run.
+  Extends L-454, L-410 and L-498. *From:* #577, #539 and #553, round 49,
+  2026-11-10.
+- **L-680. A PR whose test files predate a new lint is linted on a scratch
+  merge, and a conflicting PR never gets the CI that would say so.** #539's
+  `test/hotspot-panel.sh` passed CI on 11-08; #587 added `tests/grep-q-pipes`
+  on 11-10, and the PR's `version` conflict meant no run showed its eleven new
+  failures. *Check:* each round, for every PR that adds a script under
+  `tests/` or `packages/*/test/`, run the lints main gained since its last
+  green CI on a scratch merge (`tests/grep-q-pipes` only reads `git grep`).
+  Extends L-73, L-165 and L-511. *From:* #539, round 49, 2026-11-10.
+- **L-679. An overlay added to a descriptor's `DTB_OVERLAYS` is applied to the
+  last tagged kernel's DTB as well as the tip's; `tests/device-overlays` only
+  compiles it.** #594's overlay disables a node kernel #187 added a day after
+  `kernel-2026.11.08`, so on the tag's DTB `fdtoverlay` returns
+  `FDT_ERR_NOTFOUND` and `bin/omamobile images` dies without a cause.
+  *Check:* `scripts/dtc/dtc -@` then `fdtoverlay -i <dtb>` against
+  `out-kernel-release` and a tip build; if they differ, the descriptor names
+  the minimum kernel. Extends L-8 and L-70. *From:* #594, round 49,
+  2026-11-10.
 - **L-336. A binding commit that follows its first DTS user shows up as
   checkpatch `UNDOCUMENTED_DT_STRING` on a compatible the head documents.**
   Since L-80's fix, each commit is checked against its own bindings, and
@@ -107,13 +212,11 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   (fixed 2026-10-22: positions are stripped). *Check:* reproduce any gate
   failure by hand before blaming the PR, and report a tool fault as a
   finding for the maintainer. *From:* kernel #11, round 2.
-
 - **L-38. "No checks reported" is not a pass.** A pull request pushed
   before a CI workflow reached its base branch never ran it. *Check:*
   compare the push time with the workflow commit; until CI runs, call its
   checks (`dtbs_check`, the package suites) unchecked. *From:* kernel #10,
   #12.
-
 - **L-40. Tools resolve their path arguments before they `cd`.** Our own
   `kernel-pr-check` changed into `-C` and then passed the same relative path
   on, so CI's `-C linux` looked for `linux/linux` and failed every kernel
@@ -130,7 +233,6 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   `omamobile-shell`'s portal test (a log read then truncated, losing a line
   written between), and a retry block that exited silently. *From:* #24,
   round 3.
-
 - **L-59. "No checks reported" can mean CI is waiting for approval.** A
   first-time contributor's runs stop at `action_required` until the
   maintainer approves them (`gh run list --status action_required`). Approve,
@@ -194,65 +296,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   rev-parse A^{tree} B^{tree}` on the same base carries the earlier boot and
   builds over to a reworded commit. Extends L-45 and L-84. *From:* kernel
   #41, #35, round 10.
-- **L-145. CI checks a PR that edits a gate with that edit.** `checks.yml`
-  runs the PR's own `tools/pr-check`, so #41's new MAC exemption passed
-  itself. *Check:* run main's gate too, and review an exemption as a policy
-  change: test a line that mixes an exempt value with a real one. (Ours
-  dropped whole lines for the all-zeros exemption; since round 12 each
-  address is judged on its own.) Extends L-30. *From:* #41, round 12.
-- **L-146. CI doesn't parse UCM:** the runner has no `alsaucm`, and the test
-  skips silently. *Check:* parse UCM changes locally with `alsaucm` on a
-  virtual card, once per `If` branch. Extends L-103. *From:* #41,
-  round 12.
-- **L-154. `kernel-pr-check` builds the PR's own commits against their
-  merge base, so a fix that lands on the base after a PR branched never
-  reaches its CI until the PR is rebased.** A fresh `base.sha` doesn't change
-  the merge base, and a re-run replays the event's stale one. *Check:* gate
-  the PR rebased onto the current base (L-73) before asking for a rebase, and
-  say whether the rebase is needed for the code or only for CI. *From:*
-  kernel #43, round 13.
-- **L-155. A gate runs under every awk it will meet.** Round 12's MAC regex
-  used `(…){5}`, which mawk 1.3.4 (Debian, Ubuntu, our build container)
-  rejects, so `pr-check` failed every change there while CI's gawk passed.
-  *Check:* after any edit to a gate, run its tests in `omamobile-build:24.04`
-  too. Extends L-30. *From:* round 13.
-- **L-156. A bindings-only PR gets no `dtbs_check`** from CI or
-  `kernel-pr-check` ("device trees: none touched"), so no board's DTB is
-  checked against the new schema. *Check:* validate the affected boards'
-  DTBs by hand; dtschema's schema checks run in the container with a stub
-  `libfdt`, only `dt-validate` needs the real one. Extends L-126. *From:*
-  kernel #51, round 13.
-- **L-178. A rejected property in a dt-validate known-failure feed can read
-  "False schema does not allow 0", without the property's name.** A `prop:
-  false` under `then:` reports the value, not the key, so grepping the output
-  for the property name says "not rejected" when it was. *Check:* grep the
-  feed's output by node name and compare base against head line by line.
-  Extends L-102. *From:* kernel #63, round 20.
-- **L-179. Neither CI nor `kernel-pr-check` builds a series commit by
-  commit, and kernel PRs land commit by commit.** CONTRIBUTING §6.2 says each
-  commit must build; the gate builds the head's touched files only. *Check:*
-  for a rebase-merged series, check out each commit in a worktree on the
-  host and build that commit's touched objects in the container (a
-  worktree's `.git` file points at the host path, so `git checkout` inside
-  the container fails). Done by hand for #63's 14 commits. Extends L-123.
-  *From:* kernel #63, round 20.
-- **L-180. The gate's test-merge commits don't exist in the clone,** since
-  the container builds them in its own copy, so a later schema or DTB
-  comparison "on the test merge" makes its own tree with `git merge-tree
-  --write-tree` (`git archive` takes a tree id). *From:* round 20.
-- **L-181. Grep a CI job's log for the gate's own `ok -`/`not ok` lines, not
-  for the check's name.** The kernel job is named "Kernel (sign-offs,
-  checkpatch, W=1, dtbs_check)" and `gh run view --log` prefixes every line
-  with it, so a grep for `dtbs_check` matches everything and hides whether
-  dt-validate ran. Extends L-103. *From:* round 20.
-- **L-194. A review's clone goes on disk, and a gate's worktree is sparse:
-  the scratch `/tmp` is a 16 GB tmpfs shared by every parallel review.** A
-  `--depth 60` clone of the SM8150 tree for #52 and three full checkouts of
-  omarchy-mobile (about 1 GB each, `phone/screenshots` and all) each filled
-  it, and a command of another review lost its output. *Check:* `df -h` the
-  scratch volume before any clone or build over a few hundred MB; trees go
-  under `~/android/mainline/wt-review-<topic>`; a gate's checkout is `git
-  worktree add --no-checkout --detach`, `git sparse-checkout set --cone bin
-  device initramfs tests packages/<the ones the tests compare>`, `reset
-  --hard` (3.5 MB, and `tests/storage-guard`, `tests/simplefb-trigger` and
-  the package tests all run from it). *From:* #52, round 21.
