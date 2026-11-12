@@ -58,6 +58,7 @@ and the restart.
 14. [Safety rules this design touches](#14-safety-rules-this-design-touches)
 15. [What building L1 changed in this plan](#15-what-building-l1-changed-in-this-plan)
 16. [For the crate to change](#16-for-the-crate-to-change)
+17. [What bringing the crate to this plan found](#17-what-bringing-the-crate-to-this-plan-found)
 
 ## 1. Goal and non-goals
 
@@ -114,15 +115,19 @@ every boot for good. Now every stage with an account has one:
 
 - A **setup boot** is a boot in which the daemon's start-up rules (§6.5)
   end at stage `firstboot` or later. The boot in which the answers were
-  taken is not one: the account is made during it. There are at most
-  **three** setup boots. At the start of a fourth the daemon ends the link
+  taken is not one: the account is made during it. A boot is counted
+  once, however often the daemon starts in it: the state file holds the
+  kernel's boot id (§6.5). There are at most **three** setup boots. At the start of a fourth the daemon ends the link
   before it touches the gadget.
 - In every boot, from the moment an account exists, the link stays open
   only while a host is paired, and for **10 minutes** without one. The 10
   minutes run from the latest of: the owner's session being up (§2.8), the
   end of the last paired session, and the end of first-boot setup or of
-  provisioning. They do not run while either of those jobs runs or a step
-  owes an answer (so the link is never closed under an installer that just
+  provisioning. At `firstboot-failed` the display manager is held (§3.3)
+  and no session comes up: the 10 minutes do not run in such a boot, the
+  code stays on the first-start screen, and the limit of three boots is
+  what ends it (§17, P3). They do not run while either of those jobs runs
+  or a step owes an answer (so the link is never closed under an installer that just
   asked for something). They are counted on the monotonic clock: a phone's
   wall clock can be wrong at a first start.
 - When they run out the daemon closes the link **for this boot**: it puts
@@ -340,8 +345,10 @@ those boots.
   minutes after the display manager started count instead.
 - The socket carries fixed lines and nothing else. Agent to daemon:
   `show`, `hide`. Daemon to agent: `open BOOTS_LEFT CLOSES_S`,
-  `code DIGITS VALID_S`, `paired`, `closed BOOTS_LEFT`,
-  `ended REASON MISSING...`.
+  `code DIGITS VALID_S`, `locked`, `paired`, `closed BOOTS_LEFT`,
+  `ended REASON MISSING...`. `locked` is sent after the twentieth wrong
+  code (§2.5): the window closes and the notice reads "Too many wrong
+  codes. Tap to show a new code."; the tap is the act that clears it.
 - While the link is open and no host is paired, the agent keeps one
   notification: "Setup is not finished. Tap to continue with the installer
   on your computer." It holds no code. A tap opens a small window (in
@@ -356,7 +363,10 @@ those boots.
   none can be shown now (the session is not up) and a token exists.
 - The installer, with no token and `ask`, tells the owner: "Unlock your
   phone and tap Setup is not finished." It says `hello` again every 5 s
-  until `pair` is `code`, then asks for the code.
+  until `pair` is `code`, then asks for the code. With no token and
+  `token` (a page reloaded after the planned restart, before the owner
+  has logged in) it says the same and asks again the same way: unlocking
+  is all it takes.
 - Opening the window is an act at the phone (§2.5): it clears a lock.
 
 **What the owner sees at the end.**
@@ -371,7 +381,7 @@ those boots.
 
 | Way | What it takes |
 | --- | --- |
-| `sudo omamobile-install-link reopen` on the phone, a restart, then the installer | The owner's password on the phone itself. It grants one more setup boot under the same ten-minute rule, with pairing through the session's window. It is taken only after `expired`, and takes effect at the next boot, where the gadget change runs under its hang marker like any other. Decision N3 |
+| `sudo omamobile-install-link reopen` on the phone, a restart, then the installer | The owner's password on the phone itself. It grants one more setup boot under the same ten-minute rule, with pairing through the session's window. It is taken only after `expired`, and takes effect at the next boot, where the gadget change runs under its hang marker like any other: `reopen` records the boot id it ran in, and a daemon started in that same boot exits before any gadget change. Decision N3 |
 | `tools/nv-backup`, then `tools/phone-provision --first-install --nv-backup DIR`, over USB SSH | A checkout and an SSH key on the phone: the development way, unchanged (§10) |
 | Install again | It erases `userdata` |
 
@@ -1036,6 +1046,15 @@ with a state file is.
 | The end of provisioning | 1. The worker's result file. 2. The state file: stage `provisioned`. 3. The image and the working directory deleted. 4. `provision-done` | After 1: the daemon reads the result. After 2: an image at stage `provisioned`, deleted at the start |
 | `finish` | 1. The state file: stage `finished`. 2. `finished` sent. 3. The marker deleted, `done` written, the state deleted, the gadget put back | Stage `finished` without `done`: the start completes the end |
 
+**The state file says which boot it was last written in.** It holds the
+kernel's boot id (`/proc/sys/kernel/random/boot_id` **[D]**, random(4)),
+written in the same write as everything else in it. A start that finds
+another id is the first of a new boot: it counts the boot (§2.2) and sets
+`boot` (§2.7) in the one write that records the new id. A mark kept
+anywhere else (a file under `/run`, say) loses a boot: a daemon killed
+after that mark and before the state file's write would start again in a
+boot it believes counted, with `boot` still 1 (§17, P1).
+
 **At its start the daemon squares its state file with the phone before it
 offers anything.** First, in this order:
 
@@ -1069,7 +1088,7 @@ Then, at any stage before `finished`:
 | The file longer than the record's `synced` | Cuts it to `synced`: bytes after the last sync are not trusted |
 | The file shorter than `synced` | A sync that did not hold: the file is emptied and `synced` set to 0 |
 | "Verified", and the file's length is not `size` | Takes the mark away |
-| `backup-done`, no pending checksum file | Takes the mark away: the backup is taken again |
+| Before stage `provisioned`: `backup-done`, no pending checksum file | Takes the mark away: the backup is taken again. At `provisioned` the mark stays whatever is found: the worker has used the file, and no backup may be taken at that stage (§17, P2) |
 | A pending checksum file, no `backup-done` | Deletes the file |
 | Provisioning "running", its unit active (the daemon alone restarted) | Goes on watching it |
 | Provisioning "running", no unit, a result file in which every required step is `ok` | Stage `provisioned`; the image and the working directory deleted |
@@ -1535,3 +1554,35 @@ the crate made wrongly: it implemented the plan as it was.
 | F7 | Nothing in the machine: the order it already asks for (place the answers and start the unit, then record the stage, then answer) is §6.5's. The start-up tables are the daemon's |
 | Found in this revision | The host writes the backup's last files (`BackupFinish`) before it sends `backup-commit`, not after `backup-done` |
 | L2 | `cargo check --target aarch64-unknown-linux-gnu` in CI; the golden frames written anew; then the tag |
+
+## 17. What bringing the crate to this plan found
+
+The crate was brought to §16 on 2026-11-12 (installer repository,
+`link/`, `docs/LINK.md`). Its tests kill the daemon before each output of
+a whole install and replace the host at every frame; seven places in this
+plan did not hold or said nothing. Each is corrected above.
+
+| | What the plan said | What was wrong | Now |
+| --- | --- | --- | --- |
+| P1 | Nothing on how a start knows it is the first of a boot | With the mark outside the state file, a daemon killed between the mark and the state file's write started again with `boot` still 1: `restart` was taken a second time and the boot was not counted | §6.5: the boot id is in the state file, in one write |
+| P2 | `backup-done` with no pending checksum file: the mark is taken away, at any stage | Provisioning uses that file (§6.3). After it, every start would clear the mark on a phone whose backup is complete, at a stage where none can be taken, and `status` would say `backup: none` | §6.5: the row applies before `provisioned` only |
+| P3 | The 10 minutes run from the session being up | At `firstboot-failed` the display manager is held, so no session comes up and there is nowhere to show "paused": the phone would show "Setup stopped at" with no link | §2.2: the 10 minutes do not run in such a boot; the three boots end it |
+| P4 | The socket's lines were `open`, `code`, `paired`, `closed`, `ended` | After the twentieth wrong code the owner could not be told why the window closed | §2.8: a `locked` line and its notice |
+| P5 | The host asks again every 5 s at `ask` | At `token` with no token the installer would have stopped, when unlocking the phone is all it takes | §2.8: the same sentence and the same asking |
+| P6 | `reopen` takes effect at the next boot | Nothing kept a daemon started in the same boot from offering the link at once, a gadget change in a running session | §2.8: `reopen` records its boot id; a start in that boot exits |
+| P7 | `restart` is taken once | "Once" can only be once per run of the daemon in `boot` 1: a daemon killed between `restarting` and the reboot takes it again, and must, to finish the job | Said here; §2.7's rule is unchanged in what an owner sees: one restart |
+
+P3 and P4 change what an owner sees; the maintainer accepted both on
+2026-11-12. The crate has P3 as written here; until it has P4 it sends
+`open` where the `locked` line will be.
+
+**Left for the crate:** the `locked` line (P4). **Left for L2:** `reopen`'s
+boot id (P6), and the daemon's own reading of the phone into what the
+start-up tables take, which the crate's tests assume correct.
+
+The crate's remaining differences from this plan, all places where the
+plan is silent, are listed in its `docs/LINK.md` §6: the window's lower
+bounds (a `window` below `ack_every` is refused), a non-forward `ack`
+ending the session, a suspended stream begun again at most five times,
+an empty result counting as `interrupted`, and the effect that tells the
+daemon to drop a dead session's unsent frames.
