@@ -153,8 +153,8 @@ refused() { # why message [args]: install refused, said why, flashed nothing
   grep -cF -- "$2" "$t/out" >/dev/null || { cat "$t/out"; fail "says why it refuses $1"; }
   [[ -z $(ls -A "$t/flashed") ]] || fail "nothing is flashed when it refuses $1"
 }
-verify_refused() { # why message: --verify-only refuses it too, and contacts no phone
-  refused "$1 with --verify-only" "$2" --verify-only
+verify_refused() { # why message [args]: --verify-only refuses it too, and contacts no phone
+  refused "$1 with --verify-only" "$2" --verify-only "${@:3}"
   [[ ! -s $t/fastboot.log ]] || fail "--verify-only contacts no phone when it refuses $1"
 }
 # slot_b root images: the stand-in phone's slot B partitions hold those
@@ -223,6 +223,19 @@ refused "another phone's --serial" 'not the one this install was started for' --
 still_staged "an install refused for another phone's --serial"
 rm -r "$t/work"
 pass "--verify-only, and an install refused before the answers, leave another install's staged files in --work alone"
+
+# A work directory that can't be created or written (as under a read-only
+# home) stops with the installer's message, before the phone
+if ((EUID != 0)); then
+  mkdir -p "$t/locked" && chmod 555 "$t/locked"
+  why="can't create or write to the work directory"
+  verify_refused "a --work that can't be created" "$why $t/locked/work (give one you can write to with --work DIR)" --work "$t/locked/work"
+  verify_refused "a --work that can't be written" "$why $t/locked (give one you can write to with --work DIR)" --work "$t/locked"
+  refused "a full install with a --work that can't be written" "$why $t/locked " --work "$t/locked"
+  [[ ! -s $t/fastboot.log ]] || fail "a full install with a --work that can't be written contacts no phone"
+  chmod 755 "$t/locked"
+  pass "a --work that can't be created or written stops with the installer's message, before the phone"
+fi
 
 # The hook's first run after the install: slot B already holds its images.
 # Slot B as the bundle's images left it (before this change) still needed
