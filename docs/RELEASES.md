@@ -79,9 +79,13 @@ Bring-up tools (`*-stage`, `display-hz`, `usbc-deadman`) stay per plan: they pok
 | `BOOT_METHOD` | `android-v4` (default when omitted) | Generic images, flash, push and installer accept only `android-v4`; other methods are refused before phone access. `ram-only` marks a probe with no persistent install support. `android-v0` (enchilada) is a header-v0 phone: `images` packs one `boot.img` for `fastboot boot`, and fastboot, flash, push and the installer refuse it |
 | `PAGESIZE`, `BASE`, `KERNEL_OFFSET`, `RAMDISK_OFFSET`, `SECOND_OFFSET`, `TAGS_OFFSET` | (enchilada: `4096`, `0x00000000`, `0x00008000`, `0x01000000`, `0x00f00000`, `0x00000100`) | `android-v0` only, all required: the header-v0 page size and load offsets, numbers in decimal or lower-case hex. `images` packs the gzip `Image` with the `DTB` appended as the kernel, the initramfs as the ramdisk and `CMDLINE` as the command line. `BOOT_IMAGES` is `boot` alone and `boot_b` must be on `UFS_RW` |
 | `BOOT_IMAGES` | `boot init_boot vendor_boot vendor_kernel_boot dtbo` | The images written to slot B (the `_b` suffix is added by the tools and is not configurable). `boot`, `vendor_boot` and `dtbo` are always there. Without `init_boot`, `boot` carries the empty generic ramdisk and the OS version; without `vendor_kernel_boot`, `vendor_boot` carries the DTB and the initramfs (the Pixel 6: `boot vendor_boot dtbo`) |
+| `BOOT_UPDATE_AUTO_WRITE` | (unset; defaults to `yes`) | Optional: `yes` or `no`. The installer records it as `AUTO_WRITE` in `/etc/omamobile/boot-update.conf`; `no` keeps an installed development root from writing slot B through package updates. It does not change the installer's own allowed writes |
 | `UFS_RW` | `boot_b … dtbo_b userdata` | The storage guard's allowlist, packed into the initramfs as `/etc/omamobile-ufs-rw`. Only slot B's boot images (`boot_b`, `init_boot_b`, `vendor_boot_b`, `vendor_kernel_boot_b`, `dtbo_b`) and `userdata` are accepted, `userdata` and every `BOOT_IMAGES` entry must be on it, and each name only once. The init fails closed: a missing, empty or malformed file, or any other name in it, leaves every partition read-only |
 | `UFS_RW_LUNS` | (unset) | Optional. The LUNs besides `sda` that hold `UFS_RW` partitions, as disk names `sdb` to `sdz`, packed as `/etc/omamobile-ufs-rw-luns`. The init guards each as it guards `sda`: the whole-disk node removed, the disk left writable, and only its `UFS_RW` partitions left writable. Absent (every descriptor so far), malformed, or with a closed allowlist: every LUN but `sda` stays read-only at the disk level. Boot-image writers on the phone (`omamobile-boot-update`) still look only on `sda` |
 | `INITRAMFS_INIT` | `/initramfs/init` | The init script. A leading `/` is relative to the repo root, so devices share one script. Any other value is relative to the descriptor |
+| `INITRAMFS_ROOT_LABEL` | (unset) | Optional: `omamobile-root` enables read-only label/header checks before ext4 repair or mounting; only `e2fsck -p` statuses 0 and 1 proceed. Omitted: existing root handling, including unlabelled hand-installed roots, is unchanged |
+| `INITRAMFS_ROOT_MODE` | (unset) | Optional: `persistent-development` or `ram-rescue`, requiring `INITRAMFS_ROOT_LABEL=omamobile-root`. The former skips growth and writes `/var/lib/omamobile/root-boot-pending` before handover; an installed, enabled SSH-ready helper must clear it after USB SSH is ready, or subsequent boots stay in RAM until the marker is cleared. The latter always stays in RAM. Omitted: existing handover behavior |
+| `INITRAMFS_USB_RECOVERY` | (unset) | Optional: `yes` or `no`; `no` disables the separate 45-second no-host crash for an attended development/recovery policy. Omitted or `yes`: existing USB recovery behavior. Independent of root mode; retain watchdog and buttons/fastboot recovery |
 | `INITRAMFS_MODULES` | (unset) | Optional: kernel modules the initramfs carries in `/lib/modules/omamobile/`, listed in load order in `/lib/modules/omamobile/order`, from this kernel build's `lib/modules/$(kernel_release)` (`omamobile modules` first). The shared init loads them before any other step, and only on a board whose first compatible is `COMPATIBLE`. For drivers the boot needs before the Arch root, such as the PMIC rails a `simple-framebuffer` waits for; `images` refuses an initramfs whose modules come from another build |
 | `INITRAMFS_I2C_TOOLS` | (unset) | `1`: `i2cget` and `i2cset` (and `libi2c`) from Alpine's i2c-tools in the initramfs, for an init that talks to a chip before any driver runs (raven closes the MAX77759 USB switch). Nothing else from the package |
 | `INITRAMFS_FB_WAIT` | (unset) | `1`: the init draws the early splash once `/dev/fb0` exists (waiting up to 3 s in the background) rather than at once, for a phone whose `simple-framebuffer` registers only after `INITRAMFS_MODULES` give it its rails (raven) |
@@ -98,6 +102,58 @@ The Pixel 4 (`flame`, SM8150) is a separate RAM-only first-light probe.
 Its `ram-only` descriptor has empty `BOOT_IMAGES` and `UFS_RW`; build it with
 `tools/build-flame-probe`, following [its runbook](../device/flame/BRINGUP-M1.md).
 It does not use the generic Tensor image builder or installer.
+
+### Optional initramfs root policy
+
+Existing descriptors retain their current boot path. A descriptor may opt in:
+
+- `INITRAMFS_ROOT_LABEL=omamobile-root`: inspect userdata read-only before
+  repair or mounting; refuse another label or a failed ext4 header read. Only
+  `e2fsck -p` statuses 0 and 1 may proceed. Old hand-installed, unlabelled roots
+  are unaffected until their descriptor explicitly opts in.
+- `INITRAMFS_ROOT_MODE=persistent-development`: require the label protection,
+  skip initramfs growth, and persist `/var/lib/omamobile/root-boot-pending` before
+  systemd handover. Install and enable the matching SSH-ready service on the
+  root before using this mode; it must clear the marker after USB SSH is ready.
+  Without that helper, the first boot hands over and leaves the marker behind;
+  every subsequent boot stays in RAM until the marker is cleared manually.
+  `ram-rescue` always stays in RAM.
+- `INITRAMFS_USB_RECOVERY=no`: disable the separate 45-second no-host crash.
+  Development roots may finish booting without a USB host, and a failed root
+  handover must remain available in RAM instead of consuming slot retries.
+  This is an explicit choice, independent of root mode; the existing recovery
+  behavior remains the default. Retain a hardware-watchdog and buttons/fastboot
+  recovery runbook before using a development image.
+
+These keys change image construction only; no shipped descriptor opts in here.
+Unknown root-mode files fail closed in RAM. This change has offline test evidence,
+not a fresh phone boot.
+
+`INITRAMFS_ROOT_MODE` and `INITRAMFS_USB_RECOVERY=no` are local development
+settings and are refused by `initramfs --release`. With USB recovery left on,
+each held boot without a USB host still spends a slot try when it restarts.
+The handover marker is written only after the final storage-guard check passes.
+
+After investigating the failure, clear the marker from the RAM rescue shell
+to permit one more handover attempt. Find userdata by its partition name,
+confirm it is the installed root, then mount it, remove the marker and unmount:
+
+```sh
+userdata=
+for part in /sys/class/block/sd*; do
+  [ -r "$part/partition" ] || continue
+  if grep -qx PARTNAME=userdata "$part/uevent"; then userdata=/dev/${part##*/}; fi
+done
+mkdir -p /newroot
+if [ -n "$userdata" ] && mount -t ext4 -o rw "$userdata" /newroot; then
+  rm -f /newroot/var/lib/omamobile/root-boot-pending
+  sync
+  umount /newroot
+fi
+```
+
+Clearing the marker does not repair the failed startup or replace the SSH-ready
+helper. A further failed handover sets it again and holds subsequent boots.
 
 ### 3.2 Keys to add later
 
@@ -340,6 +396,18 @@ The bundle's signed `SHA256SUMS` covers its `MANIFEST`, which names the exact ro
 - **Upload:** `tools/release-upload out/bundle/omamobile-<codename>-<version>` (maintainer only; `--dry-run` first). It checks the bundle locally first: the release key's signature on `SHA256SUMS` (checked against this repository's `omamobile-keyring`, not the bundle's own key), every checksum, `manifest.json` against the bundle, the root image and the server path, and the `.tar`: its `.tar.sha256` signed by the release key, the tar matching it, and every member byte for byte the bundle file or root image file it stands for, with nothing else in it. Then it uploads into `releases/<codename>/.<version>.partial` (a rerun resumes an interrupted upload), checks the files there with `sha256sum`, and renames the directory to `<version>` in one step. It never overwrites a published version. Last, it reads every file back over HTTPS, checking sizes and SHA-256 (the root image and the `.tar` by size; `--full` hashes them too). `--latest` then points `latest.json` at the release (files before the index), and won't go back to an older version without `--allow-older`. `--verify-only` checks a published version again. It uses `tools/repo-publish`'s server settings (`OMAMOBILE_PKGS_HOST`, `_PORT`, `_PATH`).
 - **Server:** `tools/server/releases-nginx.sh`, run once by the maintainer with sudo on the server, adds a `location ^~ /releases/` to the `pkgs.omamobile.org` vhost. The vhost already serves `/releases/` as plain files: a missing file is a 404, and byte ranges and `Content-Length` work. The script adds `Access-Control-Allow-Origin: *` with the exposed range headers and an answer to `OPTIONS` preflights, `Cross-Origin-Resource-Policy: cross-origin`, MIME types for `.json`, `.zst`, `.img`, `.sig` and `.sha256`, no gzip (so sizes stay exact), a year's immutable cache on version directories (but not on their 404s), `no-cache` on `latest.json`, a 403 for the upload's staging directories, and the security-headers snippet in every location. It does a dry run first, `nginx -t`, a verified reload and live checks, and it rolls back on any failure (`revert` undoes it).
 - **Bandwidth:** each install downloads about 2.8 GB (a 2.7 GB root image plus about 80 MB of boot images, from the `.tar` or file by file; the `.tar` doubles the storage a release takes on the server, not the transfer), so 1 TB of transfer is about 350 installs. GitHub's per-file limit is 2 GiB, so a root image there would have to be split and joined again, which a browser flasher and the signed manifest would both have to know about. Our own server stays the one source; check the VPS plan's monthly transfer allowance before announcing a release.
+
+### Development installer policy
+
+A device descriptor may set `BOOT_UPDATE_AUTO_WRITE=no` to keep an installed
+development root from writing boot images through package updates. The
+installer records that value in `/etc/omamobile/boot-update.conf`; descriptors
+that omit the key retain `AUTO_WRITE=yes`. Only `yes` and `no` are accepted.
+This does not change which partitions the installer itself writes.
+
+Use `tools/install-phone --serial <SERIAL>` to pin the phone for an install;
+this is the installer's existing command-line check, independent of the
+automatic boot-update policy.
 
 ## 7. Versions and tags
 

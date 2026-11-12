@@ -1,0 +1,14 @@
+--- a/src/backend/drm/DRM.cpp
++++ b/src/backend/drm/DRM.cpp
+@@ -1121,8 +1121,10 @@
+ 
+     auto drmVerName = drmVer && drmVer->name ? drmVer->name : "unknown";
+     driver          = driverFromName(drmVerName);
+-    if (driver == AQ_BACKEND_GPU_DRIVER_EVDI) {
++    if (driver == AQ_BACKEND_GPU_DRIVER_EVDI || (std::string_view(drmVerName) == "simpledrm" && envEnabled("AQ_SIMPLEDRM_NO_AUX_RENDERER"))) {
+         // DisplayLink/evdi exposes KMS without a usable EGL renderer. Keep primary so its output swapchain stays LINEAR.
++        // A primary simpledrm device can use Mesa's GBM software renderer too,
++        // but has no DRM-backed EGLDevice for the auxiliary renderer probe.
+         rendererRequired = false;
+     }
+ 
