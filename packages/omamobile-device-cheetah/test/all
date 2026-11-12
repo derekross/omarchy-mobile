@@ -17,6 +17,17 @@ pass "build stays inside the package directory"
 ./build "$tmp/build" || fail "C tools compile"
 pass "C tools compile"
 
+# reboot-to.c is also linked into the initramfs, and for a phone without
+# bootctl that link is against musl with no compiler builtins
+# (bin/omamobile initramfs). musl's vfprintf needs those builtins
+# (__addtf3, __extenddftf2 and others, for long double), so one printf-family
+# call stops that build with "reboot-to failed to link", and CI doesn't build
+# that path. The other device packages hold their copy to this one.
+if grep -nE '\<v?(f|s|sn|d|as)?printf[[:space:]]*\(' src/reboot-to.c; then
+  fail "reboot-to.c calls the printf family, which doesn't link in the initramfs of a phone without bootctl"
+fi
+pass "reboot-to.c calls nothing from the printf family"
+
 # omamobile-bootctl against a synthetic devinfo: dump works, and a dry run
 # of mark-successful plans exactly one flag byte and writes nothing
 python3 - "$tmp/devinfo" <<'PY'
