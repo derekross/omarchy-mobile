@@ -13,7 +13,8 @@
 #     laptop's (packages/omamobile-provision/test/compare)
 #   - the same on real factory images, when OMAMOBILE_PROVISION_FACTORY names
 #     them (colon-separated paths; several GB of work space and minutes
-#     each). Only "equal" or the names of files that differ are printed,
+#     each: set COMPARE_WORK=DIR to a directory on disk when /tmp is in
+#     RAM). Only "equal" or the names of files that differ are printed,
 #     never contents. Never commit such an image or anything from it
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
