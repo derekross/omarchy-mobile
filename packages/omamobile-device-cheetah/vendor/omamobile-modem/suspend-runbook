@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: MIT
+# The Pixel 7 Pro's modem plan has a runbook for suspend with the modem up
+# (device/cheetah/MODEM-PLAN.md section 7, M6). omamobile-modem lets the
+# owner's /etc/omamobile/modem-suspend-enable lift its sleep inhibitor only
+# beside this file, so the owner's file alone changes nothing on a phone
+# whose device package doesn't ship it. Attended runs only, until M6 passes.
