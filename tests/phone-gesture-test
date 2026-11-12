@@ -6,7 +6,10 @@
 # shift into evidence (with the numbers the 9a measured), the touch points
 # taken from the output and the page's window, the preconditions that keep a
 # test to the screen it claims (home, over an app, no on-screen keyboard),
-# and how many fictional notifications fit in the history.
+# how many fictional notifications fit in the history, and the cleanup: a
+# hang-up ends a run through it, the sudo password never reaches a child or
+# the helper's stdin, and what a run that couldn't clean up left is put back
+# at the next start.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -19,9 +22,10 @@ pass "phone-gesture-test lists its 13 scenarios"
 tools/phone-gesture-test --help | grep -c 'usage:' >/dev/null || fail "phone-gesture-test --help prints its usage"
 pass "phone-gesture-test --help"
 
-python3 -I - tools/phone-gesture-test <<'EOF'
-import importlib.machinery, importlib.util, random, sys
+GESTURE_TEST_SUDO_PW=not-a-password python3 -I - tools/phone-gesture-test <<'EOF'
+import importlib.machinery, importlib.util, json, os, random, signal, subprocess, sys, tempfile
 
+sys.dont_write_bytecode = True  # -I ignores PYTHONDONTWRITEBYTECODE: no tools/__pycache__
 loader = importlib.machinery.SourceFileLoader("pgt", sys.argv[1])
 spec = importlib.util.spec_from_loader("pgt", loader)
 m = importlib.util.module_from_spec(spec)
@@ -103,6 +107,7 @@ app_page = dict(home_page, h=821)
 osk = {"level": 2, "ns": "osk", "x": 0, "y": 623, "w": 405, "h": 242}
 open_wifi = {"wifiPanel": True}
 m.clients_on = lambda ws: []
+m.screen_locked = lambda: False
 check(m.precondition(t["01"], open_wifi, [home_page], "9", geo) == [], "home: no window, no strip, the page reaches the bottom")
 check(m.precondition(t["01"], open_wifi, [home_page, strip], "9", geo) != [], "home: a home strip is refused")
 check(m.precondition(t["01"], {"wifiPanel": False}, [home_page], "9", geo) != [], "a page that isn't open is refused")
@@ -117,6 +122,14 @@ check(m.precondition(t["06"], dict(sheet, notifications=3), [], "9", geo) != [],
 check(m.precondition(t["06"], dict(sheet, notifications=8), [], "9", geo) == [], "and runs with 8")
 recents = {"level": 3, "ns": "omamobile-switcher", "x": 0, "y": 0, "w": 405, "h": 909}
 check(m.precondition(t["01"], open_wifi, [home_page, recents], "9", geo) != [], "a test doesn't start with Recents open")
+m.screen_locked = lambda: True
+check("the screen is locked" in m.precondition(t["01"], open_wifi, [home_page], "9", geo),
+      "the lock is checked before every gesture, not only at the start")
+m.screen_locked = lambda: False
+for ns in m.CALL_NS:
+    call = {"level": 3, "ns": ns, "x": 0, "y": 0, "w": 405, "h": 120}
+    check("a call's screen is up" in m.precondition(t["01"], open_wifi, [home_page, call], "9", geo),
+          "no gesture while a call's screen (%s) is up" % ns)
 
 # A page that closed passes only if Recents stayed shut: Recents means the
 # touch reached the home strip.
@@ -131,4 +144,133 @@ check(m.gesture_result(t["07"], {"wifiPanel": True}, [app_page, strip, recents])
 check(m.notes_to_post(8, 10, 2) == 6, "with 2 of 10 taken, 6 fit and 2 stay free")
 check(m.notes_to_post(8, 10, 0) == 8, "with an empty history, all 8")
 check(m.notes_to_post(8, 10, 9) == 0 and m.notes_to_post(8, 10, 12) == 0, "with a full history, none")
+
+# The commands a run needs are checked at its start, with their packages.
+empty = tempfile.mkdtemp()
+need = m.needed_tools([t["01"], t["07"], t["05"]], False, False)
+check({"foot", "grim", "magick", "notify-send", "sudo"} <= need and "wf-recorder" not in need,
+      "a run needs foot, grim, magick, notify-send and sudo for these tests")
+check("foot" not in m.needed_tools([t["01"]], True, True) and "wf-recorder" in m.needed_tools([t["01"]], True, True),
+      "foot only for a test over an app, wf-recorder only with --record")
+check("magick (package imagemagick)" in m.missing_tools(need, empty), "a missing command is named with its package")
+
+# The sudo password: read once, out of the environment before any child
+# gets one, and never on the helper's stdin (sudo -S -v, then sudo -n).
+check(m.SUDO_PW == "not-a-password" and "GESTURE_TEST_SUDO_PW" not in m.ENV
+      and "GESTURE_TEST_SUDO_PW" not in os.environ, "the sudo password is taken out of the environment")
+calls = []
+real_run = m.subprocess.run
+m.subprocess.run = lambda cmd, **kw: calls.append((cmd, kw.get("input"))) or subprocess.CompletedProcess(cmd, 0)
+check(m.sudo_prefix("pw") == ["sudo", "-n"] and calls == [(["sudo", "-S", "-p", "", "-v"], "pw\n")],
+      "with a password: a ticket from sudo -S -v, then sudo -n for the helper")
+calls.clear()
+check(m.sudo_prefix(None) == ["sudo", "-n"] and calls == [(["sudo", "-v"], None)],
+      "without one: sudo -v asks once, then sudo -n")
+m.subprocess.run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1)
+try:
+    m.sudo_prefix("wrong")
+    check(False, "a refused password stops the run")
+except RuntimeError:
+    check(True, "a refused password stops the run")
+m.subprocess.run = real_run
+
+
+# Finger.close never raises: the session user can't signal a helper under sudo.
+class Stuck:
+    class stdin:
+        close = staticmethod(lambda: None)
+
+    def wait(self, timeout=None):
+        raise subprocess.TimeoutExpired("sudo", timeout)
+
+    def terminate(self):
+        raise PermissionError(1, "Operation not permitted")
+
+    kill = terminate
+
+
+f = object.__new__(m.Finger)
+f.p, f.left_running = Stuck(), False
+f.close()
+check(f.left_running, "a helper that can't be stopped is noted, and close() doesn't raise")
+
+# SIGHUP (the SSH session or the USB link dropped) and SIGTERM end a run
+# through its cleanup, as Ctrl-C does.
+m.end_on_signals()
+for sig in (signal.SIGHUP, signal.SIGTERM):
+    try:
+        os.kill(os.getpid(), sig)
+        check(False, "%s ends a run through its cleanup" % sig.name)
+    except SystemExit as e:
+        check(e.code == 128 + sig, "%s ends a run through its cleanup" % sig.name)
+signal.signal(signal.SIGHUP, signal.SIG_DFL)
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
+# What a run that couldn't clean up left is put back at the next start, from
+# its record; each step checks how things are now.
+d = tempfile.mkdtemp()
+m.STATE, m.CONF = d + "/state/run.json", d + "/quicksettings.json"
+m.CONF_ASIDE, m.SEEN = m.CONF + ".gesture-test-aside", d + "/notifications-seen"
+dnd = {"state": "on"}
+dismissed = []
+rows = [{"app": m.NOTES_APP, "key": 3}, {"app": "Signal", "key": 4}, {"app": m.NOTES_APP, "key": 5}]
+
+
+def fake_notifications(method, arg=None):
+    if method == "setDnd":
+        dnd["state"] = arg
+    return dnd["state"]
+
+
+def fake_qs(method, arg=""):
+    if method == "notificationRows":
+        return json.dumps([r for r in rows if r["key"] not in dismissed])
+    if method == "dismissNotification":
+        dismissed.append(int(arg))
+    return ""
+
+
+screen = {"ws": "1", "page": False, "reset": 0}
+m.notifications, m.qs = fake_notifications, fake_qs
+m.state = lambda: {"wifiPanel": screen["page"], "bluetoothPanel": False, "opened": False}
+m.reset_ui = lambda: screen.update(page=False, reset=screen["reset"] + 1)
+m.hypr = lambda what: {"name": screen["ws"]}
+m.focus = lambda ws: screen.update(ws=ws)
+m.clients_on = lambda ws: []
+check(m.read_state() is None, "no record, no earlier run")
+m.write_state({"pid": 999999, "started": "then", "seen_before": "100\n", "dnd_before": "off",
+               "tiles_aside": True, "app_pid": 999999, "posted": 2})
+open(m.CONF_ASIDE, "w").write("{}")
+open(m.SEEN, "w").write("200\n")
+rec = m.read_state()
+check(rec["dnd_before"] == "off" and not os.path.exists(m.STATE + ".tmp"), "the record is written in one rename")
+done = m.put_back(rec)
+check(dnd["state"] == "off" and os.path.exists(m.CONF) and not os.path.exists(m.CONF_ASIDE),
+      "do-not-disturb and the tile layout are put back")
+check(sorted(dismissed) == [3, 5] and open(m.SEEN).read() == "100\n" and len(done) == 4,
+      "the fictional notifications go, the owner's stay, the unread mark moves back")
+check(m.put_back(rec) == [] and dnd["state"] == "off", "a second time, nothing changes")
+screen.update(ws="8", page=True)
+done = m.put_back(dict(rec, start_ws="1", home_ws="9", app_ws="8"))
+check(screen["ws"] == "1" and not screen["page"] and len(done) == 2,
+      "a page that run left open closes, and its empty workspace goes back to the one it started on")
+screen.update(ws="3")
+m.put_back(dict(rec, start_ws="1", home_ws="9", app_ws="8"))
+check(screen["ws"] == "3", "a workspace that isn't the run's is left in front")
+dnd["state"] = "on"
+check(m.put_back(dict(rec, dnd_before="on")) == [] and dnd["state"] == "on",
+      "do-not-disturb that was on before the run stays on")
+open(m.SEEN, "w").write("50\n")
+m.put_back(rec)
+check(open(m.SEEN).read() == "50\n", "the unread mark is never moved forward")
+open(m.CONF_ASIDE, "w").write("{}")
+m.put_back(rec)
+check(os.path.exists(m.CONF_ASIDE), "a tile file aside is left alone when the owner has a new one")
+check(not m.ours(os.getpid(), "no-such-program") and m.ours(os.getpid(), "python"),
+      "a recorded pid counts only while its command line is the suite's")
+open(m.STATE, "w").write("garbage")
+check(m.read_state() == {}, "an unreadable record still counts as a run that didn't clean up")
+m.write_state({"pid": 999999, "started": "then"})
+m.recover(m.read_state())
+check(m.read_state() is None, "recover removes the record")
 EOF

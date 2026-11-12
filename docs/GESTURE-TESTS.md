@@ -12,6 +12,7 @@ tools/phone-gesture-test --list     # the scenarios
 tools/phone-gesture-test            # all of them (asks for sudo once)
 tools/phone-gesture-test 07 08 11   # some of them
 tools/phone-gesture-test --record   # plus a screen recording per test
+tools/phone-gesture-test --cleanup  # only put back what a cut-off run left
 ```
 
 Run it on the phone, as the session user, from a checkout (it needs
@@ -22,6 +23,10 @@ or `pacman -U`); the suite tests whatever shell is running and records which
 
 **It takes over the screen for a few minutes:** workspaces switch, a terminal
 opens, notifications appear and go. Tell whoever holds the phone first.
+
+It checks at its start that the commands it needs are there (`grim`,
+`magick`, and `foot`, `notify-send`, `wf-recorder` or `sudo` when the chosen
+tests need them) and names the package of any that is missing.
 
 ## The scenarios
 
@@ -37,9 +42,10 @@ opens, notifications appear and go. Tell whoever holds the phone first.
 | 11, 12 | Wi-Fi / Bluetooth page over an app | swipe up from 40 px above the edge, inside the home strip's 44 px zone | the page closes |
 | 13 | Wi-Fi page, home screen | the same, 40 px above the edge | the page closes |
 
-## The same result on every device
+## No number of one device's
 
-Nothing in a test depends on the device, its screen size or the user's setup:
+Nothing in a test depends on the device, its screen size or the user's setup
+(so far it has run on a Pixel 9a, and in an aarch64 VM with the 9a's screen):
 
 - **Pages open through the shell's IPC**, never by a tap on a tile:
   `shell call omamobile.quicksettings openWifi ''` ("the same as the tile's
@@ -86,7 +92,10 @@ Nothing in a test depends on the device, its screen size or the user's setup:
 - Before the gesture each test checks that the screen is the one it claims,
   from the layers: on "home" no window and no home strip, with the page
   reaching the screen's bottom; over an "app" the home strip shown and the
-  page ending where it begins; no on-screen keyboard and no Recents. 03 and 04 also need the
+  page ending where it begins; no on-screen keyboard and no Recents; the
+  screen not locked and no call's screen up (`omamobile-call`,
+  `omamobile-call-top`). These are checked before every gesture, since a run
+  takes minutes. 03 and 04 also need the
   Wi-Fi list to reach the strip (they are about the end of the list); with
   only a few networks in range it doesn't. A failed precondition is a
   **SKIP**, neither a pass nor a fail.
@@ -114,6 +123,26 @@ Nothing in a test depends on the device, its screen size or the user's setup:
   hotter; both temperatures are in the log.
   `--record` heats the phone (x264 at 30 fps): leave it off for verdicts.
 
+### A run that is cut off
+
+Ctrl-C, SIGTERM and SIGHUP (what a run gets when its SSH session or the USB
+link drops) all end a run through the same cleanup, which then runs to its
+end: a second signal doesn't cut it short, and each of its commands has a
+timeout. `results.json` is written all the same, with `interrupted` naming the
+signal.
+
+A run that never gets to its cleanup (SIGKILL, a crash, a power cut) leaves
+its record, `~/.local/state/phone-gesture-test/run.json`. Each change is
+written there before it is made (do-not-disturb as it was, the tile layout
+moved aside, the terminal's process), and the file goes once everything is
+back. The next run reads it first and puts back what is still changed:
+do-not-disturb off again if it was off before, the tile layout, the terminal,
+the fictional notifications, a page or the sheet left open, the workspace it
+started on (only from one of the run's own, now empty), and the bar's unread
+mark (only ever moved back, so a notification can show as unread that was
+read, never the other way round). `--cleanup` does only that. A record whose run is still going stops
+the new run.
+
 ## Output
 
 `~/.cache/phone-gesture-test/run-TIME/` (or `--out DIR`):
@@ -139,8 +168,11 @@ notifications included: look before you share them.
 - 05 starts at half the screen's height, where the shade card's header is
   with the sheet collapsed; `gesture.png` shows where it landed.
 - One output, portrait (it refuses a rotated display or a locked screen).
-- `sudo` for `/dev/uinput`; `GESTURE_TEST_SUDO_PW` gives the password for an
-  unattended run, and nothing is stored.
+- `sudo` for `/dev/uinput`: a ticket first (`sudo -v`, which asks once), then
+  the helper under `sudo -n`, so its stdin only ever carries swipes.
+  `GESTURE_TEST_SUDO_PW` gives the password for an unattended run; it is
+  read once and taken out of the environment, so no child sees it (the
+  terminal keeps its environment for its lifetime), and nothing is stored.
 
 ## Adding a scenario
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 """phone-gesture-test: the quick-settings swipe gestures, run on the phone and
-checked through the shell's own state, the same way on any device.
+checked through the shell's own state. Touch points come from the output and
+the page's own window, so no number in it is one device's.
 
-usage: tools/phone-gesture-test [--record] [--keep-tiles] [--loud] [--out DIR] [--list] [ID ...]
+usage: tools/phone-gesture-test [--record] [--keep-tiles] [--loud] [--out DIR] [--list] [--cleanup] [ID ...]
 
 Run it on the phone, in the user's session, from a checkout (or with
 tools/phone-gesture-touch next to it). Each test sets up a known screen
@@ -31,10 +32,20 @@ It takes over the screen for a few minutes (workspaces switch, a terminal
 opens, notifications appear and go): tell whoever holds the phone first.
 
 root: phone-gesture-touch needs /dev/uinput. Without write access the script
-runs it through sudo (asks once); GESTURE_TEST_SUDO_PW supplies the password
-for an unattended run. Nothing is stored.
+first gets a sudo ticket (sudo -v, which asks once) and then starts it with
+sudo -n, so the helper's stdin only ever carries swipes. GESTURE_TEST_SUDO_PW
+supplies the password for an unattended run: it is read once and taken out of
+the environment, so no child sees it (the terminal under the pages keeps its
+environment for its lifetime), and nothing is stored.
+
+A run that ends early (Ctrl-C, SIGTERM, or SIGHUP when the SSH session or the
+USB link drops) puts everything back before it exits. What it is about to
+change is written to ~/.local/state/phone-gesture-test/run.json first, and
+the file goes once everything is back, so what a run that couldn't clean up
+left (SIGKILL, a crash, a power cut) is put back at the next start, or by
+--cleanup alone.
 """
-import argparse, glob, hashlib, json, os, re, signal, subprocess, sys, time
+import argparse, glob, hashlib, json, os, re, shutil, signal, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 VT = os.path.join(HERE, "phone-gesture-touch")
@@ -119,6 +130,14 @@ HISTORY = os.path.expanduser("~/.local/state/omarchy/notifications/history")
 OMARCHY_SHELL = "/usr/share/omarchy/shell"
 SEEN = os.path.expanduser("~/.local/state/omamobile/notifications-seen")  # the bar's unread mark
 HEADROOM = 2  # history slots left free for real notifications that arrive during a run
+# What a run is about to change, written before each change and removed once
+# everything is back (Fixtures.save, put_back).
+STATE = os.path.expanduser("~/.local/state/phone-gesture-test/run.json")
+CALL_NS = ("omamobile-call", "omamobile-call-top")  # a call's screen and its heads-up card
+# The commands a run needs, with the package that has them.
+TOOLS = {"hyprctl": "hyprland", "omarchy-shell": "omarchy-shell", "qs": "quickshell", "grim": "grim",
+         "magick": "imagemagick", "foot": "foot", "notify-send": "libnotify", "wf-recorder": "wf-recorder",
+         "sudo": "sudo"}
 THERMAL_LIMIT = 75.0  # deg C: above it the phone throttles and touches arrive late; wait it out
 
 
@@ -149,11 +168,20 @@ def session_env():
     return env
 
 
+# The password for an unattended run, read once and taken out of the
+# environment before ENV is copied from it: every child gets ENV, and the
+# terminal under the pages keeps its environment for its lifetime.
+SUDO_PW = os.environ.pop("GESTURE_TEST_SUDO_PW", None)
 ENV = session_env()
 
 
-def sh(*cmd, check=False, input=None):
-    r = subprocess.run(cmd, capture_output=True, text=True, input=input, env=ENV)
+def sh(*cmd, check=False, input=None, timeout=30):
+    """A command's stdout. A timeout, so a shell that stopped answering can't
+    hold up the cleanup, which runs with the signals that end a run ignored."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, input=input, env=ENV, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("%s gave no answer in %d s" % (" ".join(cmd), timeout))
     if check and r.returncode != 0:
         raise RuntimeError("%s failed: %s" % (" ".join(cmd), r.stderr.strip()))
     return r.stdout
@@ -234,24 +262,57 @@ def focus(ws):
     dispatch('hl.dsp.focus({ workspace = "%s" })' % ws)
 
 
+def screen_locked():
+    return sh("omarchy-shell", "lock", "isLocked").strip() == "true"
+
+
+CLEANUP_TOOLS = {"hyprctl", "omarchy-shell", "qs"}  # all that --cleanup uses
+
+
+def needed_tools(tests, record, uinput_writable):
+    need = CLEANUP_TOOLS | {"grim", "magick"}
+    if any(t["ctx"] == "app" for t in tests):
+        need.add("foot")
+    if any(t["page"] == "sheet" for t in tests):
+        need.add("notify-send")
+    if record:
+        need.add("wf-recorder")
+    if not uinput_writable:
+        need.add("sudo")
+    return need
+
+
+def missing_tools(need, path):
+    """The commands of `need` that aren't on `path`, as "cmd (package pkg)"."""
+    return ["%s (package %s)" % (c, TOOLS.get(c, c)) for c in sorted(need) if not shutil.which(c, path=path)]
+
+
 # ------------------------------------------------------------------ the finger
+
+def sudo_prefix(pw):
+    """How to start the helper as root: with a ticket from sudo -v first, then
+    sudo -n, which never reads stdin. (Started with sudo -S, a ticket from a
+    moment ago means sudo doesn't read the password, and the password line goes
+    on to the helper as its first swipe.) pw comes from GESTURE_TEST_SUDO_PW;
+    None asks on the terminal, once."""
+    if pw is None:
+        subprocess.run(["sudo", "-v"], check=True)
+    else:
+        r = subprocess.run(["sudo", "-S", "-p", "", "-v"], input=pw + "\n", text=True, capture_output=True)
+        if r.returncode != 0:
+            raise RuntimeError("sudo did not take GESTURE_TEST_SUDO_PW")
+    return ["sudo", "-n"]
+
 
 class Finger:
     """phone-gesture-touch, started once for the run (root for /dev/uinput)."""
 
     def __init__(self, geo):
         args = [sys.executable, VT, str(geo.pw), str(geo.ph)]
-        pw = None
         if not os.access("/dev/uinput", os.W_OK):
-            pw = os.environ.get("GESTURE_TEST_SUDO_PW")
-            if pw is None:
-                subprocess.run(["sudo", "-v"], check=True)  # asks on the terminal, once
-                args = ["sudo", "-n"] + args
-            else:
-                args = ["sudo", "-S", "-p", ""] + args
+            args = sudo_prefix(SUDO_PW) + args
+        self.left_running = False
         self.p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
-        if pw is not None:
-            self.p.stdin.write(pw + "\n"); self.p.stdin.flush()
         ready = json.loads(self.p.stdout.readline() or "{}")
         if not ready.get("ready"):
             raise RuntimeError("the virtual touchscreen did not start")
@@ -267,16 +328,156 @@ class Finger:
         return rec
 
     def close(self):
+        """End of input: the helper removes its device and exits. Never raises,
+        since it runs from the cleanup: the session user can't signal a helper
+        under sudo, and an exception here would cost results.json. A helper
+        that is still there is noted (left_running); it exits once it reads the
+        end of its input."""
         try:
-            self.p.stdin.close(); self.p.wait(timeout=5)
-        except Exception:
-            self.p.kill()
+            self.p.stdin.close()
+        except OSError:
+            pass
+        for stop in (None, self.p.terminate):
+            try:
+                if stop:
+                    stop()
+                self.p.wait(timeout=5)
+                return
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+        self.left_running = True
 
 
 # ------------------------------------------------------------------ fixtures
 
+def write_state(rec):
+    """STATE, replaced in one rename, so a run killed mid-write leaves the old
+    record or the new one, never half of one."""
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    tmp = STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(rec, f)
+    os.replace(tmp, STATE)
+
+
+def read_state():
+    """The record a run left: None when there is none; {} when it can't be
+    read, which still counts as a run that didn't clean up."""
+    try:
+        with open(STATE) as f:
+            rec = json.load(f)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {}
+    return rec if isinstance(rec, dict) else {}
+
+
+def ours(pid, what):
+    """pid is still a process of the suite's (its command line names `what`),
+    not a later process that got the same number."""
+    if not isinstance(pid, int) or pid <= 1:
+        return False
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as f:
+            return what.encode() in f.read()
+    except OSError:
+        return False
+
+
+def dismiss_fictional():
+    """Take the suite's notifications out of the shade the way a swipe does
+    (dismissNotification). How many it dismissed."""
+    try:
+        rows = json.loads(qs("notificationRows") or "[]")
+    except ValueError:
+        rows = []
+    n = 0
+    for r in rows:
+        if r.get("app") == NOTES_APP and r.get("key") is not None:
+            qs("dismissNotification", str(r["key"]))
+            n += 1
+    return n
+
+
+def put_back(rec):
+    """Put back what an earlier run recorded in STATE and didn't put back
+    itself. Each step checks the screen as it is now, so a step that run never
+    got to, or one already undone, changes nothing. Returns what it did, one
+    line each."""
+    done = []
+    if rec.get("dnd_before") == "off" and notifications("dndState") == "on":
+        notifications("setDnd", "off")
+        done.append("do-not-disturb off again (it was off before that run)")
+    if rec.get("tiles_aside") and os.path.exists(CONF_ASIDE):
+        if os.path.exists(CONF):
+            done.append("left %s alone: %s exists as well" % (CONF_ASIDE, CONF))
+        else:
+            os.replace(CONF_ASIDE, CONF)
+            done.append("the tile layout back in place")
+    if ours(rec.get("app_pid"), APP_ID):
+        try:
+            os.killpg(rec["app_pid"], signal.SIGTERM)
+            done.append("its terminal closed")
+        except OSError:
+            pass
+    n = dismiss_fictional()
+    if n:
+        done.append("%d fictional notification%s dismissed" % (n, "" if n == 1 else "s"))
+    # The screen: a page or the sheet that run opened, and one of its
+    # workspaces in front (empty now that its terminal is gone).
+    try:
+        st = state()
+    except ValueError:
+        st = {}
+    if any(st.get(k) for k in OPEN_KEY.values()):
+        reset_ui()
+        done.append("quick settings closed")
+    ws = hypr("activeworkspace")["name"]
+    if rec.get("start_ws") and ws != rec["start_ws"] and ws in (rec.get("home_ws"), rec.get("app_ws")) \
+            and not clients_on(ws):
+        focus(rec["start_ws"])
+        done.append("back on workspace %s" % rec["start_ws"])
+    # The bar's unread mark: only ever moved back. If it is newer than before
+    # that run, the run (opening the shade) or the owner since then moved it;
+    # moving it back can show a notification as unread that was read, never
+    # hide one that wasn't.
+    seen = rec.get("seen_before")
+    if isinstance(seen, str):
+        try:
+            with open(SEEN) as f:
+                now = f.read()
+        except OSError:
+            now = None
+        if now is not None and now != seen and now.strip().isdigit() and seen.strip().isdigit() \
+                and int(now) > int(seen):
+            with open(SEEN, "w") as f:
+                f.write(seen)
+            done.append("the bar's unread mark back")
+    return done
+
+
+def recover(rec):
+    """At the start of a run (or --cleanup): put back what an earlier run that
+    couldn't clean up left, and remove its record. Refuses while that run is
+    still going."""
+    if ours(rec.get("pid"), "phone-gesture-test") and rec.get("pid") != os.getpid():
+        sys.exit("phone-gesture-test: another run is going (pid %d)" % rec["pid"])
+    lines = put_back(rec)
+    os.remove(STATE)
+    when = rec.get("started", "an unknown time")
+    if lines:
+        print("phone-gesture-test: a run from %s ended without its cleanup; put back: %s"
+              % (when, "; ".join(lines)), flush=True)
+    else:
+        print("phone-gesture-test: a run from %s ended without its cleanup; nothing was left changed"
+              % when, flush=True)
+
+
 class Fixtures:
-    """Everything the run changes, and puts back in reverse."""
+    """Everything the run changes, and puts back in reverse. Each change is
+    recorded in STATE before it is made (save), so that a run that never gets
+    to restore() can be put back by the next one (recover)."""
 
     def __init__(self, keep_tiles, quiet):
         self.keep_tiles = keep_tiles
@@ -289,6 +490,7 @@ class Fixtures:
         self.dnd_during = self.dnd_after = None
         self.app = None
         self.home_ws = self.app_ws = None
+        self.restore_errors = []
         self.start_ws = hypr("activeworkspace")["name"]
         # The owner's notification history and the bar's unread mark, checked
         # and put back at the end of every run.
@@ -298,6 +500,13 @@ class Fixtures:
                 self.seen_before = f.read()
         except OSError:
             self.seen_before = None
+        self.rec = {"pid": os.getpid(), "started": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "seen_before": self.seen_before, "start_ws": self.start_ws}
+        write_state(self.rec)
+
+    def save(self, **changes):
+        self.rec.update(changes)
+        write_state(self.rec)
 
     def tiles(self):
         if self.keep_tiles:
@@ -305,6 +514,7 @@ class Fixtures:
         if os.path.exists(CONF_ASIDE):
             raise RuntimeError("%s is left from an earlier run: put it back as %s first" % (CONF_ASIDE, CONF))
         if os.path.exists(CONF):
+            self.save(tiles_aside=True)
             os.replace(CONF, CONF_ASIDE)  # the shell watches the file: the default layout applies now
             self.tiles_aside = True
 
@@ -314,6 +524,7 @@ class Fixtures:
         if len(free) < 2:
             raise RuntimeError("needs two empty workspaces among 4-9")
         self.home_ws, self.app_ws = free[0], free[1]
+        self.save(home_ws=self.home_ws, app_ws=self.app_ws)
 
     def open_app(self):
         focus(self.app_ws); time.sleep(0.5)
@@ -321,6 +532,7 @@ class Fixtures:
             ["foot", "--app-id", APP_ID, "--title", "phone-gesture-test",
              "sh", "-c", "echo 'phone-gesture-test: the app under the page'; exec sleep 3600"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=ENV)
+        self.save(app_pid=self.app.pid)
         for _ in range(80):
             if any(c["class"] == APP_ID for c in clients_on(self.app_ws)):
                 return
@@ -337,6 +549,7 @@ class Fixtures:
             raise RuntimeError("the notification service doesn't answer dndState (%r); use --loud" % state)
         self.dnd_before = state
         if state == "off":
+            self.save(dnd_before="off")
             notifications("setDnd", "on")
         self.dnd_during = notifications("dndState")
         if self.dnd_during != "on":
@@ -347,30 +560,30 @@ class Fixtures:
         history has room for, less HEADROOM: the service deletes its oldest
         files beyond historyLimit, and those would be the owner's."""
         n = notes_to_post(want, history_limit(), len(self.history_before))
+        self.save(posted=n)
         for title, body in NOTE_TEXTS[:n]:
             sh("notify-send", "--app-name=" + NOTES_APP, title, body)
         self.posted = n
         time.sleep(1.0)
 
     def forget_notifications(self):
-        """Take the suite's notifications out of the shade the way a swipe
-        does (dismissNotification), then check that every history file that
-        was there before the run still is."""
-        try:
-            rows = json.loads(qs("notificationRows") or "[]")
-        except ValueError:
-            rows = []
-        for r in rows:
-            if r.get("app") == NOTES_APP and r.get("key") is not None:
-                qs("dismissNotification", str(r["key"]))
+        """Take the suite's notifications out of the shade again, then check
+        that every history file that was there before the run still is."""
+        dismiss_fictional()
         time.sleep(1.0)
         now = set(os.listdir(HISTORY)) if os.path.isdir(HISTORY) else set()
         self.history_kept = set(self.history_before) <= now
 
     def restore(self):
-        if self.history_kept is None:
-            self.forget_notifications()
-        if self.seen_before is not None:
+        """Every step runs even when one before it fails; STATE goes only when
+        all of them worked, so the next run tries the rest again."""
+        def step(what, fn):
+            try:
+                fn()
+            except Exception as e:
+                self.restore_errors.append("%s: %s" % (what, e))
+
+        def seen():
             try:
                 with open(SEEN) as f:
                     changed = f.read() != self.seen_before
@@ -379,21 +592,39 @@ class Fixtures:
             if changed:
                 with open(SEEN, "w") as f:
                     f.write(self.seen_before)
-        if self.dnd_before == "off":
-            notifications("setDnd", "off")
-        if self.dnd_before:
-            self.dnd_after = notifications("dndState")
-        if self.app:
+
+        def dnd():
+            if self.dnd_before == "off":
+                notifications("setDnd", "off")
+            if self.dnd_before:
+                self.dnd_after = notifications("dndState")
+                if self.dnd_before == "off" and self.dnd_after != "off":
+                    raise RuntimeError("do-not-disturb reads %r" % self.dnd_after)
+
+        def app():
             try:
                 os.killpg(self.app.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
             self.app = None
+
+        if self.history_kept is None:
+            step("the fictional notifications", self.forget_notifications)
+        if self.seen_before is not None:
+            step("the unread mark", seen)
+        step("do-not-disturb", dnd)
+        if self.app:
+            step("the terminal", app)
         if self.tiles_aside and os.path.exists(CONF_ASIDE):
-            os.replace(CONF_ASIDE, CONF)
-            self.tiles_aside = False
-        reset_ui()
-        focus(self.start_ws)
+            step("the tile layout", lambda: os.replace(CONF_ASIDE, CONF))
+            self.tiles_aside = os.path.exists(CONF_ASIDE)
+        step("the screen", reset_ui)
+        step("the workspace", lambda: focus(self.start_ws))
+        if not self.restore_errors:
+            try:
+                os.remove(STATE)
+            except FileNotFoundError:
+                pass
 
 
 def reset_ui():
@@ -452,6 +683,12 @@ def precondition(t, st, lay, ws, geo):
     strip = ns.get("omamobile-home-strip")
     page = ns.get(PAGE_NS.get(t["page"], ""))
     on_ws = clients_on(ws)
+    # Checked before every gesture, not once per run: a run takes minutes,
+    # and a swipe must never land on the lock screen or a call.
+    if screen_locked():
+        problems.append("the screen is locked")
+    if any(n in ns for n in CALL_NS):
+        problems.append("a call's screen is up")
     if "osk" in ns:
         problems.append("the on-screen keyboard is up")
     if RECENTS_NS in ns:
@@ -743,6 +980,25 @@ def run_test(t, fx, finger, geo, out_dir, record):
 
 # ------------------------------------------------------------------ main
 
+def say(line):
+    """One line of progress. A terminal that went away (EIO, EPIPE) doesn't
+    stop the run: the results still go to results.json."""
+    try:
+        print(line, flush=True)
+    except OSError:
+        sys.stdout = open(os.devnull, "w")  # nor Python's own flush at exit
+
+
+def end_on_signals():
+    """SIGTERM and SIGHUP end a run the way Ctrl-C does, through the cleanup
+    in main's finally. SIGHUP is what a run gets when its SSH session or the
+    USB link drops; by default Python would exit on it without any cleanup."""
+    def end(sig, frame):
+        raise SystemExit(128 + sig)
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, end)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("ids", nargs="*", help="test ids to run (default: all)")
@@ -751,27 +1007,41 @@ def main():
     ap.add_argument("--loud", action="store_true", help="leave do-not-disturb off during the run")
     ap.add_argument("--out", help="output directory (default ~/.cache/phone-gesture-test/run-TIME)")
     ap.add_argument("--list", action="store_true", help="list the tests and exit")
+    ap.add_argument("--cleanup", action="store_true",
+                    help="only put back what an earlier run that didn't clean up left, and exit")
     a = ap.parse_args()
     tests = [t for t in TESTS if not a.ids or t["id"] in a.ids]
     if a.list:
         for t in TESTS:
             print("%s  %-5s %s -> %s" % (t["id"], t["ctx"], t["title"], t["expect"]))
         return 0
+    need = CLEANUP_TOOLS if a.cleanup else needed_tools(tests, a.record, os.access("/dev/uinput", os.W_OK))
+    missing = missing_tools(need, ENV.get("PATH"))
+    if missing:
+        sys.exit("phone-gesture-test: missing %s" % ", ".join(missing))
+    rec = read_state()
+    if rec is not None:
+        recover(rec)
+    elif a.cleanup:
+        print("phone-gesture-test: no earlier run left anything to put back")
+    if a.cleanup:
+        return 0
     geo = Geometry()
     if geo.transform != 0:
         sys.exit("the display is rotated (transform %s): turn rotation back first" % geo.transform)
-    if sh("omarchy-shell", "lock", "isLocked").strip() == "true":
+    if screen_locked():
         sys.exit("the screen is locked")
     out = a.out or os.path.expanduser(time.strftime("~/.cache/phone-gesture-test/run-%Y%m%d-%H%M%S"))
     os.makedirs(out, exist_ok=True)
     print("phone-gesture-test: %d tests on %s (%dx%d logical, scale %g). The screen is taken over until the end."
           % (len(tests), geo.name, geo.w, geo.h, geo.scale), flush=True)
 
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(130))
+    end_on_signals()
+    build = shell_build()
     fx = Fixtures(a.keep_tiles, not a.loud)
     finger = None
     results = []
-    build = shell_build()
+    interrupted = None
     try:
         fx.tiles()
         fx.workspaces()
@@ -790,30 +1060,47 @@ def main():
             why = {"SKIP": "; ".join(log.get("precondition", {}).get("problems", [])),
                    "ERROR": log.get("error", ""), "INCONCLUSIVE": log.get("note", ""),
                    "FAIL": log.get("note", "")}.get(log["result"], "")
-            print("%s %-38s %s%s" % (t["id"], t["name"], log["result"], "  " + why if why else ""), flush=True)
+            say("%s %-38s %s%s" % (t["id"], t["name"], log["result"], "  " + why if why else ""))
         if fx.history_before is not None:
             fx.forget_notifications()
+    except KeyboardInterrupt:
+        interrupted = "SIGINT"
+    except SystemExit as e:  # end_on_signals
+        interrupted = signal.Signals(e.code - 128).name if isinstance(e.code, int) and e.code > 128 else str(e.code)
     finally:
-        fx.restore()
+        # The cleanup runs to its end: a second Ctrl-C, or the SIGHUP that
+        # follows a SIGTERM when the session goes, mustn't cut it short (sh()
+        # has a timeout, so it can't hang either).
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            signal.signal(sig, signal.SIG_IGN)
         if finger:
             finger.close()
+        fx.restore()
     summary = {
         "device": geo.info(),
         "shell": build,
         "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "tiles": "owner's" if a.keep_tiles else "package default",
+        "interrupted": interrupted,
         "do_not_disturb": {"before": fx.dnd_before, "during": fx.dnd_during, "after": fx.dnd_after},
         "notifications": {"posted": fx.posted, "owner_history_kept": fx.history_kept},
+        "cleanup": {"errors": fx.restore_errors, "touch_helper_left_running": bool(finger and finger.left_running)},
         "tests": [{k: r.get(k) for k in ("id", "name", "title", "expect", "result", "want", "got", "recents",
                                          "error", "evidence", "note", "temp_start", "temp_ready", "temp_gesture")}
                   for r in results],
     }
-    if fx.history_kept is False:
-        print("WARNING: a notification history file from before the run is gone", flush=True)
     with open(os.path.join(out, "results.json"), "w") as f:
         json.dump(summary, f, indent=2)
+    if fx.history_kept is False:
+        say("WARNING: a notification history file from before the run is gone")
+    for e in fx.restore_errors:
+        say("WARNING: not put back, %s (the next run tries again; or --cleanup)" % e)
     passed = sum(r["result"] == "PASS" for r in results)
-    print("%d/%d passed; details in %s" % (passed, len(results), out))
+    if interrupted:
+        say("stopped by %s after %d of %d tests, everything put back; details in %s"
+            % (interrupted, len(results), len(tests), out))
+        return 130
+    say("%d/%d passed; details in %s" % (passed, len(results), out))
     return 0 if passed == len(results) else 1
 
 
