@@ -199,6 +199,14 @@ pass "sitd waits for the CP; the modem stack is on by default through the target
   || fail "the device sitd policy is staged"
 grep -q 'omamobile-sitd-policy' PKGBUILD || fail "the package provides its sitd policy capability"
 pass "the device sitd policy is staged and provided"
+
+# MODEM-PLAN section 7 (M6): the owner's modem-suspend-enable lifts
+# omamobile-modem's sleep inhibitor only beside this marker, which only the
+# Pixel 7 Pro ships; a plain data file, never a script.
+runbook=$tmp/root/usr/lib/omamobile-modem/suspend-runbook
+[[ -f $runbook && ! -x $runbook ]] || fail "the M6 runbook marker is staged as a plain file"
+[[ $(grep -cv '^#' "$runbook") == 0 ]] || fail "the M6 runbook marker holds comments only"
+pass "the M6 runbook marker is staged, so modem-suspend-enable can take effect on this phone"
 # The USB gadget's MAC addresses stay the same across boots (omamobile-usb-mac),
 # against a fake gadget: plain directories and files stand in for configfs.
 for f in usr/bin/omamobile-usb-mac usr/lib/systemd/system/omamobile-usb-mac.service; do

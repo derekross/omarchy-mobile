@@ -80,6 +80,15 @@ INHIBITOR=omamobile-modem
 # inhibitor (overridden by the test).
 SYSMODULE=${OMAMOBILE_MODEM_SYSMODULE:-/sys/module}
 SYSTEMCTL=${OMAMOBILE_MODEM_SYSTEMCTL:-systemctl}
+# MODEM-PLAN section 7 (M6): with this file, the modem starts without the
+# inhibitor (its unit is skipped by the same pair of files) and the phone
+# may sleep with it up. Attended runbook only, until M6 passes. It takes
+# effect only beside SUSPEND_RUNBOOK, which a device package ships for a
+# phone whose plan has an M6 runbook (device-cheetah, the Pixel 7 Pro):
+# suspend with the modem up is unqualified on the 9a and the 6 Pro, so the
+# owner's file alone changes nothing there.
+SUSPEND_ENABLE=${OMAMOBILE_MODEM_SUSPEND_ENABLE:-/etc/omamobile/modem-suspend-enable}
+SUSPEND_RUNBOOK=${OMAMOBILE_MODEM_SUSPEND_RUNBOOK:-/usr/lib/omamobile-modem/suspend-runbook}
 say() { printf 'omamobile-modem: %s\n' "$*" >&2; }
 boot_id() { cat /proc/sys/kernel/random/boot_id; }
 
@@ -247,12 +256,18 @@ done
 # The sleep inhibitor before the drivers: the unit requires and orders after
 # omamobile-modem-inhibit.service, but a Type=simple unit is "started" at
 # its fork, so give the lock a moment to appear, and refuse without it.
-for _ in $(seq 25); do
-  systemd-inhibit --list --no-legend 2>/dev/null | grep -c "^$INHIBITOR " >/dev/null && break
-  sleep 0.2
-done
-systemd-inhibit --list --no-legend 2>/dev/null | grep -c "^$INHIBITOR " >/dev/null ||
-  { say "no sleep inhibitor held by $INHIBITOR (systemctl start omamobile-modem-inhibit): not loading the modem's drivers"; refuse "Off: no sleep inhibitor"; }
+if [[ -e $SUSPEND_ENABLE && -e $SUSPEND_RUNBOOK ]]; then
+  say "$SUSPEND_ENABLE: the phone may sleep with the modem up (MODEM-PLAN section 7, M6)"
+else
+  [[ -e $SUSPEND_ENABLE ]] &&
+    say "$SUSPEND_ENABLE ignored: this phone has no M6 runbook ($SUSPEND_RUNBOOK); the sleep inhibitor stays"
+  for _ in $(seq 25); do
+    systemd-inhibit --list --no-legend 2>/dev/null | grep -c "^$INHIBITOR " >/dev/null && break
+    sleep 0.2
+  done
+  systemd-inhibit --list --no-legend 2>/dev/null | grep -c "^$INHIBITOR " >/dev/null ||
+    { say "no sleep inhibitor held by $INHIBITOR (systemctl start omamobile-modem-inhibit): not loading the modem's drivers"; refuse "Off: no sleep inhibitor"; }
+fi
 
 # Past every refusal: an earlier one's reason no longer describes this boot.
 rm -f "$REFUSED"
