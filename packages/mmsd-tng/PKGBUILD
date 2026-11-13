@@ -15,8 +15,8 @@ options=('!lto')
 source=("$pkgname-$pkgver.tar.gz::$url/-/archive/$pkgver/mmsd-$pkgver.tar.gz"
         '0001-use-configured-number-with-empty-own-numbers.patch'
         '0002-close-socket-on-interface-bind-failure.patch'
-        '0004-link-modern-libphonenumber-dependencies.patch'
-        '0005-accept-international-own-number-with-redacted-IMSI.patch')
+        '0003-link-modern-libphonenumber-dependencies.patch'
+        '0004-accept-international-own-number-with-redacted-IMSI.patch')
 sha256sums=('5772d4d1830664404d8f6ed96d9c35f6e7a53c60b1ac5571cd2a6183c7e633ed'
             '2bddbd5812356656162920a8cf145a69a529f6e33a2109633de6b508aee99d8e'
             '4c0a0997edfb936c50807459c51b97b55be6a404faf51bbcf7c993faf5041add'
@@ -27,8 +27,8 @@ prepare() {
   cd "mmsd-$pkgver"
   patch -Np1 -i "$srcdir/0001-use-configured-number-with-empty-own-numbers.patch"
   patch -Np1 -i "$srcdir/0002-close-socket-on-interface-bind-failure.patch"
-  patch -Np1 -i "$srcdir/0004-link-modern-libphonenumber-dependencies.patch"
-  patch -Np1 -i "$srcdir/0005-accept-international-own-number-with-redacted-IMSI.patch"
+  patch -Np1 -i "$srcdir/0003-link-modern-libphonenumber-dependencies.patch"
+  patch -Np1 -i "$srcdir/0004-accept-international-own-number-with-redacted-IMSI.patch"
 }
 
 build() {

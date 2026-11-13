@@ -7,7 +7,10 @@ pkgdesc="Omarchy Mobile ModemManager-compatible bridge: org.freedesktop.ModemMan
 arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
-depends=(python python-gobject glib2 dbus polkit 'omamobile-modem-sit>=0.3.0')
+# modem-sit from the version that reports the internet bearer's device,
+# address and DNS in its status: with an older one the bearer's Interface
+# would stay empty for good. (The number is set with the versions at merge.)
+depends=(python python-gobject glib2 dbus polkit 'omamobile-modem-sit>=0.3.36')
 checkdepends=(dbus)
 # It owns ModemManager's bus name and ships its bus policy and polkit
 # actions. Nothing in Arch or Arch Linux ARM hard-depends on modemmanager

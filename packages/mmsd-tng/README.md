@@ -4,15 +4,11 @@
 An opt-in, per-user MMS daemon using ModemManager's D-Bus API. It never
 starts the modem or sitd. This package alone does not enable picture
 messages in Messages: omatel-agent and omamessages need their T3 changes
-in their own repositories. See `docs/TELEPHONY-APPS-PLAN.md` section 1.7b.
+in their own repositories. See `docs/TELEPHONY-APPS-PLAN.md` section 1.7.
 
-The AUR has `mmsd-tng-git`, advertising 2.5.0.r0.g6529119-1 in its cached
-package metadata while building upstream HEAD. Neither Arch's exact-name
-search nor Arch Linux ARM's aarch64 core/extra indexes contained mmsd-tng
-when checked on 2026-11-03. This recipe uses upstream's stable 2.6.4 tag
-and the AUR runtime dependency set, with a checked source checksum and a
-single Meson build directory. Modern libphonenumber headers additionally
-need explicit protobuf and Abseil linkage.
+Neither Arch nor Arch Linux ARM packages mmsd-tng (checked 2026-11-03), so
+this recipe builds upstream's 2.6.4 tag with the AUR recipe's runtime
+dependencies and a checked source checksum.
 
 Sources: [AUR recipe](https://aur.archlinux.org/cgit/aur.git/tree/PKGBUILD?h=mmsd-tng-git),
 [upstream 2.6.4](https://gitlab.com/kop316/mmsd/-/tree/2.6.4),
@@ -20,10 +16,18 @@ Sources: [AUR recipe](https://aur.archlinux.org/cgit/aur.git/tree/PKGBUILD?h=mms
 Upstream is GPL-2.0; its LGPL components retain their notices. Patches use
 the corresponding upstream file's license.
 
-The patches apply the configured own number when MM's OwnNumbers array is
-empty, including E.164 parsing without an IMSI-derived region; close HTTP
-sockets on interface-binding failure; and link the dependencies required by
-current libphonenumber.
+The patches, and what drops each at a later version bump:
+
+- `0001` uses the configured own number when ModemManager's OwnNumbers is
+  empty. Offered upstream as
+  [mmsd!133](https://gitlab.com/kop316/mmsd/-/merge_requests/133).
+- `0002` closes the HTTP socket when it can't be bound to the interface.
+  Offered upstream as
+  [mmsd!134](https://gitlab.com/kop316/mmsd/-/merge_requests/134).
+- `0003` links protobuf and Abseil, which current libphonenumber headers
+  need. Not offered upstream yet.
+- `0004` parses an international own number without a region taken from the
+  IMSI. Not offered upstream yet.
 
 mmsd-tng fetches MMS over a connected bearer whose APN is its `MMS_APN`,
 bound to that bearer's device and resolving through the DNS in its
