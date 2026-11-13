@@ -1355,5 +1355,6 @@ case "${1:-}" in
   flash) cmd_flash ;;
   push) cmd_push ;;
   kernel-shell) cmd_kernel_shell ;;
-  *) usage ;;
+  ''|-h|--help) usage ;;
+  *) usage >&2; die "unknown command '$1'" ;;
 esac
