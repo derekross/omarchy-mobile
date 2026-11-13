@@ -15,7 +15,7 @@ of the tick feedbackd plays for key presses (low, medium or high); it
 edits the user's feedbackd theme (`~/.config/feedbackd/themes/custom.json`, the
 two key entries of the `full` profile, never above 0.125 or 60 ms; the first version of the file is kept once as `custom.json.bak-haptics`, a theme that
 does not have exactly those two entries is refused before anything changes). It never touches feedbackd's profile, so calls, messages and
-alarms ring as before; changing the level restarts feedbackd, so a ring in progress stops. A phone without such a theme gets a plain
+alarms ring as before; changing the level restarts feedbackd, so a ring in progress stops. A phone without such a theme (or with one that does not have exactly the two key entries) gets a plain
 message on the page and no buttons. The pages run
 `backends/display.sh` and `backends/haptics.sh` through a fixed-argument runner, with no shell string.
 Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management and

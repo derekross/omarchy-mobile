@@ -9,7 +9,8 @@
 # Only the two key entries of the theme are written. feedbackd's profile, and so whether calls, messages and alarms
 # ring, is never touched here: a keyboard page does not change that. Changing the level restarts feedbackd (a ring
 # in progress stops).
-# Nothing in the environment changes what runs here except XDG_CONFIG_HOME (the theme directory); the test runs a copy
+# The theme directory comes from XDG_CONFIG_HOME, else HOME; nothing else in the environment is read (python3 is
+# called by its absolute path, the helper tools by PATH). The test runs a copy
 # of this script with `dry=1`, which skips feedbackd and the preview tick. The theme file is checked (exactly the
 # two key entries in the full profile) before anything is changed.
 set -euo pipefail
@@ -32,24 +33,29 @@ level_pair() {
   esac
 }
 
+# Prints the level; exit 3: the theme does not have exactly the two key entries (the same rule set applies);
+# exit 4: it cannot be read as a theme.
 current_level() {
   /usr/bin/python3 -I - "$file" <<'PY'
 import json, sys
-d = json.load(open(sys.argv[1]))
-pairs = set()
-for p in d["profiles"]:
-    if p["name"] != "full":
-        continue
-    for f in p["feedbacks"]:
-        if f.get("type") == "VibraPattern" and f["event-name"] in ("button-pressed", "key-pressed"):
-            pairs.add((f["magnitudes"][0], f["durations"][0]))
+try:
+    d = json.load(open(sys.argv[1]))
+    pairs = []
+    for p in d["profiles"]:
+        if p["name"] != "full":
+            continue
+        for f in p["feedbacks"]:
+            if f.get("type") == "VibraPattern" and f["event-name"] in ("button-pressed", "key-pressed"):
+                pairs.append((f["magnitudes"][0], f["durations"][0]))
+except Exception:
+    sys.exit(4)
+if len(pairs) != 2:
+    sys.exit(3)
 names = {(0.015, 15): "low", (0.035, 15): "medium", (0.07, 15): "high"}
-if len(pairs) == 1 and next(iter(pairs)) in names:
-    print(names[next(iter(pairs))])
-elif pairs:
-    print("custom")
+if pairs[0] == pairs[1] and pairs[0] in names:
+    print(names[pairs[0]])
 else:
-    sys.exit(1)
+    print("custom")
 PY
 }
 
@@ -64,7 +70,12 @@ probe)
   ;;
 get)
   [[ -r $file ]] || fail '{"error":"no keyboard haptics theme on this phone"}'
-  lvl=$(current_level) || fail '{"error":"the haptics theme has no key entries"}'
+  rc=0; lvl=$(current_level) || rc=$?
+  case $rc in
+    0) ;;
+    3) fail '{"error":"the haptics theme does not have the two key entries"}' ;;
+    *) fail '{"error":"the haptics theme could not be read"}' ;;
+  esac
   printf '{"level":"%s"}\n' "$lvl"
   ;;
 set)
@@ -73,6 +84,7 @@ set)
   mag=${pair% *}; ms=${pair#* }
   # defence in depth: the table above can never exceed the cap or 60 ms
   /usr/bin/python3 -I -c "import sys; sys.exit(0 if float('$mag') <= $cap and int('$ms') <= 60 else 1)" || fail '{"error":"above the safety cap"}'
+  [[ -e $file ]] || fail '{"error":"no keyboard haptics theme on this phone"}'
   [[ -w $file ]] || fail '{"error":"theme file not writable"}'
   edit() { /usr/bin/python3 -I - "$file" "$mag" "$ms" "$1" <<'PY'
 import json, os, sys, tempfile
@@ -88,7 +100,7 @@ try:
                 f["magnitudes"] = [mag]
                 f["durations"] = [ms]
                 n += 1
-except (OSError, ValueError, KeyError, TypeError):
+except Exception:
     n = -1
 if n != 2:
     print('{"error":"the haptics theme does not have the two key entries"}')
@@ -108,13 +120,14 @@ if mode == "write":
             os.unlink(tmp)
         except OSError:
             pass
-        raise
+        print('{"error":"could not write the haptics theme"}')
+        sys.exit(2)
 PY
   }
   # nothing is changed until the theme is known to be what this edit expects
   edit check || exit 2
-  [[ -e $file.bak-haptics ]] || cp -p "$file" "$file.bak-haptics"
-  edit write || fail '{"error":"could not write the haptics theme"}'
+  [[ -e $file.bak-haptics ]] || cp -p "$file" "$file.bak-haptics" || fail '{"error":"could not keep a copy of the haptics theme"}'
+  edit write || exit 2
   if [[ $dry != 1 ]]; then
     # feedbackd reads the theme when it starts; D-Bus starts it again on the next event. Exact name only.
     for p in $(pgrep -u "$(id -u)" -x feedbackd || true); do kill "$p" 2>/dev/null || true; done

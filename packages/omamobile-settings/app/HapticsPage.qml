@@ -31,6 +31,7 @@ ColumnLayout {
         delegate: SettingsButton {
             required property var modelData
             Layout.fillWidth: true; Layout.preferredHeight: 64
+            visible: page.available
             highlighted: page.level === modelData.id; enabled: page.available && !page.busy
             onClicked: { page.busy = true; page.reqId = actions.run("haptics", ["set", "level", modelData.id]) }
             contentItem: Column {

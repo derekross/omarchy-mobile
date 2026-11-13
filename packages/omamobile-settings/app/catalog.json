@@ -12,7 +12,7 @@
       {
         "id": "haptics",
         "title": "Keyboard haptics",
-        "detail": "Tick strength, or silent for the whole phone",
+        "detail": "Strength of the keyboard tick",
         "icon": "haptics",
         "page": "haptics"
       },
