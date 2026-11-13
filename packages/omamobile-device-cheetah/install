@@ -22,6 +22,9 @@ install -Dm644 etc/omamobile-mirrorlist "$destination/etc/pacman.d/omamobile-mir
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-cheetah/LICENSE"
 install -Dm644 LICENSE.Apache-2.0 "$destination/usr/share/licenses/omamobile-device-cheetah/LICENSE.Apache-2.0"
 install -Dm644 version "$destination/usr/share/omamobile/device-cheetah/version"
+# Suspend is verified on this phone (device/cheetah/SUSPEND-PLAN.md): the
+# shell's user setup turns auto-sleep on once where this file exists.
+install -Dm644 /dev/null "$destination/usr/share/omamobile/auto-sleep-default"
 
 # The boot files omamobile-boot-update builds slot B's images from
 # (docs/RELEASES.md §5.1): the descriptor, the board dtbo, the compiled DTB
