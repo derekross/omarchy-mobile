@@ -94,6 +94,16 @@ screensaver_up() {
   pgrep -f '[o]rg.omarchy.screensaver' >/dev/null
 }
 
+# A saved brightness of 0 would wake to a black panel: after the display is on,
+# put the floor back.
+brightness_floor() {
+  local device
+  device=$(omarchy-hw-display 2>/dev/null)
+  sleep 0.3
+  [[ -n $device ]] || return 0
+  [[ $(brightnessctl -d "$device" get 2>/dev/null || echo 1) -gt 0 ]] || brightnessctl -q -d "$device" set 40%
+}
+
 # Light the locked display: first the lock's own wake, as a touch on the lock
 # screen would, so its blank timer runs again (patches/omarchy/0009), then the
 # display itself, because on tegu that wake reports ok without powering the
@@ -103,11 +113,7 @@ wake_locked() {
   # without powering the panel back on, so always turn the display on too.
   omarchy-shell lock wake >/dev/null 2>&1
   omarchy-brightness-display on
-  local device
-  device=$(omarchy-hw-display 2>/dev/null)
-  sleep 0.3
-  [[ -n $device ]] || return 0
-  [[ $(brightnessctl -d "$device" get 2>/dev/null || echo 1) -gt 0 ]] || brightnessctl -q -d "$device" set 40%
+  brightness_floor
 }
 
 # Light an unlocked but dark display (the lock didn't engage, or the panel
@@ -115,12 +121,7 @@ wake_locked() {
 # panel.
 wake_unlocked() {
   omarchy-brightness-display on
-  local device
-  device=$(omarchy-hw-display 2>/dev/null)
-  sleep 0.3
-  if [[ -n $device ]]; then
-    [[ $(brightnessctl -d "$device" get 2>/dev/null || echo 1) -gt 0 ]] || brightnessctl -q -d "$device" set 40%
-  fi
+  brightness_floor
 }
 
 # The panel is off when its backlight's bl_power says so (4), or when Hyprland
@@ -381,7 +382,16 @@ case "${1:-}" in
     # screen wakes; the lock ignores touches while dark (patches/omarchy/0029),
     # so this is the double tap's only wake, and it lights the panel too.
     screen_off || exit 0
-    if locked; then wake_locked; else wake_unlocked; fi
+    # Lighting the display is the slow part (about 0.25 s of modeset, then the
+    # panel's own 0.13 s on the Pixel 8 Pro), and the lock's wake and the
+    # locked check (about 0.1 s each, calls into the shell) don't depend on
+    # it: start the display first and run them beside it, then put the
+    # brightness floor back once both are done.
+    omarchy-brightness-display on &
+    panel=$!
+    if locked; then omarchy-shell lock wake >/dev/null 2>&1; fi
+    wait "$panel"
+    brightness_floor
     ;;
   dark-unlocked)
     # omamobile-doubletap: the screen went dark while unlocked (an idle
