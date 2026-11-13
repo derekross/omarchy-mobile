@@ -28,6 +28,8 @@ BorderSurface {
   property bool available: true
   property bool busy: false
   property bool details: false
+  // The chevron opens the page even while the tile can't toggle.
+  property bool detailsUnavailable: false
   property bool longPress: false
 
   property color foreground: Commons.Color.popups.text
@@ -119,10 +121,12 @@ BorderSurface {
   }
 
   // The chevron sits above the toggle's TapHandler and takes its own presses.
+  // It is dimmed and disabled with the tile, except for a tile whose page is
+  // where it is turned back on (detailsUnavailable: a modem switched off).
   Item {
     id: chevron
     visible: root.details
-    opacity: root._dim
+    opacity: root.detailsUnavailable ? 1 : root._dim
     anchors.top: parent.top
     anchors.bottom: parent.bottom
     anchors.right: parent.right
@@ -156,7 +160,7 @@ BorderSurface {
     MouseArea {
       id: chevronTouch
       anchors.fill: parent
-      enabled: root.available
+      enabled: root.available || root.detailsUnavailable
       cursorShape: Qt.PointingHandCursor
       onClicked: root.detailsRequested()
     }

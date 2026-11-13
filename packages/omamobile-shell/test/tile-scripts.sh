@@ -138,6 +138,30 @@ expect "$out" "data_status=Off after a hang or reset" "the start script's reason
 printf '%s\n' "$(printf 'x%.0s' $(seq 60))" > "$tmp/state/refused"
 out=$(no_modem)
 expect "$out" "data_status=$(printf 'x%.0s' $(seq 48))" "the reason is cut to 48 characters"
+# The modem switched off for this boot on the Mobile network page: still
+# no modem for the tile, but data_switch=off keeps the chevron to the page
+# that turns it back on, and the status says so. A switch that reports the
+# modem running, not available, or nothing readable adds nothing.
+rm -f "$tmp/state/refused"
+mkdir -p "$tmp/switch"
+switch_says() { printf '#!/bin/sh\necho %s\n' "'$1'" > "$tmp/switch/omamobile-modem-switch"; chmod +x "$tmp/switch/omamobile-modem-switch"; }
+switched() { env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" OMAMOBILE_SIT_STATE="$tmp/state/missing.json" \
+  OMAMOBILE_MODEM_REFUSED="$tmp/state/refused" OMAMOBILE_MODEM_SWITCH="$tmp/switch/omamobile-modem-switch" \
+  PATH="$fake:$basic" sh "$dir/tile-state.sh"; }
+switch_says '{"available": true, "enabled": false, "running": false, "started": false}'
+out=$(switched)
+expect "$out" "data=none" "a modem switched off is still no modem for the tile"
+expect "$out" "data_switch=off" "a modem switched off keeps the page's chevron"
+expect "$out" "data_status=Modem off" "a modem switched off says so"
+printf 'Off after a hang or reset\n' > "$tmp/state/refused"
+out=$(switched)
+expect "$out" "data_status=Off after a hang or reset" "a refused start's reason wins over the switch's"
+rm -f "$tmp/state/refused"
+for says in '{"available": true, "running": true}' '{"available": false, "running": false}' 'not json'; do
+  switch_says "$says"
+  out=$(switched)
+  [[ $(grep -c '^data_' <<<"$out") -eq 0 ]] || fail "the switch saying $says adds nothing (got: $(tr '\n' ' ' <<<"$out"))"
+done
 : > "$tmp/state/refused"
 out=$(no_modem)
 [[ $(grep -c '^data_' <<<"$out") -eq 0 ]] || fail "an empty reason file prints no status (got: $(tr '\n' ' ' <<<"$out"))"

@@ -24,6 +24,10 @@
 #                 the modem this boot (a stale marker from a hang, a phone
 #                 not yet provisioned), so the tile can say why
 #   data_signal   the signal, 0-100, while registered; -1 otherwise
+#   data_switch   off when the modem's switch (omamobile-modem-switch, the
+#                 Mobile network page) has the modem off for this boot: the
+#                 tile stays dimmed but keeps its chevron, so the page that
+#                 turns it back on can be reached; absent otherwise
 #   dictation     voxtype: on while recording, busy while transcribing, off
 #                 when idle; down when its user service isn't running, none
 #                 without voxtype (in the root image; Remove > Dictation
@@ -140,8 +144,24 @@ print("data_status=" + " ".join(words))
 else
   echo "data=none"
   refused=${OMAMOBILE_MODEM_REFUSED:-/run/omamobile/modem-refused}
+  why=
   if [ -r "$refused" ]; then
     why=$(head -n1 "$refused" 2>/dev/null | head -c 48)
-    if [ -n "$why" ]; then echo "data_status=$why"; fi
   fi
+  # A modem the owner switched off is not "no modem": its page has the
+  # switch that turns it back on, so the tile keeps its chevron.
+  switch=${OMAMOBILE_MODEM_SWITCH:-/usr/lib/omamobile-vendor/omamobile-modem-switch}
+  if [ -x "$switch" ] && have python3 &&
+     "$switch" status 2>/dev/null | python3 -I -c '
+import json, sys
+try:
+    s = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+sys.exit(0 if isinstance(s, dict) and s.get("available") and not s.get("running") else 1)
+'; then
+    echo "data_switch=off"
+    [ -n "$why" ] || why="Modem off"
+  fi
+  if [ -n "$why" ]; then echo "data_status=$why"; fi
 fi

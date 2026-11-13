@@ -78,6 +78,13 @@ Item {
     else root.close()
   }
 
+  // Back, as on the Wi-Fi and Bluetooth pages: this page closes and quick
+  // settings, which it was opened from, comes back.
+  function goBack() {
+    dismiss()
+    Quickshell.execDetached(["omarchy-shell", "shell", "summon", "omamobile.quicksettings", "{}"])
+  }
+
   // `shell call omamobile.mobilenetwork snapshot ''`: what the page shows
   // (no numbers or SIM identifiers exist in it).
   function snapshot() {
@@ -222,7 +229,7 @@ Item {
       padding: root.pad
 
       focus: root.opened
-      Keys.onEscapePressed: root.dismiss()
+      Keys.onEscapePressed: root.goBack()
 
       MouseArea { anchors.fill: parent }
 
@@ -240,8 +247,18 @@ Item {
           anchors.right: parent.right
           height: root.touchSize
 
-          Text {
+          GlyphTap {
+            id: backButton
+            objectName: "mobileNetworkBack"
             anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            glyph: "󰁍"
+            onTapped: root.goBack()
+          }
+
+          Text {
+            anchors.left: backButton.right
+            anchors.leftMargin: Style.spacing.lg
             anchors.right: closeButton.left
             anchors.verticalCenter: parent.verticalCenter
             textFormat: Text.PlainText
@@ -293,9 +310,12 @@ Item {
                 font.pixelSize: Style.font.iconLarge * 1.5
               }
 
+              // Centred on the glyph while it is the taller of the two; a
+              // title and body taller than the glyph start at the top, not
+              // above it, where the list clips them.
               Column {
                 width: parent.width - bigGlyph.width - parent.spacing
-                anchors.verticalCenter: bigGlyph.verticalCenter
+                y: Math.max(0, (bigGlyph.height - height) / 2)
                 Text {
                   width: parent.width
                   objectName: "mobileNetworkTitle"
