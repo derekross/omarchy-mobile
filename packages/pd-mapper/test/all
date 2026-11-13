@@ -1,0 +1,10 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+bash -n PKGBUILD
+grep -q 'pkgdesc="Qualcomm service registry and protection domain mapper"' PKGBUILD
+grep -q '^depends=(qrtr xz)$' PKGBUILD
+grep -q 'linux-msm/pd-mapper/tree/v1.1' PKGBUILD
+! grep -Eq '^(conflicts|groups)=' PKGBUILD
+echo 'ok - pd-mapper description, dependencies and provenance'

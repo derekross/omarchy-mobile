@@ -1,0 +1,11 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+bash -n PKGBUILD
+grep -q 'linux-msm/rmtfs/tree/v1.2' PKGBUILD
+grep -q '^depends=(qrtr libudev.so)$' PKGBUILD
+grep -q '^# SPDX-License-Identifier: 0BSD$' udev.rules
+[[ $(sha256sum udev.rules | cut -d' ' -f1) == b329490952eca456fcbfb3c3ca6b82850310f64fd63a6de25d4c56f091d5cea3 ]]
+! grep -Eq '^(conflicts|groups|makedepends)=' PKGBUILD
+echo 'ok - rmtfs provenance, dependencies and udev rule license'
