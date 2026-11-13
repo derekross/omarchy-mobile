@@ -343,6 +343,7 @@ def real_package(t):
         root45, _ = make_root("real45-about", os.path.join(ex, ".MTREE"))
         rc, out = run(root45, "apply", series=selected_series)
         ok(rc == 0, "real4.5: the series applies to a second root (%s)" % out.strip().splitlines()[-1])
+        show_logo(t, root45, centred=True)
         about_layout(t, root45, tools=os.path.join(root45, "usr/bin"))
         return
 
@@ -783,11 +784,12 @@ def screensaver_launcher(t, launcher):
     ok(osk() == "true" and not os.path.exists(marker), "0006: a launcher stopped by a signal turns the keyboard back on")
 
 
-def show_logo(t, root):
+def show_logo(t, root, centred=False):
     """Patch 0028: omarchy-show-logo in terminals of several widths (script(1)
     gives it one): the wide logo where it fits, the stacked one where only
     that fits, none below, and the wide one with no terminal at all.
-    logo.txt is omarchy-settings', so an 81-column stand-in here."""
+    logo.txt is omarchy-settings', so an 81-column stand-in here. The 4.5
+    family centres the stacked logo; the 4.0.6 one leaves it at the left."""
     narrow = os.path.join(root, "usr/share/omarchy/logo-narrow.txt")
     ok(os.path.isfile(narrow), "0028: logo-narrow.txt is created")
     widest = max(len(l) for l in open(narrow, encoding="utf-8").read().splitlines())
@@ -795,7 +797,7 @@ def show_logo(t, root):
     if not shutil.which("script"):
         print("ok - 0028: the logo by terminal width # SKIP no script(1)")
         return
-    path = os.path.join(t, "logo-path")
+    path = os.path.join(t, "logo-path-centred" if centred else "logo-path")
     os.makedirs(path)
     shutil.copy(narrow, path)
     with open(os.path.join(path, "logo.txt"), "w", encoding="utf-8") as f:
@@ -812,6 +814,22 @@ def show_logo(t, root):
     ok(lines(120) == (9, 81) and lines(81) == (9, 81), "0028: a terminal as wide as the logo shows it as before")
     ok(lines(80)[0] == 17 and lines(66)[0] == 17 and lines(48)[0] == 17, "0028: a narrower one shows it stacked")
     ok(lines(47)[0] == 0, "0028: one too narrow for that shows none, not a wrapped one")
+
+    def margins(cols):
+        """The columns left free on each side of the logo's widest rows."""
+        cmd = "stty cols %d rows 40; bash %s" % (cols, show)
+        out = subprocess.run(["script", "-qec", cmd, "/dev/null"], env={"PATH": "/usr/bin:/bin", "OMARCHY_PATH": path,
+                             "TERM": "xterm"}, stdin=subprocess.DEVNULL, capture_output=True, timeout=20).stdout
+        rows = [l for l in out.decode("utf-8", "replace").replace("\r", "").split("\n") if "█" in l]
+        left = min(len(l) - len(l.lstrip(" ")) for l in rows)
+        return left, cols - max(len(l.rstrip()) for l in rows)
+
+    if centred:
+        ok(margins(66) == (9, 9) and margins(49) == (0, 1) and margins(48) == (0, 0),
+           "0028: the stacked logo is centred in the terminal (%s at 66 columns)" % (margins(66),))
+    else:
+        ok(margins(66) == (0, 18), "0028 (4.0.6): the stacked logo is at the left, as before")
+    ok(margins(120)[0] == 0, "0028: the wide logo stays where Omarchy puts it")
     out = subprocess.run(["setsid", "-w", "bash", show], env={"PATH": "/usr/bin:/bin", "OMARCHY_PATH": path},
                          stdin=subprocess.DEVNULL, capture_output=True, timeout=20).stdout
     ok(out.decode("utf-8", "replace").count("█" * 81) == 9, "0028: no terminal: the wide logo, as before")
