@@ -22,16 +22,18 @@ checks that exactly the four sectors change.
 Without --write it only prints the plan (read-only). With --write, after the
 human types the confirmation on stdin, it saves the four old and the four new
 sectors on the laptop with a SHA256SUMS (~/android/reference/<device>/
-mark-slot-b-<lun>/, off the repository: they hold the disk's GUID), re-reads the four sectors (they must
-not have changed since the check), then writes the primary entry sector and
-header, reads them back from the disk (O_DIRECT), then the backup pair, and
-removes the node. Each sector is copied to a file in the private directory and
+mark-slot-b-<lun>/, off the repository: they hold the disk's GUID; an earlier
+set is kept under a dated name), re-reads the four sectors (they must not have
+changed since the check), then writes the primary entry sector and header,
+reads them back from the disk (O_DIRECT), then the backup pair, and removes
+the node. Each sector is copied to a file in the private directory and
 its SHA-256 checked on the phone before dd writes it from that file.
 
 A --write cut off part way leaves each of the four sectors old or new. The next
 run recognises that against the saved sectors and offers, under the typed
 confirmation, to finish the write ('mark PART') or put the old sectors back
-('restore PART'), in the same order and with the same checks.
+('restore PART'), with the same checks. A copy with one sector old and one new
+is written first, so a valid copy is never touched while it is the only one.
 
 By hand, once per install of slot B's boot image, never from a service or at
 boot (AGENTS.md §1). The rollback for a corrupted GPT is the device's NOTES.
@@ -44,6 +46,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import time
 import zlib
 
 SUCCESSFUL, ACTIVE, UNBOOTABLE = 54, 50, 55
@@ -79,16 +82,21 @@ def descriptor(path):
 class Phone:
     def __init__(self, ssh, lun):
         self.ssh, self.lun = ssh, lun
+        self.writing = False
 
     def run(self, script, data=None):
+        # stdin only for the sector itself: ssh would swallow a piped confirmation
+        io = {"input": data} if data is not None else {"stdin": subprocess.DEVNULL}
         r = subprocess.run([self.ssh, "sh -c '%s' sh %s" % ((NODE + script).replace("'", "'\\''"), self.lun)],
-                           input=data, stdout=subprocess.PIPE)
+                           stdout=subprocess.PIPE, **io)
         if r.returncode:
-            die("phone command failed (exit %d)" % r.returncode)
+            die("phone command failed (exit %d)" % r.returncode + (
+                "\nmark-slot-b: the write may have stopped part way: don't restart the phone;"
+                " run this tool again to finish the write or put the old sectors back" if self.writing else ""))
         return r.stdout
 
     def text(self, cmd):
-        r = subprocess.run([self.ssh, cmd], stdout=subprocess.PIPE, text=True)
+        r = subprocess.run([self.ssh, cmd], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
         if r.returncode:
             die("cannot run on the phone: " + cmd)
         return r.stdout.strip()
@@ -219,7 +227,13 @@ def save(path, out, ss):
         with open(os.open(os.path.join(tmp, name), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
             f.write(data)
             os.fsync(f.fileno())
-    shutil.rmtree(path, ignore_errors=True)
+    if os.path.exists(path):
+        # the only copies of those old sectors: keep them under a dated name
+        old = path + "." + time.strftime("%Y-%m-%dT%H%M%SZ", time.gmtime())
+        n = 1
+        while os.path.exists(old + ("-%d" % n) * (n > 1)):
+            n += 1
+        os.rename(path, old + ("-%d" % n) * (n > 1))
     os.rename(tmp, path)
     fd = os.open(os.path.dirname(path), os.O_RDONLY)
     os.fsync(fd)
@@ -231,10 +245,15 @@ def save(path, out, ss):
 
 def apply(ph, cur, target, want, ss, path):
     """Write target over cur: the primary pair (entries, then header), then the backup
-    pair, each pair read back from the disk. Sectors already right are not rewritten."""
+    pair (a pair with one sector old and one new goes first), each pair read back from
+    the disk. Sectors already right are not rewritten."""
     if any(ph.read(lba, 1, ss) != cur[lba] for lba in want):
         die("the GPT changed since it was checked; nothing written")
-    for pair in ((want[1], want[0]), (want[2], want[3])):
+    ph.writing = True
+    pairs = [(want[1], want[0]), (want[2], want[3])]
+    # a copy with one sector old and one new is already invalid: make it whole first
+    pairs.sort(key=lambda pr: len({cur[l] == target[l] for l in pr}) == 1)
+    for pair in pairs:
         for lba in pair:
             if cur[lba] != target[lba]:
                 ph.write(lba, target[lba], ss)

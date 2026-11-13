@@ -3,7 +3,8 @@
 # tools/mark-slot-b against a synthetic GPT with 4096-byte sectors behind a
 # fake phone-ssh: the dry run writes nothing, --write sets bit 54 on boot_b
 # alone and changes exactly the four named sectors in order, a --write cut off
-# at any sector can be finished or undone, and every refusal holds.
+# at any sector can be finished or undone, a valid GPT copy survives every
+# single write, and every refusal holds.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 command -v sfdisk >/dev/null || { echo "ok - # skip: no sfdisk for tests/mark-slot-b"; exit 0; }
@@ -48,6 +49,14 @@ elif [[ $c == *'if="$n"'* ]]; then
 fi
 # CUT=1 cuts every write's transfer short, as a dropped SSH link would
 [[ -n ${CUT:-} && $c == *'cat > '* ]] && { head -c 100 | PATH="$T/bin:$PATH" sh -c "$c"; exit; }
+# A call that sends no data reads its stdin all the same, as the real
+# phone-ssh would, and would swallow a piped confirmation
+[[ $c == *'cat > '* || -t 0 ]] || cat > /dev/null
+# SNAP=DIR keeps a copy of the disk after every write
+if [[ -n ${SNAP:-} && $c == *'of="$n"'* ]]; then
+  rc=0; PATH="$T/bin:$PATH" sh -c "$c" || rc=$?
+  cp "$T/disk.img" "$SNAP/$w"; exit $rc
+fi
 PATH="$T/bin:$PATH" exec sh -c "$c"
 EOF
 chmod +x "$t/ssh" "$t/bin/mknod"
@@ -96,9 +105,13 @@ grep 'dd of=' "$t/log" | grep -vc 'dd if="$d/sector" of="$n"' >/dev/null && fail
 grep -q "boot_b marked successful" "$t/out" || fail "--write does not report the mark"
 order=$(grep -o 'of="$n" bs=4096 seek=[0-9]*' "$t/log" | sed 's/.*seek=//' | xargs)
 grep 'if="$n"' "$t/log" | grep -vc 'iflag=direct' >/dev/null && fail "a disk read goes through the page cache, not O_DIRECT"
+grep 'of="$n"' "$t/log" | grep -vc 'conv=notrunc,fsync' >/dev/null && fail "a disk write is not synced (conv=notrunc,fsync)"
 [[ $order == "$b $a $c $d" ]] || fail "--write wrote LBA '$order', not primary entries, primary header, backup entries, backup header ($b $a $c $d)"
 [[ $(stat -c %a "$saved") == 700 && $(ls "$saved" | wc -l) == 9 ]] && (cd "$saved" && sha256sum --quiet -c SHA256SUMS) || fail "the old and new sectors were not saved privately"
 cmp -s "$saved/$b.old" <(dd if="$t/disk.orig" bs=4096 skip="$b" count=1 status=none) || fail "the saved old sector is not the disk's"
+# the cut transfer above saved a set first: it is kept under a dated name
+earlier=("$saved".*)
+[[ -d ${earlier[0]} ]] && (cd "${earlier[0]}" && sha256sum --quiet -c SHA256SUMS) || fail "an earlier saved set was not kept"
 [[ -z $(ls -A "$t/run") ]] || fail "the private node was left behind after --write"
 changed=$(cmp -l "$t/disk.orig" "$t/disk.img" | awk '{print int(($1 - 1) / 4096)}' | sort -nu | xargs)
 [[ $changed == "$lbas" ]] || fail "--write changed sectors '$changed', not '$lbas'"
@@ -116,6 +129,7 @@ for at in 2 3 4; do
   for how in mark restore; do
     cp "$t/disk.orig" "$t/disk.img"; fresh
     echo "mark boot_b" | FAIL_AT=$at mark --write > "$t/out" 2>&1 && fail "--write cut off at sector $at says it worked"
+    grep -q "don't restart the phone; run this tool again" "$t/out" || { cat "$t/out"; fail "cut off at sector $at: no word not to restart the phone"; }
     fresh
     mark > "$t/out" 2>&1 || { cat "$t/out"; fail "cut off at sector $at: the next run refuses the table"; }
     grep -q "an interrupted --write left" "$t/out" || { cat "$t/out"; fail "cut off at sector $at: not recognised"; }
@@ -124,6 +138,39 @@ for at in 2 3 4; do
     echo "$how boot_b" | mark --write > "$t/out" 2>&1 || { cat "$t/out"; fail "cut off at sector $at: $how fails"; }
     want=$t/disk.marked; [[ $how == restore ]] && want=$t/disk.orig
     cmp -s "$t/disk.img" "$want" || fail "cut off at sector $at: $how did not give the $how table"
+  done
+done
+
+# From each of the 14 mixes of old and new sectors, a finish and a restore
+# leave at least one copy with a valid header CRC and entry-array CRC after
+# every single write
+mkdir "$t/snap"
+for mix in $(seq 1 14); do
+  for how in mark restore; do
+    cp "$t/disk.orig" "$t/disk.img"; i=0
+    for lba in $lbas; do
+      (( mix >> i & 1 )) && dd if="$t/disk.marked" of="$t/disk.img" bs=4096 skip="$lba" seek="$lba" count=1 conv=notrunc status=none
+      i=$((i + 1))
+    done
+    fresh; rm -f "$t/snap"/*
+    echo "$how boot_b" | SNAP=$t/snap mark --write > "$t/out" 2>&1 || { cat "$t/out"; fail "mix $mix: $how fails"; }
+    want=$t/disk.marked; [[ $how == restore ]] && want=$t/disk.orig
+    cmp -s "$t/disk.img" "$want" || fail "mix $mix: $how did not give the $how table"
+    /usr/bin/python3 - "$a" "$d" "$t/snap"/* <<'EOF' || fail "mix $mix: $how left no valid copy after a write"
+import struct, sys, zlib
+def valid(img, lba):
+    img.seek(lba * 4096); h = img.read(4096)
+    size, crc = struct.unpack_from("<II", h, 12)
+    ent, num, esize, ecrc = struct.unpack_from("<QIII", h, 72)
+    if h[:8] != b"EFI PART" or zlib.crc32(h[:16] + bytes(4) + h[20:size]) != crc:
+        return False
+    img.seek(ent * 4096)
+    return zlib.crc32(img.read(num * esize)) == ecrc
+for snap in sys.argv[3:]:
+    with open(snap, "rb") as img:
+        if not any(valid(img, int(lba)) for lba in sys.argv[1:3]):
+            sys.exit("no valid copy after write " + snap.rsplit("/", 1)[1])
+EOF
   done
 done
 
@@ -216,6 +263,8 @@ refuses() { mark > "$t/out" 2>&1 && fail "takes $2"; grep -q "$1" "$t/out" || { 
 cp "$t/disk.orig" "$t/disk.img"
 hdr_set "$a" 32 $((d - 1)); refuses "headers do not describe each other" "a primary header pointing elsewhere"
 flip $((a * 4096 + 60)); refuses "LBA $a: header CRC does not match" "a bad primary header CRC"
+hdr_set "$a" 24 $((a + 1)); refuses "LBA $a: unexpected header (my LBA $((a + 1))" "a primary header that names another LBA as its own"
+hdr_set "$d" 24 $((d - 1)); refuses "LBA $d: unexpected header (my LBA $((d - 1))" "a backup header that names another LBA as its own"
 flip $((d * 4096 + 60)); refuses "LBA $d: header CRC does not match" "a bad backup header CRC"
 flip $((b * 4096 + 100)); flip $((c * 4096 + 100)); refuses "entry-array CRC does not match" "a bad entry-array CRC"
 sfdisk -q --sector-size 4096 --part-label "$t/disk.img" 40 boot_b
@@ -231,4 +280,4 @@ printf 'CODENAME=probe\n' > "$t/repo/device/probe/device.conf"
 mark > "$t/out" 2>&1 && fail "runs without a §3.1 entry"
 grep -q "no CONTRIBUTING §3.1 entry" "$t/out" || fail "missing entry refused for the wrong reason"
 
-echo "ok - mark-slot-b: phone check, dry run, confirmation, checked sector files, bit 54 on boot_b in exactly LBA ${lbas// /,} in order, saved sectors, finish or restore after a cut at each sector, and its refusals"
+echo "ok - mark-slot-b: phone check, dry run, confirmation, checked sector files, bit 54 on boot_b in exactly LBA ${lbas// /,} in order, saved sectors, finish or restore after a cut at each sector, a valid copy after every write from each of the 14 mixed states, and its refusals"
