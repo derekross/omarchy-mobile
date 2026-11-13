@@ -72,6 +72,14 @@ function view(s) {
   if (!s.installed)
     return { state: "none", title: "No modem", body: "This phone's modem software isn't installed." }
   var modem = modemSwitch(s.modem)
+  // Switched on, and the modem or its phone service still coming up: say
+  // so, rather than the off text, until the service reports (about two
+  // minutes from the switch, as at boot).
+  var m = s.modem || {}
+  if (!s.running && modem.shown && modem.on && m.provisioned && (m.running || !m.started))
+    return { state: "off", title: "Starting the modem",
+             body: "Registering with the network. This takes a minute or two.",
+             modem: modem }
   if (!s.running)
     return { state: "off", title: "Mobile network is off",
              body: modem.shown && !modem.on

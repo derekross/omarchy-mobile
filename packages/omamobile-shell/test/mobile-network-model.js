@@ -105,6 +105,25 @@ test("attach APN: same as internet, or the carrier's", () => {
   assert.strictEqual(M.view(ready({ apn: { attach_configured: "ims", attach_in_use: "ims", attach_source: "manual" } })).attachConfigured, "ims")
 })
 
+test("modem switched on: the page says it is starting until the phone service reports", () => {
+  const base = { installed: true, running: false }
+  const sw = (m) => Object.assign({ available: true, enabled: true, provisioned: true, sleep_blocked: true, restart_needed: false }, m)
+  // Just switched on: the modem unit runs, the phone service doesn't yet
+  let v = M.view(Object.assign({}, base, { modem: sw({ running: true, started: true }) }))
+  assert.strictEqual(v.title, "Starting the modem")
+  // Switched on, the start not yet begun
+  v = M.view(Object.assign({}, base, { modem: sw({ running: false, started: false }) }))
+  assert.strictEqual(v.title, "Starting the modem")
+  // On, but the modem started and stopped this boot: not starting, the off text
+  v = M.view(Object.assign({}, base, { modem: sw({ running: false, started: true }) }))
+  assert.strictEqual(v.title, "Mobile network is off")
+  // Switched off, and not set up: the off texts as before
+  v = M.view(Object.assign({}, base, { modem: sw({ enabled: false, running: false, started: false, sleep_blocked: false }) }))
+  assert.strictEqual(v.body, "The modem is turned off.")
+  v = M.view(Object.assign({}, base, { modem: sw({ provisioned: false, running: false, started: false }) }))
+  assert.strictEqual(v.title, "Mobile network is off")
+})
+
 let failed = 0
 for (const [name, fn] of tests) {
   try { fn(); console.log("ok - " + name) } catch (e) { failed++; console.log("not ok - " + name + "\n  " + e.message) }
