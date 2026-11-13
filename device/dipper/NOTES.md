@@ -322,3 +322,23 @@ The upstream v8 cover letter states it was tested on Xiaomi Mi 8:
 [controller-ready fix](https://lists.openwall.net/linux-kernel/2026/09/25/2214),
 [binding update](https://lists.openwall.net/linux-kernel/2026/09/25/2212).
 Firmware loading, low-power touch and wake-on-touch/AP-SLPI handoff are not implemented.
+
+## 2026-11-13 — Mesa Freedreno renderer check
+
+The Mesa 1.5 package was extracted to tmpfs in the phone's pre-existing
+userdata Linux root and tested from a console login with `eglinfo -p gbm`.
+OpenGL core, compatibility and ES reported `freedreno` / `FD630`;
+`LD_DEBUG=libs` confirmed this package's `libgallium` and `dri_gbm.so` were
+loaded. This was not a Hyprland test and the package was not installed to the
+root. The archive SHA-256 was
+`6122aec6efa24194c5dca9733fd8a8936d92e8c99058f9c96d7cb0eb83b8a7fc`.
+
+The installed package database identified `mesa 1:26.2.4-1.5`; retained build
+metadata ties its PKGBUILD checksum to Mesa commit
+`83aa88ec413644dfc2336e6d09ee0a06481edd01`. `a630_sqe.fw` was owned by
+`linux-firmware-qcom 20260916-1`; `a630_zap.mbn` came from this phone's own
+vendor firmware. The exact `eglinfo` output, `phone-smoke --json`, kernel
+release, boot-image hash and kernel source revision for this console session
+were not retained. The available contemporaneous smoke summary says the GPU
+render node and display passed, while the session check reported Hyprland and
+the shell were not running. Do not describe this as a Hyprland renderer test.
