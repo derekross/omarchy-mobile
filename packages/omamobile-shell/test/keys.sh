@@ -70,7 +70,7 @@ STUB
 for tool in omarchy-brightness-display omarchy-system-lock omarchy-shell brightnessctl; do
   cat >"$t/bin/$tool" <<STUB
 #!/bin/bash
-[[ "$tool \$*" == "omarchy-shell lock isLocked" ]] && { cat "$t/locked"; exit 0; }
+[[ "$tool \$*" == "omarchy-shell lock isLocked" ]] && { [[ -f "$t/slow-locked" ]] && sleep 0.1; cat "$t/locked"; exit 0; }
 [[ "$tool \$*" == "omarchy-shell lock status" ]] && { printf '{"locked":true,"secure":%s}\n' "\$(cat "$t/secure")"; exit 0; }
 echo "$tool \$*" >>"$log"
 STUB
@@ -195,6 +195,27 @@ for locked in true false; do
 done
 grep -qE "omarchy-system-lock|lock dark|omamobile-sleepd" "$log" && fail "a double tap never locks or sleeps"
 [[ ! -e $t/run/omamobile-keys/power-wake ]] || fail "a double tap doesn't swallow the next power press"
+# The double tap lights the display first and runs the lock's wake beside it (the display's
+# modeset is the slow part): with a display that takes 0.4 s, "lock wake" must be logged
+# between the display's start and its end, and the handler must still wait for the display.
+mkdir -p "$t/orig2"; cp "$t/bin/omarchy-brightness-display" "$t/orig2/"
+cat >"$t/bin/omarchy-brightness-display" <<STUB
+#!/bin/bash
+echo "omarchy-brightness-display \$* start" >>"$log"
+sleep 0.4
+echo "omarchy-brightness-display \$* done" >>"$log"
+STUB
+chmod +x "$t/bin/omarchy-brightness-display"
+echo true >"$t/locked"; echo false >"$t/dpms"; : >"$t/slow-locked"   # the locked check takes 0.1 s, as on the phone: the display must not wait for it
+tap2
+before "omarchy-brightness-display on start" "omarchy-shell lock wake" || fail "double tap: the display starts before the lock's wake"
+before "omarchy-shell lock wake" "omarchy-brightness-display on done" || fail "double tap: the lock's wake runs beside the display, not after it"
+grep -q "omarchy-brightness-display on done" "$log" || fail "double tap: the handler waits for the display to come on"
+echo false >"$t/locked"; echo false >"$t/dpms"
+tap2
+grep -q "omarchy-brightness-display on done" "$log" || fail "double tap, unlocked: the handler waits for the display"
+grep -q "omarchy-shell lock wake" "$log" && fail "double tap, unlocked: still no lock wake"
+rm -f "$t/slow-locked"; cp "$t/orig2/omarchy-brightness-display" "$t/bin/"
 echo "ok - double tap: wakes a dark screen, locked or not, and leaves a lit one alone"
 
 # The screen gone dark while unlocked (omamobile-doubletap tells): it locks,
