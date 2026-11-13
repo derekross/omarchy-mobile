@@ -7,10 +7,11 @@
 #   /modules  the kernel modules tarball (read-only)
 #   /target   an empty volume: the root file system is assembled here
 #   /out      where the raw image and the MANIFEST go
-# Environment: VERSION, DEVICE, DEVICE_PACKAGE, ROOTFS_PACKAGES and
-# ALLOW_MISSING (both space-separated), KERNEL_PACKAGE (1: the device
-# package ships boot files, so linux-omamobile and omamobile-boot-update go
-# in and the package's modules replace the tarball), KERNEL_RELEASE, MODULES_SHA256,
+# Environment: VERSION, DEVICE, DEVICE_PACKAGE, ROOTFS_PACKAGES,
+# ROOTFS_DIST_PACKAGES (space-separated), ALLOW_MISSING (space-separated) and
+# KERNEL_PACKAGE (1: device package ships boot files, so linux-omamobile
+# and omamobile-boot-update go in and the package modules replace the tarball),
+# KERNEL_RELEASE, MODULES_SHA256,
 # GIT_COMMIT, ALARM_SHA256, OMARCHY_CHANNEL, CHANNEL ([omamobile]: stable,
 # development or local).
 set -euo pipefail
@@ -39,6 +40,7 @@ pacman -Sy >/dev/null
 source /src/rootfs/resolve.sh
 
 mapfile -t base < <(list /src/rootfs/packages.base)
+read -ra distro <<<"${ROOTFS_DIST_PACKAGES:-}"
 mapfile -t ours < <(list /src/rootfs/packages.omamobile)
 ours+=("$DEVICE_PACKAGE")
 read -ra board <<<"${ROOTFS_PACKAGES:-}"
@@ -48,10 +50,14 @@ ours+=("${board[@]}")
 # so pacstrap's run of it leaves everything alone)
 [[ ${KERNEL_PACKAGE:-0} != 1 ]] || ours+=(omamobile-boot-update linux-omamobile)
 missing=() skipped_ours=()
-resolve_all "${base[@]}"
+resolve_all "${base[@]}" "${distro[@]}"
 ((${#absent_pkgs[@]} == 0)) || printf 'error: not in any repository: %s\n' "${absent_pkgs[*]}" >&2
 ((${#unmet_pkgs[@]} == 0)) || printf 'error: in a repository, but pacman cannot meet their dependencies: %s\n%s\n' "${unmet_pkgs[*]}" "$unmet_why" >&2
 ((${#absent_pkgs[@]} + ${#unmet_pkgs[@]} == 0)) || exit 1
+for p in "${distro[@]}"; do
+  repo=$(pacman -Sp -dd --print-format %r "$p" 2>/dev/null | tail -1 || true)
+  [[ $repo != omamobile ]] || die "$p is an Omarchy Mobile package; list it in ROOTFS_PACKAGES instead"
+done
 # Every package of ours must come from [omamobile], not a same-named one
 # elsewhere (Mesa, Hyprland, libcamera are in Arch Linux ARM and [omarchy]
 # too). One allowed to be missing is left to whatever depends on it.
@@ -78,7 +84,7 @@ if [[ ${KERNEL_PACKAGE:-0} == 1 && " ${ours_present[*]} " != *" linux-omamobile 
 fi
 
 say "Base system and Omarchy (${#base[@]} packages)"
-pacstrap -C /etc/pacman.conf -c -M "$T" "${base[@]}" >/var/log/pacstrap-base.log 2>&1 || { tail -40 /var/log/pacstrap-base.log; die "pacstrap failed"; }
+pacstrap -C /etc/pacman.conf -c -M "$T" "${base[@]}" "${distro[@]}" >/var/log/pacstrap-base.log 2>&1 || { tail -40 /var/log/pacstrap-base.log; die "pacstrap failed"; }
 
 # Omarchy's own list for a plain aarch64 computer (4.5 composes it from
 # several files; rootfs/resolve.sh)
@@ -132,6 +138,7 @@ mv "$ml.new" "$ml" && chmod 644 "$ml"
 [[ $(grep -c '^[[:space:]]*Server' "$ml") == 1 ]] && grep -qxF "Server = $server" "$ml" ||
   die "could not set the [omamobile] channel to $CHANNEL in the mirrorlist"
 echo "    [omamobile] channel: $CHANNEL ($server)"
+echo "    distribution packages: ${ROOTFS_DIST_PACKAGES:-none}"
 # The image's sync databases match its pacman.conf. [omamobile]'s index is
 # the build's own, from file://: kept for the local channel; otherwise
 # dropped, since pacman's If-Modified-Since refresh would keep it while it is
@@ -223,6 +230,7 @@ say "MANIFEST"
   echo "# Omarchy Mobile root image"
   echo "version: $VERSION"
   echo "device: $DEVICE ($DEVICE_PACKAGE${ROOTFS_PACKAGES:+ $ROOTFS_PACKAGES})"
+  echo "distribution packages: ${ROOTFS_DIST_PACKAGES:-none}"
   echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "repository commit: $GIT_COMMIT"
   echo "arch linux arm tarball sha256: $ALARM_SHA256"
