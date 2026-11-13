@@ -1,7 +1,16 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Suspend plan: s2idle first, then SYS_SLEEP (cheetah / gs201)
 
-Status (2026-11-01): **tier 1 userspace on the phone; P0-P4 passed, P5 is
+Status (2026-11-13): **P6 reported done, P8 passed, P7 passed on a kernel
+with linux-omarchy-mobile#233; the DEVICES cell is "testing".** One night
+asleep with the modem off: about 228 mA, roughly 22 h of standby. Double tap
+wakes the phone from s2idle with kernel #248 and #730. Left before "works":
+a kernel release with #233 and #248, auto-sleep on by default (the human's
+call), and sleep with the modem up (kernel #232 lost mobile data after
+refused sleeps on 2026-11-13; MODEM-PLAN M6). Details: "P7, P8 and double
+tap, 2026-11-13" below.
+
+Earlier status (2026-11-01): **tier 1 userspace on the phone; P0-P4 passed, P5 is
 ready to resume.** Auto-sleep works: Power sleeps and wakes, there is no
 lock flash, the fingerprint works after a wake, Wi-Fi stays up, and alarms
 wake the phone; 13 cycles, 0 failures (2026-10-26). P5 stopped that day on
@@ -1709,6 +1718,32 @@ for the boot (`omamobile-modem-boot.target` masked), no sleep block held,
 `spm_lvl` 5, the `omamobile-sleep` toggle on, battery 100 %, the cable out
 overnight. The start is recorded on the phone in
 `/var/lib/omamobile/power/p8-standby-start.txt`.
+
+**P7, P8 and double tap, 2026-11-13** (the reference phone, release
+2026.11.12's install):
+
+- **P8 step 2 (overnight standby): passed.** `7.3.0-rc6-omamobile-g1a9d1d4e9289`,
+  modem off for the boot, `omamobile-sleep` on, cable out. One s2idle sleep
+  from 22:40:19 to 08:32:01 (9 h 52 min), woken by Power; `suspend_stats`
+  success 1, fail 0; no UFS line. Battery 100 % to 54 %, the charge
+  counter down 2250 mAh: about 228 mA asleep, roughly 22 h from full
+  (S7's 312 mA was measured with Wi-Fi kept up; this night the sleep hook
+  unloaded it). Step 1 (the A/B noise check) not run.
+- **P7 again: passed** on `7.3.0-rc6-omamobile-push1-g2db2bc35beec`
+  (`github/omamobile` with #233), with #554's device-cheetah: power off
+  with the cable out stayed off; plugging the off phone in started the
+  charger boot (`androidboot.mode = "charger"`, panel off, the modem, Wi-Fi
+  and AoC off); holding Power there started the phone; a power off on the
+  cable went to the charger boot; unplugging there powered off. The upower
+  drop-in (6.6) can follow once a kernel release carries #233.
+- **Double tap from s2idle: passed** on that kernel plus #248, with
+  `power/wakeup` enabled on the touchscreen: asleep through
+  `omamobile-sleepd`, a double tap woke it on IRQ 98 (`spi0.0`) and lit
+  the lock screen; no desync. Not yet: a day with it on.
+- **Sleep with the modem up (MODEM-PLAN M6, kernel #232, #556): failed**
+  at the refusal step: two sleeps passed, then mobile data stopped after
+  six refused sleeps. The modem keeps its sleep inhibitor until a new
+  #232 passes.
 
 #### P8: standby numbers (risk: low; the human unplugs)
 

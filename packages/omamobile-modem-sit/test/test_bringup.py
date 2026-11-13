@@ -358,6 +358,17 @@ class OrderTests(unittest.TestCase):
         self.assertEqual(order[:6], ['state', 'off', 'attach', 'profiles', 'nr', 'on'])
         self.assertTrue(any('radio state unreadable' in l for l in lines))
 
+    def test_nr_after_radio_on_never_sets_it_with_the_radio_off(self):
+        settings = paths.config('/nonexistent')
+        settings['network']['apn'] = 'internet.example'
+        settings['network']['nr_after_radio_on'] = 'yes'
+        order, lines = self.run_start(0, settings)
+        self.assertEqual(order[:6], ['state', 'attach', 'profiles', 'on', 'nr', 'reg'])
+        self.assertTrue(any('nr_after_radio_on' in l for l in lines))
+        # With the radio already on it is set as before, once.
+        order, _ = self.run_start(1, settings)
+        self.assertEqual(order[:5], ['state', 'attach', 'profiles', 'nr', 'reg'])
+
     def test_nr_on_leaves_the_nr_mode_alone(self):
         settings = paths.config('/nonexistent')
         settings['network']['apn'] = 'internet.example'

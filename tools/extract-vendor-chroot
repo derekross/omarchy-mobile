@@ -296,7 +296,7 @@ done
 # The vendor partition says which device it was built for.
 mkdir -p "$WORK/v"
 debugfs -R "dump /build.prop $(dq "$WORK/v/build.prop")" "$WORK/vendor.img" 2>/dev/null
-[[ -s "$WORK/v/build.prop" ]] || die "vendor.img has no build.prop"
+[[ -s "$WORK/v/build.prop" ]] || die "build.prop can't be read from vendor.img"
 dev=$(sed -n 's/^ro.product.vendor.device=//p' "$WORK/v/build.prop" | head -1)
 [[ "$dev" == "$DEVICE" || -n "$FORCE" ]] ||
   die "vendor partition is for '${dev:-unknown}', not $DEVICE; use -f to override"

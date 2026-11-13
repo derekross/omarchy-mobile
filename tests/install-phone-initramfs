@@ -214,7 +214,9 @@ done
 # still be live).
 held() { # name fd: an install of six waiting at the codename, which fd gives
   mkfifo "$t/$1.fifo" && eval "exec $2<>\"\$t/$1.fifo\""
-  HOLD=$t/$1.fifo OUT=$t/$1.out install six 7>&- 8>&- &
+  # Its output is in OUT; the job's own shell would print bash's "Killed"
+  # notice for the one killed below, which in a passing log reads as a failure
+  HOLD=$t/$1.fifo OUT=$t/$1.out install six 7>&- 8>&- 2>/dev/null &
   for _ in $(seq 600); do grep -c "Type the phone's codename" "$t/$1.out" >/dev/null 2>&1 && return; sleep 0.1; done
   cat "$t/$1.out"; fail "an install waits at the codename prompt"
 }
@@ -225,7 +227,7 @@ live=$!
 held killed 8
 kill -KILL "$(cat "$t/killed.out.pid")"
 exec 8>&-
-{ wait $!; } 2>/dev/null || true
+wait $! || true
 both=$(verify_dirs)
 [[ $(wc -w <<<"$both") == 3 ]] || fail "a second install, killed, leaves its directory and the waiting one's (got: $both)"
 install six --verify-only || { cat "$t/out"; fail "--verify-only passes while an install waits"; }

@@ -98,6 +98,10 @@ make_vendor() {
     printf 'NVRAMRev=%s\n' "$g" > "$v/firmware/bcmdhd.cal_USI_G5SN_9957_V17"
     echo "clm $g" > "$v/firmware/bcmdhd_clm.blob_4398_d0"
     echo "txcap $g" > "$v/firmware/bcmdhd_txcap.blob_4398_d0"
+    echo "fictional G5SN_V17_HK3 REL $g" > "$v/firmware/brcm/BCM.hcd"
+    halo "FIRMWARE_CS40L26 BUZZ_EFFECTS2_BUZZ_LEVEL $g" > "$v/firmware/cs40l26.wmfw"
+    halo "calib $g" > "$v/firmware/cs40l26-calib.wmfw"
+    for f in cs40l26.bin cs40l26-svc.bin cs40l26-dvl.bin; do echo "WMDR $f $g" > "$v/firmware/$f"; done
     return
   fi
   printf 'fictional 4389c1-roml Version=1.0.1 (%s)\n' "$g" > "$v/firmware/fw_bcmdhd.bin"
@@ -204,15 +208,20 @@ o=$t/husky-reuse n=$failed
 seed "$o"
 if run "$t/husky" "$t/ext4.img" -d husky -o "$o"; then
   [[ ! -e $o/usr/share/omamobile/sensors ]] || fail "husky: an earlier device's sensor registry is dropped"
-  [[ $(listed "$o" | tr '\n' ' ') == "brcm/brcmfmac4398d0-pcie.google,zuma-husky.bin brcm/brcmfmac4398d0-pcie.google,zuma-husky.clm_blob brcm/brcmfmac4398d0-pcie.google,zuma-husky.txcap_blob brcm/brcmfmac4398d0-pcie.google,zuma-husky.txt " ]] ||
-    fail "husky: the checksum list names husky's four files only"
-  [[ $(find "$o/$FW" -type f | wc -l) == 4 ]] || fail "husky: no cheetah firmware stays"
+  [[ $(listed "$o" | tr '\n' ' ') == "brcm/BCM.google,zuma-husky.hcd brcm/brcmfmac4398d0-pcie.google,zuma-husky.bin brcm/brcmfmac4398d0-pcie.google,zuma-husky.clm_blob brcm/brcmfmac4398d0-pcie.google,zuma-husky.txcap_blob brcm/brcmfmac4398d0-pcie.google,zuma-husky.txt cs40l26-calib.wmfw cs40l26-dvl.bin cs40l26-svc.bin cs40l26.bin cs40l26.wmfw " ]] ||
+    fail "husky: the checksum list names husky's ten files only"
+  [[ $(find "$o/$FW" -type f | wc -l) == 10 ]] || fail "husky: no cheetah firmware stays"
+  grep -qF 'Bluetooth patch: G5SN_V17_HK3 REL gen3' "$t/log" || fail "husky: the Bluetooth patch's release is reported"
   pass_since "$n" "husky: a run over a cheetah generation leaves only husky's files"
 else
   cat "$t/log"; fail "husky: a run over a cheetah generation succeeds"
 fi
 
 # --- Failed runs leave the previous generation ----------------------------------
+# husky's BCM.hcd names the module and board, not the chip: another phone's
+# patch (here the 7 Pro's) is refused
+rm -rf "$t/husky-otherbt"; cp -r "$t/husky" "$t/husky-otherbt"; echo "BCM4389C1 fictional" > "$t/husky-otherbt/firmware/brcm/BCM.hcd"
+refuses "husky: another chip's Bluetooth patch" "BCM.hcd is not a" "$t/husky-otherbt" "$t/ext4.img" -d husky
 rm -rf "$t/v2-missing"; cp -r "$t/v2" "$t/v2-missing"; rm "$t/v2-missing/firmware/aoc.bin"
 refuses "a missing ext4 file with an older copy in OUT" "/vendor/firmware/aoc.bin is missing" "$t/v2-missing" "$t/ext4.img"
 refuses "a missing EROFS file with an older copy in OUT" "/vendor/firmware/aoc.bin is missing" "$t/v2-missing" "$t/erofs.img"
