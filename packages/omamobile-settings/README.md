@@ -17,7 +17,7 @@ never in the environment, never logged or printed), digits only for the new PIN,
 checks the current PIN and any other rule. passwd runs with `LC_ALL=C` so its prompts are the ones the script
 matches, and it is killed after 12 seconds: before the retype nothing has changed, after it the result says the PIN
 may or may not have changed. The entries are held as text in the page until the call returns, then cleared; the
-session's memory is not wiped. The pages run
+session's memory is not wiped. A change that finishes while the page is gone is reported when the page is opened again (the runner keeps its last result); quitting the app mid-change loses it. The page is for a phone that unlocks with a PIN and has one (`omamobile-set-pin --type` and `passwd -S` say so); for a password phone or a phone without one it says where to go instead. The pages run
 `backends/display.sh` and `backends/pin.sh` through a fixed-argument runner, with no shell string.
 Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management and
 recording controls are separate future contributions with their own runtime
