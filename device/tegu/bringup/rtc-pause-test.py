@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 # On the palmtop, awake: does an RTC read after a pause return an old time?
 # N rounds of "wait P s, read twice", each read compared with the system clock. With a third
 # argument A, each round also waits on until the RTC is A seconds past a minute, so the first
@@ -9,7 +10,8 @@
 # whatever alarm is armed at that moment. So it refuses to start when an alarm is armed, and it
 # holds a block sleep inhibitor of its own from start to end, so that nothing sleeps under it
 # with the alarm gone. Never run it beside a sleep series: the series arms the alarm its
-# sleeps end on.
+# sleeps end on. A dropped SSH session ends it without its cleanup, so an alarm up to an hour
+# ahead can stay armed; that only wakes the palmtop.
 #   python3 rtc-pause-test.py [rounds, default 60] [pause s, default 20] [A s past the minute]
 import subprocess, sys, time
 f = "/sys/class/rtc/rtc0/since_epoch"
