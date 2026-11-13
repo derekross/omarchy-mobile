@@ -1,0 +1,7 @@
+// SPDX-License-Identifier: MIT
+/dts-v1/;
+/plugin/;
+
+&touchscreen {
+	status = "okay";
+};
