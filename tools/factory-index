@@ -1,30 +1,55 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 """The build index: which of Google's factory images matches a phone
-(docs/INSTALL-EXPERIENCE-PLAN.md §6.1).
+(docs/INSTALL-EXPERIENCE-PLAN.md §6.1; the format and the match rule are in
+docs/INSTALL-GUIDED.md §5).
 
 One file per device, device/<codename>/factory-builds.json. It holds
 metadata only, never a file of Google's: for each factory build its build
 id, the bootloader and baseband versions its android-info.txt requires, the
-zip's name, size and SHA-256, its address on Google's servers, the page the
-installer opens for the owner, and whether a release was tested with that
-build's firmware. A guided installer (plan M1) trusts the SHA-256 it finds
-here, so it reads the index only from a source the release key signed: a
-bundle's copy covered by the signed SHA256SUMS, or a published copy with a
-detached signature.
+zip's name, size and SHA-256, its address on Google's servers (an installer
+downloads from it only after the owner has accepted Google's terms), Google's
+page for the build, and whether a release was tested with that build's
+firmware. A guided installer (plan M1) trusts the SHA-256 it finds
+here (tools/install-guided), so it reads the index only from a source the
+release key signed: a bundle's copy covered by the signed SHA256SUMS, or a
+published copy with a detached signature.
 
 For an installer (the reader; it needs no repository):
 
   factory-index info  --index FILE --codename C
       checks FILE and prints  updated=YYYY-MM-DD  and  builds=N
   factory-index match --index FILE --codename C --bootloader V --baseband V
-      prints the build to use as KEY=value lines: match=exact when a build
+      prints the phone's build as KEY=value lines: match=exact when a build
       carries both the phone's bootloader and its baseband, else match=none.
       There is no nearest build: the "tested" mark is one per build, so it
       says nothing about that build's files on a phone with another
-      baseband. Fastboot can't tell apart builds that share both versions
-      (carrier variants do); the first in the file is printed, and the
-      others are named in  same_pair=BUILD,BUILD
+      baseband. tested=true or false is that build's mark; an installer uses
+      a tested build only. Fastboot can't tell apart builds that share both
+      versions (carrier variants do); the first of them marked tested is
+      printed (the first in the file when none is), and the others are named
+      in  same_pair=BUILD,BUILD
+      url=  is that build's address on Google's server, which an installer
+      downloads from only after the owner has accepted Google's terms.
+      With or without a match,  newest=BUILD  is the newest build in the
+      list and  newest_tested=true  or false says whether an Android update
+      would land on a tested build: true only when every build of the newest
+      date has a bootloader and baseband that a tested build carries.
+      Android's updater offers Google's newest build and nothing older, so
+      an installer advises "update Android" only then. For a build that
+      isn't tested,  newer_tested=BUILD  names the newest tested build that
+      is newer than every build the phone may be running (by the date in
+      the build id), or is empty
+  factory-index entry --index FILE --codename C --build BUILD
+      prints one build by its id, as match prints a match (for an installer
+      that recorded the build and needs its file again); fails when the
+      list no longer has it
+
+The list is newest first, by the date in the build id (the six digits of
+CP2A.260705.006): add puts a build where its date belongs, and every reader
+refuses a list in which a build stands above a newer one, so "newer" is
+never read from a position that nobody kept. Builds of one date are equally
+new.
 
 For the maintainer, in the repository (-d CODENAME, default cheetah):
 
@@ -84,6 +109,12 @@ def text(v, kind, what):
     return v
 
 
+def build_date(b):
+    """The date in a build id (YYMMDD, the six digits of CP2A.260705.006):
+    what "newer" means everywhere in this tool."""
+    return b["build"].split(".")[1]
+
+
 def check_build(b, codename):
     """One entry, every field checked; returns it with only the known keys."""
     if not isinstance(b, dict):
@@ -139,6 +170,10 @@ def load(path, codename):
     ids = [b["build"] for b in builds]
     if len(set(ids)) != len(ids):
         die("a build is listed twice")
+    for above, below in zip(builds, builds[1:]):
+        if build_date(below) > build_date(above):
+            die("%s: %s is listed below %s, which is older; the list is newest first, by the date in "
+                "the build id" % (path, below["build"], above["build"]))
     return {"format": FORMAT, "codename": codename, "updated": idx["updated"], "builds": builds}
 
 
@@ -236,7 +271,10 @@ def cmd_add(a):
     entry = check_build(entry, codename)
     if any(b["build"] == build for b in idx["builds"]):
         die("%s is already in %s (tested/untested change its mark)" % (build, path))
-    idx["builds"].insert(0, entry)
+    # Newest first, by the build's date, whenever it is added: above the
+    # first build that is no newer (so above the others of its own date)
+    at = next((i for i, b in enumerate(idx["builds"]) if build_date(b) <= build_date(entry)), len(idx["builds"]))
+    idx["builds"].insert(at, entry)
     save(path, idx)
     print("added %s to %s: bootloader %s, baseband %s, %s" % (
         build, path, bootloader, baseband, "tested with " + a.tested if a.tested else "not marked tested"))
@@ -261,13 +299,18 @@ def cmd_check(a):
     path, codename = index_path(a)
     idx = load(path, codename)
     print("%s: %d builds, updated %s" % (path, len(idx["builds"]), idx["updated"]))
+    name, lands_tested = newest(idx)
     for b in idx["builds"]:
         print("  %-22s bootloader %s, baseband %s, %s" % (
             b["build"], b["bootloader"], b["baseband"],
             "tested with " + b["tested_with"] if b["tested"] else "not tested"))
+    if name:
+        print("  newest: %s. An Android update lands on %s" % (
+            name, "a tested build, so an installer may advise one" if lands_tested else
+            "a build that isn't tested, so an installer advises none"))
     for group in same_pairs(idx):
         print("  note: %s share a bootloader and baseband; a phone can't be told to run one or the "
-              "other, and the first listed is the one an installer asks for" % ", ".join(group))
+              "other, and an installer asks for the first of them that is marked tested" % ", ".join(group))
 
 
 def cmd_info(a):
@@ -276,18 +319,55 @@ def cmd_info(a):
     print("updated=%s\nbuilds=%d" % (idx["updated"], len(idx["builds"])))
 
 
+def print_build(b):
+    for key in ("build", "bootloader", "baseband", "zip", "url", "page", "sha256", "size"):
+        print("%s=%s" % (key, b[key]))
+    print("tested=" + ("true" if b["tested"] else "false"))
+
+
+def newest(idx):
+    """The newest build's id, and whether an Android update lands on a tested
+    build. Android's updater offers Google's newest build and nothing older,
+    and which of the builds of the newest date a phone gets isn't known
+    (carrier variants), so all of them have to be covered: each with a
+    bootloader and baseband that a tested build carries."""
+    if not idx["builds"]:
+        return "", False
+    top = [b for b in idx["builds"] if build_date(b) == build_date(idx["builds"][0])]
+    tested = {(b["bootloader"], b["baseband"]) for b in idx["builds"] if b["tested"]}
+    name = next((b for b in top if b["tested"]), top[0])["build"]
+    return name, all((b["bootloader"], b["baseband"]) in tested for b in top)
+
+
 def cmd_match(a):
     path, codename = index_path(a)
     idx = load(path, codename)
     found = match(idx, a.bootloader, a.baseband)
     print("match=" + ("exact" if found else "none"))
     print("updated=" + idx["updated"])
+    name, lands_tested = newest(idx)
+    print("newest=" + name)
+    print("newest_tested=" + ("true" if lands_tested else "false"))
     if found:
-        b = found[0]
-        for key in ("build", "bootloader", "baseband", "zip", "page", "sha256", "size"):
-            print("%s=%s" % (key, b[key]))
-        print("tested=" + ("true" if b["tested"] else "false"))
-        print("same_pair=" + ",".join(o["build"] for o in found[1:]))
+        # Of builds a phone can't tell apart, a tested one wherever it is listed
+        b = next((o for o in found if o["tested"]), found[0])
+        print_build(b)
+        print("same_pair=" + ",".join(o["build"] for o in found if o is not b))
+        # Newer than every build the phone may be running, by the builds'
+        # own dates (the list's order is checked, and not relied on here)
+        latest = max(build_date(o) for o in found)
+        newer = "" if b["tested"] else next(
+            (o["build"] for o in idx["builds"] if o["tested"] and build_date(o) > latest), "")
+        print("newer_tested=" + newer)
+
+
+def cmd_entry(a):
+    path, codename = index_path(a)
+    idx = load(path, codename)
+    hit = [b for b in idx["builds"] if b["build"] == a.build]
+    if not hit:
+        die("%s is not in %s" % (a.build, path))
+    print_build(hit[0])
 
 
 def cmd_sign(a):
@@ -333,6 +413,9 @@ def main():
     p.add_argument("--bootloader", required=True)
     p.add_argument("--baseband", required=True)
     p.set_defaults(fn=cmd_match)
+    p = sub.add_parser("entry"); where(p)
+    p.add_argument("--build", required=True)
+    p.set_defaults(fn=cmd_entry)
     p = sub.add_parser("sign"); where(p); p.add_argument("--out"); p.set_defaults(fn=cmd_sign)
     a = ap.parse_args()
     if getattr(a, "tested", None) and a.cmd == "add":

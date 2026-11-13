@@ -25,6 +25,13 @@ list() { sed -e 's/#.*//' -e 's/[[:space:]]//g' "$1" | grep -v '^$'; }
 out_owner=$(stat -c %u:%g /out) cache_owner=$(stat -c %u:%g /var/cache/pacman/pkg)
 trap 'chown -R "$out_owner" /out 2>/dev/null; chown -R "$cache_owner" /var/cache/pacman/pkg 2>/dev/null || true' EXIT
 
+# The builder itself is brought up to the repositories first. Its image is
+# built once and kept, and the checks below ask pacman what can be installed
+# here: behind the repositories, a library transition (openssl 3 to 4, on
+# 2026-11-12) made every base package "impossible" because installing its
+# new dependency would break the builder's own older packages.
+pacman -Syu --noconfirm >/var/log/builder-upgrade.log 2>&1 ||
+  { tail -40 /var/log/builder-upgrade.log; die "the builder could not be brought up to the repositories"; }
 # [omamobile] first, from the repository being shipped
 sed -i "0,/^\[omarchy\]/s//[omamobile]\nServer = file:\/\/\/repo\/\$arch\n\n[omarchy]/" /etc/pacman.conf
 pacman -Sy >/dev/null

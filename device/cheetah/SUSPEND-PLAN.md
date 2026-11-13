@@ -1672,6 +1672,44 @@ tools/phone-ssh 'sync; systemctl poweroff'
   release, tested by lowering `PercentageAction` above the current level
   for one attended run.
 
+**P7 run (2026-11-12): failed. Power off restarts the phone on the release
+kernel.** On release 2026.11.12's test install,
+`7.3.0-rc6-omamobile-g1a9d1d4e9289` (`kernel-2026.11.08`), battery 99-100 %:
+
+| Run | Cable | Shutdown | Then |
+| --- | --- | --- | --- |
+| 1 | in | clean: off the USB bus 45 s after `systemctl poweroff` (the modem's stop is most of that), no `ufshcd_err_handler` line, no `modem-up` marker left | back on the bus about 15 s later by itself, a normal boot on slot B |
+| 2 | out (a 30 s `systemd-run` timer, the cable pulled before it fired) | clean: "Reached target System Power Off", `systemd-shutdown` syncing | the owner watched it restart at once; a normal boot on slot B |
+
+`androidboot.bootreason` read `reboot` after both. So it is not the charger
+turning the phone back on. The cause was already found and fixed by a
+contributor: the PMIC's warm-reset restart (WTSR) is left armed by
+`rtc-s5m`, and Google's driver clears it in its shutdown callback
+([linux-omarchy-mobile#233](https://github.com/derekross/linux-omarchy-mobile/pull/233),
+merged 2026-11-12 on `omamobile`, tested on a 7 Pro on 2026-11-09 and
+2026-11-10: off with the cable out, the bootloader's charger boot with it
+in). `kernel-2026.11.08` is from before it.
+
+- **Stop taken:** upower keeps its default; no `PowerOff` drop-in. On this
+  kernel it would restart a phone with an empty battery over and over.
+- **Next:** P7 again on a kernel built from `omamobile` with #233, both
+  cable cases. With the cable in, expect the bootloader's charger boot
+  (`androidboot.mode = "charger"`), which starts the whole phone until
+  [#554](https://github.com/derekross/omarchy-mobile/pull/554) is in. Then
+  a kernel release with #233, and only then the drop-in.
+- Until that release, the power menu's Shutdown restarts a release phone.
+
+**P6 (reported by the owner on 2026-11-12):** a day of use with the toggle
+on, no problem reported. The phone was reinstalled twice that day, so the
+counters of P6's check could not be read, and whether the modem was up
+(which blocks sleep for the whole boot) is not recorded.
+
+**P8 step 2 started 2026-11-12 22:39** on the same install: the modem off
+for the boot (`omamobile-modem-boot.target` masked), no sleep block held,
+`spm_lvl` 5, the `omamobile-sleep` toggle on, battery 100 %, the cable out
+overnight. The start is recorded on the phone in
+`/var/lib/omamobile/power/p8-standby-start.txt`.
+
 #### P8: standby numbers (risk: low; the human unplugs)
 
 `tools/power-ab` as S7, detached and cable out:

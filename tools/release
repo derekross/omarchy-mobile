@@ -669,7 +669,9 @@ PY
 # records, this machine's home directory (/home/<builder>: a build path that
 # leaked; other /home/<name> paths are upstream examples and build hosts, as
 # in Neovim plugins and Alpine's libc), and each literal of the identifiers
-# file as a whole word. Prints each finding; fails when there is one.
+# file as a whole word (not where it is the holder of a copyright notice,
+# "Copyright (c) YEAR <name>": Omarchy's licence header in a patch names the
+# project's, as LICENSE does). Prints each finding; fails when there is one.
 scan_identifiers() {
   python3 -I - "$(id -un)" "$@" <<'PY'
 import os, re, sys
@@ -680,6 +682,7 @@ rules = [("serial record", re.compile(rb"(?i)(ro\.serialno|androidboot\.serialno
          ("IMEI", re.compile(rb"(?i)\bIMEI\b[=: ]+[0-9]{15}\b")),
          ("builder's home", re.compile(rb"/home/" + re.escape(builder.encode()) + rb"(?![A-Za-z0-9_-])"))]
 rules += [("listed identifier", re.compile(rb"(?<![A-Za-z0-9_])" + re.escape(l.encode()) + rb"(?![A-Za-z0-9_])")) for l in lits]
+COPYRIGHT = re.compile(rb"Copyright \(c\) (?:19|20)[0-9]{2}(?:-(?:19|20)[0-9]{2})? $")
 found = 0
 def report(path, what, text):
     global found
@@ -705,6 +708,12 @@ def scan(path):
         report(path, "MAC address", whole)
     for what, rx in rules:
         for m in rx.finditer(data):
+            # A copyright notice names its holder on purpose, as LICENSE
+            # does: "Copyright (c) 2026 <listed name>" in a source header is
+            # not a leak. Only that form passes, and only for a listed name.
+            line = data[data.rfind(b"\n", 0, m.start()) + 1:m.start()]
+            if what == "listed identifier" and COPYRIGHT.search(line):
+                continue
             report(path, what, m.group(0))
             break
 for p in paths:
@@ -725,6 +734,8 @@ PY
 # Files in bundle DIR that tools/make-bundle doesn't put there, one per line.
 # The tools under tools/ are make-bundle's own provision_tools list, read
 # from it as data, so a tool it adds is allowed here without a change.
+# factory-builds.json is the device's build index (make-bundle ships it when
+# the device has one, #716); it is under SHA256SUMS like every other file.
 bundle_extra_files() {
   local tools t args=()
   tools=$(sed -n 's/^provision_tools="\([a-z0-9 -]*\)"$/\1/p' tools/make-bundle)
@@ -732,7 +743,7 @@ bundle_extra_files() {
   for t in $tools; do args+=(! -path "./tools/$t"); done
   (cd "$1" && find . \( -type f -o -type l \) ! -path './images/*.img' ! -path ./README.txt ! -path ./INSTALL.md \
     ! -path ./MANIFEST ! -path ./manifest.json ! -path ./SHA256SUMS ! -path ./SHA256SUMS.sig ! -path ./install \
-    ! -path ./device.conf ! -path ./omamobile.gpg "${args[@]}" | LC_ALL=C sort)
+    ! -path ./device.conf ! -path ./omamobile.gpg ! -path ./factory-builds.json "${args[@]}" | LC_ALL=C sort)
 }
 
 st_identifiers() {

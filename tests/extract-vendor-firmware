@@ -25,6 +25,7 @@
 # and the failures are counted rather than stopping at the first.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+repo=$PWD
 EVF=$(realpath -- "${EVF:-tools/extract-vendor-firmware}")
 failed=0
 fail() { printf 'not ok - %s\n' "$1" >&2; failed=$((failed + 1)); }
@@ -395,5 +396,11 @@ if realdfs=$(command -v debugfs) && mkfs.ext4 -q -F -d "$t/v2" "$t/real.img" 8M 
 else
   echo "ok - # skip: no mkfs.ext4 -d and debugfs for the real ext4 checks"
 fi
+
+# The lists these tools write (vendor-firmware.sha256, each MANIFEST) are
+# compared between a laptop and a phone: with the locale's own collation the
+# same lines came out in another order under en_US.UTF-8 than under C
+bare=$(grep -nE '(^|[|;(] *)sort( |$)' "$repo/tools/extract-vendor-firmware" "$repo/tools/extract-vendor-chroot" "$repo/tools/extract-fingerprint-vendor" | grep -v 'LC_ALL=C sort' || true)
+[[ -z $bare ]] && pass "every list the extraction tools sort is sorted in the C locale" || fail "a sort that follows the locale: $bare"
 
 ((failed == 0)) || { echo "$failed check(s) failed" >&2; exit 1; }
