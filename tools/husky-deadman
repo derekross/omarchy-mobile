@@ -1,8 +1,9 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 #
-# husky-deadman: run one MAX77759 charger bring-up step on the Pixel 8 Pro
-# under a dead-man switch and a battery guard (device/husky/BATTERY-NOTES.md, M5). Ported from
+# husky-deadman: run one MAX77759 charger bring-up step on a zuma phone (the
+# Pixel 8 Pro or the Pixel 8a) under a dead-man switch and a battery guard
+# (device/husky/BATTERY-NOTES.md, M5; device/akita/BRINGUP-M4.md). Ported from
 # tools/usbc-deadman (cheetah). The step runs DETACHED on the phone
 # (tools/husky-deadman-phone, started with systemd-run) and undoes itself
 # unless this script gets back in over a NEW SSH login and confirms, or when
@@ -59,12 +60,12 @@ Physical recovery, in order:
      (the screen goes black and the boot logo returns). Linux on slot B boots
      with max77759_charger blocked in modprobe.d.
   2. Unplug the cable. Force a restart: hold Power + Volume Up for 15 to 30 s
-     (Power alone does nothing on the 8 Pro under our kernel). It boots slot B
+     (a short Power press only wakes the screen). It boots slot B
      again. EVERY reset spends one of slot B's three boot tries; at zero the
      bootloader falls back to slot A and its first boot wipes userdata. Count
      the boots since your last "bin/omamobile flash" (it gives B three again),
      and when one is left, flash your known-good image set instead of resetting.
-  3. Whether a reset puts the charger registers back is NOT known for husky:
+  3. Whether a reset puts the charger registers back is NOT known:
      keep the phone on a cable only while you watch it, and check the
      battery temperature by hand.
   4. Fastboot by hand: force a restart as in 2, then Power + Volume Down until

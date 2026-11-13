@@ -55,6 +55,17 @@ if [[ -f ../omamobile-device-husky/vendor/systemd/network/20-usb-gadget.network 
     ../omamobile-device-husky/vendor/NetworkManager/conf.d/10-omamobile-usb.conf \
     || fail "the NetworkManager drop-in drifted from the husky package"
   pass "the USB link's network files match the husky package"
+  # The USB replug rescue too: the same chips on the same bus (BRINGUP-M4).
+  cmp -s bin/omamobile-usb-rescue ../omamobile-device-husky/bin/omamobile-usb-rescue \
+    || fail "the USB rescue drifted from the husky package"
+  cmp -s vendor/systemd/system/omamobile-usb-rescue.service \
+    ../omamobile-device-husky/vendor/systemd/system/omamobile-usb-rescue.service \
+    || fail "the USB rescue unit drifted from the husky package"
+  # Its comment names the 8a: the settings are what must match
+  max=vendor/modprobe.d/omamobile-max77759.conf
+  [[ $(grep -v '^#' "$max") == "$(grep -v '^#' "../omamobile-device-husky/$max")" ]] \
+    || fail "the MAX77759 blacklist's settings drifted from the husky package"
+  pass "the USB rescue, its unit and the MAX77759 blacklist's settings match the husky package"
 fi
 grep -q 'omamobile-keyring' PKGBUILD || fail "pacman needs omamobile-keyring"
 grep -q '^install=omamobile-device-akita.install$' PKGBUILD \
@@ -79,14 +90,17 @@ for f in usr/bin/reboot-to \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
+         usr/lib/modprobe.d/omamobile-max77759.conf \
+         usr/bin/omamobile-usb-rescue \
+         usr/lib/systemd/system/omamobile-usb-rescue.service \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-akita/version \
          usr/share/licenses/omamobile-device-akita/LICENSE \
          etc/pacman.d/omamobile-mirrorlist; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
-[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 10 ]] \
-  || fail "install stages exactly these ten files: $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
+[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 14 ]] \
+  || fail "install stages exactly these fourteen files (the rescue's wants link is the fourteenth): $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
 grep -qx 'MemorySleepMode=s2idle' "$tmp/root/usr/lib/systemd/sleep.conf.d/10-omamobile.conf" \
   || fail "suspend must use s2idle: the kernel's default is deep, which zuma can't wake from yet"
 grep -qx 'AllowHibernation=no' "$tmp/root/usr/lib/systemd/sleep.conf.d/10-omamobile.conf" \
@@ -113,6 +127,24 @@ for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
 pass "install stages the udev rule, the USB link and the mirrorlist, and nothing that marks a slot or starts the radio, the charger or a camera"
+
+conf=vendor/modprobe.d/omamobile-max77759.conf
+! grep -qE '^install ' "$conf" || fail "the MAX77759 file only blacklists, a manual modprobe must still work"
+for m in max77759_charger tcpci_maxim gpio_max77759 nvmem_max77759; do
+  grep -qx "blacklist $m" "$conf" || fail "$m is kept from autoloading"
+done
+! grep -qE '^blacklist (max17042_battery|max77759)$' "$conf" || fail "the fuel gauge and the MFD core keep autoloading"
+pass "the MAX77759 cell drivers and the Type-C driver are blacklisted, the gauge and the MFD core are not"
+bash -n bin/omamobile-usb-rescue || fail "the USB rescue parses"
+grep -q '10cb0000.i2c' bin/omamobile-usb-rescue || fail "the USB rescue watches akita's bus (hsi2c_11)"
+grep -q 'i2cset -f -y "$bus" $tcpc 0x93 0x09' bin/omamobile-usb-rescue || fail "the USB rescue closes the data switch"
+[[ $(grep -c 'i2cset' bin/omamobile-usb-rescue) -eq 1 ]] || fail "the USB rescue writes one register only"
+grep -q '^ExecStart=/usr/bin/omamobile-usb-rescue$' vendor/systemd/system/omamobile-usb-rescue.service \
+  || fail "the USB rescue unit runs the script"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service") == ../omamobile-usb-rescue.service ]] \
+  || fail "the USB rescue is enabled by a wants link"
+grep -q 'i2c-tools' PKGBUILD || fail "the USB rescue needs i2cget and i2cset"
+pass "the USB replug rescue is installed, enabled by a wants link, and writes one register"
 [[ ! -e $tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf ]] \
   || fail "akita has no lid: no lid drop-in"
 pass "no lid drop-in"

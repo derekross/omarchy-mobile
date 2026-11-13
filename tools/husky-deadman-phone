@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MIT
 #
 # husky-deadman-phone: the phone half of tools/husky-deadman. Runs ONE charger
-# bring-up step on the Pixel 8 Pro detached from SSH, under a dead-man switch
-# and a battery guard. Ported from tools/usbc-deadman-phone (cheetah); the
+# bring-up step on a zuma phone (the Pixel 8 Pro or the Pixel 8a, the same
+# MAX77759 on the same bus) detached from SSH, under a dead-man switch and a
+# battery guard. Ported from tools/usbc-deadman-phone (cheetah); the
 # Type-C / USB data-switch parts are left out on purpose: on husky the USB
 # gadget is built in and nothing here loads tcpci_maxim (that is M6).
 #
@@ -49,10 +50,26 @@ confirm_s=90 grace_s=60 ilim=500000 use_wd=1 soak_s=600 allow_soc=0
 gpid=
 
 # Guard limits (uV, uA, 0.1 C). The DT caps the float voltage at 4.2 V.
-V_TRIP=4300000 V_MIN=3000000 I_TRIP=1700000 T_MAX=450 T_MIN=50
+# I_TRIP is per board (board() below): above the DT's charge current
+# (constant-charge-current-max-microamp) with some room.
+V_TRIP=4300000 V_MIN=3000000 I_TRIP= T_MAX=450 T_MIN=50
 # Preconditions
 SOC_MIN=30 SOC_MAX=80 START_V_MAX=4150000 START_T_MIN=100 START_T_MAX=400
 ILIM_MAX=900000
+
+# The boards this runs on: BOARD names the phone, I_TRIP its current guard.
+#   google,zuma-husky  Pixel 8 Pro, DT charge current 1.485 A: 1.7 A
+#   google,zuma-akita  Pixel 8a,    DT charge current 1.32 A:  1.5 A
+board() {
+  local c
+  c=$(tr '\0' '\n' < /proc/device-tree/compatible 2>/dev/null | head -1)
+  case $c in
+    google,zuma-husky) BOARD="Pixel 8 Pro" I_TRIP=1700000 ;;
+    google,zuma-akita) BOARD="Pixel 8a" I_TRIP=1500000 ;;
+    *) BOARD= I_TRIP= ;;
+  esac
+}
+BOARD= ; board
 
 log() {
   local m="husky-deadman: $*"
@@ -123,8 +140,8 @@ refuse() { log "refusing: $*"; echo "refused: $*" > $D/result; }
 
 preflight() {   # preflight STEP
   local v t s
-  tr '\0' '\n' < /proc/device-tree/compatible 2>/dev/null | grep -qx 'google,zuma-husky' ||
-    { refuse "this is not a Pixel 8 Pro (device tree compatible is not google,zuma-husky)"; return 1; }
+  [[ -n $BOARD && $I_TRIP =~ ^[0-9]+$ ]] ||
+    { refuse "this is not a Pixel 8 Pro or a Pixel 8a (the device tree's first compatible is not google,zuma-husky or google,zuma-akita)"; return 1; }
   [[ -n "$BUS" ]] || { refuse "no i2c bus for 10cb0000.i2c"; return 1; }
   command -v i2cget >/dev/null || { refuse "i2c-tools missing"; return 1; }
   [[ -d $PSY ]] || { refuse "no battery power supply $PSY (load max17042_battery)"; return 1; }
@@ -313,7 +330,7 @@ run() {
   mkdir -p $D
   guard_kill
   rm -f $D/confirm $D/result $D/trip $D/guard.last
-  log "=== step $step: confirm ${confirm_s}s, grace ${grace_s}s, soak ${soak_s}s, watchdog $use_wd, ilim $ilim; udc $(udc_state); battery v=$(psy voltage_now) t=$(psy temp) soc=$(psy capacity)"
+  log "=== step $step on the ${BOARD:-unknown board} (current guard ${I_TRIP:-none} uA): confirm ${confirm_s}s, grace ${grace_s}s, soak ${soak_s}s, watchdog $use_wd, ilim $ilim; udc $(udc_state); battery v=$(psy voltage_now) t=$(psy temp) soc=$(psy capacity)"
   preflight "$step" || return 1
   if ((use_wd)); then
     wd_arm || { refuse "cannot open $WD, held by: $(wd_holders) (stop that, or --no-watchdog)"; return 1; }
