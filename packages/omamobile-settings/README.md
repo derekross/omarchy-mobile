@@ -37,11 +37,12 @@ row stays hidden today: omamobile-device-husky blacklists `max77759_charger`
 until that blacklist is lifted on a kernel with
 derekross/linux-omarchy-mobile#266.
 A third page, Keyboard haptics, sets the strength
-of the tick feedbackd plays for key presses, or silent for the whole phone; it
+of the tick feedbackd plays for key presses (low, medium or high); it
 edits the user's feedbackd theme (`~/.config/feedbackd/themes/custom.json`, the
 two key entries of the `full` profile, never above 0.125 or 60 ms; the first version of the file is kept once as `custom.json.bak-haptics`, a theme that
-does not have exactly those two entries is refused before anything changes, and a level after Off puts the profile
-back to `full` whatever it was before) and says so on the page when the phone has no such theme. That page runs
+does not have exactly those two entries is refused before anything changes). It never touches feedbackd's profile, so calls, messages and
+alarms ring as before; changing the level restarts feedbackd, so a ring in progress stops. A phone without such a theme gets a plain
+message on the page and no buttons. That page runs
 `backends/haptics.sh` through the same runner.
 Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management and
 recording controls are separate future contributions with their own runtime

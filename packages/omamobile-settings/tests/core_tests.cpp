@@ -134,6 +134,14 @@ private slots:
         QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"available", false}}));
         QCOMPARE(page->property("status").toString(), QString("Settings cannot set a charge limit on this phone."));
     }
+    void hapticsPageGoesBackToRoot() {
+        Backend backend;
+        backend.setBackendDir(stubs("off"));
+        QVERIFY(backend.navigate("haptics"));
+        QCOMPARE(backend.page(), QString("haptics"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("root"));
+    }
     void searchHasOnlyImplementedRoutesAndBackClearsIt() {
         Backend backend;
         backend.setBackendDir(stubs("off"));

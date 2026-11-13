@@ -2,16 +2,16 @@
 # SPDX-License-Identifier: MIT
 # Keyboard haptics level: probe/get/set. The level is the strength of one 15 ms tick that feedbackd plays for key and
 # button presses. It lives in the user's feedbackd theme ($XDG_CONFIG_HOME/feedbackd/themes/custom.json, entries
-# button-pressed and key-pressed of the "full" profile). Levels (Lef 2026-11-08, motor level of 255 in brackets):
-#   low 0.015 (motor level 3, the lowest and the default he chose), medium 0.035 (8), high 0.07 (17), all 15 ms.
-# The length is the same for every level (Lef: only the strength differs; a longer pulse was tried and rejected).
+# button-pressed and key-pressed of the "full" profile); where that theme comes from is the keyboard haptics notes in
+# https://github.com/derekross/omarchy-mobile/issues/538. Levels (motor level of 255 in brackets):
+#   low 0.015 (3, the lowest), medium 0.035 (8), high 0.07 (17), all 15 ms: only the strength differs.
 # Nothing above 0.125 and nothing longer than 60 ms is ever written.
-# "off" switches feedbackd's profile to "silent": no haptic from any app, the lock-screen PIN pad included (Lef 2026-11-08).
-# Any other level puts the profile back to "full" and writes the strength.
+# Only the two key entries of the theme are written. feedbackd's profile, and so whether calls, messages and alarms
+# ring, is never touched here: a keyboard page does not change that. Changing the level restarts feedbackd (a ring
+# in progress stops).
 # Nothing in the environment changes what runs here except XDG_CONFIG_HOME (the theme directory); the test runs a copy
-# of this script with `dry=1`, which skips feedbackd, gsettings and the preview tick. The theme file is checked
-# (exactly the two key entries in the full profile) before anything is changed, and the previous profile is not
-# restored: any level after Off puts the profile back to full.
+# of this script with `dry=1`, which skips feedbackd and the preview tick. The theme file is checked (exactly the
+# two key entries in the full profile) before anything is changed.
 set -euo pipefail
 dry=0
 dir=${XDG_CONFIG_HOME:-$HOME/.config}/feedbackd/themes
@@ -32,17 +32,7 @@ level_pair() {
   esac
 }
 
-get_profile() {
-  if [[ $dry == 1 ]]; then cat "$dir/.profile-dry" 2>/dev/null || echo full
-  else gsettings get org.sigxcpu.feedbackd profile | tr -d "'"; fi
-}
-set_profile() {
-  if [[ $dry == 1 ]]; then echo "$1" >"$dir/.profile-dry"
-  else gsettings set org.sigxcpu.feedbackd profile "$1"; fi
-}
-
 current_level() {
-  [[ $(get_profile) == silent ]] && { echo off; return; }
   /usr/bin/python3 -I - "$file" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -79,11 +69,6 @@ get)
   ;;
 set)
   [[ $key == level ]] || fail '{"error":"unknown key"}'
-  if [[ $value == off ]]; then
-    set_profile silent || fail '{"error":"could not set the feedbackd profile"}'
-    printf '{"level":"off"}\n'
-    exit 0
-  fi
   pair=$(level_pair "$value") || fail '{"error":"bad value"}'
   mag=${pair% *}; ms=${pair#* }
   # defence in depth: the table above can never exceed the cap or 60 ms
@@ -129,8 +114,6 @@ PY
   # nothing is changed until the theme is known to be what this edit expects
   edit check || exit 2
   [[ -e $file.bak-haptics ]] || cp -p "$file" "$file.bak-haptics"
-  # best effort: the strength edit below must work even where gsettings cannot be reached
-  [[ $(get_profile) == silent ]] && { set_profile full || fail '{"error":"could not turn haptics back on"}'; }
   edit write || fail '{"error":"could not write the haptics theme"}'
   if [[ $dry != 1 ]]; then
     # feedbackd reads the theme when it starts; D-Bus starts it again on the next event. Exact name only.
@@ -141,10 +124,7 @@ PY
   fi
   printf '{"level":"%s"}\n' "$value"
   ;;
-watch)
-  "$0" get
-  ;;
 *)
-  fail '{"error":"usage: probe|get|set|watch"}'
+  fail '{"error":"usage: probe|get|set"}'
   ;;
 esac

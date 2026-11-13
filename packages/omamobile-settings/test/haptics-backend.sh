@@ -23,14 +23,15 @@ eq "$(run get)" '{"level":"low"}'
 eq "$(run set level medium)" '{"level":"medium"}'
 eq "$(run get)" '{"level":"medium"}'
 eq "$(run set level high)" '{"level":"high"}'
-eq "$(run set level off)" '{"level":"off"}'
-eq "$(run get)" '{"level":"off"}'
+# "off" is not a level here: it would be the phone-wide silent profile, which this page never touches
+eq "$(run set level off)" '{"error":"bad value"}'
+eq "$(run get)" '{"level":"high"}'
 eq "$(run set level low)" '{"level":"low"}'
 eq "$(run get)" '{"level":"low"}'
 eq "$(run set level loud)" '{"error":"bad value"}'
 eq "$(run set level 0.5)" '{"error":"bad value"}'
 eq "$(run set strength low)" '{"error":"unknown key"}'
-eq "$(run nonsense)" '{"error":"usage: probe|get|set|watch"}'
+eq "$(run nonsense)" '{"error":"usage: probe|get|set"}'
 # nothing above the cap is ever in the theme, and the sound entry is left alone
 python3 - "$dir/custom.json" <<'PY'
 import json, sys
@@ -50,13 +51,13 @@ d = json.load(open(sys.argv[1]))
 d["profiles"][0]["feedbacks"] = [f for f in d["profiles"][0]["feedbacks"] if f["event-name"] != "key-pressed"]
 json.dump(d, open(sys.argv[1], "w"))
 PY
-echo silent > "$dir/.profile-dry"
 before=$(sha256sum "$dir/custom.json")
 eq "$(run set level medium)" '{"error":"the haptics theme does not have the two key entries"}'
 [[ $(sha256sum "$dir/custom.json") == "$before" ]]
-eq "$(cat "$dir/.profile-dry")" silent
-cp "$tmp/good.json" "$dir/custom.json"; echo full > "$dir/.profile-dry"
-# a theme that is not there: a plain message, no crash
+cp "$tmp/good.json" "$dir/custom.json"
+# a theme that is not there: a plain message, no crash, and no level can be set (the profile is never touched)
 rm "$dir/custom.json"
 eq "$(run get)" '{"error":"no keyboard haptics theme on this phone"}'
+eq "$(run set level medium)" '{"error":"theme file not writable"}'
+[[ ! -e $dir/.profile-dry ]]
 echo "haptics backend: ok"
