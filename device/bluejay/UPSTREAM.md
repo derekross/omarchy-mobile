@@ -18,12 +18,10 @@ policy. Source-only instructions are not authority to run a phone operation.
 | Disabled Wi-Fi DT | [#230](https://github.com/derekross/linux-omarchy-mobile/pull/230) | Revised dependency stack refreshed; merge after #227 and #228, then rebase to its own two commits |
 | Trusty trace API | [#231](https://github.com/derekross/linux-omarchy-mobile/pull/231) | Merged 2026-11-09; no Trusty runtime claimed |
 
-The attended USB SSH transfer profile is `tools/ncm-transfer --peer root@<usb-ip> --interface <host-usb-interface>`. It performs sixteen SHA-256-verified 2 MiB zero transfers with a shared 20-second deadline and no retry. Run it only after the device identity and storage checks pass; USB tracing is separately required to establish that aggregation retry was exercised. It does not test laptop sleep or USB replug.
+The attended USB SSH transfer profile is `tools/ncm-transfer --peer root@<usb-ip> --interface <host-usb-interface>`. It performs sixteen SHA-256-verified 2 MiB zero transfers with a shared 20-second deadline and no retry. Each transfer uses `tools/phone-ssh --fresh`, including its `OMAMOBILE_SSH_KEY` and `OMAMOBILE_SSH_KNOWN_HOSTS` settings. Direct interface binding defaults `OMAMOBILE_SSH_CONFIG` to `/dev/null`; an incompatible explicit config is refused. Failures name the transfer and failed check and include SSH's stderr. Run it only after the device identity and storage checks pass; USB tracing is separately required to establish that aggregation retry was exercised. It does not test laptop sleep or USB replug.
 
-The November 11 replacements for #225, #227, #228, #229 and #230 are based on
-`fc7086a68fcaaed8960d09f1bdf6c51c9926c759` and were certified by the human
-under DCO after source review. Signing preserves the reviewed source trees
-and exact diffs. The common integration passes W=1 builds of seven touched C
+The November 11 integration was built on
+`fc7086a68fcaaed8960d09f1bdf6c51c9926c759`. Its local checks passed W=1 builds of seven touched C
 files, ten Google device trees without new dtbs_check warnings, four binding
 checks, policy and strict checkpatch without errors. New-file coverage
 warnings and one continuation-alignment check remain disclosed in the PRs.
@@ -31,8 +29,8 @@ A complete Image, Bluejay DTB and 1,828 modules also build for
 `7.3.0-rc6-omamobile-bluejay-review-20261111`; the full build has two format
 warnings in unchanged AoC ALSA code. Matching dependency indexes and module
 resolution pass. The revised build has not been installed or booted on the
-phone. The PR checks show fresh published-head CI separately from these local
-results and the earlier heads' passing CI.
+phone at that build checkpoint. Current source revisions, review and CI belong
+in the individual kernel PRs.
 
 This is build/policy evidence, not runtime qualification of the rebased stack.
 The tested source is the

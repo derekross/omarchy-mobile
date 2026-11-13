@@ -89,3 +89,5 @@ echo "# tests/install-guided"   # the guided install, against stand-ins for the 
 tests/install-guided
 echo "# tests/chroot-extractors"
 tests/chroot-extractors
+echo "# tests/ncm-transfer"
+tests/ncm-transfer

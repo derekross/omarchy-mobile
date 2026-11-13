@@ -1,0 +1,133 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Real phone-ssh settings with a stand-in ssh; no network or phone access.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+import runpy
+import subprocess
+import sys
+import tempfile
+from unittest.mock import MagicMock, patch
+
+tool = Path('tools/ncm-transfer').resolve()
+with tempfile.TemporaryDirectory(prefix='ncm-transfer-') as scratch:
+    scratch = Path(scratch)
+    fake = scratch / 'ssh'
+    fake.write_text('''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+log = Path(os.environ['NCM_TEST_LOG'])
+with log.open('a') as f:
+    f.write(json.dumps(sys.argv[1:]) + '\\n')
+mode = os.environ.get('NCM_TEST_MODE', 'ok')
+if mode == 'third' and len(log.read_text().splitlines()) == 3:
+    mode = 'ssh'
+if mode == 'ssh':
+    print('Host key verification failed (fixture)', file=sys.stderr)
+    sys.exit(255)
+if mode == 'short':
+    sys.stdout.buffer.write(bytes(7))
+elif mode == 'digest':
+    sys.stdout.buffer.write(b'x' * 2097152)
+else:
+    sys.stdout.buffer.write(bytes(2097152))
+''')
+    fake.chmod(0o755)
+    key = scratch / 'key with spaces'
+    known = scratch / 'known hosts'
+    key.write_text('fixture key\n')
+    known.write_text('fixture host key\n')
+    log = scratch / 'calls'
+    env = {k: v for k, v in os.environ.items() if not k.startswith('OMAMOBILE_SSH_')}
+    env.update(PATH=str(scratch) + os.pathsep + env['PATH'], NCM_TEST_LOG=str(log),
+               OMAMOBILE_SSH_KEY=str(key), OMAMOBILE_SSH_KNOWN_HOSTS=str(known),
+               OMAMOBILE_SSH_HOST_KEY_ALIAS='phone-fixture', OMAMOBILE_SSH_SHARE='1')
+    args = ['--peer', 'root@192.0.2.1', '--interface', 'usb-fixture']
+
+    def invoke(mode='ok', cli=None, extra=None):
+        log.unlink(missing_ok=True)
+        result = subprocess.run([str(tool), *(args if cli is None else cli)],
+                                env=dict(env, NCM_TEST_MODE=mode, **(extra or {})),
+                                capture_output=True, text=True, timeout=25)
+        calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+        return result, calls
+
+    result, calls = invoke()
+    assert result.returncode == 0, result.stderr
+    assert len(calls) == 16 and result.stdout.count('SHA-256 verified') == 16
+    for call in calls:
+        for option in ('ControlMaster=no', 'ControlPath=none', 'StrictHostKeyChecking=yes',
+                       'HostKeyAlias=phone-fixture', 'ConnectTimeout=5', str(key),
+                       'UserKnownHostsFile="' + str(known) + '"', '/dev/null',
+                       'root@192.0.2.1', 'head -c 2097152 /dev/zero'):
+            assert option in call, (option, call)
+        proxy, = (x for x in call if x.startswith('ProxyCommand='))
+        assert '--relay usb-fixture 192.0.2.1 5' in proxy, proxy
+        assert 'ControlMaster=auto' not in call
+    print('ok - sixteen verified transfers use fresh pinned phone-ssh settings and interface binding')
+
+    for mode, diagnostic in [('ssh', 'phone-ssh exited 255'), ('short', 'received 7'),
+                             ('digest', 'SHA-256 mismatch'), ('third', 'transfer 3/16')]:
+        result, calls = invoke(mode)
+        assert result.returncode != 0 and diagnostic in result.stderr, result
+        assert len(calls) == (3 if mode == 'third' else 1), calls
+        if mode in ('ssh', 'third'):
+            assert 'Host key verification failed (fixture)' in result.stderr
+        print('ok - ' + mode + ' names the failed check and stops without retry')
+
+    for cli in ([], ['--peer', 'root@192.0.2.1'],
+                ['--peer=-V', '--interface', 'usb-fixture'],
+                ['--peer', 'root@192.0.2.1', '--interface=-V'],
+                ['--peer', 'root@192.0.2.1', '--interface', 'off'],
+                ['--peer', 'root@192.0.2.1', '--interface', 'auto'],
+                ['--peer', 'root@192.0.2.1', '--interface', 'x' * 16]):
+        result, calls = invoke(cli=cli)
+        assert result.returncode == 2 and not calls, result
+    print('ok - missing and invalid arguments fail before SSH')
+
+    result, calls = invoke(extra={'OMAMOBILE_SSH_CONFIG': str(scratch / 'explicit config')})
+    assert result.returncode != 0 and not calls
+    assert 'requires explicit OMAMOBILE_SSH_CONFIG=/dev/null' in result.stderr
+    print('ok - incompatible explicit SSH config is diagnosed, never ignored')
+
+    # Exercise the shared deadline without waiting 20 seconds or opening a process.
+    for times, timeout in [([0, 21], False), ([0, 1], True)]:
+        process = MagicMock()
+        process.pid = 123456
+        process.communicate.side_effect = [subprocess.TimeoutExpired('fixture', 19), (b'', b'timeout fixture')]
+        with patch.object(sys, 'argv', [str(tool), *args]), \
+             patch('time.monotonic', side_effect=times), \
+             patch('subprocess.Popen') as popen, patch('os.killpg') as killpg:
+            popen.return_value.__enter__.return_value = process
+            try:
+                runpy.run_path(str(tool), run_name='__main__')
+                raise AssertionError('deadline did not stop the stage')
+            except SystemExit as error:
+                assert '20-second stage deadline' in str(error), error
+            assert popen.call_count == int(timeout)
+            if timeout:
+                assert popen.call_args.kwargs['start_new_session'] is True
+                assert process.communicate.call_args_list[0].kwargs['timeout'] == 19
+                killpg.assert_called_once_with(process.pid, 9)
+            else:
+                killpg.assert_not_called()
+    print('ok - elapsed stage deadline and transfer timeout both stop immediately')
+
+    process = MagicMock()
+    process.pid = 123456
+    process.communicate.side_effect = [KeyboardInterrupt(), (b'', b'')]
+    with patch.object(sys, 'argv', [str(tool), *args]), \
+         patch('subprocess.Popen') as popen, patch('os.killpg') as killpg:
+        popen.return_value.__enter__.return_value = process
+        try:
+            runpy.run_path(str(tool), run_name='__main__')
+            raise AssertionError('interrupt did not stop the stage')
+        except KeyboardInterrupt:
+            pass
+        killpg.assert_called_once_with(process.pid, 9)
+    print('ok - interruption stops the SSH process group before exiting')
+PY

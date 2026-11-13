@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: MIT
 """Pull 16 exact 2 MiB zero streams over an explicitly selected USB SSH link.
 
 Example: tools/ncm-transfer --peer root@<usb-ip> --interface <host-usb-interface>
+Uses phone-ssh --fresh and its OMAMOBILE_SSH_* identity and host-key settings.
+Direct interface binding defaults OMAMOBILE_SSH_CONFIG to /dev/null; an
+explicit incompatible config is refused by phone-ssh rather than ignored.
 The peer needs head and SSH. No device files or partitions are modified.
 No retries: the first timeout, SSH error, size or digest mismatch stops the run.
 Run only after the device's read-only identity and storage-guard checks pass.
@@ -11,37 +14,78 @@ whether a full request pool exercised the aggregation retry.
 """
 import argparse
 import hashlib
+import os
 import re
+import signal
 import subprocess
+import sys
 import time
+from pathlib import Path
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--peer')
-parser.add_argument('--interface')
+parser.add_argument('--peer', required=True)
+parser.add_argument('--interface', required=True)
 args = parser.parse_args()
-if not args.peer or not args.interface:
-    print('SKIP: --peer and --interface required for an authorized USB test')
-    raise SystemExit(4)
 if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.:@-]*', args.peer):
     parser.error('invalid SSH peer')
-if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.:-]*', args.interface):
+if args.interface in ('off', 'auto') or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,14}', args.interface):
     parser.error('invalid host interface')
+ssh = Path(__file__).resolve().with_name('phone-ssh')
+env = dict(os.environ, OMAMOBILE_SSH_HOST=args.peer,
+           OMAMOBILE_SSH_INTERFACE=args.interface, SSH_ASKPASS_REQUIRE='never')
+env.setdefault('OMAMOBILE_SSH_CONFIG', '/dev/null')
+env.setdefault('OMAMOBILE_SSH_CONNECT_TIMEOUT', '5')
+
+
+def fail(message, stderr=b''):
+    if stderr:
+        print(stderr.decode(errors='replace').rstrip(), file=sys.stderr)
+    raise SystemExit(f'FAIL: transfer {index + 1}/16: {message}; stopped without retry')
+
+
+def stop_transfer(process):
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    return process.communicate()
+
+
+def interrupted(signum, _frame):
+    raise SystemExit(128 + signum)
+
+
+for signum in (signal.SIGTERM, signal.SIGHUP):
+    signal.signal(signum, interrupted)
+
+
 size = 2 * 1024 * 1024
 expected = hashlib.sha256(bytes(size)).digest()
 deadline = time.monotonic() + 20
 for index in range(16):
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        raise SystemExit('FAIL: 20-second stage deadline; stopped without retry')
+        fail('20-second stage deadline')
     try:
-        result = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectionAttempts=1',
-                                 '-o', 'ConnectTimeout=5', '-o', 'ControlMaster=no',
-                                 '-o', 'ControlPath=none', '-o', 'ProxyCommand=none',
-                                 '-o', 'ProxyJump=none', '-o', 'BindInterface=' + args.interface,
-                                 args.peer, 'head -c 2097152 /dev/zero'],
-                                capture_output=True, timeout=remaining)
-    except subprocess.TimeoutExpired:
-        raise SystemExit('FAIL: transfer timeout; stopped without retry') from None
-    if result.returncode or len(result.stdout) != size or hashlib.sha256(result.stdout).digest() != expected:
-        raise SystemExit('FAIL: SSH, size or digest check; stopped without retry')
+        # No controlling terminal or interactive key prompt, and a timeout
+        # stops the SSH proxy as well as SSH itself.
+        with subprocess.Popen([str(ssh), '--fresh', 'head -c 2097152 /dev/zero'],
+                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, env=env, start_new_session=True) as process:
+            try:
+                output, errors = process.communicate(timeout=remaining)
+            except subprocess.TimeoutExpired:
+                output, errors = stop_transfer(process)
+                fail('transfer timeout within 20-second stage deadline', errors)
+            except BaseException:
+                stop_transfer(process)
+                raise
+    except OSError as error:
+        fail(f'could not start phone-ssh: {error}')
+    if process.returncode:
+        fail(f'phone-ssh exited {process.returncode}', errors)
+    if len(output) != size:
+        fail(f'size mismatch: expected {size} bytes, received {len(output)}', errors)
+    if hashlib.sha256(output).digest() != expected:
+        fail('SHA-256 mismatch', errors)
     print(f'ok - transfer {index + 1}/16: {size} bytes, SHA-256 verified', flush=True)
