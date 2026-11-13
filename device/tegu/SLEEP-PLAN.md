@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 9a sleep: why s2idle drains so much
 
-Status (2026-11-10): Two causes are known and fixed, and a third failure is open. Dead storage after a wake: the UFS pads came back as plain inputs; [linux-omarchy-mobile#224](https://github.com/derekross/linux-omarchy-mobile/pull/224), in review, re-applies the pin state at resume. A silent no-wake with C2 entered through s2idle's own path: with C2 disabled for the sleep (#96) or left to the ordinary idle path (#98) the RTC alarm woke the palmtop 300 of 300 times each; [omarchy-mobile#591](https://github.com/derekross/omarchy-mobile/pull/591) is the sleep hook for it. Open: on the published kernel, which has no idle states, a sleep still fails to wake now and then: one in 22 on 2026-11-09 (a boot without modules, no console), none in two re-runs of 36 with modules loaded, and one in 213 overnight on 2026-11-10 on the newest tip with the fixes. That one left a console: the kernel stayed alive, and CPU 7 answered nothing from just after the device suspend until the owner's reset (an RCU stall on CPU 7 every 63 s; neither the alarm nor the Power key got through); what that core was doing isn't known. The main PMIC's interrupt, and with it the RTC alarm, came to the published `zumapro-tegu.dts` with [linux-omarchy-mobile#236](https://github.com/derekross/linux-omarchy-mobile/pull/236), merged 2026-11-10; a kernel from before it has no alarm (`rtcwake` fails and a sleep ends only on a key), so check that `/sys/class/rtc/rtc0/wakealarm` exists before any RTC-woken sleep. Evidence: 300 of 300 RTC-woken 60 s sleeps twice (#96 WFI-only, #98 C2 at runtime, 2026-11-07/08), 15 of 15 wakes on the everyday path, the shell's auto-sleep behind the lock, twelve of them half-hour sleeps (#99, 2026-11-08), 12 of 12 half-hour auto-sleeps on #100 (11-09), and on the published tree with #224 and the PMIC interrupt 307 wakes and two no-wakes (11-09 and 11-10). The attended-first rule (S1, AGENTS.md) stands; the 11-10 run did not keep it (the run table says how it ran).
+Status (2026-11-13): Two causes are known and fixed, and a third failure is open. Dead storage after a wake: the UFS pads came back as plain inputs; [linux-omarchy-mobile#224](https://github.com/derekross/linux-omarchy-mobile/pull/224), merged on 2026-11-12 (00:41Z), re-applies the pin state at resume. A silent no-wake with C2 entered through s2idle's own path: with C2 disabled for the sleep (#96) or left to the ordinary idle path (#98) the RTC alarm woke the palmtop 300 of 300 times each; [omarchy-mobile#591](https://github.com/derekross/omarchy-mobile/pull/591) is the sleep hook for it. Open: on the published kernel, which has no idle states, a sleep has failed to wake twice: one in 22 on 2026-11-09 (a boot without modules, no console) and one in 213 overnight on 2026-11-10 on the newest tip with the fixes. That one left a console: the kernel stayed alive, and CPU 7 answered nothing from just after the device suspend until the owner's reset (an RCU stall on CPU 7 every 63 s; neither the alarm nor the Power key got through); what that core was doing wasn't known then. The tally on that tree, with #224's two commits: 1,100 sleeps woken and those two not. With the PM debug switches on it didn't come back: 701 sleeps from 11-10 to 11-12 with the PM debug switches on (`pm_print_times`, `pm_debug_messages`, a stall made a panic, the function tracer), 313 and 295 of them 60 s sleeps on one boot each, all woke on the alarm with no UFS line. That is not shown to be a fix: at the earlier rate four or five no-wakes were to be expected in 701 and none would be a one-in-ninety chance, but two no-wakes fix that rate poorly (they fit anything from about one in 1,300 sleeps to one in 40), and the switches may change the timing. With the function tracer and `pm_print_times` off it came back on 2026-11-12, twice; the console places CPU 7 in the noirq resume of an HSI0 USI, and [linux-omarchy-mobile#247](https://github.com/derekross/linux-omarchy-mobile/pull/247) proposes keeping those clocks on; the record follows. The main PMIC's interrupt, and with it the RTC alarm, came to the published `zumapro-tegu.dts` with [linux-omarchy-mobile#236](https://github.com/derekross/linux-omarchy-mobile/pull/236), merged 2026-11-10; a kernel from before it has no alarm (`rtcwake` fails and a sleep ends only on a key), so check that `/sys/class/rtc/rtc0/wakealarm` exists before any RTC-woken sleep. Evidence: 300 of 300 RTC-woken 60 s sleeps twice (#96 WFI-only, #98 C2 at runtime, 2026-11-07/08), 15 of 15 wakes on the everyday path, the shell's auto-sleep behind the lock, twelve of them half-hour sleeps (#99, 2026-11-08), 12 of 12 half-hour auto-sleeps on #100 (11-09), and on the published tree with #224 and the PMIC interrupt 1,100 wakes and two no-wakes (11-09 to 11-12). The attended-first rule (S1, AGENTS.md) stands; the overnight run of 11-10 and the runs of 11-11 did not keep it (the run table and its header say how each ran).
 S1 is the condensed account: the two causes, the fix, a run table, what is
 left and what was ruled out. The dated working notes that led there follow
 it, oldest first.
@@ -73,9 +73,13 @@ boot unless said; `systemctl suspend` with an RTC alarm, 60 s unless said;
 "attended" means a person at the laptop watching the loop with the owner at
 home for a button press; the first run of every new kernel was watched that
 way, and the long unattended stretches ran under the loop's recovery budget,
-with one exception, the last row: a new build's first run went overnight
-with the owner asleep, started by hand over SSH and followed only by a poll
-that could report, which is not what the rule asks):
+with two exceptions, neither of them what the rule asks. The overnight run
+of 11-10: a new build's first run went overnight with the owner asleep,
+started by hand over SSH and followed only by a poll that could report. And
+all of 11-11, with the owner out and no yes from him for any of it: the
+first form of the series script with its own inhibitor from 07:00, a
+deliberate test crash at 08:36, the reviewed form's first run at 08:38 and
+the 310 sleeps that followed):
 
 | Kernel (`uname -v`) | Change under test | Cores in sleep | Result | Attended |
 | --- | --- | --- | --- | --- |
@@ -96,6 +100,10 @@ that could report, which is not what the rule asks):
 | the same sources (`push1-g6c9420bfa77f`), modules installed, ramoops on | the re-run | WFI | **36 of 36** (60 s, `pm_wakeup_irq` 52 each, no UFS line) | yes |
 | the same sources, build #2 with `CONFIG_PHY_ZUMA_PCIE=m` (#274) | the same with Wi-Fi up and kept across the sleeps | WFI | **36 of 36**, wlan0 passing traffic after | the start yes, then the loop |
 | published `2f890a533` (11-10) + #224 + #236 + #237 (`push1-gff4fdf58035e`, build #4), modules installed, Wi-Fi kept, the hook of #591 installed | the newest tip, overnight | WFI | a 27-minute sleep ended by the Power key, then 212 woke and the 213th never did: CPU 7 stopped answering, the console kept | no (the owner asleep; his reset in the morning) |
+| the same sources with the function tracer built in (`push1-dbg-gff4fdf58035e`, build #5), `pm_print_times`, `pm_debug_messages` and `kernel.panic_on_rcu_stall=1` on, modules installed, Wi-Fi kept, the hook of #591 installed | whether the no-wake comes back, with a console that would place it | WFI | 96 sleeps entered, no hang: 94 woke on the alarm (a test sleep, 90 with a 10 s alarm, three with a 35 s one); one, the shell's auto-sleep between two cycles with no alarm, lasted 9 h 33 min until the Power key; the 96th was cut by a button reset asked for in error | the first run yes, the owner at the palmtop; he left as the second began, and the long sleep was overnight |
+| the same build, 11-11, `sleep-series.sh` holding its own sleep inhibitor (first form, before its review) | the inhibitor, and whether the auto-sleep stays out | WFI | **90 of 90** with a 35 s alarm (33.8 to 34.9 s, `pm_wakeup_irq` 53, no UFS line), stopped by hand for the review's changes | no (the owner out) |
+| the same build, 11-11, the script as reviewed (`PMDEBUG=1 TRACE=1`, 60 s alarm) | the count with the PM switches on | WFI | **313 of 313** (3 in the script's first run, then 310 from 08:43 to 16:20; 58.8 to 60.0 s, `pm_wakeup_irq` 53 each, no UFS line, no stall, `suspend_stats` 313 and 0) | no: nobody at the palmtop for the first cycles; the owner saw it cycling through the day and watched a few cycles at about 11:25 |
+| the same build and script, the night of 11-11 to 11-12 (`PMDEBUG=1 TRACE=1`, 60 s alarm) | the count again, overnight | WFI | **295 of 295** (21:35 to 04:50; 58.7 to 60.0 s, `pm_wakeup_irq` 53 each, no UFS line, no stall, `suspend_stats` 295 and 0) | the owner's yes for the night, given before he went to sleep; he slept through it. The attended runs it rests on: the build's on the evening of 11-10, and the script's, in this form, the cycles the owner watched at about 11:25 on 11-11 (the screen coming on at the lock screen, going dark for about a minute and coming on again), in a run that had begun with nobody there |
 
 Before #96, one wake in 15 to 215 lost the storage; before #98, C2 in the
 sleep lost the palmtop after 6 to 135 cycles.
@@ -112,38 +120,107 @@ missing pull, NFC polling (stopped by the hook throughout), the modem
 
 **What is left.**
 
-1. The no-wake on the published kernel. On that tree 307 sleeps have woken
-   (21, 36, 36, two ended by the Power key, 212) and two have not: the 22nd
-   of 11-09's first run, with no console, and the 213th of 11-10's, whose
-   console shows CPU 7 not answering while the rest of the kernel runs
-   (failure 3 above). Next: the same series on a build that can show what
-   that core is doing and that recovers by itself, with pseudo-NMI
-   (`CONFIG_ARM64_PSEUDO_NMI=y`, `irqchip.gicv3_pseudo_nmi=1`), so the
-   stall report's backtrace reaches a core with interrupts masked, and
+1. The no-wake on the published kernel. On that tree 1,100 sleeps have woken
+   (21, 36, 36, two ended by the Power key, 212, the 95 of the evening of
+   11-10, 90 and 313 on 11-11, and 295 in the night after) and two have not: the 22nd of 11-09's first run, with no
+   console, and the 213th of 11-10's, whose console shows CPU 7 not
+   answering while the rest of the kernel runs (failure 3 above). With the
+   switches below on it didn't come back. What was set up for it, in place of the pseudo-NMI build
+   planned here before (the maintainer's pointers on kernel #224):
+   `pm_print_times` and `pm_debug_messages`, so the console names each
+   device's suspend callback as it starts and returns;
    `kernel.panic_on_rcu_stall=1`, so the stall becomes a panic, a reboot
-   through `panic=10` and a console in pstore with no buttons. If the
-   core doesn't answer an NMI either, it is stuck below the kernel or
-   stopped, and the series goes on with the PMIC commits alone, without
-   #224's two.
-2. The sleep hook ([omarchy-mobile#591](https://github.com/derekross/omarchy-mobile/pull/591)): its series is in (the
-   last note below, 40 of 40); it waits for its merge.
-3. Sleep with the modem up (M6): never run with the fixes; the one try
-   before them (10-27) also had NFC polling.
+   through `panic=10` and a console in pstore with no buttons; and, on a
+   build with the function tracer, each core's last calls in the panic's
+   dump (`PMDEBUG=1` and `TRACE=1` in `sleep-series.sh`). With them on,
+   701 sleeps have woken on the alarm and none has hung: 93 on the evening
+   of 11-10, 313 of 60 s on 11-11 and 295 of 60 s in the night after
+   (the last notes below). The first 406 are the count the maintainer
+   asked for, and #224 merged on it. It doesn't show the no-wake gone:
+   without the switches that tree had two in about 310 sleeps, so four
+   or five were to be expected in 701 and none would happen by chance
+   about one time in ninety; but two no-wakes fix that rate poorly
+   (anything from about one in 1,300 sleeps to one in 40 fits them), and
+   at the low end 701 clean sleeps are an even chance. And the switches
+   may change the timing. With the function tracer and `pm_print_times`
+   off it came back on 2026-11-12, twice; the console places CPU 7 in the
+   noirq resume of an HSI0 USI, and [linux-omarchy-mobile#247](https://github.com/derekross/linux-omarchy-mobile/pull/247)
+   proposes keeping those clocks on; the record follows.
+2. The sleep hook ([omarchy-mobile#591](https://github.com/derekross/omarchy-mobile/pull/591)): merged on 2026-11-10 as
+   `omamobile-device-tegu` 0.2.11; its series is the 40 of 40 in the notes
+   below.
+3. Sleep with the modem up (M6): run with the fixes on 2026-11-09, five
+   boots, and it neither hung nor reset, but one attempt costs the phone
+   service until a reboot. The record is [MODEM-PLAN](MODEM-PLAN.md), "Suspend
+   with the modem on, with the sleep fixes"; what is open is in
+   [#618](https://github.com/derekross/omarchy-mobile/issues/618),
+   [#619](https://github.com/derekross/omarchy-mobile/issues/619) and
+   [#620](https://github.com/derekross/omarchy-mobile/issues/620).
 4. The root cause under the masks: zuma's PMU data without `pmu_cpuhp`,
    compared with gs101/gs201 before idle states come to a PR.
-5. The DEVICES cell to "works" once item 1's no-wake is found and fixed,
-   and #224, the PMIC interrupt (kernel #236) and the hook are merged and
-   have run from the published kernel.
+5. The DEVICES cell to "works" once item 1's no-wake is found and fixed.
+   #224 (merged 2026-11-12, 00:41Z), the PMIC interrupt (kernel #236) and the hook
+   are all merged; the 1,100 wakes above ran on the published tree with
+   #224's commits on top, and a run on the tree as published, with them
+   in it, is still to do.
+6. The RTC around a sleep. The odd readings are explained, and the fix
+   is [linux-omarchy-mobile#245](https://github.com/derekross/linux-omarchy-mobile/pull/245). In the 310 sleeps of 11-11, five
+   cycles read an RTC difference that doesn't fit the 60 s the kernel's
+   clock has for them (three 20 or 21 s short, one 7 s and one 39 s
+   long), and in the 295 of the night after, four (one 21 s short, one
+   6 s and two 39 s long). The cause is in `rtc-s5m`: before it reads the time it sets the
+   PMIC's read-update bit, which copies the counters into the time
+   registers, and for the S2MPG10 and S2MPG12 it clears the bit, waits,
+   sets it and waits 1 ms for the copy; the 9a's S2MPG14 was left out of
+   that, so a read can return the time of the read before it. Awake, 60
+   rounds of "wait 20 s, read twice, compare with the system clock"
+   (`bringup/rtc-pause-test.py`, 2026-11-11): on the daily kernel the first read
+   was old in five rounds (four by 20 s, one by 10 s), on the tracing
+   build in two (20 s), and on the same build with the S2MPG14 added to
+   the wait (`7.3.0-rc6-omamobile-push1-dbg-gc63fa9271bb8`, build #6) in
+   none; the second read, a moment later, was right every
+   time, and 2,500 reads 5 to 90 ms apart showed none off, the read
+   before being that recent. The patched build was new on the palmtop:
+   it booted at about 20:50 MST on 11-11 for this test alone, held awake
+   by a block inhibitor, entered no sleep, and was
+   replaced by the tracing build before the night's series; the owner was
+   at home and not at the palmtop. In a series the old read is either the one
+   before the alarm is armed or the one 20 s after the wake, which gives
+   the differences 20 s short and 6 s long. The 39 s ones fit a read
+   that mixed the two times, the new minute with the old seconds (the
+   time of the wake plus a minute): in all three the wake was within
+   20 s before a minute rolled over, or on it. The differences a minute
+   off in the night of 11-10, each just after a minute rolled over, fit
+   the other mix, the old minute with the new seconds, so the read tear
+   of the 11-04 note is most likely this too. That is a reading of the
+   numbers, not yet reproduced awake: `rtc-pause-test.py` with a third
+   argument reads just after the minute, and its one run so far, 35
+   reads a second past the minute and a minute apart on the daily
+   kernel (11-12), returned none old or mixed. `rtcwake` sets its alarm relative
+   to its own read, so an old read also moves the alarm earlier by its
+   age, and one older than the interval would put it in the past; no
+   wake has been lost to that in these series, where the reads are a few
+   seconds apart. Until #245 is in the kernel the palmtop runs, the
+   series' "rtc" column is off in about one cycle in sixty and the
+   kernel log's length is the one to go by. Still not looked into: on
+   11-10 a 10 s alarm gave sleeps of 19 to 20 s, 89 times.
 
 **Scripts** (`device/tegu/bringup/`): `sleep-series.sh` (on the palmtop:
-N RTC-woken `systemctl suspend` cycles of S s, records each wake),
+N RTC-woken `systemctl suspend` cycles of S s, records each wake; it holds a
+sleep inhibitor of its own for the run, so the shell's auto-sleep can't
+take the palmtop between two cycles, and `PMDEBUG=1` and `TRACE=1` turn on
+the no-wake debugging of item 1 above),
 `sleep-series-loop.sh` (laptop: polls the series, captures a dead wake,
 recovers with sysrq under a budget of MAXREC recoveries per 24 hours,
 records the next boot's ext4 recovery, restarts the series; it unmasks `sleep.target` and `suspend.target` for the run and puts them back as it found them when it exits),
 `sleep-kernel-run.sh` (laptop: a rewrite of the owner's kit launcher, pushes a built kernel and starts the loop),
 `sleep-autosleep-series.sh` and `sleep-autosleep-watch.sh` (the everyday
 path: the shell's auto-sleep does the sleeping, the script only arms the
-alarms).
+alarms), `rtc-pause-test.py` (on the palmtop, awake: whether an RTC read after
+a pause returns an old time, item 6 above. It is not read-only: every
+third round it arms a wake alarm an hour ahead and clears it again, so it
+refuses to start when an alarm is armed, holds a sleep inhibitor of its
+own for the run, and must never run beside a series).
 
 The dated working notes that led here follow, oldest first; they are the
 long story and the record of what each day tried.
@@ -4830,3 +4907,46 @@ What it says:
 So this no-wake isn't the SoC staying down, which is what failure 2 looked like on #97 (the last CPU going down, then the watchdog's reset). It is one core locked up with the rest of the kernel running, and nothing watches for that during a sleep: the cluster watchdog is stopped for it and systemd is frozen.
 
 What it doesn't say: what CPU 7 was doing. The backtrace IPI is an ordinary interrupt on this build (`CONFIG_ARM64_PSEUDO_NMI` is off), so a core with interrupts masked, or one stuck below the kernel, can't answer it. Nor whether the 22nd sleep of 11-09 was the same thing: that boot had no ramoops. "What is left" item 1 has the next run.
+
+**The tracing build's first evening: 94 alarm wakes, an unplanned sleep of nine and a half hours, and a false alarm (2026-11-10, 19:42, to 11-11, 06:19 MST palmtop clock).** `7.3.0-rc6-omamobile-push1-dbg-gff4fdf58035e`, build #5: the sources of the series above (the published tree with kernel #236 and #237, plus #224) with the function tracer added (`CONFIG_FUNCTION_TRACER`, `CONFIG_DYNAMIC_FTRACE`; pseudo-NMI is built in but not on the command line), its own modules installed, the published DTB with the `public-ramoops` and `modem-cpif` overlays, the modem boot unit masked for the boot, Wi-Fi kept, the cpuidle hook installed. The series is `sleep-series.sh` with what is now `PMDEBUG=1` and `TRACE=1`: `pm_print_times`, `pm_debug_messages`, `kernel.panic_on_rcu_stall=1`, and function and event tracing in 24 KB per CPU, dumped by a panic (`ftrace_dump_on_oops`). The owner was at the palmtop from 19:41 to about 20:45.
+
+- **Four test crashes first, and what they showed about the dump** (`echo c > /proc/sysrq-trigger`, awake, each on a fresh boot, between 19:46 and 19:58; a fifth the next morning). In the first three the saved console ended about 3,460 kernel lines after its start, in the middle of the trace dump, with no "Rebooting in 10 seconds.." line, and the bootloader's log after them has a watchdog reset (`RST_STAT: 0x1 - CLUSTER0_NONCPU_WDTRESET`): the panic never got to its own reboot. The console in pstore starts at 2.5 s of uptime, so with the lines before that each ended at about record 4096 since boot, which is the number of records the kernel's log ring holds on this build (`CONFIG_LOG_BUF_SHIFT=17`): a panic in which the ring wraps for the first time lost everything after the wrap. For the fourth the ring was filled beforehand (5,000 lines written to `/dev/kmsg`) and systemd's runtime watchdog (10 s on the palmtop, from a bring-up drop-in) was turned off: the console has the whole dump (about 950 events for each of the four cores that were traced), the dump's end marker and "Rebooting in 10 seconds..", and the palmtop rebooted by itself, SSH back 32 s after the crash, with `RST_STAT: 0x180000 - PIN_RESET | PO_RESET` in the bootloader's log. ("Reboot reason" reads `APC Watchdog Early` after all five, so that line doesn't tell a watchdog reset from the panic's own restart; `RST_STAT` does.) Two things changed at once in the fourth. The fifth (11-11, 08:36, on the boot of that morning's 90 sleeps, so with the ring long wrapped, all eight cores traced) had the watchdog raised to 60 s instead of off, the maintainer's suggestion: the whole dump again (883 to 958 events a core, 7,420 lines), the end marker, "Rebooting in 10 seconds..", `PIN_RESET | PO_RESET`, SSH back 31 s after the crash. So the series fills the ring and raises the watchdog to 60 s for the run, which keeps a net under an awake hang. Not tried: a wrapped ring with the watchdog left at 10 s, which by these timings would cut the panic's ten-second countdown short rather than the dump. A dump of 24 KB per CPU fits the 2 MB console with room for the sleep's own lines (about 64 KB of them per cycle with `pm_print_times`).
+- **A test sleep, then the first run** (boot at 19:58:23). One `systemctl suspend` with a 25 s alarm at 19:59 for omarchy-mobile#619's `SuspendState=freeze` (MODEM-PLAN has it), before the switches were on. Then a series with a 10 s alarm from 20:00: 90 sleeps, 89 of them 19.1 to 19.8 s by the kernel log (why a 10 s alarm gives a sleep that long wasn't looked at), each woken by the alarm (`pm_wakeup_irq` 53), no UFS line, no ACPM timeout, no oops. The run stopped itself at the 90th with "no suspend happened": logind had held that sleep back for NetworkManager's delay inhibitor (up to 15 s here), the sleep began after the script's fixed 10 s wait had ended, and it lasted 6 s and woke on the alarm too. The script now waits for `suspend_stats/success` to move, up to 45 s.
+- **The second run and the unplanned sleep.** A series with a 35 s alarm from 20:43, the owner leaving as it began. Two sleeps of 34.5 s woke on the alarm. The third did too, at 20:45:24, and seven seconds later the shell's auto-sleep, which is on on this palmtop, put the palmtop back to sleep, as it does 5 s after any wake that leaves the screen off behind a secure lock (`omamobile-sleepd: sleeping (dark resume, 5 s grace)`). No alarm was armed for that sleep. It lasted from 20:45:33 to 06:18:54, 9 hours 33 minutes, and ended at the owner's Power key (`PM: Triggering wakeup from IRQ 57`, `Power`), with no UFS line. In the first run the daemon logged nothing, most likely because the lock wasn't secure with the owner at the palmtop, and after the second run's first two wakes an SSH poll from the laptop happened to be open ("not sleeping: an SSH session is open"), so the daemon held off until the third.
+- **The false alarm.** From the laptop a sleep with no alarm and a hang look the same: the USB device gone and no reconnect. It was taken for the no-wake, reported as that on kernel #224 the same night, and the owner was asked to reset the palmtop in the morning. His first press of the Power key woke it; the series went on, logged its third cycle and entered a fourth sleep at 06:19:02, and the Power + Volume Up reset landed in that one. The journal of the boot, read after it, has 96 `PM: suspend entry` and 95 `PM: suspend exit` lines, no RCU stall, no panic and no UFS error line. The report on #224 was corrected the same morning.
+- **Why it happened, and the fix.** The series released the push script's keep-awake inhibitor (`x-awake`) at its first cycle, since a block inhibitor refuses its own sleeps too, and from then on nothing stood between the auto-sleep and the palmtop in the seconds after each wake. This is the trap of the unplanned first sleep in the note above, a second time. `sleep-series.sh` now holds a block inhibitor of its own from start to end and sleeps past it with `systemctl suspend -i`, so the only sleeps during a run are its own, each with an alarm; `-i` passes every block inhibitor, so the series refuses to start with the modem up (a modem unit active or `cpif` loaded) and looks again before every sleep: the modem up, or any block-mode sleep inhibitor other than its own and `x-awake`'s, ends the run. An alarm under 30 s is refused too (logind can hold a sleep back 15 s for a delay inhibitor, and an alarm that fires before the sleep begins leaves it with none).
+- **The morning after: the series with its own inhibitor (2026-11-11, 07:00 to 08:42 MST), nobody at the palmtop.** The owner had handed the palmtop over and gone out; he was asked through his phone before the reviewed script's first run and didn't answer, so these runs were followed from the laptop only, which is not what the attended rule asks. First the script with the inhibitor and `-i` but before the review's changes: 90 sleeps with a 35 s alarm from 07:00 to 08:34, each 33.8 to 34.9 s by the kernel log and woken by the alarm (`pm_wakeup_irq` 53), no UFS line, no ACPM timeout, no oops, `suspend_stats` 90 and 0; after the wakes the auto-sleep logged "not sleeping: a sleep inhibitor is held", or "an SSH session is open" when the laptop's poll was in. It was stopped by hand after the 90th for the review's changes and the 60 s alarm. Then the fifth test crash (above), and on the fresh boot the script as it is here, `N=3 S=60 PMDEBUG=1 TRACE=1`, its first run:
+
+  ```
+  before:  runtime watchdog 10000000, panic_on_rcu_stall 0, pm_print_times 0, pm_debug_messages 0, tracer nop, ftrace_dump_on_oops 0, console_suspend Y
+  debug: pm_print_times 1, pm_debug_messages 1, panic_on_rcu_stall 1, panic timeout 10 s, tracer function 27 KB per CPU on 1, ftrace_dump_on_oops 1
+  runtime watchdog 60000000 (was 10000000)
+  cycle 1 08:38:56: rtc 63 s, dmesg 59.8 s, wake irq 53, ufs 0, linkfail 0, linkwait 0, acpm 0, oops 0, spm 5, c2-s2idle  c2-run , ok 1 fail 0
+  cycle 2 08:40:24: rtc 62 s, dmesg 58.8 s, wake irq 53, ufs 0, linkfail 0, linkwait 0, acpm 0, oops 0, spm 5, c2-s2idle  c2-run , ok 2 fail 0
+  cycle 3 08:41:53: rtc 62 s, dmesg 59.8 s, wake irq 53, ufs 0, linkfail 0, linkwait 0, acpm 0, oops 0, spm 5, c2-s2idle  c2-run , ok 3 fail 0
+  done
+  restored: pm_print_times 0, pm_debug_messages 0, panic_on_rcu_stall 0, ftrace_dump_on_oops 0, tracer nop, runtime watchdog 10000000 (was 10000000)
+  restored: spm_lvl 5, state1 disable , modem boot unit masked (was masked)
+  after:   runtime watchdog 10000000, panic_on_rcu_stall 0, pm_print_times 0, pm_debug_messages 0, tracer nop, ftrace_dump_on_oops 0, console_suspend Y
+  ```
+
+  `systemd-inhibit --list` during the run (the block-mode ones; `linkwait` is the push script's `x-awake`), and what the auto-sleep logged in that boot:
+
+  ```
+  linkwait      0 root  969 systemd-inhibit sleep after test crash 5                              block
+  sleep-series  0 root 3100 systemd-inhibit sleep only the series' own sleeps, each with an alarm block
+  omamobile-sleepd: not sleeping: a sleep inhibitor is held (sleep-series)    3 times
+  omamobile-sleepd: not sleeping: a sleep inhibitor is held (linkwait)        once
+  omamobile-sleepd: not sleeping: an SSH session is open                      3 times
+  ```
+
+  After it only `linkwait` was left. systemd's journal has "Watchdog running with a hardware timeout of 1min." at the start and "of 10s." at the end, so the driver takes 60 s. The "before" and "after" lines were read by hand around the run; the rest is the series' log. Changed in the script after these runs, from the review, and not run yet: the log of the run before is kept beside the new one and a refused start no longer empties it, `printk_devkmsg` and the trace buffer's size are put back with the rest (an unused buffer reads `7 (expanded: 1408)`, and the first run wrote the 7 back), and a list of inhibitors that can't be read stops the run.
+- **The series for the count: 310 of 310 (2026-11-11, 08:43 to 16:20 MST).** The same boot and script, `N=310 S=60 PMDEBUG=1 TRACE=1`. Every sleep lasted 58.8 to 60.0 s by the kernel log and was woken by the alarm (`pm_wakeup_irq` 53), with no UFS line, no ACPM timeout and no oops; five cycles logged an RTC difference that doesn't fit (three about 20 s short, one 7 s and one about 40 s long; not looked into), while the kernel's clock has those sleeps at 60 s like the rest. The boot's kernel journal agrees with the series' log: 313 `PM: suspend entry` and 313 `PM: suspend exit` (the first run's three included), 313 `PM: Triggering wakeup from IRQ 53` and none from another interrupt, no `link startup failed`, `Host init failed`, `I/O error` or `ufshcd_err_handler` line, no RCU stall, no panic; `suspend_stats` 313 and 0. The auto-sleep asked for no sleep in that boot. At the end the "restored:" lines read as after the first run (the switches off, the tracer `nop`, the watchdog back at 10 s), and only `x-awake` held a block inhibitor. The owner wasn't at the palmtop when it began; he saw the screen cycling at several points through the day and watched a few cycles at about 11:25.
+
+What the two days add to the count: with the PM switches on, 406 sleeps woken by the alarm (93 on 11-10, 313 on 11-11) and none hung; without counting toward that, 90 more with a 35 s alarm on 11-11. It leans the right way and no more: at the rate without the switches (two no-wakes in about 310) two or three were to be expected in 406, and none turns up by chance about one time in thirteen, so this can't tell "gone" from "the switches change the timing".
+
+The long sleep of 11-10, nine and a half hours on this tree, ended at the first press of the Power key, which the two presses of the morning of 11-10 could not do for the sleep that hung.
+
+**The night of 2026-11-11 to 11-12: 295 of 295 (21:35 to 04:50 MST).** The tracing build again (`7.3.0-rc6-omamobile-push1-dbg-gff4fdf58035e`, build #5, a fresh boot), the script in the form that ran the 313 (`N=295 S=60 PMDEBUG=1 TRACE=1`), the modem boot unit masked for the boot, on the charger, Wi-Fi kept. The owner said yes to the night before he went to sleep, and slept through it. Neither part was new, and each had had its attended run: the build on the evening of 11-10, the owner at the palmtop for the first run; the script in this form at about 11:25 on 11-11, when the owner watched a few of its cycles (the screen coming on at the lock screen, going dark for about a minute and coming on again), in the run of 313 that had begun with nobody there. Every sleep lasted 58.7 to 60.0 s by the kernel log and was woken by the alarm (`pm_wakeup_irq` 53), with no UFS line, no ACPM timeout and no oops. The boot's kernel journal agrees with the log: 295 `PM: suspend entry`, 295 `PM: suspend exit`, 295 `PM: Triggering wakeup from IRQ 53` and none from another interrupt, no `link startup failed`, `Host init failed`, `I/O error` or `ufshcd_err_handler` line, no RCU stall, no panic; `suspend_stats` 295 and 0. Four cycles logged an RTC difference that doesn't fit (cycle 48 21 s short, 91 6 s long, 148 and 181 39 s long), the old reads of "What is left" item 6. At the end the "restored:" lines read as before (the switches off, the tracer `nop`, the watchdog back at 10 s). The daily kernel went back at 04:53 and the modem was up and registered at 04:54.
+
+With it the count with the PM switches on is 701 sleeps woken by the alarm and none hung. Item 1 has what that does and doesn't say.
