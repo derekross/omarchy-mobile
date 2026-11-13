@@ -9,9 +9,9 @@ the facts needed for review.
 
 | Date | `boot.img` SHA-256 | Source, as recorded | `/dev/sda` and UFS partitions | Checks and gaps |
 | --- | --- | --- | --- | --- |
-| 2026-11-12 | `ac93a5d9f6787153cf620704f192c22da91cf2041789f16f4214111b8458d226` | RAM image with the FTS5 node enabled directly in the Dipper kernel DTS | `/dev/sda` absent; all 85 UFS partition flags `ro=1` | Full reserved range, kernel `7.3.0-rc6-omamobile-push1`, `stmfts` on `event2`, no Oops/BUG/panic/WARN. No physical touch event captured on this boot; no UFS write. |
-| 2026-11-12 | `1bf0ffd5302fff7fa75f49382567063d7e03bd52083baa81a88107a47dcbdbd2` | Corrected RAM-only FTS5 overlay, rebuilt from the current preprocessed Dipper DTS | `/dev/sda` absent; all 85 UFS partition flags `ro=1` | `0x85fc0000–0x8a8fffff` reserved; `stmfts` exposed `event2` on I2C14, and physical input included contact, changing X/Y coordinates and `ABS_MT_TRACKING_ID=-1` release; `qcom_wdt` bound. No UFS write. |
-| 2026-11-12 (superseded) | `e37196952fca14d5a9152871927039b2ac1d311ec500710f8611f9ac6eff8072` | FTS5 overlay applied to a stale `base-panel.dtb` | `/dev/sda` absent; all 85 UFS partition flags `ro=1` | Touch events worked, but the DTB omitted `removed-region@86200000` and `removed-region@89100000`; `/proc/iomem` exposed those areas as System RAM. Replaced by the corrected image above. No UFS write. |
+| 2026-11-12 | `ac93a5d9f6787153cf620704f192c22da91cf2041789f16f4214111b8458d226` | Direct-DTS test; local kernel tree based on `2a318a96ae9d4`, with the FTS5 change now proposed as kernel PR #249 commit `0d548847248512b1e8e1d40d66a85b81fe5ed471` | `/dev/sda` absent (disk flag not applicable); `sdb`–`sdf` disk flags not read; all 85 partition flags `ro=1` | Full reserved range, kernel `7.3.0-rc6-omamobile-push1`, `stmfts` on `event2`, no Oops/BUG/panic/WARN. Touch X/Y min/max, `qcom_wdt` state and feeder were not read. No physical touch event captured; no UFS write. |
+| 2026-11-12 | `1bf0ffd5302fff7fa75f49382567063d7e03bd52083baa81a88107a47dcbdbd2` | Corrected overlay test; local kernel tree based on `2a318a96ae9d4`, with the FTS5 change now proposed as kernel PR #249 commit `0d548847248512b1e8e1d40d66a85b81fe5ed471`; tested enable overlay source is device PR commit `f25195d184bd9450e59a449f99881c87ff214f72` | `/dev/sda` absent (disk flag not applicable); `sdb`–`sdf` disk flags not read; all 85 partition flags `ro=1` | `0x85fc0000–0x8a8fffff` reserved; `stmfts` exposed `event2` on I2C14; physical input included contact, changing X/Y coordinates and `ABS_MT_TRACKING_ID=-1` release. `qcom_wdt` bound; feeder state and touch X/Y min/max were not read. No UFS write. |
+| 2026-11-12 (superseded) | `e37196952fca14d5a9152871927039b2ac1d311ec500710f8611f9ac6eff8072` | Stale `base-panel.dtb` source commit not retained; local kernel checkout was based on `2a318a96ae9d4`; FTS5 enable overlay is now recorded at device PR commit `f25195d184bd9450e59a449f99881c87ff214f72` | `/dev/sda` absent (disk flag not applicable); `sdb`–`sdf` disk flags not read; all 85 partition flags `ro=1` | Touch events worked, but the DTB omitted `removed-region@86200000` and `removed-region@89100000`; `/proc/iomem` exposed those areas as System RAM. This was noticed when reviewing `/proc/iomem` after the boot's touch test. Replaced by the corrected image above. No UFS write. |
 | 2026-11-11 | `665fcbd682cd8e64b3ffec1ff7f4ab9ca33a26b9b47b11073be7a3c267abf2b1` | #505 `2d67708e07728b13b5d2a9eda299ace8a1608163`; kernel/DTS #220 `26aa77c317cd029d16e58890c532562ca275c9f0` | Node absent, disk `ro=0`; all 85 partitions `ro=1`; `sdb`–`sdf` `ro=1` | `uname -r` `7.3.0-rc6-omamobile-push1`; `qcom_wdt` bound and feeder running; simpledrm fb0, USB/SSH and reserved `0x85fc0000–0x8a8fffff` passed. Physical screen, keys, touch, GPU and Wi-Fi not tested. RAM boot only; no UFS write. |
 | 2026-11-10 | `540b5d31ea73a31ade9a8d8cb5152cf701dc3c2ad8256734790b0ef2db6dbdd0` | Combined #503/#505; kernel/DTS #220 `055a4019998f22cc0e2a8afef7650274a6ce0657` | Node absent, disk `ro=0`; all 85 partitions `ro=1`; `sdb`–`sdf` `ro=1` | Watchdog/feeder, simpledrm, USB/SSH, reserved TZ range, pinned host key and `reboot-to bootloader` passed; physical keys not captured. |
 | 2026-11-10 | `a2d435a7430e7e4c145c61cdb9866d16929731859d91c7105e6bfcaf9e3e9dd7` | Rebased #503 NFS image with #220 `055a4019998f22cc0e2a8afef7650274a6ce0657` | `/dev/sda` present, set `ro=1`; six disks and all 85 partitions read back `ro=1` | `uname`, NFS root, multi-user systemd, watchdog and SSH passed; generic Arch test root only; link-loss recovery and Omarchy desktop untested. |
@@ -37,7 +37,10 @@ bound `st,stmfts5` on I2C14 and physical taps produced touch, multitouch X/Y
 and release events inside the 1080×2248 panel. Its `base-panel.dtb` was stale:
 the merged DTB omitted `removed-region@86200000` and
 `removed-region@89100000`, exposing both ranges as System RAM in `/proc/iomem`.
-The image is superseded even though all 85 UFS partition flags were read-only.
+The base DTB was reused from an earlier local build output; its exact source
+commit was not retained. The missing reservation was noticed when reviewing
+`/proc/iomem` after the boot's touch test, not before boot. The image is
+superseded even though all 85 UFS partition flags were read-only.
 
 Rebuilt the base DTB from the current preprocessed Dipper DTS, then reapplied
 the same FTS5 overlay. The corrected RAM image
@@ -47,10 +50,11 @@ kernel `7.3.0-rc6-omamobile-push1`. `/proc/iomem` showed
 `/dev/sda` was absent, and `stmfts` plus `qcom_wdt` bound. The kernel reported
 no Oops, BUG, panic or WARN. Physical touch on `/dev/input/event2` produced
 `ABS_MT_TRACKING_ID`, changing `ABS_MT_POSITION_X/Y` values, and a release
-event (`ABS_MT_TRACKING_ID=-1`). No UFS partition was written. The test overlay
-still defines the touchscreen node itself; per CONTRIBUTING §6.1, that node
-must first be added disabled to the kernel DTS before a repository overlay can
-enable it.
+event (`ABS_MT_TRACKING_ID=-1`). No UFS partition was written. The node is now
+proposed disabled in kernel PR #249 at
+`0d548847248512b1e8e1d40d66a85b81fe5ed471`; the repository overlay source is
+device PR commit `f25195d184bd9450e59a449f99881c87ff214f72`. These commits make
+the tested configuration rebuildable, but postdate the historical boots.
 
 Then booted a RAM image with the same FTS5 node enabled directly in the kernel
 DTS. Image SHA-256:
@@ -193,8 +197,9 @@ the owner confirmed the console was visible on the lit panel. All 85 partition
 flags were `ro=1`; `/dev/sda` was absent, while `/dev/sdb` through `/dev/sdf`
 remained present and had `ro=1` on this pre-#484 image. Backlight value 0 was
 accepted and restored to 511 (maximum 1023). Framebuffer blanking changed
-DRM `dpms` from `On` to `Off` and back to `On`. The FTS5 touch input still needs
-a test on the current kernel. The panel log included a missing DSI `vdda`
+DRM `dpms` from `On` to `Off` and back to `On`. FTS5 contact, coordinate
+changes and release were later captured on 2026-11-12; see above. Hyprland
+delivery remains untested. The panel log included a missing DSI `vdda`
 supply (dummy regulator) and missing `a630_sqe.fw`; the display initialized,
 but GPU rendering was not tested. The RAM image had no Arch root, and the probe
 did not write UFS. The installed-system backup checksums were verified before
@@ -238,9 +243,9 @@ procedure and supported single-slot writer are still required before a flash.
   fts,reset-gpio = <&tlmm 32 ...>; fts,default-fw-name = "st_fts_e1.ftb"; }`, with
   `fts,tp-vendor = <0x48>`. The running kernel's input device is `N: Name="fts"`.
   An `atmel,mxt-ts@4a` node exists as the alternate vendor and is not the active one.
-  **Open:** mainline's ST driver is `st,stmfts` (`drivers/input/touchscreen/stmfts.c`),
-  a different driver from Xiaomi's downstream `st_fts`; the current FTS5 driver
-  has not been tested with Dipper's DTS node. No sibling board helps —
+  Mainline's ST driver is `st,stmfts` (`drivers/input/touchscreen/stmfts.c`),
+  a different driver from Xiaomi's downstream `st_fts`; tested on Dipper
+  2026-11-12, see above. No sibling board helps —
   polaris uses `syna,rmi4-i2c@20`, beryllium a FocalTech/Novatek part.
 - **Audio** `sdm845-tavil-snd-card` (WCD9340). **Fingerprint** Goodix, capacitive
   (`fingerprint_goodix`, `uinput-goodix`); no mainline driver, out of scope.
