@@ -221,7 +221,10 @@ fi
 # husky's BCM.hcd names the module and board, not the chip: another phone's
 # patch (here the 7 Pro's) is refused
 rm -rf "$t/husky-otherbt"; cp -r "$t/husky" "$t/husky-otherbt"; echo "BCM4389C1 fictional" > "$t/husky-otherbt/firmware/brcm/BCM.hcd"
-refuses "husky: another chip's Bluetooth patch" "BCM.hcd is not a" "$t/husky-otherbt" "$t/ext4.img" -d husky
+refuses "husky: another chip's Bluetooth patch" "BCM.hcd is not a Pixel 8 Pro (G5SN_V<n>_HK3) Bluetooth patch" "$t/husky-otherbt" "$t/ext4.img" -d husky
+# husky runs the haptics checks too: a Halo WMFW that isn't the CS40L26's is refused
+rm -rf "$t/husky-otherhap"; cp -r "$t/husky" "$t/husky-otherhap"; halo "calib fictional" > "$t/husky-otherhap/firmware/cs40l26.wmfw"
+refuses "husky: another part's haptics firmware" "cs40l26.wmfw is not a CS40L26 firmware" "$t/husky-otherhap" "$t/ext4.img" -d husky
 rm -rf "$t/v2-missing"; cp -r "$t/v2" "$t/v2-missing"; rm "$t/v2-missing/firmware/aoc.bin"
 refuses "a missing ext4 file with an older copy in OUT" "/vendor/firmware/aoc.bin is missing" "$t/v2-missing" "$t/ext4.img"
 refuses "a missing EROFS file with an older copy in OUT" "/vendor/firmware/aoc.bin is missing" "$t/v2-missing" "$t/erofs.img"
