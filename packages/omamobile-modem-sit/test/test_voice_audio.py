@@ -180,6 +180,15 @@ class CallAudioDefaultTests(unittest.TestCase):
                 f.write(text)
         return patch.object(paths, 'DEVICE_DEFAULTS', paths.Path(directory))
 
+    def test_a_typo_in_the_tegu_route_only_matters_on_the_9a(self):
+        with patch.object(voice_audio.C, 'CDLL'), patch.object(voice_audio.shutil, 'which', return_value=None):
+            with patch.object(voice_audio, 'is_tegu_card', return_value=False):
+                audio = voice_audio.VoiceAudio(card=0, tegu_route='spekaer')    # another phone: never read
+                self.assertFalse(audio.tegu)
+            with patch.object(voice_audio, 'is_tegu_card', return_value=True):
+                with self.assertRaises(ValueError):
+                    voice_audio.VoiceAudio(card=3, tegu_route='spekaer')
+
     def test_no_call_audio_by_default(self):
         # No device package defaults (any phone but a verified one): no route.
         with self.device_defaults(None):
@@ -241,11 +250,14 @@ class CallAudioDefaultTests(unittest.TestCase):
 
 class TeguAudioTests(unittest.TestCase):
     def fixture(self, *, mismatch=None, unreadable=None, fail_params=False,
-                fail_start=False, fail_close=False, fail_mixer=None, fail_mute=False):
+                fail_start=False, fail_close=False, fail_mixer=None, fail_mute=False,
+                route='speaker', aec=False):
         controls = {name: '0' for name, _ in voice_audio.TEGU_ROUTE}
         controls.update({'BUILDIN MIC ID CAPTURE LIST': '0,1,-1,-1',
                          'Top Speaker Digital Volume': '220',
-                         'Bottom Speaker Digital Volume': '210'})
+                         'Bottom Speaker Digital Volume': '210', 'FT AEC Reference Source': '0',
+                         'Audio DSP Mode': '0', 'AoC Modem Mixer ASP Mode': '0',
+                         'Top Speaker Profile Id': '0', 'Bottom Speaker Profile Id': '0'})
         original = dict(controls)
         events = []
 
@@ -318,6 +330,9 @@ class TeguAudioTests(unittest.TestCase):
 
         audio = VoiceAudio.__new__(VoiceAudio)
         audio.tegu = True
+        audio.tegu_route = route
+        audio.tegu_aec = aec
+        audio.tuning = None
         audio.card = 3
         audio.mic_boost_db = 6  # ignored on tegu: stock 130 cB only
         audio.saved, audio.pcms = [], []
@@ -373,6 +388,97 @@ class TeguAudioTests(unittest.TestCase):
         self.assertEqual(controls, original)
         self.assertEqual(events[-1], ('cset', 'Incall Sink Mute', '0'))
         self.assertFalse(audio.saved or audio.pcms)
+
+    def test_aec_starts_after_the_streams_and_stops_before_restoring_echo_reference(self):
+        audio, events, controls, original = self.fixture(aec=True)
+        with patch.object(voice_audio, 'VoiceTuning') as tuning:
+            tuning.return_value.start.side_effect = lambda: events.append(('aec-start',))
+            tuning.return_value.close.side_effect = lambda: events.append(('aec-close',))
+            with audio:
+                self.assertEqual(controls['FT AEC Reference Source'], 'SPEAKER')
+                self.assertEqual(controls['Audio DSP Mode'], 'Telephony_APMG3')
+                self.assertEqual(controls['AoC Modem Mixer ASP Mode'], 'ASP_ON')
+                self.assertLess(events.index(('cset', 'AoC Modem Mixer ASP Mode', 'ASP_ON')),
+                                events.index(('aec-start',)))
+                self.assertLess(events.index(('cset', 'Audio DSP Mode', 'Telephony_APMG3')),
+                                events.index(('aec-start',)))
+                # The tuning goes up after both streams have started, before unmute
+                self.assertLess(events.index(('start', 2)), events.index(('aec-start',)))
+                self.assertLess(events.index(('aec-start',)), events.index(('cset', 'Incall Sink Mute', '0')))
+            tuning.assert_called_once_with('speaker')
+            tuning.return_value.start.assert_called_once()
+            tuning.return_value.close.assert_called_once()
+        self.assertEqual(controls, original)
+        self.assertLess(events.index(('close', 1)), events.index(('aec-close',)))
+        self.assertLess(events.index(('aec-close',)),
+                        events.index(('cset', 'FT AEC Reference Source', '0')))
+        self.assertLess(events.index(('aec-close',)),
+                        events.index(('cset', 'Audio DSP Mode', '0')))
+        self.assertLess(events.index(('aec-close',)),
+                        events.index(('cset', 'AoC Modem Mixer ASP Mode', '0')))
+
+    def test_earpiece_attenuates_top_and_bottom_after_profile_start_before_unmute(self):
+        audio, events, controls, original = self.fixture(route='earpiece', aec=True)
+        with patch.object(voice_audio, 'VoiceTuning') as tuning:
+            with audio:
+                self.assertEqual(controls['Top Speaker Digital Volume'], '160')
+                self.assertEqual(controls['Bottom Speaker Digital Volume'], '0')
+                tuning.assert_called_once_with('earpiece')
+                for name, gain in (('Top Speaker Digital Volume', '160'),
+                                   ('Bottom Speaker Digital Volume', '0')):
+                    write = events.index(('cset', name, gain))
+                    read = events.index(('cget', name, None), write)
+                    self.assertLess(events.index(('start', 2)), write)
+                    self.assertLess(read, events.index(('cset', 'Incall Sink Mute', '0')))
+        self.assertEqual(controls, original)
+
+    def test_bottom_gain_must_read_back_before_earpiece_unmutes(self):
+        audio, events, controls, original = self.fixture(route='earpiece', aec=True)
+        mixer = audio.mixer
+        def wrong_bottom(action, name, value=None):
+            result = mixer(action, name, value)
+            if action == 'cget' and name == 'Bottom Speaker Digital Volume' and controls[name] == '0':
+                return '  : values=220\n'
+            return result
+        audio.mixer = wrong_bottom
+        with patch.object(voice_audio, 'VoiceTuning') as tuning, \
+                self.assertRaisesRegex(voice_audio.AudioRefused, 'gain read-back mismatch'):
+            audio.__enter__()
+        self.assertEqual(controls, original)
+        tuning.return_value.close.assert_called_once()
+        # An unmute occurs only as the final restore, after both PCMs close.
+        self.assertLess(events.index(('close', 1)), events.index(('cset', 'Incall Sink Mute', '0')))
+
+    def test_earpiece_refuses_without_tuning_or_with_an_incomplete_profile(self):
+        for aec, profile in ((False, '0'), (True, '4')):
+            audio, events, controls, _ = self.fixture(route='earpiece', aec=aec)
+            controls['Top Speaker Profile Id'] = profile
+            with self.assertRaises(voice_audio.AudioRefused):
+                audio.__enter__()
+            self.assertFalse([e for e in events if e[0] in ('cset', 'open')])
+
+    def test_missing_tuning_refuses_audio_and_restores_the_mixers(self):
+        audio, events, controls, original = self.fixture(aec=True)
+        with patch.object(voice_audio, 'VoiceTuning', side_effect=FileNotFoundError), \
+                self.assertRaises(voice_audio.AudioRefused):
+            audio.__enter__()
+        self.assertEqual(controls, original)
+        # The streams started before the tuning; every one is closed again
+        self.assertEqual(sorted(audio.alsa.closed), [1, 2])
+        self.assertFalse(audio.pcms)
+
+    def test_uncertain_tuning_leaves_sink_muted_but_restores_other_controls(self):
+        audio, events, controls, original = self.fixture(aec=True)
+        with patch.object(voice_audio, 'VoiceTuning') as tuning:
+            tuning.return_value.start.side_effect = voice_audio.TuningError('unknown')
+            tuning.return_value.close.side_effect = voice_audio.TuningError('unknown')
+            with self.assertRaises(voice_audio.AudioRefused):
+                audio.__enter__()
+        self.assertEqual(controls['Incall Sink Mute'], '1')
+        self.assertEqual({n: v for n, v in controls.items() if n != 'Incall Sink Mute'},
+                         {n: v for n, v in original.items() if n != 'Incall Sink Mute'})
+        self.assertEqual(sorted(audio.alsa.closed), [1, 2])
+        self.assertNotIn(('cset', 'Incall Sink Mute', '0'), events)
 
     def test_partial_pcm_or_mixer_failure_restores_saved_state(self):
         for failure in ({'fail_params': True}, {'fail_start': True},

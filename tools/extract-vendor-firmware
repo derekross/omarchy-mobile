@@ -45,6 +45,8 @@
 #   vendor/firmware/bcmdhd_clm.blob_4383_a3   -> brcm/brcmfmac4383-pcie.<board>.clm_blob    (regulatory)
 #   vendor/firmware/bcmdhd_txcap.blob_4383_a3 -> brcm/brcmfmac4383-pcie.<board>.txcap_blob  (TX capabilities)
 #   vendor/firmware/brcm/BCM.hcd              -> brcm/BCM.<board>.hcd                       (btbcm)
+#   vendor/etc/aoc/{uplink_{speaker,handset}_aec_{on,off},downlink_{speaker,handset}}_config.pb
+#                                            -> omamobile/tegu/aoc/ (call tuning, unchanged owner files)
 #   vendor/firmware/aoc.bin                   -> aoc-tegu.bin            (the AoC DSP, under the 9a's own name)
 #   vendor/etc/sensors/registry/              -> /usr/share/omamobile/sensors/registry/
 #   vendor/firmware/cs40l26*.{wmfw,bin}       -> the same five files as cheetah's
@@ -230,6 +232,12 @@ case $DEVICE_OPT in
       "firmware/bcmdhd_txcap.blob_4383_a3|brcm/$FW_BASE.$BOARD.txcap_blob"
       "firmware/brcm/BCM.hcd|brcm/BCM.$BOARD.hcd"
       "firmware/aoc.bin|aoc-tegu.bin"
+      "?etc/aoc/uplink_speaker_aec_on_config.pb|omamobile/tegu/aoc/uplink_speaker_aec_on_config.pb"
+      "?etc/aoc/uplink_speaker_aec_off_config.pb|omamobile/tegu/aoc/uplink_speaker_aec_off_config.pb"
+      "?etc/aoc/downlink_speaker_config.pb|omamobile/tegu/aoc/downlink_speaker_config.pb"
+      "?etc/aoc/uplink_handset_aec_on_config.pb|omamobile/tegu/aoc/uplink_handset_aec_on_config.pb"
+      "?etc/aoc/uplink_handset_aec_off_config.pb|omamobile/tegu/aoc/uplink_handset_aec_off_config.pb"
+      "?etc/aoc/downlink_handset_config.pb|omamobile/tegu/aoc/downlink_handset_config.pb"
       "firmware/cs40l26.wmfw|cs40l26.wmfw"
       "firmware/cs40l26.bin|cs40l26.bin"
       "firmware/cs40l26-svc.bin|cs40l26-svc.bin"
@@ -421,13 +429,30 @@ mkdir -p "$OUT"
 stage=$(mktemp -d "$OUT/.extract-vendor-firmware.XXXXXX")
 new="$stage/new"
 dest="$new/$DEST_REL"
+# An entry that starts with "?" is optional as a set: the 9a's six call tuning
+# files are wanted only by an experimental, opt-in feature and have been seen
+# on one factory build, so an image without one of them still gives every
+# other file; the set is then left out whole, since the loader needs a
+# route's three files together.
+optional_missing=() optional_dirs=()
 for entry in "${MAP[@]}"; do
   from=${entry%%|*} to=${entry#*|}
-  mkdir -p "$dest/$(dirname "$to")"
-  get_file "$from" "$dest/$to" || die "/vendor/$from is missing from this image or could not be copied"
+  if [[ $from == \?* ]]; then
+    from=${from#\?}
+    optional_dirs+=("$(dirname "$to")")
+    mkdir -p "$dest/$(dirname "$to")"
+    if ! get_file "$from" "$dest/$to"; then optional_missing+=("/vendor/$from"); continue; fi
+  else
+    mkdir -p "$dest/$(dirname "$to")"
+    get_file "$from" "$dest/$to" || die "/vendor/$from is missing from this image or could not be copied"
+  fi
   chmod 0644 "$dest/$to"
   printf '  /vendor/%-28s -> /%s/%s\n' "$from" "$DEST_REL" "$to"
 done
+if (( ${#optional_missing[@]} )); then
+  for d in "${optional_dirs[@]}"; do rm -rf -- "${dest:?}/$d"; done
+  printf 'warning: %s is missing from this image or could not be copied: the call tuning files are left out (calls work without them; the opt-in tegu_aec setting needs all six)\n' "${optional_missing[*]}" >&2
+fi
 
 # The AoC's sensor registry (which sensors this board has, their buses and
 # settings), read by omamobile-sensor-proxy; without it only virtual sensors.
@@ -502,7 +527,11 @@ bt=""
 [[ -z $BT_CHIP ]] || bt=$(grep -ao "$BT_CHIP [^[]*" "$brcm/BCM.$BOARD.hcd" | head -1)
 (cd "$dest" && find . -type f -printf '%P\n' | LC_ALL=C sort | xargs sha256sum -- > "$new/vendor-firmware.sha256")
 # The checksum list names exactly the mapped files
-for entry in "${MAP[@]}"; do printf '%s\n' "${entry#*|}"; done | LC_ALL=C sort > "$stage/expected"
+for entry in "${MAP[@]}"; do
+  # an optional set that was left out is not expected
+  [[ $entry == \?* ]] && (( ${#optional_missing[@]} )) && continue
+  printf '%s\n' "${entry#*|}"
+done | LC_ALL=C sort > "$stage/expected"
 cut -c67- "$new/vendor-firmware.sha256" | cmp -s - "$stage/expected" ||
   die "the staged firmware is not exactly the mapped files"
 
