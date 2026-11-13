@@ -1,0 +1,9 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stand-in for tools/extract-fingerprint-vendor (see common.sh)
+source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
+while getopts "o:w:d:f" o; do case $o in o) OUT=$OPTARG ;; *) ;; esac; done
+shift $((OPTIND - 1))
+fake_start fingerprint "$1"
+mkdir -p "$OUT"
+chroot_tree "$OUT" fingerprint

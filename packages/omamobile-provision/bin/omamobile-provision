@@ -1,0 +1,1376 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""omamobile-provision: provisioning on the phone itself.
+
+  omamobile-provision first-install [--development] [--progress-fd N]
+                                    [--result FILE] FACTORY.zip NV-SUMS
+  omamobile-provision extract -o OUTDIR FACTORY.zip
+  omamobile-provision listing DIR
+
+first-install is tools/phone-provision --first-install with the pushes over
+SSH replaced by local installs (docs/INSTALL-LINK-PLAN.md section 6): it
+extracts Google's files from the owner's factory image with the packaged
+tools/extract-* and puts each result where phone-provision puts it, with
+the same modes, owned by root:
+
+  firmware     /usr/lib/firmware/updates                  merged
+  sensors      /usr/share/omamobile/sensors/registry      replaced
+  gnss, modem  /usr/lib/omamobile-vendor/<profile>        replaced
+  fingerprint  /usr/lib/omamobile-fp                      replaced
+  camera       /usr/lib/firmware/omamobile/camera         merged (optional)
+  modem-data   /var/lib/omamobile-vendor/modem/props.conf (the board id, from
+               androidboot.cdt_hwid in /proc/bootconfig, never printed), then
+               /etc/omamobile/modem-nv.sha256 from NV-SUMS: the last write
+
+NV-SUMS holds one "<sha256>  NAME.img" line for each of the descriptor's
+NV_PARTS (the link's pending checksum file, or tools/nv-backup's
+SHA256SUMS).
+
+It starts, stops and enables nothing: the firmware loads at the next boot,
+and omamobile-fp and the modem start there from their own units. It never
+opens a partition. Every replaced tree is whole or not there at every
+moment (README.md says exactly what is atomic); a merged tree is written
+file by file, each under a temporary name and renamed. A tree or file that
+is already what this image gives is left untouched, so a rerun after a kill
+at any point is safe and disturbs nothing that was installed whole.
+
+The extraction parses the image, so it runs as an unprivileged user
+("nobody") that can write the working directory only, when this runs as
+root. The working directory is /var/lib/omamobile/provision/work.*, mode
+700, on userdata; it is removed however the run ends, and a run removes one
+left by a kill.
+
+Progress goes to --progress-fd (default 1) as one JSON object per line, the
+link's `progress` message: {"what": "provision", "step": NAME, "done": N,
+"total": M}. The log is on stderr. The last act is the result file
+(default /var/lib/omamobile/install-link/provision.result; written aside,
+synced, renamed): {"version": 1, "ok": BOOL, "failed": STEP or null,
+"optional_failed": [STEP...], "steps": [{"step": NAME, "state": "ok",
+"failed" or "skipped"}...]}. The camera step is optional (the descriptor's
+PROVISION_OPTIONAL): when it fails it is run once more after the other
+steps, and when it fails twice the run is still a success, with the step
+"failed" in the result.
+
+Exit status: 0 every required step ok; 1 a required step failed; 2 refused
+before anything was written (usage, the inputs, not a first start).
+
+Without --development it refuses to run unless the phone is in the first
+start's provisioning state: /etc/omamobile/install-link exists,
+/var/lib/omamobile/install-link exists and holds no `done`,
+/var/lib/omamobile/firstboot/done exists, and /etc/omamobile/modem-nv.sha256
+is absent or already holds NV-SUMS's lines. No package script runs it.
+
+extract runs only the extraction, into OUTDIR (fw, chroot-gnss,
+chroot-modem, fp-vendor, camera), and installs nothing: for the byte for
+byte comparison with a laptop's run. listing prints one line per file
+under DIR (type, mode, SHA-256 or link target, path) for that comparison.
+
+Test seams: OMAMOBILE_PROVISION_ROOT (a scratch root in place of /),
+OMAMOBILE_PROVISION_TOOLS (the directory holding the extraction tools),
+OMAMOBILE_PROVISION_PYTHON (the Python that runs extract-camera-data) and,
+only with a scratch root, OMAMOBILE_PROVISION_TEST_KILL_AT=N (kill this
+process at its Nth checkpoint).
+"""
+
+import ctypes
+import fcntl
+import hashlib
+import json
+import os
+import re
+import resource
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+
+STEPS_DEFAULT = ["firmware", "sensors", "gnss", "modem", "fingerprint", "camera", "modem-data"]
+OPTIONAL_DEFAULT = ["camera"]
+NV_PARTS_DEFAULT = ["modem_a", "modem_b", "efs", "efs_backup", "modem_userdata", "persist"]
+SUPPORTED = ("cheetah",)
+EXTRACT_USER = "nobody"
+TOOL_TIMEOUT = 2 * 60 * 60
+TAG = "omamobile-provision"
+NEW = "." + TAG + ".new"
+OLD = "." + TAG + ".old"
+TMP_SUFFIX = "." + TAG + ".tmp"
+
+ROOT = os.environ.get("OMAMOBILE_PROVISION_ROOT", "")
+SCRATCH = bool(ROOT)
+TOOLS = os.environ.get("OMAMOBILE_PROVISION_TOOLS", "/usr/lib/omamobile-provision")
+PYTHON = os.environ.get("OMAMOBILE_PROVISION_PYTHON", sys.executable or "/usr/bin/python3")
+# omamobile-unicorn's private copy of the emulator extract-camera-data runs
+# in: first on that tool's module path, so it is the one imported whether or
+# not the distribution's python-unicorn (whose library aborts on the tool's
+# first SVE instruction) is installed. pyelftools is the distribution's.
+UNICORN_PATH = "/usr/lib/omamobile-unicorn/python"
+AS_ROOT = os.geteuid() == 0
+
+O_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+class Refuse(Exception):
+    """Refused before anything was written (exit 2)."""
+
+
+class Fail(Exception):
+    """A step failed."""
+
+
+class Interrupted(BaseException):
+    """A signal asked the run to end."""
+
+
+def at(path):
+    """A path of the phone, under the scratch root when there is one."""
+    return ROOT + path if ROOT else path
+
+
+def log(msg):
+    print(msg, file=sys.stderr, flush=True)
+
+
+# --- Checkpoints (tests kill the run at each one) ---------------------------
+
+_checkpoint = 0
+_kill_at = 0
+if SCRATCH and os.environ.get("OMAMOBILE_PROVISION_TEST_KILL_AT", "").isdigit():
+    _kill_at = int(os.environ["OMAMOBILE_PROVISION_TEST_KILL_AT"])
+
+
+def checkpoint(_what):
+    global _checkpoint
+    _checkpoint += 1
+    if _kill_at and _checkpoint == _kill_at:
+        os.kill(os.getpid(), signal.SIGKILL)
+
+
+# --- Small file helpers ------------------------------------------------------
+
+def fsync_dir(path_or_fd):
+    if isinstance(path_or_fd, int):
+        os.fsync(path_or_fd)
+        return
+    fd = os.open(path_or_fd, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def makedirs(path, mode=0o755):
+    """mkdir -p for a path of ours: each missing directory with MODE, synced."""
+    missing = []
+    p = path
+    while not os.path.isdir(p):
+        if os.path.lexists(p):
+            raise Fail(f"{p} is in the way: not a directory")
+        missing.append(p)
+        p = os.path.dirname(p)
+    for d in reversed(missing):
+        os.mkdir(d, mode)
+        os.chmod(d, mode)
+        fsync_dir(d)
+        fsync_dir(os.path.dirname(d))
+
+
+def write_atomic(path, data, mode):
+    """DATA to PATH: a temporary file beside it, synced, renamed, the
+    directory synced. Root's when this runs as root."""
+    d = os.path.dirname(path)
+    tmp = os.path.join(d, "." + os.path.basename(path) + TMP_SUFFIX)
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        with os.fdopen(fd, "wb", closefd=False) as f:
+            f.write(data)
+        if AS_ROOT:
+            os.fchown(fd, 0, 0)
+        os.fchmod(fd, mode)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.rename(tmp, path)
+    fsync_dir(d)
+
+
+_libc = ctypes.CDLL(None, use_errno=True)
+RENAME_EXCHANGE = 2
+AT_FDCWD = -100
+
+
+def exchange(a, b):
+    """Swap two names atomically: renameat2(2) with RENAME_EXCHANGE."""
+    r = _libc.renameat2(AT_FDCWD, os.fsencode(a), AT_FDCWD, os.fsencode(b), RENAME_EXCHANGE)
+    if r != 0:
+        e = ctypes.get_errno()
+        raise Fail(f"can't exchange {a} and {b}: {os.strerror(e)} (the file system must support RENAME_EXCHANGE)")
+
+
+def _rm_onerror(func, path, exc):
+    # a directory the extraction left without its owner's write bit
+    try:
+        parent = os.path.dirname(path)
+        os.chmod(parent, 0o700)
+        if os.path.isdir(path) and not os.path.islink(path):
+            os.chmod(path, 0o700)
+        func(path)
+    except OSError:
+        pass
+
+
+def rmtree(path):
+    """Remove a tree or a file; nothing follows a symlink."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(st.st_mode):
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(path, onexc=_rm_onerror)
+        else:
+            shutil.rmtree(path, onerror=_rm_onerror)
+    else:
+        os.unlink(path)
+
+
+# --- Reading a tree the extraction wrote -------------------------------------
+# The extraction ran unprivileged and its output is not trusted for where it
+# points: every component is opened by descriptor with O_NOFOLLOW, symlinks
+# are copied as symlinks and never followed, and anything that is not a
+# directory, a regular file or a symlink is refused.
+
+def open_under(base, rel):
+    """Open the directory REL below BASE (a path of ours), following no
+    symlink on the way."""
+    fd = os.open(base, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    for part in [p for p in rel.split("/") if p]:
+        try:
+            nfd = os.open(part, O_DIR, dir_fd=fd)
+        except OSError as e:
+            os.close(fd)
+            raise Fail(f"the extraction's {rel} can't be opened: {e.strerror}") from None
+        os.close(fd)
+        fd = nfd
+    return fd
+
+
+def sha_fd(fd):
+    h = hashlib.sha256()
+    os.lseek(fd, 0, os.SEEK_SET)
+    while True:
+        b = os.read(fd, 1 << 20)
+        if not b:
+            break
+        h.update(b)
+    return h.hexdigest()
+
+
+def scan(dirfd, prefix="", out=None, only=None):
+    """{path: ("d", mode) | ("f", mode, sha256) | ("l", target)} for the tree
+    at DIRFD. ONLY: the top-level names to look at."""
+    out = {} if out is None else out
+    with os.scandir(dirfd) as it:
+        names = sorted(e.name for e in it)
+    for name in names:
+        if only is not None and name not in only:
+            continue
+        st = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
+        path = prefix + name
+        if stat.S_ISLNK(st.st_mode):
+            out[path] = ("l", os.readlink(name, dir_fd=dirfd))
+        elif stat.S_ISDIR(st.st_mode):
+            out[path] = ("d", stat.S_IMODE(st.st_mode))
+            fd = os.open(name, O_DIR, dir_fd=dirfd)
+            try:
+                scan(fd, path + "/", out)
+            finally:
+                os.close(fd)
+        elif stat.S_ISREG(st.st_mode):
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dirfd)
+            try:
+                out[path] = ("f", stat.S_IMODE(os.fstat(fd).st_mode), sha_fd(fd))
+            finally:
+                os.close(fd)
+        else:
+            raise Fail(f"{path} is not a file, a directory or a symlink")
+    return out
+
+
+def scan_path(path, only=None):
+    try:
+        fd = os.open(path, O_DIR)
+    except (FileNotFoundError, NotADirectoryError, OSError):
+        return None
+    try:
+        return scan(fd, only=only)
+    finally:
+        os.close(fd)
+
+
+def own(fd_or_none, name=None, dir_fd=None):
+    if not AS_ROOT:
+        return
+    if fd_or_none is not None:
+        os.fchown(fd_or_none, 0, 0)
+    else:
+        os.chown(name, 0, 0, dir_fd=dir_fd, follow_symlinks=False)
+
+
+def copy_file(src_dirfd, name, dst_dirfd, dst_name, mode_mask=0o7777):
+    """One regular file, by descriptor: its bytes, mode and mtime, root's,
+    synced. Returns its SHA-256 as read from the source."""
+    sfd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=src_dirfd)
+    try:
+        st = os.fstat(sfd)
+        if not stat.S_ISREG(st.st_mode):
+            raise Fail(f"{name} is not a regular file")
+        try:
+            os.unlink(dst_name, dir_fd=dst_dirfd)
+        except FileNotFoundError:
+            pass
+        dfd = os.open(dst_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                      0o600, dir_fd=dst_dirfd)
+        try:
+            h = hashlib.sha256()
+            while True:
+                b = os.read(sfd, 1 << 20)
+                if not b:
+                    break
+                h.update(b)
+                view = memoryview(b)
+                while view:
+                    view = view[os.write(dfd, view):]
+            own(dfd)
+            os.fchmod(dfd, stat.S_IMODE(st.st_mode) & mode_mask)
+            os.utime(dfd, ns=(st.st_mtime_ns, st.st_mtime_ns))
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+        return h.hexdigest()
+    finally:
+        os.close(sfd)
+
+
+def copy_tree(src_dirfd, dst_dirfd, only=None):
+    """Everything below SRC into the (new, empty) directory DST: modes and
+    mtimes kept, root's, every file and directory synced."""
+    with os.scandir(src_dirfd) as it:
+        names = sorted(e.name for e in it)
+    for name in names:
+        if only is not None and name not in only:
+            continue
+        st = os.stat(name, dir_fd=src_dirfd, follow_symlinks=False)
+        if stat.S_ISLNK(st.st_mode):
+            os.symlink(os.readlink(name, dir_fd=src_dirfd), name, dir_fd=dst_dirfd)
+            own(None, name, dst_dirfd)
+            os.utime(name, ns=(st.st_mtime_ns, st.st_mtime_ns), dir_fd=dst_dirfd, follow_symlinks=False)
+        elif stat.S_ISDIR(st.st_mode):
+            os.mkdir(name, 0o700, dir_fd=dst_dirfd)
+            sfd = os.open(name, O_DIR, dir_fd=src_dirfd)
+            dfd = os.open(name, O_DIR, dir_fd=dst_dirfd)
+            try:
+                copy_tree(sfd, dfd)
+                own(dfd)
+                os.fchmod(dfd, stat.S_IMODE(os.fstat(sfd).st_mode))
+                os.utime(dfd, ns=(st.st_mtime_ns, st.st_mtime_ns))
+                os.fsync(dfd)
+            finally:
+                os.close(sfd)
+                os.close(dfd)
+        elif stat.S_ISREG(st.st_mode):
+            copy_file(src_dirfd, name, dst_dirfd, name)
+        else:
+            raise Fail(f"{name} is not a file, a directory or a symlink")
+    os.fsync(dst_dirfd)
+
+
+def check_owner(path):
+    """Everything below PATH is root's (only when this runs as root)."""
+    if not AS_ROOT:
+        return
+    for d, dirs, files in os.walk(path):
+        for n in [""] + dirs + files:
+            st = os.lstat(os.path.join(d, n) if n else d)
+            if st.st_uid != 0 or st.st_gid != 0:
+                raise Fail(f"{os.path.join(d, n)} is not root's after the install")
+
+
+def check_manifest(listing, manifest_bytes, what):
+    """The extraction's own list (MANIFEST: sha256, mode, path under root/)
+    against a listing of the staged tree."""
+    want = {}
+    for line in manifest_bytes.decode("utf-8", "surrogateescape").splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) != 3 or not re.fullmatch(r"[0-9a-f]{64}", parts[0]) or not re.fullmatch(r"[0-7]{3,4}", parts[1]):
+            raise Fail(f"{what}: a MANIFEST line is not 'sha256 mode path'")
+        want["root/" + parts[2]] = ("f", int(parts[1], 8), parts[0])
+    have = {p: v for p, v in listing.items() if v[0] == "f" and p.startswith("root/")}
+    if have != want:
+        bad = sorted(set(have) ^ set(want)) or sorted(p for p in want if have.get(p) != want[p])
+        raise Fail(f"{what}: the staged tree doesn't match its MANIFEST ({len(bad)} files, first {bad[0]})")
+
+
+def read_small(dirfd, name, limit=4 << 20):
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dirfd)
+    except FileNotFoundError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise Fail(f"{name} is not a regular file")
+        data = os.read(fd, limit + 1)
+        while len(data) <= limit:
+            more = os.read(fd, limit + 1 - len(data))
+            if not more:
+                break
+            data += more
+        if len(data) > limit:
+            raise Fail(f"{name} is too large")
+        return data
+    finally:
+        os.close(fd)
+
+
+# --- Installs ---------------------------------------------------------------
+
+def sweep_tmp(dest):
+    """Remove temporary files a killed run left in a merged tree."""
+    for d, dirs, files in os.walk(dest):
+        for n in files + dirs:
+            if n.endswith(TMP_SUFFIX):
+                rmtree(os.path.join(d, n))
+                if n in dirs:
+                    dirs.remove(n)
+
+
+def install_merge(src_fd, dest, what, mode_mask=0o7777, only=None):
+    """A merged tree (tar -x over what is there): directories that exist
+    stay as they are, every file and symlink is written under a temporary
+    name beside its place, synced and renamed. A file that is already the
+    same is left alone. Then every file is read back."""
+    makedirs(dest)
+    sweep_tmp(dest)
+    want = scan(src_fd, only=only)
+    if mode_mask != 0o7777:
+        want = {p: (v[0], v[1] & mode_mask, *v[2:]) if v[0] != "l" else v for p, v in want.items()}
+
+    def merge(sfd, dpath, prefix):
+        dfd = os.open(dpath, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            with os.scandir(sfd) as it:
+                names = sorted(e.name for e in it)
+            for name in names:
+                path = prefix + name
+                if path not in want:
+                    continue
+                kind = want[path]
+                target = os.path.join(dpath, name)
+                try:
+                    dst = os.lstat(target)
+                except FileNotFoundError:
+                    dst = None
+                if kind[0] == "d":
+                    if dst is None:
+                        os.mkdir(name, 0o700, dir_fd=dfd)
+                        own(None, name, dfd)
+                        os.chmod(name, kind[1], dir_fd=dfd)
+                    elif not stat.S_ISDIR(dst.st_mode):
+                        raise Fail(f"{target} is in the way: not a directory")
+                    nfd = os.open(name, O_DIR, dir_fd=sfd)
+                    try:
+                        merge(nfd, target, path + "/")
+                    finally:
+                        os.close(nfd)
+                    continue
+                if dst is not None and stat.S_ISDIR(dst.st_mode):
+                    raise Fail(f"{target} is in the way: a directory")
+                tmp = "." + name + TMP_SUFFIX
+                if kind[0] == "l":
+                    if dst is not None and stat.S_ISLNK(dst.st_mode) and os.readlink(target) == kind[1]:
+                        continue
+                    try:
+                        os.unlink(tmp, dir_fd=dfd)
+                    except FileNotFoundError:
+                        pass
+                    os.symlink(kind[1], tmp, dir_fd=dfd)
+                    own(None, tmp, dfd)
+                else:
+                    if dst is not None and stat.S_ISREG(dst.st_mode) and stat.S_IMODE(dst.st_mode) == kind[1] \
+                            and (not AS_ROOT or (dst.st_uid, dst.st_gid) == (0, 0)):
+                        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dfd)
+                        try:
+                            same = sha_fd(fd) == kind[2]
+                        finally:
+                            os.close(fd)
+                        if same:
+                            continue
+                    got = copy_file(sfd, name, dfd, tmp, mode_mask)
+                    if got != kind[2]:
+                        raise Fail(f"{path} changed while it was read")
+                checkpoint(f"{what}: {path} written aside")
+                os.rename(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+                os.fsync(dfd)
+                checkpoint(f"{what}: {path} in place")
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+
+    merge(src_fd, dest, "")
+    have = scan_path(dest) or {}
+    for path, kind in want.items():
+        got = have.get(path)
+        if kind[0] == "d":
+            if got is None or got[0] != "d":
+                raise Fail(f"{dest}/{path} is missing after the install")
+        elif got != kind:
+            raise Fail(f"{dest}/{path} doesn't match after the install")
+    files = sum(1 for v in want.values() if v[0] == "f")
+    log(f"    {dest}: {files} files, verified")
+    return want
+
+
+def stage_tree(src_fd, stage, only=None):
+    """A copy of the extraction's tree at STAGE (a new directory of ours),
+    synced, then read back and compared with what was read."""
+    rmtree(stage)
+    os.mkdir(stage, 0o700)
+    want = scan(src_fd, only=only)
+    sfd = os.open(stage, O_DIR)
+    try:
+        copy_tree(src_fd, sfd, only=only)
+    finally:
+        os.close(sfd)
+    # read back through a new descriptor: on overlayfs a directory opened
+    # while it was empty goes on listing nothing
+    got = scan_path(stage)
+    if got != want:
+        raise Fail(f"{stage} doesn't match the extraction after the copy")
+    check_owner(stage)
+    return want
+
+
+def install_replace_dir(src_fd, dest, what):
+    """A tree that owns its directory: the new one is built beside DEST,
+    checked there, and takes its name in one rename (RENAME_EXCHANGE when
+    DEST exists), so DEST is the old tree or the new one at every moment."""
+    parent, base = os.path.split(dest)
+    makedirs(parent)
+    new = os.path.join(parent, "." + base + NEW)
+    rmtree(os.path.join(parent, "." + base + OLD))
+    rmtree(new)
+    want = scan(src_fd)
+    if not want:
+        raise Fail(f"{what}: the extraction gave an empty tree")
+    try:
+        old = os.lstat(dest)
+    except FileNotFoundError:
+        old = None
+    if old is not None and not stat.S_ISDIR(old.st_mode):
+        raise Fail(f"{dest} is in the way: not a directory")
+    if old is not None and scan_path(dest) == want and (not AS_ROOT or old.st_uid == 0):
+        log(f"    {dest}: already this image's, left untouched")
+        return
+    stage_tree(src_fd, new)
+    # the directory itself: as the one it replaces, or mkdir -p's
+    os.chmod(new, stat.S_IMODE(old.st_mode) if old is not None else 0o755)
+    fsync_dir(new)
+    fsync_dir(parent)
+    checkpoint(f"{what}: staged")
+    if old is not None:
+        exchange(new, dest)
+    else:
+        os.rename(new, dest)
+    fsync_dir(parent)
+    checkpoint(f"{what}: in place")
+    rmtree(new)
+    fsync_dir(parent)
+    if scan_path(dest) != want:
+        raise Fail(f"{dest} doesn't match after the install")
+    log(f"    {dest}: {sum(1 for v in want.values() if v[0] == 'f')} files, verified")
+
+
+def install_replace_gated(src_fd, dest, what, gate="root"):
+    """A tree that shares its directory with a package's files
+    (DEST/{root,MANIFEST,SOURCE,...} beside them). Its users look for
+    DEST/root, so root is the gate: the new entries are built in a staging
+    directory inside DEST and checked there; an older root is renamed out
+    first (the tree is then not there); the other entries are renamed in;
+    root is renamed in last. DEST/root exists only with every other entry
+    of the same generation beside it."""
+    makedirs(dest)
+    new = os.path.join(dest, NEW)
+    old = os.path.join(dest, OLD)
+    rmtree(new)
+    rmtree(old)
+    fsync_dir(dest)
+    with os.scandir(src_fd) as it:
+        tops = sorted(e.name for e in it)
+    if gate not in tops:
+        raise Fail(f"{what}: the extraction gave no {gate}/")
+    if any(n in (NEW, OLD) for n in tops):
+        raise Fail(f"{what}: the extraction's tree uses a reserved name")
+    want = scan(src_fd)
+    if want.get(gate, ("",))[0] != "d":
+        raise Fail(f"{what}: the extraction's {gate} is not a directory")
+    manifest = read_small(src_fd, "MANIFEST")
+    if manifest is not None:
+        check_manifest(want, manifest, what)
+    if scan_path(dest, only=set(tops)) == want:
+        try:
+            check_owner(os.path.join(dest, gate))
+            log(f"    {dest}: already this image's, left untouched")
+            return
+        except Fail:
+            pass
+    stage_tree(src_fd, new)
+    checkpoint(f"{what}: staged")
+    if os.path.lexists(os.path.join(dest, gate)):
+        os.mkdir(old, 0o700)
+        os.rename(os.path.join(dest, gate), os.path.join(old, gate))
+        fsync_dir(dest)
+        checkpoint(f"{what}: the older {gate} out")
+    for name in tops:
+        if name == gate:
+            continue
+        target = os.path.join(dest, name)
+        try:
+            st = os.lstat(target)
+        except FileNotFoundError:
+            st = None
+        if st is not None and stat.S_ISDIR(st.st_mode):
+            os.makedirs(old, 0o700, exist_ok=True)
+            os.rename(target, os.path.join(old, name))
+        os.rename(os.path.join(new, name), target)
+        checkpoint(f"{what}: {name} in place")
+    fsync_dir(dest)
+    os.rename(os.path.join(new, gate), os.path.join(dest, gate))
+    fsync_dir(dest)
+    checkpoint(f"{what}: {gate} in place")
+    rmtree(old)
+    os.rmdir(new)
+    fsync_dir(dest)
+    if scan_path(dest, only=set(tops)) != want:
+        raise Fail(f"{dest} doesn't match after the install")
+    log(f"    {dest}: {sum(1 for v in want.values() if v[0] == 'f')} files, verified")
+
+
+# --- The phone's own data ----------------------------------------------------
+
+def board_id():
+    """androidboot.cdt_hwid from bootconfig, or Refuse. The value is never
+    printed or logged."""
+    path = at("/proc/bootconfig")
+    try:
+        with open(path, "r", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        raise Refuse(f"can't read {path}: the modem needs this phone's board id (nothing was written)") from None
+    value = None
+    for line in text.splitlines():
+        m = re.fullmatch(r'androidboot\.cdt_hwid[ \t]*=[ \t]*"([^"]*)"[ \t]*', line)
+        if m:
+            value = m.group(1)
+            break
+    if not value:
+        raise Refuse(f"no androidboot.cdt_hwid in {path}, or an empty one: the modem needs this phone's board id "
+                     "(nothing was written)")
+    if not re.fullmatch(r"0x[0-9a-fA-F]+", value):
+        raise Refuse(f"androidboot.cdt_hwid in {path} isn't 0x and hex digits (not shown): the modem needs this "
+                     "phone's board id (nothing was written)")
+    return value
+
+
+def write_props(value):
+    """The board id into props.conf: root's, mode 600; a props.conf already
+    there keeps its other lines, the two keys go last."""
+    d = at("/var/lib/omamobile-vendor/modem")
+    path = os.path.join(d, "props.conf")
+    makedirs(d)
+    keys = ("ro.boot.cdt_hwid=", "persist.vendor.modem.cdt_hwid=")
+    kept = b""
+    try:
+        st = os.lstat(path)
+        if not stat.S_ISREG(st.st_mode):
+            raise Fail(f"{path} is not a regular file")
+        with open(path, "rb") as f:
+            old = f.read()
+        kept = b"".join(l for l in old.splitlines(keepends=True) if not l.startswith(tuple(k.encode() for k in keys)))
+        if kept and not kept.endswith(b"\n"):
+            kept += b"\n"
+    except FileNotFoundError:
+        old, st = None, None
+    tail = f"ro.boot.cdt_hwid={value}\npersist.vendor.modem.cdt_hwid={value}\n".encode()
+    data = kept + tail
+    if old == data and stat.S_IMODE(st.st_mode) == 0o600 and (not AS_ROOT or (st.st_uid, st.st_gid) == (0, 0)):
+        log(f"    {path}: already holds the board id, left untouched (not shown)")
+        return
+    write_atomic(path, data, 0o600)
+    st = os.lstat(path)
+    with open(path, "rb") as f:
+        back = f.read()
+    if stat.S_IMODE(st.st_mode) != 0o600 or (AS_ROOT and (st.st_uid, st.st_gid) != (0, 0)) or back != data:
+        raise Fail(f"{path} doesn't read back as written")
+    log(f"    {path}: written from bootconfig (root's, mode 600; the board id isn't shown)")
+
+
+def nv_lines(sums, parts):
+    """The NV lines of the pending checksum file: exactly one
+    '<sha256>  NAME.img' for each partition, in the file's order."""
+    try:
+        with open(sums, "r", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError as e:
+        raise Refuse(f"can't read the NV checksums {sums}: {e.strerror}") from None
+    pat = re.compile(r"[0-9a-f]{64}  (" + "|".join(re.escape(p) for p in parts) + r")\.img")
+    hits = [(l, pat.fullmatch(l).group(1)) for l in lines if pat.fullmatch(l)]
+    bad = [p + ".img" for p in parts if sum(1 for _, n in hits if n == p) != 1]
+    if bad:
+        raise Refuse(f"{sums} needs one '<sha256>  NAME.img' line for each of the {len(parts)} NV images; "
+                     f"none or more than one for {' '.join(bad)}")
+    return "".join(l + "\n" for l, _ in hits).encode()
+
+
+def write_nv(data):
+    d = at("/etc/omamobile")
+    path = os.path.join(d, "modem-nv.sha256")
+    makedirs(d)
+    try:
+        st = os.lstat(path)
+        with open(path, "rb") as f:
+            same = stat.S_ISREG(st.st_mode) and f.read() == data and stat.S_IMODE(st.st_mode) == 0o644 and \
+                (not AS_ROOT or (st.st_uid, st.st_gid) == (0, 0))
+    except FileNotFoundError:
+        same = False
+    if same:
+        log(f"    {path}: already these lines, left untouched")
+        return
+    write_atomic(path, data, 0o644)
+    with open(path, "rb") as f:
+        if f.read() != data or stat.S_IMODE(os.lstat(path).st_mode) != 0o644:
+            raise Fail(f"{path} doesn't read back as written")
+    log(f"    {path}: the NV lines, read back")
+
+
+# --- The descriptor and the first-start state --------------------------------
+
+def descriptor():
+    path = at("/usr/share/omamobile/device.conf")
+    conf = {}
+    try:
+        with open(path, "r", errors="replace") as f:
+            for line in f:
+                m = re.fullmatch(r'([A-Z][A-Z0-9_]*)=(?:"([^"]*)"|([^"\s#]*))\s*(?:#.*)?', line.strip())
+                if m:
+                    conf[m.group(1)] = m.group(2) if m.group(2) is not None else m.group(3)
+    except OSError:
+        raise Refuse(f"no device descriptor {path}") from None
+    return conf
+
+
+def plan_from(conf):
+    code = conf.get("CODENAME", "")
+    if code not in SUPPORTED:
+        raise Refuse(f"this device ({code or 'unknown'}) has no on-phone provisioning yet ({', '.join(SUPPORTED)})")
+    steps = conf.get("PROVISION_STEPS", "").split() or list(STEPS_DEFAULT)
+    unknown = [s for s in steps if s not in STEPS_DEFAULT]
+    if unknown:
+        raise Refuse(f"the descriptor's PROVISION_STEPS names steps this version doesn't know: {' '.join(unknown)}")
+    steps = [s for s in STEPS_DEFAULT if s in steps]
+    optional = conf["PROVISION_OPTIONAL"].split() if "PROVISION_OPTIONAL" in conf else list(OPTIONAL_DEFAULT)
+    if any(o != "camera" for o in optional):
+        raise Refuse("the descriptor's PROVISION_OPTIONAL may name camera only")
+    parts = conf.get("NV_PARTS", "").split() or list(NV_PARTS_DEFAULT)
+    if not all(re.fullmatch(r"[a-z0-9_]+", p) for p in parts):
+        raise Refuse("the descriptor's NV_PARTS is not a list of partition names")
+    return code, steps, [o for o in optional if o in steps], parts
+
+
+def first_start_state(nv_data):
+    """Why this phone is not in the first start's provisioning state, or None."""
+    link = at("/var/lib/omamobile/install-link")
+    if not os.path.exists(at("/etc/omamobile/install-link")):
+        return "no /etc/omamobile/install-link: not an image that is set up over the install link"
+    if not os.path.isdir(link):
+        return "no /var/lib/omamobile/install-link: the install link never started here"
+    if os.path.lexists(os.path.join(link, "done")):
+        return "/var/lib/omamobile/install-link/done exists: the install link has ended on this phone"
+    if not os.path.exists(at("/var/lib/omamobile/firstboot/done")):
+        return "no /var/lib/omamobile/firstboot/done: first-boot setup has not finished"
+    nv = at("/etc/omamobile/modem-nv.sha256")
+    if os.path.lexists(nv):
+        try:
+            with open(nv, "rb") as f:
+                if f.read() != nv_data:
+                    return "/etc/omamobile/modem-nv.sha256 holds other checksums: this phone was provisioned before"
+        except OSError:
+            return "/etc/omamobile/modem-nv.sha256 can't be read"
+    return None
+
+
+# --- The extraction ----------------------------------------------------------
+
+def _preexec():
+    # die with the worker (a kill of it must not leave a tool writing), and
+    # leave no core file of a tool that crashed
+    try:
+        _libc.prctl(1, signal.SIGKILL)   # PR_SET_PDEATHSIG
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    except Exception:   # noqa: BLE001
+        pass
+
+
+_child = None
+
+MATERIALIZE = r"""
+import re, shutil, sys, zipfile
+out = sys.argv[1]
+src = sys.stdin.buffer
+with open(src.fileno(), "rb", closefd=False) as f:
+    if f.read(4) != b"PK\x03\x04":
+        sys.exit("the factory image is not a zip")
+    f.seek(0)
+    inner = None
+    with zipfile.ZipFile(f) as z:
+        for n in z.namelist():
+            if re.search(r"(^|/)image-[^/]*\.zip$", n):
+                inner = n
+                break
+        if inner is not None:
+            with z.open(inner) as i, open(out, "wb") as o:
+                shutil.copyfileobj(i, o, 1 << 20)
+    if inner is None:
+        f.seek(0)
+        with open(out, "wb") as o:
+            shutil.copyfileobj(f, o, 1 << 20)
+"""
+
+
+def run_tool(argv, work, stdin=None, more_env=None):
+    """One extraction program, unprivileged when this runs as root, with
+    its temporary files in the working directory. Raises Fail with the end
+    of its output."""
+    global _child
+    env = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/bin", "LC_ALL": "C",
+           "HOME": work, "TMPDIR": os.path.join(work, "tmp")}
+    if SCRATCH:
+        env["PATH"] = os.environ.get("PATH", env["PATH"])
+        for k in os.environ:
+            if k.startswith("OMAMOBILE_PROVISION_FAKE_"):
+                env[k] = os.environ[k]
+    env.update(more_env or {})
+    kw = {}
+    if AS_ROOT:
+        kw = {"user": EXTRACT_USER, "group": EXTRACT_USER, "extra_groups": []}
+    os.umask(0o022)
+    with tempfile.TemporaryFile() as out:
+        _child = subprocess.Popen(argv, stdin=stdin if stdin is not None else subprocess.DEVNULL, stdout=out,
+                                  stderr=subprocess.STDOUT, cwd=work, env=env, start_new_session=True,
+                                  preexec_fn=_preexec, **kw)
+        try:
+            rc = _child.wait(timeout=TOOL_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            rc = None
+        finally:
+            kill_child()
+        if rc != 0:
+            out.seek(0)
+            tail = out.read().decode("utf-8", "replace").splitlines()[-20:]
+            for line in tail:
+                log("    | " + line)
+            raise Fail("timed out" if rc is None else f"exit status {rc}")
+
+
+def kill_child():
+    global _child
+    c, _child = _child, None
+    if c is None:
+        return
+    try:
+        os.killpg(c.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        c.wait(timeout=10)
+    except Exception:   # noqa: BLE001
+        pass
+
+
+class Extraction:
+    """The working directory and what the tools put in it. The directory
+    belongs to the extraction's user; this process only reads it."""
+
+    def __init__(self, work, image):
+        self.work = work
+        self.image = image
+        self.src = os.path.join(work, "image.zip")
+
+    def tool(self, name):
+        path = os.path.join(TOOLS, name)
+        if not os.path.isfile(path):
+            raise Fail(f"no {path}")
+        return path
+
+    def materialize(self):
+        """The image-*.zip inside the factory zip (or the file itself, when
+        it is that already) into the working directory. The unprivileged
+        reader gets the image as an open descriptor: it can't open the
+        image's path, which is root's."""
+        with open(self.image, "rb") as f:
+            run_tool([sys.executable or "/usr/bin/python3", "-I", "-c", MATERIALIZE, self.src], self.work, stdin=f)
+
+    def firmware(self):
+        w = self.work
+        run_tool(["bash", self.tool("extract-vendor-firmware"), "-o", w + "/fw", "-c", w + "/camera.apex",
+                  "-w", w + "/t", self.src], w)
+
+    def chroot(self, profile):
+        w = self.work
+        run_tool(["bash", self.tool("extract-vendor-chroot"), "-p", profile, "-o", f"{w}/chroot-{profile}",
+                  "-w", w + "/t", self.src], w)
+
+    def fingerprint(self):
+        w = self.work
+        run_tool(["bash", self.tool("extract-fingerprint-vendor"), "-o", w + "/fp-vendor", "-w", w + "/t",
+                  self.src], w)
+
+    def camera(self):
+        w = self.work
+        # a second try starts from nothing
+        run_tool(["rm", "-rf", w + "/camera"], w)
+        # The tool runs as nobody, which can't write bytecode beside the
+        # private modules; as root (a test) it must not
+        run_tool([PYTHON, self.tool("extract-camera-data"), "--apex", w + "/camera.apex", "-d", w + "/camera"], w,
+                 more_env={"PYTHONPATH": UNICORN_PATH, "PYTHONDONTWRITEBYTECODE": "1"})
+
+
+def new_work(base, owner_dir=None):
+    """A new working directory, mode 700, the extraction user's."""
+    work = tempfile.mkdtemp(prefix="work.", dir=base)
+    os.mkdir(os.path.join(work, "tmp"), 0o700)
+    os.mkdir(os.path.join(work, "t"), 0o700)
+    if AS_ROOT:
+        import pwd
+        pw = pwd.getpwnam(EXTRACT_USER)
+        for d in (work, os.path.join(work, "tmp"), os.path.join(work, "t")):
+            os.chown(d, pw.pw_uid, pw.pw_gid)
+    os.chmod(work, 0o700)
+    return work
+
+
+# --- first-install -----------------------------------------------------------
+
+class Run:
+    def __init__(self, steps, optional, progress_fd, result_path):
+        self.steps = steps
+        self.optional = optional
+        self.state = {s: "skipped" for s in steps}
+        self.progress_fd = progress_fd
+        self.result_path = result_path
+        self.done = 0
+        self.total = 0
+        self.current = None
+
+    def progress(self, step, advance=True):
+        self.current = step
+        line = json.dumps({"what": "provision", "step": step, "done": self.done, "total": self.total},
+                          separators=(",", ":")) + "\n"
+        try:
+            os.write(self.progress_fd, line.encode())
+        except OSError:
+            pass   # a closed pipe must not stop the provisioning
+        if advance:
+            self.done += 1
+
+    def write_result(self, failed):
+        opt_failed = [s for s in self.optional if self.state.get(s) == "failed"]
+        ok = failed is None and all(self.state[s] == "ok" for s in self.steps if s not in self.optional)
+        data = json.dumps({"version": 1, "ok": ok, "failed": failed, "optional_failed": opt_failed,
+                           "steps": [{"step": s, "state": self.state[s]} for s in self.steps]},
+                          separators=(",", ":")) + "\n"
+        try:
+            write_atomic(self.result_path, data.encode(), 0o600)
+        except OSError as e:
+            log(f"error: can't write the result file {self.result_path}: {e.strerror}")
+            return False
+        return ok
+
+
+def first_install(args):
+    development = False
+    progress_fd = 1
+    result_path = at("/var/lib/omamobile/install-link/provision.result")
+    rest = []
+    while args:
+        a = args.pop(0)
+        if a == "--development":
+            development = True
+        elif a == "--progress-fd":
+            v = args.pop(0) if args else ""
+            if not v.isdigit():
+                raise Refuse("--progress-fd needs a file descriptor number")
+            progress_fd = int(v)
+        elif a == "--result":
+            if not args:
+                raise Refuse("--result needs a file")
+            result_path = os.path.abspath(args.pop(0))
+        elif a.startswith("-"):
+            raise Refuse(f"unknown option {a}")
+        else:
+            rest.append(a)
+    if len(rest) != 2:
+        raise Refuse("usage: omamobile-provision first-install [--development] [--progress-fd N] [--result FILE] "
+                     "FACTORY.zip NV-SUMS")
+    image, sums = os.path.abspath(rest[0]), os.path.abspath(rest[1])
+
+    # Every refusal comes before the first write
+    if not AS_ROOT and not SCRATCH:
+        raise Refuse("run as root (it installs under /usr and /etc)")
+    code, steps, optional, parts = plan_from(descriptor())
+    try:
+        ist = os.stat(image)
+    except OSError:
+        raise Refuse(f"no factory image {image}") from None
+    if not stat.S_ISREG(ist.st_mode) or ist.st_size == 0:
+        raise Refuse(f"the factory image {image} is not a file with something in it")
+    nv_data = nv_lines(sums, parts) if "modem-data" in steps else b""
+    hwid = board_id() if "modem-data" in steps else None
+    if not development:
+        why = first_start_state(nv_data)
+        if why:
+            raise Refuse(f"not a first start: {why}. Nothing was written (a development phone: --development)")
+    for t in ("extract-vendor-firmware", "extract-vendor-chroot", "extract-fingerprint-vendor",
+              "extract-camera-data"):
+        if not os.path.isfile(os.path.join(TOOLS, t)):
+            raise Refuse(f"no {os.path.join(TOOLS, t)}: the package is not installed whole")
+    if not os.path.isdir(os.path.dirname(result_path)):
+        raise Refuse(f"no directory for the result file {result_path}")
+    try:
+        os.fstat(progress_fd)
+    except OSError:
+        raise Refuse(f"--progress-fd {progress_fd} is not open") from None
+
+    base = at("/var/lib/omamobile/provision")
+    makedirs(base)
+    lock = os.open(os.path.join(base, "lock"), os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        raise Refuse("another omamobile-provision is running") from None
+
+    run = Run(steps, optional, progress_fd, result_path)
+    # extraction: the image, then one per tool; installs: one per step, the
+    # modem's data as two (the board id, then the checksums)
+    need_fw = any(s in steps for s in ("firmware", "sensors", "camera"))
+    run.total = 1 + (1 if need_fw else 0) + sum(1 for s in ("gnss", "modem", "fingerprint") if s in steps) + \
+        sum(1 for s in steps if s != "modem-data") + (2 if "modem-data" in steps else 0)
+    try:
+        os.unlink(result_path)
+    except FileNotFoundError:
+        pass
+    for n in os.listdir(base):
+        if n.startswith("work."):
+            log(f"==> Removing a working directory an interrupted run left ({n})")
+            rmtree(os.path.join(base, n))
+    work = None
+    failed = None
+    try:
+        work = new_work(base)
+        checkpoint("working directory")
+        ex = Extraction(work, image)
+        log(f"==> Extracting from the factory image ({code})")
+        failed = "firmware"
+        run.progress("firmware")
+        ex.materialize()
+        checkpoint("image unpacked")
+        h = hashlib.sha256()
+        with open(image, "rb") as f:
+            for block in iter(lambda: f.read(1 << 20), b""):
+                h.update(block)
+        if need_fw:
+            run.progress("firmware")
+            log("    extract-vendor-firmware")
+            ex.firmware()
+            checkpoint("firmware extracted")
+        for p in ("gnss", "modem"):
+            if p in steps:
+                failed = p
+                run.progress(p)
+                log(f"    extract-vendor-chroot -p {p}")
+                ex.chroot(p)
+                checkpoint(f"{p} extracted")
+        if "fingerprint" in steps:
+            failed = "fingerprint"
+            run.progress("fingerprint")
+            log("    extract-fingerprint-vendor")
+            ex.fingerprint()
+            checkpoint("fingerprint extracted")
+
+        log("==> Installing Google's files")
+
+        def tree(rel):
+            return open_under(work, rel)
+
+        def camera():
+            """The optional step: its extraction and its install."""
+            try:
+                log("    extract-camera-data")
+                ex.camera()
+                fd = tree("camera")
+                try:
+                    with os.scandir(fd) as it:
+                        bins = {e.name for e in it if e.name.endswith(".bin")}
+                    if not bins:
+                        raise Fail("the camera step wrote no data file")
+                    # cp's modes, as phone-provision stages them
+                    install_merge(fd, at("/usr/lib/firmware/omamobile/camera"), "camera", mode_mask=0o755,
+                                  only=bins)
+                finally:
+                    os.close(fd)
+                return True
+            except Fail as e:
+                log(f"    camera: failed ({e})")
+                return False
+            except OSError as e:
+                log(f"    camera: failed ({e.strerror})")
+                return False
+
+        for s in steps:
+            failed = s
+            if s == "firmware":
+                run.progress(s)
+                fd = tree("fw/usr/lib/firmware/updates")
+                try:
+                    want = install_merge(fd, at("/usr/lib/firmware/updates"), s)
+                finally:
+                    os.close(fd)
+                fd = tree("fw")
+                try:
+                    sums_list = read_small(fd, "vendor-firmware.sha256")
+                finally:
+                    os.close(fd)
+                if sums_list is None:
+                    raise Fail("the extraction gave no vendor-firmware.sha256")
+                listed = {}
+                for line in sums_list.decode("utf-8", "surrogateescape").splitlines():
+                    if not re.fullmatch(r"[0-9a-f]{64}  .+", line):
+                        raise Fail("a vendor-firmware.sha256 line is not sha256sum's")
+                    listed[line[66:]] = line[:64]
+                have = {p: v[2] for p, v in want.items() if v[0] == "f"}
+                if have != listed:
+                    raise Fail("the installed firmware is not what vendor-firmware.sha256 lists")
+            elif s == "sensors":
+                run.progress(s)
+                fd = tree("fw/usr/share/omamobile/sensors/registry")
+                try:
+                    install_replace_dir(fd, at("/usr/share/omamobile/sensors/registry"), s)
+                finally:
+                    os.close(fd)
+            elif s in ("gnss", "modem"):
+                run.progress(s)
+                fd = tree(f"chroot-{s}")
+                try:
+                    install_replace_gated(fd, at(f"/usr/lib/omamobile-vendor/{s}"), s)
+                finally:
+                    os.close(fd)
+            elif s == "fingerprint":
+                run.progress(s)
+                fd = tree("fp-vendor")
+                try:
+                    install_replace_gated(fd, at("/usr/lib/omamobile-fp"), s)
+                finally:
+                    os.close(fd)
+            elif s == "camera":
+                run.progress(s)
+                if not camera():
+                    run.state[s] = "failed"
+                    checkpoint("camera failed once")
+                    continue
+            elif s == "modem-data":
+                run.progress(s)
+                write_props(hwid)
+                checkpoint("board id written")
+                # the optional step's one more try, after every other step
+                # and before the write that must be the last
+                failed = "camera"
+                if run.state.get("camera") == "failed":
+                    log("==> The camera step once more")
+                    run.progress("camera", advance=False)
+                    if camera():
+                        run.state["camera"] = "ok"
+                    checkpoint("camera tried again")
+                failed = "modem-data"
+                fp = "unknown"
+                for rel in ("chroot-modem", "chroot-gnss", "fp-vendor"):
+                    try:
+                        fd = tree(rel)
+                    except Fail:
+                        continue
+                    try:
+                        text = read_small(fd, "SOURCE", 4096)
+                    finally:
+                        os.close(fd)
+                    if text:
+                        fp = re.sub(r"[^\x21-\x7e]", "", text.decode("ascii", "replace").splitlines()[0])[:256]
+                        break
+                makedirs(at("/usr/lib/omamobile-provision"))
+                record = f"vendor_fingerprint={fp}\nfactory_sha256={h.hexdigest()}\n".encode()
+                try:
+                    with open(at("/usr/lib/omamobile-provision/SOURCE"), "rb") as f:
+                        same = f.read() == record
+                except OSError:
+                    same = False
+                if not same:
+                    write_atomic(at("/usr/lib/omamobile-provision/SOURCE"), record, 0o644)
+                checkpoint("SOURCE written")
+                run.progress(s)
+                write_nv(nv_data)
+                checkpoint("NV checksums written")
+            run.state[s] = "ok"
+            checkpoint(f"step {s} done")
+        failed = None
+        if "modem-data" not in steps and run.state.get("camera") == "failed":
+            if camera():
+                run.state["camera"] = "ok"
+    except Fail as e:
+        run.state[failed] = "failed"
+        log(f"error: {failed}: {e}")
+    except Interrupted:
+        run.state[failed or steps[0]] = "failed"
+        failed = failed or steps[0]
+        log("error: interrupted")
+    except OSError as e:
+        run.state[failed or steps[0]] = "failed"
+        failed = failed or steps[0]
+        log(f"error: {failed}: {e.filename or ''} {e.strerror}")
+    finally:
+        # from here on a signal no longer stops the run: the working
+        # directory goes and the result is written
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            signal.signal(sig, signal.SIG_IGN)
+        kill_child()
+        if work is not None:
+            rmtree(work)
+    checkpoint("working directory removed")
+    for s in steps:
+        log(f"    {s}: {run.state[s]}")
+    if failed is None:
+        run.done = run.total
+    run.progress(failed or steps[-1], advance=False)
+    # the last act: the result file
+    ok = run.write_result(failed)
+    if ok:
+        opt = [s for s in optional if run.state[s] == "failed"]
+        log("==> Done" + (f" ({', '.join(opt)} not set up: an optional step failed twice)" if opt else "") +
+            ". Nothing was started: the firmware, the fingerprint service and the modem start at the next boot")
+        return 0
+    log("==> Not finished. What was installed is whole; run it again to go on")
+    return 1
+
+
+# --- extract and listing -------------------------------------------------------
+
+def extract_only(args):
+    out = None
+    rest = []
+    while args:
+        a = args.pop(0)
+        if a == "-o":
+            out = args.pop(0) if args else None
+        elif a.startswith("-"):
+            raise Refuse(f"unknown option {a}")
+        else:
+            rest.append(a)
+    if out is None or len(rest) != 1:
+        raise Refuse("usage: omamobile-provision extract -o OUTDIR FACTORY.zip")
+    image = os.path.abspath(rest[0])
+    if not os.path.isfile(image):
+        raise Refuse(f"no factory image {image}")
+    out = os.path.abspath(out)
+    if os.path.lexists(out) and (not os.path.isdir(out) or os.listdir(out)):
+        raise Refuse(f"{out} exists and is not an empty directory")
+    os.makedirs(out, exist_ok=True)
+    work = new_work(out)
+    ex = Extraction(work, image)
+    rc = 0
+    try:
+        ex.materialize()
+        log("    extract-vendor-firmware")
+        ex.firmware()
+        for p in ("gnss", "modem"):
+            log(f"    extract-vendor-chroot -p {p}")
+            ex.chroot(p)
+        log("    extract-fingerprint-vendor")
+        ex.fingerprint()
+        try:
+            log("    extract-camera-data")
+            ex.camera()
+        except Fail as e:
+            log(f"camera: failed ({e})")
+            run_tool(["rm", "-rf", work + "/camera"], work)
+        run_tool(["rm", "-rf", work + "/image.zip", work + "/camera.apex", work + "/tmp", work + "/t"], work)
+    except Fail as e:
+        log(f"error: extraction failed: {e}")
+        rc = 1
+    finally:
+        kill_child()
+    if rc:
+        rmtree(work)
+        return rc
+    # the outputs and nothing else (not, say, what a crashed tool left)
+    for n in ("fw", "chroot-gnss", "chroot-modem", "fp-vendor", "camera"):
+        if os.path.isdir(os.path.join(work, n)) and not os.path.islink(os.path.join(work, n)):
+            os.rename(os.path.join(work, n), os.path.join(out, n))
+    rmtree(work)
+    log(f"==> Extracted into {out}; nothing was installed")
+    return 0
+
+
+def listing(args):
+    if len(args) != 1 or not os.path.isdir(args[0]):
+        raise Refuse("usage: omamobile-provision listing DIR")
+    for path, v in sorted((scan_path(args[0]) or {}).items(), key=lambda kv: os.fsencode(kv[0])):
+        if v[0] == "l":
+            print(f"l\t-\t{v[1]}\t{path}")
+        elif v[0] == "d":
+            print(f"d\t{v[1]:o}\t-\t{path}")
+        else:
+            print(f"f\t{v[1]:o}\t{v[2]}\t{path}")
+    return 0
+
+
+def _on_signal(signum, _frame):
+    raise Interrupted()
+
+
+def main(argv):
+    os.umask(0o022)
+    if len(argv) < 2 or argv[1] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0 if len(argv) > 1 else 2
+    for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(s, _on_signal)
+    try:
+        if argv[1] == "first-install":
+            return first_install(argv[2:])
+        if argv[1] == "extract":
+            return extract_only(argv[2:])
+        if argv[1] == "listing":
+            return listing(argv[2:])
+        raise Refuse(f"unknown command {argv[1]} (first-install, extract, listing)")
+    except Refuse as e:
+        log(f"error: {e}")
+        return 2
+    except Interrupted:
+        kill_child()
+        log("error: interrupted")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

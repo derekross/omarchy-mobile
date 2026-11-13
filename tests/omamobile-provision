@@ -1,0 +1,92 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The omamobile-provision package against the repository (offline, no
+# phone; packages/omamobile-provision/test/all has the worker's own tests):
+#   - the tools the package installs are tools/'s, byte for byte, and
+#     tools/build-packages, tools/phone-install-package and tools/repo-build
+#     stage them before they copy the package directory
+#   - the existing tests of those tools pass against the packaged copies
+#     (tests/extract-vendor-firmware, tests/extract-camera-data,
+#     tests/extract-camera-sve.py, tests/phone-smoke)
+#   - the byte for byte comparison of docs/INSTALL-LINK-PLAN.md section 6.2
+#     on a made-up factory image: the phone side's extraction equals the
+#     laptop's (packages/omamobile-provision/test/compare)
+#   - the same on real factory images, when OMAMOBILE_PROVISION_FACTORY names
+#     them (colon-separated paths; several GB of work space and minutes
+#     each: set COMPARE_WORK=DIR to a directory on disk when /tmp is in
+#     RAM). Only "equal" or the names of files that differ are printed,
+#     never contents. Never commit such an image or anything from it
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+skip() { printf 'ok - # skip: %s\n' "$1"; }
+P=packages/omamobile-provision
+t=$(mktemp -d)
+trap 'chmod -R u+rwX "$t" 2>/dev/null || true; rm -rf "$t" || true' EXIT
+export PATH=$PATH:/usr/sbin:/sbin
+
+"$P/install" "$t/stage"
+lib=$t/stage/usr/lib/omamobile-provision
+for f in $("$P/stage-tools" --list); do
+  cmp -s "tools/$f" "$lib/$f" || fail "the packaged $f is tools/$f, byte for byte"
+done
+[[ $(ls "$lib" | xargs) == "extract-camera-data extract-fingerprint-vendor extract-vendor-chroot extract-vendor-firmware lib phone-smoke" ]] ||
+  fail "the package's tool directory holds the tools and nothing else"
+git check-ignore -q "$P/tools-staged/extract-vendor-firmware" || fail "the staged copies are gitignored (one source: tools/)"
+[[ -z $(git ls-files "$P/tools-staged") ]] || fail "no staged copy is committed"
+pass "the packaged tools are tools/'s, byte for byte, and no copy of them is committed"
+
+for b in tools/build-packages tools/phone-install-package tools/repo-build; do
+  n=$(grep -n 'stage-tools' "$b" | grep -v '^[0-9]*:[[:space:]]*#' | head -n 1 | cut -d: -f1) || true
+  m=$(grep -n 'tar cf - --exclude' "$b" | head -n 1 | cut -d: -f1)
+  [[ -n $n && -n $m ]] && ((n < m)) || fail "$b stages a package's tools before it copies the package directory"
+done
+pass "the three builders stage the tools before they copy the package directory"
+
+# The tools' own tests, against the packaged copies. Two of them name
+# tools/ themselves, so they run in a view of the repository whose tools/
+# holds the packaged files.
+EVF=$lib/extract-vendor-firmware tests/extract-vendor-firmware > "$t/log" 2>&1 || { tail -20 "$t/log"; fail "tests/extract-vendor-firmware passes on the packaged copy"; }
+n=$(grep -c '^ok' "$t/log")
+python3 tests/extract-camera-sve.py "$lib/extract-camera-data" > "$t/log" 2>&1 || { tail -20 "$t/log"; fail "tests/extract-camera-sve.py passes on the packaged copy"; }
+mkdir -p "$t/view/tools" "$t/view/tests"
+cp -r "$lib/." "$t/view/tools/"
+cp tests/extract-camera-data tests/extract-camera-sve.py tests/phone-smoke "$t/view/tests/"
+ln -s "$PWD/device" "$t/view/device"
+"$t/view/tests/extract-camera-data" > "$t/log" 2>&1 || { tail -20 "$t/log"; fail "tests/extract-camera-data passes on the packaged copy"; }
+"$t/view/tests/phone-smoke" > "$t/log" 2>&1 || { tail -20 "$t/log"; fail "tests/phone-smoke passes on the packaged copy"; }
+pass "the tools' own tests pass on the packaged copies (extract-vendor-firmware: $n checks; extract-camera-data, extract-camera-sve, phone-smoke)"
+
+lacking=""
+for c in mke2fs debugfs unzip readelf od; do command -v "$c" >/dev/null || lacking+=" $c"; done
+if [[ -n $lacking ]]; then
+  skip "the byte for byte comparison on a made-up factory image (this machine lacks$lacking)"
+else
+  python3 -I -B "$P/test/standin-factory" "$t/standin.zip" gen1
+  out=$(COMPARE_WORK=$t "$P/test/compare" "$t/standin.zip" 2>&1) || { echo "$out"; fail "made-up factory image: the phone side's extraction equals the laptop's"; }
+  grep -c '^equal (' <<<"$out" >/dev/null || { echo "$out"; fail "the comparison says equal"; }
+  pass "made-up factory image: the phone side's extraction equals the laptop's, byte for byte ($(grep '^equal' <<<"$out"))"
+  # a negative control: another generation of the image is not equal
+  python3 -I -B "$P/test/standin-factory" "$t/standin2.zip" gen2
+  a=$t/ctl; mkdir -p "$a"
+  OMAMOBILE_PROVISION_TOOLS=$lib python3 -I -B "$t/stage/usr/bin/omamobile-provision" extract -o "$a/1" "$t/standin.zip" >/dev/null 2>&1
+  OMAMOBILE_PROVISION_TOOLS=$lib python3 -I -B "$t/stage/usr/bin/omamobile-provision" extract -o "$a/2" "$t/standin2.zip" >/dev/null 2>&1
+  [[ $(python3 -I -B "$t/stage/usr/bin/omamobile-provision" listing "$a/1") != "$(python3 -I -B "$t/stage/usr/bin/omamobile-provision" listing "$a/2")" ]] ||
+    fail "two different images give different listings"
+  pass "two generations of the made-up image give different listings (the comparison can fail)"
+fi
+
+if [[ -n ${OMAMOBILE_PROVISION_FACTORY:-} ]]; then
+  IFS=: read -r -a images <<<"$OMAMOBILE_PROVISION_FACTORY"
+  for f in "${images[@]}"; do
+    [[ -f $f ]] || fail "OMAMOBILE_PROVISION_FACTORY: no such file"
+    # only "equal" or names: never a file's content
+    rc=0; out=$("$P/test/compare" "$f" 2>&1) || rc=$?
+    echo "# $(basename "$f"):"; sed 's/^/#   /' <<<"$out"
+    [[ $rc == 0 ]] || fail "real factory image $(basename "$f"): the phone side's extraction equals the laptop's"
+    pass "real factory image $(basename "$f"): the phone side's extraction equals the laptop's, byte for byte"
+  done
+else
+  skip "the comparison on a real factory image (set OMAMOBILE_PROVISION_FACTORY=FACTORY.zip[:...]; nothing of it is printed or kept)"
+fi

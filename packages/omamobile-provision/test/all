@@ -1,0 +1,522 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for omamobile-provision, offline, with no phone and no root: the
+# phone is a scratch root (OMAMOBILE_PROVISION_ROOT), the factory image a
+# made-up zip, and the extraction tools stand-ins (test/fake-tools) that
+# write small trees shaped like the real ones and fail on request. Checked:
+#   - what the package installs, with which modes, and that the packaged
+#     tools are byte for byte the repository's tools/ (in a checkout)
+#   - that it ships no unit, hook or install script and names no command
+#     that starts, stops or enables anything, and no block device
+#   - the straight path: every tree where tools/phone-provision puts it,
+#     its modes, the progress lines, the result file, the board id never in
+#     any output, the modem's checksum file written last
+#   - every refusal, with nothing written
+#   - every failure: each extraction, a tree that doesn't match its list,
+#     an interrupted run; the camera step failing once and twice
+#   - a kill at every single checkpoint, on a first install and over an
+#     older generation: no half tree is ever at a final path, the checksum
+#     file is never there early, and a rerun finishes
+#   - with mke2fs, debugfs, unzip and readelf here: the real tools on a
+#     made-up factory image (test/standin-factory), against a run of the
+#     same tools the way tools/phone-provision runs them on a laptop
+#   - where unshare can map a user range: the same as root, the extraction
+#     as an unprivileged user, everything installed root's
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+PKG=$PWD
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+skip() { printf 'ok - # skip: %s\n' "$1"; }
+
+for f in install stage-tools bin/phone-smoke test/all test/fake-tools/common.sh test/fake-tools/extract-vendor-firmware \
+         test/fake-tools/extract-vendor-chroot test/fake-tools/extract-fingerprint-vendor \
+         test/fake-tools/extract-camera-data; do
+  bash -n "$f" || fail "$f parses"
+done
+for f in bin/omamobile-provision test/standin-factory test/check-state; do
+  python3 -I -B -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$f" || fail "$f parses"
+done
+pass "scripts parse"
+
+t=$(mktemp -d)
+trap 'chmod -R u+rwX "$t" 2>/dev/null || true; rm -rf "$t" || true' EXIT
+PROV=(python3 -I -B "$PKG/bin/omamobile-provision")
+
+# --- What the package installs ------------------------------------------------
+./install "$t/stage"
+modes=$(cd "$t/stage" && find . \( -type f -o -type l \) -printf '%m %P\n' | LC_ALL=C sort -k2)
+want="755 usr/bin/omamobile-provision
+755 usr/bin/phone-smoke
+755 usr/lib/omamobile-provision/extract-camera-data
+755 usr/lib/omamobile-provision/extract-fingerprint-vendor
+755 usr/lib/omamobile-provision/extract-vendor-chroot
+755 usr/lib/omamobile-provision/extract-vendor-firmware
+644 usr/lib/omamobile-provision/lib/usage.sh
+755 usr/lib/omamobile-provision/phone-smoke
+644 usr/share/doc/omamobile-provision/README.md
+644 usr/share/licenses/omamobile-provision/LICENSE
+644 usr/share/omamobile/provision/version"
+[[ $modes == "$want" ]] || { diff <(echo "$want") <(echo "$modes") || true; fail "the package installs exactly these files, with these modes"; }
+pass "the package installs the worker, phone-smoke, the four extraction tools and nothing else"
+
+if [[ -f ../../tools/extract-vendor-firmware ]]; then
+  for f in extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data phone-smoke lib/usage.sh; do
+    cmp -s "../../tools/$f" "$t/stage/usr/lib/omamobile-provision/$f" || fail "the packaged $f is not tools/$f, byte for byte"
+  done
+  ./stage-tools --check || fail "tools-staged/ matches tools/"
+  pass "the packaged tools are the repository's tools/, byte for byte"
+else
+  (cd tools-staged && sha256sum --quiet --strict -c SHA256SUMS) || fail "tools-staged/ matches its checksums"
+  skip "no repository around this copy: the packaged tools match the staged copy's checksums only"
+fi
+# a staged copy that was edited is refused
+mkdir "$t/pkgcopy"   # not makepkg's pkg/ and src/, which check() can't read
+cp -r install stage-tools tools-staged bin version README.md LICENSE "$t/pkgcopy/"
+echo "# edited" >> "$t/pkgcopy/tools-staged/extract-vendor-chroot"
+(cd "$t/pkgcopy" && ./install "$t/stage2" >/dev/null 2>&1) && fail "an edited staged tool is refused"
+pass "an edited copy of a staged tool is refused by install"
+out=$("$t/stage/usr/lib/omamobile-provision/phone-smoke" --help) || fail "the packaged phone-smoke prints its help"
+grep -c 'phone-smoke --here' <<<"$out" >/dev/null || fail "the packaged phone-smoke finds lib/usage.sh"
+pass "the packaged phone-smoke runs from its packaged place (--help)"
+
+# --- Nothing starts, stops or enables anything --------------------------------
+[[ -z $(find "$t/stage" -path '*systemd*' -o -name '*.service' -o -name '*.timer' -o -name '*.socket' -o -name '*.target' \
+        -o -name '*.hook' -o -path '*udev*' -o -path '*modprobe*' -o -path '*/etc/*') ]] ||
+  fail "the package ships no unit, hook, udev rule, modprobe file or /etc file"
+[[ -z $(find . -maxdepth 1 -name '*.install') ]] || fail "the package has no install script"
+grep -cE '^(install|backup)=' PKGBUILD >/dev/null && fail "the PKGBUILD names no install script"
+for f in bin/omamobile-provision bin/phone-smoke install stage-tools; do
+  if grep -nE '\b(systemctl|systemd-run|service|modprobe|rmmod|insmod|reboot|reboot-to|blockdev|mount|losetup|dd)\b[^-]' "$f" |
+     grep -vE '^[0-9]+:[[:space:]]*#|own units|by its own unit|service and the modem|fingerprint service|no unit|Nothing was started' >/dev/null; then
+    grep -nE '\b(systemctl|systemd-run|service|modprobe|rmmod|insmod|reboot|reboot-to|blockdev|mount|losetup|dd)\b[^-]' "$f"
+    fail "$f names a command that starts, stops, loads, mounts or writes a device"
+  fi
+  sed 's|/dev/null||g' "$f" | grep -c '/dev/' >/dev/null && fail "$f names a device node"
+done
+pass "nothing in the package starts, stops or enables a unit, loads a module, mounts or opens a device"
+
+# --- Stand-ins ----------------------------------------------------------------
+HWID=0x00c0ffee   # made up
+mkimage() { # FILE GENERATION: a factory zip whose inner image zip says its generation
+  python3 -I -B - "$1" "$2" <<'PY'
+import io, sys, zipfile
+inner = io.BytesIO()
+with zipfile.ZipFile(inner, "w") as z:
+    z.writestr("generation.txt", sys.argv[2] + "\n")
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    z.writestr("cheetah-fict/image-cheetah-fict.zip", inner.getvalue())
+PY
+}
+mkimage "$t/gen1.zip" gen1
+mkimage "$t/gen2.zip" gen2
+NV=$t/SHA256SUMS
+for p in efs efs_backup modem_userdata persist modem_a modem_b devinfo; do
+  printf '%064d  %s.img\n' "${#p}" "$p"
+done > "$NV"
+grep -v devinfo "$NV" > "$t/nv.want"
+
+# expect DIR GENERATION: what the stand-in tools give, run directly
+expect() {
+  local e=$1 f=$1.fake; mkdir -p "$e" "$f"
+  ( export OMAMOBILE_PROVISION_FAKE_DIR=$f
+    test/fake-tools/extract-vendor-firmware -o "$e/fw" -c "$e/camera.apex" -w "$e/w" "$t/$2.inner.zip"
+    test/fake-tools/extract-vendor-chroot -p gnss -o "$e/chroot-gnss" -w "$e/w" "$t/$2.inner.zip"
+    test/fake-tools/extract-vendor-chroot -p modem -o "$e/chroot-modem" -w "$e/w" "$t/$2.inner.zip"
+    test/fake-tools/extract-fingerprint-vendor -o "$e/fp-vendor" -w "$e/w" "$t/$2.inner.zip"
+    # as the worker runs the camera tool: omamobile-unicorn's copy first
+    PYTHONPATH=/usr/lib/omamobile-unicorn/python PYTHONDONTWRITEBYTECODE=1 \
+      test/fake-tools/extract-camera-data --apex "$e/camera.apex" -d "$e/camera" )
+}
+for g in gen1 gen2; do
+  python3 -I -B -c 'import sys, zipfile; z = zipfile.ZipFile(sys.argv[1]); open(sys.argv[2], "wb").write(z.read(z.namelist()[0]))' "$t/$g.zip" "$t/$g.inner.zip"
+  expect "$t/expect-$g" "$g"
+done
+
+# mkroot DIR: a phone at the first start's provisioning stage
+mkroot() {
+  local r=$1
+  rm -rf "$r"
+  mkdir -p "$r/usr/share/omamobile" "$r/etc/omamobile" "$r/var/lib/omamobile/install-link" \
+           "$r/var/lib/omamobile/firstboot" "$r/proc" "$r/usr/lib/omamobile-fp" \
+           "$r/usr/lib/omamobile-vendor/modem" "$r/usr/lib/omamobile-vendor/gnss"
+  if [[ -f ../../device/cheetah/device.conf ]]; then cp ../../device/cheetah/device.conf "$r/usr/share/omamobile/device.conf"
+  else printf 'CODENAME=cheetah\nNV_PARTS="efs efs_backup modem_userdata persist modem_a modem_b"\n' > "$r/usr/share/omamobile/device.conf"; fi
+  : > "$r/etc/omamobile/install-link"
+  : > "$r/var/lib/omamobile/firstboot/done"
+  printf 'androidboot.slot_suffix = "_b"\nandroidboot.cdt_hwid = "%s"\n' "$HWID" > "$r/proc/bootconfig"
+  # files the packages own, beside where the trees go
+  for f in usr/lib/omamobile-fp/omamobile-fp-chroot usr/lib/omamobile-vendor/modem/stop-witness-version \
+           usr/lib/omamobile-vendor/gnss/props.conf; do echo "a package's file" > "$r/$f"; done
+}
+# run ROOT [ENV=...] -- ARGS: the worker in a scratch root with the stand-in
+# tools; its progress in $t/progress, its log in $t/log, its status in $rc
+run() {
+  local r=$1; shift
+  local env=()
+  while [[ $1 != -- ]]; do env+=("$1"); shift; done; shift
+  rc=0
+  # the braces keep bash's own "Killed" notes (the kill tests) out of the output
+  { env OMAMOBILE_PROVISION_ROOT="$r" OMAMOBILE_PROVISION_TOOLS="$PKG/test/fake-tools" OMAMOBILE_PROVISION_PYTHON=bash \
+      OMAMOBILE_PROVISION_FAKE_DIR="$t/fake" "${env[@]}" "${PROV[@]}" "$@" > "$t/progress" 2> "$t/log" || rc=$?; } 2>/dev/null
+}
+snap() { (cd "$1" && find . -printf '%y %m %p %l\n' | LC_ALL=C sort && find . -type f -print0 | LC_ALL=C sort -z | xargs -0r sha256sum); }
+result() { python3 -I -B -c 'import json, sys; r = json.load(open(sys.argv[1])); print(eval(sys.argv[2]))' "$1/var/lib/omamobile/install-link/provision.result" "$2"; }
+state() { test/check-state "$@" || { cat "$t/log"; fail "${what:-the state of the scratch root}"; }; }
+mkdir -p "$t/fake"
+fresh_fake() { rm -rf "$t/fake"; mkdir -p "$t/fake"; }
+
+# --- The straight path ----------------------------------------------------------
+R=$t/root
+mkroot "$R"
+run "$R" -- first-install "$t/gen1.zip" "$NV"
+[[ $rc == 0 ]] || { cat "$t/log"; fail "a first install succeeds (exit $rc)"; }
+what="the straight path" state --complete "$R" "$t/expect-gen1"
+[[ $(result "$R" 'r["ok"], r["failed"], r["optional_failed"], [s["step"] + "=" + s["state"] for s in r["steps"]]') == \
+   "(True, None, [], ['firmware=ok', 'sensors=ok', 'gnss=ok', 'modem=ok', 'fingerprint=ok', 'camera=ok', 'modem-data=ok'])" ]] ||
+  { cat "$R/var/lib/omamobile/install-link/provision.result"; fail "the result file names every step ok"; }
+python3 -I -B - "$t/progress" <<'PY' || fail "progress: one JSON object per line, {what, step, done, total}, done rising to total"
+import json, sys
+last, total = -1, None
+steps = {"firmware", "sensors", "gnss", "modem", "fingerprint", "camera", "modem-data"}
+lines = open(sys.argv[1]).read().splitlines()
+assert len(lines) >= 10, lines
+for line in lines:
+    m = json.loads(line)
+    assert set(m) == {"what", "step", "done", "total"}, m
+    assert m["what"] == "provision" and m["step"] in steps, m
+    assert isinstance(m["done"], int) and m["done"] >= last and m["total"] > 0, m
+    assert total in (None, m["total"]), m
+    last, total = m["done"], m["total"]
+assert last == total, (last, total)
+PY
+cmp -s "$R/etc/omamobile/modem-nv.sha256" "$t/nv.want" || fail "modem-nv.sha256 holds the six NV lines and no other"
+[[ $(stat -c %a "$R/etc/omamobile/modem-nv.sha256") == 644 ]] || fail "modem-nv.sha256 is mode 644"
+P=$R/var/lib/omamobile-vendor/modem/props.conf
+[[ $(stat -c %a "$P") == 600 ]] || fail "props.conf is mode 600"
+[[ $(cat "$P") == "ro.boot.cdt_hwid=$HWID
+persist.vendor.modem.cdt_hwid=$HWID" ]] || fail "props.conf holds the two board id keys"
+grep -c -- "$HWID" "$t/log" "$t/progress" "$R/var/lib/omamobile/install-link/provision.result" \
+  "$R/usr/lib/omamobile-provision/SOURCE" >/dev/null && fail "the board id is in no output, result or record"
+grep -cx 'vendor_fingerprint=fictional/cheetah/gen1' "$R/usr/lib/omamobile-provision/SOURCE" >/dev/null || fail "SOURCE names the build"
+grep -cx "factory_sha256=$(sha256sum < "$t/gen1.zip" | cut -d' ' -f1)" "$R/usr/lib/omamobile-provision/SOURCE" >/dev/null ||
+  fail "SOURCE holds the image's SHA-256"
+[[ $(stat -c %a "$R/usr/lib/omamobile-vendor/gnss/root/vendor/etc") == 750 &&
+   $(stat -c %a "$R/usr/lib/omamobile-vendor/gnss/root/vendor/bin/gnss-daemon") == 755 &&
+   $(stat -c %a "$R/usr/lib/omamobile-vendor/gnss") == 755 &&
+   $(stat -c %a "$R/usr/share/omamobile/sensors/registry") == 755 &&
+   $(stat -c %a "$R/usr/lib/firmware/updates/brcm") == 755 &&
+   $(stat -c %a "$R/usr/lib/firmware/omamobile/camera/imx386-uw.bin") == 644 ]] || fail "the trees keep the extraction's modes"
+[[ $(readlink "$R/usr/lib/omamobile-fp/root/system/lib64/libc.so") == /apex/com.android.runtime/lib64/bionic/libc.so ]] ||
+  fail "symlinks stay symlinks"
+[[ ! -e $R/usr/lib/firmware/omamobile/camera/notes.txt ]] || fail "only the camera's .bin files are installed"
+[[ $(stat -c %a "$R/var/lib/omamobile/install-link/provision.result") == 600 ]] || fail "the result file is mode 600"
+[[ -z $(ls "$R/var/lib/omamobile/provision" | grep -v '^lock$') ]] || fail "the working directory is removed"
+# the checksum file is the last write but the result
+python3 -I -B - "$R" <<'PY' || fail "modem-nv.sha256 is written after everything else (but the result file)"
+import os, sys
+root = sys.argv[1]
+nv = os.lstat(os.path.join(root, "etc/omamobile/modem-nv.sha256")).st_ctime_ns
+late = []
+for d, dirs, files in os.walk(root):
+    for n in dirs + files:
+        p = os.path.join(d, n)
+        rel = os.path.relpath(p, root)
+        if rel in ("etc/omamobile/modem-nv.sha256", "var/lib/omamobile/install-link/provision.result", "etc/omamobile",
+                   "var/lib/omamobile/install-link", "var/lib/omamobile/provision"):
+            continue
+        if os.lstat(p).st_ctime_ns > nv:
+            late.append(rel)
+if late:
+    print("written after modem-nv.sha256:", late)
+    sys.exit(1)
+PY
+pass "a first install: every tree in its place with its modes, progress, result, the board id never shown, the checksum file last"
+
+# A second run over a finished one changes nothing that is installed
+before=$(cd "$R" && find usr etc var/lib/omamobile-vendor -printf '%i %p\n' | LC_ALL=C sort -k2)
+run "$R" -- first-install "$t/gen1.zip" "$NV"
+[[ $rc == 0 ]] || { cat "$t/log"; fail "a second run succeeds"; }
+[[ $(cd "$R" && find usr etc var/lib/omamobile-vendor -printf '%i %p\n' | LC_ALL=C sort -k2) == "$before" ]] ||
+  fail "a second run leaves every installed file and directory untouched (the same inodes)"
+what="a second run" state --complete "$R" "$t/expect-gen1"
+pass "a second run of the same image leaves everything untouched and succeeds"
+
+# props.conf keeps its other lines; a stale registry file and tree entry go
+mkroot "$R"
+mkdir -p "$R/var/lib/omamobile-vendor/modem" "$R/usr/share/omamobile/sensors/registry"
+printf 'keep.this=1\nro.boot.cdt_hwid=0xold\n' > "$R/var/lib/omamobile-vendor/modem/props.conf"
+echo stale > "$R/usr/share/omamobile/sensors/registry/stale.json"
+run "$R" -- first-install --development "$t/gen1.zip" "$NV"
+[[ $rc == 0 ]] || { cat "$t/log"; fail "a development run succeeds"; }
+[[ $(cat "$R/var/lib/omamobile-vendor/modem/props.conf") == "keep.this=1
+ro.boot.cdt_hwid=$HWID
+persist.vendor.modem.cdt_hwid=$HWID" ]] || fail "props.conf keeps its other lines, the two keys last"
+[[ ! -e $R/usr/share/omamobile/sensors/registry/stale.json ]] || fail "the registry is replaced whole"
+pass "props.conf keeps its other lines; the sensor registry is replaced whole"
+
+# --- Refusals: nothing is written -----------------------------------------------
+refused() { # NAME PATTERN [ENV...] -- ARGS
+  local name=$1 pat=$2; shift 2
+  local b; b=$(snap "$R")
+  run "$R" "$@"
+  [[ $rc == 2 ]] || { cat "$t/log"; fail "$name is refused with exit 2 (got $rc)"; }
+  grep -cE -- "$pat" "$t/log" >/dev/null || { cat "$t/log"; fail "$name: says why"; }
+  [[ $(snap "$R") == "$b" ]] || { diff <(echo "$b") <(snap "$R") || true; fail "$name: nothing is written"; }
+  [[ ! -s $t/progress ]] || fail "$name: no progress before a refusal"
+}
+mkroot "$R"; rm "$R/etc/omamobile/install-link"
+refused "a phone without the link's marker" 'not a first start.*no /etc/omamobile/install-link' -- first-install "$t/gen1.zip" "$NV"
+mkroot "$R"; : > "$R/var/lib/omamobile/install-link/done"
+refused "a phone whose link has ended" 'not a first start.*install link has ended' -- first-install "$t/gen1.zip" "$NV"
+mkroot "$R"; rmdir "$R/var/lib/omamobile/install-link"
+refused "a phone the link never started on" 'not a first start.*never started' -- first-install "$t/gen1.zip" "$NV"
+mkroot "$R"; rm "$R/var/lib/omamobile/firstboot/done"
+refused "a phone before the end of first-boot setup" 'not a first start.*first-boot setup has not finished' -- first-install "$t/gen1.zip" "$NV"
+mkroot "$R"; printf '%064d  efs.img\n' 9 > "$R/etc/omamobile/modem-nv.sha256"
+refused "a phone that holds other NV checksums" 'not a first start.*provisioned before' -- first-install "$t/gen1.zip" "$NV"
+mkroot "$R"; rmdir "$R/var/lib/omamobile/install-link"
+refused "a development run with nowhere for the result" 'no directory for the result file' -- first-install --development "$t/gen1.zip" "$NV"
+run "$R" -- first-install --development --result "$t/result.json" "$t/gen1.zip" "$NV"
+[[ $rc == 0 && -s $t/result.json ]] || { cat "$t/log"; fail "--development with --result runs on a phone that never had the link"; }
+pass "not a first start (no marker, link ended, never started, first boot unfinished, provisioned before) is refused; --development runs"
+
+mkroot "$R"
+sed -i 's/^CODENAME=.*/CODENAME=tegu/' "$R/usr/share/omamobile/device.conf"
+refused "another device" 'no on-phone provisioning yet' -- first-install "$t/gen1.zip" "$NV"
+mkroot "$R"; rm "$R/usr/share/omamobile/device.conf"
+refused "a phone without a descriptor" 'no device descriptor' -- first-install "$t/gen1.zip" "$NV"
+mkroot "$R"
+refused "a missing image" 'no factory image' -- first-install "$t/none.zip" "$NV"
+: > "$t/empty.zip"
+refused "an empty image" 'not a file with something in it' -- first-install "$t/empty.zip" "$NV"
+grep -v ' persist.img' "$NV" > "$t/nv.short"
+refused "a missing NV line" "none or more than one for persist.img" -- first-install "$t/gen1.zip" "$t/nv.short"
+{ cat "$NV"; printf '%064d  efs.img\n' 1; } > "$t/nv.twice"
+refused "an NV line twice" "none or more than one for efs.img" -- first-install "$t/gen1.zip" "$t/nv.twice"
+sed 's/  efs.img/ efs.img/' "$NV" > "$t/nv.format"
+refused "an NV line not in sha256sum's format" "none or more than one for efs.img" -- first-install "$t/gen1.zip" "$t/nv.format"
+refused "no NV checksum file" "can't read the NV checksums" -- first-install "$t/gen1.zip" "$t/none"
+rm "$R/proc/bootconfig"
+refused "no bootconfig" "can't read .*bootconfig" -- first-install "$t/gen1.zip" "$NV"
+echo 'androidboot.slot_suffix = "_b"' > "$R/proc/bootconfig"
+refused "no board id" 'no androidboot.cdt_hwid' -- first-install "$t/gen1.zip" "$NV"
+echo 'androidboot.cdt_hwid = ""' > "$R/proc/bootconfig"
+refused "an empty board id" 'no androidboot.cdt_hwid' -- first-install "$t/gen1.zip" "$NV"
+echo 'androidboot.cdt_hwid = "12zz34"' > "$R/proc/bootconfig"
+refused "a malformed board id" "isn't 0x and hex digits \\(not shown\\)" -- first-install "$t/gen1.zip" "$NV"
+grep -c 12zz34 "$t/log" >/dev/null && fail "a malformed board id is not shown"
+mkroot "$R"
+mkdir -p "$t/fewer" && cp test/fake-tools/common.sh test/fake-tools/extract-vendor-* "$t/fewer/"
+refused "a package that lacks a tool" 'not installed whole' OMAMOBILE_PROVISION_TOOLS="$t/fewer" -- first-install "$t/gen1.zip" "$NV"
+refused "a wrong number of arguments" 'usage: omamobile-provision first-install' -- first-install "$t/gen1.zip"
+refused "an unknown option" 'unknown option --force' -- first-install --force "$t/gen1.zip" "$NV"
+refused "a closed progress descriptor" 'is not open' -- first-install --progress-fd 9 "$t/gen1.zip" "$NV"
+refused "an unknown command" 'unknown command' -- restore "$t/gen1.zip"
+if [[ $(id -u) != 0 ]]; then
+  rc=0; out=$("${PROV[@]}" first-install "$t/gen1.zip" "$NV" 2>&1) || rc=$?
+  [[ $rc == 2 ]] && grep -c 'run as root' <<<"$out" >/dev/null || fail "without a scratch root, a user who is not root is refused"
+fi
+pass "wrong inputs (device, descriptor, image, NV lines, board id, tools, arguments) are refused before anything is written"
+
+# --- Failures -------------------------------------------------------------------
+failure() { # NAME STEP REQUEST...: a run with these requests fails at STEP
+  local name=$1 step=$2; shift 2
+  mkroot "$R"; fresh_fake
+  local q; for q in "$@"; do echo "${q#*=}" > "$t/fake/${q%%=*}"; done
+  run "$R" -- first-install "$t/gen1.zip" "$NV"
+  [[ $rc == 1 ]] || { cat "$t/log"; fail "$name: exit 1 (got $rc)"; }
+  [[ $(result "$R" 'r["ok"], r["failed"]') == "(False, '$step')" ]] || { cat "$R/var/lib/omamobile/install-link/provision.result"; fail "$name: the result names $step"; }
+  [[ ! -e $R/etc/omamobile/modem-nv.sha256 ]] || fail "$name: no modem-nv.sha256 after a failure"
+  [[ -z $(ls "$R/var/lib/omamobile/provision" | grep -v '^lock$') ]] || fail "$name: the working directory is removed"
+  what="$name" state "$R" "$t/expect-gen1"
+}
+for s in firmware gnss modem fingerprint; do
+  failure "the $s extraction fails" "$s" "fail-$s=1"
+  [[ ! -e $R/usr/lib/firmware/updates && ! -e $R/usr/lib/omamobile-fp/root && ! -e $R/usr/share/omamobile/sensors ]] ||
+    fail "a failed extraction installs nothing"
+  # the request is spent: a rerun finishes
+  run "$R" -- first-install "$t/gen1.zip" "$NV"
+  [[ $rc == 0 ]] || { cat "$t/log"; fail "a rerun after the failed $s extraction succeeds"; }
+  what="the rerun after a failed $s extraction" state --complete "$R" "$t/expect-gen1"
+done
+pass "a failed extraction (firmware, gnss, modem, fingerprint): exit 1, the step named, nothing installed, a rerun finishes"
+
+failure "a modem tree that doesn't match its MANIFEST" modem "lie-modem=1"
+[[ -d $R/usr/lib/omamobile-vendor/gnss/root && ! -e $R/usr/lib/omamobile-vendor/modem/root && ! -e $R/usr/lib/omamobile-fp/root ]] ||
+  fail "a tree that fails its check is not installed; the trees before it are, the ones after it are not"
+[[ $(result "$R" '[s["step"] + "=" + s["state"] for s in r["steps"]]') == \
+   "['firmware=ok', 'sensors=ok', 'gnss=ok', 'modem=failed', 'fingerprint=skipped', 'camera=skipped', 'modem-data=skipped']" ]] ||
+  fail "the result says which steps ran"
+pass "a tree that doesn't match the extraction's own list is not installed, and the run stops there"
+
+# an image that is not a zip
+echo "not a zip" > "$t/junk.zip"
+mkroot "$R"; fresh_fake
+run "$R" -- first-install "$t/junk.zip" "$NV"
+[[ $rc == 1 && $(result "$R" 'r["failed"]') == firmware ]] || { cat "$t/log"; fail "an image that is not a zip fails the first step"; }
+what="an image that is not a zip" state "$R" "$t/expect-gen1"
+[[ ! -e $R/usr/lib/firmware/updates ]] || fail "an image that is not a zip installs nothing"
+pass "an image that is not a zip fails before anything is installed"
+
+# interrupted: SIGTERM while a tool runs
+mkroot "$R"; fresh_fake; : > "$t/fake/stall-modem"
+env OMAMOBILE_PROVISION_ROOT="$R" OMAMOBILE_PROVISION_TOOLS="$PKG/test/fake-tools" OMAMOBILE_PROVISION_PYTHON=bash \
+    OMAMOBILE_PROVISION_FAKE_DIR="$t/fake" "${PROV[@]}" first-install "$t/gen1.zip" "$NV" > "$t/progress" 2> "$t/log" &
+pid=$!
+for _ in $(seq 100); do [[ -e $t/fake/stalled-modem ]] && break; sleep 0.1; done
+[[ -e $t/fake/stalled-modem ]] || fail "the stand-in tool started"
+kill -TERM "$pid"; rc=0; wait "$pid" || rc=$?
+[[ $rc == 1 ]] || { cat "$t/log"; fail "an interrupted run exits 1 (got $rc)"; }
+[[ $(result "$R" 'r["ok"], r["failed"]') == "(False, 'modem')" ]] || fail "an interrupted run's result names the step"
+[[ -z $(ls "$R/var/lib/omamobile/provision" | grep -v '^lock$') ]] || fail "an interrupted run removes its working directory"
+sleep 0.3
+pgrep -f "$t/fake" >/dev/null && fail "an interrupted run leaves no tool running"
+what="an interrupted run" state "$R" "$t/expect-gen1"
+pass "SIGTERM during the extraction: the tool is killed, the working directory removed, the result written"
+
+# --- The camera step (INSTALL-LINK-PLAN 6.6, F5) -----------------------------------
+mkroot "$R"; fresh_fake; echo 1 > "$t/fake/fail-camera"
+run "$R" -- first-install "$t/gen1.zip" "$NV"
+[[ $rc == 0 ]] || { cat "$t/log"; fail "a camera step that fails once: the run succeeds"; }
+[[ $(result "$R" 'r["ok"], r["optional_failed"], [s["state"] for s in r["steps"]]') == \
+   "(True, [], ['ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok'])" ]] || fail "a camera step that fails once ends all ok"
+what="the camera step failing once" state --complete "$R" "$t/expect-gen1"
+grep -c 'The camera step once more' "$t/log" >/dev/null || fail "the camera step is run once more"
+pass "the camera step fails once: it is run once more after the other steps, and the run ends all ok"
+
+mkroot "$R"; fresh_fake; echo 2 > "$t/fake/fail-camera"
+run "$R" -- first-install "$t/gen1.zip" "$NV"
+[[ $rc == 0 ]] || { cat "$t/log"; fail "a camera step that fails twice: the run still succeeds (exit $rc)"; }
+[[ $(result "$R" 'r["ok"], r["failed"], r["optional_failed"], [s["step"] + "=" + s["state"] for s in r["steps"]][-2:]') == \
+   "(True, None, ['camera'], ['camera=failed', 'modem-data=ok'])" ]] ||
+  { cat "$R/var/lib/omamobile/install-link/provision.result"; fail "a camera step that fails twice: ok, with camera failed in the result"; }
+[[ $(cat "$t/fake/fail-camera") == 0 ]] || fail "the camera step is tried exactly twice"
+what="the camera step failing twice" state --complete --no-camera "$R" "$t/expect-gen1"
+cmp -s "$R/etc/omamobile/modem-nv.sha256" "$t/nv.want" || fail "a camera-only failure still writes the modem's checksums"
+pass "the camera step fails twice: a success with a note (camera failed in the result), everything else installed"
+
+mkroot "$R"; fresh_fake; echo 3 > "$t/fake/fail-camera"
+run "$R" -- first-install "$t/gen1.zip" "$NV"
+[[ $rc == 0 && $(cat "$t/fake/fail-camera") == 1 ]] || fail "the camera step is never tried a third time"
+pass "the camera step is tried twice, never more"
+
+# --- A kill at every checkpoint ---------------------------------------------------
+# Kill the run at checkpoint 1, 2, ... until one run gets through; after each
+# kill the state must hold, and a rerun must finish
+kills() {
+  local n=0
+  while :; do
+    n=$((n + 1))
+    mkroot "$R"; fresh_fake
+    run "$R" OMAMOBILE_PROVISION_TEST_KILL_AT=$n -- first-install "$t/gen1.zip" "$NV"
+    if [[ $rc != 137 ]]; then
+      [[ $rc == 0 ]] || { cat "$t/log"; fail "a first install: the run past the last checkpoint succeeds (exit $rc)"; }
+      break
+    fi
+    [[ ! -e $R/var/lib/omamobile/install-link/provision.result ]] || fail "a killed run leaves no result file (checkpoint $n)"
+    what="a first install: after a kill at checkpoint $n" state "$R" "$t/expect-gen1"
+    run "$R" -- first-install "$t/gen1.zip" "$NV"
+    [[ $rc == 0 ]] || { cat "$t/log"; fail "a first install: the rerun after a kill at checkpoint $n succeeds (exit $rc)"; }
+    what="a first install: the rerun after a kill at checkpoint $n" state --complete "$R" "$t/expect-gen1"
+    [[ $(result "$R" 'r["ok"]') == True ]] || fail "the rerun after a kill at checkpoint $n writes an ok result"
+    ((n < 400)) || fail "more than 400 checkpoints"
+  done
+  ((n > 40)) || fail "a first install: only $n checkpoints were reached"
+  pass "a first install: killed at each of $((n - 1)) checkpoints; never a half tree, never an early checksum file, every rerun finishes"
+}
+kills
+
+# Over an older generation the checksum file is already there (it is this
+# phone's, the same lines), so check-state's "only when everything else is"
+# rule is for the first install; here each tree must be one generation's
+kills_over() {
+  local n=0
+  while :; do
+    n=$((n + 1))
+    mkroot "$R"; fresh_fake
+    run "$R" -- first-install "$t/gen1.zip" "$NV"
+    [[ $rc == 0 ]] || fail "the older generation installs"
+    rm "$R/etc/omamobile/modem-nv.sha256"   # so the trees alone are judged
+    run "$R" OMAMOBILE_PROVISION_TEST_KILL_AT=$n -- first-install --development "$t/gen2.zip" "$NV"
+    if [[ $rc != 137 ]]; then
+      [[ $rc == 0 ]] || { cat "$t/log"; fail "over an older generation: the run past the last checkpoint succeeds"; }
+      break
+    fi
+    what="over an older generation: after a kill at checkpoint $n" state "$R" "$t/expect-gen1" "$t/expect-gen2"
+    run "$R" -- first-install --development "$t/gen2.zip" "$NV"
+    [[ $rc == 0 ]] || { cat "$t/log"; fail "over an older generation: the rerun after a kill at checkpoint $n succeeds"; }
+    what="over an older generation: the rerun after a kill at checkpoint $n" state --complete "$R" "$t/expect-gen2"
+    [[ ! -e $R/usr/share/omamobile/sensors/registry/only-gen1.json ]] || fail "the older registry is gone after the rerun"
+    ((n < 400)) || fail "more than 400 checkpoints"
+  done
+  ((n > 40)) || fail "over an older generation: only $n checkpoints were reached"
+  pass "over an older generation: killed at each of $((n - 1)) checkpoints; every tree is the old one, the new one or not there, never a mix"
+}
+kills_over
+
+# --- extract and listing ------------------------------------------------------------
+fresh_fake
+rc=0
+env OMAMOBILE_PROVISION_TOOLS="$PKG/test/fake-tools" OMAMOBILE_PROVISION_PYTHON=bash OMAMOBILE_PROVISION_ROOT="$t/unused" \
+    OMAMOBILE_PROVISION_FAKE_DIR="$t/fake" "${PROV[@]}" extract -o "$t/extracted" "$t/gen1.zip" > "$t/log" 2>&1 || rc=$?
+[[ $rc == 0 ]] || { cat "$t/log"; fail "extract succeeds"; }
+[[ $(ls "$t/extracted" | xargs) == "camera chroot-gnss chroot-modem fp-vendor fw" ]] || { ls -la "$t/extracted"; fail "extract leaves the five outputs and nothing else"; }
+a=$("${PROV[@]}" listing "$t/extracted") b=$(rm -rf "$t/expect-gen1/camera.apex"; "${PROV[@]}" listing "$t/expect-gen1")
+[[ $a == "$b" ]] || { diff <(echo "$a") <(echo "$b") || true; fail "extract gives what the tools give when run directly"; }
+grep -cP '^l\t-\t/apex/com.android.runtime/lib64/bionic/libc.so\tchroot-gnss/root/system/lib64/libc.so$' <<<"$a" >/dev/null &&
+  grep -cP '^f\t755\t[0-9a-f]{64}\tchroot-gnss/root/vendor/bin/gnss-daemon$' <<<"$a" >/dev/null &&
+  grep -cP '^d\t750\t-\tchroot-gnss/root/vendor/etc$' <<<"$a" >/dev/null || fail "listing: type, mode, SHA-256 or link target, path"
+pass "extract installs nothing and gives the tools' outputs; listing names every file's mode, SHA-256 or link target"
+
+# --- The real tools on a made-up factory image ---------------------------------------
+TOOLS_DIR=$t/stage/usr/lib/omamobile-provision
+export PATH=$PATH:/usr/sbin:/sbin
+lacking=""
+for c in mke2fs debugfs unzip readelf od; do command -v "$c" >/dev/null || lacking+=" $c"; done
+if [[ -n $lacking ]]; then
+  skip "the real tools on a made-up factory image (this machine lacks$lacking)"
+else
+  python3 -I -B test/standin-factory "$t/standin.zip" gen1
+  # the laptop's way: tools/phone-provision's own commands, on the factory zip
+  L=$t/laptop; mkdir -p "$L"
+  ( export LC_ALL=C
+    "$TOOLS_DIR/extract-vendor-firmware" -o "$L/fw" -c "$L/camera.apex" -w "$L/w" "$t/standin.zip"
+    for p in gnss modem; do "$TOOLS_DIR/extract-vendor-chroot" -p "$p" -o "$L/chroot-$p" -w "$L/w" "$t/standin.zip"; done
+    "$TOOLS_DIR/extract-fingerprint-vendor" -o "$L/fp-vendor" -w "$L/w" "$t/standin.zip" ) > "$t/log" 2>&1 ||
+    { tail -20 "$t/log"; fail "the packaged tools extract the made-up factory image"; }
+  rm -rf "$L/w" "$L/camera.apex"
+  mkroot "$R"
+  rc=0
+  env OMAMOBILE_PROVISION_ROOT="$R" OMAMOBILE_PROVISION_TOOLS="$TOOLS_DIR" "${PROV[@]}" first-install "$t/standin.zip" "$NV" \
+    > "$t/progress" 2> "$t/log" || rc=$?
+  [[ $rc == 0 ]] || { cat "$t/log"; fail "a first install with the real tools on the made-up image succeeds (exit $rc)"; }
+  # the made-up camera APEX is no camera HAL: the real tool fails on it twice
+  [[ $(result "$R" 'r["ok"], r["optional_failed"]') == "(True, ['camera'])" ]] || fail "the real camera tool fails on a made-up APEX, twice, and the run is a success with a note"
+  what="the real tools on the made-up image" state --complete --no-camera "$R" "$L"
+  grep -cx 'vendor_fingerprint=fictional/cheetah/gen1' "$R/usr/lib/omamobile-provision/SOURCE" >/dev/null || fail "SOURCE names the made-up build"
+  pass "the real tools on a made-up factory image: installed trees equal the laptop-style run's, byte for byte, modes and links too"
+fi
+
+# --- As root: the extraction unprivileged, everything installed root's ---------------
+# (under qemu-user the probe hangs: hence the timeout)
+if [[ $(id -u) != 0 ]] && timeout 20 unshare --map-root-user --map-auto true 2>/dev/null &&
+   [[ $(timeout 20 unshare --map-root-user --map-auto setpriv --reuid 65534 --regid 65534 --clear-groups id -u 2>/dev/null) == 65534 ]]; then
+  mkroot "$R"; fresh_fake; chmod 755 "$t" "$t/fake"; chmod 777 "$t/fake"
+  rc=0
+  unshare --map-root-user --map-auto env OMAMOBILE_PROVISION_ROOT="$R" OMAMOBILE_PROVISION_TOOLS="$PKG/test/fake-tools" \
+    OMAMOBILE_PROVISION_PYTHON=bash OMAMOBILE_PROVISION_FAKE_DIR="$t/fake" "${PROV[@]}" first-install "$t/gen1.zip" "$NV" \
+    > "$t/progress" 2> "$t/log" || rc=$?
+  [[ $rc == 0 ]] || { cat "$t/log"; fail "as root (in a user namespace) a first install succeeds (exit $rc)"; }
+  for n in firmware gnss modem fingerprint camera; do
+    [[ $(cat "$t/fake/uid-$n") == 65534 ]] || fail "as root, the $n extraction runs as an unprivileged user"
+  done
+  me=$(id -u)
+  [[ -z $(find "$R/usr/lib/firmware" "$R/usr/share/omamobile/sensors/registry" "$R/usr/lib/omamobile-fp/root" \
+          "$R/usr/lib/omamobile-vendor/modem/root" "$R/etc/omamobile/modem-nv.sha256" "$R/var/lib/omamobile-vendor" \
+          ! -uid "$me" -print -quit) ]] || fail "as root, everything installed is root's (the namespace's root is this user)"
+  what="as root in a user namespace" state --complete "$R" "$t/expect-gen1"
+  pass "as root (user namespace): the extraction runs as nobody, and every installed file is root's"
+else
+  skip "the run as root with an unprivileged extraction (no unshare --map-auto here)"
+fi

@@ -945,7 +945,9 @@ local installs.
   `e2fsprogs` (`debugfs`), `erofs-utils` (`fsck.erofs`), `binutils`
   (`readelf`), Python with `unicorn` and `pyelftools` for the camera step.
   **[I]**: that Arch Linux ARM carries all of them for aarch64, the Python
-  `unicorn` module included; stage L4.
+  `unicorn` module included; stage L4. (It carries them, but its `unicorn`
+  aborts in the camera tool: the module comes from `omamobile-unicorn`,
+  stage L4's first finding.)
 - **Per-phone inputs come from the phone itself:** the board id from
   `androidboot.cdt_hwid` in `/proc/bootconfig`, written to `props.conf`
   (root's, mode 600) and never printed, exactly as `phone-provision`'s
@@ -1349,6 +1351,125 @@ approves every step, and results are recorded here with the date and
 8. **The session agent** and `omamobile-install-link status|reopen`
    (§2.8), tested against a stand-in notification service and a scratch
    root.
+
+**Stage L4: built on 2026-11-12, offline. Nothing of it has run on a
+phone, and one of its results is a stop: the camera step does not run with
+Arch Linux ARM's `python-unicorn` (below).**
+
+It was built against the revision of this plan corrected after stage L1
+(the `install-link-plan-l1` branch), whose §6.3 to §6.6 and §11.3 the
+section numbers below are.
+
+Built (`packages/omamobile-provision` 0.1.0, its `README.md` has the
+detail):
+
+- The four extraction tools and `phone-smoke`, packaged from `tools/`
+  unchanged: one copy in the repository (`stage-tools` copies them for a
+  build, and the three builders run it), none edited for the phone.
+- `omamobile-provision first-install FACTORY.zip NV-SUMS`:
+  `tools/phone-provision --first-install` with local installs, the same
+  places, modes and owner, the checksum file its last write before the
+  result file, nothing started or stopped, the extraction as `nobody`, the
+  optional step's one retry (§6.6), `progress` lines, the first-start
+  check, and `extract` and `listing` for R1.
+- The whole-or-untouched install of §6.3, with two differences from what
+  §6.3 says, both forced by where the trees live:
+  - the gnss, modem and fingerprint trees share their directory with their
+    package's own files, so the directory can't be exchanged. Their new
+    entries are staged inside it; an older `root/` is renamed out, the
+    other entries renamed in, and `root/`, which every user of these trees
+    looks for, renamed in last. A cut leaves the old tree, no `root/`, or
+    the new tree, never a mix; over an older tree that is "whole or absent
+    until the rerun", not "whole or untouched". A first install has no
+    older tree;
+  - the sensor registry is exchanged as §6.3 says, which needs its parent
+    writable: the worker's unit must allow `/usr/share/omamobile/sensors`,
+    not only the registry, and `/usr/lib/omamobile-provision` for `SOURCE`.
+- The first-start state is read from files, since the daemon's state file
+  is L2's: the marker, the link's directory without `done`, first boot's
+  `done`, and no `modem-nv.sha256` but this run's own. L2 should confirm
+  or replace that reading.
+- No descriptor names `PROVISION_STEPS` or `PROVISION_OPTIONAL` yet (a
+  change to `device.conf` changes the staged boot files): the worker's
+  defaults are cheetah's seven steps with `camera` optional, and every
+  other device is refused.
+
+Verified without a phone:
+
+| What | Result |
+| --- | --- |
+| The dependencies on Arch Linux ARM (§6.2's **[I]**) | All resolve, and `pacman -U` installs the built package with them in the aarch64 build container: `unzip` 6.0, `android-tools` 37.0.0 (`simg2img`, `lpunpack`), `e2fsprogs` 1.47.4, `erofs-utils` 1.9.4, `binutils`, `python` 3.14.10, `python-unicorn` 2.1.4-2, `python-pyelftools` 0.33-1 |
+| The build | `tools/build-packages --local cheetah` with a local key; the package's `test/all` passes natively and, as `check()`, in the container |
+| A kill between any two installs | The run killed at each of 45 checkpoints on a first install and 48 over an older generation, each followed by a rerun: no half tree at a final path, the checksum file never before the rest, every rerun finishes. Three deliberately broken workers each fail the test |
+| §11.3's F5 | The camera step made to fail once (all `ok`) and twice (`ok` true, `camera` `failed`, `optional_failed`); never a third try |
+| The tools' own tests on the packaged copies | `tests/extract-vendor-firmware`, `tests/extract-camera-data`, `tests/phone-smoke` pass; `tests/extract-camera-sve.py` passes on the laptop |
+| Byte for byte (§6.2), on this laptop (x86-64), packaged tools run the worker's way against `tools/` run `phone-provision`'s way | Equal for both builds the index lists: CP2A.260705.006 (1778 files, 27 symlinks) and CP3A.261005.002.A1 (1761 files, 27 symlinks), the camera data included |
+| Byte for byte, the phone side in the aarch64 container (qemu-user), the package installed by pacman, the extraction as `nobody` | CP2A.260705.006 and CP3A.261005.002.A1: firmware, registry, both chroots with `MANIFEST`, `SOURCE` and `STUBS`, and the fingerprint tree are equal. **The camera step fails there** |
+
+Found, each needing a decision before L5:
+
+1. **The camera step aborts with Arch Linux ARM's `python-unicorn`
+   2.1.4-2.** `extract-camera-data` dies in unicorn itself
+   (`sve_zcr_get_valid_len: Assertion 'end_len < start_len' failed`,
+   `qemu/target/arm/helper.c`), on a real camera APEX and in the
+   repository's own `tests/extract-camera-sve.py`, which needs no factory
+   image. The same test and the same version from PyPI's wheel pass on the
+   laptop. The distribution's build has assertions on; **[I]** the wheel is
+   built without them, and the assertion is about the emulated CPU's
+   vector lengths, not the host, so the phone is expected to abort the
+   same way (seen under qemu-user only; R1 checks it on the phone). No
+   setting in the tool can avoid it. Until a `python-unicorn` that passes
+   `tests/extract-camera-sve.py` on aarch64 is in `[omamobile]` (or the
+   camera step runs natively, §6.2), every install over the link ends
+   "Cameras: not set up", and by §6.6 such a build is not offered.
+
+   **Answered on 2026-11-12, offline: `packages/omamobile-unicorn`.** The
+   **[I]** above is now checked. The distribution's library is configured
+   with `-DCMAKE_BUILD_TYPE=None` (its PKGBUILD), which keeps `assert()`;
+   upstream's wheel is a `Release` build (`bindings/python/setup.py`),
+   which compiles it out: the distribution's library imports
+   `__assert_fail` and holds the assertion's text, the wheel's does
+   neither. Built twice in the aarch64 container from upstream's 2.1.4
+   tarball with only the build type changed, `None` aborts in
+   `tests/extract-camera-sve.py` with that line and `Release` passes all
+   five checks. Behind the assertion is a gap in Unicorn 2.1.4 itself (the
+   emulated CPU's table of SVE vector lengths is never filled), which no
+   setting of the tool reaches. `omamobile-unicorn` 2.1.4-1 is that
+   `Release` build, AArch64 target only, with the binding, under
+   `/usr/lib/omamobile-unicorn/python`: it provides and conflicts with
+   nothing, and the distribution's packages install beside it.
+   `omamobile-provision` 0.1.1 depends on it in place of `python-unicorn`
+   and runs `extract-camera-data` with that directory as its
+   `PYTHONPATH`. In the container, with both packages installed by pacman
+   and no distribution `unicorn`: `tests/extract-camera-sve.py` passes as
+   `nobody`; with the distribution's packages added beside them it still
+   passes on the private copy and still aborts on theirs.
+   The byte for byte comparison with the phone side in the container, the
+   two packages installed and the extraction run as `nobody`, is now equal
+   with the camera data included, for CP3A.261005.002.A1 (1761 files, 27
+   symlinks) and CP2A.260705.006 (1778 files, 27 symlinks).
+   Not run on a phone: R1 now also checks this package's library there
+   (`packages/omamobile-unicorn/test/all --installed`). Unicorn is
+   GPL-2.0-only: the package's README says what publishing it asks for,
+   and finding 3 below holds for it too.
+2. **`MANIFEST` and `vendor-firmware.sha256` depend on the locale.** The
+   three tools sort them with the locale's collation. The worker runs the
+   tools under `LC_ALL=C`; a laptop in `en_US.UTF-8` writes the same lines
+   in another order (seen on the real image: four files differ that way,
+   and nothing else). The comparison above ran the laptop side under
+   `LC_ALL=C`. Either the tools sort with `LC_ALL=C` (one line each; it
+   changes the order on such a laptop) or §6.2's "byte for byte" is read
+   as "under `LC_ALL=C`".
+3. **The nightly build publishes every package in `packages/`.** This one
+   is inert when installed, but it would reach the development repository
+   before R1 unless it is held back.
+
+Not verified: anything on the phone (R1: the same comparison there, the
+time and the peak working space, the camera step on real aarch64); the
+worker inside the unit L2 gives it (`ProtectSystem=strict`, its
+capabilities); the result file and `progress` lines against the daemon
+that will read them; an EROFS vendor image (the chroot tools refuse one
+today); any device but cheetah.
 
 ### 11.2 On the reference phone
 
