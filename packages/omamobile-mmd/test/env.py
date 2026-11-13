@@ -213,6 +213,9 @@ class Mmd:
             f.write('[network]\napn = internet.example\nip_type = ipv4v6\n')
         with open(self.log, 'w') as log:
             polkit = [] if '--polkit' in args else ['--no-polkit']
+            # As on a phone with mmsd-tng installed, unless a test says otherwise.
+            if '--mms-daemon' not in args:
+                polkit += ['--mms-daemon', sys.executable]
             self.proc = subprocess.Popen(
                 [sys.executable, BIN, '--socket', socket_path, *polkit,
                  '--sit-config', os.path.join(directory, 'sit.conf'), *[a for a in args if a != '--polkit']],

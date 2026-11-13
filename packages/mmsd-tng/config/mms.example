@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Copy to ~/.mms/modemmanager/mms with mode 0600, before starting mmsd-tng.
+# Replace placeholders privately. The APN is the internet APN ([network] apn).
+[Modem Manager]
+CarrierMMSC=<MMSC>
+MMS_APN=<APN>
+# NULL means no proxy. Otherwise use the carrier's host:port, without a URL scheme.
+CarrierMMSProxy=NULL
+# Fill in your own phone number; omamobile-mmd deliberately exports no OwnNumbers.
+ModemNumber=<OWN_NUMBER>
+AutoProcessOnConnection=true
+AutoProcessSMSWAP=true
+
+[Settings]
+# Use only the bearer's DNS and interface, without changing system DNS.
+ForceCAres=true

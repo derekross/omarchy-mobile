@@ -228,8 +228,12 @@ class Registered(BridgeTests):
         bearers = self.modem('Bearers')
         self.assertEqual(len(bearers), 1)
         bearer = self.client.props(bearers[0], mm.BEARER)
+        # No device until sitd reports one: never a guessed rmnet0.
         self.assertEqual((bearer['Interface'], bearer['Connected'], bearer['Properties']['apn']),
-                         ('rmnet0', True, 'internet.example'))
+                         ('', True, 'internet.example'))
+        self.sitd.status['internet'] = dict(interface='rmnet1')
+        self.sitd.push()
+        wait_until(lambda: self.client.props(bearers[0], mm.BEARER)['Interface'] == 'rmnet1', 5, 'the bearer device')
         changes = [s for s in self.client.named('PropertiesChanged') if s[0] == MODEM0 and s[3][0] == mm.MODEM]
         self.assertTrue(any('State' in s[3][1] for s in changes))
         self.assertEqual(self.sitd.actions(), [])
@@ -725,6 +729,24 @@ POLKIT_XML = '''<node><interface name="org.freedesktop.PolicyKit1.Authority">
 <arg type="(bba{ss})" direction="out"/></method></interface></node>'''
 
 
+class NoMmsDaemon(BridgeTests):
+    """A phone without mmsd-tng: nothing would take a WAP push, so it goes
+    to Messages as the placeholder text."""
+    status = staticmethod(registered_status)
+    mmd_args = ('--mms-daemon', '/nonexistent/mmsdtng')
+
+    def test_mms_notification_is_a_placeholder_text(self):
+        wap = bytes.fromhex('0106226170706c69636174696f6e2f766e642e7761702e6d6d732d6d65737361676500') + b'x'
+        messages = [dict(id='sit:b', number=SENDER, text='', timestamp='2026-09-29T12:35:00+00:00',
+                         data=wap.hex(), state='received')]
+        self.sitd.handlers.update(**{'sms-list': lambda r: messages, 'sms-delete': lambda r: {}})
+        self.sitd.status['sms'] = dict(received=['sit:b'])
+        self.push()
+        wait_until(lambda: len(self.client.named('Added')) == 1, 5, 'WAP push')
+        push = self.client.props(self.modem('Messages', mm.MESSAGING)[0], mm.SMS)
+        self.assertEqual((push['Text'], bytes(push['Data'])), (bridge.NO_MMS_TEXT, b''))
+
+
 class Polkit(BridgeTests):
     """The shipped behaviour: methods with an action go through polkit for
     a caller that isn't root (the test's own uid here). A fake authority on
@@ -769,6 +791,27 @@ class Polkit(BridgeTests):
         self.assertIn(mm.ERROR_PREFIX + 'Unauthorized', box['error'].message)
         self.assertEqual(self.asked[-1][1], 'org.freedesktop.ModemManager1.Device.Control')
         self.assertEqual(self.sitd.actions(), [], 'nothing reached sitd without authorisation')
+
+
+class InternetBearer(BridgeTests):
+    """The internet bearer's device, address and DNS from sitd, which
+    mmsd-tng fetches MMS through where the MMS APN is the internet APN."""
+    status = staticmethod(lambda: registered_status(data=True))
+
+    def before_mmd(self):
+        self.sitd.status['internet'] = dict(interface='rmnet5', address='192.0.2.7',
+                                            dns=['192.0.2.53', '192.0.2.54'])
+
+    def test_the_found_device_address_and_dns(self):
+        bearer = self.client.call(MODEM0, mm.MODEM, 'ListBearers')[0][0]
+        self.assertEqual(self.client.prop(bearer, mm.BEARER, 'Interface'), 'rmnet5')
+        self.assertEqual(self.client.prop(bearer, mm.BEARER, 'Ip4Config'),
+                         dict(method=2, address='192.0.2.7', prefix=32, dns1='192.0.2.53', dns2='192.0.2.54'))
+        self.sitd.status['modem']['data'] = False
+        self.push()
+        wait_until(lambda: not self.client.prop(bearer, mm.BEARER, 'Connected'), 5, 'bearer down')
+        self.assertEqual(self.client.prop(bearer, mm.BEARER, 'Ip4Config'), dict(method=0))
+        self.assertEqual(self.client.prop(bearer, mm.BEARER, 'Ip6Config'), dict(method=0))
 
 
 if __name__ == '__main__':

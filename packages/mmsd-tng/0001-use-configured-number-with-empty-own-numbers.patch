@@ -1,0 +1,16 @@
+From: W4HO <87742609+W4HO-ham@users.noreply.github.com>
+Subject: [PATCH] MMS: apply the configured number when OwnNumbers is empty
+
+--- a/plugins/modemmanager.c
++++ b/plugins/modemmanager.c
+@@ -1761,6 +1761,10 @@
+             }
+         }
+ 
++      /* An empty OwnNumbers array never enters the loop above. */
++      if (!modem->modem_number_known && modem->modem_number)
++        mms_service_set_own_number (modem->service, modem->modem_number);
++
+       gdbus_modem = MM_GDBUS_MODEM (modem->modem);
+ 
+       modem->modem_state_watch_id = g_signal_connect (gdbus_modem,
