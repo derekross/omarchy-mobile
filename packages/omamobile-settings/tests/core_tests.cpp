@@ -18,7 +18,7 @@ private slots:
     void navigationRejectsUnknownAndHiddenActions() {
         Backend backend;
         QVERIFY(backend.catalogProblems().isEmpty());
-        QCOMPARE(backend.rows().size(), 2);
+        QCOMPARE(backend.rows().size(), 3);
         QVERIFY(!backend.navigate("recording"));
         backend.activate("arbitrary-command");
         QCOMPARE(backend.page(), QString("root"));
@@ -33,6 +33,13 @@ private slots:
         Backend backend;
         QVERIFY(backend.navigate("display"));
         QCOMPARE(backend.page(), QString("display"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("root"));
+    }
+    void hapticsPageGoesBackToRoot() {
+        Backend backend;
+        QVERIFY(backend.navigate("haptics"));
+        QCOMPARE(backend.page(), QString("haptics"));
         backend.back();
         QCOMPARE(backend.page(), QString("root"));
     }

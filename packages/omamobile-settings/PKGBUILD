@@ -9,6 +9,7 @@ license=(MIT)
 depends=(omarchy bash brightnessctl python qt6-base qt6-declarative qt6-svg)
 makedepends=(gcc make)
 checkdepends=(dbus python)
+optdepends=('feedbackd: the Keyboard haptics page edits its theme')
 
 build() { "$startdir/bin/build"; }
 check() { "$startdir/test/all"; }

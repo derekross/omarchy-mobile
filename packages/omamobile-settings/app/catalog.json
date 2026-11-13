@@ -10,6 +10,13 @@
         "page": "display"
       },
       {
+        "id": "haptics",
+        "title": "Keyboard haptics",
+        "detail": "Strength of the keyboard tick",
+        "icon": "haptics",
+        "page": "haptics"
+      },
+      {
         "id": "about",
         "title": "About this device",
         "detail": "System, software and storage",
@@ -24,6 +31,10 @@
   },
   "display": {
     "title": "Display",
+    "rows": []
+  },
+  "haptics": {
+    "title": "Keyboard haptics",
     "rows": []
   }
 }
