@@ -6,6 +6,7 @@
                         --version V --kernel-release R [--kernel-commit C]
                         [--commit C] [--channel stable|development|local]
                         [--label TEXT] [--base-url URL]
+                        [--install-link-protocol N]
 
 DIR/manifest.json gets, as data: every file of the bundle with its size and
 SHA-256 (all but SHA256SUMS, SHA256SUMS.sig and manifest.json itself), the
@@ -17,6 +18,12 @@ entry of DIR/device.conf to <image>_b, with the exact partition size an
 AVB_FOOTERS image was padded to, then userdata with the root image, then
 "set-active b" and "reboot"), plus the storage-guard allowlist the writes are
 checked against. Nothing else is ever written.
+
+--install-link-protocol N: the root image was built for the install link
+(tools/build-rootfs --install-link; docs/INSTALL-LINK-PLAN.md §3.3), whose
+daemon speaks protocol N. manifest.json then says install_link:
+{"protocol": N}, so an installer knows before the flash that the phone will
+finish its setup over the link. Without it the key is absent.
 
 tools/make-bundle runs this before computing SHA256SUMS, so the signed
 checksums cover manifest.json; tools/install-phone reads it back and refuses
@@ -77,6 +84,7 @@ def main():
     ap.add_argument("--channel", default="unknown")
     ap.add_argument("--label", default="developer preview")
     ap.add_argument("--base-url", default="")
+    ap.add_argument("--install-link-protocol", type=int, default=None)
     a = ap.parse_args()
 
     bundle = os.path.abspath(a.bundle)
@@ -152,6 +160,10 @@ def main():
             "never": NEVER,
         },
     }
+    if a.install_link_protocol is not None:
+        if not 1 <= a.install_link_protocol <= 9999:
+            die("--install-link-protocol is a protocol number")
+        manifest["install_link"] = {"protocol": a.install_link_protocol}
     out = os.path.join(bundle, "manifest.json")
     with open(out + ".new", "w") as f:
         json.dump(manifest, f, indent=2, sort_keys=True)

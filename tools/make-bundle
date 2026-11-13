@@ -22,7 +22,9 @@
 #                    it only through the signed checksums below
 #     MANIFEST       kernel release, root image, both repositories' commits, toolchain
 #     manifest.json  the same and more as data (tools/bundle-manifest): every
-#                    file with size and SHA-256, the root image, the release
+#                    file with size and SHA-256, the root image (and, for an
+#                    image built for the install link, install_link with its
+#                    protocol, from the image's MANIFEST), the release
 #                    version and label, and the install plan and its checks,
 #                    which tools/install-phone (and later a web flasher) enforce
 #     SHA256SUMS     checksums of everything above
@@ -141,6 +143,18 @@ channel=$(sed -n 's/^omamobile channel: \([a-z]*\)$/\1/p' "$manifest")
 if ((unsigned == 0)) && [[ $channel != stable ]]; then
   die "the root image follows the '${channel:-local (built before channels)}' channel; a signed release follows stable (tools/build-rootfs --channel stable)"
 fi
+# An image built for the install link (tools/build-rootfs --install-link)
+# says so with its protocol; manifest.json then carries install_link, a key
+# installers older than the link refuse (docs/INSTALL-LINK-PLAN.md §3.3)
+link_line=$(sed -n 's/^install link: //p' "$manifest")
+link_protocol=""
+case $link_line in
+  "" | none) ;;
+  "protocol "[1-9]*" (marker /etc/omamobile/install-link)")
+    link_protocol=${link_line#protocol }; link_protocol=${link_protocol%% *} ;;
+  *) die "the root image's MANIFEST has an install link line this tool does not know: $link_line" ;;
+esac
+[[ -z $link_protocol || $link_protocol =~ ^[1-9][0-9]{0,3}$ ]] || die "the install link's protocol is not a number: $link_protocol"
 root_digest=$(sha256sum < "$rootfs" | cut -d' ' -f1)
 [[ $(cut -d' ' -f1 "$rootfs.sha256") == "$root_digest" ]] || die "$rootfs doesn't match its .sha256"
 if ((unsigned == 0)); then
@@ -269,7 +283,8 @@ EOF
 python3 -I tools/bundle-manifest --bundle "$dir" --rootfs "$rootfs" --rootfs-sha256 "$root_digest" \
   --version "$version" --kernel-release "$release" --kernel-commit "$kernel_commit" \
   --commit "$(git rev-parse --short=12 HEAD)$(git diff --quiet HEAD || echo -dirty)" \
-  --channel "${channel:-unknown}" --label "$label" --base-url "$base_url" || die "writing manifest.json failed"
+  --channel "${channel:-unknown}" --label "$label" --base-url "$base_url" \
+  ${link_protocol:+--install-link-protocol "$link_protocol"} || die "writing manifest.json failed"
 (cd "$dir" && find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.sig -printf '%P\n' | sort | xargs sha256sum -- > SHA256SUMS)
 if ((unsigned)); then
   say "Unsigned bundle (--unsigned): install needs --unsigned too"
