@@ -131,8 +131,10 @@ every boot for good. Now every stage with an account has one:
   asked for something). They are counted on the monotonic clock: a phone's
   wall clock can be wrong at a first start.
 - When they run out the daemon closes the link **for this boot**: it puts
-  the gadget back (§3.3) and the notice in the session says so (§2.8). The
-  next boot opens it again if a setup boot is left.
+  the gadget back (§3.3) and the notice in the session says so (§2.8). It
+  leaves a mark on the tmpfs, and a daemon started again in that boot
+  offers nothing (§18, E4). The next boot opens it again if a setup boot is
+  left.
 - When the budget is spent the link ends for good. At stage `provisioned`
   it ends as `finished`: the smoke report is a report, not a requirement
   (Q11), so a phone whose computer never came back is complete. At an
@@ -234,7 +236,8 @@ report). Now:
   is the phone that was flashed. The serial itself never crosses the link.
   **[I]**: that `/proc/bootconfig` carries `androidboot.serialno` on our
   kernel (`androidboot.cdt_hwid` is read from there today,
-  `tools/phone-provision` **[V]**); step R0.
+  `tools/phone-provision` **[V]**); step R0. On a phone whose bootconfig
+  has no serial the daemon offers nothing and writes nothing (§18, E9).
 
 Once an account exists, a code also proves that whoever typed it could
 unlock the phone: the window that shows it opens only in the unlocked
@@ -381,7 +384,7 @@ those boots.
 
 | Way | What it takes |
 | --- | --- |
-| `sudo omamobile-install-link reopen` on the phone, a restart, then the installer | The owner's password on the phone itself. It grants one more setup boot under the same ten-minute rule, with pairing through the session's window. It is taken only after `expired`, and takes effect at the next boot, where the gadget change runs under its hang marker like any other: `reopen` records the boot id it ran in, and a daemon started in that same boot exits before any gadget change. Decision N3 |
+| `sudo omamobile-install-link reopen` on the phone, a restart, then the installer | The owner's password on the phone itself. It grants one more setup boot under the same ten-minute rule, with pairing through the session's window. It is taken only after `expired`, and takes effect at the next boot, where the gadget change runs under its hang marker like any other: `reopen` records the boot id it ran in, in a file of its own and not the state file (there it would make that boot counted, §18, E5), and refuses when the boot id cannot be read; a daemon started in that same boot exits before any gadget change. Decision N3 |
 | `tools/nv-backup`, then `tools/phone-provision --first-install --nv-backup DIR`, over USB SSH | A checkout and an SSH key on the phone: the development way, unchanged (§10) |
 | Install again | It erases `userdata` |
 
@@ -443,8 +446,9 @@ this plan alters the Pixel 7 Pro's boot images, so
   daemon that a person is at the phone (§2.5). **[I]**: that the keys'
   input device can be read in the root before the display manager; step
   R5.
-- `omamobile-install-link.service`: `ConditionPathExists=` the marker and
-  not `done`; `After=omamobile-usb-mac.service omamobile-boot-success.service`
+- `omamobile-install-link.service`: `ConditionPathExists=` the marker
+  alone (not "and not `done`": the start that finds `done` is the one that
+  completes an interrupted end, §6.5 and §18, E1); `After=omamobile-usb-mac.service omamobile-boot-success.service`
   (one gadget change at a time; `devinfo` read-only again before the
   backup); `Wants=omamobile-usb-rescue.service`. While no account exists it
   is ordered `Before=display-manager.service` and does not finish starting,
@@ -499,7 +503,9 @@ Either way the composition lasts at most one boot: the next boot's
 initramfs composes NCM and ACM again, as it always does. After `finish`,
 when the link closes for the boot or ends (§2.2), and when the daemon stops
 for any reason, `omamobile-link-gadget remove` puts the gadget back as the
-initramfs made it. So in the release composition a phone is without its
+initramfs made it. A killed daemon runs nothing, so the daemon records on
+the tmpfs that it changed the gadget, and a start that finds the record
+puts the gadget back before anything else (§18, E3). So in the release composition a phone is without its
 USB network function only while the link is open: at most the first start
 and three setup boots, ten unpaired minutes each.
 
@@ -743,7 +749,7 @@ stream after 120 s without a frame.
 | `stage` | Below |
 | `boot` | 1 before the planned restart; 2 from the first boot that begins at `provisioned`, whatever restarted the phone (D23) |
 | `release`, `kernel`, `device` | From `/usr/share/omamobile/rootfs/MANIFEST`; `uname -r`; the codename |
-| `firstboot` | {`state`: `none`, `running`, `done` or `failed`; `step`: the step's name as `omamobile-firstboot` logs it; `n`, `of`; `failed`: names} |
+| `firstboot` | {`state`: `none`, `running`, `done` or `failed`; `step`: the step's name as `omamobile-firstboot` logs it, except the account step, which is `user` (the script logs "user NAME"); `n`, `of`; `failed`: names} |
 | `backup` | {`state`: `none`, `listed` or `done`; `parts`: [{`name`, `size`, `verified`}]} |
 | `factory` | {`state`: `none`, `partial` or `verified`; `have`, `size`} |
 | `provision` | {`state`: `none`, `running`, `done` or `failed`; `step`, `n`, `of`; `optional_failed`: names of the optional steps that failed in a run that succeeded (§6.6)} |
@@ -895,7 +901,9 @@ partition's stream. The in-memory loopback of L1 cannot show it.
    write the bus has not taken after 30 s is a lost link: the daemon
    cancels what it queued (`io_cancel`, which dequeues the request **[D]**
    (the same file); **[I]**: that the phone's USB controller driver
-   dequeues cleanly, steps L3 and R4) and ends the session. The stream stays at its last
+   dequeues cleanly, steps L3 and R4) and ends the session; frames queued
+   after the lost write and before the daemon hears of it are cancelled
+   with it (§18, E7). The stream stays at its last
    acknowledged offset. So a host that ignores the window cannot hold the
    daemon either.
 4. **A partition's stream needs no window.** The phone hands the bus the
@@ -1038,13 +1046,13 @@ with a state file is.
 | Taking the answers | 1. The candidate (mode 600) on a tmpfs; both checks pass | Nothing: stage `waiting` |
 | | 2. `boot-update.conf` (Q3) | A `boot-update.conf` on a phone at `waiting`: harmless, and written again later |
 | | 3. The candidate copied to `/etc/omamobile/firstboot.conf` (mode 600) | The state file at `waiting` and a `firstboot.conf`: the table below makes it `firstboot` |
-| | 4. `omamobile-firstboot.service` started | The same; the unit also starts by itself at the next boot, on its own condition **[V]** |
+| | 4. `omamobile-firstboot.service` started | The same; a start of the daemon that finds stage `waiting` made `firstboot` by the table below, a `firstboot.conf` and the unit not run in this boot starts it (§18, E2). The unit also starts by itself at the next boot, on its own condition **[V]** |
 | | 5. The state file: stage `firstboot` | Stage `firstboot`; the host learns it from `status` |
 | | 6. `answers-ok` | |
 | The end of first-boot setup | The daemon records `firstboot-done` or `firstboot-failed` when the unit ends | The table below reads it from what first boot left |
 | The image | Each `ack`: the file synced, then the state file's `synced`, then the `ack` | A file longer than `synced`: cut back |
 | The end of provisioning | 1. The worker's result file. 2. The state file: stage `provisioned`. 3. The image and the working directory deleted. 4. `provision-done` | After 1: the daemon reads the result. After 2: an image at stage `provisioned`, deleted at the start |
-| `finish` | 1. The state file: stage `finished`. 2. `finished` sent. 3. The marker deleted, `done` written, the state deleted, the gadget put back | Stage `finished` without `done`: the start completes the end |
+| `finish` | 1. The state file: stage `finished`. 2. `finished` sent. 3. `done` written, the state deleted, the gadget put back, the marker deleted last (every end keeps this order: §18, E1) | Stage `finished` without `done`, or `done` with the marker still there: the start completes the end |
 
 **The state file says which boot it was last written in.** It holds the
 kernel's boot id (`/proc/sys/kernel/random/boot_id` **[D]**, random(4)),
@@ -1092,7 +1100,7 @@ Then, at any stage before `finished`:
 | A pending checksum file, no `backup-done` | Deletes the file |
 | Provisioning "running", its unit active (the daemon alone restarted) | Goes on watching it |
 | Provisioning "running", no unit, a result file in which every required step is `ok` | Stage `provisioned`; the image and the working directory deleted |
-| Provisioning "running", no unit, any other result or none | Provisioning failed, at the result's step or at `interrupted`. The working directory is removed and the image kept; `provision` runs it again |
+| Provisioning "running", no unit, any other result, one that cannot be read as a result, or none | Provisioning failed, at the result's step or at `interrupted`. The working directory is removed and the image kept; `provision` runs it again |
 | A working directory and no unit | Removes it |
 | Stage `provisioned` and an image file | Deletes the file |
 | A candidate or a temporary file of its own | Deletes it |
@@ -1586,3 +1594,30 @@ bounds (a `window` below `ack_every` is refused), a non-forward `ack`
 ending the session, a suspended stream begun again at most five times,
 an empty result counting as `interrupted`, and the effect that tells the
 daemon to drop a dead session's unsent frames.
+
+## 18. What building the daemon found
+
+The daemon (`linkd/` in the installer repository, `docs/LINKD.md`) was
+built on the crate on 2026-11-12, against a socket pair in place of the
+USB function. Its tests kill it at every point of a whole install and
+remove its guards one at a time. Nine places in this plan did not hold or
+said nothing. Each is corrected above. Nothing here has run on a phone.
+
+| | What the plan said | What was wrong | Now |
+| --- | --- | --- | --- |
+| E1 | `finish`: the marker deleted, then `done` written; the unit starts on "the marker and not `done`" | A daemon killed between the two left no marker and no `done`: nothing would start it again, and the link had neither ended nor could be reopened | §6.5: every end writes `done` first and deletes the marker last, and a start that finds `done` completes the end. §3.3: the unit's condition is the marker alone |
+| E2 | Placing the answers ends with the unit started | A daemon killed between copying `firstboot.conf` and starting the unit left an installer waiting for a first boot that nothing starts before the next restart | §6.5: a start that finds the stage, the file and the unit not run in this boot starts it |
+| E3 | `remove` runs "when the daemon stops for any reason" | A killed daemon runs nothing: the next start called `add` on a gadget that already had the function, or left the function on the bus with nothing behind it | §3.3: a record on the tmpfs; a start that finds it puts the gadget back first |
+| E4 | After ten unpaired minutes the link is closed "for this boot" | A boot is counted once, so a daemon started again in that boot offered the link again | §2.2: a mark on the tmpfs; a start that finds it offers nothing |
+| E5 | `reopen` records the boot id it ran in | In the state file it made that boot counted, and the start-up rules then offered the link at once | §2.8: a file of its own, read before the start-up rules; `reopen` refuses when the boot id cannot be read |
+| E6 | `firstboot.step` is the step's name as the script logs it; `status` names no user | The script logs the account step as "user NAME", and `status` is answered unpaired | §5.4: that step is `user` |
+| E7 | A write the bus did not take ends the session | Frames the daemon queued before it heard of the lost write would have reached the host numbered after the cancelled ones | §5.7: they are cancelled too |
+| E8 | "A result file" | Said nothing of one that cannot be read | §6.5: it counts as a run that was interrupted, never as a success |
+| E9 | Nothing on a phone whose bootconfig has no serial | The serial proof (§2.5) would be of nothing | §2.5: nothing is offered and nothing written |
+
+**Left for L3** (the daemon's `docs/LINKD.md` §5): everything about real
+blocking and `io_cancel` on FunctionFS, one frame per read and the pad
+rule, the function's events in place of the stand-in's, a daemon that
+dies with the function bound, the gadget script and its hang marker, the
+real `systemctl` and `systemd-run` answers, and sizes: nothing has yet
+moved a megabyte frame or a 4 GB file.
