@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: MIT
+# Tells omamobile.org to rebuild when the files its device pages are built
+# from change on main: docs/DEVICES.md, a device's NOTES.md, the release
+# notes. The site's deploy workflow (derekross/omamobile-website,
+# .github/workflows/deploy.yml) listens for the `devices-changed`
+# repository_dispatch event; without this it waits for its six-hour
+# schedule, which GitHub sometimes skips.
+#
+# Needs the repository secret WEBSITE_DEPLOY_TOKEN: a fine-grained personal
+# access token for the derekross/omamobile-website repository with
+# "Contents: read and write" (what GitHub requires to create a
+# repository_dispatch event), added by the maintainer under Settings >
+# Secrets and variables > Actions. Without it the job prints a notice and
+# does nothing, and the site rebuilds on its schedule as before.
+name: website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/DEVICES.md
+      - 'device/*/NOTES.md'
+      - docs/release-notes/**
+
+permissions: {}
+
+jobs:
+  dispatch:
+    name: Rebuild omamobile.org
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Send repository_dispatch to derekross/omamobile-website
+        env:
+          TOKEN: ${{ secrets.WEBSITE_DEPLOY_TOKEN }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [[ -z $TOKEN ]]; then
+            echo "::notice::WEBSITE_DEPLOY_TOKEN is not set: the site rebuilds on its own schedule instead"
+            exit 0
+          fi
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/derekross/omamobile-website/dispatches \
+            -d "{\"event_type\":\"devices-changed\",\"client_payload\":{\"sha\":\"$SHA\"}}"
+          echo "::notice::asked omamobile.org to rebuild for $SHA"
