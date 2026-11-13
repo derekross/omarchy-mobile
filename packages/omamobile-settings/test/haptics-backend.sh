@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # backends/haptics.sh against a temporary feedbackd theme (XDG_CONFIG_HOME), in a copy of the script with dry=1,
-# so feedbackd, gsettings and fbcli are never called.
+# so feedbackd and fbcli are never called.
 set -euo pipefail
 src=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 tmp=$(mktemp -d); trap 'rm -rf -- "$tmp"' EXIT
@@ -43,7 +43,7 @@ PY
 # the mode of the file is kept, and the first theme is saved once
 [[ $(stat -c %a "$dir/custom.json") == 644 ]] || { chmod 644 "$dir/custom.json"; run set level high >/dev/null; [[ $(stat -c %a "$dir/custom.json") == 644 ]]; }
 [[ -e $dir/custom.json.bak-haptics ]]
-# a theme with one key entry is refused before anything is touched, and the profile stays as it was
+# a theme with one key entry is refused before anything is touched, by set and by get
 cp "$dir/custom.json" "$tmp/good.json"
 python3 - "$dir/custom.json" <<'PY'
 import json, sys
@@ -54,10 +54,17 @@ PY
 before=$(sha256sum "$dir/custom.json")
 eq "$(run set level medium)" '{"error":"the haptics theme does not have the two key entries"}'
 [[ $(sha256sum "$dir/custom.json") == "$before" ]]
+eq "$(run get)" '{"error":"the haptics theme does not have the two key entries"}'
+[[ $(run probe) == *'"state":"unavailable"'* ]] || { echo "FAIL: probe says working on a one-entry theme" >&2; exit 1; }
+# a theme that is not JSON at all
+echo "{ not json" > "$dir/custom.json"
+eq "$(run get)" '{"error":"the haptics theme could not be read"}'
+[[ $(run probe) == *'"state":"unavailable"'* ]] || { echo "FAIL: probe says working on a broken theme" >&2; exit 1; }
 cp "$tmp/good.json" "$dir/custom.json"
-# a theme that is not there: a plain message, no crash, and no level can be set (the profile is never touched)
-rm "$dir/custom.json"
+eq "$(run probe)" '{"id":"haptics","state":"working","reason":"","risk":"none"}'
+# a theme that is not there: a plain message, no crash, nothing is created, no level can be set
+rm "$dir/custom.json" "$dir/custom.json.bak-haptics"
 eq "$(run get)" '{"error":"no keyboard haptics theme on this phone"}'
-eq "$(run set level medium)" '{"error":"theme file not writable"}'
-[[ ! -e $dir/.profile-dry ]]
+eq "$(run set level medium)" '{"error":"no keyboard haptics theme on this phone"}'
+[[ ! -e $dir/custom.json && ! -e $dir/custom.json.bak-haptics ]]
 echo "haptics backend: ok"
