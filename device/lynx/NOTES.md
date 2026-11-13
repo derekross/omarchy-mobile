@@ -41,10 +41,18 @@ factory images were flashed to slot B and Android booted from it. Stock
 rewrites `efs`, `persist` and `modem_userdata`, so a fresh read-only
 backup is required before any radio work.
 
-A later read on 2026-11-13, from slot B after a boot, got
-`03 00 00 00 01 0c 00 00` at `0x30-0x37` (retry byte 1). That is
-the Linux side of a same-moment row; the matching `getvar` has to be
-taken before the next boot for the row to be complete.
+A same-moment row on 2026-11-13: slot B after a boot read
+`03 00 00 00 01 0c 00 00` at `0x30-0x37`, then the bootloader was
+entered with the buttons and read before anything booted:
+
+```
+slot-successful:b   no
+slot-unbootable:b   no
+slot-retry-count:b  1
+current-slot:       b
+```
+
+The retry byte (`0x34`) is 1 in both reads, and `0x35` is `0x0c`.
 
 ## 2026-10-30: published kernel on an Android 15 unit; devinfo 3.11
 
