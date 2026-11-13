@@ -733,6 +733,10 @@ test("Back is the home screen's only with nothing open over it", () => {
   let over = {}
   for (const ns of M.BACK_FURNITURE) over = M.overAfter(over, "openlayer", ns)
   assert.deepStrictEqual(over, {}, "the bar, the dock, the pill, toasts and the keyboard are part of the screen")
+  for (const ns of ["omamobile-app-search", "omamobile-app-search-background"]) {
+    assert.deepStrictEqual(M.overAfter({}, "openlayer", ns), {},
+      "the always-mapped Search layer must not permanently disable Home Back")
+  }
   over = M.overAfter(over, "openlayer", "omamobile-quicksettings")
   assert.deepStrictEqual(over, { "omamobile-quicksettings": 1 })
   over = M.overAfter(over, "openlayer", "omarchy-menu")
