@@ -729,3 +729,32 @@ fi
 # installer, so run Omarchy's own script: it creates only what is missing.
 keyring=${OMARCHY_PATH:-/usr/share/omarchy}/install/user/default-keyring.sh
 if [[ -f $keyring ]]; then bash "$keyring"; fi
+
+# The phone's portal picks (the permission sheet for Access, Nautilus's
+# chooser for FileChooser) are in /etc/xdg/xdg-desktop-portal/
+# hyprland-portals.conf. Omarchy's migration 1788261467 (the Secret portal)
+# writes ~/.config/xdg-desktop-portal/hyprland-portals.conf with its own
+# default=hyprland;gtk, and xdg-desktop-portal goes by the first file that
+# answers: from then on file dialogs were GTK 3's desktop chooser, which
+# Hyprland squeezed to the screen (623 px into 405 on the Pixel 9a, text drawn
+# tall and narrow), and the permission question GTK's dialog. Every login,
+# since the migration can come with any update: the user's file gets each of
+# the phone's lines whose interface it doesn't name yet. One the user set
+# stays as it is.
+portals=${OMAMOBILE_PORTALS_CONF:-/etc/xdg/xdg-desktop-portal/hyprland-portals.conf}
+user_portals=${XDG_CONFIG_HOME:-$HOME/.config}/xdg-desktop-portal/hyprland-portals.conf
+if [[ -f $portals && -f $user_portals ]]; then
+  added=
+  while IFS= read -r line; do
+    grep -q "^${line%%=*}=" "$user_portals" && continue
+    if [[ -z $added ]]; then
+      [[ -z $(tail -c1 "$user_portals") ]] || echo >>"$user_portals"
+      echo "# Omarchy Mobile (omamobile-setup-user): the phone's picks from $portals" >>"$user_portals"
+    fi
+    echo "$line" >>"$user_portals"
+    added=1
+  done < <(grep -E '^org\.freedesktop\.impl\.portal\.[A-Za-z]+=' "$portals")
+  if [[ -n $added ]]; then
+    systemctl --user try-restart xdg-desktop-portal.service 2>/dev/null || true
+  fi
+fi

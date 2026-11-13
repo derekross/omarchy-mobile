@@ -75,6 +75,7 @@ run() {
     OMAMOBILE_VOICE_MODELS="${RUN_VOICE_MODELS:-$t/no-voice-models}" OMAMOBILE_VOXTYPE="${RUN_VOXTYPE:-voxtype}" \
     OMARCHY_PATH="${RUN_OMARCHY_PATH:-$t/omarchy}" \
     OMAMOBILE_USER_UNITS="${RUN_USER_UNITS:-$t/no-user-units}" \
+    OMAMOBILE_PORTALS_CONF="$pkg/portal/hyprland-portals.conf" \
     bash bin/omamobile-setup-user "$@" >"$t/out" 2>&1 || { cat "$t/out"; fail "omamobile-setup-user runs"; }
 }
 run
@@ -484,3 +485,22 @@ for gliff in no yes; do
 done
 rm -f "$F/gliff-server"
 pass "Omarchy's remote session is off on every phone, once, with or without gliff, and a user can turn it back on"
+
+# Omarchy's Secret-portal migration writes the user's own hyprland-portals.conf,
+# which hides the phone's in /etc. Each login adds the phone's lines the file
+# doesn't name yet, once, restarts the portal only then, and keeps the user's own.
+hp=$t/portals; mkdir -p "$hp/.config/hypr" "$hp/.config/xdg-desktop-portal"; cp "$H"/.config/hypr/*.lua "$hp/.config/hypr/"
+up=$hp/.config/xdg-desktop-portal/hyprland-portals.conf
+printf '[preferred]\ndefault=hyprland;gtk\norg.freedesktop.impl.portal.Secret=gnome-keyring\n' >"$up"
+RUN_HOME=$hp run; RUN_HOME=$hp run
+grep -qx 'org.freedesktop.impl.portal.FileChooser=gnome;gtk' "$up" || fail "the user's portals file gets the phone's file chooser"
+grep -qx 'org.freedesktop.impl.portal.Access=omamobile;gtk' "$up" || fail "the user's portals file gets the phone's permission sheet"
+grep -qx 'org.freedesktop.impl.portal.Secret=gnome-keyring' "$up" || fail "Omarchy's Secret line stays"
+[[ $(grep -c '^org.freedesktop.impl.portal.FileChooser=' "$up") == 1 ]] || fail "two logins add the file chooser once"
+[[ $(grep -c 'try-restart xdg-desktop-portal' "$hp/calls") == 1 ]] || fail "the portal restarts once, when lines were added"
+sed -i 's|^org.freedesktop.impl.portal.FileChooser=.*|org.freedesktop.impl.portal.FileChooser=gtk|' "$up"
+RUN_HOME=$hp run
+grep -qx 'org.freedesktop.impl.portal.FileChooser=gtk' "$up" || fail "a file chooser the user picked stays"
+[[ $(grep -c '^org.freedesktop.impl.portal.FileChooser=' "$up") == 1 ]] || fail "a user's own file chooser line isn't joined by the phone's"
+[[ ! -e $H/.config/xdg-desktop-portal/hyprland-portals.conf ]] || fail "without a user portals file none is made"
+pass "the user's portals file (Omarchy's Secret migration) gets the phone's file chooser and permission sheet, once"
