@@ -604,6 +604,14 @@ if grep -nE 'repeat: true.*running: true|running: true.*repeat: true|loops: Anim
 fi
 grep -c 'bind("shown", Qt.binding(function() { return frame.shown }))' plugins/omamobile.home/UserWidgetCell.qml >/dev/null || fail "user widgets get shown"
 grep -c '`property bool shown` (optional)' widgets/WIDGETS.md >/dev/null || fail "WIDGETS.md documents shown"
+rc=0; out=$(python3 -B test/home-backlight-idle.py 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "Home backlight polling pauses behind an app # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" >&2; fail "Home backlight polling"
+else
+  pass "Home backlight polling pauses behind an app and refreshes on return"
+fi
 rc=0; out=$(bash test/owl-idle 2>&1) || rc=$?
 if [[ $rc == 77 ]]; then
   pass "home widgets stop when nobody can see them # SKIP no qmltestrunner"
