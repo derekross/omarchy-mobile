@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile: double tap to wake from suspend-to-idle. The touchscreen
+# (Synaptics S3908 on SPI) can wake the phone once its driver is wakeup
+# capable (linux-omarchy-mobile#248); the kernel leaves that off, so turn it
+# on here. omamobile-doubletap then sees the touch that woke the phone and
+# the shell's sleepd puts a dark phone back to sleep 5 s after a wake that
+# lit nothing. On a kernel without #248 there is no power/wakeup and this
+# does nothing.
+ACTION=="add|bind", SUBSYSTEM=="spi", DRIVER=="synaptics-tcm", TEST=="power/wakeup", ATTR{power/wakeup}="enabled"
