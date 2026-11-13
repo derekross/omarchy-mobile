@@ -22,6 +22,7 @@ never logged.
 """
 import hashlib
 import itertools
+from pathlib import Path
 import re
 import uuid
 
@@ -43,6 +44,12 @@ LOCKS = {'pin': mm.LOCK_SIM_PIN, 'puk': mm.LOCK_SIM_PUK, 'network-locked': mm.LO
 DEVICE = '/sys/devices/platform/cpif'
 LIVE = (mm.CALL_DIALING, mm.CALL_RINGING_OUT, mm.CALL_RINGING_IN, mm.CALL_ACTIVE, mm.CALL_HELD,
         mm.CALL_WAITING)
+# A WAP push (an MMS notification) goes to clients as binary data only where
+# something can fetch the message: mmsd-tng, by its binary. Elsewhere the
+# owner at least learns that a message came.
+MMS_DAEMON = Path('/usr/bin/mmsdtng')
+NO_MMS_TEXT = 'Received a multimedia or binary message that this phone cannot display yet.'
+
 NOT_YET = {
     'data': 'Mobile data through ModemManager (T3); omamobile-sit-data owns rmnet0 for now',
     'pin': 'SIM PIN entry (T8); take the PIN lock off in another phone',
@@ -477,9 +484,14 @@ class Bridge:
             if sid not in wanted or sid in self.sitd_sms:
                 continue
             data = bytes.fromhex(message.get('data') or '')
+            text = message.get('text', '')
+            if data and not text and not MMS_DAEMON.exists():
+                # Nothing on this phone takes a WAP push: Messages would show
+                # nothing at all, so it gets the placeholder as a text.
+                text, data = NO_MMS_TEXT, b''
             path = self.new_message(dict(
                 sid=sid, State=mm.SMS_RECEIVED, PduType=mm.PDU_DELIVER, Number=message.get('number', ''),
-                Text=message.get('text', ''), Data=data, Timestamp=message.get('timestamp', ''),
+                Text=text, Data=data, Timestamp=message.get('timestamp', ''),
                 Storage=mm.STORAGE_ME), received)
             print(f'SMS {path} received{" (binary data: a WAP push)" if data else ""}', flush=True)
         if any(i not in self.sitd_sms for i in self.status.get('sms', {}).get('received', [])):

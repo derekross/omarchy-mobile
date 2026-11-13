@@ -7,7 +7,7 @@ omamobile-sitd's socket, so GNOME Calls, Chatty, mmsd-tng and NetworkManager
 see a modem. It never talks to the modem itself: sitd stays the only owner
 of the SIT channel, and nothing here starts the modem or sitd.
 
-  omamobile-mmd [--socket PATH] [--sit-config PATH] [--no-polkit]
+  omamobile-mmd [--socket PATH] [--sit-config PATH] [--mms-daemon PATH] [--no-polkit]
 
 --no-polkit skips the polkit checks (offline tests on a private bus only;
 the shipped unit keeps them). DBUS_SYSTEM_BUS_ADDRESS picks another bus.
@@ -15,11 +15,13 @@ the shipped unit keeps them). DBUS_SYSTEM_BUS_ADDRESS picks another bus.
 import argparse
 import configparser
 import os
+from pathlib import Path
 import signal
 import sys
 
 from gi.repository import Gio, GLib
 
+import bridge as bridge_module
 import mm_api
 from bridge import Bridge
 from exporter import Exporter
@@ -50,8 +52,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="ModemManager's D-Bus API in front of omamobile-sitd")
     parser.add_argument('--socket', default=os.path.join(RUN, 'socket'), help="omamobile-sitd's socket")
     parser.add_argument('--sit-config', default=SIT_CONFIG, help="omamobile-sitd's settings (the APN)")
+    parser.add_argument('--mms-daemon', default=str(bridge_module.MMS_DAEMON),
+                        help='the MMS daemon whose presence makes a WAP push binary data (tests)')
     parser.add_argument('--no-polkit', action='store_true', help='skip polkit (offline tests only)')
     args = parser.parse_args(argv)
+    bridge_module.MMS_DAEMON = Path(args.mms_daemon)
 
     loop = GLib.MainLoop()
     state = dict(bridge=None, link=None, code=0)

@@ -729,6 +729,24 @@ POLKIT_XML = '''<node><interface name="org.freedesktop.PolicyKit1.Authority">
 <arg type="(bba{ss})" direction="out"/></method></interface></node>'''
 
 
+class NoMmsDaemon(BridgeTests):
+    """A phone without mmsd-tng: nothing would take a WAP push, so it goes
+    to Messages as the placeholder text."""
+    status = staticmethod(registered_status)
+    mmd_args = ('--mms-daemon', '/nonexistent/mmsdtng')
+
+    def test_mms_notification_is_a_placeholder_text(self):
+        wap = bytes.fromhex('0106226170706c69636174696f6e2f766e642e7761702e6d6d732d6d65737361676500') + b'x'
+        messages = [dict(id='sit:b', number=SENDER, text='', timestamp='2026-09-29T12:35:00+00:00',
+                         data=wap.hex(), state='received')]
+        self.sitd.handlers.update(**{'sms-list': lambda r: messages, 'sms-delete': lambda r: {}})
+        self.sitd.status['sms'] = dict(received=['sit:b'])
+        self.push()
+        wait_until(lambda: len(self.client.named('Added')) == 1, 5, 'WAP push')
+        push = self.client.props(self.modem('Messages', mm.MESSAGING)[0], mm.SMS)
+        self.assertEqual((push['Text'], bytes(push['Data'])), (bridge.NO_MMS_TEXT, b''))
+
+
 class Polkit(BridgeTests):
     """The shipped behaviour: methods with an action go through polkit for
     a caller that isn't root (the test's own uid here). A fake authority on
