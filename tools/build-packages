@@ -284,7 +284,7 @@ done
 # published tag (named only, so a refusal stops the run), and boot files
 # that match this tree (a refusal skips that package and fails the run at
 # the end)
-skipped=() kept=()
+skipped=() kept=() warned=()
 for d in "${build[@]}"; do
   name=$(basename "$d")
   if [[ " ${NAMED_ONLY[*]} " == *" $name "* ]]; then
@@ -456,6 +456,12 @@ for dir in "${build[@]}"; do
     ' || { rm -rf "$work"; alarm_die "$name: build failed"; }
   add_to_repo "$out"/*.pkg.tar.zst
   rm -rf "$work"
+  # omamobile-gnss packages without the Pixel 9a's HAL client when
+  # bionic/prebuilt/ has none (it isn't committed), and on a 9a Location
+  # then fails at its start. Its install script says so in the middle of the
+  # build output; say it again where a publish run is read.
+  [[ $name == omamobile-gnss && ! -f $dir/bionic/prebuilt/omamobile-gnss-client ]] &&
+    warned+=("omamobile-gnss was built without the Pixel 9a's HAL client: no Location on a 9a from this package (make -C packages/omamobile-gnss/bionic, then build it again)")
   echo "    built in $(( ($(date +%s) - start) / 60 )) min"
   # Index after each package, so the next one can depend on it
   sign_and_index
@@ -464,6 +470,7 @@ done
 alarm_say "Signing and indexing $repo"
 sign_and_index
 ls -1 "$repo" | grep -E '\.pkg\.tar\.zst$'
+for w in "${warned[@]}"; do printf '\e[33mwarning:\e[0m %s\n' "$w" >&2; done
 # Exit 3: everything else is built and signed (tools/repo-publish publishes
 # it, then fails too); any other failure exits 1 earlier
 if ((${#skipped[@]})); then

@@ -91,6 +91,23 @@ build container --check-in-container || { cat "$t/container.log"; fail "--check-
   || { cat "$t/container.log"; fail "--check-in-container runs every check() in the container"; }
 pass "--check-in-container still moves every check into the container"
 
+# omamobile-gnss built without the Pixel 9a's HAL client (bionic/prebuilt/ is
+# not committed): the run ends with a warning, where a publish run is read
+mkdir -p "$R/packages/omamobile-gnss/bionic/prebuilt"
+echo 1 > "$R/packages/omamobile-gnss/version"
+printf 'pkgname=omamobile-gnss\npkgver=$(cat "${startdir:-.}/version")\npkgrel=1\narch=(any)\n' > "$R/packages/omamobile-gnss/PKGBUILD"
+gnss() {  # gnss LOGNAME: build the stand-in omamobile-gnss alone
+  (cd "$R" && PATH=$t/bin:$PATH TMPDIR=$t/tmp ALARM_TEST_CACHE=$t/cache BUILT_LOG=$t/built-$1 NATIVE_LOG=$t/native-$1 \
+     tools/build-packages --force --nocheck --local testdev packages/omamobile-gnss) > "$t/$1.log" 2>&1
+}
+gnss noclient || { cat "$t/noclient.log"; fail "omamobile-gnss without the 9a's client still builds"; }
+[[ $(tail -1 "$t/noclient.log") == *"warning:"*"omamobile-gnss was built without the Pixel 9a's HAL client"* ]] \
+  || { cat "$t/noclient.log"; fail "a build without the 9a's client ends with the warning"; }
+: > "$R/packages/omamobile-gnss/bionic/prebuilt/omamobile-gnss-client"
+gnss client || { cat "$t/client.log"; fail "omamobile-gnss with the 9a's client builds"; }
+grep -c 'without the Pixel 9a' "$t/client.log" >/dev/null && { cat "$t/client.log"; fail "a build with the 9a's client warns"; }
+pass "omamobile-gnss built without the Pixel 9a's HAL client ends the run with a warning, and with it doesn't"
+
 # The one package that names its tools today names what its test/all calls
 for tool in $(grep -v '^#' packages/omamobile-settings/test/host-tools); do
   [[ $tool == g++ ]] || grep -c -- "$tool" packages/omamobile-settings/test/all packages/omamobile-settings/bin/build >/dev/null \
