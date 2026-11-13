@@ -110,6 +110,14 @@ grep -q "'omamobile-audio>=0.5.15'" PKGBUILD || fail "device-raven depends on om
   || fail "raven never sets aoc_alsa_dev speaker_protection (it would allow stage c9)"
 pass "speakers through protection at stage media, the microphones with them"
 
+# The modem's units, when enabled: sitd waits for CP ONLINE (as on cheetah)
+d=$tmp/root/usr/lib/systemd/system/omamobile-sitd.service.d/20-cp-online.conf
+grep -qx 'ExecStartPre=/usr/lib/omamobile-vendor/omamobile-modem-cp wait-online 120' "$d" || fail "sitd waits for CP ONLINE with the cbd timeout"
+grep -q '^\[Service\]' "$d" && ! grep -q '^\[Unit\]' "$d" || fail "the sitd drop-in only adds to [Service]"
+d=$tmp/root/usr/lib/systemd/system/omamobile-sit-data.service.d/20-cp-online.conf
+grep -qx 'ConditionPathExists=/dev/umts_ipc0' "$d" || fail "sit-data is skipped without the modem's port"
+pass "sitd waits for the CP; sit-data needs the modem's port"
+
 # Policy that keeps the phone safe at boot
 for m in tcpci_maxim gpio_max77759; do
   grep -qx "blacklist $m" vendor/modprobe.d/omamobile-raven.conf || fail "$m stays blacklisted"

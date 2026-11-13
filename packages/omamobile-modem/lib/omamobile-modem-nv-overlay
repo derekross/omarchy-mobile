@@ -27,9 +27,10 @@ of the partitions, checked against the off-repo backup's checksums before
 anything here runs; the overlay is bound to those checksums, so a new backup
 sets it aside.
 
-Granularity: whole files. rfsd keeps the modem's NV as files in the three f2fs
-filesystems (nv_normal.bin and nv_protected.bin, each with a salted MD5 beside
-it), not as raw blocks, so a file is the unit that can be allowed or refused.
+Granularity: whole files. rfsd keeps the modem's NV as files in the three NV
+filesystems (f2fs on gs201, ext4 on gs101: nv_normal.bin and nv_protected.bin,
+each with a salted MD5 beside it), not as raw blocks, so a file is the unit
+that can be allowed or refused.
 
 Store layout (written only by capture):
   MANIFEST            header, binding, entries, its own checksum (0600)

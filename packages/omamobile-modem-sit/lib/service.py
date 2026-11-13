@@ -969,6 +969,18 @@ def main():
             if not serve_one(service, connection, clients):
                 connection.close()
             service.broadcast()
+    except (EOFError, OSError, RuntimeError) as error:
+        try:
+            online = cp.online()
+        except OSError:
+            online = False
+        if online:
+            raise
+        # The CP crashed under us: omamobile-modem.service records it, tells
+        # the user and leaves the modem alone until a reboot. Say so in one
+        # line, not as a traceback through the SIT read.
+        raise SystemExit('the modem went away (%s): calls, SMS and data are '
+                         'off until the phone restarts' % error) from None
     finally:
         try:
             if service and service.live() and not service.release_unconfirmed:

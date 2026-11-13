@@ -44,6 +44,11 @@ pass "rfsd's exit ends the profile except during this invocation's orderly stop"
 python3 test/power-off.py || fail "omamobile-modem-cp power-off"
 pass "power-off confirms OFFLINE from the device, never from its absence"
 
+# The crash notice: not during this invocation's orderly stop (its intent
+# file, as rfsd's job tests it), once otherwise (#389 review)
+python3 test/watch-stop.py || fail "omamobile-modem-cp watch through a stop"
+pass "no crash notice during this invocation's stop"
+
 # The stop witness: profile_stop, with a stand-in CP helper and capture. A
 # failed power-off still captures the NV but fails the stop and leaves no
 # witness; a confirmed one writes its invocation's witness once; no main
@@ -121,6 +126,37 @@ import sys; g = {"__name__": "cp"}; exec(open(sys.argv[1]).read(), g); print(g["
 [[ $(OMAMOBILE_MODEM_WATCH_SECONDS=five python3 "$cp" baseband-version "$t/modem.bin" 2>/dev/null) == test-version-001 ]] ||
   fail "a bad watch interval leaves other subcommands alone"
 pass "watch interval"
+
+# The crash notice reaches a session whose bus appears after the modem
+# started: the watcher's private mount namespace is made at boot, before
+# /run/user/<uid> is mounted, so it looks through PID 1's view at each call,
+# and sends as a transient unit of PID 1's, outside the profile (#389 review)
+mkdir -p "$t/host/run/user/1000" "$t/host/run/user/0"
+out=$(python3 - "$cp" "$t/host" 2>/dev/null <<'PY'
+import sys, types
+g = {"__name__": "cp"}
+exec(open(sys.argv[1]).read(), g)
+host = sys.argv[2]
+calls = []
+g["host_root"] = lambda: host
+g["os"].geteuid = lambda: 0
+g["shutil"].which = lambda name: "/usr/bin/" + name if name == "omarchy-notification-send" else None
+g["subprocess"].run = lambda argv, **kw: calls.append(argv) or types.SimpleNamespace(returncode=0, stderr=b"")
+g["notify"]("Cellular stopped", "test")
+print("before", len(calls))
+open(host + "/run/user/1000/bus", "w").close()
+g["notify"]("Cellular stopped", "test")
+print("after", len(calls), " ".join(calls[-1]) if calls else "")
+print("sessions", g["sessions"](host))
+PY
+)
+[[ $out == *"before 0"* ]] || fail "no bus yet: nothing sent ($out)"
+[[ $out == *"after 1 systemd-run --quiet --wait --collect --uid=1000 --setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus --setenv=XDG_RUNTIME_DIR=/run/user/1000 -- omarchy-notification-send -u critical Cellular stopped test"* ]] ||
+  fail "the bus that appeared later is used, through a transient unit as the user ($out)"
+[[ $out == *"[(1000, '/run/user/1000/bus')]"* ]] || fail "sessions: uids from 1000 only, the bus path as the session sees it ($out)"
+view=$(python3 -c 'import sys; g = {"__name__": "cp"}; exec(open(sys.argv[1]).read(), g); print(repr(g["host_root"]()))' "$cp")
+[[ $view == "''" ]] || fail "the same mount namespace as PID 1: its own /run ($view)"
+pass "crash notice outside the profile, bus found at each call"
 
 mkdir -p "$t/efs" "$t/efs_backup"
 for f in efs/nv_normal.bin efs/nv_protected.bin efs_backup/nv_protected.bak; do
@@ -449,5 +485,41 @@ printf 'ro.boot.cdt_hwid=TESTID\n' > "$t/p4"; cdt "$t/p4" || fail "the persist c
 cdt "$t/missing" && fail "a missing props file is refused"
 pass "board id required"
 
+# The board the daemons are told about: on a gs101 phone, props.conf names
+# that board (from google,gs101-<board>); other SoCs aren't checked here
+dev() { bash -c 'say() { :; }; eval "$(sed -n "/^modem_device_check() {/,/^}/p" profiles/modem.conf)"; modem_device_check "$1"' _ "$1"; }
+compat() { printf '%s\0' "$@" > "$t/compat"; }
+export MODEM_DT_COMPATIBLE=$t/compat
+printf 'ro.hardware=raven\nro.boot.hardware.platform=gs101\n' > "$t/raven.props"
+printf 'ro.hardware=oriole\nro.boot.hardware.platform=gs101\n' > "$t/oriole.props"
+compat google,gs101-raven google,gs101; dev "$t/raven.props" || fail "raven with raven's props passes"
+dev "$t/oriole.props" && fail "raven with oriole's props is refused"
+compat google,gs101-oriole google,gs101; dev "$t/oriole.props" || fail "oriole with oriole's props passes"
+dev "$t/raven.props" && fail "oriole with raven's props is refused"
+printf 'ro.hardware=bluejay\nro.boot.hardware.platform=gs101\n' > "$t/bluejay.props"
+compat google,gs101-bluejay google,gs101; dev "$t/bluejay.props" || fail "bluejay with bluejay's props passes"
+printf 'ro.hardware=raven\nro.boot.hardware.platform=gs201\n' > "$t/badplat.props"
+compat google,gs101-raven google,gs101; dev "$t/badplat.props" && fail "a gs101 board with another platform is refused"
+compat google,gs201-cheetah google,gs201; dev "$t/missing" || fail "cheetah (gs201) isn't checked here"
+unset MODEM_DT_COMPATIBLE
+pass "a gs101 board's props name that board"
+
+# The crash record's kernel lines: the modem's lines only, without this
+# tool's own umts_boot0 opens, and a flood folded into one line and a count
+python3 - "$cp" <<'PY' || fail "crash record folds a repeated kernel line"
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader('cp', sys.argv[1])
+cp = importlib.util.module_from_spec(importlib.util.spec_from_loader('cp', loader))
+loader.exec_module(cp)
+log = ['[1.0] gs201-pcie-cp 11920000.pcie: link-down recovery requested',
+       '[1.1] wlan: unrelated']
+log += [f'[2.{i}] cpif: s51xx_pcie_send_doorbell_int: cmd reg = 0xffff' for i in range(5000)]
+log += ['[3.0] cpif: bootdump_open: umts_boot0 (opened 2) by python3',
+        '[3.1] cpif: link down for 5000 ms and recovery did not clear it: force crash']
+out = cp.kernel_lines(log)
+assert out == [log[0], log[2], '    (repeated 4999 more times)', log[-1]], out
+assert len(cp.kernel_lines(log[2:3] * 3 + [f'[4.{i}] cpif: x{i}' for i in range(300)])) == 150
+PY
+pass "crash record folds a repeated kernel line"
 # The NV overlay: its own tests (synthetic NV-like files only).
 test/nv-overlay
