@@ -180,6 +180,15 @@ class CallAudioDefaultTests(unittest.TestCase):
                 f.write(text)
         return patch.object(paths, 'DEVICE_DEFAULTS', paths.Path(directory))
 
+    def test_a_typo_in_the_tegu_route_only_matters_on_the_9a(self):
+        with patch.object(voice_audio.C, 'CDLL'), patch.object(voice_audio.shutil, 'which', return_value=None):
+            with patch.object(voice_audio, 'is_tegu_card', return_value=False):
+                audio = voice_audio.VoiceAudio(card=0, tegu_route='spekaer')    # another phone: never read
+                self.assertFalse(audio.tegu)
+            with patch.object(voice_audio, 'is_tegu_card', return_value=True):
+                with self.assertRaises(ValueError):
+                    voice_audio.VoiceAudio(card=3, tegu_route='spekaer')
+
     def test_no_call_audio_by_default(self):
         # No device package defaults (any phone but a verified one): no route.
         with self.device_defaults(None):

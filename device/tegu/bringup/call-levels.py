@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 # Laptop: from a call-audio-watch log, the uplink (Tx) and downlink (Rx) sample values the
 # AoC prints about three times a second, per session and in 5 s windows after its start:
 # how many, the median and the largest magnitude of each. One sample per 0.32 s is a rough
