@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# The install link's notice and pairing window in the owner's session
+# (docs/INSTALL-LINK-PLAN.md §2.8). Enabled for every user by a vendor wants
+# link; runs only while the marker exists, or after the link ended, to tell
+# the owner how to finish an unfinished setup at the next three logins.
+# The daemon talks only to the account first boot made.
+[Unit]
+Description=Omarchy Mobile install link: the setup notice
+Documentation=https://github.com/derekross/omarchy-mobile/blob/main/docs/INSTALL-LINK-PLAN.md
+PartOf=graphical-session.target
+After=graphical-session.target
+ConditionPathExists=|/etc/omamobile/install-link
+ConditionPathExists=|/var/lib/omamobile/install-link/done
+
+[Service]
+ExecStart=/usr/lib/omamobile-install-link/omamobile-install-link-agent
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

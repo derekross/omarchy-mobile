@@ -1,0 +1,478 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for omamobile-install-link, offline (once the pinned source is
+# fetched), with no phone, no USB device, no gadget and no root:
+#   - what the package installs, with which modes and links, and that it
+#     installs no marker, nothing in /etc and nothing multi-user.target wants
+#   - the units: each condition and ordering the plan names (§3.3, §2.8,
+#     §18 E1), systemd-analyze verify on them where systemd is here, and
+#     their conditions evaluated by systemd itself on scratch roots: no
+#     marker, the marker, the marker and first boot's done, `done` alone
+#   - has-answers on the release image's placeholder, a filled one, none
+#   - hold-login: what holds the login screen and what lets it come
+#   - the session agent against a stand-in daemon: the notice, a tap, the
+#     code only in the window's environment, locked, paired, closed for the
+#     boot; after an unfinished end the notice at three logins, then none
+#   - with the pinned source (./fetch-source, or OMAMOBILE_LINK_SRC): the
+#     shipped gadget script is the source's, and the installer's own
+#     fake-configfs test passes against the shipped copy; the initramfs's
+#     NCM and ACM are what that test composes the link beside
+#   - with the daemon built (OMAMOBILE_LINK_BIN, or cargo here): the
+#     marker's rules on scratch roots (none, a first start, the image's
+#     unfilled placeholder, a filled firstboot.conf, an account, first
+#     boot's done, `done` for each reason), `status` and `reopen`, and the
+#     agent paired with the real daemon
+# What needs a phone is the runbook's (docs/INSTALL-LINK-PLAN.md §11.2).
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+PKG=$PWD
+REPO=$(cd ../.. 2>/dev/null && pwd)
+[[ -f $REPO/initramfs/init ]] || REPO=""
+n=0
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { n=$((n + 1)); printf 'ok - %s\n' "$1"; }
+skip() { printf 'ok - # skip: %s\n' "$1"; }
+# Short: a local socket's path holds 107 bytes, and the daemon's are under it
+t=$(mktemp -d "${TMPDIR:-/tmp}/oil.XXXXXX")
+pids=()
+cleanup() {
+  local p
+  for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
+  wait 2>/dev/null || true
+  rm -rf "${t:?}"
+}
+trap cleanup EXIT
+
+for f in install fetch-source bin/hold-login bin/has-answers test/all; do bash -n "$f" || fail "$f parses"; done
+for f in bin/omamobile-install-link-agent bin/screen-text; do
+  python3 -I -B -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$f" || fail "$f parses"
+done
+pass "scripts parse"
+
+# --- The source and the binaries ---------------------------------------------
+commit=$(sed -n 's/^COMMIT=//p' source.conf) sum=$(sed -n 's/^SHA256=//p' source.conf)
+[[ $commit =~ ^[0-9a-f]{40}$ && $sum =~ ^[0-9a-f]{64}$ ]] || fail "source.conf pins a commit and a SHA-256"
+grep -qF 'source.conf' PKGBUILD && grep -qF 'archive/$_commit.tar.gz' PKGBUILD || fail "the PKGBUILD takes its source from source.conf"
+pass "the source is pinned by commit and checksum"
+SRC=${OMAMOBILE_LINK_SRC:-}
+if [[ -z $SRC ]]; then SRC=$(./fetch-source 2>"$t/fetch.err") || { SRC=""; skip "no pinned source: $(cat "$t/fetch.err")"; }; fi
+BIN=${OMAMOBILE_LINK_BIN:-}
+if [[ -z $BIN && -n $SRC ]] && command -v cargo >/dev/null && [[ -z ${OMAMOBILE_LINK_NO_CARGO:-} ]]; then
+  if (cd "$SRC" && CARGO_TARGET_DIR=$t/target cargo build --locked --quiet -p omamobile-linkd) > "$t/cargo.log" 2>&1; then
+    BIN=$t/target/debug
+  else
+    skip "the daemon did not build here (offline?): $(tail -1 "$t/cargo.log")"
+  fi
+fi
+
+# Stand-ins for what is missing, so the layout and unit checks always run
+src_for_stage=$SRC bin_for_stage=$BIN
+if [[ -z $src_for_stage ]]; then
+  src_for_stage=$t/fake-src; mkdir -p "$src_for_stage/linkd/gadget"
+  mkdir -p "$src_for_stage/link/src"; echo 'pub const PROTOCOL: u32 = 1;' > "$src_for_stage/link/src/lib.rs"
+  printf '#!/bin/bash\n' > "$src_for_stage/linkd/gadget/omamobile-link-gadget"; echo MIT > "$src_for_stage/LICENSE"
+fi
+if [[ -z $bin_for_stage ]]; then
+  bin_for_stage=$t/fake-bin; mkdir -p "$bin_for_stage"
+  for b in omamobile-linkd omamobile-install-link; do printf '#!/bin/sh\n' > "$bin_for_stage/$b"; chmod +x "$bin_for_stage/$b"; done
+fi
+
+# --- What the package installs -------------------------------------------------
+S=$t/stage
+./install "$S" "$src_for_stage" "$bin_for_stage"
+got=$(cd "$S" && find . \( -type f -o -type l \) -printf '%m %P%l\n' | sed 's/^777 \(.*\)\(\.\.\/.*\)$/link \1 -> \2/' | LC_ALL=C sort -k2)
+want="755 usr/bin/omamobile-install-link
+755 usr/lib/omamobile-install-link/has-answers
+755 usr/lib/omamobile-install-link/hold-login
+755 usr/lib/omamobile-install-link/omamobile-install-link-agent
+755 usr/lib/omamobile-install-link/omamobile-link-gadget
+755 usr/lib/omamobile-install-link/omamobile-linkd
+755 usr/lib/omamobile-install-link/screen-text
+link usr/lib/systemd/system/graphical.target.wants/omamobile-install-link-hold.service -> ../omamobile-install-link-hold.service
+link usr/lib/systemd/system/graphical.target.wants/omamobile-install-link.service -> ../omamobile-install-link.service
+644 usr/lib/systemd/system/omamobile-firstboot.service.d/50-omamobile-install-link.conf
+644 usr/lib/systemd/system/omamobile-install-link-hold.service
+644 usr/lib/systemd/system/omamobile-install-link.service
+link usr/lib/systemd/user/graphical-session.target.wants/omamobile-install-link-agent.service -> ../omamobile-install-link-agent.service
+644 usr/lib/systemd/user/omamobile-install-link-agent.service
+644 usr/lib/tmpfiles.d/omamobile-install-link.conf
+644 usr/share/doc/omamobile-install-link/README.md
+644 usr/share/licenses/omamobile-install-link/LICENSE
+644 usr/share/licenses/omamobile-install-link/LICENSE.omamobile-installer
+644 usr/share/omamobile-install-link/code-window/shell.qml
+644 usr/share/omamobile/install-link/SOURCE
+644 usr/share/omamobile/install-link/version"
+[[ $got == "$want" ]] || { diff <(echo "$want") <(echo "$got") || true; fail "the package installs exactly these files, with these modes and links"; }
+pass "the package installs exactly its files, modes and vendor wants links"
+[[ ! -e $S/etc ]] || fail "nothing in /etc: no marker, no configuration (only an image built for the link has the marker)"
+[[ ! -e $S/usr/lib/systemd/system/multi-user.target.wants ]] || fail "nothing is wanted by multi-user.target (the unit is After= a unit that is After= it)"
+grep -qx "commit: $commit" "$S/usr/share/omamobile/install-link/SOURCE" || fail "SOURCE names the pinned commit"
+grep -qx "protocol: 1" "$S/usr/share/omamobile/install-link/SOURCE" || fail "SOURCE names the protocol the daemon speaks"
+for p in patches/*.patch; do
+  grep -qx "patch: ${p#patches/} $(sha256sum < "$p" | cut -d' ' -f1)" "$S/usr/share/omamobile/install-link/SOURCE" || fail "SOURCE names $p"
+done
+[[ ! -e install.sh && ! -e omamobile-install-link.install ]] && ! grep -q '^install=' PKGBUILD || fail "no install scriptlet: installing runs nothing"
+pass "no marker, nothing in /etc, no scriptlet; SOURCE names the protocol, the commit and the patches"
+
+# --- The units -------------------------------------------------------------------
+U=$S/usr/lib/systemd/system
+unit_key() { sed -n "s/^$2=//p" "$1"; }
+link_unit=$U/omamobile-install-link.service hold=$U/omamobile-install-link-hold.service
+agent=$S/usr/lib/systemd/user/omamobile-install-link-agent.service
+dropin=$U/omamobile-firstboot.service.d/50-omamobile-install-link.conf
+[[ $(grep -c '^Condition' "$link_unit") == 1 && $(unit_key "$link_unit" ConditionPathExists) == /etc/omamobile/install-link ]] ||
+  fail "the link's unit: ConditionPathExists= the marker alone (§3.3, §18 E1)"
+after=$(unit_key "$link_unit" After)
+[[ " $after " == *" omamobile-usb-mac.service "* && " $after " == *" omamobile-boot-success.service "* ]] ||
+  fail "the link's unit: After=omamobile-usb-mac.service omamobile-boot-success.service"
+[[ $(unit_key "$link_unit" Wants) == omamobile-usb-rescue.service ]] || fail "the link's unit: Wants=omamobile-usb-rescue.service"
+[[ $(unit_key "$link_unit" DevicePolicy) == closed && $(unit_key "$link_unit" DeviceAllow) == "block-sd r" ]] ||
+  fail "the link's unit: block devices for reading only (§2.4)"
+[[ $(unit_key "$link_unit" ExecStopPost) == "-/usr/lib/omamobile-install-link/omamobile-link-gadget remove" ]] ||
+  fail "the link's unit: the gadget is put back when the daemon stops for any reason (§18 E3)"
+[[ $(unit_key "$link_unit" ExecStart) == *"systemd-inhibit --what=sleep --mode=block"*"/usr/lib/omamobile-install-link/omamobile-linkd --transport ffs" ]] ||
+  fail "the link's unit: the daemon on FunctionFS under a sleep inhibitor (§3.3)"
+[[ $(unit_key "$link_unit" Restart) == on-failure && $(unit_key "$link_unit" RuntimeDirectoryPreserve) == yes ]] ||
+  fail "the link's unit: started again after a crash, its tmpfs marks kept across restarts (§18 E3, E4)"
+grep -q '^WantedBy=\|^\[Install\]' "$link_unit" && fail "the link's unit has no [Install]: its vendor wants link is graphical.target's"
+[[ $(unit_key "$hold" Before) == display-manager.service && $(unit_key "$hold" After) == omamobile-install-link.service ]] ||
+  fail "the hold: After= the link, Before=display-manager.service (§3.3)"
+[[ $(unit_key "$hold" ConditionPathExists | tr '\n' ' ') == "/etc/omamobile/install-link !/var/lib/omamobile/firstboot/done " ]] ||
+  fail "the hold: only with the marker and while first boot has made no account"
+[[ $(unit_key "$agent" ConditionPathExists | tr '\n' ' ') == "|/etc/omamobile/install-link |/var/lib/omamobile/install-link/done " ]] ||
+  fail "the agent: with the marker, or after the link ended (to say how to finish)"
+[[ $(unit_key "$agent" PartOf) == graphical-session.target ]] || fail "the agent runs with the session"
+[[ $(unit_key "$dropin" ExecCondition) == "/usr/lib/omamobile-install-link/has-answers /etc/omamobile/firstboot.conf" ]] ||
+  fail "first boot is skipped on a firstboot.conf without answers"
+pass "the units' conditions and ordering are the plan's"
+
+if command -v systemd-analyze >/dev/null && systemd-analyze verify --help >/dev/null 2>&1; then
+  V=$t/verify
+  cp -a "$S" "$V"
+  mkdir -p "$V/usr/bin" "$V/etc/systemd/system"
+  for b in systemd-inhibit omamobile-firstboot; do printf '#!/bin/sh\n' > "$V/usr/bin/$b"; chmod +x "$V/usr/bin/$b"; done
+  if [[ -n $REPO && -f $REPO/packages/omamobile-firstboot/systemd/omamobile-firstboot.service ]]; then
+    cp "$REPO/packages/omamobile-firstboot/systemd/omamobile-firstboot.service" "$V/usr/lib/systemd/system/"
+    fb=/usr/lib/systemd/system/omamobile-firstboot.service
+  else
+    fb=""
+  fi
+  # The user unit as a system unit: the keys it uses mean the same there
+  cp "$agent" "$V/etc/systemd/system/"
+  out=$(systemd-analyze verify --root="$V" /usr/lib/systemd/system/omamobile-install-link.service \
+        /usr/lib/systemd/system/omamobile-install-link-hold.service /etc/systemd/system/omamobile-install-link-agent.service $fb 2>&1) ||
+    { echo "$out"; fail "systemd-analyze verify"; }
+  # It warns and still exits 0 on an unknown key: any line is a failure
+  [[ -z $out ]] || { echo "$out"; fail "systemd-analyze verify has nothing to say about the units${fb:+ and the first-boot unit with the drop-in}"; }
+  pass "systemd-analyze verify: the units${fb:+, and the first-boot unit with its drop-in}"
+
+  # Their conditions, evaluated by systemd on scratch roots (the paths moved
+  # under the root: systemd-analyze condition has no --root for them)
+  conds() { grep '^Condition' "$1" | sed -E "s#=(\\|?!?)/#=\\1$2/#"; }
+  holds() { systemd-analyze condition $(conds "$1" "$2") >/dev/null 2>&1; }
+  case_root() { local r=$t/cond/$1; rm -rf "$r"; mkdir -p "$r"; shift
+    for f in "$@"; do mkdir -p "$r/$(dirname "$f")"; : > "$r/$f"; done; echo "$r"; }
+  r=$(case_root none)
+  ! holds "$link_unit" "$r" && ! holds "$hold" "$r" && ! holds "$agent" "$r" || fail "no marker: no unit of the link's starts"
+  r=$(case_root marker etc/omamobile/install-link)
+  holds "$link_unit" "$r" && holds "$hold" "$r" && holds "$agent" "$r" || fail "the marker: the link, the hold and the agent start"
+  r=$(case_root account etc/omamobile/install-link var/lib/omamobile/firstboot/done)
+  holds "$link_unit" "$r" && ! holds "$hold" "$r" && holds "$agent" "$r" || fail "the marker and an account: no hold"
+  r=$(case_root ended var/lib/omamobile/install-link/done var/lib/omamobile/firstboot/done)
+  ! holds "$link_unit" "$r" && ! holds "$hold" "$r" && holds "$agent" "$r" || fail "ended: only the agent (its notice of how to finish)"
+  r=$(case_root ending etc/omamobile/install-link var/lib/omamobile/install-link/done)
+  holds "$link_unit" "$r" || fail "the marker and done: the daemon starts, to complete the end (§18 E1)"
+  pass "systemd's own conditions on scratch roots: none, the marker, an account, an end, an end cut short"
+else
+  skip "no systemd-analyze here"
+fi
+
+# --- has-answers ------------------------------------------------------------------
+H=$PKG/bin/has-answers
+placeholder() {   # as rootfs/placeholders makes it: comments, then spaces to 4096 bytes
+  { printf '# Omarchy Mobile: the place for %s, kept by the release image.\n# Left as it is, it holds no answers.\n' "$1"
+    printf '#%*s\n' 4000 ''; } | head -c 4095; printf '\n'
+}
+placeholder /etc/omamobile/firstboot.conf > "$t/ph"
+[[ $(stat -c %s "$t/ph") == 4096 ]] || fail "the test's placeholder is 4096 bytes"
+"$H" "$t/ph" && fail "the image's placeholder holds no answers"
+{ printf 'USERNAME=owner\n'; tail -c +16 "$t/ph"; } > "$t/filled"
+"$H" "$t/filled" || fail "a filled placeholder holds answers"
+"$H" "$t/missing" && fail "no file holds no answers"
+printf '\n  # only a comment\n\n' > "$t/comments"
+"$H" "$t/comments" && fail "comments and blank lines are no answers"
+pass "has-answers: the placeholder and comments hold none, a filled file does"
+
+# --- hold-login ------------------------------------------------------------------
+HL=$PKG/bin/hold-login
+R=$t/hold
+mkdir -p "$R/etc/omamobile" "$R/var/lib/omamobile/firstboot" "$R/var/lib/omamobile/install-link"
+cat > "$t/systemctl" <<'EOF'
+#!/bin/bash
+# systemctl show -P PROP UNIT
+case $3 in ActiveState) cat "$HOLD_STATE";; SubState) cat "$HOLD_SUB";; esac
+EOF
+chmod +x "$t/systemctl"
+hold() { OMAMOBILE_LINK_ROOT=$R HOLD_SYSTEMCTL=$t/systemctl HOLD_STATE=$t/active HOLD_SUB=$t/sub HOLD_POLL_S=0.1 HOLD_GONE_POLLS=5 \
+  timeout "$1" "$HL" > /dev/null; }
+echo active > "$t/active"; echo running > "$t/sub"
+: > "$R/etc/omamobile/install-link"
+hold 1 && fail "the marker, no account, the daemon running: the login screen is held"
+echo failed > "$t/active"; echo auto-restart > "$t/sub"
+hold 1 && fail "a daemon about to be started again counts as running"
+echo failed > "$t/active"; echo failed > "$t/sub"
+hold 3 || fail "a daemon that is not running lets the login screen come"
+echo active > "$t/active"; echo running > "$t/sub"
+: > "$R/var/lib/omamobile/firstboot/done"; hold 3 || fail "first boot's done lets the login screen come"
+rm "$R/var/lib/omamobile/firstboot/done"
+: > "$R/var/lib/omamobile/install-link/done"; hold 3 || fail "the link's done lets it come"
+rm "$R/var/lib/omamobile/install-link/done" "$R/etc/omamobile/install-link"; hold 3 || fail "no marker lets it come"
+pass "hold-login: held while the daemon runs and no account exists; let go by an account, an end, no marker, no daemon"
+
+# --- The session agent, against a stand-in daemon ---------------------------
+AG=$PKG/bin/omamobile-install-link-agent
+A=$t/agent
+mkdir -p "$A/etc/omamobile" "$A/run/omamobile-install-link" "$A/var/lib/omamobile/install-link" "$A/state"
+# notify-send: logs its arguments, prints an id; with --wait it is "tapped"
+# when the test leaves a tap file, else it waits to be ended
+cat > "$t/notify" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "$AGT/notify.log"
+echo 7
+if [[ " $* " == *" --wait "* ]]; then
+  for _ in $(seq 200); do
+    if [[ -e $AGT/tap ]]; then rm -f "$AGT/tap"; echo default; exit 0; fi
+    sleep 0.05
+  done
+fi
+EOF
+# The window: notes the code's length (never the code) and its arguments;
+# it "closes" when the test leaves a winclose file
+cat > "$t/window" <<'EOF'
+#!/bin/bash
+printf 'window len=%s valid=%s args=%s\n' "${#OMAMOBILE_LINK_CODE}" "$OMAMOBILE_LINK_VALID_S" "$*" >> "$AGT/window.log"
+printf '%s\n' "$OMAMOBILE_LINK_CODE" > "$AGT/window.code"
+for _ in $(seq 200); do [[ -e $AGT/winclose ]] && { rm -f "$AGT/winclose"; exit 0; }; sleep 0.05; done
+EOF
+printf '#!/bin/bash\necho "close $*" >> "$AGT/notify.log"\n' > "$t/close"
+chmod +x "$t/notify" "$t/window" "$t/close"
+# The daemon's side: a script of lines to send and lines to wait for
+cat > "$t/standin.py" <<'EOF'
+import os, socket, sys, time
+path, script, out = sys.argv[1], sys.argv[2], sys.argv[3]
+srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+srv.bind(path); srv.listen(1)
+c, _ = srv.accept(); c.settimeout(10)
+got = b""
+with open(out, "w") as log:
+    for step in script.split(";"):
+        kind, _, text = step.partition(" ")
+        if kind == "say":
+            c.sendall(text.encode() + b"\n")
+        elif kind == "want":
+            while (text.encode() + b"\n") not in got:
+                got += c.recv(100)
+            got = got.replace(text.encode() + b"\n", b"", 1)
+            log.write("got " + text + "\n"); log.flush()
+        elif kind == "do":
+            open(os.path.join(os.environ["AGT"], text), "w").close()
+        elif kind == "sleep":
+            time.sleep(float(text))
+EOF
+agent_run() { AGT=$t OMAMOBILE_LINK_ROOT=$A OMAMOBILE_LINK_NOTIFY=$t/notify OMAMOBILE_LINK_CLOSE=$t/close \
+  OMAMOBILE_LINK_WINDOW="$t/window --a-flag" OMAMOBILE_LINK_RETRY_S=0.1 OMAMOBILE_LINK_REPEAT_S=0.5 XDG_STATE_HOME=$A/state \
+  timeout 20 python3 -I "$AG" > "$t/agent.out" 2>&1; }
+: > "$A/etc/omamobile/install-link"
+script="say open 3 600;do tap;want show;say code 123456 600;sleep 0.5;do winclose;want hide;say locked;sleep 0.3;say paired;sleep 0.3;say closed 2"
+AGT=$t python3 -I "$t/standin.py" "$A/run/omamobile-install-link/agent" "$script" "$t/standin.log" & sp=$!; pids+=("$sp")
+for _ in $(seq 100); do [[ -S $A/run/omamobile-install-link/agent ]] && break; sleep 0.05; done
+agent_run || { cat "$t/agent.out"; fail "the agent ends when the link closes for the boot"; }
+wait "$sp" || fail "the stand-in daemon's script ran to its end"
+grep -qx 'got show' "$t/standin.log" && grep -qx 'got hide' "$t/standin.log" || fail "a tap sends show; the window's close sends hide"
+grep -c 'Setup is not finished. Tap to continue with the installer on your computer.' "$t/notify.log" >/dev/null || fail "the notice says setup is not finished"
+grep -- '--action=default=Continue --wait' "$t/notify.log" | grep -c 'Setup is not finished' >/dev/null || fail "the notice can be tapped"
+grep -c 'Too many wrong codes. Tap to show a new code.' "$t/notify.log" >/dev/null || fail "locked: the notice says so"
+grep -qx "close 7" "$t/notify.log" || { cat "$t/notify.log" "$t/agent.out" "$t/standin.log"; fail "paired: the notice is withdrawn"; }
+grep -c 'Restart the phone to continue (2 restarts left).' "$t/notify.log" >/dev/null || fail "closed: the paused notice counts the restarts"
+grep -qx 'window len=6 valid=600 args=--a-flag' "$t/window.log" && [[ $(cat "$t/window.code") == 123456 ]] ||
+  fail "the code reaches the window, in its environment"
+! grep -rc 123456 "$t/notify.log" "$t/window.log" "$t/agent.out" "$A/state" >/dev/null 2>&1 || fail "the code is in no notice, no argument, no log line"
+pass "the agent: the notice, a tap, the code only in the window's environment, locked, paired, paused"
+
+# An end that left something to finish: the notice at three logins, then none
+rm -f "$A/etc/omamobile/install-link" "$t/notify.log"
+echo "expired backup firmware" > "$A/var/lib/omamobile/install-link/done"
+for i in 1 2 3 4; do agent_run || fail "the agent after an end, login $i"; done
+[[ $(grep -c 'Setup was not finished' "$t/notify.log") == 3 ]] || fail "expired: the notice at three logins, not a fourth"
+grep -c 'Not set up: the radio backup, Google.s files' "$t/notify.log" >/dev/null || fail "the notice names what is missing, in words"
+grep -c 'sudo omamobile-install-link reopen' "$t/notify.log" >/dev/null || fail "the notice says how to finish"
+echo "expired cameras" > "$A/var/lib/omamobile/install-link/done"; : > "$t/notify.log"
+agent_run; [[ $(grep -c 'Setup was not finished' "$t/notify.log") == 1 ]] || fail "another end: the count starts again"
+for reason in finished not-first-start; do
+  echo "$reason" > "$A/var/lib/omamobile/install-link/done"; : > "$t/notify.log"
+  agent_run; [[ ! -s $t/notify.log ]] || fail "$reason: no notice"
+done
+pass "after an unfinished end: the notice at three logins; none after finished or not-first-start"
+
+# --- With the pinned source: the gadget script ---------------------------------
+if [[ -n $SRC ]]; then
+  cmp -s "$S/usr/lib/omamobile-install-link/omamobile-link-gadget" "$SRC/linkd/gadget/omamobile-link-gadget" ||
+    fail "the shipped gadget script is the pinned source's"
+  # The installer's own fake-configfs test, run beside the shipped copy
+  g=$t/gadget; mkdir -p "$g"
+  cp "$SRC/linkd/gadget/test" "$g/test"
+  cp "$S/usr/lib/omamobile-install-link/omamobile-link-gadget" "$g/"
+  out=$(bash "$g/test" 2>&1) || { echo "$out"; fail "the gadget script on the installer's fake configfs"; }
+  checks=$(grep -c '^ok - ' <<<"$out")
+  grep -c '^not ok' <<<"$out" >/dev/null && { echo "$out"; fail "the gadget script on the installer's fake configfs"; }
+  grep -qx 'ok - add: the link beside NCM and ACM, bound again' <<<"$out" || fail "the fake test checks the link beside NCM and ACM"
+  pass "the gadget script on the installer's fake configfs: $checks checks, the link beside NCM and ACM"
+  # That fake composes the gadget as the initramfs does (NCM, then ACM)
+  if [[ -n $REPO ]]; then
+    grep -qE 'mkdir -p \$g/functions/ncm\.usb0 \$g/functions/acm\.GS0' "$REPO/initramfs/init" &&
+      grep -qF 'echo fake.udc' "$g/test" && grep -qF 'functions/ncm.usb0" "$G/functions/acm.GS0' "$g/test" ||
+      fail "the initramfs's gadget (ncm.usb0, acm.GS0) is the one the fake test adds the link beside"
+    pass "the initramfs makes NCM and ACM, the gadget the link is added beside"
+  fi
+else
+  skip "the gadget script's tests need the pinned source (./fetch-source)"
+fi
+
+# --- With the daemon: the marker's rules on scratch roots ---------------------
+if [[ -n $BIN && -x $BIN/omamobile-linkd ]]; then
+  D=$BIN/omamobile-linkd C=$BIN/omamobile-install-link
+  BOOT=11111111-2222-3333-4444-555555555555
+  me=$(id -u)
+  # A freshly installed phone, as the daemon's own tests make one: the
+  # marker, the descriptor, a serial in bootconfig, stand-ins for systemctl
+  # and the gadget script
+  phone() {
+    local r=$t/p/$1
+    rm -rf "${r:?}"; mkdir -p "$r/etc/omamobile" "$r/usr/share/omamobile/rootfs" "$r/proc/sys/kernel/random" \
+      "$r/usr/bin" "$r/usr/lib/omamobile-install-link" "$r/fake-systemd"
+    : > "$r/etc/omamobile/install-link"
+    printf 'CODENAME=cheetah\nNV_PARTS="efs"\n' > "$r/usr/share/omamobile/device.conf"
+    printf '# Omarchy Mobile root image\nversion: 2026.01.01\n' > "$r/usr/share/omamobile/rootfs/MANIFEST"
+    printf 'androidboot.serialno = "SERIAL-PLACEHOLDER"\n' > "$r/proc/bootconfig"
+    echo "$BOOT" > "$r/proc/sys/kernel/random/boot_id"
+    echo 7.0.0-test > "$r/proc/sys/kernel/osrelease"
+    printf 'root:x:0:0::/root:/bin/bash\n' > "$r/etc/passwd"
+    printf '#!/bin/bash\necho "$*" >> "$OMAMOBILE_LINK_ROOT/systemctl.log"\n[[ $1 == show ]] && echo inactive\nexit 0\n' > "$r/usr/bin/systemctl"
+    printf '#!/bin/bash\necho "$1" >> "$OMAMOBILE_LINK_ROOT/gadget.log"\n' > "$r/usr/lib/omamobile-install-link/omamobile-link-gadget"
+    chmod +x "$r/usr/bin/systemctl" "$r/usr/lib/omamobile-install-link/omamobile-link-gadget"
+    echo "$r"
+  }
+  # Start the daemon on root $1 with a socket pair for the link; "running"
+  # if it is still up after $2 seconds (then stopped), else its exit status
+  start() {
+    python3 -I - "$1" "$D" "${2:-1.5}" <<'EOF'
+import socket, subprocess, sys, time
+root, daemon, wait_s = sys.argv[1], sys.argv[2], float(sys.argv[3])
+a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+with open(root + "/daemon.log", "ab") as log:
+    p = subprocess.Popen([daemon, "--root", root, "--transport", "stdio"], stdin=b, stdout=log, stderr=log)
+b.close()
+end = time.time() + wait_s
+while time.time() < end and p.poll() is None:
+    time.sleep(0.05)
+if p.poll() is None:
+    p.terminate(); p.wait(); print("running")
+else:
+    print("exit %d" % p.returncode)
+EOF
+  }
+  # A first start (stage waiting, no account), then what first boot leaves:
+  # the account (this user's uid, which the agent's socket checks), its
+  # user file and its done
+  first_boot_made_the_account() {
+    start "$1" 0.8 > /dev/null
+    echo "owner:x:$me:$me::/home/owner:/bin/bash" >> "$1/etc/passwd"
+    mkdir -p "$1/var/lib/omamobile/firstboot"
+    : > "$1/var/lib/omamobile/firstboot/done"; echo owner > "$1/var/lib/omamobile/firstboot/user"
+  }
+  state_of() { sed -n 's/.*"stage":"\([a-z-]*\)".*/\1/p' "$1/var/lib/omamobile/install-link/state" 2>/dev/null; }
+  ended_as() {   # root reason: done, the marker gone, no gadget change
+    [[ $(cat "$1/var/lib/omamobile/install-link/done" 2>/dev/null) == "$2"* && ! -e $1/etc/omamobile/install-link && ! -s $1/gadget.log ]]
+  }
+
+  r=$(phone none); rm "$r/etc/omamobile/install-link"
+  [[ $(start "$r") == "exit 0" && ! -e $r/var/lib/omamobile/install-link && ! -e $r/gadget.log ]] ||
+    fail "no marker: the daemon does nothing and writes nothing"
+  r=$(phone first)
+  [[ $(start "$r") == running && $(state_of "$r") == waiting && $(head -1 "$r/gadget.log") == add ]] ||
+    { cat "$r/daemon.log"; fail "the marker on a fresh phone: the state file (waiting), then the gadget change"; }
+  r=$(phone placeholder)
+  placeholder /etc/omamobile/firstboot.conf > "$r/etc/omamobile/firstboot.conf"
+  placeholder /etc/omamobile/boot-update.conf > "$r/etc/omamobile/boot-update.conf"
+  [[ $(start "$r") == running && $(state_of "$r") == waiting ]] ||
+    { cat "$r/daemon.log"; fail "the image's unfilled placeholder is no firstboot.conf: a first start (patches/0001)"; }
+  r=$(phone filled); cp "$t/filled" "$r/etc/omamobile/firstboot.conf"
+  [[ $(start "$r") == "exit 0" ]] && ended_as "$r" not-first-start && [[ -f $r/etc/omamobile/firstboot.conf ]] ||
+    fail "a filled firstboot.conf (tools/install-phone's): not-first-start, the file left alone, no gadget change"
+  r=$(phone account); echo "someone:x:1000:1000::/home/someone:/bin/bash" >> "$r/etc/passwd"
+  [[ $(start "$r") == "exit 0" ]] && ended_as "$r" not-first-start || fail "an account and no state file: not-first-start"
+  r=$(phone fbdone); mkdir -p "$r/var/lib/omamobile/firstboot"; : > "$r/var/lib/omamobile/firstboot/done"
+  [[ $(start "$r") == "exit 0" ]] && ended_as "$r" not-first-start || fail "first boot's done and no state file: not-first-start"
+  for reason in finished expired not-first-start state-unreadable inconsistent; do
+    r=$(phone "done-$reason"); mkdir -p "$r/var/lib/omamobile/install-link"; echo "$reason" > "$r/var/lib/omamobile/install-link/done"
+    [[ $(start "$r") == "exit 0" ]] && ended_as "$r" "$reason" || fail "done ($reason) with the marker: the marker deleted, nothing offered"
+  done
+  pass "the marker's rules: none, a first start, the placeholder, a filled file, an account, first boot's done, done for each reason"
+
+  # status and reopen (a scratch root lets reopen run without root)
+  r=$(phone status); rm "$r/etc/omamobile/install-link"
+  [[ $("$C" status --root "$r") == "link: none" ]] || fail "status: no marker, no link"
+  mkdir -p "$r/var/lib/omamobile/install-link"; echo "expired backup" > "$r/var/lib/omamobile/install-link/done"
+  out=$("$C" status --root "$r")
+  grep -qx 'reason: expired' <<<"$out" && grep -qx 'missing: backup' <<<"$out" && grep -qF 'sudo omamobile-install-link reopen' <<<"$out" ||
+    fail "status after expired: the reason, what is missing and how to finish"
+  r=$(phone reopen); first_boot_made_the_account "$r"
+  # A link that ran its three setup boots at stage firstboot-done and expired
+  for i in 1 2 3 4; do
+    sed -i "s/.*/$(printf '%08d' "$i")-2222-3333-4444-555555555555/" "$r/proc/sys/kernel/random/boot_id"
+    start "$r" 0.8 > /dev/null
+  done
+  if [[ -f $r/var/lib/omamobile/install-link/done ]]; then
+    [[ $(cut -d' ' -f1 "$r/var/lib/omamobile/install-link/done") == expired ]] || fail "four boots at firstboot-done: expired"
+    "$C" reopen --root "$r" > /dev/null || fail "reopen after expired"
+    [[ -e $r/etc/omamobile/install-link && ! -e $r/var/lib/omamobile/install-link/done ]] || fail "reopen: the marker back, done gone"
+    : > "$r/gadget.log"
+    [[ $(start "$r") == "exit 0" && ! -s $r/gadget.log ]] || fail "a start in the boot reopen ran in offers nothing (§18 E5)"
+    echo 99999999-2222-3333-4444-555555555555 > "$r/proc/sys/kernel/random/boot_id"
+    [[ $(start "$r") == running && $(head -1 "$r/gadget.log") == add ]] || fail "the next boot after reopen: the link is offered"
+    pass "status and reopen: none, expired, reopened for the next boot only"
+  else
+    skip "the budget did not run out on this scratch root in four boots: reopen not checked here"
+  fi
+
+  # The agent with the real daemon: an account, stage firstboot-done
+  r=$(phone paired); first_boot_made_the_account "$r"
+  echo 22222222-2222-3333-4444-555555555555 > "$r/proc/sys/kernel/random/boot_id"
+  rm -rf "${r:?}/run"; : > "$t/notify.log"; rm -f "$t/window.code"
+  python3 -I - "$r" "$D" <<'EOF' & dp=$!
+import socket, subprocess, sys, time
+root, daemon = sys.argv[1], sys.argv[2]
+a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+with open(root + "/daemon.log", "ab") as log:
+    p = subprocess.Popen([daemon, "--root", root, "--transport", "stdio"], stdin=b, stdout=log, stderr=log)
+b.close()
+time.sleep(12)
+p.terminate(); p.wait()
+EOF
+  pids+=("$dp")
+  for _ in $(seq 100); do [[ -S $r/run/omamobile-install-link/agent ]] && break; sleep 0.05; done
+  : > "$t/tap"
+  ( AGT=$t OMAMOBILE_LINK_ROOT=$r OMAMOBILE_LINK_NOTIFY=$t/notify OMAMOBILE_LINK_CLOSE=$t/close OMAMOBILE_LINK_WINDOW=$t/window \
+      OMAMOBILE_LINK_RETRY_S=0.1 XDG_STATE_HOME=$t/pstate timeout 6 python3 -I "$AG" > "$t/agent2.out" 2>&1 || true )
+  kill "$dp" 2>/dev/null || true; wait "$dp" 2>/dev/null || true
+  [[ $(state_of "$r") == firstboot-done ]] || { cat "$r/daemon.log"; fail "the daemon's state is firstboot-done"; }
+  grep -c 'Setup is not finished' "$t/notify.log" >/dev/null || { cat "$t/agent2.out" "$r/daemon.log"; fail "the real daemon opens the agent's notice"; }
+  code=$(cat "$t/window.code" 2>/dev/null || true)
+  [[ $code =~ ^[0-9]{6}$ ]] || { cat "$t/agent2.out"; fail "a tap: the real daemon's code reaches the window"; }
+  ! grep -rc "$code" "$r/daemon.log" "$t/notify.log" "$t/agent2.out" >/dev/null 2>&1 || fail "the code is in no journal line, notice or agent line"
+  pass "the agent with the real daemon: the notice, a tap, a six-digit code in the window and nowhere else"
+else
+  skip "the marker's rules, status, reopen and the paired agent need the daemon (OMAMOBILE_LINK_BIN, or cargo and the source)"
+fi
+
+echo "1..$n"

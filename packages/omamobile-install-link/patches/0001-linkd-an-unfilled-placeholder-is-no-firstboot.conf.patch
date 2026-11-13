@@ -1,0 +1,142 @@
+Subject: [PATCH] linkd: an unfilled answers placeholder is no firstboot.conf
+
+Against derekross/omamobile-installer 53bd2f426455 (branch linkd-ffs, PR #15),
+for omarchy-mobile's package omamobile-install-link until the daemon has it
+itself (docs/INSTALL-LINK-PLAN.md §19, "for the daemon to change").
+
+A release root image carries /etc/omamobile/firstboot.conf and
+/etc/omamobile/boot-update.conf as placeholders: 4096 bytes of comment lines
+that the desktop installer and the web page fill in place as they stream
+the image (omarchy-mobile rootfs/placeholders, RELEASES §6.1). The plan's
+decision of 2026-11-13 says "no firstboot.conf" in the start-up rules means
+no file or the image's unfilled placeholder. The daemon tested existence
+only, so on a link image whose placeholder nobody filled the first start
+ended the link as `not-first-start` (§6.5 row 3) before it offered anything,
+and a placeholder boot-update.conf counted as present, so the step that
+writes it "if missing" left AUTO_WRITE off on a phone the link installed.
+
+A file holds answers when it has a line that is neither blank nor a
+comment, as omamobile-firstboot (0.1.6) and omamobile-boot-update read it.
+One that exists and cannot be read counts as holding answers: the start-up
+rules never take a phone for a first start on a guess.
+
+tests/rows.rs: a first start with both placeholders is offered; a filled
+placeholder is still not a first start; at stage `firstboot` a placeholder
+boot-update.conf is written as a missing one is. The first fails without
+the change to found.rs.
+
+diff --git a/linkd/src/daemon.rs b/linkd/src/daemon.rs
+--- a/linkd/src/daemon.rs
++++ b/linkd/src/daemon.rs
+@@ -543,7 +543,7 @@
+                 // A daemon killed between placing the answers and starting
+                 // the unit: nothing else starts it before the next boot
+                 if self.programs.unit_state(FIRSTBOOT_UNIT) == Some(UnitState::Inactive)
+-                    && self.root.firstboot_conf().exists()
++                    && found::holds_answers(&self.root.firstboot_conf())
+                 {
+                     if let Err(e) = self.programs.start_unit(FIRSTBOOT_UNIT) {
+                         log(&format!("first boot's unit: {e}"));
+@@ -682,7 +682,7 @@
+                             // It deletes firstboot.conf, then writes `done`:
+                             // between the two, the account is the witness
+                             Some(UnitState::Inactive)
+-                                if !root.firstboot_conf().exists()
++                                if !found::holds_answers(&root.firstboot_conf())
+                                     && found::firstboot_uid(&root).is_some() =>
+                             {
+                                 Some(Vec::new())
+diff --git a/linkd/src/found.rs b/linkd/src/found.rs
+--- a/linkd/src/found.rs
++++ b/linkd/src/found.rs
+@@ -20,6 +20,25 @@
+     fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+ }
+ 
++/// Whether a file of the owner's answers (`firstboot.conf`,
++/// `boot-update.conf`) holds any: a line that is neither blank nor a
++/// comment. A release image carries both as placeholders of comments only
++/// (omarchy-mobile's `rootfs/placeholders`, RELEASES §6.1), which an
++/// installer that streams the image fills in place; one left as it is
++/// counts as no file at all, as `omamobile-firstboot` and
++/// `omamobile-boot-update` read it (INSTALL-LINK-PLAN, the 2026-11-13
++/// decision). A file that cannot be read counts as one with answers: the
++/// start-up rules never take a phone for a first start on a guess.
++pub fn holds_answers(path: &Path) -> bool {
++    match fs::read(path) {
++        Ok(bytes) => String::from_utf8_lossy(&bytes).lines().any(|l| {
++            let t = l.trim();
++            !t.is_empty() && !t.starts_with('#')
++        }),
++        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
++    }
++}
++
+ /// This boot's name: the kernel's boot id. Empty when it cannot be read.
+ pub fn boot_id(root: &Root) -> String {
+     read_trimmed(&root.boot_id()).unwrap_or_default()
+@@ -206,11 +225,11 @@
+         done: root.done().exists(),
+         marker: root.marker().exists(),
+         state: StateFile::read(state.as_deref()),
+-        firstboot_conf: root.firstboot_conf().exists(),
++        firstboot_conf: holds_answers(&root.firstboot_conf()),
+         firstboot_done: root.firstboot_done().exists(),
+         account: account(root),
+         firstboot_unit,
+-        boot_update_conf: root.boot_update_conf().exists(),
++        boot_update_conf: holds_answers(&root.boot_update_conf()),
+         image_len: fs::metadata(root.image()).ok().map(|m| m.len()),
+         pending_sums: root.pending_sums().exists(),
+         provision_unit: programs.unit_state(PROVISION_UNIT) == Some(UnitState::Running),
+diff --git a/linkd/tests/rows.rs b/linkd/tests/rows.rs
+--- a/linkd/tests/rows.rs
++++ b/linkd/tests/rows.rs
+@@ -115,6 +115,47 @@
+     }
+ }
+ 
++/// The release image's placeholders (omarchy-mobile `rootfs/placeholders`):
++/// comment lines and a last comment line of spaces, 4096 bytes. Left as
++/// they are, they are no `firstboot.conf` and no `boot-update.conf`.
++fn placeholder(path: &str) -> Vec<u8> {
++    let mut b = format!(
++        "# Omarchy Mobile: the place for {path}, kept by the release image.\n\
++         # Left as it is, it holds no answers.\n"
++    )
++    .into_bytes();
++    b.push(b'#');
++    b.resize(4095, b' ');
++    b.push(b'\n');
++    b
++}
++
++#[test]
++fn row_2_an_unfilled_placeholder_is_no_firstboot_conf() {
++    let p = Phone::new();
++    p.write("/etc/omamobile/firstboot.conf", &placeholder("/etc/omamobile/firstboot.conf"));
++    p.write("/etc/omamobile/boot-update.conf", &placeholder("/etc/omamobile/boot-update.conf"));
++    let s = offered(&p);
++    assert_eq!(s.stage, Persistent::default().stage, "a first start");
++    assert_eq!(p.gadget(), ["add"]);
++    // The answers taken (stage firstboot) and boot-update.conf still the
++    // image's placeholder: it is written, as when it is missing
++    let p = Phone::new();
++    p.write("/etc/omamobile/firstboot.conf", b"USERNAME=owner\n");
++    p.write("/etc/omamobile/boot-update.conf", &placeholder("/etc/omamobile/boot-update.conf"));
++    p.state_now(|s| s.stage = Stage::Firstboot);
++    assert_eq!(offered(&p).stage, Stage::Firstboot);
++    assert!(p
++        .read("/etc/omamobile/boot-update.conf")
++        .is_some_and(|t| t.ends_with("AUTO_WRITE=yes\n")));
++    // A filled one is the owner's answers: not a first start of the link's
++    let p = Phone::new();
++    let mut filled = b"USERNAME=owner\n".to_vec();
++    filled.extend_from_slice(&placeholder("/etc/omamobile/firstboot.conf")[15..]);
++    p.write("/etc/omamobile/firstboot.conf", &filled);
++    ended(&p, "not-first-start");
++}
++
+ #[test]
+ fn rows_4_and_5_a_state_file_that_cannot_be_read() {
+     for bytes in [

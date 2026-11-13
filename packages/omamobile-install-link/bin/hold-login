@@ -1,0 +1,38 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-install-link-hold.service's one job: return only when the login
+# screen may come (docs/INSTALL-LINK-PLAN.md §3.3). That is when any of:
+#   - first boot made the account (its `done`): from stage firstboot-done on
+#     the display manager owns the screen
+#   - the link ended (its `done`), or the marker is gone
+#   - the daemon has not been running for 15 polls in a row (30 s):
+#     stopped, failed, or never started. A restart that systemd has queued
+#     (auto-restart) counts as running. A phone whose link cannot run is
+#     never left without a login screen for it
+# At stage firstboot-failed first boot has no `done`, so the screen stays
+# held: the code stays on the first-start screen (§2.2, §17 P3).
+#
+# It reads files and `systemctl show`; it writes nothing and changes nothing.
+# Tests point it elsewhere: OMAMOBILE_LINK_ROOT (a scratch root),
+# HOLD_SYSTEMCTL (a stand-in), HOLD_POLL_S (2), HOLD_GONE_POLLS (15).
+set -uo pipefail
+R=${OMAMOBILE_LINK_ROOT:-}
+systemctl=${HOLD_SYSTEMCTL:-systemctl}
+poll=${HOLD_POLL_S:-2}
+gone_polls=${HOLD_GONE_POLLS:-15}
+unit=omamobile-install-link.service
+gone=0
+say() { echo "hold-login: $*"; }
+while :; do
+  if [[ ! -e $R/etc/omamobile/install-link ]]; then say "no marker: the login screen may come"; exit 0; fi
+  if [[ -e $R/var/lib/omamobile/firstboot/done ]]; then say "first boot made the account"; exit 0; fi
+  if [[ -e $R/var/lib/omamobile/install-link/done ]]; then say "the link has ended"; exit 0; fi
+  state=$("$systemctl" show -P ActiveState "$unit" 2>/dev/null) || state=unknown
+  sub=$("$systemctl" show -P SubState "$unit" 2>/dev/null) || sub=unknown
+  case $state/$sub in
+    active/* | activating/* | reloading/* | */auto-restart) gone=0 ;;
+    *) gone=$((gone + 1)) ;;
+  esac
+  if ((gone >= gone_polls)); then say "the link's daemon is not running ($state, $sub): the login screen may come"; exit 0; fi
+  sleep "$poll"
+done
