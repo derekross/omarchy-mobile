@@ -32,6 +32,7 @@ Decisions this design implements and does not reopen:
 | --- | --- |
 | 2026-11-09 (D1) | Provisioning happens on the phone. The computer hands Google's factory image over the install link at first boot; the phone checks and extracts it. |
 | 2026-11-12 | The owner's answers also go over the install link at first start. The installer never edits an image: what is flashed is byte for byte what the release signed. |
+| 2026-11-13 | Until the link exists, the desktop installer and the web page put the answers into placeholders the release image keeps for them ([RELEASES](RELEASES.md) §6.1): the bytes they change are ones the signed manifest names, and only after those bytes match it. When the link takes the answers over, "no `firstboot.conf`" in the checks below means no file or the image's unfilled placeholder (`omamobile-firstboot --check` says "no answers"). |
 | 2026-11-12 (D2, re-decided) | The computer downloads the factory image from Google after the owner accepts Google's terms in the installer. The project hosts none of Google's files. |
 | Standing | Linux never writes the modem's NV partitions. Only slot B and `userdata` are ours. The radio backup is read-only, holds the IMEI and never leaves the owner's computer. The installer never sends the unlock command. Nothing identifying is committed. |
 

@@ -16,6 +16,9 @@ pass() { printf 'ok - %s\n' "$1"; }
 # Scratch space beside the image: it holds a full decompressed copy
 t=$(mktemp -d "$(dirname "$(readlink -f "$img")")/.rootfs-smoke.XXXXXX"); trap 'chmod -R u+rwX "$t" 2>/dev/null; rm -rf "$t"' EXIT
 
+placeholders=$(dirname -- "$(readlink -f "${BASH_SOURCE[0]}")")/../rootfs/placeholders
+beside=""
+[[ $img != *.img.zst ]] || beside=${img%.img.zst}.MANIFEST
 if [[ $img == *.zst ]]; then
   if [[ -f $img.sha256 ]]; then
     (cd "$(dirname "$img")" && sha256sum -c --quiet "$(basename "$img").sha256") || fail "checksum of $img"
@@ -64,7 +67,19 @@ pass "[omamobile] first in pacman.conf, channel $channel, its repository in the 
 
 exists /usr/bin/omamobile-firstboot || fail "omamobile-firstboot installed"
 exists /usr/lib/systemd/system/multi-user.target.wants/omamobile-firstboot.service || fail "the first-boot unit is enabled"
-exists /etc/omamobile/firstboot.conf && fail "no firstboot.conf in the image (the installer writes it)"
+# firstboot.conf and boot-update.conf: absent (an image from before the
+# placeholders) or exactly the placeholder, holding no answers; and where the
+# MANIFEST beside the image says they are, as rootfs/placeholders finds them
+placeholder() {
+  exists "$1" || return 0
+  cmp -s <(cat_ "$1") <(bash "$placeholders" marker "$1")
+}
+placeholder /etc/omamobile/firstboot.conf || fail "no answers in the image: firstboot.conf is the placeholder (the installer fills it)"
+if [[ -n $beside && -f $beside ]] && grep -c '^answers placeholder: ' "$beside" >/dev/null; then
+  [[ $(grep '^answers placeholder: ' "$beside") == "$(bash "$placeholders" locate "$img")" ]] ||
+    fail "the MANIFEST's answers placeholders are where the image has them"
+  pass "the answers placeholders are where the MANIFEST says"
+fi
 for unit in sshd NetworkManager systemd-networkd sddm; do
   d "ls -l /etc/systemd/system/multi-user.target.wants" | grep -c "$unit.service" >/dev/null ||
     d "ls -l /etc/systemd/system" | grep -c "display-manager.service" >/dev/null || fail "$unit enabled"
@@ -83,7 +98,7 @@ pass "MANIFEST, device package, modules for $release"
 if exists /usr/share/omamobile/linux/kernel.release; then
   [[ $(cat_ /usr/share/omamobile/linux/kernel.release) == "$release" ]] || fail "linux-omamobile is the MANIFEST's release $release"
   exists /usr/bin/omamobile-boot-update || fail "omamobile-boot-update comes with linux-omamobile"
-  exists /etc/omamobile/boot-update.conf && fail "no boot-update.conf in the image (the installer writes it)"
+  placeholder /etc/omamobile/boot-update.conf || fail "no AUTO_WRITE in the image: boot-update.conf is the placeholder (the installer fills it)"
   pass "kernel package linux-omamobile ($release) and omamobile-boot-update, hook off in the image"
 fi
 

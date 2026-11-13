@@ -99,8 +99,10 @@ good | sed 's/^PASSWORD_HASH=.*/PASSWORD_HASH=hunter2/' | refuse "a plain-text p
 good | sed 's/^PASSWORD_HASH=.*/PASSWORD_HASH=$1$abc$def/' | refuse "an md5-crypt hash"
 good | sed 's/^HOSTNAME=.*/HOSTNAME=-bad/' | refuse "a bad host name"
 good | sed 's/^TIMEZONE=.*/TIMEZONE=..\/..\/etc\/passwd/' | refuse "a time zone outside zoneinfo"
-good | sed 's/^TIMEZONE=.*/TIMEZONE=Mars\/Base/' | refuse "an unknown time zone"
 good | sed 's/^SSH_KEY=.*/SSH_KEY=not a key/' | refuse "a bad SSH key"
+good | sed "s/^SSH_KEY=.*/SSH_KEY=no-pty $KEY/" | refuse "an SSH key with options"
+out=$(good | sed "s/^SSH_KEY=.*/SSH_KEY=no-pty $KEY/" > "$t/badkey.conf"; check "$t/badkey.conf") && fail "refuses an SSH key with options"
+grep -qF "${KEY:12:20}" <<<"$out" && fail "a refused key is not repeated in the message: $out"
 good | sed 's/^WIFI_PSK=.*/WIFI_PSK=short/' | refuse "a short passphrase"
 good | sed '/^WIFI_SSID=/d' | refuse "a passphrase without a network"
 good | sed 's/^CREDENTIAL=.*/CREDENTIAL=pattern/' | refuse "an unknown credential type"
@@ -110,6 +112,30 @@ good | sed 's/^FULL_NAME=.*/FULL_NAME=a:b/' | refuse "a colon in the full name"
 { good; echo 'not a line'; } | refuse "a line that isn't KEY=value"
 { good; printf 'EMAIL=a@b\x07c\n'; } | sed '/^EMAIL=alice/d' | refuse "a control character"
 pass "--check refuses bad confs"
+
+# A zone this phone doesn't have: UTC, with a warning, never a stopped first start
+good | sed 's/^TIMEZONE=.*/TIMEZONE=Mars\/Base/' > "$t/tz.conf"
+out=$(check "$t/tz.conf") || fail "an unknown time zone falls back: $out"
+grep -q "warning: TIMEZONE 'Mars/Base'" <<<"$out" && grep -q 'time zone: UTC' <<<"$out" || fail "an unknown time zone becomes UTC, with a warning: $out"
+pass "a time zone the phone lacks becomes UTC"
+
+# The release image's placeholder (rootfs/placeholders): comments and a
+# padding line of spaces to 4096 bytes. Left as it is it holds no answers;
+# filled, the answers are read and the padding is skipped.
+placeholder() {
+  local text=$1 rem
+  rem=$((4096 - ${#text}))
+  printf '%s#%*s\n' "$text" $((rem - 2)) ''
+}
+placeholder $'# Omarchy Mobile: the place for /etc/omamobile/firstboot.conf\n' > "$t/empty.conf"
+[[ $(stat -c %s "$t/empty.conf") == 4096 ]] || fail "the test's placeholder is one block"
+out=$(check "$t/empty.conf") || fail "--check takes a placeholder: $out"
+grep -q '^no answers' <<<"$out" || fail "--check says a placeholder holds no answers: $out"
+placeholder "$(good)"$'\n' > "$t/filled.conf"
+[[ $(stat -c %s "$t/filled.conf") == 4096 ]] || fail "the filled placeholder is one block"
+out=$(check "$t/filled.conf") || fail "a filled placeholder passes: $out"
+grep -q 'user:      alice' <<<"$out" || fail "a filled placeholder's answers are read"
+pass "a placeholder holds no answers; filled, its padding is skipped"
 
 # A value is data: a $(...) in it is never run
 mark=$t/ran
@@ -153,7 +179,17 @@ echo 'touch "$R/ran-omarchy-apply-lock"' > "$O/install/config/lockscreen-pam.sh"
 echo 'touch "$R/ran-other-leaf"' > "$O/install/config/other.sh"
 run() { OMAMOBILE_FIRSTBOOT_ROOT=$R OMARCHY_PATH=$O OMAMOBILE_LOCK_PAM=$F/lock-pam PATH="$F:$PATH" bin/omamobile-firstboot > "$t/run.out" 2>&1; }
 
-good > "$R/etc/omamobile/firstboot.conf"
+# The image's placeholder, left as it is: nothing runs, and it stays
+cp "$t/empty.conf" "$R/etc/omamobile/firstboot.conf"
+run || { cat "$t/run.out"; fail "a placeholder run succeeds"; }
+[[ ! -s $CALLS ]] || fail "with the placeholder alone, nothing runs"
+grep -q 'holds no answers' "$t/run.out" || fail "a placeholder run says why it does nothing"
+cmp -s "$t/empty.conf" "$R/etc/omamobile/firstboot.conf" || fail "the placeholder is left as it is"
+[[ ! -e $R/var/lib/omamobile/firstboot/done ]] || fail "a placeholder run records no first boot"
+pass "the image's placeholder, unfilled: nothing to do"
+
+# The answers as an installer puts them in the placeholder
+cp "$t/filled.conf" "$R/etc/omamobile/firstboot.conf"
 run || { cat "$t/run.out"; fail "a run with a good conf succeeds"; }
 grep -qx 'clock-set 2000000060' "$CALLS" || fail "clock advances to the newest installed keyring"
 [[ $(head -1 "$CALLS") == 'clock-set 2000000060' ]] || fail "clock is seeded before pacman-key"
@@ -167,6 +203,10 @@ grep -qx '%wheel ALL=(ALL:ALL) ALL' "$R/etc/sudoers.d/00-omarchy-wheel" || fail 
 grep -qxF "$KEY" "$R/root/.ssh/authorized_keys" || fail "root gets the SSH key"
 grep -qxF "$KEY" "$R/home/alice/.ssh/authorized_keys" || fail "the user gets the SSH key"
 [[ $(stat -c %a "$R/home/alice/.ssh/authorized_keys") == 600 ]] || fail "authorized_keys is private"
+[[ $(stat -c %a "$R/root/.ssh/authorized_keys") == 600 && $(stat -c %a "$R/root/.ssh") == 700 ]] || fail "root's authorized_keys is private"
+grep -c "^chown -R root:root $R/root/.ssh\$" "$CALLS" >/dev/null && grep -c "^chown -R alice:alice $R/home/alice/.ssh\$" "$CALLS" >/dev/null ||
+  fail "each authorized_keys belongs to its user"
+grep -qF "${KEY:12:30}" "$R/var/log/omamobile/firstboot.log" "$t/run.out" && fail "the log never has the SSH key"
 grep -q '^ufw allow in on usb0 to any port 22 proto tcp$' "$CALLS" || fail "ufw allows SSH on usb0"
 grep -qx 'ENABLED=yes' "$R/etc/ufw/ufw.conf" || fail "ufw is on from the next boot"
 for unit in sshd.service systemd-networkd.service NetworkManager.service sddm.service ufw.service; do
