@@ -5,8 +5,9 @@
 #   tests/rootfs-smoke out/omamobile-rootfs-<device>-<version>-aarch64.img.zst   (or a raw .img)
 # Checks the label, that there is no account but a locked root, the keyrings,
 # the [omamobile] repository and its place in pacman.conf, the first-boot
-# unit, the kernel modules, the MANIFEST, and that no per-machine state,
-# per-phone data or Google file is in it.
+# unit, the kernel modules, the MANIFEST, the install link (inert without its
+# marker, and the marker only in an image built for it), and that no
+# per-machine state, per-phone data or Google file is in it.
 set -euo pipefail
 # debugfs and friends live in /sbin on Debian-like hosts
 export PATH=$PATH:/usr/sbin:/sbin
@@ -131,6 +132,42 @@ for unit in omamobile-modem omamobile-sitd omamobile-sit-data omamobile-mmd; do
   d "ls -l /etc/systemd/system/omamobile-sitd.service.wants" | grep -c "$unit\.service" >/dev/null && fail "$unit is not enabled in the image"
 done
 pass "no modem unit enabled at boot"
+
+# The install link (images from before it have no omamobile-install-link).
+# The package is in every image and does nothing without the marker; the
+# marker is only in an image built for the link (tools/build-rootfs
+# --install-link), whose MANIFEST says so, with omamobile-provision beside
+# it and the protocol the package speaks (docs/INSTALL-LINK-PLAN.md §3.3)
+link=$(sed -n 's/^install link: //p' <<<"$manifest")
+if exists /usr/lib/systemd/system/omamobile-install-link.service; then
+  for f in /usr/lib/omamobile-install-link/omamobile-linkd /usr/lib/omamobile-install-link/omamobile-link-gadget \
+           /usr/bin/omamobile-install-link /usr/lib/systemd/system/omamobile-install-link-hold.service \
+           /usr/lib/systemd/user/omamobile-install-link-agent.service /usr/share/omamobile/install-link/SOURCE; do
+    exists "$f" || fail "install link: $f"
+  done
+  for w in multi-user.target.wants graphical.target.wants; do
+    d "ls -l /etc/systemd/system/$w" | grep -c 'omamobile-install-link' >/dev/null &&
+      fail "the install link's units are not enabled in /etc/systemd (the marker decides)"
+  done
+  pass "omamobile-install-link installed, nothing of it enabled in /etc"
+fi
+case $link in
+  "protocol "*)
+    st=$(d "stat /etc/omamobile/install-link")
+    grep -c '^Inode:' <<<"$st" >/dev/null || fail "the MANIFEST says the image is for the install link ($link), but it has no marker"
+    [[ $st =~ Type:\ regular\ +Mode:\ +0?644 && $st =~ User:\ +0\ +Group:\ +0\ +(Project:\ +[0-9]+\ +)?Size:\ 0([^0-9]|$) ]] ||
+      fail "the marker is an empty file, root's, mode 0644"
+    exists /usr/lib/systemd/system/omamobile-install-link.service || fail "an image for the link has omamobile-install-link"
+    exists /usr/bin/omamobile-provision || fail "an image for the link has omamobile-provision"
+    speaks=$(cat_ /usr/share/omamobile/install-link/SOURCE | sed -n 's/^protocol: //p')
+    [[ $link == "protocol $speaks "* ]] || fail "the MANIFEST's protocol ($link) is the package's (${speaks:-none})"
+    pass "an image for the install link: the marker, protocol $speaks, omamobile-provision"
+    ;;
+  *)
+    exists /etc/omamobile/install-link && fail "no install-link marker in an image not built for the link (its MANIFEST says: ${link:-nothing})"
+    pass "no install-link marker (${link:-an image from before the link})"
+    ;;
+esac
 
 exists /etc/pacman.d/gnupg && fail "no pacman keyring (it holds a private key)"
 d "ls /etc/ssh" | grep -c ssh_host_ >/dev/null && fail "no SSH host keys"

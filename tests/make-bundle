@@ -237,3 +237,25 @@ if out=$(bundle); then fail "a build index that fails its own check stops the bu
 grep -c "factory-index check" <<<"$out" >/dev/null || fail "the refusal names the check: $out"
 [[ $(cd "$b" && sha256sum SHA256SUMS) == "$before" ]] || fail "a refused rebuild leaves the bundle as it was"
 pass "a build index that fails tools/factory-index check stops the bundle, and the earlier bundle stays"
+
+# The install link: manifest.json says install_link with its protocol only
+# for a root image built for the link (its MANIFEST's "install link:"
+# line), and an image line this tool does not know stops the bundle
+rm -f "$r/device/testdev/factory-builds.json"
+link_of() { python3 -I -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1])).get("install_link")))' "$b/manifest.json"; }
+out=$(bundle) || fail "a bundle without the link assembles: $out"
+[[ $(link_of) == null ]] || fail "an image from before the link: no install_link"
+mf=${root%.img.zst}.MANIFEST
+cp "$mf" "$t/MANIFEST.saved"
+echo 'install link: none' >> "$mf"
+out=$(bundle) || fail "a bundle of an image not for the link assembles: $out"
+[[ $(link_of) == null ]] || fail "an image not for the link: no install_link"
+cp "$t/MANIFEST.saved" "$mf"; echo 'install link: protocol 1 (marker /etc/omamobile/install-link)' >> "$mf"
+out=$(bundle) || fail "a bundle of an image for the link assembles: $out"
+[[ $(link_of) == '{"protocol": 1}' ]] || fail "an image for the link: install_link is {\"protocol\": 1} ($(link_of))"
+(cd "$b" && sha256sum -c --quiet SHA256SUMS) || fail "SHA256SUMS covers the manifest.json with install_link"
+cp "$t/MANIFEST.saved" "$mf"; echo 'install link: maybe' >> "$mf"
+if out=$(bundle); then fail "an install link line this tool does not know stops the bundle"; fi
+grep -c "install link line this tool does not know" <<<"$out" >/dev/null || fail "the refusal says why: $out"
+cp "$t/MANIFEST.saved" "$mf"
+pass "manifest.json's install_link: only for an image built for the link, with its protocol"

@@ -10,6 +10,10 @@
 # Waves libraries), omamobile-waydroid (a later goal).
 omamobile-keyring
 omamobile-firstboot
+# The install link's phone side: does nothing without the marker
+# /etc/omamobile/install-link, which only an image built with
+# tools/build-rootfs --install-link carries (docs/INSTALL-LINK-PLAN.md §3.3)
+omamobile-install-link
 omamobile-omarchy
 omamobile-shell
 # Whisper's base.en for Voxtype, so voice works with no download

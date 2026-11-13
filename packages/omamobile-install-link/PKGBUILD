@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+#
+# The install link's phone side (docs/INSTALL-LINK-PLAN.md §3.3, stage L5):
+# omamobile-linkd, omamobile-link-gadget, omamobile-install-link status|reopen,
+# the units, the login-screen hold and the session's notice. Nothing runs on
+# a phone without the marker /etc/omamobile/install-link, which only a root
+# image built for the link carries (tools/build-rootfs --install-link).
+#
+# Source: the daemon and the gadget script are the installer's
+# (github.com/derekross/omamobile-installer, MIT), GitHub's archive of the
+# commit in source.conf, pinned by its SHA-256; patches/ applies on top until
+# the installer has them. cargo fetches the crates (Cargo.lock pinned) in
+# prepare() and builds offline. Everything else is this directory's.
+pkgname=omamobile-install-link
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omarchy Mobile install link: the phone finishes its setup with the installer, over USB"
+arch=(aarch64)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+# systemd: the units, systemctl, systemd-run, systemd-inhibit; util-linux:
+# mount, umount, mountpoint (the gadget script); python: the session agent;
+# libnotify: its notice (notify-send); glib2: gdbus, which closes it.
+depends=(gcc-libs glibc bash coreutils util-linux systemd python libnotify glib2)
+optdepends=('quickshell: the window that shows the pairing code in the session'
+            'omamobile-provision: the on-phone provisioning the link runs')
+makedepends=(cargo patch)
+# test/all: the agent and the stand-in daemons are Python; systemd-analyze
+checkdepends=(python systemd)
+options=('!debug' '!lto')
+_commit=$(sed -n 's/^COMMIT=//p' "${startdir:-.}/source.conf")
+source=("omamobile-installer-$_commit.tar.gz::https://github.com/derekross/omamobile-installer/archive/$_commit.tar.gz")
+sha256sums=("$(sed -n 's/^SHA256=//p' "${startdir:-.}/source.conf")")
+
+prepare() {
+  cd "omamobile-installer-$_commit"
+  local p
+  for p in "$startdir"/patches/*.patch; do
+    patch -N -p1 < "$p"
+  done
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "omamobile-installer-$_commit"
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release -p omamobile-linkd
+}
+
+check() {
+  cd "omamobile-installer-$_commit"
+  export CARGO_TARGET_DIR=target
+  # The crate and the daemon on this machine's own target (the phone's, in
+  # the aarch64 build): golden frames, both machines, the start-up rows,
+  # the kill test, the gadget script on its fake configfs (stage L3's tests
+  # skip themselves without LINKD_L3)
+  cargo test --frozen -p omamobile-link -p omamobile-linkd
+  # This package's own tests, on the binaries just built
+  OMAMOBILE_LINK_SRC=$PWD OMAMOBILE_LINK_BIN=$PWD/target/release "$startdir/test/all"
+}
+
+package() {
+  cd "omamobile-installer-$_commit"
+  "$startdir/install" "$pkgdir" "$PWD" "$PWD/target/release"
+}

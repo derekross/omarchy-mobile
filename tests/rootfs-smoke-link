@@ -1,0 +1,101 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tests/rootfs-smoke on small made-up root images (mkfs.ext4 -d, no root, no
+# loop mount): the install link's part of it. An image from before the link
+# and one with the package and no marker pass; one built for the link (the
+# marker, its MANIFEST line, omamobile-provision) passes; a marker without
+# the line, the line without the marker, the marker without
+# omamobile-provision, a MANIFEST protocol the package doesn't speak, a
+# marker that isn't an empty root file, and a unit of the link's enabled in
+# /etc are each refused. The rest of each image is the least that
+# tests/rootfs-smoke takes for a root image.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+export PATH=$PATH:/usr/sbin:/sbin
+for tool in mkfs.ext4 debugfs dumpe2fs; do command -v "$tool" >/dev/null || { echo "ok - # skip: no $tool"; exit 0; }; done
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+
+# The least of a root image that tests/rootfs-smoke accepts
+base() {
+  local r=$1
+  rm -rf "$r"; mkdir -p "$r"
+  cd "$r"
+  mkdir -p etc/pacman.d etc/systemd/system/multi-user.target.wants usr/share/pacman/keyrings usr/bin \
+    usr/lib/systemd/system/multi-user.target.wants usr/share/omamobile/rootfs usr/lib/modules/7.0.0-test \
+    var/lib/omamobile/repo/aarch64 etc/omamobile
+  printf 'root:x:0:0::/root:/bin/bash\n' > etc/passwd
+  printf 'root:!*:20000::::::\n' > etc/shadow
+  for k in omamobile omarchy archlinuxarm; do : > "usr/share/pacman/keyrings/$k.gpg"; done
+  printf '[options]\n[omamobile]\n[omarchy]\n[core]\n[extra]\n[alarm]\n[aur]\n' > etc/pacman.conf
+  printf 'Server = https://pkgs.omamobile.org/stable/$arch\n' > etc/pacman.d/omamobile-mirrorlist
+  : > var/lib/omamobile/repo/aarch64/omamobile.db
+  printf '#!/bin/bash\n' > usr/bin/omamobile-firstboot
+  : > usr/lib/systemd/system/omamobile-firstboot.service
+  ln -s ../omamobile-firstboot.service usr/lib/systemd/system/multi-user.target.wants/omamobile-firstboot.service
+  for u in sshd NetworkManager systemd-networkd sddm; do ln -s "/usr/lib/systemd/system/$u.service" "etc/systemd/system/multi-user.target.wants/$u.service"; done
+  : > usr/lib/modules/7.0.0-test/modules.dep
+  echo uninitialized > etc/machine-id
+  printf '# Omarchy Mobile root image\nversion: fixture\nomamobile channel: stable\nkernel modules: 7.0.0-test (tarball sha256 0)\n\n# packages (name version repository)\nomamobile-device-fixture 0.1-1 omamobile\n' \
+    > usr/share/omamobile/rootfs/MANIFEST
+  cd - >/dev/null
+}
+# The package's files as it installs them (enough for the smoke test)
+with_package() {
+  local r=$1
+  mkdir -p "$r/usr/lib/omamobile-install-link" "$r/usr/lib/systemd/user" "$r/usr/share/omamobile/install-link"
+  for f in omamobile-linkd omamobile-link-gadget; do printf '#!/bin/sh\n' > "$r/usr/lib/omamobile-install-link/$f"; done
+  printf '#!/bin/sh\n' > "$r/usr/bin/omamobile-install-link"
+  for u in omamobile-install-link omamobile-install-link-hold; do : > "$r/usr/lib/systemd/system/$u.service"; done
+  : > "$r/usr/lib/systemd/user/omamobile-install-link-agent.service"
+  printf 'protocol: 1\ncommit: 0000000000000000000000000000000000000000\n' > "$r/usr/share/omamobile/install-link/SOURCE"
+}
+for_link() {   # what tools/build-rootfs --install-link adds
+  local r=$1
+  with_package "$r"
+  printf '#!/bin/sh\n' > "$r/usr/bin/omamobile-provision"
+  : > "$r/etc/omamobile/install-link"; chmod 644 "$r/etc/omamobile/install-link"
+  echo 'install link: protocol 1 (marker /etc/omamobile/install-link)' >> "$r/usr/share/omamobile/rootfs/MANIFEST"
+}
+image() {   # tree -> ext4 image, every inode root's as in a real image
+  local r=$1 img=$1.img
+  rm -f "$img"
+  truncate -s 32M "$img"
+  mkfs.ext4 -q -L omamobile-root -d "$r" "$img"
+  (cd "$r" && find . -mindepth 1 -printf '%P\n') | while read -r p; do echo "sif /$p uid 0"; echo "sif /$p gid 0"; done > "$r.cmds"
+  debugfs -w -f "$r.cmds" "$img" >/dev/null 2>&1
+  echo "$img"
+}
+smoke() { tests/rootfs-smoke "$1" > "$t/smoke.log" 2>&1; }
+
+r=$t/before; base "$r"
+smoke "$(image "$r")" || { cat "$t/smoke.log"; fail "an image from before the link passes"; }
+grep -qx 'ok - no install-link marker (an image from before the link)' "$t/smoke.log" || { cat "$t/smoke.log"; fail "says it has no marker"; }
+r=$t/inert; base "$r"; with_package "$r"; echo 'install link: none' >> "$r/usr/share/omamobile/rootfs/MANIFEST"
+smoke "$(image "$r")" || { cat "$t/smoke.log"; fail "the package without the marker passes"; }
+grep -qx 'ok - omamobile-install-link installed, nothing of it enabled in /etc' "$t/smoke.log" || fail "the package is checked"
+r=$t/link; base "$r"; for_link "$r"
+smoke "$(image "$r")" || { cat "$t/smoke.log"; fail "an image for the link passes"; }
+grep -qx 'ok - an image for the install link: the marker, protocol 1, omamobile-provision' "$t/smoke.log" || { cat "$t/smoke.log"; fail "says so"; }
+pass "rootfs-smoke passes an image from before the link, one with the package alone, and one built for the link"
+
+refused() {   # name, then what in the log says why
+  smoke "$(image "$t/$1")" && { cat "$t/smoke.log"; fail "$1 is refused"; }
+  grep -c "$2" "$t/smoke.log" >/dev/null || { cat "$t/smoke.log"; fail "$1: the refusal says: $2"; }
+}
+r=$t/marker-only; base "$r"; with_package "$r"; : > "$r/etc/omamobile/install-link"
+refused marker-only "no install-link marker in an image not built for the link"
+r=$t/line-only; base "$r"; for_link "$r"; rm "$r/etc/omamobile/install-link"
+refused line-only "but it has no marker"
+r=$t/no-provision; base "$r"; for_link "$r"; rm "$r/usr/bin/omamobile-provision"
+refused no-provision "has omamobile-provision"
+r=$t/protocol; base "$r"; for_link "$r"; sed -i 's/^protocol: 1$/protocol: 2/' "$r/usr/share/omamobile/install-link/SOURCE"
+refused protocol "is the package's"
+r=$t/not-empty; base "$r"; for_link "$r"; echo x > "$r/etc/omamobile/install-link"
+refused not-empty "an empty file, root's, mode 0644"
+r=$t/enabled; base "$r"; with_package "$r"; mkdir -p "$r/etc/systemd/system/graphical.target.wants"
+ln -s /usr/lib/systemd/system/omamobile-install-link.service "$r/etc/systemd/system/graphical.target.wants/omamobile-install-link.service"
+refused enabled "not enabled in /etc/systemd"
+pass "rootfs-smoke refuses a stray marker, a MANIFEST line without one, no omamobile-provision, another protocol, a marker with content, an enabled unit"

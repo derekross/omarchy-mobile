@@ -39,6 +39,7 @@
 #
 #   tools/build-rootfs [--version V] [--allow-missing "PKG..."] [--keep-raw]
 #                      [--local NAME] [--channel stable|development|local]
+#                      [--install-link]
 #     DEVICE       device/<codename>/device.conf (default cheetah)
 #     KERNEL_OUT   kernel build with modules-<release>.tar.zst
 #                  (default $KERNEL_BASE/out-int: bin/omamobile modules)
@@ -59,6 +60,16 @@
 #                       (the image's own copy, kept up to date by
 #                       tools/repo-push; the default with --local). The phone
 #                       switches later with: sudo omamobile-update channel C
+#     --install-link    an image for the install link (docs/INSTALL-LINK-PLAN.md):
+#                       the marker /etc/omamobile/install-link, which makes the
+#                       phone offer the link at its first start, and the two
+#                       packages it needs (omamobile-install-link, in every
+#                       image, and omamobile-provision). Only for a device whose
+#                       descriptor says INSTALL_LINK=yes, or INSTALL_LINK=test
+#                       for a development or local image (the plan's runbook,
+#                       R7 to R10, before any release carries the marker). The
+#                       MANIFEST says "install link: protocol N (marker ...)",
+#                       and tools/make-bundle puts install_link in manifest.json
 set -euo pipefail
 # debugfs and friends live in /sbin on Debian-like hosts
 export PATH=$PATH:/usr/sbin:/sbin
@@ -76,7 +87,7 @@ if [[ -z ${KERNEL_BASE:-} ]]; then
 fi
 KERNEL_OUT=${KERNEL_OUT:-$KERNEL_BASE/out-int}
 VERSION=$(date +%Y.%m.%d)
-ALLOW_MISSING="" KEEP_RAW=0 LOCAL="" CHANNEL=""
+ALLOW_MISSING="" KEEP_RAW=0 LOCAL="" CHANNEL="" INSTALL_LINK=0
 while (($#)); do
   case $1 in
     --version) VERSION=${2:?}; shift ;;
@@ -84,6 +95,7 @@ while (($#)); do
     --keep-raw) KEEP_RAW=1 ;;
     --local) LOCAL=${2:?}; shift ;;
     --channel) CHANNEL=${2:?}; shift ;;
+    --install-link) INSTALL_LINK=1 ;;
     -h|--help) source tools/lib/usage.sh; usage_from_header "$0"; exit 0 ;;
     *) alarm_die "unknown argument $1" ;;
   esac
@@ -113,6 +125,18 @@ ROOTFS_PACKAGES=$(sed -n 's/^ROOTFS_PACKAGES="\(.*\)"$/\1/p' "$conf")
 KERNEL_PACKAGE=0
 grep -c 'OMAMOBILE_BOOT_FILES' "packages/$DEVICE_PACKAGE/install" >/dev/null 2>&1 && KERNEL_PACKAGE=1
 [[ $ROOTFS_PACKAGES =~ ^[a-z0-9\ -]*$ ]] || alarm_die "$conf: ROOTFS_PACKAGES may hold only package names"
+# The install link is offered only where the descriptor says it may be
+# (INSTALL-LINK-PLAN §10): yes once the plan's runbook has passed on the
+# device, test for the runbook's own images, which never follow stable
+if ((INSTALL_LINK)); then
+  link_ok=$(sed -n 's/^INSTALL_LINK=\([a-z]*\)$/\1/p' "$conf")
+  case $link_ok in
+    yes) ;;
+    test) [[ $CHANNEL != stable ]] ||
+            alarm_die "$conf says INSTALL_LINK=test: an image for the link follows development or local until it says yes (--channel)" ;;
+    *) alarm_die "$conf does not say INSTALL_LINK=yes (or test): no image for the install link (docs/INSTALL-LINK-PLAN.md §10)" ;;
+  esac
+fi
 
 repo=$outrel/repo/aarch64
 [[ -f $repo/omamobile.db ]] ||
@@ -143,7 +167,8 @@ volume=omamobile-rootfs-target-$$
 docker volume create "$volume" >/dev/null
 
 start=$(date +%s)
-alarm_say "Building $name for $DEVICE (kernel $release, [omamobile] channel $CHANNEL)"
+for_link=""; ((INSTALL_LINK == 0)) || for_link=", for the install link"
+alarm_say "Building $name for $DEVICE (kernel $release, [omamobile] channel $CHANNEL$for_link)"
 commit=$(git rev-parse --short=12 HEAD)$(git diff --quiet HEAD -- rootfs packages tools device 2>/dev/null || echo "-dirty")
 docker run --rm --privileged --platform linux/arm64 \
   -v "$ROOT:/src:ro" -v "$ROOT/$outrel/repo:/repo:ro" -v "$modules:/modules:ro" \
@@ -153,6 +178,7 @@ docker run --rm --privileged --platform linux/arm64 \
   -e KERNEL_RELEASE="$release" -e MODULES_SHA256="$(sha256sum < "$modules" | cut -d' ' -f1)" \
   -e GIT_COMMIT="$commit" -e ALARM_SHA256="$(sha256sum < "$ALARM_TARBALL" | cut -d' ' -f1)" \
   -e OMARCHY_CHANNEL="$OMARCHY_CHANNEL" -e CHANNEL="$CHANNEL" -e ALLOW_MISSING="$ALLOW_MISSING" \
+  -e INSTALL_LINK="$INSTALL_LINK" \
   "$image" bash /src/rootfs/build-inside
 
 alarm_say "Compressing"
