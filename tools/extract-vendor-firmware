@@ -120,6 +120,8 @@ FW_BASE="brcmfmac4389c1-pcie"
 # and in BCM.hcd ("BCM<CHIP> <release>")
 WIFI_CHIP="4389c1"
 BT_CHIP="BCM4389C1"
+# What the Bluetooth refusal calls the patch, where BT_CHIP is a pattern
+BT_NAME=""
 DEST_REL="usr/lib/firmware/updates"
 
 # source path in the vendor partition -> path under $DEST_REL
@@ -245,6 +247,7 @@ case $DEVICE_OPT in
     FW_BASE="brcmfmac4398d0-pcie"
     WIFI_CHIP="4398d0"
     BT_CHIP="G5SN_V[0-9]*_HK3"
+    BT_NAME="Pixel 8 Pro (G5SN_V<n>_HK3)"
     # Google's SKU table (dhd_custom_google.c); husky's vendor has NVRAMs for
     # MMW, ROW and NA only, so the others take the module's default, as on stock
     case $SKU in
@@ -453,7 +456,7 @@ brcm="$dest/brcm"
 grep -aq "$WIFI_CHIP-roml" "$brcm/$FW_BASE.$BOARD.bin" ||
   die "fw_bcmdhd.bin is not a $WIFI_CHIP PCIe firmware"
 [[ -z $BT_CHIP ]] || grep -aq "$BT_CHIP" "$brcm/BCM.$BOARD.hcd" ||
-  die "BCM.hcd is not a $BT_CHIP Bluetooth patch"
+  die "BCM.hcd is not a ${BT_NAME:-$BT_CHIP} Bluetooth patch"
 grep -aq '^NVRAMRev=' "$brcm/$FW_BASE.$BOARD.txt" ||
   die "bcmdhd.cal does not look like a Broadcom text NVRAM"
 wmfw_halo() { # WMFW, Halo core (4): what cs_dsp accepts for this part

@@ -27,7 +27,7 @@ Not in this package: the boot-success marker, the charger, cameras, and the slot
 
 ## Firmware the phone needs
 
-Nothing here is in the package. `tools/extract-vendor-firmware -d husky -s SKU` also stages the Bluetooth patch (`brcm/BCM.google,zuma-husky.hcd`, stock's `BCM.hcd`) and the five CS40L26 haptics files (`cs40l26.wmfw`, `cs40l26.bin` and the three tuning files) from the same image. Wi-Fi needs four files from Google's firmware for the BCM4398 D0, which `tools/extract-vendor-firmware -d husky -s SKU` takes from the owner's own factory image or OTA `vendor.img`. They're installed under `/usr/lib/firmware/updates/brcm`, with the board-suffixed names brcmfmac loads first:
+Nothing here is in the package. Wi-Fi needs four files from Google's firmware for the BCM4398 D0, which `tools/extract-vendor-firmware -d husky -s SKU` takes from the owner's own factory image or OTA `vendor.img`. They're installed under `/usr/lib/firmware/updates/brcm`, with the board-suffixed names brcmfmac loads first:
 
 - `brcmfmac4398d0-pcie.google,zuma-husky.bin`: the firmware;
 - `.txt`: the NVRAM for the phone's region, which `-s` picks from the hardware SKU (`grep hardware.sku /proc/bootconfig`);
@@ -35,3 +35,7 @@ Nothing here is in the package. `tools/extract-vendor-firmware -d husky -s SKU` 
 - `.txcap_blob`: the TX capabilities.
 
 The kernel side is [kernel #156](https://github.com/derekross/linux-omarchy-mobile/pull/156) (a draft). Nothing in this package starts or configures Wi-Fi: NetworkManager finds `wlp1s0` on its own.
+
+The same run also stages the Bluetooth patch (`brcm/BCM.google,zuma-husky.hcd`, stock's `BCM.hcd`) and the five CS40L26 haptics files (`cs40l26.wmfw`, `cs40l26.bin` and the three tuning files) from the same image.
+
+Until this package has its own Bluetooth address step, the controller comes up on its placeholder address, the same on every 8 Pro. A pairing made now won't survive the change to the phone's own address: pair the device again after it.
