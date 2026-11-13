@@ -36,12 +36,13 @@ int ActionRunner::run(const QString &tool, const QStringList &args, const QStrin
     m_pending[key(tool, args.value(0))]++;
     auto *p = new QProcess(this);
     // What bash would read from the environment before the script runs: a startup file, exported functions,
-    // options. The tools the scripts call are found in /usr/bin only.
+    // options. The tools the scripts call are found in the system's directories and Omarchy's own (the display backend asks
+    // omarchy-hw-display); none of them is user-writable.
     auto env = QProcessEnvironment::systemEnvironment();
     for (const QString &name : env.keys())
         if (name.startsWith(QLatin1String("BASH_FUNC_"))) env.remove(name);
     for (const char *name : {"BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "CDPATH", "GLOBIGNORE"}) env.remove(QLatin1String(name));
-    env.insert("PATH", "/usr/bin:/bin");
+    env.insert("PATH", "/usr/bin:/bin:/usr/share/omarchy/bin");
     p->setProcessEnvironment(env);
     p->setProgram("/usr/bin/bash");
     p->setArguments(QStringList{"-p", dir + "/" + tool + ".sh"} + args);
