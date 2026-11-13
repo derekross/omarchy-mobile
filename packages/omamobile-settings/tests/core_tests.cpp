@@ -36,6 +36,13 @@ private slots:
         backend.back();
         QCOMPARE(backend.page(), QString("root"));
     }
+    void hapticsPageGoesBackToRoot() {
+        Backend backend;
+        QVERIFY(backend.navigate("haptics"));
+        QCOMPARE(backend.page(), QString("haptics"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("root"));
+    }
     void searchHasOnlyImplementedRoutesAndBackClearsIt() {
         Backend backend;
         backend.search("STORAGE");

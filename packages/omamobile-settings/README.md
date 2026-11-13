@@ -11,11 +11,12 @@ is brightness and, where the monitor lists more than one, the refresh rate (the
 refresh rate changes the running session only: turning the phone makes
 auto-rotate apply the monitor's preferred mode again, and a session restart or a
 reload of Hyprland's config does too). Keyboard haptics is the strength
-of the tick feedbackd plays for key presses, or silent for the whole phone; it
+of the tick feedbackd plays for key presses (low, medium or high); it
 edits the user's feedbackd theme (`~/.config/feedbackd/themes/custom.json`, the
 two key entries of the `full` profile, never above 0.125 or 60 ms; the first version of the file is kept once as `custom.json.bak-haptics`, a theme that
-does not have exactly those two entries is refused before anything changes, and a level after Off puts the profile
-back to `full` whatever it was before) and says so on the page when the phone has no such theme. The pages run
+does not have exactly those two entries is refused before anything changes). It never touches feedbackd's profile, so calls, messages and
+alarms ring as before; changing the level restarts feedbackd, so a ring in progress stops. A phone without such a theme gets a plain
+message on the page and no buttons. The pages run
 `backends/display.sh` and `backends/haptics.sh` through a fixed-argument runner, with no shell string.
 Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management and
 recording controls are separate future contributions with their own runtime
