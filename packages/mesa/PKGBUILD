@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: 0BSD
 #
-# Omarchy Mobile build of Mesa for the Pixel 7 Pro (Mali-G710 on Panthor)
-# and the Pixel 6 and 6 Pro (Mali-G78 on Panfrost), plus Pixel 9a
+# Omarchy Mobile build of Mesa for Qualcomm Adreno and the Pixel 7 Pro
+# (Mali-G710 on Panthor), Pixel 6/6 Pro (Mali-G78 on Panfrost), and Pixel 9a
 # (Mali-G715 on Panthor).
 #
 # Derived from Arch Linux's mesa PKGBUILD, tag 1-26.2.4-1
@@ -17,15 +17,15 @@
 #    backported (drop it once Mesa ships it in a release).
 #  - 0004-panfrost-add-Mali-G78-to-the-model-table.patch: the Pixel 6's
 #    Mali-G78, next to the G68 (drop it once Mesa ships the G78 entry).
-#  - aarch64 only, and only the drivers this phone can use: Gallium
+#  - aarch64 only, and only the drivers our phones can use: Gallium freedreno,
 #    panfrost (with kmsro), llvmpipe, softpipe and zink; Vulkan panfrost
 #    (PanVK). Splits: mesa, vulkan-panfrost, vulkan-mesa-implicit-layers
 #    (vulkan-panfrost depends on it). No rusticl, NVK, docs or valgrind,
 #    so no Rust crates and a much shorter native build.
 #  - 0005-0010: upstream G715 model and complete v11 support backports.
 #    See README.md for pinned sources and validation limits.
-#  - pkgrel 1.4: makepkg only allows integer[.integer], so the Omarchy Mobile
-#    marker lives in the VERSION string (".omamobile4"), which shows up in
+#  - pkgrel 1.5: makepkg only allows integer[.integer], so the Omarchy Mobile
+#    marker lives in the VERSION string (".omamobile5"), which shows up in
 #    GL_VERSION and the libgallium file name.
 #
 # Maintainers of the original: Laurent Carlier, Felix Yan, Jan Alexander
@@ -39,10 +39,10 @@ pkgname=(
 )
 pkgver=26.2.4
 _pkgver=${pkgver/[a-z]/-&}
-pkgrel=1.4
-_omamobile=omamobile4
+pkgrel=1.5
+_omamobile=omamobile5
 epoch=1
-pkgdesc="Open-source OpenGL drivers (Omarchy Mobile: Mali-G710, Mali-G78, Mali-G715)"
+pkgdesc="Open-source OpenGL drivers (Omarchy Mobile: Adreno and Mali)"
 url="https://www.mesa3d.org/"
 arch=(aarch64)
 license=("MIT AND BSD-3-Clause AND SGI-B-2.0")
@@ -165,7 +165,7 @@ build() {
     --optimization 2
     -D android-libbacktrace=disabled
     -D b_ndebug=true
-    -D gallium-drivers=panfrost,llvmpipe,softpipe,zink
+    -D gallium-drivers=freedreno,panfrost,llvmpipe,softpipe,zink
     -D gallium-extra-hud=true
     -D gallium-mediafoundation=disabled
     -D gallium-rusticl=false
