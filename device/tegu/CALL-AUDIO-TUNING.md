@@ -1,13 +1,23 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 9a: call tuning and the first earpiece route
 
-Status, 2026-11-03: tried on the palmtop. On 2026-11-02 (the daily kernel
-`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, speakerphone
-calls to the owner's iPhone, results at the end) the AoC accepted both
-uploads, but the far end still heard its own voice. AEC is off by default,
-and call audio still defaults to `card = none`. The earpiece mode below is
-a conservative top-speaker route, not a reproduction of every stock codec
-profile setting.
+Status, 2026-11-13: the trial has run, and the tuning doesn't cancel the
+echo. On the daily kernel
+(`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`), speakerphone
+calls with `tegu_aec = yes`: the AoC accepts both uploads, its APMg3
+processor runs with stock's tuning and has a reference signal, and the far
+end still hears its own voice. Measured on calls to a talking clock
+(results 8 to 11), the uplink with the tuning is quiet most of the time and
+the echo comes through in bursts louder than anything the unprocessed
+uplink had; the echo is acoustic, speakers to microphones. The "two seconds
+without echo" of the early calls were a silent uplink after the answer, not
+cancellation. Why the cancellation doesn't hold isn't known ("Next for the
+echo"). So `tegu_aec` stays off by default and is not a setting to turn on
+for better calls; call audio still defaults to `card = none`. What is
+proven is the transport (the tuning service takes the files and the AoC
+confirms them), the extractor and this record. The earpiece mode below is a
+conservative top-speaker route, not a reproduction of every stock codec
+profile setting, and it has not been tried in a call.
 
 ## Sources and the tuning transport
 
@@ -91,8 +101,9 @@ output tree, included in `vendor-firmware.sha256`:
 
 The source is `/vendor/etc/aoc/` in the owner's own 9a image. Do not use
 another device's protobufs. HAC, wired, Bluetooth, dock and external-speaker
-configs are unnecessary for these two routes. Missing any of these six
-fails extraction. The loader requires the selected route's on, off and
+configs are unnecessary for these two routes. The six are one optional set:
+when any of them is missing from the image, extraction warns, leaves the
+whole set out and extracts the rest. The loader requires the selected route's on, off and
 downlink files before any upload. Files are not shipped in the package.
 
 With `[audio] tegu_aec = yes`, the route first saves the mixer state and
@@ -310,6 +321,27 @@ is acoustic, and with the tuning it comes through in bursts rather than
 being cancelled; the processor has a reference signal. What it doesn't say
 is why the cancellation doesn't hold, or what the 5 s of silence are. One
 sample every 0.32 s is a rough level and no more.
+
+## Rules for the tests that are left
+
+- **An AoC capture that hasn't run during a call before is a first probe.**
+  One per boot, attended, with the kernel log streamed to the laptop before
+  it starts, as the 7 Pro's AoC notes ask: there a wrong capture route
+  during audio took the AoC down until a reboot. Two tries here broke that:
+  result 12's capture (`hw:0,27`) ended in "Bad address" 48 s into the call
+  and the call ended then, where the other clock calls ran 80 to 110 s, so
+  the capture may have ended it; and an in-call capture (`audio_incall_cap_0`)
+  ended in EIO with no kernel log kept, and whether the AoC was online
+  after it wasn't recorded. After result 12 the AoC was still online: the
+  next call, four minutes later on the same boot, had call audio and uplink
+  samples (result 11). Result 8 had nobody near the palmtop, and nobody was
+  asked to be there for results 9 to 12 either, against this plan's own
+  attended gate.
+- **Only uplink tuning files are edited, never a downlink one.** The downlink
+  file is the speaker's path, and a changed one could drive the speakers
+  outside what stock's tuning allows. An edited uplink file is in place for
+  one call, the owner's file goes back right after and is checked against
+  `vendor-firmware.sha256`, and an edited file is never committed.
 
 ## Next for the echo
 

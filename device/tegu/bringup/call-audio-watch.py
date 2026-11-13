@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 # On the palmtop: watch the AoC through a phone call, read-only. For D seconds it reads
 # the call's mixer controls every half second and prints one line whenever a value
 # changes, and it reads the AoC's own log (/dev/acd-logging) and prints its text as it

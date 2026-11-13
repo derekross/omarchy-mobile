@@ -121,7 +121,9 @@ class VoiceAudio:
             # The protection service's earpiece mode is the 7 Pro's CS35L41
             # route; the 9a's TAS2572 route sets its own gains.
             self.earpiece_cmd = None
-        if tegu_route not in ('speaker', 'earpiece'):
+        # Only the 9a's route reads this key: a typo in it must not cost
+        # another phone its call audio.
+        if self.tegu and tegu_route not in ('speaker', 'earpiece'):
             raise ValueError('unsupported tegu call route')
         self.tegu_route = tegu_route
         self.tegu_aec = tegu_aec
