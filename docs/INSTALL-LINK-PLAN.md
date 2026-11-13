@@ -64,6 +64,7 @@ and the restart.
 17. [What bringing the crate to this plan found](#17-what-bringing-the-crate-to-this-plan-found)
 18. [What building the daemon found](#18-what-building-the-daemon-found)
 19. [What packaging the link found (L5)](#19-what-packaging-the-link-found-l5)
+20. [The first-start screen](#20-the-first-start-screen)
 
 ## 1. Goal and non-goals
 
@@ -442,15 +443,25 @@ this plan alters the Pixel 7 Pro's boot images, so
   that boot, says so on the screen, and tries again at the next. An `EXIT`
   trap always links the previous functions and binds the UDC again.
 - `omamobile-install-screen`: draws the status lines and the code. Display
-  only; it reads no touch. A small C program on the kernel's framebuffer
-  (`CONFIG_DRM_FBDEV_EMULATION=y` in the local configs **[V]**), the same
-  drawing code SECURITY-PLAN §5.3 plans for its PIN pad. **[I]**: that a
-  write to `/dev/fb0` reaches the command-mode panel in the root with no
-  compositor running; step R5. The fallback is Plymouth's message line.
-  It also reads the two volume keys, for one purpose: a press tells the
-  daemon that a person is at the phone (§2.5). **[I]**: that the keys'
-  input device can be read in the root before the display manager; step
-  R5.
+  only; it reads no touch. **Built** (§20): a small C program (libdrm and
+  FreeType, both in every image), in `packages/omamobile-install-link/screen/`.
+  Its outputs, the first that works: a DRM device (two dumb buffers and a
+  mode set, as Plymouth does, then a page flip for each update), `/dev/fb0`,
+  Plymouth's message line, nothing. DRM comes first because on the Pixel 7
+  Pro `gs-decon` replaces simpledrm a few seconds into the boot and offers
+  no fbdev console by default (`gs_decon.fbdev=1` gives one; DISPLAY-PLAN
+  "Default KMS and the boot handover"), so `/dev/fb0` is usually gone in the
+  root. The panel is in command mode: a frame reaches it only on a DECON
+  trigger, which every commit gives; nothing is written into a buffer
+  already on screen. **[I]**: that the program gets DRM master on
+  `gs-decon` once Plymouth has quit, and that its commits reach the panel;
+  step R5. It also reads the two volume keys, for one purpose: a press
+  tells the daemon that a person is at the phone (§2.5). **[I]**: that the
+  keys' input device can be read in the root before the display manager;
+  step R5. Its unit, `omamobile-install-screen.service`, is wanted by the
+  link's unit and bound to it, runs only while first boot has made no
+  account, and never while a display manager runs; the hold stops it, and
+  waits for it to end, before the login screen may come (§20).
 - `omamobile-install-link.service`: `ConditionPathExists=` the marker
   alone (not "and not `done`": the start that finds `done` is the one that
   completes an interrupted end, §6.5 and §18, E1); `After=omamobile-usb-mac.service omamobile-boot-success.service`
@@ -1297,7 +1308,7 @@ approves every step, and results are recorded here with the date and
 | L2 | `omamobile-linkd` (the daemon around the crate's phone machine) against a socket pair in place of the endpoint files, and a scratch root (as `OMAMOBILE_FIRSTBOOT_ROOT` and `NV_PHONE_ROOT` do today **[V]**); `omamobile-firstboot --check --porcelain`; the session agent and `omamobile-install-link status\|reopen`; the golden frames in this repository. The list below | The whole flow against stand-in partitions that are regular files; the read-only preconditions each refused; a pulled "cable" before every frame; the tests of §11.3 marked L2 | L1 tagged |
 | L3 | The daemon on real FunctionFS over `dummy_hcd`, on a laptop or VM kernel that has it (the phone's kernel does not: `CONFIG_USB_DUMMY_HCD` is not set **[V]**); `omamobile-link-gadget` against a fake configfs tree and against `dummy_hcd` | The descriptors as a host reads them; one frame per read; the pad rule at 64, 512 and 1024; unbind and bind; the OS descriptor requests; the hang marker; `SUSPEND` and `RESUME` changing nothing; the tests of §11.3 marked L3, `flow` first | L2 |
 | L4 | `omamobile-provision`: the tools packaged for aarch64, the whole-or-untouched install of §6.3, the result file, the optional step's one retry | The byte-for-byte comparison of §6.2 in the aarch64 container against the laptop's run, for each factory build the index lists; the existing `tests/extract-*` against the packaged copies; a kill of the worker between any two installs leaves every tree whole or untouched; §11.3's F5 | The maintainer's own factory images, never committed |
-| L5 | The root image with both packages and the marker; `manifest.json`'s `install_link`. **Built 2026-11-13** (#743, a draft; §19): the package `omamobile-install-link` 0.1.0 (the daemon at a pinned commit of the installer's `linkd-ffs`, with one patch; the gadget script; the units, the login-screen hold, the session agent, `status`/`reopen`, tmpfiles); `tools/build-rootfs --install-link`; `install_link` in `manifest.json`. Untested on a phone; the first-start screen program and the golden frames are not in it | `tests/rootfs-smoke` (on small made-up images: `tests/rootfs-smoke-link`), `tests/build-rootfs`, `tests/make-bundle`; the package's `test/all`: the units' conditions evaluated by systemd on scratch roots, `systemd-analyze verify`, the real daemon on scratch roots with the marker and none, with the image's placeholder and a filled `firstboot.conf`, with `done` for each reason, with an existing account; the agent's unit conditioned on the marker or an end; the agent against a stand-in daemon and the real one; the gadget script on the installer's fake configfs | L2 to L4 |
+| L5 | The root image with both packages and the marker; `manifest.json`'s `install_link`. **Built 2026-11-13** (#743, a draft; §19): the package `omamobile-install-link` 0.1.0 (the daemon at a pinned commit of the installer's `linkd-ffs`, with one patch; the gadget script; the units, the login-screen hold, the session agent, `status`/`reopen`, tmpfiles); `tools/build-rootfs --install-link`; `install_link` in `manifest.json`. Untested on a phone; the golden frames are not in it. The first-start screen program came after, in 0.1.1 (§20) | `tests/rootfs-smoke` (on small made-up images: `tests/rootfs-smoke-link`), `tests/build-rootfs`, `tests/make-bundle`; the package's `test/all`: the units' conditions evaluated by systemd on scratch roots, `systemd-analyze verify`, the real daemon on scratch roots with the marker and none, with the image's placeholder and a filled `firstboot.conf`, with `done` for each reason, with an existing account; the agent's unit conditioned on the marker or an end; the agent against a stand-in daemon and the real one; the gadget script on the installer's fake configfs | L2 to L4 |
 | L6 | The installer: the `Link` transport (one frame per read, a read always pending, 30 s per write), the states, the pretend phone that speaks §5; the nonce; the backup's files before `backup-commit`; `hello` again every 5 s while `pair` is `ask` | The write path's tests extended through `ready`; an interrupted run at every state, rerun with no "replug"; a lost token at every state; app protocol 2 against the stand-in | L1 tagged |
 
 **What L2 builds**, from what L1 found it would need:
@@ -1371,7 +1382,7 @@ announced first.
 | R2 | Install `omamobile-install-link`. Ask the human; arm `systemd-run --unit=x-deadman --on-active=90 systemctl reboot` (the next boot's initramfs restores the gadget); run `omamobile-link-gadget add` with the daemon limited to `hello`, `ping` and `status`; from the laptop read `status`; confirm with `tools/phone-ssh --fresh`; stop the timer | The host lists NCM, ACM and the link interface with §4's values; `status` gives the release and the kernel; SSH answers on a fresh login; `dmesg` has no new error | No fresh SSH within 90 s: the dead-man restarts the phone. Wait 2 minutes, replug once, then ask for a forced restart | `omamobile-link-gadget remove`, or a restart | Medium: it unbinds the only link | Nothing persistent but the package |
 | R3 | A boot with the link added by the unit (the marker and a state file at `firstboot-done` placed by hand, the daemon still limited as in R2; §19, K15). One change: the unit at boot | The link is there after the boot with no hand step; SSH answers; the hang marker is gone | The phone is not on the bus 3 minutes after the boot: forced restart; the marker then skips the change, and SSH is back | Delete the marker file over SSH | Medium | The marker |
 | R4 | Pull the cable for 10 s and replug, the daemon logging to a file. Then, cable in: stop the laptop's reader for 40 s while the daemon has a `status` answer queued | Within 10 s of the replug: SSH and `hello` both answer; the daemon logged `DISABLE` then `ENABLE`. The queued write is cancelled after 30 s, the session ends, the next `hello` is answered, and `dmesg` has no new line from the USB controller | Not back in 60 s: wait 2 minutes, replug once, then a forced restart | A restart | Low | Nothing |
-| R5 | The screen. Announce it. Stop the display manager, run `omamobile-install-screen` with a test code for 30 s, press each volume key once, start the display manager | The code is readable on the panel; each key press is logged as an act at the phone, and no other key is; the session comes back | Nothing drawn: the **[I]** in §3.3 is wrong; switch to the fallback and repeat. No key event: the lock of twenty then ends only at a restart; say so on the screen and revise §2.5 | `systemctl start sddm`, or a restart | Low; the screen goes away for a minute | Nothing |
+| R5 | The screen (`omamobile-install-screen`, §20). Announce it: the panel shows a made-up code. Stop the display manager. Read only first: `ls /dev/dri /dev/fb0`, `readlink /sys/class/drm/card*/device/driver` (`gs-decon` expected), `ls /dev/input/by-path/`. Then `printf 'code 123456\n' \| timeout 30 /usr/lib/omamobile-install-link/omamobile-install-screen --demo`, press each volume key once and the power key once; then the same with `locked 0`, `paired`, `setup` and `stopped user` as its lines; then `--output fb` and `--output plymouth` once each where they apply; start the display manager | The journal (its standard error) says `output: /dev/dri/cardN, 1440x3120`; the code is readable on the panel, in the theme's colours, nothing clipped; it changes with each line; each volume key press writes `key` once to standard output and logs one press, the power key none; at the end the panel shows the background alone, and the display manager's greeter comes back with no code on it | Nothing drawn while the log names a DRM output: commits do not reach the command-mode panel; stop and revise drm.c. `output: none` with `gs-decon` loaded: the DRM device is held (check for a running Plymouth) or has no connected connector; stop. No key event: the lock of twenty then ends only at a restart; say so on the screen and revise §2.5. The greeter does not come back | `systemctl start sddm`, or a restart | Low; the screen goes away for a minute | Nothing |
 | R5b | The session's notice and window. Announce it: a notification appears. With the marker and a state file at `firstboot-done` placed by hand, start the agent in the session. Lock the phone and try to act on the notice; unlock, tap it, read the test code, close the window | Locked: the notice cannot be acted on and no code is visible anywhere on the screen. Unlocked: the window shows the code and closes; the journal holds no code | A code visible on the lock screen, or a notice that acts while locked: the **[I]** in §2.8 is wrong; the window must ask the lock's state itself before it shows anything. Revise before R7 | Stop the agent; delete the marker and the state directory | Low; a notification and a small window | The state directory |
 | R6 | The full daemon on the development phone, the code read from `screen-text` over SSH (never from the journal, §9; §19, K10): pair, `backup-list` through `backup-commit` into a new directory; then `factory-begin` through `factory-end` with one cable pull in the middle and one kill of the laptop's tool with the cable left in; no `answers`, no `provision` | The link's backup has the same `NV_PARTS` digests as the newest `tools/nv-backup` backup; `tools/nv-backup --check` on it says SAME; every partition still reads `ro` 1; the image's digest is right after both resumes; the rerun paired with no replug and no wrong count; the rate is recorded | Any `NV_PARTS` digest differs; any partition reads `ro` 0; `ufshcd_err_handler` in `dmesg` | Delete the phone's state directory and the new backup directory; remove the marker | Medium: it reads the radio partitions | The state directory and the image file on the root |
 | R7 | **A full install with the link beside NCM and ACM.** A fresh `tools/nv-backup` into a new directory first, and a known-good bundle at hand. Flash a release whose image has the marker, unmodified (Q2 says with which tool); then the command-line installer through the link to `ready` | The code appears; every state passes; the installed trees equal R1's; after the restart the smoke report's required rows pass and Wi-Fi, sound and cameras show as evidence; the link is gone at the boot after `finish`; `tools/nv-backup --check` says SAME | Any stop in §8's table that a rerun does not clear; any radio partition DIFFERENT | Fastboot by the buttons, then `tools/install-phone` with the known-good bundle | **High. Writes slot B and `userdata`: the maintainer's go** | Slot B's five images, `userdata` |
@@ -1649,7 +1660,7 @@ said nothing, or did not hold as written:
 | K7 | §6.4: the state directory is mode 700 | 0711 (`StateDirectory=`, created only when the unit starts, so only with the marker; tmpfiles `z` keeps the mode where it exists) | The session's agent and `omamobile-install-link status` as the owner read `done` (0644) by its name. The state file, the token's hash and the image stay 0600, and the directory cannot be listed |
 | K8 | §2.8: after `expired`, the notice "at each of the next three logins" | The agent's unit runs with the marker or `done`; after an end other than `finished` or `not-first-start` it shows the notice and counts the login in the user's state directory, keyed by `done`'s text, so a `reopen` and another end count again | An end deletes the marker, so an agent conditioned on the marker alone could never show it |
 | K9 | §2.8: the code window "in Omarchy's own look" | A standalone Quickshell window in plain Qt Quick; the code in its environment only, never on a command line (world-readable in `/proc`) | A standalone Quickshell configuration cannot import the shell's `qs.Commons`. An `omamobile.*` shell plugin that the agent asks over IPC would follow the theme: open, before R5b |
-| K10 | §3.3: `omamobile-install-screen` draws the code before the session exists; R6 reads the code "from the journal" | Not built. `screen-text`, a development stand-in run by hand over SSH, prints the screen socket's lines (the code among them) to its terminal, and Enter stands for a volume key | The code is never logged (§9), so the journal never has it. Without the screen program a phone at stage `waiting` shows no code: no owner's install can pair before it exists |
+| K10 | §3.3: `omamobile-install-screen` draws the code before the session exists; R6 reads the code "from the journal" | **Narrowed (§20):** the screen program is built (0.1.1) and untested on a phone. `screen-text` stays for R6, run by hand over SSH on the development phone, whose first-boot `done` keeps the screen's unit off: it prints the screen socket's lines (the code among them) to its terminal, and Enter stands for a volume key | The code is never logged (§9), so the journal never has it. Until R5 passes, a phone at stage `waiting` may still show no code |
 | K11 | §3.3: "`tools/build-rootfs`: a release image gets the two packages and the marker" | `omamobile-install-link` is in every image (inert without the marker); `omamobile-provision` goes in once `[omamobile]` has it; `--install-link` adds the marker and needs both packages, and only for a descriptor saying `INSTALL_LINK=yes`, or `INSTALL_LINK=test` for a development or local image. The MANIFEST says `install link: protocol N (marker ...)` or `none` | §10 makes `INSTALL_LINK=yes` the gate, and R7 needs an image with the marker before any device may say yes: `test` is that image, and it can never be a signed release (those follow stable). Setting either in cheetah's descriptor is the maintainer's step. `tests/rootfs-smoke` refuses a marker the MANIFEST does not name, and the reverse |
 | K12 | §3.3: `tools/bundle-manifest` writes `install_link` | It does, from `--install-link-protocol`, which `tools/make-bundle` reads from the image's MANIFEST; the key is absent otherwise, and an unknown `install link:` line stops the bundle | The protocol is the daemon's crate's (`PROTOCOL`), recorded by the package in `/usr/share/omamobile/install-link/SOURCE` and by the image build in its MANIFEST |
 | K13 | §11.1: the package's `Cargo.lock` pins the crate's tag | The installer's archive at a commit of `linkd-ffs`, pinned by its SHA-256 (`source.conf`), with the installer's own `Cargo.lock` | There is no tag yet. When there is, `source.conf` moves to it |
@@ -1693,3 +1704,86 @@ a `kill -9` of the daemon brings NCM and ACM back within seconds (E12);
 does not start on the development phone (it has first boot's `done`); the
 link's unit starts after `omamobile-boot-success`; the login screen comes as
 before.
+
+## 20. The first-start screen
+
+`omamobile-install-screen` was built on 2026-11-13 (branch `install-screen`,
+on #743; `omamobile-install-link` 0.1.1), offline. **It has not run on a
+phone.** R5 is its first run, and it changes what the phone's screen
+shows: the maintainer is told before R5 runs.
+
+**The language: C, with libdrm and FreeType.** §3.3 asked for "a small C
+program on the kernel's framebuffer, the same drawing code SECURITY-PLAN
+§5.3 plans for its PIN pad". Both libraries are in every root image (Mesa
+needs libdrm, fontconfig needs FreeType), so it adds no package. Python
+with no extra modules can set a mode through `ioctl` but has no font
+renderer; Rust would need new crates fetched beside the daemon's pinned
+lock, for a program of a few hundred lines.
+
+**What it shows.** The daemon's screen socket carries its own lines, not
+the session agent's of §2.8: `code DIGITS`, `wrong-code N`, `locked N`,
+`paired`, `version`, `setup`, `stopped STEP`, `no-space`, `damaged`, `off`
+(`omamobile-linkd`, `screen_line`). The screen keeps two things apart: the
+phase (waiting, setting up, stopped at a step) and the pairing (a code, a
+wait, locked until a key, paired), with a note under them for a wrong
+code, a version mismatch, no space or a damaged image. The words are the
+crate's where it has them ("Too many wrong codes from the computer. Press
+a volume key for a new code."). In Omarchy's look as far as a framebuffer
+goes: Omarchy's logo (U+E900 of Omarchy's own icon font,
+`/usr/share/omarchy/default/fonts/omarchy/omarchy.ttf`), JetBrains Mono, the
+font of Omarchy's login screen (`ttf-jetbrains-mono-nerd-basic`, from
+Omarchy's package list, now a dependency; Noto Sans and DejaVu Sans as
+fallbacks), and the colours of Omarchy's default theme, Tokyo Night, read
+from its `colors.toml` with the same values built in. The code is drawn in
+the accent colour, two groups of three digits, a fifth of the panel's
+width high on the Pixel 7 Pro.
+
+**Where it draws** (§3.3): a DRM device, else `/dev/fb0`, else Plymouth's
+message line, else nothing. A DRM device that another program holds puts
+Plymouth before fb0, since what fb0 gets would not show while a master
+holds the device. Until it has a DRM device it looks again every 5 s.
+Plymouth is spoken to on its own socket, not with `plymouth
+display-message --text=...`, which would put the code on a command line.
+
+| | The plan said nothing of | Built | Why |
+| --- | --- | --- | --- |
+| S1 | What the screen does with a state whose code it never saw | It asks for a volume key ("Press a volume key to show the code.") | The daemon replays only its last line to a screen that connects late, so after `wrong-code` a new screen has no code; a key press makes the daemon draw a new one and send it |
+| S2 | A daemon that goes away | The code leaves the screen at once ("Starting the install link"); the screen connects again every second. The unit is bound to the link's unit as well | A code from a daemon that is gone is of no use, and a restarted daemon draws a new one |
+| S3 | `locked N` with N above 0 | The code is hidden and a countdown shown; the daemon sends the new code when the wait ends | The daemon replaced the code when it locked (§2.5) |
+| S4 | What stays on the panel after the screen | It draws the background alone, waits for that frame, wipes its buffers, drops DRM master and closes, and puts the VT's mode back where it set graphics mode (fb0 only). On `off`, on SIGTERM and before the login screen: `hold-login` now stops the screen's unit, and waits, before it returns | No in-kernel client restores a console at the last close (DISPLAY-PLAN), and simpledrm's buffer keeps the last frame: without it the code could stay under the greeter |
+| S5 | How the screen's unit fits the boot | Wanted by the link's unit, `BindsTo=` it; conditions as the hold (the marker, no first-boot `done`); `ExecCondition=` no active display manager; no `Conflicts=display-manager.service` | Both units are in the boot's transaction, where a conflict would drop one of them, possibly the display manager |
+| S6 | A static code on an OLED for as long as the phone waits | The column moves by half a percent of the height each minute, over five places | Stage `waiting` has no time limit (§2.2). Turning the panel off after a while is not done: a person who comes back would find a dark phone, and the power key is logind's |
+| S7 | Bounce and repeat on the volume keys | A press is a value of 1; repeats (2) and releases (0) are not; presses closer than 200 ms by the events' own times count once. Never grabbed | One press should give one new code |
+| S8 | What R5 runs on a development phone, whose daemon offers nothing | `--demo`: the daemon's lines from standard input, `key` on standard output | R5 then needs no marker and no state file |
+
+**Tests, no phone** (the package's `test/all`): the program built with
+`-Werror`, the tests running a build with the address and undefined
+behaviour sanitizers; every state drawn into memory at 1440x3120, 720x1600
+and 320x240, saved as PNGs in `test/out/` (gitignored) and checked for
+clipping, the code's height and the theme's background; the socket
+protocol against a stand-in daemon (every line, malformed and unknown
+lines, an overlong one, a daemon that vanishes and comes back, a burst of
+4001 lines, `off`, SIGTERM); the volume keys from a pipe of `input_event`
+structs; Plymouth's requests against a stand-in on an abstract socket; no
+output at all, with key presses still reaching the daemon; `--demo`; the
+real daemon on a scratch root (its code shown, a new one after a key); the
+unit with `systemd-analyze verify` and its conditions on scratch roots;
+`hold-login` stopping the screen on each way it lets go; and no code, nor
+any six digits in a row, in any of the screen's logs, traces or outputs.
+The DRM and fb0 outputs are not run here: they would take the laptop's
+own display.
+
+**What R5 must check, beyond its row:** that the unit's sandbox
+(`DevicePolicy=closed` with `char-drm`, `char-fb`, `char-input` and
+`/dev/tty0`, `CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_TTY_CONFIG`)
+lets it open the DRM device, become master and read the keys (on the
+development phone first boot's `done` keeps the unit itself off, so run
+`--demo` once under the same properties with `systemd-run --pty`, before
+any owner's install); which output it names in the journal,
+and the mode (the current one, 120 Hz after Plymouth, is kept); that a
+page flip is taken by `gs-decon` (else the log says it falls back to a
+mode set for each frame); that Plymouth has quit by the time the link's
+unit starts (else the screen uses Plymouth's line, small at the top
+left); that the volume keys' device is `gpio-keys` and readable; that the
+greeter comes after `hold-login` with no code left on the panel; and that
+`/var/log/boot.log` and the journal hold no code after a Plymouth run.
