@@ -1286,16 +1286,22 @@ cmd_push() {
   # AVB_FOOTERS image is padded to the descriptor's partition size, with its
   # footer at the end, so that size must be the partition's exactly.
   local -A devs=()
-  local sectors bytes avb e
+  local sectors bytes avb e sys globs="" l
+  # The LUNs the init guards: sda, plus the descriptor's UFS_RW_LUNS
+  # (load_device checked those are sdb..sdz)
+  for l in sda ${DEV_UFS_RW_LUNS:-}; do globs+=" /sys/block/$l/$l*"; done
   for p in $DEV_BOOT_IMAGES; do
     slot_b_allowed "$p" || die "${p}_b is not on device/$DEVICE's storage-guard allowlist; refusing"
     [[ -f "$img/$p.img" ]] || die "missing $img/$p.img (run: omamobile images)"
     # Find the partition by GPT name; the init guard leaves only these writable
-    dev=$("$ssh" "for s in /sys/block/sda/sda*; do grep -qx 'PARTNAME=${p}_b' \$s/uevent && echo /dev/\${s##*/}; done; true")
-    [[ -n "$dev" ]] || die "${p}_b not found on the phone"
-    [[ "$("$ssh" "cat /sys/block/sda/${dev#/dev/}/ro")" == 0 ]] || die "$dev (${p}_b) is read-only; refusing"
+    sys=$("$ssh" "for s in$globs; do grep -qx 'PARTNAME=${p}_b' \$s/uevent && echo \$s; done; true")
+    [[ -n "$sys" ]] || die "${p}_b not found on the phone (looked on:$globs)"
+    [[ $sys != *$'\n'* ]] || die "${p}_b is on more than one partition (${sys//$'\n'/, }); refusing"
+    [[ $sys =~ ^/sys/block/(sd[a-z])/(sd[a-z])[0-9]+$ && ${BASH_REMATCH[1]} == "${BASH_REMATCH[2]}" ]] || die "unexpected partition path for ${p}_b: $sys"
+    dev=/dev/${sys##*/}
+    [[ "$("$ssh" "cat $sys/ro")" == 0 ]] || die "$dev (${p}_b) is read-only; refusing"
     # sysfs counts 512-byte sectors, whatever the device's block size
-    sectors=$("$ssh" "cat /sys/block/sda/${dev#/dev/}/size")
+    sectors=$("$ssh" "cat $sys/size")
     [[ $sectors =~ ^[0-9]{1,15}$ ]] || die "cannot read the size of $dev (${p}_b)"
     bytes=$((sectors * 512))
     (($(stat -c %s "$img/$p.img") <= bytes)) || die "$p.img is larger than ${p}_b ($dev, $bytes bytes); refusing"

@@ -86,3 +86,5 @@ echo "# tests/phone-demo-notes"
 tests/phone-demo-notes
 echo "# tests/install-guided"   # the guided install, against stand-ins for the phone and this computer's network
 tests/install-guided
+echo "# tests/mark-slot-b"
+tests/mark-slot-b
