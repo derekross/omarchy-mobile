@@ -96,7 +96,9 @@ if command -v cc >/dev/null && command -v make >/dev/null && pkg-config --exists
     { cat "$t/make.log"; fail "the first-start screen builds with no warning"; }
   SCR=$t/screen/omamobile-install-screen RT=$t/screen/render-test
   if make -s -C screen OUT="$t/screen-san" CFLAGS="-O1 -g -Werror -fsanitize=address,undefined -fno-omit-frame-pointer" \
-       LDFLAGS="-fsanitize=address,undefined" all render-test > "$t/make-san.log" 2>&1; then
+       LDFLAGS="-fsanitize=address,undefined" all render-test > "$t/make-san.log" 2>&1 &&
+     "$t/screen-san/omamobile-install-screen" --version > /dev/null 2>&1; then
+    # (a sanitized build that cannot run here, as under qemu-user, is left out)
     SCR=$t/screen-san/omamobile-install-screen RT=$t/screen-san/render-test
     export ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
   fi
