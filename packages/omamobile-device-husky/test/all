@@ -77,6 +77,8 @@ for f in usr/bin/reboot-to \
          usr/bin/omamobile-usb-rescue \
          usr/lib/systemd/system/omamobile-usb-rescue.service \
          usr/lib/systemd/system/plymouth-quit.service.d/10-omamobile-retain-splash.conf \
+         usr/bin/omamobile-bt-addr usr/lib/systemd/system/omamobile-bt-addr@.service \
+         usr/lib/udev/rules.d/80-omamobile-bt-addr.rules \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-husky/version \
          usr/share/licenses/omamobile-device-husky/LICENSE \
@@ -243,3 +245,20 @@ net=vendor/systemd/network/20-usb-gadget.network
 metric=$(sed -n '/^\[Route\]/,/^\[/{s/^Metric=//p}' "$net")
 [[ ${metric:-0} -gt 700 ]] || fail "usb0's gateway goes after Wi-Fi (600) and mobile data (700)"
 pass "USB is the last gateway"
+
+# The Bluetooth address: the 9a's script, rule and unit, with the chip name
+# (and the placeholder it describes) changed for the BCM4398.
+# Only from the repository, as the cheetah comparisons above.
+tegu=../omamobile-device-tegu
+if [[ -d $tegu ]]; then
+  for f in bin/omamobile-bt-addr vendor/systemd/system/omamobile-bt-addr@.service \
+           vendor/udev/rules.d/80-omamobile-bt-addr.rules; do
+    diff <(sed -e s/BCM4383/BCM4398/g -e "s/(43:89:00:00:..)/(43:98:D0:..)/" "$tegu/$f") "$f" >/dev/null ||
+      fail "$f is the 9a's with the BCM4398 named"
+  done
+  pass "the Bluetooth address script, rule and unit are the 9a's with the BCM4398 named"
+fi
+bash -n bin/omamobile-bt-addr || fail "the Bluetooth address script parses"
+grep -q 'chosen/config/bt_addr' bin/omamobile-bt-addr || fail "the Bluetooth address comes from the bootloader's DT"
+grep -q 'DRIVERS=="hci_uart_bcm"' vendor/udev/rules.d/80-omamobile-bt-addr.rules || fail "the rule matches the BCM UART controller only"
+pass "the Bluetooth address is read at run time, with the 9a's script"
