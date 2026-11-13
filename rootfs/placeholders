@@ -1,0 +1,133 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The places a release's root image keeps for the owner's answers
+# (docs/RELEASES.md §6.1). An installer that streams the image to the phone
+# (the desktop installer and the web page) can't change an ext4 file system,
+# so the image carries each file the answers go into already, at a fixed
+# size, and the signed manifest says which bytes of the raw image hold it.
+# The installer swaps exactly those bytes: no file-system metadata changes,
+# and ext4's metadata checksums don't cover file data.
+#
+#   rootfs/placeholders make ROOT      write the placeholders into the tree
+#                                      ROOT (rootfs/build-inside, before
+#                                      mkfs.ext4 -d)
+#   rootfs/placeholders locate IMAGE   find them in the raw ext4 IMAGE and
+#                                      print one MANIFEST line each:
+#     answers placeholder: PATH offset BYTES length BYTES sha256 HEX
+#                                      refusing anything an installer could
+#                                      not swap in place (see check below)
+#   rootfs/placeholders marker PATH    print a placeholder's bytes
+#   rootfs/placeholders fill PATH FILE print FILE (the answers) padded to
+#                                      the placeholder's length, as an
+#                                      installer fills it (tests, and the
+#                                      format's reference)
+#
+# The files, each one 4096-byte block, root-owned:
+#   /etc/omamobile/firstboot.conf    mode 0600: omamobile-firstboot's answers
+#   /etc/omamobile/boot-update.conf  mode 0644: AUTO_WRITE for the boot hook
+# A placeholder is comment lines and then one comment line of spaces up to
+# the last byte, a newline: every reader of these files (omamobile-firstboot,
+# omamobile-boot-update, omamobile-update) skips comments, so a phone whose
+# installer left them as they are reads no answers and AUTO_WRITE=no, as
+# when the files are absent. An installer fills one the same way: the
+# answers, KEY=value lines each ending in a newline, then a comment line
+# "#" and spaces up to the last byte, which is a newline (two bytes left:
+# "#\n"; one: "\n"; none: nothing).
+set -euo pipefail
+# debugfs and friends live in /sbin on Debian-like hosts
+export PATH=$PATH:/usr/sbin:/sbin LC_ALL=C
+
+LENGTH=4096
+# path mode
+FILES=("/etc/omamobile/firstboot.conf 0600" "/etc/omamobile/boot-update.conf 0644")
+
+die() { printf 'placeholders: %s\n' "$*" >&2; exit 1; }
+
+known() {
+  local f
+  for f in "${FILES[@]}"; do [[ ${f% *} == "$1" ]] && { echo "${f#* }"; return 0; }; done
+  die "$1 is not a placeholder (${FILES[*]% *})"
+}
+
+# TEXT padded to LENGTH bytes as described above
+pad() {
+  local text=$1 n rem
+  n=$(printf '%s' "$text" | wc -c)
+  ((n <= LENGTH)) || die "$n bytes don't fit a $LENGTH-byte placeholder"
+  [[ -z $text || ${text: -1} == $'\n' ]] || die "the text must end with a newline"
+  rem=$((LENGTH - n))
+  printf '%s' "$text"
+  if ((rem >= 2)); then
+    printf '#%*s\n' $((rem - 2)) ''
+  elif ((rem == 1)); then
+    printf '\n'
+  fi
+}
+
+marker() {
+  known "$1" >/dev/null
+  pad "# Omarchy Mobile: the place for $1, kept by the release image.
+# An installer that streams the image puts the owner's answers in these
+# $LENGTH bytes. Left as it is, it holds no answers: this file is read as
+# if it were not here.
+"
+}
+
+make() {
+  local root=${1:?} f path mode
+  [[ -d $root ]] || die "no directory $root"
+  for f in "${FILES[@]}"; do
+    path=${f% *} mode=${f#* }
+    mkdir -p "$root${path%/*}"
+    marker "$path" > "$root$path"
+    chmod "$mode" "$root$path"
+    [[ $EUID != 0 ]] || chown 0:0 "$root$path"
+  done
+}
+
+# One placeholder in a raw image: a regular file of exactly LENGTH bytes in
+# one block of a 4096-byte-block file system, its data in that block and
+# nowhere else (no inline data, no encryption, no verity, no data
+# journalling), root-owned with its mode, holding the marker.
+locate_one() {
+  local img=$1 path=$2 mode=$3 st flags size blocks bs offset want got
+  st=$(debugfs -R "stat $path" "$img" 2>/dev/null) || die "debugfs can't read $img"
+  [[ $st =~ Type:\ regular\ +Mode:\ +([0-7]+)\ +Flags:\ 0x([0-9a-f]+) ]] || die "$path is not a regular file in $img"
+  [[ ${BASH_REMATCH[1]} == "$mode" ]] || die "$path has mode ${BASH_REMATCH[1]}, not $mode"
+  flags=$((16#${BASH_REMATCH[2]}))
+  # Only EXTENTS (0x80000) may be set; INLINE_DATA 0x10000000, ENCRYPT
+  # 0x800, VERITY 0x100000, JOURNAL_DATA 0x4000 and the rest may not
+  ((flags == 0x80000)) || die "$path has inode flags $(printf 0x%x "$flags"); only extents (0x80000) can be swapped in place"
+  [[ $st =~ User:\ +0\ +Group:\ +0\  ]] || die "$path is not owned by root"
+  [[ $st =~ Size:\ ([0-9]+) ]] && size=${BASH_REMATCH[1]} || die "no size for $path"
+  ((size == LENGTH)) || die "$path is $size bytes, not $LENGTH"
+  bs=$(dumpe2fs -h "$img" 2>/dev/null | sed -n 's/^Block size: *//p')
+  [[ $bs == 4096 ]] || die "$img has $bs-byte blocks; a placeholder is one 4096-byte block"
+  dumpe2fs -h "$img" 2>/dev/null | grep -E '^(Filesystem features|Default mount options):' | grep -Ewc 'inline_data|encrypt|verity|journal_data' >/dev/null &&
+    die "$img has inline data, encryption, verity or data journalling"
+  read -ra blocks <<<"$(debugfs -R "blocks $path" "$img" 2>/dev/null)"
+  ((${#blocks[@]} == 1)) || die "$path is in ${#blocks[@]} blocks, not one"
+  offset=$((blocks[0] * bs))
+  want=$(marker "$path" | sha256sum | cut -d' ' -f1)
+  got=$(dd if="$img" bs="$bs" skip="${blocks[0]}" count=1 status=none | sha256sum | cut -d' ' -f1)
+  [[ $got == "$want" ]] || die "$path's block at $offset doesn't hold the placeholder"
+  echo "answers placeholder: $path offset $offset length $LENGTH sha256 $want"
+}
+
+locate() {
+  local img=${1:?} f
+  [[ -f $img ]] || die "no image $img"
+  for f in "${FILES[@]}"; do locate_one "$img" "${f% *}" "${f#* }"; done
+}
+
+case ${1:-} in
+  make) make "${2:-}" ;;
+  locate) locate "${2:-}" ;;
+  marker) marker "${2:?usage: rootfs/placeholders marker PATH}" ;;
+  fill)
+    known "${2:?usage: rootfs/placeholders fill PATH FILE}" >/dev/null
+    # The x keeps the file's last newlines through the substitution
+    text=$(cat "${3:?usage: rootfs/placeholders fill PATH FILE}"; printf x)
+    pad "${text%x}" ;;
+  *) die "usage: rootfs/placeholders make ROOT | locate IMAGE | marker PATH | fill PATH FILE" ;;
+esac

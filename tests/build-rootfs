@@ -124,6 +124,10 @@ awk '/linux-omamobile "\* \]\]; then/ {pkg = 1} pkg && /^else/ {exit} pkg && /zs
   || fail "with the kernel package installed the tarball is not unpacked over its modules"
 grep -qF '[[ $p == omamobile-boot-update ]] || kept+=("$p")' "$inside" || fail "without linux-omamobile (allowed missing) the hook is left out too"
 grep -qF 'echo "kernel modules: $modules_line"' "$inside" || fail "the MANIFEST still names the release (make-bundle, install-phone, rootfs-smoke read it)"
+grep -qF 'bash /src/rootfs/placeholders make "$T"' "$inside" || fail "build-inside puts the answers placeholders in the image"
+grep -qF 'bash /src/rootfs/placeholders locate /out/rootfs.img | tee -a /out/MANIFEST' "$inside" || fail "build-inside records where they are in the MANIFEST"
+awk '/placeholders make/ {m = NR} /mkfs.ext4/ {f = NR} /placeholders locate/ {l = NR} END {exit !(m && f && l && m < f && f < l)}' "$inside" ||
+  fail "the placeholders are made before mkfs.ext4 and located after it"
 grep -q 'OMAMOBILE_BOOT_FILES' packages/omamobile-device-cheetah/install || fail "cheetah's package ships boot files, so its image gets the kernel package"
 echo 'ok - a device with boot files gets linux-omamobile and omamobile-boot-update (the package modules replace the tarball); others keep the tarball'
 
@@ -162,6 +166,8 @@ for path, f in listed.items():
     data = open(os.path.join(b, path), "rb").read()
     assert f["size"] == len(data) and f["sha256"] == hashlib.sha256(data).hexdigest(), path
 assert m["root_image"]["name"] == image and m["root_image"]["sha256"] == digest
+# The stand-in image's MANIFEST has no "answers placeholder:" lines
+assert m["root_image"]["placeholders"] == [], m["root_image"]
 i = m["install"]
 assert i["product"] == "first" and i["require_unlocked_bootloader"] is True and i["require_matching_bootloader_slots"] is True
 assert [(w["partition"], w["source"]) for w in i["writes"]] == [("boot_b", "images/boot.img"), ("dtbo_b", "images/dtbo.img"), ("userdata", "root_image")]

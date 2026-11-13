@@ -218,6 +218,13 @@ rm -rf "$T"/etc/NetworkManager/system-connections/* "$T"/var/lib/NetworkManager/
 rm -rf "$T"/var/cache/pacman/pkg/* "$T"/var/log/journal/* "$T"/tmp/* "$T"/var/tmp/*
 find "$T/var/log" -type f -exec truncate -s 0 {} +
 
+say "Placeholders for the owner's answers"
+# firstboot.conf and boot-update.conf at a fixed size, which an installer
+# that streams the image fills in place (rootfs/placeholders, RELEASES §6.1).
+# Left as they are they hold no answers and AUTO_WRITE=no; tools/install-phone
+# writes its own files over them.
+bash /src/rootfs/placeholders make "$T"
+
 say "MANIFEST"
 {
   echo "# Omarchy Mobile root image"
@@ -251,3 +258,7 @@ truncate -s "${size}M" /out/rootfs.img
 mkfs.ext4 -q -L omamobile-root -m 1 -d "$T" /out/rootfs.img
 e2fsck -fn /out/rootfs.img >/dev/null
 echo "    ${used} MiB of files in a ${size} MiB file system"
+# Where the placeholders' bytes are in the raw image, for the bundle's signed
+# manifest (tools/bundle-manifest). Known only now, so the copy of the
+# MANIFEST inside the image doesn't have these lines.
+bash /src/rootfs/placeholders locate /out/rootfs.img | tee -a /out/MANIFEST | sed 's/^/    /'
