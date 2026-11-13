@@ -734,6 +734,8 @@ PY
 # Files in bundle DIR that tools/make-bundle doesn't put there, one per line.
 # The tools under tools/ are make-bundle's own provision_tools list, read
 # from it as data, so a tool it adds is allowed here without a change.
+# factory-builds.json is the device's build index (make-bundle ships it when
+# the device has one, #716); it is under SHA256SUMS like every other file.
 bundle_extra_files() {
   local tools t args=()
   tools=$(sed -n 's/^provision_tools="\([a-z0-9 -]*\)"$/\1/p' tools/make-bundle)
@@ -741,7 +743,7 @@ bundle_extra_files() {
   for t in $tools; do args+=(! -path "./tools/$t"); done
   (cd "$1" && find . \( -type f -o -type l \) ! -path './images/*.img' ! -path ./README.txt ! -path ./INSTALL.md \
     ! -path ./MANIFEST ! -path ./manifest.json ! -path ./SHA256SUMS ! -path ./SHA256SUMS.sig ! -path ./install \
-    ! -path ./device.conf ! -path ./omamobile.gpg "${args[@]}" | LC_ALL=C sort)
+    ! -path ./device.conf ! -path ./omamobile.gpg ! -path ./factory-builds.json "${args[@]}" | LC_ALL=C sort)
 }
 
 st_identifiers() {
