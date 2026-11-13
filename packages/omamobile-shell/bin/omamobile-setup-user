@@ -328,6 +328,18 @@ if omarchy-done ensure omamobile-chromium-mobile; then
   echo "\"--user-agent=Mozilla/5.0 (Linux; Android 14; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major:-153}.0.0.0 Mobile Safari/537.36\"" >>"$flags"
 fi
 
+# Auto-sleep (omamobile-sleepd: s2idle 30 s after the screen goes off behind
+# a secure lock), once, on a phone whose device package says its suspend is
+# verified (/usr/share/omamobile/auto-sleep-default; device/<codename>'s
+# SUSPEND-PLAN). The user's later choice stays: this runs once, and the
+# toggle (omarchy-toggle omamobile-sleep off) turns it off for good. With the
+# modem up the phone still doesn't sleep: the modem holds a sleep inhibitor.
+if [[ -e ${OMAMOBILE_AUTO_SLEEP_DEFAULT:-/usr/share/omamobile/auto-sleep-default} ]] &&
+   omarchy-done ensure omamobile-auto-sleep-on; then
+  mkdir -p ~/.local/state/omarchy/toggles
+  touch ~/.local/state/omarchy/toggles/omamobile-sleep
+fi
+
 # Lock screen: Omarchy's lock with a number pad (lock-keypad toggle, see
 # patches/omarchy/0003-*), since its session lock hides the on-screen keyboard.
 if omarchy-done ensure omamobile-lock-keypad; then
