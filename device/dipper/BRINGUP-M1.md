@@ -61,6 +61,13 @@ archive's checksum file. Do not boot if either backup is missing or fails.
    without changing UFS, and the screen stays lit because simpledrm holds the
    panel's VCI and VDDIO rails. If it goes dark about 30 seconds in, record
    `dmesg | grep -i -E 'regulator|simple'` and stop.
+   **Pre-boot DTB check:** before running `fastboot boot`, decompile the exact
+   packed DTB on the laptop with
+   `dtc -I dtb -O dts` and verify it contains both
+   `removed-region@86200000` and `removed-region@89100000`. On the phone,
+   before touching the screen or doing any other test, verify
+   `/proc/iomem` marks the complete `0x85fc0000–0x8a8fffff` range reserved.
+   If it does not, stop immediately and run `reboot-to bootloader`.
    Pass only when `uname -r`, the `boot.img` sha256, all partition `ro` values,
    whole-disk `ro` values, and `ufs-ro` lines from `dmesg` are recorded.
    `/dev/sda` must be absent or present with `/sys/block/sda/ro=1` in NFS mode;
@@ -119,8 +126,9 @@ repository; the SSH public key and generated host key stay in the local output.
   change was not retained. The 2026-11-10 NFS test root reached systemd with
   `RuntimeWatchdogSec=60s`; NFS link-loss recovery and the Omarchy desktop on
   that root remain untested.
-- Test the FTS5 touchscreen changes and GPU rendering on the phone before
-  marking them supported.
+- FTS5 controller probe and physical contact/coordinate/release events passed
+  on 2026-11-12 (see [NOTES.md]); Hyprland input delivery and GPU rendering
+  remain untested on the phone.
 
 From this rescue image, an SSH session can return to fastboot with
 `reboot-to bootloader`. The installed ROM's `recovery` image was verified from
