@@ -8,15 +8,21 @@
 #                     the PIN only on a phone that unlocks with one.
 # The test runs a copy of this script with the two tool paths replaced.
 set -euo pipefail
-here=$(cd -- "$(dirname -- "$0")" && pwd)
+PATH=/usr/bin
+# $0 is the absolute path the runner passed; no tool is looked up by name.
+here=${0%/*}
 case ${1:-} in
 change)
   exec /usr/bin/python3 -I "$here/pin.py"
   ;;
 status)
-  type=$(/usr/bin/omamobile-set-pin --type 2>/dev/null || true)
-  [[ $type == password ]] || type=pin
-  state=$(/usr/bin/passwd -S 2>/dev/null | awk '{ print $2; exit }' || true)
+  # Fails closed: a phone where either answer cannot be had gets no form.
+  cannot() { printf '%s\n' '{"error":"cannot tell how this phone unlocks"}'; exit 2; }
+  [[ -x /usr/bin/omamobile-set-pin ]] || cannot
+  type=$(/usr/bin/omamobile-set-pin --type 2>/dev/null) || cannot
+  [[ $type == pin || $type == password ]] || cannot
+  state=$(/usr/bin/passwd -S 2>/dev/null | /usr/bin/awk '{ print $2; exit }') || cannot
+  [[ -n $state ]] || cannot
   has=true
   [[ $state == NP ]] && has=false
   printf '{"type":"%s","hasPassword":%s}\n' "$type" "$has"

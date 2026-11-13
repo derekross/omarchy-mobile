@@ -4,7 +4,6 @@
 #include <QVariantMap>
 #include <QStringList>
 #include <QHash>
-#include <QSet>
 
 // Runs the source-owned backend scripts (display, pin) with a fixed argument list and no shell. Pages call run();
 // the JSON the script prints comes back through finished(), always from the event loop and never before run()
@@ -19,14 +18,18 @@ public:
     Q_INVOKABLE int run(const QString &tool, const QStringList &args, const QString &input = {});
     // A tool still running, and the last result nobody took: a page that was left while its action ran (the PIN
     // change finishes either way) finds the outcome here when it is opened again. Taking clears it.
-    Q_INVOKABLE bool pending(const QString &tool) const { return m_pending.contains(tool); }
-    Q_INVOKABLE QVariantMap takeLastResult(const QString &tool) { return m_last.take(tool); }
+    Q_INVOKABLE bool pending(const QString &tool, const QString &verb) const { return m_pending.value(key(tool, verb)) > 0; }
+    Q_INVOKABLE QVariantMap takeLastResult(const QString &tool, const QString &verb) { return m_last.take(key(tool, verb)); }
 signals:
-    void finished(const QString &tool, const QVariantMap &result, int id);
+    // verb is the first argument (get, set, change, status): a page told apart its own requests by id only,
+    // and an old page's request finishing under a new page was taken for the new page's.
+    void finished(const QString &tool, const QVariantMap &result, int id, const QString &verb);
 private:
-    void post(const QString &tool, const QVariantMap &result, int id);
+    static QString key(const QString &tool, const QString &verb) { return tool + QLatin1Char(':') + verb; }
+    void post(const QString &tool, const QStringList &args, const QVariantMap &result, int id);
+    void done(const QString &tool, const QStringList &args, const QVariantMap &result, int id);
     int m_next = 0;
     QString m_dir;
-    QSet<QString> m_pending;
+    QHash<QString, int> m_pending;
     QHash<QString, QVariantMap> m_last;
 };
