@@ -3,7 +3,8 @@
 # Tests for tools/phone-provision with a synthetic backup in the old layout
 # (no real phone data, no factory image): the dry run's path mapping (old
 # names to new, the old account's home to the user's), that it touches
-# nothing in a dry run, and, when Docker is available, a real run against a
+# nothing in a dry run, --fingerprint from a backup directory with a space
+# in its path, and, when Docker is available, a real run against a
 # throwaway Arch Linux container standing in for the phone: files land
 # under the new names owned by root (tar --no-same-owner), the fingerprint
 # tree keeps its Android owners, the home import belongs to the user, a
@@ -97,6 +98,17 @@ out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --resto
   fail "--restore-td without --fingerprint is refused"
 [[ -z $(ls -A "$t/work") ]] || fail "the staging (per-phone data) is removed"
 pass "dry run: old paths mapped to new names and the user's home, phone untouched; fingerprint: calibration and persist:/ss only, TD only with --restore-td"
+
+# A backup directory with a space in its path: --fingerprint checks the
+# fingerprint archive as one file, as it does the config archive
+mkdir "$t/backup with space"
+cp "$B"/* "$t/backup with space/"
+out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --restore "$t/backup with space" --work "$t/work" \
+      --user alice --fingerprint 2>&1) || { echo "$out"; fail "--fingerprint restores from a backup directory with a space"; }
+grep -qF "var-lib-omandroid-fp.tar: checksum matches" <<<"$out" || { echo "$out"; fail "checks the fingerprint archive's checksum"; }
+grep -qF "/var/lib/omandroid-fp/mfg_data.img -> /var/lib/omamobile-fp/mfg_data.img" <<<"$out" || { echo "$out"; fail "maps the fingerprint state"; }
+[[ ! -e $t/ssh.calls ]] || fail "a dry run never contacts the phone"
+pass "--fingerprint works from a backup directory with a space in its path"
 
 # Raven's run does none of cheetah's backup or fingerprint steps: each of
 # their options is refused before anything runs, not ignored. The fake

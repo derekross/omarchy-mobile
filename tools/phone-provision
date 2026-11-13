@@ -259,7 +259,9 @@ if [[ $device == cheetah ]] && ((first_install == 0)); then
   die "no $backup/phone-config.tar (--restore DIR: the backup taken before a reinstall). Without one this is a first install: --first-install --nv-backup DIR"
 say "Checking the backup in $backup"
 config_tar=$backup/phone-config.tar fp_tar=$backup/var-lib-omandroid-fp.tar
-for f in "$config_tar" $( ((fingerprint)) && echo "$fp_tar"); do
+archives=("$config_tar")
+((fingerprint)) && archives+=("$fp_tar")
+for f in "${archives[@]}"; do
   [[ -f $f ]] || die "no $f"
   if [[ -f $f.sha256 ]]; then
     [[ $(sha256sum < "$f" | cut -d' ' -f1) == "$(cut -d' ' -f1 < "$f.sha256")" ]] || die "$f doesn't match $f.sha256"
