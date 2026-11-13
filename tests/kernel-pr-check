@@ -67,6 +67,32 @@ git commit -q -am "drivers: a: AI signs" -m "Signed-off-by: A Human <human@examp
 run "an AI sign-off" 1 "from an AI agent"
 echo "ok - an AI Signed-off-by fails"
 
+# An AI's name is matched as a whole word: Claudette Tillman at precursor
+# and Dana Geminiani are human sign-offs, and every AI form still fails.
+# The pattern is this tool's own line; tools/pr-check's policy line also
+# says "from an AI agent".
+branch tillman
+echo x >> drivers/a.c
+git -c user.name="Claudette Tillman" -c user.email=claudette@precursor.example.org commit -q -am "drivers: a: Tillman signs" \
+  -m "Signed-off-by: Claudette Tillman <claudette@precursor.example.org>"
+run "a name that only contains AI names" 0
+branch geminiani
+echo x >> drivers/a.c
+git -c user.name="Dana Geminiani" -c user.email=dana.geminiani@example.org commit -q -am "drivers: a: Geminiani signs" \
+  -m "Signed-off-by: Dana Geminiani <dana.geminiani@example.org>"
+run "a surname that only contains an AI's name" 0 "" ": no human Signed-off-by"
+i=0
+for who in "Claude Opus 5.5 <noreply@anthropic.com>" "Anthropic <helper@example.org>" "OpenAI <helper@example.org>" \
+  "GitHub Copilot <copilot@users.noreply.github.com>" "Codex <helper@example.org>" "ChatGPT <chatgpt@example.org>" \
+  "Cursor Agent <cursoragent@cursor.com>" "Gemini <gemini@example.org>" "An LLM <llm@example.org>" \
+  "Claude3 <helper@example.org>" "dependabot[bot] <dependabot[bot]@users.noreply.github.com>"; do
+  branch "aisob-$((i += 1))"
+  echo x >> drivers/a.c
+  git commit -q -am "drivers: a: AI signs" -m "Signed-off-by: A Human <human@example.org>" -m "Signed-off-by: $who"
+  run "Signed-off-by: $who" 1 ": a Signed-off-by from an AI agent"
+done
+echo "ok - a name that only contains an AI's name passes; each AI form fails"
+
 branch noprefix
 echo x >> drivers/a.c
 git commit -q -am "Fix the thing" -m "Signed-off-by: A Human <human@example.org>"
