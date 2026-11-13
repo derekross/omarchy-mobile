@@ -91,7 +91,7 @@ pass "the mirrorlist follows stable by default; a phone on its own repository or
 OMAMOBILE_BOOT_FILES=none ./install "$tmp/root" "$tmp/build" 2>/dev/null
 for f in usr/bin/omamobile-bootctl usr/bin/reboot-to usr/bin/omamobile-boot-success usr/bin/omamobile-setup-system \
          usr/lib/systemd/system/omamobile-boot-success.service usr/lib/systemd/network/20-usb-gadget.network \
-         usr/lib/udev/rules.d/10-omamobile-storage.rules usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf usr/lib/udev/rules.d/20-omamobile-gpu-always-on.rules \
+         usr/lib/udev/rules.d/10-omamobile-storage.rules usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf usr/lib/udev/rules.d/20-omamobile-gpu-always-on.rules usr/lib/udev/rules.d/70-omamobile-touch-wake.rules \
          usr/bin/omamobile-wlan-mac usr/lib/udev/rules.d/80-omamobile-wlan-mac.rules \
          usr/bin/omamobile-charge-guard usr/lib/modprobe.d/omamobile-charger.conf \
          usr/lib/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf \
