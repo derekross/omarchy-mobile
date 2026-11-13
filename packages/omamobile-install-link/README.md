@@ -26,14 +26,15 @@ places the marker by hand only in an approved runbook step (R3).
 | `omamobile-firstboot.service.d/50-omamobile-install-link.conf` | First boot skipped on a `firstboot.conf` of comments only (the release image's placeholder), so its unit stays inactive until the link writes the answers and starts it |
 | `omamobile-install-link-agent` (user unit, Python) | The session's notice ("Setup is not finished. Tap to continue..."), the code window on a tap, the paused and unfinished notices (§2.8) |
 | `/usr/share/omamobile-install-link/code-window/` | The code window (Quickshell); the code reaches it in its environment only |
-| `/usr/lib/omamobile-install-link/screen-text` | A development stand-in for the first-start screen, for R2 to R6: prints the daemon's screen lines (the code among them) to the terminal it runs in; Enter is a volume key. No unit starts it |
+| `/usr/lib/omamobile-install-link/omamobile-install-screen` | The first-start screen (C, `screen/`; plan §20): the code and the link's state on the panel while the phone has no account, through a DRM device, else `/dev/fb0`, else Plymouth's message line, else nothing; a volume key press tells the daemon a person is at the phone. In Omarchy's look: its logo, JetBrains Mono, Tokyo Night's colours. `--demo` takes the daemon's lines on standard input (R5) |
+| `omamobile-install-screen.service` | Wanted by the link's unit and bound to it; only with the marker and no first-boot `done`, never while a display manager runs. The hold stops it, and waits for it, before the login screen may come |
+| `/usr/lib/omamobile-install-link/screen-text` | A development stand-in for the first-start screen, for R2 to R6 on the development phone (where first boot's `done` keeps the screen's unit off): prints the daemon's screen lines (the code among them) to the terminal it runs in; Enter is a volume key. No unit starts it |
 | `/usr/lib/tmpfiles.d/omamobile-install-link.conf` | The state directory's mode (0711), where it exists |
 | `/usr/share/omamobile/install-link/SOURCE` | The protocol, the installer commit and the patches it was built from |
 
-Not here yet: `omamobile-install-screen`, the framebuffer program that shows
-the code before the session exists (§3.3, R5), and the golden frames
-(§11.1 item 3). Until the first exists, a phone at stage `waiting` shows no
-code on its screen; R2 to R6 use `screen-text` over SSH.
+Not here yet: the golden frames (§11.1 item 3). The first-start screen is
+here but has not run on a phone: R5 is its first run, and it changes what
+the phone's screen shows, so the maintainer is told before it runs.
 
 ## The source
 
@@ -70,7 +71,13 @@ link's function deactivated instead. That choice is the maintainer's
 ## Tests
 
 `test/all`, offline once the source is fetched, no phone, no root, no USB:
-the installed layout; every unit's conditions and ordering, `systemd-analyze
+the installed layout; the first-start screen (built with `-Werror`, the
+tests on a sanitized build): every state drawn into memory at 1440x3120,
+720x1600 and 320x240 and saved as PNGs in `test/out/` (gitignored) to look
+at, checked for clipping and the code's size; its socket protocol against
+a stand-in daemon, the keys from a pipe of input events, Plymouth's
+requests against a stand-in, the real daemon's code, and no code in any of
+its logs; every unit's conditions and ordering, `systemd-analyze
 verify`, and systemd's own evaluation of the conditions on scratch roots;
 `has-answers`; `hold-login`; the agent against a stand-in daemon and against
 the real one; the gadget script on the installer's fake configfs, as

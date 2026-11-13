@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: MIT
+# The install link's first-start screen (docs/INSTALL-LINK-PLAN.md §3.3):
+# the pairing code and the link's state on the panel while the phone has no
+# account, before any session or display manager exists.
+#
+# Started by the link's unit (its Wants=), and bound to it: it stops when
+# the daemon stops, and starts again with it. It runs only while first boot
+# has made no account (the same condition as the login-screen hold), and
+# not at all once a display manager runs. It ends by itself on the
+# daemon's `off` (first boot done: the session owns the display), and
+# omamobile-install-link-hold stops it, and waits for it to end, before it
+# lets the login screen come: so it has drawn the background alone, dropped
+# DRM master and put the VT back before SDDM starts. A screen that does not
+# end in 5 s is killed; the kernel then drops master with the device.
+#
+# Not Conflicts=display-manager.service: both are in the boot's
+# transaction, where a conflict would drop one of them.
+[Unit]
+Description=Omarchy Mobile install link: the first-start screen
+Documentation=https://github.com/derekross/omarchy-mobile/blob/main/docs/INSTALL-LINK-PLAN.md
+ConditionPathExists=/etc/omamobile/install-link
+ConditionPathExists=!/var/lib/omamobile/firstboot/done
+After=omamobile-install-link.service
+BindsTo=omamobile-install-link.service
+Before=omamobile-install-link-hold.service display-manager.service
+
+[Service]
+Type=simple
+ExecCondition=/bin/sh -c '! systemctl -q is-active display-manager.service'
+ExecStart=/usr/lib/omamobile-install-link/omamobile-install-screen
+TimeoutStopSec=5s
+Restart=on-failure
+RestartSec=2s
+# It reads: the DRM device, /dev/fb0, the input devices, /dev/tty0 (the
+# VT's mode), the daemon's socket, Plymouth's abstract socket (so no
+# PrivateNetwork=), the theme and the fonts. It writes nothing on disk.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# DRM master (drmSetMaster) and the VT's mode (KDSETMODE)
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_TTY_CONFIG
+DevicePolicy=closed
+DeviceAllow=char-drm rw
+DeviceAllow=char-fb rw
+DeviceAllow=char-input r
+DeviceAllow=/dev/tty0 rw

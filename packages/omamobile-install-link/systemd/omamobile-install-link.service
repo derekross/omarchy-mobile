@@ -13,7 +13,9 @@
 # omamobile-boot-success is After=multi-user.target, so this unit is wanted
 # by graphical.target, never by multi-user.target (that would be a cycle).
 # While the phone has no account, omamobile-install-link-hold.service keeps
-# the login screen back (§3.3); this unit itself never holds it.
+# the login screen back (§3.3); this unit itself never holds it. It wants
+# the first-start screen, which is bound to it and runs only while no
+# account exists (omamobile-install-screen.service).
 #
 # A daemon that dies is started again while the marker is there (the kill
 # test's assumption, §18); its next start puts the gadget back first (E3),
@@ -26,7 +28,7 @@ Description=Omarchy Mobile install link
 Documentation=https://github.com/derekross/omarchy-mobile/blob/main/docs/INSTALL-LINK-PLAN.md
 ConditionPathExists=/etc/omamobile/install-link
 After=omamobile-usb-mac.service omamobile-boot-success.service
-Wants=omamobile-usb-rescue.service
+Wants=omamobile-usb-rescue.service omamobile-install-screen.service
 StartLimitIntervalSec=10min
 StartLimitBurst=5
 
