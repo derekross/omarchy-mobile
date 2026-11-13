@@ -17,7 +17,7 @@ it. No radio, NV, SIM or raw-request command is exposed.
   {"action": "sms-status", "request_id": ...} | {"action": "sms-list"}
   {"action": "sms-delete", "id": "..."}
   {"action": "screen-state", "on": true|false}
-  {"action": "radio", "on": true|false}      AT+CFUN, the rollback short of a reboot
+  {"action": "radio", "on": true|false}      selected radio transport, the rollback short of a reboot
   {"action": "subscribe"}                    keep the connection: one
       {"event": "status", "status": {...}} line now and after every change
       (the full private status, with the received SMS IDs). A subscriber
@@ -43,6 +43,7 @@ import time
 import cp
 import paths
 from at import radio
+from radio_power import SIT_RADIO_BEFORE_SIM, native_radio, profile, set_radio
 from calls import call_status, dial_payload, ring
 import data_call
 from data_call import paths as bearer_paths
@@ -96,7 +97,7 @@ class UnconfirmedRelease(RuntimeError):
     """Fatal call ownership failure; never turn this into a socket reply."""
 
 
-def unconfirmed_release(client, reason):
+def unconfirmed_release(client, reason, settings=None):
     """Stop serving an uncertain call without power-cycling the CP.
 
     In-place modem stops have reset tegu. Radio-off is best effort: even
@@ -104,8 +105,18 @@ def unconfirmed_release(client, reason):
     Keep call ownership and the modem/NV server for an attended reboot.
     """
     print('Call release not confirmed:', reason, flush=True)
+    selected_profile = 'default'
+    if settings is not None:
+        try:
+            selected_profile = profile(settings)
+        except (OSError, RuntimeError, ValueError) as error:
+            print('Recovery profile unavailable:', type(error).__name__,
+                  '; attempting AT radio-off', flush=True)
     try:
-        radio(False)
+        if selected_profile == SIT_RADIO_BEFORE_SIM:
+            native_radio(client, False)
+        else:
+            radio(False)
         print('Recovery radio-off command accepted', flush=True)
     except (OSError, RuntimeError, ValueError) as error:
         print('Recovery radio-off failed:', type(error).__name__, flush=True)
@@ -504,7 +515,7 @@ class Service:
             self.event(packet)
         if self.hangup_deadline and time.monotonic() > self.hangup_deadline:
             self.release_unconfirmed = True
-            unconfirmed_release(self.client, 'hangup deadline expired')
+            unconfirmed_release(self.client, 'hangup deadline expired', self.settings)
 
     def send_sms(self, request):
         key = request.get('request_id', '')
@@ -664,13 +675,13 @@ class Service:
             return dict(screen_on=self.screen_on)
         if action == 'radio':
             # The rollback for a running registration short of a reboot:
-            # AT+CFUN, as the start-up uses. Bearers and IMS go with it.
+            # Same board-selected transport as startup. Bearers and IMS go with it.
             on = request.get('on')
             if type(on) is not bool:
                 raise ValueError('Radio state must be boolean')
             if not on and self.live():
                 raise RuntimeError('Call in progress')
-            radio(on)
+            set_radio(self.client, self.settings, on, radio)
             self.next_poll = 0
             return dict(radio='on' if on else 'off')
         if action == 'power-status':
@@ -918,7 +929,7 @@ def main():
     try:
         marker = paths.RUN / 'active.json'
         if marker.exists() and json.loads(marker.read_text()):
-            unconfirmed_release(client, 'a call from the previous service run was never released')
+            unconfirmed_release(client, 'a call from the previous service run was never released', settings)
         service = Service(client, database(paths.STATE / 'apps.db'), settings)
         service.publish()
         for sms in paths.INBOX.glob('*.sit'):
@@ -985,7 +996,7 @@ def main():
                         service.event(packet)
                 if service.live():
                     service.release_unconfirmed = True
-                    unconfirmed_release(client, 'a call release was not confirmed at service stop')
+                    unconfirmed_release(client, 'a call release was not confirmed at service stop', settings)
         finally:
             try:
                 if service:

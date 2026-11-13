@@ -27,7 +27,7 @@ pass "unit tests$([[ -n ${SIT_SIM:-} ]] && echo ', RIL against sit-sim' || echo 
 stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
 ./install "$stage"
 for f in usr/bin/omamobile-sitd usr/bin/omamobile-sit usr/bin/omamobile-sit-data \
-         usr/lib/omamobile-sit/service.py usr/lib/omamobile-sit/sit.py usr/lib/omamobile-sit/sit_names.py \
+         usr/lib/omamobile-sit/service.py usr/lib/omamobile-sit/radio_power.py usr/lib/omamobile-sit/sit.py usr/lib/omamobile-sit/sit_names.py \
          usr/lib/systemd/system/omamobile-sitd.service usr/lib/systemd/system/omamobile-sit-data.service \
          usr/lib/NetworkManager/conf.d/90-omamobile-rmnet.conf etc/omamobile/modem-sit.conf \
          usr/lib/omamobile-sit/omamobile-sit-config usr/lib/omamobile-sit/carrier_apn.py \

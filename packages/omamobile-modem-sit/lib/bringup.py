@@ -45,6 +45,7 @@ running with data only, unless [network] ims_required = yes.
 import time
 
 from at import radio, radio_state
+from radio_power import SIT_RADIO_BEFORE_SIM, profile, native_radio, configure_single_modem
 import carrier_apn
 from data_call import APN_TYPES, activate, attach_bearer, configured_profiles, entries, initial_attach
 from data_call import owned_ids, provision_profiles, record_modem_owned, summary
@@ -336,16 +337,58 @@ def wait_for(service, predicate, seconds, stopped):
     raise TimeoutError('Modem registration deadline exceeded')
 
 
+def validate_startup_inputs(net):
+    """Validate explicit opt-in inputs without SIM access or modem requests.
+
+    Auto/empty values remain unresolved until the existing SIM/carrier path.
+    The attach-only "none" sentinel retains its existing meaning.
+    """
+    for key in ('apn', 'attach_apn', 'ims_apn'):
+        value = typed(net, key)
+        if value and not (key == 'attach_apn' and value.lower() == 'none'):
+            data_call.check_apn(value)
+    first = typed(net, 'ims_first')
+    if first:
+        yes_no(first, 'ims_first')
+    cid = typed(net, 'internet_cid')
+    if cid and (not cid.isdigit() or not 1 <= int(cid) <= 15 or int(cid) == data_call.IMS_CID):
+        raise ValueError('[network] internet_cid must be 1..15 and not 2 (IMS), or auto')
+    for key in ('ims', 'ims_required', 'ims_pcscf_required', 'ims_pcscf_from_isim'):
+        if key in net:
+            net.getboolean(key)
+    for key in ('sim_timeout', 'register_timeout', 'carrier_manifest_timeout', 'ims_timeout'):
+        if key in net:
+            net.getint(key)
+    if net.get('ip_type', 'ipv4v6') not in data_call.IP_TYPES:
+        raise ValueError('Unknown internet IP type')
+
+
 def start(service, settings, stopped=lambda: False):
     client = service.client
     net = settings['network']
     ip_type = net.get('ip_type', 'ipv4v6')
+    selected_profile = profile(settings)
+    if selected_profile == SIT_RADIO_BEFORE_SIM:
+        validate_startup_inputs(net)
+    def radio_control(enabled):
+        if selected_profile == SIT_RADIO_BEFORE_SIM:
+            if stopped():
+                raise InterruptedError('Modem startup stopped')
+            native_radio(client, enabled)
+        else:
+            radio(enabled)
     # A bad [profiles] line stops here, before the SIM and the radio; the
     # set is built again below with the APN chosen for this SIM.
     try:
         configured_profiles(settings, '')
     except ValueError as error:
         raise RuntimeError(f'Bad data profile in /etc/omamobile/modem-sit.conf: {error}') from None
+    if selected_profile == SIT_RADIO_BEFORE_SIM:
+        if stopped():
+            raise InterruptedError('Modem startup stopped')
+        service.stage('radio')
+        configure_single_modem(client)
+        radio_control(True)
     previous = None
     locked = None
     last = b''
@@ -402,11 +445,16 @@ def start(service, settings, stopped=lambda: False):
                        attach_source=chosen['attach_source'] if chosen['attach_apn'] else 'same')
     began = time.monotonic()
     service.stage('attach')
-    level = radio_state()
+    if selected_profile == SIT_RADIO_BEFORE_SIM:
+        # Explicit opt-in attach cycle; never interpret AT state as SIT.
+        radio_control(False)
+        level = 0
+    else:
+        level = radio_state()
     if level is None:
         # Unknown: 0.3.14's known-good cycle rather than a guess.
         print('Startup: radio state unreadable; switching it off before the attach settings', flush=True)
-        radio(False)
+        radio_control(False)
         already_on = False
     else:
         already_on = level == 1
@@ -458,7 +506,7 @@ def start(service, settings, stopped=lambda: False):
             print('Radio on without carrier config status after', limit, 's;',
                   'manifest sent' if service.manifest_sent else 'no request from the modem seen', flush=True)
     if not already_on:
-        radio(True)
+        radio_control(True)
         began = time.monotonic()
         if nr_after_radio:
             nr_mode(client)

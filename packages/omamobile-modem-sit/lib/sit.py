@@ -3,12 +3,14 @@
 """Single-owner SIT IPC0 transport for the S5300 (CPIF /dev/umts_ipc0).
 
 Every request goes through two guards: a fixed allow-list of the requests
-this stack sends (each one used on this phone with its stock layout), and
-the do-not-send list of device/cheetah/MODEM-SIT-RESEARCH.md section 5 (NV,
+this stack sends (the core requests used on this phone with its stock
+layout), and the do-not-send list of device/cheetah/MODEM-SIT-RESEARCH.md section 5 (NV,
 identity, carrier lock, AT forwarding, VSIM and satellite), so an edit to
 the allow-list can't let one of those through. Dial and outgoing SMS are
 refused unless the owner was opened for them. SIM_IO is refused too,
 except the read-only ISIM EF_PCSCF read of isim.py, checked byte by byte.
+The proposed opt-in Komodo configuration request below has separate provenance
+limitations; it is not covered by that core hardware-use statement.
 """
 from collections import deque
 import fcntl
@@ -78,6 +80,13 @@ def check(ident, *, sms=False, calls=False, manifest=False, isim_pcscf=False, pa
         return
     if ident in DENIED or (ident >> 8) in DENIED_FAMILIES:
         raise ValueError('request on the do-not-send list')
+    # Proposed Komodo (google,zumapro-komodo) startup request only; no dated
+    # public hardware qualification is recorded yet. Meaning/persistence of
+    # byte 0 remains unresolved; the board/profile gate belongs to radio_power.
+    if ident == 0x093f:
+        if type(payload) is not bytes or payload != b'\x00':
+            raise ValueError('Only the fixed startup configuration payload is supported')
+        return
     if not (ident in ALLOWED or (sms and ident in SMS) or (calls and ident in CALLS)):
         raise ValueError('request outside the allow-list')
 
