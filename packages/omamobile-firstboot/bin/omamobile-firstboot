@@ -55,7 +55,11 @@
 #   TIMEZONE        default UTC; a zone under /usr/share/zoneinfo (one this
 #                   phone doesn't have is replaced by UTC, with a warning:
 #                   a typo must not stop the first start)
-#   SSH_KEY         an OpenSSH public key; may repeat
+#   SSH_KEY         an OpenSSH public key line, no options; may repeat.
+#                   Each goes to root's and the user's authorized_keys
+#                   (folders 0700, files 0600, each owner's own); the
+#                   streaming installers put this computer's key here, so
+#                   SSH takes it once that step has run. Never logged
 #   WIFI_SSID       optional; WIFI_PSK with it (none for an open network)
 #   CREDENTIAL      pin or password: how the lock screen asks (default pin)
 #   FULL_NAME, EMAIL  optional; git identity, as Omarchy's installer asks
@@ -153,7 +157,8 @@ validate() {
     C[TIMEZONE]=UTC
   fi
   for k in "${SSH_KEYS[@]}"; do
-    [[ $k =~ $SSHKEY_RE ]] || die "SSH_KEY is not an OpenSSH public key: ${k:0:40}..."
+    # The key itself stays out of the message, and so out of the journal
+    [[ $k =~ $SSHKEY_RE ]] || die "an SSH_KEY is not one OpenSSH public key line (a key type, the key, a comment; no options)"
   done
   ssid=${C[WIFI_SSID]-} psk=${C[WIFI_PSK]-}
   if [[ -n ${C[WIFI_PSK]+x} && -z ${C[WIFI_SSID]+x} ]]; then die "WIFI_PSK without WIFI_SSID"; fi

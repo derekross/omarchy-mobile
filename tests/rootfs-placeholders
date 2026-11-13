@@ -73,6 +73,10 @@ CREDENTIAL=pin
 WIFI_SSID=Test network
 WIFI_PSK=not-a-real-passphrase
 A
+# The computer's SSH public key goes with the answers (a made-up one, new
+# each run: random characters in an Ed25519 key's form)
+key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI$(head -c 33 /dev/urandom | base64 -w0) installer-test"
+echo "SSH_KEY=$key" >> "$t/answers"
 printf '# Written by the Omarchy Mobile installer\nAUTO_WRITE=yes\n' > "$t/auto"
 bash "$P" fill $FB "$t/answers" > "$t/fb.block"
 bash "$P" fill $BU "$t/auto" > "$t/bu.block"
@@ -91,6 +95,8 @@ out=$(OMAMOBILE_FIRSTBOOT_ROOT=$t/root packages/omamobile-firstboot/bin/omamobil
   fail "omamobile-firstboot takes the filled file: $out"
 grep -q 'user:      alex (groups wheel audio video input, password set, pin unlock)' <<<"$out" || fail "the answers are read: $out"
 grep -q 'wi-fi:     Test network (WPA-PSK)' <<<"$out" || fail "the Wi-Fi network is read: $out"
+grep -qx 'ssh keys:  1' <<<"$out" || fail "the SSH key is read: $out"
+grep -qF "${key:12:40}" <<<"$out" && fail "--check never prints the key: $out"
 [[ $(grep -vE '^[[:space:]]*(#.*)?$' "$t/bu.block") == AUTO_WRITE=yes ]] || fail "boot-update.conf says AUTO_WRITE=yes and nothing else"
 pass "swapping the blocks: e2fsck -fn clean, the files hold the answers, firstboot reads them"
 

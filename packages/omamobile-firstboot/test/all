@@ -100,6 +100,9 @@ good | sed 's/^PASSWORD_HASH=.*/PASSWORD_HASH=$1$abc$def/' | refuse "an md5-cryp
 good | sed 's/^HOSTNAME=.*/HOSTNAME=-bad/' | refuse "a bad host name"
 good | sed 's/^TIMEZONE=.*/TIMEZONE=..\/..\/etc\/passwd/' | refuse "a time zone outside zoneinfo"
 good | sed 's/^SSH_KEY=.*/SSH_KEY=not a key/' | refuse "a bad SSH key"
+good | sed "s/^SSH_KEY=.*/SSH_KEY=no-pty $KEY/" | refuse "an SSH key with options"
+out=$(good | sed "s/^SSH_KEY=.*/SSH_KEY=no-pty $KEY/" > "$t/badkey.conf"; check "$t/badkey.conf") && fail "refuses an SSH key with options"
+grep -qF "${KEY:12:20}" <<<"$out" && fail "a refused key is not repeated in the message: $out"
 good | sed 's/^WIFI_PSK=.*/WIFI_PSK=short/' | refuse "a short passphrase"
 good | sed '/^WIFI_SSID=/d' | refuse "a passphrase without a network"
 good | sed 's/^CREDENTIAL=.*/CREDENTIAL=pattern/' | refuse "an unknown credential type"
@@ -200,6 +203,10 @@ grep -qx '%wheel ALL=(ALL:ALL) ALL' "$R/etc/sudoers.d/00-omarchy-wheel" || fail 
 grep -qxF "$KEY" "$R/root/.ssh/authorized_keys" || fail "root gets the SSH key"
 grep -qxF "$KEY" "$R/home/alice/.ssh/authorized_keys" || fail "the user gets the SSH key"
 [[ $(stat -c %a "$R/home/alice/.ssh/authorized_keys") == 600 ]] || fail "authorized_keys is private"
+[[ $(stat -c %a "$R/root/.ssh/authorized_keys") == 600 && $(stat -c %a "$R/root/.ssh") == 700 ]] || fail "root's authorized_keys is private"
+grep -c "^chown -R root:root $R/root/.ssh\$" "$CALLS" >/dev/null && grep -c "^chown -R alice:alice $R/home/alice/.ssh\$" "$CALLS" >/dev/null ||
+  fail "each authorized_keys belongs to its user"
+grep -qF "${KEY:12:30}" "$R/var/log/omamobile/firstboot.log" "$t/run.out" && fail "the log never has the SSH key"
 grep -q '^ufw allow in on usb0 to any port 22 proto tcp$' "$CALLS" || fail "ufw allows SSH on usb0"
 grep -qx 'ENABLED=yes' "$R/etc/ufw/ufw.conf" || fail "ufw is on from the next boot"
 for unit in sshd.service systemd-networkd.service NetworkManager.service sddm.service ufw.service; do
