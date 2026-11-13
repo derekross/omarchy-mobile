@@ -12,7 +12,13 @@
 # At stage firstboot-failed first boot has no `done`, so the screen stays
 # held: the code stays on the first-start screen (§2.2, §17 P3).
 #
-# It reads files and `systemctl show`; it writes nothing and changes nothing.
+# Before it returns it stops the first-start screen and waits for it to end
+# (omamobile-install-screen.service, TimeoutStopSec=5s): the screen draws the
+# background alone, drops DRM master and puts the VT back, so the display
+# manager finds the panel free and no code on it.
+#
+# It reads files and `systemctl show`, and stops the screen; it writes
+# nothing.
 # Tests point it elsewhere: OMAMOBILE_LINK_ROOT (a scratch root),
 # HOLD_SYSTEMCTL (a stand-in), HOLD_POLL_S (2), HOLD_GONE_POLLS (15).
 set -uo pipefail
@@ -23,16 +29,21 @@ gone_polls=${HOLD_GONE_POLLS:-15}
 unit=omamobile-install-link.service
 gone=0
 say() { echo "hold-login: $*"; }
+let_go() {
+  say "$1"
+  "$systemctl" stop omamobile-install-screen.service 2>/dev/null || say "the first-start screen did not stop cleanly"
+  exit 0
+}
 while :; do
-  if [[ ! -e $R/etc/omamobile/install-link ]]; then say "no marker: the login screen may come"; exit 0; fi
-  if [[ -e $R/var/lib/omamobile/firstboot/done ]]; then say "first boot made the account"; exit 0; fi
-  if [[ -e $R/var/lib/omamobile/install-link/done ]]; then say "the link has ended"; exit 0; fi
+  if [[ ! -e $R/etc/omamobile/install-link ]]; then let_go "no marker: the login screen may come"; fi
+  if [[ -e $R/var/lib/omamobile/firstboot/done ]]; then let_go "first boot made the account"; fi
+  if [[ -e $R/var/lib/omamobile/install-link/done ]]; then let_go "the link has ended"; fi
   state=$("$systemctl" show -P ActiveState "$unit" 2>/dev/null) || state=unknown
   sub=$("$systemctl" show -P SubState "$unit" 2>/dev/null) || sub=unknown
   case $state/$sub in
     active/* | activating/* | reloading/* | */auto-restart) gone=0 ;;
     *) gone=$((gone + 1)) ;;
   esac
-  if ((gone >= gone_polls)); then say "the link's daemon is not running ($state, $sub): the login screen may come"; exit 0; fi
+  if ((gone >= gone_polls)); then let_go "the link's daemon is not running ($state, $sub): the login screen may come"; fi
   sleep "$poll"
 done
