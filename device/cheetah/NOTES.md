@@ -2,6 +2,21 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-11-13: the release kernel kernel-2026.11.13 boots, power off stays off, double tap wakes from sleep
+
+`kernel-2026.11.13` is linux-omarchy-mobile's `omamobile` at `36d61a33795b`:
+the previous published tip (`2db2bc35beec`, with #233, the S2MPG12's WTSR
+and SMPL restarts disarmed at power off) plus #248 (the touchscreen as a
+wakeup source, off until user space enables it). Its release build,
+`7.3.0-rc6-omamobile-g36d61a33795b` (`bin/omamobile kernel --release` from
+a clean checkout of the tag), was pushed to the reference phone and booted:
+`tools/phone-smoke` passed, nothing failed, no UFS line, slot B marked
+successful. On the same code as a development build earlier that day
+(SUSPEND-PLAN, "P7, P8 and double tap, 2026-11-13"): power off stayed off
+with the cable out, an off phone on a charger started the charger boot with
+#554, and with `power/wakeup` enabled on the touchscreen a double tap woke
+the phone from s2idle (IRQ 98, `spi0.0`) and lit the lock screen.
+
 ## 2026-11-12: the 2026.11.12 test install, on Omarchy 4.5
 
 The release's signed bundle, `omamobile-cheetah-2026.11.12`, installed on the
