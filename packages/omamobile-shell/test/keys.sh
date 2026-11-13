@@ -91,6 +91,15 @@ press() { reset; keys power-down; keys power-up; sleep 0.5; }
 before() { awk -v a="$1" -v b="$2" '{ sub(/ +$/, "") } $0 == a && !x { x = NR } $0 == b && !y { y = NR } END { exit !(x && y && x < y) }' "$log"; }
 echo false >"$t/locked"; echo true >"$t/dpms"
 press; grep -q "omarchy-system-lock" "$log" || fail "unlocked and lit: a press locks"
+# OMAMOBILE_POWER_KEY_ANDROID=1 (device-panther): Android's fade to black
+# first, the shell's screenOff, then the panel off before the lock. Off, as
+# before: no fade, the lock first.
+if [[ ${OMAMOBILE_POWER_KEY_ANDROID:-} == 1 ]]; then
+  before "omarchy-shell shell call omamobile.home screenOff" "omarchy-system-lock" \
+    || fail "unlocked and lit, as Android's: the fade to black first, then the lock"
+else
+  grep -q "screenOff" "$log" && fail "unlocked and lit, shared default: no fade, as before"
+fi
 before "omarchy-system-lock" "omarchy-shell lock dark" && before "omarchy-shell lock dark" "omarchy-brightness-display off" \
   || fail "unlocked and lit: the new lock hears it goes dark, before the panel goes off"
 

@@ -1225,7 +1225,8 @@ grep -c 'Copyright (c) 2026 Simon Schubert and contributors' widgets/OWL.md >/de
 grep -c 'd355bdb2789f7bd1023d88b17f8a2898dc0ffa2b' widgets/OWL.md >/dev/null || fail "the OWL guide names its source commit"
 pass "install stages the package"
 
-test/keys.sh || fail "omamobile-keys volume keys"
+env -u OMAMOBILE_POWER_KEY_ANDROID test/keys.sh || fail "omamobile-keys volume keys"
+OMAMOBILE_POWER_KEY_ANDROID=1 test/keys.sh || fail "omamobile-keys, with the power key as Android's"
 test/home-command.sh || fail "omamobile-home"
 test/reboot-command.sh || fail "omamobile-reboot"
 bash test/dnd-state.sh || fail "the Do Not Disturb read on Omarchy 4.5 and 4.0"
@@ -1249,4 +1250,4 @@ elif [[ $rc != 0 ]]; then
 else
   pass "Back threshold feedback: once per gesture, both edges and retreat"
 fi
-bash test/power-overlap.sh || fail "overlapping power-key presses"
+env -u OMAMOBILE_POWER_KEY_ANDROID bash test/power-overlap.sh || fail "overlapping power-key presses"
