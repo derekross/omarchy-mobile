@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Compile the shared reboot-to helper for the installed system.
+# Compile this package's reboot-to helper for the installed system.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 out=${1:-build}

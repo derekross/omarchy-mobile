@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: MIT
-# Dipper's UFS spans sda through sdf. The initramfs keeps all partitions
-# read-only except userdata; hide whole disks and Android partitions after boot.
+# Dipper's UFS spans sda through sdf. Keep every whole disk and partition hidden.
 SUBSYSTEM=="block", KERNEL=="sd[a-f]", MODE="0000", ENV{UDISKS_IGNORE}="1"
-SUBSYSTEM=="block", KERNEL=="sd[a-f][0-9]*", ENV{ID_PART_ENTRY_NAME}!="userdata", ENV{UDISKS_IGNORE}="1"
+SUBSYSTEM=="block", KERNEL=="sd[a-f][0-9]*", ENV{UDISKS_IGNORE}="1"

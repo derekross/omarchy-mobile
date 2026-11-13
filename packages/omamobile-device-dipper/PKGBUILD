@@ -17,6 +17,10 @@ build() {
   "$startdir/build" "$srcdir"
 }
 
+check() {
+  "$startdir/test/all"
+}
+
 package() {
   "$startdir/install" "$pkgdir" "$srcdir"
 }
