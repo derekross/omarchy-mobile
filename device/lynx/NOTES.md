@@ -41,6 +41,11 @@ factory images were flashed to slot B and Android booted from it. Stock
 rewrites `efs`, `persist` and `modem_userdata`, so a fresh read-only
 backup is required before any radio work.
 
+A later read on 2026-11-13, from slot B after a boot, got
+`03 00 00 00 01 0c 00 00` at `0x30-0x37` (retry byte 1). That is
+the Linux side of a same-moment row; the matching `getvar` has to be
+taken before the next boot for the row to be complete.
+
 ## 2026-10-30: published kernel on an Android 15 unit; devinfo 3.11
 
 - **The published `omamobile` kernel brings up lynx touch on this unit.** With
