@@ -1,0 +1,30 @@
+{
+  "format": 1,
+  "codename": "cheetah",
+  "updated": "2026-11-10",
+  "builds": [
+    {
+      "build": "CP3A.261005.002.A1",
+      "bootloader": "cloudripper-17.0-15902555",
+      "baseband": "g5300q-260604-260807-B-16036236",
+      "zip": "cheetah-cp3a.261005.002.a1-factory-5b5b06ad.zip",
+      "url": "https://dl.google.com/dl/android/aosp/cheetah-cp3a.261005.002.a1-factory-5b5b06ad.zip",
+      "page": "https://developers.google.com/android/images#cheetah",
+      "sha256": "5b5b06adb6566e20b927e887f42222f7387d25d37a3257b5f4655bb905aacdb8",
+      "size": 3921490797,
+      "tested": false
+    },
+    {
+      "build": "CP2A.260705.006",
+      "bootloader": "cloudripper-17.0-15199429",
+      "baseband": "g5300q-260317-260505-B-15346003",
+      "zip": "cheetah-cp2a.260705.006-factory-23d564ad.zip",
+      "url": "https://dl.google.com/dl/android/aosp/cheetah-cp2a.260705.006-factory-23d564ad.zip",
+      "page": "https://developers.google.com/android/images#cheetah",
+      "sha256": "23d564ad5d0db2d04fa4bbde43930c9b0f8e570a51e8090c8d37c71dc96a2c0c",
+      "size": 3910686132,
+      "tested": true,
+      "tested_with": "2026.11.08"
+    }
+  ]
+}

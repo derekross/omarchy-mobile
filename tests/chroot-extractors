@@ -1,0 +1,68 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for tools/extract-vendor-chroot and tools/extract-fingerprint-vendor
+# with made-up images (no factory image, no Google files): small files with
+# the ext4 magic stand in for vendor.img and system.img in an image zip, a
+# stand-in unzip reads it with Python's zipfile, and a stand-in debugfs
+# fails the copy of build.prop as real debugfs does on a full work
+# directory (an error message, an empty file, exit 0). Checked: each tool
+# then says build.prop can't be read, not that the image has none.
+# XVC=path and XFP=path run other copies of the tools (a negative control).
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+XVC=$(realpath -- "${XVC:-tools/extract-vendor-chroot}")
+XFP=$(realpath -- "${XFP:-tools/extract-fingerprint-vendor}")
+failed=0
+fail() { printf 'not ok - %s\n' "$1" >&2; failed=$((failed + 1)); }
+pass() { printf 'ok - %s\n' "$1"; }
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+
+mkdir -p "$t/bin"
+cat > "$t/bin/unzip" <<'EOF'
+#!/bin/bash
+# unzip -Z1 ZIP (list) or unzip -p ZIP MEMBER (to stdout)
+exec python3 -I -c '
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[2]) as z:
+    if sys.argv[1] == "-Z1":
+        print("\n".join(z.namelist()))
+    else:
+        sys.stdout.buffer.write(z.read(sys.argv[3]))
+' "$@"
+EOF
+cat > "$t/bin/debugfs" <<'EOF'
+#!/bin/bash
+# debugfs -R "dump /build.prop OUT" IMG on a full disk: real debugfs's
+# messages, an empty OUT, exit 0
+read -r _ _ out <<<"$2"
+out=${out#\"}; out=${out%\"}; out=${out//\"\"/\"}   # debugfs's quoting
+: > "$out"
+echo "debugfs 1.47.2 (stand-in)" >&2
+echo "dump: No space left on device while writing file" >&2
+exit 0
+EOF
+chmod +x "$t/bin/unzip" "$t/bin/debugfs"
+
+head -c 4096 /dev/zero > "$t/ext4.img"
+printf '\x53\xef' | dd of="$t/ext4.img" bs=1 seek=1080 conv=notrunc status=none
+python3 -I -c '
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    for p in ("vendor.img", "system.img"):
+        z.write(sys.argv[2], p)
+' "$t/image-cheetah-fictional.zip" "$t/ext4.img"
+
+for tool in "$XVC" "$XFP"; do
+  name=${tool##*/}
+  args=()
+  [[ $tool != "$XVC" ]] || args=(-p gnss)
+  if PATH=$t/bin:$PATH "$tool" "${args[@]}" -w "$t/work" -o "$t/out" "$t/image-cheetah-fictional.zip" > "$t/log" 2>&1; then
+    fail "$name: a build.prop whose copy fails is refused"
+  elif ! grep -qF "error: build.prop can't be read from vendor.img" "$t/log"; then
+    cat "$t/log"; fail "$name: a build.prop whose copy fails: says it can't be read"
+  else
+    pass "$name: a build.prop whose copy fails: refused, says it can't be read"
+  fi
+done
+((failed == 0)) || { echo "$failed check(s) failed" >&2; exit 1; }

@@ -457,7 +457,14 @@ grep -q 'User name\|Password or PIN\|tools/phone-provision' "$t/out" && fail "th
 grep -q 'user:      alice (pin)' "$t/out" || fail "the piped answers are used"
 CONFIRM=nope OMAMOBILE_INSTALL_GUIDED=1 install && fail "the codename is still required from the guided installer"
 [[ -z $(flashing_calls) ]] || fail "a wrong codename from the guided installer writes nothing"
-pass "run by the guided installer: no questions printed, the answers and the codename still checked"
+# A dry run never prints the closing hints, so only a run that writes can
+# show they stay out for the guided installer (and are there by hand)
+OMAMOBILE_INSTALL_GUIDED=1 install || { cat "$t/out"; fail "a run for the guided installer succeeds"; }
+grep -c 'Done. The phone boots slot B' "$t/out" >/dev/null || fail "the guided installer's run ends as any other"
+if grep -c 'Watch it:\|tools/phone-provision\|tools/nv-backup' "$t/out" >/dev/null; then fail "the guided installer's run prints no closing hints"; fi
+install || { cat "$t/out"; fail "a run by hand succeeds"; }
+grep -c 'tools/phone-provision --first-install --nv-backup DIR FACTORY.zip' "$t/out" >/dev/null || fail "a run by hand ends with the hints for the next steps"
+pass "run by the guided installer: no questions printed, the answers and the codename still checked, no closing hints"
 
 # --serial pins the phone: another one in fastboot mode is refused before it
 # is asked anything, and the named one installs as ever

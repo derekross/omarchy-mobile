@@ -211,3 +211,29 @@ pass "a second run for the same bundle is refused and the first one completes; a
 out=$(PHONE_SSH=false "$b/tools/nv-backup" --list 2>&1) && fail "nv-backup refuses a descriptor without NV_PARTS"
 grep -c "device.conf names no NV_PARTS" <<<"$out" >/dev/null || fail "the bundled nv-backup reads the bundle's device.conf: $out"
 pass "the bundled nv-backup reads the bundle's device.conf"
+
+# The build index: absent for a device without one, and for a device with
+# one it is the tree's file, under the checksums and in manifest.json, and
+# only when it passes its own check
+[[ ! -e $b/factory-builds.json ]] || fail "a device without a build index gets none in its bundle"
+cp tools/factory-index "$r/tools/"
+sed 's/cheetah/testdev/g' device/cheetah/factory-builds.json > "$r/device/testdev/factory-builds.json"
+bundle() { DEVICE=testdev KERNEL_OUT=$k KERNEL_DIR=$r "$r/tools/make-bundle" --unsigned --version 2026.11.01 --rootfs "$root" 2>&1; }
+out=$(bundle) || fail "a bundle with a build index assembles: $out"
+cmp -s "$b/factory-builds.json" "$r/device/testdev/factory-builds.json" || fail "the bundle carries the tree's build index"
+grep -c ' factory-builds.json$' "$b/SHA256SUMS" >/dev/null || fail "the build index is under SHA256SUMS"
+(cd "$b" && sha256sum -c --quiet SHA256SUMS) || fail "SHA256SUMS holds with the build index"
+python3 -I - "$b" <<'PY' || fail "manifest.json lists the build index with its size and checksum"
+import hashlib, json, os, sys
+b = sys.argv[1]
+data = open(os.path.join(b, "factory-builds.json"), "rb").read()
+f = [f for f in json.load(open(os.path.join(b, "manifest.json")))["files"] if f["path"] == "factory-builds.json"]
+sys.exit(0 if len(f) == 1 and f[0]["size"] == len(data) and f[0]["sha256"] == hashlib.sha256(data).hexdigest() else 1)
+PY
+pass "a device's build index ships in its bundle, under the checksums and in manifest.json"
+before=$(cd "$b" && sha256sum SHA256SUMS)
+echo '{"format": 1, "codename": "otherdev", "builds": []}' > "$r/device/testdev/factory-builds.json"
+if out=$(bundle); then fail "a build index that fails its own check stops the bundle"; fi
+grep -c "factory-index check" <<<"$out" >/dev/null || fail "the refusal names the check: $out"
+[[ $(cd "$b" && sha256sum SHA256SUMS) == "$before" ]] || fail "a refused rebuild leaves the bundle as it was"
+pass "a build index that fails tools/factory-index check stops the bundle, and the earlier bundle stays"

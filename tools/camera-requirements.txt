@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# The two Python modules tools/extract-camera-data needs, for
+# tools/install-guided's step 9 (docs/INSTALL-GUIDED.md §2):
+#
+#   pip install --require-hashes --only-binary :all: -r camera-requirements.txt
+#
+# pip then installs these exact versions, as built packages only, and refuses
+# any file whose SHA-256 is not listed here. One line per module, each
+# "--hash" on that line (tools/install-guided reads the names and versions
+# from these lines to show them).
+#
+# Where the digests come from: each is the SHA-256 that pypi.org's index
+# (pypi.org/simple/<name>/) lists for the named file, compared on 2026-11-10.
+# The first unicorn digest and pyelftools' were also read from the files pip
+# had downloaded on the computer where tools/extract-camera-data was
+# developed and run against a phone. Compare a new digest with the index
+# the same way before adding it.
+#
+# unicorn is built per system. Listed, in this order, for version 2.1.4:
+#   unicorn-2.1.4-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+#   unicorn-2.1.4-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+#   unicorn-2.1.4-cp37-abi3-musllinux_1_2_x86_64.whl
+#   unicorn-2.1.4-cp37-abi3-musllinux_1_2_aarch64.whl
+# that is Linux on 64-bit Intel/AMD and 64-bit ARM, with glibc or musl. Only
+# the first has been installed and run by this project. On any other system
+# pip finds no file with a listed digest and the step stops with a message.
+# pyelftools is one file for every system (pyelftools-0.33-py3-none-any.whl;
+# it needs Python 3.10 or later). Neither needs another package there, so
+# --require-hashes has nothing unpinned to refuse.
+unicorn==2.1.4 --hash=sha256:9d6e6dea140560de4ebd8446661f7ef84a357d428c14a3ef09dacd306ec8c239 --hash=sha256:bd1fb0c9af5f57e356d8a96928b4fe045b2e18f308ef23b481d5f970008aa722 --hash=sha256:d348a90ee90219d141cb115ef8ed7e3fd1af42afaee105f7580761d775b25e32 --hash=sha256:01d744ba01c5cc68f1d7afe3d183f1868720fd440ec4eaedc4d1d5d9bf54b84c
+pyelftools==0.33 --hash=sha256:f215ad5f47d3f1373a21496a6c9e0707c622840d0622f23ff7ce08678b020036

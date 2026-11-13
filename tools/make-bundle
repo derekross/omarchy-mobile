@@ -14,6 +14,12 @@
 #                    without the repository; they extract Google's files on
 #                    the user's machine, and none of those files ship here;
 #                    and tools/nv-backup, the read-only radio backup it needs
+#     factory-builds.json
+#                    the device's build index (device/<codename>/, kept by
+#                    tools/factory-index), when the device has one: which of
+#                    Google's factory builds this release was tested with.
+#                    Metadata only, never Google's files. An installer trusts
+#                    it only through the signed checksums below
 #     MANIFEST       kernel release, root image, both repositories' commits, toolchain
 #     manifest.json  the same and more as data (tools/bundle-manifest): every
 #                    file with size and SHA-256, the root image, the release
@@ -175,6 +181,16 @@ done
 for p in $boot_images; do
   install -m644 "$KERNEL_OUT/images/$p.img" "$dir/images/$p.img"
 done
+# The build index goes in as the tree has it, and only one that passes its
+# own check: a release must not sign a list an installer would refuse
+index=device/$DEVICE/factory-builds.json
+if [[ -f $index ]]; then
+  python3 -I -B tools/factory-index check -d "$DEVICE" >/dev/null ||
+    die "$index doesn't pass tools/factory-index check"
+  install -m644 "$index" "$dir/factory-builds.json"
+else
+  rm -f "$dir/factory-builds.json"
+fi
 
 for f in "$rootfs" "$rootfs.sha256" "${rootfs%.img.zst}.MANIFEST"; do
   [[ -f $f ]] && ln -f "$f" "$out/" 2>/dev/null || cp -f "$f" "$out/"
