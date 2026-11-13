@@ -344,7 +344,12 @@ rm "$R/$B/tools/extra-tool"
 echo x > "$R/$B/images/notes.txt"
 if run check-bundle "$R/$B"; then fail "a non-image file under images/ is refused"; fi
 rm "$R/$B/images/notes.txt"
-pass "the bundle check allows exactly make-bundle's files, INSTALL.md and its provision tools included"
+# The device's build index, which make-bundle ships when the device has one
+# (2026.11.12 was the first bundle with it, and this check stopped it)
+echo '{}' > "$R/$B/factory-builds.json"
+run check-bundle "$R/$B" || fail "a bundle with its device's build index passes the bundle check"
+rm "$R/$B/factory-builds.json"
+pass "the bundle check allows exactly make-bundle's files, INSTALL.md, the build index and its provision tools included"
 urun() { (cd "$R" && PATH="$t/stub:$PATH" tools/release "$@") > "$t/log" 2>&1; }
 if urun --version "$V" upload; then fail "the upload stage stops for the maintainer"; fi
 grep -q "release-upload --dry-run $B" "$t/log" || fail "runs tools/release-upload --dry-run on the bundle directory"
