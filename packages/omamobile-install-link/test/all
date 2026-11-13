@@ -10,6 +10,15 @@
 #     marker, the marker, the marker and first boot's done, `done` alone
 #   - has-answers on the release image's placeholder, a filled one, none
 #   - hold-login: what holds the login screen and what lets it come
+#   - the first-start screen (screen/, built here with cc, libdrm, freetype2
+#     and zlib): drawn into memory at the Pixel 7 Pro's 1440x3120 and two
+#     small sizes for every state, saved as PNGs in test/out/ (gitignored)
+#     and checked for clipping, the code's size and the theme's colours;
+#     the socket protocol against a stand-in daemon (every line, a daemon
+#     that vanishes and comes back, a burst, an overlong line, off,
+#     SIGTERM); the volume keys from a pipe of input_event structs;
+#     Plymouth's message line against a stand-in plymouthd; the real
+#     daemon's code on a scratch root; and the code in no log line
 #   - the session agent against a stand-in daemon: the notice, a tap, the
 #     code only in the window's environment, locked, paired, closed for the
 #     boot; after an unfinished end the notice at three logins, then none
@@ -77,14 +86,39 @@ if [[ -z $bin_for_stage ]]; then
   for b in omamobile-linkd omamobile-install-link; do printf '#!/bin/sh\n' > "$bin_for_stage/$b"; chmod +x "$bin_for_stage/$b"; done
 fi
 
+# The first-start screen: built here with the warnings as errors (and, where
+# the compiler has them, the address and undefined-behaviour sanitizers for
+# the copy the tests run)
+SCR=""
+OUTDIR=$PKG/test/out
+if command -v cc >/dev/null && command -v make >/dev/null && pkg-config --exists libdrm freetype2 zlib 2>/dev/null; then
+  make -s -C screen OUT="$t/screen" CFLAGS="-O2 -g -Werror" all render-test > "$t/make.log" 2>&1 ||
+    { cat "$t/make.log"; fail "the first-start screen builds with no warning"; }
+  SCR=$t/screen/omamobile-install-screen RT=$t/screen/render-test
+  if make -s -C screen OUT="$t/screen-san" CFLAGS="-O1 -g -Werror -fsanitize=address,undefined -fno-omit-frame-pointer" \
+       LDFLAGS="-fsanitize=address,undefined" all render-test > "$t/make-san.log" 2>&1; then
+    SCR=$t/screen-san/omamobile-install-screen RT=$t/screen-san/render-test
+    export ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+  fi
+  pass "the first-start screen builds with -Werror${ASAN_OPTIONS:+ (the tests run the sanitized build)}"
+  rm -rf "$OUTDIR"; mkdir -p "$OUTDIR"
+else
+  skip "the first-start screen needs cc, make and pkg-config with libdrm, freetype2 and zlib"
+fi
+screen_for_stage=$t/screen/omamobile-install-screen
+if [[ -z $SCR ]]; then
+  mkdir -p "$t/screen"; screen_for_stage=$t/fake-screen; printf '#!/bin/sh\n' > "$screen_for_stage"; chmod +x "$screen_for_stage"
+fi
+
 # --- What the package installs -------------------------------------------------
 S=$t/stage
-./install "$S" "$src_for_stage" "$bin_for_stage"
+./install "$S" "$src_for_stage" "$bin_for_stage" "$screen_for_stage"
 got=$(cd "$S" && find . \( -type f -o -type l \) -printf '%m %P%l\n' | sed 's/^777 \(.*\)\(\.\.\/.*\)$/link \1 -> \2/' | LC_ALL=C sort -k2)
 want="755 usr/bin/omamobile-install-link
 755 usr/lib/omamobile-install-link/has-answers
 755 usr/lib/omamobile-install-link/hold-login
 755 usr/lib/omamobile-install-link/omamobile-install-link-agent
+755 usr/lib/omamobile-install-link/omamobile-install-screen
 755 usr/lib/omamobile-install-link/omamobile-link-gadget
 755 usr/lib/omamobile-install-link/omamobile-linkd
 755 usr/lib/omamobile-install-link/screen-text
@@ -93,6 +127,7 @@ link usr/lib/systemd/system/graphical.target.wants/omamobile-install-link.servic
 644 usr/lib/systemd/system/omamobile-firstboot.service.d/50-omamobile-install-link.conf
 644 usr/lib/systemd/system/omamobile-install-link-hold.service
 644 usr/lib/systemd/system/omamobile-install-link.service
+644 usr/lib/systemd/system/omamobile-install-screen.service
 link usr/lib/systemd/user/graphical-session.target.wants/omamobile-install-link-agent.service -> ../omamobile-install-link-agent.service
 644 usr/lib/systemd/user/omamobile-install-link-agent.service
 644 usr/lib/tmpfiles.d/omamobile-install-link.conf
@@ -118,6 +153,7 @@ pass "no marker, nothing in /etc, no scriptlet; SOURCE names the protocol, the c
 U=$S/usr/lib/systemd/system
 unit_key() { sed -n "s/^$2=//p" "$1"; }
 link_unit=$U/omamobile-install-link.service hold=$U/omamobile-install-link-hold.service
+scr_unit=$U/omamobile-install-screen.service
 agent=$S/usr/lib/systemd/user/omamobile-install-link-agent.service
 dropin=$U/omamobile-firstboot.service.d/50-omamobile-install-link.conf
 [[ $(grep -c '^Condition' "$link_unit") == 1 && $(unit_key "$link_unit" ConditionPathExists) == /etc/omamobile/install-link ]] ||
@@ -125,7 +161,8 @@ dropin=$U/omamobile-firstboot.service.d/50-omamobile-install-link.conf
 after=$(unit_key "$link_unit" After)
 [[ " $after " == *" omamobile-usb-mac.service "* && " $after " == *" omamobile-boot-success.service "* ]] ||
   fail "the link's unit: After=omamobile-usb-mac.service omamobile-boot-success.service"
-[[ $(unit_key "$link_unit" Wants) == omamobile-usb-rescue.service ]] || fail "the link's unit: Wants=omamobile-usb-rescue.service"
+[[ $(unit_key "$link_unit" Wants) == "omamobile-usb-rescue.service omamobile-install-screen.service" ]] ||
+  fail "the link's unit: Wants=omamobile-usb-rescue.service omamobile-install-screen.service"
 [[ $(unit_key "$link_unit" DevicePolicy) == closed && $(unit_key "$link_unit" DeviceAllow) == "block-sd r" ]] ||
   fail "the link's unit: block devices for reading only (§2.4)"
 [[ $(unit_key "$link_unit" ExecStopPost) == "-/usr/lib/omamobile-install-link/omamobile-link-gadget remove" ]] ||
@@ -144,12 +181,28 @@ grep -q '^WantedBy=\|^\[Install\]' "$link_unit" && fail "the link's unit has no 
 [[ $(unit_key "$agent" PartOf) == graphical-session.target ]] || fail "the agent runs with the session"
 [[ $(unit_key "$dropin" ExecCondition) == "/usr/lib/omamobile-install-link/has-answers /etc/omamobile/firstboot.conf" ]] ||
   fail "first boot is skipped on a firstboot.conf without answers"
+[[ $(unit_key "$scr_unit" ConditionPathExists | tr '\n' ' ') == "/etc/omamobile/install-link !/var/lib/omamobile/firstboot/done " ]] ||
+  fail "the screen: only with the marker and while first boot has made no account (as the hold)"
+[[ $(unit_key "$scr_unit" BindsTo) == omamobile-install-link.service && $(unit_key "$scr_unit" After) == omamobile-install-link.service ]] ||
+  fail "the screen: bound to the link's unit and after it"
+[[ $(unit_key "$scr_unit" Before) == "omamobile-install-link-hold.service display-manager.service" ]] ||
+  fail "the screen: before the hold and the display manager"
+grep -q '^Conflicts=' "$scr_unit" && fail "the screen has no Conflicts= (in the boot's transaction it would drop the display manager or itself)"
+[[ $(unit_key "$scr_unit" ExecCondition) == "/bin/sh -c '! systemctl -q is-active display-manager.service'" ]] ||
+  fail "the screen does not start while a display manager runs"
+[[ $(unit_key "$scr_unit" ExecStart) == /usr/lib/omamobile-install-link/omamobile-install-screen && $(unit_key "$scr_unit" TimeoutStopSec) == 5s ]] ||
+  fail "the screen: its program, killed 5 s into a stop that hangs"
+[[ $(unit_key "$scr_unit" DevicePolicy) == closed && $(unit_key "$scr_unit" DeviceAllow | tr '\n' ',') == "char-drm rw,char-fb rw,char-input r,/dev/tty0 rw," ]] ||
+  fail "the screen's devices: DRM and fb0 to draw, input to read, tty0 for the VT's mode"
+grep -q '^PrivateNetwork=' "$scr_unit" && fail "no PrivateNetwork= (Plymouth's socket is abstract, per network namespace)"
+grep -q '^WantedBy=\|^\[Install\]' "$scr_unit" && fail "the screen has no [Install]: the link's unit wants it"
 pass "the units' conditions and ordering are the plan's"
 
 if command -v systemd-analyze >/dev/null && systemd-analyze verify --help >/dev/null 2>&1; then
   V=$t/verify
   cp -a "$S" "$V"
-  mkdir -p "$V/usr/bin" "$V/etc/systemd/system"
+  mkdir -p "$V/usr/bin" "$V/etc/systemd/system" "$V/bin"
+  printf '#!/bin/sh\n' > "$V/bin/sh"; chmod +x "$V/bin/sh"
   for b in systemd-inhibit omamobile-firstboot; do printf '#!/bin/sh\n' > "$V/usr/bin/$b"; chmod +x "$V/usr/bin/$b"; done
   if [[ -n $REPO && -f $REPO/packages/omamobile-firstboot/systemd/omamobile-firstboot.service ]]; then
     cp "$REPO/packages/omamobile-firstboot/systemd/omamobile-firstboot.service" "$V/usr/lib/systemd/system/"
@@ -160,7 +213,8 @@ if command -v systemd-analyze >/dev/null && systemd-analyze verify --help >/dev/
   # The user unit as a system unit: the keys it uses mean the same there
   cp "$agent" "$V/etc/systemd/system/"
   out=$(systemd-analyze verify --root="$V" /usr/lib/systemd/system/omamobile-install-link.service \
-        /usr/lib/systemd/system/omamobile-install-link-hold.service /etc/systemd/system/omamobile-install-link-agent.service $fb 2>&1) ||
+        /usr/lib/systemd/system/omamobile-install-link-hold.service /usr/lib/systemd/system/omamobile-install-screen.service \
+        /etc/systemd/system/omamobile-install-link-agent.service $fb 2>&1) ||
     { echo "$out"; fail "systemd-analyze verify"; }
   # It warns and still exits 0 on an unknown key: any line is a failure
   [[ -z $out ]] || { echo "$out"; fail "systemd-analyze verify has nothing to say about the units${fb:+ and the first-boot unit with the drop-in}"; }
@@ -173,13 +227,13 @@ if command -v systemd-analyze >/dev/null && systemd-analyze verify --help >/dev/
   case_root() { local r=$t/cond/$1; rm -rf "$r"; mkdir -p "$r"; shift
     for f in "$@"; do mkdir -p "$r/$(dirname "$f")"; : > "$r/$f"; done; echo "$r"; }
   r=$(case_root none)
-  ! holds "$link_unit" "$r" && ! holds "$hold" "$r" && ! holds "$agent" "$r" || fail "no marker: no unit of the link's starts"
+  ! holds "$link_unit" "$r" && ! holds "$hold" "$r" && ! holds "$scr_unit" "$r" && ! holds "$agent" "$r" || fail "no marker: no unit of the link's starts"
   r=$(case_root marker etc/omamobile/install-link)
-  holds "$link_unit" "$r" && holds "$hold" "$r" && holds "$agent" "$r" || fail "the marker: the link, the hold and the agent start"
+  holds "$link_unit" "$r" && holds "$hold" "$r" && holds "$scr_unit" "$r" && holds "$agent" "$r" || fail "the marker: the link, the hold, the screen and the agent start"
   r=$(case_root account etc/omamobile/install-link var/lib/omamobile/firstboot/done)
-  holds "$link_unit" "$r" && ! holds "$hold" "$r" && holds "$agent" "$r" || fail "the marker and an account: no hold"
+  holds "$link_unit" "$r" && ! holds "$hold" "$r" && ! holds "$scr_unit" "$r" && holds "$agent" "$r" || fail "the marker and an account: no hold, no screen"
   r=$(case_root ended var/lib/omamobile/install-link/done var/lib/omamobile/firstboot/done)
-  ! holds "$link_unit" "$r" && ! holds "$hold" "$r" && holds "$agent" "$r" || fail "ended: only the agent (its notice of how to finish)"
+  ! holds "$link_unit" "$r" && ! holds "$hold" "$r" && ! holds "$scr_unit" "$r" && holds "$agent" "$r" || fail "ended: only the agent (its notice of how to finish)"
   r=$(case_root ending etc/omamobile/install-link var/lib/omamobile/install-link/done)
   holds "$link_unit" "$r" || fail "the marker and done: the daemon starts, to complete the end (§18 E1)"
   pass "systemd's own conditions on scratch roots: none, the marker, an account, an end, an end cut short"
@@ -209,11 +263,12 @@ R=$t/hold
 mkdir -p "$R/etc/omamobile" "$R/var/lib/omamobile/firstboot" "$R/var/lib/omamobile/install-link"
 cat > "$t/systemctl" <<'EOF'
 #!/bin/bash
-# systemctl show -P PROP UNIT
+# systemctl show -P PROP UNIT; systemctl stop UNIT (logged)
+[[ $1 == stop ]] && { echo "stop $2" >> "$HOLD_STOPS"; exit 0; }
 case $3 in ActiveState) cat "$HOLD_STATE";; SubState) cat "$HOLD_SUB";; esac
 EOF
 chmod +x "$t/systemctl"
-hold() { OMAMOBILE_LINK_ROOT=$R HOLD_SYSTEMCTL=$t/systemctl HOLD_STATE=$t/active HOLD_SUB=$t/sub HOLD_POLL_S=0.1 HOLD_GONE_POLLS=5 \
+hold() { OMAMOBILE_LINK_ROOT=$R HOLD_SYSTEMCTL=$t/systemctl HOLD_STOPS=$t/stops HOLD_STATE=$t/active HOLD_SUB=$t/sub HOLD_POLL_S=0.1 HOLD_GONE_POLLS=5 \
   timeout "$1" "$HL" > /dev/null; }
 echo active > "$t/active"; echo running > "$t/sub"
 : > "$R/etc/omamobile/install-link"
@@ -222,12 +277,258 @@ echo failed > "$t/active"; echo auto-restart > "$t/sub"
 hold 1 && fail "a daemon about to be started again counts as running"
 echo failed > "$t/active"; echo failed > "$t/sub"
 hold 3 || fail "a daemon that is not running lets the login screen come"
+[[ $(cat "$t/stops") == "stop omamobile-install-screen.service" ]] || fail "the hold stops the first-start screen before it lets the login screen come"
 echo active > "$t/active"; echo running > "$t/sub"
 : > "$R/var/lib/omamobile/firstboot/done"; hold 3 || fail "first boot's done lets the login screen come"
 rm "$R/var/lib/omamobile/firstboot/done"
 : > "$R/var/lib/omamobile/install-link/done"; hold 3 || fail "the link's done lets it come"
 rm "$R/var/lib/omamobile/install-link/done" "$R/etc/omamobile/install-link"; hold 3 || fail "no marker lets it come"
-pass "hold-login: held while the daemon runs and no account exists; let go by an account, an end, no marker, no daemon"
+[[ $(grep -c '^stop omamobile-install-screen.service$' "$t/stops") == 4 ]] || fail "every way the hold lets go stops the screen first"
+pass "hold-login: held while the daemon runs and no account exists; let go by an account, an end, no marker, no daemon, the screen stopped first"
+
+# --- The first-start screen ------------------------------------------------------
+# Made-up codes only. Every code a test sends is listed in $t/codes, and at
+# the end no log line, trace or standard output holds one (§9).
+if [[ -n $SCR ]]; then
+  : > "$t/codes"
+  code() { echo "$1" >> "$t/codes"; echo "code $1"; }
+  # Each state, at the Pixel 7 Pro's size and two small ones. Every box on
+  # the canvas, the code at least a tenth of the narrow side, the theme's
+  # background in the corner; the PNGs stay in test/out/ to be looked at
+  render_case() {   # NAME LINES WANT_CODE [render-test options]
+    local name=$1 lines=$2 want=$3 size out; shift 3
+    for size in 1440x3120 720x1600 320x240; do
+      out=$(printf '%b' "$lines" | "$RT" "$size" "$OUTDIR/$name-$size.png" "$@") || fail "render $name at $size"
+      awk -v want_code="$want" '
+        $1 == "size" { W = $2; H = $3 }
+        $1 == "box" { n++; if ($3 < 0 || $4 < 0 || $3 + $5 > W || $4 + $6 > H || $5 <= 0 || $6 <= 0) { print "clipped: " $0; bad = 1 } }
+        $1 == "box" && $2 == "code" { code = 1 }
+        $1 == "code_px" { px = $2 }
+        END {
+          small = W < H ? W : H
+          if (n < 2) { print "too few boxes"; bad = 1 }
+          if (want_code && !code) { print "no code drawn"; bad = 1 }
+          if (!want_code && code) { print "a code drawn where none belongs"; bad = 1 }
+          if (code && px < small / 10) { print "the code is " px " px high on a " W "x" H " panel"; bad = 1 }
+          exit bad
+        }' <<<"$out" || { echo "$out"; fail "$name at $size: nothing clipped, the code large enough"; }
+      [[ $(awk '$1 == "background" {print $2}' <<<"$out") == "${BG:-1a1b26}" ]] || fail "$name at $size: the theme's background"
+    done
+  }
+  render_case code "$(code 482915)\n" 1
+  render_case wrong-code "$(code 482915)\nwrong-code 4\n" 1
+  render_case wrong-code-last "$(code 482915)\nwrong-code 1\n" 1
+  render_case locked-30 "$(code 482915)\nlocked 30\n" 0
+  render_case locked-act "locked 0\n" 0
+  render_case paired "$(code 482915)\npaired\n" 0
+  render_case version "$(code 730164)\nversion\n" 1
+  render_case setup-code "setup\n$(code 730164)\n" 1
+  render_case setup-paired-damaged "setup\npaired\ndamaged\n" 0
+  render_case stopped "stopped user\n$(code 730164)\n" 1
+  render_case no-space "paired\nno-space\n" 0
+  render_case no-code-yet "setup\n" 0
+  render_case starting "" 0 --disconnected
+  # Another theme's colors.toml is taken
+  printf 'background = "#102030"\naccent = "#ff8800"\n' > "$t/colors.toml"
+  BG=102030 render_case theme "$(code 482915)\n" 1 --theme "$t/colors.toml"
+  pass "the screen drawn for every state at 1440x3120, 720x1600 and 320x240: nothing clipped, the code large, the theme's colours ($(find "$OUTDIR" -name '*.png' | wc -l) PNGs in test/out/)"
+
+  # A stand-in daemon on the screen socket, driven by a script of steps:
+  #   say LINE | raw TEXT | burst N LAST | want key | close | listen |
+  #   sleep S | trace REGEX (wait until the screen's last trace line matches)
+  cat > "$t/scr-standin.py" <<'EOF'
+import os, re, socket, sys, time
+path, trace, script = sys.argv[1], sys.argv[2], sys.argv[3]
+def last_trace():
+    try:
+        lines = open(trace).read().splitlines()
+        return lines[-1] if lines else ""
+    except FileNotFoundError:
+        return ""
+def listen():
+    if os.path.exists(path): os.unlink(path)
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.bind(path); s.listen(1)
+    s.settimeout(10)
+    c, _ = s.accept(); c.settimeout(10); s.close()
+    return c
+c = listen(); got = b""
+for step in script.split(";"):
+    kind, _, text = step.partition(" ")
+    if kind == "say":
+        c.sendall(text.encode() + b"\n")
+    elif kind == "raw":
+        c.sendall(text.encode() + b"\n")
+    elif kind == "burst":
+        n, last = text.split(" ", 1)
+        c.sendall(b"".join(b"code %06d\nwrong-code 3\n" % (100000 + i) for i in range(int(n))) + last.encode() + b"\n")
+    elif kind == "want":
+        while (text.encode() + b"\n") not in got:
+            d = c.recv(100)
+            if not d: sys.exit("the screen closed the socket while %s was awaited" % text)
+            got += d
+        got = got.replace(text.encode() + b"\n", b"", 1)
+    elif kind == "close":
+        c.close()
+    elif kind == "listen":
+        c = listen()
+    elif kind == "sleep":
+        time.sleep(float(text))
+    elif kind == "trace":
+        end = time.time() + 8
+        while not re.search(text, last_trace()):
+            if time.time() > end: sys.exit("trace never matched %r; last: %r" % (text, last_trace()))
+            time.sleep(0.02)
+EOF
+  # Input events: struct input_event on a 64-bit kernel (time, type, code, value)
+  cat > "$t/keys.py" <<'EOF'
+import struct, sys, time
+fifo, script = sys.argv[1], sys.argv[2]
+EV_SYN, EV_KEY = 0, 1
+KEY = {"up": 115, "down": 114, "power": 116, "a": 30}
+f = open(fifo, "wb", buffering=0)
+t = 1000.0
+for step in script.split(";"):
+    w = step.split()
+    if w[0] == "sleep":
+        time.sleep(float(w[1])); continue
+    if w[0] == "at":
+        t += float(w[1]); continue
+    key, value = KEY[w[0]], int(w[1])
+    sec, usec = int(t), int(round((t - int(t)) * 1e6))
+    f.write(struct.pack("qqHHi", sec, usec, EV_KEY, key, value) + struct.pack("qqHHi", sec, usec, EV_SYN, 0, 0))
+f.close()
+EOF
+  SR=$t/sroot; mkdir -p "$SR/run/omamobile-install-link"
+  sock=$SR/run/omamobile-install-link/screen
+  # The screen in memory against the stand-in; the screen's pid in SPID
+  screen_run() {   # NAME SCRIPT [keys-fifo]
+    local name=$1 script=$2 keys=${3:-} sp
+    : > "$t/$name.trace"; rm -f "$sock"
+    python3 -I "$t/scr-standin.py" "$sock" "$t/$name.trace" "$script" > "$t/$name.standin" 2>&1 & sp=$!; pids+=("$sp")
+    for _ in $(seq 100); do [[ -S $sock ]] && break; sleep 0.05; done
+    if [[ -n $keys ]]; then set -- --keys "$keys"; else set -- --no-keys; fi
+    OMAMOBILE_LINK_ROOT=$SR timeout 30 "$SCR" --output memory:360x780 --trace "$t/$name.trace" "$@" \
+      > "$t/$name.out" 2> "$t/$name.err" & SPID=$!
+    STANDIN=$sp
+  }
+  standin_ok() { wait "$STANDIN" || { cat "$t/$1.standin" "$t/$1.err" "$t/$1.trace"; fail "$1: the stand-in daemon's script ran to its end"; }; }
+
+  # Every line, in order: each one changes what is shown
+  s="trace connected=1 phase=waiting pairing=none;say $(code 104729);trace pairing=code code=#1/6"
+  s+=";say wrong-code 4;trace pairing=code code=#1/6 note=wrong left=4;say locked 30;trace pairing=locked code=#1/0 note=-"
+  s+=";say $(code 271828);trace pairing=code code=#2/6;say version;trace note=version;say paired;trace pairing=paired code=#2/0"
+  s+=";say setup;trace phase=setup pairing=paired;say damaged;trace note=damaged;say no-space;trace note=no-space"
+  s+=";say stopped user;trace phase=stopped;say $(code 314159);trace pairing=code code=#3/6 note=-;say locked 0;trace pairing=locked-act code=#3/0"
+  s+=";say $(code 161803);trace code=#4/6;say off;sleep 0.3"
+  screen_run lines "$s"; standin_ok lines
+  wait "$SPID" || fail "lines: the screen ends with status 0 on off"
+  [[ $(tail -1 "$t/lines.trace") == "blank output=memory" ]] || { cat "$t/lines.trace"; fail "lines: off draws the background alone before the end"; }
+  grep -qx 'omamobile-install-screen: daemon: off; the session owns the display from here' "$t/lines.err" || fail "lines: off is logged"
+  pass "the screen protocol: code, wrong-code, locked N, locked 0, paired, version, setup, damaged, no-space, stopped, off"
+
+  # Lines it does not know, a line too long, and codes that are not six digits
+  s="say $(code 999001);trace code=#1/6;say code 12345;say code 1234567;say code 12a456;say hello there;raw $(printf 'x%.0s' $(seq 300))"
+  s+=";say stopped ../etc;say locked -1;say wrong-code;say $(code 999002);trace code=#2/6"
+  screen_run odd "$s"; standin_ok odd
+  kill "$SPID"; wait "$SPID" || fail "odd: SIGTERM ends the screen with status 0"
+  ! grep -q 'code=#3' "$t/odd.trace" || { cat "$t/odd.trace"; fail "odd: a code that is not six digits changes nothing"; }
+  [[ $(grep -c 'a line this screen does not know' "$t/odd.err") == 7 ]] || { cat "$t/odd.err"; fail "odd: each line it does not know is logged by its length only, an overlong one skipped"; }
+  [[ $(tail -1 "$t/odd.trace") == "blank output=memory" ]] || fail "odd: SIGTERM draws the background alone before the end"
+  pass "lines the screen does not know, an overlong line, malformed codes: ignored, logged by length only; SIGTERM ends it cleanly"
+
+  # The daemon vanishes: the code goes at once, the screen waits and comes back
+  s="say $(code 577215);trace pairing=code code=#1/6;close;trace connected=0 phase=waiting pairing=none code=#1/0"
+  s+=";listen;trace connected=1 phase=waiting pairing=none;say $(code 662607);trace connected=1 .*code=#2/6;say off"
+  screen_run vanish "$s"; standin_ok vanish
+  wait "$SPID" || fail "vanish: the screen ends on off"
+  grep -qx 'omamobile-install-screen: daemon: gone; waiting for it' "$t/vanish.err" && [[ $(grep -c 'daemon: connected' "$t/vanish.err") == 2 ]] ||
+    fail "vanish: the screen logs the daemon gone and connects again"
+  pass "a daemon that vanishes: the code leaves the screen at once; the screen connects again when the daemon is back"
+
+  # A burst: 4000 lines in one go, then the last one, which is what is shown
+  s="trace connected=1;burst 2000 $(code 123987);trace code=#2001/6 note=-;say off"
+  screen_run burst "$s"; standin_ok burst
+  wait "$SPID" || fail "burst: the screen ends on off"
+  frames=$(grep -c 'connected=1' "$t/burst.trace")
+  ((frames < 200)) || fail "burst: lines that came together are drawn together ($frames frames for 4001 lines)"
+  pass "a burst of 4001 lines: the last one is shown, in $frames frames"
+
+  # The keys: a press of either volume key is reported once; a release, an
+  # autorepeat, the power key, another key and a bounce are not
+  rm -f "$t/keys"; mkfifo "$t/keys"
+  s="trace pairing=none;want key;want key;want key;say $(code 141421);trace code=#1/6;sleep 1;say off"
+  screen_run keys "$s" "$t/keys"
+  python3 -I "$t/keys.py" "$t/keys" "sleep 0.5;up 1;up 2;up 2;up 0;at 1;power 1;power 0;a 1;a 0;at 1;down 1;at 0.05;down 0;at 0.05;down 1;down 0;at 1;up 1;up 0;sleep 0.3"
+  standin_ok keys
+  wait "$SPID" || fail "keys: the screen ends on off"
+  [[ $(grep -c 'keys: a volume key press, told the daemon' "$t/keys.err") == 3 ]] || { cat "$t/keys.err"; fail "keys: three presses told the daemon (up, down, up); the bounce and the other keys not"; }
+  grep -q 'an input device went away' "$t/keys.err" || fail "keys: the end of an input source is noticed"
+  pass "the volume keys from input events: a press of either is reported once; release, repeat, power, another key and a 100 ms bounce are not"
+
+  # Plymouth's message line, against a stand-in plymouthd on an abstract socket
+  pname="/omamobile-test-plymouthd-$$"
+  cat > "$t/ply.py" <<'EOF'
+import socket, sys
+name, out, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind("\0" + name); s.listen(4); s.settimeout(15)
+with open(out, "w") as log:
+    for _ in range(n):
+        c, _ = s.accept(); c.settimeout(5)
+        data = b""
+        while True:
+            d = c.recv(400)
+            if not d: break
+            data += d
+            if len(data) >= 3 and data[1:2] == b"\2" and len(data) >= 3 + data[2]: break
+            if len(data) == 2 and data[1:2] == b"\0": break
+        log.write(repr(data) + "\n"); log.flush()
+        c.sendall(b"\x06"); c.close()
+EOF
+  python3 -I "$t/ply.py" "$pname" "$t/ply.log" 6 & pp=$!; pids+=("$pp")
+  sleep 0.3
+  : > "$t/ply.trace"; rm -f "$sock"
+  python3 -I "$t/scr-standin.py" "$sock" "$t/ply.trace" "say $(code 235711);trace code=#1/6;say paired;trace pairing=paired" > "$t/ply.standin" 2>&1 & sp=$!; pids+=("$sp")
+  for _ in $(seq 100); do [[ -S $sock ]] && break; sleep 0.05; done
+  OMAMOBILE_LINK_ROOT=$SR OMAMOBILE_SCREEN_PLYMOUTH_SOCKET=$pname timeout 30 "$SCR" --output plymouth --no-keys --trace "$t/ply.trace" \
+    > "$t/ply.out" 2> "$t/ply.err" & SPID=$!
+  wait "$sp" || { cat "$t/ply.standin" "$t/ply.err"; fail "plymouth: the stand-in daemon's script ran"; }
+  sleep 0.3; kill "$SPID"; wait "$SPID" || true
+  wait "$pp" || { cat "$t/ply.err"; fail "plymouth: the stand-in plymouthd answered six requests"; }
+  mapfile -t req < "$t/ply.log"
+  [[ ${req[0]} == "b'P\\x00'" ]] || { printf '%s\n' "${req[@]}"; fail "plymouth: a ping first ('P', NUL)"; }
+  printf '%s\n' "${req[@]}" > "$t/ply.req"
+  # The order: a message, then for each change the old one hidden and the next shown
+  [[ $(cut -c1-7 "$t/ply.req" | tr '\n' ' ') == "b'P\\x00 b'M\\x02 b'm\\x02 b'M\\x02 b'm\\x02 b'M\\x02 " ]] ||
+    { cat "$t/ply.req"; fail "plymouth: ping, show, then hide and show for each change"; }
+  [[ ${req[3]} == *"Code for the installer: 235 711\\x00'" && ${req[5]} == *"Connected to the installer"* ]] ||
+    { cat "$t/ply.req"; fail "plymouth: display-message with the code (M, \\002, length, text, NUL), then paired"; }
+  grep -qF "output: Plymouth's message line" "$t/ply.err" || fail "plymouth: the output is logged"
+  pass "Plymouth's message line on its own socket: ping, the code, hide, the next message; nothing on a command line"
+
+  # No output at all: the daemon still gets its key presses
+  rm -f "$t/keys"; mkfifo "$t/keys"; : > "$t/none.trace"; rm -f "$sock"
+  python3 -I "$t/scr-standin.py" "$sock" "$t/none.trace" "say $(code 999331);want key;say off" > "$t/none.standin" 2>&1 & sp=$!; pids+=("$sp")
+  for _ in $(seq 100); do [[ -S $sock ]] && break; sleep 0.05; done
+  OMAMOBILE_LINK_ROOT=$SR timeout 20 "$SCR" --output none --keys "$t/keys" --trace "$t/none.trace" > "$t/none.out" 2> "$t/none.err" & SPID=$!
+  python3 -I "$t/keys.py" "$t/keys" "sleep 0.5;up 1;up 0;sleep 0.5"
+  wait "$sp" || { cat "$t/none.standin" "$t/none.err"; fail "none: a key press reaches the daemon with no screen"; }
+  wait "$SPID" || fail "none: the screen ends on off"
+  grep -q 'output: none' "$t/none.err" || fail "none: the missing output is logged"
+  pass "no output: the screen tells the daemon of key presses all the same"
+
+  # --demo (R5): the lines from standard input, key on standard output
+  rm -f "$t/keys"; mkfifo "$t/keys"
+  demo_code=$(code 864209)
+  ( sleep 0.3; echo "$demo_code"; sleep 1.5; echo off ) |
+    timeout 20 "$SCR" --demo --output memory:200x400 --keys "$t/keys" --trace "$t/demo.trace" > "$t/demo.out" 2> "$t/demo.err" & SPID=$!
+  python3 -I "$t/keys.py" "$t/keys" "sleep 0.8;down 1;down 0;sleep 0.2"
+  wait "$SPID" || fail "demo: ends on off"
+  [[ $(cat "$t/demo.out") == key ]] && grep -q 'code=#1/6' "$t/demo.trace" || { cat "$t/demo.err"; fail "demo: the code from standard input, key on standard output"; }
+  pass "--demo (R5): the lines from standard input, a key press as key on standard output"
+else
+  skip "the first-start screen's tests need it built"
+fi
 
 # --- The session agent, against a stand-in daemon ---------------------------
 AG=$PKG/bin/omamobile-install-link-agent
@@ -471,8 +772,48 @@ EOF
   [[ $code =~ ^[0-9]{6}$ ]] || { cat "$t/agent2.out"; fail "a tap: the real daemon's code reaches the window"; }
   ! grep -rc "$code" "$r/daemon.log" "$t/notify.log" "$t/agent2.out" >/dev/null 2>&1 || fail "the code is in no journal line, notice or agent line"
   pass "the agent with the real daemon: the notice, a tap, a six-digit code in the window and nowhere else"
+
+  # The first-start screen with the real daemon: a first start (stage
+  # waiting) shows a code; a volume key press makes the daemon draw a new one
+  if [[ -n $SCR ]]; then
+    r=$(phone screen)
+    python3 -I - "$r" "$D" <<'EOF' & dp=$!
+import socket, subprocess, sys, time
+root, daemon = sys.argv[1], sys.argv[2]
+a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+with open(root + "/daemon.log", "ab") as log:
+    p = subprocess.Popen([daemon, "--root", root, "--transport", "stdio"], stdin=b, stdout=log, stderr=log)
+b.close()
+time.sleep(10)
+p.terminate(); p.wait()
+EOF
+    pids+=("$dp")
+    for _ in $(seq 100); do [[ -S $r/run/omamobile-install-link/screen ]] && break; sleep 0.05; done
+    rm -f "$t/keys"; mkfifo "$t/keys"; : > "$t/real.trace"
+    OMAMOBILE_LINK_ROOT=$r timeout 15 "$SCR" --output memory:360x780 --keys "$t/keys" --trace "$t/real.trace" \
+      > "$t/real.out" 2> "$t/real.err" & SPID=$!
+    python3 -I "$t/keys.py" "$t/keys" "sleep 1.5;up 1;up 0;sleep 0.2" &
+    for _ in $(seq 100); do grep -q 'code=#2/6' "$t/real.trace" && break; sleep 0.05; done
+    kill "$SPID" 2>/dev/null; wait "$SPID" || true
+    kill "$dp" 2>/dev/null || true; wait "$dp" 2>/dev/null || true
+    grep -q 'connected=1 phase=waiting pairing=code code=#1/6' "$t/real.trace" && grep -q 'pairing=code code=#2/6' "$t/real.trace" ||
+      { cat "$t/real.trace" "$t/real.err" "$r/daemon.log"; fail "the real daemon: a code on the screen, and a new one after a volume key"; }
+    ! grep -qE '[0-9]{6}' "$t/real.err" || fail "the real daemon's code is in no line of the screen's log"
+    pass "the screen with the real daemon: its code shown at a first start, a new code after a volume key"
+  fi
 else
   skip "the marker's rules, status, reopen and the paired agent need the daemon (OMAMOBILE_LINK_BIN, or cargo and the source)"
+fi
+
+# The code in no log line, trace or output of the screen's (§9)
+if [[ -n $SCR ]]; then
+  logs=("$t"/*.err "$t"/*.out "$t"/*.trace)
+  while read -r c; do
+    ! grep -lF -- "$c" "${logs[@]}" 2>/dev/null || fail "the code $c is in a log, a trace or the screen's output"
+    ! grep -lF -- "${c:0:3} ${c:3:3}" "${logs[@]}" 2>/dev/null || fail "the code $c, grouped, is in a log"
+  done < <(sort -u "$t/codes")
+  ! grep -lE '[0-9]{6}' "$t"/*.err 2>/dev/null || fail "no six digits in a row in any log of the screen's"
+  pass "no code in the screen's log lines, traces or output ($(sort -u "$t/codes" | wc -l) made-up codes checked)"
 fi
 
 echo "1..$n"
