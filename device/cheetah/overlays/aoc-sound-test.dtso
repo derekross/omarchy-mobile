@@ -1022,7 +1022,7 @@
 				sys {
 
 
-					sys@cs35l41_l {
+					clock-cs35l41-l {
 						comp = <&amp_top>;
 						src = "BCLK";
 						id = <0x00>;
@@ -1031,7 +1031,7 @@
 						out_mul = <0x01>;
 					};
 
-					sys@cs35l41_r {
+					clock-cs35l41-r {
 						comp = <&amp_bottom>;
 						src = "BCLK";
 						id = <0x00>;
