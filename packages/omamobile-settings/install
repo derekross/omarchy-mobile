@@ -11,3 +11,5 @@ install -Dm644 "$source_dir/org.omamobile.Settings.desktop" "$dest/usr/share/app
 install -Dm644 "$source_dir/org.omamobile.Settings.svg" "$dest/usr/share/icons/hicolor/scalable/apps/org.omamobile.Settings.svg"
 install -Dm644 "$source_dir/LICENSE" "$dest/usr/share/licenses/omamobile-settings/LICENSE"
 install -Dm755 "$source_dir/backends/display.sh" "$dest/usr/lib/omamobile-settings/backends/display.sh"
+install -Dm755 "$source_dir/backends/pin.sh" "$dest/usr/lib/omamobile-settings/backends/pin.sh"
+install -Dm644 "$source_dir/backends/pin.py" "$dest/usr/lib/omamobile-settings/backends/pin.py"

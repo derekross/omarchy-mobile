@@ -24,7 +24,7 @@ ApplicationWindow {
         if (backend.searching) search.clear()
         backend.back()
     }
-    readonly property var customPages: ({ display: "DisplayPage.qml" })
+    readonly property var customPages: ({ display: "DisplayPage.qml", pin: "PinPage.qml" })
     readonly property string customSource: backend.searching ? "" : (customPages[backend.page] || "")
     readonly property bool showingAbout: backend.page === "about" && !backend.searching
     Connections {

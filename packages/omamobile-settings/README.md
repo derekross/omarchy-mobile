@@ -6,12 +6,19 @@ palette and a read-only About page. It shows the model, operating system, kernel
 architecture, memory, root-filesystem capacity and installed package versions.
 Unknown values remain unavailable. It opens from the desktop launcher.
 
-This package contains the read-only foundation and one settings page, Display
-(brightness and, where the monitor lists more than one, the refresh rate; the
+This package contains the read-only foundation and two settings pages. Display
+is brightness and, where the monitor lists more than one, the refresh rate (the
 refresh rate changes the running session only: turning the phone makes
 auto-rotate apply the monitor's preferred mode again, and a session restart or a
-reload of Hyprland's config does too). The page runs
-`backends/display.sh` through a fixed-argument runner, with no shell string.
+reload of Hyprland's config does too). Change PIN changes
+the lock screen PIN, which is the account password (the lock checks it with pam_unix, and sudo does too): `backends/pin.sh` runs the
+system's own `/usr/bin/passwd` in a pseudo-terminal, as the user, with the three entries on stdin (never an argument,
+never in the environment, never logged or printed), digits only for the new PIN, 4 to 8 long, and passwd is what
+checks the current PIN and any other rule. passwd runs with `LC_ALL=C` so its prompts are the ones the script
+matches, and it is killed after 12 seconds: before the retype nothing has changed, after it the result says the PIN
+may or may not have changed. The entries are held as text in the page until the call returns, then cleared; the
+session's memory is not wiped. A change that finishes while the page is gone is reported when the page is opened again (the runner keeps its last result); quitting the app mid-change loses it. The page is for a phone that unlocks with a PIN and has one (`omamobile-set-pin --type` and `passwd -S` say so); for a password phone or a phone without one it says where to go instead. The pages run
+`backends/display.sh` and `backends/pin.sh` through a fixed-argument runner, with no shell string.
 Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management and
 recording controls are separate future contributions with their own runtime
 contracts and tests; this catalog does not offer those routes.

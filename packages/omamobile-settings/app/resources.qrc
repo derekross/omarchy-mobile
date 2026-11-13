@@ -4,6 +4,8 @@
     <file>Main.qml</file>
     <file>AboutPage.qml</file>
     <file>DisplayPage.qml</file>
+    <file>PinPage.qml</file>
+    <file>icons/pin.svg</file>
     <file>icons/display.svg</file>
     <file>catalog.json</file>
     <file>icons/system.svg</file>
