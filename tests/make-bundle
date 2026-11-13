@@ -15,9 +15,12 @@
 # files' times). A rebuild replaces the bundle directory and leaves nothing
 # else in out/bundle, and one that fails moving the new directory in puts
 # the old one back; after a run killed there, the next run puts it back,
-# even one an input check refuses. A second run for the same bundle while
-# one runs is refused, and the first one completes. The bundled nv-backup
-# reads the bundle's device.conf.
+# even one an input check refuses. A rebuild whose tar, the tar's rename or
+# its checksum fails stops and keeps the earlier .tar and .tar.sha256;
+# bundle_tar on its own returns non-zero when the new .tar can't be
+# renamed. A second run for the same bundle while one runs is refused, and
+# the first one completes. The bundled nv-backup reads the bundle's
+# device.conf.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 SRC=$PWD
@@ -156,6 +159,34 @@ out=$(PATH=$t/failmv:$PATH DEVICE=testdev KERNEL_OUT=$k KERNEL_DIR=$r "$r/tools/
   fail "a rebuild whose move into place fails says so: $out"
 intact || fail "a failed move into place puts the old bundle back: $(ls -A "$r/out/bundle")"
 pass "a rebuild that fails moving the new bundle in puts the old one back"
+
+# A tar that writes part of the download and fails (a full disk), a failed
+# rename of the new .tar and a failed checksum of it: each stops the
+# rebuild, and the earlier .tar and its .tar.sha256 stay and still match
+mkdir "$t/failtar" "$t/failtarmv" "$t/failsum"
+printf '#!/bin/bash\nfor a; do [[ ${p:-} != -cf ]] || { printf partial > "$a"; echo "tar: $a: Cannot write" >&2; exit 2; }; p=$a; done\nPATH=${PATH#*:} exec tar "$@"\n' > "$t/failtar/tar"
+printf '#!/bin/sh\ncase "$*" in *".tar.new "*) exit 1 ;; esac\nPATH=${PATH#*:} exec mv "$@"\n' > "$t/failtarmv/mv"
+printf '#!/bin/sh\ncase $(readlink /proc/$$/fd/0) in *.tar) exit 1 ;; esac\nPATH=${PATH#*:} exec sha256sum "$@"\n' > "$t/failsum/sha256sum"
+chmod +x "$t/failtar/tar" "$t/failtarmv/mv" "$t/failsum/sha256sum"
+for s in failtar failtarmv failsum; do
+  out=$(PATH=$t/$s:$PATH DEVICE=testdev KERNEL_OUT=$k KERNEL_DIR=$r "$r/tools/make-bundle" --unsigned --version 2026.11.01 --rootfs "$root" 2>&1) &&
+    fail "a rebuild with the $s stand-in fails: $out"
+  grep -cF "writing out/bundle/omamobile-testdev-2026.11.01.tar failed" <<<"$out" >/dev/null || fail "the $s rebuild says the .tar failed: $out"
+  intact && [[ $(cat "$tarball.sha256") == "$first" ]] && (cd "$r/out/bundle" && sha256sum -c --quiet --strict "${tarball##*/}.sha256") ||
+    fail "the $s rebuild keeps the earlier .tar and its .tar.sha256: $(ls -A "$r/out/bundle")"
+done
+pass "a rebuild whose tar, its rename or its checksum fails stops, and the earlier .tar stays with its .tar.sha256"
+# bundle_tar called on its own (tests/release does), in a directory that
+# already holds a good .tar: a failed rename of the new one returns
+# non-zero, rather than checksumming the old .tar, and the pair stays
+cp -a "$r/out/bundle" "$t/direct"
+if (PATH=$t/failtarmv:$PATH; source "$r/tools/lib/bundle-tar.sh"
+  bundle_tar "$t/direct" omamobile-testdev-2026.11.01 "${root##*/}" 2026.11.01) 2>/dev/null; then
+  fail "bundle_tar returns non-zero when the new .tar can't be renamed"
+fi
+cmp -s "$t/direct/${tarball##*/}" "$tarball" && cmp -s "$t/direct/${tarball##*/}.sha256" "$tarball.sha256" &&
+  (cd "$t/direct" && sha256sum -c --quiet --strict "${tarball##*/}.sha256") || fail "a failed bundle_tar keeps the .tar and .tar.sha256 already there"
+pass "bundle_tar on its own returns non-zero when the new .tar can't be renamed, and keeps the pair already there"
 
 # A run killed (SIGKILL, no trap) between the two renames leaves the old
 # bundle in the build directory; the next run puts it back, even one that an
