@@ -508,13 +508,13 @@ fi
 ver=$(grep -ao 'Version=[0-9.]* ([^)]*)' "$brcm/$FW_BASE.$BOARD.bin" | head -1)
 bt=""
 [[ -z $BT_CHIP ]] || bt=$(grep -ao "$BT_CHIP [^[]*" "$brcm/BCM.$BOARD.hcd" | head -1)
-(cd "$dest" && find . -type f -printf '%P\n' | sort | xargs sha256sum -- > "$new/vendor-firmware.sha256")
+(cd "$dest" && find . -type f -printf '%P\n' | LC_ALL=C sort | xargs sha256sum -- > "$new/vendor-firmware.sha256")
 # The checksum list names exactly the mapped files
 for entry in "${MAP[@]}"; do
   # an optional set that was left out is not expected
   [[ $entry == \?* ]] && (( ${#optional_missing[@]} )) && continue
   printf '%s\n' "${entry#*|}"
-done | sort > "$stage/expected"
+done | LC_ALL=C sort > "$stage/expected"
 cut -c67- "$new/vendor-firmware.sha256" | cmp -s - "$stage/expected" ||
   die "the staged firmware is not exactly the mapped files"
 
