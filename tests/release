@@ -137,6 +137,16 @@ done
 printf 'serial-ABC1234 is another word\n' > "$t/scan/bad.bin"
 run scan "$t/scan" || fail "a listed identifier matches only as a whole word"
 rm "$t/scan/bad.bin"
+# The holder of a copyright notice is named on purpose (2026.11.12: Omarchy's
+# licence header in a patch). Only that form passes: the same name anywhere
+# else on the line, or after other words, is still found.
+printf '// Mobile touch changes: Copyright (c) 2026 Home Net\n' > "$t/scan/header.qml"
+run scan "$t/scan" || fail "a listed name as the holder of a copyright notice passes"
+for bad in 'Copyright (c) 2026 Home Net, built on Home Net' 'Copyright (c) 2026 by Home Net' 'copyright Home Net' 'ssid=Home Net # Copyright (c) 2026'; do
+  printf '%s\n' "$bad" > "$t/scan/header.qml"
+  if run scan "$t/scan"; then fail "the scan finds: $bad"; fi
+done
+rm "$t/scan/header.qml"
 # dnsmasq's shipped example configuration (2026.11.08): its group address and
 # a dhcp-option value pass in etc/dnsmasq.conf only; a unicast dhcp-host there,
 # and a group-looking address elsewhere (a Bluetooth LE random address can
