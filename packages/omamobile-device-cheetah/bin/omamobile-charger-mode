@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""omamobile-charger-mode: the bootloader's off-mode charging boot, on Linux.
+
+A Pixel that is off and gets a charger (or is powered off with the cable in)
+is started by its bootloader with androidboot.mode = "charger", which on
+stock runs only a charging screen. Our boot used to ignore it and start the
+whole phone, so a phone powered off on its cable came straight back up.
+omamobile-charger-mode-generator makes omamobile-charger.target the default
+target of such a boot, and this service runs in it:
+
+  - the panel off (bl_power 4: the display-off set; systemd-backlight
+    doesn't save it, so the next boot's brightness is untouched), checked
+    every poll, since the panel driver is a module udev may load after this
+    starts;
+  - Power held for a second: restart into the phone (a restart isn't a
+    charger boot, so the next boot is the normal one);
+  - the cable out for a few seconds: power off, as stock does.
+
+It does nothing outside a charger boot, nor in one that started the phone
+anyway (multi-user.target active: before this package, or with
+/etc/omamobile/charger-mode-disable), where it would turn a running
+phone's panel off and restart it on a press of Power. One battery line a minute goes to
+the journal. SSH over USB comes up as usual (omamobile-charger.target).
+"""
+import glob
+import os
+import select
+import shutil
+import struct
+import subprocess
+import sys
+import time
+
+SYS = os.environ.get('OMAMOBILE_SYSFS', '/sys')
+BOOTCONFIG = os.environ.get('OMAMOBILE_BOOTCONFIG', '/proc/bootconfig')
+SYSTEMCTL = os.environ.get('OMAMOBILE_SYSTEMCTL', 'systemctl')
+INPUT = os.environ.get('OMAMOBILE_CHARGER_INPUT', '')
+HOLD = float(os.environ.get('OMAMOBILE_CHARGER_HOLD', '1.0'))
+UNPLUGGED = float(os.environ.get('OMAMOBILE_CHARGER_UNPLUGGED', '5'))
+POLL = float(os.environ.get('OMAMOBILE_CHARGER_POLL', '1'))
+REPORT = float(os.environ.get('OMAMOBILE_CHARGER_REPORT', '60'))
+
+CHARGER = 'max77759-charger'
+BATTERY = 'max170xx_battery'
+EV_KEY, KEY_POWER = 1, 116
+EVENT = struct.Struct('llHHi')  # struct input_event on a 64-bit kernel
+
+
+def log(*words):
+    print('omamobile-charger-mode:', *words, flush=True)
+
+
+def read(path, default=''):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return default
+
+
+def charger_boot():
+    for line in read(BOOTCONFIG).splitlines():
+        key, _, value = line.partition('=')
+        if key.strip() == 'androidboot.mode':
+            return value.strip().strip('"') == 'charger'
+    return False
+
+
+def panel_off(failed):
+    """bl_power 4 on every backlight that doesn't read it yet; a backlight
+    that refused is logged once (failed) and tried again each poll."""
+    for d in sorted(glob.glob(f'{SYS}/class/backlight/*')):
+        if read(f'{d}/bl_power') == '4':
+            continue
+        name = os.path.basename(d)
+        try:
+            with open(f'{d}/bl_power', 'w') as f:
+                f.write('4')
+            log('panel off:', name)
+        except OSError as e:
+            if name not in failed:
+                log('panel', name, e)
+                failed.add(name)
+
+
+def has_key(caps, code):
+    # capabilities/key: hex words, the highest first, 64 bits each.
+    words = caps.split()
+    index = len(words) - 1 - code // 64
+    return 0 <= index < len(words) and bool(int(words[index], 16) >> (code % 64) & 1)
+
+
+def power_key():
+    if INPUT:
+        return INPUT
+    for d in sorted(glob.glob(f'{SYS}/class/input/event*')):
+        if has_key(read(f'{d}/device/capabilities/key'), KEY_POWER):
+            return f'/dev/input/{os.path.basename(d)}'
+    return ''
+
+
+def battery():
+    b = f'{SYS}/class/power_supply/{BATTERY}'
+    return f"battery {read(b + '/capacity', '?')}% {read(b + '/status', '?')}"
+
+
+def finish(command, why):
+    log(why + ':', command)
+    # systemctl's status, so a refused reboot or power off fails the unit
+    # and Restart=on-failure brings the loop back instead of a dark phone.
+    return subprocess.run([SYSTEMCTL, command], check=False).returncode
+
+
+def main(argv):
+    if not charger_boot():
+        log('not a charger boot (androidboot.mode), nothing to do')
+        return 0
+    if subprocess.run([SYSTEMCTL, 'is-active', '--quiet', 'multi-user.target'],
+                      check=False).returncode == 0:
+        log('the phone is up (multi-user.target), nothing to do')
+        return 0
+    if shutil.which('plymouth'):
+        subprocess.run(['plymouth', 'quit'], check=False)
+    failed = set()
+    panel_off(failed)
+    path = power_key()
+    fd = None
+    if path:
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError as e:
+            log('no power key:', path, e)
+    else:
+        log('no power key found')
+    log('charging; hold Power to start the phone,', battery())
+
+    pending = b''
+    pressed = None        # when Power went down
+    seen_online = False   # the charger must report once before an unplug counts
+    unplugged = None      # since when it reads offline
+    reported = time.monotonic()
+    while True:
+        now = time.monotonic()
+        wait = POLL if pressed is None else max(0.0, min(POLL, pressed + HOLD - now))
+        if fd is not None and select.select([fd], [], [], wait)[0]:
+            try:
+                data = os.read(fd, EVENT.size * 16)
+            except BlockingIOError:
+                data = None
+            if data:
+                pending += data
+                while len(pending) >= EVENT.size:
+                    _, _, kind, code, value = EVENT.unpack_from(pending)
+                    pending = pending[EVENT.size:]
+                    if kind == EV_KEY and code == KEY_POWER:
+                        if value == 1 and pressed is None:
+                            pressed = time.monotonic()
+                        elif value == 0:
+                            pressed = None
+            elif data == b'':
+                time.sleep(POLL)
+        elif fd is None:
+            time.sleep(wait)
+
+        panel_off(failed)
+        now = time.monotonic()
+        if pressed is not None and now - pressed >= HOLD:
+            return finish('reboot', 'Power held')
+
+        online = read(f'{SYS}/class/power_supply/{CHARGER}/online')
+        if online == '1':
+            seen_online, unplugged = True, None
+        elif online == '0' and seen_online:
+            unplugged = unplugged or now
+            if now - unplugged >= UNPLUGGED:
+                return finish('poweroff', 'charger unplugged')
+
+        if now - reported >= REPORT:
+            log(battery())
+            reported = now
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))

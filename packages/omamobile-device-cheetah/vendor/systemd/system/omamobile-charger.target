@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# The bootloader's off-mode charging boot (androidboot.mode = "charger"),
+# the default target of such a boot through
+# omamobile-charger-mode-generator: charging with the panel off and nothing
+# of the phone started (no session, no modem, no Wi-Fi, no AoC), SSH over
+# USB as usual. Power held for a second restarts into the phone.
+[Unit]
+Description=Omarchy Mobile off-mode charging
+Requires=basic.target
+Wants=omamobile-charger.service omamobile-usb-rescue.service omamobile-usb-mac.service systemd-networkd.service sshd.service ufw.service
+After=basic.target
+Conflicts=rescue.service rescue.target
+AllowIsolate=yes

@@ -13,6 +13,8 @@ for tool in omamobile-bootctl reboot-to; do install -Dm755 "$build/$tool" "$dest
 while IFS= read -r -d '' file; do
   install -Dm644 "$file" "$destination/usr/lib/${file#vendor/}"
 done < <(find vendor -type f -print0)
+# systemd runs generators only when they are executable.
+chmod 755 "$destination"/usr/lib/systemd/system-generators/*
 while IFS= read -r -d '' file; do
   install -d "$destination/usr/lib/$(dirname "${file#vendor/}")"
   ln -sfn "$(readlink "$file")" "$destination/usr/lib/${file#vendor/}"
