@@ -80,6 +80,29 @@ class ServiceTests(unittest.TestCase):
             repeated=self.service.send_sms(req)
             self.assertEqual(repeated['state'],result['state'])
             self.assertEqual(self.client.request.call_count,before)
+    def binary_parts(self, headers, bodies=(b'\x01\x06first', b'\x00\xffsecond')):
+        inbox = self.root/'inbox'; inbox.mkdir()
+        for seq, (header, body) in enumerate(zip(headers, bodies), 1):
+            ud = bytes.fromhex(header) + body
+            tpdu = bytes.fromhex('440b912120550521f3000462909221436500') + bytes([len(ud)]) + ud
+            data = b'\0' + tpdu
+            path = inbox/f'{seq}.sit'
+            path.write_bytes(bytes(2)+struct.pack('<H',0x0d1e)+bytes(5)+bytes([len(data)])+data)
+            self.service.ingest(path)
+        return self.service.dispatch(dict(action='sms-list'))
+
+    def test_concatenated_binary_with_no_port_in_any_part_is_not_data(self):
+        # Only a message whose port is the WAP push one (2948) goes on as data.
+        rows = self.binary_parts(('050003090201', '050003090202'))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]['data'], rows[0]['text']), ('', 'Received an unsupported binary message.'))
+
+    def test_concatenated_binary_for_another_port_is_not_data(self):
+        # The first part names port 0x1584; the second, as always, names none.
+        rows = self.binary_parts(('0b0504158423f00003090201', '050003090202'))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]['data'], rows[0]['text']), ('', 'Received an unsupported binary message.'))
+
     def test_wap_push_parts_join_into_data(self):
         inbox=self.root/'inbox'; inbox.mkdir()
         pieces=[bytes(range(0,100)),bytes(range(100,160))]
@@ -336,6 +359,8 @@ class InternetConfig(unittest.TestCase):
                  patch.object(app_service.paths, 'RUN', run):
                 self.assertEqual(app_service.internet_config(), {})        # not on a device yet
                 (run/'data-interface').write_text('rmnet5\n')
+                self.assertEqual(app_service.internet_config(), {})        # a candidate being tried
+                (run/'data-interface-kept').write_text('rmnet5\n')
                 self.assertEqual(app_service.internet_config(),
                                  dict(interface='rmnet5', address='192.0.2.7', dns=['192.0.2.53']))
                 response.unlink()

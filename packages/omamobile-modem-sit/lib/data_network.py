@@ -40,6 +40,10 @@ from data_call import RESPONSE
 
 RESOLVER = Path('/etc/resolv.conf')
 INTERFACE = paths.RUN / 'data-interface'
+# Written only once a candidate has answered and is kept: what the phone
+# service reports as the internet bearer's device. data-interface names a
+# candidate from before its probe, so that a killed run can be cleaned up.
+KEPT = paths.RUN / 'data-interface-kept'
 # rmnet0-rmnet7 are tried; CPIF creates 30, a phone uses a handful.
 CANDIDATES = 8
 
@@ -200,6 +204,7 @@ def put_back(dev, address=None):
 def clear_stale():
     """A device recorded by a run that ended without its cleanup (killed, or
     stopped before 0.3.12 while probing): put it back before anything else."""
+    KEPT.unlink(missing_ok=True)
     try:
         dev = INTERFACE.read_text().strip()
     except OSError:
@@ -217,7 +222,9 @@ def find_device(address, cid, probe=None, stopped=lambda: False):
     keeps its address and route. Every other one is put back as it was, also
     when a step fails or the service is stopped in the middle (the record in
     data-interface is written before the device is touched, so a run that is
-    killed outright is cleaned up by the next start)."""
+    killed outright is cleaned up by the next start). data-interface-kept is
+    written only for the one that answered: a device that is merely being
+    tried is never reported as the bearer's."""
     probe = probe or answers
     for dev in candidates(cid):
         if stopped():
@@ -243,6 +250,7 @@ def find_device(address, cid, probe=None, stopped=lambda: False):
                 INTERFACE.unlink(missing_ok=True)
         if kept:
             print('Bearer CID', cid, 'carried by', dev, flush=True)
+            KEPT.write_text(dev + '\n')
             return dev
     if stopped():
         raise InterruptedError('Stopped while looking for the bearer device')
@@ -330,6 +338,8 @@ def main():
         # Stopped while probing: find_device has put the candidate back.
         pass
     finally:
+        # The status stops naming the device before its configuration goes.
+        KEPT.unlink(missing_ok=True)
         if resolver:
             resolver.restore()
         if dev:

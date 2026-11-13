@@ -97,13 +97,15 @@ def internet_config():
     """The internet bearer's device, address and the carrier's DNS, for the
     bridge's copy of the bearer (MMS goes over it where the MMS APN is the
     internet APN). The device is the one omamobile-sit-data found carrying
-    it; none recorded means the data network isn't up yet. It goes in the
+    it and kept (data-interface-kept, written after its probe answered; a
+    candidate still being probed is not it); none recorded means the data
+    network isn't up yet. It goes in the
     status for authorised clients only, not in state.json; the bridge then
     publishes it in the bearer's Ip4Config, which, as ModemManager's, any
     client on the system bus can read."""
     try:
         address, dns = internet_addresses(bearer_paths(data_call.INTERNET_CID)[1].read_bytes())
-        interface = (paths.RUN / 'data-interface').read_text().strip()
+        interface = (paths.RUN / 'data-interface-kept').read_text().strip()
     except (OSError, ValueError):
         return {}
     if not interface:

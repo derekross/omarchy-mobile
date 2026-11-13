@@ -45,6 +45,35 @@ class CodecTests(unittest.TestCase):
         self.assertEqual((other['data'],other['port']),(b'',0x1584))
         self.assertIn('cannot display',other['text'])
 
+    def test_only_an_uncompressed_8_bit_wap_push_is_data(self):
+        # The same WAP push header and body under other data coding schemes:
+        # the reserved alphabet (0x0c) and compressed content (0x24 8-bit,
+        # 0x20 default alphabet) are not bytes this phone can hand on.
+        body=bytes.fromhex('01060403be81ea')
+        header=bytes.fromhex('0b05040b8423f0000307' '0201')
+        def push(dcs):
+            return deliver(bytes.fromhex('440b912120550521f300')+bytes([dcs])+bytes.fromhex('62909221436500')
+                           +bytes([len(header)+len(body)])+header+body)
+        self.assertEqual(push(0x04)['data'],body)
+        for dcs in (0x0c,0x24,0x20):
+            sms=push(dcs)
+            self.assertEqual((sms['data'],sms['port']),(b'',2948),hex(dcs))
+            self.assertIn('cannot display',sms['text'],hex(dcs))
+
+    def test_an_8_bit_part_without_a_port_is_data_only_when_concatenated(self):
+        # A later part of a WAP push has no port of its own, so its bytes are
+        # kept for the service to join and judge; a single 8-bit message with
+        # no port is not a WAP push.
+        body=b'\x00\xffsecond'
+        def message(header):
+            ud=header+body
+            return deliver(bytes.fromhex('440b912120550521f3000462909221436500')+bytes([len(ud)])+ud)
+        part=message(bytes.fromhex('050003090202'))
+        self.assertEqual((part['data'],part['port'],part['concat']),(body,None,(9,2,2)))
+        single=message(bytes.fromhex('0401020304'))     # a header with no port and no concatenation
+        self.assertEqual((single['data'],single['port'],single['concat']),(b'',None,None))
+        self.assertIn('cannot display',single['text'])
+
     def test_number_and_special_service_rejection(self):
         self.assertEqual(number('(202) 555-0123',voice=True),'+12025550123')
         for value in ('911','112','*123#'):
