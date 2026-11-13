@@ -20,6 +20,27 @@ function dataArgv(on) { return ["omamobile-mobile-network", "data", on ? "on" : 
 function roamingArgv(on) { return ["omamobile-mobile-network", "roaming", on ? "on" : "off"] }
 function apnArgv(value) { return ["omamobile-mobile-network", "apn", value] }
 function attachArgv(value) { return ["omamobile-mobile-network", "attach-apn", value] }
+function modemArgv(on) { return ["omamobile-mobile-network", "modem", on ? "on" : "off"] }
+
+// The Modem switch (omamobile-modem-switch's status in s.modem, or null when
+// it isn't installed): whether the stack starts at boot, and what this boot
+// does about it. Shown only where something starts the modem at boot
+// (available). Off never stops a running modem (its sleep block lasts until
+// the reboot anyway), so off with the modem up says "after a restart", and
+// "can't sleep" follows the sleep block itself.
+function modemSwitch(m) {
+  if (!m || m.available !== true) return { shown: false }
+  var on = m.enabled === true
+  var note
+  if (!m.provisioned) note = "Not set up on this phone yet"
+  else if (on && m.running) note = "On"
+  else if (on && m.started) note = "On after a restart"
+  else if (on) note = "Starting"
+  else if (m.sleep_blocked) note = "Off after a restart. Until then the phone can't sleep."
+  else if (m.running || m.started) note = "Off after a restart."
+  else note = "Off. The phone can sleep; no calls, texts or mobile data."
+  return { shown: true, on: on, note: note, restart: m.restart_needed === true }
+}
 
 // What the override field accepts: "" or "auto" (from the SIM), or a plain
 // carrier APN (the helper checks again as root).
@@ -50,9 +71,21 @@ function view(s) {
   if (!s) return { state: "loading", title: "Mobile network", body: "Reading the modem..." }
   if (!s.installed)
     return { state: "none", title: "No modem", body: "This phone's modem software isn't installed." }
+  var modem = modemSwitch(s.modem)
+  // Switched on, and the modem or its phone service still coming up: say
+  // so, rather than the off text, until the service reports (about two
+  // minutes from the switch, as at boot).
+  var m = s.modem || {}
+  if (!s.running && modem.shown && modem.on && m.provisioned && (m.running || !m.started))
+    return { state: "off", title: "Starting the modem",
+             body: "Registering with the network. This takes a minute or two.",
+             modem: modem }
   if (!s.running)
     return { state: "off", title: "Mobile network is off",
-             body: "The modem service isn't running. It starts with the phone once the modem is set up." }
+             body: modem.shown && !modem.on
+               ? "The modem is turned off."
+               : "The modem service isn't running. It starts with the phone once the modem is set up.",
+             modem: modem }
   var sim = s.sim || {}
   var simProblem = SIM[sim.state] !== undefined ? SIM[sim.state] : "Reading the SIM"
   var registered = s.registration === "home" || s.registration === "roaming"
@@ -83,7 +116,8 @@ function view(s) {
     apnConfigured: apn.configured && apn.configured !== "auto" ? apn.configured : "",
     attachText: attachText(apn),
     attachConfigured: apn.attach_configured && apn.attach_configured !== "auto" ? apn.attach_configured : "",
-    pinText: pinText(sim)
+    pinText: pinText(sim),
+    modem: modem
   }
 }
 
@@ -124,6 +158,7 @@ function apnSavedText(value, attach) {
 if (typeof module !== "undefined") {
   module.exports = { STATUS_ARGV: STATUS_ARGV, REBOOT_ARGV: REBOOT_ARGV, parseJson: parseJson,
                      dataArgv: dataArgv, roamingArgv: roamingArgv, apnArgv: apnArgv, attachArgv: attachArgv, apnValue: apnValue,
+                     modemArgv: modemArgv, modemSwitch: modemSwitch,
                      attachText: attachText,
                      view: view, signalText: signalText, pinText: pinText, apnSavedText: apnSavedText }
 }

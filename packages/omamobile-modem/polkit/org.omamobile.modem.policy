@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT -->
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- The shell's Mobile network page: the modem stack on or off at boot,
+     for the user at the phone (the active local session), through a helper
+     that only masks or unmasks omamobile-modem-boot.target and starts it
+     when this boot's modem never started. -->
+<policyconfig>
+  <vendor>Omarchy Mobile</vendor>
+  <vendor_url>https://github.com/derekross/omarchy-mobile</vendor_url>
+  <action id="org.omamobile.modem.switch">
+    <description>Turn the modem on or off</description>
+    <message>Authentication is required to turn the modem on or off</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/omamobile-vendor/omamobile-modem-switch</annotate>
+  </action>
+</policyconfig>

@@ -32,3 +32,15 @@ configuration cannot reassign MARK/HOLD or redefine refuse. The normal marker,
 unclean-stop and hold decisions remain unchanged. Device-specific configuration
 does not authorize starting a modem or replace its watchdog/backup/recovery
 qualification. The maintainer allocates the package version at merge.
+
+# On or off from the shell
+
+`omamobile-modem-switch` (in `/usr/lib/omamobile-vendor/`) backs the Modem
+switch on the shell's Mobile network page. It is offered only where
+something starts `omamobile-modem-boot.target` at boot (the Pixel 7 Pro's
+device package links it into `multi-user.target`) or where the switch has
+masked it; elsewhere it refuses. "Off" masks the target and stops nothing in
+this boot; "on" unmasks it and starts the stack only if this boot's modem
+never started. The polkit action `org.omamobile.modem.switch` lets the user
+of the active local session switch it without a password; anyone else is
+refused.

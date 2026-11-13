@@ -8,6 +8,9 @@ SIM line (omamobile-onboarding).
   omamobile-mobile-network roaming on|off  data while roaming
   omamobile-mobile-network apn auto|APN    the internet APN (applies after a restart)
   omamobile-mobile-network attach-apn auto|APN  the APN the modem registers with (after a restart)
+  omamobile-mobile-network modem on|off    the modem stack at boot (omamobile-modem-switch):
+                                           off from the next boot; on starts it now if this
+                                           boot's modem never started, else after a restart
 
 Reads omamobile-sitd's world-readable status (/run/omamobile-sit/state.json),
 its settings (/etc/omamobile/modem-sit.conf, 0644) and, when it runs,
@@ -23,10 +26,14 @@ status:
    "roaming": {"now": false, "allowed": true},
    "apn": {"in_use": "...", "source": "carrier-database", "configured": "auto",
            "attach_in_use": "...", "attach_source": "same", "attach_configured": "auto"},
-   "voice": true, "sms": true}
+   "voice": true, "sms": true,
+   "modem": {"available": true, "enabled": true, "running": true, "started": true,
+             "provisioned": true, "sleep_blocked": true, "restart_needed": false}}
 
 installed: the modem stack (omamobile-modem-sit) is on this phone; without
 it the page shows "No modem". signal is 0-100, or -1 when not reported.
+modem: omamobile-modem-switch status (read without root), or null when the
+switch isn't installed.
 """
 import configparser
 import json
@@ -38,6 +45,7 @@ import sys
 RUN = os.environ.get('OMAMOBILE_SIT_RUN', '/run/omamobile-sit')
 CONFIG = os.environ.get('OMAMOBILE_SIT_CONFIG', '/etc/omamobile/modem-sit.conf')
 HELPER = os.environ.get('OMAMOBILE_SIT_CONFIG_HELPER', '/usr/lib/omamobile-sit/omamobile-sit-config')
+SWITCH = os.environ.get('OMAMOBILE_MODEM_SWITCH', '/usr/lib/omamobile-vendor/omamobile-modem-switch')
 
 
 def settings(path=CONFIG):
@@ -52,9 +60,10 @@ def settings(path=CONFIG):
     return dict(apn=apn, attach_apn=attach, roaming=roaming)
 
 
-def describe(installed, state, conf, data_active, mm=None):
+def describe(installed, state, conf, data_active, mm=None, switch=None):
     """The page's view from sitd's public state (or None), its settings,
-    whether the data service runs and ModemManager's modem (or None)."""
+    whether the data service runs, ModemManager's modem (or None) and the
+    modem switch's status (or None)."""
     modem = (state or {}).get('modem') or {}
     sim = modem.get('sim') or {}
     apn = modem.get('apn') or {}
@@ -88,7 +97,32 @@ def describe(installed, state, conf, data_active, mm=None):
                  attach_source=apn.get('attach_source', '') if isinstance(apn, dict) else '',
                  attach_configured=conf.get('attach_apn', 'auto')),
         voice=bool(modem.get('voice')), sms=bool(modem.get('sms')),
+        modem=switch_view(switch),
     )
+
+
+def switch_view(switch):
+    if not isinstance(switch, dict):
+        return None
+    keys = ('available', 'enabled', 'running', 'started', 'provisioned', 'sleep_blocked', 'restart_needed')
+    return {k: bool(switch.get(k)) for k in keys}
+
+
+def switch_status():
+    """omamobile-modem-switch status (it reads only, so no pkexec), or None."""
+    if not os.access(SWITCH, os.X_OK):
+        return None
+    try:
+        out = subprocess.run([SWITCH, 'status'], capture_output=True, text=True, timeout=10)
+        return json.loads(out.stdout) if out.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def switch(on):
+    helper = [SWITCH, 'on' if on else 'off']
+    command = helper if os.geteuid() == 0 else ['pkexec'] + helper
+    return subprocess.run(command, stdout=subprocess.DEVNULL).returncode
 
 
 def public_state():
@@ -145,8 +179,10 @@ def main(argv):
     if argv == ['status']:
         state = public_state()
         print(json.dumps(describe(installed(), state, settings(), data_active(),
-                                  modemmanager() if state is not None else None)))
+                                  modemmanager() if state is not None else None, switch_status())))
         return 0
+    if len(argv) == 2 and argv[0] == 'modem' and argv[1] in ('on', 'off'):
+        return switch(argv[1] == 'on')
     if len(argv) == 2 and argv[0] == 'data' and argv[1] in ('on', 'off'):
         return subprocess.run(['omamobile-sit', 'data', argv[1]]).returncode
     if len(argv) == 2 and argv[0] == 'roaming' and argv[1] in ('on', 'off'):

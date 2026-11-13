@@ -1061,8 +1061,10 @@ Item {
     function toggle() { if (available) root.runTileAction("mobile-data", !enabled) }
     // The chevron (and a long press): the Mobile network page
     // (omamobile.mobilenetwork), through the CLI, since a plugin only
-    // summons its own panels. Shown with a modem only.
-    readonly property bool details: available
+    // summons its own panels. Shown with a modem, and with one the owner
+    // switched off on that page, which is where it is switched back on.
+    readonly property bool details: available || detailsUnavailable
+    readonly property bool detailsUnavailable: !available && root.probed.data_switch === "off"
     function openDetails() {
       root.dismiss()
       Quickshell.execDetached(["omarchy-shell", "shell", "summon", "omamobile.mobilenetwork", "{}"])
@@ -2113,6 +2115,7 @@ Item {
     available: !!backend && backend.available
     busy: !!backend && backend.busy === true
     details: !!backend && backend.details === true
+    detailsUnavailable: !!backend && backend.detailsUnavailable === true
     longPress: !!backend && backend.longPress === true
     onClicked: if (backend) backend.toggle()
     onDetailsRequested: if (backend && typeof backend.openDetails === "function") backend.openDetails()
