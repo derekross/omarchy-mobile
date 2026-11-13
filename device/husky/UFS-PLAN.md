@@ -137,7 +137,7 @@ Let the UFS device runtime-suspend, with the link in hibern8. zuma's CAL has hib
 - **Risk:** medium. A failed hibern8 exit can leave the link down until the host resets it. From the initramfs, nothing writes to UFS.
 
 ### U6 System suspend (after U5)
-Omarchy's menu offers Suspend. At `spm_lvl` 5, system suspend powers the UFS device down and turns the link off, then re-initialises both on resume. That has run on neither Tensor G3 nor G4, so suspend on husky is untested until this step has its own runbook, written after U5 and on the model of the Pixel 7 Pro's [SUSPEND-PLAN](../cheetah/SUSPEND-PLAN.md).
+Omarchy's menu offers Suspend. At `spm_lvl` 5, system suspend powers the UFS device down and turns the link off, then re-initialises both on resume. That has run on neither Tensor G3 nor G4, so suspend on husky is untested until this step has its own runbook, on the model of the Pixel 7 Pro's [SUSPEND-PLAN](../cheetah/SUSPEND-PLAN.md). That runbook is [SUSPEND-PLAN](SUSPEND-PLAN.md), written before U5: Lef's `systemctl suspend` runs (#640, #642) already took UFS through system suspend at `spm_lvl` 5.
 
 ## Risks
 
