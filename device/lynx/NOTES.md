@@ -3,6 +3,81 @@
 
 Findings from real hardware, newest first. Tracking issue: #36.
 
+## devinfo 3.11 read-only evidence (2026-11-06)
+
+The Android 15 unit reports `devinfo` version 3.11. With slot B active,
+not marked successful, the eight bytes at `0x30-0x37` were:
+
+```
+03 00 00 00 00 0c 00 00
+```
+
+The same bytes and the same fastboot state were read after one unmarked
+boot through the bootloader:
+
+```
+slot-successful:b   no
+slot-unbootable:b   no
+slot-retry-count:b  1
+current-slot:       b
+```
+
+`devinfo` is read-only (`blockdev --getro` = 1) on this unit, and no
+write was forced while 3.11 is not in the merged table. A marked-state
+row still needs either the maintainer's approval to write 3.11 or a
+bootloader action that marks the slot itself.
+
+Both slots on this unit carry bootloader `lynx-15.2`.
+
+These bytes and the fastboot lines above were taken at different moments
+(Linux after a boot; `getvar` from the bootloader in a separate cycle), so
+this is **provisional**, not a same-state row: the retry byte reads 0 where
+`getvar` reports 1, and slot A's flags differ from the 3.15 table. A
+same-moment table still has to be captured.
+
+
+Stock Android on 11-06 was a deliberate restore, not a fallback: the
+factory images were flashed to slot B and Android booted from it. Stock
+rewrites `efs`, `persist` and `modem_userdata`, so a fresh read-only
+backup is required before any radio work.
+
+A same-moment row on 2026-11-13: slot B after a boot read
+`03 00 00 00 01 0c 00 00` at `0x30-0x37`, then the bootloader was
+entered with the buttons and read before anything booted:
+
+```
+slot-successful:b   no
+slot-unbootable:b   no
+slot-retry-count:b  1
+current-slot:       b
+```
+
+The retry byte (`0x34`) is 1 in both reads, and `0x35` is `0x0c`.
+
+## 2026-10-30: published kernel on an Android 15 unit; devinfo 3.11
+
+- **The published `omamobile` kernel brings up lynx touch on this unit.** With
+  the merged GT9895 node and the S2MPG12 LDO25M/LDO26M regulators, the
+  touchscreen binds as `Goodix Berlin Capacitive TouchScreen` (`event0`) and
+  Hyprland uses it. Kernel release
+  `7.3.0-rc6-omamobile-push1-gfbbcac19d8ea`.
+- **This unit's bootloader reports devinfo 3.11, not 3.15.** It is still on the
+  Android 15 factory build (`BP1A.250505.005.B1`, bootloader `lynx-15.2`).
+  `omamobile-device-lynx` 0.2.0 only accepted 3.15, so
+  `omamobile-boot-success` refused to write; whether the slot was later
+  marked by hand is not recorded.
+- **The A/B bytes are readable at the same offsets in 3.11 and 3.15.** A
+  read-only `omamobile-bootctl dump` decoded slot a and b on 3.11; layout
+  equivalence is not yet confirmed (see the provisional table below).
+- **The earlier write is not recorded.** The `0x04` -> `0x06` figure came
+  from the 3.15 test and table, not from a phone reading. 0.2.0 refuses a
+  3.11 header, and the binary that wrote slot B on 10-30 is not recorded;
+  no read-only `devinfo` backup was taken before it.
+- **Fix:** the shared source has the `#ifdef` for 3.11 and the 7 Pro's
+  3.15 condition. lynx's build does not pass the define yet, so 3.11
+  writes stay off until the table is confirmed; the package test builds
+  its own copy with the define and rejects an unverified 3.14.
+
 ## 2026-10-27: Wi-Fi parked
 
 - **The chip's boot ROM stops at its authentication stage,** `pbl_auth.c`, after reading only the ELF header and the hash segment of an image byte-identical to stock's. Every host-side difference two testers could act on was tried, one change per boot, and all were negative. The write-up, the ruled-out list, both stop conditions and what is left are in [WIFI-PLAN.md](WIFI-PLAN.md). The maintainer agreed on #36 that parking here is the right call.
