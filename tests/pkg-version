@@ -89,6 +89,14 @@ ok "a branch build is main's version at the base, its own commits and the commit
 git checkout -q -b pr-c; change c; commit "c1"; change c; commit "c2"
 git checkout -q main; git merge -q --no-ff -m "Merge pr-c" pr-c
 is "$(pv demo)" 0.3.4 "a merge commit counts once, not per commit it brings"
+# The commits it brought are on main's history but not its line: branch
+# builds of the commit they left main at, never one of main's numbers.
+v=$(pv --rev pr-c~1 demo)
+[[ $v == 0.3.3.1.g$(git rev-parse --short=7 pr-c~1) ]] || fail "a merged branch's first commit: got $v"
+ok "a commit a merge brought in is a branch build ($v)"
+v=$(pv --rev pr-c demo)
+[[ $v == 0.3.3.2.g$(git rev-parse --short=7 pr-c) ]] || fail "a merged branch's second commit: got $v"
+ok "and so is the next one ($v)"
 
 # The tool moves (and its PKGBUILD line with it): one more number, never a
 # restart from the stale version file.
@@ -226,6 +234,18 @@ for i in packages/*/install; do
 done
 ((boot >= 1)) || fail "no package ships boot files: the pattern no longer matches"
 ok "the $boot package(s) that ship boot files keep a written version"
+
+# Only these keep a written version: a new package copied from an older
+# PKGBUILD would otherwise stay on one without anyone noticing
+written=(omamobile-device-cheetah omamobile-keyring)
+for f in packages/*/PKGBUILD; do
+  p=$(basename "$(dirname "$f")")
+  grep -c -F '/.pkgver"' "$f" >/dev/null && continue
+  grep -c -E '^pkgver=.*/version"' "$f" >/dev/null || continue
+  [[ " ${written[*]} " == *" $p "* ]] ||
+    fail "$p reads a written version: read .pkgver as the other packages do, or name it in tests/pkg-version"
+done
+ok "only ${written[*]} keep a written version"
 
 # This repository's own history, replayed from its first commit.
 if [[ $(git rev-parse --is-shallow-repository) == true ]]; then

@@ -177,7 +177,11 @@ committed() {
   # The history skips a version file that doesn't parse, so without this its
   # commit would build under the number before it
   parse "$(file_at "$rev")" >/dev/null || die "$path/version doesn't hold a version (0.2 or 0.2.5) at $rev"
-  if git merge-base --is-ancestor "$rev" "$main"; then
+  # On main's own line (its first parents), not merely reachable from it: a
+  # commit a merge brought in is a branch build of the commit it left main at
+  local id later
+  id=$(git rev-parse "$rev^{commit}")
+  if git rev-list --first-parent "$main" | grep -c -x -F "$id" >/dev/null; then
     v=$(walk "$rev" | tail -1 | cut -d' ' -f2)
     [[ -n $v ]] || die "$path/version doesn't hold a version (0.2 or 0.2.5) at $rev"
     echo "$v"
@@ -185,6 +189,10 @@ committed() {
   fi
 
   base=$(git merge-base "$rev" "$main") || die "$rev shares no history with $main"
+  if [[ $base == "$id" ]]; then
+    later=$(git rev-list --first-parent "$main" "^$id" | tail -1)
+    base=$(git rev-parse "$later^1")
+  fi
   n=$(git rev-list --count --first-parent "$base..$rev" -- "$path")
   v=$(walk "$base" | tail -1 | cut -d' ' -f2)
   if ((n == 0)) && [[ -n $v ]]; then echo "$v"; return 0; fi
