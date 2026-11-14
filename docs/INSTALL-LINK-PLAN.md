@@ -12,7 +12,7 @@ and what stage L2 needs (§11.1). It asks the maintainer four new questions
 partition in this repository has changed.** (2026-11-13: stage L5, the
 package `omamobile-install-link` and the root image's side, is built in this
 repository as a draft pull request and tested offline only; §19 lists what
-it found and asks one question, N5. Still nothing has run on a phone.) This is
+it found; N5 and N6 were decided on 2026-11-14. Still nothing has run on a phone.) This is
 milestone M2 of [INSTALL-EXPERIENCE-PLAN](INSTALL-EXPERIENCE-PLAN.md): the
 USB channel a freshly installed phone offers at its first start, and what
 runs behind it. The reference device is the Pixel 7 Pro (`cheetah`). The
@@ -1657,7 +1657,7 @@ said nothing, or did not hold as written:
 | K14 | §11.2, R2: "the daemon limited to `hello`, `ping` and `status`" | The daemon has no such mode. Unpaired it answers only `hello`, `status`, `pair`, `resume`, `ping` and `bye` (§2.4): R2 and R3 run it unpaired, and nobody types the code | A limit would be a second code path to test; the unpaired rules are already the narrow ones |
 | K15 | §11.2, R2 and R3: the marker placed by hand on the development phone | The marker alone is not enough there: that phone has an account and no state file, so the daemon's first start ends the link as `not-first-start` (§6.5, row 3) and deletes the marker. R2 and R3 also place a state file at `firstboot-done` (mode 600; the crate's format, as the package's tests write it), which the daemon counts as setup boot 1 of 3; the link then closes after 10 unpaired minutes in each boot. R2 starts the unit by hand (`systemctl start`) and removes the marker before any restart, or R2 becomes R3 | The same rules that keep the link off every installed phone (§2.2) keep it off the development phone |
 
-**N5, for the maintainer: `no_disconnect=1` (§18, E12).** A daemon that
+**N5: `no_disconnect=1` (§18, E12). Decided by the maintainer on 2026-11-14: off.** A daemon that
 dies with its function bound takes the whole gadget off the bus. The mount
 option `no_disconnect=1` keeps the gadget bound and deactivates the link's
 function instead.
@@ -1673,7 +1673,12 @@ Recommended: keep it off. In the release composition it changes nothing for
 the owner, the disconnect is the clearer signal to the installer, and it is
 the case L3 has run; the development composition's few seconds without SSH
 are covered by R2's dead-man timer. Turning it on is one mount option in the
-gadget script (`LINK_FFS_OPTS`). **Not decided.**
+gadget script (`LINK_FFS_OPTS`). **Decided 2026-11-14: off, as recommended.**
+
+**N6: the link on the Pixel 7 Pro (§19, K11). Decided by the maintainer on
+2026-11-14:** cheetah's descriptor gets `INSTALL_LINK=yes` once the link's
+phone runs (R0 to R8) have passed on the reference phone; until then its
+release images carry the package without the marker.
 
 **For the daemon to change** (the installer's `linkd/`, then the patch and
 the drop-in go): `patches/0001` (K4); the hang marker under the link's state
