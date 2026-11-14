@@ -27,6 +27,8 @@ if [[ $1 == list-keys && $2 == org.gnome.nautilus.preferences ]]; then
 fi'
 # systemctl: logs calls; fails while $HOME/systemctl-fails exists (no user manager)
 fake systemctl 'echo "systemctl $*" >>"$HOME/calls"; [[ ! -e $HOME/systemctl-fails ]]'
+ln -s "$pkg/bin/omamobile-browser-setup" "$F/omamobile-browser-setup"
+fake hyprctl 'exit 1'
 fake chromium 'echo "Chromium 153.0.0.0"'
 fake omamobile-keyboard-theme 'echo "omamobile-keyboard-theme $*" >>"$HOME/calls"'
 for f in monitors looknfeel autostart; do echo "-- $f" >"$H/.config/hypr/$f.lua"; done
@@ -200,7 +202,12 @@ flags=$H/.config/chromium-flags.conf
 for flag in --enable-wayland-ime --wayland-text-input-version=3 --force-device-scale-factor=0.83; do
   [[ $(grep -cx -- "$flag" "$flags") == 1 ]] || fail "chromium-flags.conf has $flag once"
 done
-grep -c '^"--user-agent=.*Mobile Safari/537.36"$' "$flags" >/dev/null || fail "the mobile user agent stays quoted on its line"
+python3 - "$flags" <<'PYUA' || fail "the mobile user agent parses as one argument"
+import shlex, sys
+flags = shlex.split(open(sys.argv[1]).read(), comments=True)
+ua = [f for f in flags if f.startswith("--user-agent=")]
+assert len(ua) == 1 and ua[0].endswith("Chrome/153.0.0.0 Mobile Safari/537.36"), ua
+PYUA
 # Grok Bot's flags: the 7 Pro's factor, once, after two logins
 gflags=$H/.config/grok-bot-flags.conf
 [[ $(grep -cx -- --force-device-scale-factor=0.83 "$gflags") == 1 ]] || fail "grok-bot-flags.conf has the 7 Pro's factor once"
@@ -244,13 +251,29 @@ grep -cx -- --force-device-scale-factor=0.70 "$h9/.config/grok-bot-flags.conf" >
 pass "the Pixel 9a's scale: 8 / 3, GDK_SCALE left at 2, Grok Bot at 0.70"
 
 # Grok Bot's factor follows the panel: 0.62 for a 1080 px panel at scale 3
-# (360 px), and 0.83 when no panel mode can be read
-for c in 1080x2400:0.62 none:0.83; do
+# (360 px); no geometry defers only scale, keeping Chromium's other defaults
+for c in 1080x2400:0.62; do
   hg=$t/grok-${c%%:*}; mkdir -p "$hg/.config/hypr" "$hg/.config/omarchy/extensions"
   cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hg/.config/hypr/"
   RUN_HOME=$hg RUN_DRM=$t/drm-${c%%:*} run
   grep -cx -- "--force-device-scale-factor=${c#*:}" "$hg/.config/grok-bot-flags.conf" >/dev/null \
     || fail "Grok Bot's factor with panel ${c%%:*} is ${c#*:}"
+done
+hg=$t/grok-none; mkdir -p "$hg/.config/hypr" "$hg/.config/omarchy/extensions"
+cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hg/.config/hypr/"
+RUN_HOME=$hg RUN_DRM=$t/drm-none run
+[[ ! -e $hg/.config/grok-bot-flags.conf ]] || fail "no panel defers Grok's scale"
+python3 - "$hg/.config/chromium-flags.conf" <<'PYDEFAULTS'
+import shlex, sys
+flags = shlex.split(open(sys.argv[1]).read(), comments=True)
+assert '--no-first-run' in flags and '--enable-wayland-ime' in flags
+assert '--wayland-text-input-version=3' in flags
+assert len([f for f in flags if f.startswith('--user-agent=')]) == 1
+assert not any(f.startswith('--force-device-scale-factor=') for f in flags)
+PYDEFAULTS
+RUN_HOME=$hg RUN_DRM=$t/drm-1080x2400 run
+for app in grok-bot chromium; do
+  grep -cx -- --force-device-scale-factor=0.62 "$hg/.config/$app-flags.conf" >/dev/null || fail "$app retries with geometry"
 done
 pass "Grok Bot's scale factor gives about 578 px of layout width on any panel"
 
@@ -484,3 +507,12 @@ for gliff in no yes; do
 done
 rm -f "$F/gliff-server"
 pass "Omarchy's remote session is off on every phone, once, with or without gliff, and a user can turn it back on"
+
+# Browser setup is optional: a broken helper must not skip later login steps.
+rm "$F/omamobile-browser-setup"
+fake omamobile-browser-setup 'exit 1'
+rm -f "$H/.local/state/omarchy/done/omamobile-menu-hide-unlock"
+run
+grep -q 'browser setup failed; continuing' "$t/out" || fail "browser helper failure is reported"
+[[ -f $H/.local/state/omarchy/done/omamobile-menu-hide-unlock ]] || fail "user setup continues after browser helper failure"
+pass "browser helper failure does not stop later user setup"
