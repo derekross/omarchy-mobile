@@ -3774,6 +3774,22 @@ NV files 3 of 3), and the package versions didn't matter (0.1.18 and
   on, and twice on `…-g33179249011e` (packet registration 7.5 and 8.5 s
   after radio on, then IMS voice and SMS; a ping over `rmnet0` 3/3; no UFS
   line). The runs below used it.
+- Which boots each count covers: 5 of 5 are the boots of
+  `…-g33179249011e` on 2026-11-12 with the old order (before the fix);
+  3 of about 12 are the boots of `…-g80f9610feb26` on 2026-11-11.
+- The merged option, 2026-11-14 (`omamobile-modem-sit` 0.3.37 from this
+  pull request, which carries #701's 0.3.36; `…-gd2983420874d-dirty`,
+  `omamobile` at `82f31d3a7` with #232). Off (the package's default): the
+  modem accepted SET_NR_MODE with the radio off ("verified NR mode 0" before
+  radio on) and never registered, 1 of 1 boot. On, 4 of 4 boots
+  registered:
+
+  ```
+  omamobile-sitd: NR mode: set right after radio on (nr_after_radio_on)
+  omamobile-sitd: Registration: packet registered 7.5 s after radio on, RAT 14
+  ```
+
+  (the other three: 6.4 s RAT 14, 7.4 s RAT 20, 6.4 s RAT 14).
 
 **Sleep on the rebased #232, through `systemctl suspend`** (2026-11-12,
 this phone, on the charger, unattended at 80 % on the owner's word, before
