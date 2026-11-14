@@ -35,6 +35,8 @@
 #                 key, holding every package the image installs at this
 #                 checkout's version; development publishes exactly it.
 #                 Pins its index for `rootfs` and `promote`
+#                 Packages built and published on a build host:
+#                 tools/build-host-sync push, its command, then pull, first
 #   rootfs        the root image, stable channel, from the pinned repository
 #   bundle        the bundle, signed with the release key (ARGS: --unsigned
 #                 for a development proof; such a bundle is never released)
@@ -319,6 +321,7 @@ st_build() {
     [[ $(cat packages/linux-omamobile/prebuilt/kernel.release 2>/dev/null) == "$got" ]] ||
       die "packages/linux-omamobile/prebuilt does not hold $got after staging"
     note "linux-omamobile staged from $got (tools/build-packages packs it in the packages stage)"
+    note "packages built on another machine: tools/build-host-sync push, after the images stage"
   else
     note "skipped: no packages/linux-omamobile in this checkout (PR #320). The release can't pass test-install without it (§12 decision 10)"
   fi
@@ -407,7 +410,8 @@ st_packages() {
     die "a package's tests fail: $rel/packages-tests.log"; note "every package's test/all passes ($rel/packages-tests.log)"; fi
   say "out/repo: signed by the release key"
   [[ -f $db && -f $db.sig ]] || {
-    derek "tools/build-packages --all"
+    derek "tools/build-packages --all" \
+          "# on a build host: tools/build-host-sync push, run what tools/build-host-sync command prints, then tools/build-host-sync pull"
     die "no signed out/repo index"
   }
   verify_sig "$db.sig" "$db" || {
@@ -473,6 +477,7 @@ st_packages() {
     # --all leaves linux-omamobile out (it builds only when named, #320)
     [[ " ${stale[*]}" != *" linux-omamobile ("* ]] ||
       hints+=("tools/build-packages packages/linux-omamobile    # only built when named")
+    hints+=("# on a build host: tools/build-host-sync push, run what tools/build-host-sync command prints, then tools/build-host-sync pull")
     derek "${hints[@]}"
     die "out/repo is behind this checkout for the packages above"
   fi
@@ -499,7 +504,8 @@ st_packages() {
   fi
   say "development publishes exactly out/repo"
   if [[ ! -f $dev ]] || ! cmp -s "$db" "$dev"; then
-    derek "tools/repo-publish --no-build development"
+    derek "tools/repo-publish --no-build development" \
+          "# on a build host: tools/build-host-sync push, run what tools/build-host-sync command prints, then tools/build-host-sync pull"
     ((dry)) && { note "(dry run: development differs from out/repo)"; return 0; }
     die "development (out/publish) is not out/repo's index: publish it first, so phones and the image meet at the same versions (§7)"
   fi
