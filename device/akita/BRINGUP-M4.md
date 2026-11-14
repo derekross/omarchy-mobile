@@ -205,6 +205,17 @@ The kernel: `…g8136602c700c`, #246's third commit added.
 
 Slot B: 2 tries left.
 
+
+### 2026-11-14: the package's own boot (#718's review)
+
+The kernel: `…g8136602c700c`, as for test 47. The hand-made modprobe file and the test rescue unit were moved off the phone. omamobile-device-akita 0.1.4 was built on the phone from this branch (`tools/phone-install-package`) and installed, then one reboot through fastboot.
+
+| # | Test | Seen | Meaning |
+| --- | --- | --- | --- |
+| 48 | The package's blacklist, rescue and dependency, one boot | `pacman -Q`: `omamobile-device-akita 0.1.4-1`, `i2c-tools 4.4-4`. i2c-tools was already installed, as a dependency of `ddcutil` from the Omarchy image, and now lists both as "Required By". `/etc/modprobe.d` has no battery file. **`lsmod`:** `max77759` and `max17042_battery`, and no charger, GPIO, NVMEM or Type-C driver; no `max77759-charger` power supply. **The rescue:** `active (running)` from `/usr/bin`, pulled in by `multi-user.target` through the package's wants link (systemd lists the unit as "disabled", as on husky). **An unplug and a replug:** `usbsw=0x00 vbus=0`, then `usbsw=0x00 vbus=1`, "closing the data switch", and `usbsw=0x09` two seconds later, with no reboot. `tools/phone-smoke` (`59e10b0`): every required row ok, battery ok (89 %, charging under the bootloader, 36 °C), no failed units, the 2 known error lines and 0 new; GPU not ok, as before | The package does what the test boots did by hand |
+
+Slot B: 2 tries left.
+
 Findings:
 
 - **The charge current reads higher than the input limit allows.** In test 45 the gauge read about +1.0 A into the battery, with the input limit at 500 mA. At 4.1 V that's about 4.1 W, more than 5 V × 0.5 A. The gauge's sense resistor matches stock's (5 mΩ), and the level rose about as fast as that current says (7 % of 4486 mAh in 25 minutes is about 0.75 A on average). So either the input limit isn't what register 0xc2 reads back as, or the port gives more than the limit. It needs settling before any higher limits. The guard errs on the safe side if the gauge over-reads.
