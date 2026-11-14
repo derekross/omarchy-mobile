@@ -1,0 +1,15 @@
+--- a/src/managers/input/InputMethodRelay.cpp
++++ b/src/managers/input/InputMethodRelay.cpp
+@@ -121,6 +121,12 @@
+     m_inputMethod->deactivate();
+     if (shouldCommit)
+         commitIMEState(pInput);
++    else if (!pInput)
++        // No text input will commit a state after this one (its owner is gone),
++        // so send the done that applies the deactivation. Without it the input
++        // method stayed active: squeekboard kept a keyboard hidden by hand
++        // hidden for every later text field, until it was restarted.
++        m_inputMethod->done();
+ }
+ 
+ void CInputMethodRelay::commitIMEState(CTextInput* pInput) {
