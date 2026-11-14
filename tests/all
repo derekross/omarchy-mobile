@@ -25,13 +25,14 @@
 # against stand-ins for docker and repo, tools/repo-publish --from-main's
 # copy of the prebuilt binaries into a fixture's publish tree,
 # tools/repo-publish's staging, tools/extract-vendor-firmware's output
-# generations (made-up files, no factory image), the callers of
+# generations (made-up files, no factory image), the two chroot
+# extractors' message when build.prop can't be read, the callers of
 # tools/alpine-fetch.py stopping when it fails, and its dependency
 # resolution against synthetic indexes, and the tools' --help from their
 # header comments (tools/lib/usage.sh).
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
-for f in tools/install-phone tools/phone-provision tools/nv-backup tools/build-rootfs tools/build-packages tools/make-bundle \
+for f in tools/install-guided tools/install-phone tools/phone-provision tools/nv-backup tools/build-rootfs tools/build-packages tools/make-bundle \
          tools/local-key-init tools/fetch-published tools/fetch-toolchain tools/repo-publish tools/repo-build tools/release tools/release-upload tools/server/releases-nginx.sh \
          tools/lib/alarm.sh tools/lib/alarm-setup tools/lib/signing.sh tools/lib/bundle-tar.sh tools/lib/usage.sh rootfs/build-inside rootfs/resolve.sh tests/*; do
   [[ -f $f ]] || continue   # tests/owl is the OWL conformance suite's folder
@@ -84,6 +85,10 @@ echo "# tests/factory-index"   # the build index of Google's factory images, aga
 tests/factory-index
 echo "# tests/phone-demo-notes"
 tests/phone-demo-notes
+echo "# tests/install-guided"   # the guided install, against stand-ins for the phone and this computer's network
+tests/install-guided
+echo "# tests/chroot-extractors"
+tests/chroot-extractors
 echo "# tests/pkg-version"   # the counted package versions, and the tool and its library parse
 bash -n tools/pkg-version
 bash -n tools/lib/pkg-tar.sh

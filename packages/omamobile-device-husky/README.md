@@ -27,7 +27,7 @@ Not in this package: the boot-success marker, the charger, cameras, and the slot
 
 ## Firmware the phone needs
 
-Nothing here is in the package. Wi-Fi needs four files from Google's firmware for the BCM4398 D0, which `tools/extract-vendor-firmware -d husky -s SKU` takes from the owner's own factory image or OTA `vendor.img`. They're installed under `/usr/lib/firmware/updates/brcm`, with the board-suffixed names brcmfmac loads first:
+Nothing here is in the package. `tools/extract-vendor-firmware -d husky -s SKU` also stages the Bluetooth patch (`brcm/BCM.google,zuma-husky.hcd`, stock's `BCM.hcd`) and the five CS40L26 haptics files (`cs40l26.wmfw`, `cs40l26.bin` and the three tuning files) from the same image. Wi-Fi needs four files from Google's firmware for the BCM4398 D0, which `tools/extract-vendor-firmware -d husky -s SKU` takes from the owner's own factory image or OTA `vendor.img`. They're installed under `/usr/lib/firmware/updates/brcm`, with the board-suffixed names brcmfmac loads first:
 
 - `brcmfmac4398d0-pcie.google,zuma-husky.bin`: the firmware;
 - `.txt`: the NVRAM for the phone's region, which `-s` picks from the hardware SKU (`grep hardware.sku /proc/bootconfig`);

@@ -441,7 +441,18 @@ for dir in "${build[@]}"; do
       for dep in $wanted; do
         pacman -Sp --print-format %n "$dep" >/dev/null 2>&1 && install+=("$dep")
       done
-      ((${#install[@]})) && pacman -S --noconfirm --needed --asdeps --overwrite "/usr/share/pacman/keyrings/*" "${install[@]}" >/dev/null
+      # The build image is made once and kept, so it falls behind the
+      # repositories, and installing current packages into it is a partial
+      # upgrade. Usually that works. When the distribution moves a library
+      # (openssl 3 to its compat package openssl-3, 2026-11-12: "openssl-3:
+      # /usr/lib/libcrypto.so.3 exists in filesystem (owned by openssl)") it
+      # cannot: then bring this container up to date first and try once more.
+      deps() { pacman -S --noconfirm --needed --asdeps --overwrite "/usr/share/pacman/keyrings/*" "${install[@]}" >/dev/null; }
+      if ((${#install[@]})) && ! deps; then
+        echo "the build image is behind the repositories: upgrading it for this build, then installing again" >&2
+        pacman -Su --noconfirm --overwrite "/usr/share/pacman/keyrings/*" >/dev/null
+        deps
+      fi
       [[ -s /work/pgp.asc ]] && su builder -c "gpg -q --batch --import /work/pgp.asc"
       flags=(-f --nodeps --noconfirm)
       [[ $INCHECK == 1 ]] || flags+=(--nocheck)

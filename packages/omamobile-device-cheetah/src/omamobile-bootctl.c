@@ -163,7 +163,11 @@ static int check_header(const uint8_t *d, int for_write)
 		fprintf(stderr, "%s: devinfo version %u.%u has no A/B data (need 3.3+)\n", argv0, maj, min);
 		return -1;
 	}
-	if (for_write && (maj != VERIFIED_VER_MAJOR || min != VERIFIED_VER_MINOR)) {
+	if (for_write && (maj != VERIFIED_VER_MAJOR || min != VERIFIED_VER_MINOR)
+#ifdef OMAMOBILE_DEVINFO_EXTRA_MINOR
+	    && (maj != 3 || min != OMAMOBILE_DEVINFO_EXTRA_MINOR)
+#endif
+	    ) {
 		fprintf(stderr, "%s: devinfo version %u.%u is not the verified %u.%u layout; refusing to write\n",
 			argv0, maj, min, VERIFIED_VER_MAJOR, VERIFIED_VER_MINOR);
 		return -1;
