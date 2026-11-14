@@ -756,11 +756,13 @@ class Service:
             unread = self.db.execute('SELECT COUNT(*) FROM received WHERE consumed=0').fetchone()[0]
             return dict(modem=modem, calls=calls, sms=dict(unread=unread), updated=int(time.time()))
         received = [r[0] for r in self.db.execute('SELECT id FROM received WHERE consumed=0 ORDER BY rowid')]
+        # The loudspeaker and the switch are facts of the tegu route alone:
+        # every other phone's call plays in its earpiece and can't switch.
+        tegu = getattr(self.audio, 'tegu', False) is True
         return dict(modem=modem, calls=calls, sms=dict(received=['sit:' + i for i in received]),
                     audio=dict(available=True, running=self.audio is not None, mute=self.muted,
-                               speaker=self.audio is not None and getattr(self.audio, 'output', 'speaker') == 'speaker',
-                               speaker_available=getattr(self.audio, 'tegu', False) is True,
-                               error=self.audio_error))
+                               speaker=tegu and getattr(self.audio, 'output', 'speaker') == 'speaker',
+                               speaker_available=tegu, error=self.audio_error))
 
     def subscribe(self, connection):
         """Keep an authorised connection for status events; refuse beyond
