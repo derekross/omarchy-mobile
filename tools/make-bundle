@@ -22,7 +22,9 @@
 #                    it only through the signed checksums below
 #     MANIFEST       kernel release, root image, both repositories' commits, toolchain
 #     manifest.json  the same and more as data (tools/bundle-manifest): every
-#                    file with size and SHA-256, the root image, the release
+#                    file with size and SHA-256, the root image (and where in
+#                    it the placeholders for the owner's answers are, from
+#                    its MANIFEST, checked against the image), the release
 #                    version and label, and the install plan and its checks,
 #                    which tools/install-phone (and later a web flasher) enforce
 #     SHA256SUMS     checksums of everything above
@@ -267,6 +269,7 @@ Going back to stock: stock Android is still on slot A. In fastboot,
 was erased). Or flash Google's factory image for $DEVICE.
 EOF
 python3 -I tools/bundle-manifest --bundle "$dir" --rootfs "$rootfs" --rootfs-sha256 "$root_digest" \
+  --rootfs-manifest "$manifest" \
   --version "$version" --kernel-release "$release" --kernel-commit "$kernel_commit" \
   --commit "$(git rev-parse --short=12 HEAD)$(git diff --quiet HEAD || echo -dirty)" \
   --channel "${channel:-unknown}" --label "$label" --base-url "$base_url" || die "writing manifest.json failed"

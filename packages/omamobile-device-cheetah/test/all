@@ -8,7 +8,14 @@ fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
-for script in bin/*; do bash -n "$script" || fail "$script parses"; done
+for script in bin/*; do
+  if head -1 "$script" | grep -c python3 >/dev/null; then
+    python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$script" || fail "$script parses"
+  else
+    bash -n "$script" || fail "$script parses"
+  fi
+done
+sh -n vendor/systemd/system-generators/omamobile-charger-mode-generator || fail "the charger-mode generator parses"
 pass "scripts parse"
 
 grep -q '\.\./\.\.' build && fail "build reaches outside the package directory"
@@ -54,7 +61,7 @@ ml=etc/omamobile-mirrorlist
 grep -qxF 'Server = https://pkgs.omamobile.org/stable/$arch' "$ml" || fail "the default channel is stable"
 grep -qxF '#Server = https://pkgs.omamobile.org/development/$arch' "$ml" || fail "development is offered, commented"
 grep -qxF '#Server = file:///var/lib/omamobile/repo/$arch' "$ml" || fail "the local repository is offered, commented"
-grep -qx "backup=(etc/pacman.d/omamobile-mirrorlist)" PKGBUILD || fail "pacman keeps a changed mirrorlist (backup=)"
+grep -qx "backup=(etc/pacman.d/omamobile-mirrorlist etc/UPower/UPower.conf.d/50-omamobile-critical.conf)" PKGBUILD || fail "pacman keeps a changed mirrorlist and upower drop-in (backup=)"
 if [[ -f ../omamobile-omarchy/bin/omamobile-update ]]; then
   for line in $(sed -n 's/^#\{0,1\}\(Server = [^ ]*\)$/\1/p' "$ml" | tr ' ' '~'); do
     grep -qF "\"${line//\~/ }\"" ../omamobile-omarchy/bin/omamobile-update \
@@ -89,9 +96,14 @@ cmp -s "$tmp/ch/kept" "$tmp/ch/etc/omamobile-mirrorlist" || fail "a builder's de
 pass "the mirrorlist follows stable by default; a phone on its own repository or on development keeps its channel"
 
 OMAMOBILE_BOOT_FILES=none ./install "$tmp/root" "$tmp/build" 2>/dev/null
+# At a critical battery the phone powers off (SUSPEND-PLAN 6.6, P7), at 3 %.
+u=$tmp/root/etc/UPower/UPower.conf.d/50-omamobile-critical.conf
+[[ -f $u ]] && [[ $(grep -vE '^[[:space:]]*(#|$)' "$u") == $'[UPower]\nPercentageAction=3\nCriticalPowerAction=PowerOff' ]] \
+  || fail "the upower drop-in powers off at 3 %"
+pass "at a critical battery the phone powers off cleanly (upower drop-in)"
 for f in usr/bin/omamobile-bootctl usr/bin/reboot-to usr/bin/omamobile-boot-success usr/bin/omamobile-setup-system \
          usr/lib/systemd/system/omamobile-boot-success.service usr/lib/systemd/network/20-usb-gadget.network \
-         usr/lib/udev/rules.d/10-omamobile-storage.rules usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf usr/lib/udev/rules.d/20-omamobile-gpu-always-on.rules \
+         usr/lib/udev/rules.d/10-omamobile-storage.rules usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf usr/lib/udev/rules.d/20-omamobile-gpu-always-on.rules usr/lib/udev/rules.d/70-omamobile-touch-wake.rules usr/share/omamobile/auto-sleep-default \
          usr/bin/omamobile-wlan-mac usr/lib/udev/rules.d/80-omamobile-wlan-mac.rules \
          usr/bin/omamobile-charge-guard usr/lib/modprobe.d/omamobile-charger.conf \
          usr/lib/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf \
@@ -376,3 +388,101 @@ grep -A1 -F 'systemctl is-enabled -q omamobile-gnss-nmea.socket' bin/omamobile-s
   grep -cF -- '--global enable omamobile-geoclue-agent.service' >/dev/null ||
   fail "omamobile-setup-system enables GeoClue's agent with the Location socket"
 pass "the setup step turns GeoClue's agent on with the Location socket"
+# Off-mode charging (0.1.55). The generator makes omamobile-charger.target
+# the default of a charger boot only, from the early folder (before /etc),
+# and /etc/omamobile/charger-mode-disable turns it off.
+gen=vendor/systemd/system-generators/omamobile-charger-mode-generator
+[[ -x $tmp/root/usr/lib/systemd/system-generators/omamobile-charger-mode-generator ]] || fail "the generator is staged executable"
+c=$tmp/charger; mkdir -p "$c/etc/omamobile"
+printf 'androidboot.slot_suffix = "_b"\nandroidboot.mode = "charger"\n' > "$c/charger.bc"
+printf 'androidboot.slot_suffix = "_b"\nandroidboot.mode = "normal"\n' > "$c/normal.bc"
+OMAMOBILE_ETC=$c/etc OMAMOBILE_BOOTCONFIG=$c/charger.bc sh "$gen" "$c/n1" "$c/e1" "$c/l1"
+[[ $(readlink "$c/e1/default.target") == /usr/lib/systemd/system/omamobile-charger.target ]] || fail "a charger boot defaults to omamobile-charger.target"
+[[ ! -e $c/n1 && ! -e $c/l1 ]] || fail "the generator writes only its early folder"
+for u in plymouth-start.service bluetooth.service omamobile-bt-addr@.service omamobile-camera.timer omamobile-camera.service; do
+  [[ $(readlink "$c/e1/$u") == /dev/null ]] || fail "a charger boot masks $u"
+done
+OMAMOBILE_ETC=$c/etc OMAMOBILE_BOOTCONFIG=$c/normal.bc sh "$gen" "$c/n2" "$c/e2" "$c/l2"
+[[ ! -e $c/e2/default.target && ! -e $c/e2/bluetooth.service ]] || fail "a normal boot keeps its default target and masks nothing"
+OMAMOBILE_ETC=$c/etc OMAMOBILE_BOOTCONFIG=$c/missing sh "$gen" "$c/n3" "$c/e3" "$c/l3"
+[[ ! -e $c/e3/default.target ]] || fail "no bootconfig, no change"
+touch "$c/etc/omamobile/charger-mode-disable"
+OMAMOBILE_ETC=$c/etc OMAMOBILE_BOOTCONFIG=$c/charger.bc sh "$gen" "$c/n4" "$c/e4" "$c/l4"
+[[ ! -e $c/e4/default.target ]] || fail "charger-mode-disable turns it off"
+t=vendor/systemd/system/omamobile-charger.target
+grep -qx 'AllowIsolate=yes' "$t" && grep -qx 'Requires=basic.target' "$t" || fail "the charger target is a basic.target system"
+wants=$(sed -n 's/^Wants=//p' "$t")
+for u in omamobile-charger.service omamobile-usb-rescue.service omamobile-usb-mac.service sshd.service ufw.service; do
+  [[ " $wants " == *" $u "* ]] || fail "the charger target wants $u (SSH over USB as on a normal boot)"
+done
+for u in multi-user graphical omamobile-modem omamobile-wifi omamobile-aoc sddm; do
+  [[ $wants == *"$u"* ]] && fail "the charger target starts nothing of the phone ($u)"
+done
+grep -qx 'Restart=on-failure' vendor/systemd/system/omamobile-charger.service || fail "the charger service restarts if it dies"
+pass "a charger boot defaults to omamobile-charger.target (early folder, opt-out file) and masks Plymouth, Bluetooth and the camera timer; the target starts only charging and SSH"
+
+# The service: a fake sysfs, a FIFO for the power key, a systemctl that logs.
+s=$c/sys; mkdir -p "$s/class/backlight/panel" "$s/class/power_supply/max77759-charger" "$s/class/power_supply/max170xx_battery" "$c/bin"
+echo 0 > "$s/class/backlight/panel/bl_power"; echo 1 > "$s/class/power_supply/max77759-charger/online"
+echo 42 > "$s/class/power_supply/max170xx_battery/capacity"; echo Charging > "$s/class/power_supply/max170xx_battery/status"
+printf '#!/bin/sh\nif [ "$1" = is-active ]; then [ -e %s ]; exit; fi\necho "$@" >> %s\n[ -e %s ] && exit 1; exit 0\n' "$c/up" "$c/systemctl.log" "$c/refuse" > "$c/bin/systemctl"; chmod +x "$c/bin/systemctl"
+# plymouth: a fake, so the test never quits the host's own
+printf '#!/bin/sh\necho "$@" >> %s\n' "$c/plymouth.log" > "$c/bin/plymouth"; chmod +x "$c/bin/plymouth"
+mkfifo "$c/key"; exec 3<>"$c/key"
+key() { python3 -c 'import struct,sys,os; os.write(1, struct.pack("llHHi",0,0,1,116,int(sys.argv[1])))' "$1" >&3; }
+charger() {
+  PATH=$c/bin:/usr/bin:/bin OMAMOBILE_SYSFS=$s OMAMOBILE_BOOTCONFIG=${BC:-$c/charger.bc} OMAMOBILE_SYSTEMCTL=$c/bin/systemctl \
+    OMAMOBILE_CHARGER_INPUT=$c/key OMAMOBILE_CHARGER_HOLD=0.4 OMAMOBILE_CHARGER_UNPLUGGED=0.4 OMAMOBILE_CHARGER_POLL=0.05 \
+    timeout 10 python3 -I bin/omamobile-charger-mode
+}
+waitlog() { local i; for i in $(seq 1 60); do [[ -s $c/systemctl.log ]] && return 0; sleep 0.1; done; return 1; }
+# Not a charger boot: nothing at all.
+out=$(BC=$c/normal.bc charger) || fail "outside a charger boot it exits 0"
+[[ ! -e $c/systemctl.log && $(cat "$s/class/backlight/panel/bl_power") == 0 ]] || fail "outside a charger boot it touches nothing: $out"
+# A charger boot that started the phone anyway: nothing at all either.
+touch "$c/up"; out=$(charger) || fail "with the phone up it exits 0"
+[[ ! -e $c/systemctl.log && $(cat "$s/class/backlight/panel/bl_power") == 0 && $out == *"phone is up"* ]] || fail "with the phone up it touches nothing: $out"
+rm "$c/up"
+# A short press does nothing; Power held restarts; the panel goes off first.
+charger > "$c/run1.log" & pid=$!
+sleep 0.5; [[ $(cat "$s/class/backlight/panel/bl_power") == 4 ]] || fail "the panel goes off (bl_power 4)"
+key 1; sleep 0.1; key 0; sleep 0.6
+[[ ! -e $c/systemctl.log ]] || fail "a short press of Power does nothing"
+key 1; waitlog || fail "Power held restarts the phone"; key 0
+wait "$pid" || fail "the service exits 0 after the restart"
+[[ $(cat "$c/systemctl.log") == reboot ]] || fail "Power held runs systemctl reboot: $(cat "$c/systemctl.log")"
+grep -q 'battery 42% Charging' "$c/run1.log" || fail "the battery goes to the journal"
+# Unplugged: offline before the charger ever reported doesn't count; offline
+# after it did powers the phone off.
+rm -f "$c/systemctl.log"; echo 0 > "$s/class/power_supply/max77759-charger/online"
+charger > "$c/run2.log" & pid=$!
+sleep 1; [[ ! -e $c/systemctl.log ]] || fail "an offline charger that never reported online is not an unplug"
+echo 1 > "$s/class/power_supply/max77759-charger/online"; sleep 0.3
+echo 0 > "$s/class/power_supply/max77759-charger/online"
+waitlog || fail "unplugged, the phone powers off"
+wait "$pid" || fail "the service exits 0 after the power off"
+[[ $(cat "$c/systemctl.log") == poweroff ]] || fail "unplugged runs systemctl poweroff: $(cat "$c/systemctl.log")"
+grep -qx quit "$c/plymouth.log" || fail "the boot splash is quit (through the fake plymouth)"
+# A refused reboot fails the service (Restart=on-failure brings it back).
+rm -f "$c/systemctl.log"; touch "$c/refuse"; echo 1 > "$s/class/power_supply/max77759-charger/online"
+charger > "$c/run3.log" & pid=$!
+sleep 0.3; key 1; waitlog || fail "Power held asks for the restart"; key 0
+wait "$pid" && fail "a refused restart fails the service"
+rm -f "$c/refuse" "$c/systemctl.log"
+# The panel driver loads after the service starts: its backlight still goes off.
+rm -rf "$s/class/backlight/panel"
+charger > "$c/run4.log" & pid=$!
+sleep 0.5; mkdir -p "$s/class/backlight/late"; echo 0 > "$s/class/backlight/late/bl_power"
+sleep 0.5; [[ $(cat "$s/class/backlight/late/bl_power") == 4 ]] || fail "a backlight that appears late goes off too"
+key 1; waitlog || fail "Power held restarts (late backlight run)"; key 0; wait "$pid"
+grep -q 'panel off: late' "$c/run4.log" || fail "the late panel's off is logged"
+exec 3>&-
+# The power key is found from the input devices' key capabilities (gpio-keys
+# on the 7 Pro: VOLUMEDOWN, VOLUMEUP and POWER, 114-116).
+python3 -I -B - bin/omamobile-charger-mode <<'PY' || fail "KEY_POWER is read from the capability words"
+import importlib.machinery, sys
+m = importlib.machinery.SourceFileLoader('cm', sys.argv[1]).load_module()
+assert m.has_key('1c000000000000 0', 116) and m.has_key('1c000000000000 0', 114)
+assert not m.has_key('1c000000000000 0', 113) and not m.has_key('0', 116) and not m.has_key('', 116)
+PY
+pass "off-mode charging: the panel off, a short press ignored, Power held restarts, unplugged powers off, nothing outside a charger boot or with the phone up"

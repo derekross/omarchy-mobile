@@ -18,6 +18,15 @@ AVB_FOOTERS image was padded to, then userdata with the root image, then
 "set-active b" and "reboot"), plus the storage-guard allowlist the writes are
 checked against. Nothing else is ever written.
 
+The root image's placeholders for the owner's answers (rootfs/placeholders),
+from the "answers placeholder:" lines of the image's MANIFEST
+(--rootfs-manifest, by default the .MANIFEST beside the image), go into
+root_image.placeholders: each file's path, the byte offset and length of its
+data in the raw (unpacked) image, and the SHA-256 of the placeholder's bytes.
+Each is checked against the image itself (unpacked with zstd up to the last
+one) before it is written down. An image from before the placeholders has
+none, and the list is empty: installers then have nowhere to put answers.
+
 tools/make-bundle runs this before computing SHA256SUMS, so the signed
 checksums cover manifest.json; tools/install-phone reads it back and refuses
 an install that differs from the descriptor or from its own rules. A web
@@ -28,6 +37,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 
 FORMAT = 1
@@ -65,6 +75,70 @@ def sha256(path):
     return h.hexdigest()
 
 
+# rootfs/placeholders' files, each one 4096-byte block
+PLACEHOLDERS = ("/etc/omamobile/firstboot.conf", "/etc/omamobile/boot-update.conf")
+BLOCK = 4096
+PLACEHOLDER_LINE = re.compile(r"^answers placeholder: (/[a-z/._-]+) offset ([0-9]+) length ([0-9]+) sha256 ([0-9a-f]{64})$")
+
+
+def placeholders(manifest_path, rootfs):
+    """The image MANIFEST's placeholders, each checked against the unpacked image."""
+    found = []
+    try:
+        lines = open(manifest_path).read().splitlines()
+    except FileNotFoundError:
+        return found
+    for line in lines:
+        if not line.startswith("answers placeholder:"):
+            continue
+        m = PLACEHOLDER_LINE.match(line)
+        if not m:
+            die("%s: not a placeholder line: %s" % (manifest_path, line))
+        path, offset, length, digest = m.group(1), int(m.group(2)), int(m.group(3)), m.group(4)
+        if path not in PLACEHOLDERS:
+            die("%s: %s is not one of the placeholders" % (manifest_path, path))
+        if any(p["path"] == path for p in found):
+            die("%s: %s twice" % (manifest_path, path))
+        if offset % BLOCK or length != BLOCK:
+            die("%s: %s is not one %d-byte block at a block boundary" % (manifest_path, path, BLOCK))
+        found.append({"path": path, "offset": offset, "length": length, "sha256": digest})
+    if not found:
+        return found
+    if sorted(p["path"] for p in found) != sorted(PLACEHOLDERS):
+        die("%s names some placeholders but not all of %s" % (manifest_path, ", ".join(PLACEHOLDERS)))
+    found.sort(key=lambda p: p["offset"])
+    for a, b in zip(found, found[1:]):
+        if a["offset"] + a["length"] > b["offset"]:
+            die("%s: the placeholders overlap" % manifest_path)
+    # Read the unpacked image up to the last placeholder, as an installer
+    # streams it, and check each one's bytes
+    try:
+        z = subprocess.Popen(["zstd", "-q", "-d", "-c", rootfs], stdout=subprocess.PIPE)
+    except OSError as e:
+        die("can't unpack the root image to check its placeholders (%s)" % e)
+    pos, todo = 0, list(found)
+    try:
+        while todo:
+            p = todo[0]
+            skip = p["offset"] - pos
+            while skip:
+                chunk = z.stdout.read(min(skip, 1 << 20))
+                if not chunk:
+                    die("the root image ends before %s's placeholder" % p["path"])
+                skip -= len(chunk)
+                pos += len(chunk)
+            data = z.stdout.read(p["length"])
+            pos += len(data)
+            if len(data) != p["length"] or hashlib.sha256(data).hexdigest() != p["sha256"]:
+                die("the root image doesn't hold %s's placeholder where its MANIFEST says" % p["path"])
+            todo.pop(0)
+    finally:
+        z.stdout.close()
+        z.kill()
+        z.wait()
+    return found
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bundle", required=True)
@@ -77,6 +151,7 @@ def main():
     ap.add_argument("--channel", default="unknown")
     ap.add_argument("--label", default="developer preview")
     ap.add_argument("--base-url", default="")
+    ap.add_argument("--rootfs-manifest", default=None)
     a = ap.parse_args()
 
     bundle = os.path.abspath(a.bundle)
@@ -99,6 +174,8 @@ def main():
     root_name = os.path.basename(a.rootfs)
     if not re.match(r"^[A-Za-z0-9._-]+\.img\.zst$", root_name):
         die("the root image needs a plain filename ending in .img.zst")
+
+    root_placeholders = placeholders(a.rootfs_manifest or a.rootfs[:-len(".img.zst")] + ".MANIFEST", a.rootfs)
 
     files = []
     for top, dirs, names in os.walk(bundle):
@@ -140,7 +217,8 @@ def main():
         "files": files,
         "root_image": {"name": root_name, "location": "beside the bundle directory",
                        "size": os.path.getsize(a.rootfs), "sha256": a.rootfs_sha256,
-                       "compression": "zstd", "filesystem": "ext4", "label": "omamobile-root"},
+                       "compression": "zstd", "filesystem": "ext4", "label": "omamobile-root",
+                       "placeholders": root_placeholders},
         "install": {
             "tool": "fastboot",
             "product": codename,
