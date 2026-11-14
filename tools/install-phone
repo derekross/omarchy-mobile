@@ -48,7 +48,11 @@
 #                            image for this device in out/, or the exact
 #                            image named by a signed bundle's MANIFEST)
 #     --work DIR             where the local image copy goes (default
-#                            ~/.cache/omamobile-install; needs the image's size free)
+#                            ~/.cache/omamobile-install; needs the image's
+#                            size free). The next run that finds no other
+#                            run live removes killed runs' verify.*
+#                            directories; ones left by installers without
+#                            this cleanup are kept
 #     --bootloader-slots-match VERSION
 #                            when the bootloader reports no per-slot versions:
 #                            you checked the other slot carries VERSION too

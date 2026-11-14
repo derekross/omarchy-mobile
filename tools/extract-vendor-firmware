@@ -3,8 +3,8 @@
 # extract-vendor-firmware: copy the Wi-Fi, Bluetooth, haptics and speaker
 # amplifier firmware the Pixel 7 Pro (cheetah) needs out of a Google factory
 # image, on the user's own machine. The Pixel 7 (panther), the Pixel 6 Pro
-# (raven), the Pixel 9a (tegu) and the Pixel 8 Pro (husky, Wi-Fi only) are
-# options (-d).
+# (raven), the Pixel 9a (tegu) and the Pixel 8 Pro (husky: Wi-Fi, Bluetooth
+# and haptics) are options (-d).
 #
 # Google's firmware is not ours to redistribute, so Omarchy Mobile never ships it.
 # Like LineageOS's extract-files, this pulls it from an image the user already
@@ -66,12 +66,15 @@
 # is in another format, device/tegu/AUDIO-PLAN.md). The modem's and GNSS's
 # files are tools/extract-vendor-chroot's.
 #
-# The Pixel 8 Pro (-d husky; <board> is "google,zuma-husky"), Wi-Fi only:
+# The Pixel 8 Pro (-d husky; <board> is "google,zuma-husky"): Wi-Fi, Bluetooth
+# and haptics:
 #
 #   vendor/firmware/fw_bcmdhd.bin_4398_d0     -> brcm/brcmfmac4398d0-pcie.<board>.bin         (brcmfmac)
 #   vendor/firmware/bcmdhd.cal_<region>       -> brcm/brcmfmac4398d0-pcie.<board>.txt         (NVRAM)
 #   vendor/firmware/bcmdhd_clm.blob_4398_d0   -> brcm/brcmfmac4398d0-pcie.<board>.clm_blob    (regulatory)
 #   vendor/firmware/bcmdhd_txcap.blob_4398_d0 -> brcm/brcmfmac4398d0-pcie.<board>.txcap_blob  (TX capabilities)
+#   vendor/firmware/brcm/BCM.hcd              -> brcm/BCM.<board>.hcd                         (btbcm)
+#   vendor/firmware/cs40l26*.{wmfw,bin}       -> the same five files as cheetah's
 #
 # The radio is a BCM4398 D0. Stock picks the CLM and TX capability files by
 # chip revision (_4398_d0), but the NVRAM by the phone's hardware SKU
@@ -81,8 +84,15 @@
 # (bcmdhd.cal_USI_G5SN_9957_V17, the same bytes as _ROW). The regions differ
 # only in their energy-detect thresholds. Read the SKU with
 # `grep hardware.sku /proc/bootconfig` on the phone, or
-# `adb shell getprop ro.boot.hardware.sku` on Android. Bluetooth and the
-# other files wait for drivers (device/husky/ROADMAP.md). An OTA's vendor.img
+# `adb shell getprop ro.boot.hardware.sku` on Android. The Bluetooth patch
+# is stock's BCM.hcd, the file btbcm asks for under the board name (kernel
+# #199 was tested with it); the vendor partition's BCM_174.hcd (a BCM4398 B0
+# patch), BCM_181.hcd and BTFW_B.hcd are not copied. This BCM.hcd names the
+# module and the board ("G5SN_V17_HK3 REL ..."), not the chip, so that is
+# what the sanity check looks for. The haptics chip is a CS40L26, as on the
+# 7 Pro and the 9a (kernel #200); stock's cs40l26-dbc.bin has no user in
+# cs40l26-vibra and is not copied. The AoC's and the speaker amplifiers'
+# files wait for their drivers (device/husky/ROADMAP.md). An OTA's vendor.img
 # (from its payload.bin) works as SOURCE as well as a factory image.
 #
 # Output is a tree rooted at /, under usr/lib/firmware/updates (searched before
@@ -227,13 +237,14 @@ case $DEVICE_OPT in
       "firmware/cs40l26-calib.wmfw|cs40l26-calib.wmfw"
     ) ;;
   husky)
-    # Pixel 8 Pro: Wi-Fi (BCM4398 D0) only, with the NVRAM for the SKU's
-    # region (the header).
+    # Pixel 8 Pro: Wi-Fi (BCM4398 D0) with the NVRAM for the SKU's region,
+    # Bluetooth and the haptics files (the header). BT_CHIP is the module and
+    # board string husky's BCM.hcd carries in place of a chip name.
     BOARD="google,zuma-husky"
     DEVICE="husky"
     FW_BASE="brcmfmac4398d0-pcie"
     WIFI_CHIP="4398d0"
-    BT_CHIP=""
+    BT_CHIP="G5SN_V[0-9]*_HK3"
     # Google's SKU table (dhd_custom_google.c); husky's vendor has NVRAMs for
     # MMW, ROW and NA only, so the others take the module's default, as on stock
     case $SKU in
@@ -247,6 +258,12 @@ case $DEVICE_OPT in
       "firmware/$nvram|brcm/$FW_BASE.$BOARD.txt"
       "firmware/bcmdhd_clm.blob_4398_d0|brcm/$FW_BASE.$BOARD.clm_blob"
       "firmware/bcmdhd_txcap.blob_4398_d0|brcm/$FW_BASE.$BOARD.txcap_blob"
+      "firmware/brcm/BCM.hcd|brcm/BCM.$BOARD.hcd"
+      "firmware/cs40l26.wmfw|cs40l26.wmfw"
+      "firmware/cs40l26.bin|cs40l26.bin"
+      "firmware/cs40l26-svc.bin|cs40l26-svc.bin"
+      "firmware/cs40l26-dvl.bin|cs40l26-dvl.bin"
+      "firmware/cs40l26-calib.wmfw|cs40l26-calib.wmfw"
     ) ;;
   *) die "unknown device $DEVICE_OPT (cheetah, panther, raven, tegu or husky)" ;;
 esac
@@ -457,8 +474,8 @@ if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == raven ]]; then
       die "the $f speaker tuning is not a WMDR coefficient file"
   done
 fi
-# The CS40L26 haptics (the gs201 phones and tegu)
-if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu ]]; then
+# The CS40L26 haptics (the gs201 phones, tegu and husky)
+if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu || $DEVICE == husky ]]; then
   for f in cs40l26.wmfw cs40l26-calib.wmfw; do wmfw_halo "$f"; done
   grep -aq 'FIRMWARE_CS40L26' "$dest/cs40l26.wmfw" ||
     die "cs40l26.wmfw is not a CS40L26 firmware"
@@ -474,7 +491,7 @@ if [[ $DEVICE == cheetah || $DEVICE == panther ]]; then
       "$dest/cirrus/cs35l41-$DEVICE-$f-media-delta.txt" || die "the $f media delta is not a word list"
   done
 fi
-if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu ]]; then
+if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu || $DEVICE == husky ]]; then
   for f in cs40l26.bin cs40l26-svc.bin cs40l26-dvl.bin; do
     [[ "$(head -c4 "$dest/$f")" == WMDR ]] || die "$f is not a WMDR coefficient file"
   done
@@ -495,7 +512,7 @@ if [[ $DEVICE == husky ]]; then
   [[ -n $SKU ]] || say "No -s SKU: stock's default NVRAM; pass the phone's SKU for its region's"
 fi
 [[ -z $BT_CHIP ]] || say "Bluetooth patch: ${bt:-unknown version}"
-[[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu ]] &&
+[[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu || $DEVICE == husky ]] &&
   say "Haptics firmware: cs40l26.wmfw ($(stat -c %s "$dest/cs40l26.wmfw") bytes) and its wavetable"
 [[ $DEVICE == tegu ]] &&
   say "AoC firmware: aoc-tegu.bin ($(stat -c %s "$dest/aoc-tegu.bin") bytes)"
