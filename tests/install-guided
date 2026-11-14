@@ -25,7 +25,12 @@
 # test contacts Google: the curl stand-in refuses. The USB network connection shown
 # before it is added, and only with consent; each later step; and a resume
 # after a failure at every step, which goes on from that step and repeats
-# no write, no connection, no backup, no provisioning and no restart.
+# no write, no connection, no backup, no provisioning and no restart. A
+# release bundle built and signed by the real tools/make-bundle, unpacked
+# from its one-file download and installed with "bash install --guided"
+# and no option; the slot B question, a reinstall's bootloader, a finished
+# install's "Install again from the start?", a factory image saved under
+# another name, and a missing program named with its package.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 SRC=$PWD
@@ -583,7 +588,7 @@ says "More than one phone running Android" && [[ $(events '^adb .*reboot') == 0 
 adb_phone ADBSERIAL otherdev Other_Phone > "$t/adb-devices"
 if guided "\n$REST"; then fail "another model running Android stops the install"; fi
 says "is a 'Other Phone' (otherdev)" && says "It was not restarted" && [[ $(events '^adb .*reboot') == 0 ]] || fail "another model on adb: named, and not restarted"
-! says "Run this command again to go on" || fail "another model: no promise that a rerun goes on"
+! says "To go on from here, run:" || fail "another model: no promise that a rerun goes on"
 adb_phone ADBSERIAL testdev Test_Phone > "$t/adb-devices"
 guided "\n$REST" || fail "from Android with USB debugging on, the install goes through"
 [[ $(events '^adb -s ADBSERIAL reboot bootloader$') == 1 ]] || fail "after Enter, the phone is restarted into Fastboot Mode over adb"
@@ -596,15 +601,37 @@ pass "Android running: Developer options, Allow; one phone of this model only, n
 fresh; vars yes a otherphone
 if guided "$ALL"; then fail "another model is refused"; fi
 says "this download is for the Test Phone" && [[ -z $(writes) ]] || fail "another model: said plainly, nothing written"
-says "Nothing has been written to the phone." && ! says "Run this command again to go on" || fail "another model: the stop says what is true and promises nothing of a rerun"
+says "Nothing has been written to the phone." && ! says "To go on from here, run:" || fail "another model: the stop says what is true and promises nothing of a rerun"
 fresh; printf 'FAKE123\nFAKE456\n' > "$t/fb-devices"
 if guided "$ALL"; then fail "two phones are refused"; fi
 says "More than one phone" || fail "two phones: said plainly"
+# Slot B: the owner is asked the plain question, not told to type an option
 fresh; vars yes b
-if guided "$ALL"; then fail "a phone running from slot B is stopped"; fi
-says "tools/install-guided --reinstall" && ! says "user name on the phone" && [[ -z $(writes) ]] || fail "slot B: the two cases explained before any question about the owner"
-guided "$REST" --reinstall || fail "slot B with --reinstall goes through"
+if guided "yes\nmaybe\nno\n$REST"; then fail "a phone running Android from slot B is stopped"; fi
+says "Is this phone already running Omarchy Mobile? (yes/no)" && says "Type yes or no." && says "Android has to be put on" &&
+  ! says "user name on the phone" && ! says "--reinstall" && [[ -z $(writes) ]] ||
+  fail "slot B, \"no\": asked plainly (anything but yes or no asks again), stopped before any question about the owner, no option to type"
+[[ $(grep -c 'Is this phone already running Omarchy Mobile' "$t/out") == 2 ]] || fail "slot B: an answer that isn't yes or no asks again"
+guided "yes\n$REST" || fail "slot B, \"yes\": a reinstall goes through with no option"
+says "a reinstall: Omarchy Mobile on slot B is replaced" && says "slot b holds Omarchy Mobile (--reinstall): it will be replaced" ||
+  fail "slot B, \"yes\": --reinstall is handed to install-phone, which says it replaces slot B"
 once "a reinstall"
+# The reinstall rule (decided 2026-11-13): on slot B with the reinstall
+# confirmed, the bootloader version the phone reports is slot B's own, so a
+# phone that reports one version only needs no --bootloader-slots-match
+fresh; SLOTS="" vars yes b
+guided "yes\nyes\n$REST" || fail "a reinstall on slot B with one bootloader version reported goes through"
+says "slot B's bootloader, which the phone already runs; the install switches no slot" && ! says "only tells the version of the copy" ||
+  fail "a reinstall: slot B's own bootloader passes, said as such"
+once "a reinstall with one bootloader version"
+# ... but not on slot A, and not when the two slots report different versions
+fresh; SLOTS=$'version-bootloader-a:testloader-1.0-111\nversion-bootloader-b:testloader-0.9-000' vars yes b
+if guided "yes\nyes\n$REST"; then fail "a reinstall with two different bootloaders stops"; fi
+says "on this phone they differ" && [[ -z $(writes) ]] || fail "a reinstall: two different per-slot versions still stop"
+# A locked phone on slot B is never asked: it can't be running Omarchy Mobile
+fresh; vars no b
+if guided "yes\nyes\n"; then fail "a locked phone on slot B stops"; fi
+! says "Is this phone already running Omarchy Mobile" || fail "a locked phone on slot B: the reinstall question isn't asked"
 fresh; SLOTS="" vars
 if guided "$ALL"; then fail "an unknown other bootloader slot stops the install"; fi
 says "only tells the version of the copy" && says "ask in an issue" && says "wait for the next release" && [[ -z $(writes) ]] ||
@@ -612,7 +639,7 @@ says "only tells the version of the copy" && says "ask in an issue" && says "wai
 # It offers no shortcut: no option to pass, no version filled in, and no
 # promise that running it again helps
 ! says "bootloader-slots-match" && ! grep -c -- "--[a-z-]* $BL" "$t/out" >/dev/null || fail "the slot stop prints no option and no pre-filled command"
-says "running it again will stop here again" && ! says "Run this command again to go on" && says "Nothing has been written to the phone." ||
+says "running it again will stop here again" && ! says "To go on from here, run:" && says "Nothing has been written to the phone." ||
   fail "the slot stop says a rerun stops again, and what is true of the phone"
 guided "$REST" --bootloader-slots-match "$BL" || fail "--bootloader-slots-match is passed to install-phone"
 once "with the other slot confirmed"
@@ -653,13 +680,13 @@ MUST_UNLOCK=1 locked_stop "Android on slot B" "running from its second system co
 says "That can't be done while the bootloader is locked" && says "needs an unlocked bootloader, and unlocking erases the phone" &&
   says "everything on this phone is lost either way" && says "Copy off what you want to keep" && says "step 1 unlocks the bootloader" && says "step 3 says how to put Android on slot A" ||
   fail "a locked phone on slot B: the way back needs the unlock, which erases the phone, so back up first"
-! says "--reinstall" && ! says "Run this command again to go on" || fail "a locked phone on slot B: no reinstall is offered (a locked phone can't be running Omarchy Mobile), and no promise of a rerun"
+! says "--reinstall" && ! says "To go on from here, run:" || fail "a locked phone on slot B: no reinstall is offered (a locked phone can't be running Omarchy Mobile), and no promise of a rerun"
 # A phone that doesn't say which slot it runs from, or says something else,
 # is stopped: it is not taken for slot A (the phone here is on slot B)
 for line in "" "current-slot:" "current-slot:_b"; do
   fresh; vars no b; sed -i '/^current-slot:/d' "$t/vars"; [[ -z $line ]] || echo "$line" >> "$t/vars"
   locked_stop "no current slot (${line:-no line})" "doesn't tell which of its two system copies it is running from"
-  says "running it again will stop here again" && ! says "Run this command again to go on" || fail "no current slot: a rerun stops again"
+  says "running it again will stop here again" && ! says "To go on from here, run:" || fail "no current slot: a rerun stops again"
 done
 fresh; sed -i '/^current-slot:/d' "$t/vars"
 if guided "$ALL"; then fail "an unlocked phone that tells no current slot stops"; fi
@@ -670,7 +697,7 @@ locked_stop "one bootloader version only" "only tells the version of the copy"
 # here, not only by install-phone after the unlock
 fresh; SLOTS="" vars no
 LOCKED_ARGS="--bootloader-slots-match wrongloader-9" locked_stop "a --bootloader-slots-match that isn't the phone's version" "copy in use has another version:"
-says "given with the option: wrongloader-9" && says "the phone reports:     $BL" && says "If the version was mistyped" && ! says "Run this command again to go on" ||
+says "given with the option: wrongloader-9" && says "the phone reports:     $BL" && says "If the version was mistyped" && ! says "To go on from here, run:" ||
   fail "a wrong --bootloader-slots-match: both versions named, and what to do in either case"
 fresh; SLOTS="" vars
 if guided "$ALL" --bootloader-slots-match wrongloader-9; then fail "an unlocked phone with a wrong --bootloader-slots-match stops"; fi
@@ -678,7 +705,7 @@ says "copy in use has another version:" && ! says "user name on the phone" && ! 
   fail "a wrong --bootloader-slots-match on an unlocked phone: stopped at the phone step, before the owner's questions and install-phone"
 fresh; SLOTS=$'version-bootloader-a:testloader-1.0-111\nversion-bootloader-b:testloader-0.9-000' vars no
 locked_stop "two different bootloaders" "on this phone they differ"
-says "slot A: testloader-1.0-111" && says "slot B: testloader-0.9-000" && says "running it again will stop here again" && ! says "Run this command again to go on" ||
+says "slot A: testloader-1.0-111" && says "slot B: testloader-0.9-000" && says "running it again will stop here again" && ! says "To go on from here, run:" ||
   fail "different bootloaders: both versions named, and no promise of a rerun"
 fresh; vars no; sed -i 's/^partition-size:dtbo_b:.*/partition-size:dtbo_b: 0x4/' "$t/vars"
 locked_stop "a file larger than its partition" "This download doesn't fit this phone"
@@ -764,7 +791,7 @@ says "Nothing was written to the phone connected now" && says "The other phone, 
   fail "after a write that began, another phone in Fastboot Mode: which phone is half-written, and that it is the one to plug back in"
 says "--start-over\" makes this computer forget that install" && says "half-written phone then stays as it is" && says "Use it only if" ||
   fail "--start-over is offered with what it forgets and when it is right"
-! says "An earlier try began writing the phone" && ! says "Nothing has been written to the phone." && ! says "Run this command again to write it again" ||
+! says "An earlier try began writing the phone" && ! says "Nothing has been written to the phone." && ! says "To write it again, whole" ||
   fail "the footer about \"the phone\" isn't used where two phones are in play"
 [[ $(record write) == started && $(record phone) == "$(printf %s FAKE123 | sha256sum | cut -d' ' -f1)" ]] || fail "the record still names the half-written phone"
 echo FAKE123 > "$t/fb-devices"
@@ -775,7 +802,7 @@ fresh
 if guided "yes\n${OWNER}nottestdev\n"; then fail "setup: an install stopped before the write"; fi
 echo OTHER999 > "$t/fb-devices"
 if guided "${OWNER}testdev\n\n"; then fail "another phone can't take over an install that hasn't written yet"; fi
-says "Nothing has been written to either phone" && says "it forgets only how far the other install got" && ! says "half-written" && [[ -z $(writes) ]] ||
+says "Nothing has been written to either phone" && says "start again for it (it forgets" && says "only how far the other install got):" && ! says "half-written" && [[ -z $(writes) ]] ||
   fail "before the write, another phone: nothing written to either, and --start-over explained"
 pass "the record is pinned to the phone it was started on, and the stop says which of the two phones is which"
 
@@ -1051,7 +1078,7 @@ update_advice() {  # WHAT NEWEST: update Android, with what can still go wrong
   says "The list is from 2026-11-01." && says "the update lands on that one" && says "Android cannot go back" && says "https://developers.google.com/android/images#testdev" ||
     fail "$1: says the list's date and what happens when Google has published a newer build since"
   says "moves Android to slot B" && says "that way needs the bootloader" && says "unlocked, which erases the phone" || fail "$1: says what an update does to the slots, and what putting it back needs"
-  says "Run this command again to go on from here." && ! says "Don't update Android" || fail "$1: a rerun goes on after the update"
+  says "To go on from here, run:" && ! says "Don't update Android" || fail "$1: a rerun goes on after the update"
 }
 no_update_advice() {  # WHAT NEWEST|"": never told to update, and why
   if [[ -n $2 ]]; then
@@ -1063,7 +1090,7 @@ no_update_advice() {  # WHAT NEWEST|"": never told to update, and why
   fi
   ! says "System update" && ! says "so update Android" && ! says "The newest build in the list has been tested" || fail "$1: not told to update Android"
   says "Wait until a release of Omarchy Mobile has been tested with" && says "https://github.com/derekross/omarchy-mobile/issues" || fail "$1: to wait, or to ask in an issue"
-  says "Running this again will stop here again until then." && ! says "Run this command again to go on" || fail "$1: a rerun stops again"
+  says "Running this again will stop here again until then." && ! says "To go on from here, run:" || fail "$1: a rerun stops again"
 }
 for tested in true false; do
   fresh; index 2026-11-01 otherband-1 $tested > "$R/device/testdev/factory-builds.json"
@@ -1220,11 +1247,40 @@ guided "$ALL" || fail "an older published index doesn't replace the bundle's"
 ! says "using the newer list" || fail "an older published index is ignored"
 pass "a published index: used when signed by the release key and newer, otherwise the bundle's"
 
+# --- A factory image already saved under another name -----------------------------
+# Found by its size and SHA-256, whatever it is called: a browser's second
+# copy in Downloads, or the file an earlier install downloaded into the
+# default cache when this run has another --work. A zip of the same size
+# that isn't the file is passed over. Nothing is asked or downloaded.
+fresh; mv "$t/home/Downloads/$zipname" "$t/home/Downloads/$zipname(1).zip"
+head -c 3000 /dev/urandom > "$t/home/Downloads/a-decoy.zip"
+guided "$ALL" || fail "an install with the factory image saved under another name"
+[[ $(record factory_zip) == "$t/home/Downloads/$zipname(1).zip" ]] && says "found Google's factory image for build AB1C.230101.001 already on this computer" ||
+  fail "the factory image saved under another name in Downloads is found by its SHA-256, the decoy of the same size passed over"
+! says "Type yes to accept Google's terms" && [[ $(events 'dl.google.com') == 0 && $(events '^xdg-open') == 0 ]] || fail "a saved file: no terms, no download, no page"
+once "with the factory image renamed"
+fresh; rm "$t/home/Downloads/$zipname"
+mkdir -p "$t/home/.cache/omamobile-install/factory"; cp "$t/factory.src" "$t/home/.cache/omamobile-install/factory/$zipname"
+guided "$ALL" || fail "an install with the factory image in the default cache, and another --work"
+[[ $(record factory_zip) == "$t/home/.cache/omamobile-install/factory/$zipname" && $(record factory_from) == "downloaded from Google by the installer" ]] ||
+  fail "the file an earlier install downloaded into the default cache is found with another --work"
+once "with the factory image in the default cache"
+rm -rf "$t/home/.cache/omamobile-install"
+pass "a factory image already on this computer (Downloads under any name, the install's cache) is found by size and SHA-256, and nothing is downloaded"
+
+# A finished install: a dry run asks nothing and forgets nothing
+fresh; guided "$ALL" >/dev/null || fail "setup: a finished install"
+echo FAKE123 > "$t/fb-devices"
+guided "yes\n${OWNER}" --dry-run || fail "a dry run after a finished install goes through the checks"
+says "A dry run forgets nothing" && ! says "Install again from the start?" && [[ -n $(record finished) ]] || fail "a dry run after a finished install: nothing asked, nothing forgotten"
+says "would run: fastboot -s FAKE123 flash userdata" || fail "the dry run goes through to install-phone's plan"
+pass "a finished install: a dry run goes through the checks as from the start, and forgets nothing"
+
 # --- A failure at each step, then a rerun ------------------------------------------
 fresh; touch "$t/fail-flash"
 if guided "$ALL"; then fail "a failed write stops the install"; fi
 says "Writing the phone stopped partway" && [[ $(record write) == started ]] || fail "a failed write: said plainly, recorded as started"
-says "What was on the phone may already be erased" && says "factory data reset" && says "hold the test keys for a while" && says "It writes the same things" ||
+says "What was on the phone may already be erased" && says "factory data reset" && says "hold the test keys for a while" && says "which writes the same things again, whole:" ||
   fail "a failed write says the data may be gone, what Android will do, and how to go on"
 ! says "Nothing is lost" && ! says "Nothing has been written" || fail "a failed write is not followed by a reassurance"
 [[ $(events '^nmcli connection add') == 0 ]] || fail "nothing follows a failed write"
@@ -1240,7 +1296,7 @@ pass "resume: a failed write is written again whole, then the install goes on"
 fresh
 if guided "yes\n${OWNER}nottestdev\n"; then fail "a wrong codename stops the install"; fi
 says "Not confirmed" && [[ -z $(writes) && -z $(record write) ]] || fail "a wrong codename: nothing written, nothing recorded as written"
-says "Nothing has been written to the phone. Run this command again to go on from here." || fail "before the write, a stop says nothing was written and that a rerun goes on"
+says "Nothing has been written to the phone. To go on from here, run:" || fail "before the write, a stop says nothing was written and that a rerun goes on"
 guided "${OWNER}testdev\n\n" || fail "the install goes on once the codename is typed"
 once "after a wrong codename"
 pass "resume: the codename has to be typed; a wrong one writes nothing"
@@ -1370,7 +1426,7 @@ fresh; smoke bad
 if guided "$ALL"; then fail "a failed required check fails the install"; fi
 says "Something went wrong" && says "[!!]  Desktop is running: not working (Hyprland isn't running) - needed" && says "Never attach the radio backup" ||
   fail "a failed required check: said plainly, with the report and the warning about the backup"
-says "read that row" && says "or this install's record" && ! says "Run this command again to go on" && says "checks the phone again, and changes nothing else" ||
+says "read that row" && says "or this install's record" && ! says "To go on from here, run:" && says "checks the phone again, and changes nothing else" ||
   fail "a failed check: the report's dmesg row is to be read before posting, the record isn't to be attached, and a rerun only checks"
 [[ -f $STATE/report.json && $(record check) == failed && -z $(record finished) ]] || fail "the report is saved and the install isn't finished"
 smoke ok
@@ -1445,7 +1501,7 @@ fresh; touch "$t/fail-backup"
 if guided "$ALL"; then fail "setup: an install stopped at the backup"; fi
 rm "$t/fail-backup"; ssh_phone FAKE123 none
 if guided ""; then fail "a phone with no serial number to tell stops the install"; fi
-says "doesn't tell its serial number" && ! says "Run this command again to go on" && [[ $(grep -c '^nv-backup' "$t/events") == 1 ]] ||
+says "doesn't tell its serial number" && ! says "To go on from here, run:" && [[ $(grep -c '^nv-backup' "$t/events") == 1 ]] ||
   fail "no serial over SSH: said plainly, nothing copied, no promise of a rerun"
 # The serial is found wherever the kernel shows it
 for where in cmdline dt bootconfig; do
@@ -1464,8 +1520,9 @@ fresh; touch "$t/fail-backup"
 if guided "$ALL"; then fail "setup: a stopped install"; fi
 sed -i 's/^release=.*/release=2026.01.01/' "$STATE/state"
 if guided ""; then fail "another release's unfinished install isn't continued"; fi
-says "tools/install-guided --start-over" && [[ $(grep -c "^nv-backup" "$t/events") == 1 ]] || fail "another release: said plainly, nothing run"
-! says "Run this command again to go on" || fail "another release: no promise that a rerun goes on"
+grep -cE '^ {8}tools/install-guided .*--start-over$' "$t/out" >/dev/null && [[ $(tail -n 1 "$t/out") == *" --start-over" ]] &&
+  [[ $(grep -c "^nv-backup" "$t/events") == 1 ]] || fail "another release: said plainly, nothing run, and the stop ends with the command that starts again"
+! says "To go on from here, run:" || fail "another release: no promise that a rerun goes on"
 sed -i 's/^release=.*/release=development/; s/^codename=.*/codename=otherdev/' "$STATE/state"
 cp "$t/events" "$t/events.before"
 if guided ""; then fail "another phone model's record isn't continued"; fi
@@ -1548,16 +1605,36 @@ IFS=: read -ra dirs <<<"$BASE_PATH"
 for d in "${dirs[@]}"; do
   for f in "$d"/*; do [[ -e $t/sys/${f##*/} || ! -x $f ]] || ln -s "$f" "$t/sys/${f##*/}"; done
 done
-for missing in lpunpack simg2img fsck.erofs readelf; do
-  fresh
+printf 'NAME="Arch Linux"\nID=arch\n' > "$t/os-arch"
+printf 'NAME="Ubuntu"\nID=ubuntu\nID_LIKE=debian\n' > "$t/os-ubuntu"
+printf 'NAME="Other"\nID=other\n' > "$t/os-other"
+# missing ARCH-PACKAGE DEBIAN-PACKAGE (Debian's "-": none we know of)
+for spec in "lpunpack android-tools -" "simg2img android-tools android-sdk-libsparse-utils" "fsck.erofs erofs-utils erofs-utils" "readelf binutils binutils"; do
+  read -r missing arch deb <<<"$spec"
   rm -f "$t/sys/lpunpack" "$t/sys/simg2img" "$t/sys/fsck.erofs" "$t/sys/readelf" "$t/sys/llvm-readelf"
   mkdir -p "$t/extract-some"; rm -f "$t/extract-some/"*
   for c in lpunpack simg2img fsck.erofs readelf; do [[ $c == "$missing" ]] || cp "$t/extract-bin/$c" "$t/extract-some/"; done
-  if PATH="$t/bin:$t/extract-some:$t/sys" guided "$ALL"; then fail "an install without $missing is stopped"; fi
-  says "These programs are missing on this computer: $missing" && says "erofs-utils" || fail "a missing $missing is named, with the packages to install"
-  [[ $(events '^fastboot') == 0 && -z $(writes) ]] || fail "a missing $missing stops the install before the phone is contacted"
+  for os in arch ubuntu other; do
+    fresh
+    if OS_RELEASE=$t/os-$os PATH="$t/bin:$t/extract-some:$t/sys" guided "$ALL"; then fail "an install without $missing is stopped"; fi
+    says "These programs are missing on this computer: $missing" || fail "a missing $missing is named"
+    debcol=$deb; [[ $deb != - ]] || debcol="(none we know of)"
+    grep -E "^ +$missing +$arch +" "$t/out" | grep -cF -- " $debcol" >/dev/null || fail "a missing $missing: its packages on Arch ($arch) and on Debian and Ubuntu ($deb) in the table"
+    case $os in
+      arch) says "    sudo pacman -S --needed $arch" || fail "on Arch, the one command that installs $missing" ;;
+      ubuntu)
+        if [[ $deb == - ]]; then
+          says "We know of no Debian or Ubuntu package with $missing" && ! says "sudo apt install" || fail "on Ubuntu, $missing: no package is made up"
+        else
+          says "    sudo apt install $deb" || fail "on Ubuntu, the one command that installs $missing"
+        fi ;;
+      other) says "with your system's package manager" && ! says "sudo pacman" && ! says "sudo apt" || fail "another system: no command for a package manager it may not have" ;;
+    esac
+    [[ $(events '^fastboot') == 0 && -z $(writes) ]] || fail "a missing $missing stops the install before the phone is contacted"
+    [[ $(tail -n 1 "$t/out") == "        tools/install-guided "* ]] || fail "a missing $missing: the stop ends with the command to run once it is installed"
+  done
 done
-pass "a program a later step needs (lpunpack, simg2img, fsck.erofs, readelf) stops the install at step 1, not after the write"
+pass "a program a later step needs (lpunpack, simg2img, fsck.erofs, readelf) stops the install at step 1, named with its package on Arch and on Debian and Ubuntu, and the one install command for this system"
 
 # --- The real tools/phone-provision takes what the installer hands it ---------------
 # Everywhere above phone-provision is a stub, and a stub accepts anything:
@@ -1625,41 +1702,111 @@ says "Your phone is ready" || fail "the install goes on after the real tool's dr
 rm -rf "$t/pp-work"
 pass "the real tools/phone-provision accepts exactly the arguments the installer builds, and runs them as a first install"
 
-# --- A bundle: "install" beside device.conf and images/, the tools in tools/ ---------
-BD=$t/bundle/omamobile-testdev-2026.11.01
-mkdir -p "$BD/images" "$BD/tools"
-cp "$R/tools/install-guided" "$BD/install"
-cp "$R/tools/install-phone" "$R/tools/factory-index" "$R/tools/camera-requirements.txt" "$BD/tools/"
-for f in nv-backup phone-provision phone-smoke phone-ssh; do cp "$R/tools/$f" "$BD/tools/"; done
-descriptor > "$BD/device.conf"
-for p in boot init_boot vendor_boot vendor_kernel_boot dtbo; do cp "$t/images/$p.img" "$BD/images/"; done
-cp "$img" "$img.sha256" "${img%.img.zst}.MANIFEST" "$t/bundle/"
-index 2026-11-01 > "$BD/factory-builds.json"
-printf 'version: 2026.11.01\nlabel: developer preview\nkernel release: 7.3.0-test-1\nroot image: %s (%s)\n' "$(basename "$img")" "$(cut -d' ' -f1 "$img.sha256")" > "$BD/MANIFEST"
-python3 -I "$SRC/tools/bundle-manifest" --bundle "$BD" --rootfs "$img" --rootfs-sha256 "$(cut -d' ' -f1 "$img.sha256")" \
-  --version 2026.11.01 --kernel-release 7.3.0-test-1 --channel stable
-(cd "$BD" && find . -type f ! -name SHA256SUMS -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS)
+# --- A release bundle, as tools/make-bundle makes it -----------------------------------
+# The real make-bundle builds and signs it, with a key of the test's own that
+# this copy of install-phone pins (as a release pins the release key); its
+# one-file download is unpacked as a user unpacks it, and the install runs
+# as a new user runs it: "bash install --guided" in the bundle's folder,
+# with no option at all (the stand-ins are environment seams only)
+M=$t/mrepo MK=$t/mkernel MG=$t/mrepo/keys/gnupg.release
+mkdir -p "$M/tools/lib" "$M/docs" "$M/device/testdev" "$M/packages/omamobile-keyring" "$M/out" "$MK/include/config" "$MK/images"
+mkdir -p -m 700 "$MG"
+cp "$SRC/tools/make-bundle" "$SRC/tools/bundle-manifest" "$SRC/tools/install-phone" "$M/tools/"
+cp "$SRC/tools/lib/signing.sh" "$SRC/tools/lib/bundle-tar.sh" "$M/tools/lib/"
+ptools=$(sed -n 's/^provision_tools="\(.*\)"$/\1/p' "$SRC/tools/make-bundle")
+for f in install-guided phone-smoke factory-index camera-requirements.txt; do
+  [[ " $ptools " == *" $f "* ]] || fail "make-bundle ships tools/$f, which the guided install needs"
+done
+for f in $ptools; do cp "$SRC/tools/$f" "$M/tools/"; done
+cp "$SRC/docs/INSTALL.md" "$M/docs/"
+descriptor > "$M/device/testdev/device.conf"
+index 2026-11-01 > "$M/device/testdev/factory-builds.json"
+gpg --homedir "$MG" -q --batch --passphrase '' --quick-gen-key 'Test Release Key <test@example.org>' ed25519 sign never 2>/dev/null
+mfpr=$(gpg --homedir "$MG" --with-colons --list-keys 2>/dev/null | awk -F: '$1 == "fpr" { print $10; exit }')
+echo "$mfpr" > "$M/keys/fingerprint.release"
+gpg --homedir "$MG" -q --batch --export > "$M/packages/omamobile-keyring/omamobile.gpg"
+echo "$mfpr:4:" > "$M/packages/omamobile-keyring/omamobile-trusted"
+: > "$M/packages/omamobile-keyring/omamobile-revoked"
+sed -i "s/^SIGNING_KEYS=.*/SIGNING_KEYS='$mfpr'/" "$M/tools/install-phone"
+git -C "$M" init -q && git -C "$M" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m init
+echo 7.3.0-test-1 > "$MK/include/config/kernel.release"
+cp "$t/rd.lz4" "$MK/initramfs.cpio.lz4"
+touch -d '2001-01-01' "$MK/initramfs.cpio.lz4"
+cp "$t/images/"*.img "$MK/images/"
+echo testdev > "$MK/images/DEVICE"
+mroot=$M/out/omamobile-rootfs-testdev-2026.11.01-aarch64.img.zst
+cp "$img" "$mroot"
+(cd "$M/out" && sha256sum "${mroot##*/}" > "${mroot##*/}.sha256")
+printf 'version: 2026.11.01\ndevice: testdev (omamobile-device-testdev)\nomamobile channel: stable\n' > "${mroot%.img.zst}.MANIFEST"
+(cd "$M" && DEVICE=testdev KERNEL_OUT=$MK KERNEL_DIR=$M tools/make-bundle --version 2026.11.01 --rootfs "$mroot") > "$t/mb.out" 2>&1 ||
+  { cat "$t/mb.out" >&2; fail "make-bundle builds and signs the bundle"; }
+gpgconf --homedir "$MG" --kill gpg-agent 2>/dev/null || true
+U=$t/download
+mkdir -p "$U"
+tar -C "$U" -xf "$M/out/bundle/omamobile-testdev-2026.11.01.tar"
+BD=$U/omamobile-testdev-2026.11.01
+[[ -f $BD/SHA256SUMS.sig && -f $BD/tools/install-guided && -f $U/${mroot##*/} ]] || fail "the unpacked download: the signed bundle and the root image beside it"
+[[ ! -e $BD/images/DEVICE ]] || fail "a bundle's images/ has no DEVICE file: its device is its signed device.conf"
+for f in install-guided phone-smoke factory-index camera-requirements.txt; do
+  [[ $(grep -cE "^[0-9a-f]{64}  tools/$f\$" "$BD/SHA256SUMS") == 1 ]] || fail "the signed SHA256SUMS covers tools/$f"
+done
+# bguided ANSWERS [ARGS]: in the bundle's folder, as a user runs it
 bguided() {
   local answers=$1; shift
-  printf '%b' "$answers" | env -u XDG_STATE_HOME -u XDG_CACHE_HOME -u OMAMOBILE_INDEX_URL HOME="$t/home" \
+  printf '%b' "$answers" | (cd "$BD" && env -u XDG_STATE_HOME -u XDG_CACHE_HOME -u OMAMOBILE_INDEX_URL HOME="$t/home" \
     PHONE_SSH="$t/bin/phone" NV_BACKUP="$t/bin/nv-backup" PHONE_PROVISION="$t/bin/phone-provision" \
     PHONE_SMOKE="$t/bin/phone-smoke" INSTALL_POLL="${POLL:-1}" INSTALL_WAIT_FIRST_START="${WAIT_FIRST:-2}" INSTALL_WAIT_RESTART=2 \
-    INSTALL_WAIT_SETTLE=2 bash "$BD/install" --work "$t/work" "$@" > "$t/out" 2>&1
+    INSTALL_WAIT_SETTLE=2 INSTALL_WAIT_FASTBOOT=2 bash install --guided "$@") > "$t/out" 2>&1
 }
 fresh
-if bguided "$ALL"; then fail "an unsigned bundle is refused"; fi
-says "didn't pass its checks" && [[ $(events '^fastboot') == 0 ]] || fail "an unsigned bundle: refused before the phone is contacted"
-bguided "$ALL" --unsigned || fail "a development bundle installs with --unsigned"
+bguided "$ALL" || fail "a signed bundle installs with bash install --guided and no option"
 once "from a bundle"
 says "Omarchy Mobile 2026.11.01 for the Test Phone" && says "release 2026.11.01 (developer preview)" || fail "a bundle names its release"
-bguided "" --unsigned && says "bash install --start-over" && ! says "tools/install-guided" || fail "in a bundle the command it names is the bundle's: bash install"
+says "the download is complete and signed by Omarchy Mobile" || fail "the bundle's signature, checksums and root image are checked (install-phone --verify-only)"
 grep -c '^nv-backup [^-]' "$t/events" >/dev/null || fail "in a bundle nv-backup reads the bundle's own descriptor"
 [[ $(record release) == 2026.11.01 ]] || fail "the record names the bundle's release"
+pass "a bundle as make-bundle makes it, unpacked: bash install --guided installs it with no option, from the bundle's own signed files"
+
+# The finished install run again asks, instead of stopping for --start-over
+cp "$t/events" "$t/events.finished"
+bguided "" || fail "a finished install run again with no answer"
+says "Install again from the start? This erases the phone. (yes/no)" && says "Nothing was changed" && [[ -f $STATE/state ]] &&
+  cmp -s "$t/events" "$t/events.finished" || fail "a finished install, no answer: asked, nothing forgotten, nothing run"
+bguided "no\n" && says "Nothing was changed" && [[ -n $(record finished) ]] || fail "a finished install, \"no\": nothing forgotten"
+# 2026-11-13, as it went then: a reinstall of the phone the record names,
+# which runs Omarchy Mobile from slot B and reports one bootloader version
+# only. It needed --start-over, --reinstall and --bootloader-slots-match
+# typed by hand; now it is three questions
+: > "$t/events"; echo FAKE123 > "$t/fb-devices"; touch "$t/ssh-down"; rm -f "$t/firstboot-done"
+SLOTS="" vars yes b
+bguided "yes\nyes\nyes\n${OWNER}testdev\n" || fail "a reinstall from the bundle, answered with yes three times"
+says "The record of the earlier install is forgotten" && says "Is this phone already running Omarchy Mobile? (yes/no)" &&
+  says "slot B's bootloader, which the phone already runs; the install switches no slot" || fail "the reinstall: start again, slot B and its bootloader, each said"
+ADDS=0 once "a reinstall from the bundle"
+pass "a finished install run again asks \"Install again from the start?\"; a reinstall on slot B needs no option"
+
+# Every stop ends with the one command to run next, the bundle's own
+fresh; touch "$t/fail-backup"
+if bguided "$ALL"; then fail "a stopped install from the bundle"; fi
+[[ $(tail -n 2 "$t/out") == "    and go on from here, run:"*$'\n'"        bash install --guided" || $(tail -n 1 "$t/out") == "        bash install --guided" ]] ||
+  fail "a stop in a bundle ends with the command to run, bash install --guided, on a line of its own"
+rm "$t/fail-backup"
+pass "a stop in a bundle ends with: bash install --guided"
+
+# The repository's installer pointed at a bundle's images (as on 2026-11-13)
+fresh
+if INSTALLER_ARGS_ONLY=1 guided "$ALL" --device testdev --images "$BD/images" --work "$t/work"; then fail "the repository installer with a bundle's images stops"; fi
+says "holds a release bundle's images" && says "        cd $BD" && says "        bash install --guided" && [[ $(events '^fastboot') == 0 ]] ||
+  fail "a bundle's images given to the repository installer: it names the bundle's own command, and contacts no phone"
+# The guided installer never runs itself through install-phone
+if OMAMOBILE_INSTALL_GUIDED=1 bash "$BD/install" --guided > "$t/out" 2>&1; then fail "install --guided from the guided installer's own runs is refused"; fi
+says "is not for the guided installer's own runs" || fail "says why --guided is refused there"
+# The bundle's checksums cover its build index
 echo tampered >> "$BD/factory-builds.json"
 fresh
-if bguided "$ALL" --unsigned; then fail "a bundle whose build index changed is refused"; fi
-says "didn't pass its checks" || fail "the bundle's checksums cover its build index"
-pass "a bundle: install at its top runs tools/install-phone, checked first; its build index is under its checksums"
+if bguided "$ALL"; then fail "a bundle whose build index changed is refused"; fi
+says "didn't pass its checks" && [[ $(events '^fastboot') == 0 ]] || fail "the bundle's checksums cover its build index, checked before the phone is contacted"
+pass "a bundle: the repository installer sends a bundle's images to the bundle's own command; its build index is under its signed checksums"
 
 # --- A run that can't run says so --------------------------------------------------------
 # With a tool missing the suite skips whole; in CI that fails
@@ -1697,7 +1844,7 @@ grep -cFx "GOOGLE_DL='^https://dl\.google\.com/[A-Za-z0-9._~%/?&=+:,;@!-]*\$'" <
 ! grep -n 'Nothing is lost' <<<"$code" || fail "no stop carries a fixed reassurance"
 # tools/release's identifier scan reads every file of a bundle, and takes a
 # line with the serial's kernel parameter in plain text for a leaked serial
-! grep -nE '(ro\.serialno|androidboot\.serialno)' tools/install-guided tools/camera-requirements.txt || fail "no file a bundle would ship trips the release's serial scan"
+! grep -nE '(ro\.serialno|androidboot\.serialno)' tools/install-guided tools/camera-requirements.txt tools/phone-smoke tools/factory-index || fail "no file a bundle would ship trips the release's serial scan"
 [[ $(grep -cE '^[[:space:]]*written_phone$' <<<"$code") == 6 ]] || fail "six places ask the phone which one it is: the first start, the backup, provisioning, the restart (before and after) and the check"
 [[ $(grep -c -- '--serial "\$serial"' <<<"$code") == 1 && $(grep -c 'bash "\$INSTALL_PHONE"' <<<"$code") == 2 ]] ||
   fail "install-phone is run from two places: the file check, and the one that always hands it the phone's serial"

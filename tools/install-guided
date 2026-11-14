@@ -2,11 +2,15 @@
 # SPDX-License-Identifier: MIT
 # install-guided: the whole install as one command, from the laptop
 # (docs/INSTALL-EXPERIENCE-PLAN.md §11 M1; the design, every step and every
-# prompt are in docs/INSTALL-GUIDED.md). A repository tool for now:
+# prompt are in docs/INSTALL-GUIDED.md). From a release bundle, in the
+# bundle's folder:
+#   bash install --guided
+# (the bundle's install is tools/install-phone, which hands --guided on to
+# this file, the bundle's tools/install-guided), and from this repository:
 #   tools/install-guided
-# It also finds its files when it sits at the top of a release bundle, as
-# "install", but no bundle ships it yet: that waits for its first run on a
-# phone (docs/INSTALL-GUIDED.md §8).
+# In a bundle everything comes from the bundle: its signed images and the
+# root image beside it (as tools/install-phone checks them), its device.conf,
+# its tools and its build index, so no option is needed.
 #
 # It runs today's tools in order and remembers how far it got, so running it
 # again goes on from the step that stopped:
@@ -72,7 +76,9 @@
 #                      newer build index on omamobile.org unless --offline
 #     --status         show how far the install got, and stop
 #     --start-over     forget how far the install got (the radio backup and
-#                      the factory image stay where they are)
+#                      the factory image stay where they are). Not needed
+#                      after a finished install: running it again asks
+#                      whether to install again from the start
 #     --factory-zip FILE  Google's factory image, already saved: the installer
 #                      then shows no terms and downloads nothing (the file is
 #                      still checked against the build index)
@@ -87,14 +93,22 @@
 #                      record holds a SHA-256 of the phone's serial number:
 #                      keep it to yourself, like the radio backup
 #     --reinstall, --bootloader-slots-match VERSION, --unsigned, --work DIR
-#                      passed to tools/install-phone (see its --help)
-#     --device CODENAME, --images DIR, --rootfs FILE
+#                      passed to tools/install-phone (see its --help). A
+#                      release needs none of them: a phone on slot B is
+#                      asked about ("Is this phone already running Omarchy
+#                      Mobile?"), and a reinstall needs no
+#                      --bootloader-slots-match (step 3)
+#     --device CODENAME, --images DIR
 #                      repository mode only, passed to tools/install-phone
+#     --rootfs FILE    the root image, passed to tools/install-phone: only
+#                      when it isn't beside the bundle's folder (or, in the
+#                      repository, in out/)
 #   An option that takes a value is given once; a second one is refused.
 #
 # Test seams: FASTBOOT, ADB, PHONE_SSH (the command that runs a command on
 # the phone, default tools/phone-ssh), INSTALL_PHONE, NV_BACKUP,
 # PHONE_PROVISION, PHONE_SMOKE and FACTORY_INDEX (the tools it runs),
+# OS_RELEASE (the file that says which system this is, /etc/os-release),
 # CAMERA_VENV_SETUP (the command that makes the camera's Python folder; it
 # gets the folder and the requirements file),
 # OMAMOBILE_INDEX_URL, and the waits in seconds: INSTALL_WAIT_FIRST_START
@@ -103,6 +117,11 @@
 set -euo pipefail
 shopt -s nullglob
 export LC_ALL=C
+# debugfs, e2fsck and their friends are in /usr/sbin on Debian and Ubuntu,
+# which a user's PATH there often lacks; the tools run from here inherit
+# this. Where sbin is a link to bin (Arch), it adds nothing.
+for d in /usr/sbin /sbin; do [[ :$PATH: == *:$d:* || ! -d $d || -L $d ]] || PATH=$PATH:$d; done
+export PATH
 
 FASTBOOT=${FASTBOOT:-fastboot}
 ADB=${ADB:-adb}
@@ -138,18 +157,21 @@ phone_fact() {
     *) printf '    Omarchy Mobile is written to the phone, and what the install has done so\n    far stays done.' ;;
   esac
 }
+# Every stop ends with the one command to run next, on a line of its own:
+# the same command, which goes on from where it stopped
 stop() {
   printf '\n'
   printf '    %s\n' "$@"
   printf '\n'
   phone_fact
   if [[ ${S[write]:-} == started ]]; then
-    printf ' Run this command again to write it again, whole,\n    and go on.\n'
+    printf ' To write it again, whole,\n    and go on, run:\n'
   elif [[ -z ${S[write]:-} ]] && ((judging_locked)); then
-    printf '\n    Run this command again to go on from here.\n'
+    printf '\n    To go on from here, run:\n'
   else
-    printf ' Run this command again to go on from here.\n'
+    printf ' To go on from here, run:\n'
   fi
+  printf '        %s\n' "$rerun"
   exit 1
 }
 stop_final() {
@@ -157,7 +179,19 @@ stop_final() {
   printf '    %s\n' "$@"
   printf '\n'
   phone_fact
+  printf '\n    Once that has changed, run:\n        %s\n' "$rerun"
+  exit 1
+}
+# stop_next COMMAND LINES...: a stop whose way on is another command than
+# the one that was run (the command is named whole, on a line of its own)
+stop_next() {
+  local next=$1
+  shift
   printf '\n'
+  printf '    %s\n' "$@"
+  printf '\n'
+  phone_fact
+  printf '\n    Run:\n        %s\n' "$next"
   exit 1
 }
 ask() {
@@ -171,6 +205,9 @@ ask_secret() {
   printf '\n'
 }
 
+# The command as it was run, for the stops to name: running it again is
+# the way on (--start-over is named where it is meant, never repeated)
+orig_args=("$@")
 dry=0 status_only=0 start_over=0 offline=0 factory_given="" key_file="" backup_parent="" state_dir=""
 device="" pass=()
 # An option that takes a value is given once: with two, the installer's own
@@ -210,14 +247,20 @@ pass_value() {
 }
 
 # --- Where things are: a release bundle, or this repository ------------------
-if [[ -f $here/device.conf && -d $here/images ]]; then
+# In a bundle this file is tools/install-guided, beside the bundle's
+# device.conf, images/ and install (tools/install-phone). The device is the
+# one its signed device.conf names, as tools/install-phone's bundle mode
+# reads it; a bundle has no images/DEVICE marker and needs none
+if [[ ${here##*/} == tools && -f $here/../device.conf && -d $here/../images && -f $here/../install ]]; then
   mode=bundle
-  conf=$here/device.conf tools=$here/tools
-  local_index=$here/factory-builds.json keyring=$here/omamobile.gpg
+  top=$(cd -- "$here/.." && pwd)
+  conf=$top/device.conf tools=$here
+  local_index=$top/factory-builds.json keyring=$top/omamobile.gpg
   [[ -z $device ]] || die "--device is only available in repository mode"
-  release=$(sed -n 's/^version: //p' "$here/MANIFEST" 2>/dev/null | head -1)
-  label=$(sed -n 's/^label: //p' "$here/MANIFEST" 2>/dev/null | head -1)
-  self="bash install"
+  release=$(sed -n 's/^version: //p' "$top/MANIFEST" 2>/dev/null | head -1)
+  label=$(sed -n 's/^label: //p' "$top/MANIFEST" 2>/dev/null | head -1)
+  self="bash install --guided"
+  INSTALL_PHONE=${INSTALL_PHONE:-$top/install}
 else
   mode=repository
   self="tools/install-guided"
@@ -228,12 +271,29 @@ else
   local_index=$repo/device/$device/factory-builds.json keyring=$repo/packages/omamobile-keyring/omamobile.gpg
   pass+=(--device "$device")
   release=development label="development build"
+  # A release bundle's images handed to the repository's installer: the
+  # bundle has no images/DEVICE (its device is its signed device.conf), so
+  # tools/install-phone would refuse them, and the bundle's own installer
+  # checks them as a release does (2026-11-13, docs/INSTALL-GUIDED.md §8)
+  if bundle_images=$(pass_value --images) && [[ -f $bundle_images/../device.conf && -f $bundle_images/../manifest.json ]]; then
+    printf '\n    %s\n' "$bundle_images holds a release bundle's images." \
+      "A release installs from its own folder, with its own installer, which checks" \
+      "its signature, its images and the root image beside it. Run:"
+    printf '        cd %q\n        bash install --guided\n' "$(cd -- "$bundle_images/.." && pwd)"
+    exit 1
+  fi
 fi
+# rerun: the command that goes on from a stop, the one this run was started
+# with, without --start-over. In a bundle, with no options, that is
+# "bash install --guided"
+rerun=$self
+for a in "${orig_args[@]}"; do [[ $a == --start-over ]] || rerun+=" $(printf '%q' "$a")"; done
+
 [[ -f $conf ]] || die "no device descriptor $conf"
 # The images written to slot B, where tools/install-phone looks for them
 images_dir() {
   local base
-  if [[ $mode == bundle ]]; then printf '%s' "$here/images"; return 0; fi
+  if [[ $mode == bundle ]]; then printf '%s' "$top/images"; return 0; fi
   # The one --images there can be (a second is refused), so this is the
   # folder tools/install-phone writes from
   ! pass_value --images || return 0
@@ -413,21 +473,99 @@ if ((status_only)); then
 fi
 if [[ -f $state_file ]]; then
   [[ ${S[codename]:-} == "$CODENAME" ]] || die "$state_file is for ${S[codename]:-another phone}, not $CODENAME"
-  if [[ -n ${S[finished]:-} ]]; then
-    say "This phone was installed on ${S[finished]}"
-    note "Omarchy Mobile ${S[release]:-} is on it, and the radio backup is in ${S[backup_dir]:-its folder}."
-    note "To install again from the start (the phone is erased again): $self --start-over"
-    exit 0
+fi
+# A finished install run again: the owner is asked, rather than told to
+# type --start-over. Only a typed "yes" forgets the record (the radio
+# backup and the factory image stay); anything else, the end of input
+# included, changes nothing. A dry run asks nothing and forgets nothing: it
+# goes through the checks as an install from the start would.
+if [[ -n ${S[finished]:-} ]]; then
+  say "This phone was installed on ${S[finished]}"
+  note "Omarchy Mobile ${S[release]:-} is on it, and the radio backup is in ${S[backup_dir]:-its folder}."
+  if ((dry)); then
+    note "A dry run forgets nothing: it goes through the checks as an install from the start would."
+    S=()
+  else
+    printf '\n'
+    printf '%s' "    Install again from the start? This erases the phone. (yes/no) "
+    IFS= read -r REPLY || REPLY=""
+    [[ -t 0 ]] || printf '\n'
+    if [[ $REPLY != yes ]]; then
+      note "Nothing was changed: the phone keeps the install it has."
+      exit 0
+    fi
+    rm -f "$state_file" "$state_dir/report.json"
+    S=()
+    note "The record of the earlier install is forgotten; the install starts again from the start."
   fi
+fi
+if [[ -f $state_file && -n ${S[format]:-} ]]; then
   [[ ${S[release]:-} == "$release" ]] ||
-    stop_final "An install of Omarchy Mobile ${S[release]:-} was started on this computer and hasn't finished," \
+    stop_next "$rerun --start-over" \
+      "An install of Omarchy Mobile ${S[release]:-} was started on this computer and hasn't finished," \
       "and this download is Omarchy Mobile $release." \
-      "To go on with that install, run the install from its own folder." \
-      "To start again with this one: $self --start-over"
+      "To go on with that install, run the install in that release's own folder." \
+      "To start again with this download instead (the record of that install is" \
+      "forgotten; the radio backup and the factory image stay where they are)," \
+      "run the command below."
   ((dry)) || say "Going on with the install started ${S[started]:-earlier}"
 fi
 
 # --- Step 1: this computer and the download ----------------------------------
+# Which package has each program the install needs: "program arch debian",
+# the Debian column for Debian and Ubuntu, "-" where we know of none
+PACKAGES=(
+  "fastboot android-tools fastboot"
+  "debugfs e2fsprogs e2fsprogs"
+  "dumpe2fs e2fsprogs e2fsprogs"
+  "e2fsck e2fsprogs e2fsprogs"
+  "zstd zstd zstd"
+  "lz4 lz4 lz4"
+  "cpio cpio cpio"
+  "openssl openssl openssl"
+  "gpg gnupg gnupg"
+  "python3 python python3"
+  "unzip unzip unzip"
+  "ssh openssh openssh-client"
+  "sha256sum coreutils coreutils"
+  "tar tar tar"
+  "lpunpack android-tools -"
+  "simg2img android-tools android-sdk-libsparse-utils"
+  "fsck.erofs erofs-utils erofs-utils"
+  "readelf binutils binutils"
+)
+# missing_programs PROGRAM...: the stop for programs this computer lacks,
+# with the package for each and the one command that installs them all on
+# this system (Arch-like or Debian-like, from /etc/os-release)
+missing_programs() {
+  local m e prog arch deb family="" ids lines=() arch_pkgs=() deb_pkgs=() none=()
+  ids=$(sed -n 's/^\(ID\|ID_LIKE\)=//p' "${OS_RELEASE:-/etc/os-release}" 2>/dev/null | tr -d '"' | tr '\n' ' ')
+  case " $ids " in
+    *" arch "*|*" archarm "*|*" omarchy "*) family=arch ;;
+    *" debian "*|*" ubuntu "*) family=debian ;;
+  esac
+  lines+=("These programs are missing on this computer: $*" "" "    program      Arch Linux, Omarchy    Debian, Ubuntu")
+  for m in "$@"; do
+    for e in "${PACKAGES[@]}"; do
+      read -r prog arch deb <<<"$e"
+      [[ $prog == "$m" ]] || continue
+      lines+=("$(printf '    %-12s %-22s %s' "$m" "$arch" "${deb/#-/(none we know of)}")")
+      [[ " ${arch_pkgs[*]} " == *" $arch "* ]] || arch_pkgs+=("$arch")
+      if [[ $deb == - ]]; then none+=("$m"); elif [[ " ${deb_pkgs[*]} " != *" $deb "* ]]; then deb_pkgs+=("$deb"); fi
+    done
+  done
+  lines+=("")
+  if [[ $family == arch ]]; then
+    lines+=("Install them with:" "    sudo pacman -S --needed ${arch_pkgs[*]}")
+  elif [[ $family == debian ]]; then
+    ((${#deb_pkgs[@]} == 0)) || lines+=("Install them with:" "    sudo apt install ${deb_pkgs[*]}")
+    ((${#none[@]} == 0)) || lines+=("We know of no Debian or Ubuntu package with ${none[*]}: ask in an issue," \
+      "https://github.com/derekross/omarchy-mobile/issues")
+  else
+    lines+=("Install the packages above with your system's package manager.")
+  fi
+  stop "${lines[@]}"
+}
 step_preflight() {
   local missing=() t need have
   title preflight
@@ -438,22 +576,17 @@ step_preflight() {
   # simg2img, fsck.erofs, debugfs, readelf).
   for t in "$FASTBOOT" debugfs dumpe2fs e2fsck zstd lz4 cpio openssl gpg python3 unzip ssh sha256sum \
     tar lpunpack simg2img fsck.erofs; do
-    command -v "$t" >/dev/null || missing+=("$t")
+    command -v "$t" >/dev/null || missing+=("${t##*/}")
   done
   command -v readelf >/dev/null || command -v llvm-readelf >/dev/null || missing+=(readelf)
-  if ((${#missing[@]})); then
-    stop "These programs are missing on this computer: ${missing[*]}" \
-      "On Omarchy or Arch Linux, install them with:" \
-      "  sudo pacman -S --needed android-tools e2fsprogs zstd lz4 cpio openssl gnupg python unzip binutils erofs-utils openssh tar" \
-      "On other systems, install the packages with the same names."
-  fi
+  ((${#missing[@]} == 0)) || missing_programs "${missing[@]}"
   note "the programs the install needs are here"
   # Not needed by every install, so said now and not a stop: step 6 on a
   # computer without NetworkManager, and step 9's optional camera modules
   command -v nmcli >/dev/null ||
     note "this computer doesn't use NetworkManager: after the phone is written you will set the USB link's address yourself (the installer says which)"
   camera_ready || python3 -c 'import venv, ensurepip' 2>/dev/null ||
-    note "this computer's Python can't make a folder of modules (venv, pip): the cameras' two Python modules can't be fetched in step 9 unless that is installed first"
+    note "this computer's Python can't make a folder of modules (venv, pip): the cameras' two Python modules can't be fetched in step 9 unless that is installed first (on Debian and Ubuntu: python3-venv)"
   key_file=${key_file:-$HOME/.ssh/id_ed25519.pub}
   key_file=${key_file/#\~/$HOME}
   [[ -f $key_file ]] ||
@@ -649,20 +782,24 @@ other_phone_in_fastboot() {
       "try stopped. It may be half-written: what was on it may already be erased, and" \
       "it may not start. That is the phone to finish. Plug it back in, in Fastboot" \
       "Mode ($keys_fastboot)," \
-      "with this one unplugged, and run this command again." \
+      "with this one unplugged, and run:" \
+      "    $rerun" \
       "" \
-      "\"$self --start-over\" makes this computer forget that install. The" \
+      "\"--start-over\" makes this computer forget that install. The" \
       "half-written phone then stays as it is until it is installed again from the" \
       "start. Use it only if you no longer mean to finish that phone from this" \
       "computer now; after it, the phone connected now can be installed, from the" \
-      "start."
+      "start:" \
+      "    $rerun --start-over"
   else
     printf '    %s\n' \
       "The phone connected now is not the phone this install was started on." \
       "Nothing has been written to either phone." \
-      "Connect the phone the install was started on and run this command again to go" \
-      "on with it. To install the phone connected now instead, start again for it:" \
-      "$self --start-over (it forgets only how far the other install got)."
+      "To go on with that install, connect the phone it was started on and run:" \
+      "    $rerun" \
+      "To install the phone connected now instead, start again for it (it forgets" \
+      "only how far the other install got):" \
+      "    $rerun --start-over"
   fi
   printf '\n'
   exit 1
@@ -766,15 +903,30 @@ phone_checks() {
       "erases the phone), and step 3 says how to put Android on slot A. After that," \
       "run this command again."
   fi
+  # An unlocked phone on slot B: a reinstall, or Android after a system
+  # update. From Fastboot Mode the two look the same, so the owner is asked
+  # the plain question (as the desktop installer asks it), once per run,
+  # instead of being told to type --reinstall. "yes" hands --reinstall to
+  # tools/install-phone; "no" stops, as Android must not be written over.
   if [[ $slot == b ]] && ! has_pass --reinstall; then
-    stop_final "This phone is running from its second system copy (slot B)." \
-      "Omarchy Mobile is written there, and Android must stay on the first copy (slot A)" \
-      "as your way back." \
-      "" \
-      "If Omarchy Mobile is already on this phone and you are installing it again, run:" \
-      "    $self --reinstall" \
-      "If the phone runs Android (it moves to slot B after an Android system update)," \
-      "Android has to be put on slot A first: INSTALL.md, step 3, says how."
+    guide "This phone is running from its second system copy (slot B). Omarchy Mobile is" \
+      "written there, and Android stays on the first copy (slot A) as your way back." \
+      "If Omarchy Mobile is on this phone now, this install replaces it. If the phone" \
+      "runs Android (it moves to slot B after an Android system update), that Android" \
+      "must not be written over, and the install stops here."
+    printf '\n'
+    while true; do
+      ask "    Is this phone already running Omarchy Mobile? (yes/no) "
+      case $REPLY in
+        yes) pass+=(--reinstall); note "a reinstall: Omarchy Mobile on slot B is replaced"; break ;;
+        no)
+          stop_final "This phone runs Android from its second system copy (slot B), where an Android" \
+            "system update leaves it. Omarchy Mobile is written to slot B, and Android must" \
+            "stay on the first copy (slot A) as your way back, so Android has to be put on" \
+            "slot A first: INSTALL.md, step 3, says how." ;;
+        *) note "Type yes or no." ;;
+      esac
+    done
   fi
   slots_check
 }
@@ -792,6 +944,20 @@ phone_checks() {
 slots_check() {
   local bl bl_a bl_b said
   bl=$(var version-bootloader)
+  # The reinstall rule (decided 2026-11-13): on slot B, with the reinstall
+  # confirmed, the version the phone reports is slot B's own, the
+  # bootloader it already starts from, and the install switches no slot.
+  # tools/install-phone applies the same rule at the write. Two per-slot
+  # versions that differ, or a --bootloader-slots-match given anyway, are
+  # still judged below.
+  if [[ $(var current-slot) == b ]] && has_pass --reinstall && ! pass_value --bootloader-slots-match >/dev/null &&
+    ! grep -Ec '^version-bootloader[-_:][ab]:' <<<"$vars" >/dev/null; then
+    [[ $said_slots == "$bl" ]] ||
+      note "bootloader $bl: slot B's bootloader, which the phone already runs; the install switches no slot"
+    said_slots=$bl
+    return 0
+  fi
+
   bl_a=$(sed -nE 's/^version-bootloader[-_:]a:[ ]*//p' <<<"$vars" | head -1)
   bl_b=$(sed -nE 's/^version-bootloader[-_:]b:[ ]*//p' <<<"$vars" | head -1)
   if [[ -n $bl_a && -n $bl_b ]]; then
@@ -952,7 +1118,7 @@ choose_index() {
       "matches this phone. Check the internet connection and run this again."
 }
 declare -A B=()
-said_match=""
+said_match="" said_slots=""
 find_build() {
   local out line bl bb not_tested unknown update_yes update_no
   bl=$(var version-bootloader) bb=$(var version-baseband)
@@ -1213,7 +1379,7 @@ fetch_factory() {
       "Run this command again to try once more. If it happens again, the list or the" \
       "download is wrong: open an issue, https://github.com/derekross/omarchy-mobile/issues" \
       "You can also save the file yourself from Google's page (${B[page]})" \
-      "and give it with --factory-zip FILE; it is checked the same way."
+      "into your Downloads folder: the installer finds it there, checked the same way."
   fi
   if ((have < B[size])); then
     note "The download ended early: $have of ${B[size]} bytes are here."
@@ -1233,7 +1399,7 @@ fetch_factory() {
       "Run this command again to download it again. If it differs again, the list or" \
       "the download is wrong: open an issue, https://github.com/derekross/omarchy-mobile/issues" \
       "You can also save the file yourself from Google's page (${B[page]})" \
-      "and give it with --factory-zip FILE; it is checked the same way."
+      "into your Downloads folder: the installer finds it there, checked the same way."
   fi
   mv -f "$part" "$final"
   zip=$final
@@ -1247,8 +1413,26 @@ fetch_factory() {
 # saved file. Sets zip and from, or leaves zip empty in a dry run that
 # found no file.
 zip="" from=""
+# saved_factory DIR...: a file already on this computer that is the build's
+# factory image by size and SHA-256, whatever it is called (a browser saves
+# a second download as "name(1).zip"), in the folders given. Only files of
+# exactly the size the index names are read, so a folder of other zips
+# costs a stat each. Prints the first match.
+saved_factory() {
+  local d f
+  for d in "$@"; do
+    [[ -d $d ]] || continue
+    for f in "$d"/*.zip; do
+      [[ -f $f && $(stat -c %s "$f") == "${B[size]}" ]] || continue
+      [[ $(sha256sum < "$f" | cut -d' ' -f1) == "${B[sha256]}" ]] || continue
+      printf '%s' "$f"
+      return 0
+    done
+  done
+  return 1
+}
 take_factory() {
-  local downloads kept
+  local downloads kept found
   zip="" from="a file saved by the owner"
   downloads=$(xdg-user-dir DOWNLOAD 2>/dev/null || true)
   [[ -n $downloads && -d $downloads ]] || downloads=$HOME/Downloads
@@ -1262,7 +1446,16 @@ take_factory() {
   elif [[ -f $kept ]] && check_factory "$kept"; then
     zip=$kept from="downloaded from Google by the installer"
     note "found the file an earlier run downloaded ($kept)"
+  elif found=$(saved_factory "$downloads" "$(fetch_dir)" "${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-install/factory"); then
+    # Checked by size and SHA-256 against the index: it is the same file
+    # as a download would bring, so it is used, and nothing is downloaded
+    zip=$found
+    [[ $found != "$(fetch_dir)"/* && $found != "${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-install/factory/"* ]] ||
+      from="downloaded from Google by the installer"
+    note "found Google's factory image for build ${B[build]} already on this computer: $found"
+    note "(its size and SHA-256 are the ones the list names, so nothing is downloaded)"
   elif ((dry)); then
+
     note "a dry run downloads nothing and opens no page. The install would show Google's terms and,"
     note "once you accept them, download ${B[zip]}"
     note "(${B[size]} bytes, about $(gb "${B[size]}") GB) from ${B[url]:-the page above}"
@@ -1483,8 +1676,8 @@ stop_erased() {
     "" \
     "To go on with Omarchy Mobile: leave the phone in Fastboot Mode (to put it back" \
     "there: $keys_fastboot), fix what the" \
-    "message above names, and run this command again. It writes the same things" \
-    "again, whole."
+    "message above names, and run this, which writes the same things again, whole:" \
+    "    $rerun"
   exit 1
 }
 
@@ -1527,7 +1720,7 @@ written_phone() {
       "from it, put on it or restarted." \
       "Unplug every other phone that runs Omarchy Mobile, connect the $NAME this" \
       "install is for, and run this again. (If this record is left from an install" \
-      "of another phone: $self --start-over forgets it.)"
+      "of another phone, \"$rerun --start-over\" forgets it.)"
 }
 step_network() {
   if is_done network; then skip network "set up earlier"; return 0; fi
@@ -1572,11 +1765,14 @@ step_network() {
   printf '\n'
   ask "    Press Enter to add it, or type no to set it up yourself: "
   [[ -z $REPLY || $REPLY == yes ]] ||
-    stop "Not added. To set it up yourself, run the command above (or give this computer" \
-      "the address 172.16.42.2/24 on the phone's USB network interface)."
+    stop "Not added. To set it up yourself, give this computer the address 172.16.42.2/24" \
+      "on the phone's USB network interface, in your system's network settings (or add" \
+      "the connection shown above: INSTALL.md, step 5, has it to copy)."
   "${NM_ADD[@]}" >/dev/null ||
     stop "NetworkManager didn't add the connection (its message is above)." \
-      "You can add it yourself with the command shown."
+      "Give this computer the address 172.16.42.2/24 on the phone's USB network" \
+      "interface in your system's network settings (or add the connection shown above:" \
+      "INSTALL.md, step 5, has it to copy)."
   note "added the connection \"$NM_PROFILE\""
   put network "done (added $NM_PROFILE)"
 }
