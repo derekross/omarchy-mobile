@@ -323,22 +323,39 @@ class VoiceAudio:
     def set_output(self, output):
         """Switch call audio between the loudspeaker and the earpiece during
         a call. Wired for the tegu TAS2572 route only. The sink is muted
-        across the gain change (no pop), the top amplifier (the earpiece)
-        always sounds and the bottom (the loudspeaker) is muted for the
-        earpiece; the original gains return from `saved` when the call ends."""
+        across the gain change (no pop) and stays muted if the change
+        can't be confirmed; the top amplifier (the earpiece) always sounds
+        and the bottom (the loudspeaker) is muted for the earpiece; the
+        original gains return from `saved` when the call ends."""
         if output not in TEGU_OUTPUTS:
             raise ValueError('unsupported call audio output: ' + str(output))
         if not getattr(self, 'tegu', False):
             raise RuntimeError('call audio output switching is only wired for the tegu route')
         if not self.pcms:
             raise RuntimeError('no call audio is running')
+        # The tegu route's rule holds here too: the call sink is unmuted
+        # only once both gains read back what was written. A failed write or
+        # a mismatch leaves the sink muted and raises; the output isn't
+        # changed, and a repeat of the command can try again.
         self.mixer('cset', 'Incall Sink Mute', '1')
-        try:
-            for name, value in zip(TEGU_SPEAKER_DIGITAL, TEGU_OUTPUTS[output]):
-                self.mixer('cset', name, value)
-        finally:
-            self.mixer('cset', 'Incall Sink Mute', '0')
+        if self.mixer_value('Incall Sink Mute') not in ('1', 'on'):
+            raise AudioRefused('call audio output refused: sink mute read-back mismatch')
+        self.tegu_gains(TEGU_OUTPUTS[output], 'call audio output refused')
+        self.mixer('cset', 'Incall Sink Mute', '0')
         self.output = output
+
+    def tegu_gains(self, values, refusal):
+        """Write the (top, bottom) Speaker Digital Volume and read both
+        back; AudioRefused unless each reads what was written."""
+        for name, value in zip(TEGU_SPEAKER_DIGITAL, values):
+            self.mixer('cset', name, value)
+        for name, value in zip(TEGU_SPEAKER_DIGITAL, values):
+            try:
+                gain = self.mixer_value(name)
+            except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+                raise AudioRefused(refusal + ': TAS gain read-back unavailable') from error
+            if gain != value:
+                raise AudioRefused(refusal + ': TAS gain read-back mismatch')
 
     def __exit__(self, *args):
         failures = []

@@ -464,6 +464,58 @@ class TeguAudioTests(unittest.TestCase):
             self.assertEqual(audio.output, 'earpiece')
         self.assertEqual(controls, original)
 
+    def test_set_output_leaves_the_sink_muted_when_a_gain_write_fails(self):
+        audio, events, controls, original = self.fixture()
+        with audio:
+            inner = audio.mixer
+            def failing(action, name, value=None):
+                if action == 'cset' and name == 'Bottom Speaker Digital Volume' and value == '0':
+                    raise RuntimeError('mixer failed')
+                return inner(action, name, value)
+            audio.mixer = failing
+            with self.assertRaisesRegex(RuntimeError, 'mixer failed'):
+                audio.set_output('earpiece')
+            self.assertEqual(controls['Incall Sink Mute'], '1')   # never unmuted on unconfirmed gains
+            self.assertEqual(audio.output, 'speaker')             # and the output isn't claimed
+            # A repeat that goes through unmutes again.
+            audio.mixer = inner
+            audio.set_output('earpiece')
+            self.assertEqual((controls['Incall Sink Mute'], audio.output), ('0', 'earpiece'))
+        self.assertEqual(controls, original)
+
+    def test_set_output_leaves_the_sink_muted_on_a_gain_read_back_mismatch(self):
+        for broken, message in (('  : values=180\n', 'read-back mismatch'),
+                                ('  : values=unavailable\n', 'read-back unavailable')):
+            audio, events, controls, original = self.fixture()
+            with audio:
+                inner = audio.mixer
+                def lying(action, name, value=None, broken=broken):
+                    if action == 'cget' and name == 'Bottom Speaker Digital Volume':
+                        return broken
+                    return inner(action, name, value)
+                audio.mixer = lying
+                with self.assertRaisesRegex(voice_audio.AudioRefused, 'call audio output refused: TAS gain ' + message):
+                    audio.set_output('earpiece')
+                self.assertEqual(controls['Incall Sink Mute'], '1')
+                self.assertEqual(audio.output, 'speaker')
+                audio.mixer = inner
+            self.assertEqual(controls, original)
+
+    def test_set_output_checks_the_sink_mute_before_changing_a_gain(self):
+        audio, events, controls, original = self.fixture()
+        with audio:
+            inner = audio.mixer
+            def deaf(action, name, value=None):
+                if action == 'cset' and name == 'Incall Sink Mute' and value == '1':
+                    return ''
+                return inner(action, name, value)
+            audio.mixer = deaf
+            with self.assertRaisesRegex(voice_audio.AudioRefused, 'sink mute read-back mismatch'):
+                audio.set_output('earpiece')
+            self.assertEqual(controls['Bottom Speaker Digital Volume'], voice_audio.TEGU_GAIN)
+            audio.mixer = inner
+        self.assertEqual(controls, original)
+
     def test_set_output_needs_a_running_route(self):
         audio, _, _, _ = self.fixture()   # pcms not opened yet
         with self.assertRaisesRegex(RuntimeError, 'no call audio is running'):
