@@ -1714,6 +1714,118 @@ the test), on `7.3.0-rc6-omamobile-push1-dbg-gff4fdf58035e`:
 error lines. It doesn't settle the Wi-Fi loss above, which also happened
 with one state.
 
+### Suspend with the modem on, with the sleep guard: it sleeps and keeps the phone service (2026-11-13 and the night after)
+
+A test kernel only; nothing here is in a published kernel or a package yet,
+so the modem's inhibitor and the rule in AGENTS.md stand as they are.
+
+The kernel: `7.3.0-rc6-omamobile-push1-gc50fd8fdf42a`, which is the
+published `omamobile` at `2db2bc35beec` plus kernel #247 (the HSI0 USI
+gates), linux-omarchy-mobile#232's four commits (`f4e5e4846c39`: the link
+driver refuses a system sleep while the modem's link is up, keeps the PCI
+core's sleep handling off the modem's root port and leaves the endpoint
+out of system sleep), the maintainer's two patches from #232's review
+(6.1: the refusal moved to a PM notifier before the freeze, the root port
+a syscore device; 6.2: a ring trace) and one line of ours: all of it is
+behind `sleep_guard`, which only gs201 sets, so `.sleep_guard = true` in
+`zumapro_pcie_cp_data`. Userspace was main's with #697's phone packages.
+The 9a has nothing that tells the modem the screen state, so each test
+sent "screen off" through sitd's socket before a request and "screen on"
+after, waited for the link to be down for 5 s, armed an RTC alarm and
+passed the modem's inhibitor with `systemctl suspend -i`. On the charger,
+cable in, home LTE with IMS voice and SMS. The owner was not at the
+palmtop for these runs; from 2026-11-13 he has told us to run sleep tests
+with the modem up without him, and every boot ended in `systemctl reboot`.
+The series script is `device/tegu/bringup/modem-sleep-series.sh` (the copy
+that ran logged to another file and lacked the check that `rtcwake` armed
+the alarm; otherwise the same).
+
+- **The same day without the guard, for comparison** (the daily kernel #100
+  with its out-of-tree link driver, one request per boot, five boots). As
+  they were: in one boot the link was down at the request and the modem
+  was lost as on 11-09 (`pcieport … D0 to D3hot, device inaccessible`,
+  `Data Link Layer Link Active not set in 100 msec`, `Can't set D0 state`,
+  33 failed polls in four minutes); in the other the endpoint was in D0 at
+  the request and nothing was lost. With 0 written to the endpoint's
+  `d3cold_allowed` first, three boots, the link down at each request: none
+  lost the modem. That fits #232's reading (the root port marked D3cold,
+  and the resume waiting for a link that isn't coming). Both boots that
+  entered a sleep then failed to shut down: `systemctl reboot` logged
+  nothing more, the palmtop came back 57 s later and the modem's stop was
+  not recorded, which the modem's guard counted as unclean ends. The NV
+  partitions read SAME against the backup afterwards.
+- **A refusal no longer costs the phone service.** 14 requests in one boot
+  were refused by the notifier (`sleep refused before the freeze: link up,
+  PHY out of isolation`), twelve of them under `ping -i 1 -I rmnet0`: 273
+  of 273 and 200 of 200 replies, no failed poll in sitd.
+- **It sleeps.** With the cellular data service stopped: three requests of
+  45 s in that boot, all entered (45.2 s and 44.6 s to the alarm, one of
+  15.1 s ended by `cp2ap_wakeup`), then twenty of 60 s in the next boot,
+  19 entered (17 to the alarm, one ended at 27.7 s by `cp2ap_wakeup`, one
+  at 27.8 s by the PMIC's interrupt) and one refused. After each: the CP
+  ONLINE, sitd's polls answered, `ping -I rmnet0` 5 of 5. No `Unable to
+  change power state`, `Link Active`, `BME` or UFS error-handler line, the
+  root port in D0 and the endpoint in D3hot at the end, and both
+  `systemctl reboot`s stopped the modem cleanly (`CP OFFLINE`, the marker
+  removed), back in 25 s.
+- **With Wi-Fi connected and the data service as on main, every request is
+  refused**: those 14 were all there were. At logind's sleep announcement NetworkManager takes
+  `wlan0` down, the bearer's metric-700 default route is the only one
+  left, whatever was talking over Wi-Fi goes out over `rmnet0` in the same
+  second, and the link is up when the notifier looks. omarchy-mobile#750
+  (a draft) has `omamobile-sit-data` remove its route at the announcement
+  and put it back once Wi-Fi's is back, or after 10 s without one. Put
+  back at once after the wake it was worse than useless: 18 of 20 entered
+  and none reached the alarm, the answers to the few seconds of traffic
+  ending each next sleep early.
+- **The night: 300 requests of 60 s in one boot, 299 entered and woke, 1
+  refused** (7 h 40 min, Wi-Fi connected, the data service running with
+  #750's change copied over the packaged file for the test and put back
+  after). `suspend_stats` success 299, fail 1. 239 ended on the PMIC's
+  interrupt (the RTC alarm) and 60 on `cp2ap_wakeup`. After every one of
+  the 300: the CP ONLINE, sitd active, no failed poll, Wi-Fi up, no UFS
+  line; the default routes read Wi-Fi first with the bearer behind before
+  every request, and the service logged the route back behind Wi-Fi 300
+  times. At the end: registered with IMS voice, `ping -I rmnet0` 5 of 5,
+  no bad line in the kernel log of the boot (the list above, plus oops,
+  warning and RCU stall). Entry took 0.52 to 0.68 s to the noirq stage and
+  resume 0.72 to 0.87 s by the kernel's stamps. The reboot after it
+  stopped the modem cleanly.
+- **One hang, awake, on this build, not understood.** The evening before
+  the night run, a boot that had run 52 requests (49 entered, 3 refused)
+  stopped 20.4 s after a sleep had ended normally: the console's last
+  lines are the `cp2ap_wakeup` edge that starts every link power-up, and
+  the `zuma-pcie-phy … external PLL lock` line that follows about 12 ms
+  later in every other cycle never came. The watchdog reset the palmtop
+  about two minutes later (`APC Watchdog Early`, `RST_STAT: 0x1 -
+  CLUSTER0_NONCPU_WDTRESET`); nobody touched it. That was the boot's
+  1,549th link power-up; the night's boot did 6,311 without one. It is on
+  the in-tree link driver's power-up path (`pcie-gs201-cp` with
+  `phy-zuma-pcie`), which the daily kernel doesn't use (it has the
+  out-of-tree copy), and whether it happens without #232 isn't known.
+  Reported on #232. The next boot started the modem after the one unclean
+  end the guard allows.
+- **The alarm is not always what ends a 60 s sleep, and not always at
+  60 s.** In the night's 239 alarm wakes, by the RTC from the arming: 223
+  at 58 to 64 s, 12 at 28 to 36 s, 3 at 89 to 90 s and one at 121 s; five
+  more sleeps ran 83 to 93 s and were ended by the modem. The PMIC's
+  interrupt counted 522 in the boot, twice `rtc-alarm0`'s 261, so every
+  PMIC wake was an RTC alarm: the RTC raised one about 30 s early or 30 to
+  60 s late now and then. The 300 modem-off sleeps on this kernel's base
+  earlier on 11-13 were all 59.2 to 60.3 s. Not traced; a second RTC timer beside
+  `rtcwake`'s is our guess (the kernel's alarmtimer programs the RTC at
+  suspend for the next userspace alarm), and the `rtc` and `alarmtimer`
+  trace events over a run would show it. The palmtop woke every time.
+
+What this leaves before the modem's inhibitor can go on the 9a: #232 in
+the published kernel and the zumapro line after it (its own small pull
+request, as #232's author asked); the hang above understood, or at least
+counted on a build without #232; the screen state told to the modem by
+the shell, not by hand (the 7 Pro's side of that is omarchy-mobile#556);
+the route change (#750, or its equivalent in #556); and what no run here
+tested: a call and a text arriving while the palmtop sleeps, a sleep of
+hours, and a sleep off the charger.
+
 ### M2: the link only (modem link driver, `allow_hw=1`; risk: medium)
 
 One step per run, the CPIF overlay not applied, the link overlay applied
@@ -1903,7 +2015,7 @@ Preconditions, as SLEEP-PLAN's:
 | The bridge for apps | `omamobile-mmd` not installed | not part of this test (T2 follows a passing run) |
 | The link watcher | `omamobile-modem` 0.1.9 (<https://github.com/derekross/omarchy-mobile/pull/148>) keeps one open file on the boot device, which retires the old open-and-close watcher that woke the CP link every half second; 0.1.10 (<https://github.com/derekross/omarchy-mobile/pull/163>) adds the once-per-boot refusal | with the CP ONLINE the link idles and cycles on its own; on 2026-10-29 the palmtop hung eight times in a morning with the modem up for hours, the early ones tied to the watcher's open and close of the boot device (the console logs end on CPIF's `cp2ap_wakeup` wake toggles; `logs/tegu-review-20261029/hangs/`). The run uses 0.1.10 (SIM-1). Keep the session short (under an hour) and attended; `cpif-keep-link.ko` (G3-L1 step 1, untested) is the candidate fix, not part of this run |
 | Call audio | the AoC card is `google,tegu-aoc-snd-card` with its EP PCMs, but `omamobile-speaker-protection` is inactive and the amplifiers are TAS2572, which `voice_audio.py`'s earpiece checks (CS35L41 controls) don't know | **no audio routing exists on the 9a: calls are not part of this test.** `[audio] card = none` stays; a signalling-only call (cheetah's S10) is a later, separate step |
-| Suspend | unqualified with the modem on (section "Suspend with the modem on"); the start script's inhibitor blocks `systemctl suspend` for the boot | charger in for the whole test |
+| Suspend | unqualified with the modem on (section "Suspend with the modem on"); the start script's inhibitor blocks `systemctl suspend` for the boot. On a test kernel with linux-omarchy-mobile#232 and the sleep guard on for zumapro, 299 of 300 sleeps were entered and woke with the phone service kept (2026-11-13) | charger in for the whole test |
 | Identifiers | the ICCID (printed on the card), IMSI, IMEI, phone number, the carrier's name, its APN, IP addresses and message text never go into the repository, a log excerpt or a screenshot | sitd logs states and codes only; before quoting a log: `grep -nE '[0-9]{7,}|\+[0-9]|[0-9a-f]{2}(:[0-9a-f]{2}){5}|@' logs/<file>` must show nothing you would quote |
 
 **What to expect, honestly:** SIM detection likely (GET_SIM_STATUS has
