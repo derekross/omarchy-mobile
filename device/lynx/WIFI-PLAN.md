@@ -1,7 +1,22 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 7a (lynx): Wi-Fi and Bluetooth
 
-Status (2026-11-05): **parked.** The chip enumerates and reads host memory,
+Status (2026-11-13): **AoC-first firmware/scan reproduced; one guarded
+association, DHCP and verified HTTPS test passed on a local experimental
+kernel.** See [AOC-WIFI-PLAN.md](AOC-WIFI-PLAN.md) for the two kernel
+releases, the earlier WMI/TX stall, the successful retest and their limits.
+The code and overlays are not published; boot-time startup, reconnect,
+sustained traffic and suspend/resume remain unqualified. The experimental
+drivers stay blacklisted for boot. The owner has since rebooted; the guarded
+startup has not been repeated on that boot, so this is a recorded test
+result, not a claim that Wi-Fi is currently connected.
+
+Sections 1-8 below retain the investigation through 2026-11-05. Their parked
+state and next-step list describe that point in time; use the new AoC plan
+for current qualification and gates. Both stop conditions in section 6
+still apply. Tracking issue: #36.
+
+Historical status (2026-11-05): **parked.** The chip enumerates and reads host memory,
 but its boot ROM stops at its authentication stage on the first firmware
 load, with the same unsigned image stock loads in 57 ms. Every host-side
 difference two testers could act on has been tried one at a time, one
