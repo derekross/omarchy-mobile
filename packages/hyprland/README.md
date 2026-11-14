@@ -2,7 +2,7 @@
 # hyprland (Omarchy Mobile build)
 
 This is Omarchy's Hyprland 0.57.0-2 recipe (`hyprland` and `hyprpm`), built
-for aarch64 with two changes. Hyprland gave up on a refused DPMS commit after
+for aarch64 with three changes. Hyprland gave up on a refused DPMS commit after
 a single retry, and aquamarine refuses commits while a page flip is in
 flight. So when a client kept rendering, DPMS off was lost: Hyprland
 reported the screen off, but the CRTC never turned off. See
@@ -14,6 +14,7 @@ reported the screen off, but the CRTC never turned off. See
 | `nvidia-egl-teardown.patch`, `wl-output-global-grace.patch`, `monitor-rule-vrr.patch` | Omarchy's patches from the same commit, unchanged (what they fix: their comments in `prepare()`) |
 | `0001-dpms-keep-retrying-a-refused-dpms-commit.patch` | The Omarchy Mobile change to `src/output/Monitor.cpp` |
 | `0002-render-hold-the-last-frame-across-a-rotation.patch` | The Omarchy Mobile change to `src/render/Renderer.cpp` and `src/render/OpenGL.cpp` (the rotation hold, below) |
+| `0003-session-lock-configure-the-lock-surface-on-a-turn.patch` | The Omarchy Mobile change to `src/protocols/SessionLock.cpp` and `SessionLock.hpp` (a turned monitor configures its lock surface, below) |
 
 ## What differs from Omarchy's `hyprland` 0.57.0-2
 
@@ -32,11 +33,27 @@ reported the screen off, but the CRTC never turned off. See
   Hyprland's environment (read once at startup): `omamobile-device-panther`
   sets it in `environment.d`, and the other phones rotate as before until
   it has run on them.
-- `pkgrel=3.3`: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
+- The lock surface follows a turn (0003). Hyprland 0.57 applies a monitor
+  rule that differs from the active one only in "soft" properties, the
+  transform among them, through `CMonitor::applyMonitorRuleSoft()`: the
+  monitor gets its turned size and the layout is arranged again, but
+  `modeChanged` isn't emitted, and that event is the only one on which a
+  session-lock surface is sent a new `configure`. omamobile-autorotate's
+  rule change is exactly that, so a phone locked on its side, or turned as
+  it locked, kept a lock screen of the size it was made with after
+  autorotate turned the locked screen back to portrait: drawn stretched
+  over the turned output, with touch off its targets, until it was unlocked
+  (#522). The lock surface now also follows the monitor layout, as
+  `xdg_output` does, and is sent a `configure` when the monitor's size is
+  no longer the one it was last told. A turn made while the display is off
+  is applied by Hyprland at the next wake, and the lock surface is
+  configured then. Hyprland's main branch had the same gap on 2026-11-13.
+- `pkgrel=3.4`: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
   (`extra/hyprland` 0.57.0-3, a rebuild for aquamarine 0.16.0 and
   hyprgraphics 0.6.0) release, plus `.1`, so it sorts above both; `.2` for
   the rotation hold, since 3.1 is published; `.3` for the half turn's
-  383 ms and the alpha-out curve, since 3.2 is published.
+  383 ms and the alpha-out curve, since 3.2 is published; `.4` for the
+  lock surface, since 3.3 is published.
 - `arch=(aarch64)` only.
 - `build()` runs the two cmake steps of `make release` itself:
   - with Arch's `-DCMAKE_SKIP_RPATH=ON` (Arch's PKGBUILD seds it into the
@@ -54,6 +71,36 @@ of hyprwm/Hyprland#16343. 0.57.0 includes that change
 Omarchy dropped the patch, so it is gone here too.
 
 ## Status
+
+**0.57.0-3.4 (0003, the lock surface follows a turn), built on 2026-11-13
+and running on a Pixel 9a since 2026-11-14.** Built from this PKGBUILD in
+an Arch Linux ARM container on an aarch64 host (`-j8`, 6 min), against
+`extra`'s aquamarine 0.16.0, hyprgraphics 0.6.0 and hyprutils 0.14.3, the
+versions the phone runs; all six patches apply with `--fuzz=0`.
+`tools/lock-turn-test` locks with a bare lock client, turns the monitor a
+quarter and back with a rule change in which only the transform differs,
+and compares the lock surface's size with the monitor's:
+
+| Where | hyprland | A quarter turn |
+| --- | --- | --- |
+| Pixel 9a | 0.57.0-3.3 | not ok: the monitor is 909x405, the lock surface 405x909 |
+| A VM with the 9a's packages and phone session (vkms, 1080x2424 at 8/3) | 0.57.0-3.1 | not ok, the same sizes |
+| The same VM | 0.57.0-3.4 | ok, three runs; ok twice more with `OMAMOBILE_ROTATION_HOLD=1` |
+| Pixel 9a | 0.57.0-3.4 | ok, three runs |
+
+With `WAYLAND_DEBUG=1` on a lock client in the VM, 0.57.0-3.1 sent one
+`ext_session_lock_surface_v1.configure(405, 909)` at the lock and none for
+four quarter turns, while `zxdg_output_v1.logical_size` followed each;
+0.57.0-3.4 sends a configure with the new size after each quarter turn.
+Omarchy's own lock, read back from the scanout buffer (`ffmpeg -f
+kmsgrab`): on the 9a with 0.57.0-3.3, turned to landscape and back while
+locked, it stayed 909x405 and was drawn squeezed into the portrait screen;
+with 0.57.0-3.4, locked in landscape and then turned to portrait, it is
+drawn at 405x909. In the VM with 0.57.0-3.4 it also came out right after a
+turn made while the display was off (applied at the wake).
+
+Not tested: the Pixel 7 Pro and the Pixel 7 (the rotation hold was only
+run in the VM), and an external monitor.
 
 **0.57.0-3.1, built natively on the phone (2026-11-02), not installed yet.**
 Arch Linux ARM moved `extra` to aquamarine 0.16.0 (`libaquamarine.so=15`)
@@ -204,7 +251,9 @@ rebuilds:
    hyprgraphics, hyprutils, ...), even with no new Hyprland: our build
    pins the old one, and `extra` drops it.
 
-Drop the DPMS patch once upstream retries refused DPMS commits.
+Drop the DPMS patch once upstream retries refused DPMS commits, and 0003
+once upstream configures a lock surface when its monitor is only turned
+(`tools/lock-turn-test` passes without it then).
 
 **`tools/repo-build`:**
 - Packages are listed explicitly, so add `packages/hyprland` only when it

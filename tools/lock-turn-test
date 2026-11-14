@@ -1,0 +1,233 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# On-phone check that a locked screen follows a turn of the monitor
+# (packages/hyprland, patch 0003). Run it on the phone, in a terminal of
+# the session or over SSH as the session's user:
+#
+#   tools/lock-turn-test                  lock, turn a quarter and back, report
+#   tools/lock-turn-test --monitor NAME   another output than the first
+#   tools/lock-turn-test --unlock         only open a lock that a killed run
+#                                         left behind
+#
+# It locks the session for about five seconds with a lock client of its own
+# (Quickshell, ext-session-lock-v1: one bare surface per output that reports
+# its size), turns the monitor a quarter and back with a rule change in
+# which only the transform differs, as omamobile-autorotate's does, and
+# checks after each turn that the lock surface has the monitor's new size.
+# Hyprland applies such a change without a mode change, and a compositor
+# that doesn't tell a lock surface about it fails the two turn checks: the
+# surface keeps the size it was made with, and the lock screen is drawn
+# stretched over the turned output until it is unlocked.
+#
+# It takes over the screen while it runs, so announce it, and leave the
+# phone lying still: a turn by the accelerometer in between spoils the run
+# (reported as "not run"). The screen must be on and the phone unlocked.
+# Nothing needs root. The lock client opens by itself after 20 s whatever
+# happens to this script, the monitor is turned back on exit, also after
+# Ctrl-C or a hang-up, and --unlock opens a lock whose client was killed
+# (Omarchy's Hyprland lets a new client take such a lock over).
+#
+# Each check prints ok or not ok. The exit status is 0 when all passed, 1
+# when one failed, and 2 when the check could not run.
+set -u
+
+me=${0##*/}
+monitor="" unlock_only=0
+while (($#)); do
+  case $1 in
+    --monitor) monitor=${2:?--monitor NAME}; shift ;;
+    --unlock) unlock_only=1 ;;
+    -h|--help) awk 'NR > 2 && !/^#/ { exit } NR > 2' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "$me: unknown option $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+die() { echo "$me: $*" >&2; exit 2; }
+for c in hyprctl jq qs; do
+  command -v "$c" >/dev/null 2>&1 || die "$c not found"
+done
+
+# The session's sockets: a terminal in the session has them, a login over
+# SSH takes them from the user's systemd manager.
+if [[ -z ${HYPRLAND_INSTANCE_SIGNATURE:-} || -z ${WAYLAND_DISPLAY:-} ]]; then
+  export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+  while IFS='=' read -r k v; do
+    case $k in HYPRLAND_INSTANCE_SIGNATURE|WAYLAND_DISPLAY) export "$k=$v" ;; esac
+  done < <(systemctl --user show-environment 2>/dev/null)
+fi
+[[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} && -n ${WAYLAND_DISPLAY:-} ]] ||
+  die "no Hyprland session found: run it as the user of the session"
+
+dir=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/lock-turn-test.XXXXXX") || die "no temporary directory"
+pid="" turned="" t0=""
+
+# The lock client: one surface per output that says how large it is, each
+# time that changes. It opens when asked to (IPC) and after LOCKTURN_HOLD_MS
+# on its own; with 0 it opens as soon as it holds the lock (--unlock).
+cat >"$dir/shell.qml" <<'QML'
+import QtQuick
+import Quickshell
+import Quickshell.Io
+import Quickshell.Wayland
+
+ShellRoot {
+  id: root
+  readonly property int holdMs: Number(Quickshell.env("LOCKTURN_HOLD_MS") || 20000)
+  function say(what) { console.log("LOCKTURN " + what) }
+  function open() { lock.locked = false; quit.start() }
+
+  WlSessionLock {
+    id: lock
+    locked: true
+    onSecureStateChanged: {
+      root.say("secure " + secure)
+      if (secure && root.holdMs === 0) root.open()
+    }
+
+    WlSessionLockSurface {
+      id: surface
+      color: "#1e1e2e"
+      function report() {
+        if (width > 0 && height > 0) root.say("size " + (screen ? screen.name : "?") + " " + width + "x" + height)
+      }
+      onWidthChanged: report()
+      onHeightChanged: report()
+
+      Text {
+        anchors.centerIn: parent
+        color: "#cdd6f4"
+        font.pixelSize: 20
+        horizontalAlignment: Text.AlignHCenter
+        text: "lock-turn-test\n" + surface.width + " x " + surface.height + "\nopens by itself"
+      }
+    }
+  }
+
+  IpcHandler {
+    target: "lockturn"
+    function unlock(): void { root.open() }
+  }
+
+  Timer { interval: Math.max(root.holdMs, 1); running: root.holdMs > 0; onTriggered: root.open() }
+  Timer { id: quit; interval: 500; onTriggered: Qt.quit() }
+}
+QML
+
+client() { # hold in ms; nohup, so a hang-up here can't kill a client that holds the lock
+  LOCKTURN_HOLD_MS=$1 nohup qs -p "$dir/shell.qml" >"$dir/log" 2>&1 &
+  pid=$!
+}
+alive() { [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null; }
+said() { grep -a -c -- "LOCKTURN $1" "$dir/log" >/dev/null 2>&1; }
+# wait_for SECONDS COMMAND...: true as soon as the command is
+wait_for() {
+  local n=$(($1 * 10)); shift
+  while ((n-- > 0)); do
+    "$@" && return 0
+    sleep 0.1
+  done
+  "$@"
+}
+gone() { ! alive; }
+
+# Ask the client to open; never kill one that may hold the lock, it opens by
+# itself when its time is up.
+open_lock() {
+  alive || return 0
+  qs ipc --pid "$pid" call lockturn unlock >/dev/null 2>&1
+  wait_for 5 gone || echo "$me: the lock client is still up; it opens by itself within 20 s (or: $me --unlock)" >&2
+}
+
+cleanup() {
+  trap - EXIT
+  open_lock
+  [[ -n $turned && -n $t0 ]] && turn "$t0"
+  rm -rf "$dir"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 129' HUP
+trap 'exit 143' TERM
+
+if ((unlock_only)); then
+  client 0
+  if wait_for 10 gone; then
+    echo "ok - took the lock over and opened it"
+    exit 0
+  fi
+  echo "not ok - the lock client did not get the lock and open it:"
+  grep -a -i -m 5 -E 'lock|error|fail' "$dir/log"
+  exit 1
+fi
+
+# The monitor as it is now.
+m=$(hyprctl -j monitors 2>/dev/null |
+  jq -c --arg n "$monitor" '[.[] | select($n == "" or .name == $n)][0] // empty' 2>/dev/null)
+[[ -n $m ]] || die "no monitor${monitor:+ named $monitor}"
+read -r mon scale t0 dpms pw ph rate px py < <(jq -r \
+  '"\(.name) \(.scale) \(.transform) \(.dpmsStatus) \(.width) \(.height) \(.refreshRate) \(.x) \(.y)"' <<<"$m")
+[[ $dpms == true ]] || die "the screen is off: turn it on first"
+if command -v omarchy-shell >/dev/null 2>&1 && [[ $(omarchy-shell lock isLocked 2>/dev/null) == true ]]; then
+  die "the phone is locked: unlock it first"
+fi
+
+# The size Hyprland gives the monitor for a transform, rounded as it rounds.
+logical() {
+  jq -rn --argjson w "$pw" --argjson h "$ph" --argjson s "$scale" --argjson t "$1" \
+    'if $t % 2 == 1 then [$h, $w] else [$w, $h] end | map(. / $s | round) | "\(.[0])x\(.[1])"'
+}
+# The monitor's rule as it stands, with the transform given: mode, position
+# and scale are what Hyprland reports, so only the transform ever changes,
+# and the touchscreen turns with the monitor, as omamobile-autorotate has it.
+turn() {
+  hyprctl eval "hl.monitor({ output = \"$mon\", mode = \"${pw}x${ph}@${rate}\", position = \"${px}x${py}\", scale = $scale, transform = $1 }); hl.config({ input = { touchdevice = { transform = $1, output = \"$mon\" } } })" >/dev/null 2>&1
+}
+transform_is() { [[ $(hyprctl -j monitors 2>/dev/null | jq -r --arg n "$mon" '.[] | select(.name == $n) | .transform') == "$1" ]]; }
+surface_size() { grep -a -o "LOCKTURN size $mon [0-9]*x[0-9]*" "$dir/log" 2>/dev/null | tail -n 1 | awk '{ print $NF }'; }
+surface_is() { [[ $(surface_size) == "$1" ]]; }
+
+echo "# $me: $mon ${pw}x${ph} at scale $scale, transform $t0; the screen is locked for about five seconds"
+fail=0
+ok() { echo "ok - $*"; }
+not_ok() { echo "not ok - $*"; fail=1; }
+
+# The rule as this script writes it, before the lock: from here on a turn
+# differs from the active rule in its transform alone.
+turned=1
+turn "$t0"
+sleep 0.3
+transform_is "$t0" || die "not run: the monitor did not keep transform $t0"
+
+client 20000
+if ! wait_for 8 said "secure true"; then
+  echo "$me: the lock client did not get the lock:" >&2
+  grep -a -i -m 5 -E 'lock|error|fail' "$dir/log" >&2
+  exit 2
+fi
+
+want=$(logical "$t0")
+if wait_for 3 surface_is "$want"; then
+  ok "the lock surface is made at the monitor's size, $want"
+else
+  not_ok "the lock surface is made at $(surface_size), the monitor is $want"
+fi
+
+# check_turn TRANSFORM WHAT
+check_turn() {
+  local want
+  want=$(logical "$1")
+  turn "$1"
+  wait_for 2 transform_is "$1" || { echo "$me: not run: the monitor did not turn to transform $1" >&2; exit 2; }
+  if wait_for 3 surface_is "$want"; then
+    ok "$2 (transform $1): the lock surface is $want, as the monitor"
+  else
+    not_ok "$2 (transform $1): the monitor is $want, the lock surface $(surface_size)"
+  fi
+  transform_is "$1" || { echo "$me: not run: something else turned the monitor meanwhile" >&2; exit 2; }
+}
+check_turn $(((t0 + 1) % 4)) "a quarter turn"
+check_turn "$t0" "turned back"
+
+open_lock
+exit "$fail"
