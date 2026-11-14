@@ -3875,3 +3875,107 @@ panel goes dark; then M6.4 (20 sleeps through the shell's auto-sleep, the
 modem registered and a ping over `rmnet` after each, no UFS line) and M6.5
 (a day of use with the modem up). Then DEVICES' Suspend cell moves to
 "works".
+
+## Read-only SIM number query (2026-11-14)
+
+`omamobile-sit own-number [--json]` asks the existing daemon to read
+EF_MSISDN (6F40) from the ready USIM. The daemon remains the only IPC0
+owner. This is an explicit private socket action, not an automatic
+startup or status query: no number is cached in status, subscriptions,
+the database, the public state file or logs. The ModemManager bridge's
+`OwnNumbers` policy is unchanged.
+
+The separate `allow_msisdn` owner flag grants only GET RESPONSE and
+absolute READ RECORD on that file, under the USIM ADF, with no PIN2 or
+write data. Record sizes, counts and total time are bounded. The first
+version does not read extension files: an extension-dependent number
+is reported incomplete rather than silently truncated. A missing or
+unreadable file is unavailable, distinct from a successfully read file
+with empty records. A SIM-stored number is not proof of the current
+carrier-assigned number.
+
+The synchronous query has a five-second SIM-read budget, with each modem
+request limited to three seconds or the remaining budget, whichever is
+shorter. Incoming indications wait while the read runs; processing them
+afterwards can add to the command's response time. Active calls are
+refused; incoming-call latency during a slow SIM response has not been
+qualified. Use the command while the phone is idle. A slow or multi-record
+SIM can time out with this shorter budget; that returns unavailable with
+no partial number list. Whether to offer this subscriber identifier over
+the private socket remains the maintainer's decision; this does not settle
+the separate identifiers-over-D-Bus question.
+
+Gated runbook (no kernel or boot-image changes):
+
+1. **Offline, no hardware risk:** run
+   `tools/pr-check origin/main`, `tests/all` and
+   `tests/packages omamobile-modem-sit`, then
+   `tools/build-packages --local cheetah --force packages/omamobile-modem-sit`.
+   Expect the SIM parser, byte-by-byte transport
+   restrictions, authorized socket action, CLI and privacy tests to
+   pass. Stop on any failure. Rollback: discard the local feature files.
+2. **Install, low risk:** preserve the installed package and private
+   configuration. Upgrade to the package built from the rebased branch
+   through the project's package tooling. Record
+   `pacman -Q omamobile-modem-sit`; expect the built version and the
+   existing sitd PID unchanged. The merge version is the maintainer's call.
+   Stop if an unrelated dependency or service change is required. Do not
+   remove the package or restart sitd on a running CP. Rollback: install
+   the saved previous package, leaving the running daemon alone.
+3. **Activate, attended reboot:** check NV backups and charging; inspect
+   the modem's existing markers and ensure no live call. Ask the owner
+   before the reboot (AGENTS section 1). Use a clean systemd reboot so
+   the modem's stop hook clears its online marker. Expect the same
+   kernel, then modem ONLINE and sitd running. Stop on lost SSH beyond
+   three minutes, CP crash, or storage errors; do not retry the profile
+   in the same boot. Rollback: the saved package and another approved
+   clean reboot.
+4. **Query, bounded read-only:** with no live call, run
+   `omamobile-sit own-number --json` once. Expect `source: sim` and one
+   of available, empty, unavailable or incomplete. Return a number only
+   for available; do not publish the number or raw SIM data in this
+   runbook. Stop on any timeout, parser refusal, modem state change or
+   unexpected kernel error. Verify voice/SMS registration and data
+   remain as before. No SIM write or retry with arbitrary APDUs is a
+   recovery action. Run `tools/phone-smoke` and retain only its sanitized
+   report. Record a status-only query result, never the number.
+
+**Results, 2026-11-14:** kernel
+`7.3.0-rc6-omamobile-g1a9d1d4e9289`, local
+`omamobile-modem-sit` 0.3.31.1-1. The installed 0.3.31 baseline matched
+the source files before patching. Thirty-nine targeted parser, guard,
+private socket and CLI tests passed, as did the full package suite with
+the RIL simulator and the native aarch64 build. The original package was
+rebuilt and kept for rollback. The
+upgrade preserved the running daemon PID and the private configuration.
+
+After the owner's approved clean reboot
+(`systemctl reboot --reboot-argument=omamobile`), the same kernel booted,
+the modem came ONLINE and registration completed. One explicit query
+returned `available`, `source: sim`, with one number; the value is not
+recorded here. The number was absent from public state and the daemon
+journal. The modem, sitd, cellular-data service and ModemManager bridge
+remained active; the SIM was ready, LTE registered at home, and IMS
+voice/SMS and data remained available. No current-boot UFS error-handler
+pass, I/O error, oops, failed BME access or watchdog-stop error was found.
+The test wrapper also temporarily changed systemd's runtime watchdog,
+an extra operator step omitted from the original runbook. It first read
+`RuntimeWatchdogUSec` as `t 0` (disabled), then ran:
+
+```sh
+busctl --system set-property org.freedesktop.systemd1 \
+  /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager \
+  RuntimeWatchdogUSec t 60000000
+```
+
+That armed a 60-second runtime watchdog around the one query, whose
+wrapper had a 22-second subprocess timeout. A `finally` block restored
+the captured previous value with the same `busctl` command and `t 0`;
+the post-query readback was `t 0`. No persistent watchdog configuration
+was edited. The contemporaneous record does not explain why this extra
+step was taken; treating it as a recovery precaution is an inference,
+not a qualification of the query or a required feature setting.
+
+That local build had the original 15-second SIM-read budget. Its result
+does not qualify the rebased branch or the shorter budget. Other devices
+and incoming calls during a query were not tested.
