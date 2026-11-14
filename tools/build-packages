@@ -65,7 +65,12 @@ source tools/lib/alarm.sh
 
 SLOW=(mesa hyprland libcamera)
 # Packed from a staged kernel build: built only when named (see above)
-NAMED_ONLY=(linux-omamobile)
+# omamobile-install-link too, for now: its Rust toolchain doesn't install in
+# the builder's container while Arch Linux ARM's openssl 3 to 4 change is
+# half done there (2026-11-14: openssl-3's libcrypto.so.3 conflicts with
+# the container's openssl). Named, it still builds; root images leave it out
+# unless built for the link (rootfs/build-inside), and no image is yet.
+NAMED_ONLY=(linux-omamobile omamobile-install-link)
 repo=out/repo/aarch64
 # Exit 3 means exactly "built and signed everything but the skipped device
 # packages", which <repo>/../.skipped then lists: any other exit with 3 (a
