@@ -224,6 +224,79 @@ class SimulatorTests(unittest.TestCase):
         self.daemon.send_signal(signal.SIGTERM)
         self.assert_release_recovery('a call release was not confirmed at service stop', 1)
 
+    def forwarded_back_call(self):
+        """Dial a number that forwards back here: the dialled call ends and
+        a call the modem no longer has keeps ringing."""
+        self.start('--forwarded-back')
+        self.wait_ready()
+        self.cli('dial', '+12025550199')
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            calls = json.loads(self.cli('status', '--json'))['calls']
+            if sorted(c['state'] for c in calls) == ['ringing-in', 'terminated']:
+                return next(c for c in calls if c['state'] == 'ringing-in')
+            time.sleep(.1)
+        self.fail('no stale ringing call: ' + json.dumps(calls))
+
+    def assert_stale_call_ended(self, why, request):
+        calls = json.loads(self.cli('status', '--json'))['calls']
+        self.assertEqual([c['state'] for c in calls], ['terminated', 'terminated'])
+        # Longer than the 12 s hangup deadline: sitd is still serving.
+        time.sleep(13)
+        self.assertIsNone(self.daemon.poll())
+        self.assertEqual(json.loads(self.cli('status', '--json'))['modem']['stage'], 'running')
+        self.assertEqual(json.loads((self.dir / 'run' / 'active.json').read_text()), [])
+        entries = self.transcript_entries()
+        self.assertFalse([e for e in entries if 'violation' in e])
+        self.assertFalse([e for e in entries if e.get('type') == 'at' and e['cmd'] == 'AT+CFUN=0'])
+        refused = [e for e in entries if e.get('type') == 'resp' and e['id'] == request]
+        self.assertEqual([e['err'] for e in refused], [2])
+        log = (self.dir / 'daemon.log').read_text()
+        self.assertIn(f'Call check after {why}: the modem lists no call; 1 stale call(s) ended here', log)
+        self.assertNotIn('Call release not confirmed', log)
+        self.assertNotIn('2025550', log)
+        self.daemon.send_signal(signal.SIGTERM)
+        self.assertEqual(self.daemon.wait(15), 0)
+
+    def test_refused_hangup_of_a_call_the_modem_no_longer_lists_ends_it_here(self):
+        self.forwarded_back_call()
+        self.cli('hangup')
+        self.assert_stale_call_ended('a refused hang-up', 0x0d03)
+
+    def test_refused_answer_of_a_call_the_modem_no_longer_lists_ends_it_here(self):
+        self.forwarded_back_call()
+        refused = subprocess.run([sys.executable, str(BIN / 'omamobile-sit'), 'answer'], env=self.env,
+                                 capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn('already ended', refused.stderr)
+        self.assert_stale_call_ended('a refused answer', 0x0d02)
+
+    def test_stale_call_at_service_stop_ends_here_and_sitd_exits_cleanly(self):
+        self.forwarded_back_call()
+        self.daemon.send_signal(signal.SIGTERM)
+        self.assertEqual(self.daemon.wait(25), 0)
+        self.assertEqual(json.loads((self.dir / 'run' / 'active.json').read_text()), [])
+        log = (self.dir / 'daemon.log').read_text()
+        self.assertIn('Call check after the service stop: the modem lists no call', log)
+        self.assertNotIn('Call release not confirmed', log)
+        at = [e['cmd'] for e in self.transcript_entries() if e.get('type') == 'at']
+        self.assertNotIn('AT+CFUN=0', at)
+
+    def test_pending_dial_the_modem_does_not_list_yet_is_still_unconfirmed(self):
+        # A dial that timed out is still pending when the deadline expires.
+        # The modem doesn't list it (yet), but it may still go through, so
+        # the call isn't ended here: the old path.
+        self.start('--silent-dial')
+        self.wait_ready()
+        uncertain = subprocess.run([sys.executable, str(BIN / 'omamobile-sit'), 'dial', '+12025550199'],
+                                   env=self.env, capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(uncertain.returncode, 0)
+        self.assertIn('uncertain', uncertain.stderr)
+        self.assert_release_recovery('hangup deadline expired', 0)
+        ids = [e['id'] for e in self.transcript_entries() if e.get('type') == 'req']
+        self.assertEqual(ids.count(0x0000), 1)      # the dial's own check only
+        self.assertNotIn('stale call', (self.dir / 'daemon.log').read_text())
+
     def test_unresolved_previous_call_turns_radio_off_before_exiting(self):
         (self.dir / 'run' / 'active.json').write_text('[{}]')
         self.start(bringup=False)

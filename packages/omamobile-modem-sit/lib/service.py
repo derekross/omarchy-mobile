@@ -503,8 +503,48 @@ class Service:
                 break
             self.event(packet)
         if self.hangup_deadline and time.monotonic() > self.hangup_deadline:
+            if self.reconcile('the hangup deadline expired'):
+                return
             self.release_unconfirmed = True
             unconfirmed_release(self.client, 'hangup deadline expired')
+
+    def reconcile(self, why):
+        """Ask the modem before giving a call up as unconfirmed.
+
+        A call forwarded straight back to this phone rings here, the
+        outgoing call ends with cause 17, and the modem never mentions the
+        incoming one again: it refuses the answer and the hang-up (error 2)
+        and lists no call. If GET_CURRENT_CALLS is empty, the calls still
+        shown here are stale and end here; True then. The dial action relies
+        on the same answer before it dials.
+
+        Not while a dial's setup is pending (no status yet, so no modem ID):
+        the modem may not list a late dial yet, and ending it here would
+        drop the status of a call that then connects. That case, a modem
+        that lists a call and one that doesn't answer stay with
+        unconfirmed_release().
+        """
+        if self.pending or any(call['modem_id'] is None for call in self.live()):
+            return False
+        try:
+            listed = self.client.request(0x0000, timeout=5)
+        except (ModemError, TimeoutError, OSError) as error:
+            print('Call check after', why, 'failed:', type(error).__name__, flush=True)
+            return False
+        if listed != bytes(4):
+            print('Call check after', why + ': the modem still lists a call', flush=True)
+            return False
+        stale = self.live()
+        for call in stale:
+            call['state'] = 'terminated'
+            call['reason'] = 'error'
+            call['since'] = time.time()
+        self.hangup_deadline = None
+        self.audio_stop()
+        self.save_calls()
+        print('Call check after', why + ': the modem lists no call;', len(stale), 'stale call(s) ended here',
+              flush=True)
+        return True
 
     def send_sms(self, request):
         key = request.get('request_id', '')
@@ -741,12 +781,22 @@ class Service:
                 try:
                     # Ordinary voice, audio send/receive, no video.
                     self.client.request(0x0d02, struct.pack('<HHH', 1, 1, 0))
+                except ModemError:
+                    if self.reconcile('a refused answer'):
+                        raise RuntimeError('This call has already ended')
+                    self.hangup_deadline = time.monotonic() + 12
+                    raise
                 except BaseException:
                     self.hangup_deadline = time.monotonic() + 12
                     raise
             else:
                 self.hangup_deadline = time.monotonic() + 12
-                self.client.request(0x0d03, bytes([call['modem_id'], 1, 0]))
+                try:
+                    self.client.request(0x0d03, bytes([call['modem_id'], 1, 0]))
+                except ModemError:
+                    if self.reconcile('a refused hang-up'):
+                        return {}
+                    raise
             self.pump()
             return {}
         if action == 'audio':
@@ -983,7 +1033,7 @@ def main():
                     packet = client.next_indication(.25)
                     if packet:
                         service.event(packet)
-                if service.live():
+                if service.live() and not service.reconcile('the service stop'):
                     service.release_unconfirmed = True
                     unconfirmed_release(client, 'a call release was not confirmed at service stop')
         finally:
