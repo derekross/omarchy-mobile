@@ -249,6 +249,77 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.service.live(), [call])
         self.assertTrue(json.loads((self.root/'active.json').read_text()))
 
+    def stale_ring(self):
+        n=b'+12025550123'; body=struct.pack('<HBH',1,8,len(n))+n
+        self.service.event(struct.pack('<BBHHH',2,0,0x0d01,8+len(body),0)+body)
+        return self.service.live()[0]
+
+    def test_refused_hangup_of_a_call_the_modem_does_not_list_ends_it_here(self):
+        call = self.stale_ring()
+        self.service.audio = MagicMock()
+        self.client.request.side_effect = [app_service.ModemError(2, b''), bytes(4)]
+        with patch.object(app_service, 'radio') as radio:
+            self.assertEqual(self.service.dispatch(dict(action='hangup', id=call['id'])), {})
+            self.service.pump()
+            radio.assert_not_called()
+        self.assertEqual([c.args[0] for c in self.client.request.call_args_list], [0x0d03, 0x0000])
+        self.assertEqual((call['state'], call['reason']), ('terminated', 'error'))
+        self.assertIsNone(self.service.hangup_deadline)
+        self.assertIsNone(self.service.audio)
+        self.assertFalse(self.service.release_unconfirmed)
+        self.assertEqual(json.loads((self.root/'active.json').read_text()), [])
+
+    def test_refused_answer_of_a_call_the_modem_does_not_list_ends_it_here(self):
+        call = self.stale_ring()
+        self.client.request.side_effect = [app_service.ModemError(2, b''), bytes(4)]
+        with self.assertRaisesRegex(RuntimeError, 'already ended'):
+            self.service.dispatch(dict(action='accept', id=call['id']))
+        self.assertEqual(call['state'], 'terminated')
+        self.assertIsNone(self.service.hangup_deadline)
+
+    def test_refused_hangup_of_a_call_the_modem_still_lists_keeps_the_deadline(self):
+        call = self.stale_ring()
+        self.client.request.side_effect = [app_service.ModemError(2, b''), struct.pack('<I', 1)]
+        with self.assertRaises(app_service.ModemError):
+            self.service.dispatch(dict(action='hangup', id=call['id']))
+        self.assertEqual(call['state'], 'ringing-in')
+        self.assertIsNotNone(self.service.hangup_deadline)
+
+    def test_call_check_that_fails_keeps_the_deadline(self):
+        call = self.stale_ring()
+        self.client.request.side_effect = [app_service.ModemError(2, b''), TimeoutError()]
+        with self.assertRaises(app_service.ModemError):
+            self.service.dispatch(dict(action='hangup', id=call['id']))
+        self.assertEqual(call['state'], 'ringing-in')
+        self.assertIsNotNone(self.service.hangup_deadline)
+
+    def test_pending_dial_is_never_ended_by_the_call_check(self):
+        # A dial that timed out: still pending, no modem ID, and the modem
+        # doesn't list it yet. The deadline must not end it here.
+        self.client.request.side_effect = [bytes(4), TimeoutError()]
+        with self.assertRaisesRegex(RuntimeError, 'uncertain'):
+            self.service.dispatch(dict(action='dial', number='+12025550123'))
+        call = self.service.live()[0]
+        self.assertEqual(self.service.pending, call['id'])
+        self.client.request.reset_mock(side_effect=True)
+        self.client.request.return_value = bytes(4)
+        self.assertFalse(self.service.reconcile('a test'))
+        self.client.request.assert_not_called()
+        self.service.hangup_deadline = 0.001
+        with patch.object(app_service, 'radio'), \
+             patch.object(app_service.cp, 'state', return_value=app_service.cp.ONLINE):
+            with self.assertRaises(app_service.UnconfirmedRelease): self.service.pump()
+        self.assertTrue(self.service.release_unconfirmed)
+        self.assertEqual((call['state'], self.service.pending), ('dialing', call['id']))
+
+    def test_call_without_a_modem_id_is_never_ended_by_the_call_check(self):
+        self.stale_ring()
+        late = self.service.new_call('+12025550123', 'outgoing', 'dialing')
+        self.client.request.return_value = bytes(4)
+        self.assertFalse(self.service.reconcile('a test'))
+        self.client.request.assert_not_called()
+        self.assertEqual(late['state'], 'dialing')
+
 
 class RefusedAudioTests(unittest.TestCase):
     def test_a_refused_audio_route_does_not_stop_the_call(self):

@@ -24,7 +24,8 @@ fictional 555-01xx ones, addresses are from the documentation ranges.
 
   tools/sit-sim --ipc PATH --router PATH [--transcript FILE] [--search-polls N]
                 [--incoming-sms] [--no-sim] [--reject-setup CAUSE]
-                [--no-ims-registration] [--unconfirmed-hangup] [--control PATH]
+                [--no-ims-registration] [--unconfirmed-hangup] [--forwarded-back]
+                [--silent-dial] [--control PATH]
                 [--imsi-plmn MCCMNC] [--no-imsi]
 
 GET_IMSI answers a home network code (--imsi-plmn, default the test
@@ -33,6 +34,11 @@ network 00101) and a made-up subscriber part; --no-imsi refuses it.
 --no-ims-registration accepts ADD_PDN_INFO but never registers IMS (a
 carrier whose IMS values differ). --unconfirmed-hangup acknowledges hangup
 requests but leaves the call active and never sends a release indication.
+--forwarded-back is a dialled number that forwards straight back to this
+phone: the dial is accepted, a second call ID rings, the dialled call ends
+with cause 17, and the modem never mentions the ringing call again: the call
+list is empty, and answering it or hanging it up is refused with error 2.
+--silent-dial never answers AIMS_DIAL and lists no call (a late dial).
 --control PATH is a datagram socket for tests: "ring" (an incoming IMS call),
 "remote-hangup" (the far end ends the current call), "sms" (one text
 message), "wap-push" (one MMS notification: an 8-bit SMS to port 2948).
@@ -287,6 +293,15 @@ class Sim:
 
     def r_0d00(self, mid, token, p):            # AIMS_DIAL
         call_id = 1
+        if self.a.silent_dial:
+            return
+        if self.a.forwarded_back:
+            caller = TEST_SENDER.encode()
+            self.respond(mid, token)
+            self.after(0.05, lambda: self.call_status(call_id, 2, 31))
+            self.after(0.1, lambda: self.indicate(0x0d01, struct.pack('<HBH', 1, 2, len(caller)) + caller))
+            self.after(0.15, lambda: self.call_status(call_id, 6, 17))
+            return
         self.calls[call_id] = 'dialing'
         self.respond(mid, token)
         self.after(0.05, lambda: self.call_status(call_id, 2))
@@ -295,6 +310,8 @@ class Sim:
     def r_0d03(self, mid, token, p):            # AIMS_HANGUP
         if self.a.unconfirmed_hangup:
             return self.respond(mid, token)
+        if self.a.forwarded_back and p[0] not in self.calls:
+            return self.respond(mid, token, 2)
         self.calls.pop(p[0], None)
         self.respond(mid, token)
         self.after(0.05, lambda: self.call_status(p[0], 6, 16))
@@ -302,7 +319,7 @@ class Sim:
     def r_0d02(self, mid, token, p):            # AIMS_ANSWER
         ringing = [c for c, state in self.calls.items() if state == 'ringing-in']
         if not ringing:
-            return self.respond(mid, token, 6)
+            return self.respond(mid, token, 2 if self.a.forwarded_back else 6)
         self.calls[ringing[0]] = 'active'
         self.respond(mid, token)
         self.after(0.05, lambda: self.call_status(ringing[0], 0))
@@ -368,6 +385,8 @@ def main():
     p.add_argument('--reject-setup', type=int, default=0)
     p.add_argument('--no-ims-registration', action='store_true')
     p.add_argument('--unconfirmed-hangup', action='store_true')
+    p.add_argument('--forwarded-back', action='store_true')
+    p.add_argument('--silent-dial', action='store_true')
     p.add_argument('--control')
     p.add_argument('--imsi-plmn', default='00101')
     p.add_argument('--no-imsi', action='store_true')
