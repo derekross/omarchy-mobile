@@ -35,7 +35,12 @@
 # keys, no pacman keyring, no machine id, no Google file and no per-phone
 # data. tools/install-phone adds the owner's firstboot.conf to a copy of it;
 # omamobile-firstboot does the rest on the phone, and the initramfs grows it
-# to the whole userdata partition on the first boot.
+# to the whole userdata partition on the first boot. It carries placeholders
+# for firstboot.conf and boot-update.conf (rootfs/placeholders): one block
+# each, holding no answers, which the desktop installer and the web page fill
+# in place as they stream the image; the MANIFEST's "answers placeholder:"
+# lines say where they are in the raw image, and tools/make-bundle signs
+# them into manifest.json.
 #
 #   tools/build-rootfs [--version V] [--allow-missing "PKG..."] [--keep-raw]
 #                      [--local NAME] [--channel stable|development|local]
