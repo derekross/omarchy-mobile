@@ -12,13 +12,12 @@ It declares Mesa for the tested Freedreno graphics stack and the Qualcomm
 QRTR userspace packages needed by the WLAN and modem stacks. Their services
 are not enabled here.
 
-The published Dipper device tree requests `adsp.mbn`, `a630_zap.mbn`,
-`ipa_fws.mbn`, `mba.mbn` and `modem.mbn` under
-`qcom/sdm845/Xiaomi/dipper/`, plus Bluetooth calibration
-`Xiaomi/dipper/crnv21.bin`. These device-specific blobs must be extracted
-from the owner's phone or image; they are not included here. The
+The Dipper device tree explicitly requests `a630_zap.mbn`, `ipa_fws.mbn`,
+`mba.mbn` and `modem.mbn` under `qcom/sdm845/Xiaomi/dipper/`, plus Bluetooth
+calibration `Xiaomi/dipper/crnv21.bin`. These device-specific blobs must be
+extracted from the owner's phone or image; they are not included here. The
 `linux-firmware-qcom` dependency supplies generic Qualcomm firmware such as
-`a630_sqe.fw`, but does not supply those Dipper-specific names. The
+`a630_sqe.fw`, but does not supply these Dipper-specific names. The
 `[omamobile]` repository mirrorlist is installed for future package updates.
 QRTR, `pd-mapper`, `tqftpserv` and
 `rmtfs` are dependencies, but their services are not enabled here; no service
