@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+pkgname=omamobile-device-dipper
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omarchy Mobile support for the Xiaomi Mi 8 (dipper)"
+arch=(aarch64)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+depends=(bash systemd omamobile-keyring linux-firmware-qcom mesa qrtr pd-mapper tqftpserv rmtfs)
+provides=(omamobile-device)
+conflicts=(omamobile-device)
+backup=(etc/pacman.d/omamobile-mirrorlist)
+install=omamobile-device-dipper.install
+makedepends=(gcc)
+
+build() {
+  "$startdir/build" "$srcdir"
+}
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir" "$srcdir"
+}
