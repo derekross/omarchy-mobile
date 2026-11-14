@@ -1,14 +1,14 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Xiaomi Mi 8 (dipper): RAM-only first light
 
-**Status (2026-11-11):** the newest RAM boot is the 2026-11-11 one in [NOTES.md]: #505's rebuilt image `665fcbd682cd8e64b3ffec1ff7f4ab9ca33a26b9b47b11073be7a3c267abf2b1` on kernel/DTS #220's final head, with every UFS partition read-only. Before it, on 2026-11-10, the combined #503/#505 non-NFS image `540b5d31ea73a31ade9a8d8cb5152cf701dc3c2ad8256734790b0ef2db6dbdd0` booted by RAM on the Xiaomi Mi 8 with kernel/DTS PR #220 at `055a4019998f22cc0e2a8afef7650274a6ce0657`. Its initramfs root had all 85 UFS partition flags at `ro=1`. `/sys/block/sda/ro` was `0`, but `/dev/sda` was absent; `sdb`–`sdf` were `ro=1`. The guard confirmed this state. `qcom_wdt` and its feeder ran, simpledrm registered `fb0`, USB/SSH worked, and `/proc/iomem` reserved `0x85fc0000–0x8a8fffff`, covering the former TZ range. The pinned rescue SSH key matched, and `reboot-to` returned the phone to fastboot. Physical input events were not captured on this exact image.
+**Status (2026-11-12):** the newest RAM boot used the Dipper FTS5 node enabled directly in a local kernel tree. `stmfts` registered as `event2`; the screen was not visually verified, and no physical touch was captured on that boot. The preceding corrected overlay boot captured contact, changing X/Y and release. All recorded UFS partition flags were read-only, `/dev/sda` was absent, and `0x85fc0000–0x8a8fffff` remained reserved. No UFS partition was written. Rebuildable kernel DTS and repository overlay sources are now proposed in kernel PR #249 and this PR; the test images predate those commits. Earlier boots are recorded in [NOTES.md].
 
 A separate RAM NFS-root run used image `a2d435a7430e7e4c145c61cdb9866d16929731859d91c7105e6bfcaf9e3e9dd7` with the rebased #503 init. BusyBox `mount` switched to the test NFS root; all six disk flags and all 85 partition flags were `ro=1`. Systemd reached the multi-user target with `RuntimeWatchdogSec=60s`, and SSH remained available. `reboot-to bootloader` returned the phone to fastboot. The exported root was a generic Arch base; this did not test the Omarchy desktop or link-loss recovery. Full results are in [NOTES.md].
 The FTS5 driver from [touch #219] is merged into linux-omarchy-mobile. The
 Dipper board DTS from [DTS #220] is merged too (2026-11-11), and the EA8074
 panel driver is under review in [panel #218].
-The EA8074 panel test is recorded in [NOTES.md]. The FTS5 touchscreen
-still needs a hardware test.
+The EA8074 panel test and the corrected FTS5 touchscreen hardware test are
+recorded in [NOTES.md]. Both used RAM boots; no UFS partition was written.
 On 2026-11-09, a guarded RAM boot was used to capture all 84 GPT partitions
 other than `userdata` (the phone has no `super`); source and compressed-image
 checksums passed. The separate live userdata archive also passed its checksum
@@ -59,6 +59,12 @@ archive's checksum file. Do not boot if either backup is missing or fails.
    without changing UFS, and the screen stays lit because simpledrm holds the
    panel's VCI and VDDIO rails. If it goes dark about 30 seconds in, record
    `dmesg | grep -i -E 'regulator|simple'` and stop.
+   Before booting, decompile the exact packed DTB on the laptop with
+   `dtc -I dtb -O dts` and verify it contains both
+   `removed-region@86200000` and `removed-region@89100000`. On the phone,
+   before touching the screen or doing any other test, verify
+   `/proc/iomem` marks the complete `0x85fc0000–0x8a8fffff` range reserved.
+   If it does not, stop immediately and run `reboot-to bootloader`.
    Pass only when `uname -r`, the `boot.img` sha256, all partition `ro` values,
    whole-disk `ro` values, and `ufs-ro` lines from `dmesg` are recorded.
    `/dev/sda` must be absent or present with `/sys/block/sda/ro=1` in NFS mode;
@@ -117,8 +123,9 @@ repository; the SSH public key and generated host key stay in the local output.
   change was not retained. The 2026-11-10 NFS test root reached systemd with
   `RuntimeWatchdogSec=60s`; NFS link-loss recovery and the Omarchy desktop on
   that root remain untested.
-- Test the FTS5 touchscreen changes and GPU rendering on the phone before
-  marking them supported.
+- FTS5 controller probe and physical contact/coordinate/release events passed
+  on 2026-11-12 (see [NOTES.md]); Hyprland input delivery and GPU rendering
+  remain untested on the phone.
 
 From this rescue image, an SSH session can return to fastboot with
 `reboot-to bootloader`. The installed ROM's `recovery` image was verified from
