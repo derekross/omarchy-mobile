@@ -77,7 +77,7 @@ package version at merge.
 Geometry-free Chromium defaults run even before panel geometry is available;
 only the scale waits. A separate defaults marker preserves removals before
 the phone bar retries the helper at shell start with live monitor geometry,
-including computed/auto Lua scales. A failed helper never aborts user setup.
+including computed/auto Lua scales. A failed helper never aborts user setup. Fresh defaults deliberately use a generic Android mobile user agent without a device model; existing user-agent choices are preserved.
 
 Runbook (low risk, userspace only):
 
@@ -100,7 +100,7 @@ Runbook (low risk, userspace only):
 ### Pixel 6a verification, 2026-11-11
 
 The exact tested combined package is `omamobile-shell 0.2.119-1`, integration
-`83326ed6d09684ae80f38c9360e8c4e864d32614`, SHA-256
+[`83326ed6d09684ae80f38c9360e8c4e864d32614`](https://github.com/latentoperator/omarchy-mobile/commit/83326ed6d09684ae80f38c9360e8c4e864d32614) on the fork's `bringup/bluejay-userspace-tested-20261111` branch, SHA-256
 `02e0acadd2568bf167946a87c740626fffb59068918271bdb2026fac799e0270`, on
 `7.3.0-rc6-omamobile-bluejay-input-gated0`. Installation and cold shell restart
 were performed while unlocked. All six required phone-smoke checks passed;
@@ -118,8 +118,7 @@ shell profile. Temporary fixtures were removed and the phone returned home.
 Policy, the complete combined shell suite and independent review passed;
 both published UX heads passed repository and every-package CI. These runtime
 results qualify the exact combined package above, not a later kernel or an
-unrelated subsequently merged shell change. The 9a owner's one-time migration
-and the maintainer's existing/fresh-user 7 Pro checks remain before merge.
+unrelated subsequently merged shell change. The maintainer's existing/fresh-user 7 Pro checks passed on November 12; the 9a owner's one-time migration check remains before merge.
 No kernel or boot image was changed for this userspace verification.
 
 
