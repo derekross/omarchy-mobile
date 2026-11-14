@@ -71,11 +71,23 @@ echo "fastboot $*" >> "$T/events"
 if [[ $1 == devices ]]; then
   n=$(($(cat "$T/fb-count" 2>/dev/null || echo 0) + 1)); echo "$n" > "$T/fb-count"
   [[ ! -e $T/swap-after ]] || ((n <= $(cat "$T/swap-after"))) || echo OTHER999 > "$T/fb-devices"
+  # A restart into the bootloader (the slot check's): off the bus for a few
+  # looks, then back running the active slot's bootloader; $T/never-back
+  # keeps it away (an OS started)
+  if [[ -e $T/away ]]; then
+    left=$(($(cat "$T/away") - 1))
+    if ((left > 0)) || [[ -e $T/never-back ]]; then echo "$left" > "$T/away"; exit 0; fi
+    rm -f "$T/away"
+    active=$(cat "$T/active")
+    sed -i -E "s/^current-slot:.*/current-slot:$active/; s/^version-bootloader:.*/version-bootloader:$(cat "$T/version-$active")/" "$T/vars"
+  fi
   while read -r s; do [[ -z $s ]] || printf '%s\tfastboot\n' "$s"; done < "$T/fb-devices"
   exit 0
 fi
 [[ $1 == -s ]] && shift 2
 case $1 in
+  --set-active=*) echo "${1#--set-active=}" > "$T/active" ;;
+  reboot) if [[ ${2:-} == bootloader ]]; then echo 3 > "$T/away"; exit 0; fi ;;&
   getvar) sed 's/^/(bootloader) /' "$T/vars" >&2 ;;
   flashing)
     [[ $2 == get_unlock_ability ]] || { echo "FORBIDDEN fastboot flashing $2" >> "$T/events"; exit 1; }
@@ -401,6 +413,7 @@ ssh_phone() {
 }
 fresh() {  # a phone in Fastboot Mode, unlocked, stock on slot A; nothing installed
   rm -rf "$STATE" "$t/home/omamobile-backup" "$t/home/Downloads/"* "$t/work"
+  rm -f "$t/away" "$t/never-back" "$t/version-a" "$t/version-b"; echo a > "$t/active"
   rm -f "$t"/fail-* "$t/no-firstboot" "$t/no-comeback" "$t/firstboot-done" "$t/published.json" "$t/published.json.sig"
   rm -f "$t/swap-after" "$t/fb-count" "$t/keep-ssh-down" "$t/ssh-slow"
   rm -rf "$t/dl/on" "$t/dl/redirect" "$t/dl/cut" "$t/dl/nolength" "$t/dl/norange" "$t/dl/log" "$t/dl/old-curl"
@@ -645,6 +658,59 @@ guided "$REST" --bootloader-slots-match "$BL" || fail "--bootloader-slots-match 
 once "with the other slot confirmed"
 vars
 pass "another model, two phones, slot B and an unreadable bootloader slot stop it early, in plain words, with no shortcut offered"
+
+# --- The other bootloader slot, measured (a descriptor with BOOTLOADER_SLOT_PROBE=yes) ---
+# A first install from slot A of a phone that tells one copy's version: the
+# owner is asked here, the yes goes to the real tools/install-phone
+# (--measure-other-slot), which measures right before its first write
+# against the fake fastboot's restarts. No descriptor in the repository
+# says yes yet; this one is the test's own.
+{ descriptor; echo BOOTLOADER_SLOT_PROBE=yes; } > "$R/device/testdev/device.conf"
+export OMAMOBILE_SLOT_PROBE_POLL=0.02 OMAMOBILE_SLOT_PROBE_TIMEOUT=2 OMAMOBILE_SLOT_PROBE_CALL_TIMEOUT=5
+first_install() {  # [SLOT_B_VERSION [UNLOCKED]]: stock on slot A, slot B never started
+  fresh
+  SLOTS=$'slot-successful:a:yes\nslot-unbootable:a:no\nslot-successful:b:no\nslot-unbootable:b:yes' vars "${2:-yes}"
+  echo "$BL" > "$t/version-a"; echo "${1:-$BL}" > "$t/version-b"
+}
+slot_changes() { grep -E '^fastboot -s FAKE123 (--set-active=|reboot bootloader)' "$t/events" | cut -d' ' -f4- || true; }
+first_install
+guided "yes\nyes\n$REST" || fail "a first install with the other slot measured goes through"
+says "Measure slot B's bootloader now? (yes/no)" && says "fastboot --set-active=a" && says "choose nothing: use the buttons" ||
+  fail "the measurement is explained, with the way back, before the owner answers"
+says "bootloader $BL on both slots (slot b measured)" && says "Your phone is ready" || fail "measured, then installed"
+[[ $(slot_changes | tr '\n' ' ') == "--set-active=b reboot bootloader --set-active=a reboot bootloader --set-active=b " ]] ||
+  { slot_changes >&2; fail "the round trip comes before the writes, then the install's own --set-active=b"; }
+[[ $(grep -nE '^fastboot -s FAKE123 (--set-active=a|flash boot_b)' "$t/events" | cut -d: -f1 | tr '\n' ' ') =~ ^([0-9]+)\ ([0-9]+)\ $ ]] &&
+  ((BASH_REMATCH[1] < BASH_REMATCH[2])) || fail "slot a is set back before the first flash"
+first_install
+if guided "yes\nmaybe\nno\n$REST"; then fail "a first install whose owner does not want the measurement stops"; fi
+says "Type yes or no." && says "Without slot B's bootloader version" && [[ -z $(slot_changes) && -z $(writes) ]] ||
+  fail "\"no\": stopped, nothing sent but questions"
+first_install testloader-0.9-000
+if guided "yes\nyes\n$REST"; then fail "copies that differ stop the install"; fi
+says "The check of slot B's bootloader stopped the install before anything was" && says "the bootloader slots differ" &&
+  ! says "Writing the phone stopped partway" && [[ $(cat "$t/active") == a ]] &&
+  ! grep -c '^fastboot -s FAKE123 flash' "$t/events" >/dev/null || fail "copies that differ: stopped before any write, slot a active, not called a failed write"
+[[ -z $(record write) ]] || fail "copies that differ: the record does not say the write started"
+first_install; touch "$t/never-back"
+if guided "yes\nyes\n$REST"; then fail "a phone that does not come back from slot B stops"; fi
+says "Slot b may be the active slot now. To make slot a active again:" && says "before anything was" &&
+  ! grep -c '^fastboot -s FAKE123 flash' "$t/events" >/dev/null || fail "a phone that did not come back: the way back, nothing written"
+first_install
+guided "yes\n${OWNER}" --dry-run || fail "a dry run of a first install goes through"
+says "this dry run measures nothing" && ! says "Measure slot B's bootloader now?" && [[ -z $(slot_changes) ]] ||
+  fail "a dry run asks nothing and measures nothing"
+first_install "$BL" no
+if guided "yes\n\n\n"; then :; fi
+says "can only be measured once the bootloader is unlocked" && says "fastboot flashing unlock" && [[ -z $(slot_changes) ]] ||
+  fail "a locked phone is shown the unlock steps, told the measurement comes after, and sent no slot change"
+fresh; SLOTS=$'slot-successful:b:yes\nslot-unbootable:b:no' vars
+if guided "$ALL"; then fail "a slot B that reads as started is not measured"; fi
+says "only tells the version of the copy" && [[ -z $(slot_changes) ]] || fail "a slot B that reads as started: the old stop"
+unset OMAMOBILE_SLOT_PROBE_POLL OMAMOBILE_SLOT_PROBE_TIMEOUT OMAMOBILE_SLOT_PROBE_CALL_TIMEOUT
+descriptor > "$R/device/testdev/device.conf"
+vars
+pass "a first install measures the other bootloader slot where the descriptor allows it: asked once, measured before any write, and every stop before a write"
 
 # --- Every stop comes before the unlock steps ---------------------------------------
 # Unlocking erases the phone, so a locked phone is judged first (decided

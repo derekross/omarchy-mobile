@@ -469,6 +469,7 @@ $set_b
 $get
 $boot"
 recovery "never seen gone"
+((rc == 3)) || fail "a phone not seen to come back: status 3 (nothing written), not $rc"
 phone away_polls=0 no_restart=1 version_b=cloudripper-16.0-9   # the restart never happens, and the slots differ
 PROBE=yes stops "a restart that never happens" "$get
 $set_b
@@ -500,6 +501,7 @@ PROBE=yes stops "a failing --set-active" "$get
 $set_b
 $set_a"
 grep -c 'slot a was set active again' "$t/out" >/dev/null || { cat "$t/out"; fail "says slot a was set active again"; }
+((rc == 3)) || fail "a stop of the slot check ends with status 3 (before any write), not $rc"
 grep -c "The phone is still on slot a's bootloader screen" "$t/out" >/dev/null || fail "says the phone is still on slot a's screen"
 [[ $(state active) == a ]] || fail "slot a is active after a failed --set-active"
 phone fail_set_active=2
@@ -525,6 +527,7 @@ $boot
 $get
 $set_a"
 grep -c "after the first restart the phone reports current slot 'a', not b" "$t/out" >/dev/null || { cat "$t/out"; fail "names the wrong slot"; }
+((rc == 3)) || fail "a wrong slot after a restart ends with status 3, not $rc"
 grep -c "The phone may be on slot b's bootloader screen with slot a active: read fastboot -s FAKE123 getvar current-slot" "$t/out" >/dev/null || fail "where the screen isn't known, says how to find out"
 [[ $(state active) == a ]] || fail "slot a is active after a restart that didn't switch"
 phone stuck=2
@@ -603,14 +606,18 @@ PROBE=yes install --dry-run || { cat "$t/out"; fail "a dry run with the caller's
 grep -c 'was not measured' "$t/out" >/dev/null || fail "a dry run says the other slot was not measured"
 tail -1 "$t/out" | grep -c 'Dry run done: nothing was written to the phone, and the other bootloader slot was not checked (the real run checks it first)' >/dev/null ||
   { tail -2 "$t/out"; fail "a dry run's last line repeats that the other slot was not checked"; }
+# A reinstall from slot b passes on slot b's own version (main's rule of
+# 2026-11-13), and the round trip never runs for it, allowed or not
 phone current=b active=b unbootable_b=no
-PROBE=yes stops "a reinstall with an unmeasured slot" "$get" --reinstall
-grep -c -- "rerun with --bootloader-slots-match $VA. With --reinstall the installer does not switch slots" "$t/out" >/dev/null || { cat "$t/out"; fail "a reinstall asks for --bootloader-slots-match and says why"; }
+PROBE=yes install --reinstall || { cat "$t/out"; fail "a reinstall from slot b installs on slot b's own version"; }
+probe_calls | grep -c -e 'reboot bootloader' -e 'set-active=a' >/dev/null && { probe_calls; fail "a reinstall from slot b runs no part of the round trip"; }
+grep -c "slot B's bootloader, which the phone already runs; the install switches no slot (--reinstall)" "$t/out" >/dev/null || { cat "$t/out"; fail "a reinstall from slot b says whose bootloader it rests on"; }
 phone
 PROBE=yes stops "--reinstall from slot a with an unmeasured slot" "$get" --reinstall
 grep -c -- "rerun with --bootloader-slots-match $VA. With --reinstall the installer does not switch slots" "$t/out" >/dev/null || { cat "$t/out"; fail "--reinstall refuses the round trip on slot a too"; }
 phone current=b active=b unbootable_b=no
 PROBE=yes stops "slot b without --reinstall" "$get"
+((rc == 1)) || fail "a stop that is not the slot check's keeps status 1, not $rc"
 grep -c -- 'rerun with --reinstall' "$t/out" >/dev/null || fail "slot b without --reinstall gets the stock-on-b refusal, not the slot check"
 # On slot a with a slot b that has started and can still start: Omarchy Mobile
 # after "going back to Android", or stock after a system update. Fastboot

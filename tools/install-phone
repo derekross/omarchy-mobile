@@ -81,7 +81,9 @@
 #     --measure-other-slot   for a tool that calls this one: the owner has
 #                            agreed to that slot check, so it isn't asked
 #                            again. Without it the yes is read from a
-#                            terminal only, never from piped answers
+#                            terminal only, never from piped answers. Every
+#                            stop of the slot check comes before any write
+#                            and ends with exit status 3
 #     --reinstall            slot B is the current slot and holds Omarchy Mobile
 #                            (a reinstall); without it, a phone running from
 #                            slot B is refused, since that is where stock
@@ -638,6 +640,9 @@ slot_probe_recovery() {  # SLOT
   echo "      1. Bring the phone to its bootloader (fastboot) screen, if it isn't there: ${D[FASTBOOT_BUTTONS]:-with its buttons, as the install guide for ${D[NAME]:-$CODENAME} says}"
   echo "      2. $FASTBOOT -s $serial --set-active=$1"
 }
+# The slot check's stops: before any write, with exit status 3, so that a
+# calling tool (tools/install-guided) can tell them from a write that failed
+probe_die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 3; }
 slot_probe_lost() {  # SLOT WHEN
   probe_restore=""
   printf '\e[31merror:\e[0m %s\n' "the phone was not seen to leave and come back to its bootloader screen within $SLOT_PROBE_TIMEOUT s after $2. Nothing more is sent to it, and slot $probe_other was not measured" >&2
@@ -646,7 +651,7 @@ slot_probe_lost() {  # SLOT WHEN
     slot_probe_recovery "$1"
     echo "    Nothing was flashed or erased; the bootloader's slot flags changed."
   } >&2
-  exit 1
+  exit 3
 }
 slot_probe_undo() {
   local rc=$? slot=$probe_restore
@@ -709,32 +714,32 @@ slot_probe() {
   elif [[ -t 0 ]]; then
     printf 'Type yes to run this check: ' >&2
     IFS= read -r answer || answer=""
-    [[ $answer == yes ]] || die "not run; nothing was sent to the phone. To install without it, check the other slot yourself, then rerun with --bootloader-slots-match $current_bl"
+    [[ $answer == yes ]] || probe_die "not run; nothing was sent to the phone. To install without it, check the other slot yourself, then rerun with --bootloader-slots-match $current_bl"
   else
-    die "not run; nothing was sent to the phone. The slot check needs a yes typed in a terminal, or --measure-other-slot from the tool that asked the owner. To install without it, check the other slot yourself, then rerun with --bootloader-slots-match $current_bl"
+    probe_die "not run; nothing was sent to the phone. The slot check needs a yes typed in a terminal, or --measure-other-slot from the tool that asked the owner. To install without it, check the other slot yourself, then rerun with --bootloader-slots-match $current_bl"
   fi
   probe_restore=$x slot_probe_ran=1
   trap slot_probe_undo EXIT
   trap 'exit 130' INT TERM HUP
-  pfb --set-active="$other" || die "fastboot --set-active=$other failed"
-  vars=$(pfb getvar all 2>&1 | sed -E 's/^\(bootloader\) //') || die "the phone did not answer getvar all after --set-active=$other"
-  [[ $(var current-slot) == "$x" ]] || die "before any restart the phone already reports current slot '$(var current-slot)': on this bootloader current-slot follows the active slot, so it can't show whose bootloader is running. Slot $other was not measured"
-  pfb reboot bootloader || die "fastboot reboot bootloader failed"
+  pfb --set-active="$other" || probe_die "fastboot --set-active=$other failed"
+  vars=$(pfb getvar all 2>&1 | sed -E 's/^\(bootloader\) //') || probe_die "the phone did not answer getvar all after --set-active=$other"
+  [[ $(var current-slot) == "$x" ]] || probe_die "before any restart the phone already reports current slot '$(var current-slot)': on this bootloader current-slot follows the active slot, so it can't show whose bootloader is running. Slot $other was not measured"
+  pfb reboot bootloader || probe_die "fastboot reboot bootloader failed"
   probe_stage=1
   slot_probe_wait || slot_probe_lost "$x" "the first restart"
-  vars=$(pfb getvar all 2>&1 | sed -E 's/^\(bootloader\) //') || die "the phone did not answer getvar all after the first restart"
-  [[ $(var current-slot) == "$other" ]] || die "after the first restart the phone reports current slot '$(var current-slot)', not $other"
+  vars=$(pfb getvar all 2>&1 | sed -E 's/^\(bootloader\) //') || probe_die "the phone did not answer getvar all after the first restart"
+  [[ $(var current-slot) == "$other" ]] || probe_die "after the first restart the phone reports current slot '$(var current-slot)', not $other"
   probe_stage=2
   other_bl=$(var version-bootloader)
-  [[ -n $other_bl ]] || die "the phone reports no version-bootloader on slot $other"
+  [[ -n $other_bl ]] || probe_die "the phone reports no version-bootloader on slot $other"
   slot_flags_read during
-  pfb --set-active="$x" || die "fastboot --set-active=$x failed"
-  pfb reboot bootloader || die "fastboot reboot bootloader failed"
+  pfb --set-active="$x" || probe_die "fastboot --set-active=$x failed"
+  pfb reboot bootloader || probe_die "fastboot reboot bootloader failed"
   probe_stage=3
   slot_probe_wait || slot_probe_lost "$x" "the second restart"
-  vars=$(pfb getvar all 2>&1 | sed -E 's/^\(bootloader\) //') || die "the phone did not answer getvar all after the second restart"
-  [[ $(var current-slot) == "$x" ]] || die "after the second restart the phone reports current slot '$(var current-slot)', not $x"
-  [[ $(var version-bootloader) == "$current_bl" ]] || die "slot $x reported bootloader $current_bl before the check and $(var version-bootloader) after it"
+  vars=$(pfb getvar all 2>&1 | sed -E 's/^\(bootloader\) //') || probe_die "the phone did not answer getvar all after the second restart"
+  [[ $(var current-slot) == "$x" ]] || probe_die "after the second restart the phone reports current slot '$(var current-slot)', not $x"
+  [[ $(var version-bootloader) == "$current_bl" ]] || probe_die "slot $x reported bootloader $current_bl before the check and $(var version-bootloader) after it"
   slot_flags_read after
   probe_restore=""
   trap - EXIT INT TERM HUP
@@ -750,7 +755,7 @@ slot_probe() {
   done
   note "changed by the check: ${changed:-nothing}"
   if [[ $x == a ]]; then bl_a=$current_bl bl_b=$other_bl; else bl_a=$other_bl bl_b=$current_bl; fi
-  [[ $bl_a == "$bl_b" ]] || die "the bootloader slots differ (a: $bl_a, b: $bl_b). $SLOTS_DIFFER"
+  [[ $bl_a == "$bl_b" ]] || probe_die "the bootloader slots differ (a: $bl_a, b: $bl_b). $SLOTS_DIFFER"
   note "bootloader $current_bl on both slots (slot $other measured)"
   note "a rerun can skip this check: --bootloader-slots-match $current_bl"
 }

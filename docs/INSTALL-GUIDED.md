@@ -119,20 +119,35 @@ Details that matter:
   (§2a). `install-phone` stays the one that decides.
 - **The bootloader's two slots (G4).** Decided 2026-11-10 (plan D4): on a
   first install the installer measures the other slot itself, in
-  `tools/install-phone`; that is being built separately. Until the
-  `install-phone` this script runs does it, a first install (Android on
-  slot A) on a phone that reports only the current slot's version stops at
-  step 3: the other slot's version is the owner's statement, and the
-  maintainer's decision is that it stays one. The stop says so plainly, says
-  a rerun will stop again, offers two safe ways on (the next release, or an
-  issue) and prints no option and no command: `--bootloader-slots-match
-  VERSION` stays an option of the tool, for a version someone has read from
-  the phone, and the stop doesn't hand it out. A version given with the
-  option is compared with the phone's `version-bootloader` at step 3, as
-  `install-phone` compares it at the write: one that differs stops a
-  locked phone before the unlock steps, naming both, and not after the
-  unlock has erased it. `slots_check` is the one function to change when
-  `install-phone` measures.
+  `tools/install-phone` (its slot check, off for every device until its
+  descriptor says `BOOTLOADER_SLOT_PROBE=yes`, which none does until an
+  attended run on that device is in its notes). Where the descriptor says
+  yes, a first install from slot A (no `--reinstall`, and a slot B that
+  reads unbootable or not successful, as `install-phone` judges it) is
+  asked at step 3, once a run, after the explanation and the way back:
+  `Measure slot B's bootloader now? (yes/no)`. `yes` hands
+  `--measure-other-slot` to `install-phone`, which measures right before
+  its first write (two restarts into the bootloader screen; nothing is
+  written to storage, the slot flags are shown before and after); `no`
+  stops. A locked phone is not asked: the measurement needs an unlocked
+  bootloader, so the unlock steps are shown, with a line saying that the
+  copies are measured after the unlock and that if they differ the install
+  stops there, with the phone already erased. A dry run asks nothing and
+  measures nothing. Every stop of the slot check comes before any write
+  and ends `install-phone` with status 3; step 5 then says that nothing was
+  written and to put slot A back first, as the message above it says, and
+  it does not take the stop for a write that failed partway.
+  Where the descriptor says no (today, every device), a first install on a
+  phone that reports only the current slot's version stops at step 3: the
+  other slot's version is the owner's statement, and the maintainer's
+  decision is that it stays one. The stop says so plainly, says a rerun will
+  stop again, offers two safe ways on (the next release, or an issue) and
+  prints no option and no command: `--bootloader-slots-match VERSION` stays
+  an option of the tool, for a version someone has read from the phone, and
+  the stop doesn't hand it out. A version given with the option is compared
+  with the phone's `version-bootloader` at step 3, as `install-phone`
+  compares it at the write: one that differs stops a locked phone before
+  the unlock steps, naming both, and not after the unlock has erased it.
 - **A reinstall's bootloader** (decided 2026-11-13, the installer reinstall
   rule). On slot B with the reinstall confirmed, the version the phone
   reports is slot B's own: the bootloader the phone already starts from.
@@ -440,6 +455,7 @@ without changing anything.
 | 3 | `Press Enter when that is done, to check the phone again:` | Enter |
 | 3 | `Press Enter to restart the phone into Fastboot Mode:` | Enter; then `adb reboot bootloader` |
 | 3 | `Is this phone already running Omarchy Mobile? (yes/no)` | only for an unlocked phone on slot B: `yes` is a reinstall (`--reinstall`); `no` stops; anything else asks again |
+| 3 | `Measure slot B's bootloader now? (yes/no)` | only for an unlocked phone on slot A that reports one bootloader copy's version, where the descriptor says `BOOTLOADER_SLOT_PROBE=yes`, and not in a dry run: `yes` hands `--measure-other-slot` to `install-phone`, which measures before its first write; `no` stops; anything else asks again |
 | 4 | `Type yes to accept Google's terms and download the file, or press Enter to get it yourself from Google's page:` | `yes` only: the terms are accepted and recorded, and the download starts; anything else downloads nothing and goes on to the next question. Asked once per build; not asked when the owner's file is already there |
 | 4 | `Press Enter to open Google's page:` | Enter; only when the terms weren't accepted here or the download couldn't be made |
 | 4 | `Press Enter when the download has finished, or type where you saved the file:` | Enter (looks in Downloads) or a path; asked again until the file's size and SHA-256 match |
@@ -970,11 +986,12 @@ hardware address in them.
   quoted as Google's were given by the maintainer on 2026-11-12, not read
   from Google's page by this tool or its tests; they have to be compared
   with the page before a release shows them.
-- **G4.** Decided (D4), not yet in `tools/install-phone`; see §2. When it
-  lands, `install-phone` asks one more question in a first install, and
-  the guided installer has to ask it and feed the answer; `slots_check`
-  then stops only where `install-phone` still asks for the option. A
-  reinstall on slot B no longer needs it (the reinstall rule, §2).
+- **G4.** Built in `tools/install-phone` and asked here (§2), and off for
+  every device: no descriptor says `BOOTLOADER_SLOT_PROBE=yes` until an
+  attended run on that device is in its notes (the runbook for the Pixel 7
+  Pro is the installer repository's WRITE-RUNBOOK, "A first install that
+  measures the other slot"). It has run against the tests' fake fastboot
+  only. A reinstall on slot B doesn't need it (the reinstall rule, §2).
 - **`bash install --guided` from a bundle on a phone.** Built and tested
   against a bundle that the real `make-bundle` builds and signs in the
   tests, unpacked from its one-file download; not yet run on a phone. The
@@ -1052,5 +1069,5 @@ one-file download unpacks it). So no `--images`, `--rootfs` or `--device`
 is needed, and the repository's installer given a bundle's `images/` says
 to run the bundle's own command instead.
 
-Still open (§9): G4 for a first install on slot A, and the first run from
-a bundle on a phone.
+Still open (§9): G4's first attended run on a phone (it is built, off for
+every device), and the first run from a bundle on a phone.
