@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Enable lynx S6E3FC5 DSI commands
+After=local-fs.target systemd-modules-load.service
+Before=display-manager.service
+ConditionPathExists=/sys/bus/platform/devices/1c240000.display-controller
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/omamobile-lynx-display-start
+
+[Install]
+WantedBy=multi-user.target

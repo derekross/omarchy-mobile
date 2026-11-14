@@ -1,0 +1,58 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Allow the panel's DSI commands only when the bootloader names the
+# S6E3FC5 panel on the kernel command line. Lynx also ships S6E3FC3
+# panels, and S6E3FC5 brightness/refresh commands must never reach one.
+# gs_decon is blacklisted for autoload so it probes after this gate.
+# OMAMOBILE_LYNX_ROOT: a scratch root for the package tests.
+set -uo pipefail
+
+root=${OMAMOBILE_LYNX_ROOT:-}
+[[ -z $root || ( $root == /* && $root != / && -d $root ) ]] || exit 2
+
+cmdline=$root/proc/cmdline
+allow=$root/sys/module/gs_dsim_cmd/parameters/allow_tx
+panel=""
+
+for word in $(cat "$cmdline" 2>/dev/null); do
+  case $word in
+    exynos_drm.panel_name=*) panel=${word#*=} ;;
+  esac
+done
+
+log() { echo "omamobile-lynx-display: $*"; }
+
+# systemd-backlight restores the saved level before this start allows the
+# panel's commands; send it again now that the panel takes them.
+restore_brightness() {
+  local bl level
+  for bl in "$root"/sys/class/backlight/*; do
+    [[ -e $bl/brightness ]] || continue
+    level=$(cat "$bl/brightness" 2>/dev/null) || continue
+    echo "$level" > "$bl/brightness" 2>/dev/null \
+      && log "brightness of ${bl##*/}: level $level sent"
+  done
+}
+
+# The parameter appears when the driver loads; do not depend on autoload.
+modprobe gs_dsim_cmd 2>/dev/null || true
+
+case $panel in
+  sdc-s6e3fc5|sdc-s6e3fc5.*|s6e3fc5|s6e3fc5.*)
+    if echo 1 > "$allow" 2>/dev/null; then
+      log "panel $panel, DSI commands allowed"
+      restore_brightness
+    else
+      log "panel $panel, cannot write $allow; leaving it read-only"
+    fi
+    ;;
+  *)
+    log "panel ${panel:-unnamed}, DSI commands stay off"
+    ;;
+esac
+
+# Blacklisted above: the display controller probes only now, after allow_tx.
+if ! modprobe gs_decon 2>/dev/null; then
+  log "gs_decon did not load; the display stays on simple-framebuffer"
+  exit 1
+fi
