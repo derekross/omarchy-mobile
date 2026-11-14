@@ -170,6 +170,14 @@ counted_errors=(
   # up (2026-11-11: 43 in ten minutes). umts_ipc0 is not here on purpose: that
   # is the phone service's own channel, and a message dropped there is new.
   '|cpif message for a channel nobody opened|cpif: (rx_demux|io_dev_recv_skb_single_from_link_dev|pass_skb_to_demux): .*(oem_ipc[0-9]+|umts_ipc[1-9][0-9]*|umts_router)([^0-9a-z_].*)?(is not opened|rx_demux fail|recv_skb fail)'
+  # The network stack drops a few data packets the modem sends as its PCIe
+  # link comes back, before the rmnet interface is up (2026-11-12/13: three at
+  # about 113 s, data worked after). Past five in a boot, the drops are new.
+  '5|cpif rmnet packet dropped as the link came up|cpif: rx_multi_pdp: PCIE: rmnet[0-9]+<-s5300: ERR! netif_receive_skb[[:space:]]*$'
+  # The modem's in-memory NV copies are Android's f2fs images, whose quota
+  # feature needs a quota format our kernel doesn't build (err -3); the copies
+  # are thrown away at stop, so nothing needs their quota. Every modem start.
+  '|f2fs quota off on the modem NV copies|F2FS-fs \(loop[0-9]+\): (Cannot turn on quotas: error -3|Failed to enable quota tracking \(type=[0-9]+, err=-3\)\. Please run fsck to fix\.)[[:space:]]*$'
 )
 # A UFS link that doesn't come back from a sleep (device/tegu/SLEEP-PLAN.md
 # S1): any match fails kernel health, whatever the lists above say. Anchored
