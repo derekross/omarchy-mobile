@@ -61,7 +61,7 @@ ml=etc/omamobile-mirrorlist
 grep -qxF 'Server = https://pkgs.omamobile.org/stable/$arch' "$ml" || fail "the default channel is stable"
 grep -qxF '#Server = https://pkgs.omamobile.org/development/$arch' "$ml" || fail "development is offered, commented"
 grep -qxF '#Server = file:///var/lib/omamobile/repo/$arch' "$ml" || fail "the local repository is offered, commented"
-grep -qx "backup=(etc/pacman.d/omamobile-mirrorlist)" PKGBUILD || fail "pacman keeps a changed mirrorlist (backup=)"
+grep -qx "backup=(etc/pacman.d/omamobile-mirrorlist etc/UPower/UPower.conf.d/50-omamobile-critical.conf)" PKGBUILD || fail "pacman keeps a changed mirrorlist and upower drop-in (backup=)"
 if [[ -f ../omamobile-omarchy/bin/omamobile-update ]]; then
   for line in $(sed -n 's/^#\{0,1\}\(Server = [^ ]*\)$/\1/p' "$ml" | tr ' ' '~'); do
     grep -qF "\"${line//\~/ }\"" ../omamobile-omarchy/bin/omamobile-update \
@@ -96,6 +96,11 @@ cmp -s "$tmp/ch/kept" "$tmp/ch/etc/omamobile-mirrorlist" || fail "a builder's de
 pass "the mirrorlist follows stable by default; a phone on its own repository or on development keeps its channel"
 
 OMAMOBILE_BOOT_FILES=none ./install "$tmp/root" "$tmp/build" 2>/dev/null
+# At a critical battery the phone powers off (SUSPEND-PLAN 6.6, P7), at 3 %.
+u=$tmp/root/etc/UPower/UPower.conf.d/50-omamobile-critical.conf
+[[ -f $u ]] && [[ $(grep -vE '^[[:space:]]*(#|$)' "$u") == $'[UPower]\nPercentageAction=3\nCriticalPowerAction=PowerOff' ]] \
+  || fail "the upower drop-in powers off at 3 %"
+pass "at a critical battery the phone powers off cleanly (upower drop-in)"
 for f in usr/bin/omamobile-bootctl usr/bin/reboot-to usr/bin/omamobile-boot-success usr/bin/omamobile-setup-system \
          usr/lib/systemd/system/omamobile-boot-success.service usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/udev/rules.d/10-omamobile-storage.rules usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf usr/lib/udev/rules.d/20-omamobile-gpu-always-on.rules usr/lib/udev/rules.d/70-omamobile-touch-wake.rules usr/share/omamobile/auto-sleep-default \
