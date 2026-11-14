@@ -461,7 +461,36 @@ class TeguAudioTests(unittest.TestCase):
         audio.output = 'earpiece'
         with audio:
             self.assertEqual(controls['Bottom Speaker Digital Volume'], '0')
+            self.assertEqual(controls['Top Speaker Digital Volume'], voice_audio.TEGU_GAIN)
             self.assertEqual(audio.output, 'earpiece')
+            # Never a moment on the loudspeaker: the bottom amplifier is
+            # written once, to 0, both gains are read back, and the one
+            # unmute comes after that.
+            bottom = [e for e in events if e[:2] == ('cset', 'Bottom Speaker Digital Volume')]
+            self.assertEqual([e[2] for e in bottom], ['0'])
+            unmutes = [i for i, e in enumerate(events) if e == ('cset', 'Incall Sink Mute', '0')]
+            self.assertEqual(len(unmutes), 1)
+            read_back = [i for i, e in enumerate(events)
+                         if e[0] == 'cget' and e[1] in voice_audio.TEGU_GAINS and i > events.index(bottom[0])]
+            self.assertEqual(len(read_back), 2)
+            self.assertLess(max(read_back), unmutes[0])
+        self.assertEqual(controls, original)
+
+    def test_a_configured_earpiece_start_is_refused_when_its_gain_does_not_read_back(self):
+        audio, events, controls, original = self.fixture()
+        audio.output = 'earpiece'
+        inner = audio.mixer
+        def lying(action, name, value=None):
+            if action == 'cget' and name == 'Bottom Speaker Digital Volume' and controls[name] == '0':
+                return '  : values=180\n'
+            return inner(action, name, value)
+        audio.mixer = lying
+        with self.assertRaisesRegex(voice_audio.AudioRefused, 'tegu call audio refused: TAS gain read-back mismatch'):
+            audio.__enter__()
+        # Unmuted only by the restore at the end (the sink's pre-call value,
+        # written last), never while the call route was up.
+        unmutes = [i for i, e in enumerate(events) if e == ('cset', 'Incall Sink Mute', '0')]
+        self.assertEqual(unmutes, [len(events) - 1])
         self.assertEqual(controls, original)
 
     def test_set_output_leaves_the_sink_muted_when_a_gain_write_fails(self):

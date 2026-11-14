@@ -300,21 +300,12 @@ class VoiceAudio:
                 self.check(self.alsa.snd_pcm_start(pcm), 'start')
             # The codec profile resets gain at playback start. These must
             # happen afterwards, while the modem downlink remains muted.
-            for name in TEGU_GAINS:
-                self.mixer('cset', name, TEGU_GAIN)
-            for name in TEGU_GAINS:
-                try:
-                    gain = self.mixer_value(name)
-                except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
-                    raise AudioRefused('tegu call audio refused: TAS gain read-back unavailable') from error
-                if gain != TEGU_GAIN:
-                    raise AudioRefused('tegu call audio refused: TAS gain read-back mismatch')
+            # The configured output's gains (the earpiece's when asked
+            # for), so the call's first moment is already on that output.
+            self.tegu_gains(TEGU_OUTPUTS[self.output], 'tegu call audio refused')
             self.mixer('cset', 'Incall Sink Mute', '0')
-            print('AoC tegu speakerphone prepared at conservative TAS gain', flush=True)
-            # The route unmutes on the loudspeaker; start on the earpiece
-            # when the configuration or a caller asked for it.
-            if self.output != 'speaker':
-                self.set_output(self.output)
+            print('AoC tegu', 'speakerphone' if self.output == 'speaker' else self.output,
+                  'prepared at conservative TAS gain', flush=True)
             return self
         except BaseException:
             self.__exit__(None, None, None)
