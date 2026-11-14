@@ -50,10 +50,10 @@ Bluejay package builds on the passive first-light proposal [#346](https://github
 Kernel-release pins, module hashes and experimental startup belong in
 `device/bluejay/bringup/` until their dependencies merge. No combined package
 agreement with #346's author or passive-package phone migration is claimed here.
-A focused [passive policy follow-up](https://github.com/latentoperator/omarchy-mobile/commit/ffb2c8c82f8d6c53e1beaa10f420537ca7890ee2)
-is coordinated on that PR and requires #563 first. Its package fixtures and
-aarch64 build pass; replacing the old active development package still needs
-an explicit migration of the startup files it owns.
+A proposed follow-up that would make the package own `boot-update.conf`
+was not taken; #346 stays passive. Replacing the old active development
+package still needs an attended migration of the startup files it owns
+and a smoke report with the passive package installed.
 
 The tested overlays, startup files, Aquamarine patch and probe tools remain
 inspectable at [the immutable #543 source](https://github.com/latentoperator/omarchy-mobile/tree/6ad4651f8ac151333345c72db99f1fd83259696f).
