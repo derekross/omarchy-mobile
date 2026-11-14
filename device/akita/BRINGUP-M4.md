@@ -128,6 +128,8 @@ Each boot needs the human's go and changes one thing. **Each step's results end 
   - the link comes back on the laptop after the wall charger;
   - the undo leaves "system from USB, battery not charged";
   - a reboot afterwards comes up the same.
+- **Stop conditions:** the tool undoes the step by itself when the guard (every 2 s, on the gauge) reads over 4.3 V, over 45 C or under 5 C, more than 1.5 A in or out, or 3 unreadable readings in a row (exit 7), and when no new SSH login confirms within 90 s (exit 3). The person at the phone stops it by unplugging the cable if the phone gets hot. Exit 5 means it refused before applying anything (the reason is printed: the battery outside 30–80 %, over 4.15 V or outside 10–40 C, the stuck 22.0 C of a missing model, the PMIC driver not loaded, `b3-charger` already run in this boot, a step this phone may not run); exit 6 means the apply failed and was undone; exit 4 means no answer from the phone.
+- **Rollback:** after a clean soak (exit 0) the step stays applied with **nothing guarding it**, so run `tools/husky-deadman undo b3-charger` at once: it unloads the driver and leaves mode 0x04 (no charging) with the other registers back at the bootloader's values; check with `tools/husky-deadman dump`. If the undo can't unload the driver, it still forces charging off. If the phone stops answering, the watchdog resets it, and the boot comes up with the charger driver blacklisted. A reboot through the bootloader brings back its own charging (test 46).
 
 ### M4.7 The PMIC interrupt
 - **Change:** the three lines from #243.

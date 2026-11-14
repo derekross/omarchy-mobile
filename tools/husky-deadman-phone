@@ -57,19 +57,21 @@ V_TRIP=4300000 V_MIN=3000000 I_TRIP= T_MAX=450 T_MIN=50
 SOC_MIN=30 SOC_MAX=80 START_V_MAX=4150000 START_T_MIN=100 START_T_MAX=400
 ILIM_MAX=900000
 
-# The boards this runs on: BOARD names the phone, I_TRIP its current guard.
+# The boards this runs on: BOARD names the phone, I_TRIP its current guard,
+# STEPS the steps it may run (any other step is refused before anything is
+# applied, so a step for one phone's hardware can't run on the other).
 #   google,zuma-husky  Pixel 8 Pro, DT charge current 1.485 A: 1.7 A
 #   google,zuma-akita  Pixel 8a,    DT charge current 1.32 A:  1.5 A
 board() {
   local c
   c=$(tr '\0' '\n' < /proc/device-tree/compatible 2>/dev/null | head -1)
   case $c in
-    google,zuma-husky) BOARD="Pixel 8 Pro" I_TRIP=1700000 ;;
-    google,zuma-akita) BOARD="Pixel 8a" I_TRIP=1500000 ;;
-    *) BOARD= I_TRIP= ;;
+    google,zuma-husky) BOARD="Pixel 8 Pro" I_TRIP=1700000 STEPS="noop wd-drill b3-charger" ;;
+    google,zuma-akita) BOARD="Pixel 8a" I_TRIP=1500000 STEPS="noop wd-drill b3-charger" ;;
+    *) BOARD= I_TRIP= STEPS= ;;
   esac
 }
-BOARD= ; board
+BOARD= STEPS= ; board
 
 log() {
   local m="husky-deadman: $*"
@@ -142,6 +144,8 @@ preflight() {   # preflight STEP
   local v t s
   [[ -n $BOARD && $I_TRIP =~ ^[0-9]+$ ]] ||
     { refuse "this is not a Pixel 8 Pro or a Pixel 8a (the device tree's first compatible is not google,zuma-husky or google,zuma-akita)"; return 1; }
+  [[ " $STEPS " == *" $1 "* ]] ||
+    { refuse "step $1 is not one the $BOARD may run ($STEPS)"; return 1; }
   [[ -n "$BUS" ]] || { refuse "no i2c bus for 10cb0000.i2c"; return 1; }
   command -v i2cget >/dev/null || { refuse "i2c-tools missing"; return 1; }
   [[ -d $PSY ]] || { refuse "no battery power supply $PSY (load max17042_battery)"; return 1; }
