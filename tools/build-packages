@@ -65,12 +65,7 @@ source tools/lib/alarm.sh
 
 SLOW=(mesa hyprland libcamera)
 # Packed from a staged kernel build: built only when named (see above)
-# omamobile-install-link too, for now: its Rust toolchain doesn't install in
-# the builder's container while Arch Linux ARM's openssl 3 to 4 change is
-# half done there (2026-11-14: openssl-3's libcrypto.so.3 conflicts with
-# the container's openssl). Named, it still builds; root images leave it out
-# unless built for the link (rootfs/build-inside), and no image is yet.
-NAMED_ONLY=(linux-omamobile omamobile-install-link)
+NAMED_ONLY=(linux-omamobile)
 repo=out/repo/aarch64
 # Exit 3 means exactly "built and signed everything but the skipped device
 # packages", which <repo>/../.skipped then lists: any other exit with 3 (a
@@ -293,8 +288,8 @@ done
 skipped=() kept=()
 for d in "${build[@]}"; do
   name=$(basename "$d")
-  # Only the kernel package packs a staged build; other named-only packages
-  # (omamobile-install-link) compile their own
+  # Only the kernel package packs a staged build; a named-only package
+  # without a stage script compiles its own
   if [[ " ${NAMED_ONLY[*]} " == *" $name "* && -x $d/stage ]]; then
     "$d/stage" --verify "$d/prebuilt" || alarm_die "$name: the staged kernel is not a published release; nothing built"
   fi
@@ -418,7 +413,7 @@ for dir in "${build[@]}"; do
   [[ -f $repo/omamobile.db ]] && have_repo=1
   start=$(date +%s)
   docker run --rm --platform linux/arm64 \
-    -v "$work:/work" -v "$ROOT/$repo:/repo/aarch64:ro" \
+    -v "$work:/work" -v "$ROOT/$repo:/repo/aarch64:ro" -v "$ROOT/tools/lib/alarm-deps.sh:/alarm-deps.sh:ro" \
     -v "$ALARM_CACHE/pkg:/var/cache/pacman/pkg" -v "$ALARM_CACHE/src:/srcdest" \
     -e NAME="$name" -e HAVE_REPO="$have_repo" -e INCHECK="$incheck" \
     "$image" bash -c '
@@ -436,26 +431,10 @@ for dir in "${build[@]}"; do
       chown -R builder: /work /srcdest
       cd /work/$NAME
       info=$(su builder -c "makepkg --printsrcinfo")
-      # Every dependency a repository can provide goes in (the build-time
-      # ones always; runtime ones so check() can run). Ours that are not
-      # built yet are left out: makepkg runs with --nodeps.
-      wanted=$(awk "\$1 ~ /^(depends|makedepends|checkdepends)\$/ {print \$3}" <<<"$info" | sed "s/[<>=].*//" | sort -u)
-      install=()
-      for dep in $wanted; do
-        pacman -Sp --print-format %n "$dep" >/dev/null 2>&1 && install+=("$dep")
-      done
-      # The build image is made once and kept, so it falls behind the
-      # repositories, and installing current packages into it is a partial
-      # upgrade. Usually that works. When the distribution moves a library
-      # (openssl 3 to its compat package openssl-3, 2026-11-12: "openssl-3:
-      # /usr/lib/libcrypto.so.3 exists in filesystem (owned by openssl)") it
-      # cannot: then bring this container up to date first and try once more.
-      deps() { pacman -S --noconfirm --needed --asdeps --overwrite "/usr/share/pacman/keyrings/*" "${install[@]}" >/dev/null; }
-      if ((${#install[@]})) && ! deps; then
-        echo "the build image is behind the repositories: upgrading it for this build, then installing again" >&2
-        pacman -Su --noconfirm --overwrite "/usr/share/pacman/keyrings/*" >/dev/null
-        deps
-      fi
+      # Its dependencies, with the image brought up to date if it has fallen
+      # behind the repositories (tools/lib/alarm-deps.sh)
+      source /alarm-deps.sh
+      alarm_install_deps <<<"$info"
       [[ -s /work/pgp.asc ]] && su builder -c "gpg -q --batch --import /work/pgp.asc"
       flags=(-f --nodeps --noconfirm)
       [[ $INCHECK == 1 ]] || flags+=(--nocheck)
