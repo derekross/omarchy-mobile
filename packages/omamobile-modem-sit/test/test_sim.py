@@ -275,6 +275,13 @@ class SimulatorTests(unittest.TestCase):
         self.cli('answer')
         self.next_status(reader, lambda s: s['calls'][0]['state'] == 'active')
         self.cli('dtmf', '1#')
+        # The speaker command reaches sitd; this configuration routes no call
+        # audio ([audio] card = none), so it is refused and the call goes on.
+        refused = subprocess.run([sys.executable, str(BIN / 'omamobile-sit'), 'speaker', 'off'], env=self.env,
+                                 capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn('No call audio is running', refused.stderr)
+        self.assertEqual(json.loads(self.cli('status', '--json'))['calls'][0]['state'], 'active')
         self.control('remote-hangup')
         self.next_status(reader, lambda s: s['calls'][0]['state'] == 'terminated')
         self.control('wap-push')

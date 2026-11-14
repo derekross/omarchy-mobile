@@ -4,7 +4,7 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import paths
 import voice_audio
 from voice_audio import VoiceAudio
@@ -544,6 +544,24 @@ class TeguAudioTests(unittest.TestCase):
             self.assertEqual(controls['Bottom Speaker Digital Volume'], voice_audio.TEGU_GAIN)
             audio.mixer = inner
         self.assertEqual(controls, original)
+
+    def test_an_unknown_output_is_checked_on_the_tegu_route_only(self):
+        # [audio] output is the 9a's key. A mistyped value must not cost any
+        # phone its call audio: ignored away from the tegu card, and on it
+        # logged, with the call starting on the loudspeaker.
+        for tegu, value, expected, warned in ((False, 'earpeice', 'speaker', False),
+                                              (False, 'earpiece', 'speaker', False),
+                                              (True, 'earpeice', 'speaker', True),
+                                              (True, 'earpiece', 'earpiece', False),
+                                              (True, 'speaker', 'speaker', False)):
+            with patch.object(voice_audio, 'is_tegu_card', return_value=tegu), \
+                 patch.object(voice_audio.C, 'CDLL', return_value=MagicMock()), \
+                 patch.object(voice_audio.shutil, 'which', return_value=None), \
+                 patch('builtins.print') as printed:
+                audio = VoiceAudio(card=3, output=value)   # must not raise
+            self.assertEqual((audio.tegu, audio.output), (tegu, expected), (tegu, value))
+            log = ' '.join(' '.join(map(str, call.args)) for call in printed.call_args_list)
+            self.assertEqual('Unknown [audio] output' in log, warned, (tegu, value))
 
     def test_set_output_needs_a_running_route(self):
         audio, _, _, _ = self.fixture()   # pcms not opened yet

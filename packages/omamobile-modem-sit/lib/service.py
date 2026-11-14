@@ -364,7 +364,7 @@ class Service:
             try:
                 self.audio = VoiceAudio(mic_boost_db=audio.getint('mic_boost_db', 6), card=card,
                                         earpiece=audio.getboolean('earpiece', True),
-                                        output=audio.get('output', 'speaker'))
+                                        output=audio.get('output', 'speaker').strip().lower())
                 self.audio.__enter__()
             except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
                 self.audio = None
