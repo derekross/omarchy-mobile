@@ -720,9 +720,10 @@ real users.
 - **Needs:** M0; the build index (§6.1) and the maintainer tool that fills
   it; the camera's Python modules handled by the tool (its own venv) or the
   camera step moved to the phone early.
-- **Built (2026-11-10):** `tools/install-guided`, a repository tool until
-  it has run on a phone (INSTALL-GUIDED §10 lists what has to be true
-  before it is a bundle's `install`), and `tools/factory-index`, designed
+- **Built (2026-11-10):** `tools/install-guided`, run on a phone twice as
+  a reinstall (2026-11-12 and 2026-11-13) and shipped in release bundles
+  from 2026-11-14 as `bash install --guided`, with no option needed there
+  (INSTALL-GUIDED §8, §10), and `tools/factory-index`, designed
   in [INSTALL-GUIDED.md](INSTALL-GUIDED.md). It differs from §4.2 as
   written in one place, by a decision of 2026-11-10: it shows `fastboot
   flashing unlock` for the owner to run and doesn't send it

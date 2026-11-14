@@ -1,16 +1,18 @@
 <!-- SPDX-License-Identifier: MIT -->
 # The guided install: design of milestone M1
 
-Status (2026-11-12): **built and tested against stand-ins; not yet run on a
-phone, and not in any release bundle.** This is the design of M1 in the
+Status (2026-11-14): **run twice on a Pixel 7 Pro, as reinstalls (§8);
+shipped in release bundles from the next one, as `bash install --guided`.**
+This is the design of M1 in the
 [install experience plan](INSTALL-EXPERIENCE-PLAN.md) §11: one command that
 runs the whole install with today's tools. The code is
-[`tools/install-guided`](../tools/install-guided), a repository tool for
-now, with [`tools/factory-index`](../tools/factory-index) and
+[`tools/install-guided`](../tools/install-guided), with
+[`tools/factory-index`](../tools/factory-index) and
 [`tools/camera-requirements.txt`](../tools/camera-requirements.txt); the
-tests are `tests/install-guided` and `tests/factory-index`. §8 is the
-runbook for its first run on a phone, and §10 says what has to be true
-before it becomes a bundle's `install`.
+tests are `tests/install-guided` and `tests/factory-index`. A release
+bundle carries all three under its signed checksums, and its `install`
+(`tools/install-phone`) hands `--guided` on to its `tools/install-guided`
+(§10). §8 is the runbook for its runs on a phone and their results.
 
 ## 1. What it is, and what it isn't
 
@@ -49,6 +51,14 @@ today's tools in turn. It adds no way to write a phone:
 - **Device rules come from `device.conf` and `manifest.json`.** The key
   combinations and the disk space are descriptor keys (§6); the writes are
   `install-phone`'s reading of the manifest.
+- **From a bundle it needs no option** (decided 2026-11-14, §10). In the
+  bundle's folder, `bash install --guided` takes the bundle's signed images,
+  the root image beside the folder, its `device.conf`, its tools and its
+  build index, all checked as `install-phone`'s bundle mode checks them.
+  What used to be options is asked or worked out: a phone on slot B is
+  asked about (§2a, 4), a reinstall's bootloader is slot B's own (§2),
+  a factory image already saved is found (§5b), and a finished install run
+  again asks whether to start again (§3).
 
 ## 2. The steps
 
@@ -56,7 +66,11 @@ Read-only steps run every time; a step that changes something runs once and
 is recorded. "Reads" and "writes" are on the computer unless they say the
 phone.
 
+Before step 1, a record of a finished install asks `Install again from the
+start? This erases the phone. (yes/no)` (§3).
+
 | # | Step | Reads | Changes | Recorded | On a rerun |
+
 | --- | --- | --- | --- | --- | --- |
 | 1 | Preflight | every program a later step runs (below), the SSH public key, free space (`INSTALL_FREE_GB`), the download through `install-phone --verify-only` (signature, checksums, `manifest.json`, root image) | nothing | nothing | always runs |
 | 2 | The warning | the release's label | nothing | `warning` (date, release) | skipped once acknowledged |
@@ -77,9 +91,18 @@ Details that matter:
   `debugfs`, `dumpe2fs`, `e2fsck`, `zstd`, `lz4`, `cpio`, `openssl`, `gpg`,
   `python3`, `unzip`, `ssh`, `sha256sum`, `tar`, and for step 9's extract
   tools `lpunpack`, `simg2img`, `fsck.erofs` and `readelf` (or
-  `llvm-readelf`). Two things are said there and are not stops: a computer
-  without NetworkManager (step 6 then asks the owner to set the address),
-  and a Python that can't make a module folder (step 9's cameras).
+  `llvm-readelf`). The stop names each missing program with its package on
+  Arch Linux (and Omarchy) and on Debian and Ubuntu (a table in the
+  script, `PACKAGES`), then the one command that installs them on this
+  system, read from `/etc/os-release`: `sudo pacman -S --needed …` or
+  `sudo apt install …`, with only the missing packages. `lpunpack` has no
+  Debian or Ubuntu package that we know of, and the stop says so rather
+  than name one. `/usr/sbin` is added to the search path where it is a
+  folder of its own (Debian, Ubuntu), since `debugfs` and `e2fsck` are
+  there. Two things are said there and are not stops: a computer without
+  NetworkManager (step 6 then asks the owner to set the address), and a
+  Python that can't make a module folder (step 9's cameras;
+  `python3-venv` on Debian and Ubuntu).
 - **Step 2, the warning, comes before the phone step** (decided 2026-11-10,
   plan D9): for a locked phone, the unlock that step 3 guides is what
   erases it. It is acknowledged once and recorded once, and nothing asks
@@ -97,17 +120,28 @@ Details that matter:
 - **The bootloader's two slots (G4).** Decided 2026-11-10 (plan D4): on a
   first install the installer measures the other slot itself, in
   `tools/install-phone`; that is being built separately. Until the
-  `install-phone` this script runs does it, a phone that reports only the
-  current slot's version stops at step 3. The stop says a rerun will stop
-  again, offers two safe ways on (the next release, or an issue) and
-  prints no option and no command: `--bootloader-slots-match VERSION`
-  stays an option of the tool, for a version someone has read from the
-  phone, and the stop doesn't hand it out. A version given with the option
-  is compared with the phone's `version-bootloader` at step 3, as
+  `install-phone` this script runs does it, a first install (Android on
+  slot A) on a phone that reports only the current slot's version stops at
+  step 3: the other slot's version is the owner's statement, and the
+  maintainer's decision is that it stays one. The stop says so plainly, says
+  a rerun will stop again, offers two safe ways on (the next release, or an
+  issue) and prints no option and no command: `--bootloader-slots-match
+  VERSION` stays an option of the tool, for a version someone has read from
+  the phone, and the stop doesn't hand it out. A version given with the
+  option is compared with the phone's `version-bootloader` at step 3, as
   `install-phone` compares it at the write: one that differs stops a
   locked phone before the unlock steps, naming both, and not after the
   unlock has erased it. `slots_check` is the one function to change when
   `install-phone` measures.
+- **A reinstall's bootloader** (decided 2026-11-13, the installer reinstall
+  rule). On slot B with the reinstall confirmed, the version the phone
+  reports is slot B's own: the bootloader the phone already starts from.
+  `--set-active=b` switches no slot, so no other bootloader comes into
+  play, and it passes without `--bootloader-slots-match`, said as "slot B's
+  bootloader, which the phone already runs; the install switches no slot".
+  `tools/install-phone` applies the same rule at the write. Two per-slot
+  versions that differ still stop, and a `--bootloader-slots-match` given
+  anyway is still compared.
 - **An option that takes a value is given once** (`--images`,
   `--bootloader-slots-match`, `--work`, `--rootfs`, `--device`,
   `--factory-zip`, `--ssh-key`, `--backup-dir`, `--state`); a second one is
@@ -182,8 +216,13 @@ goes on):
 2. one phone only, and it is the download's model (`product`);
 3. it is the phone the record was started on;
 4. it tells which slot it runs from (`current-slot` is `a` or `b`; a phone
-   that leaves the line out is not taken for slot A), and that isn't slot
-   B (unless `--reinstall`);
+   that leaves the line out is not taken for slot A). On slot B an
+   unlocked phone's owner is asked "Is this phone already running Omarchy
+   Mobile? (yes/no)" (as the desktop installer asks it): `yes` is a
+   reinstall, and `--reinstall` is handed to `install-phone`; `no` stops,
+   because Android runs there and must not be written over; anything else
+   asks again. `--reinstall` given on the command line skips the question.
+   A locked phone on slot B isn't asked (below);
 5. the two bootloader slots: both versions reported and equal (reported
    and different stops; one reported stops, G4 above, and with
    `--bootloader-slots-match VERSION` it stops unless VERSION is the
@@ -258,15 +297,18 @@ change, not the order. §8 step 2a is the read-only look.
 with what is true of the phone at that moment, read from the record:
 nothing has been written; an earlier write began and didn't finish, so
 what was on the phone may already be erased; or Omarchy Mobile is written
-and what was done stays done. A stop that a rerun can get past adds "Run
-this command again to go on from here"; one that a rerun can't get past as
+and what was done stays done. Then every stop ends with the one command to
+run next, on a line of its own: the command as it was run, without
+`--start-over` (in a bundle, `bash install --guided`), so nothing long has
+to be typed or pasted. A stop that a rerun can get past says "To go on from
+here, run:"; one that a rerun can't get past as
 things are (another model, another phone than the record's, no current
-slot, slot B, the bootloader slots or a `--bootloader-slots-match` that
+slot, slot B with Android on it, the bootloader slots or a `--bootloader-slots-match` that
 isn't the phone's version, a file that doesn't fit, a phone that tells no
 bootloader or baseband version, a build that isn't tested or isn't listed
 while the newest build isn't tested either, another release's record, a
-phone that tells no serial, a failed required check) doesn't, and its own
-text says what has to change. The stops of the factory image step (a
+phone that tells no serial, a failed required check) says "Once that has
+changed, run:", and its own text says what has to change. The stops of the factory image step (a
 download that is too large or has another SHA-256, a recorded image that
 is for another build) are of the first kind: the next run downloads or
 takes the file again. A write that fails partway has its own message: the data may be
@@ -321,11 +363,17 @@ Beside it, `report.json` is the last `phone-smoke --json`.
 
 1. No record: a new install.
 2. A record for another model (`codename`): refused.
-3. A record with `finished`: it says when the phone was installed and
-   stops, running nothing. `--start-over` forgets the record (never the
-   backup or the zip).
-4. A record for another release: it stops and says so. An install is
-   finished with the download it was started with.
+3. A record with `finished`: it says when the phone was installed and asks
+   "Install again from the start? This erases the phone. (yes/no)". Only a
+   typed `yes` forgets the record (never the backup or the zip) and starts
+   the install from the start; anything else, the end of input included,
+   runs nothing and changes nothing. A dry run asks nothing and forgets
+   nothing: it goes through the checks as an install from the start would.
+   `--start-over` still forgets the record outright.
+4. A record for another release: it stops and says so, and ends with the
+   command that starts again with this download (the run's own command and
+   `--start-over`). An install is finished with the download it was
+   started with.
 5. A record without an acknowledged `warning`: the warning is shown, first.
 6. Before the write is done, a record whose `phone` is not the connected
    phone's: it stops, and says which phone is which. Nothing was sent to
@@ -391,6 +439,7 @@ without changing anything.
 | 2 | `Type yes to go on, or press Enter to stop:` | `yes` only |
 | 3 | `Press Enter when that is done, to check the phone again:` | Enter |
 | 3 | `Press Enter to restart the phone into Fastboot Mode:` | Enter; then `adb reboot bootloader` |
+| 3 | `Is this phone already running Omarchy Mobile? (yes/no)` | only for an unlocked phone on slot B: `yes` is a reinstall (`--reinstall`); `no` stops; anything else asks again |
 | 4 | `Type yes to accept Google's terms and download the file, or press Enter to get it yourself from Google's page:` | `yes` only: the terms are accepted and recorded, and the download starts; anything else downloads nothing and goes on to the next question. Asked once per build; not asked when the owner's file is already there |
 | 4 | `Press Enter to open Google's page:` | Enter; only when the terms weren't accepted here or the download couldn't be made |
 | 4 | `Press Enter when the download has finished, or type where you saved the file:` | Enter (looks in Downloads) or a path; asked again until the file's size and SHA-256 match |
@@ -699,8 +748,15 @@ of ours.
 
 - **What is tried first.** A file the owner already has: `--factory-zip
   FILE`, or one with Google's name in the Downloads folder. Then a file an
-  earlier run downloaded (`<work>/factory/`). Each is checked by size and
-  SHA-256. None of these shows terms or downloads anything.
+  earlier run downloaded (`<work>/factory/`). Then (2026-11-14) any `.zip`
+  in the Downloads folder, in `<work>/factory/` or in the default cache
+  (`~/.cache/omamobile-install/factory/`, when `--work` names another
+  folder) whose size is the index's and whose SHA-256 is the index's, so a
+  browser's second copy (`…zip(1).zip`) or a renamed file is found; only
+  files of exactly that size are read. Each is checked by size and SHA-256,
+  and one that passes is the very file a download would bring, so it is
+  used without a question, and the installer says where it found it. None
+  of these shows terms or downloads anything.
 - **The terms step** comes before any download (§4 has the text). It is
   shown once per build; `yes` is recorded as `factory_terms=accepted <time>
   for build <build>`, and a later run for the same build doesn't ask again.
@@ -803,7 +859,15 @@ newest first; and each for a locked phone) and the factory image; a failure at e
 rerun; what each kind of stop says; the record; the camera's modules
 (consent, `no`, a failed fetch, a list without digests); a missing program
 at step 1; the real `tools/phone-provision` given the installer's exact
-arguments in `--dry-run`; a bundle layout; and the script's own shape.
+arguments in `--dry-run`; a bundle built and signed by the real
+`make-bundle` (with a test key that its copy of `install-phone` pins),
+unpacked from its one-file download and installed with `bash install
+--guided` and no option, then reinstalled through the "Install again from
+the start?" and slot B questions on a phone that reports one bootloader
+version; the repository installer given a bundle's images; the slot B
+question (`yes`, `no`, another answer, a locked phone); a factory image
+saved under another name or in the default cache; a missing program on
+Arch, Ubuntu and another system; and the script's own shape.
 `tests/factory-index` covers the maintainer tool and the reader's refusals.
 
 The suite needs `unzip` and a few other tools, and skips whole without
@@ -819,7 +883,9 @@ real-tool test above is what keeps the two from drifting again.
 
 ## 8. First run on a phone: the maintainer's runbook
 
-Step 0 has run (its result is below the table); nothing else has. Each
+Step 0 has run, and the install itself has run twice, as reinstalls (the
+results are below the table); the other steps haven't been recorded one
+by one. Each
 step is the maintainer's to run or approve. The connection of step 4 has
 never been added to a real NetworkManager: that step is where it is first
 tried.
@@ -832,8 +898,8 @@ against the current backup passes. Steps 0 and 1 change nothing.
 | 1 | `tools/factory-index add -d cheetah --tested <release> <the phone's factory zip>`, then `tools/factory-index check -d cheetah` | one build, with the bootloader and baseband `fastboot getvar` reports; the printed SHA-256 equals Google's page | the tool refuses the zip | `git checkout device/cheetah/factory-builds.json` | none (laptop only) |
 | 2 | `tools/install-guided --dry-run` with the phone in Fastboot Mode | the warning first; steps 1 to 5 pass; the `would run` lines are slot B's five images and `userdata`, each with `-s` and the phone's serial; the connection it would add is §5a's; "nothing was written" | any other partition in the plan; the phone step misreads the phone's state; it stops at the bootloader slots (expected on the 7 Pro until `install-phone` measures them: then this runbook waits for that, or the maintainer reads the other slot and passes `--bootloader-slots-match`) | none needed (read-only) | low |
 | 2a | only if a locked phone of the model is at hand (never lock a phone for this): `fastboot getvar all 2>&1 \| sed -E 's/:.*//' \| sort -u` on it and on an unlocked one, comparing the names only | the locked phone's names include `current-slot`, `version-baseband`, `version-bootloader` and `partition-size` | one is missing on the locked phone: §2a's order then stops every locked phone there; the stop has to change before a locked phone is installed | none needed (read-only) | none |
-| 3 | `tools/install-guided` (with `--reinstall` if the phone runs Omarchy Mobile) | the warning once; nothing answering at 172.16.42.1; the zip found in Downloads; the codename asked after the dry run; then the writes | `install-phone` stops: read its message, the phone stays in fastboot. "Something already answers at the phone's USB address": unplug the other phone | `fastboot --set-active=a`, as INSTALL.md | medium (erases `userdata`, as every install) |
-| 3a | at step 4 of that run, with no factory image in Downloads: read the terms step, type `yes`. This is the first real download from Google's server | the three quoted sentences are the ones on Google's page today; curl's progress bar; "downloaded, and kept in …"; the file is 600 under `~/.cache/omamobile-install/factory/`; `sha256sum` of it equals Google's page | "Google's server sent the download on to another address" (note the host it names: §5b's rule then needs deciding again); a size or SHA-256 stop; the sentences on Google's page differ from the quoted ones (the text has to change before anyone else sees it) | the file is only on the computer: delete it, or go on with the fallback (Google's page, `--factory-zip`) | low (nothing is sent to the phone) |
+| 3 | `tools/install-guided` (from a bundle: `bash install --guided` in its folder; on slot B it asks whether the phone runs Omarchy Mobile) | the warning once; nothing answering at 172.16.42.1; the zip found in Downloads; the codename asked after the dry run; then the writes | `install-phone` stops: read its message, the phone stays in fastboot. "Something already answers at the phone's USB address": unplug the other phone | `fastboot --set-active=a`, as INSTALL.md | medium (erases `userdata`, as every install) |
+| 3a | at step 4 of that run, with no factory image in Downloads: read the terms step, type `yes`. This is the first real download from Google's server | the three quoted sentences are the ones on Google's page today; curl's progress bar; "downloaded, and kept in …"; the file is 600 under `~/.cache/omamobile-install/factory/`; `sha256sum` of it equals Google's page | "Google's server sent the download on to another address" (note the host it names: §5b's rule then needs deciding again); a size or SHA-256 stop; the sentences on Google's page differ from the quoted ones (the text has to change before anyone else sees it) | the file is only on the computer: delete it, or go on with the fallback (Google's page, or the file saved into Downloads) | low (nothing is sent to the phone) |
 | 4 | at the connection question, read the command and its description, press Enter. This is the first time this profile meets a real NetworkManager. On a computer that already has `omamobile-phone` saved the question doesn't come: to try the new profile there, `nmcli connection delete omamobile-phone` before step 3 | `nmcli connection show omamobile-phone` has `ipv4.method manual`, `ipv4.never-default yes`, priority -100; `nmcli device` shows it on the phone's link; the phone answers; `sysctl net.ipv4.ip_forward` and the firewall's rules are as before | another saved connection takes the phone's link (the phone then doesn't answer); this computer's network changes in any other way | `nmcli connection delete omamobile-phone` | low |
 | 5 | let it run: first start, backup, firmware | "the first start has finished" within minutes, with no internet on the phone but its Wi-Fi; `verified against the phone` per partition; each push `verified` | the first start doesn't finish and `/var/log/omamobile/firstboot.log` shows a step waiting for the network (§5a's reading is then wrong: say so, and the profile goes back to the maintainer); "is not the phone this install wrote" or "doesn't tell its serial number" (step 0 should have caught it); the backup names a writable or mounted partition; provisioning fails twice | rerun `tools/install-guided`; the backup only reads | low |
 | 6 | the restart and the check | the phone comes back; every required row `[ok]`; "Your phone is ready" | the phone doesn't come back in ten minutes (Power held 30 s); `journalctl -b -1 -u omamobile-modem` shows the modem was up and not stopped | rerun `tools/install-guided` (it only checks again) | low |
@@ -852,6 +918,49 @@ hardware address in them.
   SHA-256 equals that of the serial in a saved `fastboot getvar all` of
   the same phone (compared by digest; neither was printed). So the
   identity check's first source is right on this phone.
+- **The first guided install, 2026-11-12** (step 3 onwards, as a
+  reinstall): the maintainer's Pixel 7 Pro, running release 2026.11.08
+  from slot B, reinstalled with `tools/install-guided` from the repository,
+  with `--reinstall` and `--bootloader-slots-match` typed by hand. It booted
+  `7.3.0-rc6-omamobile-g1a9d1d4e9289`. What worked: the checks, the phone
+  step, the factory image, the dry run and the write, the first start, the
+  radio backup and the firmware. The backup's reads met SSH timeouts right
+  after the first start (the USB link dropping; the cause isn't known),
+  which `nv-backup`'s retries rode out. What stopped: the run printed
+  "Restarting the phone, so it starts with its firmware." and ended there
+  without a word, its last two steps unrecorded, although the phone came
+  back healthy: the wait's `now=$(boot_id)` failed while the phone was
+  silent, and under `set -e` that ended the script (fixed in #710, with a
+  stand-in phone that stays silent after a restart). Also seen: a missing
+  program was named but not the package that has it (the stop gave one
+  fixed `pacman` line for every program, and nothing for other systems).
+- **The second guided install, 2026-11-13**: release 2026.11.12, from its
+  signed bundle, on the same phone (Omarchy Mobile on slot B), with the
+  release kernel `7.3.0-rc6-omamobile-g1a9d1d4e9289`. The bundle had no
+  guided installer, so the repository's was pointed at the bundle's
+  images, and stopped: "…/images holds images for 'an unknown device', not
+  cheetah (run: DEVICE=cheetah bin/omamobile images)", because a bundle's
+  `images/` has no `DEVICE` file (`install-phone` checks it only in
+  repository mode; a bundle's device is its signed `device.conf`). It went
+  through with `--images`, `--rootfs`, `--reinstall`,
+  `--bootloader-slots-match` (slot B's own version), `--factory-zip` and
+  `--start-over` (the record of the 2026-11-12 install) typed by hand, and
+  that line broke when it was pasted. After that the install was clean:
+  written, first start, radio backup, firmware, restart and check.
+- **What changed after those two (2026-11-14):** the bundle ships the
+  guided installer and what it runs (`tools/install-guided`,
+  `tools/phone-smoke`, `tools/factory-index`,
+  `tools/camera-requirements.txt`, under the signed `SHA256SUMS`), and
+  `bash install --guided` in the bundle's folder runs it with the bundle's
+  own files, checked as bundle mode checks them, with no option (§10).
+  Slot B is a question ("Is this phone already running Omarchy Mobile?"),
+  a reinstall's bootloader is slot B's own (§2), a finished install run
+  again asks "Install again from the start?" (§3), a factory image already
+  saved under any name is found by its SHA-256 (§5b), a missing program is
+  named with its package on Arch and on Debian and Ubuntu and the one
+  command for this system (§2), and every stop ends with the one command
+  to run next on a line of its own (§2a). The repository's installer, given
+  a bundle's images, sends the owner to the bundle's own command.
 
 ## 9. Open for the maintainer
 
@@ -864,7 +973,13 @@ hardware address in them.
 - **G4.** Decided (D4), not yet in `tools/install-phone`; see §2. When it
   lands, `install-phone` asks one more question in a first install, and
   the guided installer has to ask it and feed the answer; `slots_check`
-  then stops only where `install-phone` still asks for the option.
+  then stops only where `install-phone` still asks for the option. A
+  reinstall on slot B no longer needs it (the reinstall rule, §2).
+- **`bash install --guided` from a bundle on a phone.** Built and tested
+  against a bundle that the real `make-bundle` builds and signs in the
+  tests, unpacked from its one-file download; not yet run on a phone. The
+  first release that ships it should be installed with it, by the
+  maintainer, before INSTALL.md's lead is taken as proven.
 - **A locked bootloader's answers.** §2a judges a locked phone from
   `getvar all`; that a locked bootloader gives the same lines as an
   unlocked one has not been seen on a phone (§8 step 2a).
@@ -900,16 +1015,42 @@ hardware address in them.
 - **Running as root** isn't refused.
 - **Narrowing the connection to this phone** after the first start (§5a).
 
-## 10. Before it is a bundle's `install`
+## 10. In a release bundle
 
-`tools/install-guided` finds its files when it sits at the top of a bundle
-(`device.conf` and `images/` beside it, the tools in `tools/`), and the
-tests run it that way. No bundle ships it yet. That switch (`make-bundle`,
-`tools/release`, INSTALL.md leading with it) waits for:
+From the first bundle after 2026-11-14, `tools/make-bundle` ships the
+guided install: `tools/install-guided`, and what it runs that the bundle
+didn't carry before, `tools/phone-smoke`, `tools/factory-index` and
+`tools/camera-requirements.txt`, beside the provisioning tools, all under
+the signed `SHA256SUMS` and in `manifest.json` (make-bundle's
+`provision_tools`, which `tools/release`'s bundle check reads as the list
+of what a bundle's `tools/` may hold). The command is the bundle's own
+`install`, `tools/install-phone`, with one option:
 
-1. §8 run on a Pixel 7 Pro, with the results recorded here (date,
-   `uname -r`);
-2. G4 in `tools/install-phone`, so a first install on a 7 Pro can finish
-   without an option nobody should have to pass;
-3. `device/cheetah/factory-builds.json` committed, with the maintainer's
-   word on which builds are tested.
+```sh
+bash install --guided
+```
+
+`install-phone` hands every other option to the bundle's
+`tools/install-guided` and runs nothing of its own; the guided installer
+runs `install-phone` (the bundle's `install`) for its checks and writes, and
+never with `--guided`. `bash install` without it is the install by hand, as
+before.
+
+**The device comes from the bundle's `device.conf`, and `images/` has no
+`DEVICE` file** (decided 2026-11-14). `DEVICE` is how `bin/omamobile
+images` marks a build folder in the repository, where `out-int/images`
+holds whichever device was built last; `install-phone` checks it in
+repository mode only. A bundle is one device's by construction: its
+`device.conf` and its images are under the same signed checksums, and
+`manifest.json` names the codename and the product, which `install-phone`
+compares with the descriptor. A second marker would only be one more thing
+that could disagree with the signed descriptor, and the guided installer in a
+bundle runs `install-phone` in bundle mode, which reads the descriptor,
+checks the signature, every checksum, `manifest.json` and the root image
+named by the signed `MANIFEST` (found beside the bundle's folder, as the
+one-file download unpacks it). So no `--images`, `--rootfs` or `--device`
+is needed, and the repository's installer given a bundle's `images/` says
+to run the bundle's own command instead.
+
+Still open (§9): G4 for a first install on slot A, and the first run from
+a bundle on a phone.
