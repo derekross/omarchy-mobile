@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 import env  # noqa: F401  (paths and sys.path first)
 from pathlib import Path
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -65,7 +66,9 @@ class DeviceTests(unittest.TestCase):
              patch.object(data_network, 'run', run), \
              patch.object(data_network.subprocess, 'run', undo), \
              patch.object(data_network.paths, 'RUN', Path(temp)), \
-             patch.object(data_network, 'INTERFACE', Path(temp) / 'data-interface'):
+             patch.object(data_network, 'INTERFACE', Path(temp) / 'data-interface'), \
+             patch.object(data_network, 'KEPT', Path(temp) / 'data-interface-kept'):
+            self.run_dir = Path(temp)
             try:
                 dev = data_network.find_device('192.0.2.10', cid, probe=probe or (lambda d: d == carrier),
                                                stopped=stopped)
@@ -73,6 +76,8 @@ class DeviceTests(unittest.TestCase):
                 dev = None
             recorded = (Path(temp) / 'data-interface').read_text().strip() \
                 if (Path(temp) / 'data-interface').exists() else None
+            self.kept = (Path(temp) / 'data-interface-kept').read_text().strip() \
+                if (Path(temp) / 'data-interface-kept').exists() else None
         return dev, recorded, commands
 
     def test_stock_name_first_then_the_others(self):
@@ -89,6 +94,44 @@ class DeviceTests(unittest.TestCase):
         self.assertNotIn(('ip', 'addr', 'del', '192.0.2.10/32', 'dev', 'rmnet1'), commands)
         self.assertEqual(commands[-1], ('ip', 'route', 'add', 'default', 'dev', 'rmnet1',
                                         'src', '192.0.2.10', 'metric', '700'))
+
+    def test_the_status_names_no_device_while_one_is_only_being_tried(self):
+        # The Pixel 7 Pro's case: rmnet0 is tried first and doesn't answer,
+        # rmnet1 does. The phone service's status, read during each probe,
+        # must not name the candidate; it names rmnet1 once that is kept.
+        import data_call
+        import service as app_service
+        result = bytearray(132)
+        struct.pack_into('<HBBB', result, 0, 0, data_call.INTERNET_CID, 1, 1)
+        result[5:9] = bytes([192, 0, 2, 10])
+        result[0x1a:0x1e] = bytes([192, 0, 2, 53])
+        seen = []
+        with tempfile.TemporaryDirectory() as directory:
+            response = Path(directory) / 'data-call-response.bin'
+            response.write_bytes(bytes(result))
+            def status():
+                with patch.object(app_service, 'bearer_paths', return_value=(None, response)), \
+                     patch.object(app_service.paths, 'RUN', self.run_dir):
+                    return app_service.internet_config()
+            def probe(dev):
+                seen.append((dev, (self.run_dir / 'data-interface').read_text().strip(), status()))
+                return dev == 'rmnet1'
+            real_write = Path.write_text
+            after = []
+            def write(path, text, *args, **kwargs):
+                n = real_write(path, text, *args, **kwargs)
+                if path.name == 'data-interface-kept':
+                    after.append(status())
+                return n
+            with patch.object(Path, 'write_text', write):
+                dev, recorded, _ = self.run_find('rmnet1', probe=probe)
+        self.assertEqual(seen, [('rmnet0', 'rmnet0', {}), ('rmnet1', 'rmnet1', {})])
+        self.assertEqual((dev, recorded, self.kept), ('rmnet1', 'rmnet1', 'rmnet1'))
+        self.assertEqual(after, [dict(interface='rmnet1', address='192.0.2.10', dns=['192.0.2.53'])])
+
+    def test_a_candidate_that_does_not_answer_is_never_recorded_as_kept(self):
+        dev, recorded, _ = self.run_find(None)
+        self.assertEqual((dev, recorded, self.kept), (None, None, None))
 
     def test_a_configured_device_is_never_touched(self):
         dev, _, commands = self.run_find('rmnet2', busy=('rmnet0',))
@@ -134,10 +177,13 @@ class DeviceTests(unittest.TestCase):
             return Done()
         with tempfile.TemporaryDirectory() as temp, \
              patch.object(data_network.subprocess, 'run', undo), \
-             patch.object(data_network, 'INTERFACE', Path(temp) / 'data-interface'):
+             patch.object(data_network, 'INTERFACE', Path(temp) / 'data-interface'), \
+             patch.object(data_network, 'KEPT', Path(temp) / 'data-interface-kept'):
             (Path(temp) / 'data-interface').write_text('rmnet2\n')
+            (Path(temp) / 'data-interface-kept').write_text('rmnet2\n')
             data_network.clear_stale()
             self.assertFalse((Path(temp) / 'data-interface').exists())
+            self.assertFalse((Path(temp) / 'data-interface-kept').exists())
         self.assertEqual(commands, [('ip', 'route', 'del', 'default', 'dev', 'rmnet2', 'metric', '700'),
                                     ('ip', 'addr', 'flush', 'dev', 'rmnet2'),
                                     ('ip', 'link', 'set', 'dev', 'rmnet2', 'down')])

@@ -1,0 +1,25 @@
+From: W4HO <87742609+W4HO-ham@users.noreply.github.com>
+Subject: [PATCH] build: link dependencies used by modern libphonenumber headers
+
+--- a/meson.build
++++ b/meson.build
+@@ -119,6 +119,8 @@
+   dependency('libsoup-3.0'),
+   dependency('libcares', version : '>=1.18.1'),
+   cc.find_library('dl'),
++  dependency('protobuf'),
++  dependency('absl_absl_check'),
+   cc.find_library('phonenumber', required: true)
+ ]
+ 
+--- a/unit/meson.build
++++ b/unit/meson.build
+@@ -3,6 +3,8 @@
+   dependency('mm-glib', version : '>=1.14'),
+   dependency('libcares', version : '>1.17'),
+   cc.find_library('dl'),
++  dependency('protobuf'),
++  dependency('absl_absl_check'),
+   cc.find_library('phonenumber', required: true)
+ ]
+ 

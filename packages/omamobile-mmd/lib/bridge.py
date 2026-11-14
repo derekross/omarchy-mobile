@@ -22,6 +22,7 @@ never logged.
 """
 import hashlib
 import itertools
+from pathlib import Path
 import re
 import uuid
 
@@ -43,6 +44,12 @@ LOCKS = {'pin': mm.LOCK_SIM_PIN, 'puk': mm.LOCK_SIM_PUK, 'network-locked': mm.LO
 DEVICE = '/sys/devices/platform/cpif'
 LIVE = (mm.CALL_DIALING, mm.CALL_RINGING_OUT, mm.CALL_RINGING_IN, mm.CALL_ACTIVE, mm.CALL_HELD,
         mm.CALL_WAITING)
+# A WAP push (an MMS notification) goes to clients as binary data only where
+# something can fetch the message: mmsd-tng, by its binary. Elsewhere the
+# owner at least learns that a message came.
+MMS_DAEMON = Path('/usr/bin/mmsdtng')
+NO_MMS_TEXT = 'Received a multimedia or binary message that this phone cannot display yet.'
+
 NOT_YET = {
     'data': 'Mobile data through ModemManager (T3); omamobile-sit-data owns rmnet0 for now',
     'pin': 'SIM PIN entry (T8); take the PIN lock off in another phone',
@@ -102,6 +109,9 @@ def derive(status):
 def is_emergency(number, d):
     return re.sub(r'[\s().-]', '', number) in d['emergency_numbers']
 
+
+# MM_BEARER_IP_METHOD_UNKNOWN: a bearer IP config with nothing in it.
+NO_IP_CONFIG = {'method': GLib.Variant('u', 0)}
 
 class Bridge:
     def __init__(self, exporter, link, settings):
@@ -189,7 +199,8 @@ class Bridge:
         if d['data'] and not self.bearer:
             self.create_bearer(d)
         if self.bearer:
-            self.x.set(self.bearer, mm.BEARER, Connected=d['data'])
+            self.x.set(self.bearer, mm.BEARER, Connected=d['data'], Interface=self.internet_interface(),
+                       Ip4Config=self.internet_ipv4(d), Ip6Config=NO_IP_CONFIG)
         for name in d['interfaces']:
             if not self.x.has(self.modem, name):
                 self.x.add_interface(self.modem, name, self.interface_props(name, d))
@@ -285,11 +296,32 @@ class Bridge:
                     OperatorIdentifier=d['plmn'] if d['home'] else '',
                     OperatorName=d['operator_name'] if d['home'] else '')
 
+    def internet_interface(self):
+        # The device omamobile-sit-data found carrying the internet bearer,
+        # which isn't always rmnet<CID - 1>; empty until sitd reports it, as
+        # MM leaves a bearer's interface empty before it has one (a guess
+        # such as rmnet0 can be another bearer's device for a while).
+        return ((self.status or {}).get('internet') or {}).get('interface') or ''
+
+    def internet_ipv4(self, d):
+        # The address and the carrier's DNS, as MM gives them: mmsd-tng
+        # resolves the MMSC through these where MMS goes over this bearer.
+        net = (self.status or {}).get('internet') or {}
+        if not d['data'] or not net.get('address'):
+            # libmm-glib rejects an IP config without a method (mmsd-tng
+            # logged "method not given"): unknown, as MM reports no config.
+            return NO_IP_CONFIG
+        return {'method': GLib.Variant('u', 2), 'address': GLib.Variant('s', net['address']),
+                'prefix': GLib.Variant('u', 32),
+                **{'dns' + str(i): GLib.Variant('s', value) for i, value in enumerate(net.get('dns', [])[:3], 1)}}
+
     def create_bearer(self, d):
         self.bearer = self.path('Bearer')
         apn, ip_type = self.apn_settings()
         self.x.add(self.bearer, {mm.BEARER: dict(
-            Interface='rmnet0', Connected=d['data'], IpTimeout=20, BearerType=mm.BEARER_DEFAULT,
+            Interface=self.internet_interface(), Connected=d['data'], Ip4Config=self.internet_ipv4(d),
+            Ip6Config=NO_IP_CONFIG,
+            IpTimeout=20, BearerType=mm.BEARER_DEFAULT,
             ProfileId=-1, Properties={'apn': GLib.Variant('s', apn),
                                       'ip-type': GLib.Variant('u', IP_TYPES.get(ip_type, mm.IP_V4V6))})},
             self.handle_bearer)
@@ -452,9 +484,14 @@ class Bridge:
             if sid not in wanted or sid in self.sitd_sms:
                 continue
             data = bytes.fromhex(message.get('data') or '')
+            text = message.get('text', '')
+            if data and not text and not MMS_DAEMON.exists():
+                # Nothing on this phone takes a WAP push: Messages would show
+                # nothing at all, so it gets the placeholder as a text.
+                text, data = NO_MMS_TEXT, b''
             path = self.new_message(dict(
                 sid=sid, State=mm.SMS_RECEIVED, PduType=mm.PDU_DELIVER, Number=message.get('number', ''),
-                Text=message.get('text', ''), Data=data, Timestamp=message.get('timestamp', ''),
+                Text=text, Data=data, Timestamp=message.get('timestamp', ''),
                 Storage=mm.STORAGE_ME), received)
             print(f'SMS {path} received{" (binary data: a WAP push)" if data else ""}', flush=True)
         if any(i not in self.sitd_sms for i in self.status.get('sms', {}).get('received', [])):
