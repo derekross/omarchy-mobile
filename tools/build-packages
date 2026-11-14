@@ -115,6 +115,7 @@ if ((${#dirs[@]} == 0)) && ((${#imports[@]} == 0)) && ((resign == 0)); then
   done
   for d in packages/*/; do
     name=$(basename "$d")
+    [[ " ${NAMED_ONLY[*]} " != *" $name "* ]] || continue
     [[ " ${ORDER[*]} " == *" $name "* ]] || dirs+=("packages/$name")
   done
 fi
@@ -292,7 +293,9 @@ done
 skipped=() kept=()
 for d in "${build[@]}"; do
   name=$(basename "$d")
-  if [[ " ${NAMED_ONLY[*]} " == *" $name "* ]]; then
+  # Only the kernel package packs a staged build; other named-only packages
+  # (omamobile-install-link) compile their own
+  if [[ " ${NAMED_ONLY[*]} " == *" $name "* && -x $d/stage ]]; then
     "$d/stage" --verify "$d/prebuilt" || alarm_die "$name: the staged kernel is not a published release; nothing built"
   fi
   if grep -c 'OMAMOBILE_BOOT_FILES' "$d/install" >/dev/null 2>&1 && ! tools/stage-boot-files --check "$d/boot-files"; then
