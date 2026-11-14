@@ -96,6 +96,91 @@ Hyprland transform 1 or 3 gives a 1040x480 logical px output (portrait is 480x10
 
 **What remains after batch 4:** 1.11 (gum prompts as sheets: onboarding, PIN setup), 1.12's Nightlight and Reminder tiles, 2.1's per-token font seeds (the 12 px floor is in; the overrides need a theme-change check), 2.7 contrast (4.5:1 for placeholder and secondary text), 3.1 per-site web-app flags, 3.3's upstreamable `menu.d` patch (the rows are hidden by `omamobile-setup-user` for now), 3.6 haptics, 3.7 polish, and the Omarchy patches 3-6 below.
 
+## Browser history after native Back, 2026-11-11 (1.2)
+
+Build on #643's native BackLink registry, keyboard-first behavior, Escape via
+wtype and terminal-Home handling. After native handlers decline Back, both
+edges navigate Chrome/Chromium history. Require an activated, non-modal known
+browser and matching Wayland/Hyprland handles, unchanged since gesture start.
+Browser Back sends `wtype -M alt -k Left -m alt`; only without wtype does it
+use the ordered ALT/code:113 dispatch pair. At the first browser page, Back
+stays on that page; the home pill goes home.
+Missing canonical reader, unknown app or changed focus uses the existing main
+fallback. An empty active-handler list has its upstream meaning: no surface
+consumed Back. No all-plugin readiness requirement is imposed.
+
+Quick settings, drawer and recents join that same registry. Wi-Fi/Bluetooth
+cancel their nested sheets before returning to quick settings; recorder emits
+its existing back request; editing/search/recents menus go back one level.
+The packaged BackLinkClient URL is shared by personal clones and publishers.
+Preserve threshold haptics and upstream Home/Escape argv and package version.
+
+Earlier 6a candidates established browser Back from both physical edges and
+with the keyboard open, but preceded #643's keyboard-first contract. A native
+Qt dialog exposed fixed code:9 translating to Qt key0 with Squeekboard's map;
+wtype delivered Qt Escape16777216 and closed it. The reviewed local Escape
+correction passed physical dialog checks with keyboard hidden and visible,
+and normal typing afterward. That Escape mechanism is now supplied by main.
+These observations do not qualify this new integration's native ordering.
+
+### Pixel 6a verification, 2026-11-11
+
+The revised combined package was subsequently installed and physically tested:
+`omamobile-shell 0.2.119-1`, integration
+`83326ed6d09684ae80f38c9360e8c4e864d32614`, SHA-256
+`02e0acadd2568bf167946a87c740626fffb59068918271bdb2026fac799e0270`, on
+`7.3.0-rc6-omamobile-bluejay-input-gated0`. Installation and cold shell restart
+were gated on an unlocked session. No new QML/config errors appeared; all six
+required smoke checks passed and package verification found 370 files, none
+altered. Policy, the complete combined shell suite, independent review and
+published-head repository/every-package CI passed.
+
+The owner confirmed both physical browser edges return Page two to Page one.
+With text entered and the keyboard visible, first Back hid the keyboard and
+left Page two; next Back navigated. The final DOM reports Page one,
+`back_forward` navigation and Escape count zero. The actual Qt Controls dialog
+also passed physically: five typed characters, first swipe hides only the
+keyboard, next swipe delivers Qt Escape16777216 and rejects/closes the dialog.
+Normal idle lock, input-gate refusal while locked and owner unlock were observed.
+
+Running-shell calls also verified quick settings, Wi-Fi, Bluetooth, recorder,
+drawer and recents without changing the underlying browser's history or Escape
+count. A real Access backend request was dismissed unanswered. Those surface
+and permission observations are handler/dispatch checks; the physical results
+above belong to the browser and Qt dialog. No formal physical release-to-frame
+latency was measured. Maintainer Pixel 7 Pro qualification remains before merge.
+
+Task browsers, server, fixtures and CDP tunnel were stopped and task-only data
+removed. The personal clock, flags and saved zoom were preserved, with only
+main's expected remote-session disable added to the profile. The phone returned
+home. These results belong to the exact combined artifact, not a later kernel
+or an unrelated subsequently merged shell change.
+
+
+Userspace runbook (low risk):
+
+1. Run policy, complete shell suite, current native-surface/routing/model and
+   clone tests. Build the complete combined browser/gesture package. Stop on
+   any failure. Back up the installed package and current profile/clone,
+   browser flags and done markers for rollback.
+2. Announce installation and cold shell restart. Verify the session is
+   unlocked immediately before each, install the complete package and restart
+   the shell. Stop on QML errors or changed personal settings. Keep the
+   existing qualified kernel and boot-update policy for this userspace trial.
+3. With two browser pages, test both edges with keyboard hidden. Raise and
+   type into the keyboard: first Back hides it without navigating, next Back
+   navigates. Check native quick settings/Wi-Fi/Bluetooth/recorder, drawer and
+   recents; Back must not navigate the browser beneath them. Test actual Qt
+   dialog and prompt cancellation, focus changes and lock/unlock. Stop if a
+   key reaches the wrong surface or a modifier remains held.
+4. Measure physical release-to-frame latency. The removed helper's 247ms
+   measurement is not a result for this route. Maintainer Pixel 7 Pro and
+   other reference-phone checks remain before merge. Keep draft until those
+   qualification checks are recorded.
+5. Rollback by reinstalling the saved package, restoring only changed user
+   files from the private backup and restarting while unlocked. Recheck the
+   personal clock, browser flags/zoom and selected Back plugin.
+
 ## Suggested order
 
 1. Phase 0 (one `omamobile-omarchy` and firstboot release, plus a `phone-smoke` lock check).

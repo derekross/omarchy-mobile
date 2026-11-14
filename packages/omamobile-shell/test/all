@@ -97,7 +97,7 @@ for sc in 3 '8 \/ 3'; do
   t=$(printf 'local omarchy_monitor_scale = 2\n' | sed "s/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = $sc/")
   [[ $t == 'local omarchy_monitor_scale = 3' || $t == 'local omarchy_monitor_scale = 8 / 3' ]] || fail "the seeded scale line ($t)"
 done
-grep -c 'Quickshell.execDetached(BackModel.ESCAPE_ARGV)' "$b" >/dev/null || fail "back sends Escape through BackModel"
+grep -c 'Quickshell.execDetached(browser ? BackModel.BROWSER_BACK_ARGV : BackModel.ESCAPE_ARGV)' "$b" >/dev/null || fail "back sends Escape through BackModel"
 grep -c 'WlrLayershell.namespace: "omamobile-back"' "$b" >/dev/null || fail "back strips' namespace"
 grep -c 'mask: Region { item: strip }' "$b" >/dev/null || fail "only the edge strip takes touches"
 grep -c 'exclusionMode: ExclusionMode.Normal' "$b" >/dev/null || fail "back strips stay clear of the bar and the keyboard"
@@ -119,8 +119,10 @@ grep -c 'Quickshell.execDetached(BackModel.HOME_ARGV)' "$b" >/dev/null || fail "
 # list's rules and test/back-surfaces.py every surface's registration.
 head -3 plugins/omamobile.back/BackLink.js | grep -c '^\.pragma library$' >/dev/null || fail "BackLink.js is one instance per engine (.pragma library)"
 grep -c '^import "BackLink.js" as BackLink$' plugins/omamobile.back/BackLinkClient.qml >/dev/null || fail "BackLinkClient.qml imports BackLink.js beside it"
-grep -c '^import "BackLink.js" as BackLink$' "$b" >/dev/null || fail "Back.qml imports the same BackLink.js"
-grep -c 'var used = BackLink.back()' "$b" >/dev/null || fail "back asks BackLink before sending Escape"
+# The reader loads the canonical client too: a personal clone must share the
+# publishers' registry rather than importing its own copied BackLink.js.
+grep -c 'source: Qt.resolvedUrl("../omamobile.back/BackLinkClient.qml")' "$b" >/dev/null || fail "Back.qml loads the canonical BackLink client"
+grep -c 'var used = ready ? client.back() : ""' "$b" >/dev/null || fail "back asks BackLink before sending Escape"
 # The keyboard is hidden through squeekboard's own call, never by turning it
 # off (the screen-keyboard-enabled setting; AGENTS.md, Userspace).
 k=plugins/omamobile.keyboard/Keyboard.qml
@@ -1250,3 +1252,16 @@ else
   pass "Back threshold feedback: once per gesture, both edges and retreat"
 fi
 bash test/power-overlap.sh || fail "overlapping power-key presses"
+
+# Browser routing runs Back.qml's handler and native callbacks with dispatch
+# recorded. The clone probe loads the exact canonical reader URL.
+for test in back-navigation.py back-clone.py; do
+  rc=0; out=$(python3 -B "test/$test" 2>&1) || rc=$?
+  if [[ $rc == 77 ]]; then
+    pass "$test # SKIP no qmltestrunner"
+  elif [[ $rc != 0 ]]; then
+    printf '%s\n' "$out" >&2; fail "$test"
+  else
+    pass "$test"
+  fi
+done
