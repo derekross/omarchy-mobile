@@ -1772,9 +1772,10 @@ the alarm; otherwise the same).
   refused**: those 14 were all there were. At logind's sleep announcement NetworkManager takes
   `wlan0` down, the bearer's metric-700 default route is the only one
   left, whatever was talking over Wi-Fi goes out over `rmnet0` in the same
-  second, and the link is up when the notifier looks. omarchy-mobile#750
-  (a draft) has `omamobile-sit-data` remove its route at the announcement
-  and put it back once Wi-Fi's is back, or after 10 s without one. Put
+  second, and the link is up when the notifier looks. The fix, written
+  as omarchy-mobile#750 and now part of #556, has `omamobile-sit-data`
+  remove its route at the announcement and put it back once Wi-Fi's is
+  back, or after 10 s without one. Put
   back at once after the wake it was worse than useless: 18 of 20 entered
   and none reached the alarm, the answers to the few seconds of traffic
   ending each next sleep early.
@@ -1817,14 +1818,26 @@ the alarm; otherwise the same).
   suspend for the next userspace alarm), and the `rtc` and `alarmtimer`
   trace events over a run would show it. The palmtop woke every time.
 
+- **With omarchy-mobile#556's package nothing is done by hand** (2026-11-14,
+  its head `6eddef24` merged with #697 for the build, `[control]
+  follow_screen = yes`, the same kernel): 30 requests of 60 s, 30 entered,
+  24 ended by the alarm and 6 by the modem. sitd told the modem "screen
+  off" once, 16 s after its start with the panel dark, and the sleep hook
+  logged "screen off before sleep told" 30 times; the link was already
+  idle at 26 of the 30 requests, and the whole 46-minute boot had 97 link
+  power-ups, where the modem on its "screen on" reports does about 49 a
+  minute. The route came back behind Wi-Fi 30 of 30 times. After each
+  sleep the CP was ONLINE with no failed poll, and `ping -I rmnet0` got 5
+  of 5 at the end.
+
 What this leaves before the modem's inhibitor can go on the 9a: #232 in
 the published kernel and the zumapro line after it (its own small pull
 request, as #232's author asked); the hang above understood, or at least
-counted on a build without #232; the screen state told to the modem by
-the shell, not by hand (the 7 Pro's side of that is omarchy-mobile#556);
-the route change (#750, or its equivalent in #556); and what no run here
-tested: a call and a text arriving while the palmtop sleeps, a sleep of
-hours, and a sleep off the charger.
+counted on a build without #232; omarchy-mobile#556 merged, which
+carries both the screen state and the route change, with `follow_screen`
+turned on for the 9a once a call with the screen dark has been tested;
+and what no run here tested: a call and a text arriving while the palmtop
+sleeps, a sleep of hours, and a sleep off the charger.
 
 ### M2: the link only (modem link driver, `allow_hw=1`; risk: medium)
 

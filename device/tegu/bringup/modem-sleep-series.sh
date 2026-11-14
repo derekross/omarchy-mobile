@@ -10,7 +10,7 @@
 # alarm is the wake. The cellular data service is started if it isn't running, and the
 # default routes are logged before each request: with Wi-Fi connected and the service
 # as on main, the bearer's route is the only one left at the freeze and every request
-# is refused (omarchy-mobile#750). 20 s after each request: the CP's state, sitd, its
+# is refused (fixed by omarchy-mobile#556). 20 s after each request: the CP's state, sitd, its
 # failed polls, Wi-Fi and new UFS lines. Stops when the CP isn't ONLINE. On the charger.
 #   systemd-run --unit=x-modem-sleep-series /root/modem-sleep-series.sh [N] [S] [append]
 # The last step afterwards is "systemctl reboot", never reboot-to.
