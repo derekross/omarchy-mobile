@@ -369,6 +369,14 @@ class OrderTests(unittest.TestCase):
         order, _ = self.run_start(1, settings)
         self.assertEqual(order[:5], ['state', 'attach', 'profiles', 'nr', 'reg'])
 
+    def test_nr_after_radio_on_mistyped_keeps_the_default_order(self):
+        settings = paths.config('/nonexistent')
+        settings['network']['apn'] = 'internet.example'
+        settings['network']['nr_after_radio_on'] = 'ja'
+        order, lines = self.run_start(0, settings)
+        self.assertEqual(order[:6], ['state', 'attach', 'profiles', 'nr', 'on', 'reg'])
+        self.assertTrue(any("'ja' isn't yes or no" in l for l in lines))
+
     def test_nr_on_leaves_the_nr_mode_alone(self):
         settings = paths.config('/nonexistent')
         settings['network']['apn'] = 'internet.example'
