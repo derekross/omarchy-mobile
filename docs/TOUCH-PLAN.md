@@ -79,6 +79,12 @@ only the scale waits. A separate defaults marker preserves removals before
 the phone bar retries the helper at shell start with live monitor geometry,
 including computed/auto Lua scales. A failed helper never aborts user setup. Fresh defaults deliberately use a generic Android mobile user agent without a device model; existing user-agent choices are preserved.
 
+November 14 parser follow-up: an unquoted app URL fragment must not hide
+later custom scale or user-agent flags. Comment recognition now follows
+unquoted token boundaries; the new preservation regression fails with the
+previous parser and passes with the correction. This edge-case correction
+has offline test evidence only and was not in the historical package below.
+
 Runbook (low risk, userspace only):
 
 1. Run the shell package suite and policy gate. Expect no failures; stop on
