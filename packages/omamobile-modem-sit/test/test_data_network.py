@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import data_network
-from data_network import Resolver, configuration, counters, guarded, looks_silent
+from data_network import Resolver, configuration, counters, guarded, looks_silent, other_exits
 
 class ResolverTests(unittest.TestCase):
     def test_fallback_restoration_preserves_new_wifi_dns(self):
@@ -30,6 +30,13 @@ class RouteTests(unittest.TestCase):
         self.assertFalse(looks_silent(True,(100,10),(900,40)))
         self.assertFalse(looks_silent(True,(0,10),(0,10)))
         self.assertFalse(looks_silent(False,(0,10),(0,40)))
+    def test_a_route_on_a_down_link_is_no_other_exit(self):
+        usb={'dst':'default','gateway':'172.16.42.2','dev':'usb0','metric':2048,'flags':['linkdown']}
+        self.assertEqual(other_exits([usb],'rmnet0'),[])
+        wifi={'dst':'default','gateway':'192.168.178.1','dev':'wlp1s0','metric':600,'flags':[]}
+        cell={'dst':'default','dev':'rmnet0','metric':700,'flags':[]}
+        self.assertEqual(other_exits([usb,wifi,cell],'rmnet0'),[wifi])
+        self.assertEqual(other_exits([{'dst':'default','dev':'tun-home'}],'rmnet0'),[{'dst':'default','dev':'tun-home'}])
 
 class WatchTests(unittest.TestCase):
     def test_a_stalled_or_failed_ip_is_retried(self):

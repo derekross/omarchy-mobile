@@ -70,6 +70,15 @@ def counters(stats):
     return link['rx']['bytes'], link['tx']['packets']
 
 
+def other_exits(routes, dev):
+    """The default routes that lead out other than through the bearer. One
+    whose link is down leads nowhere: the USB gadget's fallback route stays
+    configured without a cable, and counting it kept the cellular route from
+    coming back after a silent spell."""
+    return [r for r in routes
+            if r.get('dev') != dev and 'linkdown' not in r.get('flags', ())]
+
+
 def looks_silent(routed, before, after):
     """The routed bearer sent packets but received nothing since the last
     check. Not proof: a few router solicitations get no answer on a live one."""
@@ -291,7 +300,7 @@ def main():
             nonlocal last, seen, check_at
             routes = json.loads(run('ip', '-j', 'route', 'show', 'default'))
             routed = any(r.get('dev') == dev for r in routes)
-            others = [r for r in routes if r.get('dev') != dev]
+            others = other_exits(routes, dev)
             if roaming_blocked():
                 if routed:
                     run('ip', 'route', 'del', 'default', 'dev', dev, 'metric', '700')
