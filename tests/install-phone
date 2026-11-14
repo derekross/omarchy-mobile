@@ -234,8 +234,16 @@ refuse "a phone running from slot b (stock there after a system update)" --bootl
 grep -q -- '--reinstall' "$t/out" || fail "says how to confirm a reinstall"
 install --dry-run --reinstall --bootloader-slots-match cloudripper-17.0-15199429 || { cat "$t/out"; fail "a reinstall over Omarchy Mobile on slot b passes"; }
 grep -q 'slot b holds Omarchy Mobile' "$t/out" || fail "a reinstall says slot b will be replaced"
+# The reinstall rule (2026-11-13): on slot b with --reinstall, the version
+# the phone reports is slot B's own, and no slot is switched
+install --dry-run --reinstall || { cat "$t/out"; fail "a reinstall on slot b needs no --bootloader-slots-match"; }
+grep -q "slot B's bootloader, which the phone already runs; the install switches no slot" "$t/out" || fail "a reinstall says whose bootloader it is"
+refuse "a reinstall with a wrong confirmed version" --reinstall --bootloader-slots-match cloudripper-16.0-9
+CURRENT_SLOT=b vars "" "" $'version-bootloader-a:cloudripper-17.0-1\nversion-bootloader-b:cloudripper-16.0-9'
+refuse "a reinstall with different bootloader slots" --reinstall; grep -q 'slots differ' "$t/out" || fail "a reinstall: different slots still stop"
 vars
-pass "refuses another phone, a locked bootloader, mismatched or unconfirmed bootloader slots, and slot b without --reinstall"
+refuse "slot a with --reinstall and one bootloader version" --reinstall; grep -q -- '--bootloader-slots-match' "$t/out" || fail "on slot a --reinstall doesn't stand in for the other slot's version"
+pass "refuses another phone, a locked bootloader, mismatched or unconfirmed bootloader slots, and slot b without --reinstall; a reinstall on slot b takes slot B's own bootloader"
 
 vars "" "" $'version-bootloader-a:x\nversion-bootloader-b:x'
 for name in root omamobile omarchy alarm omandroid; do

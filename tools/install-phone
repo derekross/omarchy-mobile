@@ -37,6 +37,11 @@
 # omamobile-boot-update appends it, so the initramfs's rescue SSH takes it.
 #
 #   install-phone [--dry-run] [options]
+#   install-phone --guided [options]
+#     --guided               the guided install instead (tools/install-guided,
+#                            from the same bundle or checkout): "bash install
+#                            --guided" in a bundle. Every other option is
+#                            handed to it; its own --help lists them
 #     --dry-run              read the phone's variables (read-only) and prepare
 #                            the image copy, then print every flash command
 #                            instead of running it
@@ -60,7 +65,11 @@
 #     --reinstall            slot B is the current slot and holds Omarchy Mobile
 #                            (a reinstall); without it, a phone running from
 #                            slot B is refused, since that is where stock
-#                            Android runs after a system update
+#                            Android runs after a system update. A reinstall
+#                            needs no --bootloader-slots-match: the version
+#                            the phone reports is slot B's own, which it
+#                            already starts from, and the install switches
+#                            no slot (decided 2026-11-13)
 #     --unsigned             accept a bundle without SHA256SUMS.sig (development)
 #     --serial SERIAL        the phone to install on, as "fastboot devices"
 #                            names it: anything else in fastboot mode is
@@ -92,6 +101,21 @@ here=$(cd -- "$(dirname -- "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
+
+# "bash install --guided": the guided install, from the same bundle (its
+# tools/install-guided) or checkout (tools/install-guided beside this file).
+# The guided installer runs this file for its checks and its writes, never
+# with --guided.
+for a in "$@"; do
+  [[ $a == --guided ]] || continue
+  [[ -z ${OMAMOBILE_INSTALL_GUIDED:-} ]] || die "--guided is not for the guided installer's own runs"
+  rest=()
+  for b in "$@"; do [[ $b == --guided ]] || rest+=("$b"); done
+  guided_tool=$here/install-guided
+  [[ -f $guided_tool ]] || guided_tool=$here/tools/install-guided
+  [[ -f $guided_tool ]] || die "this download has no guided installer (tools/install-guided): download it again and unpack it into a new folder"
+  exec bash "$guided_tool" "${rest[@]}"
+done
 
 dry=0 device="" images="" rootfs="" work="" slots_match="" unsigned=0 reinstall=0 verify_only=0 want_serial=""
 guided=${OMAMOBILE_INSTALL_GUIDED:-}
@@ -535,6 +559,11 @@ if [[ -n $bl_a && -n $bl_b ]]; then
 elif [[ -n $slots_match ]]; then
   [[ $slots_match == "$current_bl" ]] || die "--bootloader-slots-match $slots_match, but slot ${current_slot:-?} has $current_bl"
   note "bootloader $current_bl on slot ${current_slot:-?}; the other slot confirmed by you (--bootloader-slots-match)"
+elif [[ $current_slot == b && $reinstall == 1 ]]; then
+  # The reinstall rule (decided 2026-11-13): the version reported is slot
+  # B's own, the one this phone already starts from, and --set-active=b
+  # below switches no slot, so no other bootloader comes into play
+  note "bootloader $current_bl: slot B's bootloader, which the phone already runs; the install switches no slot (--reinstall)"
 else
   die "the phone only reports slot ${current_slot:-?}'s bootloader ($current_bl). Setting slot B active runs slot B's bootloader, so both must match. Check the other slot (fastboot getvar version-bootloader while it is current), then rerun with --bootloader-slots-match $current_bl"
 fi
