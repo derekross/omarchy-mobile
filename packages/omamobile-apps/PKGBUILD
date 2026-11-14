@@ -8,7 +8,7 @@
 # in `optdepends` with the reason. Device-specific stacks (the modem's RIL
 # and bridge) never go in `depends`: they belong to the device's image.
 pkgname=omamobile-apps
-pkgver=$(cat "${startdir:-.}/version")
+pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")
 pkgrel=1
 pkgdesc="Omarchy Mobile's default mobile apps (camera, phone, messages, contacts, images, maps and location, NFC tags)"
 arch=(any)

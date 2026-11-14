@@ -18,7 +18,7 @@ R=$t/repo
 trap 'gpgconf --homedir "$R/keys/testdev/gnupg" --kill gpg-agent 2>/dev/null || true; rm -rf "$t"' EXIT
 
 mkdir -p "$R/tools/lib" "$R/device/testdev" "$R/packages" "$t/bin" "$t/tmp"
-cp tools/build-packages tools/stage-boot-files "$R/tools/" && cp omamobile.conf "$R/"
+cp tools/build-packages tools/stage-boot-files tools/pkg-version "$R/tools/" && cp tools/lib/pkg-tar.sh "$R/tools/lib/" && cp omamobile.conf "$R/"
 mkdir -p "$R/packages/omamobile-boot-update/lib" && cp packages/omamobile-boot-update/lib/descriptor.sh "$R/packages/omamobile-boot-update/lib/"
 printf 'CODENAME=testdev\n' > "$R/device/testdev/device.conf"
 cat > "$R/tools/lib/alarm.sh" <<'A'
@@ -98,3 +98,17 @@ for tool in $(grep -v '^#' packages/omamobile-settings/test/host-tools); do
 done
 grep -c '^qmake6$' packages/omamobile-settings/test/host-tools >/dev/null || fail "omamobile-settings names qmake6"
 pass "omamobile-settings names qmake6 and the other commands its test calls"
+
+# A counted package's version is tools/pkg-version's, as pkg_tar ships it: a
+# .pkgver left in its directory doesn't make an old build "up to date"
+mkdir -p "$R/packages/counted"
+echo 0.1 > "$R/packages/counted/version" && echo .pkgver > "$R/packages/.gitignore"   # as this repository has it
+printf 'pkgname=counted\npkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")\npkgrel=1\narch=(any)\n' > "$R/packages/counted/PKGBUILD"
+(cd "$R" && git add -A && git -c user.name=t -c user.email=t@invalid -c commit.gpgsign=false commit -q -m fixture)
+echo 0.0.9 > "$R/packages/counted/.pkgver"
+mkdir -p "$R/out/testdev/repo/aarch64" && : > "$R/out/testdev/repo/aarch64/counted-0.0.9-1-any.pkg.tar.zst"
+# (the slow packages --list also reports aren't in this copy, so it ends non-zero)
+list=$(cd "$R" && PATH=$t/bin:$PATH ALARM_TEST_CACHE=$t/cache tools/build-packages --local testdev --list packages/counted 2>&1 || true)
+grep -c -x 'to build    packages/counted 0.1.0-1' <<<"$list" >/dev/null \
+  || { echo "$list"; fail "a stale .pkgver doesn't make a counted package up to date"; }
+pass "a counted package's version comes from tools/pkg-version, not a .pkgver left in its directory"

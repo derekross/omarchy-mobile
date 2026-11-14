@@ -16,3 +16,6 @@ install -Dm644 share/mirror.conf.example "$d/usr/share/omamobile/mirror/mirror.c
 install -Dm644 README.md "$d/usr/share/doc/omamobile-mirror/README.md"
 install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-mirror/LICENSE"
 install -Dm644 version "$d/usr/share/omamobile/mirror/version"
+# The package's own version (tools/pkg-version), which the file's
+# series doesn't give
+[[ -z ${OMAMOBILE_PKGVER:-} ]] || echo "$OMAMOBILE_PKGVER" > "$d/usr/share/omamobile/mirror/version"

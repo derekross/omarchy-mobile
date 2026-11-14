@@ -89,3 +89,7 @@ echo "# tests/install-guided"   # the guided install, against stand-ins for the 
 tests/install-guided
 echo "# tests/chroot-extractors"
 tests/chroot-extractors
+echo "# tests/pkg-version"   # the counted package versions, and the tool and its library parse
+bash -n tools/pkg-version
+bash -n tools/lib/pkg-tar.sh
+tests/pkg-version

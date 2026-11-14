@@ -195,6 +195,15 @@ stage() {
   mkdir -p "$to"
   local new current="" previous
   new=$(db_files "$from")
+  # A branch build (.g<commit>) or a build of edits not committed yet
+  # (.d<tree>) is a test build, never published: tools/pkg-version gives
+  # main's commits plain numbers
+  local test_builds
+  test_builds=$(grep -E '\.[gd][0-9a-f]{7}-[^-]+-[^-]+\.pkg\.tar\.' <<<"$new" || true)
+  if [[ -n $test_builds ]]; then
+    echo "$from holds test builds, not built from main (tools/repo-publish --from-main builds main's): $(tr '\n' ' ' <<<"$test_builds")" >&2
+    return 1
+  fi
   if [[ -f $to.sets ]]; then
     current=$(sed -n 's/^current //p' "$to.sets")
     previous=$(sed -n 's/^previous //p' "$to.sets")
@@ -281,7 +290,8 @@ upload() {
 if [[ $channel == development ]]; then
   if ((build)); then
     say "Building what changed"
-    # 3: a device package was skipped (its boot files are missing or stale)
+    # 3: a package was skipped (a device package's boot files are missing
+    # or stale, or tools/pkg-version gave no version)
     # and everything else built: publish that, then fail the run
     rc=0; tools/build-packages --all || rc=$?
     # 3 with its list in out/repo/.skipped, and nothing else, is a skip
@@ -330,4 +340,4 @@ else
   [[ $code == 200 ]] || die "$URL/$channel/$ARCH/omamobile.db answers $code"
 fi
 say "Done: $URL/$channel/$ARCH"
-((skipped_build == 0)) || die "published without the device package(s) tools/build-packages skipped (boot files missing or stale): stage them and publish again"
+((skipped_build == 0)) || die "published without the package(s) tools/build-packages skipped (boot files missing or stale, or no version): see its error lines, then publish again"

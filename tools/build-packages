@@ -62,12 +62,13 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
 source tools/lib/alarm.sh
+source tools/lib/pkg-tar.sh
 
 SLOW=(mesa hyprland libcamera)
 # Packed from a staged kernel build: built only when named (see above)
 NAMED_ONLY=(linux-omamobile)
 repo=out/repo/aarch64
-# Exit 3 means exactly "built and signed everything but the skipped device
+# Exit 3 means exactly "built and signed everything but the skipped
 # packages", which <repo>/../.skipped then lists: any other exit with 3 (a
 # gpg, tar or repo-add that happened to return it) becomes 1. Set before
 # anything can fail; the old list goes once the repository is known
@@ -146,6 +147,11 @@ pkg_version() {
     startdir=$PWD
     # shellcheck disable=SC1091
     source ./PKGBUILD >/dev/null 2>&1
+    # A counted version comes from tools/pkg-version, as pkg_tar ships it: a
+    # .pkgver left in the directory would keep a package "up to date" for good
+    if grep -c -F '/.pkgver"' PKGBUILD >/dev/null; then
+      pkgver=$("$ROOT/tools/pkg-version" "$PWD" 2>/dev/null) || pkgver=
+    fi
     echo "${epoch:+$epoch:}$pkgver-$pkgrel"
   )
 }
@@ -283,10 +289,15 @@ done
 # Staged inputs, checked before anything is built: a release kernel from a
 # published tag (named only, so a refusal stops the run), and boot files
 # that match this tree (a refusal skips that package and fails the run at
-# the end)
-skipped=() kept=()
+# the end), and a version tools/pkg-version can work out (the same)
+skipped=() noversion=() kept=()
 for d in "${build[@]}"; do
   name=$(basename "$d")
+  if [[ $(pkg_version "$d") == -* ]]; then
+    echo "SKIPPED: $name: no version (run tools/pkg-version $d for why); building the rest" >&2
+    noversion+=("$name")
+    continue
+  fi
   if [[ " ${NAMED_ONLY[*]} " == *" $name "* ]]; then
     "$d/stage" --verify "$d/prebuilt" || alarm_die "$name: the staged kernel is not a published release; nothing built"
   fi
@@ -363,10 +374,9 @@ for dir in "${build[@]}"; do
   name=$(basename "$dir")
   alarm_say "$name $(pkg_version "$dir")"
   work=$(mktemp -d)
-  # The package directory as it is (including gitignored prebuilt files the
-  # PKGBUILDs install), minus makepkg's work directories and old packages.
-  tar cf - --exclude="./$name/pkg" --exclude="./$name/src/build" --exclude='*.pkg.tar.*' \
-    -C "$(dirname "$dir")" "./$name" | tar xf - -C "$work"
+  # The package directory as it is, with its version worked out here
+  # (tools/lib/pkg-tar.sh): the container has no git history.
+  pkg_tar "$dir" | tar xf - -C "$work" || { rm -rf "$work"; alarm_die "$name: no version (tools/pkg-version)"; }
   out=$work/out && mkdir -p "$out"
   incheck=0
   if ((nocheck == 0)); then
@@ -466,9 +476,12 @@ sign_and_index
 ls -1 "$repo" | grep -E '\.pkg\.tar\.zst$'
 # Exit 3: everything else is built and signed (tools/repo-publish publishes
 # it, then fails too); any other failure exits 1 earlier
-if ((${#skipped[@]})); then
-  printf '\e[31merror:\e[0m %s\n' "not built, boot files missing or stale: ${skipped[*]} (the rest is built and signed; stage them with tools/stage-boot-files)" >&2
+if ((${#skipped[@]} + ${#noversion[@]})); then
+  ((${#skipped[@]} == 0)) ||
+    printf '\e[31merror:\e[0m %s\n' "not built, boot files missing or stale: ${skipped[*]} (the rest is built and signed; stage them with tools/stage-boot-files)" >&2
+  ((${#noversion[@]} == 0)) ||
+    printf '\e[31merror:\e[0m %s\n' "not built, no version: ${noversion[*]} (the rest is built and signed; tools/pkg-version says why)" >&2
   mkdir -p "$(dirname "$skipfile")"
-  printf '%s\n' "${skipped[@]}" > "$skipfile"
+  printf '%s\n' "${skipped[@]}" "${noversion[@]}" | sed '/^$/d' > "$skipfile"
   exit 3
 fi

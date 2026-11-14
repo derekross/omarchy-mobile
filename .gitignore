@@ -8,3 +8,6 @@ logs/
 # Python bytecode from running package code in place
 __pycache__/
 *.pyc
+
+# A package version worked out for a build without git (tools/lib/pkg-tar.sh)
+packages/*/.pkgver

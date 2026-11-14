@@ -18,8 +18,11 @@ bash -n "$here/PKGBUILD" || fail "PKGBUILD parses"
 eval "$(startdir=$here bash -c 'source "$startdir/PKGBUILD"
   printf "pkgname=%q pkgver=%q commit=%q model=%q url0=%q sum0=%q\n" "$pkgname" "$pkgver" "$_commit" "$_model" "${source[0]}" "${sha256sums[0]}"
   printf "deps=%q\n" "${depends[*]:-}"')"
-[[ $pkgname == omamobile-voice && $pkgver == "$(cat "$here/version")" ]] || fail "name and version"
-ok "PKGBUILD parses, version from ./version"
+# The version: a build tool's copy carries it as .pkgver (no git there),
+# the repository works it out with tools/pkg-version
+if [[ -f $here/.pkgver ]]; then want=$(cat "$here/.pkgver"); else want=$("$repo/tools/pkg-version" "$here"); fi
+[[ $pkgname == omamobile-voice && -n $pkgver && $pkgver == "$want" ]] || fail "name and version"
+ok "PKGBUILD parses, version from .pkgver or tools/pkg-version"
 
 [[ $commit =~ ^[0-9a-f]{40}$ ]] || fail "the source is pinned to a full commit, not a branch: $commit"
 [[ $url0 == "$model-$commit::https://huggingface.co/ggerganov/whisper.cpp/resolve/$commit/$model" ]] || fail "the model's URL names the pinned commit: $url0"

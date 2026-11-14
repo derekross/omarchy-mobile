@@ -10,3 +10,6 @@ install -Dm644 systemd/10-tegu-attach.conf "$d/usr/lib/systemd/system/omamobile-
 install -Dm644 README.md "$d/usr/share/doc/omamobile-telephony-tegu/README.md"
 install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-telephony-tegu/LICENSE"
 install -Dm644 version "$d/usr/share/omamobile/telephony-tegu/version"
+# The package's own version (tools/pkg-version), which the file's
+# series doesn't give
+[[ -z ${OMAMOBILE_PKGVER:-} ]] || echo "$OMAMOBILE_PKGVER" > "$d/usr/share/omamobile/telephony-tegu/version"

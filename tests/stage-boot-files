@@ -55,7 +55,7 @@ pass "repo-publish carries boot-files/; build-packages checks them, verifies the
 # a throwaway local key.
 if command -v gpg >/dev/null && command -v zstd >/dev/null; then
   R=$t/repo && mkdir -p "$R/tools/lib" "$R/device/testdev" "$R/packages" "$t/bin" "$t/tmp"
-  cp tools/build-packages tools/stage-boot-files "$R/tools/" && cp omamobile.conf "$R/"
+  cp tools/build-packages tools/stage-boot-files tools/pkg-version "$R/tools/" && cp tools/lib/pkg-tar.sh "$R/tools/lib/" && cp omamobile.conf "$R/"
   mkdir -p "$R/packages/omamobile-boot-update/lib" && cp packages/omamobile-boot-update/lib/descriptor.sh "$R/packages/omamobile-boot-update/lib/"
   printf 'CODENAME=testdev\n' > "$R/device/testdev/device.conf"
   cat > "$R/tools/lib/alarm.sh" <<'A'
@@ -72,6 +72,10 @@ A
     printf 'pkgname=%s\npkgver=$(cat "${startdir:-.}/version")\npkgrel=1\narch=(any)\n' "$p" > "$R/packages/$p/PKGBUILD"
   done
   printf '#!/bin/bash\nboot=${OMAMOBILE_BOOT_FILES:-boot-files}\n' > "$R/packages/omamobile-device-testdev/install"
+  # A package whose version tools/pkg-version can't work out (a version file
+  # that holds none): skipped like stale boot files, not the whole run
+  mkdir -p "$R/packages/nover" && echo none > "$R/packages/nover/version"
+  printf 'pkgname=nover\npkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")\npkgrel=1\narch=(any)\n' > "$R/packages/nover/PKGBUILD"
   # The container: makepkg's result, a package with its .PKGINFO
   cat > "$t/bin/docker" <<'D'
 #!/bin/bash
@@ -95,14 +99,16 @@ D
   ( cd "$R" && git init -q && git add -A )
   rc=0
   (cd "$R" && PATH=$t/bin:$PATH TMPDIR=$t/tmp ALARM_TEST_CACHE=$t/cache BUILT_LOG=$t/built tools/build-packages --nocheck --local testdev \
-     packages/plain packages/omamobile-device-testdev) > "$t/bp.log" 2>&1 || rc=$?
+     packages/plain packages/omamobile-device-testdev packages/nover) > "$t/bp.log" 2>&1 || rc=$?
   gpgconf --homedir "$kd/gnupg" --kill gpg-agent 2>/dev/null || true
   [[ $rc == 3 ]] || { cat "$t/bp.log"; fail "build-packages exits 3 when a device package's boot files are missing (got $rc)"; }
   [[ $(cat "$t/built") == plain ]] || { cat "$t/bp.log"; fail "the other package is built, the device package is not"; }
   [[ -f $R/out/testdev/repo/aarch64/plain-1-1-any.pkg.tar.zst.sig ]] || { cat "$t/bp.log"; fail "and the other package is signed into the repository"; }
   grep -c 'SKIPPED: omamobile-device-testdev' "$t/bp.log" >/dev/null && grep -c 'not built, boot files missing or stale: omamobile-device-testdev' "$t/bp.log" >/dev/null \
     || { cat "$t/bp.log"; fail "the skip is named, before the build and at the end"; }
-  [[ $(cat "$R/out/testdev/repo/.skipped") == omamobile-device-testdev ]] || fail "the skip list is in repo/.skipped"
+  grep -c 'SKIPPED: nover: no version' "$t/bp.log" >/dev/null && grep -c 'not built, no version: nover' "$t/bp.log" >/dev/null \
+    || { cat "$t/bp.log"; fail "a package with no version is skipped and named, the rest built"; }
+  [[ $(cat "$R/out/testdev/repo/.skipped") == $'omamobile-device-testdev\nnover' ]] || fail "the skip list is in repo/.skipped"
   # Exit 3 from anything else is 1: a repo-add that returns 3
   printf '#!/bin/bash\nexit 3\n' > "$t/bin/repo-add"
   rm -rf "$R/out/testdev/repo/aarch64"/*

@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: MIT
 # Maintainer: Derek Ross <derekross@gmail.com>
 pkgname=omamobile-device-cheetah
+# Written by hand, not counted (tools/pkg-version): the boot files this
+# package ships go out under a new version only after they have booted on
+# the Pixel 7 Pro, and the maintainer writes that version then
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
 pkgdesc="Omarchy Mobile support for the Google Pixel 7 Pro (cheetah): boot-slot success, storage guard, USB networking"
@@ -24,5 +27,5 @@ check() {
 }
 
 package() {
-  "$startdir/install" "$pkgdir" "$srcdir/build"
+  OMAMOBILE_PKGVER=$pkgver "$startdir/install" "$pkgdir" "$srcdir/build"
 }

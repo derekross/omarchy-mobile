@@ -14,3 +14,6 @@ ln -sfn ../omamobile-firstboot.service "$d/usr/lib/systemd/system/multi-user.tar
 install -Dm644 ssh/10-omamobile.conf "$d/etc/ssh/sshd_config.d/10-omamobile.conf"
 install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-firstboot/LICENSE"
 install -Dm644 version "$d/usr/share/omamobile/firstboot/version"
+# The package's own version (tools/pkg-version), which the file's
+# series doesn't give
+[[ -z ${OMAMOBILE_PKGVER:-} ]] || echo "$OMAMOBILE_PKGVER" > "$d/usr/share/omamobile/firstboot/version"

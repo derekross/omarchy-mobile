@@ -18,3 +18,6 @@ install -Dm644 networkmanager/90-omamobile-rmnet.conf "$d/usr/lib/NetworkManager
 install -Dm644 etc/omamobile/modem-sit.conf "$d/etc/omamobile/modem-sit.conf"
 install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-modem-sit/LICENSE"
 install -Dm644 version "$d/usr/share/omamobile/modem-sit/version"
+# The package's own version (tools/pkg-version), which the file's
+# series doesn't give
+[[ -z ${OMAMOBILE_PKGVER:-} ]] || echo "$OMAMOBILE_PKGVER" > "$d/usr/share/omamobile/modem-sit/version"

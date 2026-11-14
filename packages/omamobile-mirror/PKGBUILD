@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Maintainer: Derek Ross <derekross@gmail.com>
 pkgname=omamobile-mirror
-pkgver=$(cat "${startdir:-.}/version")
+pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")
 pkgrel=1
 pkgdesc="Omarchy Mobile screen mirroring: the phone's screen and input on a computer over the USB cable (wayvnc)"
 arch=(any)
@@ -17,5 +17,5 @@ check() {
 }
 
 package() {
-  "$startdir/install" "$pkgdir"
+  OMAMOBILE_PKGVER=$pkgver "$startdir/install" "$pkgdir"
 }

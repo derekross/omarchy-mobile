@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 pkgname=omamobile-device-oriole
-pkgver=$(cat "${startdir:-.}/version")
+pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")
 pkgrel=1
 pkgdesc="Pixel 6 first-light support: storage policy, USB networking and boot helpers"
 arch=(aarch64)
@@ -16,4 +16,4 @@ backup=(etc/UPower/UPower.conf.d/20-omamobile-critical-power.conf etc/pacman.d/o
 
 build() { "$startdir/build" "$srcdir/build"; }
 check() { "$startdir/test/all"; }
-package() { "$startdir/install" "$pkgdir" "$srcdir/build"; }
+package() { OMAMOBILE_PKGVER=$pkgver "$startdir/install" "$pkgdir" "$srcdir/build"; }

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Maintainer: Derek Ross <derekross@gmail.com>
 pkgname=omamobile-omarchy
-pkgver=$(cat "${startdir:-.}/version")
+pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")
 pkgrel=1
 pkgdesc="Omarchy Mobile's Omarchy patches, re-applied after every Omarchy upgrade, omamobile-update, Omarchy's update for a phone, and a kernel module cleanup that keeps the next boot's modules"
 arch=(any)
@@ -17,5 +17,5 @@ check() {
 }
 
 package() {
-  "$startdir/install" "$pkgdir"
+  OMAMOBILE_PKGVER=$pkgver "$startdir/install" "$pkgdir"
 }

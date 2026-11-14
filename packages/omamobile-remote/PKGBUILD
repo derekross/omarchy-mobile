@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Maintainer: Derek Ross <derekross@gmail.com>
 pkgname=omamobile-remote
-pkgver=$(cat "${startdir:-.}/version")
+pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")
 pkgrel=1
 pkgdesc="Use an Omarchy Mobile phone over ssh like a person would: screenshots, keys, taps, scrolling, locking, unlocking, apps, keeping it awake during a test. Opt-in, enables nothing"
 arch=(any)
@@ -15,5 +15,5 @@ check() {
 }
 
 package() {
-  "$startdir/install" "$pkgdir"
+  OMAMOBILE_PKGVER=$pkgver "$startdir/install" "$pkgdir"
 }

@@ -59,6 +59,10 @@ jobs:
             node --version
           fi
       - uses: actions/checkout@v5
+        with:
+          # The packages' versions are counted from main's history
+          # (tools/pkg-version), and origin/main is the line they count on
+          fetch-depth: 0
       - name: A normal user (some tests check what a user may not do)
         run: |
           useradd -m ci
