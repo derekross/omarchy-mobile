@@ -147,6 +147,11 @@ pkg_version() {
     startdir=$PWD
     # shellcheck disable=SC1091
     source ./PKGBUILD >/dev/null 2>&1
+    # A counted version comes from tools/pkg-version, as pkg_tar ships it: a
+    # .pkgver left in the directory would keep a package "up to date" for good
+    if grep -c -F '/.pkgver"' PKGBUILD >/dev/null; then
+      pkgver=$("$ROOT/tools/pkg-version" "$PWD" 2>/dev/null) || pkgver=
+    fi
     echo "${epoch:+$epoch:}$pkgver-$pkgrel"
   )
 }
