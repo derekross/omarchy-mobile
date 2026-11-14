@@ -148,10 +148,18 @@ for pair in "sdc-s6e3fc5.20800a:1" "sdc-s6e3fc3-l10:0" ":0"; do
   panel=${pair%:*}; want=${pair##*:}
   echo "console=null ${panel:+exynos_drm.panel_name=$panel} bootconfig" > "$gate/proc/cmdline"
   rm -rf "$gate/sys"
-  PATH="$gate/bin:$PATH" OMAMOBILE_LYNX_ROOT=$gate \
-    bin/omamobile-lynx-display-start >/dev/null
+  mkdir -p "$gate/sys/class/backlight/panel"
+  echo 900 > "$gate/sys/class/backlight/panel/brightness"
+  out=$(PATH="$gate/bin:$PATH" OMAMOBILE_LYNX_ROOT=$gate \
+    bin/omamobile-lynx-display-start 2>&1)
   got=$(cat "$gate/sys/module/gs_dsim_cmd/parameters/allow_tx" 2>/dev/null || echo missing)
   [[ $got == "$want" ]] || fail "panel '${panel:-none}' wrote allow_tx=$got, want $want"
+  if [[ $want == 1 ]]; then
+    [[ $out == *"brightness of panel: level 900 sent"* ]] \
+      || fail "the saved brightness is not sent for '${panel:-none}': $out"
+  else
+    [[ $out != *brightness* ]] || fail "brightness sent with DSI commands off for '${panel:-none}': $out"
+  fi
 done
 pass "the panel gate allows only S6E3FC5"
 

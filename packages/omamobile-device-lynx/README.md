@@ -14,6 +14,9 @@ Omarchy Mobile's first userspace package for the Google Pixel 7a (codename lynx,
 | `bin/omamobile-boot-success` + `vendor/systemd/system/omamobile-boot-success.service` | `/usr/bin`, `/usr/lib/systemd/system` (enabled by a vendor wants link) | Marks the booted A/B slot successful after each boot, as Android's boot-control service does. Without it, the bootloader burns one of slot B's three retries per boot and then falls back to slot A. Same files as the Pixel 7 Pro package |
 | `src/omamobile-bootctl.c` | `/usr/bin/omamobile-bootctl` | Reads and updates the slot flags in `devinfo` (`sdd1`, layout 3.15 on lynx as on the Pixel 7 Pro). Only ever changes bytes 0x30-0x37, verified. Same source as the Pixel 7 Pro package |
 | `src/reboot-to.c` | `/usr/bin/reboot-to` | Reboot with a reason the bootloader understands. Same bytes as the Pixel 7 Pro package; the test checks |
+| `bin/omamobile-lynx-display-start` | `/usr/bin` | Allows the S6E3FC5 panel's DSI commands only when the bootloader names it, restores the saved brightness and then loads `gs_decon` |
+| `vendor/systemd/system/omamobile-lynx-display.service` | `/usr/lib/systemd/system` | Runs the display start once per boot, before `display-manager.service` |
+| `vendor/modprobe.d/omamobile-display.conf` | `/usr/lib/modprobe.d` | Keeps `gs_decon` out of autoload so it probes after the gate |
 | `device.conf` | `/usr/share/omamobile/device.conf` | The descriptor, the same bytes as `device/lynx/device.conf` |
 
 `./build [DIR]` compiles `omamobile-bootctl` and `reboot-to` from this directory, `./install DESTDIR [DIR]` stages the files, and `test/all` checks the two copies when it is run from the repository.
