@@ -6,10 +6,14 @@ import json
 import os
 from pathlib import Path
 import shlex
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+
+# Keep direct test runs from leaving bytecode in the packaged bin directory.
+sys.dont_write_bytecode = True
 
 loader = importlib.machinery.SourceFileLoader('browser_setup', str(Path(__file__).resolve().parents[1] / 'bin/omamobile-browser-setup'))
 spec = importlib.util.spec_from_loader(loader.name, loader)
@@ -160,6 +164,15 @@ class BrowserSetupTest(unittest.TestCase):
             self.assertTrue(self.path.read_text().startswith(original))
             self.assertNotIn('--wayland-text-input-version=3', self.path.read_text())
             version.assert_not_called()
+
+    def test_url_fragment_keeps_later_custom_overrides(self):
+        self.mark('chromium-no-first-run', 'chromium-wayland-ime')
+        original = '--app=https://example.test/#fragment --force-device-scale-factor=0.70 --user-agent=Custom\n'
+        self.path.write_text(original)
+        with patch.object(M, 'browser_major') as version:
+            self.configure()
+        self.assertEqual(self.path.read_text(), original)
+        version.assert_not_called()
 
     def test_custom_personal_scale_preserved(self):
         self.mark('chromium-scale-3')

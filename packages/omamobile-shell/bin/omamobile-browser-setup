@@ -79,6 +79,42 @@ def browser_major(program):
         return "153"  # Historical first-login fallback; never query on later logins.
 
 
+def parse_flags(source):
+    # Comments start at unquoted token boundaries; URL fragments stay literal.
+    text = []
+    quote = None
+    escaped = False
+    token = False
+    comment = False
+    for char in source:
+        if comment:
+            if char != "\n":
+                continue
+            comment = False
+        if escaped:
+            escaped = False
+        elif quote:
+            if char == quote:
+                quote = None
+            elif char == "\\" and quote == '"':
+                escaped = True
+        elif char == "#" and not token:
+            comment = True
+            continue
+        elif char in " \t\r\n":
+            token = False
+        else:
+            token = True
+            if char in "'\"":
+                quote = char
+            elif char == "\\":
+                escaped = True
+        text.append(char)
+    # Validate quotes/escapes and group argv without evaluating shell code.
+    return shlex.split("".join(text), comments=False, posix=True)
+
+
+
 def configure(path, factor, done, program):
     chromium = program == "chromium"
     marker = done / ("omamobile-browser-fit-" + program)
@@ -88,7 +124,7 @@ def configure(path, factor, done, program):
         return  # Grok has only a geometry-dependent scale default.
     defaults_marker = done / "omamobile-browser-defaults-chromium"
     before = path.read_text() if path.exists() else ""
-    flags = shlex.split(before, comments=True)
+    flags = parse_flags(before)
     has = lambda key: any(flag.split("=")[0] == key for flag in flags)
     prior = lambda name: (done / ("omamobile-" + name)).exists()
     scale_marked = (prior("chromium-scale-2") or prior("chromium-scale-3")) if chromium else prior("grok-bot-fit")
