@@ -1830,14 +1830,32 @@ the alarm; otherwise the same).
   sleep the CP was ONLINE with no failed poll, and `ping -I rmnet0` got 5
   of 5 at the end.
 
+- **A call and a text wake the sleeping palmtop** (2026-11-14, the same
+  build and package; the owner called and texted from another phone, the
+  palmtop untouched and no call answered). Four calls arrived in sleeps
+  of 82 s to 6 min 17 s: each woke it on `cp2ap_wakeup`, and sitd logged
+  "Incoming call ringing" 0.1 to 0.8 s after the kernel's suspend exit.
+  Two texts arrived 8 s and 15 s into a sleep and were stored 0.06 and
+  0.08 s after the exit. Six sleep requests that morning were called off
+  (three refused with the link up, three ended in noirq by CPIF with the
+  CP's wake line pending), and calls and texts kept arriving after each.
+- **One of those calls left a stale `ringing-in` in sitd**, which is
+  omarchy-mobile#729 (its fix for a declined call is #754): the modem
+  refused the hang-up with error 2 and sitd stopped itself 12 s later.
+  Until then, with `follow_screen` on, sitd never told the modem "screen
+  off" for the call it still held, the modem stayed at 48 link power-ups
+  a minute, and three sleep requests in a row were called off. Not seen
+  again in three more calls into a sleep.
+
 What this leaves before the modem's inhibitor can go on the 9a: #232 in
 the published kernel and the zumapro line after it (its own small pull
 request, as #232's author asked); the hang above understood, or at least
 counted on a build without #232; omarchy-mobile#556 merged, which
 carries both the screen state and the route change, with `follow_screen`
-turned on for the 9a once a call with the screen dark has been tested;
-and what no run here tested: a call and a text arriving while the palmtop
-sleeps, a sleep of hours, and a sleep off the charger.
+turned on for the 9a; a stale call ended without the owner's help
+(#729), since it keeps the palmtop awake; and what no run here tested: a
+call answered after it woke the palmtop, a sleep of hours, and a sleep
+off the charger.
 
 ### M2: the link only (modem link driver, `allow_hw=1`; risk: medium)
 
