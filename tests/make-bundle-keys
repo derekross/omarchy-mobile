@@ -20,7 +20,7 @@ mkdir -p "$r/tools/lib" "$r/docs" "$r/device/testdev" "$r/packages/omamobile-key
 cp tools/make-bundle tools/bundle-manifest "$r/tools/"
 cp tools/lib/signing.sh tools/lib/bundle-tar.sh "$r/tools/lib/"
 : > "$r/tools/install-phone"
-for f in phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data; do
+for f in $(sed -n 's/^provision_tools="\(.*\)"$/\1/p' tools/make-bundle); do
   : > "$r/tools/$f"
 done
 : > "$r/docs/INSTALL.md"

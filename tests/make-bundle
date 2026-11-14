@@ -27,7 +27,13 @@ for tool in python3 flock; do command -v "$tool" >/dev/null || { echo "ok - # sk
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
 r=$t/repo k=$t/kernel
-tools="phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data"
+# make-bundle's own list, which must hold phone-provision and what it runs,
+# nv-backup, and the guided install with what it runs (#guidedbundle)
+tools=$(sed -n 's/^provision_tools="\(.*\)"$/\1/p' tools/make-bundle)
+for f in phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data \
+  install-guided phone-smoke factory-index camera-requirements.txt; do
+  [[ " $tools " == *" $f "* ]] || fail "make-bundle's provision_tools has $f"
+done
 mkdir -p "$r/tools/lib" "$r/docs" "$r/device/testdev" "$r/packages/omamobile-keyring" "$r/out" \
   "$k/include/config" "$k/images"
 cp tools/make-bundle tools/bundle-manifest tools/install-phone "$r/tools/"
@@ -53,11 +59,16 @@ b=$r/out/bundle/omamobile-testdev-2026.11.01
 pass "an unsigned development bundle assembles"
 
 for f in $tools; do
-  [[ -x $b/tools/$f ]] || fail "the bundle has an executable tools/$f"
+  if [[ $f == *.txt ]]; then
+    [[ -f $b/tools/$f && ! -x $b/tools/$f ]] || fail "the bundle has tools/$f, not executable"
+  else
+    [[ -x $b/tools/$f ]] || fail "the bundle has an executable tools/$f"
+  fi
   cmp -s "$b/tools/$f" "tools/$f" || fail "tools/$f is the repository's"
 done
 cmp -s "$b/INSTALL.md" docs/INSTALL.md || fail "the bundle carries docs/INSTALL.md as INSTALL.md"
-pass "the bundle carries INSTALL.md and phone-provision with everything it runs"
+[[ ! -e $b/images/DEVICE ]] || fail "the bundle's images/ has no DEVICE file: its device is its device.conf"
+pass "the bundle carries INSTALL.md, phone-provision with everything it runs, and the guided install with what it runs"
 
 # Exercise the bundled wrapper's explicit transport without SSH/network IO.
 mkdir -p "$t/stubs"
@@ -93,6 +104,7 @@ if grep -c 'from the repository' "$b/README.txt" >/dev/null; then fail "README.t
 grep -c 'INSTALL.md' "$b/README.txt" >/dev/null || fail "README.txt points to INSTALL.md"
 grep -c '  bash tools/nv-backup DIR$' "$b/README.txt" >/dev/null || fail "README.txt gives the backup command"
 grep -c 'run "bash install" from this directory' "$b/README.txt" >/dev/null || fail "README.txt says bash install"
+grep -c '^  bash install --guided$' "$b/README.txt" >/dev/null || fail "README.txt gives the guided install's command"
 if grep -c '\./install' "$b/README.txt" >/dev/null; then fail "README.txt no longer says ./install"; fi
 grep -c 'sha256sum -c omamobile-testdev-2026.11.01.tar.sha256' "$b/README.txt" >/dev/null || fail "README.txt names the one-file download's check"
 pass "README.txt points to INSTALL.md, the bundled nv-backup and phone-provision, and says bash install"
