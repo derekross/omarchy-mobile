@@ -31,7 +31,8 @@ class SimulatorTests(unittest.TestCase):
                         OMAMOBILE_SIT_CONFIG=str(self.dir / 'modem-sit.conf'),
                         OMAMOBILE_SIT_DEVICE='unix:' + str(self.dir / 'ipc0'),
                         OMAMOBILE_SIT_ROUTER='unix:' + str(self.dir / 'router'),
-                        OMAMOBILE_SIT_BOOT='none', PYTHONDONTWRITEBYTECODE='1')
+                        OMAMOBILE_SIT_BOOT='none', PYTHONDONTWRITEBYTECODE='1',
+                        OMAMOBILE_SIT_BACKLIGHT=str(self.dir / 'backlight'))
         (self.dir / 'modem-sit.conf').write_text(
             '[network]\napn = internet.example\nsim_timeout = 20\nregister_timeout = 30\n'
             '[audio]\ncard = none\n')

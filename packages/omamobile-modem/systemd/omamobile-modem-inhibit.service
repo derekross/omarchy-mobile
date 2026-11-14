@@ -15,6 +15,14 @@
 # Requires= pulls this in even when that unit's own conditions skip it, so
 # the same three conditions are here: a phone that isn't provisioned (no
 # modem files, checksums or board id) keeps sleeping.
+# /etc/omamobile/modem-suspend-enable lifts it from the next modem start, for
+# MODEM-PLAN section 7 (M6: suspend with the modem up, attended runbook
+# only until M6 passes); the start script follows the same files. It is for
+# the Pixel 7 Pro's M6 runbook only, so it takes effect only beside
+# /usr/lib/omamobile-modem/suspend-runbook, which device-cheetah ships:
+# suspend with the modem up is unqualified on the 9a and the 6 Pro, and
+# there the owner's file alone keeps the lock (the two triggering
+# conditions below: the unit runs unless both files exist).
 [Unit]
 Description=Omarchy Mobile modem: block system sleep until the reboot
 Before=omamobile-modem.service
@@ -22,6 +30,8 @@ RefuseManualStop=yes
 ConditionPathExists=/usr/lib/omamobile-vendor/modem/root
 ConditionPathExists=/etc/omamobile/modem-nv.sha256
 ConditionPathExists=/var/lib/omamobile-vendor/modem/props.conf
+ConditionPathExists=|!/etc/omamobile/modem-suspend-enable
+ConditionPathExists=|!/usr/lib/omamobile-modem/suspend-runbook
 
 [Service]
 ExecStart=/usr/bin/systemd-inhibit --what=sleep:idle --who=omamobile-modem --why="suspend with the modem up is not qualified on this phone (MODEM-PLAN 6.3)" --mode=block /usr/bin/sleep infinity

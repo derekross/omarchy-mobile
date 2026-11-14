@@ -12,10 +12,13 @@ carrier manifest, the APNs and the bearer order chosen from the SIM
 (`omamobile-modem-sit` 0.3.30, `omamobile-device-cheetah` 0.1.44), and `omamobile-modem-boot.target` on by
 default from `omamobile-device-cheetah` 0.1.43 (M4.6b, B6-B9b passed,
 #398). Kernel `7.3.0-rc6-omamobile-g2219cc6cda77`, the release kernel.
-Open: suspend with the modem up (section 6.3; the stack holds a sleep
-inhibitor), other networks, cpif's `oem_ipc0` "is not opened" lines after
-sitd starts (nothing opens the OEM IPC channel), and the UFS error-handler
-pass at a modem power-off (M2.6). The day's evidence: [NOTES](NOTES.md),
+Open: suspend with the modem up (section 7, M6: M6.0-M6.3 run on a second
+Pixel 7 Pro with an SMS wake; the call half, M6.4 and M6.5 open; the stack
+holds a sleep inhibitor unless `/etc/omamobile/modem-suspend-enable` exists
+beside device-cheetah's `/usr/lib/omamobile-modem/suspend-runbook`), other
+networks, cpif's `oem_ipc0` "is not opened" lines after sitd starts
+(nothing opens the OEM IPC channel), and the UFS error-handler pass at a
+modem power-off (M2.6). The day's evidence: [NOTES](NOTES.md),
 2026-11-03.
 
 Earlier status (2026-10-13): **IPC works: the CP serves SIT (M4.1h passed).**
@@ -3512,3 +3515,300 @@ coherency on before DMA (`cp_set_iocc()` at `link_up`); write-back mappings
 of the cacheable regions; no CPU mapping of AoC voice SRAM; no `remove()`
 for cpif; panics turned into errors.
 
+
+## 7. M6: suspend with the modem online (plan and first runs, 2026-11-09)
+
+Status: **M6.0-M6.3 run on a second Pixel 7 Pro (a contributor's, not the
+maintainer's phone), on an LTE SIM with data and SMS but no voice (7.4):
+the phone freezes with the modem up and wakes for an SMS, with K1-K1c.
+Open: the call half of M6.3, M6.4, M6.5, and all of it on the maintainer's
+phone. The screen state is off by default; the runbook turns it on
+(`[control] follow_screen = yes`, M6.1b). Each step in 7.3 says who runs
+it; M6.4 on the contributor's phone waits for the maintainer.**
+Android sleeps with the modem up: the CP keeps
+its registration and wakes the AP for a call, an SMS or data. Ours holds
+`omamobile-modem-inhibit` from the modem's start to the reboot, so a phone
+with the stack on (the default since device-cheetah 0.1.43) never sleeps
+and runs warm. This section is the way to lift that, staged.
+
+### 7.1 What is already there
+
+- **CPIF's side is stock's** (gs-6.1, imported in `610ba27d9`), in
+  `drivers/soc/google/cpif/` on `omamobile`:
+  - `modem_suspend`/`modem_resume` as noirq sleep ops (`modem_main.c`
+    :942-973), and `suspend_cp()` refuses with -EBUSY while CP2AP_WAKEUP is
+    high (`modem_ctrl_s5100.c` :2007-2021; section 6.3);
+  - at suspend it writes `ap2cp_kerneltime` and drives AP2CP_PDA_ACTIVE low,
+    at resume high again (:2024-2061);
+  - the PM notifier and the deferred cp2ap work across the suspend window
+    (:2064-2104, :329-344);
+  - CP2AP_WAKEUP (gpa8-3) is a level IRQ with `enable_irq_wake()`
+    (`modem_utils.c` :530, :569), from `gpiod_to_irq()`, armed at
+    `complete_normal_boot`; gpa8 is a far-alive wakeup EINT bank, so no DT
+    `wakeup-source` is needed. Keep the bootloader's pull-up (section 6.3);
+  - a wake lock held while the PCIe link is up (:1889-1893, released at
+    the idle power-down :1819-1820), so s2idle can only begin with the link
+    down, as stock: stock does no link-down at suspend either, it happens
+    at runtime when the CP drops CP2AP_WAKEUP (M4.1h).
+- **The modem's reports with the screen off** (omamobile-modem-sit, only
+  with `[control] follow_screen = yes`, off by default): sitd sends
+  SET_SCREEN_STATE and SET_IND_CMD_FILTER when the panel goes off or on. On
+  the contributor's phone (2026-11-09, idle, registered): 47 indications a
+  minute with the screen state on (all 0x0906), none with it off. Each one
+  wakes the AP and the link.
+
+### 7.2 What is missing
+
+| What | Where | For | Note |
+|---|---|---|---|
+| K1: noirq sleep ops in the link driver ([linux-omarchy-mobile#232](https://github.com/derekross/linux-omarchy-mobile/pull/232), with K1b and K1c) | `drivers/pci/controller/dwc/pcie-gs201-cp.c` (none today, driver struct :1975-1985) | M6.2 | `suspend_noirq`: refuse with -EBUSY and a log line if the link is up or the PHY isn't isolated (PMU 0x3ec0, through the SMC regmap); otherwise nothing. `resume_noirq`: a log line. Stock's RC only isolates a down link there (`pcie-exynos-rc.c` :5823-5935), which ours already does at every `link_down`. Without it the PCI core may put the root port in D3hot on a live link: our endpoint driver has no PM ops (inferred from `pci-driver.c` :917-950). K1b and K1c, found in M6.2 and M6.3 (7.4): the root port is `PCI_DEV_FLAGS_NO_D3` and the modem's `d3cold_delay` 0, or a sleep with the link down leaves the modem disconnected |
+| K2: power-down pin states for the AP2CP outputs | the cpif overlay (`modem-cpif-test.dtso`) | only if needed | stock: gph0-2/3, gph1-1/2/3/6 with `pin-con-pdn` 3 (keep the level), no pull. Needed only if HSI1's pads lose their state in s2idle: check first (M6.0) |
+| U1: a conditional inhibitor | `omamobile-modem-inhibit.service` | M6.2 | Skipped only when `/etc/omamobile/modem-suspend-enable` exists beside `/usr/lib/omamobile-modem/suspend-runbook`, which only device-cheetah ships (two triggering `ConditionPathExists=|!` lines); the start script's check that the lock is held follows the same two files, so on the 9a or the 6 Pro the owner's file alone changes nothing. Calls keep `omamobile-call-watch`'s inhibitor |
+| U2: the screen state told before a sleep | `omamobile-modem-sit`'s systemd-sleep hook | M6.4 | found in M6.3 (7.4): `systemctl suspend` with the panel lit froze before sitd's 2 s backlight check told the modem "off". With `follow_screen = yes`, the hook asks sitd for "off" with a 10 s hold before every sleep; after the wake sitd's own check restores "on" if the panel is lit. A call refuses it, and the sleep goes ahead either way |
+| Later | | | the AP-suspend-during-call path (section 2, not ported), MSI as a wake source (only if the link ever stays up in sleep), ACPM's pcieon sleep mode (deep sleep only) |
+
+Never power the CP off for sleep: every CP power-off costs a UFS
+error-handler pass (M2.5), and stock doesn't either.
+
+### 7.3 Runbook (attended, on the charger, one change per boot)
+
+Who runs it: a sleep with the modem up on a 7 Pro is the maintainer's
+attended test until M6 is qualified (AGENTS.md). M6.0 is read-only and
+anyone's; M6.1 is a push the human approves; M6.1b to M6.5 are the
+maintainer's. The contributor's runs in 7.4 came before that rule.
+
+Before each step: the NV checksum check (AGENTS section 1), `spm_lvl` 5,
+the modem registered (`omamobile-sit status`), and after each wake
+`dmesg | grep -cE 'ufshcd_err_handler|I/O error'` (stop on any new line).
+NFC polling stopped for M6.2-M6.3 (`systemctl stop neard`), so a hang can't
+be the 9a's NFC case again.
+
+**M6.0, read-only (low).** On the current kernel, modem up:
+`grep -i cp2ap /proc/interrupts`, then `/sys/kernel/irq/<n>/wakeup` must
+read `enabled`; `cat /sys/power/wakeup_count`; the link's idle cycles in
+the log over 10 minutes with the screen off (0.3.32's filter on); HSI1's
+gph0/gph1 CON and PUD read once, one controller (AGENTS gs201 pinctrl
+note), to decide K2. Stop: a read error or an abort.
+
+**M6.1, K1 (medium).** Build `omamobile-modem-suspend` (off `omamobile`),
+`W=1` and checkpatch clean; the human pushes it. Expect: nothing changes
+awake (the stack comes up, registers, idle cycles as before). Rollback:
+`omamobile-boot-update write` or the saved slot B. Stop: the modem doesn't
+reach ONLINE.
+
+**M6.1b, the screen state on (low, the maintainer).** M6.2 to M6.5 need
+it: every result in 7.4 was taken with sitd following the screen. Add
+`[control]` `follow_screen = yes` to `/etc/omamobile/modem-sit.conf`, and
+reboot. Expect: with the panel off, `journalctl -u omamobile-sitd` shows
+SET_SCREEN_STATE off, and the modem's indications stop (none a minute,
+against about 47 with it on). Undo: remove the line, reboot. Stop: a
+refused request, or a call missed with the screen dark.
+
+**M6.2, the first freeze with the modem up (high, attended, the maintainer).**
+`touch /etc/omamobile/modem-suspend-enable`, reboot, wait for
+registration, screen off. Then a detached RTC freeze logged to UFS
+(SUSPEND-PLAN "Common setup", `freeze_cmd m6-2 30`).
+- Pass: woke at 30 s; `suspend_stats/fail` unchanged; the log has
+  "Suspend prepare", AP2CP_PDA_ACTIVE 0 then 1; `cpif` still ONLINE,
+  `omamobile-sit status` registered, a ping over `rmnet` works; no UFS line.
+- A refused suspend (-EBUSY from CPIF or K1) is a pass for safety and a
+  finding: record which and why, then stop.
+- Stop: no wake in 2 minutes. Don't send commands; the human holds Power
+  about 30 s, then Power. Then `rm /etc/omamobile/modem-suspend-enable`
+  and reboot.
+
+**M6.3, the network wakes the phone (high, the maintainer).** As M6.2 with a 300 s RTC
+alarm; from another phone, an SMS at about 60 s, then (next cycle) a call.
+Pass: the wake comes before the alarm, from the cp2ap IRQ (`omamobile-sleep`'s
+wake IRQ line), the SMS reaches the inbox, the call rings in the Phone app.
+
+**M6.4, a loop (medium, the maintainer; on hold on the contributor's
+phone).** 20 RTC cycles of 30 s, then an hour asleep with
+the link's idle cycles; UFS clean throughout, the registration kept.
+
+**M6.5, a day (the maintainer).** With the shell's auto-sleep toggle on, as
+SUSPEND-PLAN P6. After that the default (the enable file shipped, or the
+condition dropped) is the maintainer's call.
+
+Rollback at any step: `rm /etc/omamobile/modem-suspend-enable` and reboot
+(the inhibitor is back from the next modem start).
+
+### 7.4 Results
+
+All of M6.0-M6.3 ran on a second Pixel 7 Pro (a contributor's), attended
+and on the charger, NFC polling stopped, with an LTE SIM that has data and
+SMS but no voice. Every freeze below went straight to `/sys/power/state`
+(`rtcwake -m freeze`), which skips the `system-sleep` hooks and systemd's
+inhibitors, so these runs exercised neither U1's inhibitor change nor U2's
+hook: M6.4 runs some cycles through `systemctl suspend` for that, refused
+without the enable file and allowed with it.
+
+**M6.0, 2026-11-09** (`7.3.0-rc6-omamobile-push1-g0e3da55c9e9f`, modem up):
+cp2ap_wakeup is a gpa8-3 level IRQ with `wakeup` enabled; the MSIs
+(`mif_cp2ap_msg`, `mif_cp2ap_status`) are not wake-armed. `mem_sleep`
+s2idle, `spm_lvl` 5, no UFS line. The pinctrl debugfs lists no pin
+configurations for HSI1, so K2 stays open until a freeze shows a need.
+
+**M6.1, 2026-11-09** (`…-g2f2f0b979337`, K1 on the RTC power-off commit):
+the stack came up, registered on LTE with IMS voice and SMS, idle cycles as
+before.
+
+**M6.2 run 1, 2026-11-09** (`…-g2f2f0b979337`): the freeze was taken with
+the link down (`sleep: link down, PMU 0x3ec0 = 0x0`) and woke on the RTC at
+30 s, `suspend_stats` success 1, fail 0, no UFS line. But the modem was lost
+after the wake. The PCI core had tried the root port into D3hot with its
+configuration space unreachable:
+
+```
+pcieport 0001:00:00.0: Unable to change power state from D0 to D3hot, device inaccessible
+pcieport 0001:00:00.0: Unable to change power state from D3cold to D0, device inaccessible
+pcieport 0001:00:00.0: Data Link Layer Link Active not set in 100 msec
+```
+
+The failed D3hot left the port marked D3cold, so resume waited 100 ms for a
+link that only comes back when CPIF asks for it, then marked the modem
+disconnected (`pci_pm_bridge_power_up_actions()`). CPIF raised the link 3 s
+later, but every kernel config read of the modem returned 0xffff (a read
+from user space still saw the vendor ID), so no doorbell went through
+(`BME is not set`, `LINK_DOWN … retry pcie poweron`) and sitd timed out.
+The unit's clean stop worked (`modem-up` removed, no UFS line). Fix,
+K1b: the root port gets `PCI_DEV_FLAGS_NO_D3` at the first scan, so it
+stays in D0 and the core skips its bus PM in s2idle (`skip_bus_pm`).
+
+**M6.2 run 2, 2026-11-09** (`…-g75876b951a19`, K1 + K1b): pass, with one
+finding. Before: a ping over `rmnet0` 3/3. The freeze was taken with the
+link down and ended early, about 7 s in, on the cp2ap_wakeup IRQ
+(`pm_wakeup_irq`; `ap_wakeup_handler: cp2ap_wakeup work pending`), with
+sitd's screen state off since well before. After: `suspend_stats` success
+1, fail 0, the link up again on CPIF's request, a ping over `rmnet0` 3/3 at
+10 s and at 30 s, sitd's polls answered, no UFS line. The modem itself can
+wake the phone, which is what M6.3 needs; what it had to say 7 s in isn't
+logged yet. Left over: resume still prints "Unable to change power state
+from D3hot to D0" for the modem and "from D3cold to D0" for the root port,
+without consequence this time; read where that state comes from before
+M6.4.
+
+**M6.3 run 1, 2026-11-09** (`…-g75876b951a19`): failed at the wake. The
+freeze (a 300 s alarm) ended after 24 s on cp2ap_wakeup, and the modem
+was disconnected again: run 2's resume had left the root port marked
+D3cold (a failed power-up read with the link down: "Unable to change
+power state from D3cold to D0"), so this resume waited for the link
+("Data Link Layer Link Active not set in 100 msec") and dropped the modem,
+as in M6.2 run 1. K1b alone only covers the first sleep of a boot. Fix,
+K1c: the devices below the root port get a zero `d3cold_delay`, so
+`pci_bridge_wait_for_secondary_bus()` returns at once. Lesson: a sleep
+test with the modem runs at least two cycles per boot.
+
+**M6.2 again, 2026-11-09** (`…-g80f9610feb26`, K1 + K1b + K1c): two 30 s
+cycles in a row, a ping over `rmnet0` 3/3 after each. Cycle 1 woke at 14 s
+on cp2ap_wakeup, cycle 2 on the RTC alarm (the PMIC IRQ) at 32 s. No
+"Link Active" or "BME" line, no UFS line. The power-state lines at resume
+remain and are harmless now.
+
+**M6.3, 2026-11-09** (same kernel), SMS: pass. A 4-minute loop that
+freezes again 3 s after every wake, screen off. An SMS sent from another
+phone about a minute in woke the phone on cp2ap_wakeup and was stored and
+acknowledged in the same second (sitd, ModemManager, omatel). One more
+modem wake 38 s later, then 2 min 27 s asleep until the alarm. A second
+4-minute loop: one modem wake at 94 s, then 2 min 23 s asleep until the
+alarm. Over the boot (M6.2 again and M6.3), the journal holds eight
+`PM: suspend entry (s2idle)` lines, each followed by `PM: suspend exit`,
+and no failed suspend (an earlier count here said seven: one short); a ping over
+`rmnet0` 3/3 at the end; no UFS line. The call half is open: the test SIM
+has data and SMS only. What the modem's own wakes (no SMS) carry isn't
+logged yet.
+
+**Between runs, and the NV checks** (read back on 2026-11-11 from the
+phone's journal). Each M6 boot started the modem once: after M6.2 run 1 and
+M6.3 run 1, which lost the modem, the phone was rebooted with the unit's
+stop (`CP OFFLINE`, `modem-up` removed), never restarted within the boot.
+The UFS check of those two boots is that boot's own kernel log, which runs
+on past the stop (to 855 s and 1387 s): no `ufshcd_err_handler` or
+`I/O error` line in either, the stop's CP power-off included. NV: no
+`tools/nv-backup --check` ran at each boot. What each modem start checked
+instead (its RAM copies of `modem_a`, `efs`, `efs_backup`,
+`modem_userdata` and `persist` against `/etc/omamobile/modem-nv.sha256`,
+which holds the backup's sums, and the three NV files' stock checksums):
+
+| Boot | Kernel | RAM copies against the backup | NV file checksums |
+|---|---|---|---|
+| M6.0 | `…-g0e3da55c9e9f` | 5 of 5 match | 3 of 3 |
+| M6.1, M6.2 run 1 | `…-g2f2f0b979337` | 5 of 5 match | 3 of 3 |
+| M6.2 run 2, M6.3 run 1 | `…-g75876b951a19` | 5 of 5 match | 3 of 3 |
+| M6.2 again, M6.3 | `…-g80f9610feb26` | 5 of 5 match | 3 of 3 |
+
+After all of them, `tools/nv-backup --check` against the 2026-10-30 backup
+(2026-11-11): `efs`, `efs_backup`, `modem_userdata`, `persist`, `modem_a`
+and `modem_b` the same, `devinfo` different as expected. From M6.4 the
+`--check` runs before each boot's first step, as 7.3 says.
+
+**Registration on the newer kernel base: a race with sitd, and the fix**
+(2026-11-12, the same second Pixel 7 Pro, on the charger, no sleep). #232
+rebased onto the newer `omamobile` (`7.3.0-rc6-omamobile-push1-g33179249011e`)
+never registered: sitd's start-up ran as before, the radio came on, and
+GET_PS_REG_STATE read state 20, reject 0, RAT 14, no data calls, until the
+300 s deadline (5 of 5 boots). The first sign is before radio on: with the
+radio off the modem accepted SET_NR_MODE (error 0, reading 0 already)
+where it normally refuses it (error 2, and sitd sets it right after radio
+on); at radio on it put the mode back to 1 itself, and setting 0 again by
+hand later changed nothing. NV was the same every boot (RAM copies 5 of 5,
+NV files 3 of 3), and the package versions didn't matter (0.1.18 and
+0.1.21 started and stopped either way registered on the older kernel).
+
+- Bisected on the kernel base, judged by the radio-off SET_NR_MODE reply
+  at about 34 s: the first bad commit is a353a0190 ("arm64: dts: exynos:
+  google: gs201: give the CPU levels a power model"), whose energy model
+  turns on energy-aware scheduling. On that kernel, `kernel.sched_energy_aware`
+  set to 0 just before the modem starts: refused, so good; the modem's
+  daemons pinned to CPUs 4-7: still accepted; sitd pinned to CPUs 4-7:
+  refused, so good. So it is a race between sitd's start-up and the
+  modem's: on the little cores sitd reaches the request later, when the
+  modem takes it. The older kernel lost it now and then too (3 of about
+  12 boots on `…-g80f9610feb26` on 2026-11-11).
+- Fix: sitd sets the mode only right after radio on, still before
+  registration. It is its own pull request,
+  [#701](https://github.com/derekross/omarchy-mobile/pull/701) (`[network]
+  nr_after_radio_on`, off by default), since the reference 7 Pro, on the
+  same `kernel-2026.11.08`, gets the refusal and registers with today's
+  order. With it on, this phone registered on `…-ga353a0190151` with EAS
+  on, and twice on `…-g33179249011e` (packet registration 7.5 and 8.5 s
+  after radio on, then IMS voice and SMS; a ping over `rmnet0` 3/3; no UFS
+  line). The runs below used it.
+- Which boots each count covers: 5 of 5 are the boots of
+  `…-g33179249011e` on 2026-11-12 with the old order (before the fix);
+  3 of about 12 are the boots of `…-g80f9610feb26` on 2026-11-11.
+- The merged option, 2026-11-14 (`omamobile-modem-sit` 0.3.37 from this
+  pull request, which carries #701's 0.3.36; `…-gd2983420874d-dirty`,
+  `omamobile` at `82f31d3a7` with #232). Off (the package's default): the
+  modem accepted SET_NR_MODE with the radio off ("verified NR mode 0" before
+  radio on) and never registered, 1 of 1 boot. On, 4 of 4 boots
+  registered:
+
+  ```
+  omamobile-sitd: NR mode: set right after radio on (nr_after_radio_on)
+  omamobile-sitd: Registration: packet registered 7.5 s after radio on, RAT 14
+  ```
+
+  (the other three: 6.4 s RAT 14, 7.4 s RAT 20, 6.4 s RAT 14).
+
+**Sleep on the rebased #232, through `systemctl suspend`** (2026-11-12,
+this phone, on the charger, unattended at 80 % on the owner's word, before
+the rule in 7.3; a loop that sets an RTC alarm, runs `systemctl suspend`
+and pings over `rmnet0` after each wake; each `systemctl suspend` made two
+kernel attempts when the first failed).
+
+- `…-gb857fd28dd36` (#232's first three commits): cycle 1 slept and woke
+  on cp2ap_wakeup, ping fine. Cycle 2: the link came up 8 ms after
+  `PM: suspend entry` (CPIF's doorbell), so the first attempt was refused
+  with the link fully up ("sleep refused: link up, PHY out of isolation").
+  The second attempt 30 ms later found the link down, and CPIF refused it
+  (`suspend_cp: abort suspend`). Its resume printed "s51xx … Unable to
+  change power state from D3hot to D0" and "pcieport … from D3cold to D0".
+  From then on CPIF kept bringing the link up, but sitd's polls timed out
+  until the reboot.
+- `…-g1668d1e8d1b0` (#232's head, adding the fourth commit; `git
+  hash-object drivers/pci/controller/dwc/pcie-gs201-cp.c` `1d12db51af20`):
+  with a ping every second, 30 cycles and 60 attempts, all refused by the
+  link driver, and a ping over `rmnet0` after each one. Quiet: 8 of 8
+  cycles slept and woke on cp2ap_wakeup, with a ping after each. No
+  s51xx power-state line, and no UFS, I/O or BME line.
