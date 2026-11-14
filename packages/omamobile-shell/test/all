@@ -1099,6 +1099,8 @@ else
   pass "widget crash guard: same-boot death held back, one retry after a system going down, clean run and quit clear"
 fi
 bash test/osk-guard.sh || fail "omamobile-osk-guard"
+bash -n bin/omamobile-ime || fail "omamobile-ime parses"
+bash test/ime.sh || fail "omamobile-ime"
 bash -n bin/omamobile-onboarding || fail "omamobile-onboarding parses"
 bash test/onboarding-fingerprint.sh || fail "omamobile-onboarding's fingerprint offer"
 bash test/onboarding-mobile.sh || fail "omamobile-onboarding's SIM line"
@@ -1188,6 +1190,8 @@ grep -cx 'ExecStart=/usr/bin/omamobile-setup-user' systemd/user/omamobile-setup-
 [[ -x $tmp/root/usr/bin/omamobile-sleepd && -f $u/omamobile-sleepd.service &&
    $(readlink "$u/graphical-session.target.wants/omamobile-sleepd.service") == ../omamobile-sleepd.service ]] \
   || fail "the sleep watcher is staged and runs for every user's session"
+[[ -x $tmp/root/usr/bin/omamobile-ime && $(readlink "$u/graphical-session.target.wants/omamobile-ime.service") == ../omamobile-ime.service ]] ||
+  fail "Japanese input's login unit is staged for every session"
 grep -cx 'ExecStart=/usr/bin/omamobile-sleepd' systemd/user/omamobile-sleepd.service >/dev/null || fail "the unit runs the watcher"
 # Double tap to wake: phone.lua turns Hyprland's wake on touch off, so the
 # watcher must run for every session, or a single touch and a double tap
