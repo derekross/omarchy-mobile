@@ -146,9 +146,16 @@ grep -q '^WantedBy=\|^\[Install\]' "$link_unit" && fail "the link's unit has no 
   fail "first boot is skipped on a firstboot.conf without answers"
 pass "the units' conditions and ordering are the plan's"
 
-if command -v systemd-analyze >/dev/null && systemd-analyze verify --help >/dev/null 2>&1; then
+# systemd-analyze verify --root resolves every unit inside the scratch root,
+# so it needs systemd's own targets there: copied from this machine. A build
+# container whose systemd ships no units (the package builder's) can't
+# verify, and says so as a skip rather than failing the package's build.
+if command -v systemd-analyze >/dev/null && systemd-analyze verify --help >/dev/null 2>&1 &&
+   [[ -f /usr/lib/systemd/system/sysinit.target ]]; then
   V=$t/verify
   cp -a "$S" "$V"
+  mkdir -p "$V/usr/lib/systemd/system"
+  cp -n /usr/lib/systemd/system/*.target "$V/usr/lib/systemd/system/" 2>/dev/null || true
   mkdir -p "$V/usr/bin" "$V/etc/systemd/system"
   for b in systemd-inhibit omamobile-firstboot; do printf '#!/bin/sh\n' > "$V/usr/bin/$b"; chmod +x "$V/usr/bin/$b"; done
   if [[ -n $REPO && -f $REPO/packages/omamobile-firstboot/systemd/omamobile-firstboot.service ]]; then
@@ -184,7 +191,7 @@ if command -v systemd-analyze >/dev/null && systemd-analyze verify --help >/dev/
   holds "$link_unit" "$r" || fail "the marker and done: the daemon starts, to complete the end (§18 E1)"
   pass "systemd's own conditions on scratch roots: none, the marker, an account, an end, an end cut short"
 else
-  skip "no systemd-analyze here"
+  skip "no systemd-analyze with systemd's own units here (a build container)"
 fi
 
 # --- has-answers ------------------------------------------------------------------
