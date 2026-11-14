@@ -92,6 +92,7 @@ for f in usr/bin/reboot-to usr/bin/tegu-tcpc-switch \
          usr/lib/systemd/system-sleep/omamobile-tegu-cpuidle \
          usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-tegu.conf \
          usr/lib/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf \
+         usr/lib/systemd/system/service.d/10-omamobile-tegu-sleep-watchdog.conf \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
          usr/lib/udev/rules.d/10-omamobile-storage.rules usr/lib/udev/rules.d/20-omamobile-torch.rules \
          usr/lib/udev/rules.d/70-omamobile-dma-heap.rules usr/lib/udev/rules.d/72-omamobile-feedbackd.rules \
@@ -104,6 +105,13 @@ for f in usr/bin/reboot-to usr/bin/tegu-tcpc-switch \
          etc/pacman.d/omamobile-mirrorlist; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
+# The sleep runs with the kernel's clock ticking, so no service watchdog may
+# outlast it: one drop-in for every service, and nothing else in it.
+wd=$tmp/root/usr/lib/systemd/system/service.d/10-omamobile-tegu-sleep-watchdog.conf
+[[ $(grep -v '^#' "$wd" | grep -c .) == 2 && $(grep -v '^#' "$wd" | paste -sd' ') == "[Service] WatchdogSec=0" ]] \
+  || fail "the service drop-in turns the watchdogs off and does nothing else"
+[[ $(find "$tmp/root/usr/lib/systemd/system/service.d" -type f | wc -l) == 1 ]] || fail "one drop-in for all services, no more"
+! grep -rl '^WatchdogSec=' vendor/systemd/system --include='*.service' || fail "a unit of this package sets a watchdog the sleep would trip"
 [[ -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-wifi && -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-nfc &&
    -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-cpuidle ]] \
   || fail "the sleep hooks are not executable"
