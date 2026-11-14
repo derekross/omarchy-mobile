@@ -14,6 +14,7 @@ reported the screen off, but the CRTC never turned off. See
 | `nvidia-egl-teardown.patch`, `wl-output-global-grace.patch`, `monitor-rule-vrr.patch` | Omarchy's patches from the same commit, unchanged (what they fix: their comments in `prepare()`) |
 | `0001-dpms-keep-retrying-a-refused-dpms-commit.patch` | The Omarchy Mobile change to `src/output/Monitor.cpp` |
 | `0002-render-hold-the-last-frame-across-a-rotation.patch` | The Omarchy Mobile change to `src/render/Renderer.cpp` and `src/render/OpenGL.cpp` (the rotation hold, below) |
+| `0003-output-send-the-whole-state-with-done.patch` | The Omarchy Mobile change to `src/protocols/core/Output.cpp` (wl_output's geometry after a rotation, below) |
 
 ## What differs from Omarchy's `hyprland` 0.57.0-2
 
@@ -32,11 +33,22 @@ reported the screen off, but the CRTC never turned off. See
   Hyprland's environment (read once at startup): `omamobile-device-panther`
   sets it in `environment.d`, and the other phones rotate as before until
   it has run on them.
+- wl_output's geometry after a rotation (0003). A rule that only turns the
+  screen goes through `applyMonitorRuleSoft()` and emits no `modeChanged`,
+  so `CWLOutputResource::updateState()` never ran: clients bound before the
+  turn got a `wl_output.done` (from xdg-output's update) but no new
+  `wl_output.geometry`, and kept the old transform. squeekboard, bound at
+  login, sized itself for portrait in landscape and covered the screen.
+  Every done now sends the whole state first (scale, mode, geometry), which
+  is what updateState already sent on a mode change. On a Pixel 7, Chromium
+  in landscape with the keyboard up went from -18 px tall to 107, and
+  squeekboard's horizontal scale setting takes effect again.
 - `pkgrel=3.3`: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
   (`extra/hyprland` 0.57.0-3, a rebuild for aquamarine 0.16.0 and
   hyprgraphics 0.6.0) release, plus `.1`, so it sorts above both; `.2` for
   the rotation hold, since 3.1 is published; `.3` for the half turn's
-  383 ms and the alpha-out curve, since 3.2 is published.
+  383 ms and the alpha-out curve, since 3.2 is published; `.4` for the
+  wl_output geometry.
 - `arch=(aarch64)` only.
 - `build()` runs the two cmake steps of `make release` itself:
   - with Arch's `-DCMAKE_SKIP_RPATH=ON` (Arch's PKGBUILD seds it into the
