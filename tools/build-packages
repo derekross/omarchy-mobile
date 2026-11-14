@@ -110,6 +110,7 @@ if ((${#dirs[@]} == 0)) && ((${#imports[@]} == 0)) && ((resign == 0)); then
   done
   for d in packages/*/; do
     name=$(basename "$d")
+    [[ " ${NAMED_ONLY[*]} " != *" $name "* ]] || continue
     [[ " ${ORDER[*]} " == *" $name "* ]] || dirs+=("packages/$name")
   done
 fi
@@ -287,7 +288,9 @@ done
 skipped=() kept=()
 for d in "${build[@]}"; do
   name=$(basename "$d")
-  if [[ " ${NAMED_ONLY[*]} " == *" $name "* ]]; then
+  # Only the kernel package packs a staged build; a named-only package
+  # without a stage script compiles its own
+  if [[ " ${NAMED_ONLY[*]} " == *" $name "* && -x $d/stage ]]; then
     "$d/stage" --verify "$d/prebuilt" || alarm_die "$name: the staged kernel is not a published release; nothing built"
   fi
   if grep -c 'OMAMOBILE_BOOT_FILES' "$d/install" >/dev/null 2>&1 && ! tools/stage-boot-files --check "$d/boot-files"; then
@@ -410,7 +413,7 @@ for dir in "${build[@]}"; do
   [[ -f $repo/omamobile.db ]] && have_repo=1
   start=$(date +%s)
   docker run --rm --platform linux/arm64 \
-    -v "$work:/work" -v "$ROOT/$repo:/repo/aarch64:ro" \
+    -v "$work:/work" -v "$ROOT/$repo:/repo/aarch64:ro" -v "$ROOT/tools/lib/alarm-deps.sh:/alarm-deps.sh:ro" \
     -v "$ALARM_CACHE/pkg:/var/cache/pacman/pkg" -v "$ALARM_CACHE/src:/srcdest" \
     -e NAME="$name" -e HAVE_REPO="$have_repo" -e INCHECK="$incheck" \
     "$image" bash -c '
@@ -428,15 +431,10 @@ for dir in "${build[@]}"; do
       chown -R builder: /work /srcdest
       cd /work/$NAME
       info=$(su builder -c "makepkg --printsrcinfo")
-      # Every dependency a repository can provide goes in (the build-time
-      # ones always; runtime ones so check() can run). Ours that are not
-      # built yet are left out: makepkg runs with --nodeps.
-      wanted=$(awk "\$1 ~ /^(depends|makedepends|checkdepends)\$/ {print \$3}" <<<"$info" | sed "s/[<>=].*//" | sort -u)
-      install=()
-      for dep in $wanted; do
-        pacman -Sp --print-format %n "$dep" >/dev/null 2>&1 && install+=("$dep")
-      done
-      ((${#install[@]})) && pacman -S --noconfirm --needed --asdeps --overwrite "/usr/share/pacman/keyrings/*" "${install[@]}" >/dev/null
+      # Its dependencies, with the image brought up to date if it has fallen
+      # behind the repositories (tools/lib/alarm-deps.sh)
+      source /alarm-deps.sh
+      alarm_install_deps <<<"$info"
       [[ -s /work/pgp.asc ]] && su builder -c "gpg -q --batch --import /work/pgp.asc"
       flags=(-f --nodeps --noconfirm)
       [[ $INCHECK == 1 ]] || flags+=(--nocheck)

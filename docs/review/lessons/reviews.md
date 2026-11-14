@@ -3,6 +3,102 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-773. A PR that keeps a "switch off" copy of main's functions is merged
+  by hand onto today's main and tested under both switch values, even when
+  GitHub shows no conflict in that file.** #577's off block copies the old
+  `short_press`, so git applied #640's hunk (a new `panel_dark` and
+  `wait_screen_off`) to the copy: two `panel_dark` definitions, the helper
+  missing with the switch on, and main's new test failing there. *Check:* `git
+  merge --no-commit` in a scratch worktree, `grep -n '^[a-z_]*() '` for a name
+  defined twice, and each test with the switch on and off. Extends L-423 and
+  L-280. *From:* #577 with #640, round 52, 2026-11-11.
+- **L-772. A document an agent is told to read in full is kept small enough
+  to read in one go, and the reader reports what it actually read.**
+  `docs/review/LESSONS.md` had outgrown one read, and six of round 52's eight
+  reviewers read only its first 700 or 2,250 lines, which showed only when
+  they reported it. The lessons are now split into `docs/review/lessons/*.md`,
+  each fitting one read. *Check:* `tests/review-lessons` (it fails on a file
+  over 40 kB, a number used twice or missing, and an unlisted file), and each
+  review lists the lesson files it read, with their line counts. *From:*
+  round 52, 2026-11-11.
+- **L-745. "I'll set the version when I merge" is a push to the branch, not a merge option.** A squash lands the branch's files as they are, and a `version` equal to main's raises no conflict; #628 came back with both requests met and the version still at the number main had taken, as we had told its author to leave it. *Check:* when a draft promises a version at merge, the merge plan carries an explicit "push `<version>` to `<owner>:<branch>`" step before the squash, and the next round compares `git show <head>:packages/<p>/version` with main again. Extends L-426, L-404 and L-551. *From:* #628, #640, #642, round 51, 2026-11-11.
+- **L-722. A conflict with a same-day redesign of the same handler is reviewed
+  as "what does the PR still add", never resolved in a scratch merge.** #582
+  and #612 conflict with #643's Back (`BackLink.js`); taking #582's side drops
+  keyboard-first and terminals-go-home, and keeping both in #612 compiles and
+  puts Search ahead of the keyboard. *Check:* per conflicted file, list main's
+  behaviours the PR's side lacks, read main's header comment and the tests
+  that enumerate participants (`test/back-surfaces.py`'s `EXPECT`), and ask
+  for a rebuild on main with the PR's additions named. Extends L-184 and
+  L-431. *From:* #582 and #612 with #637 and #643, round 50.
+- **L-721. Two open PRs where one parses a line of a user's file and the other
+  rewrites it are a design conflict git doesn't show.** #581 reads `local
+  omarchy_monitor_scale = <number>` with a regex; #635 turns that line into a
+  function call, after which #581's helper defers at every login and writes no
+  defaults. *Check:* `git grep -n '<the line's left-hand side>'` over every
+  open PR head that touches the script seeding it, and say in both reviews
+  which merges first. Extends L-424 and L-478. *From:* #581 with #635, round
+  50.
+- **L-720. A second contributor's feature for a phone is checked against the
+  first owner's open draft for the same thing.** #626 and #374 both add a 9a
+  earpiece route, 10 dB apart and with different tuning. *Check:* `gh pr list
+  --search "<device> <feature>"`, grep the open drafts' diffs for the controls
+  the PR writes, and name the difference for the maintainer before either
+  merges. Extends L-169 and L-277. *From:* #626 with #374, round 50.
+- **L-719. A merge condition that waits for a rare failure to recur gets a
+  bound for the case where it doesn't.** We held kernel #224 for "one console
+  that places the core"; at about 1 in 150 sleeps the hang may not return for
+  nights, and absence can't meet a condition phrased as a console. *Check:*
+  when setting such a condition, say in the same comment how many clean cycles
+  with the instrumentation on are enough to merge without it. Extends L-440
+  and L-482. *From:* kernel #224, round 50.
+- **L-718. A guard change left without a version bump "for the merge" is
+  re-checked when its trigger merges.** #594's two blacklist lines had no
+  bump, harmless until kernel #237 merged the nodes that make udev load the
+  modules, the same day. *Check:* for a guard change without a version, list
+  what triggers the guarded thing (a DT node, a config line) and whether it
+  merged since the last round; if so, the bump and the merge go first. Extends
+  L-37 and L-442. *From:* #594 with kernel #237, round 50.
+- **L-690. A third party's failure report on a draft is checked against main
+  before the design discussion goes on.** On #582 a 9a owner reported that the
+  Escape dispatch main ships answers "key not found" under Hyprland 0.57,
+  after our round-48 comment had said every phone runs it and asked the author
+  to prove the failure. *Check:* grep main for the failing command
+  (`BackModel.js`), compare the version its comment names (0.56) with what
+  phones run (0.57.0), and put a reference-phone reproduction in the round's
+  decisions; a bug on main gets its own issue or PR. Extends L-520 and L-492.
+  *From:* #582, round 49, 2026-11-10.
+- **L-689. A commit-body line that starts with `#N` is deleted when a rebase
+  re-edits the message.** Git takes it for a comment: #389's `76dc2a29` lost a
+  line beginning "#398 added …" and now reads as a broken sentence. *Check:*
+  read the message hunks of every range-diff after a rebase; with
+  `COMMIT_MESSAGES` squashes the broken body lands on main unless the squash
+  body is written by hand. Extends L-312. *From:* #389, round 49, 2026-11-10.
+- **L-688. Requests left unanswered after a contributor's push are re-listed
+  in full in the numbered list, wording points included.** #330's four points
+  were posted five minutes before an unrelated correction and went unanswered
+  through two more pushes; "stock" was corrected on neither #330 nor #505
+  after round 48, having sat under "two wording points" at the end. *Check:*
+  `git grep -n` the exact strings each open point asked for (hashes, phrases,
+  the word) on the head, in the sibling PR's files too; when all are missing,
+  compare timestamps for a crossing before reading it as a refusal. Extends
+  L-648 and L-124. *From:* #330 and #505, round 49, 2026-11-10.
+- **L-687. A merge condition "shown not to be this PR's" names its
+  discriminator when it is set.** Kernel #224 waited on a comparison run
+  without its commits; at a failure rate near 1 in 150, with the unfixed bug
+  ending the comparison first, that run can't answer in a night, and the
+  thread drifted to "it isn't against this PR" by inference. *Check:* when a
+  merge waits on attributing a rare failure, estimate the runs needed from the
+  observed rate, and prefer evidence one failure can give (`pm_print_times`,
+  `pm_debug_messages`, `panic_on_rcu_stall`, a stack). Extends L-482. *From:*
+  kernel #224, round 49, 2026-11-10.
+- **L-686. A lesson that names an open PR is run as a check in that PR's next
+  round, not left as a note.** L-494 had named #403's `snprintf` in
+  `reboot-to.c` since round 42, but the thread never got it; linking the file
+  the no-bootctl way (two minutes, no network) made it a blocking finding.
+  *Check:* at the start of a later round, `grep -rn '#<N>'
+  docs/review/lessons` and run each check the hits name. *From:* #403, round
+  49, 2026-11-10.
 - **L-340. After a rework that narrows a PR to one device, the description and
   the first commit still describe the old scope, and a squash publishes
   them.** #135's body and first commit say the reorder and the rate in `state`
@@ -169,7 +265,6 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   carried #11's old commit underneath and couldn't merge as it stood. *Check:*
   when merging a PR another one is stacked on, ask the second one's author to
   rebase onto the branch, and merge in order. *From:* kernel #11 and #12.
-
 - **L-43. Parallel reviewers use unique ref names.** They share the kernel
   clone, and one deleted another's `review/pr12` mid-review. *Check:* name
   refs `review/prN-<round>` (now `review/prN-rR-<topic>`, L-127) and pass commit ids to the gates. *From:* kernel
@@ -265,7 +360,6 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   finding the line that does it: #409's `sleep-series-loop.sh` had no ext4
   line, and its cap was per invocation, not the per-night cap the condition
   named.
-
 - **L-184. When we tell a contributor how to resolve a conflict, derive the
   resolution from the file, and better, hand over the resolved hunk.** Rounds
   18 and 19 said "keep both lines in both lists" for
@@ -275,59 +369,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   merge-tree` tree plus the PR's hunk), run the schema and board validation
   on it, and attach it. Extends L-31 and L-104. *From:* kernel #39 with #60,
   round 20.
-- **L-185. A rule can change between our comment and the contributor's
-  push.** AGENTS' `userdata`-through-`install-phone` exception (`10daf5f`)
-  landed after our follow-up on #25 and before its next push, so a PR that
-  did everything asked now broke a rule its author never saw. *Check:* `git
-  log --since=<our last comment> -- AGENTS.md CONTRIBUTING.md` before judging
-  a re-push, and say in the comment which rule is new. Extends L-31 and
-  L-124. *From:* #25, round 20.
-- **L-196. A stack of N PRs is gated once at its top and read N times.**
-  Kernel #73-#79 are one linear chain on today's base; `kernel-pr-check
-  --build --merge` on each head rebuilt the same objects seven times, while
-  the per-commit builds (L-179) and the parent-name audit (L-193) on the top
-  head covered everything in one pass. *Check:* `git log base..headN` for
-  each PR to prove the chain, gate the top head, build the chain commit by
-  commit, and give one merge plan (merge the top PR, close the rest) next to
-  the one-by-one order. *From:* kernel #73-#79, round 21.
-- **L-197. A status word we ask for is checked against the legend and the
-  site's parser before we post it.** Our "the matrix row says 'in review'"
-  on #52 produced a row whose every cell the website renders as "no"
-  (`devices.ts` `parseCell`). *Check:* `grep` the legend in DEVICES.md and
-  `STATUS_WORDS` in `omamobile-website/src/lib/devices.ts` for any status
-  wording we prescribe. Extends L-31 and L-66. *From:* #52, round 21.
-- **L-198. When the contributor says the record doesn't exist, the file
-  records that it doesn't, and a baseline taken over an unexplained change
-  is downgraded, not adopted.** #35's reply gave a negative record (no date,
-  tool, partition list or boot list) and accepted the hold, while the plan
-  still said "the new baseline" and "a Linux slot A boot does not run the
-  modem stack". *Check:* the negative facts land in NOTES and Risks in the
-  contributor's words; the unexplained copy is "current contents, cause
-  unknown"; the baseline becomes the backup after the next stock boot.
-  Extends L-34, L-168 and L-186. *From:* #35, round 21.
-- **L-199. A read point we prescribe is named relative to the driver's last
-  write, not to a phase.** "Right after link-up, before MHI power-up" under
-  ath11k is after `ath11k_pci_soc_global_reset()`, and the read hung; the
-  same phase on stock (`linkup`, no reset) read fine six times. *Check:*
-  before asking for a register read, list the driver's writes to the block
-  up to that point in both trees, and name the read as "after write X,
-  before write Y". Extends L-135 and C-7. *From:* issue #36, round 21.
-- **L-215. A vendor-kernel A/B outranks host-side hypotheses.** On issue
-  #36 the stock kernel stalled exactly like mainline, retiring every
-  host-driver difference at once, while we were still asking for host-side
-  changes. *Check:* before asking for one, ask whether the stock kernel ran in
-  the failing shape, and list what differs between the stock run that works
-  and the one that doesn't. Extends L-204. *From:* issue #36, round 22.
-  (Corrected 2026-10-28, C-12: "a vendor-kernel A/B" means a one-variable
-  A/B; a stock run that differs in host and timing at once rules out
-  neither.)
-- **L-216. A re-push that answers our requests is trailer-checked on every
-  commit.** #77's re-push appended our sentence below its `Link:`, turning
-  the trailer into body text. *Check:* `git interpret-trailers --parse` on
-  each commit of the new head against the old head's. Extends L-119 and
-  L-183. *From:* kernel #77, round 22.
-- **L-217. A version we ask a contributor to take can be taken by main
-  first.** We asked #78 for 0.2.30; #90 shipped it an hour after his push.
-  *Check:* list the maintainer's open and local branches' versions of the
-  package and ask for the first free one, or say "the next free version at
-  merge" and set it ourselves. Extends L-12. *From:* #78, round 22.

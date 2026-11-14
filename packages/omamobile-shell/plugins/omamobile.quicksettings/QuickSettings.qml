@@ -814,7 +814,9 @@ Item {
 
   function refreshDnd() {
     if (dndProc.running) return
-    dndProc.command = ["qs", "ipc", "-p", Quickshell.shellDir, "call", "notifications", "dndState"]
+    // Omarchy 4.5 calls the read isDnd; 4.0 called it dndState, and each
+    // answers "Function not found" to the other's name. Ask 4.5's first.
+    dndProc.command = ["sh", "-c", "for m in isDnd dndState; do v=$(qs ipc -p \"$1\" call notifications $m 2>/dev/null); case $v in on|off) echo $v; exit 0;; esac; done", "sh", Quickshell.shellDir]
     dndProc.running = true
   }
 

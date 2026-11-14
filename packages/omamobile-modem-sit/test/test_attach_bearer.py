@@ -47,6 +47,8 @@ class Isolated(unittest.TestCase):
         self.patches = [patch.object(data_call, 'STATE', root / 'data-session.json'),
                         patch.object(data_call, 'RESPONSE', root / 'data-call-response.bin'),
                         patch.object(data_call, 'MODEM_OWNED', root / 'modem-owned-bearers.json'),
+                        patch.object(data_call, 'DATA_INTERFACE', root / 'data-interface'),
+                        patch.object(data_call, 'NET', root / 'net'),
                         patch.object(data_call, 'SETTLE_QUIET', 0),
                         patch.object(data_call, 'SETTLE_LIMIT', 0),
                         patch.object(ims, 'REGISTRATION', root / 'ims-registration.json'),
@@ -138,8 +140,8 @@ class OwnershipTests(Isolated):
             data_call.activate(modem, 'ims', ims=True)
         self.assertFalse(data_call.paths(2)[0].exists())
         self.assertEqual([p[0] for i, p in modem.sent if i == 0x0600], [1])
-        # Releasing the internet bearer leaves the modem's alone (no rmnet
-        # device exists on the host, so none is up).
+        # Releasing the internet bearer leaves the modem's alone (the test's
+        # own /sys/class/net has no device, so none is up).
         modem.listed = lambda: listing(item(2))
         data_call.deactivate(modem, 1)
         self.assertEqual([p for i, p in modem.sent if i == 0x0601], [b'\1\0'])

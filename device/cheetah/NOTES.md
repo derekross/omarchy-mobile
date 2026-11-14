@@ -2,6 +2,103 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-11-13: the release kernel kernel-2026.11.13 boots, power off stays off, double tap wakes from sleep
+
+`kernel-2026.11.13` is linux-omarchy-mobile's `omamobile` at `36d61a33795b`:
+the previous published tip (`2db2bc35beec`, with #233, the S2MPG12's WTSR
+and SMPL restarts disarmed at power off) plus #248 (the touchscreen as a
+wakeup source, off until user space enables it). Its release build,
+`7.3.0-rc6-omamobile-g36d61a33795b` (`bin/omamobile kernel --release` from
+a clean checkout of the tag), was pushed to the reference phone and booted:
+`tools/phone-smoke` passed, nothing failed, no UFS line, slot B marked
+successful. On the same code as a development build earlier that day
+(SUSPEND-PLAN, "P7, P8 and double tap, 2026-11-13"): power off stayed off
+with the cable out, an off phone on a charger started the charger boot with
+#554, and with `power/wakeup` enabled on the touchscreen a double tap woke
+the phone from s2idle (IRQ 98, `spi0.0`) and lit the lock screen.
+
+## 2026-11-12: the 2026.11.12 test install, on Omarchy 4.5
+
+The release's signed bundle, `omamobile-cheetah-2026.11.12`, installed on the
+reference phone with `bash install --reinstall --bootloader-slots-match
+cloudripper-17.0-15199429`. The phone was on slot B, running Omarchy Mobile,
+so the bootloader it reported was the one it had been starting with. It
+booted `7.3.0-rc6-omamobile-g1a9d1d4e9289` (the kernel of 2026.11.08,
+`kernel-2026.11.08`) with `omamobile-device-cheetah` 0.1.53, Omarchy
+4.5.0-3, `omamobile-settings` 0.1.2 and `omamobile-apps` 0.2.3, on the
+stable channel.
+
+- **First start:** `omamobile-firstboot` exited 0 and wrote its done file.
+  `systemd-firstboot` failed once, as on 2026.11.08. Before the firmware
+  step the AoC, Wi-Fi and Bluetooth-address units failed, as expected.
+- **Radio partitions:** `tools/nv-backup --check` against the afternoon's
+  backup read SAME for `efs`, `efs_backup`, `modem_userdata`, `persist` and
+  `modem_a/b` (`devinfo` differs, as its slot flags do after a flash).
+- **Firmware:** `tools/phone-provision --first-install --nv-backup DIR` with
+  factory image cp2a.260705.006 pushed and verified every group (firmware,
+  sensor registry, GNSS, modem, fingerprint, camera data), then
+  `systemctl reboot`.
+- **After the restart:** no failed unit, the modem registered on the home
+  LTE network with IMS voice and SMS, the AoC, Wi-Fi and fingerprint units
+  active, no `ufshcd_err_handler` line. `tools/phone-smoke` passed; it
+  flagged `cpif: rx_multi_pdp: … ERR! netif_receive_skb` (three times) as
+  new. Not looked into yet.
+- **Update:** `omamobile-update check` passed with one package from
+  Omarchy's repository newer than the image (`cliamp` 2.4.0-1 to 2.4.1-1).
+  Taken from the Updates sheet: installed, the patch series still applied,
+  nothing failed, nothing left to update.
+- **Seen on the setup screen:** the stacked logo sits at the left edge of
+  the terminal; `omamobile-omarchy` 0.1.45 centres it (#717), after this
+  image.
+
+The update to a new kernel through the package hook was not part of this
+install (the release has the kernel the previous one has). It ran earlier
+the same day on this phone: installed from release 2026.11.08, it took
+Omarchy 4.5 and a new boot image from its Updates sheet, the hook wrote and
+read back slot B, and the phone restarted into it.
+
+## 2026-11-09: power off restarted the phone (the PMIC's WTSR), and the charger boot
+
+On a second Pixel 7 Pro (a release install with `AUTO_WRITE=yes`), not the
+reference phone.
+
+Kernel `7.3.0-rc6-omamobile-g2219cc6cda77` (the packaged release) and a test
+build of it with one change, `7.3.0-rc6-omamobile-push1-g0e3da55c9e9f`
+("rtc: s5m: disarm the S2MPG12's WTSR and SMPL restarts at power off");
+`omamobile-device-cheetah` 0.1.45 test builds (0.1.55 here) of the off-mode charging below.
+NV partitions checked against the backup first (all SAME).
+
+- **The PMIC's warm-reset restart is armed** [V]: the RTC regmap
+  (`firmware:power-management:pmic-1-rtc`, ACPM, one register per read)
+  reads `0x02` (SMPL) `0x0e`, SMPL_EN 0, and `0x03` (WTSR) `0x0f`, WTSR_EN 1,
+  on a running phone. Google's `rtc-s2mpg12.c` clears SMPL_EN, WTSR_EN and
+  COLDRST_EN in its shutdown callback before a power off; `rtc-s5m` didn't.
+- **Power off, by the kernel that shuts down** [V]:
+  | kernel at shutdown | cable | next |
+  |---|---|---|
+  | release | in | a normal boot at once (no `androidboot.mode`) |
+  | test (WTSR disarmed) | in | off, then the bootloader's charger boot (`androidboot.mode = "charger"`) |
+  | test | out | stayed off for 3 minutes, until Power |
+  Earlier power offs on the release kernel restarted with the cable out too
+  (by the owner's memory, not logged). Volume Down + Power forced a reset
+  into a normal boot: the bootloader enters fastboot only while Volume Down
+  is still held as it starts (the maintainer's 7 Pro, 2026-11-10), so that
+  is ordinary, not a fault.
+- **The charger boot started the whole phone** [V]: with the cable in, the
+  bootloader starts slot B with `androidboot.mode = "charger"` (stock runs
+  only its charging screen then), and we ignored it. With device-cheetah's
+  `omamobile-charger.target` (0.1.55) that boot runs only charging and SSH:
+  the panel off (`bl_power` 4), no Plymouth, Bluetooth or camera timer,
+  nothing failed; Power held for a second restarted into a normal boot, and
+  the cable out powered it off 5 s later (`charger unplugged: poweroff`).
+- **Lesson** [V]: on a phone with `AUTO_WRITE=yes`, installing any package
+  the boot hook watches (device-cheetah here) rewrote slot B from the
+  packaged kernel, replacing a pushed test kernel without a word in the
+  session (`pacman.log`: "Saving slot B (…push1-g0e3da55c9e9f)", then
+  `boot_b` and `vendor_kernel_boot_b` written). `omamobile-boot-update
+  rollback` put the test kernel back. Check `omamobile-boot-update status`
+  before a test that depends on a pushed kernel.
+
 ## 2026-11-09: the 2026.11.08 test install, and an update run as root
 
 The release's signed bundle, `omamobile-cheetah-2026.11.08`, installed on the

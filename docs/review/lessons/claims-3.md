@@ -3,6 +3,30 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-411. A runbook that turns a supply on from userspace says what holds
+  that state across a SoC reset and undoes it early in the next boot, and
+  its register sequence is checked against Google's GPL driver.** Extends
+  C-3. *From:* issue #272, 2026-11-01.
+- **L-412. For stock DT values, ask for Google's GPL board source before a
+  decompiled image.** *From:* #249, 2026-11-01.
+- **L-425. Staging a non-reproducible artifact on two machines under one version makes two packages.** cheetah's boot-file initramfs (`find | cpio`, unpinned order and mtimes) would be staged by the nightly machine and again by #324's release `images` stage. *Check:* build any staged input twice and compare bytes; if they differ, name the one machine and step that produces it. Extends L-268 and L-310. *From:* #320 with #324, round 38, 2026-11-02.
+- **L-433. A shipped default that a working feature needs is checked on a
+  fresh install, not on the reference phone.** modem-sit shipped `[audio]
+  card = none` in its packaged `/etc` file and its built-in default, and
+  pacman keeps an edited `backup=` file, so the maintainer's hand-set `auto`
+  made "calls work" true on one phone only; the release notes and DEVICES
+  said it for everyone. *Check:* for each "works" claim in release notes or
+  DEVICES, `git show origin/main:<package>/etc/...` for the keys the feature
+  needs, and `git grep` the test that pins the default. Extends L-46.
+  *From:* #387 and #405 (commit review), fixed by #416, round 39,
+  2026-11-03.
+- **L-434. "It didn't happen at shutdown" can't be read from the next boot's
+  `dmesg`.** The modem-off UFS error-handler pass follows the CP power-off
+  in the unit's stop, and each check grepped the next boot's fresh log, so a
+  count of 0 was certain. *Check:* for any "count 0 across reboots", find
+  when the event would fire and ask for `journalctl -b -1 -k` (if journald
+  outlives the unit) or pstore. Extends L-85 and L-414. *From:* #398 and
+  #405 (commit review), round 39, 2026-11-03.
 - **L-435. "Tn ran" or "Passed" is checked against the step's own
   definition, a dated results row, the PR's later fixes and the linked
   issue's newer results.** FINGERPRINT-PLAN's status said T1-T3 ran with
