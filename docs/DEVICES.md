@@ -7,6 +7,7 @@ The status of each device, as verified on real hardware. Rows in the matrix have
 
 - **works**: verified on the phone, on by default;
 - **testing**: works by hand, not yet on by default;
+- **works (opt-in)**: verified on the phone and started by the device's package once the owner turns it on, off by default for a reason the notes name;
 - **partial**: works on by default, with a known gap that the notes name;
 - **WIP**: bring-up in progress, some gates passed;
 - **built**: driver and DT written and built, not yet run on the phone;
