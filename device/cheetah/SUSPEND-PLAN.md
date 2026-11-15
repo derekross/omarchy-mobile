@@ -1,7 +1,17 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Suspend plan: s2idle first, then SYS_SLEEP (cheetah / gs201)
 
-Status (2026-11-15): **Sleep with the modem up is held again on the 7 Pro.**
+Status (2026-11-15, afternoon): **Sleep with the modem up works on the 7 Pro,
+and is on by default again from omamobile-device-cheetah 0.1.60.** What killed
+mobile data across sleeps was never the link: the network drops the internet
+bearer (CID 3) every few minutes while the phone sleeps, and sitd never set it
+up again. omamobile-modem-sit 0.3.42 (#817) does; M6-D with it passed (85
+wakes in 45 minutes, nine drops, each set up again at the first try, data back
+by the next wake; "M6-D with the reconnect" below). device-cheetah 0.1.60
+declares it verified again and conflicts with an older omamobile-modem-sit.
+Not measured yet: standby with the modem up.
+
+Earlier status (2026-11-15, morning): **Sleep with the modem up is held again on the 7 Pro.**
 It passed MODEM-PLAN M6's attended runbook on 2026-11-14, but the release
 check that night (twenty auto-sleeps with the modem up on kernel-2026.11.15,
 omamobile-modem 0.1.26, device-cheetah 0.1.58) lost mobile data from the
@@ -1902,6 +1912,22 @@ the recorder's ping inside the grace (its `ping -I rmnet2` binds the device,
 and a device-bound IPv4 socket sends on-link when no route matches, so the
 removed route alone wouldn't stop it), and the next run is the twenty sleeps
 again, with #759 in for the route that never came back.
+
+**M6-D with the reconnect, 2026-11-15, 12:58-13:44** (the same phone and
+kernel, omamobile-modem-sit 0.3.42 from #817 at 0eaf3b11, device-cheetah
+0.1.59, the modem's inhibitor killed for the boot, on the charger; the
+recorder at WAKES=20, ended by its 45-minute bound):
+
+- **Sleeps:** 85 entered and woke (`suspend_stats` success 85; 23 refused
+  early while the link was busy, #232's guard), no UFS error-handler line.
+- **Bearer drops:** sitd logged the internet bearer (CID 3) gone nine times,
+  about every five minutes, IMS (CID 2) never; each time "setting it up
+  again in 3 s", then "set up again" at the first try.
+- **Data:** 78 of 85 checks 3/3, one 1/3, eight 0/3, each at a drop; the
+  next wake 3/3 every time; awake at the end 3/3. Before the reconnect the
+  first drop killed data until a reboot.
+- **Passes M6's long check.** What it costs: a few seconds without data at
+  each drop.
 
 **M6-D, 2026-11-15** (the reference phone just reinstalled by the guided
 installer from the 2026.11.15 candidate: `7.3.0-rc6-omamobile-gda171eae4cb7`,
