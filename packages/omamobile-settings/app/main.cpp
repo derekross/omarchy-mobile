@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Marsel Nenaj
 #include "backend.h"
 #include "deviceinfocontroller.h"
+#include "actionrunner.h"
 #include <QGuiApplication>
 #include <QDBusConnection>
 #include <QDBusInterface>
@@ -62,9 +63,11 @@ int main(int argc, char **argv) {
         if (!bus.registerObject("/Settings", &backend, QDBusConnection::ExportScriptableSlots
                                 | QDBusConnection::ExportScriptableInvokables)) return 1;
     }
+    ActionRunner actions;
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("backend", &backend);
     engine.rootContext()->setContextProperty("deviceInfo", &deviceInfo);
+    engine.rootContext()->setContextProperty("actions", &actions);
     engine.load(QUrl("qrc:/Main.qml"));
     if (engine.rootObjects().isEmpty()) return 1;
     return app.exec();

@@ -3,6 +3,8 @@
   <qresource prefix="/">
     <file>Main.qml</file>
     <file>AboutPage.qml</file>
+    <file>DisplayPage.qml</file>
+    <file>icons/display.svg</file>
     <file>catalog.json</file>
     <file>icons/system.svg</file>
     <file>SettingsStyle.qml</file>

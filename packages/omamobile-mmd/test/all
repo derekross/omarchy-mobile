@@ -19,7 +19,7 @@ done
 pass "scripts parse"
 
 command -v dbus-daemon >/dev/null || fail "dbus-daemon (package dbus) is needed for the tests"
-out=$(cd test && python3 -W ignore -m unittest -v test_api test_bridge test_libmm test_chain 2>&1) || {
+out=$(cd test && python3 -W ignore -m unittest -v test_api test_env test_bridge test_libmm test_chain 2>&1) || {
   printf '%s\n' "$out" | grep -v -e Deprecat -e EventLoopPolicy | tail -40; fail "unit and bus tests"; }
 skips=$(printf '%s\n' "$out" | grep -c "skipped '" || true)
 pass "API, bridge, libmm-glib and chain tests$( ((skips)) && echo " (# SKIP $skips: $(printf '%s\n' "$out" | grep -o "skipped '[^']*'" | sort -u | tr '\n' ' '))")"

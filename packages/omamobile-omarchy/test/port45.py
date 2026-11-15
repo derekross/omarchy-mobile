@@ -93,6 +93,15 @@ def actual(t, ex, version, make_root, run, ok, read, series, package, parse_qml)
         if result.returncode:
             print(result.stdout + result.stderr)
 
+    view = read(root, lock + 'LockView.qml')
+    ok('function darkTapWakes()' in view
+       and 'if (root.displayDark && !root.darkTapWakes()) return' in view
+       and 'if (lock.darkTapWakes()) {' in read(root, lock + 'LockGlance.qml'),
+       'real4.5: a dark touch-only lock leaves the double tap to omamobile-doubletap (0029)')
+    about = read(root, 'usr/bin/omarchy-launch-about')
+    ok('layout_room()' in about and 'about_fastfetch "${logo_args[@]}"' in about
+       and 'about_fastfetch "${measure_args[@]}" --pipe false' in about,
+       'real4.5: About picks its layout by terminal size, and the sheen measures what was drawn (0030)')
     # Refuse externally changed package files instead of overwriting them.
     lock_service = Path(root) / (lock + 'Service.qml')
     patched = lock_service.read_text()

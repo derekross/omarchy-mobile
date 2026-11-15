@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/dts-v1/;
+/plugin/;
+
+/* Keep the already-qualified USI/SPI path held until USB rescue is ready. */
+&{/chosen} {
+	bootargs = "console=tty0 panic=10 clk_ignore_unused pd_ignore_unused rdinit=/init exynos_usi.probe_hold_base=0x10d400c0";
+};
+
+&usi11 {
+	status = "okay";
+};
+
+&spi_11 {
+	status = "okay";
+};

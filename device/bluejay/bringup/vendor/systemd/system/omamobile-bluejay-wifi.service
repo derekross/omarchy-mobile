@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+ConditionPathExists=/etc/omamobile/bluejay-wifi-enable
+Description=Start Bluejay station Wi-Fi with the tested firmware and PCIe path
+Requires=omamobile-bluejay-boot-ready.service NetworkManager.service
+After=omamobile-bluejay-boot-ready.service omamobile-bluejay-hardware.service NetworkManager.service systemd-journald.service
+FailureAction=reboot-force
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-bluejay-wifi-start
+RemainAfterExit=yes
+TimeoutStartSec=45s
+TimeoutStopSec=5s
+
+[Install]
+WantedBy=multi-user.target

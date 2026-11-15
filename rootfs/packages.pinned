@@ -16,12 +16,16 @@
 #
 # <sha256> <url> [<url of the same file>...]
 
-# Omarchy 4.0.6: the Omarchy patch series (packages/omamobile-omarchy/patches)
-# doesn't apply to 4.5, and 4.5's migrations install packages that replace
-# ours (#433, #434). Unpin when omamobile-omarchy ships a series for 4.5.
+# Omarchy 4.5.0-3: the version the 4.5 patch family
+# (packages/omamobile-omarchy/patches), the update stand-ins and the held
+# migrations were checked against, on a rehearsal image and on the 7 Pro
+# (2026-11-11; #433, #434). Held here, not left to [omarchy], so a phone
+# takes a newer Omarchy only after the series was checked against it: move
+# these lines to that version then. Phones on 4.0.6 move to this one at
+# their next `omarchy update`.
 # omarchy-settings is pinned with it: omarchy depends on exactly its version.
-27cd6d88fda0be6c269c14dd65dad6a014384fedc3ea4eb5c742b2b972b10494 https://pkgs.omarchy.org/stable/aarch64/omarchy-4.0.6-1-aarch64.pkg.tar.zst https://pkgs.omamobile.org/stable/aarch64/omarchy-4.0.6-1-aarch64.pkg.tar.zst
-f653d97a7832eaa6b71dae1a6ce0480cb2631d6ca9a3350534a579cb08c6b309 https://pkgs.omarchy.org/stable/aarch64/omarchy-settings-4.0.6-1-aarch64.pkg.tar.zst https://pkgs.omamobile.org/stable/aarch64/omarchy-settings-4.0.6-1-aarch64.pkg.tar.zst
+d367067c1e35d6e99f7cd921e0a55ec6e46cb0d2bc681b1a4b39254c8c0416e7 https://pkgs.omarchy.org/stable/aarch64/omarchy-4.5.0-3-aarch64.pkg.tar.zst https://pkgs.omamobile.org/stable/aarch64/omarchy-4.5.0-3-aarch64.pkg.tar.zst
+2a81decbaeb873a354f2b9728cd0dfc8b633af101eed98e3945e2b6bf55c8c58 https://pkgs.omarchy.org/stable/aarch64/omarchy-settings-4.5.0-3-aarch64.pkg.tar.zst https://pkgs.omamobile.org/stable/aarch64/omarchy-settings-4.5.0-3-aarch64.pkg.tar.zst
 
 # aquamarine 0.16.0 (Arch Linux ARM's, signed by its build key 68B3537F...):
 # [omarchy] comes before Arch Linux ARM's repositories, and Omarchy's stable

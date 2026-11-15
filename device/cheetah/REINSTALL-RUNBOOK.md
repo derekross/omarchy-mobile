@@ -19,7 +19,7 @@ The tools, all offline-tested (`tests/all`):
 | `tools/build-rootfs` | laptop (Arch Linux ARM container) | `out/omamobile-rootfs-<device>-<date>-aarch64.img.zst` (+ `.sha256`, `.MANIFEST`) |
 | `tools/install-phone` | laptop, phone in fastboot | checks, questions, `firstboot.conf` into a local image copy, then only `fastboot flash <img>_b`, `flash userdata`, `--set-active=b`, `reboot` |
 | `omamobile-firstboot` | phone, first boot | user, keys, firewall, Omarchy's setup, autologin and lock |
-| `tools/phone-provision` | laptop, over USB SSH | Google's firmware and vendor trees from the factory image; modem props, NV sums, camera data, home screens, fingerprint state from the backup (without a `phone-config.tar`: the NV sums from the owner's NV backup, the board id from the phone's bootconfig) |
+| `tools/phone-provision` | laptop, over USB SSH | Google's firmware and vendor trees from the factory image; modem props, NV sums, camera data, home screens, fingerprint state from the backup (`--restore DIR`); with `--first-install`, for an install without a `phone-config.tar`: the NV sums from the owner's NV backup, the board id from the phone's bootconfig. It never guesses which: one of the two is given |
 
 Each step lists its commands, what to expect, a **stop** condition, the
 rollback and a risk level. Read-only steps come first. Quote results (with
@@ -29,14 +29,15 @@ rollback and a risk level. Read-only steps come first. Quote results (with
 **Without a `phone-config.tar`.** Sections 1, 5 and 7 are written for a
 reinstall over the hand-installed system that Phase 0 backed up
 (`~/android/reference/phone-backup-20261013`), and its `phone-config.tar` is
-what `tools/phone-provision` restores from. Nothing in the repository makes
+what `tools/phone-provision --restore DIR` restores from (below, `$R` is
+that directory; the tool has no default for it). Nothing in the repository makes
 one, so every other install has none: a first install, and a later
 reinstall of your own too. Then the backup is section 4a's, a read-only
 copy of the modem's partitions that `tools/phone-provision` takes with
-`--nv-backup`. Such an install skips P1 and P2 (they check Phase 0's
+`--first-install --nv-backup`. Such an install skips P1 and P2 (they check Phase 0's
 backup) and the fingerprint restore (section 7), and needs P3 only when an
 earlier install is running. It runs P4, sections 2-4, section 4a, section 5
-with `--nv-backup` (V1-V3) and section 6. `tools/phone-provision` never
+with `--first-install --nv-backup` (V1-V3) and section 6. `tools/phone-provision` never
 takes the section 4a backup itself: it holds the phone's IMEI, so the owner
 takes it, checks it and stores it off the repository.
 
@@ -373,7 +374,7 @@ the modem starts only from copies of its partitions that match them.
 backup: stock's modem stack writes `efs`, `persist` and `modem_userdata`, so
 the old checksums stop matching. N1 puts it in a new directory, so the old
 set stays beside it; keep both. Then
-`tools/phone-provision --skip-extract --nv-backup "$B"` puts the new
+`tools/phone-provision --skip-extract --first-install --nv-backup "$B"` puts the new
 checksums on the phone. Expect `the six NV lines of …/SHA256SUMS`, `pushed
 1 files to /, verified`, `wrote /var/lib/omamobile-vendor/modem/props.conf
 on the phone …` (the board id again, from the same bootconfig; the file's
@@ -386,7 +387,8 @@ section 5 pushed stay).
 
 ```sh
 F=~/android/factory/cheetah-*-factory-*.zip
-tools/phone-provision --dry-run --user <user> --import-home --restore-config --restore-wifi $F
+R=~/android/reference/phone-backup-20261013     # Phase 0's backup, with its phone-config.tar
+tools/phone-provision --dry-run --user <user> --restore "$R" --import-home --restore-config --restore-wifi $F
 ```
 
 Expect the extraction commands, then the path mapping from the backup's old
@@ -400,7 +402,7 @@ place (`--import-home`, `--restore-config`, `--restore-wifi` and
 
 ```sh
 F=~/android/factory/cheetah-*-factory-*.zip
-tools/phone-provision --dry-run --user <user> --nv-backup "$B" $F
+tools/phone-provision --dry-run --user <user> --first-install --nv-backup "$B" $F
 ```
 
 Expect `SHA256SUMS: one line for each of modem_a modem_b efs efs_backup
@@ -413,7 +415,7 @@ from androidboot.cdt_hwid in its /proc/bootconfig`. **Stop** on `needs one
 ### V2. Provision (risk low: files only, no hardware)
 
 ```sh
-tools/phone-provision --import-home --restore-config --restore-wifi $F
+tools/phone-provision --restore "$R" --import-home --restore-config --restore-wifi $F
 ```
 
 Expect each push "verified", camera data from the factory extraction if the
@@ -425,7 +427,7 @@ pushed trees.
 Without a `phone-config.tar`:
 
 ```sh
-tools/phone-provision --nv-backup "$B" $F
+tools/phone-provision --first-install --nv-backup "$B" $F
 ```
 
 Expect `board id: androidboot.cdt_hwid is in the phone's /proc/bootconfig
@@ -490,7 +492,7 @@ phone's RPMB**, and that is FINGERPRINT-PLAN F4's irreversible step. Do not
 run the second command without the human's recorded yes.
 
 ```sh
-tools/phone-provision --skip-extract --fingerprint          # copies; omamobile-fp stays stopped
+tools/phone-provision --skip-extract --restore "$R" --fingerprint   # copies; omamobile-fp stays stopped
 # --- only with the human's go, following FINGERPRINT-PLAN F4-F6 ---
 ```
 

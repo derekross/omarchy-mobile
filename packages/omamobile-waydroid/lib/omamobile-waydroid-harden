@@ -17,7 +17,9 @@ block device through the cgroup2 device controller.
   omamobile-waydroid-harden patch  [ROOT]  patch Waydroid's Python (pacman hook)
   omamobile-waydroid-harden config [ROOT]  fix the generated LXC config (before
                                            each container start)
-  omamobile-waydroid-harden verify [ROOT]  exit 1 unless both are in place
+  omamobile-waydroid-harden verify [ROOT]  exit 1 unless both are in place, and
+                                           no generated LXC file holds a device
+                                           allow rule (see OPEN_ALLOW)
 
 ROOT defaults to /. Every edit is idempotent and refuses a file whose
 expected text is missing (a new Waydroid version needs this script checked).
@@ -45,6 +47,31 @@ CUTS = [
 # Lines the generated config_nodes must not carry (an older or unpatched
 # generation): debugfs, video and framebuffer binds.
 BAD_NODE = re.compile(r"^lxc\.mount\.entry\s*=\s*/(sys/kernel/debug|dev/video\d+|dev/fb\d+|dev/graphics/fb\d+)\s")
+
+
+# Waydroid writes no device allow rule in its generated files, and ours (the
+# binder and render-node paths included) live in our own include, which is not
+# scanned. So any uncommented allow rule in the generated files is a hand edit
+# and refuses the start. That covers "allow = a" (the hand edit of #465), any
+# "b" allow, "c *:*", an absolute path ("allow = /dev/sda rwm": LXC 7 stat()s
+# the path and allows whatever type it finds, block devices included, with our
+# deny line out of the program) and the forms that only LXC's own parser
+# accepts, such as a value in quotes ('b 8:0 rwm': parse_line() strips a
+# matching pair), without this list having to know them. LXC 7 keeps block
+# devices out only because nothing allows them, and a global allow placed after
+# our include clears every rule before it. Also the older
+# lxc.cgroup.devices.allow spelling, in case LXC maps it.
+OPEN_ALLOW = re.compile(r"^lxc\.cgroup2?\.devices\.allow\b")
+# The files LXC reads from Waydroid's generated config: config itself and what
+# it includes (config_nodes, config_session)
+GENERATED = ("config", "config_nodes", "config_session")
+
+
+def open_allows(path):
+    """(line number, line) of every device allow rule in PATH."""
+    if not os.path.exists(path):
+        return []
+    return [(n, l.strip()) for n, l in enumerate(open(path), 1) if OPEN_ALLOW.match(l.strip())]
 
 
 def commented(text):
@@ -116,6 +143,10 @@ def verify(root):
     if not os.path.exists(conf) or INCLUDE not in open(conf).read().splitlines():
         print(f"FAIL {conf}: no omamobile device rules")
         ok = False
+    for name in GENERATED:
+        for n, l in open_allows(os.path.join(d, name)):
+            print(f"FAIL {os.path.join(d, name)}:{n}: a device allow rule, which Waydroid never writes: {l}")
+            ok = False
     if ok:
         print("ok    Waydroid hardened")
     return ok

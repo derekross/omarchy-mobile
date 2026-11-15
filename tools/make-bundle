@@ -4,7 +4,8 @@
 #
 #   out/bundle/omamobile-<codename>-<version>/
 #     README.txt     what it is, what it touches, how to go back to stock
-#     install        tools/install-phone
+#     install        tools/install-phone; "bash install --guided" runs the
+#                    guided install, tools/install-guided below
 #     device.conf    the descriptor the images were built from
 #     images/        the BOOT_IMAGES (boot init_boot vendor_boot vendor_kernel_boot dtbo)
 #     omamobile.gpg  the public key SHA256SUMS.sig is checked against
@@ -13,10 +14,27 @@
 #                    extract-* tools), so a user provisions from the bundle
 #                    without the repository; they extract Google's files on
 #                    the user's machine, and none of those files ship here;
-#                    and tools/nv-backup, the read-only radio backup it needs
+#                    tools/nv-backup, the read-only radio backup it needs;
+#                    and the guided install (tools/install-guided) with what
+#                    it runs that the rest doesn't: tools/phone-smoke (the
+#                    check at its end), tools/factory-index (it reads the
+#                    build index) and tools/camera-requirements.txt (the
+#                    camera's two Python modules, pinned by SHA-256). The
+#                    bundle's device is its device.conf: images/ carries no
+#                    DEVICE file, and install-phone's bundle mode reads none
+#     factory-builds.json
+#                    the device's build index (device/<codename>/, kept by
+#                    tools/factory-index), when the device has one: which of
+#                    Google's factory builds this release was tested with.
+#                    Metadata only, never Google's files. An installer trusts
+#                    it only through the signed checksums below
 #     MANIFEST       kernel release, root image, both repositories' commits, toolchain
 #     manifest.json  the same and more as data (tools/bundle-manifest): every
-#                    file with size and SHA-256, the root image, the release
+#                    file with size and SHA-256, the root image (and where in
+#                    it the placeholders for the owner's answers are, from
+#                    its MANIFEST, checked against the image; and, for an
+#                    image built for the install link, install_link with its
+#                    protocol, from the same MANIFEST), the release
 #                    version and label, and the install plan and its checks,
 #                    which tools/install-phone (and later a web flasher) enforce
 #     SHA256SUMS     checksums of everything above
@@ -77,6 +95,27 @@ done
 [[ $label =~ ^[A-Za-z0-9\ ._-]+$ ]] || die "the label is letters, digits, spaces, dots and dashes"
 base_url=${base_url:-https://pkgs.omamobile.org/releases/$DEVICE/$version/}
 [[ $base_url =~ ^https://[A-Za-z0-9./_-]+/$ ]] || die "--base-url is an https:// URL ending in /"
+name=omamobile-$DEVICE-$version
+bundles=out/bundle
+# One run per bundle at a time, or a second run's put_back below would
+# remove the first one's build directory. The lock file is in out/, where
+# put_back can't remove it; keep it: unlinking it could let two callers
+# lock different inodes.
+command -v flock >/dev/null || die "flock not found (util-linux)"
+mkdir -p out
+exec {lock}>"out/.$name.lock"
+flock -n "$lock" || die "already building $name in $bundles"
+# Everything is built in $out, beside the bundles (the same file system), and
+# moved into place at the end, once all of it, signing included, has worked:
+# a build that fails part way leaves the bundle already built under this
+# name, its .tar and the root image beside it as they were. put_back, on
+# exit and at the start (after a killed run), returns the bundle moved aside
+# for that swap if the new one never got in.
+out=$bundles/.$name.new
+dir=$out/$name
+put_back() { [[ -e $bundles/$name || ! -e $out/old ]] || mv -T -- "$out/old" "$bundles/$name"; rm -rf "$out"; }
+put_back
+trap put_back EXIT
 if ((unsigned == 0)); then
   # The key first, so a missing one is said before any work
   source tools/lib/signing.sh
@@ -86,7 +125,7 @@ if ((unsigned == 0)); then
 fi
 conf=device/$DEVICE/device.conf
 [[ -f $conf ]] || die "no $conf"
-provision_tools="phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data"
+provision_tools="phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data install-guided phone-smoke factory-index camera-requirements.txt"
 for f in $provision_tools; do [[ -f tools/$f ]] || die "no tools/$f"; done
 [[ -f docs/INSTALL.md ]] || die "no docs/INSTALL.md"
 [[ -f tools/lib/bundle-tar.sh ]] || die "no tools/lib/bundle-tar.sh"
@@ -114,6 +153,18 @@ channel=$(sed -n 's/^omamobile channel: \([a-z]*\)$/\1/p' "$manifest")
 if ((unsigned == 0)) && [[ $channel != stable ]]; then
   die "the root image follows the '${channel:-local (built before channels)}' channel; a signed release follows stable (tools/build-rootfs --channel stable)"
 fi
+# An image built for the install link (tools/build-rootfs --install-link)
+# says so with its protocol; manifest.json then carries install_link, a key
+# installers older than the link refuse (docs/INSTALL-LINK-PLAN.md §3.3)
+link_line=$(sed -n 's/^install link: //p' "$manifest")
+link_protocol=""
+case $link_line in
+  "" | none) ;;
+  "protocol "[1-9]*" (marker /etc/omamobile/install-link)")
+    link_protocol=${link_line#protocol }; link_protocol=${link_protocol%% *} ;;
+  *) die "the root image's MANIFEST has an install link line this tool does not know: $link_line" ;;
+esac
+[[ -z $link_protocol || $link_protocol =~ ^[1-9][0-9]{0,3}$ ]] || die "the install link's protocol is not a number: $link_protocol"
 root_digest=$(sha256sum < "$rootfs" | cut -d' ' -f1)
 [[ $(cut -d' ' -f1 "$rootfs.sha256") == "$root_digest" ]] || die "$rootfs doesn't match its .sha256"
 if ((unsigned == 0)); then
@@ -125,12 +176,22 @@ if ((unsigned == 0)); then
   fi
 fi
 
-name=omamobile-$DEVICE-$version
-out=out/bundle
-dir=$out/$name
-rm -rf "$dir"
+# The boot images are checked before the bundle of the same name is removed
+# below, so a refused rebuild leaves that bundle as it was.
+# bin/omamobile images records the device it built for
+built_for=$(cat "$KERNEL_OUT/images/DEVICE" 2>/dev/null || true)
+[[ $built_for == "$DEVICE" ]] || die "$KERNEL_OUT/images holds images for '${built_for:-an unknown device}', not $DEVICE"
+for p in $boot_images; do
+  [[ -f $KERNEL_OUT/images/$p.img ]] || die "missing $KERNEL_OUT/images/$p.img (bin/omamobile images)"
+done
+# Images must be newer than the kernel and initramfs they were packed from
+for f in arch/arm64/boot/Image initramfs.cpio.lz4; do
+  [[ $KERNEL_OUT/images/boot.img -nt $KERNEL_OUT/$f || ! -e $KERNEL_OUT/$f ]] ||
+    die "$KERNEL_OUT/images is older than $f: run bin/omamobile images"
+done
+
 mkdir -p "$dir/images"
-say "Assembling $dir"
+say "Assembling $bundles/$name"
 install -m755 tools/install-phone "$dir/install"
 install -m644 "$conf" "$dir/device.conf"
 install -m644 packages/omamobile-keyring/omamobile.gpg "$dir/omamobile.gpg"
@@ -139,20 +200,24 @@ install -m644 docs/INSTALL.md "$dir/INSTALL.md"
 # so in the bundle it finds tools/phone-ssh and tools/extract-* beside it
 mkdir -p "$dir/tools"
 for f in $provision_tools; do
-  install -m755 "tools/$f" "$dir/tools/$f"
+  # A program is executable; a data file (camera-requirements.txt) is not
+  mode=755
+  [[ $f != *.txt ]] || mode=644
+  install -m"$mode" "tools/$f" "$dir/tools/$f"
 done
-# bin/omamobile images records the device it built for
-built_for=$(cat "$KERNEL_OUT/images/DEVICE" 2>/dev/null || true)
-[[ $built_for == "$DEVICE" ]] || die "$KERNEL_OUT/images holds images for '${built_for:-an unknown device}', not $DEVICE"
 for p in $boot_images; do
-  [[ -f $KERNEL_OUT/images/$p.img ]] || die "missing $KERNEL_OUT/images/$p.img (bin/omamobile images)"
   install -m644 "$KERNEL_OUT/images/$p.img" "$dir/images/$p.img"
 done
-# Images must be newer than the kernel and initramfs they were packed from
-for f in arch/arm64/boot/Image initramfs.cpio.lz4; do
-  [[ $KERNEL_OUT/images/boot.img -nt $KERNEL_OUT/$f || ! -e $KERNEL_OUT/$f ]] ||
-    die "$KERNEL_OUT/images is older than $f: run bin/omamobile images"
-done
+# The build index goes in as the tree has it, and only one that passes its
+# own check: a release must not sign a list an installer would refuse
+index=device/$DEVICE/factory-builds.json
+if [[ -f $index ]]; then
+  python3 -I -B tools/factory-index check -d "$DEVICE" >/dev/null ||
+    die "$index doesn't pass tools/factory-index check"
+  install -m644 "$index" "$dir/factory-builds.json"
+else
+  rm -f "$dir/factory-builds.json"
+fi
 
 for f in "$rootfs" "$rootfs.sha256" "${rootfs%.img.zst}.MANIFEST"; do
   [[ -f $f ]] && ln -f "$f" "$out/" 2>/dev/null || cp -f "$f" "$out/"
@@ -191,14 +256,25 @@ Native Omarchy (Arch Linux ARM, Hyprland, Omarchy's packages) on the phone,
 with a mainline kernel and no Android. https://github.com/derekross/omarchy-mobile
 INSTALL.md in this directory is the step-by-step guide; read it first.
 
-Install: put the phone in fastboot mode (bootloader unlocked), connect it, and
-run "bash install" from this directory ("bash install" works even when a
-download lost the file's execute bit). $rootname must be next to
-this directory: unpacking $name.tar (the one-file download, checked
-with "sha256sum -c $name.tar.sha256") puts both side by side. If
-you downloaded this directory file by file, run "chmod +x tools/*" in it
-once. It needs fastboot (android-tools), e2fsprogs, zstd, lz4, cpio,
-openssl, gpg and python3 on this computer. The installer checks the phone first, asks for your user
+$rootname must be next to this directory: unpacking $name.tar
+(the one-file download, checked with "sha256sum -c $name.tar.sha256")
+puts both side by side. If you downloaded this directory file by file, run
+"chmod +x tools/*" in it once.
+
+The guided install (the easy way): connect the phone and run, from this
+directory:
+  bash install --guided
+It checks this computer and this download, finds the phone and says what
+is left to do on it (the bootloader unlock too), gets Google's factory
+image for it, asks your answers, writes the phone, backs up its radio
+partitions, adds its firmware and checks it, stopping at each step that
+needs you. Run it again after any stop: it goes on from there.
+
+Install by hand: put the phone in fastboot mode (bootloader unlocked),
+connect it, and run "bash install" from this directory ("bash install"
+works even when a download lost the file's execute bit). It needs fastboot
+(android-tools), e2fsprogs, zstd, lz4, cpio, openssl, gpg and python3 on
+this computer. The installer checks the phone first, asks for your user
 name, password, Wi-Fi and SSH key, shows exactly what it will write, and
 waits for you to type "$DEVICE".
 
@@ -206,12 +282,13 @@ What it writes: slot B's boot images ($(for p in $boot_images; do printf '%s_b '
 userdata (the Arch root). That ERASES userdata. It never touches slot A,
 the bootloader, radio, persist, efs, modem, devinfo or vbmeta.
 
-After the first boot: take the read-only backup of the modem's partitions
-into a new directory DIR with tools/nv-backup (INSTALL.md, "Back up"), then
-run tools/phone-provision from this directory with that backup and your own
-factory image for $DEVICE:
+After the first boot (by hand; the guided install does this itself): take
+the read-only backup of the modem's partitions into a new directory DIR
+with tools/nv-backup (INSTALL.md, "Back up"), then run tools/phone-provision
+from this directory with that backup and your own factory image for
+$DEVICE:
   bash tools/nv-backup DIR
-  bash tools/phone-provision --nv-backup DIR FACTORY.zip
+  bash tools/phone-provision --first-install --nv-backup DIR FACTORY.zip
 The backup holds this phone's IMEI and calibration: keep it, never share
 it. phone-provision puts the firmware for Wi-Fi, Bluetooth, haptics,
 speakers and the camera on the phone, extracted on this computer; nothing
@@ -229,9 +306,11 @@ Going back to stock: stock Android is still on slot A. In fastboot,
 was erased). Or flash Google's factory image for $DEVICE.
 EOF
 python3 -I tools/bundle-manifest --bundle "$dir" --rootfs "$rootfs" --rootfs-sha256 "$root_digest" \
+  --rootfs-manifest "$manifest" \
   --version "$version" --kernel-release "$release" --kernel-commit "$kernel_commit" \
   --commit "$(git rev-parse --short=12 HEAD)$(git diff --quiet HEAD || echo -dirty)" \
-  --channel "${channel:-unknown}" --label "$label" --base-url "$base_url" || die "writing manifest.json failed"
+  --channel "${channel:-unknown}" --label "$label" --base-url "$base_url" \
+  ${link_protocol:+--install-link-protocol "$link_protocol"} || die "writing manifest.json failed"
 (cd "$dir" && find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.sig -printf '%P\n' | sort | xargs sha256sum -- > SHA256SUMS)
 if ((unsigned)); then
   say "Unsigned bundle (--unsigned): install needs --unsigned too"
@@ -243,12 +322,23 @@ fi
 # one deterministic tar (tools/lib/bundle-tar.sh). It holds SHA256SUMS.sig,
 # so no checksum inside the bundle can cover it: its .sha256 gets its own
 # signature by the same key instead.
-say "Writing $out/$name.tar (the bundle and the root image, one download)"
+say "Writing $bundles/$name.tar (the bundle and the root image, one download)"
 source tools/lib/bundle-tar.sh
-rm -f "$out/$name.tar.sha256.sig"
-bundle_tar "$out" "$name" "$rootname" "$version" || die "writing $out/$name.tar failed"
+bundle_tar "$out" "$name" "$rootname" "$version" || die "writing $bundles/$name.tar failed"
 if ((unsigned == 0)); then
   gpg --batch --yes --local-user "$SIGNING_KEY" --detach-sign -o "$out/$name.tar.sha256.sig" "$out/$name.tar.sha256"
   say "Signed $name.tar.sha256 with the release key $SIGNING_KEY"
 fi
-ls -l "$dir" "$out"
+# Into place. A file's move replaces the old one in one rename. The
+# directory takes two, the old one into $out (removed with it on exit) and
+# the new one in, so between them there is none under the name; and until
+# the last rename the new directory sits beside the old .tar.
+if [[ -e $bundles/$name ]]; then mv -T -- "$bundles/$name" "$out/old"; fi
+mv -T -- "$dir" "$bundles/$name"
+((unsigned == 0)) || rm -f "$bundles/$name.tar.sha256.sig"
+for f in "$rootname" "$rootname.sha256" "${rootname%.img.zst}.MANIFEST" "$name.tar" "$name.tar.sha256" "$name.tar.sha256.sig"; do
+  if [[ -e $out/$f && ! $out/$f -ef $bundles/$f ]]; then mv -f "$out/$f" "$bundles/"; fi
+done
+# Now rather than on exit, so the listing shows what stays
+put_back
+ls -l "$bundles/$name" "$bundles"

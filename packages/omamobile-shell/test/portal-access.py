@@ -213,6 +213,19 @@ esac
         check("the app closing its request ends it with an error", call.returncode != 0 and pa.ERROR in err, out + err)
         check("a closed request's sheet is taken back", "dismiss" in logged_soon("dismiss"))
         check("an unknown id is refused", not answer("0123456789abcdef", "allow"))
+
+        # Back on the sheet: no response (the portal stores nothing and the
+        # app asks again), as a timeout, and at once.
+        logged()
+        started = time.monotonic()
+        call, _ = ask("t6")
+        request = wait_request()
+        check("Back's dismiss is taken", answer(request["id"], "dismiss"))
+        out, err = call.communicate(timeout=10)
+        check("a dismissed request ends with an error, not a stored No",
+              call.returncode != 0 and pa.ERROR in err and "uint32" not in out and time.monotonic() - started < 1.5, out + err)
+        check("a dismissed request can't be answered afterwards", not answer(request["id"], "allow"))
+        check("an unknown id can't be dismissed", not answer("0123456789abcdef", "dismiss"))
     finally:
         stop(proc)
 

@@ -1051,8 +1051,11 @@ assert l == 0 and abs(20 * math.log10(r) + 20) < 0.5
 PY
 pass "test signals: multitone at its RMS level with peaks below -1 dBFS, one-sided tone"
 
-# the real alsa-lib path, against any card this machine has (read-only)
-if [[ -e /dev/snd/controlC0 ]]; then
+# the real alsa-lib path, against any card this machine has (read-only).
+# Only where this user may open the card: a build server has one it can't
+# (root:audio, no seat), and the check then failed the whole nightly build
+# (ms01, 2026-11-10).
+if [[ -r /dev/snd/controlC0 && -w /dev/snd/controlC0 ]]; then
   python3 -I - "$here/lib" <<'PY' || fail "alsa-lib control access"
 import sys
 sys.path.insert(0, sys.argv[1])
@@ -1064,6 +1067,8 @@ read = [n for n in names[:40] if c.read(n) is not None]
 assert read, 'nothing readable'
 PY
   pass "alsa-lib control access (ctypes) lists and reads a real card"
+else
+  pass "alsa-lib control access # SKIP no sound card this user can open"
 fi
 
 # --- the speaker filter and its tone controls (C9g) -------------------------------

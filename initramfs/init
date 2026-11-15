@@ -16,7 +16,7 @@ mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev
 mkdir -p /dev/pts && mount -t devpts devpts /dev/pts
 mount -t configfs configfs /sys/kernel/config
-mount -t tmpfs tmpfs /run
+mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
 
 # With "splash" on the command line, Plymouth shows the boot animation once
 # Arch starts, so keep status lines off the screen (they still go to kmsg).
@@ -65,6 +65,10 @@ UFS_RW_LUNS=""
 ufs_rw_disk() { case " sda $UFS_RW_LUNS " in *" $1 "*) true ;; *) false ;; esac; }
 ufs_rw_load() {
   local list p
+  if [ -s /etc/omamobile-nfsroot ]; then
+    ufs_ro_log "NFS root requested: every UFS partition read-only"
+    return 0
+  fi
   if [ ! -s /etc/omamobile-ufs-rw ]; then
     ufs_ro_log "no allowlist in this image (/etc/omamobile-ufs-rw): every partition read-only"
     return 0
@@ -121,6 +125,18 @@ ufs_ro_pass() {
     [ -e "/run/ufs-ro/$name" ] && continue
     [ -b "/dev/$name" ] || continue  # devtmpfs node not there yet: next pass
     if ufs_rw_disk "$name"; then
+      if [ -s /etc/omamobile-nfsroot ]; then
+        blockdev --setro "/dev/$name"
+        read -r ro < "$s/ro"
+        if [ "$ro" = 1 ]; then
+          : > "/run/ufs-ro/$name"
+          ufs_ro_log "/dev/$name set read-only for NFS root"
+          continue
+        fi
+        ufs_ro_log "FAILED to set /dev/$name read-only for NFS root"
+        echo "omamobile: WARNING: /dev/$name is NOT read-only" > /dev/tty0 2>/dev/null
+        continue
+      fi
       rm -f "/dev/$name"
       : > "/run/ufs-ro/$name"
       ufs_ro_log "/dev/$name: whole-disk node removed (partitions guarded individually)"
@@ -152,7 +168,7 @@ ufs_unguarded() {
   for s in /sys/block/sd* /sys/block/sd*/sd*; do
     [ -r "$s/ro" ] || continue
     name=${s##*/}
-    ufs_rw_disk "$name" && continue
+    ufs_rw_disk "$name" && [ ! -s /etc/omamobile-nfsroot ] && continue
     read -r ro < "$s/ro"
     [ "$ro" = 0 ] || continue
     part=$(ufs_partname "$s")
@@ -162,9 +178,13 @@ ufs_unguarded() {
     echo "$name${part:+ ($part)}"
   done
 }
+ufs_ro_start() {
+  ( while true; do ufs_ro_pass; sleep 0.2 2>/dev/null || sleep 1; done ) &
+  ufs_guard_pid=$!
+  ufs_ro_log "guard running (pid $ufs_guard_pid)"
+}
 ufs_ro_pass
-( while true; do ufs_ro_pass; sleep 0.2 2>/dev/null || sleep 1; done ) &
-ufs_ro_log "guard running (pid $!)"
+ufs_ro_start
 
 hostname omamobile
 
@@ -188,16 +208,18 @@ board_matches() {
   return 0
 }
 
-# Modules this image carries (the descriptor's INITRAMFS_MODULES), insmodded
+# Modules this image carries (the descriptor's INITRAMFS_MODULES), loaded
 # in the packed order before any other step: on raven the PMIC regulator
 # driver the simple-framebuffer waits for, and the MAX77759 nvmem that ABL
 # reads the reboot reason from. They were built for this image's board.
 load_modules() {
-  local m
+  local m error
   [ -s /lib/modules/omamobile/order ] || return 0
   board_matches "initramfs modules" || return 0
+  # BusyBox insmod may retry initialization after finit_module fails.
+  # These modules can already have touched hardware before returning an error.
   while read -r m; do
-    insmod "/lib/modules/omamobile/$m.ko" 2>/dev/null || say "insmod $m failed"
+    error=$(/usr/local/bin/module-load-once "/lib/modules/omamobile/$m.ko" 2>&1) || say "module-load-once $m failed: $error"
   done < /lib/modules/omamobile/order
 }
 load_modules
@@ -373,6 +395,7 @@ say "ready"
 
 # Self-recovery for bring-up: if the host never configures the USB gadget,
 # show why on screen, then crash so the phone falls back to stock Android.
+if [ "$(cat /etc/omamobile-usb-recovery 2>/dev/null)" != no ]; then
 (
   for i in $(seq 1 45); do
     grep -qx configured /sys/class/udc/*/state 2>/dev/null && exit 0
@@ -392,6 +415,7 @@ say "ready"
   # slot B is out of retries ABL boots stock Android, which adb can reach
   echo c > /proc/sysrq-trigger
 ) &
+fi
 
 
 
@@ -425,24 +449,101 @@ grow_root() {
   rm -f /run/omamobile-resizing
 }
 
+# Boot the Arch root from NFS instead of the UFS, for bring-up: nothing on the
+# phone is written and the stock OS is left alone, so a root filesystem can be
+# tried before anyone decides to install it. Enabled only by the presence of
+# /etc/omamobile-nfsroot, holding one line, "<host>:<path>" -- no file, no change.
+# The USB gadget and its address are already up by the time this runs, and the
+# kernel keeps them across the switch, so the mount survives switch_root.
+boot_nfs() {
+  local spec
+  grep -q omamobile.initramfs /proc/cmdline && return 1
+  [ -r /etc/omamobile-nfsroot ] || return 1
+  spec=$(cat /etc/omamobile-nfsroot)
+  [ -n "$spec" ] || return 1
+  say "nfsroot: trying $spec"
+  mkdir -p /newroot
+  # busybox mount cannot work out the server address on its own here, so pass it.
+  # shortcut: IPv4 hosts only; add bracketed IPv6 parsing if a bring-up needs it.
+  # Retry: the phone boots faster than the host brings its usb0 end up, so the
+  # first mount can race the link coming up. ~30s covers a late host.
+  local i=0
+  until busybox mount -t nfs -o "nolock,vers=3,addr=${spec%%:*}" "$spec" /newroot 2>/dev/null; do
+    i=$((i + 1))
+    [ "$i" -ge 15 ] && {
+      say "nfsroot: cannot mount $spec (staying in the initramfs)"; return 1; }
+    sleep 2
+  done
+  if [ ! -x /newroot/usr/lib/systemd/systemd ]; then
+    say "nfsroot: no systemd on $spec"; umount /newroot; return 1
+  fi
+  # The first guard pass already used an empty allowlist in NFS mode.
+  local open
+  open=$(ufs_unguarded)
+  if [ -n "$open" ]; then
+    say "nfsroot: UFS remains writable: $(echo "$open" | tr "\n" " " ); staying in the initramfs"
+    umount /newroot
+    return 1
+  fi
+  say "nfsroot: switching to Arch Linux on $spec"
+  # kill -9 -1 also stops the feeder; systemd takes over if the new root enables its watchdog.
+  kill -9 -1 2>/dev/null
+  sleep 1
+  for m in /dev /proc /sys /run; do
+    mkdir -p "/newroot$m" && mount --move "$m" "/newroot$m"
+  done
+  exec switch_root /newroot /usr/lib/systemd/systemd
+}
+
 # Keep a shell on the screen too
 # Hand over to Arch on userdata, unless omamobile.initramfs is on the command
 # line. Everything is checked before the irreversible exec; if anything is
 # missing we stay here in the initramfs shell.
 boot_arch() {
   grep -q omamobile.initramfs /proc/cmdline && return 1
-  local dev="" s
+  local dev="" s info label check
   for s in /sys/block/sda/sda*; do
     grep -qx PARTNAME=userdata "$s/uevent" 2>/dev/null && dev=/dev/${s##*/}
   done
   [ -n "$dev" ] || { say "arch: no userdata partition"; return 1; }
   [ "$(cat /sys/block/sda/${dev#/dev/}/ro)" = 0 ] || { say "arch: userdata is read-only"; return 1; }
+  # Strict identification is opt-in: old hand-installed roots may be unlabelled.
+  # The descriptor packs this file only when it requests the root protection.
+  if [ -e /etc/omamobile-root-label ]; then
+    label=$(cat /etc/omamobile-root-label)
+    [ "$label" = omamobile-root ] || { say "arch: invalid root-label policy"; return 1; }
+    info=$(dumpe2fs -h "$dev" 2>/dev/null) || { say "arch: userdata is not an ext4 root"; return 1; }
+    [ "$(echo "$info" | sed -n 's/^Filesystem volume name: *//p')" = "$label" ] || {
+      say "arch: userdata is not labelled $label"; return 1;
+    }
+  fi
   mkdir -p /newroot
-  e2fsck -p "$dev" >/dev/null 2>&1
-  grow_root "$dev"
+  check=0
+  e2fsck -p "$dev" >/dev/null 2>&1 || check=$?
+  if [ -e /etc/omamobile-root-label ]; then
+    case $check in
+      0|1) ;;
+      *) say "arch: root check failed (status $check); staying in the initramfs"; return 1 ;;
+    esac
+  fi
+  # Keep the development filesystem at its image size until persistent boot
+  # works. Growth can be done later from the installed system.
+  if [ "$(cat /etc/omamobile-root-mode 2>/dev/null)" != persistent-development ]; then
+    grow_root "$dev"
+  fi
   mount -t ext4 -o rw,relatime "$dev" /newroot || { say "arch: cannot mount $dev"; return 1; }
   if [ ! -x /newroot/usr/lib/systemd/systemd ]; then
     say "arch: no systemd on $dev"; umount /newroot; return 1
+  fi
+  if [ "$(cat /etc/omamobile-root-mode 2>/dev/null)" = persistent-development ]; then
+    # A failed development boot returns to the USB rescue environment after
+    # reset. The installed SSH-ready service clears this marker on success.
+    local pending=/newroot/var/lib/omamobile/root-boot-pending
+    if [ -e "$pending" ]; then
+      say "arch: previous development boot did not reach SSH; holding in RAM"
+      umount /newroot
+      return 1
+    fi
   fi
   # The guard loop dies below and nothing in Arch sets a partition read-only,
   # so make one last pass and check, while SSH still runs: anything outside
@@ -456,9 +557,17 @@ boot_arch() {
     umount /newroot
     return 1
   fi
+  if [ "$(cat /etc/omamobile-root-mode 2>/dev/null)" = persistent-development ]; then
+    # Record an attempted handover only after the final guard passes. A guard
+    # refusal must not be reported as a root that failed to reach SSH next boot.
+    mkdir -p /newroot/var/lib/omamobile || { umount /newroot; return 1; }
+    cat /proc/sys/kernel/random/boot_id > "$pending" || { umount /newroot; return 1; }
+    sync
+  fi
   say "arch: switching to Arch Linux on $dev"
   # Stop the initramfs helpers (dropbear, getty, guards); the kernel keeps
   # the USB gadget and the partition read-only flags across the switch
+  # systemd takes over the hardware watchdog here if the new root enables it.
   kill -9 -1 2>/dev/null
   sleep 1
   for m in /dev /proc /sys /run; do
@@ -466,7 +575,26 @@ boot_arch() {
   done
   exec switch_root /newroot /usr/lib/systemd/systemd
 }
-boot_arch
+# A descriptor selects development handover explicitly. An unknown mode never
+# falls through into userdata. No mode file preserves the existing boot path.
+boot_root() {
+  if [ ! -e /etc/omamobile-root-mode ]; then
+    boot_arch
+    return $?
+  fi
+  case "$(cat /etc/omamobile-root-mode)" in
+    persistent-development) boot_arch ;;
+    ram-rescue) say "arch: RAM rescue selected"; return 1 ;;
+    *) say "arch: unknown root mode; holding in RAM"; return 1 ;;
+  esac
+}
+# A requested NFS root must not silently fall through to a writable UFS root.
+if [ -s /etc/omamobile-nfsroot ]; then
+  boot_nfs
+  say "nfsroot: requested root unavailable (staying in the initramfs)"
+else
+  boot_root
+fi
 
 # PID 1 must never exit: if it does the kernel panics and freezes (silently,
 # since ABL sets console=null). So keep a shell on the screen in a loop

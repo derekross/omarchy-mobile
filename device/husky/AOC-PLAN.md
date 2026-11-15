@@ -31,6 +31,18 @@ From Google's GPL tree (`android-gs-shusky-6.1-android16`; `kernel/devices/googl
 | Z7c | ALSA card, amplifiers linked into it, protection firmware | 2026-11-05, `g757721ba1a81` | the card `google,aoc-snd-card` with 30 PCM devices and the amplifiers' controls; protection firmware loads on both |
 | Z7d | first sound | 2026-11-05, `g74d6ba329f68` | the speaker route is the deep-buffer entry point (`TDM_0_RX Mixer EP6`); EP1 (UltraLL) hangs the AoC (see 5) |
 | Z7e | PipeWire / browser sound, boot unit | 2026-11-05, `g69c83385020e`, `gd0d87517121a` | works (see 6) |
+| Z8 | the packaged start: `omamobile-husky-aoc.service` and its script from derekross/omarchy-mobile#453 (local builds of omamobile-device-husky 0.1.9 and omamobile-audio 0.5.18 from `aafe089` and `80e5905`; the versions that merged are Derek's), no hand steps | 2026-11-09, `ga291900124c4` | see "The packaged start" below |
+
+### The packaged start (2026-11-09, one phone, kernel `ga291900124c4`)
+
+With the packages from #453 installed and my hand-installed start, UCM and WirePlumber files moved away: a first boot (which I recovered by hand), then a clean cold boot; the A/B check below used two more cold boots.
+
+- **First boot: "no firmware node in /sys/bus/platform/devices/154b0000.aoc"** [V]. The unit stopped before touching the firmware file, as it should. My test kernel carries `gs201_aoc_boot`, which matches `google,zuma-aoc`, so it autoloaded and bound the AoC node before `aoc_core`; my old local blacklist had hidden that. `80e5905` adds `blacklist gs201_aoc_boot` to the package. Derek's note on #453: the published kernel's `gs201_aoc_boot` only matches `google,gs201-aoc`, so the line does nothing there (the 7 Pro's and Pixel 6 Pro's packages have it too); it matters only on a test kernel like mine.
+- **Trusty is under `soc@0` on the 8 Pro** [V]: `/proc/device-tree/soc@0/trusty/status` reads `okay`, and the start script looked for `/proc/device-tree/trusty/status` only. `aafe089` checks both, with tests for the root layout, the `soc@0` layout and no node (it still fails closed with no node).
+- **Second boot, cold, no hand steps** [V]: the card came up within a second or two of the unit starting, `Services : 94`, `EP6 playback` and `EP1 capture`, no failed units, no CS35L41 mailbox errors, uptime 203 s. `tools/phone-smoke` on that boot (at 898 s of uptime): every required check ok, 0 WARN and 0 errors in dmesg, hottest zone 54 C.
+- **A/B tone check** [V]: the packaged start and my old hand-run start, each on a cold boot, amplifiers at digital 737 and analog 8 (top) and 10 (bottom), `pw-play` at 1.0, speaker 0.75, a file with 440 Hz left then 880 Hz right peaking at -22 and -12 dBFS. Both tones were heard clean on both paths, and the mic (EP1 mono, 48 kHz) read the 880 Hz tone at -51.6 and -43.1 dBFS (hand-run) against -52.9 and -43.1 (packaged), within about a dB. The first test file (`lr-test.wav`) peaked at -32 dBFS and was near the hearing threshold, so the quiet speaker I reported on #453 was that file, not a fault. Nothing above -12 dBFS was played, and the ceilings (737 / 8 and 10) were not exceeded.
+- **Unexplained** [U]: seven `cs35l41 spi1.1: Failed to set mailbox cmd 1` lines (with `Bottom DSP1 event failed: -42`) at about 271 s of uptime on the first boot, which I had recovered by hand (`modprobe -r gs201_aoc_boot`, binding the node to `aoc_core`, starting the unit). None of the four earlier boots and none of the cold boots had them. Cause unknown. Derek's advice on #453: after a failed start a reboot is the safer way back than unloading and rebinding by hand.
+- **Not covered** [U]: the packaged `HiFi.conf` drives both amplifiers in stereo for the Speaker device, where my old one used the bottom one only. Which `HiFi.conf` the hand-run side of the A/B check used was not recorded, and the difference was not measured further.
 
 Public commit ids of the kernels whose ids differ on the branch: `gbb5ba9ba53d2` is `3239ac2628e4`, `g757721ba1a81` is `d59a29c08111`, `g3f5ba5e70070` is `9bd5c74b96da`, `g74d6ba329f68` is `cc4f0ec38718`, `gd0d87517121a` is `08c3095dc5aa`, `g1f109674c767` is `7fa4d8b91e8b`. Kernels up to `g4b0fc77182d8` have the same id on the branch.
 
@@ -59,7 +71,7 @@ The 7 Pro's stages (`omamobile-audio`): `media` is digital at most 737 and analo
 ## 8. Next
 
 1. This document and the public branch (done with this change).
-   Now in review: kernel pull requests derekross/linux-omarchy-mobile#203 and #204, and package pull request derekross/omarchy-mobile#453 (the AoC start with a hang marker and the UCM2 profile).
+   Now in review: kernel pull requests derekross/linux-omarchy-mobile#203 and #204. Merged 2026-11-09: package pull request derekross/omarchy-mobile#453 (the AoC start with a hang marker and the UCM2 profile; results in "The packaged start" above).
 2. The spi-s3c64xx change as a pull request against `omamobile`, with cheetah's object file before and after, the 9a's SPI nodes, and the check that a write to one amplifier does not reach the other.
 3. The zuma System MMU v9 file beside `gs201-aoc-sysmmu.c`, with its own compatible and table.
 4. The driver changes of section 6 behind zuma's match data, with the 7 Pro's objects shown unchanged.

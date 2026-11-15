@@ -155,6 +155,17 @@ printf '#!/bin/sh\necho called >> "$CALLS"\nexit 97\n' > "$t/bin/fastboot"
 chmod +x "$t/bin/fastboot"
 echo 'ok - BOOT_METHOD=android-v4 (cheetah) gets past fastboot qcom-abl refuse'
 
+# A misspelt command fails, so a runbook's "images && push" stops there.
+if "$t/repo/bin/omamobile" imgaes > "$t/out" 2> "$t/log"; then fail "a misspelt command exits 0"; fi
+grep -q "unknown command 'imgaes'" "$t/log" || fail "a misspelt command does not name itself"
+grep -q '^Usage:' "$t/log" || fail "a misspelt command prints no usage on standard error"
+[[ ! -s $t/out ]] || fail "a misspelt command prints its usage on standard output"
+for help in -h --help ''; do
+  "$t/repo/bin/omamobile" ${help:+"$help"} > "$t/log" || fail "omamobile ${help:-with no command} exits non-zero"
+  grep -q '^Usage:' "$t/log" || fail "omamobile ${help:-with no command} prints no usage on standard output"
+done
+echo 'ok - a misspelt command exits non-zero and names itself; -h, --help and no command print the usage'
+
 # dodge-chain must refuse a stage-1 Image as STAGE2_IMAGE (nested pack → ~87MiB hang).
 cp tools/dodge-chain "$t/repo/tools/"
 # Fake "Image" carrying the stage-1 cmdline marker (strings fallback when no ikconfig).

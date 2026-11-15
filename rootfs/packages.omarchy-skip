@@ -11,3 +11,21 @@ qemu-user-static-binfmt
 # and would pull Omarchy's Hyprland over ours (#433); a phone has no floating
 # workspaces to put titlebars on
 omarchy-hyprland-titlebars
+# Superwhisper (Omarchy 4.5's list): proprietary. Images carry no proprietary
+# preinstalls; the phone's dictation is Voxtype (omamobile-voice). An owner
+# who wants it can install it.
+superwhisper-bin
+# OWE, Omarchy 4.5's video wallpaper engine, which also feeds the lock screen
+# its frames. Updated phones don't get it: the migration that starts it
+# (1789764927) is held as an unreviewed video pipeline on a phone, so a new
+# image leaves it out too, and the two agree. Take it off this list when the
+# hold is released.
+owe
+# Input-method engines for Fcitx (Omarchy 4.5's list). The on-screen keyboard
+# holds the phone's input-method slot and the Fcitx migration is held on
+# updated phones, so nothing could use them; Fcitx itself stays, as in 4.0.
+fcitx5-chewing
+fcitx5-chinese-addons
+fcitx5-hangul
+fcitx5-mozc
+fcitx5-table-extra

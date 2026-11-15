@@ -26,7 +26,11 @@ cat >"$t/bin/omarchy-shell" <<STUB
 cat "$t/locked"
 STUB
 chmod +x "$t"/bin/*
-export PATH="$t/bin:$PATH" XDG_RUNTIME_DIR="$t/run"
+# The panel's own state (backlight bl_power, the DRM connector's dpms) is read
+# from this fake sysfs, never from the machine the test runs on.
+mkdir -p "$t/sys/class/backlight/panel" "$t/sys/class/drm/card0-DSI-1"
+echo 0 >"$t/sys/class/backlight/panel/bl_power"; echo On >"$t/sys/class/drm/card0-DSI-1/dpms"; echo connected >"$t/sys/class/drm/card0-DSI-1/status"
+export PATH="$t/bin:$PATH" XDG_RUNTIME_DIR="$t/run" OMAMOBILE_KEYS_SYSFS="$t/sys"
 keys() { bash "$here/bin/omamobile-keys" "$@"; }
 fail() { printf 'not ok - %s\n' "$1" >&2; cat "$log" >&2 2>/dev/null; exit 1; }
 reset() { : >"$log"; rm -rf "$t/run/omamobile-keys"; }
@@ -47,7 +51,8 @@ echo "ok - volume keys: camera shutter in front, volume otherwise"
 
 # The power key's short press, by lock state and screen state. hyprctl answers
 # both the window class and the monitors' dpmsStatus; the backlight tools are
-# stubs, and bl_power is not consulted (no backlight device on this machine).
+# stubs, and with no backlight device name (omarchy-hw-display answers nothing)
+# bl_power is not consulted; the flash block below gives the panel a fake one.
 cat >"$t/bin/hyprctl" <<STUB
 #!/bin/bash
 if [[ \$1 == monitors ]]; then printf '[{"dpmsStatus": %s}]\n' "\$(cat "$t/dpms")"; exit 0; fi
@@ -88,6 +93,67 @@ echo false >"$t/locked"; echo true >"$t/dpms"
 press; grep -q "omarchy-system-lock" "$log" || fail "unlocked and lit: a press locks"
 before "omarchy-system-lock" "omarchy-shell lock dark" && before "omarchy-shell lock dark" "omarchy-brightness-display off" \
   || fail "unlocked and lit: the new lock hears it goes dark, before the panel goes off"
+
+# The flash: Hyprland reports the display off at once (dpmsStatus) but the panel
+# goes off only when the compositor commits it, 0.3 s later on the Pixel 8 Pro
+# (measured), so the saved brightness must not go back before the panel itself
+# reads as off (bl_power 4 or the connector's dpms Off), or the lock screen shows
+# at full brightness for an instant. Here the stand-in flips hyprctl's dpmsStatus
+# when "omarchy-brightness-display off" is called and the panel 0.4 s later,
+# writing "panel-off" to the log when it does; with a real device name, a saved
+# level of 2083, and a second case where the panel never goes off.
+mkdir -p "$t/orig"; cp "$t"/bin/omarchy-hw-display "$t"/bin/brightnessctl "$t"/bin/omarchy-brightness-display "$t/orig/"
+cat >"$t/bin/omarchy-hw-display" <<STUB
+#!/bin/bash
+echo panel
+STUB
+cat >"$t/bin/brightnessctl" <<STUB
+#!/bin/bash
+[[ "\$*" == *" get" ]] && { echo 2083; exit 0; }
+echo "brightnessctl \$*" >>"$log"
+STUB
+cat >"$t/bin/omarchy-brightness-display" <<STUB
+#!/bin/bash
+echo "omarchy-brightness-display \$*" >>"$log"
+if [[ \$1 == off && -f "$t/async-off" ]]; then
+  echo false >"$t/dpms"
+  ( sleep 0.4; echo 4 >"$t/sys/class/backlight/panel/bl_power"; echo Off >"$t/sys/class/drm/card0-DSI-1/dpms"; echo "panel-off" >>"$log" ) >/dev/null 2>&1 &
+fi
+STUB
+chmod +x "$t"/bin/*
+panel_on() { echo true >"$t/dpms"; mkdir -p "$t/sys/class/backlight/panel" "$t/sys/class/drm/card0-DSI-1"; echo 0 >"$t/sys/class/backlight/panel/bl_power"; echo On >"$t/sys/class/drm/card0-DSI-1/dpms"; echo connected >"$t/sys/class/drm/card0-DSI-1/status"; }
+echo false >"$t/locked"; panel_on; : >"$t/async-off"
+reset; keys power-down; keys power-up; sleep 1.5
+before "brightnessctl -q -d panel set 0" "omarchy-system-lock" || fail "flash: the panel goes dark by the backlight before the lock is built"
+before "panel-off" "brightnessctl -q -d panel set 2083" || fail "flash: the saved brightness goes back only after the panel is off"
+before "panel-off" "omamobile-sleepd now" || fail "flash: sleep is asked for after the panel is off"
+# The panel never goes off: the key handler still puts the brightness back and
+# asks for sleep, after at most about 1 s.
+rm -f "$t/async-off"; panel_on
+reset; start=$(date +%s%N); keys power-down; keys power-up
+for _ in $(seq 60); do grep -q "brightnessctl -q -d panel set 2083" "$log" && break; sleep 0.1; done
+# The limit is read from `date`, never from EPOCHREALTIME (a comma locale writes it with a comma).
+grep -q EPOCHREALTIME "$here/bin/omamobile-keys" && fail "flash: the wait's clock doesn't depend on the locale"
+# ... and never from date's %3N: uutils' date (0.10.0) drops the nanoseconds'
+# leading zeros before it takes three digits, so one reading in ten was wrong
+# and this wait ended up to 400 ms early on the build machine (2026-11-11).
+grep -q '%[0-9]N' "$here/bin/omamobile-keys" && fail "flash: the wait's clock doesn't use date's %3N"
+took=$(( ($(date +%s%N) - start) / 1000000 ))
+grep -q "brightnessctl -q -d panel set 2083" "$log" || fail "flash: with a panel that never goes off the brightness still goes back"
+(( took >= 900 && took < 2500 )) || fail "flash: with a panel that never goes off the wait lasts about 1 s ($took ms)"
+# No panel files at all (another machine): Hyprland's answer is all there is.
+rm -rf "$t/sys/class/drm/card0-DSI-1" "$t/sys/class/backlight/panel"; : >"$t/async-off"
+reset; start=$(date +%s%N); keys power-down; keys power-up
+took=$(( ($(date +%s%N) - start) / 1000000 )); sleep 1
+grep -q "brightnessctl -q -d panel set 2083" "$log" || fail "flash: with no panel files the brightness goes back by Hyprland's word"
+(( took < 1500 )) || fail "flash: with no panel files Hyprland's word ends the wait at once, not at the bound ($took ms)"
+# A connector that is not connected (a second, unused one) says Off and must not end the wait.
+panel_on; mkdir -p "$t/sys/class/drm/card0-DSI-2"; echo Off >"$t/sys/class/drm/card0-DSI-2/dpms"; echo disconnected >"$t/sys/class/drm/card0-DSI-2/status"; : >"$t/async-off"
+reset; keys power-down; keys power-up; sleep 1
+before "panel-off" "brightnessctl -q -d panel set 2083" || fail "flash: an unconnected connector's Off does not end the wait"
+rm -rf "$t/sys/class/drm/card0-DSI-2"; panel_on
+cp "$t"/orig/omarchy-hw-display "$t"/orig/brightnessctl "$t"/orig/omarchy-brightness-display "$t/bin/"
+echo "ok - power press unlocked and lit: the brightness comes back only after the panel is off (and still after 1 s if it never is)"
 echo false >"$t/locked"; echo false >"$t/dpms"
 press; grep -q "omarchy-brightness-display on" "$log" || fail "unlocked and dark: a press lights the screen"
 grep -q "omarchy-system-lock" "$log" && fail "unlocked and dark: a press does not lock"

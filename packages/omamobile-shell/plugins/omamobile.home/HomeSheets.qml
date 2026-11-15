@@ -29,6 +29,35 @@ Item {
 
   function close() { if (home) home.sheet = "" }
 
+  // A widget's settings with edits Save hasn't taken (the settings sheet
+  // keeps this up to date), and whether leaving has been asked about.
+  property bool settingsUnsaved: false
+  property bool confirmDiscard: false
+  // Whether the widget being approved is on a page already (the approval
+  // sheet keeps this up to date): where its "Not now", and Back, lead.
+  property bool approvePlaced: false
+  onWhichChanged: { confirmDiscard = false; if (which !== "settings") settingsUnsaved = false }
+
+  // Leaving without Save (the scrim, the header's cross, Back): a widget's
+  // unsaved settings are asked about first. The footer then offers Discard
+  // changes beside Save, and nothing is dropped until that is tapped.
+  function askDiscard() {
+    confirmDiscard = true
+    if (home && typeof home.flash === "function") home.flash("Unsaved changes: save or discard them")
+  }
+  function requestClose() {
+    if (which === "settings" && settingsUnsaved) askDiscard()
+    else close()
+  }
+  // One level of Back (HomeModel.sheetBack).
+  function back() {
+    if (!home || which === "") return false
+    var to = HomeModel.sheetBack(which, settingsUnsaved, approvePlaced)
+    if (to === "ask") askDiscard()
+    else home.sheet = to
+    return true
+  }
+
   // Scroll into view (TOUCH-PLAN 1.7). The home surface shrinks above the
   // on-screen keyboard, and so do the sheets, but nothing moved a sheet's
   // Flickable to the field being typed in. keepInView scrolls `flick` so the
@@ -60,7 +89,7 @@ Item {
   Rectangle {
     anchors.fill: parent
     color: Qt.rgba(0, 0, 0, 0.35)
-    MouseArea { anchors.fill: parent; onClicked: sheets.close() }
+    MouseArea { anchors.fill: parent; onClicked: sheets.requestClose() }
   }
 
   // Omarchy's surface: its corners (Style.cornerRadius) and its popup
@@ -113,7 +142,7 @@ Item {
         iconText: "󰅖"
         iconSize: Style.font.iconLarge
         foreground: sheets.fg
-        onClicked: sheets.close()
+        onClicked: sheets.requestClose()
       }
     }
 
@@ -667,6 +696,8 @@ Item {
         const type = approveFlick.placeType
         return sheets.home.layout.pages.some(function(p) { return p.items.some(function(i) { return i.type === type }) })
       }
+      onPlacedChanged: sheets.approvePlaced = placed
+      Component.onCompleted: sheets.approvePlaced = placed
 
       Column {
         id: approveColumn
@@ -1146,6 +1177,9 @@ Item {
 
         // Fields write here; Save hands the patch to the layout.
         property var patch: ({})
+        // Unsaved edits, for leaving without Save (sheets.requestClose, Back).
+        onPatchChanged: sheets.settingsUnsaved = HomeModel.settingsChanged(patch, config)
+        Component.onDestruction: sheets.settingsUnsaved = false
         function put(key, value) { var p = Object.assign({}, patch); p[key] = value; patch = p }
         function value(key) { return patch[key] !== undefined ? patch[key] : config[key] }
         property string failure: ""
@@ -1459,13 +1493,24 @@ Item {
             onClicked: settingsFlick.save()
           }
           SheetButton {
-            visible: !!sheets.settingsUserId
+            visible: !!sheets.settingsUserId && !sheets.confirmDiscard
             label: "Edit with AI"
             onClicked: sheets.home.openCreate("edit", sheets.settingsUserId)
           }
         }
+        // Asked about unsaved edits (Back, the cross, a tap outside): Discard
+        // changes takes Remove's place until it or Save is tapped.
         SheetButton {
           anchors.right: parent.right
+          visible: sheets.confirmDiscard
+          label: "Discard changes"
+          danger: true
+          armed: true
+          onClicked: sheets.close()
+        }
+        SheetButton {
+          anchors.right: parent.right
+          visible: !sheets.confirmDiscard
           label: settingsFlick.confirmRemove ? "Remove?" : "Remove"
           danger: true
           armed: settingsFlick.confirmRemove

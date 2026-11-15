@@ -18,7 +18,9 @@
 # The rest of the vhost (setup-site.sh, PLAIN_FILES=1, 2026-10-26) stays as
 # it is: /releases/ is already plain files (a missing path is a 404, never an
 # HTML page), with byte ranges and Content-Length; what it lacks is CORS, the
-# right MIME types, exact sizes (no gzip), and a long cache for versioned files.
+# right MIME types, exact sizes (no gzip), a long cache for versioned files,
+# and a file listing for a folder's own address (a link to
+# /releases/<codename>/<version>/ was a 404 for people, 2026-11-10).
 #
 # Before: backups of both files. After: nginx -t, a reload verified against
 # the error log, then live checks over HTTPS (the new headers on /releases/,
@@ -81,6 +83,13 @@ location ^~ /releases/ {
         text/plain                txt sha256 manifest;
     }
 
+    # A folder's own address lists its files, as download servers do, so a
+    # link to a release leads somewhere. nginx leaves dotted names (upload
+    # staging) out of a listing; sizes are shown rounded, times in UTC.
+    autoindex on;
+    autoindex_exact_size off;
+    autoindex_localtime off;
+
     # Upload staging (releases/<codename>/.<version>.partial) and anything
     # else dotted or left behind is never served.
     location ~ /\\. { deny all; }
@@ -93,7 +102,7 @@ location ^~ /releases/ {
 $(cors_block)
         # Not "always": a 404 (asked for before the upload) must not be cached
         add_header Cache-Control "public, max-age=31536000, immutable";
-        try_files \$uri =404;
+        try_files \$uri \$uri/ =404;
     }
 
     # Everything else, releases/<codename>/latest.json above all, moves:
@@ -101,7 +110,7 @@ $(cors_block)
     if (\$request_method = OPTIONS) { return 204; }
 $(cors_block)
     add_header Cache-Control "no-cache";
-    try_files \$uri =404;
+    try_files \$uri \$uri/ =404;
 }
 EOF
 }
@@ -231,6 +240,15 @@ check '^access-control-allow-headers: .*range' "the preflight allows Range"
 check '^cache-control: public, max-age=31536000, immutable' "a version directory is cached for a year"
 hdrs=$(curl -sI --max-time 20 "https://$SITE/releases/cheetah/.2026.01.01.partial/x" | tr -d '\r' || true)
 check '^HTTP/[0-9.]* 403' "upload staging directories are refused"
+# The listing, where a release exists (skipped on a server with none yet)
+for dir in "releases/cheetah/" "releases/cheetah/$(curl -s --max-time 20 "https://$SITE/releases/cheetah/latest.json" | sed -n 's/.*"version": *"\([0-9.]*\)".*/\1/p' | head -1)/"; do
+  [[ $dir == */ && $dir != *//* ]] || continue
+  code=$(curl -s -o /tmp/releases-listing.$$ -w '%{http_code} %{content_type}' --max-time 20 "https://$SITE/$dir" || echo 000)
+  if [[ $code == 404* ]]; then say "  skip: no $dir on this server yet"
+  elif [[ $code == "200 text/html"* ]] && ! grep -c '\.partial' /tmp/releases-listing.$$ >/dev/null; then say "  ok: $dir lists its files, without upload staging"
+  else say "  FAIL: $dir answered '$code' or lists a staging directory"; fails=1; fi
+  rm -f /tmp/releases-listing.$$
+done
 after_db=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "https://$SITE/development/aarch64/omamobile.db" || echo 000)
 after_root=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "https://$SITE/" || echo 000)
 if [[ $after_db == "$before_db" && $after_root == "$before_root" ]]; then

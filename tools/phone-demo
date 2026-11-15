@@ -631,9 +631,35 @@ def note_list(m):
     ]
 
 
-def demo_note_files():
-    """Omarchy's files (toasts on screen and history) holding a demo notification."""
+def store_45():
+    """Omarchy 4.5 keeps the toasts on screen in live.json and the closed ones in
+    history.json, each one JSON array of rows with a key; 4.0 kept one file
+    per notification. history.json is there from the 4.5 service's first
+    start, so it tells the two apart (as the shade does, omamobile-shell 0.2.125)."""
+    return os.path.isfile(os.path.join(NOTES, "history.json"))
+
+
+def rows_45(name):
+    try:
+        with open(os.path.join(NOTES, name), encoding="utf-8") as f:
+            v = json.load(f)
+    except (OSError, ValueError):
+        return []
+    return [r for r in v if isinstance(r, dict)] if isinstance(v, list) else []
+
+
+def demo_notes():
+    """The demo notifications Omarchy still holds, on screen or in history:
+    (the name its forget call takes, the 4.0 file or None on 4.5)."""
     wanted = {(a, s, b) for a, _, _, s, b, _ in note_list(None)}
+    is_demo = lambda v: isinstance(v, dict) and (v.get("app"), v.get("summary"), v.get("body")) in wanted
+    if store_45():
+        keys = []
+        for name in ("live.json", "history.json"):
+            for r in rows_45(name):
+                if is_demo(r) and r.get("key") and str(r["key"]) not in keys:
+                    keys.append(str(r["key"]))
+        return [(k, None) for k in keys]
     found = []
     for path in glob.glob(os.path.join(NOTES, "*.json")) + glob.glob(os.path.join(NOTES, "history", "*.json")):
         try:
@@ -641,8 +667,8 @@ def demo_note_files():
                 v = json.loads(f.readline())
         except (OSError, ValueError):
             continue
-        if isinstance(v, dict) and (v.get("app"), v.get("summary"), v.get("body")) in wanted:
-            found.append(path)
+        if is_demo(v):
+            found.append((os.path.basename(path), path))
     return found
 
 
@@ -653,32 +679,54 @@ def shell(*args):
         return ""
 
 
+def drop_rows_45(keys):
+    """Without the shell nothing else writes the 4.5 store: take the rows out
+    of its two files directly, as the service writes them (compact, 0600)."""
+    for name in ("live.json", "history.json"):
+        path = os.path.join(NOTES, name)
+        rows = rows_45(name)
+        kept = [r for r in rows if str(r.get("key")) not in keys]
+        if len(kept) == len(rows):
+            continue
+        tmp = path + ".demo-tmp"
+        with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as f:
+            f.write(json.dumps(kept, separators=(",", ":"), ensure_ascii=False) + "\n")
+        os.replace(tmp, path)
+
+
 def forget_notes():
-    files = demo_note_files()
-    for path in files:
-        # Omarchy's own forget (patch 0019) closes a toast on screen and
-        # deletes the entry; without the shell, the file goes directly.
-        if shell("notifications", "forget", os.path.basename(path)) != "ok":
+    notes = demo_notes()
+    # Omarchy's own forget closes a toast on screen and deletes the entry (by
+    # file name on 4.0, patch 0019; by key on 4.5). Only when the shell doesn't
+    # answer is the store touched directly: the running service owns it.
+    unanswered = [(name, path) for name, path in notes if shell("notifications", "forget", name) != "ok"]
+    for name, path in unanswered:
+        if path:
             try:
                 os.remove(path)
             except FileNotFoundError:
                 pass
+    if unanswered and store_45():
+        drop_rows_45({name for name, _ in unanswered})
     for _ in range(20):
-        if not demo_note_files():
+        if not demo_notes():
             break
         time.sleep(0.25)
-    left = demo_note_files()
-    for path in left:
-        try:
-            os.remove(path)
-        except FileNotFoundError:
-            pass
-    print("took away %d demo notification(s)" % len(files))
+    for name, path in demo_notes():
+        if path:
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+    left = len(demo_notes())
+    print("took away %d demo notification(s)%s" % (len(notes) - left, ", %d still there" % left if left else ""))
 
 
 def dnd_on():
+    # 4.5: quiet.json ({"dnd": true}; empty while it has never been on). 4.0: notifications.json.
+    name = "notifications/quiet.json" if store_45() else "notifications.json"
     try:
-        with open(os.path.join(HOME, ".local/state/omarchy/notifications.json")) as f:
+        with open(os.path.join(HOME, ".local/state/omarchy", name)) as f:
             return json.load(f).get("dnd") is True
     except (OSError, ValueError, AttributeError):
         return False
@@ -711,6 +759,12 @@ def notify():
 def restore_notes():
     """Put back history entries (and their images) the demo pushed out of the newest ten."""
     src = os.path.join(STAGE, "notes", "notifications")
+    # Omarchy 4.5's history is one file the running service owns and rewrites,
+    # and it never read 4.0's history/ and images/ directories: nothing from
+    # a backup of either layout is copied into a 4.5 store.
+    if store_45() or os.path.isfile(os.path.join(src, "history.json")):
+        print("notification history left as it is (Omarchy 4.5 keeps it in one file its own service writes)")
+        return
     n = 0
     for sub in ("history", "images"):
         for path in glob.glob(os.path.join(src, sub, "*")):
@@ -743,7 +797,7 @@ def status():
         print("  calls: %d of %d present" % (
             present(CALLS_DB, "SELECT count(*) FROM calls WHERE id IN (%s)", m["calls"]), len(m["calls"])))
         print("  backup: %s" % (m.get("backup") or "?"))
-    print("demo notifications on the phone: %d" % len(demo_note_files()))
+    print("demo notifications on the phone: %d" % len(demo_notes()))
     print("do not disturb: %s" % ("on (the lock glance shows no notifications)" if dnd_on() else "off"))
     if os.path.exists(os.path.join(HOME, ".local/state/omarchy/toggles/lock-hide-notification-text")):
         print("lock-hide-notification-text: on (the glance shows \"Unlock to read\")")

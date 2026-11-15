@@ -91,6 +91,28 @@ git add -A && git commit -q -m "notes" -m "Signed-off-by: Claude <noreply@anthro
 check "an AI sign-off" 1 "Signed-off-by from an AI agent"
 echo "ok - an AI Signed-off-by fails"
 
+# An AI's name is matched as a whole word: a person whose name or address
+# only contains one (Tillman, Claudette, Geminiani, precursor) signs off;
+# every AI form still fails.
+i=0
+sob_case() { # who expect [pattern]
+  case_branch "sob-$((i += 1))"
+  echo change > notes.md
+  git add -A && git commit -q -m "notes" -m "Signed-off-by: $1"
+  check "Signed-off-by: $1" "$2" "${3:-}"
+}
+sob_case "Robin Tillman <robin.tillman@example.org>" 0
+sob_case "Claudette Lovell <claudette@precursor.example.org>" 0
+sob_case "Dana Geminiani <dana.geminiani@example.org>" 0
+for who in "Claude Opus 5.5 <noreply@anthropic.com>" "Anthropic <helper@example.org>" "OpenAI <helper@example.org>" \
+  "GitHub Copilot <copilot@users.noreply.github.com>" "Codex <helper@example.org>" "ChatGPT <chatgpt@example.org>" \
+  "Cursor Agent <cursoragent@cursor.com>" "Gemini <gemini@example.org>" "An LLM <llm@example.org>" \
+  "Claude3 <helper@example.org>" "dependabot[bot] <dependabot[bot]@users.noreply.github.com>" \
+  "Helper <noreply@github.com> (bot)"; do
+  sob_case "$who" 1 "Signed-off-by from an AI agent"
+done
+echo "ok - a name that only contains an AI's name passes; each AI form fails"
+
 case_branch script
 printf '#!/bin/bash\nif then\n' > tools/broken && chmod +x tools/broken
 git add -A && git commit -q -m "tools: broken"

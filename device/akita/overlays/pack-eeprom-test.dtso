@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Bring-up probe, never default (BRINGUP-M4, M4.2b): switches on USI9 and
+ * hsi2c_9, the bus of the battery pack's EEPROM, whose byte 0x17 is the
+ * battery ID that picks the fuel gauge's model. The EEPROM node itself is in
+ * the board file (read-only). CMU_PERIC1 and its sysreg are on in the board
+ * file already; repeating them is harmless. As husky's pack-eeprom-test.dtso.
+ */
+/dts-v1/;
+/plugin/;
+
+&cmu_peric1 {
+	status = "okay";
+};
+
+&sysreg_peric1 {
+	status = "okay";
+};
+
+&usi9 {
+	status = "okay";
+};
+
+&hsi2c_9 {
+	status = "okay";
+};

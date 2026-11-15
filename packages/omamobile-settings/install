@@ -10,3 +10,4 @@ install -Dm755 "$build_dir/omamobile-settings" "$dest/usr/bin/omamobile-settings
 install -Dm644 "$source_dir/org.omamobile.Settings.desktop" "$dest/usr/share/applications/org.omamobile.Settings.desktop"
 install -Dm644 "$source_dir/org.omamobile.Settings.svg" "$dest/usr/share/icons/hicolor/scalable/apps/org.omamobile.Settings.svg"
 install -Dm644 "$source_dir/LICENSE" "$dest/usr/share/licenses/omamobile-settings/LICENSE"
+install -Dm755 "$source_dir/backends/display.sh" "$dest/usr/lib/omamobile-settings/backends/display.sh"

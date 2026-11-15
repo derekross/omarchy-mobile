@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # omamobile-update and its stand-ins against fakes: no sudo, pacman, network,
 # systemd or Omarchy command of this machine is run. Uses the real `script`
-# (util-linux) for the pty.
+# (util-linux) for the pty. The one socket opened is to a web server this
+# test starts on 127.0.0.1, for the index probe's own answers.
 set -uo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 PKG=$PWD
@@ -49,6 +50,7 @@ EOF
 printf '#!/bin/bash\nexit 3\n' >"$fake/systemctl"
 cat >"$fake/checkupdates" <<EOF
 #!/bin/bash
+if [[ -e "$t/sync-fail" ]]; then cat "$t/sync-fail" >&2; exit 1; fi
 cat "$t/updates" 2>/dev/null
 [[ -s "$t/updates" ]] || exit 2
 EOF
@@ -67,7 +69,7 @@ cat >"$fake/omarchy-update" <<EOF
 #!/bin/bash
 echo "omarchy-update \$* OMARCHY_UPDATE_LOGGED=\$OMARCHY_UPDATE_LOGGED OMAMOBILE_UPDATE=\$OMAMOBILE_UPDATE" >>"$calls"
 echo "omarchy-update OMARCHY_PATH=\${OMARCHY_PATH-unset}" >>"$calls"
-for c in omarchy-snapshot omarchy-update-aur-pkgs omarchy-update-orphan-pkgs omarchy-migrate omarchy-update-restart sudo; do
+for c in omarchy-snapshot omarchy-update-aur-pkgs omarchy-update-orphan-pkgs omarchy-migrate omarchy-update-restart omarchy-update-boot sudo; do
   echo "resolve \$c \$(command -v \$c)" >>"$calls"
 done
 omarchy-snapshot create; echo "snapshot rc \$?" >>"$calls"
@@ -123,14 +125,34 @@ echo '{"result": "ok", "applied": ["0003-x.patch"], "upstream": ["0000-y.patch"]
 # production bypass flag. The runtime's 10 GiB rule stays unchanged.
 export OMAMOBILE_UPDATE_REAL_SOURCE=$PKG/bin/omamobile-update
 cat >"$t/update-fixture.py" <<'PYCODE'
+#!/usr/bin/python3 -I
 import os, runpy, sys
 scope = runpy.run_path(os.environ["OMAMOBILE_UPDATE_REAL_SOURCE"], run_name="update_fixture")
 scope["check"].__globals__["free_bytes"] = lambda: 20 * 1024 ** 3
+# The channel's index is never asked of a real server here: the probe logs
+# the address and answers from the fixture's index-answer file ("missing":
+# the server says 404). OMAMOBILE_TEST_REAL_PROBE leaves the real probe in,
+# for the checks that aim it at this test's own web server.
+def fake_index_missing(url, t=os.environ["OMAMOBILE_TEST_DIR"]):
+    with open(os.path.join(t, "probes"), "a") as f:
+        f.write(url + "\n")
+    try:
+        with open(os.path.join(t, "index-answer")) as f:
+            return f.read().strip() == "missing"
+    except OSError:
+        return False
+if not os.environ.get("OMAMOBILE_TEST_REAL_PROBE"):
+    scope["check"].__globals__["index_missing"] = fake_index_missing
+# The run starts itself again (the unit, then inside script's pty) by its
+# own path: that is this fixture, so those processes get the stand-ins too
+scope["check"].__globals__["__file__"] = os.path.abspath(__file__)
 globals().update({k: v for k, v in scope.items() if not k.startswith("__")})
 if __name__ == "__main__":
     sys.exit(scope["main"](sys.argv[1:]))
 PYCODE
 U=$t/update-fixture.py
+chmod +x "$U"   # the unit runs it by path
+export OMAMOBILE_TEST_DIR=$t
 
 wait_done() {
   for _ in $(seq 150); do grep -cP '^state\tdone' "$XDG_RUNTIME_DIR/omamobile-update/events" >/dev/null 2>&1 && return 0; sleep 0.1; done
@@ -245,6 +267,77 @@ out=$(OMAMOBILE_BOOT_UPDATE=$t/no-such-tool python3 -I "$U" check --json)
 ok "kernel: an unreadable boot-update.conf blocks" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert not d[\"ok\"] and any(\"be read\" in b for b in d[\"blockers\"])" "$out"'
 rm -f "$t/boot-update.conf"
 printf 'omarchy 4.0.5-1\nmesa 26.1-1\n' >"$t/plan"
+ok "a check that works never asks the server for the channel's index" '[[ ! -e $t/probes ]]'
+
+# A channel with nothing published yet (stable before a first release, local
+# before the first repo-push): pacman can't fetch its index, so the check for
+# updates fails. That is a normal state, with no blocker and exit 0, when
+# the channel's server says the index isn't there; any other failure stays one
+printf "error: failed retrieving file 'omamobile.db' from pkgs.omamobile.org : The requested URL returned error: 404\nerror: failed to synchronize all databases (failed to retrieve some files)\n" >"$t/sync-fail"
+echo missing >"$t/index-answer"
+rc=0; out=$(python3 -I "$U" check --json) || rc=$?
+ok "empty channel: check is ok (exit 0), no blocker, nothing to update, and says so" '[[ $rc == 0 ]] && python3 -c "
+import json,sys; d=json.loads(sys.argv[1])
+assert d[\"ok\"] and d[\"blockers\"] == [] and d[\"update_count\"] == 0 and d[\"updates\"] == [], d
+assert d[\"channel\"][\"empty\"] is True and d[\"channel\"][\"name\"] == \"stable\"
+assert \"The stable channel has no updates yet\" in d[\"channel\"][\"note\"], d[\"channel\"]
+" "$out"'
+ok "empty channel: the index asked for is the channel's own, for aarch64" '[[ $(cat "$t/probes") == https://pkgs.omamobile.org/stable/aarch64/omamobile.db ]]'
+rc=0; out=$(python3 -I "$U" check) || rc=$?
+ok "empty channel: the plain check says no updates yet, never Blocked" '[[ $rc == 0 ]] && grep -c "^No updates yet: The stable channel has no updates yet" <<<"$out" >/dev/null && ! grep -c "Blocked" <<<"$out" >/dev/null'
+echo present >"$t/index-answer"; rm -f "$t/probes"
+rc=0; out=$(python3 -I "$U" check --json) || rc=$?
+ok "a failed check with the index there (offline, a server error) still blocks" '[[ $rc == 1 && -s $t/probes ]] && python3 -c "
+import json,sys; d=json.loads(sys.argv[1])
+assert not d[\"ok\"] and d[\"channel\"][\"empty\"] is False and d[\"channel\"][\"note\"] == \"\"
+assert any(b.startswith(\"could not check for updates\") and \"404\" in b for b in d[\"blockers\"]), d[\"blockers\"]
+" "$out"'
+echo missing >"$t/index-answer"; rm -f "$t/probes"
+printf 'Server = https://mirror.example/omamobile/$arch\n' >"$OMAMOBILE_MIRRORLIST"
+rc=0; out=$(python3 -I "$U" check --json) || rc=$?
+ok "a custom Server line is never read as an empty channel, nor asked" '[[ $rc == 1 && ! -e $t/probes ]] && python3 -c "
+import json,sys; d=json.loads(sys.argv[1]); assert not d[\"ok\"] and d[\"channel\"][\"empty\"] is False" "$out"'
+# local: the repository on the phone, no server to ask
+printf '#Server = https://pkgs.omamobile.org/stable/$arch\nServer = file:///var/lib/omamobile/repo/$arch\n' >"$OMAMOBILE_MIRRORLIST"
+rm -rf "$OMAMOBILE_LOCAL_REPO"
+rc=0; out=$(python3 -I "$U" check --json) || rc=$?
+ok "empty channel: local with no repository pushed yet is ok too, no server asked" '[[ $rc == 0 && ! -e $t/probes ]] && python3 -c "
+import json,sys; d=json.loads(sys.argv[1]); assert d[\"ok\"] and d[\"channel\"][\"empty\"] and \"The local channel\" in d[\"channel\"][\"note\"]" "$out"'
+mkdir -p "$OMAMOBILE_LOCAL_REPO/aarch64"; : >"$OMAMOBILE_LOCAL_REPO/aarch64/omamobile.db"
+rc=0; out=$(python3 -I "$U" check --json) || rc=$?
+ok "local with its index there: a failed check still blocks" '[[ $rc == 1 ]] && python3 -c "
+import json,sys; d=json.loads(sys.argv[1]); assert not d[\"ok\"] and not d[\"channel\"][\"empty\"]" "$out"'
+rm -rf "$OMAMOBILE_LOCAL_REPO"
+packaged_mirrorlist >"$OMAMOBILE_MIRRORLIST"
+
+# The probe itself, against a web server of this test's on 127.0.0.1: 404 is
+# "not there"; a file that is served, a server error and no server at all
+# are not
+mkdir -p "$t/www/stable/aarch64" "$t/www-code"
+: >"$t/www/stable/aarch64/omamobile.db"
+cat >"$t/www-code/server.py" <<'PYCODE'
+import http.server, os, sys
+root = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        code = 500 if self.path.startswith("/broken/") else 200 if os.path.isfile(root + self.path) else 404
+        self.send_response(code); self.send_header("Content-Length", "0"); self.end_headers()
+    def log_message(self, *a): pass
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+with open(sys.argv[2] + ".new", "w") as f: f.write(str(s.server_address[1]))
+os.rename(sys.argv[2] + ".new", sys.argv[2])
+s.serve_forever()
+PYCODE
+python3 -I -B "$t/www-code/server.py" "$t/www" "$t/www-port" & www=$!
+for _ in $(seq 50); do [[ -s $t/www-port ]] && break; sleep 0.1; done
+port=$(cat "$t/www-port" 2>/dev/null)
+probe() { OMAMOBILE_TEST_REAL_PROBE=1 python3 -I -B -c "import runpy,sys; s=runpy.run_path(sys.argv[1], run_name='probe'); print(s['index_missing'](sys.argv[2]))" "$U" "$1"; }
+ok "probe: HTTP 404 is an index that isn't there" '[[ -n $port && $(probe "http://127.0.0.1:$port/development/aarch64/omamobile.db") == True ]]'
+ok "probe: an index that is served is there" '[[ $(probe "http://127.0.0.1:$port/stable/aarch64/omamobile.db") == False ]]'
+ok "probe: a server error is not an empty channel" '[[ $(probe "http://127.0.0.1:$port/broken/aarch64/omamobile.db") == False ]]'
+kill "$www" 2>/dev/null; wait "$www" 2>/dev/null
+ok "probe: no answer (offline) is not an empty channel" '[[ $(probe "http://127.0.0.1:$port/development/aarch64/omamobile.db") == False ]]'
+rm -f "$t/sync-fail" "$t/index-answer" "$t/probes"
 
 # ---------------------------------------------------------------- the sheet's run
 : >"$calls"
@@ -257,7 +350,7 @@ ok "the PIN reached sudo -S on stdin, never argv" 'grep -c "^sudo -S -p  -v$" "$
 ok "no password file left behind" '[[ ! -e $XDG_RUNTIME_DIR/omamobile-update/auth ]]'
 ok "the unit runs as omamobile-update" 'grep -c -- "--unit=omamobile-update" "$calls" >/dev/null'
 ok "omarchy-update -y, unlogged (script is ours), OMAMOBILE_UPDATE=1" 'grep -c "^omarchy-update -y OMARCHY_UPDATE_LOGGED=1 OMAMOBILE_UPDATE=1" "$calls" >/dev/null'
-for c in omarchy-snapshot omarchy-update-aur-pkgs omarchy-update-orphan-pkgs omarchy-migrate omarchy-update-restart sudo; do
+for c in omarchy-snapshot omarchy-update-aur-pkgs omarchy-update-orphan-pkgs omarchy-migrate omarchy-update-restart omarchy-update-boot sudo; do
   ok "stand-in on PATH: $c" 'grep -c "^resolve $c $PKG/lib/update-bin/$c$" "$calls" >/dev/null'
 done
 ok "snapshot: skipped with 127, real Snapper never called" 'grep -c "^snapshot rc 127$" "$calls" >/dev/null && ! grep -c real-snapshot "$calls" >/dev/null'
@@ -352,6 +445,34 @@ printf '{"result": "skipped", "release": "", "message": "AUTO_WRITE is off", "ti
 out=$(rs $((now - 5)))
 ok "restart: a skipped write (development phone) asks for nothing" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert not d[\"needs_reboot\"] and not any(\"kernel\" in w for w in d[\"warnings\"]), d" "$out"'
 
+# Omarchy 4.5 runs the restart step in two halves. The first restarts the
+# marked services and the shell and decides nothing; the second decides and
+# restarts nothing, and still knows which service failed to restart
+half() { OMAMOBILE_UPDATE_DIR=$t/rs OMAMOBILE_BOOT_UPDATE_STATUS=$t/bu.json OMAMOBILE_UPDATE_STARTED=$((now - 5)) bash lib/update-bin/omarchy-update-restart "$@" >/dev/null 2>&1; }
+printf '{"result": "written", "release": "7.3.0-rc6-omamobile-g0123456789ab", "kernel_changed": true, "message": "x", "time": %d}\n' "$now" >"$t/bu.json"
+mkdir -p "$HOME/.local/state/omarchy"
+touch "$HOME/.local/state/omarchy/restart-waybar-required" "$HOME/.local/state/omarchy/restart-broken-required"
+rm -rf "$t/rs"; : >"$calls"
+half --services-only
+ok "restart, first half: the marked service and the shell restart, once each" '[[ $(grep -c "^restart-waybar$" "$calls") == 1 && $(grep -c "^restart-shell$" "$calls") == 1 ]]'
+ok "restart, first half: no verdict yet" '[[ ! -e $t/rs/restart.json ]]'
+: >"$calls"
+half --reboot-only
+ok "restart, second half: nothing restarts again" '! grep -c "^restart-" "$calls" >/dev/null'
+ok "restart, second half: the verdict, with the first half's failed service as a warning" 'python3 -c "import json; d=json.load(open(\"$t/rs/restart.json\")); assert d[\"needs_reboot\"] and \"kernel was updated\" in d[\"reasons\"][0] and d[\"warnings\"] == [\"Restarting broken failed\"], d"'
+half --reboot-only
+ok "restart, second half alone: no warning left over from an earlier run" 'python3 -c "import json; d=json.load(open(\"$t/rs/restart.json\")); assert d[\"warnings\"] == [], d"'
+rc=0; half --sideways || rc=$?
+ok "restart: an option it doesn't know is refused" '[[ $rc == 2 ]]'
+: >"$calls"; rm -rf "$t/rs"
+half
+ok "restart, no argument (Omarchy 4.0): both halves in one run" 'grep -c "^restart-shell$" "$calls" >/dev/null && [[ -e $t/rs/restart.json ]]'
+rc=0; out=$(bash lib/update-bin/omarchy-update-boot 2>&1) || rc=$?
+ok "boot check (Omarchy 4.5): the phone's stand-in passes, silently, without sudo" '[[ $rc == 0 && -z $out ]]'
+rc=0; bash lib/update-bin/omarchy-update-boot extra 2>/dev/null || rc=$?
+ok "boot check: an argument is refused as Omarchy's is" '[[ $rc == 2 ]]'
+printf 'omarchy 4.0.5-1\nmesa 26.1-1\n' >"$t/plan"
+
 # Low battery and wrong repository order: refused before the PIN is used
 battery 12 Discharging 0
 rm -f "$t/sudo-ok"; : >"$calls"
@@ -369,6 +490,29 @@ rm -f "$t/sudo-ok"; touch "$t/sudo-ok"; : >"$calls"
 out=$(python3 -I "$U" -y </dev/null 2>&1); rc=$?
 ok "terminal run: exit 0, Omarchy's output shown" '[[ $rc == 0 ]] && grep -c "Update system packages" <<<"$out" >/dev/null'
 ok "terminal run: sudo asked interactively once (sudo -v), not -S" 'grep -c "^sudo -v$" "$calls" >/dev/null && ! grep -c "^sudo -S" "$calls" >/dev/null'
+
+# The update on a channel with nothing published yet: done with nothing to
+# do (exit 0, result ok), Omarchy's update not started; with the index there,
+# the same failed check is still a refusal
+printf "error: failed retrieving file 'omamobile.db' from pkgs.omamobile.org : The requested URL returned error: 404\n" >"$t/sync-fail"
+echo missing >"$t/index-answer"; : >"$calls"
+out=$(python3 -I "$U" -y </dev/null 2>&1); rc=$?
+ok "empty channel, terminal run: exit 0 and says the channel has no updates yet" '[[ $rc == 0 ]] && grep -c "omamobile-update: The stable channel has no updates yet" <<<"$out" >/dev/null'
+ok "empty channel, terminal run: Omarchy's update never started" '! grep -c "^omarchy-update" "$calls" >/dev/null'
+ok "empty channel, terminal run: result ok, marked channel_empty, no restart" 'python3 -c "import json; d=json.load(open(\"$last\")); assert d[\"result\"] == \"ok\" and d[\"exit\"] == 0 and d[\"channel_empty\"] is True and not d[\"needs_reboot\"], d"'
+rm -f "$t/sudo-ok"
+printf '1234\n' | python3 -I "$U" start >/dev/null; wait_done
+ok "empty channel, the sheet's run: result ok with the same message" 'python3 -c "import json; d=json.load(open(\"$last\")); assert d[\"result\"] == \"ok\" and \"no updates yet\" in d[\"message\"], d"'
+echo present >"$t/index-answer"; touch "$t/sudo-ok"; : >"$calls"
+out=$(python3 -I "$U" -y </dev/null 2>&1); rc=$?
+ok "a failed check with the index there: the update is refused (exit 5), as before" '[[ $rc == 5 ]] && ! grep -c "^omarchy-update" "$calls" >/dev/null && python3 -c "import json; d=json.load(open(\"$last\")); assert d[\"result\"] == \"refused\" and \"channel_empty\" not in d, d"'
+rm -f "$t/sync-fail" "$t/index-answer" "$t/probes"
+touch "$t/sudo-ok"; : >"$calls"
+out=$(python3 -I "$U" -y </dev/null 2>&1); rc=$?
+ok "the update after an empty-channel run is an ordinary one again" '[[ $rc == 0 ]] && grep -c "^omarchy-update" "$calls" >/dev/null && python3 -c "import json; d=json.load(open(\"$last\")); assert d[\"message\"] == \"Updated\" and \"channel_empty\" not in d, d"'
+touch "$t/sudo-ok"
+out=$(FAKE_UPDATE_RC=6 python3 -I "$U" -y </dev/null 2>&1); rc=$?
+ok "Omarchy's update stopping with exit 6 later is a failure, not an empty channel" '[[ $rc == 6 ]] && python3 -c "import json; d=json.load(open(\"$last\")); assert d[\"result\"] == \"failed\" and \"channel_empty\" not in d, d"'
 
 # Stand-ins on their own
 out=$(OMAMOBILE_UPDATE_DIR=$t/u bash lib/update-bin/omarchy-update-aur-pkgs)

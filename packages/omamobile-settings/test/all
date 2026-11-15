@@ -4,6 +4,7 @@ set -eu
 source_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 build_dir=${OMAMOBILE_SETTINGS_TEST_BUILD_DIR:-"$source_dir/build/tests"}
 "$source_dir/bin/build"
+"$source_dir/test/display-backend.sh"
 mkdir -p "$build_dir"
 fixture=$(mktemp -d)
 trap 'rm -rf -- "$fixture"' EXIT HUP INT TERM

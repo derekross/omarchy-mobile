@@ -58,7 +58,8 @@ S5K3J1 is, through the settings object its driver holds: --sensor s5kgn8
 Without --sensor it writes all four sensors' files and the PHY file into
 DIR; install them in /usr/lib/firmware/omamobile/camera/.
 
-Needs python3 with the unicorn and pyelftools packages, for example in a
+Needs python3 with the unicorn and pyelftools packages (tested with Unicorn
+2.1.4; its ARM64 cpr_read/cpr_write APIs are required), for example in a
 virtual environment:
   python3 -m venv ~/.cache/omamobile-venv
   ~/.cache/omamobile-venv/bin/pip install unicorn pyelftools
@@ -105,9 +106,13 @@ def die(msg):
 
 class Emu:
     def __init__(self, path):
+        self.uc = unicorn.Uc(unicorn.UC_ARCH_ARM64, unicorn.UC_MODE_ARM)
+        if not all(callable(getattr(self.uc, name, None))
+                   for name in ("cpr_read", "cpr_write")):
+            die("Unicorn bindings lack ARM64 cpr_read/cpr_write; upgrade unicorn "
+                "(tested with 2.1.4; see --help)")
         self.data = open(path, "rb").read()
         self.elf = ELFFile(open(path, "rb"))
-        self.uc = unicorn.Uc(unicorn.UC_ARCH_ARM64, unicorn.UC_MODE_ARM)
         # The library uses Armv8.3 RCpc loads (LDAPR) on its static-guard
         # bytes; the default CPU model faults on them.
         self.uc.ctl_set_cpu_model(A.UC_CPU_ARM64_MAX)
@@ -1748,10 +1753,15 @@ def build_phy_zumapro(emu, ctle=None):
     return sects
 
 
+def dq(path):
+    """A host path in debugfs's command syntax, which splits at blanks."""
+    return '"' + path.replace('"', '""') + '"'
+
+
 def from_apex_settings(apex, tmp):
     out = os.path.join(tmp, "csis_phy_link_phy_settings.binarypb")
     subprocess.run(["debugfs", "-R",
-                    f"dump /etc/camera/csis_phy_link_phy_settings.binarypb {out}",
+                    f"dump /etc/camera/csis_phy_link_phy_settings.binarypb {dq(out)}",
                     os.path.join(tmp, "apex_payload.img")], check=True,
                    stderr=subprocess.DEVNULL)
     if not os.path.exists(out) or not os.path.getsize(out):
@@ -1762,7 +1772,7 @@ def from_apex_settings(apex, tmp):
 def from_apex(apex, tmp):
     subprocess.run(["unzip", "-q", "-o", apex, "apex_payload.img", "-d", tmp], check=True)
     out = os.path.join(tmp, "liblyric_hwl.so")
-    subprocess.run(["debugfs", "-R", f"dump /lib64/liblyric_hwl.so {out}",
+    subprocess.run(["debugfs", "-R", f"dump /lib64/liblyric_hwl.so {dq(out)}",
                     os.path.join(tmp, "apex_payload.img")], check=True,
                    stderr=subprocess.DEVNULL)
     if not os.path.getsize(out):

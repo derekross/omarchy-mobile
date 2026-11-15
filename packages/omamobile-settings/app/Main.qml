@@ -24,10 +24,11 @@ ApplicationWindow {
         if (backend.searching) search.clear()
         backend.back()
     }
+    readonly property var customPages: ({ display: "DisplayPage.qml" })
+    readonly property string customSource: backend.searching ? "" : (customPages[backend.page] || "")
     readonly property bool showingAbout: backend.page === "about" && !backend.searching
     Connections {
         target: backend
-        function onCloseRequested() { window.close() }
         function onRaiseRequested() { window.show(); window.raise(); window.requestActivate() }
         function onPageChanged() { search.text = ""; search.focus = false; Qt.inputMethod.hide(); if (backend.page === "about") deviceInfo.refresh() }
     }
@@ -53,16 +54,17 @@ ApplicationWindow {
             id: search
             objectName: "settingsSearch"
             Layout.fillWidth: true; Layout.preferredHeight: 52
-            visible: !window.showingAbout
+            visible: !window.showingAbout && window.customSource === ""
             placeholderText: qsTr("Search settings")
             color: backend.foreground; placeholderTextColor: backend.muted
             onTextEdited: backend.search(text)
             background: Rectangle { radius: Math.min(backend.radius, width / 2, height / 2); color: SettingsStyle.fill("normal") }
         }
         AboutPage { visible: window.showingAbout; Layout.fillWidth: true; Layout.fillHeight: true; controller: deviceInfo; colors: backend }
+        Loader { id: pageLoader; active: window.customSource !== ""; source: window.customSource; visible: active; Layout.fillWidth: true; Layout.fillHeight: true }
         ListView {
             id: list
-            visible: !window.showingAbout
+            visible: !window.showingAbout && window.customSource === ""
             Layout.fillWidth: true; Layout.fillHeight: true
             clip: true; model: backend.rows
             delegate: SettingsItemDelegate {

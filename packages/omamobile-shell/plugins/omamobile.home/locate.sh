@@ -28,7 +28,10 @@ if [[ ! -x $wai ]]; then
   exit 2
 fi
 # -a 4: city accuracy; -t: give up (and exit) after this many seconds.
-out=$(timeout -k 2 20 "$wai" -a 4 -t 12 2>&1)
+# Without GTK_USE_PORTAL: the session sets it to 1 for the touch file chooser
+# (20-omamobile-osk.conf), and GeoClue's client library then asks the desktop
+# portal instead of GeoClue, which answers "Location services disabled".
+out=$(env -u GTK_USE_PORTAL timeout -k 2 20 "$wai" -a 4 -t 12 2>&1)
 lat=$(sed -n 's/^Latitude: *\(-\{0,1\}[0-9][0-9.]*\).*/\1/p' <<<"$out" | tail -n 1)
 lon=$(sed -n 's/^Longitude: *\(-\{0,1\}[0-9][0-9.]*\).*/\1/p' <<<"$out" | tail -n 1)
 acc=$(sed -n 's/^Accuracy: *\([0-9][0-9.]*\).*/\1/p' <<<"$out" | tail -n 1)

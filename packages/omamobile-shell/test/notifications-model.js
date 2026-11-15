@@ -134,6 +134,68 @@ test("swipeOutcome: past 35% or a flick goes that way, else back", () => {
   assert.strictEqual(M.swipeOutcome(300, 0, 0, fling), 0, "no width yet")
 })
 
+// Omarchy 4.5's files (shell/plugins/notifications/Store.js): live.json and
+// history.json, each one line, a JSON array of rows as Store.persistable and
+// Store.closedEntry write them. These rows were made by 4.5.0-3's own
+// Store.js (snapshot, persistable, closedEntry, serialise); a verification
+// code is stored redacted.
+const row45 = (o) => Object.assign({
+  key: "nmgx1a2b3", originalId: 3, senderPid: 0, execArgv: "[\"omarchy-launch-wifi\"]", execActions: "", glyph: "",
+  app: "Signal", appIcon: "signal-desktop", summary: "Ana", body: "See you <b>soon</b> &amp; bye", rawBody: "",
+  source: "Signal", groupKey: "app:signal", urgency: 1, expireTimeout: 0, duration: 0, ts: 1760000000.123
+}, o)
+const closed45 = (o) => Object.assign(row45(o), { closed_ts: 1760000060.5, closed_reason: "dismissed" }, o)
+const store45 = (live, history) => JSON.stringify(live) + "\n" + JSON.stringify(history) + "\n"
+
+test("parse reads Omarchy 4.5's live.json and history.json, newest first", () => {
+  const raw = store45([row45({ key: "nlive", summary: "on screen", ts: 1760000300.5 })],
+                      [closed45({ key: "nnew", summary: "new", ts: 1760000200 }), closed45({ key: "nold", summary: "old", ts: 1760000100 }),
+                       closed45({ key: "ncode", originalId: 9, app: "", appIcon: "", execArgv: "", source: "", groupKey: "",
+                                  summary: "Verification notification", body: "[redacted]", ts: 1760000150, closed_reason: "expired" })])
+  const rows = M.parse(raw)
+  assert.deepStrictEqual(rows.map((r) => r.summary), ["on screen", "new", "Verification notification", "old"])
+  assert.deepStrictEqual(rows.map((r) => r.key), ["nlive", "nnew", "ncode", "nold"])
+  assert.strictEqual(rows[0].timestamp, 1760000300500, "ts in seconds, as milliseconds")
+  const [one] = M.parse(store45([], [closed45({})]))
+  assert.deepStrictEqual(one, { key: "nmgx1a2b3", file: "nmgx1a2b3", app: "Signal", summary: "Ana", body: "See you soon & bye",
+                                glyph: "", execArgv: "[\"omarchy-launch-wifi\"]", urgency: 1, timestamp: 1760000000123 })
+  assert.deepStrictEqual(M.tapArgv(one), ["omarchy-launch-wifi"])
+})
+
+test("on 4.5 each row carries its key, which forget takes", () => {
+  const [row] = M.parse(store45([], [closed45({ key: "nabc_1-Z" })]))
+  assert.strictEqual(row.file, "nabc_1-Z")
+  assert.match(row.file, /^[A-Za-z0-9_-]{1,120}$/, "the shape 4.5's Store.KEY accepts")
+})
+
+test("4.5: a row in both files shows once; rows without a usable key or text are skipped", () => {
+  const raw = store45([row45({ key: "nsame", summary: "live copy" })],
+                      [closed45({ key: "nsame", summary: "history copy" }), closed45({ key: "bad key" }), closed45({ key: "" }),
+                       closed45({ key: "x".repeat(121) }), closed45({ key: "nempty", summary: "", body: "" }), 7, null, [1], "n"])
+  const rows = M.parse(raw)
+  assert.deepStrictEqual(rows.map((r) => r.summary), ["live copy"])
+  assert.deepStrictEqual(M.parse("\n\n"), [], "4.5's files as its service creates them: empty")
+  assert.deepStrictEqual(M.parse("[]\n[]\n"), [])
+  assert.strictEqual(M.parse(store45([], [closed45({ ts: "soon" })]))[0].timestamp, 0, "no usable ts: no age")
+})
+
+test("4.5: shown hides a swiped row until it is gone, and lists every key for Clear all", () => {
+  const history = Array.from({ length: 12 }, (_, i) => closed45({ key: "n" + i, ts: 1760000000 + i }))
+  let view = M.shown(store45([], history), { n11: 900 }, 1000)
+  assert.strictEqual(view.entries.length, M.LIMIT)
+  assert.strictEqual(view.entries[0].key, "n10")
+  assert.deepStrictEqual(view.hidden, { n11: 900 })
+  assert.strictEqual(view.files.length, 12, "every row read, not only the ten shown")
+  view = M.shown(store45([], history.slice(0, 11)), view.hidden, 1000)
+  assert.deepStrictEqual(view.hidden, {})
+})
+
+test("4.0: shown lists every file name for Clear all too", () => {
+  const raw = Array.from({ length: 11 }, (_, i) => file({ timestamp: 100 + i, id: i })).join("\n")
+  assert.strictEqual(M.shown(raw, {}, 0).files.length, 11)
+  assert.strictEqual(M.shown(raw, {}, 0).files[0], "110-10.json")
+})
+
 let failed = 0
 for (const [name, fn] of tests) {
   try {

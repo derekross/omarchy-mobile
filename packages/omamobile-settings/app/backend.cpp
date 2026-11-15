@@ -43,7 +43,10 @@ QString Backend::title() const {
 }
 bool Backend::navigate(const QString &page) {
     if (!m_catalog.contains(page)) return false;
-    if (page != m_page) m_history.append(m_page);
+    // The root is the top level however it was reached (a launch from the
+    // home screen while another page is open): nothing is behind it.
+    if (page == "root") m_history.clear();
+    else if (page != m_page) m_history.append(m_page);
     m_page = page;
     m_query.clear();
     emit pageChanged();
@@ -61,7 +64,14 @@ void Backend::search(const QString &query) {
 }
 void Backend::back() {
     if (searching()) { search({}); return; }
-    if (m_history.isEmpty()) { emit closeRequested(); return; }
+    if (m_history.isEmpty()) {
+        // The top level: Back is phone-wide, so it shows the home screen, as
+        // on Android, and Settings stays open in recents. The shell's
+        // command does it; without the shell nothing happens.
+        emit homeRequested();
+        if (!m_homeCommand.isEmpty()) QProcess::startDetached(m_homeCommand.first(), m_homeCommand.mid(1));
+        return;
+    }
     m_page = m_history.takeLast();
     emit pageChanged();
     rebuild();

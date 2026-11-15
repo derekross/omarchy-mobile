@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: MIT
+# Add the [omamobile] repository to pacman.conf, before [omarchy] so its
+# builds (e.g. Mesa with Mali-G710 support) win. Added once; never removed
+# automatically, so a user's edits stay.
+add_repository() {
+  local conf=/etc/pacman.conf
+  grep -q '^\[omamobile\]' "$conf" && return
+  local entry='[omamobile]\nInclude = /etc/pacman.d/omamobile-mirrorlist\n'
+  if grep -q '^\[omarchy\]' "$conf"; then
+    sed -i "0,/^\[omarchy\]/s//${entry//\//\\/}\n[omarchy]/" "$conf"
+  elif grep -q '^\[core\]' "$conf"; then
+    sed -i "0,/^\[core\]/s//${entry//\//\\/}\n[core]/" "$conf"
+  else
+    printf '\n[omamobile]\nInclude = /etc/pacman.d/omamobile-mirrorlist\n' >>"$conf"
+  fi
+}
+
+# --- the [omamobile] channel (identical in every device package) ---
+# The mirrorlist names the channel (stable, development or local). It is a
+# backup= file, so pacman keeps a changed copy; an unchanged one, though, is
+# replaced by the new default. Phones from before 2026-11-01 read the
+# repository on the phone (file:///var/lib/omamobile/repo, filled by
+# tools/repo-push), unchanged, and would silently move to stable: such a phone
+# keeps reading its own repository, and is told how to switch.
+OMAMOBILE_MIRRORLIST=/etc/pacman.d/omamobile-mirrorlist
+OMAMOBILE_LOCAL_MARK=/var/lib/omamobile/.mirrorlist-was-local
+OMAMOBILE_LOCAL_SERVER='Server = file:///var/lib/omamobile/repo/$arch'
+
+remember_local_channel() {
+  [[ -f $OMAMOBILE_MIRRORLIST ]] || return 0
+  if grep -qxF "$OMAMOBILE_LOCAL_SERVER" "$OMAMOBILE_MIRRORLIST"; then
+    mkdir -p "${OMAMOBILE_LOCAL_MARK%/*}" && : > "$OMAMOBILE_LOCAL_MARK"
+  fi
+}
+
+keep_local_channel() {
+  [[ -e $OMAMOBILE_LOCAL_MARK ]] || return 0
+  rm -f "$OMAMOBILE_LOCAL_MARK"
+  [[ -f $OMAMOBILE_MIRRORLIST ]] || return 0
+  grep -qxF "$OMAMOBILE_LOCAL_SERVER" "$OMAMOBILE_MIRRORLIST" && return 0
+  # Comment out every Server line, then turn the local one back on
+  sed -i -E 's|^([[:space:]]*Server[[:space:]]*=)|#\1|' "$OMAMOBILE_MIRRORLIST"
+  sed -i 's|^#Server = file:///var/lib/omamobile/repo/\$arch$|Server = file:///var/lib/omamobile/repo/$arch|' "$OMAMOBILE_MIRRORLIST"
+  grep -qxF "$OMAMOBILE_LOCAL_SERVER" "$OMAMOBILE_MIRRORLIST" ||
+    printf '%s\n' "$OMAMOBILE_LOCAL_SERVER" >>"$OMAMOBILE_MIRRORLIST"
+  echo "==> [omamobile] stays on this phone's own repository (/var/lib/omamobile/repo)."
+  echo "    Installed phones follow the stable channel at pkgs.omamobile.org; switch with"
+  echo "    sudo omamobile-update channel stable   (or development)"
+}
+
+pre_upgrade() {
+  remember_local_channel
+}
+
+post_install() {
+  add_repository
+}
+
+post_upgrade() {
+  add_repository
+  keep_local_channel
+}

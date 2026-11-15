@@ -67,7 +67,8 @@ rc=0; LOCK_STATE=locking run 600 || rc=$?
 [[ ! -s $t/calls ]] || fail "the display stays on while the lock isn't secure"
 pass "a lock that never secures: the display is not turned off behind it"
 
-start=$(date +%s%3N)
+ms() { local t; t=$(date +%s%N); echo $((t / 1000000)); }   # not %3N: uutils' date drops leading zeros first
+start=$(ms)
 DISPLAY_HANG=1 run 1500 || fail "a hung display call still exits 0"
-((($(date +%s%3N) - start) < 2500)) || fail "a hung display call held the suspend past the budget"
+((($(ms) - start) < 2500)) || fail "a hung display call held the suspend past the budget"
 pass "a hung display call is cut off within the lock's budget"

@@ -616,11 +616,16 @@ Item {
   // The covering surfaces mapped now, from Hyprland's openlayer and
   // closelayer events ({ namespace: count }).
   property var coveringLayers: ({})
+  // Anything mapped over the home screen that isn't part of the screen
+  // (HomeModel.overAfter): while there is, Back isn't the home screen's.
+  property var layersOver: ({})
   Connections {
     target: Hyprland
     function onRawEvent(event) {
-      if (event && (event.name === "openlayer" || event.name === "closelayer"))
+      if (event && (event.name === "openlayer" || event.name === "closelayer")) {
         root.coveringLayers = HomeModel.layersAfter(root.coveringLayers, event.name, event.data)
+        root.layersOver = HomeModel.overAfter(root.layersOver, event.name, event.data)
+      }
     }
   }
   // The app drawer covers it once fully open (its surface is always mapped,
@@ -940,6 +945,33 @@ Item {
     if (pager) pager.goTo(i, animate)
   }
 
+  // Back (omamobile.back's BackLink.js). Most of the home screen never takes
+  // the keyboard, so Escape reached nothing: edit mode and the Widgets,
+  // Pages and OWL sheets had no Back, and neither had a page beside the home
+  // page. One level at a time (HomeModel.backLevel): a sheet goes back or
+  // closes (HomeSheets.back: a widget's unsaved settings are asked about
+  // first), then edit mode ends, then the pages go to the home page, as on
+  // Android. Only while the home screen shows with nothing open over it
+  // (HomeModel.homeTakesBack): under an app, the drawer, quick settings or
+  // any other sheet, Back is theirs.
+  readonly property string backLevel: HomeModel.backLevel(sheet, editing, currentPage, layout.home)
+  function backOneLevel() {
+    switch (backLevel) {
+    case "sheet": return homeSheets.back()
+    case "edit": setEditing(false); return true
+    case "page": goToPage(layout.home, true); return true
+    }
+    return false
+  }
+  Loader {
+    source: Qt.resolvedUrl("../omamobile.back/BackLinkClient.qml")
+    onLoaded: {
+      item.name = "home screen"
+      item.handler = function() { return root.backOneLevel() }
+      item.active = Qt.binding(function() { return HomeModel.homeTakesBack(root.homeShown, root.backLevel, root.layersOver) })
+    }
+  }
+
   function setEditing(on) {
     editing = !!on && !landscape
     if (!editing) { sheet = ""; settingsId = "" }
@@ -1166,10 +1198,8 @@ Item {
       focus: true
       onWidthChanged: root.owlScreenWidth = width
       onHeightChanged: root.owlScreenHeight = height
-      Keys.onEscapePressed: {
-        if (root.sheet) root.sheet = ""
-        else root.setEditing(false)
-      }
+      // A keyboard's Escape goes the way Back does (backOneLevel).
+      Keys.onEscapePressed: root.backOneLevel()
 
       // ---------- pages
       // HomePager: the ListView's drag (1:1 under the finger), and a short
@@ -1376,6 +1406,7 @@ Item {
 
       // ---------- sheets
       HomeSheets {
+        id: homeSheets
         z: 100
         anchors.fill: parent
         anchors.bottomMargin: root.dockInset
