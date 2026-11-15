@@ -3994,6 +3994,45 @@ discarding the already-read first number at the five-second deadline.
 `tools/build-packages --local cheetah --force packages/omamobile-modem-sit`
 built and signed `omamobile-modem-sit 0.3.41-1` for aarch64. All 22
 packaged Python and CLI source files matched the rebased query commit
-`e0ccd81`. Installation and a query on that build remain pending an
-attended, owner-approved reboot; the older result above is not evidence
-for the new build.
+`e0ccd81`; subsequent commits record validation only.
+
+**Rebased hardware validation, 2026-11-15:** on the contributor's Pixel
+7 Pro, kernel `7.3.0-rc6-omamobile-gda171eae4cb7`, the six NV partitions
+matched the off-repo backup. The installed custom package and private
+configuration were preserved for rollback. Installing the rebased build
+preserved the running sitd PID and configuration; its 22 installed
+Python/CLI sources matched the built artifact. After the owner's approved
+clean systemd reboot, the same kernel booted, configuration unchanged,
+and the modem registered with IMS voice/SMS and cellular data available.
+
+The package query and status-only result of the single
+`omamobile-sit own-number --json` invocation were:
+
+```text
+pacman -Q omamobile-modem-sit
+omamobile-modem-sit 0.3.41-1
+own-number status: available
+```
+
+The CLI invocation completed in 0.178 s. The number is not recorded here
+and was absent from public state and the daemon journal. Modem, sitd,
+cellular-data and ModemManager services stayed active; LTE registration,
+IMS voice/SMS and data status were unchanged. Three of three pings bound
+to the cellular interface passed. No UFS error-handler pass, I/O error,
+oops, panic, failed BME access or watchdog-stop error appeared. The
+runtime watchdog stayed at `t 0`; this run made no watchdog change.
+`tools/phone-smoke` passed: zero new kernel errors (33 known startup
+messages); camera enumeration was skipped because libcamera tools were
+absent. Other SIMs/devices, extension-dependent numbers, slow SIMs and
+incoming calls during a query remain untested.
+
+After the test, the saved custom `omamobile-modem-sit 0.3.37.4-1` was
+restored without restarting the running daemon, then activated by the
+owner's second approved clean reboot. Its 26 installed Python/CLI source
+files and the private configuration matched the saved originals. The
+same kernel booted; LTE registration, IMS voice/SMS, data and all four
+services returned, and three of three cellular-bound pings passed. The
+six NV partitions still matched the backup. The restored boot passed
+smoke's required checks; its warning row flagged startup diagnostics.
+Comparing error-priority journals with the pretest boot found every
+observed diagnostic family already present, with equal or lower counts.
