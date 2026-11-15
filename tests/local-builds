@@ -48,18 +48,21 @@ echo "$signer:4:" > "$kr/omamobile-trusted"
 
 srv=$t/srv/development/aarch64 && mkdir -p "$srv"
 sign() { GNUPGHOME=$t/$1 gpg --batch --yes --quiet --detach-sign -o "$2.sig" "$2"; }
-make_index() {  # make_index SIGNER: an index of foo whose checksum matches the file
-  local sum
-  sum=$(sha256sum < "$srv/foo-1-1-any.pkg.tar.zst" | cut -d' ' -f1)
-  rm -rf "$t/db" && mkdir -p "$t/db/foo-1-1"
-  printf '%%FILENAME%%\nfoo-1-1-any.pkg.tar.zst\n\n%%SHA256SUM%%\n%s\n' "$sum" > "$t/db/foo-1-1/desc"
-  tar -czf "$srv/omamobile.db" -C "$t/db" foo-1-1
-  sign "$1" "$srv/omamobile.db"
+make_index() {  # make_index KEY [FILE...]: an index of FILE (foo's by default) whose checksums match the files
+  local key=$1 f sum entry; shift
+  rm -rf "$t/db" && mkdir -p "$t/db"
+  for f in "${@:-foo-1-1-any.pkg.tar.zst}"; do
+    sum=$(sha256sum < "$srv/$f" | cut -d' ' -f1)
+    entry=$t/db/${f%-any.pkg.tar.*} && mkdir -p "$entry"
+    printf '%%FILENAME%%\n%s\n\n%%SHA256SUM%%\n%s\n' "$f" "$sum" > "$entry/desc"
+  done
+  tar -czf "$srv/omamobile.db" -C "$t/db" .
+  sign "$key" "$srv/omamobile.db"
 }
 echo "package bytes" > "$srv/foo-1-1-any.pkg.tar.zst"
 sign signer "$srv/foo-1-1-any.pkg.tar.zst"
 make_index signer
-fetch() { (cd "$R" && OMAMOBILE_PKGS_URL=file://$t/srv tools/fetch-published "$t/got") > "$t/log" 2>&1; }
+fetch() { (cd "$R" && env "$@" OMAMOBILE_PKGS_URL=file://$t/srv tools/fetch-published "$t/got") > "$t/log" 2>&1; }
 
 fetch || { cat "$t/log"; fail "fetch-published takes a trusted index and package"; }
 [[ -f $t/got/foo-1-1-any.pkg.tar.zst && -f $t/got/foo-1-1-any.pkg.tar.zst.sig ]] || fail "the package comes with its signature"
@@ -86,6 +89,77 @@ make_index signer
 echo "$signer revoked" > "$kr/omamobile-revoked"
 if fetch; then fail "refuses a revoked key"; fi
 pass "fetch-published refuses a revoked key"
+
+# The published repository moves on: foo 0.2.9 becomes 0.2.10 and bar goes.
+# DIR is then the published set again, so --import can't take the older foo
+# beside the newer one; a fetch that stops removes nothing, and only package
+# files directly in DIR go, with their .sig
+: > "$kr/omamobile-revoked"
+for f in foo-0.2.9-1-any.pkg.tar.zst foo-0.2.10-1-any.pkg.tar.zst bar-1-1-any.pkg.tar.xz baz-1-1-any.pkg.tar.zst; do
+  echo "$f" > "$srv/$f" && sign signer "$srv/$f"
+done
+make_index signer foo-0.2.9-1-any.pkg.tar.zst bar-1-1-any.pkg.tar.xz
+rm -rf "$t/got"
+fetch || { cat "$t/log"; fail "fetch-published takes foo 0.2.9 and bar"; }
+mkdir -p "$t/got/old.pkg.tar.zst" "$t/got/keep"
+echo "notes" > "$t/got/NOTES.txt"
+echo "by hand" > "$t/got/*.pkg.tar.zst"
+cp "$t/got/foo-0.2.9-1-any.pkg.tar.zst" "$t/got/keep/"
+listing() { (cd "$t/got" && find . -mindepth 1 | LC_ALL=C sort); }
+before=$(listing)
+tar -czf "$srv/omamobile.db" -T /dev/null && sign signer "$srv/omamobile.db"
+if fetch; then fail "refuses an empty index"; fi
+grep -q 'the index lists no package' "$t/log" || { cat "$t/log"; fail "says the index lists no package"; }
+[[ $(listing) == "$before" ]] || fail "an empty index removes nothing"
+# bash takes nullglob from an exported BASHOPTS, and the empty index's glob
+# then gives no entry at all rather than one that can't be read
+if fetch BASHOPTS=nullglob; then fail "refuses an empty index with nullglob inherited"; fi
+grep -q 'the index lists no package' "$t/log" || { cat "$t/log"; fail "says the index lists no package with nullglob inherited"; }
+[[ $(listing) == "$before" ]] || fail "an empty index removes nothing with nullglob inherited"
+make_index signer foo-0.2.10-1-any.pkg.tar.zst
+sign other "$srv/foo-0.2.10-1-any.pkg.tar.zst"
+if fetch; then fail "refuses foo 0.2.10 signed by an untrusted key"; fi
+[[ $(LC_ALL=C comm -23 <(echo "$before") <(listing)) == "" ]] || fail "a fetch that stops removes nothing"
+sign signer "$srv/foo-0.2.10-1-any.pkg.tar.zst"
+fetch || { cat "$t/log"; fail "fetch-published takes foo 0.2.10"; }
+[[ $(listing) == "$(printf '%s\n' ./NOTES.txt ./foo-0.2.10-1-any.pkg.tar.zst ./foo-0.2.10-1-any.pkg.tar.zst.sig \
+    ./keep ./keep/foo-0.2.9-1-any.pkg.tar.zst ./old.pkg.tar.zst | LC_ALL=C sort)" ]] \
+  || { cat "$t/log"; listing; fail "DIR keeps only what the index lists, and what isn't a package file in DIR"; }
+for f in foo-0.2.9-1-any.pkg.tar.zst bar-1-1-any.pkg.tar.xz '*.pkg.tar.zst'; do
+  grep -qxF "    gone $f" "$t/log" || { cat "$t/log"; fail "names $f as removed"; }
+done
+pass "fetch-published removes, and names, the packages the index no longer lists, and nothing else"
+
+# Three delisted entries that a looser cleanup gets wrong: a file named as
+# two listed names joined by a space (a name is matched exactly, so it goes);
+# a package-named symlink (it goes as the file would, since build-packages
+# --import would take it, but only the link: its target outside DIR is never
+# touched); a package whose .sig is a directory (the package goes, the
+# directory stays, as sub-directories do, and the run ends as usual). The run
+# inherits glob options, and ends as it would without them: DIR holds no
+# .xz (failglob would stop there), and a hidden and an upper-case name that
+# dotglob or nocaseglob would match stay
+make_index signer baz-1-1-any.pkg.tar.zst foo-0.2.10-1-any.pkg.tar.zst
+joined="baz-1-1-any.pkg.tar.zst foo-0.2.10-1-any.pkg.tar.zst"
+echo "older foo" > "$t/got/$joined"
+echo "by hand" > "$t/got/.hidden-1-1-any.pkg.tar.zst" && echo "by hand" > "$t/got/UPPER-1-1-ANY.PKG.TAR.ZST"
+mkdir -p "$t/outside" && echo "linked bytes" > "$t/outside/linked-1-1-any.pkg.tar.zst"
+target_sum=$(sha256sum < "$t/outside/linked-1-1-any.pkg.tar.zst")
+ln -s "$t/outside/linked-1-1-any.pkg.tar.zst" "$t/got/linked-1-1-any.pkg.tar.zst"
+echo "stale" > "$t/got/stale-1-1-any.pkg.tar.zst" && mkdir "$t/got/stale-1-1-any.pkg.tar.zst.sig"
+fetch BASHOPTS=nullglob:failglob:dotglob:nocaseglob \
+  || { cat "$t/log"; listing; fail "fetch-published finishes with a joined name, a symlink and a .sig directory in DIR"; }
+[[ $(listing) == "$(printf '%s\n' ./.hidden-1-1-any.pkg.tar.zst ./NOTES.txt ./UPPER-1-1-ANY.PKG.TAR.ZST \
+    ./baz-1-1-any.pkg.tar.zst ./baz-1-1-any.pkg.tar.zst.sig \
+    ./foo-0.2.10-1-any.pkg.tar.zst ./foo-0.2.10-1-any.pkg.tar.zst.sig ./keep ./keep/foo-0.2.9-1-any.pkg.tar.zst \
+    ./old.pkg.tar.zst ./stale-1-1-any.pkg.tar.zst.sig | LC_ALL=C sort)" ]] \
+  || { cat "$t/log"; listing; fail "removes the joined name, the symlink and the package, and keeps the .sig directory, a hidden and an upper-case name"; }
+for f in "$joined" linked-1-1-any.pkg.tar.zst stale-1-1-any.pkg.tar.zst; do
+  grep -qxF "    gone $f" "$t/log" || { cat "$t/log"; fail "names $f as removed"; }
+done
+[[ $(sha256sum < "$t/outside/linked-1-1-any.pkg.tar.zst") == "$target_sum" ]] \
+  || fail "leaves the symlink's target outside DIR byte for byte"
+pass "fetch-published matches names exactly, removes a symlink but never its target, and keeps a .sig directory, under inherited glob options"
 
 # --- build-packages and build-rootfs --local ---
 mv "$R/keys/panther" "$t/panther-key"
