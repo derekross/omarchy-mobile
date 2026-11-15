@@ -1,15 +1,22 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Revised Bluejay daily-carry baseline
 
-Status (2026-11-14): offline implementation in branch
-`bringup/bluejay-daily-baseline-20261114`, based on upstream `54a6565`.
-No new startup files have run on the handset. After USB/SSH became unavailable,
-the owner reached Fastboot. Fresh serial-pinned Fastboot verified actual B1
-and unchanged A flags. Historical B recovery completed once, independently
-verified natural B3, and sent one current-B boot. The historical desktop is now
-identity-verified at B2 with full B/protected hashes, 49 guards, the owned
-watchdog and six required smoke checks passing. The owner confirmed unlock,
-app opening and scrolling on this recovered historical boot.
+Status (2026-11-14, evening): corrected attended startup passed two fresh
+automatic boots on signed kernel `720a495233734e4328a09c33c095d72a8291e1c4`,
+release `7.3.0-rc6-omamobile-bluejay-review-20261111`. The first boot was B2;
+one normal reboot returned at B1. Both boots passed the software checks below,
+and the owner confirmed interaction and both battery percentage displays on
+each. Three scoped station reconnects and the original ten-minute traffic
+and battery window passed; its host dispatch failure is retained.
+The implementation is in `bringup/bluejay-daily-baseline-20261114`, based on
+upstream `54a6565`. This is an attended baseline, not daily-driver readiness.
+
+Current B is unsuccessful with one retry. Send no further ordinary reboot or
+push at this boundary. A new, frozen, unconsumed historical B recovery is
+available privately for owner-attended Fastboot, with fresh serial/A checks,
+independent natural B3 verification and a separate one-use boot command.
+The earlier historical recovery and all consumed qualification launchers
+remain evidence and must not be replayed.
 
 ## Scope and facts
 
@@ -17,17 +24,19 @@ app opening and scrolling on this recovered historical boot.
 `720a495233734e4328a09c33c095d72a8291e1c4`, release
 `7.3.0-rc6-omamobile-bluejay-review-20261111`, once with GPU, ALIX touch,
 restricted-DMA station Wi-Fi and provisional gauge monitoring. Its last
-recorded slot B state was unsuccessful with one retry. Physical interaction
-and battery-widget observations remain pending.
+recorded slot B state was unsuccessful with one retry. Its physical interaction
+and battery-widget observations were pending at that time; the two fresh
+corrected boots above have their own owner confirmations.
 
 [V] The exact historical recovery sources and all three complete B images
 passed offline validation again on November 14; six recovery-control tests
-passed. That recovery is now consumed and cannot be replayed. Prepare a new
-named historical recovery before the revised qualification boots.
+passed. That recovery was consumed and cannot be replayed. A new named
+historical recovery was prepared before the revised qualification boots and
+remains unconsumed.
 
 [V] Historical helpers target a different kernel and retain their pins. The
-current upstream bring-up directory still says revised startup has not run.
-This work adds a separate opt-in path; no device package or historical helper
+upstream bring-up directory at the base revision says revised startup has not
+run. This work adds a separate opt-in path; no device package or historical helper
 is changed. Calls, texts, modem/NV, native display and sleep are deferred.
 
 ## Design
@@ -44,9 +53,11 @@ later boots. No startup failure initiates another reboot at the retry boundary.
 The candidate adds separate opt-in units and a release-conditional late user
 UWSM environment override. Installed UWSM 0.27.2 source confirms that user
 `env.d` follows system files. All 13 installed revised modules match the exact
-manifest hashes and ABI. Twelve offline startup-control tests and eight new
+manifest hashes and ABI. Fourteen offline startup-control tests and eight new
 qualification-writer tests pass. The bounded unit graph validates with a local
-stub for the phone-only SDDM executable. No live revised result follows.
+stub for the phone-only SDDM executable. Six second-boot controls and nine
+station-network controls also pass. The complete repository suite passed on
+the corrected implementation before the live boots.
 
 Accept only ABL's observed console=tty0 to console=null replacement; require
 every other expected boot argument. Copy complete current-boot kernel journals
@@ -108,7 +119,8 @@ startup is a separate gate and must not be claimed from these runs.
 7. **Bounded station checks / moderate risk.** On a qualified revised boot,
    perform three disconnect/reconnect cycles of only the phone's recorded
    station profile, with a 30-second association/TLS deadline each and fresh
-   USB SSH after each. Arm the applicable USB deadman before network changes.
+   USB SSH after each. Arm a station-profile-only reconnect deadman before
+   network changes; leave USB outside NetworkManager control.
    Then run ten minutes of station-bound verified HTTPS traffic with per-
    request deadlines, timestamps, bytes and errors retained. Require all
    three reconnects and the full traffic window without firmware/DMA/SPI/
@@ -121,15 +133,116 @@ startup is a separate gate and must not be claimed from these runs.
    need their own staged runbook, measured input/current/thermal limits and
    USB deadman. No untethered-use claim from percentage alone.
 
+## Corrected automatic startup, November 14
+
+The runtime implementation at `cde98c4` completed the root, host-acknowledgment,
+GPU, touch, PCIe, Wi-Fi, provisional-gauge and desktop units automatically on
+two fresh boots. A B-only flash with independently verified natural B3 preceded
+the first B2 boot; exactly one normal reboot produced the second B1 boot.
+Slot A flags and protected contents remained unchanged. Each boot passed:
+
+- Fresh USB mapping, strict saved SSH key, board and bootconfig identity.
+- All 49 storage guards, complete candidate B and nine protected hashes,
+  exact module bytes/ABI/root ownership, and the PID-1-owned 20-second watchdog.
+- Nine hardware GLES pixel readbacks at the qualified 151 MHz point, Panfrost
+  desktop environment and an open compositor render node.
+- Qualified ALIX touch with zero SPI errors/timeouts, restricted DMA below
+  4 GiB, managed station Wi-Fi and station-bound verified HTTPS.
+- Six required smoke checks, no failed system units or pending startup/root
+  markers, and no detected fatal/storage/GPU/SPI fault in the full boot journal.
+- Owner interaction and both home-widget/top-bar percentage displays.
+  First-boot interaction explicitly included scrolling; second-boot wording
+  confirmed unlock, swipe and app opening.
+
+Fresh host logging was proved before acknowledging root readiness on each
+boot. No manual module command substituted for the automatic stage chain.
+This does not qualify host-free startup, permanent boot-success policy, an
+update package, native panel modes, lock/wake or suspend. CPU DVFS remains held.
+The original pre-hardware refusal and its diagnosed corrections are retained
+below; that failed boot is excluded from these two passes.
+
+## Bounded station checks, November 14
+
+Three station-profile-only disconnect/reconnect cycles completed association
+and verified HTTPS in 6.56, 6.15 and 3.06 seconds, each below the 30-second
+limit. Each had its own 45-second profile-only undo timer and a separate fresh
+identity-pinned USB SSH check before that timer was stopped. The station PCI
+identity and unmanaged USB interface were checked each time. No driver unload,
+global NetworkManager reset, other-phone change or additional reboot occurred.
+
+The original phone window completed 600.000115 seconds, all 60 verified HTTPS
+downloads and exactly 62,914,560 bytes (60 MiB), at one 1 MiB request per
+ten-second period. This is periodic traffic, not saturation, roaming, sleep or
+owner carry endurance. Its host controller failed
+while waiting for a long-running systemd oneshot to finish within a 20-second
+SSH deadline. Fresh read-only SSH proved the original phone unit still running
+on the same boot with its 660-second ceiling. A new read-only observer resumed
+that existing run, recovering the full retained boot kernel journal before
+following it. No traffic run was restarted. The dispatch failure and host-log
+observation gap remain part of the result. The future controller now uses
+`systemd-run --no-block`; an isolated regression fails the original dispatch
+and passes the corrected one, preserving all finite phone bounds.
+
+Final read-only checks on the same B1 boot passed full B/protected/module
+hashes, all 49 guards, all eight startup units, compositor render-node use,
+the full boot journal and six required smoke checks. No failed unit, pending
+startup/root marker or active station undo timer remained. The original phone
+traffic unit exited successfully. The modem remained inactive.
+
+## Battery reporting and charging disposition, November 14
+
+Provisional gauge monitoring and UPower started automatically on both boots.
+The owner saw 98% in both displays on the first; both percentage displays were
+confirmed again on the second without an exact new value. The widget's first
+628-hour estimate is an observed reporting defect, not measured runtime.
+A later read-only snapshot reported 9.7218 Wh and 0.028875 W in UPower, which
+arithmetically implies about 336.7 hours. This explains how a very small
+reported rate can produce a huge estimate; it does not reproduce the exact
+earlier value or validate the underlying energy/current data. The kernel's
+`Charging` status and UPower's `Discharging` state also disagreed.
+
+Actual pack selection, gauge scaling/model accuracy, capacity, battery health,
+time estimates and charge direction remain unqualified. The saved stock data
+contains several model variants; a static model table does not identify this
+handset's pack. No model, charger or Type-C configuration was changed in this
+baseline. Monitoring success and a USB cable do not demonstrate controlled
+charging. Follow up with read-only pack/model/scaling and UPower-state analysis,
+then a separately staged charger-only trial with actual input/current/thermal
+measurements and a tested USB recovery path.
+
+All 60 provisional traffic-window samples reported 98% and 22 degC, with
+4.302031-4.305156 V. Reported current ranged from -11,875 to +10,625 microamps;
+the energy/current/model and charge-direction uncertainty prevents a drain or
+runtime claim from this tethered observation.
+
 ## Completion and remaining gates
 
-The goal remains open until the defined live tests and owner observations pass
-or are recorded as actual blockers. Preparation is not completion. Record
-successes and failures with exact source, boot IDs and durations privately;
-publish only redacted conclusions. The next milestone should address the
-largest measured blocker, likely charging/pack accuracy or native display/
-lock/wake/sleep. Reliable updates, host-free startup and long owner carry
-trials remain later gates; this baseline is not full daily-driver readiness.
+The defined attended baseline is achieved: two corrected automatic startup
+boots with owner observations, three bounded station reconnects, the original
+600-second traffic/battery window and final state verification. The initial
+pre-hardware refusal and the host dispatch failure remain part of the evidence;
+the host harness itself did not have a clean end-to-end pass. Exact private
+boot IDs, snapshots, logs and consumed-attempt records are retained outside
+the repository. No additional reboot or write is queued at B1.
+
+| Daily-carry gate | Measured disposition |
+| --- | --- |
+| Attended revised startup and one normal reboot | Passed on two fresh boots |
+| Owner interaction and both percentage displays | Confirmed on both boots |
+| Three station reconnects and ten-minute periodic traffic | Passed; retained host-controller failure and recovered-log caveat above |
+| Exact-build provisional gauge startup | Passed; values are uncalibrated |
+| Pack/model/scaling, health, runtime and charge direction | Unqualified; implausible time and state disagreement observed |
+| Controlled charging and Type-C/USB handover | Unqualified; no charger/Type-C trial performed |
+| Permanent boot-success, host-free startup and update packaging | Open; current B1 forbids another ordinary reboot or push |
+| Native display, lock/wake, sleep and idle drain | Open; no claim from desktop or traffic checks |
+| Sustained owner carry | Open; baseline is not full daily-driver readiness |
+
+Next proposed goal: establish trustworthy Bluejay battery reporting by
+identifying the actual pack and validating gauge scaling/model selection,
+reconciling UPower state and time estimates, then qualifying conservative
+charger-only tethered behavior under a separate measured runbook. Begin
+read-only and resolve the B1 recovery boundary before any new boot or hardware
+change. Calls, texts and modem work remain deferred.
 
 ## Recovery observations, November 14
 
@@ -206,6 +319,7 @@ only that fresh boot's root readiness was acknowledged. No driver or service
 was started and no reboot was sent. This permits a future guarded Arch boot;
 it does not turn the failed startup into a pass.
 
-Prepare a new qualification ledger and two fresh automatic startup boots with
-this exact correction. The original consumed writer/observer remain evidence;
-never rerun them. The independent historical recovery remains unconsumed.
+At that point a new qualification ledger and two fresh automatic startup boots
+were required with this exact correction. They subsequently passed as recorded
+above. The original consumed writer/observer remain evidence; never rerun them.
+The independent historical recovery remains unconsumed.
