@@ -3,6 +3,19 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-777. A device that runs vendor firmware on untrusted input, enabled with
+  its IOMMU in bypass, is a security decision for the maintainer, and stock's
+  device tree says what confines it.** #250's MFC parses browser video with
+  Google's closed firmware and DMA to all RAM below 4 GiB; stock's
+  `gs201-mfc.dtsi` puts two System MMUs and `samsung,tzmp` in front of it, and
+  `gs201-s2mpu.dtsi` two S2MPUs. The maintainer's decision (2026-11-15): such a
+  node stays `disabled`, and an omarchy-mobile overlay turns it on, until the
+  IOMMU is described. *Check:* for any new DMA master a board enables, grep
+  Google's SoC dtsi for its `iommus`, `s2mpu` and `tzmp` lines, say what
+  confines it in our tree (an IOMMU, a restricted pool, nothing), and ask for
+  the node disabled with an overlay unless something confines it. Extends the
+  Wi-Fi restricted-pool decision and L-2. *From:* kernel #250, round 57,
+  2026-11-14.
 - **L-766. A boot argument a board PR adds for safety is grepped against that
   device's bring-up overlays, because an overlay's `/chosen/bootargs` replaces
   the whole string.** Husky's `klog.dtso` and `panic-probe.dtso` (and akita's
