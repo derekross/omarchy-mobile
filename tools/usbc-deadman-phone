@@ -29,7 +29,8 @@
 #   usbc-deadman-phone undo STEP            revert a confirmed STEP by hand
 #   usbc-deadman-phone rescue-watch         loop: close the data switch after each replug
 #
-# STEP: b2-core | b3-charger | b4a-tcpm | b4b-role | replug | noop
+# STEP: b2-core | b3-charger | b4a-tcpm | b4b-role | replug | noop |
+#       k1b-autoibus-on | k1b-autoibus-off (CHG_CNFG_09 bit 7, USB-C-PLAN K1b)
 # Options: --confirm SECS (default 90)  --grace SECS (default 60)
 #          --ilim UA (b3: default_ilim_ua, default 500000)  --no-watchdog
 
@@ -169,6 +170,18 @@ apply() {
       lsmod | grep -q '^tcpci_maxim ' && { log "tcpci_maxim already loaded"; return 0; }
       log "modprobe tcpci_maxim (TCPM takes over the port; expect one USB re-enumeration)"
       modprobe tcpci_maxim ;;
+    k1b-autoibus-on|k1b-autoibus-off)
+      # CHG_CNFG_09 (0xc2) bit 7, NO_AUTOIBUS: set, the input stays at the
+      # ILIM field; clear, the charger raises it from what it detects.
+      # Only that bit changes; the undo writes back the saved value.
+      local v want
+      save_charger
+      v=$(rd $CHG 0xc2) || { log "cannot read 0xc2"; return 1; }
+      if [[ $1 == k1b-autoibus-on ]]; then want=$((v | 0x80)); else want=$((v & 0x7f)); fi
+      want=$(printf '0x%02x' "$want")
+      wr $CHG 0xc2 "$want" || return 1
+      [[ $(rd $CHG 0xc2) == "$want" ]] || { log "0xc2 reads $(rd $CHG 0xc2), not $want"; return 1; }
+      log "0xc2 $v -> $want" ;;
     *) log "unknown step $1"; return 1 ;;
   esac
 }
@@ -185,6 +198,10 @@ revert() {
       force_vbus
       log "modprobe -r tcpci_maxim tcpci tcpm"
       modprobe -r tcpci_maxim tcpci tcpm ;;
+    k1b-autoibus-on|k1b-autoibus-off)
+      local v
+      v=$(awk '$1 == "0xc2" {print $2}' $D/charger.saved 2>/dev/null)
+      if [[ -n $v ]]; then wr $CHG 0xc2 "$v"; else log "no saved 0xc2: left as is"; fi ;;
   esac
   rescue
 }
