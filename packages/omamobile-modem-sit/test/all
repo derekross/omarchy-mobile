@@ -13,7 +13,7 @@ pass() { printf 'ok - %s\n' "$1"; }
 export PYTHONDONTWRITEBYTECODE=1
 
 bash -n install || fail "install parses"
-for f in bin/* lib/*.py lib/omamobile-sit-config test/*.py; do
+for f in bin/* lib/*.py lib/omamobile-sit-config systemd/system-sleep/* test/*.py; do
   python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$f" || fail "$f parses"
 done
 pass "scripts parse"
@@ -33,9 +33,42 @@ for f in usr/bin/omamobile-sitd usr/bin/omamobile-sit usr/bin/omamobile-sit-data
          usr/lib/omamobile-sit/omamobile-sit-config usr/lib/omamobile-sit/carrier_apn.py \
          usr/share/polkit-1/actions/org.omamobile.modem-sit.policy \
          usr/share/omamobile/modem-sit/apn-overrides.conf \
-         usr/share/licenses/omamobile-modem-sit/LICENSE; do
+         usr/share/licenses/omamobile-modem-sit/LICENSE \
+         usr/lib/systemd/system-sleep/omamobile-modem-sit; do
   [[ -e $stage/$f ]] || fail "staged $f"
 done
+[[ -x $stage/usr/lib/systemd/system-sleep/omamobile-modem-sit ]] || fail "the sleep hook is executable"
+# The sleep hook asks sitd for "screen off" with a hold, only before a sleep,
+# and never stops the sleep (no sitd, or a refusal).
+hook=$stage/usr/lib/systemd/system-sleep/omamobile-modem-sit
+python3 - "$hook" <<'PY' || fail "sleep hook"
+import json, os, socket, subprocess, sys, tempfile, threading
+hook = sys.argv[1]
+with tempfile.TemporaryDirectory() as run:
+    env = dict(os.environ, OMAMOBILE_SIT_RUN=run)
+    r = subprocess.run([hook, 'pre', 'suspend'], env=env, capture_output=True, text=True)
+    assert r.returncode == 0 and r.stdout == '', r
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(os.path.join(run, 'socket')); server.listen(2)
+    seen = []
+    def serve(reply):
+        c, _ = server.accept()
+        seen.append(json.loads(c.recv(4096)))
+        c.sendall(json.dumps(reply).encode() + b'\n'); c.close()
+    t = threading.Thread(target=serve, args=(dict(ok=True, result=dict(screen_on=False)),)); t.start()
+    r = subprocess.run([hook, 'pre', 'suspend'], env=env, capture_output=True, text=True); t.join()
+    assert r.returncode == 0 and 'told' in r.stdout and 'not told' not in r.stdout, r
+    assert seen == [dict(action='screen-state', on=False, hold=10)], seen
+    t = threading.Thread(target=serve, args=(dict(ok=False, error='Call in progress'),)); t.start()
+    r = subprocess.run([hook, 'pre', 'suspend'], env=env, capture_output=True, text=True); t.join()
+    assert r.returncode == 0 and 'not told: Call in progress' in r.stdout, r
+    t = threading.Thread(target=serve, args=(dict(ok=True, result=dict(screen_on=None, following=False)),)); t.start()
+    r = subprocess.run([hook, 'pre', 'suspend'], env=env, capture_output=True, text=True); t.join()
+    assert r.returncode == 0 and 'not told: follow_screen is off' in r.stdout, r
+    r = subprocess.run([hook, 'post', 'suspend'], env=env, capture_output=True, text=True)
+    assert r.returncode == 0 and r.stdout == '' and len(seen) == 3, r
+PY
+pass "sleep hook: screen off before a sleep (follow_screen only), never blocking it"
 # the installed launchers find the installed library
 python3 "$stage/usr/bin/omamobile-sitd" --help >/dev/null || fail "the staged daemon imports its library"
 python3 "$stage/usr/bin/omamobile-sit" --help >/dev/null || fail "the staged CLI runs"

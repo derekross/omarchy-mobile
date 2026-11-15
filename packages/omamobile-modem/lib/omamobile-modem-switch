@@ -1,0 +1,114 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-modem-switch: the modem stack on or off at boot, for the shell's
+# Mobile network page (omamobile-mobile-network modem on|off, under pkexec:
+# org.omamobile.modem.switch, the active local user).
+#
+#   omamobile-modem-switch status   one JSON object, any user (reads only)
+#   omamobile-modem-switch on       unmask omamobile-modem-boot.target and,
+#                                   if the modem hasn't started this boot,
+#                                   start the stack now
+#   omamobile-modem-switch off      mask omamobile-modem-boot.target: the
+#                                   stack stays off from the next boot
+#
+# The switch is offered only where something starts the target at boot:
+# it is wanted by multi-user.target (the 7 Pro's device-cheetah vendor
+# link, or an /etc link) or masked by this switch. Elsewhere (the 9a has
+# its own modem start, the 6 Pro none at boot) status says
+# "available": false, the page hides the switch, and "on" and "off" refuse,
+# so the shell never starts a modem outside that phone's own starter.
+#
+# "off" stops nothing in this boot. Once the modem's drivers have loaded,
+# its sleep inhibitor stays until the reboot whatever happens to the modem
+# unit (omamobile-modem-inhibit; only a start refused before any driver
+# loads releases it), and a modem powered off can't be started again before
+# a reboot (the profile's once-per-boot mark), so a stop now would cost the
+# phone its modem for the boot and still not let it sleep; and every modem
+# power-off is followed by one recovered UFS error-handler pass (MODEM-PLAN
+# M2.6). The page offers the restart instead. "on" starts the stack only
+# when this boot's modem has never started (no
+# /run/omamobile-modem/profile-started): the same start as at boot, through
+# the target, never a second CP power-on.
+#
+# status:
+#   {"available": true, "enabled": true, "running": true, "started": true,
+#    "provisioned": true, "sleep_blocked": true, "restart_needed": false}
+# available: the target is wanted at boot or masked (above). enabled:
+# available and not masked (it starts at boot). running: the modem unit is
+# active. started: the modem profile started this boot. provisioned: the
+# three files tools/phone-provision puts there exist (without them the
+# units skip themselves). sleep_blocked: the modem's sleep inhibitor is
+# held. restart_needed: what the switch says differs from this boot (off
+# but started, or on but started and stopped).
+set -euo pipefail
+
+TARGET=omamobile-modem-boot.target
+MARK=${OMAMOBILE_MODEM_BOOT_MARK:-/run/omamobile-modem/profile-started}
+SYSTEMCTL=${OMAMOBILE_SYSTEMCTL:-systemctl}
+PROVISION=(/usr/lib/omamobile-vendor/modem/root /etc/omamobile/modem-nv.sha256 /var/lib/omamobile-vendor/modem/props.conf)
+[[ -n ${OMAMOBILE_MODEM_PROVISION:-} ]] && read -ra PROVISION <<< "$OMAMOBILE_MODEM_PROVISION"
+
+die() { echo "omamobile-modem-switch: $*" >&2; exit 1; }
+
+masked() { [[ $("$SYSTEMCTL" is-enabled "$TARGET" 2>/dev/null || true) == masked* ]]; }
+# WantedBy sees both the vendor link under /usr/lib and links under /etc;
+# `is-enabled` reports a vendor link as "static" or "disabled".
+wanted() { [[ " $("$SYSTEMCTL" show -p WantedBy --value "$TARGET" 2>/dev/null || true) " == *" multi-user.target "* ]]; }
+available() { wanted || masked; }
+enabled() { available && ! masked; }
+sleep_blocked() { "$SYSTEMCTL" is-active --quiet omamobile-modem-inhibit.service; }
+running() { "$SYSTEMCTL" is-active --quiet omamobile-modem.service; }
+started() { [[ -e $MARK ]]; }
+provisioned() {
+  local p
+  for p in "${PROVISION[@]}"; do
+    [[ -e $p ]] && continue
+    # status runs as the user, and props.conf sits in a root-only folder
+    # (the phone's board id): a folder that is there but can't be searched
+    # counts as provisioned here; "on" runs as root and sees the file.
+    [[ -d ${p%/*} && ! -x ${p%/*} ]] && continue
+    return 1
+  done
+}
+json_bool() { if "$@"; then echo true; else echo false; fi; }
+
+status() {
+  local a e r s p b need=false
+  a=$(json_bool available); e=$(json_bool enabled); r=$(json_bool running); s=$(json_bool started)
+  p=$(json_bool provisioned); b=$(json_bool sleep_blocked)
+  if [[ $a == false ]]; then
+    need=false
+  elif [[ $e == false && $s == true ]] || [[ $e == true && $s == true && $r == false ]]; then
+    need=true
+  fi
+  printf '{"available": %s, "enabled": %s, "running": %s, "started": %s, "provisioned": %s, "sleep_blocked": %s, "restart_needed": %s}\n' \
+    "$a" "$e" "$r" "$s" "$p" "$b" "$need"
+}
+
+case ${1:-} in
+  status)
+    [[ $# -eq 1 ]] || die "usage: omamobile-modem-switch status|on|off"
+    status
+    ;;
+  on|off)
+    [[ $# -eq 1 ]] || die "usage: omamobile-modem-switch status|on|off"
+    [[ ${OMAMOBILE_MODEM_SWITCH_UID:-$(id -u)} -eq 0 ]] || die "run as root (the shell uses pkexec)"
+    available || die "nothing starts the modem at boot on this phone ($TARGET isn't wanted by multi-user.target): no switch here"
+    if [[ $1 == off ]]; then
+      "$SYSTEMCTL" mask "$TARGET" >/dev/null
+    else
+      "$SYSTEMCTL" unmask "$TARGET" >/dev/null
+      # Started at boot or by an earlier "on": leave it (the unit itself
+      # refuses a second CP power-on). Not provisioned: the units would skip
+      # themselves anyway. Not wanted once unmasked (a hand mask on a phone
+      # without the boot link): nothing to start here.
+      if wanted && ! started && ! running && provisioned; then
+        "$SYSTEMCTL" start --no-block "$TARGET"
+      fi
+    fi
+    status
+    ;;
+  *)
+    die "usage: omamobile-modem-switch status|on|off"
+    ;;
+esac

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Requires wifi-pool + wifi-controller and passed stages 0-4 on separate boots.
- * Link/attachment inspection only; brcmfmac stays blocked until its own gates.
+/* Requires a separately qualified pool and PCIe link, with brcmfmac blocked.
+ * Use wifi-reviewed-controller for the reviewed GS101 stack, or the pinned
+ * historical wifi-controller path. See WIFI-PLAN.md for their separate gates.
  */
 /dts-v1/;
 /plugin/;

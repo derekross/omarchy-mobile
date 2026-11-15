@@ -39,6 +39,11 @@ install -Dm644 vendor/systemd/system/omamobile-usb-rescue.service \
   "$destination/usr/lib/systemd/system/omamobile-usb-rescue.service"
 ln -sfn ../omamobile-usb-rescue.service \
   "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service"
+install -Dm755 bin/omamobile-bt-addr "$destination/usr/bin/omamobile-bt-addr"
+install -Dm644 vendor/systemd/system/omamobile-bt-addr@.service \
+  "$destination/usr/lib/systemd/system/omamobile-bt-addr@.service"
+install -Dm644 vendor/udev/rules.d/80-omamobile-bt-addr.rules \
+  "$destination/usr/lib/udev/rules.d/80-omamobile-bt-addr.rules"
 install -Dm644 vendor/systemd/system/plymouth-quit.service.d/10-omamobile-retain-splash.conf \
   "$destination/usr/lib/systemd/system/plymouth-quit.service.d/10-omamobile-retain-splash.conf"
 install -Dm755 bin/omamobile-husky-aoc-start "$destination/usr/bin/omamobile-husky-aoc-start"

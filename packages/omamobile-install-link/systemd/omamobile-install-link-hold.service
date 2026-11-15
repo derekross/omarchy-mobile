@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# No login screen while the phone has no account (docs/INSTALL-LINK-PLAN.md
+# §3.3): a phone at the link's first start has no user, so SDDM would show a
+# greeter nobody can log in to over the first-start screen. This unit
+# finishes starting only when first boot has made the account, the link has
+# ended, or the daemon is not running (a daemon that cannot run never keeps
+# the login screen away). omamobile-firstboot.service keeps it back too
+# while it runs. With an account (first boot's `done`) it never starts.
+#
+# Separate from omamobile-install-link.service because the daemon tells
+# systemd nothing when it is ready (no sd_notify): ordering the daemon's
+# own unit before the display manager would hold nothing.
+[Unit]
+Description=Omarchy Mobile install link: no login screen before the phone has an account
+Documentation=https://github.com/derekross/omarchy-mobile/blob/main/docs/INSTALL-LINK-PLAN.md
+ConditionPathExists=/etc/omamobile/install-link
+ConditionPathExists=!/var/lib/omamobile/firstboot/done
+After=omamobile-install-link.service
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/omamobile-install-link/hold-login
+TimeoutStartSec=infinity

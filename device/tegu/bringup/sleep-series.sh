@@ -6,53 +6,148 @@
 # the NFC hook stops polling, console kept, cable in, modem not started this
 # boot. Records each sleep's RTC length, dmesg length, wake IRQ, UFS and ACPM
 # errors, and the link-wait lines (a slow wake rather than a dead one).
-N=${N:-300}; S=${S:-60}; L=${L:-/var/log/omamobile/sleep-linkwait-20261107.log}; U=/sys/devices/platform/soc/13200000.ufs
-mkdir -p /var/log/omamobile; : > $L
+N=${N:-300}; S=${S:-60}; W=${W:-20}; L=${L:-/var/log/omamobile/sleep-linkwait-20261107.log}; U=/sys/devices/platform/soc/13200000.ufs
+mkdir -p /var/log/omamobile
+DBG=0; { [ "${PMDEBUG:-0}" = 1 ] || [ "${TRACE:-0}" = 1 ]; } && DBG=1
+# Refusals come first, before anything is changed.
+modem_up() { systemctl is-active -q omamobile-modem omamobile-tegu-modem-boot 2>/dev/null || [ -d /sys/module/cpif ]; }
+modem_up && { echo "the modem is up: stop" >> $L; exit 1; }
+# An alarm that fires before a held-back sleep begins (logind waits up to 15 s for a delay inhibitor) leaves
+# that sleep with no alarm.
+[ "$S" -ge 30 ] || { echo "S=$S: an alarm under 30 s can fire before the sleep begins: stop" >> $L; exit 1; }
+# With the debug switches a stall is a panic, and a panic has to end in a reboot.
+[ $DBG = 1 ] && [ "$(cat /proc/sys/kernel/panic)" = 0 ] && { echo "kernel.panic is 0, a panic would wait for the buttons: stop" >> $L; exit 1; }
+# Only a run that starts gets a fresh log: a refusal above is appended to the log that is there, and the
+# previous run's log is kept beside the new one, under the time of its last line.
+[ -s $L ] && mv -f $L $L.$(date -r $L +%Y%m%d-%H%M%S)
+: > $L
 uid=$(id -u mobile)
 hy() { runuser -u mobile -- env XDG_RUNTIME_DIR=/run/user/$uid HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/$uid/hypr | head -1) hyprctl dispatch "hl.dsp.dpms({ action = \"$1\" })" >/dev/null 2>&1; }
-echo N > /sys/module/printk/parameters/console_suspend
-systemctl is-active -q omamobile-modem && { echo "the modem is up: stop" >> $L; exit 1; }
+cs_before=$(cat /sys/module/printk/parameters/console_suspend)
 # The cpuidle sleep hook (omarchy-mobile#591; an earlier hook of this name was withdrawn in #255): when it is
 # installed and its keep flag is absent, every sleep of the series runs in WFI whatever WFI= says. Noted, not refused.
 if [ -e /usr/lib/systemd/system-sleep/omamobile-tegu-cpuidle ]; then echo "cpuidle hook installed, keep flag $([ -e /etc/omamobile/cpuidle-keep-across-sleep ] && echo present || echo absent)" >> $L; fi
 # The modem boot unit's state is put back as it was found, not forced on.
 modem_unit_before=$(systemctl is-enabled omamobile-tegu-modem-boot.service 2>/dev/null)
-state1_before=$(cat /sys/devices/system/cpu/cpu0/cpuidle/state1/disable)
+# The published device tree has no idle states yet: then there is no state1 to set.
+state1_before=$(cat /sys/devices/system/cpu/cpu0/cpuidle/state1/disable 2>/dev/null)
+st1() { for f in /sys/devices/system/cpu/cpu*/cpuidle/state1/disable; do [ -e $f ] && echo $1 > $f; done; }
 # RPM (default: as found): UFS rpm_lvl for the run. Experiment #92 runs with 1
 # (device active, link hibern8 in runtime suspend) so a VCC that is no longer
 # always-on is cut only by the system suspend, not by every idle period.
 rpm_before=$(cat $U/rpm_lvl)
+# What the debug switches change is read here, before anything is set, and restore() puts all of it back.
+T=/sys/kernel/tracing; WD=org.freedesktop.systemd1; EV="sched/sched_switch irq/irq_handler_entry irq/irq_handler_exit ipi power/cpu_idle power/suspend_resume timer/hrtimer_expire_entry"
+wd() { busctl "$1"-property $WD /org/freedesktop/systemd1 $WD.Manager RuntimeWatchdogUSec ${2:+t $2}; }
+if [ $DBG = 1 ]; then
+  ppt_before=$(cat /sys/power/pm_print_times); pdm_before=$(cat /sys/power/pm_debug_messages)
+  kmsg_before=$(cat /proc/sys/kernel/printk_devkmsg)
+  stall_before=$(cat /proc/sys/kernel/panic_on_rcu_stall); wd_before=$(wd get | awk '{print $2}')
+fi
+if [ "${TRACE:-0}" = 1 ] && [ -d $T ]; then
+  mountpoint -q $T || mount -t tracefs nodev $T
+  dump_before=$(cat /proc/sys/kernel/ftrace_dump_on_oops); tr_before=$(cat $T/current_tracer); on_before=$(cat $T/tracing_on)
+  # Before tracing is first used the size reads "7 (expanded: 1408)": 7 KB now, 1408 on first use. Writing 7
+  # back would leave a tiny buffer for the rest of the boot, so the size it would have grown to is put back.
+  kb_before=$(sed -E 's/^[0-9]+ \(expanded: ([0-9]+)\)$/\1/' $T/buffer_size_kb)
+  ev_before=$(for e in $EV; do echo "$e=$(cat $T/events/$e/enable)"; done)
+fi
 restore() {
-  for f in /sys/devices/system/cpu/cpu*/cpuidle/state1/disable; do echo $state1_before > $f; done
+  [ -n "$INH" ] && kill $INH 2>/dev/null
+  if [ -n "$tr_before" ]; then
+    echo 0 > $T/tracing_on; echo "$dump_before" > /proc/sys/kernel/ftrace_dump_on_oops
+    for x in $ev_before; do echo "${x##*=}" > $T/events/${x%%=*}/enable; done
+    echo "$tr_before" > $T/current_tracer; echo "$kb_before" > $T/buffer_size_kb; echo "$on_before" > $T/tracing_on
+  fi
+  if [ $DBG = 1 ]; then
+    echo "$stall_before" > /proc/sys/kernel/panic_on_rcu_stall
+    echo "$ppt_before" > /sys/power/pm_print_times; echo "$pdm_before" > /sys/power/pm_debug_messages
+    echo "$kmsg_before" > /proc/sys/kernel/printk_devkmsg 2>/dev/null
+    [ -n "$wd_before" ] && wd set "$wd_before"
+    echo "restored: pm_print_times $(cat /sys/power/pm_print_times), pm_debug_messages $(cat /sys/power/pm_debug_messages), panic_on_rcu_stall $(cat /proc/sys/kernel/panic_on_rcu_stall), ftrace_dump_on_oops $(cat /proc/sys/kernel/ftrace_dump_on_oops), tracer $(cat $T/current_tracer 2>/dev/null || echo none), runtime watchdog $(wd get | awk '{print $2}') (was $wd_before)" >> $L
+  fi
+  rtcwake -m disable >/dev/null 2>&1
+  echo $cs_before > /sys/module/printk/parameters/console_suspend
+  st1 $state1_before
   echo 5 > $U/spm_lvl
   echo $rpm_before > $U/rpm_lvl
   [ "$modem_unit_before" = enabled ] && systemctl enable omamobile-tegu-modem-boot.service >/dev/null 2>&1
   echo "restored: spm_lvl $(cat $U/spm_lvl), state1 disable $state1_before, modem boot unit $(systemctl is-enabled omamobile-tegu-modem-boot.service 2>/dev/null) (was $modem_unit_before)" >> $L
 }
 trap restore EXIT
-for f in /sys/devices/system/cpu/cpu*/cpuidle/state1/disable; do echo ${WFI:-1} > $f; done
+echo N > /sys/module/printk/parameters/console_suspend
+# Debugging a no-wake (2026-11-10; off unless asked for). PMDEBUG=1 turns pm_print_times and pm_debug_messages
+# on, so the console names each device's suspend callback as it starts and returns (the maintainer's pointer,
+# kernel #224), and makes an RCU stall a panic (kernel.panic_on_rcu_stall), which panic=10 turns into a reboot
+# with the console in pstore. TRACE=1, on a kernel with the function tracer, also runs function and event
+# tracing in small per-CPU buffers that the panic dumps to the console. The dump has to fit the 2 MB ramoops
+# console together with the sleep's own callback lines: it prints oldest first, and 24 KB per CPU is about 900
+# calls a core and under 1 MB of text for eight (measure it with an awake sysrq-c before a series).
+# Either one first fills the kernel's log ring: three test crashes on the tracing build (sysrq-c, awake) lost
+# everything after record 4096 since boot, the trace dump's tail and the "Rebooting" line with it, when the
+# ring's first wrap fell inside the panic; with the ring filled beforehand the dump was whole.
+# systemd's runtime watchdog (10 s on the palmtop) would reset a panicking kernel before the dump and the
+# panic's own reboot are through (32 s in the tests that kept their dump), so it is raised to WDSEC (60 s) for
+# the run: still a net under an awake hang. WDSEC=0 turns it off.
+if [ $DBG = 1 ]; then
+  echo on > /proc/sys/kernel/printk_devkmsg 2>/dev/null; for i in $(seq 1 5000); do echo "ring fill $i" > /dev/kmsg; done
+  echo 1 > /sys/power/pm_print_times; echo 1 > /sys/power/pm_debug_messages
+  echo 1 > /proc/sys/kernel/panic_on_rcu_stall
+  wd set $(( ${WDSEC:-60} * 1000000 ))
+fi
+if [ -n "$tr_before" ]; then
+  echo 0 > $T/tracing_on; echo ${TRACE_KB:-24} > $T/buffer_size_kb; echo function > $T/current_tracer
+  for e in $EV; do echo 1 > $T/events/$e/enable; done
+  echo 1 > $T/tracing_on; echo 1 > /proc/sys/kernel/ftrace_dump_on_oops
+fi
+echo "debug: pm_print_times $(cat /sys/power/pm_print_times), pm_debug_messages $(cat /sys/power/pm_debug_messages), panic_on_rcu_stall $(cat /proc/sys/kernel/panic_on_rcu_stall), panic timeout $(cat /proc/sys/kernel/panic) s, tracer $(cat /sys/kernel/tracing/current_tracer 2>/dev/null || echo none) $(cat /sys/kernel/tracing/buffer_size_kb 2>/dev/null) KB per CPU on $(cat /sys/kernel/tracing/tracing_on 2>/dev/null), ftrace_dump_on_oops $(cat /proc/sys/kernel/ftrace_dump_on_oops 2>/dev/null)" >> $L
+[ $DBG = 1 ] && echo "runtime watchdog $(wd get | awk '{print $2}') (was $wd_before)" >> $L
+# Only the series' own sleeps, each with its alarm, may happen during a run. The shell's auto-sleep
+# (omamobile-sleepd) puts a dark resume back to sleep 5 s after it once the lock is secure and no SSH session
+# is open, with no alarm: it did between two cycles on 2026-11-10, and the palmtop slept nine and a half
+# hours, until the Power key, which from the laptop looked like a no-wake. So the series holds a block
+# inhibitor of its own for the whole run (a push script's x-awake has a time limit) and sleeps past it
+# with "systemctl suspend -i". That passes every block inhibitor, so before each sleep the series looks
+# again: the modem up, any block-mode sleep inhibitor other than its own and x-awake's, or a list that
+# can't be read, ends the run.
+systemd-inhibit --what=sleep --who=sleep-series --why="only the series' own sleeps, each with an alarm" --mode=block sleep infinity &
+INH=$!
+others() {
+  local j
+  j=$(busctl --json=short call org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager ListInhibitors) \
+    || { echo "the inhibitor list could not be read"; return; }
+  printf '%s' "$j" | python3 -c '
+import json, sys
+mine = set(sys.argv[1:])
+print(" ".join("%s(pid %s)" % (i[1], i[5]) for i in json.load(sys.stdin)["data"][0]
+               if "sleep" in i[0].split(":") and i[3] == "block" and str(i[5]) not in mine))' $INH $(systemctl show -p MainPID --value x-awake 2>/dev/null) \
+    || echo "the inhibitor list could not be read"
+}
+st1 ${WFI:-1}
 echo 5 > $U/spm_lvl
 echo ${RPM:-$rpm_before} > $U/rpm_lvl
-echo "$(uname -v): rpm_lvl $(cat $U/rpm_lvl) (was $rpm_before), ufs-vcc always-on: $([ -e /proc/device-tree/regulator-ufs-vcc/regulator-always-on ] && echo yes || echo no), spm_lvl $(cat $U/spm_lvl) ($(cat $U/spm_target_dev_state)/$(cat $U/spm_target_link_state)), state1 disable $(cat /sys/devices/system/cpu/cpu*/cpuidle/state1/disable | tr -d '\n'), modem boot unit $modem_unit_before, $(uname -r)" >> $L
+echo "$(uname -v): rpm_lvl $(cat $U/rpm_lvl) (was $rpm_before), ufs-vcc always-on: $([ -e /proc/device-tree/regulator-ufs-vcc/regulator-always-on ] && echo yes || echo no), spm_lvl $(cat $U/spm_lvl) ($(cat $U/spm_target_dev_state)/$(cat $U/spm_target_link_state)), state1 disable $(cat /sys/devices/system/cpu/cpu*/cpuidle/state1/disable 2>/dev/null | tr -d '\n'), modem boot unit $modem_unit_before, $(uname -r)" >> $L
 [ "$(cat $U/spm_lvl)" = 5 ] || { echo "spm_lvl didn't take: stop" >> $L; exit 1; }
 for c in $(seq 1 $N); do
+  [ -e /run/sleep-series.stop ] && { rm -f /run/sleep-series.stop; echo "stop file: stop after $((c - 1)) cycles" >> $L; break; }
+  modem_up && { echo "cycle $c: the modem is up: stop" >> $L; exit 1; }
+  o=$(others); [ -z "$o" ] || { echo "cycle $c: another block-mode sleep inhibitor is held, or the list could not be read ($o): stop" >> $L; exit 1; }
   dmesg -C
   hy disable
   r0=$(cat /sys/class/rtc/rtc0/since_epoch)
   rtcwake -m no -s $S >/dev/null || { echo "rtcwake could not arm the alarm: stop" >> $L; hy enable; exit 1; }
-  # A keep-awake block inhibitor left by a push script (x-awake) would refuse every sleep. It is
-  # released here, by the series itself and only once the first alarm is armed: released by the
-  # starter before a start that then failed, it left the palmtop to the shell's auto-sleep with
-  # no alarm, until a key press (2026-11-10).
-  [ "$c" = 1 ] && systemctl stop x-awake 2>/dev/null
   ok0=$(cat /sys/power/suspend_stats/success)
-  systemctl suspend
-  sleep 20
+  systemctl suspend -i
+  # logind holds a sleep back while a delay inhibitor is taken, up to 15 s here: NetworkManager did at the 90th
+  # sleep of the first run (2026-11-10), the sleep began 15 s after the request, and a fixed wait of 10 s (W=10) took that
+  # for "no suspend happened" while the palmtop slept and woke. So wait for the sleep itself, up to 45 s.
+  for i in $(seq 90); do [ "$(cat /sys/power/suspend_stats/success)" != "$ok0" ] && break; sleep 0.5; done
+  sleep $W
   hy enable
   # A sleep that never started (a block inhibitor held, a masked target) must not count as a cycle
   [ "$(cat /sys/power/suspend_stats/success)" != "$ok0" ] || { echo "cycle $c: no suspend happened (an inhibitor or a masked sleep target?): stop" >> $L; exit 1; }
   en=$(dmesg | grep -m1 "PM: suspend entry" | sed -E "s/^\[ *([0-9.]+)\].*/\1/"); ex=$(dmesg | grep -m1 "PM: suspend exit" | sed -E "s/^\[ *([0-9.]+)\].*/\1/")
-  echo "cycle $c $(date +%T): rtc $(( $(cat /sys/class/rtc/rtc0/since_epoch) - r0 - 20 )) s, dmesg $(awk -v a=$en -v b=$ex 'BEGIN{printf "%.1f", b-a}') s, wake irq $(cat /sys/power/pm_wakeup_irq 2>/dev/null), ufs $(dmesg | grep -cE "link startup failed|Host init failed|I/O error"), linkfail $(dmesg | grep -c "startup=1"), linkwait $(dmesg | grep -c "link-wait:"), acpm $(dmesg | grep -c "Timeout! ch"), oops $(dmesg | grep -c "Internal error"), spm $(cat $U/spm_lvl), c2-s2idle $(cat /sys/devices/system/cpu/cpu0/cpuidle/state1/s2idle/usage 2>/dev/null) c2-run $(cat /sys/devices/system/cpu/cpu0/cpuidle/state1/usage 2>/dev/null), ok $(cat /sys/power/suspend_stats/success) fail $(cat /sys/power/suspend_stats/fail)" >> $L
+  echo "cycle $c $(date +%T): rtc $(( $(cat /sys/class/rtc/rtc0/since_epoch) - r0 - W )) s, dmesg $(awk -v a=$en -v b=$ex 'BEGIN{printf "%.1f", b-a}') s, wake irq $(cat /sys/power/pm_wakeup_irq 2>/dev/null), ufs $(dmesg | grep -cE "link startup failed|Host init failed|I/O error"), linkfail $(dmesg | grep -c "startup=1"), linkwait $(dmesg | grep -c "link-wait:"), acpm $(dmesg | grep -c "Timeout! ch"), oops $(dmesg | grep -c "Internal error"), spm $(cat $U/spm_lvl), c2-s2idle $(cat /sys/devices/system/cpu/cpu0/cpuidle/state1/s2idle/usage 2>/dev/null) c2-run $(cat /sys/devices/system/cpu/cpu0/cpuidle/state1/usage 2>/dev/null), ok $(cat /sys/power/suspend_stats/success) fail $(cat /sys/power/suspend_stats/fail)" >> $L
   dmesg | grep -E "link-wait:|startup=1|link startup failed|Host init failed" | head -40 >> $L
   sync
   [ "$(dmesg | grep -cE "link startup failed|Host init failed|I/O error")" = 0 ] || { echo "UFS errors: stop" >> $L; break; }
