@@ -20,7 +20,7 @@
 # modem's MSI count), the bearer's packet counters, the route the kernel
 # picks for the bearer, the UFS error-handler count and the CPIF and link
 # lines logged since the last wake. Besides its log it arms the RTC alarm and
-# sends pings; it writes nothing else.
+# sends pings; it writes nothing else but a temporary file in /run.
 #
 # No identifiers: the bearer's addresses and gateways are logged only as
 # present or absent with their prefix length, routes by device and metric.
@@ -41,7 +41,10 @@ IFACE=${IFACE:-rmnet2}
 out=/var/log/omamobile/m6-data-capture.log
 cpif=/sys/devices/platform/cpif
 
-die() { echo "m6-data-capture: $*" >&2; exit 1; }
+die() {	# a refusal after the runbook's step 2 leaves the modem's inhibitor killed
+	systemctl start omamobile-modem-inhibit.service >/dev/null 2>&1
+	echo "m6-data-capture: $*" >&2; exit 1
+}
 
 # Refusals, before anything is armed.
 [ "$(id -u)" = 0 ] || die "run as root"
@@ -152,7 +155,10 @@ while :; do
 	[ "$rtc_wakes" -ge "$WAKES" ] && { echo "end: $WAKES RTC wakes ($early early PMIC wakes)" >> "$out"; break; }
 	[ "$bad" -ge 3 ] && { echo "end: three failing wakes in a row" >> "$out"; break; }
 	[ "$(date +%s)" -ge "$deadline" ] && { echo "end: deadline" >> "$out"; break; }
-	if [ "$alarm" -eq 0 ]; then
+	# arm one when none is set, and again when the last went off while awake
+	# (an early refusal, sleepd's retry or a lit screen), or the next sleep
+	# has no alarm and its PMIC wake would be counted as the RTC's
+	if [ "$alarm" -eq 0 ] || [ "$(date +%s)" -ge "$alarm" ]; then
 		rtcwake -m no -s "$SLEEP_S" >/dev/null 2>&1 && alarm=$(( $(date +%s) + SLEEP_S ))
 	fi
 	sleep 0.5
