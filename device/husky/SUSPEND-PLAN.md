@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 8 Pro (husky): suspend
 
-Status (2026-11-13): **reviewed draft, revised for #724's review; nothing
+Status (2026-11-15): **reviewed draft, revised twice for #724's review; nothing
 in section 3 has run on this unit.** s2idle has run on one 8 Pro already,
 Lef's (section 4, from #642 and #724). This file is the runbook Derek asked
 for on #656 before a first attended suspend test on another unit: what
@@ -199,9 +199,12 @@ tools/phone-ssh 'journalctl -b --user -M <user>@ -u omamobile-sleepd -n 5 --no-p
   screen lit within about a second of the kernel resume (#642: 58 ms to
   sleepd, about 0.5 s for the display), no UFS error.
 
-**H4: ten cycles, attended throughout.** `pre` once, then ten
-`sleep_cmd h4-<n> 20`, each started only after the previous one's `after`
-reads clean, with Colin at the phone for the whole run.
+**H4: ten cycles, attended throughout.** Ten rounds of
+`tools/phone-ssh "$pre"`, then `sleep_cmd h4-<n> 20`, then `after`: `pre`
+runs before every cycle, because `after` reloads Wi-Fi and the PCIe host,
+and every sleep in this plan is with them unloaded. Each round starts only
+after the previous one's `after` reads clean, with Colin at the phone for
+the whole run.
 
 - **Pass:** ten entry/exit pairs; `suspend_stats` +10 success / 0 fail; no
   UFS error; no stray wake from Volume Up (cheetah's S2 saw one: Volume Up
@@ -247,6 +250,19 @@ never unloaded. One boot, `suspend_stats` 0 to 8 successes, 0 failures:
   0 retries`; `spm_lvl` 5, `rpm_lvl` 3. In the 58 s run wpa_supplicant lost
   the link at suspend and rejoined after the wake (one join failed with
   firmware error -14). A tap on the dark screen did not wake it.
+
+**Lef's 8 Pro, 2026-11-12, a critical-battery suspend into `deep`
+(reported on #724).** `omamobile-device-husky` 0.1.9, so without
+#656's drop-in, on the same local kernel (`-ga291900124c4`, before #244):
+after about 22 h of uptime the journal ends with UPower asking logind to
+suspend and `PM: suspend entry (deep)`. Nothing came after. The phone
+showed nothing (no charging screen, no heat) and Power + Volume Down did
+nothing; Power + Volume Up for 30 s, then Power + Volume Down, reached the
+bootloader, and the battery read 91 %, so it was not flat. In the
+bootloader slot B's retry count was 0 and the current slot had switched
+to A (#252): read the count before the first boot after a recovery like
+this. It is the `deep` case that #656 and #244 close; with both, UPower's
+suspend is s2idle, as on this unit below.
 
 **This unit, 2026-11-13, unplanned (not a stage of this plan).** On the H0
 kernel, off the charger overnight, the battery ran down. At 04:25 UPower's
