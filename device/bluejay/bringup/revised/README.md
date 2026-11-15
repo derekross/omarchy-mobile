@@ -38,10 +38,18 @@ Install locations, after the live/staging gates pass:
 
 | Source | Private development-root destination |
 | --- | --- |
-| `start.py`, `modules.json` | `/usr/local/lib/omamobile/bluejay-revised/` |
+| `start.py`, `desktop-check.py`, `modules.json` | `/usr/local/lib/omamobile/bluejay-revised/` |
 | `units/*.service` | `/etc/systemd/system/` |
 | `graphics-env` | user's `uwsm/env.d/99-bluejay-revised` after exact-path snapshot |
 | generated private profile | `/etc/omamobile/bluejay-revised.json` |
+
+The GPU stage also requires a separately built and provisioned
+`/usr/local/bin/bluejay-gpu-smoke`; its source is
+[`../bluejay-gpu-smoke.c`](../bluejay-gpu-smoke.c). The private profile pins the
+qualified executable's hash, and the stage refuses a different binary. This
+publication includes neither that executable nor a claim that rebuilding it
+under a different toolchain reproduces the qualified bytes. Resolve its source,
+build and binary provenance before preparing a new handset profile.
 
 An opt-in file `/etc/omamobile/bluejay-revised-enable` and explicit enablement
 of the revised root and desktop units are required. Every unit has a bounded
