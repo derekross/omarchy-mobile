@@ -197,6 +197,23 @@ def operator_name(payload):
     return dict(plmn=plmn if plmn.isdigit() else '', name=good[0] if good else '')
 
 
+def internet_dropped(payload, response=None):
+    """Whether a data-call list (an IND_DATA_CALL_LIST_CHANGED payload or a
+    GET_DATA_CALL_LIST response) no longer carries the internet bearer that
+    was set up (data_call.RESPONSE's CID): gone, or listed inactive. False
+    when no internet bearer is set up or the list can't be read."""
+    try:
+        items = data_call.entries(payload)
+        if response is None:
+            response = data_call.RESPONSE.read_bytes()
+    except (RuntimeError, OSError):
+        return False
+    if len(response) < 5:
+        return False
+    item = next((i for i in items if i[2] == response[2]), None)
+    return item is None or not item[3]
+
+
 def data_call_change(payload, response=None):
     """One log line for an IND_DATA_CALL_LIST_CHANGED: each listed bearer's
     summary (CID, PDP type, status, active, counts; never an address), then
@@ -286,6 +303,14 @@ class Service:
         # The payload of the latest IND_DATA_CALL_LIST_CHANGED (the modem's
         # own attach bearer shows up there); read by start-up, never logged raw.
         self.data_call_list = None
+        # The internet bearer's setup as start-up made it (apn, ip_type), for
+        # setting it up again when the modem drops it; None before start-up
+        # or without an internet bearer. A reconnect is due at reconnect_at
+        # (monotonic), its tries counted for the backoff.
+        self.internet_setup = None
+        self.reconnect_at = None
+        self.reconnect_tries = 0
+        self.reconnecting = False
         self.sim = dict(state='unknown')
         self.radio = 'unknown'
         self.current_stage = 'starting'
@@ -458,6 +483,13 @@ class Service:
                 print(data_call_change(self.data_call_list), flush=True)
             except Exception as error:   # a log line must never stop sitd
                 print('Data-call list changed: not described:', type(error).__name__, flush=True)
+            if internet_dropped(self.data_call_list) and self.internet_setup \
+                    and self.current_stage == 'running' and not self.reconnecting and self.reconnect_at is None:
+                # The network or the modem ended the internet bearer; nothing
+                # else brings it back (2026-11-15, M6-D: the modem listed CID 3
+                # gone at the wake where data stopped, and it stayed down).
+                self.reconnect_at = time.monotonic() + 3
+                print('Internet bearer dropped by the modem; setting it up again in 3 s', flush=True)
         elif ident == 0x070e:
             # IND_NTW_STATE_CHANGED: read the registration again soon (it
             # can come every second or two while the modem searches).
@@ -519,6 +551,50 @@ class Service:
         except (ModemError, TimeoutError) as error:
             # Not resent: the modem's own status (0x4601) or a reboot decides.
             print('Carrier manifest not accepted:', error, flush=True)
+
+    def reconnect(self):
+        """Set the internet bearer up again once the modem dropped it: when
+        packet-registered, and only if the modem still lists it gone or
+        inactive. Its record is stale (the modem released the bearer), so it
+        is cleared, the bearer set up with start-up's settings, and
+        omamobile-sit-data restarted to take the new configuration. A failed
+        try comes back after 15 s, doubling to 5 minutes."""
+        if self.reconnect_at is None or time.monotonic() < self.reconnect_at or not self.internet_setup:
+            return
+        try:
+            ps = self.client.request(0x0701, timeout=5)
+            if len(ps) < 4 or ps[0] not in (1, 5):
+                self.reconnect_at = time.monotonic() + 30
+                return
+            listed = self.client.request(0x0602, timeout=10)
+            # By CID, not by the setup record: a failed try has cleared it.
+            item = next((i for i in data_call.entries(listed) if i[2] == data_call.INTERNET_CID), None)
+            if item is not None and item[3]:
+                print('Internet bearer listed again by the modem; no setup needed', flush=True)
+                self.reconnect_at = None
+                self.reconnect_tries = 0
+                return
+            state_path, response_path = bearer_paths(data_call.INTERNET_CID)
+            state_path.unlink(missing_ok=True)
+            response_path.unlink(missing_ok=True)
+            self.reconnecting = True
+            try:
+                data_call.activate(self.client, self.internet_setup['apn'],
+                                   ip_type=self.internet_setup['ip_type'], on_event=self.event)
+            finally:
+                self.reconnecting = False
+        except (ModemError, TimeoutError, RuntimeError, ValueError, OSError) as error:
+            self.reconnect_tries += 1
+            delay = min(15 * 2 ** (self.reconnect_tries - 1), 300)
+            self.reconnect_at = time.monotonic() + delay
+            print('Internet bearer setup again failed:', type(error).__name__, error,
+                  f'(try {self.reconnect_tries}; next in {delay} s)', flush=True)
+            return
+        self.reconnect_at = None
+        self.reconnect_tries = 0
+        print('Internet bearer set up again', flush=True)
+        subprocess.run(['systemctl', 'try-restart', 'omamobile-sit-data.service'], check=False)
+        self.publish()
 
     def poll(self):
         """Read-only network status every 30 s (and at once after a change)."""
@@ -1058,6 +1134,7 @@ def main():
             service.poll()
             if args.bringup:  # without it the service writes nothing to the modem
                 service.follow_screen()
+                service.reconnect()
             if time.monotonic() >= next_cp_check:
                 if not cp.online():
                     raise RuntimeError('CP left ONLINE; the modem unit keeps its crash record')

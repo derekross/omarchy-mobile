@@ -3,8 +3,12 @@
 bearer the data service runs on (SUSPEND-PLAN M6-D, 2026-11-15)."""
 import env  # noqa: F401  (paths and sys.path first)
 import struct
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import Mock, patch
 
+import data_call
 import service as app_service
 
 
@@ -68,6 +72,100 @@ class DataCallChange(unittest.TestCase):
         line = app_service.data_call_change(listing(item(3, address=b'\xc0\xa8\x07\x09')), response=item(3))
         self.assertNotIn('192.168.7.9', line)
         self.assertNotIn('c0a80709', line)
+
+
+class Reconnect(unittest.TestCase):
+    """The internet bearer set up again after the modem drops it."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name)
+        self.state, self.response = root / 'data-session.json', root / 'data-call-response.bin'
+        self.state.write_text('{"cid": 3, "session": 0}')
+        self.response.write_bytes(item(3))
+        self.patches = [patch.object(data_call, 'RESPONSE', self.response),
+                        patch.object(data_call, 'INTERNET_CID', 3),
+                        patch.object(app_service, 'bearer_paths', lambda cid: (self.state, self.response)),
+                        patch.object(app_service.subprocess, 'run'),
+                        patch('builtins.print')]
+        for p in self.patches:
+            p.start()
+        self.client = Mock()
+        self.listed = listing(item(2))
+        self.client.request.side_effect = lambda ident, *a, **k: {0x0701: b'\x01\x00\x00\x0e', 0x0602: self.listed}[ident]
+        self.db = app_service.database(root / 'db')
+        self.service = app_service.Service(self.client, self.db)
+        self.service.publish = Mock()
+        self.service.current_stage = 'running'
+        self.service.internet_setup = dict(apn='internet', ip_type='ipv4v6')
+        self.service.reconnect_at = None
+        self.service.reconnect_tries = 0
+        self.service.reconnecting = False
+
+    def tearDown(self):
+        for p in reversed(self.patches):
+            p.stop()
+        self.db.close()
+        self.temp.cleanup()
+
+    def indication(self, payload):
+        return struct.pack('<BBHHxx', 2, 0, 0x0604, 8 + len(payload)) + payload
+
+    def test_dropped_detects_gone_and_inactive(self):
+        self.assertTrue(app_service.internet_dropped(listing(item(2)), response=item(3)))
+        self.assertTrue(app_service.internet_dropped(listing(item(3, active=0)), response=item(3)))
+        self.assertFalse(app_service.internet_dropped(listing(item(3, active=1)), response=item(3)))
+        self.assertFalse(app_service.internet_dropped(b'\x01\x02', response=item(3)))
+
+    def test_a_drop_schedules_and_the_setup_runs_with_start_ups_settings(self):
+        self.service.event(self.indication(listing(item(2))))
+        self.assertIsNotNone(self.service.reconnect_at)
+        self.service.reconnect_at = 0
+        with patch.object(data_call, 'activate') as activate:
+            self.service.reconnect()
+        activate.assert_called_once()
+        self.assertEqual(activate.call_args.args[1], 'internet')
+        self.assertEqual(activate.call_args.kwargs['ip_type'], 'ipv4v6')
+        self.assertFalse(self.state.exists())       # the stale record was cleared first
+        app_service.subprocess.run.assert_called_with(
+            ['systemctl', 'try-restart', 'omamobile-sit-data.service'], check=False)
+        self.assertIsNone(self.service.reconnect_at)
+
+    def test_no_schedule_during_start_up_or_its_own_setup(self):
+        self.service.current_stage = 'data'
+        self.service.event(self.indication(listing(item(2))))
+        self.assertIsNone(self.service.reconnect_at)
+        self.service.current_stage = 'running'
+        self.service.reconnecting = True
+        self.service.event(self.indication(listing(item(2))))
+        self.assertIsNone(self.service.reconnect_at)
+
+    def test_listed_again_needs_nothing(self):
+        self.listed = listing(item(2), item(3))
+        self.service.reconnect_at = 0
+        with patch.object(data_call, 'activate') as activate:
+            self.service.reconnect()
+        activate.assert_not_called()
+        self.assertTrue(self.state.exists())
+        self.assertIsNone(self.service.reconnect_at)
+
+    def test_not_registered_waits(self):
+        self.client.request.side_effect = lambda ident, *a, **k: b'\x02\x00\x00\x0e'
+        self.service.reconnect_at = 0
+        with patch.object(data_call, 'activate') as activate:
+            self.service.reconnect()
+        activate.assert_not_called()
+        self.assertGreater(self.service.reconnect_at, 0)
+
+    def test_failure_backs_off(self):
+        delays = []
+        for _ in range(7):
+            self.service.reconnect_at = 0
+            with patch.object(data_call, 'activate', side_effect=RuntimeError('data call did not become active')), \
+                    patch.object(app_service.time, 'monotonic', return_value=1000):
+                self.service.reconnect()
+            delays.append(self.service.reconnect_at - 1000)
+        self.assertEqual(delays, [15, 30, 60, 120, 240, 300, 300])
+        app_service.subprocess.run.assert_not_called()
 
 
 if __name__ == '__main__':
