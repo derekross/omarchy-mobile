@@ -343,6 +343,26 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(call['state'], 'ringing-in')
         self.assertIsNotNone(self.service.hangup_deadline)
 
+    def test_call_check_that_breaks_still_ends_in_the_radio_off(self):
+        # The transport's own errors are not ModemError: the check must not
+        # let them out past the unconfirmed release.
+        for error in (RuntimeError('unprocessed indication limit exceeded'), EOFError('SIT channel closed')):
+            with self.subTest(error=type(error).__name__):
+                self.service.calls.clear()
+                self.service.release_unconfirmed = False
+                call = self.stale_ring()
+                def request(message, *args, error=error, **kwargs):
+                    if message == 0x0000: raise error
+                    return bytes(4)     # the radio state, asked after the radio-off
+                self.client.request.side_effect = request
+                self.service.hangup_deadline = 0.001
+                with patch.object(app_service, 'radio') as radio, \
+                     patch.object(app_service.cp, 'state', return_value=app_service.cp.ONLINE):
+                    with self.assertRaises(app_service.UnconfirmedRelease): self.service.pump()
+                    radio.assert_called_once_with(False)
+                self.assertTrue(self.service.release_unconfirmed)
+                self.assertEqual((call['state'], self.service.live()), ('ringing-in', [call]))
+
     def test_pending_dial_is_never_ended_by_the_call_check(self):
         # A dial that timed out: still pending, no modem ID, and the modem
         # doesn't list it yet. The deadline must not end it here.

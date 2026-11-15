@@ -122,9 +122,14 @@ registration indication), unless `ims_required = yes`.
   message appears in the daemon's log.
 - **Outgoing SMS** carry a durable 32-hex request id; an interrupted or
   uncertain send is marked `unknown`, never repeated automatically.
-- **Calls**: a hangup whose release isn't confirmed within 12 s, or a call
-  left over from a previous run, turns the radio off (best effort, AT+CFUN=0)
-  and stops sitd with the call still recorded as its own, for an attended
+- **Calls**: when a hangup's release isn't confirmed within 12 s, or the
+  modem refuses an answer or a hang-up, sitd first asks the modem for its
+  calls (`GET_CURRENT_CALLS`): if it lists none, and no dial is still being
+  set up, the calls shown here are stale and end here, and sitd keeps
+  running ("the modem lists no call; N stale call(s) ended here"). Otherwise
+  (the modem lists a call, the check fails, a dial is pending), and for a call
+  left over from a previous run, the radio goes off (best effort, AT+CFUN=0)
+  and sitd stops with the call still recorded as its own, for an attended
   reboot. The journal says "Call release not confirmed: <reason>", the radio
   and CP states, and "attended reboot required". The RIL no longer stops the
   modem unit or powers the CP off: an in-place power-off reset the 9a once,

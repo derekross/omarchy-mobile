@@ -532,14 +532,17 @@ class Service:
         Not while a dial's setup is pending (no status yet, so no modem ID):
         the modem may not list a late dial yet, and ending it here would
         drop the status of a call that then connects. That case, a modem
-        that lists a call and one that doesn't answer stay with
+        that lists a call and a check that fails in any way stay with
         unconfirmed_release().
         """
         if self.pending or any(call['modem_id'] is None for call in self.live()):
             return False
         try:
             listed = self.client.request(0x0000, timeout=5)
-        except (ModemError, TimeoutError, OSError) as error:
+        except Exception as error:
+            # Anything, not only a refusal or a timeout: the transport also
+            # raises RuntimeError (framing, a short write, the indication
+            # limit) and EOFError, and none of them may skip the radio-off.
             print('Call check after', why, 'failed:', type(error).__name__, flush=True)
             return False
         if listed != bytes(4):
