@@ -89,7 +89,9 @@ all_blobs=$(printf '%s\n%s\n' "$blobs" "$named" | sed '/^$/d' | sort -u)
 $(sed 's/^/    /' <<<"$all_blobs" | head -10)"
 
 # ---------------------------------------------------------------- trailers
-ai='claude|anthropic|openai|chatgpt|codex|copilot|gemini|cursor|llm|noreply@github\.com.*bot|\[bot\]'
+# Each name as a whole word (no letter either side), so a person called
+# Tillman, or an address at precursor.example, isn't taken for an AI.
+ai='(^|[^[:alpha:]])(claude|anthropic|openai|chatgpt|codex|copilot|gemini|cursor|llm)([^[:alpha:]]|$)|noreply@github\.com.*bot|\[bot\]'
 bad_sob=""
 for c in $commits; do
   while IFS= read -r line; do
