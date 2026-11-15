@@ -135,6 +135,12 @@ def summary(item):
 # carrier profile's settings): recorded so that sitd's ownership checks know
 # them, and never deactivated or claimed (no ownership record, no release).
 MODEM_OWNED = RUN / 'modem-owned-bearers.json'
+# The device omamobile-sit-data found carrying the internet bearer, and the
+# kernel's view of the network devices. Names of their own, so the tests can
+# point them away from the host: on a phone with the modem up, rmnet0 is up,
+# and a package build there ran deactivate() against it.
+DATA_INTERFACE = RUN / 'data-interface'
+NET = Path('/sys/class/net')
 
 
 def modem_owned_ids():
@@ -579,11 +585,10 @@ def deactivate(client, cid=None):
     # rmnet<CID - 1>, and the device omamobile-sit-data found carrying it
     # (data_network.find_device), while that configuration exists.
     devices = {f"rmnet{owned['cid'] - 1}"}
-    recorded = RUN / 'data-interface'
-    if cid != IMS_CID and recorded.exists():
-        devices.add(recorded.read_text().strip())
+    if cid != IMS_CID and DATA_INTERFACE.exists():
+        devices.add(DATA_INTERFACE.read_text().strip())
     for dev in devices:
-        flags = Path(f'/sys/class/net/{dev}/flags')
+        flags = NET / dev / 'flags'
         if flags.exists() and int(flags.read_text(), 16) & 1:
             raise RuntimeError('remove host data configuration first')
     # Stock BuildDeactDataCall: CID and normal-release reason.

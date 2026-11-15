@@ -120,7 +120,9 @@ fails=0
 fail() { echo "not ok - $*"; fails=$((fails + 1)); }
 pass() { echo "ok - $*"; }
 skip() { echo "ok - $* # SKIP"; }
-ai='claude|anthropic|openai|chatgpt|codex|copilot|gemini|cursor|llm|\[bot\]'
+# Each name as a whole word (no letter either side), so a person called
+# Tillman isn't taken for an AI.
+ai='(^|[^[:alpha:]])(claude|anthropic|openai|chatgpt|codex|copilot|gemini|cursor|llm)([^[:alpha:]]|$)|\[bot\]'
 
 # What the builds compare: HEAD with its merge base, or with --merge the
 # test merge of HEAD onto BASE with BASE. A conflict fails and skips the

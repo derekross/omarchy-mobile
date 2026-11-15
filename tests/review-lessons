@@ -1,0 +1,32 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# docs/review/lessons/: every file small enough for one read (the reviewer
+# agent reads them whole, and a file that outgrew a read was silently read in
+# part, round 52), every L- and C- number used exactly once with none missing,
+# and every file listed in docs/review/LESSONS.md.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { echo "not ok - $*" >&2; exit 1; }
+dir=docs/review/lessons
+max=40000
+shopt -s nullglob
+files=("$dir"/*.md)
+((${#files[@]})) || fail "no files in $dir"
+for f in "${files[@]}"; do
+  size=$(wc -c < "$f")
+  ((size <= max)) || fail "$f is $size bytes, over $max: move its oldest entries to the area's next part (docs/review/LESSONS.md)"
+  grep -cF "(lessons/${f##*/})" docs/review/LESSONS.md >/dev/null || fail "$f is not in the table in docs/review/LESSONS.md"
+  [[ $(sed -n 1p "$f") == '<!-- SPDX-License-Identifier: MIT -->' ]] || fail "$f starts with its licence line"
+done
+echo "ok - ${#files[@]} lesson files, each under $max bytes and in the index"
+for kind in L C; do
+  ids=$(cat "${files[@]}" | sed -n "s/^- \*\*$kind-\([0-9][0-9]*\).*/\1/p" | sort -n)
+  dup=$(uniq -d <<<"$ids" | head -n 3 | tr '\n' ' ')
+  [[ -z $dup ]] || fail "$kind- numbers used twice: $dup"
+  last=$(tail -n 1 <<<"$ids")
+  count=$(grep -c . <<<"$ids")
+  [[ $count == "$last" ]] || fail "$kind- numbers: $count entries but the highest is $last, so one is missing"
+  echo "ok - $kind-1 to $kind-$last, each once; the next free number is $kind-$((last + 1))"
+done
+[[ $(grep -c '^- \*\*[LC]-' docs/review/LESSONS.md || true) == 0 ]] || fail "docs/review/LESSONS.md is the index: entries go in $dir"
+echo "ok - docs/review/LESSONS.md holds no entries of its own"

@@ -75,6 +75,7 @@ run() {
     OMAMOBILE_VOICE_MODELS="${RUN_VOICE_MODELS:-$t/no-voice-models}" OMAMOBILE_VOXTYPE="${RUN_VOXTYPE:-voxtype}" \
     OMARCHY_PATH="${RUN_OMARCHY_PATH:-$t/omarchy}" \
     OMAMOBILE_USER_UNITS="${RUN_USER_UNITS:-$t/no-user-units}" \
+    OMAMOBILE_AUTO_SLEEP_DEFAULT="${RUN_AUTO_SLEEP:-$t/no-auto-sleep-default}" \
     bash bin/omamobile-setup-user "$@" >"$t/out" 2>&1 || { cat "$t/out"; fail "omamobile-setup-user runs"; }
 }
 run
@@ -484,3 +485,18 @@ for gliff in no yes; do
 done
 rm -f "$F/gliff-server"
 pass "Omarchy's remote session is off on every phone, once, with or without gliff, and a user can turn it back on"
+
+# Auto-sleep: on once where the device package says suspend is verified;
+# off by default elsewhere; a user who turns it off keeps it off.
+ha=$t/auto-sleep; mkdir -p "$ha/.config/hypr" "$ha/.local/state/omarchy/done"
+cp "$H"/.config/hypr/*.lua "$ha/.config/hypr/"
+touch "$ha/.local/state/omarchy/done/omamobile-shell-profile"
+RUN_HOME=$ha run
+[[ ! -e $ha/.local/state/omarchy/toggles/omamobile-sleep ]] || fail "no device flag: auto-sleep stays off"
+touch "$t/auto-sleep-default"
+RUN_HOME=$ha RUN_AUTO_SLEEP=$t/auto-sleep-default run
+[[ -e $ha/.local/state/omarchy/toggles/omamobile-sleep ]] || fail "the device flag turns auto-sleep on"
+rm "$ha/.local/state/omarchy/toggles/omamobile-sleep"
+RUN_HOME=$ha RUN_AUTO_SLEEP=$t/auto-sleep-default run
+[[ ! -e $ha/.local/state/omarchy/toggles/omamobile-sleep ]] || fail "a user who turns auto-sleep off keeps it off"
+pass "auto-sleep: on once where the device says suspend is verified, a user's off kept"

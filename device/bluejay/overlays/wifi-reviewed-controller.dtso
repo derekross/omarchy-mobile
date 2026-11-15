@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: MIT
+/* Reviewed GS101 Wi-Fi path: requires a separately qualified wifi-pool.
+ * Enable the WLAN regulator, PHY and controller; leave the endpoint off.
+ * See WIFI-PLAN.md. This overlay does not authorize a driver load.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target-path = "/regulator-wlan";
+		__overlay__ {
+			status = "okay";
+		};
+	};
+	fragment@1 {
+		target-path = "/soc@0/phy@14550000";
+		__overlay__ {
+			status = "okay";
+		};
+	};
+	fragment@2 {
+		target-path = "/soc@0/pcie@14520000";
+		__overlay__ {
+			status = "okay";
+		};
+	};
+};

@@ -8,14 +8,13 @@
  * in device.conf for that build only.
  *
  * An overlay replaces bootargs whole, so these are a copy: zuma-akita.dts's
- * bootargs as of linux-omarchy-mobile#206 (omamobile 75b9c0b73), unchanged
- * since the first-light board file (#192). If the board file's bootargs
- * change, copy them again before reusing this, or the overlay silently
- * reverts them.
+ * bootargs as of linux-omarchy-mobile#238 (omamobile 2b1c2bc69, which added
+ * mem_sleep_default=s2idle). If the board file's bootargs change, copy them
+ * again before reusing this, or the overlay silently reverts them.
  */
 /dts-v1/;
 /plugin/;
 
 &{/chosen} {
-	bootargs = "console=tty0 fbcon=font:TER16x32 reboot=warm panic=10 softlockup_panic=1 nmi_watchdog=panic sysctl.kernel.panic_on_rcu_stall=1 clk_ignore_unused pd_ignore_unused rdinit=/init omamobile.ufs-probe omamobile.initramfs";
+	bootargs = "console=tty0 fbcon=font:TER16x32 reboot=warm panic=10 softlockup_panic=1 nmi_watchdog=panic sysctl.kernel.panic_on_rcu_stall=1 clk_ignore_unused pd_ignore_unused rdinit=/init mem_sleep_default=s2idle omamobile.ufs-probe omamobile.initramfs";
 };

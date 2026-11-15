@@ -23,6 +23,7 @@ depends=(
   omaphone     # "Phone" and "Contacts": dialpad, call log, favorites, contacts (docs/TELEPHONY-APPS-PLAN.md T6)
   omamessages  # "Messages": SMS conversations (T7); both pull in omatel-agent and work without a modem
   loupe        # "Image Viewer": touch zoom and swipe; the default for images (mimeapps.list)
+  omamobile-settings  # "Settings": About and Display so far. As a dependency here it reaches phones at their next update, not only new images
 )
 optdepends=(
   'snapshot: a second camera app (GNOME Snapshot, shown as "Snapshot"), with video, until omacam records video'

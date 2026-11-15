@@ -200,7 +200,7 @@ done
 # The vendor partition says which device it was built for.
 mkdir -p "$WORK/v"
 debugfs -R "dump /build.prop $(dq "$WORK/v/build.prop")" "$WORK/vendor.img" 2>/dev/null
-[[ -s "$WORK/v/build.prop" ]] || die "vendor.img has no build.prop"
+[[ -s "$WORK/v/build.prop" ]] || die "build.prop can't be read from vendor.img"
 dev=$(sed -n 's/^ro.product.vendor.device=//p' "$WORK/v/build.prop" | head -1)
 [[ "$dev" == "$DEVICE" || -n "$FORCE" ]] ||
   die "vendor partition is for '${dev:-unknown}', not $DEVICE; use -f to override"
@@ -348,7 +348,7 @@ head -c 64 "$root/vendor/firmware/$ta" | grep -ac TrustyApp >/dev/null ||
 grep -aq 'g7_trusty' "$root/vendor/bin/hw/android.hardware.biometrics.fingerprint-service.goodix" ||
   die "the fingerprint HAL is not the Goodix G7 one"
 
-(cd "$root" && find . -type f -printf '%m %P\n' | sort -k2 |
+(cd "$root" && find . -type f -printf '%m %P\n' | LC_ALL=C sort -k2 |
   while read -r mode path; do
     printf '%s %s %s\n' "$(sha256sum "$path" | cut -d' ' -f1)" "$mode" "$path"
   done) > "$OUT/MANIFEST"

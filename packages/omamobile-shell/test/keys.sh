@@ -134,6 +134,10 @@ reset; start=$(date +%s%N); keys power-down; keys power-up
 for _ in $(seq 60); do grep -q "brightnessctl -q -d panel set 2083" "$log" && break; sleep 0.1; done
 # The limit is read from `date`, never from EPOCHREALTIME (a comma locale writes it with a comma).
 grep -q EPOCHREALTIME "$here/bin/omamobile-keys" && fail "flash: the wait's clock doesn't depend on the locale"
+# ... and never from date's %3N: uutils' date (0.10.0) drops the nanoseconds'
+# leading zeros before it takes three digits, so one reading in ten was wrong
+# and this wait ended up to 400 ms early on the build machine (2026-11-11).
+grep -q '%[0-9]N' "$here/bin/omamobile-keys" && fail "flash: the wait's clock doesn't use date's %3N"
 took=$(( ($(date +%s%N) - start) / 1000000 ))
 grep -q "brightnessctl -q -d panel set 2083" "$log" || fail "flash: with a panel that never goes off the brightness still goes back"
 (( took >= 900 && took < 2500 )) || fail "flash: with a panel that never goes off the wait lasts about 1 s ($took ms)"

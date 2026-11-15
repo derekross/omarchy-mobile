@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Requires wifi-pool, live pool qualification and blacklisted modules.
+/* Historical c934e316b controller path, which has no regulator-wlan node.
+ * The reviewed GS101 stack uses wifi-reviewed-controller instead.
+ * Requires wifi-pool, live pool qualification and blacklisted modules.
  * Controller stages 0-4 only, under the guarded single-attempt runner.
  * Applying this overlay alone does not authorize a driver load.
  */

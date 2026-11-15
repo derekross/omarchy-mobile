@@ -47,8 +47,12 @@ class LifecycleTests(unittest.TestCase):
         root = Path(self.directory.name)
         self.state = root / 'owned.json'
         self.response = root / 'response.bin'
+        self.net = root / 'net'
         self.patches = [patch.object(data_call, 'STATE', self.state),
                         patch.object(data_call, 'RESPONSE', self.response),
+                        patch.object(data_call, 'MODEM_OWNED', root / 'modem-owned-bearers.json'),
+                        patch.object(data_call, 'DATA_INTERFACE', root / 'data-interface'),
+                        patch.object(data_call, 'NET', self.net),
                         patch.object(data_call, 'SETTLE_QUIET', 0),
                         patch.object(data_call, 'SETTLE_LIMIT', 0)]
         for item in self.patches:
@@ -58,6 +62,11 @@ class LifecycleTests(unittest.TestCase):
         for item in self.patches:
             item.stop()
         self.directory.cleanup()
+
+    def device(self, name, flags):
+        """A network device in the test's own /sys/class/net."""
+        (self.net / name).mkdir(parents=True, exist_ok=True)
+        (self.net / name / 'flags').write_text(flags + '\n')
 
     def test_rejected_setup_leaves_no_ownership(self):
         modem = Modem(status=36)
@@ -183,13 +192,9 @@ class LifecycleTests(unittest.TestCase):
     def test_failed_deactivation_retains_recovery_record(self):
         self.state.write_text(json.dumps({'cid': 1, 'session': 3}))
         self.response.write_bytes(b'private')
-        original = Path.read_text
-        def read(path, *args, **kwargs):
-            if str(path) == '/sys/class/net/rmnet0/flags':
-                return '0x0'
-            return original(path, *args, **kwargs)
+        self.device('rmnet0', '0x0')
         modem = Modem(fail_release=True)
-        with patch.object(Path, 'read_text', read), self.assertRaises(TimeoutError):
+        with self.assertRaises(TimeoutError):
             data_call.deactivate(modem)
         self.assertEqual(modem.sent, [(0x0601, b'\1\0')])
         self.assertTrue(self.state.exists())
@@ -216,20 +221,30 @@ class LifecycleTests(unittest.TestCase):
         self.assertNotIn(0x061b, [i for i, _ in modem.sent])
 
     def test_deactivation_releases_only_an_allocated_pdu_session(self):
-        original = Path.read_text
-        def read(path, *args, **kwargs):
-            if str(path) == '/sys/class/net/rmnet0/flags':
-                return '0x0'
-            return original(path, *args, **kwargs)
+        self.device('rmnet0', '0x0')
         # session 0 (this version) and 3 (a record from 0.3.4 or earlier)
         for session, sent in ((0, [(0x0601, b'\1\0'), (0x0602, b'')]),
                               (3, [(0x0601, b'\1\0'), (0x0602, b''), (0x061b, struct.pack('<i', 3))])):
             self.state.write_text(json.dumps({'cid': 1, 'session': session}))
             modem = Modem()
-            with patch.object(Path, 'read_text', read):
-                data_call.deactivate(modem)
+            data_call.deactivate(modem)
             self.assertEqual(modem.sent, sent)
             self.assertFalse(self.state.exists())
+
+    def test_deactivation_is_refused_while_a_device_is_up(self):
+        # rmnet<CID - 1>, or the device omamobile-sit-data recorded
+        for up, recorded in (('rmnet0', None), ('rmnet3', 'rmnet3')):
+            self.state.write_text(json.dumps({'cid': 1, 'session': 0}))
+            self.device('rmnet0', '0x0')
+            self.device(up, '0x1043')
+            if recorded:
+                data_call.DATA_INTERFACE.write_text(recorded + '\n')
+            modem = Modem()
+            with self.assertRaises(RuntimeError) as raised:
+                data_call.deactivate(modem)
+            self.assertIn('remove host data configuration first', str(raised.exception))
+            self.assertEqual(modem.sent, [])
+            self.assertTrue(self.state.exists())
 
     def test_unowned_bearer_blocks_additional_setup(self):
         modem = Modem()

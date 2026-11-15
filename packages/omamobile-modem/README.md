@@ -32,3 +32,41 @@ configuration cannot reassign MARK/HOLD or redefine refuse. The normal marker,
 unclean-stop and hold decisions remain unchanged. Device-specific configuration
 does not authorize starting a modem or replace its watchdog/backup/recovery
 qualification. The maintainer allocates the package version at merge.
+
+# On or off from the shell
+
+`omamobile-modem-switch` (in `/usr/lib/omamobile-vendor/`) backs the Modem
+switch on the shell's Mobile network page. It is offered only where
+something starts `omamobile-modem-boot.target` at boot (the Pixel 7 Pro's
+device package links it into `multi-user.target`) or where the switch has
+masked it; elsewhere it refuses. "Off" masks the target and stops nothing in
+this boot; "on" unmasks it and starts the stack only if this boot's modem
+never started. The polkit action `org.omamobile.modem.switch` lets the user
+of the active local session switch it without a password; anyone else is
+refused.
+
+# Sleep with the modem up
+
+With the modem's drivers loaded the phone doesn't sleep:
+`omamobile-modem-inhibit.service` holds a sleep and idle inhibitor until the
+reboot. `omamobile-modem-sleep-policy` (in `/usr/lib/omamobile-vendor/`)
+decides where it is skipped instead, as the unit's `ExecCondition=` and in
+the start script alike. It is skipped only when all three hold:
+
+- the device package declares suspend with the modem up verified, with a
+  comment-only `/usr/lib/omamobile-modem/suspend-verified`. Only the Pixel 7
+  Pro's (`omamobile-device-cheetah`) does, after MODEM-PLAN M6 passed on the
+  reference phone on 2026-11-14. The attended runbook's pair from before (the
+  owner's `/etc/omamobile/modem-suspend-enable` beside a device's
+  `/usr/lib/omamobile-modem/suspend-runbook`) still counts; the owner's file
+  alone never does;
+- the owner hasn't opted out: `touch /etc/omamobile/modem-suspend-disable`
+  keeps the inhibitor from the next boot;
+- the running kernel's modem link module (`pcie-gs201-cp`) has the early
+  sleep refusal of linux-omarchy-mobile#232 (kernel-2026.11.15 and later),
+  found in the module file itself. On an older kernel, or an older slot, the
+  inhibitor holds.
+
+`omamobile-modem-sleep-policy check` prints the answer and its reason (exit 0
+for yes); the journal of `omamobile-modem` and `omamobile-modem-inhibit` has
+the same line from each boot.
