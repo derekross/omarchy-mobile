@@ -33,6 +33,9 @@ install -Dm644 libalpm/95-omamobile-omarchy-patches.hook "$d/usr/share/libalpm/h
 install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-omarchy/LICENSE"
 install -Dm644 LICENSE.omarchy "$d/usr/share/licenses/omamobile-omarchy/omarchy-MIT"
 install -Dm644 version "$d/usr/share/omamobile/omarchy/version"
+# The package's own version (tools/pkg-version), which the file's
+# series doesn't give
+[[ -z ${OMAMOBILE_PKGVER:-} ]] || echo "$OMAMOBILE_PKGVER" > "$d/usr/share/omamobile/omarchy/version"
 for f in legacy-4.0.6/*.patch; do
   install -Dm644 "$f" "$d/usr/share/omamobile/omarchy/legacy-4.0.6/${f##*/}"
 done

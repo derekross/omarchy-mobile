@@ -13,6 +13,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
 # The release key (docs/RELEASES.md §10), with a clear error without it
 source tools/lib/signing.sh
+source tools/lib/pkg-tar.sh
 signing_key_load "$PWD" || exit 1
 key=$SIGNING_KEY
 repo=out/repo/aarch64
@@ -36,8 +37,7 @@ for dir in "${dirs[@]}"; do
   name=$(basename "$dir")
   echo "==> $name"
   "$ssh" "rm -rf $build/$name && mkdir -p $build && chown '$phone_user': $build"
-  tar cf - --exclude="./$name/pkg" --exclude="./$name/src/build" --exclude="*.pkg.tar.*" \
-    -C "$(dirname "$dir")" "./$name" | "$ssh" "tar xf - -C $build --no-same-owner && chown -R '$phone_user': $build/$name"
+  pkg_tar "$dir" | "$ssh" "tar xf - -C $build --no-same-owner && chown -R '$phone_user': $build/$name"
   # --nodeps: runtime dependencies (e.g. omamobile-keyring) come from this
   # very repository, so they needn't be installed on the builder.
   "$ssh" "su - '$phone_user' -c 'cd $build/$name && makepkg -f --nodeps --noconfirm' 2>&1 | tail -1"

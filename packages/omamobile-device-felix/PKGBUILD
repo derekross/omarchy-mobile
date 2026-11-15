@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Maintainer: Derek Ross <derekross@gmail.com>
 pkgname=omamobile-device-felix
-pkgver=$(cat "${startdir:-.}/version")
+pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")
 pkgrel=1
 pkgdesc="Omarchy Mobile support for the Google Pixel Fold (felix): storage guard and USB networking"
 arch=(aarch64)
@@ -23,5 +23,5 @@ check() {
 }
 
 package() {
-  "$startdir/install" "$pkgdir" "$srcdir/build"
+  OMAMOBILE_PKGVER=$pkgver "$startdir/install" "$pkgdir" "$srcdir/build"
 }

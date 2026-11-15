@@ -220,3 +220,17 @@ expect_index v2
 expect "without a record, a no-op keeps v1 and drops what the failed v3 copied" base-1-1 app-1-1 app-2-1
 stages v3 "stages v3 after that"
 expect "and the next change keeps only the set it replaces" base-1-1 app-2-1 app-3-1
+
+# A branch build or a build of uncommitted edits is never published, and
+# the channel is left as it was.
+before=$(have)
+make_repo vg base-1-1 app-0.2.1.1.gabc1234-1
+if run_stage vg; then fail "refuses a branch build"; fi
+grep -c 'test builds' "$t/log" >/dev/null || fail "says why a branch build is refused"
+make_repo vd base-1-1 app-0.2.1.dabc1234-1
+if run_stage vd; then fail "refuses a build of uncommitted edits"; fi
+[[ $(have) == "$before" ]] || fail "a refused test build changes nothing in the channel"
+pass "test builds (.g<commit>, .d<tree>) are refused and change nothing"
+make_repo vk base-1-1 linux-omamobile-7.3.0rc6.r4521.g0123456789ab-1
+stages vk "a release kernel's 12-digit commit is not a test build"
+pass "a release kernel's 12-digit commit is not a test build"

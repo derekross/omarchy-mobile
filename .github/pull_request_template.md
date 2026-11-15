@@ -21,7 +21,7 @@ partition contents: use placeholders such as <SERIAL>.
 - [ ] `tools/pr-check origin/main` passes
 - [ ] `tests/all` passes
 - [ ] `tests/packages` passes (or the packages I touched: ...)
-- [ ] Each changed package has its `version` bumped, and the new version is in the commit subject
+- [ ] No package `version` bumped: the version is counted at merge (`tools/pkg-version`, CONTRIBUTING §6.3)
 - [ ] Commits have area prefixes and bodies that say why; any AI help is a `Co-Authored-By:` or `Assisted-by:` trailer, never a `Signed-off-by:`
 
 ## On the phone

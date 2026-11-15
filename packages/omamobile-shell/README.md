@@ -100,6 +100,6 @@ Open, save and choose-a-folder requests through the portal (Qt, GTK, Electron an
 
 `hypr/phone.lua` maximizes every app between the bar and the dock, with no gaps, no border and full opacity (Omarchy's 0.96-0.985 let the home widgets show through). When the maximized window closes, the next one takes the screen (`misc:exit_window_retains_fullscreen`). Modal dialogs float centred at their own size, never bigger than the screen; picture-in-picture is 300x169 in the top-right corner. `omamobile-setup-user` sets the monitor scale to 3 with `GDK_SCALE` to match, gives foot 6 px padding, a scrollback multiplier of 3 and a 300 ms long press, and adds Chromium's Wayland input-method flags, each once and only over Omarchy's own values.
 
-The package contract follows omarchy-mac's: `./install DESTDIR` stages files and enables nothing, `test/all` runs the package's own tests, and `version` holds the version.
+The package contract follows omarchy-mac's: `./install DESTDIR` stages files and enables nothing, `test/all` runs the package's own tests, and `version` holds the version series (`tools/pkg-version` counts the rest from `main`'s history).
 
 Develop on a desktop with `phone/dev/run-desktop` from the repo root.

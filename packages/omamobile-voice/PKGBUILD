@@ -17,7 +17,7 @@
 # makepkg has no fallback for one source; a copy on our own server would
 # replace this URL (same file name, same sha256).
 pkgname=omamobile-voice
-pkgver=$(cat "${startdir:-.}/version")
+pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")
 pkgrel=1
 _commit=5359861c739e955e79d9a303bcbc70fb988958b1
 _model=ggml-base.en.bin

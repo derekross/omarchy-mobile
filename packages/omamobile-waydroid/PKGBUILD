@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Maintainer: Derek Ross <derekross@gmail.com>
 pkgname=omamobile-waydroid
-pkgver=$(cat "${startdir:-.}/version")
+pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")
 pkgrel=1
 pkgdesc="Omarchy Mobile Waydroid integration: kernel checks, container hardening, Mali-G710 Mesa overlay, ufw rules"
 arch=(any)
@@ -17,5 +17,5 @@ check() {
 }
 
 package() {
-  "$startdir/install" "$pkgdir"
+  OMAMOBILE_PKGVER=$pkgver "$startdir/install" "$pkgdir"
 }

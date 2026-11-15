@@ -27,3 +27,6 @@ install -Dm644 device.conf "$destination/usr/share/omamobile/device.conf"
 install -Dm644 etc/omamobile-mirrorlist "$destination/etc/pacman.d/omamobile-mirrorlist"
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-tegu/LICENSE"
 install -Dm644 version "$destination/usr/share/omamobile/device-tegu/version"
+# The package's own version (tools/pkg-version), which the file's
+# series doesn't give
+[[ -z ${OMAMOBILE_PKGVER:-} ]] || echo "$OMAMOBILE_PKGVER" > "$destination/usr/share/omamobile/device-tegu/version"

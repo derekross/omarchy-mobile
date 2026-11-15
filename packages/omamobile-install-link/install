@@ -59,6 +59,9 @@ ln -sfn ../omamobile-install-link-agent.service "$user/graphical-session.target.
 install -Dm644 tmpfiles.d/omamobile-install-link.conf "$d/usr/lib/tmpfiles.d/omamobile-install-link.conf"
 
 install -Dm644 version "$d/usr/share/omamobile/install-link/version"
+# The package's own version (tools/pkg-version), which the file's
+# series doesn't give
+[[ -z ${OMAMOBILE_PKGVER:-} ]] || echo "$OMAMOBILE_PKGVER" > "$d/usr/share/omamobile/install-link/version"
 {
   echo "# The install link's daemon and gadget script: derekross/omamobile-installer"
   echo "protocol: $protocol"

@@ -29,8 +29,8 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$R/tools/lib" "$R/rootfs" "$R/packages/omamobile-keyring" "$R/keys" "$t/up" "$t/imp"
-cp tools/build-packages "$R/tools/"
-cp tools/lib/alarm.sh tools/lib/signing.sh "$R/tools/lib/"
+cp tools/build-packages tools/pkg-version "$R/tools/"
+cp tools/lib/alarm.sh tools/lib/signing.sh tools/lib/pkg-tar.sh "$R/tools/lib/"
 run() { (cd "$R" && "$@") > "$t/log" 2>&1; }
 
 # The release key as tools/release-key-init makes it, trusted by the keyring

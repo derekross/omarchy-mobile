@@ -25,6 +25,9 @@ install -Dm644 etc/upower-critical.conf "$destination/etc/UPower/UPower.conf.d/5
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-cheetah/LICENSE"
 install -Dm644 LICENSE.Apache-2.0 "$destination/usr/share/licenses/omamobile-device-cheetah/LICENSE.Apache-2.0"
 install -Dm644 version "$destination/usr/share/omamobile/device-cheetah/version"
+# The package's own version (tools/pkg-version), which the file's
+# series doesn't give
+[[ -z ${OMAMOBILE_PKGVER:-} ]] || echo "$OMAMOBILE_PKGVER" > "$destination/usr/share/omamobile/device-cheetah/version"
 # Suspend is verified on this phone (device/cheetah/SUSPEND-PLAN.md): the
 # shell's user setup turns auto-sleep on once where this file exists.
 install -Dm644 /dev/null "$destination/usr/share/omamobile/auto-sleep-default"

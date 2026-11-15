@@ -14,7 +14,7 @@ It is opt-in. `omamobile-remote` and the patched `wlrctl` are in `packages/`, no
 On the phone, from the repository built by `tools/build-packages`:
 
 ```
-pacman -U wlrctl-0.2.2-1-aarch64.pkg.tar.* omamobile-remote-0.1.2-1-any.pkg.tar.*
+pacman -U wlrctl-0.2.2-1-aarch64.pkg.tar.* omamobile-remote-*-any.pkg.tar.*
 ```
 
 From your computer, an ssh key to the phone's user (USB networking is the easy way: `ssh user@172.16.42.1` on the images that have it). Every command below is run as that user:

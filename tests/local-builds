@@ -18,8 +18,8 @@ trap 'gpgconf --homedir "$t/signer" --kill gpg-agent 2>/dev/null || true; gpgcon
 
 R=$t/repo
 mkdir -p "$R/tools/lib" "$R/device/panther" "$R/packages"
-cp tools/local-key-init tools/fetch-published tools/build-packages tools/build-rootfs "$R/tools/"
-cp tools/lib/alarm.sh tools/lib/alarm-setup "$R/tools/lib/"
+cp tools/local-key-init tools/fetch-published tools/build-packages tools/build-rootfs tools/pkg-version "$R/tools/"
+cp tools/lib/alarm.sh tools/lib/alarm-setup tools/lib/pkg-tar.sh "$R/tools/lib/"
 cp device/panther/device.conf "$R/device/panther/"
 cp -a packages/omamobile-device-panther "$R/packages/"
 run() { (cd "$R" && "$@") > "$t/log" 2>&1; }

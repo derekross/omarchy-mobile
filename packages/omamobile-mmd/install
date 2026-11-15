@@ -13,3 +13,6 @@ install -Dm644 dbus/org.freedesktop.ModemManager1.conf "$d/usr/share/dbus-1/syst
 install -Dm644 polkit/org.freedesktop.ModemManager1.policy "$d/usr/share/polkit-1/actions/org.freedesktop.ModemManager1.policy"
 install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-mmd/LICENSE"
 install -Dm644 version "$d/usr/share/omamobile/mmd/version"
+# The package's own version (tools/pkg-version), which the file's
+# series doesn't give
+[[ -z ${OMAMOBILE_PKGVER:-} ]] || echo "$OMAMOBILE_PKGVER" > "$d/usr/share/omamobile/mmd/version"
