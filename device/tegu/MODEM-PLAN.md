@@ -1744,9 +1744,12 @@ not had an attended run first. Their boots began, by the palmtop's journal
 15:10 to 16:04, the refusals and the three 45 s sleeps at 16:36, the twenty
 at 17:02, the boot that hung at 17:51 and the night at 19:28; on 11-14 the
 boots with #556's package and the calls at 04:09, 05:37, 06:29 and 06:56.
-Until the maintainer decides otherwise, a sleep with the modem up on the 9a
-runs as AGENTS.md says: attended, on the charger, ending in a reboot, and a
-new kernel gets its attended run first.
+From 2026-11-15 the owner's palmtop runs these under the maintainer's
+decision in [#809](https://github.com/derekross/omarchy-mobile/issues/809):
+unattended is allowed there, on the charger, every such boot ending in
+`systemctl reboot`, a new kernel's first run at most 10 sleeps with its
+result posted before a longer one, and the record saying which rule each
+run ran under. Every other 9a keeps the rule as AGENTS.md has it.
 The series script is `device/tegu/bringup/modem-sleep-series.sh` (the copy
 that ran logged to another file and lacked the check that `rtcwake` armed
 the alarm; otherwise the same).
