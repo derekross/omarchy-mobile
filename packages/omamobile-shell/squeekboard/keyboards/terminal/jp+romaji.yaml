@@ -24,7 +24,7 @@
 # omamobile-setup-user links it as
 # ~/.local/share/squeekboard/keyboards/terminal/us.yaml, the only place
 # squeekboard reads layouts from besides its built-in ones.
-# Language: Englisch (US)
+# Language: Japanese (romaji)
 ---
 outlines:
     default:       { width: 40.41,   height: 52     }

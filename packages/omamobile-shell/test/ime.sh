@@ -17,16 +17,20 @@ cat > "$t/bin/gsettings" <<'SH'
 #!/bin/bash
 [[ $1 == get ]] && cat "$IME_SOURCES"
 [[ $1 == set ]] && printf '%s\n' "$4" > "$IME_SOURCES"
+[[ $1 == monitor && -n ${IME_MONITOR:-} ]] && echo "sources: changed"
 exit 0
 SH
-printf '#!/bin/bash\necho "remote $*" >> "$IME_LOG"\n' > "$t/bin/fcitx5-remote"
-chmod +x "$t/bin/gsettings" "$t/bin/fcitx5-remote"
+printf '#!/bin/bash\necho "remote $*" >> "$IME_LOG"\n[[ -z ${IME_REMOTE_FAIL:-} ]]\n' > "$t/bin/fcitx5-remote"
+printf '#!/bin/bash\necho restart >> "$IME_OSK"\n' > "$t/bin/osk-restart"
+chmod +x "$t/bin/gsettings" "$t/bin/fcitx5-remote" "$t/bin/osk-restart"
+mkdir -p "$t/run"
 : > "$t/mozc.conf"
 printf "[('xkb', 'us'), ('xkb', 'jp')]\n" > "$t/sources"
 run() {
   HOME=$t/home XDG_CONFIG_HOME=$t/home/.config IME_LOG=$t/log IME_SOURCES=$t/sources OMAMOBILE_SYSTEMCTL=$t/bin/systemctl \
     OMAMOBILE_GSETTINGS=$t/bin/gsettings OMAMOBILE_FCITX5_REMOTE=$t/bin/fcitx5-remote \
-    OMAMOBILE_MOZC_ADDON=${MOZC:-$t/mozc.conf} OMAMOBILE_IME_NO_OSK=1 bin/omamobile-ime "$@"
+    OMAMOBILE_MOZC_ADDON=${MOZC:-$t/mozc.conf} OMAMOBILE_IME_OSK_RESTART=$t/bin/osk-restart IME_OSK=$t/osk \
+    XDG_RUNTIME_DIR=$t/run OMAMOBILE_IME_OSK_WAIT=0 OMAMOBILE_IME_REMOTE_WAIT=${REMOTE_WAIT:-0} bin/omamobile-ime "$@"
 }
 c=$t/home/.config
 
@@ -61,6 +65,28 @@ for case in "us:-g English" "jp+romaji:-g Japanese" "jp:-g English" "jp+kana:-g 
   printf "[('xkb', '%s'), ('xkb', 'jp')]\n" "${case%%:*}" > "$t/sources"; : > "$t/log"
   run session
   [[ $(cat "$t/log") == "remote ${case#*:}" ]] || fail "the ${case%%:*} keyboard sends fcitx5-remote ${case#*:}"
+done
+
+# squeekboard is restarted once per login session, and again after "on".
+: > "$t/osk"; rm -f "$t/run/omamobile-ime-osk-restarted"
+run session; run session
+[[ $(wc -l < "$t/osk") == 1 ]] || fail "session restarts squeekboard once per login session"
+run on >/dev/null; run session
+[[ $(wc -l < "$t/osk") == 2 ]] || fail "on lets the next session restart squeekboard"
+
+# fcitx5 not answering (a slow login, a restart) doesn't stop the follower:
+# it retries, logs, and still applies the next change of language.
+: > "$t/log"
+REMOTE_WAIT=2 IME_REMOTE_FAIL=1 IME_MONITOR=1 run session 2>/dev/null || fail "a failing fcitx5-remote stops the follower"
+[[ $(grep -c '^remote ' "$t/log") == 4 ]] || fail "the follower retries, then applies the next change ($(grep -c '^remote ' "$t/log") calls)"
+REMOTE_WAIT=2 IME_REMOTE_FAIL=1 run session 2>&1 >/dev/null | grep -c "didn't take" >/dev/null || fail "a failed apply is logged"
+
+# The Japanese (romaji) layouts are the US ones under another name: their
+# bodies must stay the same as the US files'.
+for f in jp+romaji jp+romaji_wide terminal/jp+romaji terminal/jp+romaji_wide; do
+  cmp -s <(sed '1,/^---/d' "squeekboard/keyboards/$f.yaml") <(sed '1,/^---/d' "squeekboard/keyboards/${f/jp+romaji/us}.yaml") ||
+    fail "squeekboard/keyboards/$f.yaml differs from ${f/jp+romaji/us}.yaml: copy it again"
+  grep -qx '# Language: Japanese (romaji)' "squeekboard/keyboards/$f.yaml" || fail "$f.yaml names its language"
 done
 
 u=systemd/user/omamobile-ime.service

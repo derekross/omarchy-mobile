@@ -13,7 +13,7 @@
 # squeekboard/generate (change the generator, not this file). The row
 # sums to the widest row's 356.57: 2 x 106.971 + 2 x 71.314.
 # omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
-# Language: English (US)
+# Language: Japanese (romaji)
 ---
 outlines:
     default:       { width: 35.657, height: 52 }
