@@ -11,7 +11,14 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
 bash -n build || fail "build parses"
 bash -n install || fail "install parses"
-for script in bin/*; do bash -n "$script" || fail "$script parses"; done
+for script in bin/*; do
+  if head -1 "$script" | grep -c python3 >/dev/null; then
+    python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$script" || fail "$script parses"
+  else
+    bash -n "$script" || fail "$script parses"
+  fi
+done
+sh -n vendor/systemd/system-generators/omamobile-charger-mode-generator || fail "the charger-mode generator parses"
 pass "scripts parse"
 
 grep -q '\.\./\.\.' build install && fail "build or install reaches outside the package directory"
@@ -71,6 +78,16 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
   [[ $(readlink vendor/systemd/system-sleep/omamobile) == "$(readlink ../omamobile-device-cheetah/vendor/systemd/system-sleep/omamobile)" ]] \
     || fail "the system-sleep link drifted from the cheetah package"
   pass "omamobile-sleep and its system-sleep link match the cheetah package"
+  # Off-mode charging is the 7 Pro's: the same bootloader charger boot
+  # (androidboot.mode = "charger"), the same MAX77759 and power key. The
+  # cheetah package's test runs the script against a fake sysfs.
+  for f in bin/omamobile-charger-mode \
+           vendor/systemd/system-generators/omamobile-charger-mode-generator \
+           vendor/systemd/system/omamobile-charger.service \
+           vendor/systemd/system/omamobile-charger.target; do
+    cmp -s "$f" "../omamobile-device-cheetah/$f" || fail "$f drifted from the cheetah package"
+  done
+  pass "the off-mode charging files match the cheetah package"
 fi
 grep -q 'omamobile-keyring' PKGBUILD || fail "pacman needs omamobile-keyring"
 grep -q '^install=omamobile-device-panther.install$' PKGBUILD \
@@ -117,6 +134,9 @@ for f in usr/bin/reboot-to \
          usr/lib/modprobe.d/omamobile-wifi.conf \
          usr/bin/omamobile-wlan-mac usr/lib/udev/rules.d/80-omamobile-wlan-mac.rules \
          usr/bin/omamobile-sleep \
+         usr/bin/omamobile-charger-mode \
+         usr/lib/systemd/system/omamobile-charger.service \
+         usr/lib/systemd/system/omamobile-charger.target \
          etc/pacman.d/omamobile-mirrorlist; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
@@ -196,6 +216,32 @@ grep -q '^ConditionPathExists=/sys/bus/platform/devices/14520000.pcie$' \
 grep -q 'modprobe -r brcmfmac_wcc brcmfmac pcie_gs201' bin/omamobile-sleep \
   || fail "omamobile-sleep unloads Wi-Fi before suspend"
 grep -q 'i2c-tools' PKGBUILD || fail "omamobile-usb-rescue needs i2c-tools"
+# Off-mode charging: only a charger boot (androidboot.mode = "charger")
+# gets omamobile-charger.target, from the generator's early folder; no
+# wants link starts it on a normal boot (the check below).
+[[ -x $tmp/root/usr/bin/omamobile-charger-mode ]] || fail "omamobile-charger-mode is executable"
+grep -Eq '^ +python\)' PKGBUILD || fail "omamobile-charger-mode needs python"
+gen=$tmp/root/usr/lib/systemd/system-generators/omamobile-charger-mode-generator
+[[ -x $gen ]] || fail "the generator is staged executable"
+c=$tmp/charger; mkdir -p "$c/etc/omamobile"
+printf 'androidboot.slot_suffix = "_b"\nandroidboot.mode = "charger"\n' > "$c/charger.bc"
+printf 'androidboot.slot_suffix = "_b"\nandroidboot.mode = "normal"\n' > "$c/normal.bc"
+OMAMOBILE_ETC=$c/etc OMAMOBILE_BOOTCONFIG=$c/charger.bc sh "$gen" "$c/n1" "$c/e1" "$c/l1"
+[[ $(readlink "$c/e1/default.target") == /usr/lib/systemd/system/omamobile-charger.target ]] \
+  || fail "a charger boot defaults to omamobile-charger.target"
+[[ $(readlink "$c/e1/omamobile-camera.timer") == /dev/null ]] || fail "a charger boot masks the camera timer"
+OMAMOBILE_ETC=$c/etc OMAMOBILE_BOOTCONFIG=$c/normal.bc sh "$gen" "$c/n2" "$c/e2" "$c/l2"
+[[ ! -e $c/e2/default.target ]] || fail "a normal boot keeps its default target"
+touch "$c/etc/omamobile/charger-mode-disable"
+OMAMOBILE_ETC=$c/etc OMAMOBILE_BOOTCONFIG=$c/charger.bc sh "$gen" "$c/n3" "$c/e3" "$c/l3"
+[[ ! -e $c/e3/default.target ]] || fail "charger-mode-disable turns it off"
+wants=$(sed -n 's/^Wants=//p' "$tmp/root/usr/lib/systemd/system/omamobile-charger.target")
+[[ " $wants " == *" omamobile-usb-rescue.service "* && " $wants " == *" sshd.service "* ]] \
+  || fail "the charger target keeps SSH over USB"
+for u in multi-user graphical omamobile-modem omamobile-wifi sddm; do
+  [[ $wants == *"$u"* ]] && fail "the charger target starts nothing of the phone ($u)"
+done
+pass "a charger boot defaults to omamobile-charger.target (not a normal one, not with charger-mode-disable), masks the camera timer and keeps SSH over USB"
 grep -q '^PACKAGE=omamobile-device-panther$' "$tmp/root/usr/share/omamobile/device.conf" \
   || fail "the installed descriptor is panther"
 for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
@@ -210,7 +256,7 @@ for wants in "$tmp"/root/usr/lib/systemd/system/*.wants/*; do
     *) fail "install enables ${wants#$tmp/root/}" ;;
   esac
 done
-pass "install stages the udev rules, the USB link and its rescue, Wi-Fi, and the mirrorlist; it starts only the USB rescue, guarded Wi-Fi and the camera timer, and nothing that marks a slot or starts the modem or the charger"
+pass "install stages the udev rules, the USB link and its rescue, Wi-Fi, and the mirrorlist; it starts only the USB rescue, guarded Wi-Fi and the camera timer, and nothing that marks a slot, starts the modem or guards the charge (the charger target comes only from its generator)"
 # The cameras: drivers blacklisted, loaded only by omamobile-camera-start
 # from the timer, on panther's CSIS (1a450000; cheetah's is 1a460000).
 cam=$tmp/root/usr/bin/omamobile-camera-start
