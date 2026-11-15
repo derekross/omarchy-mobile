@@ -932,12 +932,17 @@ phone_checks() {
 }
 # The bootloader on both slots (plan G4). Decided 2026-11-10 (D4): on a
 # first install the installer measures the other slot itself, in
-# tools/install-phone, which is being built separately. Until that is in
-# the tools/install-phone this script runs, a phone that reports one slot's
-# version only stops here, and the stop offers no shortcut: a version passed
-# to --bootloader-slots-match is a statement that someone read it from the
-# phone. This function is the one place to change when install-phone
-# measures: the stop then goes, for first installs.
+# tools/install-phone, for a device whose descriptor says
+# BOOTLOADER_SLOT_PROBE=yes (none does until an attended run on it is in its
+# notes). There a first install from slot A asks the owner here, once, and
+# hands the yes to tools/install-phone (--measure-other-slot), which
+# measures right before its first write and stops with status 3, nothing
+# written, if the measurement does not read the same version. A locked
+# phone is shown the unlock steps first: the measurement needs an unlocked
+# bootloader. Everywhere else a phone that reports one slot's version only
+# stops here, and the stop offers no shortcut: a version passed to
+# --bootloader-slots-match is a statement that someone read it from the
+# phone.
 # The option's value is compared with the phone here, as tools/install-phone
 # compares it at the write: a wrong one must stop a locked phone before the
 # unlock steps, not after the unlock has erased it.
@@ -989,6 +994,10 @@ slots_check() {
       "Ask in an issue, and we will find the safe way for this phone together with you:" \
       "https://github.com/derekross/omarchy-mobile/issues"
   fi
+  if slot_probe_allowed; then
+    slot_probe_ask "$bl"
+    return 0
+  fi
   stop_final "The phone keeps two copies of its system (slot A and slot B), each with its own" \
     "bootloader. Omarchy Mobile starts from slot B, so slot B's bootloader has to be" \
     "the same version as slot A's, and this phone only tells the version of the copy" \
@@ -1004,6 +1013,72 @@ slots_check() {
     "  https://github.com/derekross/omarchy-mobile/issues" \
     "Don't tell the installer a version that nobody has read from this phone: if the" \
     "two copies differ, the phone may not start from slot B."
+}
+# Whether tools/install-phone will measure the other slot (its own rule,
+# read from the same fastboot answers): the descriptor allows it, a first
+# install from slot A (no --reinstall), and a slot B that does not read as
+# a slot that has started and can still start (an installed Omarchy Mobile
+# sent back to slot A, or Android after a system update, look like that;
+# flags the phone doesn't report count as that look too).
+slot_probe_allowed() {
+  local flag_s flag_u
+  [[ ${D[BOOTLOADER_SLOT_PROBE]:-no} == yes && $(var current-slot) == a ]] || return 1
+  ! has_pass --reinstall || return 1
+  flag_s=$(sed -nE 's/^slot-successful:b:[ ]*//p' <<<"$vars" | head -1)
+  flag_u=$(sed -nE 's/^slot-unbootable:b:[ ]*//p' <<<"$vars" | head -1)
+  [[ $flag_u == yes || $flag_s == no ]]
+}
+# The owner's yes to the measurement, asked once a run, of an unlocked phone
+# only: a locked one is told it comes after the unlock. A dry run asks
+# nothing and measures nothing.
+slot_probe_ask() {  # VERSION
+  local bl=$1
+  if has_pass --measure-other-slot; then return 0; fi
+  if ((judging_locked)); then
+    [[ $said_slots == "probe-later" ]] ||
+      note "the second bootloader copy can only be measured once the bootloader is unlocked: after the unlock the installer asks you, and if the two copies differ it stops there, after the unlock has erased the phone"
+    said_slots=probe-later
+    return 0
+  fi
+  if ((dry)); then
+    [[ $said_slots == "probe-dry" ]] ||
+      note "the second bootloader copy is measured by a run that installs, with your yes; this dry run measures nothing"
+    said_slots=probe-dry
+    return 0
+  fi
+  guide "The phone keeps two copies of its system, slot A and slot B, each with its own" \
+    "bootloader. Android runs from slot A ($bl). Omarchy Mobile is written to slot B," \
+    "and the install ends by making slot B the one the phone starts from, so slot B's" \
+    "bootloader has to be the same version. This phone tells the version of the copy" \
+    "it runs only." \
+    "" \
+    "The installer can measure slot B's version itself, right before it writes" \
+    "anything: it makes slot B the active slot, restarts the phone into slot B's" \
+    "bootloader, reads the version there, makes slot A the active slot again and" \
+    "restarts back. The phone restarts into its bootloader screen twice; it does not" \
+    "start Android. Nothing is written to the phone's storage. The bootloader's own" \
+    "record of the two slots changes, and the installer shows it before and after." \
+    "" \
+    "The risk: this starts slot B's bootloader before its version is known. If the" \
+    "phone does not come back to its bootloader screen by itself, bring it there" \
+    "($keys_fastboot), then type:" \
+    "    fastboot --set-active=a" \
+    "    fastboot reboot bootloader" \
+    "If an operating system starts and asks for anything (a factory reset, \"Try" \
+    "again\"), choose nothing: use the buttons. If the two copies differ, the install" \
+    "stops before anything is written."
+  printf '\n'
+  while true; do
+    ask "    Measure slot B's bootloader now? (yes/no) "
+    case $REPLY in
+      yes) pass+=(--measure-other-slot); note "slot B's bootloader is measured right before the write"; break ;;
+      no)
+        stop_final "Without slot B's bootloader version the installer does not make slot B" \
+          "active, so the install stops here. Nothing was sent to the phone for it." \
+          "Running this again asks again." ;;
+      *) note "Type yes or no." ;;
+    esac
+  done
 }
 # Each image against the slot B partition it is written to, as
 # tools/install-phone checks it in its dry run: no larger, and for an image
@@ -1652,10 +1727,21 @@ step_write() {
   nothing_at_usb_address
   same_phone
   put write started
-  install_phone "$typed" || {
+  local rc=0
+  install_phone "$typed" || rc=$?
+  if ((rc == 3)); then
+    # The measurement of the other bootloader slot stopped it, before any
+    # write (tools/install-phone's status 3)
+    unset password wifi_psk
+    put write ""
+    stop "The check of slot B's bootloader stopped the install before anything was" \
+      "written (the message above says why, and which slot is active now)." \
+      "Make sure slot A is the active slot again, as the message above says, before" \
+      "you start the phone or run this again."
+  elif ((rc)); then
     unset password wifi_psk
     stop_erased
-  }
+  fi
   unset password wifi_psk
   put write "done"
 }

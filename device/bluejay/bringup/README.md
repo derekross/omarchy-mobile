@@ -86,8 +86,7 @@ systemctl is-enabled omamobile-bluejay-check.service > "$backup/check.enabled" 2
 systemctl is-enabled omamobile-bluejay-boot-ready.service > "$backup/ready.enabled" 2>&1 || true
 for path in /usr/bin/omamobile-bluejay-check /usr/bin/omamobile-bluejay-boot-ready \
   /usr/lib/systemd/system/omamobile-bluejay-check.service \
-  /usr/lib/systemd/system/omamobile-bluejay-boot-ready.service \
-  /usr/lib/systemd/system/sddm.service.d/bluejay-check.conf; do
+  /usr/lib/systemd/system/omamobile-bluejay-boot-ready.service; do
   if [ -e "$path" ] || [ -L "$path" ]; then cp -a --parents "$path" "$backup/"; fi
 done
 touch "$backup/snapshot-complete"
@@ -95,16 +94,17 @@ install -Dm755 device/bluejay/bringup/bin/omamobile-bluejay-check /usr/bin/omamo
 install -Dm755 device/bluejay/bringup/bin/omamobile-bluejay-boot-ready /usr/bin/omamobile-bluejay-boot-ready
 install -Dm644 device/bluejay/bringup/vendor/systemd/system/omamobile-bluejay-check.service /usr/lib/systemd/system/omamobile-bluejay-check.service
 install -Dm644 device/bluejay/bringup/vendor/systemd/system/omamobile-bluejay-boot-ready.service /usr/lib/systemd/system/omamobile-bluejay-boot-ready.service
-install -Dm644 device/bluejay/bringup/vendor/systemd/system/sddm.service.d/bluejay-check.conf /usr/lib/systemd/system/sddm.service.d/bluejay-check.conf
 systemctl daemon-reload
 systemctl enable omamobile-bluejay-check.service omamobile-bluejay-boot-ready.service
 )
 ```
 
 Expect both units enabled and their installed `ExecStart` paths present. A real
-boot must show the check passing, SSH available, the pending marker cleared
-and the desktop ready. Stop on any failed prerequisite; do not clear the
-marker merely to make a failing boot repeat.
+boot must show the check passing, SSH available and the pending marker cleared.
+The SDDM drop-in is outside this root-only set: desktop readiness requires the
+separately staged hardware/GPU units and their hardware-ready marker. Stop on
+any failed prerequisite; do not clear the marker merely to make a failing boot
+repeat.
 
 To undo on the installed development root before another boot, restore the
 saved files below. If only RAM rescue is available, first recover access to
@@ -123,8 +123,7 @@ backup=/var/lib/omamobile/bluejay-root-gates-before-test
 systemctl disable omamobile-bluejay-check.service omamobile-bluejay-boot-ready.service
 for path in /usr/bin/omamobile-bluejay-check /usr/bin/omamobile-bluejay-boot-ready \
   /usr/lib/systemd/system/omamobile-bluejay-check.service \
-  /usr/lib/systemd/system/omamobile-bluejay-boot-ready.service \
-  /usr/lib/systemd/system/sddm.service.d/bluejay-check.conf; do
+  /usr/lib/systemd/system/omamobile-bluejay-boot-ready.service; do
   rm -f "$path"
   if [ -e "$backup$path" ] || [ -L "$backup$path" ]; then cp -a "$backup$path" "$path"; fi
 done

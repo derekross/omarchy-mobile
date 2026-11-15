@@ -3,6 +3,35 @@
 
 Findings from real hardware, newest first. Tracking issue: #36.
 
+## 2026-11-13: AoC-first Wi-Fi scan and one guarded traffic test
+
+- **AoC-first ordering reproduced on this lynx.** Trusty IPC and AoC came
+  up before WLAN power, followed by PCIe/MSI and stock ath11k firmware.
+  AoC reported 82 services with zero restarts. The first firmware/scan
+  build was `7.3.0-rc6-omamobile-lynx-wifi-aoc-20261113+`.
+- **An earlier connection failed.** A readiness-corrected attempt stalled
+  the WMI/TX queues and lost USB. The bounded guard recovered the phone;
+  the protected hashes and required smoke checks passed afterwards.
+- **One connection and traffic test passed** on
+  `7.3.0-rc6-omamobile-lynx-msi-20261113+`: passive scan (24 BSS entries),
+  association, DHCPv4, three gateway pings and Wi-Fi-bound HTTPS (HTTP 200,
+  577 bytes, TLS verified). Fresh SSH still reached the phone over USB.
+  No new WMI/TX timeout, oops or panic appeared in that connection capture.
+- **Qualification remains narrow.** This is one successful run with a local
+  MSI edge-rearm candidate, not proof of the earlier failure's cause or a
+  stable fix. Reconnect, endurance, suspend/resume, Bluetooth coexistence
+  and unattended startup were not tested. The kernel changes are not
+  published. Drivers remain blacklisted at boot; after the owner's later
+  reboot, home/touch work and Wi-Fi startup is still pending.
+- **Safety checks passed:** six protected hashes matched, storage guards
+  held, no units failed and all six required smoke checks passed on the
+  qualified boot. Raw captures, calibration hashes and firmware stay
+  private. No phone operation was needed to prepare this documentation.
+
+Build provenance, the chronological results and remaining gates are in
+[AOC-WIFI-PLAN.md](AOC-WIFI-PLAN.md). The older ROM-stall investigation and
+its stop conditions remain in [WIFI-PLAN.md](WIFI-PLAN.md).
+
 ## devinfo 3.11 read-only evidence (2026-11-06)
 
 The Android 15 unit reports `devinfo` version 3.11. With slot B active,

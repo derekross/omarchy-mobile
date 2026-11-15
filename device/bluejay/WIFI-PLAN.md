@@ -1,6 +1,64 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Bluejay station Wi-Fi
 
+## Reviewed integration: November 13 staged run
+
+Status (2026-11-14): the signed integration
+[`720a495233734e4328a09c33c095d72a8291e1c4`](https://github.com/latentoperator/linux-omarchy-mobile/commit/720a495233734e4328a09c33c095d72a8291e1c4)
+ran the revised pool, PCIe and station paths on November 13. Kernel release:
+`7.3.0-rc6-omamobile-bluejay-review-20261111`. These were separate attended
+headless boots; the trial prepared each DT by setting its stage's `status`
+properties directly. The source overlays below reproduce those exact DT
+changes; they are not a claim that these new overlay files were booted.
+
+| Stage | Overlays, applied to the unchanged integration DTB | Enabled path |
+| --- | --- | --- |
+| w0 pool | `wifi-pool` | 64 MiB restricted pool at `0xc4000000` only |
+| w1 link | `wifi-pool`, `wifi-reviewed-controller` | Pool, `regulator-wlan`, PHY and PCIe; endpoint disabled |
+| w2 station | `wifi-pool`, `wifi-reviewed-controller`, `wifi-endpoint` | The same path plus the Wi-Fi endpoint |
+
+The reviewed controller overlay includes `regulator-wlan`: the PCI power
+control path consumes that supply. The historical `wifi-controller` overlay
+does not enable it and belongs to the older kernel described below. The
+reviewed DT already has the corrected INTx specifiers, so do not add the
+historical `wifi-intx` overlay. USI, SPI and touch stay disabled in these
+Wi-Fi stages. Base nodes remain disabled; no descriptor enables these
+overlays automatically.
+
+The w0 boot verified the pool. The w1 boot linked on try 1 to `14e4:4441`
+with the endpoint unbound and no firmware loaded. The separate w2 boot
+verified restricted DMA below 4 GiB, then one managed station obtained DHCP
+and completed interface-bound HTTPS (HTTP 200, 16,932 bytes); IRQ counts
+increased from 725 to 744 and `tx_oversize_dropped` was zero. This does not
+exercise intentional oversized-frame drops. The public runtime reports are
+on [PCIe #227](https://github.com/derekross/linux-omarchy-mobile/pull/227) and
+[Wi-Fi #228](https://github.com/derekross/linux-omarchy-mobile/pull/228).
+
+Offline verification compiles and applies the overlays to the integration's
+base DTB and compares every node/property with both silicon DT variants
+extracted from each saved w0/w1/w2 `vendor_boot` image. Only the trial's
+`/chosen/bootargs` and silicon `soc_id` differ; all stage status switches,
+DMA policy, reservations and interrupt maps match. Images and captures
+remain private. No new phone operation or runtime qualification is added.
+
+These overlays describe the hardware stages, not a complete boot/runbook.
+The historical startup helpers remain pinned to `c934e316b` and must not be
+used with this integration. A future hardware run needs a new attended
+runbook with exact kernel/module pins, root and recovery gates, drivers
+blocked before boot, host logging, a watchdog and fresh SSH postchecks.
+Qualify the pool before the link and the link before firmware; stop on a
+pool/DMA mismatch, transport loss or new kernel fault, and recover using
+that runbook's known-good image set rather than unloading/rebinding.
+Hardware stages carry medium risk; compiling/applying/comparing DTBs
+offline has no phone risk. The recorded results do not qualify a release
+installer, native panel modesetting, roaming, hotspot, suspend or endurance.
+The dependency order remains kernel
+[#227](https://github.com/derekross/linux-omarchy-mobile/pull/227) and
+[#228](https://github.com/derekross/linux-omarchy-mobile/pull/228) before
+[#230](https://github.com/derekross/linux-omarchy-mobile/pull/230)'s two own commits.
+
+## Historical development kernel: November 8
+
 Status (2026-11-08): BCM4389 revision 3 station Wi-Fi initializes and reconnects
 automatically in the installed Arch/Omarchy desktop. NetworkManager owns
 association, DHCP and DNS. Fresh boots passed wireless-interface-bound HTTPS

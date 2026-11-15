@@ -2,6 +2,25 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-11-14: the release kernel for kernel-2026.11.15 boots, with the modem's sleep series
+
+The kernel that will be tagged `kernel-2026.11.15` is linux-omarchy-mobile's
+`omamobile` at `da171eae4cb7`: `kernel-2026.11.13` plus 20 commits, among
+them #232's five `PCI: dwc: gs201-cp` commits (system sleep refused before
+the freeze while the modem's link is up, the modem left out of system sleep,
+resume no longer waiting for its link, the root port kept off the PCI core's
+sleep handling). The rest are zuma device-tree commits for other phones. Its
+release build, `7.3.0-rc6-omamobile-gda171eae4cb7` (a clean checkout of
+`da171eae4cb7`), was pushed to the reference phone with the modem stopped
+first, and booted: `tools/phone-smoke` passed with nothing failed, no UFS
+line, the modem came up registered (IMS voice and SMS) with its data bearer
+up (3 of 3 pings over `rmnet2`), and the touchscreen's `power/wakeup` read
+`enabled`. With the screen off and the modem up, two RTC-armed
+`systemctl suspend` runs behaved as on the test kernel (SUSPEND-PLAN,
+2026-11-14, M6): the first sleep was entered and woke on the modem after
+1.5 s, the second was refused twice before the freeze while the link was
+busy, and data (3 of 3) and storage (no UFS line) were clean after each.
+
 ## 2026-11-13: the release kernel kernel-2026.11.13 boots, power off stays off, double tap wakes from sleep
 
 `kernel-2026.11.13` is linux-omarchy-mobile's `omamobile` at `36d61a33795b`:

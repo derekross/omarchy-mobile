@@ -75,6 +75,8 @@ fi
 python3 tests/bluejay-root-ready.py
 echo "# tests/phone-ssh"
 tests/phone-ssh
+echo "# tests/ncm-transfer"
+tests/ncm-transfer
 echo "# tests/module-load-once"
 tests/module-load-once
 # One suite per line from here on, so two pull requests that each add one

@@ -11,6 +11,18 @@ Sources:
 - `S/`: Google's GPL zuma SoC device tree, [kernel/devices/google/zuma](https://android.googlesource.com/kernel/devices/google/zuma/+/refs/tags/android-16.0.0_r0.10/dts/) at the same tag.
 - `H/`: [husky's notes](../husky/NOTES.md) and [descriptor](../husky/device.conf), for what the two zuma phones share.
 
+## 2026-11-13: battery and charging (M4)
+
+The battery: the fuel gauge, the charger's state, the USB link across an unplug, charging under Linux (gate h) and the PMIC's interrupt. The steps and results are in [BRINGUP-M4](BRINGUP-M4.md). The kernel side is linux-omarchy-mobile#246.
+
+- **The battery hardware is husky's** [V]: the MAX77759 gauge (0x36) and PMIC (0x66, its charger at 0x69) on `hsi2c_11`, with the same interrupt lines, and the pack's 24c08 EEPROM on `hsi2c_9` (G/, R/). The bus is pulled up, as in `zuma-pinctrl.dtsi` (R/'s live tree overrides G/'s `PULL_NONE`).
+- **This phone's pack is the ATL one** [V] (EEPROM byte 0x17 = 1). With Google's `atl-a1-1k` model the gauge reads a real temperature and 4486 mAh. Without a model it reads 22.0 C, stuck, and a level 4 points high.
+- **The bootloader charges the phone on the cable** [V]: mode 0x05, a 4.35 V float, a 500 mA input limit, the same values as husky's. A reboot through the bootloader puts them back even after Linux has turned charging off.
+- **M2.7's lost USB link is the charger's data switch** [V]: on an unplug the MAX77759 can open its USB2 switch (0x25:0x93), and nothing closes it until the bootloader runs. husky's `omamobile-usb-rescue` closes it again, and the package now ships it.
+- **Linux charged the battery** [V] under `tools/husky-deadman`, at 4.2 V and 1.32 A, on a laptop port and a wall charger. The guard never tripped. The charge current reads higher than the 500 mA input limit allows, which isn't settled yet.
+- **The PMIC's interrupt** [V] (GIC SPI 74, as stock's) gives `rtc0` its alarm: `rtcwake` fires on time.
+- **Omarchy 4.5's kyber rule** fails on some UFS units with "Device or resource busy" (`60-omarchy-io-scheduler.rules`). udev ignores it.
+
 ## 2026-11-11: buttons and touch (M3)
 
 The buttons (gate f) and touch (gate g), so the phone is usable by hand. The steps and results are in [BRINGUP-M3](BRINGUP-M3.md). The kernel side is linux-omarchy-mobile#238 (the buttons and `mem_sleep_default=s2idle`, merged), #240 (the S2MPG14 supply setter) and #241 (the touch supplies, the touchscreen and the panel size).

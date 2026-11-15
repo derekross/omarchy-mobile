@@ -211,6 +211,21 @@ pass "sitd waits for the CP; the modem stack is on by default through the target
   || fail "the device sitd policy is staged"
 grep -q 'omamobile-sitd-policy' PKGBUILD || fail "the package provides its sitd policy capability"
 pass "the device sitd policy is staged and provided"
+
+# MODEM-PLAN M6 is held back on this phone again (0.1.59): the twenty
+# auto-sleep check on kernel-2026.11.15 lost mobile data from the first
+# timer wake on (SUSPEND-PLAN, 2026-11-14), so the device no longer
+# declares suspend with the modem up verified, and omamobile-modem's
+# inhibitor keeps the phone awake while the modem is up.
+[[ ! -e $tmp/root/usr/lib/omamobile-modem/suspend-verified ]] || fail "the suspend-verified declaration is not shipped while M6 is held"
+[[ ! -e $tmp/root/usr/lib/omamobile-modem/suspend-runbook ]] || fail "the old runbook marker is no longer shipped"
+# follow_screen = yes is this phone's default (a [control] drop-in that sitd
+# reads: an /etc value wins).
+python3 -I -c 'import configparser,sys; p=configparser.ConfigParser(interpolation=None); p.read(sys.argv[1]); sys.exit(not p.getboolean("control","follow_screen"))' "$d" \
+  || fail "the 7 Pro's default is follow_screen = yes"
+python3 -I -c 'import configparser,sys; p=configparser.ConfigParser(interpolation=None); p.read(sys.argv[1]); sys.exit(sorted(p["control"]) != ["follow_screen"])' "$d" \
+  || fail "the drop-in's [control] sets follow_screen only"
+pass "suspend with the modem up is declared verified, and sitd follows the screen by default, on this phone"
 # The USB gadget's MAC addresses stay the same across boots (omamobile-usb-mac),
 # against a fake gadget: plain directories and files stand in for configfs.
 for f in usr/bin/omamobile-usb-mac usr/lib/systemd/system/omamobile-usb-mac.service; do
