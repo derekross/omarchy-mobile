@@ -17,6 +17,11 @@
 # end), so mobile data is the only route at each wake, the shape that lost data on the 7 Pro
 # (linux-omarchy-mobile#258). Refuses to start, and stops, unless the palmtop is charging.
 # The end counts the boot's "Reserve doorbell interrupt" and "PCI not powered on" lines.
+# Before each request and with each data check, one line of CPIF's own state, as the 7 Pro's
+# M6-D recorder reads it (device/cheetah/bringup/m6-data-capture.sh): the FMT and raw queues'
+# heads and tails, the wake lines, pcie_powered_on and reserve_doorbell, each pktproc queue's
+# fore/rear and pass, and the mif_cp2ap_msg count, so a failed wake says whether uplink,
+# downlink or the control channel stopped.
 # Attended, on the charger, and the boot ends in a reboot (AGENTS.md, the 9a sleep entry):
 #   [WIFI=off] systemd-run --unit=x-modem-sleep-series /root/modem-sleep-series.sh [N] [S] [append]
 # The last step afterwards is "systemctl reboot", never reboot-to.
@@ -46,6 +51,16 @@ charging() { (( $(cat $BAT/current_avg 2>/dev/null || echo 0) > 0 )); }
 data() { # a ping and a DNS lookup over the bearer's interface
   [[ -n $IF ]] || { echo "no bearer interface"; return; }
   echo "ping $(ping -c 3 -W 3 -I "$IF" "$H" 2>&1 | grep -o '[0-9]* received'), dns $(dns)"
+}
+cpif() { # one line of CPIF's state (read-only sysfs and /proc/interrupts)
+  local c=/sys/devices/platform/cpif
+  [[ -r $c/legacy_queues ]] || { echo "no cpif state"; return; }
+  echo "fmt $(grep -oE '^FMT: tx head:[0-9]+ tail:[0-9]+|rx head:[0-9]+ tail:[0-9]+' $c/legacy_queues | head -2 | grep -oE '[0-9]+' | paste -sd/)" \
+    "raw $(grep '^NORM_RAW' $c/legacy_queues | grep -oE '(head|tail):[0-9]+' | cut -d: -f2 | paste -sd/)" \
+    "$(grep -oE '(cp2ap_wakeup|ap2cp_wakeup|pcie_powered_on|reserve_doorbell):[0-9]+' $c/legacy_queues | paste -sd' ')" \
+    "dl $(awk '/fore\/rear\/done/ {f=$NF} /^ *pass:/ {printf "%s,%s ", f, $1}' $c/pktproc/status | sed 's/pass://g; s|fore/rear/done:||g')" \
+    "ul $(awk '/fore\/rear:/ {f=$NF} /^ *pass:/ {printf "%s,%s ", f, $1}' $c/pktproc_ul/status | sed 's/pass://g; s|fore/rear:||g')" \
+    "msg $(awk '/mif_cp2ap_msg/ {s=0; for (i = 2; i <= 9; i++) s += $i; print s}' /proc/interrupts)"
 }
 dns() { # one A query for $Q to the bearer's first DNS server, sent out of $IF itself: with Wi-Fi
   # connected the bearer's link is not resolved's default route, so resolvectl won't use it
@@ -80,6 +95,7 @@ for n in $(seq 1 "$N"); do
   charging || { say "sleep $n: not charging any more: stop"; break; }
   [[ ${WIFI:-} == off ]] || for _ in $(seq 1 30); do ip route show default | grep -c wlan0 >/dev/null && break; sleep 1; done
   say "sleep $n: default via $(ip route show default | awk '{print $5}' | paste -sd,); screen off -> $(screen off); link: $(idle); link-ups in the last 20 s: $(journalctl -b -k --no-pager --since '-20 s' | grep -c 'link up: Gen3')"
+  say "sleep $n, before: cpif $(cpif)"
   rtcwake -m no -s "$S" >/dev/null 2>&1 || { say "sleep $n: rtcwake could not arm the alarm: stop"; break; }
   r0=$(cat /sys/class/rtc/rtc0/since_epoch)
   systemctl suspend -i
@@ -92,7 +108,7 @@ for n in $(seq 1 "$N"); do
   else res="no change in suspend_stats after 150 s"; fi
   say "sleep $n: $res; screen on -> $(screen on)"
   sleep 5
-  say "sleep $n, 5 s after: default via $(ip route show default | awk '{print $5}' | paste -sd,); data: $(data)"
+  say "sleep $n, 5 s after: default via $(ip route show default | awk '{print $5}' | paste -sd,); cpif $(cpif); data: $(data); cpif after the data check: $(cpif)"
   sleep 15
   say "sleep $n, 20 s after: $(st), new ufs lines $(( $(journalctl -b -k --no-pager | grep -cE "$U") - u0 )), sitd's last line: $(journalctl -b -u omamobile-sitd --no-pager | tail -1 | cut -c40-120)"
   [[ $($CP state 2>&1 | tail -1) == ONLINE ]] || { say "the CP is not ONLINE: stop"; break; }
