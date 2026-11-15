@@ -108,6 +108,12 @@
 # Answers are read from standard input, so they can be piped for tests and by
 # the guided installer, which sets OMAMOBILE_INSTALL_GUIDED=1: the questions
 # are then not printed again (it has asked them), nor the closing hints.
+#
+# One install or dry run at a time uses a work directory: each holds a lock
+# beside it (.NAME.install.lock in its parent directory), and a second one
+# with the same work directory stops before it contacts the phone (give it
+# its own --work DIR). --verify-only runs beside them.
+# Its parent directory must be writable; the lock file is kept after the run.
 set -euo pipefail
 shopt -s nullglob
 # Byte-wise character ranges in the checks below ([ -~] is printable ASCII)
@@ -475,12 +481,52 @@ if [[ -f $manifest ]]; then
   if [[ -n $modules_release && -n $images_release ]]; then note "kernel $images_release, its modules in the root image"; fi
 fi
 
+# --- One install at a time per work directory --------------------------------
+# The files staged below have fixed names in --work: a second install there
+# would replace them while this one waits for its codename, and remove them
+# when it ends. So an install (or a dry run; --verify-only takes no part)
+# holds an exclusive flock until it exits, and a second one stops here, before
+# it reads the ramdisk or writes in --work. The kernel drops the lock with the
+# run's last process, however it ends. The lock file is beside the resolved
+# work directory (as make-bundle's is beside the bundles), so two spellings of
+# it lock one file and the directory still ends empty. It stays: unlinking it
+# could let two runs lock different inodes. A parent that can't be written, or
+# a lock that can't be taken for any other reason (a file system without
+# flock), stops the install too: going ahead unlocked could let a second
+# install replace this one's files.
+work=${work:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-install}
+if ((!verify_only)); then
+  mkdir -p "$work" && work_real=$(cd -P -- "$work" && pwd -P) ||
+    die "can't create or write to the work directory $work (give one you can write to with --work DIR)"
+  install_lock=${work_real%/*}/.${work_real##*/}.install.lock
+  exec {install_fd}>>"$install_lock" ||
+    die "can't create the lock file $install_lock beside the work directory (give a --work DIR under a directory you can write to)"
+  if python3 -I - "$install_fd" <<'PY'
+import fcntl, sys
+try:
+    fcntl.flock(int(sys.argv[1]), fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit(1)
+except OSError as error:
+    print(f"flock: {error}", file=sys.stderr)
+    sys.exit(2)
+PY
+  then
+    :
+  else
+    lock_status=$?
+    if ((lock_status == 1)); then
+      die "another install is using the work directory $work: let it finish, or give this one its own with --work DIR"
+    fi
+    die "can't lock the work directory $work (give a --work DIR on a file system that supports flock)"
+  fi
+fi
+
 # --- Slot B's shipped ramdisk ------------------------------------------------
 # Read and listed before the phone is contacted, so --verify-only checks it
 # too; the owner's key is appended to it further down. The read has a
 # directory of its own in --work that only this run removes: another install
 # may be waiting there for its answers, with its images staged.
-work=${work:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-install}
 verify_dir=""
 # vendor_ramdisk get IMG OUT, or vendor_ramdisk set IMG RAMDISK OUT (inline,
 # because a bundle ships this script alone)
