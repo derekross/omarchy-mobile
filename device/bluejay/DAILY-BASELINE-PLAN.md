@@ -171,3 +171,41 @@ provenance, unchanged-A checks, natural B3 verification and a separate one-use
 boot command. The revised writer likewise stays in Fastboot after flashing;
 its separate boot command requires independently verified B3. Neither selects
 a slot or writes metadata directly. Revised runtime tests remain pending.
+
+## First revised refusal and diagnosed correction, November 14
+
+The attended writer verified actual B2 and original A flags, flashed the exact
+revised B set once, independently verified natural B3, and sent one current-B
+boot. The revised kernel returned as boot
+`bf8a76f2-0ca2-492c-9921-1ebfa8e14864`. Its root verifier refused before any
+hardware load: the live command line contains two copies each of
+`clk_ignore_unused` and `pd_ignore_unused`, while the initial verifier expected
+one. The packed DT and vendor header each carry these holds; the generic boot
+header and compiled CONFIG_CMDLINE are empty. Every other required safety token
+was present with no conflicting value. This failed boot remains recorded and
+is not a qualification pass. The owner's observed black Linux screen ending
+at switching to Arch Linux is a held-desktop observation, not an interaction
+pass.
+
+The corrected gate requires exactly two copies of those two flags, retaining
+all other multiplicities and the single console=tty0 to console=null rewrite.
+The captured actual command line and fourteen offline refusal/control tests
+pass. A subsequent read-only preflight found the thirteen exact revised
+modules and twenty-nine parent directories retained the build user's ownership.
+Their hashes and ABI matched, but the new root-ownership requirement properly
+refused them. The module guard now also checks parent ownership.
+
+A new consumed-once diagnosed correction preserved the original runtime,
+failed unit journal, root-pending marker and all module metadata. It normalized
+only those pinned module files/directories to root ownership and ordinary
+read-only-to-users modes, preserving all bytes and the historical release.
+Under a fresh proven host log stream, only the recorded software-unit failure
+was reset. The corrected root-only gate then passed full B/protected hashes,
+49 guards, watchdog, DT/module/firmware identity and kernel-journal checks;
+only that fresh boot's root readiness was acknowledged. No driver or service
+was started and no reboot was sent. This permits a future guarded Arch boot;
+it does not turn the failed startup into a pass.
+
+Prepare a new qualification ledger and two fresh automatic startup boots with
+this exact correction. The original consumed writer/observer remain evidence;
+never rerun them. The independent historical recovery remains unconsumed.

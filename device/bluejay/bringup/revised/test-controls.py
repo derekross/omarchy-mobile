@@ -40,15 +40,27 @@ class Controls(unittest.TestCase):
                     'systemd.mask=sleep.target systemd.mask=omamobile-boot-success.service '
                     'modprobe.blacklist=salixp,panfrost bluejay.gpu_evening=1')
         actual = expected.replace('console=tty0', 'console=null')
+        actual += ' clk_ignore_unused pd_ignore_unused'
         self.assertTrue(s.bootargs_ok(actual + ' androidboot.hardware=bluejay', expected))
         for word in expected.split():
             got = actual.replace(word.replace('console=tty0', 'console=null'), '')
             with self.subTest(missing=word), self.assertRaises(RuntimeError):
                 s.bootargs_ok(got, expected)
         for extra in ('console=tty0', 'console=ttyS0', 'panic=0', 'panic=10',
-                      'systemd.mask=other.service', 'modprobe.blacklist=salixp'):
+                      'systemd.mask=other.service', 'modprobe.blacklist=salixp',
+                      'clk_ignore_unused', 'pd_ignore_unused'):
             with self.subTest(extra=extra), self.assertRaises(RuntimeError):
                 s.bootargs_ok(actual + ' ' + extra, expected)
+
+    def test_vendor_and_DT_hold_multiplicity_is_exact(self):
+        expected = 'console=tty0 panic=10 clk_ignore_unused pd_ignore_unused'
+        actual = 'console=null panic=10 clk_ignore_unused pd_ignore_unused'
+        with self.assertRaises(RuntimeError):
+            s.bootargs_ok(actual, expected)
+        self.assertTrue(s.bootargs_ok(actual + ' clk_ignore_unused pd_ignore_unused', expected))
+        for extra in ('clk_ignore_unused', 'pd_ignore_unused'):
+            with self.subTest(extra=extra), self.assertRaises(RuntimeError):
+                s.bootargs_ok(actual + ' clk_ignore_unused pd_ignore_unused ' + extra, expected)
 
     def fixture(self):
         args = ('console=tty0 panic=10 clk_ignore_unused pd_ignore_unused rdinit=/init '
@@ -79,6 +91,16 @@ class Controls(unittest.TestCase):
             d[key] = wrong
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 s.validate_profile(d)
+
+    def test_module_parent_ownership_refuses_before_loading_or_hash_read(self):
+        c = {'modules': {'test': {'path': 'kernel/drivers/test.ko', 'sha256': 'a' * 64}}}
+        with patch.object(s, 'secure', side_effect=[None, RuntimeError('unsafe parent')]) as secure, \
+                patch.object(s, 'sha') as digest, patch.object(s, 'cmd') as command:
+            with self.assertRaisesRegex(RuntimeError, 'unsafe parent'):
+                s.module(c, 'test')
+            self.assertEqual(secure.call_args.kwargs, {'directory': True})
+            digest.assert_not_called()
+            command.assert_not_called()
 
     def test_path_traversal_is_rejected(self):
         for key, value in [('firmware', {'/outside': 'a' * 64}),

@@ -94,15 +94,20 @@ def boot():
 
 
 def bootargs_ok(actual, expected):
-    """Normalize exactly the single observed console replacement.
+    """Check the exact observed command line from this frozen image pair.
 
     Bootloader-added arguments may occur, but must not override any expected
-    key. Duplicate or contradictory safety arguments are rejected.
+    key. The DT and vendor header each carry the two unused-resource holds;
+    the live boot has two copies of each. All other safety arguments retain
+    their original multiplicity. Only console=tty0 is rewritten to null.
     """
     want = expected.split()
     got = actual.split()
     need(want.count('console=tty0') == 1, 'expected console contract')
     want[want.index('console=tty0')] = 'console=null'
+    for hold in ('clk_ignore_unused', 'pd_ignore_unused'):
+        need(want.count(hold) == 1, 'expected DT hold flag contract')
+        want.append(hold)
     required = Counter(want)
     seen = Counter(got)
     need(all(seen[k] == v for k, v in required.items()), 'missing/duplicate bootarg')
@@ -253,6 +258,10 @@ def module(c, name):
     m = c['modules'][name]
     path = Path('/usr/lib/modules') / RELEASE / m['path']
     secure(path)
+    for parent in path.parents:
+        secure(parent, directory=True)
+        if parent == Path('/usr/lib/modules'):
+            break
     need(sha(path) == m['sha256'], 'module hash: ' + name)
     need(cmd('modinfo', '-F', 'vermagic', str(path)).split()[0] == RELEASE, 'module ABI')
     return path
