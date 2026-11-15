@@ -19,15 +19,21 @@ happens to be present on the phone.
 
 The root gate validates all guards and full hashes without loading hardware.
 The host opens a new pinned log stream and proves a unique kernel marker before
-writing the current boot's `host-log.json`. The acknowledgment unit waits at
+writing the current boot's `host-log.json`. That receipt proves the initial
+current-boot logging acknowledgment, not continuing logger liveness. The
+separate private attended observer monitors the host stream during startup;
+the public units do not implement that monitoring. The acknowledgment unit waits at
 most 45 seconds, then acknowledges only that boot's root marker. The stage
 chain automatically runs GPU/readbacks, touch, PCIe, Wi-Fi and provisional
 gauge monitoring. The desktop starts only after all stages pass. Each stage
 keeps a durable pending marker on failure and retains complete boot journals.
 There is no failure reboot, module unload, recovery writer or same-boot retry.
 
-The fallback for any failed stage is the answering USB root, with later stages
-and the revised desktop held. The independent graphics environment defaults to
+For a userspace refusal while the kernel and USB remain alive, the answering
+USB root remains available, with later stages and the revised desktop held.
+A driver hang, reset or lost USB does not promise that fallback: preserve the
+pending marker and use the separately prepared owner-attended recovery path.
+The independent graphics environment defaults to
 software rendering unless this boot has an active completed GPU unit and
 render node. Private root receipts remain unreadable by the desktop user.
 It does not make a failed stage safe to ignore or claim a software
