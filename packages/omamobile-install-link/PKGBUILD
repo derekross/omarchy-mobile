@@ -13,7 +13,7 @@
 # the installer has them. cargo fetches the crates (Cargo.lock pinned) in
 # prepare() and builds offline. Everything else is this directory's.
 pkgname=omamobile-install-link
-pkgver=$(cat "${startdir:-.}/version")
+pkgver=$(cat "${startdir:-.}/.pkgver" 2>/dev/null || "${startdir:-.}/../../tools/pkg-version" "${startdir:-.}")
 pkgrel=1
 pkgdesc="Omarchy Mobile install link: the phone finishes its setup with the installer, over USB"
 arch=(aarch64)
@@ -82,5 +82,5 @@ PY
 
 package() {
   cd "omamobile-installer-$_commit"
-  "$startdir/install" "$pkgdir" "$PWD" "$PWD/target/release"
+  OMAMOBILE_PKGVER=$pkgver "$startdir/install" "$pkgdir" "$PWD" "$PWD/target/release"
 }
