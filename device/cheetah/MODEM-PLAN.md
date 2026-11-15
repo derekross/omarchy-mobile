@@ -3979,3 +3979,21 @@ not a qualification of the query or a required feature setting.
 That local build had the original 15-second SIM-read budget. Its result
 does not qualify the rebased branch or the shorter budget. Other devices
 and incoming calls during a query were not tested.
+
+**Rebased offline validation, 2026-11-15:** the query code was rebased onto
+`main` at `ad58709`, keeping main's package version (`0.3.41`) for the
+maintainer to set at merge. `tools/pr-check origin/main`, `tests/all`
+and `tests/packages omamobile-modem-sit` passed, including the RIL
+simulator. `tests/all` ran with umask 0022: its release-upload permission
+assertion also fails on unchanged main with this host's umask 0002.
+Host skips remain for missing AOSP image tools, lz4, dtc, repo-add,
+Unicorn/pyelftools and a built root image; those cases are unverified.
+The 20 focused MSISDN tests passed, including a late second record
+discarding the already-read first number at the five-second deadline.
+
+`tools/build-packages --local cheetah --force packages/omamobile-modem-sit`
+built and signed `omamobile-modem-sit 0.3.41-1` for aarch64. All 22
+packaged Python and CLI source files matched the rebased query commit
+`e0ccd81`. Installation and a query on that build remain pending an
+attended, owner-approved reboot; the older result above is not evidence
+for the new build.
