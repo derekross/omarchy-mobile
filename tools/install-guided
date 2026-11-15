@@ -1793,8 +1793,9 @@ written_phone() {
   local id   # step_phone has refused a record whose "phone" isn't a digest
   id=$(phone --fresh "$PHONE_ID" 2>/dev/null | tr -cd 'a-z0-9-' || true)
   [[ -n $id ]] ||
-    stop "The phone doesn't answer over the USB cable. Unplug it, plug it back in," \
-      "wait ten seconds and run this again."
+    stop "The phone doesn't answer over the USB cable. If its screen is dark, press" \
+      "Power once (a sleeping phone drops off USB). Otherwise unplug it, plug it" \
+      "back in and wait ten seconds. Then run this again."
   [[ $id != no-serial ]] ||
     stop_final "The phone that answers over the USB cable doesn't tell its serial number, so" \
       "the installer can't be sure it is the phone it wrote, and it won't back up," \
@@ -1863,6 +1864,28 @@ step_network() {
   put network "done (added $NM_PROFILE)"
 }
 
+# keep_awake: holds off the phone's sleep while the install still works on
+# it over USB SSH. A fresh install has no firmware yet, so its modem (and
+# with it the modem's sleep inhibitor) can't start, and with the screen off
+# and locked auto-sleep puts the phone to sleep a few seconds after its first
+# start; USB drops with it and the radio backup's SSH fails (2026-11-15, the
+# 2026.11.15 candidate's test install). The hold is a transient unit on the
+# phone, in RAM only: the restart ends it, the check's end stops it, and it
+# stops by itself after an hour if this computer goes away.
+keep_awake() {
+  # Started afresh at each step, so every step has its own hour: a step can
+  # wait on the owner (the camera question) before it reaches the phone.
+  # The stop and the start are one SSH command, milliseconds apart, against
+  # sleepd's two-second poll.
+  phone --fresh 'systemctl stop omamobile-install-awake 2>/dev/null
+    systemd-run --quiet --collect --unit=omamobile-install-awake -p RuntimeMaxSec=3600 \
+      systemd-inhibit --what=sleep --who=omamobile-install \
+        --why="the installer is setting up the phone" --mode=block sleep infinity' >/dev/null 2>&1 &&
+    note "the phone is kept from sleeping until the install is done (its screen still goes dark)" ||
+    note "couldn't ask the phone to stay awake; if it goes dark and stops answering, press Power once and run this again"
+}
+release_awake() { phone --fresh 'systemctl stop omamobile-install-awake' >/dev/null 2>&1 || true; }
+
 # --- Step 7: the first start --------------------------------------------------
 step_first_start() {
   # Every wait is measured on the clock (bash's SECONDS), never in passes of
@@ -1893,6 +1916,7 @@ step_first_start() {
   done
   written_phone
   note "the first start has finished"
+  keep_awake
   put first_start "done"
 }
 
@@ -1919,6 +1943,7 @@ step_backup() {
   mkdir -p "$(dirname "$dir")"
   # This phone's radio identity must not be filed as another phone's
   written_phone
+  keep_awake
   bash "$NV_BACKUP" "${args[@]}" "$dir" ||
     stop "The backup didn't finish (the message above says why), and what it had copied" \
       "was removed. If the message is about a partition (not found, writable or" \
@@ -2010,6 +2035,7 @@ step_provision() {
   printf '\n'
   # This phone's firmware and radio checksums must not land on another phone
   written_phone
+  keep_awake
   run_provision "${S[backup_dir]:?no radio backup recorded}" "${S[factory_zip]}" ||
     stop "Adding the firmware stopped (the message above says why). Each part is put" \
       "on the phone whole or not at all, and running this again does all of it again."
@@ -2029,8 +2055,9 @@ step_restart() {
   if [[ -z $before ]]; then
     before=$(boot_id)
     [[ -n $before ]] ||
-      stop "The phone doesn't answer over the USB cable. Unplug it, plug it back in," \
-        "wait ten seconds and run this again."
+      stop "The phone doesn't answer over the USB cable. If its screen is dark, press" \
+        "Power once (a sleeping phone drops off USB). Otherwise unplug it, plug it" \
+        "back in and wait ten seconds. Then run this again."
     # Recorded before it is sent, so a rerun waits for this restart and
     # doesn't send a second one
     put restart_from "$before"
@@ -2070,6 +2097,7 @@ step_check() {
   local began=$SECONDS report=$state_dir/report.json rc=0 unreadable=0 failed=0
   title check
   written_phone
+  keep_awake
   # Sound, sensors and radios come up over the first seconds after a start
   while ((SECONDS - began < wait_settle)); do
     case $(phone --fresh 'systemctl is-system-running' 2>/dev/null || true) in
@@ -2124,6 +2152,7 @@ PY
       "Running this command again checks the phone again, and changes nothing else."
   fi
   failed=$(cat "$scratch/failed" 2>/dev/null || echo 0)
+  release_awake
   put check "passed"
   put finished "$(date -u +%Y-%m-%d)"
   if ((failed)); then
