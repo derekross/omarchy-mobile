@@ -1903,6 +1903,33 @@ and a device-bound IPv4 socket sends on-link when no route matches, so the
 removed route alone wouldn't stop it), and the next run is the twenty sleeps
 again, with #759 in for the route that never came back.
 
+**M6-D, 2026-11-15** (the reference phone just reinstalled by the guided
+installer from the 2026.11.15 candidate: `7.3.0-rc6-omamobile-gda171eae4cb7`,
+device-cheetah 0.1.59, omamobile-modem 0.1.26, omamobile-modem-sit 0.3.41,
+`wifi-keep-across-sleep` unset; on the charger; the modem's inhibitor killed
+for the boot, 11:32:41 to 11:40:13):
+
+- **Sleeps:** 12 entered and woke, `suspend_stats` fail 0, no UFS
+  error-handler line before or after the modem's stop.
+- **Data: failed at wake 10** (11:37:57), after nine good wakes in about
+  five minutes, and stayed down with the phone awake and the inhibitor back
+  (0 of 3 a minute after the end). Wake 10 was the modem's own
+  (`cp2ap_wakeup`), not the RTC's: the 2026-11-14 reading that timer wakes
+  break it doesn't hold.
+- **CPIF in the failed state:** the uplink queue moved (pktproc UL queue 1
+  fore/rear 143/143 to 147/147, pass 116 to 120: the modem took every
+  packet), the FMT control queue's rx head moved (2248 to 2568) and
+  `mif_cp2ap_msg` counted on, the reserved doorbell was clear; no downlink
+  queue moved and `rmnet2` received nothing. So the link, the doorbells and
+  CPIF work; what stops is downlink data on the bearer.
+- **Reading (not proven):** the bearer the phone runs on changed under it.
+  sitd keeps the modem's `IND_DATA_CALL_LIST_CHANGED` only for start-up and
+  omamobile-sit-data reads the bearer's setup once (`data-call-response.bin`),
+  so a bearer the modem or the network dropped or replaced during a sleep
+  looks exactly like this. omamobile-modem-sit 0.3.42 (#817) logs each change
+  against the internet bearer; M6-D again with it says which case it is.
+- **Recovered** by the reboot: 3 of 3.
+
 **The day test and the modem-up sleep, 2026-11-14** (the reference phone,
 release kernel `7.3.0-rc6-omamobile-g36d61a33795b` taken through Updates from
 the development channel: omamobile-device-cheetah 0.1.55, omamobile-shell
