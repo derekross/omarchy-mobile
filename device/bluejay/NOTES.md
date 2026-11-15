@@ -22,19 +22,22 @@ were:
 
 One subsequent ordinary current-B boot reached
 `7.3.0-rc6-omamobile-bluejay-input-gated0`. Its read-only devinfo check decoded
-B retry count 2, active, bootable and unsuccessful. The paired complete
-8192-byte Linux readbacks expose only these eight slot bytes here:
+B retry count 2, active, bootable and unsuccessful. Comparing the retained
+November 12 recovery readback with the November 13 post-refill readback gives
+these eight slot bytes from the complete 8192-byte files:
 
 | Readback | Slot A, offsets 0x30–0x33 | Slot B, offsets 0x34–0x37 |
 | --- | --- | --- |
-| Before the Fastboot visit | `02 0a 00 00` | `02 0c 00 00` |
-| After selection **and one B boot** | `02 0a 00 00` | `02 04 00 00` |
+| November 12 recovery readback | `02 0a 00 00` | `02 0c 00 00` |
+| November 13, after selection **and one B boot** | `02 0a 00 00` | `02 04 00 00` |
 
 Only offset `0x35` differed between those full readbacks, `0c` to `04`,
 clearing B's `fastboot_ok` bit. There is no eight-byte readback at the
 intermediate Fastboot B3 state; its retry count comes from the saved `getvar`
 read, not from invented intermediate bytes. A's record and every other byte
-matched. All 49 storage guards, full B/protected hashes and the six required
+matched. These are not consecutive captures immediately bracketing selection;
+the Fastboot `getvar` pairs above provide that narrower observation. All 49
+storage guards, full B/protected hashes and the six required
 smoke checks passed after the boot. Automatic boot-image writing and
 boot-success marking stayed off.
 
