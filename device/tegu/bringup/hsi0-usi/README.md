@@ -35,9 +35,12 @@ Neither runs on a palmtop before an attended run with the owner's yes
   2,000,000 rounds with no hang. On a kernel with #247 the gates never close
   and 2,000,000 rounds passed on each USI.
 
-  Run it only with the modem off (nothing else uses USI3 then), the
-  filesystems synced, a watchdog fed from userspace, and never with `usi=2`
-  while the touchscreen is in use:
+  It refuses to load on anything but a Pixel 9a (`google,zumapro-tegu`),
+  and `usi=` has no default: without `usi=2` or `usi=3` it refuses, so the
+  touchscreen's USI is never switched by accident. Run it only with the
+  modem off (nothing else uses USI3 then), the filesystems synced, a
+  watchdog fed from userspace, and never with `usi=2` while the touchscreen
+  is in use:
 
       insmod tegu-hsi0-usi-stress.ko loops=2000000 report=1000 usi=3 cpu=7 \
              [access=0] [delay_us=10]

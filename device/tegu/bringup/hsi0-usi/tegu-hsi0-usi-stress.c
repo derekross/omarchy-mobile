@@ -11,7 +11,9 @@
  * the switch of a manual-mode gate followed at once by a register access
  * hangs the SoC outside the wake path too. A hang ends in a reset by the
  * cluster watchdog while systemd feeds it, and otherwise needs the buttons.
- *   insmod tegu-hsi0-usi-stress.ko loops=200000 usi=2 cpu=7
+ *   insmod tegu-hsi0-usi-stress.ko loops=200000 usi=3 cpu=7
+ * It refuses anything but a Pixel 9a (google,zumapro-tegu), and usi= (2 or
+ * 3) has no default: USI2 is the touchscreen's, so the choice is explicit.
  * access=0 switches the clocks and touches no register; delay_us=N waits
  * N us between turning the clocks on and the first access.
  */
@@ -31,8 +33,9 @@ static unsigned long loops = 200000;
 module_param(loops, ulong, 0444);
 static unsigned long report = 10000;
 module_param(report, ulong, 0444);
-static int usi = 2;
+static int usi;
 module_param(usi, int, 0444);
+MODULE_PARM_DESC(usi, "the HSI0 USI to switch: 2 (the touchscreen's) or 3; required");
 static int cpu = 7;
 module_param(cpu, int, 0444);
 static bool access = true;
@@ -91,8 +94,14 @@ static int __init stress_init(void)
 	struct device_node *np;
 	int ret = -ENODEV;
 
-	if (usi != 2 && usi != 3)
+	if (!of_machine_is_compatible("google,zumapro-tegu")) {
+		pr_err("tegu-hsi0-usi-stress: not a Pixel 9a (google,zumapro-tegu): refusing\n");
+		return -ENODEV;
+	}
+	if (usi != 2 && usi != 3) {
+		pr_err("tegu-hsi0-usi-stress: usi=2 or usi=3 is required\n");
 		return -EINVAL;
+	}
 	np = of_find_node_by_path(nodes[usi - 2]);
 	if (!np)
 		return -ENODEV;
