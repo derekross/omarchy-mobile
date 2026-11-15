@@ -1806,6 +1806,19 @@ UFS error count. Wi-Fi was unloaded around every sleep (this install has no
   recorder's ping ran within auto-sleep's 5 s grace and may have been cut
   off by the next sleep, and Wi-Fi's reload re-probes the second PCIe
   controller each time.
+- **The link's own record** (the night's kernel log, counted): before the
+  first timer wake (22:47:50-22:49:40) 4 sleeps, 3 wakes the modem started
+  (`cp2ap_wakeup work pending`), 16 link-ups, 8 reserved doorbells; from
+  then on (to 23:08) 17 sleeps, 1 wake the modem started, 64 link-ups and
+  62 reserved doorbells. Each link-up was followed by `PHY isolated` within
+  the same second. So after the first timer wake nearly every link-up was
+  the AP asking (`s5100_try_gpio_cp_wakeup` from a reserved doorbell), the
+  link came up and powered down again each time, and data never flowed:
+  the AP side still wakes the link, and what stops answering looks like the
+  CP. In CPIF a reserved doorbell is sent at the end of
+  `s5100_poweron_pcie` once `pcie_powered_on` is set, so the doorbell is
+  not simply dropped; why the CP stops serving it after a sleep it didn't
+  start is the open question for kernel #232's author.
 - **Recovered** by a reboot (23:45): data 3 of 3, no UFS line. The owner's
   opt-out (`/etc/omamobile/modem-suspend-disable`) was set first and
   `omamobile-modem-sleep-policy` honoured it ("the owner keeps the modem's
@@ -1813,9 +1826,10 @@ UFS error count. Wi-Fi was unloaded around every sleep (this install has no
 
 **Next, before sleep with the modem up is tried again** (the maintainer's
 attended test on the charger, under AGENTS.md's rule):
-1. Read-only first: in kernel #232's CPIF, follow what happens to a
-   doorbell reserved while the link is down (`pcie_send_ap2cp_irq`) once
-   the link comes back after a system resume.
+1. Read-only first (begun above): with kernel #232's author, why the CP
+   stops answering the AP's doorbells after a sleep the CP didn't wake
+   (what CPIF tells the CP at suspend and resume, and what stock's
+   `s5100_pm_notifier` and `suspend_cp`/`resume_cp` do that ours don't).
 2. The same twenty sleeps with the data check done awake: hold a sleep
    inhibitor around the check (`systemd-inhibit --what=sleep ping ...`),
    log `ip route` and the link counters with it, and count the "Reserve
