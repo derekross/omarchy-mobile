@@ -253,7 +253,11 @@ rebuilds:
 
 Drop the DPMS patch once upstream retries refused DPMS commits, and 0003
 once upstream configures a lock surface when its monitor is only turned
-(`tools/lock-turn-test` passes without it then).
+(`tools/lock-turn-test` passes without it then). #785's patch
+(`output-send-the-whole-state-with-done`) is the same cause one protocol
+over: after a transform-only rule `wl_output` clients keep the old
+transform. Whoever drops one should check the other, since one upstream
+fix to `applyMonitorRuleSoft()` would cover both.
 
 **`tools/repo-build`:**
 - Packages are listed explicitly, so add `packages/hyprland` only when it
