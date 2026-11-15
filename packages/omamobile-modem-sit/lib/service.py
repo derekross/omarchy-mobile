@@ -197,6 +197,41 @@ def operator_name(payload):
     return dict(plmn=plmn if plmn.isdigit() else '', name=good[0] if good else '')
 
 
+def data_call_change(payload, response=None):
+    """One log line for an IND_DATA_CALL_LIST_CHANGED: each listed bearer's
+    summary (CID, PDP type, status, active, counts; never an address), then
+    what it means for the internet bearer the data service set its device up
+    from (data_call.RESPONSE, written at setup and read once by
+    omamobile-sit-data): still listed as set up, listed with other addresses
+    or DNS, listed inactive, or gone. On 2026-11-15 mobile data stopped after
+    a sleep with the modem up while the phone's side of the link still
+    worked (M6-D); this line says whether the modem changed the bearer
+    under it."""
+    try:
+        items = data_call.entries(payload)
+    except RuntimeError as error:
+        return f'Data-call list changed: unreadable ({error})'
+    listed = '; '.join(data_call.summary(item) for item in items) or 'no bearers'
+    if response is None:
+        try:
+            response = data_call.RESPONSE.read_bytes()
+        except OSError:
+            return f'Data-call list changed: {listed}; no internet bearer set up'
+    if len(response) < 5:
+        return f'Data-call list changed: {listed}; the internet bearer record is unreadable'
+    cid = response[2]
+    item = next((i for i in items if i[2] == cid), None)
+    if item is None:
+        meaning = f'the internet bearer (CID {cid}) is gone from the list'
+    elif not item[3]:
+        meaning = f'the internet bearer (CID {cid}) is listed inactive'
+    elif item[4:] == response[4:len(item)] and len(item) == len(response):
+        meaning = f'the internet bearer (CID {cid}) is as set up'
+    else:
+        meaning = f'the internet bearer (CID {cid}) is listed with other addresses or DNS than at setup'
+    return f'Data-call list changed: {listed}; {meaning}'
+
+
 def reset_indication(packet):
     """The log line for IND_PHONE_RESET (0x0804): the payload length and the
     first four payload bytes (packet offsets 0x08-0x0b) in hex. Stock's
@@ -407,8 +442,10 @@ class Service:
             self.answer_carrier_request()
         elif ident == 0x0604:
             # IND_DATA_CALL_LIST_CHANGED: kept for start-up's search for the
-            # modem's attach bearer (bringup.find_attach_bearer).
+            # modem's attach bearer (bringup.find_attach_bearer), and logged
+            # against the bearer the data service runs on.
             self.data_call_list = bytes(packet[8:])
+            print(data_call_change(self.data_call_list), flush=True)
         elif ident == 0x070e:
             # IND_NTW_STATE_CHANGED: read the registration again soon (it
             # can come every second or two while the modem searches).
