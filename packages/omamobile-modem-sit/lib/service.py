@@ -54,6 +54,13 @@ from sms_codec import submit, received_pdu, number
 import carrier_manifest
 from voice_audio import AudioRefused, VoiceAudio, aoc_card
 
+# A call left ringing this long is a ring nobody will answer (the network
+# gives up on an unanswered call within about a minute): it no longer holds
+# back the internet bearer's reconnect. A missed call the modem never ended
+# stayed ringing-in for good on the 9a (#729), and would have kept mobile data
+# down after a bearer drop until a reboot.
+RING_LIMIT = 120
+
 STATES = {0: 'active', 1: 'held', 2: 'dialing', 3: 'ringing-out', 4: 'ringing-in', 5: 'waiting',
           6: 'terminated', 7: 'held', 8: 'active'}
 RATS = {0: '', 1: 'GPRS', 2: 'EDGE', 3: 'UMTS', 9: 'HSDPA', 10: 'HSUPA', 11: 'HSPA',
@@ -578,7 +585,8 @@ class Service:
             print('Internet bearer not set up again: the radio is off', flush=True)
             self.reconnect_at = None
             return
-        if self.live():
+        if any(c['state'] != 'ringing-in' or time.time() - c.get('since', 0) < RING_LIMIT
+               for c in self.live()):
             self.reconnect_at = time.monotonic() + 15
             return
         cid = data_call.INTERNET_CID

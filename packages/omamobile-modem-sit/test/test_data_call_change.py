@@ -196,6 +196,20 @@ class Reconnect(unittest.TestCase):
         activate.assert_not_called()
         self.assertGreater(self.service.reconnect_at, 0)
 
+    def test_a_stale_ring_doesnt_hold_it(self):
+        self.service.calls = {'x': dict(state='ringing-in', since=app_service.time.time() - 600)}
+        self.service.reconnect_at = 0
+        with patch.object(data_call, 'activate') as activate:
+            self.service.reconnect()
+        activate.assert_called_once()
+
+    def test_a_fresh_ring_waits(self):
+        self.service.calls = {'x': dict(state='ringing-in', since=app_service.time.time())}
+        self.service.reconnect_at = 0
+        with patch.object(data_call, 'activate') as activate:
+            self.service.reconnect()
+        activate.assert_not_called()
+
     def test_failure_backs_off(self):
         delays = []
         for _ in range(7):
