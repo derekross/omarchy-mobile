@@ -7,6 +7,7 @@ ConditionPathExists=/sys/bus/platform/devices/1c240000.display-controller
 
 [Service]
 Type=oneshot
+TimeoutStartSec=60
 RemainAfterExit=yes
 ExecStart=/usr/bin/omamobile-lynx-display-start
 
