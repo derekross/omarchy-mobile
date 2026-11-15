@@ -146,7 +146,7 @@ case $1 in
     fi
     cat "$T/boot-id" ;;
   "systemctl is-system-running") echo running ;;
-  *omamobile-install-awake*systemd-inhibit*--what=sleep:idle*) echo "phone AWAKE" >> "$T/events" ;;
+  *omamobile-install-awake*systemd-inhibit*--what=sleep\ *) echo "phone AWAKE" >> "$T/events" ;;
   "systemctl stop omamobile-install-awake") echo "phone AWAKE-END" >> "$T/events" ;;
   *reboot-to\ omamobile*)
     echo "phone RESTART: $1" >> "$T/events"

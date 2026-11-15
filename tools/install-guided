@@ -1873,11 +1873,16 @@ step_network() {
 # phone, in RAM only: the restart ends it, the check's end stops it, and it
 # stops by itself after an hour if this computer goes away.
 keep_awake() {
-  phone --fresh 'systemctl is-active --quiet omamobile-install-awake ||
+  # Started afresh at each step, so every step has its own hour: a step can
+  # wait on the owner (the camera question) before it reaches the phone.
+  # The stop and the start are one SSH command, milliseconds apart, against
+  # sleepd's two-second poll.
+  phone --fresh 'systemctl stop omamobile-install-awake 2>/dev/null
     systemd-run --quiet --collect --unit=omamobile-install-awake -p RuntimeMaxSec=3600 \
-      systemd-inhibit --what=sleep:idle --who=omamobile-install \
-        --why="the installer is setting up the phone" --mode=block sleep infinity' >/dev/null 2>&1 ||
-    note "couldn't ask the phone to stay awake; if it goes dark, press Power once and run this again"
+      systemd-inhibit --what=sleep --who=omamobile-install \
+        --why="the installer is setting up the phone" --mode=block sleep infinity' >/dev/null 2>&1 &&
+    note "the phone is kept from sleeping until the install is done (its screen still goes dark)" ||
+    note "couldn't ask the phone to stay awake; if it goes dark and stops answering, press Power once and run this again"
 }
 release_awake() { phone --fresh 'systemctl stop omamobile-install-awake' >/dev/null 2>&1 || true; }
 
@@ -2050,8 +2055,9 @@ step_restart() {
   if [[ -z $before ]]; then
     before=$(boot_id)
     [[ -n $before ]] ||
-      stop "The phone doesn't answer over the USB cable. Unplug it, plug it back in," \
-        "wait ten seconds and run this again."
+      stop "The phone doesn't answer over the USB cable. If its screen is dark, press" \
+        "Power once (a sleeping phone drops off USB). Otherwise unplug it, plug it" \
+        "back in and wait ten seconds. Then run this again."
     # Recorded before it is sent, so a rerun waits for this restart and
     # doesn't send a second one
     put restart_from "$before"
