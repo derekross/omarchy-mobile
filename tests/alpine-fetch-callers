@@ -7,7 +7,10 @@
 # prints one package it "fetched" (an .apk holding marker-<package>), then
 # exits 1 when asked for FETCH_FAIL_ON. A `for apk in $(…)` loop ignores that
 # status and unpacks what was printed; a caller must not. A stand-in
-# minirootfs (sha256sum accepts it) holds the files the initramfs checks for.
+# minirootfs (sha256sum -c accepts it, and only it) holds the files the
+# initramfs checks for. Then bin/omamobile initramfs's own download of the
+# minirootfs, from a stand-in curl: it lands under the cached name only once
+# it passes the checksum.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
@@ -44,8 +47,30 @@ if [[ ${1:-} == -I && ${2:-} == */tools/alpine-fetch.py ]]; then
 fi
 exec "$REAL_PYTHON" "$@"
 EOF
-printf '#!/bin/sh\ncat >/dev/null\n' > "$t/bin/sha256sum"   # the stand-in minirootfs passes
-printf '#!/bin/sh\nexit 97\n' > "$t/bin/curl"                # no network
+cat > "$t/bin/sha256sum" <<'EOF'
+#!/bin/bash
+# sha256sum -c's stand-in: a file passes when it is the stand-in minirootfs
+[[ ${1:-} == -c ]] || exec "$REAL_SHA256SUM" "$@"
+read -r _ f
+[[ $("$REAL_SHA256SUM" < "$f") == "$MINIROOTFS_SUM" ]] && exit 0
+echo "$f: FAILED"
+exit 1
+EOF
+cat > "$t/bin/curl" <<'EOF'
+#!/bin/bash
+# No network. CURL_MODE serves the stand-in minirootfs to -o FILE: cut (the
+# connection drops part-way: what arrived, and curl's exit 18), whole, or
+# short (a file that isn't the minirootfs, exit 0)
+echo "curl $*" >> "$CURL_LOG"
+out=
+while (($#)); do [[ $1 == -o ]] && out=$2; shift; done
+case ${CURL_MODE:-} in
+  cut) head -c 100 "$MINIROOTFS" > "$out"; echo "curl: (18) end of response with bytes missing (stand-in)" >&2; exit 18 ;;
+  whole) cat "$MINIROOTFS" > "$out" ;;
+  short) head -c 100 "$MINIROOTFS" > "$out" ;;
+  *) exit 97 ;;
+esac
+EOF
 printf '#!/bin/sh\n' > "$t/bin/magick"                       # no splash rendering
 printf '#!/bin/sh\n' > "$t/bin/mkbootimg"
 # The live DTB's memory node, for dodge-chain's stage-1 memory check
@@ -54,9 +79,11 @@ cat > "$t/bin/dtc" <<'EOF'
 printf '/ {\n\tmemory {\n\t\treg = <0x0 0x80000000 0x0 0x1000>;\n\t};\n};\n'
 EOF
 chmod 755 "$t/bin"/*
-REAL_PYTHON=$(command -v python3)
+REAL_PYTHON=$(command -v python3) REAL_SHA256SUM=$(command -v sha256sum)
+MINIROOTFS=$t/minirootfs.tar.gz MINIROOTFS_SUM=$(sha256sum < "$t/minirootfs.tar.gz")
+export REAL_SHA256SUM MINIROOTFS MINIROOTFS_SUM CURL_LOG="$t/curls"
 export REAL_PYTHON FETCH_APKS="$t/apks" FETCH_LOG="$t/fetched" HOME="$t/home" CLANG_DIR="$t/clang" PATH="$t/bin:$PATH"
-unset KERNEL_DIR KERNEL_BASE KERNEL_OUT WORK SPLASH_BGRA_GZ FETCH_FAIL_ON || true
+unset KERNEL_DIR KERNEL_BASE KERNEL_OUT WORK SPLASH_BGRA_GZ FETCH_FAIL_ON CURL_MODE || true
 
 ver=$(sed -n 's/.* ver=\([0-9.]*\)$/\1/p' bin/omamobile)
 [[ -n $ver ]] || fail "bin/omamobile names its Alpine version"
@@ -105,6 +132,50 @@ stopped "musl sysroot" musl-dev
 [[ ! -e $sysroot/marker-musl-dev ]] || fail "musl sysroot: unpacked a list from a failed fetch"
 grep -c -F "no libc.a" "$t/log" >/dev/null && fail "musl sysroot: went on to check the sysroot"
 pass "bin/omamobile initramfs stops when the sysroot's musl-dev fails, before unpacking it"
+
+# The minirootfs download, from the stand-in curl
+dl=$t/work/downloads/alpine mrfs=alpine-minirootfs-$ver-aarch64.tar.gz
+download() {  # CURL_MODE: bin/omamobile initramfs for cheetah on what $t/work holds; the status in $status
+  mkdir -p "$dl" "$t/tmp"
+  : > "$t/curls"
+  status=0
+  CURL_MODE=$1 DEVICE=cheetah WORK=$t/work KERNEL_OUT=$t/out TMPDIR=$t/tmp \
+    bin/omamobile initramfs > "$t/log" 2>&1 || status=$?
+}
+rm -rf "$t/work" "$t/out"
+download cut
+[[ $status != 0 ]] || fail "cut-off download: the build went on"
+[[ -s $t/curls ]] || fail "cut-off download: never ran curl"
+[[ ! -e $dl/$mrfs ]] || fail "cut-off download: left what arrived under the cached name"
+pass "bin/omamobile initramfs keeps a cut-off minirootfs download out of the cache"
+
+download whole
+[[ -s $t/curls ]] || fail "after a cut-off download: the next run didn't download again"
+[[ $(sha256sum < "$dl/$mrfs") == "$MINIROOTFS_SUM" ]] || fail "after a cut-off download: the next run didn't cache the minirootfs"
+grep -c -F "alpine musl sysroot has no libc.a" "$t/log" >/dev/null || fail "after a cut-off download: the next run didn't go on"
+pass "bin/omamobile initramfs downloads the minirootfs again after a cut-off download, and goes on"
+
+rm -rf "$t/work" "$t/out"
+download short
+[[ $status != 0 ]] || fail "download that fails its checksum: the build went on"
+[[ ! -e $dl/$mrfs ]] || fail "download that fails its checksum: kept under the cached name"
+[[ -z $(ls -A "$dl") ]] || fail "download that fails its checksum: left $(ls -A "$dl")"
+grep -c -F "checksum mismatch for the downloaded $mrfs (removed it)" "$t/log" >/dev/null ||
+  fail "download that fails its checksum: no message that it was removed"
+pass "bin/omamobile initramfs removes a minirootfs download that fails its checksum, and says so"
+
+# A file under the cached name that fails the checksum, such as a download
+# cut off by an older bin/omamobile: stop, and name the file to remove
+rm -rf "$t/work" "$t/out"
+mkdir -p "$dl"
+head -c 100 "$MINIROOTFS" > "$dl/$mrfs"
+download whole
+[[ $status != 0 ]] || fail "cached file that fails its checksum: the build went on"
+[[ ! -s $t/curls ]] || fail "cached file that fails its checksum: downloaded over it"
+[[ -e $dl/$mrfs ]] || fail "cached file that fails its checksum: removed it"
+grep -c -F "checksum mismatch for the cached $dl/$mrfs: remove it to download it again" "$t/log" >/dev/null ||
+  fail "cached file that fails its checksum: no message naming the file to remove"
+pass "bin/omamobile initramfs stops at a cached minirootfs that fails its checksum, and names the file to remove"
 
 # tools/dodge-chain pack, with stand-in stage 2 inputs
 d=$t/dodge

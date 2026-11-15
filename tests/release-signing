@@ -92,7 +92,7 @@ echo "$other" > "$R/keys/fingerprint.release"
 if run tools/build-packages --resign; then fail "refuses a key omamobile-keyring doesn't trust"; fi
 grep -q 'does not trust' "$t/log" || { cat "$t/log"; fail "says the key is not trusted"; }
 echo "$release" > "$R/keys/fingerprint.release"
-echo "$release:4:" > "$kr/omamobile-revoked"
+echo "$release" > "$kr/omamobile-revoked"
 if run tools/build-packages --resign; then fail "refuses a revoked key"; fi
 grep -q 'is revoked' "$t/log" || { cat "$t/log"; fail "says the key is revoked"; }
 : > "$kr/omamobile-revoked"

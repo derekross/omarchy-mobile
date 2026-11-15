@@ -13,7 +13,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 SRC=$PWD
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
-for tool in debugfs mkfs.ext4 zstd openssl lz4 cpio; do command -v $tool >/dev/null || { echo "skip: no $tool"; exit 0; }; done
+for tool in debugfs mkfs.ext4 zstd openssl lz4 cpio timeout; do command -v $tool >/dev/null || { echo "skip: no $tool"; exit 0; }; done
 t=$(mktemp -d)
 cleanup() {
   [[ ! -d $t/gnupg ]] || gpgconf --homedir "$t/gnupg" --kill gpg-agent 2>/dev/null || true
@@ -852,6 +852,106 @@ echo tampered >> "$BD/images/dtbo.img"
 if tinstall --verify-only --unsigned; then fail "--verify-only refuses a bundle file that doesn't match"; fi
 [[ ! -s $t/fastboot.log ]] || fail "a refused --verify-only never runs fastboot"
 pass "as a bundle's tools/install-phone: finds the bundle, and --verify-only checks it with no phone"
+
+# Two installs with one --work: the staged files have fixed names there, so a
+# second install while the first waits at its codename would replace them (the
+# first would flash the second owner's answers) and remove them when it ends.
+# The second, by any spelling of that directory, stops before it writes in
+# --work or reads the ramdisk (a mktemp and an lz4 that note their calls show
+# either), so before it contacts the phone; --verify-only still runs beside
+# the first; an install killed outright leaves the next one free to go; and
+# the lock is beside --work, which ends empty, so a parent that can't be
+# written stops the install, as does a lock that can't be taken (a python3
+# that fails that one flock call stands in for a file system without flock).
+second_install() {
+  local status=0
+  : > "$t/fastboot.log"
+  answers | HOME=$t/home PATH="$t/bin:$PATH" \
+    timeout --kill-after=2s 30s "$R/tools/install-phone" \
+      --device testdev --images "$t/images" --work "$t/work" "$@" \
+      > "$t/out" 2>&1 || status=$?
+  ((status != 124 && status != 137)) ||
+    fail "a second install refuses promptly instead of waiting for the lock"
+  return "$status"
+}
+waiting() { # NAME: an install for user NAME, waiting at the codename; fd 9 types it
+  mkfifo "$t/$1.in"
+  HOME=$t/home PATH="$t/bin:$PATH" "$R/tools/install-phone" --device testdev --images "$t/images" --work "$t/work" \
+    < "$t/$1.in" > "$t/$1.out" 2>&1 &
+  exec 9> "$t/$1.in"
+  USERS=$1 answers | sed '$d' >&9
+  for _ in $(seq 300); do grep -c 'are not touched' "$t/$1.out" >/dev/null && return; sleep 0.1; done
+  cat "$t/$1.out"; fail "an install waits at the codename prompt"
+}
+staged() { (cd "$t/work" && find . -name 'verify.*' -prune -o -type f -print | LC_ALL=C sort | xargs cksum); }
+flashed_user() {
+  local f=$t/userdata.flashed
+  if command -v simg2img >/dev/null && [[ $(head -c4 "$f" | od -An -tx1 | tr -d ' ') == 3aff26ed ]]; then
+    simg2img "$f" "$t/flashed.img"; f=$t/flashed.img
+  fi
+  debugfs -R 'cat /etc/omamobile/firstboot.conf' "$f" 2>/dev/null | sed -n 's/^USERNAME=//p'
+}
+mkdir -p "$t/watch"
+cat > "$t/watch/lz4" <<'EOF'
+#!/bin/bash
+# lz4 or mktemp (by the name it is called), noting the call
+echo "${0##*/} $*" >> "$T/watched.log"
+PATH=${PATH//"$T/watch:"/} exec "${0##*/}" "$@"
+EOF
+chmod +x "$t/watch/lz4" && ln -s lz4 "$t/watch/mktemp"
+waiting alice
+first=$!
+before=$(staged)
+if PATH=$t/watch:$PATH USERS=bob second_install 9>&-; then cat "$t/out"; fail "a second install with the same --work is refused"; fi
+grep -c "another install is using the work directory $t/work" "$t/out" >/dev/null || { cat "$t/out"; fail "says another install uses the work directory"; }
+grep -c "About the phone's owner" "$t/out" >/dev/null && fail "the second install asks no questions"
+[[ ! -s $t/fastboot.log ]] || fail "the second install sends the phone nothing"
+ln -s work "$t/work-link"
+if PATH=$t/watch:$PATH USERS=bob second_install --work "$t/work-link" 9>&-; then cat "$t/out"; fail "a second install with another spelling of the --work is refused"; fi
+[[ ! -e $t/watched.log ]] || { cat "$t/watched.log"; fail "a second install stops before it writes in --work or reads the ramdisk"; }
+[[ $(staged) == "$before" ]] || fail "the second install leaves the first one's staged files as they were"
+install --verify-only 9>&- || { cat "$t/out"; fail "--verify-only runs beside a waiting install"; }
+[[ $(staged) == "$before" ]] || fail "--verify-only leaves the waiting install's staged files as they were"
+: > "$t/fastboot.log"
+echo testdev >&9
+exec 9>&-
+wait $first || { cat "$t/alice.out"; fail "the waiting install goes ahead"; }
+[[ $(flashed_user) == alice ]] || fail "the waiting install flashes its own owner's answers"
+waiting carol
+killed=$!
+kill -KILL $killed $(cat /proc/$killed/task/*/children)
+exec 9>&-
+wait $killed 2>/dev/null || true
+USERS=dave install || { cat "$t/out"; fail "an install killed outright leaves the next one free to go"; }
+[[ $(flashed_user) == dave ]] || fail "the next install flashes its own answers"
+[[ -z $(ls -A "$t/work") && -f $t/.work.install.lock ]] || fail "the work directory ends empty, the lock beside it"
+if ((EUID != 0)); then
+  mkdir -p "$t/ro/work" && chmod 555 "$t/ro"
+  install --work "$t/ro/work" && refused=0 || refused=1
+  chmod 755 "$t/ro"
+  ((refused)) || { cat "$t/out"; fail "an install whose lock can't be made beside --work is refused"; }
+  grep -c "can't create the lock file $t/ro/.work.install.lock beside the work directory" "$t/out" >/dev/null || { cat "$t/out"; fail "names the lock file it can't create"; }
+  [[ ! -s $t/fastboot.log ]] || fail "an install with no lock sends the phone nothing"
+fi
+mkdir -p "$t/nolock"
+cat > "$t/nolock/python3" <<'EOF'
+#!/bin/bash
+# python3 ($PYTHON3), but the install lock's flock fails as on a file system without flock
+if [[ $# == 3 && $1 == -I && $2 == - ]]; then
+  script=$(cat)
+  [[ $script != *'except BlockingIOError'* ]] ||
+    script=$'import errno, fcntl\ndef flock(fd, op): raise OSError(errno.EOPNOTSUPP, "Operation not supported")\nfcntl.flock = flock\n'$script
+  exec "$PYTHON3" -I -c "$script" "$3"
+fi
+exec "$PYTHON3" "$@"
+EOF
+chmod +x "$t/nolock/python3"
+if PYTHON3=$(command -v python3) PATH=$t/nolock:$PATH install; then cat "$t/out"; fail "an install whose lock can't be taken is refused"; fi
+grep -c "can't lock the work directory $t/work (give a --work DIR on a file system that supports flock)" "$t/out" >/dev/null ||
+  { cat "$t/out"; fail "says it can't lock the work directory"; }
+grep -c "About the phone's owner" "$t/out" >/dev/null && fail "an install with no lock asks no questions"
+[[ ! -s $t/fastboot.log && -z $(ls -A "$t/work") ]] || fail "an install with no lock stages nothing and sends the phone nothing"
+pass "one install at a time per work directory: a second one stops before the phone, --verify-only runs beside it, a killed one keeps none out, the lock is beside --work, no lock stops the install"
 
 # The guided installer has asked the questions: they aren't printed again,
 # the answers are still read and checked, and the closing hints stay out

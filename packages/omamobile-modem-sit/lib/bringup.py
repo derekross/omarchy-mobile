@@ -508,6 +508,7 @@ def start(service, settings, stopped=lambda: False):
     ims_first = net.getboolean('ims', True) and chosen['ims_first']
     if not ims_first and apn:
         service.stage('data')
+        service.internet_setup = dict(apn=apn, ip_type=ip_type)
         activate(client, apn, ip_type=ip_type, on_event=service.event)
         service.pump()
     if not net.getboolean('ims', True):
@@ -527,6 +528,7 @@ def start(service, settings, stopped=lambda: False):
         if internet_up or not apn:
             return
         service.stage('data')
+        service.internet_setup = dict(apn=apn, ip_type=ip_type)
         activate(client, apn, ip_type=ip_type, on_event=service.event)
         service.pump()
         internet_up = True

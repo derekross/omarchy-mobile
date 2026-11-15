@@ -146,6 +146,8 @@ case $1 in
     fi
     cat "$T/boot-id" ;;
   "systemctl is-system-running") echo running ;;
+  *omamobile-install-awake*systemd-inhibit*--what=sleep\ *) echo "phone AWAKE" >> "$T/events" ;;
+  "systemctl stop omamobile-install-awake") echo "phone AWAKE-END" >> "$T/events" ;;
   *reboot-to\ omamobile*)
     echo "phone RESTART: $1" >> "$T/events"
     [[ ! -e $T/fail-restart ]] || exit 1
@@ -500,6 +502,13 @@ guided "$ALL" || fail "a whole install succeeds"
 once "a whole install"
 order=$(grep -nE '^(fastboot -s FAKE123 (flash userdata|reboot)|nmcli connection add|nv-backup|phone-provision|phone RESTART|phone-smoke)' "$t/events" | cut -d: -f2- | awk '{ print $1 }' | tr '\n' ' ')
 [[ $order == "fastboot fastboot nmcli nv-backup phone-provision phone phone-smoke " ]] || fail "the steps run in order: $order"
+# The phone is held awake for every step after its first start (a fresh
+# install has no modem yet to hold it, and auto-sleep drops USB), from the
+# first start's end, again before the backup, the firmware and the check,
+# and the hold is let go once the check is done
+awake=$(grep -E '^(phone AWAKE|nv-backup|phone-provision|phone RESTART|phone-smoke)' "$t/events" | awk '{ print $1 $2 }' | sed 's/^\(nv-backup\|phone-provision\|phone-smoke\).*/\1/' | tr '\n' ' ')
+[[ $awake == "phoneAWAKE phoneAWAKE nv-backup phoneAWAKE phone-provision phoneRESTART: phoneAWAKE phone-smoke phoneAWAKE-END " ]] ||
+  fail "the phone is held awake from the first start to the check, and let go after it: $awake"
 # Each step that talks to the phone over SSH first asks it which phone it is
 which=$(grep -E '^(phone WHICH|nv-backup|phone-provision|phone RESTART|phone-smoke)' "$t/events" | awk '{ print $1 $2 }' | sed 's/^\(nv-backup\|phone-provision\|phone-smoke\).*/\1/' | tr '\n' ' ')
 [[ $which == "phoneWHICH phoneWHICH nv-backup phoneWHICH phone-provision phoneWHICH phoneRESTART: phoneWHICH phoneWHICH phone-smoke " ]] ||
