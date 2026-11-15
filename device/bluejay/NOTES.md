@@ -23,7 +23,8 @@ were:
 One subsequent ordinary current-B boot reached
 `7.3.0-rc6-omamobile-bluejay-input-gated0`. Its read-only devinfo check decoded
 B retry count 2, active, bootable and unsuccessful. Comparing the retained
-November 12 recovery readback with the November 13 post-refill readback gives
+November 12 recovery readback with the November 13 post-refill readback (dates
+in America/Chicago) gives
 these eight slot bytes from the complete 8192-byte files:
 
 | Readback | Slot A, offsets 0x30–0x33 | Slot B, offsets 0x34–0x37 |
