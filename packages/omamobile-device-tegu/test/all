@@ -95,6 +95,7 @@ for f in usr/bin/reboot-to usr/bin/tegu-tcpc-switch \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
          usr/lib/udev/rules.d/10-omamobile-storage.rules usr/lib/udev/rules.d/20-omamobile-torch.rules \
          usr/lib/udev/rules.d/70-omamobile-dma-heap.rules usr/lib/udev/rules.d/72-omamobile-feedbackd.rules \
+         usr/lib/udev/rules.d/70-omamobile-touch-wake.rules \
          usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
          usr/share/uwsm/env.d/omamobile-tegu-graphics \
@@ -104,6 +105,15 @@ for f in usr/bin/reboot-to usr/bin/tegu-tcpc-switch \
          etc/pacman.d/omamobile-mirrorlist; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
+# Double tap from sleep: the same rule line as the 7 Pro's, the same driver
+# (compared in the repository; a build of this package alone skips that).
+tw=vendor/udev/rules.d/70-omamobile-touch-wake.rules
+[[ $(grep -v '^#' "$tw") == 'ACTION=="add|bind", SUBSYSTEM=="spi", DRIVER=="synaptics-tcm", TEST=="power/wakeup", ATTR{power/wakeup}="enabled"' ]] \
+  || fail "the touch-wake rule turns on the synaptics-tcm touchscreen's power/wakeup and nothing else"
+other=../omamobile-device-cheetah/$tw
+if [[ -f $other ]]; then
+  [[ $(grep -v '^#' "$tw") == $(grep -v '^#' "$other") ]] || fail "the touch-wake rule matches the 7 Pro's rule line"
+fi
 [[ -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-wifi && -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-nfc &&
    -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-cpuidle ]] \
   || fail "the sleep hooks are not executable"
