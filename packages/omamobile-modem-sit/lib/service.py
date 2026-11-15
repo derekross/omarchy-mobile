@@ -225,10 +225,19 @@ def data_call_change(payload, response=None):
         meaning = f'the internet bearer (CID {cid}) is gone from the list'
     elif not item[3]:
         meaning = f'the internet bearer (CID {cid}) is listed inactive'
-    elif item[4:] == response[4:len(item)] and len(item) == len(response):
-        meaning = f'the internet bearer (CID {cid}) is as set up'
     else:
-        meaning = f'the internet bearer (CID {cid}) is listed with other addresses or DNS than at setup'
+        # Only the fields both messages name: the addresses, gateways and DNS
+        # (bytes 5 to 0x42, as omamobile-sit-data reads them) and the P-CSCF
+        # list. The setup response and a list item aren't known to share a
+        # size or their later fields (AMBR, QoS) on this modem.
+        same = (len(item) >= 0x42 and len(response) >= 0x42 and item[5:0x42] == response[5:0x42]
+                and data_call.pcscf_addresses(item) == data_call.pcscf_addresses(response))
+        meaning = (f'the internet bearer (CID {cid}) has its setup addresses and DNS' if same else
+                   f'the internet bearer (CID {cid}) is listed with other addresses or DNS than at setup')
+        if item[3] == 1:
+            meaning += ', dormant'
+        if len(item) != len(response):
+            meaning += f' (list item {len(item)} bytes, setup response {len(response)})'
     return f'Data-call list changed: {listed}; {meaning}'
 
 
@@ -445,7 +454,10 @@ class Service:
             # modem's attach bearer (bringup.find_attach_bearer), and logged
             # against the bearer the data service runs on.
             self.data_call_list = bytes(packet[8:])
-            print(data_call_change(self.data_call_list), flush=True)
+            try:
+                print(data_call_change(self.data_call_list), flush=True)
+            except Exception as error:   # a log line must never stop sitd
+                print('Data-call list changed: not described:', type(error).__name__, flush=True)
         elif ident == 0x070e:
             # IND_NTW_STATE_CHANGED: read the registration again soon (it
             # can come every second or two while the modem searches).

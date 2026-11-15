@@ -22,7 +22,7 @@ def listing(*items):
 class DataCallChange(unittest.TestCase):
     def test_as_set_up(self):
         line = app_service.data_call_change(listing(item(3), item(2)), response=item(3))
-        self.assertIn('the internet bearer (CID 3) is as set up', line)
+        self.assertIn('the internet bearer (CID 3) has its setup addresses and DNS', line)
         self.assertIn('CID 2', line)
 
     def test_gone(self):
@@ -36,6 +36,25 @@ class DataCallChange(unittest.TestCase):
     def test_new_address(self):
         line = app_service.data_call_change(listing(item(3, address=b'\x0a\x00\x00\x02')), response=item(3))
         self.assertIn('other addresses or DNS than at setup', line)
+
+    def test_other_size_same_addresses(self):
+        line = app_service.data_call_change(listing(item(3, size=280)), response=item(3, size=292))
+        self.assertIn('has its setup addresses and DNS', line)
+        self.assertIn('list item 280 bytes, setup response 292', line)
+
+    def test_later_fields_ignored(self):
+        later = bytearray(item(3)); later[0xf0] = 9
+        line = app_service.data_call_change(listing(bytes(later)), response=item(3))
+        self.assertIn('has its setup addresses and DNS', line)
+
+    def test_dormant(self):
+        line = app_service.data_call_change(listing(item(3, active=1)), response=item(3))
+        self.assertIn('dormant', line)
+
+    def test_dns_changed(self):
+        other = bytearray(item(3)); other[0x1a:0x1e] = b'\x08\x08\x08\x08'
+        line = app_service.data_call_change(listing(bytes(other)), response=item(3))
+        self.assertIn('other addresses or DNS', line)
 
     def test_empty_list(self):
         line = app_service.data_call_change(b'\x00', response=item(3))
