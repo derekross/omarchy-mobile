@@ -35,8 +35,8 @@ Nothing here is in the package. Wi-Fi needs four files from Google's firmware fo
 - `.clm_blob`: the regulatory data;
 - `.txcap_blob`: the TX capabilities.
 
-The kernel side is [kernel #156](https://github.com/derekross/linux-omarchy-mobile/pull/156) (a draft). Nothing in this package starts or configures Wi-Fi: NetworkManager finds `wlp1s0` on its own.
+The kernel side merged on 2026-11-09 through [kernel #187](https://github.com/derekross/linux-omarchy-mobile/pull/187), which carried [#156](https://github.com/derekross/linux-omarchy-mobile/pull/156)'s commits. Nothing in this package starts or configures Wi-Fi: NetworkManager finds `wlp1s0` on its own.
 
 The same run also stages the Bluetooth patch (`brcm/BCM.google,zuma-husky.hcd`, stock's `BCM.hcd`) and the five CS40L26 haptics files (`cs40l26.wmfw`, `cs40l26.bin` and the three tuning files) from the same image.
 
-Until this package has its own Bluetooth address step, the controller comes up on its placeholder address, the same on every 8 Pro. A pairing made now won't survive the change to the phone's own address: pair the device again after it.
+Since 0.1.13 the controller takes the phone's own address at boot (`omamobile-bt-addr`, above). Pairings made before 0.1.13, on the placeholder address, have to be made again once.
