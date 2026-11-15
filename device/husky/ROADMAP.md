@@ -59,7 +59,7 @@ Status words as in DEVICES.md. "9a" is the Pixel 9a (`tegu`) work. "Needs" lists
 
 A proposal, not a verdict; Brett and Derek know the hardware better.
 
-1. ~~Merge #148, #153, #154~~ (done 2026-10-31 and 2026-11-01), and the battery base (#163, #175, done). Brett's display, GPU, DVFS and Wi-Fi PRs (#160, #157, #158, and #156 through #187) landed 2026-11-09 to 2026-11-13. Next: #205 (the battery bus on by default), #199 and #200, the sound set (#203, #204, #450, #453).
+1. ~~Merge #148, #153, #154~~ (done 2026-10-31 and 2026-11-01), and the battery base (#163, #175, done). Brett's display, GPU, DVFS and Wi-Fi PRs (#160, #157, #158, and #156 through #187) landed 2026-11-09 to 2026-11-13. #205 (the battery bus on by default), #199 (Bluetooth) and #200 (haptics and torch) merged too, and #450 and #453 landed. Next: the sound kernel PRs, #203 and #204.
 2. **Battery, charging and USB-C** (Lef): the gauge and the charger work; the Type-C driver is a sink. Left: the model in the board file, the 92 % stop (#272), and host mode with VBUS out, which waits for the runbook review (#282) and a USB-C meter.
 3. ~~**Display driver** (Brett)~~: #160 merged 2026-11-10. Open: the short black blink at the DRM master handover.
 4. ~~**GPU, DVFS and thermal** (Brett)~~: #157 and #158 merged 2026-11-13. Next: a GPU load with the thermal zone watched, a skin temperature source and cpuidle.
