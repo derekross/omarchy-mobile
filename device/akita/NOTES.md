@@ -11,6 +11,16 @@ Sources:
 - `S/`: Google's GPL zuma SoC device tree, [kernel/devices/google/zuma](https://android.googlesource.com/kernel/devices/google/zuma/+/refs/tags/android-16.0.0_r0.10/dts/) at the same tag.
 - `H/`: [husky's notes](../husky/NOTES.md) and [descriptor](../husky/device.conf), for what the two zuma phones share.
 
+## 2026-11-15: speed (M5)
+
+CPU frequency scaling, thermal and the GPU. The steps and results are in [BRINGUP-M5](BRINGUP-M5.md).
+
+- **The CPU levels are the 8 Pro's** [V] (R/ `pixel-em`), but **the battery limiter's caps are lower** [V]: 1475, 1549 and 2147 MHz (G/ `zuma-akita-bcl.dtsi`), against the 8 Pro's 1945 and 2294 MHz on the mid and big clusters. With no BCL driver, everything above them is boost-only, so the tops are 1425, 1418 and 2147 MHz.
+- **The bootloader leaves the clusters at about 1411, 1060 and 1156 MHz** [V] (measured), so CPU DVFS makes the big core nearly twice as fast.
+- **Nine cores at full load for 3 minutes peaked at 71 C** [V], without reaching the 80 C trip. Stock's own trips are higher (90 to 95 C).
+- **The GPU is the 8 Pro's Mali-G715 with the same table** [V], up to 890 MHz. panthor renders the session.
+- **The session is still not smooth,** because simpledrm copies every frame with the CPU. That needs the display driver (DECON, DSIM and an ak3b panel driver).
+
 ## 2026-11-13: battery and charging (M4)
 
 The battery: the fuel gauge, the charger's state, the USB link across an unplug, charging under Linux (gate h) and the PMIC's interrupt. The steps and results are in [BRINGUP-M4](BRINGUP-M4.md). The kernel side is linux-omarchy-mobile#246.
