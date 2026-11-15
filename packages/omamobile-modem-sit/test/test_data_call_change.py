@@ -112,13 +112,15 @@ class Reconnect(unittest.TestCase):
 
     def test_dropped_detects_gone_and_inactive(self):
         self.assertTrue(app_service.internet_dropped(listing(item(2)), response=item(3)))
-        self.assertTrue(app_service.internet_dropped(listing(item(3, active=0)), response=item(3)))
+        self.assertFalse(app_service.internet_dropped(listing(item(3, active=0)), response=item(3)))
         self.assertFalse(app_service.internet_dropped(listing(item(3, active=1)), response=item(3)))
         self.assertFalse(app_service.internet_dropped(b'\x01\x02', response=item(3)))
 
     def test_a_drop_schedules_and_the_setup_runs_with_start_ups_settings(self):
+        app_service.subprocess.run.return_value.returncode = 0     # mobile data on
         self.service.event(self.indication(listing(item(2))))
         self.assertIsNotNone(self.service.reconnect_at)
+        self.assertTrue(self.service.reconnect_data)
         self.service.reconnect_at = 0
         with patch.object(data_call, 'activate') as activate:
             self.service.reconnect()
@@ -126,9 +128,46 @@ class Reconnect(unittest.TestCase):
         self.assertEqual(activate.call_args.args[1], 'internet')
         self.assertEqual(activate.call_args.kwargs['ip_type'], 'ipv4v6')
         self.assertFalse(self.state.exists())       # the stale record was cleared first
-        app_service.subprocess.run.assert_called_with(
-            ['systemctl', 'try-restart', 'omamobile-sit-data.service'], check=False)
+        calls = [c.args[0] for c in app_service.subprocess.run.call_args_list]
+        self.assertIn(['systemctl', 'stop', 'omamobile-sit-data.service'], calls)
+        self.assertEqual(calls[-1], ['systemctl', 'start', 'omamobile-sit-data.service'])
         self.assertIsNone(self.service.reconnect_at)
+
+    def test_data_off_stays_off(self):
+        app_service.subprocess.run.return_value.returncode = 3     # the route service stopped
+        self.service.event(self.indication(listing(item(2))))
+        self.service.reconnect_at = 0
+        with patch.object(data_call, 'activate'):
+            self.service.reconnect()
+        calls = [c.args[0] for c in app_service.subprocess.run.call_args_list]
+        self.assertNotIn(['systemctl', 'start', 'omamobile-sit-data.service'], calls)
+
+    def test_held_without_its_setup_is_released_first(self):
+        self.listed = listing(item(2), item(3))
+        self.response.unlink()                       # a setup that timed out kept only the record
+        self.service.reconnect_at = 0
+        order = []
+        with patch.object(data_call, 'deactivate', side_effect=lambda *a: order.append('release')) as release, \
+                patch.object(data_call, 'activate', side_effect=lambda *a, **k: order.append('setup')):
+            self.service.reconnect()
+        release.assert_called_once_with(self.client, 3)
+        self.assertEqual(order, ['release', 'setup'])
+
+    def test_radio_off_cancels(self):
+        self.service.radio = 'off'
+        self.service.reconnect_at = 0
+        with patch.object(data_call, 'activate') as activate:
+            self.service.reconnect()
+        activate.assert_not_called()
+        self.assertIsNone(self.service.reconnect_at)
+
+    def test_a_live_call_waits(self):
+        self.service.calls = {'x': dict(state='active')}
+        self.service.reconnect_at = 0
+        with patch.object(data_call, 'activate') as activate:
+            self.service.reconnect()
+        activate.assert_not_called()
+        self.assertGreater(self.service.reconnect_at, 0)
 
     def test_no_schedule_during_start_up_or_its_own_setup(self):
         self.service.current_stage = 'data'
@@ -165,7 +204,13 @@ class Reconnect(unittest.TestCase):
                 self.service.reconnect()
             delays.append(self.service.reconnect_at - 1000)
         self.assertEqual(delays, [15, 30, 60, 120, 240, 300, 300])
-        app_service.subprocess.run.assert_not_called()
+        for _ in range(5):
+            self.service.reconnect_at = 0
+            with patch.object(data_call, 'activate', side_effect=RuntimeError('refused')):
+                self.service.reconnect()
+        self.assertIsNone(self.service.reconnect_at)     # the twelfth failure gives up
+        calls = [c.args[0] for c in app_service.subprocess.run.call_args_list]
+        self.assertNotIn(['systemctl', 'start', 'omamobile-sit-data.service'], calls)
 
 
 if __name__ == '__main__':
