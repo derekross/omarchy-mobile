@@ -50,6 +50,34 @@ run "${cp1/umts_ipc1/umts_ipc0}" "${cp2//umts_ipc1/umts_ipc0}" "${cp3//umts_ipc1
 has '0 known, 3 new' && has 'new dmesg errors' || fail "a message dropped on the phone service's own channel (umts_ipc0) is new"
 pass "a message dropped on the phone service's own channel (umts_ipc0) is new"
 
+rx='[  113.204101] cpif: rx_multi_pdp: PCIE: rmnet2<-s5300: ERR! netif_receive_skb'
+run "$rx" "${rx/rmnet2/rmnet0}" "$rx"
+has 'ok|1|kernel health|' && has '(3 known, of them cpif rmnet packet dropped as the link came up x3, 0 new)' \
+  && ! has 'new dmesg errors' || fail "a few rmnet packets dropped as the modem link comes up are known and counted"
+pass "a few rmnet packets dropped as the modem link comes up are known and counted"
+lines=(); for _ in $(seq 7); do lines+=("$rx"); done
+run "${lines[@]}"
+has 'cpif rmnet packet dropped as the link came up x7' && has '(5 known' && has '2 new)' && has 'new dmesg errors' \
+  || fail "rmnet drops past five in a boot are new"
+pass "rmnet drops past five in a boot are new"
+for other in "${rx/rmnet2/umts_ipc0}" "${rx/s5300/s5400}" "${rx/netif_receive_skb/netif_receive_skb fail -12}"; do
+  run "$other"
+  has '0 known, 1 new' && has 'new dmesg errors' || fail "a netif_receive_skb drop of another form is new: $other"
+done
+pass "netif_receive_skb drops on another channel, modem or form are new"
+
+fq1='[    31.401220] F2FS-fs (loop2): Failed to enable quota tracking (type=0, err=-3). Please run fsck to fix.'
+fq2='[    31.401298] F2FS-fs (loop2): Cannot turn on quotas: error -3'
+run "$fq1" "$fq2" "${fq1/loop2/loop1}" "${fq2/loop2/loop1}" "${fq1/loop2/loop3}" "${fq2/loop2/loop3}"
+has 'ok|1|kernel health|' && has '(6 known, of them f2fs quota off on the modem NV copies x6, 0 new)' \
+  && ! has 'new dmesg errors' || fail "F2FS's quota lines on the modem NV copies' loop devices are known and counted"
+pass "F2FS's quota lines on the modem NV copies' loop devices are known and counted"
+for other in "${fq1/loop2/sda34}" "${fq2/error -3/error -5}" "${fq1/err=-3/err=-117}" 'F2FS-fs (loop2): Mismatch start address, segment0(512) cp_blkaddr(605)'; do
+  run "$other"
+  has '0 known, 1 new' && has 'new dmesg errors' || fail "another F2FS error, or one off a loop device, is new: $other"
+done
+pass "other F2FS errors, and quota errors off a loop device or with another error, are new"
+
 run "${ufs/0x4021/0x1561}"
 has '0 known, 1 new' && has 'new dmesg errors' || fail "a dme-set of another attribute is new"
 pass "a dme-set of another attribute is new"

@@ -1,0 +1,15 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# has-answers FILE: exit 0 if FILE holds any of the owner's answers (a line
+# that is neither blank nor a comment), 1 if it holds none (the release
+# image's placeholder, rootfs/placeholders) or is not there. The same rule as
+# omamobile-firstboot's and the daemon's (patches/0001). For
+# omamobile-firstboot.service's ExecCondition=: 1 skips the unit, which
+# then stays inactive. A file that exists and can't be read counts as one
+# with answers: first boot runs and says what is wrong.
+set -uo pipefail
+f=${1:?usage: has-answers FILE}
+[[ -e $f ]] || exit 1
+[[ -r $f ]] || exit 0
+grep -cvE '^[[:space:]]*(#.*)?$' "$f" >/dev/null && exit 0
+exit 1

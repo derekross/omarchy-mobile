@@ -23,12 +23,18 @@ default route, and gets it back as soon as nothing else is left: otherwise a
 dead bearer's route plus its DNS can outlive a short Wi-Fi outage, make
 NetworkManager's connectivity check fail through it and keep the phone
 offline with Wi-Fi up.
+
+Around a system sleep the default route is taken away (SleepHold): at
+logind's announcement NetworkManager takes Wi-Fi down, and a route through
+the bearer would carry everything that had been talking over Wi-Fi, bring
+the modem's link up and make the kernel refuse the sleep.
 """
 import fcntl
 import ipaddress
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import struct
 import subprocess
@@ -257,6 +263,130 @@ def wait_for_bearer(seconds):
         time.sleep(1)
 
 
+# How long after a sleep the cellular default route waits for Wi-Fi.
+RETURN_GRACE = 10
+SLEEP_MATCH = ("type='signal',interface='org.freedesktop.login1.Manager',"
+               "member='PrepareForSleep'")
+
+
+def sleep_signal(line):
+    """True or False for a logind PrepareForSleep line of busctl's JSON
+    monitor (a sleep is starting, or is over), None for anything else."""
+    try:
+        message = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(message, dict) or message.get('member') != 'PrepareForSleep':
+        return None
+    data = (message.get('payload') or {}).get('data')
+    if isinstance(data, list) and len(data) == 1 and isinstance(data[0], bool):
+        return data[0]
+    return None
+
+
+class SleepWatch:
+    """logind's sleep announcements, read without blocking. Without busctl
+    nothing is heard, and the route simply stays as it was."""
+
+    def __init__(self):
+        self.buffer = b''
+        try:
+            self.process = subprocess.Popen(
+                ['busctl', 'monitor', '--system', '--json=short', '--match', SLEEP_MATCH],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            os.set_blocking(self.process.stdout.fileno(), False)
+        except OSError:
+            self.process = None
+
+    def wait(self, seconds):
+        """Sleep up to seconds; return the announcements heard, in order."""
+        if not self.process:
+            time.sleep(seconds)
+            return []
+        heard = []
+        ready, _, _ = select.select([self.process.stdout], [], [], seconds)
+        if ready:
+            chunk = os.read(self.process.stdout.fileno(), 65536)
+            if not chunk:   # the monitor ended: go on without it
+                self.close()
+                return heard
+            self.buffer += chunk
+            *lines, self.buffer = self.buffer.split(b'\n')
+            for line in lines:
+                state = sleep_signal(line.decode(errors='replace'))
+                if state is not None:
+                    heard.append(state)
+        return heard
+
+    def close(self):
+        if self.process:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+            self.process = None
+
+
+class SleepHold:
+    """The cellular default route around a system sleep.
+
+    When the system goes to sleep NetworkManager takes Wi-Fi down first, and
+    the bearer's default route is then the only one: whatever was talking
+    over Wi-Fi sends through the bearer in that moment, the modem's link
+    comes up, and the kernel refuses the sleep because of it. So the route
+    goes at logind's announcement. After the sleep it waits for something
+    else to lead out again, or for RETURN_GRACE without that: put back at
+    once, it carried a few seconds of traffic at every wake, and the answers
+    to that traffic ended the next sleeps early.
+    """
+
+    def __init__(self, grace=RETURN_GRACE):
+        self.grace = grace
+        self.sleeping = False
+        self.held = False       # the route is ours to bring back
+        self.back_at = None     # when it returns if nothing else leads out
+
+    @property
+    def active(self):
+        """True while the route's presence is this class's business."""
+        return self.sleeping or self.back_at is not None
+
+    def announced(self, routed):
+        """A sleep is starting. True when the route has to go now."""
+        if self.sleeping:
+            return False
+        self.sleeping = True
+        # Still waiting to return after the last sleep counts as held.
+        self.held = routed or self.back_at is not None
+        self.back_at = None
+        return routed
+
+    def over(self, now, allowed=True):
+        """The sleep is over; allowed is False when roaming forbids data."""
+        if not self.sleeping:
+            return
+        self.sleeping = False
+        if self.held and allowed:
+            self.back_at = now + self.grace
+        self.held = False
+
+    def returns(self, others, now):
+        """True once: the route comes back now (others: another default
+        route exists)."""
+        if self.sleeping or self.back_at is None:
+            return False
+        if others or now >= self.back_at:
+            self.back_at = None
+            return True
+        return False
+
+    def cancel(self):
+        """Roaming took the route away for good: nothing to bring back."""
+        self.held = False
+        self.back_at = None
+
+
 def main():
     os.umask(0o077)
     lock = os.open(paths.RUN / 'data-network.lock', os.O_CREAT | os.O_RDWR, 0o600)
@@ -275,6 +405,7 @@ def main():
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     resolver = None
+    sleeps = None
     try:
         dev = find_device(address, data[2], stopped=lambda: stopping)
         addressed = True
@@ -286,6 +417,7 @@ def main():
         last = None
         seen = counters(json.loads(run('ip', '-j', '-s', 'link', 'show', 'dev', dev)))
         check_at = time.monotonic() + 30
+        hold = SleepHold()
 
         def watch():
             nonlocal last, seen, check_at
@@ -297,6 +429,7 @@ def main():
                     run('ip', 'route', 'del', 'default', 'dev', dev, 'metric', '700')
                     print('Roaming with data roaming off; the cellular default route is removed', flush=True)
                 resolver.update(False, dns)
+                hold.cancel()
                 last = None
                 return
             # With Wi-Fi up but rated limited, the carrier's DNS would keep
@@ -306,6 +439,13 @@ def main():
             if cellular != last:
                 print('Default internet path', 'cellular' if cellular else 'Wi-Fi/other', flush=True)
                 last = cellular
+            if hold.active:
+                if hold.returns(bool(others), time.monotonic()):
+                    if not routed:
+                        run('ip', 'route', 'add', 'default', 'dev', dev, 'src', address, 'metric', '700')
+                    print('The cellular default route is back', 'behind Wi-Fi' if others else 'as the only way out', flush=True)
+                    last = None
+                return
             if not routed and not others:
                 run('ip', 'route', 'add', 'default', 'dev', dev, 'src', address, 'metric', '700')
                 print('Nothing else leads out; the cellular default route is back', flush=True)
@@ -317,6 +457,16 @@ def main():
                     now = counters(json.loads(run('ip', '-j', '-s', 'link', 'show', 'dev', dev)))
                 seen = now
                 check_at = time.monotonic() + 30
+        def announced(state):
+            if not state:
+                hold.over(time.monotonic(), not roaming_blocked())
+                return
+            routes = json.loads(run('ip', '-j', 'route', 'show', 'default'))
+            routed = any(r.get('dev') == dev and r.get('metric') == 700 for r in routes)
+            if hold.announced(routed):
+                run('ip', 'route', 'del', 'default', 'dev', dev, 'metric', '700')
+                print('Sleep announced; the cellular default route is away until it is over', flush=True)
+        sleeps = SleepWatch()
         failing = None
         while not stopping and cp.online() and RESPONSE.exists():
             error = guarded(watch)
@@ -325,11 +475,14 @@ def main():
             elif failing and not error:
                 print('Network checks work again', flush=True)
             failing = error
-            time.sleep(2 if error else .5)
+            for state in sleeps.wait(2 if error else .5):
+                guarded(lambda state=state: announced(state))
     except InterruptedError:
         # Stopped while probing: find_device has put the candidate back.
         pass
     finally:
+        if sleeps:
+            sleeps.close()
         if resolver:
             resolver.restore()
         if dev:

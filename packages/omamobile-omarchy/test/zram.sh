@@ -18,6 +18,13 @@ f=$t/stage/usr/lib/systemd/zram-generator.conf.d/91-omamobile.conf
 [[ 91-omamobile.conf > 90-omarchy.conf && 91-omamobile.conf < 99-local.conf ]] \
   || fail "zram drop-in sorts after Omarchy's and before a local one"
 pass "the zram drop-in is staged and sets half the RAM"
+# Omarchy 4.5 lists zram-generator in its aarch64 package list, which only a
+# fresh image installs; its update is a plain pacman -Syu, so a phone that came
+# from 2026.11.08 never got it and its drop-in did nothing (#528). The package
+# depends on it, so the update brings it.
+grep -Eq "^depends=\(.*[ \'\"(]zram-generator[ \'\")]" PKGBUILD ||
+  fail "omamobile-omarchy depends on zram-generator, so an updated phone gets swap"
+pass "the package brings zram-generator to a phone that updated from Omarchy 4.0.6"
 
 gen=${ZRAM_GENERATOR:-/usr/lib/systemd/system-generators/zram-generator}
 if [[ ! -x $gen ]]; then

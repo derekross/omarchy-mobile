@@ -58,6 +58,16 @@ class Describe(unittest.TestCase):
         self.assertEqual((v['carrier'], v['tech'], v['data']['available'], v['roaming']['allowed']),
                          ('', '', False, False))
 
+    def test_modem_switch(self):
+        self.assertIsNone(mn.describe(True, None, CONF, False)['modem'])
+        sw = dict(available=True, enabled=False, running=True, started=True, provisioned=True,
+                  sleep_blocked=True, restart_needed=True, extra='x')
+        want = dict(sw)
+        del want['extra']
+        self.assertEqual(mn.describe(True, state(), CONF, True, switch=sw)['modem'], want)
+        # An older helper without "available": the page hides the switch.
+        self.assertFalse(mn.describe(True, state(), CONF, True, switch=dict(enabled=True))['modem']['available'])
+
     def test_no_identifiers_in_the_view(self):
         text = json.dumps(mn.describe(True, state(), CONF, True))
         self.assertNotIn('00101', text)
@@ -80,9 +90,14 @@ class Cli(unittest.TestCase):
         self.helper.write_text('#!/bin/sh\n')
         self.helper.chmod(0o755)
         (d / 'modem-sit.conf').write_text('[network]\napn = internet.example\n[data]\nroaming = no\n')
+        self.switch = d / 'omamobile-modem-switch'
+        self.switch.write_text('#!/bin/sh\n[ "$1" = status ] && echo \'{"available": true, "enabled": false, '
+                               '"running": false, "started": false, "provisioned": true, "sleep_blocked": false, '
+                               '"restart_needed": false}\'\n')
+        self.switch.chmod(0o755)
         self.env = dict(os.environ, OMAMOBILE_SIT_RUN=str(d / 'run'), OMAMOBILE_SIT_CONFIG=str(d / 'modem-sit.conf'),
                         OMAMOBILE_SIT_CONFIG_HELPER=str(self.helper), OMAMOBILE_MM='none',
-                        PATH=str(d / 'bin'))
+                        OMAMOBILE_MODEM_SWITCH=str(self.switch), PATH=str(d / 'bin'))
         self.d = d
 
     def tearDown(self):
@@ -97,6 +112,9 @@ class Cli(unittest.TestCase):
         v = json.loads(self.run_tool('status').stdout)
         self.assertEqual((v['installed'], v['running'], v['data']['enabled']), (True, True, False))
         self.assertEqual((v['apn']['configured'], v['roaming']['allowed']), ('internet.example', False))
+        self.assertEqual((v['modem']['enabled'], v['modem']['provisioned']), (False, True))
+        self.switch.unlink()
+        self.assertIsNone(json.loads(self.run_tool('status').stdout)['modem'])
 
     def test_not_installed(self):
         self.helper.unlink()
@@ -110,12 +128,17 @@ class Cli(unittest.TestCase):
         self.run_tool('roaming', 'off')
         self.run_tool('apn', 'internet.example')
         self.run_tool('attach-apn', 'ims')
+        self.run_tool('modem', 'off')
+        self.run_tool('modem', 'on')
         self.assertEqual(self.log.read_text().splitlines(), [
             'omamobile-sit data on',
             f'pkexec {self.helper} set roaming off',
             f'pkexec {self.helper} set apn internet.example',
-            f'pkexec {self.helper} set attach_apn ims'])
+            f'pkexec {self.helper} set attach_apn ims',
+            f'pkexec {self.switch} off',
+            f'pkexec {self.switch} on'])
         self.assertEqual(self.run_tool('data', 'maybe').returncode, 2)
+        self.assertEqual(self.run_tool('modem', 'restart').returncode, 2)
 
 
 if __name__ == '__main__':

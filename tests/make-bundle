@@ -27,7 +27,13 @@ for tool in python3 flock; do command -v "$tool" >/dev/null || { echo "ok - # sk
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
 r=$t/repo k=$t/kernel
-tools="phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data"
+# make-bundle's own list, which must hold phone-provision and what it runs,
+# nv-backup, and the guided install with what it runs (#guidedbundle)
+tools=$(sed -n 's/^provision_tools="\(.*\)"$/\1/p' tools/make-bundle)
+for f in phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data \
+  install-guided phone-smoke factory-index camera-requirements.txt; do
+  [[ " $tools " == *" $f "* ]] || fail "make-bundle's provision_tools has $f"
+done
 mkdir -p "$r/tools/lib" "$r/docs" "$r/device/testdev" "$r/packages/omamobile-keyring" "$r/out" \
   "$k/include/config" "$k/images"
 cp tools/make-bundle tools/bundle-manifest tools/install-phone "$r/tools/"
@@ -53,11 +59,16 @@ b=$r/out/bundle/omamobile-testdev-2026.11.01
 pass "an unsigned development bundle assembles"
 
 for f in $tools; do
-  [[ -x $b/tools/$f ]] || fail "the bundle has an executable tools/$f"
+  if [[ $f == *.txt ]]; then
+    [[ -f $b/tools/$f && ! -x $b/tools/$f ]] || fail "the bundle has tools/$f, not executable"
+  else
+    [[ -x $b/tools/$f ]] || fail "the bundle has an executable tools/$f"
+  fi
   cmp -s "$b/tools/$f" "tools/$f" || fail "tools/$f is the repository's"
 done
 cmp -s "$b/INSTALL.md" docs/INSTALL.md || fail "the bundle carries docs/INSTALL.md as INSTALL.md"
-pass "the bundle carries INSTALL.md and phone-provision with everything it runs"
+[[ ! -e $b/images/DEVICE ]] || fail "the bundle's images/ has no DEVICE file: its device is its device.conf"
+pass "the bundle carries INSTALL.md, phone-provision with everything it runs, and the guided install with what it runs"
 
 # Exercise the bundled wrapper's explicit transport without SSH/network IO.
 mkdir -p "$t/stubs"
@@ -93,6 +104,7 @@ if grep -c 'from the repository' "$b/README.txt" >/dev/null; then fail "README.t
 grep -c 'INSTALL.md' "$b/README.txt" >/dev/null || fail "README.txt points to INSTALL.md"
 grep -c '  bash tools/nv-backup DIR$' "$b/README.txt" >/dev/null || fail "README.txt gives the backup command"
 grep -c 'run "bash install" from this directory' "$b/README.txt" >/dev/null || fail "README.txt says bash install"
+grep -c '^  bash install --guided$' "$b/README.txt" >/dev/null || fail "README.txt gives the guided install's command"
 if grep -c '\./install' "$b/README.txt" >/dev/null; then fail "README.txt no longer says ./install"; fi
 grep -c 'sha256sum -c omamobile-testdev-2026.11.01.tar.sha256' "$b/README.txt" >/dev/null || fail "README.txt names the one-file download's check"
 pass "README.txt points to INSTALL.md, the bundled nv-backup and phone-provision, and says bash install"
@@ -237,3 +249,25 @@ if out=$(bundle); then fail "a build index that fails its own check stops the bu
 grep -c "factory-index check" <<<"$out" >/dev/null || fail "the refusal names the check: $out"
 [[ $(cd "$b" && sha256sum SHA256SUMS) == "$before" ]] || fail "a refused rebuild leaves the bundle as it was"
 pass "a build index that fails tools/factory-index check stops the bundle, and the earlier bundle stays"
+
+# The install link: manifest.json says install_link with its protocol only
+# for a root image built for the link (its MANIFEST's "install link:"
+# line), and an image line this tool does not know stops the bundle
+rm -f "$r/device/testdev/factory-builds.json"
+link_of() { python3 -I -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1])).get("install_link")))' "$b/manifest.json"; }
+out=$(bundle) || fail "a bundle without the link assembles: $out"
+[[ $(link_of) == null ]] || fail "an image from before the link: no install_link"
+mf=${root%.img.zst}.MANIFEST
+cp "$mf" "$t/MANIFEST.saved"
+echo 'install link: none' >> "$mf"
+out=$(bundle) || fail "a bundle of an image not for the link assembles: $out"
+[[ $(link_of) == null ]] || fail "an image not for the link: no install_link"
+cp "$t/MANIFEST.saved" "$mf"; echo 'install link: protocol 1 (marker /etc/omamobile/install-link)' >> "$mf"
+out=$(bundle) || fail "a bundle of an image for the link assembles: $out"
+[[ $(link_of) == '{"protocol": 1}' ]] || fail "an image for the link: install_link is {\"protocol\": 1} ($(link_of))"
+(cd "$b" && sha256sum -c --quiet SHA256SUMS) || fail "SHA256SUMS covers the manifest.json with install_link"
+cp "$t/MANIFEST.saved" "$mf"; echo 'install link: maybe' >> "$mf"
+if out=$(bundle); then fail "an install link line this tool does not know stops the bundle"; fi
+grep -c "install link line this tool does not know" <<<"$out" >/dev/null || fail "the refusal says why: $out"
+cp "$t/MANIFEST.saved" "$mf"
+pass "manifest.json's install_link: only for an image built for the link, with its protocol"
