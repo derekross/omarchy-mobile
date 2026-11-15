@@ -1,9 +1,13 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Exact revised-kernel development startup
 
-Offline candidate only. Nothing here is installed or enabled by the device
-package. See [the baseline plan](../../DAILY-BASELINE-PLAN.md) for the bounded
-attended runbook and recovery boundary. Keep historical startup helpers pinned.
+Attended development startup qualified on one Pixel 6a on November 14, 2026.
+Nothing here is installed or enabled by the device package. See
+[the baseline plan](../../DAILY-BASELINE-PLAN.md) for the two corrected boot
+results, retained failed attempts, bounded attended runbook and recovery
+boundary. Keep historical startup helpers pinned. This source publication
+does not provide a general installer or a reusable copy of the private lab
+controllers, handset profile, snapshots or consumed qualification launchers.
 
 `start.py` is a new implementation for signed kernel `720a495`, not a launcher
 for old consumed probes. `modules.json` records exact previously tested module
@@ -49,7 +53,7 @@ The late user override does nothing on the historical release. Verify installed
 UWSM source loads the user override last before deployment. No command in this
 README stages files.
 
-This candidate requires an attached logging host for qualification. Host-free
+This startup requires an attached logging host for qualification. Host-free
 startup, battery calibration, charging, Type-C, sleep and daily carry remain
 open. Gauge startup configures alerts and is a hardware operation even with no
 model configured. The bounded charger/model audit is separate.
