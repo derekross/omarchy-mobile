@@ -1745,6 +1745,43 @@ overnight. The start is recorded on the phone in
   six refused sleeps. The modem keeps its sleep inhibitor until a new
   #232 passes.
 
+**The day test and the modem-up sleep, 2026-11-14** (the reference phone,
+release kernel `7.3.0-rc6-omamobile-g36d61a33795b` taken through Updates from
+the development channel: omamobile-device-cheetah 0.1.55, omamobile-shell
+0.2.129, omamobile-omarchy 0.1.46):
+
+- **Updated through Updates:** the boot-update hook wrote slot B and the phone
+  booted it. Touch-wake was enabled at boot by the rule (no hand step), the
+  critical-battery drop-in and the auto-sleep marker were in place, swap on
+  zram 5.6 GB. At the owner's first login the shell turned auto-sleep on by
+  itself (#737).
+- **Day test (P6 again), modem off for the boot, cable out, 14:55 to 19:36:**
+  two sleeps, 14:56-15:34 and 15:36-19:35 (4 h unbroken), every wake from the
+  touchscreen; touches that lit nothing went back to sleep after the 5 s
+  grace. 100 % to 77 %, about 234 mA, roughly 21 h from full. No failed
+  sleep, no UFS line, no failed unit. **Passed.**
+- **Sleep with the modem up (MODEM-PLAN M6), test kernel
+  `7.3.0-rc6-omamobile-push1-g21d56455a7c5`** (kernel-2026.11.13 +
+  linux-omarchy-mobile#232's head + the two patches of the #232 analysis:
+  refuse in a PM_SUSPEND_PREPARE notifier while the link is up, the root port
+  out of system sleep, and the `ring_trace` switch), with #556's
+  omamobile-modem 0.1.25 and omamobile-modem-sit 0.3.37, `follow_screen =
+  yes`, the enable file and the runbook marker by hand, auto-sleep off and
+  NFC polling stopped for the test: two sleeps passed (44 s on the RTC alarm;
+  9 s, woken by cp2ap_wakeup), ping over rmnet2 3/3 after each. **The refusal
+  loop passed:** with a 1 s ping on rmnet2, all ten requests were refused
+  early ("sleep refused before the freeze: link up, PHY out of isolation"),
+  and the ping ran 76 of 76 with no gap; 5/5 afterwards, IMS registered.
+  The 2026-11-13 run on #232 alone lost data after six noirq refusals; the
+  early refusal is what changed.
+  **The network wakes the phone (M6.3): passed.** Asleep with a 300 s alarm:
+  a text from another phone woke it after 35 s on cp2ap_wakeup and arrived
+  (stored, acknowledged, in Messages); a call woke it after 21 s on
+  cp2ap_wakeup and rang in the Phone app. A second call, answered: audio
+  both ways (the owner's word), and while it was up the call watch's
+  inhibitor refused `systemctl suspend`. **With these patches, sleep with
+  the modem up passed every step of the M6 runbook on the reference phone.**
+
 #### P8: standby numbers (risk: low; the human unplugs)
 
 `tools/power-ab` as S7, detached and cable out:
