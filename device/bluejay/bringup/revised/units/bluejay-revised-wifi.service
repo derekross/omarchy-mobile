@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Attended exact-build Bluejay revised wifi gate
+ConditionPathExists=/etc/omamobile/bluejay-revised-enable
+ConditionKernelCommandLine=bluejay.gpu_evening=1
+Requires=bluejay-revised-pcie.service
+Requires=NetworkManager.service
+After=bluejay-revised-pcie.service systemd-journald.service NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/omamobile/bluejay-revised/start.py wifi
+RemainAfterExit=yes
+Restart=no
+TimeoutStartSec=90s
+TimeoutStopSec=5s
+UMask=0077

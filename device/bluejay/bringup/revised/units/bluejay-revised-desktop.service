@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Attended revised Bluejay desktop after exact-build hardware gates
+ConditionPathExists=/etc/omamobile/bluejay-revised-enable
+ConditionKernelCommandLine=bluejay.gpu_evening=1
+Requires=bluejay-revised-gauge.service systemd-user-sessions.service
+After=bluejay-revised-gauge.service systemd-user-sessions.service systemd-logind.service
+Conflicts=getty@tty1.service
+
+[Service]
+ExecStartPre=/usr/bin/python3 /usr/local/lib/omamobile/bluejay-revised/desktop-check.py
+ExecStart=/usr/bin/sddm
+Restart=no
+TimeoutStartSec=30s
+TimeoutStopSec=10s
+
+[Install]
+WantedBy=multi-user.target

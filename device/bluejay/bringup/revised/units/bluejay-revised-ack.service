@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Attended exact-build Bluejay revised ack gate
+ConditionPathExists=/etc/omamobile/bluejay-revised-enable
+ConditionKernelCommandLine=bluejay.gpu_evening=1
+Requires=bluejay-revised-root.service
+After=bluejay-revised-root.service systemd-journald.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/omamobile/bluejay-revised/start.py wait-host
+RemainAfterExit=yes
+Restart=no
+TimeoutStartSec=60s
+TimeoutStopSec=5s
+UMask=0077

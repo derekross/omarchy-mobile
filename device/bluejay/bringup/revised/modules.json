@@ -1,0 +1,54 @@
+{
+  "clk_acpm": {
+    "path": "kernel/drivers/clk/samsung/clk-acpm.ko",
+    "sha256": "fd16975e7dd0ba3776d33c0b630ffcef535a95879373c40a68cae1fb573eff4a"
+  },
+  "gpu_sched": {
+    "path": "kernel/drivers/gpu/drm/scheduler/gpu-sched.ko",
+    "sha256": "6acb1ac578a7949738a6b1a4b9ea28f7fd0e65db6abf1765bf3b6e2f484791d3"
+  },
+  "panfrost": {
+    "path": "kernel/drivers/gpu/drm/panfrost/panfrost.ko",
+    "sha256": "82d67f1cb2cd5acefa8ba982a1756df852323a8392ca214ab4da51a8d71858bd"
+  },
+  "salixp": {
+    "path": "kernel/drivers/input/touchscreen/salixp.ko",
+    "sha256": "3dc8b640ad5da78805d5951659e5bda68afdc6a6c5ca63d95bcfda9800b1c92f"
+  },
+  "spi_s3c64xx": {
+    "path": "kernel/drivers/spi/spi-s3c64xx.ko",
+    "sha256": "aa42a3004409dc2db9dd3d27545703dbe663ce22411f506a432b31de8c78bee3"
+  },
+  "phy_gs201_pcie": {
+    "path": "kernel/drivers/phy/samsung/phy-gs201-pcie.ko",
+    "sha256": "152e8425ece03a0faeeabac22ed90a308010afce00d32fe2a2bfca0d0f211224"
+  },
+  "pcie_gs201": {
+    "path": "kernel/drivers/pci/controller/dwc/pcie-gs201.ko",
+    "sha256": "87de3d9fb93530fa287d39d53fb5d89359f829af8fdb69baae12284b465d1e04"
+  },
+  "rfkill": {
+    "path": "kernel/net/rfkill/rfkill.ko",
+    "sha256": "4033c1cba0c3e590fd144b8a400cdc45065e95ad32332c920c33cff0bf099bef"
+  },
+  "cfg80211": {
+    "path": "kernel/net/wireless/cfg80211.ko",
+    "sha256": "f95d26e0dd38c4cb75884d5566e2f5689fc05d5650dc102d91b62e5831eea0da"
+  },
+  "brcmutil": {
+    "path": "kernel/drivers/net/wireless/broadcom/brcm80211/brcmutil/brcmutil.ko",
+    "sha256": "0c9fa7ec1c2c1330919d943e9020a8f0c7114f655603cd2ab290a5364dfe527a"
+  },
+  "brcmfmac": {
+    "path": "kernel/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko",
+    "sha256": "b34697ee7cd72ca3f4c6d72d3367850e9112e1ccb89ad99cc79f7b592671b6d6"
+  },
+  "brcmfmac_wcc": {
+    "path": "kernel/drivers/net/wireless/broadcom/brcm80211/brcmfmac/wcc/brcmfmac-wcc.ko",
+    "sha256": "cbcab60bf76a0838fd25636978261b799c25cee4988a169b6744ed33c580704e"
+  },
+  "max17042_battery": {
+    "path": "kernel/drivers/power/supply/max17042_battery.ko",
+    "sha256": "4c1dc3b5d45eb6fc42a95f7789527e7b22c5399d443022ef55f9800ea5a0b21c"
+  }
+}
