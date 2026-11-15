@@ -4,6 +4,7 @@ bearer the data service runs on (SUSPEND-PLAN M6-D, 2026-11-15)."""
 import env  # noqa: F401  (paths and sys.path first)
 import struct
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -208,7 +209,7 @@ class Reconnect(unittest.TestCase):
             self.service.reconnect_at = 0
             with patch.object(data_call, 'activate', side_effect=RuntimeError('refused')):
                 self.service.reconnect()
-        self.assertIsNone(self.service.reconnect_at)     # the twelfth failure gives up
+        self.assertEqual(self.service.reconnect_at - time.monotonic() > 1700, True)   # every 30 minutes after twelve
         calls = [c.args[0] for c in app_service.subprocess.run.call_args_list]
         self.assertNotIn(['systemctl', 'start', 'omamobile-sit-data.service'], calls)
 

@@ -569,8 +569,9 @@ class Service:
         cleared, and the bearer is set up with start-up's APN and IP type.
         The route service is started again only if it was running when the
         bearer dropped (mobile data on). A failed try comes back after 15 s,
-        doubling to 5 minutes, and the twelfth failure gives up until the
-        next drop."""
+        doubling to 5 minutes, and every 30 minutes after the twelfth. A try
+        holds sitd's loop (up to about two minutes: settle, registration,
+        setup), so none starts while a call is live."""
         if self.reconnect_at is None or time.monotonic() < self.reconnect_at or not self.internet_setup:
             return
         if self.radio == 'off':
@@ -593,6 +594,9 @@ class Service:
                 print('Internet bearer listed again by the modem; no setup needed', flush=True)
                 self.reconnect_at = None
                 return
+            # Mobile data turned on since the drop counts too.
+            self.reconnect_data = self.reconnect_data or subprocess.run(
+                ['systemctl', 'is-active', '--quiet', 'omamobile-sit-data.service'], check=False).returncode == 0
             subprocess.run(['systemctl', 'stop', 'omamobile-sit-data.service'], check=False)
             if listed is not None:
                 # Held by the modem with no setup response: a setup that timed
@@ -610,12 +614,9 @@ class Service:
                 self.reconnecting = False
         except (ModemError, TimeoutError, RuntimeError, ValueError, OSError) as error:
             self.reconnect_tries += 1
-            if self.reconnect_tries >= 12:
-                print('Internet bearer setup again failed:', type(error).__name__, error,
-                      '(12 tries; giving up until the modem reports another change)', flush=True)
-                self.reconnect_at = None
-                return
-            delay = min(15 * 2 ** (self.reconnect_tries - 1), 300)
+            # After twelve, every 30 minutes: the record is gone by then, so
+            # no later list would bring the reconnect back.
+            delay = 1800 if self.reconnect_tries >= 12 else min(15 * 2 ** (self.reconnect_tries - 1), 300)
             self.reconnect_at = time.monotonic() + delay
             print('Internet bearer setup again failed:', type(error).__name__, error,
                   f'(try {self.reconnect_tries}; next in {delay} s)', flush=True)
