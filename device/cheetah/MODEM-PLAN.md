@@ -12,10 +12,10 @@ carrier manifest, the APNs and the bearer order chosen from the SIM
 (`omamobile-modem-sit` 0.3.30, `omamobile-device-cheetah` 0.1.44), and `omamobile-modem-boot.target` on by
 default from `omamobile-device-cheetah` 0.1.43 (M4.6b, B6-B9b passed,
 #398). Kernel `7.3.0-rc6-omamobile-g2219cc6cda77`, the release kernel.
-Open: suspend with the modem up (section 7, M6: M6.0-M6.3 run on a second
-Pixel 7 Pro with an SMS wake; the call half, M6.4 and M6.5 open; the stack
-holds a sleep inhibitor unless `/etc/omamobile/modem-suspend-enable` exists
-beside device-cheetah's `/usr/lib/omamobile-modem/suspend-runbook`), other
+Suspend with the modem up (section 7, M6) passed on the reference phone on
+2026-11-14 and is on by default from `omamobile-modem` 0.1.26 and
+device-cheetah 0.1.57, on a kernel with linux-omarchy-mobile#232's early
+refusal (kernel-2026.11.15 and later; 7.5). Open: other
 networks, cpif's `oem_ipc0` "is not opened" lines after sitd starts
 (nothing opens the OEM IPC channel), and the UFS error-handler pass at a
 modem power-off (M2.6). The day's evidence: [NOTES](NOTES.md),
@@ -3518,7 +3518,18 @@ for cpif; panics turned into errors.
 
 ## 7. M6: suspend with the modem online (plan and first runs, 2026-11-09)
 
-Status: **M6.0-M6.3 run on a second Pixel 7 Pro (a contributor's, not the
+Status (2026-11-14): **Done on the 7 Pro.** M6.2, the refusal on purpose
+and M6.3 passed on the reference phone, attended, on test kernel
+`7.3.0-rc6-omamobile-push1-g21d56455a7c5` (kernel-2026.11.13 with #232 and
+the early refusal that merged as `da171eae4cb7`), with this section's
+packages and `follow_screen = yes`: two sleeps, ten sleeps refused before the
+freeze with data busy (the ping unbroken, 76 of 76), a text and a call each
+waking the phone from a 300 s sleep, audio both ways, and the call holding
+off sleep ([SUSPEND-PLAN](SUSPEND-PLAN.md), "The day test and the modem-up
+sleep, 2026-11-14"). The maintainer approved it on by default the same day:
+7.5. M6.4 and M6.5 run as the release's check after Updates (7.5).
+
+Earlier status: **M6.0-M6.3 run on a second Pixel 7 Pro (a contributor's, not the
 maintainer's phone), on an LTE SIM with data and SMS but no voice (7.4):
 the phone freezes with the modem up and wakes for an SMS, with K1-K1c.
 Open: the call half of M6.3, M6.4, M6.5, and all of it on the maintainer's
@@ -3563,7 +3574,7 @@ and runs warm. This section is the way to lift that, staged.
 |---|---|---|---|
 | K1: noirq sleep ops in the link driver ([linux-omarchy-mobile#232](https://github.com/derekross/linux-omarchy-mobile/pull/232), with K1b and K1c) | `drivers/pci/controller/dwc/pcie-gs201-cp.c` (none today, driver struct :1975-1985) | M6.2 | `suspend_noirq`: refuse with -EBUSY and a log line if the link is up or the PHY isn't isolated (PMU 0x3ec0, through the SMC regmap); otherwise nothing. `resume_noirq`: a log line. Stock's RC only isolates a down link there (`pcie-exynos-rc.c` :5823-5935), which ours already does at every `link_down`. Without it the PCI core may put the root port in D3hot on a live link: our endpoint driver has no PM ops (inferred from `pci-driver.c` :917-950). K1b and K1c, found in M6.2 and M6.3 (7.4): the root port is `PCI_DEV_FLAGS_NO_D3` and the modem's `d3cold_delay` 0, or a sleep with the link down leaves the modem disconnected |
 | K2: power-down pin states for the AP2CP outputs | the cpif overlay (`modem-cpif-test.dtso`) | only if needed | stock: gph0-2/3, gph1-1/2/3/6 with `pin-con-pdn` 3 (keep the level), no pull. Needed only if HSI1's pads lose their state in s2idle: check first (M6.0) |
-| U1: a conditional inhibitor | `omamobile-modem-inhibit.service` | M6.2 | Skipped only when `/etc/omamobile/modem-suspend-enable` exists beside `/usr/lib/omamobile-modem/suspend-runbook`, which only device-cheetah ships (two triggering `ConditionPathExists=|!` lines); the start script's check that the lock is held follows the same two files, so on the 9a or the 6 Pro the owner's file alone changes nothing. Calls keep `omamobile-call-watch`'s inhibitor |
+| U1: a conditional inhibitor | `omamobile-modem-inhibit.service` | M6.2 | Skipped only when `omamobile-modem-sleep-policy` says yes (its `ExecCondition=`; the start script asks the same policy, 7.5): from `omamobile-modem` 0.1.26 the device's `/usr/lib/omamobile-modem/suspend-verified` (device-cheetah only; before, the runbook's `/etc/omamobile/modem-suspend-enable` beside `/usr/lib/omamobile-modem/suspend-runbook`, which still counts), no owner's `/etc/omamobile/modem-suspend-disable`, and a kernel with #232's early refusal. On the 9a or the 6 Pro the owner's file alone changes nothing. Calls keep `omamobile-call-watch`'s inhibitor |
 | U2: the screen state told before a sleep | `omamobile-modem-sit`'s systemd-sleep hook | M6.4 | found in M6.3 (7.4): `systemctl suspend` with the panel lit froze before sitd's 2 s backlight check told the modem "off". With `follow_screen = yes`, the hook asks sitd for "off" with a 10 s hold before every sleep; after the wake sitd's own check restores "on" if the panel is lit. A call refuses it, and the sleep goes ahead either way |
 | Later | | | the AP-suspend-during-call path (section 2, not ported), MSI as a wake source (only if the link ever stays up in sleep), ACPM's pcieon sleep mode (deep sleep only) |
 
@@ -3631,7 +3642,9 @@ SUSPEND-PLAN P6. After that the default (the enable file shipped, or the
 condition dropped) is the maintainer's call.
 
 Rollback at any step: `rm /etc/omamobile/modem-suspend-enable` and reboot
-(the inhibitor is back from the next modem start).
+(the inhibitor is back from the next modem start). From `omamobile-modem`
+0.1.26 and device-cheetah 0.1.57, where it is on by default (7.5):
+`touch /etc/omamobile/modem-suspend-disable` and reboot.
 
 ### 7.4 Results
 
@@ -3812,3 +3825,53 @@ kernel attempts when the first failed).
   link driver, and a ping over `rmnet0` after each one. Quiet: 8 of 8
   cycles slept and woke on cp2ap_wakeup, with a ping after each. No
   s51xx power-state line, and no UFS, I/O or BME line.
+
+### 7.5 On by default on the 7 Pro (`omamobile-modem` 0.1.26, `omamobile-modem-sit` 0.3.40, device-cheetah 0.1.57; 2026-11-14)
+
+The maintainer's decision, 2026-11-14, after the reference phone's run
+(status above): "approve modem sleep by default on the 7 Pro".
+
+- **The device's word.** device-cheetah ships
+  `/usr/lib/omamobile-modem/suspend-verified` (comment-only) in place of the
+  runbook marker, and `[control] follow_screen = yes` in its
+  `modem-sit.conf.d/50-cheetah.conf` (sitd now reads that one key from a
+  device drop-in, beside `[audio]`; a value in `/etc/omamobile/modem-sit.conf`
+  wins). No file of the owner's is needed.
+- **The policy.** `omamobile-modem-sleep-policy` (omamobile-modem) is the one
+  answer for `omamobile-modem-inhibit.service` (`ExecCondition=... inhibit`)
+  and the start script (`check`). Yes needs the device's declaration (or the
+  runbook's old pair), no `/etc/omamobile/modem-suspend-disable`, and the
+  kernel guard below; anything else, an error included, keeps the inhibitor.
+  If the policy can't run at all, the unit is skipped but the start script
+  then waits for a lock that never comes and loads no driver, so the phone
+  never sleeps with the modem up by accident.
+- **The kernel guard.** Without #232's early refusal a sleep with the link
+  up is refused only at noirq, and a run of those lost mobile data until a
+  reboot (2026-11-13). The early refusal adds no sysfs attribute or module
+  parameter, and development releases (`push1-g<sha>`) don't order, so the
+  policy reads the running kernel's own `pcie-gs201-cp` module file
+  (`modinfo -n`, before the start script loads it) for the notifier's log
+  line ("sleep refused before the freeze") or its function name
+  (`gs201_pcie_cp_pm_notify`; the modules are stripped of debug information
+  only, so the symbol table stays). Checked offline: the module of
+  `kernel-2026.11.13` (`7.3.0-rc6-omamobile-g36d61a33795b`) has neither, the
+  M6 test kernels' modules both. A phone that takes the packages before the
+  kernel, or boots an older slot B image, keeps the inhibitor and says so in
+  the journal.
+- **The owner's opt-out.** `sudo touch /etc/omamobile/modem-suspend-disable`
+  keeps the inhibitor from the next boot. The Mobile network page's modem
+  switch (`omamobile-modem` 0.1.24+) turns the modem off instead.
+- **Other phones.** Unchanged: no other device package ships the
+  declaration, so the inhibitor holds on the 9a and the 6 Pro.
+
+The check after Updates (the maintainer, attended, on the charger), once
+kernel-2026.11.15 and these packages are on the phone: `uname -r` is the
+release; `/usr/lib/omamobile-vendor/omamobile-modem-sleep-policy check`
+says "may sleep"; `systemctl show -p ConditionResult,Result
+omamobile-modem-inhibit` reads `ConditionResult=no` and
+`Result=exec-condition`; `systemd-inhibit --list` has no `omamobile-modem`
+line; `journalctl -b -u omamobile-sitd | grep 'Screen off told'` after the
+panel goes dark; then M6.4 (20 sleeps through the shell's auto-sleep, the
+modem registered and a ping over `rmnet` after each, no UFS line) and M6.5
+(a day of use with the modem up). Then DEVICES' Suspend cell moves to
+"works".
