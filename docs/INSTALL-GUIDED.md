@@ -30,7 +30,17 @@ today's tools in turn. It adds no way to write a phone:
   read-only); `adb devices -l` (asks the adb server) and, after the owner
   presses Enter, `adb reboot bootloader`; and over USB SSH read-only checks
   (is anything there, which phone it is, the first start's marker, the boot
-  id, `systemctl is-system-running`) and the restart of step 10.
+  id, `systemctl is-system-running`) and the restart of step 10; and,
+  from the end of the first start until the check, a sleep hold: a
+  transient unit on the phone, `omamobile-install-awake`, running
+  `systemd-inhibit --what=sleep`, in RAM only and stopped by itself after an
+  hour. A fresh install has no firmware yet, so the modem (and with it the
+  modem's own sleep inhibitor) can't start, and without the hold auto-sleep
+  puts the locked, dark phone to sleep and USB drops with it (the 2026.11.15
+  test install's backup failed so on 2026-11-15). Each step from 7 to 11
+  starts it afresh, the restart of step 10 ends it, the check stops it when
+  it is done, and an install that stops on the way leaves it to its hour.
+  The screen still goes dark as usual.
 - **It never sends `fastboot flashing unlock`** (decided 2026-11-10): it
   shows the command, and the owner types it. The unlock erases the phone,
   and no tool of ours sends a `flashing` command.
@@ -78,11 +88,11 @@ start? This erases the phone. (yes/no)` (§3).
 | 4 | Factory image | the build step 3 found; a file the owner has (`--factory-zip`, Downloads) or one downloaded earlier | after `yes` to Google's terms, downloads the file from `https://dl.google.com/` into `<work>/factory/` (§5b); otherwise opens Google's page | `factory_terms` (time, build), `factory_*` (build, its bootloader and baseband, name, page, size, SHA-256, path, where it came from) | skipped while the file is there with its size; taken again from the record otherwise; forgotten at step 3 when the phone's bootloader or baseband are no longer the recorded ones (§2a) |
 | 5 | Write | whether anything answers at the phone's USB address; the owner's answers (memory only) | `install-phone --dry-run --serial S`, then `install-phone --serial S`: slot B and `userdata` | `write=started`, then `done` | skipped when `done`; `started` runs it again, whole |
 | 6 | USB connection | `phone-ssh true`, `nmcli connection show` | `nmcli connection add …` after Enter (§5a) | `network` | skipped |
-| 7 | First start | the phone: `/var/lib/omamobile/firstboot/done`, then which phone it is | nothing | `first_start` | waits again |
-| 8 | Radio backup | which phone it is; the phone, through `nv-backup` (read-only) | a new folder `~/omamobile-backup/<codename>-radio-backup-<date>` | `backup_dir`, `backup` | skipped while its `SHA256SUMS` is there |
-| 9 | Firmware | the zip's SHA-256 again; which phone it is | optional Python folder after Enter (below); `phone-provision -d <codename> --first-install --nv-backup DIR ZIP` | `camera_tools` (only `skipped`, only for a typed `no`), `provision` | runs again (it is idempotent) |
+| 7 | First start | the phone: `/var/lib/omamobile/firstboot/done`, then which phone it is | at its end, the sleep hold (above) | `first_start` | waits again |
+| 8 | Radio backup | which phone it is; the phone, through `nv-backup` (read-only) | the sleep hold again; a new folder `~/omamobile-backup/<codename>-radio-backup-<date>` | `backup_dir`, `backup` | skipped while its `SHA256SUMS` is there |
+| 9 | Firmware | the zip's SHA-256 again; which phone it is | optional Python folder after Enter (below); the sleep hold again; `phone-provision -d <codename> --first-install --nv-backup DIR ZIP` | `camera_tools` (only `skipped`, only for a typed `no`), `provision` | runs again (it is idempotent) |
 | 10 | Restart | which phone it is, before and after; its boot id | stops the modem's unit, `reboot-to omamobile` | `restart_from` before sending, `restart` | waits for the restart already sent; sends none twice |
-| 11 | Check | which phone it is; `phone-smoke --json` | saves `report.json` | `check`, `finished` | runs again |
+| 11 | Check | which phone it is; `phone-smoke --json` | the sleep hold again, stopped at the end; saves `report.json` | `check`, `finished` | runs again |
 
 Details that matter:
 
