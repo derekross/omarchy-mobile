@@ -142,7 +142,7 @@ for f in usr/share/doc/omamobile-modem/README.md usr/lib/omamobile-vendor/omamob
          usr/lib/systemd/system/omamobile-modem.service usr/lib/udev/rules.d/60-omamobile-modem-nv-ro.rules \
          usr/lib/omamobile-vendor/omamobile-modem-nv-overlay usr/bin/omamobile-modem \
          usr/lib/systemd/system/omamobile-modem-nv-overlay.service usr/lib/systemd/system/omamobile-modem-nv-overlay.timer \
-         usr/lib/omamobile-vendor/omamobile-modem-switch usr/share/polkit-1/actions/org.omamobile.modem.policy; do
+         usr/lib/omamobile-vendor/omamobile-modem-switch usr/lib/omamobile-vendor/omamobile-modem-sleep-policy usr/share/polkit-1/actions/org.omamobile.modem.policy; do
   [[ -e $stage/$f ]] || fail "staged $f"
 done
 grep -qx 'persist.vendor.modem.efs.clear.action=none' modem/props.conf ||
@@ -281,34 +281,70 @@ done
 grep -q 'CHROOT=\${OMAMOBILE_MODEM_CHROOT:-\$LIB/modem/root}' $s && grep -q 'NV_SUMS=\${OMAMOBILE_MODEM_NV_SUMS:-/etc/omamobile/modem-nv.sha256}' $s &&
   grep -q 'PROPS=\${OMAMOBILE_MODEM_PROPS:-/var/lib/omamobile-vendor/modem/props.conf}' $s || fail "the script checks the same three paths as the units"
 pass "a phone that isn't provisioned is refused quietly, by the units' conditions and by the script"
-# M6 (MODEM-PLAN section 7): the owner's file lifts the inhibitor only beside
-# the device's runbook marker (device-cheetah ships it), in the unit and in
-# the script alike; the script's behaviour is in test_link.py. The unit's
-# conditions are evaluated by systemd itself, with the two paths moved
-# under $m: it runs (holds the lock) unless both files exist.
+# M6 (MODEM-PLAN section 7): omamobile-modem-sleep-policy decides where the
+# phone may sleep with the modem up, for the inhibitor unit (ExecCondition=,
+# inverted: exit 0 holds the lock) and the start script (check) alike; the
+# script's behaviour with it is in test_link.py. Here the policy itself runs
+# for every combination, with the device's files, the owner's files and the
+# kernel's link module all under $m.
 unit=systemd/omamobile-modem-inhibit.service
-[[ $(grep -c '^ConditionPathExists=|!' $unit) == 2 ]] &&
-  grep -qx 'ConditionPathExists=|!/etc/omamobile/modem-suspend-enable' $unit &&
-  grep -qx 'ConditionPathExists=|!/usr/lib/omamobile-modem/suspend-runbook' $unit ||
-  fail "the inhibitor unit is skipped only with modem-suspend-enable and suspend-runbook"
-if command -v systemd-analyze >/dev/null && systemd-analyze condition 'ConditionPathExists=/' >/dev/null 2>&1; then
-  mapfile -t conds < <(grep '^ConditionPathExists=|!' $unit |
-    sed -e "s|/etc/omamobile/modem-suspend-enable|$m/m6-enable|" -e "s|/usr/lib/omamobile-modem/suspend-runbook|$m/m6-runbook|")
-  rm -f "$m/m6-enable" "$m/m6-runbook"
-  systemd-analyze condition "${conds[@]}" >/dev/null 2>&1 || fail "neither file: the inhibitor runs"
-  touch "$m/m6-enable"
-  systemd-analyze condition "${conds[@]}" >/dev/null 2>&1 || fail "the enable file alone: the inhibitor still runs"
-  touch "$m/m6-runbook"; rm "$m/m6-enable"
-  systemd-analyze condition "${conds[@]}" >/dev/null 2>&1 || fail "the runbook marker alone: the inhibitor runs"
-  touch "$m/m6-enable"
-  systemd-analyze condition "${conds[@]}" >/dev/null 2>&1 && fail "both files: the inhibitor is skipped"
-  rm -f "$m/m6-enable" "$m/m6-runbook"
+grep -qx 'ExecCondition=/usr/lib/omamobile-vendor/omamobile-modem-sleep-policy inhibit' $unit ||
+  fail "the inhibitor unit asks the sleep policy (inhibit) before it takes the lock"
+[[ $(grep -c '^ExecCondition=' $unit) == 1 && $(grep -c '^ConditionPathExists=|' $unit) == 0 ]] ||
+  fail "the policy is the unit's only sleep decision (no triggering path conditions left)"
+grep -q 'SLEEP_POLICY=\${OMAMOBILE_MODEM_SLEEP_POLICY:-\$LIB/omamobile-modem-sleep-policy}' $s ||
+  fail "the start script asks the same policy"
+[[ $(lineof 'if "\$SLEEP_POLICY" check; then') -lt $l_inhibit ]] || fail "the policy is asked before the inhibitor refusal"
+pol=lib/omamobile-modem-sleep-policy
+! grep -q '^set -e' $pol || fail "the policy has no set -e: an error must fall through to keeping the inhibitor"
+mkdir -p "$m/m6"
+policy() { # policy MODE: the answer's exit code; its line in $m/m6/why
+  OMAMOBILE_MODEM_SUSPEND_VERIFIED=$m/m6/verified OMAMOBILE_MODEM_SUSPEND_RUNBOOK=$m/m6/runbook \
+  OMAMOBILE_MODEM_SUSPEND_ENABLE=$m/m6/enable OMAMOBILE_MODEM_SUSPEND_DISABLE=$m/m6/disable \
+  OMAMOBILE_MODEM_LINK_MODULE=$m/m6/link.ko bash $pol "$1" 2> "$m/m6/why"
+}
+new_kernel() { printf '\x7fELF\0\0016sleep refused before the freeze: link %%s, PHY %%s\n' > "$m/m6/link.ko"; }
+sym_kernel() { printf '\x7fELF\0gs201_pcie_cp_pm_notify\0gs201_pcie_cp_suspend_noirq\0' > "$m/m6/link.ko"; }
+old_kernel() { printf '\x7fELF\0gs201_pcie_cp_suspend_noirq\0\0016modem PCIe ch0 bring-up\n' > "$m/m6/link.ko"; }
+expect() { # expect yes|no WHAT: check and inhibit agree, inverted
+  local c i
+  c=0; policy check || c=$?; i=0; policy inhibit || i=$?
+  if [[ $1 == yes ]]; then [[ $c == 0 && $i == 1 ]] || fail "$2: may sleep with the modem up (check $c, inhibit $i): $(cat "$m/m6/why")"
+  else [[ $c == 1 && $i == 0 ]] || fail "$2: the inhibitor holds (check $c, inhibit $i): $(cat "$m/m6/why")"; fi
+}
+reset_m6() { rm -f "$m/m6"/{verified,runbook,enable,disable,link.ko}; }
+reset_m6; new_kernel
+expect no "no device declaration, no owner's file"
+touch "$m/m6/enable"; expect no "the owner's enable file alone (a phone whose device ships no marker: the 9a, the 6 Pro)"
+grep -c "ignored" "$m/m6/why" >/dev/null || fail "the enable file alone is reported as ignored: $(cat "$m/m6/why")"
+rm "$m/m6/enable"; touch "$m/m6/runbook"; expect no "the runbook marker alone"
+touch "$m/m6/enable"; expect yes "the attended runbook's pair (#556's enable file beside the runbook marker)"
+reset_m6; new_kernel; touch "$m/m6/verified"; expect yes "the device's suspend-verified on a kernel with #232 (the 7 Pro's default)"
+grep -c "may sleep with the modem up" "$m/m6/why" >/dev/null || fail "the yes says so: $(cat "$m/m6/why")"
+sym_kernel; expect yes "a kernel module with the notifier's symbol only"
+old_kernel; expect no "the device's suspend-verified on a kernel without #232's early refusal"
+grep -c "lacks the modem link's early sleep refusal" "$m/m6/why" >/dev/null || fail "the old kernel is named as the reason: $(cat "$m/m6/why")"
+rm -f "$m/m6/link.ko"; expect no "no link module for the running kernel"
+: > "$m/m6/link.ko"; chmod 000 "$m/m6/link.ko"
+[[ -r $m/m6/link.ko ]] || expect no "a link module that can't be read"
+chmod 644 "$m/m6/link.ko"
+new_kernel; touch "$m/m6/disable"; expect no "the owner's modem-suspend-disable beside the device's declaration"
+grep -c "the owner keeps" "$m/m6/why" >/dev/null || fail "the opt-out is named: $(cat "$m/m6/why")"
+touch "$m/m6/enable" "$m/m6/runbook"; expect no "the opt-out wins over the runbook pair too"
+reset_m6; touch "$m/m6/verified"
+if command -v zstd >/dev/null; then
+  printf '\x7fELF\0\0016sleep refused before the freeze\n' | zstd -q -o "$m/m6/link.ko.zst"
+  OMAMOBILE_MODEM_SUSPEND_VERIFIED=$m/m6/verified OMAMOBILE_MODEM_SUSPEND_DISABLE=$m/m6/disable \
+    OMAMOBILE_MODEM_LINK_MODULE=$m/m6/link.ko.zst bash $pol check 2>/dev/null || fail "a zstd-compressed module with #232 is read"
+  rm -f "$m/m6/link.ko.zst"
 fi
-grep -q 'SUSPEND_ENABLE=\${OMAMOBILE_MODEM_SUSPEND_ENABLE:-/etc/omamobile/modem-suspend-enable}' $s &&
-  grep -q 'SUSPEND_RUNBOOK=\${OMAMOBILE_MODEM_SUSPEND_RUNBOOK:-/usr/lib/omamobile-modem/suspend-runbook}' $s ||
-  fail "the script follows the same two files"
-[[ $(lineof 'if \[\[ -e \$SUSPEND_ENABLE && -e \$SUSPEND_RUNBOOK \]\]') -lt $l_inhibit ]] || fail "the files are checked before the inhibitor refusal"
-pass "modem-suspend-enable lifts the sleep inhibitor only beside the device's M6 runbook, in the unit and the script alike"
+# Without a named module, the running kernel's is looked up with modinfo: on
+# this machine there is no pcie_gs201_cp, so the answer is no.
+OMAMOBILE_MODEM_SUSPEND_VERIFIED=$m/m6/verified OMAMOBILE_MODEM_SUSPEND_DISABLE=$m/m6/disable \
+  OMAMOBILE_MODEM_LINK_MODULE= bash $pol inhibit 2>/dev/null || fail "no link module found by modinfo: the inhibitor holds"
+rc=0; bash $pol bogus 2>/dev/null || rc=$?; [[ $rc == 2 ]] || fail "an unknown mode is a usage error"
+reset_m6
+pass "the sleep policy: the device's declaration, no owner's opt-out and a kernel with #232's early refusal, or the inhibitor holds"
 # The bring-up latch: refused until --retry (a hang in the bring-up never repeats on its own).
 printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$m/latch"
 out=$(start) && fail "a bring-up latch is refused"

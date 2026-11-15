@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
-# No system sleep while the modem's drivers are loaded: suspend with the
-# modem on has never run on the Pixel 7 Pro (device/cheetah/MODEM-PLAN.md
-# 6.3), and the one 9a try with the CP up never woke. omamobile-modem.service
+# No system sleep while the modem's drivers are loaded, except where the
+# sleep policy below allows it: suspend with the modem up is unqualified on
+# most phones (device/cheetah/MODEM-PLAN.md 6.3; on the 9a one sleep attempt
+# with the CP up leaves CPIF unable to reach it). omamobile-modem.service
 # requires this and starts after it, and its start script refuses to load
 # a driver until the lock shows in `systemd-inhibit --list`. Once a driver
 # has loaded, nothing stops it but the reboot: stopping the modem unit by
@@ -15,14 +16,16 @@
 # Requires= pulls this in even when that unit's own conditions skip it, so
 # the same three conditions are here: a phone that isn't provisioned (no
 # modem files, checksums or board id) keeps sleeping.
-# /etc/omamobile/modem-suspend-enable lifts it from the next modem start, for
-# MODEM-PLAN section 7 (M6: suspend with the modem up, attended runbook
-# only until M6 passes); the start script follows the same files. It is for
-# the Pixel 7 Pro's M6 runbook only, so it takes effect only beside
-# /usr/lib/omamobile-modem/suspend-runbook, which device-cheetah ships:
-# suspend with the modem up is unqualified on the 9a and the 6 Pro, and
-# there the owner's file alone keeps the lock (the two triggering
-# conditions below: the unit runs unless both files exist).
+# It is skipped where the phone may sleep with the modem up:
+# omamobile-modem-sleep-policy's ExecCondition= below exits 1 only when the
+# device package declares suspend with the modem up verified
+# (/usr/lib/omamobile-modem/suspend-verified: device-cheetah, the Pixel 7
+# Pro, MODEM-PLAN M6), the owner hasn't opted out
+# (/etc/omamobile/modem-suspend-disable) and the running kernel's modem link
+# refuses a sleep early while the link is up (linux-omarchy-mobile#232).
+# Everywhere else, the 9a and the 6 Pro among them, and on an older kernel,
+# it holds as before. The start script asks the same policy, so a policy
+# that can't run (a skip here) still loads no driver without this lock.
 [Unit]
 Description=Omarchy Mobile modem: block system sleep until the reboot
 Before=omamobile-modem.service
@@ -30,9 +33,8 @@ RefuseManualStop=yes
 ConditionPathExists=/usr/lib/omamobile-vendor/modem/root
 ConditionPathExists=/etc/omamobile/modem-nv.sha256
 ConditionPathExists=/var/lib/omamobile-vendor/modem/props.conf
-ConditionPathExists=|!/etc/omamobile/modem-suspend-enable
-ConditionPathExists=|!/usr/lib/omamobile-modem/suspend-runbook
 
 [Service]
-ExecStart=/usr/bin/systemd-inhibit --what=sleep:idle --who=omamobile-modem --why="suspend with the modem up is not qualified on this phone (MODEM-PLAN 6.3)" --mode=block /usr/bin/sleep infinity
+ExecCondition=/usr/lib/omamobile-vendor/omamobile-modem-sleep-policy inhibit
+ExecStart=/usr/bin/systemd-inhibit --what=sleep:idle --who=omamobile-modem --why="suspend with the modem up is not qualified on this phone or this kernel (MODEM-PLAN 6.3)" --mode=block /usr/bin/sleep infinity
 Restart=no
