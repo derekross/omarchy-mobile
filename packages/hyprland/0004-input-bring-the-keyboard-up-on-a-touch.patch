@@ -35,15 +35,17 @@
      if (info.cancelled)
 --- a/src/managers/input/Touch.cpp
 +++ b/src/managers/input/Touch.cpp
-@@ -16,6 +16,7 @@
+@@ -16,6 +16,9 @@
  
  void CInputManager::onTouchDown(ITouch::SDownEvent e) {
      m_lastInputTouch = true;
++    // set below once the touch reaches a surface; a touch that returns early counts on none
 +    m_lastPressTime  = std::chrono::steady_clock::now();
++    m_lastPressSurface.reset();
  
      static auto PSWIPETOUCH  = CConfigValue<Config::INTEGER>("gestures:workspace_swipe_touch");
      static auto PGAPSOUTDATA = CConfigValue<Config::IComplexConfigValue>("general:gaps_out");
-@@ -149,11 +150,14 @@
+@@ -149,11 +152,14 @@
      } else
          return; // oops, nothing found.
  
