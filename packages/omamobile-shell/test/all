@@ -1206,9 +1206,15 @@ grep -cx 'ExecStart=/usr/bin/omamobile-weather' systemd/user/omamobile-weather.s
   && grep -cx 'Unit=omamobile-weather.service' systemd/user/omamobile-weather.timer >/dev/null \
   || fail "the weather timer runs the one-shot service every 30 minutes"
 pass "the lock screen's weather runs at login and every 30 minutes"
-if grep -rnE '^[^#]*(omarchy-toggle omamobile-sleep( on| toggle|$)|toggles/omamobile-sleep)' bin install systemd plugins; then
-  fail "nothing turns the omamobile-sleep toggle on by default"
+# Auto-sleep is on by default only where the device package says suspend is
+# verified: setup-user's one step, gated on auto-sleep-default (its behaviour
+# is test/setup-user.sh's). Nothing else turns the toggle on.
+if grep -rnE '^[^#]*(omarchy-toggle omamobile-sleep( on| toggle|$)|toggles/omamobile-sleep)' bin install systemd plugins |
+   grep -vE '^bin/omamobile-setup-user:[0-9]+:  touch ~/\.local/state/omarchy/toggles/omamobile-sleep$'; then
+  fail "nothing but the device-gated setup step turns the omamobile-sleep toggle on by default"
 fi
+grep -B3 'touch ~/.local/state/omarchy/toggles/omamobile-sleep$' bin/omamobile-setup-user | grep -c 'auto-sleep-default' >/dev/null ||
+  fail "setup-user turns auto-sleep on only behind the device's auto-sleep-default"
 [[ -x $tmp/root/usr/bin/omamobile-setup-user ]] || fail "setup-user is installed where the unit runs it"
 [[ -x $tmp/root/usr/bin/omamobile-portal-access && -f $tmp/root/usr/share/xdg-desktop-portal/portals/omamobile.portal \
    && -f $tmp/root/etc/xdg/xdg-desktop-portal/hyprland-portals.conf \

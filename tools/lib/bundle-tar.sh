@@ -40,14 +40,17 @@ bundle_tar() {
   for f in $members; do
     [[ -e $out/$f ]] || { echo "bundle_tar: no $out/$f" >&2; return 1; }
   done
+  # Each step chained: set -e does nothing here when the caller tests the
+  # status (bundle_tar ... || die), so a failed tar would go on to the rename
   (
     set -euo pipefail
-    cd "$out"
-    rm -f "$name.tar.new" "$name.tar.sha256.new"
+    cd "$out" &&
+    rm -f "$name.tar.new" "$name.tar.sha256.new" &&
     LC_ALL=C tar --format=gnu --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner \
-      --mode='u+rw,go-w,a+rX,a-st' --hard-dereference -cf "$name.tar.new" -T - <<<"$members"
-    mv -f "$name.tar.new" "$name.tar"
-    printf '%s  %s\n' "$(sha256sum < "$name.tar" | cut -d' ' -f1)" "$name.tar" > "$name.tar.sha256.new"
+      --mode='u+rw,go-w,a+rX,a-st' --hard-dereference -cf "$name.tar.new" -T - <<<"$members" &&
+    mv -f "$name.tar.new" "$name.tar" &&
+    sum=$(sha256sum < "$name.tar" | cut -d' ' -f1) &&
+    printf '%s  %s\n' "$sum" "$name.tar" > "$name.tar.sha256.new" &&
     mv -f "$name.tar.sha256.new" "$name.tar.sha256"
   )
 }

@@ -10,10 +10,11 @@ pass() { printf 'ok - %s\n' "$1"; }
 export PYTHONDONTWRITEBYTECODE=1
 cp=lib/omamobile-modem-cp
 
-bash -n install && bash -n lib/omamobile-modem-start && bash -n profiles/modem.conf || fail "shell syntax"
+bash -n install && bash -n lib/omamobile-modem-start && bash -n profiles/modem.conf &&
+  bash -n lib/omamobile-modem-switch || fail "shell syntax"
 python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$cp" || fail "$cp parses"
 if command -v shellcheck >/dev/null; then
-  shellcheck -S warning lib/omamobile-modem-start install || fail "shellcheck"
+  shellcheck -S warning lib/omamobile-modem-start lib/omamobile-modem-switch install || fail "shellcheck"
 fi
 pass "scripts parse"
 python3 test/test_link.py || fail "device link module parameters and load order"
@@ -140,7 +141,8 @@ for f in usr/share/doc/omamobile-modem/README.md usr/lib/omamobile-vendor/omamob
          usr/lib/omamobile-vendor/profiles/modem.conf usr/lib/omamobile-vendor/modem/props.conf \
          usr/lib/systemd/system/omamobile-modem.service usr/lib/udev/rules.d/60-omamobile-modem-nv-ro.rules \
          usr/lib/omamobile-vendor/omamobile-modem-nv-overlay usr/bin/omamobile-modem \
-         usr/lib/systemd/system/omamobile-modem-nv-overlay.service usr/lib/systemd/system/omamobile-modem-nv-overlay.timer; do
+         usr/lib/systemd/system/omamobile-modem-nv-overlay.service usr/lib/systemd/system/omamobile-modem-nv-overlay.timer \
+         usr/lib/omamobile-vendor/omamobile-modem-switch usr/lib/omamobile-vendor/omamobile-modem-sleep-policy usr/share/polkit-1/actions/org.omamobile.modem.policy; do
   [[ -e $stage/$f ]] || fail "staged $f"
 done
 grep -qx 'persist.vendor.modem.efs.clear.action=none' modem/props.conf ||
@@ -279,6 +281,70 @@ done
 grep -q 'CHROOT=\${OMAMOBILE_MODEM_CHROOT:-\$LIB/modem/root}' $s && grep -q 'NV_SUMS=\${OMAMOBILE_MODEM_NV_SUMS:-/etc/omamobile/modem-nv.sha256}' $s &&
   grep -q 'PROPS=\${OMAMOBILE_MODEM_PROPS:-/var/lib/omamobile-vendor/modem/props.conf}' $s || fail "the script checks the same three paths as the units"
 pass "a phone that isn't provisioned is refused quietly, by the units' conditions and by the script"
+# M6 (MODEM-PLAN section 7): omamobile-modem-sleep-policy decides where the
+# phone may sleep with the modem up, for the inhibitor unit (ExecCondition=,
+# inverted: exit 0 holds the lock) and the start script (check) alike; the
+# script's behaviour with it is in test_link.py. Here the policy itself runs
+# for every combination, with the device's files, the owner's files and the
+# kernel's link module all under $m.
+unit=systemd/omamobile-modem-inhibit.service
+grep -qx 'ExecCondition=/usr/lib/omamobile-vendor/omamobile-modem-sleep-policy inhibit' $unit ||
+  fail "the inhibitor unit asks the sleep policy (inhibit) before it takes the lock"
+[[ $(grep -c '^ExecCondition=' $unit) == 1 && $(grep -c '^ConditionPathExists=|' $unit) == 0 ]] ||
+  fail "the policy is the unit's only sleep decision (no triggering path conditions left)"
+grep -q 'SLEEP_POLICY=\${OMAMOBILE_MODEM_SLEEP_POLICY:-\$LIB/omamobile-modem-sleep-policy}' $s ||
+  fail "the start script asks the same policy"
+[[ $(lineof 'if "\$SLEEP_POLICY" check; then') -lt $l_inhibit ]] || fail "the policy is asked before the inhibitor refusal"
+pol=lib/omamobile-modem-sleep-policy
+! grep -q '^set -e' $pol || fail "the policy has no set -e: an error must fall through to keeping the inhibitor"
+mkdir -p "$m/m6"
+policy() { # policy MODE: the answer's exit code; its line in $m/m6/why
+  OMAMOBILE_MODEM_SUSPEND_VERIFIED=$m/m6/verified OMAMOBILE_MODEM_SUSPEND_RUNBOOK=$m/m6/runbook \
+  OMAMOBILE_MODEM_SUSPEND_ENABLE=$m/m6/enable OMAMOBILE_MODEM_SUSPEND_DISABLE=$m/m6/disable \
+  OMAMOBILE_MODEM_LINK_MODULE=$m/m6/link.ko bash $pol "$1" 2> "$m/m6/why"
+}
+new_kernel() { printf '\x7fELF\0\0016sleep refused before the freeze: link %%s, PHY %%s\n' > "$m/m6/link.ko"; }
+sym_kernel() { printf '\x7fELF\0gs201_pcie_cp_pm_notify\0gs201_pcie_cp_suspend_noirq\0' > "$m/m6/link.ko"; }
+old_kernel() { printf '\x7fELF\0gs201_pcie_cp_suspend_noirq\0\0016modem PCIe ch0 bring-up\n' > "$m/m6/link.ko"; }
+expect() { # expect yes|no WHAT: check and inhibit agree, inverted
+  local c i
+  c=0; policy check || c=$?; i=0; policy inhibit || i=$?
+  if [[ $1 == yes ]]; then [[ $c == 0 && $i == 1 ]] || fail "$2: may sleep with the modem up (check $c, inhibit $i): $(cat "$m/m6/why")"
+  else [[ $c == 1 && $i == 0 ]] || fail "$2: the inhibitor holds (check $c, inhibit $i): $(cat "$m/m6/why")"; fi
+}
+reset_m6() { rm -f "$m/m6"/{verified,runbook,enable,disable,link.ko}; }
+reset_m6; new_kernel
+expect no "no device declaration, no owner's file"
+touch "$m/m6/enable"; expect no "the owner's enable file alone (a phone whose device ships no marker: the 9a, the 6 Pro)"
+grep -c "ignored" "$m/m6/why" >/dev/null || fail "the enable file alone is reported as ignored: $(cat "$m/m6/why")"
+rm "$m/m6/enable"; touch "$m/m6/runbook"; expect no "the runbook marker alone"
+touch "$m/m6/enable"; expect yes "the attended runbook's pair (#556's enable file beside the runbook marker)"
+reset_m6; new_kernel; touch "$m/m6/verified"; expect yes "the device's suspend-verified on a kernel with #232 (the 7 Pro's default)"
+grep -c "may sleep with the modem up" "$m/m6/why" >/dev/null || fail "the yes says so: $(cat "$m/m6/why")"
+sym_kernel; expect yes "a kernel module with the notifier's symbol only"
+old_kernel; expect no "the device's suspend-verified on a kernel without #232's early refusal"
+grep -c "lacks the modem link's early sleep refusal" "$m/m6/why" >/dev/null || fail "the old kernel is named as the reason: $(cat "$m/m6/why")"
+rm -f "$m/m6/link.ko"; expect no "no link module for the running kernel"
+: > "$m/m6/link.ko"; chmod 000 "$m/m6/link.ko"
+[[ -r $m/m6/link.ko ]] || expect no "a link module that can't be read"
+chmod 644 "$m/m6/link.ko"
+new_kernel; touch "$m/m6/disable"; expect no "the owner's modem-suspend-disable beside the device's declaration"
+grep -c "the owner keeps" "$m/m6/why" >/dev/null || fail "the opt-out is named: $(cat "$m/m6/why")"
+touch "$m/m6/enable" "$m/m6/runbook"; expect no "the opt-out wins over the runbook pair too"
+reset_m6; touch "$m/m6/verified"
+if command -v zstd >/dev/null; then
+  printf '\x7fELF\0\0016sleep refused before the freeze\n' | zstd -q -o "$m/m6/link.ko.zst"
+  OMAMOBILE_MODEM_SUSPEND_VERIFIED=$m/m6/verified OMAMOBILE_MODEM_SUSPEND_DISABLE=$m/m6/disable \
+    OMAMOBILE_MODEM_LINK_MODULE=$m/m6/link.ko.zst bash $pol check 2>/dev/null || fail "a zstd-compressed module with #232 is read"
+  rm -f "$m/m6/link.ko.zst"
+fi
+# Without a named module, the running kernel's is looked up with modinfo: on
+# this machine there is no pcie_gs201_cp, so the answer is no.
+OMAMOBILE_MODEM_SUSPEND_VERIFIED=$m/m6/verified OMAMOBILE_MODEM_SUSPEND_DISABLE=$m/m6/disable \
+  OMAMOBILE_MODEM_LINK_MODULE= bash $pol inhibit 2>/dev/null || fail "no link module found by modinfo: the inhibitor holds"
+rc=0; bash $pol bogus 2>/dev/null || rc=$?; [[ $rc == 2 ]] || fail "an unknown mode is a usage error"
+reset_m6
+pass "the sleep policy: the device's declaration, no owner's opt-out and a kernel with #232's early refusal, or the inhibitor holds"
 # The bring-up latch: refused until --retry (a hang in the bring-up never repeats on its own).
 printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$m/latch"
 out=$(start) && fail "a bring-up latch is refused"
@@ -448,6 +514,95 @@ printf 'ro.boot.cdt_hwid=TESTID\npersist.vendor.modem.cdt_hwid=TESTID\n' > "$t/p
 printf 'ro.boot.cdt_hwid=TESTID\n' > "$t/p4"; cdt "$t/p4" || fail "the persist copy is optional"
 cdt "$t/missing" && fail "a missing props file is refused"
 pass "board id required"
+
+# The on/off switch (the shell's Mobile network page): a fake systemctl
+# records what it's asked. "off" only masks; "on" unmasks and starts the
+# target only when this boot's modem never started and the phone is
+# provisioned; status reads without root. The switch exists only where the
+# target is wanted at boot (SW_WANTED: the 7 Pro's vendor link) or masked.
+sw=lib/omamobile-modem-switch
+mkdir -p "$t/sw/bin" "$t/sw/prov"
+cat > "$t/sw/bin/systemctl" <<'SH'
+#!/bin/bash
+echo "$*" >> "$SW_LOG"
+case $1 in
+  is-enabled) if [[ -e $SW_MASKED ]]; then echo masked; else echo disabled; fi ;;
+  is-active) if [[ $3 == omamobile-modem-inhibit.service ]]; then [[ -e $SW_INHIBIT ]]; else [[ -e $SW_ACTIVE ]]; fi ;;
+  show) [[ $2 == -p && $3 == WantedBy ]] || exit 1; [[ -e $SW_WANTED ]] && echo "multi-user.target" || echo ;;
+  mask) touch "$SW_MASKED" ;;
+  unmask) rm -f "$SW_MASKED" ;;
+esac
+SH
+chmod +x "$t/sw/bin/systemctl"
+: > "$t/sw/prov/a"; : > "$t/sw/wanted"
+swrun() {
+  SW_LOG=$t/sw/log SW_MASKED=$t/sw/masked SW_ACTIVE=$t/sw/active SW_WANTED=$t/sw/wanted SW_INHIBIT=$t/sw/inhibit \
+    OMAMOBILE_SYSTEMCTL=$t/sw/bin/systemctl OMAMOBILE_MODEM_BOOT_MARK=$t/sw/mark \
+    OMAMOBILE_MODEM_PROVISION="${SW_PROV:-$t/sw/prov/a}" "$@"
+}
+swfield() { python3 -c 'import json,sys; print(str(json.loads(sys.stdin.read())[sys.argv[1]]).lower())' "$1"; }
+[[ $(swrun "$sw" status | swfield enabled) == true ]] || fail "switch: on by default"
+[[ $(swrun "$sw" status | swfield available) == true ]] || fail "switch: available where the target is wanted at boot"
+[[ $(swrun "$sw" status | swfield sleep_blocked) == false ]] || fail "switch: no inhibitor, no sleep block"
+: > "$t/sw/inhibit"
+[[ $(swrun "$sw" status | swfield sleep_blocked) == true ]] || fail "switch: the inhibitor reads as the sleep block"
+rm -f "$t/sw/inhibit"
+OMAMOBILE_MODEM_SWITCH_UID=1000 swrun "$sw" off 2>/dev/null && fail "switch: off needs root"
+rm -f "$t/sw/log"
+out=$(OMAMOBILE_MODEM_SWITCH_UID=0 swrun "$sw" off)
+[[ $(swfield enabled <<< "$out") == false ]] || fail "switch: off masks"
+grep -c -e stop -e start "$t/sw/log" >/dev/null && fail "switch: off stops or starts nothing"
+# Off while this boot's modem runs: a restart is needed.
+date > "$t/sw/mark"; : > "$t/sw/active"
+[[ $(swrun "$sw" status | swfield restart_needed) == true ]] || fail "switch: off with the modem up needs a restart"
+# On again, the modem already started: unmasked, nothing started.
+rm -f "$t/sw/log"
+out=$(OMAMOBILE_MODEM_SWITCH_UID=0 swrun "$sw" on)
+[[ $(swfield enabled <<< "$out") == true && $(swfield restart_needed <<< "$out") == false ]] || fail "switch: on again with the modem up"
+grep -c start "$t/sw/log" >/dev/null && fail "switch: never a second start in a boot"
+# Started and stopped this boot, switched on: a restart, not a start.
+rm -f "$t/sw/active" "$t/sw/log"
+out=$(OMAMOBILE_MODEM_SWITCH_UID=0 swrun "$sw" on)
+grep -c start "$t/sw/log" >/dev/null && fail "switch: a stopped modem is not started again in the boot"
+[[ $(swfield restart_needed <<< "$out") == true ]] || fail "switch: a stopped modem needs a restart"
+# Never started this boot (masked at boot), switched on: started now.
+rm -f "$t/sw/mark" "$t/sw/log"
+OMAMOBILE_MODEM_SWITCH_UID=0 swrun "$sw" off >/dev/null
+OMAMOBILE_MODEM_SWITCH_UID=0 swrun "$sw" on >/dev/null
+grep -qx 'start --no-block omamobile-modem-boot.target' "$t/sw/log" || fail "switch: on starts a modem that never started this boot"
+# Not provisioned: unmasked, not started.
+rm -f "$t/sw/log" "$t/sw/prov/a"
+OMAMOBILE_MODEM_SWITCH_UID=0 swrun "$sw" on >/dev/null
+grep -c start "$t/sw/log" >/dev/null && fail "switch: an unprovisioned phone is not started"
+[[ $(swrun "$sw" status | swfield provisioned) == false ]] || fail "switch: provisioned reads the files"
+# props.conf sits in a root-only folder on the phone, and status runs as
+# the user: a folder that can't be searched counts, a missing one doesn't.
+mkdir -p "$t/sw/priv"; : > "$t/sw/priv/props.conf"; chmod 000 "$t/sw/priv"
+[[ $(SW_PROV="$t/sw/priv/props.conf" swrun "$sw" status | swfield provisioned) == true ]] ||
+  fail "switch: a file in a root-only folder reads as provisioned"
+[[ $(SW_PROV="$t/sw/none/props.conf" swrun "$sw" status | swfield provisioned) == false ]] ||
+  fail "switch: a missing folder is not provisioned"
+chmod 700 "$t/sw/priv"
+[[ $(SW_PROV="$t/sw/prov/a $t/sw/none/x" swrun "$sw" status | swfield provisioned) == false ]] ||
+  fail "switch: every file in the override list counts"
+swrun "$sw" reboot 2>/dev/null && fail "switch: unknown commands refused"
+# Not masked and not wanted at boot (the 9a, the 6 Pro): no switch, and
+# "on" and "off" refuse without touching systemd.
+: > "$t/sw/prov/a"; rm -f "$t/sw/wanted" "$t/sw/masked" "$t/sw/mark" "$t/sw/active" "$t/sw/log"
+out=$(swrun "$sw" status)
+[[ $(swfield available <<< "$out") == false && $(swfield enabled <<< "$out") == false ]] ||
+  fail "switch: not masked, not wanted reads as not available and not on"
+OMAMOBILE_MODEM_SWITCH_UID=0 swrun "$sw" on 2>/dev/null && fail "switch: on refused where nothing starts the modem at boot"
+OMAMOBILE_MODEM_SWITCH_UID=0 swrun "$sw" off 2>/dev/null && fail "switch: off refused where nothing starts the modem at boot"
+grep -c -e mask -e start "$t/sw/log" >/dev/null && fail "switch: a refusal touches nothing"
+# Masked by hand on such a phone: "on" unmasks, and starts nothing.
+: > "$t/sw/masked"; rm -f "$t/sw/log"
+OMAMOBILE_MODEM_SWITCH_UID=0 swrun "$sw" on >/dev/null
+grep -c start "$t/sw/log" >/dev/null && fail "switch: on starts nothing that isn't wanted at boot"
+[[ $(swrun "$sw" status | swfield available) == false ]] || fail "switch: unmasked and not wanted is not available"
+grep -q 'exec.path">/usr/lib/omamobile-vendor/omamobile-modem-switch<' polkit/org.omamobile.modem.policy ||
+  fail "switch: the polkit action names the helper"
+pass "on/off switch: off masks only, on starts only a modem that never started this boot"
 
 # The NV overlay: its own tests (synthetic NV-like files only).
 test/nv-overlay

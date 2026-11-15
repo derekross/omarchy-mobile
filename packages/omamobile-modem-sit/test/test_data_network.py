@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import data_network
-from data_network import Resolver, configuration, counters, guarded, looks_silent
+from data_network import Resolver, SleepHold, configuration, counters, guarded, looks_silent, sleep_signal
 
 class ResolverTests(unittest.TestCase):
     def test_fallback_restoration_preserves_new_wifi_dns(self):
@@ -21,6 +21,61 @@ class ResolverTests(unittest.TestCase):
             with self.assertRaises(ValueError): configuration(data)
 
 class RouteTests(unittest.TestCase):
+    def test_only_logind_sleep_announcements_count(self):
+        line = '{"type":"signal","member":"PrepareForSleep","payload":{"type":"b","data":[%s]}}'
+        self.assertIs(sleep_signal(line % 'true'), True)
+        self.assertIs(sleep_signal(line % 'false'), False)
+        self.assertIsNone(sleep_signal(line.replace('PrepareForSleep', 'PrepareForShutdown') % 'true'))
+        self.assertIsNone(sleep_signal('{"member":"PrepareForSleep","payload":{"data":["yes"]}}'))
+        self.assertIsNone(sleep_signal('not json'))
+        self.assertIsNone(sleep_signal('[]'))
+
+    def test_the_route_goes_at_the_announcement_and_waits_for_wifi_after(self):
+        hold = SleepHold(grace=10)
+        self.assertFalse(hold.active)
+        self.assertTrue(hold.announced(routed=True))     # remove it now
+        self.assertFalse(hold.announced(routed=False))   # a second announcement changes nothing
+        self.assertTrue(hold.active)
+        self.assertFalse(hold.returns(others=True, now=0))   # not while asleep
+        hold.over(now=100)
+        self.assertTrue(hold.active)
+        self.assertFalse(hold.returns(others=False, now=105))    # Wi-Fi not back, grace not over
+        self.assertTrue(hold.returns(others=True, now=106))      # Wi-Fi leads out again
+        self.assertFalse(hold.active)
+        self.assertFalse(hold.returns(others=True, now=107))     # once
+
+    def test_without_wifi_the_route_returns_after_the_grace(self):
+        hold = SleepHold(grace=10)
+        hold.announced(routed=True)
+        hold.over(now=100)
+        self.assertFalse(hold.returns(others=False, now=109.9))
+        self.assertTrue(hold.returns(others=False, now=110))
+
+    def test_a_route_that_was_not_there_is_not_brought_back(self):
+        hold = SleepHold(grace=10)
+        self.assertFalse(hold.announced(routed=False))   # removed earlier: silent bearer, roaming
+        hold.over(now=100)
+        self.assertFalse(hold.active)
+        self.assertFalse(hold.returns(others=True, now=200))
+
+    def test_a_sleep_during_the_wait_keeps_the_route_owed(self):
+        hold = SleepHold(grace=10)
+        hold.announced(routed=True)
+        hold.over(now=100)
+        self.assertFalse(hold.announced(routed=False))   # asleep again before it came back
+        hold.over(now=200)
+        self.assertTrue(hold.returns(others=True, now=201))
+
+    def test_roaming_ends_the_wait(self):
+        hold = SleepHold(grace=10)
+        hold.announced(routed=True)
+        hold.over(now=100, allowed=False)
+        self.assertFalse(hold.active)
+        hold.announced(routed=True)
+        hold.over(now=300)
+        hold.cancel()
+        self.assertFalse(hold.returns(others=True, now=301))
+
     def test_counters_read_ip_json(self):
         stats=[{'stats64':{'rx':{'bytes':0,'packets':0},'tx':{'bytes':900,'packets':12}}}]
         self.assertEqual(counters(stats),(0,12))

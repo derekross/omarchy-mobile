@@ -34,13 +34,14 @@ cat > "$t/bin/docker" <<'EOF'
 #!/bin/bash
 set -euo pipefail
 [[ $1 == run ]] || exit 0
-work="" device="" channel="" kernel_package=""
+work="" device="" channel="" kernel_package="" install_link=""
 while (($#)); do
   case $1 in
     -v) [[ $2 != *:/out ]] || work=${2%:/out}; shift ;;
     -e) [[ $2 != DEVICE=* ]] || device=${2#DEVICE=}
         [[ $2 != CHANNEL=* ]] || channel=${2#CHANNEL=}
-        [[ $2 != KERNEL_PACKAGE=* ]] || kernel_package=${2#KERNEL_PACKAGE=}; shift ;;
+        [[ $2 != KERNEL_PACKAGE=* ]] || kernel_package=${2#KERNEL_PACKAGE=}
+        [[ $2 != INSTALL_LINK=* ]] || install_link=${2#INSTALL_LINK=}; shift ;;
   esac
   shift
 done
@@ -56,6 +57,7 @@ fi
 [[ ${FAIL_BUILD:-0} != 1 ]] || exit 1
 printf '%s\n' "$device" > "$work/rootfs.img"
 printf '%s\n' "$kernel_package" > "$T/kernel-package.$device"
+printf '%s\n' "$install_link" > "$T/install-link.$device"
 printf 'device: %s\nomamobile channel: %s\n' "$device" "$channel" > "$work/MANIFEST"
 EOF
 cat > "$R/tests/rootfs-smoke" <<'EOF'
@@ -124,8 +126,37 @@ awk '/linux-omamobile "\* \]\]; then/ {pkg = 1} pkg && /^else/ {exit} pkg && /zs
   || fail "with the kernel package installed the tarball is not unpacked over its modules"
 grep -qF '[[ $p == omamobile-boot-update ]] || kept+=("$p")' "$inside" || fail "without linux-omamobile (allowed missing) the hook is left out too"
 grep -qF 'echo "kernel modules: $modules_line"' "$inside" || fail "the MANIFEST still names the release (make-bundle, install-phone, rootfs-smoke read it)"
+grep -qF 'bash /src/rootfs/placeholders make "$T"' "$inside" || fail "build-inside puts the answers placeholders in the image"
+grep -qF 'bash /src/rootfs/placeholders locate /out/rootfs.img | tee -a /out/MANIFEST' "$inside" || fail "build-inside records where they are in the MANIFEST"
+awk '/placeholders make/ {m = NR} /mkfs.ext4/ {f = NR} /placeholders locate/ {l = NR} END {exit !(m && f && l && m < f && f < l)}' "$inside" ||
+  fail "the placeholders are made before mkfs.ext4 and located after it"
 grep -q 'OMAMOBILE_BOOT_FILES' packages/omamobile-device-cheetah/install || fail "cheetah's package ships boot files, so its image gets the kernel package"
 echo 'ok - a device with boot files gets linux-omamobile and omamobile-boot-update (the package modules replace the tarball); others keep the tarball'
+
+# An image for the install link: only where the descriptor allows it
+# (INSTALL_LINK=yes; test for development and local images), and the
+# switch reaches the build, which places the marker and needs both packages
+build first > "$t/link.log" 2>&1 || { cat "$t/link.log"; fail "a plain build"; }
+[[ $(cat "$t/install-link.first") == 0 ]] || fail "a plain build: INSTALL_LINK=0 reaches the build"
+if build first --install-link > "$t/link.log" 2>&1; then fail "--install-link is refused for a device whose descriptor does not allow it"; fi
+grep -q 'INSTALL_LINK=yes (or test)' "$t/link.log" || { cat "$t/link.log"; fail "names the descriptor's INSTALL_LINK"; }
+conf2=$R/device/second/device.conf; cp "$conf2" "$t/second.conf"
+echo INSTALL_LINK=test >> "$conf2"
+if build second --install-link > "$t/link.log" 2>&1; then fail "INSTALL_LINK=test: a stable image for the link is refused"; fi
+grep -q 'follows development or local' "$t/link.log" || { cat "$t/link.log"; fail "says why"; }
+build second --install-link --channel development > "$t/link.log" 2>&1 || { cat "$t/link.log"; fail "INSTALL_LINK=test: a development image for the link builds"; }
+[[ $(cat "$t/install-link.second") == 1 ]] || fail "--install-link: INSTALL_LINK=1 reaches the build"
+cp "$t/second.conf" "$conf2"; echo INSTALL_LINK=yes >> "$conf2"
+build second --install-link > "$t/link.log" 2>&1 || { cat "$t/link.log"; fail "INSTALL_LINK=yes: a stable image for the link builds"; }
+cp "$t/second.conf" "$conf2"
+build second > "$t/link.log" 2>&1 || { cat "$t/link.log"; fail "rebuild without the link"; }
+grep -qF 'for p in omamobile-install-link omamobile-provision; do' "$inside" || fail "build-inside needs both packages for an image for the link"
+grep -qF ': > "$T/etc/omamobile/install-link"' "$inside" || fail "build-inside places the marker"
+grep -qF 'die "/etc/omamobile/install-link is in an image not built for the link' "$inside" || fail "build-inside refuses a marker in any other image"
+grep -qF 'echo "install link: $link_line"' "$inside" || fail "the MANIFEST says whether the image is for the link (make-bundle reads it)"
+grep -qF 'optional_ours=(omamobile-provision omamobile-install-link)' "$inside" || fail "omamobile-provision and omamobile-install-link go in once [omamobile] has them"
+! grep -qx omamobile-install-link <(grep -v '^#' rootfs/packages.omamobile) || fail "omamobile-install-link is optional, not required in every image (#775 builds it only when named)"
+echo 'ok - --install-link only where the descriptor allows it (test: development or local only); the marker and both packages in build-inside'
 
 # Bundling must select this device even when another device sorts later.
 mkdir -p "$t/kernel/images" "$R/packages/omamobile-keyring"
@@ -135,7 +166,8 @@ echo dtbo > "$t/kernel/images/dtbo.img"
 echo public-key > "$R/packages/omamobile-keyring/omamobile.gpg"
 # A bundle carries the install guide and phone-provision with its tools.
 mkdir -p "$R/docs"; echo guide > "$R/docs/INSTALL.md"
-for f in phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data; do
+# (make-bundle's own list: the provisioning tools and the guided install's)
+for f in $(sed -n 's/^provision_tools="\(.*\)"$/\1/p' "$R/tools/make-bundle"); do
   printf '#!/bin/bash\n' > "$R/tools/$f"; chmod +x "$R/tools/$f"
 done
 bundle() { DEVICE=first "$R/tools/make-bundle" --unsigned --version fixture "$@"; }
@@ -162,6 +194,8 @@ for path, f in listed.items():
     data = open(os.path.join(b, path), "rb").read()
     assert f["size"] == len(data) and f["sha256"] == hashlib.sha256(data).hexdigest(), path
 assert m["root_image"]["name"] == image and m["root_image"]["sha256"] == digest
+# The stand-in image's MANIFEST has no "answers placeholder:" lines
+assert m["root_image"]["placeholders"] == [], m["root_image"]
 i = m["install"]
 assert i["product"] == "first" and i["require_unlocked_bootloader"] is True and i["require_matching_bootloader_slots"] is True
 assert [(w["partition"], w["source"]) for w in i["writes"]] == [("boot_b", "images/boot.img"), ("dtbo_b", "images/dtbo.img"), ("userdata", "root_image")]

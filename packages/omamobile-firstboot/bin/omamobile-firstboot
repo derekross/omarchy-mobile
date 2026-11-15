@@ -3,7 +3,12 @@
 # omamobile-firstboot: set up a freshly installed Omarchy Mobile phone, once.
 #
 # tools/install-phone writes /etc/omamobile/firstboot.conf into the root image
-# it flashes. On the first boot omamobile-firstboot.service runs this before
+# it flashes; the desktop installer and the web page put the answers into the
+# release image's placeholder for it (rootfs/placeholders: the file is there
+# at a fixed size, and the installer swaps its bytes). A placeholder left as
+# it is, or any file of comments and blank lines only, holds no answers: this
+# does nothing then, as without the file. On the first boot
+# omamobile-firstboot.service runs this before
 # the display manager. It does what Omarchy's own first-boot provisioning
 # (omarchy-provision-owner) and system setup (omarchy-apply-system) do on a
 # computer, without the questions (the installer asked them on the laptop):
@@ -26,6 +31,10 @@
 #      omamobile-setup-user, as the user;
 #  10. deletes firstboot.conf.
 #
+# Comment lines and blank lines are skipped wherever they are, so the
+# padding an installer fills a placeholder with (a last comment line of
+# spaces) is never read as an answer.
+#
 # Every step is idempotent, so a failed run can simply run again (the unit
 # reruns at the next boot while firstboot.conf exists). The log is
 # /var/log/omamobile/firstboot.log. It never logs the password hash or the
@@ -43,8 +52,14 @@
 #                   system account
 #   PASSWORD_HASH   required; sha512-crypt ($6$...), as openssl passwd -6 makes
 #   HOSTNAME        default omamobile
-#   TIMEZONE        default UTC; a zone under /usr/share/zoneinfo
-#   SSH_KEY         an OpenSSH public key; may repeat
+#   TIMEZONE        default UTC; a zone under /usr/share/zoneinfo (one this
+#                   phone doesn't have is replaced by UTC, with a warning:
+#                   a typo must not stop the first start)
+#   SSH_KEY         an OpenSSH public key line, no options; may repeat.
+#                   Each goes to root's and the user's authorized_keys
+#                   (folders 0700, files 0600, each owner's own); the
+#                   streaming installers put this computer's key here, so
+#                   SSH takes it once that step has run. Never logged
 #   WIFI_SSID       optional; WIFI_PSK with it (none for an open network)
 #   CREDENTIAL      pin or password: how the lock screen asks (default pin)
 #   FULL_NAME, EMAIL  optional; git identity, as Omarchy's installer asks
@@ -134,9 +149,16 @@ validate() {
   [[ ${C[HOSTNAME]} =~ $HOSTNAME_RE ]] || die "HOSTNAME '${C[HOSTNAME]}' must be 1-63 letters, digits or dashes"
   C[TIMEZONE]=${C[TIMEZONE]:-UTC}
   [[ ${C[TIMEZONE]} =~ $TZ_RE && ${C[TIMEZONE]} != *..* ]] || die "TIMEZONE '${C[TIMEZONE]}' is not a zone name"
-  [[ -f $ROOT/usr/share/zoneinfo/${C[TIMEZONE]} ]] || die "TIMEZONE '${C[TIMEZONE]}' is not in /usr/share/zoneinfo"
+  # The installers check the name's form; only the phone knows its zones.
+  # A first start that stops here leaves a phone nobody can log in to, so
+  # a zone it doesn't have becomes UTC, changeable later in the settings.
+  if [[ ! -f $ROOT/usr/share/zoneinfo/${C[TIMEZONE]} ]]; then
+    echo "omamobile-firstboot: warning: TIMEZONE '${C[TIMEZONE]}' is not in /usr/share/zoneinfo; using UTC" >&2
+    C[TIMEZONE]=UTC
+  fi
   for k in "${SSH_KEYS[@]}"; do
-    [[ $k =~ $SSHKEY_RE ]] || die "SSH_KEY is not an OpenSSH public key: ${k:0:40}..."
+    # The key itself stays out of the message, and so out of the journal
+    [[ $k =~ $SSHKEY_RE ]] || die "an SSH_KEY is not one OpenSSH public key line (a key type, the key, a comment; no options)"
   done
   ssid=${C[WIFI_SSID]-} psk=${C[WIFI_PSK]-}
   if [[ -n ${C[WIFI_PSK]+x} && -z ${C[WIFI_SSID]+x} ]]; then die "WIFI_PSK without WIFI_SSID"; fi
@@ -166,7 +188,15 @@ summary() {
   return 0
 }
 
+# Anything but comments and blank lines: a placeholder has none
+has_answers() { grep -cvE '^[[:space:]]*(#.*)?$' "$1" >/dev/null; }
+
 if [[ ${1:-} == --check ]]; then
+  [[ -f ${2:-$CONF} ]] || die "no ${2:-$CONF}"
+  if ! has_answers "${2:-$CONF}"; then
+    echo "no answers: ${2:-$CONF} holds only comments (a placeholder left as it is)"
+    exit 0
+  fi
   parse "${2:-$CONF}"
   validate
   summary
@@ -175,6 +205,10 @@ fi
 [[ $# == 0 ]] || die "usage: omamobile-firstboot [--check [FILE]]"
 [[ -n $ROOT || $EUID == 0 ]] || die "run as root"
 [[ -f $CONF ]] || { echo "omamobile-firstboot: no $CONF, nothing to do"; exit 0; }
+# The release image's placeholder, which no installer filled (one that
+# can't, or tools/install-phone, which writes its own file in its place).
+# Left as it is: the phone's image is the release's, and nothing changes.
+has_answers "$CONF" || { echo "omamobile-firstboot: $CONF holds no answers (the image's placeholder), nothing to do"; exit 0; }
 
 mkdir -p "$LOGDIR" "$STATE"
 chmod 700 "$STATE"

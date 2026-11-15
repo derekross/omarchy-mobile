@@ -38,6 +38,16 @@
 # missing tuning fails to load instead of falling back to the other speaker's
 # (or to linux-firmware's generic cirrus/cs35l41-dsp1-spk-prot.bin).
 #
+# The Pixel 7 (-d panther; <board> is "google,gs201-panther") takes the same
+# files as cheetah under its own names, and also the video codec's:
+#
+#   vendor/firmware/mfc_fw.bin        -> s5p-mfc-v15.fw          (s5p-mfc, the MFC v15.6 decoder)
+#
+# mfc_fw.bin is the MFC's RISC core firmware, plain and unsigned. It starts
+# with that core's vector table (eight ARM branch instructions) and ends with
+# its version word, the one the MFC reports in FW_VERSION once it runs
+# (0x44250901 in the image this was tested with).
+#
 # The Pixel 9a (-d tegu; <board> is "google,zumapro-tegu"):
 #
 #   vendor/firmware/fw_bcmdhd.bin             -> brcm/brcmfmac4383-pcie.<board>.bin         (brcmfmac)
@@ -189,7 +199,10 @@ case $DEVICE_OPT in
     BOARD="google,gs201-panther"
     DEVICE="panther"
     MAP=("${MAP[@]//google,gs201-cheetah/$BOARD}")
-    MAP=("${MAP[@]//cheetah/$DEVICE}") ;;
+    MAP=("${MAP[@]//cheetah/$DEVICE}")
+    # The video codec (kernel: s5p-mfc's google,gs201-mfc), described for
+    # panther only so far
+    MAP+=("firmware/mfc_fw.bin|s5p-mfc-v15.fw") ;;
   raven)
     # Pixel 6 Pro: Wi-Fi, Bluetooth, the AoC, the speaker amplifiers'
     # protection firmware and the AoC's sensor registry (device/raven/WIFI-PLAN.md,
@@ -497,6 +510,17 @@ if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu || $DEVICE == 
   done
 fi
 
+# The MFC firmware: a vector table of eight ARM branches (cond AL, opcode
+# 0xea in each word's top byte), and its version as the last word
+if [[ $DEVICE == panther ]]; then
+  od -An -tx1 -w32 -N32 "$dest/s5p-mfc-v15.fw" |
+    awk '{ for (i = 4; i <= 32; i += 4) if ($i != "ea") exit 1 } END { if (NR != 1) exit 1 }' ||
+    die "mfc_fw.bin does not start with an ARM vector table"
+  mfc_size=$(stat -c %s "$dest/s5p-mfc-v15.fw")
+  (( mfc_size >= 4096 && mfc_size % 4 == 0 )) || die "mfc_fw.bin is not a whole number of words"
+  mfc_ver=$(od -An -tx4 -j $((mfc_size - 4)) -N4 "$dest/s5p-mfc-v15.fw" | tr -d ' ')
+fi
+
 ver=$(grep -ao 'Version=[0-9.]* ([^)]*)' "$brcm/$FW_BASE.$BOARD.bin" | head -1)
 bt=""
 [[ -z $BT_CHIP ]] || bt=$(grep -ao "$BT_CHIP [^[]*" "$brcm/BCM.$BOARD.hcd" | head -1)
@@ -514,6 +538,8 @@ fi
 [[ -z $BT_CHIP ]] || say "Bluetooth patch: ${bt:-unknown version}"
 [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu || $DEVICE == husky ]] &&
   say "Haptics firmware: cs40l26.wmfw ($(stat -c %s "$dest/cs40l26.wmfw") bytes) and its wavetable"
+[[ $DEVICE == panther ]] &&
+  say "Video codec firmware: s5p-mfc-v15.fw (version 0x$mfc_ver)"
 [[ $DEVICE == tegu ]] &&
   say "AoC firmware: aoc-tegu.bin ($(stat -c %s "$dest/aoc-tegu.bin") bytes)"
 [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == raven ]] &&
