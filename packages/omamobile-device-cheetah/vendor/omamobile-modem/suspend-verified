@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# The Pixel 7 Pro's declaration that suspend with the modem up is verified:
+# MODEM-PLAN M6 passed on the reference phone on 2026-11-14 (sleeps, sleeps
+# refused early with data busy, a text and a call each waking the phone;
+# device/cheetah/SUSPEND-PLAN.md). With this file omamobile-modem's sleep
+# policy skips the modem's sleep inhibitor at boot, but only on a kernel
+# whose modem link refuses a sleep early while the link is up
+# (linux-omarchy-mobile#232, kernel-2026.11.15 and later), and not where the
+# owner has opted out (/etc/omamobile/modem-suspend-disable). No other
+# device package ships it.

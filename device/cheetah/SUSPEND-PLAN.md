@@ -1,7 +1,21 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Suspend plan: s2idle first, then SYS_SLEEP (cheetah / gs201)
 
-Status (2026-11-13): **P6 reported done, P8 passed, P7 passed on a kernel
+Status (2026-11-14): **Auto-sleep is on by default (omamobile-shell 0.2.129),
+the day test passed again on the updated phone, and sleep with the modem up
+passed every step of MODEM-PLAN M6 on the reference phone** (two sleeps, ten
+refusals before the freeze with data busy and the ping unbroken, a text and
+a call each waking the phone, audio both ways, the call holding off sleep;
+"The day test and the modem-up sleep, 2026-11-14" below). From
+omamobile-modem 0.1.26 and omamobile-device-cheetah 0.1.57 the 7 Pro sleeps
+with the modem up by default, on a kernel with linux-omarchy-mobile#232's
+early refusal (kernel-2026.11.15 and later; on an older kernel the modem
+keeps its sleep inhibitor), unless the owner opts out
+(`/etc/omamobile/modem-suspend-disable`); MODEM-PLAN 7.5. The DEVICES cell
+stays "partial" until kernel-2026.11.15 and these packages are released
+and checked on the phone after Updates.
+
+Earlier status (2026-11-13): **P6 reported done, P8 passed, P7 passed on a kernel
 with linux-omarchy-mobile#233; the DEVICES cell is "testing".** One night
 asleep with the modem off: about 228 mA, roughly 22 h of standby. Double tap
 wakes the phone from s2idle with kernel #248 and #730. Left before "works":
