@@ -23,9 +23,12 @@ CONFIG = Path(os.environ.get('OMAMOBILE_SIT_CONFIG', '/etc/omamobile/modem-sit.c
 # a value set in CONFIG wins): the settings that hold only on that phone,
 # such as the call audio route its owner has verified ([audio] card = auto
 # from omamobile-device-cheetah). Without one, DEFAULTS hold. Only their
-# [audio] section is read: omamobile-mmd and the shell read [network] and
-# [data] from CONFIG themselves and would never see a device default there.
-# A file that can't be read or parsed is skipped (the safe side: no route).
+# [audio] section and [control] follow_screen are read: omamobile-mmd and the
+# shell read [network] and [data] from CONFIG themselves and would never see
+# a device default there, and [control] group says who may use the socket,
+# which stays the owner's. follow_screen = yes is the 7 Pro's default since
+# MODEM-PLAN M6 passed there (device-cheetah). A file that can't be read or
+# parsed is skipped (the safe side: no route, the screen state not told).
 DEVICE_DEFAULTS = Path(os.environ.get('OMAMOBILE_SIT_DEFAULTS', '/usr/lib/omamobile/modem-sit.conf.d'))
 
 # CPIF's character devices. "unix:PATH" is a SOCK_SEQPACKET socket (the
@@ -63,6 +66,8 @@ def config(path=None):
             continue
         if device.has_section('audio'):
             parser.read_dict({'audio': dict(device['audio'])})
+        if device.has_option('control', 'follow_screen'):
+            parser.read_dict({'control': {'follow_screen': device['control']['follow_screen']}})
     parser.read(path or CONFIG)
     return parser
 

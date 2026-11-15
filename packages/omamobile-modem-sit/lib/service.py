@@ -223,8 +223,9 @@ class Service:
         self.release_unconfirmed = False
         self.screen_on = None
         self.next_screen_check = 0
-        # [control] follow_screen: off by default until calls with the
-        # screen dark are tested (MODEM-PLAN 7.4).
+        # [control] follow_screen: off by default; on where a device's
+        # drop-in says so (the 7 Pro's, after MODEM-PLAN M6 passed there:
+        # calls and texts with the screen dark, 2026-11-14).
         try:
             self.follow = self.settings['control'].getboolean('follow_screen', False)
         except ValueError:
@@ -996,9 +997,9 @@ def main():
         # Set by a device whose modem sends signal reports only after it's
         # told the screen is on (the Pixel 9a's drop-in). Nothing else sends
         # the screen state unless the owner sets [control] follow_screen =
-        # yes (off by default; MODEM-PLAN section 7, M6, on the 7 Pro only
-        # so far), which then follows the panel from here on. Never set on
-        # the 7 Pro.
+        # yes (off by default; the 7 Pro's device drop-in sets it since
+        # MODEM-PLAN M6 passed there), which then follows the panel from here
+        # on. Never set on the 7 Pro.
         if args.bringup and os.environ.get('OMAMOBILE_SIT_SCREEN_ON_AT_START') == '1' \
                 and service.screen_on is None:
             service.dispatch(dict(action='screen-state', on=True))
