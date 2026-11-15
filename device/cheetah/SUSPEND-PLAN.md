@@ -1923,11 +1923,19 @@ recorder at WAKES=20, ended by its 45-minute bound):
 - **Bearer drops:** sitd logged the internet bearer (CID 3) gone nine times,
   about every five minutes, IMS (CID 2) never; each time "setting it up
   again in 3 s", then "set up again" at the first try.
-- **Data:** 78 of 85 checks 3/3, one 1/3, eight 0/3, each at a drop; the
-  next wake 3/3 every time; awake at the end 3/3. Before the reconnect the
-  first drop killed data until a reboot.
-- **Passes M6's long check.** What it costs: a few seconds without data at
-  each drop.
+- **Data:** of the 85 wakes' checks, 76 got 3/3, one 1/3 (wake 74) and
+  eight 0/3 (wakes 10, 20, 30, 40, 46, 54, 64, 84), each at a drop; the next
+  wake, 47-50 s later, 3/3 every time; the baseline and the awake check at
+  the end 3/3. Before the reconnect the first drop killed data until a reboot.
+- **Wakes:** 60 of 85 were the modem's (`cp2ap_wakeup`), 22 the PMIC's, 3
+  the RTC's: worth knowing for standby with the modem up, not measured yet.
+- **Passes M6's long check.** What it costs: data is gone from a drop until
+  the reconnect, which the ping record bounds at under a minute; IMS read
+  registered in every snapshot. The run went round the inhibitor by hand
+  (device-cheetah 0.1.59), attended on the charger, and ended in a reboot
+  (13:50); 0.1.60's declaration path ran on 11-14 with the same file, and
+  its first boot should show `omamobile-modem-sleep-policy check` saying
+  yes.
 
 **M6-D, 2026-11-15** (the reference phone just reinstalled by the guided
 installer from the 2026.11.15 candidate: `7.3.0-rc6-omamobile-gda171eae4cb7`,

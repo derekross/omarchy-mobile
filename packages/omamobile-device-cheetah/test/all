@@ -220,6 +220,9 @@ pass "the device sitd policy is staged and provided"
 verified=$tmp/root/usr/lib/omamobile-modem/suspend-verified
 [[ -f $verified && ! -x $verified ]] || fail "the suspend-verified declaration is staged as a plain file"
 [[ $(grep -cv '^#' "$verified") == 0 ]] || fail "the suspend-verified declaration holds comments only"
+# The declaration holds only with sitd's bearer reconnect (#817)
+grep -cxF "conflicts=('omamobile-modem-sit<0.3.42')" PKGBUILD >/dev/null \
+  || fail "the suspend-verified declaration ships with the conflict on omamobile-modem-sit before 0.3.42"
 [[ ! -e $tmp/root/usr/lib/omamobile-modem/suspend-runbook ]] || fail "the old runbook marker is no longer shipped"
 if [[ -f ../omamobile-modem/lib/omamobile-modem-sleep-policy ]]; then
   grep -q 'VERIFIED=\${OMAMOBILE_MODEM_SUSPEND_VERIFIED:-/usr/lib/omamobile-modem/suspend-verified}' ../omamobile-modem/lib/omamobile-modem-sleep-policy ||
