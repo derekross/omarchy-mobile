@@ -327,6 +327,30 @@ vars
 refuse "slot a with --reinstall and one bootloader version" --reinstall; grep -q -- '--bootloader-slots-match' "$t/out" || fail "on slot a --reinstall doesn't stand in for the other slot's version"
 pass "refuses another phone, a locked bootloader, mismatched or unconfirmed bootloader slots, and slot b without --reinstall; a reinstall on slot b takes slot B's own bootloader"
 
+# A phone that doesn't say which slot it runs from, or says something else,
+# is stopped before the owner is asked anything: it is not taken for slot A,
+# whatever the per-slot versions or --bootloader-slots-match say
+both=$'version-bootloader-a:cloudripper-17.0-15199429\nversion-bootloader-b:cloudripper-17.0-15199429'
+for line in "" "current-slot:" "current-slot:_b" "current-slot:invalid"; do
+  for how in "per-slot versions" "--bootloader-slots-match"; do
+    if [[ $how == per-slot* ]]; then vars "" "" "$both"; args=(); else vars; args=(--bootloader-slots-match cloudripper-17.0-15199429); fi
+    sed -i '/^current-slot:/d' "$t/vars"; [[ -z $line ]] || echo "$line" >> "$t/vars"
+    refuse "a phone with ${line:-no current-slot line} ($how)" "${args[@]}"
+    grep -c "current-slot: '${line#current-slot:}'" "$t/out" >/dev/null || { cat "$t/out"; fail "${line:-no line}: says what the phone reported"; }
+    ! grep -c -e "About the phone's owner" -e 'User name' "$t/out" >/dev/null || fail "${line:-no line} ($how): stopped before the owner's questions"
+  done
+done
+# Nor does a descriptor that turns the slot round trip on let it start there
+# (slot b unbootable, as on stock, so nothing else would keep it from starting)
+{ descriptor; echo 'BOOTLOADER_SLOT_PROBE=yes'; } > "$R/device/testdev/device.conf"
+for line in "" "current-slot:_b"; do
+  vars "" "" $'slot-successful:b:yes\nslot-unbootable:b:yes'; sed -i '/^current-slot:/d' "$t/vars"; [[ -z $line ]] || echo "$line" >> "$t/vars"
+  PROBE=yes refuse "the slot round trip on a phone with ${line:-no current-slot line}"
+  grep -c "current-slot: '${line#current-slot:}'" "$t/out" >/dev/null || { cat "$t/out"; fail "${line:-no line}, round trip on: says what the phone reported"; }
+done
+descriptor > "$R/device/testdev/device.conf"
+pass "refuses a phone whose current-slot is missing, empty or not a or b (_b included), before the owner's questions, with per-slot versions or --bootloader-slots-match; the slot round trip never starts on such a phone"
+
 # --- The other slot's bootloader, measured by a round trip (G4, D4) -----------
 # The phone reports only the current slot's version. Today's stop stays the
 # default; a descriptor with BOOTLOADER_SLOT_PROBE=yes lets a first install
