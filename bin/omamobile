@@ -663,11 +663,18 @@ cmd_initramfs() {
   local tarball="alpine-minirootfs-$ver-aarch64.tar.gz"
   local sum=9bf70a7f18ea44094cbb5f70c58f9af129c8214745743db0e68e5502cc2ce773
   mkdir -p "$dl"
-  if [[ ! -f "$dl/$tarball" ]]; then
+  # A download lands under the cached name only once it passes the checksum:
+  # every later run takes a file there as downloaded
+  if [[ -f "$dl/$tarball" ]]; then
+    echo "$sum  $dl/$tarball" | sha256sum -c --quiet ||
+      die "checksum mismatch for the cached $dl/$tarball: remove it to download it again"
+  else
     say "Downloading $tarball"
-    curl -fsSL -o "$dl/$tarball" "https://dl-cdn.alpinelinux.org/alpine/v${ver%.*}/releases/aarch64/$tarball"
+    curl -fsSL -o "$dl/$tarball.part" "https://dl-cdn.alpinelinux.org/alpine/v${ver%.*}/releases/aarch64/$tarball"
+    echo "$sum  $dl/$tarball.part" | sha256sum -c --quiet ||
+      { rm -f "$dl/$tarball.part"; die "checksum mismatch for the downloaded $tarball (removed it)"; }
+    mv "$dl/$tarball.part" "$dl/$tarball"
   fi
-  echo "$sum  $dl/$tarball" | sha256sum -c --quiet || die "checksum mismatch for $tarball"
 
   say "Staging initramfs in $stage"
   rm -rf "$stage" && mkdir -p "$stage"
