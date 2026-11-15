@@ -1733,9 +1733,20 @@ The 9a has nothing that tells the modem the screen state, so each test
 sent "screen off" through sitd's socket before a request and "screen on"
 after, waited for the link to be down for 5 s, armed an RTC alarm and
 passed the modem's inhibitor with `systemctl suspend -i`. On the charger,
-cable in, home LTE with IMS voice and SMS. The owner was not at the
-palmtop for these runs; from 2026-11-13 he has told us to run sleep tests
-with the modem up without him, and every boot ended in `systemctl reboot`.
+cable in, home LTE with IMS voice and SMS, and every boot ended in
+`systemctl reboot`.
+
+**These runs were outside the rule as AGENTS.md has it.** With the modem
+up, every request here went past its sleep inhibitor (`systemctl suspend
+-i`) with nobody at the palmtop, on a kernel that was new that day and had
+not had an attended run first. Their boots began, by the palmtop's journal
+(MST): on 2026-11-13 the five comparison boots on the daily kernel from
+15:10 to 16:04, the refusals and the three 45 s sleeps at 16:36, the twenty
+at 17:02, the boot that hung at 17:51 and the night at 19:28; on 11-14 the
+boots with #556's package and the calls at 04:09, 05:37, 06:29 and 06:56.
+Until the maintainer decides otherwise, a sleep with the modem up on the 9a
+runs as AGENTS.md says: attended, on the charger, ending in a reboot, and a
+new kernel gets its attended run first.
 The series script is `device/tegu/bringup/modem-sleep-series.sh` (the copy
 that ran logged to another file and lacked the check that `rtcwake` armed
 the alarm; otherwise the same).
@@ -1767,7 +1778,9 @@ the alarm; otherwise the same).
   change power state`, `Link Active`, `BME` or UFS error-handler line, the
   root port in D0 and the endpoint in D3hot at the end, and both
   `systemctl reboot`s stopped the modem cleanly (`CP OFFLINE`, the marker
-  removed), back in 25 s.
+  removed), back in 25 s. Mobile data was checked after every sleep here,
+  but with the data service stopped, so not in the shape that lost it on
+  the 7 Pro (below).
 - **With Wi-Fi connected and the data service as on main, every request is
   refused**: those 14 were all there were. At logind's sleep announcement NetworkManager takes
   `wlan0` down, the bearer's metric-700 default route is the only one
@@ -1791,7 +1804,16 @@ the alarm; otherwise the same).
   no bad line in the kernel log of the boot (the list above, plus oops,
   warning and RCU stall). Entry took 0.52 to 0.68 s to the noirq stage and
   resume 0.72 to 0.87 s by the kernel's stamps. The reboot after it
-  stopped the modem cleanly.
+  stopped the modem cleanly. **Where data was checked:** once, at the end.
+  At every wake Wi-Fi was the first route and the bearer's was behind it,
+  so the night doesn't show whether data over the bearer answered just
+  after each wake, which is what failed on the 7 Pro. The boot's kernel
+  log, read again on 11-15, has 1,205 `Reserve doorbell interrupt` lines,
+  1,142 of them `PCI not powered on`, the line the 7 Pro logged while its
+  data was down; here data answered at the end. The daily kernel logs the
+  same line awake with no sleep at all (23 to 97 in four boots of 7 to 44
+  minutes on 11-13 and 11-14), so on the 9a the line alone doesn't mark
+  lost data.
 - **One hang, awake, on this build, not understood.** The evening before
   the night run, a boot that had run 52 requests (49 entered, 3 refused)
   stopped 20.4 s after a sleep had ended normally: the console's last
@@ -1828,7 +1850,8 @@ the alarm; otherwise the same).
   power-ups, where the modem on its "screen on" reports does about 49 a
   minute. The route came back behind Wi-Fi 30 of 30 times. After each
   sleep the CP was ONLINE with no failed poll, and `ping -I rmnet0` got 5
-  of 5 at the end.
+  of 5 at the end, with Wi-Fi the first route; data wasn't checked after
+  each wake.
 
 - **A call and a text wake the sleeping palmtop** (2026-11-14, the same
   build and package; the owner called and texted from another phone, the
@@ -1847,15 +1870,19 @@ the alarm; otherwise the same).
   a minute, and three sleep requests in a row were called off. Not seen
   again in three more calls into a sleep.
 
-What this leaves before the modem's inhibitor can go on the 9a: #232 in
-the published kernel and the zumapro line after it (its own small pull
-request, as #232's author asked); the hang above understood, or at least
-counted on a build without #232; omarchy-mobile#556 merged, which
-carries both the screen state and the route change, with `follow_screen`
-turned on for the 9a; a stale call ended without the owner's help
-(#729), since it keeps the palmtop awake; and what no run here tested: a
-call answered after it woke the palmtop, a sleep of hours, and a sleep
-off the charger.
+What this leaves before the modem's inhibitor can go on the 9a: a release
+kernel with the zumapro guard (#232 is in kernel-2026.11.15, #258 merged on
+2026-11-15 and is in no release yet); the hang above understood, or at
+least counted on a build without #232; `follow_screen` turned on for the
+9a (#556 is in main since #791); a stale call ended without the owner's
+help (#729), since it keeps the palmtop awake; and what no run here
+tested: **mobile data in the shape that lost it on the 7 Pro** (#799):
+Wi-Fi off for the sleeps so the bearer is the only route, RTC wakes, a
+ping and a DNS lookup over `rmnet0` a few seconds after every timer wake,
+and the boot's count of `Reserve doorbell interrupt` and `PCI not powered
+on`. `modem-sleep-series.sh` with `WIFI=off` does all of that, checks data
+5 s after every wake, and refuses to start, and stops, off the charger.
+Then a call answered after it woke the palmtop, and a sleep of hours.
 
 ### M2: the link only (modem link driver, `allow_hw=1`; risk: medium)
 
@@ -2046,7 +2073,7 @@ Preconditions, as SLEEP-PLAN's:
 | The bridge for apps | `omamobile-mmd` not installed | not part of this test (T2 follows a passing run) |
 | The link watcher | `omamobile-modem` 0.1.9 (<https://github.com/derekross/omarchy-mobile/pull/148>) keeps one open file on the boot device, which retires the old open-and-close watcher that woke the CP link every half second; 0.1.10 (<https://github.com/derekross/omarchy-mobile/pull/163>) adds the once-per-boot refusal | with the CP ONLINE the link idles and cycles on its own; on 2026-10-29 the palmtop hung eight times in a morning with the modem up for hours, the early ones tied to the watcher's open and close of the boot device (the console logs end on CPIF's `cp2ap_wakeup` wake toggles; `logs/tegu-review-20261029/hangs/`). The run uses 0.1.10 (SIM-1). Keep the session short (under an hour) and attended; `cpif-keep-link.ko` (G3-L1 step 1, untested) is the candidate fix, not part of this run |
 | Call audio | the AoC card is `google,tegu-aoc-snd-card` with its EP PCMs, but `omamobile-speaker-protection` is inactive and the amplifiers are TAS2572, which `voice_audio.py`'s earpiece checks (CS35L41 controls) don't know | **no audio routing exists on the 9a: calls are not part of this test.** `[audio] card = none` stays; a signalling-only call (cheetah's S10) is a later, separate step |
-| Suspend | unqualified with the modem on (section "Suspend with the modem on"); the start script's inhibitor blocks `systemctl suspend` for the boot. On a test kernel with linux-omarchy-mobile#232 and the sleep guard on for zumapro, 299 of 300 sleeps were entered and woke with the phone service kept (2026-11-13) | charger in for the whole test |
+| Suspend | unqualified with the modem on (section "Suspend with the modem on"); the start script's inhibitor blocks `systemctl suspend` for the boot. On a test kernel with linux-omarchy-mobile#232 and the sleep guard on for zumapro, 299 of 300 sleeps were entered and woke with the phone service kept (2026-11-13; Wi-Fi connected, mobile data checked at the end) | charger in for the whole test |
 | Identifiers | the ICCID (printed on the card), IMSI, IMEI, phone number, the carrier's name, its APN, IP addresses and message text never go into the repository, a log excerpt or a screenshot | sitd logs states and codes only; before quoting a log: `grep -nE '[0-9]{7,}|\+[0-9]|[0-9a-f]{2}(:[0-9a-f]{2}){5}|@' logs/<file>` must show nothing you would quote |
 
 **What to expect, honestly:** SIM detection likely (GET_SIM_STATUS has

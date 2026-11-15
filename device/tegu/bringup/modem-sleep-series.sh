@@ -10,12 +10,18 @@
 # alarm is the wake. The cellular data service is started if it isn't running, and the
 # default routes are logged before each request: with Wi-Fi connected and the service
 # as on main, the bearer's route is the only one left at the freeze and every request
-# is refused (fixed by omarchy-mobile#556). 20 s after each request: the CP's state, sitd, its
-# failed polls, Wi-Fi and new UFS lines. Stops when the CP isn't ONLINE. On the charger.
-#   systemd-run --unit=x-modem-sleep-series /root/modem-sleep-series.sh [N] [S] [append]
+# is refused (fixed by omarchy-mobile#556). 5 s after each wake: a ping and a DNS lookup over the
+# bearer's interface (rmnet0), so mobile data is checked after every sleep, not only at the
+# end; 20 s after: the CP's state, sitd, its failed polls, Wi-Fi and new UFS lines. Stops
+# when the CP isn't ONLINE. WIFI=off turns the Wi-Fi radio off for the run (back on at the
+# end), so mobile data is the only route at each wake, the shape that lost data on the 7 Pro
+# (linux-omarchy-mobile#258). Refuses to start, and stops, unless the palmtop is charging.
+# The end counts the boot's "Reserve doorbell interrupt" and "PCI not powered on" lines.
+# Attended, on the charger, and the boot ends in a reboot (AGENTS.md, the 9a sleep entry):
+#   [WIFI=off] systemd-run --unit=x-modem-sleep-series /root/modem-sleep-series.sh [N] [S] [append]
 # The last step afterwards is "systemctl reboot", never reboot-to.
 L=/var/log/omamobile/modem-sleep-series.log; CP=/usr/lib/omamobile-vendor/omamobile-modem-cp
-N=${1:-20}; S=${2:-60}; H=1.1.1.1
+N=${1:-20}; S=${2:-60}; H=1.1.1.1; Q=example.com; BAT=/sys/class/power_supply/max77779-battery
 U='link startup failed|Host init failed|I/O error, dev|ufshcd_err_handler'
 say() { echo "$(date +%T) $*" >> $L; sync "$L" 2>/dev/null; }
 screen() { python3 - "$1" <<'PY' 2>&1 | tail -1
@@ -35,14 +41,44 @@ idle() { # wait until the link has been down for 5 s; prints how long it took
   done
   echo "not idle in 60 s"; return 1
 }
+# The battery's average current is positive while it charges (the 9a lists no charger supply).
+charging() { (( $(cat $BAT/current_avg 2>/dev/null || echo 0) > 0 )); }
+data() { # a ping and a DNS lookup over the bearer's interface
+  [[ -n $IF ]] || { echo "no bearer interface"; return; }
+  echo "ping $(ping -c 3 -W 3 -I "$IF" "$H" 2>&1 | grep -o '[0-9]* received'), dns $(dns)"
+}
+dns() { # one A query for $Q to the bearer's first DNS server, sent out of $IF itself: with Wi-Fi
+  # connected the bearer's link is not resolved's default route, so resolvectl won't use it
+  local srv; srv=$(resolvectl dns "$IF" 2>/dev/null | awk '{print $4}')
+  [[ -n $srv ]] || { echo "no server"; return; }
+  python3 - "$IF" "$srv" "$Q" <<'PY' 2>&1 | tail -1
+import socket, struct, sys
+dev, srv, name = sys.argv[1:4]
+fam = socket.AF_INET6 if ':' in srv else socket.AF_INET
+q = struct.pack('>HHHHHH', 0x5a5a, 0x0100, 1, 0, 0, 0)
+q += b''.join(bytes([len(x)]) + x.encode() for x in name.split('.')) + b'\0' + struct.pack('>HH', 1, 1)
+s = socket.socket(fam, socket.SOCK_DGRAM); s.settimeout(4)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, dev.encode())
+try:
+    s.sendto(q, (srv, 53)); r = s.recv(512)
+    ok = r[:2] == q[:2] and r[3] & 0x0f == 0 and struct.unpack('>H', r[6:8])[0] > 0
+    print('ok' if ok else 'bad answer')
+except OSError as e:
+    print('fail (%s)' % (e.strerror or 'timeout'))
+PY
+}
 [[ -e /sys/class/rtc/rtc0/wakealarm ]] || { echo "no RTC wake alarm on this kernel" >&2; exit 1; }
+charging || { echo "not charging: run this on the charger" >&2; exit 1; }
 [[ ${3:-} == append ]] || : > $L
 systemctl is-active -q omamobile-sit-data || { systemctl start omamobile-sit-data; sleep 8; }
-say "$(uname -r) $(uname -v | cut -d' ' -f1); the data service: $(systemctl is-active omamobile-sit-data), device $(cat /run/omamobile-sit/data-interface-kept 2>/dev/null), default via $(ip route show default | awk '{print $5}' | paste -sd,); $(st)"
+[[ ${WIFI:-} == off ]] && { nmcli radio wifi off; sleep 10; }
+IF=$(cat /run/omamobile-sit/data-interface /run/omamobile-sit/data-interface-kept 2>/dev/null | head -1)
+say "$(uname -r) $(uname -v | cut -d' ' -f1); the data service: $(systemctl is-active omamobile-sit-data), device ${IF:-none}, Wi-Fi radio $(nmcli radio wifi), default via $(ip route show default | awk '{print $5}' | paste -sd,); $(st); data: $(data)"
 sleep 10
 for n in $(seq 1 "$N"); do
   s0=$(cat /sys/power/suspend_stats/success); f0=$(cat /sys/power/suspend_stats/fail); u0=$(journalctl -b -k --no-pager | grep -cE "$U")
-  for _ in $(seq 1 30); do ip route show default | grep -c wlan0 >/dev/null && break; sleep 1; done
+  charging || { say "sleep $n: not charging any more: stop"; break; }
+  [[ ${WIFI:-} == off ]] || for _ in $(seq 1 30); do ip route show default | grep -c wlan0 >/dev/null && break; sleep 1; done
   say "sleep $n: default via $(ip route show default | awk '{print $5}' | paste -sd,); screen off -> $(screen off); link: $(idle); link-ups in the last 20 s: $(journalctl -b -k --no-pager --since '-20 s' | grep -c 'link up: Gen3')"
   rtcwake -m no -s "$S" >/dev/null 2>&1 || { say "sleep $n: rtcwake could not arm the alarm: stop"; break; }
   r0=$(cat /sys/class/rtc/rtc0/since_epoch)
@@ -55,13 +91,15 @@ for n in $(seq 1 "$N"); do
   elif [[ $(cat /sys/power/suspend_stats/fail) != "$f0" ]]; then res="refused (fail $(cat /sys/power/suspend_stats/fail))"
   else res="no change in suspend_stats after 150 s"; fi
   say "sleep $n: $res; screen on -> $(screen on)"
-  sleep 20
+  sleep 5
+  say "sleep $n, 5 s after: default via $(ip route show default | awk '{print $5}' | paste -sd,); data: $(data)"
+  sleep 15
   say "sleep $n, 20 s after: $(st), new ufs lines $(( $(journalctl -b -k --no-pager | grep -cE "$U") - u0 )), sitd's last line: $(journalctl -b -u omamobile-sitd --no-pager | tail -1 | cut -c40-120)"
   [[ $($CP state 2>&1 | tail -1) == ONLINE ]] || { say "the CP is not ONLINE: stop"; break; }
 done
-IF=$(cat /run/omamobile-sit/data-interface-kept 2>/dev/null)
 [[ -n $IF ]] && say "ping over $IF: $(ping -c 5 -W 3 -I "$IF" "$H" 2>&1 | grep -o '[0-9]* received')"
-say "end: $(st)"
+[[ ${WIFI:-} == off ]] && nmcli radio wifi on
+say "end: $(st); in the boot's kernel log: Reserve doorbell interrupt $(journalctl -b -k --no-pager | grep -c 'Reserve doorbell interrupt'), PCI not powered on $(journalctl -b -k --no-pager | grep -c 'PCI not powered on')"
 say "kernel lines of the boot:"
 journalctl -b -k --no-pager | grep -E "sleep refused|Unable to change power state|Link Active not set|Can.t set D0|BME is not set|link-down recovery|suspend_cp: abort|failed to suspend" | sed -E 's/^.{16}[^ ]+ kernel: //' | cut -c1-110 | sort | uniq -c | sort -rn | head -20 >> $L
 say "done"
