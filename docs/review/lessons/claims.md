@@ -3,6 +3,71 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-775. A new modem request's payload is compared with the research notes
+  and the sibling ports' plans before it is called "qualified".** #669 sends
+  SET_MODEM_CONFIG 0 as "single modem", while MODEM-SIT-RESEARCH reads the
+  byte as the stack count and raven's plan records stock sending 1. *Check:*
+  `git grep -n '<request name>\|<id>' origin/main -- device/` for every SIT
+  id a PR adds to the allow-list, and lay the PR's bytes next to each
+  recorded value. Extends L-61 and L-544. *From:* #669, round 52, 2026-11-11.
+- **L-774. A docs line that names another PR's or the kernel's state is
+  checked against that state at merge time, in both directions, and main is
+  grepped for a PR's number before it is closed.** #98's "not yet in a
+  published kernel" went wrong once `kernel-2026.11.08` took the commit; #505
+  calls kernel #220 "in review" though our order merges #220 first; DEVICES.md
+  still says "in review (#25)". *Check:* `git -C <kernel> log <newest kernel-*
+  tag> --oneline --grep '<subject>'` and
+  `packages/linux-omamobile/prebuilt/SOURCE`; `git grep -n '#<N>\|pull/<N>'
+  origin/main -- docs README.md device`. Extends L-28 and L-645. *From:* #98,
+  #505, #25, round 52, 2026-11-11.
+- **L-751. A notes PR that turns an open question into a result is diffed for the caveat it removes.** #650 replaced "larger than the glass, so no size goes into the board file yet" with "the board file carries it"; the removed half was the reason the value had been held, and it still applied. *Check:* `git diff origin/main <head> -- device/<x>/NOTES.md | grep '^-'`, and for every removed "so … not yet" sentence find the line that answers it. Extends L-339 and L-486. *From:* #650 with kernel #241, round 51, 2026-11-11.
+- **L-750. A provenance clause added to a results sentence is read for which run the remaining numbers belong to.** #655 put "the report pasted on #453 is from a later boot" in front of "every required check ok, … hottest zone 54 C", which were the lost run's figures; the pasted report reads 51 C. *Check:* after any "this came from another run" edit, compare each number left in the sentence with the cited report. Extends L-648 and L-313. *From:* #655, round 51, 2026-11-11.
+- **L-749. When a fix makes a silent path audible, every trigger of that path is listed, and a proof by a stand-in event names which trigger it used.** #389's crash notice had never reached a session, so nobody saw that the watcher takes the same branch on a clean stop; the contributor proved the fix with a stop, and the proof was the bug: "The modem crashed" on every deliberate stop. *Check:* read the condition that fires the notice and list the ordinary events that satisfy it (stop, reboot, suspend); ask for the marker that tells them apart. Extends L-564 and L-298. *From:* #389 with issue #532, round 51, 2026-11-11.
+- **L-748. On a rebase-merged PR, test claims are read in the commit messages and compared with the description.** Kernel #242's description reported a hardware run that two of its commit messages said had not happened ("has not been exercised on hardware"); the description never lands, the messages do. *Check:* grep each commit body for "not exercised", "untested" and "tested", set it against the description's test section, and ask for one account with the kernel release. Extends L-341 and L-29. *From:* kernel #242, round 51, 2026-11-11.
+- **L-747. An A/B run on local plugin copies is void unless the shell was restarted between the sides.** The shell's local-plugin reload keeps the component it compiled first (AGENTS "Quickshell plugins"), so #658's first measurements compared a switcher with itself; the author withdrew them. *Check:* for every on-phone comparison of two plugin versions, look for `omarchy-restart-shell` before each run in the description, and ask when it's missing. Extends L-392. *From:* #658, round 51, 2026-11-11.
+- **L-746. A no-wake reported from the laptop side is not a data point until that boot's journal shows what started the sleep.** From the laptop, a sleep with no alarm and a hang look the same: on kernel #224 a silent USB link at the 94th sleep was reported as the hang and corrected eight hours later, when the journal showed `omamobile-sleepd` putting a dark resume back to sleep with no alarm armed. *Check:* ask for the boot's last `PM: suspend entry` with the requester's line before it, whether auto-sleep was on and whether a block inhibitor was held between cycles; hold the count until then. Extends L-345. *From:* kernel #224 with #659, round 51, 2026-11-11.
+- **L-724. A contributor's test table is read with its screenshots, and each
+  row for whether its fixture could show the failure.** #553's "hardware test"
+  was simulated touch (uinput), said only in the images; "drag from the last
+  network scrolls" ran with three networks, where nothing scrolls; and its two
+  fails started on the home pill, outside the surface under test. *Check:*
+  open one image per kind of scenario, name the state that would make the bug
+  visible and whether the picture shows it, and find which surface owns the
+  touched pixels before blaming the PR. Extends L-29 and L-454. *From:* #553,
+  round 50.
+- **L-723. Before a long-running plan PR merges, its "what is left" list is
+  read against today's merges and the author's other threads, though no round
+  diff touches it.** #409's list still said a hook "waits for its merge" (#591
+  had merged that day) and that sleep with the modem up was "never run with
+  the fixes", while the author's #601 recorded 25 such requests. *Check:* `gh
+  pr view` each PR an item names, and search the author's open PRs and issues
+  for each item's subject. Extends L-559 and L-435. *From:* #409 with #601,
+  round 50.
+- **L-693. A restored record of a protected write is checked against what the
+  named tool could have done.** #436's notes say device-lynx 0.2.0's
+  `omamobile-bootctl` changed byte `0x35` on a 3.11 unit; 0.2.0 refuses 3.11,
+  and the bytes quoted are the test fixture's. *Check:* `git show <that
+  version>:<tool>` for the guard, and compare the quoted bytes with the unit's
+  other readings and with the test fixtures. Extends L-267, L-285 and L-488.
+  *From:* #436, round 49, 2026-11-10.
+- **L-692. An agent or cloud-client integration is reviewed from the process
+  it starts, and a run against an inert stand-in doesn't verify it against the
+  client.** For #614 the answers came from the bridge's imports (no network
+  module), the exact argv and where the binary is found, and the flags that
+  set sandbox and approval; its 55 test cases used a stand-in that accepts any
+  argv. *Check:* `grep -n 'Popen\|subprocess.run\|execDetached'`, write down
+  argv, cwd and env, confirm nothing lands in `depends`, `ROOTFS_PACKAGES` or
+  an installer, and ask for one recorded run with the real binary and its
+  version. Extends L-454 and L-651. *From:* #614, round 49, 2026-11-10.
+- **L-691. A discharge record for a low-battery fix gives the cell voltage at
+  0 % and the consumer's reaction, not only the percentage curve.** Kernel
+  #234's default-model gauge read 10 % five minutes before 0 %, yet reached
+  0 % at 3.2 V with the phone running, so a percentage-keyed shutdown still
+  comes in time; but the run was plugged in a minute later and nothing shows
+  UPower acting. *Check:* ask for `voltage_now` and the load at the last
+  non-zero sample and at 0 %, and the consumer's log line there (journal,
+  `upower -d`). Extends L-629 and L-414. *From:* kernel #234, round 49,
+  2026-11-10.
 - **L-344. A console quoted as "just before" a failure is checked against
   that console's own timestamps.** The 9a's owner cited ACPM channel timeouts as
   preceding the 9a's UFS resume failure in #152; that console has no ACPM
@@ -34,7 +99,6 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   array is the point. *Check:* find where the index comes from before
   reporting the sharing. *From:* the 9a's sleep hang, 2026-10-30, a
   candidate dropped before it reached a PR.
-
 - **L-343. A `-dirty` release that stays the same across a fix doesn't
   identify the tested build.** The 9a's NFC runs without the fix (10-28) and
   with it (10-29) report the same `…-dirty` release, and #137 quoted that
@@ -168,7 +232,6 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
 - **L-29. PR bodies written with an AI over-claim.** "checkpatch clean",
   "dtbs_check clean", "tested" were each untrue at least once this week.
   Re-run the claim; never quote it. *From:* kernel #10-#12, #27.
-
 - **L-45. A rebased companion's evidence still counts if the tested commit
   and the new head don't differ.** *Check:* `git diff <tested> <head> --
   <files the test exercised>`; empty means the test stands, otherwise ask
@@ -177,14 +240,12 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   <new>` empty, same parent) carries the evidence over only while the base's
   blob for each touched file is unchanged too (`git rev-parse <old base>:<f>
   <new base>:<f>`).
-
 - **L-46. A phone's settings reflect that phone's image, not the one we
   build.** A contributor's `busctl` value (`HandlePowerKey=suspend`) came from
   a local drop-in, while our image's `omarchy-settings` sets `ignore`.
   *Check:* compare reported values with what `rootfs/packages.base`
   installs before accepting or correcting a note about a default (with
   L-32). *From:* #29, round 2.
-
 - **L-61. "Private kernel" evidence isn't evidence.** Ask for the public
   source (Google's GPL tree, the stock DT lines, upstream) behind each value.
   *From:* kernel #28-#31.
@@ -230,74 +291,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   reset. *Check:* which check covers the calibration area, and whether it
   needs a reset, before a plan says a read answers "is it valid". *From:*
   #35, round 10.
-- **L-130. Before putting a bootloader requirement down to the SoC,
-  compare the reference phone's stock images.** Cheetah's stock vbmeta chains
-  `boot` and `init_boot` with the same rollback index and ABL build as lynx,
-  yet boots footerless images: lynx's AVB footers are its ABL's
-  configuration. *Check:* `avbtool info_image` on the stock vbmeta in
-  `~/android/reference` (read-only). *From:* #37.
-  (Corrected 2026-10-28, C-14: the comparison used the factory vbmeta, not
-  the phone's non-stock `vbmeta_b`; a stock `vbmeta_b` needs footers on
-  cheetah too.)
-- **L-131. Evidence cites the tested file's blob id, not a commit id.**
-  `git rev-parse <commit>:<path>` survives the folds and rebases we ask for,
-  and ties an out-of-tree module to its source. Extends L-45. *From:* kernel
-  #38 with #39.
-- **L-132. A device can appear twice on DEVICES.md (matrix row and Wanted
-  list); an edit to one must agree with the other**, and the plain words that
-  say the evidence isn't public must survive. *Check:* `grep -n <codename>
-  docs/DEVICES.md`. Extends L-28, L-66 and L-107. *From:* #39.
-- **L-149. A descriptor's overlays and config symbols must exist in the
-  published kernel or an open kernel PR.** raven's targeted nodes and
-  options in neither, so its images can't be built from our trees. *Check:*
-  `git grep` each overlay target and `CONFIG_` symbol against
-  `github/omamobile` and the open PR heads; whatever is missing means the
-  matrix cells name the port branch. Extends L-28 and L-61. *From:* #41,
-  round 12.
-- **L-150. Read every plan in the PR before quoting one plan's status.**
-  raven's BLUETOOTH-PLAN said "broken" while a later POWER-PLAN result said it
-  "works again". *Check:* `git grep -n` the subsystem across the PR's plans
-  and go by the newest dated result. *From:* #41, round 12.
-- **L-186. A slot A fallback record without Android symptoms makes "what is
-  on slot A?" the first question.** #35's answer to "did the lock screen
-  appear, did it offer to reset `userdata`" was "slot A is another Omarchy
-  install", which the notes on main contradicted and which means the phone
-  has no Android fallback and that slot A's images were written. *Check:*
-  whenever a fallback is reported, ask for the OS on slot A, when and how it
-  got there, and whether its initramfs has the storage guard; a Linux slot A
-  is a §3.1 event (L-135) even when nothing else went wrong. *From:* #35,
-  round 20.
-- **L-187. Check a plan's prose against the descriptor at the same head.**
-  #38's `BRINGUP-M1.md` still said `SIMPLEFB_TRIG_CON` is unset while the
-  same commit's `device.conf` set it. *Check:* `grep -n <KEY>
-  device/<x>/*.md device/<x>/device.conf` for every descriptor key a PR adds
-  or removes. *From:* #38, round 20.
-- **L-188. An AGENTS.md gotcha is checked against the plan it cites, in the
-  same PR.** #72 added "on the 9a it never woke" to a shared gotcha with no
-  plan line about suspend anywhere in its 1,220 lines. *Check:* `grep -i` the
-  gotcha's key words over the PR's plans; a gotcha without a dated result and
-  `uname -r` waits for them. Extends L-109. *From:* #72, round 20.
-- **L-189. A supplier-based property's evidence names the supplier driver,
-  and that driver's PR.** #66's "Charging / Full / Not charging" came from a
-  MAX77779 charger driver that is in no tree or PR of ours; on our tree the
-  property stays Unknown until it lands. *Check:* `git grep` the supplier's
-  compatible or driver name across the base and the open heads before
-  quoting the result. Extends L-61. *From:* kernel #66, round 20.
-- **L-190. Before accepting a plan's "next" step, check the plan's own
-  negative results and the device package for it.** Issue #77 proposed a
-  longer `BT_REG_ON` hold and a boot-time power-cycle retry; raven's
-  BLUETOOTH-PLAN had already held the line low for seconds without effect,
-  and `omamobile-bt-addr` already rebinds the driver up to three times a
-  boot. The vendor driver's own number (30 ms) is what kernel #6 copied; the
-  HAL's 100 ms is a different step. *Check:* grep the plan's result tables
-  and the package's `bin/` for the mechanism, and the vendor driver for the
-  number, before asking for or agreeing to a change. Extends L-61 and L-147.
-  *From:* issue #77, round 20.
-- **L-191. A PR's premise about a phone is checked against that device's
-  plans and the author's own words elsewhere.** #69 said husky "already shows
-  the Omarchy clock" and kernel #64 that an `ioremap` "reset the phone",
-  while DEVICES.md and UFS-PLAN show no session has run and the author said
-  on the device's issue that nothing was flashed; #69 also hard-coded
-  another contributor's kernel release. *Check:* grep the release string and
-  the claims in `device/<codename>/*`, and read the author's comments on the
-  device's issue. Extends L-61 and L-109. *From:* kernel #64, #69, round 20.

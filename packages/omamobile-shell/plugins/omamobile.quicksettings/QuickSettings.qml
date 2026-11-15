@@ -814,7 +814,9 @@ Item {
 
   function refreshDnd() {
     if (dndProc.running) return
-    dndProc.command = ["qs", "ipc", "-p", Quickshell.shellDir, "call", "notifications", "dndState"]
+    // Omarchy 4.5 calls the read isDnd; 4.0 called it dndState, and each
+    // answers "Function not found" to the other's name. Ask 4.5's first.
+    dndProc.command = ["sh", "-c", "for m in isDnd dndState; do v=$(qs ipc -p \"$1\" call notifications $m 2>/dev/null); case $v in on|off) echo $v; exit 0;; esac; done", "sh", Quickshell.shellDir]
     dndProc.running = true
   }
 
@@ -1059,8 +1061,10 @@ Item {
     function toggle() { if (available) root.runTileAction("mobile-data", !enabled) }
     // The chevron (and a long press): the Mobile network page
     // (omamobile.mobilenetwork), through the CLI, since a plugin only
-    // summons its own panels. Shown with a modem only.
-    readonly property bool details: available
+    // summons its own panels. Shown with a modem, and with one the owner
+    // switched off on that page, which is where it is switched back on.
+    readonly property bool details: available || detailsUnavailable
+    readonly property bool detailsUnavailable: !available && root.probed.data_switch === "off"
     function openDetails() {
       root.dismiss()
       Quickshell.execDetached(["omarchy-shell", "shell", "summon", "omamobile.mobilenetwork", "{}"])
@@ -2111,6 +2115,7 @@ Item {
     available: !!backend && backend.available
     busy: !!backend && backend.busy === true
     details: !!backend && backend.details === true
+    detailsUnavailable: !!backend && backend.detailsUnavailable === true
     longPress: !!backend && backend.longPress === true
     onClicked: if (backend) backend.toggle()
     onDetailsRequested: if (backend && typeof backend.openDetails === "function") backend.openDetails()

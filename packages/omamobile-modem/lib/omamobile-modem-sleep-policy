@@ -1,0 +1,118 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-modem-sleep-policy: may this phone sleep with the modem up?
+#
+#   omamobile-modem-sleep-policy check     exit 0: yes, the modem starts
+#                                          without its sleep inhibitor;
+#                                          exit 1: no, the inhibitor holds
+#   omamobile-modem-sleep-policy inhibit   the same answer inverted, for
+#                                          omamobile-modem-inhibit.service's
+#                                          ExecCondition=: exit 0 holds
+#                                          the lock, exit 1 skips the unit
+#
+# Either way one line on stderr says why. Yes needs all three of:
+#
+# 1. The device's word. A device package whose phone passed suspend with the
+#    modem up ships /usr/lib/omamobile-modem/suspend-verified (a comment-only
+#    file): device-cheetah, the Pixel 7 Pro, since MODEM-PLAN M6 passed on the
+#    reference phone on 2026-11-14 (device/cheetah/SUSPEND-PLAN.md). No other
+#    device ships it, so on the 9a and the 6 Pro the inhibitor stays. The
+#    attended runbook's pair from before (the owner's
+#    /etc/omamobile/modem-suspend-enable beside a device's
+#    /usr/lib/omamobile-modem/suspend-runbook) still counts as the device's
+#    word; the owner's file alone never does.
+# 2. Not the owner's no: /etc/omamobile/modem-suspend-disable keeps the
+#    inhibitor whatever the device says.
+# 3. The kernel's early refusal (linux-omarchy-mobile#232, da171eae4cb7,
+#    kernel-2026.11.15 and later): the modem's link driver, pcie-gs201-cp,
+#    refuses a sleep from a PM_SUSPEND_PREPARE notifier while the link is up.
+#    Without it a sleep with the link up is refused only at noirq, after the
+#    freeze, and on 2026-11-13 a run of such refusals left mobile data dead
+#    until a reboot (SUSPEND-PLAN). The kernel exposes no sysfs attribute or
+#    module parameter for it, and its release strings don't order (a
+#    development kernel is push1-g<sha>), so this reads the running kernel's
+#    own link module (modinfo -n, before the start script loads it): the
+#    notifier's log line ("sleep refused before the freeze") or its function
+#    name (gs201_pcie_cp_pm_notify, kept in the symbol table: the modules are
+#    stripped of debug information only). An older kernel, an older slot or
+#    a module that can't be found or read keeps the inhibitor.
+#
+# Anything this script can't decide is a no: check exits 0 only on a yes,
+# and inhibit exits 1 (skip the lock) only on that same yes. If the script is
+# missing or can't run, ExecCondition= skips the lock (systemd treats exit
+# codes 1-254, 203 for a failed exec among them, as a skip), but the start
+# script's own call fails too, so it waits for a lock that never comes and
+# loads no driver ("Off: no sleep inhibitor"): the phone may sleep, without
+# the modem. No set -e here: an error must fall through to the no.
+set -u
+
+VERIFIED=${OMAMOBILE_MODEM_SUSPEND_VERIFIED:-/usr/lib/omamobile-modem/suspend-verified}
+RUNBOOK=${OMAMOBILE_MODEM_SUSPEND_RUNBOOK:-/usr/lib/omamobile-modem/suspend-runbook}
+ENABLE=${OMAMOBILE_MODEM_SUSPEND_ENABLE:-/etc/omamobile/modem-suspend-enable}
+DISABLE=${OMAMOBILE_MODEM_SUSPEND_DISABLE:-/etc/omamobile/modem-suspend-disable}
+# The link module's file for the running kernel (the test names its own).
+LINK_MODULE=${OMAMOBILE_MODEM_LINK_MODULE:-}
+LINK_MODULE_NAME=pcie_gs201_cp
+
+say() { printf 'omamobile-modem: %s\n' "$*" >&2; }
+
+# The module file, decompressed if it is (the kernel's own modules aren't
+# compressed today; a package that compresses them must not turn a yes into
+# a no without saying so, nor a no into a yes).
+module_text() {
+  case $1 in
+    *.zst) zstd -dcq -- "$1" ;;
+    *.xz) xz -dc -- "$1" ;;
+    *.gz) gzip -dc -- "$1" ;;
+    *) cat -- "$1" ;;
+  esac
+}
+
+early_refusal() {
+  local mod=$LINK_MODULE n
+  if [[ -z $mod ]]; then
+    mod=$(modinfo -k "$(uname -r)" -n "$LINK_MODULE_NAME" 2>/dev/null) || mod=
+  fi
+  [[ -n $mod && -f $mod && -r $mod ]] || { why="the kernel's modem link module ($LINK_MODULE_NAME) wasn't found for $(uname -r)"; return 1; }
+  # grep -c, not -q: -q would end the pipe early (AGENTS.md, Userspace).
+  n=$(module_text "$mod" 2>/dev/null | grep -a -c -F -e 'sleep refused before the freeze' -e 'gs201_pcie_cp_pm_notify' 2>/dev/null) || n=0
+  [[ $n =~ ^[0-9]+$ && $n -gt 0 ]] ||
+    { why="the running kernel ($(uname -r)) lacks the modem link's early sleep refusal (linux-omarchy-mobile#232, kernel-2026.11.15 and later)"; return 1; }
+  return 0
+}
+
+# 0: the phone may sleep with the modem up; anything else: it may not. Sets
+# why either way.
+allowed() {
+  why=
+  if [[ -e $DISABLE ]]; then
+    why="$DISABLE: the owner keeps the modem's sleep inhibitor"
+    return 1
+  fi
+  if [[ -e $VERIFIED ]]; then
+    :
+  elif [[ -e $ENABLE && -e $RUNBOOK ]]; then
+    :
+  elif [[ -e $ENABLE ]]; then
+    why="$ENABLE ignored: this phone's device package doesn't declare suspend with the modem up verified ($VERIFIED); the sleep inhibitor stays"
+    return 1
+  else
+    why="suspend with the modem up isn't verified on this phone ($VERIFIED); the sleep inhibitor stays"
+    return 1
+  fi
+  early_refusal || { why="$why; the sleep inhibitor stays"; return 1; }
+  why="the phone may sleep with the modem up (the device declares it verified, MODEM-PLAN M6; the kernel refuses a sleep early while the link is up)"
+  return 0
+}
+
+why=
+case ${1:-} in
+  check)
+    if allowed; then say "$why"; exit 0; fi
+    say "${why:-undecided; the sleep inhibitor stays}"; exit 1 ;;
+  inhibit)
+    if allowed; then say "$why"; exit 1; fi
+    say "${why:-undecided; the sleep inhibitor stays}"; exit 0 ;;
+  *)
+    echo "Usage: omamobile-modem-sleep-policy check|inhibit" >&2; exit 2 ;;
+esac

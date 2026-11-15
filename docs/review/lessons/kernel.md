@@ -3,6 +3,39 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-777. A device that runs vendor firmware on untrusted input, enabled with
+  its IOMMU in bypass, is a security decision for the maintainer, and stock's
+  device tree says what confines it.** #250's MFC parses browser video with
+  Google's closed firmware and DMA to all RAM below 4 GiB; stock's
+  `gs201-mfc.dtsi` puts two System MMUs and `samsung,tzmp` in front of it, and
+  `gs201-s2mpu.dtsi` two S2MPUs. The maintainer's decision (2026-11-15): such a
+  node stays `disabled`, and an omarchy-mobile overlay turns it on, until the
+  IOMMU is described. *Check:* for any new DMA master a board enables, grep
+  Google's SoC dtsi for its `iommus`, `s2mpu` and `tzmp` lines, say what
+  confines it in our tree (an IOMMU, a restricted pool, nothing), and ask for
+  the node disabled with an overlay unless something confines it. Extends the
+  Wi-Fi restricted-pool decision and L-2. *From:* kernel #250, round 57,
+  2026-11-14.
+- **L-766. A boot argument a board PR adds for safety is grepped against that
+  device's bring-up overlays, because an overlay's `/chosen/bootargs` replaces
+  the whole string.** Husky's `klog.dtso` and `panic-probe.dtso` (and akita's
+  `ufs-probe.dtso`) set their own `bootargs` without `mem_sleep_default`, so
+  a boot with one of them loses what kernel #244 adds. *Check:* `git grep -l
+  'bootargs =' origin/main -- device/<codename>` in omarchy-mobile, look for
+  the new argument in each hit, and name in the review the overlays that
+  reach the Arch session without it. Extends L-49, L-207 and L-315. *From:*
+  kernel #244, round 52, 2026-11-11.
+- **L-741. A panel size "from Google's panel driver" is checked against the diagonal and the same tree's touch node.** For akita, `panel-google-ak3b.c` says 70 x 149 mm, while 6.1 inches at 1080x2400 is about 64 x 141, and `zuma-akita-touch.dtsi` has `goodix,panel-height-mm = <141>`; the device's NOTES had held the value back for that reason. *Check:* compute `sqrt(w² + h²) / 25.4` against the marketed diagonal, grep the stock touch dtsi for `panel-height-mm`, and grep the device NOTES for an earlier hold. Narrows L-352. *From:* kernel #241 with #650, round 51, 2026-11-11.
+- **L-678. An enabled board node whose driver the shared config doesn't build
+  is inert only until the config PR, and its blacklist must reach phones
+  first.** Kernel #237 adds enabled GNSS nodes; #594 adds
+  `CONFIG_EXYNOS_GNSS_IF_SPI=m` and the blacklist together, but the kernel
+  package and the device package ship separately. *Check:* for each new
+  enabled node, grep the driver's Kconfig symbol in `kernel/configs/` and the
+  device's `kernel.config`; if absent, find the PR that adds it and the
+  modprobe guard, and put "device package no later than the kernel" in the
+  merge plan. Extends L-37 and L-387. *From:* kernel #237 with #594, round 49,
+  2026-11-10.
 - **L-332. A delayed "auto-off" work in a driver is checked for re-arm, cancel
   and remove order.** Kernel #126's LHBM timer used `schedule_delayed_work()`,
   a no-op while the work is pending, and never cancelled it on off, so an
@@ -184,7 +217,6 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   Google's tree for it, never from the other SoC. *Check:* compare against
   stock's node (USI6 on gs201: GIC SPI 679, `0x1014`). *From:* kernel #10
   (correct).
-
 - **L-52. Regulator nodes use the stock board's voltage, min = max.** A full
   selector range lets any consumer set any voltage; min = max also means
   registering writes nothing when the rail is already there. *Check:* the
@@ -356,21 +388,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   patch; compare each commit's lines per file, and where only hunks differ,
   apply to the base and compare the file. Extends L-62. *From:* kernel #9,
   round 12.
-- **L-141. A gs101 power domain turned off without its DTZPC save needs the
-  save before anything powers it back on.** André's driver skips the EL3
-  save and restore for a `google,gs101-pd` without `samsung,dtzpc`, so the
-  first consumer finds the block's TrustZone settings reset, and its
-  registers SError. *Check:* a new `power-domains = <&pd_…>` on gs101 comes
-  with `samsung,dtzpc` and the block's CMU in the same series. *From:*
-  kernel #9, round 12.
-- **L-142. An enable commit before the fix for a known-bad first version is
-  a bisect hazard.** #7's raven enable commit came before the tuning that
-  stopped boot-time thermal power-offs (3 of 4 boots). *Check:* when a body
-  says "the first version did X on the phone", find that commit and ask for
-  the board enable to land last. Extends L-123. *From:* kernel #7,
-  round 12.
-- **L-143. A Kconfig guard is checked by building with the guarded symbol
-  off.** `kernel-pr-check` builds with our config (SPI on), and a
-  single-object build compiles even a driver whose symbol is off. *Check:*
-  `scripts/config -d SPI`, build the object, and `llvm-nm | grep -i spi` is
-  empty. Extends L-20. *From:* kernel #8, round 12.

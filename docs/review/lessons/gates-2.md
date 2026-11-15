@@ -3,6 +3,68 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-145. CI checks a PR that edits a gate with that edit.** `checks.yml`
+  runs the PR's own `tools/pr-check`, so #41's new MAC exemption passed
+  itself. *Check:* run main's gate too, and review an exemption as a policy
+  change: test a line that mixes an exempt value with a real one. (Ours
+  dropped whole lines for the all-zeros exemption; since round 12 each
+  address is judged on its own.) Extends L-30. *From:* #41, round 12.
+- **L-146. CI doesn't parse UCM:** the runner has no `alsaucm`, and the test
+  skips silently. *Check:* parse UCM changes locally with `alsaucm` on a
+  virtual card, once per `If` branch. Extends L-103. *From:* #41,
+  round 12.
+- **L-154. `kernel-pr-check` builds the PR's own commits against their
+  merge base, so a fix that lands on the base after a PR branched never
+  reaches its CI until the PR is rebased.** A fresh `base.sha` doesn't change
+  the merge base, and a re-run replays the event's stale one. *Check:* gate
+  the PR rebased onto the current base (L-73) before asking for a rebase, and
+  say whether the rebase is needed for the code or only for CI. *From:*
+  kernel #43, round 13.
+- **L-155. A gate runs under every awk it will meet.** Round 12's MAC regex
+  used `(…){5}`, which mawk 1.3.4 (Debian, Ubuntu, our build container)
+  rejects, so `pr-check` failed every change there while CI's gawk passed.
+  *Check:* after any edit to a gate, run its tests in `omamobile-build:24.04`
+  too. Extends L-30. *From:* round 13.
+- **L-156. A bindings-only PR gets no `dtbs_check`** from CI or
+  `kernel-pr-check` ("device trees: none touched"), so no board's DTB is
+  checked against the new schema. *Check:* validate the affected boards'
+  DTBs by hand; dtschema's schema checks run in the container with a stub
+  `libfdt`, only `dt-validate` needs the real one. Extends L-126. *From:*
+  kernel #51, round 13.
+- **L-178. A rejected property in a dt-validate known-failure feed can read
+  "False schema does not allow 0", without the property's name.** A `prop:
+  false` under `then:` reports the value, not the key, so grepping the output
+  for the property name says "not rejected" when it was. *Check:* grep the
+  feed's output by node name and compare base against head line by line.
+  Extends L-102. *From:* kernel #63, round 20.
+- **L-179. Neither CI nor `kernel-pr-check` builds a series commit by
+  commit, and kernel PRs land commit by commit.** CONTRIBUTING §6.2 says each
+  commit must build; the gate builds the head's touched files only. *Check:*
+  for a rebase-merged series, check out each commit in a worktree on the
+  host and build that commit's touched objects in the container (a
+  worktree's `.git` file points at the host path, so `git checkout` inside
+  the container fails). Done by hand for #63's 14 commits. Extends L-123.
+  *From:* kernel #63, round 20.
+- **L-180. The gate's test-merge commits don't exist in the clone,** since
+  the container builds them in its own copy, so a later schema or DTB
+  comparison "on the test merge" makes its own tree with `git merge-tree
+  --write-tree` (`git archive` takes a tree id). *From:* round 20.
+- **L-181. Grep a CI job's log for the gate's own `ok -`/`not ok` lines, not
+  for the check's name.** The kernel job is named "Kernel (sign-offs,
+  checkpatch, W=1, dtbs_check)" and `gh run view --log` prefixes every line
+  with it, so a grep for `dtbs_check` matches everything and hides whether
+  dt-validate ran. Extends L-103. *From:* round 20.
+- **L-194. A review's clone goes on disk, and a gate's worktree is sparse:
+  the scratch `/tmp` is a 16 GB tmpfs shared by every parallel review.** A
+  `--depth 60` clone of the SM8150 tree for #52 and three full checkouts of
+  omarchy-mobile (about 1 GB each, `phone/screenshots` and all) each filled
+  it, and a command of another review lost its output. *Check:* `df -h` the
+  scratch volume before any clone or build over a few hundred MB; trees go
+  under `~/android/mainline/wt-review-<topic>`; a gate's checkout is `git
+  worktree add --no-checkout --detach`, `git sparse-checkout set --cone bin
+  device initramfs tests packages/<the ones the tests compare>`, `reset
+  --hard` (3.5 MB, and `tests/storage-guard`, `tests/simplefb-trigger` and
+  the package tests all run from it). *From:* #52, round 21.
 - **L-195. A follow-up round re-gates the merge first, even when the new
   commits only touch docs, because the base moves under the PR between
   rounds.** #82's first review found "none of the moved commits touch
