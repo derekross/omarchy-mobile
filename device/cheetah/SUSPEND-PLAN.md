@@ -1774,6 +1774,13 @@ the development channel: omamobile-device-cheetah 0.1.55, omamobile-shell
   and the ping ran 76 of 76 with no gap; 5/5 afterwards, IMS registered.
   The 2026-11-13 run on #232 alone lost data after six noirq refusals; the
   early refusal is what changed.
+  **The network wakes the phone (M6.3): passed.** Asleep with a 300 s alarm:
+  a text from another phone woke it after 35 s on cp2ap_wakeup and arrived
+  (stored, acknowledged, in Messages); a call woke it after 21 s on
+  cp2ap_wakeup and rang in the Phone app. A second call, answered: audio
+  both ways (the owner's word), and while it was up the call watch's
+  inhibitor refused `systemctl suspend`. **With these patches, sleep with
+  the modem up passed every step of the M6 runbook on the reference phone.**
 
 #### P8: standby numbers (risk: low; the human unplugs)
 
