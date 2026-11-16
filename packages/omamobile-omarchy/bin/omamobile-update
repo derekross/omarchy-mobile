@@ -404,6 +404,8 @@ def auto_write_conf(path=None):
         m = re.match(r'^AUTO_WRITE="?(yes|no)"?$', line)
         if m:
             value = m.group(1)
+        elif re.match(r'^SLOT="?(a|b)"?$', line):
+            continue
         elif not re.match(r'^AVB_KEY="?/[A-Za-z0-9_./-]+"?$', line) or ".." in line:
             return ""
     return value
