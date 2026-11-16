@@ -101,9 +101,9 @@ Step 2 of §7 changes what every phone boots (the init is in device-cheetah's bo
 | Step | What | Pass | Stop | Rollback | Risk |
 | --- | --- | --- | --- | --- | --- |
 | G0 | read only: `grep slot_suffix /proc/bootconfig`; for every `sd*` partition its `PARTNAME` and `ro` | `_b`; the five `_b` boot images and `userdata` `ro` 0, everything else 1 | another slot | none | none |
-| G1 | `bin/omamobile initramfs`, `images`, then `systemctl stop omamobile-modem` and `bin/omamobile push` | SSH back on the new boot id | no SSH after about a minute (the safety net crashes back to fastboot or slot A) | `bin/omamobile flash` of the last known-good set (built by the current tool, footers included) | low: the guard is the only change |
+| G1 | `bin/omamobile initramfs`, `images`, then `systemctl stop omamobile-modem` and `bin/omamobile push` | SSH back on the new boot id | no SSH after about a minute (the safety net crashes back to fastboot or slot A) | `bin/omamobile flash` of the last known-good set (built by the current tool, footers included); after a fallback to stock on slot A (`current-slot` a), `bin/omamobile flash --from-slot-a`, which warns before writing | low: the guard is the only change |
 | G2 | read only: `dmesg \| grep ufs-ro:`, G0's list again, `tools/phone-smoke` | "running from slot b", "allowlist: boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"; the same `ro` values as G0; the boot and storage guard rows ok | any `_a` partition `ro` 0, or a `_b` boot image `ro` 1: write nothing, flash back | as G1 | none |
-| G3 | a second `bin/omamobile push` of the same images | it writes and verifies through the guard, as before | a read-only refusal | as G1 | low |
+| G3 | a second `bin/omamobile push` of the same images | it writes and verifies through the guard, as before | a read-only refusal | as G1 (`flash`, or `flash --from-slot-a` after a fallback to slot A) | low |
 
 ## 7. The changes, in order
 
@@ -137,4 +137,5 @@ Step 2 of §7 changes what every phone boots (the init is in device-cheetah's bo
 6. **Version skew** fails closed both ways: old installers refuse format 2, old hooks refuse `SLOT=`; existing slot-B phones keep `SLOT=b` by default.
 7. **The modem's slot** while `b` is accepted (§4).
 8. **The reference phone ends with the release on A and the development system on B sharing one `userdata`.** How development continues is the maintainer's choice (likely `bin/omamobile flash` to B over the release root, or a separate development phone).
-9. **Secure mode later** writes `vbmeta_<cur>` and the custom key with no stock fallback on a locked phone: SECURITY-PLAN's wording changes, not its design.
+9. **A RAM boot (`fastboot boot`) with stock active on slot A now opens stock's `_a` boot images**: the bootloader names `_a`, and the running-slot guard maps the list to it. Before, such a boot opened slot B's. Nothing of ours writes there from a RAM boot (`push` requires `_b`, `omamobile-boot-update` requires its `SLOT`), but the guard no longer keeps stock's boot images read-only on it.
+10. **Secure mode later** writes `vbmeta_<cur>` and the custom key with no stock fallback on a locked phone: SECURITY-PLAN's wording changes, not its design.
