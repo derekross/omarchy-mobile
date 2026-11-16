@@ -229,6 +229,7 @@ grep -c 'objectName: "drawerHandle"' "$l" >/dev/null || fail "the drawer has a h
 # it takes no touch and draws nothing. The home screen doesn't scale under it
 # (widgets snapped between pixels as it animated).
 grep -c 'mask: Region { item: root.opened ? sheet : null }' "$l" >/dev/null || fail "the closed drawer takes no touch"
+grep -c 'if (root.appsRefreshQueued) return' "$l" >/dev/null || fail "a burst of app changes rebuilds the drawer once"
 # Nothing changes size as the drawer moves: the dock reserves nothing (the
 # home screen keeps its height free, dockInset), so its window never grows
 # under a settling drawer (a frame of the old buffer centred: the first row

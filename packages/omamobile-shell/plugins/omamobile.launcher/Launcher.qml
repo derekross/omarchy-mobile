@@ -109,6 +109,7 @@ Item {
   readonly property bool promptMode: LauncherModel.looksLikePrompt(query, apps.length, sentenceWords)
   readonly property bool hasQuery: query.trim().length > 0
 
+  property bool appsRefreshQueued: false
   function refreshApps() {
     // sortedEntries() yields ranked rows of { entry, score, ... }; the grid
     // wants the DesktopEntry objects themselves.
@@ -130,7 +131,18 @@ Item {
   Connections {
     target: root.appLibrary
     ignoreUnknownSignals: true
-    function onAppsChanged() { root.refreshApps() }
+    // One rescan of the desktop entries can say "changed" ten times in a
+    // row: Quickshell gives an app that has a copy in
+    // ~/.local/share/applications a new object at every rescan and swaps
+    // them one by one, and a rescan comes with every bash that starts (mise
+    // touches ~/.local/share, which it watches). Each one rebuilt the grid:
+    // ten rebuilds, ~120 ms on the main thread, each time a terminal opened
+    // (Pixel 7). Taken once, after the burst.
+    function onAppsChanged() {
+      if (root.appsRefreshQueued) return
+      root.appsRefreshQueued = true
+      Qt.callLater(function() { root.appsRefreshQueued = false; root.refreshApps() })
+    }
   }
 
   // ---------------------------------------------------------------- actions
