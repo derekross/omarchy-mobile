@@ -624,6 +624,16 @@ pack_initramfs_modules() {
   done
 }
 
+# Alpine package $1 unpacked into $2 (tar options after them), or what tar
+# said and a failure. GNU tar warns once per file about the pax keyword in
+# Alpine's packages (APK-TOOLS.checksum.SHA1), so its output is shown only
+# when the unpack fails.
+unpack_apk() {
+  local apk=$1 dir=$2 err
+  shift 2
+  err=$(tar -xzf "$apk" -C "$dir" "$@" 2>&1) || { printf '%s\n' "$err" >&2; return 1; }
+}
+
 cmd_initramfs() {
   local dl="$WORK/downloads/alpine" stage="$KERNEL_OUT/initramfs" ver=3.24.2
   local release=0
@@ -687,7 +697,8 @@ cmd_initramfs() {
   apks=$(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" dropbear kexec-tools e2fsprogs e2fsprogs-extra) ||
     die "tools/alpine-fetch.py failed for the initramfs's packages"
   for apk in $apks; do
-    tar -xzf "$apk" -C "$stage" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' 2>/dev/null || true
+    unpack_apk "$apk" "$stage" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' ||
+      die "could not unpack $apk for the initramfs"
   done
   # INITRAMFS_I2C_TOOLS=1: i2cget and i2cset (and their libi2c) for a device
   # whose init talks to a chip before any driver runs; nothing else from
@@ -698,7 +709,8 @@ cmd_initramfs() {
     apks=$(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" i2c-tools) ||
       { rm -rf "$i2c"; die "INITRAMFS_I2C_TOOLS: tools/alpine-fetch.py failed for i2c-tools"; }
     for apk in $apks; do
-      tar -xzf "$apk" -C "$i2c" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' 2>/dev/null || true
+      unpack_apk "$apk" "$i2c" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' ||
+        { rm -rf "$i2c"; die "INITRAMFS_I2C_TOOLS: could not unpack $apk"; }
     done
     for f in usr/sbin/i2cget usr/sbin/i2cset; do
       [[ -f $i2c/$f ]] || { rm -rf "$i2c"; die "INITRAMFS_I2C_TOOLS: no $f in Alpine's i2c-tools"; }
@@ -772,7 +784,7 @@ cmd_initramfs() {
       apks=$(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" musl-dev) ||
         die "tools/alpine-fetch.py failed for the musl sysroot's musl-dev"
       for apk in $apks; do
-        tar -xzf "$apk" -C "$sysroot" 2>/dev/null || true
+        unpack_apk "$apk" "$sysroot" || die "could not unpack $apk for the musl sysroot"
       done
     fi
     [[ -f $sysroot/usr/lib/libc.a ]] || die "alpine musl sysroot has no libc.a"

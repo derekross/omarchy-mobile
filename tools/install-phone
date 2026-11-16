@@ -825,6 +825,10 @@ product=$(var product)
 [[ $product == "$CODENAME" ]] || die "the phone is '${product:-unknown}', not $CODENAME (${D[NAME]:-}): wrong descriptor or wrong phone"
 [[ $(var unlocked) == yes ]] || die "the bootloader is locked: unlock it first (this erases the phone; see CONTRIBUTING.md)"
 current_slot=$(var current-slot)
+# Slot b is refused below without --reinstall, so a phone that doesn't say
+# which slot it runs from can't be let through as if it had said slot a
+[[ $current_slot == a || $current_slot == b ]] ||
+  die "the phone doesn't report its current slot as a or b (current-slot: '$current_slot'). Slot b is written, so the installer goes on only when it knows which slot the phone runs from"
 current_bl=$(var version-bootloader)
 [[ -n $current_bl ]] || die "the phone reports no version-bootloader"
 # Per-slot bootloader versions, where the bootloader reports them
@@ -834,15 +838,15 @@ if [[ -n $bl_a && -n $bl_b ]]; then
   [[ $bl_a == "$bl_b" ]] || die "the bootloader slots differ (a: $bl_a, b: $bl_b). $SLOTS_DIFFER"
   note "bootloader $bl_a on both slots"
 elif [[ -n $slots_match ]]; then
-  [[ $slots_match == "$current_bl" ]] || die "--bootloader-slots-match $slots_match, but slot ${current_slot:-?} has $current_bl"
-  note "bootloader $current_bl on slot ${current_slot:-?}; the other slot confirmed by you (--bootloader-slots-match)"
+  [[ $slots_match == "$current_bl" ]] || die "--bootloader-slots-match $slots_match, but slot $current_slot has $current_bl"
+  note "bootloader $current_bl on slot $current_slot; the other slot confirmed by you (--bootloader-slots-match)"
 elif [[ $current_slot == b && $reinstall == 1 ]]; then
   # The reinstall rule (decided 2026-11-13): the version reported is slot
   # B's own, the one this phone already starts from, and --set-active=b
   # below switches no slot, so no other bootloader comes into play
   note "bootloader $current_bl: slot B's bootloader, which the phone already runs; the install switches no slot (--reinstall)"
 else
-  unmeasured="the phone only reports slot ${current_slot:-?}'s bootloader ($current_bl). Setting slot B active runs slot B's bootloader, so both must match. Check the other slot (fastboot getvar version-bootloader while it is current), then rerun with --bootloader-slots-match $current_bl"
+  unmeasured="the phone only reports slot ${current_slot}'s bootloader ($current_bl). Setting slot B active runs slot B's bootloader, so both must match. Check the other slot (fastboot getvar version-bootloader while it is current), then rerun with --bootloader-slots-match $current_bl"
   # Today's stop, unless this device's descriptor turns the round trip on
   [[ $SLOT_PROBE == yes ]] || die "$unmeasured"
   if ((reinstall)); then
@@ -850,7 +854,6 @@ else
   elif [[ $current_slot == b ]]; then
     refuse_stock_on_b
   fi
-  [[ $current_slot == a ]] || die "the phone reports no current slot (current-slot: '${current_slot}')"
   # "First install" is all fastboot can show of it: on slot a, no --reinstall,
   # and slot b not looking like a system that has started and can still
   # start. That look (successful yes, unbootable no) is an installed Omarchy
@@ -862,7 +865,7 @@ else
   fi
   slot_probe
 fi
-note "$CODENAME, unlocked, current slot ${current_slot:-?}"
+note "$CODENAME, unlocked, current slot $current_slot"
 # Stock Android must be the one on slot A. An Android system update writes the
 # other slot and switches to it, so a phone that took one can run stock from
 # slot B, and writing slot B would overwrite the stock system in use. From
