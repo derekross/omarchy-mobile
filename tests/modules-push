@@ -22,6 +22,7 @@ set -euo pipefail
 cmd=${*//\/usr\/lib\/modules/$MODULE_ROOT}
 printf '%s\n' "$cmd" >> "$CALLS"
 case $cmd in
+  *androidboot*slot_suffix*) printf '%s\n' 'androidboot.slot_suffix = "_b"'; exit 0 ;;
   true) exit 0 ;;
   'uname -r') echo 7.3.0-running; exit 0 ;;
   'cat /proc/sys/kernel/random/boot_id') echo fixture-boot; exit 0 ;;
