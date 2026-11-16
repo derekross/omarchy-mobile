@@ -155,6 +155,10 @@ known_errors=(
 # named in the kernel health row; with a ceiling, the lines beyond it count as
 # new errors (an empty ceiling means no limit, only the count).
 counted_errors=(
+  # Each sleep the modem ends: CPIF logs the cp2ap_wakeup edge it held until
+  # the resume at error level, a pair per modem-woken sleep, on every 7 Pro
+  # that sleeps with the modem up (device-cheetah 0.1.60; SUSPEND-PLAN M6-D).
+  '|modem wakes from sleep (cp2ap_wakeup)|cpif: (ap_wakeup_handler|s5100_pm_notifier): cp2ap_wakeup work (pending|resume)\. gpio_val'
   # PipeWire opens every PCM while it probes the card, before the UCM verb has
   # set the routes: once per boot. The same line is a broken UCM route's own
   # message, which repeats at every playback, so a second one is new.
@@ -248,8 +252,20 @@ fi
 failed=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | xargs)
 ufailed=""
 [[ -n $uid && -S /run/user/$uid/bus ]] && ufailed=$(as_user systemctl --user --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | xargs)
+# A sleep the modem's link driver refused before the freeze, while its link was
+# up (linux-omarchy-mobile#232; on every 7 Pro that sleeps with the modem up),
+# leaves systemd-suspend.service failed with EBUSY until the next sleep; the
+# shell's auto-sleep tries again 30 s later. It is the guard working, not a
+# fault: known when this boot's kernel logged the refusal and the last
+# suspend failure was EBUSY. Any other failed suspend still counts.
+refusals=$(dmesg 2>/dev/null | grep -c 'gs201-pcie-cp .*sleep refused before the freeze' || true)
+if [[ " $failed " == *" systemd-suspend.service "* ]] && ((refusals > 0)) \
+    && [[ $(cat /sys/power/suspend_stats/last_failed_errno 2>/dev/null) == -16 ]]; then
+  failed=$(xargs -n1 <<<"$failed" | grep -vx systemd-suspend.service | xargs || true)
+  suspend_refused=" (a sleep refused while the modem's link was busy, $refusals this boot)"
+fi
 if [[ -z $failed && -z $ufailed ]]; then
-  check ok 0 "systemd units" "none failed"
+  check ok 0 "systemd units" "none failed${suspend_refused:-}"
 else
   check "not ok" 0 "systemd units" "failed: ${failed:-none}${ufailed:+; user: $ufailed}"
 fi
