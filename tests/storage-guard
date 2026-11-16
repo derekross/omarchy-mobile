@@ -142,8 +142,11 @@ fake_disks() {
     echo 0 > "$B/sys/block/sde/sde$i/ro"; : > "$B/dev/sde$i"
   done
 }
+# GUARD_SH: the shell the guard runs under (default sh; the phone's is
+# busybox ash, e.g. GUARD_SH="busybox sh")
+GSH=${GUARD_SH:-sh}
 guard() { # run the guard's load and one pass
-  PATH="$t/bin:$PATH" sh -c ". '$t/guard-test.sh'; ufs_ro_pass"
+  PATH="$t/bin:$PATH" $GSH -c ". '$t/guard-test.sh'; ufs_ro_pass"
 }
 writable() { # names of the partitions left writable on a disk (sda), in GPT order
   local s out=""
@@ -188,7 +191,7 @@ slot_case() { # what, expected writable set (sorted), expected kmsg text; disks 
 fake_disks _a; cp "$t/etc-cheetah/omamobile-ufs-rw-slot" "$B/etc/"
 slot_case "slot A (bootconfig): its five boot images and userdata, slot B read-only" "$cheetah_a" "allowlist: $cheetah_a"
 grep -q "running from slot a" "$B/dev/kmsg" || fail "slot A is logged"
-unguarded() { PATH="$t/bin:$PATH" sh -c ". '$t/guard-test.sh'; ufs_unguarded"; }
+unguarded() { PATH="$t/bin:$PATH" $GSH -c ". '$t/guard-test.sh'; ufs_unguarded"; }
 [[ -z $(unguarded) ]] || fail "slot A: nothing outside its allowlist is writable (got: $(unguarded))"
 echo 0 > "$B/sys/block/sda/sda2/ro"
 [[ $(unguarded) == "sda2 (boot_b)" ]] || fail "slot A: a reopened boot_b is reported at the hand-over (got: $(unguarded))"
@@ -207,6 +210,17 @@ fake_disks _c
 slot_case "a suffix that is neither _a nor _b: userdata alone writable" "userdata" "no slot suffix"
 fake_disks none; printf 'androidboot.slot_suffix=_b androidboot.slot_suffix=* x\n' > "$B/proc/cmdline"
 slot_case "a glob for a suffix on the command line: userdata alone writable" "userdata" "no slot suffix"
+fake_disks none; printf 'androidboot.slot_suffix = ""\n' >> "$B/proc/bootconfig"; printf 'androidboot.slot_suffix=_a\n' > "$B/proc/cmdline"
+slot_case "an empty suffix in bootconfig: unknown, the command line not read" "userdata" "every boot partition read-only, userdata writable"
+fake_disks none; printf 'androidboot.slot_suffix = _a\n' >> "$B/proc/bootconfig"; printf 'androidboot.slot_suffix=_a\n' > "$B/proc/cmdline"
+slot_case "an unquoted suffix in bootconfig: unknown, the command line not read" "userdata" "every boot partition read-only, userdata writable"
+# Globbing is off while the suffix is read: with a file _a in the current
+# directory, "_?" must not become _a
+mkdir -p "$t/cwd"; : > "$t/cwd/_a"
+fake_disks _?
+(cd "$t/cwd" && slot_case "a glob for a suffix in bootconfig, a file _a beside it: userdata alone writable" "userdata" "every boot partition read-only")
+fake_disks none; printf 'androidboot.slot_suffix=_? x\n' > "$B/proc/cmdline"
+(cd "$t/cwd" && slot_case "a glob on the command line, a file _a beside it: userdata alone writable" "userdata" "every boot partition read-only")
 fake_disks _a
 slot_case "no slot marker: the list is still mapped to the running slot" "$cheetah_a" "running from slot a"
 for bad in slot-b '' 'running x'; do
@@ -220,7 +234,7 @@ done
 pass "a slot marker other than 'running' leaves every partition read-only"
 
 # The check boot_arch makes before handing over: nothing outside the list.
-unguarded() { PATH="$t/bin:$PATH" sh -c ". '$t/guard-test.sh'; ufs_unguarded"; }
+unguarded() { PATH="$t/bin:$PATH" $GSH -c ". '$t/guard-test.sh'; ufs_unguarded"; }
 [[ -z $(unguarded) ]] || fail "after a pass nothing outside the allowlist is writable (got: $(unguarded))"
 mkdir -p "$B/sys/block/sda/sda99"
 printf 'PARTNAME=late\n' > "$B/sys/block/sda/sda99/uevent"; echo 0 > "$B/sys/block/sda/sda99/ro"
@@ -287,7 +301,7 @@ fake_disks; printf 'boot_a userdata\n' > "$B/etc/omamobile-ufs-rw"
 closed "a slot A name in the allowlist" "allowlist names boot_a"
 
 # --- A second LUN: boot_b on sde (enchilada's layout) ---
-unguarded() { PATH="$t/bin:$PATH" sh -c ". '$t/guard-test.sh'; ufs_unguarded"; }
+unguarded() { PATH="$t/bin:$PATH" $GSH -c ". '$t/guard-test.sh'; ufs_unguarded"; }
 fake_disks
 cp "$t/etc-lun/omamobile-ufs-rw" "$t/etc-lun/omamobile-ufs-rw-luns" "$B/etc/"
 guard

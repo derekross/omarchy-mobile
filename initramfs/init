@@ -78,16 +78,18 @@ ufs_slot_add() { # one value: the first is kept, another one makes it unknown
   if [ -z "$ufs_slot" ]; then ufs_slot=$1
   elif [ "$ufs_slot" != "$1" ]; then ufs_slot=bad; fi
 }
+# When bootconfig carries the key at all, it alone decides: an empty or
+# unquoted value there is unknown, never a reason to read the command line.
 ufs_slot_suffix() {
   local w
   ufs_slot=""
   set -f
-  if [ -r /proc/bootconfig ]; then
+  if [ -r /proc/bootconfig ] && [ -n "$(sed -n '/^androidboot\.slot_suffix *=/p' /proc/bootconfig)" ]; then
     for w in $(sed -n 's/^androidboot\.slot_suffix *= *"\(.*\)" *$/\1/p' /proc/bootconfig); do
       ufs_slot_add "$w"
     done
-  fi
-  if [ -z "$ufs_slot" ] && [ -r /proc/cmdline ]; then
+    [ -n "$ufs_slot" ] || ufs_slot=bad
+  elif [ -r /proc/cmdline ]; then
     for w in $(cat /proc/cmdline); do
       case "$w" in androidboot.slot_suffix=*) ufs_slot_add "${w#androidboot.slot_suffix=}" ;; esac
     done
