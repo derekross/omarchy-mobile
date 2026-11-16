@@ -108,6 +108,17 @@ bu_load_descriptor() {
   elif [[ -n ${DEV_AVB_ROLLBACK_INDEX:-}${DEV_AVB_SECURITY_PATCH:-} ]]; then
     die "$file: AVB_ROLLBACK_INDEX and AVB_SECURITY_PATCH belong with AVB_FOOTERS"
   fi
+  # Where a release installs (bin/omamobile load_device, the same checks;
+  # tests/install-slot-descriptor): INSTALL_SLOT=b by default, or active with
+  # INSTALL_ACTIVE_SLOTS. Only checked here: which slot this phone writes
+  # comes from boot-update.conf's SLOT=, never from the descriptor.
+  case ${DEV_INSTALL_SLOT-b} in
+    b) [[ -z ${DEV_INSTALL_ACTIVE_SLOTS+x} ]] || die "$file: INSTALL_ACTIVE_SLOTS belongs with INSTALL_SLOT=active" ;;
+    active)
+      [[ ${DEV_INSTALL_ACTIVE_SLOTS-} =~ ^(a|b|a\ b|b\ a)$ ]] ||
+        die "$file: INSTALL_SLOT=active needs INSTALL_ACTIVE_SLOTS: the slots a release installs on (a, b, or a b)" ;;
+    *) die "$file: INSTALL_SLOT is active or b, not '$DEV_INSTALL_SLOT'" ;;
+  esac
   # A device whose initramfs carries modules gets them from the release
   # being written (omamobile-boot-images appends them), so their names are
   # checked here as bin/omamobile initramfs checks them
