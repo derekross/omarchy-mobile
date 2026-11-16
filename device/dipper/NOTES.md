@@ -52,9 +52,10 @@ no Oops, BUG, panic or WARN. Physical touch on `/dev/input/event2` produced
 `ABS_MT_TRACKING_ID`, changing `ABS_MT_POSITION_X/Y` values, and a release
 event (`ABS_MT_TRACKING_ID=-1`). No UFS partition was written. The node is now
 proposed disabled in kernel PR #249 at
-`0d548847248512b1e8e1d40d66a85b81fe5ed471`; the repository overlay source is
-device PR #704 commit `5184f623dbc48b0c80b31014659bb3feb95cc762`. These commits make
-the tested configuration rebuildable, but postdate the historical boots.
+`0d548847248512b1e8e1d40d66a85b81fe5ed471`; enabling it with the repository
+overlay [`device/dipper/overlays/fts5-touchscreen.dtso`](overlays/fts5-touchscreen.dtso),
+blob `f09381d59a110d02a8b8819f585e304efb1870a3`, rebuilds the tested node.
+Both proposed sources postdate the historical boots.
 
 Then booted a RAM image with the same FTS5 node enabled directly in the kernel
 DTS. Image SHA-256:
