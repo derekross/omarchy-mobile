@@ -12,22 +12,31 @@
 # as on main, the bearer's route is the only one left at the freeze and every request
 # is refused (fixed by omarchy-mobile#556). 5 s after each wake: a ping and a DNS lookup over the
 # bearer's interface (rmnet0), so mobile data is checked after every sleep, not only at the
-# end; 20 s after: the CP's state, sitd, its failed polls, Wi-Fi and new UFS lines. Stops
-# when the CP isn't ONLINE. WIFI=off turns the Wi-Fi radio off for the run (back on at the
-# end), so mobile data is the only route at each wake, the shape that lost data on the 7 Pro
-# (linux-omarchy-mobile#258). Refuses to start, and stops, unless the palmtop is charging.
-# The end counts the boot's "Reserve doorbell interrupt" and "PCI not powered on" lines.
+# end, with sitd's data-call lines from that sleep ("Data-call list changed", "Internet
+# bearer set up again", #817) beside it; 20 s after: the CP's state, sitd, its failed polls
+# and Wi-Fi. WIFI=off turns the Wi-Fi radio off for the run (back on when the script ends,
+# however it ends), so mobile data is the only route at each wake, the shape that lost data
+# on the 7 Pro (omarchy-mobile#799, SUSPEND-PLAN M6-D). Stops itself, as omarchy-mobile#809
+# asks: off the charger (and refuses to start there), on the CP not ONLINE, and on a new UFS
+# error line or an oops, both read from dmesg, which is in memory, so the check still works
+# if storage is what failed. The end counts the boot's "Reserve doorbell interrupt" and
+# "PCI not powered on" lines.
 # Before each request and with each data check, one line of CPIF's own state, as the 7 Pro's
 # M6-D recorder reads it (device/cheetah/bringup/m6-data-capture.sh): the FMT and raw queues'
 # heads and tails, the wake lines, pcie_powered_on and reserve_doorbell, each pktproc queue's
 # fore/rear and pass, and the mif_cp2ap_msg count, so a failed wake says whether uplink,
 # downlink or the control channel stopped.
-# Attended, on the charger, and the boot ends in a reboot (AGENTS.md, the 9a sleep entry):
+# On W4HO-ham's palmtop under #809's terms (AGENTS.md, the 9a's modem-up entry), everywhere
+# else attended; on the charger either way, and the boot ends in a reboot. N defaults to 10,
+# the most a new kernel's first run may have:
 #   [WIFI=off] systemd-run --unit=x-modem-sleep-series /root/modem-sleep-series.sh [N] [S] [append]
 # The last step afterwards is "systemctl reboot", never reboot-to.
 L=/var/log/omamobile/modem-sleep-series.log; CP=/usr/lib/omamobile-vendor/omamobile-modem-cp
-N=${1:-20}; S=${2:-60}; H=1.1.1.1; Q=example.com; BAT=/sys/class/power_supply/max77779-battery
+N=${1:-10}; S=${2:-60}; H=1.1.1.1; Q=example.com; BAT=/sys/class/power_supply/max77779-battery
 U='link startup failed|Host init failed|I/O error, dev|ufshcd_err_handler'
+# An oops, a BUG or a kernel panic path in dmesg
+O='Internal error:|Unable to handle kernel|kernel BUG at|BUG: |Oops'
+bad() { dmesg | grep -cE "$1"; }
 say() { echo "$(date +%T) $*" >> $L; sync "$L" 2>/dev/null; }
 screen() { python3 - "$1" <<'PY' 2>&1 | tail -1
 import json, socket, sys
@@ -86,12 +95,12 @@ PY
 charging || { echo "not charging: run this on the charger" >&2; exit 1; }
 [[ ${3:-} == append ]] || : > $L
 systemctl is-active -q omamobile-sit-data || { systemctl start omamobile-sit-data; sleep 8; }
-[[ ${WIFI:-} == off ]] && { nmcli radio wifi off; sleep 10; }
+[[ ${WIFI:-} == off ]] && { trap 'nmcli radio wifi on' EXIT; nmcli radio wifi off; sleep 10; }
 IF=$(cat /run/omamobile-sit/data-interface /run/omamobile-sit/data-interface-kept 2>/dev/null | head -1)
 say "$(uname -r) $(uname -v | cut -d' ' -f1); the data service: $(systemctl is-active omamobile-sit-data), device ${IF:-none}, Wi-Fi radio $(nmcli radio wifi), default via $(ip route show default | awk '{print $5}' | paste -sd,); $(st); data: $(data)"
 sleep 10
 for n in $(seq 1 "$N"); do
-  s0=$(cat /sys/power/suspend_stats/success); f0=$(cat /sys/power/suspend_stats/fail); u0=$(journalctl -b -k --no-pager | grep -cE "$U")
+  s0=$(cat /sys/power/suspend_stats/success); f0=$(cat /sys/power/suspend_stats/fail); u0=$(bad "$U"); o0=$(bad "$O"); t0=$(date +%s)
   charging || { say "sleep $n: not charging any more: stop"; break; }
   [[ ${WIFI:-} == off ]] || for _ in $(seq 1 30); do ip route show default | grep -c wlan0 >/dev/null && break; sleep 1; done
   say "sleep $n: default via $(ip route show default | awk '{print $5}' | paste -sd,); screen off -> $(screen off); link: $(idle); link-ups in the last 20 s: $(journalctl -b -k --no-pager --since '-20 s' | grep -c 'link up: Gen3')"
@@ -108,13 +117,14 @@ for n in $(seq 1 "$N"); do
   else res="no change in suspend_stats after 150 s"; fi
   say "sleep $n: $res; screen on -> $(screen on)"
   sleep 5
-  say "sleep $n, 5 s after: default via $(ip route show default | awk '{print $5}' | paste -sd,); cpif $(cpif); data: $(data); cpif after the data check: $(cpif)"
+  say "sleep $n, 5 s after: default via $(ip route show default | awk '{print $5}' | paste -sd,); cpif $(cpif); data: $(data); cpif after the data check: $(cpif); sitd's data-call lines this sleep: $(journalctl -u omamobile-sitd --since "@$t0" --no-pager -o cat | grep -E 'Data-call list changed|Internet bearer' | cut -c1-160 | paste -sd'|' | sed 's/^$/none/')"
   sleep 15
-  say "sleep $n, 20 s after: $(st), new ufs lines $(( $(journalctl -b -k --no-pager | grep -cE "$U") - u0 )), sitd's last line: $(journalctl -b -u omamobile-sitd --no-pager | tail -1 | cut -c40-120)"
+  say "sleep $n, 20 s after: $(st), new ufs lines $(( $(bad "$U") - u0 )), new oops lines $(( $(bad "$O") - o0 )), sitd's last line: $(journalctl -b -u omamobile-sitd --no-pager | tail -1 | cut -c40-120)"
+  (( $(bad "$U") > u0 )) && { say "a UFS error line in dmesg: stop"; dmesg | grep -E "$U" | tail -3 >> $L; break; }
+  (( $(bad "$O") > o0 )) && { say "an oops in dmesg: stop"; dmesg | grep -E "$O" | tail -3 >> $L; break; }
   [[ $($CP state 2>&1 | tail -1) == ONLINE ]] || { say "the CP is not ONLINE: stop"; break; }
 done
 [[ -n $IF ]] && say "ping over $IF: $(ping -c 5 -W 3 -I "$IF" "$H" 2>&1 | grep -o '[0-9]* received')"
-[[ ${WIFI:-} == off ]] && nmcli radio wifi on
 say "end: $(st); in the boot's kernel log: Reserve doorbell interrupt $(journalctl -b -k --no-pager | grep -c 'Reserve doorbell interrupt'), PCI not powered on $(journalctl -b -k --no-pager | grep -c 'PCI not powered on')"
 say "kernel lines of the boot:"
 journalctl -b -k --no-pager | grep -E "sleep refused|Unable to change power state|Link Active not set|Can.t set D0|BME is not set|link-down recovery|suspend_cp: abort|failed to suspend" | sed -E 's/^.{16}[^ ]+ kernel: //' | cut -c1-110 | sort | uniq -c | sort -rn | head -20 >> $L

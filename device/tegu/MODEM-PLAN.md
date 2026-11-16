@@ -1743,12 +1743,29 @@ not had an attended run first. Their boots began, by the palmtop's journal
 (MST): on 2026-11-13 the five comparison boots on the daily kernel from
 15:10 to 16:04, the refusals and the three 45 s sleeps at 16:36, the twenty
 at 17:02, the boot that hung at 17:51 and the night at 19:28; on 11-14 the
-boots with #556's package and the calls at 04:09, 05:37, 06:29 and 06:56.
+boots with #556's package and the calls at 04:09, 05:37, 06:29 and 06:56,
+and the boot from 10:31 on 11-14 to 07:23 on 11-15 on
+`push1-g716f6d8ef355` (#232, #258's line and #247), with the modem up all
+boot, the shell's auto-sleep doing the sleeping and the cable out for
+10.8 h overnight. That night 37 of 37 sleep requests woke (24 on
+`cp2ap_wakeup`, 11 on the alarm, two by the owner in the morning), with no
+hang, UFS line or oops, and in the morning the CP was ONLINE and
+registered with IMS, but a ping over `rmnet0` got 0 of 5 back with the
+bearer reported up. `rmnet0` had carried almost nothing that boot and sitd
+was 0.3.37, without #817's reconnect, so the night can't say whether the
+internet bearer was dropped and not set up again, as on the 7 Pro (#817).
+Beside it, the Wi-Fi night below ended with `rmnet0` answering 5 of 5.
 From 2026-11-15 the owner's palmtop runs these under the maintainer's
-decision in [#809](https://github.com/derekross/omarchy-mobile/issues/809):
-unattended is allowed there, on the charger, every such boot ending in
-`systemctl reboot`, a new kernel's first run at most 10 sleeps with its
-result posted before a longer one, and the record saying which rule each
+decision in [#809](https://github.com/derekross/omarchy-mobile/issues/809),
+whose terms, as AGENTS.md has them, are: W4HO-ham's modem-up sleep series
+may run unattended, a new kernel's first among them, on the charger
+(`modem-sleep-series.sh` refuses and stops off it); every boot that had a
+sleep with the modem up ends in `systemctl reboot`, never `reboot-to`; a
+new kernel's first run is at most 10 sleeps and its result is posted
+before a longer one; the series stops itself on the CP not ONLINE, a UFS
+error line or an oops, and a hang is left to the cluster watchdog or the
+owner; the NV partitions stay read-only and are checked against the
+backup after any boot that hung or reset; the record says which rule each
 run ran under. Every other 9a keeps the rule as AGENTS.md has it.
 The series script is `device/tegu/bringup/modem-sleep-series.sh` (the copy
 that ran logged to another file and lacked the check that `rtcwake` armed
@@ -1880,11 +1897,13 @@ least counted on a build without #232; `follow_screen` turned on for the
 9a (#556 is in main since #791); a stale call ended without the owner's
 help (#729), since it keeps the palmtop awake; and what no run here
 tested: **mobile data in the shape that lost it on the 7 Pro** (#799):
-Wi-Fi off for the sleeps so the bearer is the only route, RTC wakes, a
-ping and a DNS lookup over `rmnet0` a few seconds after every timer wake,
-and the boot's count of `Reserve doorbell interrupt` and `PCI not powered
-on`. `modem-sleep-series.sh` with `WIFI=off` does all of that, checks data
-5 s after every wake, and refuses to start, and stops, off the charger.
+Wi-Fi off for the sleeps so the bearer is the only route, RTC wakes, and
+data over `rmnet0` (a ping and a DNS lookup) a few seconds after every
+wake, with sitd's data-call lines from that sleep next to it, so a drop
+and its reconnect (#817) show up wake by wake. `modem-sleep-series.sh`
+with `WIFI=off` does all of that, and stops itself as #809 asks: off the
+charger, on the CP not ONLINE, and on a UFS error line or an oops in
+`dmesg`.
 Then a call answered after it woke the palmtop, and a sleep of hours.
 
 ### M2: the link only (modem link driver, `allow_hw=1`; risk: medium)
