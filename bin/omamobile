@@ -102,6 +102,8 @@ die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 # Every name a descriptor's UFS_RW may hold: slot B's boot images and
 # userdata. Never persist, efs*, modem*, devinfo, vbmeta*, bootloader, radio
 # or anything in slot A. initramfs/init's ufs_rw_load accepts the same set.
+# The names are in slot form: the init maps each X_b to X of the slot the
+# phone runs from, and leaves the other slot read-only (ACTIVE-SLOT-PLAN §4).
 UFS_RW_ALLOWED="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
 
 # Load device/$DEVICE/device.conf into DEV_* variables. The descriptor is data,
@@ -587,6 +589,10 @@ initramfs_config() {
   # The storage guard's allowlist. Without this file the init leaves every
   # partition read-only.
   printf '%s\n' "${rw[*]}" > "$etc/omamobile-ufs-rw"
+  # The list is in slot form (X_b); this marker says the init maps it to the
+  # slot the phone runs from (docs/ACTIVE-SLOT-PLAN.md §4). A format-2
+  # bundle is refused without it.
+  printf '%s\n' running > "$etc/omamobile-ufs-rw-slot"
   if [[ -n ${DEV_UFS_RW_LUNS:-} ]]; then
     printf '%s\n' "$DEV_UFS_RW_LUNS" > "$etc/omamobile-ufs-rw-luns"
   fi
