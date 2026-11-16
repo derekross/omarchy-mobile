@@ -6,14 +6,19 @@
 # omamobile-boot-update and omamobile-boot-images; the caller defines die.
 #
 # Only BOOT_METHOD=android-v4 (the default) is accepted: the Qualcomm chain,
-# the RAM-only probe and anything else have no slot-B update path here.
+# the RAM-only probe and anything else have no slot-B update path here
+# (nor one on slot A: the reader's verdict doesn't depend on the slot).
 # tests/boot-update-descriptor checks that every descriptor in device/ gets
 # the same verdict from this file as from bin/omamobile.
 
 # Every name a descriptor's UFS_RW may hold (bin/omamobile UFS_RW_ALLOWED,
-# initramfs/init ufs_rw_load).
+# initramfs/init ufs_rw_load). The names are in slot form: X_b stands for X
+# of the slot the phone runs from, which the initramfs guard opens and
+# omamobile-boot-update writes (SLOT= in boot-update.conf, b when absent;
+# docs/ACTIVE-SLOT-PLAN.md §2, §4).
 BU_UFS_RW_ALLOWED="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
-# Every image a phone writes. The partition is always <image>_b.
+# Every image a phone writes. The partition is <image>_<SLOT>: <image>_b on
+# every phone whose boot-update.conf names no slot.
 BU_IMAGES_ALLOWED="boot init_boot vendor_boot vendor_kernel_boot dtbo"
 
 # bu_load_descriptor FILE: set DEV_* from FILE, or die.

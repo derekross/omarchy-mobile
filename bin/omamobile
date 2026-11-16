@@ -90,6 +90,7 @@ Usage: [DEVICE=<codename>] omamobile <command>
   fastboot         Get the phone into fastboot without buttons (adb, reboot-to,
                    or crash until ABL falls back to stock Android on slot A)
   flash            Flash the experiment images to slot B and boot them
+                   (--from-slot-a: a development phone that fell back to stock on slot A)
   push             Write the images into slot B from the running phone over SSH,
                    verify them, and reboot into them (no fastboot)
   kernel-shell     Open a shell in the build environment, in the kernel tree
@@ -102,6 +103,8 @@ die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 # Every name a descriptor's UFS_RW may hold: slot B's boot images and
 # userdata. Never persist, efs*, modem*, devinfo, vbmeta*, bootloader, radio
 # or anything in slot A. initramfs/init's ufs_rw_load accepts the same set.
+# The names are in slot form: the init maps each X_b to X of the slot the
+# phone runs from, and leaves the other slot read-only (ACTIVE-SLOT-PLAN §4).
 UFS_RW_ALLOWED="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
 
 # Load device/$DEVICE/device.conf into DEV_* variables. The descriptor is data,
@@ -587,6 +590,10 @@ initramfs_config() {
   # The storage guard's allowlist. Without this file the init leaves every
   # partition read-only.
   printf '%s\n' "${rw[*]}" > "$etc/omamobile-ufs-rw"
+  # The list is in slot form (X_b); this marker says the init maps it to the
+  # slot the phone runs from (docs/ACTIVE-SLOT-PLAN.md §4). A format-2
+  # bundle is refused without it.
+  printf '%s\n' running > "$etc/omamobile-ufs-rw-slot"
   if [[ -n ${DEV_UFS_RW_LUNS:-} ]]; then
     printf '%s\n' "$DEV_UFS_RW_LUNS" > "$etc/omamobile-ufs-rw-luns"
   fi
@@ -1219,7 +1226,13 @@ cmd_fastboot() {
 }
 
 cmd_flash() {
-  local img="$KERNEL_OUT/images" p
+  local img="$KERNEL_OUT/images" p from_a=0
+  case ${1:-} in
+    "") ;;
+    --from-slot-a) from_a=1 ;;
+    *) die "usage: omamobile flash [--from-slot-a]" ;;
+  esac
+  (($# <= 1)) || die "usage: omamobile flash [--from-slot-a]"
   load_device
   # Qualcomm ABL keeps slot flags in the GPT. A fastboot set_active can clear
   # successful and refill retries; the bit-54 mark has no §3.1 entry yet.
@@ -1232,8 +1245,31 @@ cmd_flash() {
     die "flash refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
   in_fastboot || die "phone not in fastboot (try: omamobile fastboot)"
-  local serial
+  local serial cur
   serial=$(fastboot_serial) || exit 1
+  # Read-only: a release installed on the slot it ran from runs from slot A
+  # (docs/ACTIVE-SLOT-PLAN.md §2), and this writes slot B and makes it
+  # active, which is development only. Fastboot can't tell that release
+  # from stock Android on A, which a development phone falls back to (and
+  # `omamobile fastboot` crashes it into), so that case is named by hand
+  # with --from-slot-a.
+  cur=$(timeout 10 fastboot -s "$serial" getvar current-slot 2>&1 | sed -n 's/^current-slot: *_\{0,1\}\([ab]\)$/\1/p' | head -1)
+  if [[ $cur == a ]]; then
+    ((from_a)) || die "this phone runs from slot A (a release from slot A, or stock Android); flash writes slot B and makes it active, development only. A development phone that fell back to stock on slot A: omamobile flash --from-slot-a"
+    printf '\e[1;31m' >&2
+    cat >&2 <<'WARN'
+WARNING: --from-slot-a. This phone runs from slot A, and flash writes slot B
+and makes it active. That is right only for a development phone that fell
+back to stock Android on slot A. On a phone that runs a release from slot A
+it switches the phone to slot B: the release's slot is left behind and both
+systems share one userdata. Stop now (Ctrl-C) unless this is a development
+phone. Going on in 10 seconds.
+WARN
+    printf '\e[0m' >&2
+    sleep "${OMAMOBILE_FLASH_WARN_SECONDS:-10}"
+  elif ((from_a)); then
+    say "--from-slot-a given, but the phone reads current-slot ${cur:-unknown}: flashing as usual"
+  fi
   # Every image and allowlist entry first: never start writing slot B and
   # find out halfway that a later image is missing.
   for p in $DEV_BOOT_IMAGES; do
@@ -1271,6 +1307,15 @@ cmd_push() {
     die "push refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
   "$ssh" true || die "phone not reachable at 172.16.42.1"
+  # Read-only, before anything else (modules-push included): push writes
+  # slot B, so the phone must say it runs from B. A release installed on the
+  # slot it ran from runs from A (docs/ACTIVE-SLOT-PLAN.md §2); a boot that
+  # names no slot, or a failed read, is refused too.
+  local slots
+  slots=$("$ssh" "cat /proc/bootconfig /proc/cmdline 2>/dev/null | grep -oE 'androidboot[.]slot_suffix( = \"|=)_[ab]'; true") \
+    || die "cannot read the phone's boot slot; refusing to write"
+  [[ $slots != *_a* ]] || die "this phone runs a release from slot A; push writes slot B, development only"
+  [[ $slots == *_b* ]] || die "the phone names no boot slot (androidboot.slot_suffix in /proc/bootconfig or /proc/cmdline); push writes slot B only to a phone running from it"
   # Refuse before any write. A phone whose initramfs has no reboot-to would
   # otherwise take the images, swallow the reboot, and report success while
   # the old kernel is still running.
@@ -1371,7 +1416,7 @@ case "${1:-}" in
   images) cmd_images ;;
   kexec) cmd_kexec ;;
   fastboot) cmd_fastboot ;;
-  flash) cmd_flash ;;
+  flash) shift; cmd_flash "$@" ;;
   push) cmd_push ;;
   kernel-shell) cmd_kernel_shell ;;
   ''|-h|--help) usage ;;

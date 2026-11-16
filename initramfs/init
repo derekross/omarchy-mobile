@@ -46,25 +46,58 @@ fi
 # Nothing in this initramfs runs mdev/udev, so no one else touches the disks.
 ufs_ro_log() { echo "omamobile: ufs-ro: $*" > /dev/kmsg; }
 # Storage guard. Everything on the UFS is read-only except an allowlist of
-# partitions we own: slot B's boot images (in-place kernel updates) and
-# userdata (the Arch root). The kernel only lets a partition be written if
+# partitions we own: the running slot's boot images (in-place kernel
+# updates) and userdata (the Arch root). The kernel only lets a partition be written if
 # its whole disk is writable too, so the main disk (sda) stays writable but
 # its whole-disk node is removed, so nothing can write across partitions by
 # accident; a LUN the descriptor's UFS_RW_LUNS names is guarded the same way.
 # The other LUNs (on Pixels sdb, sdc, sdd: bootloader images) are read-only
 # at the disk level. Calibration partitions (efs, persist, modem_userdata...)
-# and all of slot A stay read-only.
+# and all of the other slot stay read-only.
 # The allowlist is the descriptor's UFS_RW, which bin/omamobile initramfs
 # checks and packs into /etc/omamobile-ufs-rw. It fails closed: a missing,
 # empty or malformed file leaves every partition read-only, so Arch does not
 # start and the initramfs shell stays up over SSH. Whatever the file says,
 # only slot B's boot images and userdata can be named.
+# The packed names are in slot form: X_b means "X of the slot this boot runs
+# from" (docs/ACTIVE-SLOT-PLAN.md §4). The slot is the bootloader's
+# androidboot.slot_suffix, from /proc/bootconfig, else /proc/cmdline. On
+# slot B the list is what it says; on slot A each X_b becomes X_a and slot
+# B stays read-only; with no readable suffix (none, or two that disagree)
+# every boot partition stays read-only and userdata alone is writable.
+# bin/omamobile initramfs packs /etc/omamobile-ufs-rw-slot ("running") to
+# say this init maps the list so; any other content in it closes the guard.
 UFS_RW=""
 UFS_RW_LUNS=""
 # Is $1 a disk that holds allowlisted partitions? sda always.
 ufs_rw_disk() { case " sda $UFS_RW_LUNS " in *" $1 "*) true ;; *) false ;; esac; }
+# The running slot's suffix: _a or _b, or nothing. Run it in a subshell
+# ($(...)): it turns off globbing for the command line's words.
+ufs_slot_add() { # one value: the first is kept, another one makes it unknown
+  case "$1" in _a|_b) ;; *) ufs_slot=bad; return 0 ;; esac
+  if [ -z "$ufs_slot" ]; then ufs_slot=$1
+  elif [ "$ufs_slot" != "$1" ]; then ufs_slot=bad; fi
+}
+# When bootconfig carries the key at all, it alone decides: an empty or
+# unquoted value there is unknown, never a reason to read the command line.
+ufs_slot_suffix() {
+  local w
+  ufs_slot=""
+  set -f
+  if [ -r /proc/bootconfig ] && [ -n "$(sed -n '/^androidboot\.slot_suffix *=/p' /proc/bootconfig)" ]; then
+    for w in $(sed -n 's/^androidboot\.slot_suffix *= *"\(.*\)" *$/\1/p' /proc/bootconfig); do
+      ufs_slot_add "$w"
+    done
+    [ -n "$ufs_slot" ] || ufs_slot=bad
+  elif [ -r /proc/cmdline ]; then
+    for w in $(cat /proc/cmdline); do
+      case "$w" in androidboot.slot_suffix=*) ufs_slot_add "${w#androidboot.slot_suffix=}" ;; esac
+    done
+  fi
+  case "$ufs_slot" in _a|_b) echo "$ufs_slot" ;; esac
+}
 ufs_rw_load() {
-  local list p
+  local list p slot mapped
   if [ -s /etc/omamobile-nfsroot ]; then
     ufs_ro_log "NFS root requested: every UFS partition read-only"
     return 0
@@ -94,6 +127,26 @@ ufs_rw_load() {
         return 0 ;;
     esac
   done
+  if [ -e /etc/omamobile-ufs-rw-slot ] && [ "$(cat /etc/omamobile-ufs-rw-slot)" != running ]; then
+    ufs_ro_log "malformed slot marker in /etc/omamobile-ufs-rw-slot: every partition read-only"
+    return 0
+  fi
+  # Slot form to the running slot: X_b is X of the slot this boot runs from
+  slot=$(ufs_slot_suffix)
+  mapped=""
+  for p in "$@"; do
+    case "$p" in
+      *_b) [ -z "$slot" ] || mapped="$mapped ${p%_b}$slot" ;;
+      *) mapped="$mapped $p" ;;
+    esac
+  done
+  if [ -n "$slot" ]; then
+    ufs_ro_log "running from slot ${slot#_}: its boot images are the allowlisted ones, the other slot stays read-only"
+  else
+    ufs_ro_log "no slot suffix in /proc/bootconfig or /proc/cmdline: every boot partition read-only, userdata writable"
+  fi
+  # shellcheck disable=SC2086 # split into names on purpose
+  set -- $mapped
   UFS_RW="$*"
   ufs_ro_log "allowlist: $UFS_RW"
   # LUNs besides sda that hold allowlisted partitions (the descriptor's
