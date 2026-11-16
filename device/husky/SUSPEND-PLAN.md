@@ -1,8 +1,8 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 8 Pro (husky): suspend
 
-Status (2026-11-15): **reviewed draft, revised twice for #724's review; nothing
-in section 3 has run on this unit.** s2idle has run on one 8 Pro already,
+Status (2026-11-15): **H0b passed on this unit (section 4); H1 to H4 have
+not run.** s2idle has run on one 8 Pro already,
 Lef's (section 4, from #642 and #724). This file is the runbook Derek asked
 for on #656 before a first attended suspend test on another unit: what
 husky has for the three things he named (Wi-Fi across sleep, UFS
@@ -272,3 +272,28 @@ when it was plugged in about 8.5 h later, and booted again. Whether it slept
 until the battery was empty or hung in suspend can't be told from this:
 there is no exit line and no later log. It shows that UPower's critical
 action reaches s2idle on husky with `suspend-off` set.
+
+**This unit, 2026-11-15, H0b: passed.** Published `omamobile` at
+`82f31d3a7` (`7.3.0-rc6-omamobile-push1-g82f31d3a7a35`),
+`omamobile-device-husky` 0.1.13, driven over USB, 85 % and charging, slot B
+refilled to 3 earlier the same day. No sleep (`suspend_stats` 0 / 0 before
+and after).
+
+- **Unload:** `pre` passed (`spm_lvl` 5, no `/sys/class/nfc`).
+  `modprobe -r brcmfmac_wcc brcmfmac pcie_gs201` returned 0; none of the
+  three was left in `lsmod`, the PCI bus had no devices and no `wlp`
+  interface remained. `brcmutil` and `phy_zuma_pcie` stayed loaded with no
+  users.
+- **Reload**, 5 s later: `modprobe pcie_gs201 && modprobe brcmfmac`
+  returned 0. Both PCI functions came back in D0, the firmware loaded
+  (`BCM4398/3 ... version 24.100.671.86.2`), and NetworkManager had
+  `wlp1s0` connected to the same 5 GHz network 14 s after the reload; three
+  pings out of three over it.
+- **Kernel log** for the reload: the known brcmfmac noise only
+  (`Ignoring unexpected firmware channel`, one
+  `brcmf_p2p_create_p2pdev: timeout`, one
+  `brcmf_join_v1: ... firmware error -14` before it associated, and
+  `Received unexpected monitor pkt`, all of which this kernel also prints
+  at boot). No PCIe, AER or UFS line. `running`, no failed units.
+- The interface came back on `phy1` (it was `phy0`): cosmetic, but a
+  script that names the phy would miss it.
