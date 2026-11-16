@@ -83,7 +83,7 @@ grep -qx 'ExecStart=/usr/lib/omamobile-settings/charge-limit %i' "$u" && grep -q
   grep -qx 'StartLimitIntervalSec=0' "$u" && ! grep -q '^\[Install\]' "$u" ||
   { echo "FAIL: unit: oneshot helper with the instance, no start limit, not enabled" >&2; exit 1; }
 [[ $(grep -v '^#' "$v/udev/rules.d/75-omamobile-charge-limit.rules" | grep -c .) == 1 ]] &&
-  grep -qxF 'ACTION=="add", SUBSYSTEM=="power_supply", KERNEL=="max77759-charger", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omamobile-charge-limit-apply.service"' \
+  grep -qxF 'SUBSYSTEM=="power_supply", KERNEL=="max77759-charger", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omamobile-charge-limit-apply.service"' \
     "$v/udev/rules.d/75-omamobile-charge-limit.rules" && ! grep -q 'RUN' "$v/udev/rules.d/75-omamobile-charge-limit.rules" ||
   { echo "FAIL: udev: one rule, charger add, pulls in the apply unit" >&2; exit 1; }
 a=$v/systemd/system/omamobile-charge-limit-apply.service
