@@ -1078,8 +1078,11 @@ flashed=$t/userdata.flashed
 if command -v simg2img >/dev/null && [[ $(head -c4 "$flashed" | od -An -tx1 | tr -d ' ') == 3aff26ed ]]; then
   simg2img "$flashed" "$t/flashed.img"; flashed=$t/flashed.img
 fi
-[[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -v '^#') == $'AUTO_WRITE=yes\nSLOT=a' ]] ||
-  fail "a format 2 install's boot-update.conf names the slot it wrote (SLOT=a)"
+[[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -v '^#') == $'SLOT=a\nAUTO_WRITE=yes' ]] ||
+  fail "a format 2 install's boot-update.conf names the slot it wrote (SLOT=a), before AUTO_WRITE"
+[[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | tail -c 15 | od -An -tx1 | tr -d ' \n') == \
+   "$(printf 'AUTO_WRITE=yes\n' | od -An -tx1 | tr -d ' \n')" ]] ||
+  fail "boot-update.conf ends with AUTO_WRITE=yes and a newline (the install link's patch checks that)"
 pass "format 2 install on slot a: exactly <image>_a, userdata, reboot; boot-update.conf SLOT=a"
 
 # A phone on slot b where only a is accepted: current-slot-not-accepted,
@@ -1097,7 +1100,7 @@ flashed=$t/userdata.flashed
 if command -v simg2img >/dev/null && [[ $(head -c4 "$flashed" | od -An -tx1 | tr -d ' ') == 3aff26ed ]]; then
   simg2img "$flashed" "$t/flashed.img"; flashed=$t/flashed.img
 fi
-[[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -v '^#') == $'AUTO_WRITE=yes\nSLOT=b' ]] ||
+[[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -v '^#') == $'SLOT=b\nAUTO_WRITE=yes' ]] ||
   fail "boot-update.conf says SLOT=b"
 pass "format 2: slot b refused (current-slot-not-accepted) unless accepted, and then written as <image>_b with no --set-active"
 

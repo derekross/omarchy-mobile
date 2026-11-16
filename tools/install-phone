@@ -1140,12 +1140,15 @@ trap cleanup EXIT
     fi
   } > "$conf_file"
   printf '%s\n' "$ssh_key" > "$keys_file"
+  # Format 2: SLOT=, the slot the install wrote and kernel updates write
+  # (absent means b, so a format 1 install's file stays as it always was).
+  # It comes before AUTO_WRITE: the install link's patch checks that the
+  # file ends with that line.
+  slot_line=()
+  ((fmt == 1)) || slot_line=("SLOT=$target")
   printf '%s\n' "# Written by install-phone: a release install takes kernel updates through" \
     "# omamobile-boot-update's pacman hook (docs/RELEASES.md §5.3). AUTO_WRITE=no stops it." \
-    "AUTO_WRITE=$BOOT_UPDATE_AUTO_WRITE" > "$boot_conf"
-  # Format 2: the slot the install wrote, the one kernel updates write
-  # (absent means b, so a format 1 install's file stays as it always was)
-  if ((fmt == 2)); then printf 'SLOT=%s\n' "$target" >> "$boot_conf"; fi
+    "${slot_line[@]}" "AUTO_WRITE=$BOOT_UPDATE_AUTO_WRITE" > "$boot_conf"
 )
 unset wifi_psk
 
