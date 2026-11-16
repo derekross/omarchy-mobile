@@ -55,8 +55,11 @@ idle() { # wait until the link has been down for 5 s; prints how long it took
   done
   echo "not idle in 60 s"; return 1
 }
-# The battery's average current is positive while it charges (the 9a lists no charger supply).
-charging() { (( $(cat $BAT/current_avg 2>/dev/null || echo 0) > 0 )); }
+# On the charger: the battery charging, or full with the cable in (the charger then holds it
+# and the current is about 0; a series stopped at sleep 47 on 2026-11-15 when the pack filled).
+# Off the cable the status is Discharging.
+charging() { case $(cat $BAT/status 2>/dev/null) in Charging | Full) return 0 ;; esac
+  (( $(cat $BAT/current_avg 2>/dev/null || echo 0) > 0 )); }
 data() { # a ping and a DNS lookup over the bearer's interface
   [[ -n $IF ]] || { echo "no bearer interface"; return; }
   echo "ping $(ping -c 3 -W 3 -I "$IF" "$H" 2>&1 | grep -o '[0-9]* received'), dns $(dns)"
