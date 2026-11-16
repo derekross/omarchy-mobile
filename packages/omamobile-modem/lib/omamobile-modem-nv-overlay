@@ -71,7 +71,14 @@ FORMAT = 'omamobile-modem-nv-overlay 1'
 # The filesystems the chroot gets read-write (RAM copies), as DIR/<name>.
 PARTS = ('efs', 'efs_backup', 'modem_userdata')
 # The checksum lines the overlay is bound to: every image the profile copies.
-IMAGES = ('efs.img', 'efs_backup.img', 'modem_a.img', 'modem_userdata.img', 'persist.img')
+# The modem image is the profile's slot's (modem_a, or on a phone whose
+# boot-update.conf names SLOT=, that slot's: the profile's rule, below), and
+# its line is bound by role: hashed under MODEM_ROLE whichever partition it
+# came from, the name it has always had, so today's bindings are unchanged.
+PROC = Path(os.environ.get('OMAMOBILE_MODEM_PROC', '/proc'))
+BOOT_UPDATE_CONF = Path(os.environ.get('OMAMOBILE_MODEM_BOOT_UPDATE_CONF', '/etc/omamobile/boot-update.conf'))
+IMAGES_BUT_MODEM = ('efs.img', 'efs_backup.img', 'modem_userdata.img', 'persist.img')
+MODEM_ROLE = 'modem_a.img'
 NV_SALT = b'Samsung_SIT_RIL'
 
 # What may come from the overlay: groups of files kept together, each with
@@ -137,8 +144,47 @@ def enabled():
 
 # -- the base and the binding ------------------------------------------------
 
+def boot_suffix():
+    """androidboot.slot_suffix as the storage guard reads it: PROC/bootconfig
+    alone when it carries the key, else PROC/cmdline; None unless exactly
+    one of _a and _b."""
+    try:
+        text = (PROC / 'bootconfig').read_text()
+    except OSError:
+        text = ''
+    if re.search(r'(?m)^androidboot\.slot_suffix *=', text):
+        values = {m.group(1) for m in re.finditer(r'(?m)^androidboot\.slot_suffix *= *"(.*)" *$', text)}
+    else:
+        try:
+            words = (PROC / 'cmdline').read_text().split()
+        except OSError:
+            words = []
+        values = {w.split('=', 1)[1] for w in words if w.startswith('androidboot.slot_suffix=')}
+    return values.pop() if len(values) == 1 and values <= {'_a', '_b'} else None
+
+
+def slot_suffix():
+    """The profile's modem slot: _a when boot-update.conf names no SLOT=
+    (every phone so far), else that slot, only while the boot runs from it."""
+    try:
+        lines = [l for l in BOOT_UPDATE_CONF.read_text().splitlines() if l.startswith('SLOT=')]
+    except OSError:
+        lines = []
+    if not lines:
+        return '_a'
+    m = re.fullmatch(r'SLOT="?([ab])"?', lines[0]) if len(lines) == 1 else None
+    if not m:
+        raise Invalid(f'{BOOT_UPDATE_CONF}: SLOT= is not one a or b line: which modem image is unknown')
+    if boot_suffix() != '_' + m.group(1):
+        raise Invalid(f'{BOOT_UPDATE_CONF} says SLOT={m.group(1)}, but this boot is not from that slot: which modem image is unknown')
+    return '_' + m.group(1)
+
+
 def binding(sums):
-    """SHA-256 of this backup's lines for IMAGES, normalised and sorted."""
+    """SHA-256 of this backup's lines for the images the profile copies,
+    normalised and sorted."""
+    modem = f'modem{slot_suffix()}.img'
+    IMAGES = IMAGES_BUT_MODEM + (modem,)
     found = {}
     for line in Path(sums).read_text().splitlines():
         fields = line.split()
@@ -152,7 +198,9 @@ def binding(sums):
     missing = [name for name in IMAGES if name not in found]
     if missing:
         raise Invalid(f'{sums} has no line for {", ".join(missing)}')
-    return sha256(''.join(f'{found[name]}  {name}\n' for name in sorted(IMAGES)).encode())
+    # The modem line by role (MODEM_ROLE), not by partition name
+    found[MODEM_ROLE] = found.pop(modem)
+    return sha256(''.join(f'{found[name]}  {name}\n' for name in sorted(found)).encode())
 
 
 def scan(root):

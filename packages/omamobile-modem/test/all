@@ -515,6 +515,67 @@ printf 'ro.boot.cdt_hwid=TESTID\n' > "$t/p4"; cdt "$t/p4" || fail "the persist c
 cdt "$t/missing" && fail "a missing props file is refused"
 pass "board id required"
 
+# The modem's slot (ACTIVE-SLOT-PLAN §4): modem_a, exactly as before,
+# unless boot-update.conf names SLOT= (a format-2 install); then that slot,
+# only while the boot runs from it (bootconfig alone when it has the key,
+# else the command line). Fake files only.
+slotof() { # boot-update.conf content (or none), bootconfig line (or none), command line
+  rm -rf "$t/proc" "$t/buc" && mkdir -p "$t/proc"
+  [[ $1 == none ]] || printf '%b' "$1" > "$t/buc"
+  [[ $2 == none ]] || printf '%s\n' "$2" > "$t/proc/bootconfig"
+  printf '%s\n' "$3" > "$t/proc/cmdline"
+  OMAMOBILE_MODEM_PROC=$t/proc OMAMOBILE_MODEM_BOOT_UPDATE_CONF=$t/buc bash -c \
+    'eval "$(sed -n "/^MODEM_PROC=/p; /^MODEM_BOOT_UPDATE_CONF=/p; /^modem_boot_suffix() {/,/^}/p; /^modem_slot_suffix() {/,/^}/p" profiles/modem.conf)"; modem_slot_suffix'
+}
+[[ $(slotof none 'androidboot.slot_suffix = "_b"' '') == _a ]] || fail "no boot-update.conf (every phone today, on slot B): modem_a"
+[[ $(slotof 'AUTO_WRITE=yes\n' 'androidboot.slot_suffix = "_b"' '') == _a ]] || fail "a boot-update.conf without SLOT=: modem_a"
+[[ $(slotof none none '') == _a ]] || fail "no SLOT= and no slot named: modem_a, nothing read"
+[[ $(slotof 'AUTO_WRITE=yes\nSLOT=a\n' 'androidboot.slot_suffix = "_a"' '') == _a ]] || fail "SLOT=a on slot A: modem_a"
+[[ $(slotof 'SLOT=b\n' 'androidboot.slot_suffix = "_b"' '') == _b ]] || fail "SLOT=b on slot B: modem_b"
+[[ $(slotof 'SLOT="b"\n' none 'x androidboot.slot_suffix=_b') == _b ]] || fail "SLOT=b, the slot on the command line: modem_b"
+[[ -z $(slotof 'SLOT=a\n' 'androidboot.slot_suffix = "_b"' '') ]] || fail "SLOT=a on slot B (a fallback): unknown"
+[[ -z $(slotof 'SLOT=a\n' none 'console=null') ]] || fail "SLOT=a, no slot named: unknown"
+[[ -z $(slotof 'SLOT=a\nSLOT=a\n' 'androidboot.slot_suffix = "_a"' '') ]] || fail "two SLOT= lines: unknown"
+[[ -z $(slotof 'SLOT=c\n' 'androidboot.slot_suffix = "_a"' '') ]] || fail "SLOT=c: unknown"
+[[ -z $(slotof 'SLOT=a\n' 'androidboot.slot_suffix = ""' 'androidboot.slot_suffix=_a') ]] || fail "an empty bootconfig value is unknown, not the command line's"
+[[ -z $(slotof 'SLOT=a\n' $'androidboot.slot_suffix = "_a"\nandroidboot.slot_suffix = "_b"' '') ]] || fail "two bootconfig values that disagree: unknown"
+grep -q 'MODEM_SLOT=$(modem_slot_suffix)' profiles/modem.conf && grep -q 'which modem image is unknown' profiles/modem.conf \
+  || fail "the check reads the slot and refuses an unknown one"
+setup=$(sed -n '/^profile_setup() {$/,/^}$/p' profiles/modem.conf)
+grep -q 'for p in "modem$MODEM_SLOT" efs efs_backup modem_userdata persist; do modem_copy "$p"; done' <<<"$setup" \
+  && grep -q 'modem_loop "$NV/modem$MODEM_SLOT.img" ro' <<<"$setup" && grep -q 'by-name/modem$MODEM_SLOT"' <<<"$setup" \
+  && grep -q 'modem_slot_props' <<<"$setup" || fail "setup copies, binds and names the running slot's modem image"
+grep -q 'cbd -t s5100sit -P "by-name/modem$MODEM_SLOT" -s 2 -o r' profiles/modem.conf || fail "cbd boots the running slot's image"
+! grep -qwE 'modem_a|modem_b' <(grep -v '^ *#' profiles/modem.conf | grep -vF 'for p in efs efs_backup modem_userdata modem_a modem_b persist; do') \
+  || fail "no fixed modem_a or modem_b left outside the NV partition check"
+! grep -qE '^(ro\.boot\.slot_suffix|vendor\.cbd\.partition)=' modem/props.conf || fail "props.conf no longer fixes the slot"
+# The property store as the chroot writes it (one file per key, printf %s),
+# then the slot's two: on slot A exactly the values props.conf fixed before
+props() { # slot, per-phone props file or none
+  rm -rf "$t/root" && mkdir -p "$t/root/dev/__omamobile_props__"
+  local line k f
+  for f in modem/props.conf "$2"; do
+    [[ -f $f ]] || continue
+    while IFS= read -r line; do
+      [[ $line =~ ^[[:space:]]*# || $line != *=* ]] && continue
+      k=${line%%=*}; printf '%s' "${line#*=}" > "$t/root/dev/__omamobile_props__/$k"
+    done < "$f"
+  done
+  ROOT=$t/root MODEM_SLOT=$1 bash -c 'die() { echo "$*" >&2; exit 1; }; eval "$(sed -n "/^modem_slot_props() {/,/^}/p" profiles/modem.conf)"; modem_slot_props'
+}
+props _a none || fail "slot A's props are written"
+[[ $(cat "$t/root/dev/__omamobile_props__/ro.boot.slot_suffix") == _a && $(cat "$t/root/dev/__omamobile_props__/vendor.cbd.partition") == modem_a ]] \
+  || fail "on slot A, ro.boot.slot_suffix=_a and vendor.cbd.partition=modem_a, as before"
+[[ $(od -An -c "$t/root/dev/__omamobile_props__/ro.boot.slot_suffix" | tr -d ' ') == _a ]] || fail "written without a newline, as the property store holds every value"
+props _b none || fail "slot B's props are written"
+[[ $(cat "$t/root/dev/__omamobile_props__/ro.boot.slot_suffix") == _b && $(cat "$t/root/dev/__omamobile_props__/vendor.cbd.partition") == modem_b ]] \
+  || fail "on slot B, _b and modem_b"
+printf 'ro.boot.cdt_hwid=TESTID\nvendor.cbd.partition=modem_a\n' > "$t/perphone"
+props _b "$t/perphone" 2>"$t/err" && fail "a per-phone value naming the other slot stops the profile"
+grep -q 'differs from this boot' "$t/err" || fail "and says why"
+props _a "$t/perphone" || fail "a per-phone value that agrees is fine"
+pass "the modem's slot: modem_a as before unless boot-update.conf names SLOT= and the boot runs from it; its image, cbd's -P and the two slot properties follow"
+
 # The on/off switch (the shell's Mobile network page): a fake systemctl
 # records what it's asked. "off" only masks; "on" unmasks and starts the
 # target only when this boot's modem never started and the phone is
