@@ -269,8 +269,35 @@ if [[ -n $out ]]; then
        && (cd "$src" && KCONFIG_CONFIG="$out/build/.config" scripts/kconfig/merge_config.sh -m -O "$out/build" "$out/build/.config" "$repo/kernel/configs/omamobile.config" >/dev/null 2>&1) \
        && "${k[@]}" olddefconfig >/dev/null 2>&1; then
       bad=""
+      # The .c files in the same or the parent directory that #include $1 (a KUnit
+      # test at the end of a driver, as drm_panic.c does with
+      # tests/drm_panic_test.c), so such a file is built through its driver.
+      includer_of() {
+        local f=$1 d b g i want
+        d=$(dirname "$(dirname "$f")"); [[ $d == . ]] && d=$(dirname "$f")
+        b=$(basename "$f" | sed 's/[][\.*^$+?(){}|]/\\&/g')
+        want=$(realpath -ms "$f")
+        while IFS= read -r g; do
+          g=${g#./}; [[ -n $g && $g != "$f" ]] || continue
+          while IFS= read -r i; do
+            [[ $(realpath -ms "$(dirname "$g")/$i") == "$want" ]] && { echo "$g"; break; }
+          done < <(sed -nE 's/^[[:space:]]*#[[:space:]]*include[[:space:]]+"([^"]+\.c)".*/\1/p' "$src/$g")
+        done < <(cd "$src" && grep -rlE --include='*.c' "#[[:space:]]*include[[:space:]]+\"([^\"]*/)?$b\"" "$d" 2>/dev/null | sort)
+      }
       for f in $cfiles; do
-        log=$("${k[@]}" W=1 "${f%.c}.o" 2>&1) || { bad+="  $f"$'\n'"$(tail -5 <<<"$log" | sed 's/^/    /')"$'\n'; continue; }
+        log=$("${k[@]}" W=1 "${f%.c}.o" 2>&1) || {
+          inc=""
+          for g in $(includer_of "$f"); do
+            l2=$("${k[@]}" W=1 "${g%.c}.o" 2>&1) && { inc=$g; log=$l2; break; }
+          done
+          if [[ -n $inc ]]; then
+            echo "# $f does not build alone; it is included by $inc, which builds"
+            grep -qF "$f" "$out/build/$(dirname "$inc")/.$(basename "${inc%.c}").o.cmd" 2>/dev/null \
+              || echo "# $f is not compiled by $inc under this config, so it is not build-tested here"
+          else
+            bad+="  $f"$'\n'"$(tail -5 <<<"$log" | sed 's/^/    /')"$'\n'; continue
+          fi
+        }
         w=$(grep -E 'warning:' <<<"$log" || true)
         [[ -n $w ]] && bad+="  $f (W=1 warnings)"$'\n'"$(head -5 <<<"$w" | sed 's/^/    /')"$'\n'
       done
