@@ -53,6 +53,31 @@ git add -A && git commit -q -m "notes"
 check "a real MAC beside an exempt one" 1 "MAC or Bluetooth addresses"
 echo "ok - an exempt MAC doesn't hide a real one on the same line"
 
+# Other spellings of an address (review lesson L-634): after a label colon,
+# with hyphens, in upper case, and as 12 bare hex digits in a MAC record.
+# Built here so that tools/release's scan of this file finds none of them.
+V=$(printf '%s:%s' 10:20:30 40:50:60) L=02:00:00:00:00:01 D=$(printf '%s:%s' 00:00:5e 00:53:01)
+H=${V//:/-} B=${V//:/} DH=${D//:/-}
+j=0
+mac_case() { # line expect [pattern]
+  case_branch "mac-form-$((j += 1))"
+  printf '%s\n' "$1" > notes.md
+  git add -A && git commit -q -m "notes"
+  check "$1" "$2" "${3:-}"
+}
+for line in "mac:$V" "tag:$V" "id:$V" "wlan0 at $H" "HWaddr ${H^^}" "mac=$B" "bd_addr: $B" \
+  "\"mac_address\": \"${B^^}\"" "Intf0MacAddress=$B" "link/ether $B" "mac-address $B" "bd-addr=$B" \
+  "mac:$L then mac:$H" "id:$D then bdaddr $B"; do
+  mac_case "$line" 1 "MAC or Bluetooth addresses"
+done
+echo "ok - a MAC after a label colon, with hyphens, in upper case or bare in a MAC record fails"
+for line in "mac:$L" "${L//:/-}" "mac=${L//:/}" "00-00-00-00-00-00" "macaddr=000000000000" "mac:$D" "${DH^^}" "hwaddr ${D//:/}" \
+  "$V:70" "a0:$V" "$H-70" "a0-$H" "10:20-30:40-50:60" "fe80::1020:3040:5060" "${B:0:8}-5060-7080-90a0-$B" \
+  "commit $B${B}1020304050607080" "build $B" "mac=${B}7" "together $B"; do
+  mac_case "$line" 0
+done
+echo "ok - made-up and documentation MACs in those forms, longer runs, mixed separators, IPv6, UUIDs and bare hex outside a MAC record pass"
+
 case_branch getprop
 echo "[ro.boot.hardware.revision]: [MP1.0]" > notes.md
 git add -A && git commit -q -m "notes"
