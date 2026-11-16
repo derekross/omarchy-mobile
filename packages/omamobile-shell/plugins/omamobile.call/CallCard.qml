@@ -43,7 +43,10 @@ Item {
   signal reply(string text)
   signal fold()
 
-  readonly property bool ringing: mode === "incoming"
+  // Only while shown: Call.qml hands the hidden card mode "incoming" when
+  // there is no call, and the rings and the wiggle below then ran forever,
+  // waking the shell 90 times a second (3.5 % of a core on a Pixel 7).
+  readonly property bool ringing: mode === "incoming" && visible
   readonly property color foreground: Commons.Color.foreground
   readonly property color accent: Commons.Color.accent
   // Answer and end are the colours every phone uses for them; the rest

@@ -1004,6 +1004,8 @@ fi
 grep -c 'function emergency()' plugins/omamobile.call/Call.qml >/dev/null || fail "the lock's Emergency call button has its warning"
 grep -c "Emergency calls (911, 112) don't work on this phone yet. Keep another phone for emergencies." plugins/omamobile.call/EmergencyInfo.qml >/dev/null \
   || fail "the emergency warning keeps the plan's words (TELEPHONY-APPS-PLAN §3.2)"
+grep -c 'readonly property bool ringing: mode === "incoming" && visible' plugins/omamobile.call/CallCard.qml >/dev/null \
+  || fail "the hidden call card doesn't ring (its animations stop with no call)"
 pass "calls: model, watcher, wiring; the bar's network and call chip; the emergency warning"
 python3 -c 'import json; assert {"id": "omamobile.access"} in json.load(open("profile/shell.json"))["plugins"]' \
   || fail "the phone profile enables the permission sheet"
