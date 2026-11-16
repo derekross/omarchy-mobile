@@ -880,7 +880,7 @@ cmd_initramfs() {
 
 cmd_images() {
   load_device
-  local img="$KERNEL_OUT/images"
+  local img="$KERNEL_OUT/images" rp
   # Pixels: the pinned mkbootimg or the checkout's (MKBOOTIMG_DIR).
   # Tree-local mkbootimg is for qcom-abl.
   local tools="$MKBOOTIMG_DIR"
@@ -912,7 +912,15 @@ cmd_images() {
     [[ -f $MKDTBOIMG ]] ||
       die "no mkdtboimg.py at $MKDTBOIMG: run tools/fetch-toolchain, or set SRC_DIR to an Android checkout (or MKDTBOIMG)"
   fi
-  mkdir -p "$img" && rm -rf "$img"/*
+  # Refuse a symbolic link: the one way this wipe can leave the build
+  # directory (audit S-6 — e.g. an images dir linked to /).
+  mkdir -p -- "$img"
+  [[ ! -L $img ]] ||
+    die "images: refusing to wipe a symbolic link '$img' (KERNEL_OUT='$KERNEL_OUT')"
+  rp=$(realpath -- "$img" 2>/dev/null) || rp=
+  [[ -n $rp && $rp != / ]] ||
+    die "images: refusing to wipe suspicious dir '$img' (KERNEL_OUT='$KERNEL_OUT')"
+  rm -rf "$img"/*
 
   # The descriptor's bring-up overlays, compiled from device/<codename>/overlays
   # and applied onto the kernel's DTB, in order. The kernel's own DTB is left
