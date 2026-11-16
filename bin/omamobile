@@ -239,6 +239,19 @@ load_device() {
   elif [[ -n ${DEV_AVB_ROLLBACK_INDEX:-}${DEV_AVB_SECURITY_PATCH:-} ]]; then
     die "$file: AVB_ROLLBACK_INDEX and AVB_SECURITY_PATCH belong with AVB_FOOTERS"
   fi
+  # Where a release installs (docs/ACTIVE-SLOT-PLAN.md §1): INSTALL_SLOT=b,
+  # the default (manifest format 1, slot B), or active (format 2: the slot
+  # the phone runs from, which must be one of INSTALL_ACTIVE_SLOTS). No
+  # device sets them yet. lib/descriptor.sh, tools/install-phone,
+  # tools/install-guided and tools/bundle-manifest check them the same way
+  # (tests/install-slot-descriptor).
+  case ${DEV_INSTALL_SLOT-b} in
+    b) [[ -z ${DEV_INSTALL_ACTIVE_SLOTS+x} ]] || die "$file: INSTALL_ACTIVE_SLOTS belongs with INSTALL_SLOT=active" ;;
+    active)
+      [[ ${DEV_INSTALL_ACTIVE_SLOTS-} =~ ^(a|b|a\ b|b\ a)$ ]] ||
+        die "$file: INSTALL_SLOT=active needs INSTALL_ACTIVE_SLOTS: the slots a release installs on (a, b, or a b)" ;;
+    *) die "$file: INSTALL_SLOT is active or b, not '$DEV_INSTALL_SLOT'" ;;
+  esac
 }
 
 # The images in $1 were built for $DEVICE: flash and push must not write

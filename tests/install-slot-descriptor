@@ -1,0 +1,111 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The descriptor's INSTALL_SLOT and INSTALL_ACTIVE_SLOTS (docs/ACTIVE-SLOT-PLAN.md
+# §7 step 6): where a release installs, slot B (b, the default, manifest
+# format 1) or the slot the phone runs from (active, format 2, one of
+# INSTALL_ACTIVE_SLOTS). Every reader of the descriptor gives the same
+# verdict, with the same words, for each set of lines below: bin/omamobile's
+# load_device (through initramfs-config), omamobile-boot-update's
+# lib/descriptor.sh, tools/install-phone, tools/install-guided and
+# tools/bundle-manifest. No device in device/ sets either key yet. No phone,
+# nothing written.
+#
+# The readers that check a whole descriptor (bin/omamobile, lib/descriptor.sh)
+# are asked whether they accept it. The installers stop at the next thing a
+# bare tree lacks (images, a root image), so for them a refusal is one that
+# names one of the two keys, and an acceptance one that goes past them.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+ROOT=$PWD
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+t=$(mktemp -d); trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
+
+# A repository-shaped tree for bin/omamobile and the two installers, and a
+# bundle-shaped one for bundle-manifest, around the cheetah descriptor
+mkdir -p "$t/repo/bin" "$t/repo/tools" "$t/repo/device/zz" "$t/repo/images" "$t/bundle/images"
+cp bin/omamobile "$t/repo/bin/"
+cp tools/install-phone tools/install-guided tools/factory-index "$t/repo/tools/"
+for f in nv-backup phone-provision phone-smoke camera-requirements.txt; do : > "$t/repo/tools/$f"; done
+cp omamobile.conf "$t/repo/"
+cp -r initramfs "$t/repo/"
+echo zz > "$t/repo/images/DEVICE"
+sed 's/^CODENAME=.*/CODENAME=zz/' device/cheetah/device.conf > "$t/base.conf"
+grep -c '^INSTALL_SLOT=\|^INSTALL_ACTIVE_SLOTS=' "$t/base.conf" >/dev/null && fail "the base descriptor sets neither key"
+for conf in device/*/device.conf; do
+  ! grep -cE '^INSTALL_(SLOT|ACTIVE_SLOTS)=' "$conf" >/dev/null || fail "$conf: no device sets INSTALL_SLOT or INSTALL_ACTIVE_SLOTS yet"
+done
+
+LIBDIR=$ROOT/packages/omamobile-boot-update/lib
+# Each reader prints its verdict: "accept", or "refuse: " and the message that
+# names the key (without the descriptor's path, which differs per reader)
+key_msg() { grep -oE '(INSTALL_SLOT|INSTALL_ACTIVE_SLOTS)[^:]*( is| belongs| needs).*' "$1" | head -1 | sed 's/\x1b\[[0-9;]*m//g'; }
+verdict() {  # OUTPUT-FILE ACCEPTED(0|1) [past-pattern]
+  local msg
+  msg=$(key_msg "$1")
+  if [[ -n $msg ]]; then echo "refuse: $msg"; return; fi
+  if [[ $2 == 1 ]] || { [[ -n ${3:-} ]] && grep -cE "$3" "$1" >/dev/null; }; then echo accept; else echo "neither: $(tail -2 "$1" | tr '\n' ' ')"; fi
+}
+laptop() {
+  local ok=0
+  (cd "$t/repo" && DEVICE=zz bin/omamobile initramfs-config "$t/cfg") > "$t/o.laptop" 2>&1 && ok=1
+  verdict "$t/o.laptop" "$ok"
+}
+phone() {
+  local ok=0
+  bash -c 'die() { echo "$*" >&2; exit 1; }; source "$1/descriptor.sh"; bu_load_descriptor "$2"' _ "$LIBDIR" "$t/repo/device/zz/device.conf" > "$t/o.phone" 2>&1 && ok=1
+  verdict "$t/o.phone" "$ok"
+}
+installer() {
+  # Past the descriptor, it looks for the images (this tree has none)
+  HOME=$t/home "$t/repo/tools/install-phone" --device zz --images "$t/repo/images" --work "$t/work" --verify-only > "$t/o.install" 2>&1 || true
+  verdict "$t/o.install" 0 'missing .*/images/boot\.img'
+}
+guided() {
+  # --status reads the descriptor and stops before the phone
+  HOME=$t/home "$t/repo/tools/install-guided" --device zz --images "$t/repo/images" --state "$t/state" --status > "$t/o.guided" 2>&1 && ok=1 || ok=0
+  verdict "$t/o.guided" "$ok"
+}
+manifest() {
+  # Past the descriptor, it looks for the images (this bundle has none)
+  cp "$t/repo/device/zz/device.conf" "$t/bundle/device.conf"
+  : > "$t/root.img.zst"
+  python3 -I tools/bundle-manifest --bundle "$t/bundle" --rootfs "$t/root.img.zst" --rootfs-sha256 "$(printf '%064d' 0)" \
+    --version 2026.11.16 --kernel-release test > "$t/o.manifest" 2>&1 || true
+  verdict "$t/o.manifest" 0 'the bundle has no images/'
+}
+
+n=0
+check() {  # WANT LINES...: accept, or the refusal's message
+  local want=$1 got r
+  shift
+  { cat "$t/base.conf"; printf '%s\n' "$@"; } > "$t/repo/device/zz/device.conf"
+  for r in laptop phone installer guided manifest; do
+    got=$($r)
+    [[ $got == "$want" ]] || { cat "$t/o.$r" >&2; fail "$r: '$*' gets '$got', not '$want'"; }
+  done
+  n=$((n + 1))
+}
+check accept
+check accept INSTALL_SLOT=b
+check accept 'INSTALL_SLOT="b"'
+check accept INSTALL_SLOT=active INSTALL_ACTIVE_SLOTS=a
+check accept INSTALL_SLOT=active 'INSTALL_ACTIVE_SLOTS="a b"'
+check accept INSTALL_SLOT=active 'INSTALL_ACTIVE_SLOTS="b a"'
+check accept INSTALL_SLOT=active INSTALL_ACTIVE_SLOTS=b
+bad_slot() { echo "refuse: INSTALL_SLOT is active or b, not '${1-}'"; }
+needs="refuse: INSTALL_SLOT=active needs INSTALL_ACTIVE_SLOTS: the slots a release installs on (a, b, or a b)"
+belongs="refuse: INSTALL_ACTIVE_SLOTS belongs with INSTALL_SLOT=active"
+check "$(bad_slot a)" INSTALL_SLOT=a
+check "$(bad_slot Active)" INSTALL_SLOT=Active
+check "$(bad_slot)" INSTALL_SLOT=
+check "$needs" INSTALL_SLOT=active
+check "$needs" INSTALL_SLOT=active INSTALL_ACTIVE_SLOTS=
+check "$needs" INSTALL_SLOT=active 'INSTALL_ACTIVE_SLOTS="a a"'
+check "$needs" INSTALL_SLOT=active 'INSTALL_ACTIVE_SLOTS="a,b"'
+check "$needs" INSTALL_SLOT=active INSTALL_ACTIVE_SLOTS=c
+check "$needs" INSTALL_SLOT=active 'INSTALL_ACTIVE_SLOTS="a b a"'
+check "$belongs" INSTALL_ACTIVE_SLOTS=a
+check "$belongs" INSTALL_SLOT=b INSTALL_ACTIVE_SLOTS=a
+check "$belongs" INSTALL_SLOT=b INSTALL_ACTIVE_SLOTS=
+pass "INSTALL_SLOT and INSTALL_ACTIVE_SLOTS: bin/omamobile, lib/descriptor.sh, install-phone, install-guided and bundle-manifest agree on $n descriptors, in the same words"
