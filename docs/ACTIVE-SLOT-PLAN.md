@@ -94,6 +94,17 @@ Before: the radio-backup check passes; the home folder and settings are copied o
 
 When every step passes, the maintainer adds the format-2 and accepted-slot lines to cheetah's descriptor and notes, and the next release is format 2.
 
+### 6.1 The running-slot guard on a development phone (slot B), before any of the above
+
+Step 2 of §7 changes what every phone boots (the init is in device-cheetah's boot files and in every `bin/omamobile initramfs`), so one development boot of it comes first. The 7 Pro on slot B, as today; every step is the maintainer's go; the device-cheetah version is set by the maintainer only after this boots.
+
+| Step | What | Pass | Stop | Rollback | Risk |
+| --- | --- | --- | --- | --- | --- |
+| G0 | read only: `grep slot_suffix /proc/bootconfig`; for every `sd*` partition its `PARTNAME` and `ro` | `_b`; the five `_b` boot images and `userdata` `ro` 0, everything else 1 | another slot | none | none |
+| G1 | `bin/omamobile initramfs`, `images`, then `systemctl stop omamobile-modem` and `bin/omamobile push` | SSH back on the new boot id | no SSH after about a minute (the safety net crashes back to fastboot or slot A) | `bin/omamobile flash` of the last known-good set (built by the current tool, footers included) | low: the guard is the only change |
+| G2 | read only: `dmesg \| grep ufs-ro:`, G0's list again, `tools/phone-smoke` | "running from slot b", "allowlist: boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"; the same `ro` values as G0; the boot and storage guard rows ok | any `_a` partition `ro` 0, or a `_b` boot image `ro` 1: write nothing, flash back | as G1 | none |
+| G3 | a second `bin/omamobile push` of the same images | it writes and verifies through the guard, as before | a read-only refusal | as G1 | low |
+
 ## 7. The changes, in order
 
 **First, changing no existing phone:**
