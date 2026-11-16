@@ -13,7 +13,13 @@ What works on each phone, and the notes behind it: [docs/DEVICES.md](docs/DEVICE
 
 ## Quick start
 
-**Installing a release?** Follow [docs/INSTALL.md](docs/INSTALL.md): it installs a downloaded, signed release bundle, with no build and no checkout of this repository. The steps below build everything yourself.
+**Installing a release?** A signed release installs with no build and no checkout of this repository, in one of three ways:
+
+- **The guided command-line install,** for first installs and reinstalls: `bash install --guided` in the downloaded release bundle's folder ([docs/INSTALL.md](docs/INSTALL.md), design in [docs/INSTALL-GUIDED.md](docs/INSTALL-GUIDED.md)). On a Pixel 7 Pro a first install from stock Android still stops at the bootloader-slot check; INSTALL.md says what to do.
+- **The desktop app, Omarchy Mobile Installer,** for reinstalls only: a Pixel 7 Pro that already runs Omarchy Mobile from slot B. Linux on x86_64, as an Arch package or an AppImage, from the installer's [releases](https://github.com/derekross/omamobile-installer/releases) ([how to install it](https://github.com/derekross/omamobile-installer/blob/main/docs/INSTALL-APP.md)).
+- **The web page** at [omamobile.org/install/web/app/](https://omamobile.org/install/web/app/), in a Chromium-based browser, to check a phone and a release: it downloads and verifies the release, looks at the phone over USB and runs a dry run. It writes nothing to the phone.
+
+Each needs release 2026.11.15 or later. The steps below build everything yourself.
 
 The installer is new: expect rough edges. You need a Pixel 7 Pro with an unlocked bootloader, an Omarchy (Arch) laptop with Docker, `android-tools` and `e2fsprogs`, and Google's factory image for the phone. Stock Android stays on slot A as the way back; installing erases `userdata`.
 

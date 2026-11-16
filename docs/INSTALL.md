@@ -1,11 +1,21 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Installing Omarchy Mobile on a Pixel 7 Pro
 
-This guide installs a release of Omarchy Mobile on a Pixel 7 Pro (codename `cheetah`). Releases are developer previews, named by date (for example `2026.11.15`). Releases are listed at [omamobile.org/download](https://omamobile.org/download), and each phone's page lists what works and what doesn't yet ([Pixel 7 Pro](https://omamobile.org/devices/cheetah), from [DEVICES.md](https://github.com/derekross/omarchy-mobile/blob/main/docs/DEVICES.md)).
+This guide installs a release of Omarchy Mobile on a Pixel 7 Pro (codename `cheetah`). Releases are developer previews, named by date (for example `2026.11.15`). Releases are listed on [GitHub](https://github.com/derekross/omarchy-mobile/releases), and each phone's page lists what works and what doesn't yet ([Pixel 7 Pro](https://omamobile.org/devices/cheetah), from [DEVICES.md](https://github.com/derekross/omarchy-mobile/blob/main/docs/DEVICES.md)).
 
 Omarchy Mobile is a community project built on [Omarchy](https://omarchy.org). It isn't an official Omarchy or Basecamp product.
 
-It takes about an hour, most of it downloads and waiting. **New to this? Use [the guided install](#the-guided-install): one command, run from the release you download, that does every step below and tells you what to do at each point.** The numbered steps after it are the same install by hand, for when you want to do each part yourself. Installing from a web page or a desktop app is planned ([install experience plan](https://github.com/derekross/omarchy-mobile/blob/main/docs/INSTALL-EXPERIENCE-PLAN.md)).
+It takes about an hour, most of it downloads and waiting. **New to this? Use [the guided install](#the-guided-install): one command, run from the release you download, that does every step below and tells you what to do at each point.** The numbered steps after it are the same install by hand, for when you want to do each part yourself.
+
+## Three ways to install
+
+| Way | For | What it does |
+| --- | --- | --- |
+| [The guided install](#the-guided-install) (`bash install --guided`, in the release bundle) | First installs and reinstalls | The whole install, from the warning to a checked phone. This guide. A first install still stops at the bootloader-slot check ([below](#the-guided-install)) |
+| The desktop app, Omarchy Mobile Installer ([releases](https://github.com/derekross/omamobile-installer/releases), [how to install it](https://github.com/derekross/omamobile-installer/blob/main/docs/INSTALL-APP.md)) | Reinstalls only: a phone that already runs Omarchy Mobile from slot B | The same install in a window: the write, the first start, the USB connection, the radio backup, the firmware, a restart and a check. A first install stops at the bootloader-slot check |
+| The web page, [omamobile.org/install/web/app/](https://omamobile.org/install/web/app/) (Chrome, Edge and other Chromium-based browsers) | Checking a phone and a release | Downloads and verifies the release, looks at the phone over USB and runs a dry run. It writes nothing to the phone |
+
+All three need release 2026.11.15 or later: earlier releases have no `bash install --guided`, and no places in the system image for your answers, which the app and the web page need.
 
 ## Before you start: what happens to your phone
 
@@ -17,7 +27,7 @@ It takes about an hour, most of it downloads and waiting. **New to this? Use [th
 ## What you need
 
 - **A Pixel 7 Pro** whose bootloader can be unlocked. Phones sold locked to a carrier often can't be. In Android, go to Settings > About phone and tap Build number seven times to turn on Developer options, then check that Settings > System > Developer options > **OEM unlocking** can be switched on. If it's greyed out, the phone can't be unlocked.
-- **A computer running Linux** (Omarchy, Arch Linux or another distribution), and a USB-C cable that carries data. The installer is a shell script for Linux; installing from a web page or a desktop app is planned.
+- **A computer running Linux** (Omarchy, Arch Linux or another distribution), and a USB-C cable that carries data. The installer is a shell script for Linux. The desktop app (reinstalls only) runs on Linux on x86_64; the web page (a check, no install) runs in a Chromium-based browser.
 - **These programs on the computer:** `fastboot` and `adb` (Android platform tools), `e2fsprogs`, `zstd`, `lz4`, `cpio`, `openssl`, `gnupg`, `python3`, `unzip`, and `binutils`. On Omarchy or Arch Linux:
 
   ```sh
@@ -32,7 +42,7 @@ It takes about an hour, most of it downloads and waiting. **New to this? Use [th
   ssh-keygen -t ed25519
   ```
 
-- **The release,** from [omamobile.org/download](https://omamobile.org/download), in one of two ways:
+- **The release** (2026.11.15 or later for the guided install), from its page on [GitHub](https://github.com/derekross/omarchy-mobile/releases), in one of two ways:
   - **one file** (the easy way): `omamobile-cheetah-<version>.tar` (about 2.8 GB) and its checksum file `omamobile-cheetah-<version>.tar.sha256`, downloaded into the same folder (and `omamobile-cheetah-<version>.tar.sha256.sig` too, for step 2's optional signature check). Step 2 checks and unpacks it.
   - **file by file:** the bundle (a folder named `omamobile-cheetah-<version>`) and the root image (`omamobile-rootfs-cheetah-<version>-aarch64.img.zst`), side by side in the same folder. Downloads often lose the files' execute permission, so run `chmod +x tools/*` once inside the bundle folder (`tools/phone-provision` runs the other tools there directly).
 - **Google's factory image for your phone,** from [Google's factory images page](https://developers.google.com/android/images#cheetah): the build your phone runs now (Settings > About phone > Build number). Check its SHA-256 against the one on Google's page (`sha256sum cheetah-*.zip`). Omarchy Mobile never ships Google's files: after the install, a tool copies the firmware your phone needs (Wi-Fi, Bluetooth, audio, haptics, the camera) out of this image, on your computer, and onto your phone. The guided install gets this file for you, straight from Google once you have accepted Google's terms, or uses the one you already saved in your Downloads folder.
