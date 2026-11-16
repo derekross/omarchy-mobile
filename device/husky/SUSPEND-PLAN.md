@@ -1,8 +1,8 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 8 Pro (husky): suspend
 
-Status (2026-11-15): **H0b passed on this unit (section 4); H1 to H4 have
-not run.** s2idle has run on one 8 Pro already,
+Status (2026-11-15): **H0b and H1 passed on this unit (section 4); H2 to
+H4 have not run.** s2idle has run on one 8 Pro already,
 Lef's (section 4, from #642 and #724). This file is the runbook Derek asked
 for on #656 before a first attended suspend test on another unit: what
 husky has for the three things he named (Wi-Fi across sleep, UFS
@@ -297,3 +297,27 @@ and after).
   at boot). No PCIe, AER or UFS line. `running`, no failed units.
 - The interface came back on `phy1` (it was `phy0`): cosmetic, but a
   script that names the phy would miss it.
+
+**This unit, 2026-11-15, H1: passed.** Same kernel and package as H0b, 20
+minutes later, over USB, 99 % and charging. `pre` passed and unloaded
+Wi-Fi and the PCIe host. `freezer`, `devices` and `platform`, each through
+`systemctl suspend` with 25 s between:
+
+- `suspend_stats` went 0 to 3 successes, 0 failures, no
+  `last_failed_dev`. Three `PM: suspend entry (s2idle)` and `suspend exit`
+  pairs, each with `suspend debug: Waiting for 5 second(s)`.
+- `devices`: suspend of devices 40 ms, resume 68 ms. `platform`: suspend
+  43 ms, late 2.6 ms, noirq 1.9 ms; noirq resume 1.8 ms, early 1.8 ms,
+  resume 69 ms. The slowest resume is the UFS device W-LUN, 41 ms both
+  times.
+- After the `devices` and the `platform` resume, UFS printed one
+  `dme-set: attr-id 0x4021 val 0x1 failed 0 retries` each, the line Lef's
+  resumes show. No error handler run, no hibern8 line, no I/O or ext4
+  error, root still read-write.
+- Each entry came about 5 s after `systemctl suspend`: logind's delay
+  inhibitors (NetworkManager, UPower, Omarchy's lock).
+- Afterwards: `running`, no failed units, Bluetooth powered, the haptics
+  input device there, the GPU at its idle rate, and Wi-Fi connected 14 s
+  after the reload. USB answered on the first try after the run. Nobody
+  touched the screen during the run, so touch after resume is not
+  checked here.
