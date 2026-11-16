@@ -26,7 +26,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      # actions/checkout v5.1.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           path: linux
           fetch-depth: 0
@@ -36,7 +37,8 @@ jobs:
       # replays it, so a fix merged since then would never be seen.
       - name: The base, now
         run: git -C linux fetch --no-tags origin "+refs/heads/${{ github.event.pull_request.base.ref }}:refs/remotes/origin/base"
-      - uses: actions/checkout@v5
+      # actions/checkout v5.1.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: derekross/omarchy-mobile
           path: omarchy-mobile
