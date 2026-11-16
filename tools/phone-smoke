@@ -92,13 +92,16 @@ up=$(cut -d. -f1 "$sr/proc/uptime" 2>/dev/null)
 # release installed on the slot it ran from, docs/ACTIVE-SLOT-PLAN.md §2),
 # b when the file or the line is absent (development phones, older installs)
 want=b want_from="our builds boot from slot b"
-v=$(sed -n 's/^SLOT="\{0,1\}\([ab]\)"\{0,1\}$/\1/p' "$sr/etc/omamobile/boot-update.conf" 2>/dev/null | tail -1)
+v=$(sed -n 's/^SLOT="\{0,1\}\([ab]\)"\{0,1\}$/\1/p' "$sr/etc/omamobile/boot-update.conf" 2>/dev/null)
 [[ -z $v ]] || want=$v want_from="boot-update.conf says SLOT=$v"
-case $slot in
+nslot=$(grep -c '^SLOT=' "$sr/etc/omamobile/boot-update.conf" 2>/dev/null)
+if ((${nslot:-0} > 1)); then
+  check "not ok" 1 "boot" "kernel $release: boot-update.conf names SLOT $nslot times (omamobile-boot-update refuses it)"
+else case $slot in
   "_$want") check ok 1 "boot" "kernel $release, slot ${slot#_}, up ${up}s" ;;
   "") check skip 1 "boot" "kernel $release, no slot in bootconfig or on the command line" ;;
   *) check "not ok" 1 "boot" "kernel $release on slot ${slot#_}: $want_from" ;;
-esac
+esac; fi
 
 # ---------------------------------------------------------------- storage
 # Every UFS partition is read-only except userdata and the running slot's

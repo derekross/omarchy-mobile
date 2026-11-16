@@ -150,6 +150,7 @@ load_conf() {
     if [[ $line =~ ^AUTO_WRITE=\"?(yes|no)\"?$ ]]; then
       AUTO_WRITE=${BASH_REMATCH[1]}
     elif [[ $line =~ ^SLOT=\"?(a|b)\"?$ ]]; then
+      [[ -z $slot ]] || refuse "$CONF:$n: a second SLOT= line (the slot must be named once)"
       slot=${BASH_REMATCH[1]}
     elif [[ $line =~ ^AVB_KEY=\"?(/[A-Za-z0-9_./-]+)\"?$ && $line != *..* ]]; then
       AVB_KEY=${BASH_REMATCH[1]}
@@ -461,10 +462,15 @@ previous_slot() { cat "$STATE/previous/SLOT" 2>/dev/null || echo b; }
 
 save_previous() {
   local img dev bytes rel booted=yes need avail written new=$STATE/previous.new
-  # A set saved from the other slot is no rollback for this one
+  # A set saved from the other slot is no rollback for this one: moved
+  # aside (previous.slot-<x>-<time>), never deleted
+  local other aside
   if [[ -d $STATE/previous && $(previous_slot) != "$SLOT" ]]; then
-    note "previous/ holds slot $(previous_slot | tr ab AB)'s images, not slot ${SLOT^^}'s: replacing it"
-    rm -rf "$STATE/previous"
+    other=$(previous_slot)
+    aside=$STATE/previous.slot-$other-$(date +%Y%m%dT%H%M%S)
+    [[ ! -e $aside ]] || refuse "$aside already exists"
+    mv "$STATE/previous" "$aside"
+    note "previous/ held slot ${other^^}'s images, not slot ${SLOT^^}'s: moved aside to $aside"
   fi
   # Booted means the slot unwritten since this boot, whatever any record says:
   # then it holds the running kernel's set

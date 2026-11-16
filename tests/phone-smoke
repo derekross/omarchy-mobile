@@ -163,6 +163,9 @@ pass "slot A without SLOT=a fails the boot row"
 fakeroot _b $B5; printf 'SLOT="a"\n' > "$fr/etc/omamobile/boot-update.conf"; rows
 has 'not ok|1|boot|' && has 'on slot b: boot-update.conf says SLOT=a' || fail "SLOT=a booted from slot B (a fallback) fails the boot row"
 pass "SLOT=a booted from slot B (a fallback) fails the boot row"
+fakeroot _a $A5; printf 'SLOT=a\nSLOT=a\n' > "$fr/etc/omamobile/boot-update.conf"; rows
+has 'not ok|1|boot|' && has 'names SLOT 2 times' || fail "a second SLOT= line fails the boot row"
+pass "a second SLOT= line fails the boot row"
 fakeroot _a $A5 boot_b; printf 'SLOT=a\n' > "$fr/etc/omamobile/boot-update.conf"; rows
 has 'not ok|1|storage guard|writable outside the allowlist: boot_b' || fail "on slot A, slot B's boot image writable fails the guard row"
 fakeroot _b $B5 dtbo_a; rows

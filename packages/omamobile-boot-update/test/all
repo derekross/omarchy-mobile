@@ -755,6 +755,10 @@ for bad in 'SLOT=c' 'SLOT=' 'SLOT=A' 'SLOT=_a' 'SLOT=a b'; do
   printf 'AUTO_WRITE=yes\n%s\n' "$bad" > "$R/etc/omamobile/boot-update.conf"
   refused "boot-update.conf with $bad" "SLOT=a|b" hook
 done
+for twice in 'SLOT=a\nSLOT=a' 'SLOT=a\nSLOT=b'; do
+  printf "AUTO_WRITE=yes\n$twice\n" > "$R/etc/omamobile/boot-update.conf"
+  refused "boot-update.conf naming SLOT twice" "a second SLOT= line" hook
+done
 printf 'AUTO_WRITE=yes\nSLOT="a"\n' > "$R/etc/omamobile/boot-update.conf"
 run write --dry-run || { cat "$t/out"; fail "SLOT=\"a\" (quoted) is read as a"; }
 # A slot-B rollback set is no rollback for slot A
@@ -764,6 +768,14 @@ echo b > "$S/previous/SLOT"
 refused "a rollback of a set saved from slot B" "holds slot B's images, not slot A's" rollback --yes
 rm "$S/previous/SLOT"
 refused "a rollback of a set saved before the slot was recorded (slot B)" "holds slot B's images, not slot A's" rollback --yes
+# The next write moves that set aside, whole, and saves slot A's
+keep=$(cd "$S/previous" && sha256sum boot.img)
+addrel "$R" 7.3.0-rc6-omamobile-00480-geeeeeeeeeeee
+run hook || { cat "$t/out"; fail "SLOT=a: a write over a slot-B previous/"; }
+grep -c 'moved aside to' "$t/out" >/dev/null || { cat "$t/out"; fail "it says the slot-B set was moved aside"; }
+aside=$(ls -d "$S"/previous.slot-b-* | head -1)
+[[ -n $aside && $(cd "$aside" && sha256sum boot.img) == "$keep" && $(cat "$S/previous/SLOT") == a ]] \
+  || fail "the slot-B set is kept aside intact, previous/ is slot A's"
 echo a > "$S/previous/SLOT"
 # A record of slot B's set says nothing about slot A
 echo b > "$S/current/SLOT"
