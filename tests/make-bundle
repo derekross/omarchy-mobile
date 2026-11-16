@@ -302,3 +302,24 @@ if out=$(bundle); then fail "an install link line this tool does not know stops 
 grep -c "install link line this tool does not know" <<<"$out" >/dev/null || fail "the refusal says why: $out"
 cp "$t/MANIFEST.saved" "$mf"
 pass "manifest.json's install_link: only for an image built for the link, with its protocol"
+
+# The install plan writes only slot B's five boot images and userdata
+# (AGENTS.md §1): a descriptor whose BOOT_IMAGES or UFS_RW names any other
+# partition, here with its own allowlist entry beside it, stops the bundle
+# with the name, and the earlier bundle stays
+conf=$r/device/testdev/device.conf
+descriptor() { printf 'CODENAME=testdev\nNAME="Test device"\nBOOT_IMAGES="%s"\nUFS_RW="%s"\n' "$1" "$2" > "$conf"; }
+printf modem > "$k/images/modem.img"
+printf vbmeta > "$k/images/vbmeta.img"
+before=$(cd "$b" && sha256sum SHA256SUMS)
+for c in "boot dtbo modem|boot_b dtbo_b modem_b userdata|BOOT_IMAGES.* not modem" \
+  "boot dtbo vbmeta|boot_b dtbo_b vbmeta_b userdata|BOOT_IMAGES.* not vbmeta" \
+  "boot dtbo|boot_b dtbo_b modem_b userdata|UFS_RW.* not modem_b"; do
+  IFS='|' read -r images rw says <<<"$c"
+  descriptor "$images" "$rw"
+  if out=$(bundle); then fail "BOOT_IMAGES=\"$images\" UFS_RW=\"$rw\" stops the bundle: it wrote $(grep -o '"partition": "[a-z_]*"' "$b/manifest.json" | cut -d'"' -f4 | xargs)"; fi
+  grep -cE "^bundle-manifest: .*$says\$" <<<"$out" >/dev/null || fail "the refusal names the partition ($says): $out"
+  [[ $(cd "$b" && sha256sum SHA256SUMS) == "$before" ]] && intact || fail "a refused descriptor leaves the bundle as it was"
+done
+descriptor "boot dtbo" "boot_b dtbo_b userdata"
+pass "a descriptor naming modem, vbmeta or modem_b stops the bundle, and the earlier bundle stays"

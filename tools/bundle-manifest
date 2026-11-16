@@ -51,6 +51,11 @@ FORMAT = 1
 NEVER = ["slot A (any *_a partition)", "an unsuffixed partition name", "bootloader", "radio", "persist", "efs",
          "modem", "devinfo", "vbmeta", "fastboot -w", "fastboot --slot", "fastboot flashing", "fastboot erase",
          "fastboot format", "fastboot oem"]
+# What a bundle may write: slot B's boot images and userdata, nothing else
+# (AGENTS.md §1). bin/omamobile's load_device, initramfs/init's
+# ufs_rw_load and tools/phone-smoke hold the same set.
+IMAGES = ("boot", "init_boot", "vendor_boot", "vendor_kernel_boot", "dtbo")
+UFS_RW = tuple(p + "_b" for p in IMAGES) + ("userdata",)
 
 
 def die(msg):
@@ -171,6 +176,12 @@ def main():
     allow = d.get("UFS_RW", "").split()
     if not boot_images or not allow:
         die("device.conf needs BOOT_IMAGES and UFS_RW")
+    for p in boot_images:
+        if p not in IMAGES:
+            die("device.conf: BOOT_IMAGES may hold only %s, not %s" % (", ".join(IMAGES), p))
+    for p in allow:
+        if p not in UFS_RW:
+            die("device.conf: UFS_RW may hold only %s, not %s" % (", ".join(UFS_RW), p))
     avb = {}
     for e in d.get("AVB_FOOTERS", "").split():
         m = re.match(r"^([a-z_]+):(0x[0-9a-f]{1,10}|[1-9][0-9]{0,11})$", e)
@@ -199,8 +210,6 @@ def main():
 
     writes = []
     for p in boot_images:
-        if not re.match(r"^[a-z_]+$", p):
-            die("bad image name %s" % p)
         if p + "_b" not in allow:
             die("%s_b is not on the storage-guard allowlist (UFS_RW)" % p)
         src = "images/%s.img" % p
