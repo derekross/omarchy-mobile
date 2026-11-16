@@ -70,6 +70,7 @@ NEVER_ACTIVE = ["the slot the phone does not run from (any *_<other> partition)"
 # The storage guard's marker (bin/omamobile initramfs packs it when the init
 # maps the packed slot-B names to the running slot)
 GUARD_MARKER = "/etc/omamobile-ufs-rw-slot"
+IMAGES_ACTIVE = ["boot", "init_boot", "vendor_boot", "vendor_kernel_boot", "dtbo"]
 
 
 def die(msg):
@@ -314,6 +315,15 @@ def main():
     if slot == "active":
         # The guard opens the running slot's images (the packed list's slot-B
         # names, mapped by the init) and userdata, and no other partition
+        # Its own list, the only images and guard names a format 2 release
+        # may carry (bin/omamobile's UFS_RW_ALLOWED): never vbmeta, abl or
+        # modem, which would be written as the running slot's live image
+        for p in boot_images:
+            if p not in IMAGES_ACTIVE:
+                die("BOOT_IMAGES may hold only %s, not %s" % (" ".join(IMAGES_ACTIVE), p))
+        for p in allow:
+            if p not in [i + "_b" for i in IMAGES_ACTIVE] + ["userdata"]:
+                die("UFS_RW may hold only slot B boot images and userdata, not %s" % p)
         guard_images = [p[:-2] for p in allow if p.endswith("_b")]
         also = [p for p in allow if not p.endswith("_b")]
         if also != ["userdata"]:

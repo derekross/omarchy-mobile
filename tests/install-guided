@@ -1962,7 +1962,8 @@ says "current-slot-not-accepted" && ! says "fastboot flashing unlock" || fail "f
 # A write that fails partway says Android may be gone too
 fresh; touch "$t/fail-flash"
 if guided2 "$ALL"; then fail "format 2: a failed write stops the install"; fi
-says "and so may Android" && says "Google's factory image for this phone" && ! says "Android itself (slot A) was not touched" ||
+says "and so may Android" && says "Google's factory image for this phone" && says "Don't restart the phone: run this again from Fastboot Mode" &&
+  ! says "Android itself (slot A) was not touched" ||
   fail "format 2: a failed write says Android may be overwritten, and the way back"
 rm -f "$t/fail-flash"
 pass "format 2: slot B not accepted stops before the unlock and the write, with no slot switch advised; a failed write says Android may be gone"

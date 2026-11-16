@@ -1837,6 +1837,7 @@ stop_erased() {
       "writes Omarchy Mobile over the system the phone runs from before the area that" \
       "holds your data. Until the install runs again whole, the phone may start no" \
       "system at all. Its bootloader is untouched, and Fastboot Mode still works." \
+      "Don't restart the phone: run this again from Fastboot Mode." \
       "" \
       "To go on with Omarchy Mobile: leave the phone in Fastboot Mode (to put it back" \
       "there: $keys_fastboot), fix what the" \

@@ -286,13 +286,21 @@ for tool in "$FASTBOOT" debugfs dumpe2fs e2fsck zstd openssl sha256sum lz4 cpio 
 done
 BOOT_IMAGES=${D[BOOT_IMAGES]:-} UFS_RW=${D[UFS_RW]:-}
 [[ -n $BOOT_IMAGES && -n $UFS_RW ]] || die "$conf: BOOT_IMAGES and UFS_RW are required"
+# The only images an install writes, and the only names the storage guard's
+# allowlist may hold (bin/omamobile's UFS_RW_ALLOWED): a descriptor that
+# names anything else (vbmeta, abl, modem) is refused, in both formats,
+# before the phone is contacted
+IMAGES_ALLOWED="boot init_boot vendor_boot vendor_kernel_boot dtbo"
+UFS_RW_ALLOWED="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
 for p in $UFS_RW; do
   [[ $p == *_b || $p == userdata ]] || die "$conf: UFS_RW may hold only *_b partitions and userdata, not $p"
+  [[ " $UFS_RW_ALLOWED " == *" $p "* ]] || die "$conf: UFS_RW may hold only slot B boot images ($UFS_RW_ALLOWED), not $p"
 done
 [[ " $UFS_RW " == *" userdata "* ]] || die "$conf: userdata is not on the storage-guard allowlist"
 for p in $BOOT_IMAGES; do
   [[ $p =~ ^[a-z_]+$ ]] || die "$conf: bad image name $p"
   [[ " $UFS_RW " == *" ${p}_b "* ]] || die "$conf: ${p}_b is not on the storage-guard allowlist (UFS_RW)"
+  [[ " $IMAGES_ALLOWED " == *" $p "* ]] || die "$conf: BOOT_IMAGES may hold only $IMAGES_ALLOWED, not $p"
   [[ -f $images/$p.img ]] || die "missing $images/$p.img (bin/omamobile images)"
 done
 # An AVB_FOOTERS image is padded to the descriptor's partition size, and ABL
@@ -1142,8 +1150,8 @@ trap cleanup EXIT
   printf '%s\n' "$ssh_key" > "$keys_file"
   # Format 2: SLOT=, the slot the install wrote and kernel updates write
   # (absent means b, so a format 1 install's file stays as it always was).
-  # It comes before AUTO_WRITE: the install link's patch checks that the
-  # file ends with that line.
+  # Its place before AUTO_WRITE is harmless either way; it is kept first
+  # for readability.
   slot_line=()
   ((fmt == 1)) || slot_line=("SLOT=$target")
   printf '%s\n' "# Written by install-phone: a release install takes kernel updates through" \
@@ -1258,7 +1266,7 @@ flash() {
   run flash "$part" "$file"
 }
 if ((fmt == 2)); then
-  failed_tail="Android on slot $target may already be partly overwritten and the phone may start no system until the install runs again whole; fix the cause and rerun, or put Android back with Google's factory image"
+  failed_tail="Android on slot $target may already be partly overwritten and the phone may start no system until the install runs again whole. Don't restart the phone: fix the cause and run this again from Fastboot Mode, or put Android back with Google's factory image"
 else
   failed_tail="Slot A is untouched; fix the cause and rerun"
 fi

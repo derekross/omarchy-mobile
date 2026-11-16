@@ -142,12 +142,21 @@ if [[ -f $T/state ]]; then
   esac
   exit 0
 fi
-if [[ $1 == devices ]]; then printf 'FAKE123\tfastboot\n'; exit 0; fi
+if [[ $1 == devices ]]; then
+  # $T/listed-for N: the phone is listed by the first N looks only
+  d=$(($(cat "$T/devices" 2>/dev/null || echo 0) + 1)); echo "$d" > "$T/devices"
+  [[ -f $T/listed-for ]] && ((d > $(cat "$T/listed-for"))) && exit 0
+  printf 'FAKE123\tfastboot\n'; exit 0
+fi
 [[ $1 == -s ]] && shift 2
 case $1 in
   # $T/vars.then: what every later getvar answers (a phone that changed
   # between two looks)
-  getvar) sed 's/^/(bootloader) /' "$T/vars" >&2; [[ ! -f $T/vars.then ]] || mv "$T/vars.then" "$T/vars" ;;
+  # $T/vars.at.N: what getvar answers from its (N+1)th call on
+  getvar)
+    sed 's/^/(bootloader) /' "$T/vars" >&2; [[ ! -f $T/vars.then ]] || mv "$T/vars.then" "$T/vars"
+    g=$(($(cat "$T/getvars" 2>/dev/null || echo 0) + 1)); echo "$g" > "$T/getvars"
+    [[ ! -f $T/vars.at.$g ]] || mv "$T/vars.at.$g" "$T/vars" ;;
   flash) [[ $2 == userdata ]] && cp "$3" "$T/userdata.flashed" ;;
 esac
 exit 0
@@ -175,6 +184,7 @@ answers() {
 }
 install() {
   : > "$t/fastboot.log"
+  rm -f "$t/getvars" "$t/devices"
   # PROBE=yes: the calling tool's consent to the slot check. The installer's
   # process id is kept for the fake's int_getvar.
   answers | HOME=$t/home PATH="$t/bin:$PATH" OMAMOBILE_SLOT_PROBE_POLL=0.02 OMAMOBILE_SLOT_PROBE_TIMEOUT=1 OMAMOBILE_SLOT_PROBE_CALL_TIMEOUT=2 \
@@ -753,6 +763,7 @@ manifest
 (cd "$BD" && find . -type f ! -name SHA256SUMS -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS)
 binstall() {
   : > "$t/fastboot.log"
+  rm -f "$t/getvars" "$t/devices"
   answers | HOME=$t/home PATH="$t/bin:$PATH" "$BD/install" --work "$t/work" "$@" > "$t/out" 2>&1
 }
 if binstall --dry-run; then fail "refuses an unsigned bundle"; fi
@@ -868,6 +879,7 @@ manifest
 rm -f "$BD/SHA256SUMS.sig"
 tinstall() {
   : > "$t/fastboot.log"
+  rm -f "$t/getvars" "$t/devices"
   answers | HOME=$t/home PATH="$t/bin:$PATH" "$BD/tools/install-phone" --work "$t/work" "$@" > "$t/out" 2>&1
 }
 tinstall --dry-run --unsigned || { cat "$t/out"; fail "install-phone in a bundle's tools/ installs that bundle"; }
@@ -1082,7 +1094,7 @@ fi
   fail "a format 2 install's boot-update.conf names the slot it wrote (SLOT=a), before AUTO_WRITE"
 [[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | tail -c 15 | od -An -tx1 | tr -d ' \n') == \
    "$(printf 'AUTO_WRITE=yes\n' | od -An -tx1 | tr -d ' \n')" ]] ||
-  fail "boot-update.conf ends with AUTO_WRITE=yes and a newline (the install link's patch checks that)"
+  fail "boot-update.conf ends with AUTO_WRITE=yes and a newline"
 pass "format 2 install on slot a: exactly <image>_a, userdata, reboot; boot-update.conf SLOT=a"
 
 # A phone on slot b where only a is accepted: current-slot-not-accepted,
@@ -1112,7 +1124,56 @@ if install --images "$t/images2"; then fail "a slot that changes before the firs
 grep -c "current slot changed from a to 'b'" "$t/out" >/dev/null || { cat "$t/out"; fail "says the slot changed"; }
 [[ -z $(flashing_calls) ]] || { flashing_calls; fail "a changed slot: nothing written"; }
 rm -f "$t/vars.then"
-pass "format 2: a slot change between the first look and the first flash stops the install before any write"
+# The gate's other two checks: another serial, and the phone gone from fastboot
+vars2 a; vars2 a "$t/vars.then"; sed -i 's/^serialno:.*/serialno:OTHER999/' "$t/vars.then"
+if install --images "$t/images2"; then fail "another serial at the gate stops the install"; fi
+grep -c 'reports another serial than FAKE123; nothing was written' "$t/out" >/dev/null || { cat "$t/out"; fail "says the serial changed"; }
+[[ -z $(flashing_calls) ]] || fail "another serial at the gate: nothing written"
+rm -f "$t/vars.then"; vars2 a; echo 1 > "$t/listed-for"
+if install --images "$t/images2"; then fail "a phone gone from fastboot at the gate stops the install"; fi
+grep -c 'is no longer in fastboot mode; nothing was written' "$t/out" >/dev/null || { cat "$t/out"; fail "says the phone is gone"; }
+[[ -z $(flashing_calls) ]] || fail "a phone gone at the gate: nothing written"
+rm -f "$t/listed-for"
+# The read-back after the writes: another slot, so no restart
+vars2 a; vars2 b "$t/vars.at.2"
+if install --images "$t/images2"; then fail "a slot changed after the writes stops the install"; fi
+grep -c "after the writes the phone reports current slot 'b', not a: it is not restarted" "$t/out" >/dev/null || { cat "$t/out"; fail "says the slot changed after the writes"; }
+[[ $(flashing_calls) == "$(sed '$d' <<<"$want")" ]] || { flashing_calls; fail "a slot changed after the writes: the writes, and no reboot"; }
+rm -f "$t/vars.at."*
+pass "format 2: a slot change between the first look and the first flash stops the install before any write; so do another serial or a phone gone from fastboot at that gate; a slot changed after the writes gets no restart"
+
+# flash() itself, the one write path: only <image>_<target> whose slot-B
+# name is on UFS_RW, or userdata on UFS_RW; never the other slot
+flash_only() {  # FMT TARGET UFS_RW PART: prints what flash() did
+  bash -c '
+    die() { echo "refused"; exit 1; }
+    run() { echo "ran $*"; }
+    eval "$(sed -n "/^flash() {/,/^}/p" "$1")"
+    fmt=$2 target=$3 UFS_RW=$4 BOOT_IMAGES="boot init_boot vendor_boot vendor_kernel_boot dtbo"
+    flash "$5" file' _ tools/install-phone "$@" 2>&1 || true
+}
+rw="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
+[[ $(flash_only 2 a "$rw" boot_a) == "ran flash boot_a file" && $(flash_only 2 a "$rw" userdata) == "ran flash userdata file" ]] || fail "flash() writes <image>_a and userdata for target a"
+[[ $(flash_only 2 a "$rw" boot_b) == refused ]] || fail "flash() refuses the other slot (boot_b with target a)"
+[[ $(flash_only 2 a "${rw/dtbo_b /}" dtbo_a) == refused ]] || fail "flash() refuses dtbo_a when dtbo_b is not on UFS_RW"
+[[ $(flash_only 2 a "${rw/ userdata/}" userdata) == refused ]] || fail "flash() refuses userdata when it is not on UFS_RW"
+[[ $(flash_only 2 a "$rw vbmeta_b" vbmeta_a) == refused ]] || fail "flash() refuses vbmeta_a, which is no boot image"
+[[ $(flash_only 1 a "$rw" boot_a) == refused && $(flash_only 1 b "$rw" boot_b) == "ran flash boot_b file" ]] || fail "format 1's flash() writes slot B only"
+pass "flash(): only the target slot's boot images on UFS_RW and userdata on UFS_RW; never the other slot, vbmeta, or format 1 off slot B"
+
+# A descriptor that names an image that isn't a boot image (vbmeta) is
+# refused before any fastboot call, in both formats
+for extra in "" $'INSTALL_SLOT=active\nINSTALL_ACTIVE_SLOTS=a'; do
+  { descriptor | sed 's/^BOOT_IMAGES="\(.*\)"$/BOOT_IMAGES="\1 vbmeta"/; s/^UFS_RW="\(.*\) userdata"$/UFS_RW="\1 vbmeta_b userdata"/'
+    [[ -z $extra ]] || printf '%s\n' "$extra"; } > "$R/device/testdev/device.conf"
+  grep -c 'vbmeta"$' "$R/device/testdev/device.conf" >/dev/null || fail "the fixture names vbmeta"
+  vars2 a
+  if install --dry-run --images "$t/images2"; then fail "refuses BOOT_IMAGES with vbmeta (${extra:+format 2}${extra:-format 1})"; fi
+  grep -c 'UFS_RW may hold only slot B boot images\|BOOT_IMAGES may hold only' "$t/out" >/dev/null || { cat "$t/out"; fail "says vbmeta is not a boot image"; }
+  [[ ! -s $t/fastboot.log ]] || fail "a descriptor naming vbmeta is refused before any fastboot call"
+done
+pass "BOOT_IMAGES and UFS_RW hold only the five boot images (and userdata): vbmeta is refused before any fastboot call, in both formats"
+active_descriptor a > "$R/device/testdev/device.conf"
 
 # The options of the slot-B install have no part in it: given, they change
 # nothing, and the descriptor's slot check is never run
@@ -1160,6 +1221,7 @@ seal2() {  # PYTHON-EDIT: manifest.json as bundle-manifest writes it, edited, th
 }
 b2install() {
   : > "$t/fastboot.log"
+  rm -f "$t/getvars" "$t/devices"
   answers | HOME=$t/home PATH="$t/bin:$PATH" "$BD2/install" --unsigned --work "$t/work" "$@" > "$t/out" 2>&1
 }
 seal2
@@ -1195,6 +1257,13 @@ b2refuse "a guard for slot b" 'm["install"]["storage_guard"]["slot"] = "b"' "sto
 b2refuse "a write with an image and a partition" 'm["install"]["writes"][0]["partition"] = "boot_b"' "names an image or a partition"
 b2refuse "format 1" 'm["format"] = 1' "not a valid release manifest"
 b2refuse "a shorter never list" 'm["install"]["never"].pop()' "never written is not format 2's"
+cp "$BD2/device.conf" "$t/device2.conf"
+sed -i 's/^BOOT_IMAGES="\(.*\)"$/BOOT_IMAGES="\1 vbmeta"/; s/^UFS_RW="\(.*\) userdata"$/UFS_RW="\1 vbmeta_b userdata"/' "$BD2/device.conf"
+cp "$t/images/vbmeta.img" "$BD2/images/"
+if python3 -I "$SRC/tools/bundle-manifest" --bundle "$BD2" --rootfs "$img" --rootfs-sha256 "$(cut -d' ' -f1 "$img.sha256")" \
+  --version 2026.10.13 --kernel-release 7.3.0-test-1 > "$t/bm.out" 2>&1; then fail "bundle-manifest refuses a format 2 bundle with vbmeta"; fi
+grep -c 'may hold only' "$t/bm.out" >/dev/null || { cat "$t/bm.out"; fail "bundle-manifest says vbmeta is not a boot image"; }
+cp "$t/device2.conf" "$BD2/device.conf"; rm "$BD2/images/vbmeta.img"
 seal2
 b2install --dry-run || { cat "$t/out"; fail "the format 2 bundle installs again once sealed"; }
 pass "format 2 bundle: bundle-manifest's install object is the contract's, and install-phone refuses any other"
