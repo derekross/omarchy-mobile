@@ -39,6 +39,14 @@ has 'ok|1|kernel health|' && has 'modem wakes from sleep (cp2ap_wakeup) x2' && h
   && ! has 'new dmesg errors' || fail "a modem-woken sleep's CPIF lines are known and counted"
 pass "a modem-woken sleep's CPIF lines are known and counted"
 
+tools/phone-smoke --refused-only 3 3 -16 && tools/phone-smoke --refused-only 1 4 -16 \
+  || { out="refused-only"; fail "every failed suspend a guard refusal: the unit is known"; }
+pass "every failed suspend a guard refusal: the unit is known"
+! tools/phone-smoke --refused-only 4 3 -16 && ! tools/phone-smoke --refused-only 2 0 -16 \
+  && ! tools/phone-smoke --refused-only 1 1 -5 && ! tools/phone-smoke --refused-only "" 1 -16 \
+  || { out="refused-only"; fail "a failure beyond the refusals, none, another errno or no count: the unit still counts"; }
+pass "a failure beyond the refusals, none, another errno or no count: the unit still counts"
+
 lines=(); for _ in $(seq 14); do lines+=("$ufs"); done
 run "${lines[@]}"
 has 'ok|1|kernel health|' && has '(14 known, of them UFS dme-set 0x4021 (s2idle) x14, 0 new)' \
