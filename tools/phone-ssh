@@ -8,6 +8,12 @@
 # OMAMOBILE_SSH_HOST overrides root@172.16.42.1 (user@host).
 # OMAMOBILE_SSH_KEY selects an identity file (IdentitiesOnly=yes).
 # OMAMOBILE_SSH_KNOWN_HOSTS selects a file with strict host-key checking.
+# The value "tofu" opts in to trust-on-first-use against a per-user pin file
+# (~/.local/share/omamobile/phone-ssh/known_hosts): the first connect records
+# the key, a later changed key is refused. The default keeps today's behavior
+# (no host-key state): the USB address is answered by several SSH servers by
+# design (the initramfs's dropbear makes a fresh key each boot; the installed
+# system has its own), so a pin keyed on the address locks our own tools out.
 # OMAMOBILE_SSH_CONFIG explicitly selects an SSH config file (-F); /dev/null
 # skips normal config files only when the caller requests it. Default unchanged.
 # OMAMOBILE_SSH_HOST_KEY_ALIAS selects the name checked in that file, so
@@ -39,6 +45,10 @@ target=${OMAMOBILE_SSH_HOST:-root@172.16.42.1}
 }
 key=${OMAMOBILE_SSH_KEY:-}
 known=${OMAMOBILE_SSH_KNOWN_HOSTS:-}
+# "tofu" is a mode, not a file: extract it before the explicit-path
+# normalization below, which would try to read a file called tofu.
+tofu=0
+if [[ $known == tofu ]]; then tofu=1; known=; fi
 alias=${OMAMOBILE_SSH_HOST_KEY_ALIAS:-}
 config=${OMAMOBILE_SSH_CONFIG:-}
 interface=${OMAMOBILE_SSH_INTERFACE:-auto}
@@ -136,7 +146,38 @@ if [[ -n $known ]]; then
   quoted=${known//\\/\\\\}
   quoted=${quoted//\"/\\\"}
   opts+=(-o StrictHostKeyChecking=yes -o "UserKnownHostsFile=\"$quoted\"")
+elif ((tofu)); then
+  # Opt-in trust on first use: pin the host key in a per-user file. Point
+  # OMAMOBILE_SSH_KNOWN_HOSTS=tofu (see the header). A missing or failed
+  # directory setup must not cost the connection; it only downgrades to the
+  # default behavior for this call.
+  kh_dir=""
+  kh_file=""
+  data_home=${XDG_DATA_HOME:-${HOME:-}}
+  if [[ -n $data_home ]]; then
+    kh_dir=$data_home/omamobile/phone-ssh
+    if mkdir -p -- "$kh_dir" 2>/dev/null; then
+      chmod 700 -- "$kh_dir" 2>/dev/null || :
+      kh_file=$kh_dir/known_hosts
+    fi
+  fi
+  if [[ -n $kh_file ]]; then
+    # The path is parsed again as ssh_config: escape it like the explicit
+    # file's above, so % and ${…} in it survive (maintainer review #855).
+    kh_quoted=${kh_file//\\/\\\\}
+    kh_quoted=${kh_quoted//\"/\\\"}
+    opts+=(-o StrictHostKeyChecking=accept-new
+      -o "UserKnownHostsFile=\"$kh_quoted\"")
+  else
+    # No HOME/XDG_DATA_HOME or the directory could not be made: this call
+    # degrades to the default (no host-key state) rather than failing.
+    opts+=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+  fi
 else
+  # The default keeps today's behavior (no host-key state): the USB address
+  # is answered by several SSH servers by design (the initramfs's dropbear
+  # makes a fresh key each boot; the installed system has its own), so a pin
+  # keyed on the address would lock our own tools out.
   opts+=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
 fi
 [[ -z $key ]] || opts+=(-o IdentitiesOnly=yes -i "$key")

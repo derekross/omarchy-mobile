@@ -29,6 +29,32 @@ tools/phone-ssh 'printf "%s" "$HOME"' >"$scratch/default"
 grep -Fx root@172.16.42.1 "$scratch/default" >/dev/null
 grep -Fx 'printf "%s" "$HOME"' "$scratch/default" >/dev/null
 grep -Fx ConnectTimeout=6 "$scratch/default" >/dev/null
+# Default stays as today: no host-key state (the USB address is answered by
+# several SSH servers by design — initramfs dropbear, installed system).
+grep -Fx StrictHostKeyChecking=no "$scratch/default" >/dev/null
+grep -Fx UserKnownHostsFile=/dev/null "$scratch/default" >/dev/null
+echo 'ok - the default has no host-key state (unchanged behavior)'
+# Opt-in TOFU (maintainer review #855, option 1): accept-new against a per-user
+# pin file under XDG_DATA_HOME, pointed at the scratch dir so the test never
+# writes to the caller's home.
+export XDG_DATA_HOME="$scratch/xdg-data"
+mkdir -p "$XDG_DATA_HOME"
+OMAMOBILE_SSH_KNOWN_HOSTS=tofu tools/phone-ssh true >"$scratch/tofu"
+grep -Fx StrictHostKeyChecking=accept-new "$scratch/tofu" >/dev/null
+grep -Fx -- 'UserKnownHostsFile="'"$XDG_DATA_HOME"'/omamobile/phone-ssh/known_hosts"' "$scratch/tofu" >/dev/null
+echo 'ok - OMAMOBILE_SSH_KNOWN_HOSTS=tofu pins on first use (accept-new)'
+# No HOME and no XDG_DATA_HOME: the connection still happens (no pin file,
+# default behavior), it must not die at an unbound variable or failed mkdir.
+env -u HOME -u XDG_DATA_HOME OMAMOBILE_SSH_KNOWN_HOSTS=tofu tools/phone-ssh true >"$scratch/tofu-nohome"
+grep -Fx StrictHostKeyChecking=no "$scratch/tofu-nohome" >/dev/null
+echo 'ok - tofu with no HOME/XDG_DATA_HOME degrades to the default, no crash'
+unset XDG_DATA_HOME
+# Two keys, one address: an explicit known_hosts file stays strict (the pin
+# file behavior is unchanged), covering the second-connection refusal path.
+printf '@cert-authority *.example ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExamplecertauthoritykeymaterial0000000\n' > "$scratch/known_hosts"
+OMAMOBILE_SSH_KNOWN_HOSTS="$scratch/known_hosts" tools/phone-ssh true >"$scratch/strict"
+grep -Fx StrictHostKeyChecking=yes "$scratch/strict" >/dev/null
+echo 'ok - an explicit known_hosts file stays strict (yes)'
 OMAMOBILE_SSH_CONNECT_TIMEOUT=19 tools/phone-ssh true >"$scratch/timeout-override"
 grep -Fx ConnectTimeout=19 "$scratch/timeout-override" >/dev/null
 for bad_timeout in 0 -1 1.5 invalid 999x; do
