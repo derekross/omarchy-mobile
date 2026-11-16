@@ -10,6 +10,13 @@
         "page": "display"
       },
       {
+        "id": "battery",
+        "title": "Battery",
+        "detail": "Charge limit",
+        "icon": "battery",
+        "page": "battery"
+      },
+      {
         "id": "about",
         "title": "About this device",
         "detail": "System, software and storage",
@@ -24,6 +31,10 @@
   },
   "display": {
     "title": "Display",
+    "rows": []
+  },
+  "battery": {
+    "title": "Battery",
     "rows": []
   }
 }

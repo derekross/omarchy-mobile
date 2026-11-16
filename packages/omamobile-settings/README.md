@@ -12,6 +12,20 @@ refresh rate changes the running session only: turning the phone makes
 auto-rotate apply the monitor's preferred mode again, and a session restart or a
 reload of Hyprland's config does too). The page runs
 `backends/display.sh` through a fixed-argument runner, with no shell string.
+A second page, Battery, sets the charge limit (80, 85, 90, 95 or 100 %) on
+chargers with `charge_control_end_threshold` (the Pixel 8 Pro's
+`max77759-charger`); elsewhere it says the limit is not available. It runs
+`backends/charge.sh`, which starts `omamobile-charge-limit@N.service`; the
+polkit rule `50-omamobile-charge-limit.rules` lets the active local user start
+those five instances only. The service runs `libexec/charge-limit` as root,
+which writes the charger (start threshold 0, then the end threshold) and only
+then saves the value to `/etc/omamobile/charge-limit`. When the charger appears
+at boot, a udev rule pulls in `omamobile-charge-limit-apply.service`, which
+applies the saved value on husky only (the helper checks the device tree for
+`google,zuma-husky`). The page is inert on
+husky today: omamobile-device-husky blacklists `max77759_charger`
+(`omamobile-max77759.conf`), so there is no `max77759-charger` power supply and
+the page says the limit is not available until that blacklist is lifted.
 Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management and
 recording controls are separate future contributions with their own runtime
 contracts and tests; this catalog does not offer those routes.

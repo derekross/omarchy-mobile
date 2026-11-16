@@ -2,7 +2,10 @@
 // Copyright (c) 2026 Marsel Nenaj
 #include "backend.h"
 #include "deviceinfocontroller.h"
+#include "actionrunner.h"
 #include <QtTest>
+#include <QQmlComponent>
+#include <memory>
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
@@ -18,7 +21,7 @@ private slots:
     void navigationRejectsUnknownAndHiddenActions() {
         Backend backend;
         QVERIFY(backend.catalogProblems().isEmpty());
-        QCOMPARE(backend.rows().size(), 2);
+        QCOMPARE(backend.rows().size(), 3);
         QVERIFY(!backend.navigate("recording"));
         backend.activate("arbitrary-command");
         QCOMPARE(backend.page(), QString("root"));
@@ -35,6 +38,50 @@ private slots:
         QCOMPARE(backend.page(), QString("display"));
         backend.back();
         QCOMPARE(backend.page(), QString("root"));
+    }
+    void batteryPageGoesBackToRoot() {
+        Backend backend;
+        QVERIFY(backend.navigate("battery"));
+        QCOMPARE(backend.page(), QString("battery"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("root"));
+        backend.search("charge limit");
+        QCOMPARE(backend.rows().size(), 1);
+        QCOMPARE(backend.rows().first().toMap()["id"].toString(), QString("battery"));
+    }
+    void runnerKnowsChargeAndRejectsOthers() {
+        ActionRunner runner;
+        QSignalSpy done(&runner, &ActionRunner::finished);
+        const int bad = runner.run("nope", {"get"});
+        const int badArg = runner.run("charge", {"set", "limit", "80;x"});
+        const int charge = runner.run("charge", {"get"});
+        QTRY_COMPARE(done.count(), 3);
+        QMap<int, QString> errors;
+        for (const auto &call : done) errors[call.at(2).toInt()] = call.at(1).toMap()["error"].toString();
+        QCOMPARE(errors[bad], QString("unknown action"));
+        QCOMPARE(errors[badArg], QString("bad argument"));
+        QVERIFY(errors[charge] != "unknown action" && errors[charge] != "bad argument");
+    }
+    void batteryPageLoadsAndShowsTheBackendAnswer() {
+        ActionRunner runner;
+        Backend backend; // outlives the engine: the style singleton reads it until the engine goes
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty("backend", &backend);
+        engine.rootContext()->setContextProperty("actions", &runner);
+        QQmlComponent component(&engine, QUrl("qrc:/BatteryPage.qml"));
+        std::unique_ptr<QObject> page(component.create());
+        QVERIFY2(page, qPrintable(component.errorString()));
+        QCOMPARE(page->property("levels").toList().size(), 5);
+        // no backend installed on the test host: the page leaves "busy" and shows the runner's error
+        QTRY_VERIFY(!page->property("busy").toBool());
+        QVERIFY(!page->property("available").toBool());
+        QVERIFY(!page->property("status").toString().isEmpty());
+        QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"available", true}, {"limit", 85}}));
+        QVERIFY(page->property("available").toBool());
+        QCOMPARE(page->property("limit").toInt(), 85);
+        QVERIFY(page->property("status").toString().startsWith("Stops charging at this level"));
+        QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"available", false}}));
+        QCOMPARE(page->property("status").toString(), QString("Charge limit is not available on this phone."));
     }
     void searchHasOnlyImplementedRoutesAndBackClearsIt() {
         Backend backend;

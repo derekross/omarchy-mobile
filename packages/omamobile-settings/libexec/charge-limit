@@ -1,0 +1,45 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Charge limit for the Pixel 8 Pro (husky): its max77759-charger on the Omarchy Mobile kernel has
+# charge_control_end_threshold. Runs as root, from omamobile-charge-limit@N.service (the Settings app's Battery
+# page, through the polkit rule 50-omamobile-charge-limit.rules) and, with no argument, from
+# omamobile-charge-limit-apply.service, which udev pulls in when the charger appears (75-omamobile-charge-limit.rules).
+#   charge-limit N    N is 80, 85, 90, 95 or 100: written to the charger, then saved to /etc/omamobile/charge-limit;
+#                     no writable end threshold, or a write that fails: exit 1 and nothing saved
+#   charge-limit      the boot path: applies the saved value, on husky only (device tree "google,zuma-husky");
+#                     no file, or another phone: nothing is touched
+# The start threshold is written first, as 0, which the driver takes as "resume 5 below the end".
+# /etc/omamobile/charge-limit is the same file omamobile-device-tegu's charge limit reads.
+set -uo pipefail
+root=${OMAMOBILE_CHARGE_ROOT:-}
+if [[ -n $root ]]; then [[ $root == /* && $root != / && -d $root ]] || exit 2; fi
+file=$root/etc/omamobile/charge-limit
+dir=$root/sys/class/power_supply/max77759-charger
+end=$dir/charge_control_end_threshold start=$dir/charge_control_start_threshold
+log() { echo "omamobile-charge-limit: $*"; }
+valid() { case $1 in 80|85|90|95|100) return 0 ;; *) return 1 ;; esac; }
+save() {
+  mkdir -p "${file%/*}" && printf '%s\n' "$1" > "$file.new" && mv -f "$file.new" "$file" || { log "cannot save $file"; exit 1; }
+}
+
+if (( $# > 0 )); then
+  valid "$1" || { log "refusing $1: only 80, 85, 90, 95 or 100"; exit 2; }
+  limit=$1
+else
+  tr '\0' '\n' 2>/dev/null < "$root/proc/device-tree/compatible" | grep -qx 'google,zuma-husky' || exit 0
+  [[ -s $file ]] || exit 0
+  limit=$(tr -d ' \t\n' < "$file")
+  valid "$limit" || { log "$file holds '$limit', not 80, 85, 90, 95 or 100; charger left alone"; exit 1; }
+fi
+if [[ ! -f $end || ! -w $end ]]; then
+  log "no charger with a writable end threshold"
+  (( $# > 0 )) && exit 1
+  exit 0
+fi
+if [[ -e $start ]]; then
+  echo 0 > "$start" || { log "the charger refused start threshold 0"; exit 1; }
+fi
+echo "$limit" > "$end" || { log "the charger refused $limit"; exit 1; }
+(( $# > 0 )) && save "$limit"
+log "charge limit $(tr -d ' \t\n' < "$end") %"
+exit 0
