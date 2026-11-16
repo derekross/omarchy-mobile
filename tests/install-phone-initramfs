@@ -84,6 +84,10 @@ phone() { # root codename soc soc_id pagesize boot_images ufs_rw [initramfs extr
   echo "$7" > "$s/etc/omamobile-ufs-rw"
   head -c 7000000 /dev/urandom | base64 > "$s/usr/lib/payload"
   if [[ -n ${8:-} ]]; then mkdir -p "$s/${8%/*}"; echo 'ssh-ed25519 AAAA developer' > "$s/$8"; fi
+  # MARKER: the storage guard opens the running slot (bin/omamobile initramfs
+  # packs this marker); DESCRIPTOR_EXTRA: more descriptor lines
+  [[ -z ${MARKER:-} ]] || echo running > "$s/etc/omamobile-ufs-rw-slot"
+  [[ -z ${DESCRIPTOR_EXTRA:-} ]] || printf '%s\n' "$DESCRIPTOR_EXTRA" >> "$R/usr/share/omamobile/device.conf"
   (cd "$s" && find . | LC_ALL=C sort | cpio -o -H newc --owner=0:0 --quiet) | lz4 -l -9 -q > "$R/usr/lib/omamobile/$cn/initramfs.cpio.lz4"
 }
 # The hook as pacman runs it: umask 022 (the builder's directory modes follow it)
@@ -133,15 +137,15 @@ seal() { # manifest.json and SHA256SUMS for the bundle as it is now
     --version 2026.11.09 --kernel-release "$REL" --channel stable
   (cd "$BUNDLE" && find . -type f ! -name SHA256SUMS -printf '%P\n' | LC_ALL=C sort | xargs sha256sum > SHA256SUMS)
 }
-install() { # codename [args]; RAMDISK_PART_SIZE: vendor_kernel_boot_b's size
-  local cn=$1 p s; shift
+install() { # codename [args]; RAMDISK_PART_SIZE: vendor_kernel_boot's size (each slot); CURRENT: the current slot (a)
+  local cn=$1 p s x; shift
   rm -rf "$t/flashed" && mkdir -p "$t/flashed"
   : > "$t/fastboot.log"
   {
-    printf 'product:%s\nunlocked:yes\ncurrent-slot:a\nversion-bootloader:x\nversion-bootloader-a:x\nversion-bootloader-b:x\n' "$cn"
+    printf 'product:%s\nunlocked:yes\ncurrent-slot:%s\nversion-bootloader:x\nversion-bootloader-a:x\nversion-bootloader-b:x\n' "$cn" "${CURRENT:-a}"
     for p in boot init_boot vendor_boot vendor_kernel_boot dtbo; do
       s=0x4000000; [[ $p != vendor_kernel_boot ]] || s=${RAMDISK_PART_SIZE:-$s}
-      printf 'partition-size:%s_b: %s\n' "$p" "$s"
+      for x in b a; do printf 'partition-size:%s_%s: %s\n' "$p" "$x" "$s"; done
     done
   } > "$t/vars"
   # user, password twice, host, time zone, name, email, Wi-Fi, key, confirmation
@@ -374,3 +378,60 @@ seal
 refused "a ramdisk image that isn't a vendor boot image" 'not an Android vendor boot image'
 verify_refused "a ramdisk image that isn't a vendor boot image" 'not an Android vendor boot image'
 pass "an image that isn't a v4 vendor boot image is refused before anything is flashed, and by --verify-only"
+
+# Format 2 (INSTALL_SLOT=active, docs/ACTIVE-SLOT-PLAN.md; no device has it
+# yet): the bundle's install writes the running slot's images, the same
+# bytes as the hook's, slot A's here, and slot B's on a phone running from B
+# where the descriptor accepts it; no slot B write and no --set-active on A
+R=$t/r-seven imgs="boot init_boot vendor_boot vendor_kernel_boot dtbo"
+rw="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
+MARKER=1 DESCRIPTOR_EXTRA=$'INSTALL_SLOT=active\nINSTALL_ACTIVE_SLOTS="a b"' phone "$R" seven gs201 0x9855001 0x800 "$imgs" "$rw"
+hook_build "$R" "$t/bundle-images-seven"
+cp "$t/owner.pub" "$R/root/.ssh/authorized_keys"
+hook_build "$R" "$t/hook-images-seven"
+bundle seven "$t/bundle-images-seven"
+[[ $(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["format"])' "$BUNDLE/manifest.json") == 2 ]] ||
+  fail "an INSTALL_SLOT=active bundle has a format 2 manifest"
+for cur in a b; do
+  CURRENT=$cur install seven || { cat "$t/out"; fail "seven: the format 2 bundle installs on slot $cur"; }
+  for p in $imgs; do
+    cmp -s "$t/flashed/${p}_$cur" "$t/hook-images-seven/$p.img" ||
+      fail "seven: ${p}_$cur is not the image omamobile-boot-update builds with the owner's key"
+  done
+  [[ $(ls "$t/flashed" | LC_ALL=C sort | tr '\n' ' ') == "$( (for p in $imgs; do printf '%s_%s\n' "$p" "$cur"; done; echo userdata) | LC_ALL=C sort | tr '\n' ' ')" ]] ||
+    fail "seven: only slot $cur's images and userdata are flashed: $(ls "$t/flashed")"
+  grep -c -- '--set-active' "$t/fastboot.log" >/dev/null && fail "seven: no --set-active on a format 2 install"
+done
+pass "format 2: the bundle's install flashes the hook's own images to the slot the phone runs from (a, or b where accepted), no --set-active"
+# The same images with a ramdisk whose guard still opens slot B: refused,
+# with --verify-only too, and bundle-manifest refuses to describe them
+rm "$R/root/.ssh/authorized_keys"
+DESCRIPTOR_EXTRA=$'INSTALL_SLOT=active\nINSTALL_ACTIVE_SLOTS="a b"' phone "$R" seven gs201 0x9855001 0x800 "$imgs" "$rw"
+hook_build "$R" "$t/unmarked-seven"
+cp "$t/unmarked-seven/vendor_kernel_boot.img" "$BUNDLE/images/"
+(cd "$BUNDLE" && find . -type f ! -name SHA256SUMS -printf '%P\n' | LC_ALL=C sort | xargs sha256sum > SHA256SUMS)
+if python3 -I tools/bundle-manifest --bundle "$BUNDLE" --rootfs "$root" --rootfs-sha256 "$(cut -d' ' -f1 "$root.sha256")" \
+  --version 2026.11.09 --kernel-release "$REL" > "$t/bm.out" 2>&1; then fail "bundle-manifest refuses a format 2 bundle without the guard's marker"; fi
+grep -cF 'no storage guard for the running slot' "$t/bm.out" >/dev/null || { cat "$t/bm.out"; fail "bundle-manifest says the marker is missing"; }
+# The manifest as bundle-manifest would write it but for that check, so the
+# install's own check is the one that refuses
+python3 -I - "$BUNDLE" <<'PY'
+import hashlib, json, os, sys
+b = sys.argv[1]
+p = os.path.join(b, "manifest.json")
+m, data = json.load(open(p)), open(os.path.join(b, "images/vendor_kernel_boot.img"), "rb").read()
+for e in m["files"]:
+    if e["path"] == "images/vendor_kernel_boot.img":
+        e["size"], e["sha256"] = len(data), hashlib.sha256(data).hexdigest()
+for w in m["install"]["writes"]:
+    if w.get("image") == "vendor_kernel_boot":
+        w["size"] = len(data)
+json.dump(m, open(p, "w"), indent=2, sort_keys=True)
+PY
+(cd "$BUNDLE" && find . -type f ! -name SHA256SUMS -printf '%P\n' | LC_ALL=C sort | xargs sha256sum > SHA256SUMS)
+for args in "" --verify-only; do
+  if install seven $args; then fail "refuses a format 2 ramdisk without the guard's marker ${args:-(install)}"; fi
+  grep -cF 'has no storage guard for the running slot (/etc/omamobile-ufs-rw-slot reading "running")' "$t/out" >/dev/null || { cat "$t/out"; fail "says the marker is missing"; }
+  [[ ! -s $t/fastboot.log && -z $(ls -A "$t/flashed") ]] || fail "a ramdisk without the marker is refused before the phone"
+done
+pass "format 2: a ramdisk whose guard doesn't open the running slot is refused by bundle-manifest, the install and --verify-only, before the phone"

@@ -46,6 +46,16 @@
 # first asks that phone which one it is and stops unless it is the phone that
 # was written (a digest of its serial number, compared with the record's).
 #
+# A release whose descriptor says INSTALL_SLOT=active (manifest format 2,
+# docs/ACTIVE-SLOT-PLAN.md; no device's does yet) installs on the slot the
+# phone runs from, in place of Android: step 3 then only checks that the
+# phone runs from a slot the release accepts (INSTALL_ACTIVE_SLOTS) and asks
+# no slot-B question and checks no bootloader slots; the warning and the
+# texts say Android is replaced and the way back is Google's factory image.
+# The radio backup (step 8) goes into a new folder on every install either
+# way, never one of an earlier install: a first install comes straight after
+# a stock start, which rewrites the radio partitions.
+#
 # What it sends to a phone itself: read-only fastboot queries ("devices",
 # "getvar all", "flashing get_unlock_ability"), "adb devices -l" and, after
 # the owner presses Enter, "adb reboot bootloader"; and over USB SSH
@@ -97,7 +107,8 @@
 #                      release needs none of them: a phone on slot B is
 #                      asked about ("Is this phone already running Omarchy
 #                      Mobile?"), and a reinstall needs no
-#                      --bootloader-slots-match (step 3)
+#                      --bootloader-slots-match (step 3). A format 2 release
+#                      uses none of them
 #     --device CODENAME, --images DIR
 #                      repository mode only, passed to tools/install-phone
 #     --rootfs FILE    the root image, passed to tools/install-phone: only
@@ -332,6 +343,22 @@ done < "$conf"
 CODENAME=${D[CODENAME]:-}
 [[ $CODENAME =~ ^[a-z0-9]+$ ]] || die "$conf: no CODENAME"
 NAME=${D[NAME]:-$CODENAME}
+# Where the release installs, checked as bin/omamobile and tools/install-phone
+# check it (tests/install-slot-descriptor): slot B (manifest format 1), or
+# with INSTALL_SLOT=active the slot the phone runs from, one of
+# INSTALL_ACTIVE_SLOTS (format 2, docs/ACTIVE-SLOT-PLAN.md; no device has it
+# yet). Format 2 has no slot-B question and no bootloader-slot check.
+INSTALL_SLOT=${D[INSTALL_SLOT]-b} ACTIVE_SLOTS=""
+case $INSTALL_SLOT in
+  b) [[ -z ${D[INSTALL_ACTIVE_SLOTS]+x} ]] || die "$conf: INSTALL_ACTIVE_SLOTS belongs with INSTALL_SLOT=active" ;;
+  active)
+    ACTIVE_SLOTS=${D[INSTALL_ACTIVE_SLOTS]-}
+    [[ $ACTIVE_SLOTS =~ ^(a|b|a\ b|b\ a)$ ]] ||
+      die "$conf: INSTALL_SLOT=active needs INSTALL_ACTIVE_SLOTS: the slots a release installs on (a, b, or a b)" ;;
+  *) die "$conf: INSTALL_SLOT is active or b, not '$INSTALL_SLOT'" ;;
+esac
+fmt2=0
+[[ $INSTALL_SLOT != active ]] || fmt2=1
 # How this phone's keys reach Fastboot Mode and force a restart: the
 # descriptor's words, never this program's.
 keys_fastboot=${D[INSTALL_KEYS_FASTBOOT]:-}
@@ -876,6 +903,28 @@ recorded_factory_fits() {
 phone_checks() {
   local slot
   slot=$(var current-slot)
+  # Format 2: Omarchy Mobile replaces Android on the slot the phone runs
+  # from, so the only slot question is whether this release installs there.
+  # The bootloader that starts it is the one answering now: no slot-B
+  # question, no check of the other slot's bootloader.
+  if ((fmt2)); then
+    [[ $slot == a || $slot == b ]] ||
+      stop_final "The phone doesn't tell which of its two system copies it is running from (slot A" \
+        "or slot B). Omarchy Mobile is written to the copy the phone runs from, so the" \
+        "installer goes on only when it knows which one that is." \
+        "It stops here, and running it again will stop here again." \
+        "Please open an issue: https://github.com/derekross/omarchy-mobile/issues"
+    [[ " $ACTIVE_SLOTS " == *" $slot "* ]] ||
+      stop_final "This phone is running from its system copy on slot ${slot^^}, and this release of" \
+        "Omarchy Mobile installs only on slot ${ACTIVE_SLOTS^^} for now: installing on slot ${slot^^} is" \
+        "not supported yet (current-slot-not-accepted)." \
+        "" \
+        "Don't switch the phone to the other copy to get past this: that starts a" \
+        "bootloader whose version nobody has read, and can leave the phone unable to" \
+        "start. Wait for a release that installs on slot ${slot^^}, or ask in an issue:" \
+        "https://github.com/derekross/omarchy-mobile/issues"
+    return 0
+  fi
   # Slot B is refused below, so a phone that doesn't say which slot it runs
   # from can't be let through as if it had said slot A: a locked one would
   # be shown the unlock steps and stopped for slot B once it was erased
@@ -1086,15 +1135,17 @@ slot_probe_ask() {  # VERSION
 # footer was made for. The sizes are the phone's own ("partition-size" in
 # getvar all) and the files are this download's, so it is settled here.
 images_fit() {
-  local dir p e psize isize avb
+  local dir p e psize isize avb slot=b
   dir=$(images_dir)
+  # Format 2 writes the slot the phone runs from (phone_checks has checked it)
+  ((fmt2 == 0)) || slot=$(var current-slot)
   for p in ${D[BOOT_IMAGES]:-}; do
     # Step 1 (install-phone --verify-only) has refused a bad name or a missing file
     [[ $p =~ ^[a-z_]+$ && -f $dir/$p.img ]] || continue
-    psize=$(sed -nE "s/^partition-size:${p}_b:[ ]*(0x[0-9a-fA-F]{1,12})\$/\1/p" <<<"$vars" | head -1)
+    psize=$(sed -nE "s/^partition-size:${p}_$slot:[ ]*(0x[0-9a-fA-F]{1,12})\$/\1/p" <<<"$vars" | head -1)
     [[ -n $psize ]] ||
       stop_final "The phone doesn't tell the size of one of the areas Omarchy Mobile is written" \
-        "to (${p}_b), so the installer can't check that this download fits this phone." \
+        "to (${p}_$slot), so the installer can't check that this download fits this phone." \
         "It stops here, and running it again will stop here again." \
         "Please open an issue: https://github.com/derekross/omarchy-mobile/issues"
     psize=$((psize)) isize=$(stat -c %s "$dir/$p.img") avb=""
@@ -1104,7 +1155,7 @@ images_fit() {
     done
     if ((isize > psize)) || [[ -n $avb && $avb != "$psize" ]]; then
       stop_final "This download doesn't fit this phone. One of its files, $p.img, is $isize bytes" \
-        "${avb:+(made for an area of exactly $avb bytes), }and the area it is written to on this phone (${p}_b) is $psize bytes." \
+        "${avb:+(made for an area of exactly $avb bytes), }and the area it is written to on this phone (${p}_$slot) is $psize bytes." \
         "The installer stops here, and running it again will stop here again." \
         "Please open an issue: https://github.com/derekross/omarchy-mobile/issues"
     fi
@@ -1118,8 +1169,20 @@ images_fit() {
 # recorded once; a record without the acknowledgement shows it again,
 # whatever else that record holds.
 step_warning() {
+  local way_back
   if [[ ${S[warning]:-} == "acknowledged "* ]]; then skip warning "read and accepted (${S[warning]#acknowledged })"; return 0; fi
   title warning
+  if ((fmt2)); then
+    # Format 2 writes over the Android the phone runs: no copy of it stays
+    way_back=("3. You can go back, with a computer. Android does not stay on the phone:" \
+      "   Omarchy Mobile is written over it. Google's own tools (the Android Flash" \
+      "   Tool, or the factory image) put the phone back as it was sold." \
+      "   INSTALL.md, \"Going back to Android\", has the steps.")
+  else
+    way_back=("3. You can go back. Android stays on the phone, unused, as a quick way" \
+      "   back, and Google's own tools can put the phone back as it was sold." \
+      "   INSTALL.md, \"Going back to Android\", has the steps.")
+  fi
   guide "Read this once. It is the only warning; nothing will ask again." \
     "" \
     "1. The phone is erased. Everything on it is lost: photos, messages, apps," \
@@ -1133,9 +1196,7 @@ step_warning() {
     "   are missing or unfinished. The list for this phone:" \
     "   $device_page" \
     "" \
-    "3. You can go back. Android stays on the phone, unused, as a quick way" \
-    "   back, and Google's own tools can put the phone back as it was sold." \
-    "   INSTALL.md, \"Going back to Android\", has the steps."
+    "${way_back[@]}"
   printf '\n'
   ask "    Type yes to go on, or press Enter to stop: "
   [[ $REPLY == yes ]] || stop "Not accepted, so the install stops here."
@@ -1230,6 +1291,17 @@ find_build() {
     "If the update moves Android to slot B, the installer will say so. INSTALL.md,"
     "step 3, has the way to put it back on slot A; that way needs the bootloader"
     "unlocked, which erases the phone, as this install does anyway.")
+  # Format 2 that installs on slot A only: an Android update writes the other
+  # copy and moves the phone to it, where this release doesn't install, so
+  # updating can't get this phone past the stop
+  if ((fmt2)) && [[ " $ACTIVE_SLOTS " != *" b "* ]]; then
+    update_yes=("Don't update Android to get past this: an Android update moves Android to its"
+      "other system copy (slot B), and this release installs only on slot A for now,"
+      "so the installer would stop for that instead, and an Android update cannot be"
+      "undone. Wait until a release of Omarchy Mobile has been tested with this"
+      "phone's build, or ask for that in an issue:"
+      "https://github.com/derekross/omarchy-mobile/issues")
+  fi
   if [[ -n ${B[newest]:-} ]]; then
     update_no=("Don't update Android to get past this. Android's own updater offers only Google's"
       "newest build, and the newest build in the list (${B[newest]}) is not tested"
@@ -1717,9 +1789,16 @@ step_write() {
   install_phone "$CODENAME" --dry-run ||
     stop "The dry run stopped (the message above says why)."
   if ((dry)); then return 0; fi
-  guide "That was the dry run: the phone is unchanged. The lines above that begin" \
-    "\"would run\" are everything the install writes: the Omarchy Mobile system on" \
-    "slot B and the phone's user data area, which is erased."
+  if ((fmt2)); then
+    guide "That was the dry run: the phone is unchanged. The lines above that begin" \
+      "\"would run\" are everything the install writes: the Omarchy Mobile system on" \
+      "slot $(var current-slot | tr a-z A-Z), the copy the phone runs from, in place of Android, and the" \
+      "phone's user data area, which is erased. Android is gone after this."
+  else
+    guide "That was the dry run: the phone is unchanged. The lines above that begin" \
+      "\"would run\" are everything the install writes: the Omarchy Mobile system on" \
+      "slot B and the phone's user data area, which is erased."
+  fi
   printf '\n'
   ask "    Type the phone's codename ($CODENAME) to write it now, or press Enter to stop: "
   typed=$REPLY
@@ -1749,6 +1828,25 @@ step_write() {
 # a person holding a phone that may now be empty.
 stop_erased() {
   printf '\n'
+  if ((fmt2)); then
+    # Format 2 writes over Android first, so no system may start now
+    printf '    %s\n' \
+      "Writing the phone stopped partway (the message above says why)." \
+      "" \
+      "What was on the phone may already be erased, and so may Android: the install" \
+      "writes Omarchy Mobile over the system the phone runs from before the area that" \
+      "holds your data. Until the install runs again whole, the phone may start no" \
+      "system at all. Its bootloader is untouched, and Fastboot Mode still works." \
+      "Don't restart the phone: run this again from Fastboot Mode." \
+      "" \
+      "To go on with Omarchy Mobile: leave the phone in Fastboot Mode (to put it back" \
+      "there: $keys_fastboot), fix what the" \
+      "message above names, and run this, which writes the same things again, whole:" \
+      "    $rerun" \
+      "To go back to Android instead: Google's factory image for this phone (INSTALL.md," \
+      "\"Going back to Android\")."
+    exit 1
+  fi
   printf '    %s\n' \
     "Writing the phone stopped partway (the message above says why)." \
     "" \
@@ -2108,10 +2206,10 @@ step_check() {
   mkdir -p "$state_dir"
   bash "$PHONE_SMOKE" --json > "$report.new" 2>"$scratch/smoke.err" || rc=$?
   mv -f "$report.new" "$report"
-  python3 -I -B - "$report" "$scratch/failed" <<'PY' || unreadable=1
+  python3 -I -B - "$report" "$scratch/failed" "$fmt2" <<'PY' || unreadable=1
 import json, sys
 PLAIN = {
-    "boot": "Starts its own system (slot B)", "storage guard": "Radio and Android partitions are protected",
+    "boot": "Starts its own system" if sys.argv[3] == "1" else "Starts its own system (slot B)", "storage guard": "Radio and Android partitions are protected",
     "root": "System is on the phone's storage", "kernel health": "No serious errors since it started",
     "USB gadget": "USB connection", "session": "Desktop is running", "display": "Display", "touch": "Touch",
     "buttons": "Buttons", "battery": "Battery", "sound cards": "Sound", "sensors": "Sensors",

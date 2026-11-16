@@ -398,12 +398,17 @@ def auto_write_conf(path=None):
     except OSError:
         return ""
     value = "no"
+    slots = 0
     for line in lines:
         if re.match(r"^\s*(#.*)?$", line):
             continue
         m = re.match(r'^AUTO_WRITE="?(yes|no)"?$', line)
         if m:
             value = m.group(1)
+        elif re.match(r'^SLOT="?(a|b)"?$', line):
+            slots += 1
+            if slots > 1:
+                return ""  # omamobile-boot-update refuses a second SLOT= line
         elif not re.match(r'^AVB_KEY="?/[A-Za-z0-9_./-]+"?$', line) or ".." in line:
             return ""
     return value

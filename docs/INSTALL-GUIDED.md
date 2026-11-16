@@ -855,6 +855,24 @@ step 3a is the first real download.
 `NV_PARTS` is `nv-backup`'s; a device without it can't finish a guided
 install. `tools/phone-provision` knows cheetah and raven only.
 
+`INSTALL_SLOT` and `INSTALL_ACTIVE_SLOTS` are where a release installs
+([RELEASES](RELEASES.md) §6, [ACTIVE-SLOT-PLAN](ACTIVE-SLOT-PLAN.md)):
+without them, slot B (manifest format 1, everything above). With
+`INSTALL_SLOT=active`, the slot the phone runs from, one of
+`INSTALL_ACTIVE_SLOTS` (format 2). No device has them yet. For format 2
+the installer changes in these places only: step 3 asks no slot B
+question and checks no bootloader slots, and a phone running from a slot
+the release doesn't accept stops there (`current-slot-not-accepted`),
+before the unlock steps, with no advice to switch slots (that would start
+the other slot's bootloader at a version nobody has read); each file is
+checked against the running slot's partition; the warning's third point,
+the words after the dry run and the stop for a write that failed say
+that Android is written over and that the way back is Google's factory
+image; the check names no slot B. The radio backup goes into a new folder
+on every install, for either format, never one an earlier install made:
+a first install comes straight after a stock start, which rewrites the
+radio partitions.
+
 ## 7. What the tests cover
 
 `tests/install-guided` runs the real `install-phone` against a fake
@@ -891,7 +909,11 @@ unpacked from its one-file download and installed with `bash install
 --guided` and no option, then reinstalled through the "Install again from
 the start?" and slot B questions on a phone that reports one bootloader
 version; the repository installer given a bundle's images; the slot B
-question (`yes`, `no`, another answer, a locked phone); a factory image
+question (`yes`, `no`, another answer, a locked phone); format 2
+(`INSTALL_SLOT=active`: a whole install from slot A with per-slot
+bootloaders that differ, no slot question or slot check, a new radio
+backup folder for a second install, slot B not accepted for an unlocked
+and a locked phone, a write that fails); a factory image
 saved under another name or in the default cache; a missing program on
 Arch, Ubuntu and another system; and the script's own shape.
 `tests/factory-index` covers the maintainer tool and the reader's refusals.
