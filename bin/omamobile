@@ -1238,8 +1238,17 @@ cmd_flash() {
     die "flash refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
   in_fastboot || die "phone not in fastboot (try: omamobile fastboot)"
-  local serial
+  local serial cur
   serial=$(fastboot_serial) || exit 1
+  # Read-only: a release installed on the slot it ran from runs from slot A
+  # (docs/ACTIVE-SLOT-PLAN.md §2), and this writes slot B and makes it
+  # active, which is development only. Fastboot can't tell that release
+  # from stock Android on A, which a development phone falls back to (and
+  # `omamobile fastboot` crashes it into), so that case is named by hand.
+  cur=$(timeout 10 fastboot -s "$serial" getvar current-slot 2>&1 | sed -n 's/^current-slot: *_\{0,1\}\([ab]\)$/\1/p' | head -1)
+  if [[ $cur == a && ${OMAMOBILE_FLASH_FROM_SLOT_A:-} != yes ]]; then
+    die "this phone runs from slot A (a release from slot A, or stock Android); flash writes slot B and makes it active, development only. A development phone that fell back to stock on slot A: run again with OMAMOBILE_FLASH_FROM_SLOT_A=yes"
+  fi
   # Every image and allowlist entry first: never start writing slot B and
   # find out halfway that a later image is missing.
   for p in $DEV_BOOT_IMAGES; do
@@ -1277,6 +1286,13 @@ cmd_push() {
     die "push refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
   "$ssh" true || die "phone not reachable at 172.16.42.1"
+  # Read-only: a release installed on the slot it ran from runs from slot A
+  # (docs/ACTIVE-SLOT-PLAN.md §2), where its storage guard leaves slot B
+  # read-only anyway; say so plainly before anything else
+  local slots
+  slots=$("$ssh" "cat /proc/bootconfig /proc/cmdline 2>/dev/null | grep -oE 'androidboot[.]slot_suffix( = \"|=)_[ab]'; true") \
+    || die "cannot read the phone's boot slot"
+  [[ $slots != *_a* ]] || die "this phone runs a release from slot A; push writes slot B, development only"
   # Refuse before any write. A phone whose initramfs has no reboot-to would
   # otherwise take the images, swallow the reboot, and report success while
   # the old kernel is still running.
