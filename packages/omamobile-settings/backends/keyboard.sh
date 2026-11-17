@@ -25,7 +25,8 @@
 # first entry is not a Latin layout is refused (passwords on the lock screen are typed in layout 1).
 # input.lua is edited in place: only the last live kb_layout, kb_variant and kb_options strings inside an
 # `input = { }` table change (per-device blocks and variables are left alone), comments and every other
-# option stays but grp:, grp_led:caps (set only with caps) and compose:caps with caps, a copy of the old
+# option stays but grp:, grp_led:caps (set only with caps) and compose:caps with caps
+# (put back when caps lets go, only if it was there: "-- compose-caps: restore" in the bind file), a copy of the old
 # file goes to input.lua.bak-omamobile first, and the write is dropped if the file changed meanwhile.
 # A file with no live kb_layout (Omarchy's stock one has them only in comments) gets one hl.config() block
 # appended at the end; get then reports Hyprland's effective values.
@@ -217,6 +218,14 @@ def active():
     i = pick[0].get("active_layout_index")
     return i if isinstance(i, int) and i >= 0 else None
 
+def compose_marked():
+    """True when the file says compose:caps was in kb_options before caps took the key."""
+    try:
+        with open(BINDS, encoding="utf-8", errors="replace") as f:
+            return any(re.fullmatch(r"-- compose-caps: restore\s*", line) for line in f)
+    except OSError:
+        return False
+
 def stored_key():
     """The file's choice; with no file, phone.lua binds the default (Alt+Shift), so that is the truth."""
     try:
@@ -249,9 +258,9 @@ def bind_lua(name):
             % name)
     return lua
 
-def write_binds(name):
+def write_binds(name, compose=False):
     text = ("-- Written by Omarchy Mobile Settings (Keyboard), loaded by phone.lua. Changes here are replaced.\n"
-            "-- switch-key: %s\n" % name) + bind_lua(name)
+            "-- switch-key: %s\n" % name + ("-- compose-caps: restore\n" if compose else "")) + bind_lua(name)
     tmp = "%s.tmp-omamobile.%d" % (BINDS, os.getpid())
     try:
         os.makedirs(os.path.dirname(BINDS), exist_ok=True)
@@ -525,7 +534,15 @@ if key == "layouts":
 else:
     sw = value
 old_options = options
+# compose:caps goes while caps holds the key; the marker brings it back when caps lets go, and only then
+was_caps = "grp:caps_toggle" in options
+if sw == "caps":
+    compose = "compose:caps" in options or (was_caps and compose_marked())
+else:
+    compose = False
 options = switch_options(options, sw)
+if sw != "caps" and was_caps and compose_marked() and "compose:caps" not in options:
+    options = options + ["compose:caps"]
 live_ok = osk_ok = True
 if key == "layouts" or options != old_options:
     new = {"kb_layout": ",".join(layouts), "kb_options": ",".join(options)}
@@ -536,7 +553,7 @@ if key == "layouts" or options != old_options:
     write(data, st, text, found, new)
     osk_ok = key != "layouts" or sync_osk(old_names, lst_names(layouts, variants))
     live_ok = apply_live(layouts, variants, options)
-if not write_binds(sw):
+if not write_binds(sw, compose):
     fail("cannot write " + os.path.basename(BINDS))
 live_ok = apply_binds(sw) and live_ok
 if not live_ok:

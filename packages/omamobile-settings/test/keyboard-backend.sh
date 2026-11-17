@@ -132,10 +132,24 @@ eq "$(run get | grep -o '"switchKey":"[^"]*"')" '"switchKey":"caps"'
 # a layouts change keeps caps
 eq "$(run set layouts us,gr:polytonic | grep -o '"switchKey":"[^"]*"')" '"switchKey":"caps"'
 has "$tmp/input.lua" 'kb_options = "grp:caps_toggle,grp_led:caps", -- keep me'
-# away from caps: both options go
+has "$b" '-- compose-caps: restore'
+# away from caps: both options go, compose:caps (there before caps) comes back
 eq "$(run set switch-key none | grep -o '"switchKey":"[^"]*"')" '"switchKey":"none"'
 has "$b" 'set_enabled(b[1] == "none")'
 has "$b" '-- switch-key: none'
+hasnt "$b" 'compose-caps'
+has "$tmp/input.lua" 'kb_options = "compose:caps", -- keep me'
+# caps then alt_shift restores compose:caps too
+run set switch-key caps >/dev/null
+has "$tmp/input.lua" 'kb_options = "grp:caps_toggle,grp_led:caps", -- keep me'
+run set switch-key alt_shift >/dev/null
+has "$tmp/input.lua" 'kb_options = "compose:caps", -- keep me'
+hasnt "$b" 'compose-caps'
+# a user without compose:caps never gets it
+sed -i 's/kb_options = "compose:caps", -- keep me/kb_options = "", -- keep me/' "$tmp/input.lua"
+run set switch-key caps >/dev/null
+hasnt "$b" 'compose-caps'
+run set switch-key ctrl_shift >/dev/null
 has "$tmp/input.lua" 'kb_options = "", -- keep me'
 run set switch-key alt_shift >/dev/null
 # one layout left: the binds stay (switchxkblayout next does nothing then); the variant goes
