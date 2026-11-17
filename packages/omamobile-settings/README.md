@@ -12,9 +12,10 @@ refresh rate changes the running session only: turning the phone makes
 auto-rotate apply the monitor's preferred mode again, and a session restart or a
 reload of Hyprland's config does too) and the screen lock. The page runs
 `backends/display.sh` and `backends/lock.sh` through a fixed-argument runner,
-with no shell string. display.sh finds Hyprland's instance signature from
-`$XDG_RUNTIME_DIR/hypr/*/.socket.sock` (the newest live one) when the app was
-started without `HYPRLAND_INSTANCE_SIGNATURE`.
+with no shell string. When Settings is started from a login outside the
+graphical session (for example over SSH), display.sh finds Hyprland's instance
+signature from `$XDG_RUNTIME_DIR/hypr/*/.socket.sock` (the newest live one) and
+sets the brightness through the user's graphical session (loginctl Display).
 
 "Lock screen after" (30 s, 1, 2, 3 or 5 min, Never) sets `idle.lock` in
 `~/.config/omarchy/shell.json`, the one timer Omarchy's idle service has: the
