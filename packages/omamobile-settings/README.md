@@ -10,8 +10,27 @@ This package contains the read-only foundation and one settings page, Display
 (brightness and, where the monitor lists more than one, the refresh rate; the
 refresh rate changes the running session only: turning the phone makes
 auto-rotate apply the monitor's preferred mode again, and a session restart or a
-reload of Hyprland's config does too). The page runs
-`backends/display.sh` through a fixed-argument runner, with no shell string.
+reload of Hyprland's config does too) and the screen lock. The page runs
+`backends/display.sh` and `backends/lock.sh` through a fixed-argument runner,
+with no shell string. display.sh finds Hyprland's instance signature from
+`$XDG_RUNTIME_DIR/hypr/*/.socket.sock` (the newest live one) when the app was
+started without `HYPRLAND_INSTANCE_SIGNATURE`.
+
+"Lock screen after" (30 s, 1, 2, 3 or 5 min, Never) sets `idle.lock` in
+`~/.config/omarchy/shell.json`, the one timer Omarchy's idle service has: the
+phone locks after that long without input and the lock turns the screen off a
+few seconds later, so lock and screen off are the same timer. Never means the
+screen stays on and the phone never sleeps by itself (omamobile-sleepd sleeps
+only with the screen off behind a secure lock); the power key still locks.
+"Stay unlocked while a keyboard is connected" writes 0 there while a Bluetooth
+or USB keyboard (udev `ID_INPUT_KEYBOARD=1`, bus 0005, or bus 0003 outside
+`/devices/virtual/input`) is connected, and the chosen time back when it goes.
+The user unit `omamobile-lock-keyboard.service` follows `udevadm monitor` for
+input devices and runs `lock.sh apply`. The choice lives in
+`~/.config/omamobile/lock.json`; a value changed in Omarchy's own settings is
+adopted. Nothing is written until the user picks something on the page. A
+receiver mouse that also reports keys counts as a keyboard.
+
 A second page, Battery, sets the charge limit (80, 85, 90, 95 or 100 %), only
 on a phone whose device package declares one in
 `/usr/share/omamobile/charge-limit.conf` (a line `supply=NAME`;

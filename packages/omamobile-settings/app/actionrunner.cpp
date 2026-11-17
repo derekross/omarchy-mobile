@@ -16,7 +16,7 @@ void ActionRunner::post(const QString &tool, const QVariantMap &result, int id) 
 
 int ActionRunner::run(const QString &tool, const QStringList &args) {
     static const QRegularExpression word("\\A[a-z0-9]{1,16}\\z");
-    static const QStringList tools = {"display", "charge"};
+    static const QStringList tools = {"display", "charge", "lock"};
     const int id = ++m_next;
     auto fail = [this, &tool, id](const QString &why) { post(tool, {{"error", why}}, id); return id; };
     if (!tools.contains(tool) || args.size() > 3) return fail("unknown action");
