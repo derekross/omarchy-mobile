@@ -8,17 +8,24 @@
 #   keyboard.sh list                        {"layouts":[{"layout":"us","name":"English (US)"}],"switchKeys":[...]}
 #   keyboard.sh set layouts us,gr[:variant] 1 to 4 layouts, each a name (and variant) in the xkb rules list
 #   keyboard.sh set switch-key grp:OPTION   or "none"; one layout left always drops the switch key
-# "active" is the index Hyprland reports for the first real keyboard, or null without one. A set answer
-# carries "warn" when the first layout is not a Latin one (a password typed on the lock screen would be
-# typed in it). input.lua is edited in place: only the last live kb_layout, kb_variant and kb_options
-# strings change, comments and every other option (grp_led:caps, compose:...) stay, a copy of the old
+# "active" is the index Hyprland reports for the main real keyboard, or null without one. Real = not
+# hl-virtual-keyboard* and not a pseudo-keyboard (consumer-control, power-button, video-bus, radio-control,
+# gpio-keys); main = the real one Hyprland marks main, else the first real one with more than one layout,
+# else the first real one (the same rule as omamobile-keyboard-switch and the bar). A layouts list whose
+# first entry is not a Latin layout is refused (passwords on the lock screen are typed in layout 1).
+# input.lua is edited in place: only the last live kb_layout, kb_variant and kb_options strings inside an
+# `input = { }` table change (per-device blocks and variables are left alone), comments and every other option (grp_led:caps, compose:...) stay, a copy of the old
 # file goes to input.lua.bak-omamobile first, and the write is dropped if the file changed meanwhile.
 # A file with no live kb_layout (Omarchy's stock one has them only in comments) gets one hl.config() block
 # appended at the end; get then reports Hyprland's effective values.
-# The change is applied live without `hyprctl reload` (a reload sets the configured refresh rate again and
-# re-runs phone.lua), then written to gsettings in the same order.
+# A symlinked input.lua stays a link: its target is written. gsettings is written first, then the change
+# is applied live without `hyprctl reload` (a reload sets the configured refresh rate again and re-runs
+# phone.lua), so the layout follower never reads the old list. gsettings is merged, not replaced: the
+# OSK's own languages and its current (first) entry stay; new hardware layouts are added at the end
+# (only ones squeekboard has a layout file for, when that directory exists); removed ones are dropped.
+# A switch-key change does not touch gsettings.
 # Test hooks (nothing in the environment sets them): OMAMOBILE_KBD_INPUT is the input.lua path,
-# OMAMOBILE_KBD_RULES the xkb rules .lst file; the test puts a fake hyprctl and gsettings first on PATH.
+# OMAMOBILE_KBD_RULES the xkb rules .lst file, OMAMOBILE_KEYBOARDS_DIR squeekboard's layout files; the test puts a fake hyprctl and gsettings first on PATH.
 set -euo pipefail
 set +x
 fail() { printf '{"error":"%s"}\n' "$1"; exit 2; }
@@ -56,7 +63,9 @@ LATIN = {"us", "gb", "de", "fr", "es", "it", "pt", "nl", "be", "ch", "at", "se",
          "is", "ie", "pl", "cz", "sk", "hu", "ro", "hr", "si", "ee", "lv", "lt", "tr", "br", "latam",
          "ca", "au", "nz", "za", "epo"}
 MAX = 4
-path = os.environ["KBD_INPUT"]
+path = os.path.realpath(os.environ["KBD_INPUT"])  # write a symlink's target, keep the link
+KEYBOARDS = os.environ.get("OMAMOBILE_KEYBOARDS_DIR", "/usr/share/omamobile/squeekboard/keyboards")
+PSEUDO_RE = re.compile(r"hl-virtual-keyboard|.*(consumer-control|power-button|video-bus|radio-control|gpio-keys)")
 
 def out(obj):
     print(json.dumps(obj, separators=(",", ":")))
@@ -109,13 +118,21 @@ def tokens(text):
         yield ("eq" if c == "=" else "other", c, i, i + 1, False)
         i += 1
 
-# The last live assignment of each key wins, as a later hl.config() overrides an earlier one.
+# The last live assignment of each key wins, as a later hl.config() overrides an earlier one. Only
+# assignments whose innermost table was opened by `input = {` count: a per-device block or a variable
+# with the same key name is not the global setting.
 def scan(text):
     t = list(tokens(text))
-    found = {}
-    for a, b, c in zip(t, t[1:], t[2:]):
-        if a[0] == "ident" and a[1] in KEYS and b[0] == "eq" and c[0] in ("string", "long"):
-            found[a[1]] = c
+    found, stack = {}, []
+    for i, a in enumerate(t):
+        if a[0] == "other" and a[1] == "{":
+            stack.append(i >= 2 and t[i - 2][:2] == ("ident", "input") and t[i - 1][0] == "eq")
+        elif a[0] == "other" and a[1] == "}":
+            if stack:
+                stack.pop()
+        elif (a[0] == "ident" and a[1] in KEYS and stack and stack[-1] and i + 2 < len(t)
+              and t[i + 1][0] == "eq" and t[i + 2][0] in ("string", "long")):
+            found[a[1]] = t[i + 2]
     return found
 
 def fields(raw):
@@ -164,9 +181,9 @@ def active():
         kbs = json.loads(s)["keyboards"]
     except (TypeError, ValueError, KeyError):
         return None
-    real = [k for k in kbs if not re.match(r"hl-virtual-keyboard|.*(consumer-control|power-button|video-bus)",
-                                           str(k.get("name", "")))]
-    pick = [k for k in real if k.get("main")] or real
+    real = [k for k in kbs if not PSEUDO_RE.match(str(k.get("name", "")))]
+    multi = [k for k in real if len([l for l in str(k.get("layout", "")).split(",") if l]) > 1]
+    pick = [k for k in real if k.get("main")] or multi or real
     if not pick:
         return None
     i = pick[0].get("active_layout_index")
@@ -251,6 +268,29 @@ def write(data, st, text, found, new):
             pass
         fail("cannot write input.lua")
 
+def lst_names(layouts, variants):
+    return [l + ("+" + v if v else "") for l, v in zip(layouts, variants)]
+
+# Merge into the OSK's list (see the header). UNVERIFIED on the phone: that squeekboard keeps its
+# current language when the list changes but its first entry does not.
+def sync_osk(old, new):
+    s = run(["gsettings", "get", "org.gnome.desktop.input-sources", "sources"])
+    if s is None:
+        return False
+    cur = re.findall(r"\(\s*'([^'\\]*)'\s*,\s*'([^'\\]*)'\s*\)", s)
+    removed = set(old) - set(new)
+    keep = [(k, n) for k, n in cur if not (k == "xkb" and n in removed)]
+    have = {n for k, n in keep if k == "xkb"}
+    carried = os.path.isdir(KEYBOARDS)
+    add = [("xkb", n) for n in new
+           if n not in have and (not carried or os.path.isfile(os.path.join(KEYBOARDS, n + ".yaml")))]
+    merged = keep + add
+    if merged == cur:
+        return True
+    src = ", ".join("('%s', '%s')" % kn for kn in merged) if merged else ""
+    return run(["gsettings", "set", "org.gnome.desktop.input-sources", "sources",
+                "[%s]" % src if merged else "@a(ss) []"]) is not None
+
 # Live apply without `hyprctl reload`. UNVERIFIED on the phone: that Hyprland 0.57 takes
 # `hyprctl eval 'hl.config({ input = {...} })'` for the keymap and re-applies it to keyboards already
 # connected. The form is the one patch 0006 uses for other options; `hyprctl keyword` is the fallback.
@@ -261,15 +301,11 @@ def apply_live(layouts, variants, options):
     r = run(["hyprctl", "eval", lua])
     if r is not None and "error" not in r.lower():
         return True
-    ok = True
-    for k in ("kb_variant", "kb_options", "kb_layout"):
-        r = run(["hyprctl", "keyword", "input:" + k, kv[k]])
-        ok = ok and r is not None and "error" not in r.lower()
-    return ok
-
-def sync_osk(layouts, variants):
-    src = ", ".join("('xkb', '%s')" % (l + ("+" + v if v else "")) for l, v in zip(layouts, variants))
-    return run(["gsettings", "set", "org.gnome.desktop.input-sources", "sources", "[%s]" % src]) is not None
+    # One batch, so Hyprland never builds a keymap from new variants with old layouts in between.
+    # The values hold only names, commas and colons (checked above), never ";" or spaces.
+    batch = "; ".join("keyword input:%s %s" % (k, kv[k]) for k in ("kb_variant", "kb_options", "kb_layout"))
+    r = run(["hyprctl", "--batch", batch])
+    return r is not None and "error" not in r.lower()
 
 def effective(key):
     s = run(["hyprctl", "-j", "getoption", "input:" + key]) or ""
@@ -296,8 +332,8 @@ if verb == "get":
     found, layouts, variants, options = parse(text)
     if "kb_layout" not in found:
         layouts, variants = effective_layouts()
-        if "kb_options" not in found:
-            options = effective_options()
+    if "kb_options" not in found:
+        options = effective_options()  # as set does, so get and set agree on the switch key
     out(state(layouts, variants, options))
     sys.exit(0)
 if verb == "list":
@@ -327,6 +363,8 @@ if key == "layouts":
         if (l, v) in zip(new_l, new_v):
             fail("layout listed twice: " + it)
         new_l.append(l); new_v.append(v)
+    if new_l[0] not in LATIN:
+        fail("the first layout must be a Latin one (passwords on the lock screen are typed in it)")
 else:
     if value != "none" and (not SWITCH_RE.fullmatch(value) or value not in opt):
         fail("unknown switch key")
@@ -341,6 +379,7 @@ data, st, text = read_file()
 found, layouts, variants, options = parse(text)
 if "kb_layout" not in found:
     layouts, variants = effective_layouts()
+old_names = lst_names(layouts, variants)
 if "kb_options" not in found:
     options = effective_options()  # keep Omarchy's defaults when input.lua does not set kb_options
 if key == "layouts":
@@ -357,12 +396,12 @@ if "kb_options" not in found and not options:
 if any(variants) or "kb_variant" in found:
     new["kb_variant"] = ",".join(variants) if any(variants) else ""
 write(data, st, text, found, new)
-if not apply_live(layouts, variants, options):
-    fail("saved to input.lua, but Hyprland did not take it live")
-if not sync_osk(layouts, variants):
+osk_ok = key != "layouts" or sync_osk(old_names, lst_names(layouts, variants))
+live_ok = apply_live(layouts, variants, options)
+if not live_ok:
+    fail("saved to input.lua, but Hyprland did not take it live"
+         + ("" if osk_ok else ", and the on-screen keyboard list was not updated"))
+if not osk_ok:
     fail("saved and applied, but the on-screen keyboard list was not updated")
-res = state(layouts, variants, options)
-if layouts[0] not in LATIN:
-    res["warn"] = "the first layout is not a Latin one: passwords on the lock screen are typed in it"
-out(res)
+out(state(layouts, variants, options))
 PY

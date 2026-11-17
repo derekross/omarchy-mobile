@@ -34,18 +34,33 @@ Flickable {
         for (const k of switchKeys) if (k.option === opt) return k.name
         return opt
     }
+    property string lastError: ""   // shown after the re-read that follows a failed set
+    function isLatin(code) { return latin.indexOf(code.split(":")[0]) >= 0 }
     function apply(r) {
         busy = false
-        if (r.error) { status = r.error; return }
+        if (r.error) {
+            // A set can fail half way (file saved, live apply or OSK not): read the real state again so
+            // the next change is not built from a stale list, and keep the error on screen.
+            if (lastError === "") { lastError = r.error; status = r.error; busy = true; reqId = actions.run("keyboard", ["get"]) }
+            else { status = lastError; lastError = "" }
+            return
+        }
         if (!r.layouts) { status = qsTr("The keyboard backend gave no values."); return }
         layouts = r.layouts.map(x => x.variant ? x.layout + ":" + x.variant : x.layout)
         switchKey = r.switchKey || ""
-        warn = r.warn || (layouts.length && latin.indexOf(layouts[0].split(":")[0]) < 0
-              ? qsTr("The first layout is not a Latin one: passwords on the lock screen are typed in it") : "")
-        status = qsTr("Changes apply at once to hardware keyboards and the on-screen keyboard.")
+        warn = layouts.length && !isLatin(layouts[0])
+              ? qsTr("The first layout is not a Latin one: passwords on the lock screen are typed in it") : ""
+        status = lastError !== "" ? lastError : qsTr("Changes apply at once to hardware keyboards and the on-screen keyboard.")
+        lastError = ""
     }
     function save(list) {
-        busy = true; adding = false
+        adding = false
+        // The backend refuses this too; stop here so nothing is sent.
+        if (!list.length || !isLatin(list[0])) {
+            status = qsTr("The first layout must be a Latin one: passwords on the lock screen are typed in it.")
+            return
+        }
+        busy = true
         reqId = actions.run("keyboard", ["set", "layouts", list.join(",")])
     }
     function move(i, d) {

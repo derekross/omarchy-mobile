@@ -17,13 +17,17 @@ case "$1 $2" in
       *) printf '{"option":"%s","str":"","set":false}\n' "$3" ;;
     esac ;;
   eval*) [[ -n ${FAKE_EVAL_FAIL:-} ]] && echo "error: no eval" || echo ok ;;
-  keyword*) [[ -n ${FAKE_KEYWORD_FAIL:-} ]] && echo "error: bad" || echo ok ;;
+  --batch*) [[ -n ${FAKE_KEYWORD_FAIL:-} ]] && echo "error: bad" || echo ok ;;
 esac
 EOT
 cat > "$tmp/bin/gsettings" <<'EOT'
 #!/bin/bash
 printf 'gsettings %s\n' "$*" >> "$FAKE_LOG"
-[[ -z ${FAKE_GSETTINGS_FAIL:-} ]]
+[[ -z ${FAKE_GSETTINGS_FAIL:-} ]] || exit 1
+case $1 in
+  get) cat "$FAKE_SOURCES" 2>/dev/null || echo "@a(ss) []" ;;
+  set) printf '%s\n' "$4" > "$FAKE_SOURCES" ;;
+esac
 EOT
 chmod +x "$tmp/bin/hyprctl" "$tmp/bin/gsettings"
 cat > "$tmp/rules.lst" <<'EOT'
@@ -47,7 +51,8 @@ cat > "$tmp/devices.json" <<'EOT'
 {"keyboards":[{"name":"hl-virtual-keyboard-squeekboard","active_layout_index":0,"main":false},
 {"name":"dell-kb7120w","active_layout_index":1,"main":true}]}
 EOT
-export PATH="$tmp/bin:$PATH" FAKE_LOG="$tmp/log" FAKE_DEVICES="$tmp/devices.json"
+export PATH="$tmp/bin:$PATH" FAKE_LOG="$tmp/log" FAKE_DEVICES="$tmp/devices.json" FAKE_SOURCES="$tmp/sources"
+export OMAMOBILE_KEYBOARDS_DIR="$tmp/nokeyboards"
 export XDG_RUNTIME_DIR="$tmp/run" HYPRLAND_INSTANCE_SIGNATURE=test
 export OMAMOBILE_KBD_INPUT="$tmp/input.lua" OMAMOBILE_KBD_RULES="$tmp/rules.lst"
 unset FAKE_OPTIONS FAKE_EVAL_FAIL FAKE_KEYWORD_FAIL FAKE_GSETTINGS_FAIL
@@ -86,12 +91,17 @@ eq "$(stat -c %a "$tmp/input.lua")" 640
 has "$tmp/input.lua.bak-omamobile" 'kb_layout = "us",'
 has "$tmp/log" 'eval hl.config({ input = { kb_layout = "us,gr", kb_variant = ",polytonic", kb_options = "compose:caps,grp_led:caps,grp:caps_toggle" } })'
 has "$tmp/log" "gsettings set org.gnome.desktop.input-sources sources [('xkb', 'us'), ('xkb', 'gr+polytonic')]"
+# gsettings is written before the live apply (the follower must not read the old list)
+g=$(grep -n '^gsettings set' "$tmp/log" | cut -d: -f1); e=$(grep -n '^eval' "$tmp/log" | cut -d: -f1)
+(( g < e )) || { echo "FAIL: gsettings ($g) after the live apply ($e)" >&2; exit 1; }
 hasnt "$tmp/log" 'reload'
 eq "$(run get)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":"polytonic"}],"switchKey":"grp:caps_toggle","active":1}'
 
-# the switch key: only the grp: part changes
+# the switch key: only the grp: part changes, gsettings is not touched
+: > "$tmp/log"
 eq "$(run set switch-key grp:alt_shift_toggle)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":"polytonic"}],"switchKey":"grp:alt_shift_toggle","active":1}'
 has "$tmp/input.lua" 'kb_options = "compose:caps,grp_led:caps,grp:alt_shift_toggle",'
+hasnt "$tmp/log" 'gsettings'
 eq "$(run set switch-key none | grep -o '"switchKey":"[^"]*"')" '"switchKey":""'
 has "$tmp/input.lua" 'kb_options = "compose:caps,grp_led:caps",'
 run set switch-key grp:caps_toggle >/dev/null
@@ -100,9 +110,54 @@ eq "$(run set layouts us)" '{"layouts":[{"layout":"us","variant":""}],"switchKey
 has "$tmp/input.lua" 'kb_options = "compose:caps,grp_led:caps",'
 has "$tmp/input.lua" 'kb_variant = "",'
 
-# a non-Latin first layout is saved with a warning
-eq "$(run set layouts gr,us | grep -c "\"warn\":\"the first layout is not a Latin one")" 1
+# a non-Latin first layout is refused, nothing written
+cp "$tmp/input.lua" "$tmp/before"; cp "$tmp/sources" "$tmp/sources.before"
+eq "$(run set layouts gr,us)" '{"error":"the first layout must be a Latin one (passwords on the lock screen are typed in it)"}'
+eq "$(run set layouts gr)" '{"error":"the first layout must be a Latin one (passwords on the lock screen are typed in it)"}'
+cmp -s "$tmp/input.lua" "$tmp/before" && cmp -s "$tmp/sources" "$tmp/sources.before" || { echo "FAIL: a refused set wrote" >&2; exit 1; }
 eq "$(run set layouts us,gr | grep -c warn || true)" 0
+
+# OSK merge: the OSK's own languages and its current (first) entry stay, new ones are added,
+# removed hardware layouts are dropped; only names squeekboard has a file for, when the dir exists
+echo "[('xkb', 'gr'), ('xkb', 'fr'), ('ibus', 'x')]" > "$tmp/sources"
+mkdir -p "$tmp/kbds"; touch "$tmp/kbds/us.yaml" "$tmp/kbds/gr.yaml"
+OMAMOBILE_KEYBOARDS_DIR=$tmp/kbds run set layouts us,gr,de >/dev/null
+eq "$(cat "$tmp/sources")" "[('xkb', 'gr'), ('xkb', 'fr'), ('ibus', 'x'), ('xkb', 'us')]"
+run set layouts us,de >/dev/null
+eq "$(cat "$tmp/sources")" "[('xkb', 'fr'), ('ibus', 'x'), ('xkb', 'us'), ('xkb', 'de')]"
+: > "$tmp/log"; run set layouts us,de >/dev/null
+hasnt "$tmp/log" 'gsettings set'
+run set layouts us,gr >/dev/null
+
+# per-device blocks and variables named kb_layout are not the global setting
+cat > "$tmp/input.lua" <<'EOT'
+local kb_layout = "ru"
+hl.config({
+  input = {
+    kb_layout = "us",
+    kb_options = "grp:caps_toggle",
+    touchpad = { kb_layout = "fr" },
+  },
+})
+hl.device({ name = "x", kb_layout = "de" })
+EOT
+eq "$(run get | grep -o '"layouts":[^]]*]')" '"layouts":[{"layout":"us","variant":""}]'
+run set layouts us,gr >/dev/null
+has "$tmp/input.lua" '    kb_layout = "us,gr",'
+has "$tmp/input.lua" 'local kb_layout = "ru"'
+has "$tmp/input.lua" 'touchpad = { kb_layout = "fr" },'
+has "$tmp/input.lua" 'hl.device({ name = "x", kb_layout = "de" })'
+
+# a symlinked input.lua stays a link, its target is written
+mkdir -p "$tmp/dots"; mv "$tmp/input.lua" "$tmp/dots/input.lua"; ln -s "$tmp/dots/input.lua" "$tmp/input.lua"
+run set layouts us,de >/dev/null
+[[ -L $tmp/input.lua ]] || { echo "FAIL: the symlink was replaced" >&2; exit 1; }
+has "$tmp/dots/input.lua" '    kb_layout = "us,de",'
+rm "$tmp/input.lua"; mv "$tmp/dots/input.lua" "$tmp/input.lua"
+
+# get and set agree on the switch key when input.lua has kb_layout but no kb_options
+printf 'hl.config({\n  input = {\n    kb_layout = "us,gr",\n  },\n})\n' > "$tmp/input.lua"
+eq "$(FAKE_OPTIONS=grp:caps_toggle run get)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":""}],"switchKey":"grp:caps_toggle","active":1}'
 
 # bad input never reaches the file
 cp "$tmp/input.lua" "$tmp/before"
@@ -165,7 +220,7 @@ eq "$(run get)" '{"error":"input.lua: kb_layout is not a plain string"}'
 printf 'hl.config({ input = {\n  kb_layout = "us",\n  kb_options = "grp_led:caps",\n} })\n' > "$tmp/input.lua"
 : > "$tmp/log"
 FAKE_EVAL_FAIL=1 run set layouts us,gr >/dev/null
-has "$tmp/log" 'keyword input:kb_layout us,gr'
+has "$tmp/log" '--batch keyword input:kb_variant ; keyword input:kb_options grp_led:caps; keyword input:kb_layout us,gr'
 eq "$(FAKE_EVAL_FAIL=1 FAKE_KEYWORD_FAIL=1 run set layouts us,de)" '{"error":"saved to input.lua, but Hyprland did not take it live"}'
 has "$tmp/input.lua" 'kb_layout = "us,de",'
 eq "$(FAKE_GSETTINGS_FAIL=1 run set layouts us,gr)" '{"error":"saved and applied, but the on-screen keyboard list was not updated"}'
