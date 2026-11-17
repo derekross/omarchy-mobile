@@ -1,0 +1,15 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Keeps the phone unlocked while a keyboard is connected, when the Display page's toggle says so:
+# runs the lock backend's apply at start (so a crash with a keyboard attached can't leave "never" behind)
+# and after every input add or remove, once the burst of events a device brings has settled (1 s).
+# The backend does nothing until the user has picked a lock setting.
+set -u
+backend=${OMAMOBILE_LOCK_BACKEND:-/usr/lib/omamobile-settings/backends/lock.sh}
+apply() { bash "$backend" apply >/dev/null || true; }
+apply
+udevadm monitor --udev --subsystem-match=input | while read -r line; do
+  [[ $line == UDEV* ]] || continue
+  while read -r -t 1 _; do :; done
+  apply
+done

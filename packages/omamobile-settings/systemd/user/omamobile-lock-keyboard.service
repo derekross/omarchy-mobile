@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Settings > Display > "Stay unlocked while a keyboard is connected": follows keyboards coming and going.
+[Unit]
+Description=Omarchy Mobile: stay unlocked while a keyboard is connected
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/lib/omamobile-settings/omamobile-lock-keyboard
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
