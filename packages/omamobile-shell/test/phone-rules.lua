@@ -164,18 +164,18 @@ end
 check(#find("ALT + TAB") == 2 and find("ALT + TAB")[1].dispatcher.dsp == "cycle_next", "Alt + Tab keeps both of Omarchy's actions")
 local f9 = find("F9", true)
 check(#f9 == 1 and f9[1].dispatcher == "voxtype record stop", "F9 still stops Voxtype on release")
--- The layout switch key with no Settings file: Alt+Shift on release, nothing consumed, the
--- other switch keys bound but off (HOME points at a directory without the file)
+-- The layout switch key with no Settings file: Alt+Shift on press, nothing consumed, Ctrl+Shift
+-- bound but off, no Caps Lock bind (xkb does caps) (HOME points at a directory without the file)
 local on, off = {}, 0
 for _, b in ipairs(binds) do
-  if b.dispatcher == "omamobile-keyboard-switch next" then
+  if b.dispatcher == "hyprctl switchxkblayout current next" then
     if b.enabled then on[#on + 1] = b else off = off + 1 end
   end
 end
-check(#on == 2 and off == 3, "the default switch binds: two on, three off")
+check(#on == 2 and off == 2, "the default switch binds: two on, two off")
 for _, b in ipairs(on) do
-  check(b.keys:find("^ALT %+ SHIFT %+ SHIFT_L$") or b.keys:find("^SHIFT %+ ALT %+ ALT_L$"), "Alt+Shift by default: " .. b.keys)
-  check(b.opts.release == true and b.opts.non_consuming == true and device_is(b, false), "on release, not consumed, not squeekboard's")
+  check(b.keys:find("^ALT %+ SHIFT_L$") or b.keys:find("^SHIFT %+ ALT_L$"), "Alt+Shift by default: " .. b.keys)
+  check(b.opts.release ~= true and b.opts.non_consuming == true and device_is(b, false), "on press, not consumed, not squeekboard's")
 end
 
 os.exit(failed and 1 or 0)

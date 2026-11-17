@@ -3,14 +3,16 @@
 # Keyboard layouts for the Settings app. The hardware keyboard's layouts live in Omarchy's user file
 # ~/.config/hypr/input.lua (kb_layout, kb_variant); the on-screen keyboard's list is gsettings
 # org.gnome.desktop.input-sources sources, and a layouts change adds new ones there too.
-# The switch key is a Hyprland bind, not an xkb grp: option (on the phone, Hyprland 0.57.0, 2026-11-17, a
-# grp: option never switched; a bind running switchxkblayout did). It is kept in a generated file,
+# The switch key (measured on the phone, Hyprland 0.57.0, Dell BT keyboard, 2026-11-17):
+# Alt+Shift and Ctrl+Shift are Hyprland press binds running `hyprctl switchxkblayout current next`
+# (11/11 switched, 14-35 ms after the second key went down). Caps Lock is xkb grp:caps_toggle with
+# grp_led:caps in kb_options (12/12, 1-3 ms); a Hyprland bind on code:66 never fired, and
+# grp:alt_shift_toggle only worked in one key order. The binds live in a generated file,
 # ~/.config/hypr/omamobile-keyboard.lua, that phone.lua loads: its "-- switch-key: NAME" line is the
-# choice. Every switch key is bound once (both key orders, on every keyboard but squeekboard's, to
-# `omamobile-keyboard-switch next`) and only the chosen one is enabled; Alt+Shift and Ctrl+Shift fire
-# on release. With no file, phone.lua binds the same set with Alt+Shift on, so "get" reports
-# alt_shift then. The same Lua is applied live with `hyprctl eval`. Any grp: option left in
-# kb_options from earlier versions is removed on the next set.
+# choice. Both pairs are bound once (both key orders, on every keyboard but squeekboard's) and only
+# the chosen one is enabled. With no file, phone.lua binds the same set with Alt+Shift on, so "get"
+# reports alt_shift then, or caps when grp:caps_toggle is in the effective kb_options. The same Lua
+# is applied live with `hyprctl eval`.
 # Prints one line of JSON.
 #   keyboard.sh get                         {"layouts":[{"layout":"us","variant":""}],"switchKey":"alt_shift","active":0}
 #   keyboard.sh list                        {"layouts":[{"layout":"us","name":"English (US)"}],"switchKeys":[...]}
@@ -23,7 +25,7 @@
 # first entry is not a Latin layout is refused (passwords on the lock screen are typed in layout 1).
 # input.lua is edited in place: only the last live kb_layout, kb_variant and kb_options strings inside an
 # `input = { }` table change (per-device blocks and variables are left alone), comments and every other
-# option but grp: (grp_led:caps, compose:...) stay, a copy of the old
+# option stays but grp:, grp_led:caps (set only with caps) and compose:caps with caps, a copy of the old
 # file goes to input.lua.bak-omamobile first, and the write is dropped if the file changed meanwhile.
 # A file with no live kb_layout (Omarchy's stock one has them only in comments) gets one hl.config() block
 # appended at the end; get then reports Hyprland's effective values.
@@ -70,18 +72,16 @@ import fcntl, hashlib, json, os, re, shutil, subprocess, sys
 KEYS = ("kb_layout", "kb_variant", "kb_options")
 NAME_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 # Switch keys: each name binds these key strings (both orders, so either key can go down first).
-# Modifier pairs fire on RELEASE and do not consume the key (release = true, non_consuming = true), so
-# Alt+Shift+Tab, Ctrl+Shift+C/V and the like reach their own bind or the app and do not switch: in
-# Hyprland's KeybindManager (a 0.5x source copy, version not identified) a release bind is shadowed once
-# another key is pressed and released or another bind fires while it is held, and the mods are matched
-# at release time, when the released modifier is still in them (as in the documented
-# `bindr = SUPER, SUPER_L`), hence "ALT + SHIFT + SHIFT_L". UNVERIFIED on the phone (0.57.0): that the
-# release binds fire for a lone Alt+Shift and stay quiet for Alt+Shift+Tab; ctrl_shift and caps.
-# "caps" binds the key by its code (66) on press, as compose:caps may give it another keysym.
-SWITCH_KEYS = {"alt_shift": ("ALT + SHIFT + SHIFT_L", "SHIFT + ALT + ALT_L"),
-               "ctrl_shift": ("CTRL + SHIFT + SHIFT_L", "SHIFT + CTRL + CTRL_L"),
-               "caps": ("code:66",), "none": ()}
-RELEASE = {"alt_shift": True, "ctrl_shift": True, "caps": False, "none": False}
+# Press binds, not release ones: release binds fired only when Shift came up before Alt (8 of 17)
+# and ~110 ms late. non_consuming, so the keys still reach apps. Known cost: Alt+Shift+Tab (and
+# Ctrl+Shift+C/V) also switch the layout. "caps" has no bind: it is xkb (CAPS_OPTS), and compose:caps
+# goes then, as it takes the key. Shift+Caps gives real Caps Lock, but 2 of 4 Shift+Caps presses
+# switched the layout instead on the phone (it also had shift:both_capslock_cancel): cause unknown.
+SWITCH_KEYS = {"alt_shift": ("ALT + SHIFT_L", "SHIFT + ALT_L"),
+               "ctrl_shift": ("CTRL + SHIFT_L", "SHIFT + CTRL_L"),
+               "caps": (), "none": ()}
+CAPS_OPTS = ["grp:caps_toggle", "grp_led:caps"]
+SWITCH_CMD = "hyprctl switchxkblayout current next"
 SWITCH_NAMES = [("alt_shift", "Alt+Shift"), ("ctrl_shift", "Ctrl+Shift"), ("caps", "Caps Lock"), ("none", "None")]
 DESC = "Keyboard: next layout"
 DEFAULT_KEY = "alt_shift"
@@ -231,19 +231,19 @@ def stored_key():
 
 # The binds as Lua, for the file and for hyprctl eval. Every switch key is bound once per Lua state
 # (handles kept in the global omamobile_kbd_binds; phone.lua's default for a phone with no file is the
-# same code) and only the chosen one is enabled. A disabled bind is skipped by Hyprland and consumes
+# same set) and only the chosen one is enabled. A disabled bind is skipped by Hyprland and consumes
 # nothing. Nothing is ever hl.unbind-ed on a key string (that would take a user's own bind on the key
 # too) or removed by handle (Superwhisper's generated config notes that removing a key's press and
 # release handles one by one crashed Hyprland 0.56; set_enabled is what it uses live). The binds stay
-# with one layout: omamobile-keyboard-switch does nothing then.
+# with one layout: switchxkblayout next has nowhere to go then.
 def bind_lua(name):
     lua = "if not omamobile_kbd_binds then\n  omamobile_kbd_binds = {}\n"
     for n, keys in SWITCH_KEYS.items():
         for k in keys:
             lua += ('  omamobile_kbd_binds[#omamobile_kbd_binds + 1] = { "%s", hl.bind("%s", '
-                    'hl.dsp.exec_cmd("omamobile-keyboard-switch next"), { description = "%s", '
-                    'device = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } }%s }) }\n'
-                    % (n, k, DESC, ", release = true, non_consuming = true" if RELEASE[n] else ""))
+                    'hl.dsp.exec_cmd("%s"), { description = "%s", '
+                    'device = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } }, non_consuming = true }) }\n'
+                    % (n, k, SWITCH_CMD, DESC))
     lua += ('end\n'
             'for _, b in ipairs(omamobile_kbd_binds) do pcall(function() b[2]:set_enabled(b[1] == "%s") end) end\n'
             % name)
@@ -312,8 +312,22 @@ def apply_binds(name):
              + "omamobile_kbd_binds = nil\n" + lua])
     return r is not None and "error" not in r.lower()
 
-def state(layouts, variants, options):
+def switch_key(options):
+    """caps lives in kb_options, the rest in the bind file; a caps file without the option is none."""
+    if "grp:caps_toggle" in options:
+        return "caps"
     sw = stored_key()
+    return "none" if sw == "caps" else sw
+
+def switch_options(options, sw):
+    """kb_options for switch key sw: every grp: and grp_led:caps out, caps' own back in."""
+    keep = [o for o in options if not o.startswith("grp:") and o != "grp_led:caps"]
+    if sw == "caps":
+        keep = [o for o in keep if o != "compose:caps"] + CAPS_OPTS
+    return keep
+
+def state(layouts, variants, options):
+    sw = switch_key(options)
     return {"layouts": [{"layout": l, "variant": v} for l, v in zip(layouts, variants)],
             "switchKey": sw, "active": active()}
 
@@ -505,16 +519,15 @@ if "kb_layout" not in found:
 old_names = lst_names(layouts, variants)
 if "kb_options" not in found:
     options = effective_options()  # keep Omarchy's defaults when input.lua does not set kb_options
-old_key = stored_key()
-had_grp = any(o.startswith("grp:") for o in options)
-options = [o for o in options if not o.startswith("grp:")]  # the switch key is a bind now
 if key == "layouts":
     layouts, variants = new_l, new_v
-    sw = old_key
+    sw = switch_key(options)
 else:
     sw = value
+old_options = options
+options = switch_options(options, sw)
 live_ok = osk_ok = True
-if key == "layouts" or had_grp:
+if key == "layouts" or options != old_options:
     new = {"kb_layout": ",".join(layouts), "kb_options": ",".join(options)}
     if "kb_options" not in found and not options:
         del new["kb_options"]

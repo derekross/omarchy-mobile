@@ -7,8 +7,9 @@
     omamobile-keyboard-switch lock      layout 0 on every real keyboard (lock screen,
                                         polkit prompt: passwords are typed in layout 0)
 
-The switch key the Settings page picks is a Hyprland bind running `next`
-(~/.config/hypr/omamobile-keyboard.lua, loaded by phone.lua).
+The switch key itself does not run this: Alt+Shift and Ctrl+Shift run
+`hyprctl switchxkblayout current next` and Caps Lock is xkb grp:caps_toggle
+(see omamobile-settings/backends/keyboard.sh). `next` is kept for scripts.
 
 Real keyboards are the ones in `hyprctl -j devices` that are not squeekboard's
 or another virtual keyboard (hl-virtual-keyboard*) or a pseudo-keyboard
@@ -98,8 +99,8 @@ def switch(n, kbs):
         subprocess.run([HYPRCTL, "--batch", "; ".join(cmds)], stdout=subprocess.DEVNULL)
 
 
-def to(n):
-    kbs = keyboards()
+def to(n, kbs=None):
+    kbs = keyboards() if kbs is None else kbs
     kb = main_kb(kbs)
     if kb is None:
         return
@@ -113,9 +114,10 @@ def to(n):
 def main(argv):
     find_hypr()
     if argv[:1] == ["next"]:
-        kb = main_kb(keyboards())
+        kbs = keyboards()
+        kb = main_kb(kbs)
         i = kb.get("active_layout_index", 0) if kb else 0
-        to((i if isinstance(i, int) else 0) + 1)
+        to((i if isinstance(i, int) else 0) + 1, kbs)
     elif argv[:1] == ["set"] and len(argv) == 2 and argv[1].isdigit():
         to(int(argv[1]))
     elif argv[:1] == ["lock"]:

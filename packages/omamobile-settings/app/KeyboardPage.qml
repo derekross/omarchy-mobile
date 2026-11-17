@@ -136,7 +136,7 @@ Flickable {
             visible: page.layouts.length > 1
             Layout.fillWidth: true; spacing: 8
             Repeater {
-                // From `keyboard.sh list`: Alt+Shift, Ctrl+Shift, Caps Lock, None (Hyprland binds, not xkb grp:)
+                // From `keyboard.sh list`: Alt+Shift, Ctrl+Shift, Caps Lock, None (Alt/Ctrl+Shift are Hyprland binds, Caps Lock is xkb grp:caps_toggle)
                 model: page.switchKeys
                 delegate: SettingsButton {
                     required property var modelData

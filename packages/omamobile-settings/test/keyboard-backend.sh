@@ -71,7 +71,7 @@ hl.config({ input = { kb_layout = "de" } })
 hl.config({
   input = {
     kb_layout = "us",
-    kb_options = "compose:caps,grp:caps_toggle,grp_led:caps", -- keep me
+    kb_options = "compose:caps,grp:alt_shift_toggle,grp_led:caps", -- keep me
     repeat_rate = 40,
   },
 })
@@ -84,15 +84,17 @@ eq "$(run get)" '{"layouts":[{"layout":"us","variant":""}],"switchKey":"alt_shif
 eq "$(run set layouts us,gr:polytonic)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":"polytonic"}],"switchKey":"alt_shift","active":1}'
 has "$tmp/input.lua" 'kb_layout = "us,gr",'
 has "$tmp/input.lua" 'kb_variant = ",polytonic",'
-# the old grp: option is removed (it never switched on the phone), grp_led and the rest stay
-has "$tmp/input.lua" 'kb_options = "compose:caps,grp_led:caps", -- keep me'
+# the old grp: option and grp_led:caps are removed (caps only), the rest stays
+has "$tmp/input.lua" 'kb_options = "compose:caps", -- keep me'
 # both key orders bound on every keyboard but squeekboard's, in the file and live
 b=$tmp/omamobile-keyboard.lua
 has "$b" '-- switch-key: alt_shift'
-has "$b" 'hl.bind("ALT + SHIFT + SHIFT_L", hl.dsp.exec_cmd("omamobile-keyboard-switch next"), { description = "Keyboard: next layout", device = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } }, release = true, non_consuming = true })'
-has "$b" 'hl.bind("SHIFT + ALT + ALT_L", hl.dsp.exec_cmd("omamobile-keyboard-switch next")'
+has "$b" 'hl.bind("ALT + SHIFT_L", hl.dsp.exec_cmd("hyprctl switchxkblayout current next"), { description = "Keyboard: next layout", device = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } }, non_consuming = true })'
+has "$b" 'hl.bind("SHIFT + ALT_L", hl.dsp.exec_cmd("hyprctl switchxkblayout current next")'
+hasnt "$b" 'release'
+hasnt "$b" 'code:66'
 has "$b" 'b[2]:set_enabled(b[1] == "alt_shift")'
-has "$tmp/log" 'hl.bind("SHIFT + ALT + ALT_L", hl.dsp.exec_cmd("omamobile-keyboard-switch next")'
+has "$tmp/log" 'hl.bind("SHIFT + ALT_L", hl.dsp.exec_cmd("hyprctl switchxkblayout current next")'
 hasnt "$tmp/log" 'unbind'
 hasnt "$tmp/log" 'grp:'
 has "$tmp/input.lua" '-- kb_layout = "fr", a comment, never touched'
@@ -101,7 +103,7 @@ has "$tmp/input.lua" '     kb_options = "grp:caps_toggle" ]]'
 eq "$(grep -c 'hl.config' "$tmp/input.lua")" 2
 eq "$(stat -c %a "$tmp/input.lua")" 640
 has "$tmp/input.lua.bak-omamobile" 'kb_layout = "us",'
-has "$tmp/log" 'eval hl.config({ input = { kb_layout = "us,gr", kb_variant = ",polytonic", kb_options = "compose:caps,grp_led:caps" } })'
+has "$tmp/log" 'eval hl.config({ input = { kb_layout = "us,gr", kb_variant = ",polytonic", kb_options = "compose:caps" } })'
 has "$tmp/log" "gsettings set org.gnome.desktop.input-sources sources [('xkb', 'us'), ('xkb', 'gr+polytonic')]"
 # gsettings is written before the live apply
 g=$(grep -n '^gsettings set' "$tmp/log" | cut -d: -f1); e=$(grep -n '^eval' "$tmp/log" | head -1 | cut -d: -f1)
@@ -119,18 +121,28 @@ has "$tmp/log" 'b[2]:set_enabled(b[1] == "ctrl_shift")'
 hasnt "$tmp/log" 'unbind'
 hasnt "$tmp/log" 'gsettings'
 hasnt "$tmp/log" 'kb_options'
-run set switch-key caps >/dev/null
-has "$b" 'hl.bind("code:66", hl.dsp.exec_cmd("omamobile-keyboard-switch next"), { description = "Keyboard: next layout", device = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } } })'
+# caps: no bind, xkb grp:caps_toggle + grp_led:caps in kb_options, compose:caps goes (it takes the key)
+: > "$tmp/log"
+eq "$(run set switch-key caps | grep -o '"switchKey":"[^"]*"')" '"switchKey":"caps"'
 has "$b" 'set_enabled(b[1] == "caps")'
+has "$tmp/input.lua" 'kb_options = "grp:caps_toggle,grp_led:caps", -- keep me'
+has "$tmp/log" 'kb_options = "grp:caps_toggle,grp_led:caps" } })'
+hasnt "$tmp/log" 'gsettings'
+eq "$(run get | grep -o '"switchKey":"[^"]*"')" '"switchKey":"caps"'
+# a layouts change keeps caps
+eq "$(run set layouts us,gr:polytonic | grep -o '"switchKey":"[^"]*"')" '"switchKey":"caps"'
+has "$tmp/input.lua" 'kb_options = "grp:caps_toggle,grp_led:caps", -- keep me'
+# away from caps: both options go
 eq "$(run set switch-key none | grep -o '"switchKey":"[^"]*"')" '"switchKey":"none"'
 has "$b" 'set_enabled(b[1] == "none")'
 has "$b" '-- switch-key: none'
+has "$tmp/input.lua" 'kb_options = "", -- keep me'
 run set switch-key alt_shift >/dev/null
-# one layout left: the binds stay (the switch script does nothing then); the variant goes; grp_led stays
+# one layout left: the binds stay (switchxkblayout next does nothing then); the variant goes
 eq "$(run set layouts us)" '{"layouts":[{"layout":"us","variant":""}],"switchKey":"alt_shift","active":1}'
 has "$b" 'set_enabled(b[1] == "alt_shift")'
 has "$b" '-- switch-key: alt_shift'
-has "$tmp/input.lua" 'kb_options = "compose:caps,grp_led:caps",'
+has "$tmp/input.lua" 'kb_options = "",'
 has "$tmp/input.lua" 'kb_variant = "",'
 
 # a non-Latin first layout is refused, nothing written
@@ -183,6 +195,8 @@ printf 'hl.config({\n  input = {\n    kb_layout = "us,gr",\n  },\n})\n' > "$tmp/
 FAKE_OPTIONS=compose:caps,grp:alt_shift_toggle run set switch-key alt_shift >/dev/null
 has "$tmp/input.lua" '    kb_options = "compose:caps",'
 printf 'hl.config({\n  input = {\n    kb_layout = "us,gr",\n  },\n})\n' > "$tmp/input.lua"
+# grp:caps_toggle in Hyprland's effective kb_options: get says caps whatever the file says
+eq "$(FAKE_OPTIONS=grp:caps_toggle,grp_led:caps run get | grep -o '"switchKey":"[^"]*"')" '"switchKey":"caps"'
 
 # bad input never reaches the file
 cp "$tmp/input.lua" "$tmp/before"
@@ -242,10 +256,10 @@ printf 'hl.config({ input = { kb_layout = [[us]], } })\n' > "$tmp/input.lua"
 eq "$(run get)" '{"error":"input.lua: kb_layout is not a plain string"}'
 
 # eval refused: the keyword fallback; both refused: says which half failed
-printf 'hl.config({ input = {\n  kb_layout = "us",\n  kb_options = "grp_led:caps",\n} })\n' > "$tmp/input.lua"
+printf 'hl.config({ input = {\n  kb_layout = "us",\n  kb_options = "compose:caps",\n} })\n' > "$tmp/input.lua"
 : > "$tmp/log"
 FAKE_EVAL_FAIL=1 run set layouts us,gr >/dev/null
-has "$tmp/log" '--batch keyword input:kb_variant ; keyword input:kb_options grp_led:caps; keyword input:kb_layout us,gr'
+has "$tmp/log" '--batch keyword input:kb_variant ; keyword input:kb_options compose:caps; keyword input:kb_layout us,gr'
 eq "$(FAKE_EVAL_FAIL=1 FAKE_KEYWORD_FAIL=1 run set layouts us,de)" '{"error":"saved, but Hyprland did not take it live"}'
 has "$tmp/input.lua" 'kb_layout = "us,de",'
 eq "$(FAKE_GSETTINGS_FAIL=1 run set layouts us,gr)" '{"error":"saved and applied, but the on-screen keyboard list was not updated"}'
@@ -254,7 +268,7 @@ FAKE_DEVICES=$tmp/none eq "$(FAKE_DEVICES=$tmp/none run get)" '{"layouts":[{"lay
 # list: layouts and grp: switch keys from the rules file, other options left out
 eq "$(run list)" '{"layouts":[{"layout":"us","name":"English (US)"},{"layout":"gr","name":"Greek"},{"layout":"de","name":"German"},{"layout":"ru","name":"Russian"}],"switchKeys":[{"option":"alt_shift","name":"Alt+Shift"},{"option":"ctrl_shift","name":"Ctrl+Shift"},{"option":"caps","name":"Caps Lock"},{"option":"none","name":"None"}]}'
 # The bind file under a stub hl: loaded twice in one Lua state (a second hyprctl eval) it binds
-# the five keys once and enables only the chosen pair; a fresh state (phone.lua resets the table)
+# the four keys once and enables only the chosen pair; a fresh state (phone.lua resets the table)
 # binds them again
 run set switch-key ctrl_shift >/dev/null
 cat > "$tmp/stub.lua" <<'EOT'
@@ -268,28 +282,29 @@ function hl.bind(k, d, o)
 end
 dofile(arg[1]); dofile(arg[1])
 local on = {}
-for _, h in ipairs(binds) do if h.enabled then on[#on + 1] = h.key .. (h.opts.release and "/r" or "") end end
+for _, h in ipairs(binds) do if h.enabled then on[#on + 1] = h.key .. (h.opts.release and "/r" or "") .. (h.opts.non_consuming and "/n" or "") end end
 print(#binds, table.concat(on, ";"))
 omamobile_kbd_binds = nil; dofile(arg[1]); print(#binds)
 EOT
-eq "$(lua "$tmp/stub.lua" "$b")" "$(printf '5\tCTRL + SHIFT + SHIFT_L/r;SHIFT + CTRL + CTRL_L/r\n10')"
-# phone.lua's default (no file) binds the same five key strings
-for k in "ALT + SHIFT + SHIFT_L" "SHIFT + ALT + ALT_L" "CTRL + SHIFT + SHIFT_L" "SHIFT + CTRL + CTRL_L" "code:66"; do
+eq "$(lua "$tmp/stub.lua" "$b")" "$(printf '4\tCTRL + SHIFT_L/n;SHIFT + CTRL_L/n\n8')"
+# phone.lua's default (no file) binds the same four key strings and command, and no code:66
+for k in "ALT + SHIFT_L" "SHIFT + ALT_L" "CTRL + SHIFT_L" "SHIFT + CTRL_L" "hyprctl switchxkblayout current next"; do
   has "$b" "\"$k\""; has "$src/../omamobile-shell/hypr/phone.lua" "\"$k\""
 done
+hasnt "$src/../omamobile-shell/hypr/phone.lua" '"code:66"'
 
-# The handle table did not survive the eval (more of ours than five): keys with only our binds
+# The handle table did not survive the eval (more of ours than four): keys with only our binds
 # are unbound and bound again; a key that also has a user's bind is left alone and reported
 ours='"description":"Keyboard: next layout"'
-{ printf '['; for i in 1 2; do printf '{"modmask":9,"key":"Shift_L","keycode":0,%s},{"modmask":9,"key":"Alt_L","keycode":0,%s},' "$ours" "$ours"
-  printf '{"modmask":5,"key":"Shift_L","keycode":0,%s},{"modmask":5,"key":"Control_L","keycode":0,%s},{"modmask":0,"key":"","keycode":66,%s},' "$ours" "$ours" "$ours"; done
+{ printf '['; for i in 1 2; do printf '{"modmask":8,"key":"Shift_L","keycode":0,%s},{"modmask":1,"key":"Alt_L","keycode":0,%s},' "$ours" "$ours"
+  printf '{"modmask":4,"key":"Shift_L","keycode":0,%s},{"modmask":1,"key":"Control_L","keycode":0,%s},' "$ours" "$ours"; done
   printf '{"modmask":64,"key":"Return","keycode":0,"description":"Terminal"}]\n'; } > "$tmp/binds.json"
 : > "$tmp/log"
 FAKE_BINDS="$tmp/binds.json" run set switch-key alt_shift | grep -q '"switchKey":"alt_shift"' || { echo "FAIL: duplicate cleanup" >&2; exit 1; }
-has "$tmp/log" 'pcall(hl.unbind, "ALT + SHIFT + SHIFT_L")'
-has "$tmp/log" 'pcall(hl.unbind, "code:66")'
+has "$tmp/log" 'pcall(hl.unbind, "ALT + SHIFT_L")'
+has "$tmp/log" 'pcall(hl.unbind, "SHIFT + CTRL_L")'
 has "$tmp/log" 'omamobile_kbd_binds = nil'
-sed -i 's/"Terminal"/"Terminal"},{"modmask":9,"key":"SHIFT_L","keycode":0,"description":"Mine"/' "$tmp/binds.json"
+sed -i 's/"Terminal"/"Terminal"},{"modmask":8,"key":"SHIFT_L","keycode":0,"description":"Mine"/' "$tmp/binds.json"
 : > "$tmp/log"
 FAKE_BINDS="$tmp/binds.json" run set switch-key alt_shift | grep -q 'did not take it live' || { echo "FAIL: a user's bind on the key is reported" >&2; exit 1; }
 hasnt "$tmp/log" 'unbind'
