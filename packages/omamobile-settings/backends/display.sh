@@ -21,6 +21,22 @@ fail() { printf '{"error":"%s"}\n' "$1"; exit 2; }
 fake=''
 [[ -z $fake || -r $fake ]] || fail "cannot read the test file"
 
+# Some launch paths (the shell's processes) start the app without HYPRLAND_INSTANCE_SIGNATURE, and hyprctl
+# then finds no Hyprland: no refresh rates. Take it from $XDG_RUNTIME_DIR/hypr/<sig>/.socket.sock, the
+# newest live socket if there are several.
+find_hypr() {
+  [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] && return 0
+  local d best='' sig
+  for d in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/hypr/*/; do
+    [[ -S $d.socket.sock ]] || continue
+    if [[ -z $best || $d.socket.sock -nt $best.socket.sock ]]; then best=$d; fi
+  done
+  [[ -n $best ]] || return 0
+  sig=${best%/}; sig=${sig##*/}
+  export HYPRLAND_INSTANCE_SIGNATURE=$sig
+}
+find_hypr
+
 get_brightness() {
   local v dev
   if [[ -n $fake ]]; then v=$(sed -n 1p "$fake")
