@@ -77,8 +77,8 @@ hl.config({
 })
 EOT
 chmod 640 "$tmp/input.lua"
-# no bind file yet: phone.lua binds the default, Alt+Shift
-eq "$(run get)" '{"layouts":[{"layout":"us","variant":""}],"switchKey":"alt_shift","active":1}'
+# no bind file yet, but kb_options has grp:alt_shift_toggle: phone.lua keeps its default binds off
+eq "$(run get)" '{"layouts":[{"layout":"us","variant":""}],"switchKey":"none","active":1}'
 
 : > "$tmp/log"
 eq "$(run set layouts us,gr:polytonic)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":"polytonic"}],"switchKey":"alt_shift","active":1}'
@@ -211,6 +211,32 @@ has "$tmp/input.lua" '    kb_options = "compose:caps",'
 printf 'hl.config({\n  input = {\n    kb_layout = "us,gr",\n  },\n})\n' > "$tmp/input.lua"
 # grp:caps_toggle in Hyprland's effective kb_options: get says caps whatever the file says
 eq "$(FAKE_OPTIONS=grp:caps_toggle,grp_led:caps run get | grep -o '"switchKey":"[^"]*"')" '"switchKey":"caps"'
+
+# no bind file and another grp: in kb_options: phone.lua keeps its binds off, so get says none;
+# a layouts save then drops the grp: option and Alt+Shift takes over as before
+rm -f "$b"
+eq "$(FAKE_OPTIONS=grp:alt_shift_toggle run get | grep -o '"switchKey":"[^"]*"')" '"switchKey":"none"'
+eq "$(FAKE_OPTIONS=compose:caps,grp:win_space_toggle run set layouts us,gr | grep -o '"switchKey":"[^"]*"')" '"switchKey":"alt_shift"'
+has "$tmp/input.lua" '    kb_options = "compose:caps",'
+# input.lua cannot be written while caps takes compose:caps: the marker is already on disk, compose:caps stays
+printf 'hl.config({\n  input = {\n    kb_layout = "us,gr",\n    kb_options = "compose:caps",\n  },\n})\n' > "$tmp/input.lua"
+run set switch-key ctrl_shift >/dev/null
+hasnt "$b" 'compose-caps'
+mkdir -p "$tmp/ro"; mv "$tmp/input.lua" "$tmp/ro/input.lua"; ln -s "$tmp/ro/input.lua" "$tmp/input.lua"
+touch "$tmp/ro/input.lua.lock-omamobile"; chmod 555 "$tmp/ro"  # the lock opens, the backup copy cannot be made
+run set switch-key caps | grep -q error || { echo "FAIL: an unwritable input.lua is not reported" >&2; exit 1; }
+chmod 755 "$tmp/ro"; chmod 644 "$tmp/ro/input.lua"
+has "$tmp/ro/input.lua" '    kb_options = "compose:caps",'
+has "$b" '-- compose-caps: restore'
+has "$b" '-- switch-key: ctrl_shift'
+eq "$(run get | grep -o '"switchKey":"[^"]*"')" '"switchKey":"ctrl_shift"'
+# the retry goes through and later leaving caps brings compose:caps back
+run set switch-key caps >/dev/null
+has "$tmp/ro/input.lua" 'kb_options = "grp:caps_toggle,grp_led:caps",'
+run set switch-key alt_shift >/dev/null
+has "$tmp/ro/input.lua" 'kb_options = "compose:caps",'
+hasnt "$b" 'compose-caps'
+rm "$tmp/input.lua"; mv "$tmp/ro/input.lua" "$tmp/input.lua"
 
 # bad input never reaches the file
 cp "$tmp/input.lua" "$tmp/before"

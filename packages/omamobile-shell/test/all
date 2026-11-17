@@ -1045,9 +1045,13 @@ if [[ -n $lua ]]; then
   printf 'if o.dictation_installed and o.dictation_installed() then\n  o.bind_hold("F9", "Start dictation (push-to-talk)", "omarchy-dictation start", "Stop dictation (push-to-talk)", "omarchy-dictation stop")\nend\n' > "$dk/migrated/.config/hypr/bindings.lua"
   printf 'o.bind("F9", "My own key", "my-own-command")\n' > "$dk/own/.config/hypr/bindings.lua"
   for sc in installed:plain migrated:migrated own-f9:own none:plain; do
-    out=$(SCENARIO=${sc%%:*} HOME=$dk/${sc##*:} "$lua" test/phone-dictation.lua) || { grep -v '^ok' <<<"$out"; rm -rf "$dk"; fail "phone.lua dictation keys (${sc%%:*})"; }
+    out=$(SCENARIO=${sc%%:*} HOME=$dk/${sc##*:} env -u XDG_CONFIG_HOME "$lua" test/phone-dictation.lua) || { grep -v '^ok' <<<"$out"; rm -rf "$dk"; fail "phone.lua dictation keys (${sc%%:*})"; }
+  done
+  for kbo in grp:caps_toggle,grp_led:caps compose:caps,grp:alt_shift_toggle; do
+    out=$(SCENARIO=installed HOME=$dk/plain KB_OPTIONS=$kbo env -u XDG_CONFIG_HOME "$lua" test/phone-dictation.lua) || { grep -v '^ok' <<<"$out"; rm -rf "$dk"; fail "phone.lua switch key with kb_options $kbo"; }
   done
   rm -rf "$dk"
+  pass "phone.lua: with no bind file Alt+Shift switches, and no default bind does when kb_options has a grp: switch"
   pass "phone.lua on Omarchy 4.5: Alt + Space and the migration's F9 are for hardware keyboards; the owner's own F9 is left alone"
 else
   pass "phone.lua window rules # SKIP no lua"

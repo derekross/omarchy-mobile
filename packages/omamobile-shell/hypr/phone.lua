@@ -266,8 +266,20 @@ if kbd_file then
   kbd_file:close()
   pcall(dofile, kbd_binds)
 end
+-- An xkb grp: switch already in kb_options (the owner's own, say
+-- grp:caps_toggle) keeps every default bind off, or one press would switch
+-- twice; keyboard.sh's switch_key then reports caps or none the same way.
+-- Read with hl.get_config("input:kb_options"): Hyprland 0.57's Lua API has
+-- it (src/config/lua/bindings/LuaBindingsConfigRules.cpp, hlGetConfig) and it
+-- returns the value as parsed so far, which includes input.lua (hyprland.lua
+-- requires hypr.input before hypr.looknfeel, which loads this file).
+local function kb_has_grp()
+  local ok, v = pcall(function() return hl.get_config("input:kb_options") end)
+  return ok and type(v) == "string" and v:find("grp:", 1, true) ~= nil
+end
 if not omamobile_kbd_binds then
   omamobile_kbd_binds = {}
+  local grp = kb_has_grp()
   local not_squeekboard = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } }
   for _, b in ipairs({
     { "alt_shift", "ALT + SHIFT_L" }, { "alt_shift", "SHIFT + ALT_L" },
@@ -277,7 +289,7 @@ if not omamobile_kbd_binds then
     local ok, h = pcall(hl.bind, b[2], hl.dsp.exec_cmd("hyprctl switchxkblayout current next"), opts)
     if ok and h then
       omamobile_kbd_binds[#omamobile_kbd_binds + 1] = { b[1], h }
-      if b[1] ~= "alt_shift" then pcall(function() h:set_enabled(false) end) end
+      if grp or b[1] ~= "alt_shift" then pcall(function() h:set_enabled(false) end) end
     end
   end
 end

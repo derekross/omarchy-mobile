@@ -11,6 +11,7 @@
 local scenario = os.getenv("SCENARIO")
 local noop = function() end
 local binds = {}
+local kbd = {}
 local function dsp(name) return function(arg) return { dsp = name, arg = arg } end end
 hl = {
   config = noop, window_rule = noop, layer_rule = noop, device = noop,
@@ -21,8 +22,15 @@ hl = {
   end,
   dsp = { window = { cycle_next = dsp("cycle_next"), bring_to_top = dsp("bring_to_top") }, focus = dsp("focus"),
           exec_cmd = function(c) return c end },
-  -- the layout switch key's binds (not checked here)
-  bind = function() return { set_enabled = noop } end,
+  -- the layout switch key's default binds (no omamobile-keyboard.lua in these homes); KB_OPTIONS
+  -- stands for Hyprland's effective input:kb_options
+  bind = function(keys)
+    local h = { keys = keys, on = true }
+    h.set_enabled = function(self, v) self.on = v end
+    kbd[#kbd + 1] = h
+    return h
+  end,
+  get_config = function(k) return k == "input:kb_options" and (os.getenv("KB_OPTIONS") or "") or nil end,
 }
 o = {
   bind = function(keys, description, dispatcher, opts)
@@ -74,5 +82,14 @@ else
   elseif scenario == "own-f9" then
     check(#f9 == 1 and f9[1].dispatcher == "my-own-command" and f9[1].opts.device == nil, "the owner's own F9 bind is left as it is")
   end
+end
+local kb_on = {}
+for _, h in ipairs(kbd) do if h.on then kb_on[#kb_on + 1] = h.keys end end
+table.sort(kb_on)
+if (os.getenv("KB_OPTIONS") or ""):find("grp:", 1, true) then
+  check(#kbd == 4 and #kb_on == 0, "an xkb grp: switch in kb_options keeps every default switch bind off")
+else
+  check(#kbd == 4 and table.concat(kb_on, " ") == "ALT + SHIFT_L SHIFT + ALT_L",
+    "with no bind file only Alt+Shift (both key orders) switches the layout")
 end
 os.exit(failed and 1 or 0)

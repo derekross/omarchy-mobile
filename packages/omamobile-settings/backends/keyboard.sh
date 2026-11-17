@@ -11,7 +11,8 @@
 # ~/.config/hypr/omamobile-keyboard.lua, that phone.lua loads: its "-- switch-key: NAME" line is the
 # choice. Both pairs are bound once (both key orders, on every keyboard but squeekboard's) and only
 # the chosen one is enabled. With no file, phone.lua binds the same set with Alt+Shift on, so "get"
-# reports alt_shift then, or caps when grp:caps_toggle is in the effective kb_options. The same Lua
+# reports alt_shift then, or caps when grp:caps_toggle is in the effective kb_options (none for any other grp:,
+# which keeps phone.lua's default binds off). The same Lua
 # is applied live with `hyprctl eval`.
 # Prints one line of JSON.
 #   keyboard.sh get                         {"layouts":[{"layout":"us","variant":""}],"switchKey":"alt_shift","active":0}
@@ -37,6 +38,8 @@
 # (only ones squeekboard has a layout file for, when that directory exists); removed ones are dropped.
 # A switch-key change does not touch gsettings. Switching layouts never writes gsettings either (that made
 # squeekboard send its keymap again, and the app got Latin letters while Hyprland said Greek).
+# Known limits: `current` switches only the main/last keyboard when two real keyboards are connected.
+# A bind file from earlier unreleased commits of this branch keeps its old binds until the next save.
 # Test hooks (nothing in the environment sets them): OMAMOBILE_KBD_INPUT is the input.lua path,
 # OMAMOBILE_KBD_BINDS the generated bind file,
 # OMAMOBILE_KBD_RULES the xkb rules .lst file, OMAMOBILE_KEYBOARDS_DIR squeekboard's layout files; the test puts a fake hyprctl and gsettings first on PATH.
@@ -325,6 +328,8 @@ def switch_key(options):
     """caps lives in kb_options, the rest in the bind file; a caps file without the option is none."""
     if "grp:caps_toggle" in options:
         return "caps"
+    if not os.path.exists(BINDS) and any(o.startswith("grp:") for o in options):
+        return "none"  # phone.lua keeps its default binds off under an xkb grp: switch
     sw = stored_key()
     return "none" if sw == "caps" else sw
 
@@ -531,6 +536,8 @@ if "kb_options" not in found:
 if key == "layouts":
     layouts, variants = new_l, new_v
     sw = switch_key(options)
+    if sw == "none" and not os.path.exists(BINDS):
+        sw = DEFAULT_KEY  # the grp: option goes below, so Alt+Shift takes over as before
 else:
     sw = value
 old_options = options
@@ -543,6 +550,12 @@ else:
 options = switch_options(options, sw)
 if sw != "caps" and was_caps and compose_marked() and "compose:caps" not in options:
     options = options + ["compose:caps"]
+# The marker goes to disk before input.lua loses compose:caps, so a failed write in between can't lose it:
+# first the old choice plus the marker (harmless while caps is not on), the new choice after input.lua.
+# Leaving caps, input.lua gets compose:caps back first, then the marker goes.
+if compose and not compose_marked():
+    if not write_binds(switch_key(old_options), True):
+        fail("cannot write " + os.path.basename(BINDS))
 live_ok = osk_ok = True
 if key == "layouts" or options != old_options:
     new = {"kb_layout": ",".join(layouts), "kb_options": ",".join(options)}
