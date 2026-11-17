@@ -5,6 +5,7 @@
 # keyboard's list is gsettings org.gnome.desktop.input-sources sources. This keeps both the same.
 # Prints one line of JSON.
 #   keyboard.sh get                         {"layouts":[{"layout":"us","variant":""}],"switchKey":"","active":0}
+#   keyboard.sh list                        {"layouts":[{"layout":"us","name":"English (US)"}],"switchKeys":[...]}
 #   keyboard.sh set layouts us,gr[:variant] 1 to 4 layouts, each a name (and variant) in the xkb rules list
 #   keyboard.sh set switch-key grp:OPTION   or "none"; one layout left always drops the switch key
 # "active" is the index Hyprland reports for the first real keyboard, or null without one. A set answer
@@ -175,7 +176,7 @@ def state(layouts, variants, options):
     return {"layouts": [{"layout": l, "variant": v} for l, v in zip(layouts, variants)],
             "switchKey": sw, "active": active()}
 
-def rules():
+def rules(names=None):
     lay, var, opt, sec = set(), set(), set(), None
     p = os.environ.get("KBD_RULES") or ""
     try:
@@ -187,6 +188,8 @@ def rules():
                 w = line.split()
                 if not w:
                     continue
+                if names is not None and sec in ("layout", "option"):
+                    names.append((sec, w[0], " ".join(w[1:])))
                 if sec == "layout":
                     lay.add(w[0])
                 elif sec == "variant" and len(w) > 1 and w[1].endswith(":"):
@@ -277,8 +280,14 @@ if verb == "get":
         fail("input.lua has no kb_layout")
     out(state(layouts, variants, options))
     sys.exit(0)
+if verb == "list":
+    names = []
+    rules(names)
+    out({"layouts": [{"layout": n, "name": d} for s, n, d in names if s == "layout" and NAME_RE.fullmatch(n)],
+         "switchKeys": [{"option": n, "name": d} for s, n, d in names if s == "option" and SWITCH_RE.fullmatch(n)]})
+    sys.exit(0)
 if verb != "set":
-    fail("usage: get|set")
+    fail("usage: get|list|set")
 key = args[1] if len(args) > 1 else ""
 value = args[2] if len(args) > 2 else ""
 if key not in ("layouts", "switch-key"):

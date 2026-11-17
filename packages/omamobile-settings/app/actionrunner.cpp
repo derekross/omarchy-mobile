@@ -16,11 +16,14 @@ void ActionRunner::post(const QString &tool, const QVariantMap &result, int id) 
 
 int ActionRunner::run(const QString &tool, const QStringList &args) {
     static const QRegularExpression word("\\A[a-z0-9]{1,16}\\z");
-    static const QStringList tools = {"display"};
+    // keyboard takes layout lists (us,gr:polytonic), switch-key and grp:option names
+    static const QRegularExpression kbdWord("\\A[a-z][a-z0-9_:,-]{0,159}\\z");
+    static const QStringList tools = {"display", "keyboard"};
     const int id = ++m_next;
     auto fail = [this, &tool, id](const QString &why) { post(tool, {{"error", why}}, id); return id; };
     if (!tools.contains(tool) || args.size() > 3) return fail("unknown action");
-    for (const auto &a : args) if (!word.match(a).hasMatch()) return fail("bad argument");
+    const auto &allowed = tool == "keyboard" ? kbdWord : word;
+    for (const auto &a : args) if (!allowed.match(a).hasMatch()) return fail("bad argument");
     const QString dir = "/usr/lib/omamobile-settings/backends";
     auto *p = new QProcess(this);
     // bash would run a startup file named by these
@@ -31,7 +34,7 @@ int ActionRunner::run(const QString &tool, const QStringList &args) {
     p->setProgram("/usr/bin/bash");
     p->setArguments(QStringList{dir + "/" + tool + ".sh"} + args);
     connect(p, &QProcess::finished, this, [this, p, tool, id](int code, QProcess::ExitStatus st) {
-        const auto raw = p->readAllStandardOutput().left(4096);
+        const auto raw = p->readAllStandardOutput().left(32768);
         p->readAllStandardError();
         auto obj = QJsonDocument::fromJson(raw).object();
         if (obj.isEmpty() || st != QProcess::NormalExit)

@@ -111,7 +111,7 @@ eq "$(run set layouts '')" '{"error":"give 1 to 4 layouts"}'
 eq "$(run set switch-key grp:nope)" '{"error":"unknown switch key"}'
 eq "$(run set switch-key 'grp:caps_toggle"')" '{"error":"unknown switch key"}'
 eq "$(run set numlock on)" '{"error":"unknown key"}'
-eq "$(run nonsense)" '{"error":"usage: get|set"}'
+eq "$(run nonsense)" '{"error":"usage: get|list|set"}'
 cmp -s "$tmp/input.lua" "$tmp/before" || { echo "FAIL: a rejected set changed input.lua" >&2; exit 1; }
 
 # no kb_layout: an error, nothing appended
@@ -148,4 +148,6 @@ has "$tmp/input.lua" 'kb_layout = "us,de",'
 eq "$(FAKE_GSETTINGS_FAIL=1 run set layouts us,gr)" '{"error":"saved and applied, but the on-screen keyboard list was not updated"}'
 # no Hyprland: active is null
 FAKE_DEVICES=$tmp/none eq "$(FAKE_DEVICES=$tmp/none run get)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":""}],"switchKey":"","active":null}'
+# list: layouts and grp: switch keys from the rules file, other options left out
+eq "$(run list)" '{"layouts":[{"layout":"us","name":"English (US)"},{"layout":"gr","name":"Greek"},{"layout":"de","name":"German"},{"layout":"ru","name":"Russian"}],"switchKeys":[{"option":"grp:alt_shift_toggle","name":"Alt+Shift"},{"option":"grp:caps_toggle","name":"Caps Lock"}]}'
 echo "keyboard backend: ok"
