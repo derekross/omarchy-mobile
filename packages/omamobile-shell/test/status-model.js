@@ -70,3 +70,14 @@ assert.strictEqual(M.unreadStored("[{\"ts\": 5", 0), 0, "torn")
 assert.strictEqual(M.unreadStored(JSON.stringify([null, 4, { ts: "x" }, { ts: -1 }, {}, { ts: 5 }]), 0), 1)
 assert.strictEqual(M.unreadStored(undefined, 0), 0)
 console.log("ok - status model: unread notifications on Omarchy 4.5")
+
+const dev = (o) => JSON.stringify({ keyboards: o })
+const osk = { name: "hl-virtual-keyboard-squeekboard", layout: "us", active_layout_index: 0, main: false }
+assert.strictEqual(M.layoutLabel(dev([osk])), "", "squeekboard alone: no label")
+assert.strictEqual(M.layoutLabel(dev([osk, { name: "dell", layout: "us", active_layout_index: 0, main: true }])), "", "one layout: no label")
+assert.strictEqual(M.layoutLabel(dev([osk, { name: "dell", layout: "us,gr", active_layout_index: 1, main: true }])), "GR")
+assert.strictEqual(M.layoutLabel(dev([{ name: "x-consumer-control", layout: "us,gr", active_layout_index: 1 },
+  { name: "dell", layout: "gb,de", active_layout_index: 0 }])), "EN", "pseudo-keyboards skipped, gb is EN")
+assert.strictEqual(M.layoutLabel("not json"), "")
+assert.strictEqual(M.layoutLabel(dev([{ name: "dell", layout: "us,gr", active_layout_index: 5 }])), "", "index out of range")
+console.log("ok - status model: keyboard layout label")

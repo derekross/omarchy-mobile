@@ -145,11 +145,33 @@ function batteryIcon(percent, charging, full) {
   return charging ? chargingIcons[index] : defaultIcons[index]
 }
 
+// The keyboard layout label from `hyprctl -j devices`: the main real keyboard
+// (not squeekboard's hl-virtual-keyboard or a consumer-control pseudo one,
+// as bin/omamobile-keyboard-switch), "" when it has one layout or none.
+// English layouts read EN, the rest their xkb code in capitals (GR, DE).
+var englishLayouts = ["us", "gb", "au", "ca", "ie", "nz", "za"]
+function layoutLabel(text) {
+  var kbs
+  try { kbs = (JSON.parse(text) || {}).keyboards || [] } catch (e) { return "" }
+  var real = kbs.filter(function(k) {
+    var n = String(k && k.name || "")
+    return n !== "" && n.indexOf("hl-virtual-keyboard") !== 0 && !/consumer-control|power-button|video-bus/.test(n)
+  })
+  var kb = real.filter(function(k) { return k.main })[0] || real[0]
+  if (!kb) return ""
+  var layouts = String(kb.layout || "").split(",").filter(function(l) { return l !== "" })
+  var i = kb.active_layout_index
+  if (layouts.length < 2 || typeof i !== "number" || i < 0 || i >= layouts.length) return ""
+  var code = layouts[i]
+  return englishLayouts.indexOf(code) >= 0 ? "EN" : code.slice(0, 3).toUpperCase()
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     findDevice: findDevice, connectedNetwork: connectedNetwork, wifiIcon: wifiIcon, networkIcon: networkIcon,
     cellularIcon: cellularIcon, cellGlyph: cellGlyph, cellText: cellText, parseCell: parseCell,
     callChip: callChip, elapsed: elapsed, batteryIcon: batteryIcon,
-    stampOf: stampOf, parseStamp: parseStamp, unreadCount: unreadCount, unreadStored: unreadStored
+    stampOf: stampOf, parseStamp: parseStamp, unreadCount: unreadCount, unreadStored: unreadStored,
+    layoutLabel: layoutLabel
   }
 }
