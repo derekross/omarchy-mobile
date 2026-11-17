@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Hardware keyboard layout switching, kept in step with the on-screen keyboard.
+
+    omamobile-keyboard-switch next      every real keyboard to the next layout
+    omamobile-keyboard-switch set N     every real keyboard to layout N (0 = first)
+    omamobile-keyboard-switch lock      layout 0 on every real keyboard and first in
+                                        the on-screen keyboard's list (lock screen,
+                                        polkit prompt: passwords are typed in layout 0)
+    omamobile-keyboard-switch listen    follow Hyprland's activelayout events (the xkb
+                                        grp: switch key runs no command) and move the
+                                        same layout to the front of the OSK's list
+
+Real keyboards are the ones in `hyprctl -j devices` that are not squeekboard's
+or another virtual keyboard (hl-virtual-keyboard*) or a pseudo-keyboard
+(consumer-control, power-button, video-bus), the same set as the Settings
+backend. The layout count and names come from the keyboard's own `layout` and
+`variant` fields. The OSK follows by NAME, never by index: squeekboard and
+omamobile-keyboard-languages move the current entry to the front of
+org.gnome.desktop.input-sources sources, so its order changes on every switch.
+A layout that is not in the OSK list is added by omamobile-keyboard-languages.
+
+UNVERIFIED on the phone's Hyprland (0.57): the socket2 `activelayout>>KB,NAME`
+line format, `switchxkblayout` through `hyprctl --batch`, and the device JSON
+fields. Checked only against Hyprland 0.56.2 on a desktop.
+
+OMAMOBILE_HYPRCTL and OMAMOBILE_KBD_LANGUAGES point elsewhere for tests."""
+
+import glob
+import json
+import os
+import socket
+import subprocess
+import sys
+
+HYPRCTL = os.environ.get("OMAMOBILE_HYPRCTL", "hyprctl")
+LANGUAGES = os.environ.get("OMAMOBILE_KBD_LANGUAGES", "omamobile-keyboard-languages")
+PSEUDO = ("consumer-control", "power-button", "video-bus")
+
+
+def find_hypr():
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        return
+    run = os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()
+    socks = glob.glob(os.path.join(run, "hypr", "*", ".socket.sock"))
+    if socks:
+        newest = max(socks, key=os.path.getmtime)
+        os.environ["HYPRLAND_INSTANCE_SIGNATURE"] = os.path.basename(os.path.dirname(newest))
+
+
+def real(name):
+    return not name.startswith("hl-virtual-keyboard") and not any(p in name for p in PSEUDO)
+
+
+def keyboards():
+    r = subprocess.run([HYPRCTL, "-j", "devices"], capture_output=True, text=True)
+    if r.returncode:
+        sys.exit("omamobile-keyboard-switch: hyprctl devices failed")
+    try:
+        kbs = json.loads(r.stdout).get("keyboards", [])
+    except ValueError:
+        sys.exit("omamobile-keyboard-switch: hyprctl devices gave no JSON")
+    return [k for k in kbs if real(k.get("name", ""))]
+
+
+def names(kb):
+    """xkb names as gsettings writes them: layout or layout+variant."""
+    lay = kb.get("layout", "").split(",")
+    var = kb.get("variant", "").split(",")
+    var += [""] * (len(lay) - len(var))
+    return [l + ("+" + v if v else "") for l, v in zip(lay, var) if l]
+
+
+def main_kb(kbs):
+    return next((k for k in kbs if k.get("main")), kbs[0] if kbs else None)
+
+
+def osk_front(name):
+    subprocess.run([LANGUAGES, "set", name], stdout=subprocess.DEVNULL)
+
+
+def switch(n, kbs):
+    cmds = ["switchxkblayout %s %d" % (k["name"], n) for k in kbs]
+    if cmds:
+        subprocess.run([HYPRCTL, "--batch", "; ".join(cmds)], stdout=subprocess.DEVNULL)
+
+
+def to(n, front=True):
+    kbs = keyboards()
+    kb = main_kb(kbs)
+    if kb is None:
+        return
+    lst = names(kb)
+    if not lst:
+        return
+    n %= len(lst)
+    switch(n, kbs)
+    if front:
+        osk_front(lst[n])
+
+
+def listen():
+    find_hypr()
+    sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+    if not sig:
+        sys.exit("omamobile-keyboard-switch: no Hyprland")
+    run = os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(os.path.join(run, "hypr", sig, ".socket2.sock"))
+    for line in s.makefile("r", encoding="utf-8", errors="replace"):
+        ev, _, data = line.rstrip("\n").partition(">>")
+        if ev != "activelayout":
+            continue
+        dev = data.split(",", 1)[0]
+        if not real(dev):  # squeekboard's own keymap changes are not a hardware switch
+            continue
+        kb = next((k for k in keyboards() if k.get("name") == dev), None)
+        if kb is None:
+            continue
+        lst, i = names(kb), kb.get("active_layout_index")
+        # No loop: nothing turns a gsettings change back into a Hyprland switch, and `set` of the
+        # entry already in front leaves the list as it is (several keyboards report one switch).
+        if isinstance(i, int) and 0 <= i < len(lst):
+            osk_front(lst[i])
+
+
+def main(argv):
+    find_hypr()
+    if argv[:1] == ["next"]:
+        kb = main_kb(keyboards())
+        i = kb.get("active_layout_index", 0) if kb else 0
+        to((i if isinstance(i, int) else 0) + 1)
+    elif argv[:1] == ["set"] and len(argv) == 2 and argv[1].isdigit():
+        to(int(argv[1]))
+    elif argv[:1] == ["lock"]:
+        to(0)
+    elif argv[:1] == ["listen"]:
+        listen()
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

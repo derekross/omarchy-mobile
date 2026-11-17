@@ -189,6 +189,11 @@ o.bind("XF86Keyboard", "Keyboard: hide", "omarchy-shell shell call omamobile.key
 -- keyboard's surface where taps didn't land, and offered a GNOME settings
 -- panel the phone doesn't have. XF86MediaLanguageMenu is KEY_LANGUAGE's.
 o.bind("XF86MediaLanguageMenu", "Keyboard: languages", "omarchy-shell shell call omamobile.keyboard languages ''", { device = osk_only })
+-- Next layout on a hardware keyboard (all of them, and the on-screen keyboard
+-- follows). Super + Space is Omarchy's menu, so this takes Super + Alt +
+-- Shift + Space, which Omarchy's defaults leave free (checked with
+-- `hyprctl binds` on a desktop, Hyprland 0.56.2; not yet on the phone).
+o.bind("SUPER + ALT + SHIFT + SPACE", "Keyboard: next layout", "omamobile-keyboard-switch next", { device = not_osk })
 -- Resolving squeekboard's binds by keysym also lets its Ctrl, Alt, Tab,
 -- Delete and F-keys reach Omarchy's own binds, which they never did: Ctrl +
 -- Alt + Delete would close every window, F9 would start Voxtype instead of

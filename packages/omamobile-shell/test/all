@@ -513,6 +513,8 @@ grep -c 'if (offset > Style.space(60)) sheet.dismissed()' plugins/omamobile.keyb
 if grep -n 'gnome-control-center\|Keyboard Settings' plugins/omamobile.keyboard/*.qml; then fail "no link to a GNOME settings panel the phone doesn't have"; fi
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-keyboard-languages || fail "omamobile-keyboard-languages parses"
 bash test/keyboard-languages.sh >/dev/null || { bash test/keyboard-languages.sh; fail "omamobile-keyboard-languages"; }
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-keyboard-switch || fail "omamobile-keyboard-switch parses"
+bash test/keyboard-switch.sh >/dev/null || { bash test/keyboard-switch.sh; fail "omamobile-keyboard-switch"; }
 if [[ -n ${OMAMOBILE_KEYBOARD_RENDER:-} ]]; then
   bash test/keyboard-render "$OMAMOBILE_KEYBOARD_RENDER" >/dev/null || fail "language sheet render"
 fi

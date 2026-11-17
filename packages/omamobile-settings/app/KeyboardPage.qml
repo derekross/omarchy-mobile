@@ -128,7 +128,7 @@ Flickable {
             Layout.fillWidth: true; spacing: 8
             Repeater {
                 model: [{ option: "none", name: qsTr("None") }].concat(page.switchKeys.filter(k =>
-                    ["grp:alt_shift_toggle", "grp:win_space_toggle", "grp:ctrl_shift_toggle", "grp:caps_toggle",
+                    ["grp:alt_shift_toggle", "grp:ctrl_shift_toggle", "grp:caps_toggle",
                      "grp:alt_space_toggle", "grp:ctrl_space_toggle"].indexOf(k.option) >= 0 || k.option === page.switchKey))
                 delegate: SettingsButton {
                     required property var modelData
