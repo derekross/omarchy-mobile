@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Keyboard layouts (up to 4) and the hardware switch key, through backends/keyboard.sh. Each change is
-// saved and applied at once; the backend keeps the on-screen keyboard's list in the same order.
+// saved and applied at once; new layouts are added to the on-screen keyboard's list, and the switch key is a Hyprland bind.
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -17,7 +17,6 @@ Flickable {
     property string status: qsTr("Reading the keyboard settings...")
     property string warn: ""
     property bool busy: true
-    property bool adding: false
     property int reqId: -1
     property int listId: -1
     readonly property int maxLayouts: 4
@@ -54,7 +53,7 @@ Flickable {
         lastError = ""
     }
     function save(list) {
-        adding = false
+        filter.text = ""
         // The backend refuses this too; stop here so nothing is sent.
         if (!list.length || !isLatin(list[0])) {
             status = qsTr("The first layout must be a Latin one: passwords on the lock screen are typed in it.")
@@ -105,25 +104,21 @@ Flickable {
             text: "⚠ " + page.warn
             color: backend.foreground; wrapMode: Text.Wrap; Layout.fillWidth: true
         }
-        SettingsButton {
-            visible: !page.adding && page.layouts.length < page.maxLayouts
-            enabled: !page.busy && page.available.length > 0
-            text: qsTr("Add a layout")
-            onClicked: { filter.text = ""; page.adding = true }
-        }
+        // Add a layout: a search field, with matches shown as you type (the full list is ~100 long).
         SettingsTextField {
             id: filter
-            visible: page.adding
+            visible: page.layouts.length < page.maxLayouts
+            enabled: !page.busy && page.available.length > 0
             Layout.fillWidth: true; Layout.preferredHeight: 52
-            placeholderText: qsTr("Search layouts")
+            placeholderText: qsTr("Add a layout: type a language or country")
             color: backend.foreground; placeholderTextColor: backend.muted
             background: Rectangle { radius: Math.min(backend.radius, width / 2, height / 2); color: SettingsStyle.fill("normal") }
         }
         Repeater {
-            model: page.adding ? page.available.filter(a => {
-                const q = filter.text.toLowerCase()
-                return page.layouts.indexOf(a.layout) < 0 && (q === "" || a.name.toLowerCase().indexOf(q) >= 0 || a.layout.indexOf(q) >= 0)
-            }).slice(0, 30) : []
+            model: filter.visible && filter.text.trim() !== "" ? page.available.filter(a => {
+                const q = filter.text.trim().toLowerCase()
+                return page.layouts.indexOf(a.layout) < 0 && (a.name.toLowerCase().indexOf(q) >= 0 || a.layout.indexOf(q) >= 0)
+            }).slice(0, 12) : []
             delegate: SettingsButton {
                 required property var modelData
                 Layout.fillWidth: true
@@ -132,7 +127,6 @@ Flickable {
                 onClicked: page.add(modelData.layout)
             }
         }
-        SettingsButton { visible: page.adding; text: qsTr("Cancel"); onClicked: page.adding = false }
         SettingsLabel {
             visible: page.layouts.length > 1
             text: qsTr("Switch key (hardware keyboard)"); font.weight: Font.DemiBold; color: backend.foreground
@@ -142,13 +136,12 @@ Flickable {
             visible: page.layouts.length > 1
             Layout.fillWidth: true; spacing: 8
             Repeater {
-                model: [{ option: "none", name: qsTr("None") }].concat(page.switchKeys.filter(k =>
-                    ["grp:alt_shift_toggle", "grp:ctrl_shift_toggle", "grp:caps_toggle",
-                     "grp:alt_space_toggle", "grp:ctrl_space_toggle"].indexOf(k.option) >= 0 || k.option === page.switchKey))
+                // From `keyboard.sh list`: Alt+Shift, Ctrl+Shift, Caps Lock, None (Hyprland binds, not xkb grp:)
+                model: page.switchKeys
                 delegate: SettingsButton {
                     required property var modelData
                     text: modelData.name
-                    highlighted: modelData.option === "none" ? page.switchKey === "" : page.switchKey === modelData.option
+                    highlighted: page.switchKey === modelData.option
                     enabled: !page.busy
                     onClicked: { page.busy = true; page.reqId = actions.run("keyboard", ["set", "switch-key", modelData.option]) }
                 }

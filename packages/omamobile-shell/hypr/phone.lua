@@ -189,11 +189,6 @@ o.bind("XF86Keyboard", "Keyboard: hide", "omarchy-shell shell call omamobile.key
 -- keyboard's surface where taps didn't land, and offered a GNOME settings
 -- panel the phone doesn't have. XF86MediaLanguageMenu is KEY_LANGUAGE's.
 o.bind("XF86MediaLanguageMenu", "Keyboard: languages", "omarchy-shell shell call omamobile.keyboard languages ''", { device = osk_only })
--- Next layout on a hardware keyboard (all of them, and the on-screen keyboard
--- follows). Super + Space is Omarchy's menu, so this takes Super + Alt +
--- Shift + Space, which Omarchy's defaults leave free (checked with
--- `hyprctl binds` on a desktop, Hyprland 0.56.2; not yet on the phone).
-o.bind("SUPER + ALT + SHIFT + SPACE", "Keyboard: next layout", "omamobile-keyboard-switch next", { device = not_osk })
 -- Resolving squeekboard's binds by keysym also lets its Ctrl, Alt, Tab,
 -- Delete and F-keys reach Omarchy's own binds, which they never did: Ctrl +
 -- Alt + Delete would close every window, F9 would start Voxtype instead of
@@ -251,4 +246,16 @@ elseif o.cmd_present("voxtype") then
     { "Start dictation (push-to-talk)", "voxtype record start" },
     { "Stop dictation (push-to-talk)", "voxtype record stop", { release = true } },
   })
+end
+
+-- The hardware keyboard's layout switch key (Settings > Keyboard writes this
+-- file: binds on every keyboard but squeekboard's to
+-- `omamobile-keyboard-switch next`). An xkb grp: option never switched on the
+-- phone (Hyprland 0.57.0); a bind running switchxkblayout did. pcall: a bad
+-- or half-written file must not stop the rest of the config.
+local kbd_binds = (os.getenv("XDG_CONFIG_HOME") or ((os.getenv("HOME") or "") .. "/.config")) .. "/hypr/omamobile-keyboard.lua"
+local kbd_file = io.open(kbd_binds, "r")
+if kbd_file then
+  kbd_file:close()
+  pcall(dofile, kbd_binds)
 end

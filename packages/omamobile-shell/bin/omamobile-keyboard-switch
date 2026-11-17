@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Hardware keyboard layout switching, kept in step with the on-screen keyboard.
+"""Hardware keyboard layout switching.
 
     omamobile-keyboard-switch next      every real keyboard to the next layout
     omamobile-keyboard-switch set N     every real keyboard to layout N (0 = first)
-    omamobile-keyboard-switch lock      layout 0 on every real keyboard and first in
-                                        the on-screen keyboard's list (lock screen,
+    omamobile-keyboard-switch lock      layout 0 on every real keyboard (lock screen,
                                         polkit prompt: passwords are typed in layout 0)
-    omamobile-keyboard-switch listen    follow Hyprland's activelayout events (the xkb
-                                        grp: switch key runs no command) and move the
-                                        same layout to the front of the OSK's list
+
+The switch key the Settings page picks is a Hyprland bind running `next`
+(~/.config/hypr/omamobile-keyboard.lua, loaded by phone.lua).
 
 Real keyboards are the ones in `hyprctl -j devices` that are not squeekboard's
 or another virtual keyboard (hl-virtual-keyboard*) or a pseudo-keyboard
@@ -17,29 +16,26 @@ or another virtual keyboard (hl-virtual-keyboard*) or a pseudo-keyboard
 set as the Settings backend and the bar. The "main" keyboard (whose layout
 `next` steps from and the bar shows) is, in all three: the real one Hyprland
 marks main, else the first real one with more than one layout, else the first
-real one. `listen` brings every other real keyboard to the index of the one a
-switch key was pressed on, so they agree and the pick does not matter much.
-On Hyprland 0.56.2 only the virtual keyboard had main: true. The layout count and names come from the keyboard's own `layout` and
-`variant` fields. The OSK follows by NAME, never by index: squeekboard and
-omamobile-keyboard-languages move the current entry to the front of
-org.gnome.desktop.input-sources sources, so its order changes on every switch.
-A layout that is not in the OSK list is added by omamobile-keyboard-languages.
+real one. Every real keyboard is set to the same index.
 
-UNVERIFIED on the phone's Hyprland (0.57): the socket2 `activelayout>>KB,NAME`
-line format, `switchxkblayout` through `hyprctl --batch`, and the device JSON
-fields. Checked only against Hyprland 0.56.2 on a desktop.
+This never touches the on-screen keyboard: no gsettings write and no
+omamobile-keyboard-languages call. On the phone (Hyprland 0.57.0, 2026-11-17)
+a gsettings write on a hardware switch made squeekboard send its keymap again,
+and the app then got Latin letters while Hyprland said Greek. The OSK keeps its
+own language list and globe key.
 
-OMAMOBILE_HYPRCTL and OMAMOBILE_KBD_LANGUAGES point elsewhere for tests."""
+UNVERIFIED on the phone: `switchxkblayout` through `hyprctl --batch` (the
+phone test ran `hyprctl switchxkblayout <device> next` directly).
+
+OMAMOBILE_HYPRCTL points elsewhere for tests."""
 
 import glob
 import json
 import os
-import socket
 import subprocess
 import sys
 
 HYPRCTL = os.environ.get("OMAMOBILE_HYPRCTL", "hyprctl")
-LANGUAGES = os.environ.get("OMAMOBILE_KBD_LANGUAGES", "omamobile-keyboard-languages")
 PSEUDO = ("consumer-control", "power-button", "video-bus", "radio-control", "gpio-keys")
 # hyprctl --batch splits commands on ";" and arguments on spaces: a name with any of these
 # cannot be passed safely, so that keyboard is left out (Hyprland names seen on 0.56.2 are
@@ -73,7 +69,7 @@ def keyboards():
 
 
 def names(kb):
-    """xkb names as gsettings writes them: layout or layout+variant."""
+    """xkb names: layout or layout+variant."""
     lay = kb.get("layout", "").split(",")
     var = kb.get("variant", "").split(",")
     var += [""] * (len(lay) - len(var))
@@ -84,10 +80,6 @@ def main_kb(kbs):
     return (next((k for k in kbs if k.get("main")), None)
             or next((k for k in kbs if len(names(k)) > 1), None)
             or (kbs[0] if kbs else None))
-
-
-def osk_front(name):
-    subprocess.run([LANGUAGES, "set", name], stdout=subprocess.DEVNULL)
 
 
 def safe(name):
@@ -106,7 +98,7 @@ def switch(n, kbs):
         subprocess.run([HYPRCTL, "--batch", "; ".join(cmds)], stdout=subprocess.DEVNULL)
 
 
-def to(n, front=True):
+def to(n):
     kbs = keyboards()
     kb = main_kb(kbs)
     if kb is None:
@@ -116,39 +108,6 @@ def to(n, front=True):
         return
     n %= len(lst)
     switch(n, kbs)
-    if front:
-        osk_front(lst[n])
-
-
-def listen():
-    find_hypr()
-    sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
-    if not sig:
-        sys.exit("omamobile-keyboard-switch: no Hyprland")
-    run = os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.connect(os.path.join(run, "hypr", sig, ".socket2.sock"))
-    for line in s.makefile("r", encoding="utf-8", errors="replace"):
-        ev, _, data = line.rstrip("\n").partition(">>")
-        if ev != "activelayout":
-            continue
-        dev = data.split(",", 1)[0]
-        if not real(dev):  # squeekboard's own keymap changes are not a hardware switch
-            continue
-        kbs = keyboards()
-        kb = next((k for k in kbs if k.get("name") == dev), None)
-        if kb is None:
-            continue
-        lst, i = names(kb), kb.get("active_layout_index")
-        if not (isinstance(i, int) and 0 <= i < len(lst)):
-            continue
-        # The xkb grp: key switches only the keyboard it was pressed on: bring the others along.
-        # Their own activelayout events then find them all on i already, so this stops there.
-        others = [k for k in kbs if k is not kb and k.get("active_layout_index") != i]
-        switch(i, others)
-        # No loop: nothing turns a gsettings change back into a Hyprland switch, and `set` of the
-        # entry already in front leaves the list as it is (several keyboards report one switch).
-        osk_front(lst[i])
 
 
 def main(argv):
@@ -161,8 +120,6 @@ def main(argv):
         to(int(argv[1]))
     elif argv[:1] == ["lock"]:
         to(0)
-    elif argv[:1] == ["listen"]:
-        listen()
     else:
         sys.exit(__doc__)
 

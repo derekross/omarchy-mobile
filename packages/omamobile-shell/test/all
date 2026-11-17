@@ -517,6 +517,9 @@ python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobil
 bash test/keyboard-languages.sh >/dev/null || { bash test/keyboard-languages.sh; fail "omamobile-keyboard-languages"; }
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-keyboard-switch || fail "omamobile-keyboard-switch parses"
 bash test/keyboard-switch.sh >/dev/null || { bash test/keyboard-switch.sh; fail "omamobile-keyboard-switch"; }
+[[ ! -e systemd/user/omamobile-keyboard-switch.service ]] || fail "no layout follower service (it bounced switches back)"
+grep -c 'pcall(dofile, kbd_binds)' hypr/phone.lua >/dev/null || fail "phone.lua loads the switch-key binds Settings writes"
+if grep -n 'SUPER + ALT + SHIFT + SPACE' hypr/phone.lua; then fail "the old next-layout bind is gone"; fi
 if [[ -n ${OMAMOBILE_KEYBOARD_RENDER:-} ]]; then
   bash test/keyboard-render "$OMAMOBILE_KEYBOARD_RENDER" >/dev/null || fail "language sheet render"
 fi

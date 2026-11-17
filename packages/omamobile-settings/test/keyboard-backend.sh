@@ -54,7 +54,7 @@ EOT
 export PATH="$tmp/bin:$PATH" FAKE_LOG="$tmp/log" FAKE_DEVICES="$tmp/devices.json" FAKE_SOURCES="$tmp/sources"
 export OMAMOBILE_KEYBOARDS_DIR="$tmp/nokeyboards"
 export XDG_RUNTIME_DIR="$tmp/run" HYPRLAND_INSTANCE_SIGNATURE=test
-export OMAMOBILE_KBD_INPUT="$tmp/input.lua" OMAMOBILE_KBD_RULES="$tmp/rules.lst"
+export OMAMOBILE_KBD_INPUT="$tmp/input.lua" OMAMOBILE_KBD_RULES="$tmp/rules.lst" OMAMOBILE_KBD_BINDS="$tmp/omamobile-keyboard.lua"
 unset FAKE_OPTIONS FAKE_EVAL_FAIL FAKE_KEYWORD_FAIL FAKE_GSETTINGS_FAIL
 run() { bash "$src/backends/keyboard.sh" "$@" || true; }
 eq() { [[ $1 == "$2" ]] || { echo "FAIL: got $1, want $2" >&2; exit 1; }; }
@@ -76,37 +76,59 @@ hl.config({
 })
 EOT
 chmod 640 "$tmp/input.lua"
-eq "$(run get)" '{"layouts":[{"layout":"us","variant":""}],"switchKey":"grp:caps_toggle","active":1}'
+# no bind file yet: the default switch key
+eq "$(run get)" '{"layouts":[{"layout":"us","variant":""}],"switchKey":"alt_shift","active":1}'
 
 : > "$tmp/log"
-eq "$(run set layouts us,gr:polytonic)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":"polytonic"}],"switchKey":"grp:caps_toggle","active":1}'
+eq "$(run set layouts us,gr:polytonic)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":"polytonic"}],"switchKey":"alt_shift","active":1}'
 has "$tmp/input.lua" 'kb_layout = "us,gr",'
 has "$tmp/input.lua" 'kb_variant = ",polytonic",'
-has "$tmp/input.lua" 'kb_options = "compose:caps,grp_led:caps,grp:caps_toggle", -- keep me'
+# the old grp: option is removed (it never switched on the phone), grp_led and the rest stay
+has "$tmp/input.lua" 'kb_options = "compose:caps,grp_led:caps", -- keep me'
+# both key orders bound on every keyboard but squeekboard's, in the file and live
+b=$tmp/omamobile-keyboard.lua
+has "$b" '-- switch-key: alt_shift'
+has "$b" 'hl.bind("ALT + SHIFT_L", hl.dsp.exec_cmd("omamobile-keyboard-switch next"), { description = "Keyboard: next layout", device = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } } })'
+has "$b" 'hl.bind("SHIFT + ALT_L", hl.dsp.exec_cmd("omamobile-keyboard-switch next")'
+has "$tmp/log" 'pcall(hl.unbind, "ALT + SHIFT_L")'
+has "$tmp/log" 'hl.bind("SHIFT + ALT_L", hl.dsp.exec_cmd("omamobile-keyboard-switch next")'
+hasnt "$tmp/log" 'grp:'
 has "$tmp/input.lua" '-- kb_layout = "fr", a comment, never touched'
 has "$tmp/input.lua" 'hl.config({ input = { kb_layout = "de" } })'
 has "$tmp/input.lua" '     kb_options = "grp:caps_toggle" ]]'
 eq "$(grep -c 'hl.config' "$tmp/input.lua")" 2
 eq "$(stat -c %a "$tmp/input.lua")" 640
 has "$tmp/input.lua.bak-omamobile" 'kb_layout = "us",'
-has "$tmp/log" 'eval hl.config({ input = { kb_layout = "us,gr", kb_variant = ",polytonic", kb_options = "compose:caps,grp_led:caps,grp:caps_toggle" } })'
+has "$tmp/log" 'eval hl.config({ input = { kb_layout = "us,gr", kb_variant = ",polytonic", kb_options = "compose:caps,grp_led:caps" } })'
 has "$tmp/log" "gsettings set org.gnome.desktop.input-sources sources [('xkb', 'us'), ('xkb', 'gr+polytonic')]"
-# gsettings is written before the live apply (the follower must not read the old list)
-g=$(grep -n '^gsettings set' "$tmp/log" | cut -d: -f1); e=$(grep -n '^eval' "$tmp/log" | cut -d: -f1)
+# gsettings is written before the live apply
+g=$(grep -n '^gsettings set' "$tmp/log" | cut -d: -f1); e=$(grep -n '^eval' "$tmp/log" | head -1 | cut -d: -f1)
 (( g < e )) || { echo "FAIL: gsettings ($g) after the live apply ($e)" >&2; exit 1; }
 hasnt "$tmp/log" 'reload'
-eq "$(run get)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":"polytonic"}],"switchKey":"grp:caps_toggle","active":1}'
+eq "$(run get)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":"polytonic"}],"switchKey":"alt_shift","active":1}'
 
-# the switch key: only the grp: part changes, gsettings is not touched
-: > "$tmp/log"
-eq "$(run set switch-key grp:alt_shift_toggle)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":"polytonic"}],"switchKey":"grp:alt_shift_toggle","active":1}'
-has "$tmp/input.lua" 'kb_options = "compose:caps,grp_led:caps,grp:alt_shift_toggle",'
+# the switch key: the old binds go, the new ones come; input.lua and gsettings are not touched
+cp "$tmp/input.lua" "$tmp/before"; : > "$tmp/log"
+eq "$(run set switch-key ctrl_shift)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":"polytonic"}],"switchKey":"ctrl_shift","active":1}'
+cmp -s "$tmp/input.lua" "$tmp/before" || { echo "FAIL: a switch-key change wrote input.lua" >&2; exit 1; }
+has "$b" '-- switch-key: ctrl_shift'
+has "$b" 'hl.bind("CTRL + SHIFT_L",'
+has "$b" 'hl.bind("SHIFT + CTRL_L",'
+hasnt "$b" 'ALT'
+has "$tmp/log" 'pcall(hl.unbind, "ALT + SHIFT_L")'
+has "$tmp/log" 'pcall(hl.unbind, "SHIFT + ALT_L")'
 hasnt "$tmp/log" 'gsettings'
-eq "$(run set switch-key none | grep -o '"switchKey":"[^"]*"')" '"switchKey":""'
-has "$tmp/input.lua" 'kb_options = "compose:caps,grp_led:caps",'
-run set switch-key grp:caps_toggle >/dev/null
-# one layout left drops the switch key and the variant; grp_led stays
-eq "$(run set layouts us)" '{"layouts":[{"layout":"us","variant":""}],"switchKey":"","active":1}'
+hasnt "$tmp/log" 'kb_options'
+run set switch-key caps >/dev/null
+has "$b" 'hl.bind("code:66",'
+eq "$(run set switch-key none | grep -o '"switchKey":"[^"]*"')" '"switchKey":"none"'
+hasnt "$b" 'hl.bind'
+has "$b" '-- switch-key: none'
+run set switch-key alt_shift >/dev/null
+# one layout left: no binds (the choice is kept for later); the variant goes; grp_led stays
+eq "$(run set layouts us)" '{"layouts":[{"layout":"us","variant":""}],"switchKey":"alt_shift","active":1}'
+hasnt "$b" 'hl.bind'
+has "$b" '-- switch-key: alt_shift'
 has "$tmp/input.lua" 'kb_options = "compose:caps,grp_led:caps",'
 has "$tmp/input.lua" 'kb_variant = "",'
 
@@ -135,7 +157,7 @@ local kb_layout = "ru"
 hl.config({
   input = {
     kb_layout = "us",
-    kb_options = "grp:caps_toggle",
+    kb_options = "compose:caps",
     touchpad = { kb_layout = "fr" },
   },
 })
@@ -155,9 +177,11 @@ run set layouts us,de >/dev/null
 has "$tmp/dots/input.lua" '    kb_layout = "us,de",'
 rm "$tmp/input.lua"; mv "$tmp/dots/input.lua" "$tmp/input.lua"
 
-# get and set agree on the switch key when input.lua has kb_layout but no kb_options
+# an effective grp: option (input.lua has no kb_options) is dropped by a switch-key change too
 printf 'hl.config({\n  input = {\n    kb_layout = "us,gr",\n  },\n})\n' > "$tmp/input.lua"
-eq "$(FAKE_OPTIONS=grp:caps_toggle run get)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":""}],"switchKey":"grp:caps_toggle","active":1}'
+FAKE_OPTIONS=compose:caps,grp:alt_shift_toggle run set switch-key alt_shift >/dev/null
+has "$tmp/input.lua" '    kb_options = "compose:caps",'
+printf 'hl.config({\n  input = {\n    kb_layout = "us,gr",\n  },\n})\n' > "$tmp/input.lua"
 
 # bad input never reaches the file
 cp "$tmp/input.lua" "$tmp/before"
@@ -167,8 +191,8 @@ eq "$(run set layouts us,gr:intl)" '{"error":"unknown layout: gr:intl"}'
 eq "$(run set layouts 'us,gr"')" '{"error":"bad layout name"}'
 eq "$(run set layouts us,us)" '{"error":"layout listed twice: us"}'
 eq "$(run set layouts '')" '{"error":"give 1 to 4 layouts"}'
-eq "$(run set switch-key grp:nope)" '{"error":"unknown switch key"}'
-eq "$(run set switch-key 'grp:caps_toggle"')" '{"error":"unknown switch key"}'
+eq "$(run set switch-key grp:alt_shift_toggle)" '{"error":"unknown switch key"}'
+eq "$(run set switch-key 'caps"')" '{"error":"unknown switch key"}'
 eq "$(run set numlock on)" '{"error":"unknown key"}'
 eq "$(run nonsense)" '{"error":"usage: get|list|set"}'
 cmp -s "$tmp/input.lua" "$tmp/before" || { echo "FAIL: a rejected set changed input.lua" >&2; exit 1; }
@@ -187,12 +211,12 @@ hl.config({
 EOT
 FAKE_OPTIONS="compose:caps,shift:both_capslock_cancel"
 export FAKE_OPTIONS
-eq "$(run get)" '{"layouts":[{"layout":"us","variant":""}],"switchKey":"","active":1}'
+eq "$(run get)" '{"layouts":[{"layout":"us","variant":""}],"switchKey":"alt_shift","active":1}'
 run set layouts us,gr >/dev/null
 has "$tmp/input.lua" '--     kb_layout = "us,dk,eu",'
 has "$tmp/input.lua" '    kb_layout = "us,gr",'
 has "$tmp/input.lua" '    kb_options = "compose:caps,shift:both_capslock_cancel",'
-eq "$(run get)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":""}],"switchKey":"","active":1}'
+eq "$(run get)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":""}],"switchKey":"alt_shift","active":1}'
 eq "$(grep -c 'hl.config' "$tmp/input.lua")" 2
 run set layouts us,de >/dev/null
 eq "$(grep -c 'hl.config' "$tmp/input.lua")" 2
@@ -203,7 +227,7 @@ eq "$(run get)" '{"error":"input.lua is missing"}'
 
 # kb_options and kb_variant absent: added on the kb_layout line's table, Omarchy's effective options kept
 printf 'hl.config({\n  input = {\n    kb_layout = "us",\n  },\n})\n' > "$tmp/input.lua"
-FAKE_OPTIONS='compose:caps' eq "$(FAKE_OPTIONS=compose:caps run set layouts us,gr:polytonic | grep -o '"switchKey":"[^"]*"')" '"switchKey":""'
+FAKE_OPTIONS='compose:caps' eq "$(FAKE_OPTIONS=compose:caps run set layouts us,gr:polytonic | grep -o '"switchKey":"[^"]*"')" '"switchKey":"alt_shift"'
 has "$tmp/input.lua" '    kb_layout = "us,gr",'
 has "$tmp/input.lua" '    kb_variant = ",polytonic",'
 has "$tmp/input.lua" '    kb_options = "compose:caps",'
@@ -211,7 +235,7 @@ eq "$(grep -c 'hl.config' "$tmp/input.lua")" 1
 # a kb_layout that is not followed by a comma: refused rather than guessed
 printf 'hl.config({ input = { kb_layout = "us" } })\n' > "$tmp/input.lua"
 eq "$(run set layouts us,gr:polytonic)" '{"error":"input.lua: cannot add kb_variant next to kb_layout"}'
-eq "$(run set layouts us,gr)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":""}],"switchKey":"","active":1}'
+eq "$(run set layouts us,gr)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":""}],"switchKey":"alt_shift","active":1}'
 # a value this editor does not handle is refused
 printf 'hl.config({ input = { kb_layout = [[us]], } })\n' > "$tmp/input.lua"
 eq "$(run get)" '{"error":"input.lua: kb_layout is not a plain string"}'
@@ -221,11 +245,11 @@ printf 'hl.config({ input = {\n  kb_layout = "us",\n  kb_options = "grp_led:caps
 : > "$tmp/log"
 FAKE_EVAL_FAIL=1 run set layouts us,gr >/dev/null
 has "$tmp/log" '--batch keyword input:kb_variant ; keyword input:kb_options grp_led:caps; keyword input:kb_layout us,gr'
-eq "$(FAKE_EVAL_FAIL=1 FAKE_KEYWORD_FAIL=1 run set layouts us,de)" '{"error":"saved to input.lua, but Hyprland did not take it live"}'
+eq "$(FAKE_EVAL_FAIL=1 FAKE_KEYWORD_FAIL=1 run set layouts us,de)" '{"error":"saved, but Hyprland did not take it live"}'
 has "$tmp/input.lua" 'kb_layout = "us,de",'
 eq "$(FAKE_GSETTINGS_FAIL=1 run set layouts us,gr)" '{"error":"saved and applied, but the on-screen keyboard list was not updated"}'
 # no Hyprland: active is null
-FAKE_DEVICES=$tmp/none eq "$(FAKE_DEVICES=$tmp/none run get)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":""}],"switchKey":"","active":null}'
+FAKE_DEVICES=$tmp/none eq "$(FAKE_DEVICES=$tmp/none run get)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":""}],"switchKey":"alt_shift","active":null}'
 # list: layouts and grp: switch keys from the rules file, other options left out
-eq "$(run list)" '{"layouts":[{"layout":"us","name":"English (US)"},{"layout":"gr","name":"Greek"},{"layout":"de","name":"German"},{"layout":"ru","name":"Russian"}],"switchKeys":[{"option":"grp:alt_shift_toggle","name":"Alt+Shift"},{"option":"grp:caps_toggle","name":"Caps Lock"}]}'
+eq "$(run list)" '{"layouts":[{"layout":"us","name":"English (US)"},{"layout":"gr","name":"Greek"},{"layout":"de","name":"German"},{"layout":"ru","name":"Russian"}],"switchKeys":[{"option":"alt_shift","name":"Alt+Shift"},{"option":"ctrl_shift","name":"Ctrl+Shift"},{"option":"caps","name":"Caps Lock"},{"option":"none","name":"None"}]}'
 echo "keyboard backend: ok"
