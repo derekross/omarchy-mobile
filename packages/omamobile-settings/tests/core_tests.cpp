@@ -144,9 +144,17 @@ private slots:
         QCOMPARE(backend.rows().size(), 1);
         QCOMPARE(backend.rows().first().toMap()["id"].toString(), QString("display"));
     }
+    // a backend dir with a stub lock.sh that prints the given line
+    static QString stubBackends(QTemporaryDir &dir, const QByteArray &line) {
+        QFile script(dir.filePath("lock.sh"));
+        if (!script.open(QIODevice::WriteOnly)) return {};
+        script.write("echo '" + line + "'\n");
+        return dir.path();
+    }
     void runnerKnowsLockAndRejectsOthers() {
+        QTemporaryDir dir;
         ActionRunner runner;
-        runner.setBackendDir(stubs("off"));
+        runner.setBackendDir(stubBackends(dir, R"({"lock":60,"keyboardAwake":false,"keyboard":false,"effective":60})"));
         QSignalSpy done(&runner, &ActionRunner::finished);
         const int bad = runner.run("nope", {"get"});
         const int badArg = runner.run("lock", {"set", "lock", "60;x"});
@@ -156,11 +164,19 @@ private slots:
         for (const auto &call : done) errors[call.at(2).toInt()] = call.at(1).toMap()["error"].toString();
         QCOMPARE(errors[bad], QString("unknown action"));
         QCOMPARE(errors[badArg], QString("bad argument"));
-        QVERIFY(errors[lock] != "unknown action" && errors[lock] != "bad argument");
+        QVERIFY(errors[lock].isEmpty());
+        QCOMPARE(done.at(2).at(1).toMap()["lock"].toInt(), 60);
+        // no backend there: an error, not a crash
+        QTemporaryDir empty;
+        runner.setBackendDir(empty.path());
+        runner.run("lock", {"get"});
+        QTRY_COMPARE(done.count(), 4);
+        QVERIFY(!done.at(3).at(1).toMap()["error"].toString().isEmpty());
     }
     void displayPageShowsTheLockAnswer() {
+        QTemporaryDir dir;
         ActionRunner runner;
-        runner.setBackendDir(stubs("off"));
+        runner.setBackendDir(stubBackends(dir, R"({"error":"stub says no"})"));
         Backend backend; // outlives the engine: the style singleton reads it until the engine goes
         backend.setBackendDir(stubs("off"));
         QQmlEngine engine;
@@ -170,9 +186,9 @@ private slots:
         std::unique_ptr<QObject> page(component.create());
         QVERIFY2(page, qPrintable(component.errorString()));
         QCOMPARE(page->property("lockChoices").toList().size(), 6);
-        // no lock.sh in the stub dir: the lock rows leave "busy" and show the runner's error
+        // the stub backend's error: the lock rows leave "busy" and show it
         QTRY_VERIFY(!page->property("lockBusy").toBool());
-        QVERIFY(!page->property("lockError").toString().isEmpty());
+        QCOMPARE(page->property("lockError").toString(), QString("stub says no"));
         QMetaObject::invokeMethod(page.get(), "applyLock",
             QVariant(QVariantMap{{"lock", 0}, {"keyboardAwake", true}, {"keyboard", true}, {"effective", 0}}));
         QCOMPARE(page->property("lockAfter").toInt(), 0);
