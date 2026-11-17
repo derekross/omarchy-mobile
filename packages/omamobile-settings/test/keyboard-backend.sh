@@ -11,7 +11,11 @@ cat > "$tmp/bin/hyprctl" <<'EOT'
 printf '%s\n' "$*" >> "$FAKE_LOG"
 case "$1 $2" in
   "-j devices") cat "$FAKE_DEVICES" 2>/dev/null || exit 1 ;;
-  "-j getoption") printf '{"option":"input:kb_options","str":"%s","set":true}\n' "${FAKE_OPTIONS:-}" ;;
+  "-j getoption") case $3 in
+      input:kb_options) printf '{"option":"input:kb_options","str":"%s","set":true}\n' "${FAKE_OPTIONS:-}" ;;
+      input:kb_layout) printf '{"option":"input:kb_layout","str":"%s","set":true}\n' "${FAKE_LAYOUT:-us}" ;;
+      *) printf '{"option":"%s","str":"","set":false}\n' "$3" ;;
+    esac ;;
   eval*) [[ -n ${FAKE_EVAL_FAIL:-} ]] && echo "error: no eval" || echo ok ;;
   keyword*) [[ -n ${FAKE_KEYWORD_FAIL:-} ]] && echo "error: bad" || echo ok ;;
 esac
@@ -114,12 +118,31 @@ eq "$(run set numlock on)" '{"error":"unknown key"}'
 eq "$(run nonsense)" '{"error":"usage: get|list|set"}'
 cmp -s "$tmp/input.lua" "$tmp/before" || { echo "FAIL: a rejected set changed input.lua" >&2; exit 1; }
 
-# no kb_layout: an error, nothing appended
-printf -- '-- empty\nhl.config({ input = { repeat_rate = 40 } })\n' > "$tmp/input.lua"
-cp "$tmp/input.lua" "$tmp/before"
-eq "$(run get)" '{"error":"input.lua has no kb_layout"}'
-eq "$(run set layouts us,gr)" '{"error":"input.lua has no kb_layout"}'
-cmp -s "$tmp/input.lua" "$tmp/before" || { echo "FAIL: input.lua was changed" >&2; exit 1; }
+# Omarchy's stock file: kb_* only in comments. get reports Hyprland's effective values; set appends
+# one hl.config() block and leaves the commented example alone (the phone's file, 0.57, 2026-11-17)
+cat > "$tmp/input.lua" <<'EOT'
+hl.config({
+  input = {
+    -- Use multiple keyboard layouts and switch between them with Left Alt + Right Alt
+    --     kb_layout = "us,dk,eu",
+    --     kb_options = "compose:caps,grp:alts_toggle",
+    repeat_rate = 40,
+  },
+})
+EOT
+FAKE_OPTIONS="compose:caps,shift:both_capslock_cancel"
+export FAKE_OPTIONS
+eq "$(run get)" '{"layouts":[{"layout":"us","variant":""}],"switchKey":"","active":1}'
+run set layouts us,gr >/dev/null
+has "$tmp/input.lua" '--     kb_layout = "us,dk,eu",'
+has "$tmp/input.lua" '    kb_layout = "us,gr",'
+has "$tmp/input.lua" '    kb_options = "compose:caps,shift:both_capslock_cancel",'
+eq "$(run get)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":""}],"switchKey":"","active":1}'
+eq "$(grep -c 'hl.config' "$tmp/input.lua")" 2
+run set layouts us,de >/dev/null
+eq "$(grep -c 'hl.config' "$tmp/input.lua")" 2
+has "$tmp/input.lua" '    kb_layout = "us,de",'
+unset FAKE_OPTIONS
 rm "$tmp/input.lua"
 eq "$(run get)" '{"error":"input.lua is missing"}'
 

@@ -13,7 +13,8 @@
 # typed in it). input.lua is edited in place: only the last live kb_layout, kb_variant and kb_options
 # strings change, comments and every other option (grp_led:caps, compose:...) stay, a copy of the old
 # file goes to input.lua.bak-omamobile first, and the write is dropped if the file changed meanwhile.
-# A file with no live kb_layout is an error: nothing is appended, so a second input table never appears.
+# A file with no live kb_layout (Omarchy's stock one has them only in comments) gets one hl.config() block
+# appended at the end; get then reports Hyprland's effective values.
 # The change is applied live without `hyprctl reload` (a reload sets the configured refresh rate again and
 # re-runs phone.lua), then written to gsettings in the same order.
 # Test hooks (nothing in the environment sets them): OMAMOBILE_KBD_INPUT is the input.lua path,
@@ -205,6 +206,13 @@ def write(data, st, text, found, new):
     for s, e, v in edits:
         text = text[:s] + '"' + v + '"' + text[e:]
     missing = [k for k in KEYS if k in new and k not in found]
+    if missing and "kb_layout" not in found:
+        # Omarchy's stock input.lua has its kb_* lines only in comments: add one hl.config() block at the
+        # end, as the desktop plugin does (InputLua.pl), and leave the commented example as it is.
+        if text and not text.endswith("\n"):
+            text += "\n"
+        text += "\nhl.config({\n  input = {\n" + "".join('    %s = "%s",\n' % (k, new[k]) for k in missing) + "  },\n})\n"
+        missing = []
     if missing:
         # A missing key goes on its own line right after the live kb_layout, only when that line ends
         # with a comma, so it lands in the same `input = { }` table. Anything else is an error.
@@ -263,13 +271,23 @@ def sync_osk(layouts, variants):
     src = ", ".join("('xkb', '%s')" % (l + ("+" + v if v else "")) for l, v in zip(layouts, variants))
     return run(["gsettings", "set", "org.gnome.desktop.input-sources", "sources", "[%s]" % src]) is not None
 
-def effective_options():
-    s = run(["hyprctl", "-j", "getoption", "input:kb_options"]) or ""
+def effective(key):
+    s = run(["hyprctl", "-j", "getoption", "input:" + key]) or ""
     try:
         v = json.loads(s).get("str", "")
     except (ValueError, AttributeError):
         v = ""
-    return [o for o in fields(v) if OPTION_RE.fullmatch(o)]
+    return v if isinstance(v, str) else ""
+
+def effective_options():
+    return [o for o in fields(effective("kb_options")) if OPTION_RE.fullmatch(o)]
+
+# No live kb_layout (the stock file): what Hyprland runs with now, "us" when it cannot say.
+def effective_layouts():
+    lay = [l for l in fields(effective("kb_layout")) if NAME_RE.fullmatch(l)] or ["us"]
+    var = fields(effective("kb_variant"))
+    var = [v if NAME_RE.fullmatch(v) else "" for v in var][:len(lay)]
+    return lay, var + [""] * (len(lay) - len(var))
 
 args = sys.argv[1:]
 verb = args[0] if args else ""
@@ -277,7 +295,9 @@ if verb == "get":
     _, _, text = read_file()
     found, layouts, variants, options = parse(text)
     if "kb_layout" not in found:
-        fail("input.lua has no kb_layout")
+        layouts, variants = effective_layouts()
+        if "kb_options" not in found:
+            options = effective_options()
     out(state(layouts, variants, options))
     sys.exit(0)
 if verb == "list":
@@ -320,7 +340,7 @@ except OSError:
 data, st, text = read_file()
 found, layouts, variants, options = parse(text)
 if "kb_layout" not in found:
-    fail("input.lua has no kb_layout")
+    layouts, variants = effective_layouts()
 if "kb_options" not in found:
     options = effective_options()  # keep Omarchy's defaults when input.lua does not set kb_options
 if key == "layouts":
