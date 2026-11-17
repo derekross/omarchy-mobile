@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # backends/lock.sh against a scratch HOME, a fake /sys/class/input and /run/udev/data.
 set -euo pipefail
+export OMAMOBILE_LOCK_NO_REARM=1  # never touch the idle service of the machine running the tests
 src=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 tmp=$(mktemp -d); trap 'rm -rf -- "$tmp"' EXIT
 export HOME=$tmp/home XDG_CONFIG_HOME=$tmp/home/.config OMARCHY_PATH=$tmp/omarchy
@@ -161,4 +162,23 @@ rc=0; PATH="$tmp/bin:$PATH" OMAMOBILE_LOCK_BACKEND=$tmp/stub.sh timeout 20 bash 
 eq "$rc" 1
 grep -qx 'Restart=always' "$src/systemd/user/omamobile-lock-keyboard.service"
 grep -q '^ExecStopPost=.*lock.sh restore$' "$src/systemd/user/omamobile-lock-keyboard.service"
+# The idle re-arm: with idle on and stay-awake off a set switches idle off and on; with stay-awake on,
+# or for get, it is left alone. A fake omarchy-shell logs its calls.
+mkdir -p "$tmp/rearm"; cat > "$tmp/rearm/omarchy-shell" <<'SH'
+#!/bin/bash
+echo "$*" >> "$REARM_LOG"
+[[ $* == "idle status" ]] && cat "$REARM_STATUS"
+exit 0
+SH
+chmod +x "$tmp/rearm/omarchy-shell"
+export REARM_LOG=$tmp/rearm/log REARM_STATUS=$tmp/rearm/status
+echo '{"enabled":true,"stayAwake":false}' > "$REARM_STATUS"; : > "$REARM_LOG"
+PATH="$tmp/rearm:$PATH" OMAMOBILE_LOCK_NO_REARM= bash "$src/backends/lock.sh" set lock 60 >/dev/null
+eq "$(tr '\n' ',' < "$REARM_LOG")" "idle status,idle disable,idle enable,"
+echo '{"enabled":true,"stayAwake":true}' > "$REARM_STATUS"; : > "$REARM_LOG"
+PATH="$tmp/rearm:$PATH" OMAMOBILE_LOCK_NO_REARM= bash "$src/backends/lock.sh" set lock 120 >/dev/null
+eq "$(tr '\n' ',' < "$REARM_LOG")" "idle status,"
+: > "$REARM_LOG"
+PATH="$tmp/rearm:$PATH" OMAMOBILE_LOCK_NO_REARM= bash "$src/backends/lock.sh" get >/dev/null
+eq "$(cat "$REARM_LOG")" ""
 echo "lock backend: ok"
