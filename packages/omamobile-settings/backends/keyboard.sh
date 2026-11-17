@@ -6,9 +6,11 @@
 # The switch key is a Hyprland bind, not an xkb grp: option (on the phone, Hyprland 0.57.0, 2026-11-17, a
 # grp: option never switched; a bind running switchxkblayout did). It is kept in a generated file,
 # ~/.config/hypr/omamobile-keyboard.lua, that phone.lua loads: its "-- switch-key: NAME" line is the
-# choice, and with two or more layouts it binds both key orders (ALT + SHIFT_L and SHIFT + ALT_L) on every
-# keyboard but squeekboard's to `omamobile-keyboard-switch next`. The same binds are applied live with
-# `hyprctl eval`. Any grp: option left in kb_options from earlier versions is removed on the next set.
+# choice. Every switch key is bound once (both key orders, on every keyboard but squeekboard's, to
+# `omamobile-keyboard-switch next`) and only the chosen one is enabled; Alt+Shift and Ctrl+Shift fire
+# on release. With no file, phone.lua binds the same set with Alt+Shift on, so "get" reports
+# alt_shift then. The same Lua is applied live with `hyprctl eval`. Any grp: option left in
+# kb_options from earlier versions is removed on the next set.
 # Prints one line of JSON.
 #   keyboard.sh get                         {"layouts":[{"layout":"us","variant":""}],"switchKey":"alt_shift","active":0}
 #   keyboard.sh list                        {"layouts":[{"layout":"us","name":"English (US)"}],"switchKeys":[...]}
@@ -68,11 +70,20 @@ import fcntl, hashlib, json, os, re, shutil, subprocess, sys
 KEYS = ("kb_layout", "kb_variant", "kb_options")
 NAME_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 # Switch keys: each name binds these key strings (both orders, so either key can go down first).
-# "caps" binds the key by its code (66), as compose:caps may give it another keysym. UNVERIFIED on the
-# phone: ctrl_shift and caps (only ALT + SHIFT_L / SHIFT + ALT_L were tried, 2026-11-17).
-SWITCH_KEYS = {"alt_shift": ("ALT + SHIFT_L", "SHIFT + ALT_L"), "ctrl_shift": ("CTRL + SHIFT_L", "SHIFT + CTRL_L"),
+# Modifier pairs fire on RELEASE and do not consume the key (release = true, non_consuming = true), so
+# Alt+Shift+Tab, Ctrl+Shift+C/V and the like reach their own bind or the app and do not switch: in
+# Hyprland's KeybindManager (a 0.5x source copy, version not identified) a release bind is shadowed once
+# another key is pressed and released or another bind fires while it is held, and the mods are matched
+# at release time, when the released modifier is still in them (as in the documented
+# `bindr = SUPER, SUPER_L`), hence "ALT + SHIFT + SHIFT_L". UNVERIFIED on the phone (0.57.0): that the
+# release binds fire for a lone Alt+Shift and stay quiet for Alt+Shift+Tab; ctrl_shift and caps.
+# "caps" binds the key by its code (66) on press, as compose:caps may give it another keysym.
+SWITCH_KEYS = {"alt_shift": ("ALT + SHIFT + SHIFT_L", "SHIFT + ALT + ALT_L"),
+               "ctrl_shift": ("CTRL + SHIFT + SHIFT_L", "SHIFT + CTRL + CTRL_L"),
                "caps": ("code:66",), "none": ()}
+RELEASE = {"alt_shift": True, "ctrl_shift": True, "caps": False, "none": False}
 SWITCH_NAMES = [("alt_shift", "Alt+Shift"), ("ctrl_shift", "Ctrl+Shift"), ("caps", "Caps Lock"), ("none", "None")]
+DESC = "Keyboard: next layout"
 DEFAULT_KEY = "alt_shift"
 BINDS = os.environ["KBD_BINDS"]
 OPTION_RE = re.compile(r"[a-z0-9_]{1,32}:[A-Za-z0-9_]{1,48}")
@@ -207,6 +218,7 @@ def active():
     return i if isinstance(i, int) and i >= 0 else None
 
 def stored_key():
+    """The file's choice; with no file, phone.lua binds the default (Alt+Shift), so that is the truth."""
     try:
         with open(BINDS, encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -217,18 +229,29 @@ def stored_key():
         pass
     return DEFAULT_KEY
 
-def bind_lua(name, count):
-    """The binds for a switch key, as Lua for the file and for hyprctl eval; none with one layout."""
-    if count < 2:
-        return ""
-    dev = '{ inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } }'
-    return "".join('hl.bind("%s", hl.dsp.exec_cmd("omamobile-keyboard-switch next"), '
-                   '{ description = "Keyboard: next layout", device = %s })\n' % (k, dev)
-                   for k in SWITCH_KEYS[name])
+# The binds as Lua, for the file and for hyprctl eval. Every switch key is bound once per Lua state
+# (handles kept in the global omamobile_kbd_binds; phone.lua's default for a phone with no file is the
+# same code) and only the chosen one is enabled. A disabled bind is skipped by Hyprland and consumes
+# nothing. Nothing is ever hl.unbind-ed on a key string (that would take a user's own bind on the key
+# too) or removed by handle (Superwhisper's generated config notes that removing a key's press and
+# release handles one by one crashed Hyprland 0.56; set_enabled is what it uses live). The binds stay
+# with one layout: omamobile-keyboard-switch does nothing then.
+def bind_lua(name):
+    lua = "if not omamobile_kbd_binds then\n  omamobile_kbd_binds = {}\n"
+    for n, keys in SWITCH_KEYS.items():
+        for k in keys:
+            lua += ('  omamobile_kbd_binds[#omamobile_kbd_binds + 1] = { "%s", hl.bind("%s", '
+                    'hl.dsp.exec_cmd("omamobile-keyboard-switch next"), { description = "%s", '
+                    'device = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } }%s }) }\n'
+                    % (n, k, DESC, ", release = true, non_consuming = true" if RELEASE[n] else ""))
+    lua += ('end\n'
+            'for _, b in ipairs(omamobile_kbd_binds) do pcall(function() b[2]:set_enabled(b[1] == "%s") end) end\n'
+            % name)
+    return lua
 
-def write_binds(name, count):
+def write_binds(name):
     text = ("-- Written by Omarchy Mobile Settings (Keyboard), loaded by phone.lua. Changes here are replaced.\n"
-            "-- switch-key: %s\n" % name) + bind_lua(name, count)
+            "-- switch-key: %s\n" % name) + bind_lua(name)
     tmp = "%s.tmp-omamobile.%d" % (BINDS, os.getpid())
     try:
         os.makedirs(os.path.dirname(BINDS), exist_ok=True)
@@ -245,15 +268,48 @@ def write_binds(name, count):
         return False
     return True
 
-# Live: drop the old key's binds (and the new key's, so nothing is bound twice), then bind. hl.unbind
-# takes every bind on that key string, a user's own too. UNVERIFIED on the phone: hl.unbind and hl.bind
-# through `hyprctl eval` (the phone test bound ALT + SHIFT_L live, not through this code).
-def apply_binds(old, name, count):
-    keys = list(dict.fromkeys(SWITCH_KEYS[old] + SWITCH_KEYS[name]))
-    lua = "".join('pcall(hl.unbind, "%s")\n' % k for k in keys) + bind_lua(name, count)
-    if not lua:
-        return True
+MODBITS = {"SHIFT": 1, "CAPS": 2, "CTRL": 4, "CONTROL": 4, "ALT": 8, "MOD2": 16, "MOD3": 32, "SUPER": 64, "MOD5": 128}
+
+def split_key(k):
+    parts = [p.strip() for p in k.split("+")]
+    return sum(MODBITS.get(p.upper(), 0) for p in parts[:-1]), parts[-1]
+
+def ours_count():
+    """How many of our binds Hyprland has, or None when it cannot be read."""
+    try:
+        binds = json.loads(run(["hyprctl", "-j", "binds"]) or "x")
+    except ValueError:
+        return None
+    if not isinstance(binds, list):
+        return None
+    return sum(1 for b in binds if isinstance(b, dict) and b.get("description") == DESC), binds
+
+ALL_KEYS = [k for ks in SWITCH_KEYS.values() for k in ks]
+
+# Live. UNVERIFIED on the phone: that the omamobile_kbd_binds global survives between `hyprctl eval`
+# calls and the config, and set_enabled through eval. When it does not (more of our binds than the
+# one set afterwards), a key is hl.unbind-ed only when every bind Hyprland lists on it is ours, and
+# the set is bound again; a key that also carries a user's bind is left alone and the save reports
+# that it did not apply live (the file applies on the next config load).
+def apply_binds(name):
+    lua = bind_lua(name)
     r = run(["hyprctl", "eval", lua])
+    if r is None or "error" in r.lower():
+        return False
+    got = ours_count()
+    if got is None or got[0] == len(ALL_KEYS):
+        return True
+    clean = []
+    for k in ALL_KEYS:
+        mods, key = split_key(k)
+        on = [b for b in got[1] if isinstance(b, dict) and (
+              (key.startswith("code:") and b.get("keycode") == int(key[5:]) and not b.get("modmask"))
+              or (str(b.get("key", "")).lower() == key.lower() and b.get("modmask") == mods))]
+        if any(b.get("description") != DESC for b in on):
+            return False
+        clean.append(k)
+    r = run(["hyprctl", "eval", "".join('pcall(hl.unbind, "%s")\n' % k for k in clean)
+             + "omamobile_kbd_binds = nil\n" + lua])
     return r is not None and "error" not in r.lower()
 
 def state(layouts, variants, options):
@@ -467,9 +523,9 @@ if key == "layouts" or had_grp:
     write(data, st, text, found, new)
     osk_ok = key != "layouts" or sync_osk(old_names, lst_names(layouts, variants))
     live_ok = apply_live(layouts, variants, options)
-if not write_binds(sw, len(layouts)):
+if not write_binds(sw):
     fail("cannot write " + os.path.basename(BINDS))
-live_ok = apply_binds(old_key, sw, len(layouts)) and live_ok
+live_ok = apply_binds(sw) and live_ok
 if not live_ok:
     fail("saved, but Hyprland did not take it live"
          + ("" if osk_ok else ", and the on-screen keyboard list was not updated"))

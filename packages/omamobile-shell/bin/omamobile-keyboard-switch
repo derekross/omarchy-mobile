@@ -104,8 +104,8 @@ def to(n):
     if kb is None:
         return
     lst = names(kb)
-    if not lst:
-        return
+    if len(lst) < 2:
+        return  # one layout: the switch key does nothing
     n %= len(lst)
     switch(n, kbs)
 

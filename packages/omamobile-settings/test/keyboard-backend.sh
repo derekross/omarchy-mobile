@@ -11,6 +11,7 @@ cat > "$tmp/bin/hyprctl" <<'EOT'
 printf '%s\n' "$*" >> "$FAKE_LOG"
 case "$1 $2" in
   "-j devices") cat "$FAKE_DEVICES" 2>/dev/null || exit 1 ;;
+  "-j binds") cat "$FAKE_BINDS" 2>/dev/null || exit 1 ;;
   "-j getoption") case $3 in
       input:kb_options) printf '{"option":"input:kb_options","str":"%s","set":true}\n' "${FAKE_OPTIONS:-}" ;;
       input:kb_layout) printf '{"option":"input:kb_layout","str":"%s","set":true}\n' "${FAKE_LAYOUT:-us}" ;;
@@ -76,7 +77,7 @@ hl.config({
 })
 EOT
 chmod 640 "$tmp/input.lua"
-# no bind file yet: the default switch key
+# no bind file yet: phone.lua binds the default, Alt+Shift
 eq "$(run get)" '{"layouts":[{"layout":"us","variant":""}],"switchKey":"alt_shift","active":1}'
 
 : > "$tmp/log"
@@ -88,10 +89,11 @@ has "$tmp/input.lua" 'kb_options = "compose:caps,grp_led:caps", -- keep me'
 # both key orders bound on every keyboard but squeekboard's, in the file and live
 b=$tmp/omamobile-keyboard.lua
 has "$b" '-- switch-key: alt_shift'
-has "$b" 'hl.bind("ALT + SHIFT_L", hl.dsp.exec_cmd("omamobile-keyboard-switch next"), { description = "Keyboard: next layout", device = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } } })'
-has "$b" 'hl.bind("SHIFT + ALT_L", hl.dsp.exec_cmd("omamobile-keyboard-switch next")'
-has "$tmp/log" 'pcall(hl.unbind, "ALT + SHIFT_L")'
-has "$tmp/log" 'hl.bind("SHIFT + ALT_L", hl.dsp.exec_cmd("omamobile-keyboard-switch next")'
+has "$b" 'hl.bind("ALT + SHIFT + SHIFT_L", hl.dsp.exec_cmd("omamobile-keyboard-switch next"), { description = "Keyboard: next layout", device = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } }, release = true, non_consuming = true })'
+has "$b" 'hl.bind("SHIFT + ALT + ALT_L", hl.dsp.exec_cmd("omamobile-keyboard-switch next")'
+has "$b" 'b[2]:set_enabled(b[1] == "alt_shift")'
+has "$tmp/log" 'hl.bind("SHIFT + ALT + ALT_L", hl.dsp.exec_cmd("omamobile-keyboard-switch next")'
+hasnt "$tmp/log" 'unbind'
 hasnt "$tmp/log" 'grp:'
 has "$tmp/input.lua" '-- kb_layout = "fr", a comment, never touched'
 has "$tmp/input.lua" 'hl.config({ input = { kb_layout = "de" } })'
@@ -112,22 +114,21 @@ cp "$tmp/input.lua" "$tmp/before"; : > "$tmp/log"
 eq "$(run set switch-key ctrl_shift)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":"polytonic"}],"switchKey":"ctrl_shift","active":1}'
 cmp -s "$tmp/input.lua" "$tmp/before" || { echo "FAIL: a switch-key change wrote input.lua" >&2; exit 1; }
 has "$b" '-- switch-key: ctrl_shift'
-has "$b" 'hl.bind("CTRL + SHIFT_L",'
-has "$b" 'hl.bind("SHIFT + CTRL_L",'
-hasnt "$b" 'ALT'
-has "$tmp/log" 'pcall(hl.unbind, "ALT + SHIFT_L")'
-has "$tmp/log" 'pcall(hl.unbind, "SHIFT + ALT_L")'
+has "$b" 'b[2]:set_enabled(b[1] == "ctrl_shift")'
+has "$tmp/log" 'b[2]:set_enabled(b[1] == "ctrl_shift")'
+hasnt "$tmp/log" 'unbind'
 hasnt "$tmp/log" 'gsettings'
 hasnt "$tmp/log" 'kb_options'
 run set switch-key caps >/dev/null
-has "$b" 'hl.bind("code:66",'
+has "$b" 'hl.bind("code:66", hl.dsp.exec_cmd("omamobile-keyboard-switch next"), { description = "Keyboard: next layout", device = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } } })'
+has "$b" 'set_enabled(b[1] == "caps")'
 eq "$(run set switch-key none | grep -o '"switchKey":"[^"]*"')" '"switchKey":"none"'
-hasnt "$b" 'hl.bind'
+has "$b" 'set_enabled(b[1] == "none")'
 has "$b" '-- switch-key: none'
 run set switch-key alt_shift >/dev/null
-# one layout left: no binds (the choice is kept for later); the variant goes; grp_led stays
+# one layout left: the binds stay (the switch script does nothing then); the variant goes; grp_led stays
 eq "$(run set layouts us)" '{"layouts":[{"layout":"us","variant":""}],"switchKey":"alt_shift","active":1}'
-hasnt "$b" 'hl.bind'
+has "$b" 'set_enabled(b[1] == "alt_shift")'
 has "$b" '-- switch-key: alt_shift'
 has "$tmp/input.lua" 'kb_options = "compose:caps,grp_led:caps",'
 has "$tmp/input.lua" 'kb_variant = "",'
@@ -252,4 +253,45 @@ eq "$(FAKE_GSETTINGS_FAIL=1 run set layouts us,gr)" '{"error":"saved and applied
 FAKE_DEVICES=$tmp/none eq "$(FAKE_DEVICES=$tmp/none run get)" '{"layouts":[{"layout":"us","variant":""},{"layout":"gr","variant":""}],"switchKey":"alt_shift","active":null}'
 # list: layouts and grp: switch keys from the rules file, other options left out
 eq "$(run list)" '{"layouts":[{"layout":"us","name":"English (US)"},{"layout":"gr","name":"Greek"},{"layout":"de","name":"German"},{"layout":"ru","name":"Russian"}],"switchKeys":[{"option":"alt_shift","name":"Alt+Shift"},{"option":"ctrl_shift","name":"Ctrl+Shift"},{"option":"caps","name":"Caps Lock"},{"option":"none","name":"None"}]}'
+# The bind file under a stub hl: loaded twice in one Lua state (a second hyprctl eval) it binds
+# the five keys once and enables only the chosen pair; a fresh state (phone.lua resets the table)
+# binds them again
+run set switch-key ctrl_shift >/dev/null
+cat > "$tmp/stub.lua" <<'EOT'
+local binds = {}
+hl = { dsp = { exec_cmd = function(c) return c end } }
+function hl.bind(k, d, o)
+  local h = { key = k, enabled = true, opts = o }
+  function h:set_enabled(v) self.enabled = v end
+  binds[#binds + 1] = h
+  return h
+end
+dofile(arg[1]); dofile(arg[1])
+local on = {}
+for _, h in ipairs(binds) do if h.enabled then on[#on + 1] = h.key .. (h.opts.release and "/r" or "") end end
+print(#binds, table.concat(on, ";"))
+omamobile_kbd_binds = nil; dofile(arg[1]); print(#binds)
+EOT
+eq "$(lua "$tmp/stub.lua" "$b")" "$(printf '5\tCTRL + SHIFT + SHIFT_L/r;SHIFT + CTRL + CTRL_L/r\n10')"
+# phone.lua's default (no file) binds the same five key strings
+for k in "ALT + SHIFT + SHIFT_L" "SHIFT + ALT + ALT_L" "CTRL + SHIFT + SHIFT_L" "SHIFT + CTRL + CTRL_L" "code:66"; do
+  has "$b" "\"$k\""; has "$src/../omamobile-shell/hypr/phone.lua" "\"$k\""
+done
+
+# The handle table did not survive the eval (more of ours than five): keys with only our binds
+# are unbound and bound again; a key that also has a user's bind is left alone and reported
+ours='"description":"Keyboard: next layout"'
+{ printf '['; for i in 1 2; do printf '{"modmask":9,"key":"Shift_L","keycode":0,%s},{"modmask":9,"key":"Alt_L","keycode":0,%s},' "$ours" "$ours"
+  printf '{"modmask":5,"key":"Shift_L","keycode":0,%s},{"modmask":5,"key":"Control_L","keycode":0,%s},{"modmask":0,"key":"","keycode":66,%s},' "$ours" "$ours" "$ours"; done
+  printf '{"modmask":64,"key":"Return","keycode":0,"description":"Terminal"}]\n'; } > "$tmp/binds.json"
+: > "$tmp/log"
+FAKE_BINDS="$tmp/binds.json" run set switch-key alt_shift | grep -q '"switchKey":"alt_shift"' || { echo "FAIL: duplicate cleanup" >&2; exit 1; }
+has "$tmp/log" 'pcall(hl.unbind, "ALT + SHIFT + SHIFT_L")'
+has "$tmp/log" 'pcall(hl.unbind, "code:66")'
+has "$tmp/log" 'omamobile_kbd_binds = nil'
+sed -i 's/"Terminal"/"Terminal"},{"modmask":9,"key":"SHIFT_L","keycode":0,"description":"Mine"/' "$tmp/binds.json"
+: > "$tmp/log"
+FAKE_BINDS="$tmp/binds.json" run set switch-key alt_shift | grep -q 'did not take it live' || { echo "FAIL: a user's bind on the key is reported" >&2; exit 1; }
+hasnt "$tmp/log" 'unbind'
+
 echo "keyboard backend: ok"

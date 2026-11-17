@@ -19,7 +19,10 @@ hl = {
     for _, b in ipairs(binds) do if b.keys ~= keys then kept[#kept + 1] = b end end
     binds = kept
   end,
-  dsp = { window = { cycle_next = dsp("cycle_next"), bring_to_top = dsp("bring_to_top") }, focus = dsp("focus") },
+  dsp = { window = { cycle_next = dsp("cycle_next"), bring_to_top = dsp("bring_to_top") }, focus = dsp("focus"),
+          exec_cmd = function(c) return c end },
+  -- the layout switch key's binds (not checked here)
+  bind = function() return { set_enabled = noop } end,
 }
 o = {
   bind = function(keys, description, dispatcher, opts)

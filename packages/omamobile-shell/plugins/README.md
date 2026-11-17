@@ -205,7 +205,7 @@ reads "<name> connected", with Disconnect for a Bluetooth keyboard whose
 turns auto-show back on and shows it; Hide turns it off and hides it. A
 keyboard that goes away stays listed for 5 s (a reconnect of the same `uniq`
 keeps the mode); with none left the mode goes back to auto and auto-show is
-on. Locked with a password credential, auto-show stays on.
+on. Locked (any credential), auto-show stays on; a polkit prompt is not detected (known limit).
 
 ### Media card
 

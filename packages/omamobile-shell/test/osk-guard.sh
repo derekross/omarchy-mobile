@@ -5,7 +5,7 @@
 # on-screen keyboard back on only when no screensaver runs, waits out one that
 # does, and leaves an enabled keyboard alone; a real Bluetooth or USB keyboard
 # turns auto-show off (one entry per uniq), the card's "show" mode and a
-# password lock keep it on, and a keyboard that went away is dropped after
+# lock (any credential) keep it on, and a keyboard that went away is dropped after
 # its grace with the mode back to auto.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
@@ -92,18 +92,28 @@ state true 0; guard --mode hide
 [[ $(cat "$t/osk") == false ]] && grep -q 'SetVisible b false' "$t/log" || fail "hide: auto-show off and the keyboard hidden"
 pass "Show and Hide set the mode, the setting and the keyboard"
 
-# ---- the lock: a password keeps it showable, a PIN does not
-mkdir -p "$t/home/.local/state/omarchy/toggles"
+# ---- the lock: any credential keeps it showable; odd isLocked output counts as locked
 echo true >"$t/locked"
 state false 0; guard --once
-[[ $(cat "$t/osk") == false ]] || fail "locked with a PIN: auto-show stays off"
-: >"$t/home/.local/state/omarchy/toggles/credential-password"
-state false 0; guard --once
-[[ $(cat "$t/osk") == true ]] || fail "locked with a password: the keyboard can come up"
+[[ $(cat "$t/osk") == true ]] || fail "locked (PIN or password): the keyboard can come up"
 echo false >"$t/locked"
 state true 0; guard --once
 [[ $(cat "$t/osk") == false ]] || fail "unlocked: auto-show off again"
-pass "while locked with a password the on-screen keyboard stays showable"
+echo "Error: no shell" >"$t/locked"
+state false 0; guard --once
+[[ $(cat "$t/osk") == true ]] || fail "unknown isLocked output: treated as locked"
+echo false >"$t/locked"
+pass "while locked (any credential, or unknown) the on-screen keyboard stays showable"
+
+# ---- a state entry without a string name is dropped, not a crash
+python3 - "$st" <<'EOF2'
+import json, sys
+s = json.load(open(sys.argv[1])); s["keyboards"].append({"id": "x"}); s["keyboards"].append({"id": "y", "name": 3})
+json.dump(s, open(sys.argv[1], "w"))
+EOF2
+state true 0; guard --once || fail "a bad state entry does not stop the guard"
+[[ $(cat "$t/osk") == false ]] || fail "bad entries ignored, the real keyboard still counts"
+pass "state entries without a string id and name are ignored"
 
 # ---- a USB keyboard; a virtual one never counts
 unplug 15; unplug 16
@@ -138,3 +148,42 @@ state true 0
 guard && fail "the guard exits non-zero when its monitor ends"
 [[ $(cat "$t/osk") == true && $(grep -c set "$t/log") == 1 ]] || fail "a change the monitor reports is checked"
 pass "the watch loop restores the keyboard and exits for a restart when the monitor ends"
+
+# ---- the keyboard goes away under the screensaver: no auto-show written over it
+mkdir -p "$t/state2"; st2=$t/state2/osk-hwkbd.json
+node 30 0005 "BT Keyboard" "aa:bb:cc:dd:ee:30"
+echo '{"keyboards":[],"mode":"auto"}' >"$st2"
+python3 - "$t" "$st2" <<'EOF2' || fail "grace and screensaver in the watcher class"
+import importlib.util, importlib.machinery, os, sys, time
+sys.dont_write_bytecode = True
+t, st = sys.argv[1], sys.argv[2]
+os.environ.update(T=t, HOME=t + "/home", OMAMOBILE_OSK_SYSFS=t + "/sys", OMAMOBILE_OSK_UDEVDATA=t + "/udev",
+                  OMAMOBILE_OSK_STATE=st, OMAMOBILE_OSK_KEYBOARD_GRACE="5", OMAMOBILE_OSK_GUARD_GRACE="0",
+                  OMAMOBILE_OSK_POLL="2", PATH=t + "/fakes:/usr/bin:/bin")
+loader = importlib.machinery.SourceFileLoader("guard", "bin/omamobile-osk-guard")
+spec = importlib.util.spec_from_loader("guard", loader); g = importlib.util.module_from_spec(spec); loader.exec_module(g)
+open(t + "/osk", "w").write("true\n"); open(t + "/locked", "w").write("false\n")
+G = g.Guard(); G.evaluate(100.0)
+assert open(t + "/osk").read().strip() == "false", "connected: off"
+G.state["mode"] = "hide"
+import json; json.dump({"keyboards": G.state["keyboards"], "mode": "hide"}, open(st, "w"))
+# Last scan long before the removal: the grace still counts from the removal
+os.system("rm -rf " + t + "/sys/class/input/event30")
+G.evaluate(200.0)
+assert G.state["keyboards"] and G.state["mode"] == "hide", ("kept in its grace", G.state)
+G.evaluate(203.0)
+assert G.state["keyboards"] and G.state["mode"] == "hide", ("still in the grace 3 s after removal", G.state)
+# Screensaver running when the grace ends: nothing written
+open(t + "/screensaver", "w").write("5\n")
+G.evaluate(205.5)
+assert not G.state["keyboards"] and G.state["mode"] == "auto", G.state
+assert open(t + "/osk").read().strip() == "false", "no auto-show over the screensaver"
+assert G.restore_at is not None, "the safety net waits it out"
+EOF2
+pass "the grace runs from the removal; a keyboard gone under the screensaver waits for it to end"
+
+# ---- stopping the watcher clears the list (the card goes, a hide cannot stick)
+state true 0
+guard || true
+python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s=={"keyboards":[],"mode":"auto"}, s' "$st" || fail "list cleared on exit"
+pass "the watcher clears the keyboard list when it stops"

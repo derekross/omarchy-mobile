@@ -1990,7 +1990,7 @@ Item {
       readonly property real listHeight: root.notifications.length > 0 ? shadeList.contentHeight : shadeEmpty.implicitHeight
       // The keyboard and media cards and the gaps under them, when they show.
       readonly property real mediaRoom: (mediaCard.visible ? mediaCard.height + shadeColumn.spacing : 0)
-        + (keyboardCard.visible ? keyboardCard.height + shadeColumn.spacing : 0)
+        + (keyboardCard.keyboards.length > 0 ? keyboardCard.height + shadeColumn.spacing : 0)
       readonly property real natural: insets + mediaRoom + shadeHeader.height + shadeColumn.spacing + listHeight
 
       visible: !root.editing && root.reveal > 0 && room >= insets + mediaRoom + shadeHeader.height
@@ -2020,6 +2020,7 @@ Item {
         KeyboardCard {
           id: keyboardCard
           objectName: "keyboardCard"
+          active: root.reveal > 0
           width: parent.width
           height: implicitHeight
           foreground: root.foreground

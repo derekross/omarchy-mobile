@@ -19,11 +19,13 @@ BorderSurface {
   property color foreground: Commons.Color.popups.text
   property var keyboards: []
   property string mode: "auto"
+  // The shade is open: only then is the file re-read on a timer.
+  property bool active: false
 
   readonly property int inner: Style.spacing.lg
 
   visible: keyboards.length > 0
-  implicitHeight: visible ? column.implicitHeight + inner * 2 : 0
+  implicitHeight: keyboards.length > 0 ? column.implicitHeight + inner * 2 : 0
   radius: Style.cornerRadius
   color: Style.normalFillFor(card.foreground, Commons.Color.accent)
   borderSpec: Border.controlSpec("normal", card.foreground, Commons.Color.accent)
@@ -48,8 +50,10 @@ BorderSurface {
   }
 
   // The guard replaces the file (rename); each reload watches it again, and
-  // this catches a watch that was lost.
-  Timer { interval: 5000; repeat: true; running: true; onTriggered: stateFile.reload() }
+  // this catches a watch that was lost, while the shade is open (and once
+  // when it opens).
+  onActiveChanged: if (active) stateFile.reload()
+  Timer { interval: 5000; repeat: true; running: card.active; onTriggered: stateFile.reload() }
 
   Column {
     id: column

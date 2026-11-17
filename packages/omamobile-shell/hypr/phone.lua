@@ -248,14 +248,37 @@ elseif o.cmd_present("voxtype") then
   })
 end
 
--- The hardware keyboard's layout switch key (Settings > Keyboard writes this
--- file: binds on every keyboard but squeekboard's to
--- `omamobile-keyboard-switch next`). An xkb grp: option never switched on the
--- phone (Hyprland 0.57.0); a bind running switchxkblayout did. pcall: a bad
--- or half-written file must not stop the rest of the config.
+-- The hardware keyboard's layout switch key. Settings > Keyboard writes
+-- omamobile-keyboard.lua: every switch key bound once (on every keyboard but
+-- squeekboard's, to `omamobile-keyboard-switch next`), only the chosen one
+-- enabled. With no file yet, the same binds with Alt+Shift on (keep in step
+-- with bind_lua in omamobile-settings/backends/keyboard.sh; test/all checks).
+-- Alt+Shift and Ctrl+Shift fire on release and consume nothing, so
+-- Alt+Shift+Tab or Ctrl+Shift+C still do their own thing. With one layout
+-- the switch does nothing. An xkb grp: option never switched on the phone
+-- (Hyprland 0.57.0). The handle table is reset here: a config load drops
+-- every bind. pcall: a bad file must not stop the rest of the config.
+omamobile_kbd_binds = nil
 local kbd_binds = (os.getenv("XDG_CONFIG_HOME") or ((os.getenv("HOME") or "") .. "/.config")) .. "/hypr/omamobile-keyboard.lua"
 local kbd_file = io.open(kbd_binds, "r")
 if kbd_file then
   kbd_file:close()
   pcall(dofile, kbd_binds)
+end
+if not omamobile_kbd_binds then
+  omamobile_kbd_binds = {}
+  local not_squeekboard = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } }
+  for _, b in ipairs({
+    { "alt_shift", "ALT + SHIFT + SHIFT_L", true }, { "alt_shift", "SHIFT + ALT + ALT_L", true },
+    { "ctrl_shift", "CTRL + SHIFT + SHIFT_L", true }, { "ctrl_shift", "SHIFT + CTRL + CTRL_L", true },
+    { "caps", "code:66", false },
+  }) do
+    local opts = { description = "Keyboard: next layout", device = not_squeekboard }
+    if b[3] then opts.release = true; opts.non_consuming = true end
+    local ok, h = pcall(hl.bind, b[2], hl.dsp.exec_cmd("omamobile-keyboard-switch next"), opts)
+    if ok and h then
+      omamobile_kbd_binds[#omamobile_kbd_binds + 1] = { b[1], h }
+      if b[1] ~= "alt_shift" then pcall(function() h:set_enabled(false) end) end
+    end
+  end
 end

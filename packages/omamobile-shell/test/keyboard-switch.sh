@@ -69,3 +69,10 @@ pass "keyboard-switch main keyboard rule"
 
 [[ ! -e $t/osk.log ]] || fail "a hardware switch touched the on-screen keyboard: $(cat "$t/osk.log")"
 pass "keyboard-switch leaves the on-screen keyboard alone"
+
+# one layout: the switch key does nothing
+printf '{"keyboards":[{"name":"dell-kb7120w","layout":"us","variant":"","active_layout_index":0,"main":true}]}\n' >"$t/devices.json"
+rm -f "$t/hypr.log"
+python3 -B "$s" next
+[[ ! -e $t/hypr.log ]] || fail "one layout: no switch"
+pass "keyboard-switch does nothing with one layout"

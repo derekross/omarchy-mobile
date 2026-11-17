@@ -1036,7 +1036,7 @@ pass "permission sheet"
 # of Hyprland's Lua API and sets what the layout depends on.
 lua=$(command -v lua || command -v lua5.4 || command -v luajit || true)
 if [[ -n $lua ]]; then
-  out=$("$lua" test/phone-rules.lua) || { grep -v '^ok' <<<"$out"; fail "phone.lua window rules"; }
+  out=$(XDG_CONFIG_HOME=/nonexistent "$lua" test/phone-rules.lua) || { grep -v '^ok' <<<"$out"; fail "phone.lua window rules"; }
   pass "phone.lua: edge to edge, opaque, dialogs, picture-in-picture"
   # Dictation keys under Omarchy 4.5's helpers: four homes, four bindings.lua
   dk=$(mktemp -d)
