@@ -11,7 +11,10 @@
 #include <QJsonDocument>
 #include <QSaveFile>
 #include <QQmlApplicationEngine>
+#include <QQmlComponent>
 #include <QQmlContext>
+#include <QSignalSpy>
+#include <memory>
 #include <QTemporaryDir>
 
 class CoreTests : public QObject {
@@ -133,6 +136,49 @@ private slots:
         QVERIFY(page->property("status").toString().startsWith("Stops charging at this level"));
         QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"available", false}}));
         QCOMPARE(page->property("status").toString(), QString("Settings cannot set a charge limit on this phone."));
+    }
+    void displaySearchFindsTheScreenLock() {
+        Backend backend;
+        backend.setBackendDir(stubs("off"));
+        backend.search("screen lock");
+        QCOMPARE(backend.rows().size(), 1);
+        QCOMPARE(backend.rows().first().toMap()["id"].toString(), QString("display"));
+    }
+    void runnerKnowsLockAndRejectsOthers() {
+        ActionRunner runner;
+        runner.setBackendDir(stubs("off"));
+        QSignalSpy done(&runner, &ActionRunner::finished);
+        const int bad = runner.run("nope", {"get"});
+        const int badArg = runner.run("lock", {"set", "lock", "60;x"});
+        const int lock = runner.run("lock", {"get"});
+        QTRY_COMPARE(done.count(), 3);
+        QMap<int, QString> errors;
+        for (const auto &call : done) errors[call.at(2).toInt()] = call.at(1).toMap()["error"].toString();
+        QCOMPARE(errors[bad], QString("unknown action"));
+        QCOMPARE(errors[badArg], QString("bad argument"));
+        QVERIFY(errors[lock] != "unknown action" && errors[lock] != "bad argument");
+    }
+    void displayPageShowsTheLockAnswer() {
+        ActionRunner runner;
+        runner.setBackendDir(stubs("off"));
+        Backend backend; // outlives the engine: the style singleton reads it until the engine goes
+        backend.setBackendDir(stubs("off"));
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty("backend", &backend);
+        engine.rootContext()->setContextProperty("actions", &runner);
+        QQmlComponent component(&engine, QUrl("qrc:/DisplayPage.qml"));
+        std::unique_ptr<QObject> page(component.create());
+        QVERIFY2(page, qPrintable(component.errorString()));
+        QCOMPARE(page->property("lockChoices").toList().size(), 6);
+        // no lock.sh in the stub dir: the lock rows leave "busy" and show the runner's error
+        QTRY_VERIFY(!page->property("lockBusy").toBool());
+        QVERIFY(!page->property("lockError").toString().isEmpty());
+        QMetaObject::invokeMethod(page.get(), "applyLock",
+            QVariant(QVariantMap{{"lock", 0}, {"keyboardAwake", true}, {"keyboard", true}, {"effective", 0}}));
+        QCOMPARE(page->property("lockAfter").toInt(), 0);
+        QVERIFY(page->property("keyboardAwake").toBool());
+        QVERIFY(page->property("keyboard").toBool());
+        QVERIFY(page->property("lockError").toString().isEmpty());
     }
     void searchHasOnlyImplementedRoutesAndBackClearsIt() {
         Backend backend;

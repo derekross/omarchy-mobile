@@ -5,7 +5,7 @@
       {
         "id": "display",
         "title": "Display",
-        "detail": "Brightness and refresh rate",
+        "detail": "Brightness, refresh rate and screen lock",
         "icon": "display",
         "page": "display"
       },
