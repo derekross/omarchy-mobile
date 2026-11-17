@@ -3,13 +3,16 @@
 # Keeps the phone unlocked while a keyboard is connected, when the Display page's toggle says so:
 # runs the lock backend's apply at start (so a crash with a keyboard attached can't leave "never" behind)
 # and after every input add or remove, once the burst of events a device brings has settled (1 s).
-# The backend does nothing until the user has picked a lock setting.
-set -u
+# The backend does nothing until the user has picked a lock setting. If udevadm monitor ends or an apply
+# fails, this exits non-zero: the unit restarts it (Restart=always) and its ExecStopPost puts the choice back.
+set -u -o pipefail
 backend=${OMAMOBILE_LOCK_BACKEND:-/usr/lib/omamobile-settings/backends/lock.sh}
-apply() { bash "$backend" apply >/dev/null || true; }
-apply
+apply() { bash "$backend" apply >/dev/null; }
+apply || exit 1
 udevadm monitor --udev --subsystem-match=input | while read -r line; do
-  [[ $line == UDEV* ]] || continue
+  [[ $line == 'UDEV  ['* ]] || continue  # events only, not the "UDEV - the event which udev sends" header
   while read -r -t 1 _; do :; done
-  apply
+  apply || exit 1
 done
+echo "omamobile-lock-keyboard: udevadm monitor ended" >&2
+exit 1

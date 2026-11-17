@@ -23,7 +23,7 @@ fake=''
 
 # Some launch paths (the shell's processes) start the app without HYPRLAND_INSTANCE_SIGNATURE, and hyprctl
 # then finds no Hyprland: no refresh rates. Take it from $XDG_RUNTIME_DIR/hypr/<sig>/.socket.sock, the
-# newest live socket if there are several.
+# newest socket by mtime if there are several (a crashed Hyprland's stale socket file is not told apart).
 find_hypr() {
   [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] && return 0
   local d best='' sig
