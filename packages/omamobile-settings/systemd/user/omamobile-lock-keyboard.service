@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Settings > Display > "Stay unlocked while a keyboard is connected": follows keyboards coming and going.
+# The keyboard's "never lock" is only written while this runs; when it stops for any reason the user's
+# chosen timeout is written back (ExecStopPost), and it is always restarted.
 [Unit]
 Description=Omarchy Mobile: stay unlocked while a keyboard is connected
 PartOf=graphical-session.target
@@ -7,8 +9,9 @@ After=graphical-session.target
 
 [Service]
 ExecStart=/usr/lib/omamobile-settings/omamobile-lock-keyboard
-Restart=on-failure
-RestartSec=5
+ExecStopPost=/usr/bin/bash /usr/lib/omamobile-settings/backends/lock.sh restore
+Restart=always
+RestartSec=10
 
 [Install]
 WantedBy=graphical-session.target

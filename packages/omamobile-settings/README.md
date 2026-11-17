@@ -24,12 +24,20 @@ screen stays on and the phone never sleeps by itself (omamobile-sleepd sleeps
 only with the screen off behind a secure lock); the power key still locks.
 "Stay unlocked while a keyboard is connected" writes 0 there while a Bluetooth
 or USB keyboard (udev `ID_INPUT_KEYBOARD=1`, bus 0005, or bus 0003 outside
-`/devices/virtual/input`) is connected, and the chosen time back when it goes.
-The user unit `omamobile-lock-keyboard.service` follows `udevadm monitor` for
-input devices and runs `lock.sh apply`. The choice lives in
-`~/.config/omamobile/lock.json`; a value changed in Omarchy's own settings is
-adopted. Nothing is written until the user picks something on the page. A
-receiver mouse that also reports keys counts as a keyboard.
+`/devices/virtual/input`, with the letter keys and space, a name, and not a
+known security token or barcode scanner) is connected, and the chosen time
+back when it goes. The user unit `omamobile-lock-keyboard.service` follows
+`udevadm monitor` for input devices and runs `lock.sh apply`; it is always
+restarted, and when it stops `lock.sh restore` writes the chosen time back.
+The 0 is only written while that unit runs. The choice lives in
+`~/.config/omamobile/lock.json`, saved before `shell.json` with a flag saying
+whether the 0 in force is the keyboard's, so a crash never turns it into
+"Never". A value changed in Omarchy's own settings is adopted. Nothing is
+written until the user picks something on the page, and nothing at all if the
+user's `shell.json` does not parse. Both files are written under one `flock`.
+Known limits: a USB receiver, dock or KVM that exposes a full keyboard
+interface counts even with no keyboard behind it; a Bluetooth keyboard that
+goes to sleep disconnects, so the timer comes back until it wakes.
 
 A second page, Battery, sets the charge limit (80, 85, 90, 95 or 100 %), only
 on a phone whose device package declares one in

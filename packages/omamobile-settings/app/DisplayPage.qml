@@ -104,7 +104,7 @@ ColumnLayout {
     }
     SettingsLabel {
         text: (page.keyboard ? qsTr("A keyboard is connected now. ") : qsTr("No keyboard is connected now. "))
-              + qsTr("Any Bluetooth or USB keyboard counts. While one is connected the screen also stays on.")
+              + qsTr("Any Bluetooth or USB keyboard counts. While one is connected the screen also stays on. A Bluetooth keyboard that goes to sleep counts as disconnected.")
         color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13); wrapMode: Text.Wrap; Layout.fillWidth: true
     }
     Item { Layout.fillHeight: true }
