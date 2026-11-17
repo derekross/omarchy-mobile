@@ -309,6 +309,7 @@ else
 fi
 grep -cF 'call omamobile.bar notificationsSeen' "$qs" >/dev/null || fail "the shade tells the bar what it has shown"
 grep -cF 'function notificationsSeen(stamp: string): string' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar serves notificationsSeen"
+grep -cF 'onExited: if (root.layoutPending) { root.layoutPending = false; layoutReread.restart() }' plugins/omamobile.bar/Bar.qml >/dev/null || fail "an event during a layout read reruns it"
 grep -cF 'anchors.left: layoutText.visible ? layoutText.right : clockText.right' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the call chip follows the layout label, or the clock when it is hidden"
 grep -cF '"/.local/state/omamobile/notifications-seen"' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar reads the shade's mark at start"
 grep -cF '"omarchy-shell", "shell", "summon", "omarchy.clipboard"' "$qs" >/dev/null || fail "the Clipboard tile opens Omarchy's clipboard history"

@@ -146,8 +146,10 @@ function batteryIcon(percent, charging, full) {
 }
 
 // The keyboard layout label from `hyprctl -j devices`: the main real keyboard
-// (not squeekboard's hl-virtual-keyboard or a consumer-control pseudo one,
-// as bin/omamobile-keyboard-switch), "" when it has one layout or none.
+// (not squeekboard's hl-virtual-keyboard or a pseudo one), picked by the same
+// rule as bin/omamobile-keyboard-switch and the Settings backend: the real one
+// marked main, else the first real one with more than one layout, else the
+// first real one. "" when it has one layout or none.
 // English layouts read EN, the rest their xkb code in capitals (GR, DE).
 var englishLayouts = ["us", "gb", "au", "ca", "ie", "nz", "za"]
 function layoutLabel(text) {
@@ -155,9 +157,11 @@ function layoutLabel(text) {
   try { kbs = (JSON.parse(text) || {}).keyboards || [] } catch (e) { return "" }
   var real = kbs.filter(function(k) {
     var n = String(k && k.name || "")
-    return n !== "" && n.indexOf("hl-virtual-keyboard") !== 0 && !/consumer-control|power-button|video-bus/.test(n)
+    return n !== "" && n.indexOf("hl-virtual-keyboard") !== 0 && !/consumer-control|power-button|video-bus|radio-control|gpio-keys/.test(n)
   })
-  var kb = real.filter(function(k) { return k.main })[0] || real[0]
+  var kb = real.filter(function(k) { return k.main })[0]
+        || real.filter(function(k) { return String(k.layout || "").split(",").filter(function(l) { return l !== "" }).length > 1 })[0]
+        || real[0]
   if (!kb) return ""
   var layouts = String(kb.layout || "").split(",").filter(function(l) { return l !== "" })
   var i = kb.active_layout_index

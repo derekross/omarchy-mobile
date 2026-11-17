@@ -29,12 +29,14 @@ cat >"$t/devices.json" <<'J'
 {"name":"hl-virtual-keyboard-squeekboard","layout":"us","variant":"","active_layout_index":0,"main":false},
 {"name":"dell-kb7120w-consumer-control","layout":"us,gr","variant":",polytonic","active_layout_index":0,"main":false},
 {"name":"dell-kb7120w","layout":"us,gr","variant":",polytonic","active_layout_index":1,"main":true},
-{"name":"other-kbd","layout":"us,gr","variant":",polytonic","active_layout_index":1,"main":false}]}
+{"name":"other-kbd","layout":"us,gr","variant":",polytonic","active_layout_index":1,"main":false},
+{"name":"bad name;exec x","layout":"us,gr","variant":",polytonic","active_layout_index":1,"main":false}]}
 J
 export OMAMOBILE_HYPRCTL=$t/hyprctl OMAMOBILE_KBD_LANGUAGES=$t/languages HYPRLAND_INSTANCE_SIGNATURE=test
 s=bin/omamobile-keyboard-switch
 
-python3 -B "$s" next
+python3 -B "$s" next 2>"$t/err"
+grep -q "skipping keyboard 'bad name;exec x'" "$t/err" || fail "a name with a space or ; is left out of the batch"
 [[ $(cat "$t/hypr.log") == "switchxkblayout dell-kb7120w 0; switchxkblayout other-kbd 0" ]] || fail "next wraps to 0 on real keyboards only: $(cat "$t/hypr.log")"
 [[ $(cat "$t/osk.log") == "set us" ]] || fail "next puts us first in the OSK list"
 pass "keyboard-switch next"
@@ -67,3 +69,40 @@ XDG_RUNTIME_DIR=$t/run timeout 10 python3 -B "$s" listen
 wait "$server"
 [[ $(cat "$t/osk.log") == "set gr+polytonic" ]] || fail "listen follows hardware events only: $(cat "$t/osk.log")"
 pass "keyboard-switch listen"
+
+# listen brings the other real keyboards to the index of the one switched (dell on 1, other-kbd on 0)
+cat >"$t/devices.json" <<'J'
+{"keyboards":[
+{"name":"hl-virtual-keyboard-squeekboard","layout":"us","variant":"","active_layout_index":0,"main":true},
+{"name":"gpio-keys","layout":"us,gr","variant":",polytonic","active_layout_index":0,"main":false},
+{"name":"dell-kb7120w","layout":"us,gr","variant":",polytonic","active_layout_index":1,"main":false},
+{"name":"other-kbd","layout":"us,gr","variant":",polytonic","active_layout_index":0,"main":false}]}
+J
+rm -f "$t/run/hypr/test/.socket2.sock"; : >"$t/hypr.log"; : >"$t/osk.log"
+python3 -B -c '
+import socket, sys
+s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(1)
+c, _ = s.accept()
+c.sendall(b"activelayout>>dell-kb7120w,Greek (polytonic)\n")
+c.close()' "$t/run/hypr/test/.socket2.sock" &
+server=$!
+for _ in $(seq 50); do [[ -S $t/run/hypr/test/.socket2.sock ]] && break; sleep 0.1; done
+XDG_RUNTIME_DIR=$t/run timeout 10 python3 -B "$s" listen
+wait "$server"
+[[ $(cat "$t/hypr.log") == "switchxkblayout other-kbd 1" ]] || fail "listen syncs the other real keyboards: $(cat "$t/hypr.log")"
+[[ $(cat "$t/osk.log") == "set gr+polytonic" ]] || fail "listen moves the OSK after the sync"
+pass "keyboard-switch listen syncs other keyboards"
+
+# main pick with no real keyboard marked main: the first real one with more than one layout
+# (not the virtual one marked main, not gpio-keys, not a one-layout keyboard)
+cat >"$t/devices.json" <<'J'
+{"keyboards":[
+{"name":"hl-virtual-keyboard-squeekboard","layout":"us","variant":"","active_layout_index":0,"main":true},
+{"name":"gpio-keys","layout":"us,gr","variant":"","active_layout_index":0,"main":false},
+{"name":"single","layout":"us","variant":"","active_layout_index":0,"main":false},
+{"name":"dell-kb7120w","layout":"us,gr","variant":",polytonic","active_layout_index":1,"main":false}]}
+J
+: >"$t/hypr.log"; : >"$t/osk.log"
+python3 -B "$s" next
+[[ $(cat "$t/osk.log") == "set us" ]] || fail "next steps from the first real keyboard with 2+ layouts: $(cat "$t/osk.log")"
+pass "keyboard-switch main keyboard rule"

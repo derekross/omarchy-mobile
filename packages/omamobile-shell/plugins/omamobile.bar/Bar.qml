@@ -104,16 +104,24 @@ Item {
   // start and again on Hyprland's activelayout and configreloaded events
   // (event names checked on Hyprland 0.56.2 only, UNVERIFIED on 0.57).
   property string layoutLabel: ""
+  // An event that comes while a read runs marks it pending: setting running
+  // on a running Process does nothing, so the read is run again after it ends.
+  property bool layoutPending: false
+  function readLayout() {
+    if (layoutRead.running) layoutPending = true
+    else layoutRead.running = true
+  }
   Process {
     id: layoutRead
     command: ["hyprctl", "-j", "devices"]
     running: true
+    onExited: if (root.layoutPending) { root.layoutPending = false; layoutReread.restart() }
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.layoutLabel = StatusModel.layoutLabel(text)
     }
   }
-  Timer { id: layoutReread; interval: 150; onTriggered: layoutRead.running = true }
+  Timer { id: layoutReread; interval: 150; onTriggered: root.readLayout() }
   Connections {
     target: Hyprland
     function onRawEvent(event) {

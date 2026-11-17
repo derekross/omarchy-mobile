@@ -80,4 +80,8 @@ assert.strictEqual(M.layoutLabel(dev([{ name: "x-consumer-control", layout: "us,
   { name: "dell", layout: "gb,de", active_layout_index: 0 }])), "EN", "pseudo-keyboards skipped, gb is EN")
 assert.strictEqual(M.layoutLabel("not json"), "")
 assert.strictEqual(M.layoutLabel(dev([{ name: "dell", layout: "us,gr", active_layout_index: 5 }])), "", "index out of range")
+// main pick: virtual main ignored, gpio-keys and one-layout keyboards passed over
+assert.strictEqual(M.layoutLabel(dev([{ name: "hl-virtual-keyboard-squeekboard", layout: "us,gr", active_layout_index: 0, main: true },
+  { name: "gpio-keys", layout: "us,gr", active_layout_index: 0 }, { name: "single", layout: "us", active_layout_index: 0 },
+  { name: "dell", layout: "us,gr", active_layout_index: 1 }])), "GR", "first real keyboard with 2+ layouts")
 console.log("ok - status model: keyboard layout label")

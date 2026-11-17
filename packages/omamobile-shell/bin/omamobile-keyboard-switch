@@ -13,8 +13,13 @@
 
 Real keyboards are the ones in `hyprctl -j devices` that are not squeekboard's
 or another virtual keyboard (hl-virtual-keyboard*) or a pseudo-keyboard
-(consumer-control, power-button, video-bus), the same set as the Settings
-backend. The layout count and names come from the keyboard's own `layout` and
+(consumer-control, power-button, video-bus, radio-control, gpio-keys), the same
+set as the Settings backend and the bar. The "main" keyboard (whose layout
+`next` steps from and the bar shows) is, in all three: the real one Hyprland
+marks main, else the first real one with more than one layout, else the first
+real one. `listen` brings every other real keyboard to the index of the one a
+switch key was pressed on, so they agree and the pick does not matter much.
+On Hyprland 0.56.2 only the virtual keyboard had main: true. The layout count and names come from the keyboard's own `layout` and
 `variant` fields. The OSK follows by NAME, never by index: squeekboard and
 omamobile-keyboard-languages move the current entry to the front of
 org.gnome.desktop.input-sources sources, so its order changes on every switch.
@@ -35,7 +40,11 @@ import sys
 
 HYPRCTL = os.environ.get("OMAMOBILE_HYPRCTL", "hyprctl")
 LANGUAGES = os.environ.get("OMAMOBILE_KBD_LANGUAGES", "omamobile-keyboard-languages")
-PSEUDO = ("consumer-control", "power-button", "video-bus")
+PSEUDO = ("consumer-control", "power-button", "video-bus", "radio-control", "gpio-keys")
+# hyprctl --batch splits commands on ";" and arguments on spaces: a name with any of these
+# cannot be passed safely, so that keyboard is left out (Hyprland names seen on 0.56.2 are
+# lowercase with dashes, e.g. dell-kb7120w).
+UNSAFE = set(" ;\t\r\n\"'\\")
 
 
 def find_hypr():
@@ -72,15 +81,27 @@ def names(kb):
 
 
 def main_kb(kbs):
-    return next((k for k in kbs if k.get("main")), kbs[0] if kbs else None)
+    return (next((k for k in kbs if k.get("main")), None)
+            or next((k for k in kbs if len(names(k)) > 1), None)
+            or (kbs[0] if kbs else None))
 
 
 def osk_front(name):
     subprocess.run([LANGUAGES, "set", name], stdout=subprocess.DEVNULL)
 
 
+def safe(name):
+    return bool(name) and not any(c in UNSAFE or ord(c) < 32 for c in name)
+
+
 def switch(n, kbs):
-    cmds = ["switchxkblayout %s %d" % (k["name"], n) for k in kbs]
+    cmds = []
+    for k in kbs:
+        if safe(k["name"]):
+            cmds.append("switchxkblayout %s %d" % (k["name"], n))
+        else:
+            print("omamobile-keyboard-switch: skipping keyboard %r (name hyprctl --batch cannot take)"
+                  % k["name"], file=sys.stderr)
     if cmds:
         subprocess.run([HYPRCTL, "--batch", "; ".join(cmds)], stdout=subprocess.DEVNULL)
 
@@ -114,14 +135,20 @@ def listen():
         dev = data.split(",", 1)[0]
         if not real(dev):  # squeekboard's own keymap changes are not a hardware switch
             continue
-        kb = next((k for k in keyboards() if k.get("name") == dev), None)
+        kbs = keyboards()
+        kb = next((k for k in kbs if k.get("name") == dev), None)
         if kb is None:
             continue
         lst, i = names(kb), kb.get("active_layout_index")
+        if not (isinstance(i, int) and 0 <= i < len(lst)):
+            continue
+        # The xkb grp: key switches only the keyboard it was pressed on: bring the others along.
+        # Their own activelayout events then find them all on i already, so this stops there.
+        others = [k for k in kbs if k is not kb and k.get("active_layout_index") != i]
+        switch(i, others)
         # No loop: nothing turns a gsettings change back into a Hyprland switch, and `set` of the
         # entry already in front leaves the list as it is (several keyboards report one switch).
-        if isinstance(i, int) and 0 <= i < len(lst):
-            osk_front(lst[i])
+        osk_front(lst[i])
 
 
 def main(argv):
