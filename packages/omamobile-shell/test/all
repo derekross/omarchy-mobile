@@ -377,6 +377,7 @@ if command -v node >/dev/null; then
   node test/gesture-model.js >/dev/null || { node test/gesture-model.js | grep -v '^ok'; fail "home and drawer gesture rules"; }
   node test/wifi-model.js || fail "Wi-Fi model"
   node test/bluetooth-model.js || fail "Bluetooth model"
+  node test/hwkeyboard-model.js || fail "hardware keyboard card model"
   node test/sensor-model.js || fail "fingerprint sensor model"
   node test/tiles-model.js || fail "quick-settings tile layout"
   node test/notifications-model.js >/dev/null || { node test/notifications-model.js; fail "notification shade model"; }
@@ -1084,7 +1085,7 @@ pass "screenshot toast: Loupe, or Tensaku without the on-screen keyboard"
 
 bash -n bin/omamobile-setup-user || fail "omamobile-setup-user parses"
 bash test/setup-user.sh || fail "omamobile-setup-user against a scratch home"
-bash -n bin/omamobile-osk-guard || fail "omamobile-osk-guard parses"
+python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-osk-guard || fail "omamobile-osk-guard parses"
 # The widget crash guard counts a shell death inside the same boot as a
 # crash. A widget still "loading" from another boot (reboot, shutdown, dead
 # battery, or a system crash it caused) gets one retry as a suspect, and is
@@ -1190,6 +1191,8 @@ grep -cx 'ExecStart=/usr/bin/omamobile-setup-user' systemd/user/omamobile-setup-
 [[ -x $tmp/root/usr/bin/omamobile-osk-guard && -f $u/omamobile-osk-guard.service &&
    $(readlink "$u/graphical-session.target.wants/omamobile-osk-guard.service") == ../omamobile-osk-guard.service ]] \
   || fail "the keyboard safety net is staged and enabled for every user's session"
+grep -cx 'ExecStopPost=/usr/bin/gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true' systemd/user/omamobile-osk-guard.service >/dev/null \
+  || fail "the keyboard's owner leaves auto-show on when it stops"
 # Sleep on screen-off: staged and running for every session, but off until
 # the user's toggle (SUSPEND-PLAN 6.2): nothing in the package turns it on.
 [[ -x $tmp/root/usr/bin/omamobile-sleepd && -f $u/omamobile-sleepd.service &&

@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: MIT
-# Turns the on-screen keyboard back on when it was left off with no
-# screensaver running (TOUCH-PLAN 0.5). Enabled for every user by a vendor
+# Owns the on-screen keyboard's auto-show (screen-keyboard-enabled): off while
+# a hardware keyboard is connected, and back on when it was left off with no
+# screensaver running (TOUCH-PLAN 0.5, OSK-HWKBD-PLAN). Stopping it, or a
+# crash, leaves auto-show on. Enabled for every user by a vendor
 # wants link; runs for the graphical session.
 [Unit]
-Description=Omarchy Mobile on-screen keyboard safety net
+Description=Omarchy Mobile on-screen keyboard owner and safety net
 PartOf=graphical-session.target
 After=graphical-session.target
 
@@ -11,6 +13,7 @@ After=graphical-session.target
 ExecStart=/usr/bin/omamobile-osk-guard
 Restart=always
 RestartSec=5
+ExecStopPost=/usr/bin/gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true
 
 [Install]
 WantedBy=graphical-session.target

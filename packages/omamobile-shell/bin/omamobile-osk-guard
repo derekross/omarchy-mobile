@@ -1,43 +1,358 @@
-#!/bin/bash
+#!/usr/bin/python3 -I
 # SPDX-License-Identifier: MIT
-# The on-screen keyboard's safety net (TOUCH-PLAN 0.5). Omarchy's screensaver
-# launcher turns the global screen-keyboard-enabled setting off while the
-# screensaver runs (patches/omarchy/0006-*), and its exit paths turn it back
-# on. A path that missed left a phone with no keyboard for any text field
-# until the next login. This watches the setting: whenever it goes off, it
-# waits until no screensaver runs, gives the screensaver's own restore its
-# time (it waits up to 5 s for the lock), and turns it back on if it is
-# still off. On a phone nothing else turns the keyboard off: squeekboard's
-# hide button only hides it.
+# The on-screen keyboard's owner: the one program that writes the global
+# screen-keyboard-enabled setting (squeekboard's "no physical keyboard" flag).
 #
-#   omamobile-osk-guard          watch (omamobile-osk-guard.service)
-#   omamobile-osk-guard --once   check once and exit
-set -u
+# 1. Hardware keyboards (OSK-HWKBD-PLAN): while a real Bluetooth or USB
+#    keyboard is connected, squeekboard does not pop up on a text field
+#    (the setting is false), unless the user chose "Show on-screen keyboard"
+#    on the shade's keyboard card (mode "show"). The keyboards and the mode
+#    are in ~/.local/state/omamobile/osk-hwkbd.json, which the card reads. A
+#    keyboard that goes away stays listed for a 5 s grace (a Bluetooth
+#    keyboard waking up comes back as the same uniq and keeps the mode);
+#    after it, with no keyboard left, the mode goes back to "auto". While the
+#    session is locked and the credential is a password, the setting stays
+#    true, so the lock's field can still bring the keyboard up.
+# 2. The safety net (TOUCH-PLAN 0.5): Omarchy's screensaver launcher turns
+#    the setting off while the screensaver runs (patches/omarchy/0006-*) and
+#    back on after. When it is off and should not be, this waits until no
+#    screensaver runs, gives the screensaver's own restore its time, and
+#    turns it back on. When 0006's restore turns it on while a keyboard is
+#    connected, this turns it straight back off. No keyboard: always true.
+#    Stopping the watcher leaves it true.
+#
+#   omamobile-osk-guard                 watch (omamobile-osk-guard.service)
+#   omamobile-osk-guard --once          check once and exit
+#   omamobile-osk-guard --mode show|hide|auto
+#                                       the card's buttons: set the mode, the
+#                                       setting, and show or hide the keyboard
+#   omamobile-osk-guard --disconnect MAC
+#                                       bluetoothctl disconnect (the card)
+import fcntl, json, os, re, select, signal, struct, subprocess, sys, tempfile, time
 
-key=(org.gnome.desktop.a11y.applications screen-keyboard-enabled)
+KEY = ["org.gnome.desktop.a11y.applications", "screen-keyboard-enabled"]
+HOME = os.environ.get("HOME", "/")
+SYSFS = os.environ.get("OMAMOBILE_OSK_SYSFS", "/sys")
+UDEV = os.environ.get("OMAMOBILE_OSK_UDEVDATA", "/run/udev/data")
+STATE = os.environ.get("OMAMOBILE_OSK_STATE", HOME + "/.local/state/omamobile/osk-hwkbd.json")
+PASSWORD_TOGGLE = HOME + "/.local/state/omarchy/toggles/credential-password"
+
+
+def num(name, default):
+    try: return float(os.environ.get(name, default))
+    except ValueError: return float(default)
+
+
 # The launcher turns the setting off a moment before the screensaver's
 # window opens, and the screensaver's restore waits for the lock.
-grace=${OMAMOBILE_OSK_GUARD_GRACE:-10}
+GRACE = num("OMAMOBILE_OSK_GUARD_GRACE", 10)
+KEYBOARD_GRACE = num("OMAMOBILE_OSK_KEYBOARD_GRACE", 5)
+SETTLE = num("OMAMOBILE_OSK_SETTLE", 1)
+POLL = num("OMAMOBILE_OSK_POLL", 2)
+MAC = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$", re.I)
 
-osk_off() { [[ $(gsettings get "${key[@]}" 2>/dev/null) == false ]]; }
-screensaver_up() { pgrep -f '[o]rg.omarchy.screensaver' >/dev/null; }
 
-check() {
-  osk_off || return 0
-  sleep "$grace"
-  while screensaver_up; do sleep 2; done
-  sleep "$grace"
-  if osk_off && ! screensaver_up; then
-    gsettings set "${key[@]}" true
-    echo "omamobile-osk-guard: the on-screen keyboard was off with no screensaver running; turned it back on"
-  fi
-}
+def log(msg):
+    print("omamobile-osk-guard: " + msg, flush=True)
 
-check
-[[ ${1:-} == --once ]] && exit 0
 
-while IFS= read -r line; do
-  [[ $line == *false ]] && check
-done < <(gsettings monitor "${key[@]}")
-# The monitor ended (the session bus went away): let systemd restart it.
-exit 1
+def run(cmd, timeout=10):
+    try:
+        return subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+# ------------------------------------------------------------------ keyboards
+# The rule of omamobile-settings' lock.sh keyboard_connected() (a copy: that
+# is another package): an event node udev calls a keyboard, on Bluetooth
+# (bus 0005) or USB (0003, not a virtual device), not a security key or a
+# scanner, with the letter rows and space. gpio-keys (0019) and squeekboard's
+# virtual keyboard never pass.
+NOT_KEYBOARDS = re.compile(r"yubikey|yubico|nitrokey|solokey|onlykey|token|barcode|scanner", re.I)
+LONG_BITS = struct.calcsize("l") * 8
+NEEDED = list(range(16, 26)) + list(range(30, 39)) + list(range(44, 51)) + [57]  # Q..P, A..L, Z..M, space
+
+
+def read(p):
+    try:
+        with open(p) as f: return f.read().strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def keyboards():
+    """Connected keyboards, one per uniq (else phys, else node): name, uniq, bus."""
+    base = os.path.join(SYSFS, "class/input")
+    try: names = sorted(os.listdir(base), key=lambda n: (len(n), n))
+    except OSError: return []
+    found = {}
+    for ev in names:
+        if not ev.startswith("event"): continue
+        d = os.path.join(base, ev)
+        dev, bus = read(d + "/dev"), read(d + "/device/id/bustype")
+        if not dev or not bus: continue
+        data = read(os.path.join(UDEV, "c" + dev)) or ""
+        if "E:ID_INPUT_KEYBOARD=1" not in data.splitlines(): continue
+        path = os.path.realpath(d + "/device")
+        if bus == "0005": pass
+        elif bus == "0003" and "/devices/virtual/input/" not in path + "/": pass
+        else: continue
+        name = read(d + "/device/name")
+        if not name or NOT_KEYBOARDS.search(name): continue
+        caps = (read(d + "/device/capabilities/key") or "").split()
+        try: bits = sum(int(w, 16) << (i * LONG_BITS) for i, w in enumerate(reversed(caps)))
+        except ValueError: continue
+        if not all(bits >> k & 1 for k in NEEDED): continue
+        uniq = (read(d + "/device/uniq") or "").lower()
+        key = uniq or read(d + "/device/phys") or ev
+        if key not in found:
+            found[key] = {"name": name, "uniq": uniq, "bus": "bluetooth" if bus == "0005" else "usb"}
+    return [dict(k, id=key) for key, k in found.items()]
+
+
+# ------------------------------------------------------------------ state file
+def locked_state():
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    f = open(STATE + ".lock", "a")
+    fcntl.flock(f, fcntl.LOCK_EX)
+    return f
+
+
+def load():
+    try:
+        with open(STATE) as f: s = json.load(f)
+        if not isinstance(s, dict): raise ValueError
+    except (OSError, ValueError):
+        s = {}
+    kbs = s.get("keyboards") if isinstance(s.get("keyboards"), list) else []
+    mode = s.get("mode") if s.get("mode") in ("auto", "show", "hide") else "auto"
+    return {"keyboards": [k for k in kbs if isinstance(k, dict)], "mode": mode}
+
+
+def save(s):
+    target = os.path.realpath(STATE)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target), prefix=".osk-hwkbd.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(s, f, ensure_ascii=False); f.write("\n")
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, target)
+    except BaseException:
+        try: os.unlink(tmp)
+        except OSError: pass
+        raise
+
+
+# ------------------------------------------------------------------ the setting
+def osk_get():
+    r = run(["gsettings", "get"] + KEY)
+    v = r.stdout.strip() if r and r.returncode == 0 else ""
+    return True if v == "true" else False if v == "false" else None
+
+
+def osk_set(value):
+    run(["gsettings", "set"] + KEY + ["true" if value else "false"])
+
+
+def screensaver_up():
+    r = run(["pgrep", "-f", "[o]rg.omarchy.screensaver"])
+    return bool(r and r.returncode == 0)
+
+
+def password_locked():
+    if not os.path.exists(PASSWORD_TOGGLE): return False
+    r = run(["omarchy-shell", "lock", "isLocked"], timeout=5)
+    return bool(r and r.returncode == 0 and r.stdout.strip() == "true")
+
+
+def wanted(state):
+    if not state["keyboards"] or state["mode"] == "show": return True
+    return password_locked()
+
+
+def set_visible(show):
+    run(["busctl", "--user", "call", "sm.puri.OSK0", "/sm/puri/OSK0", "sm.puri.OSK0",
+         "SetVisible", "b", "true" if show else "false"])
+
+
+# ------------------------------------------------------------------ the watcher
+class Guard:
+    def __init__(self):
+        self.seen = {}          # id -> (keyboard, last time present)
+        self.last_wanted = None
+        self.restore_at = None  # the safety net's deadline (setting off, wanted on)
+        self.restore_phase = 0  # 0: first grace, 1: screensaver gone, second grace
+        self.scan_at = 0.0
+        self.scanned = 0.0
+        # A restart keeps what the file lists for one grace (and its mode).
+        start = time.monotonic()
+        for k in load()["keyboards"]:
+            if isinstance(k.get("id"), str): self.seen[k["id"]] = (k, start)
+
+    def refresh(self, now):
+        """Rescan; write the state file when the list or the mode changes."""
+        self.scanned = now
+        for k in keyboards():
+            self.seen[k["id"]] = (k, now)
+        listed = []
+        for key, (k, t) in list(self.seen.items()):
+            if t == now or now - t < KEYBOARD_GRACE: listed.append(k)
+            else: del self.seen[key]
+        listed.sort(key=lambda k: (k["name"], k["id"]))
+        with locked_state():
+            s = load()
+            new = {"keyboards": listed, "mode": s["mode"] if listed else "auto"}
+            if new != s: save(new)
+        return new
+
+    def evaluate(self, now):
+        s = self.refresh(now)
+        want = wanted(s)
+        actual = osk_get()
+        if want != self.last_wanted and self.last_wanted is not None:
+            # Our own change (a keyboard came or went, the lock, the mode): now.
+            self.restore_at = None
+            self.last_wanted = want
+            if actual != want: osk_set(want)
+            return
+        self.last_wanted = want
+        if actual is None or actual == want:
+            self.restore_at = None
+            return
+        if not want:
+            # Someone turned it on over a connected keyboard (0006's restore).
+            self.restore_at = None
+            osk_set(False)
+            log("a keyboard is connected; turned the on-screen keyboard's auto-show back off")
+            return
+        if self.restore_at is None:
+            self.restore_at = now + GRACE
+            self.restore_phase = 0
+
+    def due(self, now):
+        """The safety net's next step when its deadline came."""
+        if self.restore_at is None or now < self.restore_at: return
+        if screensaver_up():
+            self.restore_at = now + POLL
+            self.restore_phase = 0
+            return
+        if self.restore_phase == 0:
+            self.restore_phase = 1
+            self.restore_at = now + GRACE
+            return
+        self.restore_at = None
+        if osk_get() is False and wanted(load()) and not screensaver_up():
+            osk_set(True)
+            log("the on-screen keyboard was off with no screensaver running; turned it back on")
+
+    def lock_matters(self):
+        s = load()
+        return bool(s["keyboards"]) and s["mode"] != "show" and os.path.exists(PASSWORD_TOGGLE)
+
+    def next_deadline(self, now):
+        times = [t for t in (self.restore_at, self.scan_at or None) if t is not None]
+        # A keyboard in its grace: drop it (and maybe the mode) when it ends.
+        times += [t + KEYBOARD_GRACE for _, t in self.seen.values() if t != self.scanned]
+        if self.lock_matters(): times.append(now + POLL)
+        return min(times) if times else None
+
+
+def once():
+    g = Guard()
+    g.last_wanted = None
+    now = time.monotonic()
+    g.evaluate(now)
+    while g.restore_at is not None:
+        time.sleep(max(0.0, g.restore_at - time.monotonic()))
+        g.due(time.monotonic())
+    return 0
+
+
+def watch():
+    children = []
+
+    def stop(*_):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGHUP, stop)
+    try:
+        mon = subprocess.Popen(["gsettings", "monitor"] + KEY, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, text=True)
+        children.append(mon)
+        try:
+            udev = subprocess.Popen(["udevadm", "monitor", "--udev", "--subsystem-match=input"],
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, text=True)
+            children.append(udev)
+        except OSError:
+            udev = None
+            log("udevadm monitor did not start; hardware keyboards are read only on other changes")
+        g = Guard()
+        g.evaluate(time.monotonic())
+        streams = [mon.stdout] + ([udev.stdout] if udev else [])
+        while True:
+            now = time.monotonic()
+            deadline = g.next_deadline(now)
+            timeout = None if deadline is None else max(0.0, deadline - now)
+            ready, _, _ = select.select(streams, [], [], timeout)
+            now = time.monotonic()
+            for r in ready:
+                line = r.readline()
+                if not line:
+                    if r is mon.stdout:
+                        # The monitor ended (the session bus went away): let systemd restart it.
+                        return 1
+                    streams.remove(r)
+                    continue
+                if udev and r is udev.stdout:
+                    g.scan_at = now + SETTLE
+                else:
+                    g.evaluate(now)
+            if g.scan_at and now >= g.scan_at:
+                g.scan_at = 0.0
+                g.evaluate(now)
+            elif not ready:
+                g.evaluate(now)  # grace expiry, the lock poll
+            g.due(now)
+    finally:
+        for c in children:
+            try: c.terminate()
+            except OSError: pass
+        # Never leave the phone without its keyboard.
+        if osk_get() is False: osk_set(True)
+
+
+def set_mode(mode):
+    with locked_state():
+        s = load()
+        s["mode"] = mode
+        save(s)
+    want = wanted(s)
+    if osk_get() != want: osk_set(want)
+    if mode == "show": set_visible(True)
+    elif mode == "hide": set_visible(False)
+    return 0
+
+
+def disconnect(mac):
+    if not MAC.match(mac):
+        print("omamobile-osk-guard: not a Bluetooth address: " + mac, file=sys.stderr)
+        return 2
+    r = run(["bluetoothctl", "disconnect", mac.upper()], timeout=15)
+    return 0 if r and r.returncode == 0 else 1
+
+
+def main(argv):
+    if not argv: return watch()
+    if argv == ["--once"]: return once()
+    if len(argv) == 2 and argv[0] == "--mode" and argv[1] in ("show", "hide", "auto"): return set_mode(argv[1])
+    if len(argv) == 2 and argv[0] == "--disconnect": return disconnect(argv[1])
+    print("Usage: omamobile-osk-guard [--once | --mode show|hide|auto | --disconnect MAC]", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
