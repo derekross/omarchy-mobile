@@ -90,6 +90,7 @@ Usage: [DEVICE=<codename>] omamobile <command>
   fastboot         Get the phone into fastboot without buttons (adb, reboot-to,
                    or crash until ABL falls back to stock Android on slot A)
   flash            Flash the experiment images to slot B and boot them
+                   (--from-slot-a: a development phone that fell back to stock on slot A)
   push             Write the images into slot B from the running phone over SSH,
                    verify them, and reboot into them (no fastboot)
   kernel-shell     Open a shell in the build environment, in the kernel tree
@@ -102,6 +103,8 @@ die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 # Every name a descriptor's UFS_RW may hold: slot B's boot images and
 # userdata. Never persist, efs*, modem*, devinfo, vbmeta*, bootloader, radio
 # or anything in slot A. initramfs/init's ufs_rw_load accepts the same set.
+# The names are in slot form: the init maps each X_b to X of the slot the
+# phone runs from, and leaves the other slot read-only (ACTIVE-SLOT-PLAN §4).
 UFS_RW_ALLOWED="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
 
 # Load device/$DEVICE/device.conf into DEV_* variables. The descriptor is data,
@@ -236,6 +239,19 @@ load_device() {
   elif [[ -n ${DEV_AVB_ROLLBACK_INDEX:-}${DEV_AVB_SECURITY_PATCH:-} ]]; then
     die "$file: AVB_ROLLBACK_INDEX and AVB_SECURITY_PATCH belong with AVB_FOOTERS"
   fi
+  # Where a release installs (docs/ACTIVE-SLOT-PLAN.md §1): INSTALL_SLOT=b,
+  # the default (manifest format 1, slot B), or active (format 2: the slot
+  # the phone runs from, which must be one of INSTALL_ACTIVE_SLOTS). No
+  # device sets them yet. lib/descriptor.sh, tools/install-phone,
+  # tools/install-guided and tools/bundle-manifest check them the same way
+  # (tests/install-slot-descriptor).
+  case ${DEV_INSTALL_SLOT-b} in
+    b) [[ -z ${DEV_INSTALL_ACTIVE_SLOTS+x} ]] || die "$file: INSTALL_ACTIVE_SLOTS belongs with INSTALL_SLOT=active" ;;
+    active)
+      [[ ${DEV_INSTALL_ACTIVE_SLOTS-} =~ ^(a|b|a\ b|b\ a)$ ]] ||
+        die "$file: INSTALL_SLOT=active needs INSTALL_ACTIVE_SLOTS: the slots a release installs on (a, b, or a b)" ;;
+    *) die "$file: INSTALL_SLOT is active or b, not '$DEV_INSTALL_SLOT'" ;;
+  esac
 }
 
 # The images in $1 were built for $DEVICE: flash and push must not write
@@ -587,6 +603,10 @@ initramfs_config() {
   # The storage guard's allowlist. Without this file the init leaves every
   # partition read-only.
   printf '%s\n' "${rw[*]}" > "$etc/omamobile-ufs-rw"
+  # The list is in slot form (X_b); this marker says the init maps it to the
+  # slot the phone runs from (docs/ACTIVE-SLOT-PLAN.md §4). A format-2
+  # bundle is refused without it.
+  printf '%s\n' running > "$etc/omamobile-ufs-rw-slot"
   if [[ -n ${DEV_UFS_RW_LUNS:-} ]]; then
     printf '%s\n' "$DEV_UFS_RW_LUNS" > "$etc/omamobile-ufs-rw-luns"
   fi
@@ -622,6 +642,16 @@ pack_initramfs_modules() {
     cp "$ko" "$dest/"
     echo "$m" >> "$dest/order"
   done
+}
+
+# Alpine package $1 unpacked into $2 (tar options after them), or what tar
+# said and a failure. GNU tar warns once per file about the pax keyword in
+# Alpine's packages (APK-TOOLS.checksum.SHA1), so its output is shown only
+# when the unpack fails.
+unpack_apk() {
+  local apk=$1 dir=$2 err
+  shift 2
+  err=$(tar -xzf "$apk" -C "$dir" "$@" 2>&1) || { printf '%s\n' "$err" >&2; return 1; }
 }
 
 cmd_initramfs() {
@@ -663,11 +693,18 @@ cmd_initramfs() {
   local tarball="alpine-minirootfs-$ver-aarch64.tar.gz"
   local sum=9bf70a7f18ea44094cbb5f70c58f9af129c8214745743db0e68e5502cc2ce773
   mkdir -p "$dl"
-  if [[ ! -f "$dl/$tarball" ]]; then
+  # A download lands under the cached name only once it passes the checksum:
+  # every later run takes a file there as downloaded
+  if [[ -f "$dl/$tarball" ]]; then
+    echo "$sum  $dl/$tarball" | sha256sum -c --quiet ||
+      die "checksum mismatch for the cached $dl/$tarball: remove it to download it again"
+  else
     say "Downloading $tarball"
-    curl -fsSL -o "$dl/$tarball" "https://dl-cdn.alpinelinux.org/alpine/v${ver%.*}/releases/aarch64/$tarball"
+    curl -fsSL -o "$dl/$tarball.part" "https://dl-cdn.alpinelinux.org/alpine/v${ver%.*}/releases/aarch64/$tarball"
+    echo "$sum  $dl/$tarball.part" | sha256sum -c --quiet ||
+      { rm -f "$dl/$tarball.part"; die "checksum mismatch for the downloaded $tarball (removed it)"; }
+    mv "$dl/$tarball.part" "$dl/$tarball"
   fi
-  echo "$sum  $dl/$tarball" | sha256sum -c --quiet || die "checksum mismatch for $tarball"
 
   say "Staging initramfs in $stage"
   rm -rf "$stage" && mkdir -p "$stage"
@@ -680,7 +717,8 @@ cmd_initramfs() {
   apks=$(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" dropbear kexec-tools e2fsprogs e2fsprogs-extra) ||
     die "tools/alpine-fetch.py failed for the initramfs's packages"
   for apk in $apks; do
-    tar -xzf "$apk" -C "$stage" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' 2>/dev/null || true
+    unpack_apk "$apk" "$stage" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' ||
+      die "could not unpack $apk for the initramfs"
   done
   # INITRAMFS_I2C_TOOLS=1: i2cget and i2cset (and their libi2c) for a device
   # whose init talks to a chip before any driver runs; nothing else from
@@ -691,7 +729,8 @@ cmd_initramfs() {
     apks=$(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" i2c-tools) ||
       { rm -rf "$i2c"; die "INITRAMFS_I2C_TOOLS: tools/alpine-fetch.py failed for i2c-tools"; }
     for apk in $apks; do
-      tar -xzf "$apk" -C "$i2c" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' 2>/dev/null || true
+      unpack_apk "$apk" "$i2c" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' ||
+        { rm -rf "$i2c"; die "INITRAMFS_I2C_TOOLS: could not unpack $apk"; }
     done
     for f in usr/sbin/i2cget usr/sbin/i2cset; do
       [[ -f $i2c/$f ]] || { rm -rf "$i2c"; die "INITRAMFS_I2C_TOOLS: no $f in Alpine's i2c-tools"; }
@@ -765,7 +804,7 @@ cmd_initramfs() {
       apks=$(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" musl-dev) ||
         die "tools/alpine-fetch.py failed for the musl sysroot's musl-dev"
       for apk in $apks; do
-        tar -xzf "$apk" -C "$sysroot" 2>/dev/null || true
+        unpack_apk "$apk" "$sysroot" || die "could not unpack $apk for the musl sysroot"
       done
     fi
     [[ -f $sysroot/usr/lib/libc.a ]] || die "alpine musl sysroot has no libc.a"
@@ -1200,7 +1239,13 @@ cmd_fastboot() {
 }
 
 cmd_flash() {
-  local img="$KERNEL_OUT/images" p
+  local img="$KERNEL_OUT/images" p from_a=0
+  case ${1:-} in
+    "") ;;
+    --from-slot-a) from_a=1 ;;
+    *) die "usage: omamobile flash [--from-slot-a]" ;;
+  esac
+  (($# <= 1)) || die "usage: omamobile flash [--from-slot-a]"
   load_device
   # Qualcomm ABL keeps slot flags in the GPT. A fastboot set_active can clear
   # successful and refill retries; the bit-54 mark has no §3.1 entry yet.
@@ -1213,8 +1258,31 @@ cmd_flash() {
     die "flash refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
   in_fastboot || die "phone not in fastboot (try: omamobile fastboot)"
-  local serial
+  local serial cur
   serial=$(fastboot_serial) || exit 1
+  # Read-only: a release installed on the slot it ran from runs from slot A
+  # (docs/ACTIVE-SLOT-PLAN.md §2), and this writes slot B and makes it
+  # active, which is development only. Fastboot can't tell that release
+  # from stock Android on A, which a development phone falls back to (and
+  # `omamobile fastboot` crashes it into), so that case is named by hand
+  # with --from-slot-a.
+  cur=$(timeout 10 fastboot -s "$serial" getvar current-slot 2>&1 | sed -n 's/^current-slot: *_\{0,1\}\([ab]\)$/\1/p' | head -1)
+  if [[ $cur == a ]]; then
+    ((from_a)) || die "this phone runs from slot A (a release from slot A, or stock Android); flash writes slot B and makes it active, development only. A development phone that fell back to stock on slot A: omamobile flash --from-slot-a"
+    printf '\e[1;31m' >&2
+    cat >&2 <<'WARN'
+WARNING: --from-slot-a. This phone runs from slot A, and flash writes slot B
+and makes it active. That is right only for a development phone that fell
+back to stock Android on slot A. On a phone that runs a release from slot A
+it switches the phone to slot B: the release's slot is left behind and both
+systems share one userdata. Stop now (Ctrl-C) unless this is a development
+phone. Going on in 10 seconds.
+WARN
+    printf '\e[0m' >&2
+    sleep "${OMAMOBILE_FLASH_WARN_SECONDS:-10}"
+  elif ((from_a)); then
+    say "--from-slot-a given, but the phone reads current-slot ${cur:-unknown}: flashing as usual"
+  fi
   # Every image and allowlist entry first: never start writing slot B and
   # find out halfway that a later image is missing.
   for p in $DEV_BOOT_IMAGES; do
@@ -1252,6 +1320,15 @@ cmd_push() {
     die "push refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
   "$ssh" true || die "phone not reachable at 172.16.42.1"
+  # Read-only, before anything else (modules-push included): push writes
+  # slot B, so the phone must say it runs from B. A release installed on the
+  # slot it ran from runs from A (docs/ACTIVE-SLOT-PLAN.md §2); a boot that
+  # names no slot, or a failed read, is refused too.
+  local slots
+  slots=$("$ssh" "cat /proc/bootconfig /proc/cmdline 2>/dev/null | grep -oE 'androidboot[.]slot_suffix( = \"|=)_[ab]'; true") \
+    || die "cannot read the phone's boot slot; refusing to write"
+  [[ $slots != *_a* ]] || die "this phone runs a release from slot A; push writes slot B, development only"
+  [[ $slots == *_b* ]] || die "the phone names no boot slot (androidboot.slot_suffix in /proc/bootconfig or /proc/cmdline); push writes slot B only to a phone running from it"
   # Refuse before any write. A phone whose initramfs has no reboot-to would
   # otherwise take the images, swallow the reboot, and report success while
   # the old kernel is still running.
@@ -1352,7 +1429,7 @@ case "${1:-}" in
   images) cmd_images ;;
   kexec) cmd_kexec ;;
   fastboot) cmd_fastboot ;;
-  flash) cmd_flash ;;
+  flash) shift; cmd_flash "$@" ;;
   push) cmd_push ;;
   kernel-shell) cmd_kernel_shell ;;
   ''|-h|--help) usage ;;

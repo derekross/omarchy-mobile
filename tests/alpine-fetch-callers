@@ -6,8 +6,15 @@
 # tools/dodge-chain pack's busybox-static. A stand-in for alpine-fetch.py
 # prints one package it "fetched" (an .apk holding marker-<package>), then
 # exits 1 when asked for FETCH_FAIL_ON. A `for apk in $(…)` loop ignores that
-# status and unpacks what was printed; a caller must not. A stand-in
-# minirootfs (sha256sum accepts it) holds the files the initramfs checks for.
+# status and unpacks what was printed; a caller must not. Each of
+# bin/omamobile's three also stops when a package it was given doesn't
+# unpack (FETCH_BROKEN: a file that isn't an archive), naming the file and
+# with tar's own message; the stand-in packages are in Alpine's .apk
+# layout, and unpack with none of tar's warnings in the output. A stand-in
+# minirootfs (sha256sum -c accepts it, and only it) holds the files the
+# initramfs checks for. Then bin/omamobile initramfs's own download of the
+# minirootfs, from a stand-in curl: it lands under the cached name only once
+# it passes the checksum.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
@@ -19,21 +26,61 @@ for f in sbin/e2fsck usr/sbin/resize2fs usr/sbin/dumpe2fs; do
   printf '#!/bin/sh\n' > "$t/root/$f"; chmod 755 "$t/root/$f"
 done
 tar -czf "$t/minirootfs.tar.gz" -C "$t/root" .
+# SRC OUT: an .apk of SRC's files in Alpine's layout, three gzip members
+# (signature, control, data). The first two tars end without end-of-archive
+# blocks, and each data file has the pax header Alpine adds, which GNU tar
+# warns about once per file
+apk() {
+  python3 -I - "$1" "$2" <<'EOF'
+import gzip, hashlib, io, os, sys, tarfile
+src, out = sys.argv[1:3]
+def tar(files, cut):
+    buf = io.BytesIO()
+    t = tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT)
+    for ti, data in files:
+        t.addfile(ti, io.BytesIO(data))
+    if cut:
+        return buf.getvalue()[:t.offset]
+    t.close()
+    return buf.getvalue()
+def entry(name, data, mode=0o644, checksum=False):
+    ti = tarfile.TarInfo(name)
+    ti.size, ti.mode = len(data), mode
+    if checksum:
+        ti.pax_headers = {"APK-TOOLS.checksum.SHA1": hashlib.sha1(data).hexdigest()}
+    return ti, data
+files = []
+for d, dirs, names in sorted(os.walk(src)):
+    dirs.sort()
+    for n in sorted(names):
+        p = os.path.join(d, n)
+        files.append(entry(os.path.relpath(p, src), open(p, "rb").read(), os.stat(p).st_mode & 0o777, True))
+with open(out, "wb") as f:
+    f.write(gzip.compress(tar([entry(".SIGN.RSA.sample.rsa.pub", b"sample")], True)))
+    f.write(gzip.compress(tar([entry(".PKGINFO", b"pkgname = sample\n")], True)))
+    f.write(gzip.compress(tar(files, False)))
+EOF
+}
 for p in dropbear musl-dev busybox-static; do
   mkdir -p "$t/apk-src/$p"; : > "$t/apk-src/$p/marker-$p"
-  tar -czf "$t/apks/$p.apk" -C "$t/apk-src/$p" "marker-$p"
+  apk "$t/apk-src/$p" "$t/apks/$p.apk"
 done
 # What the initramfs installs from i2c-tools
 mkdir -p "$t/apk-src/i2c/usr/sbin" "$t/apk-src/i2c/usr/lib"
 : > "$t/apk-src/i2c/usr/sbin/i2cget"; : > "$t/apk-src/i2c/usr/sbin/i2cset"; : > "$t/apk-src/i2c/usr/lib/libi2c.so.0"
-tar -czf "$t/apks/i2c-tools.apk" -C "$t/apk-src/i2c" usr
+apk "$t/apk-src/i2c" "$t/apks/i2c-tools.apk"
+# A package that doesn't unpack, such as a damaged file in the cache (which
+# alpine-fetch.py takes at the index's size), and what tar says about it
+for p in dropbear i2c-tools musl-dev; do head -c 512 /dev/zero > "$t/apks/broken-$p.apk"; done
+tar_says=$(tar -xzf "$t/apks/broken-dropbear.apk" -C "$t/apk-src" 2>&1 || :)
+[[ -n $tar_says ]] || { echo "not ok - tar says nothing about a file that isn't an archive" >&2; exit 1; }
 
 cat > "$t/bin/python3" <<'EOF'
 #!/bin/bash
 # tools/alpine-fetch.py's stand-in; any other python3 run is the real one
 if [[ ${1:-} == -I && ${2:-} == */tools/alpine-fetch.py ]]; then
   echo "${*:5}" >> "$FETCH_LOG"
-  echo "$FETCH_APKS/$5.apk"
+  if [[ $5 == "${FETCH_BROKEN:-}" ]]; then echo "$FETCH_APKS/broken-$5.apk"; else echo "$FETCH_APKS/$5.apk"; fi
   for p in "${@:5}"; do
     if [[ $p == "${FETCH_FAIL_ON:-}" ]]; then
       echo "alpine-fetch: no package or provider in the index for $p (stand-in)" >&2
@@ -44,8 +91,30 @@ if [[ ${1:-} == -I && ${2:-} == */tools/alpine-fetch.py ]]; then
 fi
 exec "$REAL_PYTHON" "$@"
 EOF
-printf '#!/bin/sh\ncat >/dev/null\n' > "$t/bin/sha256sum"   # the stand-in minirootfs passes
-printf '#!/bin/sh\nexit 97\n' > "$t/bin/curl"                # no network
+cat > "$t/bin/sha256sum" <<'EOF'
+#!/bin/bash
+# sha256sum -c's stand-in: a file passes when it is the stand-in minirootfs
+[[ ${1:-} == -c ]] || exec "$REAL_SHA256SUM" "$@"
+read -r _ f
+[[ $("$REAL_SHA256SUM" < "$f") == "$MINIROOTFS_SUM" ]] && exit 0
+echo "$f: FAILED"
+exit 1
+EOF
+cat > "$t/bin/curl" <<'EOF'
+#!/bin/bash
+# No network. CURL_MODE serves the stand-in minirootfs to -o FILE: cut (the
+# connection drops part-way: what arrived, and curl's exit 18), whole, or
+# short (a file that isn't the minirootfs, exit 0)
+echo "curl $*" >> "$CURL_LOG"
+out=
+while (($#)); do [[ $1 == -o ]] && out=$2; shift; done
+case ${CURL_MODE:-} in
+  cut) head -c 100 "$MINIROOTFS" > "$out"; echo "curl: (18) end of response with bytes missing (stand-in)" >&2; exit 18 ;;
+  whole) cat "$MINIROOTFS" > "$out" ;;
+  short) head -c 100 "$MINIROOTFS" > "$out" ;;
+  *) exit 97 ;;
+esac
+EOF
 printf '#!/bin/sh\n' > "$t/bin/magick"                       # no splash rendering
 printf '#!/bin/sh\n' > "$t/bin/mkbootimg"
 # The live DTB's memory node, for dodge-chain's stage-1 memory check
@@ -54,21 +123,23 @@ cat > "$t/bin/dtc" <<'EOF'
 printf '/ {\n\tmemory {\n\t\treg = <0x0 0x80000000 0x0 0x1000>;\n\t};\n};\n'
 EOF
 chmod 755 "$t/bin"/*
-REAL_PYTHON=$(command -v python3)
+REAL_PYTHON=$(command -v python3) REAL_SHA256SUM=$(command -v sha256sum)
+MINIROOTFS=$t/minirootfs.tar.gz MINIROOTFS_SUM=$(sha256sum < "$t/minirootfs.tar.gz")
+export REAL_SHA256SUM MINIROOTFS MINIROOTFS_SUM CURL_LOG="$t/curls"
 export REAL_PYTHON FETCH_APKS="$t/apks" FETCH_LOG="$t/fetched" HOME="$t/home" CLANG_DIR="$t/clang" PATH="$t/bin:$PATH"
-unset KERNEL_DIR KERNEL_BASE KERNEL_OUT WORK SPLASH_BGRA_GZ FETCH_FAIL_ON || true
+unset KERNEL_DIR KERNEL_BASE KERNEL_OUT WORK SPLASH_BGRA_GZ FETCH_FAIL_ON FETCH_BROKEN CURL_MODE || true
 
 ver=$(sed -n 's/.* ver=\([0-9.]*\)$/\1/p' bin/omamobile)
 [[ -n $ver ]] || fail "bin/omamobile names its Alpine version"
 stage=$t/out/initramfs sysroot=$t/work/downloads/alpine/sysroot
-# DEVICE [FETCH_FAIL_ON]: bin/omamobile initramfs from nothing; the status in $status
+# DEVICE [FETCH_FAIL_ON [FETCH_BROKEN]]: bin/omamobile initramfs from nothing; the status in $status
 initramfs() {
   rm -rf "$t/work" "$t/out" "$t/tmp"
   mkdir -p "$t/work/downloads/alpine" "$t/tmp"
   cp "$t/minirootfs.tar.gz" "$t/work/downloads/alpine/alpine-minirootfs-$ver-aarch64.tar.gz"
   : > "$t/fetched"
   status=0
-  DEVICE=$1 FETCH_FAIL_ON=${2:-} WORK=$t/work KERNEL_OUT=$t/out TMPDIR=$t/tmp \
+  DEVICE=$1 FETCH_FAIL_ON=${2:-} FETCH_BROKEN=${3:-} WORK=$t/work KERNEL_OUT=$t/out TMPDIR=$t/tmp \
     bin/omamobile initramfs > "$t/log" 2>&1 || status=$?
 }
 stopped() {  # what, the package the stand-in failed on
@@ -76,11 +147,20 @@ stopped() {  # what, the package the stand-in failed on
   grep -c -w -F -- "$2" "$t/fetched" >/dev/null || fail "$1: the build never reached alpine-fetch.py for $2"
   grep -c -F "tools/alpine-fetch.py failed" "$t/log" >/dev/null || fail "$1: no message that alpine-fetch.py failed"
 }
+unpack_stopped() {  # what, the package whose .apk doesn't unpack
+  [[ $status != 0 ]] || fail "$1: the build went on"
+  grep -c -F -- "$t/apks/broken-$2.apk" "$t/log" >/dev/null || fail "$1: no message naming broken-$2.apk"
+  while IFS= read -r line; do
+    [[ -z $line ]] || grep -c -F -- "$line" "$t/log" >/dev/null || fail "$1: no message from tar ($line)"
+  done <<< "$tar_says"
+}
 
-# The callers still unpack what alpine-fetch.py prints when it succeeds
+# The callers still unpack what alpine-fetch.py prints when it succeeds,
+# with none of tar's warnings about Alpine's pax header in the build's output
 initramfs cheetah
 [[ -e $stage/marker-dropbear && -e $sysroot/marker-musl-dev ]] || fail "cheetah: a successful fetch is unpacked"
 grep -c -F "alpine musl sysroot has no libc.a" "$t/log" >/dev/null || fail "cheetah: the stand-in build stops at the sysroot's libc.a"
+grep -c "tar: " "$t/log" >/dev/null && fail "cheetah: tar's output in the build's output"
 pass "bin/omamobile initramfs unpacks the packages a successful fetch lists"
 
 initramfs cheetah dropbear
@@ -89,9 +169,15 @@ stopped "initramfs packages" dropbear
 grep -c -F musl-dev "$t/fetched" >/dev/null && fail "initramfs packages: went on to the sysroot"
 pass "bin/omamobile initramfs stops when the initramfs's packages fail, before unpacking any"
 
+initramfs cheetah '' dropbear
+unpack_stopped "initramfs packages (unpack)" dropbear
+grep -c -F musl-dev "$t/fetched" >/dev/null && fail "initramfs packages (unpack): went on to the sysroot"
+pass "bin/omamobile initramfs stops when one of the initramfs's packages doesn't unpack, and says which, with tar's message"
+
 initramfs raven
 [[ -e $stage/usr/sbin/i2cget && -e $stage/usr/sbin/i2cset && -e $stage/usr/lib/libi2c.so.0 ]] || fail "raven: a successful i2c-tools fetch is installed"
 grep -c -F "INITRAMFS_MODULES needs a kernel build" "$t/log" >/dev/null || fail "raven: the stand-in build stops at INITRAMFS_MODULES"
+grep -c "tar: " "$t/log" >/dev/null && fail "raven: tar's output in the build's output"
 pass "bin/omamobile initramfs installs i2c-tools from a successful fetch"
 
 initramfs raven i2c-tools
@@ -100,11 +186,66 @@ stopped "INITRAMFS_I2C_TOOLS" i2c-tools
 [[ ! -e $stage/usr/sbin/i2cget ]] || fail "INITRAMFS_I2C_TOOLS: installed i2cget"
 pass "bin/omamobile initramfs stops when i2c-tools fails, before unpacking it, and removes its scratch directory"
 
+initramfs raven '' i2c-tools
+unpack_stopped "INITRAMFS_I2C_TOOLS (unpack)" i2c-tools
+[[ -z $(ls -A "$t/tmp") ]] || fail "INITRAMFS_I2C_TOOLS (unpack): left its scratch directory ($(ls -A "$t/tmp"))"
+grep -c -F "no usr/sbin/i2cget" "$t/log" >/dev/null && fail "INITRAMFS_I2C_TOOLS (unpack): went on to look for i2cget"
+pass "bin/omamobile initramfs stops when i2c-tools doesn't unpack, says so with tar's message, and removes its scratch directory"
+
 initramfs cheetah musl-dev
 stopped "musl sysroot" musl-dev
 [[ ! -e $sysroot/marker-musl-dev ]] || fail "musl sysroot: unpacked a list from a failed fetch"
 grep -c -F "no libc.a" "$t/log" >/dev/null && fail "musl sysroot: went on to check the sysroot"
 pass "bin/omamobile initramfs stops when the sysroot's musl-dev fails, before unpacking it"
+
+initramfs cheetah '' musl-dev
+unpack_stopped "musl sysroot (unpack)" musl-dev
+grep -c -F "no libc.a" "$t/log" >/dev/null && fail "musl sysroot (unpack): went on to check the sysroot"
+pass "bin/omamobile initramfs stops when the sysroot's musl-dev doesn't unpack, and says which, with tar's message"
+
+# The minirootfs download, from the stand-in curl
+dl=$t/work/downloads/alpine mrfs=alpine-minirootfs-$ver-aarch64.tar.gz
+download() {  # CURL_MODE: bin/omamobile initramfs for cheetah on what $t/work holds; the status in $status
+  mkdir -p "$dl" "$t/tmp"
+  : > "$t/curls"
+  status=0
+  CURL_MODE=$1 DEVICE=cheetah WORK=$t/work KERNEL_OUT=$t/out TMPDIR=$t/tmp \
+    bin/omamobile initramfs > "$t/log" 2>&1 || status=$?
+}
+rm -rf "$t/work" "$t/out"
+download cut
+[[ $status != 0 ]] || fail "cut-off download: the build went on"
+[[ -s $t/curls ]] || fail "cut-off download: never ran curl"
+[[ ! -e $dl/$mrfs ]] || fail "cut-off download: left what arrived under the cached name"
+pass "bin/omamobile initramfs keeps a cut-off minirootfs download out of the cache"
+
+download whole
+[[ -s $t/curls ]] || fail "after a cut-off download: the next run didn't download again"
+[[ $(sha256sum < "$dl/$mrfs") == "$MINIROOTFS_SUM" ]] || fail "after a cut-off download: the next run didn't cache the minirootfs"
+grep -c -F "alpine musl sysroot has no libc.a" "$t/log" >/dev/null || fail "after a cut-off download: the next run didn't go on"
+pass "bin/omamobile initramfs downloads the minirootfs again after a cut-off download, and goes on"
+
+rm -rf "$t/work" "$t/out"
+download short
+[[ $status != 0 ]] || fail "download that fails its checksum: the build went on"
+[[ ! -e $dl/$mrfs ]] || fail "download that fails its checksum: kept under the cached name"
+[[ -z $(ls -A "$dl") ]] || fail "download that fails its checksum: left $(ls -A "$dl")"
+grep -c -F "checksum mismatch for the downloaded $mrfs (removed it)" "$t/log" >/dev/null ||
+  fail "download that fails its checksum: no message that it was removed"
+pass "bin/omamobile initramfs removes a minirootfs download that fails its checksum, and says so"
+
+# A file under the cached name that fails the checksum, such as a download
+# cut off by an older bin/omamobile: stop, and name the file to remove
+rm -rf "$t/work" "$t/out"
+mkdir -p "$dl"
+head -c 100 "$MINIROOTFS" > "$dl/$mrfs"
+download whole
+[[ $status != 0 ]] || fail "cached file that fails its checksum: the build went on"
+[[ ! -s $t/curls ]] || fail "cached file that fails its checksum: downloaded over it"
+[[ -e $dl/$mrfs ]] || fail "cached file that fails its checksum: removed it"
+grep -c -F "checksum mismatch for the cached $dl/$mrfs: remove it to download it again" "$t/log" >/dev/null ||
+  fail "cached file that fails its checksum: no message naming the file to remove"
+pass "bin/omamobile initramfs stops at a cached minirootfs that fails its checksum, and names the file to remove"
 
 # tools/dodge-chain pack, with stand-in stage 2 inputs
 d=$t/dodge

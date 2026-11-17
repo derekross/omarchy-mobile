@@ -116,7 +116,7 @@ Bring-up steps hang phones. Plan for it before you start:
   2. Unplug and replug the cable once.
   3. Force a restart: hold Power for about 30 s until the phone is off, then press Power. On the Pixel 8 Pro, hold Power + Volume Up for 15-30 s; Power alone does nothing under our kernel ([BRINGUP-M1](device/husky/BRINGUP-M1.md) test 23).
   4. Reach fastboot by hand: with the phone off, hold Volume Down, add Power, and keep both held about 20 s until "Fastboot Mode" appears. Letting go early lands on the unlocked-bootloader warning, which carries on booting slot B.
-  5. From fastboot, flash known-good images to slot B, or `fastboot --set-active=a` to boot stock Android.
+  5. From fastboot, flash known-good images to slot B, or `fastboot --set-active=a` to boot stock Android. `bin/omamobile flash` refuses a phone whose `current-slot` is `a`, since a release installed on slot A looks the same from fastboot; for a development phone that fell back to stock on slot A, run `bin/omamobile flash --from-slot-a` (it warns, then writes slot B and makes it active).
 - **Slot fallback:** a slot B that hasn't been marked successful falls back to stock slot A after the bootloader's retries run out. Once `omamobile-boot-success` has marked slot B, don't rely on that fallback: use fastboot. Keep a known-good image set (we keep one in `~/omamobile-kernel/known-good`).
 
 ### 3.5 Never touch PMU registers from userspace; mind `devmem`

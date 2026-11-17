@@ -34,6 +34,16 @@ daemon speaks protocol N. manifest.json then says install_link:
 {"protocol": N}, so an installer knows before the flash that the phone will
 finish its setup over the link. Without it the key is absent.
 
+A descriptor with INSTALL_SLOT=active (none has it yet; docs/ACTIVE-SLOT-PLAN.md
+§1) gets format 2 instead: the install plan writes each BOOT_IMAGES entry to
+<image>_<s>, where s is the slot the phone reports as current-slot at the
+install (one of INSTALL_ACTIVE_SLOTS, "accept_current_slots"), then
+userdata, then "reboot" only: no set-active, no bootloader-slot requirement.
+The storage guard of such a release opens the running slot, so the ramdisk
+image (vendor_kernel_boot, else vendor_boot) must carry the guard's marker,
+/etc/omamobile-ufs-rw-slot reading "running", or nothing is written.
+Without INSTALL_SLOT=active the output is format 1, as it always was.
+
 tools/make-bundle runs this before computing SHA256SUMS, so the signed
 checksums cover manifest.json; tools/install-phone reads it back and refuses
 an install that differs from the descriptor or from its own rules. A web
@@ -44,6 +54,7 @@ import hashlib
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
 
@@ -51,6 +62,15 @@ FORMAT = 1
 NEVER = ["slot A (any *_a partition)", "an unsuffixed partition name", "bootloader", "radio", "persist", "efs",
          "modem", "devinfo", "vbmeta", "fastboot -w", "fastboot --slot", "fastboot flashing", "fastboot erase",
          "fastboot format", "fastboot oem"]
+# Format 2 (INSTALL_SLOT=active): the shared contract's list, word for word
+NEVER_ACTIVE = ["the slot the phone does not run from (any *_<other> partition)",
+                "an unsuffixed partition name but userdata", "bootloader", "radio", "persist", "efs", "modem",
+                "devinfo", "vbmeta", "fastboot -w", "fastboot --slot", "fastboot --set-active", "fastboot flashing",
+                "fastboot erase", "fastboot format", "fastboot oem"]
+# The storage guard's marker (bin/omamobile initramfs packs it when the init
+# maps the packed slot-B names to the running slot)
+GUARD_MARKER = "/etc/omamobile-ufs-rw-slot"
+IMAGES_ACTIVE = ["boot", "init_boot", "vendor_boot", "vendor_kernel_boot", "dtbo"]
 
 
 def die(msg):
@@ -72,6 +92,71 @@ def descriptor(path):
                 die("%s:%d: not a KEY=value line" % (path, n))
             d[m.group(1)] = m.group(2)
     return d
+
+
+def install_slot(d):
+    """INSTALL_SLOT and INSTALL_ACTIVE_SLOTS, checked as bin/omamobile's load_device checks them."""
+    slot = d.get("INSTALL_SLOT", "b")
+    if slot == "b":
+        if "INSTALL_ACTIVE_SLOTS" in d:
+            die("device.conf: INSTALL_ACTIVE_SLOTS belongs with INSTALL_SLOT=active")
+        return slot, []
+    if slot != "active":
+        die("device.conf: INSTALL_SLOT is active or b, not '%s'" % slot)
+    slots = d.get("INSTALL_ACTIVE_SLOTS", "")
+    if not re.fullmatch(r"a|b|a b|b a", slots):
+        die("device.conf: INSTALL_SLOT=active needs INSTALL_ACTIVE_SLOTS: the slots a release installs on (a, b, or a b)")
+    return slot, slots.split()
+
+
+def cpio_file(data, name):
+    """The contents of NAME (or ./NAME) in a newc cpio stream (archives one
+    after another, as the kernel reads them; the last copy wins), or None."""
+    found, pos = None, 0
+    while pos + 110 <= len(data):
+        if data[pos:pos + 6] not in (b"070701", b"070702"):
+            if data[pos:pos + 1] == b"\0":   # padding between archives
+                pos += 1
+                continue
+            die("the ramdisk is not a newc cpio archive")
+        f = [int(data[pos + 6 + 8 * i:pos + 14 + 8 * i], 16) for i in range(13)]
+        size, namesize = f[6], f[11]
+        npos = pos + 110
+        entry = data[npos:npos + namesize - 1].decode("utf-8", "replace")
+        dpos = (npos + namesize + 3) & ~3
+        if entry != "TRAILER!!!" and entry.lstrip(".").lstrip("/") == name.lstrip("/"):
+            found = data[dpos:dpos + size]
+        pos = (dpos + size + 3) & ~3
+    return found
+
+
+def guard_marker(bundle, boot_images):
+    """The ramdisk image's guard marker, which must read "running"."""
+    ramdisk = "vendor_kernel_boot" if "vendor_kernel_boot" in boot_images else \
+        "vendor_boot" if "vendor_boot" in boot_images else None
+    if ramdisk is None:
+        die("INSTALL_SLOT=active needs a ramdisk image (vendor_kernel_boot or vendor_boot) to check the storage guard in")
+    path = os.path.join(bundle, "images", ramdisk + ".img")
+    try:
+        img = open(path, "rb").read()
+    except OSError as e:
+        die("can't read %s (%s)" % (path, e))
+    # vendor_boot_img_hdr_v4, as tools/install-phone reads it
+    if len(img) < 2128 or img[:8] != b"VNDRBOOT":
+        die("images/%s.img is not an Android vendor boot image" % ramdisk)
+    version, page, _, _, rd_size = struct.unpack_from("<5I", img, 8)
+    if version != 4 or page < 2048 or page & (page - 1):
+        die("images/%s.img is not a v4 vendor boot image" % ramdisk)
+    o_rd = -(-2128 // page) * page
+    try:
+        cpio = subprocess.run(["lz4", "-dc"], input=img[o_rd:o_rd + rd_size], stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, check=True).stdout
+    except (OSError, subprocess.CalledProcessError) as e:
+        die("can't unpack images/%s.img's ramdisk with lz4 (%s)" % (ramdisk, e))
+    marker = cpio_file(cpio, GUARD_MARKER)
+    if marker is None or marker.decode("ascii", "replace").strip() != "running":
+        die("images/%s.img's initramfs has no storage guard for the running slot (%s reading \"running\"): "
+            "an INSTALL_SLOT=active release needs one (bin/omamobile initramfs)" % (ramdisk, GUARD_MARKER))
 
 
 def sha256(path):
@@ -197,6 +282,7 @@ def main():
     files.sort(key=lambda f: f["path"])
     sizes = {f["path"]: f["size"] for f in files}
 
+    slot, accept = install_slot(d)
     writes = []
     for p in boot_images:
         if not re.match(r"^[a-z_]+$", p):
@@ -206,14 +292,58 @@ def main():
         src = "images/%s.img" % p
         if src not in sizes:
             die("the bundle has no %s" % src)
-        writes.append({"partition": p + "_b", "source": src, "size": sizes[src],
-                       "partition_size": avb.get(p)})
+        if slot == "active":
+            writes.append({"image": p, "source": src, "size": sizes[src], "partition_size": avb.get(p)})
+        else:
+            writes.append({"partition": p + "_b", "source": src, "size": sizes[src],
+                           "partition_size": avb.get(p)})
     if "userdata" not in allow:
         die("userdata is not on the storage-guard allowlist (UFS_RW)")
     writes.append({"partition": "userdata", "source": "root_image", "erases_userdata": True})
 
+    install = {
+        "tool": "fastboot",
+        "product": codename,
+        "require_unlocked_bootloader": True,
+        "require_matching_bootloader_slots": True,
+        "storage_guard_allowlist": allow,
+        "writes": writes,
+        "after": ["set-active b", "reboot"],
+        "never": NEVER,
+    }
+    fmt = FORMAT
+    if slot == "active":
+        # The guard opens the running slot's images (the packed list's slot-B
+        # names, mapped by the init) and userdata, and no other partition
+        # Its own list, the only images and guard names a format 2 release
+        # may carry (bin/omamobile's UFS_RW_ALLOWED): never vbmeta, abl or
+        # modem, which would be written as the running slot's live image
+        for p in boot_images:
+            if p not in IMAGES_ACTIVE:
+                die("BOOT_IMAGES may hold only %s, not %s" % (" ".join(IMAGES_ACTIVE), p))
+        for p in allow:
+            if p not in [i + "_b" for i in IMAGES_ACTIVE] + ["userdata"]:
+                die("UFS_RW may hold only slot B boot images and userdata, not %s" % p)
+        guard_images = [p[:-2] for p in allow if p.endswith("_b")]
+        also = [p for p in allow if not p.endswith("_b")]
+        if also != ["userdata"]:
+            die("UFS_RW may hold only slot-B boot images and userdata")
+        guard_marker(bundle, boot_images)
+        fmt = 2
+        install = {
+            "tool": "fastboot",
+            "product": codename,
+            "require_unlocked_bootloader": True,
+            "slot": "active",
+            "accept_current_slots": accept,
+            "writes": writes,
+            "after": ["reboot"],
+            "never": NEVER_ACTIVE,
+            "storage_guard": {"slot": "running", "images": guard_images, "also": also, "marker": GUARD_MARKER},
+        }
+
     manifest = {
-        "format": FORMAT,
+        "format": fmt,
         "name": "Omarchy Mobile",
         "label": a.label,
         "version": a.version,
@@ -227,16 +357,7 @@ def main():
                        "size": os.path.getsize(a.rootfs), "sha256": a.rootfs_sha256,
                        "compression": "zstd", "filesystem": "ext4", "label": "omamobile-root",
                        "placeholders": root_placeholders},
-        "install": {
-            "tool": "fastboot",
-            "product": codename,
-            "require_unlocked_bootloader": True,
-            "require_matching_bootloader_slots": True,
-            "storage_guard_allowlist": allow,
-            "writes": writes,
-            "after": ["set-active b", "reboot"],
-            "never": NEVER,
-        },
+        "install": install,
     }
     if a.install_link_protocol is not None:
         if not 1 <= a.install_link_protocol <= 9999:
