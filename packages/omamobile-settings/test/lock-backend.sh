@@ -174,10 +174,32 @@ chmod +x "$tmp/rearm/omarchy-shell"
 export REARM_LOG=$tmp/rearm/log REARM_STATUS=$tmp/rearm/status
 echo '{"enabled":true,"stayAwake":false}' > "$REARM_STATUS"; : > "$REARM_LOG"
 PATH="$tmp/rearm:$PATH" OMAMOBILE_LOCK_NO_REARM= bash "$src/backends/lock.sh" set lock 60 >/dev/null
-eq "$(tr '\n' ',' < "$REARM_LOG")" "idle status,idle disable,idle enable,"
+eq "$(tr '\n' ',' < "$REARM_LOG")" "idle status,idle disable,idle enable,idle status,"
+# the same value again: shell.json unchanged, no re-arm (it would restart the countdown)
+: > "$REARM_LOG"
+PATH="$tmp/rearm:$PATH" OMAMOBILE_LOCK_NO_REARM= bash "$src/backends/lock.sh" set lock 60 >/dev/null
+eq "$(cat "$REARM_LOG")" ""
+# idle switched off by the user: left alone
+echo '{"enabled":false,"stayAwake":false}' > "$REARM_STATUS"; : > "$REARM_LOG"
+PATH="$tmp/rearm:$PATH" OMAMOBILE_LOCK_NO_REARM= bash "$src/backends/lock.sh" set lock 90 >/dev/null || true
+PATH="$tmp/rearm:$PATH" OMAMOBILE_LOCK_NO_REARM= bash "$src/backends/lock.sh" set lock 180 >/dev/null
+eq "$(tr '\n' ',' < "$REARM_LOG")" "idle status,"
+# enable that never takes: retried, then a non-zero exit instead of silence
+cat > "$tmp/rearm/omarchy-shell" <<'SH'
+#!/bin/bash
+echo "$*" >> "$REARM_LOG"
+[[ $* == "idle status" ]] && { [[ -e $REARM_LOG.disabled ]] && echo '{"enabled":false,"stayAwake":false}' || cat "$REARM_STATUS"; }
+[[ $* == "idle disable" ]] && touch "$REARM_LOG.disabled"
+exit 0
+SH
+echo '{"enabled":true,"stayAwake":false}' > "$REARM_STATUS"; : > "$REARM_LOG"; rm -f "$REARM_LOG.disabled"
+rc=0; PATH="$tmp/rearm:$PATH" OMAMOBILE_LOCK_NO_REARM= bash "$src/backends/lock.sh" set lock 300 >/dev/null 2>&1 || rc=$?
+eq "$rc" 3
+eq "$(grep -c 'idle enable' "$REARM_LOG")" 3
 echo '{"enabled":true,"stayAwake":true}' > "$REARM_STATUS"; : > "$REARM_LOG"
 PATH="$tmp/rearm:$PATH" OMAMOBILE_LOCK_NO_REARM= bash "$src/backends/lock.sh" set lock 120 >/dev/null
 eq "$(tr '\n' ',' < "$REARM_LOG")" "idle status,"
+rm -f "$REARM_LOG.disabled"
 : > "$REARM_LOG"
 PATH="$tmp/rearm:$PATH" OMAMOBILE_LOCK_NO_REARM= bash "$src/backends/lock.sh" get >/dev/null
 eq "$(cat "$REARM_LOG")" ""

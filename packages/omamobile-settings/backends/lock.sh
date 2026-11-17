@@ -40,8 +40,9 @@ if [[ -z $watcher ]]; then
 fi
 
 # All work in one place: finds keyboards, reads prefs and shell.json, applies the verb, writes both.
+markdir=$(mktemp -d); trap 'rm -rf "$markdir"' EXIT; mark=$markdir/written
 rc=0
-res=$(/usr/bin/python3 -I - "$prefs" "$shell" "$defaults" "$sys" "$udev" "$watcher" "$verb" "$key" "$value" <<'PY'
+res=$(LOCK_WRITTEN_MARK=$mark /usr/bin/python3 -I - "$prefs" "$shell" "$defaults" "$sys" "$udev" "$watcher" "$verb" "$key" "$value" <<'PY'
 import fcntl, json, os, re, struct, sys, tempfile
 prefs_path, shell_path, defaults_path, sysfs, udev, watcher, verb, key, value = sys.argv[1:]
 CHOICES = (30, 60, 120, 180, 300, 0)
@@ -166,6 +167,7 @@ prefs["applied"], prefs["override"] = want, override
 try: save(prefs_path, prefs)
 except OSError: fail("cannot save the setting")
 # 2. shell.json, read again just before the write so a concurrent Omarchy change to other keys is kept
+written = False
 if want != current:
     try: shell = user_shell()
     except Unreadable: fail("shell.json is not readable")
@@ -176,6 +178,9 @@ if want != current:
     idle["lock"] = want; shell["idle"] = idle
     try: save(shell_path, shell, indent=2)
     except OSError: fail("cannot write shell.json")
+    written = True
+    mark = os.environ.get("LOCK_WRITTEN_MARK")
+    if mark: open(mark, "w").close()
 out({"lock": prefs["lock"], "keyboardAwake": prefs["keyboardAwake"], "keyboard": kb, "effective": want})
 PY
 ) || rc=$?
@@ -185,10 +190,18 @@ printf '%s\n' "$res"
 # Omarchy's idle service keeps the timeout its idle monitor started with: a new idle.lock only takes
 # effect after the shell restarts. Switch idle off and on through its own IPC so the monitor is made
 # again with the new value. Only when idle is on and stay-awake is off, so neither is changed.
-if [[ $verb != get && -z ${OMAMOBILE_LOCK_NO_REARM:-} ]] && command -v omarchy-shell >/dev/null 2>&1; then
-  st=$(timeout 5 omarchy-shell idle status 2>/dev/null | tail -n1 || true)
-  if [[ $st == *'"enabled":true'* && $st == *'"stayAwake":false'* ]]; then
-    timeout 5 omarchy-shell idle disable >/dev/null 2>&1 || true
+idle_status() { timeout 5 omarchy-shell idle status 2>/dev/null | tail -n1 || true; }
+idle_on() { local st; st=$(idle_status); [[ $st == *'"enabled":true'* && $st == *'"stayAwake":false'* ]]; }
+# Only when shell.json really changed: a re-arm restarts the idle countdown, and the keyboard watcher
+# calls apply after every input change.
+if [[ -e $mark && -z ${OMAMOBILE_LOCK_NO_REARM:-} ]] && command -v omarchy-shell >/dev/null 2>&1 && idle_on; then
+  timeout 5 omarchy-shell idle disable >/dev/null 2>&1 || true
+  # Never leave idle off: enable until the status says so.
+  for _ in 1 2 3; do
     timeout 5 omarchy-shell idle enable >/dev/null 2>&1 || true
-  fi
+    [[ $(idle_status) == *'"enabled":true'* ]] && exit 0
+    sleep 1
+  done
+  echo "lock.sh: could not switch Omarchy's idle back on" >&2
+  exit 3
 fi
