@@ -37,6 +37,7 @@ Omarchy Mobile's phone profile for Omarchy's own shell. It isn't a fork: these a
 | `systemd/user/xdg-desktop-portal-gnome-omamobile.conf` | The file chooser's drop-in: xdg-desktop-portal-gnome on plain Wayland (`GDK_BACKEND=wayland`), since with Omarchy's `wayland,x11,*` it serves Settings only |
 | `bin/omamobile-widget` | The user's own home-screen widgets: scan and check them, make one from the template, copy an example, remove one, start Omarchy's default agent in a widget's folder |
 | `widgets/WIDGETS.md` | The contract for user widgets, for people and coding agents (installed to `/usr/share/omamobile/shell/`) |
+| `widgets/TILES.md` | The file format for the user's own quick-settings tiles (`~/.config/omamobile/tiles/<id>.json`), which `plugins/omamobile.quicksettings/user-tiles.py` reads and runs (installed to `/usr/share/omamobile/shell/`) |
 | `widgets/template`, `widgets/examples` | The starter **Create a widget with AI** copies, and examples to copy (`widget-template/`, `widget-examples/`) |
 
 ## AI Agent shortcut

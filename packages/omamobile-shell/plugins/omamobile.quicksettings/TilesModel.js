@@ -8,6 +8,12 @@
 //   { "version": 1, "tiles": ["wifi", "bluetooth", ...] }
 // Unknown ids (a tile a later version dropped) and duplicates are skipped;
 // a missing or unreadable file means the default layout.
+//
+// The user's own tiles (TILES.md, one file each in ~/.config/omamobile/tiles)
+// are "user:<id>" in the layout. Any well-formed one is known, whether or not
+// its file is there, so the layout keeps it before user-tiles.py has listed
+// them and while its file is away; the sheet shows a missing one as
+// unavailable.
 
 var VERSION = 1
 
@@ -50,10 +56,32 @@ var DEFAULT_LAYOUT = [
 var QUICK_COUNT = 4
 var PAGE_SIZE = 8
 
-function known(id) {
+// Must match user-tiles.py's ID_RE.
+var USER_PREFIX = "user:"
+var USER_ID_RE = /^[a-z0-9-]+$/
+// A user tile's icon when its file gives none (user-tiles.py's DEFAULT_ICON).
+var USER_ICON = String.fromCodePoint(0xF0D2A)
+
+function builtIn(id) {
   for (var i = 0; i < CATALOG.length; i++)
     if (CATALOG[i].id === id) return true
   return false
+}
+
+function isUser(id) {
+  return typeof id === "string" && id.indexOf(USER_PREFIX) === 0 && USER_ID_RE.test(id.slice(USER_PREFIX.length))
+}
+
+// "user:<id>" for a bare user tile id or one that has its prefix; "" for
+// anything else.
+function userTileId(id) {
+  var text = String(id === undefined || id === null ? "" : id)
+  var full = text.indexOf(USER_PREFIX) === 0 ? text : USER_PREFIX + text
+  return isUser(full) ? full : ""
+}
+
+function known(id) {
+  return builtIn(id) || isUser(id)
 }
 
 function label(id) {
@@ -98,7 +126,7 @@ function parseList(text) {
     try { list = JSON.parse(value) } catch (error) { return null }
     return Array.isArray(list) ? sanitize(list) : null
   }
-  if (value === "" || !/^[a-z, -]*$/.test(value)) return null
+  if (value === "" || !/^[a-z0-9:, -]*$/.test(value)) return null
   return sanitize(value.split(/[\s,]+/).filter(function(id) { return id.length > 0 }))
 }
 
@@ -106,14 +134,22 @@ function serialize(layout) {
   return JSON.stringify({ version: VERSION, tiles: sanitize(layout) }, null, 2) + "\n"
 }
 
-// Catalog order, minus what the layout already shows.
-function available(layout) {
+// Catalog order, then the user's own tiles in the order given (bare ids or
+// "user:" ones), minus what the layout already shows.
+function available(layout, userIds) {
   var shown = {}
   var list = sanitize(layout)
   for (var i = 0; i < list.length; i++) shown[list[i]] = true
   var out = []
   for (var j = 0; j < CATALOG.length; j++)
     if (!shown[CATALOG[j].id]) out.push(CATALOG[j].id)
+  var extra = Array.isArray(userIds) ? userIds : []
+  for (var k = 0; k < extra.length; k++) {
+    var id = userTileId(extra[k])
+    if (id === "" || shown[id]) continue
+    shown[id] = true
+    out.push(id)
+  }
   return out
 }
 
@@ -170,6 +206,70 @@ function pages(layout, size) {
   for (var i = 0; i < list.length; i += per) out.push(list.slice(i, i + per))
   if (out.length === 0) out.push([])
   return out
+}
+
+// `user-tiles.py list` -> its tiles, each with every field in its type, so
+// the sheet never meets a missing one: { id, label, icon, status, active,
+// choices: [{ value, label }], hasChoices, hasAction, error }. Entries with
+// a bad id are dropped; anything that isn't a list is no tiles.
+function parseUserTiles(text) {
+  var raw = null
+  try { raw = JSON.parse(String(text || "")) } catch (error) { return [] }
+  if (!Array.isArray(raw)) return []
+  var out = []
+  var seen = {}
+  for (var i = 0; i < raw.length; i++) {
+    var t = raw[i]
+    if (!t || typeof t !== "object" || typeof t.id !== "string" || !USER_ID_RE.test(t.id) || seen[t.id]) continue
+    seen[t.id] = true
+    var choices = []
+    var list = Array.isArray(t.choices) ? t.choices : []
+    for (var j = 0; j < list.length; j++) {
+      var c = list[j]
+      if (!c || typeof c.value !== "string" || c.value === "") continue
+      choices.push({ value: c.value, label: typeof c.label === "string" && c.label !== "" ? c.label : c.value })
+    }
+    out.push({
+      id: t.id,
+      label: typeof t.label === "string" && t.label !== "" ? t.label : t.id,
+      icon: typeof t.icon === "string" && t.icon !== "" ? t.icon : USER_ICON,
+      status: typeof t.status === "string" ? t.status : "",
+      active: t.active === true,
+      choices: choices,
+      hasChoices: t.hasChoices === true,
+      hasAction: t.hasAction === true,
+      error: typeof t.error === "string" ? t.error : ""
+    })
+  }
+  return out
+}
+
+function findUserTile(tiles, id) {
+  var bare = userTileId(id).slice(USER_PREFIX.length)
+  var list = Array.isArray(tiles) ? tiles : []
+  for (var i = 0; i < list.length; i++)
+    if (list[i].id === bare) return list[i]
+  return null
+}
+
+// What a tap on a user tile does: "choose" (open its chooser), "run" (its
+// action) or "" (a broken tile, or one that only shows a status).
+function userTap(tile) {
+  if (!tile || tile.error) return ""
+  if (tile.hasChoices) return "choose"
+  if (tile.hasAction) return "run"
+  return ""
+}
+
+// The chooser marks the row whose value or label is the tile's status, so
+// a status that shows the current choice marks it with no extra command.
+function currentChoice(tile) {
+  if (!tile || !tile.status) return ""
+  for (var i = 0; i < tile.choices.length; i++) {
+    var c = tile.choices[i]
+    if (c.value === tile.status || c.label === tile.status) return c.value
+  }
+  return ""
 }
 
 // The state probe (tile-state.sh) prints key=value lines; later lines win.
@@ -237,6 +337,12 @@ if (typeof module !== "undefined") {
     DEFAULT_LAYOUT: DEFAULT_LAYOUT,
     QUICK_COUNT: QUICK_COUNT,
     PAGE_SIZE: PAGE_SIZE,
+    USER_PREFIX: USER_PREFIX,
+    USER_ID_RE: USER_ID_RE,
+    USER_ICON: USER_ICON,
+    builtIn: builtIn,
+    isUser: isUser,
+    userTileId: userTileId,
     known: known,
     label: label,
     defaults: defaults,
@@ -253,6 +359,10 @@ if (typeof module !== "undefined") {
     isDefault: isDefault,
     quickRow: quickRow,
     pages: pages,
+    parseUserTiles: parseUserTiles,
+    findUserTile: findUserTile,
+    userTap: userTap,
+    currentChoice: currentChoice,
     parseProbe: parseProbe,
     powerStatus: powerStatus,
     dictationStatus: dictationStatus,

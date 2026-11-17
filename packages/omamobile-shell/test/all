@@ -395,6 +395,10 @@ fi
 sh -n plugins/omamobile.quicksettings/tile-state.sh || fail "tile-state.sh parses"
 sh -n plugins/omamobile.quicksettings/tile-action.sh || fail "tile-action.sh parses"
 bash test/tile-scripts.sh || fail "quick-settings tile scripts"
+# The user's own tiles (widgets/TILES.md): the helper that reads their files
+# and runs their commands, never through a shell.
+python3 -B test/user-tiles.py >/dev/null || { python3 -B test/user-tiles.py | grep -v '^ok'; fail "user tiles (user-tiles.py)"; }
+pass "user tiles"
 
 # The Bluetooth pairing helper parses, and its pure parts work without D-Bus.
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-bt-agent || fail "omamobile-bt-agent parses"
@@ -768,6 +772,21 @@ elif [[ $rc != 0 ]]; then
 else
   pass "open-refresh queue settles, coalesces and cancels pending work"
 fi
+
+# The user's own tiles in the sheet (widgets/TILES.md): their backends, a
+# missing file, a tap, the chooser and the helper's argv.
+rc=0
+out=$(python3 -B test/quicksettings-user-tiles.py \
+  plugins/omamobile.quicksettings/QuickSettings.qml 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "user tiles in the sheet # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" >&2
+  fail "user tiles in the sheet (test/quicksettings-user-tiles.py)"
+else
+  pass "user tiles in the sheet: backends, Not installed, taps and the chooser"
+fi
+grep -c 'Keys.onEscapePressed: root.backRequested()' plugins/omamobile.quicksettings/ChoicePanel.qml >/dev/null || fail "ChoicePanel: Escape goes back to quick settings"
 
 # The shade's media card (MPRIS): which player shows, what each control
 # calls, the seek bar, the card's tap. test/media-touch drives it; the art

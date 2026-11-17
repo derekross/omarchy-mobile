@@ -14,7 +14,7 @@ logical at scale 3).
 | Plugin | Kind | What it is |
 | --- | --- | --- |
 | `omamobile.bar` | `bar` | Status bar: clock, connectivity, battery; tap or pull down for quick settings |
-| `omamobile.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: up to 21 tiles the user arranges, brightness and volume, a Settings gear, media controls and the notification history; Wi-Fi picker and Bluetooth panel |
+| `omamobile.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: up to 21 tiles and the user's own (`widgets/TILES.md`), arranged by the user, brightness and volume, a Settings gear, media controls and the notification history; Wi-Fi picker and Bluetooth panel |
 | `omamobile.launcher` | `panel` (keepLoaded) | Home bar: app search, app grid and coding-agent prompt in one input |
 | `omamobile.home` | `panel` (keepLoaded) | Home screens: pages of apps and widgets on the wallpaper, with an edit mode |
 | `omamobile.fingerprint` | `panel` (keepLoaded) | Fingerprint target over the sensor during verification, desktop guard, and the enrollment screen |
@@ -116,6 +116,17 @@ the default back, Done (or Escape) leaves. The layout is per user, in
 `~/.config/omamobile/quicksettings.json` (`{"version": 1, "tiles": [ids]}`,
 rules and default in `TilesModel.js`, tests in `test/tiles-model.js`). Edits
 to the file by hand show on the next refresh.
+
+The user's own tiles sit in the same layout as `user:<id>`: one JSON file
+each in `~/.config/omamobile/tiles/<id>.json` whose commands give the tile's
+status, its on or off state, and a list of choices or an action
+([widgets/TILES.md](../widgets/TILES.md) has the format). `user-tiles.py`
+beside the sheet reads them and runs their commands, with timeouts and never
+through a shell; the sheet reads the list with every probe pass (on open and
+after a tap), offers them under "Add tiles", and opens a page of choices
+(`ChoicePanel.qml`) for a tile that has them. A tile whose file is gone shows
+"Not installed"; a broken file shows why on the tile. Tests:
+`test/user-tiles.py` and `test/tiles-model.js`.
 
 Default order: Wi-Fi, Bluetooth, Do not disturb, Torch (the collapsed row),
 Mobile data, Rotation lock, Airplane mode, Location, Battery saver, Dark

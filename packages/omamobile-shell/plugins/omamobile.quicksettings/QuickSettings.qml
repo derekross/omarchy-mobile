@@ -35,6 +35,10 @@ import "MediaModel.js" as MediaModel
 // The layout is per user, in ~/.config/omamobile/quicksettings.json
 // (TilesModel.js has the format and the default).
 //
+// The user's own tiles (TILES.md), one JSON file each in
+// ~/.config/omamobile/tiles, sit in the layout as "user:<id>" next to the
+// built-in ones; user-tiles.py reads them and runs their commands.
+//
 // On its side (TOUCH-PLAN 2.4: 1040x480) the sheet keeps to the left 58%
 // of the width with the shade beside it, the tile grids take as many
 // columns as fit 180 px each, and a sheet taller than the screen scrolls.
@@ -69,6 +73,7 @@ Item {
     }
     wifiPicker.close()
     bluetoothPanelItem.close()
+    choicePanelItem.close()
     if (editing) finishEditing()
     expanded = payload.expanded === true
     if (payload.page === "edit") startEditing()
@@ -155,6 +160,7 @@ Item {
       volume: audio.available ? Math.round(audio.volume * 100) : null,
       wifiPanel: wifiPicker.opened,
       bluetoothPanel: bluetoothPanelItem.opened,
+      choicePanel: choicePanelItem.opened ? choicePanelItem.tileId : null,
       notifications: notifications.length,
       media: media.player ? { app: MediaModel.appName(media.player), title: String(media.player.trackTitle || ""),
                               playing: MediaModel.playing(media.player) } : null
@@ -213,10 +219,10 @@ Item {
   }
 
   // `shell call omamobile.quicksettings toggleTile <name>`: the same
-  // action as tapping a tile (any TilesModel id, shown or not). Returns the
-  // new state() or "unknown".
+  // action as tapping a tile (any TilesModel id, shown or not, "user:<id>"
+  // for the user's own). Returns the new state() or "unknown".
   function toggleTile(name) {
-    var target = backends[String(name || "")]
+    var target = backendFor(String(name || ""))
     if (!target) return "unknown"
     if (!target.available) return "unavailable"
     target.toggle()
@@ -224,15 +230,18 @@ Item {
   }
 
   // `shell call omamobile.quicksettings tiles ''` lists every tile with its
-  // state; `setTiles 'wifi torch dnd'` saves a layout (space-separated ids,
-  // since qs ipc splits its arguments on commas; unknown ids are dropped),
-  // `resetTiles ''` the default.
+  // state, the user's own tiles after the built-in ones; `setTiles 'wifi
+  // torch dnd'` saves a layout (space-separated ids, since qs ipc splits its
+  // arguments on commas; unknown ids are dropped), `resetTiles ''` the
+  // default.
   function tiles() {
+    var ids = TilesModel.CATALOG.map(function(t) { return t.id })
+    for (var j = 0; j < userTiles.length; j++) ids.push(TilesModel.USER_PREFIX + userTiles[j].id)
     var out = []
-    for (var i = 0; i < TilesModel.CATALOG.length; i++) {
-      var id = TilesModel.CATALOG[i].id
-      var b = backends[id]
-      out.push({ id: id, shown: TilesModel.indexOf(layout, id) >= 0, available: !!b && b.available,
+    for (var i = 0; i < ids.length; i++) {
+      var id = ids[i]
+      var b = backendFor(id)
+      out.push({ id: id, label: tileLabel(id), shown: TilesModel.indexOf(layout, id) >= 0, available: !!b && b.available,
                  enabled: !!b && b.enabled, status: b ? b.status : "" })
     }
     return JSON.stringify(out)
@@ -258,10 +267,11 @@ Item {
     return JSON.stringify(layout)
   }
 
-  // Every tile's backend by TilesModel id. Each has available, enabled,
-  // status, icon and toggle(); details (a chevron and a page) or longPress
-  // (related settings) come with openDetails().
-  readonly property var backends: ({
+  // Every built-in tile's backend by TilesModel id. Each has available,
+  // enabled, status, icon and toggle(); details (a chevron and a page) or
+  // longPress (related settings) come with openDetails(). `backends` adds
+  // the user's own tiles (below).
+  readonly property var builtinBackends: ({
     "wifi": wifi, "bluetooth": bluetooth, "mobile-data": mobileData, "airplane": airplane,
     "hotspot": hotspot, "dnd": dnd, "torch": torch, "rotation-lock": rotationLock,
     "location": location, "nfc": nfc, "battery-saver": batterySaver, "dark-theme": darkTheme,
@@ -279,7 +289,7 @@ Item {
   // columns, six on the side at three).
   readonly property var quickTiles: TilesModel.quickRow(layout, Math.ceil(TilesModel.QUICK_COUNT / tileColumns) * tileColumns)
   readonly property var tilePages: TilesModel.pages(layout)
-  readonly property var spareTiles: TilesModel.available(layout)
+  readonly property var spareTiles: TilesModel.available(layout, userTileIds)
 
   // HOME, not XDG_CONFIG_HOME: the same place omamobile-set-pin keeps its
   // record, and Omarchy's shell finds shell.json the same way.
@@ -393,6 +403,7 @@ Item {
 
   function refreshProbe() {
     if (!probeProc.running) probeProc.running = true
+    refreshUserTiles()
   }
 
   function probedOn(id, key) {
@@ -632,6 +643,151 @@ Item {
     }
   }
 
+  // ---------------------------------------------------------------- user tiles
+
+  // The user's own tiles (TILES.md): one JSON file each in
+  // ~/.config/omamobile/tiles, read and run by user-tiles.py beside this file
+  // (with python3 -I), never from here. Each gets a plain backend object with
+  // the built-in ones' interface; `backends` is rebuilt whenever the list or
+  // a running tile changes, so the tiles' bindings see it. The list is read
+  // with every probe pass: on open, at load and after a tap.
+  property var userTiles: []
+  property bool userTilesLoaded: false
+  property bool userTilesAgain: false
+  // The bare id of the user tile whose command runs now: it shows busy.
+  property string userTileRunning: ""
+  // What edit mode offers: every user tile whose file is valid.
+  readonly property var userTileIds: userTiles.filter(function(t) { return !t.error })
+    .map(function(t) { return TilesModel.USER_PREFIX + t.id })
+
+  readonly property var backends: {
+    var map = {}
+    for (var key in builtinBackends) map[key] = builtinBackends[key]
+    for (var i = 0; i < userTiles.length; i++) map[TilesModel.USER_PREFIX + userTiles[i].id] = userBackend(userTiles[i])
+    return map
+  }
+
+  function userBackend(tile) {
+    var id = tile.id
+    var tap = TilesModel.userTap(tile)
+    return {
+      available: !tile.error,
+      enabled: !tile.error && tile.active,
+      busy: root.userTileRunning === id,
+      icon: tile.icon,
+      label: tile.label,
+      // A broken file says why, on the tile itself.
+      status: tile.error ? tile.error : tile.status,
+      details: tap === "choose",
+      toggle: function() { root.tapUserTile(id) },
+      openDetails: function() { root.openUserChooser(id) }
+    }
+  }
+
+  // A tile's backend, also for a user tile in the layout whose file is gone
+  // (or not listed yet): unavailable, "Not installed", never a missing
+  // object that would break the sheet.
+  function backendFor(id) {
+    var b = backends[id]
+    if (b) return b
+    if (!TilesModel.isUser(id)) return null
+    return {
+      available: false, enabled: false, icon: TilesModel.USER_ICON, label: id.slice(TilesModel.USER_PREFIX.length),
+      status: userTilesLoaded ? "Not installed" : "", toggle: function() {}
+    }
+  }
+
+  // Built-in tiles' names come from TilesModel, user tiles' from their file.
+  function tileLabel(id) {
+    if (!TilesModel.isUser(id)) return TilesModel.label(id)
+    var b = backendFor(id)
+    return b ? b.label : String(id)
+  }
+
+  function refreshUserTiles() {
+    if (userTilesProc.running) { userTilesAgain = true; return }
+    userTilesProc.running = true
+  }
+
+  // Only a list replaces the tiles: a run that failed outright keeps the
+  // last one. An unchanged list leaves `backends` alone.
+  function applyUserTiles(text) {
+    var raw = String(text || "").trim()
+    if (raw.charAt(0) !== "[") return
+    var next = TilesModel.parseUserTiles(raw)
+    if (!userTilesLoaded || JSON.stringify(next) !== JSON.stringify(userTiles)) userTiles = next
+    userTilesLoaded = true
+  }
+
+  Process {
+    id: userTilesProc
+    command: ["python3", "-I", root.scriptPath("user-tiles.py"), "list"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyUserTiles(text)
+    }
+    // A read asked for while this one ran: once more, with what it changed.
+    onExited: {
+      if (!root.userTilesAgain) return
+      root.userTilesAgain = false
+      Qt.callLater(root.refreshUserTiles)
+    }
+  }
+
+  // A tap: a tile with choices opens its page, one with an action runs it.
+  function tapUserTile(id) {
+    var tap = TilesModel.userTap(TilesModel.findUserTile(userTiles, id))
+    if (tap === "choose") openUserChooser(id)
+    else if (tap === "run") runUserTile(id, null)
+  }
+
+  // One command at a time; a tap while one runs is ignored (the tile shows
+  // busy). The value goes to user-tiles.py as its own argument, and only
+  // reaches the choose command if the tile's choices list it.
+  function runUserTile(id, value) {
+    if (userRunProc.running) return
+    userTileRunning = id
+    userRunProc.command = ["python3", "-I", scriptPath("user-tiles.py"), "run", id].concat(value === null ? [] : [String(value)])
+    userRunProc.running = true
+  }
+
+  Process {
+    id: userRunProc
+    onExited: {
+      root.userTileRunning = ""
+      root.refreshUserTiles()
+    }
+  }
+
+  // The chooser is its own window, like the Screen record page: the sheet
+  // goes away and the page stays up on its own. The list read at the open
+  // fills it at once; a fresh read follows.
+  function openUserChooser(id) {
+    var tile = TilesModel.findUserTile(userTiles, id)
+    if (TilesModel.userTap(tile) !== "choose") return
+    choicePanelItem.tileId = tile.id
+    openPage("choose")
+    root.dismiss()
+    refreshUserTiles()
+  }
+
+  // A pick closes the page and leaves the sheet away, so whatever the
+  // command brings up (a password prompt) is in sight.
+  function chooseUserTile(id, value) {
+    choicePanelItem.close()
+    runUserTile(id, value)
+  }
+
+  ChoicePanel {
+    id: choicePanelItem
+    readonly property var tile: TilesModel.findUserTile(root.userTiles, tileId)
+    title: tile ? tile.label : ""
+    choices: tile ? tile.choices : []
+    current: TilesModel.currentChoice(tile)
+    onBackRequested: root.backToSheet(choicePanelItem)
+    onChosen: function(value) { root.chooseUserTile(choicePanelItem.tileId, value) }
+  }
+
   // ---------------------------------------------------------------- clock
 
   // The header follows the bar clock's 12/24-hour choice (Omarchy's clock
@@ -712,9 +868,11 @@ Item {
     if (page !== "wifi") wifiPicker.close()
     if (page !== "bluetooth") bluetoothPanelItem.close()
     if (page !== "record") recordPanelItem.close()
+    if (page !== "choose") choicePanelItem.close()
     if (page === "wifi") wifiPicker.open()
     else if (page === "bluetooth") bluetoothPanelItem.open()
     else if (page === "record") recordPanelItem.open()
+    else if (page === "choose") choicePanelItem.open()
   }
 
   RecordPanel {
@@ -1792,8 +1950,8 @@ Item {
                       x: root.gap / 2
                       width: parent.width - root.gap
                       height: root.editTileHeight
-                      icon: root.backends[model.tileId] ? root.backends[model.tileId].icon : ""
-                      label: TilesModel.label(model.tileId)
+                      icon: root.backendFor(model.tileId) ? root.backendFor(model.tileId).icon : ""
+                      label: root.tileLabel(model.tileId)
                       lifted: editGrid.dragIndex === index
                     }
                   }
@@ -1885,8 +2043,8 @@ Item {
                       x: root.gap / 2
                       width: parent.width - root.gap
                       height: root.editTileHeight
-                      icon: root.backends[modelData] ? root.backends[modelData].icon : ""
-                      label: TilesModel.label(modelData)
+                      icon: root.backendFor(modelData) ? root.backendFor(modelData).icon : ""
+                      label: root.tileLabel(modelData)
                       adding: true
                       opacity: spareTouch.pressed ? 0.7 : 1
                     }
@@ -2106,10 +2264,10 @@ Item {
     property var host: null
     property string tileId: ""
     objectName: "tile-" + tileId
-    readonly property var backend: host && host.backends[tileId] ? host.backends[tileId] : null
+    readonly property var backend: host ? host.backendFor(tileId) : null
 
     icon: backend ? backend.icon : ""
-    label: TilesModel.label(tileId)
+    label: host ? host.tileLabel(tileId) : TilesModel.label(tileId)
     status: backend ? backend.status : ""
     active: !!backend && backend.enabled
     available: !!backend && backend.available

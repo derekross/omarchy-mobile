@@ -16,6 +16,8 @@ done < <(find plugins profile hypr branding -type f -print0)
 install -Dm644 widgets/WIDGETS.md "$destination/usr/share/omamobile/shell/WIDGETS.md"
 # The OWL language guide (Simon Schubert, MIT, credited inside) for OWL widgets.
 install -Dm644 widgets/OWL.md "$destination/usr/share/omamobile/shell/OWL.md"
+# Your own quick-settings tiles: their file format.
+install -Dm644 widgets/TILES.md "$destination/usr/share/omamobile/shell/TILES.md"
 while IFS= read -r -d '' file; do
   install -Dm644 "$file" "$destination/usr/share/omamobile/shell/widget-${file#widgets/}"
 done < <(find widgets/template widgets/examples -type f -print0)

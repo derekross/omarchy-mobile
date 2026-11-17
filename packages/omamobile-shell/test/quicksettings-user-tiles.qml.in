@@ -1,0 +1,195 @@
+// SPDX-License-Identifier: MIT
+import QtQuick
+import QtTest
+import "TilesModel.js" as TilesModel
+
+TestCase {
+    id: root
+    name: "UserTiles"
+    when: windowShown
+    visible: true
+    width: 100
+    height: 100
+
+    // Quickshell's Process and StdioCollector: the test plays the process.
+    component StdioCollector: QtObject {
+        property bool waitForEnd: false
+        property string text: ""
+        signal streamFinished()
+    }
+    component Process: QtObject {
+        property var command: []
+        property bool running: false
+        property QtObject stdout: null
+        signal exited(int exitCode, int exitStatus)
+    }
+    // The choice page: what the sheet sets on it and asks of it.
+    component ChoicePanel: QtObject {
+        property bool opened: false
+        property string tileId: ""
+        property string title: ""
+        property var choices: []
+        property string current: ""
+        signal backRequested()
+        signal chosen(string value)
+        function open() { opened = true }
+        function close() { opened = false }
+    }
+
+    // The rest of the sheet the section calls.
+    property var pages: []
+    property int dismissed: 0
+    readonly property var builtinBackends: ({ "wifi": wifiStub })
+    QtObject {
+        id: wifiStub
+        readonly property bool available: true
+        readonly property bool enabled: true
+        readonly property string icon: "w"
+        readonly property string status: "Home"
+        function toggle() {}
+    }
+    function scriptPath(name) { return "/plugin/" + name }
+    function openPage(page) {
+        pages = pages.concat([page])
+        if (page === "choose") choicePanelItem.open()
+    }
+    function dismiss() { dismissed++ }
+    function backToSheet(page) { page.close() }
+
+    SECTION
+
+    readonly property string listText: JSON.stringify([
+        { id: "solar", label: "Solar time", icon: "s", status: "Bashley Safe House", active: false, hasChoices: true, hasAction: false, error: "",
+          choices: [{ value: "Tempus_Solaris_Rustica", label: "Rustica" }, { value: "Tempus_Solaris_Bashley_Safe_House", label: "Bashley Safe House" }] },
+        { id: "lamp", label: "Lamp", icon: "l", status: "On", active: true, choices: [], hasChoices: false, hasAction: true, error: "" },
+        { id: "broken", label: "broken", icon: "b", status: "", active: false, choices: [], hasChoices: false, hasAction: false, error: "unknown field colour" }
+    ])
+
+    // The list process finishing with `text`.
+    function finishList(text) {
+        verify(userTilesProc.running, "the list was asked for")
+        userTilesProc.stdout.text = text
+        userTilesProc.stdout.streamFinished()
+        userTilesProc.running = false
+        userTilesProc.exited(0, 0)
+    }
+
+    function finishRun(code) {
+        verify(userRunProc.running)
+        userRunProc.running = false
+        userRunProc.exited(code, 0)
+    }
+
+    function init() {
+        userTiles = []
+        userTilesLoaded = false
+        userTilesAgain = false
+        userTileRunning = ""
+        userTilesProc.running = false
+        userRunProc.running = false
+        choicePanelItem.close()
+        choicePanelItem.tileId = ""
+        pages = []
+        dismissed = 0
+    }
+
+    function test_list() {
+        compare(userTilesProc.command.join(" "), "python3 -I /plugin/user-tiles.py list")
+        refreshUserTiles()
+        // Before the list: a layout's user tile is there, unavailable, saying nothing yet.
+        compare(backendFor("user:solar").available, false)
+        compare(backendFor("user:solar").status, "")
+        compare(backendFor("wifi").status, "Home")
+        compare(backendFor("bogus"), null)
+        finishList(listText)
+        compare(userTilesLoaded, true)
+        compare(Object.keys(backends).sort().join(","), "user:broken,user:lamp,user:solar,wifi")
+        compare(userTileIds.join(","), "user:solar,user:lamp", "Add tiles offers the valid ones")
+        var solar = backendFor("user:solar")
+        compare(solar.available, true)
+        compare(solar.enabled, false)
+        compare(solar.status, "Bashley Safe House")
+        compare(solar.details, true)
+        compare(tileLabel("user:solar"), "Solar time")
+        compare(tileLabel("wifi"), "Wi-Fi")
+        compare(backendFor("user:lamp").enabled, true)
+        compare(backendFor("user:lamp").details, false)
+        compare(backendFor("user:broken").available, false)
+        compare(backendFor("user:broken").status, "unknown field colour")
+        // A file that went away.
+        compare(backendFor("user:gone").available, false)
+        compare(backendFor("user:gone").status, "Not installed")
+        compare(tileLabel("user:gone"), "gone")
+        backendFor("user:gone").toggle()
+        compare(userRunProc.running, false)
+    }
+
+    function test_failedListKeepsTheLastOne() {
+        refreshUserTiles()
+        finishList(listText)
+        var before = backends
+        refreshUserTiles()
+        finishList("")
+        compare(Object.keys(backends).length, 4)
+        refreshUserTiles()
+        finishList(listText)
+        verify(backends === before, "an unchanged list leaves the backends alone")
+    }
+
+    function test_readAgainWhenAskedWhileRunning() {
+        refreshUserTiles()
+        refreshUserTiles()
+        compare(userTilesAgain, true)
+        finishList(listText)
+        tryCompare(userTilesProc, "running", true, 500)
+        compare(userTilesAgain, false)
+    }
+
+    function test_actionTap() {
+        refreshUserTiles()
+        finishList(listText)
+        backends["user:lamp"].toggle()
+        compare(userRunProc.command.join("|"), "python3|-I|/plugin/user-tiles.py|run|lamp")
+        compare(userTileRunning, "lamp")
+        compare(backends["user:lamp"].busy, true)
+        // A second tap while it runs does nothing.
+        var command = userRunProc.command
+        backends["user:lamp"].toggle()
+        verify(userRunProc.command === command)
+        finishRun(0)
+        compare(userTileRunning, "")
+        compare(backends["user:lamp"].busy, false)
+        compare(userTilesProc.running, true, "re-read after the run")
+        // A broken tile and a status-only tile run nothing.
+        finishList(listText)
+        backends["user:broken"].toggle()
+        compare(userRunProc.running, false)
+    }
+
+    function test_chooser() {
+        refreshUserTiles()
+        finishList(listText)
+        backends["user:solar"].toggle()
+        compare(pages.join(","), "choose")
+        compare(dismissed, 1)
+        compare(choicePanelItem.opened, true)
+        compare(choicePanelItem.tileId, "solar")
+        compare(choicePanelItem.title, "Solar time")
+        compare(choicePanelItem.choices.length, 2)
+        compare(choicePanelItem.current, "Tempus_Solaris_Bashley_Safe_House")
+        compare(userTilesProc.running, true, "a fresh read for the page")
+        finishList(listText)
+        var odd = "a b; $(touch x)"
+        choicePanelItem.chosen(odd)
+        compare(choicePanelItem.opened, false)
+        compare(userRunProc.command.length, 6)
+        compare(userRunProc.command[4], "solar")
+        compare(userRunProc.command[5], odd, "the value is its own argument")
+        finishRun(0)
+        // The chevron opens the same page.
+        backends["user:solar"].openDetails()
+        compare(choicePanelItem.opened, true)
+        choicePanelItem.backRequested()
+        compare(choicePanelItem.opened, false)
+    }
+}
