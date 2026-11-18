@@ -1950,8 +1950,9 @@ uncleanly (a forced reboot and a flat battery), both after ONLINE.
 **The published branch as it is**
 (`7.3.0-rc6-omamobile-push1-g26867fc4e826`: `omamobile` at `26867fc4e`,
 which has #224, #232, #247, #258 and #234; defconfig plus main's
-`omamobile.config`, nothing added; `omamobile-modem-sit` 0.3.44, #837's
-branch). Before it, `zumapro_gpio_peric0` read `CLK_IS_CRITICAL`.
+`omamobile.config`, nothing added; `omamobile-modem-sit` built from #837's
+branch at ec597afa, which then said 0.3.44, a number #881 takes). Before it,
+`zumapro_gpio_peric0` read `CLK_IS_CRITICAL`.
 
 - 10 requests of 120 s: 9 entered and woke, 1 refused (-16). The nine woke
   on `cp2ap_wakeup` after 3 to 25 s.

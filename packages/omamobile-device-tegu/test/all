@@ -102,6 +102,7 @@ for f in usr/bin/reboot-to usr/bin/tegu-tcpc-switch \
          usr/share/uwsm/env.d/omamobile-tegu-graphics \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-tegu/version \
+         usr/share/omamobile/auto-sleep-default \
          usr/share/licenses/omamobile-device-tegu/LICENSE \
          etc/pacman.d/omamobile-mirrorlist etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
