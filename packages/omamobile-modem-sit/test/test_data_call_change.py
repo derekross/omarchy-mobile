@@ -224,12 +224,14 @@ class Reconnect(unittest.TestCase):
                 self.assertEqual(release.call_count, n)
                 self.assertIsNotNone(self.service.reconnect_at)      # a failed try, to come back
                 self.service.reconnect_at = 0
+            app_service.subprocess.run.reset_mock()
             self.service.reconnect()                                 # one more IPv6-only grant: kept
             self.assertEqual(release.call_count, limit)
             self.assertIsNone(self.service.reconnect_at)
             self.assertEqual(self.service.reconnect_tries, 0)
             calls = [c.args[0] for c in app_service.subprocess.run.call_args_list]
-            self.assertEqual(calls[-1], ['systemctl', 'start', 'omamobile-sit-data.service'])
+            # kept, but the route service (IPv4 only) isn't started on it
+            self.assertNotIn(['systemctl', 'start', 'omamobile-sit-data.service'], calls)
             for _ in range(5):                                       # later drops on the same network
                 self.drop()
                 self.service.reconnect()
@@ -237,6 +239,15 @@ class Reconnect(unittest.TestCase):
             self.assertEqual(release.call_count, limit)
         said = [' '.join(str(a) for a in c.args) for c in print.call_args_list]
         self.assertEqual(sum('keeping it as it is' in line for line in said), 1)
+        self.assertTrue(any('not started on an IPv6-only bearer' in line for line in said))
+        # IPv4 again: mobile data was still wanted, and starts on that bearer
+        with patch.object(data_call, 'activate', side_effect=self.granting(3)), \
+                patch.object(data_call, 'deactivate'):
+            self.drop()
+            app_service.subprocess.run.reset_mock()
+            self.service.reconnect()
+        calls = [c.args[0] for c in app_service.subprocess.run.call_args_list]
+        self.assertEqual(calls[-1], ['systemctl', 'start', 'omamobile-sit-data.service'])
 
     def test_ipv4_again_starts_the_count_afresh(self):
         limit = app_service.IPV6_ONLY_RELEASES
@@ -252,6 +263,22 @@ class Reconnect(unittest.TestCase):
             self.drop()
             self.service.reconnect()
         release.assert_called_once_with(self.client, 3)
+
+    def test_a_release_owed_ends_when_the_modem_drops_the_bearer(self):
+        """A release that failed, then the modem dropped the bearer itself:
+        nothing is owed any more, and a kept bearer listed later is left alone."""
+        with patch.object(data_call, 'activate', side_effect=self.granting(2)), \
+                patch.object(data_call, 'deactivate', side_effect=RuntimeError('no answer')):
+            self.drop()
+            self.service.reconnect()
+        self.assertTrue(self.service.ipv6_release_owed)
+        self.listed = listing(item(2))                               # the internet bearer (CID 3) is gone
+        self.service.reconnect_at = 0
+        with patch.object(data_call, 'activate', side_effect=self.granting(3)), \
+                patch.object(data_call, 'deactivate') as release:
+            self.service.reconnect()
+        release.assert_not_called()
+        self.assertFalse(self.service.ipv6_release_owed)
 
     def test_a_release_that_fails_is_done_before_the_next_setup(self):
         with patch.object(data_call, 'activate', side_effect=self.granting(2)), \

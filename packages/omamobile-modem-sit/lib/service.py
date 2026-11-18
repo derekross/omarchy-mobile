@@ -647,6 +647,9 @@ class Service:
             else:
                 state_path.unlink(missing_ok=True)
                 response_path.unlink(missing_ok=True)
+                # Gone from the modem's list, it holds nothing to release: a
+                # release owed from a try that failed is owed no more.
+                self.ipv6_release_owed = False
             # The network can end the IMS bearer together with the internet
             # one (2026-11-18 02:25, an empty list): its record then names a
             # CID the modem no longer lists, and activate() refused every try
@@ -657,6 +660,7 @@ class Service:
                 print('IMS bearer record cleared: the modem no longer lists CID', data_call.IMS_CID, flush=True)
                 ims_state.unlink()
                 ims_response.unlink(missing_ok=True)
+            kept_ipv6_only = False
             self.reconnecting = True
             try:
                 data_call.activate(self.client, self.internet_setup['apn'],
@@ -680,6 +684,7 @@ class Service:
                     print('Internet bearer came back IPv6 only', self.ipv6_only_grants,
                           'times in a row; keeping it as it is, and the next ones, until a setup brings IPv4',
                           flush=True)
+                kept_ipv6_only = True
             else:
                 self.ipv6_only_grants = 0
         except (ModemError, TimeoutError, RuntimeError, ValueError, OSError) as error:
@@ -694,7 +699,12 @@ class Service:
         self.reconnect_at = None
         self.reconnect_tries = 0
         print('Internet bearer set up again', flush=True)
-        if self.reconnect_data:
+        if self.reconnect_data and kept_ipv6_only:
+            # The route service needs IPv4: started on this bearer it fails,
+            # and systemd starts it again every 10 s for the rest of the boot.
+            # Mobile data stays wanted, so the next bearer with IPv4 starts it.
+            print('Mobile data not started on an IPv6-only bearer: the route needs IPv4', flush=True)
+        elif self.reconnect_data:
             subprocess.run(['systemctl', 'start', 'omamobile-sit-data.service'], check=False)
         self.publish()
 
