@@ -596,8 +596,8 @@ class Service:
             if len(ps) < 4 or ps[0] not in (1, 5):
                 self.reconnect_at = time.monotonic() + 30
                 return
-            listed = next((i for i in data_call.entries(self.client.request(0x0602, timeout=10))
-                           if i[2] == cid), None)
+            items = data_call.entries(self.client.request(0x0602, timeout=10))
+            listed = next((i for i in items if i[2] == cid), None)
             if listed is not None and response_path.exists():
                 print('Internet bearer listed again by the modem; no setup needed', flush=True)
                 self.reconnect_at = None
@@ -614,6 +614,16 @@ class Service:
             else:
                 state_path.unlink(missing_ok=True)
                 response_path.unlink(missing_ok=True)
+            # The network can end the IMS bearer together with the internet
+            # one (2026-11-18 02:25, an empty list): its record then names a
+            # CID the modem no longer lists, and activate() refused every try
+            # ("unresolved bearer ownership") until a reboot. Gone from the
+            # list, it holds nothing to release.
+            ims_state, ims_response = bearer_paths(data_call.IMS_CID)
+            if ims_state.exists() and data_call.IMS_CID not in {i[2] for i in items}:
+                print('IMS bearer record cleared: the modem no longer lists CID', data_call.IMS_CID, flush=True)
+                ims_state.unlink()
+                ims_response.unlink(missing_ok=True)
             self.reconnecting = True
             try:
                 data_call.activate(self.client, self.internet_setup['apn'],
