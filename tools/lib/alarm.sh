@@ -18,6 +18,11 @@
 # Docker images: omamobile-alarm-base:<tarball sha256> (the plain tarball)
 # and omamobile-alarm-build:<hash> (keyrings, repositories, base-devel).
 
+# Plain http on purpose: os.archlinuxarm.org's TLS certificate does not
+# match the hostname (it is issued for archlinuxarm.org), so https fails
+# curl's verification. The download is not trusted on transport anyway:
+# alarm_fetch checks the tarball against its MD5 file and a detached
+# signature whose VALIDSIG must name the pinned key below.
 ALARM_URL=${ALARM_URL:-http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz}
 # Arch Linux ARM Build System <builder@archlinuxarm.org>
 ALARM_KEY=68B3537F39A313B3E574D06777193F152BDBE6A6

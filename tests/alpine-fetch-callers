@@ -12,9 +12,9 @@
 # with tar's own message; the stand-in packages are in Alpine's .apk
 # layout, and unpack with none of tar's warnings in the output. A stand-in
 # minirootfs (sha256sum -c accepts it, and only it) holds the files the
-# initramfs checks for. Then bin/omamobile initramfs's own download of the
-# minirootfs, from a stand-in curl: it lands under the cached name only once
-# it passes the checksum.
+# initramfs checks for. Then the minirootfs download of bin/omamobile
+# initramfs and of tools/dodge-chain pack, from a stand-in curl: it lands
+# under the cached name only once it passes the checksum.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
@@ -247,23 +247,25 @@ grep -c -F "checksum mismatch for the cached $dl/$mrfs: remove it to download it
   fail "cached file that fails its checksum: no message naming the file to remove"
 pass "bin/omamobile initramfs stops at a cached minirootfs that fails its checksum, and names the file to remove"
 
-# tools/dodge-chain pack, with stand-in stage 2 inputs
-d=$t/dodge
-dodge() {  # [FETCH_FAIL_ON]: dodge-chain pack; the status in $status
+# tools/dodge-chain pack, with stand-in stage 2 inputs, on one minirootfs
+# cache that every run shares
+d=$t/dodge ddl=$t/dodge-dl dmrfs=alpine-minirootfs-$(sed -n 's/^ALPINE_VER=//p' tools/dodge-chain)-aarch64.tar.gz
+dodge() {  # [FETCH_FAIL_ON [CURL_MODE]]: dodge-chain pack on what $ddl holds; the status in $status
   rm -rf "$d"
-  mkdir -p "$d/chainload" "$d/kernel/scripts" "$d/stage2/arch/arm64/boot" "$d/dl" "$d/src"
+  mkdir -p "$d/chainload" "$d/kernel/scripts" "$d/stage2/arch/arm64/boot" "$d/src" "$ddl"
   printf '#!/bin/sh\n' > "$d/chainload/init"
   : > "$d/chainload/stage2-dtb.py"
   printf '#!/bin/sh\n' > "$d/kernel/scripts/config"; chmod 755 "$d/kernel/scripts/config"
   echo stage2 > "$d/stage2/arch/arm64/boot/Image"
   : > "$d/stage2/.config"; : > "$d/stage2.dtb"; : > "$d/initrd"; : > "$d/live.dtb"
-  cp "$t/minirootfs.tar.gz" "$d/dl/alpine-minirootfs-$(sed -n 's/^ALPINE_VER=//p' tools/dodge-chain)-aarch64.tar.gz"
-  : > "$t/fetched"
+  : > "$t/fetched"; : > "$t/curls"
   status=0
-  FETCH_FAIL_ON=${1:-} CHAINLOAD_DIR=$d/chainload KERNEL_DIR=$d/kernel STAGE2_OUT=$d/stage2 \
-    STAGE2_DTB_IN=$d/stage2.dtb STAGE2_INITRD=$d/initrd LIVE_DTB=$d/live.dtb ALPINE_DL=$d/dl SRC_DIR=$d/src \
+  FETCH_FAIL_ON=${1:-} CURL_MODE=${2:-} CHAINLOAD_DIR=$d/chainload KERNEL_DIR=$d/kernel STAGE2_OUT=$d/stage2 \
+    STAGE2_DTB_IN=$d/stage2.dtb STAGE2_INITRD=$d/initrd LIVE_DTB=$d/live.dtb ALPINE_DL=$ddl SRC_DIR=$d/src \
     tools/dodge-chain pack > "$t/log" 2>&1 || status=$?
 }
+mkdir -p "$ddl"
+cp "$t/minirootfs.tar.gz" "$ddl/$dmrfs"
 dodge
 [[ -e $d/stage2/chain/chain/x/marker-busybox-static ]] || fail "dodge-chain: a successful fetch is unpacked"
 grep -c -F "Alpine packages incomplete" "$t/log" >/dev/null || fail "dodge-chain: the stand-in pack stops at its package check"
@@ -274,3 +276,45 @@ stopped "dodge-chain" busybox-static
 [[ ! -e $d/stage2/chain/chain/x/marker-busybox-static ]] || fail "dodge-chain: unpacked a list from a failed fetch"
 grep -c -F "Alpine packages incomplete" "$t/log" >/dev/null && fail "dodge-chain: went on to check the packages"
 pass "tools/dodge-chain pack stops when busybox-static fails, before unpacking any"
+
+# tools/dodge-chain pack's own download of the minirootfs, from the stand-in
+# curl, each run on what the runs before it left in the cache
+rm -rf "$ddl"
+dodge '' cut
+[[ $status != 0 ]] || fail "dodge-chain cut-off download: the pack went on"
+[[ -s $t/curls ]] || fail "dodge-chain cut-off download: never ran curl"
+[[ ! -e $ddl/$dmrfs ]] || fail "dodge-chain cut-off download: left what arrived under the cached name"
+pass "tools/dodge-chain pack keeps a cut-off minirootfs download out of the cache"
+
+dodge '' whole
+[[ -s $t/curls ]] || fail "dodge-chain after a cut-off download: the next run didn't download again"
+[[ $(sha256sum < "$ddl/$dmrfs") == "$MINIROOTFS_SUM" ]] || fail "dodge-chain after a cut-off download: the next run didn't cache the minirootfs"
+[[ -e $d/stage2/chain/chain/x/marker-busybox-static ]] || fail "dodge-chain after a cut-off download: the next run didn't go on to its packages"
+pass "tools/dodge-chain pack downloads the minirootfs again after a cut-off download, and goes on"
+
+dodge '' whole
+[[ ! -s $t/curls ]] || fail "dodge-chain cached minirootfs: downloaded it again"
+[[ -e $d/stage2/chain/chain/x/marker-busybox-static ]] || fail "dodge-chain cached minirootfs: didn't go on to its packages"
+pass "tools/dodge-chain pack takes a cached minirootfs that passes its checksum, with no download"
+
+rm -rf "$ddl"
+dodge '' short
+[[ $status != 0 ]] || fail "dodge-chain download that fails its checksum: the pack went on"
+[[ ! -e $ddl/$dmrfs ]] || fail "dodge-chain download that fails its checksum: kept under the cached name"
+[[ -z $(ls -A "$ddl") ]] || fail "dodge-chain download that fails its checksum: left $(ls -A "$ddl")"
+grep -c -F "checksum mismatch for the downloaded $dmrfs (removed it)" "$t/log" >/dev/null ||
+  fail "dodge-chain download that fails its checksum: no message that it was removed"
+pass "tools/dodge-chain pack removes a minirootfs download that fails its checksum, and says so"
+
+# A file under the cached name that fails the checksum, such as a download
+# cut off by an older tools/dodge-chain: stop, and name the file to remove
+rm -rf "$ddl"
+mkdir -p "$ddl"
+head -c 100 "$MINIROOTFS" > "$ddl/$dmrfs"
+dodge '' whole
+[[ $status != 0 ]] || fail "dodge-chain cached file that fails its checksum: the pack went on"
+[[ ! -s $t/curls ]] || fail "dodge-chain cached file that fails its checksum: downloaded over it"
+[[ -e $ddl/$dmrfs ]] || fail "dodge-chain cached file that fails its checksum: removed it"
+grep -c -F "checksum mismatch for the cached $ddl/$dmrfs: remove it to download it again" "$t/log" >/dev/null ||
+  fail "dodge-chain cached file that fails its checksum: no message naming the file to remove"
+pass "tools/dodge-chain pack stops at a cached minirootfs that fails its checksum, and names the file to remove"

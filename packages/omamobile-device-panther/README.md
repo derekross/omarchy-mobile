@@ -1,6 +1,6 @@
 # omamobile-device-panther
 
-Omarchy Mobile's first userspace package for the Google Pixel 7 (codename panther, Tensor G2 / gs201). It hides the Android partitions from desktop tools, holds the USB address and brings USB back after a replug, brings up Wi-Fi with the Pixel 7 Pro's guarded start, and gives pacman the same `[omamobile]` repository as the Pixel 7 Pro. It loads the camera drivers after the boot has settled. It does not drive the modem or the charger, and it does not mark a boot slot successful.
+Omarchy Mobile's first userspace package for the Google Pixel 7 (codename panther, Tensor G2 / gs201). It hides the Android partitions from desktop tools, holds the USB address and brings USB back after a replug, brings up Wi-Fi with the Pixel 7 Pro's guarded start, and gives pacman the same `[omamobile]` repository as the Pixel 7 Pro. It loads the camera drivers after the boot has settled. It sets the charger's policy, does not drive the modem, and does not mark a boot slot successful.
 
 | Path | Installs to | What it does |
 | --- | --- | --- |
@@ -18,6 +18,8 @@ Omarchy Mobile's first userspace package for the Google Pixel 7 (codename panthe
 | `bin/omamobile-wlan-mac`, `vendor/udev/rules.d/80-omamobile-wlan-mac.rules` | `/usr/bin`, `/usr/lib/udev/rules.d` | Gives the Wi-Fi link the MAC address the bootloader writes into the device tree, before NetworkManager takes it. Same as the Pixel 7 Pro |
 | `vendor/systemd/logind.conf.d/10-omamobile-power-key.conf` | `/usr/lib/systemd/logind.conf.d` | A short power press does not power the phone off. Same drop-in as the Pixel 7 Pro. The long press stays the PMIC reset |
 | `vendor/modprobe.d/omamobile-display.conf` | `/usr/lib/modprobe.d` | Lets `gs_dsim_cmd` send DCS packets to the panel (`allow_tx=1`), so the panel driver can set the brightness and turn the display off and on. The driver ships with sending off; brightness passed DISPLAY-PLAN gate D2 on the Pixel 7 |
+| `vendor/modprobe.d/omamobile-max77759.conf` | `/usr/lib/modprobe.d` | Keeps `tcpci_maxim` (it would take over the USB-C port used for SSH), `gpio_max77759` and `nvmem_max77759` from loading; the gauge, the MFD core and the charger load at boot. Without the `pmic@66` node (linux-omarchy-mobile#259) nothing of the PMIC binds |
+| `vendor/modprobe.d/omamobile-charger.conf` | `/usr/lib/modprobe.d` | The charger's policy, as on the Pixel 7 Pro: a 500 mA input without a Type-C source (`default_ilim_ua`; without it the upstream driver turns charging off at probe), and stock's temperature bands from the gauge (`temp_guard`); the gauge loads first. With the `pmic@66` node it charges to 4.45 V instead of the bootloader's 4.35 V. device/panther/BATTERY-PLAN.md gates B3.3, B3g and D1 |
 | `vendor/modprobe.d/omamobile-fingerprint.conf` | `/usr/lib/modprobe.d` | Keeps `sg` and `goodix_fp` from autoloading: omamobile-fp loads them (the RPMB LUN, the sensor). Trusty is left to the DT's `/trusty` node, since this package has no sound start that loads it as the 7 Pro's does (device/panther/FINGERPRINT-PLAN.md) |
 | `vendor/systemd/sleep.conf.d/10-omamobile.conf` | `/usr/lib/systemd/sleep.conf.d` | Suspend means suspend-to-idle: the kernel offers `deep`, but Linux has no gs201 sleep sequence, and the phone doesn't wake from it. No hibernation. Same drop-in as the Pixel 7 Pro |
 | `bin/omamobile-sleep`, `vendor/systemd/system-sleep/omamobile` | `/usr/bin`, `/usr/lib/systemd/system-sleep` (a link to the script) | Unloads Wi-Fi before every suspend and reloads it through the guarded service after, unless `/etc/omamobile/wifi-keep-across-sleep` exists; after a wake that fails in the Wi-Fi device it goes back to unloading for the rest of the boot. Also logs the wake reason and restarts fprintd after a wake. Wi-Fi staying loaded across suspend hasn't run on a Pixel 7. Same script as the Pixel 7 Pro |
@@ -29,4 +31,4 @@ Omarchy Mobile's first userspace package for the Google Pixel 7 (codename panthe
 
 `./build [DIR]` compiles `reboot-to` from this directory, `./install DESTDIR [DIR]` stages the files, and `test/all` checks the copies when it is run from the repository.
 
-Not in this package: the boot-success marker, the modem, the charger, and the slot-B image hook. Those stay out until each one has its own runbook.
+Not in this package: the boot-success marker, the modem, and the slot-B image hook. Those stay out until each one has its own runbook.
