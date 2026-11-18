@@ -8,6 +8,20 @@
 # handleIdleChanged() ignores the off/on flip, so the re-arm neither
 # cancels a running idle cycle nor wakes a locked display.
 #
+# The bug is in Quickshell, not here (0.3.2.r7.g2b4501a, src/wayland/
+# idle_notify/monitor.cpp): on a timeout change updateNotification() deletes
+# the old notification, creates the new one, and only then assigns the
+# pointer isIdle is bound to. The new object lands at the old address, so
+# the pointer "did not change" and isIdle stays bound to the destroyed one.
+# Seen on the 8 Pro with Omarchy 4.5.0-3 and
+# QT_LOGGING_RULES=quickshell.wayland.idle_notify.debug=true: Destroyed and
+# Created at the same 0xffff5a365070, "has been marked idle", while
+# `omarchy-shell idle status` kept "idle":false and nothing locked in 67 s.
+# With this patch the new one came at another address and the phone locked
+# 30 s after the change. Turning enabled off and on sends the pointer
+# through null. Drop this once a Quickshell that clears the pointer before
+# creating the new notification is on the phones.
+#
 # Omarchy 4.5: same hunk, one line of offset.
 
 --- i/shell/plugins/services/idle/Service.qml
