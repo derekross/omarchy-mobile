@@ -71,7 +71,8 @@ used. Results are in the private R/ capture.
 - **A/B names exist for `boot`, `init_boot`, `vendor_boot`,
   `vendor_kernel_boot`, and `dtbo`; `super` and `userdata` are also present**
   [V] (R/ `partitions-by-name.txt:11-12,18-19,30-31,51,57,64-67`). Partition
-  sizes and fastboot slot metadata remain unknown.
+  sizes are only partially captured; the queried sizes and slot flags are
+  recorded above.
 
 ## Interpretation and open questions
 
