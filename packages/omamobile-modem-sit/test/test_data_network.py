@@ -51,6 +51,30 @@ class RouteTests(unittest.TestCase):
         self.assertFalse(hold.returns(others=False, now=109.9))
         self.assertTrue(hold.returns(others=False, now=110))
 
+    def test_with_nothing_else_before_the_sleep_the_route_returns_at_once(self):
+        hold = SleepHold(grace=10)
+        self.assertTrue(hold.announced(routed=True, alone=True))
+        self.assertFalse(hold.returns(others=False, now=50))     # not while asleep
+        hold.over(now=100)
+        self.assertTrue(hold.returns(others=False, now=100))
+        self.assertFalse(hold.active)
+
+    def test_wifi_before_the_sleep_still_waits_for_it(self):
+        hold = SleepHold(grace=10)
+        hold.announced(routed=True, alone=False)
+        hold.over(now=100)
+        self.assertFalse(hold.returns(others=False, now=100))
+        self.assertTrue(hold.returns(others=False, now=110))
+
+    def test_a_sleep_during_the_wait_keeps_what_was_known_before(self):
+        hold = SleepHold(grace=10)
+        hold.announced(routed=True, alone=False)
+        hold.over(now=100)
+        hold.announced(routed=False, alone=True)   # the route is away for the wait, so alone reads True
+        hold.over(now=200)
+        self.assertFalse(hold.returns(others=False, now=205))
+        self.assertTrue(hold.returns(others=False, now=210))
+
     def test_a_route_that_was_not_there_is_not_brought_back(self):
         hold = SleepHold(grace=10)
         self.assertFalse(hold.announced(routed=False))   # removed earlier: silent bearer, roaming

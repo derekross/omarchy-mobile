@@ -170,6 +170,34 @@ class Reconnect(unittest.TestCase):
         calls = [c.args[0] for c in app_service.subprocess.run.call_args_list]
         self.assertNotIn(['systemctl', 'start', 'omamobile-sit-data.service'], calls)
 
+    def test_ipv6_only_is_released_and_tried_again(self):
+        app_service.subprocess.run.return_value.returncode = 0     # mobile data on
+        self.service.event(self.indication(listing(item(2))))
+        self.service.reconnect_at = 0
+
+        def granted(pdp):
+            def setup(*a, **k):
+                record = bytearray(item(3))
+                record[4] = pdp
+                self.response.write_bytes(bytes(record))
+            return setup
+        with patch.object(data_call, 'activate', side_effect=granted(2)), \
+                patch.object(data_call, 'deactivate') as release:
+            self.service.reconnect()
+        release.assert_called_once_with(self.client, 3)
+        self.assertEqual(self.service.reconnect_tries, 1)
+        self.assertIsNotNone(self.service.reconnect_at)
+        calls = [c.args[0] for c in app_service.subprocess.run.call_args_list]
+        self.assertNotIn(['systemctl', 'start', 'omamobile-sit-data.service'], calls)
+        self.service.reconnect_at = 0
+        with patch.object(data_call, 'activate', side_effect=granted(3)), \
+                patch.object(data_call, 'deactivate') as release:
+            self.service.reconnect()
+        release.assert_not_called()
+        self.assertIsNone(self.service.reconnect_at)
+        calls = [c.args[0] for c in app_service.subprocess.run.call_args_list]
+        self.assertEqual(calls[-1], ['systemctl', 'start', 'omamobile-sit-data.service'])
+
     def test_held_without_its_setup_is_released_first(self):
         self.listed = listing(item(2), item(3))
         self.response.unlink()                       # a setup that timed out kept only the record

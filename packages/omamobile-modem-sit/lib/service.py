@@ -573,7 +573,9 @@ class Service:
         is stopped (it holds rmnet's configuration), a bearer the modem still
         lists without a setup record (a setup that timed out) is released
         through its ownership record, a record the modem no longer lists is
-        cleared, and the bearer is set up with start-up's APN and IP type.
+        cleared, and the bearer is set up with start-up's APN and IP type; one
+        that comes back IPv6 only when IPv4 was asked for is released and
+        counts as a failed try.
         The route service is started again only if it was running when the
         bearer dropped (mobile data on). A failed try comes back after 15 s,
         doubling to 5 minutes, and every 30 minutes after the twelfth. A try
@@ -630,6 +632,15 @@ class Service:
                                    ip_type=self.internet_setup['ip_type'], on_event=self.event)
             finally:
                 self.reconnecting = False
+            # The network may grant less than asked: on the 9a (2026-11-15) a
+            # reconnect asked for IPv4v6 came back IPv6 only, which the route
+            # service can't use (it needs IPv4), so mobile data stayed down.
+            # Released and tried again, as a failed setup.
+            pdp = response_path.read_bytes()[4:5] if response_path.exists() else b''
+            if self.internet_setup['ip_type'] != 'ipv6' and pdp == b'\x02':
+                print('Internet bearer came back IPv6 only; releasing it to try again', flush=True)
+                data_call.deactivate(self.client, cid)
+                raise ValueError('the internet bearer came back without IPv4')
         except (ModemError, TimeoutError, RuntimeError, ValueError, OSError) as error:
             self.reconnect_tries += 1
             # After twelve, every 30 minutes: the record is gone by then, so
