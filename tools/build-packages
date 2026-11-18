@@ -201,6 +201,11 @@ add_to_repo() {
     cp -f "$file" "$repo/$base"
     rm -f "$repo/$base.sig"
     if [[ -n $local_name && -f $file.sig ]]; then cp -f "$file.sig" "$repo/$base.sig"; fi
+    # A forced rebuild can replace bytes without changing the filename.
+    # Pacstrap must fetch the replacement and its new signature together.
+    if [[ -f $ALARM_CACHE/pkg/$base ]] && ! cmp -s "$repo/$base" "$ALARM_CACHE/pkg/$base"; then
+      rm -f -- "$ALARM_CACHE/pkg/$base" "$ALARM_CACHE/pkg/$base.sig"
+    fi
     echo "    $base"
   done
 }
