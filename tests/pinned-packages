@@ -18,6 +18,7 @@ for tool in gpg repo-add bsdtar zstd curl; do
   command -v "$tool" >/dev/null || { pass "# skip: no $tool"; exit 0; }
 done
 t=$(mktemp -d)
+export ALARM_CACHE=$t/cache   # add_to_repo removes from the package cache: never the developer's own
 export GNUPGHOME=$t/home && mkdir -m 700 "$GNUPGHOME"  # never the user's ~/.gnupg
 R=$t/repo
 cleanup() {

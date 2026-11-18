@@ -25,7 +25,11 @@
 # evidence for the pull request.
 set -uo pipefail
 
-here=0 json=0 errors_from=""
+# A suspend failure that is only the modem link's guard (the units check below)
+refused_only() {	# FAILS REFUSALS LAST_ERRNO: yes when every failure is a refusal
+  [[ $1 =~ ^[0-9]+$ && $2 =~ ^[0-9]+$ ]] && (($2 > 0 && $1 <= $2)) && [[ $3 == -16 ]]
+}
+here=0 json=0 errors_from="" slot_from=""
 while (($#)); do
   a=$1; shift
   case $a in
@@ -33,6 +37,11 @@ while (($#)); do
     --json) json=1 ;;
     # tests only: the kernel health rows for a saved error log, then exit
     --errors-from) errors_from=${1:?--errors-from FILE}; shift; here=1 ;;
+    # tests only: the boot and storage guard rows for a fake root (its proc,
+    # sys/class/block and etc/omamobile), then exit
+    --slot-from) slot_from=${1:?--slot-from DIR}; shift; here=1 ;;
+    # tests only: the refused-suspend rule for FAILS REFUSALS LAST_ERRNO, then exit
+    --refused-only) refused_only "${1:-}" "${2:-}" "${3:-}"; exit $? ;;
     -h|--help) source "$(dirname -- "${BASH_SOURCE[0]}")/lib/usage.sh"; usage_from_header --raw "$0"; exit 0 ;;
     *) echo "phone-smoke: unknown option $a" >&2; exit 2 ;;
   esac
@@ -73,22 +82,35 @@ uid=$(id -u "$user" 2>/dev/null || true)
 as_user() { runuser -u "$user" -- env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" "$@" </dev/null; }
 
 # ---------------------------------------------------------------- boot
+sr=$slot_from   # a test's fake root, else nothing
 release=$(uname -r)
 # The Pixel bootloaders pass androidboot.* in bootconfig, not on the command line.
-slot=$(sed -n 's/^androidboot\.slot_suffix = "\(_[ab]\)"$/\1/p' /proc/bootconfig 2>/dev/null)
-[[ -n $slot ]] || slot=$(grep -oE 'androidboot\.slot_suffix=_[ab]' /proc/cmdline 2>/dev/null | cut -d= -f2)
-up=$(cut -d. -f1 /proc/uptime)
-case $slot in
-  _b) check ok 1 "boot" "kernel $release, slot b, up ${up}s" ;;
+slot=$(sed -n 's/^androidboot\.slot_suffix = "\(_[ab]\)"$/\1/p' "$sr/proc/bootconfig" 2>/dev/null | head -1)
+[[ -n $slot ]] || slot=$(grep -oE 'androidboot\.slot_suffix=_[ab]' "$sr/proc/cmdline" 2>/dev/null | head -1 | cut -d= -f2)
+up=$(cut -d. -f1 "$sr/proc/uptime" 2>/dev/null)
+# The slot this phone's system boots from: SLOT= in boot-update.conf (a
+# release installed on the slot it ran from, docs/ACTIVE-SLOT-PLAN.md §2),
+# b when the file or the line is absent (development phones, older installs)
+want=b want_from="our builds boot from slot b"
+v=$(sed -n 's/^SLOT="\{0,1\}\([ab]\)"\{0,1\}$/\1/p' "$sr/etc/omamobile/boot-update.conf" 2>/dev/null)
+[[ -z $v ]] || want=$v want_from="boot-update.conf says SLOT=$v"
+nslot=$(grep -c '^SLOT=' "$sr/etc/omamobile/boot-update.conf" 2>/dev/null)
+if ((${nslot:-0} > 1)); then
+  check "not ok" 1 "boot" "kernel $release: boot-update.conf names SLOT $nslot times (omamobile-boot-update refuses it)"
+else case $slot in
+  "_$want") check ok 1 "boot" "kernel $release, slot ${slot#_}, up ${up}s" ;;
   "") check skip 1 "boot" "kernel $release, no slot in bootconfig or on the command line" ;;
-  *) check "not ok" 1 "boot" "kernel $release on slot ${slot#_}: our builds boot from slot b" ;;
-esac
+  *) check "not ok" 1 "boot" "kernel $release on slot ${slot#_}: $want_from" ;;
+esac; fi
 
 # ---------------------------------------------------------------- storage
-# Every UFS partition is read-only except userdata and slot B's boot images.
-allowed=" userdata boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b "
+# Every UFS partition is read-only except userdata and the running slot's
+# boot images (the guard maps its list to the slot the phone runs from; with
+# no slot named, only userdata).
+allowed=" userdata "
+[[ -z $slot ]] || allowed+="boot$slot init_boot$slot vendor_boot$slot vendor_kernel_boot$slot dtbo$slot "
 rw=() total=0
-for s in /sys/class/block/sd*; do
+for s in "$sr"/sys/class/block/sd*; do
   [[ -r $s/partition && -r $s/uevent ]] || continue
   name=$(sed -n 's/^PARTNAME=//p' "$s/uevent")
   [[ -n $name ]] || continue
@@ -100,7 +122,12 @@ if ((total == 0)); then
 elif ((${#rw[@]})); then
   check "not ok" 1 "storage guard" "writable outside the allowlist: ${rw[*]}"
 else
-  check ok 1 "storage guard" "$total partitions; only userdata and slot B's boot images writable"
+  imgs=""; [[ -z $slot ]] || imgs=" and slot ${slot#_}'s boot images"
+  check ok 1 "storage guard" "$total partitions; only userdata$imgs writable"
+fi
+if [[ -n $slot_from ]]; then
+  printf '%s\n' "${results[@]}"
+  exit 0
 fi
 
 rootdev=$(findmnt -no SOURCE / 2>/dev/null)
@@ -155,6 +182,10 @@ known_errors=(
 # named in the kernel health row; with a ceiling, the lines beyond it count as
 # new errors (an empty ceiling means no limit, only the count).
 counted_errors=(
+  # Each sleep the modem ends: CPIF logs the cp2ap_wakeup edge it held until
+  # the resume at error level, a pair per modem-woken sleep, on every 7 Pro
+  # that sleeps with the modem up (device-cheetah 0.1.60; SUSPEND-PLAN M6-D).
+  '|modem wakes from sleep (cp2ap_wakeup)|cpif: (ap_wakeup_handler|s5100_pm_notifier): cp2ap_wakeup work (pending|resume)\. gpio_val'
   # PipeWire opens every PCM while it probes the card, before the UCM verb has
   # set the routes: once per boot. The same line is a broken UCM route's own
   # message, which repeats at every playback, so a second one is new.
@@ -170,6 +201,14 @@ counted_errors=(
   # up (2026-11-11: 43 in ten minutes). umts_ipc0 is not here on purpose: that
   # is the phone service's own channel, and a message dropped there is new.
   '|cpif message for a channel nobody opened|cpif: (rx_demux|io_dev_recv_skb_single_from_link_dev|pass_skb_to_demux): .*(oem_ipc[0-9]+|umts_ipc[1-9][0-9]*|umts_router)([^0-9a-z_].*)?(is not opened|rx_demux fail|recv_skb fail)'
+  # The network stack drops a few data packets the modem sends as its PCIe
+  # link comes back, before the rmnet interface is up (2026-11-12/13: three at
+  # about 113 s, data worked after). Past five in a boot, the drops are new.
+  '5|cpif rmnet packet dropped as the link came up|cpif: rx_multi_pdp: PCIE: rmnet[0-9]+<-s5300: ERR! netif_receive_skb[[:space:]]*$'
+  # The modem's in-memory NV copies are Android's f2fs images, whose quota
+  # feature needs a quota format our kernel doesn't build (err -3); the copies
+  # are thrown away at stop, so nothing needs their quota. Every modem start.
+  '|f2fs quota off on the modem NV copies|F2FS-fs \(loop[0-9]+\): (Cannot turn on quotas: error -3|Failed to enable quota tracking \(type=[0-9]+, err=-3\)\. Please run fsck to fix\.)[[:space:]]*$'
 )
 # A UFS link that doesn't come back from a sleep (device/tegu/SLEEP-PLAN.md
 # S1): any match fails kernel health, whatever the lists above say. Anchored
@@ -240,8 +279,24 @@ fi
 failed=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | xargs)
 ufailed=""
 [[ -n $uid && -S /run/user/$uid/bus ]] && ufailed=$(as_user systemctl --user --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | xargs)
+# A sleep the modem's link driver refused before the freeze, while its link was
+# up (linux-omarchy-mobile#232; on every 7 Pro that sleeps with the modem up),
+# leaves systemd-suspend.service failed with EBUSY until the next sleep; the
+# shell's auto-sleep tries again 30 s later. It is the guard working, not a
+# fault, but only when every failed suspend this boot is one of the guard's:
+# EBUSY is also a freezer that couldn't freeze or a device that refused, so
+# one early refusal must not cover a later fault. Each refusal fails one
+# attempt and logs one line, so failures above the refusals are something
+# else (and a wrapped dmesg errs towards counting the unit).
+if [[ " $failed " == *" systemd-suspend.service "* ]] \
+    && refused_only "$(cat /sys/power/suspend_stats/fail 2>/dev/null)" \
+         "$(dmesg 2>/dev/null | grep -c 'gs201-pcie-cp .*sleep refused before the freeze' || true)" \
+         "$(cat /sys/power/suspend_stats/last_failed_errno 2>/dev/null)"; then
+  failed=$(xargs -n1 <<<"$failed" | grep -vx systemd-suspend.service | xargs || true)
+  suspend_refused=" (sleeps refused while the modem's link was busy: $(cat /sys/power/suspend_stats/fail) this boot)"
+fi
 if [[ -z $failed && -z $ufailed ]]; then
-  check ok 0 "systemd units" "none failed"
+  check ok 0 "systemd units" "none failed${suspend_refused:-}"
 else
   check "not ok" 0 "systemd units" "failed: ${failed:-none}${ufailed:+; user: $ufailed}"
 fi

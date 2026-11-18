@@ -5,6 +5,20 @@ Findings from real hardware, newest first. [BRINGUP-M1.md](BRINGUP-M1.md) is the
 
 The board file (`gs201-panther.dts`) was merged as [linux-omarchy-mobile#108](https://github.com/derekross/linux-omarchy-mobile/pull/108), and the FT3658 driver as [#109](https://github.com/derekross/linux-omarchy-mobile/pull/109); the test kernels below add one local commit each on top.
 
+## 2026-11-15: hardware video, off by default (overlays/mfc.dtso)
+
+The MFC v15 (hardware H.264, HEVC, VP8 and VP9 decode and H.264, HEVC
+and VP8 encode, linux-omarchy-mobile#250 and #256) is described in the
+kernel with its 256 MiB pool but left disabled. Its two System MMUs and
+the S2MPUs in front of it are not described yet, so they stay in bypass,
+and Google's closed firmware, parsing whatever video an app hands it, can
+reach all memory below 4 GiB, the kernel's included. That isn't wanted on
+every Pixel 7 by default (the maintainer's decision on #250).
+`overlays/mfc.dtso` enables it for an owner who accepts that; it also
+needs `s5p-mfc-v15.fw`, which `tools/extract-vendor-firmware` takes from
+the owner's own factory image (#747). The `iommus` and S2MPU description,
+as its own series, is what would turn it on by default.
+
 ## 2026-11-03: a second unit (angelrenefm)
 
 A stock factory Pixel 7 (CP3A.261005.002.A1 on both slots), offered on [#342](https://github.com/derekross/omarchy-mobile/issues/342). It booted Arch on slot B once the boot images carried AVB footers ([#396](https://github.com/derekross/omarchy-mobile/pull/396)); `tools/phone-smoke` passed everything required. What differs from the first unit, all read-only:

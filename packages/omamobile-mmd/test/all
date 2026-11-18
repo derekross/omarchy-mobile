@@ -40,8 +40,11 @@ grep -E '^(Requires|Wants|BindsTo|Requisite)=' systemd/omamobile-mmd.service && 
 [[ -z $(find "$stage" -path '*dbus-1/system-services*' -print -quit) ]] || fail "no D-Bus activation file"
 ! grep -qx 'Conflicts=ModemManager.service' systemd/omamobile-mmd.service \
   || fail "starting the bridge must not stop another modem daemon"
+# Only what systemd-analyze says about the staged unit counts: it also loads the
+# host's own units, and a warning about one of those (they begin with the host's
+# unit path) failed the nightly publish on the build host on 2026-11-18.
 if command -v systemd-analyze >/dev/null; then
   systemd-analyze verify --man=no "$stage/usr/lib/systemd/system/omamobile-mmd.service" 2>&1 |
-    grep -v -e 'not executable' -e 'No such file' -e 'omamobile-sitd.service' -e '^$' && fail "unit verify" || true
+    grep -v -e '^/usr/lib/systemd/' -e '^/lib/systemd/' -e '^/etc/systemd/' -e '^/run/systemd/' -e 'not executable' -e 'No such file' -e 'omamobile-sitd.service' -e '^$' && fail "unit verify" || true
 fi
 pass "staged layout and unit"

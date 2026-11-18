@@ -6,8 +6,11 @@
 # were https://pkgs.omamobile.org (no network, nothing real uploaded). A dry
 # run touches nothing; an upload lands complete under releases/<codename>/
 # <version>/ with no staging left; a second upload of that version, a file
-# changed after signing, a signature by another key, a wrong base_url and a
-# root image that doesn't match are all refused before anything is sent;
+# changed after signing, a signature by another key, a wrong base_url, a
+# root image that doesn't match, a revoked release key and an
+# omamobile-revoked that can't be read as a file or has any line that isn't
+# one fingerprint in capitals with its newline are all refused before
+# anything is sent;
 # --verify-only catches a file corrupted on the server; --latest writes
 # latest.json (with the .tar's URL, size and SHA-256) and won't go back
 # without --allow-older. The one-file .tar (tools/lib/bundle-tar.sh) is
@@ -35,8 +38,9 @@ cleanup() {
   rm -rf "$top"
 }
 trap cleanup EXIT
-mkdir -p "$R/tools" "$R/packages/omamobile-keyring" "$R/keys" "$t/bin" "$S"
+mkdir -p "$R/tools/lib" "$R/packages/omamobile-keyring" "$R/keys" "$t/bin" "$S"
 cp tools/release-upload tools/bundle-manifest "$R/tools/"
+cp tools/lib/signing.sh "$R/tools/lib/"
 source tools/lib/bundle-tar.sh
 
 newkey() {  # newkey HOME UID: prints the primary's fingerprint
@@ -212,6 +216,66 @@ mkbundle "$V2"
 refused "an upload without keys/fingerprint.release" "fingerprint.release"
 mv "$t/fpr" "$R/keys/fingerprint.release"
 pass "a changed file, another key, a wrong base_url, a mismatched root image or an unlisted file are refused before upload"
+
+# omamobile-revoked is read only when every line is one 40-digit fingerprint
+# in capitals with its newline (docs/RELEASES.md §10): any other line stops
+# the upload before it starts, whichever key it names
+nl=$'\n'
+mkbundle "$V2"
+malformed() {  # malformed WHAT LINE CONTENT: omamobile-revoked holds CONTENT
+  printf '%s' "$3" > "$kr/omamobile-revoked"
+  refused "$1" "omamobile-revoked is malformed at line $2: "
+  if grep -c 'is revoked' "$t/log" >/dev/null; then fail "$1: the refusal doesn't say the key is revoked"; fi
+}
+malformed "the release key in lowercase" 1 "${release,,}$nl"
+malformed "the release key in omamobile-trusted's FPR:4: form" 1 "$release:4:$nl"
+malformed "the release key with a word after it" 1 "$release revoked$nl"
+malformed "the release key with a CRLF" 1 "$release"$'\r\n'
+malformed "39 digits" 1 "${release:0:39}$nl"
+malformed "41 digits" 1 "${release}0$nl"
+malformed "a digit that isn't hex" 1 "${release:0:39}G$nl"
+malformed "a blank line before the release key" 1 "$nl$release$nl"
+malformed "a blank line after the release key" 2 "$release$nl$nl"
+malformed "the release key without its newline" 1 "$release"
+malformed "a last line without its newline" 2 "$other$nl$release"
+malformed "another key in the FPR:4: form" 1 "$other:4:$nl"
+malformed "another key in lowercase, on line 2" 2 "$other$nl${other,,}$nl"
+malformed "a blank line, then a lowercase one" 2 "$other$nl$nl${release,,}$nl"
+echo "$other" > "$kr/omamobile-revoked"
+run --dry-run "$B2" || fail "a well-formed line for another key lets the release key through"
+: > "$kr/omamobile-revoked"
+run --dry-run "$B2" || fail "an empty omamobile-revoked lets the release key through"
+echo "$release" > "$kr/omamobile-revoked"
+refused "a well-formed line for the release key" "the release key $release is revoked in omamobile-keyring"
+: > "$kr/omamobile-revoked"
+pass "a malformed omamobile-revoked is refused before upload, naming the line; a well-formed one is read as before"
+
+# A missing omamobile-revoked revokes nothing, as before; anything else in
+# its place that can't be read as a file stops the upload before it starts
+unreadable() {  # unreadable WHAT: omamobile-revoked's place holds WHAT
+  refused "$1" "omamobile-revoked cannot be read: "
+  if grep -c 'is revoked' "$t/log" >/dev/null; then fail "$1: the refusal doesn't say the key is revoked"; fi
+}
+rm "$kr/omamobile-revoked"
+run --dry-run "$B2" || fail "a missing omamobile-revoked lets the release key through"
+mkdir "$kr/omamobile-revoked"
+unreadable "a directory"
+rmdir "$kr/omamobile-revoked"
+ln -s /dev/null "$kr/omamobile-revoked"
+unreadable "a link to /dev/null"
+ln -sfn nowhere "$kr/omamobile-revoked"
+unreadable "a link to nowhere"
+rm "$kr/omamobile-revoked"
+echo "$release" > "$kr/omamobile-revoked"
+chmod 000 "$kr/omamobile-revoked"
+if [[ -r $kr/omamobile-revoked ]]; then
+  pass "# skip: this user reads a mode-000 file (root), so it can't stand for one it can't read"
+else
+  unreadable "a mode-000 file that revokes the release key"
+fi
+chmod 644 "$kr/omamobile-revoked"
+: > "$kr/omamobile-revoked"
+pass "an omamobile-revoked that can't be read as a file is refused before upload; a missing one revokes nothing"
 
 # The one-file download's refusals, before anything is sent
 T2=$R/out/bundle/omamobile-cheetah-$V2.tar

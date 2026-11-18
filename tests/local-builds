@@ -13,6 +13,7 @@ fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 command -v gpg >/dev/null && command -v gpgv >/dev/null || { pass "# skip: no gpg"; exit 0; }
 t=$(mktemp -d)
+export ALARM_CACHE=$t/cache   # add_to_repo removes from the package cache: never the developer's own
 export GNUPGHOME=$t/home && mkdir -m 700 "$GNUPGHOME"  # never the user's ~/.gnupg
 trap 'gpgconf --homedir "$t/signer" --kill gpg-agent 2>/dev/null || true; gpgconf --homedir "$t/other" --kill gpg-agent 2>/dev/null || true; rm -rf "$t"' EXIT
 
@@ -37,6 +38,7 @@ gpgconf --homedir "$R/keys/panther/gnupg" --kill gpg-agent 2>/dev/null || true
 pass "local-key-init makes one signing key in keys/panther, once"
 
 # --- tools/fetch-published ---
+cp tools/lib/signing.sh "$R/tools/lib/"
 mkdir -m 700 "$t/signer" "$t/other"
 GNUPGHOME=$t/signer gpg --batch --quiet --passphrase '' --quick-generate-key "test signer <s@invalid>" ed25519 sign never
 GNUPGHOME=$t/other gpg --batch --quiet --passphrase '' --quick-generate-key "someone else <o@invalid>" ed25519 sign never
@@ -48,18 +50,21 @@ echo "$signer:4:" > "$kr/omamobile-trusted"
 
 srv=$t/srv/development/aarch64 && mkdir -p "$srv"
 sign() { GNUPGHOME=$t/$1 gpg --batch --yes --quiet --detach-sign -o "$2.sig" "$2"; }
-make_index() {  # make_index SIGNER: an index of foo whose checksum matches the file
-  local sum
-  sum=$(sha256sum < "$srv/foo-1-1-any.pkg.tar.zst" | cut -d' ' -f1)
-  rm -rf "$t/db" && mkdir -p "$t/db/foo-1-1"
-  printf '%%FILENAME%%\nfoo-1-1-any.pkg.tar.zst\n\n%%SHA256SUM%%\n%s\n' "$sum" > "$t/db/foo-1-1/desc"
-  tar -czf "$srv/omamobile.db" -C "$t/db" foo-1-1
-  sign "$1" "$srv/omamobile.db"
+make_index() {  # make_index KEY [FILE...]: an index of FILE (foo's by default) whose checksums match the files
+  local key=$1 f sum entry; shift
+  rm -rf "$t/db" && mkdir -p "$t/db"
+  for f in "${@:-foo-1-1-any.pkg.tar.zst}"; do
+    sum=$(sha256sum < "$srv/$f" | cut -d' ' -f1)
+    entry=$t/db/${f%-any.pkg.tar.*} && mkdir -p "$entry"
+    printf '%%FILENAME%%\n%s\n\n%%SHA256SUM%%\n%s\n' "$f" "$sum" > "$entry/desc"
+  done
+  tar -czf "$srv/omamobile.db" -C "$t/db" .
+  sign "$key" "$srv/omamobile.db"
 }
 echo "package bytes" > "$srv/foo-1-1-any.pkg.tar.zst"
 sign signer "$srv/foo-1-1-any.pkg.tar.zst"
 make_index signer
-fetch() { (cd "$R" && OMAMOBILE_PKGS_URL=file://$t/srv tools/fetch-published "$t/got") > "$t/log" 2>&1; }
+fetch() { (cd "$R" && env "$@" OMAMOBILE_PKGS_URL=file://$t/srv tools/fetch-published "${into:-$t/got}") > "$t/log" 2>&1; }
 
 fetch || { cat "$t/log"; fail "fetch-published takes a trusted index and package"; }
 [[ -f $t/got/foo-1-1-any.pkg.tar.zst && -f $t/got/foo-1-1-any.pkg.tar.zst.sig ]] || fail "the package comes with its signature"
@@ -83,9 +88,125 @@ pass "fetch-published refuses an untrusted index, an untrusted package and a cha
 echo "package bytes" > "$srv/foo-1-1-any.pkg.tar.zst"
 sign signer "$srv/foo-1-1-any.pkg.tar.zst"
 make_index signer
-echo "$signer revoked" > "$kr/omamobile-revoked"
+echo "$signer" > "$kr/omamobile-revoked"
 if fetch; then fail "refuses a revoked key"; fi
+grep -q 'index is not signed by a trusted' "$t/log" || { cat "$t/log"; fail "says the revoked key's index is untrusted"; }
 pass "fetch-published refuses a revoked key"
+
+# The published repository moves on: foo 0.2.9 becomes 0.2.10 and bar goes.
+# DIR is then the published set again, so --import can't take the older foo
+# beside the newer one; a fetch that stops removes nothing, and only package
+# files directly in DIR go, with their .sig
+: > "$kr/omamobile-revoked"
+for f in foo-0.2.9-1-any.pkg.tar.zst foo-0.2.10-1-any.pkg.tar.zst bar-1-1-any.pkg.tar.xz baz-1-1-any.pkg.tar.zst; do
+  echo "$f" > "$srv/$f" && sign signer "$srv/$f"
+done
+make_index signer foo-0.2.9-1-any.pkg.tar.zst bar-1-1-any.pkg.tar.xz
+rm -rf "$t/got"
+fetch || { cat "$t/log"; fail "fetch-published takes foo 0.2.9 and bar"; }
+mkdir -p "$t/got/old.pkg.tar.zst" "$t/got/keep"
+echo "notes" > "$t/got/NOTES.txt"
+echo "by hand" > "$t/got/*.pkg.tar.zst"
+cp "$t/got/foo-0.2.9-1-any.pkg.tar.zst" "$t/got/keep/"
+listing() { (cd "$t/got" && find . -mindepth 1 | LC_ALL=C sort); }
+before=$(listing)
+tar -czf "$srv/omamobile.db" -T /dev/null && sign signer "$srv/omamobile.db"
+if fetch; then fail "refuses an empty index"; fi
+grep -q 'the index lists no package' "$t/log" || { cat "$t/log"; fail "says the index lists no package"; }
+[[ $(listing) == "$before" ]] || fail "an empty index removes nothing"
+# bash takes nullglob from an exported BASHOPTS, and the empty index's glob
+# then gives no entry at all rather than one that can't be read
+if fetch BASHOPTS=nullglob; then fail "refuses an empty index with nullglob inherited"; fi
+grep -q 'the index lists no package' "$t/log" || { cat "$t/log"; fail "says the index lists no package with nullglob inherited"; }
+[[ $(listing) == "$before" ]] || fail "an empty index removes nothing with nullglob inherited"
+make_index signer foo-0.2.10-1-any.pkg.tar.zst
+sign other "$srv/foo-0.2.10-1-any.pkg.tar.zst"
+if fetch; then fail "refuses foo 0.2.10 signed by an untrusted key"; fi
+[[ $(LC_ALL=C comm -23 <(echo "$before") <(listing)) == "" ]] || fail "a fetch that stops removes nothing"
+sign signer "$srv/foo-0.2.10-1-any.pkg.tar.zst"
+fetch || { cat "$t/log"; fail "fetch-published takes foo 0.2.10"; }
+[[ $(listing) == "$(printf '%s\n' ./NOTES.txt ./foo-0.2.10-1-any.pkg.tar.zst ./foo-0.2.10-1-any.pkg.tar.zst.sig \
+    ./keep ./keep/foo-0.2.9-1-any.pkg.tar.zst ./old.pkg.tar.zst | LC_ALL=C sort)" ]] \
+  || { cat "$t/log"; listing; fail "DIR keeps only what the index lists, and what isn't a package file in DIR"; }
+for f in foo-0.2.9-1-any.pkg.tar.zst bar-1-1-any.pkg.tar.xz '*.pkg.tar.zst'; do
+  grep -qxF "    gone $f" "$t/log" || { cat "$t/log"; fail "names $f as removed"; }
+done
+pass "fetch-published removes, and names, the packages the index no longer lists, and nothing else"
+
+# Three delisted entries that a looser cleanup gets wrong: a file named as
+# two listed names joined by a space (a name is matched exactly, so it goes);
+# a package-named symlink (it goes as the file would, since build-packages
+# --import would take it, but only the link: its target outside DIR is never
+# touched); a package whose .sig is a directory (the package goes, the
+# directory stays, as sub-directories do, and the run ends as usual). The run
+# inherits glob options, and ends as it would without them: DIR holds no
+# .xz (failglob would stop there), and a hidden and an upper-case name that
+# dotglob or nocaseglob would match stay
+make_index signer baz-1-1-any.pkg.tar.zst foo-0.2.10-1-any.pkg.tar.zst
+joined="baz-1-1-any.pkg.tar.zst foo-0.2.10-1-any.pkg.tar.zst"
+echo "older foo" > "$t/got/$joined"
+echo "by hand" > "$t/got/.hidden-1-1-any.pkg.tar.zst" && echo "by hand" > "$t/got/UPPER-1-1-ANY.PKG.TAR.ZST"
+mkdir -p "$t/outside" && echo "linked bytes" > "$t/outside/linked-1-1-any.pkg.tar.zst"
+target_sum=$(sha256sum < "$t/outside/linked-1-1-any.pkg.tar.zst")
+ln -s "$t/outside/linked-1-1-any.pkg.tar.zst" "$t/got/linked-1-1-any.pkg.tar.zst"
+echo "stale" > "$t/got/stale-1-1-any.pkg.tar.zst" && mkdir "$t/got/stale-1-1-any.pkg.tar.zst.sig"
+fetch BASHOPTS=nullglob:failglob:dotglob:nocaseglob \
+  || { cat "$t/log"; listing; fail "fetch-published finishes with a joined name, a symlink and a .sig directory in DIR"; }
+[[ $(listing) == "$(printf '%s\n' ./.hidden-1-1-any.pkg.tar.zst ./NOTES.txt ./UPPER-1-1-ANY.PKG.TAR.ZST \
+    ./baz-1-1-any.pkg.tar.zst ./baz-1-1-any.pkg.tar.zst.sig \
+    ./foo-0.2.10-1-any.pkg.tar.zst ./foo-0.2.10-1-any.pkg.tar.zst.sig ./keep ./keep/foo-0.2.9-1-any.pkg.tar.zst \
+    ./old.pkg.tar.zst ./stale-1-1-any.pkg.tar.zst.sig | LC_ALL=C sort)" ]] \
+  || { cat "$t/log"; listing; fail "removes the joined name, the symlink and the package, and keeps the .sig directory, a hidden and an upper-case name"; }
+for f in "$joined" linked-1-1-any.pkg.tar.zst stale-1-1-any.pkg.tar.zst; do
+  grep -qxF "    gone $f" "$t/log" || { cat "$t/log"; fail "names $f as removed"; }
+done
+[[ $(sha256sum < "$t/outside/linked-1-1-any.pkg.tar.zst") == "$target_sum" ]] \
+  || fail "leaves the symlink's target outside DIR byte for byte"
+pass "fetch-published matches names exactly, removes a symlink but never its target, and keeps a .sig directory, under inherited glob options"
+
+# A DIR that holds a repository index is a package repository given by mistake:
+# it is refused before any download, the index's included (a curl on PATH logs
+# every call, and a run into $t/got shows it does), and left as it was
+real_curl=$(command -v curl) && mkdir -p "$t/bin"
+cat > "$t/bin/curl" <<EOF
+#!/bin/sh
+echo "\$*" >> "$t/curl.log"
+exec "$real_curl" "\$@"
+EOF
+chmod +x "$t/bin/curl"
+state() { (cd "$1" && find . -mindepth 1 -printf '%y %p\n' | LC_ALL=C sort && find . -type f -exec sha256sum {} + | LC_ALL=C sort); }
+for db in omamobile.db omamobile.db.tar.gz; do
+  d=$t/local-$db && mkdir -p "$d"
+  echo "a local index" > "$d/$db"
+  echo "the port's own" > "$d/local-1-1-any.pkg.tar.zst" && echo "its signature" > "$d/local-1-1-any.pkg.tar.zst.sig"
+  was=$(state "$d") && : > "$t/curl.log"
+  if into=$d fetch PATH="$t/bin:$PATH"; then cat "$t/log"; fail "refuses a folder that holds $db"; fi
+  grep -qxF "error: $d is a package repository (it holds omamobile.db): give fetch-published a folder of its own, such as out/<codename>/published" "$t/log" \
+    || { cat "$t/log"; fail "says a folder that holds $db is a package repository"; }
+  [[ ! -s $t/curl.log ]] || { cat "$t/curl.log"; fail "fetches nothing into a folder that holds $db"; }
+  [[ $(state "$d") == "$was" ]] || { state "$d"; fail "leaves a folder that holds $db as it was"; }
+done
+fetch PATH="$t/bin:$PATH" || { cat "$t/log"; fail "fetch-published runs again into its own folder"; }
+grep -q 'omamobile.db.sig$' "$t/curl.log" || { cat "$t/curl.log"; fail "the curl log sees the tool's index download"; }
+pass "fetch-published refuses a folder that holds a repository index, before any download, and leaves it as it was"
+
+# omamobile-revoked is read only in the form docs/RELEASES.md §10 gives: a
+# line in another form (the signer in lowercase, which a looser read takes
+# for no revocation), or a directory in the file's place, stops the run
+# before any download, with the words of tools/lib/signing.sh's check
+for bad in lowercase directory; do
+  [[ $bad != lowercase || $signer == *[A-F]* ]] || { pass "# skip: the signer's fingerprint has no letter to lowercase"; continue; }
+  if [[ $bad == lowercase ]]; then echo "${signer,,}" > "$kr/omamobile-revoked"
+  else rm "$kr/omamobile-revoked" && mkdir "$kr/omamobile-revoked"; fi
+  if why=$(source "$R/tools/lib/signing.sh" && revoked_file_check "$R"); then fail "the check refuses omamobile-revoked as a $bad"; fi
+  d=$t/revoked-$bad && : > "$t/curl.log"
+  if into=$d fetch PATH="$t/bin:$PATH"; then cat "$t/log"; fail "refuses omamobile-revoked as a $bad"; fi
+  grep -qxF "error: $why" "$t/log" || { cat "$t/log"; fail "says why omamobile-revoked as a $bad is refused"; }
+  [[ ! -s $t/curl.log ]] || { cat "$t/curl.log"; fail "fetches nothing with omamobile-revoked as a $bad"; }
+  [[ ! -e $d ]] || fail "makes no DIR with omamobile-revoked as a $bad"
+done
+rmdir "$kr/omamobile-revoked" && : > "$kr/omamobile-revoked"
+pass "fetch-published stops at an omamobile-revoked not in RELEASES §10's form, before any download, with the signing tools' words"
 
 # --- build-packages and build-rootfs --local ---
 mv "$R/keys/panther" "$t/panther-key"
@@ -105,3 +226,38 @@ mv "$t/panther-key" "$R/keys/panther"
 if run tools/build-rootfs --local panther; then fail "build-rootfs --local refuses without out/panther/repo"; fi
 grep -q 'no \[omamobile\] repository in out/panther/repo' "$t/log" || { cat "$t/log"; fail "says out/panther/repo is missing"; }
 pass "build-rootfs --local checks the device, the key and out/NAME/repo"
+
+# --- build-packages --import ---
+# A folder filled by hand with two files of one package: add_to_repo keeps
+# one file per name, so the glob's order chose which, and foo 0.2.9 sorts
+# after 0.2.10; one has another file name, so only its .PKGINFO says it
+# is foo. The run stops and names both before it copies anything from
+# the folder; a folder of different packages still imports, foo-utils
+# beside foo among them (a name that begins with another). repo-add is a
+# stand-in, as in tests/build-packages-host-tools: without pacman's, the
+# tool would fetch it from the Arch Linux ARM tarball
+command -v bsdtar >/dev/null || command -v zstd >/dev/null || { pass "# skip: no bsdtar or zstd"; exit 0; }
+mkpkg() {  # mkpkg DIR NAME VER-REL [FILE]: a package file (NAME-VER-REL-any.pkg.tar.zst) with its .PKGINFO
+  local file=$1/${4:-$2-$3-any.pkg.tar.zst}
+  mkdir -p "$t/pkginfo" "$1"
+  printf 'pkgname = %s\npkgver = %s\narch = any\n' "$2" "$3" > "$t/pkginfo/.PKGINFO"
+  if command -v bsdtar >/dev/null; then bsdtar --zstd -cf "$file" -C "$t/pkginfo" .PKGINFO
+  else tar --zstd -cf "$file" -C "$t/pkginfo" .PKGINFO; fi
+}
+mkdir -p "$t/bin-import"
+printf '#!/bin/bash\nwhile [[ $1 == -* ]]; do [[ $1 == --key ]] && shift; shift; done\ntouch "$1"; ln -sf "$1" omamobile.db\n' > "$t/bin-import/repo-add"
+chmod +x "$t/bin-import/repo-add"
+r=$R/out/panther/repo/aarch64
+mkpkg "$t/same" foo 0.2.9-1 renamed-0.2.9-1-any.pkg.tar.zst && mkpkg "$t/same" foo 0.2.10-1 && mkpkg "$t/same" bar 1-1
+if run env PATH="$t/bin-import:$PATH" tools/build-packages --local panther --import "$t/same"; then cat "$t/log"; fail "--import refuses a folder with two files of one package"; fi
+line=$(grep -F 'two files of foo' "$t/log") || { cat "$t/log"; fail "says the folder has two files of foo"; }
+[[ $line == *renamed-0.2.9-1-any.pkg.tar.zst* && $line == *foo-0.2.10-1-any.pkg.tar.zst* ]] || { cat "$t/log"; fail "names both files of foo"; }
+[[ -z $(ls -A "$r" 2>/dev/null) ]] || { ls -A "$r"; fail "copies nothing from the folder and writes no index"; }
+pass "build-packages --import stops on two files of one package in a folder, names both, and adds nothing"
+mkpkg "$t/different" foo 0.2.10-1 && mkpkg "$t/different" foo-utils 1-1 && mkpkg "$t/different" bar 1-1
+run env PATH="$t/bin-import:$PATH" tools/build-packages --local panther --import "$t/different" \
+  || { cat "$t/log"; fail "--import takes a folder of different packages"; }
+gpgconf --homedir "$R/keys/panther/gnupg" --kill gpg-agent 2>/dev/null || true
+[[ -f $r/foo-0.2.10-1-any.pkg.tar.zst && -f $r/foo-utils-1-1-any.pkg.tar.zst && -f $r/bar-1-1-any.pkg.tar.zst && -e $r/omamobile.db ]] \
+  || { ls -A "$r"; cat "$t/log"; fail "all three packages and the index are in the repository"; }
+pass "build-packages --import still takes a folder of different packages, foo and foo-utils among them"

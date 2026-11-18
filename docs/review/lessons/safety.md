@@ -3,6 +3,17 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-776. A helper that "falls back to the old path on failure" is checked
+  against every exception the transport under it raises, not only the ones
+  the tests inject.** #754's `reconcile()` caught `ModemError`, `TimeoutError`
+  and `OSError`, while `Sit.request()` also raises a bare `RuntimeError` and
+  `EOFError`; either one skipped the unconfirmed release's radio-off that the
+  helper sits in front of, and all of the PR's tests stayed green. *Check:*
+  `grep -n 'raise ' <transport>` for every exception class the helper's call
+  can raise, then run the PR's fixture with each as the side effect and count
+  the safety calls on main and on the head; prefer `except Exception`
+  returning "not handled". Extends L-757 and L-716. *From:* #754, round 57,
+  2026-11-14.
 - **L-757. A safety or recovery call that a PR puts behind a selector or a
   helper is run with the selector wrong and with a stop arriving mid-start,
   and the hardware calls are counted on main and on the head.** #669's profile

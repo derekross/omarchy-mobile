@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Off-mode charging: the panel off, Power held for a second to start the
+# phone, power off once the cable is out (omamobile-charger-mode). Pulled in
+# only by omamobile-charger.target, and the script itself does nothing
+# outside a charger boot.
+[Unit]
+Description=Omarchy Mobile off-mode charging (panel off, hold Power to start)
+After=basic.target plymouth-start.service
+DefaultDependencies=yes
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/omamobile-charger-mode
+Restart=on-failure

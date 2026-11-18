@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: MIT
+# The install link (docs/INSTALL-LINK-PLAN.md §3.3): omamobile-linkd adds a
+# USB function to the gadget the initramfs made (NCM and ACM, the link last
+# beside them) and talks to the installer on the owner's computer.
+#
+# The condition is the marker alone, never "and not done" (§18, E1): the
+# start that finds `done` is the one that completes an end a kill cut
+# short. Only a root image built for the link carries the marker
+# (tools/build-rootfs --install-link); on any other phone this never runs.
+#
+# Ordering: after omamobile-usb-mac (one gadget change at a time) and
+# omamobile-boot-success (devinfo read-only again before the radio backup).
+# omamobile-boot-success is After=multi-user.target, so this unit is wanted
+# by graphical.target, never by multi-user.target (that would be a cycle).
+# While the phone has no account, omamobile-install-link-hold.service keeps
+# the login screen back (§3.3); this unit itself never holds it.
+#
+# A daemon that dies is started again while the marker is there (the kill
+# test's assumption, §18); its next start puts the gadget back first (E3),
+# and ExecStopPost does the same at once, so the development phone's NCM and
+# ACM do not wait for the restart (E12). The sleep inhibitor is held for the
+# daemon's whole life, which is the link's: the daemon exits when the link
+# closes for the boot or ends.
+[Unit]
+Description=Omarchy Mobile install link
+Documentation=https://github.com/derekross/omarchy-mobile/blob/main/docs/INSTALL-LINK-PLAN.md
+ConditionPathExists=/etc/omamobile/install-link
+After=omamobile-usb-mac.service omamobile-boot-success.service
+Wants=omamobile-usb-rescue.service
+StartLimitIntervalSec=10min
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/systemd-inhibit --what=sleep --mode=block --who=omamobile-install-link "--why=Setting up the phone with the installer" /usr/lib/omamobile-install-link/omamobile-linkd --transport ffs
+ExecStopPost=-/usr/lib/omamobile-install-link/omamobile-link-gadget remove
+Restart=on-failure
+RestartSec=5s
+# The state directory, mode 0711: the owner's session can stat `done` and
+# read it (0644), never the state file or the image (0600). The tmpfs
+# directory keeps its marks (closed, offered) across the daemon's restarts
+# within a boot (§18, E3 and E4).
+StateDirectory=omamobile/install-link
+StateDirectoryMode=0711
+RuntimeDirectory=omamobile-install-link
+RuntimeDirectoryMode=0711
+RuntimeDirectoryPreserve=yes
+# What it may write (§2.4): firstboot.conf, boot-update.conf and the marker
+# in /etc/omamobile; its state, the hang marker (/var/lib/omamobile/
+# link-gadget-started) and the provisioning work directory it removes after
+# a crash in /var/lib/omamobile; /run/omamobile-install-link (FunctionFS is
+# mounted there). configfs (/sys) stays writable under strict.
+ProtectSystem=strict
+ReadWritePaths=/etc/omamobile /var/lib/omamobile
+PrivateTmp=yes
+NoNewPrivileges=yes
+# UFS block devices can be opened for reading only, whatever the code does
+DevicePolicy=closed
+DeviceAllow=block-sd r

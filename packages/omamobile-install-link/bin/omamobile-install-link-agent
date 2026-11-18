@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""The install link's agent in the owner's session (INSTALL-LINK-PLAN §2.8).
+
+While the link is open it connects to the daemon's socket
+/run/omamobile-install-link/agent (the daemon takes the account first boot
+made and nobody else) and speaks its fixed lines:
+
+  daemon to agent   open BOOTS_LEFT CLOSES_S | code DIGITS VALID_S | locked |
+                    paired | closed BOOTS_LEFT | ended REASON MISSING...
+  agent to daemon   show | hide
+
+It keeps one notice while no host is paired ("Setup is not finished. Tap
+to continue with the installer on your computer."); a tap sends `show`, the
+daemon draws a new code, and a small window shows it until it is closed
+(then `hide`) or the code runs out. The code goes to that window through
+its environment and nowhere else: never into a notice, a file, a command
+line or the journal.
+
+After the link has ended unfinished (no marker, `done` naming anything but
+`finished` or `not-first-start`) it shows at each of the next three logins
+how to finish, then nothing. It counts those logins in the user's own state
+directory, and starts the count again when `done` changes (a `reopen` and
+another end).
+
+Tests point it elsewhere: OMAMOBILE_LINK_ROOT (a scratch root),
+OMAMOBILE_LINK_NOTIFY (a program that stands in for notify-send),
+OMAMOBILE_LINK_CLOSE (for gdbus's CloseNotification), OMAMOBILE_LINK_WINDOW
+(for the code window), OMAMOBILE_LINK_RETRY_S, OMAMOBILE_LINK_REPEAT_S.
+"""
+import hashlib
+import os
+import select
+import shlex
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+ROOT = os.environ.get("OMAMOBILE_LINK_ROOT", "")
+MARKER = ROOT + "/etc/omamobile/install-link"
+DONE = ROOT + "/var/lib/omamobile/install-link/done"
+SOCKET = ROOT + "/run/omamobile-install-link/agent"
+CLOSED = ROOT + "/run/omamobile-install-link/closed"
+RETRY_S = float(os.environ.get("OMAMOBILE_LINK_RETRY_S", "3"))
+# A notice dismissed without a tap comes back after this long
+REPEAT_S = float(os.environ.get("OMAMOBILE_LINK_REPEAT_S", "60"))
+WINDOW_QML = "/usr/share/omamobile-install-link/code-window"
+APP = "Omarchy Mobile"
+# Reasons that leave nothing to finish: no notice
+QUIET = ("finished", "not-first-start")
+LOGINS = 3
+
+TEXT_OPEN = "Setup is not finished. Tap to continue with the installer on your computer."
+TEXT_LOCKED = "Too many wrong codes. Tap to show a new code."
+TEXT_ENDED = ("Setup was not finished: no Wi-Fi, sound, cameras or mobile network. "
+              "To finish: run \"sudo omamobile-install-link reopen\" in a terminal, restart the phone, "
+              "then run the installer on your computer. Or install again.")
+WORDS = {"backup": "the radio backup", "firmware": "Google's files", "cameras": "the cameras"}
+
+
+def log(msg):
+    # The kind of thing, never a code (§9)
+    print("omamobile-install-link-agent: " + msg, flush=True)
+
+
+def paused(left):
+    if left is None:
+        return "Setup with the installer is paused. Restart the phone to continue."
+    n = "restart" if left == 1 else "restarts"
+    return "Setup with the installer is paused. Restart the phone to continue (%d %s left)." % (left, n)
+
+
+class Notice:
+    """One notification, replaced in place; an action runs `on_tap`."""
+
+    def __init__(self):
+        self.cmd = shlex.split(os.environ.get("OMAMOBILE_LINK_NOTIFY", "notify-send"))
+        self.close_cmd = os.environ.get("OMAMOBILE_LINK_CLOSE")
+        self.id = None
+        self.proc = None
+        self.tap = False
+
+    def _stop(self):
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        self.proc = None
+
+    def show(self, text, action):
+        """`action`: the notice can be tapped (notify-send waits for it)."""
+        self._stop()
+        args = self.cmd + ["--app-name=" + APP, "--urgency=normal", "--expire-time=0", "--print-id"]
+        if self.id:
+            args.append("--replace-id=%s" % self.id)
+        if action:
+            args += ["--action=default=Continue", "--wait"]
+        args += ["Phone setup", text]
+        try:
+            self.proc = subprocess.Popen(args, stdout=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True)
+        except OSError as e:
+            log("no notice: %s" % e.strerror)
+            self.proc = None
+            return
+        if not action:
+            out, _ = self.proc.communicate()
+            self._id(out)
+            self.proc = None
+        else:
+            # The id is the first line; the action's name, if tapped, the next
+            line = self.proc.stdout.readline()
+            self._id(line)
+
+    def _id(self, text):
+        first = (text or "").strip().splitlines()[:1]
+        if first and first[0].isdigit():
+            self.id = first[0]
+
+    def fileno(self):
+        return self.proc.stdout.fileno() if self.proc and self.proc.stdout else None
+
+    def read_tap(self):
+        """After select() says the notice's output is readable."""
+        line = self.proc.stdout.readline()
+        if not line:
+            self.proc.wait()
+            self.proc = None
+            return False
+        return line.strip() == "default"
+
+    def close(self):
+        self._stop()
+        if not self.id:
+            return
+        if self.close_cmd:
+            args = shlex.split(self.close_cmd) + [self.id]
+        else:
+            args = ["gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
+                    "--object-path", "/org/freedesktop/Notifications",
+                    "--method", "org.freedesktop.Notifications.CloseNotification", self.id]
+        try:
+            subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log("the notice could not be withdrawn: %s" % e)
+        self.id = None
+
+
+class Window:
+    """The code window: a program of its own, the code in its environment."""
+
+    def __init__(self):
+        cmd = os.environ.get("OMAMOBILE_LINK_WINDOW")
+        self.cmd = shlex.split(cmd) if cmd else ["qs", "-n", "-p", WINDOW_QML]
+        self.proc = None
+
+    def open(self, digits, valid_s):
+        self.close()
+        env = dict(os.environ, OMAMOBILE_LINK_CODE=digits, OMAMOBILE_LINK_VALID_S=str(valid_s))
+        try:
+            self.proc = subprocess.Popen(self.cmd, env=env, stdin=subprocess.DEVNULL,
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as e:
+            log("no code window: %s" % e.strerror)
+            self.proc = None
+
+    def gone(self):
+        """True once, when the window ended by itself (closed, timed out)."""
+        if self.proc and self.proc.poll() is not None:
+            self.proc = None
+            return True
+        return False
+
+    def close(self):
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        self.proc = None
+
+
+def state_file():
+    base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    return os.path.join(base, "omamobile", "install-link-notice")
+
+
+def ended_notice(text):
+    """The end's notice at the next three logins; then nothing."""
+    words = text.split()
+    reason = words[0] if words else "unknown"
+    if reason in QUIET:
+        return 0
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    path = state_file()
+    shown = 0
+    try:
+        with open(path) as f:
+            d, n = f.read().split()
+            if d == digest:
+                shown = int(n)
+    except (OSError, ValueError):
+        pass
+    if shown >= LOGINS:
+        return 0
+    missing = [WORDS.get(w, w) for w in words[1:]]
+    body = TEXT_ENDED
+    if missing:
+        body = "Not set up: %s. %s" % (", ".join(missing), body)
+    Notice().show(body, False)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("%s %d\n" % (digest, shown + 1))
+    os.replace(tmp, path)
+    log("the link ended (%s): the notice, login %d of %d" % (reason, shown + 1, LOGINS))
+    return 0
+
+
+def read_done():
+    try:
+        with open(DONE) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def connect():
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.connect(SOCKET)
+    except OSError:
+        s.close()
+        return None
+    return s
+
+
+def session(sock, notice, window):
+    """One connection to the daemon, to its end. Returns what ended it, and
+    for an end the daemon's words (REASON MISSING...)."""
+    buf = b""
+    # The notice to keep up while no host is paired: (text, tappable)
+    keep = None
+    again_at = None
+    while True:
+        fds = [sock]
+        if notice.fileno() is not None:
+            fds.append(notice.fileno())
+        r, _, _ = select.select(fds, [], [], 0.5)
+        if window.gone():
+            sock.sendall(b"hide\n")
+            if keep:
+                notice.show(*keep)
+        if notice.fileno() is not None and notice.fileno() in r:
+            if notice.read_tap():
+                sock.sendall(b"show\n")
+            elif keep:
+                # Dismissed without a tap: it comes back in a minute
+                again_at = time.monotonic() + REPEAT_S
+        if again_at and time.monotonic() >= again_at:
+            again_at = None
+            if keep and window.proc is None and notice.fileno() is None:
+                notice.show(*keep)
+        if sock not in r:
+            continue
+        data = sock.recv(4096)
+        if not data:
+            return "gone", None
+        buf += data
+        while b"\n" in buf:
+            raw, buf = buf.split(b"\n", 1)
+            words = raw.decode("ascii", "replace").split()
+            if not words:
+                continue
+            kind = words[0]
+            if kind == "open":
+                window.close()
+                keep = (TEXT_OPEN, True)
+                notice.show(*keep)
+                log("open: the notice")
+            elif kind == "code" and len(words) == 3 and words[1].isdigit() and words[2].isdigit():
+                window.open(words[1], int(words[2]))
+                log("code: the window")
+            elif kind == "locked":
+                window.close()
+                keep = (TEXT_LOCKED, True)
+                notice.show(*keep)
+                log("locked: the notice")
+            elif kind == "paired":
+                window.close()
+                keep = None
+                notice.close()
+                log("paired: no notice")
+            elif kind == "closed":
+                window.close()
+                left = int(words[1]) if len(words) > 1 and words[1].isdigit() else None
+                notice.show(paused(left), False)
+                log("closed for this boot")
+                return "closed", None
+            elif kind == "ended":
+                window.close()
+                notice.close()
+                log("ended")
+                return "ended", " ".join(words[1:])
+            else:
+                log("an unknown line from the daemon: ignored")
+
+
+def main():
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    notice, window = Notice(), Window()
+    try:
+        while True:
+            if not os.path.exists(MARKER):
+                done = read_done()
+                return ended_notice(done) if done else 0
+            sock = connect()
+            if sock is None:
+                if os.path.exists(CLOSED):
+                    # Closed for this boot before this login: say so once
+                    notice.show(paused(None), False)
+                    return 0
+                time.sleep(RETRY_S)
+                continue
+            log("connected to the daemon")
+            try:
+                how, words = session(sock, notice, window)
+            except OSError:
+                how, words = "gone", None
+            finally:
+                sock.close()
+            if how == "closed":
+                return 0
+            if how == "ended":
+                return ended_notice(words or read_done() or "")
+            window.close()
+            time.sleep(RETRY_S)
+    finally:
+        window.close()
+        notice._stop()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

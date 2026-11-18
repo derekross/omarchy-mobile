@@ -1,0 +1,216 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/build-host-sync in a copy of the repository, with stand-ins: ssh runs
+# its command in a scratch "build host" home here, rsync maps HOST:PATH into
+# that home and calls the real rsync, curl serves a scratch package server,
+# and stage --verify and stage-boot-files --check are stubs that pass unless
+# a FAIL file sits beside them. No network, no Docker, no phone. Covered: no
+# host or an odd one refused; push checking here, refusing another commit or
+# a failing check on either side, and copying; command printing the publish
+# service's DOCKER_HOST, refusing an unresolved %t, and the shell's socket
+# without one; pull replacing out/ only when the build host's indexes are the
+# served ones, out/repo is development's and the packages match, and leaving
+# out/ as it was otherwise; and --dry-run calling no ssh, rsync or curl.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; [[ ! -f ${t:-}/log ]] || cat "$t/log" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+for tool in git rsync bsdtar sha256sum; do
+  command -v "$tool" >/dev/null || { pass "# skip: no $tool"; exit 0; }
+done
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+export GIT_AUTHOR_NAME=Test GIT_AUTHOR_EMAIL=t@invalid GIT_COMMITTER_NAME=Test GIT_COMMITTER_EMAIL=t@invalid
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+REAL_RSYNC=$(command -v rsync)
+
+# --- the repository, and the build host's clone of it ---
+R=$t/repo
+mkdir -p "$R/tools/lib" "$R/packages/linux-omamobile" "$R/packages/omamobile-device-testdev"
+cp tools/build-host-sync omamobile.conf "$R/tools/" && mv "$R/tools/omamobile.conf" "$R/"
+cp tools/lib/usage.sh "$R/tools/lib/"
+for f in packages/linux-omamobile/stage tools/stage-boot-files; do
+  printf '%s\n' '#!/bin/bash' 'here=$(cd "$(dirname "$0")" && pwd)' \
+    '[[ ! -e $here/FAIL ]] || { echo "check failed in $PWD" >&2; exit 1; }' \
+    'echo "$0 $* in $PWD" >> "$CHECKS"' > "$R/$f"
+  chmod +x "$R/$f"
+done
+printf 'prebuilt/\nboot-files/\nout/\nFAIL\n' > "$R/.gitignore"
+echo "# stand-in" > "$R/packages/omamobile-device-testdev/PKGBUILD"
+git -C "$R" init -q && git -C "$R" add -A && git -C "$R" commit -q -m base
+H=$t/home
+mkdir -p "$H/Projects"
+git clone -q "$R" "$H/Projects/omarchy-mobile"
+B=$H/Projects/omarchy-mobile
+
+# The staged files here
+mkdir -p "$R/packages/linux-omamobile/prebuilt" "$R/packages/omamobile-device-testdev/boot-files"
+echo 7.3.0-rc6-omamobile-g0123456789ab > "$R/packages/linux-omamobile/prebuilt/kernel.release"
+echo image > "$R/packages/linux-omamobile/prebuilt/Image"
+echo dtbo > "$R/packages/omamobile-device-testdev/boot-files/dtbo.img"
+for d in "$R/packages/linux-omamobile/prebuilt" "$R/packages/omamobile-device-testdev/boot-files"; do
+  (cd "$d" && sha256sum -- * > SHA256SUMS)
+done
+
+# --- the stand-ins ---
+S=$t/stub
+mkdir -p "$S"
+cat > "$S/ssh" <<EOF
+#!/bin/bash
+echo "ssh \$*" >> "$t/net.log"
+while [[ \$1 == -* ]]; do [[ \$1 == -o ]] && shift; shift; done
+shift   # the host
+cd "$H" && HOME="$H" bash -c "\$*"
+EOF
+cat > "$S/rsync" <<EOF
+#!/bin/bash
+echo "rsync \$*" >> "$t/net.log"
+a=()
+for x in "\$@"; do
+  if [[ \$x =~ ^[A-Za-z0-9_@.-]+:(.*)\$ ]]; then a+=("$H/\${BASH_REMATCH[1]}"); else a+=("\$x"); fi
+done
+exec "$REAL_RSYNC" "\${a[@]}"
+EOF
+cat > "$S/curl" <<EOF
+#!/bin/bash
+echo "curl \$*" >> "$t/net.log"
+o="" u=""
+while ((\$#)); do case \$1 in -o) o=\$2; shift ;; http*) u=\$1 ;; esac; shift; done
+f="$t/server/\${u#https://pkgs.omamobile.org/}"
+[[ -f \$f ]] || exit 22
+cp "\$f" "\$o"
+EOF
+cat > "$S/systemctl" <<EOF
+#!/bin/bash
+[[ -f "$t/unit-env" ]] && cat "$t/unit-env"
+EOF
+chmod +x "$S"/*
+export CHECKS=$t/checks
+run() { (cd "$R" && PATH="$S:$PATH" tools/build-host-sync "$@") > "$t/log" 2>&1; }
+
+# --- the host ---
+if run push; then fail "no build host is refused"; fi
+grep -q 'BUILD_HOST=USER@HOST in omamobile.local.conf' "$t/log" || fail "says where the build host is set"
+if run --host '-oProxyCommand=x' push; then fail "an option for a host is refused"; fi
+if run --host builder@bh --repo '~/x;rm' push; then fail "a repo path with shell characters is refused"; fi
+echo 'BUILD_HOST=builder@bh' > "$R/omamobile.local.conf"
+pass "a build host is needed, from omamobile.local.conf or --host, and only a plain one"
+
+# --- dry runs call nothing ---
+: > "$t/net.log"
+for s in push command pull; do
+  run --dry-run "$s" || fail "--dry-run $s"
+  grep -q 'would run' "$t/log" || fail "--dry-run $s prints its commands"
+done
+[[ ! -s $t/net.log ]] || fail "a dry run called ssh, rsync or curl: $(cat "$t/net.log")"
+[[ ! -e $CHECKS ]] || fail "a dry run ran a check"
+run --dry-run push
+grep -q "would run: rsync -a --delete -- packages/linux-omamobile/prebuilt/ builder@bh:Projects/omarchy-mobile/packages/linux-omamobile/prebuilt/" "$t/log" &&
+  grep -q "would run: ssh builder@bh 'cd ~/Projects/omarchy-mobile && packages/linux-omamobile/stage --verify && tools/stage-boot-files --check packages/omamobile-device-testdev/boot-files'" "$t/log" ||
+  fail "the dry run names the copies and the checks there"
+pass "--dry-run prints every step's commands and calls no ssh, rsync, curl or check"
+
+# --- push ---
+touch "$R/packages/omamobile-device-testdev/boot-files/FAIL"
+touch "$R/tools/FAIL"
+if run push; then fail "a failing check here is refused"; fi
+grep -q 'fails its check here' "$t/log" || fail "says the check here failed"
+[[ ! -s $t/net.log ]] || fail "nothing is copied after a failing check here"
+rm "$R/tools/FAIL" "$R/packages/omamobile-device-testdev/boot-files/FAIL"
+git -C "$R" commit -q --allow-empty -m newer
+if run push; then fail "a build host at another commit is refused"; fi
+grep -q 'both must be the same commit' "$t/log" && grep -q 'merge --ff-only' "$t/log" || fail "says the commits differ and how to move it"
+git -C "$B" pull -q "$R" HEAD
+echo dirty >> "$B/omamobile.conf"
+if run push; then fail "a build host with local changes is refused"; fi
+git -C "$B" checkout -q -- omamobile.conf
+: > "$CHECKS"
+run push || fail "push"
+cmp -s "$R/packages/linux-omamobile/prebuilt/Image" "$B/packages/linux-omamobile/prebuilt/Image" &&
+  cmp -s "$R/packages/omamobile-device-testdev/boot-files/SHA256SUMS" "$B/packages/omamobile-device-testdev/boot-files/SHA256SUMS" ||
+  fail "push copies the kernel prebuilt and the boot files"
+grep -c "stage --verify in $R\$" "$CHECKS" >/dev/null && grep -c "stage --verify in $B\$" "$CHECKS" >/dev/null &&
+  grep -c "stage-boot-files --check packages/omamobile-device-testdev/boot-files in $B\$" "$CHECKS" >/dev/null ||
+  fail "push checks the copies here and on the build host: $(cat "$CHECKS")"
+grep -q 'the same on builder@bh, and current there' "$t/log" || fail "push reports both sides agree"
+touch "$B/tools/FAIL"
+if run push; then fail "a failing check on the build host is refused"; fi
+grep -q 'fail their check on builder@bh' "$t/log" || fail "says the check there failed"
+rm "$B/tools/FAIL"
+pass "push checks here, needs the same clean commit there, copies, and checks there"
+
+# --- command ---
+rm -f "$t/unit-env"
+run command || fail "command"
+# shellcheck disable=SC2016
+grep -qF "ssh -t builder@bh 'cd ~/Projects/omarchy-mobile && export DOCKER_HOST=unix:///run/user/\$(id -u)/docker.sock && tools/build-packages packages/linux-omamobile && tools/repo-publish --from-main development'" "$t/log" ||
+  fail "with no DOCKER_HOST in the unit, the shell's rootless socket"
+echo 'DOCKER_HOST=unix:///run/user/1000/docker.sock' > "$t/unit-env"
+run command || fail "command with the unit's DOCKER_HOST"
+grep -qF "export DOCKER_HOST=unix:///run/user/1000/docker.sock && tools/build-packages" "$t/log" || fail "the unit's resolved DOCKER_HOST"
+echo 'DOCKER_HOST=unix://%t/docker.sock' > "$t/unit-env"
+if run command; then fail "an unresolved %t is refused"; fi
+grep -q 'not one a shell can use' "$t/log" || fail "says the DOCKER_HOST is unusable"
+mv "$R/packages/linux-omamobile/prebuilt" "$t/prebuilt.away"
+echo 'DOCKER_HOST=unix:///run/user/1000/docker.sock' > "$t/unit-env"
+run command && ! grep -q 'build-packages packages/linux-omamobile' "$t/log" || fail "no kernel staged: no linux-omamobile build"
+mv "$t/prebuilt.away" "$R/packages/linux-omamobile/prebuilt"
+pass "command prints the build and publish with a DOCKER_HOST a shell can use"
+
+# --- pull ---
+# An index as repo-add lays one out: one desc per package
+mkindex() { # DIR FILE...
+  local dir=$1 f d; shift
+  d=$(mktemp -d)
+  for f in "$@"; do
+    mkdir -p "$d/${f%%.pkg*}"
+    printf '%%FILENAME%%\n%s\n\n%%SHA256SUM%%\n%s\n\n' "$f" "$(sha256sum < "$dir/$f" | cut -d' ' -f1)" > "$d/${f%%.pkg*}/desc"
+  done
+  bsdtar -czf "$dir/omamobile.db.tar.gz" -C "$d" .
+  rm -rf "$d"
+}
+for ch in repo publish/development publish/stable; do mkdir -p "$B/out/$ch/aarch64"; done
+for p in a-1-1 b-2-1; do
+  echo "$p" > "$B/out/repo/aarch64/$p-aarch64.pkg.tar.zst"; echo sig > "$B/out/repo/aarch64/$p-aarch64.pkg.tar.zst.sig"
+done
+mkindex "$B/out/repo/aarch64" a-1-1-aarch64.pkg.tar.zst b-2-1-aarch64.pkg.tar.zst
+cp -p "$B/out/repo/aarch64/"* "$B/out/publish/development/aarch64/"
+cp -p "$B/out/repo/aarch64/a-1-1-aarch64.pkg.tar.zst"* "$B/out/publish/stable/aarch64/"
+mkindex "$B/out/publish/stable/aarch64" a-1-1-aarch64.pkg.tar.zst
+mkdir -p "$t/server/development/aarch64" "$t/server/stable/aarch64"
+cp "$B/out/publish/development/aarch64/omamobile.db.tar.gz" "$t/server/development/aarch64/"
+cp "$B/out/publish/stable/aarch64/omamobile.db.tar.gz" "$t/server/stable/aarch64/"
+# This machine's out/, stale
+mkdir -p "$R/out/repo/aarch64" "$R/out/publish"
+echo old > "$R/out/repo/aarch64/old-0-1-aarch64.pkg.tar.zst"
+snap() { (cd "$R/out" && find . -type f -exec sha256sum {} + | sort) > "$1"; }
+snap "$t/before"
+
+echo other > "$t/server/development/aarch64/omamobile.db.tar.gz"
+if run pull; then fail "a development the server doesn't serve is refused"; fi
+grep -q "out/publish/development .* is not what https://pkgs.omamobile.org serves" "$t/log" || fail "says development isn't the served one"
+cp "$B/out/publish/development/aarch64/omamobile.db.tar.gz" "$t/server/development/aarch64/"
+rm "$t/server/stable/aarch64/omamobile.db.tar.gz"
+if run pull; then fail "a stable the server doesn't serve is refused"; fi
+cp "$B/out/publish/stable/aarch64/omamobile.db.tar.gz" "$t/server/stable/aarch64/"
+cp "$B/out/repo/aarch64/omamobile.db.tar.gz" "$t/db.keep"
+mkindex "$B/out/repo/aarch64" a-1-1-aarch64.pkg.tar.zst
+if run pull; then fail "an out/repo that isn't development's index is refused"; fi
+grep -q "out/repo is not development's index" "$t/log" || fail "says out/repo isn't development's"
+cp "$t/db.keep" "$B/out/repo/aarch64/omamobile.db.tar.gz"
+echo tampered > "$B/out/repo/aarch64/b-2-1-aarch64.pkg.tar.zst"
+if run pull; then fail "a package that isn't its index's is refused"; fi
+grep -q "repo/aarch64/b-2-1-aarch64.pkg.tar.zst is missing, unsigned or not the index's" "$t/log" || fail "names the package"
+snap "$t/after"
+cmp -s "$t/before" "$t/after" || fail "a refused pull leaves out/ here as it was"
+pass "pull refuses indexes the server doesn't serve, an unpublished out/repo and a package off its index, leaving out/ alone"
+
+echo b-2-1 > "$B/out/repo/aarch64/b-2-1-aarch64.pkg.tar.zst"
+run pull || fail "pull"
+[[ ! -e $R/out/repo/aarch64/old-0-1-aarch64.pkg.tar.zst ]] || fail "pull drops what the build host doesn't have"
+cmp -s "$R/out/repo/aarch64/omamobile.db.tar.gz" "$B/out/repo/aarch64/omamobile.db.tar.gz" &&
+  cmp -s "$R/out/publish/stable/aarch64/omamobile.db.tar.gz" "$t/server/stable/aarch64/omamobile.db.tar.gz" &&
+  [[ -f $R/out/publish/development/aarch64/b-2-1-aarch64.pkg.tar.zst ]] || fail "pull brings out/repo and out/publish"
+grep -q '4 package files checked' "$t/log" || fail "pull checks every listed package"
+[[ ! -e $R/out/.build-host-pull ]] || fail "pull leaves no staging directory"
+pass "pull puts the build host's out/repo and out/publish in place, every package checked"

@@ -6,7 +6,8 @@
 # load_device refuses bad descriptors; push, against a fake phone, refuses an
 # image too big for its partition before writing any, writes and verifies the
 # images and tells a reboot that did not happen from a phone that never came
-# back. Then, with a stub kernel output (a random Image, minimal DTBs, a
+# back; both refuse a phone that runs from slot A (a release there), flash
+# unless --from-slot-a names a development phone fallen back to stock. Then, with a stub kernel output (a random Image, minimal DTBs, a
 # random initramfs), a gs201-style descriptor yields its five boot images and
 # a gs101-style one (no init_boot or vendor_kernel_boot) yields boot (ramdisk
 # and OS version), vendor_boot (DTB and initramfs) and dtbo; a zuma-style one
@@ -100,6 +101,8 @@ fi
 # Every other call must name the phone.
 [[ $1 == -s && $2 == "${WANT_SERIAL:-FAKE123}" ]] || { echo "unpinned or wrong serial: $*" >&2; exit 64; }
 shift 2
+# fastboot prints getvar answers on stderr
+[[ $1 == getvar && $2 == current-slot ]] && { echo "current-slot: ${CURRENT_SLOT:-b}" >&2; echo 'Finished. Total time: 0.001s' >&2; exit 0; }
 [[ $1 == flash && ${FAIL_FLASH:-} == "$2" ]] && { echo FAILED; exit 17; }
 [[ $1 == flash ]] && echo OKAY
 exit 0
@@ -150,6 +153,25 @@ if om six flash; then fail "flash refuses an incomplete image set"; fi
 mv "$t/dtbo.img" "$K/images/dtbo.img"
 pass "a missing later image is refused before the first flash"
 
+# A phone that runs from slot A: refused before any write, unless the
+# owner names it a development phone that fell back to stock there
+for cur in a _a; do
+  : > "$t/fastboot.log"
+  if CURRENT_SLOT=$cur om six flash; then fail "flash refuses a phone on slot A ($cur)"; fi
+  grep -c 'this phone runs from slot A' "$t/log" >/dev/null || { cat "$t/log"; fail "flash says the phone runs from slot A"; }
+  [[ -z $(flashed) ]] && ! grep -Eq -- '--set-active|reboot' "$t/fastboot.log" || fail "flash writes nothing on slot A"
+done
+grep -c 'getvar current-slot' "$t/fastboot.log" >/dev/null || fail "the slot is read with getvar"
+: > "$t/fastboot.log"
+grep -c 'omamobile flash --from-slot-a' "$t/log" >/dev/null || fail "the refusal names --from-slot-a"
+OMAMOBILE_FLASH_FROM_SLOT_A=yes CURRENT_SLOT=a om six flash && fail "the old environment override is gone"
+: > "$t/fastboot.log"
+OMAMOBILE_FLASH_WARN_SECONDS=0 CURRENT_SLOT=a om six flash --from-slot-a || { cat "$t/log"; fail "--from-slot-a lets a development phone back onto slot B"; }
+[[ $(flashed) == "boot_b vendor_boot_b dtbo_b " ]] || fail "and flash writes slot B as before"
+grep -c 'WARNING: --from-slot-a' "$t/log" >/dev/null || fail "--from-slot-a prints a loud warning"
+om six flash --bogus && fail "flash refuses an unknown option"
+pass "flash refuses a phone running from slot A unless --from-slot-a, which warns"
+
 # Bad descriptors are refused before anything is built or written
 bad() { # what, sed expression on six's descriptor, expected message
   cp "$R/device/six/device.conf" "$t/good.conf"
@@ -198,6 +220,7 @@ cat > "$R/tools/phone-ssh" <<'PHONE'
 P=$T/phone cmd="$*"
 case $cmd in
   true|*'command -v reboot-to'*) exit 0 ;;
+  *androidboot*slot_suffix*) [[ ${PHONE_SLOT-} != FAIL ]] || exit 255; printf '%s\n' "${PHONE_SLOT-androidboot.slot_suffix = \"_b}" ;;
   'cat /proc/sys/kernel/random/boot_id')
     n=$(( $(cat "$P/reads" 2>/dev/null || echo 0) + 1 )); echo $n > "$P/reads"
     state=$(sed -n "${n}p" "$P/script"); [[ -n $state ]] || state=$(tail -n 1 "$P/script")
@@ -222,6 +245,18 @@ push() { # the boot_id answers, one per argument
 push old down new || { cat "$t/log"; fail "push succeeds when the phone comes back with a new boot id"; }
 [[ $(find "$P" -name 'sda_*' | wc -l) == 3 && $(cat "$P/log") == rebooted ]] || fail "push writes the three images and reboots once"
 pass "push writes and verifies the images, then sees the new boot id"
+for slot in 'androidboot.slot_suffix = "_a' 'androidboot.slot_suffix=_a'; do
+  if PHONE_SLOT=$slot push old new; then fail "push refuses a phone running from slot A ($slot)"; fi
+  grep -c 'this phone runs a release from slot A; push writes slot B, development only' "$t/log" >/dev/null || { cat "$t/log"; fail "push says why"; }
+  [[ $(find "$P" -name 'sda_*' | wc -l) == 0 && ! -s $P/log ]] || fail "push writes nothing and does not reboot on slot A"
+done
+if PHONE_SLOT= push old new; then fail "push refuses a phone that names no slot"; fi
+grep -c 'the phone names no boot slot' "$t/log" >/dev/null || { cat "$t/log"; fail "push says the phone names no slot"; }
+[[ $(find "$P" -name 'sda_*' | wc -l) == 0 && ! -s $P/log ]] || fail "push writes nothing when no slot is named"
+if PHONE_SLOT=FAIL push old new; then fail "push refuses when the slot can't be read"; fi
+grep -c "cannot read the phone's boot slot" "$t/log" >/dev/null || { cat "$t/log"; fail "push says the read failed"; }
+grep -c 'modules-push\|Module marker' "$t/log" >/dev/null && fail "the slot is checked before the modules"
+pass "push refuses a phone not running from slot B (A, none named, unreadable) before modules-push and any write"
 if push old old; then fail "push fails when the boot id never changes"; fi
 grep -c 'same boot id: the reboot did not happen' "$t/log" >/dev/null || { cat "$t/log"; fail "an unchanged boot id is reported as such"; }
 pass "push reports a reboot that did not happen"
