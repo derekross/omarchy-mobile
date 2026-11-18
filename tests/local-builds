@@ -13,6 +13,7 @@ fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 command -v gpg >/dev/null && command -v gpgv >/dev/null || { pass "# skip: no gpg"; exit 0; }
 t=$(mktemp -d)
+export ALARM_CACHE=$t/cache   # add_to_repo removes from the package cache: never the developer's own
 export GNUPGHOME=$t/home && mkdir -m 700 "$GNUPGHOME"  # never the user's ~/.gnupg
 trap 'gpgconf --homedir "$t/signer" --kill gpg-agent 2>/dev/null || true; gpgconf --homedir "$t/other" --kill gpg-agent 2>/dev/null || true; rm -rf "$t"' EXIT
 
@@ -37,6 +38,7 @@ gpgconf --homedir "$R/keys/panther/gnupg" --kill gpg-agent 2>/dev/null || true
 pass "local-key-init makes one signing key in keys/panther, once"
 
 # --- tools/fetch-published ---
+cp tools/lib/signing.sh "$R/tools/lib/"
 mkdir -m 700 "$t/signer" "$t/other"
 GNUPGHOME=$t/signer gpg --batch --quiet --passphrase '' --quick-generate-key "test signer <s@invalid>" ed25519 sign never
 GNUPGHOME=$t/other gpg --batch --quiet --passphrase '' --quick-generate-key "someone else <o@invalid>" ed25519 sign never
@@ -86,8 +88,9 @@ pass "fetch-published refuses an untrusted index, an untrusted package and a cha
 echo "package bytes" > "$srv/foo-1-1-any.pkg.tar.zst"
 sign signer "$srv/foo-1-1-any.pkg.tar.zst"
 make_index signer
-echo "$signer revoked" > "$kr/omamobile-revoked"
+echo "$signer" > "$kr/omamobile-revoked"
 if fetch; then fail "refuses a revoked key"; fi
+grep -q 'index is not signed by a trusted' "$t/log" || { cat "$t/log"; fail "says the revoked key's index is untrusted"; }
 pass "fetch-published refuses a revoked key"
 
 # The published repository moves on: foo 0.2.9 becomes 0.2.10 and bar goes.
@@ -187,6 +190,24 @@ fetch PATH="$t/bin:$PATH" || { cat "$t/log"; fail "fetch-published runs again in
 grep -q 'omamobile.db.sig$' "$t/curl.log" || { cat "$t/curl.log"; fail "the curl log sees the tool's index download"; }
 pass "fetch-published refuses a folder that holds a repository index, before any download, and leaves it as it was"
 
+# omamobile-revoked is read only in the form docs/RELEASES.md §10 gives: a
+# line in another form (the signer in lowercase, which a looser read takes
+# for no revocation), or a directory in the file's place, stops the run
+# before any download, with the words of tools/lib/signing.sh's check
+for bad in lowercase directory; do
+  [[ $bad != lowercase || $signer == *[A-F]* ]] || { pass "# skip: the signer's fingerprint has no letter to lowercase"; continue; }
+  if [[ $bad == lowercase ]]; then echo "${signer,,}" > "$kr/omamobile-revoked"
+  else rm "$kr/omamobile-revoked" && mkdir "$kr/omamobile-revoked"; fi
+  if why=$(source "$R/tools/lib/signing.sh" && revoked_file_check "$R"); then fail "the check refuses omamobile-revoked as a $bad"; fi
+  d=$t/revoked-$bad && : > "$t/curl.log"
+  if into=$d fetch PATH="$t/bin:$PATH"; then cat "$t/log"; fail "refuses omamobile-revoked as a $bad"; fi
+  grep -qxF "error: $why" "$t/log" || { cat "$t/log"; fail "says why omamobile-revoked as a $bad is refused"; }
+  [[ ! -s $t/curl.log ]] || { cat "$t/curl.log"; fail "fetches nothing with omamobile-revoked as a $bad"; }
+  [[ ! -e $d ]] || fail "makes no DIR with omamobile-revoked as a $bad"
+done
+rmdir "$kr/omamobile-revoked" && : > "$kr/omamobile-revoked"
+pass "fetch-published stops at an omamobile-revoked not in RELEASES §10's form, before any download, with the signing tools' words"
+
 # --- build-packages and build-rootfs --local ---
 mv "$R/keys/panther" "$t/panther-key"
 if run tools/build-packages --local panther packages/omamobile-device-panther; then fail "build-packages --local refuses without the local key"; fi
@@ -205,3 +226,38 @@ mv "$t/panther-key" "$R/keys/panther"
 if run tools/build-rootfs --local panther; then fail "build-rootfs --local refuses without out/panther/repo"; fi
 grep -q 'no \[omamobile\] repository in out/panther/repo' "$t/log" || { cat "$t/log"; fail "says out/panther/repo is missing"; }
 pass "build-rootfs --local checks the device, the key and out/NAME/repo"
+
+# --- build-packages --import ---
+# A folder filled by hand with two files of one package: add_to_repo keeps
+# one file per name, so the glob's order chose which, and foo 0.2.9 sorts
+# after 0.2.10; one has another file name, so only its .PKGINFO says it
+# is foo. The run stops and names both before it copies anything from
+# the folder; a folder of different packages still imports, foo-utils
+# beside foo among them (a name that begins with another). repo-add is a
+# stand-in, as in tests/build-packages-host-tools: without pacman's, the
+# tool would fetch it from the Arch Linux ARM tarball
+command -v bsdtar >/dev/null || command -v zstd >/dev/null || { pass "# skip: no bsdtar or zstd"; exit 0; }
+mkpkg() {  # mkpkg DIR NAME VER-REL [FILE]: a package file (NAME-VER-REL-any.pkg.tar.zst) with its .PKGINFO
+  local file=$1/${4:-$2-$3-any.pkg.tar.zst}
+  mkdir -p "$t/pkginfo" "$1"
+  printf 'pkgname = %s\npkgver = %s\narch = any\n' "$2" "$3" > "$t/pkginfo/.PKGINFO"
+  if command -v bsdtar >/dev/null; then bsdtar --zstd -cf "$file" -C "$t/pkginfo" .PKGINFO
+  else tar --zstd -cf "$file" -C "$t/pkginfo" .PKGINFO; fi
+}
+mkdir -p "$t/bin-import"
+printf '#!/bin/bash\nwhile [[ $1 == -* ]]; do [[ $1 == --key ]] && shift; shift; done\ntouch "$1"; ln -sf "$1" omamobile.db\n' > "$t/bin-import/repo-add"
+chmod +x "$t/bin-import/repo-add"
+r=$R/out/panther/repo/aarch64
+mkpkg "$t/same" foo 0.2.9-1 renamed-0.2.9-1-any.pkg.tar.zst && mkpkg "$t/same" foo 0.2.10-1 && mkpkg "$t/same" bar 1-1
+if run env PATH="$t/bin-import:$PATH" tools/build-packages --local panther --import "$t/same"; then cat "$t/log"; fail "--import refuses a folder with two files of one package"; fi
+line=$(grep -F 'two files of foo' "$t/log") || { cat "$t/log"; fail "says the folder has two files of foo"; }
+[[ $line == *renamed-0.2.9-1-any.pkg.tar.zst* && $line == *foo-0.2.10-1-any.pkg.tar.zst* ]] || { cat "$t/log"; fail "names both files of foo"; }
+[[ -z $(ls -A "$r" 2>/dev/null) ]] || { ls -A "$r"; fail "copies nothing from the folder and writes no index"; }
+pass "build-packages --import stops on two files of one package in a folder, names both, and adds nothing"
+mkpkg "$t/different" foo 0.2.10-1 && mkpkg "$t/different" foo-utils 1-1 && mkpkg "$t/different" bar 1-1
+run env PATH="$t/bin-import:$PATH" tools/build-packages --local panther --import "$t/different" \
+  || { cat "$t/log"; fail "--import takes a folder of different packages"; }
+gpgconf --homedir "$R/keys/panther/gnupg" --kill gpg-agent 2>/dev/null || true
+[[ -f $r/foo-0.2.10-1-any.pkg.tar.zst && -f $r/foo-utils-1-1-any.pkg.tar.zst && -f $r/bar-1-1-any.pkg.tar.zst && -e $r/omamobile.db ]] \
+  || { ls -A "$r"; cat "$t/log"; fail "all three packages and the index are in the repository"; }
+pass "build-packages --import still takes a folder of different packages, foo and foo-utils among them"

@@ -3,6 +3,7 @@
 # Smoke test of a root image from tools/build-rootfs, read through debugfs
 # (no root, no loop mount, nothing written):
 #   tests/rootfs-smoke out/omamobile-rootfs-<device>-<version>-aarch64.img.zst   (or a raw .img)
+#   tests/rootfs-smoke rootfs.img omamobile-rootfs-<...>.MANIFEST   (a raw image, with the MANIFEST beside its .zst)
 # Checks the label, that there is no account but a locked root, the keyrings,
 # the [omamobile] repository and its place in pacman.conf, the first-boot
 # unit, the kernel modules, the MANIFEST, the install link (inert without its
@@ -11,15 +12,15 @@
 set -euo pipefail
 # debugfs and friends live in /sbin on Debian-like hosts
 export PATH=$PATH:/usr/sbin:/sbin
-img=${1:?usage: tests/rootfs-smoke IMAGE[.zst]}
+img=${1:?usage: tests/rootfs-smoke IMAGE[.zst] [MANIFEST]}
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 # Scratch space beside the image: it holds a full decompressed copy
 t=$(mktemp -d "$(dirname "$(readlink -f "$img")")/.rootfs-smoke.XXXXXX"); trap 'chmod -R u+rwX "$t" 2>/dev/null; rm -rf "$t"' EXIT
 
 placeholders=$(dirname -- "$(readlink -f "${BASH_SOURCE[0]}")")/../rootfs/placeholders
-beside=""
-[[ $img != *.img.zst ]] || beside=${img%.img.zst}.MANIFEST
+beside=${2:-}
+[[ -n $beside || $img != *.img.zst ]] || beside=${img%.img.zst}.MANIFEST
 if [[ $img == *.zst ]]; then
   if [[ -f $img.sha256 ]]; then
     (cd "$(dirname "$img")" && sha256sum -c --quiet "$(basename "$img").sha256") || fail "checksum of $img"

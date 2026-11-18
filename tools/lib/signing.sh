@@ -21,8 +21,8 @@
 #     in capitals on every line, each ending with a newline. If not, prints
 #     why, naming the first wrong line, and returns 1; the same if it can't
 #     be read as a file (a missing one revokes nothing).
-#     signing_key_load and tools/release-upload run it before they read a
-#     line of the file.
+#     signing_key_load, tools/release-upload and tools/fetch-published run
+#     it before they read a line of the file.
 #
 # Nothing here reads, prints or copies secret key material.
 

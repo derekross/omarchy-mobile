@@ -41,7 +41,7 @@ pass() { printf 'ok - %s\n' "$1"; }
 # skipped every case here (as every run did while the workflow installed no
 # unzip) says nothing. Elsewhere the skip is said on both streams, with
 # what it leaves unchecked.
-for tool in debugfs mkfs.ext4 zstd openssl lz4 cpio gpg unzip python3 curl; do
+for tool in debugfs mkfs.ext4 zstd openssl lz4 cpio gpg unzip python3 curl img2simg; do
   command -v $tool >/dev/null && continue
   if [[ -n ${CI:-}${GITHUB_ACTIONS:-} ]]; then
     echo "not ok - tests/install-guided can't run in CI: no $tool (add it to .github/workflows/checks.yml)" >&2
@@ -1688,9 +1688,13 @@ done
 printf 'NAME="Arch Linux"\nID=arch\n' > "$t/os-arch"
 printf 'NAME="Ubuntu"\nID=ubuntu\nID_LIKE=debian\n' > "$t/os-ubuntu"
 printf 'NAME="Other"\nID=other\n' > "$t/os-other"
-# missing ARCH-PACKAGE DEBIAN-PACKAGE (Debian's "-": none we know of)
-for spec in "lpunpack android-tools -" "simg2img android-tools android-sdk-libsparse-utils" "fsck.erofs erofs-utils erofs-utils" "readelf binutils binutils"; do
+# missing ARCH-PACKAGE DEBIAN-PACKAGE (Debian's "-": none we know of).
+# img2simg is this computer's own (the installer runs it), so its link goes
+# for its own turn only
+real_img2simg=$(readlink -f "$t/sys/img2simg")
+for spec in "lpunpack android-tools -" "simg2img android-tools android-sdk-libsparse-utils" "img2simg android-tools android-sdk-libsparse-utils" "fsck.erofs erofs-utils erofs-utils" "readelf binutils binutils"; do
   read -r missing arch deb <<<"$spec"
+  ln -sfn "$real_img2simg" "$t/sys/img2simg"; [[ $missing != img2simg ]] || rm -f "$t/sys/img2simg"
   rm -f "$t/sys/lpunpack" "$t/sys/simg2img" "$t/sys/fsck.erofs" "$t/sys/readelf" "$t/sys/llvm-readelf"
   mkdir -p "$t/extract-some"; rm -f "$t/extract-some/"*
   for c in lpunpack simg2img fsck.erofs readelf; do [[ $c == "$missing" ]] || cp "$t/extract-bin/$c" "$t/extract-some/"; done
@@ -1714,7 +1718,7 @@ for spec in "lpunpack android-tools -" "simg2img android-tools android-sdk-libsp
     [[ $(tail -n 1 "$t/out") == "        tools/install-guided "* ]] || fail "a missing $missing: the stop ends with the command to run once it is installed"
   done
 done
-pass "a program a later step needs (lpunpack, simg2img, fsck.erofs, readelf) stops the install at step 1, named with its package on Arch and on Debian and Ubuntu, and the one install command for this system"
+pass "a program a later step needs (lpunpack, simg2img, img2simg, fsck.erofs, readelf) stops the install at step 1, named with its package on Arch and on Debian and Ubuntu, and the one install command for this system"
 
 # --- The real tools/phone-provision takes what the installer hands it ---------------
 # Everywhere above phone-provision is a stub, and a stub accepts anything:

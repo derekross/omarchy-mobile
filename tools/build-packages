@@ -201,6 +201,11 @@ add_to_repo() {
     cp -f "$file" "$repo/$base"
     rm -f "$repo/$base.sig"
     if [[ -n $local_name && -f $file.sig ]]; then cp -f "$file.sig" "$repo/$base.sig"; fi
+    # A forced rebuild can replace bytes without changing the filename.
+    # Pacstrap must fetch the replacement and its new signature together.
+    if [[ -f $ALARM_CACHE/pkg/$base ]] && ! cmp -s "$repo/$base" "$ALARM_CACHE/pkg/$base"; then
+      rm -f -- "$ALARM_CACHE/pkg/$base" "$ALARM_CACHE/pkg/$base.sig"
+    fi
     echo "    $base"
   done
 }
@@ -210,8 +215,16 @@ for dir in "${imports[@]}"; do
   files=()
   for f in "$dir"/*.pkg.tar.*; do [[ $f == *.sig ]] || files+=("$f"); done
   ((${#files[@]})) || alarm_die "no packages in $dir"
+  declare -A seen=()
   for f in "${files[@]}"; do
-    [[ $(pkginfo "$f" | sed -n 's/^arch = //p') =~ ^(aarch64|any)$ ]] || alarm_die "$f is not an aarch64 package"
+    info=$(pkginfo "$f" || true)
+    [[ $(sed -n 's/^arch = //p' <<<"$info") =~ ^(aarch64|any)$ ]] || alarm_die "$f is not an aarch64 package"
+    # add_to_repo keeps one file per package name, the last one copied, and
+    # the glob puts foo-0.2.9 after foo-0.2.10
+    name=$(sed -n 's/^pkgname = //p' <<<"$info")
+    [[ -z $name || -z ${seen[$name]:-} ]] ||
+      alarm_die "$dir has two files of $name, ${seen[$name]##*/} and ${f##*/}: remove the one you don't want; nothing was imported from $dir"
+    [[ -z $name ]] || seen[$name]=$f
   done
   add_to_repo "${files[@]}"
 done
