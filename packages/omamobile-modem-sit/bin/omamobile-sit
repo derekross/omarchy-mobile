@@ -9,6 +9,8 @@
   omamobile-sit hangup [ID]            the current call (or call ID)
   omamobile-sit dtmf KEYS [ID]         touch tones in the active call
   omamobile-sit mute on|off            the microphone during a call
+  omamobile-sit speaker on|off         the loudspeaker or the earpiece during a
+                                       call (Pixel 9a only)
   omamobile-sit sms send NUMBER TEXT   one SMS (several parts if needed)
   omamobile-sit sms list [--json]      received, not yet deleted
   omamobile-sit sms delete ID
@@ -119,6 +121,9 @@ def main(argv):
             return 0
         if cmd == 'mute' and rest in (['on'], ['off']):
             request('audio', what='mute', value=rest[0])
+            return 0
+        if cmd == 'speaker' and rest in (['on'], ['off']):
+            print('loudspeaker' if request('audio', what='speaker', value=rest[0])['speaker'] else 'earpiece')
             return 0
         if cmd == 'sms' and rest[:1] == ['send'] and len(rest) == 3:
             key = uuid.uuid4().hex
