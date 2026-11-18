@@ -196,6 +196,8 @@ grep -cx 'pad=6x6' "$foot" >/dev/null && ! grep -c '^pad=14x14' "$foot" >/dev/nu
 grep -cx 'multiplier=3.0' "$foot" >/dev/null || fail "foot's scrollback multiplier is 3"
 [[ $(grep -c '^\[touch\]$' "$foot") == 1 && $(grep -cx 'long-press-delay=300' "$foot") == 1 ]] || fail "foot's [touch] long press is 300 ms, once"
 grep -cx 'style=block' "$foot" >/dev/null || fail "the rest of foot.ini is kept"
+[[ $(grep -cx 'selection-target=both' "$foot") == 1 ]] || fail "foot's selection goes to the clipboard too, once"
+[[ $(sed -n '/^\[main\]$/{n;p;q}' "$foot") == selection-target=both ]] || fail "selection-target is in [main]"
 # Chromium's input method flags (TOUCH-PLAN 3.1), once each
 flags=$H/.config/chromium-flags.conf
 for flag in --enable-wayland-ime --wayland-text-input-version=3 --force-device-scale-factor=0.83; do
@@ -223,7 +225,19 @@ printf '[main]\npad=10x10\n\n[scrollback]\nmultiplier=5.0\n\n[touch]\nlong-press
 cp "$h/.config/foot/foot.ini" "$t/custom-foot.ini"
 RUN_HOME=$h run
 grep -cx 'local omarchy_gdk_scale = 2' "$h/.config/hypr/monitors.lua" >/dev/null || fail "GDK_SCALE stays with a user's own monitor scale"
-cmp -s "$h/.config/foot/foot.ini" "$t/custom-foot.ini" || fail "a user's own foot values stay theirs"
+grep -v '^selection-target=both$' "$h/.config/foot/foot.ini" | cmp -s - "$t/custom-foot.ini" || fail "a user's own foot values stay theirs"
+# selection-target: an existing one (spaces allowed) is kept, a file without [main] gets one on top
+for c in 'selection-target = primary' '  selection-target=primary'; do
+  hs=$t/home-sel; rm -rf "$hs"; mkdir -p "$hs/.config/hypr" "$hs/.config/omarchy" "$hs/.config/foot"
+  cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hs/.config/hypr/"; printf '[main]\n%s\n' "$c" >"$hs/.config/foot/foot.ini"
+  RUN_HOME=$hs run
+  [[ $(grep -c 'selection-target' "$hs/.config/foot/foot.ini") == 1 ]] || fail "an existing selection-target ($c) is kept alone"
+done
+hs=$t/home-sel; rm -rf "$hs"; mkdir -p "$hs/.config/hypr" "$hs/.config/omarchy" "$hs/.config/foot"
+cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hs/.config/hypr/"; printf 'font=x:size=9\n\n[colors]\nalpha=1\n' >"$hs/.config/foot/foot.ini"
+RUN_HOME=$hs run
+[[ $(head -2 "$hs/.config/foot/foot.ini") == $'[main]\nselection-target=both' ]] && grep -cx 'font=x:size=9' "$hs/.config/foot/foot.ini" >/dev/null || fail "a foot.ini without [main] gets one on top and keeps its keys"
+
 [[ -e $h/.local/state/omarchy/done/omamobile-foot-touch ]] || fail "the foot step runs once foot.ini is there"
 [[ $(grep -cx -- --enable-wayland-ime "$h/.config/chromium-flags.conf") == 1 ]] || fail "a flag the user has isn't added twice"
 grep -cx -- --wayland-text-input-version=3 "$h/.config/chromium-flags.conf" >/dev/null || fail "the missing flag is added"
