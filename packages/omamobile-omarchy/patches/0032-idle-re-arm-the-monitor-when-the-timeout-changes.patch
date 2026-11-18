@@ -20,7 +20,10 @@
 # With this patch the new one came at another address and the phone locked
 # 30 s after the change. Turning enabled off and on sends the pointer
 # through null. Drop this once a Quickshell that clears the pointer before
-# creating the new notification is on the phones.
+# creating the new notification is on the phones: reported upstream as
+# https://github.com/quickshell-mirror/quickshell/issues/938 and /1309, with
+# an open fix in https://github.com/quickshell-mirror/quickshell/pull/1097
+# (bNotification = nullptr before the delete).
 #
 # Omarchy 4.5: same hunk, one line of offset.
 
