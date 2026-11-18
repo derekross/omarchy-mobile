@@ -3,6 +3,7 @@ import QtQuick
 import Qt.labs.folderlistmodel
 import Quickshell
 import Quickshell.Bluetooth
+import Quickshell.Hyprland
 import Quickshell.Io
 import Quickshell.Networking
 import Quickshell.Services.UPower
@@ -97,6 +98,36 @@ Item {
     onExited: { root.cell = null; cellRestart.restart() }
   }
   Timer { id: cellRestart; interval: 5000; onTriggered: cellWatch.running = true }
+
+  // The hardware keyboard's layout (EN, GR...) beside the clock, only when
+  // kb_layout has more than one layout. Read from `hyprctl -j devices` at
+  // start and again on Hyprland's activelayout and configreloaded events
+  // (event names checked on Hyprland 0.56.2 only, UNVERIFIED on 0.57).
+  property string layoutLabel: ""
+  // An event that comes while a read runs marks it pending: setting running
+  // on a running Process does nothing, so the read is run again after it ends.
+  property bool layoutPending: false
+  function readLayout() {
+    if (layoutRead.running) layoutPending = true
+    else layoutRead.running = true
+  }
+  Process {
+    id: layoutRead
+    command: ["hyprctl", "-j", "devices"]
+    running: true
+    onExited: if (root.layoutPending) { root.layoutPending = false; layoutReread.restart() }
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.layoutLabel = StatusModel.layoutLabel(text)
+    }
+  }
+  Timer { id: layoutReread; interval: 150; onTriggered: root.readLayout() }
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      if (event && (event.name === "activelayout" || event.name === "configreloaded")) layoutReread.restart()
+    }
+  }
 
   // A call in progress: a chip with its time beside the clock. omatel's
   // agent through bin/omamobile-call-watch --observe (the call card runs
@@ -306,6 +337,21 @@ Item {
           font.bold: true
         }
 
+        Text {
+          id: layoutText
+          objectName: "layoutLabel"
+          visible: root.layoutLabel !== ""
+          anchors.left: clockText.right
+          anchors.leftMargin: Style.spacing.lg
+          anchors.verticalCenter: parent.verticalCenter
+          textFormat: Text.PlainText
+          text: root.layoutLabel
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          font.bold: true
+        }
+
         // The call in progress, beside the clock; a tap opens the Phone
         // app's in-call screen (the bar is never shown over the lock).
         Rectangle {
@@ -313,7 +359,8 @@ Item {
           objectName: "callChip"
           visible: root.callChip !== ""
           z: 2
-          anchors.left: clockText.right
+          // after the layout label, or the clock when the label is hidden
+          anchors.left: layoutText.visible ? layoutText.right : clockText.right
           anchors.leftMargin: Style.spacing.lg
           anchors.verticalCenter: parent.verticalCenter
           height: Math.round(root.barSize * 0.66)

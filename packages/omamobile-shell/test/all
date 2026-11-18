@@ -309,6 +309,8 @@ else
 fi
 grep -cF 'call omamobile.bar notificationsSeen' "$qs" >/dev/null || fail "the shade tells the bar what it has shown"
 grep -cF 'function notificationsSeen(stamp: string): string' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar serves notificationsSeen"
+grep -cF 'onExited: if (root.layoutPending) { root.layoutPending = false; layoutReread.restart() }' plugins/omamobile.bar/Bar.qml >/dev/null || fail "an event during a layout read reruns it"
+grep -cF 'anchors.left: layoutText.visible ? layoutText.right : clockText.right' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the call chip follows the layout label, or the clock when it is hidden"
 grep -cF '"/.local/state/omamobile/notifications-seen"' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar reads the shade's mark at start"
 grep -cF '"omarchy-shell", "shell", "summon", "omarchy.clipboard"' "$qs" >/dev/null || fail "the Clipboard tile opens Omarchy's clipboard history"
 # A swipe on a row forgets that one notification through the service's
@@ -375,6 +377,7 @@ if command -v node >/dev/null; then
   node test/gesture-model.js >/dev/null || { node test/gesture-model.js | grep -v '^ok'; fail "home and drawer gesture rules"; }
   node test/wifi-model.js || fail "Wi-Fi model"
   node test/bluetooth-model.js || fail "Bluetooth model"
+  node test/hwkeyboard-model.js || fail "hardware keyboard card model"
   node test/sensor-model.js || fail "fingerprint sensor model"
   node test/tiles-model.js || fail "quick-settings tile layout"
   node test/notifications-model.js >/dev/null || { node test/notifications-model.js; fail "notification shade model"; }
@@ -513,6 +516,11 @@ grep -c 'if (offset > Style.space(60)) sheet.dismissed()' plugins/omamobile.keyb
 if grep -n 'gnome-control-center\|Keyboard Settings' plugins/omamobile.keyboard/*.qml; then fail "no link to a GNOME settings panel the phone doesn't have"; fi
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-keyboard-languages || fail "omamobile-keyboard-languages parses"
 bash test/keyboard-languages.sh >/dev/null || { bash test/keyboard-languages.sh; fail "omamobile-keyboard-languages"; }
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-keyboard-switch || fail "omamobile-keyboard-switch parses"
+bash test/keyboard-switch.sh >/dev/null || { bash test/keyboard-switch.sh; fail "omamobile-keyboard-switch"; }
+[[ ! -e systemd/user/omamobile-keyboard-switch.service ]] || fail "no layout follower service (it bounced switches back)"
+if grep -nE 'switchxkblayout|omamobile-keyboard-switch|omamobile-keyboard\.lua|SHIFT_L|ALT_L|CTRL_L|code:66' hypr/phone.lua; then fail "phone.lua binds no switch key (xkb grp: options do it)"; fi
+if grep -n 'SUPER + ALT + SHIFT + SPACE' hypr/phone.lua; then fail "the old next-layout bind is gone"; fi
 if [[ -n ${OMAMOBILE_KEYBOARD_RENDER:-} ]]; then
   bash test/keyboard-render "$OMAMOBILE_KEYBOARD_RENDER" >/dev/null || fail "language sheet render"
 fi
@@ -1028,7 +1036,7 @@ pass "permission sheet"
 # of Hyprland's Lua API and sets what the layout depends on.
 lua=$(command -v lua || command -v lua5.4 || command -v luajit || true)
 if [[ -n $lua ]]; then
-  out=$("$lua" test/phone-rules.lua) || { grep -v '^ok' <<<"$out"; fail "phone.lua window rules"; }
+  out=$(XDG_CONFIG_HOME=/nonexistent "$lua" test/phone-rules.lua) || { grep -v '^ok' <<<"$out"; fail "phone.lua window rules"; }
   pass "phone.lua: edge to edge, opaque, dialogs, picture-in-picture"
   # Dictation keys under Omarchy 4.5's helpers: four homes, four bindings.lua
   dk=$(mktemp -d)
@@ -1037,7 +1045,7 @@ if [[ -n $lua ]]; then
   printf 'if o.dictation_installed and o.dictation_installed() then\n  o.bind_hold("F9", "Start dictation (push-to-talk)", "omarchy-dictation start", "Stop dictation (push-to-talk)", "omarchy-dictation stop")\nend\n' > "$dk/migrated/.config/hypr/bindings.lua"
   printf 'o.bind("F9", "My own key", "my-own-command")\n' > "$dk/own/.config/hypr/bindings.lua"
   for sc in installed:plain migrated:migrated own-f9:own none:plain; do
-    out=$(SCENARIO=${sc%%:*} HOME=$dk/${sc##*:} "$lua" test/phone-dictation.lua) || { grep -v '^ok' <<<"$out"; rm -rf "$dk"; fail "phone.lua dictation keys (${sc%%:*})"; }
+    out=$(SCENARIO=${sc%%:*} HOME=$dk/${sc##*:} env -u XDG_CONFIG_HOME "$lua" test/phone-dictation.lua) || { grep -v '^ok' <<<"$out"; rm -rf "$dk"; fail "phone.lua dictation keys (${sc%%:*})"; }
   done
   rm -rf "$dk"
   pass "phone.lua on Omarchy 4.5: Alt + Space and the migration's F9 are for hardware keyboards; the owner's own F9 is left alone"
@@ -1077,7 +1085,7 @@ pass "screenshot toast: Loupe, or Tensaku without the on-screen keyboard"
 
 bash -n bin/omamobile-setup-user || fail "omamobile-setup-user parses"
 bash test/setup-user.sh || fail "omamobile-setup-user against a scratch home"
-bash -n bin/omamobile-osk-guard || fail "omamobile-osk-guard parses"
+python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-osk-guard || fail "omamobile-osk-guard parses"
 # The widget crash guard counts a shell death inside the same boot as a
 # crash. A widget still "loading" from another boot (reboot, shutdown, dead
 # battery, or a system crash it caused) gets one retry as a suspect, and is
@@ -1183,6 +1191,8 @@ grep -cx 'ExecStart=/usr/bin/omamobile-setup-user' systemd/user/omamobile-setup-
 [[ -x $tmp/root/usr/bin/omamobile-osk-guard && -f $u/omamobile-osk-guard.service &&
    $(readlink "$u/graphical-session.target.wants/omamobile-osk-guard.service") == ../omamobile-osk-guard.service ]] \
   || fail "the keyboard safety net is staged and enabled for every user's session"
+grep -cx 'ExecStopPost=/usr/bin/gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true' systemd/user/omamobile-osk-guard.service >/dev/null \
+  || fail "the keyboard's owner leaves auto-show on when it stops"
 # Sleep on screen-off: staged and running for every session, but off until
 # the user's toggle (SUSPEND-PLAN 6.2): nothing in the package turns it on.
 [[ -x $tmp/root/usr/bin/omamobile-sleepd && -f $u/omamobile-sleepd.service &&

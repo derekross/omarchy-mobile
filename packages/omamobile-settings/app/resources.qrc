@@ -4,6 +4,8 @@
     <file>Main.qml</file>
     <file>AboutPage.qml</file>
     <file>DisplayPage.qml</file>
+    <file>KeyboardPage.qml</file>
+    <file>icons/keyboard.svg</file>
     <file>icons/display.svg</file>
     <file>catalog.json</file>
     <file>icons/system.svg</file>

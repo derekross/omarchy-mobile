@@ -10,6 +10,13 @@
         "page": "display"
       },
       {
+        "id": "keyboard",
+        "title": "Keyboard",
+        "detail": "Layouts and the switch key",
+        "icon": "keyboard",
+        "page": "keyboard"
+      },
+      {
         "id": "about",
         "title": "About this device",
         "detail": "System, software and storage",
@@ -24,6 +31,10 @@
   },
   "display": {
     "title": "Display",
+    "rows": []
+  },
+  "keyboard": {
+    "title": "Keyboard",
     "rows": []
   }
 }

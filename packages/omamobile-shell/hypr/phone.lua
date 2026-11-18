@@ -247,3 +247,10 @@ elseif o.cmd_present("voxtype") then
     { "Stop dictation (push-to-talk)", "voxtype record stop", { release = true } },
   })
 end
+
+-- The hardware keyboard's layout switch key is xkb only, a grp: option in
+-- kb_options that Settings > Keyboard writes to input.lua; nothing is bound
+-- here. On the phone (Hyprland 0.57.0) grp:alt_shift_toggle and
+-- grp:ctrl_shift_toggle switched in both key orders, and a press bind on top
+-- of the option switched twice per press. A fresh phone has no grp: option
+-- unless Omarchy's input.lua adds one (grp:alts_toggle for a non-Latin layout).

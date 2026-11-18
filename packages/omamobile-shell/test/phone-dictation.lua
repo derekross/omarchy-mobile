@@ -11,6 +11,7 @@
 local scenario = os.getenv("SCENARIO")
 local noop = function() end
 local binds = {}
+local kbd = {}
 local function dsp(name) return function(arg) return { dsp = name, arg = arg } end end
 hl = {
   config = noop, window_rule = noop, layer_rule = noop, device = noop,
@@ -19,7 +20,15 @@ hl = {
     for _, b in ipairs(binds) do if b.keys ~= keys then kept[#kept + 1] = b end end
     binds = kept
   end,
-  dsp = { window = { cycle_next = dsp("cycle_next"), bring_to_top = dsp("bring_to_top") }, focus = dsp("focus") },
+  dsp = { window = { cycle_next = dsp("cycle_next"), bring_to_top = dsp("bring_to_top") }, focus = dsp("focus"),
+          exec_cmd = function(c) return c end },
+  -- phone.lua must bind no layout switch key (xkb does it): any hl.bind is counted
+  bind = function(keys)
+    local h = { keys = keys, on = true }
+    h.set_enabled = function(self, v) self.on = v end
+    kbd[#kbd + 1] = h
+    return h
+  end,
 }
 o = {
   bind = function(keys, description, dispatcher, opts)
@@ -72,4 +81,5 @@ else
     check(#f9 == 1 and f9[1].dispatcher == "my-own-command" and f9[1].opts.device == nil, "the owner's own F9 bind is left as it is")
   end
 end
+check(#kbd == 0, "no layout switch bind, the switch key is xkb's")
 os.exit(failed and 1 or 0)

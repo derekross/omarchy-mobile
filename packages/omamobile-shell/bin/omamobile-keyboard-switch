@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Hardware keyboard layout switching.
+
+    omamobile-keyboard-switch next      every real keyboard to the next layout
+    omamobile-keyboard-switch set N     every real keyboard to layout N (0 = first)
+    omamobile-keyboard-switch lock      layout 0 on every real keyboard (lock screen,
+                                        polkit prompt: passwords are typed in layout 0)
+
+The hardware switch key does not run this: it is an xkb grp: option in
+kb_options (grp:alt_shift_toggle, grp:ctrl_shift_toggle or grp:caps_toggle; see
+omamobile-settings/backends/keyboard.sh). Nothing calls this script yet (the
+quick-settings card does not); it is kept, with its tests, for scripts and a
+later caller.
+
+Real keyboards are the ones in `hyprctl -j devices` that are not squeekboard's
+or another virtual keyboard (hl-virtual-keyboard*) or a pseudo-keyboard
+(consumer-control, power-button, video-bus, radio-control, gpio-keys), the same
+set as the Settings backend and the bar. The "main" keyboard (whose layout
+`next` steps from and the bar shows) is, in all three: the real one Hyprland
+marks main, else the first real one with more than one layout, else the first
+real one. Every real keyboard is set to the same index.
+
+This never touches the on-screen keyboard: no gsettings write and no
+omamobile-keyboard-languages call. On the phone (Hyprland 0.57.0, 2026-11-17)
+a gsettings write on a hardware switch made squeekboard send its keymap again,
+and the app then got Latin letters while Hyprland said Greek. The OSK keeps its
+own language list and globe key.
+
+UNVERIFIED on the phone: `switchxkblayout` through `hyprctl --batch` (the
+phone test ran `hyprctl switchxkblayout <device> next` directly).
+
+OMAMOBILE_HYPRCTL points elsewhere for tests."""
+
+import glob
+import json
+import os
+import subprocess
+import sys
+
+HYPRCTL = os.environ.get("OMAMOBILE_HYPRCTL", "hyprctl")
+PSEUDO = ("consumer-control", "power-button", "video-bus", "radio-control", "gpio-keys")
+# hyprctl --batch splits commands on ";" and arguments on spaces: a name with any of these
+# cannot be passed safely, so that keyboard is left out (Hyprland names seen on 0.56.2 are
+# lowercase with dashes, e.g. dell-kb7120w).
+UNSAFE = set(" ;\t\r\n\"'\\")
+
+
+def find_hypr():
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        return
+    run = os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()
+    socks = glob.glob(os.path.join(run, "hypr", "*", ".socket.sock"))
+    if socks:
+        newest = max(socks, key=os.path.getmtime)
+        os.environ["HYPRLAND_INSTANCE_SIGNATURE"] = os.path.basename(os.path.dirname(newest))
+
+
+def real(name):
+    return not name.startswith("hl-virtual-keyboard") and not any(p in name for p in PSEUDO)
+
+
+def keyboards():
+    r = subprocess.run([HYPRCTL, "-j", "devices"], capture_output=True, text=True)
+    if r.returncode:
+        sys.exit("omamobile-keyboard-switch: hyprctl devices failed")
+    try:
+        kbs = json.loads(r.stdout).get("keyboards", [])
+    except ValueError:
+        sys.exit("omamobile-keyboard-switch: hyprctl devices gave no JSON")
+    return [k for k in kbs if real(k.get("name", ""))]
+
+
+def names(kb):
+    """xkb names: layout or layout+variant."""
+    lay = kb.get("layout", "").split(",")
+    var = kb.get("variant", "").split(",")
+    var += [""] * (len(lay) - len(var))
+    return [l + ("+" + v if v else "") for l, v in zip(lay, var) if l]
+
+
+def main_kb(kbs):
+    return (next((k for k in kbs if k.get("main")), None)
+            or next((k for k in kbs if len(names(k)) > 1), None)
+            or (kbs[0] if kbs else None))
+
+
+def safe(name):
+    return bool(name) and not any(c in UNSAFE or ord(c) < 32 for c in name)
+
+
+def switch(n, kbs):
+    cmds = []
+    for k in kbs:
+        if safe(k["name"]):
+            cmds.append("switchxkblayout %s %d" % (k["name"], n))
+        else:
+            print("omamobile-keyboard-switch: skipping keyboard %r (name hyprctl --batch cannot take)"
+                  % k["name"], file=sys.stderr)
+    if cmds:
+        subprocess.run([HYPRCTL, "--batch", "; ".join(cmds)], stdout=subprocess.DEVNULL)
+
+
+def to(n, kbs=None):
+    kbs = keyboards() if kbs is None else kbs
+    kb = main_kb(kbs)
+    if kb is None:
+        return
+    lst = names(kb)
+    if len(lst) < 2:
+        return  # one layout: the switch key does nothing
+    n %= len(lst)
+    switch(n, kbs)
+
+
+def main(argv):
+    find_hypr()
+    if argv[:1] == ["next"]:
+        kbs = keyboards()
+        kb = main_kb(kbs)
+        i = kb.get("active_layout_index", 0) if kb else 0
+        to((i if isinstance(i, int) else 0) + 1, kbs)
+    elif argv[:1] == ["set"] and len(argv) == 2 and argv[1].isdigit():
+        to(int(argv[1]))
+    elif argv[:1] == ["lock"]:
+        to(0)
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

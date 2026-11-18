@@ -191,6 +191,22 @@ omamobile-omarchy's 4.5 series; without it the rows come back).
 The card takes the room left under the sheet and scrolls past that; it hides
 in edit mode, or when the sheet leaves no room for it.
 
+### Hardware keyboard card
+
+While a real Bluetooth or USB keyboard is connected, the on-screen keyboard
+stops popping up on text fields and the shade starts with a keyboard card
+(`KeyboardCard.qml`, rules in `HwKeyboardModel.js`, tests in
+`test/hwkeyboard-model.js` and `test/osk-guard.sh`). `omamobile-osk-guard`
+is the only writer of `screen-keyboard-enabled` and lists the keyboards (one
+per `uniq`, so a keyboard's several input nodes are one row) in
+`~/.local/state/omamobile/osk-hwkbd.json`, which the card watches. Each row
+reads "<name> connected", with Disconnect for a Bluetooth keyboard whose
+`uniq` is its address (`bluetoothctl disconnect`). Show on-screen keyboard
+turns auto-show back on and shows it; Hide turns it off and hides it. A
+keyboard that goes away stays listed for 5 s (a reconnect of the same `uniq`
+keeps the mode); with none left the mode goes back to auto and auto-show is
+on. Locked (any credential), auto-show stays on; a polkit prompt is not detected (known limit).
+
 ### Media card
 
 While a player plays or is paused, the shade starts with a media card, as

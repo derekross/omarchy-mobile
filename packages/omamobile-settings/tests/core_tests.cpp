@@ -18,7 +18,7 @@ private slots:
     void navigationRejectsUnknownAndHiddenActions() {
         Backend backend;
         QVERIFY(backend.catalogProblems().isEmpty());
-        QCOMPARE(backend.rows().size(), 2);
+        QCOMPARE(backend.rows().size(), 3);
         QVERIFY(!backend.navigate("recording"));
         backend.activate("arbitrary-command");
         QCOMPARE(backend.page(), QString("root"));
@@ -26,6 +26,13 @@ private slots:
         QCOMPARE(backend.page(), QString("about"));
         backend.activate("about");
         QCOMPARE(backend.page(), QString("about"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("root"));
+    }
+    void keyboardPageGoesBackToRoot() {
+        Backend backend;
+        QVERIFY(backend.navigate("keyboard"));
+        QCOMPARE(backend.page(), QString("keyboard"));
         backend.back();
         QCOMPARE(backend.page(), QString("root"));
     }
