@@ -177,9 +177,12 @@ grep -qx 'persist.vendor.modem.efs.clear.action=none' modem/props.conf ||
   fail "efs.clear.action is pinned to none (empty clears NV)"
 grep -qx 'vendor.modem.bin.path=/mnt/vendor/modem_img/images/default/modem.bin' modem/props.conf ||
   fail "rfsd reads its TOC from the firmware file (vendor.modem.bin.path)"
+# Only what systemd-analyze says about the staged unit counts: it also loads the
+# host's own units, and a warning about one of those (they begin with the host's
+# unit path) failed the nightly publish on the build host on 2026-11-18.
 if command -v systemd-analyze >/dev/null; then
   systemd-analyze verify --man=no "$stage"/usr/lib/systemd/system/omamobile-modem{.service,-inhibit.service,-boot.target} 2>&1 |
-    grep -v -e 'not executable' -e 'No such file' -e 'omamobile-aoc.service' -e 'omamobile-audio.service' \
+    grep -v -e '^/usr/lib/systemd/' -e '^/lib/systemd/' -e '^/etc/systemd/' -e '^/run/systemd/' -e 'not executable' -e 'No such file' -e 'omamobile-aoc.service' -e 'omamobile-audio.service' \
       -e 'omamobile-sitd.service' -e 'omamobile-sit-data.service' -e 'omamobile-mmd.service' -e '^$' &&
     fail "unit verify" || true
 fi
