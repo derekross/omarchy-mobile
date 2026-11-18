@@ -154,7 +154,25 @@ has "$b" '-- compose-caps: restore omarchy:shift_caps_compose'
 run set switch-key alt_shift >/dev/null
 has "$tmp/input.lua" 'kb_options = "grp:alt_shift_toggle,omarchy:shift_caps_compose", -- keep me'
 [[ ! -e $b ]] || { echo "FAIL: the marker stayed after caps" >&2; exit 1; }
-sed -i 's/kb_options = "grp:alt_shift_toggle,omarchy:shift_caps_compose", -- keep me/kb_options = "grp:ctrl_shift_toggle", -- keep me/' "$tmp/input.lua"
+# both Compose options at once: both go with caps, the marker names both, both come back
+sed -i 's/kb_options = "grp:alt_shift_toggle,omarchy:shift_caps_compose", -- keep me/kb_options = "compose:caps,omarchy:shift_caps_compose", -- keep me/' "$tmp/input.lua"
+run set switch-key caps >/dev/null
+has "$tmp/input.lua" 'kb_options = "grp:caps_toggle,grp_led:caps", -- keep me'
+has "$b" '-- compose-caps: restore compose:caps omarchy:shift_caps_compose'
+run set switch-key none >/dev/null
+has "$tmp/input.lua" 'kb_options = "compose:caps,omarchy:shift_caps_compose", -- keep me'
+[[ ! -e $b ]] || { echo "FAIL: the marker stayed after caps" >&2; exit 1; }
+# a Compose option added by hand while caps is on joins the marker, the earlier one stays in it
+sed -i 's/kb_options = "compose:caps,omarchy:shift_caps_compose", -- keep me/kb_options = "compose:caps", -- keep me/' "$tmp/input.lua"
+run set switch-key caps >/dev/null
+has "$b" '-- compose-caps: restore'
+hasnt "$b" 'omarchy:'
+sed -i 's/kb_options = "grp:caps_toggle,grp_led:caps", -- keep me/kb_options = "grp:caps_toggle,grp_led:caps,omarchy:shift_caps_compose", -- keep me/' "$tmp/input.lua"
+run set switch-key caps >/dev/null
+has "$b" '-- compose-caps: restore compose:caps omarchy:shift_caps_compose'
+run set switch-key alt_shift >/dev/null
+has "$tmp/input.lua" 'kb_options = "grp:alt_shift_toggle,compose:caps,omarchy:shift_caps_compose", -- keep me'
+sed -i 's/kb_options = "grp:alt_shift_toggle,compose:caps,omarchy:shift_caps_compose", -- keep me/kb_options = "grp:ctrl_shift_toggle", -- keep me/' "$tmp/input.lua"
 run set switch-key alt_shift >/dev/null
 # one layout left: the option stays (xkb has nowhere to switch then); the variant goes
 eq "$(run set layouts us)" '{"layouts":[{"layout":"us","variant":""}],"switchKey":"alt_shift","active":1}'

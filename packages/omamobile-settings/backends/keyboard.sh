@@ -5,8 +5,8 @@
 # org.gnome.desktop.input-sources sources, and a layouts change adds new ones there too.
 # The switch key is pure xkb, a grp: option in kb_options, never a Hyprland bind (measured on the phone,
 # Hyprland 0.57.0-3.2, Dell KB7120W over Bluetooth): alt_shift = grp:alt_shift_toggle (20/20 on 2026-11-18,
-# both key orders, 1-2 ms after the second key), ctrl_shift = grp:ctrl_shift_toggle (19/19, both orders),
-# caps = grp:caps_toggle,grp_led:caps (12/12, 1-3 ms, 2026-11-17), none = no grp: option. Press binds on
+# both key orders, 1-2 ms after the second key), ctrl_shift = grp:ctrl_shift_toggle (41 switches in two runs, both orders, no doubles),
+# caps = grp:caps_toggle,grp_led:caps (14 timed presses, 2-3 ms, 2026-11-17), none = no grp: option. Press binds on
 # top of the xkb option switched twice per press, so phone.lua binds nothing. "get" reads the choice from
 # the effective kb_options; any other grp: option (Omarchy's grp:alts_toggle for a non-Latin layout, say)
 # reports none, and only a switch-key save replaces it. On a fresh phone nothing switches the hardware
@@ -105,13 +105,18 @@ def out(obj):
     print(json.dumps(obj, separators=(",", ":")))
 
 MARKER_NEW = False  # True while a marker this run wrote has no input.lua write behind it yet
+MARKER_PREV = []  # the marker's options before this run rewrote it
 
 def fail(msg):
     if MARKER_NEW:
-        try:
-            os.unlink(BINDS)  # input.lua still has compose:caps, so the marker would be stale
-        except OSError:
-            pass
+        # input.lua was not written, so the marker goes back to what it said before this run
+        if MARKER_PREV:
+            write_state(MARKER_PREV)
+        else:
+            try:
+                os.unlink(BINDS)
+            except OSError:
+                pass
     out({"error": msg})
     sys.exit(2)
 
@@ -231,17 +236,18 @@ def active():
     return i if isinstance(i, int) and i >= 0 else None
 
 def compose_marked():
-    """The Compose option that was in kb_options before caps took the key, from the state file, else None.
+    """The Compose options that were in kb_options before caps took the key, from the state file, else [].
     A bare "restore" line (written before the Omarchy 4.5 name was known) means compose:caps."""
+    names = "|".join(re.escape(o) for o in COMPOSE_OPTS)
     try:
         with open(BINDS, encoding="utf-8", errors="replace") as f:
             for line in f:
-                m = re.fullmatch(r"-- compose-caps: restore(?: (omarchy:shift_caps_compose))?\s*", line)
+                m = re.fullmatch(r"-- compose-caps: restore((?: (?:%s))*)\s*" % names, line)
                 if m:
-                    return m.group(1) or "compose:caps"
+                    return m.group(1).split() or ["compose:caps"]
     except OSError:
         pass
-    return None
+    return []
 
 def old_key():
     """alt_shift or ctrl_shift from an earlier commit's bind file, else None."""
@@ -256,7 +262,7 @@ def old_key():
     return None
 
 def write_state(compose):
-    """The compose-caps marker for option compose on disk, else (compose falsy) no state file."""
+    """The compose-caps marker for the options in compose on disk, else (compose empty) no state file."""
     if not compose:
         try:
             os.unlink(BINDS)
@@ -266,7 +272,7 @@ def write_state(compose):
             return False
         return True
     text = ("-- Written by Omarchy Mobile Settings (Keyboard); nothing loads it. Changes here are replaced.\n"
-            "-- compose-caps: restore%s\n" % ("" if compose == "compose:caps" else " " + compose))
+            "-- compose-caps: restore%s\n" % ("" if compose == ["compose:caps"] else " " + " ".join(compose)))
     tmp = "%s.tmp-omamobile.%d" % (BINDS, os.getpid())
     try:
         os.makedirs(os.path.dirname(BINDS), exist_ok=True)
@@ -513,15 +519,17 @@ else:
     # compose:caps goes while caps holds the key; the marker brings it back when caps lets go, and only then
     was_caps = "grp:caps_toggle" in options
     marked = compose_marked()
-    present = next((o for o in COMPOSE_OPTS if o in options), None)
-    compose = (present or (marked if was_caps else None) or False) if sw == "caps" else False
+    # every Compose option on Caps that is in kb_options now, or that the marker says was there before caps
+    keep = (marked if was_caps else []) + [o for o in options if o in COMPOSE_OPTS]
+    compose = [o for o in COMPOSE_OPTS if o in keep] if sw == "caps" else []
     options = switch_options(options, sw)
-    if sw != "caps" and was_caps and marked and not any(o in options for o in COMPOSE_OPTS):
-        options = options + [marked]
+    if sw != "caps" and was_caps:
+        options = options + [o for o in marked if o not in options]
     # The marker goes to disk before input.lua loses compose:caps, so a failed write in between can't
     # lose it (harmless while caps is not on); leaving caps, input.lua gets compose:caps back first,
     # then the marker goes.
     if compose and compose != marked:
+        MARKER_PREV = marked if was_caps else []
         if not write_state(compose):
             fail("cannot write " + os.path.basename(BINDS))
         MARKER_NEW = True
