@@ -211,11 +211,14 @@ if [[ $rc == 77 ]]; then
 elif [[ $rc != 0 ]]; then
   printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the home pill under touch (test/pill-touch)"
 else
-  pass "the home pill under touch: a double tap toggles the keyboard, a tap does nothing, swipes go home, the hide key, the reserved strip, the search pill, the hold for voice"
+  pass "the home pill under touch: a double tap toggles the keyboard, a tap does nothing, swipes of any length go home, a swipe held still opens recent apps, the hide key, the reserved strip, the search pill, the hold for voice"
 fi
 grep -c '} else if (!recents && swipeY < -24) root.goHome()' "$l" >/dev/null || fail "a short swipe goes home"
 grep -c 'if (recents || root.opened) return' "$l" >/dev/null || fail "over the drawer a swipe opens no recent apps"
-grep -c 'if (swipeY < -120) {' "$l" >/dev/null || fail "a long swipe opens recent apps"
+# A swipe goes home however long it is; only a finger held still opens recent
+# apps (up to 0.2.133 a swipe past 120 px did too, and an ordinary one is longer).
+grep -c 'swipeY < -120' "$l" >/dev/null && fail "a long swipe goes home, not to recent apps"
+grep -c '} else if (!hold.running || Math.abs(swipeY - restY) > swipeArea.holdSlop) {' "$l" >/dev/null || fail "the hold waits for a finger at rest, whatever small shifts it makes"
 # Drawer: pull down to close, and a pull is not also a tap on an app.
 grep -c 'if (LauncherModel.drawerEndsOpen(root.progress, speed, true)) root.settleTo(true, speed)' "$l" >/dev/null || fail "pulling the drawer down closes it"
 grep -c 'onClicked: if (!root.pullMoved) cell.tapped()' "$l" >/dev/null || fail "a pull doesn't launch the app under it"
