@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+# Tactus's defaults for Stevia's settings. It is compiled with Stevia's schemas
+# under /usr/lib/tactus, which only Tactus reads.
+[mobi.phosh.osk]
+# Stevia's own word completion stays off: Tactus's typing engine takes the keys
+# before Stevia's completer would see them, and corrects the words itself.
+completion-mode=[]

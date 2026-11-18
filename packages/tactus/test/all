@@ -1,0 +1,158 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Checks for the tactus package.
+#
+#   test/all                    offline (tests/packages, CI): the PKGBUILD's pins, the patches'
+#                               shape and which files they touch, the launcher, the licences
+#   test/all --upstream DIR     also: the patches apply to the untouched Stevia tree in DIR
+#                               with no fuzz, and nothing of ours overwrites a file of Stevia's
+#   test/all --built BUILD SRC  (the PKGBUILD's check()) also: the checks built with the
+#                               keyboard run: the typing engine against make-believe text
+#                               fields, the autocorrection's word list, and, under xvfb-run,
+#                               the keys and the emoji page; and the trace says nothing typed
+set -uo pipefail
+cd "$(dirname "$(readlink -f "$0")")/.."
+fails=0
+fail() { echo "FAIL: $*" >&2; fails=$((fails + 1)); }
+pass() { echo "ok: $*"; }
+
+upstream= built= src=
+case ${1:-} in
+  --upstream) upstream=${2:?--upstream DIR} ;;
+  --built) built=${2:?--built BUILD SRC}; src=${3:?--built BUILD SRC} ;;
+  "") ;;
+  *) echo "usage: test/all [--upstream DIR | --built BUILD SRC]" >&2; exit 2 ;;
+esac
+
+# --- the PKGBUILD
+# shellcheck disable=SC1091
+( startdir=$PWD; source ./PKGBUILD
+  [[ $pkgname == tactus && $pkgver == "$(cat version)" ]] || exit 1
+  [[ ${#source[@]} == 2 && ${#sha256sums[@]} == 2 ]] || exit 2
+  [[ ${sha256sums[0]} =~ ^[0-9a-f]{64}$ && ${sha256sums[1]} =~ ^[0-9a-f]{64}$ ]] || exit 3
+  [[ ${source[0]} == *"/v$_stevia/stevia-v$_stevia.tar.gz" ]] || exit 4
+  [[ ${source[1]} == *"/FrequencyWords/$_counts/content/2018/en/en_50k.txt" && $_counts =~ ^[0-9a-f]{40}$ ]] || exit 5
+  grep -q "commit $_counts" WORD-COUNTS || exit 6
+  [[ " ${depends[*]} " == *" hunspell-en_us "* && " ${depends[*]} " != *" squeekboard "* ]] || exit 7
+  [[ -z ${conflicts[*]:-} && -z ${provides[*]:-} ]] || exit 8
+) && pass "PKGBUILD: both downloads pinned by commit or tag and sha256, the word counts' commit is the one WORD-COUNTS names, no conflict with squeekboard" \
+  || fail "PKGBUILD (exit $?)"
+grep -q -- '--prefix=/usr/lib/tactus' PKGBUILD && grep -q -- '-Dsystemd_user_unit_dir=/usr/lib/tactus/' PKGBUILD \
+  && grep -q -- '-Ddefault_osk=false' PKGBUILD \
+  && pass "everything is installed under /usr/lib/tactus, the unit included (squeekboard owns mobi.phosh.OSK.service)" \
+  || fail "the build no longer keeps to /usr/lib/tactus"
+grep -q 'mv "$p/bin/phosh-osk-stevia" "$p/bin/tactus"' PKGBUILD \
+  && pass "the binary is named tactus (Hyprland names its virtual keyboard after it)" || fail "the binary keeps Stevia's name"
+
+# --- the patches
+want_files="meson.build src/layouts/us.json src/meson.build src/pos-emoji-picker.c src/pos-emoji-picker.h src/pos-hw-tracker.c src/pos-input-surface.c src/pos-osk-widget.c src/pos-osk-widget.h src/pos-wayland.c tools/meson.build"
+shopt -s nullglob
+patches=(patches/*.patch)
+[[ ${#patches[@]} == 6 ]] && pass "six patches" || fail "${#patches[@]} patches, not six"
+bad=
+for p in "${patches[@]}"; do
+  [[ $(head -1 "$p") == "Subject: "* ]] || bad+=" $p:no-subject"
+  grep -qx -- '---' "$p" || bad+=" $p:no-separator"
+  [[ $(grep -c '^@@ ' "$p") -ge 1 ]] || bad+=" $p:no-hunk"
+done
+[[ -z $bad ]] && pass "each patch says what it does and why, then the diff" || fail "patches not shaped as patches:$bad"
+got_files=$(grep -h '^+++ b/' "${patches[@]}" | sed 's|^+++ b/||' | sort | tr '\n' ' ')
+[[ "$got_files" == "$(tr ' ' '\n' <<<"$want_files" | sort | tr '\n' ' ')" ]] \
+  && pass "the patches change eleven of Stevia's files and no other" || fail "the patches touch: $got_files"
+
+# --- our own sources
+own=(source/tactus-autocorrect.c source/tactus-autocorrect.h source/tactus-draw.c source/tactus-draw.h source/tactus-typer.c source/tactus-typer.h
+     tools/tactus-ac-test.c tools/tactus-draw-test.c tools/tactus-emoji-test.c tools/tactus-kbd-test.c tools/tactus-pages-test.c tools/tactus-typer-test.c)
+bad=
+for f in "${own[@]}"; do
+  [[ -f $f ]] || { bad+=" $f:missing"; continue; }
+  grep -q 'SPDX-License-Identifier: GPL-3.0-or-later' "$f" || bad+=" $f:no-licence"
+done
+[[ -z $bad && $(ls source/* tools/* | wc -l) == "${#own[@]}" ]] && pass "twelve source files of our own, each GPL-3.0-or-later" || fail "own sources:$bad"
+[[ $(sed -n 1p COPYING 2>/dev/null | tr -s ' ') == ' GNU GENERAL PUBLIC LICENSE' && $(sed -n 2p COPYING | tr -s ' ') == ' Version 3, 29 June 2007' ]] \
+  && [[ $(head -1 README.md) == '<!-- SPDX-License-Identifier: GPL-3.0-or-later -->' ]] \
+  && pass "the GPL-3.0 text is beside them, and the README says it" || fail "COPYING is not the GPL-3.0, or the README has no SPDX line"
+own_cr=0; for f in source/* tools/*; do grep -q 'Copyright (C) 2026 W4HO' "$f" || own_cr=1; done
+((own_cr == 0)) && pass "each of our own files has its copyright line" || fail "a file of our own has no copyright line"
+for t in ac draw emoji kbd pages typer; do
+  grep -q "tactus-$t-test" patches/0002-*.patch || fail "tools/meson.build (patch 0002) doesn't build tactus-$t-test"
+done
+# What the trace may say is fixed text and counts: no place in it takes a typed word
+if grep -n 'note (self' source/tactus-typer.c | grep -E '%s' | grep -vE '"(corrected|kept by the dictionary)"|"(taps|letters only)"|, why\)|\? "a text field" : "no text field"' | grep -c . >/dev/null; then
+  fail "a trace line in tactus-typer.c takes a string that is not one of its own fixed ones"
+else
+  pass "the trace's lines take counts and fixed words only"
+fi
+# Nor do the debug lines (G_MESSAGES_DEBUG): none of them takes a string
+if grep -n 'g_debug (' source/tactus-typer.c source/tactus-autocorrect.c | grep -c '%s' >/dev/null; then
+  fail "a debug line in the typing engine or the autocorrection takes a string: $(grep -n 'g_debug (' source/tactus-typer.c source/tactus-autocorrect.c | grep '%s' | head -2)"
+else
+  pass "the debug lines take counts only"
+fi
+# --- Stevia's settings as Tactus wants them
+grep -qx 'completion-mode=\[\]' tactus.gschema.override && grep -q '^\[mobi.phosh.osk\]$' tactus.gschema.override \
+  && [[ $(grep -n 'tactus.gschema.override' PKGBUILD | head -1 | cut -d: -f1) -lt $(grep -n 'glib-compile-schemas' PKGBUILD | head -1 | cut -d: -f1) ]] \
+  && pass "Stevia's own completion is off by default, in an override compiled with the private schemas" \
+  || fail "the settings override is missing, or installed after the schemas are compiled"
+
+# --- the launcher
+bash -n tactus && grep -q 'GSETTINGS_SCHEMA_DIR=/usr/lib/tactus/share/glib-2.0/schemas' tactus \
+  && grep -q 'exec /usr/lib/tactus/bin/tactus --allow-replacement' tactus \
+  && pass "the launcher points GSettings at Tactus's own schemas and lets another keyboard take over" || fail "the launcher"
+
+# --- with the untouched Stevia tree
+if [[ -n $upstream ]]; then
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  cp -a "$upstream" "$tmp/t"
+  ok=1
+  for p in "${patches[@]}"; do
+    patch -d "$tmp/t" -Np1 -F0 -s -i "$PWD/$p" >"$tmp/patch.log" 2>&1 || { ok=0; fail "$p does not apply: $(head -3 "$tmp/patch.log" | tr '\n' ' ')"; }
+  done
+  ((ok)) && pass "the patches apply to the untouched tree with no fuzz"
+  clash=
+  for f in "${own[@]}"; do [[ -e $upstream/${f/#source\//src/} ]] && clash+=" $f"; done
+  [[ -z $clash ]] && pass "none of our files has the name of one of Stevia's" || fail "our files would overwrite Stevia's:$clash"
+fi
+
+# --- with the build
+if [[ -n $built ]]; then
+  export TACTUS_WORD_COUNTS=${TACTUS_WORD_COUNTS:?the word counts file}
+  tmp2=$(mktemp -d)
+  export XDG_DATA_HOME=$tmp2/data XDG_STATE_HOME=$tmp2/state XDG_CONFIG_HOME=$tmp2/config
+  out=$("$built/tools/tactus-typer-test" 2>&1); rc=$?
+  [[ $rc == 0 ]] && pass "typing: $(tail -1 <<<"$out")" || fail "typing: $(grep -E 'FAIL|failed|no dictionary' <<<"$out" | head -5 | tr '\n' ' ')"
+  out=$("$built/tools/tactus-ac-test" 2>&1); rc=$?
+  [[ $rc == 0 ]] && pass "words: $(tail -1 <<<"$out")" || fail "words: $(grep -E 'FAIL|failed|no dictionary' <<<"$out" | head -5 | tr '\n' ' ')"
+  # The trace and the debug lines, on: what they say of a run that types these words must not hold one
+  out=$(TACTUS_TRACE=1 G_MESSAGES_DEBUG=all "$built/tools/tactus-typer-test" 2>&1 | grep -E -- '-Message: |DEBUG' || true)
+  if ! grep -c -- '-Message: ' <<<"$out" >/dev/null; then
+    fail "the trace says nothing with TACTUS_TRACE=1"
+  elif ! grep -c 'DEBUG' <<<"$out" >/dev/null; then
+    fail "no debug lines with G_MESSAGES_DEBUG=all"
+  elif grep -qiE 'teh|wrold|zorblat|tomorow|github|bob@' <<<"$out"; then
+    fail "the trace or a debug line holds typed text: $(grep -iE 'teh|wrold|zorblat|tomorow|github|bob@' <<<"$out" | head -2)"
+  else
+    pass "the trace and the debug lines ($(wc -l <<<"$out") lines) hold nothing that was typed"
+  fi
+  if command -v xvfb-run >/dev/null; then
+    mkdir -p "$tmp2/schemas" "$tmp2/out"
+    cp "$src"/data/*.gschema.xml "$built"/data/*.xml "$tmp2/schemas/" 2>/dev/null
+    cp tactus.gschema.override "$tmp2/schemas/10_tactus.gschema.override"
+    glib-compile-schemas --strict "$tmp2/schemas" 2>/dev/null || fail "the schemas with Tactus's override do not compile"
+    export GSETTINGS_SCHEMA_DIR=$tmp2/schemas GDK_BACKEND=x11 GSETTINGS_BACKEND=memory NO_AT_BRIDGE=1
+    if command -v gsettings >/dev/null; then
+      [[ $(gsettings get mobi.phosh.osk completion-mode 2>/dev/null) == '@as []' ]] \
+        && pass "a new user's keyboard has Stevia's completion off" || fail "completion-mode defaults to $(gsettings get mobi.phosh.osk completion-mode 2>&1)"
+    fi
+    out=$(xvfb-run -a -s "-screen 0 1280x1024x24" "$built/tools/tactus-kbd-test" "$tmp2/out/kbd" 2>&1); rc=$?
+    [[ $rc == 0 ]] && pass "the keys: $(grep -E 'checks' <<<"$out" | tail -1)" || fail "the keys: $(grep -E 'FAIL|not ok|checks' <<<"$out" | head -5 | tr '\n' ' ')"
+    out=$(xvfb-run -a -s "-screen 0 1280x1024x24" "$built/tools/tactus-emoji-test" 2>&1); rc=$?
+    [[ $rc == 0 ]] && pass "the emoji page: $(grep -E 'checks' <<<"$out" | tail -1)" || fail "the emoji page: $(grep -E 'FAIL|not ok|checks' <<<"$out" | head -5 | tr '\n' ' ')"
+  else
+    pass "the keys and the emoji page # SKIP no xvfb-run"
+  fi
+  rm -rf "$tmp2"
+fi
+
+((fails)) && { echo "$fails test(s) failed" >&2; exit 1; }
+echo "tactus: all tests passed"

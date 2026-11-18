@@ -1,0 +1,12 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tactus, the on-screen keyboard. It lives under /usr/lib/tactus with settings
+# schemas of its own (Stevia's, which a phone with squeekboard doesn't have),
+# so this points GSettings at them and starts it. --allow-replacement: another
+# keyboard may take the session's keyboard name (sm.puri.OSK0) from it, which
+# is how `omamobile-osk use` changes keyboards without a gap.
+# TACTUS_TRACE=1 makes it say in the journal what the typing engine does and
+# why (a word kept or corrected, a text field that tells its text or doesn't),
+# never what is typed.
+export GSETTINGS_SCHEMA_DIR=/usr/lib/tactus/share/glib-2.0/schemas${GSETTINGS_SCHEMA_DIR:+:$GSETTINGS_SCHEMA_DIR}
+exec /usr/lib/tactus/bin/tactus --allow-replacement "$@"
