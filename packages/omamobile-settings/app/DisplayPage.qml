@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: MIT
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 import "."
-ColumnLayout {
+// Scrolls like the About page, so the keyboard text at the end can be read
+// on a short screen.
+ScrollView {
     id: page
-    spacing: 14
+    contentWidth: availableWidth
+    clip: true
     property int brightness: -1
     property int refresh: -1
     property var rates: []
@@ -45,6 +49,9 @@ ColumnLayout {
         }
     }
     Component.onCompleted: { reqId = actions.run("display", ["get"]); lockReq = actions.run("lock", ["get"]) }
+    ColumnLayout {
+    width: page.availableWidth
+    spacing: 14
     SettingsLabel { text: qsTr("Brightness"); font.weight: Font.DemiBold; color: backend.foreground; Layout.fillWidth: true }
     Flow {
         Layout.fillWidth: true; spacing: 8
@@ -109,5 +116,5 @@ ColumnLayout {
               + qsTr("Any Bluetooth or USB keyboard counts, a dock or receiver too. While one is connected the phone locks and the screen turns off after 30 minutes without input instead of the time above (Never stays never). A Bluetooth keyboard that goes to sleep counts as disconnected.")
         color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13); wrapMode: Text.Wrap; Layout.fillWidth: true
     }
-    Item { Layout.fillHeight: true }
+    }
 }
