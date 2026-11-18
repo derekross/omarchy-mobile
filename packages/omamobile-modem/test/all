@@ -338,9 +338,11 @@ if command -v zstd >/dev/null; then
     OMAMOBILE_MODEM_LINK_MODULE=$m/m6/link.ko.zst bash $pol check 2>/dev/null || fail "a zstd-compressed module with #232 is read"
   rm -f "$m/m6/link.ko.zst"
 fi
-# Without a named module, the running kernel's is looked up with modinfo: on
-# this machine there is no pcie_gs201_cp, so the answer is no.
-OMAMOBILE_MODEM_SUSPEND_VERIFIED=$m/m6/verified OMAMOBILE_MODEM_SUSPEND_DISABLE=$m/m6/disable \
+# Without a named module, the running kernel's is looked up with modinfo; a
+# modinfo that finds no pcie_gs201_cp (as on a laptop; makepkg's check on the
+# phone finds the real one) means no.
+mkdir -p "$m/m6/bin"; printf '#!/bin/sh\nexit 1\n' > "$m/m6/bin/modinfo"; chmod +x "$m/m6/bin/modinfo"
+PATH=$m/m6/bin:$PATH OMAMOBILE_MODEM_SUSPEND_VERIFIED=$m/m6/verified OMAMOBILE_MODEM_SUSPEND_DISABLE=$m/m6/disable \
   OMAMOBILE_MODEM_LINK_MODULE= bash $pol inhibit 2>/dev/null || fail "no link module found by modinfo: the inhibitor holds"
 rc=0; bash $pol bogus 2>/dev/null || rc=$?; [[ $rc == 2 ]] || fail "an unknown mode is a usage error"
 reset_m6
