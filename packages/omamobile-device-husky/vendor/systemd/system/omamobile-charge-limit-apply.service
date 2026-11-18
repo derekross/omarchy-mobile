@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+# Applies the saved charge limit (/etc/omamobile/charge-limit) to the charger this package declares
+# (/usr/share/omamobile/charge-limit.conf). Pulled in by udev when the charger appears
+# (75-omamobile-charge-limit.rules); without a saved file the helper does nothing. The helper is omamobile-settings'.
+# Not enabled.
+[Unit]
+Description=Apply the saved charge limit
+StartLimitIntervalSec=0
+After=local-fs.target
+ConditionFileIsExecutable=/usr/lib/omamobile-settings/charge-limit
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/omamobile-settings/charge-limit
+TimeoutStartSec=15

@@ -50,8 +50,10 @@ ours+=("${board[@]}")
 [[ ${KERNEL_PACKAGE:-0} != 1 ]] || ours+=(omamobile-boot-update linux-omamobile)
 # Ours that go in once [omamobile] has them, so an image builds before they
 # exist: omamobile-provision, the install link's on-phone provisioning
-# (docs/INSTALL-LINK-PLAN.md §6). An image for the link needs it (below).
-optional_ours=(omamobile-provision)
+# (docs/INSTALL-LINK-PLAN.md §6), and omamobile-install-link, the link's
+# phone side, inert without its marker and built only when named until the
+# builder can install Rust (#775). An image for the link needs both (below).
+optional_ours=(omamobile-provision omamobile-install-link)
 missing=() skipped_ours=() not_yet=()
 resolve_all "${base[@]}"
 ((${#absent_pkgs[@]} == 0)) || printf 'error: not in any repository: %s\n' "${absent_pkgs[*]}" >&2

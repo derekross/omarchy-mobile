@@ -35,6 +35,8 @@
 #                 key, holding every package the image installs at this
 #                 checkout's version; development publishes exactly it.
 #                 Pins its index for `rootfs` and `promote`
+#                 Packages built and published on a build host:
+#                 tools/build-host-sync push, its command, then pull, first
 #   rootfs        the root image, stable channel, from the pinned repository
 #   bundle        the bundle, signed with the release key (ARGS: --unsigned
 #                 for a development proof; such a bundle is never released)
@@ -319,6 +321,7 @@ st_build() {
     [[ $(cat packages/linux-omamobile/prebuilt/kernel.release 2>/dev/null) == "$got" ]] ||
       die "packages/linux-omamobile/prebuilt does not hold $got after staging"
     note "linux-omamobile staged from $got (tools/build-packages packs it in the packages stage)"
+    note "packages built on another machine: tools/build-host-sync push, after the images stage"
   else
     note "skipped: no packages/linux-omamobile in this checkout (PR #320). The release can't pass test-install without it (§12 decision 10)"
   fi
@@ -407,7 +410,8 @@ st_packages() {
     die "a package's tests fail: $rel/packages-tests.log"; note "every package's test/all passes ($rel/packages-tests.log)"; fi
   say "out/repo: signed by the release key"
   [[ -f $db && -f $db.sig ]] || {
-    derek "tools/build-packages --all"
+    derek "tools/build-packages --all" \
+          "# on a build host: tools/build-host-sync push, run what tools/build-host-sync command prints, then tools/build-host-sync pull"
     die "no signed out/repo index"
   }
   verify_sig "$db.sig" "$db" || {
@@ -473,6 +477,7 @@ st_packages() {
     # --all leaves linux-omamobile out (it builds only when named, #320)
     [[ " ${stale[*]}" != *" linux-omamobile ("* ]] ||
       hints+=("tools/build-packages packages/linux-omamobile    # only built when named")
+    hints+=("# on a build host: tools/build-host-sync push, run what tools/build-host-sync command prints, then tools/build-host-sync pull")
     derek "${hints[@]}"
     die "out/repo is behind this checkout for the packages above"
   fi
@@ -499,7 +504,8 @@ st_packages() {
   fi
   say "development publishes exactly out/repo"
   if [[ ! -f $dev ]] || ! cmp -s "$db" "$dev"; then
-    derek "tools/repo-publish --no-build development"
+    derek "tools/repo-publish --no-build development" \
+          "# on a build host: tools/build-host-sync push, run what tools/build-host-sync command prints, then tools/build-host-sync pull"
     ((dry)) && { note "(dry run: development differs from out/repo)"; return 0; }
     die "development (out/publish) is not out/repo's index: publish it first, so phones and the image meet at the same versions (§7)"
   fi
@@ -677,7 +683,12 @@ scan_identifiers() {
 import os, re, sys
 builder, ids_file, paths = sys.argv[1], sys.argv[2], sys.argv[3:]
 lits = [l.strip() for l in open(ids_file, encoding="utf-8") if l.strip() and not l.lstrip().startswith("#")]
-mac = re.compile(rb"(?<![0-9A-Fa-f:])([0-9A-Fa-f]{2})((?::[0-9A-Fa-f]{2}){5})(?![0-9A-Fa-f:])")
+# A MAC as tools/pr-check reads one (see its comment), each judged in the
+# colon form; the lookahead only skips offsets where no match can start
+mac = re.compile(rb"(?i)(?=[0-9a-f:\-hm])(?:"
+                 rb"(?:(?<![0-9a-f:])|(?<=[g-z_])[0-9a-f]*:)([0-9a-f]{2}(?::[0-9a-f]{2}){5})(?![0-9a-f]|:[0-9a-f])"
+                 rb"|(?:(?<![0-9a-f-])|(?<=[g-z_])[0-9a-f]*-)([0-9a-f]{2}(?:-[0-9a-f]{2}){5})(?![0-9a-f]|-[0-9a-f])"
+                 rb"|(?<![a-z])(?:mac(?:[_-]?addr(?:ess)?)?|(?:hw|bd)[_-]?addr(?:ess)?|ether)[\"']?(?:[ \t]*[=:][ \t]*|[ \t]+)[\"']?([0-9a-f]{12})(?![0-9a-f]))")
 rules = [("serial record", re.compile(rb"(?i)(ro\.serialno|androidboot\.serialno)[^\n]{0,40}")),
          ("IMEI", re.compile(rb"(?i)\bIMEI\b[=: ]+[0-9]{15}\b")),
          ("builder's home", re.compile(rb"/home/" + re.escape(builder.encode()) + rb"(?![A-Za-z0-9_-])"))]
@@ -695,14 +706,15 @@ def scan(path):
     except OSError:
         return
     for m in mac.finditer(data):
-        first = int(m.group(1), 16)
-        whole = (m.group(1) + m.group(2)).lower()
+        k = m.lastindex
+        whole = b":".join(re.findall(rb"[0-9a-f]{2}", m.group(k).lower()))
+        first = int(whole[:2], 16)
         if first & 2 or whole in (b"00:00:00:00:00:00", b"ff:ff:ff:ff:ff:ff"):
             continue
         # dnsmasq's shipped example configuration only: its group address
         # (no Wi-Fi or Ethernet card has one, but a Bluetooth LE random
         # address can look like one, so not image-wide) and option bytes
-        line = data[data.rfind(b"\n", 0, m.start()) + 1:m.start()]
+        line = data[data.rfind(b"\n", 0, m.start(k)) + 1:m.start(k)]
         if path.endswith("/etc/dnsmasq.conf") and (first & 1 or re.search(rb"^\s*#?\s*dhcp-option=[^#]*$", line)):
             continue
         report(path, "MAC address", whole)
@@ -732,13 +744,14 @@ PY
 }
 
 # Files in bundle DIR that tools/make-bundle doesn't put there, one per line.
-# The tools under tools/ are make-bundle's own provision_tools list, read
+# The files under tools/ are make-bundle's own provision_tools list (the
+# provisioning tools and the guided install's, camera-requirements.txt too), read
 # from it as data, so a tool it adds is allowed here without a change.
 # factory-builds.json is the device's build index (make-bundle ships it when
 # the device has one, #716); it is under SHA256SUMS like every other file.
 bundle_extra_files() {
   local tools t args=()
-  tools=$(sed -n 's/^provision_tools="\([a-z0-9 -]*\)"$/\1/p' tools/make-bundle)
+  tools=$(sed -n 's/^provision_tools="\([a-z0-9 .-]*\)"$/\1/p' tools/make-bundle)
   [[ -n $tools ]] || die "can't read provision_tools from tools/make-bundle"
   for t in $tools; do args+=(! -path "./tools/$t"); done
   (cd "$1" && find . \( -type f -o -type l \) ! -path './images/*.img' ! -path ./README.txt ! -path ./INSTALL.md \

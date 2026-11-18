@@ -17,6 +17,31 @@
 # "flashing" or an unsuffixed partition name. Slot A, the bootloader, radio,
 # persist, efs, modem, devinfo and vbmeta are never touched.
 #
+# A device whose descriptor says INSTALL_SLOT=active (manifest format 2,
+# docs/ACTIVE-SLOT-PLAN.md; no device says it yet) is installed on the slot
+# the phone runs from instead: the target is the "current-slot" the phone
+# reports, which must be one of the descriptor's INSTALL_ACTIVE_SLOTS, read
+# again just before the first flash (a change stops it). Then it writes
+# "fastboot flash <image>_<target>" per BOOT_IMAGES entry (each <image>_b on
+# UFS_RW, the guard's slot form), "fastboot flash userdata", and "fastboot
+# reboot", and nothing else: no --set-active, no slot check, never the other
+# slot. That replaces Android on the phone; the way back is Google's factory
+# image. boot-update.conf gets SLOT=<target>, and the ramdisk image must
+# carry the storage guard's running-slot marker (/etc/omamobile-ufs-rw-slot
+# reading "running"), or nothing is written. --reinstall,
+# --bootloader-slots-match and --measure-other-slot have no part in it.
+#
+# One more thing changes the bootloader's slot flags, and only for a device
+# whose descriptor says BOOTLOADER_SLOT_PROBE=yes (none does yet): where the
+# bootloader reports only the current slot's version, a first install can
+# read the other slot's itself (slot_probe below): "--set-active=<other>",
+# "reboot bootloader", read the version, "--set-active=<first>", "reboot
+# bootloader", check. It flashes and erases nothing, but the bootloader writes
+# both slots' flags to its own storage (devinfo on our Pixels), and it starts
+# the other slot's bootloader before its version is known. The first slot is
+# set active again if a step fails while the phone still answers. It never
+# runs with --reinstall, or when slot B's flags look like an installed system.
+#
 # Before anything it checks: the phone answers in fastboot, its product is the
 # descriptor's CODENAME, the bootloader is unlocked, both bootloader slots
 # carry the same version, and each image fits its slot B partition (an
@@ -37,6 +62,11 @@
 # omamobile-boot-update appends it, so the initramfs's rescue SSH takes it.
 #
 #   install-phone [--dry-run] [options]
+#   install-phone --guided [options]
+#     --guided               the guided install instead (tools/install-guided,
+#                            from the same bundle or checkout): "bash install
+#                            --guided" in a bundle. Every other option is
+#                            handed to it; its own --help lists them
 #     --dry-run              read the phone's variables (read-only) and prepare
 #                            the image copy, then print every flash command
 #                            instead of running it
@@ -56,11 +86,26 @@
 #     --bootloader-slots-match VERSION
 #                            when the bootloader reports no per-slot versions:
 #                            you checked the other slot carries VERSION too
-#                            (it must equal the current slot's)
+#                            (it must equal the current slot's). Without it
+#                            the installer stops and asks for it, unless the
+#                            descriptor says BOOTLOADER_SLOT_PROBE=yes: then
+#                            a first install reads the other slot itself
+#                            (two restarts into the bootloader screen; it
+#                            says what changes first, and asks)
+#     --measure-other-slot   for a tool that calls this one: the owner has
+#                            agreed to that slot check, so it isn't asked
+#                            again. Without it the yes is read from a
+#                            terminal only, never from piped answers. Every
+#                            stop of the slot check comes before any write
+#                            and ends with exit status 3
 #     --reinstall            slot B is the current slot and holds Omarchy Mobile
 #                            (a reinstall); without it, a phone running from
 #                            slot B is refused, since that is where stock
-#                            Android runs after a system update
+#                            Android runs after a system update. A reinstall
+#                            needs no --bootloader-slots-match: the version
+#                            the phone reports is slot B's own, which it
+#                            already starts from, and the install switches
+#                            no slot (decided 2026-11-13)
 #     --unsigned             accept a bundle without SHA256SUMS.sig (development)
 #     --serial SERIAL        the phone to install on, as "fastboot devices"
 #                            names it: anything else in fastboot mode is
@@ -77,6 +122,12 @@
 # Answers are read from standard input, so they can be piped for tests and by
 # the guided installer, which sets OMAMOBILE_INSTALL_GUIDED=1: the questions
 # are then not printed again (it has asked them), nor the closing hints.
+#
+# One install or dry run at a time uses a work directory: each holds a lock
+# beside it (.NAME.install.lock in its parent directory), and a second one
+# with the same work directory stops before it contacts the phone (give it
+# its own --work DIR). --verify-only runs beside them.
+# Its parent directory must be writable; the lock file is kept after the run.
 set -euo pipefail
 shopt -s nullglob
 # Byte-wise character ranges in the checks below ([ -~] is printable ASCII)
@@ -93,7 +144,22 @@ say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 
-dry=0 device="" images="" rootfs="" work="" slots_match="" unsigned=0 reinstall=0 verify_only=0 want_serial=""
+# "bash install --guided": the guided install, from the same bundle (its
+# tools/install-guided) or checkout (tools/install-guided beside this file).
+# The guided installer runs this file for its checks and its writes, never
+# with --guided.
+for a in "$@"; do
+  [[ $a == --guided ]] || continue
+  [[ -z ${OMAMOBILE_INSTALL_GUIDED:-} ]] || die "--guided is not for the guided installer's own runs"
+  rest=()
+  for b in "$@"; do [[ $b == --guided ]] || rest+=("$b"); done
+  guided_tool=$here/install-guided
+  [[ -f $guided_tool ]] || guided_tool=$here/tools/install-guided
+  [[ -f $guided_tool ]] || die "this download has no guided installer (tools/install-guided): download it again and unpack it into a new folder"
+  exec bash "$guided_tool" "${rest[@]}"
+done
+
+dry=0 device="" images="" rootfs="" work="" slots_match="" unsigned=0 reinstall=0 verify_only=0 want_serial="" measure_ok=0
 guided=${OMAMOBILE_INSTALL_GUIDED:-}
 while (($#)); do
   case $1 in
@@ -104,6 +170,7 @@ while (($#)); do
     --work) work=${2:?}; shift ;;
     --bootloader-slots-match) slots_match=${2:?}; shift ;;
     --reinstall) reinstall=1 ;;
+    --measure-other-slot) measure_ok=1 ;;
     --unsigned) unsigned=1 ;;
     --verify-only) verify_only=1 ;;
     --serial) want_serial=${2:?}; [[ $want_serial =~ ^[!-~]+$ ]] || die "--serial takes a serial as 'fastboot devices' prints it"; shift ;;
@@ -173,6 +240,40 @@ if [[ -n ${D[SOC_IDS]:-} && -n ${D[SOC_COMPATIBLE]:-} ]]; then
 elif [[ -z ${D[SOC_IDS]:-} && -z ${D[SOC_COMPATIBLE]:-} ]]; then
   die "$conf: SOC_IDS is missing (or SOC_COMPATIBLE); this device can't be installed yet"
 fi
+# BOOTLOADER_SLOT_PROBE=yes turns on slot_probe below for this phone: the
+# round trip that reads the other slot's bootloader version. Off unless set,
+# because it restarts the phone into the other slot's bootloader before that
+# bootloader's version is known, the very thing the "slots must match" check
+# exists to prevent. Google's factory images page
+# (https://developers.google.com/android/images) says of the Pixel 6 and
+# Pixel 8 families after their May 2025 update, and of the Pixel 10 family
+# after May 2026: "The inactive slot contains an older bootloader whose
+# anti-rollback version has not been incremented." and "Since the inactive
+# slot contains the older bootloader, the device enters an unbootable state."
+# A device gets the line after an attended run on it is in its notes.
+# FASTBOOT_BUTTONS: how to reach the bootloader screen by the buttons,
+# printed with the way back.
+# INSTALL_SLOT: where a release installs, checked as bin/omamobile's
+# load_device checks it (tests/install-slot-descriptor). b, the default, is
+# manifest format 1 (slot B, set active after the writes); active is format
+# 2 (the slot the phone runs from, one of INSTALL_ACTIVE_SLOTS).
+INSTALL_SLOT=${D[INSTALL_SLOT]-b} ACTIVE_SLOTS=""
+case $INSTALL_SLOT in
+  b) [[ -z ${D[INSTALL_ACTIVE_SLOTS]+x} ]] || die "$conf: INSTALL_ACTIVE_SLOTS belongs with INSTALL_SLOT=active" ;;
+  active)
+    ACTIVE_SLOTS=${D[INSTALL_ACTIVE_SLOTS]-}
+    [[ $ACTIVE_SLOTS =~ ^(a|b|a\ b|b\ a)$ ]] ||
+      die "$conf: INSTALL_SLOT=active needs INSTALL_ACTIVE_SLOTS: the slots a release installs on (a, b, or a b)" ;;
+  *) die "$conf: INSTALL_SLOT is active or b, not '$INSTALL_SLOT'" ;;
+esac
+fmt=1
+[[ $INSTALL_SLOT != active ]] || fmt=2
+# The slot written: B for format 1; for format 2 the phone's current slot,
+# set once the phone has been read (and read again before the first flash)
+target=b
+SLOT_PROBE=${D[BOOTLOADER_SLOT_PROBE]:-no}
+[[ $SLOT_PROBE == yes || $SLOT_PROBE == no ]] || die "$conf: BOOTLOADER_SLOT_PROBE is yes or no, not $SLOT_PROBE"
+[[ ${D[FASTBOOT_BUTTONS]:-} =~ ^[\ -~]{0,200}$ ]] || die "$conf: FASTBOOT_BUTTONS is one line of at most 200 printable characters"
 # Images record the device they were built for, as flash and push check:
 # out-int/images holds whichever device was built last.
 if [[ $mode == repository ]]; then
@@ -180,18 +281,26 @@ if [[ $mode == repository ]]; then
   [[ $built_for == "$CODENAME" ]] \
     || die "$images holds images for '${built_for:-an unknown device}', not $CODENAME (run: DEVICE=$CODENAME bin/omamobile images)"
 fi
-for tool in "$FASTBOOT" debugfs dumpe2fs e2fsck zstd openssl sha256sum lz4 cpio python3; do
+for tool in "$FASTBOOT" debugfs dumpe2fs e2fsck zstd openssl sha256sum lz4 cpio python3 timeout; do
   command -v "$tool" >/dev/null || die "$tool not found (fastboot: android-tools; debugfs: e2fsprogs; lz4: lz4; cpio: cpio)"
 done
 BOOT_IMAGES=${D[BOOT_IMAGES]:-} UFS_RW=${D[UFS_RW]:-}
 [[ -n $BOOT_IMAGES && -n $UFS_RW ]] || die "$conf: BOOT_IMAGES and UFS_RW are required"
+# The only images an install writes, and the only names the storage guard's
+# allowlist may hold (bin/omamobile's UFS_RW_ALLOWED): a descriptor that
+# names anything else (vbmeta, abl, modem) is refused, in both formats,
+# before the phone is contacted
+IMAGES_ALLOWED="boot init_boot vendor_boot vendor_kernel_boot dtbo"
+UFS_RW_ALLOWED="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
 for p in $UFS_RW; do
   [[ $p == *_b || $p == userdata ]] || die "$conf: UFS_RW may hold only *_b partitions and userdata, not $p"
+  [[ " $UFS_RW_ALLOWED " == *" $p "* ]] || die "$conf: UFS_RW may hold only slot B boot images ($UFS_RW_ALLOWED), not $p"
 done
 [[ " $UFS_RW " == *" userdata "* ]] || die "$conf: userdata is not on the storage-guard allowlist"
 for p in $BOOT_IMAGES; do
   [[ $p =~ ^[a-z_]+$ ]] || die "$conf: bad image name $p"
   [[ " $UFS_RW " == *" ${p}_b "* ]] || die "$conf: ${p}_b is not on the storage-guard allowlist (UFS_RW)"
+  [[ " $IMAGES_ALLOWED " == *" $p "* ]] || die "$conf: BOOT_IMAGES may hold only $IMAGES_ALLOWED, not $p"
   [[ -f $images/$p.img ]] || die "missing $images/$p.img (bin/omamobile images)"
 done
 # An AVB_FOOTERS image is padded to the descriptor's partition size, and ABL
@@ -205,6 +314,19 @@ done
 for p in "${!avb_size[@]}"; do
   [[ " $BOOT_IMAGES " == *" $p "* ]] || die "$conf: AVB_FOOTERS names $p, which is not in BOOT_IMAGES"
 done
+
+# Format 2's storage guard: bin/omamobile initramfs packs this marker when the
+# init opens the running slot's images instead of slot B's, and its "never"
+# list, as tools/bundle-manifest writes it
+GUARD_MARKER=/etc/omamobile-ufs-rw-slot
+never_active=(
+  "the slot the phone does not run from (any *_<other> partition)"
+  "an unsuffixed partition name but userdata"
+  bootloader radio persist efs modem devinfo vbmeta
+  "fastboot -w" "fastboot --slot" "fastboot --set-active" "fastboot flashing"
+  "fastboot erase" "fastboot format" "fastboot oem"
+)
+NEVER_ACTIVE=$(IFS='|'; printf '%s' "${never_active[*]}")
 
 # --- Integrity of what will be written ---------------------------------------
 say "Checking the files ($mode mode)"
@@ -285,13 +407,40 @@ r = m.get("root_image") or {}
 out += ["root_name=" + s(r.get("name"), r"[A-Za-z0-9._-]+\.img\.zst", "root_image.name"),
         "root_sha256=" + s(r.get("sha256"), HEX, "root_image.sha256")]
 i = m["install"]
+fmt = m.get("format")
+
+def names(v, pattern, what):
+    if not isinstance(v, list):
+        bad("%s is not a list" % what)
+    return " ".join(s(p, pattern, "an entry of " + what) for p in v)
+
 out += ["product=" + s(i.get("product"), r"[a-z0-9]+", "install.product"),
-        "require_unlocked_bootloader=" + b(i.get("require_unlocked_bootloader"), "install.require_unlocked_bootloader"),
-        "require_matching_bootloader_slots=" + b(i.get("require_matching_bootloader_slots"), "install.require_matching_bootloader_slots")]
-allow = i.get("storage_guard_allowlist")
-if not isinstance(allow, list):
-    bad("install.storage_guard_allowlist is not a list")
-out.append("allowlist=" + " ".join(s(p, r"[a-z_]+", "an allowlist entry") for p in allow))
+        "require_unlocked_bootloader=" + b(i.get("require_unlocked_bootloader"), "install.require_unlocked_bootloader")]
+if fmt == 2:
+    # The running slot's install (docs/ACTIVE-SLOT-PLAN.md §1): exactly these
+    # keys, so require_matching_bootloader_slots, a storage_guard_allowlist or
+    # anything else of format 1's is an error here
+    keys = {"tool", "product", "require_unlocked_bootloader", "slot", "accept_current_slots", "writes", "after",
+            "never", "storage_guard"}
+    if set(i) != keys:
+        bad("install has other keys than format 2's (%s)" % ", ".join(sorted(set(i) ^ keys)))
+    g = i["storage_guard"]
+    if not isinstance(g, dict) or set(g) != {"slot", "images", "also", "marker"}:
+        bad("install.storage_guard is not format 2's")
+    out += ["tool=" + s(i.get("tool"), r"[a-z]+", "install.tool"),
+            "slot=" + s(i.get("slot"), r"[a-z]+", "install.slot"),
+            "accept=" + names(i.get("accept_current_slots"), r"[ab]", "install.accept_current_slots"),
+            "guard_slot=" + s(g.get("slot"), r"[a-z]+", "install.storage_guard.slot"),
+            "guard_images=" + names(g.get("images"), r"[a-z_]+", "install.storage_guard.images"),
+            "guard_also=" + names(g.get("also"), r"[a-z_]+", "install.storage_guard.also"),
+            "guard_marker=" + s(g.get("marker"), r"/[a-z/._-]+", "install.storage_guard.marker")]
+    never = i.get("never")
+    if not isinstance(never, list) or not all(isinstance(x, str) and re.fullmatch(r"[ -{}~]+", x) for x in never):
+        bad("install.never is not a list of lines (printable, no |)")
+    out.append("never=" + "|".join(never))
+else:
+    out.append("require_matching_bootloader_slots=" + b(i.get("require_matching_bootloader_slots"), "install.require_matching_bootloader_slots"))
+    out.append("allowlist=" + names(i.get("storage_guard_allowlist"), r"[a-z_]+", "install.storage_guard_allowlist"))
 after = i.get("after")
 if not isinstance(after, list):
     bad("install.after is not a list")
@@ -302,7 +451,15 @@ if not isinstance(writes, list):
 for w in writes:
     if not isinstance(w, dict):
         bad("an install.writes entry is not an object")
-    part = s(w.get("partition"), r"[a-z_]+", "a write's partition")
+    if fmt == 2:
+        # An image, written to <image>_<the phone's current slot>, or a
+        # partition by its own name (userdata); never both, never neither
+        if ("image" in w) == ("partition" in w):
+            bad("a format 2 write names an image or a partition")
+        part = "image:" + s(w["image"], r"[a-z_]+", "a write's image") if "image" in w else \
+            "partition:" + s(w["partition"], r"[a-z_]+", "a write's partition")
+    else:
+        part = s(w.get("partition"), r"[a-z_]+", "a write's partition")
     src = s(w.get("source"), r"root_image|images/[a-z_]+\.img", "a write's source")
     size = "-" if src == "root_image" else str(n(w.get("size"), "a write's size"))
     psize = "-" if w.get("partition_size") is None else str(n(w.get("partition_size"), "a write's partition_size"))
@@ -330,22 +487,48 @@ PY
       *=*) M[${line%%=*}]=${line#*=} ;;
     esac
   done <<<"$plan"
-  [[ ${M[format]} == 1 ]] || die "manifest.json has format ${M[format]}; this installer reads format 1"
+  [[ ${M[format]} == 1 || ${M[format]} == 2 ]] || die "manifest.json has format ${M[format]}; this installer reads formats 1 and 2"
+  # The format is the descriptor's: 2 exactly when it says INSTALL_SLOT=active
+  [[ ${M[format]} == "$fmt" ]] ||
+    die "manifest.json has format ${M[format]}, but the descriptor says INSTALL_SLOT=$INSTALL_SLOT (format $fmt)"
   [[ ${M[codename]} == "$CODENAME" && ${M[product]} == "$CODENAME" ]] ||
     die "manifest.json is for ${M[codename]} (product ${M[product]}), but the descriptor is $CODENAME"
   [[ ${M[require_unlocked_bootloader]} == true ]] || die "manifest.json must require an unlocked bootloader"
-  [[ ${M[require_matching_bootloader_slots]} == true ]] || die "manifest.json must require both bootloader slots to match"
   read -ra allow <<<"$UFS_RW"
-  [[ ${M[allowlist]} == "${allow[*]}" ]] || die "manifest.json's storage-guard allowlist (${M[allowlist]}) is not the descriptor's ($UFS_RW)"
-  [[ ${M[after]} == "set-active b,reboot" ]] || die "manifest.json must end with set-active b and reboot, nothing else (has: ${M[after]})"
-  # Exactly the descriptor's slot B images, in its order, then userdata
   want_writes=()
-  for p in $BOOT_IMAGES; do
-    want_writes+=("${p}_b images/$p.img $(stat -c %s "$here/images/$p.img") ${avb_size[$p]:--} false")
-  done
-  want_writes+=("userdata root_image - - true")
-  [[ $(printf '%s\n' "${m_writes[@]}") == "$(printf '%s\n' "${want_writes[@]}")" ]] ||
-    die "manifest.json's writes are not exactly slot B's images ($(for p in $BOOT_IMAGES; do printf '%s_b ' "$p"; done)) and userdata, with their sizes"
+  if ((fmt == 1)); then
+    [[ ${M[require_matching_bootloader_slots]} == true ]] || die "manifest.json must require both bootloader slots to match"
+    [[ ${M[allowlist]} == "${allow[*]}" ]] || die "manifest.json's storage-guard allowlist (${M[allowlist]}) is not the descriptor's ($UFS_RW)"
+    [[ ${M[after]} == "set-active b,reboot" ]] || die "manifest.json must end with set-active b and reboot, nothing else (has: ${M[after]})"
+    # Exactly the descriptor's slot B images, in its order, then userdata
+    for p in $BOOT_IMAGES; do
+      want_writes+=("${p}_b images/$p.img $(stat -c %s "$here/images/$p.img") ${avb_size[$p]:--} false")
+    done
+    want_writes+=("userdata root_image - - true")
+    [[ $(printf '%s\n' "${m_writes[@]}") == "$(printf '%s\n' "${want_writes[@]}")" ]] ||
+      die "manifest.json's writes are not exactly slot B's images ($(for p in $BOOT_IMAGES; do printf '%s_b ' "$p"; done)) and userdata, with their sizes"
+  else
+    # Format 2: the running slot's images. The slot is the phone's, read at
+    # the install, never the manifest's; the manifest names which slots may
+    # be it, the guard that opens it, and nothing after the writes but reboot
+    [[ ${M[tool]} == fastboot && ${M[slot]} == active ]] || die "manifest.json's format 2 install must be fastboot on the active slot"
+    [[ ${M[accept]} == "$ACTIVE_SLOTS" ]] || die "manifest.json accepts current slots '${M[accept]}', but the descriptor's INSTALL_ACTIVE_SLOTS is '$ACTIVE_SLOTS'"
+    [[ ${M[after]} == reboot ]] || die "manifest.json must end with reboot, nothing else (has: ${M[after]})"
+    guard_images="" guard_also=""
+    for p in "${allow[@]}"; do
+      if [[ $p == *_b ]]; then guard_images+="${guard_images:+ }${p%_b}"; else guard_also+="${guard_also:+ }$p"; fi
+    done
+    [[ ${M[guard_slot]} == running && ${M[guard_images]} == "$guard_images" && ${M[guard_also]} == "$guard_also" &&
+       ${M[guard_marker]} == "$GUARD_MARKER" ]] ||
+      die "manifest.json's storage guard is not the descriptor's (the running slot's $guard_images, and $guard_also; marker $GUARD_MARKER)"
+    [[ ${M[never]} == "$NEVER_ACTIVE" ]] || die "manifest.json's list of what is never written is not format 2's"
+    for p in $BOOT_IMAGES; do
+      want_writes+=("image:$p images/$p.img $(stat -c %s "$here/images/$p.img") ${avb_size[$p]:--} false")
+    done
+    want_writes+=("partition:userdata root_image - - true")
+    [[ $(printf '%s\n' "${m_writes[@]}") == "$(printf '%s\n' "${want_writes[@]}")" ]] ||
+      die "manifest.json's writes are not exactly the running slot's images ($BOOT_IMAGES) and userdata, with their sizes"
+  fi
   # Every file of the bundle is listed with its size and SHA-256, and nothing else
   listed=() actual=()
   for entry in "${m_files[@]}"; do
@@ -412,12 +595,52 @@ if [[ -f $manifest ]]; then
   if [[ -n $modules_release && -n $images_release ]]; then note "kernel $images_release, its modules in the root image"; fi
 fi
 
+# --- One install at a time per work directory --------------------------------
+# The files staged below have fixed names in --work: a second install there
+# would replace them while this one waits for its codename, and remove them
+# when it ends. So an install (or a dry run; --verify-only takes no part)
+# holds an exclusive flock until it exits, and a second one stops here, before
+# it reads the ramdisk or writes in --work. The kernel drops the lock with the
+# run's last process, however it ends. The lock file is beside the resolved
+# work directory (as make-bundle's is beside the bundles), so two spellings of
+# it lock one file and the directory still ends empty. It stays: unlinking it
+# could let two runs lock different inodes. A parent that can't be written, or
+# a lock that can't be taken for any other reason (a file system without
+# flock), stops the install too: going ahead unlocked could let a second
+# install replace this one's files.
+work=${work:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-install}
+if ((!verify_only)); then
+  mkdir -p "$work" && work_real=$(cd -P -- "$work" && pwd -P) ||
+    die "can't create or write to the work directory $work (give one you can write to with --work DIR)"
+  install_lock=${work_real%/*}/.${work_real##*/}.install.lock
+  exec {install_fd}>>"$install_lock" ||
+    die "can't create the lock file $install_lock beside the work directory (give a --work DIR under a directory you can write to)"
+  if python3 -I - "$install_fd" <<'PY'
+import fcntl, sys
+try:
+    fcntl.flock(int(sys.argv[1]), fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit(1)
+except OSError as error:
+    print(f"flock: {error}", file=sys.stderr)
+    sys.exit(2)
+PY
+  then
+    :
+  else
+    lock_status=$?
+    if ((lock_status == 1)); then
+      die "another install is using the work directory $work: let it finish, or give this one its own with --work DIR"
+    fi
+    die "can't lock the work directory $work (give a --work DIR on a file system that supports flock)"
+  fi
+fi
+
 # --- Slot B's shipped ramdisk ------------------------------------------------
 # Read and listed before the phone is contacted, so --verify-only checks it
 # too; the owner's key is appended to it further down. The read has a
 # directory of its own in --work that only this run removes: another install
 # may be waiting there for its answers, with its images staged.
-work=${work:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-install}
 verify_dir=""
 # vendor_ramdisk get IMG OUT, or vendor_ramdisk set IMG RAMDISK OUT (inline,
 # because a bundle ships this script alone)
@@ -504,10 +727,232 @@ PY
   listing=$(cpio -it --quiet < "$verify_dir/shipped.cpio" 2> "$verify_dir/cpio.err") ||
     die "cpio couldn't list $ramdisk_image.img's ramdisk: $(tail -n 1 "$verify_dir/cpio.err")"
 fi
+# Format 2 writes the slot the phone runs from, so its initramfs must open
+# that slot's images, not slot B's: the guard's marker reads "running", or
+# the first boot would leave the slot it runs from read-only and slot B
+# writable, the wrong way round
+if ((fmt == 2)); then
+  [[ -n $ramdisk_image ]] || die "$conf: INSTALL_SLOT=active needs a ramdisk image (vendor_kernel_boot or vendor_boot) whose storage guard can be checked"
+  marker=$(python3 -I - "$verify_dir/shipped.cpio" "${GUARD_MARKER#/}" <<'PY'
+import sys
+data, name, found, pos = open(sys.argv[1], "rb").read(), sys.argv[2], None, 0
+# newc archives one after another, as the kernel reads them: the last copy wins
+while pos + 110 <= len(data):
+    if data[pos:pos + 6] not in (b"070701", b"070702"):
+        if data[pos:pos + 1] == b"\0":
+            pos += 1
+            continue
+        sys.exit("not a newc cpio archive")
+    size, namesize = int(data[pos + 54:pos + 62], 16), int(data[pos + 94:pos + 102], 16)
+    entry = data[pos + 110:pos + 109 + namesize].decode("utf-8", "replace")
+    dpos = (pos + 110 + namesize + 3) & ~3
+    if entry.lstrip(".").lstrip("/") == name:
+        found = data[dpos:dpos + size]
+    pos = (dpos + size + 3) & ~3
+if found is not None:
+    print(found.decode("ascii", "replace").strip())
+PY
+  ) || die "can't read $ramdisk_image.img's ramdisk"
+  [[ $marker == running ]] ||
+    die "$ramdisk_image.img's initramfs has no storage guard for the running slot ($GUARD_MARKER reading \"running\"); this release installs on the slot the phone runs from and needs one (bin/omamobile initramfs)"
+  note "$ramdisk_image.img's storage guard opens the slot the phone runs from ($GUARD_MARKER)"
+fi
 if ((verify_only)); then
   say "The files check out (the phone was not contacted)"
   exit 0
 fi
+
+# --- The other slot's bootloader, measured (per device, off by default) ------
+# Where the bootloader reports only the current slot's version, and the
+# descriptor says BOOTLOADER_SLOT_PROBE=yes, a first install reads the other
+# slot's by a round trip: the other slot set active, a restart into the
+# bootloader, its version read, the first slot set active again, a restart, a
+# check. Nothing is flashed, erased or booted. The bootloader does write: it
+# keeps both slots' flags in its own storage, and they are printed before and
+# after. And the first restart starts the other slot's bootloader before its
+# version is known (see BOOTLOADER_SLOT_PROBE above).
+#
+# What makes the result believable: "back" means the phone was seen to leave
+# the bus and return, and current-slot is read once more between --set-active
+# and the restart. If it already names the other slot there, it follows the
+# active flag, not the running bootloader, and can't show that the restart
+# happened: the check stops, unmeasured.
+#
+# If anything fails after the first --set-active, an EXIT trap sets the first
+# slot active again, as long as the phone is still listed; a phone that didn't
+# come back gets nothing more, and the owner gets the way back in words (it is
+# also printed before the question, for a killed installer or a pulled cable).
+# The three OMAMOBILE_SLOT_PROBE_* variables exist for the tests: seconds to
+# wait for a restart, seconds between looks at the bus, seconds per command.
+SLOT_PROBE_TIMEOUT=${OMAMOBILE_SLOT_PROBE_TIMEOUT:-60}
+SLOT_PROBE_POLL=${OMAMOBILE_SLOT_PROBE_POLL:-0.2}
+SLOT_PROBE_CALL_TIMEOUT=${OMAMOBILE_SLOT_PROBE_CALL_TIMEOUT:-30}
+[[ $SLOT_PROBE_TIMEOUT =~ ^[1-9][0-9]{0,3}$ && $SLOT_PROBE_POLL =~ ^[0-9]+(\.[0-9]+)?$ && $SLOT_PROBE_CALL_TIMEOUT =~ ^[1-9][0-9]{0,2}$ ]] ||
+  die "bad OMAMOBILE_SLOT_PROBE_TIMEOUT, OMAMOBILE_SLOT_PROBE_POLL or OMAMOBILE_SLOT_PROBE_CALL_TIMEOUT"
+probe_restore="" probe_stage=0 probe_other="" slot_probe_ran=0 slot_probe_dry=0
+declare -A slot_flags=()
+# The probe's only way to the phone: three commands, each with a time limit
+pfb() { timeout "$SLOT_PROBE_CALL_TIMEOUT" "$FASTBOOT" -s "$serial" "$@"; }
+phone_listed() { "$FASTBOOT" devices 2>/dev/null | awk -v s="$serial" '$1 == s && $2 == "fastboot" { n = 1 } END { exit !n }'; }
+slot_flag() { sed -nE "s/^slot-$1:$2:[ ]*//p" <<<"$vars" | head -1; }  # FLAG SLOT, from $vars
+slot_flags_read() {  # WHEN
+  local s f
+  for s in a b; do
+    for f in successful unbootable retry-count fastboot-ok; do slot_flags[$1 $f $s]=$(slot_flag "$f" "$s"); done
+  done
+}
+slot_flags_line() {  # WHEN LABEL; fastboot-ok only where the phone reports it
+  local s line
+  line=$(printf '%-18s' "$2:")
+  for s in a b; do
+    line+="  $s: successful ${slot_flags[$1 successful $s]:-?}, unbootable ${slot_flags[$1 unbootable $s]:-?}, retry-count ${slot_flags[$1 retry-count $s]:-?}"
+    [[ -z ${slot_flags[$1 fastboot-ok $s]} ]] || line+=", fastboot-ok ${slot_flags[$1 fastboot-ok $s]}"
+  done
+  note "$line"
+}
+slot_probe_wait() {
+  # Back only after having been seen gone: a phone that stays listed has not
+  # restarted, as far as this can tell, and is treated as one that didn't
+  # come back.
+  local end gone=0
+  end=$(($(date +%s%3N) + SLOT_PROBE_TIMEOUT * 1000))
+  while (($(date +%s%3N) < end)); do
+    if phone_listed; then
+      if ((gone)); then return 0; fi
+    else
+      gone=1
+    fi
+    sleep "$SLOT_PROBE_POLL"
+  done
+  return 1
+}
+slot_probe_recovery() {  # SLOT
+  echo "      1. Bring the phone to its bootloader (fastboot) screen, if it isn't there: ${D[FASTBOOT_BUTTONS]:-with its buttons, as the install guide for ${D[NAME]:-$CODENAME} says}"
+  echo "      2. $FASTBOOT -s $serial --set-active=$1"
+}
+# The slot check's stops: before any write, with exit status 3, so that a
+# calling tool (tools/install-guided) can tell them from a write that failed
+probe_die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 3; }
+slot_probe_lost() {  # SLOT WHEN
+  probe_restore=""
+  printf '\e[31merror:\e[0m %s\n' "the phone was not seen to leave and come back to its bootloader screen within $SLOT_PROBE_TIMEOUT s after $2. Nothing more is sent to it, and slot $probe_other was not measured" >&2
+  {
+    echo "    Slot $probe_other may be the active slot now. To make slot $1 active again:"
+    slot_probe_recovery "$1"
+    echo "    Nothing was flashed or erased; the bootloader's slot flags changed."
+  } >&2
+  exit 3
+}
+slot_probe_undo() {
+  local rc=$? slot=$probe_restore
+  trap - EXIT INT TERM HUP
+  if [[ -n $slot ]]; then
+    probe_restore=""
+    if ! phone_listed; then
+      {
+        echo "    The phone no longer answers in fastboot, so nothing more is sent to it. To make slot $slot active again:"
+        slot_probe_recovery "$slot"
+      } >&2
+    elif pfb --set-active="$slot"; then
+      {
+        echo "    The check stopped early: slot $slot was set active again (fastboot --set-active=$slot). Nothing was flashed or erased; the bootloader's slot flags changed."
+        case $probe_stage in
+          0) echo "    The phone is still on slot $slot's bootloader screen." ;;
+          2) echo "    The phone is on slot $probe_other's bootloader screen with slot $slot active: restart it into the bootloader ($FASTBOOT -s $serial reboot bootloader) before running the installer again." ;;
+          *) echo "    The phone may be on slot $probe_other's bootloader screen with slot $slot active: read $FASTBOOT -s $serial getvar current-slot, and if it isn't $slot, restart it into the bootloader ($FASTBOOT -s $serial reboot bootloader) before running the installer again." ;;
+        esac
+      } >&2
+    else
+      {
+        echo "    Setting slot $slot active again failed. To do it by hand:"
+        slot_probe_recovery "$slot"
+      } >&2
+    fi
+  fi
+  exit "$rc"
+}
+slot_probe() {
+  local x=$current_slot other=b other_bl answer="" step s f changed=""
+  [[ $x == a ]] || other=a
+  probe_other=$other
+  slot_flags_read before
+  say "Checking slot $other's bootloader (the phone reports only slot $x's)"
+  note "Both slots must carry the same bootloader version before slot B is used, and"
+  note "this phone reports only the current slot's. To read the other one, the phone"
+  note "restarts into its bootloader screen twice: once on slot $other, then back on"
+  note "slot $x. That starts slot $other's bootloader before its version is known."
+  note "Nothing is flashed or erased. The bootloader's own record of the two slots"
+  note "does change (stock Android's slot can lose its \"successful\" mark; what that"
+  note "costs later has not been measured). It is shown here, and again afterwards:"
+  slot_flags_line before "now"
+  note "Leave the cable in and the buttons alone. If this is interrupted (the"
+  note "installer killed, the cable pulled), slot $other may be left active. Then:"
+  slot_probe_recovery "$x"
+  note "The commands:"
+  for step in "--set-active=$other" "getvar all" "reboot bootloader" "getvar all" "--set-active=$x" "reboot bootloader" "getvar all"; do
+    if ((dry)); then printf '    would run: %s -s %s %s\n' "$FASTBOOT" "$serial" "$step"; else printf '    %s -s %s %s\n' "$FASTBOOT" "$serial" "$step"; fi
+  done
+  if ((dry)); then
+    slot_probe_dry=1
+    note "dry run: none of it was run, so slot $other's bootloader was not measured"
+    return 0
+  fi
+  # The yes comes from a terminal or from the caller's option, never from
+  # piped answers, where a line meant for another question could be taken.
+  if ((measure_ok)); then
+    note "agreed to by the caller (--measure-other-slot)"
+  elif [[ -t 0 ]]; then
+    printf 'Type yes to run this check: ' >&2
+    IFS= read -r answer || answer=""
+    [[ $answer == yes ]] || probe_die "not run; nothing was sent to the phone. To install without it, check the other slot yourself, then rerun with --bootloader-slots-match $current_bl"
+  else
+    probe_die "not run; nothing was sent to the phone. The slot check needs a yes typed in a terminal, or --measure-other-slot from the tool that asked the owner. To install without it, check the other slot yourself, then rerun with --bootloader-slots-match $current_bl"
+  fi
+  probe_restore=$x slot_probe_ran=1
+  trap slot_probe_undo EXIT
+  trap 'exit 130' INT TERM HUP
+  pfb --set-active="$other" || probe_die "fastboot --set-active=$other failed"
+  vars=$(pfb getvar all 2>&1 | sed -E 's/^\(bootloader\) //') || probe_die "the phone did not answer getvar all after --set-active=$other"
+  [[ $(var current-slot) == "$x" ]] || probe_die "before any restart the phone already reports current slot '$(var current-slot)': on this bootloader current-slot follows the active slot, so it can't show whose bootloader is running. Slot $other was not measured"
+  pfb reboot bootloader || probe_die "fastboot reboot bootloader failed"
+  probe_stage=1
+  slot_probe_wait || slot_probe_lost "$x" "the first restart"
+  vars=$(pfb getvar all 2>&1 | sed -E 's/^\(bootloader\) //') || probe_die "the phone did not answer getvar all after the first restart"
+  [[ $(var current-slot) == "$other" ]] || probe_die "after the first restart the phone reports current slot '$(var current-slot)', not $other"
+  probe_stage=2
+  other_bl=$(var version-bootloader)
+  [[ -n $other_bl ]] || probe_die "the phone reports no version-bootloader on slot $other"
+  slot_flags_read during
+  pfb --set-active="$x" || probe_die "fastboot --set-active=$x failed"
+  pfb reboot bootloader || probe_die "fastboot reboot bootloader failed"
+  probe_stage=3
+  slot_probe_wait || slot_probe_lost "$x" "the second restart"
+  vars=$(pfb getvar all 2>&1 | sed -E 's/^\(bootloader\) //') || probe_die "the phone did not answer getvar all after the second restart"
+  [[ $(var current-slot) == "$x" ]] || probe_die "after the second restart the phone reports current slot '$(var current-slot)', not $x"
+  [[ $(var version-bootloader) == "$current_bl" ]] || probe_die "slot $x reported bootloader $current_bl before the check and $(var version-bootloader) after it"
+  slot_flags_read after
+  probe_restore=""
+  trap - EXIT INT TERM HUP
+  note "the phone is back on slot $x. Slot flags:"
+  slot_flags_line before "before"
+  slot_flags_line during "on slot $other"
+  slot_flags_line after "after"
+  for s in a b; do
+    for f in successful unbootable retry-count fastboot-ok; do
+      [[ ${slot_flags[before $f $s]} == "${slot_flags[after $f $s]}" ]] ||
+        changed+="${changed:+, }slot-$f:$s ${slot_flags[before $f $s]:-?} -> ${slot_flags[after $f $s]:-?}"
+    done
+  done
+  note "changed by the check: ${changed:-nothing}"
+  if [[ $x == a ]]; then bl_a=$current_bl bl_b=$other_bl; else bl_a=$other_bl bl_b=$current_bl; fi
+  [[ $bl_a == "$bl_b" ]] || probe_die "the bootloader slots differ (a: $bl_a, b: $bl_b). $SLOTS_DIFFER"
+  note "bootloader $current_bl on both slots (slot $other measured)"
+  note "a rerun can skip this check: --bootloader-slots-match $current_bl"
+}
+SLOTS_DIFFER="Never flash a bootloader partition by hand (CONTRIBUTING §3.1): from stock Android, sideload the full OTA for your build twice, so each slot gets the same bootloader, then rerun. If that doesn't make them match, stop and ask in an issue"
+refuse_stock_on_b() {
+  die "the phone runs from slot b. If stock Android is on slot b (after an Android system update), installing would overwrite it: make slot a active (fastboot --set-active=a), flash Google's factory image onto it, check Android starts, then rerun. If slot b holds Omarchy Mobile (a reinstall), rerun with --reinstall"
+}
 
 # --- The phone ---------------------------------------------------------------
 say "Checking the phone"
@@ -518,46 +963,103 @@ serial=${serials[0]}
 [[ -z $want_serial || $serial == "$want_serial" ]] ||
   die "the phone in fastboot mode is not the one this install was started for (--serial): connect only that phone"
 fb() { "$FASTBOOT" -s "$serial" "$@"; }
-vars=$(fb getvar all 2>&1 | sed -E 's/^\(bootloader\) //')
+# The phone's variables (read-only); read again before a format 2 install's
+# first flash and after its writes
+read_vars() { vars=$(fb getvar all 2>&1 | sed -E 's/^\(bootloader\) //'); }
+read_vars
 var() { awk -F: -v k="$1" '$1 == k { sub(/^[^:]*:[ ]*/, ""); print; exit }' <<<"$vars"; }
 product=$(var product)
 [[ $product == "$CODENAME" ]] || die "the phone is '${product:-unknown}', not $CODENAME (${D[NAME]:-}): wrong descriptor or wrong phone"
 [[ $(var unlocked) == yes ]] || die "the bootloader is locked: unlock it first (this erases the phone; see CONTRIBUTING.md)"
 current_slot=$(var current-slot)
+# Slot b is refused below without --reinstall, so a phone that doesn't say
+# which slot it runs from can't be let through as if it had said slot a; and
+# format 2 writes the slot it names
+[[ $current_slot == a || $current_slot == b ]] ||
+  die "the phone doesn't report its current slot as a or b (current-slot: '$current_slot'). Which slot is written depends on it, so the installer goes on only when it knows which slot the phone runs from"
 current_bl=$(var version-bootloader)
 [[ -n $current_bl ]] || die "the phone reports no version-bootloader"
-# Per-slot bootloader versions, where the bootloader reports them
-bl_a=$(sed -nE 's/^version-bootloader[-_:]a:[ ]*//p' <<<"$vars" | head -1)
-bl_b=$(sed -nE 's/^version-bootloader[-_:]b:[ ]*//p' <<<"$vars" | head -1)
-if [[ -n $bl_a && -n $bl_b ]]; then
-  [[ $bl_a == "$bl_b" ]] || die "the bootloader slots differ (a: $bl_a, b: $bl_b). Never flash a bootloader partition by hand (CONTRIBUTING §3.1): from stock Android, sideload the full OTA for your build twice, so each slot gets the same bootloader, then rerun. If that doesn't make them match, stop and ask in an issue"
-  note "bootloader $bl_a on both slots"
-elif [[ -n $slots_match ]]; then
-  [[ $slots_match == "$current_bl" ]] || die "--bootloader-slots-match $slots_match, but slot ${current_slot:-?} has $current_bl"
-  note "bootloader $current_bl on slot ${current_slot:-?}; the other slot confirmed by you (--bootloader-slots-match)"
-else
-  die "the phone only reports slot ${current_slot:-?}'s bootloader ($current_bl). Setting slot B active runs slot B's bootloader, so both must match. Check the other slot (fastboot getvar version-bootloader while it is current), then rerun with --bootloader-slots-match $current_bl"
+if ((fmt == 2)); then
+  # The running slot (format 2): the bootloader that starts Omarchy Mobile is
+  # the one answering now, so the other slot's version, the slot check,
+  # --bootloader-slots-match and --reinstall have no part in it. The slot
+  # must be one the descriptor accepts; the stop names no way round it, and
+  # never "--set-active": that would start the other slot's bootloader at a
+  # version nothing here has read.
+  [[ " $ACTIVE_SLOTS " == *" $current_slot "* ]] ||
+    die "the phone runs from slot $current_slot, and this release installs only on slot ${ACTIVE_SLOTS// / or } (current-slot-not-accepted): installing on slot $current_slot is not supported yet. Don't switch the phone's slot to get past this; ask in an issue (https://github.com/derekross/omarchy-mobile/issues)"
+  target=$current_slot
+  ((reinstall == 0 && measure_ok == 0)) && [[ -z $slots_match ]] ||
+    note "--reinstall, --bootloader-slots-match and --measure-other-slot are not used: this release installs on the slot the phone runs from"
+  other=b
+  [[ $target == b ]] && other=a
+  slot_flags_read before
+  note "bootloader $current_bl on slot $target, the slot the phone runs from; it starts Omarchy Mobile, and no slot is switched"
+  note "$CODENAME, unlocked, current slot $current_slot"
+  slot_flags_line before "slot flags"
+  if [[ $(slot_flag successful "$other") == yes && $(slot_flag unbootable "$other") != yes ]]; then
+    note "slot $other reads as a system that has started (stock Android after a system update, or a development install): it is left as it is"
+  fi
 fi
-note "$CODENAME, unlocked, current slot ${current_slot:-?}"
-# Stock Android must be the one on slot A. An Android system update writes the
-# other slot and switches to it, so a phone that took one can run stock from
-# slot B, and writing slot B would overwrite the stock system in use. From
-# fastboot alone a reinstall (Omarchy Mobile on B) looks the same, so the
-# owner says which it is.
-if [[ $current_slot == b && $reinstall != 1 ]]; then
-  die "the phone runs from slot b. If stock Android is on slot b (after an Android system update), installing would overwrite it: make slot a active (fastboot --set-active=a), flash Google's factory image onto it, check Android starts, then rerun. If slot b holds Omarchy Mobile (a reinstall), rerun with --reinstall"
+# Format 1 (slot B): both bootloader slots must match, and slot B is stock's
+# after a system update unless the owner says it is a reinstall
+if ((fmt == 1)); then
+  # Per-slot bootloader versions, where the bootloader reports them
+  bl_a=$(sed -nE 's/^version-bootloader[-_:]a:[ ]*//p' <<<"$vars" | head -1)
+  bl_b=$(sed -nE 's/^version-bootloader[-_:]b:[ ]*//p' <<<"$vars" | head -1)
+  if [[ -n $bl_a && -n $bl_b ]]; then
+    [[ $bl_a == "$bl_b" ]] || die "the bootloader slots differ (a: $bl_a, b: $bl_b). $SLOTS_DIFFER"
+    note "bootloader $bl_a on both slots"
+  elif [[ -n $slots_match ]]; then
+    [[ $slots_match == "$current_bl" ]] || die "--bootloader-slots-match $slots_match, but slot $current_slot has $current_bl"
+    note "bootloader $current_bl on slot $current_slot; the other slot confirmed by you (--bootloader-slots-match)"
+  elif [[ $current_slot == b && $reinstall == 1 ]]; then
+    # The reinstall rule (decided 2026-11-13): the version reported is slot
+    # B's own, the one this phone already starts from, and --set-active=b
+    # below switches no slot, so no other bootloader comes into play
+    note "bootloader $current_bl: slot B's bootloader, which the phone already runs; the install switches no slot (--reinstall)"
+  else
+    unmeasured="the phone only reports slot ${current_slot}'s bootloader ($current_bl). Setting slot B active runs slot B's bootloader, so both must match. Check the other slot (fastboot getvar version-bootloader while it is current), then rerun with --bootloader-slots-match $current_bl"
+    # Today's stop, unless this device's descriptor turns the round trip on
+    [[ $SLOT_PROBE == yes ]] || die "$unmeasured"
+    if ((reinstall)); then
+      die "$unmeasured. With --reinstall the installer does not switch slots to measure it: that clears slot B's successful mark, which on some phones costs boot tries and can end in a fallback that erases userdata"
+    elif [[ $current_slot == b ]]; then
+      refuse_stock_on_b
+    fi
+    # "First install" is all fastboot can show of it: on slot a, no --reinstall,
+    # and slot b not looking like a system that has started and can still
+    # start. That look (successful yes, unbootable no) is an installed Omarchy
+    # Mobile with the phone sent back to slot a, and also stock after a system
+    # update; the two can't be told apart from here, so neither gets the round
+    # trip. Flags the phone doesn't report count as that look too.
+    if [[ $(slot_flag unbootable b) != yes && $(slot_flag successful b) != no ]]; then
+      die "$unmeasured. The installer does not switch slots to measure it on this phone as it is: slot b reads successful '$(slot_flag successful b)', unbootable '$(slot_flag unbootable b)', and a slot that has started and can still start is what an installed Omarchy Mobile looks like from fastboot (stock Android after a system update looks the same). Switching slots would clear that mark. If slot b holds Omarchy Mobile, this is a reinstall: say --reinstall as well"
+    fi
+    slot_probe
+  fi
+  note "$CODENAME, unlocked, current slot $current_slot"
+  # Stock Android must be the one on slot A. An Android system update writes the
+  # other slot and switches to it, so a phone that took one can run stock from
+  # slot B, and writing slot B would overwrite the stock system in use. From
+  # fastboot alone a reinstall (Omarchy Mobile on B) looks the same, so the
+  # owner says which it is.
+  if [[ $current_slot == b && $reinstall != 1 ]]; then
+    refuse_stock_on_b
+  fi
+  [[ $current_slot == b ]] && note "slot b holds Omarchy Mobile (--reinstall): it will be replaced"
 fi
-[[ $current_slot == b ]] && note "slot b holds Omarchy Mobile (--reinstall): it will be replaced"
-# Each image must fit its slot B partition, an AVB_FOOTERS image exactly.
+# Each image must fit the partition it is written to (slot B's, or the
+# running slot's), an AVB_FOOTERS image exactly.
 declare -A part_size=()
 for p in $BOOT_IMAGES; do
-  psize=$(sed -nE "s/^partition-size:${p}_b:[ ]*(0x[0-9a-fA-F]{1,12})\$/\1/p" <<<"$vars" | head -1)
-  [[ -n $psize ]] || die "the phone reports no partition-size for ${p}_b"
+  psize=$(sed -nE "s/^partition-size:${p}_$target:[ ]*(0x[0-9a-fA-F]{1,12})\$/\1/p" <<<"$vars" | head -1)
+  [[ -n $psize ]] || die "the phone reports no partition-size for ${p}_$target"
   psize=$((psize)) isize=$(stat -c %s "$images/$p.img")
   part_size[$p]=$psize
-  ((isize <= psize)) || die "$p.img is $isize bytes, larger than ${p}_b ($psize bytes)"
+  ((isize <= psize)) || die "$p.img is $isize bytes, larger than ${p}_$target ($psize bytes)"
   [[ -z ${avb_size[$p]:-} ]] || ((avb_size[$p] == psize)) \
-    || die "$conf: AVB_FOOTERS pads $p to ${avb_size[$p]} bytes, but ${p}_b is $psize: its footer would not be at the end of the partition"
+    || die "$conf: AVB_FOOTERS pads $p to ${avb_size[$p]} bytes, but ${p}_$target is $psize: its footer would not be at the end of the partition"
 done
 
 # --- The owner's answers -----------------------------------------------------
@@ -646,9 +1148,15 @@ trap cleanup EXIT
     fi
   } > "$conf_file"
   printf '%s\n' "$ssh_key" > "$keys_file"
+  # Format 2: SLOT=, the slot the install wrote and kernel updates write
+  # (absent means b, so a format 1 install's file stays as it always was).
+  # Its place before AUTO_WRITE is harmless either way; it is kept first
+  # for readability.
+  slot_line=()
+  ((fmt == 1)) || slot_line=("SLOT=$target")
   printf '%s\n' "# Written by install-phone: a release install takes kernel updates through" \
     "# omamobile-boot-update's pacman hook (docs/RELEASES.md §5.3). AUTO_WRITE=no stops it." \
-    "AUTO_WRITE=$BOOT_UPDATE_AUTO_WRITE" > "$boot_conf"
+    "${slot_line[@]}" "AUTO_WRITE=$BOOT_UPDATE_AUTO_WRITE" > "$boot_conf"
 )
 unset wifi_psk
 
@@ -691,7 +1199,7 @@ cmp -s <(debugfs -R "cat /etc/omamobile/firstboot.conf" "$copy" 2>/dev/null) "$c
 cmp -s <(debugfs -R "cat /root/.ssh/authorized_keys" "$copy" 2>/dev/null) "$keys_file" || die "writing authorized_keys into the image copy failed"
 cmp -s <(debugfs -R "cat /etc/omamobile/boot-update.conf" "$copy" 2>/dev/null) "$boot_conf" || die "writing boot-update.conf into the image copy failed"
 e2fsck -fn "$copy" >/dev/null 2>&1 || die "the image copy doesn't check clean after the writes"
-note "firstboot.conf, root's authorized_keys and boot-update.conf (AUTO_WRITE=$BOOT_UPDATE_AUTO_WRITE) written, file system checks clean"
+note "firstboot.conf, root's authorized_keys and boot-update.conf (AUTO_WRITE=$BOOT_UPDATE_AUTO_WRITE$( ((fmt == 1)) || printf ', SLOT=%s' "$target")) written, file system checks clean"
 userdata_image=$copy
 if command -v img2simg >/dev/null; then
   img2simg "$copy" "$sparse"
@@ -737,7 +1245,7 @@ if [[ -n $ramdisk_image ]]; then
       die "rewriting $ramdisk_image.img with the new ramdisk failed"
     isize=$(stat -c %s "$ramdisk_dir/$ramdisk_image.img")
     ((isize <= part_size[$ramdisk_image])) ||
-      die "$ramdisk_image.img with the owner's key is $isize bytes, larger than ${ramdisk_image}_b (${part_size[$ramdisk_image]} bytes)"
+      die "$ramdisk_image.img with the owner's key is $isize bytes, larger than ${ramdisk_image}_$target (${part_size[$ramdisk_image]} bytes)"
     image_file[$ramdisk_image]=$ramdisk_dir/$ramdisk_image.img
     note "the owner's key appended to $ramdisk_image.img's initramfs (as omamobile-boot-update appends it)"
   fi
@@ -745,20 +1253,29 @@ fi
 
 # --- What will be written ----------------------------------------------------
 # The only way this script writes to the phone. PART must be one of the
-# descriptor's boot images with _b on the allowlist, or userdata.
+# descriptor's boot images on the target slot (slot B, or for format 2 the
+# slot the phone runs from) whose slot-B name is on the allowlist (UFS_RW's
+# slot form), or userdata on the allowlist. The other slot is never one.
 flash() {
   local part=$1 file=$2 ok=0 p
-  for p in $BOOT_IMAGES; do [[ $part == "${p}_b" ]] && ok=1; done
-  [[ $part == userdata ]] && ok=1
-  ((ok)) && [[ " $UFS_RW " == *" $part "* ]] || die "refusing to write $part: not a slot B boot image or userdata on the allowlist"
+  [[ $target == a || $target == b ]] || die "refusing to write $part: no target slot"
+  ((fmt == 2)) || [[ $target == b ]] || die "refusing to write $part: a format 1 install writes slot B only"
+  for p in $BOOT_IMAGES; do [[ $part == "${p}_$target" && " $UFS_RW " == *" ${p}_b "* ]] && ok=1; done
+  [[ $part == userdata && " $UFS_RW " == *" userdata "* ]] && ok=1
+  ((ok)) || die "refusing to write $part: not one of slot $target's boot images or userdata on the allowlist"
   run flash "$part" "$file"
 }
+if ((fmt == 2)); then
+  failed_tail="Android on slot $target may already be partly overwritten and the phone may start no system until the install runs again whole. Don't restart the phone: fix the cause and run this again from Fastboot Mode, or put Android back with Google's factory image"
+else
+  failed_tail="Slot A is untouched; fix the cause and rerun"
+fi
 run() {
   if ((dry)); then
     printf '    would run: %s -s %s %s\n' "$FASTBOOT" "$serial" "$*"
   else
     printf '    %s %s\n' "$FASTBOOT" "$*"
-    fb "$@" || die "fastboot $* failed; the phone is still in fastboot. Slot A is untouched; fix the cause and rerun"
+    fb "$@" || die "fastboot $* failed; the phone is still in fastboot. $failed_tail"
   fi
 }
 
@@ -770,27 +1287,67 @@ note "SSH key:   ${ssh_key:0:40}... (root and $username)"
 note "root image: $(basename "$rootfs")"
 echo
 echo "These commands, and only these, will run:"
-for p in $BOOT_IMAGES; do echo "    fastboot flash ${p}_b ${image_file[$p]}"; done
+for p in $BOOT_IMAGES; do echo "    fastboot flash ${p}_$target ${image_file[$p]}"; done
 echo "    fastboot flash userdata $userdata_image"
-echo "    fastboot --set-active=b"
+((fmt == 2)) || echo "    fastboot --set-active=b"
 echo "    fastboot reboot"
 echo
-echo "userdata will be ERASED: stock Android's data is lost, and stock Android on"
-echo "slot A will need a factory reset if you ever boot it again. Slot A itself,"
-echo "the bootloader, radio, persist, efs, modem and devinfo are not touched."
+if ((fmt == 2)); then
+  echo "Android on this phone is REPLACED: Omarchy Mobile is written over the system"
+  echo "the phone runs from (slot $target), and userdata is ERASED, so Android and its"
+  echo "data are gone. The phone keeps starting from slot $target; no slot is switched."
+  echo "The way back to Android is Google's factory image for this phone (Google's"
+  echo "Android Flash Tool, or the factory image's flash-all), from a computer. If the"
+  echo "install is cut off, the phone starts no system until it runs again whole."
+  echo "Slot $other, the bootloader, radio, persist, efs, modem, devinfo and vbmeta are not touched."
+else
+  echo "userdata will be ERASED: stock Android's data is lost, and stock Android on"
+  echo "slot A will need a factory reset if you ever boot it again. Slot A itself,"
+  echo "the bootloader, radio, persist, efs, modem and devinfo are not touched."
+fi
 echo
 answer=$(ask "Type the phone's codename ($CODENAME) to go ahead")
-[[ $answer == "$CODENAME" ]] || die "not confirmed; nothing was written"
+if [[ $answer != "$CODENAME" ]]; then
+  ((slot_probe_ran)) || die "not confirmed; nothing was written"
+  die "not confirmed; nothing was flashed or erased. The slot check above did change the bootloader's slot flags (listed there), and slot $current_slot is the active slot"
+fi
 
 ((dry)) && say "Dry run: printing the commands instead of running them" || say "Flashing"
-for p in $BOOT_IMAGES; do flash "${p}_b" "${image_file[$p]}"; done
+# Format 2's gate: the same phone, on the same slot, just before the first
+# flash. The owner may have taken minutes over the answers; a phone that
+# restarted onto the other slot meanwhile would have its target change.
+if ((fmt == 2 && !dry)); then
+  phone_listed || die "the phone (serial $serial) is no longer in fastboot mode; nothing was written"
+  read_vars
+  [[ $(var product) == "$CODENAME" ]] || die "the phone no longer reports product $CODENAME; nothing was written"
+  [[ -z $(var serialno) || $(var serialno) == "$serial" ]] || die "the phone reports another serial than $serial; nothing was written"
+  [[ $(var current-slot) == "$target" ]] ||
+    die "the phone's current slot changed from $target to '$(var current-slot)' since it was checked; nothing was written. Run the install again"
+fi
+for p in $BOOT_IMAGES; do flash "${p}_$target" "${image_file[$p]}"; done
 flash userdata "$userdata_image"
-run --set-active=b
+((fmt == 2)) || run --set-active=b
+if ((fmt == 2 && !dry)); then
+  # Read back (read-only): still the same slot, and its flags after the writes
+  read_vars
+  [[ $(var current-slot) == "$target" ]] ||
+    die "after the writes the phone reports current slot '$(var current-slot)', not $target: it is not restarted. Ask in an issue before you restart it (https://github.com/derekross/omarchy-mobile/issues)"
+  slot_flags_read after
+  slot_flags_line after "after the writes"
+fi
 run reboot
 if ((dry)); then
-  say "Dry run done: nothing was written to the phone"
+  if ((slot_probe_dry)); then
+    say "Dry run done: nothing was written to the phone, and the other bootloader slot was not checked (the real run checks it first)"
+  else
+    say "Dry run done: nothing was written to the phone"
+  fi
 else
-  say "Done. The phone boots slot B; the first boot sets up $username (a few minutes)."
+  if ((fmt == 2)); then
+    say "Done. The phone starts Omarchy Mobile from slot $target; the first boot sets up $username (a few minutes)."
+  else
+    say "Done. The phone boots slot B; the first boot sets up $username (a few minutes)."
+  fi
   if [[ -z $guided ]]; then
     echo "    Watch it:  tools/phone-ssh 'journalctl -fu omamobile-firstboot'"
     echo "    Then:      tools/nv-backup DIR, then tools/phone-provision --first-install --nv-backup DIR FACTORY.zip"

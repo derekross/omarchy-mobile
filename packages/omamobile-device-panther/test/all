@@ -96,10 +96,13 @@ for f in usr/bin/reboot-to \
          usr/lib/udev/rules.d/70-omamobile-dma-heap.rules \
          usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/environment.d/40-omamobile-rotation.conf \
+         usr/lib/environment.d/40-omamobile-power-key.conf \
          usr/lib/systemd/system/omamobile-speaker-protection.service.d/50-panther-default-cal.conf \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
          usr/lib/modprobe.d/omamobile-display.conf \
+         usr/lib/modprobe.d/omamobile-max77759.conf \
+         usr/lib/modprobe.d/omamobile-charger.conf \
          usr/lib/modprobe.d/omamobile-camera.conf \
          usr/lib/systemd/system/omamobile-camera.service \
          usr/lib/systemd/system/omamobile-camera.timer \
@@ -130,6 +133,8 @@ grep -q 'Address=172.16.42.1/24' "$tmp/root/usr/lib/systemd/network/20-usb-gadge
   || fail "usb0 keeps the initramfs address"
 grep -qx 'OMAMOBILE_ROTATION_HOLD=1' "$tmp/root/usr/lib/environment.d/40-omamobile-rotation.conf" \
   || fail "the Pixel 7 turns on Hyprland's rotation hold"
+grep -qx 'OMAMOBILE_POWER_KEY_ANDROID=1' "$tmp/root/usr/lib/environment.d/40-omamobile-power-key.conf" \
+  || fail "the Pixel 7 turns on the power key as Android's"
 dropin="$tmp/root/usr/lib/systemd/system/omamobile-speaker-protection.service.d/50-panther-default-cal.conf"
 grep -qx '\[Service\]' "$dropin" && grep -qx 'Environment=OMAMOBILE_SPK_DEFAULT_CAL=1' "$dropin" \
   || fail "the Pixel 7 starts its speakers on the default calibration when it has no speaker.cal"
@@ -144,6 +149,21 @@ grep -q '^MemorySleepMode=s2idle$' "$tmp/root/usr/lib/systemd/sleep.conf.d/10-om
   || fail "suspend must be s2idle: gs201 never wakes from deep"
 grep -qx 'options gs_dsim_cmd allow_tx=1' "$tmp/root/usr/lib/modprobe.d/omamobile-display.conf" \
   || fail "the DSI command host may send to the panel (brightness)"
+# The charger (BATTERY-PLAN B3.3, B3g, D1): it loads at boot with both of
+# the Pixel 7 Pro's options, or the upstream driver turns charging off at
+# probe without a Type-C source; tcpci_maxim would take the USB-C port.
+mod=$tmp/root/usr/lib/modprobe.d
+grep -qx 'options max77759_charger default_ilim_ua=500000 temp_guard=1' "$mod/omamobile-charger.conf" \
+  || fail "the charger charges without a Type-C source, under the temperature guard"
+grep -qx 'softdep max77759_charger pre: max17042_battery' "$mod/omamobile-charger.conf" \
+  || fail "the gauge loads before the charger, for the guard's first reading"
+for m in tcpci_maxim gpio_max77759 nvmem_max77759; do
+  grep -qx "blacklist $m" "$mod/omamobile-max77759.conf" || fail "$m stays blacklisted"
+done
+grep -qx 'blacklist max77759_charger' "$mod/omamobile-max77759.conf" && fail "the charger is not blacklisted"
+grep -h '^options max77759_charger' "$mod"/*.conf | grep -cvx 'options max77759_charger default_ilim_ua=500000 temp_guard=1' >/dev/null \
+  && fail "never one charger option without the other"
+pass "the charger loads with its input limit and the temperature guard, after the gauge; tcpci_maxim and the GPIO and NVMEM cells stay out"
 f=$tmp/root/usr/lib/modprobe.d/omamobile-fingerprint.conf
 for m in sg goodix_fp; do
   grep -qx "blacklist $m" "$f" || fail "$m is loaded by omamobile-fp only"

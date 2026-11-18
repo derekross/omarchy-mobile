@@ -154,8 +154,8 @@ grep -qF 'for p in omamobile-install-link omamobile-provision; do' "$inside" || 
 grep -qF ': > "$T/etc/omamobile/install-link"' "$inside" || fail "build-inside places the marker"
 grep -qF 'die "/etc/omamobile/install-link is in an image not built for the link' "$inside" || fail "build-inside refuses a marker in any other image"
 grep -qF 'echo "install link: $link_line"' "$inside" || fail "the MANIFEST says whether the image is for the link (make-bundle reads it)"
-grep -qF 'optional_ours=(omamobile-provision)' "$inside" || fail "omamobile-provision goes in once [omamobile] has it"
-grep -qx omamobile-install-link <(grep -v '^#' rootfs/packages.omamobile) || fail "every image has omamobile-install-link (inert without the marker)"
+grep -qF 'optional_ours=(omamobile-provision omamobile-install-link)' "$inside" || fail "omamobile-provision and omamobile-install-link go in once [omamobile] has them"
+! grep -qx omamobile-install-link <(grep -v '^#' rootfs/packages.omamobile) || fail "omamobile-install-link is optional, not required in every image (#775 builds it only when named)"
 echo 'ok - --install-link only where the descriptor allows it (test: development or local only); the marker and both packages in build-inside'
 
 # Bundling must select this device even when another device sorts later.
@@ -166,7 +166,8 @@ echo dtbo > "$t/kernel/images/dtbo.img"
 echo public-key > "$R/packages/omamobile-keyring/omamobile.gpg"
 # A bundle carries the install guide and phone-provision with its tools.
 mkdir -p "$R/docs"; echo guide > "$R/docs/INSTALL.md"
-for f in phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data; do
+# (make-bundle's own list: the provisioning tools and the guided install's)
+for f in $(sed -n 's/^provision_tools="\(.*\)"$/\1/p' "$R/tools/make-bundle"); do
   printf '#!/bin/bash\n' > "$R/tools/$f"; chmod +x "$R/tools/$f"
 done
 bundle() { DEVICE=first "$R/tools/make-bundle" --unsigned --version fixture "$@"; }

@@ -19,6 +19,6 @@ Target = usr/lib/omamobile/*/initramfs.cpio.lz4
 Target = usr/lib/omamobile/*/overlays/*
 
 [Action]
-Description = Writing the kernel into slot B (omamobile-boot-update)...
+Description = Writing the kernel into its boot slot (omamobile-boot-update)...
 When = PostTransaction
 Exec = /usr/bin/omamobile-boot-update hook
