@@ -141,7 +141,9 @@ Item {
     stepText = "Starting"
     progressText = ""
     liveLine = ""
-    detailsOpen = true
+    // Details opens for a new run; following the same run again (a status
+    // refresh, reopening the sheet) keeps what the user chose.
+    if (page !== "progress") detailsOpen = true
     page = "progress"
     tailProc.running = false
     Qt.callLater(function() { tailProc.running = true })
@@ -645,11 +647,16 @@ Item {
           Text {
             width: parent.width
             textFormat: Text.PlainText
+            // three lines are kept for it, so Details under it doesn't move
+            // when the line wraps to two or three
+            height: Math.ceil(progressMetrics.lineSpacing * 3)
             text: root.progressText
             color: root.foreground
             opacity: 0.75
             font.family: Style.font.family
             font.pixelSize: Readable.px(Style.font.caption)
+            FontMetrics { id: progressMetrics; font.family: Style.font.family; font.pixelSize: Readable.px(Style.font.caption) }
+            verticalAlignment: Text.AlignTop
             wrapMode: Text.WrapAnywhere
             maximumLineCount: 3
             elide: Text.ElideRight
