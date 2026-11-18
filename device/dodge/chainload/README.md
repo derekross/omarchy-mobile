@@ -18,7 +18,10 @@ our DTB without flashing `vendor_boot` is this chain:
    `/omamobile/slot_suffix` (from `OMAMOBILE_SLOT` — this ABL puts the
    property in neither bootconfig nor bootargs under `fastboot boot`;
    stage 1 dumps both to kmsg and logs `source=packed`) (stage 1's own `/proc/cmdline` is
-   `CMDLINE_FORCE`d and has no ABL keys), and `kexec -c`
+   `CMDLINE_FORCE`d and has no ABL keys); it forwards `_b` only, since
+   stage 2's storage guard opens the slot it is told and this chain boots
+   slot B (any other value is logged and dropped, so stage 2's boot
+   partitions stay read-only); and `kexec -c`
    into stage 2. Stage 1's kernel config has UFS disabled
    (`SCSI_UFS_QCOM` / `SCSI_UFSHCD`), so it does not probe storage on
    stock's DTB.

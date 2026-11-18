@@ -36,7 +36,12 @@
 #                    image built for the install link, install_link with its
 #                    protocol, from the same MANIFEST), the release
 #                    version and label, and the install plan and its checks,
-#                    which tools/install-phone (and later a web flasher) enforce
+#                    which tools/install-phone (and later a web flasher) enforce.
+#                    Format 1 (slot B) unless the descriptor says
+#                    INSTALL_SLOT=active (no device does yet): then format 2,
+#                    the slot the phone runs from, and bundle-manifest refuses
+#                    a ramdisk image whose initramfs lacks the storage guard's
+#                    running-slot marker (/etc/omamobile-ufs-rw-slot)
 #     SHA256SUMS     checksums of everything above
 #     SHA256SUMS.sig signed with the release key (keys/gnupg.release,
 #                    tools/lib/signing.sh; maintainer only; --unsigned skips)
@@ -131,6 +136,10 @@ for f in $provision_tools; do [[ -f tools/$f ]] || die "no tools/$f"; done
 [[ -f tools/lib/bundle-tar.sh ]] || die "no tools/lib/bundle-tar.sh"
 boot_images=$(sed -n 's/^BOOT_IMAGES="\(.*\)"$/\1/p' "$conf")
 [[ -n $boot_images ]] || die "$conf has no BOOT_IMAGES"
+# Where the release installs (tools/bundle-manifest checks the value): slot
+# B, or the slot the phone runs from (docs/ACTIVE-SLOT-PLAN.md §1)
+install_slot=$(sed -nE 's/^INSTALL_SLOT="?([^"]*)"?$/\1/p' "$conf" | tail -1)
+install_slot=${install_slot:-b}
 if [[ -z $rootfs ]]; then
   shopt -s nullglob
   for f in out/omamobile-rootfs-*-aarch64.img.zst; do
@@ -243,6 +252,27 @@ kernel_commit=$(git -C "${KERNEL_DIR:-$KERNEL_BASE/wt-int}" rev-parse --short=12
   echo "# boot images"
   (cd "$dir/images" && sha256sum -- *.img)
 } > "$dir/MANIFEST"
+# The two paragraphs that differ with where the release installs
+if [[ $install_slot == active ]]; then
+  what_it_writes="What it writes: the boot images of the slot the phone runs from now
+($(for p in $boot_images; do printf '%s ' "$p"; done)as <image>_a or <image>_b, whichever slot the phone
+reports) and userdata (the Arch root). That REPLACES Android on this phone
+and ERASES userdata. It switches no slot, and never touches the other slot,
+the bootloader, radio, persist, efs, modem, devinfo or vbmeta."
+  way_back="Going back to Android: Android is replaced, so the way back is Google's
+factory image for $DEVICE, written by Google's Android Flash Tool
+(https://flash.android.com) or by the factory image's flash-all script from
+fastboot mode (the bootloader is still unlocked). It puts Android back and
+erases userdata. Don't lock the bootloader unless both slots hold Google's
+images."
+else
+  what_it_writes="What it writes: slot B's boot images ($(for p in $boot_images; do printf '%s_b ' "$p"; done)) and
+userdata (the Arch root). That ERASES userdata. It never touches slot A,
+the bootloader, radio, persist, efs, modem, devinfo or vbmeta."
+  way_back="Going back to stock: stock Android is still on slot A. In fastboot,
+\"fastboot --set-active=a\" and reboot, then factory-reset Android (its data
+was erased). Or flash Google's factory image for $DEVICE."
+fi
 cat > "$dir/README.txt" <<EOF
 Omarchy Mobile $version for the $(sed -n 's/^NAME="\(.*\)"$/\1/p' "$conf") ($DEVICE)
 $(printf '%s' "$label" | tr '[:lower:]' '[:upper:]')
@@ -278,9 +308,7 @@ this computer. The installer checks the phone first, asks for your user
 name, password, Wi-Fi and SSH key, shows exactly what it will write, and
 waits for you to type "$DEVICE".
 
-What it writes: slot B's boot images ($(for p in $boot_images; do printf '%s_b ' "$p"; done)) and
-userdata (the Arch root). That ERASES userdata. It never touches slot A,
-the bootloader, radio, persist, efs, modem, devinfo or vbmeta.
+$what_it_writes
 
 After the first boot (by hand; the guided install does this itself): take
 the read-only backup of the modem's partitions into a new directory DIR
@@ -301,9 +329,7 @@ installs what is new there.
 manifest.json: this release as data (files, sizes, checksums, the install
 plan and its checks), covered by SHA256SUMS and its signature.
 
-Going back to stock: stock Android is still on slot A. In fastboot,
-"fastboot --set-active=a" and reboot, then factory-reset Android (its data
-was erased). Or flash Google's factory image for $DEVICE.
+$way_back
 EOF
 python3 -I tools/bundle-manifest --bundle "$dir" --rootfs "$rootfs" --rootfs-sha256 "$root_digest" \
   --rootfs-manifest "$manifest" \

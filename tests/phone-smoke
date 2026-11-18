@@ -5,7 +5,9 @@
 # ceiling, and a UFS link that doesn't come back failing kernel health; and
 # from the laptop side, against a stand-in for the phone (PHONE_SSH): the
 # device named from the repository's descriptors, or in a release bundle
-# from its one device.conf.
+# from its one device.conf. The boot and guard rows against a fake root
+# (--slot-from): the slot boot-update.conf names, b when absent, and the
+# running slot's boot images.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
@@ -123,6 +125,57 @@ run "$dais" "$ufs" "$ufs" 'some driver: something new broke'
 has 'of them ASoC no backend DAIs (PipeWire probe) x1, UFS dme-set 0x4021 (s2idle) x2, 1 new)' \
   && has 'new dmesg errors|some driver: something new broke x1' || fail "counted and new lines together"
 pass "counted and new lines together"
+
+# The boot and storage guard rows (--slot-from: a fake root). The boot row
+# wants the slot boot-update.conf names (b when absent); the guard row
+# allows userdata and the running slot's five boot images.
+fr=$t/fr
+fakeroot() { # running suffix (or none), then the writable partitions
+  rm -rf "$fr"; mkdir -p "$fr/proc" "$fr/etc/omamobile"
+  echo '123.45 100.00' > "$fr/proc/uptime"
+  [[ $1 == none ]] || printf 'androidboot.slot_suffix = "%s"\n' "$1" > "$fr/proc/bootconfig"
+  echo 'console=ttynull' > "$fr/proc/cmdline"
+  shift
+  local i=0 p
+  for p in boot_a init_boot_a vendor_boot_a vendor_kernel_boot_a dtbo_a boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata efs persist; do
+    i=$((i + 1)); mkdir -p "$fr/sys/class/block/sda$i"; echo "$i" > "$fr/sys/class/block/sda$i/partition"
+    printf 'PARTNAME=%s\n' "$p" > "$fr/sys/class/block/sda$i/uevent"
+    if [[ " $* " == *" $p "* ]]; then echo 0; else echo 1; fi > "$fr/sys/class/block/sda$i/ro"
+  done
+}
+rows() { out=$(tools/phone-smoke --slot-from "$fr"); }
+B5="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
+A5="boot_a init_boot_a vendor_boot_a vendor_kernel_boot_a dtbo_a userdata"
+fakeroot _b $B5; rows
+has 'ok|1|boot|kernel ' && has ', slot b, up 123s' && has 'ok|1|storage guard|13 partitions; only userdata and slot b' \
+  || fail "a development phone on slot B, no boot-update.conf: both rows pass as before"
+pass "a development phone on slot B, no boot-update.conf: both rows pass as before"
+echo 'AUTO_WRITE=yes' > "$fr/etc/omamobile/boot-update.conf"; rows
+has 'ok|1|boot|' && has 'ok|1|storage guard|' || fail "a release on slot B whose boot-update.conf names no slot: b"
+pass "a release on slot B whose boot-update.conf names no slot: b"
+fakeroot _a $A5; printf 'AUTO_WRITE=yes\nSLOT=a\n' > "$fr/etc/omamobile/boot-update.conf"; rows
+has 'ok|1|boot|' && has ', slot a, up' && has 'ok|1|storage guard|13 partitions; only userdata and slot a' \
+  || fail "a release on slot A with SLOT=a: both rows pass"
+pass "a release on slot A with SLOT=a: both rows pass"
+fakeroot _a $A5; rows
+has 'not ok|1|boot|' && has 'on slot a: our builds boot from slot b' || fail "slot A without SLOT=a fails the boot row"
+pass "slot A without SLOT=a fails the boot row"
+fakeroot _b $B5; printf 'SLOT="a"\n' > "$fr/etc/omamobile/boot-update.conf"; rows
+has 'not ok|1|boot|' && has 'on slot b: boot-update.conf says SLOT=a' || fail "SLOT=a booted from slot B (a fallback) fails the boot row"
+pass "SLOT=a booted from slot B (a fallback) fails the boot row"
+fakeroot _a $A5; printf 'SLOT=a\nSLOT=a\n' > "$fr/etc/omamobile/boot-update.conf"; rows
+has 'not ok|1|boot|' && has 'names SLOT 2 times' || fail "a second SLOT= line fails the boot row"
+pass "a second SLOT= line fails the boot row"
+fakeroot _a $A5 boot_b; printf 'SLOT=a\n' > "$fr/etc/omamobile/boot-update.conf"; rows
+has 'not ok|1|storage guard|writable outside the allowlist: boot_b' || fail "on slot A, slot B's boot image writable fails the guard row"
+fakeroot _b $B5 dtbo_a; rows
+has 'not ok|1|storage guard|writable outside the allowlist: dtbo_a' || fail "on slot B, slot A's dtbo writable fails the guard row"
+pass "the other slot's boot images writable fail the guard row, either way"
+fakeroot none userdata; rows
+has 'skip|1|boot|' && has 'ok|1|storage guard|13 partitions; only userdata writable' || fail "no slot named: the boot row skips, the guard allows userdata alone"
+fakeroot none $B5; rows
+has 'not ok|1|storage guard|writable outside the allowlist: ' && has ' boot_b ' || fail "no slot named: a writable boot image fails the guard row"
+pass "no slot named: the boot row skips and only userdata may be writable"
 
 # From the laptop: PHONE_SSH stands in for the phone. It answers the
 # compatible question and records what the smoke run was started with.
