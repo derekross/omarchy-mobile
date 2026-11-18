@@ -1,0 +1,40 @@
+# Idle: re-arm the main idle monitor when its timeout changes. A lock or
+# screensaver timeout changed while the shell runs never fired: the live
+# IdleMonitor took the new timeout but never reported idle again until a
+# shell restart (Pixel 8 Pro, Omarchy 4.0.6, quickshell 0.3.2.r7, Hyprland
+# 0.57: untouched for 100 s after a change to 30 s, no lock). Switching the
+# monitor off for 50 ms when firstIdleTimeoutSeconds changes starts it again;
+# with this the phone locked 31 s after the change.
+# handleIdleChanged() ignores the off/on flip, so the re-arm neither
+# cancels a running idle cycle nor wakes a locked display.
+#
+# Omarchy 4.5: same hunk, one line of offset.
+
+--- i/shell/plugins/services/idle/Service.qml
++++ w/shell/plugins/services/idle/Service.qml
+@@ -191,6 +191,8 @@
+   function handleIdleChanged() {
+     logEvent("idle-monitor", idleMonitor.isIdle ? "idle" : "active")
+     if (!root.idleEnabled || !root.idleTimersEnabled) return
++    // The 50 ms re-arm below flips isIdle; it is not user activity.
++    if (root.idleRearming) return
+ 
+     if (idleMonitor.isIdle) startIdleCycle()
+     else handleActiveSignal()
+@@ -295,9 +297,15 @@
+     }
+   }
+ 
++  // A new timeout on a live monitor never fires (seen on the Pixel 8 Pro,
++  // quickshell 0.3.2): switch the monitor off and on so it starts again.
++  property bool idleRearming: false
++  onFirstIdleTimeoutSecondsChanged: { idleRearming = true; idleRearmTimer.restart() }
++  Timer { id: idleRearmTimer; interval: 50; repeat: false; onTriggered: root.idleRearming = false }
++
+   IdleMonitor {
+     id: idleMonitor
+-    enabled: root.idleEnabled && root.idleTimersEnabled
++    enabled: root.idleEnabled && root.idleTimersEnabled && !root.idleRearming
+     timeout: Math.max(1, root.firstIdleTimeoutSeconds)
+     respectInhibitors: true
+     onIsIdleChanged: root.handleIdleChanged()
