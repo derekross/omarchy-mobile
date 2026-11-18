@@ -3,7 +3,11 @@
 # a minimal chroot, plus omamobile-fp-bridge, which fprintd's omamobile_udfps
 # driver talks to (device/cheetah/FINGERPRINT-PLAN.md). Enabled by the
 # package (a vendor wants link) and inert until tools/phone-provision has
-# pushed Google's files (the conditions below). Before storageproxyd the
+# pushed Google's files (the conditions below). On a phone the runner
+# doesn't mark FIRST_START=auto, the first start also waits for the owner's
+# go, /etc/omamobile/fingerprint-first-start: it writes Trusty's secure
+# storage, which can't be undone. The ExecCondition checks that, and that
+# the runner knows the board, before any module load. Before storageproxyd the
 # runner makes read-only copies of mfg_data and persist:/ss and refuses to
 # start without the TDP copy or once it, or persist:/ss/0, changed.
 #
@@ -21,6 +25,7 @@ ConditionPathExists=/usr/lib/omamobile-fp/root
 ConditionPathExists=/dev/trusty-ipc-dev0
 
 [Service]
+ExecCondition=/usr/lib/omamobile-fp/omamobile-fp-chroot admitted
 # The sensor's rail is on pmic-2 (S2MPG13, bound through sec_acpm) and its
 # driver is goodix_fp; both are blacklisted from autoload, so load them
 # here. Loading before the regulator core's cleanup of unused rails (about
