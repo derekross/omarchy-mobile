@@ -856,7 +856,10 @@ the loader undoes itself (that is its job). By hand:
 battery read `CHG_CNFG_09` (0xc2) = `0x93`: the 500 mA limit (sel 19) with
 `NO_AUTOIBUS` (bit 7) set. The battery current sat between -145 and +26 mA
 on the cable; `i2cset -f -y 5 0x69 0xc2 0x13` took it to +1.41 A within a
-second. A user in the community chat reports the same symptom twice ("won't
+second. A second 7 Pro on the same issue (2026-11-16) read `0x93` after a
+boot from flat: -223 mA with the screen on, about +250 mA with it off, and
++1.41 A five seconds after the same write; a reboot from 88 % then read
+`0x13`. A user in the community chat reports the same symptom twice ("won't
 take a charge"), with no register read yet. Every read on record has the
 bit clear: B3.0, the two `usbc-deadman dump`s in `logs/`, the Pixel 6 Pro's
 C2, the reporter's other sessions, and the reference phone on 2026-11-15
@@ -868,8 +871,10 @@ power-on value (0x13 in Google's register header).
 (#169's readings: Rp 3.0 A gives +1.42 A, Rp default about 0 net), and
 `NO_AUTOIBUS` turns that off. Nothing in the driver touched the bit, so
 whatever was left in the chip stayed. Who sets it isn't known. Most likely
-the bootloader: the one instance was a boot from an empty battery, when ABL
-charges before Linux. Another candidate is stock: Google's driver writes
+the bootloader: both instances were boots from an empty battery, when ABL
+charges before Linux. It isn't every such boot: the second phone booted flat
+on 11-12 and 11-13 and took +1.41 A with no write (register not read), and
+a third 7 Pro read `0x13` on flat boots on 11-15 and 11-17 (#169). Another candidate is stock: Google's driver writes
 `NO_AUTOIBUS` = 1 with every input limit (it programs the limit from its
 USB-PD stack, which we don't have), so a warm reboot from slot A could carry
 it over if the bit survives a reboot, which K1b.4 finds out.
@@ -999,7 +1004,9 @@ omamobile-modem-boot.target`.
 
 **K1b.5, the field case (whenever a battery runs flat).** Boot from empty
 on the cable and read the two probe lines: `found: … (NO_AUTOIBUS set)`
-then a clean `probed:` closes it, and tells us ABL sets the bit.
+then a clean `probed:` closes it, and tells us ABL sets the bit. A flat boot
+whose `found:` line has no suffix is no result: not every flat boot sets the
+bit (#169).
 
 ---
 
