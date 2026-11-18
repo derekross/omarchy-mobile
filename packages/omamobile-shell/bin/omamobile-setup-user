@@ -209,14 +209,27 @@ fi
 
 # On-screen keyboard: squeekboard shows itself when a text field takes focus
 # (Hyprland relays text-input-v3 to its input-method-v2). Started from
-# Omarchy's user autostart file, once.
+# Omarchy's user autostart file, once: omamobile-osk runs the keyboard the
+# owner chose, which is squeekboard unless they picked Tactus (Setup >
+# Keyboard, below). The line falls back to squeekboard itself when
+# omamobile-osk is gone (an older omamobile-shell installed over this one),
+# so the session never starts without a keyboard: on a lock that takes a
+# password, that would leave no way to unlock it.
+osk_line="o.launch_on_start(\"sh -c 'command -v omamobile-osk >/dev/null && exec omamobile-osk; exec squeekboard'\")"
 if omarchy-done ensure omamobile-osk; then
   gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true
-  cat >>~/.config/hypr/autostart.lua <<'LUA'
-
--- Omamobile: on-screen keyboard
-o.launch_on_start("squeekboard")
-LUA
+  printf '\n-- Omamobile: on-screen keyboard\n%s\n' "$osk_line" >>~/.config/hypr/autostart.lua
+fi
+# Up to 0.2.133 that line started squeekboard itself. The line as this script
+# wrote it is changed, once; one the owner wrote or changed is left alone
+# (and then the keyboard they start is the one they get).
+if omarchy-done ensure omamobile-osk-chosen; then
+  autostart=~/.config/hypr/autostart.lua
+  if [[ -f $autostart ]] && grep -qx 'o.launch_on_start("squeekboard")' "$autostart"; then
+    while IFS= read -r l || [[ -n $l ]]; do
+      if [[ $l == 'o.launch_on_start("squeekboard")' ]]; then printf '%s\n' "$osk_line"; else printf '%s\n' "$l"; fi
+    done <"$autostart" >"$autostart.new" && mv -f "$autostart.new" "$autostart"
+  fi
 fi
 
 # Files (Nautilus) opens folders with one tap: a double tap is a mouse habit
@@ -470,6 +483,15 @@ if omarchy-done ensure omamobile-menu-mobilenetwork; then
   extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
   if [[ -f $extension ]] && ! grep -q '"setup.mobile-network"' "$extension"; then
     sed -i '0,/^{/s//{\n  "setup.mobile-network": {"icon":"\xf3\xb0\x9e\x83","label":"Mobile network","description":"Carrier, mobile data, roaming and the APN","when":"test -x \/usr\/lib\/omamobile-sit\/omamobile-sit-config","action":"omarchy-shell shell summon omamobile.mobilenetwork '"'"'{}'"'"'"},/' "$extension"
+  fi
+fi
+# Setup > Keyboard in Omarchy's menu: which on-screen keyboard, the standard
+# one (squeekboard) or Tactus, with a tick on the one in use. Shown only where
+# there is a choice, that is, where Tactus is installed. Added once.
+if omarchy-done ensure omamobile-menu-keyboard; then
+  extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
+  if [[ -f $extension ]] && ! grep -q '"setup.keyboard"' "$extension"; then
+    sed -i '0,/^{/s//{\n  "setup.keyboard": {"icon":"\xf3\xb0\x8c\x8c","label":"Keyboard","title":"On-screen keyboard","description":"Which keyboard to type on","when":"command -v tactus"},\n  "setup.keyboard.squeekboard": {"icon":"\xf3\xb0\x8c\x8c","label":"Standard","description":"Types what you tap, in every language","checked":"[[ $(omamobile-osk which) == squeekboard ]]","action":"omamobile-osk use squeekboard"},\n  "setup.keyboard.tactus": {"icon":"\xf3\xb0\x8c\x8c","label":"Tactus","description":"Corrects words as you type (English)","checked":"[[ $(omamobile-osk which) == tactus ]]","action":"omamobile-osk use tactus"},/' "$extension"
   fi
 fi
 # Setup > Voice in Omarchy's menu opens the voice settings (omamobile.voice),

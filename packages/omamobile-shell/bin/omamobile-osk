@@ -1,0 +1,90 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The phone's on-screen keyboard: the one the owner chose.
+#
+#   omamobile-osk            run the chosen keyboard (the session's autostart)
+#   omamobile-osk which      the chosen keyboard: squeekboard or tactus
+#   omamobile-osk list       the keyboards installed, one a line
+#   omamobile-osk use NAME   choose NAME and change to it now
+#
+# squeekboard is the phone's keyboard and a dependency of this package. Tactus
+# (packages/tactus) is one an owner may install beside it: it corrects words
+# as they are typed. The choice is one word in ~/.config/omamobile/keyboard.
+# Anything else there, or a keyboard that is no longer installed, means
+# squeekboard, so there is always a keyboard.
+set -u
+
+file=${XDG_CONFIG_HOME:-$HOME/.config}/omamobile/keyboard
+
+installed() {
+  case $1 in
+    squeekboard | tactus) command -v "$1" >/dev/null ;;
+    *) return 1 ;;
+  esac
+}
+
+chosen() {
+  local name
+  name=$(head -n1 "$file" 2>/dev/null | tr -d '[:space:]')
+  if [[ $name == tactus ]] && installed tactus; then
+    echo tactus
+  else
+    echo squeekboard
+  fi
+}
+
+running() { pgrep -u "$(id -u)" -x "$1" >/dev/null 2>&1; }
+
+case ${1:-} in
+  "")
+    exec "$(chosen)"
+    ;;
+  which)
+    chosen
+    ;;
+  list)
+    for k in squeekboard tactus; do
+      installed "$k" && echo "$k"
+    done
+    ;;
+  use)
+    name=${2:-}
+    case $name in
+      squeekboard | tactus) ;;
+      *) echo "omamobile-osk: use squeekboard or tactus" >&2; exit 2 ;;
+    esac
+    installed "$name" || { echo "omamobile-osk: $name is not installed" >&2; exit 1; }
+    mkdir -p "${file%/*}" && printf '%s\n' "$name" >"$file.new" && mv -f "$file.new" "$file" || exit 1
+
+    # Change now. Where the session runs the keyboard as squeekboard's user
+    # unit (this package's drop-in makes that unit run omamobile-osk), through
+    # the unit.
+    if systemctl --user is-active -q mobi.phosh.OSK.service 2>/dev/null; then
+      systemctl --user restart mobi.phosh.OSK.service
+      exit
+    fi
+    # Otherwise stop the one that runs and start the other as Omarchy's
+    # autostart does (uwsm-app), through Hyprland when it is there: started
+    # from a terminal or over SSH, a keyboard did not come up
+    # (omamobile-keyboard-theme, 2026-10-31).
+    for k in squeekboard tactus; do
+      running "$k" && pkill -u "$(id -u)" -x "$k"
+    done
+    for _ in $(seq 30); do
+      running squeekboard || running tactus || break
+      sleep 0.1
+    done
+    cmd=omamobile-osk
+    command -v uwsm-app >/dev/null && cmd="uwsm-app -- omamobile-osk"
+    if [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] && command -v hyprctl >/dev/null; then
+      hyprctl dispatch "hl.dsp.exec_cmd(\"$cmd\")" >/dev/null
+    else
+      # shellcheck disable=SC2086
+      setsid -f $cmd </dev/null >/dev/null 2>&1
+    fi
+    ;;
+  *)
+    sed -n '3,8p' "$0" | sed 's/^# \{0,1\}//' >&2
+    exit 2
+    ;;
+esac

@@ -439,6 +439,48 @@ done
   || fail "the keyboard's theme-set hook is linked"
 pass "the keyboard: every layout, the theme at each login, its import and hook once"
 
+# Which keyboard: the start line runs omamobile-osk (the owner's choice), once, and squeekboard where
+# omamobile-osk is gone (an older omamobile-shell installed over this one)
+osk_line="o.launch_on_start(\"sh -c 'command -v omamobile-osk >/dev/null && exec omamobile-osk; exec squeekboard'\")"
+[[ $(grep -cxF "$osk_line" "$H/.config/hypr/autostart.lua") == 1 ]] || fail "a new user's session starts the chosen keyboard, once"
+if grep -c 'launch_on_start("squeekboard")' "$H/.config/hypr/autostart.lua" >/dev/null; then fail "a new user's start line names no keyboard"; fi
+# What the line runs, with omamobile-osk there and gone (sh as Hyprland's exec gives it)
+lt=$t/osk-line; mkdir -p "$lt/with" "$lt/without"
+for d in with without; do
+  printf '#!/bin/sh\necho squeekboard\n' >"$lt/$d/squeekboard"; chmod +x "$lt/$d/squeekboard"
+done
+printf '#!/bin/sh\necho omamobile-osk\n' >"$lt/with/omamobile-osk"; chmod +x "$lt/with/omamobile-osk"
+cmd=$(sed -E 's/^o\.launch_on_start\("(.*)"\)$/\1/' <<<"$osk_line")
+[[ $(PATH="$lt/with:/usr/bin:/bin" sh -c "$cmd") == omamobile-osk && $(PATH="$lt/without:/usr/bin:/bin" sh -c "$cmd") == squeekboard ]] \
+  || fail "the start line runs omamobile-osk, and squeekboard without it"
+python3 -I - "$H/.config/omarchy/extensions/omarchy-menu.jsonc" <<'PY' || fail "Setup > Keyboard offers the keyboards"
+import json, re, sys
+text = open(sys.argv[1]).read()
+text = re.sub(r"(?m)^\s*//.*$", "", text)
+text = re.sub(r",(\s*[}\]])", r"\1", text)
+menu = json.loads(text)
+top = menu["setup.keyboard"]
+assert top["label"] == "Keyboard" and top["icon"] == "\U000f030c" and top["when"] == "command -v tactus", top
+assert "action" not in top, top
+for name, label in (("squeekboard", "Standard"), ("tactus", "Tactus")):
+    row = menu["setup.keyboard." + name]
+    assert row["label"] == label and row["action"] == "omamobile-osk use " + name, row
+    assert row["checked"] == "[[ $(omamobile-osk which) == %s ]]" % name, row
+PY
+[[ $(grep -c '"setup.keyboard"' "$H/.config/omarchy/extensions/omarchy-menu.jsonc") == 1 ]] || fail "Setup > Keyboard is added once"
+# A user from before 0.2.134: the line this script wrote is changed once, a line of their own is not
+ho2=$t/keyboard-old; mkdir -p "$ho2/.config/hypr" "$ho2/.config/omarchy/extensions" "$ho2/.local/state/omarchy/done"
+cp "$H"/.config/hypr/{looknfeel,monitors}.lua "$ho2/.config/hypr/"
+printf -- '-- autostart\n\n-- Omarchy Mobile: on-screen keyboard\no.launch_on_start("squeekboard")\no.launch_on_start("squeekboard --mine")\n' >"$ho2/.config/hypr/autostart.lua"
+touch "$ho2/.local/state/omarchy/done/omamobile-osk"
+RUN_HOME=$ho2 run
+[[ $(grep -cxF "$osk_line" "$ho2/.config/hypr/autostart.lua") == 1 ]] || fail "the old start line now runs the chosen keyboard"
+grep -cx 'o.launch_on_start("squeekboard --mine")' "$ho2/.config/hypr/autostart.lua" >/dev/null || fail "a start line of the user's own is kept"
+printf 'o.launch_on_start("squeekboard")\n' >>"$ho2/.config/hypr/autostart.lua"
+RUN_HOME=$ho2 run
+grep -cx 'o.launch_on_start("squeekboard")' "$ho2/.config/hypr/autostart.lua" >/dev/null || fail "the start line is changed once: put back by the user, it stays"
+pass "which keyboard: the session starts the owner's choice, an older start line is changed once, Setup > Keyboard"
+
 # A layout of the user's own stays theirs
 hk=$t/keyboard-own; mkdir -p "$hk/.config/hypr" "$hk/.config/omarchy/extensions" "$hk/.local/share/squeekboard/keyboards"
 cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hk/.config/hypr/"
