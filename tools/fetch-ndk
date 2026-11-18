@@ -5,18 +5,26 @@
 # Google's download host, checked against the SHA-256 and the size recorded
 # there before anything is unpacked.
 #
-#   tools/fetch-ndk [--dir DIR] [--lock FILE] [--any-host]
+#   tools/fetch-ndk --accept-google-terms [--dir DIR] [--lock FILE] [--any-host]
 #   tools/fetch-ndk --print [--dir DIR] [--lock FILE]
 #     --dir       where the NDK is kept (default $OMAMOBILE_NDK_DIR, else
 #                 ~/.cache/omamobile/ndk: outside the repository)
 #     --lock      the pin (default tools/ndk.lock): RELEASE REVISION SHA256 SIZE URL
 #     --print     print only the path of the NDK already fetched, for
 #                 make -C packages/omamobile-gnss/bionic NDK="$(tools/fetch-ndk --print)";
-#                 never downloads: without the NDK it stops and says to run
-#                 tools/fetch-ndk first
+#                 never downloads: without the NDK it stops and says how to
+#                 fetch it
 #     --any-host  fetch on a computer that isn't x86_64 all the same
+#     --accept-google-terms
+#                 you have read the terms and conditions Google asks everyone
+#                 to agree to before downloading the NDK, on its download page
+#                 (https://developer.android.com/ndk/downloads), and accept
+#                 them. A download needs it: without it the fetch stops,
+#                 naming the page and the option. An NDK already fetched needs
+#                 no option, and neither does --print.
 #
-# So the two steps are: tools/fetch-ndk, then the make with --print.
+# So the two steps are: tools/fetch-ndk --accept-google-terms, then the make
+# with --print.
 #
 # The archive is about 740 MB and the NDK about 2.5 GB unpacked; an NDK that
 # is already there, with the pinned revision in its source.properties, is
@@ -38,12 +46,15 @@ dir=${OMAMOBILE_NDK_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile/ndk}
 lock=$ROOT/tools/ndk.lock
 quiet=0
 any_host=0
+accept=0
+terms=https://developer.android.com/ndk/downloads
 while (($#)); do
   case $1 in
     --dir) dir=${2:?--dir needs a directory}; shift ;;
     --lock) lock=${2:?--lock needs a file}; shift ;;
     --print) quiet=1 ;;
     --any-host) any_host=1 ;;
+    --accept-google-terms) accept=1 ;;
     -h|--help) source "$ROOT/tools/lib/usage.sh"; usage_from_header "$self"; exit 0 ;;
     *) die "unknown argument $1" ;;
   esac
@@ -68,9 +79,12 @@ if has_revision "$ndk"; then
   exit 0
 fi
 [[ -e $ndk ]] && die "$ndk is there but isn't the NDK $release ($revision): remove it first"
-((quiet)) && die "the NDK $release isn't in $dir yet: run tools/fetch-ndk first"
+((quiet)) && die "the NDK $release isn't in $dir yet: fetch it first with tools/fetch-ndk --accept-google-terms (Google's terms for it: $terms)"
 [[ $(uname -m) == x86_64 ]] || ((any_host)) ||
   die "this computer is $(uname -m): the NDK's compilers run on x86_64 Linux only (--any-host to fetch it all the same)"
+# Google's terms, as for the factory images: nothing of Google's is downloaded
+# until the builder has said they accept them
+((accept)) || die "the Android NDK is Google's, and Google asks everyone who downloads it to agree to its terms and conditions first. Read them on its download page, $terms, and if you accept them, run: tools/fetch-ndk --accept-google-terms"
 
 command -v curl >/dev/null || die "curl is needed"
 if command -v unzip >/dev/null; then unpack() { unzip -q "$1" -d "$2"; }
