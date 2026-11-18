@@ -36,6 +36,20 @@ for conf in device/*/device.conf; do
   ! grep -cE '^INSTALL_(SLOT|ACTIVE_SLOTS)=' "$conf" >/dev/null || fail "$conf: no device sets INSTALL_SLOT or INSTALL_ACTIVE_SLOTS yet"
 done
 
+# The installer checks for its programs before it reads the two keys, and
+# stops at the missing images long before it runs one. On a computer without
+# one of them (fastboot, on a machine that never installs a phone) it would
+# stop at that check and every verdict below would read "neither". A stand-in
+# at the END of PATH answers `command -v` for whatever is missing here; a
+# real program always wins, and a stand-in that is ever run fails the suite.
+mkdir -p "$t/standin"
+for tool in "${FASTBOOT:-fastboot}" debugfs dumpe2fs e2fsck zstd openssl sha256sum lz4 cpio python3 timeout img2simg; do
+  command -v "$tool" >/dev/null && continue
+  printf '#!/bin/sh\necho "$0 $*" >> %q\nexit 97\n' "$t/standin-called" > "$t/standin/${tool##*/}"
+  chmod +x "$t/standin/${tool##*/}"
+done
+PATH=$PATH:$t/standin
+
 LIBDIR=$ROOT/packages/omamobile-boot-update/lib
 # Each reader prints its verdict: "accept", or "refuse: " and the message that
 # names the key (without the descriptor's path, which differs per reader)
@@ -58,8 +72,8 @@ phone() {
 }
 installer() {
   # Past the descriptor, it looks for the images (this tree has none)
-  HOME=$t/home "$t/repo/tools/install-phone" --device zz --images "$t/repo/images" --work "$t/work" --verify-only > "$t/o.install" 2>&1 || true
-  verdict "$t/o.install" 0 'missing .*/images/boot\.img'
+  HOME=$t/home "$t/repo/tools/install-phone" --device zz --images "$t/repo/images" --work "$t/work" --verify-only > "$t/o.installer" 2>&1 || true
+  verdict "$t/o.installer" 0 'missing .*/images/boot\.img'
 }
 guided() {
   # --status reads the descriptor and stops before the phone
@@ -108,4 +122,5 @@ check "$needs" INSTALL_SLOT=active 'INSTALL_ACTIVE_SLOTS="a b a"'
 check "$belongs" INSTALL_ACTIVE_SLOTS=a
 check "$belongs" INSTALL_SLOT=b INSTALL_ACTIVE_SLOTS=a
 check "$belongs" INSTALL_SLOT=b INSTALL_ACTIVE_SLOTS=
+[[ ! -e $t/standin-called ]] || fail "a stand-in for a missing program was run: $(head -1 "$t/standin-called")"
 pass "INSTALL_SLOT and INSTALL_ACTIVE_SLOTS: bin/omamobile, lib/descriptor.sh, install-phone, install-guided and bundle-manifest agree on $n descriptors, in the same words"
