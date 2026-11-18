@@ -35,8 +35,9 @@ export GIT_AUTHOR_NAME=Test GIT_AUTHOR_EMAIL=t@invalid GIT_COMMITTER_NAME=Test G
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 
 R=$t/repo
-mkdir -p "$R/tools" "$R/device/testdev" "$R/packages/omamobile-keyring" "$R/rootfs" "$R/tests" "$R/out/repo/aarch64"
+mkdir -p "$R/tools/lib" "$R/device/testdev" "$R/packages/omamobile-keyring" "$R/rootfs" "$R/tests" "$R/out/repo/aarch64"
 cp tools/release tools/release-upload tools/bundle-manifest tools/make-bundle "$R/tools/"
+cp tools/lib/signing.sh "$R/tools/lib/"
 cp tests/packages "$R/tests/"
 cp packages/omamobile-keyring/omamobile.gpg "$R/packages/omamobile-keyring/"
 printf 'CODENAME=testdev\nNAME="Test Phone"\nPACKAGE=omamobile-device-testdev\n' > "$R/device/testdev/device.conf"
@@ -137,6 +138,41 @@ done
 printf 'serial-ABC1234 is another word\n' > "$t/scan/bad.bin"
 run scan "$t/scan" || fail "a listed identifier matches only as a whole word"
 rm "$t/scan/bad.bin"
+# Other spellings of an address (review lesson L-634): after a label colon,
+# with hyphens, in upper case, and as 12 bare hex digits in a MAC record,
+# text or binary. RFC 7042's range is not exempt here. Built as above.
+lam=02:00:00:00:00:01 doc=$(printf '%s:%s' 00:00:5e 00:53:01)
+hy=${mac//:/-} bare=${mac//:/}
+for bad in "mac:$mac" "tag:$mac" "id:$mac" "wlan0 at $hy" "HWaddr ${hy^^}" "mac=$bare" "bd_addr: $bare" \
+  "\"mac_address\": \"${bare^^}\"" "Intf0MacAddress=$bare" "link/ether $bare" "mac-address $bare" "bd-addr=$bare" "hwaddr $bare" \
+  "mac:$lam then mac:$hy" "mac:$doc"; do
+  printf '%s\n' "$bad" > "$t/scan/bad.bin"
+  if run scan "$t/scan"; then fail "the scan finds: $bad"; fi
+done
+printf 'x\0mac=%s\0y' "$bare" > "$t/scan/bad.bin"
+if run scan "$t/scan"; then fail "the scan finds a bare MAC record between NUL bytes"; fi
+grep -c "MAC address: $mac\$" "$t/log" >/dev/null || fail "the scan reports a bare MAC in the colon form"
+dochy=${doc//:/-}
+printf 'HWaddr %s\n' "${dochy^^}" > "$t/scan/bad.bin"
+if run scan "$t/scan"; then fail "the scan finds: HWaddr ${dochy^^}"; fi
+grep -c "MAC address: $doc\$" "$t/log" >/dev/null || fail "the scan reports an upper-case hyphenated MAC in the lower-case colon form"
+for ok in "mac:$lam" "${lam//:/-}" "mac=${lam//:/}" "00-00-00-00-00-00" "macaddr=000000000000" "$mac:70" "a0:$mac" "$hy-70" "a0-$hy" "10:20-30:40-50:60" \
+  "fe80::1020:3040:5060" "${bare:0:8}-5060-7080-90a0-$bare" "commit $bare${bare}1020304050607080" "build $bare" \
+  "mac=${bare}7" "together $bare"; do
+  printf '%s\n' "$ok" > "$t/scan/bad.bin"
+  run scan "$t/scan" || fail "the scan passes: $ok"
+done
+rm "$t/scan/bad.bin"
+# The holder of a copyright notice is named on purpose (2026.11.12: Omarchy's
+# licence header in a patch). Only that form passes: the same name anywhere
+# else on the line, or after other words, is still found.
+printf '// Mobile touch changes: Copyright (c) 2026 Home Net\n' > "$t/scan/header.qml"
+run scan "$t/scan" || fail "a listed name as the holder of a copyright notice passes"
+for bad in 'Copyright (c) 2026 Home Net, built on Home Net' 'Copyright (c) 2026 by Home Net' 'copyright Home Net' 'ssid=Home Net # Copyright (c) 2026'; do
+  printf '%s\n' "$bad" > "$t/scan/header.qml"
+  if run scan "$t/scan"; then fail "the scan finds: $bad"; fi
+done
+rm "$t/scan/header.qml"
 # dnsmasq's shipped example configuration (2026.11.08): its group address and
 # a dhcp-option value pass in etc/dnsmasq.conf only; a unicast dhcp-host there,
 # and a group-looking address elsewhere (a Bluetooth LE random address can
@@ -334,7 +370,12 @@ rm "$R/$B/tools/extra-tool"
 echo x > "$R/$B/images/notes.txt"
 if run check-bundle "$R/$B"; then fail "a non-image file under images/ is refused"; fi
 rm "$R/$B/images/notes.txt"
-pass "the bundle check allows exactly make-bundle's files, INSTALL.md and its provision tools included"
+# The device's build index, which make-bundle ships when the device has one
+# (2026.11.12 was the first bundle with it, and this check stopped it)
+echo '{}' > "$R/$B/factory-builds.json"
+run check-bundle "$R/$B" || fail "a bundle with its device's build index passes the bundle check"
+rm "$R/$B/factory-builds.json"
+pass "the bundle check allows exactly make-bundle's files, INSTALL.md, the build index and its provision tools included"
 urun() { (cd "$R" && PATH="$t/stub:$PATH" tools/release "$@") > "$t/log" 2>&1; }
 if urun --version "$V" upload; then fail "the upload stage stops for the maintainer"; fi
 grep -q "release-upload --dry-run $B" "$t/log" || fail "runs tools/release-upload --dry-run on the bundle directory"

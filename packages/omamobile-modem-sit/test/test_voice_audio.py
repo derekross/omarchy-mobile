@@ -220,6 +220,25 @@ class CallAudioDefaultTests(unittest.TestCase):
         shutil.copy(shipped, directory)
         with patch.object(paths, 'DEVICE_DEFAULTS', paths.Path(directory)):
             self.assertEqual(paths.config(self.PACKAGED)['audio']['card'], 'auto')
+            # MODEM-PLAN M6: the 7 Pro follows the screen by default.
+            self.assertTrue(paths.config(self.PACKAGED)['control'].getboolean('follow_screen'))
+
+    def test_follow_screen_is_off_without_a_device_default(self):
+        with self.device_defaults(None):
+            self.assertFalse(paths.config(self.PACKAGED)['control'].getboolean('follow_screen'))
+
+    def test_a_device_may_turn_follow_screen_on_but_not_set_the_group(self):
+        with self.device_defaults('[control]\nfollow_screen = yes\ngroup = users\n'):
+            settings = paths.config(self.PACKAGED)
+            self.assertTrue(settings['control'].getboolean('follow_screen'))
+            self.assertEqual(settings['control']['group'], 'wheel')
+
+    def test_the_owners_follow_screen_wins_over_the_device(self):
+        conf = os.path.join(tempfile.mkdtemp(dir=env.TMP), 'modem-sit.conf')
+        with open(conf, 'w') as f:
+            f.write('[control]\nfollow_screen = no\n')
+        with self.device_defaults('[control]\nfollow_screen = yes\n'):
+            self.assertFalse(paths.config(conf)['control'].getboolean('follow_screen'))
 
     def test_no_aoc_card_routes_nothing(self):
         with patch.object(voice_audio, 'Path') as fake:

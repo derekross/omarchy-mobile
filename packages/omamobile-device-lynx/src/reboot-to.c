@@ -96,6 +96,19 @@ int main(int argc, char **argv)
 {
 	const char *reason = argc > 1 ? argv[1] : "bootloader";
 
+	/* An option is never a reason: "--help" or a typo prints the usage and
+	 * reboots nothing, before the note below, so it writes nothing either.
+	 * write(), not the printf family (see marker_names_boot). */
+	if (reason[0] == '-') {
+		static const char usage[] =
+			"usage: reboot-to [REASON]\n"
+			"Reboot with REASON (default: bootloader), e.g. bootloader or recovery.\n";
+		ssize_t written = write(STDOUT_FILENO, usage, sizeof(usage) - 1);
+
+		(void)written;
+		return strcmp(reason, "-h") && strcmp(reason, "--help") ? 2 : 0;
+	}
+
 	note_deliberate_restart();
 	sync();
 	syscall(SYS_reboot, LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2,

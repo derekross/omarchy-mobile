@@ -52,7 +52,8 @@ Item {
 
   Process {
     id: dndProc
-    command: widget.ipc(["notifications", "dndState"])
+    // isDnd on Omarchy 4.5, dndState on 4.0 (QuickSettings.qml has the same line)
+    command: ["sh", "-c", "for m in isDnd dndState; do v=$(qs ipc -p \"$1\" call notifications $m 2>/dev/null); case $v in on|off) echo $v; exit 0;; esac; done", "sh", Quickshell.shellDir]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {

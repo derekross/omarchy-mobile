@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile, Pixel 9a: double tap to wake from suspend-to-idle, as on the
+# 7 Pro. The touchscreen (Synaptics S3908 on SPI, the same synaptics-tcm
+# driver) can wake the palmtop once its driver is wakeup capable
+# (linux-omarchy-mobile#248, in kernel-2026.11.13); the kernel leaves that
+# off, so turn it on here. omamobile-doubletap then sees the touch that woke
+# the palmtop, and the shell's sleepd puts a dark palmtop back to sleep 5 s
+# after a wake that lit nothing. On a kernel without #248 there is no
+# power/wakeup and this does nothing.
+ACTION=="add|bind", SUBSYSTEM=="spi", DRIVER=="synaptics-tcm", TEST=="power/wakeup", ATTR{power/wakeup}="enabled"

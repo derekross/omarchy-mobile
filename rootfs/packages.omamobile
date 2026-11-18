@@ -10,6 +10,12 @@
 # Waves libraries), omamobile-waydroid (a later goal).
 omamobile-keyring
 omamobile-firstboot
+# Not listed: omamobile-install-link, the install link's phone side. It is
+# built only when named until the builder can install Rust (#775), so
+# rootfs/build-inside adds it as optional: in the image when [omamobile] has
+# it (inert without the marker /etc/omamobile/install-link), and required for
+# an image built with tools/build-rootfs --install-link
+# (docs/INSTALL-LINK-PLAN.md §3.3)
 omamobile-omarchy
 omamobile-shell
 # Whisper's base.en for Voxtype, so voice works with no download

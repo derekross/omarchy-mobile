@@ -110,6 +110,7 @@ if ((${#dirs[@]} == 0)) && ((${#imports[@]} == 0)) && ((resign == 0)); then
   done
   for d in packages/*/; do
     name=$(basename "$d")
+    [[ " ${NAMED_ONLY[*]} " != *" $name "* ]] || continue
     [[ " ${ORDER[*]} " == *" $name "* ]] || dirs+=("packages/$name")
   done
 fi
@@ -209,8 +210,16 @@ for dir in "${imports[@]}"; do
   files=()
   for f in "$dir"/*.pkg.tar.*; do [[ $f == *.sig ]] || files+=("$f"); done
   ((${#files[@]})) || alarm_die "no packages in $dir"
+  declare -A seen=()
   for f in "${files[@]}"; do
-    [[ $(pkginfo "$f" | sed -n 's/^arch = //p') =~ ^(aarch64|any)$ ]] || alarm_die "$f is not an aarch64 package"
+    info=$(pkginfo "$f" || true)
+    [[ $(sed -n 's/^arch = //p' <<<"$info") =~ ^(aarch64|any)$ ]] || alarm_die "$f is not an aarch64 package"
+    # add_to_repo keeps one file per package name, the last one copied, and
+    # the glob puts foo-0.2.9 after foo-0.2.10
+    name=$(sed -n 's/^pkgname = //p' <<<"$info")
+    [[ -z $name || -z ${seen[$name]:-} ]] ||
+      alarm_die "$dir has two files of $name, ${seen[$name]##*/} and ${f##*/}: remove the one you don't want; nothing was imported from $dir"
+    [[ -z $name ]] || seen[$name]=$f
   done
   add_to_repo "${files[@]}"
 done
@@ -284,10 +293,12 @@ done
 # published tag (named only, so a refusal stops the run), and boot files
 # that match this tree (a refusal skips that package and fails the run at
 # the end)
-skipped=() kept=()
+skipped=() kept=() warned=()
 for d in "${build[@]}"; do
   name=$(basename "$d")
-  if [[ " ${NAMED_ONLY[*]} " == *" $name "* ]]; then
+  # Only the kernel package packs a staged build; a named-only package
+  # without a stage script compiles its own
+  if [[ " ${NAMED_ONLY[*]} " == *" $name "* && -x $d/stage ]]; then
     "$d/stage" --verify "$d/prebuilt" || alarm_die "$name: the staged kernel is not a published release; nothing built"
   fi
   if grep -c 'OMAMOBILE_BOOT_FILES' "$d/install" >/dev/null 2>&1 && ! tools/stage-boot-files --check "$d/boot-files"; then
@@ -410,7 +421,7 @@ for dir in "${build[@]}"; do
   [[ -f $repo/omamobile.db ]] && have_repo=1
   start=$(date +%s)
   docker run --rm --platform linux/arm64 \
-    -v "$work:/work" -v "$ROOT/$repo:/repo/aarch64:ro" \
+    -v "$work:/work" -v "$ROOT/$repo:/repo/aarch64:ro" -v "$ROOT/tools/lib/alarm-deps.sh:/alarm-deps.sh:ro" \
     -v "$ALARM_CACHE/pkg:/var/cache/pacman/pkg" -v "$ALARM_CACHE/src:/srcdest" \
     -e NAME="$name" -e HAVE_REPO="$have_repo" -e INCHECK="$incheck" \
     "$image" bash -c '
@@ -428,15 +439,10 @@ for dir in "${build[@]}"; do
       chown -R builder: /work /srcdest
       cd /work/$NAME
       info=$(su builder -c "makepkg --printsrcinfo")
-      # Every dependency a repository can provide goes in (the build-time
-      # ones always; runtime ones so check() can run). Ours that are not
-      # built yet are left out: makepkg runs with --nodeps.
-      wanted=$(awk "\$1 ~ /^(depends|makedepends|checkdepends)\$/ {print \$3}" <<<"$info" | sed "s/[<>=].*//" | sort -u)
-      install=()
-      for dep in $wanted; do
-        pacman -Sp --print-format %n "$dep" >/dev/null 2>&1 && install+=("$dep")
-      done
-      ((${#install[@]})) && pacman -S --noconfirm --needed --asdeps --overwrite "/usr/share/pacman/keyrings/*" "${install[@]}" >/dev/null
+      # Its dependencies, with the image brought up to date if it has fallen
+      # behind the repositories (tools/lib/alarm-deps.sh)
+      source /alarm-deps.sh
+      alarm_install_deps <<<"$info"
       [[ -s /work/pgp.asc ]] && su builder -c "gpg -q --batch --import /work/pgp.asc"
       flags=(-f --nodeps --noconfirm)
       [[ $INCHECK == 1 ]] || flags+=(--nocheck)
@@ -445,6 +451,12 @@ for dir in "${build[@]}"; do
     ' || { rm -rf "$work"; alarm_die "$name: build failed"; }
   add_to_repo "$out"/*.pkg.tar.zst
   rm -rf "$work"
+  # omamobile-gnss packages without the Pixel 9a's HAL client when
+  # bionic/prebuilt/ has none (it isn't committed), and on a 9a Location
+  # then fails at its start. Its install script says so in the middle of the
+  # build output; say it again where a publish run is read.
+  [[ $name == omamobile-gnss && ! -f $dir/bionic/prebuilt/omamobile-gnss-client ]] &&
+    warned+=("omamobile-gnss was built without the Pixel 9a's HAL client: no Location on a 9a from this package (make -C packages/omamobile-gnss/bionic, then build it again)")
   echo "    built in $(( ($(date +%s) - start) / 60 )) min"
   # Index after each package, so the next one can depend on it
   sign_and_index
@@ -453,6 +465,7 @@ done
 alarm_say "Signing and indexing $repo"
 sign_and_index
 ls -1 "$repo" | grep -E '\.pkg\.tar\.zst$'
+for w in "${warned[@]}"; do printf '\e[33mwarning:\e[0m %s\n' "$w" >&2; done
 # Exit 3: everything else is built and signed (tools/repo-publish publishes
 # it, then fails too); any other failure exits 1 earlier
 if ((${#skipped[@]})); then

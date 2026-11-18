@@ -12,7 +12,8 @@
 # package ships boot files, so linux-omamobile and omamobile-boot-update go
 # in and the package's modules replace the tarball), KERNEL_RELEASE, MODULES_SHA256,
 # GIT_COMMIT, ALARM_SHA256, OMARCHY_CHANNEL, CHANNEL ([omamobile]: stable,
-# development or local).
+# development or local), INSTALL_LINK (1: an image for the install link,
+# with its marker; tools/build-rootfs --install-link).
 set -euo pipefail
 
 T=/target
@@ -25,6 +26,13 @@ list() { sed -e 's/#.*//' -e 's/[[:space:]]//g' "$1" | grep -v '^$'; }
 out_owner=$(stat -c %u:%g /out) cache_owner=$(stat -c %u:%g /var/cache/pacman/pkg)
 trap 'chown -R "$out_owner" /out 2>/dev/null; chown -R "$cache_owner" /var/cache/pacman/pkg 2>/dev/null || true' EXIT
 
+# The builder itself is brought up to the repositories first. Its image is
+# built once and kept, and the checks below ask pacman what can be installed
+# here: behind the repositories, a library transition (openssl 3 to 4, on
+# 2026-11-12) made every base package "impossible" because installing its
+# new dependency would break the builder's own older packages.
+pacman -Syu --noconfirm >/var/log/builder-upgrade.log 2>&1 ||
+  { tail -40 /var/log/builder-upgrade.log; die "the builder could not be brought up to the repositories"; }
 # [omamobile] first, from the repository being shipped
 sed -i "0,/^\[omarchy\]/s//[omamobile]\nServer = file:\/\/\/repo\/\$arch\n\n[omarchy]/" /etc/pacman.conf
 pacman -Sy >/dev/null
@@ -42,7 +50,13 @@ ours+=("${board[@]}")
 # that writes it to slot B (off until install-phone writes AUTO_WRITE=yes,
 # so pacstrap's run of it leaves everything alone)
 [[ ${KERNEL_PACKAGE:-0} != 1 ]] || ours+=(omamobile-boot-update linux-omamobile)
-missing=() skipped_ours=()
+# Ours that go in once [omamobile] has them, so an image builds before they
+# exist: omamobile-provision, the install link's on-phone provisioning
+# (docs/INSTALL-LINK-PLAN.md §6), and omamobile-install-link, the link's
+# phone side, inert without its marker and built only when named until the
+# builder can install Rust (#775). An image for the link needs both (below).
+optional_ours=(omamobile-provision omamobile-install-link)
+missing=() skipped_ours=() not_yet=()
 resolve_all "${base[@]}"
 ((${#absent_pkgs[@]} == 0)) || printf 'error: not in any repository: %s\n' "${absent_pkgs[*]}" >&2
 ((${#unmet_pkgs[@]} == 0)) || printf 'error: in a repository, but pacman cannot meet their dependencies: %s\n%s\n' "${unmet_pkgs[*]}" "$unmet_why" >&2
@@ -62,6 +76,17 @@ for p in "${ours[@]}"; do
   fi
 done
 ((${#missing[@]} == 0)) || die "not in out/repo: ${missing[*]} (build them: tools/build-packages; or allow: --allow-missing)"
+for p in "${optional_ours[@]}"; do
+  repo=$(pacman -Sp -dd --print-format %r "$p" 2>/dev/null | tail -1 || true)
+  if [[ $repo == omamobile ]]; then ours_present+=("$p"); else not_yet+=("$p"); fi
+done
+# An image for the install link: its marker means "offer the link at the
+# first start", which only works with the daemon and the provisioning it runs
+if [[ ${INSTALL_LINK:-0} == 1 ]]; then
+  for p in omamobile-install-link omamobile-provision; do
+    [[ " ${ours_present[*]} " == *" $p "* ]] || die "an image for the install link needs $p from [omamobile] (tools/build-packages)"
+  done
+fi
 # Without the kernel package (allowed missing) the hook would refuse every
 # later device-package update ("no kernel package release"): leave it out
 if [[ ${KERNEL_PACKAGE:-0} == 1 && " ${ours_present[*]} " != *" linux-omamobile "* ]]; then
@@ -216,6 +241,32 @@ rm -rf "$T"/etc/NetworkManager/system-connections/* "$T"/var/lib/NetworkManager/
 rm -rf "$T"/var/cache/pacman/pkg/* "$T"/var/log/journal/* "$T"/tmp/* "$T"/var/tmp/*
 find "$T/var/log" -type f -exec truncate -s 0 {} +
 
+say "Placeholders for the owner's answers"
+# firstboot.conf and boot-update.conf at a fixed size, which an installer
+# that streams the image fills in place (rootfs/placeholders, RELEASES §6.1).
+# Left as they are they hold no answers and AUTO_WRITE=no; tools/install-phone
+# writes its own files over them.
+bash /src/rootfs/placeholders make "$T"
+
+say "Install link"
+# The marker is the whole switch (docs/INSTALL-LINK-PLAN.md §2.2, §3.3): with
+# it the link's unit starts at the first boot; without it nothing of the
+# package runs. It is part of the image, so part of what the release signs.
+link_line=none
+if [[ ${INSTALL_LINK:-0} == 1 ]]; then
+  protocol=$(sed -n 's/^protocol: \([0-9]*\)$/\1/p' "$T/usr/share/omamobile/install-link/SOURCE" 2>/dev/null || true)
+  [[ $protocol =~ ^[1-9][0-9]*$ ]] || die "omamobile-install-link names no protocol in /usr/share/omamobile/install-link/SOURCE"
+  install -d -m755 "$T/etc/omamobile"
+  : > "$T/etc/omamobile/install-link"
+  chown 0:0 "$T/etc/omamobile/install-link" && chmod 644 "$T/etc/omamobile/install-link"
+  link_line="protocol $protocol (marker /etc/omamobile/install-link)"
+  echo "    the marker, protocol $protocol"
+elif [[ -e $T/etc/omamobile/install-link ]]; then
+  die "/etc/omamobile/install-link is in an image not built for the link (tools/build-rootfs --install-link)"
+else
+  echo "    none (the package, if installed, does nothing without the marker)"
+fi
+
 say "MANIFEST"
 {
   echo "# Omarchy Mobile root image"
@@ -232,6 +283,8 @@ say "MANIFEST"
   echo "omarchy packages not built for aarch64: ${unavailable[*]:-none}"
   echo "omarchy packages skipped: ${skip[*]:-none}"
   echo "omamobile packages missing (allowed): ${skipped_ours[*]:-none}"
+  echo "omamobile packages not in the repository yet: ${not_yet[*]:-none}"
+  echo "install link: $link_line"
   first_boot_manifest "$T"
   echo
   echo "# packages (name version repository)"
@@ -250,3 +303,7 @@ truncate -s "${size}M" /out/rootfs.img
 mkfs.ext4 -q -L omamobile-root -m 1 -d "$T" /out/rootfs.img
 e2fsck -fn /out/rootfs.img >/dev/null
 echo "    ${used} MiB of files in a ${size} MiB file system"
+# Where the placeholders' bytes are in the raw image, for the bundle's signed
+# manifest (tools/bundle-manifest). Known only now, so the copy of the
+# MANIFEST inside the image doesn't have these lines.
+bash /src/rootfs/placeholders locate /out/rootfs.img | tee -a /out/MANIFEST | sed 's/^/    /'

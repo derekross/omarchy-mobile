@@ -16,7 +16,8 @@
 #   tools/usbc-deadman undo STEP        revert a confirmed STEP by hand
 #   tools/usbc-deadman log              the phone's /var/log/usbc-deadman.log
 #
-# STEP: b2-core | b3-charger | b4a-tcpm | b4b-role | replug | noop
+# STEP: b2-core | b3-charger | b4a-tcpm | b4b-role | replug | noop |
+#       k1b-autoibus-on | k1b-autoibus-off (CHG_CNFG_09 bit 7, USB-C-PLAN K1b)
 #
 # Options:
 #   --confirm SECS   phone waits this long for our confirmation (default 90;
@@ -87,7 +88,7 @@ case "$cmd" in
   dump) install_phone; phone 'usbc-deadman-phone dump'; exit $? ;;
   log) phone 'cat /var/log/usbc-deadman.log'; exit $? ;;
   undo) install_phone; phone "usbc-deadman-phone undo ${1:?STEP}"; exit $? ;;
-  b2-core|b3-charger|b4a-tcpm|b4b-role|replug|noop) step="$cmd" ;;
+  b2-core|b3-charger|b4a-tcpm|b4b-role|replug|noop|k1b-autoibus-on|k1b-autoibus-off) step="$cmd" ;;
   *) usage 1 ;;
 esac
 while (($#)); do
