@@ -13,6 +13,7 @@ fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 command -v gpg >/dev/null && command -v gpgv >/dev/null || { pass "# skip: no gpg"; exit 0; }
 t=$(mktemp -d)
+export ALARM_CACHE=$t/cache   # add_to_repo removes from the package cache: never the developer's own
 export GNUPGHOME=$t/home && mkdir -m 700 "$GNUPGHOME"  # never the user's ~/.gnupg
 trap 'gpgconf --homedir "$t/signer" --kill gpg-agent 2>/dev/null || true; gpgconf --homedir "$t/other" --kill gpg-agent 2>/dev/null || true; rm -rf "$t"' EXIT
 
