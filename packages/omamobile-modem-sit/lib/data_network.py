@@ -352,19 +352,31 @@ class SleepHold:
         self.held = False       # the route is ours to bring back
         self.back_at = None     # when it returns if nothing else leads out
         self.alone = False      # the bearer was the only way out before the sleep
+        self.path_alone = False # ... at the last check that counts (seen)
 
     @property
     def active(self):
         """True while the route's presence is this class's business."""
         return self.sleeping or self.back_at is not None
 
-    def announced(self, routed, alone=False):
+    def seen(self, alone):
+        """A check found the bearer the only way out, or not. Only checks made
+        while the route is its own business count: with the route away for a
+        sleep, or in the half second between its return and the next check,
+        the answer from before stands, so a sleep announced right then
+        doesn't wait RETURN_GRACE for a Wi-Fi that was never there."""
+        if not self.active:
+            self.path_alone = bool(alone)
+
+    def announced(self, routed, alone=None):
         """A sleep is starting. True when the route has to go now. alone:
-        the bearer was the only way out just before it (read before the
-        announcement, since NetworkManager takes Wi-Fi down at the same
-        signal)."""
+        the bearer was the only way out just before it; left out, what the
+        last check that counts saw (read before the announcement, since
+        NetworkManager takes Wi-Fi down at the same signal)."""
         if self.sleeping:
             return False
+        if alone is None:
+            alone = self.path_alone
         self.sleeping = True
         # Still waiting to return after the last sleep counts as held, and
         # keeps what was known about Wi-Fi before that sleep.
@@ -458,6 +470,7 @@ def main():
                     print('The cellular default route is back', 'behind Wi-Fi' if others else 'as the only way out', flush=True)
                     last = None
                 return
+            hold.seen(cellular)
             if not routed and not others:
                 run('ip', 'route', 'add', 'default', 'dev', dev, 'src', address, 'metric', '700')
                 print('Nothing else leads out; the cellular default route is back', flush=True)
@@ -475,9 +488,9 @@ def main():
                 return
             routes = json.loads(run('ip', '-j', 'route', 'show', 'default'))
             routed = any(r.get('dev') == dev and r.get('metric') == 700 for r in routes)
-            # `last` is the path the previous check saw, before NetworkManager
-            # heard of the sleep: True when cellular was the only way out.
-            if hold.announced(routed, alone=last is True):
+            # Whether cellular was the only way out is what the last check
+            # saw (hold.seen), before NetworkManager heard of the sleep.
+            if hold.announced(routed):
                 run('ip', 'route', 'del', 'default', 'dev', dev, 'metric', '700')
                 print('Sleep announced; the cellular default route is away until it is over', flush=True)
         sleeps = SleepWatch()

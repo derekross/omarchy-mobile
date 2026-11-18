@@ -198,6 +198,95 @@ class Reconnect(unittest.TestCase):
         calls = [c.args[0] for c in app_service.subprocess.run.call_args_list]
         self.assertEqual(calls[-1], ['systemctl', 'start', 'omamobile-sit-data.service'])
 
+    def granting(self, pdp, order=None):
+        def setup(*a, **k):
+            record = bytearray(item(3))
+            record[4] = pdp
+            self.response.write_bytes(bytes(record))
+            if order is not None:
+                order.append('setup')
+        return setup
+
+    def drop(self):
+        self.service.event(self.indication(listing(item(2))))
+        self.service.reconnect_at = 0
+
+    def test_ipv6_only_releases_are_bounded(self):
+        """A network that only ever grants IPv6 for the APN: a few releases,
+        then the bearer is kept, and so are the next ones."""
+        app_service.subprocess.run.return_value.returncode = 0     # mobile data on
+        limit = app_service.IPV6_ONLY_RELEASES
+        with patch.object(data_call, 'activate', side_effect=self.granting(2)), \
+                patch.object(data_call, 'deactivate') as release:
+            self.drop()
+            for n in range(1, limit + 1):
+                self.service.reconnect()
+                self.assertEqual(release.call_count, n)
+                self.assertIsNotNone(self.service.reconnect_at)      # a failed try, to come back
+                self.service.reconnect_at = 0
+            self.service.reconnect()                                 # one more IPv6-only grant: kept
+            self.assertEqual(release.call_count, limit)
+            self.assertIsNone(self.service.reconnect_at)
+            self.assertEqual(self.service.reconnect_tries, 0)
+            calls = [c.args[0] for c in app_service.subprocess.run.call_args_list]
+            self.assertEqual(calls[-1], ['systemctl', 'start', 'omamobile-sit-data.service'])
+            for _ in range(5):                                       # later drops on the same network
+                self.drop()
+                self.service.reconnect()
+                self.assertIsNone(self.service.reconnect_at)
+            self.assertEqual(release.call_count, limit)
+        said = [' '.join(str(a) for a in c.args) for c in print.call_args_list]
+        self.assertEqual(sum('keeping it as it is' in line for line in said), 1)
+
+    def test_ipv4_again_starts_the_count_afresh(self):
+        limit = app_service.IPV6_ONLY_RELEASES
+        self.service.ipv6_only_grants = limit + 3                    # kept for a while
+        with patch.object(data_call, 'activate', side_effect=self.granting(3)), \
+                patch.object(data_call, 'deactivate') as release:
+            self.drop()
+            self.service.reconnect()
+        release.assert_not_called()
+        self.assertEqual(self.service.ipv6_only_grants, 0)
+        with patch.object(data_call, 'activate', side_effect=self.granting(2)), \
+                patch.object(data_call, 'deactivate') as release:
+            self.drop()
+            self.service.reconnect()
+        release.assert_called_once_with(self.client, 3)
+
+    def test_a_release_that_fails_is_done_before_the_next_setup(self):
+        with patch.object(data_call, 'activate', side_effect=self.granting(2)), \
+                patch.object(data_call, 'deactivate', side_effect=RuntimeError('no answer')):
+            self.drop()
+            self.service.reconnect()
+        self.assertTrue(self.service.ipv6_release_owed)
+        self.assertEqual(self.service.reconnect_tries, 1)
+        self.listed = listing(item(2), item(3))                      # the modem still has it, IPv6 only
+        self.service.reconnect_at = 0
+        order = []
+        with patch.object(data_call, 'deactivate', side_effect=lambda *a: order.append('release')), \
+                patch.object(data_call, 'activate', side_effect=self.granting(3, order)):
+            self.service.reconnect()
+        self.assertEqual(order, ['release', 'setup'])
+        self.assertFalse(self.service.ipv6_release_owed)
+        self.assertIsNone(self.service.reconnect_at)
+        said = [' '.join(str(a) for a in c.args) for c in print.call_args_list]
+        self.assertTrue(any('still listed IPv6 only' in line for line in said))
+        self.assertFalse(any('no setup needed' in line for line in said))
+
+    def test_an_ipv6_only_bearer_the_modem_lists_again_is_left_alone(self):
+        """One nobody meant to release (the network's grant at start-up, or
+        one kept after the bound) is not released for being listed again."""
+        record = bytearray(item(3))
+        record[4] = 2
+        self.response.write_bytes(bytes(record))
+        self.listed = listing(item(2), item(3))
+        self.service.reconnect_at = 0
+        with patch.object(data_call, 'activate') as activate, patch.object(data_call, 'deactivate') as release:
+            self.service.reconnect()
+        activate.assert_not_called()
+        release.assert_not_called()
+        self.assertIsNone(self.service.reconnect_at)
+
     def test_held_without_its_setup_is_released_first(self):
         self.listed = listing(item(2), item(3))
         self.response.unlink()                       # a setup that timed out kept only the record
