@@ -99,7 +99,7 @@ Details that matter:
 - **Step 1** asks for every program the later steps run, so a missing one
   stops the install before the phone is erased, not after: `fastboot`,
   `debugfs`, `dumpe2fs`, `e2fsck`, `zstd`, `lz4`, `cpio`, `openssl`, `gpg`,
-  `python3`, `unzip`, `ssh`, `sha256sum`, `tar`, and for step 9's extract
+  `python3`, `unzip`, `ssh`, `sha256sum`, `tar`, `img2simg`, and for step 9's extract
   tools `lpunpack`, `simg2img`, `fsck.erofs` and `readelf` (or
   `llvm-readelf`). The stop names each missing program with its package on
   Arch Linux (and Omarchy) and on Debian and Ubuntu (a table in the

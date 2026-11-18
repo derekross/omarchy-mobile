@@ -284,7 +284,7 @@ if [[ $mode == repository ]]; then
     || die "$images holds images for '${built_for:-an unknown device}', not $CODENAME (run: DEVICE=$CODENAME bin/omamobile images)"
 fi
 for tool in "$FASTBOOT" debugfs dumpe2fs e2fsck img2simg zstd openssl sha256sum lz4 cpio python3 timeout; do
-  command -v "$tool" >/dev/null || die "$tool not found (fastboot, img2simg: android-tools; debugfs: e2fsprogs; lz4: lz4; cpio: cpio)"
+  command -v "$tool" >/dev/null || die "$tool not found (fastboot, img2simg: android-tools, or fastboot and android-sdk-libsparse-utils on Debian and Ubuntu; debugfs: e2fsprogs; lz4: lz4; cpio: cpio)"
 done
 BOOT_IMAGES=${D[BOOT_IMAGES]:-} UFS_RW=${D[UFS_RW]:-}
 [[ -n $BOOT_IMAGES && -n $UFS_RW ]] || die "$conf: BOOT_IMAGES and UFS_RW are required"
