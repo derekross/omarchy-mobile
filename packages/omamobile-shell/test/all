@@ -1030,6 +1030,11 @@ lua=$(command -v lua || command -v lua5.4 || command -v luajit || true)
 if [[ -n $lua ]]; then
   out=$("$lua" test/phone-rules.lua) || { grep -v '^ok' <<<"$out"; fail "phone.lua window rules"; }
   pass "phone.lua: edge to edge, opaque, dialogs, picture-in-picture"
+  # The optional device.lua: a broken one is reported, the shared rules stand.
+  for hook in valid syntax runtime; do
+    out=$(DEVICE_HOOK_CASE=$hook "$lua" test/phone-rules.lua) || { grep -v '^ok' <<<"$out"; fail "phone.lua with a $hook device.lua"; }
+  done
+  pass "phone.lua: device.lua runs after the shared rules, and an error in it leaves them standing"
   # Dictation keys under Omarchy 4.5's helpers: four homes, four bindings.lua
   dk=$(mktemp -d)
   mkdir -p "$dk/plain/.config/hypr" "$dk/migrated/.config/hypr" "$dk/own/.config/hypr"
