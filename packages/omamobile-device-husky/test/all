@@ -86,6 +86,9 @@ for f in usr/bin/reboot-to \
          usr/bin/omamobile-bt-addr usr/lib/systemd/system/omamobile-bt-addr@.service \
          usr/lib/udev/rules.d/80-omamobile-bt-addr.rules \
          usr/share/omamobile/device.conf \
+         usr/share/omamobile/charge-limit.conf \
+         usr/lib/udev/rules.d/75-omamobile-charge-limit.rules \
+         usr/lib/systemd/system/omamobile-charge-limit-apply.service \
          usr/share/omamobile/device-husky/version \
          usr/share/licenses/omamobile-device-husky/LICENSE \
          etc/pacman.d/omamobile-mirrorlist; do
@@ -173,6 +176,11 @@ pass "install stages the udev rule, the USB link, the mirrorlist and the display
 [[ ! -e $tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf ]] \
   || fail "husky has no lid: no lid drop-in"
 pass "no lid drop-in"
+grep -qx 'supply=max77759-charger' "$tmp/root/usr/share/omamobile/charge-limit.conf" \
+  || fail "husky declares its charge limit on max77759-charger"
+[[ ! -e $tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-charge-limit-apply.service ]] \
+  || fail "the apply unit is pulled in by udev, not enabled"
+pass "the charge limit declaration, its udev rule and the apply unit are staged; the unit is not enabled"
 
 
 # --- the AoC start: hang marker, nothing without the node ------------------

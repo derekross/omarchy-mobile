@@ -14,7 +14,8 @@
         "title": "Battery",
         "detail": "Charge limit",
         "icon": "battery",
-        "page": "battery"
+        "page": "battery",
+        "requires": "charge"
       },
       {
         "id": "about",

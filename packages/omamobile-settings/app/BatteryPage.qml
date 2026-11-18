@@ -15,7 +15,7 @@ ColumnLayout {
         busy = false
         if (r.error) { status = r.error; return }
         available = r.available === true
-        if (!available) { status = qsTr("Charge limit is not available on this phone."); return }
+        if (!available) { status = qsTr("Settings cannot set a charge limit on this phone."); return }
         if (r.limit === undefined) { status = qsTr("The charger backend gave no value."); return }
         limit = r.limit
         status = qsTr("Stops charging at this level; it resumes 5 % lower. 100 % charges fully.")

@@ -13,12 +13,22 @@ grep -q "^fake=$root" "$tmp/charge.sh"
 run() { bash "$tmp/charge.sh" "$@" || true; }
 eq() { [[ $1 == "$2" ]] || { echo "FAIL: got $1, want $2" >&2; exit 1; }; }
 
+decl=$root/usr/share/omamobile/charge-limit.conf
+declare_husky() { mkdir -p "${decl%/*}"; printf '# test\nsupply=max77759-charger\n' > "$decl"; }
 # no charger: not available, and set refuses
 mkdir -p "$root"
 eq "$(run get)" '{"available":false}'
 eq "$(run set limit 80)" '{"error":"this phone has no charge limit"}'
 
+# a charger with the threshold but no declaration (the Pixel 7 Pro on a kernel with #266): not available, no write
 mkdir -p "$dir"; echo 100 > "$end"; echo 7 > "$start"
+eq "$(run get)" '{"available":false}'
+eq "$(run set limit 80)" '{"error":"this phone has no charge limit"}'
+eq "$(cat "$end")" 100
+for bad in 'supply=../../x' 'supply=' 'supply=Max'; do
+  mkdir -p "${decl%/*}"; echo "$bad" > "$decl"; eq "$(run get)" '{"available":false}'
+done
+declare_husky
 eq "$(run get)" '{"available":true,"limit":100}'
 eq "$(run set limit 80)" '{"available":true,"limit":80}'
 eq "$(run set limit 75)" '{"error":"bad value"}'
@@ -34,7 +44,6 @@ helper=$src/libexec/charge-limit
 export OMAMOBILE_CHARGE_ROOT=$root
 file=$root/etc/omamobile/charge-limit
 no() { if bash "$helper" "$@" >/dev/null 2>&1; then echo "FAIL: accepted: $*" >&2; exit 1; fi; }
-mkdir -p "$root/proc/device-tree"; printf 'google,zuma-husky\0google,zuma\0' > "$root/proc/device-tree/compatible"
 echo 100 > "$end"
 bash "$helper" >/dev/null || { echo "FAIL: no saved file is an error" >&2; exit 1; }
 eq "$(cat "$end")" 100
@@ -48,11 +57,13 @@ eq "$(cat "$file")" 85; eq "$(cat "$end")" 85
 echo 100 > "$end"; echo 90 > "$file"
 bash "$helper" >/dev/null; eq "$(cat "$end")" 90
 echo 42 > "$file"; no; eq "$(cat "$end")" 90
-# boot on another phone: nothing is touched
-echo 80 > "$file"; printf 'google,gs201-cheetah\0google,gs201\0' > "$root/proc/device-tree/compatible"
-bash "$helper" >/dev/null; eq "$(cat "$end")" 90
-rm "$root/proc/device-tree/compatible"; bash "$helper" >/dev/null; eq "$(cat "$end")" 90
-printf 'google,zuma-husky\0google,zuma\0' > "$root/proc/device-tree/compatible"
+# no declaration (another phone): both paths touch nothing, and N is refused without saving
+echo 80 > "$file"; rm "$decl"
+bash "$helper" >/dev/null || { echo "FAIL: boot without a declaration is an error" >&2; exit 1; }
+eq "$(cat "$end")" 90
+no 95; eq "$(cat "$end")" 90; eq "$(cat "$file")" 80
+echo 'supply=../max77759-charger' > "$decl"; no 95; bash "$helper" >/dev/null; eq "$(cat "$end")" 90
+declare_husky
 # a failed write saves nothing: a directory in place of the end file cannot be written
 echo 85 > "$file"
 mv "$end" "$tmp/end.bak"; mkdir "$end"; chmod 755 "$end"
@@ -82,14 +93,21 @@ u=$v/systemd/system/omamobile-charge-limit@.service
 grep -qx 'ExecStart=/usr/lib/omamobile-settings/charge-limit %i' "$u" && grep -qx 'Type=oneshot' "$u" &&
   grep -qx 'StartLimitIntervalSec=0' "$u" && ! grep -q '^\[Install\]' "$u" ||
   { echo "FAIL: unit: oneshot helper with the instance, no start limit, not enabled" >&2; exit 1; }
-[[ $(grep -v '^#' "$v/udev/rules.d/75-omamobile-charge-limit.rules" | grep -c .) == 1 ]] &&
-  grep -qxF 'SUBSYSTEM=="power_supply", KERNEL=="max77759-charger", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omamobile-charge-limit-apply.service"' \
-    "$v/udev/rules.d/75-omamobile-charge-limit.rules" && ! grep -q 'RUN' "$v/udev/rules.d/75-omamobile-charge-limit.rules" ||
-  { echo "FAIL: udev: one rule, charger add, pulls in the apply unit" >&2; exit 1; }
-a=$v/systemd/system/omamobile-charge-limit-apply.service
-grep -qx 'ExecStart=/usr/lib/omamobile-settings/charge-limit' "$a" && grep -qx 'Type=oneshot' "$a" &&
-  grep -qx 'StartLimitIntervalSec=0' "$a" && ! grep -q '^\[Install\]' "$a" ||
-  { echo "FAIL: apply unit: oneshot helper with no argument, not enabled" >&2; exit 1; }
+h=$src/../omamobile-device-husky
+if [[ -d $h ]]; then
+  r=$h/vendor/udev/rules.d/75-omamobile-charge-limit.rules
+  [[ $(grep -v '^#' "$r" | grep -c .) == 1 ]] &&
+    grep -qxF 'SUBSYSTEM=="power_supply", KERNEL=="max77759-charger", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omamobile-charge-limit-apply.service"' "$r" &&
+    ! grep -v '^#' "$r" | grep -c -e RUN -e ACTION >/dev/null ||
+    { echo "FAIL: udev: one rule, no ACTION filter, pulls in the apply unit" >&2; exit 1; }
+  a=$h/vendor/systemd/system/omamobile-charge-limit-apply.service
+  grep -qx 'ExecStart=/usr/lib/omamobile-settings/charge-limit' "$a" && grep -qx 'Type=oneshot' "$a" &&
+    grep -qx 'StartLimitIntervalSec=0' "$a" && ! grep -q '^\[Install\]' "$a" ||
+    { echo "FAIL: apply unit: oneshot helper with no argument, not enabled" >&2; exit 1; }
+  grep -qx 'supply=max77759-charger' "$h/charge-limit.conf" || { echo "FAIL: husky declares max77759-charger" >&2; exit 1; }
+fi
+[[ ! -e $v/udev/rules.d/75-omamobile-charge-limit.rules && ! -e $v/systemd/system/omamobile-charge-limit-apply.service ]] ||
+  { echo "FAIL: the udev rule and the apply unit belong to the device package" >&2; exit 1; }
 grep -q 'systemctl start --no-ask-password "omamobile-charge-limit@$value.service"' "$src/backends/charge.sh" ||
   { echo "FAIL: charge.sh starts the unit without asking" >&2; exit 1; }
 
@@ -100,7 +118,7 @@ cat > "$tmp/bin/systemctl" <<EOT
 printf '%s\\n' "systemctl \$*" >> "$tmp/systemctl.log"
 EOT
 chmod +x "$tmp/bin/systemctl"
-sed "s|^end=.*|end=$end|" "$src/backends/charge.sh" > "$tmp/charge-real.sh"
+sed -e "s|^decl=.*|decl=$decl|" -e "s|^end=.*|end=$end|" "$src/backends/charge.sh" > "$tmp/charge-real.sh"
 grep -q "^fake=''$" "$tmp/charge-real.sh"
 eq "$(PATH=$tmp/bin:$PATH bash "$tmp/charge-real.sh" set limit 80)" '{"available":true,"limit":100}'
 eq "$(cat "$tmp/systemctl.log")" 'systemctl start --no-ask-password omamobile-charge-limit@80.service'
@@ -117,8 +135,10 @@ done <<'EOT'
 755 usr/lib/omamobile-settings/backends/charge.sh
 755 usr/lib/omamobile-settings/charge-limit
 644 usr/lib/systemd/system/omamobile-charge-limit@.service
-644 usr/lib/systemd/system/omamobile-charge-limit-apply.service
-644 usr/lib/udev/rules.d/75-omamobile-charge-limit.rules
 644 usr/share/polkit-1/rules.d/50-omamobile-charge-limit.rules
 EOT
+for f in usr/lib/systemd/system/omamobile-charge-limit-apply.service usr/lib/udev/rules.d/75-omamobile-charge-limit.rules \
+         usr/share/omamobile/charge-limit.conf; do
+  [[ ! -e $stage/$f ]] || { echo "FAIL: Settings stages $f, which is the device package's" >&2; exit 1; }
+done
 echo "charge backend: ok"

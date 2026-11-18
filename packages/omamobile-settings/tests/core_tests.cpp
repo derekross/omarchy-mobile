@@ -21,7 +21,11 @@ private slots:
     void navigationRejectsUnknownAndHiddenActions() {
         Backend backend;
         QVERIFY(backend.catalogProblems().isEmpty());
+        QCOMPARE(backend.rows().size(), 2); // the Battery row waits for the charge backend, absent here
+        backend.setToolAvailable("charge", true);
         QCOMPARE(backend.rows().size(), 3);
+        backend.setToolAvailable("charge", false);
+        QCOMPARE(backend.rows().size(), 2);
         QVERIFY(!backend.navigate("recording"));
         backend.activate("arbitrary-command");
         QCOMPARE(backend.page(), QString("root"));
@@ -45,6 +49,9 @@ private slots:
         QCOMPARE(backend.page(), QString("battery"));
         backend.back();
         QCOMPARE(backend.page(), QString("root"));
+        backend.search("charge limit");
+        QCOMPARE(backend.rows().size(), 0); // hidden from search too while the backend reports no limit
+        backend.setToolAvailable("charge", true);
         backend.search("charge limit");
         QCOMPARE(backend.rows().size(), 1);
         QCOMPARE(backend.rows().first().toMap()["id"].toString(), QString("battery"));
@@ -81,7 +88,7 @@ private slots:
         QCOMPARE(page->property("limit").toInt(), 85);
         QVERIFY(page->property("status").toString().startsWith("Stops charging at this level"));
         QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"available", false}}));
-        QCOMPARE(page->property("status").toString(), QString("Charge limit is not available on this phone."));
+        QCOMPARE(page->property("status").toString(), QString("Settings cannot set a charge limit on this phone."));
     }
     void searchHasOnlyImplementedRoutesAndBackClearsIt() {
         Backend backend;

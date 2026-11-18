@@ -1,6 +1,0 @@
-# SPDX-License-Identifier: MIT
-# Apply the saved charge limit (/etc/omamobile/charge-limit) when the MAX77759 charger appears, at every boot,
-# No ACTION filter: with ACTION=="add" the unit did not start at boot on husky (2026-11-16), without it it does.
-# through omamobile-charge-limit-apply.service rather than inside the udev worker. The helper acts on husky only
-# (device tree "google,zuma-husky"); other phones, or no file: nothing is touched.
-SUBSYSTEM=="power_supply", KERNEL=="max77759-charger", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omamobile-charge-limit-apply.service"

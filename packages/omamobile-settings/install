@@ -14,6 +14,4 @@ install -Dm755 "$source_dir/backends/display.sh" "$dest/usr/lib/omamobile-settin
 install -Dm755 "$source_dir/backends/charge.sh" "$dest/usr/lib/omamobile-settings/backends/charge.sh"
 install -Dm755 "$source_dir/libexec/charge-limit" "$dest/usr/lib/omamobile-settings/charge-limit"
 install -Dm644 "$source_dir/vendor/systemd/system/omamobile-charge-limit@.service" "$dest/usr/lib/systemd/system/omamobile-charge-limit@.service"
-install -Dm644 "$source_dir/vendor/systemd/system/omamobile-charge-limit-apply.service" "$dest/usr/lib/systemd/system/omamobile-charge-limit-apply.service"
-install -Dm644 "$source_dir/vendor/udev/rules.d/75-omamobile-charge-limit.rules" "$dest/usr/lib/udev/rules.d/75-omamobile-charge-limit.rules"
 install -Dm644 "$source_dir/vendor/polkit/50-omamobile-charge-limit.rules" "$dest/usr/share/polkit-1/rules.d/50-omamobile-charge-limit.rules"
