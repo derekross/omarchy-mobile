@@ -8,14 +8,15 @@
 # appears, and this never runs. It exits when the charger goes away.
 # Limits: a cable plugged in while already asleep is not covered (nothing
 # wakes the phone), and polling is 1 s, so a suspend within about a second
-# of plug-in can get through.
+# of plug-in can get through. Once held, the lock goes only on a 0 or when
+# the file is gone: an empty or failed read (an I2C error) keeps holding.
 C=${OMAMOBILE_CHARGER_ONLINE:-/sys/class/power_supply/max77759-charger/online}
 while [ -r "$C" ]; do
   if [ "$(cat "$C" 2>/dev/null)" = 1 ]; then
     # the lock lives exactly as long as the cable is in
     systemd-inhibit --what=sleep --mode=block --who=omamobile-charger \
       --why="charging: the charge guard does not run during sleep" \
-      sh -c 'while [ "$(cat "$1" 2>/dev/null)" = 1 ]; do sleep 1; done' _ "$C" \
+      sh -c 'while [ -e "$1" ] && [ "$(cat "$1" 2>/dev/null)" != 0 ]; do sleep 1; done' _ "$C" \
       || { echo "omamobile-plugged-inhibit: systemd-inhibit failed, sleep is not blocked" >&2; exit 1; }
   fi
   sleep 1

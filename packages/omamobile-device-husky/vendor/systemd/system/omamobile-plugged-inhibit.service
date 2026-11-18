@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 [Unit]
 Description=Block sleep while charging (the charge guard pauses in s2idle)
 Wants=systemd-logind.service
