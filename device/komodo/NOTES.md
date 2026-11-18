@@ -49,10 +49,15 @@ used. Results are in the private R/ capture.
   green** [V] (R/ `post-fastboot-state.txt:1-7`). The prior ADB capture was on
   slot B with build `CP3A.261005.005` (R/ `getprop.txt:764,695`).
 - **No `set_active`, unlock, flash, or partition-write command was issued.**
-  Why the bootloader reported A unsuccessful before the reboot, then Android
-  completed on A with a newer build, is unresolved. A pending stock update is
-  one possibility, not confirmed. Stop further slot or bootloader work pending
-  review.
+  **Inference I1:** the pre-reboot state matches AOSP's documented
+  "update applied, reboot pending" state: Android was on successful B while A
+  was selected, bootable, but not yet marked successful. AOSP says the next
+  reboot enters the new slot, which remains unsuccessful until its userspace
+  verification completes ([A/B update flow](https://source.android.com/docs/core/ota/ab)).
+  A stock OTA already staged to A is therefore the likely explanation for the
+  `CP4A` build. No update logs were read, so its timing and source are unconfirmed.
+  Do not perform further reboots or slot actions until the update state is
+  reviewed.
 
 ### CPU, memory, and partition names
 
@@ -87,9 +92,11 @@ used. Results are in the private R/ capture.
 
 The initial capture used unrooted ADB reads. With the owner's approval, one
 reboot to fastboot and a plain reboot back to Android were performed, with only
-named `getvar` reads in fastboot. No slot-change command, unlock, flash, root
-operation, or partition-write command was issued. The phone is currently on
-stock Android, slot A, with verified boot green. Because its returned build and
-slot differ from the initial capture, stop further bootloader work until the
-transition is understood and the boot chain, rollback behavior, recovery path,
-and a gated first-light plan have been reviewed.
+named `getvar` reads in fastboot. No slot-change, unlock, flash, root, or
+partition-write command was issued by this session; a stock A/B update appears
+to have been pending, but its installation time and source are unknown. The
+phone is currently on stock Android, slot A, with verified boot green. No
+update logs were read, and the new slot's final successful mark was not
+checked. Do not perform further reboots or slot actions until the update state,
+boot chain, rollback behavior, recovery path, and a gated first-light plan
+have been reviewed.
