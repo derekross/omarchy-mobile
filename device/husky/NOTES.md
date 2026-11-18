@@ -99,6 +99,7 @@ Wi-Fi works on a test kernel, [kernel #156](https://github.com/derekross/linux-o
   - P2P: `brcmf_p2p_create_p2pdev: timeout occurred` at load, since the firmware never confirms the P2P device interface. Station mode doesn't need it.
   - A reload after a real firmware crash, which can't take the trap, is untested.
   - Bluetooth.
+- **Power save** [V]: the trade behind `wifi.powersave=3` in omamobile-device-husky 0.1.15 ([#836](https://github.com/derekross/omarchy-mobile/pull/836)). Battery current with the cable out and the screen off, 2026-11-14, six steps of about 4 minutes (16 readings each): step medians 537, 541, 532 and 543 mA with it off, 509 and 508 mA with it on, so about 30 mA less with it on. 200 pings at 0.2 s from the desktop, off, on, off again: average 2.26, 2.52 and 2.27 ms, maximum 5.8, 71.2 and 6.1 ms, no loss. So power save adds an occasional spike of up to about 71 ms.
 - **Lesson** [V]: a raw `/dev/mem` read of the Wi-Fi chip's BAR0 while it was in a bad state hung the phone, which panicked and rebooted. Don't read the endpoint's BARs from userspace.
 
 ## 2026-10-31: a second phone: Kioxia 256 GB, UFS 4.0
