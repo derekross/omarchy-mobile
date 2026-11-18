@@ -66,11 +66,6 @@ if [[ -f ../omamobile-device-husky/vendor/systemd/network/20-usb-gadget.network 
   [[ $(grep -v '^#' "$max") == "$(grep -v '^#' "../omamobile-device-husky/$max")" ]] \
     || fail "the MAX77759 blacklist's settings drifted from the husky package"
   pass "the USB rescue, its unit and the MAX77759 blacklist's settings match the husky package"
-  # The GPU's clock ceiling: the same setting, the comment names the 8a
-  [[ $(grep -v '^#' vendor/modprobe.d/omamobile-akita-clk-acpm.conf) == \
-     "$(grep -v '^#' ../omamobile-device-husky/vendor/modprobe.d/omamobile-husky-clk-acpm.conf)" ]] \
-    || fail "the GPU clock file's settings drifted from the husky package"
-  pass "the GPU clock file's settings match the husky package"
 fi
 grep -q 'omamobile-keyring' PKGBUILD || fail "pacman needs omamobile-keyring"
 grep -q '^install=omamobile-device-akita.install$' PKGBUILD \
@@ -143,9 +138,10 @@ done
 pass "the MAX77759 cell drivers and the Type-C driver are blacklisted, the gauge and the MFD core are not"
 grep -qE '^options clk_acpm zuma_gpu_max_khz=[0-9]+$' "$tmp/root/usr/lib/modprobe.d/omamobile-akita-clk-acpm.conf" \
   || fail "the GPU clock file sets clk_acpm's zuma_gpu_max_khz"
-(( $(sed -n 's/^options clk_acpm zuma_gpu_max_khz=//p' vendor/modprobe.d/omamobile-akita-clk-acpm.conf) <= 890000 )) \
-  || fail "the GPU's ceiling stays at or below stock's 890 MHz"
-pass "the GPU clock file sets a ceiling of at most 890 MHz"
+# The 8a's BCL caps its GPU at 723 MHz at most (vdroop1, zuma-akita-bcl.dtsi)
+(( $(sed -n 's/^options clk_acpm zuma_gpu_max_khz=//p' vendor/modprobe.d/omamobile-akita-clk-acpm.conf) <= 723000 )) \
+  || fail "the GPU's ceiling stays at or below the 8a's highest BCL cap, 723 MHz"
+pass "the GPU clock file sets a ceiling of at most 723 MHz"
 bash -n bin/omamobile-usb-rescue || fail "the USB rescue parses"
 grep -q '10cb0000.i2c' bin/omamobile-usb-rescue || fail "the USB rescue watches akita's bus (hsi2c_11)"
 grep -q 'i2cset -f -y "$bus" $tcpc 0x93 0x09' bin/omamobile-usb-rescue || fail "the USB rescue closes the data switch"

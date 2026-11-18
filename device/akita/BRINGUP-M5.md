@@ -36,9 +36,9 @@ From R/ (the stock live tree) and G/ (`zuma-akita-bcl.dtsi`):
 | Item | akita | husky | Source |
 | --- | --- | --- | --- |
 | CPU levels | little 324–1704 MHz (10), mid 402–2367 MHz (15), big 500–2914 MHz (15): **the same levels and powers as the 8 Pro's** in stock's default energy model | the same | [V] R/ `pixel-em`; `zuma.dtsi` |
-| BCL caps | **little 1475, mid 1549, big 2147 MHz**, on all of VDROOP1, VDROOP2 and the SMPL warning | mid 1945, big 2294 MHz (little uncapped) | [V] G/ `zuma-akita-bcl.dtsi` `freq_qos`; `zuma.dtsi`'s comment |
-| GPU levels | 150–890 MHz, max 890 (`gpu_dvfs_max_freq`); the same shader rates as the 8 Pro's | 13 levels to 890 MHz | [V] R/ `gpu_dvfs_table_v1`/`_v2` |
-| Thermal sensors | **none yet on akita's running kernel** (built on `2db2bc35b`, before #158): its one zone is the battery's, so phone-smoke's "hottest zone 36 °C" was the battery. Today's `omamobile` gives akita the shared ACPM TMU and CPU/GPU zones (80/95 C passive, 105 C critical) | the same zones | [V] the phone, 2026-11-15; #158's thread |
+| BCL caps | CPUs **little 1475, mid 1549, big 2147 MHz** on all four events (batoilo, vdroop1, vdroop2, smpl_gm); **GPU 649 (batoilo), 723 (vdroop1), 580 (vdroop2) and 649 MHz (smpl_gm)** | CPUs mid 1945, big 2294 MHz (little uncapped); GPU 890 MHz on vdroop1 | [V] G/ `zuma-akita-bcl.dtsi` `freq_qos`; `zuma.dtsi`'s comment |
+| GPU levels | stock's table: 150–890 MHz, max 890 (`gpu_dvfs_max_freq`), the same shader rates as the 8 Pro's. **With the limiter's caps, the 8a's top is 723 MHz** (vdroop1, the highest of its four) | 13 levels to 890 MHz | [V] R/ `gpu_dvfs_table_v1`/`_v2` |
+| Thermal sensors | **none yet on akita's running kernel** (built on `2db2bc35b`, before #158): its one zone is the battery's, so phone-smoke's "hottest zone 36 °C" was the battery. Today's `omamobile` gives akita the shared ACPM TMU and its zones: CPU 80 and 95 C passive, 105 C critical; GPU 85 C passive, 105 C critical | the same zones | [V] the phone, 2026-11-15; #158's thread |
 | Stock's thermal trips | CPU passive ("control") at 90 C (mid, big) and 95 C (little), GPU 90 C, hot at 115 C | — | [V] R/ `thermal-zones` |
 
 So **akita's levels are husky's; only the turbo-mode marks differ.** Above its caps the 8a would have more levels marked turbo:
@@ -57,7 +57,7 @@ So **akita's levels are husky's; only the turbo-mode marks differ.** Above its c
    I'd propose (a), and ask on the PR.
 2. **The GPU:** `&cmu_g3d` and `&gpu` as in `zuma-husky.dts`. Its 13-level table is in husky's board file, so either akita gets a copy, or the table moves to `zuma.dtsi`, the maintainer's call. akita's device package gets husky's ACPM clock file (with a byte-for-byte test, as with the USB rescue).
 3. **One change per boot,** as before. Thermal comes first (M5.1), before anything can raise the clocks.
-4. **Safe defaults:** boost stays off (no turbo levels), and the GPU stops at 890 MHz, as stock.
+4. **Safe defaults:** boost stays off (no turbo levels), and the GPU stops at 723 MHz, the highest of the 8a's BCL caps for it, in both the device tree (the levels above it deleted) and the package's ACPM ceiling (`zuma_gpu_max_khz=723000`). Stock's DVFS top, 890 MHz, is above all four of the 8a's GPU caps.
 
 ## Runbook
 
@@ -94,7 +94,7 @@ Each boot needs the human's go and changes one thing. **Each step's results end 
 - **Stop condition:** any zone over 80 C, or the phone hot to the touch: stop the load at once.
 
 ### M5.4 The GPU
-- **Change:** `&cmu_g3d` and `&gpu` with the 890 MHz table, plus the ACPM clock file in akita's package.
+- **Change:** `&cmu_g3d` and `&gpu` with `zuma.dtsi`'s table less the levels above 723 MHz, plus the ACPM clock file in akita's package.
 - **Pass:**
   - panthor binds, and `/dev/dri/renderD128` exists;
   - GL and Vulkan enumerate (`eglinfo`, `vulkaninfo --summary`);
@@ -114,7 +114,7 @@ Each boot needs the human's go and changes one thing. **Each step's results end 
 
 - **Heat.** There's no skin-temperature sensor and no BCL. husky's SoC reached 86 C on a software video decode. So boost stays off, M5.2 has a hard stop, and the phone is in hand during every load.
 - **Brown-outs:** without a limiter, the levels above the caps stay off.
-- **ACPM:** the GPU clock is set through the ACPM firmware, as on husky. Only stock's rates are requested, never above 890 MHz.
+- **ACPM:** the GPU clock is set through the ACPM firmware, as on husky. Only stock's rates are requested, never above the 8a's 723 MHz cap.
 - **Slot B's tries:** each change is a boot.
 
 ## Open questions
@@ -128,7 +128,7 @@ Each boot needs the human's go and changes one thing. **Each step's results end 
 
 ### 2026-11-15: the baseline (M5.0)
 
-The kernel: `…g8136602c700c` (`2db2bc35b` + #246), no cpufreq, no GPU, no SoC thermal zones. Battery 32.5 C.
+The kernel: `7.3.0-rc6-omamobile-push1-g8136602c700c` (`2db2bc35b` + #246), no cpufreq, no GPU, no SoC thermal zones, on slot B from M4.7's `bin/omamobile flash`. Battery 32.5 C.
 
 | # | Test | Seen | Meaning |
 | --- | --- | --- | --- |
@@ -142,7 +142,7 @@ Slot B: 2 tries left.
 
 ### 2026-11-15: today's kernel, thermal only (M5.1)
 
-The kernel: `…g317d87dc2db0`, `omamobile` at `317d87dc2` with nothing added (it has #246 and #158). No gauge-model overlay.
+The kernel: `7.3.0-rc6-omamobile-push1-g317d87dc2db0`, `omamobile` at `317d87dc2` with nothing added (it has #246 and #158). No gauge-model overlay. On slot B by `bin/omamobile modules-push`, then `bin/omamobile flash`.
 
 | # | Test | Seen | Meaning |
 | --- | --- | --- | --- |
@@ -154,7 +154,7 @@ Slot B: 2 tries left.
 
 ### 2026-11-15: CPU frequency scaling (M5.2)
 
-The kernel: `…g03e86b1eb814`, M5.1's plus `03e86b1eb` (the CPUs on `zuma.dtsi`'s tables, with the 8a's six extra turbo marks).
+The kernel: `7.3.0-rc6-omamobile-push1-g03e86b1eb814`, M5.1's plus `03e86b1eb` (the CPUs on `zuma.dtsi`'s tables, with the 8a's six extra turbo marks). On slot B by `modules-push`, then `flash`.
 
 | # | Test | Seen | Meaning |
 | --- | --- | --- | --- |
@@ -166,7 +166,7 @@ Slot B: 2 tries left.
 
 ### 2026-11-15: thermal under load (M5.3)
 
-The same kernel as M5.2. All nine cores ran `openssl speed sha256` (one per core, pinned) for 180 s, with the clocks, the three CPU zones, the cooling devices and the battery logged every second, and a stop at 80 C. The phone was on the laptop's cable, in the owner's hand.
+The same kernel and boot as M5.2 (`7.3.0-rc6-omamobile-push1-g03e86b1eb814`). All nine cores ran `openssl speed sha256` (one per core, pinned) for 180 s, with the clocks, the three CPU zones, the cooling devices and the battery logged every second, and a stop at 80 C. The phone was on the laptop's cable, in the owner's hand.
 
 | # | Test | Seen | Meaning |
 | --- | --- | --- | --- |
@@ -178,7 +178,7 @@ Slot B: 2 tries left.
 
 ### 2026-11-15: the GPU (M5.4) and the session (M5.5, gate i)
 
-The kernel: `…g0b04e364a09c`, M5.2's plus `0b04e364a` (CMU_G3D and the GPU, 13 levels to 890 MHz). The package: omamobile-device-akita 0.1.5 (the ACPM GPU clock's 890 MHz ceiling), built on the phone from the branch and installed before the boot.
+The kernel: `7.3.0-rc6-omamobile-push1-g0b04e364a09c`, M5.2's plus `0b04e364a` (CMU_G3D and the GPU, 13 levels to 890 MHz; `zuma-akita.dts` blob `210154a07fac`). On slot B by `modules-push`, then `flash`. The package: omamobile-device-akita 0.1.5 as it was then (the ACPM GPU clock's 890 MHz ceiling, since lowered to 723 MHz, test 62), built on the phone from the branch and installed before the boot.
 
 | # | Test | Seen | Meaning |
 | --- | --- | --- | --- |
@@ -191,5 +191,15 @@ Findings:
 - **What's still slow is the display path, not the GPU.** Hyprland renders into a linear 1080×2400 buffer on the GPU, and then copies it into a "dumb" buffer on simpledrm, the bootloader's framebuffer, for every frame (its log: "DRM Dumb: created a dumb allocator", "Explicit sync unsupported", `supportsAsyncCommit: false`, no VRR). simpledrm has no vsync and copies about 10 MB per frame with the CPU, which fits the busy kernel worker. The 8 Pro got past this with its display driver (kernel #160: DECON0, DSIM0 and a panel driver). akita needs the same for its ak3b panel: the next milestone.
 - **Hyprland asks for a high-priority GLES 3.2 context first,** gets `EGL_BAD_MATCH`, and falls back to GLES 3.0 with normal priority. Harmless.
 - `eglinfo` and `vulkaninfo` aren't on the image (`mesa-utils`, `vulkan-tools`), and the phone had no network to add them, so GL and Vulkan weren't enumerated by hand.
+
+Slot B: 2 tries left.
+
+### 2026-11-18: the GPU at the 8a's cap (review of #264 and #832)
+
+The kernel: `7.3.0-rc6-omamobile-push1-g9cf0719104a1`, `omamobile` at `26867fc4e` plus #264's reworked commits: the CPUs as in M5.2; the GPU table moved into `zuma.dtsi`; the 8a's GPU with the levels above 723 MHz deleted. No display nodes. On slot B by `modules-push`, then `flash`. The package: omamobile-device-akita 0.1.5 with `zuma_gpu_max_khz=723000`, built on the phone from the branch and installed before the boot.
+
+| # | Test | Seen | Meaning |
+| --- | --- | --- | --- |
+| 62 | The GPU's top | `clk_acpm`'s `zuma_gpu_max_khz` reads 723000. devfreq: `simple_ondemand`, 150 to 723 MHz, ten levels (150, 302, 337, 376, 419, 467, 521, 580, 649, 723). During 15 s of swiping it went to 723 MHz (1.2 s there in total) and no higher, with 46 transitions, then back to 150 MHz; the zones read 44 to 46 C afterwards. The CPU tops are unchanged (1425, 1418, 2147 MHz). `tools/phone-smoke`: every required row ok, GPU ok, no failed units, 3 known error lines and 0 new | The 8a's GPU stops at its highest BCL cap, held by both the device tree and the package |
 
 Slot B: 2 tries left.
