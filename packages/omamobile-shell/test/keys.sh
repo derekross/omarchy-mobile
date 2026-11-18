@@ -160,6 +160,10 @@ grep -q "brightnessctl -q -d panel set 2083" "$log" || fail "flash: with a panel
 rm -rf "$t/sys/class/drm/card0-DSI-1" "$t/sys/class/backlight/panel"; : >"$t/async-off"
 reset; start=$(date +%s%N); keys power-down; keys power-up
 took=$(( ($(date +%s%N) - start) / 1000000 ))
+# The stand-in's delayed half still runs here (its writes fail, the files are
+# gone): give it its 0.4 s before the next case puts the panel files back, or
+# it turns that new panel off behind the test's back.
+sleep 1
 logged "brightnessctl -q -d panel set 2083" || fail "flash: with no panel files the brightness goes back by Hyprland's word"
 (( took < 1500 )) || fail "flash: with no panel files Hyprland's word ends the wait at once, not at the bound ($took ms)"
 # A connector that is not connected (a second, unused one) says Off and must not end the wait.
