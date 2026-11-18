@@ -144,6 +144,31 @@ git add -A && git commit -q -m "tools: broken"
 check "a broken script" 1 "tools/broken"
 echo "ok - a script that doesn't parse fails"
 
+# A touched file shorter than 64 bytes, with a head on PATH that writes once
+# more after the data, as uutils' head (the build machine's) writes again at
+# the end of a short file, after the reader of its first line may have gone.
+mkdir "$t/bin"
+cat > "$t/bin/head" <<'EOF'
+#!/bin/bash
+PATH=${PATH#*:}
+[[ $1 == -c ]] || exec head "$@"
+head "$@"; sleep 1; echo
+EOF
+chmod +x "$t/bin/head"
+case_branch short-file
+printf '#!/bin/bash\necho hi\n' > tools/hi && chmod +x tools/hi
+git add -A && git commit -q -m "tools: hi"
+PATH=$t/bin:$PATH check "a script shorter than 64 bytes" 0 "touched scripts parse"
+echo "ok - a script shorter than 64 bytes passes when head writes again at end of file"
+
+# Only the first 64 bytes are looked at, NULs included: an image whose NULs
+# push a shebang past byte 64 is not a script.
+case_branch nul-window
+{ head -c 60 /dev/zero; printf '#!/bin/bash\nif then\n'; } > tools/looks.png
+git add -A && git commit -q -m "tools: an image"
+check "a shebang past byte 64" 0 "touched scripts parse"
+echo "ok - a shebang after 60 NUL bytes is past the 64-byte window"
+
 git checkout -q main
 check "nothing to check" 0 "no commits"
 echo "ok - no commits, nothing to check"
