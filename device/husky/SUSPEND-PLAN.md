@@ -1,8 +1,9 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 8 Pro (husky): suspend
 
-Status (2026-11-15): **reviewed draft, revised twice for #724's review; nothing
-in section 3 has run on this unit.** s2idle has run on one 8 Pro already,
+Status (2026-11-18): **H0b passed, and H1 passed (touch, display and a
+played haptic effect not checked; carried into H2), on this unit (section
+4); H2 to H4 have not run.** s2idle has run on one 8 Pro already,
 Lef's (section 4, from #642 and #724). This file is the runbook Derek asked
 for on #656 before a first attended suspend test on another unit: what
 husky has for the three things he named (Wi-Fi across sleep, UFS
@@ -23,13 +24,16 @@ Kernels:
 - H0b to H4: the published `omamobile` branch of
   derekross/linux-omarchy-mobile at `82f31d3a7` (`7.3.0-rc6-omamobile-push1-g82f31d3a7a35`), unchanged, which has
   the GPU and CPU DVFS series (#157 with #158), the RTC interrupt (#243) and
-  `mem_sleep_default=s2idle` (#244). `omamobile-device-husky` 0.1.10.
+  `mem_sleep_default=s2idle` (#244). H0b and H1 ran with
+  `omamobile-device-husky` 0.1.13. H2 to H4 run with 0.1.14 or later
+  (`SuspendState=freeze`, #806), once it is in the development channel;
+  each result names the installed version.
 
 ## 1. What cheetah and raven needed, and husky's state
 
 | Needed on cheetah / raven | On husky (H0, read-only) |
 | --- | --- |
-| s2idle, never `deep`: the firmware offers PSCI SYSTEM_SUSPEND, so "mem" means `deep`, which has no zuma sleep sequence in Linux and would not wake | the H0 kernel predates #244 and reads `s2idle [deep]`; device-husky 0.1.10's `sleep.conf.d` drop-in makes `systemctl suspend` use s2idle. The published kernel boots with `[s2idle] deep`. Every stage sleeps through `systemctl suspend`; nothing here writes `/sys/power/state` |
+| s2idle, never `deep`: the firmware offers PSCI SYSTEM_SUSPEND, so "mem" means `deep`, which has no zuma sleep sequence in Linux and would not wake | the H0 kernel predates #244 and reads `s2idle [deep]`; the device package's `sleep.conf.d` drop-in (since 0.1.10) makes `systemctl suspend` use s2idle. The published kernel boots with `[s2idle] deep`. Every stage sleeps through `systemctl suspend`; nothing here writes `/sys/power/state` |
 | Wi-Fi: a sleep hook (cheetah, raven) that keeps it connected through brcmfmac's D3 handshake, or unloads Wi-Fi and the PCIe host | **no hook**: `/usr/lib/systemd/system-sleep/` has only Omarchy's `unmount-fuse`. Loaded: `brcmfmac_wcc`, `brcmfmac`, `pcie_gs201`, `phy_zuma_pcie`; the BCM4398 at `0000:01:00.0` in D0. Whether the D3 handshake works on zuma is unknown [U] (Lef's sleeps kept Wi-Fi loaded: "hot resume" and `Flowring creation failed` lines, section 4). So every stage unloads Wi-Fi and the PCIe host first, once H0b shows the unload and reload work on their own |
 | UFS at `spm_lvl` 5 (at 3, the first hibern8 exit on resume failed and needed a host reset) | `13200000.ufs`: `spm_lvl` 5 at boot, `rpm_lvl` 3, `auto_hibern8` not supported, runtime `active` [V]. Checked again before every stage |
 | NFC not polling through s2idle (AGENTS.md, the 9a) | no NFC driver bound and no `/sys/class/nfc` [V] (the node is disabled; #208 and #209 are drafts). Checked again before every stage; with a driver bound, stop |
@@ -50,23 +54,31 @@ Inhibitors: NetworkManager, UPower and Omarchy's lock, all `delay`.
 ## 2. Rules and recovery
 
 - Attended for every stage and every cycle, with Colin at the phone and
-  the USB cable in. One stage per go-ahead; read the result before the
-  next. Nothing in this plan runs unattended.
+  the USB cable in. One stage per go-ahead, and the go-ahead is Derek's
+  (for H2, on #835). Read the result before the next. (H1 ran 20 minutes
+  after H0b in the same sitting, on the go-ahead for H0b alone. From H2
+  on, each stage waits for its own.) Nothing in this plan runs unattended.
 - Slot B only, no flash between H0b and H4. Before H0b, and before any
   stage when fewer than two retries are left, refill slot B to 3 from the
   bootloader: `fastboot -s <serial> set_active b` (as in BATTERY-NOTES).
   Every boot of slot B spends one, clean ones too, and with #578 a power
   off restarts the phone and spends one more.
 - Every sleep goes through `systemctl suspend` (logind, the `system-sleep`
-  hooks, the 0.1.10 drop-in), started detached with `systemd-run` and
-  logged to `/var/lib/omamobile/suspend/`: USB (and Wi-Fi, once unloaded)
-  drops while asleep. The RTC wake is armed through sysfs first. Results
-  are read from `suspend_stats` and the journal's `PM: suspend entry` and
-  `PM: suspend exit` lines.
+  hooks, the device package's `sleep.conf.d` drop-in), started detached
+  with `systemd-run` and logged to `/var/lib/omamobile/suspend/`: USB (and
+  Wi-Fi, once unloaded) drops while asleep. The RTC wake is armed through
+  sysfs first. Results are read from `suspend_stats` and the journal's
+  `PM: suspend entry` and `PM: suspend exit` lines.
 - Before every sleep: `spm_lvl` 5; no `/sys/class/nfc`; Wi-Fi and PCIe
   unloaded and their modules gone (the `pre` helper stops otherwise). After
   every stage: `dmesg | grep -E "ufshcd_err_handler|hibern8|I/O error"` is
   empty, then `modprobe pcie_gs201 && modprobe brcmfmac`.
+- One UFS line at resume is expected and is not a stop:
+  `dme-set: attr-id 0x4021 val 0x1 failed 0 retries`. 0x4021 is the peer
+  device ID (`T_PEERDEVICEID`) that `ufs-exynos` sets when the link comes
+  back. Lef's resumes and this unit's H1 show it (section 4), and so does
+  every healthy wake on the Pixel 9a ([SLEEP-PLAN](../tegu/SLEEP-PLAN.md)).
+  Any other UFS error at resume is a stop.
 - Never press Shut down (#578) or Suspend in the menu during these stages.
 
 Recovery:
@@ -87,15 +99,17 @@ Recovery:
   above.
 - **Wakes, but USB doesn't come back:** the session should be on screen;
   restart from the menu's Restart, then read the log.
-- **Any UFS error on resume** (error handler, I/O errors, read-only
-  remount): restart at once, stop, report. No more sleeps on that kernel.
+- **Any UFS error on resume other than the expected `dme-set` line**
+  (error handler, I/O errors, read-only remount): restart at once, stop,
+  report. No more sleeps on that kernel.
 - **Suspend refuses** (`suspend_stats` fail goes up, or no
   `PM: suspend entry`): not dangerous. Read `dmesg` for the device and
   stop.
 
-Stop conditions: any UFS error; an RCU stall, soft lockup or "SMC failed";
-a wake that needs the buttons or sysrq; an interrupt storm on pmic-1 or the
-gauge; a device that fails to suspend or resume.
+Stop conditions: any UFS error other than the expected `dme-set` line
+above; an RCU stall, soft lockup or "SMC failed"; a wake that needs the
+buttons or sysrq; an interrupt storm on pmic-1 or the gauge; a device that
+fails to suspend or resume.
 
 ## 3. Runbook
 
@@ -143,9 +157,12 @@ dmesg | grep -iE "brcmf|pcie|gs201" | tail -20'
 
 - **Pass:** `pre ok`; after the reload both modules are back, the
   interface reconnects to the same network, and `dmesg` shows no PCIe or
-  brcmfmac error beyond the known noise (`Ignoring unexpected firmware
-  channel`, one `brcmf_p2p_create_p2pdev: timeout`). Then H1 changes only
-  one thing.
+  brcmfmac error beyond the known noise, which this kernel also prints at
+  boot: `Ignoring unexpected firmware channel`, one
+  `brcmf_p2p_create_p2pdev: timeout`, one
+  `brcmf_join_v1: ... firmware error -14` before it associates, and
+  `Received unexpected monitor pkt`. H1 to H4 reuse this list. Then H1
+  changes only one thing.
 
 **H1: pm_test dry runs through systemd.** `freezer`, `devices`, then
 `platform`: the kernel waits 5 s at that level and comes back by itself.
@@ -157,18 +174,19 @@ tools/phone-ssh 'mkdir -p /var/lib/omamobile/suspend; systemd-run --collect --un
   echo 1 > /sys/power/pm_print_times; echo 1 > /sys/power/pm_debug_messages
   for t in freezer devices platform; do
     echo == \$t success=\$(cat /sys/power/suspend_stats/success) fail=\$(cat /sys/power/suspend_stats/fail) >> \$L
-    sync; echo \$t > /sys/power/pm_test; systemctl suspend; sleep 20
+    sync; echo \$t > /sys/power/pm_test; systemctl suspend; sleep 25
   done
   echo none > /sys/power/pm_test
   echo end success=\$(cat /sys/power/suspend_stats/success) fail=\$(cat /sys/power/suspend_stats/fail) >> \$L
   dmesg | tail -400 >> \$L; sync"'
-# reconnect after about a minute
+# reconnect after about a minute and a half (three levels, 25 s each)
 tools/phone-ssh "$after"
 ```
 
 - **Pass:** three `PM: suspend entry`/`exit` pairs and `suspend_stats` fail
-  unchanged; no "failed to suspend"; no UFS error; display, touch, GPU,
-  Bluetooth and haptics work afterwards; Wi-Fi reconnects after the reload.
+  unchanged; no "failed to suspend"; no UFS error beyond the one expected
+  line (section 2); display, touch, GPU, Bluetooth and haptics work
+  afterwards; Wi-Fi reconnects after the reload.
 - **Risk:** low to medium. The CPUs never stop, but at `devices` and
   `platform` every driver runs its suspend and resume callbacks, UFS's
   included (at `spm_lvl` 5 the device powers down and the link goes off).
@@ -182,8 +200,9 @@ Reconnect after about a minute and run `tools/phone-ssh "$after"`.
 
 - **Pass:** one `PM: suspend entry` and `exit` about 30 s apart; success
   +1, fail +0; `wakeup_irq` is pmic-1's interrupt; no UFS error; the PIN pad
-  comes up on Power; touch, display, GPU, Bluetooth and haptics work; Wi-Fi
-  reconnects after the reload.
+  comes up on Power; touch, display, GPU, Bluetooth and haptics (a played
+  effect) work, which also covers what H1 left unchecked; Wi-Fi reconnects
+  after the reload.
 - **Risk:** low to medium: the first RTC-woken s2idle on an 8 Pro (Lef's
   had no RTC device).
 
@@ -272,3 +291,66 @@ when it was plugged in about 8.5 h later, and booted again. Whether it slept
 until the battery was empty or hung in suspend can't be told from this:
 there is no exit line and no later log. It shows that UPower's critical
 action reaches s2idle on husky with `suspend-off` set.
+
+**This unit, 2026-11-15, H0b: passed.** Published `omamobile` at
+`82f31d3a7` (`7.3.0-rc6-omamobile-push1-g82f31d3a7a35`),
+`omamobile-device-husky` 0.1.13, driven over USB, attended, 85 % and
+charging, slot B refilled to 3 earlier the same day. No sleep
+(`suspend_stats` 0 / 0 before and after).
+
+- **Unload:** `pre` passed (`spm_lvl` 5, no `/sys/class/nfc`).
+  `modprobe -r brcmfmac_wcc brcmfmac pcie_gs201` returned 0; none of the
+  three was left in `lsmod`, the PCI bus had no devices and no `wlp`
+  interface remained. `brcmutil` and `phy_zuma_pcie` stayed loaded with no
+  users.
+- **Reload**, 5 s later: `modprobe pcie_gs201 && modprobe brcmfmac`
+  returned 0. Both PCI functions came back in D0, the firmware loaded
+  (`BCM4398/3 ... version 24.100.671.86.2`), and NetworkManager had
+  `wlp1s0` connected to the same 5 GHz network 14 s after the reload; three
+  pings out of three over it.
+- **Kernel log** for the reload: the known brcmfmac noise only
+  (`Ignoring unexpected firmware channel`, one
+  `brcmf_p2p_create_p2pdev: timeout`, one
+  `brcmf_join_v1: ... firmware error -14` before it associated, and
+  `Received unexpected monitor pkt`, all of which this kernel also prints
+  at boot). No PCIe, AER or UFS line. `running`, no failed units.
+- The interface came back on `phy1` (it was `phy0`): cosmetic, but a
+  script that names the phy would miss it.
+
+**This unit, 2026-11-15, H1: passed (touch, display and a played haptic
+effect not checked; carried into H2).** Same kernel and package as H0b,
+20 minutes later, over USB, attended, 99 % and charging. `pre` passed and
+unloaded Wi-Fi and the PCIe host. `freezer`, `devices` and `platform`,
+each through `systemctl suspend` with 25 s between (the run's script slept
+25 where the runbook then said 20; the runbook now says 25):
+
+- `suspend_stats` went 0 to 3 successes, 0 failures, no
+  `last_failed_dev`. Three `PM: suspend entry (s2idle)` and `suspend exit`
+  pairs, each with `suspend debug: Waiting for 5 second(s)`.
+- `devices`: suspend of devices 40 ms, resume 68 ms. `platform`: suspend
+  43 ms, late 2.6 ms, noirq 1.9 ms; noirq resume 1.8 ms, early 1.8 ms,
+  resume 69 ms. The slowest resume is the UFS device W-LUN, 41 ms both
+  times.
+- After the `devices` and the `platform` resume, UFS printed one
+  `dme-set: attr-id 0x4021 val 0x1 failed 0 retries` each, the line Lef's
+  resumes show. No error handler run, no hibern8 line, no I/O or ext4
+  error, root still read-write.
+- Each entry came about 5 s after `systemctl suspend`: logind's delay
+  inhibitors (NetworkManager, UPower, Omarchy's lock).
+- Afterwards: `running`, no failed units, Bluetooth powered, the haptics
+  input device there, the GPU at its idle rate, and Wi-Fi connected 14 s
+  after the reload. USB answered on the first try after the run. Nobody
+  touched the screen during the run, so touch after resume is not
+  checked here. The display was not checked and no haptic effect was
+  played either. All three are carried into H2.
+
+**This unit, 2026-11-18, the sleep configuration in effect (read-only,
+asked for before H2).** `omamobile-device-husky` 0.1.13.
+`systemd-analyze cat-config systemd/sleep.conf` shows two files:
+`/etc/systemd/sleep.conf` with nothing set under `[Sleep]` (every line
+commented), and the package's
+`/usr/lib/systemd/sleep.conf.d/10-omamobile.conf` with
+`MemorySleepMode=s2idle`, `AllowHibernation=no`, `AllowHybridSleep=no` and
+`AllowSuspendThenHibernate=no`. There is no `/etc/systemd/sleep.conf.d/`
+directory, so no hand copy hides the package's file (#806). To be read
+again once 0.1.14 is installed.

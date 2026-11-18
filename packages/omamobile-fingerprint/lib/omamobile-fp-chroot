@@ -688,7 +688,7 @@ start() {
   fi
   # unshare's child: PID 1 inside, its parent is unshare outside. /run is
   # shared with the host until our mounts, so record the host PID for ns/run.
-  awk '/^NSpid:/ {print $2}' /proc/self/status > "$NSPID"
+  ns_pid_record
   trap 'stop 0' TERM INT
   # a die from here on (after the proxy may have started) still stops the
   # stack in order
@@ -758,6 +758,18 @@ start() {
   # wait also returns when TERM/INT arrives; then the trap is already stopping
   [[ -n $STOPPING ]] || say "a service exited"
   stop 1
+}
+
+# Record this shell's PID as the host sees it. Read with a builtin: /proc/self
+# in its redirection is this shell. An awk here read its own status, so the
+# file named awk's short-lived PID and ns and run failed ("cannot open
+# /proc/N/ns/mnt"); the same bug, found in omamobile-gnss's runner.
+ns_pid_record() {
+  local k v _
+  while read -r k v _; do
+    [[ $k == NSpid: ]] && { printf '%s\n' "$v" > "$NSPID"; return 0; }
+  done < /proc/self/status
+  die "no NSpid in /proc/self/status"
 }
 
 # $NSPID holds the namespace's PID 1 as seen from the host.

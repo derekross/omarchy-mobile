@@ -15,15 +15,17 @@
 # missing camera APEX) leaves the previous outputs and the -c file byte
 # for byte, so an older file can't pass for a missing one; an image whose
 # build.prop is missing, empty or not copied is refused, as it can't be
-# checked, and staged with -f; a -c that is a directory or inside the
-# outputs is refused; an -o that resolves to / is refused before anything
-# is written; and a move that fails while publishing puts the previous
-# outputs back. With mkfs.ext4 and debugfs on the host, the same on a real
-# ext4 image whose registry belongs to root, work and output paths with a
-# space and a double quote in them, a copy that a file size limit cuts
-# short, and an image without build.prop. EVF=path
-# runs another copy of the tool (a negative control), so every check runs
-# and the failures are counted rather than stopping at the first.
+# checked, with debugfs's reason when it gave one, and staged with -f; a
+# -c that is a directory or inside the outputs is refused; an -o that
+# resolves to / is refused before anything is written; and a move that
+# fails while publishing puts the previous outputs back. With mkfs.ext4
+# and debugfs on the host, the same on a real ext4 image whose registry
+# belongs to root, work and output paths with a space and a double quote
+# in them, a copy that a file size limit cuts short, and images without
+# build.prop or with a damaged superblock, whose refusals end with
+# debugfs's own last line. EVF=path runs another copy of the tool (a
+# negative control), so every check runs and the failures are counted
+# rather than stopping at the first.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 repo=$PWD
@@ -53,7 +55,7 @@ if [[ -f $FAKE_VENDOR/.fail-dump && $src == "/$(cat "$FAKE_VENDOR/.fail-dump")" 
    [[ $cmd == rdump && -f $FAKE_VENDOR/.fail-rdump ]]; then
   if [[ $cmd == dump ]]; then
     echo partial > "$out"
-    echo "dump_file: File too large while writing file \"$src\"" >&2
+    echo "dump: No space left on device while writing file" >&2
   else   # after many real notes, an error whose file name holds their words
     mkdir -p "$out/${src##*/}" && echo partial > "$out/${src##*/}/part.json"
     for n in $(seq 800); do
@@ -68,7 +70,7 @@ case $cmd in
   rdump) [[ -d $FAKE_VENDOR$src ]] && cp -r "$FAKE_VENDOR$src" "$out/" &&
          echo "dump_file: Operation not permitted while changing ownership of $out/${src##*/}/x" >&2 &&
          echo "rdump: Operation not permitted while changing ownership of $out/${src##*/}" >&2 ;;
-esac || echo "$cmd: File not found by ext2_lookup while looking up $src" >&2
+esac || echo "$src: File not found by ext2_lookup " >&2   # with its trailing blank
 exit 0
 EOF
 cat > "$t/bin/fsck.erofs" <<'EOF'
@@ -184,6 +186,12 @@ refuses() { # NAME EXPECTED-ERROR VENDOR IMG ARGS...
   [[ $(snap "$o") == "$before" ]] || { diff <(echo "$before") <(snap "$o") || true; fail "$name: the previous outputs stay as they were"; return; }
   pass "$name: refused, the previous outputs untouched"
 }
+# says NAME LINE: the last run's error line is LINE, byte for byte
+says() {
+  local got
+  got=$(sed -n '/^error: /p' "$t/log")
+  if [[ $got == "$2" ]]; then pass "$1: says $2"; else printf '%s\n' "$got"; fail "$1: says $2"; fi
+}
 
 # --- A fresh run ---------------------------------------------------------------
 o=$t/fresh n=$failed
@@ -282,10 +290,18 @@ pass_since "$n" "a registry short write under a file size limit: refused, the pr
 rm -rf "$t/v2-noprop"; cp -r "$t/v2" "$t/v2-noprop"; rm "$t/v2-noprop/build.prop"
 rm -rf "$t/v2-emptyprop"; cp -r "$t/v2" "$t/v2-emptyprop"; : > "$t/v2-emptyprop/build.prop"
 rm -rf "$t/v2-propfail"; cp -r "$t/v2" "$t/v2-propfail"; echo build.prop > "$t/v2-propfail/.fail-dump"
+# The refusal passes on debugfs's last line, its reason (a lookup error's
+# trailing blank dropped); only its banner adds none, and nothing reaches
+# the EROFS refusal, not even a "reason" in the environment
+msg="error: build.prop can't be read from vendor.img" use_f="; use -f to override"
 refuses "no build.prop (ext4)" "build.prop can't be read from vendor.img" "$t/v2-noprop" "$t/ext4.img"
-refuses "no build.prop (EROFS)" "build.prop can't be read from vendor.img" "$t/v2-noprop" "$t/erofs.img"
+says "no build.prop (ext4)" "$msg: /build.prop: File not found by ext2_lookup$use_f"
+reason="a stale reason" refuses "no build.prop (EROFS)" "build.prop can't be read from vendor.img" "$t/v2-noprop" "$t/erofs.img"
+says "no build.prop (EROFS)" "$msg$use_f"
 refuses "an empty build.prop" "build.prop can't be read from vendor.img" "$t/v2-emptyprop" "$t/ext4.img"
+says "an empty build.prop" "$msg$use_f"
 refuses "a build.prop whose copy fails" "build.prop can't be read from vendor.img" "$t/v2-propfail" "$t/ext4.img"
+says "a build.prop whose copy fails" "$msg: dump: No space left on device while writing file$use_f"
 o=$t/noprop-forced
 seed "$o"
 if run "$t/v2-noprop" "$t/ext4.img" -f -o "$o" && [[ $(listed "$o") == "$CHEETAH_FILES" ]]; then
@@ -419,14 +435,25 @@ if realdfs=$(command -v debugfs) && mkfs.ext4 -q -F -d "$t/v2" "$t/real.img" 8M 
   else
     pass "real ext4: a missing file with an older copy in OUT is refused, the previous outputs untouched"
   fi
-  before=$(snap "$o")
-  if "$EVF" -w "$t/work" -o "$o" "$t/real-noprop.img" > "$t/log" 2>&1; then
-    fail "real ext4: an image without build.prop is refused"
-  elif ! grep -qF "build.prop can't be read from vendor.img" "$t/log" || [[ $(snap "$o") != "$before" ]]; then
-    cat "$t/log"; fail "real ext4: an image without build.prop is refused, the previous outputs untouched"
-  else
-    pass "real ext4: an image without build.prop is refused, the previous outputs untouched"
-  fi
+  # The refusal ends with the last line the host's debugfs itself writes for
+  # the image: one without build.prop, and one whose superblock's block size
+  # is damaged (the magic intact), where debugfs first says it can't open it
+  cp "$t/real.img" "$t/real-sb.img"
+  printf '\xff\xff\xff\x7f' | dd of="$t/real-sb.img" bs=1 seek=1048 conv=notrunc status=none
+  for image in noprop sb; do
+    why=$("$realdfs" -R "dump /build.prop \"$t/probe.prop\"" "$t/real-$image.img" 2>&1 >/dev/null)
+    why=${why##*$'\n'} why=${why% }
+    before=$(snap "$o")
+    if [[ -z $why || $why == "debugfs "[0-9]* || -e $t/probe.prop ]]; then
+      fail "real ext4 $image: debugfs itself fails to copy build.prop, with a reason"
+    elif "$EVF" -w "$t/work" -o "$o" "$t/real-$image.img" > "$t/log" 2>&1; then
+      fail "real ext4 $image: build.prop that can't be read is refused"
+    elif [[ $(sed -n '/^error: /p' "$t/log") != "$msg: $why$use_f" || $(snap "$o") != "$before" ]]; then
+      cat "$t/log"; fail "real ext4 $image: refused with debugfs's last line, the previous outputs untouched"
+    else
+      pass "real ext4 $image: refused with debugfs's last line, the previous outputs untouched"
+    fi
+  done
   before=$(snap "$o")
   if PATH=$t/limited:$PATH "$EVF" -w "$t/work" -o "$o" "$t/real-big.img" > "$t/log" 2>&1; then
     fail "real ext4: a copy cut short by debugfs is refused"

@@ -40,12 +40,17 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
     ../omamobile-device-cheetah/omamobile-device-cheetah.install \
     || fail "the pacman install script drifted from the cheetah package"
   pass "the pacman install script matches the cheetah package"
-  # Its comment names zuma, cheetah's gs201: the settings are what must match
-  sleep=vendor/systemd/sleep.conf.d/10-omamobile.conf
-  [[ $(grep -v '^#' "$sleep") == "$(grep -v '^#' "../omamobile-device-cheetah/$sleep")" ]] \
-    || fail "the sleep drop-in's settings drifted from the cheetah package"
-  pass "the sleep drop-in's settings match the cheetah package"
 fi
+# The sleep drop-in: suspend-to-idle only, one state so a refused sleep isn't
+# tried a second time (#619), and nothing that hibernates. Checked by its
+# settings, as the 9a's package does: the 7 Pro's copy gets SuspendState in a
+# change of its own.
+sleepconf=vendor/systemd/sleep.conf.d/10-omamobile.conf
+[[ $(grep -v '^#' "$sleepconf" | grep -c .) -eq 6 && $(grep -v '^#' "$sleepconf" | head -1) == "[Sleep]" ]] || fail "the sleep drop-in has other lines than its five settings"
+for line in SuspendState=freeze MemorySleepMode=s2idle AllowHibernation=no AllowHybridSleep=no AllowSuspendThenHibernate=no; do
+  grep -qx "$line" "$sleepconf" || fail "the sleep drop-in lacks $line"
+done
+pass "the sleep drop-in: one sleep state (freeze), s2idle, no hibernation"
 grep -q 'omamobile-keyring' PKGBUILD || fail "pacman needs omamobile-keyring"
 grep -q '^install=omamobile-device-husky.install$' PKGBUILD \
   || fail "the pacman install script is not named"
@@ -68,6 +73,7 @@ for f in usr/bin/reboot-to \
          usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
+         etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
          usr/lib/modprobe.d/omamobile-husky-clk-acpm.conf \
          usr/lib/modprobe.d/omamobile-husky-display.conf \
@@ -80,6 +86,9 @@ for f in usr/bin/reboot-to \
          usr/bin/omamobile-bt-addr usr/lib/systemd/system/omamobile-bt-addr@.service \
          usr/lib/udev/rules.d/80-omamobile-bt-addr.rules \
          usr/share/omamobile/device.conf \
+         usr/share/omamobile/charge-limit.conf \
+         usr/lib/udev/rules.d/75-omamobile-charge-limit.rules \
+         usr/lib/systemd/system/omamobile-charge-limit-apply.service \
          usr/share/omamobile/device-husky/version \
          usr/share/licenses/omamobile-device-husky/LICENSE \
          etc/pacman.d/omamobile-mirrorlist; do
@@ -167,6 +176,11 @@ pass "install stages the udev rule, the USB link, the mirrorlist and the display
 [[ ! -e $tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf ]] \
   || fail "husky has no lid: no lid drop-in"
 pass "no lid drop-in"
+grep -qx 'supply=max77759-charger' "$tmp/root/usr/share/omamobile/charge-limit.conf" \
+  || fail "husky declares its charge limit on max77759-charger"
+[[ ! -e $tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-charge-limit-apply.service ]] \
+  || fail "the apply unit is pulled in by udev, not enabled"
+pass "the charge limit declaration, its udev rule and the apply unit are staged; the unit is not enabled"
 
 
 # --- the AoC start: hang marker, nothing without the node ------------------
@@ -262,3 +276,7 @@ bash -n bin/omamobile-bt-addr || fail "the Bluetooth address script parses"
 grep -q 'chosen/config/bt_addr' bin/omamobile-bt-addr || fail "the Bluetooth address comes from the bootloader's DT"
 grep -q 'DRIVERS=="hci_uart_bcm"' vendor/udev/rules.d/80-omamobile-bt-addr.rules || fail "the rule matches the BCM UART controller only"
 pass "the Bluetooth address is read at run time, with the 9a's script"
+ps="$tmp/root/etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf"
+grep -qx '\[connection\]' "$ps" || fail "the Wi-Fi power save file needs a [connection] header"
+grep -qx 'wifi.powersave=3' "$ps" || fail "Wi-Fi power save is on by default (3 = enable)"
+pass "Wi-Fi power save is on by default"
