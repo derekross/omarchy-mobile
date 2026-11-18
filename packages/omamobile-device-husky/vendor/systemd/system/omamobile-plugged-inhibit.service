@@ -1,0 +1,10 @@
+[Unit]
+Description=Block sleep while charging (the charge guard pauses in s2idle)
+Wants=systemd-logind.service
+After=systemd-logind.service
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/usr/bin/omamobile-plugged-inhibit
+Restart=on-failure
+RestartSec=5
