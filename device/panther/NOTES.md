@@ -13,17 +13,39 @@ exactly as the Pixel 7 Pro's: Google's source has one file for both
 `gs201-pmic.dtsi`. So panther gets cheetah's node (linux-omarchy-mobile
 PR: the GNSS node, the rails and the pins, all disabled), and
 `overlays/gnss.dtso` turns on the sub-PMIC, the three rails, USI5 and its
-SPI, as cheetah's `gnss-pmic-test.dtso` and `gnss-test.dtso` do together.
-It isn't in `DTB_OVERLAYS`.
+SPI, as cheetah's `gnss-pmic-test.dtso` and `gnss-test.dtso` do together,
+and gph2's pin controller (`pinctrl@14440000`, disabled in `gs201.dtsi`),
+which `mcu_resp` and `nstandby` need. It isn't in `DTB_OVERLAYS`, and it
+needs a kernel with [linux-omarchy-mobile#268](https://github.com/derekross/linux-omarchy-mobile/pull/268):
+on a kernel without it, `fdtoverlay` refuses the overlay, as the three
+rails aren't in the base DTB.
+
+To try it:
+
+1. Install `omamobile-gnss` first. Its blacklist keeps `bcm4775x-gnss`
+   from loading by itself (`omamobile-gnss-start` loads it); the Pixel 7's
+   image and device package don't install it, so without it the driver
+   would load at the first boot with the overlay.
+2. The first boot with the overlay should show `bcm4775x-gnss` not loaded,
+   the three `vdd_gnss_*` rails registered and off, and USB and the
+   fingerprint sensor as before.
+3. The way back is the DTB without the overlay.
 
 Tested on a Pixel 7 (angelrenefm) on 2026-11-04, with a local kernel whose
 node is the same as the PR's (the built DTB against the phone's live tree:
 the same properties, other than phandles and `status`) and the stock
 GNSS daemons in `omamobile-gnss`'s vendor chroot: 8 minutes of NMEA
 outdoors from a cold start, the first fix 178 s in, then 303 fixes, up to
-16 satellites. Indoors, 60 s, no fix. Applied with `fdtoverlay` to the
+16 satellites. Indoors, 60 s, no fix. That boot ran
+`7.3.0-rc6-omamobile-push1-g44048a9aa795` with `omamobile-gnss` 0.2.7
+(built on the phone). On 2026-11-17, the same kernel with
+`omamobile-gnss` 0.2.9, indoors: `omamobile-gnss force` bound
+`bcm4775x-gnss` on `spi0.0` and gave 1089 NMEA sentences in 20 s (GPS,
+GLONASS, Galileo, BeiDou, QZSS), no fix. Applied with `fdtoverlay` to the
 PR's `gs201-panther.dtb`, the overlay changes those six `status` lines and
-nothing else, and it applies together with `fingerprint-sensor.dtso`. Not
+nothing else, and it applies together with `fingerprint-sensor.dtso`
+(seven with gph2's pin controller, checked again on 2026-11-18 against
+#268's DTB at `070e5489d`). Not
 tested: the overlay through `omamobile-boot-update`, and a warm start with
 fresh orbit predictions (`omamobile-gnss-lto`).
 
