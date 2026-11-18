@@ -74,10 +74,13 @@ python3 "$stage/usr/bin/omamobile-sitd" --help >/dev/null || fail "the staged da
 python3 "$stage/usr/bin/omamobile-sit" --help >/dev/null || fail "the staged CLI runs"
 python3 -c 'import configparser,sys; configparser.ConfigParser(interpolation=None).read(sys.argv[1])' \
   etc/omamobile/modem-sit.conf || fail "the config parses"
+# Only what systemd-analyze says about the staged unit counts: it also loads the
+# host's own units, and a warning about one of those (they begin with the host's
+# unit path) failed the nightly publish on the build host on 2026-11-18.
 if command -v systemd-analyze >/dev/null; then
   for u in omamobile-sitd omamobile-sit-data; do
     systemd-analyze verify --man=no "$stage/usr/lib/systemd/system/$u.service" 2>&1 |
-      grep -v -e 'not executable' -e 'No such file' -e 'omamobile-modem.service' -e 'omamobile-audio.service' \
+      grep -v -e '^/usr/lib/systemd/' -e '^/lib/systemd/' -e '^/etc/systemd/' -e '^/run/systemd/' -e 'not executable' -e 'No such file' -e 'omamobile-modem.service' -e 'omamobile-audio.service' \
         -e 'omamobile-sitd.service' -e '^$' && fail "$u verify" || true
   done
 fi
