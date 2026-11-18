@@ -22,12 +22,37 @@ device identifiers and is not in this repository.
 - **Android 17, build `CP3A.261005.005`, security patch 2026-10-05** [V]
   (R/ `getprop.txt:764,778,783`).
 - **Stock kernel `6.1.162-android14-11`** [V] (R/ `kernel-version.txt:1`).
-- **Currently running slot B; bootloader locked and verified boot green** [V]
-  (R/ `getprop.txt:666,695,709,732`). This says nothing about the other slot's
-  bootloader version or slot health.
-- **Bootloader property `ripcurrentpro-17.0-15819938`; `dtbo_idx` 34** [V]
-  (R/ `getprop.txt:655,664`). Fastboot variables have not been
-  read; doing so requires an attended reboot to the bootloader.
+- **At the initial ADB capture, Android was running slot B; bootloader locked
+  and verified boot green** [V] (R/ `getprop.txt:666,695,709,732`).
+- **The initial Android bootloader property was
+  `ripcurrentpro-17.0-15819938`; `dtbo_idx` was 34** [V]
+  (R/ `getprop.txt:655,664`).
+
+### Named fastboot reads and return to stock Android
+
+With the owner's approval, the phone was rebooted into the bootloader on
+2026-11-18. Only named `fastboot getvar` reads were run; `getvar all` was not
+used. Results are in the private R/ capture.
+
+- **Fastboot reported product `komodo`, revision MP1.0, current slot A, and
+  bootloader `ripcurrentpro-17.0-16433847`** [V]
+  (R/ `fastboot-vars.txt:3,7,11,15`).
+- **At that read, slot A was `successful=no`, `unbootable=no`, with 3 tries;
+  slot B was `successful=yes`, `unbootable=no`, with 2 tries** [V]
+  (R/ `fastboot-vars.txt:26-47`).
+- **The queried boot-image partition sizes** [V] (R/ `fastboot-vars.txt`):
+  `boot_a/b`, `vendor_boot_a/b`, and `vendor_kernel_boot_a/b` were `0x4000000`
+  each; `init_boot_a/b` were `0x800000` each; `dtbo_a/b` were `0x1000000` each.
+  `userdata` was `0x1b5e215000` (R/ `fastboot-vars.txt:50-91`).
+- **After the plain `fastboot reboot`, Android completed boot on slot A with
+  build `CP4A.261105.040.A1`; bootloader remained locked and verified boot
+  green** [V] (R/ `post-fastboot-state.txt:1-7`). The prior ADB capture was on
+  slot B with build `CP3A.261005.005` (R/ `getprop.txt:764,695`).
+- **No `set_active`, unlock, flash, or partition-write command was issued.**
+  Why the bootloader reported A unsuccessful before the reboot, then Android
+  completed on A with a newer build, is unresolved. A pending stock update is
+  one possibility, not confirmed. Stop further slot or bootloader work pending
+  review.
 
 ### CPU, memory, and partition names
 
@@ -51,16 +76,20 @@ device identifiers and is not in this repository.
 - The modem package already notes that Pixel 9 Pro XL needs its PHY brought up
   before its PCIe host. This is a lead for a separate hardware investigation,
   not a verified result from this phone.
-- Still needed before any device descriptor or kernel DTS: stock fastboot
-  variables and partition sizes; the live device tree and memory map; the exact
-  factory-image DTB/DTBO for this build; boot-chain and recovery analysis; and
-  board-specific display, touch, storage, Wi-Fi and modem evidence.
+- Still needed before any device descriptor or kernel DTS: remaining stock
+  partition sizes and descriptor facts; the live device tree and memory map;
+  the exact factory-image DTB/DTBO for this build; boot-chain and recovery
+  analysis; and board-specific display, touch, storage, Wi-Fi and modem evidence.
 - No device-specific kernel tree is present on the contributor's host yet.
   Kernel DTS work belongs in `linux-omarchy-mobile`, not this repository.
 
 ## Safety boundary
 
-The capture used only unrooted ADB reads. No reboot, bootloader unlock, slot
-change, flash, root operation, or partition write was performed. Keep the phone
-on stock until the boot chain, exact partitions, rollback behavior, recovery
-path, and a gated first-light plan have been reviewed.
+The initial capture used unrooted ADB reads. With the owner's approval, one
+reboot to fastboot and a plain reboot back to Android were performed, with only
+named `getvar` reads in fastboot. No slot-change command, unlock, flash, root
+operation, or partition-write command was issued. The phone is currently on
+stock Android, slot A, with verified boot green. Because its returned build and
+slot differ from the initial capture, stop further bootloader work until the
+transition is understood and the boot chain, rollback behavior, recovery path,
+and a gated first-light plan have been reviewed.
