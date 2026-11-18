@@ -75,6 +75,27 @@ class RouteTests(unittest.TestCase):
         self.assertFalse(hold.returns(others=False, now=205))
         self.assertTrue(hold.returns(others=False, now=210))
 
+    def test_the_last_check_says_whether_the_bearer_was_alone(self):
+        hold = SleepHold(grace=10)
+        hold.seen(True)
+        self.assertTrue(hold.announced(routed=True))
+        hold.seen(False)                             # the route is away for the sleep: this check doesn't count
+        hold.over(now=100)
+        self.assertTrue(hold.returns(others=False, now=100))     # at once: nothing else led out before
+        # A sleep announced in the half second before the next check still knows
+        self.assertTrue(hold.announced(routed=True))
+        hold.over(now=200)
+        self.assertTrue(hold.returns(others=False, now=200))
+
+    def test_wifi_at_the_last_check_waits_for_it(self):
+        hold = SleepHold(grace=10)
+        hold.seen(True)
+        hold.seen(False)                             # Wi-Fi came up before the sleep
+        hold.announced(routed=True)
+        hold.over(now=100)
+        self.assertFalse(hold.returns(others=False, now=100))
+        self.assertTrue(hold.returns(others=False, now=110))
+
     def test_a_route_that_was_not_there_is_not_brought_back(self):
         hold = SleepHold(grace=10)
         self.assertFalse(hold.announced(routed=False))   # removed earlier: silent bearer, roaming
