@@ -22,7 +22,8 @@
 # What it does, in order; any failure stops it:
 #  1. Locally: SHA256SUMS.sig is a good signature by the release key
 #     (keys/fingerprint.release, which omamobile-keyring must trust and not
-#     revoke; checked against the keyring's public keys in this repository,
+#     revoke, in an omamobile-revoked that tools/lib/signing.sh finds well
+#     formed; checked against the keyring's public keys in this repository,
 #     never the bundle's own omamobile.gpg), every file matches SHA256SUMS,
 #     manifest.json is covered by it, lists exactly the bundle's files with
 #     their sizes and SHA-256, names this codename and version, gives
@@ -113,6 +114,8 @@ keyring=$ROOT/packages/omamobile-keyring
 fpr=$(tr -d '[:space:]' < "$fpr_file")
 [[ $fpr =~ ^[0-9A-F]{40}$ ]] || die "keys/fingerprint.release does not hold a 40-digit fingerprint"
 cut -d: -f1 "$keyring/omamobile-trusted" | grep -cxF "$fpr" >/dev/null || die "omamobile-keyring does not trust the release key $fpr"
+source tools/lib/signing.sh
+why=$(revoked_file_check "$ROOT") || die "$why"
 if cut -d: -f1 "$keyring/omamobile-revoked" 2>/dev/null | grep -cxF "$fpr" >/dev/null; then
   die "the release key $fpr is revoked in omamobile-keyring"
 fi

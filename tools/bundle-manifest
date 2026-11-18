@@ -312,18 +312,19 @@ def main():
         "never": NEVER,
     }
     fmt = FORMAT
+    # The only images and guard names a release may carry, in either format
+    # (bin/omamobile's UFS_RW_ALLOWED): never vbmeta, abl or modem, which
+    # would be written as slot B's image (format 1) or as the running slot's
+    # live image (format 2)
+    for p in boot_images:
+        if p not in IMAGES_ACTIVE:
+            die("BOOT_IMAGES may hold only %s, not %s" % (" ".join(IMAGES_ACTIVE), p))
+    for p in allow:
+        if p not in [i + "_b" for i in IMAGES_ACTIVE] + ["userdata"]:
+            die("UFS_RW may hold only slot B boot images and userdata, not %s" % p)
     if slot == "active":
         # The guard opens the running slot's images (the packed list's slot-B
         # names, mapped by the init) and userdata, and no other partition
-        # Its own list, the only images and guard names a format 2 release
-        # may carry (bin/omamobile's UFS_RW_ALLOWED): never vbmeta, abl or
-        # modem, which would be written as the running slot's live image
-        for p in boot_images:
-            if p not in IMAGES_ACTIVE:
-                die("BOOT_IMAGES may hold only %s, not %s" % (" ".join(IMAGES_ACTIVE), p))
-        for p in allow:
-            if p not in [i + "_b" for i in IMAGES_ACTIVE] + ["userdata"]:
-                die("UFS_RW may hold only slot B boot images and userdata, not %s" % p)
         guard_images = [p[:-2] for p in allow if p.endswith("_b")]
         also = [p for p in allow if not p.endswith("_b")]
         if also != ["userdata"]:

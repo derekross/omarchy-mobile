@@ -36,6 +36,34 @@ out=$(bash -c '
 [[ $out == alive ]] || fail "a daemon exiting 3 leaves spawn_optional's job alive (got: $out)"
 pass "spawn_optional survives a failing daemon"
 
+# gnssd's RIL library: the stub goes over it read-only when both exist, and
+# nothing is mounted (or written) otherwise.
+sitril=$(sed -n '/^SITRIL_GPS=/p; /^SITRIL_GPS_STUB=/p; /^modem_gnss_sitril() {$/,/^}$/p' profiles/modem.conf)
+[[ $sitril == *modem_gnss_sitril* ]] || fail "modem_gnss_sitril found in modem.conf"
+st=$(mktemp -d)
+mkdir -p "$st/root/vendor/lib64" "$st/stubs"
+run_sitril() {
+  bash -c '
+    set -euo pipefail
+    ROOT=$1/root STUBS=$1/stubs
+    say() { echo "say: $*"; }
+    mount() { echo "mount $*"; }
+    '"$sitril"'
+    modem_gnss_sitril
+  ' _ "$st"
+}
+[[ -z $(run_sitril) ]] || fail "no libsitril-gps.so in the image: nothing mounted"
+echo real > "$st/root/vendor/lib64/libsitril-gps.so"
+[[ $(run_sitril) == "say: no "*"(omamobile-gnss)"* ]] || fail "no stub: a note and no mount"
+echo stub > "$st/stubs/libomamobile-sitril-gps.so"
+out=$(run_sitril)
+[[ $out == "mount --bind $st/stubs/libomamobile-sitril-gps.so $st/root/vendor/lib64/libsitril-gps.so"$'\n'"mount -o remount,bind,ro $st/root/vendor/lib64/libsitril-gps.so" ]] ||
+  fail "the stub is bound read-only over libsitril-gps.so (got: $out)"
+[[ $(cat "$st/root/vendor/lib64/libsitril-gps.so") == real ]] || fail "the image's library is left as it was"
+rm -rf "$st"
+grep -q '^    modem_gnss_sitril$' profiles/modem.conf || fail "profile_setup binds the stub with the GNSS devices"
+pass "gnssd gets the SIT RIL GPS stub instead of the binder library"
+
 # rfsd's job: an exit is a crash (the supervisor stops the profile) unless
 # this invocation's stop intent is in place; then it stays open for systemd.
 python3 test/rfsd-lifecycle.py || fail "rfsd's job through an orderly stop"
@@ -149,9 +177,12 @@ grep -qx 'persist.vendor.modem.efs.clear.action=none' modem/props.conf ||
   fail "efs.clear.action is pinned to none (empty clears NV)"
 grep -qx 'vendor.modem.bin.path=/mnt/vendor/modem_img/images/default/modem.bin' modem/props.conf ||
   fail "rfsd reads its TOC from the firmware file (vendor.modem.bin.path)"
+# Only what systemd-analyze says about the staged unit counts: it also loads the
+# host's own units, and a warning about one of those (they begin with the host's
+# unit path) failed the nightly publish on the build host on 2026-11-18.
 if command -v systemd-analyze >/dev/null; then
   systemd-analyze verify --man=no "$stage"/usr/lib/systemd/system/omamobile-modem{.service,-inhibit.service,-boot.target} 2>&1 |
-    grep -v -e 'not executable' -e 'No such file' -e 'omamobile-aoc.service' -e 'omamobile-audio.service' \
+    grep -v -e '^/usr/lib/systemd/' -e '^/lib/systemd/' -e '^/etc/systemd/' -e '^/run/systemd/' -e 'not executable' -e 'No such file' -e 'omamobile-aoc.service' -e 'omamobile-audio.service' \
       -e 'omamobile-sitd.service' -e 'omamobile-sit-data.service' -e 'omamobile-mmd.service' -e '^$' &&
     fail "unit verify" || true
 fi
@@ -338,9 +369,11 @@ if command -v zstd >/dev/null; then
     OMAMOBILE_MODEM_LINK_MODULE=$m/m6/link.ko.zst bash $pol check 2>/dev/null || fail "a zstd-compressed module with #232 is read"
   rm -f "$m/m6/link.ko.zst"
 fi
-# Without a named module, the running kernel's is looked up with modinfo: on
-# this machine there is no pcie_gs201_cp, so the answer is no.
-OMAMOBILE_MODEM_SUSPEND_VERIFIED=$m/m6/verified OMAMOBILE_MODEM_SUSPEND_DISABLE=$m/m6/disable \
+# Without a named module, the running kernel's is looked up with modinfo; a
+# modinfo that finds no pcie_gs201_cp (as on a laptop; makepkg's check on the
+# phone finds the real one) means no.
+mkdir -p "$m/m6/bin"; printf '#!/bin/sh\nexit 1\n' > "$m/m6/bin/modinfo"; chmod +x "$m/m6/bin/modinfo"
+PATH=$m/m6/bin:$PATH OMAMOBILE_MODEM_SUSPEND_VERIFIED=$m/m6/verified OMAMOBILE_MODEM_SUSPEND_DISABLE=$m/m6/disable \
   OMAMOBILE_MODEM_LINK_MODULE= bash $pol inhibit 2>/dev/null || fail "no link module found by modinfo: the inhibitor holds"
 rc=0; bash $pol bogus 2>/dev/null || rc=$?; [[ $rc == 2 ]] || fail "an unknown mode is a usage error"
 reset_m6

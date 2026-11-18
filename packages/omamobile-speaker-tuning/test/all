@@ -47,9 +47,12 @@ done
 python3 "$tmp/stage/usr/bin/omamobile-speaker-tuning" --help >/dev/null || fail "the staged daemon imports its library"
 [[ -z $(find "$tmp/stage" -name '*.so' -o -name '*.mps' -o -name '*.ini') ]] || fail "nothing of Google's or Waves' is staged"
 grep -q '^#OMAMOBILE_SPK_TUNING=off' etc/omamobile/speaker-tuning.conf || fail "tuning is off by default"
+# Only what systemd-analyze says about the staged unit counts: it also loads the
+# host's own units, and a warning about one of those (they begin with the host's
+# unit path) failed the nightly publish on the build host on 2026-11-18.
 if command -v systemd-analyze >/dev/null; then
   systemd-analyze verify --man=no "$tmp/stage/usr/lib/systemd/system/omamobile-speaker-tuning.service" 2>&1 |
-    grep -v -e 'not executable' -e 'No such file' -e 'omamobile-speaker-watch' -e 'omamobile-aoc' -e '^$' && fail "unit verify" || true
+    grep -v -e '^/usr/lib/systemd/' -e '^/lib/systemd/' -e '^/etc/systemd/' -e '^/run/systemd/' -e 'not executable' -e 'No such file' -e 'omamobile-speaker-watch' -e 'omamobile-aoc' -e '^$' && fail "unit verify" || true
 fi
 pass "staged layout, config and unit"
 
