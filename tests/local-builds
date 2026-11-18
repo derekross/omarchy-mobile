@@ -37,6 +37,7 @@ gpgconf --homedir "$R/keys/panther/gnupg" --kill gpg-agent 2>/dev/null || true
 pass "local-key-init makes one signing key in keys/panther, once"
 
 # --- tools/fetch-published ---
+cp tools/lib/signing.sh "$R/tools/lib/"
 mkdir -m 700 "$t/signer" "$t/other"
 GNUPGHOME=$t/signer gpg --batch --quiet --passphrase '' --quick-generate-key "test signer <s@invalid>" ed25519 sign never
 GNUPGHOME=$t/other gpg --batch --quiet --passphrase '' --quick-generate-key "someone else <o@invalid>" ed25519 sign never
@@ -86,8 +87,9 @@ pass "fetch-published refuses an untrusted index, an untrusted package and a cha
 echo "package bytes" > "$srv/foo-1-1-any.pkg.tar.zst"
 sign signer "$srv/foo-1-1-any.pkg.tar.zst"
 make_index signer
-echo "$signer revoked" > "$kr/omamobile-revoked"
+echo "$signer" > "$kr/omamobile-revoked"
 if fetch; then fail "refuses a revoked key"; fi
+grep -q 'index is not signed by a trusted' "$t/log" || { cat "$t/log"; fail "says the revoked key's index is untrusted"; }
 pass "fetch-published refuses a revoked key"
 
 # The published repository moves on: foo 0.2.9 becomes 0.2.10 and bar goes.
@@ -186,6 +188,24 @@ done
 fetch PATH="$t/bin:$PATH" || { cat "$t/log"; fail "fetch-published runs again into its own folder"; }
 grep -q 'omamobile.db.sig$' "$t/curl.log" || { cat "$t/curl.log"; fail "the curl log sees the tool's index download"; }
 pass "fetch-published refuses a folder that holds a repository index, before any download, and leaves it as it was"
+
+# omamobile-revoked is read only in the form docs/RELEASES.md §10 gives: a
+# line in another form (the signer in lowercase, which a looser read takes
+# for no revocation), or a directory in the file's place, stops the run
+# before any download, with the words of tools/lib/signing.sh's check
+for bad in lowercase directory; do
+  [[ $bad != lowercase || $signer == *[A-F]* ]] || { pass "# skip: the signer's fingerprint has no letter to lowercase"; continue; }
+  if [[ $bad == lowercase ]]; then echo "${signer,,}" > "$kr/omamobile-revoked"
+  else rm "$kr/omamobile-revoked" && mkdir "$kr/omamobile-revoked"; fi
+  if why=$(source "$R/tools/lib/signing.sh" && revoked_file_check "$R"); then fail "the check refuses omamobile-revoked as a $bad"; fi
+  d=$t/revoked-$bad && : > "$t/curl.log"
+  if into=$d fetch PATH="$t/bin:$PATH"; then cat "$t/log"; fail "refuses omamobile-revoked as a $bad"; fi
+  grep -qxF "error: $why" "$t/log" || { cat "$t/log"; fail "says why omamobile-revoked as a $bad is refused"; }
+  [[ ! -s $t/curl.log ]] || { cat "$t/curl.log"; fail "fetches nothing with omamobile-revoked as a $bad"; }
+  [[ ! -e $d ]] || fail "makes no DIR with omamobile-revoked as a $bad"
+done
+rmdir "$kr/omamobile-revoked" && : > "$kr/omamobile-revoked"
+pass "fetch-published stops at an omamobile-revoked not in RELEASES §10's form, before any download, with the signing tools' words"
 
 # --- build-packages and build-rootfs --local ---
 mv "$R/keys/panther" "$t/panther-key"
