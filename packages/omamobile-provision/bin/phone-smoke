@@ -1,0 +1,17 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# phone-smoke on the phone: the repository's tools/phone-smoke, unchanged,
+# from this package (docs/INSTALL-LINK-PLAN.md section 6.1 has the install
+# link run `phone-smoke --here --json`). Run here it is always the phone's
+# own test, so --here is added when it is missing: without it the tool would
+# look for a phone over SSH.
+here=0
+for a in "$@"; do
+  case $a in --here|--errors-from|-h|--help) here=1 ;; esac
+done
+((here)) || set -- --here "$@"
+if [[ -z ${SMOKE_DEVICE:-} && -r /usr/share/omamobile/device.conf ]]; then
+  SMOKE_DEVICE=$(sed -n 's/^CODENAME="\{0,1\}\([a-z0-9]*\)"\{0,1\}$/\1/p' /usr/share/omamobile/device.conf | head -n 1)
+  export SMOKE_DEVICE
+fi
+exec /usr/lib/omamobile-provision/phone-smoke "$@"

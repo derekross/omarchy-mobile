@@ -98,3 +98,5 @@ echo "# tests/rootfs-smoke-link"   # the smoke test's install-link checks, on sm
 tests/rootfs-smoke-link
 echo "# tests/build-packages-deps"   # a package's dependencies into the build container, behind a library change too
 tests/build-packages-deps
+echo "# tests/omamobile-provision"   # the provisioning package against tools/, and the byte for byte comparison on a made-up factory image
+tests/omamobile-provision

@@ -1,0 +1,151 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""check-state: what a scratch root holds after omamobile-provision ran or
+was killed there, against what the extraction gives (its own reading of
+the trees, not the worker's code).
+
+  test/check-state [--complete] [--no-camera] ROOT EXPECT [EXPECT...]
+
+EXPECT is an extraction's output (fw, chroot-gnss, chroot-modem, fp-vendor,
+camera); with several, the phone may hold any one generation of each tree,
+never a mix, and the last is the one being installed. At any moment:
+  - a replaced tree that shares its directory (gnss, modem, fingerprint):
+    when its root/ is there, root/ and every other entry of the tree are one
+    generation's, whole;
+  - the sensor registry: absent, or one generation's, whole;
+  - a merged tree (firmware, camera): every file under its final name is a
+    whole file of one generation, and nothing else is there but temporary
+    files;
+  - the modem's checksum file is there only when everything else of the
+    last generation is.
+--complete: the run ended well: all of the above for the last generation,
+no temporary file or working directory anywhere, the files the packages
+own still beside the trees. --no-camera: the camera step failed twice.
+Prints what is wrong and exits 1.
+"""
+
+import hashlib
+import os
+import stat
+import sys
+
+GATED = {"chroot-gnss": "usr/lib/omamobile-vendor/gnss", "chroot-modem": "usr/lib/omamobile-vendor/modem",
+         "fp-vendor": "usr/lib/omamobile-fp"}
+REGISTRY = ("fw/usr/share/omamobile/sensors/registry", "usr/share/omamobile/sensors/registry")
+FIRMWARE = ("fw/usr/lib/firmware/updates", "usr/lib/firmware/updates")
+CAMERA = ("camera", "usr/lib/firmware/omamobile/camera")
+TMP = ".omamobile-provision"
+bad = []
+
+
+def listing(top, only=None, mask=0o7777):
+    out = {}
+    if not os.path.isdir(top) or os.path.islink(top):
+        return None
+    for d, dirs, files in os.walk(top):
+        rel = os.path.relpath(d, top)
+        if rel == ".":
+            rel = ""
+            if only is not None:
+                dirs[:] = [x for x in dirs if x in only]
+                files = [x for x in files if x in only]
+        for n in sorted(dirs) + sorted(files):
+            p = os.path.join(d, n)
+            key = os.path.join(rel, n) if rel else n
+            st = os.lstat(p)
+            if stat.S_ISLNK(st.st_mode):
+                out[key] = ("l", os.readlink(p))
+                if n in dirs:
+                    dirs.remove(n)
+            elif stat.S_ISDIR(st.st_mode):
+                out[key] = ("d", stat.S_IMODE(st.st_mode))
+            else:
+                with open(p, "rb") as f:
+                    out[key] = ("f", stat.S_IMODE(st.st_mode) & mask, hashlib.sha256(f.read()).hexdigest())
+    return out
+
+
+def main():
+    args = sys.argv[1:]
+    complete = "--complete" in args
+    no_camera = "--no-camera" in args
+    args = [a for a in args if not a.startswith("--")]
+    root, expects = args[0], args[1:]
+    whole = {}   # tree -> index of the generation it holds whole, or None
+
+    for name, dest in GATED.items():
+        d = os.path.join(root, dest)
+        whole[name] = None
+        if not os.path.lexists(os.path.join(d, "root")):
+            continue
+        for i, e in enumerate(expects):
+            want = listing(os.path.join(e, name))
+            if listing(d, only={k.split("/")[0] for k in want}) == want:
+                whole[name] = i
+        if whole[name] is None:
+            bad.append(f"{dest}: root/ is there, but the tree is no one generation's, whole")
+
+    d = os.path.join(root, REGISTRY[1])
+    whole["registry"] = None
+    if os.path.lexists(d):
+        have = listing(d)
+        for i, e in enumerate(expects):
+            if have == listing(os.path.join(e, REGISTRY[0])):
+                whole["registry"] = i
+        if whole["registry"] is None:
+            bad.append(f"{REGISTRY[1]}: there, but no one generation's, whole")
+
+    for tag, (src, dest), mask, binonly in (("firmware", FIRMWARE, 0o7777, False), ("camera", CAMERA, 0o755, True)):
+        d = os.path.join(root, dest)
+        have = listing(d) or {}
+        wants = []
+        for e in expects:
+            w = listing(os.path.join(e, src), mask=mask) or {}
+            if binonly:
+                w = {k: v for k, v in w.items() if k.endswith(".bin") and "/" not in k}
+            wants.append(w)
+        for k, v in have.items():
+            if k.endswith(TMP + ".tmp"):
+                if complete:
+                    bad.append(f"{dest}/{k}: a temporary file is left")
+                continue
+            if not any(w.get(k) == v for w in wants):
+                bad.append(f"{dest}/{k}: not a whole file of any generation")
+        whole[tag] = len(expects) - 1 if wants and all(have.get(k) == v for k, v in wants[-1].items()) and wants[-1] \
+            else None
+
+    last = len(expects) - 1
+    nv = os.path.lexists(os.path.join(root, "etc/omamobile/modem-nv.sha256"))
+    need = [t for t in whole if not (t == "camera" and no_camera)]
+    everything = all(whole[t] == last for t in need) and \
+        os.path.exists(os.path.join(root, "var/lib/omamobile-vendor/modem/props.conf")) and \
+        os.path.exists(os.path.join(root, "usr/lib/omamobile-provision/SOURCE"))
+    if nv and not everything:
+        bad.append("modem-nv.sha256 is there before everything else: " +
+                   ", ".join(f"{t}={'whole' if whole[t] == last else 'not yet'}" for t in need))
+    if complete:
+        if not nv:
+            bad.append("no modem-nv.sha256 after a finished run")
+        if not everything:
+            bad.append("not everything is installed: " + ", ".join(t for t in need if whole[t] != last))
+        if no_camera and os.path.isdir(os.path.join(root, CAMERA[1])) and os.listdir(os.path.join(root, CAMERA[1])):
+            bad.append("camera files were installed by a failed camera step")
+        for d, dirs, files in os.walk(root):
+            for n in dirs + files:
+                if TMP + "." in n or n.startswith("work."):
+                    bad.append(f"{os.path.relpath(os.path.join(d, n), root)}: left behind")
+        for f in ("usr/lib/omamobile-fp/omamobile-fp-chroot", "usr/lib/omamobile-vendor/modem/stop-witness-version",
+                  "usr/lib/omamobile-vendor/gnss/props.conf"):
+            try:
+                with open(os.path.join(root, f)) as fh:
+                    if fh.read() != "a package's file\n":
+                        bad.append(f"{f}: a package's file changed")
+            except OSError:
+                bad.append(f"{f}: a package's file is gone")
+    for b in bad:
+        print(b)
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

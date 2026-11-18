@@ -1,0 +1,35 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copy the repository's test of the camera tool's emulator
+# (tests/extract-camera-sve.py) and the tool it loads
+# (tools/extract-camera-data) into test-staged/ (gitignored), with their
+# checksums. tools/build-packages, tools/phone-install-package and
+# tools/repo-build copy the package directory alone into their build and
+# run this first, so the build can run that very test on the library it
+# has just built (test/all --built). Nothing here is edited or packaged.
+#
+#   ./stage-tools            copy them
+#   ./stage-tools --check    exit 0 if test-staged/ matches the repository
+#   ./stage-tools --list     the files, one per line
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+FILES=(tests/extract-camera-sve.py tools/extract-camera-data)
+src=../..
+case ${1:-} in
+  --list) printf '%s\n' "${FILES[@]}"; exit 0 ;;
+  --check)
+    for f in "${FILES[@]}"; do cmp -s "$src/$f" "test-staged/$f" || { echo "test-staged/$f is not $f" >&2; exit 1; }; done
+    (cd test-staged && sha256sum --quiet --strict -c SHA256SUMS) || exit 1
+    exit 0 ;;
+  "") ;;
+  *) echo "usage: ./stage-tools [--check|--list]" >&2; exit 2 ;;
+esac
+for f in "${FILES[@]}"; do
+  [[ -f $src/$f ]] || { echo "stage-tools: no $src/$f (run it in a checkout of the repository)" >&2; exit 1; }
+done
+rm -rf test-staged.new
+mkdir -p test-staged.new/tests test-staged.new/tools
+for f in "${FILES[@]}"; do cp -- "$src/$f" "test-staged.new/$f"; done
+(cd test-staged.new && sha256sum -- "${FILES[@]}" > SHA256SUMS)
+rm -rf test-staged
+mv test-staged.new test-staged

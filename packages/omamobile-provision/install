@@ -1,0 +1,32 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-provision into DESTDIR. It ships programs only: no unit,
+# no hook and no install script, so installing the package runs nothing and
+# starts, stops and enables nothing. omamobile-provision itself runs only
+# when the install link's daemon (or a person, with --development) runs it.
+#
+# The extraction tools and phone-smoke are the repository's own files from
+# tools/, unchanged: ./stage-tools copies them into tools-staged/ (in a
+# checkout this script runs it first, so a stale copy is never packaged),
+# and what is installed is checked against that copy's checksums.
+#   ./install DESTDIR
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+d=${1:?Usage: ./install DESTDIR}
+[[ $d == /* && $d != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+if [[ -f ../../tools/extract-vendor-firmware ]]; then ./stage-tools; fi
+[[ -f tools-staged/SHA256SUMS ]] ||
+  { echo "omamobile-provision: no tools-staged/: run packages/omamobile-provision/stage-tools in the repository first" >&2; exit 1; }
+(cd tools-staged && sha256sum --quiet --strict -c SHA256SUMS) ||
+  { echo "omamobile-provision: tools-staged/ fails its checksums (run ./stage-tools again)" >&2; exit 1; }
+l=$d/usr/lib/omamobile-provision
+while read -r f; do
+  grep -cE "  $f\$" tools-staged/SHA256SUMS >/dev/null || { echo "omamobile-provision: tools-staged/SHA256SUMS does not cover $f" >&2; exit 1; }
+  mode=755; [[ $f == lib/* ]] && mode=644
+  install -Dm"$mode" "tools-staged/$f" "$l/$f"
+done < <(./stage-tools --list)
+install -Dm755 bin/omamobile-provision "$d/usr/bin/omamobile-provision"
+install -Dm755 bin/phone-smoke "$d/usr/bin/phone-smoke"
+install -Dm644 version "$d/usr/share/omamobile/provision/version"
+install -Dm644 README.md "$d/usr/share/doc/omamobile-provision/README.md"
+install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-provision/LICENSE"

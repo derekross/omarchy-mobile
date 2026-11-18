@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: MIT
+# ./stage-tools' copies of tests/extract-camera-sve.py and
+# tools/extract-camera-data: one source, the repository's
+test-staged/

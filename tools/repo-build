@@ -35,6 +35,8 @@ fetch() { "$ssh" "cat '$1'" >"$repo/$(basename "$1")"; }
 for dir in "${dirs[@]}"; do
   name=$(basename "$dir")
   echo "==> $name"
+  # files a package ships from tools/ go into its directory first
+  if [[ -x $dir/stage-tools ]]; then "$dir/stage-tools"; fi
   "$ssh" "rm -rf $build/$name && mkdir -p $build && chown '$phone_user': $build"
   tar cf - --exclude="./$name/pkg" --exclude="./$name/src/build" --exclude="*.pkg.tar.*" \
     -C "$(dirname "$dir")" "./$name" | "$ssh" "tar xf - -C $build --no-same-owner && chown -R '$phone_user': $build/$name"

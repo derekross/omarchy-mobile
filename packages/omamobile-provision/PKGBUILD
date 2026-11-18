@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+pkgname=omamobile-provision
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omarchy Mobile: provisioning on the phone itself (Google's files from the owner's factory image, installed whole or not at all) and the smoke test"
+arch=(any)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+# What the extraction tools run (tools/extract-*): unzip; simg2img and
+# lpunpack from android-tools; debugfs from e2fsprogs; fsck.erofs from
+# erofs-utils; readelf from binutils; od, sha256sum and the rest from
+# coreutils; and for the camera step Python with pyelftools and unicorn.
+# unicorn is omamobile-unicorn's private copy (/usr/lib/omamobile-unicorn/python,
+# put first on the tool's module path): Arch Linux ARM's python-unicorn
+# 2.1.4-2 aborts in the tool's first SVE instruction (packages/omamobile-unicorn).
+# phone-smoke: systemd, pacman, util-linux (runuser), python.
+depends=(bash coreutils findutils grep sed gawk util-linux unzip android-tools e2fsprogs erofs-utils binutils
+         python omamobile-unicorn python-pyelftools systemd pacman)
+checkdepends=(e2fsprogs unzip binutils python)
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}

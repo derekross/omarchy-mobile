@@ -1,0 +1,131 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for omamobile-unicorn, offline, no phone.
+#
+#   test/all                 the package's shape (no built library needed):
+#                            the PKGBUILD pins upstream's tarball by SHA-256,
+#                            builds it Release (assert() compiled out, as
+#                            upstream's wheel is) for the AArch64 target,
+#                            installs only under its private directory and
+#                            licences, provides and conflicts with nothing,
+#                            and ends build() with the checks below
+#   test/all --built DIR     the built private copy (DIR is the directory
+#                            that goes on the Python path; the PKGBUILD's
+#                            build() runs this on what it built, so it
+#                            needs the machine the library was built for):
+#                            test/sve-check.py, then the repository's
+#                            tests/extract-camera-sve.py unchanged, both
+#                            with DIR first on the module path. The abort
+#                            this package exists to avoid (SIGABRT in
+#                            sve_zcr_get_valid_len) fails it by name
+#   test/all --installed     the same for /usr/lib/omamobile-unicorn/python
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+PKG=$PWD
+PRIVATE=usr/lib/omamobile-unicorn/python
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+
+built=""
+case ${1:-} in
+  "") ;;
+  --built) built=${2:?--built needs the private directory} ;;
+  --installed) built=/$PRIVATE ;;
+  *) echo "usage: test/all [--built DIR|--installed]" >&2; exit 2 ;;
+esac
+
+# One Python run against the private copy. Exit 134 or a death by SIGABRT
+# is the assertion: say so.
+run_check() {
+  local what=$1 rc=0; shift
+  (ulimit -c 0; exec python3 -I -B "$PKG/test/sve-check.py" "$built" "$@") > "$t/log" 2>&1 || rc=$?
+  if ((rc == 134)) || grep -c 'sve_zcr_get_valid_len' "$t/log" >/dev/null; then
+    tail -n 5 "$t/log" >&2
+    fail "$what: the abort is back (SIGABRT in Unicorn's sve_zcr_get_valid_len): this library was built with assert() left in"
+  fi
+  ((rc == 0)) || { tail -n 20 "$t/log" >&2; fail "$what (exit $rc)"; }
+}
+
+if [[ -n $built ]]; then
+  [[ -f $built/unicorn/__init__.py && -f $built/unicorn/lib/libunicorn.so.2 ]] ||
+    fail "$built holds the binding (unicorn/) and its library (unicorn/lib/libunicorn.so.2)"
+  t=$(mktemp -d)
+  trap 'rm -rf "$t"' EXIT
+  # The repository's test and the tool it loads: the checkout's when this
+  # package is in one, otherwise the copies ./stage-tools made for the build
+  if [[ -f ../../tests/extract-camera-sve.py && -f ../../tools/extract-camera-data ]]; then
+    real=$(cd ../.. && pwd)
+  else
+    [[ -f test-staged/SHA256SUMS ]] || fail "no tests/extract-camera-sve.py: run ./stage-tools in the repository first"
+    (cd test-staged && sha256sum --quiet --strict -c SHA256SUMS) || fail "test-staged/ passes its checksums"
+    real=$PKG/test-staged
+  fi
+  run_check "the private copy loads and runs our SVE instructions"
+  [[ $(grep -c '^ok - ' "$t/log") == 2 ]] || { cat "$t/log" >&2; fail "test/sve-check.py made its two checks"; }
+  cat "$t/log"
+  run_check "tests/extract-camera-sve.py passes on the private copy" "$real/tests/extract-camera-sve.py" "$real/tools/extract-camera-data"
+  ! grep -c 'SKIP' "$t/log" >/dev/null || { cat "$t/log" >&2; fail "tests/extract-camera-sve.py ran (it skipped: no pyelftools?)"; }
+  n=$(grep -c '^ok - ' "$t/log")
+  ((n == 5)) || { cat "$t/log" >&2; fail "tests/extract-camera-sve.py made its 5 checks (made $n)"; }
+  pass "tests/extract-camera-sve.py, unchanged, passes on the private copy ($n checks, no abort)"
+  if strings -a "$built/unicorn/lib/libunicorn.so.2" 2>/dev/null | grep -c 'end_len < start_len' >/dev/null; then
+    fail "the library holds no text of the assertion (it was built with assert() left in)"
+  fi
+  pass "the library holds no text of the assertion"
+  exit 0
+fi
+
+for f in stage-tools test/all; do bash -n "$f" || fail "$f parses"; done
+python3 -I -B -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' test/sve-check.py || fail "test/sve-check.py parses"
+pass "scripts parse"
+
+# shellcheck disable=SC1091
+( startdir=$PKG; source ./PKGBUILD
+  [[ $pkgname == omamobile-unicorn && $pkgver == 2.1.4 ]] || exit 1
+  [[ ${#source[@]} == 1 && ${#sha256sums[@]} == 1 && ${sha256sums[0]} =~ ^[0-9a-f]{64}$ ]] || exit 2
+  [[ ${source[0]} == "unicorn-$pkgver.tar.gz::https://github.com/unicorn-engine/unicorn/archive/refs/tags/$pkgver.tar.gz" ]] || exit 3
+  [[ ${arch[*]} == aarch64 && ${license[*]} == GPL-2.0-only ]] || exit 4
+  [[ -z ${provides[*]:-}${conflicts[*]:-}${replaces[*]:-}${install:-}${backup[*]:-} ]] || exit 5
+  [[ " ${depends[*]} ${optdepends[*]:-} " != *unicorn* ]] || exit 6
+  [[ $_private == "$PRIVATE" ]] || exit 7
+) && pass "PKGBUILD: upstream's 2.1.4 tarball pinned by SHA-256, GPL-2.0-only, aarch64, and no provides, conflicts, replaces or install script" ||
+  fail "PKGBUILD (exit $?): the pin, the licence, or a provides/conflicts/replaces/install line"
+
+build=$(sed -n '/^build() {/,/^}/p' PKGBUILD)
+grep -c -- '-DCMAKE_BUILD_TYPE=Release' <<<"$build" >/dev/null || fail "build() configures CMAKE_BUILD_TYPE=Release (assert() compiled out, as upstream's wheel)"
+[[ $(grep -c 'CMAKE_BUILD_TYPE' PKGBUILD | head -n 1) -ge 1 && $(grep -c -- '-DCMAKE_BUILD_TYPE=' <<<"$build") == 1 ]] || fail "build() sets one build type"
+! grep -cE -- '-U ?NDEBUG|UNICORN_LOGGING=(ON|on|1)|DEBUG=1' PKGBUILD >/dev/null || fail "nothing turns assertions or debug logging back on"
+pass "build() is a Release build: assert() is compiled out, as in upstream's wheel"
+grep -c -- '-DUNICORN_ARCH=aarch64$\|-DUNICORN_ARCH=aarch64 ' <<<"$build" >/dev/null || fail "build() builds the AArch64 target only"
+pass "build() builds the AArch64 target only"
+[[ $(tail -n 2 <<<"$build" | head -n 1) == *'"$startdir/test/all" --built "$srcdir/stage/$_private"'* ]] ||
+  fail "build() ends by running test/all --built on what it built (so --nocheck can't package a library that aborts)"
+pass "build() ends with test/all --built on the tree it stages"
+
+# Nothing outside the private directory, the licences and the README: no
+# site-packages, no /usr/lib/libunicorn*, no pkg-config file, no headers
+pkgfn=$(sed -n '/^_stage() {/,/^}/p; /^package() {/,/^}/p' PKGBUILD)
+! grep -cE 'site-packages|usr/lib/libunicorn|pkgconfig|usr/include|cmake --install|usr/bin' <<<"$pkgfn" >/dev/null ||
+  fail "package() installs nothing a system-wide unicorn or python-unicorn owns"
+grep -c 'local src=.*d=\$1/\$_private/unicorn' <<<"$pkgfn" >/dev/null || fail "the binding and the library go under the private directory"
+pass "package() installs under /$PRIVATE, the licences and the README only"
+
+./stage-tools --list > /dev/null || fail "stage-tools --list"
+if [[ -d ../../.git || -f ../../.git ]]; then
+  git check-ignore -q "$PKG/test-staged/SHA256SUMS" || fail "the staged copies are gitignored"
+  [[ -z $(git ls-files "$PKG/test-staged") ]] || fail "no staged copy is committed"
+  pass "the staged test copies are gitignored and not committed"
+fi
+
+# The one package that uses this copy asks for it, not for the
+# distribution's python-unicorn, and puts it first on the tool's path
+if [[ -f ../omamobile-provision/PKGBUILD ]]; then
+  ( startdir=$PKG/../omamobile-provision; source ../omamobile-provision/PKGBUILD
+    [[ " ${depends[*]} " == *" omamobile-unicorn "* && " ${depends[*]} " != *" python-unicorn "* &&
+       " ${depends[*]} " == *" python-pyelftools "* ]] ) ||
+    fail "omamobile-provision depends on omamobile-unicorn and python-pyelftools, not on python-unicorn"
+  grep -c "\"/$PRIVATE\"" ../omamobile-provision/bin/omamobile-provision >/dev/null ||
+    fail "omamobile-provision names /$PRIVATE"
+  pass "omamobile-provision depends on this package and names its directory"
+fi
+echo "omamobile-unicorn: all tests passed"
