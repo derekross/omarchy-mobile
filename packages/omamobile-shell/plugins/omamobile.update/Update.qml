@@ -42,6 +42,7 @@ Item {
   property var lastResult: null
   property string stepText: ""
   property string progressText: ""
+  property string liveLine: ""  // the transient progress line (pacman \r bar), shown at the end of Details
   property var detailLines: []
   property bool detailsOpen: false
   property string authError: ""
@@ -139,6 +140,8 @@ Item {
     detailLines = []
     stepText = "Starting"
     progressText = ""
+    liveLine = ""
+    detailsOpen = true
     page = "progress"
     tailProc.running = false
     Qt.callLater(function() { tailProc.running = true })
@@ -150,14 +153,20 @@ Item {
     if (ev.kind === "step") {
       stepText = ev.text
       progressText = ""
+      liveLine = ""
       detailLines = UpdateModel.appendDetail(detailLines, "== " + ev.text)
     } else if (ev.kind === "line") {
       progressText = ev.text
+      liveLine = ""
       detailLines = UpdateModel.appendDetail(detailLines, ev.text)
     } else if (ev.kind === "progress") {
-      progressText = ev.text
+      // pacman pads its bar line with runs of spaces; squeeze them so the line fits a phone
+      progressText = ev.text.replace(/\s{2,}/g, "  ")
+      liveLine = progressText
     } else if (ev.kind === "result") {
       lastResult = ev.result
+      liveLine = ""
+      detailsOpen = false  // the result page keeps Details collapsed, as before
       page = "result"
       tailProc.running = false
       updateAvailable = false
@@ -199,6 +208,8 @@ Item {
         recent = Date.now() - Date.parse(st.last.finished) < 30 * 60 * 1000
         if (recent || statusProc.openAfter) {
           root.lastResult = st.last
+          root.liveLine = ""
+          root.detailsOpen = false
           root.page = "result"
           if (!root.opened && root.shell && typeof root.shell.summon === "function")
             root.shell.summon((root.manifest && root.manifest.id) || "omamobile.update", "{}")
@@ -639,6 +650,8 @@ Item {
             opacity: 0.75
             font.family: Style.font.family
             font.pixelSize: Readable.px(Style.font.caption)
+            wrapMode: Text.WrapAnywhere
+            maximumLineCount: 3
             elide: Text.ElideRight
           }
 
@@ -814,7 +827,14 @@ Item {
             contentHeight: detailsText.implicitHeight
             clip: true
             boundsBehavior: Flickable.StopAtBounds
-            onContentHeightChanged: if (contentHeight > height) contentY = contentHeight - height
+            // Follow the newest line unless the user scrolled up; opening shows the newest lines
+            property bool stick: true
+            function toEnd() { contentY = Math.max(0, contentHeight - height) }
+            onMovementStarted: stick = false
+            onMovementEnded: stick = atYEnd
+            onVisibleChanged: if (visible) { stick = true; toEnd() }
+            onHeightChanged: if (stick && !moving) toEnd()
+            onContentHeightChanged: if (stick && !moving) toEnd()
 
             Rectangle {
               width: detailsFlick.width
@@ -828,7 +848,7 @@ Item {
               width: detailsFlick.width
               padding: Style.spacing.lg
               textFormat: Text.PlainText
-              text: root.detailLines.join("\n")
+              text: root.detailLines.concat(root.liveLine ? [root.liveLine] : []).join("\n")
               color: root.foreground
               font.family: "monospace"
               font.pixelSize: Readable.px(Style.font.caption - 1)
