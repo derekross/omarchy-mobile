@@ -5,9 +5,10 @@ Prepared 2026-11-08 and rebased onto main on 2026-11-17: descriptor and
 inert boot policy only. Preparing it contacted no phone; the hardware
 history it relies on, from 2026-10-28 on, is in [NOTES.md](NOTES.md) by
 date. The comet board DTS (`dt-bindings` commit first, new nodes
-disabled) and the USB glue are their own linux-omarchy-mobile pull
-requests, linux-omarchy-mobile#273 and #271; this descriptor builds
-from public code only once they land.
+disabled, USB on the Pixel 9a's plain `snps,dwc3` node) is its own
+linux-omarchy-mobile pull request, #273; this descriptor builds from
+public code only once it lands. The dwc3 glue (#271) is closed: a cold
+boot of #273's DT showed the plain node binds without it.
 Kernel #80 is closed, not a merge dependency. A later owner-approved
 enablement and qualification is still required.
 

@@ -3,11 +3,11 @@
 
 Staged boot policy for the Pixel 9 Pro Fold (comet, Tensor G4 / zumapro).
 This is not a supported install profile. The descriptor needs the separate
-public Comet board DTS and USB glue before it can build from upstream.
-The per-device build fragment selects that glue as a module; it does not
-enable USB in the board DTS. Release builds exclude per-device fragments,
-and this candidate is not a release-build profile. The separately prepared
-board subset leaves USB disabled and needs its own attended qualification.
+public Comet board DTS (linux-omarchy-mobile#273) before it can build from
+upstream. That DTS enables USB on the Pixel 9a's plain `snps,dwc3` node,
+which the shared kernel config builds in, so comet has no per-device build
+fragment. Everything else the DTS leaves disabled needs its own attended
+qualification.
 
 The package installs the descriptor, reboot-to, USB networking at metric
 2000, storage-hiding udev rules, power-key/lid logind policy, shutdown watchdog
