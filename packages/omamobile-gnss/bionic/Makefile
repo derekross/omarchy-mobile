@@ -7,7 +7,8 @@
 #   prebuilt/omamobile-gnss-client the Pixel 9a GNSS HAL client (gnss-slsi profile)
 #
 #   make NDK=/opt/android-ndk          (Android NDK r27 or later; the
-#                                       pinned one: NDK="$(tools/fetch-ndk --print)")
+#                                       pinned one: tools/fetch-ndk, then
+#                                       make NDK="$(tools/fetch-ndk --print)")
 #   make CLANG=... BIONIC=... CHROOT=...
 #                                      (an AOSP/LineageOS tree's prebuilt
 #                                       clang and bionic headers, linked

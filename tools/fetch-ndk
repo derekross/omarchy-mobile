@@ -5,18 +5,26 @@
 # Google's download host, checked against the SHA-256 and the size recorded
 # there before anything is unpacked.
 #
-#   tools/fetch-ndk [--dir DIR] [--lock FILE] [--print]
-#     --dir    where the NDK is kept (default $OMAMOBILE_NDK_DIR, else
-#              ~/.cache/omamobile/ndk: outside the repository)
-#     --lock   the pin (default tools/ndk.lock): RELEASE REVISION SHA256 SIZE URL
-#     --print  print only the NDK's path, for
-#              make -C packages/omamobile-gnss/bionic NDK="$(tools/fetch-ndk --print)"
+#   tools/fetch-ndk [--dir DIR] [--lock FILE] [--any-host]
+#   tools/fetch-ndk --print [--dir DIR] [--lock FILE]
+#     --dir       where the NDK is kept (default $OMAMOBILE_NDK_DIR, else
+#                 ~/.cache/omamobile/ndk: outside the repository)
+#     --lock      the pin (default tools/ndk.lock): RELEASE REVISION SHA256 SIZE URL
+#     --print     print only the path of the NDK already fetched, for
+#                 make -C packages/omamobile-gnss/bionic NDK="$(tools/fetch-ndk --print)";
+#                 never downloads: without the NDK it stops and says to run
+#                 tools/fetch-ndk first
+#     --any-host  fetch on a computer that isn't x86_64 all the same
+#
+# So the two steps are: tools/fetch-ndk, then the make with --print.
 #
 # The archive is about 740 MB and the NDK about 2.5 GB unpacked; an NDK that
 # is already there, with the pinned revision in its source.properties, is
 # used as it is. The archive is removed once it is unpacked. Google builds
 # the NDK's compilers for x86_64 Linux (and macOS), so the make runs on an
-# x86_64 build host. Nothing is built or installed here.
+# x86_64 build host, and a fetch elsewhere stops unless asked for. The
+# download is held to HTTPS, redirects included. Nothing is built or
+# installed here.
 #
 # Licence: the NDK is Google's (Apache-2.0 and others; its NOTICE files are
 # in the tree). The project redistributes none of it.
@@ -29,11 +37,13 @@ say() { ((quiet)) || printf '\e[1m==> %s\e[0m\n' "$*" >&2; }
 dir=${OMAMOBILE_NDK_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile/ndk}
 lock=$ROOT/tools/ndk.lock
 quiet=0
+any_host=0
 while (($#)); do
   case $1 in
     --dir) dir=${2:?--dir needs a directory}; shift ;;
     --lock) lock=${2:?--lock needs a file}; shift ;;
     --print) quiet=1 ;;
+    --any-host) any_host=1 ;;
     -h|--help) source "$ROOT/tools/lib/usage.sh"; usage_from_header "$self"; exit 0 ;;
     *) die "unknown argument $1" ;;
   esac
@@ -47,8 +57,8 @@ read -r release revision sum size url < <(grep -v '^[[:space:]]*\(#\|$\)' "$lock
 [[ $url == https://dl.google.com/android/repository/* || $url == file://* ]] ||
   die "$lock: the NDK comes from https://dl.google.com/android/repository/"
 
-mkdir -p "$dir"
-dir=$(cd -- "$dir" && pwd)
+((quiet)) || mkdir -p "$dir"
+[[ -d $dir ]] && dir=$(cd -- "$dir" && pwd)
 ndk=$dir/android-ndk-$release
 has_revision() { [[ $(sed -n 's/^Pkg\.Revision *= *//p' "$1/source.properties" 2>/dev/null | tr -d '\r') == "$revision" ]]; }
 
@@ -58,19 +68,23 @@ if has_revision "$ndk"; then
   exit 0
 fi
 [[ -e $ndk ]] && die "$ndk is there but isn't the NDK $release ($revision): remove it first"
+((quiet)) && die "the NDK $release isn't in $dir yet: run tools/fetch-ndk first"
+[[ $(uname -m) == x86_64 ]] || ((any_host)) ||
+  die "this computer is $(uname -m): the NDK's compilers run on x86_64 Linux only (--any-host to fetch it all the same)"
 
 command -v curl >/dev/null || die "curl is needed"
 if command -v unzip >/dev/null; then unpack() { unzip -q "$1" -d "$2"; }
 elif command -v bsdtar >/dev/null; then unpack() { bsdtar -xf "$1" -C "$2"; }
 else die "unzip or bsdtar is needed (they keep the compilers executable)"; fi
-[[ $(uname -m) == x86_64 ]] || say "this host is $(uname -m): the NDK's compilers run on x86_64 Linux only"
 
-part=$dir/.android-ndk-$release.zip.part
+# Each run downloads and unpacks under names of its own, so two runs at once
+# can't mix their files; the second to finish finds the NDK in place.
+part=$dir/.android-ndk-$release.zip.$$.part
 work=$dir/.unpack-$$
 trap 'rm -rf "$work" "$part"' EXIT
 say "downloading the NDK $release ($((size / 1000000)) MB) from ${url%%/android-ndk-*}"
-if ((quiet)); then progress=(-sS); else progress=(--progress-bar); fi
-curl -fL --retry 3 "${progress[@]}" -o "$part" "$url" || die "the download failed"
+curl -fL --retry 3 --progress-bar --proto '=https,file' --proto-redir '=https' -o "$part" "$url" ||
+  die "the download failed"
 got_size=$(stat -c %s "$part")
 [[ $got_size == "$size" ]] || die "the download is $got_size bytes, not the pinned $size: nothing unpacked"
 got=$(sha256sum "$part" | cut -d' ' -f1)
@@ -80,6 +94,8 @@ mkdir -p "$work"
 unpack "$part" "$work" || die "unpacking failed"
 [[ -d $work/android-ndk-$release ]] && has_revision "$work/android-ndk-$release" ||
   die "the archive holds no android-ndk-$release with revision $revision"
-mv "$work/android-ndk-$release" "$ndk"
+if ! mv -T "$work/android-ndk-$release" "$ndk" 2>/dev/null; then
+  has_revision "$ndk" || die "could not put the NDK in $ndk"
+fi
 say "the NDK $release ($revision) is in $ndk"
 printf '%s\n' "$ndk"
