@@ -338,7 +338,12 @@ class SleepHold:
     goes at logind's announcement. After the sleep it waits for something
     else to lead out again, or for RETURN_GRACE without that: put back at
     once, it carried a few seconds of traffic at every wake, and the answers
-    to that traffic ended the next sleeps early.
+    to that traffic ended the next sleeps early. That wait is for Wi-Fi, so
+    it applies only when something else led out before the sleep: when the
+    bearer was already the only way out (Wi-Fi off or out of reach), the
+    route comes back at once, or mobile data would be off for the first
+    RETURN_GRACE seconds of every wake (2026-11-15, the 9a with Wi-Fi off:
+    a ping 5 s after each of 155 wakes got only its last echo back).
     """
 
     def __init__(self, grace=RETURN_GRACE):
@@ -346,18 +351,25 @@ class SleepHold:
         self.sleeping = False
         self.held = False       # the route is ours to bring back
         self.back_at = None     # when it returns if nothing else leads out
+        self.alone = False      # the bearer was the only way out before the sleep
 
     @property
     def active(self):
         """True while the route's presence is this class's business."""
         return self.sleeping or self.back_at is not None
 
-    def announced(self, routed):
-        """A sleep is starting. True when the route has to go now."""
+    def announced(self, routed, alone=False):
+        """A sleep is starting. True when the route has to go now. alone:
+        the bearer was the only way out just before it (read before the
+        announcement, since NetworkManager takes Wi-Fi down at the same
+        signal)."""
         if self.sleeping:
             return False
         self.sleeping = True
-        # Still waiting to return after the last sleep counts as held.
+        # Still waiting to return after the last sleep counts as held, and
+        # keeps what was known about Wi-Fi before that sleep.
+        if self.back_at is None:
+            self.alone = routed and alone
         self.held = routed or self.back_at is not None
         self.back_at = None
         return routed
@@ -368,7 +380,7 @@ class SleepHold:
             return
         self.sleeping = False
         if self.held and allowed:
-            self.back_at = now + self.grace
+            self.back_at = now + (0 if self.alone else self.grace)
         self.held = False
 
     def returns(self, others, now):
@@ -463,7 +475,9 @@ def main():
                 return
             routes = json.loads(run('ip', '-j', 'route', 'show', 'default'))
             routed = any(r.get('dev') == dev and r.get('metric') == 700 for r in routes)
-            if hold.announced(routed):
+            # `last` is the path the previous check saw, before NetworkManager
+            # heard of the sleep: True when cellular was the only way out.
+            if hold.announced(routed, alone=last is True):
                 run('ip', 'route', 'del', 'default', 'dev', dev, 'metric', '700')
                 print('Sleep announced; the cellular default route is away until it is over', flush=True)
         sleeps = SleepWatch()
