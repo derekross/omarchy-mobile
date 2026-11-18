@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile storage guard, continued in Arch. The initramfs marks every UFS
+# partition read-only except slot B's boot images and userdata, and removes
+# the whole-disk node of the main LUN. udev would recreate /dev/sda, so make
+# the whole-disk node inaccessible and keep desktop tools from touching any
+# Android partition.
+SUBSYSTEM=="block", KERNEL=="sda", MODE="0000", ENV{UDISKS_IGNORE}="1"
+SUBSYSTEM=="block", KERNEL=="sd[a-d][0-9]*", ENV{ID_PART_ENTRY_NAME}!="userdata", ENV{UDISKS_IGNORE}="1"

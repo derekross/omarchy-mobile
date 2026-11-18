@@ -156,7 +156,7 @@ grep -cx 'checked: efs efs_backup modem_userdata persist modem_a modem_b' "$B/NV
 grep -cx "efs $(dev_of efs) ro=1 mounted=0 1536" "$B/partitions.txt" >/dev/null || fail "partitions.txt: $(cat "$B/partitions.txt")"
 grep -c 'This backup is private' <<<"$out" >/dev/null || fail "the run warns that the backup is private"
 grep -c 'IMEI' <<<"$out" >/dev/null || fail "the warning names the IMEI"
-grep -c "tools/phone-provision --nv-backup $B" <<<"$out" >/dev/null || fail "the run names the next step"
+grep -c "tools/phone-provision --first-install --nv-backup $B" <<<"$out" >/dev/null || fail "the run names the next step"
 grep -c 'verified against the phone' <<<"$out" >/dev/null || fail "each copy is verified against the phone"
 # Each partition read with dd and read again with sha256sum on the phone
 for p in $parts; do

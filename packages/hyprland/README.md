@@ -2,7 +2,7 @@
 # hyprland (Omarchy Mobile build)
 
 This is Omarchy's Hyprland 0.57.0-2 recipe (`hyprland` and `hyprpm`), built
-for aarch64 with one change. Hyprland gave up on a refused DPMS commit after
+for aarch64 with two changes. Hyprland gave up on a refused DPMS commit after
 a single retry, and aquamarine refuses commits while a page flip is in
 flight. So when a client kept rendering, DPMS off was lost: Hyprland
 reported the screen off, but the CRTC never turned off. See
@@ -13,14 +13,30 @@ reported the screen off, but the CRTC never turned off. See
 | `PKGBUILD` | Omarchy's `pkgbuilds/hyprland/PKGBUILD` at `347f3d791489` (omacom-io/omarchy-pkgs), changes in its header |
 | `nvidia-egl-teardown.patch`, `wl-output-global-grace.patch`, `monitor-rule-vrr.patch` | Omarchy's patches from the same commit, unchanged (what they fix: their comments in `prepare()`) |
 | `0001-dpms-keep-retrying-a-refused-dpms-commit.patch` | The Omarchy Mobile change to `src/output/Monitor.cpp` |
+| `0002-render-hold-the-last-frame-across-a-rotation.patch` | The Omarchy Mobile change to `src/render/Renderer.cpp` and `src/render/OpenGL.cpp` (the rotation hold, below) |
 
 ## What differs from Omarchy's `hyprland` 0.57.0-2
 
 - The DPMS patch. A refused DPMS commit is retried every two frames for up
   to a second instead of once.
-- `pkgrel=3.1`: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
+- The rotation hold (0002). After a transform change the output keeps its
+  last frame until every mapped layer surface has drawn at its new size
+  (its buffer too, and a second buffer or 50 ms more), or 500 ms; layers
+  and the active workspaces get their frame callbacks once per refresh
+  meanwhile. Then the new frame turns in on Android's (0.2, 0, 0, 1) curve,
+  over 283 ms for a quarter turn and 383 ms for a half turn, and the old one,
+  kept where it was on the glass, turns with it and fades out over 116 ms on
+  Android's alpha-out curve (0.57, 0, 0.71, 0.43). On a Pixel 7 the holds took
+  106 to 228 ms; without the patch the old buffers showed stretched for
+  200 ms to a second. It is off unless `OMAMOBILE_ROTATION_HOLD=1` is in
+  Hyprland's environment (read once at startup): `omamobile-device-panther`
+  sets it in `environment.d`, and the other phones rotate as before until
+  it has run on them.
+- `pkgrel=3.3`: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
   (`extra/hyprland` 0.57.0-3, a rebuild for aquamarine 0.16.0 and
-  hyprgraphics 0.6.0) release, plus `.1`, so it sorts above both.
+  hyprgraphics 0.6.0) release, plus `.1`, so it sorts above both; `.2` for
+  the rotation hold, since 3.1 is published; `.3` for the half turn's
+  383 ms and the alpha-out curve, since 3.2 is published.
 - `arch=(aarch64)` only.
 - `build()` runs the two cmake steps of `make release` itself:
   - with Arch's `-DCMAKE_SKIP_RPATH=ON` (Arch's PKGBUILD seds it into the

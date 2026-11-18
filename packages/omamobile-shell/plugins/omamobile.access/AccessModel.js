@@ -55,6 +55,13 @@ function answerArgv(id, allow) {
   return ["busctl", "--user", "call", BUS_NAME, SHEET_PATH, SHEET_IFACE, "Answer", "ss", String(id), allow ? "allow" : "deny"]
 }
 
+// Back on the sheet: the request ends unanswered. The service then denies
+// this one request and the portal stores nothing, so the app asks again next
+// time; "deny" would be remembered as the app's permanent "no".
+function dismissArgv(id) {
+  return ["busctl", "--user", "call", BUS_NAME, SHEET_PATH, SHEET_IFACE, "Answer", "ss", String(id), "dismiss"]
+}
+
 // A first letter for the icon tile when the app has no icon.
 function initial(name) {
   var s = String(name || "").trim()
@@ -65,6 +72,6 @@ if (typeof module !== "undefined") {
   module.exports = {
     BUS_NAME: BUS_NAME, SHEET_PATH: SHEET_PATH, SHEET_IFACE: SHEET_IFACE,
     parseRequest: parseRequest, enqueue: enqueue, remove: remove, idOf: idOf,
-    answerArgv: answerArgv, initial: initial
+    answerArgv: answerArgv, dismissArgv: dismissArgv, initial: initial
   }
 }

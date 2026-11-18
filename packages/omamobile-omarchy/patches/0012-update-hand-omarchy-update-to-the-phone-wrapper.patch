@@ -9,11 +9,22 @@
 # Omarchy's update runs unwrapped, as before. Escape hatch:
 # OMAMOBILE_UPDATE=1 omarchy-update.
 #
-# Against Omarchy 4.0.4 (edge 4.0.4-2; tag v4.0.4).
+#
+# Omarchy 4.5 port: the handoff is unchanged and still the first thing the
+# script does, before 4.5's transcript (script), its update lock and its
+# sudo keep-alive. 4.5 split the restart step into --services-only (found
+# on PATH, so the phone's stand-in runs it) and a final --reboot-only run
+# by its absolute path in $OMARCHY_PATH/bin, which would skip the stand-in
+# and decide "kernel updated" from vmlinuz/modules ownership, wrong for a
+# phone booting slot B. Under OMAMOBILE_UPDATE only, that last call goes
+# through PATH too; a desktop runs it exactly as before. 4.5's new boot
+# verification (omarchy-update-boot) is a stand-in on the phone as well
+# (packages/omamobile-omarchy lib/update-bin).
+
 diff --git i/bin/omarchy-update w/bin/omarchy-update
 --- i/bin/omarchy-update
 +++ w/bin/omarchy-update
-@@ -7,6 +7,14 @@
+@@ -8,6 +8,14 @@
  
  set -e
  
@@ -25,6 +36,21 @@ diff --git i/bin/omarchy-update w/bin/omarchy-update
 +  exec /usr/bin/omamobile-update "$@"
 +fi
 +
- if [[ -z ${OMARCHY_UPDATE_LOGGED:-} ]]; then
-   script_command=$(printf '%q ' "$0" "$@")
-   exec env OMARCHY_UPDATE_LOGGED=1 script -qefc "$script_command" "/tmp/omarchy-update.log"
+ update_stay_awake_stopped=0
+ sudo_keepalive_pid=""
+ 
+@@ -147,7 +155,13 @@
+   fi
+ 
+   if (( boot_verified )); then
+-    "$OMARCHY_PATH/bin/omarchy-update-restart" --reboot-only
++    # Omarchy Mobile: under omamobile-update the phone's stand-in on PATH
++    # decides about a restart (slot B, not a vmlinuz), and asks nothing.
++    if [[ -n ${OMAMOBILE_UPDATE:-} ]]; then
++      omarchy-update-restart --reboot-only
++    else
++      "$OMARCHY_PATH/bin/omarchy-update-restart" --reboot-only
++    fi
+   else
+     echo -e "\e[31m\nThe update is not finished: its boot files did not pass verification (see above). Do not reboot until omarchy update completes.\e[0m" >&2
+     exit 1

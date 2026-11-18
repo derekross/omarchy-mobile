@@ -1,0 +1,4 @@
+#!/bin/bash
+# fake pgrep: the shell's pid is 4242, nothing else is running
+[[ $* == *quickshell* ]] && echo 4242
+exit 0

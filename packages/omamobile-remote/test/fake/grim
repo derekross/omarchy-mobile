@@ -1,0 +1,11 @@
+#!/bin/bash
+# fake grim: writes a PNG-sized file; a geometry crop is small, a full frame is big
+echo "grim $*" >> "$FAKE_LOG"
+# a hang that never clears
+[[ -f $FAKE_STATE/grim-hang-always ]] && { sleep 30; exit 0; }
+# a one-off hang (display looks on, no frame comes): the marker file is consumed by the first call
+if [[ -f $FAKE_STATE/grim-hang ]]; then rm -f "$FAKE_STATE/grim-hang"; sleep 30; exit 0; fi
+# a display that is off: grim never finishes until something wakes it
+if [[ $(cat "$FAKE_STATE/dpms" 2>/dev/null || echo 1) == 0 ]]; then sleep 30; exit 0; fi
+out=${@: -1}
+if [[ $* == *-g* ]]; then head -c 2000 /dev/zero > "$out"; else head -c "${FAKE_SHOT_BYTES:-80000}" /dev/zero > "$out"; fi

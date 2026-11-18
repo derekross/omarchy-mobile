@@ -65,6 +65,23 @@ class ServiceTests(unittest.TestCase):
         other=app_service.database(self.root/'db')
         self.assertEqual(other.execute('SELECT state FROM outgoing').fetchone()[0],'unknown'); other.close()
 
+    def test_refused_tegu_gain_does_not_fail_call_signalling(self):
+        self.service.settings['audio']['card'] = 'auto'
+        self.client.request.side_effect = [bytes(4), b'']
+        with patch.object(app_service, 'aoc_card', return_value=3), \
+             patch.object(app_service, 'VoiceAudio') as route:
+            route.return_value.__enter__.side_effect = app_service.AudioRefused('gain mismatch')
+            call = self.service.dispatch(dict(action='dial', number='+12025550123'))
+        self.assertEqual(self.service.calls[call['call']]['state'], 'dialing')
+        self.assertEqual([c.args[0] for c in self.client.request.call_args_list], [0x0000, 0x0d00])
+        self.assertIsNone(self.service.audio)
+
+    def test_tegu_route_is_reported_as_speakerphone(self):
+        self.service.audio = MagicMock(tegu=True)
+        self.assertTrue(self.service.status()['audio']['speaker'])
+        self.service.audio.tegu = False
+        self.assertFalse(self.service.status()['audio']['speaker'])
+
     def test_failed_radio_off_still_requires_reboot_without_claiming_release(self):
         self.client.request.side_effect = TimeoutError()
         with patch.object(app_service, 'radio', side_effect=OSError()), \
@@ -138,6 +155,56 @@ class ServiceTests(unittest.TestCase):
         self.service.dispatch(dict(action='screen-state',on=True))
         self.assertTrue(self.service.screen_on)
         self.client.request.assert_called_with(0x0928,b'\xff'*4,timeout=5)
+
+    def test_the_modem_follows_the_panel(self):
+        light=self.root/'backlight'/'panel'; light.mkdir(parents=True)
+        power=light/'bl_power'
+        def at(t, value=None):
+            if value is not None: power.write_text(value+'\n')
+            self.client.request.reset_mock()
+            self.service.follow_screen(now=t)
+            return [c.args for c in self.client.request.call_args_list]
+        with patch.object(app_service,'BACKLIGHT',self.root/'backlight'), patch('builtins.print'):
+            # Off by default: nothing is sent, and the sleep hook's request
+            # is answered without a word to the modem.
+            self.assertFalse(app_service.Service(self.client,self.db,paths.config(self.root/'none.conf')).follow)
+            self.service.follow=False
+            power.write_text('4\n')
+            self.assertEqual(at(0),[])
+            self.assertEqual(self.service.dispatch(dict(action='screen-state',on=False,hold=10)),
+                             dict(screen_on=None,following=False))
+            self.client.request.assert_not_called()
+            self.service.follow=True
+            self.assertEqual(at(0,'0'),[(0x0902,b'\x01\0\0\0'),(0x0928,b'\xff'*4)])
+            self.assertEqual(at(1,'4'),[])                        # checked every 2 s
+            self.assertEqual(at(2),[(0x0902,bytes(4)),(0x0928,bytes(4))])
+            self.assertEqual(at(4),[])                            # no change, no request
+            self.assertEqual(at(6,'0'),[(0x0902,b'\x01\0\0\0'),(0x0928,b'\xff'*4)])
+            # During a call the reports stay on.
+            call=self.service.new_call('+12025550123','incoming','ringing-in',7)
+            self.assertEqual(at(8,'4'),[])
+            call['state']='terminated'
+            self.assertEqual(at(10),[(0x0902,bytes(4)),(0x0928,bytes(4))])
+            # A failed request waits 30 s.
+            self.client.request.side_effect=TimeoutError()
+            at(12,'0'); self.assertIsNone(self.service.screen_on)
+            self.client.request.side_effect=None
+            self.assertEqual(at(20),[])
+            self.assertEqual(at(42),[(0x0902,b'\x01\0\0\0'),(0x0928,b'\xff'*4)])
+            # No backlight that reads: nothing is guessed.
+            power.unlink()
+            self.assertEqual(at(50),[])
+            self.assertTrue(self.service.screen_on)
+            # The sleep hook's "off" holds against a lit panel, then lapses.
+            power.write_text('0\n')
+            with patch.object(app_service.time,'monotonic',return_value=100):
+                self.service.dispatch(dict(action='screen-state',on=False,hold=10))
+            self.assertFalse(self.service.screen_on)
+            self.assertEqual(at(105),[])
+            self.assertEqual(at(110),[(0x0902,b'\x01\0\0\0'),(0x0928,b'\xff'*4)])
+            for bad in (-1, 61, True, '5'):
+                with self.assertRaises(ValueError):
+                    self.service.dispatch(dict(action='screen-state',on=False,hold=bad))
 
     def test_public_state_has_no_numbers(self):
         self.service.new_call('+12025550123','incoming','ringing-in',7)

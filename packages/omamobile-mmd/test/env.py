@@ -56,13 +56,33 @@ class PrivateBus:
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.address = 'unix:path=' + self.path
         deadline = time.monotonic() + 10
-        while not os.path.exists(self.path):
-            if time.monotonic() > deadline or self.proc.poll() is not None:
-                raise RuntimeError('private dbus-daemon did not start')
-            time.sleep(.02)
-        self.connection = Gio.DBusConnection.new_for_address_sync(
-            self.address, Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT |
-            Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION, None, None)
+        try:
+            while not os.path.exists(self.path):
+                if time.monotonic() > deadline or self.proc.poll() is not None:
+                    raise RuntimeError('private dbus-daemon did not start')
+                time.sleep(.02)
+            while True:
+                try:
+                    self.connection = Gio.DBusConnection.new_for_address_sync(
+                        self.address, Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT |
+                        Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION, None, None)
+                    break
+                except GLib.Error as error:
+                    # bind() creates the socket before listen() accepts clients.
+                    if not error.matches(Gio.io_error_quark(), Gio.IOErrorEnum.CONNECTION_REFUSED):
+                        raise
+                    if time.monotonic() > deadline or self.proc.poll() is not None:
+                        raise RuntimeError('private dbus-daemon did not start') from error
+                    time.sleep(.02)
+        except BaseException:
+            if self.proc.poll() is None:
+                self.proc.terminate()
+                try:
+                    self.proc.wait(5)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill()
+                    self.proc.wait()
+            raise
 
     def close(self):
         self.connection.close_sync(None)

@@ -404,6 +404,61 @@ speaker calibration is never committed.
    speaker protection.
 6. **R5:** sensors (auto-rotate) through the same AoC.
 
+## R6: raven's own speaker limits (2026-10-27, `gb3d6253b0d61`, omamobile-audio 0.4.4)
+
+**Stock's values.** Raven's `mixer_paths.xml` (its factory vendor image)
+sets `AMP PCM Gain` 17 and `Digital PCM Volume` 817 on both amplifiers, as
+cheetah's, so stage media (737/10) sits as far below stock on raven as on
+cheetah. The one raven difference is the boost peak current: 3.50 A by
+default, lowered in the `speaker` path to 1.70 A top and 1.90 A bottom
+(3.50 A only in voice-speaker and speaker-safe). Mainline has no control
+for it and takes it from the DT at probe, so raven played at 3.50 A.
+`omamobile-gs101-audio` 9551be2e5 sets 1700/1900 mA (needs the human's
+sign-off); checked as an overlay: `BSTCVRT_PEAK_CUR` (0x3808) read 0x12 and
+0x16 instead of 0x36.
+
+**C9a on raven, stage media (737/10):** passed. The sense paths during
+playback (bounded read, never past 0x10100): `0x2018` 0x3721 (VMON, IMON
+on), DSP inputs `0x18 0x19 0x28 0x29 0x3a`, cheetah's values. The firmware
+ran throughout (halo 2, state 0, errorno 0, calibration set 2, the
+heartbeat about 1520 a second, no freeze), both coils at 23.00-23.04 C at
+-20 dBFS; at -10 dBFS both tracked the signal (+0.15 C top, +0.11 C
+bottom per 10 s burst, back down within about 4 s). `verify` passed and
+wrote the stamp. The human heard both speakers, clean. `vmon low` reads 1
+at every level tried.
+
+**Stepping up** (stage c9, `speaker_protection=1` from
+`/etc/modprobe.d/omamobile-audio-c9-bringup.conf`; one -20 dBFS multitone
+burst per step unless noted, stop on a jump over 2 C in a second or a rise
+over 1 C):
+
+| Digital / analog | Gain over 737/10 | Coils |
+| --- | --- | --- |
+| 737/10 | 0 dB | +0.04 C, sane |
+| 737/13 | +3 dB | +0.09 / +0.06 C, sane |
+| 737/17 | +7 dB | +0.22 / +0.16 C, sane; the human: louder, clean |
+| 757/17 | +9.5 dB | +0.39 / +0.28 C, sane |
+| 797/10 | +7.5 dB | music for a minute, 23.4-23.9 C, sane |
+| 817/10 | +10 dB | **bottom misread**: 23 to 36 C in the first second, flat, 33 C with nothing playing |
+| 777/17 | +12 dB | **both misread**: 23 to 37 / 36 C in the first second; stopped, the watchdog muted too |
+
+So the protection firmware's coil estimate holds up to about +9.5 dB over
+stage media, whether the gain is digital or analog, and breaks at about
++10 dB on raven (cheetah broke at 817/10 as well). The rises below that
+scale with the power (about nine times stage media's at +9.5 dB). The last
+~10 dB to stock is the gain-17 problem (cheetah C9d-7/8).
+
+**737/17 with music:** 2 min 40 s at full volume, 121 samples, top
+23.62 to 23.88 C at most, bottom 23.44 to 23.61 C, no jump. `verify`
+refuses analog 17 by design (its stamp gates c9 at stage-media levels);
+its "heartbeat did not move" there needs a look (a track ending?). The
+human's phone now runs stage c9 at 737/17 daily, locally (its
+`speaker.conf` says how to go back); not in any package.
+
+Open: with music the first burst (-20 dBFS) at 797/10 was "still a bit
+quiet" and the -10 dBFS one "quite loud"; 737/17 is about as loud as
+797/10. Stock's level needs the gain-17 work.
+
 ## Without the amplifiers (2026-10-27, `gb3d6253b0d61`, device-raven 0.1.23)
 
 Derek asked on #41 whether the sound card, and so the microphones, still
@@ -423,3 +478,20 @@ clash Derek pointed out. Ways forward, not decided: give the card a
 speaker-less link set when the amplifiers are absent, or load the
 amplifier driver muted with no protection firmware, so the card and the
 microphones come up while the speakers stay off.
+
+**Microphones without protection (2026-10-27, `gb3d6253b0d61`,
+omamobile-audio 0.5.3, device-raven 0.1.25; branch
+`omamobile-raven-mics`):** the second way. `omamobile-speaker-protection
+mics` (run by `omamobile-audio-mics.service`, which device-raven enables)
+loads `snd_soc_cs35l41_spi` and mutes both amplifiers, as `start` does
+before anything else, and stops there: no DSP firmware, no unmute. The
+unit doesn't run once speaker protection is enabled, and uses the same
+hang marker. On raven, after a reboot: the unit finished at 12:01:45, the
+card came up, both amplifiers read `Digital PCM Volume` 0, speaker
+protection inactive, and PipeWire's default source was "Built-in Audio
+Microphone". A 4 s recording in a quiet room read -64.5 dBFS RMS (not
+digital silence); with the human counting out loud, -48 to -56 dBFS per
+half second, falling to about -71 dBFS between words. So the microphones
+work with the speakers muted. Not tested: a call (the modem doesn't start
+at boot with this package set), and the speaker sink, which PipeWire still
+lists but which plays into muted amplifiers.

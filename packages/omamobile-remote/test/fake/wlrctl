@@ -1,0 +1,6 @@
+#!/bin/bash
+# fake wlrctl: "pointer move dx dy" updates the position, the rest is logged
+echo "wlrctl $*" >> "$FAKE_LOG"
+if [[ "$1 $2" == "pointer move" ]]; then
+  read -r x y < "$FAKE_STATE/pos"; echo "$((x + $3)) $((y + $4))" > "$FAKE_STATE/pos"
+fi

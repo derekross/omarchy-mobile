@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: MIT
+# Upstream packages that [omamobile] carries unchanged, to hold phones at a
+# version our patches support. [omamobile] comes first in the phone's
+# pacman.conf, so its copy wins over the newer one in [omarchy]: phones stay
+# on it through `omarchy update`, and images built from out/repo install it.
+#
+# tools/build-packages fetches each file (once: it stays in out/repo) from the
+# first of its URLs that gives the SHA-256 here, and signs it with the release
+# key like our own packages. List upstream's URL first, then our published
+# copy (pkgs.omamobile.org), for when upstream prunes the old version; the
+# checksum makes any copy safe. A pin never takes the name of a package
+# under packages/. Removing a line takes the package out of out/repo at the next
+# build, and phones move on to [omarchy]'s version at their next update.
+# Check a new line's file against the upstream signature before adding it
+# (pacman-key --verify FILE.sig FILE).
+#
+# <sha256> <url> [<url of the same file>...]
+
+# Omarchy 4.5.0-3: the version the 4.5 patch family
+# (packages/omamobile-omarchy/patches), the update stand-ins and the held
+# migrations were checked against, on a rehearsal image and on the 7 Pro
+# (2026-11-11; #433, #434). Held here, not left to [omarchy], so a phone
+# takes a newer Omarchy only after the series was checked against it: move
+# these lines to that version then. Phones on 4.0.6 move to this one at
+# their next `omarchy update`.
+# omarchy-settings is pinned with it: omarchy depends on exactly its version.
+d367067c1e35d6e99f7cd921e0a55ec6e46cb0d2bc681b1a4b39254c8c0416e7 https://pkgs.omarchy.org/stable/aarch64/omarchy-4.5.0-3-aarch64.pkg.tar.zst https://pkgs.omamobile.org/stable/aarch64/omarchy-4.5.0-3-aarch64.pkg.tar.zst
+2a81decbaeb873a354f2b9728cd0dfc8b633af101eed98e3945e2b6bf55c8c58 https://pkgs.omarchy.org/stable/aarch64/omarchy-settings-4.5.0-3-aarch64.pkg.tar.zst https://pkgs.omamobile.org/stable/aarch64/omarchy-settings-4.5.0-3-aarch64.pkg.tar.zst
+
+# aquamarine 0.16.0 (Arch Linux ARM's, signed by its build key 68B3537F...):
+# [omarchy] comes before Arch Linux ARM's repositories, and Omarchy's stable
+# aarch64 aquamarine 0.15.1 provides only libaquamarine.so=14, while our
+# Hyprland 0.57 (and Arch Linux ARM's hyprtoolkit) need so=15. Without this
+# a phone installed before 2026-11-03 can't update and a fresh image can't be
+# built (#433). Unpin when Omarchy's stable channel has 0.16.
+1c4c6766b1a56099044cd408b6788855c9d94adcff6409f9c1eafd4d1e650bb4 https://fl.us.mirror.archlinuxarm.org/aarch64/extra/aquamarine-0.16.0-1-aarch64.pkg.tar.xz https://pkgs.omamobile.org/stable/aarch64/aquamarine-0.16.0-1-aarch64.pkg.tar.xz

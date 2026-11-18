@@ -72,6 +72,17 @@ if [ -z "$SLOT_SUFFIX" ] && [ -f /omamobile/slot_suffix ]; then
   SLOT_SUFFIX=$($B cat /omamobile/slot_suffix)
   SLOT_SRC=packed
 fi
+# Stage 2's storage guard opens the boot images of the slot it is told
+# (docs/ACTIVE-SLOT-PLAN.md §4), and this chain boots slot B only: forward
+# _b alone. Anything else (slot A, a packed value, a stray string) is not
+# forwarded, so stage 2 sees no suffix and keeps every boot partition
+# read-only.
+case $SLOT_SUFFIX in
+  ""|_b) ;;
+  *)
+    echo "omamobile-chain: slot_suffix=$SLOT_SUFFIX source=$SLOT_SRC not forwarded (only _b is): stage 2 keeps every boot partition read-only" > /dev/kmsg 2>/dev/null || true
+    SLOT_SUFFIX= SLOT_SRC= ;;
+esac
 if [ -n "$SLOT_SUFFIX" ]; then
   echo "omamobile-chain: slot_suffix=$SLOT_SUFFIX source=$SLOT_SRC" > /dev/kmsg 2>/dev/null || true
   tok="androidboot.slot_suffix=$SLOT_SUFFIX"

@@ -39,6 +39,10 @@
 # here, the next one finds it, leaves the amplifier driver alone and fails.
 #
 #   omamobile-speaker-protection start [--retry]    (the service)
+#   omamobile-speaker-protection mics [--retry]     (omamobile-audio-mics.service)
+#                           the microphones without protection: steps 1 and 2
+#                           only, so the card (which waits for both amplifiers)
+#                           comes up and both stay muted; the speakers are silent
 #   omamobile-speaker-protection watch              (omamobile-speaker-watch.service)
 #   omamobile-speaker-protection status | monitor [SECONDS] | health
 #   omamobile-speaker-protection verify             (during playback; C9a)
@@ -88,6 +92,14 @@
 set -uo pipefail
 
 KERNEL_DIGITAL_MAX=817
+
+# The systems whose c9 levels below were measured under protection (AOC-PLAN
+# C9). On any other phone c9 is refused, whatever its stamp or the list says:
+# raven's firmware misreads its coil at these levels (raven AUDIO-PLAN R6).
+C9_SYSTEMS="cheetah"
+# The systems whose top amplifier passed the earpiece check (AOC-PLAN C9k);
+# earpiece on is refused on any other.
+EAR_SYSTEMS="cheetah"
 
 # auto (the default): c9 at the everyday loud levels below when the phone
 # has what c9 needs (aoc_alsa_dev speaker_protection=1, which device-cheetah
@@ -219,6 +231,12 @@ boost_file=$RUN/speaker-protection-boost
 mode_file=$RUN/speaker-mode
 ack_file=$RUN/speaker-watch-mode
 cal=$RUN/speaker.cal
+# What the last start ran the DSPs on: "factory calibration", or "default
+# calibration" (OMAMOBILE_SPK_DEFAULT_CAL=1 and no speaker.cal). The watchdog
+# accepts CAL_SET_STATUS 1 only when this says so, and stage c9 and verify are
+# refused then; the setting alone switches none of that
+cal_state=$RUN/speaker-protection-calibration
+default_cal=0
 card=
 
 export OMAMOBILE_SPK_STAGE=$STAGE OMAMOBILE_SPK_SCRIPT=${OMAMOBILE_SPK_SCRIPT:-$0}
@@ -332,6 +350,8 @@ in_verified_list() {
 c9_source() {
   local digest
   C9_SOURCE='' C9_WHY=''
+  [[ " $C9_SYSTEMS " == *" $SYSTEM "* ]] || {
+    C9_WHY="stage c9 has no levels measured for $SYSTEM (only for: $C9_SYSTEMS)"; return 1; }
   digest=$(fw_digest 2>/dev/null) || { C9_WHY="the protection firmware or a tuning is missing"; return 1; }
   if [[ -r $stamp && $(sed -n 's/^firmware //p' "$stamp") == "$digest" ]]; then
     C9_SOURCE=stamp; return 0
@@ -363,17 +383,34 @@ c9_source_text() {
 # Copy persist's speaker.cal to $cal and check both records. Sets the arrays
 # cal_r, cal_status, cal_checksum, cal_ambient. Logs no values.
 read_calibration() {
-  local dev w i
+  local dev w i err
+  default_cal=0
   dev=$(grep -l '^PARTNAME=persist$' "$SYSBLOCK"/*/uevent 2>/dev/null | head -n1)
   [[ -n $dev ]] || { log "no persist partition"; return 1; }
   dev=${dev%/uevent}
   dev=$DEVDIR/${dev##*/}
   command -v debugfs >/dev/null || { log "no debugfs (e2fsprogs)"; return 1; }
   mkdir -p "$RUN"
-  # debugfs opens the device read-only unless given -w
-  (umask 077 && debugfs -R "cat $CAL_PATH" "$dev" > "$cal" 2>/dev/null)
+  # debugfs opens the device read-only unless given -w; it exits 0 whatever
+  # went wrong, so its messages are kept to tell a missing file apart, in
+  # English whatever the phone's language (LC_ALL=C), since that message is
+  # matched below
+  err=$( (umask 077 && LC_ALL=C debugfs -R "cat $CAL_PATH" "$dev" 2>&1 > "$cal") )
   if (($(stat -c %s "$cal" 2>/dev/null || echo 0) < ${#AMPS[@]} * CAL_WORDS * 4)); then
     log "persist:$CAL_PATH is missing or short"
+    # only debugfs's own "File not found": an empty file, or an empty read
+    # for any other reason (persist not opened, a read error), still stops
+    if [[ ${OMAMOBILE_SPK_DEFAULT_CAL:-0} == 1 && ! -s $cal && $err == *"$CAL_PATH: File not found by ext2_lookup"* ]]; then
+      # As stock's audio_spk_35l41.so does on a phone with no speaker.cal:
+      # load the protection firmware without writing CAL_*, so it runs on the
+      # tuning's default calibration. CAL_SET_STATUS only reads during
+      # playback, so start just logs it and records the mode in $cal_state;
+      # the watchdog then accepts 1 ("Use default calibration data") as well
+      # as 2. A short file still stops.
+      log "OMAMOBILE_SPK_DEFAULT_CAL=1: using the protection firmware's default calibration, as stock without speaker.cal"
+      default_cal=1
+      return 0
+    fi
     return 1
   fi
   mapfile -t w < <(od -An -tu4 -v -N $((${#AMPS[@]} * CAL_WORDS * 4)) "$cal" | tr -s ' ' '\n' | sed '/^$/d')
@@ -489,7 +526,7 @@ start() {
   sync -f "$marker" 2>/dev/null || sync
   # A start always ends in speaker mode (C9k): earpiece mode never outlives
   # a restart, and no earpiece request is taken while this runs.
-  rm -f "$mode_file" "$ack_file" "$boost_file"
+  rm -f "$mode_file" "$ack_file" "$boost_file" "$cal_state"
   set_status "starting"
   # the kernel log's clock (CLOCK_MONOTONIC; /proc/uptime also counts suspend)
   since=$(python3 -c 'import time; print(time.monotonic())')
@@ -551,8 +588,15 @@ start() {
       log "stage c9 chosen by this phone's stamp"
     fi
   fi
+  [[ -z $STAGE_NOTE ]] || log "$STAGE_NOTE"
   check_firmware || fail "stopped at the firmware check"
   read_calibration || fail "stopped at the calibration check"
+  # c9's levels lean on the firmware's coil temperature, which rests on the
+  # calibrated coil resistance: on the tuning's default it is off by however
+  # far this coil is from it. Auto picks media then (resolve_stage, below).
+  if ((default_cal)) && [[ $STAGE == c9 ]]; then
+    fail "stage c9 needs the factory calibration: on the firmware's default calibration only media and c8 run"
+  fi
 
   # 5. Firmware into both DSPs, then the calibration
   for p in "${AMPS[@]}"; do
@@ -565,6 +609,7 @@ start() {
     dsp_ctl "$p" CAL_R >/dev/null || fail "$p: no CAL_R control after ${CTL_WAIT} s (protection firmware not loaded; see dmesg)"
   done
   for i in "${!AMPS[@]}"; do
+    ((default_cal)) && break
     p=${AMPS[i]}
     # the order mainline cs-amp-lib writes them in; OMAMOBILE_SPK_CAL_ORDER=stock
     # writes them in the stock HAL's order, ambient last (AOC-PLAN C9d-8,
@@ -581,7 +626,17 @@ start() {
       [[ $v == "$want" ]] || fail "$p: ${f%%:*} did not read back"
     done
   done
-  log "calibration written to both DSPs and read back"
+  if ((default_cal)); then
+    for p in "${AMPS[@]}"; do
+      c=$(dsp_ctl "$p" CAL_SET_STATUS) || fail "$p: no CAL_SET_STATUS control (default calibration needs it)"
+      v=$(ctl_values "$c")
+      log "$p CAL_SET_STATUS: $v"
+    done
+    echo "default calibration" > "$cal_state" || fail "writing $cal_state failed"
+  else
+    log "calibration written to both DSPs and read back"
+    echo "factory calibration" > "$cal_state" || fail "writing $cal_state failed"
+  fi
 
   # 6. DAC through the DSP, analog gain
   for p in "${AMPS[@]}"; do
@@ -634,7 +689,45 @@ levels_text() { echo "Top $(level Top DIGITAL)/$(level Top ANALOG), Bottom $(lev
 # The status line in speaker mode. omamobile-sitd's call audio reads its
 # "ok: stage <stage>," start, so keep that.
 set_status_ok() {
-  set_status "ok: stage $STAGE, protection firmware with factory calibration, PCM Source DSP, held awake, digital/analog $(levels_text), $(cat "$boost_file" 2>/dev/null)$(stage_from)"
+  local c="factory calibration"
+  ((default_cal)) && c="the firmware's default calibration"
+  set_status "ok: stage $STAGE, protection firmware with $c, PCM Source DSP, held awake, digital/analog $(levels_text), $(cat "$boost_file" 2>/dev/null)$(stage_from)"
+}
+
+# The microphones without the speakers. The AoC sound card waits for both
+# amplifiers as codecs, so with their driver unloaded there are no microphones
+# either. Load the driver and mute both, as start does before anything else,
+# and stop there: no DSP firmware, no unmute. Hang-safe through the same marker.
+mics() {
+  local i p
+  if [[ -e $marker ]]; then
+    log "the last start ($(cat "$marker" 2>/dev/null)) never finished; the amplifiers stay off this boot."
+    log "after checking the previous boot's log, retry with: omamobile-speaker-protection mics --retry"
+    find_card && mute
+    set_status "off: the last start never finished"
+    exit 1
+  fi
+  mkdir -p "$STATE"
+  date -Is > "$marker"
+  sync -f "$marker" 2>/dev/null || sync
+  if compgen -G "$SPIDRV/spi*" >/dev/null; then
+    find_card && mute
+  else
+    modprobe snd_soc_cs35l41_spi || fail "snd_soc_cs35l41_spi failed to load"
+  fi
+  for ((i = 0; i < CARD_WAIT * 5; i++)); do find_card && break; sleep 0.2; done
+  find_card || fail "no AoC sound card after ${CARD_WAIT} s (both amplifiers probed? the AoC up?)"
+  # alsa-utils restores the saved mixer state from udev when the card
+  # appears; let that run first, then check again that it didn't undo the mute.
+  udevadm settle -t 10 2>/dev/null || true
+  mute || fail "muting failed"
+  sleep 1
+  for p in "${AMPS[@]}"; do
+    [[ $(ctl_values "$p Digital PCM Volume") == 0 ]] || fail "the $p amplifier was unmuted after the mute"
+  done
+  finish
+  set_status "muted: microphones only, speakers off (no protection)"
+  log "AoC sound card $card: microphones only, both amplifiers muted (no speaker protection)"
 }
 
 # Read-only report. Prints the DSP state but never the calibration values.
@@ -659,7 +752,7 @@ status() {
   echo "mode: $(cur_mode) (the watchdog enforces: $(cat "$ack_file" 2>/dev/null || echo 'nothing reported'))"
   find_card || { echo "no AoC sound card"; return 1; }
   local have_cal=0
-  read_calibration >/dev/null 2>&1 && have_cal=1
+  read_calibration >/dev/null 2>&1 && ((!default_cal)) && have_cal=1
   for i in "${!AMPS[@]}"; do
     p=${AMPS[i]}
     d=$(amp_dev "$i")
@@ -683,6 +776,8 @@ status() {
 verify() {
   local digest
   digest=$(fw_digest) || { echo "no firmware"; return 1; }
+  # the stamp lets c9 run, and c9 needs the factory calibration (start)
+  ((!default_cal)) || { echo "not verified: the DSPs run on the protection firmware's default calibration (no speaker.cal); a stamp needs the factory calibration"; return 1; }
   dsp verify "$@" || return 1
   mkdir -p "$STATE"
   printf 'date %s\nkernel %s\nfirmware %s\n' "$(date -Is)" "$(uname -r)" "$digest" > "$stamp"
@@ -805,6 +900,10 @@ earpiece() {
     status) echo "mode: $(cur_mode); the watchdog enforces: $(cat "$ack_file" 2>/dev/null || echo 'nothing reported')"; return 0 ;;
     *) echo "Usage: omamobile-speaker-protection earpiece on|off|status" >&2; exit 2 ;;
   esac
+  # Only where the top amplifier is known to be the earpiece and C9k's check
+  # passed; off has to work everywhere.
+  [[ $want == off || " $EAR_SYSTEMS " == *" $SYSTEM "* ]] ||
+    ear_refuse on "no earpiece check for $SYSTEM yet (AOC-PLAN C9k ran on: $EAR_SYSTEMS)"
   mkdir -p "$RUN"
   # one change at a time (the UCM's disable and enable sequences can ask for
   # both in quick succession)
@@ -882,17 +981,27 @@ earpiece() {
 
 # auto: c9 when the phone has what c9 needs, media otherwise (see STAGE above)
 resolve_stage() {
+  STAGE_NOTE=''
   [[ $STAGE == auto ]] || return 0
   local prot
   prot=$(cat "$SYSMODULE/aoc_alsa_dev/parameters/speaker_protection" 2>/dev/null)
   if [[ $prot == Y ]] && c9_source; then
     STAGE=c9
+    # c9 needs the factory calibration (start)
+    ((!default_cal)) || STAGE=media STAGE_NOTE="stage media, not c9: c9 needs the factory calibration, and this phone runs on the firmware's default"
   else
     STAGE=media
   fi
   set_stage
   export OMAMOBILE_SPK_STAGE=$STAGE
 }
+# On the firmware's default calibration: start reads persist for it now,
+# before the stage is chosen (only when OMAMOBILE_SPK_DEFAULT_CAL=1 asks for
+# it); every other command takes what the last start recorded
+case ${1:-} in
+  start|restart|recover) [[ ${OMAMOBILE_SPK_DEFAULT_CAL:-0} != 1 ]] || read_calibration >/dev/null 2>&1 || true ;;
+  *) [[ $(cat "$cal_state" 2>/dev/null) == "default calibration" ]] && default_cal=1 ;;
+esac
 resolve_stage
 # Which way c9 is allowed, for the log, the status and the watchdog (its
 # first-stream check runs with "list" only); empty in every other stage
@@ -924,6 +1033,9 @@ case ${1:-} in
   start|restart|recover)
     [[ ${2:-} == --retry ]] && rm -f "$marker"
     start ;;
+  mics)
+    [[ ${2:-} == --retry ]] && rm -f "$marker"
+    mics ;;
   watch) find_card || { log "watchdog: no AoC sound card"; exit 1; }; dsp --card "$card" watch ;;
   status) status ;;
   earpiece) earpiece "${2:-}" ;;
@@ -950,7 +1062,7 @@ case ${1:-} in
       exit 1
     fi ;;
   *)
-    echo "Usage: omamobile-speaker-protection start [--retry] | watch | status | health | monitor [SECONDS [INTERVAL]]" >&2
+    echo "Usage: omamobile-speaker-protection start [--retry] | mics [--retry] | watch | status | health | monitor [SECONDS [INTERVAL]]" >&2
     echo "       | earpiece on|off|status   (the top amplifier alone as the earpiece, AOC-PLAN C9k)" >&2
     echo "       | digest   (the installed firmware's digest, as a line of the verified list)" >&2
     echo "       | verify | signal tone|multitone FILE [--level DBFS --seconds S --channels both|left|right] | mute [--reason TEXT]" >&2

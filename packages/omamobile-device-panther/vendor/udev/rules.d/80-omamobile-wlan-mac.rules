@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile: set the Wi-Fi MAC from the bootloader before NetworkManager
+# takes the link (omamobile-wlan-mac). $name, not %k: by the time RUN
+# runs, 80-net-setup-link has renamed wlan0 to wlp1s0.
+ACTION=="add", SUBSYSTEM=="net", DRIVERS=="brcmfmac", RUN+="/usr/bin/omamobile-wlan-mac $name"

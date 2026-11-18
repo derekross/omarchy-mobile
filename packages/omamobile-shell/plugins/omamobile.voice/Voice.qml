@@ -299,6 +299,27 @@ Item {
     settingsOpen = false
   }
 
+  // Back (omamobile.back's BackLink.js). The settings sheet never takes the
+  // keyboard, so Escape went to the app under it: Back closes it. The check
+  // before Ask takes the keyboard for its text but had no Escape of its own:
+  // Back is its Discard.
+  Loader {
+    source: Qt.resolvedUrl("../omamobile.back/BackLinkClient.qml")
+    onLoaded: {
+      item.name = "voice settings"
+      item.handler = function() { root.dismissSettings() }
+      item.active = Qt.binding(function() { return root.opened })
+    }
+  }
+  Loader {
+    source: Qt.resolvedUrl("../omamobile.back/BackLinkClient.qml")
+    onLoaded: {
+      item.name = "voice result"
+      item.handler = function() { root.reset() }
+      item.active = Qt.binding(function() { return root.phase === "result" || root.phase === "error" })
+    }
+  }
+
   function dismissSettings() {
     if (shell && typeof shell.hide === "function") shell.hide(pluginId)
     else close()

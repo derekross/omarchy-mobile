@@ -1,0 +1,136 @@
+// SPDX-License-Identifier: MIT
+import QtQuick
+import QtTest
+
+TestCase {
+    id: test
+    name: "PublicShadeViewport"
+    when: windowShown
+    visible: true
+    width: 120
+    height: 120
+    QtObject {
+        id: style
+        readonly property real gapsOut: 24
+        readonly property var spacing: ({
+                lg: 20
+            })
+    }
+    QtObject {
+        id: window
+        property real height: 935
+    }
+    Item {
+        id: root
+        property bool wide: false
+        property bool editing: false
+        property real reveal: 0
+        property real baseHeight: 400
+        property int roomChanges: 0
+        property int heightChanges: 0
+        QtObject {
+            id: drag
+            property real offset: 0
+        }
+        Item {
+            id: sheet
+            height: root.baseHeight
+            y: POSITION
+        }
+        Item {
+            id: shade
+            readonly property real shadeTop: SHADETOP
+            readonly property real restingTop: RESTING
+            readonly property real room: ROOM
+            property real natural: 900
+            y: shadeTop
+            height: Math.min(natural, room)
+            onRoomChanged: root.roomChanges++
+            onHeightChanged: root.heightChanges++
+        }
+        NumberAnimation {
+            id: slide
+            target: root
+            property: "reveal"
+            from: 0
+            to: 1
+            duration: 220
+        }
+    }
+    function init() {
+        slide.stop();
+        root.wide = false;
+        window.height = 935;
+        root.baseHeight = 400;
+        drag.offset = 0;
+        root.reveal = 0;
+        shade.natural = 900;
+        wait(10);
+        root.roomChanges = 0;
+        root.heightChanges = 0;
+    }
+    function test_animationLayoutChurn() {
+        slide.start();
+        tryVerify(function () {
+            return !slide.running;
+        }, 600);
+        console.log("REVEAL_GEOMETRY_UPDATES", root.roomChanges, root.heightChanges);
+        CHURN;
+        compare(shade.room, window.height - style.gapsOut - sheet.height - style.spacing.lg - style.gapsOut);
+    }
+    function test_endStateAndExpansion() {
+        root.reveal = 1;
+        var cases = [
+            {
+                wide: false,
+                h: 935,
+                sheet: 400,
+                n: 100
+            },
+            {
+                wide: false,
+                h: 935,
+                sheet: 400,
+                n: 900
+            },
+            {
+                wide: true,
+                h: 420,
+                sheet: 320,
+                n: 900
+            },
+            {
+                wide: false,
+                h: 300,
+                sheet: 280,
+                n: 900
+            }
+        ];
+        for (var i = 0; i < cases.length; i++) {
+            var v = cases[i];
+            root.wide = v.wide;
+            window.height = v.h;
+            root.baseHeight = v.sheet;
+            shade.natural = v.n;
+            var room = v.h - (v.wide ? style.gapsOut : style.gapsOut + v.sheet + style.spacing.lg) - style.gapsOut;
+            compare(shade.room, room);
+            compare(shade.height, Math.min(v.n, room));
+            compare(shade.y, v.wide ? style.gapsOut : style.gapsOut + v.sheet + style.spacing.lg);
+        }
+        root.wide = false;
+        window.height = 935;
+        root.baseHeight = 400;
+        shade.natural = 900;
+        var old = shade.height;
+        root.baseHeight = 500;
+        verify(shade.height < old);
+    }
+    function test_dragKeepsLayout() {
+        root.reveal = 1;
+        var before = shade.height;
+        var y = shade.y;
+        drag.offset = -50;
+        compare(shade.y, y - 50);
+        DRAG;
+    }
+}

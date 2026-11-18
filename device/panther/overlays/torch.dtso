@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (as device/cheetah/overlays/torch.dtso, HAPTICS-TORCH-PLAN.md
+ * gates T1-T4): USI15 as I2C (Google's bus 15: the LM3644 at 0x63, held in
+ * shutdown by HWEN on gpp8-2; camera EEPROM at 0x50, wireless charger at
+ * 0x3c, neither described), so leds-lm3644 probes (HWEN up for ~2 ms, ID and
+ * reset values read, nothing written) and registers
+ * /sys/class/leds/white:torch. The PERIC0 pin controller that owns HWEN is
+ * already on in the panther DTB. Paths, not labels.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/usi@10da00c0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@10da00c0/i2c@10da0000} {
+	status = "okay";
+};

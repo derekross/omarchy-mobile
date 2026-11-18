@@ -25,7 +25,9 @@ Prints one JSON line per pass, {"text", "secs", "ms"}, or one status line
 and exits: {"status": "no-model" | "no-voxtype" | "no-audio"}. It ends on
 SIGTERM or SIGINT (the bar stops it when listening ends), when the capture
 ends, and after MAX_SECONDS whatever happens, so the microphone is never
-left open. --from WAV feeds a 16 kHz mono WAV (- for stdin) instead of the microphone, at
+left open. The loop keeps that limit, and the kernel keeps a second one a
+little later (an alarm with SIGALRM's default action), for a loop that no
+longer runs. --from WAV feeds a 16 kHz mono WAV (- for stdin) instead of the microphone, at
 --speed times real time: a check of the whole loop without recording.
 
 OMAMOBILE_VOXTYPE names the voxtype binary (tests use a fake one)."""
@@ -53,6 +55,9 @@ FRAME = 0.05
 # int16 RMS below which a chunk is silence (Whisper invents words for it)
 SILENCE_RMS = 120
 MAX_SECONDS = 75
+# The kernel's limit comes this long after the loop's own: room for the pass
+# under way to end.
+LIMIT_MARGIN = 15
 # A pass longer than this is dropped (killed): with a short context, Whisper
 # now and then loops on a chunk that is mostly silence ("for
 # alternatively.", 5.9 s on the Pixel 7 Pro); the next pass catches up.
@@ -189,6 +194,33 @@ def nice_child():
         pass
 
 
+# Set by the signal handler and read by the loop. A plain assignment, and no
+# threading.Event: a handler runs in the main thread between two of its
+# bytecodes and must not take a lock that thread may be holding. Event.set()
+# takes the event's own lock, and Event.wait() holds that lock for a few
+# bytecodes on every round of the loop. A SIGTERM that landed there blocked
+# the main thread for good while the capture thread went on: on a Pixel 9a
+# the microphone stayed open for 1 h 54 min, with the audio piling up in
+# memory, and the loop's MAX_SECONDS was no help, since the loop was the
+# thread that was blocked.
+STOP = [False]
+
+
+def request_stop(*_):
+    """The SIGTERM and SIGINT handler."""
+    STOP[0] = True
+    for p in list(CURRENT):
+        p.kill()
+
+
+def arm_limit(seconds):
+    """The limit the kernel keeps: SIGALRM, with its default action, ends the
+    process after seconds whatever its threads are doing, and its children go
+    with it (die_with_parent)."""
+    signal.signal(signal.SIGALRM, signal.SIG_DFL)
+    signal.alarm(int(seconds))
+
+
 def emit(obj):
     sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
     sys.stdout.flush()
@@ -293,14 +325,9 @@ def run(args):
         return 0
 
     cap = Capture()
-    stopping = threading.Event()
-
-    def on_signal(*_):
-        stopping.set()
-        for p in list(CURRENT):
-            p.kill()
-    signal.signal(signal.SIGTERM, on_signal)
-    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, request_stop)
+    arm_limit(MAX_SECONDS + LIMIT_MARGIN)
 
     try:
         if args.get("from"):
@@ -313,14 +340,16 @@ def run(args):
 
     began = time.monotonic()
     committed, start, last_end, passes = "", 0, 0, 0
-    while not stopping.is_set() and time.monotonic() - began < MAX_SECONDS:
+    while not STOP[0] and time.monotonic() - began < MAX_SECONDS:
         pcm = cap.snapshot()
         total = len(pcm) // BYTES
         step_now = plan(total, start, last_end, step)
         if step_now is None:
             if cap.ended:
                 break
-            stopping.wait(0.1)
+            # a signal's handler runs at once and the sleep then goes on to
+            # its end, so a stop is seen a tenth of a second later at most
+            time.sleep(0.1)
             continue
         if step_now[0] == "commit":
             end = quietest_cut(pcm, step_now[2], step_now[3])
@@ -337,7 +366,7 @@ def run(args):
             text = transcribe(voxtype, model_path, piece, pass_timeout(step))
         except (OSError, ValueError, subprocess.TimeoutExpired):
             text = None
-        if stopping.is_set():
+        if STOP[0]:
             break
         if text is None:
             continue
@@ -349,6 +378,7 @@ def run(args):
         emit({"text": join(committed, text), "secs": round(total / RATE, 2),
               "ms": int((time.monotonic() - t0) * 1000), "model": model})
     cap.stop()
+    signal.alarm(0)
     return 0
 
 

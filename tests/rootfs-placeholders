@@ -1,0 +1,143 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The placeholders for the owner's answers (rootfs/placeholders), in a small
+# real ext4 image made as rootfs/build-inside makes the root image
+# (mkfs.ext4 -d, 4096-byte blocks): they are found, one block each, where
+# their bytes are; swapping those bytes for padded answers, as the desktop
+# installer and the web page do in the stream, leaves a file system that
+# e2fsck finds clean, with the answers in the files; omamobile-firstboot
+# reads the filled firstboot.conf and finds no answers in the placeholder;
+# tools/bundle-manifest records them from the MANIFEST lines and refuses
+# lines that don't match the image. Nothing runs as root.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+export PATH=$PATH:/usr/sbin:/sbin
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+for tool in mkfs.ext4 debugfs e2fsck dumpe2fs zstd python3; do
+  command -v "$tool" >/dev/null || { echo "ok - # skip: no $tool"; exit 0; }
+done
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+P=rootfs/placeholders FB=/etc/omamobile/firstboot.conf BU=/etc/omamobile/boot-update.conf
+
+mkdir -p "$t/root/etc" "$t/root/usr/share/zoneinfo"
+echo omamobile > "$t/root/etc/hostname"
+: > "$t/root/usr/share/zoneinfo/UTC"
+bash "$P" make "$t/root"
+for f in $FB $BU; do
+  [[ $(stat -c %s "$t/root$f") == 4096 ]] || fail "$f is one block"
+  cmp -s "$t/root$f" <(bash "$P" marker "$f") || fail "$f holds the marker"
+done
+[[ $(stat -c %a "$t/root$FB") == 600 && $(stat -c %a "$t/root$BU") == 644 ]] || fail "the modes are 600 and 644"
+OMAMOBILE_FIRSTBOOT_ROOT=$t/root packages/omamobile-firstboot/bin/omamobile-firstboot --check "$t/root$FB" | grep -c '^no answers' >/dev/null ||
+  fail "omamobile-firstboot reads no answers in the placeholder"
+grep -vE '^[[:space:]]*(#.*)?$' "$t/root$BU" && fail "boot-update.conf's placeholder sets nothing (AUTO_WRITE=no)"
+pass "the placeholders: one block each, comments only, no answers"
+
+img=$t/root.img
+truncate -s 64M "$img"
+mkfs.ext4 -q -b 4096 -L omamobile-root -m 1 -d "$t/root" "$img"
+# The build runs as root; here mkfs.ext4 -d copies our uid
+for f in $FB $BU; do
+  debugfs -w -R "sif $f uid 0" "$img" 2>/dev/null; debugfs -w -R "sif $f gid 0" "$img" 2>/dev/null
+done
+lines=$(bash "$P" locate "$img") || fail "locate finds the placeholders"
+[[ $(grep -c '^answers placeholder: ' <<<"$lines") == 2 ]] || fail "one line each: $lines"
+declare -A off=()
+while read -r _ _ path _ offset _ length _ sum; do
+  ((offset % 4096 == 0 && length == 4096)) || fail "$path is one block at a block boundary"
+  [[ $(dd if="$img" bs=4096 skip=$((offset / 4096)) count=1 status=none | sha256sum | cut -d' ' -f1) == "$sum" ]] ||
+    fail "$path's recorded bytes are the placeholder's"
+  off[$path]=$offset
+done <<<"$lines"
+pass "locate gives each placeholder's offset in the raw image and the marker's SHA-256"
+
+# What locate refuses: another owner, a file that isn't one block
+cp "$img" "$t/other.img"
+debugfs -w -R "sif $FB uid 1000" "$t/other.img" 2>/dev/null
+bash "$P" locate "$t/other.img" 2>"$t/err" >/dev/null && fail "refuses a placeholder not owned by root"
+grep -q 'not owned by root' "$t/err" || fail "says why: $(cat "$t/err")"
+mkdir -p "$t/big/etc/omamobile"; bash "$P" make "$t/big"; head -c 8192 /dev/urandom > "$t/big$FB"
+truncate -s 64M "$t/big.img"; mkfs.ext4 -q -b 4096 -d "$t/big" "$t/big.img"
+bash "$P" locate "$t/big.img" >/dev/null 2>&1 && fail "refuses a placeholder of another size"
+pass "locate refuses what can't be swapped in place"
+
+# Swap the bytes, as an installer does in the stream
+cat > "$t/answers" <<'A'
+# Written by the Omarchy Mobile installer on the computer; omamobile-firstboot reads and deletes it.
+USERNAME=alex
+PASSWORD_HASH=$6$saltstring$svn8UoSVapNtMuq1ukKS4tPQd8iKwSMHWjl/O817G3uBnIFNjnQJuesI68u4OTLiBFdcbYEdFCoEOfaS35inz1
+HOSTNAME=alex-phone
+TIMEZONE=UTC
+CREDENTIAL=pin
+WIFI_SSID=Test network
+WIFI_PSK=not-a-real-passphrase
+A
+# The computer's SSH public key goes with the answers (a made-up one, new
+# each run: random characters in an Ed25519 key's form)
+key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI$(head -c 33 /dev/urandom | base64 -w0) installer-test"
+echo "SSH_KEY=$key" >> "$t/answers"
+printf '# Written by the Omarchy Mobile installer\nAUTO_WRITE=yes\n' > "$t/auto"
+bash "$P" fill $FB "$t/answers" > "$t/fb.block"
+bash "$P" fill $BU "$t/auto" > "$t/bu.block"
+[[ $(stat -c %s "$t/fb.block") == 4096 && $(stat -c %s "$t/bu.block") == 4096 ]] || fail "filled, each is still one block"
+[[ $(tail -c 1 "$t/fb.block" | od -An -c | tr -d ' ') == '\n' ]] || fail "the padding ends in a newline"
+cp "$img" "$t/before.img"
+dd if="$t/fb.block" of="$img" bs=4096 seek=$((off[$FB] / 4096)) conv=notrunc status=none
+dd if="$t/bu.block" of="$img" bs=4096 seek=$((off[$BU] / 4096)) conv=notrunc status=none
+e2fsck -fn "$img" > "$t/fsck" 2>&1 || { cat "$t/fsck"; fail "the file system checks clean after the swap"; }
+cmp -s <(debugfs -R "cat $FB" "$img" 2>/dev/null) "$t/fb.block" || fail "firstboot.conf holds the answers"
+cmp -s <(debugfs -R "cat $BU" "$img" 2>/dev/null) "$t/bu.block" || fail "boot-update.conf holds AUTO_WRITE"
+[[ $(cmp -l "$t/before.img" "$img" | awk '{ b = int(($1 - 1) / 4096) } !(b in s) { s[b]; n++ } END { print n + 0 }') == 2 ]] ||
+  fail "only the two placeholder blocks changed"
+debugfs -R "cat $FB" "$img" 2>/dev/null > "$t/read.conf"
+out=$(OMAMOBILE_FIRSTBOOT_ROOT=$t/root packages/omamobile-firstboot/bin/omamobile-firstboot --check "$t/read.conf" 2>&1) ||
+  fail "omamobile-firstboot takes the filled file: $out"
+grep -q 'user:      alex (groups wheel audio video input, password set, pin unlock)' <<<"$out" || fail "the answers are read: $out"
+grep -q 'wi-fi:     Test network (WPA-PSK)' <<<"$out" || fail "the Wi-Fi network is read: $out"
+grep -qx 'ssh keys:  1' <<<"$out" || fail "the SSH key is read: $out"
+grep -qF "${key:12:40}" <<<"$out" && fail "--check never prints the key: $out"
+[[ $(grep -vE '^[[:space:]]*(#.*)?$' "$t/bu.block") == AUTO_WRITE=yes ]] || fail "boot-update.conf says AUTO_WRITE=yes and nothing else"
+pass "swapping the blocks: e2fsck -fn clean, the files hold the answers, firstboot reads them"
+
+# The padding at its edges: 4095 bytes of answers leave "\n", 4094 "#\n",
+# 4096 nothing, 4097 don't fit
+for n in 4094 4095 4096; do
+  { printf 'A%.0s' $(seq $((n - 1))); printf '\n'; } > "$t/edge"
+  bash "$P" fill $FB "$t/edge" > "$t/edge.block" || fail "$n bytes fit"
+  [[ $(stat -c %s "$t/edge.block") == 4096 ]] || fail "$n bytes padded to one block"
+done
+{ printf 'A%.0s' $(seq 4096); printf '\n'; } > "$t/edge"
+bash "$P" fill $FB "$t/edge" >/dev/null 2>&1 && fail "4097 bytes don't fit"
+pass "the padding fills exactly to the block, and answers too long are refused"
+
+# tools/bundle-manifest reads the MANIFEST's lines and checks them against
+# the packed image
+zstd -q -19 "$t/before.img" -o "$t/root.img.zst"
+{ echo "device: testdev"; echo "$lines"; } > "$t/root.MANIFEST"
+python3 -I - tools/bundle-manifest "$t/root.MANIFEST" "$t/root.img.zst" "$t/bad.MANIFEST" <<'PY' || fail "bundle-manifest records the placeholders"
+import importlib.machinery, importlib.util, sys
+tool, good, image, bad = sys.argv[1:]
+loader = importlib.machinery.SourceFileLoader("bundle_manifest", tool)
+spec = importlib.util.spec_from_loader("bundle_manifest", loader)
+bm = importlib.util.module_from_spec(spec)
+loader.exec_module(bm)
+found = bm.placeholders(good, image)
+assert sorted(p["path"] for p in found) == ["/etc/omamobile/boot-update.conf", "/etc/omamobile/firstboot.conf"], found
+assert all(p["length"] == 4096 and p["offset"] % 4096 == 0 for p in found), found
+assert found == sorted(found, key=lambda p: p["offset"])
+# Somewhere else in the image: refused
+text = open(good).read()
+first = found[0]
+open(bad, "w").write(text.replace("offset %d " % first["offset"], "offset %d " % (first["offset"] + 409600)))
+try:
+    bm.placeholders(bad, image)  # says why on stderr
+except SystemExit as e:
+    assert e.code == 1
+else:
+    raise AssertionError("a wrong offset is refused")
+# An image from before the placeholders: none, and nothing to check
+open(bad, "w").write("device: testdev\n")
+assert bm.placeholders(bad, image) == []
+PY
+pass "bundle-manifest records the placeholders, checked against the image"

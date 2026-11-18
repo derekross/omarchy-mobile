@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+post_install() {
+  systemctl daemon-reload 2>/dev/null || true
+  echo "omamobile-telephony-tegu: installed; no services enabled or started."
+  echo "  From the graphical user's terminal, with sitd already running:"
+  echo "  omamobile-tegu-mmd-attach --check, then --attach (attended)."
+  echo "  Migrate any /etc copy of omamobile-sitd.service first; see the README."
+}
+post_upgrade() {
+  post_install
+}

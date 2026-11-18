@@ -16,9 +16,11 @@ Requires=omamobile-aoc.service
 After=omamobile-aoc.service
 Wants=omamobile-speaker-watch.service
 Before=systemd-user-sessions.service
-# cheetah only: raven's amplifiers aren't validated with these ceilings and
-# this calibration flow yet (raven AUDIO-PLAN.md)
-ConditionPathExists=/sys/bus/platform/devices/181d0000.aoc
+# The AoC's sound card on gs201 (181d0000) or gs101 (175d0000). Raven runs
+# stage media under protection (raven AUDIO-PLAN.md R6); c9 and earpiece
+# mode stay cheetah's (C9_SYSTEMS, EAR_SYSTEMS in the script).
+ConditionPathExists=|/sys/bus/platform/devices/181d0000.aoc
+ConditionPathExists=|/sys/bus/platform/devices/175d0000.aoc
 
 [Service]
 Type=oneshot

@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# The camera drivers load 40 s into the boot: after the regulator core's
+# unused-supply clean-up (about 30 s after late init) and once the session is
+# up, so a problem with them never holds up the boot.
+[Unit]
+Description=Load the camera drivers after the boot has settled
+
+[Timer]
+OnBootSec=40s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

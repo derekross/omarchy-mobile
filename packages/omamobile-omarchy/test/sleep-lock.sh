@@ -9,12 +9,20 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
-src=${OMARCHY_PKG_ROOT:?an extracted omarchy package}/usr/share/omarchy
+package_root=${OMARCHY_PKG_ROOT:?an extracted omarchy package}
+src=$package_root/usr/share/omarchy
+[[ -f $package_root/.PKGINFO ]] || fail "the extracted package has no .PKGINFO version"
+version=$(sed -n 's/^pkgver = //p' "$package_root/.PKGINFO")
+case $version in
+  4.0.6-*) series=legacy-4.0.6 ;;
+  4.5.0-*) series=patches ;;
+  *) fail "no sleep-lock patch family for package version '$version'" ;;
+esac
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
 
 mkdir -p "$t/omarchy/bin" "$t/fake" "$t/backlight/panel"
 cp "$src/bin/omarchy-system-sleep-lock" "$t/omarchy/bin/"
-(cd "$t/omarchy" && patch -p1 --fuzz=0 -s) <patches/0021-sleep-turn-the-display-off-before-suspend.patch \
+(cd "$t/omarchy" && patch -p1 --fuzz=0 -s) <"$series/0021-sleep-turn-the-display-off-before-suspend.patch" \
   || fail "0021 applies to the real omarchy-system-sleep-lock"
 lock=$t/omarchy/bin/omarchy-system-sleep-lock
 
@@ -59,7 +67,8 @@ rc=0; LOCK_STATE=locking run 600 || rc=$?
 [[ ! -s $t/calls ]] || fail "the display stays on while the lock isn't secure"
 pass "a lock that never secures: the display is not turned off behind it"
 
-start=$(date +%s%3N)
+ms() { local t; t=$(date +%s%N); echo $((t / 1000000)); }   # not %3N: uutils' date drops leading zeros first
+start=$(ms)
 DISPLAY_HANG=1 run 1500 || fail "a hung display call still exits 0"
-((($(date +%s%3N) - start) < 2500)) || fail "a hung display call held the suspend past the budget"
+((($(ms) - start) < 2500)) || fail "a hung display call held the suspend past the budget"
 pass "a hung display call is cut off within the lock's budget"

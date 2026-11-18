@@ -212,7 +212,7 @@ Test, verified from its journal: unplug at 11:37:08 (`usbsw=0x00 vbus=0`), replu
 
 ## 9. Slot B retries, and the cure that cheetah already has
 
-Omarchy never marks slot B's boot successful, so every boot of slot B uses one of its three bootloader retries. At zero the bootloader falls back to slot A (GrapheneOS), and its first boot reformatted `userdata`: the Omarchy install was gone. It happened after a set of drills and reboots in one session. Observed with `fastboot getvar` after the fallback: current slot a; slot A successful, retry 1; slot B not successful, retry 0, not unbootable. `fastboot set_active b` sets the counter back to 3. Reading the count in the bootloader changes nothing; whether `reboot-to bootloader` itself uses a retry is not established (two of my readings disagree).
+Omarchy never marks slot B's boot successful, so every boot of slot B uses one of its three bootloader retries. At zero the bootloader falls back to slot A (GrapheneOS), and its first boot reformatted `userdata`: the Omarchy install was gone. It happened after a set of drills and reboots in one session. Observed with `fastboot getvar` after the fallback: current slot a; slot A successful, retry 1; slot B not successful, retry 0, not unbootable. `fastboot set_active b` sets the counter back to 3: on 2026-11-09 it did so 9 times on my phone (the Kioxia UFS 4.0 one) without any flash. greenbrettmichael's refills end with `bin/omamobile flash`'s `--set-active=b` and read 3 as well ([#252](https://github.com/derekross/omarchy-mobile/issues/252)). Reading the count in the bootloader changes nothing, and on those 9 runs entering fastboot with `reboot-to bootloader` did not cost a try either (the count read what my own boot count predicted each time; the two readings that disagreed earlier are not explained). Wipe on fallback: seen with GrapheneOS on slot A (my phone), not yet known with stock Android on slot A. greenbrettmichael's slot A is stock Android 17, and his slot B has not fallen back since Omarchy went onto `userdata`.
 
 Recovery was a fresh read-only backup in the initramfs, then `tools/install-phone` (it asks for answers, so it has to run in a real terminal), then the keyring repair for the known clock issue (#188), then the battery images and modules.
 
@@ -230,6 +230,25 @@ So the layout is consistent with husky's [verified, read-only, on files]: the ma
 - The bring-up used a modprobe block by hand and an overlay each time, not the package. Once the package ships `omamobile-max77759.conf`, delete the local `/etc/modprobe.d/omamobile-battery-test.conf`: a file in `/etc` of the same name would replace the package's and its later changes would not apply.
 - `modprobe -r max77759_charger` was used four times (by the tool's undo). CONTRIBUTING warns about unloading bring-up modules; for this driver the unload worked every time, but note that the driver has no remove function and leaves charging on when unloaded, which is why the undo forces the mode to 0x4 explicitly.
 - No Type-C work, no charger limits above the conservative ones, no JEITA, no PCA9468, no wireless, no OTG.
+
+## 10a. Charger baseline, plugged and done (2026-11-06, kernel 7.3.0-rc6-omamobile-push1-g904a64931327)
+
+Read only, no writes, over I2C bus 3 address 0x69 with `i2cget -y -f` (the dead-man tool's own `baseline` refuses while the USB gadget is configured, so it was not used):
+
+| register | value | meaning |
+| --- | --- | --- |
+| 0xb5 CHG_DETAILS_00 | 0x60 | not decoded here |
+| 0xb6 CHG_DETAILS_01 | 0xb4 | low nibble 4 = done (it read 0xb1, CC, while charging) |
+| 0xb7 CHG_DETAILS_02 | 0x20 | not decoded here |
+| 0xb9 MODE | 0x05 | as left by the bootloader |
+| 0xbd CHG_CNFG_04 | 0x23 | 4350 mV float (the bootloader's setting, the charger finishes there) |
+| 0xc2 | 0x13 | bit 7 (NO_AUTOIBUS) clear |
+
+Battery at the same time: 92 %, 4.3125 V, 34.9 C, `charge_now` 4630000 of `charge_full` 4978000 uAh, status Discharging at about -8 mA with the cable in (the charger is in its done state).
+
+The charger driver is not loaded on this phone: `lsmod | grep -i max77759` lists only the `max77759` MFD module, no `max77759_charger`, and `/sys/class/power_supply` has only `max170xx_battery`. So nothing sets a float voltage; the 4.35 V in 0xbd is what the bootloader left, and the charger stops at its own done state while the gauge's 100 % sits higher, which is why the phone sits at 92 %. This matches what was read after 12 h plugged in on 2026-11-04 (0xb6 = 0xb4, 0xbd = 0x23, 92 %).
+
+When the charger driver binds with today's device tree it sets 4.20 V on purpose (section 7), so "full" will read lower than 92 % until step charging is in the device tree.
 
 ## 11. Open questions, in the order they matter
 

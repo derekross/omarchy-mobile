@@ -76,7 +76,7 @@ while (($#)); do
     --lock) lock=${2:?--lock needs a file}; shift ;;
     --verify) verify=1 ;;
     --digest) tree_digest "${2:?--digest needs a directory}"; exit ;;
-    -h|--help) sed -n '3,33p' "$self" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) source "$ROOT/tools/lib/usage.sh"; usage_from_header "$self"; exit 0 ;;
     *) die "unknown argument $1" ;;
   esac
   shift
@@ -115,7 +115,7 @@ while read -r kind path sum url extra; do
   say "Fetching $path"
   progress=(-sS)
   [[ -t 2 ]] && progress=(-#)
-  curl -fL "${progress[@]}" --retry 3 --proto '=https,file' -o "$tmp/download" "$url" || die "download of $path failed: $url"
+  curl -fL "${progress[@]}" --retry 3 --proto '=https,file' --proto-redir '=https' -o "$tmp/download" "$url" || die "download of $path failed: $url"
   case $kind in
     file) mv "$tmp/download" "$tmp/item" ;;
     b64) base64 -d < "$tmp/download" > "$tmp/item" || die "$path: not base64" ;;

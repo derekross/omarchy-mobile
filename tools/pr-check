@@ -50,17 +50,36 @@ fi
 added=$(git diff --unified=0 --no-color "$range" -- . ':(exclude)tools/pr-check' ':(exclude)tests/pr-check' \
   | awk '/^\+\+\+ /{f=substr($0, 7); next} /^\+/{print f ": " substr($0, 2)}')
 
-# A MAC whose first octet has the locally administered bit set (x2, x6,
-# xA, xE) is made up; so are all zeros, all ones and RFC 7042's
-# documentation range (00:00:5e:00:53:xx). Each address on a line is judged
-# on its own, so an exempt one doesn't hide a real one beside it.
-macs=$(awk '{
-    line = tolower($0); rest = line; real = 0
-    while (match(rest, /(^|[^0-9a-f:])[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]([^0-9a-f:]|$)/)) {
-      m = substr(rest, RSTART, RLENGTH); rest = substr(rest, RSTART + RLENGTH - 1)
-      gsub(/^[^0-9a-f]|[^0-9a-f]$/, "", m)
-      if (m ~ /^.[26ae]:/ || m == "00:00:00:00:00:00" || m == "ff:ff:ff:ff:ff:ff" || m ~ /^00:00:5e:00:53:/) continue
-      real = 1
+# A MAC is six octets joined all by colons or all by hyphens, in any case,
+# with no hex digit or further octet on either side; a label before it
+# (mac:, id:, wlan0-) still counts. 12 bare hex digits count in a MAC
+# record: mac, macaddr, mac_address, hwaddr, bdaddr, bd_addr or ether, then
+# =, : or white space. Each is read in the colon form, and one whose first
+# octet has the locally administered bit set (x2, x6, xA, xE) is made up;
+# so are all zeros, all ones and RFC 7042's documentation range
+# (00:00:5e:00:53:xx). Each address on a line is judged on its own, so an
+# exempt one doesn't hide a real one beside it. No interval expressions:
+# mawk can't parse them.
+macs=$(awk 'BEGIN {
+    o = "[0-9a-f][0-9a-f]"; c = o; h = o; b = o
+    for (i = 1; i < 6; i++) { c = c ":" o; h = h "-" o; b = b o }
+    re[1] = "(^|[^0-9a-f:]|[g-z_][0-9a-f]*:)" c "([^0-9a-f:]|$|:([^0-9a-f]|$))"
+    re[2] = "(^|[^0-9a-f-]|[g-z_][0-9a-f]*-)" h "([^0-9a-f-]|$|-([^0-9a-f]|$))"
+    re[3] = "(^|[^a-z])(mac([_-]?addr(ess)?)?|(hw|bd)[_-]?addr(ess)?|ether)[\"\047]?([ \t]*[=:][ \t]*|[ \t]+)[\"\047]?" b "([^0-9a-f]|$)"
+    any = o "[:-]" o "|" b
+  }
+  {
+    line = tolower($0); real = 0
+    if (line !~ any) next
+    for (k = 1; k <= 3; k++) {
+      rest = line
+      while (match(rest, re[k])) {
+        m = substr(rest, RSTART, RLENGTH); rest = substr(rest, RSTART + RLENGTH - 1)
+        sub(/[^0-9a-f]+$/, "", m); gsub(/[:-]/, "", m); m = substr(m, length(m) - 11)
+        for (i = 10; i > 0; i -= 2) m = substr(m, 1, i) ":" substr(m, i + 1)
+        if (m ~ /^.[26ae]:/ || m == "00:00:00:00:00:00" || m == "ff:ff:ff:ff:ff:ff" || m ~ /^00:00:5e:00:53:/) continue
+        real = 1
+      }
     }
     if (real) print
   }' <<<"$added")
@@ -89,7 +108,9 @@ all_blobs=$(printf '%s\n%s\n' "$blobs" "$named" | sed '/^$/d' | sort -u)
 $(sed 's/^/    /' <<<"$all_blobs" | head -10)"
 
 # ---------------------------------------------------------------- trailers
-ai='claude|anthropic|openai|chatgpt|codex|copilot|gemini|cursor|llm|noreply@github\.com.*bot|\[bot\]'
+# Each name as a whole word (no letter either side), so a person called
+# Tillman, or an address at precursor.example, isn't taken for an AI.
+ai='(^|[^[:alpha:]])(claude|anthropic|openai|chatgpt|codex|copilot|gemini|cursor|llm)([^[:alpha:]]|$)|noreply@github\.com.*bot|\[bot\]'
 bad_sob=""
 for c in $commits; do
   while IFS= read -r line; do
@@ -105,7 +126,11 @@ tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 while IFS= read -r f; do
   git show "$head:$f" > "$tmp" 2>/dev/null || continue
-  first=$(head -c 64 "$tmp" | head -1)
+  # tr, not head -1: uutils' head writes again at the end of a short file,
+  # after head -1 has gone, so pipefail ended pr-check. tr reads to the end
+  # and drops NULs as $(...) did.
+  first=$(head -c 64 "$tmp" | tr -d '\0')
+  first=${first%%$'\n'*}
   case $first in
     '#!/bin/bash'*|'#!/usr/bin/env bash'*) bash -n "$tmp" 2>/dev/null || broken+="$f"$'\n' ;;
     '#!/bin/sh'*|'#!/bin/busybox sh'*) sh -n "$tmp" 2>/dev/null || broken+="$f"$'\n' ;;

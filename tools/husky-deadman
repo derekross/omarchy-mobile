@@ -1,8 +1,9 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 #
-# husky-deadman: run one MAX77759 charger bring-up step on the Pixel 8 Pro
-# under a dead-man switch and a battery guard (device/husky/BATTERY-NOTES.md, M5). Ported from
+# husky-deadman: run one MAX77759 charger bring-up step on a zuma phone (the
+# Pixel 8 Pro or the Pixel 8a) under a dead-man switch and a battery guard
+# (device/husky/BATTERY-NOTES.md, M5; device/akita/BRINGUP-M4.md). Ported from
 # tools/usbc-deadman (cheetah). The step runs DETACHED on the phone
 # (tools/husky-deadman-phone, started with systemd-run) and undoes itself
 # unless this script gets back in over a NEW SSH login and confirms, or when
@@ -58,17 +59,29 @@ Physical recovery, in order:
   1. Wait 2 minutes: the phone undoes the step, then its watchdog resets it
      (the screen goes black and the boot logo returns). Linux on slot B boots
      with max77759_charger blocked in modprobe.d.
-  2. Unplug the cable. Force a restart: hold Power + Volume Up for 15 to 30 s
-     (Power alone does nothing on the 8 Pro under our kernel). It boots slot B
-     again. EVERY reset spends one of slot B's three boot tries; at zero the
-     bootloader falls back to slot A and its first boot wipes userdata. Count
-     the boots since your last "bin/omamobile flash" (it gives B three again),
-     and when one is left, flash your known-good image set instead of resetting.
-  3. Whether a reset puts the charger registers back is NOT known for husky:
-     keep the phone on a cable only while you watch it, and check the
-     battery temperature by hand.
-  4. Fastboot by hand: force a restart as in 2, then Power + Volume Down until
-     "Fastboot Mode"; flash your known-good image set.
+  2. Unplug the cable. Force a restart:
+     - Pixel 8 Pro: hold Power + Volume Up for 15 to 30 s (Power alone does
+       nothing on the 8 Pro under our kernel).
+     - Pixel 8a: not tested. Volume Down + Power held for over a minute
+       restarted it into slot B once (device/akita/BRINGUP-M4.md, findings).
+     It boots slot B again. EVERY reset spends one of slot B's three boot
+     tries; at zero the bootloader falls back to slot A and its first boot
+     wipes userdata. Count the boots since your last "bin/omamobile flash"
+     (it gives B three again), and when one is left, flash your known-good
+     image set instead of resetting.
+  3. The charger registers after a reset:
+     - Pixel 8 Pro: whether a reset puts the charger registers back is NOT
+       known for husky: keep the phone on a cable only while you watch it,
+       and check the battery temperature by hand.
+     - Pixel 8a: a reboot through the bootloader put the bootloader's values
+       back (BRINGUP-M4, test 46); a forced restart is not tested, so watch
+       it the same way.
+  4. Fastboot by hand:
+     - Pixel 8 Pro: force a restart as in 2, then Power + Volume Down until
+       "Fastboot Mode"; flash your known-good image set.
+     - Pixel 8a: Volume Down + Power reached fastboot once (BRINGUP-M2,
+       after the host lost power), and once came back into slot B instead
+       (BRINGUP-M4); how long to hold which key is not known.
 TXT
 }
 

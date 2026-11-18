@@ -1,0 +1,68 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# systemd-sleep hook for the Pixel 9a's CPU idle states: the sleep runs in
+# WFI. With every core in the core power-down state (C2) through s2idle the
+# palmtop sometimes never woke, not from the RTC alarm and not from the
+# power key, after 6 to 135 sleeps (2026-10-28 to 2026-11-08; a watchdog kept
+# counting through the sleep showed the suspend side complete and nothing
+# after it). With C2 off for the sleep, 300 of 300 RTC-woken sleeps came
+# back (2026-11-07/08). Why C2 doesn't wake is open: the PMU's wake-up
+# masks and the CPU power-down handshake aren't programmed on this SoC yet
+# (device/tegu SLEEP-PLAN S1).
+#
+# So before the sleep: every idle state deeper than state0 that is enabled
+# is disabled on every CPU, and noted. After the wake: the noted ones are
+# enabled again, so the cores still power down while the palmtop is awake.
+# A state someone disabled by hand stays disabled. On a kernel without
+# deeper states (the published device tree has none yet) nothing happens.
+#
+# Like the NFC hook, this covers a systemd sleep only: a sleep written
+# straight to /sys/power/state (rtcwake -m freeze) skips it. To test C2 in
+# the sleep on purpose, make /etc/omamobile/cpuidle-keep-across-sleep: the
+# hook then only logs. Logs to /var/log/omamobile/cpuidle-sleep.log.
+# OMAMOBILE_TEGU_ROOT: a scratch root for the package tests.
+root=${OMAMOBILE_TEGU_ROOT:-}
+C=$root/sys/devices/system/cpu
+D=$root/run/omamobile
+N=$D/cpuidle-disabled-for-sleep
+KEEP=$root/etc/omamobile/cpuidle-keep-across-sleep
+L=$root/var/log/omamobile/cpuidle-sleep.log
+mkdir -p "$D" "${L%/*}"
+log() { echo "$(date -Is) $1: $2" >> "$L"; }
+# Enable the noted states again and drop the note. $1: the pass, for the log.
+restore() {
+  local f n=0
+  while read -r f; do
+    [[ -e $f ]] || continue
+    if { echo 0 > "$f"; } 2>/dev/null; then n=$((n + 1)); else log "$1" "could not enable $f"; fi
+  done < "$N"
+  rm -f "$N"
+  if [[ $1 == pre ]]; then
+    log pre "$n idle states enabled again (the note of a sleep whose post pass never ran)"
+  else
+    log post "$n idle states enabled again"
+  fi
+}
+case "$1" in
+  pre)
+    # A note still here is from a sleep whose "post" never ran (systemd-sleep
+    # killed between the two passes): its states are enabled again first, so
+    # they aren't taken for hand-disabled ones and left off for good.
+    [[ -e $N ]] && restore pre
+    if [[ -e $KEEP ]]; then
+      log pre "$KEEP exists: the idle states are left as they are"
+      exit 0
+    fi
+    n=0
+    for f in "$C"/cpu[0-9]*/cpuidle/state[1-9]*/disable; do
+      [[ -e $f ]] || continue
+      [[ $(cat "$f") == 0 ]] || continue
+      if { echo 1 > "$f"; } 2>/dev/null; then echo "$f" >> "$N"; n=$((n + 1)); else log pre "could not disable $f"; fi
+    done
+    ((n)) && log pre "$n deeper idle states disabled for the sleep"
+    ;;
+  post)
+    [[ -e $N ]] && restore post
+    ;;
+esac
+exit 0

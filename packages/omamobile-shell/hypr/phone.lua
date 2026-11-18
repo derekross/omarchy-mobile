@@ -125,8 +125,12 @@ o.launch_on_start("gsettings set org.gnome.desktop.a11y.applications screen-keyb
 -- Hardware keys don't wake the screen, as on Android: power wakes it through
 -- omamobile-keys, which decides from the screen's state when it is released.
 -- With Omarchy's key_press_enables_dpms, the press itself lit the screen and
--- the release then turned it off again. Touch still wakes it.
+-- the release then turned it off again.
 hl.config({ misc = { key_press_enables_dpms = false } })
+-- Nor does a single touch: a double tap wakes it, as on Android
+-- (omamobile-doubletap; the lock ignores touches while dark, patches/omarchy/0029),
+-- so a touch in a pocket or a brush of the palm leaves it dark.
+hl.config({ misc = { mouse_move_enables_dpms = false } })
 
 -- Hyprland 0.57 turned quirks:skip_non_kms_dmabuf_formats on by default: it
 -- offers clients only the formats a display plane can scan out. gs201's DECON
@@ -213,7 +217,31 @@ not_from_osk("ALT + SHIFT + TAB", {
 })
 not_from_osk("CTRL + ALT + TAB", { { "Focus on next monitor", hl.dsp.focus({ monitor = "+1" }) } })
 not_from_osk("CTRL + ALT + SHIFT + TAB", { { "Focus on previous monitor", hl.dsp.focus({ monitor = "-1" }) } })
-if o.cmd_present("voxtype") then
+-- Dictation keys. Omarchy 4.0 binds F9 to Voxtype (voxtype.lua). Omarchy 4.5
+-- binds Alt + Space to its dictation command when a backend is installed
+-- (dictation.lua, which defines o.dictation_installed), and its migration
+-- keeps F9 in the bindings.lua of someone who had dictation before. Either
+-- way squeekboard's own F9 and Alt + Space belong to the app in front, and
+-- the phone's way to dictate is the keyboard's Mic key and the Dictation
+-- tile. An F9 line in bindings.lua that isn't that migration's is the
+-- owner's and is left alone.
+local function migrated_f9()
+  local file = io.open((os.getenv("HOME") or "") .. "/.config/hypr/bindings.lua", "r")
+  if not file then return false end
+  local text = file:read("*a")
+  file:close()
+  return text:find('o.bind_hold("F9", "Start dictation (push-to-talk)", "omarchy-dictation start"', 1, true) ~= nil
+end
+if o.dictation_installed then
+  if o.dictation_installed() then
+    not_from_osk("ALT + SPACE", { { "Toggle dictation", "omarchy-dictation toggle" } })
+    if migrated_f9() then
+      hl.unbind("F9")
+      o.bind_hold("F9", "Start dictation (push-to-talk)", "omarchy-dictation start",
+        "Stop dictation (push-to-talk)", "omarchy-dictation stop", { device = not_osk })
+    end
+  end
+elseif o.cmd_present("voxtype") then
   not_from_osk("F9", {
     { "Start dictation (push-to-talk)", "voxtype record start" },
     { "Stop dictation (push-to-talk)", "voxtype record stop", { release = true } },

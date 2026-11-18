@@ -1,0 +1,76 @@
+# Touch screens: swipe through the image picker (backgrounds, themes), fit it
+# to a narrow screen, and hold the desktop for the Style menu (there is no
+# right button or keyboard shortcut on a phone).
+#
+# Against Omarchy 4.0.4 (edge 4.0.4-2; tag v4.0.4) with 0000 (Commons.Color)
+# applied: only the context of the picker's size properties differs from
+# upstream main.
+diff --git i/shell/plugins/background/Background.qml w/shell/plugins/background/Background.qml
+index 0a53b20..546aaaf 100644
+--- i/shell/plugins/background/Background.qml
++++ w/shell/plugins/background/Background.qml
+@@ -105,6 +105,15 @@ Item {
+     if (!bgSwitchProc.running) bgSwitchProc.running = true
+   }
+ 
++  function openStyleMenu() {
++    if (!styleMenuProc.running) styleMenuProc.running = true
++  }
++
++  Process {
++    id: styleMenuProc
++    command: ["omarchy-menu", "summon", "style"]
++  }
++
+   function openThemeSwitcher() {
+     if (!themeSwitchProc.running) themeSwitchProc.running = true
+   }
+@@ -313,6 +322,10 @@ Item {
+       MouseArea {
+         anchors.fill: parent
+         acceptedButtons: Qt.LeftButton | Qt.RightButton
++        onPressAndHold: function(mouse) {
++          root.openStyleMenu()
++          mouse.accepted = true
++        }
+         onDoubleClicked: function(mouse) {
+           if (mouse.button === Qt.RightButton) root.openThemeSwitcher()
+           else root.openSelector()
+diff --git i/shell/plugins/image-picker/ImagePicker.qml w/shell/plugins/image-picker/ImagePicker.qml
+index b0554f5..0f735f6 100644
+--- i/shell/plugins/image-picker/ImagePicker.qml
++++ w/shell/plugins/image-picker/ImagePicker.qml
+@@ -39,10 +39,11 @@ Item {
+   property color scrim: Commons.Color.imagePicker.scrim
+   property color selectedBorder: Commons.Color.imagePicker.selectedBorder
+   property color unselectedBorder: Commons.Color.imagePicker.unselectedBorder
+-  property int expandedWidth: 768
+-  property int expandedHeight: 475
++  // Fit narrow screens (phones): never wider than the window allows.
++  property int expandedWidth: panel.width > 0 ? Math.min(768, panel.width - 96) : 768
++  property int expandedHeight: Math.round(475 * expandedWidth / 768)
+   property int sliceWidth: 108
+-  property int sliceHeight: 432
++  property int sliceHeight: Math.round(432 * expandedWidth / 768)
+   property int sliceSpacing: -30
+   property int skewOffset: 28
+   property int bottomChromeHeight: showLabels ? (filterable ? 104 : 74) : (filterable ? 60 : 30)
+@@ -435,6 +436,18 @@ Item {
+ 
+           Component.onCompleted: forceActiveFocus()
+ 
++          // Swipe left or right to move through the images on touch screens.
++          DragHandler {
++            target: null
++            yAxis.enabled: false
++            property real swipeX: 0
++            onActiveTranslationChanged: swipeX = activeTranslation.x
++            onActiveChanged: {
++              if (active) swipeX = 0
++              else if (Math.abs(swipeX) > 40) root.selectAdjacent(swipeX < 0 ? 1 : -1)
++            }
++          }
++
+           Repeater {
+             model: root.imageArray.length
+ 

@@ -125,7 +125,7 @@ since_start() { sed -n "/fingerprint-capture: start $step/,\$p" "$log"; }
 result=
 while (( $(date +%s) - start < wait_s )); do
   sleep 1
-  if since_start | grep -Eq "$done_re"; then result=done; break; fi
+  if since_start | grep -Ec "$done_re" >/dev/null; then result=done; break; fi
 done
 wait "$step_pid" 2>/dev/null
 sleep 2

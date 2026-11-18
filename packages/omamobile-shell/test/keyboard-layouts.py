@@ -123,6 +123,43 @@ for path in paths:
         print("ok - %s" % path)
 print("ok - %d layouts carry the action row" % len(paths))
 
+# Greek: a row of accented vowels under the action row, one key each. Plain
+# keys that type their letter (dead keys for the tonos do not work: squeekboard
+# sends them as the characters, the app never composes them).
+GREEK_ACCENT_ROWS = {"base": "ά έ ή ί ό ύ ώ ϊ ϋ ΐ ΰ", "upper": "Ά Έ Ή Ί Ό Ύ Ώ Ϊ Ϋ « »"}
+
+
+def row_width(data, row):
+    return sum(data["outlines"][(data["buttons"].get(k) or {}).get("outline", "default")]["width"] for k in row.split())
+
+
+for rel in ("gr.yaml", "gr_wide.yaml"):
+    path = "squeekboard/keyboards/" + rel
+    with open(path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    views, buttons = data["views"], data["buttons"]
+    if "accent" not in data["outlines"]:
+        fail(path, "the accent outline is defined")
+        continue
+    for view, letters in GREEK_ACCENT_ROWS.items():
+        want = " ".join(c + "-accent" for c in letters.split())
+        if len(views[view]) < 3 or views[view][0] != ACTION_ROW or views[view][1] != want:
+            fail(path, "view %s: the second row, under the action row, is the accent row" % view)
+        for c in letters.split():
+            b = buttons.get(c + "-accent") or {}
+            if b.get("text") != c or b.get("outline") != "accent":
+                fail(path, "%s-accent types %s with the accent outline" % (c, c))
+        if abs(row_width(data, want) - row_width(data, ACTION_ROW)) > 0.1:
+            fail(path, "view %s: the accent row is as wide as the action row" % view)
+    for vname, rows in views.items():
+        if vname not in GREEK_ACCENT_ROWS and any("-accent" in r for r in rows):
+            fail(path, "view %s has no accent row" % vname)
+    if "accented" not in views or "show_accented" not in buttons:
+        fail(path, "the accents view and its key are still there")
+    if not any("show_accented" in r for r in views["base"]):
+        fail(path, "the base view still opens the accents view")
+print("ok - the Greek layouts have the accent row, 1 key per vowel, in the base and shift views")
+
 for line in failures:
     print("not ok - " + line)
 sys.exit(1 if failures else 0)

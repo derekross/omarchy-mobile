@@ -57,6 +57,31 @@ HEADER_END = "# omamobile-setup-user links it into ~/.local/share/squeekboard/ke
 GLOBE_UPSTREAM = 'action: "show_prefs"'
 GLOBE = 'keysym: "XF86MediaLanguageMenu"'
 HAND_MADE = {"terminal/us.yaml", "terminal/us_wide.yaml"}
+# Greek (gr, gr_wide): a row of its own under the action row with the accented
+# vowels, one key each, so ά is one tap and not two (open the accents view,
+# then tap; it closes itself after one key). The accents view stays for the rest of what is only there.
+# Lowercase in the base view, capitals in the shift view, which also gets the
+# Greek quotes « ». Plain keys that type their own letter, so every app takes
+# them. (Dead keys for the tonos and dialytika were tried first: squeekboard
+# sends them as the characters ´ and ¨ and the app never composes them.) The
+# keys are named with a suffix because key names are shared by all views and
+# ώ is already a wider key in the accents view.
+GREEK_FILES = {"gr.yaml", "gr_wide.yaml"}
+GREEK_ACCENT_ROWS = {
+    "base": "ά έ ή ί ό ύ ώ ϊ ϋ ΐ ΰ",
+    "upper": "Ά Έ Ή Ί Ό Ύ Ώ Ϊ Ϋ « »",
+}
+GREEK_OUTLINE = "accent"
+GREEK_SUFFIX = "-accent"
+GREEK_COMMENT = "# Greek: the accented vowels, one key each (the accents view stays for the rest)"
+GREEK_HEADER = [
+    "# Greek, also: a row of accented vowels under the action row (capitals and",
+    "# the quotes « » with shift), one key each.",
+]
+
+
+def greek_row(view):
+    return " ".join(ch + GREEK_SUFFIX for ch in GREEK_ACCENT_ROWS[view].split())
 SKIP_DIRS = {"emoji", "number", "pin"}
 
 
@@ -117,6 +142,12 @@ def generate(upstream, rel):
     for _, outline, _, _, _ in KEYS:
         head = " " * indent + outline + ":"
         new.append(head.ljust(max(column, len(head) + 1)) + "{ width: %s, height: %d }" % (shares[outline], height))
+    greek = rel in GREEK_FILES
+    if greek:
+        base_h = data["outlines"]["default"]["height"]
+        each = round(width / len(GREEK_ACCENT_ROWS["base"].split()), 3)
+        head = " " * indent + GREEK_OUTLINE + ":"
+        new.append(head.ljust(max(column, len(head) + 1)) + "{ width: %s, height: %d }" % (num(each), round(base_h * 32 / 52)))
     lines[last + 1:last + 1] = new
 
     # the row at the top of every view
@@ -130,6 +161,11 @@ def generate(upstream, rel):
             lines.insert(i + 1, " " * pad + '- "%s"' % ACTION_ROW)
             last += 1
             i += 1
+            vname = lines[i - 1].split(":")[0].strip()
+            if greek and vname in GREEK_ACCENT_ROWS:
+                lines.insert(i + 1, " " * pad + '- "%s"' % greek_row(vname))
+                last += 1
+                i += 1
         i += 1
 
     # the buttons, at the end of the buttons block
@@ -140,6 +176,15 @@ def generate(upstream, rel):
         new += [pad + name + ":", pad * 2 + 'outline: "%s"' % outline,
                 pad * 2 + 'keysym: "%s"' % keysym, pad * 2 + 'label: "%s"' % label]
     lines[last + 1:last + 1] = new
+
+    if greek:
+        start, last, indent = block(lines, "buttons")
+        pad = " " * indent
+        new = [pad + GREEK_COMMENT]
+        for view in GREEK_ACCENT_ROWS:
+            for ch in GREEK_ACCENT_ROWS[view].split():
+                new += [pad + ch + GREEK_SUFFIX + ":", pad * 2 + 'outline: "%s"' % GREEK_OUTLINE, pad * 2 + 'text: "%s"' % ch]
+        lines[last + 1:last + 1] = new
 
     # the globe key: a keysym for hypr/phone.lua instead of the popover
     globes = [i for i, line in enumerate(lines) if line.strip() == GLOBE_UPSTREAM]
@@ -159,10 +204,15 @@ def generate(upstream, rel):
         "# sums to the widest row's %s: 2 x %s + 2 x %s." % (num(width), a, b),
         HEADER_END,
     ]
+    if greek:
+        header[-1:-1] = GREEK_HEADER
     out = "\n".join(header + lines)
     check = yaml.safe_load(out)
     for vname, rows in check["views"].items():
-        assert rows[0] == ACTION_ROW and rows[1:] == data["views"][vname], (rel, vname)
+        want = data["views"][vname]
+        if greek and vname in GREEK_ACCENT_ROWS:
+            want = [greek_row(vname)] + want
+        assert rows[0] == ACTION_ROW and rows[1:] == want, (rel, vname)
     assert [b for b in check["buttons"].values() if b.get("action") == "show_prefs"] == [], rel
     return out
 
@@ -170,8 +220,11 @@ def generate(upstream, rel):
 def strip(generated):
     """The upstream file back from a generated one."""
     lines = generated.split("\n")
+    greek = GREEK_COMMENT in generated
     lines = lines[lines.index(HEADER_END) + 1:]
-    outline = re.compile(r"^\s+(%s):\s+\{ width: " % "|".join(k[1] for k in KEYS))
+    names = [k[1] for k in KEYS] + ([GREEK_OUTLINE] if greek else [])
+    outline = re.compile(r"^\s+(%s):\s+\{ width: " % "|".join(names))
+    accent_rows = {'- "%s"' % greek_row(v) for v in GREEK_ACCENT_ROWS} if greek else set()
     row = '- "%s"' % ACTION_ROW
     out, skip = [], 0
     for line in lines:
@@ -181,7 +234,10 @@ def strip(generated):
         if line.strip() == BUTTONS_COMMENT:
             skip = 4 * len(KEYS)
             continue
-        if outline.match(line) or line.strip() == row:
+        if line.strip() == GREEK_COMMENT:
+            skip = 3 * sum(len(r.split()) for r in GREEK_ACCENT_ROWS.values())
+            continue
+        if outline.match(line) or line.strip() == row or line.strip() in accent_rows:
             continue
         if line.strip() == GLOBE:
             line = line.replace(GLOBE, GLOBE_UPSTREAM)

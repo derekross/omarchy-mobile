@@ -253,7 +253,9 @@ Item {
       anchors.fill: parent
       focus: root.opened
       Keys.onEscapePressed: {
-        if (root.actionsOpen) root.closeActions()
+        // One level: "Show with…" back to the window's menu, as its Back row.
+        if (root.actionsOpen && root.actionPage === "pick") root.actionPage = "menu"
+        else if (root.actionsOpen) root.closeActions()
         else root.dismiss()
       }
     }
@@ -299,9 +301,28 @@ Item {
         var i = Math.max(0, Math.min(count - 1, index))
         currentIndex = i
         positionViewAtIndex(i, ListView.Center)
+        keep()
       }
-      onWidthChanged: Qt.callLater(function() { cards.centreOn(cards.currentIndex) })
-      onCountChanged: Qt.callLater(function() { cards.centreOn(cards.currentIndex) })
+
+      // The card the user is on, by its window and by its place.
+      // root.windows is a new array whenever a window opens or closes, and a
+      // new model puts currentIndex back to 0: closing a card jumped back to
+      // the newest one. Come back to the same window, or, when that window
+      // is the one that closed, to the card that took its place.
+      property var keptWindow: null
+      property int keptIndex: 0
+      function keep() {
+        keptIndex = currentIndex
+        keptWindow = root.windows[currentIndex] || null
+      }
+      function restore() {
+        var i = keptWindow ? root.windows.indexOf(keptWindow) : -1
+        centreOn(i >= 0 ? i : keptIndex)
+      }
+      onMovementEnded: keep()
+      onWidthChanged: Qt.callLater(cards.restore)
+      onCountChanged: Qt.callLater(cards.restore)
+      onModelChanged: Qt.callLater(cards.restore)
 
       // 72% of the width upright; on its side, no wider than the screen's
       // shape gives the card's height (the title sits above the card).

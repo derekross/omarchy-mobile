@@ -1,0 +1,81 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# rootfs/resolve.sh against a stand-in pacman: a package no repository has
+# is "absent", one whose dependencies can't be met is "unmet" with pacman's
+# reasons (#433), only pacman's "target not found" counts as absent, and
+# build-inside uses it for both of its package lists.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { echo "not ok - $*" >&2; exit 1; }
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+cat > "$t/pacman" <<'PACMAN'
+#!/bin/bash
+# -Sp --print-format %n NAME, as resolve.sh calls it
+name=${*: -1}
+# pacman translates its messages; resolve.sh must ask for them untranslated
+[[ ${LC_ALL:-} == C ]] || { echo "Fehler: Ziel nicht gefunden: $name" >&2; exit 1; }
+case $name in
+  nosuch) echo "error: target not found: nosuch" >&2; exit 1 ;;
+  hyprtoolkit|xdg-desktop-portal-hyprland)
+    echo "error: failed to prepare transaction (could not satisfy dependencies)" >&2
+    echo ":: unable to satisfy dependency 'libaquamarine.so=15-64' required by hyprtoolkit" >&2
+    [[ $name == hyprtoolkit ]] || echo ":: unable to satisfy dependency 'hyprtoolkit' required by xdg-desktop-portal-hyprland" >&2
+    exit 1 ;;
+  clash)
+    echo "error: failed to prepare transaction (conflicting dependencies)" >&2
+    echo ":: clash and clash-git are in conflict" >&2
+    exit 1 ;;
+  silent) exit 1 ;;
+  *) echo "$name" ;;
+esac
+PACMAN
+chmod +x "$t/pacman"
+export PATH="$t:$PATH"
+# shellcheck source=../rootfs/resolve.sh
+source rootfs/resolve.sh
+
+resolve bash
+[[ $verdict == ok && -z $why ]] || fail "an installable package is ok"
+resolve nosuch
+[[ $verdict == absent && -z $why ]] || fail "a package no repository has is absent (got: $verdict)"
+resolve hyprtoolkit
+[[ $verdict == unmet ]] || fail "a package with unmet dependencies is unmet, not absent"
+[[ $why == ":: unable to satisfy dependency 'libaquamarine.so=15-64' required by hyprtoolkit" ]] || fail "unmet carries pacman's reason (got: $why)"
+resolve clash
+[[ $verdict == unmet && $why == ":: clash and clash-git are in conflict" ]] || fail "a conflict is unmet with pacman's reason, not absent (got: $verdict $why)"
+resolve silent
+[[ $verdict == unmet && -n $why ]] || fail "a failure without \"target not found\" is unmet, never absent, and still says something"
+echo "ok - resolve tells absent from unmet"
+
+resolve_all bash nosuch hyprtoolkit xdg-desktop-portal-hyprland git
+[[ "${ok_pkgs[*]}" == "bash git" ]] || fail "ok_pkgs (got: ${ok_pkgs[*]})"
+[[ "${absent_pkgs[*]}" == nosuch ]] || fail "absent_pkgs (got: ${absent_pkgs[*]})"
+[[ "${unmet_pkgs[*]}" == "hyprtoolkit xdg-desktop-portal-hyprland" ]] || fail "unmet_pkgs (got: ${unmet_pkgs[*]})"
+[[ $(grep -c libaquamarine <<<"$unmet_why") == 1 ]] || fail "each reason is printed once"
+grep -qF "    :: unable to satisfy dependency 'hyprtoolkit' required by xdg-desktop-portal-hyprland" <<<"$unmet_why" || fail "every package's reasons are kept, indented"
+resolve_all
+((${#ok_pkgs[@]} + ${#absent_pkgs[@]} + ${#unmet_pkgs[@]} == 0)) || fail "an empty list resolves to nothing"
+echo "ok - resolve_all sorts a list and keeps each reason once"
+
+# Omarchy's package list: one file on 4.0, composed on 4.5
+L=$t/lists; mkdir -p "$L/40" "$L/45" "$L/none"
+printf '# base\nbash\nhyprland  # the compositor\n\nlimine\nbash\n' > "$L/40/omarchy-base.packages"
+cp "$L/40/omarchy-base.packages" "$L/45/"
+printf 'zram-generator\nrtkit\nhyprland\n' > "$L/45/omarchy-aarch64.packages"
+printf '# only x86_64 builds these\nlimine\n' > "$L/45/omarchy-x86_64-only.packages"
+printf 'asahi-fwextract\n' > "$L/45/omarchy-aarch64-apple.packages"
+[[ $(omarchy_packages "$L/40" | tr '\n' ' ') == "bash hyprland limine " ]] || fail "Omarchy 4.0: the base list, comments and repeats removed (got: $(omarchy_packages "$L/40" | tr '\n' ' '))"
+[[ $(omarchy_packages "$L/45" | tr '\n' ' ') == "bash hyprland zram-generator rtkit " ]] \
+  || fail "Omarchy 4.5: base plus the aarch64 list, minus the x86_64-only one, never a named platform's (got: $(omarchy_packages "$L/45" | tr '\n' ' '))"
+omarchy_packages "$L/none" >/dev/null 2>&1 && fail "no base list is a failure, not an empty list"
+echo "ok - Omarchy's package list: the base file on 4.0; base plus aarch64 minus x86_64-only on 4.5"
+
+inside=rootfs/build-inside
+grep -qF 'done < <(omarchy_packages "$omarchy_lists")' "$inside" || fail "build-inside takes Omarchy's list from omarchy_packages"
+grep -qF 'source /src/rootfs/resolve.sh' "$inside" || fail "build-inside sources resolve.sh"
+grep -qF 'resolve_all "${base[@]}"' "$inside" || fail "build-inside checks the base list with resolve_all"
+grep -qF 'resolve_all "${listed[@]}"' "$inside" || fail "build-inside checks Omarchy's list with resolve_all"
+grep -qF 'unavailable=("${absent_pkgs[@]}")' "$inside" || fail "only absent packages are 'not built for aarch64' in the MANIFEST"
+grep -q 'available()' "$inside" && fail "build-inside no longer has the yes/no available check"
+echo "ok - build-inside uses it for the base list and Omarchy's list"

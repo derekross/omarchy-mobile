@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# Load the camera drivers (hang-safe script; device/cheetah/CAMERA-PLAN.md
+# CAM5.4). Started by omamobile-camera.timer, after the boot has settled.
+[Unit]
+Description=Load the camera drivers (hang-safe)
+After=multi-user.target omamobile-aoc.service
+ConditionPathExists=/sys/bus/platform/devices/1a450000.csis
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-camera-start
+RemainAfterExit=yes
