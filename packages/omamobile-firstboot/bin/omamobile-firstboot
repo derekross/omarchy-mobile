@@ -373,9 +373,9 @@ s_services() {
   local unit
   for unit in NetworkManager.service systemd-networkd.service systemd-resolved.service sshd.service \
               sddm.service bluetooth.service systemd-timesyncd.service ufw.service; do
-    systemctl enable "$unit" || echo "    could not enable $unit"
+    systemctl enable --no-reload "$unit" || echo "    could not enable $unit"
   done
-  systemctl mask systemd-networkd-wait-online.service NetworkManager-wait-online.service || true
+  systemctl mask --no-reload systemd-networkd-wait-online.service NetworkManager-wait-online.service || true
   if [[ ! -L $ROOT/etc/resolv.conf ]]; then
     ln -sfn /run/systemd/resolve/stub-resolv.conf "$ROOT/etc/resolv.conf"
   fi
