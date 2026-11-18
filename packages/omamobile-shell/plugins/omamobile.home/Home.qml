@@ -628,9 +628,9 @@ Item {
       }
     }
   }
-  // The app drawer covers it once fully open (its surface is always mapped,
-  // so it has no openlayer event to go by; drawerProgress below).
-  readonly property bool homeShown: HomeModel.homeShown(owlPanelOff, appOnScreen, coveringLayers) && drawerProgress < 1
+  // The drawer and Search surfaces stay mapped. Use their launcher state
+  // to pause widgets and leave Back to the visible surface.
+  readonly property bool homeShown: HomeModel.homeShown(owlPanelOff, appOnScreen, coveringLayers) && drawerProgress < 1 && !searchOpened
   readonly property bool owlPaused: !homeShown
   // The app drawer (omamobile.launcher's root, through its DrawerLink.js,
   // which DrawerLinkClient.qml beside it imports), for the swipe up and for
@@ -641,6 +641,7 @@ Item {
     source: Qt.resolvedUrl("../omamobile.launcher/DrawerLinkClient.qml")
   }
   readonly property var drawer: drawerLink.item ? drawerLink.item.drawer : null
+  readonly property bool searchOpened: !!drawer && drawer.searchOpened === true
   readonly property real drawerProgress: drawer && drawer.progress !== undefined ? Number(drawer.progress) || 0 : 0
   // The dock (omamobile.launcher) reserves no space, so that no window
   // changes size as the drawer opens over it; the home screen keeps its

@@ -1,0 +1,15 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The actual apps-only Search component and its input context lifecycle,
+# under Qt Quick Test with inert desktop entries. No shell, OSK, app launch,
+# session bus, user files or compositor is contacted.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+runner=$(command -v qmltestrunner6 || command -v /usr/lib/qt6/bin/qmltestrunner || command -v qmltestrunner || true)
+[[ -n $runner ]] || { echo "apps-search: no qmltestrunner"; exit 77; }
+work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/launcher"
+cp "$here/../plugins/omamobile.launcher/AppsSearch.qml" "$here/../plugins/omamobile.launcher/SearchFocus.qml" "$work/launcher/"
+cp "$here/apps-search.qml" "$work/tst_apps_search.qml"
+export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
+"$runner" -import "$here/qml-stubs" -input "$work/tst_apps_search.qml"

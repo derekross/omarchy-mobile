@@ -1048,6 +1048,7 @@ function drawerFallbackOpens(travel, speed) {
 // volume display and the on-screen keyboard (Back's own first stop).
 var BACK_FURNITURE = ["omarchy-background", "omarchy-bar", "omarchy-notifications", "omarchy-osd",
                       "omamobile-home", "omamobile-dock", "omamobile-home-strip", "omamobile-back", "omamobile-launcher",
+                      "omamobile-app-search", "omamobile-app-search-background",
                       "omamobile-fingerprint", "omamobile-fingerprint-guard", "omamobile-call-top", "omamobile-voice-bar", "osk"]
 
 // Everything else mapped over the home screen after one Hyprland event

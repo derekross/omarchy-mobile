@@ -38,6 +38,7 @@ Item {
     }
 
     function init() {
+      harness.searchOpened = false
       harness.close()
       tryCompare(harness, "progress", 0, 3000)
       harness.calls = []
@@ -263,6 +264,13 @@ Item {
       t.release(0, view, c.x, c.y + 120).commit()
       tryCompare(harness, "progress", 0, 3000)
       compare(layoutOf(), closed, "closed again")
+    }
+
+    function test_no_home_swipe_while_native_search_is_open() {
+      harness.searchOpened = true
+      verify(!harness.gestureBegin())
+      compare(harness.progress, 0)
+      harness.searchOpened = false
     }
 
     function test_no_home_swipe_while_open() {

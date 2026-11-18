@@ -68,6 +68,9 @@ Item {
     hide: function(id) { root.calls = root.calls.concat(["hide"]); root.close(); return true }
   })
   readonly property string pluginId: "omamobile.launcher"
+  // Search is tested separately; these are the drawer's lifecycle calls.
+  property QtObject appsSearch: QtObject { function close() {} }
+  property bool searchOpened: false
   property bool opened: false
   property string query: ""
   property var apps: []

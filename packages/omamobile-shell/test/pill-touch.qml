@@ -34,6 +34,8 @@ Item {
       // towards the next one's.
       wait(600)
       Quickshell.executed = []
+      harness.searchOpened = false
+      harness.settings = ({nativeSearch:false})
     }
 
     function calls(fragment) {
@@ -97,6 +99,32 @@ Item {
     // keyboard, a hold opens the voice bar (with a tick), a swipe goes home.
     function ticks() {
       return Quickshell.executed.filter(function(argv) { return argv.join(" ").indexOf("fbcli -E button-pressed") >= 0 }).length
+    }
+
+    function test_native_search_keeps_home_reachable_after_manual_keyboard_hide() {
+      harness.appOnScreen = false
+      harness.opened = false
+      harness.fullscreenOnScreen = false
+      harness.sessionLocked = false
+      harness.searchOpened = true
+      harness.oskOpen = false
+      compare(harness.stripZone, harness.stripHeight)
+      compare(harness.dockZone, 0)
+      harness.goHome()
+      verify(!harness.searchOpened)
+    }
+
+    function test_stale_lock_does_not_hide_strip_over_an_app_with_keyboard_hidden() {
+      harness.appOnScreen = true
+      harness.opened = false
+      harness.fullscreenOnScreen = false
+      harness.searchOpened = false
+      harness.oskOpen = false
+      harness.sessionLocked = true
+      compare(harness.stripZone, harness.stripHeight)
+      harness.oskOpen = true
+      compare(harness.stripZone, 0)
+      verify(!harness.keyboardStripShown)
     }
 
     function test_holding_the_pill_opens_the_voice_bar_with_a_tick() {
@@ -178,6 +206,17 @@ Item {
 
     // The dock's search pill on the home screen: a tap opens the drawer
     // (with the keyboard), a hold opens the voice bar, a swipe recent apps.
+    function test_a_tap_on_the_search_pill_selects_native_search_when_enabled() {
+      harness.settings = ({nativeSearch:true})
+      var dock = find(harness, "dock")
+      tap(dock, dock.width / 2, dock.height / 2)
+      wait(600)
+      compare(calls("native-search"), 1)
+      compare(calls("expand"), 0)
+      verify(harness.searchOpened)
+      compare(voiceCalls("start"), 0)
+    }
+
     function test_a_tap_on_the_search_pill_opens_the_drawer() {
       var dock = find(harness, "dock")
       tap(dock, dock.width / 2, dock.height / 2)

@@ -25,6 +25,7 @@ MARK = 'source: Qt.resolvedUrl("../omamobile.back/BackLinkClient.qml")'
 
 # file -> the names its blocks register under, in file order
 EXPECT = {
+    "omamobile.launcher/Launcher.qml": ["app search"],
     "omamobile.keyboard/Keyboard.qml": ["keyboard languages", "keyboard"],
     "omamobile.access/Access.qml": ["permission sheet"],
     "omamobile.fingerprint/Fingerprint.qml": ["fingerprint setup"],
@@ -83,6 +84,8 @@ FAKES = '''
   property alias cell: owlCell
   QtObject {
     id: root
+    property bool searchOpened: false
+    function closeSearch() { note("closeSearch"); searchOpened = false }
     property bool oskOpen: false
     property bool languagesOpen: false
     property bool opened: false
@@ -138,6 +141,7 @@ TestCase {
   function names() { return BackLink.names().join(",") }
   function sent() { return Quickshell.executed.length }
 
+  Component { id: search; SurfAppSearch {} }
   Component { id: kb; SurfKeyboard {} }
   Component { id: lang; SurfKeyboardLanguages {} }
   Component { id: perm; SurfPermissionSheet {} }
@@ -165,6 +169,20 @@ TestCase {
     compare(back(), "ok")
     compare(sent(), 1)
     compare(JSON.stringify(Quickshell.executed[0]), JSON.stringify(BackModel.ESCAPE_ARGV))
+  }
+
+  function test_searchKeyboardFirst() {
+    var keys = make(kb)
+    var view = make(search)
+    view.fake.searchOpened = true
+    keys.fake.oskOpen = true
+    compare(back(), "keyboard")
+    verify(view.fake.searchOpened)
+    compare(sent(), 0)
+    compare(back(), "app search")
+    verify(!view.fake.searchOpened)
+    compare(names(), "")
+    compare(sent(), 0)
   }
 
   function test_keyboard() { alone(make(kb), "keyboard", function(o) { o.fake.oskOpen = true }, "hideKeyboard") }
