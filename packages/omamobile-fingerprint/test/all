@@ -97,6 +97,10 @@ u=vendor/systemd/system/omamobile-fp.service
 grep -c '^Restart=no$' "$u" >/dev/null || fail "the unit never restarts the stack"
 grep -c -e '^Restart=on' -e '^Restart=always' -e '^StartLimitBurst' "$u" >/dev/null && fail "no restart loop in the unit"
 grep -c '^KillMode=mixed$' "$u" >/dev/null || fail "systemd signals only the runner, which stops the stack in order"
+# Trusty can come up after the unit is reached (no AoC service on the Pixel 7):
+# wait for its device in ExecCondition (skip, not fail), never a condition
+grep -c '^ConditionPathExists=/dev/trusty-ipc-dev0' "$u" >/dev/null && fail "no condition on trusty-ipc-dev0 (it races udev)"
+grep -c '^ExecCondition=.*seq 50.*-c /dev/trusty-ipc-dev0.*exit 1' "$u" >/dev/null || fail "ExecCondition waits for trusty-ipc-dev0"
 # Stop order: the bridge and the HAL, then KeyMint and Gatekeeper, the proxy last
 order=$(sed -n '/^stop() {/,/^}/p' lib/omamobile-fp-chroot | sed -n 's/^ *stop_children [0-9]* //p' | tr '\n' '|')
 [[ $order == "bridge fingerprint|gatekeeper keymint|storageproxyd|" ]] || fail "stop order: $order"
