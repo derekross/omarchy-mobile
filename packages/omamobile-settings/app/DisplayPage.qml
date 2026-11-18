@@ -23,9 +23,11 @@ ColumnLayout {
                                         {s: 180, t: qsTr("3 min")}, {s: 300, t: qsTr("5 min")}, {s: 0, t: qsTr("Never")}]
     function applyLock(r) {
         lockBusy = false
+        // a saved value with an error (the shell did not reload, the watcher did not start) shows both
+        if (r.lock !== undefined) { lockAfter = r.lock; keyboardAwake = !!r.keyboardAwake; keyboard = !!r.keyboard }
         if (r.error) { lockError = r.error; return }
         if (r.lock === undefined) { lockError = qsTr("The lock backend gave no values."); return }
-        lockError = ""; lockAfter = r.lock; keyboardAwake = !!r.keyboardAwake; keyboard = !!r.keyboard
+        lockError = ""
     }
     function apply(r) {
         busy = false
@@ -90,7 +92,7 @@ ColumnLayout {
             : qsTr("With no touch for this long the phone locks, and the screen turns off a few seconds later. Locking and screen off are the same timer.")
         color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13); wrapMode: Text.Wrap; Layout.fillWidth: true
     }
-    SettingsLabel { text: qsTr("Stay unlocked while a keyboard is connected"); font.weight: Font.DemiBold; color: backend.foreground; wrapMode: Text.Wrap; Layout.fillWidth: true; Layout.topMargin: 8 }
+    SettingsLabel { text: qsTr("Lock after 30 minutes while a keyboard is connected"); font.weight: Font.DemiBold; color: backend.foreground; wrapMode: Text.Wrap; Layout.fillWidth: true; Layout.topMargin: 8 }
     Flow {
         Layout.fillWidth: true; spacing: 8
         Repeater {
@@ -104,7 +106,7 @@ ColumnLayout {
     }
     SettingsLabel {
         text: (page.keyboard ? qsTr("A keyboard is connected now. ") : qsTr("No keyboard is connected now. "))
-              + qsTr("Any Bluetooth or USB keyboard counts. While one is connected the screen also stays on. A Bluetooth keyboard that goes to sleep counts as disconnected.")
+              + qsTr("Any Bluetooth or USB keyboard counts, a dock or receiver too. While one is connected the phone locks and the screen turns off after 30 minutes without input instead of the time above (Never stays never). A Bluetooth keyboard that goes to sleep counts as disconnected.")
         color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13); wrapMode: Text.Wrap; Layout.fillWidth: true
     }
     Item { Layout.fillHeight: true }

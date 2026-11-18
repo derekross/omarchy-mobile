@@ -3,18 +3,27 @@
 # Screen lock settings for the Settings app's Display page. Prints one line of JSON.
 #   lock.sh get                 {"lock":60,"keyboardAwake":false,"keyboard":false,"effective":60}
 #   lock.sh set lock N          N is 30, 60, 120, 180, 300 or 0 (never)
-#   lock.sh set keyboard on|off stay unlocked while a Bluetooth or USB keyboard is connected
+#   lock.sh set keyboard on|off lock after 30 min (1800 s) while a Bluetooth or USB keyboard is connected;
+#                               on enables and starts the watcher unit (if that fails the toggle goes back to
+#                               off), off disables it and stops it without waiting (--no-block): this run has
+#                               already written the choice back, so the unit's own restore finds nothing to do
 #   lock.sh apply               write the value in force now (omamobile-lock-keyboard, on each input change)
 #   lock.sh restore             write the user's choice, keyboard or not (the watcher's ExecStopPost)
 # How the phone locks: Omarchy's idle service locks after shell.json's idle.lock seconds (0 = never, the
 # phone profile's value is 60), and the lock turns the screen off a few seconds later. So this one value
 # is both "lock after" and "screen off after"; there is no separate screen-off timer.
-# The choice is kept in ~/.config/omamobile/lock.json: {lock, keyboardAwake, applied, override}. "applied" is
-# the value last written to shell.json's idle.lock, and "override" says that value is the keyboard's 0, not
-# the user's choice. lock.json is always saved before shell.json, so after a crash or a failed write the
-# keyboard's 0 is never taken for the user's "Never". If idle.lock holds something else than "applied" and
+# The choice is kept in ~/.config/omamobile/lock.json: {lock, keyboardAwake, applied, override, reloadPending}.
+# "applied" is the value last written to shell.json's idle.lock, and "override" says a 1800 in shell.json is
+# the keyboard's, not the user's choice. lock.json is always saved before shell.json, and when the 1800 is
+# being replaced "override" stays set until shell.json is written (then lock.json is saved again), so a crash
+# at any point never turns the keyboard's 1800 into a choice made in Omarchy's settings. lock.json is only
+# rewritten when something in it changed. If idle.lock holds something else than "applied" and
 # it is not our override, it was changed elsewhere (Omarchy's own settings) and becomes the choice.
-# Nothing is written before the user picks something here. The keyboard's 0 is only written while the
+# After shell.json is written the running shell is told with `omarchy-shell shell reloadConfig` (5 s at most),
+# as Omarchy's own omarchy-shell-config does; if that fails the JSON carries an "error" (the value is saved)
+# and "reloadPending" stays set, so the next set/apply/restore reloads again even when it writes nothing.
+# Stay awake and idle on/off are never touched.
+# Nothing is written before the user picks something here. The keyboard's 1800 is only written while the
 # watcher unit runs (it puts the choice back when it stops). If the user's shell.json exists but does not
 # parse or has another version, nothing is written: only a missing or empty one starts from the defaults.
 # Both files are changed under one flock, through unique temp files.
@@ -39,13 +48,13 @@ if [[ -z $watcher ]]; then
     systemctl --user is-active --quiet omamobile-lock-keyboard.service 2>/dev/null; then watcher=1; fi
 fi
 
-# All work in one place: finds keyboards, reads prefs and shell.json, applies the verb, writes both.
-markdir=$(mktemp -d); trap 'rm -rf "$markdir"' EXIT; mark=$markdir/written
-rc=0
-res=$(LOCK_WRITTEN_MARK=$mark /usr/bin/python3 -I - "$prefs" "$shell" "$defaults" "$sys" "$udev" "$watcher" "$verb" "$key" "$value" <<'PY'
+# All work in one place: finds keyboards, reads prefs and shell.json, applies the verb, writes both, reloads.
+core() {
+/usr/bin/python3 -I - "$prefs" "$shell" "$defaults" "$sys" "$udev" "$watcher" "$@" <<'PY'
 import fcntl, json, os, re, struct, sys, tempfile
-prefs_path, shell_path, defaults_path, sysfs, udev, watcher, verb, key, value = sys.argv[1:]
+prefs_path, shell_path, defaults_path, sysfs, udev, watcher, verb, key, value = (sys.argv[1:] + ["", ""])[:9]
 CHOICES = (30, 60, 120, 180, 300, 0)
+KB_LOCK = 1800  # while a keyboard is connected: a long lock, not never
 def out(d): print(json.dumps(d, separators=(",", ":"))); sys.exit(0)
 def fail(m): print(json.dumps({"error": m}, separators=(",", ":"))); sys.exit(2)
 
@@ -134,9 +143,10 @@ except Unreadable: defaults = None
 current = secs(((shell or defaults or {}).get("idle") or {}).get("lock"), 300)
 try: prefs = load(prefs_path)
 except Unreadable: prefs = None  # our own file: start again from what is in force (below)
+saved = dict(prefs) if prefs is not None else None
 if prefs is not None:
     applied, override = prefs.get("applied"), bool(prefs.get("override"))
-    if isinstance(applied, int) and applied != current and not (override and current == 0):
+    if isinstance(applied, int) and applied != current and not (override and current == KB_LOCK):
         prefs["lock"] = current  # changed outside this page
     if not isinstance(prefs.get("lock"), int) or prefs["lock"] < 0: prefs["lock"] = current
     prefs["keyboardAwake"] = bool(prefs.get("keyboardAwake"))
@@ -161,11 +171,16 @@ else:
     fail("usage: get|set|apply|restore")
 
 override = verb != "restore" and watcher == "1" and prefs["keyboardAwake"] and kb and prefs["lock"] != 0
-want = 0 if override else prefs["lock"]
-# 1. lock.json first: if we die before shell.json, the next run knows a 0 there is ours
-prefs["applied"], prefs["override"] = want, override
-try: save(prefs_path, prefs)
-except OSError: fail("cannot save the setting")
+want = KB_LOCK if override else prefs["lock"]
+# 1. lock.json first: if we die before shell.json, the next run knows a 1800 there is ours. While the 1800
+# is being replaced, override stays true until shell.json holds the new value (saved again below).
+ours = prefs.get("override") and current == KB_LOCK
+prefs["applied"], prefs["override"] = want, bool(override or (ours and want != current))
+prefs["reloadPending"] = bool(prefs.get("reloadPending")) or want != current
+if prefs != saved:
+    try: save(prefs_path, prefs)
+    except OSError: fail("cannot save the setting")
+step1 = dict(prefs)
 # 2. shell.json, read again just before the write so a concurrent Omarchy change to other keys is kept
 written = False
 if want != current:
@@ -179,29 +194,48 @@ if want != current:
     try: save(shell_path, shell, indent=2)
     except OSError: fail("cannot write shell.json")
     written = True
-    mark = os.environ.get("LOCK_WRITTEN_MARK")
-    if mark: open(mark, "w").close()
-out({"lock": prefs["lock"], "keyboardAwake": prefs["keyboardAwake"], "keyboard": kb, "effective": want})
+# 3. tell the running shell, as omarchy-shell-config does: after a write, or when an earlier reload failed
+result = {"lock": prefs["lock"], "keyboardAwake": prefs["keyboardAwake"], "keyboard": kb, "effective": want}
+if prefs["reloadPending"]:
+    import subprocess
+    try:
+        ok = subprocess.run(["timeout", "5", "omarchy-shell", "shell", "reloadConfig"], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    except OSError: ok = False
+    if ok: prefs["reloadPending"] = False
+    else: result["error"] = "saved, but the shell did not reload its settings"
+prefs["override"] = override
+if prefs != step1:
+    try: save(prefs_path, prefs)
+    except OSError: result["error"] = "cannot save the setting"
+print(json.dumps(result, separators=(",", ":")))
+sys.exit(3 if "error" in result else 0)
 PY
-) || rc=$?
-printf '%s\n' "$res"
-[[ $rc -eq 0 ]] || exit "$rc"
-
-# Omarchy's idle service keeps the timeout its idle monitor started with: a new idle.lock only takes
-# effect after the shell restarts. Switch idle off and on through its own IPC so the monitor is made
-# again with the new value. Only when idle is on and stay-awake is off, so neither is changed.
-idle_status() { timeout 5 omarchy-shell idle status 2>/dev/null | tail -n1 || true; }
-idle_on() { local st; st=$(idle_status); [[ $st == *'"enabled":true'* && $st == *'"stayAwake":false'* ]]; }
-# Only when shell.json really changed: a re-arm restarts the idle countdown, and the keyboard watcher
-# calls apply after every input change.
-if [[ -e $mark && -z ${OMAMOBILE_LOCK_NO_REARM:-} ]] && command -v omarchy-shell >/dev/null 2>&1 && idle_on; then
-  timeout 5 omarchy-shell idle disable >/dev/null 2>&1 || true
-  # Never leave idle off: enable until the status says so.
-  for _ in 1 2 3; do
-    timeout 5 omarchy-shell idle enable >/dev/null 2>&1 || true
-    [[ $(idle_status) == *'"enabled":true'* ]] && exit 0
-    sleep 1
-  done
-  echo "lock.sh: could not switch Omarchy's idle back on" >&2
-  exit 3
+}
+rc=0; res=$(core "$verb" "$key" "$value") || rc=$?
+# 3 means the JSON carries an error (the value is saved): the watcher step below still runs.
+if [[ $rc -ne 0 && $rc -ne 3 ]]; then printf '%s\n' "$res"; exit "$rc"; fi
+err() {  # the error already in $res, if any, then this one
+  res=$(/usr/bin/python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); e=d.get("error"); d["error"]=sys.argv[2] if not e else e if sys.argv[2] in e.split("; ") else e+"; "+sys.argv[2]; print(json.dumps(d,separators=(",",":")))' "$res" "$1")
+  rc=3
+}
+# The watcher runs only while the toggle is on. After the flock above is released, since its restore takes
+# it too. off: the choice is already written back above, so don't wait for the unit's restore (--no-block),
+# which keeps the whole run well under the page runner's 20 s.
+if [[ $verb == set && $key == keyboard ]]; then
+  if [[ $value == on ]]; then
+    if ! timeout 5 systemctl --user enable --now omamobile-lock-keyboard.service >/dev/null 2>&1; then
+      timeout 2 systemctl --user disable --no-block omamobile-lock-keyboard.service >/dev/null 2>&1 || true
+      prev=$(/usr/bin/python3 -I -c 'import json,sys; print(json.loads(sys.argv[1]).get("error",""))' "$res")
+      rc=0; res=$(watcher=0 core set keyboard off) || rc=$?
+      if [[ $rc -ne 0 && $rc -ne 3 ]]; then printf '%s\n' "$res"; exit "$rc"; fi
+      [[ -z $prev ]] || err "$prev"
+      err "could not start the keyboard watcher"
+    fi
+  else
+    timeout 5 systemctl --user disable --now --no-block omamobile-lock-keyboard.service >/dev/null 2>&1 ||
+      err "could not stop the keyboard watcher"
+  fi
 fi
+printf '%s\n' "$res"
+exit "$rc"

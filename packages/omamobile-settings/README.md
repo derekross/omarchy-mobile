@@ -23,17 +23,27 @@ phone locks after that long without input and the lock turns the screen off a
 few seconds later, so lock and screen off are the same timer. Never means the
 screen stays on and the phone never sleeps by itself (omamobile-sleepd sleeps
 only with the screen off behind a secure lock); the power key still locks.
-"Stay unlocked while a keyboard is connected" writes 0 there while a Bluetooth
-or USB keyboard (udev `ID_INPUT_KEYBOARD=1`, bus 0005, or bus 0003 outside
-`/devices/virtual/input`, with the letter keys and space, a name, and not a
-known security token or barcode scanner) is connected, and the chosen time
-back when it goes. The user unit `omamobile-lock-keyboard.service` follows
-`udevadm monitor` for input devices and runs `lock.sh apply`; it is always
-restarted, and when it stops `lock.sh restore` writes the chosen time back.
-The 0 is only written while that unit runs. The choice lives in
-`~/.config/omamobile/lock.json`, saved before `shell.json` with a flag saying
-whether the 0 in force is the keyboard's, so a crash never turns it into
-"Never". A value changed in Omarchy's own settings is adopted. Nothing is
+"Lock after 30 minutes while a keyboard is connected" writes 1800 there while
+a Bluetooth or USB keyboard (udev `ID_INPUT_KEYBOARD=1`, bus 0005, or bus 0003
+outside `/devices/virtual/input`, with the letter keys and space, a name, and
+not a known security token or barcode scanner) is connected, and the chosen
+time back when it goes; a chosen Never stays never. The user unit
+`omamobile-lock-keyboard.service` follows `udevadm monitor` for input devices
+and runs `lock.sh apply`. It is not enabled by the package: turning the toggle
+on enables and starts it, turning it off stops and disables it, and when it
+stops `lock.sh restore` writes the chosen time back. The 1800 is only written
+while that unit runs; a failed apply (a broken `shell.json`) is logged once and
+retried on the next input change instead of restarting the unit. After a write
+the running shell is told with `omarchy-shell shell reloadConfig`, as
+Omarchy's `omarchy-shell-config` does; if that fails the page shows an error
+and the reload is tried again on the next change, even one that writes
+nothing. If the watcher cannot be started the toggle goes back to off.
+Stay awake and idle on/off are never touched. The choice lives in
+`~/.config/omamobile/lock.json`, saved (only when it changed) before
+`shell.json` with a flag saying whether the 1800 in force is the keyboard's,
+kept until the chosen time is back in `shell.json`, so a crash at any point
+never turns it into the owner's choice. A value changed in Omarchy's
+own settings is adopted. Nothing is
 written until the user picks something on the page, and nothing at all if the
 user's `shell.json` does not parse. Both files are written under one `flock`.
 Known limits: a USB receiver, dock or KVM that exposes a full keyboard
