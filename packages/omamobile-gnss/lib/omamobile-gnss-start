@@ -16,6 +16,24 @@ SESSION=/run/omamobile-gnss/session
 STOP_REQUEST=/run/omamobile-gnss/stop-request
 say() { printf 'omamobile-gnss: %s\n' "$*" >&2; }
 
+# The 9a's gnssd: up when its socket is listening. The modem profile starts it
+# some 20 s after the CP is ONLINE (OMAMOBILE_MODEM_GNSS_DELAY), when the
+# modem unit runs with OMAMOBILE_MODEM_GNSS=1; a location request in that
+# window waits for it (GNSSD_WAIT s at most) rather than finding nothing.
+GNSSD_WAIT=${OMAMOBILE_GNSS_GNSSD_WAIT:-90}
+# Without gnssd the start holds the client's connection this long before it
+# exits: a client that reconnects at once (GeoClue) would otherwise start the
+# unit five times in a second, and systemd's start limit would fail it and
+# its socket for the rest of the boot.
+NOTHING_HOLD=${OMAMOBILE_GNSS_NOTHING_HOLD:-5}
+gnssd_up() { grep -c '@GNSSND' /proc/net/unix >/dev/null; }
+gnssd_coming() {
+  local state env
+  state=$(${OMAMOBILE_GNSS_SYSTEMCTL:-systemctl} show -p ActiveState --value omamobile-tegu-modem.service 2>/dev/null) || return 1
+  env=$(${OMAMOBILE_GNSS_SYSTEMCTL:-systemctl} show -p Environment --value omamobile-tegu-modem.service 2>/dev/null) || return 1
+  [[ $state == active || $state == activating ]] && [[ " $env " == *" OMAMOBILE_MODEM_GNSS=1 "* ]]
+}
+
 # the Pixel 9a (zumapro-tegu) runs the gnss-slsi profile, the Pixel 7 Pro gnss
 # OMAMOBILE_DT lets the tests run both branches on any machine (as
 # omamobile-setup-user does).
@@ -71,8 +89,16 @@ fi
 # the modem profile, and the gnss-slsi profile runs the HAL and our client,
 # which writes NMEA to the FIFO the bridge reads. Nothing to load here.
 if tegu; then
-  if ! grep -c '@GNSSND' /proc/net/unix >/dev/null; then
+  if ! gnssd_up && gnssd_coming; then
+    say "waiting for gnssd: the modem profile starts it some 20 s after the modem is ONLINE"
+    for ((i = 0; i < GNSSD_WAIT; i++)); do
+      gnssd_up && break
+      sleep 1
+    done
+  fi
+  if ! gnssd_up; then
     say "gnssd isn't running (the modem profile with OMAMOBILE_MODEM_GNSS=1); nothing to do"
+    sleep "$NOTHING_HOLD"
     exit 0
   fi
   # The HAL client is in the package only when it was built with
