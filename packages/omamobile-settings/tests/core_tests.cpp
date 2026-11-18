@@ -88,10 +88,16 @@ private slots:
         const int charge = runner.run("charge", {"get"});
         QTRY_COMPARE(done.count(), 3);
         QMap<int, QString> errors;
-        for (const auto &call : done) errors[call.at(2).toInt()] = call.at(1).toMap()["error"].toString();
+        QMap<int, QVariantMap> answers;
+        for (const auto &call : done) {
+            errors[call.at(2).toInt()] = call.at(1).toMap()["error"].toString();
+            answers[call.at(2).toInt()] = call.at(1).toMap();
+        }
         QCOMPARE(errors[bad], QString("unknown action"));
         QCOMPARE(errors[badArg], QString("bad argument"));
-        QVERIFY(errors[charge] != "unknown action" && errors[charge] != "bad argument");
+        // the stub's own answer, so the runner ran the stub and not an installed charge.sh
+        QCOMPARE(errors[charge], QString());
+        QCOMPARE(answers[charge].value("available"), QVariant(false));
     }
     void batteryPageLoadsAndShowsTheBackendAnswer_data() {
         QTest::addColumn<QString>("stub");
