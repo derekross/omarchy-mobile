@@ -24,8 +24,6 @@
 # https://github.com/quickshell-mirror/quickshell/issues/938 and /1309, with
 # an open fix in https://github.com/quickshell-mirror/quickshell/pull/1097
 # (bNotification = nullptr before the delete).
-#
-# Omarchy 4.5: same hunk, one line of offset.
 
 --- i/shell/plugins/services/idle/Service.qml
 +++ w/shell/plugins/services/idle/Service.qml
