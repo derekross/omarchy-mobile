@@ -64,8 +64,22 @@ cat > "$R/tests/rootfs-smoke" <<'EOF'
 #!/bin/bash
 set -euo pipefail
 [[ ${FAIL_SMOKE:-0} != 1 ]] || exit 1
-zstd -qt "$1"
-[[ -s ${1%.img.zst}.MANIFEST ]]
+[[ $1 == */rootfs.img && -s $1 ]]
+[[ $(cat "$1") == first || $(cat "$1") == second ]]
+[[ $2 == "${1%/*}"/omamobile-rootfs-*-aarch64.MANIFEST && -s $2 ]]
+EOF
+real_sha256sum=$(command -v sha256sum)
+cat > "$t/bin/sha256sum" <<EOF
+#!/bin/bash
+if [[ \${FAIL_IMAGE_CHECKSUM:-0} == 1 && \${1:-} == -c ]]; then exit 1; fi
+exec "$real_sha256sum" "\$@"
+EOF
+real_zstd=$(command -v zstd)
+cat > "$t/bin/zstd" <<EOF
+#!/bin/bash
+# FAIL_IMAGE_COMPARE=1: the archive unpacks to something other than the image that was built
+if [[ \${FAIL_IMAGE_COMPARE:-0} == 1 && " \$* " == *" -dc "* ]]; then echo other; exit 0; fi
+exec "$real_zstd" "\$@"
 EOF
 chmod +x "$t/bin/"* "$R/tests/rootfs-smoke"
 export T=$t PATH="$t/bin:$PATH" KERNEL_OUT=$t/kernel ALARM_CACHE=$t/cache ALARM_TARBALL=$t/alarm.tar OMARCHY_CHANNEL=stable
@@ -87,6 +101,9 @@ echo 'ok - different devices build concurrently; duplicate device/version is loc
 
 before=$(sha256sum "$R/out/omamobile-rootfs-first-fixture-aarch64.img.zst")
 if FAIL_BUILD=1 build first > "$t/failed.log" 2>&1; then fail "container failure propagates"; fi
+if FAIL_IMAGE_CHECKSUM=1 build first > "$t/failed.log" 2>&1; then fail "checksum failure propagates"; fi
+if FAIL_IMAGE_COMPARE=1 build first > "$t/failed.log" 2>&1; then fail "an archive that differs from the built image stops the build"; fi
+grep -c "doesn't unpack to the image that was built" "$t/failed.log" >/dev/null || { cat "$t/failed.log"; fail "says the archive differs from the built image"; }
 if FAIL_SMOKE=1 build first > "$t/failed.log" 2>&1; then fail "smoke failure propagates"; fi
 [[ $(sha256sum "$R/out/omamobile-rootfs-first-fixture-aarch64.img.zst") == "$before" ]] || fail "failed rebuild preserves published image"
 [[ -z $(find "$R/out" -maxdepth 1 -type d -name '.omamobile-rootfs-*') ]] || fail "temporary build directories are removed"
