@@ -126,7 +126,11 @@ tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 while IFS= read -r f; do
   git show "$head:$f" > "$tmp" 2>/dev/null || continue
-  first=$(head -c 64 "$tmp" | head -1)
+  # tr, not head -1: uutils' head writes again at the end of a short file,
+  # after head -1 has gone, so pipefail ended pr-check. tr reads to the end
+  # and drops NULs as $(...) did.
+  first=$(head -c 64 "$tmp" | tr -d '\0')
+  first=${first%%$'\n'*}
   case $first in
     '#!/bin/bash'*|'#!/usr/bin/env bash'*) bash -n "$tmp" 2>/dev/null || broken+="$f"$'\n' ;;
     '#!/bin/sh'*|'#!/bin/busybox sh'*) sh -n "$tmp" 2>/dev/null || broken+="$f"$'\n' ;;
