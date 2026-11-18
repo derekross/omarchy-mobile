@@ -12,6 +12,30 @@ refresh rate changes the running session only: turning the phone makes
 auto-rotate apply the monitor's preferred mode again, and a session restart or a
 reload of Hyprland's config does too). The page runs
 `backends/display.sh` through a fixed-argument runner, with no shell string.
+A second page, Battery, sets the charge limit (80, 85, 90, 95 or 100 %), only
+on a phone whose device package declares one in
+`/usr/share/omamobile/charge-limit.conf` (a line `supply=NAME`;
+omamobile-device-husky ships it for `max77759-charger`) and only while that
+supply has `charge_control_end_threshold`. Everywhere else the Battery row is
+hidden (the catalog row's `"requires": "charge"`: Settings runs
+`backends/charge.sh get` at start and shows the row only on
+`{"available":true}`), and the backend and the helper write nothing. The row
+appears only if the charger was there when Settings started: a charger that
+shows up later needs Settings to be started again. The page
+runs `backends/charge.sh`, which starts `omamobile-charge-limit@N.service`; the
+polkit rule `50-omamobile-charge-limit.rules` lets the active local user start
+those five instances only. The service runs `libexec/charge-limit` as root,
+which checks the declaration, writes the charger (start threshold 0, then the
+end threshold) and only then saves the value to `/etc/omamobile/charge-limit`.
+The device package that declares the limit also ships the udev rule and
+`omamobile-charge-limit-apply.service`, which run the same helper without an
+argument when the charger appears, to apply the saved value at boot. The
+Pixel 9a's limit (`omamobile-device-tegu`, from `/etc/omamobile/charge-limit`
+by its own script) is not declared, so Settings leaves it alone. On husky the
+row stays hidden today: omamobile-device-husky blacklists `max77759_charger`
+(`omamobile-max77759.conf`), so there is no `max77759-charger` power supply
+until that blacklist is lifted on a kernel with
+derekross/linux-omarchy-mobile#266.
 Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management and
 recording controls are separate future contributions with their own runtime
 contracts and tests; this catalog does not offer those routes.
