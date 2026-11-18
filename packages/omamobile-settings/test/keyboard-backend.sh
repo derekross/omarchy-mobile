@@ -144,6 +144,17 @@ run set switch-key caps >/dev/null
 [[ ! -e $b ]] || { echo "FAIL: a marker without compose:caps" >&2; exit 1; }
 run set switch-key ctrl_shift >/dev/null
 has "$tmp/input.lua" 'kb_options = "grp:ctrl_shift_toggle", -- keep me'
+# Omarchy 4.5's omarchy:shift_caps_compose takes Caps Lock too: it goes with caps and comes back after
+sed -i 's/kb_options = "grp:ctrl_shift_toggle", -- keep me/kb_options = "omarchy:shift_caps_compose", -- keep me/' "$tmp/input.lua"
+run set switch-key caps >/dev/null
+has "$tmp/input.lua" 'kb_options = "grp:caps_toggle,grp_led:caps", -- keep me'
+has "$b" '-- compose-caps: restore omarchy:shift_caps_compose'
+run set layouts us,gr >/dev/null
+has "$b" '-- compose-caps: restore omarchy:shift_caps_compose'
+run set switch-key alt_shift >/dev/null
+has "$tmp/input.lua" 'kb_options = "grp:alt_shift_toggle,omarchy:shift_caps_compose", -- keep me'
+[[ ! -e $b ]] || { echo "FAIL: the marker stayed after caps" >&2; exit 1; }
+sed -i 's/kb_options = "grp:alt_shift_toggle,omarchy:shift_caps_compose", -- keep me/kb_options = "grp:ctrl_shift_toggle", -- keep me/' "$tmp/input.lua"
 run set switch-key alt_shift >/dev/null
 # one layout left: the option stays (xkb has nowhere to switch then); the variant goes
 eq "$(run set layouts us)" '{"layouts":[{"layout":"us","variant":""}],"switchKey":"alt_shift","active":1}'

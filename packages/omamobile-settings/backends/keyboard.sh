@@ -25,7 +25,7 @@
 # first entry is not a Latin layout is refused (passwords on the lock screen are typed in layout 1).
 # input.lua is edited in place: only the last live kb_layout, kb_variant and kb_options strings inside an
 # `input = { }` table change (per-device blocks and variables are left alone), comments and every other
-# option stays but, on a switch-key save, grp:, grp_led:caps (set only with caps) and compose:caps with caps
+# option stays but, on a switch-key save, grp:, grp_led:caps (set only with caps) and compose:caps or omarchy:shift_caps_compose with caps
 # (put back when caps lets go, only if it was there: "-- compose-caps: restore" in a small state file,
 # ~/.config/hypr/omamobile-keyboard.lua, which nothing loads; it is removed when not needed), a copy of the old
 # file goes to input.lua.bak-omamobile first, and the write is dropped if the file changed meanwhile.
@@ -86,6 +86,9 @@ NAME_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 # had shift:both_capslock_cancel): cause unknown.
 SWITCH_OPTS = {"alt_shift": ["grp:alt_shift_toggle"], "ctrl_shift": ["grp:ctrl_shift_toggle"],
                "caps": ["grp:caps_toggle", "grp_led:caps"], "none": []}
+# Compose on Caps Lock: Omarchy 4.0 sets compose:caps, later Omarchy omarchy:shift_caps_compose (Shift+Caps
+# is Compose). Both take the Caps key, so a Caps switch key would not switch with either left in.
+COMPOSE_OPTS = ("compose:caps", "omarchy:shift_caps_compose")
 SWITCH_NAMES = [("alt_shift", "Alt+Shift"), ("ctrl_shift", "Ctrl+Shift"), ("caps", "Caps Lock"), ("none", "None")]
 BINDS = os.environ["KBD_BINDS"]
 # xkb option names as in base.lst: group:name, the name may hold "-" (compose:caps-altgr, fkeys:basic_13-24)
@@ -228,12 +231,17 @@ def active():
     return i if isinstance(i, int) and i >= 0 else None
 
 def compose_marked():
-    """True when the file says compose:caps was in kb_options before caps took the key."""
+    """The Compose option that was in kb_options before caps took the key, from the state file, else None.
+    A bare "restore" line (written before the Omarchy 4.5 name was known) means compose:caps."""
     try:
         with open(BINDS, encoding="utf-8", errors="replace") as f:
-            return any(re.fullmatch(r"-- compose-caps: restore\s*", line) for line in f)
+            for line in f:
+                m = re.fullmatch(r"-- compose-caps: restore(?: (omarchy:shift_caps_compose))?\s*", line)
+                if m:
+                    return m.group(1) or "compose:caps"
     except OSError:
-        return False
+        pass
+    return None
 
 def old_key():
     """alt_shift or ctrl_shift from an earlier commit's bind file, else None."""
@@ -248,7 +256,7 @@ def old_key():
     return None
 
 def write_state(compose):
-    """The compose-caps marker on disk when compose, else no state file."""
+    """The compose-caps marker for option compose on disk, else (compose falsy) no state file."""
     if not compose:
         try:
             os.unlink(BINDS)
@@ -258,7 +266,7 @@ def write_state(compose):
             return False
         return True
     text = ("-- Written by Omarchy Mobile Settings (Keyboard); nothing loads it. Changes here are replaced.\n"
-            "-- compose-caps: restore\n")
+            "-- compose-caps: restore%s\n" % ("" if compose == "compose:caps" else " " + compose))
     tmp = "%s.tmp-omamobile.%d" % (BINDS, os.getpid())
     try:
         os.makedirs(os.path.dirname(BINDS), exist_ok=True)
@@ -286,7 +294,7 @@ def switch_options(options, sw):
     """kb_options for switch key sw: every grp: and grp_led:caps out, sw's own back in."""
     keep = [o for o in options if not o.startswith("grp:") and o != "grp_led:caps"]
     if sw == "caps":
-        keep = [o for o in keep if o != "compose:caps"]
+        keep = [o for o in keep if o not in COMPOSE_OPTS]
     return keep + SWITCH_OPTS[sw]
 
 def state(layouts, variants, options):
@@ -505,15 +513,16 @@ else:
     # compose:caps goes while caps holds the key; the marker brings it back when caps lets go, and only then
     was_caps = "grp:caps_toggle" in options
     marked = compose_marked()
-    compose = sw == "caps" and ("compose:caps" in options or (was_caps and marked))
+    present = next((o for o in COMPOSE_OPTS if o in options), None)
+    compose = (present or (marked if was_caps else None) or False) if sw == "caps" else False
     options = switch_options(options, sw)
-    if sw != "caps" and was_caps and marked and "compose:caps" not in options:
-        options = options + ["compose:caps"]
+    if sw != "caps" and was_caps and marked and not any(o in options for o in COMPOSE_OPTS):
+        options = options + [marked]
     # The marker goes to disk before input.lua loses compose:caps, so a failed write in between can't
     # lose it (harmless while caps is not on); leaving caps, input.lua gets compose:caps back first,
     # then the marker goes.
-    if compose and not marked:
-        if not write_state(True):
+    if compose and compose != marked:
+        if not write_state(compose):
             fail("cannot write " + os.path.basename(BINDS))
         MARKER_NEW = True
 live_ok = osk_ok = True
