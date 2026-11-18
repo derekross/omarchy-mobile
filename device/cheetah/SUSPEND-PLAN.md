@@ -1,7 +1,42 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Suspend plan: s2idle first, then SYS_SLEEP (cheetah / gs201)
 
-Status (2026-11-13): **P6 reported done, P8 passed, P7 passed on a kernel
+Status (2026-11-15, afternoon): **Sleep with the modem up works on the 7 Pro,
+and is on by default again from omamobile-device-cheetah 0.1.60.** What killed
+mobile data across sleeps was never the link: the network drops the internet
+bearer (CID 3) every few minutes while the phone sleeps, and sitd never set it
+up again. omamobile-modem-sit 0.3.42 (#817) does; M6-D with it passed (85
+wakes in 45 minutes, nine drops, each set up again at the first try, data back
+by the next wake; "M6-D with the reconnect" below). device-cheetah 0.1.60
+declares it verified again and conflicts with an older omamobile-modem-sit.
+Not measured yet: standby with the modem up.
+
+Earlier status (2026-11-15, morning): **Sleep with the modem up is held again on the 7 Pro.**
+It passed MODEM-PLAN M6's attended runbook on 2026-11-14, but the release
+check that night (twenty auto-sleeps with the modem up on kernel-2026.11.15,
+omamobile-modem 0.1.26, device-cheetah 0.1.58) lost mobile data from the
+first timer wake on, and it stayed down with the phone awake until a
+reboot. omamobile-device-cheetah 0.1.59 no longer declares it verified, so
+the modem's inhibitor keeps the phone awake while the modem is up (#794;
+AGENTS.md's rule is back as it was, #797). Sleep with the modem off is
+unchanged and on by default. Details and the next check: "The release
+check with the modem up, 2026-11-14 night" below.
+
+Earlier status (2026-11-14): **Auto-sleep is on by default (omamobile-shell 0.2.129),
+the day test passed again on the updated phone, and sleep with the modem up
+passed every step of MODEM-PLAN M6 on the reference phone** (two sleeps, ten
+refusals before the freeze with data busy and the ping unbroken, a text and
+a call each waking the phone, audio both ways, the call holding off sleep;
+"The day test and the modem-up sleep, 2026-11-14" below). From
+omamobile-modem 0.1.26 and omamobile-device-cheetah 0.1.57 the 7 Pro sleeps
+with the modem up by default, on a kernel with linux-omarchy-mobile#232's
+early refusal (kernel-2026.11.15 and later; on an older kernel the modem
+keeps its sleep inhibitor), unless the owner opts out
+(`/etc/omamobile/modem-suspend-disable`); MODEM-PLAN 7.5. The DEVICES cell
+stays "partial" until kernel-2026.11.15 and these packages are released
+and checked on the phone after Updates.
+
+Earlier status (2026-11-13): **P6 reported done, P8 passed, P7 passed on a kernel
 with linux-omarchy-mobile#233; the DEVICES cell is "testing".** One night
 asleep with the modem off: about 228 mA, roughly 22 h of standby. Double tap
 wakes the phone from s2idle with kernel #248 and #730. Left before "works":
@@ -1744,6 +1779,227 @@ overnight. The start is recorded on the phone in
   at the refusal step: two sleeps passed, then mobile data stopped after
   six refused sleeps. The modem keeps its sleep inhibitor until a new
   #232 passes.
+
+**The release check with the modem up, 2026-11-14 night** (the reference
+phone, `7.3.0-rc6-omamobile-gda171eae4cb7` from the `linux-omamobile`
+package of kernel-2026.11.15, written to slot B by `omamobile-boot-update`'s
+hook in Updates; omamobile-modem 0.1.26, omamobile-modem-sit 0.3.40,
+device-cheetah 0.1.58; every hand-placed test file removed first, the
+sleep policy reading "the phone may sleep with the modem up" from the
+packages alone; the inhibitor skipped at boot, the modem registered with
+data). Auto-sleep did the sleeping; a recorder armed `rtcwake -m no -s 60`
+in each awake window and logged each wake, a ping through `rmnet2` and the
+UFS error count. Wi-Fi was unloaded around every sleep (this install has no
+`/etc/omamobile/wifi-keep-across-sleep`).
+
+- **Sleeps:** 20 of 20 entered and woke, `suspend_stats` fail 0, no UFS
+  line. Wakes 1-3 were the modem's own (`cp2ap_wakeup`, 13 s apart), 4-20
+  the RTC alarm (about 67 s apart).
+- **Data: failed.** The ping after wakes 1-3 got 2 of 2; after every RTC
+  wake, 0 of 2. Half an hour later, awake, 0 of 3, while
+  `omamobile-sit status` still read the bearer up and IMS registered. The
+  kernel log then showed the modem's link coming up again and again
+  (`link up: Gen3 x2`) and CPIF answering each attempt with
+  `pcie_send_ap2cp_irq: Reserve doorbell interrupt: PCI not powered on`.
+- **Not the route, first:** omamobile-sit-data took its default route away
+  at each sleep's announcement and put it back after, as designed; it
+  removed the route as silent only at 22:55:29, six minutes after the
+  pings had started failing with the route in place (from 22:49:49). On
+  main that removal is never undone while another default route exists,
+  and the USB gadget's `usb0` default counts as one (#759 fixes this), so
+  it explains why data stayed down awake but not why it stopped.
+- **Reading (not proven):** the difference between the good and the bad
+  wakes is whether the link was busy when the phone woke. After a timer
+  wake the first packet finds the link down; CPIF reserves its doorbell
+  until the link is up, and the doorbell looks never to be sent, so
+  nothing goes out and nothing comes back. Two weaker factors: the
+  recorder's ping ran within auto-sleep's 5 s grace and may have been cut
+  off by the next sleep, and Wi-Fi's reload re-probes the second PCIe
+  controller each time.
+- **The link's own record** (the night's kernel log, counted): before the
+  first timer wake (22:47:50-22:49:40) 4 sleeps, 3 wakes the modem started
+  (`cp2ap_wakeup work pending`), 16 link-ups, 8 reserved doorbells; from
+  then on (to 23:08) 17 sleeps, 1 wake the modem started, 64 link-ups and
+  62 reserved doorbells. Each link-up was followed by `PHY isolated` within
+  the same second. So after the first timer wake nearly every link-up was
+  the AP asking (`s5100_try_gpio_cp_wakeup` from a reserved doorbell), the
+  link came up and powered down again each time, and data never flowed:
+  the AP side still wakes the link, and what stops answering looks like the
+  CP. In CPIF a reserved doorbell is sent at the end of
+  `s5100_poweron_pcie` once `pcie_powered_on` is set, so the doorbell is
+  not simply dropped; why the CP stops serving it after a sleep it didn't
+  start is the open question for kernel #232's author.
+- **Recovered** by a reboot (23:45): data 3 of 3, no UFS line. The owner's
+  opt-out (`/etc/omamobile/modem-suspend-disable`) was set first and
+  `omamobile-modem-sleep-policy` honoured it ("the owner keeps the modem's
+  sleep inhibitor"), which is the opt-out check.
+
+**Next, before sleep with the modem up is tried again** (the maintainer's
+attended test on the charger, under AGENTS.md's rule):
+1. Read-only first (begun above): with kernel #232's author, why the CP
+   stops answering the AP's doorbells after a sleep the CP didn't wake
+   (what CPIF tells the CP at suspend and resume, and what stock's
+   `s5100_pm_notifier` and `suspend_cp`/`resume_cp` do that ours don't).
+2. The same twenty sleeps with the data check done awake: hold a sleep
+   inhibitor around the check (`systemd-inhibit --what=sleep ping ...`),
+   log `ip route` and the link counters with it, and count the "Reserve
+   doorbell" lines per wake; with #759 merged so the route can return.
+3. One run each with `wifi-keep-across-sleep` set and unset, to rule the
+   Wi-Fi reload in or out.
+
+**What the night's journal already says (read-only, 2026-11-15).** Wi-Fi
+was unloaded before and reloaded after every sleep, the three good wakes
+included, so the reload alone doesn't separate the good wakes from the bad
+ones (point 3 drops to a confirmation run). What does: the good wakes ended
+sleeps of 4-10 s that the modem woke itself, with `cp2ap_wakeup` high at
+the wake ("work pending", then "work resume"); data broke at the end of the
+first 60 s sleep, which the RTC alarm ended with the modem's line low.
+Stock drives `AP2CP_AP_ACTIVE` the same way we do (low in `suspend_cp`,
+high in `resume_cp`; `CONFIG_CP_LCD_NOTIFIER` is off in both), and the
+`GS_S2MPU` early return in `resume_cp` is built neither here nor in
+stock's gs201 configuration (only gs101's sets it), so neither explains
+it. No `Can't send Interrupt`, BME or CTO line appears in the
+boot; the two `pcie_clean_dislink: Link is disconnected` lines are the
+modem's start (22:45:21) and the reboot (23:44:29), and the three
+`rx_multi_pdp: netif_receive_skb` errors came as the bearer came up
+(22:47:04), before any sleep.
+
+What no capture has yet is CPIF's own state in the failed state, and CPIF
+already exports it read-only: `/sys/devices/platform/cpif/legacy_queues`
+(the FMT control queue and the raw queue, head and tail, the wake lines,
+`pcie_powered_on`, `reserve_doorbell`), `pktproc/status` (four downlink
+queues, fore/rear/done and pass/fail) and `pktproc_ul/status` (two uplink
+queues), and the MSI counts in `/proc/interrupts` (`mif_cp2ap_msg`). Read
+before and after each wake, they say whether the modem stops consuming
+uplink (UL fore runs ahead of rear), stops delivering downlink (DL pass
+stops while UL moves) or stops talking on the control channel too (FMT rx
+head and `mif_cp2ap_msg` stand still); each points at a different fix.
+
+#### M6-D: the data path across a timer wake (attended, on the charger)
+
+The maintainer's run, under AGENTS.md section 1 and section 4 ("Suspend
+with the modem on"): on the charger, the phone within reach, and the boot
+ends in a reboot. On the release kernel as installed: no new kernel, no
+`push`. Recorder: [`bringup/m6-data-capture.sh`](bringup/m6-data-capture.sh).
+Besides its log it only arms the RTC alarm and pings over the bearer. It
+refuses unless it is on a 7 Pro on the charger with the bearer up and the
+modem's inhibitor gone; it takes a sleep inhibitor of its own within 0.5 s
+of each wake and holds it while it reads, before and after the ping (so
+auto-sleep's 5 s grace can't cut the check off); it logs no address or
+gateway; and it ends after ten RTC wakes, three failing wakes in a row, any
+rise in the UFS error-handler count or 45 minutes, starting the modem's
+inhibitor again on any exit, so the phone stops sleeping with the modem up
+the moment the series ends.
+
+During the series the phone is asleep most of the time and USB drops with
+it, and an open SSH session holds auto-sleep off: so no SSH from step 3 to
+step 4, and a silent phone is not a hang. Before step 4, one short press of
+Power.
+
+| Step | Command (laptop, omarchy-mobile checkout) | Expect / Pass | Stop | Rollback | Risk |
+| --- | --- | --- | --- | --- | --- |
+| 0 | `tools/phone-ssh 'cat /sys/class/power_supply/*/online; ping -c3 -W2 -I rmnet2 1.1.1.1; dmesg \| grep -c ufshcd_err_handler; cat /sys/devices/platform/cpif/pktproc/status /sys/devices/platform/cpif/pktproc_ul/status'` | on the charger; 3 received; the UFS count noted; both pktproc files read | not charging; data already down; a pktproc read that errors or hangs | none | low |
+| 1 | `tools/phone-ssh 'cat > /root/m6-data-capture.sh' < device/cheetah/bringup/m6-data-capture.sh` | copied | | `rm /root/m6-data-capture.sh` | none |
+| 2 | `tools/phone-ssh 'systemctl kill omamobile-modem-inhibit.service; sleep 1; systemctl is-active omamobile-modem omamobile-modem-inhibit; systemd-inhibit --list --no-legend \| grep -c omamobile-modem'` | `active`, `inactive`, `0`: the modem up, its inhibitor gone for this boot. (`stop` is refused, `RefuseManualStop=yes`, and would power the modem off through its `Requires=`; `omamobile-modem-start` uses `kill` the same way) | the modem not `active`; the count not 0 | `systemctl start omamobile-modem-inhibit.service` | medium: sleep with the modem up |
+| 3 | `tools/phone-ssh 'systemd-run --unit=m6-capture bash /root/m6-data-capture.sh; sleep 2; systemctl is-active m6-capture'`, then close every SSH session, lock the phone and leave it screen-off on the charger with auto-sleep on | `active`; sleeps begin within a minute | the unit not `active` (`journalctl -u m6-capture` names the refusal) | `systemctl start omamobile-modem-inhibit.service` | medium |
+| 4 | after about 15 minutes, one short press of Power, then `tools/phone-ssh 'systemctl is-active m6-capture; tail -3 /var/log/omamobile/m6-data-capture.log; systemd-inhibit --list --no-legend \| grep -c omamobile-modem'` and `tools/phone-ssh 'cat /var/log/omamobile/m6-data-capture.log' > logs/m6-data-capture-$(date +%F).log` | the unit inactive (still `active`: the series is running, wait five minutes and look again); the log ends `done` and says `inhibitor restored: 1` | no answer after the press: wait two minutes, press again, then ask (AGENTS: send nothing more to a phone that has stopped answering) | `systemctl start omamobile-modem-inhibit.service` if the count is 0 | none |
+| 5 | `tools/phone-ssh 'dmesg \| grep -c ufshcd_err_handler; systemctl stop omamobile-modem; dmesg \| grep -c ufshcd_err_handler; rm -f /root/m6-data-capture.sh; systemctl reboot'` (the human's go) | the count as in step 0, then one more (the modem's power-off); the phone back with data and the inhibitor holding | a count above step 0's before the stop: record it with the log | | low |
+
+Pass for M6-D itself is not "data kept": it is a log whose first failing
+wake, if any, has its state before and after the ping, so the fix can be
+written. If every wake keeps data, the 2026-11-14 failure most likely was
+the recorder's ping inside the grace (its `ping -I rmnet2` binds the device,
+and a device-bound IPv4 socket sends on-link when no route matches, so the
+removed route alone wouldn't stop it), and the next run is the twenty sleeps
+again, with #759 in for the route that never came back.
+
+**M6-D with the reconnect, 2026-11-15, 12:58-13:44** (the same phone and
+kernel, omamobile-modem-sit 0.3.42 from #817 at 0eaf3b11, device-cheetah
+0.1.59, the modem's inhibitor killed for the boot, on the charger; the
+recorder at WAKES=20, ended by its 45-minute bound):
+
+- **Sleeps:** 85 entered and woke (`suspend_stats` success 85; 23 refused
+  early while the link was busy, #232's guard), no UFS error-handler line.
+- **Bearer drops:** sitd logged the internet bearer (CID 3) gone nine times,
+  about every five minutes, IMS (CID 2) never; each time "setting it up
+  again in 3 s", then "set up again" at the first try.
+- **Data:** of the 85 wakes' checks, 76 got 3/3, one 1/3 (wake 74) and
+  eight 0/3 (wakes 10, 20, 30, 40, 46, 54, 64, 84), each at a drop; the next
+  wake, 47-50 s later, 3/3 every time; the baseline and the awake check at
+  the end 3/3. Before the reconnect the first drop killed data until a reboot.
+- **Wakes:** 60 of 85 were the modem's (`cp2ap_wakeup`), 22 the PMIC's, 3
+  the RTC's: worth knowing for standby with the modem up, not measured yet.
+- **Passes M6's long check.** What it costs: data is gone from a drop until
+  the reconnect, which the ping record bounds at under a minute; IMS read
+  registered in every snapshot. The run went round the inhibitor by hand
+  (device-cheetah 0.1.59), attended on the charger, and ended in a reboot
+  (13:50); 0.1.60's declaration path ran on 11-14 with the same file, and
+  its first boot should show `omamobile-modem-sleep-policy check` saying
+  yes.
+
+**M6-D, 2026-11-15** (the reference phone just reinstalled by the guided
+installer from the 2026.11.15 candidate: `7.3.0-rc6-omamobile-gda171eae4cb7`,
+device-cheetah 0.1.59, omamobile-modem 0.1.26, omamobile-modem-sit 0.3.41,
+`wifi-keep-across-sleep` unset; on the charger; the modem's inhibitor killed
+for the boot, 11:32:41 to 11:40:13):
+
+- **Sleeps:** 12 entered and woke, `suspend_stats` fail 0, no UFS
+  error-handler line before or after the modem's stop.
+- **Data: failed at wake 10** (11:37:57), after nine good wakes in about
+  five minutes, and stayed down with the phone awake and the inhibitor back
+  (0 of 3 a minute after the end). Wake 10 was the modem's own
+  (`cp2ap_wakeup`), not the RTC's: the 2026-11-14 reading that timer wakes
+  break it doesn't hold.
+- **CPIF in the failed state:** the uplink queue moved (pktproc UL queue 1
+  fore/rear 143/143 to 147/147, pass 116 to 120: the modem took every
+  packet), the FMT control queue's rx head moved (2248 to 2568) and
+  `mif_cp2ap_msg` counted on, the reserved doorbell was clear; no downlink
+  queue moved and `rmnet2` received nothing. So the link, the doorbells and
+  CPIF work; what stops is downlink data on the bearer.
+- **Reading (not proven):** the bearer the phone runs on changed under it.
+  sitd keeps the modem's `IND_DATA_CALL_LIST_CHANGED` only for start-up and
+  omamobile-sit-data reads the bearer's setup once (`data-call-response.bin`),
+  so a bearer the modem or the network dropped or replaced during a sleep
+  looks exactly like this. omamobile-modem-sit 0.3.42 (#817) logs each change
+  against the internet bearer; M6-D again with it says which case it is.
+- **Recovered** by the reboot: 3 of 3.
+
+**The day test and the modem-up sleep, 2026-11-14** (the reference phone,
+release kernel `7.3.0-rc6-omamobile-g36d61a33795b` taken through Updates from
+the development channel: omamobile-device-cheetah 0.1.55, omamobile-shell
+0.2.129, omamobile-omarchy 0.1.46):
+
+- **Updated through Updates:** the boot-update hook wrote slot B and the phone
+  booted it. Touch-wake was enabled at boot by the rule (no hand step), the
+  critical-battery drop-in and the auto-sleep marker were in place, swap on
+  zram 5.6 GB. At the owner's first login the shell turned auto-sleep on by
+  itself (#737).
+- **Day test (P6 again), modem off for the boot, cable out, 14:55 to 19:36:**
+  two sleeps, 14:56-15:34 and 15:36-19:35 (4 h unbroken), every wake from the
+  touchscreen; touches that lit nothing went back to sleep after the 5 s
+  grace. 100 % to 77 %, about 234 mA, roughly 21 h from full. No failed
+  sleep, no UFS line, no failed unit. **Passed.**
+- **Sleep with the modem up (MODEM-PLAN M6), test kernel
+  `7.3.0-rc6-omamobile-push1-g21d56455a7c5`** (kernel-2026.11.13 +
+  linux-omarchy-mobile#232's head + the two patches of the #232 analysis:
+  refuse in a PM_SUSPEND_PREPARE notifier while the link is up, the root port
+  out of system sleep, and the `ring_trace` switch), with #556's
+  omamobile-modem 0.1.25 and omamobile-modem-sit 0.3.37, `follow_screen =
+  yes`, the enable file and the runbook marker by hand, auto-sleep off and
+  NFC polling stopped for the test: two sleeps passed (44 s on the RTC alarm;
+  9 s, woken by cp2ap_wakeup), ping over rmnet2 3/3 after each. **The refusal
+  loop passed:** with a 1 s ping on rmnet2, all ten requests were refused
+  early ("sleep refused before the freeze: link up, PHY out of isolation"),
+  and the ping ran 76 of 76 with no gap; 5/5 afterwards, IMS registered.
+  The 2026-11-13 run on #232 alone lost data after six noirq refusals; the
+  early refusal is what changed.
+  **The network wakes the phone (M6.3): passed.** Asleep with a 300 s alarm:
+  a text from another phone woke it after 35 s on cp2ap_wakeup and arrived
+  (stored, acknowledged, in Messages); a call woke it after 21 s on
+  cp2ap_wakeup and rang in the Phone app. A second call, answered: audio
+  both ways (the owner's word), and while it was up the call watch's
+  inhibitor refused `systemctl suspend`. **With these patches, sleep with
+  the modem up passed every step of the M6 runbook on the reference phone.**
 
 #### P8: standby numbers (risk: low; the human unplugs)
 

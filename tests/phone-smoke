@@ -5,7 +5,9 @@
 # ceiling, and a UFS link that doesn't come back failing kernel health; and
 # from the laptop side, against a stand-in for the phone (PHONE_SSH): the
 # device named from the repository's descriptors, or in a release bundle
-# from its one device.conf.
+# from its one device.conf. The boot and guard rows against a fake root
+# (--slot-from): the slot boot-update.conf names, b when absent, and the
+# running slot's boot images.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
@@ -33,6 +35,20 @@ has 'ASoC no backend DAIs (PipeWire probe) x3' && has '(1 known' && has '2 new)'
   || fail "no-backend-DAIs lines past the first are new (a broken UCM route)"
 pass "no-backend-DAIs lines past the first are new (a broken UCM route)"
 
+run '[  301.000001] cpif: ap_wakeup_handler: cp2ap_wakeup work pending. gpio_val : 1' \
+    '[  301.010002] cpif: s5100_pm_notifier: cp2ap_wakeup work resume. gpio_val : 1'
+has 'ok|1|kernel health|' && has 'modem wakes from sleep (cp2ap_wakeup) x2' && has '0 new)' \
+  && ! has 'new dmesg errors' || fail "a modem-woken sleep's CPIF lines are known and counted"
+pass "a modem-woken sleep's CPIF lines are known and counted"
+
+tools/phone-smoke --refused-only 3 3 -16 && tools/phone-smoke --refused-only 1 4 -16 \
+  || { out="refused-only"; fail "every failed suspend a guard refusal: the unit is known"; }
+pass "every failed suspend a guard refusal: the unit is known"
+! tools/phone-smoke --refused-only 4 3 -16 && ! tools/phone-smoke --refused-only 2 0 -16 \
+  && ! tools/phone-smoke --refused-only 1 1 -5 && ! tools/phone-smoke --refused-only "" 1 -16 \
+  || { out="refused-only"; fail "a failure beyond the refusals, none, another errno or no count: the unit still counts"; }
+pass "a failure beyond the refusals, none, another errno or no count: the unit still counts"
+
 lines=(); for _ in $(seq 14); do lines+=("$ufs"); done
 run "${lines[@]}"
 has 'ok|1|kernel health|' && has '(14 known, of them UFS dme-set 0x4021 (s2idle) x14, 0 new)' \
@@ -49,6 +65,34 @@ pass "CPIF's lines for channels nothing opens are known and stay counted"
 run "${cp1/umts_ipc1/umts_ipc0}" "${cp2//umts_ipc1/umts_ipc0}" "${cp3//umts_ipc1/umts_ipc0}"
 has '0 known, 3 new' && has 'new dmesg errors' || fail "a message dropped on the phone service's own channel (umts_ipc0) is new"
 pass "a message dropped on the phone service's own channel (umts_ipc0) is new"
+
+rx='[  113.204101] cpif: rx_multi_pdp: PCIE: rmnet2<-s5300: ERR! netif_receive_skb'
+run "$rx" "${rx/rmnet2/rmnet0}" "$rx"
+has 'ok|1|kernel health|' && has '(3 known, of them cpif rmnet packet dropped as the link came up x3, 0 new)' \
+  && ! has 'new dmesg errors' || fail "a few rmnet packets dropped as the modem link comes up are known and counted"
+pass "a few rmnet packets dropped as the modem link comes up are known and counted"
+lines=(); for _ in $(seq 7); do lines+=("$rx"); done
+run "${lines[@]}"
+has 'cpif rmnet packet dropped as the link came up x7' && has '(5 known' && has '2 new)' && has 'new dmesg errors' \
+  || fail "rmnet drops past five in a boot are new"
+pass "rmnet drops past five in a boot are new"
+for other in "${rx/rmnet2/umts_ipc0}" "${rx/s5300/s5400}" "${rx/netif_receive_skb/netif_receive_skb fail -12}"; do
+  run "$other"
+  has '0 known, 1 new' && has 'new dmesg errors' || fail "a netif_receive_skb drop of another form is new: $other"
+done
+pass "netif_receive_skb drops on another channel, modem or form are new"
+
+fq1='[    31.401220] F2FS-fs (loop2): Failed to enable quota tracking (type=0, err=-3). Please run fsck to fix.'
+fq2='[    31.401298] F2FS-fs (loop2): Cannot turn on quotas: error -3'
+run "$fq1" "$fq2" "${fq1/loop2/loop1}" "${fq2/loop2/loop1}" "${fq1/loop2/loop3}" "${fq2/loop2/loop3}"
+has 'ok|1|kernel health|' && has '(6 known, of them f2fs quota off on the modem NV copies x6, 0 new)' \
+  && ! has 'new dmesg errors' || fail "F2FS's quota lines on the modem NV copies' loop devices are known and counted"
+pass "F2FS's quota lines on the modem NV copies' loop devices are known and counted"
+for other in "${fq1/loop2/sda34}" "${fq2/error -3/error -5}" "${fq1/err=-3/err=-117}" 'F2FS-fs (loop2): Mismatch start address, segment0(512) cp_blkaddr(605)'; do
+  run "$other"
+  has '0 known, 1 new' && has 'new dmesg errors' || fail "another F2FS error, or one off a loop device, is new: $other"
+done
+pass "other F2FS errors, and quota errors off a loop device or with another error, are new"
 
 run "${ufs/0x4021/0x1561}"
 has '0 known, 1 new' && has 'new dmesg errors' || fail "a dme-set of another attribute is new"
@@ -81,6 +125,57 @@ run "$dais" "$ufs" "$ufs" 'some driver: something new broke'
 has 'of them ASoC no backend DAIs (PipeWire probe) x1, UFS dme-set 0x4021 (s2idle) x2, 1 new)' \
   && has 'new dmesg errors|some driver: something new broke x1' || fail "counted and new lines together"
 pass "counted and new lines together"
+
+# The boot and storage guard rows (--slot-from: a fake root). The boot row
+# wants the slot boot-update.conf names (b when absent); the guard row
+# allows userdata and the running slot's five boot images.
+fr=$t/fr
+fakeroot() { # running suffix (or none), then the writable partitions
+  rm -rf "$fr"; mkdir -p "$fr/proc" "$fr/etc/omamobile"
+  echo '123.45 100.00' > "$fr/proc/uptime"
+  [[ $1 == none ]] || printf 'androidboot.slot_suffix = "%s"\n' "$1" > "$fr/proc/bootconfig"
+  echo 'console=ttynull' > "$fr/proc/cmdline"
+  shift
+  local i=0 p
+  for p in boot_a init_boot_a vendor_boot_a vendor_kernel_boot_a dtbo_a boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata efs persist; do
+    i=$((i + 1)); mkdir -p "$fr/sys/class/block/sda$i"; echo "$i" > "$fr/sys/class/block/sda$i/partition"
+    printf 'PARTNAME=%s\n' "$p" > "$fr/sys/class/block/sda$i/uevent"
+    if [[ " $* " == *" $p "* ]]; then echo 0; else echo 1; fi > "$fr/sys/class/block/sda$i/ro"
+  done
+}
+rows() { out=$(tools/phone-smoke --slot-from "$fr"); }
+B5="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
+A5="boot_a init_boot_a vendor_boot_a vendor_kernel_boot_a dtbo_a userdata"
+fakeroot _b $B5; rows
+has 'ok|1|boot|kernel ' && has ', slot b, up 123s' && has 'ok|1|storage guard|13 partitions; only userdata and slot b' \
+  || fail "a development phone on slot B, no boot-update.conf: both rows pass as before"
+pass "a development phone on slot B, no boot-update.conf: both rows pass as before"
+echo 'AUTO_WRITE=yes' > "$fr/etc/omamobile/boot-update.conf"; rows
+has 'ok|1|boot|' && has 'ok|1|storage guard|' || fail "a release on slot B whose boot-update.conf names no slot: b"
+pass "a release on slot B whose boot-update.conf names no slot: b"
+fakeroot _a $A5; printf 'AUTO_WRITE=yes\nSLOT=a\n' > "$fr/etc/omamobile/boot-update.conf"; rows
+has 'ok|1|boot|' && has ', slot a, up' && has 'ok|1|storage guard|13 partitions; only userdata and slot a' \
+  || fail "a release on slot A with SLOT=a: both rows pass"
+pass "a release on slot A with SLOT=a: both rows pass"
+fakeroot _a $A5; rows
+has 'not ok|1|boot|' && has 'on slot a: our builds boot from slot b' || fail "slot A without SLOT=a fails the boot row"
+pass "slot A without SLOT=a fails the boot row"
+fakeroot _b $B5; printf 'SLOT="a"\n' > "$fr/etc/omamobile/boot-update.conf"; rows
+has 'not ok|1|boot|' && has 'on slot b: boot-update.conf says SLOT=a' || fail "SLOT=a booted from slot B (a fallback) fails the boot row"
+pass "SLOT=a booted from slot B (a fallback) fails the boot row"
+fakeroot _a $A5; printf 'SLOT=a\nSLOT=a\n' > "$fr/etc/omamobile/boot-update.conf"; rows
+has 'not ok|1|boot|' && has 'names SLOT 2 times' || fail "a second SLOT= line fails the boot row"
+pass "a second SLOT= line fails the boot row"
+fakeroot _a $A5 boot_b; printf 'SLOT=a\n' > "$fr/etc/omamobile/boot-update.conf"; rows
+has 'not ok|1|storage guard|writable outside the allowlist: boot_b' || fail "on slot A, slot B's boot image writable fails the guard row"
+fakeroot _b $B5 dtbo_a; rows
+has 'not ok|1|storage guard|writable outside the allowlist: dtbo_a' || fail "on slot B, slot A's dtbo writable fails the guard row"
+pass "the other slot's boot images writable fail the guard row, either way"
+fakeroot none userdata; rows
+has 'skip|1|boot|' && has 'ok|1|storage guard|13 partitions; only userdata writable' || fail "no slot named: the boot row skips, the guard allows userdata alone"
+fakeroot none $B5; rows
+has 'not ok|1|storage guard|writable outside the allowlist: ' && has ' boot_b ' || fail "no slot named: a writable boot image fails the guard row"
+pass "no slot named: the boot row skips and only userdata may be writable"
 
 # From the laptop: PHONE_SSH stands in for the phone. It answers the
 # compatible question and records what the smoke run was started with.

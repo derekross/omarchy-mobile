@@ -262,6 +262,12 @@ ok "kernel: the first kernel package with no config passes (the hook will skip)"
 echo 'AUTO_WRITE=yes' >"$t/boot-update.conf"
 out=$(OMAMOBILE_BOOT_UPDATE=$t/no-such-tool python3 -I "$U" check --json)
 ok "kernel: AUTO_WRITE=yes but no omamobile-boot-update to ask: blocked" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert not d[\"ok\"] and any(\"AUTO_WRITE=yes\" in b for b in d[\"blockers\"])" "$out"'
+printf 'AUTO_WRITE=yes\nSLOT=a\n' >"$t/boot-update.conf"
+out=$(OMAMOBILE_BOOT_UPDATE=$t/no-such-tool python3 -I "$U" check --json)
+ok "kernel: a SLOT= line (omamobile-boot-update 0.2.0) is read with AUTO_WRITE=yes, not taken as unreadable" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert not any(\"be read\" in b for b in d[\"blockers\"]) and any(\"AUTO_WRITE=yes\" in b for b in d[\"blockers\"]), d" "$out"'
+printf 'AUTO_WRITE=yes\nSLOT=a\nSLOT=a\n' >"$t/boot-update.conf"
+out=$(OMAMOBILE_BOOT_UPDATE=$t/no-such-tool python3 -I "$U" check --json)
+ok "kernel: a second SLOT= line is unreadable, as omamobile-boot-update finds it" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert not d[\"ok\"] and any(\"be read\" in b for b in d[\"blockers\"]), d" "$out"'
 echo 'AUTO_WRITE=perhaps' >"$t/boot-update.conf"
 out=$(OMAMOBILE_BOOT_UPDATE=$t/no-such-tool python3 -I "$U" check --json)
 ok "kernel: an unreadable boot-update.conf blocks" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert not d[\"ok\"] and any(\"be read\" in b for b in d[\"blockers\"])" "$out"'

@@ -14,7 +14,8 @@
 # builds are added in, and a list that isn't is refused; match says whether
 # an Android update would land on a tested build (the newest one); match and
 # entry name the build's address on Google's server, which is Google's or
-# the index is refused; and sign makes a detached signature gpg verifies.
+# the index is refused; and sign makes a detached signature gpg verifies,
+# and writes nothing when the release key can't be loaded.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -228,9 +229,31 @@ if command -v gpg >/dev/null; then
   fx sign -d testdev --out "$t/signed" >/dev/null || fail "sign writes a signed copy"
   cmp -s "$t/signed/factory-builds.json" "$idx" || fail "the signed copy is the index"
   gpg --homedir "$G" --batch --verify "$t/signed/factory-builds.json.sig" "$t/signed/factory-builds.json" 2>/dev/null || fail "the signature verifies"
+  # A sign the key loader refuses writes nothing: the copy and signature
+  # already there stay a pair, and no folder is made. The index changes
+  # first, so a copy written anyway would differ
+  sums() { sha256sum "$t/signed/factory-builds.json" "$t/signed/factory-builds.json.sig"; }
+  fx tested -d testdev AB1C.230101.001 2026.11.08 >/dev/null
+  kept=$(sums)
+  echo "${fpr,,}" > "$r/packages/omamobile-keyring/omamobile-revoked"
+  if fx sign -d testdev --out "$t/signed" 2>"$t/err"; then fail "sign refuses a malformed omamobile-revoked"; fi
+  grep -c 'omamobile-revoked is malformed at line 1' "$t/err" >/dev/null || { cat "$t/err" >&2; fail "sign says omamobile-revoked is malformed"; }
+  [[ $(sums) == "$kept" ]] || fail "a sign refused for a malformed omamobile-revoked leaves the signed copy and its signature as they were"
+  if fx sign -d testdev --out "$t/signed-malformed" 2>/dev/null; then fail "sign into a new folder refuses a malformed omamobile-revoked"; fi
+  [[ ! -e $t/signed-malformed ]] || fail "a sign refused for a malformed omamobile-revoked makes no folder"
+  : > "$r/packages/omamobile-keyring/omamobile-revoked"
+  fx sign -d testdev --out "$t/signed" >/dev/null || fail "sign works again once omamobile-revoked is well formed"
+  cmp -s "$t/signed/factory-builds.json" "$idx" &&
+    gpg --homedir "$G" --batch --verify "$t/signed/factory-builds.json.sig" "$t/signed/factory-builds.json" 2>/dev/null ||
+    fail "after a refused sign, a good one writes the new copy and a signature that verifies"
+  fx untested -d testdev AB1C.230101.001 >/dev/null
+  kept=$(sums)
   rm -rf "$r/keys"
-  if fx sign -d testdev --out "$t/signed2" 2>/dev/null; then fail "sign needs the release key"; fi
-  pass "sign: a detached signature by the release key, and none without it"
+  if fx sign -d testdev --out "$t/signed" 2>/dev/null; then fail "sign needs the release key"; fi
+  [[ $(sums) == "$kept" ]] || fail "a sign without the release key leaves the signed copy and its signature as they were"
+  if fx sign -d testdev --out "$t/signed2" 2>/dev/null; then fail "sign into a new folder needs the release key"; fi
+  [[ ! -e $t/signed2 ]] || fail "a sign without the release key makes no folder"
+  pass "sign: a detached signature by the release key, and none without it; a refused sign writes nothing"
 else
   echo "ok - # skip: no gpg for sign"
 fi

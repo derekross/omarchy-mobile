@@ -13,15 +13,21 @@ for tool in omamobile-bootctl reboot-to; do install -Dm755 "$build/$tool" "$dest
 while IFS= read -r -d '' file; do
   install -Dm644 "$file" "$destination/usr/lib/${file#vendor/}"
 done < <(find vendor -type f -print0)
+# systemd runs generators only when they are executable.
+chmod 755 "$destination"/usr/lib/systemd/system-generators/*
 while IFS= read -r -d '' file; do
   install -d "$destination/usr/lib/$(dirname "${file#vendor/}")"
   ln -sfn "$(readlink "$file")" "$destination/usr/lib/${file#vendor/}"
 done < <(find vendor -type l -print0)
 install -Dm644 wireplumber/50-omamobile-cameras.conf "$destination/usr/share/wireplumber/wireplumber.conf.d/50-omamobile-cameras.conf"
 install -Dm644 etc/omamobile-mirrorlist "$destination/etc/pacman.d/omamobile-mirrorlist"
+install -Dm644 etc/upower-critical.conf "$destination/etc/UPower/UPower.conf.d/50-omamobile-critical.conf"
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-cheetah/LICENSE"
 install -Dm644 LICENSE.Apache-2.0 "$destination/usr/share/licenses/omamobile-device-cheetah/LICENSE.Apache-2.0"
 install -Dm644 version "$destination/usr/share/omamobile/device-cheetah/version"
+# Suspend is verified on this phone (device/cheetah/SUSPEND-PLAN.md): the
+# shell's user setup turns auto-sleep on once where this file exists.
+install -Dm644 /dev/null "$destination/usr/share/omamobile/auto-sleep-default"
 
 # The boot files omamobile-boot-update builds slot B's images from
 # (docs/RELEASES.md §5.1): the descriptor, the board dtbo, the compiled DTB

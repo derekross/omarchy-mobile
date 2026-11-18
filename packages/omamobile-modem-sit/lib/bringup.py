@@ -430,7 +430,15 @@ def start(service, settings, stopped=lambda: False):
         provision_profiles(client, profiles)
     lte = net.get('nr', 'off') == 'off'
     nr_after_radio = False
-    if lte and not already_on and net.getboolean('nr_after_radio_on', False):
+    try:
+        after_on = net.getboolean('nr_after_radio_on', False)
+    except ValueError:
+        # A mistyped value keeps today's order rather than stopping the
+        # start after the attach settings were sent.
+        print(f"nr_after_radio_on = {net.get('nr_after_radio_on')!r} isn't yes or no; "
+              'the NR mode is set as by default', flush=True)
+        after_on = False
+    if lte and not already_on and after_on:
         # [network] nr_after_radio_on = yes: never with the radio off. On a
         # second Pixel 7 Pro this modem sometimes accepted SET_NR_MODE with
         # the radio off (reading 0) instead of refusing it, put the mode back
@@ -500,6 +508,7 @@ def start(service, settings, stopped=lambda: False):
     ims_first = net.getboolean('ims', True) and chosen['ims_first']
     if not ims_first and apn:
         service.stage('data')
+        service.internet_setup = dict(apn=apn, ip_type=ip_type)
         activate(client, apn, ip_type=ip_type, on_event=service.event)
         service.pump()
     if not net.getboolean('ims', True):
@@ -519,6 +528,7 @@ def start(service, settings, stopped=lambda: False):
         if internet_up or not apn:
             return
         service.stage('data')
+        service.internet_setup = dict(apn=apn, ip_type=ip_type)
         activate(client, apn, ip_type=ip_type, on_event=service.event)
         service.pump()
         internet_up = True

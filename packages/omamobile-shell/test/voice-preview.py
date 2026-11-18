@@ -165,10 +165,74 @@ def stops_at_once():
         assert p.returncode == 0
 
 
+def stops_whenever():
+    """A stop that lands while the loop only waits (silence coming in): thirty
+    of them at slightly different moments, none taking longer than the next
+    look at the flag plus the interpreter's exit."""
+    with tempfile.TemporaryDirectory() as tmp:
+        env, home = env_for(tmp)
+        open(os.path.join(home, ".local/share/voxtype/models/ggml-tiny.en.bin"), "w").close()
+        quiet = os.path.join(tmp, "quiet.wav")
+        with open(quiet, "wb") as f:
+            f.write(vp.wav_bytes(silence(20)))
+        for i in range(30):
+            p = subprocess.Popen([sys.executable, tool, "--from", quiet], stdin=subprocess.DEVNULL, env=env,
+                                 stdout=subprocess.PIPE)
+            time.sleep(0.25 + 0.011 * i)
+            t0 = time.time()
+            p.send_signal(signal.SIGTERM)
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                raise AssertionError("the %dth stop was never seen: the loop is stuck" % (i + 1))
+            assert time.time() - t0 < 2 and p.returncode == 0, (i, time.time() - t0, p.returncode)
+
+
+def handler_takes_no_lock():
+    """The handler must not need a lock the interrupted thread may hold:
+    called while every lock this module could offer it is held, it returns."""
+    src = open(tool).read()
+    assert "threading.Event(" not in src, "no Event: its set() takes a lock its wait() holds"
+    body = src[src.index("def request_stop("):src.index("def arm_limit(")]
+    assert "STOP[0] = True" in body and ".set(" not in body and "with " not in body and ".acquire(" not in body, body
+    vp.STOP[0] = False
+    vp.request_stop()
+    assert vp.STOP[0] is True
+    vp.STOP[0] = False
+
+
+def the_kernels_limit():
+    """A main thread blocked for good on a lock, as the stuck one was, is
+    ended by the alarm, and not by anything that thread would have to do."""
+    code = ("import importlib.machinery, importlib.util, sys, threading\n"
+            "loader = importlib.machinery.SourceFileLoader('vp', sys.argv[1])\n"
+            "spec = importlib.util.spec_from_loader('vp', loader)\n"
+            "vp = importlib.util.module_from_spec(spec); loader.exec_module(vp)\n"
+            "vp.arm_limit(1)\n"
+            "lock = threading.Lock(); lock.acquire(); lock.acquire()\n")
+    t0 = time.time()
+    p = subprocess.Popen([sys.executable, "-B", "-c", code, tool], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        p.wait(timeout=6)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        raise AssertionError("a blocked main thread outlived the limit")
+    assert p.returncode == -signal.SIGALRM, p.returncode
+    assert 0.5 < time.time() - t0 < 4, time.time() - t0
+    src = open(tool).read()
+    run = src[src.index("def run(args):"):]
+    assert "arm_limit(MAX_SECONDS + LIMIT_MARGIN)" in run and run.index("arm_limit(") < run.index("cap.from_mic()"), \
+        "the limit is armed before the microphone is opened"
+
+
 check("its model: tiny.en, else the daemon's base.en, else none", models)
 check("the chunk plan: a pass per step of new audio, a commit past 8 s", planning)
 check("audio: the cut in the pause, silence, the WAV", audio)
 check("text: Whisper's tags out, the transcript from voxtype's output", text)
 check("the whole loop against a fake voxtype", whole_loop)
 check("SIGTERM stops a pass under way", stops_at_once)
+check("SIGTERM stops a loop that only waits, whenever it lands", stops_whenever)
+check("the stop handler takes no lock", handler_takes_no_lock)
+check("the kernel ends a blocked loop at the limit", the_kernels_limit)
 sys.exit(1 if failed else 0)

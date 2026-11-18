@@ -6,14 +6,19 @@
 # omamobile-boot-update and omamobile-boot-images; the caller defines die.
 #
 # Only BOOT_METHOD=android-v4 (the default) is accepted: the Qualcomm chain,
-# the RAM-only probe and anything else have no slot-B update path here.
+# the RAM-only probe and anything else have no slot-B update path here
+# (nor one on slot A: the reader's verdict doesn't depend on the slot).
 # tests/boot-update-descriptor checks that every descriptor in device/ gets
 # the same verdict from this file as from bin/omamobile.
 
 # Every name a descriptor's UFS_RW may hold (bin/omamobile UFS_RW_ALLOWED,
-# initramfs/init ufs_rw_load).
+# initramfs/init ufs_rw_load). The names are in slot form: X_b stands for X
+# of the slot the phone runs from, which the initramfs guard opens and
+# omamobile-boot-update writes (SLOT= in boot-update.conf, b when absent;
+# docs/ACTIVE-SLOT-PLAN.md §2, §4).
 BU_UFS_RW_ALLOWED="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
-# Every image a phone writes. The partition is always <image>_b.
+# Every image a phone writes. The partition is <image>_<SLOT>: <image>_b on
+# every phone whose boot-update.conf names no slot.
 BU_IMAGES_ALLOWED="boot init_boot vendor_boot vendor_kernel_boot dtbo"
 
 # bu_load_descriptor FILE: set DEV_* from FILE, or die.
@@ -108,6 +113,17 @@ bu_load_descriptor() {
   elif [[ -n ${DEV_AVB_ROLLBACK_INDEX:-}${DEV_AVB_SECURITY_PATCH:-} ]]; then
     die "$file: AVB_ROLLBACK_INDEX and AVB_SECURITY_PATCH belong with AVB_FOOTERS"
   fi
+  # Where a release installs (bin/omamobile load_device, the same checks;
+  # tests/install-slot-descriptor): INSTALL_SLOT=b by default, or active with
+  # INSTALL_ACTIVE_SLOTS. Only checked here: which slot this phone writes
+  # comes from boot-update.conf's SLOT=, never from the descriptor.
+  case ${DEV_INSTALL_SLOT-b} in
+    b) [[ -z ${DEV_INSTALL_ACTIVE_SLOTS+x} ]] || die "$file: INSTALL_ACTIVE_SLOTS belongs with INSTALL_SLOT=active" ;;
+    active)
+      [[ ${DEV_INSTALL_ACTIVE_SLOTS-} =~ ^(a|b|a\ b|b\ a)$ ]] ||
+        die "$file: INSTALL_SLOT=active needs INSTALL_ACTIVE_SLOTS: the slots a release installs on (a, b, or a b)" ;;
+    *) die "$file: INSTALL_SLOT is active or b, not '$DEV_INSTALL_SLOT'" ;;
+  esac
   # A device whose initramfs carries modules gets them from the release
   # being written (omamobile-boot-images appends them), so their names are
   # checked here as bin/omamobile initramfs checks them
