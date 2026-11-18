@@ -483,6 +483,44 @@ fi
 if omarchy-done ensure omamobile-access-plugin; then
   add_plugin omamobile.access
 fi
+# The phone's two portal choices (that sheet for Access, Nautilus's touch
+# file chooser for FileChooser) are in /etc/xdg/xdg-desktop-portal/
+# hyprland-portals.conf (portal/). Omarchy 4.5 gives every user a
+# hyprland-portals.conf of their own with a default= line, and
+# xdg-desktop-portal (1.22, xdp_portal_config_find) asks each file in turn
+# for the interface's own line and then for that file's default before it
+# goes on to the next file. So the user's default answered for both, the
+# phone's lines were never reached, and the file chooser was GTK 3's desktop
+# dialog again, where a tap or a double tap opens no folder (seen on a Pixel
+# 9a from the day it took Omarchy 4.5). The two lines go into the user's file
+# too, under its [preferred] group, at any login that finds one missing: an
+# Omarchy update may write the file again. A file that names the interface
+# is left alone, whatever it names (with blanks around its "=" or not), so
+# an owner who wants another backend says so there. A file that is a link
+# (a dotfile setup) is left as it is, with a line saying what it lacks: sed
+# would replace the link with a copy. A file that can't be written is
+# reported, and the rest of the setup goes on. xdg-desktop-portal reads its
+# files when it starts.
+portals=${XDG_CONFIG_HOME:-$HOME/.config}/xdg-desktop-portal/hyprland-portals.conf
+if [[ -L $portals ]]; then
+  echo "omamobile-setup-user: $portals is a link, left as it is; the phone's file chooser and permission sheet need" \
+    "org.freedesktop.impl.portal.FileChooser=gnome;gtk and org.freedesktop.impl.portal.Access=omamobile;gtk under [preferred] there" >&2
+elif [[ -f $portals ]] && grep -q '^\[preferred\]' "$portals"; then
+  portals_changed=0
+  for line in 'org.freedesktop.impl.portal.FileChooser=gnome;gtk' 'org.freedesktop.impl.portal.Access=omamobile;gtk'; do
+    if ! grep -q "^[[:space:]]*${line%%=*}[[:space:]]*=" "$portals"; then
+      if sed -i "0,/^\[preferred\]/s//[preferred]\n$line/" "$portals" 2>/dev/null; then
+        portals_changed=1
+      else
+        echo "omamobile-setup-user: could not add ${line%%=*} to $portals" >&2
+        break
+      fi
+    fi
+  done
+  if ((portals_changed)); then
+    systemctl --user try-restart xdg-desktop-portal.service 2>/dev/null || true
+  fi
+fi
 # Calls (omamobile.call): incoming calls over the lock, a heads-up card when
 # unlocked and the in-call controls, from omatel's agent when it runs.
 if omarchy-done ensure omamobile-call-plugin; then

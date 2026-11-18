@@ -500,3 +500,58 @@ rm "$ha/.local/state/omarchy/toggles/omamobile-sleep"
 RUN_HOME=$ha RUN_AUTO_SLEEP=$t/auto-sleep-default run
 [[ ! -e $ha/.local/state/omarchy/toggles/omamobile-sleep ]] || fail "a user who turns auto-sleep off keeps it off"
 pass "auto-sleep: on once where the device says suspend is verified, a user's off kept"
+
+# The phone's portal choices in the user's own file. Omarchy 4.5's
+# hyprland-portals.conf has a default= line, which answers for every
+# interface before the phone's file in /etc/xdg is reached.
+hp=$t/portals; mkdir -p "$hp/.config/hypr" "$hp/.config/xdg-desktop-portal" "$hp/.local/state/omarchy/done"
+cp "$H"/.config/hypr/*.lua "$hp/.config/hypr/"
+touch "$hp/.local/state/omarchy/done/omamobile-shell-profile"
+pf=$hp/.config/xdg-desktop-portal/hyprland-portals.conf
+printf '[preferred]\ndefault=hyprland;gtk\norg.freedesktop.impl.portal.Secret=gnome-keyring\n' >"$pf"
+RUN_HOME=$hp run
+[[ $(sed -n 1p "$pf") == '[preferred]' && $(grep -c '^\[' "$pf") == 1 ]] || fail "the user's portal file keeps its one group"
+[[ $(grep -cx 'org.freedesktop.impl.portal.FileChooser=gnome;gtk' "$pf") == 1 && $(grep -cx 'org.freedesktop.impl.portal.Access=omamobile;gtk' "$pf") == 1 ]] \
+  || fail "the file chooser and the permission sheet are named in the user's portal file"
+[[ $(grep -cx 'default=hyprland;gtk' "$pf") == 1 && $(grep -cx 'org.freedesktop.impl.portal.Secret=gnome-keyring' "$pf") == 1 ]] || fail "Omarchy's own lines are kept"
+[[ $(grep -cx 'systemctl --user try-restart xdg-desktop-portal.service' "$hp/calls") == 1 ]] || fail "a running xdg-desktop-portal is restarted to read it"
+before=$(sha256sum <"$pf")
+RUN_HOME=$hp run
+[[ $(sha256sum <"$pf") == "$before" && $(grep -cx 'systemctl --user try-restart xdg-desktop-portal.service' "$hp/calls") == 1 ]] \
+  || fail "a file that has the lines is left alone, and nothing is restarted for it"
+# The owner's own backend for an interface stays theirs
+printf '[preferred]\ndefault=hyprland;gtk\norg.freedesktop.impl.portal.FileChooser=gtk\n' >"$pf"
+RUN_HOME=$hp run
+[[ $(grep -c 'impl.portal.FileChooser=' "$pf") == 1 ]] && grep -cx 'org.freedesktop.impl.portal.FileChooser=gtk' "$pf" >/dev/null \
+  || fail "an owner's own file chooser is kept"
+grep -cx 'org.freedesktop.impl.portal.Access=omamobile;gtk' "$pf" >/dev/null || fail "the interface the owner didn't name is still added"
+# An Omarchy update writes the file again: the lines come back at the next login
+printf '[preferred]\ndefault=hyprland;gtk\n' >"$pf"
+RUN_HOME=$hp run
+[[ $(grep -c 'impl.portal.\(FileChooser=gnome\|Access=omamobile\);gtk' "$pf") == 2 ]] || fail "a rewritten file gets the lines again"
+# An owner's line written with blanks around its "=" is theirs too
+printf '[preferred]\ndefault=hyprland;gtk\n  org.freedesktop.impl.portal.FileChooser = gtk\n' >"$pf"
+RUN_HOME=$hp run
+[[ $(grep -c 'impl.portal.FileChooser' "$pf") == 1 ]] || fail "an owner's line with blanks around its = is kept, and no second one is added"
+# A file that is a link (a dotfile setup) stays a link, unchanged, with a line saying what it lacks
+printf '[preferred]\ndefault=hyprland;gtk\n' >"$hp/dotfile-portals.conf"
+rm "$pf"; ln -s "$hp/dotfile-portals.conf" "$pf"
+before=$(sha256sum <"$hp/dotfile-portals.conf")
+RUN_HOME=$hp run
+[[ -L $pf && $(sha256sum <"$hp/dotfile-portals.conf") == "$before" ]] || fail "a portal file that is a link is left as it is"
+grep -c 'is a link, left as it is' "$t/out" >/dev/null || fail "the setup says what a linked portal file lacks"
+rm "$pf"
+# A file that can't be written: said once, and the setup goes on to its end
+if ((EUID != 0)); then
+  printf '[preferred]\ndefault=hyprland;gtk\n' >"$pf"
+  chmod a-w "$hp/.config/xdg-desktop-portal"
+  RUN_HOME=$hp run
+  chmod u+w "$hp/.config/xdg-desktop-portal"
+  grep -c 'could not add org.freedesktop.impl.portal.FileChooser' "$t/out" >/dev/null || fail "a portal file that can't be written is reported"
+  [[ $(grep -c 'impl.portal' "$pf") == 0 ]] || fail "nothing is half-written into a file that can't be written"
+  rm "$pf"
+fi
+# No file of the user's: none is made, and the phone's own in /etc/xdg is read
+RUN_HOME=$hp run
+[[ ! -e $pf ]] || fail "no portal file is made for a user who has none"
+pass "the portal choices: the touch file chooser and the permission sheet in the user's own portal file, an owner's choice kept (blanks or not), a linked or unwritable file left alone, no file made"
