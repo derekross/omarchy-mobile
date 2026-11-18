@@ -850,7 +850,7 @@ the loader undoes itself (that is its job). By hand:
 
 ---
 
-### K1b: a NO_AUTOIBUS left set stops charging (2026-11-15, offline; nothing run yet)
+### K1b: a NO_AUTOIBUS left set stops charging (2026-11-15, offline; no write run yet)
 
 **The report.** A community 7 Pro on issue #169 that booted from an empty
 battery read `CHG_CNFG_09` (0xc2) = `0x93`: the 500 mA limit (sel 19) with
@@ -908,8 +908,10 @@ passes data is the next thing to try. The battery below 90 %, so it charges
 at constant current, screen on, the modem stopped for K1b.1 to K1b.4
 (`systemctl stop omamobile-modem`; with it up, a dead-man watchdog reset
 would use the modem's one allowed unclean end, AGENTS.md section 2), and
-after K1b.3's reboot `systemctl mask omamobile-modem-boot.target` for the
-test (unmask it at the end).
+before K1b.3's push `systemctl mask omamobile-modem-boot.target`, so the
+test kernel's boots come up without it (unmask it at the end). The mask
+goes in before the push because the 7 Pro starts the modem at boot, and
+masking the target stops nothing a boot has already started.
 
 Every write to the MAX77759 runs under the dead-man switch (section 4): the
 chip also owns the USB data switch, and USB is the only link.
@@ -948,8 +950,10 @@ minutes).** The modem stopped (Setup).
 which reproduces the report on our phone. **Stop** if the tool exits
 non-zero (3 undone, 4 no answer: follow its recovery text; 5 refused or 6
 failed: nothing stayed applied), the mode isn't 5, or USB drops.
-**Rollback:** K1b.2, or `tools/usbc-deadman undo k1b-autoibus-on`; a reboot
-may end it too (K1b.4's question).
+**Rollback:** K1b.2, with the dump's `NO_AUTOIBUS 0` as its check. (`undo
+k1b-autoibus-on` also works after one run of the step; a second run in the
+same boot saves the bit-set value, and the undo then leaves the bit set.) A
+reboot may end it too (K1b.4's question).
 
 **K1b.2, back to normal (risk: low; under the dead-man).**
 `tools/usbc-deadman k1b-autoibus-off`; expect exit 0, `NO_AUTOIBUS 0`,
@@ -962,8 +966,12 @@ K1b.1.
 `KERNEL_DIR=~/omamobile-kernel/wt-charger-autoibus
 KERNEL_OUT=~/omamobile-kernel/out-charger-autoibus` set, build the whole set
 offline first: `bin/omamobile kernel`, `initramfs`, `images` (cheetah, the
-default device) and `modules`. Then, the modem stopped, `bin/omamobile
-push`. After boot, mask the modem for the test (Setup), then K1b.0 again:
+default device) and `modules`. Then, on the phone, `systemctl mask
+omamobile-modem-boot.target` and `systemctl stop omamobile-modem` (already
+stopped since K1b.1: `systemctl is-active omamobile-modem` reads
+`inactive`), and only then `bin/omamobile push`. The test kernel boots
+without the modem (Setup). After boot, K1b.0 again:
+`systemctl is-active omamobile-modem` reads `inactive`,
 `uname -r` reads the test release, `probed:` has no `(NO_AUTOIBUS set)`,
 CNFG_09 `NO_AUTOIBUS 0`, current as before, `tools/phone-smoke` passes.
 **Stop** if any of those fail. **Rollback:** the same `push` with
@@ -971,7 +979,9 @@ CNFG_09 `NO_AUTOIBUS 0`, current as before, `tools/phone-smoke` passes.
 complete).
 
 **K1b.4, the fix itself (risk: low; the bit set under the dead-man, then a
-warm reboot).** `tools/usbc-deadman k1b-autoibus-on`, check that charging
+warm reboot).** First `systemctl is-active omamobile-modem` reads
+`inactive`: **stop** if it doesn't, the watchdog must not be armed with the
+modem up. Then `tools/usbc-deadman k1b-autoibus-on`, check that charging
 stops as in K1b.1, then `systemctl reboot`. **Stop** before the reboot if
 the step didn't confirm. After boot:
 
