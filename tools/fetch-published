@@ -15,7 +15,8 @@
 # or .xz, or a link to one: the link goes, never its target) whose name the
 # index doesn't list goes, with its .sig file, so DIR holds only the
 # published set; other files and sub-directories stay. A run that stops
-# before then removes nothing.
+# before then removes nothing. A DIR that holds a repository index
+# (omamobile.db or omamobile.db.tar.gz) is refused before any download.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -32,6 +33,8 @@ while (($#)); do
 done
 [[ $channel =~ ^(development|stable)$ ]] || die "--channel is development or stable"
 [[ -n $dir ]] || die "usage: tools/fetch-published [--channel development|stable] DIR"
+[[ ! -e $dir/omamobile.db && ! -e $dir/omamobile.db.tar.gz ]] ||
+  die "$dir is a package repository (it holds omamobile.db): give fetch-published a folder of its own, such as out/<codename>/published"
 url=${OMAMOBILE_PKGS_URL:-https://pkgs.omamobile.org}/$channel/aarch64
 command -v gpgv >/dev/null && command -v curl >/dev/null || die "gpgv and curl are needed"
 

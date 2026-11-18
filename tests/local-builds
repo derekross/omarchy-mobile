@@ -62,7 +62,7 @@ make_index() {  # make_index KEY [FILE...]: an index of FILE (foo's by default) 
 echo "package bytes" > "$srv/foo-1-1-any.pkg.tar.zst"
 sign signer "$srv/foo-1-1-any.pkg.tar.zst"
 make_index signer
-fetch() { (cd "$R" && env "$@" OMAMOBILE_PKGS_URL=file://$t/srv tools/fetch-published "$t/got") > "$t/log" 2>&1; }
+fetch() { (cd "$R" && env "$@" OMAMOBILE_PKGS_URL=file://$t/srv tools/fetch-published "${into:-$t/got}") > "$t/log" 2>&1; }
 
 fetch || { cat "$t/log"; fail "fetch-published takes a trusted index and package"; }
 [[ -f $t/got/foo-1-1-any.pkg.tar.zst && -f $t/got/foo-1-1-any.pkg.tar.zst.sig ]] || fail "the package comes with its signature"
@@ -160,6 +160,32 @@ done
 [[ $(sha256sum < "$t/outside/linked-1-1-any.pkg.tar.zst") == "$target_sum" ]] \
   || fail "leaves the symlink's target outside DIR byte for byte"
 pass "fetch-published matches names exactly, removes a symlink but never its target, and keeps a .sig directory, under inherited glob options"
+
+# A DIR that holds a repository index is a package repository given by mistake:
+# it is refused before any download, the index's included (a curl on PATH logs
+# every call, and a run into $t/got shows it does), and left as it was
+real_curl=$(command -v curl) && mkdir -p "$t/bin"
+cat > "$t/bin/curl" <<EOF
+#!/bin/sh
+echo "\$*" >> "$t/curl.log"
+exec "$real_curl" "\$@"
+EOF
+chmod +x "$t/bin/curl"
+state() { (cd "$1" && find . -mindepth 1 -printf '%y %p\n' | LC_ALL=C sort && find . -type f -exec sha256sum {} + | LC_ALL=C sort); }
+for db in omamobile.db omamobile.db.tar.gz; do
+  d=$t/local-$db && mkdir -p "$d"
+  echo "a local index" > "$d/$db"
+  echo "the port's own" > "$d/local-1-1-any.pkg.tar.zst" && echo "its signature" > "$d/local-1-1-any.pkg.tar.zst.sig"
+  was=$(state "$d") && : > "$t/curl.log"
+  if into=$d fetch PATH="$t/bin:$PATH"; then cat "$t/log"; fail "refuses a folder that holds $db"; fi
+  grep -qxF "error: $d is a package repository (it holds omamobile.db): give fetch-published a folder of its own, such as out/<codename>/published" "$t/log" \
+    || { cat "$t/log"; fail "says a folder that holds $db is a package repository"; }
+  [[ ! -s $t/curl.log ]] || { cat "$t/curl.log"; fail "fetches nothing into a folder that holds $db"; }
+  [[ $(state "$d") == "$was" ]] || { state "$d"; fail "leaves a folder that holds $db as it was"; }
+done
+fetch PATH="$t/bin:$PATH" || { cat "$t/log"; fail "fetch-published runs again into its own folder"; }
+grep -q 'omamobile.db.sig$' "$t/curl.log" || { cat "$t/curl.log"; fail "the curl log sees the tool's index download"; }
+pass "fetch-published refuses a folder that holds a repository index, before any download, and leaves it as it was"
 
 # --- build-packages and build-rootfs --local ---
 mv "$R/keys/panther" "$t/panther-key"
