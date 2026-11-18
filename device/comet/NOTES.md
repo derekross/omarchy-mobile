@@ -93,37 +93,76 @@ button restart. The feeder went into the root image, enabled before
 `sysinit`, and later into our development device package (not part of
 this PR, which ships boot policy only).
 
-**Slot B marking.** With the feeder in place, slot B was marked successful
-once by hand, with the owner's approval: one `devinfo` byte, the same
-helper and before/after images as on 2026-10-29. `omamobile-boot-success`
-has stayed **masked** since 2026-11-07 (it was masked on the old install
-before the restore and is masked on the new one); this package ships no
-writer and enables nothing. No `devinfo` write has been made since: the bytes read on 2026-11-17
-match the post-restore backup (below).
+**Slot B marking (2026-11-08 01:25:18Z).** With the feeder in place, slot
+B was marked successful once by hand, with the owner's approval but not
+the maintainer's (asked on 2026-11-05 for no further `devinfo` write; see
+#203). It was the same helper and before/after images as on 2026-10-29:
+`/usr/bin/omamobile-boot-success`, run over USB SSH on the booted system
+after its health check passed (storage guard active, `devinfo` and its
+disk `ro=1`, sshd, USB gadget, SDDM, Hyprland, the display on, no failed
+units).
 
-**devinfo bytes 0x30-0x37.** In the post-restore backup below (image taken
-2026-11-07 19:41 CST): `02 1a 00 00 02 16 00 00`. Read again on 2026-11-17 (read-only): `02 1a 00 00 02 16 00 00`, the same.
-The layout of these bytes is not decoded here; earlier readings are in the
-2026-10-30 entry.
+- **What made `devinfo` writable:** the helper itself. It runs
+  `blockdev --setrw` on the parent disk (`sdd`) and then on the partition
+  (`sdd1`) immediately before its single `omamobile-bootctl
+  mark-successful` call, and `blockdev --setro` on both right after it, also
+  from an exit trap. The window is that one call; the whole run took about
+  5 s (01:25:18Z to 01:25:23Z), and it logged no failed attempt.
+  `devinfo` is not in `/etc/omamobile-ufs-rw` (`boot_b init_boot_b
+  vendor_boot_b vendor_kernel_boot_b dtbo_b userdata`), and the storage
+  guard sets both `ro=1` again on its own.
+- **Bytes 0x30-0x37:** before `02 1a 00 00 02 14 00 00`, after
+  `02 1a 00 00 02 16 00 00`. A full compare of the helper's before and
+  after images (8 KiB each) shows exactly one changed byte: 0x35,
+  `0x14 -> 0x16` (B's successful bit).
+- `omamobile-boot-success.service` has stayed **masked** since 2026-11-07
+  (masked on the old install before the restore and on the new one); this
+  package ships no writer and enables nothing.
+
+**No `devinfo` write since.** The whole partition read on 2026-11-18
+(read-only, `ro=1`) has the same sha256 as the copies in the 2026-11-08
+02:32Z and 2026-11-14 backups. The only difference from the post-restore
+backup (01:41Z) is two bytes in ABL's own unused area (0x6e, 0x70), which
+ABL changed during the reboots between the two captures; no tool of ours
+writes there.
 
 **Fresh protected backup.** Stock's modem stack rewrote `efs`, `persist`,
 `modem_userdata` and `trusty_userdata`, and the factory flash rewrote
 `modem_a` and `devinfo`, so the 2026-10-30 checksums no longer apply.
 A new read-only capture was taken from a RAM-only hold (every block
-device read-only, nothing mounted) before any modem, PMIC, AoC or Trusty
-start: `efs`, `efs_backup`, `modem_userdata`, `persist`, `modem_a`,
+device read-only, nothing mounted), entered right after the mark: the
+hold started at about 01:28Z and the last image was read at 01:41Z on
+2026-11-08 (19:41 CST on 11-07). So **this backup was taken after the
+mark**, and its `devinfo` already has B's successful bit. It came before
+any modem, AoC or Trusty start: the fresh root carried the package's
+AoC and Trusty blacklist, and our local bring-up files (the modem start
+among them) went back only at 01:46Z. It covers `efs`, `efs_backup`, `modem_userdata`, `persist`, `modem_a`,
 `modem_b`, `devinfo`, `trusty_persist` and `trusty_userdata`. Each
 partition was read twice in phone RAM and hash-checked before it was
 copied, and the backup tool's `verify` passed. Rechecked offline on
 2026-11-17: all nine laptop images match the manifest and the hashes
 computed on the phone (9/9 MATCH). `modem_a` and `modem_b` are identical,
 and match the factory image's modem. The images stay off-repo.
-Stock booted again on 2026-11-11, so this capture is no longer the
-reference. A new read-only capture of the same nine partitions was taken
-on 2026-11-14 at 03:29Z on the running Linux system (each partition
-`ro=1` and unmounted, read twice on the phone with matching sha256, a
-third hash of the laptop copy); that one is current, and also stays
-off-repo.
+
+**Stock has not booted since 2026-11-08.** An earlier version of this
+entry said stock booted again on 2026-11-11. That was wrong: on 11-11 the
+phone dropped off USB during a Wi-Fi sleep trial, and every boot in that
+night's journal is Linux on slot B. The captures confirm it:
+
+- A read-only capture of the same nine partitions was taken on
+  2026-11-14 at 03:29:09Z on the running Linux system (each partition
+  `ro=1` and unmounted, no `storageproxyd`, read twice on the phone with
+  matching sha256, a third hash of the laptop copy). All nine images,
+  `devinfo` included, are byte-identical to a capture taken on 2026-11-08
+  at 02:32Z, so nothing wrote `efs`, `persist` or `modem_userdata` (as
+  stock's modem stack does) and no slot change wrote `devinfo` (as both a
+  fallback and a switch to A do).
+- Between those captures the phone ran Linux on slot B only, with
+  Trusty, the AoC and the modem started at each boot; the identical
+  images show those starts wrote none of the nine partitions.
+- The Fold's first fingerprint storage start came after that capture:
+  the runner's state directories were created at 03:31:11Z on
+  2026-11-14, about two minutes after it (FINGERPRINT-PLAN F4).
 
 **Superseded by this entry:** the 2026-10-30 statements that slot A is
 unbootable, that ABL has no slot to fall back to, and that recovery means

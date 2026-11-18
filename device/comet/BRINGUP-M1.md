@@ -28,7 +28,10 @@ stock: a slot B that exhausts its tries falls back to it.
 
 No `devinfo` write or boot-success enablement is admitted; the
 boot-success policy for comet is the maintainer's decision. Keep reboots
-few: with B unmarked, each boot spends one of its tries.
+few. B has been marked successful since 2026-11-08, so a normal boot
+spends no tries and nothing falls back to stock: a broken slot B image
+means the buttons and R1. R1's flashes clear the mark, so B then has
+three tries again, and if they run out stock boots (R2).
 
 ## Recovery procedures
 
@@ -36,9 +39,10 @@ Both run from fastboot on the laptop, with the owner present and the
 owner's go for each write. `<SERIAL>` is the phone's serial. Neither
 touches slot A, the bootloader, radio, `devinfo`, `persist`, `efs*`,
 `modem*` or `vbmeta`, and neither runs an unsuffixed `flash`.
-Approval: the owner, in a private working session on 2026-10-30 (R1);
-there is no public record, so the procedures are written out here in full
-for review.
+Approval: R1, the owner, in a private working session on 2026-10-30,
+written out here in full for review. R2's step 4 (`--set-active=b`, a slot
+flag write outside the tools our rules name) waits for the maintainer's
+decision on #203; until then, stop after step 3 and ask there.
 
 ### R1: slot B boots but is broken (bad kernel, lost USB)
 
@@ -62,8 +66,8 @@ fastboot -s <SERIAL> reboot
 
 No `--set-active`: B is already current. Stop at the first write that
 fails and write the set again before any reboot; never boot a half-written
-slot B. A fastboot flash may clear B's successful flag, so B then has its
-three tries and a failure falls back to stock (R2).
+slot B. A fastboot flash of slot B clears B's successful flag, so B then
+has its three tries and a failure falls back to stock (R2).
 
 ### R2: slot B exhausted its tries and stock booted on A
 
