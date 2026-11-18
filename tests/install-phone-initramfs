@@ -37,7 +37,7 @@ PKG=$SRC/packages/omamobile-boot-update
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 skip() { printf 'ok - # skip: %s\n' "$1"; exit 0; }
-for tool in lz4 cpio dtc debugfs mkfs.ext4 zstd openssl python3 flock; do command -v $tool >/dev/null || skip "no $tool"; done
+for tool in lz4 cpio dtc debugfs mkfs.ext4 zstd openssl python3 flock img2simg; do command -v $tool >/dev/null || skip "no $tool"; done
 t=$(mktemp -d)
 trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
 

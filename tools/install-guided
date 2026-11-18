@@ -558,6 +558,7 @@ PACKAGES=(
   "tar tar tar"
   "lpunpack android-tools -"
   "simg2img android-tools android-sdk-libsparse-utils"
+  "img2simg android-tools android-sdk-libsparse-utils"
   "fsck.erofs erofs-utils erofs-utils"
   "readelf binutils binutils"
 )
@@ -598,11 +599,12 @@ step_preflight() {
   title preflight
   # Every program a later step runs, asked for now: one that is missing must
   # stop the install here, not after the phone has been erased. The writes
-  # (tools/install-phone), the radio backup (tools/nv-backup) and the
+  # (tools/install-phone, which needs img2simg for the sparse userdata
+  # image), the radio backup (tools/nv-backup) and the
   # firmware (tools/phone-provision and the extract tools it runs: lpunpack,
   # simg2img, fsck.erofs, debugfs, readelf).
   for t in "$FASTBOOT" debugfs dumpe2fs e2fsck zstd lz4 cpio openssl gpg python3 unzip ssh sha256sum \
-    tar lpunpack simg2img fsck.erofs; do
+    tar img2simg lpunpack simg2img fsck.erofs; do
     command -v "$t" >/dev/null || missing+=("${t##*/}")
   done
   command -v readelf >/dev/null || command -v llvm-readelf >/dev/null || missing+=(readelf)
