@@ -27,6 +27,12 @@ device identifiers and is not in this repository.
 - **The initial Android bootloader property was
   `ripcurrentpro-17.0-15819938`; `dtbo_idx` was 34** [V]
   (R/ `getprop.txt:655,664`).
+- **A targeted read-only ADB check after returning from fastboot confirmed the
+  stock update had booted on slot A:** Android 17, build
+  `CP4A.261105.040.A1`, security patch 2026-11-05, kernel
+  `6.1.172-android14-11`, hardware revision `MP1.0`, and `dtbo_idx=34` [V]
+  (R/ `post-update-targeted.txt`). Bootloader remains locked and verified
+  boot is green. No personal content was queried.
 
 ### Named fastboot reads and return to stock Android
 
@@ -74,6 +80,27 @@ used. Results are in the private R/ capture.
   sizes are only partially captured; the queried sizes and slot flags are
   recorded above.
 
+### Google GPL board-source match (candidate)
+
+- The public Google `kernel/devices/google/caimito` branch
+  `android-gs-caimito-6.1-android16` contains `zumapro-komodo-mp.dts`.
+  Its `constants.bzl` places that overlay at zero-based DTBO index 34; the
+  overlay declares board ID `0x60806`, revision `0x010000`, and compatible
+  `google,ZUMA PRO KOMODO`. This matches the captured `dtbo_idx=34` and
+  `zumapro`/`komodo` identity [V] **for that published branch**, not yet for
+  the installed Android 17 image [G/ [`zumapro-komodo-mp.dts`](https://android.googlesource.com/kernel/devices/google/caimito/+/38a058681d6cefbb95200dc8a5348939773eb9d6/dts/zumapro-komodo-mp.dts):16-24,
+  [`constants.bzl`](https://android.googlesource.com/kernel/devices/google/caimito/+/38a058681d6cefbb95200dc8a5348939773eb9d6/constants.bzl):42;
+  R/ `getprop.txt:655,675,677`].
+- The phone's reported `MP1.0` hardware revision is consistent with the
+  overlay's `MP` name, but that label alone does not prove which DTS revision
+  or source version the installed image used [I].
+- **Source limitation:** this is an Android 16 Google source branch, while
+  the current system build is Android 17. No matching Android 17 caimito
+  branch or factory DTBO for the installed build was found in this review.
+  Treat the overlay as a strong reference candidate, not a verified exact
+  source match. No Google source files or binaries were copied into this
+  repository.
+
 ## Interpretation and open questions
 
 - The Pixel 9a (`tegu`) is the current Tensor G4 bring-up, but it is a different
@@ -86,8 +113,10 @@ used. Results are in the private R/ capture.
   partition sizes and descriptor facts; the live device tree and memory map;
   the exact factory-image DTB/DTBO for this build; boot-chain and recovery
   analysis; and board-specific display, touch, storage, Wi-Fi and modem evidence.
-- No device-specific kernel tree is present on the contributor's host yet.
-  Kernel DTS work belongs in `linux-omarchy-mobile`, not this repository.
+- A public Google GPL source checkout is now available locally at
+  `~/omamobile-kernel/google-caimito`. Kernel DTS work belongs in
+  `linux-omarchy-mobile`, not this repository; see the initial gate plan in
+  [`BRINGUP-M1.md`](BRINGUP-M1.md).
 
 ## Safety boundary
 
