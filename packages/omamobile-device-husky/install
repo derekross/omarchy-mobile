@@ -61,3 +61,6 @@ install -Dm644 etc/omamobile-mirrorlist \
   "$destination/etc/pacman.d/omamobile-mirrorlist"
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-husky/LICENSE"
 install -Dm644 version "$destination/usr/share/omamobile/device-husky/version"
+install -Dm644 hypr/screen-look.frag \
+  "$destination/usr/share/omamobile/device-husky/screen-look.frag"
+install -Dm644 hypr/device.lua "$destination/usr/share/omamobile/hypr/device.lua"
