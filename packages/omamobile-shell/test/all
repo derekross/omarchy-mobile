@@ -1010,6 +1010,10 @@ python3 -c 'import json; assert {"id": "omamobile.access"} in json.load(open("pr
 grep -c 'add_plugin omamobile.access' bin/omamobile-setup-user >/dev/null || fail "existing users get the permission sheet"
 grep -cx 'org.freedesktop.impl.portal.Access=omamobile;gtk' portal/hyprland-portals.conf >/dev/null || fail "Hyprland's portals.conf picks the sheet for Access only"
 ! grep -c '^default' portal/hyprland-portals.conf >/dev/null || fail "the override leaves the default portals alone"
+# The same choices go into a user's own hyprland-portals.conf, whose default= line would answer first
+while IFS= read -r line; do
+  grep -cF "'$line'" bin/omamobile-setup-user >/dev/null || fail "omamobile-setup-user adds $line to the user's portal file"
+done < <(grep '^org.freedesktop.impl.portal\.' portal/hyprland-portals.conf)
 # The file chooser's backend must not itself use the portal (#277): the
 # session's GDK_DEBUG=portals / GTK_USE_PORTAL=1 made it wait 25 s on the main
 # portal, which was waiting for it.
