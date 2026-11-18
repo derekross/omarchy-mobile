@@ -103,7 +103,7 @@ if [[ -f ../../bin/omamobile ]]; then
     [[ -z $probe || ! -e $probe ]] || fail "bin/omamobile would build $probe into the initramfs"
   done < <(grep -oh 'packages/\$DEV_PACKAGE/[A-Za-z0-9_./-]*' ../../bin/omamobile | sed 's#^packages/\$DEV_PACKAGE/##' | sort -u)
 fi
-! ls src/ 2>/dev/null | grep -q bootctl || fail "a bootctl file under src/, where the boot-file tools look"
+! ls src/ 2>/dev/null | grep -c bootctl >/dev/null || fail "a bootctl file under src/, where the boot-file tools look"
 pass "the tool is outside the paths the initramfs builder and stage-boot-files read"
 test/bootctl || fail "test/bootctl"
 
