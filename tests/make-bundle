@@ -302,3 +302,109 @@ if out=$(bundle); then fail "an install link line this tool does not know stops 
 grep -c "install link line this tool does not know" <<<"$out" >/dev/null || fail "the refusal says why: $out"
 cp "$t/MANIFEST.saved" "$mf"
 pass "manifest.json's install_link: only for an image built for the link, with its protocol"
+
+# The install plan writes only slot B's five boot images and userdata
+# (AGENTS.md §1): a descriptor whose BOOT_IMAGES or UFS_RW names any other
+# partition, here with its own allowlist entry beside it, stops the bundle
+# with the name, and the earlier bundle stays
+conf=$r/device/testdev/device.conf
+descriptor() { printf 'CODENAME=testdev\nNAME="Test device"\nBOOT_IMAGES="%s"\nUFS_RW="%s"\n' "$1" "$2" > "$conf"; }
+printf modem > "$k/images/modem.img"
+printf vbmeta > "$k/images/vbmeta.img"
+before=$(cd "$b" && sha256sum SHA256SUMS)
+for c in "boot dtbo modem|boot_b dtbo_b modem_b userdata|BOOT_IMAGES.* not modem" \
+  "boot dtbo vbmeta|boot_b dtbo_b vbmeta_b userdata|BOOT_IMAGES.* not vbmeta" \
+  "boot dtbo|boot_b dtbo_b modem_b userdata|UFS_RW.* not modem_b"; do
+  IFS='|' read -r images rw says <<<"$c"
+  descriptor "$images" "$rw"
+  if out=$(bundle); then fail "BOOT_IMAGES=\"$images\" UFS_RW=\"$rw\" stops the bundle: it wrote $(grep -o '"partition": "[a-z_]*"' "$b/manifest.json" | cut -d'"' -f4 | xargs)"; fi
+  grep -cE "^bundle-manifest: .*$says\$" <<<"$out" >/dev/null || fail "the refusal names the partition ($says): $out"
+  [[ $(cd "$b" && sha256sum SHA256SUMS) == "$before" ]] && intact || fail "a refused descriptor leaves the bundle as it was"
+done
+descriptor "boot dtbo" "boot_b dtbo_b userdata"
+pass "a descriptor naming modem, vbmeta or modem_b stops the bundle, and the earlier bundle stays"
+
+# Format 1, for every device today (no INSTALL_SLOT): manifest.json's install
+# plan and README.txt's two slot paragraphs as they were before format 2
+python3 -I - "$b/manifest.json" <<'PY' || fail "a slot-B bundle's install plan is format 1's, unchanged"
+import json, sys
+m = json.load(open(sys.argv[1]))
+want = {"after": ["set-active b", "reboot"],
+        "never": ["slot A (any *_a partition)", "an unsuffixed partition name", "bootloader", "radio", "persist", "efs",
+                  "modem", "devinfo", "vbmeta", "fastboot -w", "fastboot --slot", "fastboot flashing", "fastboot erase",
+                  "fastboot format", "fastboot oem"],
+        "product": "testdev", "require_matching_bootloader_slots": True, "require_unlocked_bootloader": True,
+        "storage_guard_allowlist": ["boot_b", "dtbo_b", "userdata"], "tool": "fastboot",
+        "writes": [{"partition": "boot_b", "partition_size": None, "size": 4, "source": "images/boot.img"},
+                   {"partition": "dtbo_b", "partition_size": None, "size": 4, "source": "images/dtbo.img"},
+                   {"erases_userdata": True, "partition": "userdata", "source": "root_image"}]}
+assert m["format"] == 1, m["format"]
+assert m["install"] == want, m["install"]
+PY
+readme_slot_b="What it writes: slot B's boot images (boot_b dtbo_b ) and
+userdata (the Arch root). That ERASES userdata. It never touches slot A,
+the bootloader, radio, persist, efs, modem, devinfo or vbmeta."
+readme_way_back='Going back to stock: stock Android is still on slot A. In fastboot,
+"fastboot --set-active=a" and reboot, then factory-reset Android (its data
+was erased). Or flash Google'"'"'s factory image for testdev.'
+grep -cxF -- "$(head -1 <<<"$readme_slot_b")" "$b/README.txt" >/dev/null && [[ $(cat "$b/README.txt") == *"$readme_slot_b"* && $(cat "$b/README.txt") == *"$readme_way_back" ]] ||
+  fail "a slot-B bundle's README.txt keeps its slot B paragraphs, word for word"
+pass "format 1 (no INSTALL_SLOT): manifest.json's install plan and README.txt's slot B paragraphs are as before"
+
+# Format 2 (INSTALL_SLOT=active; no device has it yet): the install plan of
+# the shared contract, with the slot the phone runs from read at the install;
+# README.txt's way back is Google's factory image; and a ramdisk image whose
+# initramfs lacks the storage guard's running-slot marker is refused
+command -v lz4 >/dev/null && command -v cpio >/dev/null || { echo "ok - # skip: no lz4 or cpio for format 2"; exit 0; }
+vendor_boot() {  # RAMDISK-DIR OUT: a v4 vendor boot image holding that directory as its lz4 ramdisk
+  (cd "$1" && find . | LC_ALL=C sort | cpio -o -H newc --quiet) | lz4 -l -9 -q > "$t/rd.lz4"
+  python3 -I -c '
+import struct, sys
+rd, page = open(sys.argv[1], "rb").read(), 4096
+pad = lambda b: b + bytes(-len(b) % page)
+hdr = struct.pack("<8s5I2048sI16s2IQ4I", b"VNDRBOOT", 4, page, 0, 0, len(rd), b"", 0, b"", 2128, 3, 0, 108, 1, 108, 0)
+table = struct.pack("<3I32s", len(rd), 0, 1, b"") + bytes(64)
+open(sys.argv[2], "wb").write(pad(hdr) + pad(rd) + pad(b"dtb") + pad(table))
+' "$t/rd.lz4" "$2"
+}
+mkdir -p "$t/rd/etc" && echo init > "$t/rd/init" && echo running > "$t/rd/etc/omamobile-ufs-rw-slot"
+vendor_boot "$t/rd" "$k/images/vendor_boot.img"
+touch "$k/images/boot.img" "$k/images/dtbo.img"
+printf 'CODENAME=testdev\nNAME="Test device"\nBOOT_IMAGES="boot vendor_boot dtbo"\nUFS_RW="boot_b vendor_boot_b dtbo_b userdata"\nINSTALL_SLOT=active\nINSTALL_ACTIVE_SLOTS=a\n' > "$r/device/testdev/device.conf"
+out=$(bundle) || fail "an INSTALL_SLOT=active bundle assembles: $out"
+python3 -I - "$b/manifest.json" <<'PY' || fail "an INSTALL_SLOT=active bundle's manifest.json is format 2, the shared contract's install plan"
+import json, sys
+m = json.load(open(sys.argv[1]))
+assert m["format"] == 2, m["format"]
+i = m["install"]
+want = {"tool": "fastboot", "product": "testdev", "require_unlocked_bootloader": True, "slot": "active",
+        "accept_current_slots": ["a"], "after": ["reboot"],
+        "never": ["the slot the phone does not run from (any *_<other> partition)", "an unsuffixed partition name but userdata",
+                  "bootloader", "radio", "persist", "efs", "modem", "devinfo", "vbmeta", "fastboot -w", "fastboot --slot",
+                  "fastboot --set-active", "fastboot flashing", "fastboot erase", "fastboot format", "fastboot oem"],
+        "storage_guard": {"slot": "running", "images": ["boot", "vendor_boot", "dtbo"], "also": ["userdata"],
+                          "marker": "/etc/omamobile-ufs-rw-slot"}}
+for k, v in want.items():
+    assert i[k] == v, (k, i[k])
+assert sorted(i) == sorted(list(want) + ["writes"]), sorted(i)
+assert [w.get("image") for w in i["writes"][:-1]] == ["boot", "vendor_boot", "dtbo"]
+assert all("partition" not in w for w in i["writes"][:-1])
+assert i["writes"][-1] == {"partition": "userdata", "source": "root_image", "erases_userdata": True}
+PY
+grep -cF "Google's Android Flash Tool" "$b/README.txt" >/dev/null && grep -cF 'REPLACES Android on this phone' "$b/README.txt" >/dev/null ||
+  fail "an INSTALL_SLOT=active bundle's README.txt says Android is replaced and the way back is Google's factory image"
+if grep -cF -- '--set-active=a' "$b/README.txt" >/dev/null || grep -cF "slot B's boot images" "$b/README.txt" >/dev/null; then
+  fail "an INSTALL_SLOT=active bundle's README.txt has none of slot B's words"
+fi
+(cd "$b" && sha256sum -c --quiet SHA256SUMS) || fail "SHA256SUMS holds for the format 2 bundle"
+pass "format 2 (INSTALL_SLOT=active): manifest.json has the shared contract's install plan, README.txt's way back is Google's factory image"
+before=$(cd "$b" && sha256sum SHA256SUMS)
+rm "$t/rd/etc/omamobile-ufs-rw-slot"
+vendor_boot "$t/rd" "$k/images/vendor_boot.img"
+if out=$(bundle); then fail "a format 2 bundle without the storage guard's running-slot marker is refused"; fi
+grep -cF 'no storage guard for the running slot' <<<"$out" >/dev/null || fail "the refusal names the missing marker: $out"
+echo b > "$t/rd/etc/omamobile-ufs-rw-slot"
+vendor_boot "$t/rd" "$k/images/vendor_boot.img"
+if out=$(bundle); then fail "a format 2 bundle whose marker doesn't read running is refused"; fi
+[[ $(cd "$b" && sha256sum SHA256SUMS) == "$before" ]] || fail "a refused format 2 rebuild leaves the bundle as it was"
+pass "format 2: a ramdisk image without the storage guard's running-slot marker stops the bundle, and the earlier bundle stays"

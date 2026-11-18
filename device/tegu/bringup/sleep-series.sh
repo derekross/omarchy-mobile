@@ -8,7 +8,7 @@
 # errors, and the link-wait lines (a slow wake rather than a dead one).
 N=${N:-300}; S=${S:-60}; W=${W:-20}; L=${L:-/var/log/omamobile/sleep-linkwait-20261107.log}; U=/sys/devices/platform/soc/13200000.ufs
 mkdir -p /var/log/omamobile
-DBG=0; { [ "${PMDEBUG:-0}" = 1 ] || [ "${TRACE:-0}" = 1 ]; } && DBG=1
+DBG=0; { [ "${PMDEBUG:-0}" = 1 ] || [ "${TRACE:-0}" = 1 ] || [ "${TRACE:-0}" = 2 ]; } && DBG=1
 # Refusals come first, before anything is changed.
 modem_up() { systemctl is-active -q omamobile-modem omamobile-tegu-modem-boot 2>/dev/null || [ -d /sys/module/cpif ]; }
 modem_up && { echo "the modem is up: stop" >> $L; exit 1; }
@@ -37,14 +37,14 @@ st1() { for f in /sys/devices/system/cpu/cpu*/cpuidle/state1/disable; do [ -e $f
 # always-on is cut only by the system suspend, not by every idle period.
 rpm_before=$(cat $U/rpm_lvl)
 # What the debug switches change is read here, before anything is set, and restore() puts all of it back.
-T=/sys/kernel/tracing; WD=org.freedesktop.systemd1; EV="sched/sched_switch irq/irq_handler_entry irq/irq_handler_exit ipi power/cpu_idle power/suspend_resume timer/hrtimer_expire_entry"
+T=/sys/kernel/tracing; WD=org.freedesktop.systemd1; EV="sched/sched_switch irq/irq_handler_entry irq/irq_handler_exit ipi power/cpu_idle power/suspend_resume power/device_pm_callback_start power/device_pm_callback_end timer/hrtimer_expire_entry"
 wd() { busctl "$1"-property $WD /org/freedesktop/systemd1 $WD.Manager RuntimeWatchdogUSec ${2:+t $2}; }
 if [ $DBG = 1 ]; then
   ppt_before=$(cat /sys/power/pm_print_times); pdm_before=$(cat /sys/power/pm_debug_messages)
   kmsg_before=$(cat /proc/sys/kernel/printk_devkmsg)
   stall_before=$(cat /proc/sys/kernel/panic_on_rcu_stall); wd_before=$(wd get | awk '{print $2}')
 fi
-if [ "${TRACE:-0}" = 1 ] && [ -d $T ]; then
+if { [ "${TRACE:-0}" = 1 ] || [ "${TRACE:-0}" = 2 ]; } && [ -d $T ]; then
   mountpoint -q $T || mount -t tracefs nodev $T
   dump_before=$(cat /proc/sys/kernel/ftrace_dump_on_oops); tr_before=$(cat $T/current_tracer); on_before=$(cat $T/tracing_on)
   # Before tracing is first used the size reads "7 (expanded: 1408)": 7 KB now, 1408 on first use. Writing 7
@@ -83,6 +83,10 @@ echo N > /sys/module/printk/parameters/console_suspend
 # tracing in small per-CPU buffers that the panic dumps to the console. The dump has to fit the 2 MB ramoops
 # console together with the sleep's own callback lines: it prints oldest first, and 24 KB per CPU is about 900
 # calls a core and under 1 MB of text for eight (measure it with an awake sysrq-c before a series).
+# TRACE=2 records the events alone, without the function tracer, and PMPRINT=0 (with PMDEBUG=1) leaves
+# pm_print_times and pm_debug_messages off: with both heavy switches on the no-wake didn't come back in 701
+# sleeps, and with them off (PMDEBUG=1 TRACE=2 PMPRINT=0) it came back at the 70th and the 41st (2026-11-12).
+# The events include the device PM callbacks' start and end, which name the callback a core stops in.
 # Either one first fills the kernel's log ring: three test crashes on the tracing build (sysrq-c, awake) lost
 # everything after record 4096 since boot, the trace dump's tail and the "Rebooting" line with it, when the
 # ring's first wrap fell inside the panic; with the ring filled beforehand the dump was whole.
@@ -91,12 +95,17 @@ echo N > /sys/module/printk/parameters/console_suspend
 # the run: still a net under an awake hang. WDSEC=0 turns it off.
 if [ $DBG = 1 ]; then
   echo on > /proc/sys/kernel/printk_devkmsg 2>/dev/null; for i in $(seq 1 5000); do echo "ring fill $i" > /dev/kmsg; done
-  echo 1 > /sys/power/pm_print_times; echo 1 > /sys/power/pm_debug_messages
+  # PMPRINT=0 leaves the callback names off: about 64 KB of console text a cycle changes the timing of a sleep,
+  # and the no-wake didn't come back in 701 sleeps with them on.
+  if [ "${PMPRINT:-1}" = 1 ]; then echo 1 > /sys/power/pm_print_times; echo 1 > /sys/power/pm_debug_messages; fi
   echo 1 > /proc/sys/kernel/panic_on_rcu_stall
   wd set $(( ${WDSEC:-60} * 1000000 ))
 fi
 if [ -n "$tr_before" ]; then
-  echo 0 > $T/tracing_on; echo ${TRACE_KB:-24} > $T/buffer_size_kb; echo function > $T/current_tracer
+  # TRACE=2 records the events only (interrupts, timers, scheduling, idle), without the function tracer:
+  # far less work per call, and the dump still says what woke a core last and what ran on it.
+  echo 0 > $T/tracing_on; echo ${TRACE_KB:-24} > $T/buffer_size_kb
+  if [ "${TRACE:-0}" = 2 ]; then echo nop > $T/current_tracer; else echo function > $T/current_tracer; fi
   for e in $EV; do echo 1 > $T/events/$e/enable; done
   echo 1 > $T/tracing_on; echo 1 > /proc/sys/kernel/ftrace_dump_on_oops
 fi

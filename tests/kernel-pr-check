@@ -248,10 +248,25 @@ for t; do
   sed -n 's/^msg //p' "$f" | sed "s|@B@|$b|g; s|^|arch/arm64/boot/dts/$t: |"
 done
 EOF
-chmod +x "$d/scripts/kconfig/merge_config.sh" "$d/scripts/fake-dtbs"
+# The C objects' stand-in: a .c with a "nobuild" line fails, any other
+# builds and writes the object's .cmd, listing the .c and each "dep FILE"
+# line in it, and prints a W=1 warning for each "warn TEXT" line (the files an #include really compiled in).
+cat > "$d/scripts/fake-cc" <<'EOF'
+#!/bin/sh
+o=$1 c=${2%.o}.c
+[ -e "$c" ] || { echo "make[4]: *** No rule to make target '$2'.  Stop." >&2; exit 2; }
+grep -q '^nobuild' "$c" && { echo "$c:1:9: error: use of undeclared identifier" >&2; exit 2; }
+sed -n "s|^warn \\(.*\\)|$c:1:1: warning: \\1|p" "$c" >&2
+mkdir -p "$o/$(dirname "$c")"
+{ echo "deps_$2 := $c"; sed -n 's/^dep //p' "$c"; } > "$o/$(dirname "$c")/.$(basename "$2").cmd"
+EOF
+chmod +x "$d/scripts/kconfig/merge_config.sh" "$d/scripts/fake-dtbs" "$d/scripts/fake-cc"
 cat > "$d/Makefile" <<'EOF'
 DTBS := $(filter %.dtb,$(MAKECMDGOALS))
-.PHONY: defconfig olddefconfig $(DTBS)
+OBJS := $(filter %.o,$(MAKECMDGOALS))
+.PHONY: defconfig olddefconfig $(DTBS) $(OBJS)
+$(OBJS):
+	@sh scripts/fake-cc $(O) $@
 defconfig olddefconfig:
 	@mkdir -p $(O) && touch $(O)/.config
 $(firstword $(DTBS)):
@@ -315,3 +330,66 @@ git commit -q -am "arm64: dts: exynos: google: zuma-husky: fix" -m "Signed-off-b
 merge="" brun "a base that doesn't build" 1 "the base's device trees don't all build"
 merge="" brun "a base that doesn't build" 1 "^    arch/arm64/boot/dts/exynos/google/zuma-husky.dtb: phy" "^    .*gs201-cheetah.dtb"
 echo "ok - a base that doesn't all build is compared where it did, and says so"
+
+# An included .c (a KUnit test #included at the end of its driver) is built
+# through its includer when it doesn't build alone. It counts as built only
+# when the includer's .cmd lists it; otherwise the result is a SKIP naming
+# it. A .c whose directory Makefile names its .o fails as before.
+git checkout -q omamobile
+mkdir -p "$d/drivers/power/supply/tests"
+printf 'obj-y += chg.o\n' > "$d/drivers/power/supply/Makefile"
+printf 'int chg;\n#include "tests/chg_test.c"\n' > "$d/drivers/power/supply/chg.c"
+git add -A && git commit -q -m "base: a driver"
+dbranch inc-built
+printf 'nobuild\n' > "$d/drivers/power/supply/tests/chg_test.c"
+printf 'dep drivers/power/supply/tests/chg_test.c\n' >> "$d/drivers/power/supply/chg.c"
+git add -A && git commit -q -m "power: supply: chg: add a test" -m "Signed-off-by: A Human <human@example.org>"
+merge="" brun "an included test that is compiled" 0 "^ok - W=1 builds of 2 touched C files$"
+merge="" brun "an included test that is compiled" 0 "included by drivers/power/supply/chg.c, which builds" "not compiled"
+echo "ok - an included .c that its includer's .cmd lists counts as built"
+
+dbranch inc-not-built
+mkdir -p "$d/drivers/power/supply/tests"
+printf 'nobuild\n' > "$d/drivers/power/supply/tests/chg_test.c"
+git add -A && git commit -q -m "power: supply: chg: add a test" -m "Signed-off-by: A Human <human@example.org>"
+merge="" brun "an included test that is not compiled" 0 "^ok - W=1 builds of 0 touched C files; 1 not compiled under this config (chg_test.c, included by chg.c) # SKIP$"
+echo "ok - an included .c missing from its includer's .cmd is a SKIP, not counted as built"
+
+dbranch inc-own-object
+mkdir -p "$d/drivers/power/supply/tests"
+printf 'nobuild\n' > "$d/drivers/power/supply/tests/chg_test.c"
+printf 'obj-y += chg_test.o\n' > "$d/drivers/power/supply/tests/Makefile"
+printf 'dep drivers/power/supply/tests/chg_test.c\n' >> "$d/drivers/power/supply/chg.c"
+git add -A && git commit -q -m "power: supply: chg: add a test" -m "Signed-off-by: A Human <human@example.org>"
+merge="" brun "an included .c its Makefile names" 1 "^not ok - W=1 builds:" "which builds"
+echo "ok - a .c whose Makefile names its .o fails when it doesn't build, includer or not"
+
+for mk in "drivers/power/supply/Makefile:obj-y += chg.o tests/chg_test.o" "drivers/power/supply/tests/Kbuild:obj-y += chg_test.o"; do
+  dbranch_n=${mk%%:*}; dbranch "inc-own-$dbranch_n"
+  mkdir -p "$d/drivers/power/supply/tests"
+  printf 'nobuild\n' > "$d/drivers/power/supply/tests/chg_test.c"
+  printf '%s\n' "${mk#*:}" > "$d/$dbranch_n"
+  printf 'dep drivers/power/supply/tests/chg_test.c\n' >> "$d/drivers/power/supply/chg.c"
+  git add -A && git commit -q -m "power: supply: chg: add a test" -m "Signed-off-by: A Human <human@example.org>"
+  merge="" brun "an included .c named in $dbranch_n" 1 "^not ok - W=1 builds:" "which builds"
+done
+echo "ok - a .c named by path in its parent's Makefile, or in a Kbuild, fails when it doesn't build"
+
+dbranch inc-dotdot
+mkdir -p "$d/drivers/power/supply/tests"
+printf 'nobuild\n' > "$d/drivers/power/supply/tests/chg_test.c"
+printf 'dep drivers/power/supply/../supply/tests/./chg_test.c\n' >> "$d/drivers/power/supply/chg.c"
+git add -A && git commit -q -m "power: supply: chg: add a test" -m "Signed-off-by: A Human <human@example.org>"
+merge="" brun "an included test the .cmd spells with ../" 0 "^ok - W=1 builds of 2 touched C files$" "not compiled"
+echo "ok - an includer's .cmd that spells the included path with ../ counts as compiling it"
+
+dbranch inc-warn
+mkdir -p "$d/drivers/power/supply/tests"
+printf 'nobuild\n' > "$d/drivers/power/supply/tests/chg_test.c"
+printf 'dep drivers/power/supply/tests/chg_test.c\nwarn unused variable xyzzy\n' >> "$d/drivers/power/supply/chg.c"
+git add -A && git commit -q -m "power: supply: chg: add a test" -m "Signed-off-by: A Human <human@example.org>"
+merge="" brun "a touched includer with warnings" 1 "unused variable xyzzy"
+out=$(PATH=$t/bin:$PATH "$here/tools/kernel-pr-check" -C "$d" --build "$t/out" omamobile HEAD 2>&1) || true
+n=$(grep -c "unused variable xyzzy" <<<"$out" || true)
+[[ $n == 1 ]] || { echo "$out"; fail "a touched includer's warnings listed $n times, expected 1"; }
+echo "ok - a touched includer's W=1 warnings are listed once"

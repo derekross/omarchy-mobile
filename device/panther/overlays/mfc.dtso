@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Opt-in: hardware video decode and encode (the MFC v15, s5p-mfc) on the
+ * Pixel 7. The kernel describes the MFC and its 256 MiB pool but leaves it
+ * disabled (linux-omarchy-mobile#250): its two System MMUs are not
+ * described yet, so they stay in bypass, and Google's closed firmware,
+ * parsing whatever video an app hands it, can reach all memory below
+ * 4 GiB, the kernel's included. Enable it only if you accept that. It also
+ * needs the firmware, mfc_fw.bin from your own factory image, which
+ * tools/extract-vendor-firmware stages as s5p-mfc-v15.fw.
+ * Path, not label, so the base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/video-codec@1c8d0000} {
+	status = "okay";
+};

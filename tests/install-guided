@@ -146,6 +146,8 @@ case $1 in
     fi
     cat "$T/boot-id" ;;
   "systemctl is-system-running") echo running ;;
+  *omamobile-install-awake*systemd-inhibit*--what=sleep\ *) echo "phone AWAKE" >> "$T/events" ;;
+  "systemctl stop omamobile-install-awake") echo "phone AWAKE-END" >> "$T/events" ;;
   *reboot-to\ omamobile*)
     echo "phone RESTART: $1" >> "$T/events"
     [[ ! -e $T/fail-restart ]] || exit 1
@@ -440,6 +442,11 @@ partition-size:init_boot_b: 0x800000
 partition-size:vendor_boot_b: 0x4000000
 partition-size:vendor_kernel_boot_b: 0x4000000
 partition-size:dtbo_b: 0x1000000
+partition-size:boot_a: 0x4000000
+partition-size:init_boot_a: 0x800000
+partition-size:vendor_boot_a: 0x4000000
+partition-size:vendor_kernel_boot_a: 0x4000000
+partition-size:dtbo_a: 0x1000000
 EOF
 }
 smoke() {  # smoke ok|bad
@@ -500,6 +507,13 @@ guided "$ALL" || fail "a whole install succeeds"
 once "a whole install"
 order=$(grep -nE '^(fastboot -s FAKE123 (flash userdata|reboot)|nmcli connection add|nv-backup|phone-provision|phone RESTART|phone-smoke)' "$t/events" | cut -d: -f2- | awk '{ print $1 }' | tr '\n' ' ')
 [[ $order == "fastboot fastboot nmcli nv-backup phone-provision phone phone-smoke " ]] || fail "the steps run in order: $order"
+# The phone is held awake for every step after its first start (a fresh
+# install has no modem yet to hold it, and auto-sleep drops USB), from the
+# first start's end, again before the backup, the firmware and the check,
+# and the hold is let go once the check is done
+awake=$(grep -E '^(phone AWAKE|nv-backup|phone-provision|phone RESTART|phone-smoke)' "$t/events" | awk '{ print $1 $2 }' | sed 's/^\(nv-backup\|phone-provision\|phone-smoke\).*/\1/' | tr '\n' ' ')
+[[ $awake == "phoneAWAKE phoneAWAKE nv-backup phoneAWAKE phone-provision phoneRESTART: phoneAWAKE phone-smoke phoneAWAKE-END " ]] ||
+  fail "the phone is held awake from the first start to the check, and let go after it: $awake"
 # Each step that talks to the phone over SSH first asks it which phone it is
 which=$(grep -E '^(phone WHICH|nv-backup|phone-provision|phone RESTART|phone-smoke)' "$t/events" | awk '{ print $1 $2 }' | sed 's/^\(nv-backup\|phone-provision\|phone-smoke\).*/\1/' | tr '\n' ' ')
 [[ $which == "phoneWHICH phoneWHICH nv-backup phoneWHICH phone-provision phoneWHICH phoneRESTART: phoneWHICH phoneWHICH phone-smoke " ]] ||
@@ -1884,6 +1898,77 @@ grep -c "^not ok - tests/install-guided can't run in CI: no debugfs" "$t/skip.ou
 grep -c '^ok - # skip: no debugfs' "$t/skip.out" >/dev/null && grep -c 'SKIPPED, no debugfs: none of its cases ran' "$t/skip.err" >/dev/null ||
   fail "outside CI the skip is said on both streams"
 pass "a suite that can't run: a failure in CI, a loud skip elsewhere"
+
+# --- Format 2: the slot the phone runs from (INSTALL_SLOT=active) --------------------------
+# No device has it yet (docs/ACTIVE-SLOT-PLAN.md). The images carry the
+# storage guard's running-slot marker, as tools/install-phone requires
+mkdir -p "$t/rd2/etc" && echo init > "$t/rd2/init" && echo running > "$t/rd2/etc/omamobile-ufs-rw-slot"
+(cd "$t/rd2" && find . | LC_ALL=C sort | cpio -o -H newc --quiet) | lz4 -l -9 -q > "$t/rd2.lz4"
+mkdir -p "$t/images2" && cp "$t/images/"* "$t/images2/"
+for p in vendor_boot vendor_kernel_boot; do
+  python3 -I -c '
+import struct, sys
+rd, page = open(sys.argv[1], "rb").read(), 4096
+pad = lambda b: b + bytes(-len(b) % page)
+hdr = struct.pack("<8s5I2048sI16s2IQ4I", b"VNDRBOOT", 4, page, 0, 0, len(rd), b"", 0, b"", 2128, 3, 0, 108, 1, 108, 0)
+table = struct.pack("<3I32s", len(rd), 0, 1, b"") + bytes(64)
+open(sys.argv[2], "wb").write(pad(hdr) + pad(rd) + pad(b"dtb") + pad(table))
+' "$t/rd2.lz4" "$t/images2/$p.img"
+done
+{ descriptor; printf 'INSTALL_SLOT=active\nINSTALL_ACTIVE_SLOTS=a\n'; } > "$R/device/testdev/device.conf"
+guided2() { INSTALLER_ARGS_ONLY=1 guided "$1" --device testdev --images "$t/images2" --work "$t/work" "${@:2}"; }
+flashes1=$flashes
+flashes='fastboot -s FAKE123 flash boot_a
+fastboot -s FAKE123 flash init_boot_a
+fastboot -s FAKE123 flash vendor_boot_a
+fastboot -s FAKE123 flash vendor_kernel_boot_a
+fastboot -s FAKE123 flash dtbo_a
+fastboot -s FAKE123 flash userdata
+fastboot -s FAKE123 reboot'
+# Per-slot bootloaders that differ: format 2 doesn't read the other slot's
+fresh; SLOTS=$'version-bootloader-a:testloader-1.0-111\nversion-bootloader-b:testloader-0.9-000' vars
+guided2 "$ALL" || fail "a format 2 install from slot A succeeds"
+once "a format 2 install"
+! says "Is this phone already running Omarchy Mobile" && ! says "Measure slot B's bootloader" && ! says "two copies differ" ||
+  fail "format 2: no slot-B question and no bootloader-slot check"
+says "Android does not stay on the phone" && says "Omarchy Mobile is written over it" && ! says "Android stays on the phone, unused" ||
+  fail "format 2: the warning says Android is replaced and the way back is Google's tools"
+says "slot A, the copy the phone runs from, in place of Android" || fail "format 2: after the dry run it says what is written in place of Android"
+says "Android on this phone is REPLACED" || fail "format 2: install-phone's plan is shown"
+first=$(record backup_dir)
+[[ -f $first/SHA256SUMS ]] || fail "format 2: the radio backup is taken"
+grep -cFx "phone-provision -d testdev --first-install --nv-backup $first $t/home/Downloads/$zipname" "$t/events" >/dev/null ||
+  fail "format 2: phone-provision runs in first-install mode with that backup"
+says "[ok]  Starts its own system" && ! says "Starts its own system (slot B)" || fail "format 2: the check names no slot B"
+# A second install of the same phone (its record forgotten, the earlier
+# backup kept): the radio backup goes into a new folder, never the old one
+rm -rf "$STATE"; : > "$t/events"; echo FAKE123 > "$t/fb-devices"; rm -f "$t/firstboot-done"; touch "$t/ssh-down"
+sleep 1
+guided2 "$ALL" || fail "a second format 2 install succeeds"
+second=$(record backup_dir)
+[[ -f $second/SHA256SUMS && -f $first/SHA256SUMS && $second != "$first" ]] || fail "format 2: each install takes its radio backup into a new folder ($first, $second)"
+pass "format 2: a whole install from slot A, no slot question or slot check, Android replaced in the words, a new radio backup folder each install"
+
+# A phone on slot B, where this release doesn't install: stopped before the
+# unlock steps and before any write, with no advice to switch slots
+fresh; SLOTS="" vars yes b
+if guided2 "$ALL"; then fail "format 2: a phone on slot B is stopped when only slot A is accepted"; fi
+says "not supported yet (current-slot-not-accepted)" && says "Don't switch the phone to the other copy" || fail "format 2: says slot B is not supported yet"
+! says "Is this phone already running Omarchy Mobile" && ! says "fastboot --set-active" || fail "format 2: no reinstall question and no --set-active advice"
+[[ -z $(writes) ]] || fail "format 2: a phone on slot B is not written"
+fresh; SLOTS="" vars no b
+if guided2 "yes\n\n"; then fail "format 2: a locked phone on slot B is stopped"; fi
+says "current-slot-not-accepted" && ! says "fastboot flashing unlock" || fail "format 2: a locked phone on slot B is stopped before the unlock steps"
+# A write that fails partway says Android may be gone too
+fresh; touch "$t/fail-flash"
+if guided2 "$ALL"; then fail "format 2: a failed write stops the install"; fi
+says "and so may Android" && says "Google's factory image for this phone" && says "Don't restart the phone: run this again from Fastboot Mode" &&
+  ! says "Android itself (slot A) was not touched" ||
+  fail "format 2: a failed write says Android may be overwritten, and the way back"
+rm -f "$t/fail-flash"
+pass "format 2: slot B not accepted stops before the unlock and the write, with no slot switch advised; a failed write says Android may be gone"
+descriptor > "$R/device/testdev/device.conf"
+flashes=$flashes1
 
 # --- The script itself ------------------------------------------------------------------
 code=$(grep -v '^[[:space:]]*#' tools/install-guided)

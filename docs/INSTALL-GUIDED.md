@@ -30,7 +30,17 @@ today's tools in turn. It adds no way to write a phone:
   read-only); `adb devices -l` (asks the adb server) and, after the owner
   presses Enter, `adb reboot bootloader`; and over USB SSH read-only checks
   (is anything there, which phone it is, the first start's marker, the boot
-  id, `systemctl is-system-running`) and the restart of step 10.
+  id, `systemctl is-system-running`) and the restart of step 10; and,
+  from the end of the first start until the check, a sleep hold: a
+  transient unit on the phone, `omamobile-install-awake`, running
+  `systemd-inhibit --what=sleep`, in RAM only and stopped by itself after an
+  hour. A fresh install has no firmware yet, so the modem (and with it the
+  modem's own sleep inhibitor) can't start, and without the hold auto-sleep
+  puts the locked, dark phone to sleep and USB drops with it (the 2026.11.15
+  test install's backup failed so on 2026-11-15). Each step from 7 to 11
+  starts it afresh, the restart of step 10 ends it, the check stops it when
+  it is done, and an install that stops on the way leaves it to its hour.
+  The screen still goes dark as usual.
 - **It never sends `fastboot flashing unlock`** (decided 2026-11-10): it
   shows the command, and the owner types it. The unlock erases the phone,
   and no tool of ours sends a `flashing` command.
@@ -78,11 +88,11 @@ start? This erases the phone. (yes/no)` (§3).
 | 4 | Factory image | the build step 3 found; a file the owner has (`--factory-zip`, Downloads) or one downloaded earlier | after `yes` to Google's terms, downloads the file from `https://dl.google.com/` into `<work>/factory/` (§5b); otherwise opens Google's page | `factory_terms` (time, build), `factory_*` (build, its bootloader and baseband, name, page, size, SHA-256, path, where it came from) | skipped while the file is there with its size; taken again from the record otherwise; forgotten at step 3 when the phone's bootloader or baseband are no longer the recorded ones (§2a) |
 | 5 | Write | whether anything answers at the phone's USB address; the owner's answers (memory only) | `install-phone --dry-run --serial S`, then `install-phone --serial S`: slot B and `userdata` | `write=started`, then `done` | skipped when `done`; `started` runs it again, whole |
 | 6 | USB connection | `phone-ssh true`, `nmcli connection show` | `nmcli connection add …` after Enter (§5a) | `network` | skipped |
-| 7 | First start | the phone: `/var/lib/omamobile/firstboot/done`, then which phone it is | nothing | `first_start` | waits again |
-| 8 | Radio backup | which phone it is; the phone, through `nv-backup` (read-only) | a new folder `~/omamobile-backup/<codename>-radio-backup-<date>` | `backup_dir`, `backup` | skipped while its `SHA256SUMS` is there |
-| 9 | Firmware | the zip's SHA-256 again; which phone it is | optional Python folder after Enter (below); `phone-provision -d <codename> --first-install --nv-backup DIR ZIP` | `camera_tools` (only `skipped`, only for a typed `no`), `provision` | runs again (it is idempotent) |
+| 7 | First start | the phone: `/var/lib/omamobile/firstboot/done`, then which phone it is | at its end, the sleep hold (above) | `first_start` | waits again |
+| 8 | Radio backup | which phone it is; the phone, through `nv-backup` (read-only) | the sleep hold again; a new folder `~/omamobile-backup/<codename>-radio-backup-<date>` | `backup_dir`, `backup` | skipped while its `SHA256SUMS` is there |
+| 9 | Firmware | the zip's SHA-256 again; which phone it is | optional Python folder after Enter (below); the sleep hold again; `phone-provision -d <codename> --first-install --nv-backup DIR ZIP` | `camera_tools` (only `skipped`, only for a typed `no`), `provision` | runs again (it is idempotent) |
 | 10 | Restart | which phone it is, before and after; its boot id | stops the modem's unit, `reboot-to omamobile` | `restart_from` before sending, `restart` | waits for the restart already sent; sends none twice |
-| 11 | Check | which phone it is; `phone-smoke --json` | saves `report.json` | `check`, `finished` | runs again |
+| 11 | Check | which phone it is; `phone-smoke --json` | the sleep hold again, stopped at the end; saves `report.json` | `check`, `finished` | runs again |
 
 Details that matter:
 
@@ -845,6 +855,24 @@ step 3a is the first real download.
 `NV_PARTS` is `nv-backup`'s; a device without it can't finish a guided
 install. `tools/phone-provision` knows cheetah and raven only.
 
+`INSTALL_SLOT` and `INSTALL_ACTIVE_SLOTS` are where a release installs
+([RELEASES](RELEASES.md) §6, [ACTIVE-SLOT-PLAN](ACTIVE-SLOT-PLAN.md)):
+without them, slot B (manifest format 1, everything above). With
+`INSTALL_SLOT=active`, the slot the phone runs from, one of
+`INSTALL_ACTIVE_SLOTS` (format 2). No device has them yet. For format 2
+the installer changes in these places only: step 3 asks no slot B
+question and checks no bootloader slots, and a phone running from a slot
+the release doesn't accept stops there (`current-slot-not-accepted`),
+before the unlock steps, with no advice to switch slots (that would start
+the other slot's bootloader at a version nobody has read); each file is
+checked against the running slot's partition; the warning's third point,
+the words after the dry run and the stop for a write that failed say
+that Android is written over and that the way back is Google's factory
+image; the check names no slot B. The radio backup goes into a new folder
+on every install, for either format, never one an earlier install made:
+a first install comes straight after a stock start, which rewrites the
+radio partitions.
+
 ## 7. What the tests cover
 
 `tests/install-guided` runs the real `install-phone` against a fake
@@ -881,7 +909,11 @@ unpacked from its one-file download and installed with `bash install
 --guided` and no option, then reinstalled through the "Install again from
 the start?" and slot B questions on a phone that reports one bootloader
 version; the repository installer given a bundle's images; the slot B
-question (`yes`, `no`, another answer, a locked phone); a factory image
+question (`yes`, `no`, another answer, a locked phone); format 2
+(`INSTALL_SLOT=active`: a whole install from slot A with per-slot
+bootloaders that differ, no slot question or slot check, a new radio
+backup folder for a second install, slot B not accepted for an unlocked
+and a locked phone, a write that fails); a factory image
 saved under another name or in the default cache; a missing program on
 Arch, Ubuntu and another system; and the script's own shape.
 `tests/factory-index` covers the maintainer tool and the reader's refusals.

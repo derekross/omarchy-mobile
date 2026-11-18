@@ -1,0 +1,32 @@
+# First run: skip a user unit that isn't installed, and OWE's theme hook
+# when OWE isn't there. Omarchy 4.5's first-run enables seven user units
+# and counts any one it can't find as a failure; first-run then never marks
+# itself done and runs again at the next login, with its welcome, git and
+# Wi-Fi notifications each time. A phone's image leaves OWE out on purpose
+# (rootfs/packages.omarchy-skip), so owed.service is never there and the
+# notifications stacked up at every boot of the 2026.11.15 install. A unit
+# that is installed and fails still counts as a failure, as before.
+# Candidate for upstream Omarchy.
+#
+# Against Omarchy 4.5.0 (4.5.0-3).
+diff --git i/install/user/first-run/enable-user-units.sh w/install/user/first-run/enable-user-units.sh
+index 0f73262..7c95330 100755
+--- i/install/user/first-run/enable-user-units.sh
++++ w/install/user/first-run/enable-user-units.sh
+@@ -26,8 +26,15 @@ for unit in \
+   omarchy-migrate-notify.service \
+   omarchy-fcitx5.service \
+   omarchy-crash-watch.service; do
++  # A unit of a package the system leaves out (owed.service, with OWE off
++  # a phone's image) is skipped: counted as a failure it kept first-run from
++  # ever finishing, and its notifications came back at every login.
++  if ! systemctl --user cat "$unit" >/dev/null 2>&1; then
++    echo "$unit is not installed; skipped" >&2
++    continue
++  fi
+   systemctl --user enable --now "$unit" || failed=1
+ done
+ 
+-omarchy-hook-install theme-set /usr/share/owe/10-owe-sync
++[[ ! -e /usr/share/owe/10-owe-sync ]] || omarchy-hook-install theme-set /usr/share/owe/10-owe-sync
+ exit "$failed"

@@ -130,6 +130,8 @@ FW_BASE="brcmfmac4389c1-pcie"
 # and in BCM.hcd ("BCM<CHIP> <release>")
 WIFI_CHIP="4389c1"
 BT_CHIP="BCM4389C1"
+# What the Bluetooth refusal calls the patch, where BT_CHIP is a pattern
+BT_NAME=""
 DEST_REL="usr/lib/firmware/updates"
 
 # source path in the vendor partition -> path under $DEST_REL
@@ -258,6 +260,7 @@ case $DEVICE_OPT in
     FW_BASE="brcmfmac4398d0-pcie"
     WIFI_CHIP="4398d0"
     BT_CHIP="G5SN_V[0-9]*_HK3"
+    BT_NAME="Pixel 8 Pro (G5SN_V<n>_HK3)"
     # Google's SKU table (dhd_custom_google.c); husky's vendor has NVRAMs for
     # MMW, ROW and NA only, so the others take the module's default, as on stock
     case $SKU in
@@ -380,6 +383,7 @@ if [[ "$(magic_at "$img" 0)" == ed26ff3a ]]; then
 fi
 
 # Copy one file out of the vendor filesystem ($1, no leading /) to $2.
+reason=""   # why debugfs couldn't (dfs, below); EROFS gives none
 if [[ "$(od -An -tx2 -j 1080 -N2 "$img" | tr -d ' ')" == ef53 ]]; then
   need debugfs "install e2fsprogs"
   say "vendor.img is ext4; reading it with debugfs (no mount)"
@@ -387,10 +391,14 @@ if [[ "$(od -An -tx2 -j 1080 -N2 "$img" | tr -d ' ')" == ef53 ]]; then
   # full disk) and says so on stderr: anything there but its banner, or
   # rdump's notes that it can't give the files the image's owners (as a
   # user), fails the copy. The copy goes to a new path, so no older file
-  # can stand in for it.
+  # can stand in for it. Its last line says why, and is kept in $reason
+  # for the build.prop refusal (a lookup error's trailing blank dropped).
   dfs() {
-    local err line
-    err=$(debugfs -R "$1" "$img" 2>&1 >/dev/null) || return 1
+    local err line rc=0
+    err=$(debugfs -R "$1" "$img" 2>&1 >/dev/null) || rc=1
+    reason=${err##*$'\n'} reason=${reason% }
+    [[ $reason != "debugfs "[0-9]* ]] || reason=""   # only its banner: no reason
+    ((rc == 0)) || return 1
     while [[ -n $err ]]; do   # line by line in the shell: nothing here can fail
       line=${err%%$'\n'*}
       if [[ $err == *$'\n'* ]]; then err=${err#*$'\n'}; else err=""; fi
@@ -425,7 +433,7 @@ if get_file build.prop "$WORK/build.prop"; then
     die "vendor partition is for '${dev:-unknown}', not $DEVICE; use -f to override"
   say "Vendor partition: $(sed -n 's/^ro.vendor.build.fingerprint=//p' "$WORK/build.prop" | head -1)"
 else
-  [[ -n "$FORCE" ]] || die "build.prop can't be read from vendor.img; use -f to override"
+  [[ -n "$FORCE" ]] || die "build.prop can't be read from vendor.img${reason:+: $reason}; use -f to override"
 fi
 
 # The new generation: everything below is written into $new, which starts
@@ -466,7 +474,7 @@ brcm="$dest/brcm"
 grep -aq "$WIFI_CHIP-roml" "$brcm/$FW_BASE.$BOARD.bin" ||
   die "fw_bcmdhd.bin is not a $WIFI_CHIP PCIe firmware"
 [[ -z $BT_CHIP ]] || grep -aq "$BT_CHIP" "$brcm/BCM.$BOARD.hcd" ||
-  die "BCM.hcd is not a $BT_CHIP Bluetooth patch"
+  die "BCM.hcd is not a ${BT_NAME:-$BT_CHIP} Bluetooth patch"
 grep -aq '^NVRAMRev=' "$brcm/$FW_BASE.$BOARD.txt" ||
   die "bcmdhd.cal does not look like a Broadcom text NVRAM"
 wmfw_halo() { # WMFW, Halo core (4): what cs_dsp accepts for this part
