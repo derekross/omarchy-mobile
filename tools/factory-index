@@ -374,11 +374,16 @@ def cmd_sign(a):
     path, codename = index_path(a)
     load(path, codename)
     out = a.out or os.path.join(ROOT, "out", "factory-index", codename)
-    os.makedirs(out, exist_ok=True)
     dest = os.path.join(out, "factory-builds.json")
+    # The key first: a refusal writes nothing, so no new copy is left
+    # unsigned or beside the signature of the copy it replaced
+    key = 'source "$1/tools/lib/signing.sh"; signing_key_load "$1"'
+    if subprocess.run(["bash", "-c", key, "sign", ROOT]).returncode != 0:
+        die("signing %s failed" % dest)
+    os.makedirs(out, exist_ok=True)
     with open(path, "rb") as src, open(dest, "wb") as dst:
         dst.write(src.read())
-    script = 'source "$1/tools/lib/signing.sh"; signing_key_load "$1" || exit 1; ' \
+    script = key + ' || exit 1; ' \
              'gpg --batch --yes --local-user "$SIGNING_KEY" --detach-sign -o "$2.sig" "$2"'
     if subprocess.run(["bash", "-c", script, "sign", ROOT, dest]).returncode != 0:
         die("signing %s failed" % dest)

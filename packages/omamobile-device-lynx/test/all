@@ -164,7 +164,79 @@ for absent in usr/bin/omamobile-wifi-start usr/bin/omamobile-charge-guard \
               usr/bin/omamobile-camera-start; do
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
-pass "install stages the udev rule, the USB link, the mirrorlist, and the boot-success marker, and nothing that starts hardware"
+[[ -f $tmp/root/usr/lib/modprobe.d/omamobile-display.conf ]] \
+  || fail "install stages the display modprobe file"
+[[ -x $tmp/root/usr/bin/omamobile-lynx-display-start ]] \
+  || fail "install stages the display start script"
+[[ -f $tmp/root/usr/lib/systemd/system/omamobile-lynx-display.service ]] \
+  || fail "install stages the display service"
+grep -qx 'ConditionPathExists=/sys/bus/platform/devices/1c240000.display-controller' \
+  "$tmp/root/usr/lib/systemd/system/omamobile-lynx-display.service" \
+  || fail "the display unit names the DECON node"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-lynx-display.service") == ../omamobile-lynx-display.service ]] \
+  || fail "the display service is enabled"
+# The panel gate: allow only the S6E3FC5 names, create the parameter
+# through modprobe first, and load gs_decon after the write.
+gate=$tmp/panel-gate
+mkdir -p "$gate/proc" "$gate/bin"
+cat > "$gate/bin/modprobe" <<'FAKE'
+#!/bin/bash
+echo "$1 allow=$(cat "$OMAMOBILE_LYNX_ROOT/sys/module/gs_dsim_cmd/parameters/allow_tx" 2>/dev/null || echo none)" >> "$TEST_LOG"
+p=$OMAMOBILE_LYNX_ROOT/sys/module/gs_dsim_cmd/parameters
+mkdir -p "$p"
+[[ -e $p/allow_tx ]] || echo 0 > "$p/allow_tx"
+if [[ $1 == gs_decon ]]; then
+  d=$OMAMOBILE_LYNX_ROOT/sys/bus/platform/devices/1c240000.display-controller
+  mkdir -p "$d" "$OMAMOBILE_LYNX_ROOT/sys/bus/platform/drivers/gs-decon"
+  ln -sfn "$OMAMOBILE_LYNX_ROOT/sys/bus/platform/drivers/gs-decon" "$d/driver"
+fi
+FAKE
+chmod +x "$gate/bin/modprobe"
+for pair in "sdc-s6e3fc5.20800a:1" "sdc-s6e3fc3-l10:0" ":0"; do
+  panel=${pair%:*}; want=${pair##*:}
+  echo "console=null ${panel:+exynos_drm.panel_name=$panel} bootconfig" > "$gate/proc/cmdline"
+  rm -rf "$gate/sys" "$gate/var"
+  mkdir -p "$gate/sys/class/backlight/panel"
+  echo 900 > "$gate/sys/class/backlight/panel/brightness"
+  : > "$gate/calls"
+  out=$(TEST_LOG=$gate/calls PATH="$gate/bin:$PATH" OMAMOBILE_LYNX_ROOT=$gate \
+    bin/omamobile-lynx-display-start 2>&1)
+  got=$(cat "$gate/sys/module/gs_dsim_cmd/parameters/allow_tx" 2>/dev/null || echo missing)
+  [[ $got == "$want" ]] || fail "panel '${panel:-none}' wrote allow_tx=$got, want $want"
+  grep -qx "gs_decon allow=$want" "$gate/calls" \
+    || fail "gs_decon was not loaded after allow_tx=$want for '${panel:-none}': $(cat "$gate/calls")"
+  if [[ $want == 1 ]]; then
+    [[ $out == *"brightness of panel: level 900 sent"* ]] \
+      || fail "the saved brightness is not sent for '${panel:-none}': $out"
+  else
+    [[ $out != *brightness* ]] || fail "brightness sent with DSI commands off for '${panel:-none}': $out"
+  fi
+done
+grep -qx 'blacklist gs_decon' vendor/modprobe.d/omamobile-display.conf \
+  || fail "gs_decon is not blacklisted for autoload"
+# Already loaded this boot: no second load.
+mkdir -p "$gate/sys/module/gs_decon"
+out=$(TEST_LOG=$gate/calls PATH="$gate/bin:$PATH" OMAMOBILE_LYNX_ROOT=$gate \
+  bin/omamobile-lynx-display-start 2>&1)
+[[ $out == *"already started this boot"* ]] || fail "a loaded gs_decon is loaded again: $out"
+rm -rf "$gate/sys/module/gs_decon"
+
+# A marker from a load that never returned: nothing is loaded until --retry.
+mkdir -p "$gate/var/lib/omamobile"
+echo "2026-11-15T00:00:00+00:00 display" > "$gate/var/lib/omamobile/lynx-display-started"
+: > "$gate/calls"
+out=$(TEST_LOG=$gate/calls PATH="$gate/bin:$PATH" OMAMOBILE_LYNX_ROOT=$gate \
+  bin/omamobile-lynx-display-start 2>&1)
+[[ $out == *"never finished"* && ! -s "$gate/calls" ]] \
+  || fail "a stale marker did not stop the load: $out / $(cat "$gate/calls")"
+out=$(TEST_LOG=$gate/calls PATH="$gate/bin:$PATH" OMAMOBILE_LYNX_ROOT=$gate \
+  bin/omamobile-lynx-display-start --retry 2>&1)
+[[ $out == *"up: display"* && ! -e "$gate/var/lib/omamobile/lynx-display-started" ]] \
+  || fail "--retry did not clear the marker and load: $out"
+
+pass "the panel gate allows only S6E3FC5"
+
+pass "install stages the udev rule, the USB link, the mirrorlist, the boot-success marker and the display gate, and no radio"
 
 # USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
 # it sent IPv4 into a dead cable (seen on raven, 2026-10-28).
