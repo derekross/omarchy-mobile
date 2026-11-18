@@ -193,7 +193,10 @@ mv "$work/MANIFEST" "$work/$name.MANIFEST"
 
 alarm_say "Checking the image"
 (cd "$work" && sha256sum -c --quiet "$name.img.zst.sha256")
-zstd -q -t "$work/$name.img.zst"
+# The smoke test reads rootfs.img, so the archive that is published is shown
+# to hold those bytes: a stream compare, with no second copy on disk
+zstd -q -dc "$work/$name.img.zst" | cmp -s - "$work/rootfs.img" ||
+  alarm_die "$name.img.zst doesn't unpack to the image that was built"
 tests/rootfs-smoke "$work/rootfs.img" "$work/$name.MANIFEST"
 # Publish only a complete, checked build. A failed rebuild leaves the old one.
 mv "$work/$name.img.zst" "$work/$name.MANIFEST" "$out/"
