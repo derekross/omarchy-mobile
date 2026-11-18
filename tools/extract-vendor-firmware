@@ -631,4 +631,8 @@ fi
 publishing=""   # published: nothing below may undo it
 [[ -z $CAMERA_APEX ]] || say "Camera HAL APEX copied to $CAMERA_APEX"
 say "Staged in $OUT (checksums in $OUT/vendor-firmware.sha256)"
-echo "This is proprietary firmware from your own device image. Do not redistribute it."
+if [[ $DEVICE == dipper ]]; then
+  echo "This is proprietary firmware from your own device image. Do not redistribute it."
+else
+  echo "This is Google's proprietary firmware from your own factory image. Do not redistribute it."
+fi
