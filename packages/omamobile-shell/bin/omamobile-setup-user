@@ -222,13 +222,28 @@ if omarchy-done ensure omamobile-osk; then
 fi
 # Up to 0.2.133 that line started squeekboard itself. The line as this script
 # wrote it is changed, once; one the owner wrote or changed is left alone
-# (and then the keyboard they start is the one they get).
+# (and then the keyboard they start is the one they get). A file that is a
+# link (a dotfile setup) is left as it is, with a line saying what to
+# change: the rewrite would replace the link with a copy. A file that can't
+# be written is reported, the rest of the setup goes on, and the next login
+# tries again.
 if omarchy-done ensure omamobile-osk-chosen; then
   autostart=~/.config/hypr/autostart.lua
-  if [[ -f $autostart ]] && grep -qx 'o.launch_on_start("squeekboard")' "$autostart"; then
-    while IFS= read -r l || [[ -n $l ]]; do
-      if [[ $l == 'o.launch_on_start("squeekboard")' ]]; then printf '%s\n' "$osk_line"; else printf '%s\n' "$l"; fi
-    done <"$autostart" >"$autostart.new" && mv -f "$autostart.new" "$autostart"
+  if [[ -L $autostart ]]; then
+    if grep -qx 'o.launch_on_start("squeekboard")' "$autostart" 2>/dev/null; then
+      echo "omamobile-setup-user: $autostart is a link, left as it is; for the keyboard chosen in Setup > Keyboard," \
+        "its line o.launch_on_start(\"squeekboard\") becomes $osk_line" >&2
+    fi
+  elif [[ -f $autostart ]] && grep -qx 'o.launch_on_start("squeekboard")' "$autostart"; then
+    if ! {
+      while IFS= read -r l || [[ -n $l ]]; do
+        if [[ $l == 'o.launch_on_start("squeekboard")' ]]; then printf '%s\n' "$osk_line"; else printf '%s\n' "$l"; fi
+      done <"$autostart" >"$autostart.new" && mv -f "$autostart.new" "$autostart"
+    } 2>/dev/null; then
+      rm -f "$autostart.new" 2>/dev/null || true
+      rm -f ~/.local/state/omarchy/done/omamobile-osk-chosen
+      echo "omamobile-setup-user: could not change the keyboard's start line in $autostart; the next login tries again" >&2
+    fi
   fi
 fi
 

@@ -1,7 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # omamobile-osk against a scratch home and fake keyboards: the choice, the
-# fallback to squeekboard, and how a change of keyboard is carried out.
+# fallback to squeekboard (Tactus not installed, or failing at its start),
+# and how a change of keyboard is carried out.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -72,3 +73,32 @@ printf 'something else\n' >"$H/.config/omamobile/keyboard"
 printf '  tactus  \nmore\n' >"$H/.config/omamobile/keyboard"
 [[ $(osk which) == tactus ]] || fail "the first word is the choice"
 pass "a choice that can't be met, or isn't one, means squeekboard"
+
+# Tactus chosen and installed but failing at its start: squeekboard follows. A Tactus that quit,
+# ran past its first seconds, or was stopped by a signal (pkill on a change of keyboard, or a
+# signal to omamobile-osk, passed on) is not followed by anything.
+printf 'tactus\n' >"$H/.config/omamobile/keyboard"
+EXTRA=(OMAMOBILE_OSK_GRACE=5)
+started() { fake tactus "$1"; out=$(osk 2>"$t/err") || true; }
+started 'echo "tactus runs"; exit 1'
+[[ $out == $'tactus runs\nsqueekboard runs' ]] && grep -c 'tactus ended at its start (status 1): squeekboard instead' "$t/err" >/dev/null \
+  || fail "an error at Tactus's start brings squeekboard: $out / $(cat "$t/err")"
+started 'echo "tactus runs"; kill -SEGV $$'
+[[ $out == $'tactus runs\nsqueekboard runs' ]] || fail "a crash at Tactus's start brings squeekboard: $out"
+started 'echo "tactus runs"; kill -TERM $$'
+[[ $out == "tactus runs" ]] || fail "a Tactus stopped by a signal from elsewhere is not followed: $out"
+started 'echo "tactus runs"; exit 0'
+[[ $out == "tactus runs" ]] || fail "a Tactus that quits is not followed: $out"
+EXTRA=(OMAMOBILE_OSK_GRACE=1)
+started 'echo "tactus runs"; sleep 1.5; exit 1'
+[[ $out == "tactus runs" ]] || fail "an error past the first seconds is not followed: $out"
+EXTRA=(OMAMOBILE_OSK_GRACE=5)
+# This one ends with an error on SIGTERM, as a program may: still nothing follows
+fake tactus 'trap "exit 1" TERM; echo "tactus runs"; sleep 5 & wait'
+# (env execs bash, so $p is omamobile-osk itself, not a subshell around it)
+env -i HOME="$H" T="$t" PATH="$F" "${EXTRA[@]}" bash bin/omamobile-osk >"$t/out" 2>"$t/err" & p=$!
+for _ in $(seq 50); do grep -c 'tactus runs' "$t/out" >/dev/null 2>&1 && break; sleep 0.1; done
+s0=$SECONDS; kill -TERM "$p"; rc=0; wait "$p" || rc=$?
+[[ $(cat "$t/out") == "tactus runs" ]] && ((SECONDS - s0 < 3)) || fail "a signal to omamobile-osk stops Tactus, and nothing follows: $(cat "$t/out") (status $rc)"
+fake tactus 'echo "tactus runs"'
+pass "a Tactus that fails at its start is followed by squeekboard; one that quits, runs on or is stopped is not"
