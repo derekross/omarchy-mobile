@@ -1,18 +1,25 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Keeps the phone unlocked while a keyboard is connected, when the Display page's toggle says so:
-# runs the lock backend's apply at start (so a crash with a keyboard attached can't leave "never" behind)
-# and after every input add or remove, once the burst of events a device brings has settled (1 s).
-# The backend does nothing until the user has picked a lock setting. If udevadm monitor ends or an apply
-# fails, this exits non-zero: the unit restarts it (Restart=always) and its ExecStopPost puts the choice back.
+# Locks after 30 minutes instead of the chosen time while a keyboard is connected, when the Display page's
+# toggle says so: runs the lock backend's apply at start and after every input add or remove, once the
+# burst of events a device brings has settled (1 s). The unit runs only while the toggle is on.
+# A failed apply (a broken shell.json, say) is logged once and the watcher keeps going, so it is not
+# restarted every 10 s; the next input change tries again. If udevadm monitor ends this exits non-zero:
+# the unit restarts it and its ExecStopPost puts the choice back.
 set -u -o pipefail
 backend=${OMAMOBILE_LOCK_BACKEND:-/usr/lib/omamobile-settings/backends/lock.sh}
-apply() { bash "$backend" apply >/dev/null; }
-apply || exit 1
+failing=0
+apply() {
+  local out
+  if out=$(bash "$backend" apply 2>&1); then failing=0; return; fi
+  [[ $failing == 1 ]] || echo "omamobile-lock-keyboard: apply failed: $out" >&2
+  failing=1
+}
+apply
 udevadm monitor --udev --subsystem-match=input | while read -r line; do
   [[ $line == 'UDEV  ['* ]] || continue  # events only, not the "UDEV - the event which udev sends" header
   while read -r -t 1 _; do :; done
-  apply || exit 1
+  apply
 done
 echo "omamobile-lock-keyboard: udevadm monitor ended" >&2
 exit 1
