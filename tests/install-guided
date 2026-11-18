@@ -41,7 +41,7 @@ pass() { printf 'ok - %s\n' "$1"; }
 # skipped every case here (as every run did while the workflow installed no
 # unzip) says nothing. Elsewhere the skip is said on both streams, with
 # what it leaves unchecked.
-for tool in debugfs mkfs.ext4 zstd openssl lz4 cpio gpg unzip python3 curl; do
+for tool in debugfs mkfs.ext4 zstd openssl lz4 cpio gpg unzip python3 curl img2simg; do
   command -v $tool >/dev/null && continue
   if [[ -n ${CI:-}${GITHUB_ACTIONS:-} ]]; then
     echo "not ok - tests/install-guided can't run in CI: no $tool (add it to .github/workflows/checks.yml)" >&2
