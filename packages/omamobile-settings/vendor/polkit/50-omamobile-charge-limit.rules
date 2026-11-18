@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: MIT
+// The Settings app's Battery page: let the active local user start
+// omamobile-charge-limit@80|85|90|95|100.service, which runs
+// "/usr/lib/omamobile-settings/charge-limit N" as root. Nothing else.
+polkit.addRule(function(action, subject) {
+  if (action.id == "org.freedesktop.systemd1.manage-units" &&
+      subject.local && subject.active &&
+      /^omamobile-charge-limit@(80|85|90|95|100)\.service$/.test(action.lookup("unit")) &&
+      action.lookup("verb") == "start") {
+    return polkit.Result.YES;
+  }
+});

@@ -1,0 +1,257 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# A release cut on this machine (tools/release) whose packages are built and
+# published on another, the build host that runs the daily publish
+# (tools/systemd/omamobile-publish.*): the staged kernel package and boot
+# files go there, the signed repository comes back, and each copy is checked
+# on both sides (docs/RELEASES.md §11). Nothing here touches a phone, builds,
+# signs, or uploads to the package server.
+#
+#   tools/build-host-sync [--host USER@HOST] [--repo PATH] [--dry-run] STEP
+#     push      after tools/release's build and images stages: the staged
+#               kernel package (packages/linux-omamobile/prebuilt) and every
+#               device package's boot files (packages/*/boot-files), checked
+#               here first (stage --verify, stage-boot-files --check), copied,
+#               then checked there with the same tools. Refused unless the
+#               build host's checkout is at this checkout's commit, clean
+#     command   prints the one command that builds and publishes there, with
+#               the DOCKER_HOST its publish service runs with, resolved (the
+#               unit's unix://%t/docker.sock is no shell's); runs nothing there
+#     pull      before tools/release's packages and rootfs stages: the build
+#               host's out/repo and out/publish, copied into a staging
+#               directory and put in place here only when the copies are the
+#               build host's indexes, its development and stable indexes are
+#               the ones pkgs.omamobile.org serves, out/repo is development's
+#               index, and every package that index lists is there with its
+#               checksum. On any mismatch this machine's out/ is left as it was
+#     --host     the build host for ssh and rsync (default: BUILD_HOST, from
+#                omamobile.local.conf)
+#     --repo     its checkout (default: BUILD_HOST_REPO, else
+#                ~/Projects/omarchy-mobile; ~ is the build host's home)
+#     --dry-run  print every command, run none (no ssh, rsync or curl)
+#
+# A release on the build host: push, then the command it prints, then pull,
+# then tools/release --version V packages. The pulled out/repo is the one the
+# release pins and builds its root image from, so it must be exactly what
+# development serves.
+set -euo pipefail
+export LC_ALL=C
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+URL=${OMAMOBILE_PKGS_URL:-https://pkgs.omamobile.org}
+DB=omamobile.db.tar.gz
+PRE=packages/linux-omamobile/prebuilt
+
+say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
+note() { printf '    %s\n' "$*"; }
+die() { printf '\e[31mbuild-host-sync: %s\e[0m\n' "$*" >&2; exit 1; }
+derek() {
+  printf '\e[33m==> For Derek to run:\e[0m\n'
+  local line
+  for line in "$@"; do printf '    %s\n' "$line"; done
+}
+
+host="" repo="" dry=0 step=""
+while (($#)); do
+  case $1 in
+    --host) host=${2:?--host needs USER@HOST}; shift ;;
+    --repo) repo=${2:?--repo needs a path}; shift ;;
+    --dry-run|-n) dry=1 ;;
+    -h|--help) source tools/lib/usage.sh; usage_from_header "$0"; exit 0 ;;
+    -*) die "unknown option $1 (see --help)" ;;
+    *) [[ -z $step ]] || die "one step at a time (see --help)"; step=$1 ;;
+  esac
+  shift
+done
+[[ -n $step ]] || die "which step: push, command or pull (see --help)"
+
+# BUILD_HOST and BUILD_HOST_REPO, as bin/omamobile reads its configuration
+# shellcheck disable=SC1091
+source ./omamobile.conf
+# shellcheck disable=SC1091
+[[ ! -f omamobile.local.conf ]] || source ./omamobile.local.conf
+host=${host:-${BUILD_HOST:-}}
+# shellcheck disable=SC2088 # expanded by the build host's shell
+repo=${repo:-${BUILD_HOST_REPO:-'~/Projects/omarchy-mobile'}}
+[[ -n $host ]] || die "no build host: --host USER@HOST, or BUILD_HOST=USER@HOST in omamobile.local.conf"
+[[ $host =~ ^[A-Za-z0-9_][A-Za-z0-9._@-]*$ ]] || die "'$host' is not a USER@HOST"
+# Put into the build host's shell unquoted, so that ~ is its home: plain
+# path characters only
+[[ $repo =~ ^(~/|/)?[A-Za-z0-9._][A-Za-z0-9._/-]*$ && $repo != *..* ]] || die "'$repo' is not a plain path"
+rrepo=${repo#\~/}   # rsync's remote paths are relative to the home already
+
+run() {
+  if ((dry)); then printf '    would run: %s\n' "$*"; else printf '    $ %s\n' "$*"; "$@"; fi
+}
+# rsh SCRIPT: SCRIPT in the build host's checkout (a dry run prints it)
+rsh() {
+  local s="cd $repo && $1"
+  if ((dry)); then printf "    would run: ssh %s '%s'\n" "$host" "$s"; return 0; fi
+  printf "    \$ ssh %s '%s'\n" "$host" "$s" >&2
+  ssh "$host" "$s"
+}
+# A pull's staging directory goes, whatever the outcome
+staging=""
+trap '[[ -z $staging ]] || rm -rf -- "$staging" "$staging".development "$staging".stable' EXIT
+sha() { sha256sum < "$1" | cut -d' ' -f1; }
+# "file sha256" for each package an index lists
+db_sums() {
+  bsdtar -xOf "$1" --include='*/desc' |
+    awk '/^%FILENAME%$/ { getline; f = $0 } /^%SHA256SUM%$/ { getline; print f, $0 }'
+}
+
+# The build host's checkout is this one's commit, with no local changes:
+# boot files are checked against the tree they are built from
+same_tree() {
+  local head rhead dirty
+  head=$(git rev-parse HEAD)
+  say "The build host's checkout ($host:$repo)"
+  if ((dry)); then rsh "git rev-parse HEAD && git status --porcelain --untracked-files=no"; return 0; fi
+  rhead=$(rsh "git rev-parse HEAD") || die "can't read $host:$repo's commit"
+  dirty=$(rsh "git status --porcelain --untracked-files=no") || die "can't read $host:$repo's status"
+  if [[ $rhead != "$head" ]]; then
+    derek "ssh $host 'git -C $repo fetch -q origin && git -C $repo merge --ff-only ${head:0:12}'"
+    die "$host:$repo is at ${rhead:0:12}, this checkout at ${head:0:12}: the boot files are checked against the tree, so both must be the same commit"
+  fi
+  [[ -z $dirty ]] || die "$host:$repo has local changes (above): build from its clean commit"
+  [[ $head == "$(git rev-parse -q --verify origin/main 2>/dev/null || true)" ]] ||
+    note "both at ${head:0:12}, which is not origin/main here: the daily publish builds origin/main"
+  note "at ${head:0:12}, clean"
+}
+
+st_push() {
+  local dirs=() d checks="" sums mine
+  say "Checked here first"
+  if [[ -f $PRE/kernel.release ]]; then
+    run packages/linux-omamobile/stage --verify || die "$PRE fails its check here: stage it again (tools/release build)"
+    dirs+=("$PRE")
+    checks="packages/linux-omamobile/stage --verify"
+  fi
+  for d in packages/*/boot-files; do
+    [[ -d $d ]] || continue
+    run tools/stage-boot-files --check "$d" || die "$d fails its check here: stage it again (tools/release images)"
+    dirs+=("$d")
+    checks+="${checks:+ && }tools/stage-boot-files --check $d"
+  done
+  ((${#dirs[@]})) || die "nothing staged here: no $PRE and no packages/*/boot-files (tools/release build and images stage them)"
+  same_tree
+  say "Copied to $host"
+  for d in "${dirs[@]}"; do
+    run rsync -a --delete -- "$d/" "$host:$rrepo/$d/" || die "copying $d to $host failed"
+  done
+  say "Checked there"
+  rsh "$checks" || die "the copies fail their check on $host (above)"
+  if ((dry)); then
+    rsh "sha256sum ${dirs[*]/%//SHA256SUMS}"
+    return 0
+  fi
+  # The same files, not only files that pass: both sides' SHA256SUMS agree
+  sums=$(rsh "sha256sum ${dirs[*]/%//SHA256SUMS}") || die "can't read the copies' SHA256SUMS on $host"
+  mine=$(sha256sum "${dirs[@]/%//SHA256SUMS}")
+  [[ $sums == "$mine" ]] || { diff <(echo "$mine") <(echo "$sums") >&2 || true; die "the copies on $host are not this machine's (above)"; }
+  for d in "${dirs[@]}"; do note "$d: the same on $host, and current there"; done
+  note "next: tools/build-host-sync command"
+}
+
+st_command() {
+  local env dh build=""
+  say "Building and publishing on $host"
+  if ((dry)); then
+    rsh "systemctl --user show omamobile-publish.service -p Environment --value"
+    # shellcheck disable=SC2016 # evaluated by the build host's shell
+    dh='unix:///run/user/$(id -u)/docker.sock'
+  else
+    env=$(rsh "systemctl --user show omamobile-publish.service -p Environment --value" 2>/dev/null || true)
+    dh=$(tr ' ' '\n' <<<"$env" | sed -n 's/^"\{0,1\}DOCKER_HOST=\([^"]*\)"\{0,1\}$/\1/p' | tail -1)
+    if [[ -z $dh ]]; then
+      # shellcheck disable=SC2016 # evaluated by the build host's shell
+      dh='unix:///run/user/$(id -u)/docker.sock'
+      note "its publish service sets no DOCKER_HOST: rootless Docker's socket, as the build host's shell finds it"
+    elif [[ $dh == *%* || ! $dh =~ ^(unix|tcp|ssh)://[A-Za-z0-9._/:@-]+$ ]]; then
+      die "its publish service's DOCKER_HOST ($dh) is not one a shell can use"
+    else
+      note "DOCKER_HOST $dh, as its publish service runs"
+    fi
+  fi
+  # linux-omamobile is built only when named (tools/build-packages); the
+  # rest, the device package with its boot files among them, is what
+  # --from-main builds, from origin/main, before it publishes development
+  [[ ! -f $PRE/kernel.release ]] || build="tools/build-packages packages/linux-omamobile && "
+  derek "ssh -t $host 'cd $repo && export DOCKER_HOST=$dh && ${build}tools/repo-publish --from-main development'"
+  note "then: tools/build-host-sync pull"
+}
+
+st_pull() {
+  local tmp=out/.build-host-pull q k v ch got want n=0 file sum d
+  local -A rem=() pub=()
+  ((dry)) || staging=$tmp
+  say "Indexes on $host"
+  q="for f in out/repo/aarch64/$DB out/publish/development/aarch64/$DB out/publish/stable/aarch64/$DB; do if [ -f \$f ]; then sha256sum \$f; fi; done"
+  if ((dry)); then
+    rsh "$q"
+  else
+    v=$(rsh "$q") || die "can't read $host:$repo's indexes"
+    while read -r v k; do [[ -z $k ]] || rem[$k]=$v; done <<<"$v"
+    [[ -n ${rem[out/repo/aarch64/$DB]:-} ]] || die "$host:$repo has no out/repo index"
+    [[ -n ${rem[out/publish/development/aarch64/$DB]:-} ]] || die "$host:$repo has published no development (out/publish)"
+  fi
+  say "Indexes on ${URL#https://}"
+  for ch in development stable; do
+    if ((dry)); then run curl -fsS -o "$tmp.$ch" "$URL/$ch/aarch64/$DB"; continue; fi
+    rm -f "$tmp.$ch"
+    if curl -fsS -o "$tmp.$ch" "$URL/$ch/aarch64/$DB"; then pub[$ch]=$(sha "$tmp.$ch"); fi
+    rm -f "$tmp.$ch"
+    [[ $ch == stable || -n ${pub[$ch]:-} ]] || die "can't read development's index from $URL"
+    want=${rem[out/publish/$ch/aarch64/$DB]:-}
+    [[ ${pub[$ch]:-} == "$want" ]] ||
+      die "$host's out/publish/$ch (${want:0:12}) is not what $URL serves (${pub[$ch]:-none}): a publish that didn't finish, or one from another machine"
+    note "$ch: ${want:-none (never promoted)}${want:+, on $host and served}"
+  done
+  if ((!dry)); then
+    [[ ${rem[out/repo/aarch64/$DB]} == "${rem[out/publish/development/aarch64/$DB]}" ]] || {
+      derek "tools/build-host-sync command    # build and publish there first"
+      die "$host's out/repo is not development's index: the release pins out/repo, and development must publish exactly it"
+    }
+    note "out/repo is development's index"
+  fi
+  say "Copied from $host into $tmp"
+  run rm -rf -- "$tmp"
+  run mkdir -p -- "$tmp"
+  # Seeded with hard links to what is here, so rsync moves only what
+  # changed; it writes a changed file anew, never through the link
+  for d in repo publish; do
+    [[ ! -d out/$d ]] || run cp -al -- "out/$d" "$tmp/$d"
+    run rsync -a --delete -- "$host:$rrepo/out/$d/" "$tmp/$d/" || die "copying out/$d from $host failed (out/ here is unchanged)"
+  done
+  if ((dry)); then
+    note "would check the copies' indexes against $host's and every listed package's checksum"
+    run mv -- out/repo out/publish "$tmp/old/"
+    run mv -- "$tmp/repo" "$tmp/publish" out/
+    return 0
+  fi
+  for k in "${!rem[@]}"; do
+    got=$(sha "$tmp/${k#out/}" 2>/dev/null || true)
+    [[ $got == "${rem[$k]}" ]] || die "the copy of $k is not $host's (it changed during the copy?); out/ here is unchanged"
+  done
+  for ch in repo/aarch64 publish/development/aarch64; do
+    while read -r file sum; do
+      [[ -f $tmp/$ch/$file && -f $tmp/$ch/$file.sig && $(sha "$tmp/$ch/$file") == "$sum" ]] ||
+        die "$ch/$file is missing, unsigned or not the index's in the copy; out/ here is unchanged"
+      n=$((n + 1))
+    done < <(db_sums "$tmp/$ch/$DB")
+  done
+  mkdir -p "$tmp/old"
+  for d in repo publish; do
+    [[ ! -d out/$d ]] || mv -- "out/$d" "$tmp/old/$d"
+    mv -- "$tmp/$d" "out/$d"
+  done
+  note "out/repo and out/publish are $host's: index ${rem[out/repo/aarch64/$DB]:0:12}, $n package files checked"
+  note "next: tools/release --version <V> packages"
+}
+
+case $step in
+  push) st_push ;;
+  command) st_command ;;
+  pull) st_pull ;;
+  *) die "unknown step $step (push, command or pull)" ;;
+esac

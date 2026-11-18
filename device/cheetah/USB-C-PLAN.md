@@ -850,6 +850,166 @@ the loader undoes itself (that is its job). By hand:
 
 ---
 
+### K1b: a NO_AUTOIBUS left set stops charging (2026-11-15, offline; no write run yet)
+
+**The report.** A community 7 Pro on issue #169 that booted from an empty
+battery read `CHG_CNFG_09` (0xc2) = `0x93`: the 500 mA limit (sel 19) with
+`NO_AUTOIBUS` (bit 7) set. The battery current sat between -145 and +26 mA
+on the cable; `i2cset -f -y 5 0x69 0xc2 0x13` took it to +1.41 A within a
+second. A second 7 Pro on the same issue (2026-11-16) read `0x93` after a
+boot from flat: -223 mA with the screen on, about +250 mA with it off, and
++1.41 A five seconds after the same write; a reboot from 88 % then read
+`0x13`. A user in the community chat reports the same symptom twice ("won't
+take a charge"), with no register read yet. Every read on record has the
+bit clear: B3.0, the two `usbc-deadman dump`s in `logs/`, the Pixel 6 Pro's
+C2, the reporter's other sessions, and the reference phone on 2026-11-15
+(`7.3.0-rc6-omamobile-gda171eae4cb7`, `0x13` at 98 %). Clear is also the
+power-on value (0x13 in Google's register header).
+
+**Why.** With no Type-C driver, the charger raises its input current above
+`default_ilim_ua` only by itself, following the Rp the source advertises
+(#169's readings: Rp 3.0 A gives +1.42 A, Rp default about 0 net), and
+`NO_AUTOIBUS` turns that off. Nothing in the driver touched the bit, so
+whatever was left in the chip stayed. Who sets it isn't known. Most likely
+the bootloader: both instances were boots from an empty battery, when ABL
+charges before Linux. It isn't every such boot: the second phone booted flat
+on 11-12 and 11-13 and took +1.41 A with no write (register not read), and
+a third 7 Pro read `0x13` on flat boots on 11-15 and 11-17 (#169). Another candidate is stock: Google's driver writes
+`NO_AUTOIBUS` = 1 with every input limit (it programs the limit from its
+USB-PD stack, which we don't have), so a warm reboot from slot A could carry
+it over if the bit survives a reboot, which K1b.4 finds out.
+
+**The fix**, linux-omarchy-mobile#261, `omamobile-charger-autoibus` (one
+commit on `github/omamobile` @ `d49d68c764d4`):
+`max77759_charger_start_default()` clears `NO_AUTOIBUS` after setting the
+default limit (a failure is a warning, not a failed probe), and the `found:`
+and `probed:` lines end in `(NO_AUTOIBUS set)` while it is set.
+`psy_work_item()` doesn't touch the bit; probe clears it on any phone with
+`default_ilim_ua` set (the 7 Pro, the Pixel 6 Pro, and the Pixel 7 once
+#259 lands), with or without TCPM, though no phone has both today. On a
+boot with the bit already clear the regmap cache skips the write, so
+nothing changes on the bus. checkpatch `--strict` and `W=1` clean,
+`tools/kernel-pr-check --merge` passes all but the human sign-off.
+
+This picks the side of K1 that every read on record has run on (bit clear,
+the input following Rp); it doesn't add the SDP cap K1 describes.
+
+**A trap for the test.** The charger regmap is `REGCACHE_FLAT` with no
+`reg_defaults_raw`, filled from the hardware when the MFD probes, and 0xc2
+isn't volatile. A bit set later by `i2cset` is not in the cache, so
+`regmap_update_bits()` sees it clear and writes nothing: rebinding the
+charger after an `i2cset` would show the fix failing. The bit has to be in
+the hardware before the MFD probes, that is, across a reboot. Whether a
+warm reboot keeps it (or ABL rewrites 0xc2) is not known; K1b.4 finds out.
+
+**Setup.** The phone on the laptop's USB-C port: the dead-man tool and every
+check here need the USB link (`tools/usbc-deadman` stops at "phone not
+reachable at 172.16.42.1"), so a wall charger alone won't do. The source
+has to advertise Rp 1.5 A or 3.0 A, or the bit makes no difference (#169:
+at Rp default the current is about 0 net either way) and K1b.1 can't fail.
+G0 on 2026-10-19 read Rp 3.0 A on this port; K1b.0 checks it again. If it
+reads default, a USB-C PD hub between the laptop and a wall charger that
+passes data is the next thing to try. The battery below 90 %, so it charges
+at constant current, screen on, the modem stopped for K1b.1 to K1b.4
+(`systemctl stop omamobile-modem`; with it up, a dead-man watchdog reset
+would use the modem's one allowed unclean end, AGENTS.md section 2), and
+before K1b.3's push `systemctl mask omamobile-modem-boot.target`, so the
+test kernel's boots come up without it (unmask it at the end). The mask
+goes in before the push because the 7 Pro starts the modem at boot, and
+masking the target stops nothing a boot has already started.
+
+Every write to the MAX77759 runs under the dead-man switch (section 4): the
+chip also owns the USB data switch, and USB is the only link.
+`tools/usbc-deadman` has two steps for this, `k1b-autoibus-on` and
+`k1b-autoibus-off`. Each reads 0xc2 once, refuses (nothing written) if the
+read fails, keeps that value in its own `/run/usbc-deadman/<step>.saved`,
+changes only bit 7 and reads it back. It is confirmed over a fresh SSH login
+(`--fresh`) or undone by the phone (its own saved value written back, the
+data switch closed if VBUS is there), with the watchdog behind that.
+`tools/usbc-deadman undo <step>` restores what was there before that step,
+whatever ran since. `tools/usbc-deadman dump` is the read-only view (its
+CNFG_09 line shows NO_AUTOIBUS; TCPC 0x1d is CC_STATUS).
+
+**K1b.0, read-only (risk: none).**
+
+    tools/nv-backup --check <the off-repo backup>    # AGENTS.md section 1, before PMIC work
+    tools/phone-ssh 'uname -r; journalctl -k -b | grep -E "max77759-charger.*(found|probed)"'
+    tools/usbc-deadman dump
+    tools/phone-ssh 'for i in $(seq 10); do cat /sys/class/power_supply/max170xx_battery/current_now; sleep 1; done'
+
+**Expect** CNFG_09 sel 19 with `NO_AUTOIBUS 0`, CNFG_00 mode 5, the battery
+about +1.4 A (µA in sysfs), and CC_STATUS (0x1d) with the attached CC at 2
+(Rp 1.5 A) or 3 (Rp 3.0 A): CC1 is bits 1:0, CC2 bits 3:2. **Stop** if the
+NV check fails, the mode isn't 5, the battery is above 42 C, or the CC
+reads 1 (Rp default): change the setup first.
+
+**K1b.1, the symptom on the release kernel (risk: low; one charger config
+bit, under the dead-man; tell the human first: charging stops for a few
+minutes).** The modem stopped (Setup).
+
+    tools/usbc-deadman k1b-autoibus-on
+    tools/phone-ssh --fresh 'for i in $(seq 30); do cat /sys/class/power_supply/max170xx_battery/current_now; sleep 2; done'
+
+**Expect** exit 0 ("CONFIRMED"), the dump's CNFG_09 line `NO_AUTOIBUS 1`.
+**Pass:** the current falls to about 0 (below +300 mA) within seconds,
+which reproduces the report on our phone. **Stop** if the tool exits
+non-zero (3 undone, 4 no answer: follow its recovery text; 5 refused or 6
+failed: nothing stayed applied), the mode isn't 5, or USB drops.
+**Rollback:** K1b.2, with the dump's `NO_AUTOIBUS 0` as its check. (`undo
+k1b-autoibus-on` also works after one run of the step; a second run in the
+same boot saves the bit-set value, and the undo then leaves the bit set.) A
+reboot may end it too (K1b.4's question).
+
+**K1b.2, back to normal (risk: low; under the dead-man).**
+`tools/usbc-deadman k1b-autoibus-off`; expect exit 0, `NO_AUTOIBUS 0`,
++1.4 A within seconds. If the phone undoes this step it writes back the
+bit-set value it found: charging stays at the 500 mA limit and USB is not
+affected; run the step again, or `undo k1b-autoibus-on`. **Stop** as in
+K1b.1.
+
+**K1b.3, the test kernel (risk: medium, a push and a reboot).** With
+`KERNEL_DIR=~/omamobile-kernel/wt-charger-autoibus
+KERNEL_OUT=~/omamobile-kernel/out-charger-autoibus` set, build the whole set
+offline first: `bin/omamobile kernel`, `initramfs`, `images` (cheetah, the
+default device) and `modules`. Then, on the phone, `systemctl mask
+omamobile-modem-boot.target` and `systemctl stop omamobile-modem` (already
+stopped since K1b.1: `systemctl is-active omamobile-modem` reads
+`inactive`), and only then `bin/omamobile push`. The test kernel boots
+without the modem (Setup). After boot, K1b.0 again:
+`systemctl is-active omamobile-modem` reads `inactive`,
+`uname -r` reads the test release, `probed:` has no `(NO_AUTOIBUS set)`,
+CNFG_09 `NO_AUTOIBUS 0`, current as before, `tools/phone-smoke` passes.
+**Stop** if any of those fail. **Rollback:** the same `push` with
+`KERNEL_OUT=~/omamobile-kernel/out-k1115rel` (the release kernel, its set
+complete).
+
+**K1b.4, the fix itself (risk: low; the bit set under the dead-man, then a
+warm reboot).** First `systemctl is-active omamobile-modem` reads
+`inactive`: **stop** if it doesn't, the watchdog must not be armed with the
+modem up. Then `tools/usbc-deadman k1b-autoibus-on`, check that charging
+stops as in K1b.1, then `systemctl reboot`. **Stop** before the reboot if
+the step didn't confirm. After boot:
+
+    tools/phone-ssh 'journalctl -k -b | grep -E "max77759-charger.*(found|probed)"'
+    tools/usbc-deadman dump
+
+**Pass:** `found: … (NO_AUTOIBUS set)`, then `probed:` without it, CNFG_09
+`NO_AUTOIBUS 0` and +1.4 A. If `found:` doesn't show it, the bit didn't
+survive the warm reboot (or ABL rewrote it): record which, and the fix
+stays proven only by a boot from an empty battery (K1b.5). **Stop** if
+`probed:` still shows it. **Rollback:** `tools/usbc-deadman
+k1b-autoibus-off` (K1b.2) puts the bit back to clear on any kernel; the
+kernel itself as in K1b.3. At the end, `systemctl unmask
+omamobile-modem-boot.target`.
+
+**K1b.5, the field case (whenever a battery runs flat).** Boot from empty
+on the cable and read the two probe lines: `found: … (NO_AUTOIBUS set)`
+then a clean `probed:` closes it, and tells us ABL sets the bit. A flat boot
+whose `found:` line has no suffix is no result: not every flat boot sets the
+bit (#169).
+
+---
+
 ### What the battery reports, and what upower sees, in each state
 
 | State | Gauge `status` | Line power in upower | `on-battery` |
@@ -876,7 +1036,7 @@ current flowing.
 | Overlays B4a/B4b | `device/cheetah/overlays/usbc-{tcpm,role}-test.dtso` | done; apply to today's overlaid DTB (checked) |
 | P1: device-cheetah 0.1.32 (D1) | blacklist, options, softdep, test flip | **to write** |
 | P2: `omamobile-typec-start` + unit, rescue as fallback watcher (D2) | device-cheetah | **to write** |
-| K1 (only if G0 shows SDP above 500 mA): set `NO_AUTOIBUS` with the limit, as Google does | `max77759_charger.c` `set_input_current_limit()` | to write if needed; changes the charge rate on CDP ports (1.5 A to 0.5 A), so the human decides |
+| K1 (only if G0 shows SDP above 500 mA): set `NO_AUTOIBUS` with the limit, as Google does | `max77759_charger.c` `set_input_current_limit()` | to write if needed; changes the charge rate on CDP ports (1.5 A to 0.5 A), so the human decides. The other half, clearing a bit the bootloader left set, is K1b above: **written, untested** |
 | K2 (nice to have): round the guard's current down; charger `status` "Not charging" while inhibited | `max77759_charger.c` | not needed for safety |
 | K3 (D4b/c): fold overlays into the DTS; gauge `power-supplies` | `gs201-cheetah.dts` | after B4b/D3 |
 | Tool: `usbc-deadman` uses `out-usbc` nowhere; only the plan text does | `USB-C-PLAN.md` section 6 | replace with this |

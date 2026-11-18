@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Pool-only boot: no PCIe, PHY or WLAN driver. See WIFI-INTEGRATION-P1.md. */
+/* Pool-only boot: no PCIe, PHY or WLAN driver. See WIFI-PLAN.md. */
 /dts-v1/;
 /plugin/;
 

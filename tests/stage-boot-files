@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # tools/stage-boot-files --check, as tools/build-packages runs it before it
 # builds a device package that ships boot files: current files pass; stale,
-# tampered or SOURCES-less ones, or none, refuse. No kernel build needed.
+# tampered or SOURCES-less ones, or none, refuse. Staging refuses an
+# initramfs with a development boot policy. No kernel build needed.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { echo "not ok - $*" >&2; exit 1; }
@@ -44,9 +45,86 @@ pass "--check refuses stale, tampered, SOURCES-less or missing boot files"
 grep -qF "':(glob)packages/**/boot-files/**'" tools/repo-publish || fail "repo-publish --from-main carries boot-files/ into its clean tree"
 grep -qF 'tools/stage-boot-files --check "$d/boot-files"' tools/build-packages || fail "build-packages checks the boot files before building"
 grep -qF '"$d/stage" --verify "$d/prebuilt"' tools/build-packages || fail "build-packages verifies the staged kernel before building"
-grep -qE '^NAMED_ONLY=\(linux-omamobile\)$' tools/build-packages || fail "linux-omamobile is built only when named"
+grep -qE '^NAMED_ONLY=\(linux-omamobile( [a-z0-9-]+)*\)$' tools/build-packages || fail "linux-omamobile is built only when named"
 grep -qF '[[ " ${NAMED_ONLY[*]} " != *" $name "* ]] || continue' tools/build-packages || fail "and never by default or with --all"
 pass "repo-publish carries boot-files/; build-packages checks them, verifies the kernel, and builds linux-omamobile only when named"
+
+# Staging takes what bin/omamobile initramfs --release builds and nothing
+# it refuses to build: a member etc/omamobile-nfsroot or
+# etc/omamobile-root-mode, whatever its type, or an
+# etc/omamobile-usb-recovery listed twice, not saying yes or not readable,
+# is refused, and DEST keeps its earlier staging. Members are matched by
+# name as the listing gives them (etc/x or ./etc/x), as the SSH-key check
+# matches them. Each archive has cheetah's allowlist and this tree's init,
+# so only the policy file decides. A stand-in for dtc and mkdtboimg writes
+# their output files: tests/boot-update-parity checks the bytes.
+if command -v cpio >/dev/null && command -v lz4 >/dev/null; then
+  K=$t/kout && mkdir -p "$K" "$t/sbin"
+  printf '#!/bin/bash\n[[ $1 == create ]] && { echo dtbo > "$2"; exit 0; }\nwhile (($#)); do [[ $1 == -o ]] && echo dtb > "$2"; shift; done\n' > "$t/sbin/dt"
+  chmod +x "$t/sbin/dt"
+  rw=$(sed -n 's/^UFS_RW="\(.*\)"$/\1/p' device/cheetah/device.conf)
+  pack() { # members besides init and the allowlist: path=line ("path=" an empty file), path/ a directory,
+           # path@target a symlink, +path that member packed once more, +path@target that member
+           # appended once more as a symlink to target (GNU cpio's --append)
+    local f more= app=; rm -rf "$t/rd" && mkdir -p "$t/rd/etc" && cp initramfs/init "$t/rd/init" && echo "$rw" > "$t/rd/etc/omamobile-ufs-rw"
+    for f in "$@"; do
+      case $f in
+        +*@*) app=${f#+} ;;
+        +*) more+="./${f#+}"$'\n' ;;
+        */) mkdir "$t/rd/$f" ;;
+        *@*) ln -s "${f#*@}" "$t/rd/${f%%@*}" ;;
+        *=) : > "$t/rd/${f%=}" ;;
+        *) echo "${f#*=}" > "$t/rd/${f%%=*}" ;;
+      esac
+    done
+    # (bsdcpio warns as it truncates inode numbers to newc's 32 bits)
+    (cd "$t/rd" && { find . | LC_ALL=C sort; printf %s "$more"; } | $packer -o -H newc --quiet 2>/dev/null) > "$t/rd.cpio"
+    [[ -z $app ]] || (cd "$t/rd" && ln -sf "${app#*@}" "${app%%@*}" && echo "${app%%@*}" | cpio -o -A -H newc --quiet -O "$t/rd.cpio")
+    lz4 -l -9 -q -f "$t/rd.cpio" "$K/initramfs.cpio.lz4"
+  }
+  sbf() { DEVICE=cheetah KERNEL_OUT=$K DTC=$t/sbin/dt MKDTBOIMG=$t/sbin/dt "$S" "$t/staged" > "$t/out" 2>&1; }
+  stages() { # what, files
+    local what=$1; shift; pack "$@"
+    sbf || { cat "$t/out"; fail "$packer archive: stages $what"; }
+    cmp -s "$t/staged/initramfs.cpio.lz4" "$K/initramfs.cpio.lz4" || fail "$packer archive: $what is the staged initramfs"
+  }
+  refuses_rd() { # what, message, files
+    local what=$1 msg=$2 earlier; shift 2; pack "$@"
+    earlier=$(cat "$t/staged/SHA256SUMS")
+    if sbf; then fail "$packer archive: refuses $what"; fi
+    grep -qF -- "$msg" "$t/out" || { cat "$t/out"; fail "$packer archive, $what: says '$msg'"; }
+    [[ $(cat "$t/staged/SHA256SUMS") == "$earlier" ]] && (cd "$t/staged" && sha256sum --quiet --strict -c SHA256SUMS) && [[ ! -e $t/staged.new ]] \
+      || fail "$packer archive, $what: DEST keeps its earlier staging, and no DEST.new is left"
+  }
+  # A stand-in cpio for one staging call: the tool's read of etc/omamobile-usb-recovery prints yes and fails; every other call is cpio's
+  mkdir -p "$t/failread" && printf '#!/bin/bash\n[[ "$*" == *"--to-stdout etc/omamobile-usb-recovery"* ]] && { printf yes; exit 1; }\nexec %q "$@"\n' "$(command -v cpio)" > "$t/failread/cpio"
+  chmod +x "$t/failread/cpio"
+  # GNU cpio packs etc/x (as bin/omamobile does); bsdcpio packs ./etc/x
+  packers=cpio; command -v bsdcpio >/dev/null && packers+=" bsdcpio"
+  for packer in $packers; do
+    rm -rf "$t/staged"
+    stages "a release initramfs"
+    stages "INITRAMFS_ROOT_LABEL and INITRAMFS_USB_RECOVERY=yes" etc/omamobile-root-label=omamobile-root etc/omamobile-usb-recovery=yes
+    nfs="carries etc/omamobile-nfsroot (OMAMOBILE_NFSROOT, bring-up only): build it with --release"
+    refuses_rd "an NFS root" "$nfs" etc/omamobile-nfsroot=192.0.2.1:/srv/nfs/sample
+    refuses_rd "an empty etc/omamobile-nfsroot" "$nfs" etc/omamobile-nfsroot=
+    refuses_rd "etc/omamobile-nfsroot as a symlink to an NFS root" "$nfs" etc/nfs=192.0.2.1:/srv/nfs/sample etc/omamobile-nfsroot@nfs
+    refuses_rd "etc/omamobile-nfsroot as a directory" "$nfs" etc/omamobile-nfsroot/
+    mode="carries a root mode (INITRAMFS_ROOT_MODE, bring-up only): build it with --release"
+    refuses_rd "root mode persistent-development" "$mode" etc/omamobile-root-label=omamobile-root etc/omamobile-root-mode=persistent-development
+    refuses_rd "an empty root mode, which the init holds in RAM" "$mode" etc/omamobile-root-mode=
+    usb="carries an etc/omamobile-usb-recovery that is not one file saying yes (INITRAMFS_USB_RECOVERY, bring-up only): build it with --release"
+    refuses_rd "USB recovery off" "$usb" etc/omamobile-usb-recovery=no
+    refuses_rd "etc/omamobile-usb-recovery as a symlink to no" "$usb" etc/usb=no etc/omamobile-usb-recovery@usb
+    refuses_rd "etc/omamobile-usb-recovery twice, saying no" "$usb" etc/omamobile-usb-recovery=no +etc/omamobile-usb-recovery
+    # GNU cpio only: bsdcpio can't append
+    [[ $packer != cpio ]] || refuses_rd "etc/omamobile-usb-recovery saying yes, then again as a symlink to no" "$usb" etc/usb=no etc/omamobile-usb-recovery=yes +etc/omamobile-usb-recovery@usb
+    PATH=$t/failread:$PATH refuses_rd "a USB recovery read that fails after printing yes" "can't read etc/omamobile-usb-recovery from" etc/omamobile-usb-recovery=yes
+  done
+  pass "staging refuses etc/omamobile-nfsroot (file, empty, symlink, directory), etc/omamobile-root-mode (file, empty), and etc/omamobile-usb-recovery saying no, as a symlink, twice or unreadable, and keeps DEST; it stages what --release builds ($packers)"
+else
+  pass "staging's release policies # SKIP no cpio or lz4"
+fi
 
 # build-packages with a device package whose boot files are missing: that
 # package is skipped, the rest is built and signed, and the run exits 3

@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# The Settings app's charge limit: saves %i (80, 85, 90, 95 or 100) to /etc/omamobile/charge-limit and writes it
+# to the charger's charge_control_end_threshold. The polkit rule 50-omamobile-charge-limit.rules lets the active
+# local user start these instances and nothing else; the script refuses any other value. Not enabled.
+[Unit]
+Description=Charge limit %i %%
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/omamobile-settings/charge-limit %i
+TimeoutStartSec=15
