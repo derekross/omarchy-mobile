@@ -247,7 +247,7 @@ pass "a refused start leaves the persistent marker as it was"
 # (it needs CPIF's ports) with the latch removed on a refusal, READY after
 # the check, and the profile last.
 s=lib/omamobile-modem-start
-lineof() { grep -n "$1" $s | head -1 | cut -d: -f1; }
+lineof() { grep -n "$1" $s | sed -n 1p | cut -d: -f1; }
 l_prov_refuse=$(lineof "isn't provisioned"); l_mark_refuse=$(lineof 'never reached ONLINE; skipping'); l_up_refuse=$(lineof 'refuse_unclean$')
 l_inhibit=$(lineof 'no sleep inhibitor held'); l_latch=$(lineof '> "\$MARK"'); l_latch_sync=$(awk -v n="$l_latch" 'NR == n + 1' $s)
 l_modprobe=$(lineof '^[[:space:]]*modprobe '); l_check=$(lineof 'omamobile-vendor-chroot" modem check'); l_rm=$(lineof '^  rm -f "\$MARK"')
@@ -533,7 +533,7 @@ grep -qx 'DefaultDependencies=no' systemd/omamobile-modem-boot.target || fail "t
 grep -qx 'WantedBy=multi-user.target' systemd/omamobile-modem-boot.target || fail "the boot target is enabled under multi-user.target"
 grep -q 'systemctl mask omamobile-modem-boot.target' systemd/omamobile-modem-boot.target || fail "the target says how to keep the stack off (a vendor link survives disable)"
 ! grep -q '^Requires=' systemd/omamobile-modem-boot.target || fail "the boot target only wants (a missing unit is fine)"
-[[ -z $(find "$stage" -name '*.wants' -o -name '*.requires' | head -1) ]] || fail "no wants or requires link is shipped: $(find "$stage" -name '*.wants' -o -name '*.requires')"
+[[ -z $(find "$stage" -name '*.wants' -o -name '*.requires' | sed -n 1p) ]] || fail "no wants or requires link is shipped: $(find "$stage" -name '*.wants' -o -name '*.requires')"
 ! grep -rq 'systemctl enable' install || fail "the install script enables nothing"
 pass "the inhibitor, the modem unit and the target (enabled by the device package, not here)"
 

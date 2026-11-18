@@ -302,7 +302,7 @@ unpack() { # image -> $t/u/<image>/ plus its header summary in $t/u/<image>.txt
   rm -rf "$t/u/$1" && mkdir -p "$t/u"
   python3 -I "$mkbootimg/unpack_bootimg.py" --boot_img "$K/images/$1.img" --out "$t/u/$1" > "$t/u/$1.txt"
 }
-field() { sed -n "s/^$2: *//p" "$t/u/$1.txt" | head -1; }
+field() { sed -n "s/^$2: *//p" "$t/u/$1.txt" | sed -n 1p; }
 
 # The stub kernel output
 dts=$K/arch/arm64/boot/dts/exynos/google

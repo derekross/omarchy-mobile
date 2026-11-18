@@ -7,7 +7,8 @@
 # against a stand-in phone tree,
 # tools/phone-install-package against a stand-in phone, the initramfs's
 # first-boot growth, the bring-up overlays, the simplefb trigger, the init's per-board steps, the storage guard's packed
-# allowlist and the USB product string, no pipefail script piping into grep -q,
+# allowlist and the USB product string, no pipefail script piping into grep -q
+# (and no pipefail test script into head),
 # bin/omamobile's boot-image layouts
 # (and omamobile-boot-update building the same bytes on the phone)
 # and flash against a fake fastboot, omamobile-firstboot's own tests, the
@@ -86,6 +87,8 @@ echo "# tests/power-ab/samples.py"
 python3 tests/power-ab/samples.py
 echo "# tests/review-lessons"
 tests/review-lessons
+echo "# tests/head-pipes"   # no pipefail test script pipes into head
+tests/head-pipes
 echo "# tests/factory-index"   # the build index of Google's factory images, against a made-up zip
 tests/factory-index
 echo "# tests/phone-demo-notes"

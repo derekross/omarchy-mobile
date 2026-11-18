@@ -203,5 +203,5 @@ for dir in /etc /usr/lib/systemd /usr/share/omamobile; do
   debugfs -R "rdump $dir $t/dump" "$img" >/dev/null 2>&1 || true
 done
 # (the widget tool keeps the old prefix reserved on purpose: UserWidgets.js)
-if grep -rIl omandroid "$t/dump" 2>/dev/null | grep -v '/omamobile\.home/UserWidgets\.js$' | head -5 | grep .; then fail "no 'omandroid' left in /etc, /usr/lib/systemd, /usr/share/omamobile"; fi
+if grep -rIl omandroid "$t/dump" 2>/dev/null | grep -v '/omamobile\.home/UserWidgets\.js$' | sed -n '1,5p' | grep .; then fail "no 'omandroid' left in /etc, /usr/lib/systemd, /usr/share/omamobile"; fi
 pass "no old project name in /etc, /usr/lib/systemd, /usr/share/omamobile"

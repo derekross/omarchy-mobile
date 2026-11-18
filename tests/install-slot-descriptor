@@ -39,7 +39,7 @@ done
 LIBDIR=$ROOT/packages/omamobile-boot-update/lib
 # Each reader prints its verdict: "accept", or "refuse: " and the message that
 # names the key (without the descriptor's path, which differs per reader)
-key_msg() { grep -oE '(INSTALL_SLOT|INSTALL_ACTIVE_SLOTS)[^:]*( is| belongs| needs).*' "$1" | head -1 | sed 's/\x1b\[[0-9;]*m//g'; }
+key_msg() { grep -oE '(INSTALL_SLOT|INSTALL_ACTIVE_SLOTS)[^:]*( is| belongs| needs).*' "$1" | sed -n 1p | sed 's/\x1b\[[0-9;]*m//g'; }
 verdict() {  # OUTPUT-FILE ACCEPTED(0|1) [past-pattern]
   local msg
   msg=$(key_msg "$1")

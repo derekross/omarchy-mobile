@@ -46,7 +46,7 @@ fi
 # settings, as the 9a's package does: the 7 Pro's copy gets SuspendState in a
 # change of its own.
 sleepconf=vendor/systemd/sleep.conf.d/10-omamobile.conf
-[[ $(grep -v '^#' "$sleepconf" | grep -c .) -eq 6 && $(grep -v '^#' "$sleepconf" | head -1) == "[Sleep]" ]] || fail "the sleep drop-in has other lines than its five settings"
+[[ $(grep -v '^#' "$sleepconf" | grep -c .) -eq 6 && $(grep -v '^#' "$sleepconf" | sed -n 1p) == "[Sleep]" ]] || fail "the sleep drop-in has other lines than its five settings"
 for line in SuspendState=freeze MemorySleepMode=s2idle AllowHibernation=no AllowHybridSleep=no AllowSuspendThenHibernate=no; do
   grep -qx "$line" "$sleepconf" || fail "the sleep drop-in lacks $line"
 done
