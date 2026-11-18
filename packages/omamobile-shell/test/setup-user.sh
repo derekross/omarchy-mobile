@@ -529,8 +529,29 @@ grep -cx 'org.freedesktop.impl.portal.Access=omamobile;gtk' "$pf" >/dev/null || 
 printf '[preferred]\ndefault=hyprland;gtk\n' >"$pf"
 RUN_HOME=$hp run
 [[ $(grep -c 'impl.portal.\(FileChooser=gnome\|Access=omamobile\);gtk' "$pf") == 2 ]] || fail "a rewritten file gets the lines again"
-# No file of the user's: none is made, and the phone's own in /etc/xdg is read
+# An owner's line written with blanks around its "=" is theirs too
+printf '[preferred]\ndefault=hyprland;gtk\n  org.freedesktop.impl.portal.FileChooser = gtk\n' >"$pf"
+RUN_HOME=$hp run
+[[ $(grep -c 'impl.portal.FileChooser' "$pf") == 1 ]] || fail "an owner's line with blanks around its = is kept, and no second one is added"
+# A file that is a link (a dotfile setup) stays a link, unchanged, with a line saying what it lacks
+printf '[preferred]\ndefault=hyprland;gtk\n' >"$hp/dotfile-portals.conf"
+rm "$pf"; ln -s "$hp/dotfile-portals.conf" "$pf"
+before=$(sha256sum <"$hp/dotfile-portals.conf")
+RUN_HOME=$hp run
+[[ -L $pf && $(sha256sum <"$hp/dotfile-portals.conf") == "$before" ]] || fail "a portal file that is a link is left as it is"
+grep -c 'is a link, left as it is' "$t/out" >/dev/null || fail "the setup says what a linked portal file lacks"
 rm "$pf"
+# A file that can't be written: said once, and the setup goes on to its end
+if ((EUID != 0)); then
+  printf '[preferred]\ndefault=hyprland;gtk\n' >"$pf"
+  chmod a-w "$hp/.config/xdg-desktop-portal"
+  RUN_HOME=$hp run
+  chmod u+w "$hp/.config/xdg-desktop-portal"
+  grep -c 'could not add org.freedesktop.impl.portal.FileChooser' "$t/out" >/dev/null || fail "a portal file that can't be written is reported"
+  [[ $(grep -c 'impl.portal' "$pf") == 0 ]] || fail "nothing is half-written into a file that can't be written"
+  rm "$pf"
+fi
+# No file of the user's: none is made, and the phone's own in /etc/xdg is read
 RUN_HOME=$hp run
 [[ ! -e $pf ]] || fail "no portal file is made for a user who has none"
-pass "the portal choices: the touch file chooser and the permission sheet in the user's own portal file, an owner's choice kept, no file made"
+pass "the portal choices: the touch file chooser and the permission sheet in the user's own portal file, an owner's choice kept (blanks or not), a linked or unwritable file left alone, no file made"

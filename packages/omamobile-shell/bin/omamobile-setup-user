@@ -495,15 +495,26 @@ fi
 # 9a from the day it took Omarchy 4.5). The two lines go into the user's file
 # too, under its [preferred] group, at any login that finds one missing: an
 # Omarchy update may write the file again. A file that names the interface
-# is left alone, whatever it names, so an owner who wants another backend
-# says so there. xdg-desktop-portal reads its files when it starts.
+# is left alone, whatever it names (with blanks around its "=" or not), so
+# an owner who wants another backend says so there. A file that is a link
+# (a dotfile setup) is left as it is, with a line saying what it lacks: sed
+# would replace the link with a copy. A file that can't be written is
+# reported, and the rest of the setup goes on. xdg-desktop-portal reads its
+# files when it starts.
 portals=${XDG_CONFIG_HOME:-$HOME/.config}/xdg-desktop-portal/hyprland-portals.conf
-if [[ -f $portals ]] && grep -q '^\[preferred\]' "$portals"; then
+if [[ -L $portals ]]; then
+  echo "omamobile-setup-user: $portals is a link, left as it is; the phone's file chooser and permission sheet need" \
+    "org.freedesktop.impl.portal.FileChooser=gnome;gtk and org.freedesktop.impl.portal.Access=omamobile;gtk under [preferred] there" >&2
+elif [[ -f $portals ]] && grep -q '^\[preferred\]' "$portals"; then
   portals_changed=0
   for line in 'org.freedesktop.impl.portal.FileChooser=gnome;gtk' 'org.freedesktop.impl.portal.Access=omamobile;gtk'; do
-    if ! grep -q "^${line%%=*}=" "$portals"; then
-      sed -i "0,/^\[preferred\]/s//[preferred]\n$line/" "$portals"
-      portals_changed=1
+    if ! grep -q "^[[:space:]]*${line%%=*}[[:space:]]*=" "$portals"; then
+      if sed -i "0,/^\[preferred\]/s//[preferred]\n$line/" "$portals" 2>/dev/null; then
+        portals_changed=1
+      else
+        echo "omamobile-setup-user: could not add ${line%%=*} to $portals" >&2
+        break
+      fi
     fi
   done
   if ((portals_changed)); then
