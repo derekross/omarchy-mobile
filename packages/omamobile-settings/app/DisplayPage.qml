@@ -24,7 +24,7 @@ ScrollView {
     property int lockReq: -1
     property string lockError: ""
     readonly property var lockChoices: [{s: 30, t: qsTr("30 s")}, {s: 60, t: qsTr("1 min")}, {s: 120, t: qsTr("2 min")},
-                                        {s: 180, t: qsTr("3 min")}, {s: 300, t: qsTr("5 min")}, {s: 0, t: qsTr("Never")}]
+                                        {s: 180, t: qsTr("3 min")}, {s: 300, t: qsTr("5 min")}]
     function applyLock(r) {
         lockBusy = false
         // a saved value with an error (the shell did not reload, the watcher did not start) shows both
@@ -95,7 +95,7 @@ ScrollView {
     }
     SettingsLabel {
         text: page.lockError !== "" ? page.lockError
-            : page.lockAfter === 0 ? qsTr("Never: the phone stays unlocked and the screen stays on until you press the power key. It also won't go to sleep by itself.")
+            : page.lockAfter === 0 ? qsTr("The lock time is off in Omarchy's settings file: the phone stays unlocked until you press the power key. Pick a time above to turn it back on.")
             : qsTr("With no touch for this long the phone locks, and the screen turns off a few seconds later. Locking and screen off are the same timer.")
         color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13); wrapMode: Text.Wrap; Layout.fillWidth: true
     }
@@ -113,7 +113,7 @@ ScrollView {
     }
     SettingsLabel {
         text: (page.keyboard ? qsTr("A keyboard is connected now. ") : qsTr("No keyboard is connected now. "))
-              + qsTr("Any Bluetooth or USB keyboard counts, a dock or receiver too. While one is connected the phone locks and the screen turns off after 30 minutes without input instead of the time above (Never stays never). A Bluetooth keyboard that goes to sleep counts as disconnected.")
+              + qsTr("Any Bluetooth or USB keyboard counts, a dock or receiver too. While one is connected the phone locks and the screen turns off after 30 minutes without input instead of the time above. A Bluetooth keyboard that goes to sleep counts as disconnected.")
         color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13); wrapMode: Text.Wrap; Layout.fillWidth: true
     }
     }

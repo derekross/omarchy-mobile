@@ -49,8 +49,8 @@ eq "$(run apply)" '{"applied":null}'
 
 eq "$(run set lock 120)" '{"lock":120,"keyboardAwake":false,"keyboard":false,"effective":120}'
 eq "$(idle)" '120 0 omamobile.bar'
-eq "$(run set lock 0)" '{"lock":0,"keyboardAwake":false,"keyboard":false,"effective":0}'
-eq "$(idle)" '0 0 omamobile.bar'
+eq "$(run set lock 0)" '{"error":"bad value"}'  # no Never on the page (derekross, #866)
+eq "$(idle)" '120 0 omamobile.bar'
 eq "$(run set lock 45)" '{"error":"bad value"}'
 eq "$(run set lock x)" '{"error":"bad value"}'
 eq "$(run set keyboard maybe)" '{"error":"bad value"}'
