@@ -17,17 +17,17 @@ graphical session (for example over SSH), display.sh finds Hyprland's instance
 signature from `$XDG_RUNTIME_DIR/hypr/*/.socket.sock` (the newest live one) and
 sets the brightness through the user's graphical session (loginctl Display).
 
-"Lock screen after" (30 s, 1, 2, 3 or 5 min, Never) sets `idle.lock` in
+"Lock screen after" (30 s, 1, 2, 3 or 5 min) sets `idle.lock` in
 `~/.config/omarchy/shell.json`, the one timer Omarchy's idle service has: the
 phone locks after that long without input and the lock turns the screen off a
-few seconds later, so lock and screen off are the same timer. Never means the
-screen stays on and the phone never sleeps by itself (omamobile-sleepd sleeps
-only with the screen off behind a secure lock); the power key still locks.
+few seconds later, so lock and screen off are the same timer. There is no
+Never: a phone that never locks by itself isn't offered one tap away. A 0 set
+by hand in shell.json still means no idle lock, and the page says so.
 "Lock after 30 minutes while a keyboard is connected" writes 1800 there while
 a Bluetooth or USB keyboard (udev `ID_INPUT_KEYBOARD=1`, bus 0005, or bus 0003
 outside `/devices/virtual/input`, with the letter keys and space, a name, and
 not a known security token or barcode scanner) is connected, and the chosen
-time back when it goes; a chosen Never stays never. The user unit
+time back when it goes. The user unit
 `omamobile-lock-keyboard.service` follows `udevadm monitor` for input devices
 and runs `lock.sh apply`. It is not enabled by the package: turning the toggle
 on enables and starts it, turning it off stops and disables it, and when it

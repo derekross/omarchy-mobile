@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # Screen lock settings for the Settings app's Display page. Prints one line of JSON.
 #   lock.sh get                 {"lock":60,"keyboardAwake":false,"keyboard":false,"effective":60}
-#   lock.sh set lock N          N is 30, 60, 120, 180, 300 or 0 (never)
+#   lock.sh set lock N          N is 30, 60, 120, 180 or 300 (no Never here: a phone that never locks by
+#                               itself is not offered one tap away; 0 can still be set in shell.json by hand)
 #   lock.sh set keyboard on|off lock after 30 min (1800 s) while a Bluetooth or USB keyboard is connected;
 #                               on enables and starts the watcher unit (if that fails the toggle goes back to
 #                               off), off disables it and stops it without waiting (--no-block): this run has
@@ -53,7 +54,7 @@ core() {
 /usr/bin/python3 -I - "$prefs" "$shell" "$defaults" "$sys" "$udev" "$watcher" "$@" <<'PY'
 import fcntl, json, os, re, struct, sys, tempfile
 prefs_path, shell_path, defaults_path, sysfs, udev, watcher, verb, key, value = (sys.argv[1:] + ["", ""])[:9]
-CHOICES = (30, 60, 120, 180, 300, 0)
+CHOICES = (30, 60, 120, 180, 300)
 KB_LOCK = 1800  # while a keyboard is connected: a long lock, not never
 def out(d): print(json.dumps(d, separators=(",", ":"))); sys.exit(0)
 def fail(m): print(json.dumps({"error": m}, separators=(",", ":"))); sys.exit(2)

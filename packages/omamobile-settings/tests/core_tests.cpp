@@ -185,7 +185,7 @@ private slots:
         QQmlComponent component(&engine, QUrl("qrc:/DisplayPage.qml"));
         std::unique_ptr<QObject> page(component.create());
         QVERIFY2(page, qPrintable(component.errorString()));
-        QCOMPARE(page->property("lockChoices").toList().size(), 6);
+        QCOMPARE(page->property("lockChoices").toList().size(), 5);  // 30 s to 5 min, no Never
         // the stub backend's error: the lock rows leave "busy" and show it
         QTRY_VERIFY(!page->property("lockBusy").toBool());
         QCOMPARE(page->property("lockError").toString(), QString("stub says no"));
