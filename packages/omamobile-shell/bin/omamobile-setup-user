@@ -456,16 +456,21 @@ if [[ -f $foot ]] && omarchy-done ensure omamobile-foot-selection; then
   if ! grep -Ec '^[[:space:]]*selection-target[[:space:]]*=' "$foot" >/dev/null; then
     main='^\[main\][[:space:]]*(#.*)?$'
     if grep -Ec "$main" "$foot" >/dev/null; then
-      sed -i --follow-symlinks -E "0,/$main/s//&\nselection-target=both/" "$foot"
+      # sed -i writes a temp file next to foot.ini; if it can't, the step runs again next login
+      if ! sed -i --follow-symlinks -E "0,/$main/s//&\nselection-target=both/" "$foot"; then
+        rm -f "$HOME/.local/state/omarchy/done/omamobile-foot-selection"
+      fi
     else
       # Keys above the first section are foot's [main], so a [main] on top changes nothing else
       # Through a temp file, written back in place so a symlinked foot.ini stays a link; a failed
       # write leaves the step for the next login instead of a cut file
-      tmp=$(mktemp "${foot%/*}/.foot.ini.XXXXXX")
-      if { printf '[main]\nselection-target=both\n\n'; cat "$foot"; } >"$tmp" && cat "$tmp" >"$foot"; then
+      tmp=
+      if tmp=$(mktemp "${foot%/*}/.foot.ini.XXXXXX") \
+        && { printf '[main]\nselection-target=both\n\n'; cat "$foot"; } >"$tmp" && cat "$tmp" >"$foot"; then
         rm -f "$tmp"
       else
-        rm -f "$tmp" "$HOME/.local/state/omarchy/done/omamobile-foot-selection"
+        [[ -z $tmp ]] || rm -f "$tmp"
+        rm -f "$HOME/.local/state/omarchy/done/omamobile-foot-selection"
       fi
     fi
   fi

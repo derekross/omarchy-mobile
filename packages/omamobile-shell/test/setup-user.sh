@@ -238,6 +238,22 @@ cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hs/.config/hypr/"; pri
 RUN_HOME=$hs run
 [[ $(head -2 "$hs/.config/foot/foot.ini") == $'[main]\nselection-target=both' ]] && grep -cx 'font=x:size=9' "$hs/.config/foot/foot.ini" >/dev/null || fail "a foot.ini without [main] gets one on top and keeps its keys"
 
+# A foot.ini in a read-only directory (sed -i and mktemp can't make their temp file), with
+# and without [main]: nothing is written, the marker is taken back and the login goes on
+if [[ $(id -u) != 0 ]]; then
+  for c in '[main]\nfont=x:size=9\n' 'font=x:size=9\n'; do
+    hs=$t/home-sel; chmod -R u+w "$hs" 2>/dev/null || true; rm -rf "$hs"
+    mkdir -p "$hs/.config/hypr" "$hs/.config/omarchy" "$hs/.config/foot" "$hs/.local/state/omarchy/done"
+    cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hs/.config/hypr/"; printf "$c" >"$hs/.config/foot/foot.ini"
+    : >"$hs/.local/state/omarchy/done/omamobile-screensaver"; : >"$hs/.local/state/omarchy/done/omamobile-foot-touch"
+    cp "$hs/.config/foot/foot.ini" "$t/ro-foot.ini"; chmod a-w "$hs/.config/foot"
+    RUN_HOME=$hs run || fail "a read-only foot directory doesn't stop the login ($c)"
+    chmod u+w "$hs/.config/foot"
+    cmp -s "$hs/.config/foot/foot.ini" "$t/ro-foot.ini" || fail "a failed foot write leaves foot.ini as it was ($c)"
+    [[ ! -e $hs/.local/state/omarchy/done/omamobile-foot-selection ]] || fail "a failed foot write leaves the step for the next login ($c)"
+    [[ -z $(find "$hs/.config/foot" -name '.foot.ini.*') ]] || fail "a failed foot write leaves no temp file ($c)"
+  done
+fi
 [[ -e $h/.local/state/omarchy/done/omamobile-foot-touch ]] || fail "the foot step runs once foot.ini is there"
 [[ $(grep -cx -- --enable-wayland-ime "$h/.config/chromium-flags.conf") == 1 ]] || fail "a flag the user has isn't added twice"
 grep -cx -- --wayland-text-input-version=3 "$h/.config/chromium-flags.conf" >/dev/null || fail "the missing flag is added"
