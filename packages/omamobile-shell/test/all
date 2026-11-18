@@ -519,7 +519,7 @@ bash test/keyboard-languages.sh >/dev/null || { bash test/keyboard-languages.sh;
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-keyboard-switch || fail "omamobile-keyboard-switch parses"
 bash test/keyboard-switch.sh >/dev/null || { bash test/keyboard-switch.sh; fail "omamobile-keyboard-switch"; }
 [[ ! -e systemd/user/omamobile-keyboard-switch.service ]] || fail "no layout follower service (it bounced switches back)"
-grep -c 'pcall(dofile, kbd_binds)' hypr/phone.lua >/dev/null || fail "phone.lua loads the switch-key binds Settings writes"
+if grep -nE 'switchxkblayout|omamobile-keyboard-switch|omamobile-keyboard\.lua|SHIFT_L|ALT_L|CTRL_L|code:66' hypr/phone.lua; then fail "phone.lua binds no switch key (xkb grp: options do it)"; fi
 if grep -n 'SUPER + ALT + SHIFT + SPACE' hypr/phone.lua; then fail "the old next-layout bind is gone"; fi
 if [[ -n ${OMAMOBILE_KEYBOARD_RENDER:-} ]]; then
   bash test/keyboard-render "$OMAMOBILE_KEYBOARD_RENDER" >/dev/null || fail "language sheet render"
@@ -1047,11 +1047,7 @@ if [[ -n $lua ]]; then
   for sc in installed:plain migrated:migrated own-f9:own none:plain; do
     out=$(SCENARIO=${sc%%:*} HOME=$dk/${sc##*:} env -u XDG_CONFIG_HOME "$lua" test/phone-dictation.lua) || { grep -v '^ok' <<<"$out"; rm -rf "$dk"; fail "phone.lua dictation keys (${sc%%:*})"; }
   done
-  for kbo in grp:caps_toggle,grp_led:caps compose:caps,grp:alt_shift_toggle; do
-    out=$(SCENARIO=installed HOME=$dk/plain KB_OPTIONS=$kbo env -u XDG_CONFIG_HOME "$lua" test/phone-dictation.lua) || { grep -v '^ok' <<<"$out"; rm -rf "$dk"; fail "phone.lua switch key with kb_options $kbo"; }
-  done
   rm -rf "$dk"
-  pass "phone.lua: with no bind file Alt+Shift switches, and no default bind does when kb_options has a grp: switch"
   pass "phone.lua on Omarchy 4.5: Alt + Space and the migration's F9 are for hardware keyboards; the owner's own F9 is left alone"
 else
   pass "phone.lua window rules # SKIP no lua"

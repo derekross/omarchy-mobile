@@ -248,48 +248,9 @@ elseif o.cmd_present("voxtype") then
   })
 end
 
--- The hardware keyboard's layout switch key. Settings > Keyboard writes
--- omamobile-keyboard.lua: the Alt+Shift and Ctrl+Shift press binds (both key
--- orders, every keyboard but squeekboard's, running `hyprctl switchxkblayout
--- current next`), only the chosen pair enabled. With no file yet, the same
--- binds with Alt+Shift on (keep in step with bind_lua in
--- omamobile-settings/backends/keyboard.sh; its test checks). Press, not
--- release: on the phone (Hyprland 0.57.0) release binds missed 9 of 17. Not
--- consumed; Alt+Shift+Tab also switches. Caps Lock is xkb grp:caps_toggle in
--- kb_options, not a bind (a code:66 bind never fired). The handle table is
--- reset here: a config load drops every bind. pcall: a bad file must not
--- stop the rest of the config.
-omamobile_kbd_binds = nil
-local kbd_binds = (os.getenv("XDG_CONFIG_HOME") or ((os.getenv("HOME") or "") .. "/.config")) .. "/hypr/omamobile-keyboard.lua"
-local kbd_file = io.open(kbd_binds, "r")
-if kbd_file then
-  kbd_file:close()
-  pcall(dofile, kbd_binds)
-end
--- An xkb grp: switch already in kb_options (the owner's own, say
--- grp:caps_toggle) keeps every default bind off, or one press would switch
--- twice; keyboard.sh's switch_key then reports caps or none the same way.
--- Read with hl.get_config("input:kb_options"): Hyprland 0.57's Lua API has
--- it (src/config/lua/bindings/LuaBindingsConfigRules.cpp, hlGetConfig) and it
--- returns the value as parsed so far, which includes input.lua (hyprland.lua
--- requires hypr.input before hypr.looknfeel, which loads this file).
-local function kb_has_grp()
-  local ok, v = pcall(function() return hl.get_config("input:kb_options") end)
-  return ok and type(v) == "string" and v:find("grp:", 1, true) ~= nil
-end
-if not omamobile_kbd_binds then
-  omamobile_kbd_binds = {}
-  local grp = kb_has_grp()
-  local not_squeekboard = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } }
-  for _, b in ipairs({
-    { "alt_shift", "ALT + SHIFT_L" }, { "alt_shift", "SHIFT + ALT_L" },
-    { "ctrl_shift", "CTRL + SHIFT_L" }, { "ctrl_shift", "SHIFT + CTRL_L" },
-  }) do
-    local opts = { description = "Keyboard: next layout", device = not_squeekboard, non_consuming = true }
-    local ok, h = pcall(hl.bind, b[2], hl.dsp.exec_cmd("hyprctl switchxkblayout current next"), opts)
-    if ok and h then
-      omamobile_kbd_binds[#omamobile_kbd_binds + 1] = { b[1], h }
-      if grp or b[1] ~= "alt_shift" then pcall(function() h:set_enabled(false) end) end
-    end
-  end
-end
+-- The hardware keyboard's layout switch key is xkb only, a grp: option in
+-- kb_options that Settings > Keyboard writes to input.lua; nothing is bound
+-- here. On the phone (Hyprland 0.57.0) grp:alt_shift_toggle and
+-- grp:ctrl_shift_toggle switched in both key orders, and a press bind on top
+-- of the option switched twice per press. A fresh phone has no grp: option
+-- unless Omarchy's input.lua adds one (grp:alts_toggle for a non-Latin layout).

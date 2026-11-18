@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Keyboard layouts (up to 4) and the hardware switch key, through backends/keyboard.sh. Each change is
-// saved and applied at once; new layouts are added to the on-screen keyboard's list, and the switch key is a Hyprland bind.
+// saved and applied at once; new layouts are added to the on-screen keyboard's list, and the switch key is an xkb grp: option in kb_options.
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -136,7 +136,7 @@ Flickable {
             visible: page.layouts.length > 1
             Layout.fillWidth: true; spacing: 8
             Repeater {
-                // From `keyboard.sh list`: Alt+Shift, Ctrl+Shift, Caps Lock, None (Alt/Ctrl+Shift are Hyprland binds, Caps Lock is xkb grp:caps_toggle)
+                // From `keyboard.sh list`: Alt+Shift, Ctrl+Shift, Caps Lock, None (grp:alt_shift_toggle, grp:ctrl_shift_toggle, grp:caps_toggle, no grp:)
                 model: page.switchKeys
                 delegate: SettingsButton {
                     required property var modelData

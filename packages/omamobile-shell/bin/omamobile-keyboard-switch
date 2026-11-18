@@ -7,9 +7,11 @@
     omamobile-keyboard-switch lock      layout 0 on every real keyboard (lock screen,
                                         polkit prompt: passwords are typed in layout 0)
 
-The switch key itself does not run this: Alt+Shift and Ctrl+Shift run
-`hyprctl switchxkblayout current next` and Caps Lock is xkb grp:caps_toggle
-(see omamobile-settings/backends/keyboard.sh). `next` is kept for scripts.
+The hardware switch key does not run this: it is an xkb grp: option in
+kb_options (grp:alt_shift_toggle, grp:ctrl_shift_toggle or grp:caps_toggle; see
+omamobile-settings/backends/keyboard.sh). Nothing calls this script yet (the
+quick-settings card does not); it is kept, with its tests, for scripts and a
+later caller.
 
 Real keyboards are the ones in `hyprctl -j devices` that are not squeekboard's
 or another virtual keyboard (hl-virtual-keyboard*) or a pseudo-keyboard

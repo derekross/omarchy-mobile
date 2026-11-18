@@ -3,22 +3,21 @@
 # Keyboard layouts for the Settings app. The hardware keyboard's layouts live in Omarchy's user file
 # ~/.config/hypr/input.lua (kb_layout, kb_variant); the on-screen keyboard's list is gsettings
 # org.gnome.desktop.input-sources sources, and a layouts change adds new ones there too.
-# The switch key (measured on the phone, Hyprland 0.57.0, Dell BT keyboard, 2026-11-17):
-# Alt+Shift and Ctrl+Shift are Hyprland press binds running `hyprctl switchxkblayout current next`
-# (11/11 switched, 14-35 ms after the second key went down). Caps Lock is xkb grp:caps_toggle with
-# grp_led:caps in kb_options (12/12, 1-3 ms); a Hyprland bind on code:66 never fired, and
-# grp:alt_shift_toggle only worked in one key order. The binds live in a generated file,
-# ~/.config/hypr/omamobile-keyboard.lua, that phone.lua loads: its "-- switch-key: NAME" line is the
-# choice. Both pairs are bound once (both key orders, on every keyboard but squeekboard's) and only
-# the chosen one is enabled. With no file, phone.lua binds the same set with Alt+Shift on, so "get"
-# reports alt_shift then, or caps when grp:caps_toggle is in the effective kb_options (none for any other grp:,
-# which keeps phone.lua's default binds off). The same Lua
-# is applied live with `hyprctl eval`.
+# The switch key is pure xkb, a grp: option in kb_options, never a Hyprland bind (measured on the phone,
+# Hyprland 0.57.0-3.2, Dell KB7120W over Bluetooth): alt_shift = grp:alt_shift_toggle (20/20 on 2026-11-18,
+# both key orders, 1-2 ms after the second key), ctrl_shift = grp:ctrl_shift_toggle (19/19, both orders),
+# caps = grp:caps_toggle,grp_led:caps (12/12, 1-3 ms, 2026-11-17), none = no grp: option. Press binds on
+# top of the xkb option switched twice per press, so phone.lua binds nothing. "get" reads the choice from
+# the effective kb_options; any other grp: option (Omarchy's grp:alts_toggle for a non-Latin layout, say)
+# reports none, and only a switch-key save replaces it. On a fresh phone nothing switches the hardware
+# layout until a key is picked here, unless Omarchy's input.lua already sets a grp: option (it does not
+# with Latin layouts only). omamobile-keyboard-switch exists but nothing calls it yet (not the
+# quick-settings card either).
 # Prints one line of JSON.
 #   keyboard.sh get                         {"layouts":[{"layout":"us","variant":""}],"switchKey":"alt_shift","active":0}
 #   keyboard.sh list                        {"layouts":[{"layout":"us","name":"English (US)"}],"switchKeys":[...]}
 #   keyboard.sh set layouts us,gr[:variant] 1 to 4 layouts, each a name (and variant) in the xkb rules list
-#   keyboard.sh set switch-key NAME         alt_shift, ctrl_shift, caps or none (default alt_shift)
+#   keyboard.sh set switch-key NAME         alt_shift, ctrl_shift, caps or none
 # "active" is the index Hyprland reports for the main real keyboard, or null without one. Real = not
 # hl-virtual-keyboard* and not a pseudo-keyboard (consumer-control, power-button, video-bus, radio-control,
 # gpio-keys); main = the real one Hyprland marks main, else the first real one with more than one layout,
@@ -26,8 +25,9 @@
 # first entry is not a Latin layout is refused (passwords on the lock screen are typed in layout 1).
 # input.lua is edited in place: only the last live kb_layout, kb_variant and kb_options strings inside an
 # `input = { }` table change (per-device blocks and variables are left alone), comments and every other
-# option stays but grp:, grp_led:caps (set only with caps) and compose:caps with caps
-# (put back when caps lets go, only if it was there: "-- compose-caps: restore" in the bind file), a copy of the old
+# option stays but, on a switch-key save, grp:, grp_led:caps (set only with caps) and compose:caps with caps
+# (put back when caps lets go, only if it was there: "-- compose-caps: restore" in a small state file,
+# ~/.config/hypr/omamobile-keyboard.lua, which nothing loads; it is removed when not needed), a copy of the old
 # file goes to input.lua.bak-omamobile first, and the write is dropped if the file changed meanwhile.
 # A file with no live kb_layout (Omarchy's stock one has them only in comments) gets one hl.config() block
 # appended at the end; get then reports Hyprland's effective values.
@@ -38,10 +38,16 @@
 # (only ones squeekboard has a layout file for, when that directory exists); removed ones are dropped.
 # A switch-key change does not touch gsettings. Switching layouts never writes gsettings either (that made
 # squeekboard send its keymap again, and the app got Latin letters while Hyprland said Greek).
-# Known limits: `current` switches only the main/last keyboard when two real keyboards are connected.
-# A bind file from earlier unreleased commits of this branch keeps its old binds until the next save.
+# Known limits: xkb keeps a layout per keyboard, so with two real keyboards the switch key moves only the
+# one it was pressed on (UNVERIFIED on the phone, only one keyboard tested).
+# A bind file from earlier unreleased commits of this branch ("-- switch-key: alt_shift" or ctrl_shift)
+# is no longer loaded. While kb_options has no grp: option, get reports its choice and the next save
+# writes the matching grp: option and removes the file. Binds it registered stay in Hyprland until
+# `hyprctl reload` (or a new login).
+# When input.lua has no live kb_layout or kb_options, a save needs Hyprland's effective value; if
+# `hyprctl getoption` fails, nothing is written.
 # Test hooks (nothing in the environment sets them): OMAMOBILE_KBD_INPUT is the input.lua path,
-# OMAMOBILE_KBD_BINDS the generated bind file,
+# OMAMOBILE_KBD_BINDS the state file,
 # OMAMOBILE_KBD_RULES the xkb rules .lst file, OMAMOBILE_KEYBOARDS_DIR squeekboard's layout files; the test puts a fake hyprctl and gsettings first on PATH.
 set -euo pipefail
 set +x
@@ -75,22 +81,15 @@ import fcntl, hashlib, json, os, re, shutil, subprocess, sys
 
 KEYS = ("kb_layout", "kb_variant", "kb_options")
 NAME_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
-# Switch keys: each name binds these key strings (both orders, so either key can go down first).
-# Press binds, not release ones: release binds fired only when Shift came up before Alt (8 of 17)
-# and ~110 ms late. non_consuming, so the keys still reach apps. Known cost: Alt+Shift+Tab (and
-# Ctrl+Shift+C/V) also switch the layout. "caps" has no bind: it is xkb (CAPS_OPTS), and compose:caps
-# goes then, as it takes the key. Shift+Caps gives real Caps Lock, but 2 of 4 Shift+Caps presses
-# switched the layout instead on the phone (it also had shift:both_capslock_cancel): cause unknown.
-SWITCH_KEYS = {"alt_shift": ("ALT + SHIFT_L", "SHIFT + ALT_L"),
-               "ctrl_shift": ("CTRL + SHIFT_L", "SHIFT + CTRL_L"),
-               "caps": (), "none": ()}
-CAPS_OPTS = ["grp:caps_toggle", "grp_led:caps"]
-SWITCH_CMD = "hyprctl switchxkblayout current next"
+# Switch keys as xkb options (see the header). caps takes the key, so compose:caps goes with it. Shift+Caps
+# gives real Caps Lock, but 2 of 4 Shift+Caps presses switched the layout instead on the phone (it also
+# had shift:both_capslock_cancel): cause unknown.
+SWITCH_OPTS = {"alt_shift": ["grp:alt_shift_toggle"], "ctrl_shift": ["grp:ctrl_shift_toggle"],
+               "caps": ["grp:caps_toggle", "grp_led:caps"], "none": []}
 SWITCH_NAMES = [("alt_shift", "Alt+Shift"), ("ctrl_shift", "Ctrl+Shift"), ("caps", "Caps Lock"), ("none", "None")]
-DESC = "Keyboard: next layout"
-DEFAULT_KEY = "alt_shift"
 BINDS = os.environ["KBD_BINDS"]
-OPTION_RE = re.compile(r"[a-z0-9_]{1,32}:[A-Za-z0-9_]{1,48}")
+# xkb option names as in base.lst: group:name, the name may hold "-" (compose:caps-altgr, fkeys:basic_13-24)
+OPTION_RE = re.compile(r"[a-z0-9_]{1,32}:[A-Za-z0-9_][A-Za-z0-9_-]{0,47}")
 LATIN = {"us", "gb", "de", "fr", "es", "it", "pt", "nl", "be", "ch", "at", "se", "no", "dk", "fi",
          "is", "ie", "pl", "cz", "sk", "hu", "ro", "hr", "si", "ee", "lv", "lt", "tr", "br", "latam",
          "ca", "au", "nz", "za", "epo"}
@@ -102,7 +101,14 @@ PSEUDO_RE = re.compile(r"hl-virtual-keyboard|.*(consumer-control|power-button|vi
 def out(obj):
     print(json.dumps(obj, separators=(",", ":")))
 
+MARKER_NEW = False  # True while a marker this run wrote has no input.lua write behind it yet
+
 def fail(msg):
+    if MARKER_NEW:
+        try:
+            os.unlink(BINDS)  # input.lua still has compose:caps, so the marker would be stale
+        except OSError:
+            pass
     out({"error": msg})
     sys.exit(2)
 
@@ -229,41 +235,30 @@ def compose_marked():
     except OSError:
         return False
 
-def stored_key():
-    """The file's choice; with no file, phone.lua binds the default (Alt+Shift), so that is the truth."""
+def old_key():
+    """alt_shift or ctrl_shift from an earlier commit's bind file, else None."""
     try:
         with open(BINDS, encoding="utf-8", errors="replace") as f:
             for line in f:
-                m = re.fullmatch(r"-- switch-key: ([a-z_]+)\s*", line)
-                if m and m.group(1) in SWITCH_KEYS:
+                m = re.fullmatch(r"-- switch-key: (alt_shift|ctrl_shift)\s*", line)
+                if m:
                     return m.group(1)
     except OSError:
         pass
-    return DEFAULT_KEY
+    return None
 
-# The binds as Lua, for the file and for hyprctl eval. Every switch key is bound once per Lua state
-# (handles kept in the global omamobile_kbd_binds; phone.lua's default for a phone with no file is the
-# same set) and only the chosen one is enabled. A disabled bind is skipped by Hyprland and consumes
-# nothing. Nothing is ever hl.unbind-ed on a key string (that would take a user's own bind on the key
-# too) or removed by handle (Superwhisper's generated config notes that removing a key's press and
-# release handles one by one crashed Hyprland 0.56; set_enabled is what it uses live). The binds stay
-# with one layout: switchxkblayout next has nowhere to go then.
-def bind_lua(name):
-    lua = "if not omamobile_kbd_binds then\n  omamobile_kbd_binds = {}\n"
-    for n, keys in SWITCH_KEYS.items():
-        for k in keys:
-            lua += ('  omamobile_kbd_binds[#omamobile_kbd_binds + 1] = { "%s", hl.bind("%s", '
-                    'hl.dsp.exec_cmd("%s"), { description = "%s", '
-                    'device = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } }, non_consuming = true }) }\n'
-                    % (n, k, SWITCH_CMD, DESC))
-    lua += ('end\n'
-            'for _, b in ipairs(omamobile_kbd_binds) do pcall(function() b[2]:set_enabled(b[1] == "%s") end) end\n'
-            % name)
-    return lua
-
-def write_binds(name, compose=False):
-    text = ("-- Written by Omarchy Mobile Settings (Keyboard), loaded by phone.lua. Changes here are replaced.\n"
-            "-- switch-key: %s\n" % name + ("-- compose-caps: restore\n" if compose else "")) + bind_lua(name)
+def write_state(compose):
+    """The compose-caps marker on disk when compose, else no state file."""
+    if not compose:
+        try:
+            os.unlink(BINDS)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return False
+        return True
+    text = ("-- Written by Omarchy Mobile Settings (Keyboard); nothing loads it. Changes here are replaced.\n"
+            "-- compose-caps: restore\n")
     tmp = "%s.tmp-omamobile.%d" % (BINDS, os.getpid())
     try:
         os.makedirs(os.path.dirname(BINDS), exist_ok=True)
@@ -280,68 +275,24 @@ def write_binds(name, compose=False):
         return False
     return True
 
-MODBITS = {"SHIFT": 1, "CAPS": 2, "CTRL": 4, "CONTROL": 4, "ALT": 8, "MOD2": 16, "MOD3": 32, "SUPER": 64, "MOD5": 128}
-
-def split_key(k):
-    parts = [p.strip() for p in k.split("+")]
-    return sum(MODBITS.get(p.upper(), 0) for p in parts[:-1]), parts[-1]
-
-def ours_count():
-    """How many of our binds Hyprland has, or None when it cannot be read."""
-    try:
-        binds = json.loads(run(["hyprctl", "-j", "binds"]) or "x")
-    except ValueError:
-        return None
-    if not isinstance(binds, list):
-        return None
-    return sum(1 for b in binds if isinstance(b, dict) and b.get("description") == DESC), binds
-
-ALL_KEYS = [k for ks in SWITCH_KEYS.values() for k in ks]
-
-# Live. UNVERIFIED on the phone: that the omamobile_kbd_binds global survives between `hyprctl eval`
-# calls and the config, and set_enabled through eval. When it does not (more of our binds than the
-# one set afterwards), a key is hl.unbind-ed only when every bind Hyprland lists on it is ours, and
-# the set is bound again; a key that also carries a user's bind is left alone and the save reports
-# that it did not apply live (the file applies on the next config load).
-def apply_binds(name):
-    lua = bind_lua(name)
-    r = run(["hyprctl", "eval", lua])
-    if r is None or "error" in r.lower():
-        return False
-    got = ours_count()
-    if got is None or got[0] == len(ALL_KEYS):
-        return True
-    clean = []
-    for k in ALL_KEYS:
-        mods, key = split_key(k)
-        on = [b for b in got[1] if isinstance(b, dict) and (
-              (key.startswith("code:") and b.get("keycode") == int(key[5:]) and not b.get("modmask"))
-              or (str(b.get("key", "")).lower() == key.lower() and b.get("modmask") == mods))]
-        if any(b.get("description") != DESC for b in on):
-            return False
-        clean.append(k)
-    r = run(["hyprctl", "eval", "".join('pcall(hl.unbind, "%s")\n' % k for k in clean)
-             + "omamobile_kbd_binds = nil\n" + lua])
-    return r is not None and "error" not in r.lower()
-
 def switch_key(options):
-    """caps lives in kb_options, the rest in the bind file; a caps file without the option is none."""
-    if "grp:caps_toggle" in options:
-        return "caps"
-    if not os.path.exists(BINDS) and any(o.startswith("grp:") for o in options):
-        return "none"  # phone.lua keeps its default binds off under an xkb grp: switch
-    sw = stored_key()
-    return "none" if sw == "caps" else sw
+    """The choice, from kb_options alone; any other grp: option is none."""
+    for name in ("alt_shift", "ctrl_shift", "caps"):
+        if SWITCH_OPTS[name][0] in options:
+            return name
+    return "none"
 
 def switch_options(options, sw):
-    """kb_options for switch key sw: every grp: and grp_led:caps out, caps' own back in."""
+    """kb_options for switch key sw: every grp: and grp_led:caps out, sw's own back in."""
     keep = [o for o in options if not o.startswith("grp:") and o != "grp_led:caps"]
     if sw == "caps":
-        keep = [o for o in keep if o != "compose:caps"] + CAPS_OPTS
-    return keep
+        keep = [o for o in keep if o != "compose:caps"]
+    return keep + SWITCH_OPTS[sw]
 
 def state(layouts, variants, options):
     sw = switch_key(options)
+    if sw == "none" and not any(o.startswith("grp:") for o in options):
+        sw = old_key() or sw
     return {"layouts": [{"layout": l, "variant": v} for l, v in zip(layouts, variants)],
             "switchKey": sw, "active": active()}
 
@@ -389,9 +340,12 @@ def write(data, st, text, found, new):
         indent = re.match(r"[ \t]*", text[ls:]).group(0)
         le = text.find("\n", anchor[3])
         le = len(text) if le < 0 else le
-        if not re.fullmatch(r"[ \t]*,[ \t]*(--[^\n]*)?", text[anchor[3]:le]):
-            fail("input.lua: cannot add %s next to kb_layout" % missing[0])
-        text = text[:le] + "".join('\n%s%s = "%s",' % (indent, k, new[k]) for k in missing) + text[le:]
+        if re.fullmatch(r"[ \t]*,[ \t]*(--[^\n]*)?", text[anchor[3]:le]):
+            text = text[:le] + "".join('\n%s%s = "%s",' % (indent, k, new[k]) for k in missing) + text[le:]
+        else:
+            # kb_layout = "us" } on one line: the keys go right after the string, in the same table
+            text = (text[:anchor[3]] + "".join(', %s = "%s"' % (k, new[k]) for k in missing)
+                    + text[anchor[3]:])
     updated = text.encode("utf-8")
     if updated == data:
         return
@@ -458,21 +412,26 @@ def apply_live(layouts, variants, options):
     r = run(["hyprctl", "--batch", batch])
     return r is not None and "error" not in r.lower()
 
-def effective(key):
-    s = run(["hyprctl", "-j", "getoption", "input:" + key]) or ""
+def effective(key, need):
+    """Hyprland's value; None when it cannot say (need: fail then, as a save must not guess)."""
+    s = run(["hyprctl", "-j", "getoption", "input:" + key])
     try:
         v = json.loads(s).get("str", "")
-    except (ValueError, AttributeError):
-        v = ""
-    return v if isinstance(v, str) else ""
+    except (TypeError, ValueError, AttributeError):
+        v = None
+    if not isinstance(v, str):
+        v = None
+    if v is None and need:
+        fail("cannot read Hyprland's input:%s, nothing written" % key)
+    return v
 
-def effective_options():
-    return [o for o in fields(effective("kb_options")) if OPTION_RE.fullmatch(o)]
+def effective_options(need=False):
+    return [o for o in fields(effective("kb_options", need) or "") if OPTION_RE.fullmatch(o)]
 
-# No live kb_layout (the stock file): what Hyprland runs with now, "us" when it cannot say.
-def effective_layouts():
-    lay = [l for l in fields(effective("kb_layout")) if NAME_RE.fullmatch(l)] or ["us"]
-    var = fields(effective("kb_variant"))
+# No live kb_layout (the stock file): what Hyprland runs with now; get says "us" when it cannot say.
+def effective_layouts(need=False):
+    lay = [l for l in fields(effective("kb_layout", need) or "") if NAME_RE.fullmatch(l)] or ["us"]
+    var = fields(effective("kb_variant", need) or "")
     var = [v if NAME_RE.fullmatch(v) else "" for v in var][:len(lay)]
     return lay, var + [""] * (len(lay) - len(var))
 
@@ -517,7 +476,7 @@ if key == "layouts":
     if new_l[0] not in LATIN:
         fail("the first layout must be a Latin one (passwords on the lock screen are typed in it)")
 else:
-    if value not in SWITCH_KEYS:
+    if value not in SWITCH_OPTS:
         fail("unknown switch key")
 
 lockpath = path + ".lock-omamobile"
@@ -529,33 +488,34 @@ except OSError:
 data, st, text = read_file()
 found, layouts, variants, options = parse(text)
 if "kb_layout" not in found:
-    layouts, variants = effective_layouts()
+    layouts, variants = effective_layouts(True)
 old_names = lst_names(layouts, variants)
 if "kb_options" not in found:
-    options = effective_options()  # keep Omarchy's defaults when input.lua does not set kb_options
+    options = effective_options(True)  # keep Omarchy's defaults when input.lua does not set kb_options
+old_options = options
+compose = None  # None: the state file is left as it is (a layouts save)
 if key == "layouts":
     layouts, variants = new_l, new_v
-    sw = switch_key(options)
-    if sw == "none" and not os.path.exists(BINDS):
-        sw = DEFAULT_KEY  # the grp: option goes below, so Alt+Shift takes over as before
+    migrate = old_key()
+    if migrate and not any(o.startswith("grp:") for o in options):
+        options = switch_options(options, migrate)  # the earlier bind file's choice, now as xkb
+        compose = False
 else:
     sw = value
-old_options = options
-# compose:caps goes while caps holds the key; the marker brings it back when caps lets go, and only then
-was_caps = "grp:caps_toggle" in options
-if sw == "caps":
-    compose = "compose:caps" in options or (was_caps and compose_marked())
-else:
-    compose = False
-options = switch_options(options, sw)
-if sw != "caps" and was_caps and compose_marked() and "compose:caps" not in options:
-    options = options + ["compose:caps"]
-# The marker goes to disk before input.lua loses compose:caps, so a failed write in between can't lose it:
-# first the old choice plus the marker (harmless while caps is not on), the new choice after input.lua.
-# Leaving caps, input.lua gets compose:caps back first, then the marker goes.
-if compose and not compose_marked():
-    if not write_binds(switch_key(old_options), True):
-        fail("cannot write " + os.path.basename(BINDS))
+    # compose:caps goes while caps holds the key; the marker brings it back when caps lets go, and only then
+    was_caps = "grp:caps_toggle" in options
+    marked = compose_marked()
+    compose = sw == "caps" and ("compose:caps" in options or (was_caps and marked))
+    options = switch_options(options, sw)
+    if sw != "caps" and was_caps and marked and "compose:caps" not in options:
+        options = options + ["compose:caps"]
+    # The marker goes to disk before input.lua loses compose:caps, so a failed write in between can't
+    # lose it (harmless while caps is not on); leaving caps, input.lua gets compose:caps back first,
+    # then the marker goes.
+    if compose and not marked:
+        if not write_state(True):
+            fail("cannot write " + os.path.basename(BINDS))
+        MARKER_NEW = True
 live_ok = osk_ok = True
 if key == "layouts" or options != old_options:
     new = {"kb_layout": ",".join(layouts), "kb_options": ",".join(options)}
@@ -564,11 +524,11 @@ if key == "layouts" or options != old_options:
     if any(variants) or "kb_variant" in found:
         new["kb_variant"] = ",".join(variants) if any(variants) else ""
     write(data, st, text, found, new)
+    MARKER_NEW = False
     osk_ok = key != "layouts" or sync_osk(old_names, lst_names(layouts, variants))
     live_ok = apply_live(layouts, variants, options)
-if not write_binds(sw, compose):
+if compose is not None and not write_state(compose):
     fail("cannot write " + os.path.basename(BINDS))
-live_ok = apply_binds(sw) and live_ok
 if not live_ok:
     fail("saved, but Hyprland did not take it live"
          + ("" if osk_ok else ", and the on-screen keyboard list was not updated"))
