@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 7 (panther) suspend: s2idle, on the Pixel 7 Pro's path
 
-Status (2026-11-16): Z1, Z3, Z4 and P7 passed; Z2 found its cause. The screen comes back after s2idle (DISPLAY-PLAN D5), the RTC alarm wakes the phone ([linux-omarchy-mobile#201](https://github.com/derekross/linux-omarchy-mobile/pull/201), merged), and Power and Volume Down wake it too. Wi-Fi's hang after a resume is the firmware trapping on the freeze path (Z2g to Z2k); on `systemctl suspend` it hasn't trapped in 256 resumes. So device-panther unloads Wi-Fi around sleep by default (#475), and a check that reloads it when it is kept loaded (Z2l, Z2m) and two brcmfmac patches are pull requests to come. Z6 has standby numbers (Z6b to Z6k): about 284 mA asleep with the memory bus at 2028 MHz, 184-200 mA at 1014 MHz (a kernel pull request to come), 52 mA more with Wi-Fi kept. Power off powers off on a kernel with [linux-omarchy-mobile#233](https://github.com/derekross/linux-omarchy-mobile/pull/233) (P7); the upower drop-in waits for a kernel release with it and for off-mode charging (#788). Z5 hasn't run.
+Status (2026-11-16): Z1, Z3, Z4 and P7 passed; Z2 found its cause. The screen comes back after s2idle (DISPLAY-PLAN D5, to come with the 90 Hz pull request), the RTC alarm wakes the phone ([linux-omarchy-mobile#201](https://github.com/derekross/linux-omarchy-mobile/pull/201), merged), and Power and Volume Down wake it too. Wi-Fi's hang after a resume is the firmware trapping on the freeze path (Z2g to Z2k); on `systemctl suspend` it hasn't trapped in 256 resumes. So device-panther unloads Wi-Fi around sleep by default (#475), and a check that reloads it when it is kept loaded (Z2l, Z2m) and two brcmfmac patches are pull requests to come. Z6 has standby numbers (Z6b to Z6k): asleep with Wi-Fi kept, about 284-296 mA with the memory bus at 2028 MHz (Z6c, Z6j) and 248-251 mA at 1014 MHz (Z6j, Z6k; the 1014 MHz floor is a kernel pull request to come); at 1014 MHz with Wi-Fi unloaded, 184-200 mA (Z6k). Power off powers off on a kernel with [linux-omarchy-mobile#233](https://github.com/derekross/linux-omarchy-mobile/pull/233) (P7); the kernel releases since `kernel-2026.11.13` carry it, so the upower drop-in waits only for off-mode charging (#788). Z5 hasn't run.
 
 The Pixel 7 Pro (cheetah, the same gs201) has done this work:
 `device/cheetah/SUSPEND-PLAN.md` explains s2idle on gs201, the wake
@@ -17,7 +17,8 @@ the Pixel 7 Pro has it.
 ## What is known
 
 **Kernel [V].** The daily kernel (`7.3.0-rc6-omamobile-push1-g1ba78e119cc8`,
-DISPLAY-PLAN D5) has, from `omamobile`:
+DISPLAY-PLAN D5, to come with the 90 Hz pull request) has, from
+`omamobile`:
 - `mem_sleep_default=s2idle` in panther's bootargs, so `mem_sleep` reads
   `[s2idle] deep` (gs201 never wakes from `deep`);
 - the S2MPG12 PMIC and its RTC as `rtc0`, with `alarmtimer`;
@@ -35,7 +36,7 @@ DISPLAY-PLAN D5) has, from `omamobile`:
 - USB came back by itself after each wake.
 - The panel woke through its cold init, or kept running at 90 Hz.
 - Each resume printed one UFS `dme-set: attr-id 0x4021` line, as the Pixel
-  9 Pro's clean resumes do (`device/tegu/SLEEP-PLAN.md`), and no UFS
+  9a's clean resumes do (`device/tegu/SLEEP-PLAN.md`), and no UFS
   errors.
 
 **Wake-enabled devices [V]:**
@@ -62,7 +63,8 @@ plugging or unplugging the cable may wake the phone.
 
 The shell and Omarchy packages here are far behind `main`'s (0.2.100,
 0.1.32). They come from the published channel. The phone's
-`[omamobile]` still points at a local, contributor-signed repo (NOTES), so
+`[omamobile]` still points at a local, contributor-signed repo (NOTES, to come with the 90 Hz pull
+request), so
 **Z5 waits for that repository change**.
 
 **Power off reboots the phone** (NOTES 2026-10-28), spending a slot B
@@ -166,7 +168,8 @@ The package gets the Pixel 7 Pro's hook:
 - A `test/all` case, as device-cheetah's.
 
 It is installed as a local build (device-panther 0.1.7.2), with
-`tools/phone-install-package` and the temporary pacman config (NOTES).
+`tools/phone-install-package` and the temporary pacman config (NOTES, to come with the 90 Hz
+pull request).
 Then the Pixel 7 Pro's P1:
 1. `rtcwake -m no -s 40`, then `systemctl suspend`, through logind and the
    hook.
@@ -1041,7 +1044,9 @@ spsr and sp, and the type is printed as it is in the record.
 
 **Z2k's boot.** The `push` of `ptest-daily6` found slot B with no retry
 left (not counted beforehand), so the phone fell to slot A's stock
-recovery. Nothing was accepted there. `adb reboot bootloader` reached
+recovery. Only the recovery screen came up (`adb devices` listed the
+phone as `recovery`); Android itself didn't start. Nothing was accepted
+there. `adb reboot bootloader` reached
 fastboot: current slot A, B retry 0, not successful, not unbootable.
 `bin/omamobile flash` wrote slot B's five images and booted
 `gfb56a7a880cf`: system running, Wi-Fi up, Bluetooth powered, charging,
@@ -1662,5 +1667,5 @@ Takeaways:
   kernel release carries #233.
 - With the cable in, the charger boot starts the whole phone. The Pixel 7
   Pro handles `androidboot.mode = "charger"` in its device package
-  (omarchy-mobile#554); panther needs the same before the drop-in, or a
+  (#730, device-cheetah 0.1.55, which carried #554's commits); panther needs the same before the drop-in, or a
   phone powered off on the cable comes back up.
