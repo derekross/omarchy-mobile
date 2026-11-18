@@ -10,9 +10,10 @@ Tracking issue: [#913](https://github.com/derekross/omarchy-mobile/issues/913).
 ## Stage 0: stock Android capture
 
 `R/` means the contributor's private capture made with `bin/omamobile capture
-komodo-stock` over ADB on 2026-11-18. It was unrooted, so there is no live DT,
-`dmesg`, `/proc/iomem`, or root-only kernel state. The capture contains device
-identifiers and is not in this repository.
+komodo-stock` over ADB on 2026-11-18, plus the named read-only follow-up queries
+below. It was unrooted, so there is no live DT blob or property values,
+`dmesg`, `/proc/iomem`, or other root-only kernel state. The capture contains
+device identifiers and is not in this repository.
 
 ### Identity and current boot
 
@@ -20,6 +21,7 @@ identifiers and is not in this repository.
   [V] (R/ `getprop.txt:675,677,872,878,926`).
 - **Android 17, build `CP3A.261005.005`, security patch 2026-10-05** [V]
   (R/ `getprop.txt:764,778,783`).
+- **Stock kernel `6.1.162-android14-11`** [V] (R/ `kernel-version.txt:1`).
 - **Currently running slot B; bootloader locked and verified boot green** [V]
   (R/ `getprop.txt:666,695,709,732`). This says nothing about the other slot's
   bootloader version or slot health.
@@ -32,6 +34,10 @@ identifiers and is not in this repository.
 - **Eight CPUs** [V] (R/ `proc.txt:7-70`): four with CPU part `0xd80`, three
   with `0xd81`, and one with `0xd82`. Part names are not inferred here.
 - **`MemTotal` 15,957,128 kB** [V] (R/ `proc.txt:73`).
+- **An unrooted listing of `/proc/device-tree` returned 732 entries, but
+  reading the root `compatible` property was denied** [V]
+  (R/ `device-tree-nodes.txt:1-732`, `device-tree-nodes.err:1`). These names
+  are not a substitute for the live DT property values.
 - **A/B names exist for `boot`, `init_boot`, `vendor_boot`,
   `vendor_kernel_boot`, and `dtbo`; `super` and `userdata` are also present**
   [V] (R/ `partitions-by-name.txt:11-12,18-19,30-31,51,57,64-67`). Partition
