@@ -1,0 +1,85 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Fetch the Android NDK the Pixel 9a's GNSS HAL client is built with
+# (packages/omamobile-gnss/bionic), at the release tools/ndk.lock pins, from
+# Google's download host, checked against the SHA-256 and the size recorded
+# there before anything is unpacked.
+#
+#   tools/fetch-ndk [--dir DIR] [--lock FILE] [--print]
+#     --dir    where the NDK is kept (default $OMAMOBILE_NDK_DIR, else
+#              ~/.cache/omamobile/ndk: outside the repository)
+#     --lock   the pin (default tools/ndk.lock): RELEASE REVISION SHA256 SIZE URL
+#     --print  print only the NDK's path, for
+#              make -C packages/omamobile-gnss/bionic NDK="$(tools/fetch-ndk --print)"
+#
+# The archive is about 740 MB and the NDK about 2.5 GB unpacked; an NDK that
+# is already there, with the pinned revision in its source.properties, is
+# used as it is. The archive is removed once it is unpacked. Google builds
+# the NDK's compilers for x86_64 Linux (and macOS), so the make runs on an
+# x86_64 build host. Nothing is built or installed here.
+#
+# Licence: the NDK is Google's (Apache-2.0 and others; its NOTICE files are
+# in the tree). The project redistributes none of it.
+set -euo pipefail
+self=$(readlink -f "${BASH_SOURCE[0]}")
+ROOT=$(cd -- "$(dirname -- "$self")/.." && pwd)
+die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
+say() { ((quiet)) || printf '\e[1m==> %s\e[0m\n' "$*" >&2; }
+
+dir=${OMAMOBILE_NDK_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile/ndk}
+lock=$ROOT/tools/ndk.lock
+quiet=0
+while (($#)); do
+  case $1 in
+    --dir) dir=${2:?--dir needs a directory}; shift ;;
+    --lock) lock=${2:?--lock needs a file}; shift ;;
+    --print) quiet=1 ;;
+    -h|--help) source "$ROOT/tools/lib/usage.sh"; usage_from_header "$self"; exit 0 ;;
+    *) die "unknown argument $1" ;;
+  esac
+  shift
+done
+
+[[ -f $lock ]] || die "no lock file $lock"
+read -r release revision sum size url < <(grep -v '^[[:space:]]*\(#\|$\)' "$lock" | head -1) || true
+[[ $release =~ ^r[0-9]+[a-z]?$ && $revision =~ ^[0-9]+(\.[0-9]+)+$ && $sum =~ ^[0-9a-f]{64}$ && $size =~ ^[0-9]+$ ]] ||
+  die "$lock: one line of RELEASE REVISION SHA256 SIZE URL"
+[[ $url == https://dl.google.com/android/repository/* || $url == file://* ]] ||
+  die "$lock: the NDK comes from https://dl.google.com/android/repository/"
+
+mkdir -p "$dir"
+dir=$(cd -- "$dir" && pwd)
+ndk=$dir/android-ndk-$release
+has_revision() { [[ $(sed -n 's/^Pkg\.Revision *= *//p' "$1/source.properties" 2>/dev/null | tr -d '\r') == "$revision" ]]; }
+
+if has_revision "$ndk"; then
+  say "the NDK $release ($revision) is in $ndk"
+  printf '%s\n' "$ndk"
+  exit 0
+fi
+[[ -e $ndk ]] && die "$ndk is there but isn't the NDK $release ($revision): remove it first"
+
+command -v curl >/dev/null || die "curl is needed"
+if command -v unzip >/dev/null; then unpack() { unzip -q "$1" -d "$2"; }
+elif command -v bsdtar >/dev/null; then unpack() { bsdtar -xf "$1" -C "$2"; }
+else die "unzip or bsdtar is needed (they keep the compilers executable)"; fi
+[[ $(uname -m) == x86_64 ]] || say "this host is $(uname -m): the NDK's compilers run on x86_64 Linux only"
+
+part=$dir/.android-ndk-$release.zip.part
+work=$dir/.unpack-$$
+trap 'rm -rf "$work" "$part"' EXIT
+say "downloading the NDK $release ($((size / 1000000)) MB) from ${url%%/android-ndk-*}"
+if ((quiet)); then progress=(-sS); else progress=(--progress-bar); fi
+curl -fL --retry 3 "${progress[@]}" -o "$part" "$url" || die "the download failed"
+got_size=$(stat -c %s "$part")
+[[ $got_size == "$size" ]] || die "the download is $got_size bytes, not the pinned $size: nothing unpacked"
+got=$(sha256sum "$part" | cut -d' ' -f1)
+[[ $got == "$sum" ]] || die "the download's SHA-256 is $got, not the pinned $sum: nothing unpacked"
+
+mkdir -p "$work"
+unpack "$part" "$work" || die "unpacking failed"
+[[ -d $work/android-ndk-$release ]] && has_revision "$work/android-ndk-$release" ||
+  die "the archive holds no android-ndk-$release with revision $revision"
+mv "$work/android-ndk-$release" "$ndk"
+say "the NDK $release ($revision) is in $ndk"
+printf '%s\n' "$ndk"

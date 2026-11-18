@@ -1,0 +1,73 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/fetch-ndk against a local fixture (a file:// URL, no network): an
+# archive that matches its pin is unpacked with its executables kept and the
+# archive removed, an NDK already there is used without a download, and a
+# wrong size, a wrong SHA-256, an archive without the pinned revision, a
+# different NDK in the way and a lock that isn't one are refused, leaving
+# nothing behind.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+for tool in curl python3 sha256sum; do
+  command -v "$tool" >/dev/null || { echo "ok - # skip: no $tool"; exit 0; }
+done
+command -v unzip >/dev/null || command -v bsdtar >/dev/null || { echo "ok - # skip: no unzip or bsdtar"; exit 0; }
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+fail() { echo "not ok - $*" >&2; [[ -f $t/log ]] && cat "$t/log" >&2; exit 1; }
+fetch() { tools/fetch-ndk --dir "$t/cache" --lock "$t/lock" "$@" > "$t/out" 2> "$t/log"; }
+
+# The fixture: an NDK-shaped tree with an executable compiler, zipped as Google zips it
+mkdir -p "$t/src/android-ndk-r9z/toolchains/llvm/prebuilt/linux-x86_64/bin"
+printf 'Pkg.Desc = Android NDK\nPkg.Revision = 9.0.1234\n' > "$t/src/android-ndk-r9z/source.properties"
+printf '#!/bin/sh\necho clang\n' > "$t/src/android-ndk-r9z/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+chmod 755 "$t/src/android-ndk-r9z/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+python3 -I - "$t/src" "$t/ndk.zip" <<'PY'
+import os, sys, zipfile
+root, out = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+    for d, _, files in os.walk(root):
+        for f in files:
+            p = os.path.join(d, f)
+            z.write(p, os.path.relpath(p, root))
+PY
+sum=$(sha256sum "$t/ndk.zip" | cut -d' ' -f1); size=$(stat -c %s "$t/ndk.zip")
+lock() { printf '# a comment\n\n%s\n' "$1" > "$t/lock"; }
+
+lock "r9z 9.0.1234 $sum $size file://$t/ndk.zip"
+fetch --print || fail "a matching archive is fetched"
+[[ $(cat "$t/out") == "$t/cache/android-ndk-r9z" ]] || fail "--print prints the NDK's path: $(cat "$t/out")"
+[[ ! -s $t/log ]] || fail "--print says nothing else"
+[[ -x $t/cache/android-ndk-r9z/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]] || fail "the compiler stays executable"
+[[ -z $(find "$t/cache" -maxdepth 1 -name '.*' -newer "$t/lock") ]] || fail "no archive or work directory is left: $(ls -A "$t/cache")"
+echo "ok - a matching archive is unpacked, its compiler executable, the archive removed"
+
+mv "$t/ndk.zip" "$t/ndk.zip.away"
+fetch || fail "an NDK already there needs no download"
+grep -c 'is in' "$t/log" >/dev/null && [[ $(cat "$t/out") == "$t/cache/android-ndk-r9z" ]] || fail "it says where the NDK is"
+mv "$t/ndk.zip.away" "$t/ndk.zip"
+echo "ok - an NDK already there is used as it is"
+
+rm -rf "$t/cache"
+lock "r9z 9.0.1234 $sum $((size + 1)) file://$t/ndk.zip"
+if fetch; then fail "a wrong size is refused"; fi
+grep -c 'not the pinned' "$t/log" >/dev/null || fail "the size refusal says why"
+lock "r9z 9.0.1234 $(printf '%064d' 0) $size file://$t/ndk.zip"
+if fetch; then fail "a wrong SHA-256 is refused"; fi
+grep -c "SHA-256 is $sum" "$t/log" >/dev/null || fail "the checksum refusal says why"
+[[ -z $(ls -A "$t/cache") ]] || fail "a refused archive leaves nothing: $(ls -A "$t/cache")"
+lock "r9z 9.9.9 $sum $size file://$t/ndk.zip"
+if fetch; then fail "an archive without the pinned revision is refused"; fi
+[[ ! -e $t/cache/android-ndk-r9z ]] || fail "an archive without the pinned revision isn't put in place"
+echo "ok - a wrong size, a wrong SHA-256 or another revision is refused, leaving nothing"
+
+mkdir -p "$t/cache/android-ndk-r9z"; printf 'Pkg.Revision = 8.0.1\n' > "$t/cache/android-ndk-r9z/source.properties"
+lock "r9z 9.0.1234 $sum $size file://$t/ndk.zip"
+if fetch; then fail "another NDK in the way is refused"; fi
+grep -c 'remove it first' "$t/log" >/dev/null || fail "it says to remove the other NDK"
+rm -rf "$t/cache"
+lock "r9z 9.0.1234 $sum $size https://example.org/android-ndk-r9z-linux.zip"
+if fetch; then fail "a download from anywhere but Google is refused"; fi
+lock "r9z 9.0.1234 $sum"
+if fetch; then fail "a short lock line is refused"; fi
+echo "ok - another NDK in the way, another host and a broken lock are refused"
