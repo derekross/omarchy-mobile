@@ -133,7 +133,11 @@ local function find(keys, release)
 end
 local function device_is(b, inclusive)
   local d = b.opts.device
-  return d ~= nil and d.inclusive == inclusive and #d.list == 1 and d.list[1] == osk
+  if d == nil or d.inclusive ~= inclusive or d.list[1] ~= osk then return false end
+  -- squeekboard's own keys are squeekboard's alone; what is kept from the
+  -- on-screen keyboard is kept from Tactus too
+  if inclusive then return #d.list == 1 end
+  return #d.list == 2 and d.list[2] == "hl-virtual-keyboard-tactus"
 end
 local function one(keys, release, command)
   local f = find(keys, release)
@@ -152,7 +156,7 @@ for _, keys in ipairs({ "CTRL + ALT + DELETE", "ALT + TAB", "ALT + SHIFT + TAB",
   local f = find(keys)
   local ok = #f > 0
   for _, b in ipairs(f) do ok = ok and device_is(b, false) end
-  check(ok, keys .. " is bound for every keyboard but squeekboard")
+  check(ok, keys .. " is bound for every keyboard but the on-screen ones")
 end
 check(#find("ALT + TAB") == 2 and find("ALT + TAB")[1].dispatcher.dsp == "cycle_next", "Alt + Tab keeps both of Omarchy's actions")
 local f9 = find("F9", true)

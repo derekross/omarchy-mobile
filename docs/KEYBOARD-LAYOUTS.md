@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Keyboard layouts
 
-The on-screen keyboard is squeekboard. Omarchy Mobile ships its own copies of squeekboard's layouts, with an action row and a globe key that opens the shell's language sheet. This page says what ships, how a user picks a language, how a user adds a layout file of their own, and how a contributor changes the shipped set. Greek is the example throughout: English first, Greek second, the globe opens the language sheet, and one tap on a row switches.
+The on-screen keyboard is squeekboard. (An owner may install Tactus beside it and pick it in Setup > Keyboard, `packages/tactus`; this page is about squeekboard.) Omarchy Mobile ships its own copies of squeekboard's layouts, with an action row and a globe key that opens the shell's language sheet. This page says what ships, how a user picks a language, how a user adds a layout file of their own, and how a contributor changes the shipped set. Greek is the example throughout: English first, Greek second, the globe opens the language sheet, and one tap on a row switches.
 
 Everything here is from the `omamobile-shell` package (`packages/omamobile-shell/`). Paths below are relative to it unless they start with `docs/`, `tools/` or `tests/`, or are `AGENTS.md`.
 

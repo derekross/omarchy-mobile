@@ -52,7 +52,8 @@ local function find(keys)
 end
 local function not_osk(b)
   local d = b.opts.device
-  return d ~= nil and d.inclusive == false and #d.list == 1 and d.list[1] == "hl-virtual-keyboard-squeekboard"
+  return d ~= nil and d.inclusive == false and #d.list == 2 and d.list[1] == "hl-virtual-keyboard-squeekboard"
+    and d.list[2] == "hl-virtual-keyboard-tactus"
 end
 local space, f9 = find("ALT + SPACE"), find("F9")
 for _, b in ipairs(f9) do
