@@ -1,0 +1,160 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Keep the USB gadget's network addresses the same on every boot.
+#
+# The initramfs creates the gadget (CDC NCM + ACM), and the kernel gives the
+# NCM function two new random MAC addresses each time: HOST, the host's end
+# of the link (the address a Mac names its interface after), and DEV, the
+# phone's usb0. So every boot looks like a new device to the host. Whether
+# macOS's "Allow accessories to connect: ask" prompt keys on the address is
+# untested (#448); this only makes the addresses stable.
+#
+# This makes both addresses once, from /dev/urandom (never from the serial
+# number or anything else that identifies the phone), keeps them on the
+# phone's root (userdata) and puts them on the gadget at every boot.
+#
+# The kernel refuses to change the addresses while the function is part of a
+# configuration, so the gadget is taken apart and put back in the same order:
+# unbind the UDC, unlink the functions, write the addresses, link the
+# functions again (NCM first, as the initramfs does), bind the UDC. The host
+# sees one unplug and plug early in the boot. Whatever happens in between,
+# the functions are linked again and the UDC bound again before this exits.
+# A gadget that already has the addresses, or none at all, is left alone.
+#
+# A marker is written and synced before the UDC is unbound, and removed once
+# the gadget is back together. USB is the phone's only link, so a hang inside
+# the unbind or the bind would repeat on every boot: if the next start finds
+# the marker, it logs that the previous boot did not finish, removes it and
+# leaves the gadget as the initramfs made it (CONTRIBUTING 3.4). Only the
+# normal path removes the marker: when the EXIT trap runs instead (a start
+# timeout's SIGTERM, or a refused unbind), the gadget is put back together but
+# the marker stays, so a slow hang that systemd interrupts is not repeated at
+# every boot either.
+#
+# The addresses stay out of the log: the saved pair is what the phone shows
+# every computer it is plugged into.
+#   omamobile-usb-mac        (omamobile-usb-mac.service, before the network)
+# Tests: USB_MAC_FILE, USB_GADGET, USB_IFACE and USB_NETDIR point it at a fake gadget.
+set -uo pipefail
+
+state=${USB_MAC_FILE:-/var/lib/omamobile/usb-gadget-mac}
+g=${USB_GADGET:-/sys/kernel/config/usb_gadget/g1}
+iface=${USB_IFACE:-usb0}
+cfg=$g/configs/c.1
+fn=$g/functions/ncm.usb0
+marker=${state%/*}/usb-mac-cycle-started
+log() { echo "omamobile-usb-mac: $*"; }
+
+# The last start hung inside the unbind or the bind: do not do it again this boot
+if [[ -e $marker ]]; then
+  log "the previous boot did not finish changing the gadget ($(cat "$marker" 2>/dev/null)); leaving the gadget as the initramfs made it"
+  rm -f "$marker"
+  sync -f "${marker%/*}" 2>/dev/null || sync
+  exit 0
+fi
+
+# A unicast, locally administered address: the first byte's low two bits are 10.
+valid() { [[ $1 =~ ^[0-9a-f]{2}(:[0-9a-f]{2}){5}$ ]] && (( (16#${1:0:2} & 3) == 2 )); }
+random_mac() {
+  local b
+  b=$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')
+  printf '%02x:%s:%s:%s:%s:%s\n' $(( (16#${b:0:2} & 0xfc) | 0x02 )) \
+    "${b:2:2}" "${b:4:2}" "${b:6:2}" "${b:8:2}" "${b:10:2}"
+}
+
+# The two addresses: the saved ones, or new ones saved before they are used
+host= dev=
+if [[ -r $state ]]; then
+  host=$(sed -n 's/^host=//p' "$state" | head -n1)
+  dev=$(sed -n 's/^dev=//p' "$state" | head -n1)
+fi
+if ! valid "$host" || ! valid "$dev" || [[ $host == "$dev" ]]; then
+  host=$(random_mac)
+  dev=$(random_mac)
+  while [[ $dev == "$host" ]]; do dev=$(random_mac); done
+  if ! { mkdir -p "${state%/*}" &&
+         (umask 077; printf 'host=%s\ndev=%s\n' "$host" "$dev" > "$state.new") &&
+         sync "$state.new" && mv -f "$state.new" "$state" && sync "${state%/*}"; }; then
+    # Never apply an address that would not be there at the next boot
+    log "cannot save $state; leaving the gadget as it is"
+    rm -f "$state.new"
+    exit 1
+  fi
+  log "made and saved a new pair of USB addresses in $state"
+fi
+
+[[ -d $fn && -d $cfg ]] || { log "no NCM function in $g; nothing to do"; exit 0; }
+
+# usb0 itself keeps the address it was created with: set it as well. The
+# kernel refuses a new address on a link that is up, so take it down for the
+# change; this runs before the network is configured, which brings it up again.
+set_iface() {
+  local net=${USB_NETDIR:-/sys/class/net}
+  [[ -e $net/$iface ]] || return 0
+  [[ $(cat "$net/$iface/address" 2>/dev/null) == "$dev" ]] && return 0
+  ip link set dev "$iface" address "$dev" 2>/dev/null && return 0
+  { ip link set dev "$iface" down && ip link set dev "$iface" address "$dev"; } 2>/dev/null \
+    || log "could not set the address of $iface"
+  ip link set dev "$iface" up 2>/dev/null
+  return 0
+}
+
+read -r cur_host _ < "$fn/host_addr" 2>/dev/null || cur_host=
+read -r cur_dev _ < "$fn/dev_addr" 2>/dev/null || cur_dev=
+if [[ ${cur_host,,} == "$host" && ${cur_dev,,} == "$dev" ]]; then
+  log "the gadget already has the saved pair"
+  set_iface
+  exit 0
+fi
+
+# The functions in the configuration now, NCM first
+links=()
+[[ -L $cfg/ncm.usb0 ]] && links+=(ncm.usb0)
+for l in "$cfg"/*; do
+  [[ -L $l && ${l##*/} != ncm.usb0 ]] && links+=("${l##*/}")
+done
+
+udc=$(cat "$g/UDC" 2>/dev/null) || udc=
+unbound=0
+restore() {
+  local n
+  for n in "${links[@]}"; do
+    [[ -e $cfg/$n ]] || ln -s "$g/functions/$n" "$cfg/$n" || log "could not link $n again"
+  done
+  if (( unbound )); then
+    echo "$udc" > "$g/UDC" || log "could not bind $udc again"
+    unbound=0
+  fi
+}
+# Back together on the normal path: the marker is for a hang, not a failure.
+# The trap calls restore alone and leaves it.
+finish() {
+  rm -f "$marker"
+  sync -f "${marker%/*}" 2>/dev/null || sync
+}
+
+# Written and synced before anything is taken apart; if it cannot be, nothing is
+if ! { date -Is > "$marker" && { sync -f "$marker" 2>/dev/null || sync; }; }; then
+  log "cannot write $marker; leaving the gadget as it is"
+  rm -f "$marker"
+  exit 1
+fi
+trap restore EXIT
+
+if [[ -n $udc ]]; then
+  echo "" > "$g/UDC" || { log "could not unbind $udc"; exit 1; }
+  unbound=1
+fi
+for n in "${links[@]}"; do rm -f "$cfg/$n"; done
+
+rc=0
+echo "$host" > "$fn/host_addr" || { log "the kernel refused host_addr"; rc=1; }
+echo "$dev" > "$fn/dev_addr" || { log "the kernel refused dev_addr"; rc=1; }
+
+restore
+trap - EXIT
+finish
+(( rc )) && exit "$rc"
+log "the gadget now has the saved pair"
+set_iface
+exit 0

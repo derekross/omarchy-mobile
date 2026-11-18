@@ -1,0 +1,34 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Offline checks for the wlrctl package: the PKGBUILD lists what it should, the
+# patch's checksum is the one the PKGBUILD pins, and the patch is shaped like a
+# patch for pointer.c. (That it applies to the pinned tarball was checked with
+# `patch -Np1 -F0` on the tarball and by building the package on a Pixel 8 Pro;
+# this test has no network and no tarball.)
+set -euo pipefail
+cd "$(dirname "$(readlink -f "$0")")/.."
+fails=0
+fail() { echo "FAIL: $*" >&2; fails=$((fails + 1)); }
+pass() { echo "ok: $*"; }
+
+# shellcheck disable=SC1091
+( source ./PKGBUILD
+  [[ $pkgname == wlrctl ]] || exit 1
+  [[ ${#source[@]} == "${#sha256sums[@]}" ]] || exit 2
+  patch=0001-pointer-click-and-scroll-need-pointer-focus.patch
+  [[ ${source[1]} == "$patch" ]] || exit 3
+  [[ ${sha256sums[1]} == "$(sha256sum "$patch" | cut -d' ' -f1)" ]] || exit 4
+  [[ ${sha256sums[0]} =~ ^[0-9a-f]{64}$ ]] || exit 5
+  [[ ${source[0]} == *"v$pkgver.tar.gz" ]] || exit 6
+) && pass "PKGBUILD: one checksum per source, the patch's checksum is current, the tarball is pinned" \
+  || fail "PKGBUILD pins (exit $?): a source and its sha256 do not line up, or the patch was edited without updating the PKGBUILD"
+
+grep -q -- '-Dwerror=false' PKGBUILD && pass "PKGBUILD builds with -Dwerror=false (upstream trips -Wtype-limits on aarch64)" \
+  || fail "PKGBUILD lost -Dwerror=false"
+grep -q '^--- a/pointer.c' 0001-*.patch && grep -q '^+++ b/pointer.c' 0001-*.patch \
+  && pass "the patch is a unified diff of pointer.c" || fail "the patch is not a unified diff of pointer.c"
+[[ $(grep -c '^@@ ' 0001-*.patch) -ge 2 ]] && pass "the patch changes click and scroll (two hunks or more)" || fail "the patch has too few hunks"
+grep -q 'nanosleep' 0001-*.patch && pass "the patch waits between the motion and the button" || fail "the patch has no wait"
+
+((fails)) && { echo "$fails test(s) failed" >&2; exit 1; }
+echo "wlrctl: all tests passed"

@@ -7,6 +7,7 @@
 //
 // aarch64 Linux entry: sp points at argc, then the argv pointers.
 
+#define __NR_write 64
 #define __NR_sync 81
 #define __NR_reboot 142
 #define __NR_exit_group 94
@@ -40,12 +41,28 @@ __attribute__((naked)) void _start(void)
 		"b go\n");
 }
 
+static const char usage[] = "usage: reboot-to [REASON]\n"
+			    "Reboot with REASON (default: bootloader), e.g. bootloader or recovery.\n";
+
+static int same(const char *a, const char *b)
+{
+	while (*a && *a == *b)
+		a++, b++;
+	return *a == *b;
+}
+
 void go(long argc, char **argv)
 {
 	const char *reason = "bootloader";
 
 	if (argc > 1 && argv[1] && argv[1][0])
 		reason = argv[1];
+
+	/* An option is never a reason: don't reboot on "--help" or a typo */
+	if (reason[0] == '-') {
+		scall(__NR_write, 1, (long)usage, sizeof(usage) - 1, 0);
+		scall(__NR_exit_group, same(reason, "-h") || same(reason, "--help") ? 0 : 2, 0, 0, 0);
+	}
 
 	scall(__NR_sync, 0, 0, 0, 0);
 	scall(__NR_reboot, LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2,

@@ -321,6 +321,7 @@ def real_package(t):
     subprocess.run(["bsdtar", "-xf", pkg, "-C", ex], check=True)
     info = dict(l.split(" = ", 1) for l in open(os.path.join(ex, ".PKGINFO")).read().splitlines() if " = " in l)
     version = info["pkgver"]
+    selected_series = os.path.join(PKG, "legacy-4.0.6") if version.startswith("4.0.6-") else SERIES
 
     def make_root(name, mtree_from):
         root = os.path.join(t, name)
@@ -334,11 +335,23 @@ def real_package(t):
             shutil.copy(mtree_from, os.path.join(entry, "mtree"))
         return root, entry
 
+    if version.startswith("4.5.0-"):
+        import port45
+        port45.actual(t, ex, version, make_root, run, ok, read, selected_series, PKG, qml_parse)
+        # About's layouts by terminal size (0030), run on the patched 4.5
+        # files (port45 ends by restoring its own root)
+        root45, _ = make_root("real45-about", os.path.join(ex, ".MTREE"))
+        rc, out = run(root45, "apply", series=selected_series)
+        ok(rc == 0, "real4.5: the series applies to a second root (%s)" % out.strip().splitlines()[-1])
+        show_logo(t, root45, centred=True)
+        about_layout(t, root45, tools=os.path.join(root45, "usr/bin"))
+        return
+
     root, _ = make_root("real", os.path.join(ex, ".MTREE"))
-    rc, out = run(root, "apply", series=SERIES)
+    rc, out = run(root, "apply", series=selected_series)
     ok(rc == 0, "real omarchy %s: the shipped series applies (%s)" % (version, out.strip().splitlines()[-1]))
     status = json.load(open(os.path.join(root, STATE, "status.json")))
-    ok(not status["upstream"] and len(status["applied"]) == len(glob.glob(os.path.join(SERIES, "*.patch"))),
+    ok(not status["upstream"] and len(status["applied"]) == len(glob.glob(os.path.join(selected_series, "*.patch"))),
        "real omarchy %s: every patch applied, none upstream" % version)
     ok("omamobile-update" in read(root, "usr/bin/omarchy-update"), "real omarchy: omarchy-update hands over (0012)")
     ok(os.path.isfile(os.path.join(root, "usr/share/omarchy/shell/plugins/lock/Keypad.qml")), "real omarchy: the lock's keypad is there (0003)")
@@ -382,7 +395,7 @@ def real_package(t):
     ok("(event.key === Qt.Key_Backspace || event.key === Qt.Key_Left) && !root.filterText) {\n            root.goBack()" in menu,
        "real omarchy: Backspace and Left still go back (0018)")
     ok("property bool cardSettled: false" in menu, "real omarchy: the menu-first-frame bridge applies after 0018")
-    qml_parse(root)
+    qml_parse(root, selected_series)
     lock_glance(root)
     lock_battery(t, root)
     lock_media(root)
@@ -404,7 +417,7 @@ def real_package(t):
     notification_phrasing(t, os.path.join(root, "usr/bin/omarchy-notification-send"),
                           os.path.join(ex, "usr/bin/omarchy-notification-send"))
     lock_fingerprint_probe(t, root)
-    rc, out = run(root, "apply", series=SERIES)
+    rc, out = run(root, "apply", series=selected_series)
     ok(rc == 0 and "already applied" in out, "real omarchy: already applied")
     rc, _ = run(root, "verify")
     ok(rc == 0, "real omarchy: verify")
@@ -418,7 +431,7 @@ def real_package(t):
         names = [l[6:].split("\t")[0].rstrip("\n") for l in open(path) if l.startswith("+++ w/")]
         return names and not any(os.path.islink(os.path.join(root2, "usr/share/omarchy", n)) for n in names)
 
-    patch0000 = next(p for p in sorted(glob.glob(os.path.join(SERIES, "*.patch"))) if touches_no_links(p))
+    patch0000 = next(p for p in sorted(glob.glob(os.path.join(selected_series, "*.patch"))) if touches_no_links(p))
     p = mod_patch(root2, patch0000)
     subprocess.run(["patch", "-s", "-p1", "-d", root2, "-i", p], check=True)
     lines = ["#mtree", "/set type=file uid=0 gid=0 mode=644"]
@@ -432,22 +445,23 @@ def real_package(t):
                 lines.append("./%s sha256digest=%s" % (rel, sha(open(full, "rb").read())))
     with gzip.open(os.path.join(entry, "mtree"), "wt") as f:
         f.write("\n".join(lines) + "\n")
-    rc, out = run(root2, "apply", series=SERIES)
+    rc, out = run(root2, "apply", series=selected_series)
     status = json.load(open(os.path.join(root2, STATE, "status.json")))
     ok(rc == 0 and status["upstream"] == [os.path.basename(patch0000)],
        "real omarchy with %s upstream: skipped and reported, the rest applied" % os.path.basename(patch0000))
-    ok(len(status["applied"]) == len(glob.glob(os.path.join(SERIES, "*.patch"))) - 1, "real omarchy with one patch upstream: the others apply on it")
+    ok(len(status["applied"]) == len(glob.glob(os.path.join(selected_series, "*.patch"))) - 1, "real omarchy with one patch upstream: the others apply on it")
 
 
-def qml_parse(root):
+def qml_parse(root, series=None):
     """Every QML file the series touches still parses, when qmlformat is at
     hand (it reports syntax errors without needing the shell's imports)."""
-    tool = shutil.which("qmlformat") or ("/usr/lib/qt6/bin/qmlformat" if os.path.isfile("/usr/lib/qt6/bin/qmlformat") else "")
+    tool = shutil.which("qmlformat") or next(
+        (p for p in ("/usr/lib/qt6/bin/qmlformat", "/usr/lib64/qt6/bin/qmlformat") if os.path.isfile(p)), "")
     if not tool:
         print("ok - real omarchy: the patched QML parses # SKIP no qmlformat")
         return
     files = set()
-    for p in glob.glob(os.path.join(SERIES, "*.patch")):
+    for p in glob.glob(os.path.join(series or SERIES, "*.patch")):
         for line in open(p):
             if line.startswith("+++ w/") and line.rstrip().endswith(".qml"):
                 files.add(line[6:].rstrip())
@@ -460,6 +474,10 @@ def app_icons_largest(root):
     """Patch 0024: the icon index keeps the largest size per name. The
     patched indexIconLine and iconPathSize run in node against paths in
     the scan's order (SVGs first, then PNGs in directory order)."""
+    node = shutil.which("node")
+    if not node:
+        print("ok - real omarchy: the largest icon rule # SKIP no node")
+        return
     lib = read(root, "usr/share/omarchy/shell/services/AppLibrary.qml")
     fns = []
     for name in ("iconPathSize", "indexIconLine"):
@@ -480,7 +498,7 @@ def app_icons_largest(root):
              "/usr/share/icons/hicolor/64x64/apps/foot.png",
              "/usr/share/pixmaps/odd.png",
              "/usr/share/icons/hicolor/24x24/apps/odd.png"]
-    p = subprocess.run(["node", "-e", js, "--"] + paths, capture_output=True, text=True)
+    p = subprocess.run([node, "-e", js, "--"] + paths, capture_output=True, text=True)
     got = json.loads(p.stdout) if p.returncode == 0 and p.stdout.strip() else {}
     ok(got.get("chromium", "").endswith("/256x256/apps/chromium.png")
        and got.get("foot", "").endswith("/scalable/apps/foot.svg")
@@ -519,6 +537,9 @@ def lock_glance(root):
     ok("XMLHttpRequest" not in glance and "curl" not in glance and "execDetached" not in glance
        and "call notifications forget" in glance and "invokeAction" not in glance,
        "real omarchy: the glance asks no network and runs no notification action, only the forget call (0023)")
+    ok("function darkTapWakes()" in view and "if (root.displayDark && !root.darkTapWakes()) return" in view
+       and "if (lock.darkTapWakes()) {" in read(root, lock + "LockGlance.qml"),
+       "real omarchy: a dark touch-only lock leaves the double tap to omamobile-doubletap (0029)")
     p = subprocess.run(["bash", os.path.join(HERE, "lock-glance"), os.path.join(root, "usr/share/omarchy/shell")],
                        capture_output=True, text=True)
     if p.returncode == 77:
@@ -763,11 +784,12 @@ def screensaver_launcher(t, launcher):
     ok(osk() == "true" and not os.path.exists(marker), "0006: a launcher stopped by a signal turns the keyboard back on")
 
 
-def show_logo(t, root):
+def show_logo(t, root, centred=False):
     """Patch 0028: omarchy-show-logo in terminals of several widths (script(1)
     gives it one): the wide logo where it fits, the stacked one where only
     that fits, none below, and the wide one with no terminal at all.
-    logo.txt is omarchy-settings', so an 81-column stand-in here."""
+    logo.txt is omarchy-settings', so an 81-column stand-in here. The 4.5
+    family centres the stacked logo; the 4.0.6 one leaves it at the left."""
     narrow = os.path.join(root, "usr/share/omarchy/logo-narrow.txt")
     ok(os.path.isfile(narrow), "0028: logo-narrow.txt is created")
     widest = max(len(l) for l in open(narrow, encoding="utf-8").read().splitlines())
@@ -775,7 +797,7 @@ def show_logo(t, root):
     if not shutil.which("script"):
         print("ok - 0028: the logo by terminal width # SKIP no script(1)")
         return
-    path = os.path.join(t, "logo-path")
+    path = os.path.join(t, "logo-path-centred" if centred else "logo-path")
     os.makedirs(path)
     shutil.copy(narrow, path)
     with open(os.path.join(path, "logo.txt"), "w", encoding="utf-8") as f:
@@ -792,12 +814,28 @@ def show_logo(t, root):
     ok(lines(120) == (9, 81) and lines(81) == (9, 81), "0028: a terminal as wide as the logo shows it as before")
     ok(lines(80)[0] == 17 and lines(66)[0] == 17 and lines(48)[0] == 17, "0028: a narrower one shows it stacked")
     ok(lines(47)[0] == 0, "0028: one too narrow for that shows none, not a wrapped one")
+
+    def margins(cols):
+        """The columns left free on each side of the logo's widest rows."""
+        cmd = "stty cols %d rows 40; bash %s" % (cols, show)
+        out = subprocess.run(["script", "-qec", cmd, "/dev/null"], env={"PATH": "/usr/bin:/bin", "OMARCHY_PATH": path,
+                             "TERM": "xterm"}, stdin=subprocess.DEVNULL, capture_output=True, timeout=20).stdout
+        rows = [l for l in out.decode("utf-8", "replace").replace("\r", "").split("\n") if "█" in l]
+        left = min(len(l) - len(l.lstrip(" ")) for l in rows)
+        return left, cols - max(len(l.rstrip()) for l in rows)
+
+    if centred:
+        ok(margins(66) == (9, 9) and margins(49) == (0, 1) and margins(48) == (0, 0),
+           "0028: the stacked logo is centred in the terminal (%s at 66 columns)" % (margins(66),))
+    else:
+        ok(margins(66) == (0, 18), "0028 (4.0.6): the stacked logo is at the left, as before")
+    ok(margins(120)[0] == 0, "0028: the wide logo stays where Omarchy puts it")
     out = subprocess.run(["setsid", "-w", "bash", show], env={"PATH": "/usr/bin:/bin", "OMARCHY_PATH": path},
                          stdin=subprocess.DEVNULL, capture_output=True, timeout=20).stdout
     ok(out.decode("utf-8", "replace").count("█" * 81) == 9, "0028: no terminal: the wide logo, as before")
 
 
-def about_layout(t, root):
+def about_layout(t, root, tools=None):
     """Patch 0030: the About layout by terminal size. A stand-in fastfetch
     whose modules are as big as Omarchy's on a phone (54 columns, 28 rows
     with the closing break) and a 54x26 logo, as Omarchy's about.txt is: side
@@ -830,7 +868,8 @@ def about_layout(t, root):
         return h
 
     def env(h):
-        return {"PATH": stub + ":/usr/bin:/bin", "HOME": h, "TERM": "xterm",
+        # tools: the package's own commands the launcher sources or calls (4.5)
+        return {"PATH": stub + (":" + tools if tools else "") + ":/usr/bin:/bin", "HOME": h, "TERM": "xterm",
                 "FASTFETCH_LOG": os.path.join(h, "fastfetch.log")}
 
     sizes = [(61, 63), (57, 63), (56, 63), (41, 63), (61, 56), (61, 55), (61, 117), (29, 118), (26, 136)]

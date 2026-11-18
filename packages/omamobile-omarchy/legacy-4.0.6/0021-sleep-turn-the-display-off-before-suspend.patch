@@ -1,0 +1,53 @@
+# Sleep: turn the display off before suspend, once the session is secure.
+# A phone's panel stays lit through suspend-to-idle: its display driver
+# doesn't power it down for system sleep. A suspend that didn't come from
+# the power key (upower's critical action, the system menu) began with the
+# lock screen lit, so the phone slept behind a lit lock screen, drained the
+# battery the suspend was meant to save, and couldn't charge from a 500 mA
+# port. Only panels whose backlight this user may power down (bl_power), the
+# panels patch 0008 makes follow DPMS, so laptops are unchanged. Bounded by
+# what is left of the lock's budget, so a stuck Hyprland can't hold the
+# suspend. A power-key wake lights the display again (omamobile-keys wake).
+# It also tells the lock the display went dark (omarchy-shell lock dark,
+# patch 0023), so the glance is up on the next wake.
+#
+# Against Omarchy 4.0.6 (4.0.6-1).
+diff --git i/bin/omarchy-system-sleep-lock w/bin/omarchy-system-sleep-lock
+index d471cea..b278615 100755
+--- i/bin/omarchy-system-sleep-lock
++++ w/bin/omarchy-system-sleep-lock
+@@ -104,6 +104,25 @@ report_unsecured() {
+   exit 1
+ }
+ 
++# A phone's panel stays lit through suspend-to-idle (its display driver doesn't
++# power it down for system sleep), so a suspend that began with the screen on
++# slept behind a lit lock screen and drained the battery it was meant to save.
++# Once the session is secure, turn the display off within what is left of the
++# budget; a power-key wake lights it again. Only panels whose backlight this
++# user may power down (bl_power), the same panels brightness follows DPMS on.
++display_off() {
++  local device remaining seconds
++  device=$(omarchy-hw-display 2>/dev/null) || return 0
++  [[ -w ${OMARCHY_BACKLIGHT_PATH:-/sys/class/backlight}/$device/bl_power ]] || return 0
++  remaining=$(remaining_ms)
++  (( remaining > 0 )) || return 0
++  printf -v seconds '%d.%03d' $((remaining / 1000)) $((remaining % 1000))
++  # The lock's glance view (patch 0023) goes back to the glance whenever the
++  # display goes dark; tell it, as omamobile-keys and omamobile-sleepd do.
++  timeout --kill-after=0.1s "$seconds" omarchy-shell lock dark >/dev/null 2>&1 || true
++  timeout --kill-after=0.1s "$seconds" omarchy-brightness-display off >/dev/null 2>&1 || true
++}
++
+ # Request the lock before touching monitor state, so a stuck Hyprland IPC call
+ # cannot consume the window before Quickshell has begun securing the session.
+ request_lock
+@@ -113,7 +132,7 @@ sync_clamshell
+ # inside the reserve derive_budget_ms already held back for logind.
+ while (( $(remaining_ms) > 0 )); do
+   case $(lock_state) in
+-    secure) exit 0 ;;
++    secure) display_off; exit 0 ;;
+     locking) ;;
+     *) request_lock ;;
+   esac

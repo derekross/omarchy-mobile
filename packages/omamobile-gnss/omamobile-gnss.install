@@ -10,6 +10,15 @@ post_upgrade() {
   # the switch's current state
   if systemctl is-enabled -q omamobile-gnss-nmea.socket 2>/dev/null; then
     systemctl enable --now omamobile-gnss-lto.timer 2>/dev/null || true
+    # 0.2.9: a phone set up before it has the socket on and GeoClue's agent
+    # off (the setup step enabled only the socket), so Location read "on"
+    # and no app got a position: the agent follows the switch too
+    systemctl --global enable omamobile-geoclue-agent.service 2>/dev/null || true
+    # --global reaches a session only at its next login: start the agent in
+    # the sessions that are running now, so the update itself is the repair
+    for u in $(loginctl list-users --no-legend 2>/dev/null | awk '$1 >= 1000 {print $2}'); do
+      systemctl --user -M "$u@.host" start omamobile-geoclue-agent.service 2>/dev/null || true
+    done
   fi
   if [ "$(vercmp "$2" 0.2.0)" -lt 0 ]; then
     echo "omamobile-gnss 0.2.0: settings in /etc/omamobile/gnss.conf; SUPL is now off"

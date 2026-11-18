@@ -1,0 +1,92 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/phone-demo's notification code against both of Omarchy's stores, in a
+# made-up home with no phone: 4.0's one file per notification, and 4.5's
+# live.json, history.json and quiet.json. The demo's rows are found, taken
+# away through Omarchy's forget call when the shell answers and directly
+# when it doesn't, a real notification is never touched, Do Not Disturb is
+# read from the right file, and nothing from a backup goes into a 4.5 store.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+sed -n "/^cat > \"\$stage\/demo.py\" <<'PY'\$/,/^PY\$/p" tools/phone-demo | sed '1d;$d' > "$t/demo.py"
+[[ -s $t/demo.py ]] || { echo "not ok - found the phone side of tools/phone-demo" >&2; exit 1; }
+mkdir -p "$t/bin" "$t/stage" "$t/data"
+DEMO_STAGE=$t/stage DEMO_DATA=$t/data DEMO_HOME=$t/home T=$t PATH="$t/bin:$PATH" python3 -B - <<'PY'
+import importlib.util, io, json, os, stat, sys, contextlib
+t = os.environ["T"]
+spec = importlib.util.spec_from_file_location("demo", t + "/demo.py"); d = importlib.util.module_from_spec(spec); spec.loader.exec_module(d)
+d.time.sleep = lambda s: None
+def check(ok, what):
+    print(("ok - " if ok else "not ok - ") + what)
+    if not ok: sys.exit(1)
+def quiet(f):
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out): f()
+    return out.getvalue()
+notes = d.NOTES; state = os.path.dirname(notes)
+demo = [dict(app=a, summary=s, body=b) for a, _, _, s, b, _ in d.note_list(None)]
+real = dict(app="Signal", summary="Dana", body="see you at six")
+def fresh():
+    import shutil; shutil.rmtree(os.path.join(t, "home"), ignore_errors=True); os.makedirs(notes)
+def shell_script(body):
+    p = os.path.join(t, "bin", "omarchy-shell")
+    if body is None:
+        if os.path.exists(p): os.remove(p)
+        return
+    open(p, "w").write("#!/bin/sh\n" + body + "\n"); os.chmod(p, 0o755)
+def write45(live, hist, quiet_text=""):
+    for name, rows in (("live.json", live), ("history.json", hist)):
+        open(os.path.join(notes, name), "w").write(json.dumps(rows, separators=(",", ":")) + "\n")
+    open(os.path.join(notes, "quiet.json"), "w").write(quiet_text)
+def rows(name): return json.load(open(os.path.join(notes, name)))
+
+# Omarchy 4.5, the shell not answering: the rows go out of the two files directly
+fresh(); shell_script(None)
+write45([dict(demo[0], key="k1"), dict(real, key="r1")], [dict(demo[1], key="k2"), dict(real, key="r2"), dict(demo[2], key="k3")])
+check(d.store_45() and sorted(n for n, p in d.demo_notes()) == ["k1", "k2", "k3"] and all(p is None for n, p in d.demo_notes()),
+      "4.5: the demo's rows are found by key in live.json and history.json")
+out = quiet(d.forget_notes)
+check([r["key"] for r in rows("live.json")] == ["r1"] and [r["key"] for r in rows("history.json")] == ["r2"],
+      "4.5, no shell: the demo's rows are taken out and the real notifications stay")
+check("took away 3 demo notification(s)" in out and "still there" not in out, "4.5, no shell: it says how many it took away")
+check(stat.S_IMODE(os.stat(os.path.join(notes, "history.json")).st_mode) == 0o600 and open(os.path.join(notes, "history.json")).read().endswith("]\n"),
+      "4.5, no shell: the files stay 0600 and compact, as the service writes them")
+
+# Omarchy 4.5, the shell answering: forget is called with each key and the store is left to the service
+fresh(); shell_script('echo "$*" >> "%s/calls"; echo ok' % t)
+write45([dict(demo[0], key="k1")], [dict(demo[1], key="k2"), dict(real, key="r2")])
+before = open(os.path.join(notes, "history.json")).read()
+out = quiet(d.forget_notes)
+calls = open(t + "/calls").read().split("\n")
+check("notifications forget k1" in calls and "notifications forget k2" in calls and "notifications forget r2" not in calls,
+      "4.5, the shell answers: Omarchy's forget is called with each demo row's key, never a real one's")
+check(open(os.path.join(notes, "history.json")).read() == before and "2 still there" in out,
+      "4.5, the shell answers: the store is the service's to write, and rows it leaves are counted, not hidden")
+
+# Do Not Disturb on 4.5 is quiet.json; empty means off
+check(d.dnd_on() is False, "4.5: an empty quiet.json is Do Not Disturb off")
+open(os.path.join(notes, "quiet.json"), "w").write('{"dnd":true}\n')
+open(os.path.join(state, "notifications.json"), "w").write('{"dnd":false}')
+check(d.dnd_on() is True, "4.5: Do Not Disturb is read from quiet.json, not 4.0's notifications.json")
+
+# Nothing from a backup goes into a 4.5 store
+src = os.path.join(t, "stage", "notes", "notifications", "history"); os.makedirs(src)
+open(os.path.join(src, "1-1.json"), "w").write(json.dumps(real))
+out = quiet(d.restore_notes)
+check(not os.path.exists(os.path.join(notes, "history")) and "left as it is" in out, "4.5: restore-notes copies no 4.0 history into the store")
+
+# Omarchy 4.0: one file per notification, by file name
+fresh(); shell_script(None); os.makedirs(os.path.join(notes, "history"))
+open(os.path.join(notes, "5-1.json"), "w").write(json.dumps(demo[0]) + "\n")
+open(os.path.join(notes, "history", "4-1.json"), "w").write(json.dumps(demo[1]) + "\n")
+open(os.path.join(notes, "history", "3-1.json"), "w").write(json.dumps(real) + "\n")
+check(not d.store_45() and sorted(n for n, p in d.demo_notes()) == ["4-1.json", "5-1.json"], "4.0: the demo's files are found by name")
+quiet(d.forget_notes)
+check(sorted(os.listdir(os.path.join(notes, "history"))) == ["3-1.json"] and not os.path.exists(os.path.join(notes, "5-1.json")),
+      "4.0, no shell: the demo's files are removed and the real one stays")
+open(os.path.join(state, "notifications.json"), "w").write('{"dnd":true}')
+check(d.dnd_on() is True, "4.0: Do Not Disturb is read from notifications.json")
+out = quiet(d.restore_notes)
+check(os.path.exists(os.path.join(notes, "history", "1-1.json")), "4.0: restore-notes still puts a pushed-out history entry back")
+PY

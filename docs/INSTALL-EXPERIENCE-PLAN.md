@@ -1,8 +1,11 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Install experience plan: a one-step, guided install
 
-Status (2026-11-02): **design only.** Nothing here has been built or run on
-a phone. Today's install is the manual guide in [INSTALL.md](INSTALL.md):
+Status (2026-11-10): **M1 is built as a repository tool and tested against
+stand-ins; it has not run on a phone yet and is in no release bundle**
+([INSTALL-GUIDED.md](INSTALL-GUIDED.md): its design, every prompt, the
+build index's format and the runbook for its first run). The rest is
+design only. Today's install is still the manual guide in [INSTALL.md](INSTALL.md):
 about an hour of terminal commands, a factory image the user finds and
 downloads by hand, a USB network connection set up by hand, a radio backup
 and a provisioning run. This plan is how that becomes one guided install
@@ -47,13 +50,10 @@ What the person does:
    same checks (§11, M3).
 2. Picks their phone from the list, or plugs it in and lets the installer
    recognise it.
-3. Follows plain steps, each one screen with a picture: turn on Developer
-   options and OEM unlocking, allow the computer, confirm the unlock on the
-   phone with the volume keys. This is the only part done on the phone
-   itself.
-4. Reads one clear warning, shown once before anything is written, and
-   acknowledges it (Google's terms for the firmware are a separate
-   checkbox, §6.3). The warning says:
+3. Reads one clear warning, shown once, before the unlock steps (unlocking
+   the bootloader already wipes the phone, D9) and before anything is
+   written, and acknowledges it (Google's terms for the firmware are
+   accepted on Google's own page, in step 6 and §6.3). The warning says:
    - the phone is wiped, and everything on it is lost;
    - Omarchy Mobile replaces Android as the phone's operating system, and
      what that means day to day: no Google apps or Play Store, Android apps
@@ -70,12 +70,20 @@ What the person does:
    screen. Fingerprint unlock is on by default, with no separate question;
    the runner's data guards (read-only copies, the TDP refusal, one proxy
    per boot) keep stock's data safe.
+4. Follows plain steps, each one screen with a picture: turn on Developer
+   options and OEM unlocking, allow the computer, confirm the unlock on the
+   phone with the volume keys. This is the only part done on the phone
+   itself.
 5. Chooses a user name, a PIN or password, the phone's name, the time zone
    and optionally a Wi-Fi network, in the installer window.
-6. Waits. The installer downloads the release and the phone's own firmware,
-   checks everything, writes the phone, waits for its first start, backs up
-   the radio partitions to the computer, puts the firmware on the phone and
-   restarts it.
+6. Reads Google's terms for the factory image in the installer, accepts
+   them, and the installer downloads the image from Google's own server
+   for the phone's build (§6.3; D2, re-decided 2026-11-12). Someone who
+   would rather not accept them there clicks through to Google's page,
+   saves the file, and the installer picks it up. Then waits.
+   The installer downloads the release, checks everything, writes the
+   phone, waits for its first start, backs up the radio partitions to the
+   computer, puts the firmware on the phone and restarts it.
 7. Sees one screen: "Your phone is ready", with a short list (display,
    touch, Wi-Fi, sound, cameras, sensors, battery) each ticked, and where
    the radio backup was saved.
@@ -84,24 +92,29 @@ On the first start that the person sees, Wi-Fi, Bluetooth, sound, haptics,
 sensors and the cameras work, and the modem's per-phone data (board id, NV
 checksums) is in place, so the modem can start without any further step.
 After that the phone updates itself through the Updater (the update sheet
-in the shell, `omamobile-update` underneath, RELEASES §5.4), including its
-firmware (§9).
+in the shell, `omamobile-update` underneath, RELEASES §5.4). Its firmware
+updates there too, with the factory image fetched from Google as at
+install (§9).
 
 What the person never does: install `fastboot` or Android's tools, open a
 terminal, find Google's factory image page, match a build number, set up a
 USB network connection, run a backup or a provisioning tool by hand, or
 download anything from a site other than omamobile.org and Google's own
-servers (and the download from Google happens inside the installer).
+servers. The installer downloads the factory image from Google itself,
+once the person has accepted Google's terms in it (D2); only someone who
+declines that screen starts that download by hand, on Google's page.
 
 ## 2. What stays fixed
 
 - **Google's firmware is never hosted by the project** (RELEASES §12.7). Not
   in a bundle, not in a package, not on `pkgs.omamobile.org`, not through a
-  proxy or cache of ours. The installer fetches the user's own phone's
-  factory image straight from Google's servers to the user's machine (or the
-  phone fetches it itself, §9), after the user has accepted Google's terms
-  in the installer, and the files the phone needs are extracted locally. No
-  byte of Google's passes through a server of ours.
+  proxy or cache of ours. The user's own phone's factory image comes
+  straight from Google's servers to the user's machine (or to the phone,
+  §9), after the user has accepted Google's terms (§6.3, D2: in the
+  installer, which then downloads from Google on the user's behalf; or on
+  Google's own page, where the user saves the file), and
+  the files the phone needs are extracted locally. No byte of Google's
+  passes through a server of ours.
 - **The factory image is the one that matches the phone**: the build whose
   bootloader and radio versions equal the ones the phone reports in fastboot
   (`version-bootloader`, `version-baseband`). §6 covers what happens when
@@ -137,7 +150,7 @@ which passed a clean reinstall on 2026-11-02 **[V]**:
 | First start | grows the root, runs `omamobile-firstboot`, shows the lock screen | on the phone |
 | USB network | `nmcli connection add ...` by hand | by hand |
 | Radio backup | `tools/nv-backup DIR` | `tools/nv-backup` |
-| Firmware | a Python venv for the camera, then `tools/phone-provision --nv-backup DIR FACTORY.zip` | `tools/phone-provision`, `tools/extract-*` |
+| Firmware | a Python venv for the camera, then `tools/phone-provision --first-install --nv-backup DIR FACTORY.zip` | `tools/phone-provision`, `tools/extract-*` |
 | Restart | `tools/phone-ssh 'reboot-to omamobile'` | by hand |
 | Check | none for the user; `tools/phone-smoke` for developers | `tools/phone-smoke` |
 
@@ -181,14 +194,16 @@ left:
   says whether OEM unlocking is on. If it reads 0, back to the previous
   screen. If 1, the installer explains the wipe in one sentence ("Unlocking
   erases everything on this phone. Copy off photos, messages and two-factor
-  codes first.") and asks the user to confirm in the installer, then sends
-  `fastboot flashing unlock`; the user confirms again on the phone with the
-  volume keys and Power. The phone erases itself and restarts.
+  codes first.") and shows the command for the owner to type,
+  `fastboot flashing unlock`; the installer doesn't send it (D8). The user
+  confirms on the phone with the volume keys and Power. The phone erases
+  itself and restarts.
 - **Fastboot, unlocked:** on to the checks.
 
 `flashing unlock` is a request the bootloader asks the person to confirm on
-the phone, and it writes nothing of ours; it is the one `flashing` command
-the installer sends, and only from this screen. After the unlock the phone
+the phone, and it writes nothing of ours. The installer still doesn't send
+it (D8, decided 2026-11-10): this screen shows the command, and the owner
+types it. After the unlock the phone
 has to start Android once and be put back into fastboot; the installer
 walks through that.
 
@@ -198,8 +213,10 @@ Today: `tools/install-phone`, "Checking the phone" **[V]**.
 
 The same checks, read from `manifest.json` as data: one phone, product
 equals the bundle's codename, unlocked, each image fits its `_b` partition
-(an AVB footer image exactly). One check needs work before it can be
-automated without the user's help: the bootloader slots (gap G4, §10).
+(an AVB footer image exactly). One check needed work before it could be
+automated without the user's help: the bootloader slots (gap G4, §10). The
+installer can now read the other slot itself on a first install, for a
+device whose descriptor turns that on (D4); none does yet.
 Which slot stock Android lives on is already checked: `install-phone`
 refuses a phone running from slot B unless `--reinstall` is given (#352).
 
@@ -264,7 +281,7 @@ retries silently, as `nv-backup` does.
 
 ### 4.8 Provisioning
 
-Today: `tools/phone-provision --nv-backup DIR FACTORY.zip` after the first
+Today: `tools/phone-provision --first-install --nv-backup DIR FACTORY.zip` after the first
 start: the `extract-*` tools on the computer, then pushes over USB SSH, then
 the board id read on the phone **[V]**. §5 weighs folding this into the
 install on the computer against doing it on the phone.
@@ -305,8 +322,9 @@ image reaches it.
 
 ### 5.1 Option A: extract on the computer
 
-What today's tools do. The installer downloads the factory image to the
-computer, runs the extraction there and either writes the result into the
+What today's tools do. The factory image is on the computer (downloaded
+from Google by the installer, or saved from Google's page by the user,
+§6.3), and the installer runs the extraction there and either writes the result into the
 local root image copy before flashing (RELEASES §6 step 2-3, designed but
 not built) or pushes it after the first start (today's `phone-provision`).
 
@@ -342,8 +360,9 @@ code later serves firmware updates (§9).
 
 ### 5.3 Recommendation: B, with the image carried over an install link
 
-The computer downloads the factory image from Google (it is the only side
-with a network at that point), and hands it to the phone over USB at first
+The factory image is downloaded to the computer from Google (§6.3; it
+is the only side with a network at that point), and the installer hands it
+to the phone over USB at first
 boot; the phone checks its SHA-256 and extracts it. The channel is an
 **install link**: a small USB function the phone offers only in first-boot
 install mode (FunctionFS in the gadget the initramfs already sets up, with
@@ -407,9 +426,11 @@ order:
    against an older bootloader and radio is untested **[I]**; the camera
    extraction gave the same five files from CP2A and CP3A builds **[V]**.
    Allowed only for builds the index marks tested with that pair.
-3. **Otherwise:** the installer stops and explains that stock Android needs
+3. **Otherwise:** the installer stops. It explains that stock Android needs
    updating first (Settings > System > System update in Android, then come
-   back), and why. An Android update moves stock to slot B, and the
+   back), and why, but only when the newest build in the index is tested
+   (D12): Android's updater goes to Google's newest build and can't go
+   back, so with an untested newest build the phone is told not to update. An Android update moves stock to slot B, and the
    installer now refuses a phone running from slot B unless `--reinstall`
    is given (G5, #352), so the user then has to bring stock back to slot A
    first.
@@ -420,14 +441,31 @@ is an open question (D3).
 ### 6.3 Google's terms
 
 Google's page asks the visitor to acknowledge terms before it shows the
-download links **[D]**. The installer shows those terms, linked to Google's
-own page, with a checkbox the user must tick before the download starts,
-and records that it was ticked (on the computer only). Whether a third-party
-installer may present the acknowledgement this way, or must send the user
-to Google's page to click through, needs checking before M1 ships (D2). The
-fallback is honest and still simple: a button that opens Google's page at
-the right build, and a file picker (or a watched Downloads folder) for the
-zip the user saved.
+download links **[D]**.
+
+**Re-decided 2026-11-12 (D2):** the installer presents that acknowledgement
+itself and downloads on the owner's behalf. It shows Google's own
+sentences as Google's, with Google's links (the Terms of Service, the
+Privacy Policy, the note on third-party terms) and the link to Google's
+page for the build; says in our own words that the files are for the
+owner's own Pixel and may not be redistributed, so they come straight from
+Google to the owner's computer and the project neither hosts them nor
+passes them on; and takes a clear yes, which it records with the build and
+the time (on the computer only). Then it downloads the file from Google's
+own server, from the address in the signed index and from no other host,
+and checks its size and SHA-256 against the index before using it
+([INSTALL-GUIDED](INSTALL-GUIDED.md) §5b). Whether a third-party tool may
+present that acceptance remains the project's own risk judgement; it is
+recorded as that, not as something Google has confirmed.
+
+**The fallback stays** (the rule of 2026-11-09 and 2026-11-10): when the
+owner doesn't accept the terms in the installer, when the download can't
+be made, or when the owner hands in a file, the installer opens Google's
+page at the right build; the owner accepts the terms there and saves the
+zip; a file picker (or a watched Downloads folder) takes the saved file,
+and the installer checks its SHA-256 against the signed index before using
+it. The Updater's firmware offers follow the same rule when they are built
+(§9).
 
 ### 6.4 Downloading in a browser
 
@@ -450,14 +488,16 @@ Terms of Service **[D]**.
 
 - **So the design stays as it is:** the user's own machine (or the user's
   own phone, §9) downloads the factory image from Google, for that user's
-  own Pixel, and the files the phone needs are extracted locally. That is
+  own Pixel (after that user has accepted Google's terms, in the installer
+  or on Google's page, D2), and the files the phone needs are extracted
+  locally. That is
   the most defensible reading of those terms we have. It isn't spotless:
   "modified" makes any extraction a grey area, one that every system other
   than Google's running on a Pixel shares.
-- **Bundling or hosting Google's vendor files ourselves is out**, in a
-  bundle, a package or anywhere on our servers, unless Google gives written
-  permission, or a lawyer's opinion says otherwise. The maintainer may ask
-  Google (D7).
+- **Bundling or hosting Google's vendor files ourselves is not done**, in
+  a bundle, a package or anywhere on our servers. Whether it ever could be
+  (the files as extracted, with Google's written permission or on a
+  lawyer's opinion) is not decided and will be revisited (D7).
 - **If permission came,** the provisioning step shrinks: the release would
   carry the device's firmware and vendor files itself (a firmware package
   per device in `[omamobile]`, installed in the root image), so the install
@@ -545,13 +585,18 @@ Updater:
    are compatible with the phone's (read on the phone; the phone's
    bootloader and radio never change under Linux, because nothing of ours
    writes them).
-3. **It asks once, the first time,** to accept Google's terms (§6.3); the
-   owner can choose to be asked every time instead. Then, on Wi-Fi, on the
-   charger or above a battery level, and with enough free space (the zip
-   plus room to unpack, several GB **[I]**), it downloads the factory image
-   straight from Google to the phone, checks the SHA-256 from the signed
-   index, and extracts it with the same `omamobile-provision` code as the
-   install (§5.2).
+3. **It offers the update and fetches the image as the installer does**
+   (§6.3, D2, re-decided 2026-11-12; not built yet): the Updater says a
+   newer firmware set is ready, shows Google's terms for the owner to
+   accept, and then downloads the image from Google's own server. An owner
+   who doesn't accept them there gets the fallback: Google's page at that
+   build, in the phone's browser or as a link for a computer, where the
+   owner accepts the terms and saves the zip, and the Updater takes the
+   saved file (a file picker, or the Downloads folder). With enough free space (the zip plus room to unpack, several GB
+   **[I]**), on the charger or above a battery level, it checks the SHA-256
+   from the signed index and extracts the image with the same
+   `omamobile-provision` code as the install (§5.2). The Updater downloads
+   no firmware before the owner has accepted Google's terms for it.
 4. **It installs the new firmware set beside the old one**
    (`/usr/lib/firmware/updates` and the vendor chroots in versioned
    directories with a link to the current one, instead of overwritten in
@@ -577,8 +622,9 @@ Constraints:
   Updater then keeps the old set and reports it.
 - On a secure phone the firmware lives inside the encrypted root, so nothing
   changes for the verified boot chain.
-- Google's terms, and whether automatic downloads on the owner's behalf are
-  acceptable under them, is part of D2.
+- A download on the owner's behalf follows the owner's acceptance of
+  Google's terms (D2). A download with no acceptance at all, fully
+  automatic, is not part of that decision.
 
 ## 10. Gaps found in the 2026-11-02 test install
 
@@ -594,7 +640,12 @@ else.
   reinstall; on anyone else's, every install is a first install. Fix: an
   explicit mode (`--first-install` with `--nv-backup DIR`, or `--restore
   DIR`), no default backup path in the bundle's copy, and the factory image
-  fetched by the tool itself (§6) when none is given.
+  fetched by the tool itself (§6) when none is given. **The modes are
+  done:** the tool has no default backup directory, refuses a cheetah run
+  that names neither mode, and `--backup DIR` stays as `--restore DIR`'s
+  older spelling. The fetch is the guided installer's
+  (`tools/install-guided`, D2 as re-decided 2026-11-12), which hands
+  `phone-provision` the file; `phone-provision` itself still takes a zip.
 - **G2. The stable channel must exist before a release's first update.**
   `tools/release`'s `test-install` stage runs before `promote`, and a
   release install follows `stable`, so the test-installed phone's first
@@ -602,6 +653,13 @@ else.
   once, before the first release's test install (later releases find the
   previous release there, which is correct); and `omamobile-update` reports
   "this channel has no updates yet" as a normal state, not an error.
+  **Done:** stable has had an index since the 2026.11.08 release, so the
+  ordering can only bite on a new server; `tools/release test-install`
+  asks the server and, with no stable index, prints the one-time promotion
+  and stops. `omamobile-update` (omamobile-omarchy 0.1.41) treats a channel
+  whose index the server says isn't there as "no updates yet": no blocker,
+  exit 0. The Updates sheet shows that state as up to date; it doesn't show
+  the sentence yet.
 - **G3. `systemd-firstboot` fails once on first boot.** It wants to ask for
   settings on a console the phone doesn't have. Fix: the root image provides
   what it asks for (locale, keymap, time zone from `firstboot.conf`, machine
@@ -620,7 +678,43 @@ else.
   and trusts Google's flashing tools to have written both slots **[I]**;
   (c) it reads both versions from Android before the reboot to fastboot, if
   Android exposes the other slot's **[I]**. Option (a) is the only one that
-  measures.
+  measures, and it measures by doing the thing the check guards: it starts
+  the other slot's bootloader before its version is known. Google's factory
+  images page (https://developers.google.com/android/images, read
+  2026-11-10) says of the Pixel 6 and Pixel 8 families after their May 2025
+  update, and of the Pixel 10 family after May 2026: "The inactive slot
+  contains an older bootloader whose anti-rollback version has not been
+  incremented" and "Since the inactive slot contains the older bootloader,
+  the device enters an unbootable state" **[D]**. For those families
+  Google's own remedy, the full OTA sideloaded from stock (CONTRIBUTING
+  §3.1), is the safer road. **Decided 2026-11-10 (D4): option (a), on a
+  first install only; built into `tools/install-phone` off by default**
+  (tests in `tests/install-phone`). A device gets it by
+  `BOOTLOADER_SLOT_PROBE=yes` in its descriptor, which the maintainer adds
+  after an attended run on that device is in its notes; no device has it,
+  so every phone still stops and asks for `--bootloader-slots-match`. Where
+  it is on: with the owner's yes (typed on a terminal, or
+  `--measure-other-slot` from a calling tool) the installer sets the other
+  slot active, reads `current-slot` once more, restarts into the
+  bootloader, reads the version, sets the first slot active again, restarts
+  and checks. The first slot is set active again if a step fails while the
+  phone answers; a phone not seen to leave the bus and come back gets
+  nothing more; both slots' `slot-successful`, `slot-unbootable`,
+  `slot-retry-count` and `slot-fastboot-ok` are printed before and after.
+  Nothing is flashed or erased, but the bootloader writes the flags to its
+  own storage (`devinfo`). It is refused with `--reinstall`, and when slot
+  B reads as started and still startable (an installed Omarchy Mobile sent
+  back to slot A looks like that from fastboot, and so does stock after a
+  system update): the round trip clears slot B's successful mark, which on
+  some phones (the Pixel 9a) costs boot tries and can end in a fallback
+  that wipes `userdata`. Not run on a phone yet, so these are **[I]**:
+  that `reboot bootloader` after `--set-active` starts the other slot's
+  bootloader and reports its version; that `current-slot` names the running
+  bootloader's slot, not the active flag (the installer stops if it sees
+  otherwise); what the round trip does to each flag, stock's slot A
+  included, and whether stock's slot earns its successful mark back; what
+  `slot-fastboot-ok: no` on the other slot means for restarting into it;
+  how long the restarts take.
 - **G5. Done (#352).** Found while writing this plan, not in the test
   install: **no check that stock lives on slot A.** `install-phone` read
   `current-slot` and printed it but didn't refuse slot B. After an Android
@@ -645,16 +739,21 @@ real users.
 - **Needs:** small changes to `tools/phone-provision`, `tools/release`,
   `omamobile-update`, the root image and `tools/install-phone`, with tests
   in `tests/`.
-- **Open:** G4 (D4).
+- **Open:** G4's slot check is built (D4), off for every device, and has
+  not run on a phone: an attended run on a Pixel 7 Pro in first-install
+  state comes first, and its record decides whether the 7 Pro's descriptor
+  turns it on.
 
 ### M1. A guided CLI, end to end
 
 - **What:** the bundle's `install` grows into one command that runs the
-  whole install with today's tools: preflight, unlock guidance from the
-  phone's state (§4.2), the one warning of §1 step 4 (wipe, new operating
-  system and what it means day to day, the way back) acknowledged once before any write and recorded with
-  the install's state, with no further prompts about it, the build index lookup and the factory image
-  download from Google after the terms prompt (§6), the checks and writes
+  whole install with today's tools: preflight, the one warning of §1 step 3 (wipe, new operating
+  system and what it means day to day, the way back) acknowledged once before the unlock guidance and any write (D9) and recorded with
+  the install's state, with no further prompts about it, unlock guidance from the
+  phone's state (§4.2), the build index lookup, Google's terms shown and
+  the factory image downloaded from Google and checked, or Google's page
+  opened at the right build and the saved file taken and checked (§6.3,
+  D2), the checks and writes
   (`install-phone`), the USB network connection set up with the user's
   consent (a NetworkManager profile for `cdc_ncm`, shown before it is
   added), waiting for the first start, `nv-backup` into a named folder,
@@ -664,7 +763,17 @@ real users.
 - **Needs:** M0; the build index (§6.1) and the maintainer tool that fills
   it; the camera's Python modules handled by the tool (its own venv) or the
   camera step moved to the phone early.
-- **Open:** Google's terms in a third-party tool (D2); still Linux only,
+- **Built (2026-11-10):** `tools/install-guided`, run on a phone twice as
+  a reinstall (2026-11-12 and 2026-11-13) and shipped in release bundles
+  from 2026-11-14 as `bash install --guided`, with no option needed there
+  (INSTALL-GUIDED §8, §10), and `tools/factory-index`, designed
+  in [INSTALL-GUIDED.md](INSTALL-GUIDED.md). It differs from §4.2 as
+  written in one place, by a decision of 2026-11-10: it shows `fastboot
+  flashing unlock` for the owner to run and doesn't send it
+  (INSTALL-GUIDED §1). It has no fallback to a build with
+  the same bootloader and another baseband (§6.2) until the index records
+  tested pairs.
+- **Open:** how Google's server really answers the download (redirects, resume; INSTALL-GUIDED §5b); still Linux only,
   still a terminal; what the index marks as tested (D3).
 
 ### M2. Install mode and the install link on the phone
@@ -690,13 +799,12 @@ real users.
   link, the build index) used by both front ends. The Omarchy Mobile
   Installer app for Omarchy first (an Omarchy package with its udev rule),
   then other Linux distributions; macOS and Windows later.
-- **Needs:** a language that builds both to WebAssembly and to a native
-  binary (Rust is the obvious candidate; TypeScript with a native USB
-  backend is the other) and one UI shared by the app and the web page (a
-  web UI in a native window, so the two look and behave the same). The CLI
-  from M1 stays as the scriptable front end of the same core.
-- **Open:** language and UI toolkit (D5); signing and distributing the app
-  outside Omarchy.
+- **Needs:** the core in Rust, built natively and to WebAssembly, and one
+  web UI shared by the app and the web page (a web UI in a native window,
+  so the two look and behave the same), as decided (D5). The CLI from M1
+  stays as the scriptable front end of the same core.
+- **Open:** signing and distributing the app outside Omarchy. The language
+  and the UI are decided (D5): Rust, and one web UI.
 
 ### M4. The web flasher
 
@@ -717,14 +825,15 @@ real users.
 
 ### M5. Firmware updates through the Updater
 
-- **What:** §9: the build index in the Updater, the phone downloading and
-  extracting new firmware from Google, versioned firmware sets with
-  rollback.
+- **What:** §9: the build index in the Updater, Google's terms and the
+  download of the new factory image from Google (§9 step 3, with the
+  owner's own download as the fallback) and its extraction on the phone,
+  versioned firmware sets with rollback.
 - **Needs:** M2's `omamobile-provision` on the phone; the index process
   with a tested flag per build and device; a health check after the
   restart that can roll back.
 - **Open:** compatibility between newer firmware and older bootloaders and
-  radios (§6.2); D2 for automatic downloads.
+  radios (§6.2).
 
 ### M6. Secure installs
 
@@ -749,24 +858,103 @@ never offered: that write stays a manual, named exception.
 
 ## 12. Decisions for the maintainer
 
-- **D1. Provisioning:** on the phone with the install link (recommended,
-  §5.3), or on the computer (option A) for the long term too.
-- **D2. Google's terms:** check whether the installer may show Google's
-  acknowledgement itself and download on the user's behalf, and whether the
-  Updater may download later firmware automatically after one acceptance.
-  Until then, M1 uses the open-Google's-page-and-pick-the-file fallback.
+- **D1. Provisioning: decided 2026-11-09, on the phone with the install
+  link (§5.3).** The computer downloads the factory image and hands it over
+  the install link at first boot; the phone checks and extracts it. Until
+  the install link exists (M2), M1 does the same steps over USB SSH with
+  option A's extraction on the computer.
+- **D2. Google's terms: re-decided 2026-11-12. The installer downloads
+  from Google on the owner's behalf, after the owner accepts Google's
+  terms in the installer.** It shows Google's own sentences and links, and
+  in plain words that the files are for the owner's own Pixel, come
+  straight from Google to the owner's computer and are neither hosted nor
+  passed on by the project; the owner types a clear yes, recorded with the
+  build and the time; then the installer downloads the factory image from
+  Google's own server, from the address in the signed index and no other
+  host, and checks it before use (§6.3, [INSTALL-GUIDED](INSTALL-GUIDED.md)
+  §5b). The Updater's firmware offers follow the same rule when they are
+  built (§9 step 3). Whether a third-party tool may present that
+  acceptance remains the project's own risk judgement, and is recorded
+  here as that: it has not been confirmed by Google. This reverses the
+  decision of 2026-11-09, confirmed on 2026-11-10 ("option B": open
+  Google's page at the right build and take the zip the owner saved, with
+  the installer neither presenting the acknowledgement nor downloading).
+  That way stays as the fallback: when the owner declines the terms
+  screen, when the download fails, or when a file is handed in.
 - **D3. Tested builds:** which factory builds the index marks tested, and
   how a build earns it (a `phone-smoke` pass on the reference phone with
   that build's firmware is the proposal).
-- **D4. The other bootloader slot (G4):** switch slots in fastboot to read
-  it (measured, but the installer changes slot flags twice), or trust a
-  factory flash and the user's word.
-- **D5. Core language and UI** for M3.
+- **D4. The other bootloader slot (G4): decided 2026-11-10, the installer
+  measures it itself, on a first install only.** It switches slots in
+  fastboot to read the other slot's version and switches back (G4's option
+  (a)), undone if a step fails. On a reinstall (`--reinstall`, where slot B
+  is ours and current) the round trip is refused, because it clears slot
+  B's successful mark, which on some phones (the Pixel 9a) costs boot tries
+  and can end in a fallback that wipes `userdata`; a reinstall keeps the
+  earlier behaviour and asks for `--bootloader-slots-match VERSION`. As
+  built after review (2026-11-10): off by default and turned on per device
+  (`BOOTLOADER_SLOT_PROBE=yes`) once an attended run on that device is in
+  its notes, because the round trip starts the other slot's bootloader
+  before its version is known (G4). Open for the maintainer: whether Pixel
+  6, Pixel 8 and Pixel 10 family phones may ever get it, given Google's
+  warning; and whether the cost to stock's slot is accepted, once measured.
+- **D5. Core language and UI: decided 2026-11-10, Rust and one web UI.**
+  The shared installer core (M3) is written in Rust, built natively for
+  Linux, Windows and macOS and to WebAssembly for the web flasher, with one
+  web UI shared by the site and the desktop app, in its own repository
+  (https://github.com/derekross/omamobile-installer).
 - **D6. The build index's home:** beside `latest.json` on our server,
   inside a package in `[omamobile]`, or both; signed by the release key
   either way.
-- **D7. Shipping Google's files ourselves (§6.5):** keep fetching from
-  Google and extracting locally (the plan's design), and optionally ask
-  Google for written permission to redistribute the vendor files, or get a
-  lawyer's opinion first. Nothing is bundled or hosted unless one of those
-  says it may be.
+- **D7. Shipping Google's files ourselves (§6.5): not decided, and to be
+  revisited.** Today nothing of Google's is bundled or hosted: the image
+  is fetched from Google and the files are extracted locally (D2). Whether
+  the project could ever ship the extracted files itself, and on what
+  footing (Google's written permission, a lawyer's opinion), is open.
+- **D8. Unlocking: decided 2026-11-10, the owner types the command.** The
+  guided installer does not send `fastboot flashing unlock` itself; it
+  shows the command for the owner to type (§4.2).
+- **D9. Where the warning sits: decided 2026-11-10, before the unlock
+  guidance.** Unlocking the bootloader already wipes the phone, so the one
+  warning (§1 step 3) is read and acknowledged before the unlock steps are
+  shown. It is acknowledged once and recorded once, and nothing asks again;
+  an install record without the acknowledgement shows it, whatever else
+  that record holds ([INSTALL-GUIDED](INSTALL-GUIDED.md) §2, §3).
+- **D10. The USB connection for the install: decided 2026-11-10, a plain
+  link.** The NetworkManager profile the install adds has a manual address
+  on the phone's USB subnet and is never the default route: no DHCP or DNS
+  server, no forwarding, no NAT, nothing of the computer's sent through
+  the phone. Its autoconnect priority is negative, so it never wins over
+  the owner's own connections, and its match is as narrow as
+  NetworkManager allows before the phone has started, which is the gadget's
+  driver (INSTALL-GUIDED §5a says what can't be narrowed, and why the
+  phone's own address can only be used after its first start). No step of
+  the install needs the phone to reach the internet through the cable
+  (checked by reading, INSTALL-GUIDED §5a); [INSTALL.md](INSTALL.md) step 5
+  gives the same profile.
+- **D11. Every stop before the unlock steps: decided 2026-11-12.** A
+  locked phone is judged before it is shown how to unlock, since the
+  unlock erases it: the model, the phone the install was started on, slot
+  B, the two bootloader slots, each image against its partition and the
+  build index (D12) are all settled from the
+  phone's fastboot answers and the download first, and a phone that fails
+  one is stopped without seeing the unlock steps. What can't be judged
+  that early is listed, with the reason, in
+  [INSTALL-GUIDED](INSTALL-GUIDED.md) §2a; that a locked bootloader
+  answers like an unlocked one is still to be seen on a phone.
+- **D12. A build that isn't tested: decided 2026-11-12, the install stops
+  and says "not tested yet".** The installer uses the build whose
+  bootloader and baseband both equal the phone's, and only when the index
+  marks it tested (§6.2's first case with that condition; D3 still says
+  which builds earn the mark). A phone whose exact build is listed and not
+  tested is told that it is not tested yet. **Narrowed 2026-11-12, after
+  the review of #645:** it is told to update Android only when the newest
+  build in the index is tested. Android's updater offers Google's newest
+  build and nothing older, and Android doesn't go back, so advice to
+  update is sound only when the update lands on a tested build. When the
+  newest build isn't tested, a phone is told not to update, also when its
+  own build isn't listed and also when some build between its own and the
+  newest is tested, and to wait or ask in an issue. The index is kept
+  newest first by the tool, and read by the builds' dates. A tested mark
+  covers the builds that share its bootloader and baseband, as a stated
+  assumption ([INSTALL-GUIDED](INSTALL-GUIDED.md) §5).

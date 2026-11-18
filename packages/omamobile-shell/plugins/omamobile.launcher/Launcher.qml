@@ -470,7 +470,8 @@ Item {
   // controls apps keep at the very bottom (the Phone app's Favorites,
   // Recents, Contacts and Keypad tabs). The zone goes with the window: the
   // strip isn't mapped on the home screen (the dock reserves its own height
-  // there), with the drawer open, under the lock screen's keyboard, or for
+  // there) or with the drawer open, unless the keyboard is up and covers the
+  // dock; nor under the lock screen's keyboard, or for
   // a fullscreen window (video, the screensaver), which keeps the whole
   // screen. Under the lock it isn't drawn (no above_lock rule in
   // hypr/phone.lua), and the session lock's surface covers the whole screen
@@ -667,7 +668,10 @@ Item {
 
   // The strip is on screen (each screen's window shows with it), and it is
   // the keyboard's strip: the keyboard is up above it.
-  readonly property bool stripShown: appOnScreen && !opened && !fullscreenOnScreen && !(oskOpen && sessionLocked)
+  // While the keyboard is up the strip shows on the home screen too, and
+  // over the open drawer (its search field): the keyboard covers the dock
+  // there, and with it the swipe up to the drawer.
+  readonly property bool stripShown: (appOnScreen || oskOpen) && (!opened || oskOpen) && !fullscreenOnScreen && !(oskOpen && sessionLocked)
   readonly property bool keyboardStripShown: stripShown && oskOpen
 
   Process {
@@ -1224,7 +1228,9 @@ Item {
       property bool recents: false
       onActiveTranslationChanged: {
         swipeY = activeTranslation.y
-        if (recents) return
+        // Over the open drawer a swipe only closes it: recent apps from
+        // there left the drawer half open over the next app.
+        if (recents || root.opened) return
         if (swipeY < -120) {
           recents = true
           hold.stop()
@@ -1237,7 +1243,17 @@ Item {
         if (active) { swipeY = 0; recents = false; return }
         hold.stop()
         console.log("omamobile-home-indicator: swipe", Math.round(swipeY), recents ? "recents" : "", "(" + swipeArea.strip + ")")
-        if (!recents && swipeY < -24) root.goHome()
+        if (!recents && swipeY < -24 && root.opened) {
+          // Over the drawer (searching): the keyboard goes and the drawer
+          // closes, back to the home screen.
+          root.keyboardCall("hideKeyboard")
+          root.dismiss(0)
+        } else if (!recents && swipeY < -24 && !root.appOnScreen) {
+          // On the home screen (the keyboard's strip, no app): the drawer
+          // opens, as the dock's swipe does, and the keyboard goes.
+          root.keyboardCall("hideKeyboard")
+          root.expand()
+        } else if (!recents && swipeY < -24) root.goHome()
       }
     }
 
@@ -1245,7 +1261,7 @@ Item {
       id: hold
       interval: 350
       onTriggered: {
-        if (!swipe.active || swipe.recents) return
+        if (!swipe.active || swipe.recents || root.opened) return
         swipe.recents = true
         root.showRecents()
       }

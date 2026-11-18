@@ -14,14 +14,35 @@
 # notice doesn't keep offering it) and listed in
 # ~/.local/state/omamobile/update/held-migrations; after a review,
 # omamobile-update run-migration <name> runs it. OMAMOBILE_HOLD_MIGRATIONS=0
-# holds nothing.
+# holds none of the generic desktop matches. Named mobile migrations and
+# mobile-critical PAM/input/video matches remain held until reviewed/run
+# individually.
 real=${OMAMOBILE_REAL_BIN:-/usr/bin}/omarchy-migrate
 case ${1:-} in
   --pending | --check | -h | --help) exec "$real" "$@" ;;
 esac
 
-pattern='limine|mkinitcpio|initcpio|efibootmgr|sbctl|snapper|grub-|bootctl|fwupd|/boot/|plymouth-set-default-theme|dracut|linux-omarchy|nvidia|gum (confirm|choose|input|write|filter|file)|(install|cp|mv) [^|;&]*[[:space:]]"?/etc/pacman\.conf"?[[:space:]]*($|[;&|])|omarchy-refresh-pacman'
-if [[ ${OMAMOBILE_HOLD_MIGRATIONS:-1} == 1 ]]; then
+pattern='limine|mkinitcpio|initcpio|efibootmgr|sbctl|snapper|grub-|bootctl|fwupd|/boot/|plymouth-set-default-theme|dracut|linux-omarchy|nvidia|gum (confirm|choose|input|write|filter|file)|(install|cp|mv) [^|;&]*[[:space:]]"?/etc/pacman\.conf"?[[:space:]]*($|[;&|])|omarchy-refresh-pacman|owedvideo|fcitx|omarchy-apply-lock|/etc/pam\.d/|system-sleep/fprintd'
+# These releases contain concrete unreviewed phone regressions; a broad
+# generic-hold override must not silently enable them.
+mobile_pattern='omarchy-hyprland-titlebars|owedvideo|fcitx|omarchy-apply-lock|/etc/pam\.d/|system-sleep/fprintd'
+# Not held: 1792648436.sh (4.5) removes the 4.0 notification engine's files
+# (one per notification, history/, images/) and carries Do Not Disturb over.
+# The 4.5 shell never reads them, the phone's shade reads the 4.5 store, and
+# they hold old message text, so the phone runs it as a computer does.
+mobile_hold_reason() {
+  case $1 in
+    1791403310.sh) echo 'installs titlebars pinned to a different Hyprland build' ;;
+    1790042972.sh) echo 'adds a world clock to the bar (the phone has its own status bar)' ;;
+    1789764927.sh) echo 'starts owedvideo (unreviewed mobile video pipeline)' ;;
+    1791367434.sh) echo 'replaces input method with Fcitx defaults' ;;
+    1791125650.sh) echo 'changes fprintd resume/stop lifecycle (preserve mobile PAM/claim policy)' ;;
+  esac
+}
+# Only an explicit 0 disables generic holds; malformed values stay safe.
+hold_generic=1
+[[ ${OMAMOBILE_HOLD_MIGRATIONS:-1} == 0 ]] && hold_generic=0
+{
   omarchy_path=${OMARCHY_PATH:-/usr/share/omarchy}
   state=${OMARCHY_MIGRATION_STATE:-$HOME/.local/state/omarchy/migrations}
   held=$HOME/.local/state/omamobile/update/held-migrations
@@ -29,7 +50,14 @@ if [[ ${OMAMOBILE_HOLD_MIGRATIONS:-1} == 1 ]]; then
     [[ -f $file ]] || continue
     name=${file##*/}
     [[ -f $state/$name ]] && continue
-    match=$(grep -m1 -oE "$pattern" "$file" || true)
+    match=$(mobile_hold_reason "$name")
+    reason=$match
+    if [[ -z $match ]]; then
+      match=$(grep -m1 -oE "$mobile_pattern" "$file" || true)
+    fi
+    if [[ -z $match && $hold_generic == 1 ]]; then
+      match=$(grep -m1 -oE "$pattern" "$file" || true)
+    fi
     [[ -n $match ]] || continue
     match=${match%%$'\n'*}
     title=$(sed -n '1s/^echo "\(.*\)"$/\1/p' "$file")
@@ -37,14 +65,15 @@ if [[ ${OMAMOBILE_HOLD_MIGRATIONS:-1} == 1 ]]; then
     touch "$state/$name"
     printf '%s\t%s\t%s\n' "$name" "$match" "${title:-}" >>"$held"
     [[ -n ${OMAMOBILE_UPDATE_DIR:-} ]] && printf '%s\t%s\t%s\n' "$name" "$match" "${title:-}" >>"$OMAMOBILE_UPDATE_DIR/held"
-    echo "Holding migration ${name%.sh}${title:+ ($title)}: it mentions $match."
+    [[ -n $reason ]] || reason="mentions $match"
+    echo "Holding migration ${name%.sh}${title:+ ($title)}: $reason."
     if [[ $match == *pacman* ]]; then
       echo "  Don't run it by hand: it would put [omarchy] above [omamobile] again."
     else
       echo "  Review it, then: omamobile-update run-migration $name"
     fi
   done
-fi
+}
 rc=0
 "$real" "$@" || rc=$?
 

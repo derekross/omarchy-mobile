@@ -116,7 +116,7 @@ Levels and the boot level from the phone's ECT (DVFS block; boot from
 
 | Idx | Domain | ECT levels (MHz) | Boot (MHz) |
 |---|---|---|---|
-| 0 | MIF | 3172 2730 2535 2288 2028 1716 1539 1352 1014 845 676 546 421 | **3172** (max) |
+| 0 | MIF | 3172 2730 2535 2288 2028 1716 1539 1352 1014 845 676 546 421 | **3172** (max) in the ECT; the phone runs at 2028 (below) |
 | 1 | INT | 533 465 332 267 200 155 100 | 533 (max) |
 | 2 | CPUCL0 | 2196 … 300 (15 levels) | 1197 |
 | 3 | CPUCL1 | 2466 … 400 (17 levels) | 910 or 1197 (by ASV group) |
@@ -131,10 +131,15 @@ Levels and the boot level from the phone's ECT (DVFS block; boot from
 
 Consequences:
 
-- **MIF already runs at its maximum (3172 MHz) and INT at 533 MHz.** Google's GPU
+- **MIF runs at 2028 MHz, not the ECT's boot level of 3172 MHz, and INT at
+  533 MHz.** ACPM's own rate read in A2 (`logs/acpm-a2.out`: mif 2028000000)
+  and every gs-decon probe in `logs/` (332 of them: "MIF at 2028000000 Hz")
+  agree. This line said "already at its maximum (3172 MHz)" until 2026-11-07;
+  the ECT's boot entry isn't what the firmware leaves running. Google's GPU
   table asks for MIF ≥ 3172 MHz only at the top GPU level
-  (`gs201-gpu.dtsi:93`), so the GPU needs no MIF change. MIF DVFS is about
-  power, not speed: a devfreq/interconnect driver on clock index 0 later.
+  (`gs201-gpu.dtsi:93`), so the top GPU level would want MIF raised, which
+  nothing does yet. Below that, MIF DVFS is about power, not speed: a
+  devfreq/interconnect driver on clock index 0 later.
 - **The CPUs are still at their boot levels** (about 1.2/0.9–1.2/1.0–1.1 GHz;
   stock goes to 2.1/2.35/2.85 GHz). The same ACPM clocks give cpufreq-dt CPU
   DVFS, as upstream gs101 does (`L/arch/arm64/boot/dts/exynos/google/gs101.dtsi:81`).
@@ -326,7 +331,7 @@ tools/acpm-stage --watchdog a2
 
 - **Does:** loads `clk_acpm`. Registering the 15 clocks sends one `FREQ_GET`
   per domain on channel 0; the script then reads every clock once more.
-- **Expect (Hz):** mif 3172000000, int 533000000, g3d 151000000,
+- **Expect (Hz):** mif 3172000000 (A2 read 2028000000: see section 2), int 533000000, g3d 151000000,
   g3dl2 151000000, gpu 151000000, CPU clusters near their boot levels
   (section 2), the rest at the table's levels. Then Panthor binds:
   `/dev/dri/card1` + `renderD128`, devfreq lists 12 frequencies,

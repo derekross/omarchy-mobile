@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+pkgname=omamobile-device-oriole
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Pixel 6 first-light support: storage policy, USB networking and boot helpers"
+arch=(aarch64)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+depends=(bash systemd util-linux omamobile-keyring)
+provides=(omamobile-device)
+conflicts=(omamobile-device)
+install=omamobile-device-oriole.install
+makedepends=(gcc)
+checkdepends=(python)
+backup=(etc/UPower/UPower.conf.d/20-omamobile-critical-power.conf etc/pacman.d/omamobile-mirrorlist)
+
+build() { "$startdir/build" "$srcdir/build"; }
+check() { "$startdir/test/all"; }
+package() { "$startdir/install" "$pkgdir" "$srcdir/build"; }

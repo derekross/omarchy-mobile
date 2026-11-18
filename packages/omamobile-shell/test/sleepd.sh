@@ -15,6 +15,13 @@ fake() { printf '#!/bin/bash\nT=%q\n%s\n' "$t" "$2" >"$F/$1"; chmod +x "$F/$1"; 
 fake sleep 'echo $(( $(cat "$T/clock") + ${1%%.*} )) >"$T/clock"
 # "the user presses power" at a given time: the watcher gets its signal.
 if [[ -f $T/now_at ]] && (( $(cat "$T/clock") >= $(cat "$T/now_at") )); then rm -f "$T/now_at"; kill -USR1 $PPID; fi
+# A one-shot real hang that moves no clock: the frozen sleep of a phone that
+# is asleep. The "logind" signal arrives 0.3 s later (events in $T/evts).
+if [[ -f $T/hang ]]; then
+  rm -f "$T/hang"
+  ( /usr/bin/sleep 0.3; for e in $(cat "$T/evts"); do printf "{\"type\":\"b\",\"data\":[%s]}\n" "$e" >"$T/evt"; /usr/bin/sleep 0.1; done ) >/dev/null 2>&1 &
+  exec /usr/bin/sleep 20
+fi
 # "the panel finishes powering off" at a given time.
 if [[ -f $T/off_at ]] && (( $(cat "$T/clock") >= $(cat "$T/off_at") )); then rm -f "$T/off_at"; echo 4 >"$T/sys/class/backlight/panel/bl_power"; fi'
 fake omarchy-toggle-enabled '[[ $1 == omamobile-sleep && -f $T/toggle ]]'
@@ -24,7 +31,9 @@ fake omarchy-shell '[[ "$*" == "lock status" ]] && printf "{\"locked\":true,\"se
 [[ "$*" == "lock dark" ]] && echo "omarchy-shell lock dark at $(cat "$T/clock")" >>"$T/log"
 true'
 fake ss 'cat "$T/ssh"'
-fake busctl 'printf "{\"type\":\"a(ssssuu)\",\"data\":[[%s]]}\n" "$(cat "$T/inhibitors")"'
+fake busctl '# the resume listener (busctl wait): a FIFO stands in for the logind signals; none: it fails and the poll carries on
+if [[ " $* " == *" wait "* ]]; then echo "$*" >"$T/wait-args"; [[ -p $T/evt ]] || exit 1; exec cat "$T/evt"; fi
+printf "{\"type\":\"a(ssssuu)\",\"data\":[[%s]]}\n" "$(cat "$T/inhibitors")"'
 fake pactl 'cat "$T/sinks"'
 fake omamobile-keys 'echo "omamobile-keys $* at $(cat "$T/clock")" >>"$T/log"'
 fake systemctl 'echo "systemctl $* at $(cat "$T/clock")" >>"$T/log"
@@ -167,6 +176,44 @@ reset; sleepd now >"$t/out"
 reset; echo false >"$t/secure"; sleepd now >"$t/out"
 [[ $(suspends) == 0 ]] || fail "now with no watcher still checks the lock"
 echo "ok - sleepd: now (the power key) sleeps within 2 s through the watcher, and does nothing with the toggle off"
+
+fake systemctl 'echo "systemctl $* at $(cat "$T/clock")" >>"$T/log"
+case "$*" in
+  suspend)
+    echo $(( $(cat "$T/sys/power/suspend_stats/success") + 1 )) >"$T/sys/power/suspend_stats/success"
+    cat "$T/wake_irq" 2>/dev/null >"$T/sys/power/pm_wakeup_irq" || echo 145 >"$T/sys/power/pm_wakeup_irq"
+    echo $(( $(cat "$T/clock") + 600 )) >"$T/clock"
+    [[ -f $T/on_resume ]] && bash "$T/on_resume"
+    exit 0 ;;
+  "--user --quiet is-active omamobile-sleepd.service") [[ -f $T/active ]] ;;
+esac'
+# The resume event: a power-key wake while the watcher sits in a long sleep
+# (the real one is frozen inside it, so the rest of it runs after the resume).
+# Without the event the 20 s real hang below would outlast the 10 s limit.
+watchto() {
+  timeout 10 env HOME="$t/home" PATH="$F:$PATH" OMAMOBILE_SLEEP_SYSFS="$t/sys" OMAMOBILE_SLEEP_PROCFS="$t/proc" \
+    OMAMOBILE_SLEEP_CLOCK="$t/clock" OMAMOBILE_SLEEPD_STOP_AT=$((1000 + $1)) bash "$here/bin/omamobile-sleepd" >"$t/out" 2>&1
+}
+lit='echo 0 >"%s"; echo true >"%s"; touch "%s"\n'
+pkey() { reset; mkfifo "$t/evt"; echo 111 >"$t/wake_irq"; printf "$lit" "$t/sys/class/backlight/panel/bl_power" "$t/dpms" "$t/hang" >"$t/on_resume"; echo "$1" >"$t/evts"; }
+# PrepareForSleep(false) ends the wait at once.
+pkey false; watchto 700 || fail "event: PrepareForSleep(false) ends the sleeping watcher's wait (timed out)"
+grep -c '^omamobile-keys wake' "$t/log" >/dev/null || fail "event: the power-key wake lights the PIN pad"
+[[ $(<"$t/wait-args") == *"wait org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager PrepareForSleep"* ]] || fail "event: the listener names logind as the sender ($(<"$t/wait-args"))"
+rm -f "$t/evt"
+# A true ahead of the false (the signal before a sleep) is read and ignored: the false after it still arrives.
+pkey "true false"; watchto 700 || fail "event: only the false signal ends the wait (timed out)"
+[[ $(suspends) == 1 ]] || fail "event: PrepareForSleep(true) does not start a sleep"
+grep -c "no more resume events from logind" "$t/out" >/dev/null && fail "event: a true then a false keeps the listener going"
+rm -f "$t/evt"
+# No signal source at all (busctl wait fails): the poll carries on as before.
+reset; echo 111 >"$t/wake_irq"; printf 'echo 0 >"%s"; echo true >"%s"\n' "$t/sys/class/backlight/panel/bl_power" "$t/dpms" >"$t/on_resume"; watch 700
+grep -c '^omamobile-keys wake' "$t/log" >/dev/null || fail "event: with no listener the poll still lights the PIN pad"
+grep -c "no more resume events from logind: back to polling" "$t/out" >/dev/null || fail "event: a listener that gives up says so"
+# Nothing of the listener is left behind.
+sleep 0.5; pgrep -f "cat $t/evt" >/dev/null && fail "event: the listener's busctl is killed with the watcher"
+rm -f "$t/evt" "$t/evts"
+echo "ok - sleepd: logind's PrepareForSleep(false) ends the wait at once, true is ignored, the poll is the fallback, nothing is left running"
 
 reset; out=$(sleepd check) || fail "check: exit 0 when nothing stops sleep"
 [[ $out == "nothing stops sleep" ]] || fail "check: says so ($out)"

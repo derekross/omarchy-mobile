@@ -18,14 +18,33 @@ Tracking issue: https://github.com/derekross/omarchy-mobile/issues/199
 - Bootloader: spacecraft-17.4-16238327 on both slots (`fastboot getvar version-bootloader`, confirmed with `--set-active=b`)
 - Kernel: 6.12.69-android16-6-g5c5f2fea42dd-ab15835541-4k (`adb shell uname -a`)
 - CPU: 6× 0xd8b (rev 1) + 1× 0xd8c (rev 0) (`/proc/cpuinfo`)
-- Boot image header: v4
+- Boot image header: v4 (`unpack_bootimg` on `init_boot.img` and `boot.img`)
+- OS version: 17.0.0 (`unpack_bootimg --boot_img init_boot.img`)
+- OS patch level: 2026-09 (`unpack_bootimg --boot_img init_boot.img`)
+- Page size: 0x800 (`unpack_bootimg --boot_img vendor_boot.img`)
 - DTB: in `vendor_kernel_boot.img` (decompiled to confirm nodes)
 - Display: Verisilicon DC9x00 DPU + MIPI DSI2 (stock DTB)
 - dtbo_idx: 37 (`adb shell getprop ro.boot.dtbo_idx`)
-- DTBO entry 37: id=0x80406 rev=0x10000 (factory `dtbo.img`)
+- DTBO entry 37: id=0x80406 rev=0x10000 (`mkdtboimg dump` on factory `dtbo.img`)
+- AVB values: `avbtool info_image` on the factory `vbmeta.img` (from the official factory image for CD1A.260905.001.B1), plus `boot.img` and `init_boot.img`. Rollback index and security patch match the factory image; vbmeta chains boot (loc 2) and init_boot (loc 4). Same values present on slot B after the factory flash.
 - Bootloader unlocked: yes
 - Current confirmed bootable slots: both (factory flash + full OTA sideload)
 - ABL still appends `console=null` (`adb shell cat /proc/cmdline`)
+
+## Slots
+
+- OrangeFox was installed via the AIO installer (`install-desktop.sh`) after the factory flash and OTA sideload, and before the calibration backup.
+- Flash output not kept; the installer was set to slot b only.
+- The installer replaced only the recovery part of `vendor_boot` on slot B. Slot A remains stock.
+- The installer dropped the AVB footer from slot B’s vendor_boot (grown ramdisk + old footer would overflow the partition). Slot B’s vendor_boot currently has no AVB footer.
+- It did not write `vbmeta`, `boot`, or `init_boot`.
+- No plan to restore stock `vendor_boot` on slot A (it was never changed).
+
+## Partition and AVB sources
+
+- Partition sizes: `fastboot getvar partition-size:boot_b`, `partition-size:init_boot_b`, etc.
+- Partition names and by-name → block mapping: from recovery (sysfs/by-name)
+- AVB values: see Stock facts above (factory `vbmeta.img`)
 
 ## Hardware from stock DTB (vendor_kernel_boot)
 
@@ -52,6 +71,8 @@ Tracking issue: https://github.com/derekross/omarchy-mobile/issues/199
 
 ## Status
 
-Stock facts collected and both slots restored to factory.  
+Stock facts collected and both slots restored to factory. On 2026-11-01 OrangeFox’s recovery replaced slot B’s vendor_boot (stock copy saved by the installer at backup/20261101-151204/vendor_boot_b before the rebuild).
 Device descriptor added in `device/kodiak/device.conf`.  
-Critical calibration partitions backed up off-device with SHA-256 checksums (persist, modem_a/b, nvdata, nvram, devinfo, trusty_userdata).  
+Critical calibration partitions backed up off-device with SHA-256 checksums (persist, modem_a/b, nvdata, nvram, devinfo, trusty_userdata). Taken from OrangeFox recovery on slot B (contents at that time; recovery may have mounted persist/metadata). Not a clean stock baseline.
+
+Next calibration backup will be taken from the Omarchy initramfs on first slot B boot (read-only dd). Checksums and file/folder timestamps will be compared with the OrangeFox backup to see if persist or other calibration partitions changed.

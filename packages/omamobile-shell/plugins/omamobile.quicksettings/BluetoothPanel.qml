@@ -543,9 +543,11 @@ Item {
       padding: root.pad
 
       focus: root.opened
+      // One level: a sheet closes; the panel goes back to quick settings,
+      // as its header's back button.
       Keys.onEscapePressed: {
         if (root.activeSheet) root.cancelSheet()
-        else root.close()
+        else root.backRequested()
       }
 
       // Swallow taps so they don't reach the scrim.

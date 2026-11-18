@@ -6,6 +6,8 @@ import Quickshell
 // the test's responder answers the command, finishes with that output.
 QtObject {
   id: proc
+  property bool stdinEnabled: false
+  function write(value) {}
   property var command: []
   property bool running: false
   property var stdout: null

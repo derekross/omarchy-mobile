@@ -1,0 +1,30 @@
+# App launch: no "Launching ..." toast for a desktop entry that runs
+# omarchy-shell. Such an entry opens a shell surface (on the phone the
+# Updates entry summons the update sheet), never a toplevel, so the toast
+# waited for a window that never came and sat over the sheet's buttons
+# until its timeout. Every other launch keeps the toast. Candidate for
+# upstream Omarchy.
+diff --git i/shell/services/AppLibrary.qml w/shell/services/AppLibrary.qml
+--- i/shell/services/AppLibrary.qml
++++ w/shell/services/AppLibrary.qml
+@@ -74,10 +74,19 @@
+     if (!iconIndexScan.running) iconIndexScan.running = true
+   }
+ 
++  // An entry that runs omarchy-shell opens a shell surface (a panel or a
++  // sheet), never a window, so the launch toast would wait for a toplevel
++  // that doesn't come and cover the surface until it times out.
++  function launchesShellSurface(id) {
++    var entry = DesktopEntries.byId(id)
++    var command = entry && entry.command ? entry.command : []
++    return command.length > 0 && String(command[0]).replace(/^.*\//, "") === "omarchy-shell"
++  }
++
+   function launch(desktopId, name) {
+     var id = String(desktopId || "")
+     if (!id) return
+-    root.beginLaunchFeedback(name)
++    if (!root.launchesShellSurface(id)) root.beginLaunchFeedback(name)
+     // Start gtk-launch inside a scope under app-graphical.slice so apps do not
+     // inherit wayland-wm@.service. Keeping gtk-launch as the desktop-entry
+     // resolver supports IDs with spaces and entries that UWSM rejects.

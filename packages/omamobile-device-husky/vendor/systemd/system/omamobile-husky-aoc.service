@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# The AoC and the speaker amplifiers on the Pixel 8 Pro at boot. If a start
+# hangs, the next boot leaves the AoC off (see the script). Does nothing on a
+# kernel that has no AoC node. The AoC modules are blacklisted for autoload
+# (modprobe.d/omamobile-husky-aoc.conf), so this hang-safe script is the only
+# thing that starts them.
+[Unit]
+Description=Start the AoC audio DSP and the speaker amplifiers (hang-safe)
+After=local-fs.target systemd-modules-load.service
+Before=sound.target
+ConditionPathExists=/sys/bus/platform/devices/154b0000.aoc
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-husky-aoc-start
+RemainAfterExit=yes
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

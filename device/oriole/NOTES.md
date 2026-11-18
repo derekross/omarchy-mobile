@@ -9,6 +9,80 @@ Sources:
 - `U/`: upstream Linux v7.0, `arch/arm64/boot/dts/exynos/google/gs101*.dts(i)`.
 - `P/`: postmarketOS pmaports [`device/testing/device-google-oriole`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/device-google-oriole), [`soc-google-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/soc-google-gs101) and [`linux-postmarketos-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/linux-postmarketos-gs101) (7.0.6), which builds [gs101-mainline/linux @ d28cfa42](https://github.com/gs101-mainline/linux/tree/d28cfa4275b95e93f4b7a1e743de31b723bd21b8).
 
+## 2026-11-08: offline audit of omitted startup safeguards
+
+[V, recovered private checker and unit] The companion's boot check is gated
+by `omamobile.oriole-staged`, requires private initramfs assets and an armed
+handoff-watchdog process, and checks protected storage, the compositor,
+shell IPC and staged touch state. Only after success does it disarm the
+watchdog, record the kernel release and clear the persistent boot-in-progress
+marker. The matching staged initramfs uses a leftover marker for guarded USB
+rescue before providers. This is Linux startup/recovery state, not ABL
+boot-success marking: the checker does not write boot metadata. Its private
+paths, touch interface and rendering assumptions prevent treating it as a
+generic public device-package service.
+
+[V, recovered configuration] The companion separately retains cheetah's
+`RebootWatchdogSec=1min`. The checker requires an open `/dev/watchdog0` and
+checks disarm, but source prerequisites are not a public-kernel binding or
+shutdown-reset test. No such standalone qualification was established by
+this offline audit. Neither watchdog mechanism certifies slot success.
+
+The README and descriptor now explicitly say that an image with this package
+alone is not yet a supported install. Public startup/recovery integration and
+its hardware qualification remain separate work. No private services,
+battery code, boot-success writes or watchdog configuration were added;
+no phone access or new hardware result is claimed.
+
+## 2026-11-07: first-light 0.2.0 package installed with local safeguards
+
+[V] Native `makepkg` build/check/package passed for `0.2.0-1` on the Pixel 6.
+The build used a separate `BUILDDIR`, preserving the package's source tree
+during makepkg clean-build preparation. Version 0.2.0 satisfies the existing
+hardware packages' minimum device-package dependencies; a 0.1.0 transaction
+was rejected by the normal dependency check before any package changes.
+
+[V] On `7.3.0-rc6-oriole-hsi1-late-dev0-g4bd35d34abb9-dirty`, normal signed
+`pacman -U` installed `omamobile-device-oriole 0.2.0-1` together with a private
+`omamobile-oriole-local-safeguards 0.1.9-2` package. The latter preserves the
+original boot-check/battery scripts and units, power-key policy and reboot
+watchdog policy byte for byte. It is not part of this public package or a
+standalone-image qualification. All archive signatures were verified against
+the existing phone keyring; dependency, signature and hook checks stayed on.
+
+[V] Fresh SSH, safeguard hashes, package ownership, enabled units, repository
+configuration/channel and pacman database checks passed. The existing local
+mirrorlist was retained, with the incoming default saved as `.pacnew`. A
+laptop kernel log, owned marker and bounded rollback timer covered the
+transaction; systemd's supported update marker prevented a udev retrigger.
+The timer and only this test's markers were cleared after validation.
+
+[V] `phone-smoke` passed every required check: slot B, 49-partition storage
+guard, root, kernel health, USB and session. It still reported existing
+error-level kernel messages and the backlight/NFC low-battery startup
+refusals. Battery reported 70% Charging. No kernel fault was observed in the
+transaction log. No reboot, flash, provider retry or shell restart occurred.
+Rollback ownership transfer passed offline; live rollback and a boot of this
+package combination remain untested. Do not replace an integration package
+with this public package alone.
+
+## 2026-11-07: first-light package native staging check
+
+[V] Package source at `d32957dc3feb` passed `test/all` on the Pixel 6
+(`aarch64`), running
+`7.3.0-rc6-oriole-hsi1-late-dev0-g4bd35d34abb9-dirty`. The reboot helper
+compiled and installation into a temporary directory passed the file,
+USB-route, coldplug and disabled-sleep checks. Temporary files were removed.
+The package was not installed; `omamobile-device-oriole 0.1.9-2` remains.
+
+[V] A separate baseline `phone-smoke` report passed the required boot,
+storage, root, kernel-health, USB and session checks. It also reported new
+error-level kernel messages and failed backlight/NFC units; both units
+reported `Battery outside development limits`. This is not a clean report
+or an exact-package boot qualification. The first-light package omits the
+installed boot-check, battery and reboot-watchdog safeguards, so replacing
+the integration package still needs a qualified migration and rollback.
+
 ## 2026-10-31: build provenance and recovery limits
 
 This describes the unpublished stack in the October 30 smoke report. It is
@@ -125,6 +199,12 @@ helper's logic or from a later backup. No new metadata write was attempted.
 - [V] A Pixel 6 booted native Linux from slot B with its root on `userdata`, using the unpublished `7.3.0-rc6-oriole-hsi1-late-dev0-g4bd35d34abb9-dirty` kernel and a separate integration package set. A read-only `phone-smoke --here --json` run passed all required checks: storage guard, root, USB and desktop session. It reported no failed units, oops, BUG or WARN, and 48 existing dmesg error lines; sound, sensors and cameras were skipped. This is a test-phone result, not an installation claim for the public images.
 - [V, source] On the published kernel's `omamobile` branch, the S2MPG10 alarm callback reads `S2MPS14_REG_ST2` at offset `0x08`. On S2MPG10 that is `INT3M`; [Google's register definitions](https://android.googlesource.com/kernel/google-modules/soc/gs/+/204078758737776959ecc85c527a00fd2cabb62f/include/linux/mfd/samsung/s2mpg10-register.h) place `STATUS2` at `0x0d`, and its [RTC driver](https://android.googlesource.com/kernel/google-modules/soc/gs/+/204078758737776959ecc85c527a00fd2cabb62f/drivers/rtc/rtc-s2mpg10.c) reads the alarm-0 status bit there. The proposed kernel fix, [linux-omarchy-mobile#149](https://github.com/derekross/linux-omarchy-mobile/pull/149), is S2MPG10-specific; the S2MPG12 path remains unchanged. The test phone's unpublished kernel already contains the correction.
 - [I] The smoke test does not exercise a live pending alarm, alarm delivery, suspend or wake. Those paths remain to be independently verified.
+
+## 2026-10-17: coldplug audit on the first-light kernel
+
+[V] On `7.3.0-rc6-omamobile-oriole-firstlight-g4bd35d34abb9-dirty`, a read-only audit of unbound platform, I2C and SPI devices found module matches for `clk_acpm`, `max77759_charger`, `gpio_max77759`, `arm_dsu_pmu`, `at24` and `max17042_battery`. The local device policy blocked both alias autoload and direct modprobe; dry runs confirmed the refusals. The audit did not load any of these modules, so it does not establish what each would do when loaded. These blocks are conservative bring-up policy, not proof of individual driver failure.
+
+[V] The local native integration later used a separate experimental read-only `oriole-battery-readonly` provider, publishing `omamobile-battery`, to report battery telemetry; it did not use `max17042_battery`. Its kernel charging status remained Unknown. UPower inference and a separate charger-status observation do not establish charging control or prove that the upstream charger driver is safe. The public package contains neither that experimental provider nor its startup service; battery reporting is not guaranteed by this policy package.
 
 ## 2026-10-16: stage 0, part 2: a retail Pixel 6 (stock, bootloader locked)
 

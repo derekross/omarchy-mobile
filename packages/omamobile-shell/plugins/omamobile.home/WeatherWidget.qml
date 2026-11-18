@@ -133,7 +133,7 @@ Item {
       Text {
         textFormat: Text.PlainText
         visible: !!widget.forecast
-        text: widget.forecast ? [widget.here ? "Here" : widget.config.place, widget.look.text,
+        text: widget.forecast ? [widget.here ? "Your location" : widget.config.place, widget.look.text,
           widget.forecast.high !== null ? "↑" + widget.forecast.high + "° ↓" + widget.forecast.low + "°" : ""]
           .filter(function(s) { return !!s }).join(" · ") : ""
         color: widget.dim

@@ -5,9 +5,12 @@
 # network, no Docker, no phone; the real keys/ and out/ are never touched):
 # build-packages and repo-publish refuse without keys/gnupg.release, never
 # fall back to the original keys/gnupg, and refuse a key omamobile-keyring
-# doesn't trust; build-packages --resign moves a repository signed with the
-# original key to the release key, package bytes unchanged; repo-publish
-# publishes only what the release key signed (a dry run, with rsync faked).
+# doesn't trust or revokes, or an omamobile-revoked that can't be read as a
+# file or has any line that isn't one fingerprint in capitals with its
+# newline, in any locale; build-packages --resign moves a repository signed
+# with the original key to the release key, package bytes unchanged;
+# repo-publish publishes only what the release key signed (a dry run, with
+# rsync faked).
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -92,7 +95,7 @@ echo "$other" > "$R/keys/fingerprint.release"
 if run tools/build-packages --resign; then fail "refuses a key omamobile-keyring doesn't trust"; fi
 grep -q 'does not trust' "$t/log" || { cat "$t/log"; fail "says the key is not trusted"; }
 echo "$release" > "$R/keys/fingerprint.release"
-echo "$release:4:" > "$kr/omamobile-revoked"
+echo "$release" > "$kr/omamobile-revoked"
 if run tools/build-packages --resign; then fail "refuses a revoked key"; fi
 grep -q 'is revoked' "$t/log" || { cat "$t/log"; fail "says the key is revoked"; }
 : > "$kr/omamobile-revoked"
@@ -119,6 +122,98 @@ done
 [[ $(cd "$repo" && sha256sum ./*.pkg.tar.zst) == "$sums_before" ]] || fail "the packages' bytes are unchanged"
 ls "$repo" | grep -c '\.new$' >/dev/null && fail "no half-done signatures are left"
 pass "build-packages --resign signs every package and the index with the release key, bytes unchanged"
+
+# --- omamobile-revoked is read only when every line is well formed ---
+# One 40-digit fingerprint in capitals per line, with its newline
+# (docs/RELEASES.md §10): any other line stops the tools before they sign,
+# whichever key it names.
+nl=$'\n'
+sigs() { cat "$repo"/*.sig | sha256sum; }
+malformed() {  # malformed WHAT LINE CONTENT: omamobile-revoked holds CONTENT
+  local before
+  printf '%s' "$3" > "$kr/omamobile-revoked"
+  before=$(sigs)
+  if run tools/build-packages --resign; then fail "$1 is refused"; fi
+  grep -c "omamobile-revoked is malformed at line $2: " "$t/log" >/dev/null || { cat "$t/log"; fail "$1: names line $2 of omamobile-revoked"; }
+  if grep -c 'is revoked' "$t/log" >/dev/null; then cat "$t/log"; fail "$1: doesn't say the key is revoked"; fi
+  [[ $(sigs) == "$before" ]] || fail "$1: nothing is signed"
+}
+malformed "the release key in lowercase" 1 "${release,,}$nl"
+malformed "the release key in omamobile-trusted's FPR:4: form" 1 "$release:4:$nl"
+malformed "the release key with a word after it" 1 "$release revoked$nl"
+malformed "the release key with a CRLF" 1 "$release"$'\r\n'
+malformed "39 digits" 1 "${release:0:39}$nl"
+malformed "41 digits" 1 "${release}0$nl"
+malformed "a digit that isn't hex" 1 "${release:0:39}G$nl"
+malformed "a blank line before the release key" 1 "$nl$release$nl"
+malformed "a blank line after the release key" 2 "$release$nl$nl"
+malformed "the release key without its newline" 1 "$release"
+malformed "a last line without its newline" 2 "$original$nl$release"
+malformed "another key in the FPR:4: form" 1 "$original:4:$nl"
+malformed "another key in lowercase, on line 2" 2 "$original$nl${original,,}$nl"
+malformed "a blank line, then a lowercase one" 2 "$original$nl$nl${release,,}$nl"
+echo "$original" > "$kr/omamobile-revoked"
+run tools/build-packages --resign || { cat "$t/log"; fail "a well-formed line for another key lets the release key sign"; }
+: > "$kr/omamobile-revoked"
+run tools/build-packages --resign || { cat "$t/log"; fail "an empty omamobile-revoked lets the release key sign"; }
+echo "$release" > "$kr/omamobile-revoked"
+if run tools/build-packages --resign; then fail "a well-formed line for the release key refuses it"; fi
+grep -c 'is revoked' "$t/log" >/dev/null || { cat "$t/log"; fail "a well-formed line for the release key says it is revoked"; }
+: > "$kr/omamobile-revoked"
+pass "a malformed omamobile-revoked stops build-packages before it signs, naming the line; a well-formed one is read as before"
+
+# A missing omamobile-revoked revokes nothing, as before; anything else in
+# its place that can't be read as a file stops the tools, never reads as
+# a file that lists nothing.
+unreadable() {  # unreadable WHAT: omamobile-revoked's place holds WHAT
+  local before
+  before=$(sigs)
+  if run tools/build-packages --resign; then fail "$1 is refused"; fi
+  grep -c 'omamobile-revoked cannot be read: ' "$t/log" >/dev/null || { cat "$t/log"; fail "$1: says omamobile-revoked cannot be read"; }
+  if grep -c 'is revoked' "$t/log" >/dev/null; then cat "$t/log"; fail "$1: doesn't say the key is revoked"; fi
+  [[ $(sigs) == "$before" ]] || fail "$1: nothing is signed"
+}
+rm "$kr/omamobile-revoked"
+run tools/build-packages --resign || { cat "$t/log"; fail "a missing omamobile-revoked lets the release key sign"; }
+mkdir "$kr/omamobile-revoked"
+unreadable "a directory"
+rmdir "$kr/omamobile-revoked"
+ln -s /dev/null "$kr/omamobile-revoked"
+unreadable "a link to /dev/null"
+ln -sfn nowhere "$kr/omamobile-revoked"
+unreadable "a link to nowhere"
+rm "$kr/omamobile-revoked"
+echo "$release" > "$kr/omamobile-revoked"
+chmod 000 "$kr/omamobile-revoked"
+if [[ -r $kr/omamobile-revoked ]]; then
+  pass "# skip: this user reads a mode-000 file (root), so it can't stand for one it can't read"
+else
+  unreadable "a mode-000 file that revokes the release key"
+fi
+chmod 644 "$kr/omamobile-revoked"
+: > "$kr/omamobile-revoked"
+pass "an omamobile-revoked that can't be read as a file stops build-packages before it signs; a missing one revokes nothing"
+
+# The check reads in the C locale. In a locale whose ranges follow its
+# collation, [0-9A-F] can take a letter that isn't hex: build en_US.UTF-8 in
+# scratch, and use it only if it does take this line's É.
+line=$'\xc3\x89'${release:1}
+mkdir "$t/locale"
+if command -v localedef >/dev/null &&
+   localedef --no-archive -i en_US -f UTF-8 "$t/locale/en_US.UTF-8" >/dev/null 2>&1 &&
+   env LOCPATH="$t/locale" LC_ALL=en_US.UTF-8 grep -cxE '[0-9A-F]{40}' <<<"$line" >/dev/null; then
+  printf '%s\n' "$line" > "$kr/omamobile-revoked"
+  before=$(sigs)
+  if run env LOCPATH="$t/locale" LC_ALL=en_US.UTF-8 tools/build-packages --resign; then
+    fail "a line with an É is refused in a locale whose [0-9A-F] takes it"
+  fi
+  grep -c 'omamobile-revoked is malformed at line 1: ' "$t/log" >/dev/null || { cat "$t/log"; fail "a line with an É: names line 1"; }
+  [[ $(sigs) == "$before" ]] || fail "a line with an É: nothing is signed"
+  : > "$kr/omamobile-revoked"
+  pass "a line the locale's collation would take for a fingerprint is refused all the same"
+else
+  pass "# skip: no en_US.UTF-8 here (localedef) whose [0-9A-F] takes É"
+fi
 
 # --- and publishing takes it ---
 run tools/repo-publish --no-build --dry-run development || { cat "$t/log"; fail "repo-publish takes the re-signed repository"; }

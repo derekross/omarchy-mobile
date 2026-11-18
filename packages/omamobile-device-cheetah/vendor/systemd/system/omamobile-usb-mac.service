@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# Give the USB gadget the same MAC addresses on every boot (omamobile-usb-mac).
+# Early, before the network is configured, because the host sees the link drop
+# and come back once while the addresses change. A failure leaves the gadget
+# as the initramfs made it and never holds the boot.
+[Unit]
+Description=Keep the USB gadget's MAC addresses the same on every boot
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target
+Wants=network-pre.target
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/omamobile-usb-mac
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

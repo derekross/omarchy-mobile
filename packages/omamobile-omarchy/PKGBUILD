@@ -7,7 +7,7 @@ pkgdesc="Omarchy Mobile's Omarchy patches, re-applied after every Omarchy upgrad
 arch=(any)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
-depends=('omarchy>=4.0.6' bash python patch libarchive gzip util-linux sudo pacman-contrib fakeroot systemd)
+depends=('omarchy>=4.0.6' bash python patch libarchive gzip util-linux sudo pacman-contrib fakeroot systemd zram-generator)
 optdepends=('omamobile-shell: the update sheet')
 checkdepends=(diffutils patch util-linux libarchive)
 install=omamobile-omarchy.install

@@ -13,11 +13,28 @@
 # before, and a user's own fastfetch config is left alone. Candidate for
 # upstream Omarchy.
 #
-# Against Omarchy 4.0.6 (4.0.6-1).
+# Omarchy 4.5's About draws a sheen over the logo, on the cells where it
+# finds the logo in fastfetch's own output. It finds them in the layout that
+# was drawn: the fit still measures the side-by-side layout it sizes a
+# desktop window for, and the sheen then measures again with the options the
+# render used, so a logo above the modules is animated where it is, and
+# with no logo there is no sheen.
+#
+# Against Omarchy 4.5.0 (4.5.0-3).
 diff --git i/bin/omarchy-launch-about w/bin/omarchy-launch-about
+index 0a4a920..99ec53e 100755
 --- i/bin/omarchy-launch-about
 +++ w/bin/omarchy-launch-about
-@@ -146,6 +146,44 @@ fit_window() {
+@@ -208,6 +208,8 @@ fit_window() {
+   # logo and the module column: once the logo is the taller of the two, fastfetch
+   # writes a row more than that arithmetic expects, and a window sized by it
+   # scrolls the top padding away.
++  measure_args=()
++  LAYOUT_ROWS=""
+   measure_layout || return 1
+ 
+   # Mirror the logo block in the fastfetch config: 2 columns of padding left of
+@@ -250,6 +252,45 @@ fit_window() {
    return 1
  }
  
@@ -33,13 +50,14 @@ diff --git i/bin/omarchy-launch-about w/bin/omarchy-launch-about
 +  read -r logo_w logo_h <<<"$(logo_dimensions)"
 +  [[ -n ${logo_w:-} ]] || return 1
 +
-+  modules=$(fastfetch --logo none | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g'; printf X)
++  modules=$(about_fastfetch --logo none | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g'; printf X)
 +  modules=${modules%X}
 +  module_w=$(printf '%s' "$modules" | display_columns)
 +  module_h=$(printf '%s' "$modules" | wc -l)
 +
-+  printf '%s %s %s\n' $(( 2 + logo_w + 6 + module_w + 2 )) \
-+    $(( 2 + logo_w > module_w ? 2 + logo_w : module_w )) $(( 2 + logo_h + module_h + 1 ))
++  printf '%s %s %s\n' $(( LOGO_PAD_LEFT + logo_w + LOGO_PAD_RIGHT + module_w + LOGO_PAD_LEFT )) \
++    $(( LOGO_PAD_LEFT + logo_w > module_w ? LOGO_PAD_LEFT + logo_w : module_w )) \
++    $(( LOGO_PAD_TOP + logo_h + module_h + 1 ))
 +}
 +
 +# The config turns line wrapping off, so a terminal narrower than the logo and
@@ -59,25 +77,52 @@ diff --git i/bin/omarchy-launch-about w/bin/omarchy-launch-about
 +  fi
 +}
 +
- if [[ ${1:-} == "--render" ]]; then
-   printf '\e[?25l'
+ # One run answers both questions the sheen has to ask first. How tall the layout
+ # is, because a window too small for it scrolls, which moves the logo off the rows
+ # the frames address. And what colour fastfetch drew the logo in, because the
+@@ -258,11 +299,14 @@ fit_window() {
+ measure_layout() {
+   [[ -n ${LAYOUT_ROWS:-} ]] && return 0
  
-@@ -154,11 +192,13 @@ if [[ ${1:-} == "--render" ]]; then
++  # Without a logo there is nothing to find, and nothing for the sheen to draw.
++  [[ " ${measure_args[*]} " != *" none "* ]] || return 1
++
+   local rendered plain needle offset found row
+ 
+   # --pipe false because fastfetch drops its colours when it is not writing to a
+   # terminal, and it is writing to this substitution.
+-  rendered=$(about_fastfetch --pipe false 2>/dev/null; printf X)
++  rendered=$(about_fastfetch "${measure_args[@]}" --pipe false 2>/dev/null; printf X)
+   rendered=${rendered%X}
+   LAYOUT_ROWS=$(printf '%s' "$rendered" | wc -l)
+   (( LAYOUT_ROWS > 0 )) || return 1
+@@ -395,13 +439,15 @@ if [[ ${1:-} == "--render" ]]; then
  
    fitted=false
    passes=0
 +  room=$(layout_room)
    while :; do
-     size=$(stty size)
+     grid=$(stty size)
      logo_stamp=$(stat -c %Y "$LOGO_FILE" 2>/dev/null)
+     resized=false
+     LAYOUT_ROWS=""
      clear
--    fastfetch
-+    read -ra logo_args <<<"$(logo_options $size)"
-+    fastfetch "${logo_args[@]}"
+-    about_fastfetch
++    read -ra logo_args <<<"$(logo_options $grid)"
++    about_fastfetch "${logo_args[@]}"
      # A second pass picks up a fit that could not measure the window the first
      # time. Beyond that, a window that will not settle would be fitted again on
      # every repaint.
-@@ -173,6 +213,7 @@ if [[ ${1:-} == "--render" ]]; then
+@@ -410,12 +456,16 @@ if [[ ${1:-} == "--render" ]]; then
+     fi
+     # An empty frame list plays nothing, so a logo that cannot be animated waits
+     # here exactly as the still one did, and there is one loop rather than two.
++    # The sheen follows the layout that was drawn, not the one the fit measured.
++    measure_args=("${logo_args[@]}")
++    LAYOUT_ROWS=""
+     build_sheen
+     while play_sheen && rest_sheen; do :; done
+     # A rebranded logo changes the content dimensions, so measure again.
      if [[ $(stat -c %Y "$LOGO_FILE" 2>/dev/null) != $logo_stamp ]]; then
        fitted=false
        passes=0

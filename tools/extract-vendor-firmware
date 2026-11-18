@@ -3,8 +3,8 @@
 # extract-vendor-firmware: copy the Wi-Fi, Bluetooth, haptics and speaker
 # amplifier firmware the Pixel 7 Pro (cheetah) needs out of a Google factory
 # image, on the user's own machine. The Pixel 7 (panther), the Pixel 6 Pro
-# (raven), the Pixel 9a (tegu) and the Pixel 8 Pro (husky, Wi-Fi only) are
-# options (-d).
+# (raven), the Pixel 9a (tegu) and the Pixel 8 Pro (husky: Wi-Fi, Bluetooth
+# and haptics) are options (-d).
 #
 # Google's firmware is not ours to redistribute, so Omarchy Mobile never ships it.
 # Like LineageOS's extract-files, this pulls it from an image the user already
@@ -38,6 +38,16 @@
 # missing tuning fails to load instead of falling back to the other speaker's
 # (or to linux-firmware's generic cirrus/cs35l41-dsp1-spk-prot.bin).
 #
+# The Pixel 7 (-d panther; <board> is "google,gs201-panther") takes the same
+# files as cheetah under its own names, and also the video codec's:
+#
+#   vendor/firmware/mfc_fw.bin        -> s5p-mfc-v15.fw          (s5p-mfc, the MFC v15.6 decoder)
+#
+# mfc_fw.bin is the MFC's RISC core firmware, plain and unsigned. It starts
+# with that core's vector table (eight ARM branch instructions) and ends with
+# its version word, the one the MFC reports in FW_VERSION once it runs
+# (0x44250901 in the image this was tested with).
+#
 # The Pixel 9a (-d tegu; <board> is "google,zumapro-tegu"):
 #
 #   vendor/firmware/fw_bcmdhd.bin             -> brcm/brcmfmac4383-pcie.<board>.bin         (brcmfmac)
@@ -66,12 +76,15 @@
 # is in another format, device/tegu/AUDIO-PLAN.md). The modem's and GNSS's
 # files are tools/extract-vendor-chroot's.
 #
-# The Pixel 8 Pro (-d husky; <board> is "google,zuma-husky"), Wi-Fi only:
+# The Pixel 8 Pro (-d husky; <board> is "google,zuma-husky"): Wi-Fi, Bluetooth
+# and haptics:
 #
 #   vendor/firmware/fw_bcmdhd.bin_4398_d0     -> brcm/brcmfmac4398d0-pcie.<board>.bin         (brcmfmac)
 #   vendor/firmware/bcmdhd.cal_<region>       -> brcm/brcmfmac4398d0-pcie.<board>.txt         (NVRAM)
 #   vendor/firmware/bcmdhd_clm.blob_4398_d0   -> brcm/brcmfmac4398d0-pcie.<board>.clm_blob    (regulatory)
 #   vendor/firmware/bcmdhd_txcap.blob_4398_d0 -> brcm/brcmfmac4398d0-pcie.<board>.txcap_blob  (TX capabilities)
+#   vendor/firmware/brcm/BCM.hcd              -> brcm/BCM.<board>.hcd                         (btbcm)
+#   vendor/firmware/cs40l26*.{wmfw,bin}       -> the same five files as cheetah's
 #
 # The radio is a BCM4398 D0. Stock picks the CLM and TX capability files by
 # chip revision (_4398_d0), but the NVRAM by the phone's hardware SKU
@@ -81,12 +94,28 @@
 # (bcmdhd.cal_USI_G5SN_9957_V17, the same bytes as _ROW). The regions differ
 # only in their energy-detect thresholds. Read the SKU with
 # `grep hardware.sku /proc/bootconfig` on the phone, or
-# `adb shell getprop ro.boot.hardware.sku` on Android. Bluetooth and the
-# other files wait for drivers (device/husky/ROADMAP.md). An OTA's vendor.img
+# `adb shell getprop ro.boot.hardware.sku` on Android. The Bluetooth patch
+# is stock's BCM.hcd, the file btbcm asks for under the board name (kernel
+# #199 was tested with it); the vendor partition's BCM_174.hcd (a BCM4398 B0
+# patch), BCM_181.hcd and BTFW_B.hcd are not copied. This BCM.hcd names the
+# module and the board ("G5SN_V17_HK3 REL ..."), not the chip, so that is
+# what the sanity check looks for. The haptics chip is a CS40L26, as on the
+# 7 Pro and the 9a (kernel #200); stock's cs40l26-dbc.bin has no user in
+# cs40l26-vibra and is not copied. The AoC's and the speaker amplifiers'
+# files wait for their drivers (device/husky/ROADMAP.md). An OTA's vendor.img
 # (from its payload.bin) works as SOURCE as well as a factory image.
 #
 # Output is a tree rooted at /, under usr/lib/firmware/updates (searched before
 # linux-firmware's files, and not owned by any package). Nothing touches the phone.
+# Each run builds a whole new generation in a staging directory inside OUTDIR,
+# checks every file and the checksum list, and only then replaces the paths
+# this script owns there (usr/lib/firmware/updates, usr/share/omamobile/sensors,
+# vendor-firmware.sha256 and the -c file). A failed run, a failed replacement
+# included, leaves the previous outputs as they were (if putting them back
+# fails too, the error names the directory holding them), and a reused OUTDIR
+# keeps no file from an earlier run (another device's firmware, an old sensor
+# registry); the rest of OUTDIR is left alone. An OUTDIR that is / (or
+# resolves to it) is refused before anything is written.
 #
 # Needs: unzip, debugfs (e2fsprogs); simg2img if vendor.img is sparse;
 # lpunpack if the image only has super.img; fsck.erofs (erofs-utils) if vendor is EROFS.
@@ -101,6 +130,8 @@ FW_BASE="brcmfmac4389c1-pcie"
 # and in BCM.hcd ("BCM<CHIP> <release>")
 WIFI_CHIP="4389c1"
 BT_CHIP="BCM4389C1"
+# What the Bluetooth refusal calls the patch, where BT_CHIP is a pattern
+BT_NAME=""
 DEST_REL="usr/lib/firmware/updates"
 
 # source path in the vendor partition -> path under $DEST_REL
@@ -128,11 +159,12 @@ Usage: extract-vendor-firmware [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
 
   SOURCE   Google factory zip (<device>-*-factory-*.zip), the image-<device>-*.zip
            inside it, or a raw/sparse vendor.img
-  -o DIR   staging root to write into (default: ./out/vendor-firmware)
+  -o DIR   staging root to write into (default: ./out/vendor-firmware); a
+           successful run replaces this script's earlier outputs there
   -w DIR   scratch directory for the ~1 GB vendor.img (default: a temp dir in \$TMPDIR)
   -d DEV   cheetah (default), panther, raven, tegu or husky
   -s SKU   husky: the hardware SKU (androidboot.hardware.sku), which picks the NVRAM
-  -f       skip the android-info.txt board=$DEVICE check
+  -f       skip the device checks (android-info.txt board=$DEVICE, the vendor build.prop)
   -c FILE  also copy the camera HAL APEX (/vendor/apex/com.google.pixel.camera.hal.apex)
            to FILE, for tools/extract-camera-data --apex (tools/phone-provision uses it)
 
@@ -169,7 +201,10 @@ case $DEVICE_OPT in
     BOARD="google,gs201-panther"
     DEVICE="panther"
     MAP=("${MAP[@]//google,gs201-cheetah/$BOARD}")
-    MAP=("${MAP[@]//cheetah/$DEVICE}") ;;
+    MAP=("${MAP[@]//cheetah/$DEVICE}")
+    # The video codec (kernel: s5p-mfc's google,gs201-mfc), described for
+    # panther only so far
+    MAP+=("firmware/mfc_fw.bin|s5p-mfc-v15.fw") ;;
   raven)
     # Pixel 6 Pro: Wi-Fi, Bluetooth, the AoC, the speaker amplifiers'
     # protection firmware and the AoC's sensor registry (device/raven/WIFI-PLAN.md,
@@ -217,13 +252,15 @@ case $DEVICE_OPT in
       "firmware/cs40l26-calib.wmfw|cs40l26-calib.wmfw"
     ) ;;
   husky)
-    # Pixel 8 Pro: Wi-Fi (BCM4398 D0) only, with the NVRAM for the SKU's
-    # region (the header).
+    # Pixel 8 Pro: Wi-Fi (BCM4398 D0) with the NVRAM for the SKU's region,
+    # Bluetooth and the haptics files (the header). BT_CHIP is the module and
+    # board string husky's BCM.hcd carries in place of a chip name.
     BOARD="google,zuma-husky"
     DEVICE="husky"
     FW_BASE="brcmfmac4398d0-pcie"
     WIFI_CHIP="4398d0"
-    BT_CHIP=""
+    BT_CHIP="G5SN_V[0-9]*_HK3"
+    BT_NAME="Pixel 8 Pro (G5SN_V<n>_HK3)"
     # Google's SKU table (dhd_custom_google.c); husky's vendor has NVRAMs for
     # MMW, ROW and NA only, so the others take the module's default, as on stock
     case $SKU in
@@ -237,6 +274,12 @@ case $DEVICE_OPT in
       "firmware/$nvram|brcm/$FW_BASE.$BOARD.txt"
       "firmware/bcmdhd_clm.blob_4398_d0|brcm/$FW_BASE.$BOARD.clm_blob"
       "firmware/bcmdhd_txcap.blob_4398_d0|brcm/$FW_BASE.$BOARD.txcap_blob"
+      "firmware/brcm/BCM.hcd|brcm/BCM.$BOARD.hcd"
+      "firmware/cs40l26.wmfw|cs40l26.wmfw"
+      "firmware/cs40l26.bin|cs40l26.bin"
+      "firmware/cs40l26-svc.bin|cs40l26-svc.bin"
+      "firmware/cs40l26-dvl.bin|cs40l26-dvl.bin"
+      "firmware/cs40l26-calib.wmfw|cs40l26-calib.wmfw"
     ) ;;
   *) die "unknown device $DEVICE_OPT (cheetah, panther, raven, tegu or husky)" ;;
 esac
@@ -247,6 +290,15 @@ SRC=$(readlink -f "$1")
 [[ -f "$SRC" ]] || die "no such file: $1"
 # Absolute, because the checksum step runs from inside the staging dir
 OUT=$(realpath -m -- "$OUT")
+# Publishing replaces whole directories under OUT, so OUT=/ would replace this
+# machine's own; refuse before anything is written (WORK included)
+[[ $OUT != / ]] || die "-o resolves to /: publishing would replace this machine's own directories"
+[[ -z $CAMERA_APEX || ( -d $(dirname -- "$CAMERA_APEX") && ! -d $CAMERA_APEX ) ]] ||
+  die "-c needs a file name in an existing directory: $CAMERA_APEX"
+case $CAMERA_APEX in
+  "$OUT/$DEST_REL"/*|"$OUT/usr/share/omamobile/sensors"/*|"$OUT/vendor-firmware.sha256")
+    die "-c must not be inside the outputs this script replaces in $OUT" ;;
+esac
 
 if [[ -n "$WORK" ]]; then
   mkdir -p "$WORK"
@@ -254,7 +306,25 @@ if [[ -n "$WORK" ]]; then
 else
   WORK=$(mktemp -d "${TMPDIR:-/tmp}/xvf.XXXXXX")
 fi
-trap 'rm -rf "$WORK"' EXIT
+stage="" cam_new="" publishing="" aside=() published=()
+# A failed publish puts the previous outputs back (restore); only if that
+# fails too does the staging directory stay, holding them.
+restore() {
+  local p
+  for p in "${published[@]}"; do rm -rf -- "${OUT:?}/$p" || return 1; done
+  for p in "${aside[@]}"; do mv -T -- "$stage/old/$p" "$OUT/$p" || return 1; done
+}
+cleanup() {
+  [[ -z $cam_new ]] || rm -f -- "$cam_new"
+  if [[ -n $publishing ]] && ! restore; then
+    printf 'error: publishing failed; the previous outputs are in %s\n' "$stage/old" >&2
+  else
+    [[ -z $publishing ]] || printf 'error: publishing failed; the previous outputs are back in place\n' >&2
+    [[ -z $stage ]] || rm -rf "$stage"
+  fi
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
 
 # Read 4 bytes at an offset as a little-endian hex word.
 magic_at() { od -An -tx4 -j "$2" -N4 "$1" | tr -d ' \n'; }
@@ -279,7 +349,7 @@ fetch_vendor() {
   fi
   m=$(zip_member "$src" "android-info\.txt")
   if [[ -n "$m" && -z "$FORCE" ]]; then
-    unzip -p "$src" "$m" | grep -qE "^require board=(.*\|)?$DEVICE(\|.*)?\$" ||
+    unzip -p "$src" "$m" | grep -cE "^require board=(.*\|)?$DEVICE(\|.*)?\$" >/dev/null ||
       die "this image is not for $DEVICE (android-info.txt); use -f to override"
   fi
   m=$(zip_member "$src" "vendor\.img")
@@ -313,14 +383,38 @@ if [[ "$(magic_at "$img" 0)" == ed26ff3a ]]; then
 fi
 
 # Copy one file out of the vendor filesystem ($1, no leading /) to $2.
+reason=""   # why debugfs couldn't (dfs, below); EROFS gives none
 if [[ "$(od -An -tx2 -j 1080 -N2 "$img" | tr -d ' ')" == ef53 ]]; then
   need debugfs "install e2fsprogs"
   say "vendor.img is ext4; reading it with debugfs (no mount)"
-  get_file() {
-    debugfs -R "dump /$1 $2" "$img" 2>/dev/null
-    [[ -s "$2" ]]
+  # debugfs exits 0 when a copy fails (a missing file, a short write on a
+  # full disk) and says so on stderr: anything there but its banner, or
+  # rdump's notes that it can't give the files the image's owners (as a
+  # user), fails the copy. The copy goes to a new path, so no older file
+  # can stand in for it. Its last line says why, and is kept in $reason
+  # for the build.prop refusal (a lookup error's trailing blank dropped).
+  dfs() {
+    local err line rc=0
+    err=$(debugfs -R "$1" "$img" 2>&1 >/dev/null) || rc=1
+    reason=${err##*$'\n'} reason=${reason% }
+    [[ $reason != "debugfs "[0-9]* ]] || reason=""   # only its banner: no reason
+    ((rc == 0)) || return 1
+    while [[ -n $err ]]; do   # line by line in the shell: nothing here can fail
+      line=${err%%$'\n'*}
+      if [[ $err == *$'\n'* ]]; then err=${err#*$'\n'}; else err=""; fi
+      case $line in
+        "" | "debugfs "[0-9]*) ;;
+        "dump_file: Operation not permitted while changing ownership of "*) ;;
+        "rdump: Operation not permitted while changing ownership of "*) ;;
+        *) return 1 ;;
+      esac
+    done
   }
-  get_dir() { mkdir -p "$2" && debugfs -R "rdump /$1 $2" "$img" 2>/dev/null && [[ -d "$2/$(basename "$1")" ]]; }
+  # debugfs splits its command at blanks: a host path goes in double
+  # quotes, with any double quote in it doubled
+  dq() { printf '"%s"' "${1//\"/\"\"}"; }
+  get_file() { dfs "dump /$1 $(dq "$2")" && [[ -s "$2" ]]; }
+  get_dir() { mkdir -p "$2" && dfs "rdump /$1 $(dq "$2")" && [[ -d "$2/$(basename "$1")" ]]; }
 elif [[ "$(magic_at "$img" 1024)" == e0f5e1e2 ]]; then
   need fsck.erofs "install erofs-utils"
   say "vendor.img is EROFS; extracting it with fsck.erofs"
@@ -338,13 +432,20 @@ if get_file build.prop "$WORK/build.prop"; then
   [[ "$dev" == "$DEVICE" || -n "$FORCE" ]] ||
     die "vendor partition is for '${dev:-unknown}', not $DEVICE; use -f to override"
   say "Vendor partition: $(sed -n 's/^ro.vendor.build.fingerprint=//p' "$WORK/build.prop" | head -1)"
+else
+  [[ -n "$FORCE" ]] || die "build.prop can't be read from vendor.img${reason:+: $reason}; use -f to override"
 fi
 
-dest="$OUT/$DEST_REL"
+# The new generation: everything below is written into $new, which starts
+# empty, so no file from an earlier run can stand in for a missing one.
+mkdir -p "$OUT"
+stage=$(mktemp -d "$OUT/.extract-vendor-firmware.XXXXXX")
+new="$stage/new"
+dest="$new/$DEST_REL"
 for entry in "${MAP[@]}"; do
   from=${entry%%|*} to=${entry#*|}
   mkdir -p "$dest/$(dirname "$to")"
-  get_file "$from" "$dest/$to" || die "/vendor/$from is missing from this image"
+  get_file "$from" "$dest/$to" || die "/vendor/$from is missing from this image or could not be copied"
   chmod 0644 "$dest/$to"
   printf '  /vendor/%-28s -> /%s/%s\n' "$from" "$DEST_REL" "$to"
 done
@@ -353,16 +454,19 @@ done
 # settings), read by omamobile-sensor-proxy; without it only virtual sensors.
 # husky has no AoC driver yet, so it skips the registry.
 if [[ $DEVICE != husky ]]; then
-  reg="$OUT/usr/share/omamobile/sensors"
-  get_dir etc/sensors/registry "$reg" || die "/vendor/etc/sensors/registry is missing from this image"
+  reg="$new/usr/share/omamobile/sensors"
+  get_dir etc/sensors/registry "$reg" ||
+    die "/vendor/etc/sensors/registry is missing from this image or could not be copied"
   chmod -R u=rwX,go=rX "$reg"
   printf '  /vendor/%-28s -> /%s\n' "etc/sensors/registry/" "usr/share/omamobile/sensors/registry/"
 fi
 
+# The camera APEX goes to a new file beside -c, renamed into place below
 if [[ -n $CAMERA_APEX ]]; then
-  get_file apex/com.google.pixel.camera.hal.apex "$CAMERA_APEX" ||
-    die "/vendor/apex/com.google.pixel.camera.hal.apex is missing from this image"
-  say "Camera HAL APEX copied to $CAMERA_APEX"
+  cam_new=$(mktemp "$CAMERA_APEX.XXXXXX")
+  get_file apex/com.google.pixel.camera.hal.apex "$cam_new" ||
+    die "/vendor/apex/com.google.pixel.camera.hal.apex is missing from this image or could not be copied"
+  chmod 0644 "$cam_new"
 fi
 
 # Sanity checks: right chip, text NVRAM, Cirrus file formats.
@@ -370,7 +474,7 @@ brcm="$dest/brcm"
 grep -aq "$WIFI_CHIP-roml" "$brcm/$FW_BASE.$BOARD.bin" ||
   die "fw_bcmdhd.bin is not a $WIFI_CHIP PCIe firmware"
 [[ -z $BT_CHIP ]] || grep -aq "$BT_CHIP" "$brcm/BCM.$BOARD.hcd" ||
-  die "BCM.hcd is not a $BT_CHIP Bluetooth patch"
+  die "BCM.hcd is not a ${BT_NAME:-$BT_CHIP} Bluetooth patch"
 grep -aq '^NVRAMRev=' "$brcm/$FW_BASE.$BOARD.txt" ||
   die "bcmdhd.cal does not look like a Broadcom text NVRAM"
 wmfw_halo() { # WMFW, Halo core (4): what cs_dsp accepts for this part
@@ -391,8 +495,8 @@ if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == raven ]]; then
       die "the $f speaker tuning is not a WMDR coefficient file"
   done
 fi
-# The CS40L26 haptics (the gs201 phones and tegu)
-if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu ]]; then
+# The CS40L26 haptics (the gs201 phones, tegu and husky)
+if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu || $DEVICE == husky ]]; then
   for f in cs40l26.wmfw cs40l26-calib.wmfw; do wmfw_halo "$f"; done
   grep -aq 'FIRMWARE_CS40L26' "$dest/cs40l26.wmfw" ||
     die "cs40l26.wmfw is not a CS40L26 firmware"
@@ -408,27 +512,66 @@ if [[ $DEVICE == cheetah || $DEVICE == panther ]]; then
       "$dest/cirrus/cs35l41-$DEVICE-$f-media-delta.txt" || die "the $f media delta is not a word list"
   done
 fi
-if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu ]]; then
+if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu || $DEVICE == husky ]]; then
   for f in cs40l26.bin cs40l26-svc.bin cs40l26-dvl.bin; do
     [[ "$(head -c4 "$dest/$f")" == WMDR ]] || die "$f is not a WMDR coefficient file"
   done
 fi
 
+# The MFC firmware: a vector table of eight ARM branches (cond AL, opcode
+# 0xea in each word's top byte), and its version as the last word
+if [[ $DEVICE == panther ]]; then
+  od -An -tx1 -w32 -N32 "$dest/s5p-mfc-v15.fw" |
+    awk '{ for (i = 4; i <= 32; i += 4) if ($i != "ea") exit 1 } END { if (NR != 1) exit 1 }' ||
+    die "mfc_fw.bin does not start with an ARM vector table"
+  mfc_size=$(stat -c %s "$dest/s5p-mfc-v15.fw")
+  (( mfc_size >= 4096 && mfc_size % 4 == 0 )) || die "mfc_fw.bin is not a whole number of words"
+  mfc_ver=$(od -An -tx4 -j $((mfc_size - 4)) -N4 "$dest/s5p-mfc-v15.fw" | tr -d ' ')
+fi
+
 ver=$(grep -ao 'Version=[0-9.]* ([^)]*)' "$brcm/$FW_BASE.$BOARD.bin" | head -1)
 bt=""
 [[ -z $BT_CHIP ]] || bt=$(grep -ao "$BT_CHIP [^[]*" "$brcm/BCM.$BOARD.hcd" | head -1)
-(cd "$dest" && find . -type f -printf '%P\n' | sort | xargs sha256sum -- > "$OUT/vendor-firmware.sha256")
+(cd "$dest" && find . -type f -printf '%P\n' | LC_ALL=C sort | xargs sha256sum -- > "$new/vendor-firmware.sha256")
+# The checksum list names exactly the mapped files
+for entry in "${MAP[@]}"; do printf '%s\n' "${entry#*|}"; done | LC_ALL=C sort > "$stage/expected"
+cut -c67- "$new/vendor-firmware.sha256" | cmp -s - "$stage/expected" ||
+  die "the staged firmware is not exactly the mapped files"
+
 say "Wi-Fi firmware: ${ver:-unknown version}"
 if [[ $DEVICE == husky ]]; then
   say "NVRAM: /vendor/firmware/$nvram${SKU:+ (SKU $SKU)}"
   [[ -n $SKU ]] || say "No -s SKU: stock's default NVRAM; pass the phone's SKU for its region's"
 fi
 [[ -z $BT_CHIP ]] || say "Bluetooth patch: ${bt:-unknown version}"
-[[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu ]] &&
+[[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu || $DEVICE == husky ]] &&
   say "Haptics firmware: cs40l26.wmfw ($(stat -c %s "$dest/cs40l26.wmfw") bytes) and its wavetable"
+[[ $DEVICE == panther ]] &&
+  say "Video codec firmware: s5p-mfc-v15.fw (version 0x$mfc_ver)"
 [[ $DEVICE == tegu ]] &&
   say "AoC firmware: aoc-tegu.bin ($(stat -c %s "$dest/aoc-tegu.bin") bytes)"
 [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == raven ]] &&
   say "Speaker protection: cs35l41-dsp1-spk-prot-$DEVICE.wmfw and the top and bottom tunings"
+# Publish: move the previous outputs aside, then the new ones into place, all
+# renames within OUTDIR, then the -c file. A failed move puts it all back.
+publishing=1
+for p in "$DEST_REL" usr/share/omamobile/sensors vendor-firmware.sha256; do
+  if [[ -e $OUT/$p || -L $OUT/$p ]]; then   # -L: a dangling symlink too
+    mkdir -p "$stage/old/$(dirname "$p")"
+    mv -T -- "$OUT/$p" "$stage/old/$p"
+    aside+=("$p")
+  fi
+  if [[ -e $new/$p ]]; then
+    mkdir -p "$OUT/$(dirname "$p")"
+    mv -T -- "$new/$p" "$OUT/$p"
+    published+=("$p")
+  fi
+done
+if [[ -n $CAMERA_APEX ]]; then
+  mv -fT -- "$cam_new" "$CAMERA_APEX"
+  cam_new=""
+fi
+publishing=""   # published: nothing below may undo it
+[[ -z $CAMERA_APEX ]] || say "Camera HAL APEX copied to $CAMERA_APEX"
 say "Staged in $OUT (checksums in $OUT/vendor-firmware.sha256)"
 echo "This is Google's proprietary firmware from your own factory image. Do not redistribute it."

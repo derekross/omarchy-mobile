@@ -6,7 +6,9 @@
 # fit the screen: the real QuickSettings.qml, its layer-shell window a
 # plain Item, over a throwaway $HOME with a few notifications of our own
 # in the shade. No backend answers here (no D-Bus, no scripts on PATH), so
-# the tiles show as unavailable; it is the layout under review. Runs inside
+# the tiles show as unavailable; it is the layout under review. The dark
+# theme's notifications are Omarchy 4.0's files, the light theme's 4.5's
+# live.json and history.json, so the shade's read runs on both. Runs inside
 # the OWL conformance container (tests/owl/Dockerfile), never on a desktop:
 #
 #   docker run --rm --network none -u "$(id -u):$(id -g)" -v "$PWD:/src" \
@@ -53,17 +55,30 @@ for theme in tokyo-night catppuccin-latte; do
   home=/tmp/quicksettings-home-$theme
   rm -rf "$home"; mkdir -p "$home/.local/state/omarchy/current" "$home/.local/state/omarchy/notifications/history" "$home/.config/omamobile"
   ln -sfn "/themes/$theme" "$home/.local/state/omarchy/current/theme"
-  # Three notifications of our own in the history, as Omarchy's service
-  # writes them (one line each, named <timestamp>-<id>.json).
-  python3 - "$home/.local/state/omarchy/notifications/history" <<'PY'
+  # Three notifications of our own, as Omarchy's service writes them: on
+  # 4.0 one line per file in history/, named <timestamp>-<id>.json; on 4.5
+  # one on screen in live.json and two in history.json (Store.js).
+  python3 - "$home/.local/state/omarchy/notifications" "$theme" <<'PY'
 import json, sys
-d = sys.argv[1]
+d, theme = sys.argv[1:]
 rows = [(1760000300000, 1, "Signal", "Ana", "See you soon"), (1760000200000, 2, "Omarchy", "Update available", "Omarchy 4.0.7 is ready to install"),
         (1760000100000, 3, "Clock", "Alarm", "Tomorrow 07:00")]
-for ts, i, app, summary, body in rows:
-    with open("%s/%d-%d.json" % (d, ts, i), "w") as f:
-        f.write(json.dumps({"id": i, "originalId": i, "app": app, "appIcon": "", "summary": summary, "body": body, "image": "", "glyph": "",
-                            "execArgv": "", "urgency": 1, "expireTimeout": 0, "timestamp": ts}) + "\n")
+if theme == "catppuccin-latte":
+    def row(ts, i, app, summary, body, **closed):
+        return dict({"key": "n%d" % i, "originalId": i, "senderPid": 0, "execArgv": "", "execActions": "", "glyph": "", "app": app, "appIcon": "",
+                     "summary": summary, "body": body, "rawBody": "", "source": app, "groupKey": "app:" + app.lower(), "urgency": 1,
+                     "expireTimeout": 0, "duration": 0, "ts": ts / 1000}, **closed)
+    with open(d + "/live.json", "w") as f:
+        f.write(json.dumps([row(*rows[0])]) + "\n")
+    with open(d + "/history.json", "w") as f:
+        f.write(json.dumps([row(*r, closed_ts=r[0] / 1000 + 60, closed_reason="dismissed") for r in rows[1:]]) + "\n")
+    with open(d + "/quiet.json", "w") as f:
+        f.write(json.dumps({"dnd": False}) + "\n")
+else:
+    for ts, i, app, summary, body in rows:
+        with open("%s/history/%d-%d.json" % (d, ts, i), "w") as f:
+            f.write(json.dumps({"id": i, "originalId": i, "app": app, "appIcon": "", "summary": summary, "body": body, "image": "", "glyph": "",
+                                "execArgv": "", "urgency": 1, "expireTimeout": 0, "timestamp": ts}) + "\n")
 PY
   python3 - "$out" "$theme" > "$h/job-$theme.json" <<'PY'
 import json, sys
@@ -122,6 +137,7 @@ for name, g in geo.items():
               json.dumps([parts.get("handle"), parts.get("settingsButton")]))
         has_shade = "shade" in parts
         check(name + ": the notification shade shows", has_shade and inside(parts["shade"], screen, 1) and parts["shade"]["h"] >= 100, json.dumps(parts.get("shade")))
+        check(name + ": the shade read all three notifications", g["notifications"] == 3, str(g["notifications"]))
         if has_shade:
             beside = parts["shade"]["x"] >= parts["sheet"]["x"] + parts["sheet"]["w"] if landscape else parts["shade"]["y"] >= parts["sheet"]["y"] + parts["sheet"]["h"]
             check(name + ": the shade is %s the sheet" % ("beside" if landscape else "under"), beside and apart(parts["sheet"], parts["shade"]))

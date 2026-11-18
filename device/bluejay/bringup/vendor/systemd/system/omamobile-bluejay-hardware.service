@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+ConditionPathExists=/etc/omamobile/bluejay-hardware-enable
+Description=Start tested Bluejay touch and retained display refresh
+Requires=omamobile-bluejay-boot-ready.service
+After=omamobile-bluejay-boot-ready.service systemd-journald.service
+Before=sddm.service
+FailureAction=reboot-force
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-bluejay-hardware-start
+RemainAfterExit=yes
+TimeoutStartSec=25s
+TimeoutStopSec=5s
+
+[Install]
+WantedBy=multi-user.target

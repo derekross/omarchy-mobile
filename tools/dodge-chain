@@ -187,7 +187,7 @@ cmd_pack() {
   if [[ -z $MKBOOTIMG_PY ]]; then
     command -v mkbootimg >/dev/null || die "no mkbootimg.py under $ROOT/system/tools/mkbootimg or $SRC_DIR/system/tools/mkbootimg, and no mkbootimg on PATH"
   fi
-  local work="$CHAIN_OUT/chain" dl="${ALPINE_DL:-$HOME/android/downloads/alpine}" apk
+  local work="$CHAIN_OUT/chain" dl="${ALPINE_DL:-$HOME/android/downloads/alpine}" apk apks
   mkdir -p "$work/x" "$CHAIN_OUT/images" "$dl"
 
   say "Stage 2 DTB (options: ${DTB_OPTS:-none})"
@@ -200,16 +200,25 @@ cmd_pack() {
 
   say "Alpine busybox-static, kexec-tools and musl"
   local tarball="alpine-minirootfs-$ALPINE_VER-aarch64.tar.gz"
-  if [[ ! -f $dl/$tarball ]]; then
-    curl -fsSL -o "$dl/$tarball" \
+  # A download lands under the cached name only once it passes the checksum:
+  # every later run takes a file there as downloaded
+  if [[ -f $dl/$tarball ]]; then
+    echo "$ALPINE_SUM  $dl/$tarball" | sha256sum -c --quiet \
+      || die "checksum mismatch for the cached $dl/$tarball: remove it to download it again"
+  else
+    curl -fsSL -o "$dl/$tarball.part" \
       "https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VER%.*}/releases/aarch64/$tarball"
+    echo "$ALPINE_SUM  $dl/$tarball.part" | sha256sum -c --quiet \
+      || { rm -f "$dl/$tarball.part"; die "checksum mismatch for the downloaded $tarball (removed it)"; }
+    mv "$dl/$tarball.part" "$dl/$tarball"
   fi
-  echo "$ALPINE_SUM  $dl/$tarball" | sha256sum -c --quiet \
-    || die "checksum mismatch for $tarball"
   rm -rf "$work/x" && mkdir -p "$work/x"
   tar -xzf "$dl/$tarball" -C "$work/x"
-  for apk in $(python3 -I "$ROOT/tools/alpine-fetch.py" "$ALPINE_VER" "$dl/apks" \
-      busybox-static kexec-tools); do
+  # Read whole before it is used: `for apk in $(…)` loses alpine-fetch.py's
+  # exit status and unpacks what it printed
+  apks=$(python3 -I "$ROOT/tools/alpine-fetch.py" "$ALPINE_VER" "$dl/apks" busybox-static kexec-tools) ||
+    die "tools/alpine-fetch.py failed for busybox-static and kexec-tools"
+  for apk in $apks; do
     tar -xzf "$apk" -C "$work/x" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' \
       2>/dev/null || true
   done

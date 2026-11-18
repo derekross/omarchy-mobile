@@ -37,7 +37,7 @@ while (($#)); do
   case $1 in
     -n|--dry-run) dry=1; shift ;;
     --tag) tag=${2:?--tag needs a name}; shift 2 ;;
-    -h|--help) sed -n '3,30p' "$self"; exit 0 ;;
+    -h|--help) source "$repo/tools/lib/usage.sh"; usage_from_header --raw "$self"; exit 0 ;;
     -*) echo "publish-kernel: unknown option $1" >&2; echo "$usage" >&2; exit 2 ;;
     *) break ;;
   esac

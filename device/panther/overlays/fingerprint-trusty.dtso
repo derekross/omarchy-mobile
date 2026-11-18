@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (device/panther/FINGERPRINT-PLAN.md, gate P2): enable the
+ * Trusty node, so the trusty modules can bind. Nothing on the Pixel 7
+ * starts Trusty yet; the modules are loaded by hand. Paths, not labels, so
+ * the base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/trusty} {
+	status = "okay";
+};
