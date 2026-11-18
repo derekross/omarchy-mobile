@@ -50,6 +50,9 @@ public:
     // A row with "requires": TOOL is shown only once that backend's `get` has said {"available":true} (the Battery
     // row: only on a phone whose device package declares a charge limit). The probe calls this; so do the tests.
     void setToolAvailable(const QString &tool, bool available);
+    // Where the probe finds the backend scripts; tests point it at stubs so they don't depend on the host's
+    // install. The probe starts from the event loop, so set this right after construction.
+    void setBackendDir(const QString &dir) { m_backendDir = dir; }
     Q_SCRIPTABLE bool Open(const QString &page);
 signals:
     void rowsChanged();
@@ -71,6 +74,7 @@ private:
     QProcess m_roundingQuery;
     QProcess m_chargeProbe;
     QSet<QString> m_availableTools;
+    QString m_backendDir = QStringLiteral("/usr/lib/omamobile-settings/backends");
     quint64 m_roundingGeneration = 0;
     int m_radius = 0;
     QVariantMap m_themeTokens = SettingsTheme::tokens({}, {});

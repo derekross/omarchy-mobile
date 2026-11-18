@@ -25,7 +25,7 @@ mkdir -p "$dir"; echo 100 > "$end"; echo 7 > "$start"
 eq "$(run get)" '{"available":false}'
 eq "$(run set limit 80)" '{"error":"this phone has no charge limit"}'
 eq "$(cat "$end")" 100
-for bad in 'supply=../../x' 'supply=' 'supply=Max'; do
+for bad in 'supply=../../x' 'supply=' 'supply=Max' 'supply=../power_supply/max77759-charger'; do
   mkdir -p "${decl%/*}"; echo "$bad" > "$decl"; eq "$(run get)" '{"available":false}'
 done
 declare_husky
@@ -63,6 +63,10 @@ bash "$helper" >/dev/null || { echo "FAIL: boot without a declaration is an erro
 eq "$(cat "$end")" 90
 no 95; eq "$(cat "$end")" 90; eq "$(cat "$file")" 80
 echo 'supply=../max77759-charger' > "$decl"; no 95; bash "$helper" >/dev/null; eq "$(cat "$end")" 90
+# a name with a path in it that still reaches the real charger: only the name check refuses it
+echo 'supply=../power_supply/max77759-charger' > "$decl"
+no 95; eq "$(cat "$end")" 90; eq "$(cat "$file")" 80
+bash "$helper" >/dev/null; eq "$(cat "$end")" 90
 declare_husky
 # a failed write saves nothing: a directory in place of the end file cannot be written
 echo 85 > "$file"

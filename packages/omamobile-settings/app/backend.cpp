@@ -31,7 +31,7 @@ Backend::Backend(QObject *parent) : QObject(parent) {
     });
     reloadTheme();
     rebuild();
-    probe("charge");
+    QTimer::singleShot(0, this, [this] { probe("charge"); });
 }
 void Backend::probe(const QString &tool) {
     // The same fixed-argument call the page makes (actionrunner.cpp): bash, no startup file, one `get`.
@@ -46,7 +46,7 @@ void Backend::probe(const QString &tool) {
     env.remove("BASH_ENV");
     env.remove("ENV");
     p->setProcessEnvironment(env);
-    p->start("/usr/bin/bash", {"/usr/lib/omamobile-settings/backends/" + tool + ".sh", "get"});
+    p->start("/usr/bin/bash", {m_backendDir + "/" + tool + ".sh", "get"});
     p->closeWriteChannel();
     QTimer::singleShot(5000, p, [p] { if (p->state() != QProcess::NotRunning) p->kill(); });
 }

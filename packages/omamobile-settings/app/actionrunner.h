@@ -12,9 +12,12 @@ class ActionRunner : public QObject {
 public:
     explicit ActionRunner(QObject *parent = nullptr) : QObject(parent) {}
     Q_INVOKABLE int run(const QString &tool, const QStringList &args);
+    // Where the backend scripts live; tests point it at stubs so they don't depend on the host's install.
+    void setBackendDir(const QString &dir) { m_dir = dir; }
 signals:
     void finished(const QString &tool, const QVariantMap &result, int id);
 private:
     void post(const QString &tool, const QVariantMap &result, int id);
     int m_next = 0;
+    QString m_dir = QStringLiteral("/usr/lib/omamobile-settings/backends");
 };

@@ -19,7 +19,9 @@ omamobile-device-husky ships it for `max77759-charger`) and only while that
 supply has `charge_control_end_threshold`. Everywhere else the Battery row is
 hidden (the catalog row's `"requires": "charge"`: Settings runs
 `backends/charge.sh get` at start and shows the row only on
-`{"available":true}`), and the backend and the helper write nothing. The page
+`{"available":true}`), and the backend and the helper write nothing. The row
+appears only if the charger was there when Settings started: a charger that
+shows up later needs Settings to be started again. The page
 runs `backends/charge.sh`, which starts `omamobile-charge-limit@N.service`; the
 polkit rule `50-omamobile-charge-limit.rules` lets the active local user start
 those five instances only. The service runs `libexec/charge-limit` as root,

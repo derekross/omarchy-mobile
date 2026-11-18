@@ -21,7 +21,6 @@ int ActionRunner::run(const QString &tool, const QStringList &args) {
     auto fail = [this, &tool, id](const QString &why) { post(tool, {{"error", why}}, id); return id; };
     if (!tools.contains(tool) || args.size() > 3) return fail("unknown action");
     for (const auto &a : args) if (!word.match(a).hasMatch()) return fail("bad argument");
-    const QString dir = "/usr/lib/omamobile-settings/backends";
     auto *p = new QProcess(this);
     // bash would run a startup file named by these
     auto env = QProcessEnvironment::systemEnvironment();
@@ -29,7 +28,7 @@ int ActionRunner::run(const QString &tool, const QStringList &args) {
     env.remove("ENV");
     p->setProcessEnvironment(env);
     p->setProgram("/usr/bin/bash");
-    p->setArguments(QStringList{dir + "/" + tool + ".sh"} + args);
+    p->setArguments(QStringList{m_dir + "/" + tool + ".sh"} + args);
     connect(p, &QProcess::finished, this, [this, p, tool, id](int code, QProcess::ExitStatus st) {
         const auto raw = p->readAllStandardOutput().left(4096);
         p->readAllStandardError();
