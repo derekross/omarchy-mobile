@@ -6,7 +6,7 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { echo "FAIL: $*" >&2; exit 1; }
 for f in bin/omamobile-gnss lib/omamobile-vendor-chroot lib/omamobile-gnss-start lib/omamobile-gnss-lto \
-         lib/omamobile-gnss-conf install profiles/gnss.conf omamobile-gnss.install; do
+         lib/omamobile-gnss-conf install profiles/gnss.conf profiles/gnss-slsi.conf omamobile-gnss.install; do
   bash -n "$f" || fail "syntax: $f"
 done
 python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/omamobile-gnss-nmea || fail "python: omamobile-gnss-nmea"
@@ -27,6 +27,15 @@ echo "chroot $*" >> "${STUB_LOG}"
 [ "${STUB_FAIL:-0}" != 1 ] || [ "$2" != stop ]
 EOF
 chmod +x "$tmp/stub"
+# systemd-inhibit's stand-in: says it was asked, then runs the command
+cat > "$tmp/inhibit" <<'EOF'
+#!/bin/sh
+echo "inhibit $*" >> "${STUB_LOG}"
+while [ "${1#--}" != "$1" ]; do shift; done
+exec "$@"
+EOF
+chmod +x "$tmp/inhibit"
+export OMAMOBILE_GNSS_INHIBIT=$tmp/inhibit
 run_start() { # $1 dt dir, $2 fake unix table
   STUB_LOG="$tmp/log" OMAMOBILE_DT="$1" OMAMOBILE_GNSS_CLIENT="${TEST_CLIENT-$tmp/stub}" INVOCATION_ID="${TEST_INVOCATION_ID-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" \
     SERVICE_RESULT="${TEST_SERVICE_RESULT:-success}" MAINPID="${TEST_MAINPID-123}" STUB_FAIL="${TEST_STUB_FAIL:-0}" bash -c '
@@ -37,7 +46,8 @@ run_start() { # $1 dt dir, $2 fake unix table
         -e "s|/run/omamobile-gnss/stop-request|'"$tmp"'/run/omamobile-gnss/stop-request|" \
         -e "s|/sys/firmware/devicetree/base/soc@0/usi@109400c0/spi@10940000/status|'"$tmp"'/no-spi5|" \
         -e "s|/usr/lib/omamobile-vendor/omamobile-vendor-chroot|'"$tmp"'/stub|" lib/omamobile-gnss-start > '"$tmp"'/start
-    bash '"$tmp"'/start "$@"' _ "${3:-}" 2>/dev/null
+    chmod +x '"$tmp"'/start
+    if [ -n "$1" ]; then bash '"$tmp"'/start "$1"; else bash '"$tmp"'/start; fi' _ "${3:-}" 2>/dev/null
 }
 # The starts below that skip GNSS hold the client's connection first; not here, unless a case asks.
 export OMAMOBILE_GNSS_NOTHING_HOLD=0
@@ -94,11 +104,27 @@ grep -c 'gnss-slsi start' "$tmp/log" >/dev/null && fail "9a branch: a start with
 run_start "$tmp/dt" "$tmp/unix"
 grep -c 'gnss-slsi' "$tmp/log" >/dev/null && fail "7 Pro branch: must not touch gnss-slsi"
 [[ ! -e "$tmp/var/lib/omamobile/gnss-bringup-started" ]] || fail "7 Pro branch: no SPI5 node here, so no marker"
+# The sleep inhibitor is the start's own (the unit's ExecStart is the plain script): the 7 Pro takes it at
+# once, as its unit always did, and the 9a only around a session
+grep -c '^inhibit --what=sleep --mode=block --who=Omamobile GNSS --why=A location session is running ' "$tmp/log" >/dev/null \
+  || fail "7 Pro branch: the start runs under the sleep inhibitor"
+[[ $(grep -c '^inhibit ' "$tmp/log") == 1 ]] || fail "7 Pro branch: the inhibitor is taken once"
+printf 'google,zumapro-tegu\0google,zumapro\0' > "$tmp/dt/compatible"
+: > "$tmp/log"; rm -f "$tmp/var/lib/omamobile/gnss-bringup-started"
+run_start "$tmp/dt" "$tmp/unix"
+[[ $(grep -n '^inhibit .* gnss-slsi start$' "$tmp/log" | cut -d: -f1) == 1 && $(grep -c '^chroot gnss-slsi start$' "$tmp/log") == 1 ]] \
+  || fail "9a branch: the session runs under the sleep inhibitor"
+rm -f "$tmp/var/lib/omamobile/gnss-bringup-started"
+grep -c -x 'ExecStart=/usr/lib/omamobile-vendor/omamobile-gnss-start' vendor/systemd/system/omamobile-gnss.service >/dev/null \
+  || fail "the unit starts the script itself, which takes the inhibitor"
+echo "ok - the 7 Pro's start and the 9a's session hold the sleep inhibitor"
 # gnssd not up yet when a client asks: the 9a's start waits for it while the modem unit brings it
-# (OMAMOBILE_MODEM_GNSS=1), and without it holds the connection a moment before giving up, so a client
-# that reconnects at once can't run the unit into systemd's start limit
+# (OMAMOBILE_MODEM_GNSS=1), and otherwise holds the connection, looking for the modem, before giving up, so a
+# client that reconnects at once can't run the unit into systemd's start limit. Neither holds the inhibitor,
+# and a give-up leaves no marker.
 cat > "$tmp/systemctl" <<'EOF'
 #!/bin/bash
+[[ -z ${FAKE_FILE:-} ]] || source "$FAKE_FILE"
 case "$*" in
   *ActiveState*) echo "${FAKE_STATE:-inactive}" ;;
   *Environment*) echo "${FAKE_ENV:-}" ;;
@@ -106,29 +132,53 @@ esac
 EOF
 chmod +x "$tmp/systemctl"
 export OMAMOBILE_GNSS_SYSTEMCTL=$tmp/systemctl
-printf 'google,zumapro-tegu\0google,zumapro\0' > "$tmp/dt/compatible"
-rm -f "$tmp/var/lib/omamobile/gnss-bringup-started"
-: > "$tmp/log"; : > "$tmp/unix-late"
+gave_up() { # $1 what: nothing started, nothing left, no inhibitor
+  grep -c 'gnss-slsi start' "$tmp/log" >/dev/null && fail "$1: gnss-slsi started"
+  grep -c '^inhibit ' "$tmp/log" >/dev/null && fail "$1: the sleep inhibitor was taken"
+  [[ ! -e "$tmp/var/lib/omamobile/gnss-bringup-started" && ! -e "$tmp/run/omamobile-gnss/session" ]] || fail "$1: a give-up left a marker or a session"
+}
+: > "$tmp/log"; : > "$tmp/unix-late"; rm -f "$tmp/run/omamobile-gnss/session" "$tmp/run/omamobile-gnss/stop-request"
 t0=$SECONDS
-OMAMOBILE_GNSS_NOTHING_HOLD=2 OMAMOBILE_GNSS_GNSSD_WAIT=5 FAKE_STATE=inactive run_start "$tmp/dt" "$tmp/unix-late" || fail "no gnssd: the start fails"
+OMAMOBILE_GNSS_NOTHING_HOLD=2 OMAMOBILE_GNSS_GNSSD_WAIT=30 FAKE_STATE=inactive run_start "$tmp/dt" "$tmp/unix-late" || fail "no gnssd: the start fails"
 (( SECONDS - t0 >= 2 )) || fail "no gnssd and none coming: the connection is held before giving up"
-grep -c 'gnss-slsi start' "$tmp/log" >/dev/null && fail "no gnssd: gnss-slsi started"
-FAKE_STATE=active FAKE_ENV="OMAMOBILE_MODEM_GNSS=0 X=1" OMAMOBILE_GNSS_NOTHING_HOLD=0 OMAMOBILE_GNSS_GNSSD_WAIT=5 \
+(( SECONDS - t0 < 8 )) || fail "no gnssd and none coming: the hold is NOTHING_HOLD, not the wait for a modem"
+gave_up "no gnssd and no modem"
+t0=$SECONDS
+FAKE_STATE=inactive FAKE_ENV="OMAMOBILE_MODEM_GNSS=1" OMAMOBILE_GNSS_NOTHING_HOLD=0 OMAMOBILE_GNSS_GNSSD_WAIT=30 \
+  run_start "$tmp/dt" "$tmp/unix-late" || fail "a stopped modem unit: the start fails"
+(( SECONDS - t0 < 8 )) || fail "a modem unit that isn't running isn't waited for"
+gave_up "a stopped modem unit"
+t0=$SECONDS
+FAKE_STATE=active FAKE_ENV="OMAMOBILE_MODEM_GNSS=0 X=1" OMAMOBILE_GNSS_NOTHING_HOLD=0 OMAMOBILE_GNSS_GNSSD_WAIT=30 \
   run_start "$tmp/dt" "$tmp/unix-late" || fail "a modem without GNSS: the start fails"
-grep -c 'gnss-slsi start' "$tmp/log" >/dev/null && fail "a modem without GNSS: gnss-slsi started"
+(( SECONDS - t0 < 8 )) || fail "a modem started without GNSS isn't waited for"
+gave_up "a modem without GNSS"
 t0=$SECONDS
 FAKE_STATE=active FAKE_ENV="X=1 OMAMOBILE_MODEM_GNSS=1" OMAMOBILE_GNSS_NOTHING_HOLD=0 OMAMOBILE_GNSS_GNSSD_WAIT=2 \
   run_start "$tmp/dt" "$tmp/unix-late" || fail "gnssd never came: the start fails"
 (( SECONDS - t0 >= 2 )) || fail "gnssd coming: the start waits for it"
-grep -c 'gnss-slsi start' "$tmp/log" >/dev/null && fail "gnssd never came: gnss-slsi started"
+gave_up "gnssd never came"
 ( sleep 1; printf '@GNSSND\n' > "$tmp/unix-late" ) &
-FAKE_STATE=activating FAKE_ENV="OMAMOBILE_MODEM_GNSS=1" OMAMOBILE_GNSS_NOTHING_HOLD=0 OMAMOBILE_GNSS_GNSSD_WAIT=10 \
+t0=$SECONDS
+FAKE_STATE=activating FAKE_ENV="OMAMOBILE_MODEM_GNSS=1" OMAMOBILE_GNSS_NOTHING_HOLD=0 OMAMOBILE_GNSS_GNSSD_WAIT=30 \
   run_start "$tmp/dt" "$tmp/unix-late" || fail "gnssd came late: the start fails"
 wait
+(( SECONDS - t0 < 10 )) || fail "gnssd came during the wait: the start goes on at once"
 grep -c 'chroot gnss-slsi start' "$tmp/log" >/dev/null || fail "gnssd came during the wait: gnss-slsi starts"
+[[ -e "$tmp/var/lib/omamobile/gnss-bringup-started" ]] || fail "gnssd came during the wait: the marker goes down with the session"
+# the modem started during the hold: seen at the hold's next look (5 s), then waited for
+rm -f "$tmp/var/lib/omamobile/gnss-bringup-started" "$tmp/run/omamobile-gnss/session"; : > "$tmp/log"; : > "$tmp/unix-late"
+echo 'FAKE_STATE=inactive' > "$tmp/modem-state"
+( sleep 2; printf 'FAKE_STATE=activating\nFAKE_ENV=OMAMOBILE_MODEM_GNSS=1\n' > "$tmp/modem-state"; sleep 5; printf '@GNSSND\n' > "$tmp/unix-late" ) &
+t0=$SECONDS
+FAKE_FILE=$tmp/modem-state OMAMOBILE_GNSS_NOTHING_HOLD=6 OMAMOBILE_GNSS_GNSSD_WAIT=30 \
+  run_start "$tmp/dt" "$tmp/unix-late" || fail "the modem started during the hold: the start fails"
+wait
+grep -c 'chroot gnss-slsi start' "$tmp/log" >/dev/null || fail "the modem started during the hold: its gnssd is waited for past the hold"
+(( SECONDS - t0 < 15 )) || fail "the modem started during the hold: the start goes on when gnssd listens"
 unset OMAMOBILE_GNSS_SYSTEMCTL
-rm -f "$tmp/var/lib/omamobile/gnss-bringup-started"
-echo "ok - a request before gnssd is up waits for it while the modem brings it, and without it holds a moment before giving up"
+rm -f "$tmp/var/lib/omamobile/gnss-bringup-started" "$tmp/run/omamobile-gnss/session"
+echo "ok - a request before gnssd is up waits for it while the modem brings it, and without it holds, watching for the modem, before giving up"
 # A marker left by a bring-up that never finished: the 9a skips GNSS, keeps the marker, and holds the
 # connection first, so GeoClue's reconnects can't fail the socket and --retry's next request finds it listening
 date -Is > "$tmp/var/lib/omamobile/gnss-bringup-started"
@@ -136,44 +186,57 @@ date -Is > "$tmp/var/lib/omamobile/gnss-bringup-started"
 OMAMOBILE_GNSS_NOTHING_HOLD=2 run_start "$tmp/dt" "$tmp/unix" || fail "a leftover marker: the start fails"
 (( SECONDS - t0 >= 2 )) || fail "a leftover marker on the 9a: the connection is held before the skip"
 grep -c 'gnss-slsi start' "$tmp/log" >/dev/null && fail "a leftover marker: gnss-slsi started"
+grep -c '^inhibit ' "$tmp/log" >/dev/null && fail "a leftover marker: the sleep inhibitor was taken"
 [[ -e "$tmp/var/lib/omamobile/gnss-bringup-started" ]] || fail "a leftover marker: the skip keeps it"
 rm -f "$tmp/var/lib/omamobile/gnss-bringup-started"
 echo "ok - a leftover marker skips GNSS on the 9a after holding the connection, and stays"
-grep -qx 'After=omamobile-tegu-modem.service' vendor/systemd/system/omamobile-gnss.service \
+grep -c -x 'After=omamobile-tegu-modem.service' vendor/systemd/system/omamobile-gnss.service >/dev/null \
   || fail "the GNSS stack stops before the 9a's modem unit at shutdown"
 grep -E '^(Requires|Wants|BindsTo)=.*omamobile-tegu-modem' vendor/systemd/system/omamobile-gnss.service \
   && fail "the GNSS stack must not pull the modem in"
 echo "ok - at shutdown the GNSS stack stops before the 9a's modem, which it never starts"
-# The client survives the bridge going first: SIGPIPE ignored for its spawn (inherited across exec), and only for it
-awk '/^profile_start\(\)/,/^}/' profiles/gnss-slsi.conf > "$tmp/ps"
-grep -n "trap '' PIPE" "$tmp/ps" | head -1 | cut -d: -f1 > "$tmp/ign"; grep -n 'spawn client' "$tmp/ps" | head -1 | cut -d: -f1 > "$tmp/cl"
-grep -n 'trap - PIPE' "$tmp/ps" | head -1 | cut -d: -f1 > "$tmp/rst"; grep -n 'spawn hal' "$tmp/ps" | head -1 | cut -d: -f1 > "$tmp/hal"
-[[ -s $tmp/ign && -s $tmp/cl && -s $tmp/rst && -s $tmp/hal ]] || fail "the 9a's profile ignores SIGPIPE around the client's spawn"
-(( $(<"$tmp/hal") < $(<"$tmp/ign") && $(<"$tmp/ign") < $(<"$tmp/cl") && $(<"$tmp/cl") < $(<"$tmp/rst") )) \
-  || fail "SIGPIPE is ignored for the client only, after the HAL's spawn and back to default after it"
+# The client survives the bridge going first: SIGPIPE ignored around its spawn (inherited across exec), set
+# after the HAL's spawn and back to default after the client's
+order=$(awk '/^profile_start\(\)/ {p=1} p && /spawn hal / {print "hal"} p && /^  trap .. PIPE$/ {print "ignore"}
+  p && /spawn client / && !c++ {print "client"} p && /^  trap - PIPE$/ {print "default"} p && /^}/ {exit}' profiles/gnss-slsi.conf | paste -sd' ')
+[[ $order == "hal ignore client default" ]] \
+  || fail "the 9a's profile ignores SIGPIPE for the client's spawn only: after the HAL's, default again after it (got: $order)"
 echo "ok - the 9a's client outlives a bridge that stops first, so the stack's stop stays a clean one"
-# The 9a's graceful stop: the client alone first, with the stop-requested file written before its signal, so it
-# can stop the receiver through the HAL; the runner takes that exit as a clean stop
-sleep 30 & fake=$!
+# The 9a's graceful stop: the client alone first, the stop-requested file written before its signal (the
+# runner reads it when the client's exit wakes it), so the client can stop the receiver through the HAL
 mkdir -p "$tmp/run-ps"
+F=$tmp/run-ps/stop-requested bash -c 'sleep 30 & s=$!; trap "kill $s; [[ -e \$F ]] && exit 7; exit 9" TERM; wait $s' & fake=$!
+sleep 0.3
 out=$(STOP_REQUESTED="$tmp/run-ps/stop-requested" FAKE=$fake bash -c '
   say() { echo "say: $*"; }
-  pgrep() { [[ $* == "-f ^/omamobile/bin/omamobile-gnss-client " ]] && echo "$FAKE"; }
+  pgrep() { [[ $* == "-o -f ^/omamobile/bin/omamobile-gnss-client " ]] && echo "$FAKE"; }
   source <(awk "/^profile_stop\\(\\)/,/^}/" profiles/gnss-slsi.conf)
   profile_stop
   echo "returned"' 2>&1)
-grep -qx returned <<<"$out" || fail "profile_stop returns"
-[[ -e $tmp/run-ps/stop-requested ]] || fail "profile_stop writes the stop-requested file"
+grep -c -x returned <<<"$out" >/dev/null || fail "profile_stop returns"
+if kill -0 "$fake" 2>/dev/null; then
+  kill -KILL "$fake" 2>/dev/null || true
+  fail "profile_stop sends the client TERM"
+fi
 rc=0; wait "$fake" || rc=$?
-(( rc == 143 )) || { kill "$fake" 2>/dev/null; fail "profile_stop sends the client TERM"; }
+(( rc != 9 )) || fail "profile_stop writes the stop-requested file before it signals the client"
+(( rc == 7 )) || fail "profile_stop ends the client with TERM (its exit: $rc)"
 out=$(STOP_REQUESTED="$tmp/run-ps/none" bash -c '
   say() { :; }; pgrep() { return 1; }
   source <(awk "/^profile_stop\\(\\)/,/^}/" profiles/gnss-slsi.conf)
   profile_stop; echo "returned"')
 [[ $out == returned && ! -e $tmp/run-ps/none ]] || fail "no client: profile_stop writes nothing and returns"
-grep -n 'wait -n || true' -A 2 lib/omamobile-vendor-chroot | grep -c '\[\[ -e $STOP_REQUESTED \]\] && stop 0' >/dev/null \
-  || fail "the runner takes a requested stop's exit as clean"
-grep -q 'rm -f "$NSPID" "$STOP_REQUESTED"' lib/omamobile-vendor-chroot || fail "a new start drops an old stop-requested file"
+# ...and the runner's own lines, run: a daemon that exits with the file there ends the profile quietly with
+# 0, and without it as before ("a service exited", 1). setsid: its stop signals its whole process group.
+awk '/^stop\(\) \{/,/^}/' lib/omamobile-vendor-chroot > "$tmp/runner-stop"
+awk '/^  wait -n \|\| true$/ {p=1} p {print} p && /^  stop 1$/ {exit}' lib/omamobile-vendor-chroot > "$tmp/runner-tail"
+[[ -s $tmp/runner-stop && $(grep -c . "$tmp/runner-tail") -ge 4 ]] || fail "the runner's stop and supervision lines are where the test reads them"
+{ printf 'STOPPING=\nsay() { echo "say: $*"; }\n'; cat "$tmp/runner-stop"; printf 'sleep 30 &\nsleep 0.3 &\n'; cat "$tmp/runner-tail"; } > "$tmp/runner-harness"
+rc=0; out=$(STOP_REQUESTED="$tmp/run-ps/stop-requested" setsid --wait bash "$tmp/runner-harness" 2>&1) || rc=$?
+[[ $rc == 0 && $out == "say: stopping" ]] || fail "a requested stop: the runner stops the rest quietly with 0 (rc $rc: $out)"
+rc=0; out=$(STOP_REQUESTED="$tmp/run-ps/none" setsid --wait bash "$tmp/runner-harness" 2>&1) || rc=$?
+[[ $rc == 1 && $out == *"say: a service exited"* ]] || fail "no requested stop: a daemon's exit is still reported and ends with 1 (rc $rc: $out)"
+grep -c 'rm -f "$NSPID" "$STOP_REQUESTED"' lib/omamobile-vendor-chroot >/dev/null || fail "a new start drops an old stop-requested file"
 echo "ok - the 9a's stop ends the client first, through the HAL, and the runner calls that a clean stop"
 
 rm -rf "$tmp"
@@ -187,8 +250,8 @@ grep -c 'gnss-slsi/data/vendor/gps' vendor/systemd/system/omamobile-gnss-nmea.se
 # --stop comes before the hang marker, so a leftover marker never skips a stop
 [[ $(grep -n -- '--stop' lib/omamobile-gnss-start | sed -n 1p | cut -d: -f1) -lt $(grep -n 'elif \[\[ -e \$MARK' lib/omamobile-gnss-start | cut -d: -f1) ]] || fail "--stop before the marker"
 # A running stack keeps the phone awake (SUSPEND-PLAN 6.1).
-grep -qx 'ExecStart=/usr/bin/systemd-inhibit --what=sleep --mode=block "--who=Omamobile GNSS" "--why=A location session is running" /usr/lib/omamobile-vendor/omamobile-gnss-start' \
-  vendor/systemd/system/omamobile-gnss.service || fail "the stack holds a sleep inhibitor while it runs"
+grep -c '^INHIBIT=("${OMAMOBILE_GNSS_INHIBIT:-/usr/bin/systemd-inhibit}" --what=sleep --mode=block$' lib/omamobile-gnss-start >/dev/null \
+  || fail "the stack holds a sleep inhibitor (block mode) while it runs"
 # One GeoClue agent, ours (2026-11-02): geoclue's XDG autostart of its demo
 # agent ran at login, our unit exited as a second instance and stayed
 # inactive. The mask must carry the generator's escaped name, and our unit
