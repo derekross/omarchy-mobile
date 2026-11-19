@@ -1,0 +1,64 @@
+SPDX-License-Identifier: GPL-3.0-or-later
+
+hexagonrpcd: serve /sys/project_info
+
+OnePlus's SLPI firmware (OnePlus 7T Pro) reads
+/sys/project_info/project_name, as its sns_reg_config says, and picks
+per-project behaviour in its sensor drivers (the TCS3701 and STK2232
+drivers log the project). Serve <root>/project_info/ there, or an empty
+directory when it is missing, as /sys/devices/soc0 is served.
+
+diff --git a/hexagonrpcd/rpcd_builder.c b/hexagonrpcd/rpcd_builder.c
+index d374958..f81877c 100644
+--- a/hexagonrpcd/rpcd_builder.c
++++ b/hexagonrpcd/rpcd_builder.c
+@@ -32,6 +32,7 @@
+ #define SENSORS_REGISTRY	"/sensors/registry/"
+ #define SNS_REG_CONFIG		"/sensors/sns_reg.conf"
+ #define SYSFS_SOCINFO		"/socinfo/"
++#define SYSFS_PROJECT_INFO	"/project_info/"
+ 
+ static struct hexagonfs_dirent *hfs_mkdir(const char *name, size_t n_ents, ...)
+ {
+@@ -112,6 +113,7 @@ static struct hexagonfs_dirent *hfs_map_or_empty(const char *name, const char *p
+ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
+ {
+ 	char *acdbdata, *dsp_libs, *sns_cfg, *sns_reg, *sns_reg_config, *socinfo;
++	char *project_info;
+ 	size_t n_prefix;
+ 	struct hexagonfs_dirent *persist_dir, *vendor_dir;
+ 
+@@ -122,6 +124,7 @@ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
+ 	sns_reg = malloc(n_prefix + strlen(SENSORS_REGISTRY) + 1);
+ 	sns_reg_config = malloc(n_prefix + strlen(SNS_REG_CONFIG) + 1);
+ 	socinfo = malloc(n_prefix + strlen(SYSFS_SOCINFO) + 1);
++	project_info = malloc(n_prefix + strlen(SYSFS_PROJECT_INFO) + 1);
+ 
+ 	dsp_libs = malloc(n_prefix + strlen(DSP_LIBS) + strlen(dsp) + 1);
+ 
+@@ -150,6 +153,11 @@ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
+ 		strcat(socinfo, SYSFS_SOCINFO);
+ 	}
+ 
++	if (project_info != NULL) {
++		strcpy(project_info, prefix);
++		strcat(project_info, SYSFS_PROJECT_INFO);
++	}
++
+ 	if (dsp_libs != NULL) {
+ 		strcpy(dsp_libs, prefix);
+ 		strcat(dsp_libs, DSP_LIBS);
+@@ -189,10 +197,11 @@ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
+ 				)
+ 			),
+ 			persist_dir,
+-			hfs_mkdir("sys", 1,
++			hfs_mkdir("sys", 2,
+ 				hfs_mkdir("devices", 1,
+ 					hfs_map_or_empty("soc0", socinfo)
+-				)
++				),
++				hfs_map_or_empty("project_info", project_info)
+ 			),
+ 			hfs_mkdir("system", 1,
+ 				vendor_dir

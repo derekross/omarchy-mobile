@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: MIT
+# hexagonrpc: FastRPC library and hexagonrpcd, the file server a Qualcomm
+# DSP's sensors PD reads its registry, sensor configs and DSP libraries from
+# (Snapdragon sensors behind the SLPI or ADSP). Not in Arch Linux ARM's
+# repositories, so we build it. A device package runs hexagonrpcd with its
+# own root directory (the phone's own files, never shipped).
+#
+# Source: upstream's git, pinned by commit (v0.5.0 plus 20, the commit the
+# dodge bring-up ran), with two changes: the listener keeps serving after a
+# call it does not implement instead of quitting, and /sys/project_info is
+# served from the root directory (OnePlus's SLPI firmware reads the project
+# name from there).
+pkgname=hexagonrpc
+pkgver=0.5.0.r20.gda7a374
+pkgrel=2
+pkgdesc="FastRPC library and file server for Qualcomm Hexagon DSPs"
+arch=(aarch64)
+url="https://github.com/linux-msm/hexagonrpc"
+license=('GPL-3.0-or-later')
+depends=(glibc)
+makedepends=(git meson)
+provides=(hexagonrpcd libhexagonrpc.so)
+conflicts=(hexagonrpcd)
+source=("hexagonrpc::git+https://github.com/linux-msm/hexagonrpc.git#commit=da7a3742ab8d5273a281b70ee11f16fb2cb6a690"
+        0001-listener-keep-serving-after-an-unsupported-method.patch
+        0002-rpcd-serve-sys-project_info.patch)
+# The git source is pinned by its commit above; the patches by sha256
+sha256sums=('SKIP'
+            '1e4366e40833524e39612b1c82058affe6477dc70aa50d336572deb929228bf4'
+            '2a8ca9df6f0b5ab1f0f4847520e01a2e52a1241bcce8885925b2cd85be55a3da')
+
+prepare() {
+  cd hexagonrpc
+  patch -Np1 -i ../0001-listener-keep-serving-after-an-unsupported-method.patch
+  patch -Np1 -i ../0002-rpcd-serve-sys-project_info.patch
+}
+
+build() {
+  arch-meson hexagonrpc build
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+}
