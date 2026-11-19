@@ -8,6 +8,8 @@
 #                               on enables and starts the watcher unit (if that fails the toggle goes back to
 #                               off), off disables it and stops it without waiting (--no-block): this run has
 #                               already written the choice back, so the unit's own restore finds nothing to do
+#                               get also enables+starts the watcher unit if lock.json says on and it is not
+#                               enabled (an upgrade from an older build), and disables it if off and enabled
 #   lock.sh apply               write the value in force now (omamobile-lock-keyboard, on each input change)
 #   lock.sh restore             write the user's choice, keyboard or not (the watcher's ExecStopPost)
 # How the phone locks: Omarchy's idle service locks after shell.json's idle.lock seconds (0 = never, the
@@ -33,7 +35,8 @@
 # keys and space, and a name that is not empty and not a known security token or barcode scanner. The
 # built-in keys, the on-screen keyboard and virtual devices are left out.
 # Test hooks: OMAMOBILE_LOCK_SYSFS and OMAMOBILE_LOCK_UDEVDATA stand in for /sys and /run/udev/data;
-# OMAMOBILE_LOCK_WATCHER=1/0 stands in for "is the watcher unit active".
+# OMAMOBILE_LOCK_WATCHER=1/0 stands in for "is the watcher unit active", OMAMOBILE_LOCK_UNIT_ENABLED=1/0
+# for "is it enabled".
 set -euo pipefail
 set +x
 verb=${1:-}; key=${2:-}; value=${3:-}
@@ -155,7 +158,9 @@ if prefs is not None:
 
 if verb == "get":
     p = prefs or {"lock": current, "keyboardAwake": False}
-    out({"lock": p["lock"], "keyboardAwake": p["keyboardAwake"], "keyboard": kb, "effective": current})
+    r = {"lock": p["lock"], "keyboardAwake": p["keyboardAwake"], "keyboard": kb, "effective": current}
+    if prefs is not None: r["unit"] = p["keyboardAwake"]  # a saved choice: the shell part checks the unit
+    out(r)
 elif verb == "set":
     p = prefs or {"lock": current, "keyboardAwake": False, "override": False}
     if key == "lock":
@@ -223,6 +228,23 @@ err() {  # the error already in $res, if any, then this one
 # The watcher runs only while the toggle is on. After the flock above is released, since its restore takes
 # it too. off: the choice is already written back above, so don't wait for the unit's restore (--no-block),
 # which keeps the whole run well under the page runner's 20 s.
+# get (the page opens with it) puts the unit in line with a saved choice: lock.json from an older build
+# can say on while the unit was never enabled. Only when lock.json was read fine ("unit" in the JSON).
+if [[ $verb == get ]]; then
+  unit=$(/usr/bin/python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); print({True:"on",False:"off"}.get(d.get("unit"),""))' "$res")
+  res=$(/usr/bin/python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); d.pop("unit",None); print(json.dumps(d,separators=(",",":")))' "$res")
+  enabled=${OMAMOBILE_LOCK_UNIT_ENABLED:-}
+  if [[ -n $unit && -z $enabled ]]; then
+    enabled=0; if timeout 2 systemctl --user is-enabled --quiet omamobile-lock-keyboard.service 2>/dev/null; then enabled=1; fi
+  fi
+  if [[ $unit == on && $enabled == 0 ]]; then
+    timeout 5 systemctl --user enable --now omamobile-lock-keyboard.service >/dev/null 2>&1 ||
+      err "could not start the keyboard watcher"
+  elif [[ $unit == off && $enabled == 1 ]]; then
+    timeout 5 systemctl --user disable --now --no-block omamobile-lock-keyboard.service >/dev/null 2>&1 ||
+      err "could not stop the keyboard watcher"
+  fi
+fi
 if [[ $verb == set && $key == keyboard ]]; then
   if [[ $value == on ]]; then
     if ! timeout 5 systemctl --user enable --now omamobile-lock-keyboard.service >/dev/null 2>&1; then

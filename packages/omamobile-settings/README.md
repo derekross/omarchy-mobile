@@ -30,7 +30,8 @@ not a known security token or barcode scanner) is connected, and the chosen
 time back when it goes. The user unit
 `omamobile-lock-keyboard.service` follows `udevadm monitor` for input devices
 and runs `lock.sh apply`. It is not enabled by the package: turning the toggle
-on enables and starts it, turning it off stops and disables it, and when it
+on enables and starts it, turning it off stops and disables it (opening the
+page puts the unit in line with a saved choice, e.g. after an upgrade), and when it
 stops `lock.sh restore` writes the chosen time back. The 1800 is only written
 while that unit runs; a failed apply (a broken `shell.json`) is logged once and
 retried on the next input change instead of restarting the unit. After a write
