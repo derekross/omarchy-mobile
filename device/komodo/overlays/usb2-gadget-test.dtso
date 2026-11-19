@@ -1,0 +1,136 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Experimental USB2 peripheral/gadget path for Komodo only.
+ *
+ * Not selected by any device descriptor and not ready to flash. The DWC3/eUSB2
+ * block setup follows mainline Tegu's Zumapro setup. HSI2C6, gpp12-0/1 and the
+ * MAX77759 interrupt at gpa8-3 follow Google's Caimito/Zumapro Android 16
+ * source and Tegu's mainline DTS; validate these against the exact Komodo live
+ * DT before enabling this overlay. The S2MPG14 PMIC interrupt (SPI 74) is a
+ * Tegu reference value pending Komodo confirmation.
+ *
+ * The test is USB2-only and phone-peripheral-only. It does not enable the
+ * eUSB repeater, SuperSpeed, panel, storage, or host power sourcing.
+ */
+/dts-v1/;
+/plugin/;
+
+&cmu_hsi0 {
+	status = "okay";
+};
+
+&sysreg_hsi0 {
+	status = "okay";
+};
+
+&usb {
+	/* Zumapro HSI0 clocks: LINK, USB20_REF, SUSPEND, SUBCTL. */
+	clocks = <&cmu_hsi0 21>, <&cmu_hsi0 4>,
+		 <&cmu_hsi0 22>, <&cmu_hsi0 20>;
+	clock-names = "bus_early", "ref", "suspend", "subctl";
+	dr_mode = "peripheral";
+	maximum-speed = "high-speed";
+	snps,dis-u2-freeclk-exists-quirk;
+	snps,usb2-gadget-lpm-disable;
+	status = "okay";
+};
+
+&usb_hsphy {
+	vdd-supply = <&eusb_vdd>;
+	vdda12-supply = <&eusb_vdda12>;
+	status = "okay";
+};
+
+&usbdrd_phy {
+	status = "okay";
+};
+
+&cmu_peric0 {
+	status = "okay";
+};
+
+&sysreg_peric0 {
+	status = "okay";
+};
+
+&pinctrl_peric0 {
+	status = "okay";
+
+	hsi2c6_bus_komodo: hsi2c6-bus-komodo-pins {
+		samsung,pins = "gpp12-0", "gpp12-1";
+		samsung,pin-function = <3>;
+		samsung,pin-pud = <3>;
+		samsung,pin-drv = <0>;
+	};
+};
+
+&pinctrl_alive {
+	status = "okay";
+
+	usb_pd_irq_komodo: usb-pd-irq-pins {
+		samsung,pins = "gpa8-3";
+		samsung,pin-function = <0xf>;
+		samsung,pin-pud = <3>;
+		samsung,pin-drv = <0>;
+	};
+};
+
+/* Zumapro gpa8 GPIO interrupt lines, as defined by the mainline Tegu DTS. */
+&gpa8 {
+	interrupt-controller;
+	#interrupt-cells = <2>;
+	interrupt-parent = <&gic>;
+	interrupts = <0 44 4>, <0 45 4>, <0 46 4>, <0 47 4>;
+};
+
+&usi6 {
+	status = "okay";
+};
+
+&hsi2c6 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&hsi2c6_bus_komodo>;
+	status = "okay";
+
+	tcpc@25 {
+		compatible = "maxim,max77759-tcpci", "maxim,max33359";
+		reg = <0x25>;
+		interrupt-parent = <&gpa8>;
+		interrupts = <3 8>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&usb_pd_irq_komodo>;
+
+		connector {
+			compatible = "usb-c-connector";
+			label = "USB-C";
+			data-role = "dual";
+			power-role = "dual";
+			try-power-role = "sink";
+		};
+	};
+};
+
+&acpm_ipc {
+	status = "okay";
+
+	pmic-1 {
+		compatible = "samsung,s2mpg14-pmic";
+		/* Candidate copied from the mainline Zumapro Tegu reference. */
+		interrupt-parent = <&gic>;
+		interrupts = <0 74 4>;
+		google,vgpio2ap-sysreg = <&sysreg_vgpio2ap>;
+		wakeup-source;
+
+		regulators {
+			eusb_vdd: ldo8m {
+				regulator-name = "eusb-vdd";
+			};
+
+			eusb_vdda12: ldo9m {
+				regulator-name = "eusb-vdda12";
+			};
+		};
+	};
+};

@@ -1,9 +1,12 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 9 Pro XL (komodo) bring-up notes
 
-Stage 0 started 2026-11-18. This is a read-only stock capture from one retail
-Pixel 9 Pro XL. Nothing from Omarchy Mobile has been booted or flashed. Raw
-captures remain private; only non-identifying facts are recorded here.
+Stage 0 started 2026-11-18 with a read-only stock capture from one retail Pixel
+9 Pro XL. The owner later authorized and completed a bootloader unlock, which
+factory-reset userdata; Android setup was completed again. Nothing from Omarchy
+Mobile has been booted or flashed. Raw captures remain private; only
+non-identifying facts are recorded here. The latest check has the phone in
+fastboot on slot A, bootloader unlocked.
 
 Tracking issue: [#913](https://github.com/derekross/omarchy-mobile/issues/913).
 
@@ -31,8 +34,8 @@ device identifiers and is not in this repository.
   stock update had booted on slot A:** Android 17, build
   `CP4A.261105.040.A1`, security patch 2026-11-05, kernel
   `6.1.172-android14-11`, hardware revision `MP1.0`, and `dtbo_idx=34` [V]
-  (R/ `post-update-targeted.txt`). Bootloader remains locked and verified
-  boot is green. No personal content was queried.
+  (R/ `post-update-targeted.txt`). At the time of this read, the bootloader was
+  locked and verified boot was green. No personal content was queried.
 
 ### Named fastboot reads and return to stock Android
 
@@ -54,7 +57,8 @@ used. Results are in the private R/ capture.
   build `CP4A.261105.040.A1`; bootloader remained locked and verified boot
   green** [V] (R/ `post-fastboot-state.txt:1-7`). The prior ADB capture was on
   slot B with build `CP3A.261005.005` (R/ `getprop.txt:764,695`).
-- **No `set_active`, unlock, flash, or partition-write command was issued.**
+- **During this initial fastboot measurement, no `set_active`, unlock, flash,
+  or partition-write command was issued.**
   **Inference I1:** the pre-reboot state matches AOSP's documented
   "update applied, reboot pending" state: Android was on successful B while A
   was selected, bootable, but not yet marked successful. AOSP says the next
@@ -118,15 +122,21 @@ used. Results are in the private R/ capture.
   `linux-omarchy-mobile`, not this repository; see the initial gate plan in
   [`BRINGUP-M1.md`](BRINGUP-M1.md).
 
-## Safety boundary
+## Safety boundary and latest state
 
-The initial capture used unrooted ADB reads. With the owner's approval, one
-reboot to fastboot and a plain reboot back to Android were performed, with only
-named `getvar` reads in fastboot. No slot-change, unlock, flash, root, or
-partition-write command was issued by this session; a stock A/B update appears
-to have been pending, but its installation time and source are unknown. The
-phone is currently on stock Android, slot A, with verified boot green. No
-update logs were read, and the new slot's final successful mark was not
-checked. Do not perform further reboots or slot actions until the update state,
-boot chain, rollback behavior, recovery path, and a gated first-light plan
-have been reviewed.
+The initial capture used unrooted ADB reads. The owner later authorized
+unlocking and experimental device work; the bootloader was unlocked and its
+factory reset completed. Android setup was finished, then the phone was
+returned to fastboot. No Omarchy image has been flashed and no partition has
+been written by the bring-up work. The latest named reads (2026-11-18) report:
+`unlocked=yes`, current slot A, bootloader
+`ripcurrentpro-17.0-16433847`, A successful/not-unbootable, and B
+successful/unbootable. `fastboot fetch boot_a` was refused even after unlock,
+so a raw stock-partition backup is not established. Google's official factory
+image for exact `komodo` build `CP4A.261105.040.A1` is downloaded outside the
+repository at `~/android/factory/komodo/CP4A.261105.040.A1/` and matches the
+official SHA-256. That is a verified stock package, but the attended recovery
+runbook and required read-only partition backups remain incomplete. Continue
+only after the boot image, rollback, and recovery gates are complete; preserve
+slot A and never write modem, radio, devinfo, persist, or calibration
+partitions.
