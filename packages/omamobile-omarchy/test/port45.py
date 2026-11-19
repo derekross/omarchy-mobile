@@ -98,6 +98,13 @@ def actual(t, ex, version, make_root, run, ok, read, series, package, parse_qml)
        and 'if (root.displayDark && !root.darkTapWakes()) return' in view
        and 'if (lock.darkTapWakes()) {' in read(root, lock + 'LockGlance.qml'),
        'real4.5: a dark touch-only lock leaves the double tap to omamobile-doubletap (0029)')
+    # The lock sets these three in Service.qml; its lock surface's view only
+    # hears of a wake or a dark screen if they are passed in.
+    lock_wiring = read(root, lock + 'Service.qml')
+    ok('wakeSerial: root.wakeSerial' in lock_wiring
+       and 'blankSerial: root.blankSerial' in lock_wiring
+       and 'displayDark: root.displayDark' in lock_wiring,
+       'real4.5: the lock passes its wake, blank and dark state to the lock view (0023)')
     about = read(root, 'usr/bin/omarchy-launch-about')
     ok('layout_room()' in about and 'about_fastfetch "${logo_args[@]}"' in about
        and 'about_fastfetch "${measure_args[@]}" --pipe false' in about,
