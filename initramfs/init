@@ -554,11 +554,25 @@ boot_nfs() {
 # missing we stay here in the initramfs shell.
 boot_arch() {
   grep -q omamobile.initramfs /proc/cmdline && return 1
-  local dev="" s info label check
-  for s in /sys/block/sda/sda*; do
-    grep -qx PARTNAME=userdata "$s/uevent" 2>/dev/null && dev=/dev/${s##*/}
+  local dev="" s info label check waited=0 limit=0
+  # UFS can come up late: on the OnePlus 7T Pro after a RAM boot from the
+  # fastboot screen, userdata appeared 50 s after SSH. A descriptor's
+  # INITRAMFS_USERDATA_WAIT packs a limit in seconds; without it the init
+  # looks once, as it always has.
+  [ -e /etc/omamobile-userdata-wait ] && limit=$(cat /etc/omamobile-userdata-wait)
+  case $limit in ''|*[!0-9]*) limit=0 ;; esac
+  while :; do
+    for s in /sys/block/sda/sda*; do
+      grep -qx PARTNAME=userdata "$s/uevent" 2>/dev/null && dev=/dev/${s##*/}
+    done
+    [ -n "$dev" ] || [ $waited -ge $limit ] && break
+    [ $((waited % 10)) -eq 0 ] && say "arch: waiting for the userdata partition (${waited} s)"
+    sleep 1
+    waited=$((waited + 1))
   done
   [ -n "$dev" ] || { say "arch: no userdata partition"; return 1; }
+  # the guard sets each new partition read-only first; let it see userdata
+  [ $waited -gt 0 ] && { ufs_ro_pass; sleep 1; }
   [ "$(cat /sys/block/sda/${dev#/dev/}/ro)" = 0 ] || { say "arch: userdata is read-only"; return 1; }
   # Strict identification is opt-in: old hand-installed roots may be unlabelled.
   # The descriptor packs this file only when it requests the root protection.
