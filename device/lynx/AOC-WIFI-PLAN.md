@@ -5,8 +5,8 @@ Status (2026-11-15): **guarded association and traffic passed on two boots of
 the old local experimental kernel**. This records our reproduction of alfikpl's AoC-first
 ordering and four mainline fixes reported in [issue 36](https://github.com/derekross/omarchy-mobile/issues/36#issuecomment-6819528828)
 and the subsequent tests on the original lynx test phone. The kernel changes
-and test overlays for those historical runs are not included here. The revised
-signed integration is now published as draft kernel PRs, but has never booted.
+and test overlays for those historical runs are not included here. The revised signed integration later
+booted with AoC and WLAN held off (section 3).
 No release package or automatic driver startup is qualified by these results.
 
 The historical source and its distinction from the revised series are recorded
@@ -30,8 +30,9 @@ The sequence was Trusty IPC, GSA/AoC, WLAN power, PCIe link, then ath11k.
 The local changes include:
 
 - Trusty IPC descriptors using premapped shared-memory buffer IDs;
-- preserving GSA probe deferral in AoC and avoiding a second claim of the
-  chip-id resource already owned by exynos-chipid;
+- preserving GSA probe deferral in AoC and mapping the chip-ID range without
+  requesting exclusive ownership (alfikpl reported an exynos-chipid conflict
+  on their build; this phone’s archived DT identifies no second owner);
 - an AoC-online dependency checked before WLAN power and PCIe bring-up;
 - lynx-specific WCN6855 power sequencing and DWC iMSI-RX handling,
   including restoring ELBI interrupt enables after link reset;
@@ -44,7 +45,9 @@ firmware set: `amss20.bin`, `m3.bin`, `regdb.bin` and a `board-2.bin` packed
 from the stock board files for this endpoint. Neither firmware nor board
 data is redistributed. Bluetooth and the modem were not started for these
 tests. No extra chip-window, PMU, SysMMU or iATU userspace register reads
-were used to obtain the result.
+were used to obtain the result. In both MSI runs the WCN6855 endpoint had
+no restricted DMA pool, and the PCIe controller had no active IOMMU mapping
+(the HSI2 SysMMU was disabled in the tested DT).
 
 The recorded lab stages did not start `storageproxyd` or any fingerprint or
 modem service. Their preflights required those services inactive and rejected
@@ -98,7 +101,7 @@ render node; this Wi-Fi result does not qualify those paths.
    false association-request flag is stale: its primary per-boot marker and
    kernel capture show that association was requested.
 
-   A separately reviewed activation on that same boot added an eight-second
+   A revised activation on that same boot added an eight-second
    bound for IPv4 address, DHCP options and gateway readiness. It passed DHCP,
    three gateway pings, Wi-Fi-bound HTTPS (HTTP 200, 577 bytes, TLS verified),
    and fresh USB SSH. Ordinary HTTPS also used Wi-Fi and passed. The revised
@@ -120,10 +123,19 @@ The experimental drivers remain blacklisted for boot. Startup is a guarded
 manual lab sequence. The owner subsequently rebooted the same kernel; home
 and touch were confirmed working, and the later restoration in section 2
 repeated guarded Wi-Fi startup on that boot. These are historical receipts,
-not proof of present connectivity. The exact signed integration
-`dfdf8ce251c89d3cd05a6325c61ed7ea1c61a741`, including the revised late-link/MSI
-refusal paths and overlay split, has never booted and is not qualified by
-either old-kernel result.
+not proof of present connectivity. On November 15 the signed integration at
+`dfdf8ce251c89d3cd05a6325c61ed7ea1c61a741` booted from B as
+`7.3.0-rc6-omamobile-lynx-qual-dfdf8ce251c8+`. The first host check stopped
+at an obsolete pinctrl debugfs path. A separate read-only check confirmed
+the build and module set, with AoC and WLAN held off. Association and HTTPS
+have only been demonstrated on the old experimental kernel.
+
+The board change still needs a restricted DMA pool that ath11k can use.
+On this kernel MHI requests a contiguous 512 KiB firmware segment and the
+restricted pool permits at most 256 KiB per allocation. Increasing the
+total pool size would leave that limit in place.
+[ath11k MHI configuration](https://github.com/latentoperator/linux-omarchy-mobile/blob/dfdf8ce251c89d3cd05a6325c61ed7ea1c61a741/drivers/net/wireless/ath/ath11k/mhi.c#L381-L384)
+and [SWIOTLB segment and slot sizes](https://github.com/latentoperator/linux-omarchy-mobile/blob/dfdf8ce251c89d3cd05a6325c61ed7ea1c61a741/include/linux/swiotlb.h#L20-L32).
 
 Reconnect, repeated cold-start operation, sustained traffic, suspend/resume,
 Bluetooth coexistence and unattended startup remain unqualified. AoC
@@ -140,12 +152,13 @@ On USB loss, stop sending commands and observe recovery before a fresh
 identity-pinned probe. Any boot-image write or reboot needs the owner's
 approval for that operation.
 
-The separated, human-certified topic series are published as draft kernel PRs
-251-255. The signed integration now has a complete offline kernel/module
+As of 2026-11-15 the human-certified topics were open as drafts from
+[linux-omarchy-mobile#251](https://github.com/derekross/linux-omarchy-mobile/pull/251) through
+[linux-omarchy-mobile#255](https://github.com/derekross/linux-omarchy-mobile/pull/255).
+That integration had a complete offline kernel/module
 build and matched AoC-only/AoC+WLAN images, with image, AVB, module and overlay
-verification. A newly reviewed attended runner and concrete owner approval
-remain prerequisites for its first boot; offline preparation is not runtime
-qualification. Shared Trusty/AoC paths still require a maintainer-approved
+verification. Testing AoC and Wi-Fi on that build still requires a revised
+attended runner and owner approval. Shared Trusty/AoC paths still require a maintainer-approved
 Pixel 7 Pro regression before merge. This does not establish that those paths
 are unchanged or ready to merge. Private logs, network identifiers,
 partition images and calibration hashes remain off-repository.
