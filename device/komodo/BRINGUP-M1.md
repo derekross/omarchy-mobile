@@ -56,13 +56,16 @@ touch, or other peripherals until first light and recovery are proven.
   returned to stock Android on slot A, locked and verified boot green. No slot
   selection or partition write was issued. (R/ `fastboot-vars.txt`,
   `post-fastboot-state.txt`.)
-- **[V]** A fresh targeted fastboot read on 2026-11-18 reports bootloader
-  `ripcurrentpro-17.0-16433847`. After unlock, fastboot reports `unlocked=yes`,
-  current slot A, A successful/bootable, and B successful but unbootable. Named
-  A/B boot partition sizes remain 64 MiB (`boot` and `vendor_boot`) and 16 MiB
-  (`dtbo`). The bootloader does not expose `dtbo_idx` through `getvar`; the
-  earlier ADB read reported 34. (R/ `fastboot-postupdate-targeted.txt` and
-  `post-unlock-targeted.txt`.)
+- **[V]** A fresh read-only fastboot inventory on 2026-11-18 reports product
+  `komodo`, bootloader `ripcurrentpro-17.0-16433847`, `unlocked=yes`, and
+  current slot A. A is successful/not-unbootable; B is successful/unbootable;
+  both report two retries. Each A/B image partition exists with these sizes:
+  `boot` 64 MiB, `init_boot` 8 MiB, `vendor_boot` 64 MiB,
+  `vendor_kernel_boot` 64 MiB, and `dtbo` 16 MiB. `userdata` is
+  `0x1b5e215000` bytes. No slot or partition was changed. The bootloader does
+  not expose `dtbo_idx` through `getvar`; the earlier ADB read reported 34.
+  (R/ `fastboot-postupdate-targeted.txt`, `post-unlock-targeted.txt`, and
+  `fastboot-inventory-2026-11-18.txt`.)
 - **[V]** User authorized bootloader unlock, its factory reset, and experimental
   device operations. The reset completed and Android setup was finished. The
   phone is currently in fastboot. No Omarchy image has been written.
