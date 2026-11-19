@@ -75,6 +75,18 @@ hl.window_rule({
   move = { "(monitor_w-window_w-8)", "(monitor_h*0.08)" },
 })
 
+-- Going home and switching apps are workspace switches here (every app has a
+-- screen of its own, omamobile-launch), and Omarchy turns the workspace
+-- animation off, as a desktop wants: on the phone the app was gone in one
+-- frame, a cut where Android fades. A 200 ms fade instead; windows opening and
+-- closing keep Omarchy's own animations. The curve is defined here (Omarchy's
+-- easeOutQuint, by value) so the line doesn't rest on a name from another
+-- package: Hyprland rejects an animation whose curve it doesn't know. To get
+-- the cut back, add after the line that loads this file (looknfeel.lua):
+--   hl.animation({ leaf = "workspaces", enabled = false })
+hl.curve("omamobileWorkspaceFade", { type = "bezier", points = { { 0.23, 1 }, { 0.32, 1 } } })
+hl.animation({ leaf = "workspaces", enabled = true, speed = 2, bezier = "omamobileWorkspaceFade", style = "fade" })
+
 -- Lock after boot, like a phone: the session logs in automatically, then
 -- Omarchy's lock comes up with its PIN pad. Only once a PIN is set (the
 -- lock-on-start toggle), since a lock with no password can't be opened.
