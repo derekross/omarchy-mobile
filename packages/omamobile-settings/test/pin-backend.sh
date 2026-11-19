@@ -50,11 +50,17 @@ sleep 0.5
 ! pgrep -f "$tmp/passwd" >/dev/null || { echo "FAIL: passwd was left running" >&2; exit 1; }
 eq "$(run change 5061 7384 9152)" '{"error":"the new PINs do not match"}'
 eq "$(run change 5061 5061 5061)" '{"error":"the new PIN is the same as the current one"}'
-eq "$(run change 5061 123 123)" '{"error":"new PIN must be 4 to 8 digits"}'
-eq "$(run change 5061 123456789 123456789)" '{"error":"new PIN must be 4 to 8 digits"}'
-eq "$(run change 5061 12a45 12a45)" '{"error":"new PIN must be 4 to 8 digits"}'
+eq "$(run change 5061 123 123)" '{"error":"the new PIN must be 4 to 84 digits"}'
+# long PINs: 70 and 84 digits go through to passwd, 85 is more than a later change could carry
+eq "$(run change 5061 1234567890123456789012345678901234567890123456789012345678901234567890 1234567890123456789012345678901234567890123456789012345678901234567890)" '{"changed":true}'
+eq "$(run change 5061 123456789012345678901234567890123456789012345678901234567890123456789012345678901234 123456789012345678901234567890123456789012345678901234567890123456789012345678901234)" '{"changed":true}'
+eq "$(run change 5061 1234567890123456789012345678901234567890123456789012345678901234567890123456789012345 1234567890123456789012345678901234567890123456789012345678901234567890123456789012345)" '{"error":"the new PIN must be 4 to 84 digits"}'
+# a 70-digit PIN is taken as the current one on the next change (the stand-in only knows 5061, so passwd says no)
+eq "$(run change 1234567890123456789012345678901234567890123456789012345678901234567890 7384 7384)" '{"error":"the current PIN was not accepted"}'
+eq "$(run change 1234567890123456789012345678901234567890123456789012345678901234567890123456789012345 7384 7384)" '{"error":"current PIN must be digits"}'
+eq "$(run change 5061 12a45 12a45)" '{"error":"the new PIN must be 4 to 84 digits"}'
 eq "$(run change abc 7384 7384)" '{"error":"current PIN must be digits"}'
-eq "$(run change 5061 '' '')" '{"error":"new PIN must be 4 to 8 digits"}'
+eq "$(run change 5061 '' '')" '{"error":"the new PIN must be 4 to 84 digits"}'
 eq "$(run other 5061 7384 7384)" '{"error":"usage: change|status"}'
 eq "$(printf '5061\n' | bash "$tmp/pin.sh" change 2>/dev/null || true)" '{"error":"no new PIN"}'
 eq "$(printf '' | bash "$tmp/pin.sh" change 2>/dev/null || true)" '{"error":"no current PIN"}'

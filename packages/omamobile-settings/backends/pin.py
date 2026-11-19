@@ -4,7 +4,8 @@
 # the checking. Three lines come from stdin: the current PIN, the new PIN, the new PIN again. They are only ever on
 # stdin and in this process's memory: never an argument, never in the environment, never logged, never printed.
 # passwd runs with LC_ALL=C and a minimal environment, so its prompts are the English ones matched here. Rules: the
-# new PIN is digits only, 4 to 8 long, differs from the current one and is typed twice; everything else is up to
+# new PIN is digits only, 4 to 84 long (84 is what the runner's 256 characters of input carry for three PINs, so a PIN
+# set here can always be typed as the current one later), differs from the current one and is typed twice; everything else is up to
 # passwd. After DEADLINE seconds passwd is killed: before the retype is sent nothing has changed, after it nobody can
 # say, and the result says so. The binary is /usr/bin/passwd and nothing in the environment changes that; the test
 # runs a copy of this file with the path and the deadline replaced.
@@ -24,8 +25,8 @@ def entry(why):
 old = entry("no current PIN")
 new = entry("no new PIN")
 again = entry("no confirmation")
-if not re.fullmatch(r"[0-9]{1,64}", old): fail("current PIN must be digits")
-if not re.fullmatch(r"[0-9]{4,8}", new): fail("new PIN must be 4 to 8 digits")
+if not re.fullmatch(r"[0-9]{1,84}", old): fail("current PIN must be digits")
+if not re.fullmatch(r"[0-9]{4,84}", new): fail("the new PIN must be 4 to 84 digits")
 if new != again: fail("the new PINs do not match")
 if new == old: fail("the new PIN is the same as the current one")
 

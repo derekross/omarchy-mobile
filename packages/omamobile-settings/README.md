@@ -39,7 +39,7 @@ derekross/linux-omarchy-mobile#266.
 A third page, Change PIN, changes
 the lock screen PIN, which is the account password (the lock checks it with pam_unix, and sudo does too): `backends/pin.sh` runs the
 system's own `/usr/bin/passwd` in a pseudo-terminal, as the user, with the three entries on stdin (never an argument,
-never in the environment, never logged or printed), digits only for the new PIN, 4 to 8 long, and passwd is what
+never in the environment, never logged or printed), digits only for the new PIN, 4 to 84 long (the runner carries 256 characters, three PINs of 84), and passwd is what
 checks the current PIN and any other rule. passwd runs with `LC_ALL=C` so its prompts are the ones the script
 matches, and it is killed after 12 seconds: before the retype nothing has changed, after it the result says the PIN
 may or may not have changed. The entries are held as text in the page until the call returns, then cleared; the

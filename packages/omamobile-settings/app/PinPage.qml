@@ -5,19 +5,23 @@ import "."
 ColumnLayout {
     id: page
     spacing: 12
-    readonly property string hint: qsTr("Digits only, 4 to 8 long. The PIN is also the sudo password.")
+    readonly property string hint: qsTr("Digits only, 4 to 84 long. The PIN is also the sudo password.")
     // What the page says: what it knows about the phone (baseText), the outcome of the last change (resultText: a
     // change that finished while the page was gone is shown once), and while a change runs only that.
     property string baseText: qsTr("Checking this phone...")
     property string resultText: ""
     property string busyText: ""
-    readonly property string statusText: busy ? busyText : (resultText === "" ? baseText : (allowed ? resultText : resultText + " " + baseText))
+    // What is wrong with the new PIN while it is typed, so a disabled button is never a mystery. The only upper
+    // limit is the runner's 256 characters of input: three PINs of 84 digits and three newlines fit, so any PIN
+    // set here can be changed again later.
+    readonly property string formText: !allowed || busy || next.text === "" ? "" : (!/^[0-9]*$/.test(next.text) ? qsTr("The new PIN can only have digits.") : (next.text.length < 4 ? qsTr("The new PIN needs at least 4 digits.") : next.text.length > 84 ? qsTr("The new PIN can be at most 84 digits.") : (again.text !== "" && again.text !== next.text ? qsTr("The new PINs do not match.") : "")))
+    readonly property string statusText: busy ? busyText : formText !== "" ? formText : (resultText === "" ? baseText : (allowed ? resultText : resultText + " " + baseText))
     // The form is for a phone that unlocks with a PIN and has one; anything else gets a plain line.
     property bool allowed: false
     property bool busy: false
     property int statusId: -1
-    readonly property var digits: /^[0-9]{4,8}$/
-    readonly property var currentDigits: /^[0-9]{1,64}$/
+    readonly property var digits: /^[0-9]{4,84}$/
+    readonly property var currentDigits: /^[0-9]{1,84}$/
     readonly property bool ready: currentDigits.test(cur.text) && digits.test(next.text) && again.text === next.text && !busy && allowed
     function reset() { cur.text = ""; next.text = ""; again.text = "" }
     function show(r) {
@@ -54,9 +58,9 @@ ColumnLayout {
         if (last.changed !== undefined || last.error !== undefined) show(last)
     }
     Component.onDestruction: page.reset()
-    SettingsTextField { id: cur; enabled: page.allowed && !page.busy; Layout.fillWidth: true; Layout.preferredHeight: 52; placeholderText: qsTr("Current PIN"); echoMode: TextInput.Password; maximumLength: 64; inputMethodHints: Qt.ImhDigitsOnly | Qt.ImhSensitiveData; color: backend.foreground; placeholderTextColor: backend.muted }
-    SettingsTextField { id: next; enabled: page.allowed && !page.busy; Layout.fillWidth: true; Layout.preferredHeight: 52; placeholderText: qsTr("New PIN"); echoMode: TextInput.Password; maximumLength: 8; inputMethodHints: Qt.ImhDigitsOnly | Qt.ImhSensitiveData; color: backend.foreground; placeholderTextColor: backend.muted }
-    SettingsTextField { id: again; enabled: page.allowed && !page.busy; Layout.fillWidth: true; Layout.preferredHeight: 52; placeholderText: qsTr("New PIN again"); echoMode: TextInput.Password; maximumLength: 8; inputMethodHints: Qt.ImhDigitsOnly | Qt.ImhSensitiveData; color: backend.foreground; placeholderTextColor: backend.muted }
+    SettingsTextField { id: cur; enabled: page.allowed && !page.busy; Layout.fillWidth: true; Layout.preferredHeight: 52; placeholderText: qsTr("Current PIN"); echoMode: TextInput.Password; maximumLength: 84; inputMethodHints: Qt.ImhDigitsOnly | Qt.ImhSensitiveData; color: backend.foreground; placeholderTextColor: backend.muted }
+    SettingsTextField { id: next; enabled: page.allowed && !page.busy; Layout.fillWidth: true; Layout.preferredHeight: 52; placeholderText: qsTr("New PIN"); echoMode: TextInput.Password; inputMethodHints: Qt.ImhDigitsOnly | Qt.ImhSensitiveData; color: backend.foreground; placeholderTextColor: backend.muted }
+    SettingsTextField { id: again; enabled: page.allowed && !page.busy; Layout.fillWidth: true; Layout.preferredHeight: 52; placeholderText: qsTr("New PIN again"); echoMode: TextInput.Password; inputMethodHints: Qt.ImhDigitsOnly | Qt.ImhSensitiveData; color: backend.foreground; placeholderTextColor: backend.muted }
     SettingsButton {
         Layout.fillWidth: true; text: qsTr("Change PIN"); enabled: page.ready
         onClicked: { page.resultText = ""; page.busyText = qsTr("Changing..."); page.busy = true; actions.run("pin", ["change"], cur.text + "\n" + next.text + "\n" + again.text + "\n") }
