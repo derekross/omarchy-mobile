@@ -9,7 +9,7 @@ export OMAMOBILE_LOCK_SYSFS=$tmp/sys OMAMOBILE_LOCK_UDEVDATA=$tmp/udev OMAMOBILE
 # stand-ins for omarchy-shell and systemctl: never touch the shell or units of the machine running the tests
 mkdir -p "$tmp/stubs"; export STUB_LOG=$tmp/stubs/log STUB_FAIL=$tmp/stubs/fail; : > "$STUB_LOG"
 for c in omarchy-shell systemctl; do
-  printf '#!/bin/bash\necho "%s $*" >> "$STUB_LOG"\n[[ -e $STUB_FAIL.%s ]] && exit 1\nexit 0\n' "$c" "$c" > "$tmp/stubs/$c"
+  printf '#!/bin/bash\necho "%s $*" >> "$STUB_LOG"\n[[ -e $STUB_FAIL.%s ]] && exit 1\n[[ $2 == is-enabled ]] && { cat "$STUB_LOG.state" 2>/dev/null || echo enabled; }\nexit 0\n' "$c" "$c" > "$tmp/stubs/$c"
   chmod +x "$tmp/stubs/$c"
 done
 export PATH=$tmp/stubs:$PATH
@@ -266,11 +266,32 @@ echo '{"lock":120,"keyboardAwake":true,"applied":120,"override":false,"reloadPen
 eq "$(cat "$STUB_LOG")" "systemctl --user enable --now omamobile-lock-keyboard.service"
 : > "$STUB_LOG"; OMAMOBILE_LOCK_UNIT_ENABLED=1 run get >/dev/null; eq "$(cat "$STUB_LOG")" ""
 : > "$STUB_LOG"; run get >/dev/null  # no hook: asks systemctl (the stub says enabled), nothing to change
-eq "$(cat "$STUB_LOG")" "systemctl --user is-enabled --quiet omamobile-lock-keyboard.service"
+eq "$(cat "$STUB_LOG")" "systemctl --user is-enabled omamobile-lock-keyboard.service"
 echo '{"lock":120,"keyboardAwake":false,"applied":120,"override":false,"reloadPending":false}' > "$prefs"
 : > "$STUB_LOG"; OMAMOBILE_LOCK_UNIT_ENABLED=1 run get >/dev/null
 eq "$(cat "$STUB_LOG")" "systemctl --user disable --now --no-block omamobile-lock-keyboard.service"
 : > "$STUB_LOG"; OMAMOBILE_LOCK_UNIT_ENABLED=0 run get >/dev/null; eq "$(cat "$STUB_LOG")" ""
+# is-enabled says something else (masked, garbage) or hangs: nothing done, reported
+echo '{"lock":120,"keyboardAwake":true,"applied":120,"override":false,"reloadPending":false}' > "$prefs"
+for st in masked garbage; do
+  echo "$st" > "$STUB_LOG.state"; : > "$STUB_LOG"
+  eq "$(run get)" '{"lock":120,"keyboardAwake":true,"keyboard":false,"effective":120,"error":"could not tell if the keyboard watcher is enabled"}'
+  eq "$(cat "$STUB_LOG")" "systemctl --user is-enabled omamobile-lock-keyboard.service"
+done
+rm -f "$STUB_LOG.state"
+cp "$tmp/stubs/systemctl" "$tmp/systemctl.keep"
+printf '#!/bin/bash\necho "systemctl $*" >> "$STUB_LOG"\n[[ $2 == is-enabled ]] && sleep 10\nexit 0\n' > "$tmp/stubs/systemctl"
+: > "$STUB_LOG"
+eq "$(run get)" '{"lock":120,"keyboardAwake":true,"keyboard":false,"effective":120,"error":"could not tell if the keyboard watcher is enabled"}'
+eq "$(grep -c 'enable --now' "$STUB_LOG")" '0'
+# race: a set keyboard off started while get is deciding waits for get's lock, then disables
+printf '#!/bin/bash\necho "systemctl $*" >> "$STUB_LOG"\nif [[ $2 == is-enabled ]]; then OMAMOBILE_LOCK_WATCHER=0 bash "$RACE_SRC/backends/lock.sh" set keyboard off >/dev/null & echo $! > "$STUB_LOG.pid"; sleep 1; echo disabled; fi\nexit 0\n' > "$tmp/stubs/systemctl"
+: > "$STUB_LOG"; RACE_SRC=$src run get >/dev/null
+while kill -0 "$(cat "$STUB_LOG.pid")" 2>/dev/null; do sleep 0.2; done
+eq "$(pj keyboardAwake)" 'False'
+eq "$(grep 'able' "$STUB_LOG" | tail -1)" "systemctl --user disable --now --no-block omamobile-lock-keyboard.service"
+cp "$tmp/systemctl.keep" "$tmp/stubs/systemctl"
+echo '{"lock":120,"keyboardAwake":false,"applied":120,"override":false,"reloadPending":false}' > "$prefs"
 # systemctl fails: reported in the JSON, the choice is kept
 touch "$STUB_FAIL.systemctl"
 eq "$(OMAMOBILE_LOCK_UNIT_ENABLED=1 run get)" '{"lock":120,"keyboardAwake":false,"keyboard":false,"effective":120,"error":"could not stop the keyboard watcher"}'

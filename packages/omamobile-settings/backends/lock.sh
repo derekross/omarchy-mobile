@@ -230,19 +230,35 @@ err() {  # the error already in $res, if any, then this one
 # which keeps the whole run well under the page runner's 20 s.
 # get (the page opens with it) puts the unit in line with a saved choice: lock.json from an older build
 # can say on while the unit was never enabled. Only when lock.json was read fine ("unit" in the JSON).
+# Under the same flock as the work above, re-reading the choice, so a set landing meanwhile waits and wins.
+# Only "enabled"/"enabled-runtime" and "disabled" count; anything else (masked, timeout, no bus) is reported.
+# systemctl runs without fd 9, so nothing it starts holds the lock. enable --now does not wait for the unit's apply (a simple service), so holding the lock cannot deadlock.
 if [[ $verb == get ]]; then
-  unit=$(/usr/bin/python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); print({True:"on",False:"off"}.get(d.get("unit"),""))' "$res")
+  unit=$(/usr/bin/python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); print(1 if "unit" in d else "")' "$res")
   res=$(/usr/bin/python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); d.pop("unit",None); print(json.dumps(d,separators=(",",":")))' "$res")
-  enabled=${OMAMOBILE_LOCK_UNIT_ENABLED:-}
-  if [[ -n $unit && -z $enabled ]]; then
-    enabled=0; if timeout 2 systemctl --user is-enabled --quiet omamobile-lock-keyboard.service 2>/dev/null; then enabled=1; fi
-  fi
-  if [[ $unit == on && $enabled == 0 ]]; then
-    timeout 5 systemctl --user enable --now omamobile-lock-keyboard.service >/dev/null 2>&1 ||
-      err "could not start the keyboard watcher"
-  elif [[ $unit == off && $enabled == 1 ]]; then
-    timeout 5 systemctl --user disable --now --no-block omamobile-lock-keyboard.service >/dev/null 2>&1 ||
-      err "could not stop the keyboard watcher"
+  if [[ -n $unit ]]; then
+    act=$(
+      exec 9>>"$prefs.lock"; flock 9
+      want=$(/usr/bin/python3 -I -c 'import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: d=None
+print(("on" if d.get("keyboardAwake") else "off") if isinstance(d,dict) else "")' "$prefs")
+      [[ -n $want ]] || exit 0
+      case ${OMAMOBILE_LOCK_UNIT_ENABLED:-} in
+        1) state=enabled ;; 0) state=disabled ;;
+        *) state=$(timeout 2 systemctl --user is-enabled omamobile-lock-keyboard.service 2>/dev/null 9>&-) || true ;;
+      esac
+      case $state in enabled|enabled-runtime) state=1 ;; disabled) state=0 ;;
+        *) echo "could not tell if the keyboard watcher is enabled"; exit 0 ;; esac
+      if [[ $want == on && $state == 0 ]]; then
+        timeout 5 systemctl --user enable --now omamobile-lock-keyboard.service >/dev/null 2>&1 9>&- ||
+          echo "could not start the keyboard watcher"
+      elif [[ $want == off && $state == 1 ]]; then
+        timeout 5 systemctl --user disable --now --no-block omamobile-lock-keyboard.service >/dev/null 2>&1 9>&- ||
+          echo "could not stop the keyboard watcher"
+      fi
+    )
+    [[ -z $act ]] || err "$act"
   fi
 fi
 if [[ $verb == set && $key == keyboard ]]; then
