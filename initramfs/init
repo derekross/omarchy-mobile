@@ -48,9 +48,10 @@ ufs_ro_log() { echo "omamobile: ufs-ro: $*" > /dev/kmsg; }
 # Storage guard. Everything on the UFS is read-only except an allowlist of
 # partitions we own: the running slot's boot images (in-place kernel
 # updates) and userdata (the Arch root). The kernel only lets a partition be written if
-# its whole disk is writable too, so the main disk (sda) stays writable but
-# its whole-disk node is removed, so nothing can write across partitions by
-# accident; a LUN the descriptor's UFS_RW_LUNS names is guarded the same way.
+# its whole disk is writable too. With an allowlist, the main disk (sda)
+# stays writable but its whole-disk node is removed, so nothing can write
+# across partitions by accident; with no allowlist, the disk is read-only.
+# A LUN the descriptor's UFS_RW_LUNS names is guarded the same way.
 # The other LUNs (on Pixels sdb, sdc, sdd: bootloader images) are read-only
 # at the disk level. Calibration partitions (efs, persist, modem_userdata...)
 # and all of the other slot stay read-only.
@@ -178,15 +179,15 @@ ufs_ro_pass() {
     [ -e "/run/ufs-ro/$name" ] && continue
     [ -b "/dev/$name" ] || continue  # devtmpfs node not there yet: next pass
     if ufs_rw_disk "$name"; then
-      if [ -s /etc/omamobile-nfsroot ]; then
+      if [ -s /etc/omamobile-nfsroot ] || [ -z "$UFS_RW" ]; then
         blockdev --setro "/dev/$name"
         read -r ro < "$s/ro"
         if [ "$ro" = 1 ]; then
           : > "/run/ufs-ro/$name"
-          ufs_ro_log "/dev/$name set read-only for NFS root"
+          ufs_ro_log "/dev/$name set read-only (no writable partitions)"
           continue
         fi
-        ufs_ro_log "FAILED to set /dev/$name read-only for NFS root"
+        ufs_ro_log "FAILED to set /dev/$name read-only"
         echo "omamobile: WARNING: /dev/$name is NOT read-only" > /dev/tty0 2>/dev/null
         continue
       fi
@@ -214,14 +215,14 @@ ufs_ro_pass() {
     fi
   done
 }
-# Prints every disk or partition that is writable but not on the allowlist
-# (sda itself excepted: its node is removed). Empty means the guard holds.
+# Prints every disk or partition that is writable but not on the allowlist.
+# With an allowlist, the writable whole-disk node is removed.
 ufs_unguarded() {
   local s name part ro
   for s in /sys/block/sd* /sys/block/sd*/sd*; do
     [ -r "$s/ro" ] || continue
     name=${s##*/}
-    ufs_rw_disk "$name" && [ ! -s /etc/omamobile-nfsroot ] && continue
+    ufs_rw_disk "$name" && [ -n "$UFS_RW" ] && [ ! -s /etc/omamobile-nfsroot ] && continue
     read -r ro < "$s/ro"
     [ "$ro" = 0 ] || continue
     part=$(ufs_partname "$s")

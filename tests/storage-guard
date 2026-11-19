@@ -7,10 +7,11 @@
 # here against a fake sysfs and /dev: a missing, empty or malformed file, or
 # a forbidden name, leaves every partition read-only; cheetah's list leaves
 # exactly its six partitions writable, as the hard-coded list did; /dev/sda's
-# whole-disk node is removed either way. A LUN named in UFS_RW_LUNS (a
-# test descriptor's sde, enchilada's layout) is guarded as sda is; without
-# that list, or with a bad one or a closed allowlist, it stays read-only at
-# the disk level. The packed list is in slot form (ACTIVE-SLOT-PLAN §4):
+# whole-disk node is removed only when a partition is writable. A LUN named
+# in UFS_RW_LUNS (a test descriptor's sde, enchilada's layout) is guarded as
+# sda is. Without that list, or with a bad one or a closed allowlist, it
+# stays read-only at the disk level. The packed list is in slot form
+# (ACTIVE-SLOT-PLAN §4):
 # booted from slot B (androidboot.slot_suffix in /proc/bootconfig, else
 # /proc/cmdline) it holds as packed; from slot A each X_b becomes X_a and
 # slot B stays read-only; with no readable suffix (none, two that disagree,
@@ -168,6 +169,11 @@ disk_checks() { # $1: case name; $2: sde when sde is a listed LUN
       || fail "$1: an unlisted LUN is read-only, boot_b on it too (writable: $(writable sde))"
   fi
 }
+closed_disk_checks() { # $1: case name
+  [[ -e $B/dev/sda && $(cat "$B/sys/block/sda/ro") == 1 ]] || fail "$1: main disk must be read-only"
+  [[ -e $B/dev/sde && $(cat "$B/sys/block/sde/ro") == 1 ]] || fail "$1: other UFS disk must be read-only"
+  [[ -z $(unguarded) ]] || fail "$1: hand-over sees a writable UFS node"
+}
 
 fake_disks
 cp "$t/etc-cheetah/omamobile-ufs-rw" "$t/etc-cheetah/omamobile-ufs-rw-slot" "$B/etc/"
@@ -229,7 +235,7 @@ for bad in slot-b '' 'running x'; do
   guard
   [[ -z $(writable) ]] || fail "slot marker '$bad': every partition read-only (writable: $(writable))"
   grep -q "malformed slot marker" "$B/dev/kmsg" || { cat "$B/dev/kmsg"; fail "slot marker '$bad': says so on kmsg"; }
-  disk_checks "slot marker '$bad'"
+  closed_disk_checks "slot marker '$bad'"
 done
 pass "a slot marker other than 'running' leaves every partition read-only"
 
@@ -280,13 +286,16 @@ closed() { # what, expected kmsg text; the file is set up by the caller
   guard
   [[ -z $(writable) ]] || fail "$1: every partition read-only (writable: $(writable))"
   grep -q -- "$2" "$B/dev/kmsg" || { cat "$B/dev/kmsg"; fail "$1: says so on kmsg ($2)"; }
-  disk_checks "$1"
-  pass "$1: every partition read-only"
+  closed_disk_checks "$1"
+  pass "$1: every disk and partition read-only"
 }
 fake_disks
 closed "no allowlist file" "no allowlist in this image"
 fake_disks; : > "$B/etc/omamobile-ufs-rw"
 closed "an empty allowlist file" "no allowlist in this image"
+echo 0 > "$B/sys/block/sda/ro"
+[[ $(unguarded) == sda ]] || fail "an empty allowlist reports a reopened main disk"
+pass "an empty allowlist reports a reopened main disk"
 fake_disks; printf '   \n' > "$B/etc/omamobile-ufs-rw"
 closed "a blank allowlist" "empty allowlist"
 fake_disks; printf 'boot_b userdata\npersist\n' > "$B/etc/omamobile-ufs-rw"
