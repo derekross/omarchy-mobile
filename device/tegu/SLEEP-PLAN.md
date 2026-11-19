@@ -347,6 +347,45 @@ The figures are from the 2026-10-27 and 10-28 NOTES entries
   SoC busy, so this can't reproduce the cable-out figure. A PM-notifier
   module (`tegu-mif-sleep`: 421 MHz at suspend-prepare, the old rate after
   resume; the commit above) is the policy to measure with the cable out.
+- **The power domains (2026-11-18): all 26 were on, the unused ones too.**
+  Nothing in Linux manages the 9a's power domains (`pm_genpd_summary` is
+  empty), so each stays as ABL leaves it. A read-only bring-up module read
+  each `<NAME>_STATUS` word in the PMU at 0x15460000, at the offsets
+  Google's GPL `flexpmu_cal_local_zuma.h` reads (MMIO, as the kernel reads
+  the PMU; the ISPFE and HSI0 reads matched the PMU regmap's). All 26 read
+  on, among them TPU, AUR, EH, BW, MFC, G2D, the camera stages (GDC, GSE,
+  MCSC, RGBP, TNR, YUVP) and DPUF1, which nothing in Linux uses here.
+- **Switching unused domains off saves about 30 mA, half of it the camera
+  stages.** A second bring-up module switched them off from the boot state
+  with Google's own off sequence: the domain CMU's controller option bit 24
+  cleared, `<NAME>_CONFIGURATION` bit 0 cleared through the PMU
+  register-write SMC, then a wait for `_STATUS` bit 0. Each went off within
+  150 µs. Both modules are out of tree, on the laptop only, and not
+  published. Measured with the cable in, the charger's buck off, the screen
+  off, the modem off for the boot, MIF at 421 MHz, as 90 s means of
+  `current_now`:
+
+  | domains off | drain |
+  | --- | --- |
+  | none (all 26 on) | 284 mA |
+  | TPU, AUR, EH, BW, MFC and G2D | 261 and 273 mA |
+  | those six and the six camera stages | 253, 256 and 252 mA |
+
+  Two cautions from the same day:
+  - A domain powered back on by hand comes up with its DTZPC at the secure
+    default. The next non-secure access to its CMU, the off sequence's
+    first step, took a synchronous external abort, and the palmtop reset.
+    The gs101 domain driver's TZ-config SMC (`smc_offset`) is what such a
+    power-on needs.
+  - With the six camera stages off, libcamera listed no cameras (three
+    with all on).
+
+  With only TPU, AUR, EH, BW, MFC and G2D off, libcamera listed all three
+  cameras, and `cam -c1` captured at 10.7 fps with the modem ONLINE. Those
+  six stayed off through a 42-minute s2idle sleep and its wake. With the
+  modem up, the screen off and MIF at 421 MHz, the six off read 310, 292
+  and 286 mA against 306, 337 and 312 mA with all on that afternoon: about
+  20 mA.
 - **Cluster power-down was tried** (2026-10-28) through the hint Google's
   `exynos-cpupm` writes on each idle entry (`CPU_INFORM`, PMU 0x860 + 4 x
   cpu; 1 = C2, 2 = cluster power-down). The C2 hint was stable but saved
@@ -406,6 +445,22 @@ The figures are from the 2026-10-27 and 10-28 NOTES entries
    by design), the NFC clock pad (always enabled while NFC is bound), and
    the modem when it has been started (no suspend is allowed then, by the
    inhibitor).
+
+6. **The unused power domains: about 30 mA.** A genpd provider for
+   zumapro's domains would power the unused ones off at boot, as stock's
+   drivers do through runtime PM. The kernel's `google,gs101-pd` already
+   does the PMU part on gs101 (`CONFIGURATION` bit 0, `STATUS` at +4, the
+   TZ-config SMC). On zumapro, `STATUS` bit 0 at those offsets followed
+   each switch-off in these runs, but the Pixel 8 Pro's notes say the bit
+   the gs101 driver reads does not mean powered on zuma, so each SoC's
+   status word needs checking first. The zumapro PMU regmap would need
+   these offsets in its tables, and `pd_ignore_unused` (in the bootargs)
+   keeps genpd from powering unused domains off at boot. The Pixel 8 Pro's
+   attempt (13 domains for genpd, device/husky NOTES of 2026-11-05) reset
+   the phone 8 to 40 s after boot, together with an idle-state overlay;
+   which of the two did it is not established.
+   The camera stages need their driver first, since libcamera lists no
+   camera without them; TPU, AUR, EH, BW, MFC and G2D are the first step.
 
 The CPUs' own idle state works: cpu0's `c2` was entered about a million
 times by 2026-10-29, with 1304 rejected (EINVAL); cpu4 1148 of 46339, cpu7
