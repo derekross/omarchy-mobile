@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: MIT
+# Lock: the glance's clock is right at a wake. Quickshell's SystemClock
+# waits for the next minute on a timer, and a sleep stops that timer but
+# not the time, so after a wake the lock showed the time from before the
+# sleep until the rest of that minute had run, up to 60 s. Measured on a
+# Pixel 7 Pro: asleep 20 minutes, a minute-precision SystemClock first
+# ticked 18 s after the power key lit the lock, and held the old time until
+# then. The glance's clock is now off while the display is dark
+# (displayDark, from 0023) and on again at a wake; turned on, SystemClock
+# reads the time at once.
+#
+# The bar, the home clock widget and quick settings use SystemClock too and
+# are late the same way after an unlock; this patch is the lock only.
+#
+# Against Omarchy 4.5.0 (4.5.0-3).
+diff --git i/shell/plugins/lock/LockGlance.qml w/shell/plugins/lock/LockGlance.qml
+--- i/shell/plugins/lock/LockGlance.qml
++++ w/shell/plugins/lock/LockGlance.qml
+@@ -288,9 +288,16 @@
+     }
+   }
+ 
++  // Quickshell's clock waits for the next minute on a timer, and a sleep
++  // stops that timer but not the time: after a wake it showed the time from
++  // before the sleep until the rest of that minute had run, up to 60 s. So
++  // it is off while the display is dark; turned back on at a wake, it reads
++  // the time at once.
+   SystemClock {
+     id: clock
++    objectName: "lockGlanceClock"
+     precision: SystemClock.Minutes
++    enabled: !glance.lock || !glance.lock.displayDark
+   }
+ 
+   // The player the media controls show; its position asked for only while

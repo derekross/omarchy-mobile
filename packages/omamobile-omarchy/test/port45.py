@@ -105,6 +105,10 @@ def actual(t, ex, version, make_root, run, ok, read, series, package, parse_qml)
        and 'blankSerial: root.blankSerial' in lock_wiring
        and 'displayDark: root.displayDark' in lock_wiring,
        'real4.5: the lock passes its wake, blank and dark state to the lock view (0023)')
+    glance = read(root, lock + 'LockGlance.qml')
+    ok('objectName: "lockGlanceClock"' in glance
+       and 'enabled: !glance.lock || !glance.lock.displayDark' in glance,
+       'real4.5: the glance\'s clock is off while dark and on at a wake (0032)')
     about = read(root, 'usr/bin/omarchy-launch-about')
     ok('layout_room()' in about and 'about_fastfetch "${logo_args[@]}"' in about
        and 'about_fastfetch "${measure_args[@]}" --pipe false' in about,

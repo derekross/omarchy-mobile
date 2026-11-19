@@ -6,5 +6,6 @@ import QtQuick
 QtObject {
   enum Precision { Hours, Minutes, Seconds }
   property int precision: SystemClock.Seconds
+  property bool enabled: true
   property date date: new Date()
 }
