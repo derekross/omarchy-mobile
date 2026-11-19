@@ -18,10 +18,11 @@ The rear light visibly turned on and off. The shell's existing
 brightness 0 to 2 and back to 0. The shell reported Off and the hardware
 enable line was low before the fallback timer fired.
 
-The public device package does not enable the torch. The board description
-in [kernel #242](https://github.com/derekross/linux-omarchy-mobile/pull/242)
-leaves it disabled. A boot and attended pulse with that public kernel and
-the Oriole enable overlay are still outstanding.
+The released kernel has no Pixel 6 torch node. The proposed node in
+[kernel #242](https://github.com/derekross/linux-omarchy-mobile/pull/242)
+is disabled. Testing the public configuration requires an Oriole enable
+overlay, which still needs to be written, and an attended pulse after
+kernel #242 merges.
 
 ## 2026-11-08: offline audit of omitted startup safeguards
 
