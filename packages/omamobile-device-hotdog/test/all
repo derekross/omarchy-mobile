@@ -182,6 +182,8 @@ grep -cx 'BindsTo=dev-fastrpc\\x2dsdsp.device' "$stage/usr/lib/systemd/system/om
 grep -c 'debugfs -c ' libexec/omamobile-hotdog-sensors-root >/dev/null && grep -c 'losetup -r ' libexec/omamobile-hotdog-sensors-root >/dev/null &&
   ! grep -E 'debugfs +-w|mount |losetup +(-f|--find)? *[^r-]' libexec/omamobile-hotdog-sensors-root >/dev/null ||
   { echo "not ok - the sensors root is not built read-only"; exit 1; }
+[[ -f $stage/usr/share/omamobile/mobile-network-modemmanager && -f $stage/usr/share/omamobile/call-proximity ]] ||
+  { echo "not ok - the shell's opt-ins (ModemManager page, call proximity) not staged"; exit 1; }
 echo "ok - staged install"
 # The cameras: the CPU debayer (the GPU one gives zero frames on this GPU),
 # and the user's session may allocate the ISP's buffers
