@@ -40,6 +40,11 @@ install -Dm644 etc/omamobile-mirrorlist "$destination/etc/pacman.d/omamobile-mir
 # GNSS through the modem's QMI LOC (omamobile-gnss reads the opt-in), and
 # GeoClue's ModemManager GPS source off (it only ever sees $PQ sentences)
 install -Dm644 gnss/qmi-loc.conf "$destination/usr/share/omamobile/gnss/qmi-loc.conf"
+# omamobile-shell's opt-ins (0.2.136): the Mobile network page and the data
+# tile through ModemManager (no omamobile-modem-sit here), and the screen
+# off at the ear in calls (the touchscreen's proximity switch)
+install -Dm644 /dev/null "$destination/usr/share/omamobile/mobile-network-modemmanager"
+install -Dm644 /dev/null "$destination/usr/share/omamobile/call-proximity"
 install -Dm644 geoclue/92-omamobile-hotdog.conf "$destination/etc/geoclue/conf.d/92-omamobile-hotdog.conf"
 # Fingerprint (device/hotdog/FINGERPRINT-PLAN.md): the runner, its property
 # file and the bionic programs built on the computer with the NDK
