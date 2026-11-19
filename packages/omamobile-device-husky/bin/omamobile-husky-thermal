@@ -304,6 +304,7 @@ tick() {
     return 0
   fi
   unsay nozone
+  cpu_busy
   (( ${#inactive[@]} )) && { pick_up; load_track; }
   for k in "${!caps[@]}"; do
     read -ra lv <<< "${levels[k]}"
@@ -317,15 +318,18 @@ tick() {
     [[ -n ${busy[$k]:-} ]] && { log "${caps[k]} reads again"; unset 'busy[$k]'; }
     save_cap "${caps[k]}" "$cur" || rc=1
     if [[ -z ${track[$k]:-} ]]; then
-      # first sight: the highest level at or below the cap found
-      for ((i = n - 1; i > 0; i--)); do (( lv[i] <= cur )) && break; done
-      track[$k]=$i; changed=1
+      # first sight: start from the hardware max, not a cap someone else
+      # left (the old stopgap's); the cap found is still what stop restores
+      track[$k]=$((n - 1)); i=$((n - 1)); changed=1
     fi
     i=${track[$k]}
     (( i == 0 )) || floored=0
+    # below the floor the lowest level is never reached by stepping; in
+    # the hold band the caps still climb while the CPUs are idle, so a
+    # phone idling at 56-57 C does not stay ratcheted down
     if (( hot >= floor )); then i=0
-    elif (( hot >= step_down )); then (( i > 0 )) && ((i--))
-    elif (( hot < step_up )); then (( i < n - 1 )) && ((i++))
+    elif (( hot >= step_down )); then (( i > 1 )) && ((i--))
+    elif (( hot < step_up || (busy_pct >= 0 && busy_pct < squeeze_release_busy) )); then (( i < n - 1 )) && ((i++))
     fi
     (( i == track[$k] )) || { track[$k]=$i; changed=1; }
     want=${lv[i]}
@@ -346,7 +350,6 @@ tick() {
   # counter went back): the squeeze holds while still >= release_below;
   # below it cooling lets it out one level per tick as usual.
   local deepest
-  cpu_busy
   level=$squeeze
   if (( busy_pct < 0 )); then (( hot < release_below && squeeze > 0 )) && ((level--))
   elif (( squeeze ? busy_pct < squeeze_release_busy : busy_pct < squeeze_busy )); then

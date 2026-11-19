@@ -354,8 +354,9 @@ temp 58000 1; run --tick
 [[ $(caps) == "1328000 1418000 2049000 467000000" ]] || fail "58 C steps every cap down one level: $(caps)"
 temp 60000 3; run --tick
 [[ $(caps) == "324000 402000 500000 150000000" ]] || fail "60 C floors everything: $(caps)"
-temp 57000 3; temp 56000 1; run --tick
-[[ $(caps) == "324000 402000 500000 150000000" ]] || fail "56-57 C holds the floor: $(caps)"
+load=40; temp 57000 3; temp 56000 1; run --tick
+[[ $(caps) == "324000 402000 500000 150000000" ]] || fail "56-57 C and busy holds the floor: $(caps)"
+load=0
 temp 55000 3; temp 55000 1; temp 54000 2; temp 55000 0; run --tick
 [[ $(caps) == "610000 1418000 1557000 467000000" ]] || fail "55 C idle releases the hold, one level up: $(caps)"
 for _ in 1 2 3 4; do run --tick; done
@@ -389,6 +390,30 @@ for bad in 'step_down=58000\nfloor=60000\nstep_up=58000\ninterval=2' 'step_down=
   tconf=$tmp/bad.conf run --tick 2>/dev/null && fail "a bad conf is refused: $bad"
 done
 pass "the thermal guard: 55 C climbs to the max, 58 C steps down, 60 C floors, 56-57 C holds, a failing zone is skipped, OPPs sorted, restore puts the caps back"
+# The phone case (2026-11-19 night): started over the old stopgap's caps
+# (1328000/1418000/1557000), idle at 56-57 C with a 58 C reading now and
+# then. Ten minutes (300 ticks) must end at the hardware max, and a reading
+# below 60 C never floors.
+sfs=$fs scpu=$cpu sgpu=$gpu; fs=$tmp/sys-phone; cpu=$fs/devices/system/cpu/cpufreq; gpu=$fs/class/devfreq/1f000000.gpu
+mkzone 0 big-thermal; mkzone 1 mid-thermal; mkzone 2 little-thermal; mkzone 3 gpu-thermal
+mkcap "$cpu/policy0" scaling_max_freq 1328000 "324000 610000 820000 955000 1098000 1197000 1328000 1425000 1548000 1704000" scaling_available_frequencies
+mkcap "$cpu/policy4" scaling_max_freq 1418000 "402000 578000 697000 712000 910000 1065000 1221000 1328000 1418000 1572000 1836000 1945000" scaling_available_frequencies
+mkcap "$cpu/policy8" scaling_max_freq 1557000 "500000 880000 1164000 1298000 1557000 1745000 1885000 2049000 2147000 2294000" scaling_available_frequencies
+mkcap "$gpu" max_freq 890000000 "150000000 302000000 337000000 376000000 419000000 467000000 521000000 580000000 649000000 723000000 807000000 850000000 890000000" available_frequencies
+rm -rf "$tmp/run"; load=5
+for ((t = 0; t < 300; t++)); do
+  temp 55000 0; temp 56000 1; temp 55000 2; temp 56000 3
+  (( t % 3 )) || temp 57000 1
+  (( t % 20 == 7 && t < 290 )) && temp 58000 3
+  run --tick 2>/dev/null || fail "a phone tick runs"
+  [[ $(<"$cpu/policy0/scaling_max_freq") != 324000 ]] || fail "58 C floored policy0 at tick $t: $(caps)"
+done
+[[ $(caps) == "1704000 1945000 2294000 890000000" ]] || fail "idle at 56-57 C over the stopgap's caps ends at the hardware max: $(caps)"
+run --restore || fail "restore runs"
+[[ $(caps) == "1328000 1418000 1557000 890000000" ]] || fail "stop puts the stopgap's caps back: $(caps)"
+rm -rf "$tmp/run"; fs=$sfs cpu=$scpu gpu=$sgpu; load=0
+pass "the phone case: idle at 56-57 C over the stopgap's caps, 58 C now and then, ends at the hardware max and never floors below 60 C"
+
 
 # The squeeze: user.slice onto fewer CPUs once the caps are at the floor.
 # A fake systemctl writes the cgroup file, or refuses while $tmp/refuse exists.
