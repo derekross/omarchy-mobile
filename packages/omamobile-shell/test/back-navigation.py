@@ -44,7 +44,6 @@ TestCase {
  property string actionPage: ""
  property int dismissals: 0
  property int returns: 0
- Loader { id: backLink; source: Qt.resolvedUrl("../omamobile.back/BackLinkClient.qml") }
  QtObject { id: manager; property var activeToplevel: null }
  QtObject { id: hyprSource; property var activeToplevel: null }
  QtObject { id: input; property bool activeFocus: false }
@@ -61,7 +60,6 @@ TestCase {
  RECENTS
  function browser() { var w={appId:"chromium",activated:true,parent:null}; manager.activeToplevel=w; hyprSource.activeToplevel={wayland:w}; return w }
  function init() {
-  backLink.active=true; tryVerify(function(){return backLink.item!==null})
   BackLink.clear(); calls=[]; opened=false; editing=false; query=""; input.activeFocus=false; actionsOpen=false; actionPage=""; dismissals=0; returns=0
   wifiPicker.opened=false; wifiPicker.sheet=""; bluetoothPanelItem.opened=false; bluetoothPanelItem.activeSheet=""; recordPanelItem.opened=false; browser()
  }
@@ -73,7 +71,6 @@ TestCase {
  function test_otherAppAndDisagreement() { manager.activeToplevel.appId="foot"; back(); fallback(); calls=[]; browser(); hyprSource.activeToplevel=null; back(); fallback() }
  Window { id: shellWindow; visible:true; width:20; height:20 }
  function test_staleApplicationActiveDoesNotBlockBrowser() { shellWindow.requestActivate(); tryCompare(Qt.application,"state",Qt.ApplicationActive); browser(); back(); history() }
- function test_missingCanonicalReaderFallsBack() { backLink.active=false; tryVerify(function(){return backLink.item===null}); back(); fallback() }
  function test_keyboardBeforePanelBeforeHistory() {
   var keyboard={}, panel={}; var hidden=0,closed=0
   BackLink.register(panel,function(){closed++;BackLink.unregister(panel);return true},"surface","panel")
@@ -123,7 +120,7 @@ with tempfile.TemporaryDirectory(prefix="browser-back-") as temporary:
     (directory / "runtime").mkdir(mode=0o700)
     source = directory / "omamobile.back"
     source.mkdir()
-    for name in ("BackLink.js", "BackLinkClient.qml", "BackModel.js"):
+    for name in ("BackLink.js", "BackModel.js"):
         shutil.copyfile(pkg / "plugins/omamobile.back" / name, source / name)
     (source / "tst_back.qml").write_text(qml)
     env = os.environ.copy()

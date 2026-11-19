@@ -76,7 +76,7 @@ for name, wanted in EXPECT.items():
 # Nothing else loads the client unseen by this test.
 for path in plugins.glob("*/*.qml"):
     rel = str(path.relative_to(plugins))
-    if rel not in EXPECT and rel not in ("omamobile.back/BackLinkClient.qml", "omamobile.back/Back.qml"):
+    if rel not in EXPECT and rel != "omamobile.back/BackLinkClient.qml":
         assert MARK not in path.read_text(), "%s registers with Back but isn't tested here" % rel
 
 FAKES = '''
@@ -142,8 +142,6 @@ TestCase {
   function back(payloadJson, startedToplevel) BACK_FN
   QtObject { id: manager; property var activeToplevel: null }
   QtObject { id: hyprSource; property var activeToplevel: null }
-  Loader { id: backLink; source: "omamobile.back/BackLinkClient.qml" }
-  function initTestCase() { tryVerify(function() { return backLink.item !== null }) }
 
   function names() { return BackLink.names().join(",") }
   function sent() { return Quickshell.executed.length }

@@ -75,6 +75,15 @@ if tegu; then
     say "gnssd isn't running (the modem profile with OMAMOBILE_MODEM_GNSS=1); nothing to do"
     exit 0
   fi
+  # The HAL client is in the package only when it was built with
+  # bionic/prebuilt (install packages without it otherwise). Say so before
+  # the marker: the profile's own check refuses after it, and the marker
+  # left behind then skips every later request until --retry.
+  client=${OMAMOBILE_GNSS_CLIENT:-/usr/lib/omamobile-vendor/omamobile-gnss-client}
+  if [[ ! -x $client ]]; then
+    say "this omamobile-gnss was packaged without the 9a's HAL client ($client): no GNSS until a package built with it is installed"
+    exit 1
+  fi
   # The hang marker goes down before the session, as on the 7 Pro, because
   # a session on the 9a can still hang the SoC with the modem up
   # (MODEM-PLAN G3-L1), and socket activation lets any GeoClue client start

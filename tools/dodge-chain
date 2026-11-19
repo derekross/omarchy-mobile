@@ -200,12 +200,18 @@ cmd_pack() {
 
   say "Alpine busybox-static, kexec-tools and musl"
   local tarball="alpine-minirootfs-$ALPINE_VER-aarch64.tar.gz"
-  if [[ ! -f $dl/$tarball ]]; then
-    curl -fsSL -o "$dl/$tarball" \
+  # A download lands under the cached name only once it passes the checksum:
+  # every later run takes a file there as downloaded
+  if [[ -f $dl/$tarball ]]; then
+    echo "$ALPINE_SUM  $dl/$tarball" | sha256sum -c --quiet \
+      || die "checksum mismatch for the cached $dl/$tarball: remove it to download it again"
+  else
+    curl -fsSL -o "$dl/$tarball.part" \
       "https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VER%.*}/releases/aarch64/$tarball"
+    echo "$ALPINE_SUM  $dl/$tarball.part" | sha256sum -c --quiet \
+      || { rm -f "$dl/$tarball.part"; die "checksum mismatch for the downloaded $tarball (removed it)"; }
+    mv "$dl/$tarball.part" "$dl/$tarball"
   fi
-  echo "$ALPINE_SUM  $dl/$tarball" | sha256sum -c --quiet \
-    || die "checksum mismatch for $tarball"
   rm -rf "$work/x" && mkdir -p "$work/x"
   tar -xzf "$dl/$tarball" -C "$work/x"
   # Read whole before it is used: `for apk in $(…)` loses alpine-fetch.py's

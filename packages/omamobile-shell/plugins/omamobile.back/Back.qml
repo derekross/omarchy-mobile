@@ -5,6 +5,7 @@ import Quickshell.Hyprland
 import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
+import "BackLink.js" as BackLink
 import "BackModel.js" as BackModel
 
 // The back gesture, as on Android (TOUCH-PLAN 1.2): swipe in from the left
@@ -39,21 +40,13 @@ Item {
   }
   function close() {}
 
-  // Use the packaged URL from personal clones as well as the packaged plugin.
-  Loader {
-    id: backLink
-    source: Qt.resolvedUrl("../omamobile.back/BackLinkClient.qml")
-  }
-
   // `shell call omamobile.back back ''`: the same as the gesture. One Back
   // does one thing (BackLink.js): the on-screen keyboard is put away, or
   // else the topmost shell surface that registered closes, or else Escape
   // goes to the focused window, with history Back for a coherent browser.
   // Returns what used it.
   function back(payloadJson, startedToplevel) {
-    var client = backLink.item
-    var ready = !!client && typeof client.back === "function"
-    var used = ready ? client.back() : ""
+    var used = BackLink.back()
     if (used !== "") {
       console.log("omamobile-back:", used)
       return used
@@ -61,7 +54,7 @@ Item {
     var active = ToplevelManager.activeToplevel
     var started = startedToplevel === undefined ? active : startedToplevel
     var hypr = Hyprland.activeToplevel
-    var browser = ready && !!active && active === started
+    var browser = !!active && active === started
       && active.activated === true && !active.parent
       && !!hypr && hypr.wayland === active && BackModel.isBrowser(active.appId)
     Quickshell.execDetached(browser ? BackModel.BROWSER_BACK_ARGV : BackModel.ESCAPE_ARGV)
@@ -83,7 +76,7 @@ Item {
   // `shell call omamobile.back state ''`
   function state() {
     return JSON.stringify({ fullscreen: fullscreenOnScreen, strips: !fullscreenOnScreen, edge: edge, threshold: BackModel.THRESHOLD,
-                            asks: backLink.item ? backLink.item.names() : [] })
+                            asks: BackLink.names() })
   }
 
   // The touchable strip at each edge, and the width its window draws in.

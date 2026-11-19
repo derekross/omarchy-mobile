@@ -103,3 +103,7 @@ Open, save and choose-a-folder requests through the portal (Qt, GTK, Electron an
 The package contract follows omarchy-mac's: `./install DESTDIR` stages files and enables nothing, `test/all` runs the package's own tests, and `version` holds the version.
 
 Develop on a desktop with `phone/dev/run-desktop` from the repo root.
+
+## Device settings
+
+After the shared rules, `hypr/phone.lua` loads `/usr/share/omamobile/hypr/device.lua` if a device package installs one, for settings only that phone needs (an inner and an outer panel, its own input devices). Every session that loads `phone.lua` (setup-user adds it to `looknfeel.lua`) gets it, new and existing users alike. It runs under `pcall`: a syntax or runtime error in the device file is logged and the shared rules stay in force. With no device file nothing changes, so every phone today is unaffected.

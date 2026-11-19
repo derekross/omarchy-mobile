@@ -1,25 +1,62 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6a (bluejay) bring-up notes
 
-## 2026-11-11: installed userspace and physical Back checks
+## 2026-11-13: bootloader retry refill without an image flash
 
-On the existing `7.3.0-rc6-omamobile-bluejay-input-gated0` development kernel,
-the complete combined `omamobile-shell 0.2.119-1` package from integration
-`83326ed6d09684ae80f38c9360e8c4e864d32614` passed all six required smoke checks.
-The owner confirmed physical browser Back from both edges, first Back hiding
-the keyboard without navigation, and subsequent Back navigating. Actual Qt
-Controls typing and keyboard-first dialog dismissal also passed physically;
-Qt received Escape16777216 and closed the dialog. Normal idle lock and owner
-unlock passed, and the input gate refused commands while locked.
+[V] On one unlocked Pixel 6a, attended Fastboot `--set-active=b` alone
+refilled B from two tries to three. No image was flashed and B was not marked
+successful. The saved Fastboot reads immediately before and after selection
+were:
 
-The installed browser helper passed deferred-geometry fitting and preservation
-of deliberately removed flags. Native surface and permission-request checks
-were exercised through the running shell. See [TOUCH-PLAN](../../docs/TOUCH-PLAN.md)
-for the exact combined artifact, physical-versus-handler evidence and remaining
-latency/reference-device gates. The revised kernel topics were not booted by
-this userspace test. No boot image or protected-data write occurred. Personal
-settings were preserved and temporary fixtures removed.
+| Fastboot field | Before selection | After selection |
+| --- | --- | --- |
+| `product` | `bluejay` | `bluejay` |
+| `unlocked` | `yes` | `yes` |
+| `current-slot` | `b` | `b` |
+| `slot-successful:a` | `yes` | `yes` |
+| `slot-unbootable:a` | `no` | `no` |
+| `slot-retry-count:a` | `2` | `2` |
+| `slot-successful:b` | `no` | `no` |
+| `slot-unbootable:b` | `no` | `no` |
+| `slot-retry-count:b` | `2` | `3` |
 
+One subsequent ordinary current-B boot reached
+`7.3.0-rc6-omamobile-bluejay-input-gated0`. Its read-only devinfo check decoded
+B retry count 2, active, bootable and unsuccessful. Comparing the retained
+November 12 recovery readback with the November 13 post-refill readback (dates
+in America/Chicago) gives
+these eight slot bytes from the complete 8192-byte files:
+
+| Readback | Slot A, offsets 0x30–0x33 | Slot B, offsets 0x34–0x37 |
+| --- | --- | --- |
+| November 12 recovery readback | `02 0a 00 00` | `02 0c 00 00` |
+| November 13, after selection **and one B boot** | `02 0a 00 00` | `02 04 00 00` |
+
+Only offset `0x35` differed between those full readbacks, `0c` to `04`,
+clearing B's `fastboot_ok` bit. There is no eight-byte readback at the
+intermediate Fastboot B3 state; its retry count comes from the saved `getvar`
+read, not from invented intermediate bytes. A's record and every other byte
+matched. These are not consecutive captures immediately bracketing selection;
+the Fastboot `getvar` pairs above provide that narrower observation. All 49
+storage guards, full B/protected hashes and the six required
+smoke checks passed after the boot. Automatic boot-image writing and
+boot-success marking stayed off.
+
+This is the saved observation reported in
+[#252](https://github.com/derekross/omarchy-mobile/issues/252#issuecomment-6856940843),
+not a new recovery run or permission to change the current routine. The
+maintainer's [ruling](https://github.com/derekross/omarchy-mobile/issues/252#issuecomment-6858586731)
+keeps manual GS101 success marking on hold and requires a known-good image
+flash before the boot that would spend B's final try. This note changes no
+tool, guard, package or runbook and performs no phone operation.
+
+## 2026-11-11: physical Back gestures
+
+On November 11, both edges went back one page in Chromium on the Pixel 6a.
+With the keyboard open, the first Back hid it and left the page in place.
+A Qt dialog closed on Escape delivered through `wtype`. The phone ran
+`omamobile-shell 0.2.119-1` from the combined build at `83326ed6`.
+The revised package still needs its own handset run.
 
 ## 2026-11-09: review split and slot-success audit (offline)
 

@@ -155,6 +155,17 @@ printf '#!/bin/sh\necho called >> "$CALLS"\nexit 97\n' > "$t/bin/fastboot"
 chmod +x "$t/bin/fastboot"
 echo 'ok - BOOT_METHOD=android-v4 (cheetah) gets past fastboot qcom-abl refuse'
 
+# A misspelt command fails, so a runbook's "images && push" stops there.
+if "$t/repo/bin/omamobile" imgaes > "$t/out" 2> "$t/log"; then fail "a misspelt command exits 0"; fi
+grep -q "unknown command 'imgaes'" "$t/log" || fail "a misspelt command does not name itself"
+grep -q '^Usage:' "$t/log" || fail "a misspelt command prints no usage on standard error"
+[[ ! -s $t/out ]] || fail "a misspelt command prints its usage on standard output"
+for help in -h --help ''; do
+  "$t/repo/bin/omamobile" ${help:+"$help"} > "$t/log" || fail "omamobile ${help:-with no command} exits non-zero"
+  grep -q '^Usage:' "$t/log" || fail "omamobile ${help:-with no command} prints no usage on standard output"
+done
+echo 'ok - a misspelt command exits non-zero and names itself; -h, --help and no command print the usage'
+
 # dodge-chain must refuse a stage-1 Image as STAGE2_IMAGE (nested pack → ~87MiB hang).
 cp tools/dodge-chain "$t/repo/tools/"
 # Fake "Image" carrying the stage-1 cmdline marker (strings fallback when no ikconfig).
@@ -219,6 +230,16 @@ printf '_b' > "$pk"
 got=$("$rs" /nonexistent /nonexistent "$pk")
 [[ $got == _b ]] || fail "packed fallback failed, got '$got'"
 echo 'ok - slot_suffix falls back to packed /omamobile/slot_suffix'
+# Only _b is forwarded to stage 2 (whose guard opens the slot it is told)
+fwd=$(sed -n '/^case \$SLOT_SUFFIX in$/,/^esac$/p' device/dodge/chainload/init)
+[[ -n $fwd ]] || fail "the chain's forwarding filter is in its init"
+for v in _b _a packed-junk _c ''; do
+  got=$(SLOT_SUFFIX=$v SLOT_SRC=packed sh -c "$(printf '%s\n' "$fwd" | sed 's|/dev/kmsg|/dev/null|')"'
+printf "%s" "$SLOT_SUFFIX"')
+  if [[ $v == _b ]]; then [[ $got == _b ]] || fail "_b is forwarded (got '$got')"
+  else [[ -z $got ]] || fail "'$v' is not forwarded (got '$got')"; fi
+done
+echo 'ok - the chain forwards slot suffix _b only; _a, a packed stray value or none forward nothing'
 got=$("$rs" "$bc" /nonexistent "$pk")
 [[ $got == _b ]] || fail "bootconfig must beat packed, got '$got'"
 # Force bootconfig to _a to prove priority over packed _b

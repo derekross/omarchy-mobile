@@ -1211,5 +1211,4 @@ an activated Chrome/Chromium window whose current Wayland and Hyprland handles
 agree with the window captured at gesture start. Modal, changed or uncertain
 focus uses the existing Escape/Home path. Quick settings, drawer and recents
 register active handlers with BackLink so navigation stays in their topmost
-surface. A cloned Back plugin reads through the packaged BackLinkClient URL,
-sharing the same registry as native publishers.
+surface.

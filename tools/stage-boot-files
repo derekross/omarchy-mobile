@@ -20,7 +20,8 @@
 # mkdtboimg with the descriptor's board id and revision), the overlays are
 # compiled with the kernel build's dtc, and the initramfs is KERNEL_OUT's,
 # which must be a release one (`bin/omamobile initramfs --release`): no SSH
-# keys of the builder, no dropbear host keys, and the descriptor's storage
+# keys of the builder, no dropbear host keys, no development boot policy
+# (no NFS root or root mode; USB recovery yes), and the descriptor's storage
 # guard allowlist packed in it. A device whose initramfs carries kernel
 # modules (INITRAMFS_MODULES) is refused: its initramfs belongs to one
 # kernel release, not to the device package.
@@ -112,6 +113,13 @@ initramfs=$KERNEL_OUT/initramfs.cpio.lz4
 list=$(lz4 -dc "$initramfs" | cpio -it --quiet 2>/dev/null | sed 's|^\./||') || die "$initramfs is not an lz4 cpio"
 grep -cx 'root/\.ssh/authorized_keys' <<<"$list" >/dev/null && die "$initramfs carries the builder's SSH keys: build it with --release"
 grep -cE '^etc/dropbear/dropbear_.*_host_key$' <<<"$list" >/dev/null && die "$initramfs carries dropbear host keys: build it with --release"
+# Development boot policies: only what --release packs passes at these paths
+grep -cx 'etc/omamobile-nfsroot' <<<"$list" >/dev/null && die "$initramfs carries etc/omamobile-nfsroot (OMAMOBILE_NFSROOT, bring-up only): build it with --release"
+grep -cx 'etc/omamobile-root-mode' <<<"$list" >/dev/null && die "$initramfs carries a root mode (INITRAMFS_ROOT_MODE, bring-up only): build it with --release"
+usbs=$(grep -cx 'etc/omamobile-usb-recovery' <<<"$list") || true
+usb=yes
+((usbs == 1)) && { usb=$(lz4 -dc "$initramfs" | cpio -i --quiet --to-stdout etc/omamobile-usb-recovery ./etc/omamobile-usb-recovery) || die "can't read etc/omamobile-usb-recovery from $initramfs"; }
+((usbs < 2)) && [[ $usb == yes ]] || die "$initramfs carries an etc/omamobile-usb-recovery that is not one file saying yes (INITRAMFS_USB_RECOVERY, bring-up only): build it with --release"
 rw=$(lz4 -dc "$initramfs" | cpio -i --quiet --to-stdout etc/omamobile-ufs-rw ./etc/omamobile-ufs-rw 2>/dev/null || true)
 [[ $rw == "$(read -ra a <<<"$DEV_UFS_RW"; echo "${a[*]}")" ]] || die "$initramfs packs allowlist '$rw', not $DEVICE's UFS_RW (built for another device?)"
 # The initramfs must come from this tree: its init is INITRAMFS_INIT's, so
