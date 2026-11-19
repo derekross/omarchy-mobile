@@ -73,8 +73,6 @@ else
 fi
 
 python3 tests/bluejay-root-ready.py
-echo "# device/bluejay/bringup/revised/test-controls.py"
-python3 device/bluejay/bringup/revised/test-controls.py
 echo "# tests/phone-ssh"
 tests/phone-ssh
 echo "# tests/ncm-transfer"

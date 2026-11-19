@@ -1,22 +1,20 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Revised Bluejay daily-carry baseline
 
-Status (2026-11-14, evening): corrected attended startup passed two fresh
+November 14 baseline: corrected attended startup passed two fresh
 automatic boots on signed kernel `720a495233734e4328a09c33c095d72a8291e1c4`,
 release `7.3.0-rc6-omamobile-bluejay-review-20261111`. The first boot was B2;
 one normal reboot returned at B1. Both boots passed the software checks below,
 and the owner confirmed interaction and both battery percentage displays on
 each. Three scoped station reconnects and the original ten-minute traffic
 and battery window passed; its host dispatch failure is retained.
-The implementation is in `bringup/bluejay-daily-baseline-20261114`, based on
-upstream `54a6565`. This is an attended baseline, not daily-driver readiness.
+The tested runner, units and offline tests are preserved on the
+[`bringup/bluejay-daily-baseline-tested-20261114`](https://github.com/latentoperator/omarchy-mobile/tree/bringup/bluejay-daily-baseline-tested-20261114/device/bluejay/bringup/revised).
+The runner also requires private handset-specific inputs.
 
-Current B is unsuccessful with one retry. Send no further ordinary reboot or
-push at this boundary. A new, frozen, unconsumed historical B recovery is
-available privately for owner-attended Fastboot, with fresh serial/A checks,
-independent natural B3 verification and a separate one-use boot command.
-The earlier historical recovery and all consumed qualification launchers
-remain evidence and must not be replayed.
+The November 14 session ended on an unsuccessful B with one retry. The
+November 15 recovery below reached B with two retries and restored the desktop
+on that same boot. Both are dated observations.
 
 ## Scope and facts
 
@@ -32,12 +30,11 @@ corrected boots above have their own owner confirmations.
 passed offline validation again on November 14; six recovery-control tests
 passed. That recovery was consumed and cannot be replayed. A new named
 historical recovery was prepared before the revised qualification boots and
-remains unconsumed.
+was unconsumed at that checkpoint.
 
 [V] Historical helpers target a different kernel and retain their pins. The
 upstream bring-up directory at the base revision says revised startup has not
-run. This work adds a separate opt-in path; no device package or historical helper
-is changed. Calls, texts, modem/NV, native display and sleep are deferred.
+run. The fork holds the separate opt-in path. Calls, texts, modem/NV, native display and sleep are deferred.
 
 ## Design
 
@@ -86,7 +83,8 @@ startup is a separate gate and must not be claimed from these runs.
 3. **Recovery / attended B-image risk.** At actual B1, no Linux reboot or push.
    Owner reaches Fastboot by buttons. The frozen historical recovery requires
    serial-pinned unlocked Bluejay/current B1 and unchanged stock-A flags,
-   writes only known-good suffixed B images through the frozen project tool,
+   writes only known-good suffixed B images through a private, modified copy
+   of the project flash tool (commands below),
    independently verifies natural B3, then permits one current-B boot.
    Stop in Fastboot on partial/ambiguous results; never repeat an attempt,
    select a slot, restore metadata or enable boot-success. Expect historical
@@ -99,7 +97,7 @@ startup is a separate gate and must not be claimed from these runs.
    partial staging or unsafe file. Undo restores precisely that snapshot.
 5. **Fresh revised B budget / attended B-image risk.** Prepare a NEW consumed-
    once Fastboot writer for the exact revised full image set, using the
-   reviewed project B-only flash path without slot selection or auto-reboot.
+   private B-only writer described below, which returns to Fastboot after the writes.
    Require actual B1/B2, original A flags and known-good historical recovery.
    Independently verify natural B3 after flash before one current-B boot.
    Do not repurpose the historical recovery launcher for candidate images.
@@ -210,6 +208,25 @@ charging. Follow up with read-only pack/model/scaling and UPower-state analysis,
 then a separately staged charger-only trial with actual input/current/thermal
 measurements and a tested USB recovery path.
 
+The tested DT supplies a 5,000 µΩ sense resistor and an alert IRQ for the
+MAX77759. The runner checks the live node for that resistor and the absence
+of a battery model and model parameters before loading the driver.
+[Device tree](https://github.com/latentoperator/linux-omarchy-mobile/blob/720a495233734e4328a09c33c095d72a8291e1c4/arch/arm64/boot/dts/exynos/google/gs101-pixel-common.dtsi#L742-L751)
+and [startup check](https://github.com/latentoperator/omarchy-mobile/blob/cde98c4cd44595ca7ef097f3da3befe9202d151b/device/bluejay/bringup/revised/start.py#L472-L487).
+
+With a successfully registered IRQ, probe sets bit 2 of CONFIG (0x1d)
+and bit 7 of Config2 (0xbb) to enable alerts and whole-percent SOC
+interrupts. It writes SALRT_Th (0x03) to 0xff03 if integer RepSOC is at
+least 3%, or 0xff00 below 3%. Without a usable IRQ, probe writes 0xff00
+to SALRT_Th. Current sensing skips the CGAIN, MiscCFG and LearnCFG
+writes. With this model-less DT the POR worker has no model or configuration
+to program. Later SOC interrupts can rearm the alerts and the handler clears
+status bits while preserving POR and battery status. These are the writes
+identified from source. The baseline did not capture an I²C transaction trace.
+[Probe](https://github.com/latentoperator/linux-omarchy-mobile/blob/720a495233734e4328a09c33c095d72a8291e1c4/drivers/power/supply/max17042_battery.c#L1997-L2067),
+[alert handling](https://github.com/latentoperator/linux-omarchy-mobile/blob/720a495233734e4328a09c33c095d72a8291e1c4/drivers/power/supply/max17042_battery.c#L1190-L1256)
+and [POR worker](https://github.com/latentoperator/linux-omarchy-mobile/blob/720a495233734e4328a09c33c095d72a8291e1c4/drivers/power/supply/max17042_battery.c#L1635-L1648).
+
 All 60 provisional traffic-window samples reported 98% and 22 degC, with
 4.302031-4.305156 V. Reported current ranged from -11,875 to +10,625 microamps;
 the energy/current/model and charge-direction uncertainty prevents a drain or
@@ -223,7 +240,7 @@ boots with owner observations, three bounded station reconnects, the original
 pre-hardware refusal and the host dispatch failure remain part of the evidence;
 the host harness itself did not have a clean end-to-end pass. Exact private
 boot IDs, snapshots, logs and consumed-attempt records are retained outside
-the repository. No additional reboot or write is queued at B1.
+the repository. The November 14 run stopped at B1.
 
 | Daily-carry gate | Measured disposition |
 | --- | --- |
@@ -233,16 +250,14 @@ the repository. No additional reboot or write is queued at B1.
 | Exact-build provisional gauge startup | Passed; values are uncalibrated |
 | Pack/model/scaling, health, runtime and charge direction | Unqualified; implausible time and state disagreement observed |
 | Controlled charging and Type-C/USB handover | Unqualified; no charger/Type-C trial performed |
-| Permanent boot-success, host-free startup and update packaging | Open; current B1 forbids another ordinary reboot or push |
+| Permanent boot-success, host-free startup and update packaging | Open at both the November 14 and 15 checkpoints |
 | Native display, lock/wake, sleep and idle drain | Open; no claim from desktop or traffic checks |
 | Sustained owner carry | Open; baseline is not full daily-driver readiness |
 
 Next proposed goal: establish trustworthy Bluejay battery reporting by
 identifying the actual pack and validating gauge scaling/model selection,
 reconciling UPower state and time estimates, then qualifying conservative
-charger-only tethered behavior under a separate measured runbook. Begin
-read-only and resolve the B1 recovery boundary before any new boot or hardware
-change. Calls, texts and modem work remain deferred.
+charger-only tethered behavior under a separate measured runbook. The November 15 checkpoint below records the subsequent recovery and gauge read. Calls, texts and modem work remain deferred.
 
 ## Recovery observations, November 14
 
@@ -283,7 +298,7 @@ B recovery is frozen for the qualification, with complete original image
 provenance, unchanged-A checks, natural B3 verification and a separate one-use
 boot command. The revised writer likewise stays in Fastboot after flashing;
 its separate boot command requires independently verified B3. Neither selects
-a slot or writes metadata directly. Revised runtime tests remain pending.
+a slot or writes metadata directly. The revised runtime tests were pending at staging.
 
 ## First revised refusal and diagnosed correction, November 14
 
@@ -322,4 +337,67 @@ it does not turn the failed startup into a pass.
 At that point a new qualification ledger and two fresh automatic startup boots
 were required with this exact correction. They subsequently passed as recorded
 above. The original consumed writer/observer remain evidence; never rerun them.
-The independent historical recovery remains unconsumed.
+The independent historical recovery was unconsumed at the end of November 14.
+
+## November 15 recovery and gauge read
+
+After an accidental unplug, the owner rebooted from the November 14 B1
+boundary. Linux returned on B with zero retries and the root check stopped
+startup before loading hardware. The saved B images and nine protected
+hashes matched. The owner then used the buttons to reach Fastboot.
+
+| Observation | Selected slot | A successful / unbootable / retries | B successful / unbootable / retries |
+| --- | --- | --- | --- |
+| November 14 Linux, before the owner's reboot | B | yes / no / 2 | no / no / 1 |
+| November 15 Linux, after the reboot | B | yes / no / 2 | no / no / 0 |
+| Fastboot, on entry by buttons | A | yes / no / 2 | no / no / 0 |
+| Fastboot, after all three B image writes | A | yes / no / 2 | no / no / 3 |
+| Fastboot, after explicit B selection | B | yes / no / 2 | no / no / 3 |
+| Linux, after the separate boot command | B | yes / no / 2 | no / no / 2 |
+
+No stock Android boot was observed. The host saw Linux USB disconnect and
+Fastboot enumerate about eight seconds later, with no Android enumeration
+in that interval. The slot selection alone cannot establish whether Android
+started. The original protected backup remained the comparison baseline.
+A confirmed stock boot would require a fresh read-only backup.
+
+### Commands recorded by the historical writers
+
+Both days' private, frozen copies of the project tool ran the following
+three commands in order, using the pinned handset serial and image directory.
+This is a transcript of the write operations. The one-use controllers
+performed the identity, image and slot checks separately and are consumed.
+
+```sh
+timeout 60 fastboot -s "$serial" flash boot_b "$img/boot.img"
+timeout 60 fastboot -s "$serial" flash vendor_boot_b "$img/vendor_boot.img"
+timeout 60 fastboot -s "$serial" flash dtbo_b "$img/dtbo.img"
+```
+
+On November 14 B was already selected. The controller independently verified
+that writing the images restored three retries and a separate phase issued
+`/usr/bin/fastboot -s "$serial" reboot` with a 20-second controller timeout. On November 15 the original
+B-selected controller refused the A-selected state. The replacement checked
+that the writes had restored B3 while A remained selected, then issued
+`timeout 20 fastboot -s "$serial" --set-active=b` as a separate operation.
+It checked B was now selected with three retries and A's reported fields
+still matched before issuing `/usr/bin/fastboot -s "$serial" reboot` with
+the same 20-second timeout.
+Fastboot refused a partition readback, so the fresh full-image checks came
+from Linux. The public flash command selects B and reboots immediately after
+the writes, leaving no checkpoint for independent verification between
+those operations. [Project flash implementation at the PR base](https://github.com/derekross/omarchy-mobile/blob/ca82fe7cde16d362cb68e739efd4cdfe5221d597/bin/omamobile#L1225-L1233).
+
+On the recovered B2 boot the root check held the hardware again. The full
+8,192-byte devinfo record matched the November 13 archive byte for byte.
+After the full B, nine protected, module, firmware and 49 storage-guard
+checks, the private profile admitted just that additional exact record.
+Fresh host logging preceded acknowledgment on the same boot. The original
+units completed with no failed unit or pending stage, and the owner confirmed
+a visible screen and working touch.
+
+A separate observation on that B2 boot read CGain once through the original
+driver. It returned 0x0400 (1024) against 0x03de (990) in the selected stock
+ATL model. The observation made no register writes. It establishes a
+configuration difference. Current accuracy, battery health, charging and
+host-free startup remained unqualified at this checkpoint.
