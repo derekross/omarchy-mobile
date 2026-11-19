@@ -81,8 +81,8 @@ used. Results are in the private R/ capture.
 - **A/B names exist for `boot`, `init_boot`, `vendor_boot`,
   `vendor_kernel_boot`, and `dtbo`; `super` and `userdata` are also present**
   [V] (R/ `partitions-by-name.txt:11-12,18-19,30-31,51,57,64-67`). Partition
-  sizes are only partially captured; the queried sizes and slot flags are
-  recorded above.
+  sizes were first captured partially; a fresh read-only fastboot inventory
+  below now records every boot-image partition size and userdata size.
 
 ### Google GPL board-source match (candidate)
 
@@ -128,10 +128,15 @@ The initial capture used unrooted ADB reads. The owner later authorized
 unlocking and experimental device work; the bootloader was unlocked and its
 factory reset completed. Android setup was finished, then the phone was
 returned to fastboot. No Omarchy image has been flashed and no partition has
-been written by the bring-up work. The latest named reads (2026-11-18) report:
-`unlocked=yes`, current slot A, bootloader
+been written by the bring-up work. The latest named reads (2026-11-18) report
+product `komodo`, `unlocked=yes`, current slot A, bootloader
 `ripcurrentpro-17.0-16433847`, A successful/not-unbootable, and B
-successful/unbootable. `fastboot fetch boot_a` was refused even after unlock,
+successful/unbootable, with two retries on each slot. `boot_a/b`,
+`vendor_boot_a/b`, and `vendor_kernel_boot_a/b` are 64 MiB each;
+`init_boot_a/b` are 8 MiB each; `dtbo_a/b` are 16 MiB each; `userdata` is
+`0x1b5e215000` bytes. The query was read-only and changed no slot or partition.
+The sanitized output is in private `R/fastboot-inventory-2026-11-18.txt`.
+`fastboot fetch boot_a` was refused even after unlock,
 so a raw stock-partition backup is not established. Google's official factory
 image for exact `komodo` build `CP4A.261105.040.A1` is downloaded outside the
 repository at `~/android/factory/komodo/CP4A.261105.040.A1/` and matches the
