@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+# OnePlus 7T Pro: the modem's remote file system, read-only. rmtfs serves
+# the modem's EFS (modemst1, modemst2, fsg, fsc and OnePlus's oem_stanvbk and
+# oem_dycnvbk) from /dev/disk/by-partlabel (-P) and starts the modem
+# remoteproc once its service is up (-s). With -r every partition is read
+# into RAM when the modem opens it, and the modem's writes only change that
+# copy: Linux never writes the modem's NV partitions (AGENTS.md §1), and the
+# storage guard and 10-omamobile-storage.rules keep them read-only in the
+# kernel as well. The Wi-Fi firmware runs on the modem, so Wi-Fi needs this.
+#
+# Stopping: on SIGTERM, rmtfs -s stops the modem, and that clean stop sent
+# the SoC to its crash dump (05c6:900e) at shutdown, with the root file
+# system still mounted read-write (device/hotdog/MODEM-PLAN.md R9). The
+# modem's EFS writes are discarded anyway (-r), so the modem is not stopped:
+# SIGKILL ends rmtfs without touching it, and the modem runs on until the
+# reboot resets the SoC. Recovery is off first, so a modem that crashes
+# without rmtfs is not booted again during the shutdown; it is on again when
+# rmtfs starts. A restart of this unit leaves a running modem running (rmtfs
+# then logs that it could not start it) and serves it again.
+[Unit]
+Description=Qualcomm remote file system for the modem (read-only)
+After=systemd-udev-settle.service systemd-modules-load.service
+
+[Service]
+ExecStartPre=-/usr/lib/omamobile/hotdog/omamobile-hotdog-modem-recovery enabled
+ExecStart=/usr/lib/omamobile/hotdog/rmtfs -r -P -s
+ExecStop=-/usr/lib/omamobile/hotdog/omamobile-hotdog-modem-recovery disabled
+KillSignal=SIGKILL
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

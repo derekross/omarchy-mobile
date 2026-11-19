@@ -1,0 +1,71 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# OnePlus 7T Pro: make the SIM the modem's primary subscription.
+#
+# The modem has two SIM slots and comes up with no provisioning session:
+# it sees the card and its USIM application ("detected") but uses neither,
+# so ModemManager stops at "GW primary session index unknown" and reports
+# the SIM missing. Android's RIL activates the session at every start of the
+# modem; so does this, at boot and after every modem restart (the session is
+# the modem's runtime state, not a setting, and goes with the modem).
+#
+# It watches the modem's card status and, when there is no primary GW
+# session but a card with a USIM application is present, activates that
+# application (the first such slot). If ModemManager has already given up
+# on the modem as "sim-missing", it is restarted so that it probes again.
+# Nothing is written to the SIM or to the modem's NV, and no PIN is touched.
+# It prints no ICCID, IMSI or number. (device/hotdog/MODEM-PLAN.md R4)
+set -uo pipefail
+
+dev=qrtr://0
+interval=${OMAMOBILE_SIM_SELECT_INTERVAL:-10}
+qmi() { qmicli -d "$dev" -p "$@" 2>/dev/null; }
+
+# "slot aid" of the first present card's USIM application, from card status
+first_usim() {
+  awk '
+    /^Slot \[[0-9]+\]:/ { slot = $2; gsub(/[^0-9]/, "", slot); present = 0 }
+    /Card state: *\047present\047/ { present = 1 }
+    /Application type: *\047usim/ { usim = present }
+    /Application ID:/ { want = usim; next }
+    want && NF { gsub(/[ \t]/, ""); print slot, $0; exit }
+  '
+}
+
+select_once() {
+  local status slot aid
+  status=$(qmi --uim-get-card-status) || return 1
+  # A session exists: nothing to do, and the next look can wait (each look
+  # is QMI traffic, and a reply that lands while the phone goes to sleep
+  # aborts the sleep: SUSPEND-PLAN S5)
+  grep -c "Primary GW: *session doesn't exist" <<<"$status" >/dev/null || return 2
+  read -r slot aid < <(first_usim <<<"$status") || true
+  # No card with a USIM application (no SIM inserted): nothing to activate,
+  # and nothing will be until a card goes in, so this waits too
+  [[ -n ${slot:-} && -n ${aid:-} ]] || return 2
+  if qmi --uim-change-provisioning-session="slot=$slot,activate=yes,session-type=primary-gw-provisioning,aid=$aid" >/dev/null; then
+    echo "activated the USIM in slot $slot as the primary subscription"
+    sleep 3
+    if mmcli -m any -K 2>/dev/null | grep -c "state-failed-reason *: sim-missing" >/dev/null; then
+      echo "ModemManager gave up on the modem (sim-missing): restarting it"
+      systemctl restart ModemManager.service
+    fi
+  else
+    echo "could not activate the USIM in slot $slot" >&2
+  fi
+}
+
+# --once exits 2 when the next look can wait, otherwise 0
+if [[ ${1:-} == --once ]]; then
+  select_once
+  (($? == 2)) && exit 2
+  exit 0
+fi
+# Every $interval s until the session exists, then every $idle_interval s
+# (a modem restart drops the session, and a SIM put in finds no session:
+# either is found within that time). With no SIM, every $idle_interval s.
+idle_interval=${OMAMOBILE_SIM_SELECT_IDLE_INTERVAL:-60}
+while :; do
+  select_once
+  if (($? == 2)); then sleep "$idle_interval"; else sleep "$interval"; fi
+done

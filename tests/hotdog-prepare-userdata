@@ -1,0 +1,60 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# device/hotdog/prepare-userdata on a small real ext4 root image (no phone,
+# no root): the owner's firstboot.conf, root's authorized_keys and made-up
+# firmware land with their modes, and the file system checks clean, also
+# when the image already has the directories (a lived-in root, or the same
+# image prepared twice: debugfs's mkdir of an existing directory leaves an
+# image e2fsck rejects). A firmware folder for another phone is refused.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+for tool in mkfs.ext4 debugfs dumpe2fs e2fsck zstd; do
+  command -v "$tool" >/dev/null || { echo "ok - # skip: no $tool"; exit 0; }
+done
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+
+# A root as build-rootfs leaves it, as far as this goes: /etc, /root and
+# /usr/lib/firmware, nothing of the phone's
+mkdir -p "$t/tree/etc" "$t/tree/root" "$t/tree/usr/lib/firmware"
+truncate -s 64M "$t/root.img"
+mkfs.ext4 -q -F -L omamobile-root -d "$t/tree" "$t/root.img"
+zstd -q "$t/root.img" -o "$t/root.img.zst"
+
+fw=$t/firmware
+mkdir -p "$fw/qcom/sm8150/oneplus/hotdog" "$fw/ath10k/WCN3990/hw1.0" "$fw/qca"
+for f in qcom/sm8150/oneplus/hotdog/a640_zap.mbn qcom/sm8150/oneplus/hotdog/modem.mbn \
+         ath10k/WCN3990/hw1.0/board-2.bin qca/crnv21.bin; do
+  head -c 4096 /dev/urandom > "$fw/$f"
+done
+conf=$t/firstboot.conf
+printf 'USERNAME=owner\nPASSWORD_HASH=$6$salt$notarealhash\nSSH_KEY=ssh-ed25519 AAAAtest owner@laptop\n' > "$conf"
+chmod 600 "$conf"
+
+check() { # image
+  [[ $(debugfs -R "cat /etc/omamobile/firstboot.conf" "$1" 2>/dev/null) == "$(cat "$conf")" ]] || fail "firstboot.conf in the image"
+  [[ $(debugfs -R "cat /root/.ssh/authorized_keys" "$1" 2>/dev/null) == "ssh-ed25519 AAAAtest owner@laptop" ]] || fail "authorized_keys from SSH_KEY"
+  cmp -s <(debugfs -R "cat /usr/lib/firmware/qcom/sm8150/oneplus/hotdog/modem.mbn" "$1" 2>/dev/null) "$fw/qcom/sm8150/oneplus/hotdog/modem.mbn" ||
+    fail "the vendor tree goes where the device tree names it"
+  cmp -s <(debugfs -R "cat /usr/lib/firmware/updates/qca/crnv21.bin" "$1" 2>/dev/null) "$fw/qca/crnv21.bin" ||
+    fail "everything else goes under /usr/lib/firmware/updates"
+  debugfs -R "stat /root/.ssh" "$1" 2>/dev/null | grep -c 'Mode:  0700' >/dev/null || fail "/root/.ssh is 0700"
+  debugfs -R "stat /etc/omamobile/firstboot.conf" "$1" 2>/dev/null | grep -c 'Mode:  0600' >/dev/null || fail "firstboot.conf is 0600"
+  e2fsck -fn "$1" >/dev/null 2>&1 || fail "the image checks clean"
+}
+
+device/hotdog/prepare-userdata "$t/root.img.zst" "$fw" "$conf" "$t/out.img" > "$t/log" 2>&1 || { cat "$t/log"; fail "prepares a fresh root"; }
+check "$t/out.img"
+pass "a fresh root: firstboot.conf, authorized_keys and the firmware land, and it checks clean"
+
+# The same image prepared again: every directory exists now, every file too
+zstd -q -f "$t/out.img" -o "$t/again.img.zst"
+device/hotdog/prepare-userdata "$t/again.img.zst" "$fw" "$conf" "$t/again.img" > "$t/log" 2>&1 || { cat "$t/log"; fail "prepares a root that has the directories"; }
+check "$t/again.img"
+pass "a root that already has the directories and files: made again, and it checks clean"
+
+mv "$fw/qcom/sm8150/oneplus/hotdog" "$fw/qcom/sm8150/oneplus/other"
+if device/hotdog/prepare-userdata "$t/root.img.zst" "$fw" "$conf" "$t/other.img" > "$t/log" 2>&1; then fail "refuses another phone's firmware"; fi
+grep -c 'not this phone' "$t/log" >/dev/null || { cat "$t/log"; fail "says why"; }
+pass "refuses a firmware folder without this phone's tree"

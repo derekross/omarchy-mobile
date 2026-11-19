@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# OnePlus 7T Pro: call audio behind callaudiod's D-Bus API, for omatel-agent
+# and GNOME Calls (device/hotdog/MODEM-PLAN.md V2). It exits at once on a
+# kernel without the voice front end and owns nothing then.
+[Unit]
+Description=Call audio for the OnePlus 7T Pro
+After=wireplumber.service
+ConditionPathExists=!/usr/bin/callaudiod
+
+[Service]
+ExecStart=/usr/lib/omamobile/hotdog/omamobile-hotdog-call-audio
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up (CAMERA-PLAN.md, step T1): the rear flash LEDs as one torch,
+ * white:torch, capped at stock's torch current (300 mA per LED). The flash
+ * strobe is not described. leds-qcom-flash is a module: blacklist it before
+ * the first boot with this overlay, so T2 loads it by hand.
+ * Paths, not labels, so the base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/spmi@c440000/pmic@5/led-controller@d300} {
+	status = "okay";
+};

@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up (FINGERPRINT-PLAN.md, step F3): the Goodix sensor's supply switch
+ * and its AP-side node (goodix-fp: /dev/goodix_fp, netlink 25). Blacklist
+ * goodix-fp before the first boot with this overlay; the step loads it by
+ * hand. Nothing here talks to the secure world.
+ * Paths, not labels, so the base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/regulator-fp-vdd} {
+	status = "okay";
+};
+
+&{/fingerprint} {
+	status = "okay";
+};

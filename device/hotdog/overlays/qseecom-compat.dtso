@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up (FINGERPRINT-PLAN.md, step F4): /dev/qseecom for the vendor HAL,
+ * with its buffers in the qseecom carve-out. Blacklist qcom_qseecom_compat
+ * before the first boot with this overlay; the step loads it by hand, with
+ * its allow-lists empty, so no trusted application loads and no listener
+ * registers until the human sets them.
+ * Paths, not labels, so the base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/qseecom-compat} {
+	status = "okay";
+};

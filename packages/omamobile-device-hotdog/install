@@ -1,0 +1,63 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-device-hotdog into DESTDIR. Never activates anything by
+# itself: the units are enabled by vendor wants links.
+#   ./install DESTDIR [BUILDDIR]   (BUILDDIR holds rmtfs and tqftpserv)
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+destination=${1:?Usage: ./install DESTDIR [BUILDDIR]}
+build=${2:-build}
+[[ $destination == /* && $destination != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+for file in bin/*; do install -Dm755 "$file" "$destination/usr/bin/${file##*/}"; done
+for tool in rmtfs tqftpserv; do install -Dm755 "$build/$tool" "$destination/usr/lib/omamobile/hotdog/$tool"; done
+for file in libexec/*; do install -Dm755 "$file" "$destination/usr/lib/omamobile/hotdog/${file##*/}"; done
+while IFS= read -r -d '' file; do
+  install -Dm644 "$file" "$destination/usr/lib/${file#vendor/}"
+done < <(find vendor -type f -print0)
+while IFS= read -r -d '' file; do
+  install -d "$destination/usr/lib/$(dirname "${file#vendor/}")"
+  ln -sfn "$(readlink "$file")" "$destination/usr/lib/${file#vendor/}"
+done < <(find vendor -type l -print0)
+while IFS= read -r -d '' file; do
+  install -Dm644 "$file" "$destination/usr/share/alsa/${file}"
+done < <(find ucm2 -type f -print0)
+# ModemManager is no longer masked (device/hotdog/MODEM-PLAN.md R2): the
+# radio came on cleanly on 2026-11-14 with the RF cable state set by the
+# kernel's project-info driver. It starts from a vendor wants link, after
+# rmtfs and tqftpserv (its drop-in).
+install -d "$destination/etc/systemd/system"
+# systemd-firstboot prompts for locale, keymap, timezone and root password on
+# the console, which is the panel here (console=tty0) and has no keyboard;
+# it runs before sysinit.target, so it held sshd and omamobile-firstboot
+# (H3, 2026-11-04). omamobile-firstboot sets all of that from firstboot.conf.
+ln -sfn /dev/null "$destination/etc/systemd/system/systemd-firstboot.service"
+# The microphones' capture format (the ADSP's S24 capture is misaligned)
+install -Dm644 wireplumber/51-omamobile-hotdog-mic.conf \
+  "$destination/usr/share/wireplumber/wireplumber.conf.d/51-omamobile-hotdog-mic.conf"
+# The cameras' software ISP runs on the CPU (CAMERA-PLAN C8)
+install -Dm644 libcamera/configuration.yaml "$destination/usr/share/libcamera/configuration.yaml"
+install -Dm644 etc/omamobile-mirrorlist "$destination/etc/pacman.d/omamobile-mirrorlist"
+# GNSS through the modem's QMI LOC (omamobile-gnss reads the opt-in), and
+# GeoClue's ModemManager GPS source off (it only ever sees $PQ sentences)
+install -Dm644 gnss/qmi-loc.conf "$destination/usr/share/omamobile/gnss/qmi-loc.conf"
+install -Dm644 geoclue/92-omamobile-hotdog.conf "$destination/etc/geoclue/conf.d/92-omamobile-hotdog.conf"
+# Fingerprint (device/hotdog/FINGERPRINT-PLAN.md): the runner, its property
+# file and the bionic programs built on the computer with the NDK
+#   make -C device/hotdog/fingerprint NDK=... OUT=$PWD/packages/omamobile-device-hotdog/prebuilt
+# The owner's OxygenOS files (root/) are never packaged. Without the
+# programs the package still installs, and the unit's conditions keep
+# fingerprint off.
+fp=$destination/usr/lib/omamobile-fp-hotdog
+install -Dm755 lib/omamobile-fp-hotdog-chroot "$fp/omamobile-fp-hotdog-chroot"
+install -Dm644 lib/props-hotdog.conf "$fp/props-hotdog.conf"
+if [[ -d prebuilt ]]; then
+  install -Dm644 prebuilt/omamobile-fp-shim.so "$fp/omamobile-fp-shim.so"
+  install -Dm644 prebuilt/omamobile-fp-ion-shim.so "$fp/omamobile-fp-ion-shim.so"
+  install -Dm755 prebuilt/omamobile-fp-hotdog-bridge "$fp/omamobile-fp-hotdog-bridge"
+else
+  echo "install: no prebuilt/ (device/hotdog/fingerprint/Makefile): packaging without fingerprint" >&2
+fi
+install -Dm644 etc/pam.d/omarchy-lock-fingerprint "$destination/etc/pam.d/omarchy-lock-fingerprint"
+install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-hotdog/LICENSE"
+install -Dm644 LICENSE.Apache-2.0 "$destination/usr/share/licenses/omamobile-device-hotdog/LICENSE.Apache-2.0"
+install -Dm644 version "$destination/usr/share/omamobile/device-hotdog/version"

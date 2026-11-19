@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up (MODEM-PLAN.md, V1): call audio. Turns on the ADSP's voice
+ * services (MVM, CVS, CVP: the out-of-tree q6voice drivers, kernel branch
+ * omamobile-hotdog-voice) and the sound card's VoiceMMode1 front end. The
+ * voice session starts only when that PCM is opened, which only the call
+ * audio service does, during a call. Needs the mic overlay: the uplink is
+ * the codec's SLIMbus capture.
+ *
+ * Paths, not labels, so the base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/remoteproc@17300000/glink-edge/apr/apr-service@9} {
+	status = "okay";
+};
+
+&{/soc@0/remoteproc@17300000/glink-edge/apr/apr-service@a} {
+	status = "okay";
+};
+
+&{/soc@0/remoteproc@17300000/glink-edge/apr/apr-service@b} {
+	status = "okay";
+};
+
+&{/sound/voicemmode1-dai-link} {
+	status = "okay";
+};

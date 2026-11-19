@@ -1,0 +1,386 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: MIT
+"""The OnePlus 7T Pro's pop-up front camera (CAMERA-PLAN.md section 6, P-steps).
+
+Hardware (stock device tree, dtbo entry 18; OnePlus's GPL motor driver):
+  a DRV8834 stepper driver, 1/32 microsteps (M1 high, M0 high-impedance):
+    STEP   PM8150L GPIO10, func1 = the PM8150L LPG's channel at 0xbd00 (pwm 4)
+    DIR    PM8150L GPIO11, 0 = up, 1 = down
+    M1     PM8150L GPIO8, 1
+    M0     PM8150B GPIO5, high-impedance (the LPG's pin state)
+    nSLEEP PM8150  GPIO10, 1 = run
+    BOOST  PM8150B GPIO12, 1 (stock sets it once and leaves it on)
+  two MagnaChip M1120 hall sensors on QUP SE1 (i2c@884000): 0x0c sees the
+  camera at the top, 0x0d at the bottom; |field| above a threshold (stock:
+  150) means "there".
+
+A move: wake the driver, 100 ms of slow steps, then fast steps until the
+target's hall sensor reads "there" (plus a few ms to seat), never longer
+than stock's timed move, then stop and sleep the driver. Stock stops on its
+timer alone; this stops earlier when the sensor says so.
+
+  status          read-only: both hall readings and what they mean
+  up | down       one move (refused toward an end the camera is at)
+  daemon          raise the camera while the front sensor streams, lower it
+                  1.5 s after; lower it at once if it is pushed in while up
+                  and leave it down until the sensor has been idle; needs
+                  /etc/omamobile/popup-hotdog-enable. No free-fall
+                  protection: stock's free-fall interrupt (TLMM gpio163)
+                  has no known source on Linux yet
+Nothing here writes a hall sensor register other than its reset, interrupt
+and measurement setup (0x00, 0x01, 0x07, 0x08): 0x06 disables its I2C.
+"""
+
+import ctypes
+import fcntl
+import glob
+import os
+import signal
+import sys
+import time
+
+CONF = "/etc/omamobile/popup-hotdog.conf"
+ENABLE = "/etc/omamobile/popup-hotdog-enable"
+STATE = "/run/omamobile/popup-hotdog"
+
+# Defaults, overridable in CONF (KEY=value lines).
+DEFAULTS = {
+    "UP_THRESHOLD": 150,     # |up sensor| above: camera at the top
+    "DOWN_THRESHOLD": 150,   # |down sensor| above: camera at the bottom
+    "SLOW_NS": 105000,       # 9.5 kHz microsteps (~300 full steps/s); LPG-exact
+    "FAST_NS": 13125,        # 76 kHz microsteps (~2400 full steps/s); LPG-exact
+    "SLOW_MS": 100,
+    "MAX_FAST_MS": 510,      # stock's timed move, about 1244 full steps
+    "DOWN_EXTRA_MS": 9,      # stock moves 20 steps further down
+    "SEAT_MS": 10,           # after the sensor says "there"
+    "IDLE_DOWN_MS": 1500,    # front sensor idle this long: lower the camera
+}
+
+# --- device-tree paths of the pieces we use ---
+DT = "/sys/firmware/devicetree/base"
+GPIO_PM8150 = "pmic@0/gpio@c000"
+GPIO_PM8150B = "pmic@2/gpio@c000"
+GPIO_PM8150L = "pmic@4/gpio@c000"
+LPG_PM8150L = "pmic@5/pwm"
+HALL_BUS = "i2c@884000"
+HALL_UP, HALL_DOWN = 0x0C, 0x0D
+STEP_CHANNEL = 4
+
+
+def log(msg):
+    print(f"popup: {msg}", file=sys.stderr, flush=True)
+
+
+def load_conf():
+    conf = dict(DEFAULTS)
+    try:
+        with open(CONF) as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                if "=" in line:
+                    k, v = (s.strip() for s in line.split("=", 1))
+                    if k in conf:
+                        conf[k] = int(v)
+    except FileNotFoundError:
+        pass
+    return conf
+
+
+def of_path(sysdev):
+    """The device-tree node of a sysfs device (or its parent), or ''."""
+    for cand in (os.path.join(sysdev, "of_node"),
+                 os.path.join(sysdev, "device", "of_node"),
+                 os.path.join(sysdev, "..", "of_node")):
+        if os.path.exists(cand):
+            return os.path.realpath(cand)
+    return ""
+
+
+# --- GPIO character device (uAPI v2) ---
+def _iowr(nr, size):
+    return (3 << 30) | (size << 16) | (0xB4 << 8) | nr
+
+
+GPIO_V2_GET_LINE_IOCTL = _iowr(0x07, 592)
+GPIO_V2_LINE_SET_VALUES_IOCTL = _iowr(0x0F, 16)
+FLAG_OUTPUT = 1 << 3
+
+
+def gpiochip(node_suffix):
+    for dev in glob.glob("/sys/bus/gpio/devices/gpiochip*"):
+        if of_path(dev).endswith(node_suffix):
+            return "/dev/" + os.path.basename(dev)
+    raise SystemExit(f"popup: no GPIO controller {node_suffix} (overlay missing?)")
+
+
+class Line:
+    """One PMIC GPIO held as an output (DT numbering from 1)."""
+
+    def __init__(self, chip, pmic_gpio, value, name):
+        self.name = name
+        req = bytearray(592)
+        req[0:4] = (pmic_gpio - 1).to_bytes(4, "little")
+        req[256:256 + len("omamobile-popup")] = b"omamobile-popup"
+        cfg = 288
+        # Output only: drive, bias and power source stay as the LPG's pin
+        # state set them
+        req[cfg:cfg + 8] = FLAG_OUTPUT.to_bytes(8, "little")
+        req[cfg + 8:cfg + 12] = (1).to_bytes(4, "little")       # one attribute
+        att = cfg + 32
+        req[att:att + 4] = (2).to_bytes(4, "little")             # OUTPUT_VALUES
+        req[att + 8:att + 16] = (value & 1).to_bytes(8, "little")
+        req[att + 16:att + 24] = (1).to_bytes(8, "little")       # mask: line 0
+        req[560:564] = (1).to_bytes(4, "little")                 # num_lines
+        fd = os.open(chip, os.O_RDWR | os.O_CLOEXEC)
+        try:
+            fcntl.ioctl(fd, GPIO_V2_GET_LINE_IOCTL, req)
+        finally:
+            os.close(fd)
+        self.fd = int.from_bytes(req[588:592], "little", signed=True)
+
+    def set(self, value):
+        vals = (value & 1).to_bytes(8, "little") + (1).to_bytes(8, "little")
+        fcntl.ioctl(self.fd, GPIO_V2_LINE_SET_VALUES_IOCTL, bytearray(vals))
+
+    def close(self):
+        os.close(self.fd)
+
+
+# --- PWM (sysfs) ---
+class Step:
+    def __init__(self):
+        chips = [c for c in glob.glob("/sys/class/pwm/pwmchip*")
+                 if of_path(c).endswith(LPG_PM8150L)]
+        if not chips:
+            raise SystemExit("popup: no PM8150L LPG PWM (overlay missing?)")
+        self.dir = os.path.join(chips[0], f"pwm{STEP_CHANNEL}")
+        if not os.path.isdir(self.dir):
+            self._w(os.path.join(chips[0], "export"), STEP_CHANNEL)
+            time.sleep(0.05)
+
+    @staticmethod
+    def _w(path, value):
+        with open(path, "w") as f:
+            f.write(str(value))
+
+    def run(self, period_ns):
+        """Start or retime the pulses; duty is always half the period."""
+        cur = int(open(os.path.join(self.dir, "period")).read() or 0)
+        half = period_ns // 2
+        if period_ns < cur:
+            self._w(os.path.join(self.dir, "duty_cycle"), half)
+            self._w(os.path.join(self.dir, "period"), period_ns)
+        else:
+            self._w(os.path.join(self.dir, "period"), period_ns)
+            self._w(os.path.join(self.dir, "duty_cycle"), half)
+        self._w(os.path.join(self.dir, "enable"), 1)
+
+    def stop(self):
+        self._w(os.path.join(self.dir, "enable"), 0)
+
+
+# --- M1120 hall sensors over /dev/i2c-N ---
+I2C_RDWR, I2C_M_RD = 0x0707, 0x0001
+
+
+class I2cMsg(ctypes.Structure):
+    _fields_ = [("addr", ctypes.c_uint16), ("flags", ctypes.c_uint16),
+                ("len", ctypes.c_uint16), ("buf", ctypes.POINTER(ctypes.c_uint8))]
+
+
+class I2cRdwr(ctypes.Structure):
+    _fields_ = [("msgs", ctypes.POINTER(I2cMsg)), ("nmsgs", ctypes.c_uint32)]
+
+
+ALLOWED_HALL_WRITES = {0x00, 0x01, 0x07, 0x08}
+
+
+class Hall:
+    def __init__(self):
+        # Kernel 7.3 has no /sys/class/i2c-adapter: the adapters are only on
+        # the bus (CAMERA-PLAN P1, 2026-11-05); older kernels have both
+        buses = [b for b in sorted(set(glob.glob("/sys/bus/i2c/devices/i2c-*") +
+                                       glob.glob("/sys/class/i2c-adapter/i2c-*")))
+                 if of_path(b).endswith(HALL_BUS)]
+        if not buses:
+            raise SystemExit("popup: hall sensor bus i2c@884000 not enabled (overlay missing?)")
+        self.fd = os.open("/dev/" + os.path.basename(buses[0]), os.O_RDWR | os.O_CLOEXEC)
+        for addr in (HALL_UP, HALL_DOWN):
+            self._init(addr)
+
+    def _xfer(self, addr, wr, rdlen=0):
+        wbuf = (ctypes.c_uint8 * len(wr))(*wr)
+        msgs = [I2cMsg(addr, 0, len(wr), wbuf)]
+        rbuf = (ctypes.c_uint8 * max(rdlen, 1))()
+        if rdlen:
+            msgs.append(I2cMsg(addr, I2C_M_RD, rdlen, rbuf))
+        arr = (I2cMsg * len(msgs))(*msgs)
+        fcntl.ioctl(self.fd, I2C_RDWR, I2cRdwr(arr, len(msgs)))
+        return bytes(rbuf[:rdlen])
+
+    def _write(self, addr, reg, val):
+        if reg not in ALLOWED_HALL_WRITES:
+            raise SystemExit(f"popup: refusing to write hall register 0x{reg:02x}")
+        self._xfer(addr, [reg, val])
+
+    def _init(self, addr):
+        self._write(addr, 0x07, 0x01)          # soft reset
+        time.sleep(0.005)
+        did = self._xfer(addr, [0x09], 1)[0]
+        if did != 0x9C:
+            raise SystemExit(f"popup: 0x{addr:02x} is not an M1120 (ID 0x{did:02x})")
+        self._write(addr, 0x00, 0x40)          # persistence
+        self._write(addr, 0x01, 0x01)          # polling, 10 bit, 0.034 mT/LSB
+        self._write(addr, 0x08, 0x41)          # 80 Hz, 10 bit, measuring
+
+    def read(self, addr):
+        """Signed 10-bit field, or None while no sample is ready."""
+        st1, lo, hi = self._xfer(addr, [0x10], 3)
+        if not st1 & 0x01:
+            return None
+        x = ((hi & 0x40) >> 6) << 8 | lo
+        return x - 0x200 if hi & 0x80 else x
+
+    def settled(self, addr, tries=10):
+        for _ in range(tries):
+            v = self.read(addr)
+            if v is not None:
+                return v
+            time.sleep(0.013)
+        raise SystemExit(f"popup: hall 0x{addr:02x} gives no data")
+
+
+def position(hall, conf):
+    up, down = hall.settled(HALL_UP), hall.settled(HALL_DOWN)
+    if abs(up) > conf["UP_THRESHOLD"] and abs(down) <= conf["DOWN_THRESHOLD"]:
+        where = "up"
+    elif abs(down) > conf["DOWN_THRESHOLD"] and abs(up) <= conf["UP_THRESHOLD"]:
+        where = "down"
+    else:
+        where = "unknown"
+    return where, up, down
+
+
+class Motor:
+    def __init__(self):
+        pm8150l, pm8150b, pm8150 = (gpiochip(n) for n in (GPIO_PM8150L, GPIO_PM8150B, GPIO_PM8150))
+        self.sleep_n = Line(pm8150, 10, 0, "nSLEEP")
+        self.direction = Line(pm8150l, 11, 0, "DIR")
+        self.m1 = Line(pm8150l, 8, 1, "M1")
+        self.boost = Line(pm8150b, 12, 1, "BOOST")
+        self.step = Step()
+
+    def move(self, hall, conf, target):
+        sensor = HALL_UP if target == "up" else HALL_DOWN
+        limit = conf["UP_THRESHOLD"] if target == "up" else conf["DOWN_THRESHOLD"]
+        fast_ms = conf["MAX_FAST_MS"] + (conf["DOWN_EXTRA_MS"] if target == "down" else 0)
+        self.direction.set(0 if target == "up" else 1)
+        self.sleep_n.set(1)
+        time.sleep(0.002)                      # DRV8834 wake-up
+        t0 = time.monotonic()
+        reached = None
+        try:
+            self.step.run(conf["SLOW_NS"])
+            time.sleep(conf["SLOW_MS"] / 1000)
+            self.step.run(conf["FAST_NS"])
+            end = time.monotonic() + fast_ms / 1000
+            while time.monotonic() < end:
+                v = hall.read(sensor)
+                if v is not None and abs(v) > limit:
+                    reached = time.monotonic()
+                    end = min(end, reached + conf["SEAT_MS"] / 1000)
+                time.sleep(0.004)
+        finally:
+            self.step.stop()
+            self.sleep_n.set(0)
+            self.direction.set(0)
+        ms = (time.monotonic() - t0) * 1000
+        where, up, down = position(hall, conf)
+        log(f"{target}: {ms:.0f} ms, sensor {'reached' if reached else 'NOT reached'}; "
+            f"now {where} (up {up}, down {down})")
+        os.makedirs(os.path.dirname(STATE), exist_ok=True)
+        with open(STATE, "w") as f:
+            f.write(where + "\n")
+        return where == target
+
+
+def cmd_move(target):
+    conf = load_conf()
+    hall = Hall()
+    where, up, down = position(hall, conf)
+    if where == target:
+        log(f"already {target} (up {up}, down {down}); not moving")
+        return 0
+    if where == "unknown" and target == "up":
+        log(f"position unknown (up {up}, down {down}): only 'down' is allowed")
+        return 1
+    return 0 if Motor().move(hall, conf, target) else 1
+
+
+def front_sensor_state():
+    for dev in glob.glob("/sys/bus/i2c/drivers/imx471/*-*/power/runtime_status"):
+        return open(dev).read().strip()
+    return None
+
+
+def cmd_daemon():
+    if not os.path.exists(ENABLE):
+        log(f"{ENABLE} missing: the pop-up stays where it is")
+        return 0
+    conf = load_conf()
+    hall = Hall()
+    motor = Motor()
+    stopping = []
+    signal.signal(signal.SIGTERM, lambda *_: stopping.append(1))
+    signal.signal(signal.SIGINT, lambda *_: stopping.append(1))
+    where, up, down = position(hall, conf)
+    log(f"start: {where} (up {up}, down {down})")
+    if where != "down":
+        motor.move(hall, conf, "down")
+    idle_since = None
+    held = False     # pushed in, or a move failed: wait for the camera to go idle
+    while not stopping:
+        state = front_sensor_state()
+        where, up, _ = position(hall, conf)
+        if state == "active":
+            idle_since = None
+            if held:
+                pass
+            elif where == "down":
+                held = not motor.move(hall, conf, "up")
+            elif where == "unknown":
+                # Up, then no longer at the top: pushed in by hand (stock
+                # lowers it too), or it never got there
+                log(f"left the top while in use (up {up}): lowering, not raising again until idle")
+                motor.move(hall, conf, "down")
+                held = True
+        else:
+            held = False
+            idle_since = idle_since or time.monotonic()
+            if where != "down" and (time.monotonic() - idle_since) * 1000 >= conf["IDLE_DOWN_MS"]:
+                motor.move(hall, conf, "down")
+        time.sleep(0.2)
+    where, _, _ = position(hall, conf)
+    if where != "down":
+        motor.move(hall, conf, "down")
+    return 0
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
+    if cmd == "status":
+        conf = load_conf()
+        where, up, down = position(Hall(), conf)
+        print(f"{where} up={up} down={down} "
+              f"thresholds={conf['UP_THRESHOLD']}/{conf['DOWN_THRESHOLD']}")
+        return 0
+    if cmd in ("up", "down"):
+        return cmd_move(cmd)
+    if cmd == "daemon":
+        return cmd_daemon()
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

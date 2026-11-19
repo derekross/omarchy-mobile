@@ -1,0 +1,109 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# prepare-userdata: the OnePlus 7T Pro's userdata image, on the laptop.
+#
+# tools/install-phone writes slot B's boot images, which this phone has none
+# of (device.conf), so its root image is prepared here and written by hand
+# (BRINGUP-M1.md). Into a LOCAL COPY of the root image built by
+# tools/build-rootfs --local hotdog this writes, with debugfs (no root needed):
+#   - the owner's firstboot.conf (made by the owner, never committed: the
+#     keys are omamobile-firstboot's, see packages/omamobile-firstboot) and
+#     root's authorized_keys from its SSH_KEY lines;
+#   - the phone's firmware from FIRMWARE_DIR: Qualcomm's signed images for
+#     the modem, the DSPs, the GPU and the Wi-Fi core from the owner's own
+#     OxygenOS, and the board files ath10k and Bluetooth need. The vendor
+#     tree qcom/sm8150/oneplus/hotdog goes where the device tree names it;
+#     everything else goes under /usr/lib/firmware/updates, which the kernel
+#     searches first, so no linux-firmware package can collide with it.
+# Vendor firmware and the result hold the owner's data: keep both outside the
+# repository and delete the image after flashing.
+#
+#   device/hotdog/prepare-userdata ROOTFS.img.zst FIRMWARE_DIR FIRSTBOOT_CONF OUT.img
+set -euo pipefail
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+(($# == 4)) || die "usage: prepare-userdata ROOTFS.img.zst FIRMWARE_DIR FIRSTBOOT_CONF OUT.img"
+rootfs=$1 fw=${2%/} conf=$3 out=$4
+for tool in debugfs dumpe2fs e2fsck zstd; do command -v "$tool" >/dev/null || die "$tool not found"; done
+[[ -f $rootfs ]] || die "no root image $rootfs"
+[[ -d $fw/qcom/sm8150/oneplus/hotdog ]] || die "$fw has no qcom/sm8150/oneplus/hotdog: not this phone's firmware"
+[[ -f $fw/qcom/sm8150/oneplus/hotdog/a640_zap.mbn && -f $fw/qcom/sm8150/oneplus/hotdog/modem.mbn ]] ||
+  die "$fw lacks the GPU or modem firmware"
+[[ -f $conf ]] || die "no firstboot.conf $conf"
+grep -c '^USERNAME=[a-z_][a-z0-9_-]*$' "$conf" >/dev/null || die "$conf has no USERNAME"
+grep -c '^PASSWORD_HASH=\$6\$' "$conf" >/dev/null || die "$conf has no sha512-crypt PASSWORD_HASH"
+grep -c '^SSH_KEY=' "$conf" >/dev/null || die "$conf has no SSH_KEY (the phone's only way in at first)"
+[[ $(stat -c %a "$conf") == 600 ]] || die "$conf must be mode 600 (it holds the password hash)"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+umask 077
+sed -n 's/^SSH_KEY=//p' "$conf" > "$tmp/authorized_keys"
+
+zstd -q -d --sparse -f "$rootfs" -o "$out"
+[[ $(dumpe2fs -h "$out" 2>/dev/null | sed -n 's/^Filesystem volume name: *//p') == omamobile-root ]] ||
+  die "$rootfs is not an Omarchy Mobile root image (label omamobile-root)"
+
+# debugfs has no mkdir -p, and its mkdir of a directory that already exists
+# (a lived-in root, or this image prepared twice) still allocates the inode,
+# then fails to link it: e2fsck rejects the result. So every directory is
+# looked up first and only the missing ones are made (as tools/install-phone
+# does), and every file is removed before it is written.
+have() { debugfs -R "stat $1" "$out" 2>/dev/null | grep -c '^Inode:' >/dev/null; }
+dest() { case $1 in qcom/sm8150/oneplus/hotdog/*) echo "/usr/lib/firmware/$1" ;; *) echo "/usr/lib/firmware/updates/$1" ;; esac; }
+mapfile -t files < <(cd "$fw" && find . -type f | sed 's|^\./||' | sort)
+for f in "${files[@]}"; do
+  [[ $f =~ ^[A-Za-z0-9._/+-]+$ ]] || die "bad firmware file name: $f"
+done
+# Every parent of every destination, parents first (sort puts a/b before
+# a/b/c); the image has no linux-firmware-qcom, so even
+# /usr/lib/firmware/qcom is usually new
+mapfile -t dirs < <(
+  printf '%s\n' /etc/omamobile /root/.ssh
+  for f in "${files[@]}"; do
+    t=$(dest "$f")
+    while [[ ${t%/*} != /usr/lib && ${t%/*} != "" ]]; do t=${t%/*}; echo "$t"; done
+  done | sort -u)
+
+# One debugfs script: every directory it makes and every file it writes is
+# owned by root; files 0644 but for the two secrets. Paths come from find,
+# never from the files.
+# debugfs splits its commands at blanks: a host path goes in double quotes,
+# with any double quote in it doubled
+dq() { printf '"%s"' "${1//\"/\"\"}"; }
+cmds=$tmp/cmds
+{
+  for d in "${dirs[@]}"; do
+    have "$d" && continue
+    echo "mkdir $d"
+    case $d in
+      /root/.ssh) ;;
+      *) printf "sif $d %s\n" "mode 040755" "uid 0" "gid 0" ;;
+    esac
+  done
+  printf 'sif /root/.ssh %s\n' "mode 040700" "uid 0" "gid 0"
+  echo "rm /etc/omamobile/firstboot.conf"
+  echo "write $(dq "$conf") /etc/omamobile/firstboot.conf"
+  printf 'sif /etc/omamobile/firstboot.conf %s\n' "mode 0100600" "uid 0" "gid 0"
+  echo "rm /root/.ssh/authorized_keys"
+  echo "write $(dq "$tmp/authorized_keys") /root/.ssh/authorized_keys"
+  printf 'sif /root/.ssh/authorized_keys %s\n' "mode 0100600" "uid 0" "gid 0"
+  for f in "${files[@]}"; do
+    t=$(dest "$f")
+    echo "rm $t"
+    echo "write $(dq "$fw/$f") $t"
+    printf "sif $t %s\n" "mode 0100644" "uid 0" "gid 0"
+  done
+} > "$cmds"
+# rm of a file that isn't there fails harmlessly; the checks below decide
+debugfs -w -f "$cmds" "$out" >/dev/null 2>&1 || true
+
+cmp -s <(debugfs -R "cat /etc/omamobile/firstboot.conf" "$out" 2>/dev/null) "$conf" || die "writing firstboot.conf failed"
+cmp -s <(debugfs -R "cat /root/.ssh/authorized_keys" "$out" 2>/dev/null) "$tmp/authorized_keys" || die "writing authorized_keys failed"
+n=0
+for f in "${files[@]}"; do
+  cmp -s <(debugfs -R "cat $(dest "$f")" "$out" 2>/dev/null) "$fw/$f" || die "firmware $f did not land in the image"
+  n=$((n + 1))
+done
+e2fsck -fn "$out" >/dev/null 2>&1 || die "the image doesn't check clean after the writes"
+echo "$out: firstboot.conf, authorized_keys and $n firmware files written; file system checks clean"
+echo "It holds the owner's password hash and vendor firmware: delete it after flashing."

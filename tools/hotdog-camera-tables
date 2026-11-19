@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""
+hotdog-camera-tables: build the OnePlus 7T Pro's camera register tables from
+the owner's own OxygenOS image.
+
+The main camera (Sony IMX586) and the ultrawide (Sony IMX481) need
+initialisation and mode settings that are not public. OxygenOS carries them
+in its camera module files (vendor/lib64/camera/com.qti.sensormodule.*.bin).
+This tool decodes those files with tools/camx-sensormodule-decode and
+writes, for each sensor, the table file the kernel's sony-fwtable driver
+loads (device/hotdog/CAMERA-PLAN.md section 5.2):
+
+  <OUT>/imx586-main.bin   ->  /usr/lib/firmware/omamobile/camera/imx586-main.bin
+  <OUT>/imx481-wide.bin   ->  /usr/lib/firmware/omamobile/camera/imx481-wide.bin
+
+Nothing from OnePlus's or Qualcomm's software is stored in the repository:
+the output is for the owner's own phone, never committed or redistributed.
+
+  tools/hotdog-camera-tables [--all-modes] VENDOR_CAMERA_DIR OUT
+    VENDOR_CAMERA_DIR  the image's vendor/lib64/camera
+    --all-modes        keep high-frame-rate and HDR modes too (default: the
+                       plain modes only)
+
+It prints each kept mode with the link frequency the device tree must list
+for it (the driver offers only modes whose link frequency the endpoint
+names). Every variant of a sensor's module file (semco, ofilm, no_otp, ...)
+must decode to the same tables, or the tool stops.
+
+File format: the comment at the top of drivers/media/i2c/sony-fwtable.c
+(version 1). Register writes of 16-bit data are split into two byte writes,
+high byte first, as the sensors' register map is big-endian. Writes to mode
+select (0x0100) are dropped: the driver starts and stops the stream. A table
+that writes the OTP registers (0x0a00-0x0aff) stops the tool.
+"""
+
+import argparse
+import glob
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import struct
+import sys
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+_loader = importlib.machinery.SourceFileLoader(
+    "camx_decode", os.path.join(HERE, "camx-sensormodule-decode"))
+_spec = importlib.util.spec_from_loader("camx_decode", _loader)
+camx = importlib.util.module_from_spec(_spec)
+_loader.exec_module(camx)
+
+SENSORS = {
+    # name: (output file, chip id, native width, native height)
+    "imx586": ("imx586-main.bin", 0x0586, 8000, 6000),
+    "imx481": ("imx481-wide.bin", 0x0481, 4656, 3496),
+}
+MBUS = {"RGGB": 0x300F, "GRBG": 0x300A, "GBRG": 0x300E, "BGGR": 0x3007}
+RAW10_DT = 0x2B
+AGAIN_MAX = 960          # 16x: the sensors' libraries clamp here
+EXPOSURE_MIN = 4
+NO_SEQ = 0xFFFFFFFF
+
+
+def die(msg):
+    sys.exit(f"hotdog-camera-tables: {msg}")
+
+
+def regs_to_bytes(regs, where):
+    """CAMX [addr, value, delayUs, addrType, dataType, op, slave] -> byte writes."""
+    out = []
+    for r in regs:
+        addr, val, delay, atype, dtype, op, slave = r
+        if slave is not None or op not in (0, None):
+            die(f"{where}: unsupported entry {r}")
+        if atype != 2:
+            die(f"{where}: {atype}-byte register address in {r}")
+        vals = val if isinstance(val, list) else [val]
+        a = addr
+        for i, v in enumerate(vals):
+            if dtype == 1:
+                parts = [v & 0xFF]
+            elif dtype == 2:
+                parts = [(v >> 8) & 0xFF, v & 0xFF]
+            else:
+                die(f"{where}: {dtype}-byte data in {r}")
+            for p in parts:
+                if a == 0x0100:
+                    a += 1
+                    continue
+                if 0x0A00 <= a <= 0x0AFF:
+                    die(f"{where}: writes OTP register 0x{a:04x}")
+                last = i == len(vals) - 1 and p is parts[-1]
+                out.append((a, p, delay if last else 0))
+                a += 1
+    return out
+
+
+def link_freq(opclk, bpp, lanes, cphy):
+    # Documentation/driver-api/media/tx-rx.rst:
+    #   pixel_rate = link_freq * 2 * lanes * 16 / k / bpp, k = 16 (D-PHY), 7 (C-PHY)
+    k = 7 if cphy else 16
+    return round(opclk * bpp * k / (2 * lanes * 16))
+
+
+def build(sensor, files, all_modes):
+    out_name, chip_id, native_w, native_h = SENSORS[sensor]
+    decoded = [camx.decode(f) for f in files]
+    for d in decoded:
+        if d["errors"]:
+            die(f"{d['file']}: {d['errors']}")
+
+    def key(d):
+        sd = d["sensorDriverData"]
+        return hashlib.sha256(json.dumps(
+            [sd["initSettings"], sd["resolutionInfo"], sd["slaveInfo"]],
+            sort_keys=True).encode()).hexdigest()
+
+    keys = {key(d) for d in decoded}
+    if len(keys) != 1:
+        die(f"{sensor}: the module files decode to different tables: "
+            + ", ".join(d["file"] for d in decoded))
+
+    sd = decoded[0]["sensorDriverData"]
+    si = sd["slaveInfo"]
+    if si["sensorId"] != chip_id or si["sensorIdRegAddr"] != 0x0016:
+        die(f"{sensor}: chip ID {si['sensorId']:#x} at {si['sensorIdRegAddr']:#x}")
+    mclk = si["mclkHz"]
+    margin = sd["exposureControlInfo"]["verticalOffset"]
+
+    seqs = []
+    init = sd["initSettings"]
+    if len(init) != 1:
+        die(f"{sensor}: {len(init)} init tables (sensor versions); expected one")
+    seqs.append(regs_to_bytes(init[0]["regSetting"], f"{sensor} init"))
+
+    modes, seen, lanes, cphy = [], set(), None, None
+    for i, r in enumerate(sd["resolutionInfo"]["resolutionData"]):
+        img = [s for s in r["streamConfiguration"] if s["type"] == "IMAGE"]
+        if len(img) != 1 or img[0]["dt"] != RAW10_DT or r["bitDepth"] != 10:
+            continue
+        if not all_modes and r["capability"] != [0]:
+            continue
+        if lanes is None:
+            lanes, cphy = r["laneCount"], bool(r["is3Phase"])
+        elif (lanes, cphy) != (r["laneCount"], bool(r["is3Phase"])):
+            die(f"{sensor}: modes use different lane setups")
+        regs = regs_to_bytes(r["regSetting"], f"{sensor} mode {i}")
+        # One mode per output size (the first, which the vendor lists as its
+        # default): V4L2 picks a mode by size alone
+        if (r["width"], r["height"]) in seen:
+            continue
+        seen.add((r["width"], r["height"]))
+        hb, vb = r.get("horizontalBinning") or 1, r.get("verticalBinning") or 1
+        cw, ch = min(r["width"] * hb, native_w), min(r["height"] * vb, native_h)
+        fps = r["frameRate"]
+        modes.append({
+            "index": i,
+            "width": r["width"], "height": r["height"],
+            "crop": ((native_w - cw) // 2 & ~1, (native_h - ch) // 2 & ~1, cw, ch),
+            "line_length": r["lineLengthPixelClock"],
+            "frame_length": r["frameLengthLines"],
+            "pixel_rate": round(r["lineLengthPixelClock"] * r["frameLengthLines"] * fps),
+            "link_freq": link_freq(r["outputPixelClock"], 10, r["laneCount"], cphy),
+            "mbus": MBUS[r["colorFilterArrangement"]],
+            "seq": len(seqs), "fps": fps,
+        })
+        seqs.append(regs)
+
+    if not modes:
+        die(f"{sensor}: no usable mode")
+    if len(modes) > 16 or len(seqs) > 16:
+        die(f"{sensor}: too many modes for the file format")
+
+    blob = bytearray()
+    blob += struct.pack("<4sHH10I16x", b"OMST", 1, chip_id, len(modes),
+                        len(seqs), 0, NO_SEQ, NO_SEQ, mclk, lanes,
+                        EXPOSURE_MIN, margin, AGAIN_MAX)
+    for m in modes:
+        blob += struct.pack("<IIIIIIIIQQII8x", m["width"], m["height"], *m["crop"],
+                            m["line_length"], m["frame_length"], m["pixel_rate"],
+                            m["link_freq"], m["mbus"], m["seq"])
+    for s in seqs:
+        blob += struct.pack("<I", len(s))
+        for a, v, dl in s:
+            blob += struct.pack("<HBBI", a, v, 0, min(dl, 100000))
+    assert len(blob) == 64 + 64 * len(modes) + sum(4 + 8 * len(q) for q in seqs)
+    return out_name, bytes(blob), modes, mclk, lanes, cphy
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
+    ap.add_argument("vendor_camera_dir")
+    ap.add_argument("out")
+    ap.add_argument("--all-modes", action="store_true")
+    args = ap.parse_args()
+
+    os.makedirs(args.out, exist_ok=True)
+    for sensor in SENSORS:
+        files = sorted(glob.glob(os.path.join(
+            args.vendor_camera_dir, f"com.qti.sensormodule.*_{sensor}*.bin")))
+        if not files:
+            die(f"no module file for {sensor} in {args.vendor_camera_dir}")
+        name, blob, modes, mclk, lanes, cphy = build(sensor, files, args.all_modes)
+        path = os.path.join(args.out, name)
+        with open(path, "wb") as fh:
+            fh.write(blob)
+        print(f"{path}: {len(blob)} bytes, MCLK {mclk} Hz, "
+              f"{lanes} {'trios (C-PHY)' if cphy else 'lanes (D-PHY)'}, "
+              f"from {len(files)} matching module files")
+        for m in modes:
+            print(f"  {m['width']}x{m['height']}@{m['fps']:.2f}  "
+                  f"link-frequency {m['link_freq']}  pixel rate {m['pixel_rate']}")
+
+
+if __name__ == "__main__":
+    main()

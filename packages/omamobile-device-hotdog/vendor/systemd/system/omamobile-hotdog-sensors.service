@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# OnePlus 7T Pro: the sensors (device/hotdog/SENSORS-PLAN.md). The SLPI's
+# sensors PD reads its registry, configs and libraries from Linux over
+# FastRPC; hexagonrpcd serves them from read-only copies of the phone's own
+# partitions (omamobile-hotdog-sensors-root). Started by udev when the SLPI's
+# FastRPC node appears, and stopped with it, so it follows every SLPI
+# restart. Once the Sensor Core answers, iio-sensor-proxy is started again:
+# it looks for its sensors only when it starts.
+#   systemctl mask omamobile-hotdog-sensors   keeps it off
+[Unit]
+Description=OnePlus 7T Pro sensors: hexagonrpcd for the SLPI's sensors PD
+BindsTo=dev-fastrpc\x2dsdsp.device
+After=dev-fastrpc\x2dsdsp.device
+# The node can appear before its sessions are probed (open: EBUSY)
+StartLimitIntervalSec=60
+StartLimitBurst=20
+
+[Service]
+ExecStartPre=/usr/lib/omamobile/hotdog/omamobile-hotdog-sensors-root
+ExecStart=/usr/bin/hexagonrpcd -f /dev/fastrpc-sdsp -d sdsp -s -R /var/lib/omamobile/sensors/root
+ExecStartPost=-/usr/lib/omamobile/hotdog/omamobile-hotdog-sensors-ready
+Restart=on-failure
+RestartSec=1
+# At every SLPI start the sensors PD tries to write its registry back about
+# 2,500 times in a second; hexagonrpcd refuses and logs each one
+LogRateLimitIntervalSec=10s
+LogRateLimitBurst=40

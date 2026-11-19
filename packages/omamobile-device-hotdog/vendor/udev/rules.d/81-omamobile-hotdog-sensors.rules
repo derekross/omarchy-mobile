@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# OnePlus 7T Pro: the SLPI's FastRPC node starts hexagonrpcd for the sensors
+# PD (device/hotdog/SENSORS-PLAN.md). iio-sensor-proxy's own rules tag SSC
+# nodes for light (and compass). Proximity is not tagged: the SSC lists the
+# TCS3701's proximity, but its firmware keeps it off on this phone (stock
+# uses an ultrasound and touchscreen proximity), so a claim would only time
+# out.
+ACTION=="remove", GOTO="omamobile_hotdog_sensors_end"
+SUBSYSTEM=="misc", KERNEL=="fastrpc-sdsp", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omamobile-hotdog-sensors.service"
+LABEL="omamobile_hotdog_sensors_end"

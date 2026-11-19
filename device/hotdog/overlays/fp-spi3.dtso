@@ -1,0 +1,7 @@
+// SPDX-License-Identifier: MIT
+// The Goodix sensor's SPI (QUP0 SE3, gpio144-147) is driven by the trusted
+// app in QSEE; Linux only keeps the serial engine's clocks and pins up, as
+// stock's overlay does (qupv3_se3_spi "ok" with no child).
+/dts-v1/;
+/plugin/;
+&{/soc@0/geniqup@8c0000/spi@88c000} { status = "okay"; };

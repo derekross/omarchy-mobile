@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# OnePlus 7T Pro: firmware files for the modem over QRTR. The modem fetches
+# the Wi-Fi firmware (wlanmdsp.mbn) and its configuration this way, from
+# the directory of the modem's own remoteproc firmware under /usr/lib/firmware.
+# Files the modem writes land in the state directory, never on a partition.
+[Unit]
+Description=QRTR TFTP server for the modem
+
+[Service]
+ExecStart=/usr/lib/omamobile/hotdog/tqftpserv
+Restart=always
+RestartSec=2
+StateDirectory=tqftpserv
+
+[Install]
+WantedBy=multi-user.target

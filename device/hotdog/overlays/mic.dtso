@@ -1,0 +1,35 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up (MIC-PLAN.md, step M3): the microphones. Turns on the SLIMbus
+ * controller (and with it the WCD9340 codec described under it) and the
+ * sound card's capture link, and gives the card its microphone routes.
+ * Blacklist slim_qcom_ngd_ctrl before the first boot with this overlay: the
+ * card waits for the codec until the step loads it by hand, so the speakers
+ * are missing until then.
+ *
+ * Routes from the stock dtbo's last word on the tavil card (fragment@91,
+ * project 19801): AMIC1, AMIC4 and AMIC5 biased by MICBIAS1, AMIC3 by
+ * MICBIAS4. AMIC2 (USB-C headset, MICBIAS2) is left out. MCLK feeds the
+ * capture interface: mainline only turns the codec's clock on through a
+ * route, and this phone has no codec playback or SoundWire to do it.
+ *
+ * Paths, not labels, so the base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/slim-ngd@171c0000} {
+	status = "okay";
+};
+
+&{/sound/slimcap-dai-link} {
+	status = "okay";
+};
+
+&{/sound} {
+	audio-routing = "AIF1 CAP", "MCLK",
+			"AMIC1", "MIC BIAS1",
+			"AMIC3", "MIC BIAS4",
+			"AMIC4", "MIC BIAS1",
+			"AMIC5", "MIC BIAS1";
+};

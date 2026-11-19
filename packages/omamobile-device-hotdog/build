@@ -1,0 +1,29 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Compile the modem's file services for omamobile-device-hotdog:
+#   rmtfs      serves the modem's EFS partitions (read-only here)
+#   tqftpserv  serves firmware to the modem over QRTR (wlanmdsp.mbn, the
+#              Wi-Fi firmware, runs on the modem)
+# both linked with qrtr's library sources, so no shared libqrtr is installed.
+#   ./build SRCDIR OUTDIR   (SRCDIR holds the unpacked qrtr-*, rmtfs-*, tqftpserv-*)
+set -euo pipefail
+src=${1:?Usage: ./build SRCDIR OUTDIR}
+out=${2:?Usage: ./build SRCDIR OUTDIR}
+qrtr=$(ls -d "$src"/qrtr-*/ | head -1)
+rmtfs=$(ls -d "$src"/rmtfs-*/ | head -1)
+tq=$(ls -d "$src"/tqftpserv-*/ | head -1)
+mkdir -p "$out"
+cc=${CC:-gcc}
+flags=(-O2 -g -Wall -I"$qrtr/include" ${CFLAGS:-})
+lib=("$qrtr/lib/qrtr.c" "$qrtr/lib/qmi.c" "$qrtr/lib/logging.c")
+
+# rmtfs's generated QMI sources ship in the tarball; keep make-style
+# regeneration out of it entirely by compiling the listed sources directly
+"$cc" "${flags[@]}" -o "$out/rmtfs" \
+  "$rmtfs"/{qmi_rmtfs.c,rmtfs.c,rproc.c,sharedmem.c,storage.c,util.c} "${lib[@]}" \
+  ${LDFLAGS:-} -ludev -lpthread
+
+"$cc" "${flags[@]}" -DHAVE_ZSTD -DHAVE_XZ -o "$out/tqftpserv" \
+  "$tq"/{translate.c,tqftpserv.c,zstd-decompress.c,xz-decompress.c} "${lib[@]}" \
+  ${LDFLAGS:-} -lzstd -llzma
+ls -l "$out"

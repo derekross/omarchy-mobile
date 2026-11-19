@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Where pacman gets Omarchy Mobile's packages ([omamobile] in /etc/pacman.conf).
+#
+# The one active Server line is the channel this phone follows. The OnePlus
+# 7T Pro follows its own repository on the phone (local), filled from a
+# build machine by tools/repo-push: its device package is not published yet,
+# and the published Mesa is built for Mali only, so stable or development
+# would replace the Adreno-capable Mesa this phone runs with one that has no
+# driver for its GPU.
+#   stable       what has run on the Pixel 7 Pro
+#   development  every day's build
+#   local        the repository on the phone itself, /var/lib/omamobile/repo
+#
+# Switch with:   sudo omamobile-update channel local   (or stable, development)
+# See which:     omamobile-update check
+#
+# pacman keeps a changed copy of this file across upgrades (backup= in the
+# device package); a new default then arrives as omamobile-mirrorlist.pacnew.
+#Server = https://pkgs.omamobile.org/stable/$arch
+#Server = https://pkgs.omamobile.org/development/$arch
+Server = file:///var/lib/omamobile/repo/$arch

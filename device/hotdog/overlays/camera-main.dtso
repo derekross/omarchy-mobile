@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up (CAMERA-PLAN.md, step C7): the main camera, a Sony IMX586 on
+ * CSIPHY1 over C-PHY, and its four load switches. Needs camera.dtso
+ * applied first, a kernel with CAMSS C-PHY support and the owner's
+ * /usr/lib/firmware/omamobile/camera/imx586-main.bin.
+ * Paths, not labels, so the base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/regulator-cam-main-vana} {
+	status = "okay";
+};
+
+&{/regulator-cam-main-vana2} {
+	status = "okay";
+};
+
+&{/regulator-cam-main-vdig2} {
+	status = "okay";
+};
+
+&{/soc@0/cci@ac4a000/i2c-bus@1/camera@1a} {
+	status = "okay";
+};

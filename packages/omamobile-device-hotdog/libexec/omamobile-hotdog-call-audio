@@ -1,0 +1,430 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Call audio on the OnePlus 7T Pro, behind callaudiod's D-Bus API.
+
+omatel-agent (and GNOME Calls) switch call audio through callaudiod's
+session-bus interface, org.mobian_project.CallAudio: SelectMode, EnableSpeaker
+and MuteMic. This serves that interface for this phone (device/hotdog/
+MODEM-PLAN.md, V2).
+
+During a call the modem's voice runs through the ADSP, never through Linux:
+downlink from the ADSP's voice processor to the speakers' MI2S port (the
+TFA9874s), uplink from the WCD9340's SLIMbus capture (AMIC4, the voice mic).
+The ADSP starts that session when the sound card's VoiceMMode1 front end is
+opened for playback and capture, so call mode sets the routes and holds both
+PCMs open (8 kHz mono, prepared and started, no data) until the call ends.
+
+Earpiece: the top amplifier only, at the gain of stock's "receiver" profile.
+Speaker: the bottom one only, as stock's "voice-speaker" path. Mute: the mic
+ADCs are switched away from the decimators. Every control is read before the
+call and put back after it, so whatever the HiFi verb had set (PipeWire may
+be recording) comes back.
+
+/etc/omamobile/call-audio.conf (optional, read at the start of every call)
+sets the uplink's processing, so it can be compared between calls:
+  tx_topology = 0x10F70  the ADSP's Tx topology (0x10F70 none, 0x10F71
+                         single-mic ECNS, 0x10F72 dual-mic Fluence)
+  mics = 1               1: AMIC4; 2: AMIC4 and AMIC3 (stock's handset pair)
+  earpiece_gain = 13     the top amplifier's speaker gain in earpiece mode
+
+Without the voice front end (a kernel without the q6voice drivers or the
+voice overlay) it exits at once and leaves the bus name alone, so the phone
+app keeps reporting that call audio can't be routed.
+"""
+
+import ctypes
+import glob
+import re
+import subprocess
+import sys
+
+from gi.repository import Gio, GLib
+
+BUS_NAME = "org.mobian_project.CallAudio"
+PATH = "/org/mobian_project/CallAudio"
+XML = """
+<node>
+  <interface name="org.mobian_project.CallAudio">
+    <method name="SelectMode">
+      <arg direction="in" name="mode" type="u"/>
+      <arg direction="out" name="success" type="b"/>
+    </method>
+    <method name="EnableSpeaker">
+      <arg direction="in" name="enable" type="b"/>
+      <arg direction="out" name="success" type="b"/>
+    </method>
+    <method name="MuteMic">
+      <arg direction="in" name="mute" type="b"/>
+      <arg direction="out" name="success" type="b"/>
+    </method>
+    <property name="AudioMode" type="u" access="read"/>
+    <property name="SpeakerState" type="u" access="read"/>
+    <property name="MicState" type="u" access="read"/>
+  </interface>
+</node>
+"""
+
+MODE_DEFAULT, MODE_CALL = 0, 1
+STATE_OFF, STATE_ON = 0, 1
+
+CONFIG = "/etc/omamobile/call-audio.conf"
+DEFAULTS = {
+    # The uplink without processing: the default single-mic echo canceller
+    # (0x10F71) sent silence on this phone (MODEM-PLAN V3); 0x10F70 is "none"
+    "tx_topology": 0x10F70,
+    "mics": 1,
+    # NXP's container: TDMSPKG 13 in the receiver profile, 4 for the speaker
+    "earpiece_gain": 13,
+}
+
+# The voice routes in the ADSP (q6voice-dai) and the voice mic's path in the
+# codec, as the HiFi verb's Mic1 sets it (ucm2/OnePlus/hotdog/HiFi.conf)
+CALL_ROUTES = [
+    ("AIF1_CAP Mixer SLIM TX0", "1"),
+    ("CDC_IF TX0 MUX", "DEC0"),
+    ("ADC MUX0", "AMIC"),
+    ("AMIC4_5 SEL", "AMIC4"),
+    ("AMIC MUX0", "ADC4"),
+    ("ADC4 Volume", "12"),
+    ("DEC0 Volume", "84"),
+    ("VoiceMMode1 Capture Mixer SLIMBUS_0_TX", "1"),
+    ("QUAT_MI2S_RX Voice Mixer VoiceMMode1", "1"),
+]
+# The second mic, AMIC3 (the HiFi verb's Mic2), on SLIM TX1 as stock's
+# handset pair (mixer_paths "handset-dmic-endfire": AMIC4 first, AMIC3)
+SECOND_MIC = [
+    ("AIF1_CAP Mixer SLIM TX1", "1"),
+    ("CDC_IF TX1 MUX", "DEC1"),
+    ("ADC MUX1", "AMIC"),
+    ("AMIC MUX1", "ADC3"),
+    ("ADC3 Volume", "12"),
+    ("DEC1 Volume", "84"),
+]
+NO_SECOND_MIC = [("AIF1_CAP Mixer SLIM TX1", "0")]
+# Controls only some kernels have (voice kernel gbcfa573612aa and later)
+OPTIONAL = {"VoiceMMode1 TX Channels", "Top Speaker Gain"}
+EARPIECE = [("Top Amp Switch", "1"), ("Bottom Amp Switch", "0")]
+SPEAKER = [("Top Amp Switch", "0"), ("Bottom Amp Switch", "1")]
+MIC_MUTED = [("AMIC MUX0", "ZERO"), ("AMIC MUX1", "ZERO")]
+
+SND_PCM_STREAM_PLAYBACK, SND_PCM_STREAM_CAPTURE = 0, 1
+SND_PCM_FORMAT_S16_LE = 2
+SND_PCM_ACCESS_RW_INTERLEAVED = 3
+
+
+def log(*args):
+    print("omamobile-hotdog-call-audio:", *args, file=sys.stderr, flush=True)
+
+
+def read_config(path=None):
+    """DEFAULTS, with what the config file sets (numbers, hex allowed)."""
+    path = path or CONFIG
+    cfg = dict(DEFAULTS)
+    try:
+        lines = open(path).read().splitlines()
+    except OSError:
+        return cfg
+    for line in lines:
+        line = line.split("#", 1)[0].strip()
+        if "=" not in line:
+            continue
+        key, value = (x.strip() for x in line.split("=", 1))
+        if key not in DEFAULTS:
+            log(f"{path}: unknown key {key}")
+            continue
+        try:
+            cfg[key] = int(value, 0)
+        except ValueError:
+            log(f"{path}: {key}: not a number: {value}")
+    if cfg["mics"] not in (1, 2):
+        log(f"{path}: mics must be 1 or 2")
+        cfg["mics"] = DEFAULTS["mics"]
+    return cfg
+
+
+def find_voice_pcm():
+    """(card, device) of the VoiceMMode1 front end, or None."""
+    for info in sorted(glob.glob("/proc/asound/card*/pcm*p/info")):
+        try:
+            text = open(info).read()
+        except OSError:
+            continue
+        if re.search(r"^id: VoiceMMode1\b", text, re.M):
+            card = int(re.search(r"^card: (\d+)", text, re.M).group(1))
+            device = int(re.search(r"^device: (\d+)", text, re.M).group(1))
+            return card, device
+    return None
+
+
+class Mixer:
+    def __init__(self, card):
+        self.card = str(card)
+        self._have = {}
+
+    def get(self, name):
+        r = subprocess.run(["amixer", "-c", self.card, "cget", f"name={name}"],
+                           capture_output=True, text=True)
+        if r.returncode:
+            return None
+        items = re.findall(r"^\s*; Item #(\d+) '([^']*)'", r.stdout, re.M)
+        m = re.search(r"^\s*: values=(.*)$", r.stdout, re.M)
+        if not m:
+            return None
+        value = m.group(1).split(",")[0]
+        if items:  # an enum: give the item's name back, as cset takes it
+            return dict(items).get(value, value)
+        return {"on": "1", "off": "0"}.get(value, value)
+
+    def set(self, name, value):
+        r = subprocess.run(["amixer", "-q", "-c", self.card, "cset", f"name={name}", value],
+                           capture_output=True, text=True)
+        if r.returncode:
+            log(f"cset '{name}' {value}: {r.stderr.strip()}")
+        return r.returncode == 0
+
+    def apply(self, controls):
+        ok = True
+        for name, value in controls:
+            if name in OPTIONAL and not self.has(name):
+                continue
+            ok = self.set(name, value) and ok
+        return ok
+
+    def has(self, name):
+        if name not in self._have:
+            self._have[name] = self.get(name) is not None
+        return self._have[name]
+
+
+class Pcm:
+    """One side of the voice front end, held open: no data passes."""
+
+    _lib = None
+
+    def __init__(self, card, device, capture):
+        if Pcm._lib is None:
+            lib = ctypes.CDLL("libasound.so.2")
+            lib.snd_pcm_open.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p,
+                                         ctypes.c_int, ctypes.c_int]
+            lib.snd_pcm_set_params.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+                                               ctypes.c_uint, ctypes.c_uint, ctypes.c_int,
+                                               ctypes.c_uint]
+            lib.snd_pcm_start.argtypes = [ctypes.c_void_p]
+            lib.snd_pcm_close.argtypes = [ctypes.c_void_p]
+            lib.snd_strerror.restype = ctypes.c_char_p
+            Pcm._lib = lib
+        self.lib = Pcm._lib
+        self.handle = ctypes.c_void_p()
+        self.capture = capture
+        self.what = f"hw:{card},{device} {'capture' if capture else 'playback'}"
+        stream = SND_PCM_STREAM_CAPTURE if capture else SND_PCM_STREAM_PLAYBACK
+        self._check(self.lib.snd_pcm_open(ctypes.byref(self.handle),
+                                          f"hw:{card},{device}".encode(), stream, 0), "open")
+
+    def _check(self, rc, step):
+        if rc < 0:
+            raise OSError(f"{self.what}: {step}: {self.lib.snd_strerror(rc).decode()}")
+
+    def run(self):
+        self._check(self.lib.snd_pcm_set_params(self.handle, SND_PCM_FORMAT_S16_LE,
+                                                SND_PCM_ACCESS_RW_INTERLEAVED,
+                                                1, 8000, 0, 100000), "parameters")
+        if self.capture:
+            rc = self.lib.snd_pcm_start(self.handle)
+            if rc < 0:
+                log(f"{self.what}: start: {self.lib.snd_strerror(rc).decode()}")
+        # Playback stays PREPARED: the voice front end has no buffer (a write
+        # is EINVAL, a start EPIPE). The ADSP's ports run from prepare, and
+        # the session from open (V2, 2026-11-14).
+
+    def close(self):
+        if self.handle:
+            self.lib.snd_pcm_close(self.handle)
+            self.handle = ctypes.c_void_p()
+
+
+class CallAudio:
+    def __init__(self, card, device):
+        self.card, self.device = card, device
+        self.mixer = Mixer(card)
+        self.mode = MODE_DEFAULT
+        self.speaker = STATE_OFF
+        self.mic = STATE_ON
+        self.saved = []
+        self.pcms = []
+        self.conn = None
+        self.cfg = dict(DEFAULTS)
+
+    # --- the routes, from the config read at the call's start ---
+    def call_routes(self):
+        routes = list(CALL_ROUTES) + [("VoiceMMode1 TX Topology", str(self.cfg["tx_topology"]))]
+        if self.cfg["mics"] == 2:
+            routes += SECOND_MIC
+        else:
+            routes += NO_SECOND_MIC
+        routes.append(("VoiceMMode1 TX Channels", str(self.cfg["mics"])))
+        return routes
+
+    def earpiece(self):
+        return EARPIECE + [("Top Speaker Gain", str(self.cfg["earpiece_gain"]))]
+
+    def mic_live(self):
+        live = [("AMIC MUX0", "ADC4")]
+        if self.cfg["mics"] == 2:
+            live.append(("AMIC MUX1", "ADC3"))
+        return live
+
+    # --- the call ---
+    def start_call(self):
+        self.cfg = read_config()
+        log("uplink: topology 0x%X, %d mic(s); earpiece gain %d"
+            % (self.cfg["tx_topology"], self.cfg["mics"], self.cfg["earpiece_gain"]))
+        touched = {n for n, _ in self.call_routes() + self.earpiece() + SPEAKER + MIC_MUTED
+                   + SECOND_MIC}
+        self.saved = [(n, v) for n in sorted(touched) if (v := self.mixer.get(n)) is not None]
+        self.mixer.apply(self.call_routes())
+        self.mixer.apply(SPEAKER if self.speaker == STATE_ON else self.earpiece())
+        self.mixer.apply(self.mic_live() if self.mic == STATE_ON else MIC_MUTED)
+        try:
+            # Both directions must be open before the ADSP starts the session
+            self.pcms = [Pcm(self.card, self.device, capture=False),
+                         Pcm(self.card, self.device, capture=True)]
+            for pcm in self.pcms:
+                pcm.run()
+        except OSError as e:
+            log(f"voice session: {e}")
+            self.stop_call()
+            return False
+        self.amps_off_again(SPEAKER if self.speaker == STATE_ON else EARPIECE)
+        log("call audio on")
+        return True
+
+    def amps_off_again(self, routes):
+        """Switch the amplifiers that should be silent off once more.
+
+        An amplifier switched off before the voice stream starts comes up
+        running all the same (its enable bit set, 2026-11-14: the earpiece
+        call played on both speakers); switched during the stream, it stops.
+        The switch writes only on a change, so it goes on and off again.
+        """
+        for name, value in routes:
+            if name.endswith("Amp Switch") and value == "0":
+                self.mixer.set(name, "1")
+                self.mixer.set(name, "0")
+
+    def stop_call(self):
+        for pcm in reversed(self.pcms):
+            pcm.close()
+        self.pcms = []
+        self.mixer.apply(self.saved)
+        self.saved = []
+        log("call audio off")
+
+    # --- D-Bus ---
+    def changed(self, **props):
+        if self.conn is None:
+            return
+        self.conn.emit_signal(None, PATH, "org.freedesktop.DBus.Properties", "PropertiesChanged",
+                              GLib.Variant("(sa{sv}as)", ("org.mobian_project.CallAudio",
+                                           {k: GLib.Variant("u", v) for k, v in props.items()}, [])))
+
+    def select_mode(self, mode):
+        if mode not in (MODE_DEFAULT, MODE_CALL):
+            return False
+        if mode == self.mode:
+            return True
+        if mode == MODE_CALL:
+            if not self.start_call():
+                return False
+        else:
+            self.stop_call()
+            # After a call: the earpiece and a live mic for the next one
+            self.speaker, self.mic = STATE_OFF, STATE_ON
+            self.changed(SpeakerState=self.speaker, MicState=self.mic)
+        self.mode = mode
+        self.changed(AudioMode=self.mode)
+        return True
+
+    def enable_speaker(self, enable):
+        state = STATE_ON if enable else STATE_OFF
+        ok = True
+        if self.mode == MODE_CALL:
+            ok = self.mixer.apply(SPEAKER if enable else self.earpiece())
+        if ok and state != self.speaker:
+            self.speaker = state
+            self.changed(SpeakerState=state)
+        return ok
+
+    def mute_mic(self, mute):
+        state = STATE_OFF if mute else STATE_ON
+        ok = True
+        if self.mode == MODE_CALL:
+            ok = self.mixer.apply(MIC_MUTED if mute else self.mic_live())
+        if ok and state != self.mic:
+            self.mic = state
+            self.changed(MicState=state)
+        return ok
+
+    def on_call(self, conn, sender, path, iface, method, params, invocation):
+        args = params.unpack()
+        try:
+            if method == "SelectMode":
+                ok = self.select_mode(args[0])
+            elif method == "EnableSpeaker":
+                ok = self.enable_speaker(args[0])
+            elif method == "MuteMic":
+                ok = self.mute_mic(args[0])
+            else:
+                invocation.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", method)
+                return
+        except Exception as e:  # never leave the caller waiting
+            log(f"{method}: {e}")
+            ok = False
+        invocation.return_value(GLib.Variant("(b)", (ok,)))
+
+    def on_get(self, conn, sender, path, iface, prop):
+        return GLib.Variant("u", {"AudioMode": self.mode, "SpeakerState": self.speaker,
+                                  "MicState": self.mic}[prop])
+
+
+def main():
+    pcm = find_voice_pcm()
+    if pcm is None:
+        log("no VoiceMMode1 front end on this kernel: call audio stays off")
+        return 0
+    audio = CallAudio(*pcm)
+    loop = GLib.MainLoop()
+    node = Gio.DBusNodeInfo.new_for_xml(XML)
+
+    def acquired_bus(conn, name):
+        audio.conn = conn
+        conn.register_object(PATH, node.interfaces[0], audio.on_call, audio.on_get, None)
+
+    def lost(conn, name):
+        log(f"lost or could not own {name}")
+        loop.quit()
+
+    owner = Gio.bus_own_name(Gio.BusType.SESSION, BUS_NAME, Gio.BusNameOwnerFlags.NONE,
+                             acquired_bus, None, lost)
+
+    def stop(*_):
+        loop.quit()
+        return GLib.SOURCE_REMOVE
+
+    try:
+        from gi.repository import GLibUnix
+        signal_add = GLibUnix.signal_add
+    except ImportError:  # GLib before 2.86
+        signal_add = GLib.unix_signal_add
+    signal_add(GLib.PRIORITY_DEFAULT, 15, stop)
+    signal_add(GLib.PRIORITY_DEFAULT, 2, stop)
+    log(f"VoiceMMode1 at hw:{pcm[0]},{pcm[1]}")
+    loop.run()
+    if audio.mode == MODE_CALL:
+        audio.stop_call()
+    Gio.bus_unown_name(owner)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

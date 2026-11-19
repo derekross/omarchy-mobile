@@ -1,0 +1,189 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# systemd-sleep hook for the OnePlus 7T Pro (device/hotdog/SUSPEND-PLAN.md),
+# linked from /usr/lib/systemd/system-sleep/omamobile-hotdog. systemd-sleep
+# runs it as
+#   omamobile-hotdog-sleep pre|post suspend|hibernate|hybrid-sleep|suspend-then-hibernate
+# Only "systemctl suspend" (logind, as omamobile-sleepd asks) gets here; a
+# write to /sys/power/state skips it.
+#
+# pre:  let the modem's QRTR channel (GLINK IPCRTR) wake the phone, so an
+#       incoming call or SMS ends the sleep. Needs a kernel with "rpmsg:
+#       qcom: glink: support waking up on channel rx", which makes every
+#       GLINK channel wakeup-capable but leaves waking off; only this one is
+#       turned on (the ADSP's and CDSP's stay off). Done before every sleep
+#       rather than once from udev: the channel's wakeup file appears just
+#       after its add event, and a modem restart makes a new channel.
+#       ModemManager keeps the modem but tells it to send only calls and
+#       texts while the phone sleeps (--test-quick-suspend-resume, its
+#       drop-in), so routine reports don't wake it.
+#       Before all that, wait while a remote processor (modem, ADSP, CDSP)
+#       restarts after a crash, and at the end arm /sys/power/wakeup_count,
+#       so a wakeup event that lands while the phone goes down (a remote
+#       processor crashing, the modem's channel) cancels the sleep. On
+#       2026-11-17 the modem crashed just after a wake and the phone slept
+#       again 23 s later, mid-restart: Wi-Fi's firmware (controlled through
+#       the modem) and the CDSP crashed and the phone reset into crash-dump
+#       mode (SUSPEND-PLAN S7). The kernel already counts a restart as a
+#       wakeup event in progress (remoteproc holds its device awake until the
+#       restart is done, and its restart work freezes for the sleep), but
+#       only a sleep armed through wakeup_count heeds that, and systemd
+#       doesn't arm it.
+# pre and post: log the battery (level and charge), so a night's drain
+# asleep can be read from the journal (upower's history is saved only every
+# so often and lost in a crash).
+# post: log what woke the phone.
+set -uo pipefail
+
+log() { echo "omamobile-hotdog-sleep: $*"; }
+
+channels=/sys/bus/rpmsg/devices
+quiet_ms=${OMAMOBILE_HOTDOG_SLEEP_QUIET_MS:-1500}
+settle_ms=${OMAMOBILE_HOTDOG_SLEEP_SETTLE_MS:-8000}
+step_ms=250
+
+# Messages on the armed channel so far (each is a wakeup event)
+events() { cat "$channels"/4080000.remoteproc:glink-edge.IPCRTR.*/power/wakeup_active_count 2>/dev/null | head -n 1; }
+
+net=/sys/class/net
+power=/sys/power
+rprocs=/sys/class/remoteproc
+sources=/sys/kernel/debug/wakeup_sources
+busy_s=${OMAMOBILE_HOTDOG_SLEEP_BUSY_S:-60}
+
+supplies=/sys/class/power_supply
+
+battery() {
+  local b
+  for b in "$supplies"/*; do
+    [[ $(cat "$b/type" 2>/dev/null) == Battery ]] || continue
+    log "battery $1: $(cat "$b/capacity" 2>/dev/null) % ($(cat "$b/charge_now" 2>/dev/null) uAh, $(cat "$b/status" 2>/dev/null))"
+    return 0
+  done
+}
+
+# Wakeup sources active now (column 6 of debugfs' list: active_since, ms)
+active_sources() {
+  awk 'NR > 1 && $6 > 0 { printf "%s%s", sep, $1; sep = " " }' "$sources" 2>/dev/null
+}
+
+# Remote processors that crashed and haven't come back yet
+crashed() {
+  local r out=
+  for r in "$rprocs"/remoteproc*; do
+    [[ $(cat "$r/state" 2>/dev/null) == crashed ]] && out+="${out:+ }$(cat "$r/name" 2>/dev/null)"
+  done
+  echo "$out"
+}
+
+# Wait, at most busy_s, while a remote processor is down after a crash or a
+# wakeup event is in progress: reading wakeup_count blocks until none is.
+wait_settled() {
+  local start=$SECONDS left c
+  while :; do
+    left=$((busy_s - (SECONDS - start)))
+    c=$(crashed)
+    if [[ -z $c ]] && ((left > 0)) && timeout "$left" cat "$power/wakeup_count" >/dev/null 2>&1; then
+      (( SECONDS - start < 1 )) || log "waited $((SECONDS - start)) s for wakeup events in progress (a remote processor restarting) to end"
+      return 0
+    fi
+    if (( SECONDS - start >= busy_s )); then
+      log "still busy after ${busy_s} s (crashed: ${c:-none}; active: $(active_sources)): sleeping anyway, the arm below cancels it if an event is still in progress"
+      return 1
+    fi
+    sleep 1
+  done
+}
+
+# Arm the sleep: from here on, a wakeup event cancels it (the kernel's
+# check at freeze, device suspend and in s2idle). Read (blocks while an
+# event is in progress) and write back the count; a write fails when an
+# event came in between, so try again a few times.
+arm_wakeup_count() {
+  local i count
+  for i in 1 2 3 4 5; do
+    count=$(timeout 5 cat "$power/wakeup_count" 2>/dev/null) || continue
+    if echo "$count" > "$power/wakeup_count" 2>/dev/null; then
+      log "armed: a wakeup event from now on cancels the sleep"
+      return 0
+    fi
+    sleep 0.2
+  done
+  log "could not arm wakeup_count (events keep coming: $(active_sources)): the sleep goes ahead unarmed"
+}
+
+# Every wireless interface that is up goes down (ath10k stops its firmware)
+wifi_down() {
+  local d
+  for d in "$net"/*; do
+    # Administratively up: IFF_UP (bit 0 of flags), whatever the carrier
+    [[ -e $d/phy80211 ]] && (( $(cat "$d/flags" 2>/dev/null || echo 0) & 1 )) || continue
+    ip link set dev "${d##*/}" down 2>/dev/null && log "${d##*/} down for the sleep"
+  done
+}
+
+modem_channel_wake() {
+  local f n=0 last now quiet=0 waited=0
+  for f in "$channels"/4080000.remoteproc:glink-edge.IPCRTR.*/power/wakeup; do
+    [[ -e $f ]] || continue
+    if [[ $(<"$f") != enabled ]]; then
+      echo enabled > "$f" 2>/dev/null || { log "could not arm $f"; continue; }
+    fi
+    n=$((n + 1))
+  done
+  if ((n == 0)); then
+    log "no wakeup-capable modem QRTR channel (kernel without GLINK wakeup, or the modem is down): calls and texts won't wake the phone"
+    return 0
+  fi
+  # Going to sleep makes the modem talk: ModemManager's terse mode,
+  # NetworkManager taking mobile data down, and their replies. A message that
+  # lands while the kernel suspends its devices aborts the sleep, as a call
+  # should, so wait until the channel has been quiet for a moment (S5).
+  # Wi-Fi too: its firmware's QMI service (WLFW) is on the modem's QRTR
+  # node, and NetworkManager leaves wlan0 up (only disconnected) for the
+  # sleep, so mac80211 stopped the radio inside the device suspend and the
+  # firmware's reply aborted it, every time. Take the link down first, so
+  # that exchange happens here; NetworkManager raises it again at wake.
+  wifi_down
+  last=$(events)
+  while ((quiet < quiet_ms && waited < settle_ms)); do
+    sleep "0.$((step_ms / 10))"
+    waited=$((waited + step_ms))
+    now=$(events)
+    if [[ $now == "$last" ]]; then quiet=$((quiet + step_ms)); else quiet=0 last=$now; fi
+  done
+  if ((quiet >= quiet_ms)); then
+    log "the modem's QRTR channel can wake the phone (quiet after ${waited} ms)"
+  else
+    log "the modem's QRTR channel can wake the phone (still busy after ${settle_ms} ms: the sleep may be aborted)"
+  fi
+}
+
+wake_reason() {
+  local irq name
+  irq=$(cat /sys/power/pm_wakeup_irq 2>/dev/null) || irq=
+  if [[ -n $irq ]]; then
+    name=$(awk -v i="$irq:" '$1 == i { $1 = ""; print; exit }' /proc/interrupts | tr -s ' ')
+    log "woken by IRQ $irq:${name:- (unknown)}"
+  else
+    # A wakeup event rather than an interrupt marked for wake (the modem's
+    # channel reports one): name the source that fired last.
+    name=$(awk 'NR > 1 && $9 > max { max = $9; n = $1 } END { print n }' /sys/kernel/debug/wakeup_sources 2>/dev/null)
+    log "no wake IRQ recorded${name:+ (latest wakeup source: $name)}"
+  fi
+}
+
+case "${1:-}/${2:-}" in
+  pre/suspend)
+    # A restarting modem has no channel to arm yet: wait for it first
+    wait_settled
+    modem_channel_wake
+    battery "before the sleep"
+    arm_wakeup_count
+    ;;
+  post/suspend)
+    wake_reason
+    battery "after the sleep"
+    ;;
+esac
+exit 0

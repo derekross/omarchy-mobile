@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# OnePlus 7T Pro: activate the SIM as the modem's primary subscription at
+# boot and after every modem restart (device/hotdog/MODEM-PLAN.md R4).
+[Unit]
+Description=SIM subscription for the OnePlus 7T Pro's modem
+Wants=omamobile-rmtfs.service
+After=omamobile-rmtfs.service omamobile-tqftpserv.service
+Before=ModemManager.service
+
+[Service]
+ExecStart=/usr/lib/omamobile/hotdog/omamobile-hotdog-sim-select
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

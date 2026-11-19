@@ -1,0 +1,802 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Decode Qualcomm CAMX "Chromatix" sensor module parameter files.
+
+Reads com.qti.sensormodule.<module>_<sensor>.bin (from the owner's own
+vendor image) and prints JSON: the module configuration (camera slot,
+names, lanes, lens), the sensor's I2C identity, power sequences, the
+exposure/gain register map, every register table (init, stream on/off,
+group hold, per resolution mode, ...) and the focus actuator's settings.
+
+Standalone, Python 3 standard library only. Run it with `python3 -I`.
+It never writes anything except to stdout (or --out). The decoded tables are
+vendor data: keep them out of public repositories.
+
+  python3 -I camx-sensormodule-decode.py [--hex] [--generic] [--out F] FILE...
+
+Binary layout (reverse-engineered from "Parameter Parser V1.3.2" files)
+-----------------------------------------------------------------------
+All integers little-endian.
+
+  0x00  char[28]  "QTI Chromatix Header", NUL padded
+  0x1c  u32       total file size
+  0x20  u16,u16   format version (1, 1)
+  0x28  char[112] "Parameter Parser V1.3.2 (<build>)", NUL padded
+  0x98  u32       offset of the section table (0xa0)
+  0x9c  u32       number of sections (3)
+  0xa0  section table, 24 bytes per entry: u64 index, u64 offset, u64 size
+          section 0: symbol table
+          section 1: data
+          section 2: 24 zero bytes (unused here)
+
+Symbol table: an array of 72-byte entries
+  u64 id; char name[32]; u64 isTopLevel; u64 marker; u64 offset; u64 size
+  (marker is 0 for top-level blocks, 0xffffffff otherwise; offset is
+  relative to the data section). Every top-level block (cameraModuleData,
+  sensorDriverData, PDConfigData, actuatorDriver, EEPROMDriverData,
+  flashDriverData, OISDriver) and every out-of-line blob (array, string,
+  optional element) has one symbol. Top-level blocks take ids 1..N; the
+  other ids follow in depth-first pre-order, and the blobs are laid out in
+  the data section in exactly that order, back to back.
+
+Data: the generated C structures, flattened so that every scalar field
+takes one 8-byte slot (UINT32/enum/BOOL zero-extended, FLOAT in the low 4
+bytes, DOUBLE as is, UINT64 as is). A pointer field is two slots,
+(count, symbolId): count elements of an array, the length of a string
+including its NUL, or 0/1 for an optional element (count 0 means absent,
+its symbol has size 0). The symbol's name is the XML element name of the
+field, "[0]" for an element of a string array. Arrays of scalars may pack
+elements to their natural size (one OIS EEPROM array uses 4-byte elements);
+blobs are padded to 8 bytes.
+
+So the file can be walked without a schema: in each blob, a slot pair
+(c, id) is a pointer exactly when id is the next symbol id in DFS order
+and that symbol's offset is the current end of the data laid out so far.
+That generic walk (--generic prints it) names every pointer field but not
+inline scalars. A second pass maps the slots onto the known structure
+(SCHEMA below), checking that each expected pointer has the expected
+symbol name; a mismatch is reported in "errors" and that block falls back
+to the generic dump, so a different parser version degrades to raw data
+instead of wrong labels.
+
+Field names: those of pointer fields come from the file itself. Names of
+inline scalars follow CAMX sensor XML conventions and were checked against
+the data (sensor ID 0x586/0x471/0x30d5 at 0x0016/0x0000, 0x34c/0x34e/0x340/
+0x342/0x202/0x204 SMIA registers, LL x FLL x fps consistent with the pixel
+clock). Fields marked with a "?" in their name are best guesses.
+Enumerations follow the kernel's cam_sensor headers (power sequence types,
+I2C frequency modes, I2C address/data types).
+
+Actuator (actuatorDriver): name, 8-bit slave address, I2C mode, type,
+DAC width, power sequences, the position register (registerParam: address
+and data types, register, operation, hwMask, hwShift, delayUs?, dataShift),
+init/deinit register tables (same rows as the sensor's), initial code, the
+step region (macro/infinity step boundaries, codes per step) and the two
+ringing scenarios. Labels with "?" are guesses; dataShift is the last slot
+(6 for the 10-bit AK7374, 0 for the LC898217XC).
+
+Gain formulas: the files carry realToRegGain/regToRealGain as empty strings;
+the conversion lives in com.qti.sensor.<sensor>.so. GAIN_HINTS below holds
+what those libraries compute, read from their constant pools.
+"""
+
+import argparse
+import json
+import struct
+import sys
+
+MAGIC = b"QTI Chromatix Header"
+
+
+class FormatError(Exception):
+    pass
+
+
+class SchemaError(Exception):
+    pass
+
+
+# --------------------------------------------------------------------------
+# Container and generic walk
+
+
+class Sym:
+    __slots__ = ("id", "name", "top", "off", "size")
+
+    def __init__(self, id_, name, top, off, size):
+        self.id, self.name, self.top, self.off, self.size = id_, name, top, off, size
+
+
+class Ptr:
+    """A pointer field: count elements in symbol sym, with children items."""
+
+    __slots__ = ("count", "sym", "items", "raw")
+
+    def __init__(self, count, sym, items, raw):
+        self.count, self.sym, self.items, self.raw = count, sym, items, raw
+
+
+class ChromatixFile:
+    def __init__(self, data):
+        self.d = data
+        if not data.startswith(MAGIC):
+            raise FormatError("not a QTI Chromatix file (magic missing)")
+        size = struct.unpack_from("<I", data, 0x1C)[0]
+        if size != len(data):
+            raise FormatError("size field %d != file size %d" % (size, len(data)))
+        self.version = struct.unpack_from("<HH", data, 0x20)
+        self.parser = data[0x28:0x98].split(b"\0")[0].decode("ascii", "replace")
+        toff, tcnt = struct.unpack_from("<II", data, 0x98)
+        if tcnt < 2 or toff + 24 * tcnt > len(data):
+            raise FormatError("bad section table")
+        self.sections = [struct.unpack_from("<QQQ", data, toff + 24 * i) for i in range(tcnt)]
+        for _, off, sz in self.sections:
+            if off + sz > len(data):
+                raise FormatError("section past end of file")
+        _, so, ss = self.sections[0]
+        _, self.dbase, self.dsize = self.sections[1]
+        if ss % 72:
+            raise FormatError("symbol table size %d not a multiple of 72" % ss)
+        self.syms = {}
+        for i in range(ss // 72):
+            e = so + 72 * i
+            sid = struct.unpack_from("<Q", data, e)[0]
+            name = data[e + 8:e + 40].split(b"\0")[0].decode("ascii", "replace")
+            top, _marker, off, sz = struct.unpack_from("<QQQQ", data, e + 40)
+            if off + sz > self.dsize:
+                raise FormatError("symbol %d (%s) outside data section" % (sid, name))
+            self.syms[sid] = Sym(sid, name, top == 1, off, sz)
+        self.tops = sorted((s for s in self.syms.values() if s.top), key=lambda s: s.id)
+        self._walk()
+
+    def blob(self, sym):
+        o = self.dbase + sym.off
+        return self.d[o:o + sym.size]
+
+    def _walk(self):
+        self.next_id = len(self.tops) + 1
+        self.cursor = sum(s.size for s in self.tops)
+        self.trees = {}
+        for t in self.tops:
+            self.trees[t.name] = self._items(t)
+        if self.next_id != max(self.syms) + 1:
+            raise FormatError("generic walk consumed %d of %d symbols"
+                              % (self.next_id - 1, max(self.syms)))
+
+    def _items(self, sym):
+        raw = self.blob(sym)
+        n = len(raw) // 8
+        slots = struct.unpack_from("<%dQ" % n, raw) if n else ()
+        items = []
+        k = 0
+        while k < n:
+            if k + 1 < n and slots[k + 1] == self.next_id and self.next_id in self.syms:
+                child = self.syms[self.next_id]
+                if child.off == self.cursor and not child.top:
+                    self.next_id += 1
+                    self.cursor += child.size
+                    items.append(Ptr(slots[k], child, self._items(child), self.blob(child)))
+                    k += 2
+                    continue
+            items.append(slots[k])
+            k += 1
+        return items
+
+
+def guess_scalar(v):
+    hi, lo = v >> 32, v & 0xFFFFFFFF
+    if hi == 0:
+        if 0x30000000 < lo < 0x4F000000:
+            f = struct.unpack("<f", struct.pack("<I", lo))[0]
+            return {"u": v, "float?": round(f, 7)}
+        return v
+    d = struct.unpack("<d", struct.pack("<Q", v))[0]
+    if 1e-30 < abs(d) < 1e30:
+        return {"double?": d}
+    return {"u64": v}
+
+
+def generic(items):
+    out = []
+    for it in items:
+        if isinstance(it, Ptr):
+            s = as_string(it)
+            out.append({"field": it.sym.name, "count": it.count,
+                        "value": s if s is not None else generic(it.items)})
+        else:
+            out.append(guess_scalar(it))
+    return out
+
+
+def as_string(p):
+    """A (length, id) pointer whose blob holds length-1 printable chars + NUL."""
+    if p.items and any(isinstance(i, Ptr) for i in p.items):
+        return None
+    if p.count == 0 or p.count > len(p.raw):
+        return None
+    b = p.raw[:p.count]
+    if b[-1:] != b"\0" or any(c < 0x20 or c > 0x7E for c in b[:-1]):
+        return None
+    if len(p.raw) != (p.count + 7) // 8 * 8:
+        return None
+    if p.count == 1 and p.raw.strip(b"\0"):
+        return None
+    return b[:-1].decode("ascii")
+
+
+# --------------------------------------------------------------------------
+# Schema-driven mapping
+
+
+def as_double(v):
+    return struct.unpack("<d", struct.pack("<Q", v))[0]
+
+
+def as_float(v):
+    return struct.unpack("<f", struct.pack("<I", v & 0xFFFFFFFF))[0]
+
+
+class Cur:
+    def __init__(self, items, where):
+        self.items, self.i, self.where = items, 0, where
+
+    def scalar(self, what):
+        if self.i >= len(self.items):
+            raise SchemaError("%s: ran out of slots at %s" % (self.where, what))
+        v = self.items[self.i]
+        if isinstance(v, Ptr):
+            raise SchemaError("%s: expected scalar %s, found pointer '%s'"
+                              % (self.where, what, v.sym.name))
+        self.i += 1
+        return v
+
+    def ptr(self, name):
+        if self.i >= len(self.items):
+            raise SchemaError("%s: ran out of slots at pointer %s" % (self.where, name))
+        v = self.items[self.i]
+        if not isinstance(v, Ptr):
+            raise SchemaError("%s: expected pointer %s, found scalar %#x" % (self.where, name, v))
+        if name is not None and v.sym.name != name:
+            raise SchemaError("%s: expected pointer %s, found '%s'" % (self.where, name, v.sym.name))
+        self.i += 1
+        return v
+
+    def peek_ptr(self, name):
+        return (self.i < len(self.items) and isinstance(self.items[self.i], Ptr)
+                and self.items[self.i].sym.name == name)
+
+    def done(self):
+        return self.i >= len(self.items)
+
+    def rest(self):
+        r = self.items[self.i:]
+        self.i = len(self.items)
+        return r
+
+
+def read_struct(cur, spec, ctx):
+    """spec: list of (name, kind[, arg]). Returns a dict."""
+    out = {}
+    for f in spec:
+        name, kind = f[0], f[1]
+        arg = f[2] if len(f) > 2 else None
+        sym = arg if kind in ("opt_u", "opt_d", "str", "strarr", "opt_raw", "u_array") else None
+        if kind == "u":
+            out[name] = cur.scalar(name)
+        elif kind == "d":
+            out[name] = as_double(cur.scalar(name))
+        elif kind == "f":
+            out[name] = round(as_float(cur.scalar(name)), 7)
+        elif kind == "opt_u" or kind == "opt_d":
+            p = cur.ptr(sym or name)
+            if p.count == 0:
+                out[name] = None
+            else:
+                vals = [v for v in p.items if not isinstance(v, Ptr)]
+                conv = as_double if kind == "opt_d" else (lambda x: x)
+                out[name] = conv(vals[0]) if p.count == 1 else [conv(x) for x in vals[:p.count]]
+        elif kind == "u_array":
+            p = cur.ptr(sym or name)
+            out[name] = unpack_uarray(p)
+        elif kind == "str":
+            p = cur.ptr(sym or name)
+            s = as_string(p)
+            if s is None:
+                raise SchemaError("%s: %s is not a string" % (cur.where, name))
+            out[name] = s
+        elif kind == "strarr":
+            p = cur.ptr(sym or name)
+            vals = []
+            for it in p.items:
+                if not isinstance(it, Ptr):
+                    raise SchemaError("%s: %s element is not a string" % (cur.where, name))
+                vals.append(as_string(it))
+            out[name] = vals[0] if len(vals) == 1 else (vals or None)
+        elif kind == "opt_raw":
+            p = cur.ptr(sym or name)
+            out[name] = generic(p.items) if p.count else None
+        elif kind == "array":
+            # arg = (symbol name, element reader)
+            symname, reader = arg
+            p = cur.ptr(symname)
+            sub = Cur(p.items, "%s.%s" % (cur.where, name))
+            out[name] = [reader(sub, ctx) for _ in range(p.count)]
+            if not sub.done():
+                raise SchemaError("%s: %d unread slots" % (sub.where, len(sub.items) - sub.i))
+        elif kind == "inline":
+            out[name] = arg(cur, ctx)
+        else:
+            raise AssertionError(kind)
+    return out
+
+
+def unpack_uarray(p):
+    if p.count == 0:
+        return []
+    if p.count * 8 <= len(p.raw):
+        vals = struct.unpack_from("<%dQ" % p.count, p.raw)
+    else:
+        vals = struct.unpack_from("<%dI" % p.count, p.raw)
+    return list(vals)
+
+
+I2C_TYPE = {1: "BYTE", 2: "WORD", 3: "3B", 4: "DWORD"}
+I2C_FREQ = {0: "STANDARD (100 kHz)", 1: "FAST (400 kHz)", 2: "CUSTOM", 3: "FAST_PLUS (1 MHz)"}
+POWER_TYPE = {0: "MCLK", 1: "VANA", 2: "VDIG", 3: "VIO", 4: "VAF", 5: "VAF_PWDM",
+              6: "CUSTOM_REG1", 7: "CUSTOM_REG2", 8: "RESET", 9: "STANDBY",
+              10: "CUSTOM_GPIO1", 11: "CUSTOM_GPIO2"}
+CFA = {0: "RGGB", 1: "GRBG", 2: "GBRG", 3: "BGGR", 4: "Y"}
+CSI_DT = {0x12: "EMBEDDED", 0x2a: "RAW8", 0x2b: "RAW10", 0x2c: "RAW12", 0x2d: "RAW14"}
+STREAM_TYPE = {1: "IMAGE", 2: "PDAF", 3: "HDR/META?"}
+POSITION = {0: "REAR", 1: "FRONT", 2: "REAR_AUX"}
+
+# From the com.qti.sensor.<name>.so constant pools (not in the .bin).
+GAIN_HINTS = {
+    "imx586": "analog reg = 1024 - 1024/gain (Sony, 10-bit; lib clamps to max/min gain); "
+              "digital gain written as Q8.8 (gain * 256)",
+    "imx481": "analog reg = 1024 - 1024/gain (Sony); digital gain Q8.8",
+    "imx471": "analog reg = 1024 - 1024/gain, reg clamped to 960 (16x); digital gain Q8.8",
+    "s5k3m5": "analog reg = gain * 32 (0x20 = 1x, Samsung); digital gain per channel",
+}
+
+
+def rd_power(cur, ctx):
+    t = cur.scalar("configType")
+    return {"type": POWER_TYPE.get(t, t), "typeId": t,
+            "configValue": cur.scalar("configValue"), "delayMs": cur.scalar("delayMs")}
+
+
+def rd_reg(cur, ctx):
+    slave = cur.ptr("slaveAddr")
+    addr = cur.scalar("registerAddr")
+    data = unpack_uarray(cur.ptr("registerData"))
+    at = cur.scalar("regAddrType")
+    dt = cur.scalar("regDataType")
+    op = cur.scalar("operation")
+    dl = cur.ptr("delayUs")
+    delay = unpack_uarray(dl)[0] if dl.count else 0
+    sl = unpack_uarray(slave)[0] if slave.count else None
+    val = data[0] if len(data) == 1 else data
+    return [addr, val, delay, at, dt, op, sl]
+
+
+REG_COLUMNS = ["addr", "value (list = burst)", "delayUs", "addrType", "dataType",
+               "operation(0=write?)", "slaveAddr override"]
+
+
+def rd_regs(cur, ctx, name="regSetting"):
+    p = cur.ptr(name)
+    sub = Cur(p.items, cur.where + "." + name)
+    regs = [rd_reg(sub, ctx) for _ in range(p.count)]
+    if not sub.done():
+        raise SchemaError("%s: unread slots" % sub.where)
+    return regs
+
+
+def rd_opt_regblock(name):
+    """Optional element containing only a regSetting array."""
+    def f(cur, ctx):
+        p = cur.ptr(name)
+        if p.count == 0:
+            return None
+        sub = Cur(p.items, cur.where + "." + name)
+        out = [rd_regs(sub, ctx) for _ in range(p.count)]
+        if not sub.done():
+            raise SchemaError("%s: unread slots" % sub.where)
+        return out[0] if p.count == 1 else out
+    return f
+
+
+def rd_multi_regblock(name):
+    """Optional element whose body is several regSetting arrays."""
+    def f(cur, ctx):
+        p = cur.ptr(name)
+        if p.count == 0:
+            return None
+        sub = Cur(p.items, cur.where + "." + name)
+        out = []
+        while not sub.done():
+            out.append(rd_regs(sub, ctx))
+        return out
+    return f
+
+
+def rd_stream(cur, ctx):
+    vc, dt = cur.scalar("vc"), cur.scalar("dt")
+    x, y, w, h = (cur.scalar(n) for n in ("xStart", "yStart", "width", "height"))
+    bw, ty = cur.scalar("bitWidth"), cur.scalar("type")
+    return {"vc": vc, "dt": dt, "dtName": CSI_DT.get(dt, "0x%02x" % dt), "xStart": x,
+            "yStart": y, "width": w, "height": h, "bitWidth": bw,
+            "type": STREAM_TYPE.get(ty, ty), "typeId": ty}
+
+
+def rd_resdata(cur, ctx):
+    r = {}
+    cfa = cur.scalar("colorFilterArrangement")
+    r["colorFilterArrangement"] = CFA.get(cfa, cfa)
+    r["colorFilterArrangementId"] = cfa
+    r.update(read_struct(cur, [("streamConfiguration", "array",
+                                ("streamConfiguration", rd_stream))], ctx))
+    r.update(read_struct(cur, [
+        ("lineLengthPixelClock", "u"), ("frameLengthLines", "u"),
+        ("minHorizontalBlanking", "u"), ("minVerticalBlanking", "u"),
+        ("outputPixelClock", "u"), ("horizontalBinning", "u"), ("verticalBinning", "u"),
+        ("frameRate", "d"), ("laneCount", "u"),
+        ("downScaleFactor", "opt_raw"), ("settleTimeNs?", "u"), ("is3Phase", "u"),
+        ("integrationInfo", "opt_raw"),
+    ], ctx))
+    r["regSetting"] = rd_regs(cur, ctx)
+    r["cropInfo?"] = dict(zip(("left", "right", "top", "bottom"),
+                              (cur.scalar("crop") for _ in range(4))))
+    r.update(read_struct(cur, [
+        ("ZZHDRInfo", "opt_raw"), ("HDR3ExposureInfo", "opt_raw"),
+        ("RemosaicTypeInfo", "opt_raw"), ("capability", "u_array"),
+    ], ctx))
+    for n in ("IHDRSeamlessInfo", "IZOOMSeamlessInfo"):
+        p = cur.ptr(n)
+        r[n] = None if not p.count else dict(zip(
+            ("lineLengthPixelClock", "frameLengthLines"), unpack_uarray_slots(p)))
+    # derived values
+    img = [s for s in r["streamConfiguration"] if s["typeId"] == 1] or r["streamConfiguration"]
+    if img:
+        r["width"], r["height"] = img[0]["width"], img[0]["height"]
+        r["bitDepth"], r["csiDataType"] = img[0]["bitWidth"], img[0]["dtName"]
+    # Derived, not stored in the file.
+    der = {"vtPixelClockHz (LL*FLL*fps)": round(r["lineLengthPixelClock"]
+                                                * r["frameLengthLines"] * r["frameRate"])}
+    if r["frameLengthLines"] and r["frameRate"]:
+        der["lineTimeNs (1e9/(FLL*fps))"] = round(1e9 / (r["frameLengthLines"] * r["frameRate"]), 1)
+    if r["outputPixelClock"] and img and r["laneCount"]:
+        bits = r["outputPixelClock"] * img[0]["bitWidth"]
+        der["linkBitsPerSecond (opclk*bpp)"] = bits
+        der["perLaneOrTrio (opclk*bpp/lanes)"] = bits // r["laneCount"]
+    r["derived"] = der
+    return r
+
+
+def unpack_uarray_slots(p):
+    n = len(p.raw) // 8
+    return list(struct.unpack_from("<%dQ" % n, p.raw)) if n else []
+
+
+def rd_resinfo(cur, ctx):
+    r = read_struct(cur, [("sensorVersion", "opt_u")], ctx)
+    r.update(read_struct(cur, [("resolutionData", "array", ("resolutionData", rd_resdata))], ctx))
+    return r
+
+
+def rd_initsettings(cur, ctx):
+    return {"sensorVersion?": cur.scalar("sensorVersion"), "regSetting": rd_regs(cur, ctx)}
+
+
+def rd_testpattern(cur, ctx):
+    return {"mode?": cur.scalar("mode"), "regSetting": rd_regs(cur, ctx)}
+
+
+def rd_sensor_driver(cur, ctx):
+    s = {}
+    s["moduleVersion"] = [cur.scalar("major"), cur.scalar("minor"), cur.scalar("incr")]
+    slave = read_struct(cur, [
+        ("sensorName", "str"), ("slaveAddress8bit", "u"), ("regAddrType", "u"),
+        ("regDataType", "u"), ("sensorIdRegAddr", "u"), ("sensorId", "u"),
+        ("sensorIdMask", "u"), ("i2cFrequencyMode", "u"),
+        ("powerUpSequence", "array", ("powerSetting", rd_power)),
+        ("powerDownSequence", "array", ("powerSetting", rd_power)),
+    ], ctx)
+    slave["slaveAddress7bit"] = slave["slaveAddress8bit"] >> 1
+    slave["i2cFrequencyModeName"] = I2C_FREQ.get(slave["i2cFrequencyMode"])
+    slave["regAddrTypeName"] = I2C_TYPE.get(slave["regAddrType"])
+    slave["regDataTypeName"] = I2C_TYPE.get(slave["regDataType"])
+    mclk = [p["configValue"] for p in slave["powerUpSequence"] if p["typeId"] == 0]
+    slave["mclkHz"] = mclk[0] if mclk else None
+    s["slaveInfo"] = slave
+    s["regAddrInfo"] = read_struct(cur, [
+        ("xOutput", "u"), ("yOutput", "u"), ("frameLengthLines", "u"),
+        ("lineLengthPixelClock", "u"), ("coarseIntgTimeAddr", "u"),
+        ("shortCoarseIntgTimeAddr", "opt_u"), ("globalGainAddr", "u"),
+        ("shortGlobalGainAddr", "opt_u"), ("digitalGlobalGainAddr", "opt_u"),
+        ("digitalGainRedAddr", "opt_u"), ("digitalGainGreenRedAddr", "opt_u"),
+        ("digitalGainBlueAddr", "opt_u"), ("digitalGainGreenBlueAddr", "opt_u"),
+        ("testPatternRAddr", "u"), ("testPatternGRAddr", "u"),
+        ("testPatternBAddr", "u"), ("testPatternGBAddr", "u"),
+    ], ctx)
+    ri = read_struct(cur, [("resolutionInfo", "array", ("resolutionInfo", rd_resinfo))], ctx)
+    s["resolutionInfo"] = ri["resolutionInfo"][0] if len(ri["resolutionInfo"]) == 1 \
+        else ri["resolutionInfo"]
+    ec = read_struct(cur, [
+        ("maxAnalogGain", "d"), ("maxDigitalGain?", "d"), ("minAnalogGain", "opt_d"),
+        ("verticalOffset", "u"), ("maxLineCount", "u"), ("minLineCount", "opt_u"),
+        ("unknownGain256?", "d"), ("realToRegGain", "str"), ("regToRealGain", "str"),
+    ], ctx)
+    ec["gainFormulaHint (from com.qti.sensor.<name>.so)"] = GAIN_HINTS.get(slave["sensorName"])
+    s["exposureControlInfo"] = ec
+    s["streamOnSettings"] = rd_regs(cur, ctx)
+    s["streamOffSettings"] = rd_regs(cur, ctx)
+    s["groupHoldOnSettings"] = rd_regs(cur, ctx)
+    s["groupHoldOffSettings"] = rd_regs(cur, ctx)
+    for n in ("masterSettings", "slaveSettings", "slaveOffSettings"):
+        s[n] = rd_opt_regblock(n)(cur, ctx)
+    s.update(read_struct(cur, [("initSettings", "array", ("initSettings", rd_initsettings))], ctx))
+    for n in ("iHDRSettings", "iZoomSettings"):
+        if cur.peek_ptr(n):
+            s[n] = rd_multi_regblock(n)(cur, ctx)
+    if cur.peek_ptr("testPatternData"):
+        s.update(read_struct(cur, [("testPatternData", "array",
+                                    ("testPatternData", rd_testpattern))], ctx))
+    s["colorLevelInfo"] = read_struct(cur, [
+        ("whiteLevel", "u"), ("rPedestal", "u"), ("grPedestal", "u"),
+        ("bPedestal", "u"), ("gbPedestal", "u")], ctx)
+    # The rest (pixel array / sensor properties / noise model) is only partly
+    # understood: keep it generic, pointer fields named.
+    s["sensorPropertyTail (unlabelled)"] = generic(cur.rest())
+    return s
+
+
+def rd_module_config(cur, ctx):
+    m = read_struct(cur, [
+        ("cameraId", "u"), ("moduleName", "strarr"), ("sensorName", "str"),
+        ("sensorSlaveAddress", "opt_u"), ("sensorI2CFrequencyMode", "opt_u"),
+        ("actuatorName", "strarr"), ("oisName", "strarr"), ("eepromName", "strarr"),
+        ("flashName", "strarr"), ("chromatixName", "strarr", "Name"), ("position", "u"),
+        ("laneAssign", "opt_u"), ("isComboMode", "opt_u"),
+        ("focalLength", "d"), ("fNumber", "d"), ("minFocusDistance", "d"),
+        ("totalFocusDistance", "d"), ("horizontalViewAngle", "d"), ("verticalViewAngle", "d"),
+        ("maxRollDegree", "opt_d"), ("maxPitchDegree", "opt_d"), ("maxYawDegree", "opt_d"),
+        ("pdafName", "strarr"),
+    ], ctx)
+    m["positionName"] = POSITION.get(m["position"])
+    la = m["laneAssign"]
+    if la is not None:
+        lanes = []
+        v = la
+        while True:
+            lanes.append(v & 0xF)
+            v >>= 4
+            if not v:
+                break
+        m["laneAssignList (CSI lane per logical lane)"] = lanes
+        m["laneAssignCount"] = len(lanes)
+    return m
+
+
+def rd_camera_module(cur, ctx):
+    ver = [cur.scalar("major"), cur.scalar("minor"), cur.scalar("incr")]
+    r = read_struct(cur, [("moduleConfiguration", "array",
+                           ("moduleConfiguration", rd_module_config))], ctx)
+    r["moduleVersion"] = ver
+    return r
+
+
+ACT_TYPE = {0: "VCM?"}
+ACT_OPERATION = {1: "WRITE_DAC?"}
+
+
+def rd_act_regparam(cur, ctx):
+    r = read_struct(cur, [("regAddrType", "u"), ("regDataType", "u"), ("registerAddr", "u"),
+                          ("registerData", "u"), ("operation", "u"), ("hwMask", "u"),
+                          ("hwShift", "u"), ("delayUs?", "u"), ("dataShift", "u")], ctx)
+    r["operationName"] = ACT_OPERATION.get(r["operation"])
+    return r
+
+
+def rd_act_region(cur, ctx):
+    return {"macroStepBoundary": cur.scalar("macroStepBoundary"),
+            "infinityStepBoundary": cur.scalar("infinityStepBoundary"),
+            "codePerStep": round(as_float(cur.scalar("codePerStep")), 7),
+            "qFactor?": cur.scalar("qFactor")}
+
+
+def rd_act_damping(cur, ctx):
+    v = [cur.scalar("damping") for _ in range(3)]
+    return {"dampingStep?": v[0], "dampingDelayUs?": v[1],
+            "hwParams?": v[2] - (1 << 16) if v[2] & 0x8000 else v[2]}
+
+
+def rd_act_scenario(cur, ctx):
+    return read_struct(cur, [("region", "array", ("region", rd_act_damping))], ctx)
+
+
+def rd_actuator(cur, ctx):
+    """actuatorDriver. Field names follow CAMX actuator XML conventions; the
+    order of the last registerParam fields (delayUs?, dataShift) is inferred
+    from the AK73xx family's MSB-aligned positions (shift 6 for 10 bits)."""
+    a = {"moduleVersion": [cur.scalar("major"), cur.scalar("minor"), cur.scalar("incr")]}
+    a.update(read_struct(cur, [
+        ("actuatorName", "str"), ("slaveAddress8bit", "u"), ("i2cFrequencyMode", "u"),
+        ("actuatorType", "u"), ("dataBitWidth", "u"),
+        ("powerUpSequence", "array", ("powerSetting", rd_power)),
+        ("powerDownSequence", "array", ("powerSetting", rd_power)),
+        ("registerParam", "array", ("registerParam", rd_act_regparam)),
+    ], ctx))
+    a["slaveAddress7bit"] = a["slaveAddress8bit"] >> 1
+    a["i2cFrequencyModeName"] = I2C_FREQ.get(a["i2cFrequencyMode"])
+    a["actuatorTypeName"] = ACT_TYPE.get(a["actuatorType"])
+    a["initSettings"] = rd_regs(cur, ctx)
+    a["deInitSettings"] = rd_regs(cur, ctx, "deInitSettings")
+    a["initialCode"] = cur.scalar("initialCode")
+    a.update(read_struct(cur, [("region", "array", ("region", rd_act_region))], ctx))
+    for n in ("forward", "backward"):
+        a[n + "Scenario?"] = {"stepBoundary?": cur.scalar(n)}
+        a[n + "Scenario?"].update(read_struct(cur, [("scenario", "array",
+                                                     ("scenario", rd_act_scenario))], ctx))
+    return a
+
+
+READERS = {"cameraModuleData": rd_camera_module, "sensorDriverData": rd_sensor_driver,
+           "actuatorDriver": rd_actuator}
+
+
+def decode(path, want_generic=False, hexfmt=False):
+    with open(path, "rb") as fh:
+        cf = ChromatixFile(fh.read())
+    out = {"file": path.rsplit("/", 1)[-1], "parser": cf.parser,
+           "formatVersion": list(cf.version), "blocks": [t.name for t in cf.tops],
+           "errors": []}
+    for name, items in cf.trees.items():
+        rd = READERS.get(name)
+        if rd is None:
+            if want_generic:
+                out[name] = {"generic": generic(items)}
+            continue
+        cur = Cur(items, name)
+        try:
+            out[name] = rd(cur, {})
+            if not cur.done():
+                raise SchemaError("%s: %d unread slots" % (name, len(cur.items) - cur.i))
+        except SchemaError as e:
+            out["errors"].append(str(e))
+            out[name] = {"generic": generic(items)}
+    out["summary"] = summarize(out)
+    out["registerColumns"] = REG_COLUMNS
+    if hexfmt:
+        hexify(out)
+    return out
+
+
+def summarize(o):
+    s = {}
+    cm = o.get("cameraModuleData", {})
+    mc = (cm.get("moduleConfiguration") or [{}])[0] if isinstance(cm, dict) else {}
+    sd = o.get("sensorDriverData", {})
+    if "cameraId" in mc:
+        s.update({"module": mc.get("moduleName"), "sensor": mc.get("sensorName"),
+                  "cameraId(slot)": mc.get("cameraId"), "position": mc.get("positionName"),
+                  "laneAssign": "0x%x" % mc["laneAssign"] if mc.get("laneAssign") is not None
+                  else None, "laneAssignCount": mc.get("laneAssignCount"),
+                  "isComboMode": mc.get("isComboMode"), "eeprom": mc.get("eepromName"),
+                  "actuator": mc.get("actuatorName"), "ois": mc.get("oisName"),
+                  "flash": mc.get("flashName")})
+    act = o.get("actuatorDriver", {})
+    if "actuatorName" in act:
+        rp = act["registerParam"][0] if act["registerParam"] else {}
+        s["actuatorDriver"] = {
+            "name": act["actuatorName"], "slaveAddress7bit": "0x%02x" % act["slaveAddress7bit"],
+            "i2cFrequency": act["i2cFrequencyModeName"], "dataBitWidth": act["dataBitWidth"],
+            "position": "reg 0x%02x, %s, value << %s" % (
+                rp.get("registerAddr", 0), I2C_TYPE.get(rp.get("regDataType")),
+                rp.get("dataShift")) if rp else None,
+            "init": len(act["initSettings"]), "deInit": len(act["deInitSettings"]),
+            "initialCode": act["initialCode"]}
+    if "slaveInfo" in sd:
+        si, ra = sd["slaveInfo"], sd["regAddrInfo"]
+        s.update({
+            "slaveAddress8bit": "0x%02x" % si["slaveAddress8bit"],
+            "slaveAddress7bit": "0x%02x" % si["slaveAddress7bit"],
+            "i2cFrequency": si["i2cFrequencyModeName"],
+            "chipId": "reg 0x%04x == 0x%x (mask 0x%x)" % (si["sensorIdRegAddr"], si["sensorId"],
+                                                          si["sensorIdMask"]),
+            "mclkHz": si["mclkHz"],
+            "powerUp": ["%s=%d/%dms" % (p["type"], p["configValue"], p["delayMs"])
+                        for p in si["powerUpSequence"]],
+            "powerDown": ["%s=%d/%dms" % (p["type"], p["configValue"], p["delayMs"])
+                          for p in si["powerDownSequence"]],
+            "exposureRegs": {k: (("0x%x" % v) if isinstance(v, int) else v)
+                             for k, v in ra.items()},
+            "gain": {k: v for k, v in sd["exposureControlInfo"].items()
+                     if not k.startswith("realTo") and not k.startswith("regTo")},
+            "registerCounts": {
+                "init": [len(i["regSetting"]) for i in sd.get("initSettings", [])],
+                "streamOn": len(sd["streamOnSettings"]), "streamOff": len(sd["streamOffSettings"]),
+                "groupHoldOn": len(sd["groupHoldOnSettings"]),
+                "groupHoldOff": len(sd["groupHoldOffSettings"]),
+                "master": len(sd["masterSettings"] or []), "slave": len(sd["slaveSettings"] or []),
+                "slaveOff": len(sd["slaveOffSettings"] or []),
+                "iHDR": [len(x) for x in sd.get("iHDRSettings") or []],
+                "iZoom": [len(x) for x in sd.get("iZoomSettings") or []],
+            },
+            "modes": [],
+        })
+        for i, m in enumerate(sd["resolutionInfo"]["resolutionData"]):
+            s["modes"].append(
+                "%d: %dx%d@%.2f LL=%d FLL=%d opclk=%d vtclk~%d %s %dbit %s lanes=%d%s cap=%s "
+                "regs=%d streams=%s" % (
+                    i, m.get("width", 0), m.get("height", 0), m["frameRate"],
+                    m["lineLengthPixelClock"], m["frameLengthLines"], m["outputPixelClock"],
+                    m["derived"]["vtPixelClockHz (LL*FLL*fps)"], m.get("csiDataType"),
+                    m.get("bitDepth", 0), m["colorFilterArrangement"], m["laneCount"],
+                    " CPHY" if m["is3Phase"] else "", m["capability"], len(m["regSetting"]),
+                    ",".join("%s:%dx%d/%s" % (st["type"], st["width"], st["height"], st["dtName"])
+                             for st in m["streamConfiguration"])))
+    return s
+
+
+def hexify(o):
+    """--hex: register tables as hex strings."""
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if k in ("regSetting", "streamOnSettings", "streamOffSettings", "initSettings",
+                     "deInitSettings",
+                     "groupHoldOnSettings", "groupHoldOffSettings") and isinstance(v, list):
+                o[k] = [hexreg(r) for r in v]
+            else:
+                hexify(v)
+    elif isinstance(o, list):
+        for v in o:
+            hexify(v)
+
+
+def hexreg(r):
+    if not (isinstance(r, list) and len(r) == 7):
+        hexify(r)
+        return r
+    a, v, d, at, dt, op, sl = r
+    w = {1: 2, 2: 4, 3: 6, 4: 8}
+    fv = ["0x%0*x" % (w.get(dt, 2), x) for x in v] if isinstance(v, list) \
+        else "0x%0*x" % (w.get(dt, 2), v)
+    return ["0x%0*x" % (w.get(at, 4), a), fv, d, at, dt, op,
+            None if sl is None else "0x%02x" % sl]
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("files", nargs="+")
+    ap.add_argument("--hex", action="store_true", help="register tables as hex strings")
+    ap.add_argument("--generic", action="store_true",
+                    help="also dump the other blocks (PDAF, EEPROM, flash, OIS) "
+                         "as a generic tree")
+    ap.add_argument("--summary", action="store_true", help="print only the summaries")
+    ap.add_argument("--out", help="write JSON here instead of stdout")
+    a = ap.parse_args()
+    res = []
+    rc = 0
+    for f in a.files:
+        try:
+            r = decode(f, a.generic, a.hex)
+            if r["errors"]:
+                rc = 1
+        except (FormatError, OSError, struct.error) as e:
+            r = {"file": f, "errors": ["%s: %s" % (type(e).__name__, e)]}
+            rc = 1
+        res.append({"file": r["file"], "summary": r.get("summary"), "errors": r["errors"]}
+                   if a.summary else r)
+    text = json.dumps(res, indent=1)
+    if a.out:
+        with open(a.out, "w") as fh:
+            fh.write(text + "\n")
+    else:
+        sys.stdout.write(text + "\n")
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())
