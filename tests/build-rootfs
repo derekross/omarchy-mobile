@@ -34,14 +34,15 @@ cat > "$t/bin/docker" <<'EOF'
 #!/bin/bash
 set -euo pipefail
 [[ $1 == run ]] || exit 0
-work="" device="" channel="" kernel_package="" install_link=""
+work="" device="" channel="" kernel_package="" install_link="" local_key=""
 while (($#)); do
   case $1 in
     -v) [[ $2 != *:/out ]] || work=${2%:/out}; shift ;;
     -e) [[ $2 != DEVICE=* ]] || device=${2#DEVICE=}
         [[ $2 != CHANNEL=* ]] || channel=${2#CHANNEL=}
         [[ $2 != KERNEL_PACKAGE=* ]] || kernel_package=${2#KERNEL_PACKAGE=}
-        [[ $2 != INSTALL_LINK=* ]] || install_link=${2#INSTALL_LINK=}; shift ;;
+        [[ $2 != INSTALL_LINK=* ]] || install_link=${2#INSTALL_LINK=}
+        [[ $2 != LOCAL_KEY=* ]] || local_key=${2#LOCAL_KEY=}; shift ;;
   esac
   shift
 done
@@ -58,6 +59,7 @@ fi
 printf '%s\n' "$device" > "$work/rootfs.img"
 printf '%s\n' "$kernel_package" > "$T/kernel-package.$device"
 printf '%s\n' "$install_link" > "$T/install-link.$device"
+printf '%s\n' "$local_key" > "$T/local-key.$device.$channel"
 printf 'device: %s\nomamobile channel: %s\n' "$device" "$channel" > "$work/MANIFEST"
 EOF
 cat > "$R/tests/rootfs-smoke" <<'EOF'
@@ -126,6 +128,11 @@ if build second --channel edge > "$t/channel.log" 2>&1; then fail "refuses an un
 grep -q 'stable, development or local' "$t/channel.log" || { cat "$t/channel.log"; fail "names the channels"; }
 build second > "$t/channel.log" 2>&1 || { cat "$t/channel.log"; fail "rebuild on stable"; }
 echo 'ok - the image follows stable by default, local with --local, development when asked'
+# Only a --local build is handed its key (rootfs/local-key.sh ships it;
+# tests/rootfs-local-key): stable and development builds get none
+[[ $(cat "$t/local-key.first.local") == /src/keys/first/public.asc ]] || fail "a --local build gets its own key"
+[[ -z $(cat "$t/local-key.second.stable") && -z $(cat "$t/local-key.second.development") ]] || fail "stable and development builds get no local key"
+echo 'ok - only a --local build is handed its local key'
 
 # A device package that ships boot files gets the kernel as a package and
 # the slot-B hook; one without them keeps the module tarball
