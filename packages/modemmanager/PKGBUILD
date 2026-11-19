@@ -1,0 +1,156 @@
+# SPDX-License-Identifier: 0BSD
+#
+# Omarchy Mobile build of ModemManager.
+#
+# Derived from Arch Linux's modemmanager PKGBUILD, 1.24.2-2
+# (https://gitlab.archlinux.org/archlinux/packaging/packages/modemmanager),
+# with its two cherry-picks unchanged. Omarchy Mobile changes:
+#  - cherry-picks upstream 9317cbc4 ("netlink: fix use-after-free calling
+#    completion_fn on transaction completion", on main since 2026-10-04, not
+#    in 1.24.2 or the mm-1-24 branch). ModemManager creates the rmnet link of
+#    a multiplexed data connection over netlink; 1.24.2 called the finished
+#    transaction's completion function through the freed transaction, and on
+#    the OnePlus 7T Pro (qcom-soc, IPA) the second data connection of every
+#    ModemManager run crashed it (SIGSEGV at 0x30 right after "net link
+#    qmapmux0.0 created"): mobile data could be turned on once per boot
+#    (device/hotdog/MODEM-PLAN.md R6). Drop it once a release carries it.
+#  - cherry-picks upstream 0edcb916 ("base-manager: fix cleanup of
+#    multiplexed bearers", on main, not in 1.24.2 or the mm-1-24 branch). Over
+#    IPA every bearer is multiplexed, so the modem's limit of non-multiplexed
+#    active bearers is 0, and 1.24.2's cleanup counted a connected bearer
+#    against that limit alone: ModemManager aborted (g_assert in
+#    mm_iface_modem_count_bearers) at every stop with mobile data on, at each
+#    shutdown of the OnePlus 7T Pro (device/hotdog/MODEM-PLAN.md R9).
+#  - pkgrel 2.2: Arch's and Arch Linux ARM's 1.24.2-2 plus .2, so it sorts
+#    above both; [omamobile] comes first in pacman.conf.
+#  - the source pinned by commit (1.24.2's) instead of the signed tag, so
+#    the build needs no maintainer keys; no gtk-doc, no modemmanager-docs.
+#  - arch=(aarch64) only.
+#
+# Maintainer of the original: Jan Alexander Steffens (heftig); contributor
+# Ionut Biru.
+
+pkgbase=modemmanager
+pkgname=(
+  modemmanager
+  libmm-glib
+)
+pkgver=1.24.2
+pkgrel=2.2
+pkgdesc="Mobile broadband modem management service (Omarchy Mobile: netlink use-after-free and multiplexed cleanup fixes)"
+url="https://www.freedesktop.org/wiki/Software/ModemManager/"
+arch=(aarch64)
+license=(
+  GPL-2.0-or-later
+  LGPL-2.1-or-later
+)
+depends=(
+  bash
+  glib2
+  glibc
+  hicolor-icon-theme
+  libgcc
+  libgudev
+  libmbim
+  libqmi
+  libqrtr-glib
+  mobile-broadband-provider-info
+  polkit
+  ppp
+  systemd-libs
+)
+makedepends=(
+  bash-completion
+  git
+  glib2-devel
+  gobject-introspection
+  meson
+  systemd
+  vala
+)
+# 1.24.2's commit (the tag); the cherry-picks below come from the same clone
+_commit=f2b9ab1ad78d322f32134a444b5b54c6e8160e19
+source=(
+  "git+https://gitlab.freedesktop.org/mobile-broadband/ModemManager.git#commit=$_commit"
+)
+b2sums=('SKIP')
+
+prepare() {
+  cd ModemManager
+
+  # Arch: fix gtk-doc build
+  git cherry-pick -n 1ec2b86239c3686e22034baae0068bd5d52779ae
+
+  # Arch: fix for Fibocom modems
+  # https://gitlab.archlinux.org/archlinux/packaging/packages/modemmanager/-/issues/1
+  git cherry-pick -n 018e44084825ab294ad2b5d5b301d2b9e2577eb1
+
+  # Omarchy Mobile: the netlink use-after-free (header)
+  git cherry-pick -n 9317cbc4702c7d6283e42a498cd9812e19eeccf3
+
+  # Omarchy Mobile: the bearer-count assertion at cleanup with multiplexed bearers
+  git cherry-pick -n 0edcb916ad2b7267caf73bbd9a31e46da0727a00
+}
+
+build() {
+  local meson_options=(
+    -D dbus_policy_dir=/usr/share/dbus-1/system.d
+    -D dist_version="\"$pkgver-$pkgrel\""
+    -D gtk_doc=false
+    -D polkit=permissive
+    -D vapi=true
+  )
+
+  arch-meson ModemManager build "${meson_options[@]}"
+  meson compile -C build
+}
+
+_pick() {
+  local p="$1" f d; shift
+  for f; do
+    d="$srcdir/$p/${f#$pkgdir/}"
+    mkdir -p "$(dirname "$d")"
+    mv "$f" "$d"
+    rmdir -p --ignore-fail-on-non-empty "$(dirname "$f")"
+  done
+}
+
+package_modemmanager() {
+  license=(GPL-2.0-or-later)
+  depends+=(
+    "libmm-glib=$pkgver-$pkgrel" libmm-glib.so
+    libgudev-1.0.so
+    libg{lib,object,io,module}-2.0.so
+    libmbim-glib.so
+    libqmi-glib.so
+    libsystemd.so
+  )
+  optdepends=(
+    'usb_modeswitch: install if your modem shows up as a storage drive'
+  )
+
+  meson install -C build --destdir "$pkgdir"
+
+  cd "$pkgdir"
+  _pick libmm usr/include
+  _pick libmm usr/lib/girepository-1.0
+  _pick libmm usr/lib/libmm-glib.so*
+  _pick libmm usr/lib/pkgconfig
+  _pick libmm usr/share/gir-1.0
+  _pick libmm usr/share/vala
+}
+
+package_libmm-glib() {
+  pkgdesc="ModemManager library"
+  license=(LGPL-2.1-or-later)
+  depends=(
+    glib2 libg{lib,object,io}-2.0.so
+    glibc
+    libgcc
+  )
+  provides=(libmm-glib.so)
+
+  mv libmm/* "$pkgdir"
+}
+
+# vim:set sw=2 sts=-1 et:
