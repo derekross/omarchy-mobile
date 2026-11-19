@@ -36,10 +36,10 @@ row stays hidden today: omamobile-device-husky blacklists `max77759_charger`
 (`omamobile-max77759.conf`), so there is no `max77759-charger` power supply
 until that blacklist is lifted on a kernel with
 derekross/linux-omarchy-mobile#266.
-A third page, Keyboard haptics, sets the strength
-of the tick feedbackd plays for key presses (low, medium or high); it
+A third page, Keyboard haptics, sets the pattern
+feedbackd plays for key presses (low: one light tick; medium: a tick, then a 40 ms gap; high: a stronger tick, then the gap; a first mapping, still to be confirmed by feel on the phone); it
 edits the user's feedbackd theme (`~/.config/feedbackd/themes/custom.json`, the
-two key entries of the `full` profile, never above 0.125 or 60 ms; the first version of the file is kept once as `custom.json.bak-haptics`, a theme that
+two key entries of the `full` profile, never above 0.125 or 60 ms in total; the first version of the file is kept once as `custom.json.bak-haptics`, a theme that
 does not have exactly those two entries is refused before anything changes). It never touches feedbackd's profile, so calls, messages and
 alarms ring as before; changing the level restarts feedbackd, so a ring in progress stops. A phone without such a theme (or with one that does not have exactly the two key entries) gets a plain
 message on the page and no buttons. That page runs

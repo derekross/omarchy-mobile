@@ -19,14 +19,20 @@ EOT
 run() { bash "$tmp/haptics.sh" "$@" || true; }
 eq() { [[ $1 == "$2" ]] || { echo "FAIL: got $1, want $2" >&2; exit 1; }; }
 
+# the full magnitudes and durations of both key entries, for every level
+pat() { /usr/bin/python3 -I -c 'import json,sys; print(sorted({(tuple(f["magnitudes"]),tuple(f["durations"])) for p in json.load(open(sys.argv[1]))["profiles"] for f in p["feedbacks"] if f.get("type")=="VibraPattern"}))' "$dir/custom.json"; }
+eq "$(pat)" '[((0.015,), (15,))]'
 eq "$(run get)" '{"level":"low"}'
 eq "$(run set level medium)" '{"level":"medium"}'
 eq "$(run get)" '{"level":"medium"}'
+eq "$(pat)" '[((0.07, 0.0), (15, 40))]'
 eq "$(run set level high)" '{"level":"high"}'
+eq "$(pat)" '[((0.1, 0.0), (15, 40))]'
 # "off" is not a level here: it would be the phone-wide silent profile, which this page never touches
 eq "$(run set level off)" '{"error":"bad value"}'
 eq "$(run get)" '{"level":"high"}'
 eq "$(run set level low)" '{"level":"low"}'
+eq "$(pat)" '[((0.015,), (15,))]'
 eq "$(run get)" '{"level":"low"}'
 eq "$(run set level loud)" '{"error":"bad value"}'
 eq "$(run set level 0.5)" '{"error":"bad value"}'
@@ -37,7 +43,7 @@ python3 - "$dir/custom.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
 fb = d["profiles"][0]["feedbacks"]
-assert all(f["magnitudes"][0] <= 0.125 and f["durations"][0] <= 60 for f in fb if f["type"] == "VibraPattern")
+assert all(all(0 <= m <= 0.125 for m in f["magnitudes"]) and sum(f["durations"]) <= 60 for f in fb if f["type"] == "VibraPattern")
 assert any(f["type"] == "Sound" for f in fb)
 PY
 # the mode of the file is kept, and the first theme is saved once

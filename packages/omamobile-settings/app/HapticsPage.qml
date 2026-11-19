@@ -12,9 +12,9 @@ ColumnLayout {
     property bool available: false
     property int reqId: -1
     readonly property var levels: [
-        { id: "low", label: qsTr("Low"), hint: qsTr("keyboard tick, gentlest") },
-        { id: "medium", label: qsTr("Medium"), hint: qsTr("keyboard tick") },
-        { id: "high", label: qsTr("High"), hint: qsTr("keyboard tick, strongest") }
+        { id: "low", label: qsTr("Low"), hint: qsTr("one light tick") },
+        { id: "medium", label: qsTr("Medium"), hint: qsTr("tick, then a short gap") },
+        { id: "high", label: qsTr("High"), hint: qsTr("stronger tick, then a short gap") }
     ]
     function apply(r) {
         busy = false
