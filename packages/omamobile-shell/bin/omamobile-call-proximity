@@ -1,0 +1,476 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""The screen off at the ear in calls, as on Android.
+
+While a call is dialling, ringing out or active with its audio on the
+earpiece (omatel's agent, through `omamobile-call-watch --observe`), this
+holds a proximity source open. When it reads near, the panel goes off
+(`omarchy-brightness-display off`) and the touchscreen is grabbed, so a
+cheek reaches nothing; when it reads far, or the call ends or leaves the
+earpiece, the panel comes back and the grab is let go.
+
+The proximity source, the first that exists:
+  - an input switch with SW_FRONT_PROXIMITY: the OnePlus 7T Pro's
+    touchscreen ("s6sy761 proximity"), whose ear mode runs only while the
+    switch is held open, so only in calls;
+  - iio-sensor-proxy's proximity (net.hadess.SensorProxy, HasProximity),
+    claimed for the call.
+With neither nothing happens.
+
+Off unless the device package opts in with /usr/share/omamobile/call-proximity
+(the OnePlus 7T Pro's does): without that file it exits at once, so a phone
+whose package doesn't ship it keeps its calls as they were.
+
+While the panel is off for the ear, `$XDG_RUNTIME_DIR/omamobile-call-proximity`
+exists, holds this process's PID and is kept locked by it (flock):
+`omamobile-keys dark-unlocked` (which omamobile-doubletap calls when the
+screen goes dark) leaves the phone unlocked then, as Android does, but only
+while that lock is held. A panel lit by hand in the meantime (the power key)
+is left alone: the grab goes, and the next near turns it off again.
+
+SIGTERM and SIGHUP (the unit stopped, the session ending, a package update)
+end it as the call's end does: panel on, grab released, marker removed. A
+kill that skips that (SIGKILL, a crash) can't leave the lock off: the lock
+on the marker and the grab die with the process, so dark-unlocked stops
+believing the marker at once. At the next start a marker no one holds is
+removed, and if the screen is still dark, `omamobile-keys dark-unlocked`
+locks the phone behind it, as it would have when the screen went dark.
+"""
+
+import fcntl
+import glob
+import json
+import os
+import select
+import signal
+import struct
+import subprocess
+import sys
+import time
+
+try:
+    from gi.repository import Gio, GLib
+except ImportError:      # no python-gobject: only the input switch
+    Gio = GLib = None
+
+CALL_STATES = ("dialing", "ringing-out", "active")
+POLL = 0.2               # s between reads of iio-sensor-proxy's proximity
+DBUS_TIMEOUT = 200       # ms for each call to the sensor proxy
+RESTART_AFTER = 5        # s before the call watcher is started again
+SETTLE = 1.5             # s after the panel is switched off before a lit
+                         # panel counts as lit by hand (DPMS reads Off some
+                         # 0.35 s after the request)
+
+EV_KEY, EV_ABS, EV_SW = 0x01, 0x03, 0x05
+SW_FRONT_PROXIMITY = 0x0b
+BTN_TOUCH = 0x14a
+ABS_MT_POSITION_X = 0x35
+INPUT_PROP_DIRECT = 0x01
+EVENT = struct.Struct("llHHi")
+EVIOCGRAB = 0x40044590
+
+
+def EVIOCGSW(length):
+    return 0x80000000 | (length << 16) | (ord("E") << 8) | 0x1b
+
+
+def flag_path():
+    return os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid(),
+                        "omamobile-call-proximity")
+
+
+def hold_flag():
+    """Create the marker and take the lock on it; returns its fd, which
+    holds the lock until it is closed (by _clear or by this process's end),
+    or None when another live process holds it already. Python's fds aren't
+    inherited, so a child never keeps the lock alive."""
+    path = flag_path()
+    while True:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # Locked the file that is still at the path, not one that
+            # clear_stale() unlinked in the meantime.
+            if os.fstat(fd).st_ino != os.stat(path).st_ino:
+                raise FileNotFoundError(path)
+        except BlockingIOError:
+            os.close(fd)
+            return None
+        except FileNotFoundError:
+            os.close(fd)
+            continue
+        except OSError:
+            os.close(fd)
+            raise
+        os.ftruncate(fd, 0)
+        os.write(fd, b"%d\n" % os.getpid())
+        return fd
+
+
+def clear_stale():
+    """Remove a marker no live process holds (its owner killed); returns
+    whether there was one."""
+    path = flag_path()
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except FileNotFoundError:
+        return False
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False        # a live owner holds it
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            return False
+        return True
+    finally:
+        os.close(fd)
+
+
+def wanted(state):
+    """Whether the call state from omamobile-call-watch wants the guard: a
+    call dialling, ringing out or active, with the audio on the earpiece."""
+    if not state.get("agent"):
+        return False
+    if (state.get("route") or "earpiece") != "earpiece":
+        return False
+    return any(c.get("state") in CALL_STATES for c in state.get("calls", []))
+
+
+def bitmask(text):
+    """A capabilities file (hex words, the most significant first) as an int."""
+    value = 0
+    for word in text.split():
+        value = (value << 64) | int(word, 16)
+    return value
+
+
+def has(mask, bit):
+    return bool(mask >> bit & 1)
+
+
+def read(path):
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def event_node(input_dir):
+    nodes = sorted(glob.glob(input_dir + "/event*"))
+    return "/dev/input/" + os.path.basename(nodes[0]) if nodes else None
+
+
+def find_proximity_switch(sysfs="/sys"):
+    """The first input device with SW_FRONT_PROXIMITY."""
+    for d in sorted(glob.glob(sysfs + "/class/input/input*"),
+                    key=lambda p: int(p.rsplit("input", 1)[1] or 0)):
+        if has(bitmask(read(d + "/capabilities/sw") or "0"), SW_FRONT_PROXIMITY):
+            node = event_node(d)
+            if node:
+                return node
+    return None
+
+
+def find_touchscreen(sysfs="/sys"):
+    """The touchscreen, as omamobile-doubletap finds it."""
+    for d in sorted(glob.glob(sysfs + "/class/input/input*"),
+                    key=lambda p: int(p.rsplit("input", 1)[1] or 0)):
+        props = bitmask(read(d + "/properties") or "0")
+        keys = bitmask(read(d + "/capabilities/key") or "0")
+        abs_ = bitmask(read(d + "/capabilities/abs") or "0")
+        if has(props, INPUT_PROP_DIRECT) and has(keys, BTN_TOUCH) and has(abs_, ABS_MT_POSITION_X):
+            node = event_node(d)
+            if node:
+                return node
+    return None
+
+
+def screen_dark(sysfs="/sys"):
+    """Whether the panel is off (a DSI connector's DPMS isn't On); None when
+    there is no DSI connector to tell."""
+    states = [read(p).strip() for p in glob.glob(sysfs + "/class/drm/*-DSI-*/dpms")]
+    states = [s for s in states if s]
+    if not states:
+        return None
+    return any(s != "On" for s in states)
+
+
+class SwitchSource:
+    """SW_FRONT_PROXIMITY on an input device: open while the call wants it."""
+
+    def __init__(self, path):
+        self.path = path
+        self.fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        self.near = False
+        try:
+            bits = bytearray(8)
+            fcntl.ioctl(self.fd, EVIOCGSW(len(bits)), bits)
+            self.near = has(int.from_bytes(bits, "little"), SW_FRONT_PROXIMITY)
+        except OSError:
+            pass
+
+    def fileno(self):
+        return self.fd
+
+    def update(self):
+        """Read what is pending; returns the state."""
+        try:
+            data = os.read(self.fd, EVENT.size * 32)
+        except BlockingIOError:
+            return self.near
+        if not data:
+            raise OSError("proximity switch gone")
+        for i in range(0, len(data) - EVENT.size + 1, EVENT.size):
+            _, _, type_, code, value = EVENT.unpack_from(data, i)
+            if type_ == EV_SW and code == SW_FRONT_PROXIMITY:
+                self.near = bool(value)
+        return self.near
+
+    def close(self):
+        os.close(self.fd)
+
+
+class IioSource:
+    """iio-sensor-proxy's proximity, claimed while the call wants it."""
+    NAME = "net.hadess.SensorProxy"
+    PATH = "/net/hadess/SensorProxy"
+
+    def __init__(self):
+        self.bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        if not self._get("HasProximity"):
+            raise OSError("no proximity sensor")
+        self._call(self.NAME, "ClaimProximity")
+        self.near = False
+
+    def _call(self, iface, method, args=None):
+        return self.bus.call_sync(self.NAME, self.PATH, iface, method, args, None,
+                                  Gio.DBusCallFlags.NONE, DBUS_TIMEOUT, None)
+
+    def _get(self, prop):
+        r = self._call("org.freedesktop.DBus.Properties", "Get",
+                       GLib.Variant("(ss)", (self.NAME, prop)))
+        return r.unpack()[0]
+
+    def fileno(self):
+        return None
+
+    def update(self):
+        try:
+            self.near = bool(self._get("ProximityNear"))
+        except Exception:   # noqa: BLE001 - the proxy restarting: keep the last state
+            pass
+        return self.near
+
+    def close(self):
+        try:
+            self._call(self.NAME, "ReleaseProximity")
+        except Exception:   # noqa: BLE001 - the proxy drops it when we leave the bus anyway
+            pass
+
+
+def open_source():
+    path = find_proximity_switch()
+    if path:
+        try:
+            return SwitchSource(path)
+        except OSError as e:
+            print("omamobile-call-proximity: %s: %s" % (path, e), flush=True)
+    if Gio is not None:
+        try:
+            return IioSource()
+        except Exception:   # noqa: BLE001 - no proxy, no sensor
+            pass
+    return None
+
+
+class Blank:
+    """The panel off and the touchscreen grabbed, and back."""
+
+    def __init__(self, run=subprocess.run, clock=time.monotonic):
+        self.run = run
+        self.clock = clock
+        self.touch = None
+        self.flag = None       # the marker's fd, holding its lock
+        self.on = False
+        self.since = 0.0
+        self.by_hand = False   # lit by hand while near: not again until far
+
+    def start(self):
+        if self.on:
+            return
+        self.flag = hold_flag()
+        # On before the panel goes off, so a stop at any point turns it on.
+        self.on = True
+        path = find_touchscreen()
+        if path:
+            try:
+                self.touch = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+                fcntl.ioctl(self.touch, EVIOCGRAB, 1)
+            except OSError as e:
+                print("omamobile-call-proximity: grab %s: %s" % (path, e), flush=True)
+                self._release_touch()
+        self.run(["omarchy-brightness-display", "off"], check=False)
+        self.since = self.clock()
+
+    def drain(self):
+        """Read and drop what the grabbed touchscreen sends."""
+        if self.touch is None:
+            return
+        try:
+            while os.read(self.touch, EVENT.size * 64):
+                pass
+        except BlockingIOError:
+            pass
+        except OSError:
+            self._release_touch()
+
+    def _release_touch(self):
+        if self.touch is not None:
+            try:
+                os.close(self.touch)   # also ends the grab
+            except OSError:
+                pass
+            self.touch = None
+
+    def _clear(self):
+        self._release_touch()
+        if self.flag is not None:
+            try:
+                os.unlink(flag_path())
+            except FileNotFoundError:
+                pass
+            os.close(self.flag)   # also ends the lock
+            self.flag = None
+        self.on = False
+
+    def stop(self):
+        if self.on:
+            self.run(["omarchy-brightness-display", "on"], check=False)
+        self._clear()
+
+    def follow(self, near, dark):
+        """One step: `near` from the source, `dark` from screen_dark()."""
+        if not near:
+            self.by_hand = False
+            self.stop()
+        elif not self.on:
+            # Near: off, unless it is dark already (the power key) or was
+            # lit by hand since it last read near.
+            if not self.by_hand and dark is not True:
+                self.start()
+        elif dark is False and self.clock() - self.since >= SETTLE:
+            # Lit by hand (the power key) while still near: keep it lit and
+            # give the touchscreen back.
+            self.by_hand = True
+            self._clear()
+
+
+def call_watch():
+    return subprocess.Popen(["omamobile-call-watch", "--observe"], stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, text=True, bufsize=1)
+
+
+ENABLE = os.environ.get("OMAMOBILE_CALL_PROXIMITY_ENABLE", "/usr/share/omamobile/call-proximity")
+
+
+def enabled(path=None):
+    return os.path.exists(ENABLE if path is None else path)
+
+
+class Stop(BaseException):
+    """SIGTERM or SIGHUP: leave as at a call's end. A BaseException, so
+    the D-Bus paths' `except Exception` can't swallow a stop that lands
+    during one of their calls and leave the panel dark."""
+
+
+def stop_on_signal(signum, frame):
+    raise Stop(signal.Signals(signum).name)
+
+
+def main():
+    if not enabled():
+        print("omamobile-call-proximity: not enabled on this phone (%s)" % ENABLE, flush=True)
+        return
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, stop_on_signal)
+    if clear_stale():
+        # The last run was killed with the panel off for the ear: what it
+        # kept unlocked locks now if the screen is still dark.
+        print("omamobile-call-proximity: removed a marker left by a killed run", flush=True)
+        if screen_dark() is True:
+            subprocess.run(["omamobile-keys", "dark-unlocked"], check=False)
+    blank = Blank()
+    source = None
+    want = False
+    watcher = call_watch()
+    try:
+        while True:
+            fds = [watcher.stdout]
+            if source is not None and source.fileno() is not None:
+                fds.append(source)
+            if blank.touch is not None:
+                fds.append(blank.touch)
+            ready = select.select(fds, [], [], POLL)[0]
+
+            if watcher.stdout in ready:
+                line = watcher.stdout.readline()
+                if not line:
+                    # The watcher ended (the session bus restarting): no call
+                    # until it is back.
+                    watcher.wait()
+                    want = False
+                    time.sleep(RESTART_AFTER)
+                    watcher = call_watch()
+                else:
+                    try:
+                        want = wanted(json.loads(line))
+                    except ValueError:
+                        pass
+
+            if blank.touch is not None and blank.touch in ready:
+                blank.drain()
+
+            if want and source is None:
+                source = open_source()
+                if source is not None:
+                    print("omamobile-call-proximity: in a call, proximity on", flush=True)
+            elif not want and source is not None:
+                blank.by_hand = False
+                blank.stop()
+                source.close()
+                source = None
+                print("omamobile-call-proximity: call over, proximity off", flush=True)
+
+            if source is None:
+                continue
+            try:
+                near = source.update()
+            except OSError as e:
+                print("omamobile-call-proximity: %s" % e, flush=True)
+                blank.stop()
+                source.close()
+                source = None
+                continue
+
+            blank.follow(near, screen_dark())
+    except Stop as e:
+        print("omamobile-call-proximity: %s, stopping" % e, flush=True)
+    finally:
+        # A second signal must not cut the cleanup short.
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            signal.signal(sig, signal.SIG_IGN)
+        blank.stop()
+        if source is not None:
+            source.close()
+        watcher.terminate()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(0)

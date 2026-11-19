@@ -5,12 +5,16 @@
 // What omamobile-fp-bridge publishes (/run/omamobile-fp-ui/state.json):
 //   {"op":"idle|enroll|auth","finger":false,"x":717,"y":2360,"r":121,
 //    "w":1440,"h":3120,"seq":7,"acquired":1,"remaining":24,"error":0,
-//    "last":"none|enrolled|match|nomatch|lockout|error","contact":false}
+//    "last":"none|enrolled|match|nomatch|lockout|error","contact":false,
+//    "illuminate":false}
 // x, y and r are panel pixels in the panel's own (portrait) orientation,
 // w and h the panel size they refer to. acquired, remaining and error are
 // the last ACQUIRED code, PROGRESS remaining (-1: none yet) and ERROR code
 // of the current or last operation, seq counts those events (older bridges
-// leave them out). Returns null for anything else.
+// leave them out). illuminate: the panel does not light the sensor itself
+// (no LHBM, as on the OnePlus 7T Pro): the shell draws a white disc over it
+// while a finger is down, as the stock system does. Returns null for
+// anything else.
 function parse(text) {
   var s
   try { s = JSON.parse(String(text || "")) } catch (e) { return null }
@@ -27,7 +31,8 @@ function parse(text) {
            last: ["enrolled", "match", "nomatch", "lockout", "error"].indexOf(s.last) >= 0 ? s.last : "none",
            // a touch that reached the sensor is still down; null: an older
            // bridge that does not say
-           contact: typeof s.contact === "boolean" ? s.contact : null }
+           contact: typeof s.contact === "boolean" ? s.contact : null,
+           illuminate: s.illuminate === true }
 }
 
 function active(state) {
