@@ -9,7 +9,9 @@
 # (D+/D- connected), as the bootloader leaves it. Stands aside once a Type-C
 # driver owns the chip. Only reads 0x25:0x93 and 0x69:0xb5 and writes
 # 0x25:0x93. It also logs every change of the switch, VBUS and the UDC state
-# to the journal (to explain the next loss).
+# to the journal (to explain the next loss). It wakes on udev events for
+# power_supply, udc and i2c (a plug, a gadget state change, a driver binding),
+# not on a timer; a look every RECHECK s covers a change that sends none.
 set -uo pipefail
 
 chg=0x69 tcpc=0x25
@@ -27,6 +29,10 @@ vbus_valid() { local v; v=$(rd $chg 0xb5) || return 1; (( ((v >> 5) & 3) == 3 ))
 tcpm_owns() { [[ -e /sys/bus/i2c/devices/$bus-0025/driver ]]; }
 udc_state() { cat /sys/class/udc/*/state 2>/dev/null | head -1; }
 
+RECHECK=${OMAMOBILE_USB_RESCUE_RECHECK:-30}
+# Each udev event ends a wait; the switch and VBUS are read again after it.
+coproc UEV { exec udevadm monitor --kernel --subsystem-match=power_supply \
+  --subsystem-match=udc --subsystem-match=i2c 2>/dev/null; }
 log "watching the USB data switch on I2C bus $bus"
 last=
 while :; do
@@ -42,5 +48,15 @@ while :; do
     log "VBUS valid, USBSW_CTRL $sw: closing the data switch"
     i2cset -f -y "$bus" $tcpc 0x93 0x09
   fi
-  sleep 2
+  if [[ -n ${UEV_PID:-} ]]; then
+    # Block until an event (then drain the burst a plug sends) or RECHECK.
+    if read -r -t "$RECHECK" -u "${UEV[0]}" _; then
+      while read -r -t 0.2 -u "${UEV[0]}" _; do :; done
+    elif (( $? <= 128 )); then
+      log "udevadm monitor ended; looking every 2 s"
+      unset UEV_PID
+    fi
+  else
+    sleep 2
+  fi
 done

@@ -148,6 +148,8 @@ bash -n bin/omamobile-usb-rescue || fail "the USB rescue parses"
 grep -q '10cb0000.i2c' bin/omamobile-usb-rescue || fail "the USB rescue watches husky's bus (hsi2c_11)"
 grep -q 'i2cset -f -y "$bus" $tcpc 0x93 0x09' bin/omamobile-usb-rescue || fail "the USB rescue closes the data switch"
 [[ $(grep -c 'i2cset' bin/omamobile-usb-rescue) -eq 1 ]] || fail "the USB rescue writes one register only"
+grep -q 'udevadm monitor --kernel --subsystem-match=power_supply' bin/omamobile-usb-rescue || fail "the USB rescue waits on udev events"
+! grep -qx '  sleep 2' bin/omamobile-usb-rescue || fail "the USB rescue has no fixed 2 s loop"
 grep -q '^ExecStart=/usr/bin/omamobile-usb-rescue$' vendor/systemd/system/omamobile-usb-rescue.service \
   || fail "the USB rescue unit runs the script"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service") == ../omamobile-usb-rescue.service ]] \
