@@ -37,7 +37,7 @@ row stays hidden today: omamobile-device-husky blacklists `max77759_charger`
 until that blacklist is lifted on a kernel with
 derekross/linux-omarchy-mobile#266.
 A third page, Keyboard haptics, sets the pattern
-feedbackd plays for key presses (low: one light tick; medium: a tick, then a 40 ms gap; high: a stronger tick, then the gap; a first mapping, still to be confirmed by feel on the phone); it
+feedbackd plays for key presses (low: one light tick; medium: a tick, then a 40 ms gap; high: a stronger tick, then the gap; tried by feel on a Pixel 8 Pro); it
 edits the user's feedbackd theme (`~/.config/feedbackd/themes/custom.json`, the
 two key entries of the `full` profile, never above 0.125 or 60 ms in total; the first version of the file is kept once as `custom.json.bak-haptics`, a theme that
 does not have exactly those two entries is refused before anything changes). It never touches feedbackd's profile, so calls, messages and

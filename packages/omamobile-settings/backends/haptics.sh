@@ -7,7 +7,7 @@
 #   low: one 0.015 tick (3, the lowest) for 15 ms;
 #   medium: 0.07 (17) for 15 ms, then 0 for 40 ms;
 #   high: 0.1 (25) for 15 ms, then the same 40 ms gap.
-# The gap levels are a first mapping, still to be confirmed by feel on the phone.
+# The gap levels were tried by feel on a Pixel 8 Pro (2026-11-19).
 # Nothing above 0.125 and no pattern longer than 60 ms in total is ever written.
 # Only the two key entries of the theme are written. feedbackd's profile, and so whether calls, messages and alarms
 # ring, is never touched here: a keyboard page does not change that. Changing the level restarts feedbackd (a ring
