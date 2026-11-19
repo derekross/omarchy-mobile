@@ -152,6 +152,29 @@ grep -n 'trap - PIPE' "$tmp/ps" | head -1 | cut -d: -f1 > "$tmp/rst"; grep -n 's
 (( $(<"$tmp/hal") < $(<"$tmp/ign") && $(<"$tmp/ign") < $(<"$tmp/cl") && $(<"$tmp/cl") < $(<"$tmp/rst") )) \
   || fail "SIGPIPE is ignored for the client only, after the HAL's spawn and back to default after it"
 echo "ok - the 9a's client outlives a bridge that stops first, so the stack's stop stays a clean one"
+# The 9a's graceful stop: the client alone first, with the stop-requested file written before its signal, so it
+# can stop the receiver through the HAL; the runner takes that exit as a clean stop
+sleep 30 & fake=$!
+mkdir -p "$tmp/run-ps"
+out=$(STOP_REQUESTED="$tmp/run-ps/stop-requested" FAKE=$fake bash -c '
+  say() { echo "say: $*"; }
+  pgrep() { [[ $* == "-f ^/omamobile/bin/omamobile-gnss-client " ]] && echo "$FAKE"; }
+  source <(awk "/^profile_stop\\(\\)/,/^}/" profiles/gnss-slsi.conf)
+  profile_stop
+  echo "returned"' 2>&1)
+grep -qx returned <<<"$out" || fail "profile_stop returns"
+[[ -e $tmp/run-ps/stop-requested ]] || fail "profile_stop writes the stop-requested file"
+rc=0; wait "$fake" || rc=$?
+(( rc == 143 )) || { kill "$fake" 2>/dev/null; fail "profile_stop sends the client TERM"; }
+out=$(STOP_REQUESTED="$tmp/run-ps/none" bash -c '
+  say() { :; }; pgrep() { return 1; }
+  source <(awk "/^profile_stop\\(\\)/,/^}/" profiles/gnss-slsi.conf)
+  profile_stop; echo "returned"')
+[[ $out == returned && ! -e $tmp/run-ps/none ]] || fail "no client: profile_stop writes nothing and returns"
+grep -n 'wait -n || true' -A 2 lib/omamobile-vendor-chroot | grep -c '\[\[ -e $STOP_REQUESTED \]\] && stop 0' >/dev/null \
+  || fail "the runner takes a requested stop's exit as clean"
+grep -q 'rm -f "$NSPID" "$STOP_REQUESTED"' lib/omamobile-vendor-chroot || fail "a new start drops an old stop-requested file"
+echo "ok - the 9a's stop ends the client first, through the HAL, and the runner calls that a clean stop"
 
 rm -rf "$tmp"
 echo "ok - the 9a's marker survives failed stops and clears only after a clean stop"
