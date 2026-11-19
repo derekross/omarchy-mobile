@@ -260,5 +260,26 @@ t0=$(date +%s); run set keyboard off >/dev/null; t1=$(date +%s)
 (( t1 - t0 <= 8 )) || { echo "FAIL: set keyboard off took $((t1 - t0)) s" >&2; exit 1; }
 printf '#!/bin/bash\necho "omarchy-shell $*" >> "$STUB_LOG"\n[[ -e $STUB_FAIL.omarchy-shell ]] && exit 1\nexit 0\n' > "$tmp/stubs/omarchy-shell"
 gone 14
+# e) get puts the unit in line with lock.json (an upgrade left keyboardAwake on, unit never enabled)
+echo '{"lock":120,"keyboardAwake":true,"applied":120,"override":false,"reloadPending":false}' > "$prefs"
+: > "$STUB_LOG"; eq "$(OMAMOBILE_LOCK_UNIT_ENABLED=0 run get)" '{"lock":120,"keyboardAwake":true,"keyboard":false,"effective":120}'
+eq "$(cat "$STUB_LOG")" "systemctl --user enable --now omamobile-lock-keyboard.service"
+: > "$STUB_LOG"; OMAMOBILE_LOCK_UNIT_ENABLED=1 run get >/dev/null; eq "$(cat "$STUB_LOG")" ""
+: > "$STUB_LOG"; run get >/dev/null  # no hook: asks systemctl (the stub says enabled), nothing to change
+eq "$(cat "$STUB_LOG")" "systemctl --user is-enabled --quiet omamobile-lock-keyboard.service"
+echo '{"lock":120,"keyboardAwake":false,"applied":120,"override":false,"reloadPending":false}' > "$prefs"
+: > "$STUB_LOG"; OMAMOBILE_LOCK_UNIT_ENABLED=1 run get >/dev/null
+eq "$(cat "$STUB_LOG")" "systemctl --user disable --now --no-block omamobile-lock-keyboard.service"
+: > "$STUB_LOG"; OMAMOBILE_LOCK_UNIT_ENABLED=0 run get >/dev/null; eq "$(cat "$STUB_LOG")" ""
+# systemctl fails: reported in the JSON, the choice is kept
+touch "$STUB_FAIL.systemctl"
+eq "$(OMAMOBILE_LOCK_UNIT_ENABLED=1 run get)" '{"lock":120,"keyboardAwake":false,"keyboard":false,"effective":120,"error":"could not stop the keyboard watcher"}'
+echo '{"lock":120,"keyboardAwake":true,"applied":120,"override":false,"reloadPending":false}' > "$prefs"
+eq "$(OMAMOBILE_LOCK_UNIT_ENABLED=0 run get)" '{"lock":120,"keyboardAwake":true,"keyboard":false,"effective":120,"error":"could not start the keyboard watcher"}'
+eq "$(pj keyboardAwake)" 'True'
+rm -f "$STUB_FAIL.systemctl"
+# no lock.json, or a broken one: the unit is never touched
+rm -f "$prefs"; : > "$STUB_LOG"; OMAMOBILE_LOCK_UNIT_ENABLED=1 run get >/dev/null; eq "$(cat "$STUB_LOG")" ""
+echo '{broken' > "$prefs"; OMAMOBILE_LOCK_UNIT_ENABLED=1 run get >/dev/null; eq "$(cat "$STUB_LOG")" ""
 ! grep -q 'idle' "$STUB_LOG" || { echo "FAIL: idle service touched" >&2; exit 1; }
 echo "lock backend: ok"
