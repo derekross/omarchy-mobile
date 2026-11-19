@@ -1,16 +1,22 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Waydroid plan: Android apps in a container (cheetah / gs201)
 
-Status (2026-10-13): **offline work done, nothing run on the phone.** The
+Status: **run on hardware.** On the OnePlus 7T Pro (2026-11-05), W0-W5
+pass and W6 partly (section 9): Android boots on the Adreno, reaches the
+internet through ufw and can't reach block devices or debugfs, but apps open
+at Android's freeform default size, not maximized. On the Pixel 7 Pro, the
+container and the session started and W4 ran with `omamobile-waydroid` 0.1.1
+to 0.1.3 (2026-11-09 and 11-10; recorded in those commits, not yet in
+section 9). Next: launch apps maximized (W8).
+
+Earlier status (2026-10-13): offline work done, nothing run on the phone. The
 kernel options are in `kernel/configs/omamobile.config` (the "Waydroid"
-block at the end, uncommitted) and verified with `merge_config.sh` and
+block at the end) and verified with `merge_config.sh` and
 `olddefconfig` on top of `omamobile-int`'s configuration: every option
 resolves as written, and the only side effects are the helpers they select
 (`FIB_RULES`, `NF_SOCKET_*`, `NF_TPROXY_*`, `NF_NAT_REDIRECT`,
 `NETFILTER_CONNCOUNT`, `TEXTSEARCH*`). No new kernel code and no new DT
-nodes are needed. The `packages/omamobile-waydroid` draft (0.1.0, uncommitted)
-passes `test/all`. Next: W0 (read-only) on the current kernel, then W1 (a
-kernel with the block above).
+nodes are needed.
 
 Goal: Android apps on the phone as phone apps, each in its own Hyprland
 window launched from our launcher, on our mainline kernel with GPU
@@ -467,4 +473,57 @@ Android-apps switch in quick settings that starts and stops the container.
 
 ## 9. Results
 
-None yet.
+### 2026-11-05, OnePlus 7T Pro (`hotdog`), `7.3.0-rc6-omamobile-push1-gb743280ab222`
+
+The first run recorded here, on the 7T Pro (Adreno 640, msm) rather than the
+Pixel, with the port's own builds of `omamobile-waydroid` (numbered 0.1.1 and
+0.1.2 in the port's tree, not this repository's 0.1.1 and 0.1.2; their msm
+check is what 0.1.6 brings here). Waydroid 1.6.3-1 and lxc 7.0.0 from Arch
+Linux ARM's `extra`; images `lineage-20.0-20260927-VANILLA` (system) and
+`lineage-20.0-20261022-MAINLINE` (vendor).
+
+- **W0:** every kernel option `ok` (the W1 block is in every `out-hotdog*`
+  build). The only `MISS` was the GPU: the check accepted Panthor only. The
+  port's build also accepts an msm render node when an Adreno is bound (msm's
+  render node sits on `msm_dpu`), and runs the Mali-G710 Mesa patch only on
+  Panthor. Waydroid itself maps `msm_dpu` to freedreno and binds only the
+  render node, no card node.
+- **W2:** the hook commented out all six lines (five in `lxc.py`, three tagged
+  lines in `container_manager.py`); the service stayed disabled.
+- **W3:** both images downloaded and verified in about 2.5 minutes; the
+  Mesa step said no patch is needed; `config_nodes` binds `renderD128` and no
+  video, framebuffer or debugfs node. Firewall rules under the dead-man
+  switch: a fresh SSH login worked, ufw stayed active.
+- **W4, first try: the container stopped about 19 s after start**
+  (`lxc-start: open_devnull: Operation not permitted - Can't open
+  /dev/null`): `lxc-omamobile.conf` held only the block-device deny, and LXC
+  7's cgroup2 filter then allows nothing. This repository's 0.1.1 fixed the
+  same fault with an allow list (#493); the port's build put
+  `lxc.cgroup2.devices.allow = a` before the deny instead, which is not what
+  ships here.
+- **W4 with that fix:** the container runs. Inside, `mknod` of a block device
+  (7:0 and 8:0) is refused with "Operation not permitted";
+  `/sys/kernel/debug` is empty; `/dev` has no `video*`, `fb*` or `sd*`;
+  `/dev/dri` holds only `renderD128`. The container starts with the session
+  (Waydroid 1.6), not with the service.
+- **W5: pass.** `sys.boot_completed` 1 within about a minute;
+  `GLES: freedreno, FD640, OpenGL ES 3.2 Mesa 26.0.8` (`ro.hardware.vulkan`
+  freedreno); ping to 1.1.1.1 and to a name both answer. No oops, no
+  `ufshcd_err_handler`, no "failed to get security context". The Adreno
+  `gpu fault ... source=CCU` lines and one `hangcheck recover` in the log come
+  from a host GPU context that faulted from 16:52, before Waydroid ran: the
+  7T Pro's existing host fault, not Android's.
+- **W6, partly:** F-Droid (signature checked against F-Droid's key)
+  installed with `waydroid app install`; its desktop entry has no
+  `NoDisplay`, Android's own twelve system apps all do. `waydroid app
+  launch` opens it as its own window, app ID `waydroid.org.fdroid.fdroid`,
+  focused, and Hyprland gives it the full 480x952. **But Android opens the app
+  as a freeform task at its default size** (751x1440 px of the 1440x2856
+  display, `sw250dp`), so the app is a small card in the middle of the
+  window with the shell showing around it. `am task resize <task> 0 0 1440
+  2856` inside Android made it fill the screen at once (`sw480dp`). Waydroid
+  1.6.3 has no setting for this: `launchApp` goes to Android's platform
+  service. Next: launch maximized (W8).
+- **Freeze:** with no Android window on screen the container froze within
+  about a minute, and an `lxc-attach` into a frozen container hangs; `waydroid
+  container unfreeze` first.
