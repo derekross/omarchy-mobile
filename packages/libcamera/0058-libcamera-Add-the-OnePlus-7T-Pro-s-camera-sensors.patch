@@ -1,0 +1,364 @@
+From 8bccf79953fb21ae79910e46de54bad787c2b265 Mon Sep 17 00:00:00 2001
+From: johannSo <jzeug@soppa.de>
+Date: Thu, 5 Nov 2026 10:07:29 +0100
+Subject: [PATCH] libcamera: Add the OnePlus 7T Pro's camera sensors
+
+The OnePlus 7T Pro's cameras are a Sony IMX586 (main), a Sony IMX481
+(ultrawide), a Samsung S5K3M5 (telephoto) and a Sony IMX471 (front, in
+the pop-up), captured through Qualcomm CAMSS and the simple pipeline
+handler with the software ISP.
+
+Add their camera sensor helpers: a black level of 64 at 10 bits (the
+pedestal the phone's vendor camera files give), Sony's analogue gain
+1024 / (1024 - code) for the three Sony sensors, and for the S5K3M5 the
+whole-step gain its kernel driver takes (1x to 16x). Add their sensor
+properties: the unit cells the sensors' makers give (0.8 um for the
+IMX586, 1.0 um for the others) and two-frame control delays. The test
+pattern numbering is not listed.
+
+Add uncalibrated tuning files for the simple IPA: the identity colour
+matrix so the saturation default applies, contrast 1.2 and saturation
+1.1 as on the other phones, luma and chroma noise reduction scaled with
+the gain, and contrast autofocus on the main camera (LC898217XC lens),
+the ultrawide (AK7374) and the telephoto (LC898217XC). The front camera
+has fixed focus.
+
+Nothing changes for the other sensors: the helpers, properties and
+tuning files are new entries only.
+
+The IMX481 values (its helper and imx481.yaml, autofocus included) are
+the OnePlus 7T Pro's. The Pixel 4 XL's rear telephoto is an IMX481 too,
+and its kernel driver names it imx481, so it takes the same helper and
+tuning file, with autofocus tuned for the 7T Pro's AK7374 lens.
+---
+ src/ipa/libipa/camera_sensor_helper.cpp           |   49 +++++++++++++++++++++
+ src/ipa/simple/data/imx471.yaml                   |   25 +++++++++++
+ src/ipa/simple/data/imx481.yaml                   |   40 ++++++++++++++++
+ src/ipa/simple/data/imx586.yaml                   |   36 +++++++++++++++
+ src/ipa/simple/data/meson.build                   |    4 ++
+ src/ipa/simple/data/s5k3m5.yaml                   |   35 +++++++++++++++
+ src/libcamera/sensor/camera_sensor_properties.cpp |   40 +++++++++++++++++
+ 7 files changed, 229 insertions(+)
+ create mode 100644 src/ipa/simple/data/imx471.yaml
+ create mode 100644 src/ipa/simple/data/imx481.yaml
+ create mode 100644 src/ipa/simple/data/imx586.yaml
+ create mode 100644 src/ipa/simple/data/s5k3m5.yaml
+
+diff --git a/src/ipa/libipa/camera_sensor_helper.cpp b/src/ipa/libipa/camera_sensor_helper.cpp
+index aab98a1..26689d5 100644
+--- a/src/ipa/libipa/camera_sensor_helper.cpp
++++ b/src/ipa/libipa/camera_sensor_helper.cpp
+@@ -649,6 +649,30 @@ class CameraSensorHelperImx462 : public CameraSensorHelperImx290
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("imx462", CameraSensorHelperImx462)
+ 
++class CameraSensorHelperImx471 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperImx471()
++	{
++		/* 64 at 10 bits; gain = 1024 / (1024 - code). */
++		blackLevel_ = 4096;
++		gain_ = AnalogueGainLinear{ 0, 1024, -1, 1024 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("imx471", CameraSensorHelperImx471)
++
++class CameraSensorHelperImx481 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperImx481()
++	{
++		/* 64 at 10 bits; gain = 1024 / (1024 - code). */
++		blackLevel_ = 4096;
++		gain_ = AnalogueGainLinear{ 0, 1024, -1, 1024 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("imx481", CameraSensorHelperImx481)
++
+ class CameraSensorHelperImx477 : public CameraSensorHelper
+ {
+ public:
+@@ -659,6 +683,18 @@ public:
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("imx477", CameraSensorHelperImx477)
+ 
++class CameraSensorHelperImx586 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperImx586()
++	{
++		/* 64 at 10 bits; gain = 1024 / (1024 - code). */
++		blackLevel_ = 4096;
++		gain_ = AnalogueGainLinear{ 0, 1024, -1, 1024 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("imx586", CameraSensorHelperImx586)
++
+ class CameraSensorHelperImx678 : public CameraSensorHelper
+ {
+ public:
+@@ -857,6 +893,19 @@ public:
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("s5k3j1", CameraSensorHelperS5k3j1)
+ 
++class CameraSensorHelperS5k3m5 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperS5k3m5()
++	{
++		/* 64 at 10 bits. */
++		blackLevel_ = 4096;
++		/* The kernel driver takes the gain in whole steps, 1x to 16x. */
++		gain_ = AnalogueGainLinear{ 1, 0, 0, 1 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("s5k3m5", CameraSensorHelperS5k3m5)
++
+ class CameraSensorHelperS5kgm5 : public CameraSensorHelper
+ {
+ public:
+diff --git a/src/ipa/simple/data/imx471.yaml b/src/ipa/simple/data/imx471.yaml
+new file mode 100644
+index 0000000..3f9e597
+--- /dev/null
++++ b/src/ipa/simple/data/imx471.yaml
+@@ -0,0 +1,25 @@
++# SPDX-License-Identifier: CC0-1.0
++#
++# Sony IMX471 (the OnePlus 7T Pro's front camera, in its pop-up), not calibrated yet. The black level comes from the sensor's helper.
++# Fixed focus: no Af.
++#
++# The colour matrix is the identity until a calibration, so the saturation
++# default applies.
++%YAML 1.1
++---
++version: 1
++algorithms:
++  - BlackLevel:
++  - Awb:
++  - Ccm:
++      ccms:
++        - ct: 5000
++          ccm: [ 1, 0, 0,
++                 0, 1, 0,
++                 0, 0, 1 ]
++  # Defaults for applications that do not set the controls.
++  - Adjust:
++      contrast: 1.2
++      saturation: 1.1
++  - Agc:
++...
+diff --git a/src/ipa/simple/data/imx481.yaml b/src/ipa/simple/data/imx481.yaml
+new file mode 100644
+index 0000000..c10057a
+--- /dev/null
++++ b/src/ipa/simple/data/imx481.yaml
+@@ -0,0 +1,40 @@
++# SPDX-License-Identifier: CC0-1.0
++#
++# Sony IMX481 (the OnePlus 7T Pro's ultrawide), not calibrated yet. The black level comes from the sensor's helper.
++# Autofocus drives the AK7374 lens: 8 coarse steps, then steps of 1/16
++# of the range.
++#
++# These values are the OnePlus 7T Pro's. The Pixel 4 XL's rear telephoto is
++# an IMX481 too and takes this file, with autofocus tuned for this lens.
++#
++# The colour matrix is the identity until a calibration, so the saturation
++# default applies.
++%YAML 1.1
++---
++version: 1
++algorithms:
++  - BlackLevel:
++  - Awb:
++  - Ccm:
++      ccms:
++        - ct: 5000
++          ccm: [ 1, 0, 0,
++                 0, 1, 0,
++                 0, 0, 1 ]
++  # Defaults for applications that do not set the controls.
++  - Adjust:
++      contrast: 1.2
++      saturation: 1.1
++  # Luma and chroma noise reduction and sharpening, scaled with the gain:
++  # measured on our own frames at gain 16 (indoors, the sensor's
++  # limit): about a fifth less luma and a sixth less colour noise than the
++  # Pixel's values, and stronger settings only hit the caps.
++  - Detail:
++      sharpen: 0.5
++      denoise: 0.03
++      chromaDenoise: 0.08
++  - Agc:
++  - Af:
++      coarseSteps: 8
++      fineSteps: 16
++...
+diff --git a/src/ipa/simple/data/imx586.yaml b/src/ipa/simple/data/imx586.yaml
+new file mode 100644
+index 0000000..15f118a
+--- /dev/null
++++ b/src/ipa/simple/data/imx586.yaml
+@@ -0,0 +1,36 @@
++# SPDX-License-Identifier: CC0-1.0
++#
++# Sony IMX586 (the OnePlus 7T Pro's main camera), not calibrated yet. The black level comes from the sensor's helper.
++# Autofocus drives the main lens (an LC898217XC on our phone's SEMCO
++# module): 8 coarse steps over the range, then steps of 1/32 of it around
++# the sharpest one, for the large sensor's shallow depth of field.
++#
++# The colour matrix is the identity until a calibration, so the saturation
++# default applies.
++%YAML 1.1
++---
++version: 1
++algorithms:
++  - BlackLevel:
++  - Awb:
++  - Ccm:
++      ccms:
++        - ct: 5000
++          ccm: [ 1, 0, 0,
++                 0, 1, 0,
++                 0, 0, 1 ]
++  # Defaults for applications that do not set the controls.
++  - Adjust:
++      contrast: 1.2
++      saturation: 1.1
++  # Luma and chroma noise reduction and sharpening, scaled with the gain:
++  # the Pixel 7 Pro main camera's values.
++  - Detail:
++      sharpen: 0.6
++      denoise: 0.015
++      chromaDenoise: 0.03
++  - Agc:
++  - Af:
++      coarseSteps: 8
++      fineSteps: 32
++...
+diff --git a/src/ipa/simple/data/meson.build b/src/ipa/simple/data/meson.build
+index eaef79f..7717d23 100644
+--- a/src/ipa/simple/data/meson.build
++++ b/src/ipa/simple/data/meson.build
+@@ -2,7 +2,11 @@
+ 
+ conf_files = files([
+     'imx386.yaml',
++    'imx471.yaml',
++    'imx481.yaml',
++    'imx586.yaml',
+     's5k3j1.yaml',
++    's5k3m5.yaml',
+     's5kgm5.yaml',
+     's5kgn1.yaml',
+     's5kgn8.yaml',
+diff --git a/src/ipa/simple/data/s5k3m5.yaml b/src/ipa/simple/data/s5k3m5.yaml
+new file mode 100644
+index 0000000..78db0cc
+--- /dev/null
++++ b/src/ipa/simple/data/s5k3m5.yaml
+@@ -0,0 +1,35 @@
++# SPDX-License-Identifier: CC0-1.0
++#
++# Samsung S5K3M5 (the OnePlus 7T Pro's telephoto), not calibrated yet. The black level comes from the sensor's helper.
++# Autofocus drives the LC898217XC lens: 8 coarse steps, then steps of
++# 1/16 of the range.
++#
++# The colour matrix is the identity until a calibration, so the saturation
++# default applies.
++%YAML 1.1
++---
++version: 1
++algorithms:
++  - BlackLevel:
++  - Awb:
++  - Ccm:
++      ccms:
++        - ct: 5000
++          ccm: [ 1, 0, 0,
++                 0, 1, 0,
++                 0, 0, 1 ]
++  # Defaults for applications that do not set the controls.
++  - Adjust:
++      contrast: 1.2
++      saturation: 1.1
++  # Luma and chroma noise reduction and sharpening, scaled with the gain:
++  # the ultrawide's values (both are small-pixel sensors).
++  - Detail:
++      sharpen: 0.5
++      denoise: 0.03
++      chromaDenoise: 0.08
++  - Agc:
++  - Af:
++      coarseSteps: 8
++      fineSteps: 16
++...
+diff --git a/src/libcamera/sensor/camera_sensor_properties.cpp b/src/libcamera/sensor/camera_sensor_properties.cpp
+index a2502a2..3ce9b8a 100644
+--- a/src/libcamera/sensor/camera_sensor_properties.cpp
++++ b/src/libcamera/sensor/camera_sensor_properties.cpp
+@@ -297,6 +297,26 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sen
+ 				.hblankDelay = 2
+ 			},
+ 		} },
++		{ "imx471", {
++			.unitCellSize = { 1000, 1000 },
++			.testPatternModes = {},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
++		{ "imx481", {
++			.unitCellSize = { 1000, 1000 },
++			.testPatternModes = {},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
+ 		{ "imx477", {
+ 			.unitCellSize = { 1550, 1550 },
+ 			.testPatternModes = {},
+@@ -325,6 +345,16 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sen
+ 				.hblankDelay = 3
+ 			},
+ 		} },
++		{ "imx586", {
++			.unitCellSize = { 800, 800 },
++			.testPatternModes = {},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
+ 		{ "imx678", {
+ 			.unitCellSize = { 2000, 2000 },
+ 			.testPatternModes = {},
+@@ -529,6 +559,16 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sen
+ 				.hblankDelay = 2
+ 			},
+ 		} },
++		{ "s5k3m5", {
++			.unitCellSize = { 1000, 1000 },
++			.testPatternModes = {},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
+ 		{ "s5kgm5", {
+ 			.unitCellSize = { 700, 700 },
+ 			.testPatternModes = {},
+-- 
+2.56.0
+

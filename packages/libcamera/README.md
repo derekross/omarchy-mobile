@@ -72,6 +72,7 @@ in the table. See `device/cheetah/CAMERA-PLAN.md`, section 5.2.
 | `0055-software_isp-debayer_egl-Correct-defective-pixels-be.patch` | Defective pixel correction in a pass before the debayer, on the packed bytes: a sample beyond its eight same-colour neighbours' range is clamped to it. `LIBCAMERA_SOFTISP_NO_DPC` turns it off |
 | `0056-libcamera-Add-the-Samsung-S5KGN8-sensor.patch` | The S5KGN8 (the Pixel 9a's main camera) sensor helper, with the black level measured on the phone (64 at 10 bits) and the code / 32 gain, its properties, and an uncalibrated tuning file without a colour matrix or autofocus |
 | `0057-ipa-simple-Autofocus-on-the-Pixel-9a-s-main-camera.patch` | Contrast autofocus on the S5KGN8, through the module's LC898129 lens driver, with the Pixel 7 Pro main camera's scan steps |
+| `0058-libcamera-Add-the-OnePlus-7T-Pro-s-camera-sensors.patch` | The OnePlus 7T Pro's IMX586, IMX481, IMX471 and S5K3M5: sensor helpers (black level 64 at 10 bits, Sony's 1024 / (1024 - code) gain, the S5K3M5 driver's whole-step gain), properties, and uncalibrated tuning files with autofocus (LC898217XC, AK7374) and noise reduction |
 | `libcamera-fix-python3.14-macro-redefinition.patch` | Arch's patch, unchanged (sha512 `8b54cbdf…`) |
 | `.SRCINFO` | `makepkg --printsrcinfo` output |
 
