@@ -1,0 +1,35 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stops an SDDM autologin loop. With Relogin=true (set by firstboot, since a
+# phone can't type into the greeter) SDDM logs in again at once when the
+# session ends, with no backoff. If the old logind session still holds tty1,
+# every try fails ("Auth: sddm-helper exited with 5") and SDDM spins: one
+# phone did ~530 tries a minute for six hours until sddm was restarted.
+# This follows SDDM's journal, and when failed autologins pass THRESHOLD in
+# WINDOW seconds it logs why and restarts sddm once. After a restart it waits
+# COOLDOWN seconds before it would restart again, so it can't loop itself.
+#   omamobile-sddm-guard   (run by omamobile-sddm-guard.service)
+set -uo pipefail
+THRESHOLD=${OMAMOBILE_SDDM_GUARD_THRESHOLD:-20}
+WINDOW=${OMAMOBILE_SDDM_GUARD_WINDOW:-60}
+COOLDOWN=${OMAMOBILE_SDDM_GUARD_COOLDOWN:-600}
+
+fails=()      # times of recent failed autologins
+last=-1       # time of the last restart, -1 = none yet
+while IFS= read -r line; do
+  [[ $line == *'sddm-helper exited with 5'* ]] || continue
+  # short-unix lines start with the entry's time: "1762825980.123456 host ..."
+  now=${line%%[. ]*}
+  [[ $now =~ ^[0-9]+$ ]] || continue
+  keep=()
+  for f in "${fails[@]}"; do (( now - f < WINDOW )) && keep+=("$f"); done
+  fails=("${keep[@]}" "$now")
+  (( ${#fails[@]} > THRESHOLD )) || continue
+  if (( last >= 0 && now - last < COOLDOWN )); then
+    continue
+  fi
+  echo "omamobile-sddm-guard: ${#fails[@]} failed autologins in ${WINDOW}s, restarting sddm once (next restart no sooner than ${COOLDOWN}s)"
+  systemctl restart sddm.service || echo "omamobile-sddm-guard: restarting sddm failed" >&2
+  last=$now
+  fails=()
+done < <(journalctl -f -n 0 -o short-unix -u sddm.service)

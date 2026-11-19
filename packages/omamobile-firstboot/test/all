@@ -288,3 +288,38 @@ rm "$t/sddm/autologin.conf"
 ( source "$t/scriptlet"; post_install ) || fail "no drop-in, nothing to do"
 [[ ! -e $t/sddm/autologin.conf ]] || fail "no drop-in is made"
 pass "upgrades add Relogin=true to an existing autologin drop-in"
+
+# The SDDM loop guard: fed a fake journal, it restarts sddm once when failed
+# autologins pass the threshold, and not again within the cooldown
+bash -n bin/omamobile-sddm-guard || fail "the guard parses"
+[[ $(readlink "$t/stage/usr/lib/systemd/system/multi-user.target.wants/omamobile-sddm-guard.service") == ../omamobile-sddm-guard.service ]] ||
+  fail "the guard unit is enabled by a vendor wants link"
+G=$t/guard; mkdir -p "$G/bin"
+cat > "$G/bin/journalctl" <<'J'
+#!/bin/bash
+echo "journalctl $*" >> "$GUARD_CALLS"
+cat "$GUARD_JOURNAL"
+J
+cat > "$G/bin/systemctl" <<'J'
+#!/bin/bash
+echo "systemctl $*" >> "$GUARD_CALLS"
+J
+chmod +x "$G/bin/journalctl" "$G/bin/systemctl"
+guard() { : > "$G/calls"; GUARD_CALLS=$G/calls GUARD_JOURNAL=$G/journal PATH="$G/bin:$PATH" bin/omamobile-sddm-guard > "$G/out"; }
+burst() { local s=$1 n=$2 i; for ((i = 0; i < n; i++)); do echo "$((s + i / 10)).000001 phone sddm[1]: Auth: sddm-helper exited with 5"; done; }
+# 20 failures in a minute, plus other lines: no restart
+{ echo "1000.0 phone sddm[1]: Display server started."; burst 1000 20; } > "$G/journal"
+guard
+grep -q '^journalctl -f -n 0 -o short-unix -u sddm.service$' "$G/calls" || fail "the guard follows sddm's journal"
+grep -q '^systemctl' "$G/calls" && fail "20 failures a minute is under the threshold"
+# failures spread out over minutes: no restart
+for ((i = 0; i < 60; i++)); do echo "$((2000 + i * 10)).0 phone sddm[1]: Auth: sddm-helper exited with 5"; done > "$G/journal"
+guard
+grep -q '^systemctl' "$G/calls" && fail "slow failures are not a loop"
+# a loop: 530 a minute for 30 minutes means one restart, then one per 10 minutes
+burst 5000 $((530 * 30)) > "$G/journal"
+guard
+n=$(grep -c '^systemctl restart sddm.service$' "$G/calls")
+(( n == 3 )) || fail "a 30-minute loop restarts sddm 3 times, not $n"
+grep -q 'failed autologins in 60s, restarting sddm once' "$G/out" || fail "the guard logs why it restarts"
+pass "the SDDM loop guard restarts sddm at most once per cooldown"
