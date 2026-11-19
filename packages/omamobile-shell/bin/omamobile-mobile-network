@@ -34,6 +34,23 @@ installed: the modem stack (omamobile-modem-sit) is on this phone; without
 it the page shows "No modem". signal is 0-100, or -1 when not reported.
 modem: omamobile-modem-switch status (read without root), or null when the
 switch isn't installed.
+
+Phones without omamobile-modem-sit whose modem ModemManager itself drives
+(the OnePlus 7T Pro: qcom-soc over QRTR) take the same commands through
+ModemManager and NetworkManager instead: the status from ModemManager's
+objects, mobile data as a NetworkManager "gsm" profile owned by the
+phone's user (so changing it asks for no password: polkit's
+settings.modify.own), data on|off as that profile's autoconnect plus up or
+down, roaming as its gsm.home-only, the APN as its gsm.apn ("auto": the APN
+the network gave at registration, ModemManager's initial EPS bearer; never
+an empty APN, on which ModemManager 1.24.2 crashed). The attach APN is the
+modem's own there (attach-apn answers 1). That path is off unless the
+device package opts in with /usr/share/omamobile/mobile-network-modemmanager
+(the OnePlus 7T Pro's does); without it such a phone shows "No modem", as
+before.
+
+  omamobile-mobile-network tile            the quick settings tile's lines
+                                           (data=, data_signal=, data_status=)
 """
 import configparser
 import json
@@ -46,6 +63,8 @@ RUN = os.environ.get('OMAMOBILE_SIT_RUN', '/run/omamobile-sit')
 CONFIG = os.environ.get('OMAMOBILE_SIT_CONFIG', '/etc/omamobile/modem-sit.conf')
 HELPER = os.environ.get('OMAMOBILE_SIT_CONFIG_HELPER', '/usr/lib/omamobile-sit/omamobile-sit-config')
 SWITCH = os.environ.get('OMAMOBILE_MODEM_SWITCH', '/usr/lib/omamobile-vendor/omamobile-modem-switch')
+# The device package's opt-in to the ModemManager path (see the docstring)
+MM_ENABLE = os.environ.get('OMAMOBILE_MOBILE_NETWORK_MM', '/usr/share/omamobile/mobile-network-modemmanager')
 
 
 def settings(path=CONFIG):
@@ -169,13 +188,237 @@ def modemmanager():
     return None
 
 
+# ---------------------------------------------------- ModemManager and NM
+
+MM = 'org.freedesktop.ModemManager1'
+PROFILE = 'Mobile data'
+# MMModem3gppRegistrationState
+MM_REGISTRATION = {0: 'not-registered', 1: 'home', 2: 'searching', 3: 'denied', 4: 'unknown',
+                   5: 'roaming', 6: 'home', 7: 'roaming', 8: 'not-registered', 9: 'home',
+                   10: 'roaming', 11: 'home'}
+# MMModemAccessTechnology bits, best first (as omamobile-cell-watch)
+MM_TECH = [(1 << 15, '5G'), ((1 << 14) | (1 << 16) | (1 << 17), 'LTE'), (1 << 9, 'H+'),
+           ((1 << 6) | (1 << 7) | (1 << 8), 'H'), (1 << 5, '3G'), (1 << 4, 'E'), (1 << 3, 'G'),
+           ((1 << 1) | (1 << 2), '2G')]
+MM_CONNECTED = 11
+MM_ENABLED = 6
+
+
+def mm_snapshot():
+    """The first modem's interfaces as plain values, or None: Modem,
+    Modem3gpp, the initial EPS bearer's APN, the connected bearer's APN and
+    whether it has Voice and Messaging. OMAMOBILE_MM=none skips it."""
+    if os.environ.get('OMAMOBILE_MM') == 'none':
+        return None
+    try:
+        import dbus
+        bus = dbus.SystemBus()
+        if not bus.name_has_owner(MM):
+            return None
+        objects = bus.get_object(MM, '/org/freedesktop/ModemManager1', introspect=False).GetManagedObjects(
+            dbus_interface='org.freedesktop.DBus.ObjectManager', timeout=5)
+        for path in sorted(objects):
+            ifaces = objects[path]
+            if MM + '.Modem' not in ifaces:
+                continue
+            modem = dict(ifaces[MM + '.Modem'])
+            gpp = dict(ifaces.get(MM + '.Modem.Modem3gpp', {}))
+            snap = dict(
+                state=int(modem.get('State', 0)),
+                failed=int(modem.get('StateFailedReason', 0)),
+                unlock=int(modem.get('UnlockRequired', 0)),
+                quality=tuple(modem.get('SignalQuality', (0, False))),
+                tech=int(modem.get('AccessTechnologies', 0)),
+                registration=int(gpp.get('RegistrationState', 4)),
+                operator=str(gpp.get('OperatorName', '')),
+                voice=MM + '.Modem.Voice' in ifaces,
+                sms=MM + '.Modem.Messaging' in ifaces,
+                initial_apn='', bearer_apn='')
+            props = 'org.freedesktop.DBus.Properties'
+            initial = str(gpp.get('InitialEpsBearer', '/'))
+            if initial != '/':
+                settings_ = bus.get_object(MM, initial, introspect=False).Get(
+                    MM + '.Bearer', 'Properties', dbus_interface=props, timeout=5)
+                snap['initial_apn'] = str(dict(settings_).get('apn', ''))
+            for bearer in modem.get('Bearers', []):
+                obj = bus.get_object(MM, str(bearer), introspect=False)
+                if bool(obj.Get(MM + '.Bearer', 'Connected', dbus_interface=props, timeout=5)):
+                    snap['bearer_apn'] = str(dict(obj.Get(MM + '.Bearer', 'Properties',
+                                                          dbus_interface=props, timeout=5)).get('apn', ''))
+            return snap
+    except Exception:  # noqa: BLE001  any D-Bus trouble: no modem shown
+        return None
+    return None
+
+
+def nmcli(*args, check=False):
+    return subprocess.run(['nmcli'] + list(args), capture_output=True, text=True, timeout=30, check=check)
+
+
+def nm_profile():
+    """The mobile data profile (the first "gsm" connection) as a dict, or None."""
+    try:
+        listing = nmcli('-t', '-f', 'UUID,TYPE', 'connection', 'show')
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in listing.stdout.splitlines():
+        uuid, _, kind = line.rpartition(':')
+        if kind != 'gsm':
+            continue
+        uuid = uuid.replace('\\:', ':')
+        shown = nmcli('-t', '-f', 'connection.autoconnect,gsm.apn,gsm.home-only,GENERAL.STATE',
+                      'connection', 'show', uuid)
+        fields = {}
+        for row in shown.stdout.splitlines():
+            key, _, value = row.partition(':')
+            fields[key] = value.replace('\\:', ':')
+        return dict(uuid=uuid, autoconnect=fields.get('connection.autoconnect') == 'yes',
+                    apn=fields.get('gsm.apn', ''), home_only=fields.get('gsm.home-only') == 'yes',
+                    active=fields.get('GENERAL.STATE') == 'activated')
+    return None
+
+
+def mm_tech(bits):
+    for mask, label in MM_TECH:
+        if bits & mask:
+            return label
+    return ''
+
+
+def describe_mm(mm, profile):
+    """The page's view from ModemManager's modem (mm_snapshot) and the
+    NetworkManager profile (nm_profile, or None before the first use)."""
+    state, failed = mm['state'], mm['failed']
+    if state == -1 and failed == 2:
+        sim = 'absent'
+    elif state == -1 and failed == 3:
+        sim = 'error'
+    elif state == 2:  # locked: MMModemLock sim-pin 2, sim-puk 4 (3 is
+        # sim-pin2, which a registered modem reports for fixed dialling)
+        sim = 'puk' if mm['unlock'] == 4 else 'pin'
+    elif state < 0:
+        sim = 'error'
+    else:
+        sim = 'ready' if state >= MM_ENABLED or state in (3, 4, 5) else 'unknown'
+    registration = MM_REGISTRATION.get(mm['registration'], 'unknown') if state >= MM_ENABLED else 'unknown'
+    registered = registration in ('home', 'roaming')
+    signal = -1
+    try:
+        if bool(mm['quality'][1]):
+            signal = max(0, min(100, int(mm['quality'][0])))
+    except (TypeError, ValueError, IndexError):
+        pass
+    configured = (profile or {}).get('apn', '')
+    automatic = not configured or configured == mm['initial_apn']
+    in_use = mm['bearer_apn'] or configured or mm['initial_apn']
+    return dict(
+        installed=True, running=True, stage='running',
+        carrier=mm['operator'] if registered else '',
+        registration=registration,
+        tech=mm_tech(mm['tech']) if registered else '',
+        signal=signal,
+        sim=dict(state=sim, pin_lock='unknown'),
+        data=dict(enabled=bool(profile and profile['autoconnect']), up=state == MM_CONNECTED,
+                  available=True),
+        roaming=dict(now=registration == 'roaming', allowed=not (profile or {}).get('home_only', False)),
+        apn=dict(in_use=in_use, source='network' if automatic else 'manual',
+                 configured='auto' if automatic else configured,
+                 attach_in_use=mm['initial_apn'], attach_source='same' if mm['initial_apn'] == in_use else 'network',
+                 attach_configured='auto'),
+        voice=mm['voice'], sms=mm['sms'],
+        modem=None,
+    )
+
+
+def mm_tile(mm, profile):
+    """tile-state.sh's lines for the quick settings tile."""
+    if mm is None:
+        return ['data=none']
+    view = describe_mm(mm, profile)
+    lines = ['data=%s' % ('on' if view['data']['enabled'] else 'off')]
+    if view['registration'] not in ('home', 'roaming'):
+        return lines + ['data_signal=-1', 'data_status=No signal']
+    lines.append('data_signal=%d' % max(0, view['signal']))
+    name = view['carrier'].strip()
+    if name.replace(' ', '').isdigit():
+        name = ''
+    lines.append('data_status=' + ' '.join(w for w in (name, view['tech']) if w))
+    return lines
+
+
+def mm_ensure_profile(mm):
+    """The mobile data profile, created when there is none: owned by the
+    user who runs this (root: any), the network's APN, autoconnect off."""
+    profile = nm_profile()
+    if profile:
+        return profile
+    args = ['connection', 'add', 'type', 'gsm', 'ifname', '*', 'con-name', PROFILE,
+            'gsm.apn', (mm or {}).get('initial_apn', ''), 'connection.autoconnect', 'no']
+    if os.geteuid() != 0:
+        import pwd
+        args += ['connection.permissions', 'user:' + pwd.getpwuid(os.geteuid()).pw_name]
+    if nmcli(*args).returncode != 0:
+        return None
+    return nm_profile()
+
+
+def mm_command(argv, mm):
+    """data / roaming / apn through NetworkManager; returns an exit code."""
+    profile = mm_ensure_profile(mm)
+    if profile is None:
+        print('omamobile-mobile-network: no mobile data profile (NetworkManager refused)', file=sys.stderr)
+        return 1
+    uuid = profile['uuid']
+    if argv[0] == 'data':
+        on = argv[1] == 'on'
+        rc = nmcli('connection', 'modify', uuid, 'connection.autoconnect', 'yes' if on else 'no').returncode
+        if rc:
+            return rc
+        if on:
+            return nmcli('connection', 'up', uuid).returncode
+        nmcli('connection', 'down', uuid)  # not active is fine
+        return 0
+    if argv[0] == 'roaming':
+        return nmcli('connection', 'modify', uuid, 'gsm.home-only', 'no' if argv[1] == 'on' else 'yes').returncode
+    if argv[0] == 'apn':
+        value = argv[1]
+        if value.lower() in ('', 'auto'):
+            value = (mm or {}).get('initial_apn', '')
+        rc = nmcli('connection', 'modify', uuid, 'gsm.apn', value).returncode
+        if rc == 0 and profile['active']:
+            rc = nmcli('connection', 'up', uuid).returncode  # reconnect on the new APN
+        return rc
+    print('omamobile-mobile-network: the attach APN is the modem\'s own on this phone', file=sys.stderr)
+    return 1
+
+
 def configure(key, value):
     helper = [HELPER, 'set', key, value]
     command = helper if os.geteuid() == 0 else ['pkexec'] + helper
     return subprocess.run(command).returncode
 
 
+def mm_enabled():
+    return os.path.exists(MM_ENABLE)
+
+
 def main(argv):
+    if not installed() and mm_enabled():
+        mm = mm_snapshot()
+        if argv == ['tile']:
+            print('\n'.join(mm_tile(mm, nm_profile() if mm else None)))
+            return 0
+        if mm is not None:
+            if argv == ['status']:
+                print(json.dumps(describe_mm(mm, nm_profile())))
+                return 0
+            if len(argv) == 2 and argv[0] in ('data', 'roaming') and argv[1] in ('on', 'off'):
+                return mm_command(argv, mm)
+            if len(argv) == 2 and argv[0] in ('apn', 'attach-apn'):
+                return mm_command([argv[0], argv[1].strip()], mm)
+    if argv == ['tile']:
+        print('data=none')
+        return 0
     if argv == ['status']:
         state = public_state()
         print(json.dumps(describe(installed(), state, settings(), data_active(),

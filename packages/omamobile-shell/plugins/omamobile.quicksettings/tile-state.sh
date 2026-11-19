@@ -141,6 +141,14 @@ if name.replace(" ", "").isdigit():
 words = [w for w in (name, str(m.get("tech") or "").strip()) if w]
 print("data_status=" + " ".join(words))
 ' "$state"
+elif ! have omamobile-sit && [ -e "${OMAMOBILE_MOBILE_NETWORK_MM:-/usr/share/omamobile/mobile-network-modemmanager}" ] && \
+     have omamobile-mobile-network && \
+     mm=$(omamobile-mobile-network tile 2>/dev/null) && \
+     case $mm in data=none*|'') false ;; *) true ;; esac; then
+  # A modem ModemManager drives itself (no omamobile-modem-sit: the OnePlus
+  # 7T Pro, whose device package opts in): the helper reads ModemManager and
+  # NetworkManager
+  printf '%s\n' "$mm"
 else
   echo "data=none"
   refused=${OMAMOBILE_MODEM_REFUSED:-/run/omamobile/modem-refused}

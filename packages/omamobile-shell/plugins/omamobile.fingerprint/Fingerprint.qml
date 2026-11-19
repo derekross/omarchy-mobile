@@ -92,6 +92,11 @@ Item {
   property var sensor: null
   readonly property bool active: SensorModel.active(sensor)
   readonly property bool fingerDown: !!sensor && sensor.finger
+  // An optical sensor sees the finger by the light of the pixels under it.
+  // Where the panel can't light them itself (no LHBM: the OnePlus 7T Pro),
+  // the shell draws a white disc there while a finger is down; the bridge
+  // has turned the panel's HBM on by then.
+  readonly property bool illuminate: fingerDown && !!sensor && sensor.illuminate
 
   // Shown while active, and for a moment after: between a failed match and
   // fprintd's next attempt the bridge is idle for a few hundred ms, and the
@@ -314,6 +319,16 @@ Item {
         anchors.fill: parent
         acceptedButtons: Qt.AllButtons
         preventStealing: true
+      }
+
+      // the light for an optical sensor without LHBM (see illuminate)
+      Rectangle {
+        anchors.centerIn: parent
+        width: root.spot ? root.spot.r * 2.2 : 0
+        height: width
+        radius: width / 2
+        color: "white"
+        visible: root.illuminate
       }
 
       Item {
@@ -741,6 +756,17 @@ Item {
               ctx.stroke()
             }
           }
+        }
+
+        // the light for an optical sensor without LHBM (see illuminate)
+        Rectangle {
+          anchors.centerIn: parent
+          width: screenBody.sr * 2.2
+          height: width
+          radius: width / 2
+          color: "white"
+          visible: root.illuminate
+          z: 2
         }
 
         // the circle itself, as the target draws it

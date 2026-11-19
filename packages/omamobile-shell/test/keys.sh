@@ -227,7 +227,24 @@ echo false >"$t/locked"; echo true >"$t/dpms"
 darku; [[ ! -s $log ]] || fail "lit and unlocked: dark-unlocked does nothing"
 echo true >"$t/locked"; echo false >"$t/dpms"
 darku; [[ ! -s $log ]] || fail "dark and locked: dark-unlocked does nothing"
-echo "ok - a screen gone dark while unlocked locks, as on Android"
+# omamobile-call-proximity's marker counts only while a live process holds
+# the lock on it: a stand-in holder here, then killed as a SIGKILL would.
+marker=$t/run/omamobile-call-proximity
+echo false >"$t/locked"; echo false >"$t/dpms"; mkdir -p "$t/run"
+flock -o "$marker" sleep 30 & holder=$!   # -o: the lock is the flock process's alone
+for _ in $(seq 50); do flock -n "$marker" true 2>/dev/null || break; sleep 0.05; done
+darku; [[ ! -s $log ]] || fail "dark for the ear in a call (the marker held): dark-unlocked leaves it unlocked"
+child=$(pgrep -P "$holder" || true)
+kill -KILL "$holder"; wait "$holder" 2>/dev/null || true; [[ -z $child ]] || kill "$child" 2>/dev/null || true
+for _ in $(seq 50); do flock -n "$marker" true 2>/dev/null && break; sleep 0.05; done
+[[ -e $marker ]] || fail "the killed holder's marker is still there for this check"
+darku; before "omarchy-system-lock" "omarchy-shell lock dark" || fail "a marker whose holder was killed is not believed: it locks"
+rm -f "$marker"; echo 4242 >"$marker"
+darku; before "omarchy-system-lock" "omarchy-shell lock dark" || fail "a stale marker no one holds is not believed: it locks"
+rm -f "$marker"
+darku; before "omarchy-system-lock" "omarchy-shell lock dark" || fail "no marker: it locks"
+[[ ! -e $marker ]] || fail "dark-unlocked never creates the marker"
+echo "ok - a screen gone dark while unlocked locks, as on Android, except at the ear in a call (a held marker only)"
 
 # A lock slower than the long-press timer (it takes about a second on the
 # phone) must not turn the short press into a long one that wakes the lock.

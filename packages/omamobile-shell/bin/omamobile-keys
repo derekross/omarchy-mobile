@@ -161,6 +161,16 @@ chord() {
 # The locked screen is going dark: the lock goes back to its glance view, so
 # whatever wakes it next finds the glance, and the touch that wakes it only
 # wakes it (patches/omarchy/0023). An older lock without the call ignores it.
+# omamobile-call-proximity has the panel off for the ear: its marker exists
+# and the tool holds the lock on it. A marker whose owner was killed is
+# believed no longer, since the lock died with it; opened for reading only,
+# so a missing marker is never created here.
+call_proximity_holds() {
+  local marker=${XDG_RUNTIME_DIR:-/run/user/$UID}/omamobile-call-proximity
+  [[ -e $marker ]] || return 1
+  { ! flock -n -s 9; } 2>/dev/null 9<"$marker"
+}
+
 lock_dark() {
   omarchy-shell lock dark >/dev/null 2>&1
 }
@@ -570,6 +580,9 @@ case "${1:-}" in
     # surface takes those touches (derekross/omarchy-mobile#420's review).
     locked && exit 0
     screen_off || exit 0
+    # Dark for the ear in a call (omamobile-call-proximity): stays unlocked,
+    # as on Android; that tool keeps the touchscreen to itself meanwhile.
+    call_proximity_holds && exit 0
     omarchy-system-lock
     lock_dark
     ;;
