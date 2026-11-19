@@ -1,0 +1,586 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""omamobile-gnss-qmi-loc: a Qualcomm modem's GNSS as NMEA, over QMI LOC.
+
+On Qualcomm phones the GNSS engine runs in the modem and answers the QMI
+LOC service over QRTR. Its own NMEA output is only Qualcomm's proprietary
+$PQ... sentences: on Android the location HAL builds the standard ones on
+the application processor from LOC's position and satellite reports. This
+daemon does the same: it opens a LOC client, starts a periodic session and
+writes GGA, RMC, GSA and GSV sentences to a FIFO, which omamobile-gnss-nmea
+serves to GeoClue and gpsd as it does for the other phones' engines.
+
+It runs as omamobile-gnss.service's main process (omamobile-gnss-start
+execs it) on a phone whose device package ships /usr/share/omamobile/gnss/
+qmi-loc.conf. Settings there, KEY=VALUE:
+
+  ENGINE_UNLOCK=0|1   Android sets the engine lock when its Location
+                      setting is off, and the modem keeps it in its EFS: a
+                      locked engine refuses every session (QMI error 46).
+                      1 clears the lock at each start. It is a write to the
+                      modem's EFS, so only a device whose rmtfs keeps the
+                      modem's writes in RAM (rmtfs -r) sets it; otherwise
+                      the daemon reports the lock and stops. Even with 1,
+                      the daemon clears the lock only while the partitions
+                      rmtfs serves (modemst1, modemst2, fsg, fsc), found by
+                      PARTNAME in /sys/class/block, each read ro 1 (the
+                      storage guard); one writable or missing, and it
+                      reports the lock and stops as with 0.
+
+/etc/omamobile/gnss.conf's INJECT_TIME (default 1) gives the engine the
+system time when systemd-timesyncd has synchronized it.
+
+Nothing is written but LOC requests. Coordinates are never logged.
+Standard library only.
+"""
+
+import argparse
+import math
+import os
+import re
+import select
+import signal
+import socket
+import stat
+import struct
+import sys
+import time
+
+AF_QIPCRTR = 42
+QRTR_PORT_CTRL = 0xFFFFFFFE
+QRTR_TYPE_NEW_SERVER = 4
+QRTR_TYPE_DEL_SERVER = 5
+QRTR_TYPE_NEW_LOOKUP = 10
+LOC_SERVICE = 0x10
+
+# QMI LOC messages (libqmi data/qmi-service-loc.json, Qualcomm loc_api_v02)
+REG_EVENTS = 0x21
+START = 0x22
+STOP = 0x23
+IND_POSITION = 0x24
+IND_SV_INFO = 0x25
+IND_INJECT_TIME_REQ = 0x28
+IND_ENGINE_STATE = 0x2B
+IND_FIX_SESSION_STATE = 0x2C
+INJECT_UTC_TIME = 0x38
+SET_ENGINE_LOCK = 0x3A
+GET_ENGINE_LOCK = 0x3B
+
+EV_POSITION = 0x01
+EV_SV_INFO = 0x02
+EV_INJECT_TIME_REQ = 0x10
+EV_ENGINE_STATE = 0x80
+EV_FIX_SESSION_STATE = 0x100
+EVENTS = EV_POSITION | EV_SV_INFO | EV_INJECT_TIME_REQ | EV_ENGINE_STATE | EV_FIX_SESSION_STATE
+
+LOCK_NONE = 1
+SESSION_ID = 1
+FIX_PERIODIC = 1
+ACCURACY_HIGH = 3
+INTERMEDIATE_ON = 1  # reports before the first fix too: a steady no-fix stream
+TECH_SATELLITE = 0x01
+SESSION_SUCCESS = 0
+
+# QmiLocSystem in the SV report
+SYS_GPS, SYS_GALILEO, SYS_SBAS, SYS_COMPASS, SYS_GLONASS, SYS_BDS, SYS_QZSS = 1, 2, 3, 4, 5, 6, 7
+SV_TRACK = 3
+
+CONF = "/usr/share/omamobile/gnss/qmi-loc.conf"
+USER_CONF = "/etc/omamobile/gnss.conf"
+FIFO = "/run/omamobile-gnss/nmea_out"
+TIMESYNC = "/run/systemd/timesync/synchronized"
+SYSBLOCK = "/sys/class/block"
+# The modem's EFS as rmtfs serves it: the lock lives there, so these must be
+# read-only before the daemon asks the modem to change it.
+NV_PARTS = ("modemst1", "modemst2", "fsg", "fsc")
+STALL_S = 30  # no position report for this long in a session: start it again
+
+
+def log(msg):
+    print(f"omamobile-gnss-qmi-loc: {msg}", file=sys.stderr, flush=True)
+
+
+def read_conf(path, keys):
+    """KEY=VALUE lines, only the given keys, values 0 or 1."""
+    out = dict(keys)
+    try:
+        lines = open(path, encoding="utf-8").read().splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        m = re.match(r'^\s*([A-Z_]+)\s*=\s*"?([01])"?\s*(#.*)?$', line)
+        if m and m.group(1) in out:
+            out[m.group(1)] = m.group(2) == "1"
+    return out
+
+
+def nv_not_read_only(sysblock=SYSBLOCK, names=NV_PARTS):
+    """Why the modem's NV partitions are not all read-only: [] when every one
+    is found by PARTNAME and each block device with that name reads ro 1."""
+    found = {n: [] for n in names}
+    try:
+        entries = sorted(os.listdir(sysblock))
+    except OSError:
+        entries = []
+    for dev in entries:
+        try:
+            uevent = open(os.path.join(sysblock, dev, "uevent"), encoding="utf-8").read().splitlines()
+        except OSError:
+            continue
+        for line in uevent:
+            if line.startswith("PARTNAME=") and line[9:] in found:
+                found[line[9:]].append(dev)
+    problems = []
+    for n in names:
+        if not found[n]:
+            problems.append(f"no {n} partition (PARTNAME={n} in {sysblock}/*/uevent)")
+        for dev in found[n]:
+            try:
+                ro = open(os.path.join(sysblock, dev, "ro"), encoding="utf-8").read().strip()
+            except OSError:
+                ro = "?"
+            if ro != "1":
+                problems.append(f"{n} ({dev}) is not read-only (ro {ro})")
+    return problems
+
+
+# --- QMI over QRTR -----------------------------------------------------------
+
+def tlv(t, value):
+    return struct.pack("<BH", t, len(value)) + value
+
+
+def parse_tlvs(data):
+    tl, p = {}, 0
+    while p + 3 <= len(data):
+        t, n = struct.unpack_from("<BH", data, p)
+        tl[t] = data[p + 3:p + 3 + n]
+        p += 3 + n
+    return tl
+
+
+def qmi_result(tl):
+    """(ok, error code) from the result TLV of a response."""
+    if 2 not in tl or len(tl[2]) < 4:
+        return False, -1
+    res, err = struct.unpack_from("<HH", tl[2])
+    return res == 0, err
+
+
+def ind_status(tl):
+    """The status TLV of a LOC indication: 0 is success."""
+    return struct.unpack_from("<I", tl[1])[0] if len(tl.get(1, b"")) >= 4 else -1
+
+
+# --- NMEA --------------------------------------------------------------------
+
+def sentence(body):
+    cs = 0
+    for c in body.encode("ascii"):
+        cs ^= c
+    return f"${body}*{cs:02X}\r\n".encode("ascii")
+
+
+def nmea_coord(value, lon):
+    """Degrees to (d)ddmm.mmmm and the hemisphere letter."""
+    hemi = ("E" if value >= 0 else "W") if lon else ("N" if value >= 0 else "S")
+    minutes = round(abs(value) * 60.0, 4)
+    deg = int(minutes // 60)
+    mins = minutes - deg * 60
+    return f"{deg:0{3 if lon else 2}d}{mins:07.4f}", hemi
+
+
+def nmea_time(ms):
+    t = time.gmtime(ms // 1000)
+    return f"{t.tm_hour:02d}{t.tm_min:02d}{t.tm_sec:02d}.{(ms % 1000) // 10:02d}", \
+        f"{t.tm_mday:02d}{t.tm_mon:02d}{t.tm_year % 100:02d}"
+
+
+def sv_talker(system, svid):
+    """(talker, NMEA satellite number) for a LOC satellite, or None."""
+    if system == SYS_GPS and 1 <= svid <= 32:
+        return "GP", svid
+    if system == SYS_SBAS and 120 <= svid <= 158:
+        return "GP", svid - 87
+    if system == SYS_GLONASS and 65 <= svid <= 96:
+        return "GL", svid
+    if system == SYS_GALILEO and 301 <= svid <= 336:
+        return "GA", svid - 300
+    if system in (SYS_BDS, SYS_COMPASS) and 201 <= svid <= 263:
+        return "GB", svid - 200
+    if system == SYS_QZSS and 193 <= svid <= 202:
+        return "GQ", svid - 192
+    return None
+
+
+def sv_number(svid):
+    """A LOC satellite ID (as in a position's used list) in NMEA numbering."""
+    for system in (SYS_GPS, SYS_SBAS, SYS_GLONASS, SYS_GALILEO, SYS_BDS, SYS_QZSS):
+        r = sv_talker(system, svid)
+        if r:
+            return r[1]
+    return None
+
+
+class Position:
+    """A LOC position report, decoded."""
+
+    def __init__(self, tl):
+        f32 = lambda t: struct.unpack_from("<f", tl[t])[0] if len(tl.get(t, b"")) >= 4 else None
+        f64 = lambda t: struct.unpack_from("<d", tl[t])[0] if len(tl.get(t, b"")) >= 8 else None
+        self.status = ind_status(tl)
+        self.lat, self.lon = f64(0x10), f64(0x11)
+        self.unc = f32(0x12)
+        self.speed = f32(0x18)
+        self.alt_ell, self.alt_msl = f32(0x1A), f32(0x1B)
+        self.heading = f32(0x20)
+        self.tech = struct.unpack_from("<I", tl[0x23])[0] if len(tl.get(0x23, b"")) >= 4 else 0
+        self.pdop = self.hdop = self.vdop = None
+        if len(tl.get(0x24, b"")) >= 12:
+            self.pdop, self.hdop, self.vdop = struct.unpack_from("<fff", tl[0x24])
+        self.utc_ms = struct.unpack_from("<Q", tl[0x25])[0] if len(tl.get(0x25, b"")) >= 8 else None
+        self.alt_assumed = bool(tl.get(0x2D, b"\0")[0])
+        self.used = []
+        raw = tl.get(0x2C) or b""
+        if raw:
+            n = raw[0]
+            self.used = list(struct.unpack_from(f"<{n}H", raw, 1)) if len(raw) >= 1 + 2 * n else []
+
+    def is_fix(self):
+        return (self.status == SESSION_SUCCESS and self.lat is not None and self.lon is not None
+                and bool(self.tech & TECH_SATELLITE)
+                and not (math.isnan(self.lat) or math.isnan(self.lon)))
+
+
+def position_sentences(p, now_ms=None):
+    """GGA, RMC and GSA for one position report (no fix: empty fields)."""
+    ms = p.utc_ms if p.utc_ms else (now_ms if now_ms is not None else int(time.time() * 1000))
+    hms, dmy = nmea_time(ms)
+    if not p.is_fix():
+        return [sentence(f"GNGGA,{hms},,,,,0,00,99.99,,,,,,"),
+                sentence(f"GNRMC,{hms},V,,,,,,,{dmy},,,N"),
+                sentence("GNGSA,A,1,,,,,,,,,,,,,99.99,99.99,99.99")]
+    lat, ns = nmea_coord(p.lat, False)
+    lon, ew = nmea_coord(p.lon, True)
+    hdop = p.hdop if p.hdop and p.hdop > 0 else (p.unc / 5.0 if p.unc else 1.0)
+    nums = [n for n in (sv_number(s) for s in p.used) if n is not None]
+    nsv = len(p.used)
+    alt = sep = ""
+    if p.alt_msl is not None and not p.alt_assumed:
+        alt = f"{p.alt_msl:.1f}"
+        if p.alt_ell is not None:
+            sep = f"{p.alt_ell - p.alt_msl:.1f}"
+    gga = f"GNGGA,{hms},{lat},{ns},{lon},{ew},1,{min(nsv, 99):02d},{hdop:.1f},{alt},{'M' if alt else ''},{sep},{'M' if sep else ''},,"
+    knots = f"{p.speed * 1.943844:.1f}" if p.speed is not None else ""
+    course = f"{p.heading:.1f}" if p.heading is not None and p.speed and p.speed > 0.5 else ""
+    rmc = f"GNRMC,{hms},A,{lat},{ns},{lon},{ew},{knots},{course},{dmy},,,A"
+    fix = "2" if p.alt_assumed else "3"
+    ids = ",".join(str(n) for n in nums[:12]) + "," * (12 - min(len(nums), 12))
+    dop = lambda v: f"{v:.1f}" if v and v > 0 else ""
+    gsa = f"GNGSA,A,{fix},{ids},{dop(p.pdop)},{dop(hdop)},{dop(p.vdop)}"
+    return [sentence(gga), sentence(rmc), sentence(gsa)]
+
+
+def parse_svs(tl):
+    """[(system, svid, status, elevation, azimuth, snr)] from an SV report."""
+    raw = tl.get(0x10) or b""
+    if not raw:
+        return []
+    n = raw[0]
+    out = []
+    for i in range(n):
+        off = 1 + i * 28
+        if off + 28 > len(raw):
+            break
+        _valid, system, svid, _health, status, _info, el, az, snr = struct.unpack_from("<IIHBIBfff", raw, off)
+        out.append((system, svid, status, el, az, snr))
+    return out
+
+
+def sv_sentences(svs):
+    """GSV sentences, one group per constellation, four satellites each."""
+    groups = {}
+    for system, svid, status, el, az, snr in svs:
+        r = sv_talker(system, svid)
+        if not r:
+            continue
+        talker, num = r
+        snr_s = f"{round(snr):02d}" if status == SV_TRACK and snr > 0 else ""
+        el_s = f"{round(el):02d}" if 0 <= el <= 90 else ""
+        az_s = f"{round(az) % 360:03d}" if 0 <= az <= 360 else ""
+        groups.setdefault(talker, []).append(f"{num:02d},{el_s},{az_s},{snr_s}")
+    out = []
+    for talker in ("GP", "GL", "GA", "GB", "GQ"):
+        sats = groups.get(talker)
+        if not sats:
+            continue
+        sats = sats[:36]
+        total = (len(sats) + 3) // 4
+        for i in range(total):
+            chunk = sats[i * 4:(i + 1) * 4]
+            out.append(sentence(f"{talker}GSV,{total},{i + 1},{len(sats):02d}," + ",".join(chunk)))
+    return out
+
+
+# --- the client --------------------------------------------------------------
+
+class Gone(Exception):
+    """The LOC service went away (modem restart)."""
+
+
+class LocClient:
+    def __init__(self):
+        self.sock = socket.socket(AF_QIPCRTR, socket.SOCK_DGRAM)
+        self.node, self.port = self.sock.getsockname()
+        self.srv = None
+        self.txn = 0
+        self.pending = []  # LOC messages read while waiting for another
+
+    def lookup(self):
+        """Ask the name service to report LOC servers (now and later)."""
+        self.sock.sendto(struct.pack("<5I", QRTR_TYPE_NEW_LOOKUP, LOC_SERVICE, 0, 0, 0),
+                         (self.node, QRTR_PORT_CTRL))
+
+    def _ctrl(self, data):
+        if len(data) < 20:
+            return
+        cmd, service, _inst, node, port = struct.unpack_from("<5I", data)
+        if service != LOC_SERVICE:
+            return
+        if cmd == QRTR_TYPE_NEW_SERVER and self.srv is None:
+            self.srv = (node, port)
+            log(f"LOC service at {node}:{port}")
+        elif cmd == QRTR_TYPE_DEL_SERVER and self.srv == (node, port):
+            self.srv = None
+            raise Gone()
+
+    def recv(self, timeout):
+        """One LOC message (flags, txn, msg, tlvs), or None on timeout."""
+        if self.pending:
+            return self.pending.pop(0)
+        end = time.monotonic() + timeout
+        while True:
+            left = end - time.monotonic()
+            if left <= 0:
+                return None
+            r, _, _ = select.select([self.sock], [], [], left)
+            if not r:
+                return None
+            data, addr = self.sock.recvfrom(65536)
+            if addr[1] == QRTR_PORT_CTRL:
+                self._ctrl(data)
+                continue
+            if self.srv is None or tuple(addr) != self.srv or len(data) < 7:
+                continue
+            flags, txn, msg, n = struct.unpack_from("<BHHH", data)
+            return flags, txn, msg, parse_tlvs(data[7:7 + n])
+
+    def wait_service(self, timeout):
+        end = time.monotonic() + timeout
+        while self.srv is None and time.monotonic() < end:
+            self.recv(min(1.0, end - time.monotonic()))
+        return self.srv is not None
+
+    def send(self, msg, body=b""):
+        self.txn = self.txn % 0xFFFF + 1
+        self.sock.sendto(struct.pack("<BHHH", 0, self.txn, msg, len(body)) + body, self.srv)
+        return self.txn
+
+    def call(self, msg, body=b"", ind=None, timeout=5.0):
+        """Send a request; return (response tlvs, indication tlvs or None)."""
+        txn = self.send(msg, body)
+        resp = ind_tl = None
+        held = []
+        end = time.monotonic() + timeout
+        while time.monotonic() < end and (resp is None or (ind and ind_tl is None)):
+            m = self.recv(end - time.monotonic())
+            if m is None:
+                break
+            flags, mtxn, mmsg, tl = m
+            if flags == 2 and mtxn == txn and mmsg == msg:
+                resp = tl
+                if resp is not None and not qmi_result(resp)[0]:
+                    break
+            elif flags == 4 and ind and mmsg == ind:
+                ind_tl = tl
+            else:
+                held.append(m)
+        self.pending = held + self.pending
+        return resp, ind_tl
+
+
+class Daemon:
+    def __init__(self, fifo, unlock, inject_time, sysblock=SYSBLOCK, loc=None):
+        self.fifo = fifo
+        self.unlock = unlock
+        self.inject_time = inject_time
+        self.sysblock = sysblock
+        self.fd = None
+        self.loc = loc if loc is not None else LocClient()
+        self.running = True
+        self.started = None
+        self.first_fix = None
+        self.last_report = 0.0
+        self.tracked = 0
+        self.last_log = 0.0
+
+    def open_fifo(self):
+        os.makedirs(os.path.dirname(self.fifo), mode=0o755, exist_ok=True)
+        try:
+            st = os.lstat(self.fifo)
+            if not stat.S_ISFIFO(st.st_mode):
+                os.unlink(self.fifo)
+                raise FileNotFoundError
+        except FileNotFoundError:
+            os.mkfifo(self.fifo, 0o600)
+        # O_RDWR: never blocks for a reader and never fails with EPIPE
+        self.fd = os.open(self.fifo, os.O_RDWR | os.O_NONBLOCK)
+
+    def write(self, lines):
+        for line in lines:
+            try:
+                os.write(self.fd, line)
+            except (BlockingIOError, InterruptedError):
+                pass  # nobody reads: the sentence is dropped
+
+    def engine_lock(self):
+        """True when the engine accepts sessions (after unlocking it if allowed)."""
+        _, ind = self.loc.call(GET_ENGINE_LOCK, ind=GET_ENGINE_LOCK)
+        if ind is None:
+            log("no engine-lock answer; trying the session anyway")
+            return True
+        lock_type = struct.unpack_from("<I", ind[0x10])[0] if len(ind.get(0x10, b"")) >= 4 else LOCK_NONE
+        clients = struct.unpack_from("<Q", ind[0x12])[0] if len(ind.get(0x12, b"")) >= 8 else 0
+        if lock_type == LOCK_NONE and clients == 0:
+            return True
+        locked = f"the GNSS engine is locked (type {lock_type}, clients {clients:#x}; Android's Location setting)"
+        if not self.unlock:
+            log(f"{locked} and this device doesn't allow clearing it (ENGINE_UNLOCK in {CONF})")
+            return False
+        # Clearing it is a write to the modem's EFS: only while the storage
+        # guard keeps every partition rmtfs serves read-only.
+        problems = nv_not_read_only(self.sysblock)
+        if problems:
+            for p in problems:
+                log(p)
+            log(f"{locked}; not clearing it: the modem's NV partitions must all be read-only (ro 1)")
+            return False
+        resp, ind = self.loc.call(SET_ENGINE_LOCK, tlv(1, struct.pack("<I", LOCK_NONE)), ind=SET_ENGINE_LOCK)
+        ok = resp is not None and qmi_result(resp)[0] and ind is not None and ind_status(ind) == 0
+        log(f"engine lock (type {lock_type}, clients {clients:#x}) " + ("cleared" if ok else "could not be cleared"))
+        return ok
+
+    def do_inject_time(self):
+        if not self.inject_time or not os.path.exists(TIMESYNC):
+            return
+        now = int(time.time() * 1000)
+        self.loc.send(INJECT_UTC_TIME, tlv(1, struct.pack("<Q", now)) + tlv(2, struct.pack("<I", 1000)))
+
+    def start_session(self):
+        resp, _ = self.loc.call(REG_EVENTS, tlv(1, struct.pack("<Q", EVENTS)))
+        if resp is None or not qmi_result(resp)[0]:
+            raise RuntimeError(f"registering for LOC events failed ({qmi_result(resp or {})[1]})")
+        self.do_inject_time()
+        body = (tlv(1, bytes([SESSION_ID])) + tlv(0x10, struct.pack("<I", FIX_PERIODIC))
+                + tlv(0x11, struct.pack("<I", ACCURACY_HIGH)) + tlv(0x12, struct.pack("<I", INTERMEDIATE_ON))
+                + tlv(0x13, struct.pack("<I", 1000)))
+        resp, _ = self.loc.call(START, body)
+        if resp is None or not qmi_result(resp)[0]:
+            raise RuntimeError(f"starting the LOC session failed (QMI error {qmi_result(resp or {})[1]})")
+        self.started = time.monotonic()
+        self.last_report = self.started
+        self.first_fix = None
+        log("session started")
+
+    def stop_session(self):
+        if self.started is None or self.loc.srv is None:
+            return
+        try:
+            self.loc.call(STOP, tlv(1, bytes([SESSION_ID])), timeout=2)
+        except OSError:
+            pass
+        self.started = None
+        log("session stopped")
+
+    def handle(self, m):
+        flags, _txn, msg, tl = m
+        if flags != 4:
+            return
+        if msg == IND_POSITION:
+            self.last_report = time.monotonic()
+            p = Position(tl)
+            if p.is_fix() and self.first_fix is None:
+                self.first_fix = time.monotonic()
+                log(f"first fix after {self.first_fix - self.started:.0f} s ({len(p.used)} satellites used)")
+            self.write(position_sentences(p))
+        elif msg == IND_SV_INFO:
+            svs = parse_svs(tl)
+            self.tracked = sum(1 for s in svs if s[2] == SV_TRACK)
+            self.write(sv_sentences(svs))
+        elif msg == IND_INJECT_TIME_REQ:
+            self.do_inject_time()
+        elif msg == IND_FIX_SESSION_STATE:
+            pass
+        now = time.monotonic()
+        if now - self.last_log > 300:
+            self.last_log = now
+            log(f"{self.tracked} satellites tracked, " + ("fix" if self.first_fix else "no fix yet"))
+
+    def run(self):
+        self.open_fifo()
+        self.loc.lookup()
+        while self.running:
+            try:
+                if not self.loc.wait_service(60):
+                    log("waiting for the modem's LOC service")
+                    continue
+                if not self.engine_lock():
+                    return 1
+                self.start_session()
+                while self.running:
+                    m = self.loc.recv(5)
+                    if m:
+                        self.handle(m)
+                    if time.monotonic() - self.last_report > STALL_S:
+                        log(f"no report for {STALL_S} s; starting the session again")
+                        self.stop_session()
+                        self.start_session()
+            except Gone:
+                log("the LOC service went away (modem restart); waiting for it")
+                self.started = None
+                time.sleep(1)
+            except RuntimeError as e:
+                log(str(e))
+                return 1
+        self.stop_session()
+        return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--fifo", default=FIFO)
+    ap.add_argument("--conf", default=os.environ.get("OMAMOBILE_GNSS_QMI_LOC_CONF", CONF))
+    args = ap.parse_args()
+    dev = read_conf(args.conf, {"ENGINE_UNLOCK": False})
+    user = read_conf(os.environ.get("OMAMOBILE_GNSS_CONF", USER_CONF), {"INJECT_TIME": True})
+    # Always the real sysfs: the tests hand Daemon() their fake one, and
+    # nothing outside the code can point the read-only check elsewhere
+    d = Daemon(args.fifo, dev["ENGINE_UNLOCK"], user["INJECT_TIME"])
+
+    def stop(_sig, _frm):
+        d.running = False
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    try:
+        rc = d.run()
+    except KeyboardInterrupt:
+        d.running = False
+        d.stop_session()
+        rc = 0
+    sys.exit(rc)
+
+
+if __name__ == "__main__":
+    main()
