@@ -3,7 +3,7 @@
 pkgname=omamobile-boot-update
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile: rebuild a phone's slot-B boot images from linux-omamobile and write them, guarded and verified (pacman hook, opt-in)"
+pkgdesc="Omarchy Mobile: rebuild a phone's boot images (slot B, or the slot boot-update.conf names) from linux-omamobile and write them, guarded and verified (pacman hook, opt-in)"
 arch=(any)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT Apache-2.0)

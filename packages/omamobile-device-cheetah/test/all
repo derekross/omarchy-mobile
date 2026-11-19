@@ -211,6 +211,30 @@ pass "sitd waits for the CP; the modem stack is on by default through the target
   || fail "the device sitd policy is staged"
 grep -q 'omamobile-sitd-policy' PKGBUILD || fail "the package provides its sitd policy capability"
 pass "the device sitd policy is staged and provided"
+
+# MODEM-PLAN M6, on by default on this phone: the device's declaration that
+# suspend with the modem up is verified, which omamobile-modem's sleep
+# policy reads (beside the owner's opt-out and the kernel's early refusal);
+# a plain, comment-only data file, never a script. The attended runbook's
+# marker from before is no longer shipped: the declaration replaces it.
+verified=$tmp/root/usr/lib/omamobile-modem/suspend-verified
+[[ -f $verified && ! -x $verified ]] || fail "the suspend-verified declaration is staged as a plain file"
+[[ $(grep -cv '^#' "$verified") == 0 ]] || fail "the suspend-verified declaration holds comments only"
+# The declaration holds only with sitd's bearer reconnect (#817)
+grep -cxF "conflicts=('omamobile-modem-sit<0.3.42')" PKGBUILD >/dev/null \
+  || fail "the suspend-verified declaration ships with the conflict on omamobile-modem-sit before 0.3.42"
+[[ ! -e $tmp/root/usr/lib/omamobile-modem/suspend-runbook ]] || fail "the old runbook marker is no longer shipped"
+if [[ -f ../omamobile-modem/lib/omamobile-modem-sleep-policy ]]; then
+  grep -q 'VERIFIED=\${OMAMOBILE_MODEM_SUSPEND_VERIFIED:-/usr/lib/omamobile-modem/suspend-verified}' ../omamobile-modem/lib/omamobile-modem-sleep-policy ||
+    fail "the declaration is at the path omamobile-modem's sleep policy reads"
+fi
+# follow_screen = yes is this phone's default (a [control] drop-in that sitd
+# reads: an /etc value wins).
+python3 -I -c 'import configparser,sys; p=configparser.ConfigParser(interpolation=None); p.read(sys.argv[1]); sys.exit(not p.getboolean("control","follow_screen"))' "$d" \
+  || fail "the 7 Pro's default is follow_screen = yes"
+python3 -I -c 'import configparser,sys; p=configparser.ConfigParser(interpolation=None); p.read(sys.argv[1]); sys.exit(sorted(p["control"]) != ["follow_screen"])' "$d" \
+  || fail "the drop-in's [control] sets follow_screen only"
+pass "suspend with the modem up is declared verified, and sitd follows the screen by default, on this phone"
 # The USB gadget's MAC addresses stay the same across boots (omamobile-usb-mac),
 # against a fake gadget: plain directories and files stand in for configfs.
 for f in usr/bin/omamobile-usb-mac usr/lib/systemd/system/omamobile-usb-mac.service; do

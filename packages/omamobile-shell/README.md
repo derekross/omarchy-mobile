@@ -128,3 +128,7 @@ unquoted 0.83 scale line migrates once; custom values and quoted overrides
 stay. Chromium's version is read only immediately before writing a missing UA.
 No browser profile or site zoom changes. Chrome defaults are deferred until
 its quote-aware launcher is released separately in omarchy-pkgs.
+
+## Device settings
+
+After the shared rules, `hypr/phone.lua` loads `/usr/share/omamobile/hypr/device.lua` if a device package installs one, for settings only that phone needs (an inner and an outer panel, its own input devices). Every session that loads `phone.lua` (setup-user adds it to `looknfeel.lua`) gets it, new and existing users alike. It runs under `pcall`: a syntax or runtime error in the device file is logged and the shared rules stay in force. With no device file nothing changes, so every phone today is unaffected.

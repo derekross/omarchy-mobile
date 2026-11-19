@@ -6,7 +6,8 @@
 # power supply. Covers the descriptor rules, the image builder (with the real
 # mkbootimg, avbtool, lz4 and dtc when installed, else stand-ins), the hook's
 # opt-in, every refusal before a write, the write and its read-back, the
-# saved previous set, an interrupted write and the rollback.
+# saved previous set, an interrupted write and the rollback, and a phone
+# whose boot-update.conf names slot A (SLOT=a) booted from slot A.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 PKG=$PWD
@@ -189,12 +190,14 @@ fi
 export LZ4=$LZ4_BIN MKBOOTIMG=$MKBOOTIMG_BIN AVBTOOL=$AVBTOOL_BIN OPENSSL=$OPENSSL_BIN
 echo "# tools: dtc=${DTC_BIN:-none} fdtoverlay=${FDTOVERLAY_BIN:-none} lz4=$LZ4 mkbootimg=$MKBOOTIMG avbtool=$AVBTOOL"
 
-# A release initramfs: an allowlist, an init, no SSH keys
+# A release initramfs: an allowlist, the running-slot marker (RD_MARK=
+# leaves it out, as an init from before it), an init, no SSH keys
 mkinitramfs() { # out ufs_rw [extra-path]
   local s=$t/initramfs-stage
   rm -rf "$s" && mkdir -p "$s/etc"
   echo '#!/bin/sh' > "$s/init"
   echo "$2" > "$s/etc/omamobile-ufs-rw"
+  [[ -z ${RD_MARK-running} ]] || echo "${RD_MARK-running}" > "$s/etc/omamobile-ufs-rw-slot"
   if [[ -n ${3:-} ]]; then mkdir -p "$s/${3%/*}"; echo key > "$s/$3"; fi
   (cd "$s" && find . | LC_ALL=C sort | cpio -o -H newc --owner=0:0 --quiet) | "$LZ4" -l -9 -q > "$1"
 }
@@ -310,20 +313,20 @@ export OMAMOBILE_BOOT_UPDATE_LIB=$stub OMAMOBILE_BOOT_AVB_TESTKEY=$PKG/avb/testk
 U=$PKG/bin/omamobile-boot-update
 
 PARTS="boot_a init_boot_a vendor_boot_a vendor_kernel_boot_a dtbo_a boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b vbmeta_b devinfo persist efs userdata"
-mkroot() { # R
-  local R=$1 i=0 p
+mkroot() { # R [slot the phone runs from, writable to the guard: b]
+  local R=$1 i=0 p ws=${2:-b}
   rm -rf "$R"
   mkdir -p "$R/usr/share/omamobile" "$R/proc/device-tree" "$R/dev" "$R/etc/omamobile" "$R/usr/lib/omamobile/twelve" \
     "$R/sys/block/sda" "$R/sys/block/sdb/sdb1" "$R/root/.ssh"
   cat "$t/twelve.conf" > "$R/usr/share/omamobile/device.conf"
   printf 'AVB_FOOTERS="boot:0x40000 init_boot:0x20000"\nAVB_ROLLBACK_INDEX=1783209600\nAVB_SECURITY_PATCH=2026-07-05\n' >> "$R/usr/share/omamobile/device.conf"
   printf 'google,gs201-twelve\0google,gs201\0' > "$R/proc/device-tree/compatible"
-  echo 'console=null androidboot.slot_suffix=_b panic=10' > "$R/proc/cmdline"
+  echo "console=null androidboot.slot_suffix=_$ws panic=10" > "$R/proc/cmdline"
   for p in $PARTS; do
     i=$((i + 1))
     mkdir -p "$R/sys/block/sda/sda$i"
     printf 'MAJOR=8\nMINOR=%d\nDEVNAME=sda%d\nDEVTYPE=partition\nPARTN=%d\nPARTNAME=%s\n' "$i" "$i" "$i" "$p" > "$R/sys/block/sda/sda$i/uevent"
-    case $p in boot_b|init_boot_b|vendor_boot_b|vendor_kernel_boot_b|dtbo_b|userdata) echo 0 ;; *) echo 1 ;; esac > "$R/sys/block/sda/sda$i/ro"
+    case $p in "boot_$ws"|"init_boot_$ws"|"vendor_boot_$ws"|"vendor_kernel_boot_$ws"|"dtbo_$ws"|userdata) echo 0 ;; *) echo 1 ;; esac > "$R/sys/block/sda/sda$i/ro"
     case $p in boot_*) s=0x40000 ;; init_boot_*) s=0x20000 ;; *) s=0x10000 ;; esac
     echo $((s / 512)) > "$R/sys/block/sda/sda$i/size"
     echo '0 0 0 0 0 0 0 0 0 0 0' > "$R/sys/block/sda/sda$i/stat"
@@ -419,7 +422,7 @@ printf 'google,gs201-twelve\0google,gs201\0' > "$R/proc/device-tree/compatible"
 echo 'androidboot.slot_suffix=_a' > "$R/proc/cmdline"
 refused "a boot from slot A" "slot A" hook
 echo 'console=null panic=10' > "$R/proc/cmdline"
-refused "a boot that names no slot" "says this boot is from slot B" hook
+refused "a boot that names no slot" "says which slot this boot is from" hook
 printf 'androidboot.slot_suffix = "_b"\n' > "$R/proc/bootconfig"
 run write --dry-run || { cat "$t/out"; fail "slot B named in /proc/bootconfig (as on cheetah) is enough"; }
 rm "$R/proc/bootconfig"
@@ -694,6 +697,99 @@ reboot_counters "$R"
 "$U" preflight --json > "$t/pf" || true
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "no set that booted" not in d["problem"], d' "$t/pf" || fail "after a restart that refusal is gone"
 pass "booted means slot B unwritten since this boot (write counters): a same-release rewrite, a half push and an unbooted push never replace the set that booted"
+
+# ---------------------------------------------------------------- SLOT=a
+# A release installed on the slot it ran from: boot-update.conf says SLOT=a,
+# the bootloader says _a, and the guard left slot A's images writable.
+mkroot "$R" a
+printf 'AUTO_WRITE=yes\nSLOT=a\n' > "$R/etc/omamobile/boot-update.conf"
+declare -A olda=()
+for p in $PARTS; do olda[$p]=$(sha256sum < "$(part "$R" "$p")"); done
+run write --dry-run || { cat "$t/out"; fail "SLOT=a: a dry run on slot A"; }
+grep -c 'boot.img .*-> boot_a (sda1).* write$' "$t/out" >/dev/null || { cat "$t/out"; fail "SLOT=a: the plan names boot_a"; }
+grep -c '_b (' "$t/out" >/dev/null && { cat "$t/out"; fail "SLOT=a: the plan names no _b partition"; }
+run hook || { cat "$t/out"; fail "SLOT=a: the hook writes slot A"; }
+for p in boot_a init_boot_a vendor_boot_a vendor_kernel_boot_a dtbo_a; do
+  grep -c "^IMG ${p%_a} " "$(part "$R" $p)" >/dev/null || fail "SLOT=a: $p holds ${p%_a}.img"
+done
+for p in boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b vbmeta_b devinfo persist efs userdata; do
+  [[ $(sha256sum < "$(part "$R" "$p")") == "${olda[$p]}" ]] || fail "SLOT=a: $p is untouched"
+done
+grep -c 'boot_a (.*) written and verified' "$t/out" >/dev/null && grep -c 'Slot A holds' "$t/out" >/dev/null \
+  || { cat "$t/out"; fail "SLOT=a: it names slot A's partitions and slot A"; }
+[[ $(cat "$S/previous/SLOT") == a && $(head -c 10 "$S/previous/boot.img") == "OLD boot_a" ]] || fail "SLOT=a: previous/ holds slot A's old set and says so"
+[[ $(cat "$S/current/SLOT") == a ]] || fail "SLOT=a: current/ records slot A"
+"$U" status > "$t/st" 2>&1
+grep -c '^slot:  *a$' "$t/st" >/dev/null && grep -c '^slot A: ' "$t/st" >/dev/null && grep -c '^partition:   boot_a ' "$t/st" >/dev/null \
+  || { cat "$t/st"; fail "SLOT=a: status names slot A"; }
+"$U" preflight --json > "$t/pf" || true
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "not writing slot" not in d["problem"], d' "$t/pf" || fail "preflight strips the slot A prefix too"
+run rollback --yes || { cat "$t/out"; fail "SLOT=a: rollback"; }
+for p in boot_a init_boot_a vendor_boot_a vendor_kernel_boot_a dtbo_a boot_b; do
+  [[ $(sha256sum < "$(part "$R" "$p")") == "${olda[$p]}" ]] || fail "SLOT=a: rollback restores $p (or leaves it)"
+done
+pass "SLOT=a on slot A: writes, saves and rolls back slot A's images only, and says so"
+
+# The slot must be the running one, both ways, and the slot-A guard there
+mkroot "$R" a
+refused "slot A booted, no SLOT= line (b)" "this boot is from slot A, but" hook
+grep -c '(it has no SLOT= line: B)' "$t/out" >/dev/null || fail "and says the default is B"
+printf 'AUTO_WRITE=yes\nSLOT=a\n' > "$R/etc/omamobile/boot-update.conf"
+printf 'androidboot.slot_suffix = "_b"\n' > "$R/proc/bootconfig"
+refused "SLOT=a with bootconfig and the command line disagreeing" "this boot is from slot B, but" hook
+rm "$R/proc/bootconfig"
+mkroot "$R" b
+printf 'AUTO_WRITE=yes\nSLOT=a\n' > "$R/etc/omamobile/boot-update.conf"
+refused "SLOT=a on a phone that fell back to slot B" "not writing slot A: the bootloader says this boot is from slot B, but" hook
+mkroot "$R" a
+printf 'AUTO_WRITE=yes\nSLOT=a\n' > "$R/etc/omamobile/boot-update.conf"
+echo 'androidboot.slot_suffix=_c' > "$R/proc/cmdline"
+refused "a suffix that is neither _a nor _b" "is '_c', not _a or _b" hook
+echo 'androidboot.slot_suffix=_a' > "$R/proc/cmdline"
+RD_MARK= mkinitramfs "$R/usr/lib/omamobile/twelve/initramfs.cpio.lz4" "$RW5"
+refused "SLOT=a with an initramfs from before the running-slot guard" "no running-slot guard" hook
+RD_MARK=slot-b mkinitramfs "$R/usr/lib/omamobile/twelve/initramfs.cpio.lz4" "$RW5"
+refused "SLOT=a with a malformed running-slot marker" "no running-slot guard" hook
+mkinitramfs "$R/usr/lib/omamobile/twelve/initramfs.cpio.lz4" "$RW5"
+for bad in 'SLOT=c' 'SLOT=' 'SLOT=A' 'SLOT=_a' 'SLOT=a b'; do
+  printf 'AUTO_WRITE=yes\n%s\n' "$bad" > "$R/etc/omamobile/boot-update.conf"
+  refused "boot-update.conf with $bad" "SLOT=a|b" hook
+done
+for twice in 'SLOT=a\nSLOT=a' 'SLOT=a\nSLOT=b'; do
+  printf "AUTO_WRITE=yes\n$twice\n" > "$R/etc/omamobile/boot-update.conf"
+  refused "boot-update.conf naming SLOT twice" "a second SLOT= line" hook
+done
+printf 'AUTO_WRITE=yes\nSLOT="a"\n' > "$R/etc/omamobile/boot-update.conf"
+run write --dry-run || { cat "$t/out"; fail "SLOT=\"a\" (quoted) is read as a"; }
+# A slot-B rollback set is no rollback for slot A
+printf 'AUTO_WRITE=yes\nSLOT=a\n' > "$R/etc/omamobile/boot-update.conf"
+run hook || { cat "$t/out"; fail "SLOT=a: a write to keep a previous set"; }
+echo b > "$S/previous/SLOT"
+refused "a rollback of a set saved from slot B" "holds slot B's images, not slot A's" rollback --yes
+rm "$S/previous/SLOT"
+refused "a rollback of a set saved before the slot was recorded (slot B)" "holds slot B's images, not slot A's" rollback --yes
+# The next write moves that set aside, whole, and saves slot A's
+keep=$(cd "$S/previous" && sha256sum boot.img)
+addrel "$R" 7.3.0-rc6-omamobile-00480-geeeeeeeeeeee
+run hook || { cat "$t/out"; fail "SLOT=a: a write over a slot-B previous/"; }
+grep -c 'moved aside to' "$t/out" >/dev/null || { cat "$t/out"; fail "it says the slot-B set was moved aside"; }
+aside=$(ls -d "$S"/previous.slot-b-* | head -1)
+[[ -n $aside && $(cd "$aside" && sha256sum boot.img) == "$keep" && $(cat "$S/previous/SLOT") == a ]] \
+  || fail "the slot-B set is kept aside intact, previous/ is slot A's"
+echo a > "$S/previous/SLOT"
+# A record of slot B's set says nothing about slot A
+echo b > "$S/current/SLOT"
+"$U" status > "$t/st" 2>&1
+grep -c '^slot A: *changed outside' "$t/st" >/dev/null || { cat "$t/st"; fail "a current/ record of slot B is stale on slot A"; }
+pass "SLOT= must name the running slot, every suffix found must agree, slot A needs the running-slot initramfs, and previous/ and current/ are per slot"
+
+# A phone with no SLOT= line keeps slot B, its old previous/ (no SLOT file)
+# included
+mkroot "$R"
+run hook || { cat "$t/out"; fail "no SLOT=: the first write"; }
+rm "$S/previous/SLOT" "$S/current/SLOT"
+run rollback --dry-run || { cat "$t/out"; fail "no SLOT=: a previous/ from before the slot was recorded is slot B's"; }
+pass "no SLOT= line: slot B, and sets saved before the slot was recorded count as slot B's"
 
 # End to end with the real builder (the tools above), when dtc is there:
 # slot B ends up holding exactly what omamobile-boot-images makes
