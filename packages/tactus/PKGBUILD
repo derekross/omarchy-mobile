@@ -3,7 +3,7 @@
 # Tactus, an on-screen keyboard that corrects words as they are typed.
 # Opt-in: nothing depends on it, and squeekboard stays the phone's keyboard
 # until the owner picks Tactus (Setup > Keyboard, or `omamobile-osk use
-# tactus`; omamobile-shell 0.2.134 and later).
+# tactus`, from an omamobile-shell that has omamobile-osk).
 #
 # Built from Stevia 0.59.0 (https://gitlab.gnome.org/World/Phosh/stevia,
 # GPL-3.0-or-later), whose Wayland side, layout files and emoji data it keeps:

@@ -4,7 +4,7 @@
 Tactus is an on-screen keyboard an owner may choose instead of squeekboard. It corrects words as they are typed, the way the keyboards on current phones do. Opt-in: no image installs it, nothing depends on it, and squeekboard stays the phone's keyboard until the owner picks Tactus.
 
 <p align="center">
-  <img src="../../docs/screenshots/tactus/letters.png" width="30%" alt="Tactus under a text field. The sentence was typed with three slips (im, teh, dont) and no capitals">
+  <img src="../../docs/screenshots/tactus/letters.png" width="45%" alt="Tactus in Omarchy's Tokyo Night theme">
 </p>
 
 It is built from [Stevia](https://gitlab.gnome.org/World/Phosh/stevia) 0.59.0 (GPL-3.0-or-later), whose Wayland side, layout files and emoji data it keeps. The keys, the emoji page and everything about what gets typed are written anew: six patches to Stevia's files in `patches/`, each with what it does and why in its header, and Tactus's own sources in `source/` (the typing engine, the autocorrection, the drawing) and `tools/` (its checks).
@@ -22,7 +22,7 @@ omamobile-osk use tactus        # and back: omamobile-osk use squeekboard
 omamobile-osk which
 ```
 
-Both come with the shell's part of this, a pull request of its own (#896): `omamobile-osk` starts the keyboard the owner chose, and `hypr/phone.lua` keeps Tactus's virtual keyboard out of the hardware-key binds, as it does squeekboard's. The choice is one word in `~/.config/omamobile/keyboard`. If Tactus is removed, the phone is back on squeekboard at the next start.
+Both come with omamobile-shell's `omamobile-osk`, which starts the keyboard the owner chose (squeekboard instead, if Tactus fails at its start), and its `hypr/phone.lua` keeps Tactus's virtual keyboard out of the hardware-key binds, as it does squeekboard's. The choice is one word in `~/.config/omamobile/keyboard`. If Tactus is removed, the phone is back on squeekboard at the next start.
 
 The package sits beside squeekboard: everything is under `/usr/lib/tactus`, with Stevia's settings schemas compiled there and the binary named `tactus`. (Arch's `stevia` package conflicts with squeekboard, which omamobile-shell needs.)
 
@@ -51,7 +51,13 @@ Password fields get none of this: the typing engine is off wherever what is type
 
 ## Its colours
 
-Tactus draws itself in the applied Omarchy theme, as squeekboard is styled: the panel in the theme's darker background, the keys in its lighter one, the letters in its foreground, the caret in its accent (from `~/.local/state/omarchy/current/theme/colors.toml`). When Omarchy applies another theme the keyboard takes the new colours at once (it watches `theme.generation`). Without a theme file it uses light or dark colours of its own, by the desktop's setting. An owner who prefers those anyway can say so:
+Tactus draws itself in the applied Omarchy theme, as squeekboard is styled: the panel in the theme's darker background, the keys in its lighter one, the letters in its foreground, the caret in its accent (from `~/.local/state/omarchy/current/theme/colors.toml`). When Omarchy applies another theme the keyboard takes the new colours at once (it watches `theme.generation`): the keyboard at the top of this page in Tokyo Night, and here a moment after `omarchy-theme-set catppuccin-latte`.
+
+<p align="center">
+  <img src="../../docs/screenshots/tactus/theme-light.png" width="45%" alt="The same keyboard a moment after Omarchy applied Catppuccin Latte">
+</p>
+
+Without a theme file it uses light or dark colours of its own, by the desktop's setting. An owner who prefers those anyway can say so:
 
 ```
 mkdir -p ~/.config/tactus && touch ~/.config/tactus/own-colours
