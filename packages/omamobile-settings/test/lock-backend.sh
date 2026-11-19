@@ -285,9 +285,11 @@ printf '#!/bin/bash\necho "systemctl $*" >> "$STUB_LOG"\n[[ $2 == is-enabled ]] 
 eq "$(run get)" '{"lock":120,"keyboardAwake":true,"keyboard":false,"effective":120,"error":"could not tell if the keyboard watcher is enabled"}'
 eq "$(grep -c 'enable --now' "$STUB_LOG")" '0'
 # race: a set keyboard off started while get is deciding waits for get's lock, then disables
-printf '#!/bin/bash\necho "systemctl $*" >> "$STUB_LOG"\nif [[ $2 == is-enabled ]]; then OMAMOBILE_LOCK_WATCHER=0 bash "$RACE_SRC/backends/lock.sh" set keyboard off >/dev/null & echo $! > "$STUB_LOG.pid"; sleep 1; echo disabled; fi\nexit 0\n' > "$tmp/stubs/systemctl"
+printf '#!/bin/bash\necho "systemctl $*" >> "$STUB_LOG"\nif [[ $2 == is-enabled ]]; then { OMAMOBILE_LOCK_WATCHER=0 bash "$RACE_SRC/backends/lock.sh" set keyboard off; touch "$STUB_LOG.done"; } >/dev/null 2>&1 9>&- & sleep 1; echo disabled; fi\nexit 0\n' > "$tmp/stubs/systemctl"
 : > "$STUB_LOG"; RACE_SRC=$src run get >/dev/null
-while kill -0 "$(cat "$STUB_LOG.pid")" 2>/dev/null; do sleep 0.2; done
+# a done file, not kill -0: the racer is reparented to the container's PID 1, which may never reap it
+for _ in $(seq 100); do [[ -e $STUB_LOG.done ]] && break; sleep 0.2; done
+[[ -e $STUB_LOG.done ]] || { echo "FAIL: the racing set keyboard off did not end" >&2; exit 1; }
 eq "$(pj keyboardAwake)" 'False'
 eq "$(grep 'able' "$STUB_LOG" | tail -1)" "systemctl --user disable --now --no-block omamobile-lock-keyboard.service"
 cp "$tmp/systemctl.keep" "$tmp/stubs/systemctl"
