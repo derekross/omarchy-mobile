@@ -7,6 +7,10 @@
 [Unit]
 Description=Omamobile GNSS (Pixel 7 Pro: BCM4775x, stock lhd and gpsd; Pixel 9a: the modem's Kepler through the stock HAL)
 After=network-online.target
+# The 9a's gnssd runs in the modem's unit: stopped after it at shutdown, a
+# session ends before gnssd goes, so a reboot mid-session is a clean stop and
+# clears the hang marker. Ordering only; nothing here starts the modem.
+After=omamobile-tegu-modem.service
 StopWhenUnneeded=yes
 ConditionPathExists=|/usr/lib/omamobile-vendor/gnss/root
 ConditionPathExists=|/usr/lib/omamobile-vendor/gnss-slsi/root

@@ -39,6 +39,8 @@ run_start() { # $1 dt dir, $2 fake unix table
         -e "s|/usr/lib/omamobile-vendor/omamobile-vendor-chroot|'"$tmp"'/stub|" lib/omamobile-gnss-start > '"$tmp"'/start
     bash '"$tmp"'/start "$@"' _ "${3:-}" 2>/dev/null
 }
+# The starts below that skip GNSS hold the client's connection first; not here, unless a case asks.
+export OMAMOBILE_GNSS_NOTHING_HOLD=0
 : > "$tmp/log"; printf '@GNSSND\n' > "$tmp/unix"
 run_start "$tmp/dt" "$tmp/unix"
 grep -c 'chroot gnss-slsi start' "$tmp/log" >/dev/null || fail "9a branch: gnss-slsi start ran"
@@ -127,6 +129,29 @@ grep -c 'chroot gnss-slsi start' "$tmp/log" >/dev/null || fail "gnssd came durin
 unset OMAMOBILE_GNSS_SYSTEMCTL
 rm -f "$tmp/var/lib/omamobile/gnss-bringup-started"
 echo "ok - a request before gnssd is up waits for it while the modem brings it, and without it holds a moment before giving up"
+# A marker left by a bring-up that never finished: the 9a skips GNSS, keeps the marker, and holds the
+# connection first, so GeoClue's reconnects can't fail the socket and --retry's next request finds it listening
+date -Is > "$tmp/var/lib/omamobile/gnss-bringup-started"
+: > "$tmp/log"; t0=$SECONDS
+OMAMOBILE_GNSS_NOTHING_HOLD=2 run_start "$tmp/dt" "$tmp/unix" || fail "a leftover marker: the start fails"
+(( SECONDS - t0 >= 2 )) || fail "a leftover marker on the 9a: the connection is held before the skip"
+grep -c 'gnss-slsi start' "$tmp/log" >/dev/null && fail "a leftover marker: gnss-slsi started"
+[[ -e "$tmp/var/lib/omamobile/gnss-bringup-started" ]] || fail "a leftover marker: the skip keeps it"
+rm -f "$tmp/var/lib/omamobile/gnss-bringup-started"
+echo "ok - a leftover marker skips GNSS on the 9a after holding the connection, and stays"
+grep -qx 'After=omamobile-tegu-modem.service' vendor/systemd/system/omamobile-gnss.service \
+  || fail "the GNSS stack stops before the 9a's modem unit at shutdown"
+grep -E '^(Requires|Wants|BindsTo)=.*omamobile-tegu-modem' vendor/systemd/system/omamobile-gnss.service \
+  && fail "the GNSS stack must not pull the modem in"
+echo "ok - at shutdown the GNSS stack stops before the 9a's modem, which it never starts"
+# The client survives the bridge going first: SIGPIPE ignored for its spawn (inherited across exec), and only for it
+awk '/^profile_start\(\)/,/^}/' profiles/gnss-slsi.conf > "$tmp/ps"
+grep -n "trap '' PIPE" "$tmp/ps" | head -1 | cut -d: -f1 > "$tmp/ign"; grep -n 'spawn client' "$tmp/ps" | head -1 | cut -d: -f1 > "$tmp/cl"
+grep -n 'trap - PIPE' "$tmp/ps" | head -1 | cut -d: -f1 > "$tmp/rst"; grep -n 'spawn hal' "$tmp/ps" | head -1 | cut -d: -f1 > "$tmp/hal"
+[[ -s $tmp/ign && -s $tmp/cl && -s $tmp/rst && -s $tmp/hal ]] || fail "the 9a's profile ignores SIGPIPE around the client's spawn"
+(( $(<"$tmp/hal") < $(<"$tmp/ign") && $(<"$tmp/ign") < $(<"$tmp/cl") && $(<"$tmp/cl") < $(<"$tmp/rst") )) \
+  || fail "SIGPIPE is ignored for the client only, after the HAL's spawn and back to default after it"
+echo "ok - the 9a's client outlives a bridge that stops first, so the stack's stop stays a clean one"
 
 rm -rf "$tmp"
 echo "ok - the 9a's marker survives failed stops and clears only after a clean stop"
