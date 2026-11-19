@@ -18,7 +18,8 @@ chg=0x69 tcpc=0x25
 log() { echo "omamobile-usb-rescue: $*"; }
 
 bus=
-for d in /sys/bus/i2c/devices/i2c-*; do
+SYS=${OMAMOBILE_USB_RESCUE_SYS:-/sys}
+for d in "$SYS"/bus/i2c/devices/i2c-*; do
   readlink -f "$d" | grep -q 10cb0000.i2c && { bus=${d##*-}; break; }
 done
 [[ -n $bus ]] || { log "no I2C bus for 10cb0000.i2c"; exit 0; }
@@ -26,13 +27,17 @@ done
 rd() { i2cget -f -y "$bus" "$1" "$2" 2>/dev/null; }
 # VBUS as the charger sees it: CHG_DETAILS_00.CHGIN_DTLS (bits 6:5) == 3.
 vbus_valid() { local v; v=$(rd $chg 0xb5) || return 1; (( ((v >> 5) & 3) == 3 )); }
-tcpm_owns() { [[ -e /sys/bus/i2c/devices/$bus-0025/driver ]]; }
-udc_state() { cat /sys/class/udc/*/state 2>/dev/null | head -1; }
+tcpm_owns() { [[ -e $SYS/bus/i2c/devices/$bus-0025/driver ]]; }
+udc_state() { cat "$SYS"/class/udc/*/state 2>/dev/null | head -1; }
 
 RECHECK=${OMAMOBILE_USB_RESCUE_RECHECK:-30}
 # Each udev event ends a wait; the switch and VBUS are read again after it.
 coproc UEV { exec udevadm monitor --kernel --subsystem-match=power_supply \
   --subsystem-match=udc --subsystem-match=i2c 2>/dev/null; }
+# Bash unsets UEV once the coproc is reaped, and ${UEV[0]} under set -u would
+# then end the script, so keep our own copy of its output fd.
+uev=
+[[ -n ${UEV[0]:-} ]] && exec {uev}<&"${UEV[0]}"
 log "watching the USB data switch on I2C bus $bus"
 last=
 while :; do
@@ -48,15 +53,16 @@ while :; do
     log "VBUS valid, USBSW_CTRL $sw: closing the data switch"
     i2cset -f -y "$bus" $tcpc 0x93 0x09
   fi
-  if [[ -n ${UEV_PID:-} ]]; then
+  if [[ -n $uev ]]; then
     # Block until an event (then drain the burst a plug sends) or RECHECK.
-    if read -r -t "$RECHECK" -u "${UEV[0]}" _; then
-      while read -r -t 0.2 -u "${UEV[0]}" _; do :; done
+    if read -r -t "$RECHECK" -u "$uev" _; then
+      while read -r -t 0.2 -u "$uev" _; do :; done
     elif (( $? <= 128 )); then
       log "udevadm monitor ended; looking every 2 s"
-      unset UEV_PID
+      exec {uev}<&-
+      uev=
     fi
   else
-    sleep 2
+    sleep "${OMAMOBILE_USB_RESCUE_POLL:-2}"
   fi
 done

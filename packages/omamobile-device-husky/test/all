@@ -149,7 +149,19 @@ grep -q '10cb0000.i2c' bin/omamobile-usb-rescue || fail "the USB rescue watches 
 grep -q 'i2cset -f -y "$bus" $tcpc 0x93 0x09' bin/omamobile-usb-rescue || fail "the USB rescue closes the data switch"
 [[ $(grep -c 'i2cset' bin/omamobile-usb-rescue) -eq 1 ]] || fail "the USB rescue writes one register only"
 grep -q 'udevadm monitor --kernel --subsystem-match=power_supply' bin/omamobile-usb-rescue || fail "the USB rescue waits on udev events"
-! grep -qx '  sleep 2' bin/omamobile-usb-rescue || fail "the USB rescue has no fixed 2 s loop"
+# The monitor ends early: the rescue falls back to polling and keeps running.
+ur=$tmp/usbrescue; mkdir -p "$ur/bin" "$ur/sys/bus/i2c/devices" "$ur/dev/10cb0000.i2c/i2c-7"
+ln -s "$ur/dev/10cb0000.i2c/i2c-7" "$ur/sys/bus/i2c/devices/i2c-7"
+printf '#!/bin/sh\nexit 0\n' >"$ur/bin/udevadm"
+printf '#!/bin/sh\necho 0x09\n' >"$ur/bin/i2cget"
+printf '#!/bin/sh\necho "$@" >>%s/writes\n' "$ur" >"$ur/bin/i2cset"
+chmod +x "$ur/bin/"*
+PATH="$ur/bin:$PATH" OMAMOBILE_USB_RESCUE_SYS="$ur/sys" OMAMOBILE_USB_RESCUE_RECHECK=1 OMAMOBILE_USB_RESCUE_POLL=0.1 \
+  timeout 3 bash bin/omamobile-usb-rescue >"$ur/log" 2>&1 && rc=0 || rc=$?
+[[ $rc -eq 124 ]] || fail "the USB rescue keeps running after udevadm monitor ends: $(cat "$ur/log")"
+grep -q 'udevadm monitor ended; looking every 2 s' "$ur/log" || fail "the USB rescue falls back to polling: $(cat "$ur/log")"
+! grep -q 'unbound variable' "$ur/log" || fail "the USB rescue survives the reaped coproc"
+[[ ! -e $ur/writes ]] || fail "the USB rescue leaves a closed switch alone"
 grep -q '^ExecStart=/usr/bin/omamobile-usb-rescue$' vendor/systemd/system/omamobile-usb-rescue.service \
   || fail "the USB rescue unit runs the script"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service") == ../omamobile-usb-rescue.service ]] \
