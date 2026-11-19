@@ -1,0 +1,6 @@
+#%PAM-1.0
+# Omarchy Mobile: the lock screen's fingerprint conversation (Omarchy's own
+# setup_lock_fingerprint_pam; its omarchy-setup-security-fingerprint looks for a USB
+# reader, so the phone ships this file instead). device/hotdog/FINGERPRINT-PLAN.md.
+auth       required                    pam_fprintd.so
+account    include                     system-local-login

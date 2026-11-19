@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# OnePlus 7T Pro: give the WCN3998 Bluetooth controller its address, which
+# leaves it unconfigured until then (bin/omamobile-hotdog-bt-addr).
+[Unit]
+Description=Set the OnePlus 7T Pro Bluetooth address
+After=bluetooth.service
+Wants=bluetooth.service
+ConditionPathExists=/proc/device-tree/model
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-hotdog-bt-addr
+TimeoutStartSec=60s
+RemainAfterExit=yes
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictAddressFamilies=AF_UNIX AF_BLUETOOTH
+RestrictRealtime=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

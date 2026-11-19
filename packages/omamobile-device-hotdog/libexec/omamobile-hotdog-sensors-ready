@@ -1,0 +1,17 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# OnePlus 7T Pro: wait until the SLPI's Sensor Core answers, then start
+# iio-sensor-proxy again (device/hotdog/SENSORS-PLAN.md). iio-sensor-proxy
+# looks for its SSC sensors once, when it starts; udev starts it at boot
+# when the ADSP's FastRPC node appears, long before the SLPI's sensors are
+# up, so it finds none and exits.
+set -u
+for _ in $(seq 60); do
+  if ssccli --sensor light --timeout 1 >/dev/null 2>&1; then
+    systemctl restart --no-block iio-sensor-proxy.service
+    exit 0
+  fi
+  sleep 1
+done
+echo "omamobile-hotdog-sensors-ready: the Sensor Core did not answer in 60 s" >&2
+exit 1

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile storage guard, continued in Arch (OnePlus 7T Pro). The
+# initramfs marks every UFS partition read-only except userdata and removes
+# the whole-disk node of the main LUN (sda). udev would recreate /dev/sda, so
+# make the whole-disk node inaccessible and keep desktop tools from touching
+# any Android partition; this phone's boot and modem partitions are on sde
+# and sdf, so the rule covers every LUN.
+SUBSYSTEM=="block", KERNEL=="sda", MODE="0000", ENV{UDISKS_IGNORE}="1"
+SUBSYSTEM=="block", KERNEL=="sd[a-z][0-9]*", ENV{ID_PART_ENTRY_NAME}!="userdata", ENV{UDISKS_IGNORE}="1"
+# The modem's EFS and NV backups and persist, read-only again whenever udev
+# sees them (BLKROSET; after 60-persistent-storage, which names them), in
+# case anything ever rescans a LUN after the initramfs guard has gone.
+ACTION=="add|change", SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_PART_ENTRY_NAME}=="modemst1|modemst2|fsg|fsc|oem_stanvbk|oem_dycnvbk|mdm_oem_stanvbk|mdm_oem_dycnvbk|mdm1m9kefsc|persist", RUN+="/usr/bin/blockdev --setro $devnode"
+# The partitions on sda carry no ID_PART_ENTRY_NAME: with /dev/sda gone, udev
+# cannot read that LUN's partition table. The kernel's own PARTNAME (from the
+# GPT at probe) is there for every partition, so match it as well.
+ACTION=="add|change", SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{PARTNAME}=="modemst1|modemst2|fsg|fsc|oem_stanvbk|oem_dycnvbk|mdm_oem_stanvbk|mdm_oem_dycnvbk|mdm1m9kefsc|persist", RUN+="/usr/bin/blockdev --setro $devnode"
+# rmtfs (-P) opens OnePlus's NV backups, oem_stanvbk and oem_dycnvbk (both on
+# sda), by /dev/disk/by-partlabel; name those two from PARTNAME, and only
+# them. rmtfs runs read-only (-r) and the partitions stay ro in the kernel.
+ACTION=="add|change", SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_PART_ENTRY_NAME}=="", ENV{PARTNAME}=="oem_stanvbk|oem_dycnvbk", SYMLINK+="disk/by-partlabel/$env{PARTNAME}"

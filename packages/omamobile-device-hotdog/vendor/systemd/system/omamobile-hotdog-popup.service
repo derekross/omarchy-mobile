@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+# OnePlus 7T Pro: raise the pop-up front camera while the front sensor
+# streams and lower it afterwards (CAMERA-PLAN.md, P-steps). Not enabled by
+# the package: the owner enables it after the plan's P-steps have passed,
+# and it still does nothing without /etc/omamobile/popup-hotdog-enable.
+# Stopping it (and shutting down) lowers the camera.
+[Unit]
+Description=OnePlus 7T Pro pop-up camera
+ConditionPathExists=/etc/omamobile/popup-hotdog-enable
+After=systemd-modules-load.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/omamobile/hotdog/omamobile-hotdog-popup daemon
+KillSignal=SIGTERM
+TimeoutStopSec=10s
+Restart=no
+Nice=-10
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=20
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/run/omamobile
+RuntimeDirectory=omamobile
+RuntimeDirectoryPreserve=yes
+
+[Install]
+WantedBy=multi-user.target
