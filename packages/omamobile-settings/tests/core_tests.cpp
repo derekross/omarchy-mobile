@@ -4,6 +4,7 @@
 #include "deviceinfocontroller.h"
 #include "actionrunner.h"
 #include <QtTest>
+#include <QPointer>
 #include <QQmlComponent>
 #include <memory>
 #include <QDir>
@@ -141,6 +142,32 @@ private slots:
         QCOMPARE(backend.page(), QString("haptics"));
         backend.back();
         QCOMPARE(backend.page(), QString("root"));
+    }
+    void hapticsTryFieldExistsAndIsClearedOnLeaving() {
+        Backend backend;
+        backend.setBackendDir(stubs("off"));
+        backend.setHomeCommand({});
+        ActionRunner runner;
+        runner.setBackendDir(stubs("off"));
+        DeviceInfoController info(true);
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("backend", &backend);
+        engine.rootContext()->setContextProperty("actions", &runner);
+        engine.rootContext()->setContextProperty("deviceInfo", &info);
+        engine.load(QUrl("qrc:/Main.qml"));
+        QCOMPARE(engine.rootObjects().size(), 1);
+        auto *window = engine.rootObjects().first();
+        QVERIFY(backend.navigate("haptics"));
+        QTRY_VERIFY(window->findChild<QObject *>("hapticsTryField"));
+        QPointer<QObject> field = window->findChild<QObject *>("hapticsTryField");
+        field->setProperty("text", "typed");
+        QCOMPARE(field->property("text").toString(), QString("typed"));
+        QVERIFY(QMetaObject::invokeMethod(window, "goBack"));
+        QCOMPARE(backend.page(), QString("root"));
+        QTRY_VERIFY(!field || field->property("text").toString().isEmpty());
+        QVERIFY(backend.navigate("haptics"));
+        QTRY_VERIFY(window->findChild<QObject *>("hapticsTryField"));
+        QCOMPARE(window->findChild<QObject *>("hapticsTryField")->property("text").toString(), QString());
     }
     void searchHasOnlyImplementedRoutesAndBackClearsIt() {
         Backend backend;

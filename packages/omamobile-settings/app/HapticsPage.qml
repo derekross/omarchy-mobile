@@ -26,12 +26,16 @@ ColumnLayout {
     }
     Connections { target: actions; function onFinished(tool, r, id) { if (tool === "haptics" && id === page.reqId) page.apply(r) } }
     Component.onCompleted: reqId = actions.run("haptics", ["get"])
+    // Leaving the page drops what was typed; nothing here is ever saved.
+    Component.onDestruction: { tryField.clear(); if (tryField.activeFocus) Qt.inputMethod.hide() }
     Repeater {
         model: page.levels
         delegate: SettingsButton {
             required property var modelData
             Layout.fillWidth: true; Layout.preferredHeight: 64
             visible: page.available
+            // No focus on tap, so the try field keeps the keyboard up while levels are compared.
+            focusPolicy: Qt.NoFocus
             highlighted: page.level === modelData.id; enabled: page.available && !page.busy
             onClicked: { page.busy = true; page.reqId = actions.run("haptics", ["set", "level", modelData.id]) }
             contentItem: Column {
@@ -40,6 +44,17 @@ ColumnLayout {
                 SettingsLabel { text: modelData.hint; color: backend.muted; font.pixelSize: SettingsStyle.fontPx(12); width: parent.width; wrapMode: Text.Wrap }
             }
         }
+    }
+    SettingsTextField {
+        id: tryField
+        objectName: "hapticsTryField"
+        Layout.fillWidth: true; Layout.preferredHeight: 52
+        visible: page.available
+        placeholderText: qsTr("Try it here: type to feel the ticks")
+        color: backend.foreground; placeholderTextColor: backend.muted
+        inputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhSensitiveData
+        background: Rectangle { radius: Math.min(backend.radius, width / 2, height / 2); color: SettingsStyle.fill("normal") }
+        onVisibleChanged: if (!visible) clear()
     }
     SettingsLabel { text: page.status; color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13); wrapMode: Text.Wrap; Layout.fillWidth: true }
     Item { Layout.fillHeight: true }
