@@ -343,4 +343,5 @@ a Wi-Fi run's kernel had the Bluetooth node.
 | Boot images | `boot`, `init_boot`, `vendor_boot`, `vendor_kernel_boot`, `dtbo`, A/B; `boot` 64 MiB, `init_boot` 8 MiB | [V] `fastboot getvar` |
 | `vendor_boot` page size | 0x800, header v4 | [V] stock image header |
 | Panel | `sdc-s6e3fc5`, 1080x2400, on DECON0 and DSIM0 | [V] `exynos_drm.panel_name`, `dumpsys display`, stock dmesg |
+| DSIM link timers (60 Hz) | command mode, underrun `0x1cf8`, TE `0x2a82306d` | [V] DSIM0 registers read on this phone via `/dev/mem` |
 | Storage | 128 GB SK hynix UFS 3.1 | [V] `fastboot getvar` |
