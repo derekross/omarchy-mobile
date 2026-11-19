@@ -1,0 +1,3598 @@
+From 37dbf8a8de53273587c01e0e3c5b492cd293e01b Mon Sep 17 00:00:00 2001
+From: local <local@localhost>
+Date: Sat, 14 Nov 2026 18:33:25 +0100
+Subject: [PATCH] omatel 0.3.0: MMS and group messages through mmsd-tng
+
+The agent becomes mmsd-tng's client (org.ofono.mms on the session bus).
+It follows mmsd-tng as it comes and goes, imports what GetMessages lists
+when it appears, then follows MessageAdded, MessageRemoved, the
+messages' PropertyChanged("status") and MessageSendError.
+
+A received MMS is stored like an SMS: committed first (its text from the
+text/plain parts, every other part copied out of mmsd-tng's PDU file into
+parts/<uuid>/ in the data directory), then deleted from mmsd-tng. The
+store keys MMS by mmsd-tng's object path (a unique index), so a crash in
+between or a message reported twice stores nothing twice. A group
+conversation is the sender and the recipients minus the phone's own
+numbers (mmsd-tng's Modem Number, ModemManager's OwnNumbers), with the
+store's sorted, comma-joined address; each message keeps its sender.
+Notifications say "Picture" or "Attachment" for a message with no text,
+and name the sender in a group.
+
+Sending: Messages1 gains SendWithAttachments(as, s, a(ss)) and
+SendToConversationWithAttachments(x, s, a(ss)), ListParts(x) -> a(ssx)
+and the MmsReady property; the 0.2 members are unchanged, except that a
+group conversation's text now goes as MMS. The agent picks the
+transport: text to one person stays SMS, anything with an attachment or
+to a group is MMS. Attachments are copied into parts/out-<id>/ before the
+call returns; the stored message follows mmsd-tng's sent,
+sending_failed and delivered, and leaves mmsd-tng once nothing more can
+happen to it (48 hours at most for a delivery report). The carrier's
+size limit is checked first so "too big" is said plainly. Without
+mmsd-tng the message is kept as failed with that reason, Retry sends it
+later, and the new calls answer ...Messages1.Error.MmsUnavailable.
+
+The apps delete messages straight in the store, so schema 2 adds triggers
+that list deleted messages' mmsd-tng paths and part files; the agent
+deletes those from mmsd-tng and from disk at attach and every ten minutes,
+and a forgotten path is never imported again. An MMS that mmsd-tng still
+holds is no longer failed at start-up as "interrupted".
+
+Tests: store tests for MMS inserts, parts, groups and the forgotten
+lists; a scripted mmsd-tng in omatel-mock (shapes from mmsd-tng 2.6.4's
+service.c) and tests/mms.rs driving the agent against it on a private
+session bus.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Cargo.lock                          |   17 +-
+ Cargo.toml                          |    2 +-
+ README.md                           |    7 +-
+ apps/omatel-agent/Cargo.toml        |    1 +
+ apps/omatel-agent/src/iface.rs      |  153 +++-
+ apps/omatel-agent/src/lib.rs        |   19 +
+ apps/omatel-agent/src/mms.rs        | 1283 +++++++++++++++++++++++++++
+ apps/omatel-agent/src/sms.rs        |  119 ++-
+ apps/omatel-agent/tests/mms.rs      |  447 ++++++++++
+ crates/omatel-api/src/lib.rs        |   72 +-
+ crates/omatel-mock/src/lib.rs       |    2 +
+ crates/omatel-mock/src/mmsd.rs      |  433 +++++++++
+ crates/omatel-store/src/lib.rs      |    3 +-
+ crates/omatel-store/src/messages.rs |  443 ++++++++-
+ docs/architecture.md                |   48 +-
+ docs/development.md                 |    7 +
+ docs/export-format.md               |    3 +-
+ 17 files changed, 3006 insertions(+), 53 deletions(-)
+ create mode 100644 apps/omatel-agent/src/mms.rs
+ create mode 100644 apps/omatel-agent/tests/mms.rs
+ create mode 100644 crates/omatel-mock/src/mmsd.rs
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 44292bb..9c1711e 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1143,9 +1143,10 @@ dependencies = [
+ 
+ [[package]]
+ name = "omatel-agent"
+-version = "0.2.4"
++version = "0.3.0"
+ dependencies = [
+  "anyhow",
++ "chrono",
+  "clap",
+  "futures-util",
+  "omatel-api",
+@@ -1165,7 +1166,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "omatel-api"
+-version = "0.2.4"
++version = "0.3.0"
+ dependencies = [
+  "serde",
+  "tempfile",
+@@ -1176,7 +1177,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "omatel-contacts"
+-version = "0.2.4"
++version = "0.3.0"
+ dependencies = [
+  "phonenumber",
+  "tempfile",
+@@ -1186,7 +1187,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "omatel-mm"
+-version = "0.2.4"
++version = "0.3.0"
+ dependencies = [
+  "chrono",
+  "futures-util",
+@@ -1199,7 +1200,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "omatel-mock"
+-version = "0.2.4"
++version = "0.3.0"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -1215,7 +1216,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "omatel-notify"
+-version = "0.2.4"
++version = "0.3.0"
+ dependencies = [
+  "futures-util",
+  "omatel-mock",
+@@ -1226,7 +1227,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "omatel-store"
+-version = "0.2.4"
++version = "0.3.0"
+ dependencies = [
+  "omatel-contacts",
+  "rusqlite",
+@@ -1239,7 +1240,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "omatel-theme"
+-version = "0.2.4"
++version = "0.3.0"
+ dependencies = [
+  "gtk4",
+  "libadwaita",
+diff --git a/Cargo.toml b/Cargo.toml
+index c139789..754a4c7 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -12,7 +12,7 @@ members = [
+ ]
+ 
+ [workspace.package]
+-version = "0.2.4"
++version = "0.3.0"
+ edition = "2021"
+ license = "GPL-3.0-or-later"
+ rust-version = "1.87"
+diff --git a/README.md b/README.md
+index 18257f9..6fb7cc9 100644
+--- a/README.md
++++ b/README.md
+@@ -21,7 +21,7 @@ apps depend on them as git dependencies pinned to a release tag:
+ | `omatel-notify` | desktop notifications with buttons and inline reply |
+ | `omatel-theme` | the Omarchy theme for GTK 4 and libadwaita, and the apps' shared stylesheet |
+ | `omatel-api` | the agent's session-bus API (`org.omamobile.Phone1`, `org.omamobile.Messages1`) and the shared settings |
+-| `omatel-mock` | test doubles: a scripted ModemManager, a notification server, fictional demo data (never shipped) |
++| `omatel-mock` | test doubles: a scripted ModemManager and mmsd-tng, a notification server, fictional demo data (never shipped) |
+ 
+ **omatel-agent** runs from login, whether or not an app is open:
+ - It talks to the modem through ModemManager's D-Bus API. On Omarchy Mobile
+@@ -35,13 +35,16 @@ apps depend on them as git dependencies pinned to a release tag:
+   one notification per conversation with an inline reply, sends messages
+   and records delivery reports. While the phone is locked, notifications
+   say only "New message" unless you allow more in Messages' settings.
++- It is mmsd-tng's client for MMS: pictures and other attachments, and
++  group conversations, in and out. mmsd-tng (a user service on the session
++  bus) does the network side; the agent stores what it receives, with the
++  attachments copied into its data directory, and hands it what you send.
+ 
+ > **Emergency calls (911, 112) don't work on this phone yet. Keep another
+ > phone for emergencies.** The agent refuses emergency numbers, and Phone
+ > shows a full-screen message instead of placing the call.
+ 
+ Not yet:
+-- MMS and group messages (they arrive with mmsd-tng).
+ - Call audio routing: speaker and mute go to callaudiod once Omarchy
+   Mobile's call audio work lands.
+ - Hold, swap and conference calls; visual voicemail.
+diff --git a/apps/omatel-agent/Cargo.toml b/apps/omatel-agent/Cargo.toml
+index bdaf886..8885dc2 100644
+--- a/apps/omatel-agent/Cargo.toml
++++ b/apps/omatel-agent/Cargo.toml
+@@ -10,6 +10,7 @@ rust-version.workspace = true
+ workspace = true
+ 
+ [dependencies]
++chrono.workspace = true
+ serde_json.workspace = true
+ omatel-api.workspace = true
+ omatel-mm.workspace = true
+diff --git a/apps/omatel-agent/src/iface.rs b/apps/omatel-agent/src/iface.rs
+index af6cc4b..74a8076 100644
+--- a/apps/omatel-agent/src/iface.rs
++++ b/apps/omatel-agent/src/iface.rs
+@@ -6,14 +6,16 @@
+ use std::sync::Arc;
+ 
+ use futures_util::StreamExt;
+-use omatel_api::{CallInfo, MESSAGES_NAME, MESSAGES_PATH, PHONE_NAME, PHONE_PATH, ROUTES};
++use omatel_api::{
++    CallInfo, PartInfo, MESSAGES_NAME, MESSAGES_PATH, PHONE_NAME, PHONE_PATH, ROUTES,
++};
+ use omatel_contacts::number;
+ use omatel_notify::Event;
+ use zbus::object_server::SignalEmitter;
+ use zbus::{interface, DBusError};
+ 
+ use crate::calls::{self, DialError};
+-use crate::{audio, sms, Agent, Target};
++use crate::{audio, mms, sms, Agent, Target};
+ 
+ #[derive(Debug, DBusError)]
+ #[zbus(prefix = "org.omamobile.Phone1.Error")]
+@@ -237,6 +239,64 @@ fn store_error(e: omatel_store::Error) -> zbus::fdo::Error {
+     zbus::fdo::Error::Failed(format!("message store: {e}"))
+ }
+ 
++/// Errors of the Messages1 members added with MMS: the standard ones
++/// (through `ZBus`) and MmsUnavailable.
++#[derive(Debug, DBusError)]
++#[zbus(prefix = "org.omamobile.Messages1.Error")]
++pub enum MessagesError {
++    #[zbus(error)]
++    ZBus(zbus::Error),
++    MmsUnavailable(String),
++}
++
++impl From<zbus::fdo::Error> for MessagesError {
++    fn from(e: zbus::fdo::Error) -> MessagesError {
++        MessagesError::ZBus(zbus::Error::FDO(Box::new(e)))
++    }
++}
++
++impl From<mms::SendError> for MessagesError {
++    fn from(e: mms::SendError) -> MessagesError {
++        match e {
++            mms::SendError::Store(e) => store_error(e).into(),
++            mms::SendError::Invalid(m) => zbus::fdo::Error::InvalidArgs(m).into(),
++        }
++    }
++}
++
++impl Messages {
++    /// Send to a conversation: SMS for text to one person, MMS for
++    /// anything with attachments or to a group.
++    async fn send_into(
++        &self,
++        conversation: i64,
++        text: &str,
++        attachments: Vec<(String, String)>,
++    ) -> Result<i64, MessagesError> {
++        let a = self.agent.clone();
++        let t = text.to_string();
++        if attachments.is_empty() && !sms::is_group(&self.agent, conversation) {
++            return self
++                .agent
++                .on_runtime(async move { sms::send(&a, conversation, &t).await })
++                .await
++                .map_err(|e| store_error(e).into());
++        }
++        let id = self
++            .agent
++            .on_runtime(async move { mms::send(&a, conversation, &t, &attachments).await })
++            .await?;
++        if !mms::ready(&self.agent) {
++            // Kept, as failed, for Retry once mmsd-tng runs.
++            return Err(MessagesError::MmsUnavailable(format!(
++                "{}; the message is kept as not sent",
++                mms::NOT_RUNNING
++            )));
++        }
++        Ok(id)
++    }
++}
++
+ #[interface(name = "org.omamobile.Messages1")]
+ impl Messages {
+     async fn send(&self, number: &str, text: &str) -> zbus::fdo::Result<(i64, i64)> {
+@@ -285,6 +345,78 @@ impl Messages {
+             .map_err(store_error)
+     }
+ 
++    async fn send_with_attachments(
++        &self,
++        recipients: Vec<String>,
++        text: &str,
++        attachments: Vec<(String, String)>,
++    ) -> Result<(i64, i64), MessagesError> {
++        if text.trim().is_empty() && attachments.is_empty() {
++            return Err(zbus::fdo::Error::InvalidArgs("Empty message".into()).into());
++        }
++        let region = self.agent.region();
++        let members: Vec<(String, String)> = recipients
++            .iter()
++            .map(|r| (number::normalize(r, &region), r.trim().to_string()))
++            .filter(|(n, _)| !n.is_empty())
++            .collect();
++        if members.is_empty() {
++            return Err(zbus::fdo::Error::InvalidArgs("Missing number".into()).into());
++        }
++        let conv = self
++            .agent
++            .messages
++            .lock()
++            .unwrap()
++            .conversation_for_members(&members)
++            .map_err(store_error)?;
++        let id = self.send_into(conv, text, attachments).await?;
++        Ok((conv, id))
++    }
++
++    async fn send_to_conversation_with_attachments(
++        &self,
++        conversation: i64,
++        text: &str,
++        attachments: Vec<(String, String)>,
++    ) -> Result<i64, MessagesError> {
++        if text.trim().is_empty() && attachments.is_empty() {
++            return Err(zbus::fdo::Error::InvalidArgs("Empty message".into()).into());
++        }
++        let exists = self
++            .agent
++            .messages
++            .lock()
++            .unwrap()
++            .conversation(conversation)
++            .map_err(store_error)?
++            .is_some();
++        if !exists {
++            return Err(zbus::fdo::Error::InvalidArgs("No such conversation".into()).into());
++        }
++        self.send_into(conversation, text, attachments).await
++    }
++
++    fn list_parts(&self, message: i64) -> zbus::fdo::Result<Vec<PartInfo>> {
++        let parts = self
++            .agent
++            .messages
++            .lock()
++            .unwrap()
++            .parts(message)
++            .map_err(store_error)?;
++        Ok(parts
++            .into_iter()
++            .map(|p| PartInfo {
++                path: mms::part_path(&self.agent, &p.file)
++                    .to_string_lossy()
++                    .into_owned(),
++                mime: p.mime,
++                size: p.size,
++            })
++            .collect())
++    }
++
+     async fn retry(&self, message: i64) -> zbus::fdo::Result<()> {
+         let a = self.agent.clone();
+         if self
+@@ -337,6 +469,12 @@ impl Messages {
+         self.agent.modem_state.lock().unwrap().clone()
+     }
+ 
++    /// mmsd-tng runs: MMS can be handed to it.
++    #[zbus(property)]
++    fn mms_ready(&self) -> bool {
++        mms::ready(&self.agent)
++    }
++
+     #[zbus(signal)]
+     async fn messages_changed(emitter: &SignalEmitter<'_>, conversation: i64) -> zbus::Result<()>;
+ }
+@@ -432,6 +570,17 @@ pub async fn modem_state_changed(agent: &Agent) {
+     }
+ }
+ 
++pub async fn mms_ready_changed(agent: &Agent) {
++    if let Ok(i) = agent
++        .session
++        .object_server()
++        .interface::<_, Messages>(MESSAGES_PATH)
++        .await
++    {
++        let _ = i.get().await.mms_ready_changed(i.signal_emitter()).await;
++    }
++}
++
+ /// After the last call: mute off, back to the earpiece.
+ pub async fn reset_audio(agent: &Agent) {
+     let changed = {
+diff --git a/apps/omatel-agent/src/lib.rs b/apps/omatel-agent/src/lib.rs
+index b4febfa..8b059a4 100644
+--- a/apps/omatel-agent/src/lib.rs
++++ b/apps/omatel-agent/src/lib.rs
+@@ -13,6 +13,8 @@
+ //! - stores every incoming SMS (committed to disk, then deleted from the
+ //!   modem; duplicates filtered), notifies per conversation with an inline
+ //!   reply, sends messages and records delivery reports;
++//! - is mmsd-tng's client for MMS, group messages and attachments
++//!   ([`mms`]): stores what it receives, hands it what is sent;
+ //! - serves `org.omamobile.Phone1` and `org.omamobile.Messages1` on the
+ //!   session bus for the apps and the shell ([`omatel_api`]).
+ //!
+@@ -22,6 +24,7 @@
+ mod audio;
+ mod calls;
+ mod iface;
++mod mms;
+ mod sms;
+ mod util;
+ 
+@@ -143,6 +146,14 @@ pub struct Agent {
+     pub(crate) route: Mutex<String>,
+     /// SMS objects being handled now (Added and List can both name one).
+     pub(crate) handling: Mutex<HashSet<String>>,
++    /// The phone's own numbers (ModemManager's OwnNumbers), left out of
++    /// group conversations.
++    pub(crate) own_numbers: Mutex<Vec<String>>,
++    /// mmsd-tng, while it runs.
++    pub(crate) mms: Mutex<mms::MmsState>,
++    /// Held while an MMS is handed to mmsd-tng, which announces the new
++    /// message before it answers: its handler waits for the answer.
++    pub(crate) mms_send: tokio::sync::Mutex<()>,
+     /// The agent's runtime. zbus runs D-Bus method handlers on its own
+     /// executor thread, where tokio isn't available: handlers hand their
+     /// work to this runtime ([`Agent::on_runtime`]).
+@@ -294,10 +305,15 @@ pub async fn start(
+         muted: Mutex::new(false),
+         route: Mutex::new("earpiece".into()),
+         handling: Mutex::new(HashSet::new()),
++        own_numbers: Mutex::new(Vec::new()),
++        mms: Mutex::new(mms::MmsState::default()),
++        mms_send: tokio::sync::Mutex::new(()),
+         rt: tokio::runtime::Handle::current(),
+     });
+     iface::serve(&agent).await?;
+     tokio::spawn(iface::notification_events(agent.clone()));
++    tokio::spawn(mms::watch(agent.clone()));
++    tokio::spawn(mms::sweep_files_now_and_then(agent.clone()));
+     tracing::info!("serving org.omamobile.Phone1 and org.omamobile.Messages1");
+     Ok(agent)
+ }
+@@ -378,6 +394,9 @@ async fn attach_when_present(agent: &Arc<Agent>) -> anyhow::Result<()> {
+     });
+     refresh_modem_state(agent, &modem_proxy, voice.as_ref()).await;
+     refresh_emergency(agent, &modem_proxy).await;
++    if let Ok(own) = modem_proxy.own_numbers().await {
++        *agent.own_numbers.lock().unwrap() = own;
++    }
+ 
+     let mut state_changes = modem_proxy.receive_state_changed().await;
+     // ModemManager settles EmergencyOnly a moment after the state (after a
+diff --git a/apps/omatel-agent/src/mms.rs b/apps/omatel-agent/src/mms.rs
+new file mode 100644
+index 0000000..624614e
+--- /dev/null
++++ b/apps/omatel-agent/src/mms.rs
+@@ -0,0 +1,1283 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! MMS through mmsd-tng, which serves `org.ofono.mms` on the session bus
++//! and does the network side (the WAP push, the MMSC over the mobile data
++//! bearer). The agent is its client:
++//!
++//! - **Receiving.** Each message mmsd-tng reports (`GetMessages` when it
++//!   appears, then `MessageAdded`) is stored like an SMS: its text from
++//!   the text/plain parts, every other part copied out of mmsd-tng's PDU
++//!   file into `parts/<uuid>/` in the data directory. Once committed, the
++//!   message is deleted from mmsd-tng, as an SMS is from the modem: a
++//!   crash in between stores nothing twice, because the store keys MMS by
++//!   mmsd-tng's object path.
++//! - **Groups.** The conversation is everyone on the message (the sender
++//!   and the recipients) but the phone's own numbers, which mmsd-tng
++//!   reports as `Modem Number` and ModemManager as `OwnNumbers`.
++//! - **Sending.** Text and attachments go to `SendMessage` (mmsd-tng
++//!   builds the SMIL); the stored message follows the status mmsd-tng
++//!   signals (`sent`, `sending_failed`, `delivered`) and is deleted there
++//!   once nothing more can happen to it.
++//! - **Deleting.** The apps delete messages straight in the store, which
++//!   lists their mmsd-tng paths and files by trigger; [`sweep_mms`] and
++//!   [`sweep_files`] act on those lists.
++//!
++//! Logs carry object paths and counts, never a number or text.
++
++use std::collections::{HashMap, HashSet};
++use std::path::{Path, PathBuf};
++use std::sync::Arc;
++use std::time::Duration;
++
++use futures_util::StreamExt;
++use omatel_contacts::number;
++use omatel_store::{Direction, MessageState, NewMms, NewPart};
++use zbus::message::Type as MessageType;
++use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
++use zbus::{MatchRule, MessageStream};
++
++use crate::{iface, sms, Agent};
++
++pub const SERVICE: &str = "org.ofono.mms";
++pub const ROOT: &str = "/org/ofono/mms";
++const IFACE_MANAGER: &str = "org.ofono.mms.Manager";
++const IFACE_SERVICE: &str = "org.ofono.mms.Service";
++const IFACE_MESSAGE: &str = "org.ofono.mms.Message";
++
++/// How long a sent MMS stays in mmsd-tng for its delivery report.
++const DELIVERY_WAIT_MS: i64 = 48 * 3600 * 1000;
++/// How often deleted messages are cleaned up in mmsd-tng and on disk.
++const SWEEP_EVERY: Duration = Duration::from_secs(600);
++/// A part bigger than this is not an MMS part; it isn't copied.
++const MAX_PART: u64 = 64 << 20;
++
++/// Why a message failed, as the stored message (and Messages) shows it.
++pub const NOT_RUNNING: &str = "The MMS service (mmsd-tng) isn't running";
++
++type Props = HashMap<String, OwnedValue>;
++
++#[zbus::proxy(
++    interface = "org.ofono.mms.Manager",
++    default_service = "org.ofono.mms",
++    default_path = "/org/ofono/mms"
++)]
++trait MmsManager {
++    fn get_services(&self) -> zbus::Result<Vec<(OwnedObjectPath, Props)>>;
++}
++
++#[zbus::proxy(interface = "org.ofono.mms.Service", default_service = "org.ofono.mms")]
++trait MmsService {
++    fn get_messages(&self) -> zbus::Result<Vec<(OwnedObjectPath, Props)>>;
++    fn get_properties(&self) -> zbus::Result<Props>;
++    fn send_message(
++        &self,
++        recipients: &[&str],
++        options: &Value<'_>,
++        attachments: &[(&str, &str, &str)],
++    ) -> zbus::Result<OwnedObjectPath>;
++}
++
++#[zbus::proxy(interface = "org.ofono.mms.Message", default_service = "org.ofono.mms")]
++trait MmsMessage {
++    fn delete(&self) -> zbus::Result<()>;
++}
++
++/// What the agent knows of mmsd-tng while it runs.
++#[derive(Default)]
++pub(crate) struct MmsState {
++    /// Its services (the ModemManager plugin's: `/org/ofono/mms/modemmanager`).
++    pub services: Vec<OwnedObjectPath>,
++    /// The messages it holds now.
++    pub held: HashSet<String>,
++    /// Sent messages waiting for a delivery report, with when they went
++    /// (ms): they stay in mmsd-tng until the report or the deadline.
++    pub reports: HashMap<String, i64>,
++    /// Its `Modem Number`s: the phone's own numbers, for group members.
++    pub own: HashSet<String>,
++}
++
++/// Follow mmsd-tng: attach whenever it runs (it may start after the agent).
++pub async fn watch(agent: Arc<Agent>) {
++    loop {
++        match follow(&agent).await {
++            Ok(()) => tracing::info!("MMS service gone"),
++            Err(e) => tracing::warn!(error = %e, "MMS service watch ended"),
++        }
++        detach(&agent).await;
++        tokio::time::sleep(Duration::from_secs(1)).await;
++    }
++}
++
++/// Delete the files of deleted messages now and then, mmsd-tng or not.
++pub async fn sweep_files_now_and_then(agent: Arc<Agent>) {
++    loop {
++        sweep_files(&agent);
++        tokio::time::sleep(SWEEP_EVERY).await;
++    }
++}
++
++async fn follow(agent: &Arc<Agent>) -> anyhow::Result<()> {
++    let dbus = zbus::fdo::DBusProxy::new(&agent.session).await?;
++    let mut owners = dbus
++        .receive_name_owner_changed_with_args(&[(0, SERVICE)])
++        .await?;
++    let owner = loop {
++        if let Ok(o) = dbus.get_name_owner(SERVICE.try_into()?).await {
++            break o.to_string();
++        }
++        match owners.next().await {
++            Some(_) => continue,
++            None => anyhow::bail!("the session bus went away"),
++        }
++    };
++    // Subscribed before listing, so nothing falls between the two.
++    let rule = MatchRule::builder()
++        .msg_type(MessageType::Signal)
++        .sender(owner.as_str())?
++        .path_namespace(ROOT)?
++        .build();
++    let mut signals = MessageStream::for_match_rule(rule, &agent.session, Some(256)).await?;
++    let manager = MmsManagerProxy::new(&agent.session).await?;
++    for (path, _) in manager.get_services().await? {
++        attach_service(agent, path).await?;
++    }
++    sweep_mms(agent).await;
++    let mut sweeps =
++        tokio::time::interval_at(tokio::time::Instant::now() + SWEEP_EVERY, SWEEP_EVERY);
++    loop {
++        tokio::select! {
++            Some(msg) = signals.next() => {
++                if let Ok(m) = msg {
++                    on_signal(agent, &m).await;
++                }
++            }
++            Some(sig) = owners.next() => {
++                if let Ok(a) = sig.args() {
++                    if a.new_owner().as_ref().map(|o| o.as_str()) != Some(owner.as_str()) {
++                        return Ok(());
++                    }
++                }
++            }
++            _ = sweeps.tick() => sweep_mms(agent).await,
++            else => return Ok(()),
++        }
++    }
++}
++
++async fn detach(agent: &Arc<Agent>) {
++    let was = {
++        let mut s = agent.mms.lock().unwrap();
++        let was = !s.services.is_empty();
++        *s = MmsState::default();
++        was
++    };
++    if was {
++        iface::mms_ready_changed(agent).await;
++    }
++}
++
++/// Whether an MMS can be handed to mmsd-tng now.
++pub fn ready(agent: &Agent) -> bool {
++    !agent.mms.lock().unwrap().services.is_empty()
++}
++
++async fn attach_service(agent: &Arc<Agent>, path: OwnedObjectPath) -> anyhow::Result<()> {
++    if agent.mms.lock().unwrap().services.contains(&path) {
++        return Ok(());
++    }
++    let service = MmsServiceProxy::builder(&agent.session)
++        .path(path.clone())?
++        .build()
++        .await?;
++    let messages = service.get_messages().await?;
++    agent.mms.lock().unwrap().services.push(path.clone());
++    tracing::info!(path = %path, messages = messages.len(), "MMS service attached");
++    iface::mms_ready_changed(agent).await;
++    for (p, props) in &messages {
++        agent.mms.lock().unwrap().held.insert(p.to_string());
++        handle_message(agent, p.as_str(), props, false).await;
++    }
++    // Ours that mmsd-tng no longer has (it lost its store): not sent.
++    let held: HashSet<String> = messages.iter().map(|(p, _)| p.to_string()).collect();
++    let in_flight = agent
++        .messages
++        .lock()
++        .unwrap()
++        .mms_in_flight()
++        .unwrap_or_default();
++    for (id, p) in in_flight {
++        if p.starts_with(path.as_str()) && !held.contains(&p) {
++            fail(agent, id, "The MMS service lost it").await;
++        }
++    }
++    Ok(())
++}
++
++async fn on_signal(agent: &Arc<Agent>, msg: &zbus::Message) {
++    let header = msg.header();
++    let (Some(iface), Some(member), Some(path)) =
++        (header.interface(), header.member(), header.path())
++    else {
++        return;
++    };
++    let body = msg.body();
++    match (iface.as_str(), member.as_str()) {
++        (IFACE_MANAGER, "ServiceAdded") => {
++            if let Ok((p, _)) = body.deserialize::<(OwnedObjectPath, Props)>() {
++                if let Err(e) = attach_service(agent, p).await {
++                    tracing::warn!(error = %e, "MMS service not attached");
++                }
++            }
++        }
++        (IFACE_MANAGER, "ServiceRemoved") => {
++            if let Ok(p) = body.deserialize::<OwnedObjectPath>() {
++                agent.mms.lock().unwrap().services.retain(|s| *s != p);
++                iface::mms_ready_changed(agent).await;
++            }
++        }
++        (IFACE_SERVICE, "MessageAdded") => {
++            if let Ok((p, props)) = body.deserialize::<(OwnedObjectPath, Props)>() {
++                agent.mms.lock().unwrap().held.insert(p.to_string());
++                handle_message(agent, p.as_str(), &props, true).await;
++            }
++        }
++        (IFACE_SERVICE, "MessageRemoved") => {
++            if let Ok(p) = body.deserialize::<OwnedObjectPath>() {
++                let mut s = agent.mms.lock().unwrap();
++                s.held.remove(p.as_str());
++                s.reports.remove(p.as_str());
++            }
++        }
++        (IFACE_SERVICE, "MessageSendError") => {
++            if let Ok(d) = body.deserialize::<Props>() {
++                let p = prop_str(&d, "MessagePath");
++                let found = agent
++                    .messages
++                    .lock()
++                    .unwrap()
++                    .by_mms_path(&p)
++                    .ok()
++                    .flatten();
++                if let Some(m) = found {
++                    tracing::info!(path = %p, "MMS center unreachable");
++                    fail(
++                        agent,
++                        m.id,
++                        "Couldn't reach the MMS center; check the MMS settings",
++                    )
++                    .await;
++                }
++            }
++        }
++        (IFACE_SERVICE, "MessageReceiveError") => {
++            // "From" is a number: not logged.
++            tracing::warn!("an MMS couldn't be downloaded from the MMS center");
++        }
++        (IFACE_MESSAGE, "PropertyChanged") => {
++            if let Ok((name, value)) = body.deserialize::<(String, OwnedValue)>() {
++                // mmsd-tng sends "status" (its documentation says "Status").
++                if name.eq_ignore_ascii_case("status") {
++                    if let Ok(s) = <&str>::try_from(&value) {
++                        status_changed(agent, path.as_str(), s).await;
++                    }
++                }
++            }
++        }
++        _ => {}
++    }
++}
++
++/// A message mmsd-tng reported. `live`: from MessageAdded (it arrived
++/// now), not from the list at start-up.
++async fn handle_message(agent: &Arc<Agent>, path: &str, props: &Props, live: bool) {
++    let own = prop_str(props, "Modem Number");
++    if !own.is_empty() {
++        agent.mms.lock().unwrap().own.insert(own);
++    }
++    let status = prop_str(props, "Status");
++    let result = match status.as_str() {
++        "received" => incoming(agent, path, props, live).await,
++        "draft" | "sent" | "sending_failed" | "delivered" => {
++            outgoing(agent, path, props, &status).await
++        }
++        // A notification not downloaded yet has no properties.
++        "" => Ok(()),
++        other => {
++            tracing::info!(path, status = other, "MMS not downloaded; left in mmsd-tng");
++            Ok(())
++        }
++    };
++    if let Err(e) = result {
++        tracing::warn!(path, error = %e, "MMS not stored; it stays in mmsd-tng");
++    }
++}
++
++async fn incoming(agent: &Arc<Agent>, path: &str, props: &Props, live: bool) -> anyhow::Result<()> {
++    let (stored, forgotten) = known(agent, path);
++    if stored || forgotten {
++        // Stored before a restart, or deleted here: mmsd-tng's copy goes.
++        delete_held(agent, path).await;
++        return Ok(());
++    }
++    let region = agent.region();
++    let sender = prop_str(props, "Sender");
++    let recipients = prop_strs(props, "Recipients");
++    let members = members(&sender, &recipients, &own_numbers(agent, &region), &region);
++    let group = members.len() > 1;
++    let conversation = agent
++        .messages
++        .lock()
++        .unwrap()
++        .conversation_for_members(&members)?;
++    let (body, parts) = content(&agent.cfg.data_dir, path, &attachments(props))?;
++    let sent_at = parse_date(&prop_str(props, "Date"));
++    let now = crate::util::now_ms();
++    let at = if live {
++        now
++    } else {
++        sent_at.filter(|t| *t <= now).unwrap_or(now)
++    };
++    let from = number::normalize(&sender, &region);
++    let stored = agent.messages.lock().unwrap().insert_mms(
++        &NewMms {
++            conversation,
++            direction: Direction::In,
++            sender: if group { &from } else { "" },
++            body: &body,
++            at,
++            sent_at,
++            state: MessageState::Received,
++            mms_path: path,
++        },
++        &parts,
++    )?;
++    // On disk now (synchronous=FULL): mmsd-tng's copy can go.
++    delete_held(agent, path).await;
++    if let Some(id) = stored {
++        tracing::info!(
++            path,
++            conversation,
++            message_id = id,
++            parts = parts.len(),
++            "MMS stored"
++        );
++        iface::messages_changed(agent, conversation).await;
++        sms::notify(agent, conversation).await;
++    }
++    Ok(())
++}
++
++/// One of ours (or another client's) that mmsd-tng sends.
++async fn outgoing(
++    agent: &Arc<Agent>,
++    path: &str,
++    props: &Props,
++    status: &str,
++) -> anyhow::Result<()> {
++    // A send in progress records its path when SendMessage returns, and
++    // mmsd-tng signals the new message before that: wait for it.
++    let _sending = agent.mms_send.lock().await;
++    if props_bool(props, "Delivery Report") && status == "sent" {
++        let since = parse_date(&prop_str(props, "Date")).unwrap_or_else(crate::util::now_ms);
++        agent
++            .mms
++            .lock()
++            .unwrap()
++            .reports
++            .entry(path.to_string())
++            .or_insert(since);
++    }
++    let (stored, forgotten) = known(agent, path);
++    if forgotten {
++        delete_held(agent, path).await;
++        return Ok(());
++    }
++    if !stored {
++        import_outgoing(agent, path, props, status)?;
++    }
++    status_changed(agent, path, status).await;
++    Ok(())
++}
++
++/// An MMS another client sent through mmsd-tng: shown in its thread.
++fn import_outgoing(
++    agent: &Arc<Agent>,
++    path: &str,
++    props: &Props,
++    status: &str,
++) -> anyhow::Result<()> {
++    let region = agent.region();
++    let own = own_numbers(agent, &region);
++    let members = members("", &prop_strs(props, "Recipients"), &own, &region);
++    let store = agent.messages.lock().unwrap();
++    let conversation = store.conversation_for_members(&members)?;
++    let (body, parts) = content(&agent.cfg.data_dir, path, &attachments(props))?;
++    let sent_at = parse_date(&prop_str(props, "Date"));
++    store.insert_mms(
++        &NewMms {
++            conversation,
++            direction: Direction::Out,
++            sender: "",
++            body: &body,
++            at: sent_at.unwrap_or_else(crate::util::now_ms),
++            sent_at,
++            state: state_for(status).unwrap_or(MessageState::Sending),
++            mms_path: path,
++        },
++        &parts,
++    )?;
++    tracing::info!(path, conversation, "MMS sent elsewhere, stored");
++    Ok(())
++}
++
++fn state_for(status: &str) -> Option<MessageState> {
++    match status {
++        "draft" => Some(MessageState::Sending),
++        "sent" => Some(MessageState::Sent),
++        "delivered" => Some(MessageState::Delivered),
++        "sending_failed" => Some(MessageState::Failed),
++        _ => None,
++    }
++}
++
++/// mmsd-tng's status for one of our messages changed.
++async fn status_changed(agent: &Arc<Agent>, path: &str, status: &str) {
++    let Some(state) = state_for(status) else {
++        // "delivery_update,<number>=<status>" per recipient, and "read".
++        return;
++    };
++    let found = agent
++        .messages
++        .lock()
++        .unwrap()
++        .by_mms_path(path)
++        .ok()
++        .flatten();
++    let Some(m) = found else { return };
++    if m.direction != Direction::Out {
++        return;
++    }
++    // A failure already explained (MessageSendError) keeps its reason.
++    if m.state != state && !(m.state == MessageState::Failed && state == MessageState::Failed) {
++        tracing::info!(
++            path,
++            message_id = m.id,
++            state = state.as_str(),
++            "MMS status"
++        );
++        let why = (state == MessageState::Failed).then_some("The MMS center didn't take it");
++        let _ = agent.messages.lock().unwrap().set_state(m.id, state, why);
++        iface::messages_changed(agent, m.conversation_id).await;
++    }
++    let done = match state {
++        MessageState::Sent => !agent.mms.lock().unwrap().reports.contains_key(path),
++        MessageState::Delivered | MessageState::Failed => true,
++        _ => false,
++    };
++    if done {
++        delete_held(agent, path).await;
++    }
++}
++
++/// (stored here, deleted here) for an mmsd-tng path.
++fn known(agent: &Agent, path: &str) -> (bool, bool) {
++    let store = agent.messages.lock().unwrap();
++    let stored = store.by_mms_path(path).ok().flatten().is_some();
++    let forgotten = store
++        .forgotten_mms()
++        .unwrap_or_default()
++        .iter()
++        .any(|p| p == path);
++    (stored, forgotten)
++}
++
++/// Delete a message from mmsd-tng, if it still has it.
++async fn delete_held(agent: &Agent, path: &str) {
++    if !agent.mms.lock().unwrap().held.contains(path) {
++        return;
++    }
++    match message_proxy(agent, path).await {
++        Ok(p) => match p.delete().await {
++            Ok(()) => {
++                let mut s = agent.mms.lock().unwrap();
++                s.held.remove(path);
++                s.reports.remove(path);
++            }
++            Err(e) => tracing::warn!(path, error = %e, "MMS not deleted from mmsd-tng"),
++        },
++        Err(e) => tracing::warn!(path, error = %e, "MMS not deleted from mmsd-tng"),
++    }
++}
++
++async fn message_proxy(agent: &Agent, path: &str) -> zbus::Result<MmsMessageProxy<'static>> {
++    MmsMessageProxy::builder(&agent.session)
++        .path(path.to_string())?
++        .build()
++        .await
++}
++
++/// Delete from mmsd-tng what was deleted here, and sent messages whose
++/// delivery report never came.
++pub async fn sweep_mms(agent: &Arc<Agent>) {
++    if !ready(agent) {
++        return;
++    }
++    let forgotten = agent
++        .messages
++        .lock()
++        .unwrap()
++        .forgotten_mms()
++        .unwrap_or_default();
++    for p in forgotten {
++        delete_held(agent, &p).await;
++        if !agent.mms.lock().unwrap().held.contains(&p) {
++            let _ = agent.messages.lock().unwrap().drop_forgotten_mms(&p);
++        }
++    }
++    let now = crate::util::now_ms();
++    let overdue: Vec<String> = agent
++        .mms
++        .lock()
++        .unwrap()
++        .reports
++        .iter()
++        .filter(|(_, since)| now - **since > DELIVERY_WAIT_MS)
++        .map(|(p, _)| p.clone())
++        .collect();
++    for p in overdue {
++        tracing::info!(path = %p, "no MMS delivery report");
++        agent.mms.lock().unwrap().reports.remove(&p);
++        delete_held(agent, &p).await;
++    }
++}
++
++/// Delete the attachment files of deleted messages (and their emptied
++/// directories). Only files under `parts/` are ever touched.
++pub fn sweep_files(agent: &Agent) {
++    let files = agent
++        .messages
++        .lock()
++        .unwrap()
++        .forgotten_files()
++        .unwrap_or_default();
++    for f in files {
++        if is_part_file(&f) {
++            let path = agent.cfg.data_dir.join(&f);
++            match std::fs::remove_file(&path) {
++                Ok(()) => {}
++                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
++                Err(e) => {
++                    tracing::warn!(error = %e, "attachment not deleted");
++                    continue;
++                }
++            }
++            if let Some(dir) = path.parent() {
++                let _ = std::fs::remove_dir(dir); // only when empty
++            }
++        }
++        let _ = agent.messages.lock().unwrap().drop_forgotten_file(&f);
++    }
++}
++
++fn is_part_file(f: &str) -> bool {
++    f.starts_with("parts/") && !f.split('/').any(|c| c == ".." || c.is_empty())
++}
++
++// ---- sending -----------------------------------------------------------
++
++#[derive(Debug)]
++pub enum SendError {
++    Store(omatel_store::Error),
++    /// The caller's mistake: a file that isn't there, a missing type.
++    Invalid(String),
++}
++
++impl From<omatel_store::Error> for SendError {
++    fn from(e: omatel_store::Error) -> SendError {
++        SendError::Store(e)
++    }
++}
++
++impl std::fmt::Display for SendError {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        match self {
++            SendError::Store(e) => write!(f, "message store: {e}"),
++            SendError::Invalid(m) => f.write_str(m),
++        }
++    }
++}
++
++/// Queue an MMS to a conversation: stored with copies of the attachment
++/// files (path, MIME type), then sent in the background.
++pub async fn send(
++    agent: &Arc<Agent>,
++    conversation: i64,
++    text: &str,
++    files: &[(String, String)],
++) -> Result<i64, SendError> {
++    for (path, mime) in files {
++        let ok = std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() > 0);
++        if !ok {
++            return Err(SendError::Invalid(format!(
++                "Can't read the attachment {}",
++                file_name(path)
++            )));
++        }
++        if !mime.contains('/') {
++            return Err(SendError::Invalid("An attachment has no MIME type".into()));
++        }
++    }
++    let id = agent
++        .messages
++        .lock()
++        .unwrap()
++        .insert_outgoing_mms(conversation, text)?;
++    match copy_in(&agent.cfg.data_dir, id, files) {
++        Ok(parts) => agent.messages.lock().unwrap().add_parts(id, &parts)?,
++        Err(e) => {
++            tracing::warn!(error = %e, "attachment not copied");
++            let _ = agent.messages.lock().unwrap().delete_message(id);
++            sweep_files(agent);
++            return Err(SendError::Invalid("Can't read an attachment".into()));
++        }
++    }
++    iface::messages_changed(agent, conversation).await;
++    tokio::spawn(deliver(agent.clone(), conversation, id));
++    Ok(id)
++}
++
++/// Send a failed MMS again, in its place in the thread.
++pub async fn retry(agent: &Arc<Agent>, id: i64, conversation: i64) {
++    let old = agent.messages.lock().unwrap().mms_path(id).ok().flatten();
++    let _ = agent.messages.lock().unwrap().forget_mms_path(id);
++    if let Some(p) = old {
++        delete_held(agent, &p).await;
++    }
++    let _ = agent
++        .messages
++        .lock()
++        .unwrap()
++        .set_state(id, MessageState::Sending, None);
++    iface::messages_changed(agent, conversation).await;
++    tokio::spawn(deliver(agent.clone(), conversation, id));
++}
++
++async fn fail(agent: &Arc<Agent>, id: i64, why: &str) {
++    tracing::info!(message_id = id, why, "MMS not sent");
++    let conversation = {
++        let store = agent.messages.lock().unwrap();
++        let _ = store.set_state(id, MessageState::Failed, Some(why));
++        store.message(id).ok().flatten().map(|m| m.conversation_id)
++    };
++    if let Some(c) = conversation {
++        iface::messages_changed(agent, c).await;
++    }
++}
++
++pub(crate) async fn deliver(agent: Arc<Agent>, conversation: i64, id: i64) {
++    let (numbers, body, parts) = {
++        let store = agent.messages.lock().unwrap();
++        let c = store.conversation(conversation).ok().flatten();
++        let m = store.message(id).ok().flatten();
++        let parts = store.parts(id).unwrap_or_default();
++        match (c, m) {
++            (Some(c), Some(m)) => (c.numbers, m.body, parts),
++            _ => return,
++        }
++    };
++    if numbers.is_empty() {
++        return fail(&agent, id, "No recipient").await;
++    }
++    let service = agent.mms.lock().unwrap().services.first().cloned();
++    let Some(service) = service else {
++        return fail(&agent, id, NOT_RUNNING).await;
++    };
++    let proxy = match MmsServiceProxy::builder(&agent.session)
++        .path(service)
++        .map(|b| b.cache_properties(zbus::proxy::CacheProperties::No))
++    {
++        Ok(b) => b.build().await,
++        Err(e) => Err(e),
++    };
++    let Ok(proxy) = proxy else {
++        return fail(&agent, id, NOT_RUNNING).await;
++    };
++    let size: i64 = parts.iter().map(|p| p.size).sum::<i64>() + body.len() as i64;
++    if let Some(why) = over_limits(&proxy, size, parts.len()).await {
++        return fail(&agent, id, &why).await;
++    }
++    let dir = agent.cfg.data_dir.join(format!("parts/out-{id}"));
++    let mut files: Vec<(String, String, String)> = Vec::new();
++    let text_file = dir.join("text.txt");
++    if !body.trim().is_empty() {
++        if let Err(e) = write_private(&text_file, body.as_bytes()) {
++            tracing::warn!(error = %e, "MMS text not written");
++            return fail(&agent, id, "Couldn't prepare the message").await;
++        }
++        files.push((
++            "text.txt".into(),
++            "text/plain".into(),
++            text_file.to_string_lossy().into_owned(),
++        ));
++    }
++    for p in &parts {
++        let path = p.path(&agent.cfg.data_dir);
++        files.push((
++            file_name(&p.file).to_string(),
++            p.mime.clone(),
++            path.to_string_lossy().into_owned(),
++        ));
++    }
++    let report = agent.settings().delivery_reports;
++    let options = Value::from(HashMap::from([("DeliveryReport", Value::from(report))]));
++    let recipients: Vec<&str> = numbers.iter().map(String::as_str).collect();
++    let attachments: Vec<(&str, &str, &str)> = files
++        .iter()
++        .map(|(a, b, c)| (a.as_str(), b.as_str(), c.as_str()))
++        .collect();
++    let result = {
++        let _sending = agent.mms_send.lock().await;
++        let r = proxy
++            .send_message(&recipients, &options, &attachments)
++            .await;
++        if let Ok(path) = &r {
++            let _ = agent
++                .messages
++                .lock()
++                .unwrap()
++                .set_mms_path(id, path.as_str());
++            if report {
++                agent
++                    .mms
++                    .lock()
++                    .unwrap()
++                    .reports
++                    .insert(path.to_string(), crate::util::now_ms());
++            }
++        }
++        r
++    };
++    // mmsd-tng read the files during the call; the text copy can go.
++    let _ = std::fs::remove_file(&text_file);
++    match result {
++        Ok(path) => tracing::info!(path = %path, message_id = id, "MMS handed to mmsd-tng"),
++        Err(e) => {
++            tracing::warn!(message_id = id, error = %e, "mmsd-tng refused the MMS");
++            fail(&agent, id, &refusal(&e)).await;
++        }
++    }
++}
++
++/// The carrier's limits as mmsd-tng knows them, checked first so the
++/// reason is clear (mmsd-tng only answers "invalid arguments").
++async fn over_limits(proxy: &MmsServiceProxy<'_>, size: i64, count: usize) -> Option<String> {
++    let props = proxy.get_properties().await.ok()?;
++    let max_size = props
++        .get("TotalMaxAttachmentSize")
++        .and_then(|v| i32::try_from(v).ok());
++    let max_count = props
++        .get("MaxAttachments")
++        .and_then(|v| i32::try_from(v).ok());
++    if let Some(max) = max_size.filter(|m| *m > 0 && size > *m as i64) {
++        return Some(format!(
++            "Too big for MMS: {} KB, the limit is {} KB",
++            (size + 1023) / 1024,
++            max / 1024
++        ));
++    }
++    // The text goes as one more attachment.
++    if let Some(max) = max_count.filter(|m| *m > 0 && count + 1 > *m as usize) {
++        return Some(format!("Too many attachments: at most {}", max - 1));
++    }
++    None
++}
++
++fn refusal(e: &zbus::Error) -> String {
++    match e {
++        zbus::Error::MethodError(name, _, _) if name.as_str().ends_with("InvalidArgs") => {
++            "The MMS service refused it (a number, or the attachments)".into()
++        }
++        zbus::Error::MethodError(name, _, _)
++            if name.as_str().ends_with("ServiceUnknown") || name.as_str().ends_with("NoReply") =>
++        {
++            NOT_RUNNING.into()
++        }
++        _ => "The MMS service refused it".into(),
++    }
++}
++
++/// Copy the caller's files into `parts/out-<id>/`.
++fn copy_in(data_dir: &Path, id: i64, files: &[(String, String)]) -> std::io::Result<Vec<NewPart>> {
++    let dir = format!("parts/out-{id}");
++    let mut used = HashSet::new();
++    let mut parts = Vec::new();
++    for (path, mime) in files {
++        let mime = base_mime(mime);
++        let name = unique_name(&safe_name(file_name(path), &mime), &mut used);
++        let rel = format!("{dir}/{name}");
++        let bytes = std::fs::read(path)?;
++        write_private(&data_dir.join(&rel), &bytes)?;
++        parts.push(NewPart {
++            mime,
++            file: rel,
++            size: bytes.len() as i64,
++        });
++    }
++    Ok(parts)
++}
++
++// ---- reading what mmsd-tng reports ---------------------------------------
++
++/// One entry of a message's `Attachments`: a slice of mmsd-tng's PDU file.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub(crate) struct Attachment {
++    pub id: String,
++    pub content_type: String,
++    pub file: String,
++    pub offset: u64,
++    pub len: u64,
++}
++
++fn prop_str(props: &Props, key: &str) -> String {
++    props
++        .get(key)
++        .and_then(|v| <&str>::try_from(v).ok())
++        .unwrap_or_default()
++        .to_string()
++}
++
++fn prop_strs(props: &Props, key: &str) -> Vec<String> {
++    match props.get(key).map(|v| &**v) {
++        Some(Value::Array(a)) => a
++            .iter()
++            .filter_map(|v| match v {
++                Value::Str(s) => Some(s.to_string()),
++                _ => None,
++            })
++            .collect(),
++        _ => Vec::new(),
++    }
++}
++
++fn props_bool(props: &Props, key: &str) -> bool {
++    props
++        .get(key)
++        .and_then(|v| bool::try_from(v).ok())
++        .unwrap_or(false)
++}
++
++pub(crate) fn attachments(props: &Props) -> Vec<Attachment> {
++    let Some(Value::Array(a)) = props.get("Attachments").map(|v| &**v) else {
++        return Vec::new();
++    };
++    let s = |v: Option<&Value>| match v {
++        Some(Value::Str(s)) => s.to_string(),
++        _ => String::new(),
++    };
++    let n = |v: Option<&Value>| match v {
++        Some(Value::U64(n)) => *n,
++        _ => 0,
++    };
++    a.iter()
++        .filter_map(|v| match v {
++            Value::Structure(st) => {
++                let f = st.fields();
++                Some(Attachment {
++                    id: s(f.first()),
++                    content_type: s(f.get(1)),
++                    file: s(f.get(2)),
++                    offset: n(f.get(3)),
++                    len: n(f.get(4)),
++                })
++            }
++            _ => None,
++        })
++        .collect()
++}
++
++/// The message's text (its text/plain parts) and its other parts, copied
++/// into `parts/<uuid>/` under `data_dir`.
++pub(crate) fn content(
++    data_dir: &Path,
++    path: &str,
++    attachments: &[Attachment],
++) -> std::io::Result<(String, Vec<NewPart>)> {
++    let dir = format!(
++        "parts/{}",
++        safe_component(path.rsplit('/').next().unwrap_or(""))
++    );
++    let mut texts = Vec::new();
++    let mut parts = Vec::new();
++    let mut used = HashSet::new();
++    for a in attachments {
++        let (mime, charset) = split_content_type(&a.content_type);
++        if mime == "application/smil" {
++            continue;
++        }
++        let bytes = read_slice(Path::new(&a.file), a.offset, a.len)?;
++        if mime == "text/plain" {
++            texts.push(decode_text(&bytes, charset.as_deref()));
++            continue;
++        }
++        let name = unique_name(&safe_name(&a.id, &mime), &mut used);
++        let rel = format!("{dir}/{name}");
++        write_private(&data_dir.join(&rel), &bytes)?;
++        parts.push(NewPart {
++            mime,
++            file: rel,
++            size: bytes.len() as i64,
++        });
++    }
++    let text = texts
++        .iter()
++        .map(|t| t.trim())
++        .filter(|t| !t.is_empty())
++        .collect::<Vec<_>>()
++        .join("\n");
++    Ok((text, parts))
++}
++
++fn read_slice(file: &Path, offset: u64, len: u64) -> std::io::Result<Vec<u8>> {
++    use std::io::{Read, Seek, SeekFrom};
++    if len > MAX_PART {
++        return Err(std::io::Error::other("part too large"));
++    }
++    let mut f = std::fs::File::open(file)?;
++    f.seek(SeekFrom::Start(offset))?;
++    let mut buf = vec![0; len as usize];
++    f.read_exact(&mut buf)?;
++    Ok(buf)
++}
++
++/// Write a file only its owner can read, creating its directory.
++fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
++    use std::io::Write;
++    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
++    if let Some(dir) = path.parent() {
++        std::fs::DirBuilder::new()
++            .recursive(true)
++            .mode(0o700)
++            .create(dir)?;
++    }
++    let mut f = std::fs::OpenOptions::new()
++        .write(true)
++        .create(true)
++        .truncate(true)
++        .mode(0o600)
++        .open(path)?;
++    f.write_all(bytes)?;
++    f.sync_all()
++}
++
++/// "text/plain; charset=utf-8" -> ("text/plain", Some("utf-8")); mmsd-tng
++/// passes some types on with a `Content-Type: "..."` wrapper.
++pub(crate) fn split_content_type(ct: &str) -> (String, Option<String>) {
++    let ct = ct.trim();
++    let ct = ct.strip_prefix("Content-Type:").unwrap_or(ct).trim();
++    let mut fields = ct.split(';');
++    let mime = base_mime(fields.next().unwrap_or(""));
++    let charset = fields.find_map(|f| {
++        let (k, v) = f.split_once('=')?;
++        k.trim()
++            .eq_ignore_ascii_case("charset")
++            .then(|| v.trim().trim_matches('"').to_ascii_lowercase())
++    });
++    (mime, charset)
++}
++
++fn base_mime(mime: &str) -> String {
++    mime.split(';')
++        .next()
++        .unwrap_or("")
++        .trim()
++        .trim_matches('"')
++        .to_ascii_lowercase()
++}
++
++/// Text in the charsets MMS uses: UTF-8 (the default and nearly all),
++/// ASCII, Latin-1 and UTF-16 with a byte-order mark.
++pub(crate) fn decode_text(bytes: &[u8], charset: Option<&str>) -> String {
++    let text = decode_charset(bytes, charset);
++    // Some phones end a text part with a NUL.
++    text.trim_end_matches('\0').to_string()
++}
++
++fn decode_charset(bytes: &[u8], charset: Option<&str>) -> String {
++    match charset {
++        Some("iso-8859-1" | "latin1" | "windows-1252") => {
++            bytes.iter().map(|b| *b as char).collect()
++        }
++        Some(c) if c.starts_with("utf-16") => {
++            let (le, body) = match bytes {
++                [0xff, 0xfe, rest @ ..] => (true, rest),
++                [0xfe, 0xff, rest @ ..] => (false, rest),
++                _ => (c.ends_with("le"), bytes),
++            };
++            let units: Vec<u16> = body
++                .chunks_exact(2)
++                .map(|p| {
++                    if le {
++                        u16::from_le_bytes([p[0], p[1]])
++                    } else {
++                        u16::from_be_bytes([p[0], p[1]])
++                    }
++                })
++                .collect();
++            String::from_utf16_lossy(&units)
++        }
++        _ => String::from_utf8_lossy(bytes).into_owned(),
++    }
++}
++
++fn file_name(path: &str) -> &str {
++    path.rsplit('/').next().unwrap_or(path)
++}
++
++/// A path component made of safe characters.
++fn safe_component(s: &str) -> String {
++    let out: String = s
++        .chars()
++        .map(|c| {
++            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
++                c
++            } else {
++                '_'
++            }
++        })
++        .collect();
++    let out = out.trim_matches('.').to_string();
++    if out.is_empty() {
++        "part".into()
++    } else {
++        out
++    }
++}
++
++/// A file name for a part: its content id cleaned up (they are often
++/// "<image1.jpg>" or empty), with an extension from its type if it has none.
++pub(crate) fn safe_name(id: &str, mime: &str) -> String {
++    let id = file_name(id.trim().trim_matches(['<', '>', '"']));
++    let mut name = safe_component(id);
++    if !name.contains('.') {
++        name.push_str(extension(mime));
++    }
++    name
++}
++
++fn extension(mime: &str) -> &'static str {
++    match mime {
++        "image/jpeg" | "image/jpg" => ".jpg",
++        "image/png" => ".png",
++        "image/gif" => ".gif",
++        "image/webp" => ".webp",
++        "image/heic" => ".heic",
++        "image/bmp" => ".bmp",
++        "video/mp4" => ".mp4",
++        "video/3gpp" => ".3gp",
++        "audio/amr" => ".amr",
++        "audio/mpeg" => ".mp3",
++        "audio/mp4" => ".m4a",
++        "text/x-vcard" | "text/vcard" => ".vcf",
++        "text/x-vcalendar" | "text/calendar" => ".ics",
++        "application/pdf" => ".pdf",
++        _ => ".bin",
++    }
++}
++
++fn unique_name(name: &str, used: &mut HashSet<String>) -> String {
++    let mut candidate = name.to_string();
++    let (stem, ext) = match name.rfind('.') {
++        Some(i) if i > 0 => (&name[..i], &name[i..]),
++        _ => (name, ""),
++    };
++    let mut n = 2;
++    while !used.insert(candidate.clone()) {
++        candidate = format!("{stem}-{n}{ext}");
++        n += 1;
++    }
++    candidate
++}
++
++/// mmsd-tng's dates ("2026-11-14T10:20:48-0400"), ms.
++pub(crate) fn parse_date(s: &str) -> Option<i64> {
++    chrono::DateTime::parse_from_str(s.trim(), "%Y-%m-%dT%H:%M:%S%z")
++        .ok()
++        .map(|t| t.timestamp_millis())
++        .or_else(|| omatel_mm::parse_timestamp(s))
++}
++
++fn own_numbers(agent: &Agent, region: &str) -> Vec<String> {
++    let mut own: Vec<String> = agent.own_numbers.lock().unwrap().clone();
++    own.extend(agent.mms.lock().unwrap().own.iter().cloned());
++    own.iter()
++        .map(|n| number::normalize(n, region))
++        .filter(|n| !n.is_empty())
++        .collect()
++}
++
++/// The members of an MMS conversation, (normalized, as given): the
++/// sender and the recipients but the phone's own numbers. When the own
++/// number isn't known, a single recipient is taken to be this phone.
++pub(crate) fn members(
++    sender: &str,
++    recipients: &[String],
++    own: &[String],
++    region: &str,
++) -> Vec<(String, String)> {
++    let norm = |raw: &str| number::normalize(raw, region);
++    let mut out: Vec<(String, String)> = Vec::new();
++    let mut add = |raw: &str| {
++        let n = norm(raw);
++        if !n.is_empty() && !own.contains(&n) && !out.iter().any(|(k, _)| *k == n) {
++            out.push((n, raw.trim().to_string()));
++        }
++    };
++    if !sender.is_empty() {
++        add(sender);
++    }
++    let unknown_self = own.is_empty() && !sender.is_empty() && recipients.len() == 1;
++    if !unknown_self {
++        for r in recipients {
++            add(r);
++        }
++    }
++    if out.is_empty() && !sender.is_empty() {
++        out.push((norm(sender), sender.trim().to_string()));
++    }
++    out
++}
++
++/// A one-line stand-in for a message with no text: "Picture" or
++/// "Attachment".
++pub fn describe_parts(parts: &[omatel_store::Part]) -> &'static str {
++    match parts {
++        [] => "",
++        [p] if p.is_image() => "Picture",
++        ps if ps.iter().all(|p| p.is_image()) => "Pictures",
++        [_] => "Attachment",
++        _ => "Attachments",
++    }
++}
++
++/// The absolute path of a stored part, for clients.
++pub fn part_path(agent: &Agent, file: &str) -> PathBuf {
++    agent.cfg.data_dir.join(file)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn content_types() {
++        assert_eq!(
++            split_content_type("text/plain; charset=UTF-8"),
++            ("text/plain".into(), Some("utf-8".into()))
++        );
++        assert_eq!(
++            split_content_type("Content-Type: \"text/plain\";charset=utf-8"),
++            ("text/plain".into(), Some("utf-8".into()))
++        );
++        assert_eq!(
++            split_content_type("image/JPEG"),
++            ("image/jpeg".into(), None)
++        );
++    }
++
++    #[test]
++    fn texts_in_their_charsets() {
++        assert_eq!(decode_text(b"hi there\0", None), "hi there");
++        assert_eq!(decode_text(b"caf\xe9", Some("iso-8859-1")), "café");
++        assert_eq!(decode_text(b"\xff\xfeh\0i\0", Some("utf-16")), "hi");
++        assert_eq!(decode_text("ünï".as_bytes(), Some("utf-8")), "ünï");
++    }
++
++    #[test]
++    fn part_names() {
++        assert_eq!(safe_name("<image1.jpg>", "image/jpeg"), "image1.jpg");
++        assert_eq!(safe_name("", "image/png"), "part.png");
++        assert_eq!(safe_name("../../etc/passwd", "text/x-vcard"), "passwd.vcf");
++        assert_eq!(safe_name("my photo", "image/jpeg"), "my_photo.jpg");
++        let mut used = HashSet::new();
++        assert_eq!(unique_name("a.jpg", &mut used), "a.jpg");
++        assert_eq!(unique_name("a.jpg", &mut used), "a-2.jpg");
++        assert_eq!(unique_name("a.jpg", &mut used), "a-3.jpg");
++        assert!(is_part_file("parts/x/a.jpg"));
++        assert!(!is_part_file("parts/../messages.db"));
++        assert!(!is_part_file("/etc/passwd"));
++    }
++
++    #[test]
++    fn dates() {
++        assert_eq!(
++            parse_date("2026-10-14T09:30:00+0000"),
++            Some(1_791_970_200_000)
++        );
++        assert_eq!(
++            parse_date("2026-10-14T05:30:00-0400"),
++            Some(1_791_970_200_000)
++        );
++        assert_eq!(parse_date("nonsense"), None);
++    }
++
++    fn s(v: &[&str]) -> Vec<String> {
++        v.iter().map(|x| x.to_string()).collect()
++    }
++
++    #[test]
++    fn group_members_leave_out_this_phone() {
++        let own = s(&["+12025550199"]);
++        let m = members(
++            "+12025550101",
++            &s(&["+12025550199", "+12025550102"]),
++            &own,
++            "US",
++        );
++        assert_eq!(
++            m.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
++            vec!["+12025550101", "+12025550102"]
++        );
++        // Sent to this phone alone, own number unknown: one-to-one.
++        let m = members("+12025550101", &s(&["+12025550199"]), &[], "US");
++        assert_eq!(m.len(), 1);
++        // Our own outgoing message: the recipients.
++        let m = members("", &s(&["+12025550101", "+12025550102"]), &own, "US");
++        assert_eq!(m.len(), 2);
++        // Only ourselves (a note to self): still somewhere to put it.
++        let m = members("+12025550199", &s(&["+12025550199"]), &own, "US");
++        assert_eq!(m.len(), 1);
++    }
++
++    #[test]
++    fn content_reads_slices_and_skips_smil() {
++        let dir = tempfile::tempdir().unwrap();
++        let pdu = dir.path().join("pdu");
++        std::fs::write(&pdu, b"HEADER<smil/>hello\0PNGDATA").unwrap();
++        let f = pdu.to_string_lossy().to_string();
++        let att = |id: &str, ct: &str, off: u64, len: u64| Attachment {
++            id: id.into(),
++            content_type: ct.into(),
++            file: f.clone(),
++            offset: off,
++            len,
++        };
++        let data = dir.path().join("data");
++        let (text, parts) = content(
++            &data,
++            "/org/ofono/mms/modemmanager/abc123",
++            &[
++                att("smil", "application/smil", 6, 7),
++                att("text.txt", "text/plain;charset=utf-8", 13, 6),
++                att("<pic>", "image/png", 19, 7),
++            ],
++        )
++        .unwrap();
++        assert_eq!(text, "hello");
++        assert_eq!(parts.len(), 1);
++        assert_eq!(parts[0].file, "parts/abc123/pic.png");
++        assert_eq!(parts[0].size, 7);
++        assert_eq!(
++            std::fs::read(data.join(&parts[0].file)).unwrap(),
++            b"PNGDATA"
++        );
++    }
++}
+diff --git a/apps/omatel-agent/src/sms.rs b/apps/omatel-agent/src/sms.rs
+index 1df6dd5..b24aa5c 100644
+--- a/apps/omatel-agent/src/sms.rs
++++ b/apps/omatel-agent/src/sms.rs
+@@ -12,7 +12,7 @@ use omatel_notify::{Notification, DEFAULT_ACTION, MESSAGES};
+ use omatel_store::{Direction, MessageState, NewIncoming};
+ use zbus::zvariant::OwnedObjectPath;
+ 
+-use crate::{iface, Agent, Target};
++use crate::{iface, mms, Agent, Target};
+ 
+ /// How long a sent message's delivery report is awaited.
+ const DELIVERY_WAIT: Duration = Duration::from_secs(48 * 3600);
+@@ -131,26 +131,41 @@ pub async fn notify(agent: &Arc<Agent>, conversation: i64) {
+         }
+         return;
+     }
+-    let raw = conv
+-        .numbers
+-        .first()
+-        .cloned()
+-        .unwrap_or(conv.address.clone());
+-    let blocked = agent
+-        .blocked
+-        .lock()
+-        .unwrap()
+-        .is_blocked(&raw, &agent.region())
+-        .unwrap_or(false);
++    let numbers = if conv.numbers.is_empty() {
++        vec![conv.address.clone()]
++    } else {
++        conv.numbers.clone()
++    };
++    let region = agent.region();
++    // A group with anyone blocked is hidden in Messages: silent here too.
++    let blocked = numbers.iter().any(|n| {
++        agent
++            .blocked
++            .lock()
++            .unwrap()
++            .is_blocked(n, &region)
++            .unwrap_or(false)
++    });
+     if !settings.message_notifications || conv.muted || blocked {
+         return;
+     }
+-    let name = agent.name_for(&raw);
+-    let who = if name.is_empty() {
+-        agent.display_number(&raw)
++    let group = numbers.len() > 1;
++    let who = if !conv.title.is_empty() {
++        conv.title.clone()
+     } else {
+-        name
++        numbers
++            .iter()
++            .map(|n| display_name(agent, n))
++            .collect::<Vec<_>>()
++            .join(", ")
+     };
++    let lines: Vec<String> = unread
++        .iter()
++        .rev()
++        .take(3)
++        .rev()
++        .map(|m| line(agent, m, group))
++        .collect();
+     let private = !settings.lockscreen_details && agent.is_locked().await;
+     let mut n = if private {
+         Notification::new(MESSAGES, "New message", "")
+@@ -160,13 +175,6 @@ pub async fn notify(agent: &Arc<Agent>, conversation: i64) {
+         } else {
+             who
+         };
+-        let lines: Vec<&str> = unread
+-            .iter()
+-            .rev()
+-            .take(3)
+-            .rev()
+-            .map(|m| m.body.as_str())
+-            .collect();
+         Notification::new(MESSAGES, summary, lines.join("\n"))
+     };
+     n = n.action(DEFAULT_ACTION, "Open");
+@@ -194,6 +202,44 @@ pub async fn notify(agent: &Arc<Agent>, conversation: i64) {
+     }
+ }
+ 
++/// A contact's name, or the number as people read it.
++fn display_name(agent: &Agent, raw: &str) -> String {
++    let name = agent.name_for(raw);
++    if name.is_empty() {
++        agent.display_number(raw)
++    } else {
++        name
++    }
++}
++
++/// One message in a notification: its text, or what it carries when it
++/// has none ("Picture"); in a group, after who sent it.
++fn line(agent: &Agent, m: &omatel_store::Message, group: bool) -> String {
++    let text = if m.body.trim().is_empty() && m.transport == "mms" {
++        let parts = agent
++            .messages
++            .lock()
++            .unwrap()
++            .parts(m.id)
++            .unwrap_or_default();
++        mms::describe_parts(&parts).to_string()
++    } else {
++        m.body.clone()
++    };
++    if group && !m.sender.is_empty() {
++        let name = agent.name_for(&m.sender);
++        let from = if name.is_empty() {
++            agent.display_number(&m.sender)
++        } else {
++            // First names keep a group's lines short.
++            name.split_whitespace().next().unwrap_or(&name).to_string()
++        };
++        format!("{from}: {text}")
++    } else {
++        text
++    }
++}
++
+ pub async fn close(agent: &Agent, id: u32) {
+     let _ = agent.notifier.close(id).await;
+     let mut notes = agent.notes.lock().unwrap();
+@@ -225,8 +271,17 @@ pub async fn mark_read(agent: &Arc<Agent>, conversation: i64) {
+     }
+ }
+ 
+-/// Queue a text to a conversation; it is sent in the background.
++/// Queue a text to a conversation; it is sent in the background. A
++/// group conversation's text goes as MMS (SMS has no groups).
+ pub async fn send(agent: &Arc<Agent>, conversation: i64, text: &str) -> omatel_store::Result<i64> {
++    if is_group(agent, conversation) {
++        return mms::send(agent, conversation, text, &[])
++            .await
++            .map_err(|e| match e {
++                mms::SendError::Store(e) => e,
++                mms::SendError::Invalid(m) => omatel_store::Error::Format(m),
++            });
++    }
+     let id = agent
+         .messages
+         .lock()
+@@ -237,6 +292,18 @@ pub async fn send(agent: &Arc<Agent>, conversation: i64, text: &str) -> omatel_s
+     Ok(id)
+ }
+ 
++/// Whether a conversation has several members (a group: MMS only).
++pub fn is_group(agent: &Agent, conversation: i64) -> bool {
++    agent
++        .messages
++        .lock()
++        .unwrap()
++        .conversation(conversation)
++        .ok()
++        .flatten()
++        .is_some_and(|c| c.numbers.len() > 1)
++}
++
+ /// Send a failed message again, in its place in the thread.
+ pub async fn retry(agent: &Arc<Agent>, id: i64) -> bool {
+     let msg = agent.messages.lock().unwrap().message(id).ok().flatten();
+@@ -244,6 +311,10 @@ pub async fn retry(agent: &Arc<Agent>, id: i64) -> bool {
+     if m.direction != Direction::Out || m.state != MessageState::Failed {
+         return false;
+     }
++    if m.transport == "mms" {
++        mms::retry(agent, id, m.conversation_id).await;
++        return true;
++    }
+     let _ = agent
+         .messages
+         .lock()
+diff --git a/apps/omatel-agent/tests/mms.rs b/apps/omatel-agent/tests/mms.rs
+new file mode 100644
+index 0000000..6881ac0
+--- /dev/null
++++ b/apps/omatel-agent/tests/mms.rs
+@@ -0,0 +1,447 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! The agent as mmsd-tng's client, end to end: the scripted mmsd-tng
++//! (`omatel_mock::mmsd`) and the notification server on a private
++//! "session" bus, the scripted ModemManager on a private "system" bus,
++//! and the agent driven through `org.omamobile.Messages1`. Every number is
++//! a fictional 555-01xx one.
++
++use std::time::Duration;
++
++use futures_util::StreamExt;
++use omatel_agent::{Config, Launcher, LockProbe};
++use omatel_api::Messages1Proxy;
++use omatel_contacts::{AddressBook, Contact, Phone, PhoneKind};
++use omatel_mock::bus::PrivateBus;
++use omatel_mock::mm::MockModem;
++use omatel_mock::mmsd::{Incoming, MockMmsd};
++use omatel_mock::notifications::MockNotifications;
++use omatel_store::{MessageState, MessageStore};
++
++const FRIEND: &str = "+12025550100";
++const OTHER: &str = "+12025550102";
++const STRANGER: &str = "+12025550150";
++const ME: &str = "+12025550199";
++
++struct Rig {
++    _system: PrivateBus,
++    session: PrivateBus,
++    dir: tempfile::TempDir,
++    modem: MockModem,
++    notes: MockNotifications,
++    messages: Messages1Proxy<'static>,
++}
++
++impl Rig {
++    fn store(&self) -> MessageStore {
++        MessageStore::open(&self.dir.path().join("data/messages.db")).unwrap()
++    }
++
++    fn write_settings(&self, text: &str) {
++        std::fs::create_dir_all(self.dir.path().join("config")).unwrap();
++        std::fs::write(self.dir.path().join("config/settings.toml"), text).unwrap();
++    }
++
++    /// A mock mmsd-tng on the session bus, its name not taken yet.
++    async fn mmsd(&self) -> MockMmsd {
++        let m = MockMmsd::serve(self.session.connect().await.unwrap())
++            .await
++            .unwrap();
++        m.set_own_number(ME);
++        m
++    }
++
++    async fn mmsd_running(&self) -> MockMmsd {
++        let m = self.mmsd().await;
++        m.claim().await.unwrap();
++        eventually(|| async { self.messages.mms_ready().await.unwrap_or(false) }).await;
++        m
++    }
++
++    /// A file to attach, in the test's directory.
++    fn file(&self, name: &str, bytes: &[u8]) -> String {
++        let p = self.dir.path().join(name);
++        std::fs::write(&p, bytes).unwrap();
++        p.to_string_lossy().into_owned()
++    }
++}
++
++async fn rig() -> Rig {
++    let system = PrivateBus::start().unwrap();
++    let session = PrivateBus::start().unwrap();
++    let dir = tempfile::tempdir().unwrap();
++    let mut book = AddressBook::open(dir.path().join("contacts"), "US");
++    let mut c = Contact::new("Alex Example");
++    c.phones.push(Phone {
++        number: "(202) 555-0100".into(),
++        kind: PhoneKind::Mobile,
++        label: String::new(),
++    });
++    book.save(&c).unwrap();
++    let modem = MockModem::start(system.connect().await.unwrap())
++        .await
++        .unwrap();
++    let notes = MockNotifications::start(session.connect().await.unwrap(), true)
++        .await
++        .unwrap();
++    let cfg = Config {
++        data_dir: dir.path().join("data"),
++        contacts_dir: dir.path().join("contacts"),
++        settings_path: dir.path().join("config/settings.toml"),
++        launcher: Launcher::Off,
++        lock_probe: LockProbe::Fixed(false),
++        dnd_path: dir.path().join("omarchy/notifications.json"),
++    };
++    let sys = system.connect().await.unwrap();
++    let ses = session.connect().await.unwrap();
++    tokio::spawn(async move {
++        omatel_agent::run(cfg, sys, ses).await.unwrap();
++    });
++    let client = session.connect().await.unwrap();
++    let dbus = zbus::fdo::DBusProxy::new(&client).await.unwrap();
++    for _ in 0..200 {
++        if dbus
++            .name_has_owner("org.omamobile.Messages1".try_into().unwrap())
++            .await
++            .unwrap()
++        {
++            break;
++        }
++        tokio::time::sleep(Duration::from_millis(20)).await;
++    }
++    let messages = Messages1Proxy::builder(&client)
++        .cache_properties(zbus::proxy::CacheProperties::No)
++        .build()
++        .await
++        .unwrap();
++    let rig = Rig {
++        _system: system,
++        session,
++        dir,
++        modem,
++        notes,
++        messages,
++    };
++    eventually(|| async { rig.messages.ready().await.unwrap_or(false) }).await;
++    rig
++}
++
++async fn eventually<F, Fut>(f: F)
++where
++    F: Fn() -> Fut,
++    Fut: std::future::Future<Output = bool>,
++{
++    for _ in 0..250 {
++        if f().await {
++            return;
++        }
++        tokio::time::sleep(Duration::from_millis(20)).await;
++    }
++    panic!("condition not reached in 5 s");
++}
++
++async fn next<S: futures_util::Stream + Unpin>(s: &mut S) -> S::Item {
++    tokio::time::timeout(Duration::from_secs(5), s.next())
++        .await
++        .expect("timed out")
++        .expect("stream ended")
++}
++
++fn text(t: &str) -> (String, String, Vec<u8>) {
++    (
++        "text_0001.txt".into(),
++        "text/plain;charset=utf-8".into(),
++        t.as_bytes().to_vec(),
++    )
++}
++
++fn image(id: &str, bytes: &[u8]) -> (String, String, Vec<u8>) {
++    (id.into(), "image/jpeg".into(), bytes.to_vec())
++}
++
++#[tokio::test]
++async fn incoming_group_mms_is_stored_with_its_picture_and_notified() {
++    let r = rig().await;
++    let mmsd = r.mmsd_running().await;
++    let mut changed = r.messages.receive_messages_changed().await.unwrap();
++    let path = mmsd
++        .receive(&Incoming {
++            sender: FRIEND.into(),
++            recipients: vec![ME.into(), OTHER.into()],
++            date: "2026-10-14T09:30:00+0000".into(),
++            parts: vec![
++                (
++                    "smil".into(),
++                    "application/smil".into(),
++                    b"<smil/>".to_vec(),
++                ),
++                text("See you there"),
++                image("<photo.jpg>", b"JPEGDATA"),
++            ],
++        })
++        .await
++        .unwrap();
++    let conv = next(&mut changed).await.args().unwrap().conversation;
++    // Stored, then deleted from mmsd-tng.
++    eventually(|| async { mmsd.deleted().contains(&path.to_string()) }).await;
++    let store = r.store();
++    let c = store.conversation(conv).unwrap().unwrap();
++    assert_eq!(c.address, format!("{FRIEND},{OTHER}"));
++    let msgs = store.messages(conv, 10, None).unwrap();
++    assert_eq!(msgs.len(), 1);
++    let m = &msgs[0];
++    assert_eq!(m.transport, "mms");
++    assert_eq!(m.body, "See you there");
++    assert_eq!(m.sender, FRIEND);
++    assert_eq!(m.sent_at, Some(1_791_970_200_000));
++
++    let parts = r.messages.list_parts(m.id).await.unwrap();
++    assert_eq!(parts.len(), 1);
++    assert_eq!(parts[0].mime, "image/jpeg");
++    assert_eq!(parts[0].size, 8);
++    assert_eq!(parts[0].name(), "photo.jpg");
++    assert_eq!(std::fs::read(&parts[0].path).unwrap(), b"JPEGDATA");
++
++    eventually(|| async {
++        r.notes
++            .open()
++            .iter()
++            .any(|n| n.body == "Alex: See you there")
++    })
++    .await;
++    let n = r
++        .notes
++        .open()
++        .into_iter()
++        .find(|n| n.body == "Alex: See you there")
++        .unwrap();
++    assert_eq!(n.summary, "Alex Example, (202) 555-0102");
++}
++
++#[tokio::test]
++async fn a_picture_alone_says_picture_and_comes_to_a_one_to_one_thread() {
++    let r = rig().await;
++    let mmsd = r.mmsd_running().await;
++    // No own number known: the single recipient is this phone.
++    mmsd.set_own_number("");
++    let mut changed = r.messages.receive_messages_changed().await.unwrap();
++    mmsd.receive(&Incoming {
++        sender: STRANGER.into(),
++        recipients: vec![ME.into()],
++        date: "2026-10-14T09:30:00+0000".into(),
++        parts: vec![image("", b"PIXELS")],
++    })
++    .await
++    .unwrap();
++    let conv = next(&mut changed).await.args().unwrap().conversation;
++    let c = r.store().conversation(conv).unwrap().unwrap();
++    assert_eq!(c.address, STRANGER);
++    let m = &r.store().messages(conv, 10, None).unwrap()[0];
++    assert_eq!(m.body, "");
++    assert_eq!(m.sender, "");
++    let parts = r.messages.list_parts(m.id).await.unwrap();
++    assert_eq!(parts[0].name(), "part.jpg");
++    eventually(|| async {
++        r.notes
++            .open()
++            .iter()
++            .any(|n| n.summary == "(202) 555-0150" && n.body == "Picture")
++    })
++    .await;
++}
++
++#[tokio::test]
++async fn mms_waiting_in_mmsd_is_imported_when_it_starts_and_cleaned_up() {
++    let r = rig().await;
++    assert!(!r.messages.mms_ready().await.unwrap());
++    // mmsd-tng holds a message before the agent can see it.
++    let mmsd = r.mmsd().await;
++    let path = mmsd
++        .receive(&Incoming {
++            sender: FRIEND.into(),
++            recipients: vec![ME.into()],
++            date: "2026-10-14T09:30:00+0000".into(),
++            parts: vec![text("waiting for you")],
++        })
++        .await
++        .unwrap();
++    mmsd.claim().await.unwrap();
++    eventually(|| async { mmsd.deleted().contains(&path.to_string()) }).await;
++    assert!(r.messages.mms_ready().await.unwrap());
++    let store = r.store();
++    let hits = store.search("waiting", 5).unwrap();
++    assert_eq!(hits.len(), 1);
++    // Imported from the list: its time is the network's.
++    assert_eq!(hits[0].message.at, 1_791_970_200_000);
++
++    // Deleted in Messages (straight in the store): forgotten, and the
++    // agent drops the note once mmsd-tng no longer has the message.
++    store.delete_conversation(hits[0].conversation_id).unwrap();
++    assert_eq!(store.forgotten_mms().unwrap(), vec![path.to_string()]);
++    mmsd.stop().await.unwrap();
++    eventually(|| async { !r.messages.mms_ready().await.unwrap_or(true) }).await;
++    mmsd.claim().await.unwrap();
++    eventually(|| async { r.store().forgotten_mms().unwrap().is_empty() }).await;
++}
++
++#[tokio::test]
++async fn group_send_goes_as_mms_and_follows_mmsd() {
++    let r = rig().await;
++    let mmsd = r.mmsd_running().await;
++    let pic = r.file("cat.png", b"PNGBYTES");
++    let (conv, id) = r
++        .messages
++        .send_with_attachments(&[OTHER, FRIEND], "Hello all", &[(&pic, "image/png")])
++        .await
++        .unwrap();
++    // The caller's file may go: the agent has its own copy.
++    std::fs::remove_file(&pic).unwrap();
++    eventually(|| async { mmsd.sent().len() == 1 }).await;
++    let sent = &mmsd.sent()[0];
++    assert_eq!(sent.recipients, vec![FRIEND, OTHER]);
++    assert_eq!(sent.delivery_report, Some(true));
++    assert_eq!(
++        sent.attachments,
++        vec![
++            (
++                "text.txt".into(),
++                "text/plain".into(),
++                b"Hello all".to_vec()
++            ),
++            ("cat.png".into(), "image/png".into(), b"PNGBYTES".to_vec()),
++        ]
++    );
++    let c = r.store().conversation(conv).unwrap().unwrap();
++    assert_eq!(c.numbers, vec![FRIEND, OTHER]);
++    let m = r.store().message(id).unwrap().unwrap();
++    assert_eq!(m.transport, "mms");
++    assert_eq!(m.body, "Hello all");
++    let parts = r.messages.list_parts(id).await.unwrap();
++    assert_eq!(std::fs::read(&parts[0].path).unwrap(), b"PNGBYTES");
++
++    // mmsd-tng's "sent", then the delivery report.
++    eventually(|| async { r.store().message(id).unwrap().unwrap().state == MessageState::Sent })
++        .await;
++    assert!(mmsd.held().contains(&sent.path), "kept for its report");
++    mmsd.set_status(&sent.path, "delivered").await.unwrap();
++    eventually(|| async {
++        r.store().message(id).unwrap().unwrap().state == MessageState::Delivered
++    })
++    .await;
++    eventually(|| async { mmsd.deleted().contains(&sent.path) }).await;
++
++    // A plain text to the group is an MMS too (SMS has no groups).
++    let id2 = r
++        .messages
++        .send_to_conversation(conv, "One more thing")
++        .await
++        .unwrap();
++    eventually(|| async { mmsd.sent().len() == 2 }).await;
++    assert_eq!(
++        mmsd.sent()[1].attachments,
++        vec![(
++            "text.txt".into(),
++            "text/plain".into(),
++            b"One more thing".to_vec()
++        )]
++    );
++    assert_eq!(r.store().message(id2).unwrap().unwrap().transport, "mms");
++    assert!(r.modem.sent().is_empty());
++    // The text file handed to mmsd-tng is not kept.
++    assert!(!r
++        .dir
++        .path()
++        .join(format!("data/parts/out-{id2}/text.txt"))
++        .exists());
++}
++
++#[tokio::test]
++async fn text_to_one_person_stays_sms() {
++    let r = rig().await;
++    let mmsd = r.mmsd_running().await;
++    let (_, id) = r
++        .messages
++        .send_with_attachments(&[FRIEND], "just text", &[])
++        .await
++        .unwrap();
++    eventually(|| async { r.modem.sent().len() == 1 }).await;
++    assert_eq!(r.modem.sent()[0].text, "just text");
++    assert_eq!(r.store().message(id).unwrap().unwrap().transport, "sms");
++    assert!(mmsd.sent().is_empty());
++    assert!(r
++        .messages
++        .send_with_attachments(&[], "nobody", &[])
++        .await
++        .is_err());
++    assert!(r
++        .messages
++        .send_with_attachments(&[FRIEND], "", &[("/nonexistent/x.png", "image/png")])
++        .await
++        .is_err());
++}
++
++#[tokio::test]
++async fn without_mmsd_an_mms_fails_clearly_and_retry_sends_it() {
++    let r = rig().await;
++    r.write_settings("delivery_reports = false\n");
++    let pic = r.file("a.jpg", b"JPEG");
++    let mut changed = r.messages.receive_messages_changed().await.unwrap();
++    let err = r
++        .messages
++        .send_with_attachments(&[FRIEND], "", &[(&pic, "image/jpeg")])
++        .await
++        .unwrap_err();
++    assert!(err.to_string().contains("MmsUnavailable"), "{err}");
++    let conv = next(&mut changed).await.args().unwrap().conversation;
++    eventually(|| async {
++        r.store()
++            .messages(conv, 5, None)
++            .unwrap()
++            .first()
++            .is_some_and(|m| m.state == MessageState::Failed)
++    })
++    .await;
++    let m = r.store().messages(conv, 5, None).unwrap()[0].clone();
++    assert_eq!(
++        m.error.as_deref(),
++        Some("The MMS service (mmsd-tng) isn't running")
++    );
++
++    let mmsd = r.mmsd_running().await;
++    r.messages.retry(m.id).await.unwrap();
++    eventually(|| async { mmsd.sent().len() == 1 }).await;
++    eventually(|| async { r.store().message(m.id).unwrap().unwrap().state == MessageState::Sent })
++        .await;
++    // No report asked for: mmsd-tng's copy goes once sent.
++    let path = mmsd.sent()[0].path.clone();
++    eventually(|| async { mmsd.deleted().contains(&path) }).await;
++}
++
++#[tokio::test]
++async fn a_refused_mms_is_failed_and_too_big_is_explained() {
++    let r = rig().await;
++    let mmsd = r.mmsd_running().await;
++    mmsd.set_fail_sends(true);
++    let (_, id) = r
++        .messages
++        .send_with_attachments(&[FRIEND, OTHER], "fails", &[])
++        .await
++        .unwrap();
++    eventually(|| async { r.store().message(id).unwrap().unwrap().state == MessageState::Failed })
++        .await;
++    let path = mmsd.sent()[0].path.clone();
++    eventually(|| async { mmsd.deleted().contains(&path) }).await;
++
++    mmsd.set_fail_sends(false);
++    mmsd.set_max_size(4);
++    let pic = r.file("big.jpg", b"TOO MANY BYTES");
++    let (_, id) = r
++        .messages
++        .send_with_attachments(&[FRIEND], "", &[(&pic, "image/jpeg")])
++        .await
++        .unwrap();
++    eventually(|| async { r.store().message(id).unwrap().unwrap().state == MessageState::Failed })
++        .await;
++    let m = r.store().message(id).unwrap().unwrap();
++    assert!(m.error.unwrap().starts_with("Too big for MMS"));
++    assert_eq!(mmsd.sent().len(), 1);
++}
+diff --git a/crates/omatel-api/src/lib.rs b/crates/omatel-api/src/lib.rs
+index 8dfe1ec..53f8a1f 100644
+--- a/crates/omatel-api/src/lib.rs
++++ b/crates/omatel-api/src/lib.rs
+@@ -25,13 +25,31 @@
+ //! | Member | Kind | |
+ //! | --- | --- | --- |
+ //! | `Send(s number, s text) -> (x conversation, x message)` | method | the call card's canned replies use it |
+-//! | `SendToConversation(x conversation, s text) -> x message` | method | |
++//! | `SendToConversation(x conversation, s text) -> x message` | method | a group conversation goes as MMS |
++//! | `SendWithAttachments(as recipients, s text, a(ss) attachments) -> (x conversation, x message)` | method | since 0.3; attachments are (file path, MIME type); see below |
++//! | `SendToConversationWithAttachments(x conversation, s text, a(ss) attachments) -> x message` | method | since 0.3 |
++//! | `ListParts(x message) -> a(ssx)` | method | since 0.3: [`PartInfo`] for each attachment of a message |
+ //! | `Retry(x message)` | method | a failed outgoing message, sent again as new |
+ //! | `MarkRead(x conversation)` | method | also withdraws its notification |
+ //! | `OpenConversation(s number)` | method | opens Messages on that thread |
+ //! | `Ready b`, `ModemState s` | properties | `Ready`: the modem can send |
++//! | `MmsReady b` | property | since 0.3: mmsd-tng runs, so MMS can go out |
+ //! | `MessagesChanged(x conversation)` | signal | a message arrived or changed state |
+ //!
++//! **Which transport.** The agent picks it: a message to one recipient with
++//! text only is an SMS; anything with an attachment, and anything to a
++//! group (several recipients), is an MMS through mmsd-tng
++//! (`org.ofono.mms` on the session bus). The attachment files are copied
++//! into the agent's data directory before the call returns, so the caller
++//! may delete its own copies. When mmsd-tng isn't running, the With
++//! Attachments calls keep the message as failed (Retry sends it later)
++//! and return `...Messages1.Error.MmsUnavailable`; the older calls
++//! report the failure only in the stored message, as for SMS.
++//!
++//! Members added in 0.3 leave the 0.2 ones as they were, so older clients
++//! keep working; a client checks for the new ones by calling them (an
++//! older agent answers `org.freedesktop.DBus.Error.UnknownMethod`).
++//!
+ //! Numbers and texts travel on the user's own session bus only; the agent
+ //! never logs them.
+ 
+@@ -47,6 +65,8 @@ pub const MESSAGES_PATH: &str = "/org/omamobile/Messages1";
+ 
+ /// D-Bus error names the agent returns.
+ pub mod errors {
++    /// Sending an MMS while mmsd-tng isn't running (Messages1).
++    pub const MMS_UNAVAILABLE: &str = "org.omamobile.Messages1.Error.MmsUnavailable";
+     pub const EMERGENCY_UNSUPPORTED: &str = "org.omamobile.Phone1.Error.EmergencyUnsupported";
+     pub const NO_MODEM: &str = "org.omamobile.Phone1.Error.NoModem";
+     pub const INVALID_NUMBER: &str = "org.omamobile.Phone1.Error.InvalidNumber";
+@@ -100,6 +120,29 @@ impl CallInfo {
+     }
+ }
+ 
++/// One attachment of a message, as `ListParts` reports it.
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
++pub struct PartInfo {
++    /// The file, absolute, in the agent's data directory. Read-only for
++    /// clients: the agent deletes it with its message.
++    pub path: String,
++    /// Its MIME type, without parameters ("image/jpeg").
++    pub mime: String,
++    /// Its size in bytes.
++    pub size: i64,
++}
++
++impl PartInfo {
++    pub fn is_image(&self) -> bool {
++        self.mime.starts_with("image/")
++    }
++
++    /// The file's name, for a row that shows it.
++    pub fn name(&self) -> &str {
++        self.path.rsplit('/').next().unwrap_or(&self.path)
++    }
++}
++
+ /// Audio routes for `SetRoute`.
+ pub const ROUTES: &[&str] = &["earpiece", "speaker", "bluetooth"];
+ 
+@@ -150,6 +193,19 @@ pub trait Phone1 {
+ pub trait Messages1 {
+     fn send(&self, number: &str, text: &str) -> zbus::Result<(i64, i64)>;
+     fn send_to_conversation(&self, conversation: i64, text: &str) -> zbus::Result<i64>;
++    fn send_with_attachments(
++        &self,
++        recipients: &[&str],
++        text: &str,
++        attachments: &[(&str, &str)],
++    ) -> zbus::Result<(i64, i64)>;
++    fn send_to_conversation_with_attachments(
++        &self,
++        conversation: i64,
++        text: &str,
++        attachments: &[(&str, &str)],
++    ) -> zbus::Result<i64>;
++    fn list_parts(&self, message: i64) -> zbus::Result<Vec<PartInfo>>;
+     fn retry(&self, message: i64) -> zbus::Result<()>;
+     fn mark_read(&self, conversation: i64) -> zbus::Result<()>;
+     fn open_conversation(&self, number: &str) -> zbus::Result<()>;
+@@ -158,6 +214,8 @@ pub trait Messages1 {
+     fn ready(&self) -> zbus::Result<bool>;
+     #[zbus(property)]
+     fn modem_state(&self) -> zbus::Result<String>;
++    #[zbus(property)]
++    fn mms_ready(&self) -> zbus::Result<bool>;
+ 
+     #[zbus(signal)]
+     fn messages_changed(&self, conversation: i64) -> zbus::Result<()>;
+@@ -188,6 +246,18 @@ mod tests {
+         assert_eq!(CallInfo::SIGNATURE.to_string(), "(sssssxx)");
+     }
+ 
++    #[test]
++    fn part_info_signature_and_name() {
++        assert_eq!(PartInfo::SIGNATURE.to_string(), "(ssx)");
++        let p = PartInfo {
++            path: "/data/omatel/parts/a1/cat.jpg".into(),
++            mime: "image/jpeg".into(),
++            size: 10,
++        };
++        assert!(p.is_image());
++        assert_eq!(p.name(), "cat.jpg");
++    }
++
+     #[test]
+     fn call_info_helpers() {
+         let c = CallInfo {
+diff --git a/crates/omatel-mock/src/lib.rs b/crates/omatel-mock/src/lib.rs
+index 8250296..b0f7aea 100644
+--- a/crates/omatel-mock/src/lib.rs
++++ b/crates/omatel-mock/src/lib.rs
+@@ -4,10 +4,12 @@
+ //! - [`demo`]: fictional contacts, calls and messages for screenshots;
+ //! - [`bus`]: a private dbus-daemon for tests (never the machine's buses);
+ //! - [`mm`]: a scripted ModemManager (calls, SMS, delivery reports);
++//! - [`mmsd`]: a scripted mmsd-tng (MMS in and out, group MMS);
+ //! - [`notifications`]: an org.freedesktop.Notifications server that
+ //!   records what it is sent and can answer with actions and replies.
+ 
+ pub mod bus;
+ pub mod demo;
+ pub mod mm;
++pub mod mmsd;
+ pub mod notifications;
+diff --git a/crates/omatel-mock/src/mmsd.rs b/crates/omatel-mock/src/mmsd.rs
+new file mode 100644
+index 0000000..463bf55
+--- /dev/null
++++ b/crates/omatel-mock/src/mmsd.rs
+@@ -0,0 +1,433 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! A scripted mmsd-tng on a (private) session bus: the manager at
++//! `/org/ofono/mms`, the ModemManager plugin's service at
++//! `/org/ofono/mms/modemmanager` and one object per message under it.
++//!
++//! The network side is the test's: [`MockMmsd::receive`] delivers an MMS
++//! (its parts written into one "PDU" file, as mmsd-tng reports them:
++//! (id, type, file, offset, length)), [`MockMmsd::set_status`] moves a
++//! sent message on. `SendMessage` announces the new message before it
++//! answers, as mmsd-tng does, then reports it sent (or, with
++//! [`MockMmsd::set_fail_sends`], failed). What clients did is recorded.
++//!
++//! Signal and property shapes follow mmsd-tng 2.6.4's `src/service.c`:
++//! `PropertyChanged("status", <s>)` with a lower-case name, `Attachments`
++//! as `a(ssstt)`, dates as `%Y-%m-%dT%H:%M:%S%z`.
++
++use std::collections::HashMap;
++use std::path::PathBuf;
++use std::sync::{Arc, Mutex};
++use std::time::Duration;
++
++use zbus::object_server::SignalEmitter;
++use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
++use zbus::{fdo, interface, Connection, ObjectServer};
++
++pub const SERVICE: &str = "org.ofono.mms";
++pub const ROOT: &str = "/org/ofono/mms";
++pub const MODEMMANAGER: &str = "/org/ofono/mms/modemmanager";
++
++type Props = HashMap<String, OwnedValue>;
++
++/// A message a client sent through the mock, with the attachments' bytes
++/// as they were when SendMessage was called.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct SentMms {
++    pub path: String,
++    pub recipients: Vec<String>,
++    pub delivery_report: Option<bool>,
++    /// (content id, content type, bytes).
++    pub attachments: Vec<(String, String, Vec<u8>)>,
++}
++
++#[derive(Default)]
++struct Shared {
++    next: u32,
++    messages: Vec<(String, Props)>,
++    sent: Vec<SentMms>,
++    deleted: Vec<String>,
++    fail_sends: bool,
++    own_number: String,
++    max_size: i32,
++}
++
++type State = Arc<Mutex<Shared>>;
++
++/// A running mock mmsd-tng.
++#[derive(Clone)]
++pub struct MockMmsd {
++    conn: Connection,
++    state: State,
++    dir: Arc<tempfile::TempDir>,
++}
++
++fn props_value(props: &Props) -> HashMap<String, OwnedValue> {
++    props
++        .iter()
++        .map(|(k, v)| (k.clone(), v.try_clone().expect("no fds")))
++        .collect()
++}
++
++fn owned<'a, T: Into<Value<'a>>>(v: T) -> OwnedValue {
++    OwnedValue::try_from(v.into()).expect("no fds")
++}
++
++struct Manager;
++
++#[interface(name = "org.ofono.mms.Manager")]
++impl Manager {
++    fn get_services(&self) -> Vec<(OwnedObjectPath, Props)> {
++        vec![(
++            OwnedObjectPath::try_from(MODEMMANAGER).expect("path"),
++            HashMap::new(),
++        )]
++    }
++}
++
++struct Service {
++    state: State,
++}
++
++#[interface(name = "org.ofono.mms.Service")]
++impl Service {
++    fn get_messages(&self) -> Vec<(OwnedObjectPath, Props)> {
++        self.state
++            .lock()
++            .unwrap()
++            .messages
++            .iter()
++            .map(|(p, props)| {
++                (
++                    OwnedObjectPath::try_from(p.as_str()).expect("path"),
++                    props_value(props),
++                )
++            })
++            .collect()
++    }
++
++    fn get_properties(&self) -> Props {
++        let max = self.state.lock().unwrap().max_size;
++        HashMap::from([
++            ("UseDeliveryReports".to_string(), owned(false)),
++            ("AutoCreateSMIL".to_string(), owned(true)),
++            ("TotalMaxAttachmentSize".to_string(), owned(max)),
++            ("MaxAttachments".to_string(), owned(25i32)),
++            ("NotificationInds".to_string(), owned(0i32)),
++        ])
++    }
++
++    async fn send_message(
++        &self,
++        recipients: Vec<String>,
++        options: OwnedValue,
++        attachments: Vec<(String, String, String)>,
++        #[zbus(object_server)] server: &ObjectServer,
++        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
++    ) -> fdo::Result<OwnedObjectPath> {
++        if recipients.is_empty() {
++            return Err(fdo::Error::InvalidArgs("no recipients".into()));
++        }
++        let mut files = Vec::new();
++        for (id, ct, file) in &attachments {
++            let bytes = std::fs::read(file)
++                .map_err(|e| fdo::Error::InvalidArgs(format!("cannot read {file}: {e}")))?;
++            files.push((id.clone(), ct.clone(), bytes));
++        }
++        let delivery_report = bool_option(&options, "DeliveryReport");
++        let (path, props, fail) = {
++            let mut s = self.state.lock().unwrap();
++            s.next += 1;
++            let path = format!("{MODEMMANAGER}/out{:04}", s.next);
++            let props: Props = HashMap::from([
++                ("Status".to_string(), owned("draft")),
++                ("Date".to_string(), owned("2026-11-14T10:00:00+0000")),
++                ("Subject".to_string(), owned("")),
++                (
++                    "Delivery Report".to_string(),
++                    owned(delivery_report.unwrap_or(false)),
++                ),
++                ("Modem Number".to_string(), owned(s.own_number.clone())),
++                ("Recipients".to_string(), owned(recipients.clone())),
++                ("Attachments".to_string(), owned(Vec::<Att>::new())),
++            ]);
++            s.messages.push((path.clone(), props_value(&props)));
++            s.sent.push(SentMms {
++                path: path.clone(),
++                recipients,
++                delivery_report,
++                attachments: files,
++            });
++            (path, props, s.fail_sends)
++        };
++        let op = OwnedObjectPath::try_from(path.as_str()).expect("path");
++        server
++            .at(
++                op.clone(),
++                MessageIface {
++                    state: self.state.clone(),
++                },
++            )
++            .await
++            .map_err(|e| fdo::Error::Failed(e.to_string()))?;
++        // mmsd-tng signals the message before SendMessage returns.
++        Service::message_added(&emitter, op.clone(), props).await?;
++        let conn = emitter.connection().clone();
++        let state = self.state.clone();
++        let p = path.clone();
++        // The method runs on zbus's executor, not tokio's (as in mm.rs).
++        std::thread::spawn(move || {
++            std::thread::sleep(Duration::from_millis(50));
++            let status = if fail { "sending_failed" } else { "sent" };
++            let _ = zbus::block_on(status_signal(&conn, &state, &p, status));
++        });
++        Ok(op)
++    }
++
++    #[zbus(signal)]
++    async fn message_added(
++        emitter: &SignalEmitter<'_>,
++        path: OwnedObjectPath,
++        properties: Props,
++    ) -> zbus::Result<()>;
++
++    #[zbus(signal)]
++    async fn message_removed(
++        emitter: &SignalEmitter<'_>,
++        path: OwnedObjectPath,
++    ) -> zbus::Result<()>;
++}
++
++/// An `a{sv}` option of SendMessage.
++fn bool_option(options: &OwnedValue, key: &str) -> Option<bool> {
++    let map = HashMap::<String, OwnedValue>::try_from(options.try_clone().ok()?).ok()?;
++    match &**map.get(key)? {
++        Value::Bool(b) => Some(*b),
++        Value::Value(inner) => match **inner {
++            Value::Bool(b) => Some(b),
++            _ => None,
++        },
++        _ => None,
++    }
++}
++
++/// One entry of `Attachments`: (id, content type, file, offset, length).
++type Att = (String, String, String, u64, u64);
++
++struct MessageIface {
++    state: State,
++}
++
++#[interface(name = "org.ofono.mms.Message")]
++impl MessageIface {
++    async fn delete(
++        &self,
++        #[zbus(header)] header: zbus::message::Header<'_>,
++        #[zbus(object_server)] server: &ObjectServer,
++        #[zbus(connection)] conn: &Connection,
++    ) -> fdo::Result<()> {
++        let path = header
++            .path()
++            .map(|p| p.to_string())
++            .ok_or_else(|| fdo::Error::Failed("no path".into()))?;
++        {
++            let mut s = self.state.lock().unwrap();
++            s.messages.retain(|(p, _)| *p != path);
++            s.deleted.push(path.clone());
++        }
++        let op = OwnedObjectPath::try_from(path.as_str()).expect("path");
++        let _ = server.remove::<MessageIface, _>(op.clone()).await;
++        let emitter = SignalEmitter::new(conn, MODEMMANAGER)?;
++        Service::message_removed(&emitter, op).await?;
++        Ok(())
++    }
++
++    fn mark_read(&self) -> fdo::Result<()> {
++        Ok(())
++    }
++
++    #[zbus(signal)]
++    async fn property_changed(
++        emitter: &SignalEmitter<'_>,
++        name: &str,
++        value: Value<'_>,
++    ) -> zbus::Result<()>;
++}
++
++async fn status_signal(
++    conn: &Connection,
++    state: &State,
++    path: &str,
++    status: &str,
++) -> zbus::Result<()> {
++    {
++        let mut s = state.lock().unwrap();
++        if let Some((_, props)) = s.messages.iter_mut().find(|(p, _)| p == path) {
++            props.insert("Status".into(), owned(status));
++        }
++    }
++    let emitter = SignalEmitter::new(conn, path.to_string())?;
++    // mmsd-tng names it in lower case (emit_msg_status_changed).
++    MessageIface::property_changed(&emitter, "status", Value::from(status)).await
++}
++
++/// An MMS for [`MockMmsd::receive`].
++#[derive(Debug, Clone, Default)]
++pub struct Incoming {
++    pub sender: String,
++    pub recipients: Vec<String>,
++    pub date: String,
++    /// (content id, content type, bytes); a text/plain part is the text.
++    pub parts: Vec<(String, String, Vec<u8>)>,
++}
++
++impl MockMmsd {
++    /// Serve the mock on `conn` without taking mmsd-tng's name yet:
++    /// messages added now are what `GetMessages` finds at [`MockMmsd::claim`].
++    pub async fn serve(conn: Connection) -> zbus::Result<MockMmsd> {
++        let state: State = Arc::new(Mutex::new(Shared {
++            max_size: 1_100_000,
++            ..Shared::default()
++        }));
++        let server = conn.object_server();
++        server.at(ROOT, Manager).await?;
++        server
++            .at(
++                MODEMMANAGER,
++                Service {
++                    state: state.clone(),
++                },
++            )
++            .await?;
++        let dir = tempfile::Builder::new()
++            .prefix("omatel-mmsd-")
++            .tempdir()
++            .map_err(|e| zbus::Error::Failure(e.to_string()))?;
++        Ok(MockMmsd {
++            conn,
++            state,
++            dir: Arc::new(dir),
++        })
++    }
++
++    /// Take `org.ofono.mms`: clients see mmsd-tng start.
++    pub async fn claim(&self) -> zbus::Result<()> {
++        self.conn.request_name(SERVICE).await?;
++        Ok(())
++    }
++
++    /// Serve and claim the name at once.
++    pub async fn start(conn: Connection) -> zbus::Result<MockMmsd> {
++        let m = MockMmsd::serve(conn).await?;
++        m.claim().await?;
++        Ok(m)
++    }
++
++    /// Give up the name: clients see mmsd-tng stop.
++    pub async fn stop(&self) -> zbus::Result<()> {
++        self.conn.release_name(SERVICE).await?;
++        Ok(())
++    }
++
++    /// The phone's number as mmsd-tng reports it (`Modem Number`).
++    pub fn set_own_number(&self, n: &str) {
++        self.state.lock().unwrap().own_number = n.to_string();
++    }
++
++    /// Make every following send fail (or succeed again).
++    pub fn set_fail_sends(&self, on: bool) {
++        self.state.lock().unwrap().fail_sends = on;
++    }
++
++    /// The carrier's total attachment size limit (bytes).
++    pub fn set_max_size(&self, bytes: i32) {
++        self.state.lock().unwrap().max_size = bytes;
++    }
++
++    /// An MMS arrives: stored, registered, announced with MessageAdded.
++    pub async fn receive(&self, m: &Incoming) -> zbus::Result<OwnedObjectPath> {
++        let (path, props) = {
++            let mut s = self.state.lock().unwrap();
++            s.next += 1;
++            let uuid = format!("in{:04}", s.next);
++            let file: PathBuf = self.dir.path().join(&uuid);
++            let mut pdu = b"MMS-HEADER".to_vec();
++            let mut atts: Vec<Att> = Vec::new();
++            for (id, ct, bytes) in &m.parts {
++                atts.push((
++                    id.clone(),
++                    ct.clone(),
++                    file.to_string_lossy().into_owned(),
++                    pdu.len() as u64,
++                    bytes.len() as u64,
++                ));
++                pdu.extend_from_slice(bytes);
++            }
++            std::fs::write(&file, &pdu).map_err(|e| zbus::Error::Failure(e.to_string()))?;
++            let props: Props = HashMap::from([
++                ("Status".to_string(), owned("received")),
++                ("Date".to_string(), owned(m.date.clone())),
++                ("Subject".to_string(), owned("")),
++                ("Sender".to_string(), owned(m.sender.clone())),
++                ("Recipients".to_string(), owned(m.recipients.clone())),
++                ("Modem Number".to_string(), owned(s.own_number.clone())),
++                ("Attachments".to_string(), owned(atts)),
++            ]);
++            let path = format!("{MODEMMANAGER}/{uuid}");
++            s.messages.push((path.clone(), props_value(&props)));
++            (path, props)
++        };
++        let op = OwnedObjectPath::try_from(path.as_str()).expect("path");
++        self.conn
++            .object_server()
++            .at(
++                op.clone(),
++                MessageIface {
++                    state: self.state.clone(),
++                },
++            )
++            .await?;
++        let emitter = SignalEmitter::new(&self.conn, MODEMMANAGER)?;
++        Service::message_added(&emitter, op.clone(), props).await?;
++        Ok(op)
++    }
++
++    /// Announce a message again (mmsd-tng reporting one twice).
++    pub async fn announce_again(&self, path: &str) -> zbus::Result<()> {
++        let props = {
++            let s = self.state.lock().unwrap();
++            s.messages
++                .iter()
++                .find(|(p, _)| p == path)
++                .map(|(_, props)| props_value(props))
++        };
++        let Some(props) = props else {
++            return Ok(());
++        };
++        let emitter = SignalEmitter::new(&self.conn, MODEMMANAGER)?;
++        Service::message_added(&emitter, OwnedObjectPath::try_from(path)?, props).await
++    }
++
++    /// Move a message on ("sent", "delivered", "sending_failed").
++    pub async fn set_status(&self, path: &str, status: &str) -> zbus::Result<()> {
++        status_signal(&self.conn, &self.state, path, status).await
++    }
++
++    pub fn sent(&self) -> Vec<SentMms> {
++        self.state.lock().unwrap().sent.clone()
++    }
++
++    pub fn deleted(&self) -> Vec<String> {
++        self.state.lock().unwrap().deleted.clone()
++    }
++
++    /// The messages the mock still holds.
++    pub fn held(&self) -> Vec<String> {
++        self.state
++            .lock()
++            .unwrap()
++            .messages
++            .iter()
++            .map(|(p, _)| p.clone())
++            .collect()
++    }
++}
+diff --git a/crates/omatel-store/src/lib.rs b/crates/omatel-store/src/lib.rs
+index 5b49ae1..ae41529 100644
+--- a/crates/omatel-store/src/lib.rs
++++ b/crates/omatel-store/src/lib.rs
+@@ -25,7 +25,8 @@ use rusqlite::Connection;
+ pub use blocked::{BlockList, Blocked};
+ pub use calls::{CallDirection, CallLog, CallOutcome, CallRecord};
+ pub use messages::{
+-    Conversation, Direction, Message, MessageState, MessageStore, NewIncoming, SearchHit,
++    group_address, Conversation, Direction, Message, MessageState, MessageStore, NewIncoming,
++    NewMms, NewPart, Part, SearchHit,
+ };
+ 
+ #[derive(Debug, thiserror::Error)]
+diff --git a/crates/omatel-store/src/messages.rs b/crates/omatel-store/src/messages.rs
+index dc84598..eb1b4da 100644
+--- a/crates/omatel-store/src/messages.rs
++++ b/crates/omatel-store/src/messages.rs
+@@ -8,6 +8,15 @@
+ //! `dedupe_key` (number, network timestamp, text): the agent stores a
+ //! message, then deletes it from the modem, and a crash between the two
+ //! must give a duplicate that this key filters, never a lost message.
++//!
++//! MMS (transport `mms`) come from mmsd-tng. Each keeps mmsd-tng's object
++//! path in `mms_path`, unique, so a message mmsd-tng reports twice (at
++//! start-up and in a signal) is stored once. Its attachments are files in
++//! the agent's data directory (`parts/...`, stored relative to it) listed
++//! in `parts`. Deleting a message here (the apps do it straight in this
++//! database) leaves its mmsd-tng path in `mms_forgotten` and its files in
++//! `files_forgotten` by trigger: the agent deletes those from mmsd-tng and
++//! from disk later, and a forgotten path is never imported again.
+ 
+ use std::path::Path;
+ 
+@@ -16,7 +25,8 @@ use serde::{Deserialize, Serialize};
+ 
+ use crate::{now_ms, open, Error, Result, EXPORT_VERSION};
+ 
+-const MIGRATIONS: &[&str] = &["CREATE TABLE conversations (
++const MIGRATIONS: &[&str] = &[
++    "CREATE TABLE conversations (
+         id INTEGER PRIMARY KEY,
+         address TEXT NOT NULL UNIQUE,
+         title TEXT NOT NULL DEFAULT '',
+@@ -72,7 +82,18 @@ const MIGRATIONS: &[&str] = &["CREATE TABLE conversations (
+     CREATE TRIGGER messages_au AFTER UPDATE OF body ON messages BEGIN
+         INSERT INTO messages_fts (messages_fts, rowid, body) VALUES ('delete', old.id, old.body);
+         INSERT INTO messages_fts (rowid, body) VALUES (new.id, new.body);
+-    END;"];
++    END;",
++    "CREATE UNIQUE INDEX messages_mms_path ON messages (mms_path) WHERE mms_path IS NOT NULL;
++    CREATE INDEX parts_message ON parts (message_id);
++    CREATE TABLE mms_forgotten (path TEXT PRIMARY KEY);
++    CREATE TABLE files_forgotten (file TEXT PRIMARY KEY);
++    CREATE TRIGGER messages_mms_ad AFTER DELETE ON messages WHEN old.mms_path IS NOT NULL BEGIN
++        INSERT OR IGNORE INTO mms_forgotten (path) VALUES (old.mms_path);
++    END;
++    CREATE TRIGGER parts_ad AFTER DELETE ON parts BEGIN
++        INSERT OR IGNORE INTO files_forgotten (file) VALUES (old.file);
++    END;",
++];
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+ #[serde(rename_all = "lowercase")]
+@@ -221,6 +242,66 @@ pub struct NewIncoming<'a> {
+     pub received_at: Option<i64>,
+ }
+ 
++/// An MMS to store (from mmsd-tng, in either direction).
++#[derive(Debug, Clone)]
++pub struct NewMms<'a> {
++    pub conversation: i64,
++    pub direction: Direction,
++    /// The sender in a group conversation; empty otherwise.
++    pub sender: &'a str,
++    pub body: &'a str,
++    /// When it arrived or was written, ms.
++    pub at: i64,
++    pub sent_at: Option<i64>,
++    pub state: MessageState,
++    /// mmsd-tng's object path: the dedupe key.
++    pub mms_path: &'a str,
++}
++
++/// An attachment to record: a file under the data directory.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct NewPart {
++    pub mime: String,
++    /// Relative to the data directory (`parts/...`).
++    pub file: String,
++    pub size: i64,
++}
++
++/// A stored attachment.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct Part {
++    pub id: i64,
++    pub message_id: i64,
++    pub mime: String,
++    /// Relative to the data directory (`parts/...`).
++    pub file: String,
++    pub size: i64,
++}
++
++impl Part {
++    /// Where the file is, under the stores' directory.
++    pub fn path(&self, data_dir: &Path) -> std::path::PathBuf {
++        data_dir.join(&self.file)
++    }
++
++    pub fn is_image(&self) -> bool {
++        self.mime.starts_with("image/")
++    }
++}
++
++/// The address of a conversation with these members (normalized
++/// numbers): one number, or a group's numbers sorted and comma-joined.
++pub fn group_address(numbers: &[&str]) -> String {
++    let mut n: Vec<&str> = numbers
++        .iter()
++        .map(|s| s.trim())
++        .filter(|s| !s.is_empty())
++        .collect();
++    n.sort_unstable();
++    n.dedup();
++    n.join(",")
++}
++
+ #[derive(Serialize, Deserialize)]
+ struct ExportConversation {
+     address: String,
+@@ -324,6 +405,20 @@ impl MessageStore {
+             .optional()?)
+     }
+ 
++    /// The conversation with these members, (normalized, as given) each,
++    /// created if new: one member is a one-to-one thread, more a group.
++    pub fn conversation_for_members(&self, members: &[(String, String)]) -> Result<i64> {
++        let mut m: Vec<&(String, String)> = members.iter().filter(|(n, _)| !n.is_empty()).collect();
++        m.sort_by(|a, b| a.0.cmp(&b.0));
++        m.dedup_by(|a, b| a.0 == b.0);
++        if m.is_empty() {
++            return Err(Error::Format("a conversation needs a member".into()));
++        }
++        let keys: Vec<&str> = m.iter().map(|(n, _)| n.as_str()).collect();
++        let raws: Vec<&str> = m.iter().map(|(_, r)| r.as_str()).collect();
++        self.conversation_for(&group_address(&keys), &raws)
++    }
++
+     /// Store an incoming SMS. `Ok(None)` when it is a duplicate of one
+     /// already stored. Committed (and synced) when this returns.
+     pub fn insert_incoming(&self, m: &NewIncoming) -> Result<Option<(i64, i64)>> {
+@@ -364,11 +459,21 @@ impl MessageStore {
+ 
+     /// Add an outgoing message written at `now` (ms), for imports and demos.
+     pub fn insert_outgoing_at(&self, conversation: i64, body: &str, now: i64) -> Result<i64> {
++        self.insert_outgoing_with(conversation, body, now, "sms")
++    }
++
++    fn insert_outgoing_with(
++        &self,
++        conversation: i64,
++        body: &str,
++        now: i64,
++        transport: &str,
++    ) -> Result<i64> {
+         let tx = self.conn.unchecked_transaction()?;
+         tx.execute(
+-            "INSERT INTO messages (conversation_id, direction, body, at, state, read)
+-             VALUES (?1, 'out', ?2, ?3, 'sending', 1)",
+-            params![conversation, body, now],
++            "INSERT INTO messages (conversation_id, direction, transport, body, at, state, read)
++             VALUES (?1, 'out', ?4, ?2, ?3, 'sending', 1)",
++            params![conversation, body, now, transport],
+         )?;
+         let id = tx.last_insert_rowid();
+         tx.execute(
+@@ -423,12 +528,172 @@ impl MessageStore {
+             .optional()?)
+     }
+ 
++    /// Store an MMS from mmsd-tng with its attachments, in one
++    /// transaction. `Ok(None)` when its path is already stored, or was
++    /// deleted here (forgotten): it is never imported twice.
++    pub fn insert_mms(&self, m: &NewMms, parts: &[NewPart]) -> Result<Option<i64>> {
++        let known: bool = self.conn.query_row(
++            "SELECT EXISTS (SELECT 1 FROM messages WHERE mms_path = ?1)
++                 OR EXISTS (SELECT 1 FROM mms_forgotten WHERE path = ?1)",
++            [m.mms_path],
++            |r| r.get(0),
++        )?;
++        if known {
++            return Ok(None);
++        }
++        let incoming = m.direction == Direction::In;
++        let tx = self.conn.unchecked_transaction()?;
++        tx.execute(
++            "INSERT INTO messages (conversation_id, direction, transport, sender, body, at, sent_at,
++                                   state, read, mms_path)
++             VALUES (?1, ?2, 'mms', ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
++            params![
++                m.conversation,
++                m.direction.as_str(),
++                m.sender,
++                m.body,
++                m.at,
++                m.sent_at,
++                m.state.as_str(),
++                !incoming,
++                m.mms_path
++            ],
++        )?;
++        let id = tx.last_insert_rowid();
++        insert_parts(&tx, id, parts)?;
++        // A new incoming message brings an archived conversation back.
++        tx.execute(
++            "UPDATE conversations SET last_at = max(last_at, ?2),
++                 archived = CASE WHEN ?3 THEN 0 ELSE archived END WHERE id = ?1",
++            params![m.conversation, m.at, incoming],
++        )?;
++        tx.commit()?;
++        Ok(Some(id))
++    }
++
++    /// Add an outgoing MMS in the `sending` state; its attachments follow
++    /// with [`MessageStore::add_parts`] once they are copied.
++    pub fn insert_outgoing_mms(&self, conversation: i64, body: &str) -> Result<i64> {
++        self.insert_outgoing_with(conversation, body, now_ms(), "mms")
++    }
++
++    pub fn add_parts(&self, message: i64, parts: &[NewPart]) -> Result<()> {
++        let tx = self.conn.unchecked_transaction()?;
++        insert_parts(&tx, message, parts)?;
++        tx.commit()?;
++        Ok(())
++    }
++
++    /// A message's attachments, in the order they were added.
++    pub fn parts(&self, message: i64) -> Result<Vec<Part>> {
++        let mut st = self.conn.prepare_cached(
++            "SELECT id, message_id, mime, file, size FROM parts WHERE message_id = ?1 ORDER BY id",
++        )?;
++        let rows = st.query_map([message], |r| {
++            Ok(Part {
++                id: r.get(0)?,
++                message_id: r.get(1)?,
++                mime: r.get(2)?,
++                file: r.get(3)?,
++                size: r.get(4)?,
++            })
++        })?;
++        Ok(rows.collect::<rusqlite::Result<_>>()?)
++    }
++
++    /// Remember mmsd-tng's object for a message we handed it.
++    pub fn set_mms_path(&self, id: i64, path: &str) -> Result<()> {
++        self.conn.execute(
++            "UPDATE messages SET mms_path = ?2 WHERE id = ?1",
++            params![id, path],
++        )?;
++        Ok(())
++    }
++
++    /// The message mmsd-tng knows by this path.
++    pub fn by_mms_path(&self, path: &str) -> Result<Option<Message>> {
++        Ok(self
++            .conn
++            .query_row(
++                &format!("SELECT {MESSAGE_COLUMNS} FROM messages m WHERE m.mms_path = ?1"),
++                [path],
++                message,
++            )
++            .optional()?)
++    }
++
++    pub fn mms_path(&self, id: i64) -> Result<Option<String>> {
++        Ok(self
++            .conn
++            .query_row("SELECT mms_path FROM messages WHERE id = ?1", [id], |r| {
++                r.get(0)
++            })
++            .optional()?
++            .flatten())
++    }
++
++    /// Unlink a message from its mmsd-tng object (a retry sends a new
++    /// one); the old path goes to the forgotten list.
++    pub fn forget_mms_path(&self, id: i64) -> Result<()> {
++        let tx = self.conn.unchecked_transaction()?;
++        tx.execute(
++            "INSERT OR IGNORE INTO mms_forgotten (path)
++             SELECT mms_path FROM messages WHERE id = ?1 AND mms_path IS NOT NULL",
++            [id],
++        )?;
++        tx.execute("UPDATE messages SET mms_path = NULL WHERE id = ?1", [id])?;
++        tx.commit()?;
++        Ok(())
++    }
++
++    /// Outgoing MMS still in mmsd-tng's hands (`sending` with a path).
++    pub fn mms_in_flight(&self) -> Result<Vec<(i64, String)>> {
++        let mut st = self.conn.prepare(
++            "SELECT id, mms_path FROM messages
++             WHERE direction = 'out' AND state = 'sending' AND mms_path IS NOT NULL",
++        )?;
++        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
++        Ok(rows.collect::<rusqlite::Result<_>>()?)
++    }
++
++    /// mmsd-tng paths of messages deleted here, to delete there too.
++    pub fn forgotten_mms(&self) -> Result<Vec<String>> {
++        let mut st = self.conn.prepare("SELECT path FROM mms_forgotten")?;
++        let rows = st.query_map([], |r| r.get(0))?;
++        Ok(rows.collect::<rusqlite::Result<_>>()?)
++    }
++
++    /// Drop a forgotten path once mmsd-tng no longer has it. It is still
++    /// never imported again: a stored message keeps it, a deleted one
++    /// is gone from mmsd-tng.
++    pub fn drop_forgotten_mms(&self, path: &str) -> Result<()> {
++        self.conn
++            .execute("DELETE FROM mms_forgotten WHERE path = ?1", [path])?;
++        Ok(())
++    }
++
++    /// Attachment files of deleted messages, to delete from disk.
++    pub fn forgotten_files(&self) -> Result<Vec<String>> {
++        let mut st = self.conn.prepare("SELECT file FROM files_forgotten")?;
++        let rows = st.query_map([], |r| r.get(0))?;
++        Ok(rows.collect::<rusqlite::Result<_>>()?)
++    }
++
++    pub fn drop_forgotten_file(&self, file: &str) -> Result<()> {
++        self.conn
++            .execute("DELETE FROM files_forgotten WHERE file = ?1", [file])?;
++        Ok(())
++    }
++
+     /// Outgoing messages left in `sending` (the agent stopped mid-send):
+-    /// marked failed so the user can retry. Returns their IDs.
++    /// marked failed so the user can retry. Returns their IDs. An MMS
++    /// that mmsd-tng already holds (it has a path) is still being sent
++    /// there; the agent follows it when mmsd-tng is back.
+     pub fn fail_interrupted(&self) -> Result<Vec<i64>> {
+-        let mut st = self
+-            .conn
+-            .prepare("SELECT id FROM messages WHERE direction = 'out' AND state = 'sending'")?;
++        let mut st = self.conn.prepare(
++            "SELECT id FROM messages WHERE direction = 'out' AND state = 'sending'
++             AND mms_path IS NULL",
++        )?;
+         let ids: Vec<i64> = st
+             .query_map([], |r| r.get(0))?
+             .collect::<rusqlite::Result<_>>()?;
+@@ -699,6 +964,16 @@ impl MessageStore {
+     }
+ }
+ 
++fn insert_parts(tx: &rusqlite::Transaction, message: i64, parts: &[NewPart]) -> Result<()> {
++    for p in parts {
++        tx.execute(
++            "INSERT INTO parts (message_id, mime, file, size) VALUES (?1, ?2, ?3, ?4)",
++            params![message, p.mime, p.file, p.size],
++        )?;
++    }
++    Ok(())
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -868,4 +1143,154 @@ mod tests {
+         );
+         assert!(b.search("two", 5).unwrap().len() == 1);
+     }
++
++    fn mms<'a>(conversation: i64, body: &'a str, path: &'a str) -> NewMms<'a> {
++        NewMms {
++            conversation,
++            direction: Direction::In,
++            sender: "+12025550161",
++            body,
++            at: 5,
++            sent_at: Some(4),
++            state: MessageState::Received,
++            mms_path: path,
++        }
++    }
++
++    fn part(file: &str) -> NewPart {
++        NewPart {
++            mime: "image/png".into(),
++            file: file.into(),
++            size: 3,
++        }
++    }
++
++    #[test]
++    fn group_conversations_sort_their_members() {
++        assert_eq!(
++            group_address(&["+12025550162", " +12025550161", "+12025550162", ""]),
++            "+12025550161,+12025550162"
++        );
++        let s = MessageStore::open_in_memory().unwrap();
++        let members = |a: &str, b: &str| {
++            vec![
++                (a.to_string(), format!("raw {a}")),
++                (b.to_string(), format!("raw {b}")),
++            ]
++        };
++        let c = s
++            .conversation_for_members(&members("+12025550162", "+12025550161"))
++            .unwrap();
++        let same = s
++            .conversation_for_members(&members("+12025550161", "+12025550162"))
++            .unwrap();
++        assert_eq!(c, same);
++        let conv = s.conversation(c).unwrap().unwrap();
++        assert_eq!(conv.address, "+12025550161,+12025550162");
++        // The raw numbers follow the sorted order.
++        assert_eq!(conv.numbers, vec!["raw +12025550161", "raw +12025550162"]);
++        assert!(s.conversation_for_members(&[]).is_err());
++    }
++
++    #[test]
++    fn mms_insert_dedupes_and_keeps_parts() {
++        let s = MessageStore::open_in_memory().unwrap();
++        let c = s
++            .conversation_for("+12025550161,+12025550162", &[])
++            .unwrap();
++        s.set_archived(c, true).unwrap();
++        let id = s
++            .insert_mms(
++                &mms(c, "look", "/org/ofono/mms/modemmanager/a1"),
++                &[part("parts/a1/cat.png"), part("parts/a1/dog.png")],
++            )
++            .unwrap()
++            .unwrap();
++        // The same mmsd-tng message again is a no-op.
++        assert!(s
++            .insert_mms(&mms(c, "look", "/org/ofono/mms/modemmanager/a1"), &[])
++            .unwrap()
++            .is_none());
++        let m = s.message(id).unwrap().unwrap();
++        assert_eq!(m.transport, "mms");
++        assert_eq!(m.sender, "+12025550161");
++        assert!(!m.read);
++        let conv = s.conversation(c).unwrap().unwrap();
++        assert!(!conv.archived && conv.unread == 1 && conv.last_at == 5);
++        let parts = s.parts(id).unwrap();
++        assert_eq!(
++            parts.iter().map(|p| p.file.as_str()).collect::<Vec<_>>(),
++            vec!["parts/a1/cat.png", "parts/a1/dog.png"]
++        );
++        assert!(parts[0].is_image());
++        assert_eq!(
++            parts[0].path(Path::new("/data")),
++            Path::new("/data/parts/a1/cat.png")
++        );
++        assert_eq!(
++            s.by_mms_path("/org/ofono/mms/modemmanager/a1")
++                .unwrap()
++                .unwrap()
++                .id,
++            id
++        );
++        assert!(s.search("look", 5).unwrap().len() == 1);
++    }
++
++    #[test]
++    fn deleting_mms_leaves_paths_and_files_to_clean_up() {
++        let s = MessageStore::open_in_memory().unwrap();
++        let c = s.conversation_for("+12025550163", &[]).unwrap();
++        s.insert_mms(
++            &mms(c, "", "/org/ofono/mms/modemmanager/b1"),
++            &[part("parts/b1/x.png")],
++        )
++        .unwrap()
++        .unwrap();
++        // Deleting the conversation cascades to messages and parts.
++        s.delete_conversation(c).unwrap();
++        assert_eq!(
++            s.forgotten_mms().unwrap(),
++            vec!["/org/ofono/mms/modemmanager/b1"]
++        );
++        assert_eq!(s.forgotten_files().unwrap(), vec!["parts/b1/x.png"]);
++        // A forgotten message is never imported again.
++        let c = s.conversation_for("+12025550163", &[]).unwrap();
++        assert!(s
++            .insert_mms(&mms(c, "", "/org/ofono/mms/modemmanager/b1"), &[])
++            .unwrap()
++            .is_none());
++        s.drop_forgotten_file("parts/b1/x.png").unwrap();
++        s.drop_forgotten_mms("/org/ofono/mms/modemmanager/b1")
++            .unwrap();
++        assert!(s.forgotten_files().unwrap().is_empty());
++        assert!(s.forgotten_mms().unwrap().is_empty());
++    }
++
++    #[test]
++    fn outgoing_mms_in_flight_is_not_failed_at_start() {
++        let s = MessageStore::open_in_memory().unwrap();
++        let c = s
++            .conversation_for("+12025550164,+12025550165", &[])
++            .unwrap();
++        let handed = s.insert_outgoing_mms(c, "to mmsd").unwrap();
++        s.add_parts(handed, &[part("parts/out-1/p.png")]).unwrap();
++        s.set_mms_path(handed, "/org/ofono/mms/modemmanager/c1")
++            .unwrap();
++        let queued = s.insert_outgoing_mms(c, "not yet").unwrap();
++        assert_eq!(s.message(handed).unwrap().unwrap().transport, "mms");
++        assert_eq!(s.parts(handed).unwrap().len(), 1);
++        assert_eq!(s.fail_interrupted().unwrap(), vec![queued]);
++        assert_eq!(
++            s.mms_in_flight().unwrap(),
++            vec![(handed, "/org/ofono/mms/modemmanager/c1".to_string())]
++        );
++        // A retry unlinks the old mmsd-tng object and remembers it.
++        s.forget_mms_path(handed).unwrap();
++        assert_eq!(s.mms_path(handed).unwrap(), None);
++        assert_eq!(
++            s.forgotten_mms().unwrap(),
++            vec!["/org/ofono/mms/modemmanager/c1"]
++        );
++    }
+ }
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 0877357..5ac1f7c 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -137,7 +137,9 @@ otherwise a Reply button that opens Messages.
+   shade and the lock screen show on the card.
+ 
+ **Sending.** The message is written as `sending`, then sent in the
+-background: `Messaging.Create`, then `Sms.Send`.
++background: `Messaging.Create`, then `Sms.Send`. Text to one person goes
++as SMS; anything with an attachment, and anything to a group, as MMS
++(below).
+ - Delivery reports are requested by default, and the message object
+   stays on the modem while the report is awaited, for 48 hours at most.
+ - A failure marks the message `failed`. Retry sends it again in its
+@@ -145,6 +147,44 @@ background: `Messaging.Create`, then `Sms.Send`.
+ - A send interrupted by the agent stopping is marked failed at the next
+   start.
+ 
++## MMS
++
++mmsd-tng (`org.ofono.mms` on the session bus, a user service) does the
++network side: it takes the WAP push from ModemManager, fetches the message
++from the MMSC over the mobile data bearer, and posts what is sent. The
++agent follows it as it comes and goes (`MmsReady` on Messages1) and is its
++client (`apps/omatel-agent/src/mms.rs`):
++- **Receiving.** When mmsd-tng appears, `GetMessages` is read once; after
++  that `MessageAdded`. A received message is stored like an SMS: the text
++  from its text/plain parts, every other part copied out of mmsd-tng's PDU
++  file (each attachment is an offset and a length in it) into
++  `parts/<uuid>/` in the data directory. Then it is deleted from mmsd-tng.
++  The store keys MMS by mmsd-tng's object path (unique), so a crash in
++  between, or a message reported twice, stores nothing twice.
++- **Groups.** A conversation is everyone on the message, the sender and
++  the recipients, except the phone's own numbers (mmsd-tng's `Modem
++  Number`, ModemManager's `OwnNumbers`). Its address is the members'
++  numbers sorted and comma-joined; each message records its sender.
++- **Sending.** `SendWithAttachments` and `SendToConversationWithAttachments`
++  copy the attachment files into `parts/out-<id>/` before they return,
++  then hand text and files to `SendMessage` (mmsd-tng builds the SMIL). The
++  message follows mmsd-tng's status: `sent`, `sending_failed`,
++  `delivered`. It stays in mmsd-tng while a delivery report is awaited
++  (48 hours at most) and is deleted there after. The carrier's size limit
++  (`TotalMaxAttachmentSize`) is checked first, so a message that is too
++  big says so.
++- **mmsd-tng not running.** The message is kept as failed with the reason
++  ("The MMS service (mmsd-tng) isn't running"); Retry sends it once
++  mmsd-tng runs. The With Attachments calls also answer
++  `org.omamobile.Messages1.Error.MmsUnavailable`.
++- **Deleting.** The apps delete straight in the store. Triggers list the
++  deleted messages' mmsd-tng paths and attachment files
++  (`mms_forgotten`, `files_forgotten`), and the agent deletes those from
++  mmsd-tng and from disk when it attaches and every ten minutes. A
++  forgotten path is never imported again.
++- Read state isn't mirrored to mmsd-tng: a received message no longer
++  exists there once it is stored.
++
+ ## Privacy
+ 
+ - Logs carry states, counts and object paths only: never a number, a
+@@ -155,9 +195,9 @@ background: `Messaging.Create`, then `Sms.Send`.
+ 
+ ## Not yet
+ 
+-- **MMS (T3):** mmsd-tng, attachments and group threads. The schema has
+-  the `parts` table and the `transport` column, and the UI shows the
+-  attach button disabled.
++- **MMS on a phone (T3):** the client side above is tested against a
++  scripted mmsd-tng only. The data bearer, the carrier's MMSC settings and
++  mmsd-tng's user unit are the phone's part.
+ - **Call audio (T4):** callaudiod, earpiece and speaker routing, and
+   Bluetooth.
+ - **The lock-screen call card and inline reply in Omarchy's
+diff --git a/docs/development.md b/docs/development.md
+index 4edb191..ff2fe97 100644
+--- a/docs/development.md
++++ b/docs/development.md
+@@ -55,6 +55,13 @@ bin/cross package     # pkgbuild/omatel-agent-<version>-1-aarch64.pkg.tar.zst
+     inline reply, delivery report, retry, "New message" on a locked
+     phone, muted, blocked and disabled notifications;
+   - a modem that appears late.
++- **`apps/omatel-agent/tests/mms.rs`** runs the agent against the scripted
++  mmsd-tng (`omatel_mock::mmsd`) on the private session bus: a group MMS
++  with text and a picture received, stored and notified; a picture alone;
++  messages waiting in mmsd-tng imported when it starts, and deletions
++  cleaned up there; a group send with an attachment followed through sent
++  and delivered; text to one person staying SMS; a send without mmsd-tng
++  failing clearly and sent by Retry later; a refused and a too-big MMS.
+ - **`scripts/chain-test.sh`** runs the agent over the real stack in a
+   container: the agent, then `omamobile-mmd` and `omamobile-sitd` from an
+   Omarchy Mobile checkout (`OMARCHY_MOBILE`, default
+diff --git a/docs/export-format.md b/docs/export-format.md
+index 699097d..896343a 100644
+--- a/docs/export-format.md
++++ b/docs/export-format.md
+@@ -49,7 +49,8 @@ Fields:
+   `delivered_at`.
+ - **`state`:** one of `received`, `sending`, `sent`, `delivered` or
+   `failed`.
+-- **`transport`:** `sms` today, `mms` later.
++- **`transport`:** `sms` or `mms`. An MMS's text is exported; its
++  attachments (the files under `parts/` in the data directory) are not.
+ 
+ Importing merges into existing conversations by `address`.
+ - A message whose direction, `at` and `body` all match one already stored
+-- 
+2.56.1
+

@@ -14,20 +14,39 @@
 # pinned tag, in prepare(), and builds offline.
 pkgname=omamessages
 pkgver=0.2.2
-pkgrel=1
-pkgdesc="Messages: SMS conversations with search, drafts, delivery reports and blocking"
+pkgrel=2
+pkgdesc="Messages: SMS and MMS conversations with search, drafts, delivery reports and blocking"
 arch=(aarch64)
 url="https://github.com/derekross/omamessages"
 license=('GPL-3.0-or-later' 'MIT')
-depends=('omatel-agent>=0.2.1' gcc-libs glib2 glibc 'gtk4>=4.14' 'libadwaita>=1.5' sqlite hicolor-icon-theme)
+depends=('omatel-agent>=0.2.4-3' gcc-libs glib2 glibc 'gtk4>=4.14' 'libadwaita>=1.5' sqlite hicolor-icon-theme)
 makedepends=(cargo git pkgconf gtk4 libadwaita sqlite)
 install=omamessages.install
 options=('!debug' '!lto')
-source=("omamessages-$pkgver.tar.gz::https://github.com/derekross/omamessages/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('063786445c822b8e915ea9097fbaa53986e9f02633fa3681e90206f865d8a0ee')
+# 0001: pictures, attachments and group messages (MMS) for the OnePlus 7T
+# Pro (device/hotdog/MODEM-PLAN.md), on omatel's crates with omatel-agent's
+# two patches (copies of packages/omatel's, omatel-000*.patch): its Cargo.toml points the omatel crates at
+# ../omatel until an omatel release carries the new API. Drop the patches
+# and the omatel source when releases of both carry them.
+_omatel=0.2.4
+source=("omamessages-$pkgver.tar.gz::https://github.com/derekross/omamessages/archive/refs/tags/v$pkgver.tar.gz"
+        "omatel-$_omatel.tar.gz::https://github.com/derekross/omatel/archive/refs/tags/v$_omatel.tar.gz"
+        0001-pictures-attachments-and-group-messages-MMS.patch
+        omatel-0001-agent-follow-EmergencyOnly-changes.patch
+        omatel-0002-MMS-and-group-messages-through-mmsd-tng.patch)
+sha256sums=('063786445c822b8e915ea9097fbaa53986e9f02633fa3681e90206f865d8a0ee'
+            'e02986f33b70e89accb67bf62c4d4e1b695b2d12acc801008db80c1bf6242670'
+            '2394989f495f7f169f0e92bc4ad5bd898f8de1ce076eb1af00c32966ae9f3e7d'
+            'cb3433e8392b48e3d951d6415983aee67953678b3fa76db6f7aac1cf811f9639'
+            '6389ea61b79b782df6c3ba99ada30c58e76beef900d90092ea6e94adccaaaad9')
 
 prepare() {
+  rm -rf omatel
+  cp -a "omatel-$_omatel" omatel
+  patch -d omatel -Np1 -i "$srcdir/omatel-0001-agent-follow-EmergencyOnly-changes.patch"
+  patch -d omatel -Np1 -i "$srcdir/omatel-0002-MMS-and-group-messages-through-mmsd-tng.patch"
   cd "omamessages-$pkgver"
+  patch -Np1 -i "$srcdir/0001-pictures-attachments-and-group-messages-MMS.patch"
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }
 
