@@ -1,7 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Unsupported boot methods must fail before touching a phone; ram-only permits
-# only the recovery path to fastboot.
+# only the recovery path to fastboot; the shipped enchilada (android-v0) and
+# hotdog (qcom-abl-v2) descriptors reach only the image build.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
@@ -118,6 +119,41 @@ for dry in '' --dry-run; do
 done
 [[ ! -e $t/calls && ! -e $t/work ]] || fail "the enchilada descriptor accessed a phone or prepared an image"
 echo 'ok - enchilada images reach the kernel check; fastboot/flash/push and both installer modes refuse android-v0'
+
+# The shipped hotdog descriptor: qcom-abl-v2 images get past the descriptor
+# checks (no kernel build here, so they stop at "build the kernel first");
+# fastboot, flash and push refuse it (a human writes boot_a by fastboot), and
+# the installer refuses the method. None of it reaches a phone.
+mkdir -p "$t/repo/device/hotdog"
+cp device/hotdog/device.conf "$t/repo/device/hotdog/"
+if DEVICE=hotdog KERNEL_OUT="$t/no-kernel" "$t/repo/bin/omamobile" images > "$t/log" 2>&1; then fail "hotdog images succeeds without a kernel"; fi
+grep -q 'build the kernel first' "$t/log" || fail "hotdog images fails for the wrong reason"
+for cmd in fastboot flash push; do
+  if DEVICE=hotdog "$t/repo/bin/omamobile" "$cmd" > "$t/log" 2>&1; then fail "hotdog $cmd succeeds"; fi
+  grep -q "$cmd refuses BOOT_METHOD=qcom-abl-v2" "$t/log" || fail "hotdog $cmd fails for the wrong reason"
+done
+for dry in '' --dry-run; do
+  if "$t/repo/tools/install-phone" --device hotdog $dry --work "$t/work" > "$t/log" 2>&1; then fail "hotdog installs"; fi
+  grep -q 'unsupported BOOT_METHOD=qcom-abl-v2;' "$t/log" || fail "hotdog installer fails for the wrong reason"
+done
+[[ ! -e $t/calls && ! -e $t/work ]] || fail "the hotdog descriptor accessed a phone or prepared an image"
+echo 'ok - hotdog images reach the kernel check; fastboot/flash/push and both installer modes refuse qcom-abl-v2'
+
+# qcom-abl-v2: CMDLINE and BOOT_PAGESIZE are required, BOOT_IMAGES is boot
+# alone and UFS_RW userdata alone (Linux writes no boot partition there).
+mkdir -p "$t/repo/device/v2probe"
+v2bad() { # sed expression, expected message
+  sed -e "s/^CODENAME=.*/CODENAME=v2probe/" -e "$1" device/hotdog/device.conf > "$t/repo/device/v2probe/device.conf"
+  if DEVICE=v2probe KERNEL_OUT="$t/no-kernel" "$t/repo/bin/omamobile" images > "$t/log" 2>&1; then fail "v2 descriptor accepted: $1"; fi
+  grep -q "$2" "$t/log" || fail "v2 descriptor '$1' fails for the wrong reason"
+}
+v2bad '/^CMDLINE=/d' 'CMDLINE is missing'
+v2bad '/^BOOT_PAGESIZE=/d' 'BOOT_PAGESIZE is missing'
+v2bad 's/^BOOT_PAGESIZE=.*/BOOT_PAGESIZE=4097/' 'BOOT_PAGESIZE must be 2048 or 4096'
+v2bad 's/^BOOT_IMAGES=.*/BOOT_IMAGES="boot dtbo"/' 'qcom-abl-v2 BOOT_IMAGES must be boot alone'
+v2bad 's/^UFS_RW=.*/UFS_RW="boot_b userdata"/' 'qcom-abl-v2 UFS_RW must be userdata alone'
+[[ ! -e $t/calls ]] || fail "a v2 descriptor check accessed a phone"
+echo 'ok - qcom-abl-v2 CMDLINE, BOOT_PAGESIZE, BOOT_IMAGES and UFS_RW are checked'
 
 # Header fields must be present and numeric; BOOT_IMAGES is boot only and
 # boot_b must be writable.
