@@ -86,6 +86,11 @@ profile_stop() { :; }
 source "$PROFILE_CONF"
 ROOT=$RUN/root
 NSPID=$RUN/ns.pid
+# A profile's graceful stop (profile_stop, from the host) may end one of its
+# daemons on purpose before systemd's stop signals the rest; it writes this
+# file first, and the supervision below then takes that exit as part of the
+# stop: a clean one, not "a service exited".
+STOP_REQUESTED=$RUN/stop-requested
 
 LIBS_VENDOR=/vendor/lib64:/vendor/lib64/hw:/system/lib64:/omamobile/lib64
 LIBS_SYSTEM=/system/lib64:/vendor/lib64:/omamobile/lib64
@@ -282,7 +287,7 @@ start() {
   check
   mkdir -p "$RUN"
   if [[ -z ${OMAMOBILE_VENDOR_IN_NS:-} ]]; then
-    rm -f "$NSPID"
+    rm -f "$NSPID" "$STOP_REQUESTED"
     exec unshare --mount --propagation private --pid --fork --kill-child \
       env OMAMOBILE_VENDOR_IN_NS=1 "$0" "$PROFILE" start
   fi
@@ -299,6 +304,7 @@ start() {
   # whether to restart it).
   wait -n || true
   # wait also returns when TERM/INT arrives; then the trap is already stopping
+  [[ -e $STOP_REQUESTED ]] && stop 0
   [[ -n $STOPPING ]] || say "a service exited"
   stop 1
 }

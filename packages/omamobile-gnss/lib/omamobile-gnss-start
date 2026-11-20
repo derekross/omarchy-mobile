@@ -16,6 +16,34 @@ SESSION=/run/omamobile-gnss/session
 STOP_REQUEST=/run/omamobile-gnss/stop-request
 say() { printf 'omamobile-gnss: %s\n' "$*" >&2; }
 
+# The 9a's gnssd: up when its socket is listening. The modem profile starts it
+# some 20 s after the CP is ONLINE (OMAMOBILE_MODEM_GNSS_DELAY), when the
+# modem unit runs with OMAMOBILE_MODEM_GNSS=1; a location request in that
+# window waits for it (GNSSD_WAIT s at most) rather than finding nothing.
+GNSSD_WAIT=${OMAMOBILE_GNSS_GNSSD_WAIT:-90}
+# Without gnssd, and with no modem unit bringing it, the start holds the
+# client's connection this long before it exits, looking every 5 s whether
+# the modem has started meanwhile: a client that reconnects at once (GeoClue)
+# would otherwise start the unit five times in a second, and systemd's start
+# limit would fail it and its socket for the rest of the boot. A client that
+# keeps asking with the modem off so starts the unit once a minute.
+NOTHING_HOLD=${OMAMOBILE_GNSS_NOTHING_HOLD:-60}
+# The sleep inhibitor (block mode), which logind and omamobile-sleepd honour
+# (device/cheetah/SUSPEND-PLAN.md 6.1). The 7 Pro holds it for the whole
+# start, as its unit always did. The 9a takes it for a session only: the
+# wait and the hold above run without it, so a 9a whose modem is off isn't
+# kept awake by a client that asks for a position it can't have.
+INHIBIT=("${OMAMOBILE_GNSS_INHIBIT:-/usr/bin/systemd-inhibit}" --what=sleep --mode=block
+  "--who=Omarchy Mobile GNSS" "--why=A location session is running")
+# Read with a builtin: this runs once a second while it waits.
+gnssd_up() { [[ $(< /proc/net/unix) == *@GNSSND* ]]; }
+gnssd_coming() {
+  local state env
+  state=$(${OMAMOBILE_GNSS_SYSTEMCTL:-systemctl} show -p ActiveState --value omamobile-tegu-modem.service 2>/dev/null) || return 1
+  env=$(${OMAMOBILE_GNSS_SYSTEMCTL:-systemctl} show -p Environment --value omamobile-tegu-modem.service 2>/dev/null) || return 1
+  [[ $state == active || $state == activating ]] && [[ " $env " == *" OMAMOBILE_MODEM_GNSS=1 "* ]]
+}
+
 # the Pixel 9a (zumapro-tegu) runs the gnss-slsi profile, the Pixel 7 Pro gnss
 # OMAMOBILE_DT lets the tests run both branches on any machine (as
 # omamobile-setup-user does).
@@ -50,6 +78,10 @@ if [[ ${1:-} == --stop ]]; then
   exec /usr/lib/omamobile-vendor/omamobile-vendor-chroot "$profile" stop
 fi
 
+if [[ $# -eq 0 && -z ${OMAMOBILE_GNSS_INHIBITED:-} ]] && ! tegu; then
+  OMAMOBILE_GNSS_INHIBITED=1 exec "${INHIBIT[@]}" "$0"
+fi
+
 if [[ ${1:-} == --retry ]]; then
   rm -f "$MARK"
   # By hand on the 9a this only clears the marker: GNSS starts inside its
@@ -61,6 +93,10 @@ if [[ ${1:-} == --retry ]]; then
 elif [[ -e $MARK ]]; then
   if tegu; then
     say "the last bring-up ($(cat "$MARK")) never finished; skipping GNSS (/usr/lib/omamobile-vendor/omamobile-gnss-start --retry clears the marker; the next location request then starts GNSS)"
+    # Held as "nothing to do" below is: GeoClue reconnects at once, and five
+    # quick exits failed the socket (trigger limit) for the rest of the boot,
+    # so after --retry the next request still found nothing listening.
+    sleep "$NOTHING_HOLD"
   else
     say "the last bring-up ($(cat "$MARK")) never finished; skipping GNSS (run /usr/lib/omamobile-vendor/omamobile-gnss-start --retry)"
   fi
@@ -71,7 +107,22 @@ fi
 # the modem profile, and the gnss-slsi profile runs the HAL and our client,
 # which writes NMEA to the FIFO the bridge reads. Nothing to load here.
 if tegu; then
-  if ! grep -c '@GNSSND' /proc/net/unix >/dev/null; then
+  # Before the marker and the session: a give-up here leaves nothing behind.
+  coming=0 idle=0 told=
+  until gnssd_up; do
+    if gnssd_coming; then
+      [[ -n $told ]] || say "waiting for gnssd: the modem profile starts it some 20 s after the modem is ONLINE"
+      told=1
+      ((coming++ < GNSSD_WAIT)) || break
+      sleep 1
+    else
+      ((idle < NOTHING_HOLD)) || break
+      step=$((NOTHING_HOLD - idle < 5 ? NOTHING_HOLD - idle : 5))
+      sleep "$step"
+      idle=$((idle + step))
+    fi
+  done
+  if ! gnssd_up; then
     say "gnssd isn't running (the modem profile with OMAMOBILE_MODEM_GNSS=1); nothing to do"
     exit 0
   fi
@@ -96,7 +147,7 @@ if tegu; then
   printf '%s\n' "$INVOCATION_ID" > "$SESSION"
   sync
   say "starting the 9a's GNSS HAL and client"
-  OMAMOBILE_GNSS_NMEA_OUT=fifo exec /usr/lib/omamobile-vendor/omamobile-vendor-chroot gnss-slsi start
+  OMAMOBILE_GNSS_NMEA_OUT=fifo exec "${INHIBIT[@]}" /usr/lib/omamobile-vendor/omamobile-vendor-chroot gnss-slsi start
 fi
 # The DT must have the GNSS node enabled (gnss overlay); otherwise nothing to do.
 if ! grep -qs okay /sys/firmware/devicetree/base/soc@0/usi@109400c0/spi@10940000/status; then
