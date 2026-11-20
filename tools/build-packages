@@ -325,10 +325,15 @@ if ((${#build[@]})); then
 fi
 
 sign_and_index() {
-  local package
+  local package cached_signature
   for package in "$repo"/*.pkg.tar.*; do
     [[ -e $package && $package != *.sig ]] || continue
     [[ -f $package.sig ]] || gpg --batch --yes --local-user "$key" --detach-sign "$package"
+    # Re-signing unchanged bytes must not reuse a previous key's cached signature.
+    cached_signature=$ALARM_CACHE/pkg/${package##*/}.sig
+    if [[ -f $cached_signature ]] && ! cmp -s "$package.sig" "$cached_signature"; then
+      rm -f -- "$cached_signature"
+    fi
   done
   rm -f "$repo"/omamobile.db* "$repo"/omamobile.files*
   local packages=() f
