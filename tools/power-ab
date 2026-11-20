@@ -85,14 +85,6 @@ done
 [[ -n "$test" ]] || usage 1
 [[ $EUID -eq 0 ]] || { echo "power-ab: run as root" >&2; exit 1; }
 
-if ((detach)); then
-  args=(--unplug "$unplug" --phase "$phase" --settle "$settle" --rounds "$rounds" --delay-ms "$delay_ms"
-        --units "$units" --user-units "$user_units" --user "$uname" --suspend "$suspend" "$test")
-  setsid nohup "$0" "${args[@]}" > /dev/null 2>&1 < /dev/null &
-  echo "power-ab: started (pid $!); unplug within ${unplug} s"
-  exit 0
-fi
-
 # The battery: the power supply of type Battery that reports current_now
 bat=
 for d in /sys/class/power_supply/*; do
@@ -124,8 +116,11 @@ case "$test" in
           { echo "power-ab: systemctl suspend would not enter s2idle here" >&2; exit 1; } ;;
       *) echo "power-ab: --suspend takes rtcwake or systemd, not '$suspend'" >&2; exit 1 ;;
     esac
-    [[ -r "$bat/charge_counter" || -r "$bat/charge_now" ]] \
-      || { echo "power-ab: the gauge has neither charge_counter nor charge_now" >&2; exit 1; } ;;
+    # Read one, not just test for the file: a gauge that withholds its charge
+    # (the 9a's MAX77779 after a power-on reset answers ENODATA) has readable
+    # files and no figure, and the sleep phase's only number comes from them
+    cat "$bat/charge_counter" >/dev/null 2>&1 || cat "$bat/charge_now" >/dev/null 2>&1 \
+      || { echo "power-ab: the gauge gives neither charge_counter nor charge_now (a file that can't be read, or no data after a gauge reset)" >&2; exit 1; } ;;
   units)
     [[ -n "$units$user_units" ]] || { echo "power-ab: units needs --units or --user-units" >&2; exit 1; } ;;
   eas)
@@ -139,6 +134,16 @@ case "$test" in
     (( ${#em_domains[@]} )) \
       || { echo "power-ab: no CPU energy model in /sys/kernel/debug/energy_model: EAS can't engage" >&2; exit 1; } ;;
 esac
+
+# Detach only after the checks above: a detached run has no terminal, so a
+# refusal there would go nowhere and the owner would unplug for nothing
+if ((detach)); then
+  args=(--unplug "$unplug" --phase "$phase" --settle "$settle" --rounds "$rounds" --delay-ms "$delay_ms"
+        --units "$units" --user-units "$user_units" --user "$uname" --suspend "$suspend" "$test")
+  setsid nohup "$0" "${args[@]}" > /dev/null 2>&1 < /dev/null &
+  echo "power-ab: started (pid $!); unplug within ${unplug} s"
+  exit 0
+fi
 
 # The units test touches only units that are active now
 [[ -z "$uname" ]] && uname=$(loginctl list-users --no-legend 2>/dev/null | awk '$2 != "root" {print $2; exit}')
@@ -212,12 +217,28 @@ if grep -qsx 1 /sys/class/power_supply/*/online; then
   echo "# warning: a supply reports online=1 at start (cable still in?)" >> "$csv"
 fi
 
+# Failed sysfs reads (including stale cached telemetry) must not become
+# zero-valued samples. Exit through the restoration trap before summarizing.
 sample() { # TAG
-  printf '%s,%s,%s,%s,%s,%s,%s\n' "$(date +%s)" "$1" \
-    "$(cat "$bat/voltage_now")" "$(cat "$bat/current_now")" \
-    "$(cat "$bat/current_avg" 2>/dev/null || echo)" \
-    "$(cat "$bat/charge_counter" 2>/dev/null || echo)" \
-    "$(cat "$bat/charge_now" 2>/dev/null || echo)" >> "$csv"
+  local name value
+  local -a values=()
+  for name in voltage_now current_now current_avg charge_counter charge_now; do
+    value=
+    if [[ $name == voltage_now || $name == current_now ]]; then
+      if ! value=$(cat "$bat/$name" 2>/dev/null) || [[ ! $value =~ ^-?[0-9]+$ ]]; then
+        sleep 1
+        if ! value=$(cat "$bat/$name" 2>/dev/null) || [[ ! $value =~ ^-?[0-9]+$ ]]; then
+          echo "# power-ab: invalid or unavailable $name after retry; stopping" >> "$csv"
+          echo "power-ab: invalid or unavailable $name after retry; stopping" >&2
+          exit 1
+        fi
+      fi
+    elif ! value=$(cat "$bat/$name" 2>/dev/null) || [[ ! $value =~ ^-?[0-9]+$ ]]; then
+      value=
+    fi
+    values+=("$value")
+  done
+  printf '%s,%s,%s,%s,%s,%s,%s\n' "$(date +%s)" "$1" "${values[@]}" >> "$csv"
 }
 
 freeze_phase() { # one B phase of s2idle: frozen until the phase is over

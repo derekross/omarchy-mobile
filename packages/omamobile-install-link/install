@@ -1,0 +1,74 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-install-link into DESTDIR.
+#
+#   ./install DESTDIR SRC BIN
+#     SRC  the installer's source tree at source.conf's commit, patched
+#          (makepkg's, or ./fetch-source's): the gadget script comes from it
+#     BIN  where omamobile-linkd and omamobile-install-link were built
+#
+# Nothing it installs runs on a phone without /etc/omamobile/install-link:
+# the daemon's unit, the login-screen hold and the session agent all have
+# that marker as their condition (the agent also runs after an unfinished
+# end, to tell the owner how to finish). The vendor wants links below only
+# put them in the boot's transaction, where their conditions decide. The
+# drop-in for omamobile-firstboot.service skips first boot on a file of
+# comments only (the release image's placeholder), which first boot itself
+# does nothing with either. No package script runs; nothing is enabled,
+# started or written at install time.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+d=${1:?Usage: ./install DESTDIR SRC BIN}
+src=${2:?Usage: ./install DESTDIR SRC BIN}
+bin=${3:?Usage: ./install DESTDIR SRC BIN}
+[[ $d == /* && $d != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+gadget=$src/linkd/gadget/omamobile-link-gadget
+[[ -f $gadget ]] || { echo "omamobile-install-link: no $gadget (SRC is the installer's source tree)" >&2; exit 1; }
+for b in omamobile-linkd omamobile-install-link; do
+  [[ -x $bin/$b ]] || { echo "omamobile-install-link: no $bin/$b (BIN is the cargo build's release directory)" >&2; exit 1; }
+done
+commit=$(sed -n 's/^COMMIT=//p' source.conf)
+# The protocol the daemon speaks, from the crate it is built on: the root
+# image's MANIFEST and the bundle's manifest.json carry it
+# (tools/build-rootfs --install-link, tools/bundle-manifest)
+protocol=$(sed -n 's/^pub const PROTOCOL: u32 = \([0-9]\{1,4\}\);$/\1/p' "$src/link/src/lib.rs" 2>/dev/null || true)
+[[ $protocol =~ ^[1-9][0-9]*$ ]] || { echo "omamobile-install-link: no protocol number in $src/link/src/lib.rs" >&2; exit 1; }
+lib=$d/usr/lib/omamobile-install-link
+sys=$d/usr/lib/systemd/system
+user=$d/usr/lib/systemd/user
+
+install -Dm755 "$bin/omamobile-linkd" "$lib/omamobile-linkd"
+install -Dm755 "$bin/omamobile-install-link" "$d/usr/bin/omamobile-install-link"
+install -Dm755 "$gadget" "$lib/omamobile-link-gadget"
+install -Dm755 bin/hold-login "$lib/hold-login"
+install -Dm755 bin/has-answers "$lib/has-answers"
+install -Dm755 bin/omamobile-install-link-agent "$lib/omamobile-install-link-agent"
+install -Dm755 bin/screen-text "$lib/screen-text"
+install -Dm644 share/code-window/shell.qml "$d/usr/share/omamobile-install-link/code-window/shell.qml"
+
+install -Dm644 systemd/omamobile-install-link.service "$sys/omamobile-install-link.service"
+install -Dm644 systemd/omamobile-install-link-hold.service "$sys/omamobile-install-link-hold.service"
+install -d "$sys/graphical.target.wants"
+ln -sfn ../omamobile-install-link.service "$sys/graphical.target.wants/omamobile-install-link.service"
+ln -sfn ../omamobile-install-link-hold.service "$sys/graphical.target.wants/omamobile-install-link-hold.service"
+install -Dm644 systemd/omamobile-firstboot.service.d/50-omamobile-install-link.conf \
+  "$sys/omamobile-firstboot.service.d/50-omamobile-install-link.conf"
+install -Dm644 systemd/user/omamobile-install-link-agent.service "$user/omamobile-install-link-agent.service"
+install -d "$user/graphical-session.target.wants"
+ln -sfn ../omamobile-install-link-agent.service "$user/graphical-session.target.wants/omamobile-install-link-agent.service"
+install -Dm644 tmpfiles.d/omamobile-install-link.conf "$d/usr/lib/tmpfiles.d/omamobile-install-link.conf"
+
+install -Dm644 version "$d/usr/share/omamobile/install-link/version"
+{
+  echo "# The install link's daemon and gadget script: derekross/omamobile-installer"
+  echo "protocol: $protocol"
+  echo "commit: $commit"
+  echo "archive sha256: $(sed -n 's/^SHA256=//p' source.conf)"
+  for p in patches/*.patch; do
+    if [[ -e $p ]]; then echo "patch: ${p#patches/} $(sha256sum < "$p" | cut -d' ' -f1)"; fi
+  done
+} > "$d/usr/share/omamobile/install-link/SOURCE"
+chmod 644 "$d/usr/share/omamobile/install-link/SOURCE"
+install -Dm644 README.md "$d/usr/share/doc/omamobile-install-link/README.md"
+install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-install-link/LICENSE"
+install -Dm644 "$src/LICENSE" "$d/usr/share/licenses/omamobile-install-link/LICENSE.omamobile-installer"

@@ -4,11 +4,14 @@
 # bl_power (the device package's udev rule).
 #
 # Against Omarchy 4.0.4 (edge 4.0.4-2; tag v4.0.4).
+#
+# Omarchy 4.5: unchanged; 4.5 added Apple and DDC display paths after
+# this point, and the off/on steps it hooks are as before.
+
 diff --git i/bin/omarchy-brightness-display w/bin/omarchy-brightness-display
-index 5a3e534..3c754bb 100755
 --- i/bin/omarchy-brightness-display
 +++ w/bin/omarchy-brightness-display
-@@ -82,12 +82,26 @@ if (( $# == 0 )); then
+@@ -82,12 +82,26 @@
    exit
  fi
  

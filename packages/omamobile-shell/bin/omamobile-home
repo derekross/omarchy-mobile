@@ -1,0 +1,41 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-home: show the home screen, as a swipe up on the home pill does.
+#
+# This is what an app runs when Back (the shell's edge swipe, which sends
+# Escape) reaches its top level: Back is phone-wide, so a screen with
+# somewhere to go back to goes back one level, and a top level goes home, as
+# on Android. The shell can't do this for the app: Escape is only a key, and
+# nothing tells the shell whether the app used it. So the app decides ("I am
+# at my top level") and the shell's command does the rest, and no app has to
+# know how the shell shows home.
+#
+# Home is an empty workspace (the app keeps running on its own, and stays in
+# recents) and the home screens' home page: the same two calls as the pill
+# (plugins/omamobile.launcher goHome) and the switcher's Home button.
+#
+#   omamobile-home          go home
+#   omamobile-home --help
+#
+# Exit status: 0 when Hyprland took the switch, 1 when it didn't (no
+# Hyprland: a desktop session, a test). The home page call is best effort.
+# OMAMOBILE_HYPRCTL names another hyprctl, for the tests.
+
+case ${1:-} in
+  -h|--help)
+    sed -n '3,19s/^# \{0,1\}//p' "$0"
+    exit 0
+    ;;
+  "") ;;
+  *)
+    echo "usage: omamobile-home" >&2
+    exit 2
+    ;;
+esac
+
+hyprctl=${OMAMOBILE_HYPRCTL:-hyprctl}
+status=0
+"$hyprctl" dispatch 'hl.dsp.focus({ workspace = "empty" })' >/dev/null 2>&1 || status=1
+# ...and the home screens (omamobile.home) back on their home page.
+omarchy-shell -q shell call omamobile.home goHome '' >/dev/null 2>&1 || true
+exit "$status"

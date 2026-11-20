@@ -1,0 +1,63 @@
+# Polkit prompt usable with an on-screen keyboard: on the top layer with
+# OnDemand focus and normal exclusion, so squeekboard is drawn above it, gets
+# its touches and keeps its reserved area; the field is re-focused after a
+# wrong password so the keyboard shows again (FINGERPRINT-PLAN.md).
+#
+# Against Omarchy 4.0.4 (edge 4.0.4-2; tag v4.0.4).
+diff --git i/shell/plugins/polkit/PolkitAgent.qml w/shell/plugins/polkit/PolkitAgent.qml
+index acd6514c..e98356dd 100644
+--- i/shell/plugins/polkit/PolkitAgent.qml
++++ w/shell/plugins/polkit/PolkitAgent.qml
+@@ -103,8 +103,16 @@ Item {
+     if (!dialogVisible) return
+     // In fingerprint mode there is no field to type into — park focus on the
+     // key catcher so Escape still cancels; otherwise focus the password field.
+-    if (fingerprintMode) keyCatcher.forceActiveFocus()
+-    else passwordInput.forceActiveFocus()
++    if (fingerprintMode) {
++      keyCatcher.forceActiveFocus()
++      return
++    }
++    // A field that already has focus gets no new focus-in, so the input
++    // method (an on-screen keyboard) is not asked to show again: after a
++    // wrong password the field was read-only for a moment, the keyboard hid,
++    // and tapping the field did not bring it back. Move focus off and back.
++    if (passwordInput.activeFocus) keyCatcher.forceActiveFocus()
++    passwordInput.forceActiveFocus()
+   }
+ 
+   function submitResponse() {
+@@ -149,7 +157,11 @@ Item {
+     id: errorTimer
+     interval: 1200
+     repeat: false
+-    onTriggered: root.errorFlash = false
++    onTriggered: {
++      root.errorFlash = false
++      // writable again: re-focus so an on-screen keyboard shows again
++      Qt.callLater(root.refocus)
++    }
+   }
+ 
+   SequentialAnimation {
+@@ -225,9 +237,17 @@ Item {
+     anchors { top: true; bottom: true; left: true; right: true }
+     color: "transparent"
+     WlrLayershell.namespace: "omarchy-polkit"
+-    WlrLayershell.layer: WlrLayer.Overlay
+-    WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+-    exclusionMode: ExclusionMode.Ignore
++    // Top, not Overlay: an on-screen keyboard (squeekboard) is a top-layer
++    // surface that maps when the field takes focus, after this one, so it is
++    // drawn above the prompt; on the overlay layer the prompt covered it.
++    WlrLayershell.layer: WlrLayer.Top
++    // OnDemand still takes the keyboard when the prompt maps. Exclusive would
++    // also send every touch to this surface, so an on-screen keyboard (a
++    // touch-only device's only way to type the password) could not be used.
++    WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand
++    // Normal: stay out of other surfaces' exclusive zones, such as the area
++    // an on-screen keyboard reserves.
++    exclusionMode: ExclusionMode.Normal
+ 
+     Rectangle {
+       anchors.fill: parent

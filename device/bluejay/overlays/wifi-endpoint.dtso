@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* Requires a separately qualified pool and PCIe link, with brcmfmac blocked.
+ * Use wifi-reviewed-controller for the reviewed GS101 stack, or the pinned
+ * historical wifi-controller path. See WIFI-PLAN.md for their separate gates.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target-path = "/soc@0/pcie@14520000/pcie@0,0/wifi@0,0";
+		__overlay__ {
+			status = "okay";
+		};
+	};
+};

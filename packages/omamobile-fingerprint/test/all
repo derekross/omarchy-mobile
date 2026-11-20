@@ -106,7 +106,7 @@ grep -c 'ln -sfn ../omamobile-fp.service "$d/usr/lib/systemd/system/multi-user.t
 # a die in the namespace still stops in order, and the marker is taken
 # atomically
 st=$(sed -n '/^start() {/,/^}/p' lib/omamobile-fp-chroot)
-grep -A1 '^  say "stage \$stage running"$' <<<"$st" | grep -qx '  rm -f "\$PENDING"' ||
+grep -A1 '^  say "stage \$stage running"$' <<<"$st" | grep -cx '  rm -f "\$PENDING"' >/dev/null ||
   fail "start clears start-pending right after the stack runs"
 grep -qx "  trap 'stop \$?' EXIT" <<<"$st" || fail "the namespace's EXIT trap keeps the stop order on a die"
 grep -c 'set -o noclobber; umask 077; echo .* > "\$MARKER"' lib/omamobile-fp-chroot >/dev/null ||
@@ -154,6 +154,19 @@ else
 fi
 rm -rf "$nsroot"
 
+# The namespace PID is the runner's own (2026-11-17): an awk wrote its own
+# PID, which was gone before ns or run used it.
+grep -q "awk '/^NSpid:/" lib/omamobile-fp-chroot && fail "the namespace PID is read by the shell itself, not a child"
+nsf=$(sed -n '/^ns_pid_record() {$/,/^}$/p' lib/omamobile-fp-chroot)
+[[ -n $nsf ]] || fail "ns_pid_record found"
+nsd=$(mktemp -d)
+bash -c 'NSPID=$1/ns.pid; die() { exit 1; }; '"$nsf"'; ns_pid_record; true; sleep 2' _ "$nsd" &
+nsp=$!
+for _ in $(seq 1 20); do [[ -s $nsd/ns.pid ]] && break; sleep 0.1; done
+[[ $(cat "$nsd/ns.pid" 2>/dev/null) == "$nsp" ]] || { kill "$nsp" 2>/dev/null; rm -rf "$nsd"; fail "ns.pid names the runner's shell ($nsp), not $(cat "$nsd/ns.pid" 2>/dev/null)"; }
+wait "$nsp"; rm -rf "$nsd"
+echo "ok - ns.pid names the runner, so ns and run can enter its namespace"
+
 if [[ ! -f prebuilt/omamobile-fp-shim.so ]]; then
   echo "ok - the rest # SKIP no bionic prebuilts in this checkout (built on the computer)"
   exit 0
@@ -192,9 +205,12 @@ done
 # on by default, with this runner: the package itself enables the unit
 [[ $(readlink "$stage/usr/lib/systemd/system/multi-user.target.wants/omamobile-fp.service") == ../omamobile-fp.service ]] ||
   fail "the package enables omamobile-fp (vendor wants link)"
+# Only what systemd-analyze says about the staged unit counts: it also loads the
+# host's own units, and a warning about one of those (they begin with the host's
+# unit path) failed the nightly publish on the build host on 2026-11-18.
 if command -v systemd-analyze >/dev/null; then
   out=$(systemd-analyze verify --man=no "$stage/usr/lib/systemd/system/omamobile-fp.service" 2>&1 || true)
-  out=$(grep -v -e 'not executable' -e 'No such file' -e 'is not a regular file' -e '^$' <<<"$out" || true)
+  out=$(grep -v -e '^/usr/lib/systemd/' -e '^/lib/systemd/' -e '^/etc/systemd/' -e '^/run/systemd/' -e 'not executable' -e 'No such file' -e 'is not a regular file' -e '^$' <<<"$out" || true)
   [[ -z $out ]] || fail "unit: $out"
 fi
 echo "omamobile-fingerprint: ok"

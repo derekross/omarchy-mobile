@@ -1,0 +1,52 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Charge limit on the power supply the device package declares in /usr/share/omamobile/charge-limit.conf (a line
+# supply=NAME; omamobile-device-husky ships it for max77759-charger). Without that file, or with a bad name, both
+# paths below do nothing and write nothing. Runs as root, from omamobile-charge-limit@N.service (the Settings app's Battery
+# page, through the polkit rule 50-omamobile-charge-limit.rules) and, with no argument, from
+# omamobile-charge-limit-apply.service, which udev pulls in when the charger appears (the device package's
+# 75-omamobile-charge-limit.rules).
+#   charge-limit N    N is 80, 85, 90, 95 or 100: written to the charger, then saved to /etc/omamobile/charge-limit;
+#                     no declaration: exit 1; no writable end threshold, or a write that fails: exit 1, nothing saved
+#   charge-limit      the boot path: applies the saved value; no declaration or no saved file: nothing is touched
+# The start threshold is written first, as 0, which the driver takes as "resume 5 below the end".
+# /etc/omamobile/charge-limit is the same file omamobile-device-tegu's charge limit reads.
+set -uo pipefail
+root=${OMAMOBILE_CHARGE_ROOT:-}
+if [[ -n $root ]]; then [[ $root == /* && $root != / && -d $root ]] || exit 2; fi
+file=$root/etc/omamobile/charge-limit
+decl=$root/usr/share/omamobile/charge-limit.conf
+supply=$(sed -n 's/^supply=//p' "$decl" 2>/dev/null | head -n 1) || supply=''
+dir=$root/sys/class/power_supply/$supply
+end=$dir/charge_control_end_threshold start=$dir/charge_control_start_threshold
+log() { echo "omamobile-charge-limit: $*"; }
+valid() { case $1 in 80|85|90|95|100) return 0 ;; *) return 1 ;; esac; }
+save() {
+  mkdir -p "${file%/*}" && printf '%s\n' "$1" > "$file.new" && mv -f "$file.new" "$file" || { log "cannot save $file"; exit 1; }
+}
+
+if [[ ! $supply =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]]; then
+  log "this phone declares no charge limit ($decl)"
+  (( $# > 0 )) && exit 1
+  exit 0
+fi
+if (( $# > 0 )); then
+  valid "$1" || { log "refusing $1: only 80, 85, 90, 95 or 100"; exit 2; }
+  limit=$1
+else
+  [[ -s $file ]] || exit 0
+  limit=$(tr -d ' \t\n' < "$file")
+  valid "$limit" || { log "$file holds '$limit', not 80, 85, 90, 95 or 100; charger left alone"; exit 1; }
+fi
+if [[ ! -f $end || ! -w $end ]]; then
+  log "no charger with a writable end threshold"
+  (( $# > 0 )) && exit 1
+  exit 0
+fi
+if [[ -e $start ]]; then
+  echo 0 > "$start" || { log "the charger refused start threshold 0"; exit 1; }
+fi
+echo "$limit" > "$end" || { log "the charger refused $limit"; exit 1; }
+(( $# > 0 )) && save "$limit"
+log "charge limit $(tr -d ' \t\n' < "$end") %"
+exit 0

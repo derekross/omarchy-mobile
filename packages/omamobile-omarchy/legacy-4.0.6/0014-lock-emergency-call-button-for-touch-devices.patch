@@ -1,0 +1,54 @@
+# Lock: an "Emergency call" button on touch-only devices, under the number
+# pad (or the field), as every phone's lock screen has. It asks the phone
+# shell's call plugin (omamobile.call) to show what an emergency call can
+# do on this phone, over the lock; until emergency calling is tested on a
+# carrier (TELEPHONY-APPS-PLAN §3.3) that is the warning that it doesn't
+# work yet, never a dialpad. The lock stays as it is.
+#
+# Against Omarchy 4.0.6 (edge 4.0.6-1), after 0003 and 0011.
+diff --git i/shell/plugins/lock/LockView.qml w/shell/plugins/lock/LockView.qml
+--- i/shell/plugins/lock/LockView.qml
++++ w/shell/plugins/lock/LockView.qml
+@@ -374,5 +374,42 @@
+       wrapMode: Text.WordWrap
+       horizontalAlignment: Text.AlignHCenter
+     }
++
++    // Touch-only devices (phones): "Emergency call", under the number pad
++    // or the field. It asks the phone shell's call plugin (omamobile.call)
++    // to show what an emergency call can do on this phone, over the lock;
++    // the lock itself stays as it is. Without that plugin the call does
++    // nothing.
++    Item {
++      id: emergencyButton
++      objectName: "lockEmergencyCall"
++      visible: root.keypad
++      anchors.horizontalCenter: parent.horizontalCenter
++      anchors.top: numberPad.visible ? numberPad.bottom : inputField.bottom
++      anchors.topMargin: Style.space(20)
++      width: emergencyLabel.implicitWidth + Style.space(40)
++      height: Math.max(Style.space(44), emergencyLabel.implicitHeight + Style.space(16))
++
++      Text {
++        id: emergencyLabel
++        anchors.centerIn: parent
++        textFormat: Text.PlainText
++        text: "Emergency call"
++        color: Commons.Color.lock.text
++        opacity: emergencyTap.pressed ? 0.6 : 0.9
++        font.family: Style.font.family
++        font.pixelSize: Style.font.subtitle
++        font.bold: true
++      }
++
++      MouseArea {
++        id: emergencyTap
++        anchors.fill: parent
++        onClicked: {
++          root.wakeRequested()
++          Quickshell.execDetached(["omarchy-shell", "shell", "call", "omamobile.call", "emergency", ""])
++        }
++      }
++    }
+   }
+ }

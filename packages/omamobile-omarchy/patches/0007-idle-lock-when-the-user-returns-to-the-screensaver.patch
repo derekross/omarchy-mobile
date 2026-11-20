@@ -1,11 +1,14 @@
 # Lock as soon as the user returns to the screensaver (lock-after-screensaver).
 # Refreshed against Omarchy 4.0.6 (edge 4.0.6-1) so it applies without fuzz;
 # the hunk lands where the fuzzed one did, before the main idle monitor.
+#
+# Omarchy 4.5: rebased (one line of offset); 4.5's idle service keeps
+# runProcess, lockProcess, screensaverWindowCount and logEvent as used here.
+
 diff --git i/shell/plugins/services/idle/Service.qml w/shell/plugins/services/idle/Service.qml
-index 8fb45a6..d694ab9 100644
 --- i/shell/plugins/services/idle/Service.qml
 +++ w/shell/plugins/services/idle/Service.qml
-@@ -266,6 +266,32 @@ Item {
+@@ -267,6 +267,32 @@
    // With both timeouts at 0 the monitor stops reporting, so nothing else would end a running cycle.
    onIdleTimersEnabledChanged: if (!idleTimersEnabled) cancelIdleCycle("idle-timers-disabled")
  

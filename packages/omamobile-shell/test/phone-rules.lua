@@ -42,7 +42,29 @@ o = {
 o.bind("CTRL + ALT + DELETE", "Close all windows", "omarchy-hyprland-window-close-all")
 o.bind("ALT + TAB", "Focus on next window", hl.dsp.window.cycle_next())
 o.bind("F9", "Start dictation (push-to-talk)", "voxtype record start")
+-- The optional device hook (/usr/share/omamobile/hypr/device.lua), with no
+-- file, a valid one, a syntax error and a runtime error (DEVICE_HOOK_CASE).
+-- Only that one path is redirected, to a temporary file; with no case set
+-- the hook path reads as absent, so no file on the host takes part.
+local hook_case = os.getenv("DEVICE_HOOK_CASE") or "absent"
+local real_open, real_dofile = io.open, dofile
+local hook_path = "/usr/share/omamobile/hypr/device.lua"
+local hook_tmp = os.tmpname()
+local hook_source = {
+  valid = "omamobile_hook_ran = true",
+  syntax = "this is not Lua!",
+  runtime = 'error("fixture device error")',
+}
+os.remove(hook_tmp)
+if hook_source[hook_case] then
+  local f = assert(real_open(hook_tmp, "w"))
+  f:write(hook_source[hook_case]); f:close()
+end
+io.open = function(path, ...) return real_open(path == hook_path and hook_tmp or path, ...) end
+dofile = function(path) return real_dofile(path == hook_path and hook_tmp or path) end
 dofile("hypr/phone.lua")
+io.open, dofile = real_open, real_dofile
+os.remove(hook_tmp)
 
 local failed = false
 local function check(ok, what)
@@ -82,6 +104,8 @@ check(effect(all, "tag") ~= nil and effect(all, "tag"):find("-default-opacity", 
   "Omarchy's default-opacity tag is dropped")
 check(effect(all, "maximize") == true, "apps still fill the screen")
 check((config.misc or {}).exit_window_retains_fullscreen == true, "the next window takes the screen when one closes")
+check((config.misc or {}).key_press_enables_dpms == false, "a key press doesn't light the screen (omamobile-keys does)")
+check((config.misc or {}).mouse_move_enables_dpms == false, "a single touch doesn't light the screen (a double tap does)")
 check((config.quirks or {}).skip_non_kms_dmabuf_formats == false, "clients may use formats with alpha (Hyprland 0.57 default off)")
 check(config.general.layout == nil, "the layout stays Omarchy's dwindle")
 
@@ -155,5 +179,8 @@ end
 check(#find("ALT + TAB") == 2 and find("ALT + TAB")[1].dispatcher.dsp == "cycle_next", "Alt + Tab keeps both of Omarchy's actions")
 local f9 = find("F9", true)
 check(#f9 == 1 and f9[1].dispatcher == "voxtype record stop", "F9 still stops Voxtype on release")
+
+check(omamobile_hook_ran == (hook_case == "valid" or nil),
+  "device hook (" .. hook_case .. "): runs only when valid, and the shared rules stand")
 
 os.exit(failed and 1 or 0)

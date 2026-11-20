@@ -1,0 +1,87 @@
+# About: the logo above the modules, or none, where they don't fit side by
+# side. omarchy-launch-about shows the logo (about.txt, 54 columns) beside
+# fastfetch's module boxes (54 columns), 118 columns in all with the
+# config's padding, and the config turns line wrapping off. A phone's About
+# window is the width of the screen, 63 columns at Omarchy's terminal font
+# on a Pixel 7 Pro, so the logo filled it and every module line was cut to
+# a single character. A terminal narrower than the side-by-side layout now
+# gets the logo above the modules (56 columns and 57 rows with Omarchy's
+# logo), and one too small for that as well, such as a phone with its
+# on-screen keyboard up, gets the modules alone. The room comes from the
+# same measurement fit_window makes (the logo file and fastfetch --logo
+# none), so a window fit_window has sized, as on a desktop, renders as
+# before, and a user's own fastfetch config is left alone. Candidate for
+# upstream Omarchy.
+#
+# Against Omarchy 4.0.6 (4.0.6-1).
+diff --git i/bin/omarchy-launch-about w/bin/omarchy-launch-about
+--- i/bin/omarchy-launch-about
++++ w/bin/omarchy-launch-about
+@@ -146,6 +146,44 @@ fit_window() {
+   return 1
+ }
+ 
++# The room each layout needs, from the same measurement fit_window makes: the
++# columns for the logo beside the modules (what fit_window sizes the window
++# for), then the columns and rows for the logo above them, where the modules
++# start at the left edge and the cursor takes a row. Nothing where fit_window
++# measures nothing either: a user's own fastfetch config, or no logo file.
++layout_room() {
++  custom_fastfetch_config && return 1
++
++  local logo_w logo_h modules module_w module_h
++  read -r logo_w logo_h <<<"$(logo_dimensions)"
++  [[ -n ${logo_w:-} ]] || return 1
++
++  modules=$(fastfetch --logo none | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g'; printf X)
++  modules=${modules%X}
++  module_w=$(printf '%s' "$modules" | display_columns)
++  module_h=$(printf '%s' "$modules" | wc -l)
++
++  printf '%s %s %s\n' $(( 2 + logo_w + 6 + module_w + 2 )) \
++    $(( 2 + logo_w > module_w ? 2 + logo_w : module_w )) $(( 2 + logo_h + module_h + 1 ))
++}
++
++# The config turns line wrapping off, so a terminal narrower than the logo and
++# the modules side by side, such as a phone's full-width window, cuts every
++# module line short. It gets the logo above the modules instead, and one too
++# small for that as well, such as a phone with its keyboard up, gets the
++# modules without the logo. A terminal wide enough renders as before.
++logo_options() {
++  local rows=$1 cols=$2 side_c top_c top_r
++  read -r side_c top_c top_r <<<"$room"
++  [[ -n ${side_c:-} ]] && (( cols < side_c )) || return 0
++
++  if (( cols >= top_c && rows >= top_r )); then
++    echo "--logo-position top"
++  else
++    echo "--logo none"
++  fi
++}
++
+ if [[ ${1:-} == "--render" ]]; then
+   printf '\e[?25l'
+ 
+@@ -154,11 +192,13 @@ if [[ ${1:-} == "--render" ]]; then
+ 
+   fitted=false
+   passes=0
++  room=$(layout_room)
+   while :; do
+     size=$(stty size)
+     logo_stamp=$(stat -c %Y "$LOGO_FILE" 2>/dev/null)
+     clear
+-    fastfetch
++    read -ra logo_args <<<"$(logo_options $size)"
++    fastfetch "${logo_args[@]}"
+     # A second pass picks up a fit that could not measure the window the first
+     # time. Beyond that, a window that will not settle would be fitted again on
+     # every repaint.
+@@ -173,6 +213,7 @@ if [[ ${1:-} == "--render" ]]; then
+     if [[ $(stat -c %Y "$LOGO_FILE" 2>/dev/null) != $logo_stamp ]]; then
+       fitted=false
+       passes=0
++      room=$(layout_room)
+     fi
+   done
+ fi

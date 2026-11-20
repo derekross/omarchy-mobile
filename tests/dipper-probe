@@ -1,0 +1,71 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+bash -n tools/dipper/build
+sh -n tools/dipper/initramfs-inside.sh
+python3 - <<'PY'
+from pathlib import Path
+
+script = Path('tools/dipper/initramfs-inside.sh').read_text()
+assert 'patch-init.py "$stage/init"' in script
+assert 'OMAMOBILE_NFSROOT' in Path('tools/dipper/build').read_text()
+assert 'omamobile-nfsroot' in script
+builder = Path('tools/dipper/build').read_text()
+assert 'OUT=${OUT:-$repo/out/dipper}' in builder
+assert 'modules_install' not in builder
+assert 'FIRMWARE_DIR' not in builder
+assert 'fastboot -s <serial> boot boot.img' in builder
+assert 'panel-samsung-ea8074' not in script
+for path in ('init', 'prune-modules.py', 'patch-init.py', 'initramfs-inside.sh',
+             'reboot-to.c', 'key.pub'):
+    assert f':/input/{path}:ro' in builder, f'missing read-only container mount for /input/{path}'
+assert 'sh /input/initramfs-inside.sh' in builder
+print('ok - Dipper initramfs patch anchors and RAM-only builder inputs')
+PY
+
+python3 - <<'PY'
+from pathlib import Path
+import subprocess
+import tempfile
+
+with tempfile.TemporaryDirectory() as tmp:
+    init = Path(tmp) / 'init'
+    init.write_bytes(Path('initramfs/init').read_bytes())
+    subprocess.run(['python3', 'tools/dipper/patch-init.py', str(init)], check=True)
+    subprocess.run(['sh', '-n', str(init)], check=True)
+    patched = init.read_text()
+    assert 'modprobe qcom_wdt' in patched
+    assert 'watchdog -t 5 -T 30 /dev/watchdog0' in patched
+    assert 'dropbear -E -s -p "$usb_addr:22" -r /etc/dropbear/dropbear_ed25519_host_key 2>/dev/null && say "ssh: root@$usb_addr"' in patched
+    assert 'dropbear -R -E -p 22 2>/dev/null && say "ssh: root@172.16.42.1"' not in patched
+    assert 'no USB host; RAM-only probe will reboot in 20 s' in patched
+print('ok - Dipper patch step applies to the checked-in shared init')
+PY
+
+python3 - <<'PY'
+import json
+from pathlib import Path
+import subprocess
+import tempfile
+
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    kernel, dtb, ramdisk, out = (root / n for n in ('Image.gz', 'dipper.dtb', 'initramfs.gz', 'out'))
+    kernel.write_bytes(b'kernel')
+    dtb.write_bytes(b'\xd0\x0d\xfe\xed' + b'dtb')
+    ramdisk.write_bytes(b'ramdisk')
+    subprocess.run(['python3', 'tools/dipper/build-boot.py', '--kernel', str(kernel),
+                    '--dtb', str(dtb), '--ramdisk', str(ramdisk), '--out', str(out)],
+                   check=True, capture_output=True, text=True)
+    manifest = json.loads((out / 'BOOT-MANIFEST.json').read_text())
+    assert manifest['hardware_boot_tested'] is False
+    assert (out / 'boot.img').read_bytes().startswith(b'ANDROID!')
+    kernel.write_bytes(b'k' * 0xF80001)
+    result = subprocess.run(['python3', 'tools/dipper/build-boot.py', '--kernel', str(kernel),
+                             '--dtb', str(dtb), '--ramdisk', str(ramdisk), '--out', str(out)],
+                            capture_output=True, text=True)
+    assert result.returncode != 0 and 'ABL refuses' in result.stderr
+print('ok - Dipper boot image header, size refusal, appended DTB, and manifest')
+PY
