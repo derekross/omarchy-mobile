@@ -89,12 +89,19 @@ assert.strictEqual(M.eventLayout("nocomma"), null)
 // devices at start: the typed keyboard furthest along, its layout count
 const dev = (o) => JSON.stringify({ keyboards: o })
 const osk = { name: "hl-virtual-keyboard-squeekboard", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek", main: true }
-assert.deepStrictEqual(M.layoutState(dev([osk])), { count: 0, description: "" }, "squeekboard alone: no label")
+assert.deepStrictEqual(M.layoutState(dev([osk])), { count: 0, description: "", names: [] }, "squeekboard alone: no label")
 assert.deepStrictEqual(M.layoutState(dev([osk, { name: "dell", layout: "us", active_layout_index: 0, active_keymap: "English (US)" }])),
-  { count: 1, description: "English (US)" })
+  { count: 1, description: "English (US)", names: ["dell"] })
 assert.deepStrictEqual(M.layoutState(dev([{ name: "power-button", layout: "us,gr", active_layout_index: 0, active_keymap: "English (US)" },
   { name: "a", layout: "us,gr", active_layout_index: 0, active_keymap: "English (US)" },
-  { name: "b", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" }])), { count: 2, description: "Greek" })
+  { name: "b", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" }])), { count: 2, description: "Greek", names: ["a", "b"] })
 assert.strictEqual(M.layoutState("not json"), null)
 assert.strictEqual(M.layoutState("{}"), null)
+// a keyboard connected after start: its first activelayout triggers a devices read, known ones do not
+assert.strictEqual(M.needsDeviceRead("activelayout", "dell,Greek", []), true, "none at start, one plugged in later")
+assert.strictEqual(M.needsDeviceRead("activelayout", "dell,Greek", ["dell"]), false)
+assert.strictEqual(M.needsDeviceRead("activelayout", "hl-virtual-keyboard-squeekboard,Greek", []), false)
+assert.strictEqual(M.needsDeviceRead("activelayout", "nocomma", []), false)
+assert.strictEqual(M.needsDeviceRead("configreloaded", "", ["dell"]), true)
+assert.strictEqual(M.needsDeviceRead("workspace", "1", []), false)
 console.log("ok - status model: keyboard layout label from the event")

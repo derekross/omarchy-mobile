@@ -103,11 +103,14 @@ Item {
   // the typed keyboard has more than one layout. A switch is read from the
   // activelayout event itself (keyboard,description), as Omarchy 4.5's bar
   // widget does; squeekboard's own events are ignored. `hyprctl -j devices`
-  // runs only at start and after configreloaded, for the count and the first
+  // runs at start, after configreloaded and when an activelayout comes from a
+  // keyboard not in the last read (one connected later), for the count and the
   // label; `xkbcli list` once, when a label is first needed.
   property int layoutCount: 0
   property string layoutDescription: ""
   property var layoutBriefs: ({})
+  property var layoutKeyboards: []
+  property bool layoutReread: false
   readonly property string layoutLabel: layoutCount > 1 ? StatusModel.shortLabel(layoutDescription, layoutBriefs) : ""
   onLayoutCountChanged: if (layoutCount > 1 && !briefsRead.ran) { briefsRead.ran = true; briefsRead.running = true }
   Process {
@@ -121,8 +124,10 @@ Item {
         if (!st) return
         root.layoutCount = st.count
         root.layoutDescription = st.description
+        root.layoutKeyboards = st.names
       }
     }
+    onExited: if (root.layoutReread) { root.layoutReread = false; running = true }
   }
   Process {
     id: briefsRead
@@ -140,8 +145,10 @@ Item {
       if (event.name === "activelayout") {
         const d = StatusModel.eventLayout(event.data)
         if (d !== null) root.layoutDescription = d
-      } else if (event.name === "configreloaded" && !layoutRead.running) {
-        layoutRead.running = true
+      }
+      if (StatusModel.needsDeviceRead(event.name, event.data, root.layoutKeyboards)) {
+        if (layoutRead.running) root.layoutReread = true
+        else layoutRead.running = true
       }
     }
   }

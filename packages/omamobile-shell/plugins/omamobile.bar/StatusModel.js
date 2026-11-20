@@ -190,10 +190,24 @@ function layoutState(text) {
   try { kbs = (JSON.parse(text) || {}).keyboards } catch (e) { return null }
   if (!Array.isArray(kbs)) return null
   var typed = kbs.filter(function(k) { return k && typedKeyboard(k.name) })
-  if (!typed.length) return { count: 0, description: "" }
+  var names = typed.map(function(k) { return String(k.name) })
+  if (!typed.length) return { count: 0, description: "", names: names }
   var kb = typed.reduce(function(a, k) { return (k.active_layout_index || 0) > (a.active_layout_index || 0) ? k : a }, typed[0])
   var count = String(kb.layout || "").split(",").filter(function(l) { return l !== "" }).length
-  return { count: count, description: String(kb.active_keymap || "") }
+  return { count: count, description: String(kb.active_keymap || ""), names: names }
+}
+// Whether a Hyprland event means `hyprctl -j devices` must be read again:
+// a config reload, or an activelayout from a typed keyboard not seen in the
+// last read (one plugged in or paired later; Hyprland has no device-added
+// event on its socket).
+function needsDeviceRead(name, data, known) {
+  if (name === "configreloaded") return true
+  if (name !== "activelayout") return false
+  var s = String(data || "")
+  var i = s.indexOf(",")
+  if (i < 0) return false
+  var kb = s.slice(0, i)
+  return typedKeyboard(kb) && (known || []).indexOf(kb) < 0
 }
 
 if (typeof module !== "undefined") {
@@ -202,6 +216,7 @@ if (typeof module !== "undefined") {
     cellularIcon: cellularIcon, cellGlyph: cellGlyph, cellText: cellText, parseCell: parseCell,
     callChip: callChip, elapsed: elapsed, batteryIcon: batteryIcon,
     stampOf: stampOf, parseStamp: parseStamp, unreadCount: unreadCount, unreadStored: unreadStored,
-    layoutBriefs: layoutBriefs, shortLabel: shortLabel, eventLayout: eventLayout, layoutState: layoutState
+    layoutBriefs: layoutBriefs, shortLabel: shortLabel, eventLayout: eventLayout, layoutState: layoutState,
+    needsDeviceRead: needsDeviceRead
   }
 }
