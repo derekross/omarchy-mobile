@@ -80,6 +80,9 @@ for f in usr/bin/reboot-to \
          usr/lib/systemd/system/omamobile-husky-display.service \
          usr/lib/systemd/system/display-manager.service.d/10-omamobile-husky.conf \
          usr/lib/modprobe.d/omamobile-max77759.conf \
+         usr/lib/modprobe.d/omamobile-charger.conf \
+         usr/bin/omamobile-plugged-inhibit usr/lib/systemd/system/omamobile-plugged-inhibit.service \
+         usr/lib/udev/rules.d/80-omamobile-charger.rules \
          usr/bin/omamobile-usb-rescue \
          usr/lib/systemd/system/omamobile-usb-rescue.service \
          usr/lib/systemd/system/plymouth-quit.service.d/10-omamobile-retain-splash.conf \
@@ -144,6 +147,69 @@ for m in max77759_charger tcpci_maxim gpio_max77759 nvmem_max77759; do
 done
 ! grep -qE '^blacklist (max17042_battery|max77759)$' "$conf" || fail "the fuel gauge and the MFD core keep autoloading"
 pass "the MAX77759 cell drivers and the Type-C driver are blacklisted, the gauge and the MFD core are not"
+# The charger's policy, as on the Pixel 7 Pro and the Pixel 7 (#827): both
+# options on one line, the gauge first. Inert: the charger stays blacklisted
+# above, so the lines only apply to a modprobe by hand.
+mod=$tmp/root/usr/lib/modprobe.d
+grep -qx 'options max77759_charger default_ilim_ua=500000 temp_guard=1' "$mod/omamobile-charger.conf" \
+  || fail "the charger charges without a Type-C source, under the temperature guard"
+grep -qx 'softdep max77759_charger pre: max17042_battery' "$mod/omamobile-charger.conf" \
+  || fail "the gauge loads before the charger, for the guard's first reading"
+(( $(grep -h '^options max77759_charger' "$mod"/*.conf | wc -l) == 1 )) \
+  || fail "one charger options line only"
+grep -qx 'blacklist max77759_charger' "$mod/omamobile-max77759.conf" || fail "the charger stays blacklisted until the kernel side is in"
+pass "the charger's options and softdep are set, and it stays blacklisted (inert)"
+# Sleep on the cable: the blocker starts only when the charger binds, holds
+# a block inhibitor while it is online, and is not enabled at boot.
+rule=$tmp/root/usr/lib/udev/rules.d/80-omamobile-charger.rules
+grep -qx 'ACTION=="add", SUBSYSTEM=="power_supply", KERNEL=="max77759-charger", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omamobile-plugged-inhibit.service"' "$rule" \
+  || fail "the sleep blocker starts when the charger's power supply appears"
+[[ ! -e $tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-plugged-inhibit.service ]] \
+  || fail "the sleep blocker is not enabled at boot: it would run with no charger"
+sh -n bin/omamobile-plugged-inhibit || fail "the sleep blocker parses"
+grep -q '^ExecStart=/usr/bin/omamobile-plugged-inhibit$' vendor/systemd/system/omamobile-plugged-inhibit.service \
+  || fail "the blocker unit starts the script"
+stub=$tmp/stub; mkdir -p "$stub"
+# a stub systemd-inhibit: records its options and pid, then runs the child
+cat > "$stub/systemd-inhibit" <<STUB
+#!/bin/sh
+echo "\$@" >> "$stub/calls"; echo \$\$ > "$stub/child"
+while [ "\${1#--}" != "\$1" ]; do shift; done
+exec "\$@"
+STUB
+chmod +x "$stub/systemd-inhibit"
+run_blocker() { PATH=$stub:$PATH OMAMOBILE_CHARGER_ONLINE=$tmp/online sh bin/omamobile-plugged-inhibit 2>/dev/null & ipid=$!; }
+gone() { for _ in $(seq 34); do kill -0 "$1" 2>/dev/null || return 0; sleep 0.3; done; return 1; }
+# no charger: exits at once and blocks nothing
+PATH=$stub:$PATH OMAMOBILE_CHARGER_ONLINE=$tmp/no-such-file timeout 5 sh bin/omamobile-plugged-inhibit 2>/dev/null \
+  || fail "the blocker exits by itself when there is no charger"
+[[ ! -e $stub/calls ]] || fail "the blocker holds nothing without a charger"
+# online 0 at start: no lock; the charger going away stops it
+echo 0 > "$tmp/online"; run_blocker; sleep 2
+[[ ! -e $stub/calls ]] || fail "the blocker takes no lock while the charger is offline"
+rm -f "$tmp/online"; gone "$ipid" || { kill "$ipid"; fail "the blocker stops when the charger goes away"; }
+wait "$ipid" 2>/dev/null || :
+# online 1: the lock is held while the file says 1, released when it says 0
+echo 1 > "$tmp/online"; run_blocker
+for _ in $(seq 50); do [[ -s $stub/child ]] && break; sleep 0.2; done
+child=$(cat "$stub/child" 2>/dev/null); sleep 2
+[[ -n $child ]] && kill -0 "$child" 2>/dev/null || { kill "$ipid"; fail "the blocker holds the lock while charging"; }
+# an empty or failed read (an I2C error) keeps holding
+: > "$tmp/online"; sleep 3
+kill -0 "$child" 2>/dev/null || { kill "$ipid"; fail "an empty read keeps the lock"; }
+echo 1 > "$tmp/online"; chmod 000 "$tmp/online"; sleep 3
+kill -0 "$child" 2>/dev/null || { kill "$ipid"; fail "a failed read keeps the lock"; }
+chmod 644 "$tmp/online"
+echo 0 > "$tmp/online"
+gone "$child" || { kill "$ipid" "$child"; fail "the lock is released when charging stops"; }
+rm -f "$tmp/online"; gone "$ipid" || { kill "$ipid"; fail "the blocker stops when the charger goes away"; }
+wait "$ipid" 2>/dev/null || :
+grep -q -- '--what=sleep --mode=block --who=omamobile-charger' "$stub/calls" || fail "the blocker holds a sleep block while charging"
+(( $(wc -l < "$stub/calls") == 1 )) || fail "one lock per plug-in"
+unit=vendor/systemd/system/omamobile-plugged-inhibit.service
+grep -qx 'StartLimitIntervalSec=0' "$unit" && grep -qx 'RestartSec=5' "$unit" \
+  || fail "the blocker unit never hits the start limit and stays failed"
+pass "the sleep blocker starts with the charger, blocks sleep while it is online, and does nothing without it"
 bash -n bin/omamobile-usb-rescue || fail "the USB rescue parses"
 grep -q '10cb0000.i2c' bin/omamobile-usb-rescue || fail "the USB rescue watches husky's bus (hsi2c_11)"
 grep -q 'i2cset -f -y "$bus" $tcpc 0x93 0x09' bin/omamobile-usb-rescue || fail "the USB rescue closes the data switch"
