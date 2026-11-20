@@ -5,9 +5,10 @@
 # bring-up step on a zuma phone (the Pixel 8 Pro or the Pixel 8a, the same
 # MAX77759 on the same bus) detached from SSH, under a dead-man switch and a
 # battery guard. Ported from tools/usbc-deadman-phone (cheetah). On the Pixel 8a
-# only the charger steps run, nothing here loads tcpci_maxim for it (that is M6).
-# The Pixel 8 Pro also runs the Type-C step (b4-tcpm, TYPEC-FAST-CHARGE-PLAN.md
-# stage 4, the port of cheetah's b4a-tcpm): it may take the USB port away, so
+# only the charger steps run, nothing here loads tcpci_maxim for it.
+# The Pixel 8 Pro also runs the Type-C step (b4-tcpm) and the 5 V host step
+# (b5-host) (TYPEC-FAST-CHARGE-PLAN.md stage 4, the port of cheetah's b4a-tcpm):
+# b4-tcpm may take the USB port away, so
 # Wi-Fi (wlp1s0) is the way in and the only precondition on the link.
 #
 #   1. refuse unless the preconditions hold (nothing is applied if not);
