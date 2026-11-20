@@ -205,6 +205,117 @@ fails, preserve the first discriminating trace and discuss it before any
 new kernel workaround. This PR must retain the outstanding status until
 that evidence exists.
 
+## 6. Slot B marked successful by hand
+
+**Status (2026-11-07):** tool written, **never run on a phone**; it waits for
+the maintainer's review of its pull request. The 9a's hold in AGENTS.md ("Pixel 9a: a fallback to slot A costs the Linux root") still stands: nothing here may run until the maintainer has merged the tool and lifted it.
+
+The decision on [#252](https://github.com/derekross/omarchy-mobile/issues/252):
+slot B is marked successful by hand, attended, once per install of slot B's
+images, and only after that image set has booted cleanly and passed
+`tools/phone-smoke`. Never on the first boot of an untested image, and never
+from a unit, a hook or the installer. Once B is marked, ABL no longer falls
+back to slot A, so a broken image after that means fastboot by the buttons
+(with the phone off, Volume Down then Power, both held about 20 s). Any fastboot flash of slot B's images clears the mark again
+([NOTES](NOTES.md) 2026-10-31); mark again only after the new set passes the smoke test.
+
+The tool is `omamobile-bootctl` from `omamobile-device-tegu`
+(`packages/omamobile-device-tegu/bootctl/omamobile-bootctl.c`, the same source as
+the husky package; this phone's values in `bootctl/bootctl-device.h`). It
+refuses another board, a devinfo version other than 3.15 (the one recorded
+for tegu: [NOTES](NOTES.md) "Read-only layout evidence after official OTA maintenance", the pair across a boot that spent a try, and the three marks of 2026-10-22 to 10-31), a boot from slot A, a slot B that isn't active or is
+marked unbootable, and a storage guard that isn't holding (the main LUN's
+whole-disk node usable, or any disk or partition outside `UFS_RW` writable).
+It prints the devinfo version and the eight slot bytes 0x30-0x37, decoded,
+and nothing else from the partition.
+
+**Its read-write window.** The kernel can't write a partition of a read-only
+disk: `bdev_read_only()` is the partition's own flag OR its disk's
+(`include/linux/blkdev.h`), and the write path (`blkdev_write_iter()`), the
+`BLKROGET` ioctl and sysfs `ro` all use it. So `devinfo` can't be made
+writable while its boot LUN stays read-only, and the tool clears the LUN's
+flag too, for as long as the one byte takes. **That exposes the whole LUN:**
+while the disk's flag is clear, the whole-disk node is writable, and raw
+writes through it reach every byte of the LUN, the other partitions on it
+(`mfg_data`, per FINGERPRINT-PLAN; the LUN's other partitions aren't
+recorded here yet) included; their own flags guard only their own nodes. Whether
+that is acceptable is the maintainer's ruling on #252 and this tool waits
+for it. The recommendation is to guard the boot LUNs as the main LUN is
+guarded (whole-disk node removed, each partition's own flag set) in a
+separate change tested on the 7 Pro; with that in place the window becomes
+devinfo's flag alone.
+
+The window, in order: refuse if devinfo, its LUN or a sibling is mounted or
+held, or open for writing by any other process (checked again right before
+the window, after the codename); the disk writable, and checked; each
+sibling's and devinfo's own flag checked (the only moment a partition's own
+flag can be read; any clear or unreadable one closes the window); devinfo
+writable; devinfo read again and compared with what the checks saw; the
+byte at 0x35 (slot B's flags) changed by OR 0x02 with `O_DSYNC` (the kernel
+writes the 4 KiB block that holds it); the whole partition read back past the
+page cache (`O_DIRECT`) and compared with the prediction (on a mismatch the
+original is written back and read back, and the tool fails); devinfo
+read-only and checked; the disk read-only and checked. ^C, SIGTERM and SIGHUP
+are blocked. A relock child, started before the window, sets both flags back
+the moment the tool exits or is killed, and from the moment the window
+opens it also sets them back every 10 s for as long as the tool lives (a
+stopped or hung tool), so the window can't stay open unwatched.
+
+Each step: risk, command, expect / pass, stop, rollback. Record the results
+here with the date and `uname -r`. Post only the version and the eight slot
+bytes, never a dump.
+
+1. **Preconditions** (none; read-only). The installed image set has booted
+   cleanly at least once and `tools/phone-smoke` passed on it (keep the
+   report). `pacman -Q omamobile-device-tegu` shows the version with the tool,
+   built from the merged source. The layout pair is recorded
+   ([NOTES](NOTES.md), 2026-10-22); repeat it if the bootloader was updated
+   since.
+   **Stop:** any of these missing. **Rollback:** none.
+2. **Status** (none; read-only). `omamobile-bootctl status`.
+   **Expect:** `devinfo version 3.15 (the layout recorded for tegu)`, `booted
+   from slot b`, `storage guard: holding`, slot b active, not successful, not
+   unbootable. **Stop:** any refusal, another version, slot a booted, the
+   guard not holding. **Rollback:** none.
+3. **Dry run** (none; read-only: nothing is opened for writing).
+   `omamobile-bootctl mark-b-successful`. **Expect:** `planned: byte 0x35 XX
+   -> YY (slot b successful), nothing else`, where YY is XX OR 02, and the
+   write command with this boot's eight bytes. Post the output on #252 and
+   wait for the maintainer's go. **Stop:** any other plan, a refusal, no go.
+   **Rollback:** none.
+4. **Read-only backup** (none; read-only). From the laptop,
+   `tools/nv-backup DIR` (devinfo is in the descriptor's `NV_BACKUP_EXTRA`),
+   then `tools/nv-backup --check DIR` right before step 5. Keep it off the
+   repository. **Expect:** every copy verified, and the check matches live
+   storage. **Stop:** a failed copy or a mismatch. **Rollback:** none.
+5. **The write** (medium: one bit of `devinfo`, outside the allowlist). With a
+   kernel log stream to the laptop running and nobody about to reboot the
+   phone: `omamobile-bootctl mark-b-successful --write --codename tegu
+   --expect "<the eight bytes from step 3>"`. Nothing changes on the screen.
+   **Expect:** exit 0, `before` and `after` lines that differ only in byte
+   0x35 by 0x02, then `slot b marked successful: written, read back, devinfo
+   and <its LUN> read-only again`. **Stop:** any other exit, and don't run it
+   again: exit 1 or 2 refused before anything was opened; 3, the write
+   failed or was put back and devinfo reads as before; 4, devinfo may differ
+   from the backup (don't reboot; post the output and wait); 5, a read-only
+   flag could not be restored (`systemctl reboot`: the initramfs sets it
+   again). **Rollback:** the mark is undone by flashing slot B's images
+   (`bin/omamobile flash` with a known-good set), which clears it; the
+   step 4 backup is for exit 4, and writing it back is the maintainer's call.
+6. **Read back** (none; read-only). `omamobile-bootctl status` again, then
+   `tools/nv-backup --check DIR`. **Expect:** slot b successful, the guard
+   holding; the check differs only in `devinfo`, and a fresh read-only copy
+   of it differs from the backup in byte 0x35 alone (`cmp -l` prints one
+   line, offset 54). **Stop:** anything else. **Rollback:** as in step 5.
+7. **ABL's view** (low: one trip to fastboot, which spends no try with B
+   marked). `reboot-to bootloader`, then, with this phone's serial pinned,
+   `fastboot -s <serial> getvar slot-successful:b`, `slot-unbootable:b` and
+   `slot-retry-count:b` (each with `-s <serial>`), then
+   `fastboot -s <serial> reboot`.
+   **Expect:** `yes`, `no`, and the phone boots slot B again. **Stop:** `no`
+   for successful: post it and don't repeat the write. **Rollback:** as in
+   step 5.
+
 ## Recorded control result, 2026-10-22
 
 Both official OTA passes, stock-A build properties, both-slot signed AVB
