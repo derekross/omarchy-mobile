@@ -13,23 +13,48 @@ set -uo pipefail
 THRESHOLD=${OMAMOBILE_SDDM_GUARD_THRESHOLD:-20}
 WINDOW=${OMAMOBILE_SDDM_GUARD_WINDOW:-60}
 COOLDOWN=${OMAMOBILE_SDDM_GUARD_COOLDOWN:-600}
+OWNER_UID=${OMAMOBILE_SDDM_GUARD_UID:-1000}
 
-fails=()      # times of recent failed autologins
-last=-1       # time of the last restart, -1 = none yet
+# The guard's own clock, not the journal's: the wall clock can jump (an
+# offline phone seeds it at first boot), and the cooldown must not.
+now() { local up; read -r up _ < /proc/uptime && echo "${up%%.*}"; }
+[[ -n ${OMAMOBILE_SDDM_GUARD_CLOCK:-} ]] && now() { "$OMAMOBILE_SDDM_GUARD_CLOCK"; }
+
+# True when the owner has a healthy graphical session: then sddm's failures
+# don't matter enough to pull the session down with a restart.
+owner_session_ok() {
+  local id props
+  for id in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); do
+    props=$(loginctl show-session "$id" -p User -p Type -p Active -p State 2>/dev/null) || continue
+    grep -qx "User=$OWNER_UID" <<<"$props" && grep -qx 'Type=wayland' <<<"$props" &&
+      grep -qx 'Active=yes' <<<"$props" && grep -qx 'State=active' <<<"$props" && return 0
+  done
+  return 1
+}
+
+fails=()      # guard-clock times of recent failed autologins
+last=-1       # guard-clock time of the last restart, -1 = none yet
 while IFS= read -r line; do
   [[ $line == *'sddm-helper exited with 5'* ]] || continue
-  # short-unix lines start with the entry's time: "1762825980.123456 host ..."
-  now=${line%%[. ]*}
-  [[ $now =~ ^[0-9]+$ ]] || continue
+  t=$(now)
+  [[ $t =~ ^[0-9]+$ ]] || continue
   keep=()
-  for f in "${fails[@]}"; do (( now - f < WINDOW )) && keep+=("$f"); done
-  fails=("${keep[@]}" "$now")
+  for f in "${fails[@]}"; do (( t - f < WINDOW )) && keep+=("$f"); done
+  fails=("${keep[@]}" "$t")
   (( ${#fails[@]} > THRESHOLD )) || continue
-  if (( last >= 0 && now - last < COOLDOWN )); then
+  if (( last >= 0 && t - last < COOLDOWN )); then
+    continue
+  fi
+  if owner_session_ok; then
+    echo "omamobile-sddm-guard: ${#fails[@]} failed autologins in ${WINDOW}s, but uid $OWNER_UID has an active wayland session, so sddm is left alone"
+    fails=()
     continue
   fi
   echo "omamobile-sddm-guard: ${#fails[@]} failed autologins in ${WINDOW}s, restarting sddm once (next restart no sooner than ${COOLDOWN}s)"
   systemctl restart sddm.service || echo "omamobile-sddm-guard: restarting sddm failed" >&2
-  last=$now
+  last=$t
   fails=()
-done < <(journalctl -f -n 0 -o short-unix -u sddm.service)
+done < <(journalctl -f -n 0 -o cat -u sddm.service)
+# journalctl -f only ends when something is wrong: fail, so systemd restarts us
+echo "omamobile-sddm-guard: the journal follow ended, exiting so systemd restarts the guard" >&2
+exit 1

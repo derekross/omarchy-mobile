@@ -303,23 +303,53 @@ J
 cat > "$G/bin/systemctl" <<'J'
 #!/bin/bash
 echo "systemctl $*" >> "$GUARD_CALLS"
+exit "${GUARD_SYSTEMCTL_RC:-0}"
 J
-chmod +x "$G/bin/journalctl" "$G/bin/systemctl"
-guard() { : > "$G/calls"; GUARD_CALLS=$G/calls GUARD_JOURNAL=$G/journal PATH="$G/bin:$PATH" bin/omamobile-sddm-guard > "$G/out"; }
-burst() { local s=$1 n=$2 i; for ((i = 0; i < n; i++)); do echo "$((s + i / 10)).000001 phone sddm[1]: Auth: sddm-helper exited with 5"; done; }
+# loginctl: one session, with the properties in $GUARD_SESSION
+cat > "$G/bin/loginctl" <<'J'
+#!/bin/bash
+case $1 in
+  list-sessions) echo "  3 1000 alice seat0 tty1" ;;
+  show-session) printf '%s\n' $GUARD_SESSION ;;
+esac
+J
+# the guard's clock: call n reads $GUARD_BASE + (n / $GUARD_RATE) * $GUARD_STEP
+cat > "$G/clock" <<'J'
+#!/bin/bash
+n=$(cat "$GUARD_TICKS"); echo $((n + 1)) > "$GUARD_TICKS"
+echo $((GUARD_BASE + n / GUARD_RATE * GUARD_STEP))
+J
+chmod +x "$G/bin/"* "$G/clock"
+guard() {
+  : > "$G/calls"; echo 0 > "$G/ticks"
+  GUARD_CALLS=$G/calls GUARD_JOURNAL=$G/journal GUARD_TICKS=$G/ticks GUARD_BASE=${base:-1000} \
+  GUARD_RATE=${rate:-10} GUARD_STEP=${step:-1} GUARD_SESSION=${session:-User=1000 Type=tty Active=no State=closing} \
+  OMAMOBILE_SDDM_GUARD_CLOCK=$G/clock PATH="$G/bin:$PATH" bin/omamobile-sddm-guard > "$G/out" 2> "$G/err"
+}
+burst() { local n=$1 i; for ((i = 0; i < n; i++)); do echo "Auth: sddm-helper exited with 5"; done; }
 # 20 failures in a minute, plus other lines: no restart
-{ echo "1000.0 phone sddm[1]: Display server started."; burst 1000 20; } > "$G/journal"
-guard
-grep -q '^journalctl -f -n 0 -o short-unix -u sddm.service$' "$G/calls" || fail "the guard follows sddm's journal"
+{ echo "Display server started."; burst 20; } > "$G/journal"
+guard && fail "the guard exits non-zero when the journal follow ends"
+grep -q 'journal follow ended' "$G/err" || fail "the guard says why it exits"
+grep -q '^journalctl -f -n 0 -o cat -u sddm.service$' "$G/calls" || fail "the guard follows sddm's journal"
 grep -q '^systemctl' "$G/calls" && fail "20 failures a minute is under the threshold"
+# exactly threshold + 1: one restart
+burst 21 > "$G/journal"; guard || true
+(( $(grep -c '^systemctl restart sddm.service$' "$G/calls") == 1 )) || fail "21 failures a minute restart sddm once"
 # failures spread out over minutes: no restart
-for ((i = 0; i < 60; i++)); do echo "$((2000 + i * 10)).0 phone sddm[1]: Auth: sddm-helper exited with 5"; done > "$G/journal"
-guard
+burst 60 > "$G/journal"; rate=1 step=10 guard || true
 grep -q '^systemctl' "$G/calls" && fail "slow failures are not a loop"
 # a loop: 530 a minute for 30 minutes means one restart, then one per 10 minutes
-burst 5000 $((530 * 30)) > "$G/journal"
-guard
+burst $((530 * 30)) > "$G/journal"; rate=9 guard || true
 n=$(grep -c '^systemctl restart sddm.service$' "$G/calls")
 (( n == 3 )) || fail "a 30-minute loop restarts sddm 3 times, not $n"
 grep -q 'failed autologins in 60s, restarting sddm once' "$G/out" || fail "the guard logs why it restarts"
+# a failed restart is logged
+burst 21 > "$G/journal"; GUARD_SYSTEMCTL_RC=1 guard || true
+grep -q 'restarting sddm failed' "$G/err" || fail "a failed restart is logged"
+# the owner's active wayland session: log, never restart
+session='User=1000 Type=wayland Active=yes State=active' guard || true
+grep -q '^systemctl' "$G/calls" && fail "an active owner session is never restarted"
+grep -q 'active wayland session, so sddm is left alone' "$G/out" || fail "the guard logs why it skips"
+grep -qx 'Restart=always' systemd/omamobile-sddm-guard.service || fail "the guard unit always restarts"
 pass "the SDDM loop guard restarts sddm at most once per cooldown"

@@ -3,13 +3,15 @@
 # /usr/bin/omamobile-sddm-guard). At most one restart per 10 minutes.
 [Unit]
 Description=Omarchy Mobile SDDM autologin loop guard
-After=systemd-journald.service
 
 [Service]
 ExecStart=/usr/bin/omamobile-sddm-guard
-Restart=on-failure
-RestartSec=30
+Restart=always
+RestartSec=10
 Nice=10
+ProtectHome=read-only
+NoNewPrivileges=yes
+PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target
