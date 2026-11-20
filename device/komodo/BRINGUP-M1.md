@@ -12,10 +12,11 @@ samples improved after hardware rendering was enabled, but this was not a
 controlled benchmark. Internal Wi-Fi is not working: its PCI host enumerates,
 but the first `bcmdhd` probe failed coherent DMA allocation and oopsed in its
 error path. A corrected shared-DMA-pool configuration has not yet been
-verified with the driver. A local synthetic desktop notification appears in
-the logged-in session but was not shown on the lock screen; WhatsApp is not
-linked and no real messages were read. See [NOTES.md](NOTES.md) for evidence
-and chronology. The owner authorized experimental writes to slot B and
+verified with the driver. Local synthetic notifications appear in both the
+logged-in session and on the lock screen; whether they wake the display is
+unverified. WhatsApp is not linked and no real messages were read. See
+[NOTES.md](NOTES.md) for evidence and chronology. The owner authorized
+experimental writes to slot B and
 `userdata`; slot A and firmware/calibration partitions remain untouched. No
 personal content was queried. Kernel worktree: `~/omamobile-kernel/wt-komodo-m1`;
 test builds are under `~/omamobile-kernel/out-komodo-*`.
@@ -128,10 +129,10 @@ supported slot-B and userdata install paths.
 3. **Next:** diagnose the failed internal Wi-Fi module probe and verify or
    reject the shared-DMA-pool candidate. Keep the proprietary driver/firmware
    private unless a distributable licensing and packaging path is established.
-4. **Later:** test lock-screen notifications, then continue with KM4 panel
-   integration, brightness/sleep, charging, sensors, audio, and remaining
-   peripherals. Do not describe this device as generally supported until these
-   paths and installation/release handling are reviewed.
+4. **Later:** verify notification wake/interaction behavior, then continue with
+   KM4 panel integration, brightness/sleep, charging, sensors, audio, and
+   remaining peripherals. Do not describe this device as generally supported
+   until these paths and installation/release handling are reviewed.
 
 Keep build outputs and hardware captures in the isolated worktrees and
 `bringup-artifacts/`; keep device-specific unproven settings out of shared
@@ -145,7 +146,7 @@ required for this owner-authorized experiment.
 | --- | --- | --- |
 | M2: Omarchy rootfs and USB access | **Passed, experimental** | Persistent root, firstboot, USB SSH and USB internet verified. |
 | M3: basic interaction | **Partial** | GUI, touch, flip-only KMS and GPU verified. Internal Wi-Fi failed; investigate the DMA pool and driver failure path. |
-| M4: hardware completeness | **Open** | Lock-screen notifications, full panel/brightness, suspend, charging, sensors, audio, cellular and Bluetooth need separate tests. |
+| M4: hardware completeness | **Open** | Notifications appear on the lock screen; wake behavior is unverified. Full panel/brightness, suspend, charging, sensors, audio, cellular and Bluetooth need separate tests. |
 
 ## 5. Results and open questions
 
@@ -380,8 +381,8 @@ required for this owner-authorized experiment.
   The temporary Android-v4 images were test artifacts, not a supported device
   package. The USB test overlay is only a source/build artifact; its hardware
   behavior remains unverified.
-- Open: verify lock-screen notification presentation and wake behavior, bring
-  up internal Wi-Fi, match the Android 17 source/DTBO, port the full panel
+- Open: verify notification wake behavior, bring up internal Wi-Fi, match the
+  Android 17 source/DTBO, port the full panel
   driver, and test the remaining peripherals. Persistent userspace, USB SSH,
   touch, flip-only KMS, and the GPU are proven on this one test device;
   `boot_a` remains unreadable through Fastboot.

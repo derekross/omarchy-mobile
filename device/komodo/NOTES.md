@@ -261,8 +261,8 @@ README/test scaffolding and release review.
 ## 2026-11-20 synthetic notification check
 
 Sent a local `notify-send` test with placeholder text and no WhatsApp account
-or message content. The notification appeared in the logged-in Omarchy session;
-the owner confirmed that the lock screen continued to report no notifications.
-The display did not wake for the test. This confirms desktop-session banners,
-not WhatsApp Web delivery, lock-screen notification support, or vibration.
-No real messages were accessed.
+or message content. It appeared in the logged-in Omarchy session. The owner
+later confirmed that notifications also appeared on the lock screen. The
+initial test did not establish whether a notification wakes the display;
+WhatsApp delivery and vibration were not tested. No real messages were
+accessed.
