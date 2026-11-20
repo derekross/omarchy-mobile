@@ -123,6 +123,16 @@ grep -qF "ln -sfn /dev/null \"\$d/usr/lib/systemd/user/$mask\"" install || fail 
 grep -qxF "ExecStartPre=-/usr/bin/systemctl --user stop ${mask//\\/\\\\}" vendor/systemd/user/omamobile-geoclue-agent.service ||
   fail "the agent unit must stop an autostart agent first (escaped once more for systemd's C escapes)"
 
+# GeoClue's start deadlock (2026-11-20): the drop-in names GLib's built-in
+# proxy resolver and sets nothing else, and it is installed as a drop-in of
+# geoclue.service itself, where systemd reads it.
+geo=vendor/systemd/geoclue.service.d/10-omamobile-gnss.conf
+[[ $(grep -v -E '^(#|$)' "$geo") == $'[Service]\nEnvironment=GIO_USE_PROXY_RESOLVER=dummy' ]] \
+  || fail "the geoclue drop-in sets the built-in proxy resolver and nothing else"
+grep -c -xF "install -Dm644 $geo \"\$d/usr/lib/systemd/system/geoclue.service.d/10-omamobile-gnss.conf\"" install >/dev/null \
+  || fail "the geoclue drop-in is installed under geoclue.service.d"
+echo "ok - GeoClue starts with GLib's built-in proxy resolver"
+
 # The bionic prebuilts are built on the computer with the Android toolchain
 # and never committed; a checkout without them (CI) checks the rest only.
 if [[ ! -f bionic/prebuilt/omamobile-fp-shim.so ]]; then
@@ -151,6 +161,7 @@ for f in usr/bin/omamobile-gnss usr/lib/omamobile-vendor/omamobile-vendor-chroot
          usr/lib/systemd/system/omamobile-gnss-location@.service usr/lib/modprobe.d/omamobile-gnss.conf \
          usr/share/polkit-1/rules.d/50-omamobile-gnss.rules etc/geoclue/conf.d/90-omamobile-gnss.conf \
          usr/lib/systemd/user/omamobile-geoclue-agent.service \
+         usr/lib/systemd/system/geoclue.service.d/10-omamobile-gnss.conf \
          usr/lib/omamobile-vendor/omamobile-gnss-lto usr/lib/omamobile-vendor/omamobile-gnss-conf \
          usr/lib/systemd/system/omamobile-gnss-lto.service usr/lib/systemd/system/omamobile-gnss-lto.timer \
          etc/omamobile/gnss.conf; do
