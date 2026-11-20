@@ -525,6 +525,17 @@ rm -rf "$tmp/run"
 echo 1328000 > "$cpu/policy0/scaling_max_freq"; echo 1945000 > "$cpu/policy4/scaling_max_freq"
 echo 2294000 > "$cpu/policy8/scaling_max_freq"; echo 890000000 > "$gpu/max_freq"
 load=95
+# user.slice/cpuset.cpus missing (no cpuset controller): the caps still work,
+# the squeeze stays off, systemctl is never asked and nothing is created
+mv "$cg/cpuset.cpus" "$tmp/cpuset.cpus"; : > "$tmp/systemctl.log"; hot 60000
+for i in 1 2 3 4; do sq --tick 2>>"$tmp/nocg.err" || fail "a tick without cpuset.cpus fails"; done
+[[ $(caps) == "324000 402000 500000 150000000" ]] || fail "without cpuset.cpus the caps still floor: $(caps)"
+[[ ! -e $cg/cpuset.cpus && ! -e $tmp/run/cpuset && ! -e $tmp/run/squeeze && ! -s $tmp/systemctl.log ]] || fail "without cpuset.cpus nothing is squeezed"
+grep -q 'cannot be read, no squeeze' "$tmp/nocg.err" || fail "a missing cpuset.cpus is logged"
+mv "$tmp/cpuset.cpus" "$cg/cpuset.cpus"; rm -rf "$tmp/run"
+echo 1328000 > "$cpu/policy0/scaling_max_freq"; echo 1945000 > "$cpu/policy4/scaling_max_freq"
+echo 2294000 > "$cpu/policy8/scaling_max_freq"; echo 890000000 > "$gpu/max_freq"
+pass "user.slice without cpuset.cpus: caps work, the squeeze stays off"
 # restore (the unit's ExecStopPost) puts the CPUs and the caps back
 OMAMOBILE_SYSTEMCTL=$tmp/bin/fake-systemctl OMAMOBILE_SYSFS=$fs OMAMOBILE_THERMAL_STATE=$tmp/run bin/omamobile-husky-thermal --restore || fail "restore runs"
 [[ -z $(cpus) && ! -e $tmp/run/cpuset && ! -e $tmp/run/orig ]] || fail "restore puts the slice back: [$(cpus)]"
