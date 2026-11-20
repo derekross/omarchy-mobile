@@ -23,6 +23,7 @@ EOT
 cat > "$tmp/bin/langs" <<'EOT'
 #!/bin/bash
 printf 'langs %s\n' "$*" >> "$FAKE_LOG"
+[[ -n ${FAKE_LANGS_OLD:-} ]] && exit 2
 [[ -z ${FAKE_LANGS_FAIL:-} ]]
 EOT
 chmod +x "$tmp/bin/hyprctl" "$tmp/bin/langs"
@@ -116,6 +117,13 @@ r=$(run set layouts us,de); eq "$(j "$r" 'd.get("error")')" "None"
 run set switch-key default >/dev/null
 cmp -s "$input" "$tmp/stock.lua" || { echo "FAIL: default does not give back the stock file" >&2; diff "$input" "$tmp/stock.lua" >&2; exit 1; }
 r=$(run set switch-key bogus); has <(echo "$r") 'unknown switch key'
+# an input.lua without a trailing newline comes back byte for byte, also after switching twice
+printf 'hl.config({ input = { repeat_rate = 40 } })' > "$input"; cp "$input" "$tmp/nonl.lua"
+run set switch-key caps >/dev/null; has "$input" 'grp:caps_toggle'
+run set switch-key alt_shift >/dev/null; eq "$(j "$(run get)" 'd["switchKey"]')" "alt_shift"
+run set switch-key default >/dev/null
+cmp -s "$input" "$tmp/nonl.lua" || { echo "FAIL: no-newline input.lua not restored" >&2; od -c "$input" | tail -3 >&2; exit 1; }
+cp "$tmp/stock.lua" "$input"
 
 # the user's own live kb_layout: reported, layouts not written; own kb_options: switch key not written
 printf 'hl.config({\n  input = {\n    kb_layout = "us,dk",\n    kb_options = "compose:caps",\n  },\n})\n' > "$input"
@@ -130,6 +138,8 @@ FAKE_EVAL_FAIL=1 r=$(FAKE_EVAL_FAIL=1 run set layouts us,gr); has <(echo "$r") '
 eq "$(head -1 "$store")" 'XKBLAYOUT=us,gr'
 r=$(FAKE_LANGS_FAIL=1 run set layouts us,gr,ru); has <(echo "$r") 'on-screen keyboard list was not updated'
 eq "$(head -1 "$store")" 'XKBLAYOUT=us,gr,ru'
+# an omamobile-shell without the add verb (usage, exit 2) is named in the error
+r=$(FAKE_LANGS_OLD=1 run set layouts us,gr,ru,de); has <(echo "$r") 'omamobile-shell is too old'
 
 # list: the layouts and the four switch choices
 r=$(run list); eq "$(j "$r" '[k["option"] for k in d["switchKeys"]]')" "['alt_shift', 'ctrl_shift', 'caps', 'default']"

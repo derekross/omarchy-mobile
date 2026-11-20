@@ -64,6 +64,9 @@ SWITCH_NAMES = [("alt_shift", "Alt+Shift"), ("ctrl_shift", "Ctrl+Shift"), ("caps
                 ("default", "Omarchy default")]
 BEGIN = "-- omamobile-settings: switch key (begin, changed by Settings > Keyboard)"
 END = "-- omamobile-settings: switch key (end)"
+# Written instead of BEGIN when input.lua had no trailing newline, so taking the
+# block out also drops the newline we added and the file is restored byte for byte.
+BEGIN_NL = BEGIN[:-1] + "; newline added)"
 NAME_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 MAX = 4
 STORE, STATE = os.environ["KBD_STORE"], os.environ["KBD_STATE"]
@@ -84,6 +87,20 @@ def run(cmd):
     except (OSError, subprocess.TimeoutExpired):
         return None
     return r.stdout if r.returncode == 0 else None
+
+def osk_add(name):
+    """The `add` verb is new in omamobile-shell's omamobile-keyboard-languages;
+    an older one prints its usage and exits 2, which is reported, not hidden."""
+    global osk_old
+    try:
+        r = subprocess.run([os.environ["KBD_LANGUAGES"], "add", name], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if r.returncode == 2:
+        osk_old = True
+    return r.returncode == 0
+
+osk_old = False
 
 # Lua tokens, enough to see live `key = "string"` assignments; comments and long strings are skipped.
 def tokens(text):
@@ -145,11 +162,15 @@ def read_input():
 
 def split_block(text):
     """(text without our block, the block's kb_options or None)."""
-    m = re.search(r"(?m)^%s\n(.*?)^%s\n?" % (re.escape(BEGIN), re.escape(END)), text, re.S)
+    m = re.search(r"(?m)^(%s|%s)\n(.*?)^%s\n?" % (re.escape(BEGIN), re.escape(BEGIN_NL), re.escape(END)),
+                  text, re.S)
     if not m:
         return text, None
-    v = re.search(r'kb_options\s*=\s*"([^"\\]*)"', m.group(1))
-    return text[:m.start()] + text[m.end():], (v.group(1) if v else "")
+    v = re.search(r'kb_options\s*=\s*"([^"\\]*)"', m.group(2))
+    start = m.start()
+    if m.group(1) == BEGIN_NL and start > 0 and text[start - 1] == "\n":
+        start -= 1
+    return text[:start] + text[m.end():], (v.group(1) if v else "")
 
 def read_store():
     """Omarchy's keyboard.lua rules: KEY=value, trailing # comment and quotes stripped."""
@@ -339,7 +360,7 @@ if key == "layouts":
     for l, v in zip(lay, var):
         n = l + ("+" + v if v else "")
         if n not in old and (not carried or os.path.isfile(os.path.join(KEYBOARDS, n + ".yaml"))):
-            osk_ok = run([os.environ["KBD_LANGUAGES"], "add", n]) is not None and osk_ok
+            osk_ok = osk_add(n) and osk_ok
 else:
     if custom:
         fail("input.lua sets its own kb_options; nothing written")
@@ -349,9 +370,11 @@ else:
     if new_block != block:
         new = rest
         if new_block is not None:
+            begin = BEGIN
             if new and not new.endswith("\n"):
                 new += "\n"
-            new += '%s\nhl.config({ input = { kb_options = "%s" } })\n%s\n' % (BEGIN, new_block, END)
+                begin = BEGIN_NL
+            new += '%s\nhl.config({ input = { kb_options = "%s" } })\n%s\n' % (begin, new_block, END)
         try:
             shutil.copyfile(INPUT, os.path.join(STATE, "keyboard-input.lua.bak"))
         except OSError:
@@ -369,7 +392,8 @@ if opts is None or not apply_live(lay, var, opts):
     fail("saved, applies at next login (Hyprland did not take it live)"
          + ("" if osk_ok else ", and the on-screen keyboard list was not updated"))
 if not osk_ok:
-    fail("saved and applied, but the on-screen keyboard list was not updated")
+    fail("saved and applied, but the on-screen keyboard list was not updated"
+         + (" (omamobile-shell is too old: its omamobile-keyboard-languages has no add)" if osk_old else ""))
 res = state(lay, var, block, custom, override)
 if key == "layouts" and [l + (":" + v if v else "") for l, v in zip(lay, var)] != items:
     res["note"] = "us goes first: passwords on the lock screen are typed in the first layout"
