@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+SCHEMA=omamobile-device-v1
+CODENAME=comet
+PACKAGE=omamobile-device-comet
+STATUS=boot-policy
+PHYSICAL_SUPPORT=historical-private-kernel-only
+INSTALLABLE_PROFILE=no
+BOOT_SUCCESS=disabled
