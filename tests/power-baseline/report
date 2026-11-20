@@ -1,0 +1,69 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# power-baseline --report: the median and range of Part B's current, the
+# Discharging and screen-on counts, the power estimate and the names it
+# hides, from a run's files and with no phone.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.."
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+fail() { echo "not ok - $*" >&2; exit 1; }
+
+cat > "$t/conditions.txt" <<'C'
+user: alice
+host: alice-phone
+cond: Kernel: `7.3.0-rc6-omamobile-gtest` (Google Pixel 7 Pro)
+cond: Room temperature: not measured (add it if known)
+C
+cat > "$t/partA.txt" <<'A'
+7.3.0-rc6-omamobile-gtest
+cpuidle driver: psci_idle
+big-thermal temp=53000 policy=step_wise
+mid-thermal temp=54000 policy=step_wise
+isp-thermal temp=25000 policy=step_wise
+max170xx_battery temp=38000 policy=step_wise
+A
+# five samples: 600 610 620 630 900 mA (median 620), one Charging
+cat > "$t/floor.txt" <<'B'
+gauge: /sys/class/power_supply/max170xx_battery
+10:00:00 Discharging -600000 uA batt=380 zones: 53000 54000 25000 38000
+10:00:15 Discharging -610000 uA batt=382 zones: 55000 54000 25000 38200
+10:00:30 Discharging -620000 uA batt=384 zones: 53000 56000 25000 38400
+10:00:45 Discharging -630000 uA batt=386 zones: 53000 54000 25000 38600
+10:01:00 Charging 900000 uA batt=388 zones: 53000 54000 25000 38800
+B
+printf 'bl_power: 4\nvoltage_now: 4000000\n' > "$t/floor-extra.txt"
+for v in 4000000 4100000 4200000 4300000; do printf 'bl_power: %s\nvoltage_now: %s\n' $([[ $v == 4300000 ]] && echo 0 || echo 4) "$v"; done >> "$t/floor-extra.txt"
+cat > "$t/partC.txt" <<'P'
+900 interrupts/s, 1200 context switches/s
+   2412 alice     20   0 2568852 916672 142868 S   4.3   7.8  15:26.27 quickshell
+--- wakeup_sources
+P
+printf '09:50:00 cable out and screen off at 80 %%; settling 600 s\nsuspend: Suspends during Parts B and C: 0; battery at the end 78 %%, Discharging\n10:02:00 done\n' > "$t/progress.txt"
+
+tools/power-baseline --report "$t" >/dev/null || fail "--report failed"
+r=$t/report.md
+grep -F -- '**median 620 mA** (600.0 to 900.0 mA over 5 samples, mean 672.0), about 2.54 W at 4.10 V' "$r" >/dev/null \
+  || fail "the floor line is wrong: $(grep -F 'floor' "$r")"
+echo "ok - median, range, mean and power of Part B"
+grep -F 'Status Discharging in 4 of 5 samples; screen on in 1 of them.' "$r" >/dev/null || fail "the Discharging or screen-on count is wrong"
+echo "ok - Discharging and screen-on counts"
+grep -F 'Thermal zones during Part B: big-thermal 53-55, mid-thermal 54-56, isp-thermal 25 °C; battery 38.4 °C (median).' "$r" >/dev/null \
+  || fail "zones or battery temperature wrong: $(grep -F Thermal "$r")"
+echo "ok - each zone's range by its type, the battery's zone left out"
+grep -F -- '- Battery: 80 % at cable out, 78 % at the end of Part C.' "$r" >/dev/null || fail "the battery line is wrong: $(grep -F 'Battery:' "$r")"
+echo "ok - the battery at cable out and at the end"
+grep -F -- '- 900 interrupts/s, 1200 context switches/s.' "$r" >/dev/null || fail "Part C's rates missing"
+grep -F -- '- Suspends during Parts B and C: 0.' "$r" >/dev/null || fail "the suspend line is missing"
+echo "ok - Part C's rates and the suspend count"
+! grep -E 'alice' "$r" >/dev/null || fail "the user or host name is left in the report: $(grep alice "$r")"
+
+grep -F ' <user>     20' "$r" >/dev/null || fail "top's user column isn't hidden"
+echo "ok - user and host names hidden"
+(($(grep -c '^<details>' "$r") == 3)) || fail "the report doesn't hold three <details> blocks"
+echo "ok - Parts A, B and C in <details> blocks"
+
+# a run with no Part B log has no report
+mkdir "$t/empty"
+! tools/power-baseline --report "$t/empty" 2>/dev/null || fail "--report on a folder without floor.txt didn't fail"
+echo "ok - no report without Part B"
