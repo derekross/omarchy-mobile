@@ -3,10 +3,23 @@
 
 Stage 0 started 2026-11-18 with a read-only stock capture from one retail Pixel
 9 Pro XL. The owner later authorized and completed a bootloader unlock, which
-factory-reset userdata; Android setup was completed again. Nothing from Omarchy
-Mobile has been booted or flashed. Raw captures remain private; only
-non-identifying facts are recorded here. The latest check has the phone in
-fastboot on slot A, bootloader unlocked.
+factory-reset userdata; Android setup was completed again. Experimental
+Omarchy Mobile is installed on slot B and reachable over USB SSH. The
+`/dev/sda34` userdata partition is mounted as the ext4 root, firstboot completed,
+and SDDM, Hyprland, and Omarchy QuickShell are running on DSI-1. The touchscreen
+driver is registered and a live sample confirmed BTN_TOUCH/absolute-axis events.
+Display blanking is explained by the phone profile's 60-second idle lock with
+screensaver disabled. This test phone's user config now requests a 600-second
+lock, and the live idle service reports the new value; the existing lock remains
+engaged. Omarchy's wake command re-enabled DSI/CRTC without unlocking. Wi-Fi is
+not provisioned. Userdata was erased by the
+authorized installer; no personal content was queried. Slot A remains untouched.
+Raw captures remain private; only non-identifying facts are recorded here.
+
+The current DECON stage-1 boot measures 60 Hz from the live 1344x2992 DPP0
+handoff at `0xfac00000`, using a no-map reservation and no KMS or panel
+commands. A stage-2 flip-only KMS plus framebuffer-console candidate is built
+for the next boot.
 
 Tracking issue: [#913](https://github.com/derekross/omarchy-mobile/issues/913).
 
@@ -66,8 +79,8 @@ used. Results are in the private R/ capture.
   verification completes ([A/B update flow](https://source.android.com/docs/core/ota/ab)).
   A stock OTA already staged to A is therefore the likely explanation for the
   `CP4A` build. No update logs were read, so its timing and source are unconfirmed.
-  Do not perform further reboots or slot actions until the update state is
-  reviewed.
+  This describes the initial capture only; the device was later unlocked and
+  intentionally used for slot-B Linux bring-up.
 
 ### CPU, memory, and partition names
 
@@ -113,35 +126,143 @@ used. Results are in the private R/ capture.
 - The modem package already notes that Pixel 9 Pro XL needs its PHY brought up
   before its PCIe host. This is a lead for a separate hardware investigation,
   not a verified result from this phone.
-- Still needed before any device descriptor or kernel DTS: remaining stock
-  partition sizes and descriptor facts; the live device tree and memory map;
-  the exact factory-image DTB/DTBO for this build; boot-chain and recovery
-  analysis; and board-specific display, touch, storage, Wi-Fi and modem evidence.
+- Current engineering work is beyond the initial read-only gate: Komodo has a
+  local experimental descriptor and board DTS; Omarchy boots from slot B with
+  USB SSH and a running graphical session. The next work is characterizing the
+  display idle/wake behavior and continuing hardware bring-up. Android 17
+  source matching, Wi-Fi, the full KM4 panel path, and other peripherals are
+  separate remaining work.
 - A public Google GPL source checkout is now available locally at
   `~/omamobile-kernel/google-caimito`. Kernel DTS work belongs in
   `linux-omarchy-mobile`, not this repository; see the initial gate plan in
   [`BRINGUP-M1.md`](BRINGUP-M1.md).
 
-## Safety boundary and latest state
+## Safety boundary and state as of 2026-11-19
 
-The initial capture used unrooted ADB reads. The owner later authorized
-unlocking and experimental device work; the bootloader was unlocked and its
-factory reset completed. Android setup was finished, then the phone was
-returned to fastboot. No Omarchy image has been flashed and no partition has
-been written by the bring-up work. The latest named reads (2026-11-18) report
-product `komodo`, `unlocked=yes`, current slot A, bootloader
-`ripcurrentpro-17.0-16433847`, A successful/not-unbootable, and B
-successful/unbootable, with two retries on each slot. `boot_a/b`,
-`vendor_boot_a/b`, and `vendor_kernel_boot_a/b` are 64 MiB each;
-`init_boot_a/b` are 8 MiB each; `dtbo_a/b` are 16 MiB each; `userdata` is
-`0x1b5e215000` bytes. The query was read-only and changed no slot or partition.
-The sanitized output is in private `R/fastboot-inventory-2026-11-18.txt`.
-`fastboot fetch boot_a` was refused even after unlock,
-so a raw stock-partition backup is not established. Google's official factory
-image for exact `komodo` build `CP4A.261105.040.A1` is downloaded outside the
-repository at `~/android/factory/komodo/CP4A.261105.040.A1/` and matches the
-official SHA-256. That is a verified stock package, but the attended recovery
-runbook and required read-only partition backups remain incomplete. Continue
-only after the boot image, rollback, and recovery gates are complete; preserve
-slot A and never write modem, radio, devinfo, persist, or calibration
-partitions.
+**Historical checkpoint — 2026-11-19:** the owner explicitly says phone data and stock
+recovery do not matter and has authorized flashing and erasure to reach Omarchy.
+After an Android fallback, Linux rescue reported userdata was not ext4; Android
+reformatting it is plausible but not proven. `tools/install-phone --reinstall`
+then rewrote the five slot-B boot images and userdata; every flash returned
+`OKAY`, slot B was activated, and slot A/bootloader-related partitions were not
+touched. The rootfs is mounted from `/dev/sda34` as ext4. Firstboot completed,
+USB SSH works, and SDDM, Hyprland, and Omarchy QuickShell are running on the
+connected 1344x2992 DSI output. The Synaptics driver reports BTN_TOUCH and
+absolute-axis events through `/dev/input/event0`; Hyprland lists the touch
+device enabled with transform 0. Omarchy's user idle profile first locked after
+60 seconds (`screensaver=0`); the test user's config now requests 600 seconds
+and the live idle service reports that value. That setting does not control the
+separate lock-screen blank timer: the installed lock service uses 10 seconds
+when the touch keypad is enabled. Wi-Fi is not provisioned.
+
+**Touch interaction diagnosis at that checkpoint (2026-11-19):** a local screenshot confirmed the
+lock glance rendered, but its swipe gesture did not respond. The separate
+10-second lock blank timer and delayed physical wake made the earlier short
+tests unreliable: `omarchy-shell lock wake` returns `ok` before the panel is
+visibly lit, and the lock deliberately consumes touches while `displayDark` is
+true and for a 400 ms post-wake guard. The user then tested on the unlocked
+home screen for several minutes. SPI IRQ counts and thousands of touch events
+confirmed the sensor and driver were active, while no UI controls responded.
+The kernel boot log reports Synaptics app firmware range `13440x29920`; the
+Komodo test overlay had incorrectly set `touchscreen-size-x/y` to the panel
+pixel size `1344x2992`. The driver applies those values to the advertised axis
+ranges but does not scale reported touch coordinates, leaving them about 10x
+out of bounds. Removed those two properties from
+`overlays/synaptics-touch-test.dtso` so the driver keeps its native firmware
+range. Removed the properties in `overlays/synaptics-touch-test.dtso`, rebuilt
+the five Android v4 boot images, and wrote only `boot_b`, `init_boot_b`,
+`vendor_boot_b`, `vendor_kernel_boot_b`, and `dtbo_b`. Each write was SHA-256
+verified; slot A and userdata were untouched. The phone rebooted and its USB
+network returned, but at this checkpoint the graphical session and touch fix
+were not yet verified: SSH key authentication was rejected and the owner saw a
+text console. This was later resolved; the following USB internet/GPU entry
+records the successful persistent GUI boot. The `lock-on-start` toggle was
+temporarily preserved as `lock-on-start.paused-for-touch-test`. No message or
+personal user data was read.
+
+The device port follows the repository's supported write path: slot-B boot
+images through `bin/omamobile flash|push`, and userdata only through
+`tools/install-phone`. Userdata is explicitly disposable and may be erased by
+the installer. Do not spend project time on stock recovery or data backups.
+The older read-only fastboot inventory and exact factory image remain useful
+historical facts, not prerequisites or gates for this experiment.
+
+## 2026-11-20 Wi-Fi host and driver probe
+
+At this checkpoint, the slot-B Wi-Fi host overlay brought the Komodo BCM4390 PCI function up as
+PCI `14e4:4438` (subsystem `14e4:4390`) with a Gen3 x1 link. An experimental
+Broadcom `bcmdhd` module was built in a private cache against the exact running
+kernel release; no proprietary blobs or module sources were added to this
+repository. Firmware and board calibration were copied from the local factory
+vendor image, with owner-only permissions.
+
+The first module probe reached `dhdpcie` attach, then failed its first 320 KiB
+coherent DMA ring allocation. The active test DT used `restricted-dma-pool`,
+which is for restricted streaming DMA and did not provide the driver's coherent
+allocation. The failed attach also exposed a Broadcom cleanup bug: it purged an
+RX skb queue before that queue had been initialized, causing a kernel NULL
+pointer oops. A guard for that failure path exists only in the disposable
+private driver build copy.
+
+Changed the test pool to `shared-dma-pool` plus `no-map`, kept its 16 MiB
+allocation below 4 GiB, and added `wifi-host-test` to the Komodo image overlay
+list. `bin/omamobile images` succeeded. `bin/omamobile push` wrote and
+read-back SHA-256 verified `boot_b`, `init_boot_b`, `vendor_boot_b`,
+`vendor_kernel_boot_b`, and `dtbo_b`; slot A and userdata were not written by
+that operation. The push tool did not observe a changed boot ID after its
+`reboot-to omamobile` request. A subsequent explicit `systemctl reboot` did
+reboot the phone, but at this checkpoint the laptop saw its `Komodo Omarchy
+RAM test` USB gadget, could ping the phone, and got TCP connection refused on
+SSH port 22. The coherent-pool overlay had not yet been tested at runtime, and
+Wi-Fi was not working. The root filesystem check result was unverified. The
+next entry records the subsequent recovery of the running GUI and USB SSH.
+
+At that checkpoint, access recovery was still pending. Preserve slot A; keep
+proprietary Wi-Fi firmware in private, owner-only staging until its driver and
+licensing/package path are resolved.
+
+## 2026-11-20 USB internet and GPU acceleration
+
+The phone is back in persistent Omarchy on slot B. The touch fix and USB
+networking are live. The laptop shares its Wi-Fi connection over an isolated
+USB network; firewall forwarding blocks access to the home LAN while allowing
+outbound internet. The phone's USB interface is configured persistently by the
+Komodo package's systemd-networkd file. A live `curl` from the phone to
+WhatsApp Web returned HTTP 200.
+The browser pairing page was opened for owner testing; no account was linked
+and no message content was viewed. The Pixel's internal Wi-Fi still does not
+work; this is internet over USB.
+
+Added `gpu-test` to the slot-B overlay set. It enables Komodo's Zumapro GPU
+and G3D clock controller, uses the ACPM paired GPU clock and only the 150 and
+302 MHz OPPs from the sibling Tegu bring-up, and blacklists Panthor autoload
+until the guarded service probes it. The first manual probe was run with
+`/dev/watchdog0` armed: Panthor bound, created `/dev/dri/renderD128`, identified
+the chip as Mali-G715, and loaded CSF firmware. The kernel also logged
+`_opp_set_regulators: no regulator (mali) found`, but initialization completed;
+no higher OPPs have been tested.
+
+Package `omamobile-device-komodo` 0.0.4 now installs the GPU startup unit,
+watchdog-guarded loader, UWSM hardware-rendering environment, and persistent
+USB network configuration. The service is enabled and active. On a subsequent
+boot it loaded Panthor before the graphical session, and Hyprland/QuickShell
+inherited `LIBGL_ALWAYS_SOFTWARE=0`, `QSG_RHI_BACKEND=opengl`, and
+`AQ_DRM_DEVICES=/dev/dri/card0`. The device reports the Komodo Mali GPU. In
+brief, idle samples Hyprland fell from the earlier 40-70% CPU observations to
+about 1-8%; QuickShell settled around 3-10%. These are live observations, not
+a controlled benchmark. The graphics session was restarted once and the
+WhatsApp Web pairing page reopened. The five slot-B boot images were
+read-back verified; slot A and userdata were not written.
+
+Package version 0.0.4 is a local experimental bring-up artifact; its source is
+not included in this PR because it still needs the repository's package
+README/test scaffolding and release review.
+
+## 2026-11-20 synthetic notification check
+
+Sent a local `notify-send` test with placeholder text and no WhatsApp account
+or message content. The notification appeared in the logged-in Omarchy session;
+the owner confirmed that the lock screen continued to report no notifications.
+The display did not wake for the test. This confirms desktop-session banners,
+not WhatsApp Web delivery, lock-screen notification support, or vibration.
+No real messages were accessed.
