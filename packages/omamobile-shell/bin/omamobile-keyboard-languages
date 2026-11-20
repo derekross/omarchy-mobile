@@ -23,11 +23,14 @@ the same evdev.xml), "layout+variant" for a variant.
 
 Layouts that can be added are the ones the keyboard has: the layouts in
 /usr/share/omamobile/squeekboard/keyboards/ (squeekboard's own, with our
-action row), not yet in the list. squeekboard's Emoji and Terminal overlays
+action row), not yet in the list. Japanese (romaji) is offered only while
+Japanese input is on (omamobile-ime's switch, ~/.config/omamobile/fcitx5):
+without it, it is the US keyboard under a Japanese name. squeekboard's Emoji and Terminal overlays
 are not sources and can't be chosen from outside squeekboard (docs/VOICE-PLAN.md,
 "The language sheet").
 
-OMAMOBILE_XKB_RULES and OMAMOBILE_KEYBOARDS_DIR point elsewhere for tests."""
+OMAMOBILE_XKB_RULES, OMAMOBILE_KEYBOARDS_DIR and XDG_CONFIG_HOME point
+elsewhere for tests."""
 
 import ast
 import glob
@@ -43,6 +46,10 @@ RULES = os.environ.get("OMAMOBILE_XKB_RULES", "/usr/share/X11/xkb/rules/evdev.xm
 KEYBOARDS = os.environ.get("OMAMOBILE_KEYBOARDS_DIR", "/usr/share/omamobile/squeekboard/keyboards")
 # What squeekboard shows with no sources at all (src/state.rs, Application::new)
 FALLBACK = "us"
+# Layouts only for Japanese input (omamobile-ime), and its switch
+IME_ONLY = {"jp+romaji"}
+IME_SWITCH = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+                          "omamobile", "fcitx5")
 
 
 def gsettings(*args):
@@ -106,6 +113,8 @@ def carried():
         name = os.path.basename(path)[:-len(".yaml")]
         if not name.endswith("_wide"):
             out.add(name)
+    if not os.path.exists(IME_SWITCH):
+        out -= IME_ONLY
     return out
 
 

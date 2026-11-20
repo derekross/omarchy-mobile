@@ -33,9 +33,9 @@ cat >"$t/evdev.xml" <<'XML'
   </layoutList>
 </xkbConfigRegistry>
 XML
-for f in us us_wide de de_wide fr fr_wide us+colemak us+colemak_wide; do : >"$t/keyboards/$f.yaml"; done
+for f in us us_wide de de_wide fr fr_wide us+colemak us+colemak_wide jp+romaji jp+romaji_wide; do : >"$t/keyboards/$f.yaml"; done
 langs() { env T="$t" PATH="$t/fakes:$PATH" OMAMOBILE_XKB_RULES="$t/evdev.xml" OMAMOBILE_KEYBOARDS_DIR="$t/keyboards" \
-  python3 -B bin/omamobile-keyboard-languages "$@"; }
+  XDG_CONFIG_HOME="$t/config" python3 -B bin/omamobile-keyboard-languages "$@"; }
 sources() { cat "$t/sources"; }
 
 echo "[('xkb', 'us'), ('xkb', 'de')]" >"$t/sources"
@@ -48,6 +48,14 @@ assert [(r["name"], r["label"]) for r in d["sources"]] == [("us", "English (US)"
 assert [(r["name"], r["label"]) for r in d["available"]] == [("us+colemak", "English (Colemak)"), ("fr", "French")], d
 ' || fail "list: squeekboard's names, sorted, the current one, the layouts to add"
 pass "the list names each language as squeekboard does"
+
+mkdir -p "$t/config/omamobile"; : >"$t/config/omamobile/fcitx5"
+langs list | python3 -c '
+import json, sys
+assert "jp+romaji" in [r["name"] for r in json.load(sys.stdin)["available"]]
+' || fail "Japanese (romaji) is offered while Japanese input is on"
+rm "$t/config/omamobile/fcitx5"
+pass "Japanese (romaji) is offered only while Japanese input is on"
 
 langs set de
 [[ $(sources) == "[('xkb', 'de'), ('xkb', 'us')]" ]] || fail "set moves the layout to the front: $(sources)"
