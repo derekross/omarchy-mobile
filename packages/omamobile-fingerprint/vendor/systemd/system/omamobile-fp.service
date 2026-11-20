@@ -15,12 +15,17 @@
 [Unit]
 Description=Omarchy Mobile fingerprint (vendor HAL and bridge)
 Documentation=file:///usr/share/doc/omamobile/FINGERPRINT-PLAN.md
-# Trusty comes up with the AoC (omamobile-aoc-start loads trusty_*)
+# Trusty comes up with the AoC (omamobile-aoc-start loads trusty_*) where
+# there is one; on a phone without that service (the Pixel 7) udev loads
+# trusty_* from the DT, and /dev/trusty-ipc-dev0 can appear after this unit
+# is reached: ExecCondition below waits for it.
 After=omamobile-aoc.service systemd-modules-load.service
 ConditionPathExists=/usr/lib/omamobile-fp/root
-ConditionPathExists=/dev/trusty-ipc-dev0
 
 [Service]
+# Up to 10 s for Trusty's IPC device. Without it the unit is skipped, as a
+# condition would skip it, not failed, and no start of this boot is spent.
+ExecCondition=/bin/sh -c 'for i in $(seq 50); do [ -c /dev/trusty-ipc-dev0 ] && exit 0; sleep 0.2; done; echo "no /dev/trusty-ipc-dev0"; exit 1'
 # The sensor's rail is on pmic-2 (S2MPG13, bound through sec_acpm) and its
 # driver is goodix_fp; both are blacklisted from autoload, so load them
 # here. Loading before the regulator core's cleanup of unused rails (about
