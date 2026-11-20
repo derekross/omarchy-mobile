@@ -15,10 +15,12 @@
 # keymap there), but squeekboard no longer sees text fields: double-tap the
 # home strip to show or hide it. Mozc converts only while the keyboard's
 # language (the globe key) is Japanese (romaji), jp+romaji: a copy of the US
-# layout, since jp.yaml's kana views need more keycodes than a keymap can
-# carry. With any other language fcitx5 passes keys through as typed (a
+# terminal layout (Esc, Tab, Ctrl and the arrows in every app, since
+# squeekboard no longer learns a field is a terminal), as jp.yaml's kana views
+# need more keycodes than a keymap can carry. With any other language fcitx5 passes keys through as typed (a
 # password in English is safe). "on" adds that language to the keyboard's
-# list and "off" takes it out again. Space converts, Enter commits; candidates
+# list and "off" takes it out again. English gets the US terminal layout
+# while it is on (us_layouts). Space converts, Enter commits; candidates
 # appear in fcitx5's own window, which takes no taps. The switch is
 # ~/.config/omamobile/fcitx5 (the drop-in on omarchy-fcitx5.service reads
 # it too).
@@ -34,19 +36,28 @@ REMOTE=${OMAMOBILE_FCITX5_REMOTE:-fcitx5-remote}
 # How long session waits for squeekboard, and for fcitx5 to answer, in seconds
 OSK_WAIT=${OMAMOBILE_IME_OSK_WAIT:-20}
 REMOTE_WAIT=${OMAMOBILE_IME_REMOTE_WAIT:-10}
-# squeekboard is restarted once per login session (and again after "on")
+# squeekboard is restarted once per login session ("on" restarts it itself)
 RESTARTED=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/omamobile-ime-osk-restarted
 SCHEMA=org.gnome.desktop.input-sources
+# squeekboard's layouts, as omamobile-setup-user links them
+KEYBOARDS=${XDG_DATA_HOME:-$HOME/.local/share}/squeekboard/keyboards
+SHARE=/usr/share/omamobile/squeekboard/keyboards
 
 die() { echo "omamobile-ime: $*" >&2; exit 1; }
+
+# Stop squeekboard (OMAMOBILE_IME_OSK_STOP runs instead, for tests).
+stop_squeekboard() {
+  if [[ -n ${OMAMOBILE_IME_OSK_STOP:-} ]]; then "$OMAMOBILE_IME_OSK_STOP"; return; fi
+  pkill -x squeekboard 2>/dev/null || true
+  for _ in $(seq 30); do pgrep -x squeekboard >/dev/null || break; sleep 0.1; done
+}
 
 # squeekboard as Omarchy's autostart starts it, through Hyprland's exec:
 # started straight from a script it didn't come back (omamobile-keyboard-theme).
 # OMAMOBILE_IME_OSK_RESTART runs instead, for tests.
 restart_squeekboard() {
   if [[ -n ${OMAMOBILE_IME_OSK_RESTART:-} ]]; then "$OMAMOBILE_IME_OSK_RESTART"; return; fi
-  pkill -x squeekboard 2>/dev/null || true
-  for _ in $(seq 30); do pgrep -x squeekboard >/dev/null || break; sleep 0.1; done
+  stop_squeekboard
   local sig=${HYPRLAND_INSTANCE_SIGNATURE:-}
   [[ -n $sig ]] || sig=$(ls "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr" 2>/dev/null | head -1)
   [[ -n $sig ]] || die "no Hyprland session to start squeekboard in"
@@ -126,6 +137,19 @@ remove_language() {
   "$GSETTINGS" set $SCHEMA sources "$new"
 }
 
+# With the IME on squeekboard never learns a field is a terminal, so English
+# gets the US terminal layout too (Esc, Tab, Ctrl and the arrows): "on" points
+# the user's us.yaml links at terminal/, "off" points them back. Only our own
+# links are changed; a layout file of the user's own is left alone.
+us_layouts() {
+  local from=$1 to=$2 w
+  for w in "" _wide; do
+    [[ $(readlink "$KEYBOARDS/us$w.yaml" 2>/dev/null) == "$SHARE/${from}us$w.yaml" ]] &&
+      ln -sfn "$SHARE/${to}us$w.yaml" "$KEYBOARDS/us$w.yaml"
+  done
+  return 0
+}
+
 status() {
   local state=off mozc=no
   [[ -e $FLAG ]] && state=on
@@ -142,14 +166,24 @@ case ${1:-} in
     write_config
     add_language
     mkdir -p "${FLAG%/*}"; : > "$FLAG"
-    rm -f "$RESTARTED"
+    # Hyprland gives the input method to whoever asks first and fcitx5 asks
+    # once, when it starts: started while squeekboard holds it, fcitx5 never
+    # gets it, and squeekboard types straight into the field. So squeekboard
+    # is stopped first and started again once fcitx5 answers.
+    stop_squeekboard
+    us_layouts "" terminal/
     "$SYSTEMCTL" --user restart omarchy-fcitx5.service
+    for _ in $(seq $((REMOTE_WAIT * 5))); do "$REMOTE" >/dev/null 2>&1 && break; sleep 0.2; done
+    sleep "${OMAMOBILE_IME_SETTLE:-1}"
+    restart_squeekboard
+    : > "$RESTARTED"
     "$SYSTEMCTL" --user restart omamobile-ime.service
     echo "Japanese input on: pick Japanese (romaji) with the globe key; double-tap the home strip for the keyboard"
     ;;
   off)
     rm -f "$FLAG" "$RESTARTED"
     remove_language
+    us_layouts terminal/ ""
     "$SYSTEMCTL" --user stop omamobile-ime.service omarchy-fcitx5.service 2>/dev/null || true
     restart_squeekboard
     echo "Japanese input off"

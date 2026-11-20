@@ -52,6 +52,7 @@ def keysym_ok(sym):
 
 HAND_MADE = {"squeekboard/keyboards/terminal/us.yaml", "squeekboard/keyboards/terminal/us_wide.yaml",
              # Japanese (romaji) for omamobile-ime: copies of the two above
+             "squeekboard/keyboards/jp+romaji.yaml", "squeekboard/keyboards/jp+romaji_wide.yaml",
              "squeekboard/keyboards/terminal/jp+romaji.yaml", "squeekboard/keyboards/terminal/jp+romaji_wide.yaml"}
 GENERATED = "# squeekboard/generate (change the generator, not this file)."
 paths = sorted(glob.glob("squeekboard/keyboards/**/*.yaml", recursive=True))

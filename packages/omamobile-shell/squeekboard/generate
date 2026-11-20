@@ -57,7 +57,8 @@ HEADER_END = "# omamobile-setup-user links it into ~/.local/share/squeekboard/ke
 GLOBE_UPSTREAM = 'action: "show_prefs"'
 GLOBE = 'keysym: "XF86MediaLanguageMenu"'
 HAND_MADE = {"terminal/us.yaml", "terminal/us_wide.yaml",
-             # Japanese (romaji) for omamobile-ime: copies of the US layouts
+             # Japanese (romaji) for omamobile-ime: copies of the US terminal
+             # layouts (with the IME on, squeekboard never sees a terminal)
              "jp+romaji.yaml", "jp+romaji_wide.yaml",
              "terminal/jp+romaji.yaml", "terminal/jp+romaji_wide.yaml"}
 # Greek (gr, gr_wide): a row of its own under the action row with the accented
