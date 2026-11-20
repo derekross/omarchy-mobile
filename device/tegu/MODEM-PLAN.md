@@ -2070,7 +2070,8 @@ GeoClue as started only at the shutdown. Each time the request came 16 to
 20 s into the boot, while the session and its GeoClue agent were starting.
 It is not the GNSS path, and it is not the 9a's alone.
 
-It is a deadlock in GLib's one-time setups. The backtraces of two stalled
+It is a deadlock in GLib's one-time setups, known upstream as GLib issue
+4078 (<https://gitlab.gnome.org/GNOME/glib/-/issues/4078>). The backtraces of two stalled
 starts show the main thread in `g_vfs_get_default()`, holding the VFS's
 init and waiting for GIO's default-modules lock, and a pool thread in
 `g_proxy_resolver_get_default()`, holding that lock while libproxy's
