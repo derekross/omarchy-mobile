@@ -28,26 +28,37 @@ private slots:
             QVERIFY(f.open(QIODevice::WriteOnly));
             f.write("printf '%s\\n' '" + it.value() + "'\n");
         }
+        // keyboard.sh stub: get, list and set answer as the backend does, and each call is logged
+        QFile k(stubs("on") + "/keyboard.sh");
+        QVERIFY(k.open(QIODevice::WriteOnly));
+        k.write("printf '%s\\n' \"$*\" >> \"$(dirname \"$0\")/keyboard.log\"\n"
+                "case $1 in\n"
+                "list) echo '{\"layouts\":[{\"layout\":\"us\",\"name\":\"English (US)\"},{\"layout\":\"gr\",\"name\":\"Greek\"}],"
+                "\"switchKeys\":[{\"option\":\"alt_shift\",\"name\":\"Alt+Shift\"},{\"option\":\"default\",\"name\":\"Omarchy default\"}]}' ;;\n"
+                "get) echo '{\"layouts\":[{\"layout\":\"us\",\"variant\":\"\"}],\"switchKey\":\"default\",\"active\":0,\"override\":\"\"}' ;;\n"
+                "set) echo '{\"layouts\":[{\"layout\":\"us\",\"variant\":\"\"},{\"layout\":\"gr\",\"variant\":\"\"}],"
+                "\"switchKey\":\"default\",\"active\":0,\"override\":\"\",\"note\":\"us goes first\"}' ;;\n"
+                "esac\n");
     }
     void probeShowsTheBatteryRowOnlyWhenTheBackendSaysAvailable() {
         Backend on;
         on.setBackendDir(stubs("on"));
-        QCOMPARE(on.rows().size(), 2);
-        QTRY_COMPARE(on.rows().size(), 3);
+        QCOMPARE(on.rows().size(), 3);
+        QTRY_COMPARE(on.rows().size(), 4);
         Backend off;
         off.setBackendDir(stubs("off"));
         off.setToolAvailable("charge", true);
-        QTRY_COMPARE(off.rows().size(), 2); // the probe's answer clears it
+        QTRY_COMPARE(off.rows().size(), 3); // the probe's answer clears it
     }
     void navigationRejectsUnknownAndHiddenActions() {
         Backend backend;
         backend.setBackendDir(stubs("off"));
         QVERIFY(backend.catalogProblems().isEmpty());
-        QCOMPARE(backend.rows().size(), 2); // the Battery row waits for the charge backend, absent here
+        QCOMPARE(backend.rows().size(), 3); // the Battery row waits for the charge backend, absent here
         backend.setToolAvailable("charge", true);
-        QCOMPARE(backend.rows().size(), 3);
+        QCOMPARE(backend.rows().size(), 4);
         backend.setToolAvailable("charge", false);
-        QCOMPARE(backend.rows().size(), 2);
+        QCOMPARE(backend.rows().size(), 3);
         QVERIFY(!backend.navigate("recording"));
         backend.activate("arbitrary-command");
         QCOMPARE(backend.page(), QString("root"));
@@ -57,6 +68,45 @@ private slots:
         QCOMPARE(backend.page(), QString("about"));
         backend.back();
         QCOMPARE(backend.page(), QString("root"));
+    }
+    void keyboardPageGoesBackToRoot() {
+        Backend backend;
+        QVERIFY(backend.navigate("keyboard"));
+        QCOMPARE(backend.page(), QString("keyboard"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("root"));
+    }
+    void keyboardPageLoadsAgainstTheStubRunner() {
+        ActionRunner runner;
+        runner.setBackendDir(stubs("on"));
+        Backend backend;
+        backend.setBackendDir(stubs("on"));
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty("backend", &backend);
+        engine.rootContext()->setContextProperty("actions", &runner);
+        QQmlComponent component(&engine, QUrl("qrc:/KeyboardPage.qml"));
+        std::unique_ptr<QObject> page(component.create());
+        QVERIFY2(page, qPrintable(component.errorString()));
+        QTRY_VERIFY(!page->property("busy").toBool());
+        QTRY_COMPARE(page->property("available").toList().size(), 2);
+        QCOMPARE(page->property("layouts").toStringList(), QStringList{"us"});
+        QCOMPARE(page->property("switchKey").toString(), QString("default"));
+        // the page sends what the owner picked; the backend's Latin rule answers, the page shows its note
+        QMetaObject::invokeMethod(page.get(), "save", QVariant(QStringList{"gr", "us"}));
+        QTRY_COMPARE(page->property("layouts").toStringList(), (QStringList{"us", "gr"}));
+        QCOMPARE(page->property("status").toString(), QString("us goes first"));
+        QFile log(stubs("on") + "/keyboard.log");
+        QVERIFY(log.open(QIODevice::ReadOnly));
+        QVERIFY(log.readAll().contains("set layouts gr,us\n"));
+        // an error is shown and the state is read again
+        QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"error", "saved, applies at next login"}}));
+        QTRY_VERIFY(!page->property("busy").toBool());
+        QCOMPARE(page->property("status").toString(), QString("saved, applies at next login"));
+        QCOMPARE(page->property("layouts").toStringList(), QStringList{"us"});
+        // an input.lua override locks the layout list
+        QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"layouts", QVariantList{QVariantMap{{"layout", "us"}, {"variant", ""}}}},
+            {"switchKey", "custom"}, {"override", "input.lua sets its own layouts"}}));
+        QVERIFY(page->property("status").toString().startsWith("input.lua sets its own layouts"));
     }
     void displayPageGoesBackToRoot() {
         Backend backend;

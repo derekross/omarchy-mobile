@@ -18,6 +18,13 @@
         "requires": "charge"
       },
       {
+        "id": "keyboard",
+        "title": "Keyboard",
+        "detail": "Layouts and the switch key",
+        "icon": "keyboard",
+        "page": "keyboard"
+      },
+      {
         "id": "about",
         "title": "About this device",
         "detail": "System, software and storage",
@@ -36,6 +43,10 @@
   },
   "battery": {
     "title": "Battery",
+    "rows": []
+  },
+  "keyboard": {
+    "title": "Keyboard",
     "rows": []
   }
 }
