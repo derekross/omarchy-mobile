@@ -27,6 +27,7 @@ fi
 for f in bionic/prebuilt/stubs/*.so; do install -Dm644 "$f" "$v/stubs/${f##*/}"; done
 for f in vendor/systemd/system/*; do install -Dm644 "$f" "$d/usr/lib/systemd/system/${f##*/}"; done
 install -Dm644 vendor/systemd/user/omamobile-geoclue-agent.service "$d/usr/lib/systemd/user/omamobile-geoclue-agent.service"
+install -Dm644 vendor/systemd/geoclue.service.d/10-omamobile-gnss.conf "$d/usr/lib/systemd/system/geoclue.service.d/10-omamobile-gnss.conf"
 # geoclue's own XDG autostart of its demo agent would run it at every login,
 # Location on or off, and then our agent unit exits as a second instance:
 # mask the unit systemd-xdg-autostart-generator makes of it (generator.late
