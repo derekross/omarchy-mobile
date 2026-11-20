@@ -2,8 +2,8 @@
 /*
  * Experimental USB2 peripheral/gadget path for Komodo only.
  *
- * Not selected by any device descriptor and not ready to flash. The DWC3/eUSB2
- * block setup follows mainline Tegu's Zumapro setup. HSI2C6, gpp12-0/1 and the
+ * The DWC3/eUSB2 block setup follows mainline Tegu's Zumapro setup. HSI2C6,
+ * gpp12-0/1 and the
  * MAX77759 interrupt at gpa8-3 follow Google's Caimito/Zumapro Android 16
  * source and Tegu's mainline DTS; validate these against the exact Komodo live
  * DT before enabling this overlay. The S2MPG14 PMIC interrupt (SPI 74) is a
@@ -14,6 +14,19 @@
  */
 /dts-v1/;
 /plugin/;
+
+/* ACPM provides the PMIC regulators that the USB2 PHY waits for. */
+&ap2apm_mailbox {
+	status = "okay";
+};
+
+&apm_sram {
+	status = "okay";
+};
+
+&cmu_apm {
+	status = "okay";
+};
 
 &cmu_hsi0 {
 	status = "okay";
@@ -124,6 +137,12 @@
 		wakeup-source;
 
 		regulators {
+				touch_avdd: ldo4m {
+					regulator-name = "touch-avdd";
+					regulator-min-microvolt = <3300000>;
+					regulator-max-microvolt = <3300000>;
+				};
+
 			eusb_vdd: ldo8m {
 				regulator-name = "eusb-vdd";
 			};
@@ -131,6 +150,12 @@
 			eusb_vdda12: ldo9m {
 				regulator-name = "eusb-vdda12";
 			};
+
+				touch_vdd: ldo25m {
+					regulator-name = "touch-vdd";
+					regulator-min-microvolt = <1800000>;
+					regulator-max-microvolt = <1800000>;
+				};
 		};
 	};
 };

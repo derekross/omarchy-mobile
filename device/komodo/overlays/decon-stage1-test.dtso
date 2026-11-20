@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* Measure the live Komodo DECON handoff without KMS or panel control. */
+/dts-v1/;
+/plugin/;
+
+&{/reserved-memory} {
+	komodo_boot_fb: framebuffer@fac00000 {
+		reg = <0x0 0xfac00000 (1344 * 2992 * 4)>;
+	no-map;
+	};
+};
+
+&decon0 {
+	compatible = "google,zumapro-komodo-decon", "google,zumapro-decon";
+	memory-region = <&komodo_boot_fb>;
+	memory-region-names = "boot-framebuffer";
+	status = "okay";
+};
