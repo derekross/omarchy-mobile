@@ -165,6 +165,23 @@ def stops_at_once():
         assert p.returncode == 0
 
 
+def wait_for_handler(p):
+    """Wait until the child has installed its SIGTERM handler (bit 15 of the
+    caught-signals mask in /proc/<pid>/status), so a stop never lands in the
+    interpreter's start-up, where the default action would kill it."""
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        try:
+            for line in open("/proc/%d/status" % p.pid):
+                if line.startswith("SigCgt:") and int(line.split()[1], 16) & (1 << (signal.SIGTERM - 1)):
+                    return
+        except OSError:
+            pass
+        assert p.poll() is None, "the child ended before it caught SIGTERM: %r" % p.returncode
+        time.sleep(0.005)
+    raise AssertionError("the child never installed its SIGTERM handler")
+
+
 def stops_whenever():
     """A stop that lands while the loop only waits (silence coming in): thirty
     of them at slightly different moments, none taking longer than the next
@@ -178,7 +195,12 @@ def stops_whenever():
         for i in range(30):
             p = subprocess.Popen([sys.executable, tool, "--from", quiet], stdin=subprocess.DEVNULL, env=env,
                                  stdout=subprocess.PIPE)
-            time.sleep(0.25 + 0.011 * i)
+            try:
+                wait_for_handler(p)
+                time.sleep(0.25 + 0.011 * i)
+            except BaseException:
+                p.kill()
+                raise
             t0 = time.time()
             p.send_signal(signal.SIGTERM)
             try:
