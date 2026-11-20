@@ -3,6 +3,8 @@ post_install() {
   echo "omamobile-fingerprint: omamobile-fp starts at boot once Google's files are in"
   echo "  /usr/lib/omamobile-fp/root (tools/phone-provision). Its first start copies"
   echo "  mfg_data and persist:/ss read-only and writes Trusty's secure storage."
+  echo "  On a phone without an automatic first start (any but the 7 Pro, 9a and 7)"
+  echo "  that first start waits for the owner: sudo touch /etc/omamobile/fingerprint-first-start"
 }
 post_upgrade() {
   systemctl daemon-reload 2>/dev/null || true
