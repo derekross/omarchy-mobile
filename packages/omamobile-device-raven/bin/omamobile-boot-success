@@ -6,9 +6,13 @@
 #
 # Copied from omamobile-device-cheetah: raven has the same gs-common devinfo
 # (checked with omamobile-bootctl dump). devinfo sits on a bootloader LUN (sdd)
-# that the storage guard keeps read-only. Open exactly that disk and partition for the one write, then
-# close them again. omamobile-bootctl only ever changes the slot flag bytes
+# that the storage guard keeps read-only. The guard removes the LUN's whole-disk node, leaves the disk's
+# own flag clear and sets each partition's own flag (#252), so clearing
+# devinfo's own flag opens devinfo alone, for the one write; it is set
+# again afterwards. omamobile-bootctl only ever changes the slot flag bytes
 # (0x30-0x37) and verifies the whole partition afterwards.
+# bin/omamobile push and flash look for the next line; keep it exact.
+# guard: partition flags (#252)
 set -euo pipefail
 
 slot=$(sed -n 's/^androidboot.slot_suffix = "_\([ab]\)"$/\1/p' /proc/bootconfig)
@@ -19,16 +23,37 @@ for s in /sys/block/sd*/sd*; do
   grep -qx PARTNAME=devinfo "$s/uevent" 2>/dev/null && dev=/dev/${s##*/}
 done
 [[ -n "$dev" ]] || { echo "devinfo partition not found"; exit 1; }
-disk=/dev/$(basename "$(dirname "$(readlink -f "/sys/class/block/${dev#/dev/}")")")
+part=${dev#/dev/}
+disk=$(basename "$(dirname "$(readlink -f "/sys/class/block/$part")")")
+[[ $disk == sd* && $disk != "$part" && -r /sys/block/$disk/$part/ro ]] \
+  || { echo "devinfo ($part) is not a partition of a UFS LUN"; exit 1; }
 
 if omamobile-bootctl dump "$dev" | sed -n "/^slot $slot /,/retry-count/p" | grep -q 'successful:  yes'; then
   echo "slot $slot already marked successful"
   exit 0
 fi
 
-relock() { blockdev --setro "$dev"; blockdev --setro "$disk"; }
-trap relock EXIT
-blockdev --setrw "$disk"
-blockdev --setrw "$dev"
+part_ro() { cat "/sys/block/$disk/$part/ro"; }
+if [[ $(<"/sys/block/$disk/ro") == 0 ]]; then
+  # The guard as it is: only devinfo's own flag is cleared.
+  relock() {
+    blockdev --setro "$dev"
+    [[ $(part_ro) == 1 ]] || echo "WARNING: $dev ($part) is still writable"
+  }
+  trap relock EXIT
+  blockdev --setrw "$dev"
+else
+  # An initramfs from before #252 still sets the disk's own flag, which
+  # also keeps devinfo read-only: open the disk too, as before, until the
+  # phone boots an initramfs with the new guard.
+  relock() {
+    blockdev --setro "$dev"; blockdev --setro "/dev/$disk"
+    [[ $(part_ro) == 1 ]] || echo "WARNING: $dev ($part) is still writable"
+  }
+  trap relock EXIT
+  blockdev --setrw "/dev/$disk"
+  blockdev --setrw "$dev"
+fi
+[[ $(part_ro) == 0 ]] || { echo "$dev ($part) did not become writable"; exit 1; }
 omamobile-bootctl mark-successful "$dev" "$slot" --i-understand
 echo "slot $slot marked successful"

@@ -10,6 +10,16 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 for script in bin/*; do bash -n "$script" || fail "$script parses"; done
 pass "scripts parse"
 
+# The boot-success marker is cheetah's, comments aside; run cheetah's test
+# on it when the cheetah package is beside this one (#252)
+if [[ -x ../omamobile-device-cheetah/test/boot-success ]]; then
+  cmp -s <(grep -v '^#' bin/omamobile-boot-success) <(grep -v '^#' ../omamobile-device-cheetah/bin/omamobile-boot-success) \
+    || fail "omamobile-boot-success drifted from the cheetah package"
+  ../omamobile-device-cheetah/test/boot-success "$PWD/bin/omamobile-boot-success" > "$tmp/boot-success.log" 2>&1 \
+    || { cat "$tmp/boot-success.log"; fail "cheetah's test/boot-success on raven's marker"; }
+  pass "the boot-success marker matches cheetah's and clears only devinfo's own flag"
+fi
+
 ./build "$tmp/build" || fail "C tools compile"
 pass "C tools compile"
 

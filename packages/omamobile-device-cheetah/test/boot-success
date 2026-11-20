@@ -1,0 +1,160 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-boot-success against a fake root (no phone, nothing compiled).
+# Each "block device" is a file, each read-only flag a file in sysfs that
+# follows the kernel's rule (bdev_read_only: a partition is read-only when
+# its own flag or its disk's flag is set), and blockdev and omamobile-bootctl
+# are stubs; the bootctl stub refuses to write a devinfo that reads
+# read-only, as the kernel would.
+#
+# With the storage guard of #252 (whole-disk nodes removed, disk flags
+# clear, every partition's own flag set), the marker clears devinfo's own
+# flag alone and never a disk's; with an initramfs from before it (the disk
+# flag set, its node present) it opens the disk too, as it always did.
+#
+#   test/boot-success [SCRIPT]   default bin/omamobile-boot-success
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+script=${1:-bin/omamobile-boot-success}
+t=$(mktemp -d); trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
+R=$t/r
+
+# bin/omamobile push and flash recognise a marker that knows the guard by
+# this exact line (#252)
+grep -qxF '# guard: partition flags (#252)' "$script" || fail "the marker carries the guard line push and flash look for"
+if [[ -f ../../bin/omamobile ]]; then
+  grep -qxF "MARKER_TAG='# guard: partition flags (#252)'" ../../bin/omamobile || fail "bin/omamobile looks for the same line"
+fi
+pass "the marker carries the line push and flash look for"
+
+# The marker with its paths pointed into $R
+sed -e "s|/proc/bootconfig|$R/proc/bootconfig|g" -e "s|/sys/|$R/sys/|g" -e "s|/dev/|$R/dev/|g" \
+    "$script" > "$t/marker"
+[[ $(grep -c "$R" "$t/marker") -ge 4 ]] || fail "the marker's paths were redirected"
+
+mkdir -p "$t/bin"
+# blockdev --setro|--setrw NODE: fails on a missing node, as the real one
+# does; sets the node's own flag, then rewrites every sysfs ro file.
+cat > "$t/bin/blockdev" <<EOF
+#!/bin/bash
+R=$R
+case \$1 in --setro) v=1 ;; --setrw) v=0 ;; *) exit 1 ;; esac
+[[ -e \$2 ]] || { echo "blockdev: cannot open \$2: No such file or directory" >&2; exit 1; }
+n=\${2##*/}
+echo "\$1 \$n" >> "\$R/blockdev.log"
+echo \$v > "\$R/own/\$n"
+for d in "\$R"/sys/block/*; do
+  dn=\${d##*/}; echo "\$(<"\$R/own/\$dn")" > "\$d/ro"
+  for p in "\$d"/sd*; do
+    [[ -d \$p ]] || continue
+    pn=\${p##*/}
+    if [[ \$(<"\$R/own/\$pn") == 1 || \$(<"\$R/own/\$dn") == 1 ]]; then echo 1; else echo 0; fi > "\$p/ro"
+  done
+done
+EOF
+# omamobile-bootctl dump|mark-successful DEV SLOT: the slot's state is a
+# word in the device file; a write needs the device to read writable.
+cat > "$t/bin/omamobile-bootctl" <<EOF
+#!/bin/bash
+R=$R
+n=\${2##*/}
+case \$1 in
+  dump)
+    printf 'slot a \nsuccessful:  yes\nretry-count: 3\nslot b \nsuccessful:  %s\nretry-count: 3\n' "\$(<"\$2")" ;;
+  mark-successful)
+    ro=\$(cat "\$R"/sys/block/*/"\$n"/ro)
+    [[ \$ro == 0 ]] || { echo "write \$2: Operation not permitted" >&2; exit 1; }
+    echo "mark \$n" >> "\$R/blockdev.log"
+    echo yes > "\$2" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$t/bin/blockdev" "$t/bin/omamobile-bootctl"
+cp -p "$t/bin/blockdev" "$t/bin/omamobile-bootctl" "$t/"
+stubs() { cp -p "$t/blockdev" "$t/omamobile-bootctl" "$t/bin/"; }  # undo a case's change
+
+# A gs201-shaped layout: sda (main LUN), sdd (devinfo, pinfo, mfg_data).
+# $1 new: the guard of #252; old: the guard from before it.
+fresh() {
+  rm -rf "$R"; mkdir -p "$R/proc" "$R/dev" "$R/own" "$R/sys/class/block"
+  printf 'androidboot.slot_suffix = "_b"\n' > "$R/proc/bootconfig"
+  : > "$R/blockdev.log"
+  local d p n
+  for d in sda sdd; do
+    mkdir -p "$R/sys/block/$d"; echo 0 > "$R/own/$d"
+  done
+  n=0
+  for p in sda:persist sda:userdata sdd:devinfo sdd:pinfo sdd:mfg_data; do
+    d=${p%%:*} n=$((n + 1))
+    mkdir -p "$R/sys/block/$d/$d$n"
+    printf 'PARTN=%s\nPARTNAME=%s\n' "$n" "${p#*:}" > "$R/sys/block/$d/$d$n/uevent"
+    echo 1 > "$R/own/$d$n"
+    [[ ${p#*:} == userdata ]] && echo 0 > "$R/own/$d$n"
+    ln -s "../../block/$d/$d$n" "$R/sys/class/block/$d$n"
+    echo no > "$R/dev/$d$n"
+  done
+  if [[ $1 == old ]]; then
+    echo 1 > "$R/own/sdd"; : > "$R/dev/sdd"
+  fi
+  # write the sysfs ro files from the own flags
+  PATH="$t/bin:$PATH" blockdev --setro "$R/dev/sda1"; : > "$R/blockdev.log"
+}
+run() { PATH="$t/bin:$PATH" bash "$t/marker" > "$t/out" 2>&1; }
+ro() { cat "$R"/sys/block/*/"$1"/ro 2>/dev/null || cat "$R/sys/block/$1/ro"; }
+
+fresh new
+run || { cat "$t/out"; fail "the marker marks slot b under the new guard"; }
+[[ $(<"$R/dev/sdd3") == yes ]] || fail "devinfo was written"
+[[ $(<"$R/blockdev.log") == $'--setrw sdd3\nmark sdd3\n--setro sdd3' ]] \
+  || fail "only devinfo's own flag was cleared, and set again (log: $(tr '\n' ' ' < "$R/blockdev.log"))"
+[[ $(ro sdd) == 0 && $(ro sdd3) == 1 && $(ro sdd4) == 1 && $(ro sdd5) == 1 && $(ro sda1) == 1 ]] \
+  || fail "devinfo is read-only again and nothing else changed"
+[[ ! -e $R/dev/sdd ]] || fail "no whole-disk node was made"
+pass "new guard: devinfo's own flag alone is cleared for the write and set again; no disk flag is touched"
+
+run || fail "a second run succeeds"
+grep -q 'already marked successful' "$t/out" || fail "a marked slot is left alone"
+[[ $(<"$R/blockdev.log") == $'--setrw sdd3\nmark sdd3\n--setro sdd3' ]] || fail "a marked slot clears no flag"
+pass "a slot already marked: no flag is touched"
+
+fresh old
+run || { cat "$t/out"; fail "the marker marks slot b under the old guard"; }
+[[ $(<"$R/dev/sdd3") == yes ]] || fail "devinfo was written (old guard)"
+[[ $(<"$R/blockdev.log") == $'--setrw sdd\n--setrw sdd3\nmark sdd3\n--setro sdd3\n--setro sdd' ]] \
+  || fail "old guard: the disk and devinfo opened and closed as before (log: $(tr '\n' ' ' < "$R/blockdev.log"))"
+[[ $(ro sdd) == 1 && $(ro sdd3) == 1 ]] || fail "old guard: the disk and devinfo are read-only again"
+pass "old guard (disk flag set): the disk and devinfo are opened and closed again, as before"
+
+# A devinfo whose flag won't clear: nothing written, and the reason said
+fresh new
+sed -i 's#^echo \$v > #[[ $n == sdd3 \&\& $v == 0 ]] || echo $v > #' "$t/bin/blockdev"
+st=0; run || st=$?
+[[ $st != 0 && $(<"$R/dev/sdd3") == no ]] || fail "a devinfo that stays read-only is not written (exit $st)"
+grep -q 'did not become writable' "$t/out" || { cat "$t/out"; fail "the marker says why"; }
+pass "a devinfo flag that won't clear: nothing written, the marker fails and says why"
+stubs
+
+# The write fails: devinfo is still set read-only again
+fresh new
+sed -i 's|^    echo yes > "\$2" ;;|    exit 1 ;;|' "$t/bin/omamobile-bootctl"
+st=0; run || st=$?
+[[ $st != 0 && $(ro sdd3) == 1 && $(ro sdd) == 0 ]] || fail "a failed write still sets devinfo read-only again (exit $st)"
+pass "a failed write: devinfo is set read-only again"
+stubs
+
+# devinfo that isn't on a LUN's partition list is refused before any flag
+fresh new
+rm "$R/sys/class/block/sdd3"; ln -s "../../block/sdd" "$R/sys/class/block/sdd3"
+st=0; run || st=$?
+[[ $st != 0 && ! -s $R/blockdev.log ]] || { cat "$t/out"; fail "a devinfo that resolves to a whole disk is refused before any flag changes (exit $st)"; }
+pass "a devinfo that isn't a partition of a LUN is refused before any flag changes"
+
+# No devinfo partition: refused before any flag changes
+fresh new
+sed -i 's/^PARTNAME=devinfo$/PARTNAME=notdevinfo/' "$R/sys/block/sdd/sdd3/uevent"
+st=0; run || st=$?
+[[ $st != 0 && ! -s $R/blockdev.log ]] && grep -q 'devinfo partition not found' "$t/out" \
+  || { cat "$t/out"; fail "a phone without devinfo is refused before any flag changes (exit $st)"; }
+pass "no devinfo partition: refused before any flag changes"
