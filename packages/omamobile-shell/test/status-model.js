@@ -70,3 +70,31 @@ assert.strictEqual(M.unreadStored("[{\"ts\": 5", 0), 0, "torn")
 assert.strictEqual(M.unreadStored(JSON.stringify([null, 4, { ts: "x" }, { ts: -1 }, {}, { ts: 5 }]), 0), 1)
 assert.strictEqual(M.unreadStored(undefined, 0), 0)
 console.log("ok - status model: unread notifications on Omarchy 4.5")
+
+// keyboard layout label (Omarchy 4.5's rules: brief from xkbcli, else the description's first word)
+const briefs = M.layoutBriefs("layouts:\n- layout: 'us'\n  variant: ''\n  brief: 'en'\n  description: English (US)\n" +
+  "- layout: 'gr'\n  variant: ''\n  brief: 'gr'\n  description: Greek\n- layout: 'xx'\n  variant: ''\n  description: Nobrief\n")
+assert.deepStrictEqual(briefs, { "English (US)": "en", "Greek": "gr" })
+assert.strictEqual(M.shortLabel("Greek", briefs), "GR")
+assert.strictEqual(M.shortLabel("English (US)", briefs), "EN")
+assert.strictEqual(M.shortLabel("Portuguese (Brazil)", briefs), "POR", "no brief: first word")
+assert.strictEqual(M.shortLabel("constructor", {}), "CON", "inherited members are not briefs")
+assert.strictEqual(M.shortLabel("", briefs), "")
+// the event carries the layout; squeekboard's and pseudo keyboards' events are ignored
+assert.strictEqual(M.eventLayout("dell-kb7120w,Greek"), "Greek")
+assert.strictEqual(M.eventLayout("dell,English (US, intl., with dead keys)"), "English (US, intl., with dead keys)")
+assert.strictEqual(M.eventLayout("hl-virtual-keyboard-squeekboard,Greek"), null)
+assert.strictEqual(M.eventLayout("gpio-keys,Greek"), null)
+assert.strictEqual(M.eventLayout("nocomma"), null)
+// devices at start: the typed keyboard furthest along, its layout count
+const dev = (o) => JSON.stringify({ keyboards: o })
+const osk = { name: "hl-virtual-keyboard-squeekboard", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek", main: true }
+assert.deepStrictEqual(M.layoutState(dev([osk])), { count: 0, description: "" }, "squeekboard alone: no label")
+assert.deepStrictEqual(M.layoutState(dev([osk, { name: "dell", layout: "us", active_layout_index: 0, active_keymap: "English (US)" }])),
+  { count: 1, description: "English (US)" })
+assert.deepStrictEqual(M.layoutState(dev([{ name: "power-button", layout: "us,gr", active_layout_index: 0, active_keymap: "English (US)" },
+  { name: "a", layout: "us,gr", active_layout_index: 0, active_keymap: "English (US)" },
+  { name: "b", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" }])), { count: 2, description: "Greek" })
+assert.strictEqual(M.layoutState("not json"), null)
+assert.strictEqual(M.layoutState("{}"), null)
+console.log("ok - status model: keyboard layout label from the event")

@@ -3,6 +3,7 @@ import QtQuick
 import Qt.labs.folderlistmodel
 import Quickshell
 import Quickshell.Bluetooth
+import Quickshell.Hyprland
 import Quickshell.Io
 import Quickshell.Networking
 import Quickshell.Services.UPower
@@ -97,6 +98,53 @@ Item {
     onExited: { root.cell = null; cellRestart.restart() }
   }
   Timer { id: cellRestart; interval: 5000; onTriggered: cellWatch.running = true }
+
+  // The hardware keyboard's layout (EN, GR...) beside the clock, only while
+  // the typed keyboard has more than one layout. A switch is read from the
+  // activelayout event itself (keyboard,description), as Omarchy 4.5's bar
+  // widget does; squeekboard's own events are ignored. `hyprctl -j devices`
+  // runs only at start and after configreloaded, for the count and the first
+  // label; `xkbcli list` once, when a label is first needed.
+  property int layoutCount: 0
+  property string layoutDescription: ""
+  property var layoutBriefs: ({})
+  readonly property string layoutLabel: layoutCount > 1 ? StatusModel.shortLabel(layoutDescription, layoutBriefs) : ""
+  onLayoutCountChanged: if (layoutCount > 1 && !briefsRead.ran) { briefsRead.ran = true; briefsRead.running = true }
+  Process {
+    id: layoutRead
+    command: ["hyprctl", "-j", "devices"]
+    running: true
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        const st = StatusModel.layoutState(text)
+        if (!st) return
+        root.layoutCount = st.count
+        root.layoutDescription = st.description
+      }
+    }
+  }
+  Process {
+    id: briefsRead
+    property bool ran: false
+    command: ["xkbcli", "list", "--load-exotic"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.layoutBriefs = StatusModel.layoutBriefs(text)
+    }
+  }
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      if (!event) return
+      if (event.name === "activelayout") {
+        const d = StatusModel.eventLayout(event.data)
+        if (d !== null) root.layoutDescription = d
+      } else if (event.name === "configreloaded" && !layoutRead.running) {
+        layoutRead.running = true
+      }
+    }
+  }
 
   // A call in progress: a chip with its time beside the clock. omatel's
   // agent through bin/omamobile-call-watch --observe (the call card runs
@@ -306,6 +354,21 @@ Item {
           font.bold: true
         }
 
+        Text {
+          id: layoutText
+          objectName: "layoutLabel"
+          visible: root.layoutLabel !== ""
+          anchors.left: clockText.right
+          anchors.leftMargin: Style.spacing.lg
+          anchors.verticalCenter: parent.verticalCenter
+          textFormat: Text.PlainText
+          text: root.layoutLabel
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          font.bold: true
+        }
+
         // The call in progress, beside the clock; a tap opens the Phone
         // app's in-call screen (the bar is never shown over the lock).
         Rectangle {
@@ -313,7 +376,8 @@ Item {
           objectName: "callChip"
           visible: root.callChip !== ""
           z: 2
-          anchors.left: clockText.right
+          // after the layout label, or the clock when the label is hidden
+          anchors.left: layoutText.visible ? layoutText.right : clockText.right
           anchors.leftMargin: Style.spacing.lg
           anchors.verticalCenter: parent.verticalCenter
           height: Math.round(root.barSize * 0.66)

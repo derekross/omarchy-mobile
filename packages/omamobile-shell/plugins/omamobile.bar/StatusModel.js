@@ -145,11 +145,63 @@ function batteryIcon(percent, charging, full) {
   return charging ? chargingIcons[index] : defaultIcons[index]
 }
 
+// The keyboard layout label, the way Omarchy 4.5's own bar widget makes it
+// (shell/plugins/bar/widgets/KeyboardLayoutModel.js): xkb's short code
+// ("brief", from `xkbcli list`) for the layout's description, else the first
+// word of the description, capped at 3 characters.
+function layoutBriefs(text) {
+  var briefs = {}
+  var brief = ""
+  String(text || "").split("\n").forEach(function(line) {
+    if (/^\s*- /.test(line)) brief = ""
+    var field = line.match(/^  (brief|description): (.*)$/)
+    if (!field) return
+    if (field[1] === "brief") brief = field[2].replace(/^'|'$/g, "")
+    else if (brief) { briefs[field[2]] = brief; brief = "" }
+  })
+  return briefs
+}
+function shortLabel(description, briefs) {
+  if (!description) return ""
+  var brief = (briefs || {})[description]
+  var label = typeof brief === "string" && brief ? brief.split("-")[0] : String(description).split(/\s+/)[0]
+  return label.substring(0, 3).toUpperCase()
+}
+// Keyboards nobody types on: squeekboard's virtual keyboard and pseudo ones.
+var untypedKeyboards = /^hl-virtual-keyboard|consumer-control|power-button|sleep-button|lid-switch|video-bus|radio-control|gpio-keys/
+function typedKeyboard(name) {
+  name = String(name || "")
+  return name !== "" && !untypedKeyboards.test(name)
+}
+// Hyprland's activelayout event is "keyboard,description": the layout is read
+// from the event itself, no `hyprctl` per switch. null for a keyboard nobody
+// types on (squeekboard sends these while the on-screen keyboard is used).
+function eventLayout(data) {
+  var s = String(data || "")
+  var i = s.indexOf(",")
+  if (i < 0 || !typedKeyboard(s.slice(0, i))) return null
+  return s.slice(i + 1)
+}
+// From `hyprctl -j devices` (at start and after a config reload only):
+// {count, description} of the typed keyboard furthest along its list, the one
+// being typed on (Omarchy's rule).
+function layoutState(text) {
+  var kbs
+  try { kbs = (JSON.parse(text) || {}).keyboards } catch (e) { return null }
+  if (!Array.isArray(kbs)) return null
+  var typed = kbs.filter(function(k) { return k && typedKeyboard(k.name) })
+  if (!typed.length) return { count: 0, description: "" }
+  var kb = typed.reduce(function(a, k) { return (k.active_layout_index || 0) > (a.active_layout_index || 0) ? k : a }, typed[0])
+  var count = String(kb.layout || "").split(",").filter(function(l) { return l !== "" }).length
+  return { count: count, description: String(kb.active_keymap || "") }
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     findDevice: findDevice, connectedNetwork: connectedNetwork, wifiIcon: wifiIcon, networkIcon: networkIcon,
     cellularIcon: cellularIcon, cellGlyph: cellGlyph, cellText: cellText, parseCell: parseCell,
     callChip: callChip, elapsed: elapsed, batteryIcon: batteryIcon,
-    stampOf: stampOf, parseStamp: parseStamp, unreadCount: unreadCount, unreadStored: unreadStored
+    stampOf: stampOf, parseStamp: parseStamp, unreadCount: unreadCount, unreadStored: unreadStored,
+    layoutBriefs: layoutBriefs, shortLabel: shortLabel, eventLayout: eventLayout, layoutState: layoutState
   }
 }
