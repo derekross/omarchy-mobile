@@ -45,7 +45,7 @@ checked=-1    # guard-clock time of the last session check
 session_ok=1  # its result
 # /proc/uptime and /run both start over at boot, so a stored time is valid
 # as long as it is not in the future
-read -r stored < "$STATE_DIR/last-restart" 2>/dev/null
+read -r stored 2>/dev/null < "$STATE_DIR/last-restart"
 t=$(now)
 [[ ${stored:-} =~ ^[0-9]+$ && $t =~ ^[0-9]+$ ]] && (( stored <= t )) && last=$stored
 save_last() {
