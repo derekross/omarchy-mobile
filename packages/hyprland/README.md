@@ -14,6 +14,9 @@ reported the screen off, but the CRTC never turned off. See
 | `nvidia-egl-teardown.patch`, `wl-output-global-grace.patch`, `monitor-rule-vrr.patch` | Omarchy's patches from the same commit, unchanged (what they fix: their comments in `prepare()`) |
 | `0001-dpms-keep-retrying-a-refused-dpms-commit.patch` | The Omarchy Mobile change to `src/output/Monitor.cpp` |
 | `0002-render-hold-the-last-frame-across-a-rotation.patch` | The Omarchy Mobile change to `src/render/Renderer.cpp` and `src/render/OpenGL.cpp` (the rotation hold, below) |
+| `0003-output-send-the-whole-state-with-done.patch` | The Omarchy Mobile change to `src/protocols/core/Output.cpp` (wl_output's geometry after a rotation, below) |
+| `0004-input-bring-the-keyboard-up-on-a-touch.patch` | The Omarchy Mobile change to `src/managers/input/` (the keyboard on a touch, below) |
+| `0005-input-method-apply-a-deactivation-with-done.patch` | The Omarchy Mobile change to `src/managers/input/InputMethodRelay.cpp` (below) |
 
 ## What differs from Omarchy's `hyprland` 0.57.0-2
 
@@ -32,11 +35,36 @@ reported the screen off, but the CRTC never turned off. See
   Hyprland's environment (read once at startup): `omamobile-device-panther`
   sets it in `environment.d`, and the other phones rotate as before until
   it has run on them.
+- wl_output's geometry after a rotation (0003). A rule that only turns the
+  screen goes through `applyMonitorRuleSoft()` and emits no `modeChanged`,
+  so `CWLOutputResource::updateState()` never ran: clients bound before the
+  turn got a `wl_output.done` (from xdg-output's update) but no new
+  `wl_output.geometry`, and kept the old transform. squeekboard, bound at
+  login, sized itself for portrait in landscape and covered the screen.
+  Every done now sends the whole state first (scale, mode, geometry), which
+  is what updateState already sent on a mode change. On a Pixel 7, Chromium
+  in landscape with the keyboard up went from -18 px tall to 107, and
+  squeekboard's horizontal scale setting takes effect again.
+- The keyboard on a touch (0004), with `OMAMOBILE_IME_ON_TOUCH=1` in
+  Hyprland's environment (read once at startup; off, nothing changes). A
+  field enabled within 800 ms of a touch or click activates the input method
+  at once, as before. One enabled with no touch (Chromium's address bar as a
+  window opens, a GTK text view) waits: 200 ms after the next touch or click
+  ends, if it is still the focused, enabled field, it activates. A tap on a
+  link or elsewhere takes the focus away first, so the keyboard stays down.
+  Chromium and GTK send no text-input request after that tap until the input
+  method is active, so the compositor decides. A keyboard brought up by hand
+  still types (squeekboard falls back to its virtual keyboard).
+- The input method's done (0005). Closing the window of a focused text field
+  deactivated the input method without a done, so it never applied:
+  squeekboard stayed active, and a keyboard hidden by hand stayed hidden for
+  every later field until it was restarted.
 - `pkgrel=3.3`: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
   (`extra/hyprland` 0.57.0-3, a rebuild for aquamarine 0.16.0 and
   hyprgraphics 0.6.0) release, plus `.1`, so it sorts above both; `.2` for
   the rotation hold, since 3.1 is published; `.3` for the half turn's
-  383 ms and the alpha-out curve, since 3.2 is published.
+  383 ms and the alpha-out curve, since 3.2 is published; `.4` for the
+  wl_output geometry; `.5` for the keyboard on a touch and the done.
 - `arch=(aarch64)` only.
 - `build()` runs the two cmake steps of `make release` itself:
   - with Arch's `-DCMAKE_SKIP_RPATH=ON` (Arch's PKGBUILD seds it into the
