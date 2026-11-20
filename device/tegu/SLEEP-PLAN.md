@@ -466,6 +466,15 @@ The figures are from the 2026-10-27 and 10-28 NOTES entries
     (`nxp-nci_i2c: Read failed with error -121`), as #132 describes for a
     kernel without linux-omarchy-mobile#131.
   - **Wi-Fi power save: about 30 mA** (NOTES 2026-11-20, #937).
+  - **Two things about Wi-Fi that cost nothing measurable.** ASPM L1 on the
+    Wi-Fi link, set in both Link Control registers by hand (the kernel's
+    `link/l1_aspm` takes a 1 and stays 0 on this link): 264, 267 and 262 mA
+    without it, 266, 263 and 256 mA with it, 200 of 200 pings either way.
+    And the Wi-Fi chip's interrupt: about 205 a second at all times, with
+    power save on or off and with the radio off, while some 4 packets a
+    second move. With the driver loaded and the radio off the drain read
+    266, 249 and 243 mA; with the driver unloaded and no such interrupts,
+    276, 249 and 256 mA.
 - **Cluster power-down was tried** (2026-10-28) through the hint Google's
   `exynos-cpupm` writes on each idle entry (`CPU_INFORM`, PMU 0x860 + 4 x
   cpu; 1 = C2, 2 = cluster power-down). The C2 hint was stable but saved
@@ -549,8 +558,9 @@ The figures are from the 2026-10-27 and 10-28 NOTES entries
    modem driver asks for L1 substates once the modem is up
    (`s51xx_pcie_l1ss_ctrl(1)` in CPIF), and the link driver's
    `gs201_pcie_cp_l1ss()` is a stub ("Not implemented yet"). Next is that
-   function, measured with the one-a-second ping above. The Wi-Fi link is
-   in the same state and may be worth the same look.
+   function, measured with the one-a-second ping above. Plain L1 on the
+   Wi-Fi link saved nothing (above), so the gain, if there is one, is in
+   the substates.
 8. **Telling the modem the screen is off** (`follow_screen`, the 7 Pro's
    default): 10 to 30 mA in one run, and 50 link power-ups a minute down to
    about 10. Before it is the 9a's default: a call and a text with the
