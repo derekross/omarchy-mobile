@@ -2012,7 +2012,8 @@ sleep within half a minute.
 All runs on the palmtop, on the charger, with Location on, Wi-Fi up and the
 palmtop indoors at one spot. The kernel was the published `omamobile` at
 26867fc4e (`7.3.0-rc6-omamobile-push1-g26867fc4e826`, defconfig plus main's
-`omamobile.config`, with the overlays `public-ramoops` and `modem-cpif`), so
+`omamobile.config`, with the overlays `modem-cpif` and `public-ramoops`, a
+bring-up overlay that only adds the pstore region and isn't in the tree), so
 the CP and GNSS ran from the in-tree drivers, and `omamobile-tegu-modem-boot`
 started the modem. Packages: omamobile-modem 0.1.27-1, omamobile-device-tegu
 0.2.21-1, and omamobile-gnss 0.2.11-1 from #864 with #921's start script,
@@ -2051,19 +2052,36 @@ followed each time by `where-am-i`:
 - GeoClue's IP position came 1.1 s after each request, and a GNSS fix came
   7.5 to 9.4 s after it, five of five.
 
-**Open: GeoClue's start stall.** In 3 of the first 8 boots with both
-changes, and once before, GeoClue's own start stopped after "Failed to
-connect to avahi service" and never took its bus name. where-am-i's call to
-start it timed out after 25 s ("Error calling StartServiceByName"), and
-systemd logged GeoClue as started only at the shutdown, 44 s later. Each
-time the request came about 16 s into the boot, while the session and its
-GeoClue agent were starting.
+**On #921's final head (2026-11-20).** The same kernel, packages and method,
+with #921's head (f326aef6) in place of its first two changes: 8 boots with
+a request at 18 to 20 s, a GNSS fix in 7 (79 to 117 s after the boot), and
+one GeoClue start stall. The seven reboots a later boot looked back at each
+stopped their session with the runner's "stopping", and no boot found a
+marker. Five more rounds of Location off and on each gave a GNSS fix 12.2
+to 12.3 s after the request. On the daily kernel, 8 boots the same way each
+had a GNSS fix, 69 to 93 s after the boot.
 
-It never happened with GeoClue's debug log on (12 boots), nor in the 8
-boots after that without it, nor in the 16 on the daily kernel. So it is a race in GeoClue's start that the
-log's timing hides. It is not understood yet, and it is GeoClue's own start,
-not the GNSS path. Not checked: whether a later request in such a boot gets
-through once systemd's start timeout (90 s) ends the stalled GeoClue.
+**GeoClue's start stall.** In 5 of these 44 boots on the published kernel
+(one before #921's second change, three in the first 8 boots with it, one
+on 11-20), GeoClue's own start stopped after "Failed to connect to avahi
+service" and never took its bus name. where-am-i's call to start it timed
+out after 25 s ("Error calling StartServiceByName"), and systemd logged
+GeoClue as started only at the shutdown. Each time the request came 16 to
+20 s into the boot, while the session and its GeoClue agent were starting.
+It is not the GNSS path, and it is not the 9a's alone.
+
+It is a deadlock in GLib's one-time setups. The backtraces of two stalled
+starts show the main thread in `g_vfs_get_default()`, holding the VFS's
+init and waiting for GIO's default-modules lock, and a pool thread in
+`g_proxy_resolver_get_default()`, holding that lock while libproxy's
+resolver is created, whose init opens a GFile and waits for the VFS's init
+(geoclue 2.8.2, glib2 2.90.1, libproxy 0.5.12). It needs no boot: with the
+file cache dropped before each start, 7 of 80 starts of GeoClue stalled on
+the daily kernel. With `GIO_USE_PROXY_RESOLVER=dummy` for `geoclue.service`
+none of 80 did, and none of 200 with a warm cache (2 of 180 without it):
+omarchy-mobile#942. Not run: boots with that drop-in from a package. Not
+checked: whether a later request in a stalled boot gets through once
+systemd's start timeout (90 s) ends the stalled GeoClue.
 
 ### M2: the link only (modem link driver, `allow_hw=1`; risk: medium)
 
