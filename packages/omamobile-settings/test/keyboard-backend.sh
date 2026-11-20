@@ -123,6 +123,11 @@ run set switch-key caps >/dev/null; has "$input" 'grp:caps_toggle'
 run set switch-key alt_shift >/dev/null; eq "$(j "$(run get)" 'd["switchKey"]')" "alt_shift"
 run set switch-key default >/dev/null
 cmp -s "$input" "$tmp/nonl.lua" || { echo "FAIL: no-newline input.lua not restored" >&2; od -c "$input" | tail -3 >&2; exit 1; }
+# a line the user appends after our block stays its own line when the block is removed
+run set switch-key caps >/dev/null; printf 'hl.config({ input = { repeat_delay = 300 } })\n' >> "$input"
+run set switch-key default >/dev/null
+printf 'hl.config({ input = { repeat_rate = 40 } })\nhl.config({ input = { repeat_delay = 300 } })\n' > "$tmp/appended.lua"
+cmp -s "$input" "$tmp/appended.lua" || { echo "FAIL: user's line after our block was joined" >&2; od -c "$input" | tail -5 >&2; exit 1; }
 cp "$tmp/stock.lua" "$input"
 
 # the user's own live kb_layout: reported, layouts not written; own kb_options: switch key not written

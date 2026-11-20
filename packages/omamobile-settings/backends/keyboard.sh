@@ -168,7 +168,9 @@ def split_block(text):
         return text, None
     v = re.search(r'kb_options\s*=\s*"([^"\\]*)"', m.group(2))
     start = m.start()
-    if m.group(1) == BEGIN_NL and start > 0 and text[start - 1] == "\n":
+    # the newline we added goes only while our block still ends the file; a line the user put
+    # after it must not be joined onto the old last line
+    if m.group(1) == BEGIN_NL and m.end() == len(text) and start > 0 and text[start - 1] == "\n":
         start -= 1
     return text[:start] + text[m.end():], (v.group(1) if v else "")
 
