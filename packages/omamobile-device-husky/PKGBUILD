@@ -13,6 +13,7 @@ conflicts=(omamobile-device)
 backup=(etc/pacman.d/omamobile-mirrorlist etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf)
 install=omamobile-device-husky.install
 makedepends=(gcc)
+checkdepends=(glslang lua)
 
 build() {
   "$startdir/build" "$srcdir/build"

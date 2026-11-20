@@ -280,3 +280,33 @@ ps="$tmp/root/etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf"
 grep -qx '\[connection\]' "$ps" || fail "the Wi-Fi power save file needs a [connection] header"
 grep -qx 'wifi.powersave=3' "$ps" || fail "Wi-Fi power save is on by default (3 = enable)"
 pass "Wi-Fi power save is on by default"
+
+# Screen look stopgap (#537): the shader and the per-device Lua phone.lua loads.
+[[ $(head -1 hypr/screen-look.frag) == '#version 300 es' ]] || fail "the shader starts with a GLSL ES 3.00 header"
+grep -q 'pow(max(c.rgb, vec3(0.0)), vec3(1.55))' hypr/screen-look.frag || fail "the shader's gamma is 1.55"
+grep -q 'rgb \*= 0.88;' hypr/screen-look.frag || fail "the shader's gain is 0.88"
+# glslang and lua are checkdepends, so a package build always runs these.
+command -v glslangValidator >/dev/null || fail "glslangValidator (glslang) is installed for the shader check"
+glslangValidator -S frag hypr/screen-look.frag >/dev/null || fail "the shader compiles (glslangValidator)"
+grep -q '"/usr/share/omamobile/device-husky/screen-look.frag"' hypr/device.lua || fail "device.lua points at the installed shader"
+grep -q '"$destination/usr/share/omamobile/device-husky/screen-look.frag"' install \
+  || fail "install puts the shader where device.lua looks"
+grep -q 'hypr/device.lua "$destination/usr/share/omamobile/hypr/device.lua"' install \
+  || fail "install puts device.lua where phone.lua's hook (#204) looks"
+# Other phones may ship their own device.lua (#204), but not this shader file.
+for other in ../omamobile-device-*; do
+  [[ $other == ../omamobile-device-husky ]] && continue
+  [[ -e $other/hypr/screen-look.frag ]] && fail "another phone ($other) ships screen-look.frag"
+done
+command -v lua >/dev/null || fail "lua is installed for the device.lua check"
+stub='hl = { config = function(t) local d = t.decoration; io.write("[", d and d.screen_shader or "nil", "]") end }'
+mkdir -p "$tmp/home/.config/omamobile"
+out=$(HOME="$tmp/home" lua -e "$stub" hypr/device.lua)
+[[ -z $out ]] || fail "without the screen-look-on marker device.lua leaves screen_shader alone"
+touch "$tmp/home/.config/omamobile/screen-look-on"
+out=$(HOME="$tmp/home" lua -e "$stub" hypr/device.lua)
+[[ $out == '[/usr/share/omamobile/device-husky/screen-look.frag]' ]] || fail "the screen-look-on marker sets the screen shader"
+out=$(HOME="$tmp/home" lua -e 'hl = { config = function() error("boom") end }' hypr/device.lua) \
+  || fail "a failing hl.config does not raise out of device.lua"
+[[ $out == *'screen look:'*boom* ]] || fail "a failing hl.config is printed"
+pass "the screen look shader ships on husky, off unless screen-look-on is there"
