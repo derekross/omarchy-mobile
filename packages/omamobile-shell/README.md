@@ -94,7 +94,7 @@ afterwards.
 
 ## Japanese input
 
-`omamobile-ime on` (with `fcitx5-mozc` installed) hands the input method to fcitx5 with Mozc, and `omamobile-ime off` gives it back to squeekboard. Hyprland gives it to one client, so with it on squeekboard no longer sees text fields: double-tap the home strip to show it. Type romaji, Space converts, Enter commits. It needs hyprland 0.57.0-3.4, which resends squeekboard's keymap to fcitx5. At login `omamobile-ime.service` restarts squeekboard once fcitx5 holds the input method.
+`omamobile-ime on` (with `fcitx5-mozc` installed) hands the input method to fcitx5 with Mozc, and `omamobile-ime off` gives it back to squeekboard and takes Japanese (romaji) out of the keyboard's languages again. Hyprland gives it to one client, so with it on squeekboard no longer sees text fields: double-tap the home strip to show it. Type romaji, Space converts, Enter commits. It needs hyprland 0.57.0-3.4, which resends squeekboard's keymap to fcitx5. At login `omamobile-ime.service` restarts squeekboard once fcitx5 holds the input method.
 
 Not yet: picking a candidate by tap (fcitx5's window takes no taps; a candidate bar above the keyboard, through fcitx5's kimpanel, would), showing the keyboard when a field takes focus, and the Kana layout (it needs more keycodes than a keymap has).
 

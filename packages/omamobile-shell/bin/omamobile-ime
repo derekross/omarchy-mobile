@@ -18,7 +18,7 @@
 # layout, since jp.yaml's kana views need more keycodes than a keymap can
 # carry. With any other language fcitx5 passes keys through as typed (a
 # password in English is safe). "on" adds that language to the keyboard's
-# list. Space converts, Enter commits; candidates
+# list and "off" takes it out again. Space converts, Enter commits; candidates
 # appear in fcitx5's own window, which takes no taps. The switch is
 # ~/.config/omamobile/fcitx5 (the drop-in on omarchy-fcitx5.service reads
 # it too).
@@ -114,6 +114,18 @@ add_language() {
   fi
 }
 
+# Take Japanese (romaji) out of the keyboard's languages again: without the
+# IME it is the US keyboard under a Japanese name. If it was the current one
+# (the first), the next language becomes current.
+remove_language() {
+  local now new
+  now=$("$GSETTINGS" get $SCHEMA sources)
+  grep -q "'jp+romaji'" <<<"$now" || return 0
+  new=$(sed -E "s/\('xkb', 'jp\+romaji'\)(, )?//g; s/, \]/]/" <<<"$now")
+  [[ $new == *"('"* ]] || new="@a(ss) []"
+  "$GSETTINGS" set $SCHEMA sources "$new"
+}
+
 status() {
   local state=off mozc=no
   [[ -e $FLAG ]] && state=on
@@ -137,6 +149,7 @@ case ${1:-} in
     ;;
   off)
     rm -f "$FLAG" "$RESTARTED"
+    remove_language
     "$SYSTEMCTL" --user stop omamobile-ime.service omarchy-fcitx5.service 2>/dev/null || true
     restart_squeekboard
     echo "Japanese input off"

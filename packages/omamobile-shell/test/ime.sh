@@ -57,6 +57,15 @@ run on >/dev/null
 run off >/dev/null
 [[ ! -e $c/omamobile/fcitx5 ]] || fail "off clears the switch"
 grep -qx -- '--user stop omamobile-ime.service omarchy-fcitx5.service' "$t/log" || fail "off stops the follower and fcitx5"
+grep -q "jp+romaji" "$t/sources" && fail "off removes Japanese (romaji) from the keyboard's languages"
+[[ $(cat "$t/sources") == "[('xkb', 'us'), ('xkb', 'jp')]" ]] || fail "off keeps the other languages"
+# Removed from the front, the next language becomes current; alone, none is left.
+for case in "[('xkb', 'jp+romaji'), ('xkb', 'de')]:[('xkb', 'de')]" "[('xkb', 'jp+romaji')]:@a(ss) []"; do
+  printf '%s\n' "${case%%:*}" > "$t/sources"
+  run off >/dev/null
+  [[ $(cat "$t/sources") == "${case#*:}" ]] || fail "off turns ${case%%:*} into ${case#*:}, not $(cat "$t/sources")"
+done
+printf "[('xkb', 'us'), ('xkb', 'jp')]\n" > "$t/sources"
 run bogus 2>/dev/null && fail "unknown commands refused"
 
 # Mozc only while the keyboard's language (the first source) is Japanese
