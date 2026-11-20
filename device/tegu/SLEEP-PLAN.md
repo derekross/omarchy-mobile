@@ -417,6 +417,55 @@ The figures are from the 2026-10-27 and 10-28 NOTES entries
     screen off and MIF at 421 MHz, the six off read 310, 292 and 286 mA
     against 306, 337 and 312 mA with all on that afternoon: a difference
     the size of the spread.
+- **Awake with the screen off, the modem up: about 300 mA, and about 500
+  with data moving over the modem** (2026-11-19 and 11-20, the daily
+  bring-up kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`).
+  The 9a doesn't sleep with the modem up, so this is what a day in a pocket
+  draws.
+  - **A day's log** (8.5 hours with the cable out, a line every 30 s, no
+    sleep entered): 409 minutes with the screen off at a median of 313 mA.
+    In the 73 of those minutes with more than 100 kB per half minute over
+    `rmnet0` the median was 519 mA; with Wi-Fi as the route it was
+    292 mA.
+  - **Split by traffic** (cable in, the charger's buck off, screen off,
+    Wi-Fi off so `rmnet0` is the route, 60 s means, a 1000-byte ping out of
+    `rmnet0` as the traffic):
+
+    | traffic | drain | link power-ups a minute |
+    | --- | --- | --- |
+    | none | 285 to 316 mA | 46 to 61 |
+    | a ping every 5 s | 386 to 416 mA | 30 to 41 |
+    | a ping every second | 503 to 509 mA | 0, the link stays up |
+    | a ping every half second | 515 to 541 mA | 0 |
+
+    With no traffic the drain on mobile data is the same as on Wi-Fi (297
+    to 352 mA that night). So about 100 mA comes with the radio staying
+    connected, and about 100 mA more with the modem's PCIe link staying
+    up.
+  - **The link has no power saving while it is up.** `lspci -vv` during the
+    one-a-second run: the modem's root port and endpoint (8 GT/s, x2) both
+    read `ASPM Disabled`, with no L1 substate enabled. The Wi-Fi link reads
+    the same (`ASPM L1` in its capabilities, `ASPM Disabled`).
+  - **The link goes up and down about 50 times a minute with nothing to
+    send,** because the modem is never told the screen is off. Each time
+    costs nine kernel log lines on this kernel and eight on the
+    published one. In the day's log one two-minute stretch with traffic had
+    638 power-ups, and journald took 6.5 % of a core in such minutes. With
+    `[control] follow_screen = yes` (omamobile-modem-sit 0.3.45) the count
+    fell to 6 to 17 a minute, and the drain read 282 to 297 mA idle and 350
+    to 394 mA with a ping every 5 s: 10 to 30 mA less, inside the spread.
+    It is off again on the palmtop: no call or text was tried with it on
+    this kernel.
+  - **On the published kernel** (`omamobile` at 26867fc4e, the same
+    packages): 49 to 50 power-ups a minute with the screen off, Wi-Fi on or
+    off. No drain figure from it: the bus the charger is on isn't there, so
+    the buck stayed on, and no route came up on `rmnet0` with Wi-Fi off.
+  - **Bluetooth and NFC cost nothing measurable** (three rounds of 120 s
+    means with each off in turn: 266 to 284 mA in all nine). Powering the
+    NFC adapter off and on through neard left it dead until a reboot
+    (`nxp-nci_i2c: Read failed with error -121`), as #132 describes for a
+    kernel without linux-omarchy-mobile#131.
+  - **Wi-Fi power save: about 30 mA** (NOTES 2026-11-20, #937).
 - **Cluster power-down was tried** (2026-10-28) through the hint Google's
   `exynos-cpupm` writes on each idle entry (`CPU_INFORM`, PMU 0x860 + 4 x
   cpu; 1 = C2, 2 = cluster power-down). The C2 hint was stable but saved
@@ -495,6 +544,20 @@ The figures are from the 2026-10-27 and 10-28 NOTES entries
    range additions) did it is not established.
    The camera stages need their driver first, since libcamera lists no
    camera without them; TPU, AUR, EH, BW, MFC and G2D are the first step.
+7. **The modem's link with data moving: about 100 mA.** While the modem
+   keeps the link up it sits in L0 (`ASPM Disabled`, no L1 substate). The
+   modem driver asks for L1 substates once the modem is up
+   (`s51xx_pcie_l1ss_ctrl(1)` in CPIF), and the link driver's
+   `gs201_pcie_cp_l1ss()` is a stub ("Not implemented yet"). Next is that
+   function, measured with the one-a-second ping above. The Wi-Fi link is
+   in the same state and may be worth the same look.
+8. **Telling the modem the screen is off** (`follow_screen`, the 7 Pro's
+   default): 10 to 30 mA in one run, and 50 link power-ups a minute down to
+   about 10. Before it is the 9a's default: a call and a text with the
+   screen dark on the kernel the palmtop runs.
+9. **The link's log lines.** Eight or nine `dev_info` lines per power-up,
+   some 500 lines a minute idle and several thousand with traffic, all
+   through journald to the disk. They belong at debug level.
 
 The CPUs' own idle state works: cpu0's `c2` was entered about a million
 times by 2026-10-29, with 1304 rejected (EINVAL); cpu4 1148 of 46339, cpu7
