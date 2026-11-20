@@ -982,7 +982,17 @@
    }
  
    function submitPassword(value) {
-@@ -903,7 +914,18 @@
+@@ -510,6 +521,9 @@
+       LockView {
+         id: lockView
+         keypad: root.keypad
++        wakeSerial: root.wakeSerial
++        blankSerial: root.blankSerial
++        displayDark: root.displayDark
+         anchors.fill: parent
+         backgroundPath: root.backgroundPath
+         videoPosterPath: root.videoPosterPath
+@@ -903,7 +917,18 @@
      // it and re-arm the blank timer (a phone's power button).
      function wake(): string {
        if (!root.currentlyLocked()) return "unlocked"
