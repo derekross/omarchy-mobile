@@ -309,7 +309,7 @@ J
 cat > "$G/bin/loginctl" <<'J'
 #!/bin/bash
 case $1 in
-  list-sessions) echo "  3 1000 alice seat0 tty1" ;;
+  list-sessions) echo "loginctl" >> "$GUARD_CALLS"; echo "  3 1000 alice seat0 tty1" ;;
   show-session) printf '%s\n' $GUARD_SESSION ;;
 esac
 J
@@ -321,10 +321,10 @@ echo $((GUARD_BASE + n / GUARD_RATE * GUARD_STEP))
 J
 chmod +x "$G/bin/"* "$G/clock"
 guard() {
-  : > "$G/calls"; echo 0 > "$G/ticks"
+  : > "$G/calls"; echo 0 > "$G/ticks"; [[ -n ${keep_state:-} ]] || rm -rf "$G/state"
   GUARD_CALLS=$G/calls GUARD_JOURNAL=$G/journal GUARD_TICKS=$G/ticks GUARD_BASE=${base:-1000} \
   GUARD_RATE=${rate:-10} GUARD_STEP=${step:-1} GUARD_SESSION=${session:-User=1000 Type=tty Active=no State=closing} \
-  OMAMOBILE_SDDM_GUARD_CLOCK=$G/clock PATH="$G/bin:$PATH" bin/omamobile-sddm-guard > "$G/out" 2> "$G/err"
+  OMAMOBILE_SDDM_GUARD_STATE=$G/state OMAMOBILE_SDDM_GUARD_CLOCK=$G/clock PATH="$G/bin:$PATH" bin/omamobile-sddm-guard > "$G/out" 2> "$G/err"
 }
 burst() { local n=$1 i; for ((i = 0; i < n; i++)); do echo "Auth: sddm-helper exited with 5"; done; }
 # 20 failures in a minute, plus other lines: no restart
@@ -351,5 +351,26 @@ grep -q 'restarting sddm failed' "$G/err" || fail "a failed restart is logged"
 session='User=1000 Type=wayland Active=yes State=active' guard || true
 grep -q '^systemctl' "$G/calls" && fail "an active owner session is never restarted"
 grep -q 'active wayland session, so sddm is left alone' "$G/out" || fail "the guard logs why it skips"
+active='User=1000 Type=wayland Active=yes State=active'
+# a 3-minute loop with an active session: no restart, one skip log and one
+# session check a minute (9 lines a second, so ~1600 failures)
+burst $((9 * 180)) > "$G/journal"; rate=9 session=$active guard || true
+grep -q '^systemctl' "$G/calls" && fail "a 3-minute loop with an active session is left alone"
+n=$(grep -c 'so sddm is left alone' "$G/out"); (( n == 3 )) || fail "the skip is logged once a minute, not $n times"
+n=$(grep -c '^loginctl$' "$G/calls"); (( n == 3 )) || fail "the session is checked once a minute, not $n times"
+# a loop that goes on 6 minutes despite the session: one restart at 5 minutes
+burst $((9 * 360)) > "$G/journal"; rate=9 session=$active guard || true
+n=$(grep -c '^systemctl restart sddm.service$' "$G/calls"); (( n == 1 )) || fail "a 5-minute loop restarts sddm despite the session, $n times"
+grep -q 'looping for 300s despite uid 1000.s active wayland session, restarting sddm anyway' "$G/out" || fail "the guard logs why it restarts anyway"
+# the cooldown survives a guard restart, kept on the uptime clock
+burst 21 > "$G/journal"; guard || true
+[[ $(cat "$G/state/last-restart") == 1002 ]] || fail "the restart time is saved"
+keep_state=1 base=1100 guard || true
+grep -q '^systemctl' "$G/calls" && fail "a restarted guard keeps the cooldown"
+keep_state=1 base=1700 guard || true
+grep -q '^systemctl restart' "$G/calls" || fail "after the cooldown a restarted guard restarts sddm"
+echo 99999 > "$G/state/last-restart"; keep_state=1 guard || true
+grep -q '^systemctl restart' "$G/calls" || fail "a saved time in the future (an old boot) is ignored"
+grep -qx 'RuntimeDirectory=omamobile-sddm-guard' systemd/omamobile-sddm-guard.service || fail "the guard unit has a runtime directory"
 grep -qx 'Restart=always' systemd/omamobile-sddm-guard.service || fail "the guard unit always restarts"
 pass "the SDDM loop guard restarts sddm at most once per cooldown"

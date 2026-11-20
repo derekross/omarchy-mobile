@@ -7,13 +7,19 @@
 # phone did ~530 tries a minute for six hours until sddm was restarted.
 # This follows SDDM's journal, and when failed autologins pass THRESHOLD in
 # WINDOW seconds it logs why and restarts sddm once. After a restart it waits
-# COOLDOWN seconds before it would restart again, so it can't loop itself.
+# COOLDOWN seconds before it would restart again, so it can't loop itself;
+# the restart time is kept in STATE_DIR (/run), so a restarted guard keeps it.
+# If the owner has an active wayland session it leaves sddm alone, unless the
+# loop goes on for PERSIST seconds anyway (on 11-11 the old session was alive).
 #   omamobile-sddm-guard   (run by omamobile-sddm-guard.service)
 set -uo pipefail
 THRESHOLD=${OMAMOBILE_SDDM_GUARD_THRESHOLD:-20}
 WINDOW=${OMAMOBILE_SDDM_GUARD_WINDOW:-60}
 COOLDOWN=${OMAMOBILE_SDDM_GUARD_COOLDOWN:-600}
 OWNER_UID=${OMAMOBILE_SDDM_GUARD_UID:-1000}
+PERSIST=${OMAMOBILE_SDDM_GUARD_PERSIST:-300}
+CHECK_EVERY=60   # seconds between session checks (and skip log lines)
+STATE_DIR=${OMAMOBILE_SDDM_GUARD_STATE:-/run/omamobile-sddm-guard}
 
 # The guard's own clock, not the journal's: the wall clock can jump (an
 # offline phone seeds it at first boot), and the cooldown must not.
@@ -34,6 +40,19 @@ owner_session_ok() {
 
 fails=()      # guard-clock times of recent failed autologins
 last=-1       # guard-clock time of the last restart, -1 = none yet
+loop_since=-1 # guard-clock time the loop began, -1 = no loop now
+checked=-1    # guard-clock time of the last session check
+session_ok=1  # its result
+# /proc/uptime and /run both start over at boot, so a stored time is valid
+# as long as it is not in the future
+read -r stored < "$STATE_DIR/last-restart" 2>/dev/null
+t=$(now)
+[[ ${stored:-} =~ ^[0-9]+$ && $t =~ ^[0-9]+$ ]] && (( stored <= t )) && last=$stored
+save_last() {
+  mkdir -p "$STATE_DIR" && echo "$1" > "$STATE_DIR/last-restart.tmp" &&
+    mv -f "$STATE_DIR/last-restart.tmp" "$STATE_DIR/last-restart" ||
+    echo "omamobile-sddm-guard: could not save the restart time in $STATE_DIR" >&2
+}
 while IFS= read -r line; do
   [[ $line == *'sddm-helper exited with 5'* ]] || continue
   t=$(now)
@@ -41,19 +60,29 @@ while IFS= read -r line; do
   keep=()
   for f in "${fails[@]}"; do (( t - f < WINDOW )) && keep+=("$f"); done
   fails=("${keep[@]}" "$t")
-  (( ${#fails[@]} > THRESHOLD )) || continue
+  if (( ${#fails[@]} <= THRESHOLD )); then loop_since=-1; continue; fi
+  (( loop_since < 0 )) && loop_since=$t
   if (( last >= 0 && t - last < COOLDOWN )); then
     continue
   fi
-  if owner_session_ok; then
-    echo "omamobile-sddm-guard: ${#fails[@]} failed autologins in ${WINDOW}s, but uid $OWNER_UID has an active wayland session, so sddm is left alone"
-    fails=()
-    continue
+  why="restarting sddm once"
+  if (( checked < 0 || t - checked >= CHECK_EVERY )); then
+    checked=$t
+    owner_session_ok; session_ok=$?
+    (( session_ok == 0 && t - loop_since < PERSIST )) &&
+      echo "omamobile-sddm-guard: ${#fails[@]} failed autologins in ${WINDOW}s, but uid $OWNER_UID has an active wayland session, so sddm is left alone (looping for $((t - loop_since))s, restart anyway at ${PERSIST}s)"
   fi
-  echo "omamobile-sddm-guard: ${#fails[@]} failed autologins in ${WINDOW}s, restarting sddm once (next restart no sooner than ${COOLDOWN}s)"
+  if (( session_ok == 0 )); then
+    (( t - loop_since < PERSIST )) && continue
+    why="looping for $((t - loop_since))s despite uid $OWNER_UID's active wayland session, restarting sddm anyway"
+  fi
+  echo "omamobile-sddm-guard: ${#fails[@]} failed autologins in ${WINDOW}s, $why (next restart no sooner than ${COOLDOWN}s)"
   systemctl restart sddm.service || echo "omamobile-sddm-guard: restarting sddm failed" >&2
   last=$t
+  save_last "$t"
   fails=()
+  loop_since=-1
+  checked=-1
 done < <(journalctl -f -n 0 -o cat -u sddm.service)
 # journalctl -f only ends when something is wrong: fail, so systemd restarts us
 echo "omamobile-sddm-guard: the journal follow ended, exiting so systemd restarts the guard" >&2

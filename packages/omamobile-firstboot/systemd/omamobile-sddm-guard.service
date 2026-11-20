@@ -12,6 +12,8 @@ Nice=10
 ProtectHome=read-only
 NoNewPrivileges=yes
 PrivateTmp=yes
+RuntimeDirectory=omamobile-sddm-guard
+RuntimeDirectoryPreserve=yes
 
 [Install]
 WantedBy=multi-user.target
