@@ -214,6 +214,8 @@ for unit in sshd.service systemd-networkd.service NetworkManager.service sddm.se
 done
 grep -q '^systemctl mask --no-reload systemd-networkd-wait-online.service NetworkManager-wait-online.service$' "$CALLS" ||
   fail "masks wait-online units without reloading systemd"
+[[ $(grep -cx 'systemctl daemon-reload' "$CALLS") == 1 ]] || fail "reloads systemd once after service changes"
+[[ $(grep -n '^systemctl daemon-reload$' "$CALLS" | cut -d: -f1) -gt $(grep -n '^systemctl mask --no-reload ' "$CALLS" | cut -d: -f1) ]] || fail "reload follows all enable and mask operations"
 grep -qx alice-phone "$R/etc/hostname" || fail "the host name"
 [[ $(readlink "$R/etc/localtime") == /usr/share/zoneinfo/Europe/Paris ]] || fail "the time zone"
 wifi=$(ls "$R"/etc/NetworkManager/system-connections/*.nmconnection)

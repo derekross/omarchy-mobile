@@ -376,6 +376,7 @@ s_services() {
     systemctl enable --no-reload "$unit" || echo "    could not enable $unit"
   done
   systemctl mask --no-reload systemd-networkd-wait-online.service NetworkManager-wait-online.service || true
+  systemctl daemon-reload
   if [[ ! -L $ROOT/etc/resolv.conf ]]; then
     ln -sfn /run/systemd/resolve/stub-resolv.conf "$ROOT/etc/resolv.conf"
   fi
