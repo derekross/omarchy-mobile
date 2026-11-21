@@ -1,0 +1,44 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Pixel 7a (lynx): display bring-up overlay.
+ * The board DTS ships these nodes disabled so a board without the panel
+ * overlay keeps the bootloader framebuffer.
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target = <&dsi0>;
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+	fragment@1 {
+		target = <&decon0>;
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+	fragment@2 {
+		target = <&cmu_dpu>;
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+	fragment@3 {
+		target = <&cmu_disp>;
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+};
