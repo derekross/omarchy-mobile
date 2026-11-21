@@ -311,3 +311,30 @@ each from a GPT whose bytes match its dump, kept in
 copies identical, `361c9ccc…`. The slot table under Slots (XBL, TZ, ABL and
 `boot_b`) is from the same session. No further `write` until the maintainer
 has decided the CONTRIBUTING §3.1 entry (#931).
+
+**2026-11-21, RAM boot of an image built from this branch (#931 review,
+point 6), with the owner's yes.** The image: `bin/omamobile initramfs` and
+`images` from this branch at `68d10cc2` (descriptor keys
+`INITRAMFS_USB_RECOVERY=no`, `INITRAMFS_USERDATA_WAIT=300`), plus the
+encrypted root's unlock from the owner's local disk-encryption work (the
+init's `crypt_unlock`, the PIN pad, `cryptsetup`, `s6sy761` in the
+initramfs; not part of this pull request, but this phone's root is LUKS2
+now and can't boot without it). Kernel `7.3.0-rc6-omamobile-crypt1-gf3a11a5f5062`,
+the overlays and command line of the `boot_a` image (`mic torch camera
+popup camera-main camera-af voice`; `splash` in place of `console=tty0`),
+so the Image and the DTB were byte for byte those of `boot_a`; only the
+initramfs differed. Before: `slot-successful:a` yes, `slot-retry-count:a` 6,
+`boot_a` unchanged (`fastboot boot` writes nothing). `systemctl reboot
+--reboot-argument=bootloader` reached fastboot in 16 s; `fastboot boot`:
+OKAY. The init: guard up (only `userdata` writable), USB gadget and SSH,
+`userdata` present at once (the wait loop had nothing to wait for), the PIN
+pad at 2.5 s, the root open at 23.5 s (the owner's PIN), the switch to Arch
+at 23.6 s. `tools/phone-smoke`: no failed units; display, GPU, session,
+lock, touch, buttons, Wi-Fi, Bluetooth, battery, sound, sensors and the
+four cameras ok; no GPU faults, the shell with `FD_MESA_DEBUG=sysmem`; all
+four remote processors running. Its two required "not ok" are this phone's
+known differences: slot A (Slots, above) and a root on `/dev/mapper/root`,
+which the smoke test doesn't know yet. The modem reported `failed`
+(`sim-missing`): there was no SIM in the phone (the owner's check), as on
+the boot before from `boot_a`. The 45 s USB watcher did
+not run (`usb-recovery` no).
