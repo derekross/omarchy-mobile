@@ -14,6 +14,7 @@ reported the screen off, but the CRTC never turned off. See
 | `nvidia-egl-teardown.patch`, `wl-output-global-grace.patch`, `monitor-rule-vrr.patch` | Omarchy's patches from the same commit, unchanged (what they fix: their comments in `prepare()`) |
 | `0001-dpms-keep-retrying-a-refused-dpms-commit.patch` | The Omamobile change to `src/output/Monitor.cpp` |
 | `0002-render-hold-the-last-frame-across-a-rotation.patch` | The Omamobile change to `src/render/Renderer.cpp` and `src/render/OpenGL.cpp` (the rotation hold, below) |
+| `0003-input-drop-a-touch-that-nothing-can-take.patch` | The Omamobile change to `src/managers/input/Touch.cpp` and `src/managers/SeatManager.cpp` (the dropped touch, below) |
 
 ## What differs from Omarchy's `hyprland` 0.57.0-2
 
@@ -32,7 +33,16 @@ reported the screen off, but the CRTC never turned off. See
   Hyprland's environment (read once at startup): `omamobile-device-panther`
   sets it in `environment.d`, and the other phones rotate as before until
   it has run on them.
-- `pkgrel=3.3`: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
+- The dropped touch (0003). With the session locked and no lock surface on
+  the monitor, a touch-down went on with the window and surface of the last
+  touch before the lock. When that surface was gone, Hyprland crashed
+  (`CSeatManager::sendTouchDown` on an empty surface) and the session went
+  with it: on a Pixel 9a a touch on the locked screen left the phone
+  with no shell until a reboot. When it was still there, the touch went to
+  a window behind the lock. Such a touch is dropped now, and so is any
+  touch-down with no surface.
+- `pkgrel=3.4` for the dropped touch, since 3.3 is published. Before that,
+  `pkgrel=3.3`: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
   (`extra/hyprland` 0.57.0-3, a rebuild for aquamarine 0.16.0 and
   hyprgraphics 0.6.0) release, plus `.1`, so it sorts above both; `.2` for
   the rotation hold, since 3.1 is published; `.3` for the half turn's
@@ -71,7 +81,14 @@ phone's own system; see "Building on the phone" below. It took about
 depends on `libaquamarine.so=15` and `libhyprgraphics.so=5`; its soname
 list is the same as `extra/hyprland` 0.57.0-3's.
 
-Checked offline:
+**0.57.0-3.4 (2026-11-21), built, not installed on a phone yet.** Built
+natively in an Arch Linux ARM container on an arm64 build host against that
+day's repositories (aquamarine 0.16.0-1, hyprgraphics 0.6.0-2, hyprutils
+0.14.4-1), 7 min at `-j8`. Its soname list is 0.57.0-3.3's, and
+every symbol it takes from the Hypr libraries is in the ones a phone on
+3.3 has (hyprutils 0.14.3-1 among them).
+
+Checked offline (for 0.57.0-3.1):
 
 - The source tarball's sha256 matches Arch's and Omarchy's (`82d006ba…`).
 - All four patches apply to it with `--fuzz=0`, in the PKGBUILD's order.
