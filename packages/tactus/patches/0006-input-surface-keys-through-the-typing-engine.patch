@@ -12,8 +12,10 @@ Also here:
   was answered;
 - Backspace held: letters, then whole words;
 - the keys under the keyboard: the emoji page, the microphone, which
-  starts the phone's dictation (omamobile.voice), and Paste, which opens
-  Omarchy's clipboard list (omarchy-menu-clipboard);
+  starts the phone's dictation (omamobile.voice), and Paste: a tap pastes
+  the last copy with Shift and Insert, a hold opens Omarchy's clipboard
+  list (omarchy-menu-clipboard), and the key is there only while
+  tactus-clipboard finds something to paste;
 - a swipe down puts the keyboard away, and a touch of the text field brings
   it back;
 - the surface is as high as the page it shows and leaves the band above the
@@ -37,17 +39,19 @@ Also here:
   *
   * SPDX-License-Identifier: GPL-3.0-or-later
   *
-@@ -29,7 +30,8 @@
+@@ -29,7 +30,10 @@
  #include "pos-speech-input.h"
  #include "pos-style-manager.h"
  #include "pos-vk-driver.h"
 -#include "pos-vk-driver.h"
++#include "pos-wayland.h"
++#include "tactus-clipboard.h"
 +#include "tactus-draw.h"
 +#include "tactus-typer.h"
  #include "util.h"
  
  #include <gmobile.h>
-@@ -47,9 +49,23 @@
+@@ -47,9 +51,23 @@
  
  #define MIN_Y_VELOCITY 1000
  
@@ -67,14 +71,14 @@ Also here:
 +#define TACTUS_DICTATION \
 +  "omarchy-shell shell call omamobile.voice press ''; omarchy-shell shell call omamobile.voice release ''"
 +
-+/* What the Paste key under the keys opens: the phone's clipboard list, where a
-+ * tap on an entry pastes it into the app that had the text field (the stock
-+ * keyboard's Paste key ends in the same command) */
++/* What the Paste key under the keys opens when it is held: the phone's
++ * clipboard list, where a tap on an entry pastes it into the app that had the
++ * text field (the stock keyboard's Paste key ends in the same command) */
 +#define TACTUS_CLIPBOARD "omarchy-menu-clipboard"
  
  /**
   * POS_INPUT_SURFACE_IS_LANG_LAYOUT:
-@@ -104,10 +120,10 @@
+@@ -104,10 +122,10 @@
   * can easily add and remove actions.
   */
  struct _PosInputSurface {
@@ -88,7 +92,16 @@ Also here:
    guint                       min_height;
    guint                       dead_zone;
  
-@@ -176,6 +192,28 @@
+@@ -158,6 +176,8 @@
+ 
+   /* Clipboard */
+   PosClipboardManager        *clipboard_manager;
++  /* Whether there is anything to paste: the Paste key is there only then */
++  TactusClipboard            *clipboard;
+ 
+   /* Speech Input */
+   PosSpeechInput             *speech_input;
+@@ -176,6 +196,28 @@
    gboolean                    layout_overriden;
    /* Keymap handling */
    guint                       keymap_delayed_id;
@@ -117,7 +130,7 @@ Also here:
  };
  
  
-@@ -264,8 +302,20 @@
+@@ -264,8 +306,20 @@
  {
    PosInputSurface *self = data;
  
@@ -138,7 +151,7 @@ Also here:
  
    return G_SOURCE_CONTINUE;
  }
-@@ -277,14 +327,9 @@
+@@ -277,14 +331,9 @@
    PosInputSurface *self = data;
    guint interval;
  
@@ -156,7 +169,7 @@ Also here:
  
    self->bs_repeat_id = g_timeout_add (interval, on_bs_key_repeat, self);
    g_source_set_name_by_id (self->bs_repeat_id, "[pos-bs-key-repeat]");
-@@ -332,6 +377,252 @@
+@@ -332,6 +381,320 @@
  }
  
  
@@ -356,6 +369,72 @@ Also here:
 +    g_warning ("%s: %s", what, err->message);
 +}
 +
++static void set_keymap (PosInputSurface *self);
++
++/* The Paste key is there while there is something to paste */
++static gboolean
++tactus_paste_changed (gpointer data)
++{
++  PosInputSurface *self = POS_INPUT_SURFACE (data);
++  gboolean shown = tactus_clipboard_can_paste (self->clipboard);
++
++  for (guint i = 0; self->osks && i < self->osks->len; i++)
++    pos_osk_widget_set_paste_shown (g_ptr_array_index (self->osks, i), shown);
++  if (self->osk_terminal)
++    pos_osk_widget_set_paste_shown (POS_OSK_WIDGET (self->osk_terminal), shown);
++  return G_SOURCE_REMOVE;
++}
++
++/*
++ * A tap on Paste: the last copy, pasted the way an application pastes, with
++ * Shift and Insert from the keyboard's own virtual keyboard (what a pick in
++ * Omarchy's clipboard list ends in, and what the terminal, GTK and the
++ * phone's own programs take as Paste). The text is never typed out: a copy
++ * with a line break in it would press Return half way through, and where
++ * Return sends, half a message would be gone. A picture is pasted the same way.
++ *
++ * With nothing on the clipboard itself (the program it was copied in has
++ * gone) the newest entry of the clipboard's history is pasted, by the shell's
++ * own commands, as a tap on it in the list would.
++ */
++static void
++tactus_paste (PosInputSurface *self)
++{
++  const TactusClipEntry *newest;
++  g_autofree char *index = NULL;
++  g_autoptr (GError) err = NULL;
++  const char *argv[5] = { NULL };
++
++  if (tactus_clipboard_has_copy (self->clipboard)) {
++    if (self->keyboard_driver == NULL)
++      return;
++    /* An accent or an emoji was just sent with a keymap of its own */
++    if (self->keymap_delayed_id) {
++      g_clear_handle_id (&self->keymap_delayed_id, g_source_remove);
++      set_keymap (self);
++    }
++    tactus_press_key (self, "KEY_INSERT", POS_KEYCODE_MODIFIER_SHIFT);
++    return;
++  }
++
++  newest = tactus_clipboard_newest (self->clipboard);
++  if (newest == NULL)
++    return;
++  if (newest->image) {
++    argv[0] = "omarchy-clipboard-paste-file";
++    argv[1] = newest->mime;
++    argv[2] = newest->path;
++  } else {
++    index = g_strdup_printf ("%d", newest->index);
++    argv[0] = "omarchy-clipboard-paste-text";
++    argv[1] = "--shift-insert";
++    argv[2] = "--history-index";
++    argv[3] = index;
++  }
++  if (!g_spawn_async (NULL, (char **) argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &err))
++    g_warning ("Paste: %s", err->message);
++}
++
 +/* One of the keys under the keyboard */
 +static void
 +on_osk_strip_key (PosInputSurface *self, const char *which, GtkWidget *osk_widget)
@@ -370,7 +449,9 @@ Also here:
 +  } else if (g_strcmp0 (which, "mic") == 0) {
 +    tactus_run ("Dictation", TACTUS_DICTATION);
 +  } else if (g_strcmp0 (which, "paste") == 0) {
-+    /* The list takes the keyboard focus, so the text field lets go of the
++    tactus_paste (self);
++  } else if (g_strcmp0 (which, "clipboard") == 0) {
++    /* Held. The list takes the keyboard focus, so the text field lets go of the
 +     * keyboard, and its pick is pasted into the app when the list has closed */
 +    tactus_run ("Paste", TACTUS_CLIPBOARD);
 +  }
@@ -409,7 +490,7 @@ Also here:
  static void
  on_swipe (GtkGestureSwipe *swipe, double velocity_x, double velocity_y, gpointer data)
  {
-@@ -342,7 +633,14 @@
+@@ -342,7 +705,14 @@
    g_debug ("swipe with v_x: %f, v_y: %f", velocity_x, velocity_y);
  
    if (velocity_y > MIN_Y_VELOCITY && velocity_y > 2.0 * ABS (velocity_x)) {
@@ -424,7 +505,7 @@ Also here:
      pos_input_surface_set_visible (self, FALSE);
    } else {
      g_debug ("Swipe not downwards");
-@@ -578,11 +876,19 @@
+@@ -578,11 +948,19 @@
  
  
  static void
@@ -445,7 +526,7 @@ Also here:
  }
  
  
-@@ -595,20 +901,49 @@
+@@ -595,20 +973,49 @@
  
    is_bs = pos_input_surface_set_backspace_pressed (self, symbol);
  
@@ -499,7 +580,7 @@ Also here:
      return;
    }
  
-@@ -621,8 +956,7 @@
+@@ -621,8 +1028,7 @@
    if (is_bs) {
      pos_input_surface_handle_backsapce (self);
    } else if (g_str_has_prefix (symbol, "KEY_")) {
@@ -509,7 +590,7 @@ Also here:
    } else {
      pos_input_method_send_string (self->input_method, symbol, TRUE);
    }
-@@ -725,7 +1059,9 @@
+@@ -725,7 +1131,9 @@
    if (gm_str_is_null_or_empty (text))
      return;
  
@@ -520,7 +601,7 @@ Also here:
      pos_input_surface_submit_current_preedit (self);
      pos_input_method_send_string (self->input_method, text, TRUE);
    } else {
-@@ -789,7 +1125,9 @@
+@@ -789,7 +1197,9 @@
    g_assert (POS_IS_INPUT_SURFACE (self));
    g_assert (POS_IS_EMOJI_PICKER (emoji_picker));
  
@@ -531,7 +612,7 @@ Also here:
      pos_input_surface_submit_current_preedit (self);
      pos_input_method_send_string (self->input_method, emoji, TRUE);
    } else {
-@@ -1039,6 +1377,253 @@
+@@ -1039,6 +1449,253 @@
  }
  
  
@@ -785,7 +866,7 @@ Also here:
  static void
  on_visible_child_changed (PosInputSurface *self)
  {
-@@ -1048,6 +1633,11 @@
+@@ -1048,6 +1705,11 @@
    child = hdy_deck_get_visible_child (self->deck);
  
    pos_input_surface_toggle_shortcuts_bar (self);
@@ -797,7 +878,7 @@ Also here:
  
    if (!POS_IS_OSK_WIDGET (child))
      return;
-@@ -1055,6 +1645,11 @@
+@@ -1055,6 +1717,11 @@
    osk = POS_OSK_WIDGET (child);
    g_debug ("Switched to layout '%s'", pos_osk_widget_get_display_name (osk));
    pos_osk_widget_set_layer (osk, POS_OSK_WIDGET_LAYER_NORMAL);
@@ -809,7 +890,7 @@ Also here:
  
    set_keymap (self);
  
-@@ -1100,9 +1695,11 @@
+@@ -1100,9 +1767,11 @@
  
    if (self->animation.progress >= 1.0 && self->animation.show) {
      /* On unfold adjust the exclusive zone at the very end to avoid flickering */
@@ -822,7 +903,7 @@ Also here:
      phosh_layer_surface_set_exclusive_zone (PHOSH_LAYER_SURFACE (self), 0);
    }
  
-@@ -1363,7 +1960,8 @@
+@@ -1363,7 +2032,8 @@
      pos_input_surface_set_min_height (self, g_value_get_uint (value));
      break;
    case PROP_DEAD_ZONE:
@@ -832,7 +913,7 @@ Also here:
      break;
    default:
      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
-@@ -1630,6 +2228,7 @@
+@@ -1630,6 +2300,7 @@
                      on_im_text_change_cause_changed, self,
                      "swapped-object-signal::notify::surrounding-text",
                      on_im_surrounding_text_changed, self,
@@ -840,13 +921,14 @@ Also here:
                      NULL);
  
    set_keymap (self);
-@@ -1667,6 +2266,15 @@
+@@ -1667,6 +2338,16 @@
    g_clear_handle_id (&self->animation.id, g_source_remove);
    g_clear_handle_id (&self->bs_repeat_id, g_source_remove);
    g_clear_handle_id (&self->keymap_delayed_id, g_source_remove);
 +  g_clear_handle_id (&self->typer_wake_id, g_source_remove);
 +  g_clear_handle_id (&self->shape_id, g_source_remove);
 +  g_clear_pointer (&self->typer, tactus_typer_free);
++  g_clear_pointer (&self->clipboard, tactus_clipboard_free);
 +  if (self->tactus_css) {
 +    gtk_style_context_remove_provider_for_screen (gdk_screen_get_default (),
 +                                                  GTK_STYLE_PROVIDER (self->tactus_css));
@@ -856,7 +938,7 @@ Also here:
  
    g_clear_object (&self->speech_input);
    g_clear_object (&self->logind_session);
-@@ -1813,13 +2421,12 @@
+@@ -1813,13 +2494,12 @@
    gtk_widget_get_preferred_size (GTK_WIDGET (self), &min, NULL);
    g_object_get (self, "height", &height, NULL);
  
@@ -873,7 +955,7 @@ Also here:
    }
  
    /* Ensure unfold animation starts from the screen bottom */
-@@ -1827,6 +2434,8 @@
+@@ -1827,6 +2507,8 @@
      phosh_layer_surface_set_margins (PHOSH_LAYER_SURFACE (self), 0, 0, -min.height, 0);
  
    GTK_CONTAINER_CLASS (pos_input_surface_parent_class)->check_resize (container);
@@ -882,15 +964,19 @@ Also here:
  }
  
  
-@@ -2073,6 +2682,7 @@
+@@ -2073,8 +2755,11 @@
                      "swapped-signal::notify::mode", G_CALLBACK (on_osk_mode_changed), self,
                      "swapped-signal::popover-shown", G_CALLBACK (on_osk_popover_shown), self,
                      "swapped-signal::popover-hidden", G_CALLBACK (on_osk_popover_hidden), self,
 +                    "swapped-signal::strip-key", G_CALLBACK (on_osk_strip_key), self,
                      NULL);
  
++  pos_osk_widget_set_paste_shown (osk_widget, tactus_clipboard_can_paste (self->clipboard));
++
    hdy_deck_insert_child_after (self->deck, GTK_WIDGET (osk_widget), NULL);
-@@ -2367,8 +2977,51 @@
+   g_ptr_array_add (self->osks, osk_widget);
+ 
+@@ -2367,8 +3052,60 @@
    g_autoptr (GError) err = NULL;
    GAction *action;
  
@@ -913,6 +999,15 @@ Also here:
 +  hdy_deck_set_transition_duration (self->deck, 0);
 +  hdy_deck_set_homogeneous (self->deck, GTK_ORIENTATION_VERTICAL, FALSE);
 +  g_signal_connect_swapped (self->osk_terminal, "strip-key", G_CALLBACK (on_osk_strip_key), self);
++  {
++    PosWayland *wayland = pos_wayland_get_default ();
++    g_autofree char *history = tactus_clipboard_history_path ();
++
++    self->clipboard = tactus_clipboard_new (wayland ? pos_wayland_get_ext_data_control_manager_v1 (wayland) : NULL,
++                                            wayland ? pos_wayland_get_wl_seat (wayland) : NULL,
++                                            history, tactus_paste_changed, self);
++    tactus_paste_changed (self);
++  }
 +  g_signal_connect (self->keypad, "draw", G_CALLBACK (on_page_draw), NULL);
 +  g_object_connect (self->emoji_picker,
 +                    "swapped-signal::mic", G_CALLBACK (on_emoji_picker_mic), self,
@@ -942,7 +1037,7 @@ Also here:
    self->bs_mode = POS_BACKSPACE_MODE_CHAR;
    self->style_manager = pos_style_manager_new ();
    self->action_map = g_simple_action_group_new ();
-@@ -2503,6 +3156,11 @@
+@@ -2503,6 +3240,11 @@
  
    self->surface_visible = visible;
    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_SURFACE_VISIBLE]);
@@ -954,7 +1049,7 @@ Also here:
  
    self->animation.show = visible;
    self->animation.last_frame = -1;
-@@ -2618,7 +3276,12 @@
+@@ -2618,7 +3360,12 @@
    g_autofree char *name = NULL;
  
    if (g_str_equal (type, "")) {

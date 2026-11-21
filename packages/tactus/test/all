@@ -45,10 +45,10 @@ grep -q 'mv "$p/bin/phosh-osk-stevia" "$p/bin/tactus"' PKGBUILD \
   && pass "the binary is named tactus (Hyprland names its virtual keyboard after it)" || fail "the binary keeps Stevia's name"
 
 # --- the patches
-want_files="meson.build src/layouts/us.json src/meson.build src/pos-emoji-picker.c src/pos-emoji-picker.h src/pos-hw-tracker.c src/pos-input-surface.c src/pos-osk-widget.c src/pos-osk-widget.h src/pos-wayland.c tools/meson.build"
+want_files="meson.build src/layouts/us.json src/meson.build src/pos-emoji-picker.c src/pos-emoji-picker.h src/pos-hw-tracker.c src/pos-input-surface.c src/pos-osk-widget.c src/pos-osk-widget.h src/pos-vk-driver.c src/pos-wayland.c tools/meson.build"
 shopt -s nullglob
 patches=(patches/*.patch)
-[[ ${#patches[@]} == 6 ]] && pass "six patches" || fail "${#patches[@]} patches, not six"
+[[ ${#patches[@]} == 7 ]] && pass "seven patches" || fail "${#patches[@]} patches, not seven"
 bad=
 for p in "${patches[@]}"; do
   [[ $(head -1 "$p") == "Subject: "* ]] || bad+=" $p:no-subject"
@@ -58,17 +58,17 @@ done
 [[ -z $bad ]] && pass "each patch says what it does and why, then the diff" || fail "patches not shaped as patches:$bad"
 got_files=$(grep -h '^+++ b/' "${patches[@]}" | sed 's|^+++ b/||' | sort | tr '\n' ' ')
 [[ "$got_files" == "$(tr ' ' '\n' <<<"$want_files" | sort | tr '\n' ' ')" ]] \
-  && pass "the patches change eleven of Stevia's files and no other" || fail "the patches touch: $got_files"
+  && pass "the patches change twelve of Stevia's files and no other" || fail "the patches touch: $got_files"
 
 # --- our own sources
-own=(source/tactus-autocorrect.c source/tactus-autocorrect.h source/tactus-draw.c source/tactus-draw.h source/tactus-typer.c source/tactus-typer.h
-     tools/tactus-ac-test.c tools/tactus-draw-test.c tools/tactus-emoji-test.c tools/tactus-kbd-test.c tools/tactus-pages-test.c tools/tactus-typer-test.c)
+own=(source/tactus-autocorrect.c source/tactus-autocorrect.h source/tactus-clipboard.c source/tactus-clipboard.h source/tactus-draw.c source/tactus-draw.h source/tactus-typer.c source/tactus-typer.h
+     tools/tactus-ac-test.c tools/tactus-draw-test.c tools/tactus-emoji-test.c tools/tactus-kbd-test.c tools/tactus-pages-test.c tools/tactus-paste-test.c tools/tactus-typer-test.c)
 bad=
 for f in "${own[@]}"; do
   [[ -f $f ]] || { bad+=" $f:missing"; continue; }
   grep -q 'SPDX-License-Identifier: GPL-3.0-or-later' "$f" || bad+=" $f:no-licence"
 done
-[[ -z $bad && $(ls source/* tools/* | wc -l) == "${#own[@]}" ]] && pass "twelve source files of our own, each GPL-3.0-or-later" || fail "own sources:$bad"
+[[ -z $bad && $(ls source/* tools/* | wc -l) == "${#own[@]}" ]] && pass "fifteen source files of our own, each GPL-3.0-or-later" || fail "own sources:$bad"
 [[ $(sed -n 1p COPYING 2>/dev/null | tr -s ' ') == ' GNU GENERAL PUBLIC LICENSE' && $(sed -n 2p COPYING | tr -s ' ') == ' Version 3, 29 June 2007' ]] \
   && [[ $(head -1 README.md) == '<!-- SPDX-License-Identifier: GPL-3.0-or-later -->' ]] \
   && pass "the GPL-3.0 text is beside them, and the README says it" || fail "COPYING is not the GPL-3.0, or the README has no SPDX line"
@@ -121,6 +121,8 @@ if [[ -n $built ]]; then
   export XDG_DATA_HOME=$tmp2/data XDG_STATE_HOME=$tmp2/state XDG_CONFIG_HOME=$tmp2/config
   out=$("$built/tools/tactus-typer-test" 2>&1); rc=$?
   [[ $rc == 0 ]] && pass "typing: $(tail -1 <<<"$out")" || fail "typing: $(grep -E 'FAIL|failed|no dictionary' <<<"$out" | head -5 | tr '\n' ' ')"
+  out=$("$built/tools/tactus-paste-test" 2>&1); rc=$?
+  [[ $rc == 0 ]] && pass "what there is to paste: $(tail -1 <<<"$out")" || fail "what there is to paste: $(grep -E 'FAIL|failed' <<<"$out" | head -5 | tr '\n' ' ')"
   out=$("$built/tools/tactus-ac-test" 2>&1); rc=$?
   [[ $rc == 0 ]] && pass "words: $(tail -1 <<<"$out")" || fail "words: $(grep -E 'FAIL|failed|no dictionary' <<<"$out" | head -5 | tr '\n' ' ')"
   # The trace and the debug lines, on: what they say of a run that types these words must not hold one

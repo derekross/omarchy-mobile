@@ -1,7 +1,7 @@
 Subject: build: the typing engine, the drawing and their tests
 
-Adds Tactus's own sources to the library (tactus-autocorrect, tactus-draw,
-tactus-typer), links hunspell for the dictionary, tells the code where the
+Adds Tactus's own sources to the library (tactus-autocorrect,
+tactus-clipboard, tactus-draw, tactus-typer), links hunspell for the dictionary, tells the code where the
 package's data is (TACTUS_PKGDATADIR, for the word counts), and builds the
 checks that run with no window on screen (tools/tactus-*-test).
 ---
@@ -25,12 +25,14 @@ checks that run with no window on screen (tools/tactus-*-test).
    wayland_client_dep,
    xkbcommon_dep,
    cc.find_library('m', required: false),
-@@ -34,6 +35,12 @@
+@@ -34,6 +35,14 @@
  )
  
  libpos_sources = files(
 +  'tactus-autocorrect.c',
 +  'tactus-autocorrect.h',
++  'tactus-clipboard.c',
++  'tactus-clipboard.h',
 +  'tactus-draw.c',
 +  'tactus-draw.h',
 +  'tactus-typer.c',
@@ -40,7 +42,7 @@ checks that run with no window on screen (tools/tactus-*-test).
    'pos-activation-filter.h',
 --- a/tools/meson.build
 +++ b/tools/meson.build
-@@ -1,3 +1,17 @@
+@@ -1,3 +1,18 @@
  
  
  executable('pos-speech-test', 'pos-speech-test.c', dependencies: libpos_dep)
@@ -55,6 +57,7 @@ checks that run with no window on screen (tools/tactus-*-test).
 +)
 +executable('tactus-ac-test', 'tactus-ac-test.c', dependencies: libpos_dep)
 +executable('tactus-typer-test', 'tactus-typer-test.c', dependencies: libpos_dep)
++executable('tactus-paste-test', 'tactus-paste-test.c', dependencies: libpos_dep)
 +executable('tactus-pages-test', 'tactus-pages-test.c', dependencies: libpos_dep)
 +
 +executable('tactus-emoji-test', 'tactus-emoji-test.c', dependencies: libpos_dep)

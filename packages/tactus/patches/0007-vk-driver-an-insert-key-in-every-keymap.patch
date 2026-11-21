@@ -1,0 +1,27 @@
+Subject: vk-driver: an Insert key in every keymap
+
+The Paste key pastes as an application does, with Shift and Insert from the
+keyboard's own virtual keyboard. The driver gives each layout a keymap of its
+own, with the keycodes handed out in order to whatever the layout types, so
+the keycode a hardware keyboard has for Insert may mean a letter there. Insert
+now has a key of its own in the generated keymaps, as Return, Backspace and
+the arrows have, and is among the named keys of the terminal's keymap.
+---
+--- a/src/pos-vk-driver.c
++++ b/src/pos-vk-driver.c
+@@ -59,6 +59,7 @@
+   { "KEY_TAB", KEY_TAB, POS_KEYCODE_MODIFIER_NONE },
+   { "KEY_BACKSPACE" ,KEY_BACKSPACE, POS_KEYCODE_MODIFIER_NONE },
+   { "KEY_ESC", KEY_ESC, POS_KEYCODE_MODIFIER_NONE },
++  { "KEY_INSERT", KEY_INSERT, POS_KEYCODE_MODIFIER_NONE },
+   { "KEY_F1", KEY_F1, POS_KEYCODE_MODIFIER_NONE },
+   { "KEY_F2", KEY_F2, POS_KEYCODE_MODIFIER_NONE },
+   { "KEY_F3", KEY_F3, POS_KEYCODE_MODIFIER_NONE },
+@@ -693,6 +694,7 @@
+     { "KEY_RIGHT", "Right" },
+     { "KEY_UP", "Up" },
+     { "KEY_DOWN", "Down"},
++    { "KEY_INSERT", "Insert" },
+     { NULL, NULL } };
+ 
+   g_return_if_fail (POS_IS_VK_DRIVER (self));

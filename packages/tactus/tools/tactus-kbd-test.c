@@ -473,6 +473,8 @@ main (int argc, char **argv)
   }
 
   /* ---- pictures ---- */
+  pos_osk_widget_set_paste_shown (w, TRUE);
+  wait_ms (20);
   snap (window, w, "01-lower.png");
   tap (w, "shift");
   snap (window, w, "02-shift.png");
@@ -705,44 +707,128 @@ main (int argc, char **argv)
   check_str ("they type nothing", typed->str, "");
   reset (w);
 
-  tap (w, "paste");
-  check_str ("paste", strstr (log_events->str, "strip:") ?: "", "strip:paste ");
-  check_str ("it types nothing", typed->str, "");
-  reset (w);
+  /* paste: there only while there is something to paste, and then in the middle */
   {
     TactusGeom *mic = find_key (w, "mic"), *paste = find_key (w, "paste"), *emoji = find_key (w, "emoji");
-    double sy = mic->vy + mic->vh / 2, wide = gtk_widget_get_allocated_width (GTK_WIDGET (w));
-    double mic_x = mic->vx + mic->vw / 2, paste_x = paste->vx + paste->vw / 2;
-    double between = (mic_x + paste_x) / 2;
+    double wide = gtk_widget_get_allocated_width (GTK_WIDGET (w));
+    double px = paste->vx + paste->vw / 2, py = paste->vy + paste->vh / 2;
+    double mic_x = mic->vx + mic->vw / 2, emoji_x = emoji->vx + emoji->vw / 2;
+    double reach = 2 * (wide - mic_x);                              /* a span's width */
+    double far = 12.0 * w->vs + 2;                                  /* further than the slop */
 
-    check_int ("paste stands left of dictation, clear of it", paste->vx + paste->vw < mic->vx, TRUE);
-    check_int ("and right of the middle", paste->vx > wide / 2, TRUE);
-    check_int ("at dictation's height", (int) paste->vy, (int) mic->vy);
-
-    /* dictation keeps the span it had: out to the edge, and as far in as before */
-    send_touch (w, GDK_TOUCH_BEGIN, 0, between + 2, sy);
-    send_touch (w, GDK_TOUCH_END, 0, between + 2, sy);
-    check_str ("just right of half way between them: dictation", strstr (log_events->str, "strip:") ?: "", "strip:mic ");
-    reset (w);
-    send_touch (w, GDK_TOUCH_BEGIN, 0, between - 2, sy);
-    send_touch (w, GDK_TOUCH_END, 0, between - 2, sy);
-    check_str ("just left of it: paste", strstr (log_events->str, "strip:") ?: "", "strip:paste ");
-    reset (w);
-    send_touch (w, GDK_TOUCH_BEGIN, 0, wide - 1, sy);
-    send_touch (w, GDK_TOUCH_END, 0, wide - 1, sy);
-    check_str ("the right edge is dictation's", strstr (log_events->str, "strip:") ?: "", "strip:mic ");
-    reset (w);
-
-    /* the middle of the strip belongs to nobody: swipes up start there */
-    send_touch (w, GDK_TOUCH_BEGIN, 0, wide / 2 - 4, sy);
-    send_touch (w, GDK_TOUCH_END, 0, wide / 2 - 4, sy);
-    check_str ("the middle of the strip is no key", strstr (log_events->str, "strip:") ?: "", "");
+    pos_osk_widget_set_paste_shown (w, FALSE);
+    tap (w, "paste");
+    check_str ("with nothing to paste the middle is no key", log_events->str, "");
     check_str ("and types nothing", typed->str, "");
     reset (w);
-    send_touch (w, GDK_TOUCH_BEGIN, 0, emoji->vx + emoji->vw / 2 + (mic_x - between) - 2, sy);
-    send_touch (w, GDK_TOUCH_END, 0, emoji->vx + emoji->vw / 2 + (mic_x - between) - 2, sy);
-    check_str ("emoji keeps its span", strstr (log_events->str, "strip:") ?: "", "strip:emoji ");
+
+    pos_osk_widget_set_paste_shown (w, TRUE);
+    wait_ms (20);
+    check_int ("paste stands in the middle", (int) (px + 0.5), (int) (wide / 2 + 0.5));
+    check_int ("at dictation's height", (int) paste->vy, (int) mic->vy);
+    check_int ("emoji where it was", (int) emoji_x, (int) (wide - mic_x));
+    check_int ("clear of emoji and of dictation",
+               emoji->vx + emoji->vw < paste->vx && paste->vx + paste->vw < mic->vx, TRUE);
+
+    tap (w, "paste");
+    check_str ("a tap on paste", strstr (log_events->str, "strip:") ?: "", "strip:paste ");
+    check_str ("it types nothing", typed->str, "");
     reset (w);
+
+    /* its span is as wide as the others', and theirs are what they were */
+    send_touch (w, GDK_TOUCH_BEGIN, 0, px + reach / 2 - 2, py);
+    send_touch (w, GDK_TOUCH_END, 0, px + reach / 2 - 2, py);
+    check_str ("the right end of its span", strstr (log_events->str, "strip:") ?: "", "strip:paste ");
+    reset (w);
+    send_touch (w, GDK_TOUCH_BEGIN, 0, px + reach / 2 + 2, py);
+    send_touch (w, GDK_TOUCH_END, 0, px + reach / 2 + 2, py);
+    check_str ("just past it: no key", log_events->str, "");
+    reset (w);
+    send_touch (w, GDK_TOUCH_BEGIN, 0, px - reach / 2 - 2, py);
+    send_touch (w, GDK_TOUCH_END, 0, px - reach / 2 - 2, py);
+    check_str ("nor just left of it", log_events->str, "");
+    reset (w);
+    send_touch (w, GDK_TOUCH_BEGIN, 0, wide - reach + 2, py);
+    send_touch (w, GDK_TOUCH_END, 0, wide - reach + 2, py);
+    check_str ("dictation keeps its span", strstr (log_events->str, "strip:") ?: "", "strip:mic ");
+    reset (w);
+    send_touch (w, GDK_TOUCH_BEGIN, 0, reach - 2, py);
+    send_touch (w, GDK_TOUCH_END, 0, reach - 2, py);
+    check_str ("and emoji its own", strstr (log_events->str, "strip:") ?: "", "strip:emoji ");
+    reset (w);
+
+    /* held: the history, once, while it is held */
+    down (w, 0, "paste");
+    wait_ms (300);
+    check_str ("held 300 ms: nothing yet", strstr (log_events->str, "strip:") ?: "", "");
+    wait_ms (150);
+    check_str ("held 450 ms: the history", strstr (log_events->str, "strip:") ?: "", "strip:clipboard ");
+    wait_ms (450);
+    up (w, 0, "paste");
+    check_str ("held on and let go: still the once, and no paste", strstr (log_events->str, "strip:") ?: "",
+               "strip:clipboard ");
+    reset (w);
+
+    /* a tap may wobble */
+    send_touch (w, GDK_TOUCH_BEGIN, 0, px, py);
+    send_touch (w, GDK_TOUCH_UPDATE, 0, px + 3, py - 4);
+    send_touch (w, GDK_TOUCH_END, 0, px + 3, py - 4);
+    check_str ("a tap that wobbles a little", strstr (log_events->str, "strip:") ?: "", "strip:paste ");
+    reset (w);
+
+    /* a swipe that starts on the key is neither a tap nor a hold */
+    send_touch (w, GDK_TOUCH_BEGIN, 0, px, py);
+    send_touch (w, GDK_TOUCH_UPDATE, 0, px, py - far);
+    send_touch (w, GDK_TOUCH_END, 0, px, py - far);
+    check_str ("a swipe up from the key: nothing", strstr (log_events->str, "strip:") ?: "", "");
+    reset (w);
+    send_touch (w, GDK_TOUCH_BEGIN, 0, px, py);
+    send_touch (w, GDK_TOUCH_END, 0, px, py - 6 * far);
+    check_str ("a quick one, lifted far away with nothing in between", strstr (log_events->str, "strip:") ?: "", "");
+    reset (w);
+    send_touch (w, GDK_TOUCH_BEGIN, 0, px, py);
+    send_touch (w, GDK_TOUCH_UPDATE, 0, px + far, py);
+    send_touch (w, GDK_TOUCH_UPDATE, 0, px, py);
+    send_touch (w, GDK_TOUCH_END, 0, px, py);
+    check_str ("out and back again: still nothing", strstr (log_events->str, "strip:") ?: "", "");
+    reset (w);
+    send_touch (w, GDK_TOUCH_BEGIN, 0, px, py);
+    send_touch (w, GDK_TOUCH_UPDATE, 0, px, py + far);
+    wait_ms (450);
+    check_str ("a swipe down that rests: no history", strstr (log_events->str, "strip:") ?: "", "");
+    send_touch (w, GDK_TOUCH_UPDATE, 0, px, py);
+    wait_ms (450);
+    send_touch (w, GDK_TOUCH_END, 0, px, py);
+    check_str ("nor when it comes back and stays", strstr (log_events->str, "strip:") ?: "", "");
+    reset (w);
+    send_touch (w, GDK_TOUCH_BEGIN, 0, px, py);
+    wait_ms (200);
+    send_touch (w, GDK_TOUCH_UPDATE, 0, px, py - far);
+    wait_ms (300);
+    send_touch (w, GDK_TOUCH_END, 0, px, py - far);
+    check_str ("held a moment, then swiped: nothing", strstr (log_events->str, "strip:") ?: "", "");
+    reset (w);
+    send_touch (w, GDK_TOUCH_BEGIN, 0, px, py);
+    send_touch (w, GDK_TOUCH_CANCEL, 0, px, py);
+    wait_ms (450);
+    check_str ("a touch the compositor took for a gesture: nothing", strstr (log_events->str, "strip:") ?: "", "");
+    check_str ("none of this typed anything", typed->str, "");
+    reset (w);
+
+    /* what was copied goes away under the finger */
+    down (w, 0, "paste");
+    pos_osk_widget_set_paste_shown (w, FALSE);
+    wait_ms (450);
+    up (w, 0, "paste");
+    check_str ("the key went while it was held: nothing", strstr (log_events->str, "strip:") ?: "", "");
+    reset (w);
+    check_int ("the others did not move", (int) (find_key (w, "mic")->vx + find_key (w, "mic")->vw / 2), (int) mic_x);
+    tap (w, "mic");
+    check_str ("and dictation works without it", strstr (log_events->str, "strip:") ?: "", "strip:mic ");
+    reset (w);
+    snap (window, w, "18-nothing-to-paste.png");
+    pos_osk_widget_set_paste_shown (w, TRUE);
+    wait_ms (20);
   }
 
   /* return */
@@ -805,8 +891,12 @@ main (int argc, char **argv)
     check_int ("right of l: l", tactus_hit_test (w, width - 2, find_key (w, "l")->vy + 5) == find_key (w, "l"), TRUE);
     check_int ("just under the space bar: space",
                tactus_hit_test (w, width / 2, tactus_keys_bottom (w) + 6) == find_key (w, "space"), TRUE);
-    check_int ("under the middle of the keys, lower: nothing",
+    check_int ("under the middle of the keys, lower: paste",
+               tactus_hit_test (w, width / 2, tactus_keys_bottom (w) + 30) == find_key (w, "paste"), TRUE);
+    pos_osk_widget_set_paste_shown (w, FALSE);
+    check_int ("and with nothing to paste: nothing",
                tactus_hit_test (w, width / 2, tactus_keys_bottom (w) + 30) == NULL, TRUE);
+    pos_osk_widget_set_paste_shown (w, TRUE);
   }
 
   /* a pressed key, and dark */

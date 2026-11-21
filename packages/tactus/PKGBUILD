@@ -7,9 +7,10 @@
 #
 # Built from Stevia 0.59.0 (https://gitlab.gnome.org/World/Phosh/stevia,
 # GPL-3.0-or-later), whose Wayland side, layout files and emoji data it keeps:
-#  - patches/0001 to 0006, each with what it does and why in its header;
+#  - patches/0001 to 0007, each with what it does and why in its header;
 #  - source/ and tools/: Tactus's own sources (the typing engine, the
-#    autocorrection, the drawing) and the checks that run with no window.
+#    autocorrection, the drawing, what there is to paste) and the checks
+#    that run with no window.
 # The word counts the autocorrection weighs are hermitdave's FrequencyWords
 # (content/2018/en/en_50k.txt, made from OpenSubtitles 2018, CC-BY-SA-4.0),
 # fetched at a pinned commit and installed unchanged.

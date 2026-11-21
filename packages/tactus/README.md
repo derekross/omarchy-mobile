@@ -7,7 +7,7 @@ Tactus is an on-screen keyboard an owner may choose instead of squeekboard. It c
   <img src="../../docs/screenshots/tactus/letters.png" width="45%" alt="Tactus in Omarchy's Tokyo Night theme">
 </p>
 
-It is built from [Stevia](https://gitlab.gnome.org/World/Phosh/stevia) 0.59.0 (GPL-3.0-or-later), whose Wayland side, layout files and emoji data it keeps. The keys, the emoji page and everything about what gets typed are written anew: six patches to Stevia's files in `patches/`, each with what it does and why in its header, and Tactus's own sources in `source/` (the typing engine, the autocorrection, the drawing) and `tools/` (its checks).
+It is built from [Stevia](https://gitlab.gnome.org/World/Phosh/stevia) 0.59.0 (GPL-3.0-or-later), whose Wayland side, layout files and emoji data it keeps. The keys, the emoji page and everything about what gets typed are written anew: seven patches to Stevia's files in `patches/`, each with what it does and why in its header, and Tactus's own sources in `source/` (the typing engine, the autocorrection, the drawing, what there is to paste) and `tools/` (its checks).
 
 ## Choosing it
 
@@ -34,7 +34,7 @@ The package sits beside squeekboard: everything is under `/usr/lib/tactus`, with
 - **A long press** on a letter offers its accented forms. Held on the space bar, a slide moves the cursor. Backspace held deletes letters, then whole words. **Return held types a new line** where a tap on it would send what was written (a message, a search): it goes to the application as Return with Shift, and the line break appears while the key is still held.
 - **An emoji page:** large emoji in four rows that slide sideways, the ones used lately first, a sign for each kind, a search by name, skin tones on a long press.
 - **A microphone key** that starts the phone's dictation (`omamobile.voice`), and a swipe down that puts the keyboard away.
-- **A Paste key** beside the microphone, which opens Omarchy's clipboard list (`omarchy-menu-clipboard`, what squeekboard's Paste key opens): a tap on an entry there pastes it into the application. The list takes the keyboard's place while it is open.
+- **A Paste key** in the middle under the keys, between the emoji key and the microphone. **A tap pastes the last copy**; **held**, it opens Omarchy's clipboard list (`omarchy-menu-clipboard`), where a tap on an entry pastes that one. The tap pastes as an application does, with Shift and Insert from the keyboard's own virtual keyboard (what a pick in the clipboard list ends in): the text is never typed out, so a copy with a line break in it can't send a message half way through, and a picture pastes the same way. When the program the copy was made in has gone and the clipboard itself is empty, the tap pastes the newest entry of the clipboard's history, through the shell's own commands. This differs from squeekboard's Paste key, which opens the list on a tap. **The key is there only while there is something to paste:** text or a picture on the clipboard, or an entry in the history (`~/.local/state/omarchy/clipboard-history.json`). Tactus is told of both, by the compositor (the data-control protocol: only the kinds of data a copy is offered as, never the data) and by a file monitor, and asks neither on a timer; nothing else under the keys moves when the key comes or goes. **A press on it that travels is neither a tap nor a hold:** once the finger has moved more than 12 points from where it came down (a couple of millimetres on a phone), in any direction and wherever it goes afterwards, or the compositor has taken the touch for a gesture of its own, nothing happens. So a swipe up for the home screen or down to put the keyboard away may start on the key.
 - **Past its round top corners the application shows,** not the wallpaper: the keyboard asks for a little less room than its panel is high (8 px on a screen 360 wide), so the window in front reaches that far under the panel's top. That much of the window's lower edge is behind the keyboard.
 - It learns where the owner's fingers land (`~/.local/state/tactus/touch`) and shifts the keys' touch targets by it, within narrow limits.
 
@@ -77,9 +77,9 @@ Every key is committed at once (no preedit), and the typing engine keeps its own
 
 ## Tests
 
-- `test/all` (offline; what `tests/packages` and CI run): the downloads are pinned, the patches are shaped as patches and touch the eleven files they should, the launcher, the licences.
+- `test/all` (offline; what `tests/packages` and CI run): the downloads are pinned, the patches are shaped as patches and touch the twelve files they should, the launcher, the licences.
 - `test/all --upstream DIR`: the patches apply to the untouched Stevia tree with no fuzz.
-- `test/all --built BUILD SRC` (the PKGBUILD's `check()`): the checks built with the keyboard. `tactus-typer-test` types against make-believe text fields (one that tells, one that tells nothing, a slow one, one that ignores deletes, a browser answered and unanswered): 126 checks. `tactus-ac-test` runs a list of slips and of words that must stay. Under `xvfb-run`, `tactus-kbd-test` and `tactus-emoji-test` drive the keys and the emoji page with no window on screen.
+- `test/all --built BUILD SRC` (the PKGBUILD's `check()`): the checks built with the keyboard. `tactus-typer-test` types against make-believe text fields (one that tells, one that tells nothing, a slow one, one that ignores deletes, a browser answered and unanswered): 126 checks. `tactus-ac-test` runs a list of slips and of words that must stay. `tactus-paste-test` checks which kinds of copy count, how the clipboard history's file is read, and that a change of the file is noticed without asking. Under `xvfb-run`, `tactus-kbd-test` and `tactus-emoji-test` drive the keys and the emoji page with no window on screen.
 
 ## Where it has run
 
