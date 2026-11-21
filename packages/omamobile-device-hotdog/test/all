@@ -10,6 +10,13 @@ for f in PKGBUILD build install bin/* lib/omamobile-fp-hotdog-chroot libexec/oma
     libexec/omamobile-hotdog-sensors-root libexec/omamobile-hotdog-sensors-ready; do bash -n "$f"; done
 python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' libexec/omamobile-hotdog-call-audio
 echo "ok - scripts parse"
+# The shell renders without GMEM tiles (the Adreno 640's CCU faults froze it),
+# in the file omamobile-omarchy's launcher reads for the shell alone
+grep -cx 'FD_MESA_DEBUG=sysmem' vendor/omamobile/shell-env.d/50-hotdog-gpu.conf >/dev/null ||
+  { echo "not ok - the shell renders without GMEM"; exit 1; }
+[[ $(grep -cv '^#\|^$' vendor/omamobile/shell-env.d/50-hotdog-gpu.conf) == 1 ]] ||
+  { echo "not ok - the shell's environment file sets nothing else"; exit 1; }
+echo "ok - the shell renders without GMEM"
 python3 -B test/call-audio.py
 echo "ok - call audio routes and restores"
 # The SIM selection against a recorded card status (no ICCID in it): it
@@ -170,6 +177,8 @@ grep -cx 'After=omamobile-rmtfs.service omamobile-tqftpserv.service' \
     "$stage/usr/lib/systemd/system/ModemManager.service.d/omamobile-hotdog.conf" >/dev/null ||
   { echo "not ok - ModemManager does not wait for rmtfs"; exit 1; }
 [[ $(readlink "$stage/etc/systemd/system/systemd-firstboot.service") == /dev/null ]] || { echo "not ok - systemd-firstboot not masked"; exit 1; }
+[[ -f $stage/usr/lib/omamobile/shell-env.d/50-hotdog-gpu.conf ]] ||
+  { echo "not ok - the shell's environment file is staged where the launcher reads it"; exit 1; }
 [[ -x $stage/usr/lib/omamobile/hotdog/omamobile-hotdog-call-audio && \
    $(readlink "$stage/usr/lib/systemd/user/default.target.wants/omamobile-hotdog-call-audio.service") == ../omamobile-hotdog-call-audio.service ]] ||
   { echo "not ok - call audio service"; exit 1; }
