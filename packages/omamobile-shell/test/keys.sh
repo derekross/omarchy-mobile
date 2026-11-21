@@ -109,8 +109,14 @@ before "omarchy-system-lock" "omarchy-shell lock dark" && before "omarchy-shell 
 # reads as off (bl_power 4 or the connector's dpms Off), or the lock screen shows
 # at full brightness for an instant. Here the stand-in flips hyprctl's dpmsStatus
 # when "omarchy-brightness-display off" is called and the panel 0.4 s later,
-# writing "panel-off" to the log when it does; with a real device name, a saved
+# writing "panel-off" to the log just before it does (before, not after: the
+# key handler polls the panel files every 50 ms, and with the log line written
+# last it could see the panel off and log its own lines first on a loaded
+# machine, which failed CI on 2026-11-18); with a real device name, a saved
 # level of 2083, and a second case where the panel never goes off.
+# logged LINE: wait up to 10 s for LINE in the log, so a slow machine is
+# waited for and a fast one loses no time.
+logged() { local _; for _ in $(seq 100); do grep -qxF -- "$1" "$log" && return 0; sleep 0.1; done; return 1; }
 mkdir -p "$t/orig"; cp "$t"/bin/omarchy-hw-display "$t"/bin/brightnessctl "$t"/bin/omarchy-brightness-display "$t/orig/"
 cat >"$t/bin/omarchy-hw-display" <<STUB
 #!/bin/bash
@@ -126,13 +132,13 @@ cat >"$t/bin/omarchy-brightness-display" <<STUB
 echo "omarchy-brightness-display \$*" >>"$log"
 if [[ \$1 == off && -f "$t/async-off" ]]; then
   echo false >"$t/dpms"
-  ( sleep 0.4; echo 4 >"$t/sys/class/backlight/panel/bl_power"; echo Off >"$t/sys/class/drm/card0-DSI-1/dpms"; echo "panel-off" >>"$log" ) >/dev/null 2>&1 &
+  ( sleep 0.4; echo "panel-off" >>"$log"; echo 4 >"$t/sys/class/backlight/panel/bl_power"; echo Off >"$t/sys/class/drm/card0-DSI-1/dpms" ) >/dev/null 2>&1 &
 fi
 STUB
 chmod +x "$t"/bin/*
 panel_on() { echo true >"$t/dpms"; mkdir -p "$t/sys/class/backlight/panel" "$t/sys/class/drm/card0-DSI-1"; echo 0 >"$t/sys/class/backlight/panel/bl_power"; echo On >"$t/sys/class/drm/card0-DSI-1/dpms"; echo connected >"$t/sys/class/drm/card0-DSI-1/status"; }
 echo false >"$t/locked"; panel_on; : >"$t/async-off"
-reset; keys power-down; keys power-up; sleep 1.5
+reset; keys power-down; keys power-up; logged "omamobile-sleepd now" || fail "flash: the press ends by asking for sleep"
 before "brightnessctl -q -d panel set 0" "omarchy-system-lock" || fail "flash: the panel goes dark by the backlight before the lock is built"
 before "panel-off" "brightnessctl -q -d panel set 2083" || fail "flash: the saved brightness goes back only after the panel is off"
 before "panel-off" "omamobile-sleepd now" || fail "flash: sleep is asked for after the panel is off"
@@ -153,12 +159,16 @@ grep -q "brightnessctl -q -d panel set 2083" "$log" || fail "flash: with a panel
 # No panel files at all (another machine): Hyprland's answer is all there is.
 rm -rf "$t/sys/class/drm/card0-DSI-1" "$t/sys/class/backlight/panel"; : >"$t/async-off"
 reset; start=$(date +%s%N); keys power-down; keys power-up
-took=$(( ($(date +%s%N) - start) / 1000000 )); sleep 1
-grep -q "brightnessctl -q -d panel set 2083" "$log" || fail "flash: with no panel files the brightness goes back by Hyprland's word"
+took=$(( ($(date +%s%N) - start) / 1000000 ))
+# The stand-in's delayed half still runs here (its writes fail, the files are
+# gone): give it its 0.4 s before the next case puts the panel files back, or
+# it turns that new panel off behind the test's back.
+sleep 1
+logged "brightnessctl -q -d panel set 2083" || fail "flash: with no panel files the brightness goes back by Hyprland's word"
 (( took < 1500 )) || fail "flash: with no panel files Hyprland's word ends the wait at once, not at the bound ($took ms)"
 # A connector that is not connected (a second, unused one) says Off and must not end the wait.
 panel_on; mkdir -p "$t/sys/class/drm/card0-DSI-2"; echo Off >"$t/sys/class/drm/card0-DSI-2/dpms"; echo disconnected >"$t/sys/class/drm/card0-DSI-2/status"; : >"$t/async-off"
-reset; keys power-down; keys power-up; sleep 1
+reset; keys power-down; keys power-up; logged "brightnessctl -q -d panel set 2083" || fail "flash: with an unconnected connector the brightness still goes back"
 before "panel-off" "brightnessctl -q -d panel set 2083" || fail "flash: an unconnected connector's Off does not end the wait"
 rm -rf "$t/sys/class/drm/card0-DSI-2"; panel_on
 cp "$t"/orig/omarchy-hw-display "$t"/orig/brightnessctl "$t"/orig/omarchy-brightness-display "$t/bin/"

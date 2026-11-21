@@ -19,6 +19,8 @@ install -Dm644 vendor/NetworkManager/conf.d/10-omamobile-usb.conf \
   "$destination/usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf"
 install -Dm644 vendor/systemd/sleep.conf.d/10-omamobile.conf \
   "$destination/usr/lib/systemd/sleep.conf.d/10-omamobile.conf"
+install -Dm644 vendor/modprobe.d/omamobile-akita-clk-acpm.conf \
+  "$destination/usr/lib/modprobe.d/omamobile-akita-clk-acpm.conf"
 install -Dm644 vendor/modprobe.d/omamobile-max77759.conf \
   "$destination/usr/lib/modprobe.d/omamobile-max77759.conf"
 install -Dm755 bin/omamobile-usb-rescue "$destination/usr/bin/omamobile-usb-rescue"

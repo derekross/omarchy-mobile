@@ -78,9 +78,11 @@
 #                            image for this device in out/, or the exact
 #                            image named by a signed bundle's MANIFEST)
 #     --work DIR             where the local image copy goes (default
-#                            ~/.cache/omamobile-install; needs the image's
-#                            size free). The next run that finds no other
-#                            run live removes killed runs' verify.*
+#                            ~/.cache/omamobile-install; needs room for the
+#                            image's used blocks twice, the copy and its
+#                            sparse conversion, plus 1 GiB). The next run
+#                            that finds no other run live removes killed
+#                            runs' verify.*
 #                            directories; ones left by installers without
 #                            this cleanup are kept
 #     --bootloader-slots-match VERSION
@@ -281,8 +283,8 @@ if [[ $mode == repository ]]; then
   [[ $built_for == "$CODENAME" ]] \
     || die "$images holds images for '${built_for:-an unknown device}', not $CODENAME (run: DEVICE=$CODENAME bin/omamobile images)"
 fi
-for tool in "$FASTBOOT" debugfs dumpe2fs e2fsck zstd openssl sha256sum lz4 cpio python3 timeout; do
-  command -v "$tool" >/dev/null || die "$tool not found (fastboot: android-tools; debugfs: e2fsprogs; lz4: lz4; cpio: cpio)"
+for tool in "$FASTBOOT" debugfs dumpe2fs e2fsck img2simg zstd openssl sha256sum lz4 cpio python3 timeout; do
+  command -v "$tool" >/dev/null || die "$tool not found (fastboot, img2simg: android-tools, or fastboot and android-sdk-libsparse-utils on Debian and Ubuntu; debugfs: e2fsprogs; lz4: lz4; cpio: cpio)"
 done
 BOOT_IMAGES=${D[BOOT_IMAGES]:-} UFS_RW=${D[UFS_RW]:-}
 [[ -n $BOOT_IMAGES && -n $UFS_RW ]] || die "$conf: BOOT_IMAGES and UFS_RW are required"
@@ -1200,13 +1202,21 @@ cmp -s <(debugfs -R "cat /root/.ssh/authorized_keys" "$copy" 2>/dev/null) "$keys
 cmp -s <(debugfs -R "cat /etc/omamobile/boot-update.conf" "$copy" 2>/dev/null) "$boot_conf" || die "writing boot-update.conf into the image copy failed"
 e2fsck -fn "$copy" >/dev/null 2>&1 || die "the image copy doesn't check clean after the writes"
 note "firstboot.conf, root's authorized_keys and boot-update.conf (AUTO_WRITE=$BOOT_UPDATE_AUTO_WRITE$( ((fmt == 1)) || printf ', SLOT=%s' "$target")) written, file system checks clean"
-userdata_image=$copy
-if command -v img2simg >/dev/null; then
-  img2simg "$copy" "$sparse"
-  rm -f "$copy"
-  userdata_image=$sparse
-  note "converted to an Android sparse image ($(du -h "$sparse" | cut -f1))"
-fi
+# userdata is always flashed as an Android sparse image: one path, the one
+# the dry run prints. The sparse copy takes about the raw copy's used blocks
+# (decompressed with --sparse, so far fewer than its apparent size): check
+# for that much free plus 1 GiB rather than let img2simg run out of room.
+used_bytes=$(du -k "$copy" | awk '{printf "%.0f\n", $1 * 1024}')
+free_bytes=$(df -Pk "$work" | awk 'NR == 2 {printf "%.0f\n", $4 * 1024}')
+[[ $used_bytes =~ ^[0-9]+$ && $free_bytes =~ ^[0-9]+$ ]] ||
+  die "can't tell the image copy's size or the free space in $work"
+need=$((used_bytes + 1073741824))
+((free_bytes >= need)) ||
+  die "$work has $free_bytes bytes free; the sparse copy needs $need (give a --work DIR on a larger file system)"
+img2simg "$copy" "$sparse" || die "img2simg failed to convert the image copy in $work"
+rm -f "$copy"
+userdata_image=$sparse
+note "converted to an Android sparse image ($(du -h "$sparse" | cut -f1))"
 
 # --- The owner's key in slot B's initramfs -----------------------------------
 # omamobile-boot-update builds slot B's ramdisk with root's authorized_keys

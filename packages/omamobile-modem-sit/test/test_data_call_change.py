@@ -83,9 +83,11 @@ class Reconnect(unittest.TestCase):
         self.state, self.response = root / 'data-session.json', root / 'data-call-response.bin'
         self.state.write_text('{"cid": 3, "session": 0}')
         self.response.write_bytes(item(3))
+        self.ims_state, self.ims_response = root / 'ims-session.json', root / 'ims-response.bin'
         self.patches = [patch.object(data_call, 'RESPONSE', self.response),
                         patch.object(data_call, 'INTERNET_CID', 3),
-                        patch.object(app_service, 'bearer_paths', lambda cid: (self.state, self.response)),
+                        patch.object(app_service, 'bearer_paths', lambda cid: (self.ims_state, self.ims_response)
+                                     if cid == data_call.IMS_CID else (self.state, self.response)),
                         patch.object(app_service.subprocess, 'run'),
                         patch('builtins.print')]
         for p in self.patches:
@@ -133,6 +135,31 @@ class Reconnect(unittest.TestCase):
         self.assertIn(['systemctl', 'stop', 'omamobile-sit-data.service'], calls)
         self.assertEqual(calls[-1], ['systemctl', 'start', 'omamobile-sit-data.service'])
         self.assertIsNone(self.service.reconnect_at)
+
+    def test_an_ims_record_the_modem_no_longer_lists_is_cleared(self):
+        # 2026-11-18 02:25: the network ended both bearers (an empty list);
+        # the IMS record left behind blocked every setup until a reboot.
+        self.ims_state.write_text('{"cid": 2, "session": 0}')
+        self.ims_response.write_bytes(item(2))
+        self.listed = listing()
+        self.service.reconnect_at = 0
+        seen = []
+        with patch.object(data_call, 'activate',
+                          side_effect=lambda *a, **k: seen.append(self.ims_state.exists())) as activate:
+            self.service.reconnect()
+        activate.assert_called_once()
+        self.assertEqual(seen, [False])              # cleared before the setup's ownership check
+        self.assertFalse(self.ims_response.exists())
+        self.assertIsNone(self.service.reconnect_at)
+
+    def test_a_listed_ims_bearer_keeps_its_record(self):
+        self.ims_state.write_text('{"cid": 2, "session": 0}')
+        self.ims_response.write_bytes(item(2))
+        self.service.reconnect_at = 0                # listed: item(2) only, internet gone
+        with patch.object(data_call, 'activate'):
+            self.service.reconnect()
+        self.assertTrue(self.ims_state.exists())
+        self.assertTrue(self.ims_response.exists())
 
     def test_data_off_stays_off(self):
         app_service.subprocess.run.return_value.returncode = 3     # the route service stopped

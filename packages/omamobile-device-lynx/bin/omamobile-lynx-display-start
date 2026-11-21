@@ -1,0 +1,101 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Allow the panel's DSI commands only when the bootloader names the
+# S6E3FC5 panel on the kernel command line, then load gs_decon (blacklisted
+# for autoload) so it probes after the gate. Hang-safe: a marker written and
+# synced before modprobe stops the next boot from trying a load that never
+# returned; --retry clears it. Lynx also ships S6E3FC3 panels.
+#   omamobile-lynx-display-start [--retry]
+# OMAMOBILE_LYNX_ROOT: a scratch root for the package tests.
+set -uo pipefail
+
+root=${OMAMOBILE_LYNX_ROOT:-}
+[[ -z $root || ( $root == /* && $root != / && -d $root ) ]] || exit 2
+
+state=$root/var/lib/omamobile
+marker=$state/lynx-display-started
+cmdline=$root/proc/cmdline
+decon=$root/sys/bus/platform/devices/1c240000.display-controller
+allow=$root/sys/module/gs_dsim_cmd/parameters/allow_tx
+panel=""
+
+log() { echo "omamobile-lynx-display: $*"; }
+loaded() { [[ -d $root/sys/module/$1 ]]; }
+bound() {
+  local i
+  for ((i = 0; i < $3; i++)); do
+    [[ $(readlink -f "$1/driver" 2>/dev/null) == */$2 ]] && return 0
+    sleep 0.25
+  done
+  return 1
+}
+
+for word in $(cat "$cmdline" 2>/dev/null); do
+  case $word in
+    exynos_drm.panel_name=*) panel=${word#*=} ;;
+  esac
+done
+
+# systemd-backlight restores the saved level before this start allows the
+# panel's commands; send it again now that the panel takes them.
+restore_brightness() {
+  local bl level
+  for bl in "$root"/sys/class/backlight/*; do
+    [[ -e $bl/brightness ]] || continue
+    level=$(cat "$bl/brightness" 2>/dev/null) || continue
+    echo "$level" > "$bl/brightness" 2>/dev/null \
+      && log "brightness of ${bl##*/}: level $level sent"
+  done
+}
+
+case ${1:-} in
+  '') ;;
+  --retry) rm -f "$marker" ;;
+  *) log "usage: omamobile-lynx-display-start [--retry]"; exit 2 ;;
+esac
+
+if [[ -e $marker ]]; then
+  log "the last start ($(cat "$marker" 2>/dev/null)) never finished; the display stays on simple-framebuffer this boot."
+  log "after checking the previous boot's log, retry with: omamobile-lynx-display-start --retry"
+  exit 0
+fi
+if [[ ${1:-} != --retry ]] && loaded gs_decon; then
+  log "already started this boot"
+  exit 0
+fi
+
+mkdir -p "$state"
+printf '%s display\n' "$(date -Is)" > "$marker"
+sync -f "$marker" 2>/dev/null || sync
+
+# The parameter appears when the driver loads; do not depend on autoload.
+modprobe gs_dsim_cmd 2>/dev/null || true
+
+case $panel in
+  sdc-s6e3fc5|sdc-s6e3fc5.*|s6e3fc5|s6e3fc5.*)
+    if echo 1 > "$allow" 2>/dev/null; then
+      log "panel $panel, DSI commands allowed"
+      restore_brightness
+    else
+      log "panel $panel, cannot write $allow; leaving it read-only"
+    fi
+    ;;
+  *)
+    log "panel ${panel:-unnamed}, DSI commands stay off"
+    ;;
+esac
+
+status=0
+if ! modprobe gs_decon; then
+  log "gs_decon failed (see dmesg); the display stays on simple-framebuffer"
+  status=1
+elif ! bound "$decon" gs-decon 60; then
+  log "the display controller did not bind to gs-decon (see dmesg)"
+  status=1
+else
+  log "up: display"
+fi
+
+rm -f "$marker"
+sync -f "$state" 2>/dev/null || sync
+exit $status

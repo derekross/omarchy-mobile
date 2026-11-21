@@ -24,7 +24,7 @@ It takes about an hour, most of it downloads and waiting. **New to this? Use [th
   sudo pacman -S --needed android-tools e2fsprogs zstd lz4 cpio openssl gnupg python unzip binutils erofs-utils
   ```
 
-  On other distributions, install the packages with the same names (Android's tools are often split into `fastboot`, `adb` and a "libsparse" package for `img2simg` and `simg2img`).
+  On other distributions, install the packages with the same names. Android's tools are often split into `fastboot`, `adb` and a "libsparse" package for `img2simg` and `simg2img` (`android-sdk-libsparse-utils` on Debian and Ubuntu), and the installer needs `img2simg`: Google's platform-tools download doesn't have it.
 - **Free disk space:** about 35 GB (the downloads, Google's factory image and a working copy of the system image while installing).
 - **An SSH key.** The installer puts your public key on the phone so your computer can reach it over USB later. If `~/.ssh/id_ed25519.pub` doesn't exist, make one:
 

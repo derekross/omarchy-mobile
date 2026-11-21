@@ -268,16 +268,91 @@ if [[ -n $out ]]; then
     if "${k[@]}" defconfig >/dev/null 2>&1 \
        && (cd "$src" && KCONFIG_CONFIG="$out/build/.config" scripts/kconfig/merge_config.sh -m -O "$out/build" "$out/build/.config" "$repo/kernel/configs/omamobile.config" >/dev/null 2>&1) \
        && "${k[@]}" olddefconfig >/dev/null 2>&1; then
-      bad=""
+      bad="" notbuilt="" nbuilt=0 nnot=0
+      # The .c files anywhere under the parent of $1's directory that #include
+      # $1 (a KUnit test at the end of a driver, as drm_panic.c does with
+      # tests/drm_panic_test.c), so such a file is built through its driver.
+      includer_of() {
+        local f=$1 d b g i want
+        d=$(dirname "$(dirname "$f")"); [[ $d == . ]] && d=$(dirname "$f")
+        b=$(basename "$f" | sed 's/[][\.*^$+?(){}|]/\\&/g')
+        want=$(realpath -ms "$f")
+        while IFS= read -r g; do
+          g=${g#./}; [[ -n $g && $g != "$f" ]] || continue
+          while IFS= read -r i; do
+            [[ $(realpath -ms "$(dirname "$g")/$i") == "$want" ]] && { echo "$g"; break; }
+          done < <(sed -nE 's/^[[:space:]]*#[[:space:]]*include[[:space:]]+"([^"]+\.c)".*/\1/p' "$src/$g")
+        done < <(cd "$src" && grep -rlE --include='*.c' "#[[:space:]]*include[[:space:]]+\"([^\"]*/)?$b\"" "$d" 2>/dev/null | sort)
+      }
+      # Whether a Makefile or Kbuild from $1's directory up to the directory
+      # includer_of searches names $1's object by its path from there
+      # ("chg_test.o" beside it, "tests/chg_test.o" in the parent): then it
+      # is meant to build on its own, and no includer stands in for it.
+      own_object() {
+        local f=$1 top dir rel o m
+        top=$(dirname "$(dirname "$f")"); [[ $top == . ]] && top=$(dirname "$f")
+        dir=$(dirname "$f")
+        while :; do
+          rel=${f#"$dir"/}
+          o=$(sed 's/[][\.*^$+?(){}|]/\\&/g' <<<"${rel%.c}")
+          for m in Makefile Kbuild; do
+            grep -qE "(^|[^[:alnum:]_./-])(\./)?$o\.o([^[:alnum:]_]|$)" "$src/$dir/$m" 2>/dev/null && return 0
+          done
+          [[ $dir == "$top" || $dir == . ]] && return 1
+          dir=$(dirname "$dir")
+        done
+      }
+      # Whether the .cmd file $2 lists $1, however it spells the path
+      # (absolute, or relative with ../ segments, from the tree or OUT).
+      cmd_lists() {
+        local want t; want=$(realpath -ms "$src/$1")
+        [[ -r $2 ]] || return 1
+        while IFS= read -r t; do
+          t=${t%:}; [[ -n $t ]] || continue
+          if [[ $t == /* ]]; then [[ $(realpath -ms "$t") == "$want" ]] && return 0
+          else
+            [[ $(realpath -ms "$src/$t") == "$want" || $(realpath -ms "$out/build/$t") == "$want" ]] && return 0
+          fi
+        done < <(tr -s ' \t\\' '\n\n\n' < "$2" | grep -F -- "$(basename "$1")")
+        return 1
+      }
+      plural() { [[ $1 == 1 ]] && echo "$1 $2" || echo "$1 ${2}s"; }
       for f in $cfiles; do
-        log=$("${k[@]}" W=1 "${f%.c}.o" 2>&1) || { bad+="  $f"$'\n'"$(tail -5 <<<"$log" | sed 's/^/    /')"$'\n'; continue; }
+        inc=""
+        log=$("${k[@]}" W=1 "${f%.c}.o" 2>&1) || {
+          if ! own_object "$f"; then
+            for g in $(includer_of "$f"); do
+              l2=$("${k[@]}" W=1 "${g%.c}.o" 2>&1) && { inc=$g; log=$l2; break; }
+            done
+          fi
+          if [[ -n $inc ]]; then
+            echo "# $f does not build alone; it is included by $inc, which builds"
+            # The includer's .cmd lists the files its object was compiled
+            # from; $f is missing there when the include is under a config
+            # that is off (or #if 0), so nothing of $f was compiled.
+            if ! cmd_lists "$f" "$out/build/$(dirname "$inc")/.$(basename "${inc%.c}").o.cmd"; then
+              echo "# $f is not compiled by $inc under this config, so it is not build-tested here"
+              notbuilt+="${notbuilt:+, }$(basename "$f"), included by $(basename "$inc")"
+              nnot=$((nnot + 1)); continue
+            fi
+          else
+            bad+="  $f"$'\n'"$(tail -5 <<<"$log" | sed 's/^/    /')"$'\n'; continue
+          fi
+        }
+        nbuilt=$((nbuilt + 1))
         w=$(grep -E 'warning:' <<<"$log" || true)
-        [[ -n $w ]] && bad+="  $f (W=1 warnings)"$'\n'"$(head -5 <<<"$w" | sed 's/^/    /')"$'\n'
+        # An includer that is touched itself lists these under its own name.
+        [[ -n $inc ]] && grep -qxF -- "$inc" <<<"$cfiles" && w=""
+        [[ -n $w ]] && bad+="  $f (W=1 warnings${inc:+, in $inc, which includes it})"$'\n'"$(head -5 <<<"$w" | sed 's/^/    /')"$'\n'
       done
+      notmsg="$nnot not compiled under this config ($notbuilt)"
       if [[ -z $cfiles ]]; then skip "C builds: no C files touched"
-      elif [[ -z $bad ]]; then pass "W=1 builds of $(wc -w <<<"$cfiles") touched C files"
-      else fail "W=1 builds:
-${bad%$'\n'}"; fi
+      elif [[ -n $bad ]]; then
+        fail "W=1 builds:
+${bad%$'\n'}"
+        [[ -z $notbuilt ]] || echo "# $notmsg"
+      elif [[ -n $notbuilt ]]; then skip "W=1 builds of $(plural "$nbuilt" "touched C file"); $notmsg"
+      else pass "W=1 builds of $(plural "$nbuilt" "touched C file")"; fi
 
       if [[ -n $dts ]]; then
         # The boards whose DTBs the touched files reach: every .dts in the

@@ -1,15 +1,16 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 7a (lynx): Wi-Fi and Bluetooth
 
-Status (2026-11-13): **AoC-first firmware/scan reproduced; one guarded
-association, DHCP and verified HTTPS test passed on a local experimental
-kernel.** See [AOC-WIFI-PLAN.md](AOC-WIFI-PLAN.md) for the two kernel
+Status (2026-11-15): **AoC-first firmware/scan reproduced; guarded association,
+DHCP and verified HTTPS passed on two boots of the old experimental kernel.**
+See [AOC-WIFI-PLAN.md](AOC-WIFI-PLAN.md) for the two kernel
 releases, the earlier WMI/TX stall, the successful retest and their limits.
-The code and overlays are not published; boot-time startup, reconnect,
-sustained traffic and suspend/resume remain unqualified. The experimental
-drivers stay blacklisted for boot. The owner has since rebooted; the guarded
-startup has not been repeated on that boot, so this is a recorded test
-result, not a claim that Wi-Fi is currently connected.
+The revised signed integration booted with AoC and WLAN held off. Its Wi-Fi
+startup, reconnect, sustained traffic and suspend/resume remain unqualified. The experimental
+drivers stay blacklisted for boot. Later private restore receipts record
+post-reboot guarded startup on the old release, including a DHCP-check race
+and successful revised activation. These are recorded test results, not a
+claim that Wi-Fi is currently connected or that the signed stack is qualified.
 
 Sections 1-8 below retain the investigation through 2026-11-05. Their parked
 state and next-step list describe that point in time; use the new AoC plan

@@ -303,7 +303,7 @@ needs you. Run it again after any stop: it goes on from there.
 Install by hand: put the phone in fastboot mode (bootloader unlocked),
 connect it, and run "bash install" from this directory ("bash install"
 works even when a download lost the file's execute bit). It needs fastboot
-(android-tools), e2fsprogs, zstd, lz4, cpio, openssl, gpg and python3 on
+and img2simg (android-tools), e2fsprogs, zstd, lz4, cpio, openssl, gpg and python3 on
 this computer. The installer checks the phone first, asks for your user
 name, password, Wi-Fi and SSH key, shows exactly what it will write, and
 waits for you to type "$DEVICE".
