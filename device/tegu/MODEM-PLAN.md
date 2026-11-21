@@ -2007,6 +2007,79 @@ with the modem up is one whose link cycles all day; and a timer-woken
 sleep with the modem up has not been seen, because the modem ends every
 sleep within half a minute.
 
+### A night on the shell's own sleep path with the modem up (2026-11-20 to 11-21)
+
+Under #809's terms, on the owner's palmtop and at his wish: a night the way
+he carries it, so no series script and no `systemctl suspend -i`. The modem
+was up, Wi-Fi connected, and `omamobile-sleepd` did the sleeping through
+logind. The modem's inhibitor and the rule in AGENTS.md stand as they are.
+
+The published `omamobile` at `26867fc4e`
+(`7.3.0-rc6-omamobile-push1-g26867fc4e826`, the build of 2026-11-16 above;
+overlays `public-ramoops` and `modem-cpif`), `omamobile-modem-sit` 0.3.45,
+`omamobile-modem` 0.1.27, `omamobile-device-tegu` 0.2.21, the owner's local
+build of `omamobile-shell` 0.2.134. On the charger all night, cable in.
+Before the boot the NV partitions read SAME against the backup, with the
+modem off for that boot, and `zumapro_gpio_peric0` read `CLK_IS_CRITICAL`.
+Three things were set by hand, which is what makes this not the packaged
+state:
+
+- `[control] follow_screen = yes` in `modem-sit.conf`, so the sleep hook
+  tells the modem the screen is off before a sleep;
+- the modem's sleep inhibitor (`omamobile-tegu-modem-nosleep`) stopped once
+  the CP was ONLINE, by a recorder that puts it back when it stops and
+  would have stopped on a CP not ONLINE, a UFS error line, an oops or the
+  charger gone (none came);
+- `omamobile-sit-data` started by hand.
+
+From 19:47 to 04:00 by the palmtop's clock, 8 h 13 min:
+
+- 32 sleeps, `suspend_stats` 32 and 0; no request was refused by the
+  link's notifier. 28 of the 31 wakes the recorder saw were
+  `cp2ap_wakeup`, three were the touchscreen (the owner). No alarm was set.
+- From 7 s to 2,993 s between `PM: suspend entry` and `PM: suspend exit`,
+  median 581 s, fifteen over ten minutes, seven over half an hour; 28,788 of
+  the 29,603 s between the first entry and the last exit, about 97 %. On
+  2026-11-16 the modem ended every sleep within 29 s; there the series
+  slept seconds after a data check, here the palmtop was left alone.
+- After every wake the CP was ONLINE and sitd active; at the end IMS voice
+  and SMS were registered and the bearer up. sitd logged one failed poll in
+  the boot, not placed.
+- No UFS error line, no oops, no `Watchdog timeout` line (0.2.21's
+  drop-in), no failed unit but three of the owner's own bring-up units.
+- No hang awake. The link went up 168 times in the boot, against about
+  once a second on 2026-11-16, and the palmtop was awake for perhaps
+  twenty minutes of the night, so this says little about that hang. 95
+  `Reserve doorbell interrupt: PCI not powered on` and 19 `PCI on/off
+  working` lines in the boot.
+- **Mobile data answers about 10 s after a wake when Wi-Fi is the first
+  route.** Thirteen checks that began within a second of a wake (eight
+  pings a second apart out of `rmnet0`, then a DNS query) each got their
+  first answer on the eighth ping, and DNS answered. `omamobile-sit-data`
+  logs why: "Sleep announced; the cellular default route is away until it
+  is over", then "The cellular default route is back behind Wi-Fi" about
+  10 s after the wake, with `wlan0` still down at that point each time. It
+  is #750's wait for Wi-Fi running to its end because Wi-Fi takes longer
+  than that to reconnect, not the bearer: sitd logged no "Internet bearer
+  set up again" all night.
+
+Where the record falls short of the rule: a modem-up sleep record checks
+mobile data after every wake with no other route ahead of it. This one
+checked at most every ten minutes, with Wi-Fi connected, because the night
+was meant to be the owner's everyday one; each check held a block
+inhibitor for ten seconds (`omamobile-sleepd`: "not sleeping: a sleep
+inhibitor is held", thirteen times). The recorder had two faults, both in
+its log: for two minutes after a restart at 20:16 it left the inhibitor on,
+and until 22:11 it could measure a sleep from after the wake (user space
+thaws before the kernel counts the sleep), so its own lengths for that part
+of the night are wrong and the ones above are the journal's. The boot ended
+in `systemctl reboot`, with the modem's boot start masked first.
+
+What this adds: left alone, with the modem told that the screen is off,
+the 9a sleeps for up to 50 minutes at a time with the modem up and wakes on
+the modem. Not shown: a night off the charger, with mobile data as the only
+route, and anything about the hang awake.
+
 ### M2: the link only (modem link driver, `allow_hw=1`; risk: medium)
 
 One step per run, the CPIF overlay not applied, the link overlay applied
