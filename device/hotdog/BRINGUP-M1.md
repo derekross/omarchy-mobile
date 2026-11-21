@@ -7,10 +7,11 @@ device descriptor, device package and the userdata preparation are written
 and built on the laptop; nothing has run on the phone yet. The results of
 each step below are recorded under [Results](#results).
 
-The phone ran Linux before this port: first postmarketOS's SM8150 kernel, then
-the owner's own earlier port on a 7.0.0 build of that kernel with hotdog
-patches (display, GPU, touch, battery, charging, Wi-Fi, Bluetooth, speakers). This port moves the
-same hardware support onto linux-omarchy-mobile (7.3) and Omarchy's userspace.
+The kernel code for this phone comes from postmarketOS's SM8150 kernel tree
+(the SoC and the board), which the owner's own earlier port had carried onto
+a 7.0.0 kernel with hotdog patches (display, GPU, touch, battery, charging,
+Wi-Fi, Bluetooth, speakers). This port moves the same hardware support onto
+linux-omarchy-mobile (7.3) and Omarchy's userspace.
 
 ## 1. How this phone differs from a Pixel
 
@@ -27,12 +28,37 @@ same hardware support onto linux-omarchy-mobile (7.3) and Omarchy's userspace.
 boot LUN. On this phone a slot switch once moved the UFS boot LUN onto slot B's
 mismatched bootloader firmware and took a full EDL (MSM) restore. So:
 
-- Omarchy Mobile boots from `boot_a`. Slot A is current and marked successful
-  (retry count 6) and stays that way: `fastboot flash boot_a` has not changed
-  the flags in any earlier capture, and nothing here marks or switches a slot.
-- No `--set-active`, no `qbootctl`, no write to any GPT. The earlier Linux
-  ports on this phone marked slot A at every boot with `qbootctl -m`; Omarchy
-  Mobile does not (AGENTS.md §1: never from a service or at boot).
+- Omarchy Mobile boots from `boot_a`. Slot A is current. `fastboot flash
+  boot_a` clears its successful mark (H4), and nothing at boot marks it
+  again; `device/hotdog/slot-a-mark` does, by hand, with the owner's yes
+  (Results, 2026-11-15). That GPT write is outside CONTRIBUTING §3.1 as it
+  stands: **on hold until the maintainer decides the entry** (#931). Until
+  then, keep reboots few: each one spends a try while the mark is clear.
+- No `--set-active`, no `qbootctl`, no write to any GPT from a service or at
+  boot (AGENTS.md §1). The earlier Linux ports on this phone marked slot A at
+  every boot with `qbootctl -m`; Omarchy Mobile does not.
+- **`sde` holds slot A's whole boot chain after XBL**, not just `boot_a`:
+  `abl_a` (`sde8`), `tz_a` (`sde2`), `aop_a` (`sde1`), `hyp_a` (`sde3`),
+  `devcfg_a`, `dtbo_a` and `vbmeta_a`, with their `_b` twins; XBL itself
+  is on `sdb` (`xbl_a`) and `sdc` (`xbl_b`). A `sde` GPT the boot chain
+  can't read therefore can't reach ABL's fastboot either: **the way back
+  from a broken `sde` GPT is EDL** (Qualcomm's 9008 mode and the OxygenOS
+  MSM package), not the buttons.
+- What the slots hold (read-only from Linux, `PARTNAME` in
+  `/sys/class/block/*/uevent`, 2026-11-21, every partition `ro` 1):
+
+  | | slot A | slot B |
+  | --- | --- | --- |
+  | XBL (`QC_IMAGE_VERSION_STRING`) | `BOOT.XF.3.0-00479-SM8150LZB-1` (`sdb1`) | `BOOT.XF.3.0-00543-SM8150LZB-1` (`sdc1`) |
+  | TZ | `TZ.XF.5.2-223055` | `TZ.XF.5.2-398866` |
+  | ABL | `abl_a`, sha256 `f7dcf0bc…` (1.2 MB used) | `abl_b`, `9bcac221…` (225 KB used): another build |
+  | boot | Omarchy Mobile's header-v2 image | an Android 10 boot image (downstream kernel 4.14.117, patch level 2021-03) from a community Android build |
+  | GPT flags | priority 3, active, tries 6, successful | priority 0, not active, tries 0, not successful |
+
+  ABL reports no `version-bootloader` (empty in every `getvar all` since
+  2026-10-30), so these strings are the versions. `abl_a`, `abl_b` and
+  `boot_b` read the same as the off-phone copy of 2026-10-31; the two
+  slots' chains are different builds, which is why a switch to B fails.
 - `bin/omamobile flash`, `push` and `fastboot` refuse `BOOT_METHOD=qcom-abl-v2`.
   The boot image is written by a human with `fastboot flash boot_a`, only an
   image that has RAM-booted (`fastboot boot`), and read back.
@@ -209,7 +235,8 @@ so reboot to fastboot by the buttons until the shutdown crash is understood.
 `slot-successful:a` went from `yes` to `no` and `slot-retry-count:a` from 6 to
 7. ABL clears the mark when `boot_a` is flashed, and nothing in our system
 marks the slot again (the owner's earlier port did), so every boot now spends a try, and at zero
-ABL would turn to slot B, which has no system. With the owner's yes, booted:
+ABL would turn to slot B, whose bootloader chain differs from slot A's and
+whose boot image is an old Android build's (Slots, above). With the owner's yes, booted:
 `androidboot.mode=normal`, slot `_a`, `boot_a` reads back as the image by
 sha256, `systemctl --failed` empty. Open, the owner's decision: how slot A
 gets marked again (a GPT write: `fastboot --set-active=a` in ABL or a
@@ -230,8 +257,13 @@ successful 0 unbootable 0`); both CRCs valid, copies identical, new sha256
 `361c9ccc…`. Every later `fastboot flash boot_a` clears the bit again
 (H4 above): after the flashed kernel has booted, run `status`, `dump` and
 `write` again with the owner's yes. Rollback for a broken GPT: the dump holds
-both copies' header and entry bytes at their offsets; the phone still boots
-to fastboot by the buttons.
+both copies' header and entry bytes at their offsets, and since 2026-11-21
+`slot-a-mark restore DUMP --sha256 …` puts them back from the running
+system (a write that stopped between the two copies is refused by
+`status`, `dump` and `write` until then). *Corrected 2026-11-21:* this entry
+said the phone "still boots to fastboot by the buttons" with a broken GPT.
+`abl_a` is on `sde` too (Slots, above), so a GPT the boot chain can't read is
+an EDL restore.
 
 **2026-11-18: `boot_a` flashed with `7.3.0-rc6-omamobile-push1-gf38b21c1fdb9`
 (the sleep kernel with the ath10k MSA fix, SUSPEND-PLAN K7; cmdline
@@ -258,3 +290,24 @@ the key; for later images `rootfs/build-inside` ships a `local` image's key
 as `/usr/share/pacman/keyrings/omamobile-local.gpg` (+ `-trusted`), which
 firstboot's `pacman-key --populate` picks up. `omamobile-update check`: ok,
 no blockers.
+
+**`slot-a-mark write` runs so far** (every one with the owner's yes, after a
+`fastboot flash boot_a` had cleared the mark and the new kernel had booted;
+each from a GPT whose bytes match its dump, kept in
+`~/android/reference/hotdog/gpt/`, never committed):
+
+| Date | `boot_a` kernel | before → after |
+| --- | --- | --- |
+| 2026-11-15 | `gce58cc9c3759` | `3466da83…` (tries 6, successful 0) → `361c9ccc…` (successful 1) |
+| 2026-11-18 | `gf38b21c1fdb9` | the same |
+| 2026-11-18 | `g3ae752f99c6a` (haptics) | the same |
+| 2026-11-18 | `g7539ca3e06f6` (proximity) | the same |
+| 2026-11-19 | the disk-encryption test image | a dump at tries 5, successful 0 → successful 1 |
+| 2026-11-20 | `gf3a11a5f5062` | `3466da83…` → `361c9ccc…` |
+
+**2026-11-21, read-only (`7.3.0-rc6-omamobile-crypt1-gf3a11a5f5062`):**
+`slot-a-mark status`: `boot_a` priority 3, active, tries 6, successful 1;
+`boot_b` priority 0, not active, tries 0, not successful; both CRCs valid,
+copies identical, `361c9ccc…`. The slot table under Slots (XBL, TZ, ABL and
+`boot_b`) is from the same session. No further `write` until the maintainer
+has decided the CONTRIBUTING §3.1 entry (#931).
