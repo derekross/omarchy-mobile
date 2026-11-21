@@ -96,7 +96,7 @@ for f in usr/bin/reboot-to usr/bin/tegu-tcpc-switch \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
          usr/lib/udev/rules.d/10-omamobile-storage.rules usr/lib/udev/rules.d/20-omamobile-torch.rules \
          usr/lib/udev/rules.d/70-omamobile-dma-heap.rules usr/lib/udev/rules.d/72-omamobile-feedbackd.rules \
-         usr/lib/udev/rules.d/70-omamobile-touch-wake.rules \
+         usr/lib/udev/rules.d/70-omamobile-touch-wake.rules usr/lib/udev/rules.d/70-omamobile-tegu-gpu-floor.rules \
          usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
          usr/share/uwsm/env.d/omamobile-tegu-graphics \
@@ -122,6 +122,11 @@ other=../omamobile-device-cheetah/$tw
 if [[ -f $other ]]; then
   [[ $(grep -v '^#' "$tw") == $(grep -v '^#' "$other") ]] || fail "the touch-wake rule matches the 7 Pro's rule line"
 fi
+# The GPU's floor: one rule line, for the 9a's GPU only, when its devfreq
+# device appears (panthor's probe, from the graphics start).
+gf=vendor/udev/rules.d/70-omamobile-tegu-gpu-floor.rules
+[[ $(grep -v '^#' "$gf") == 'ACTION=="add", SUBSYSTEM=="devfreq", KERNEL=="1f000000.gpu", ATTR{min_freq}="419000000"' ]] \
+  || fail "the GPU floor rule sets the 9a GPU's lowest level to 419 MHz and nothing else"
 [[ -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-wifi && -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-nfc &&
    -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-cpuidle ]] \
   || fail "the sleep hooks are not executable"
