@@ -792,14 +792,24 @@ locked_stop "a file larger than its partition" "This download doesn't fit this p
 says "dtbo.img" && says "(dtbo_b) is 4 bytes" || fail "a file that doesn't fit: the file and the area are named"
 # An image with an AVB footer is made for one partition size: another
 # size, even a larger one that the file fits, stops (boot_b is 0x4000000)
+avb_footer_image() {  # FILE SIZE (writes AVBf at -64)
+  python3 -I - "$@" <<'PY'
+import sys
+path, size = sys.argv[1], int(sys.argv[2], 0)
+with open(path, "wb") as f:
+    f.truncate(size)
+    f.seek(size - 64)
+    f.write(b"AVBf")
+PY
+}
 fresh; vars no; { descriptor; echo 'AVB_FOOTERS="boot:0x2000000"'; } > "$R/device/testdev/device.conf"
-truncate -s $((0x2000000)) "$t/images/boot.img"
+avb_footer_image "$t/images/boot.img" $((0x2000000))
 locked_stop "an AVB footer made for another partition size" "This download doesn't fit this phone"
 says "boot.img" && says "(made for an area of exactly 33554432 bytes)" && says "(boot_b) is 67108864 bytes" ||
   fail "an AVB footer for another size: the file, the size it was made for and the area's size are named"
 fresh; vars no; { descriptor; echo 'AVB_FOOTERS="boot:0x4000000 dtbo:16777216"'; } > "$R/device/testdev/device.conf"
-truncate -s $((0x4000000)) "$t/images/boot.img"
-truncate -s 16777216 "$t/images/dtbo.img"
+avb_footer_image "$t/images/boot.img" $((0x4000000))
+avb_footer_image "$t/images/dtbo.img" 16777216
 if guided "yes\n\n"; then fail "a locked phone stops the install"; fi
 says "fastboot flashing unlock" && ! says "doesn't fit" || fail "AVB footers made for exactly the phone's partition sizes pass (hex and decimal)"
 echo "boot image" > "$t/images/boot.img"
