@@ -366,3 +366,55 @@ The upstream v8 cover letter states it was tested on Xiaomi Mi 8:
 [controller-ready fix](https://lists.openwall.net/linux-kernel/2026/09/25/2214),
 [binding update](https://lists.openwall.net/linux-kernel/2026/09/25/2212).
 Firmware loading, low-power touch and wake-on-touch/AP-SLPI handoff are not implemented.
+
+## 2026-11-13 — Mesa Freedreno renderer check
+
+The earlier scoped Dipper Mesa 1.5 package was extracted to tmpfs in the
+phone's pre-existing userdata Linux root and tested from a console login with
+`eglinfo -p gbm`.
+OpenGL core, compatibility and ES reported `freedreno` / `FD630`;
+`LD_DEBUG=libs` confirmed this package's `libgallium` and `dri_gbm.so` were
+loaded. This was not a Hyprland test and the package was not installed to the
+root. The archive SHA-256 was
+`6122aec6efa24194c5dca9733fd8a8936d92e8c99058f9c96d7cb0eb83b8a7fc`.
+
+The installed package database identified `mesa 1:26.2.4-1.5`; retained build
+metadata ties its PKGBUILD checksum to Mesa commit
+`83aa88ec413644dfc2336e6d09ee0a06481edd01`. `a630_sqe.fw` was owned by
+`linux-firmware-qcom 20260916-1`; `a630_zap.mbn` came from this phone's own
+vendor firmware. The exact `eglinfo` output, `phone-smoke --json`, kernel
+release, boot-image hash and kernel source revision for this console session
+were not retained. The available contemporaneous smoke summary says the GPU
+render node and display passed, while the session check reported Hyprland and
+the shell were not running. Do not describe this as a Hyprland renderer test.
+
+## 2026-11-20 — exact shared Mesa archive repeat
+
+Repeated a guarded RAM rescue/chroot test using the exact shared Mesa build
+archive with SHA-256
+`774f3b799c6e0aea91f61fea2b7991af742e0a6e4fc9511491dba1b04219872b`.
+The hash was checked on the phone before interpreting the result. Kernel
+source commit was `f61e96519032e385a04ca0688a068ca6dbc56d63`, GitHub's
+test merge of derekross/linux-omarchy-mobile#218 into the published kernel,
+reporting release
+`7.3.0-rc6-omamobile-push1-gf61e96519032`; boot image SHA-256 was
+`022b935a0b49b703e964cbfb286805ca54a38cd9fb66d095dcca9e6b0e97145f`.
+Userdata was mounted `ro,noload`; package extraction and test configuration
+stayed in RAM. The complete Mesa library path, DRI and GBM binds, shared-memory
+tmpfs and devpts were provided for the rescue chroot.
+
+GBM and Wayland EGL core, compatibility and GLES all reported FD630. Xwayland
+`glxinfo -B` reported `Accelerated: yes`, `OpenGL renderer string: FD630`,
+and Mesa `26.2.4-arch1.1.5.omamobile5`. GLX gears reported 277 frames in
+5 seconds (55.215 FPS), then 299 (59.782 FPS). With udev input metadata and
+the temporary diagnostic keyboard, native Wayland GLES gears reported
+301 frames in 5 seconds (60.008 FPS), then 299 (59.788 FPS). A software
+renderer also appeared as a separate enumerated EGL device; the GBM and
+Wayland results used FD630.
+
+This is hardware renderer evidence for the shared archive, not a clean
+installed-system test. Normal-system phone-smoke, a clean installed desktop,
+physical panel observation and the maintainer's Pixel Panthor check remain
+outstanding. All 91 UFS flags read back as `1`; the rescue reboot helper
+returned the phone to fastboot. No UFS write occurred. Raw output remains
+private off-repository.

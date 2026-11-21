@@ -1,8 +1,8 @@
 <!-- SPDX-License-Identifier: MIT -->
 # mesa (Omarchy Mobile build)
 
-Arch Linux's Mesa 26.2.4 package, rebuilt for the Pixel 7 Pro and the
-Pixel 6 and 6 Pro, with additional Pixel 9a Mali-G715 support. Mali-G710
+Arch Linux's Mesa 26.2.4 package, rebuilt for Qualcomm Adreno phones (the
+Mi 8 port is in progress), the Pixel 7 Pro, Pixel 6/6 Pro and Pixel 9a. Mali-G710
 (gs201) and Mali-G78 (gs101, with upstream's G68 next to it) are added to
 Panfrost's model table. Without an entry, Mesa
 rejects the GPU (for the G710 even when Panthor is loaded): the Gallium
@@ -26,15 +26,21 @@ driver bails out on an unknown model, and PanVK returns
 
 - The patches above.
 - `arch=(aarch64)`.
-- Only drivers this phone can use:
-  - Gallium `panfrost` (which brings `kmsro`), `llvmpipe`, `softpipe` and `zink`.
+- Only drivers our phones can use:
+  - Gallium `freedreno`, `panfrost` (which brings `kmsro`), `llvmpipe`, `softpipe` and `zink`.
   - Vulkan `panfrost` (PanVK).
   - The `device-select` and `anti-lag` layers.
 - Only three split packages: `mesa`, `vulkan-panfrost` and
   `vulkan-mesa-implicit-layers` (which `vulkan-panfrost` depends on).
-- `pkgrel=1.4`. makepkg only accepts `integer[.integer]`, so the Omarchy Mobile
-  marker is in Mesa's version string instead: `26.2.4-arch1.1.4.omamobile4`.
+- `pkgrel=1.5`. makepkg only accepts `integer[.integer]`, so the Omarchy Mobile
+  marker is in Mesa's version string instead: `26.2.4-arch1.1.5.omamobile5`.
   That string shows up in `GL_VERSION` and in the `libgallium-*.so` file name.
+
+Freedreno supplies the Adreno DRI driver (`msm_dri.so`) needed by Qualcomm
+phones. `[omamobile]` comes before Arch Linux ARM in pacman's repository
+order, so our Mesa replaces theirs on every phone; the shared package must
+carry Freedreno. The separate Vulkan Freedreno package remains supplied by
+Arch Linux ARM.
 
 The other ALARM split packages (`vulkan-swrast`, `opencl-mesa` and so on)
 don't depend on `mesa`'s exact version. They can stay installed at
@@ -99,9 +105,9 @@ sudo pacman -S --needed base-devel
 gpg --recv-keys 57551DE15B968F6341C248F68D8E31AFC32428A6   # Eric Engestrom, signed 26.2.4
 cd packages/mesa
 makepkg -s                       # pulls the makedepends listed in the PKGBUILD
-sudo pacman -U mesa-1:26.2.4-1.4-aarch64.pkg.tar.zst \
-  vulkan-panfrost-1:26.2.4-1.4-aarch64.pkg.tar.zst \
-  vulkan-mesa-implicit-layers-1:26.2.4-1.4-aarch64.pkg.tar.zst
+sudo pacman -U mesa-1:26.2.4-1.5-aarch64.pkg.tar.zst \
+  vulkan-panfrost-1:26.2.4-1.5-aarch64.pkg.tar.zst \
+  vulkan-mesa-implicit-layers-1:26.2.4-1.5-aarch64.pkg.tar.zst
 ```
 
 Until Panthor exposes `/dev/dri/renderD128`, nothing changes visibly:
