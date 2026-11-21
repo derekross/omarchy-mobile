@@ -97,6 +97,8 @@ echo "# tests/install-guided"   # the guided install, against stand-ins for the 
 tests/install-guided
 echo "# tests/chroot-extractors"
 tests/chroot-extractors
+echo "# tests/repo-push"
+tests/repo-push
 echo "# tests/rootfs-smoke-link"   # the smoke test's install-link checks, on small made-up images
 tests/rootfs-smoke-link
 echo "# tests/build-packages-deps"   # a package's dependencies into the build container, behind a library change too
