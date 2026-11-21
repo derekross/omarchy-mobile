@@ -100,3 +100,5 @@ echo "# tests/build-packages-deps"   # a package's dependencies into the build c
 tests/build-packages-deps
 echo "# tests/build-packages-cache"   # a forced same-version rebuild drops the stale cached package
 tests/build-packages-cache
+echo "# tests/mark-slot-b"
+tests/mark-slot-b
