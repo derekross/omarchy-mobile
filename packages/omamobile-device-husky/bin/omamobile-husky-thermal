@@ -4,15 +4,8 @@
 # the GPU (devfreq max_freq) one level at a time from the hottest SoC thermal
 # zone, with the hysteresis in /usr/share/omamobile/thermal.conf. Thermal
 # trips are never written. The caps found at start are saved in /run and put
-# back on stop. When the caps are already at the floor and the SoC is still
-# at squeeze_at, user.slice is squeezed onto fewer CPUs (systemd AllowedCPUs),
-# one level per tick, and let out one level per tick below release_below.
-# This kernel has no CFS bandwidth (no cpu.max) and refuses CPU hotplug, so
-# the cpuset is what is left. The squeeze only happens while the CPUs are
-# busy (/proc/stat, squeeze_busy): heat from charging is not cooled by fewer
-# CPUs, it only freezes the UI (seen on the phone, 2026-11-19). It never goes
-# below squeeze_min_cpus unless the CPUs are very busy (squeeze_deep_busy),
-# and is let out at once when the CPUs stop being busy.
+# back on stop. Between step_up and step_down the caps hold while the CPUs
+# are busy and climb while they are idle (/proc/stat, idle_busy).
 #   omamobile-husky-thermal            run the loop (the unit)
 #   omamobile-husky-thermal --tick     one step
 #   omamobile-husky-thermal --restore  put the saved caps and CPUs back
@@ -24,57 +17,16 @@ state=${OMAMOBILE_THERMAL_STATE:-/run/omamobile-husky-thermal}
 proc=${OMAMOBILE_PROC:-/proc}
 wait_zones=${OMAMOBILE_THERMAL_WAIT:-60} # half seconds
 log() { echo "omamobile-husky-thermal: $*" >&2; }
-# the only cgroup the guard ever squeezes
-slice=user.slice
-slicefile=$sys/fs/cgroup/$slice/cpuset.cpus
-# Against a fake sysfs the real systemctl is never called, only
-# OMAMOBILE_SYSTEMCTL if given.
-setprop=${OMAMOBILE_SYSTEMCTL:-}
-[[ -z $setprop && $sys == /sys ]] && setprop=systemctl
-# systemd's runtime drop-in for the slice (set-property --runtime writes it)
-control=${OMAMOBILE_SYSTEMD_CONTROL:-}
-[[ -z $control && $sys == /sys ]] && control=/run/systemd/system.control
-dropin=${control:+$control/$slice.d/50-AllowedCPUs.conf}
-# true unless systemd's drop-in still holds a list other than $1
-dropin_ok() {
-  [[ -n $dropin && -f $dropin ]] || return 0
-  local v; v=$(grep '^AllowedCPUs=' "$dropin" | tail -n 1)
-  [[ ${v#AllowedCPUs=} == "$1" ]]
-}
-# Set the slice's CPUs (empty = all). 0: done. 1: failed. 2: systemd refused,
-# so the cgroup file was written as a last resort; systemd still has its old
-# AllowedCPUs and a daemon-reload would put it back, so the caller retries.
-set_cpus() {
-  if [[ -n $setprop ]]; then
-    "$setprop" set-property --runtime "$slice" "AllowedCPUs=$1" 2>/dev/null && [[ $(<"$slicefile") == "$1" ]] && return 0
-    echo "$1" > "$slicefile" 2>/dev/null || return 1
-    return 2
-  fi
-  echo "$1" > "$slicefile" 2>/dev/null
-}
-
 restore() {
-  local path value rc=0 cg orig r
-  if [[ -f $state/cpuset ]]; then
-    { read -r cg; read -r orig; } < "$state/cpuset"
-    if [[ $cg == "$slicefile" && -e $cg && $orig =~ ^[0-9,-]*$ ]]; then
-      # systemd refused (2): ask once more, then it is only a failure if
-      # its runtime drop-in still holds a squeeze
-      set_cpus "$orig"; r=$?
-      (( r == 2 )) && { set_cpus "$orig"; r=$?; }
-      (( r == 2 )) && dropin_ok "$orig" && r=0
-      if (( r == 0 )); then rm -f "$state/cpuset" "$state/squeeze" "$state/unsynced" "$state/stat" "$state/notbusy"
-      else log "could not restore $cg"; rc=1; fi
-    else rm -f "$state/cpuset" "$state/squeeze" "$state/unsynced" "$state/stat" "$state/notbusy"; fi
-  fi
-  [[ -f $state/orig ]] || return $rc
+  local path value rc=0
+  rm -f "$state/stat"
+  [[ -f $state/orig ]] || return 0
   while read -r path value; do
     [[ $value =~ ^[0-9]+$ ]] || continue
     # a device that is gone for now keeps the saved caps for a retry
     [[ -e $path ]] || { log "$path missing, keeping the saved caps"; rc=1; continue; }
     echo "$value" > "$path" || { log "could not restore $path"; rc=1; }
   done < "$state/orig"
-  rm -f "$state/stat"
   (( rc )) || rm -f "$state/orig" "$state/levels"
   return $rc
 }
@@ -85,37 +37,18 @@ case ${1:-} in
   *) log "usage: $0 [--tick | --restore]"; exit 2 ;;
 esac
 
-step_down= floor= step_up= interval= gpu_devfreq= squeeze_at= release_below= squeeze_cgroup= squeeze_cpus=
-squeeze_busy=50 squeeze_release_busy=35 squeeze_deep_busy=90 squeeze_deep_release_busy=75 squeeze_min_cpus=
+step_down= floor= step_up= interval= gpu_devfreq= idle_busy=35
 while IFS='=' read -r key value; do
   case $key in
-    step_down|floor|step_up|interval|gpu_devfreq|squeeze_at|release_below|squeeze_cgroup|squeeze_cpus|squeeze_busy|squeeze_release_busy|squeeze_deep_busy|squeeze_deep_release_busy|squeeze_min_cpus) printf -v "$key" '%s' "$value" ;;
+    step_down|floor|step_up|interval|gpu_devfreq|idle_busy) printf -v "$key" '%s' "$value" ;;
   esac
 done < <(grep -v '^[[:space:]]*#' "$conf")
-for v in step_down floor step_up interval squeeze_at release_below squeeze_busy squeeze_release_busy squeeze_deep_busy squeeze_deep_release_busy; do
+for v in step_down floor step_up interval idle_busy; do
   [[ ${!v} =~ ^[0-9]+$ ]] || { log "$v in $conf must be a number"; exit 1; }
 done
 (( step_up < step_down && step_down <= floor && floor <= 95000 && step_up >= 40000 && interval >= 1 )) \
   || { log "need 40 C <= step_up < step_down <= floor <= 95 C"; exit 1; }
-(( release_below < squeeze_at && floor <= squeeze_at && squeeze_at <= 95000 && release_below >= 40000 )) \
-  || { log "need 40 C <= release_below < squeeze_at, floor <= squeeze_at <= 95 C"; exit 1; }
-# only user.slice, never system.slice (the guard and the critical units) or init.scope
-[[ -z $squeeze_cgroup || $squeeze_cgroup == "$slice" ]] \
-  || { log "squeeze_cgroup must be $slice or empty"; exit 1; }
-read -ra squeeze_levels <<< "$squeeze_cpus"
-for v in "${squeeze_levels[@]}"; do
-  [[ $v =~ ^[0-9][0-9,-]*$ && $v =~ ^0([,-]|$) ]] || { log "squeeze_cpus levels must be cpu lists that start at cpu0: $v"; exit 1; }
-done
-(( squeeze_release_busy >= 1 && squeeze_release_busy < squeeze_busy && squeeze_busy <= squeeze_deep_busy && squeeze_deep_busy <= 100 &&
-   squeeze_deep_release_busy < squeeze_deep_busy && squeeze_deep_release_busy >= squeeze_release_busy )) \
-  || { log "need 1 <= squeeze_release_busy < squeeze_busy <= squeeze_deep_busy <= 100, squeeze_release_busy <= squeeze_deep_release_busy < squeeze_deep_busy"; exit 1; }
-# the deepest level while busy but not very busy (all levels if no floor)
-min_level=${#squeeze_levels[@]}
-if [[ -n $squeeze_min_cpus ]]; then
-  min_level=
-  for i in "${!squeeze_levels[@]}"; do [[ ${squeeze_levels[i]} == "$squeeze_min_cpus" ]] && min_level=$((i + 1)); done
-  [[ -n $min_level ]] || { log "squeeze_min_cpus must be one of squeeze_cpus: $squeeze_min_cpus"; exit 1; }
-fi
+(( idle_busy >= 1 && idle_busy <= 100 )) || { log "need 1 <= idle_busy <= 100"; exit 1; }
 [[ -z $gpu_devfreq || $gpu_devfreq =~ ^[A-Za-z0-9._-]+$ ]] || { log "bad gpu_devfreq"; exit 1; }
 
 temps=()
@@ -185,53 +118,6 @@ declare -A said busy
 say() { [[ -n ${said[$1]:-} ]] || log "$2"; said[$1]=1; }
 unsay() { unset 'said[$1]'; }
 
-# A squeeze change is logged at most once a minute; the ones in between are
-# counted and the count goes on the next line logged ($state/lastlog).
-logchange() {
-  local now last=0 skipped=0
-  now=$(date +%s)
-  [[ -f $state/lastlog ]] && read -r last skipped < "$state/lastlog"
-  if (( now - last >= 60 )); then
-    (( skipped )) && log "$1 ($skipped changes not logged)" || log "$1"
-    echo "$now 0" > "$state/lastlog"
-  else echo "$last $((skipped + 1))" > "$state/lastlog"; fi
-}
-# A cpu list (0-3,5) as one cpu number per word.
-expand() {
-  local part out=() i
-  IFS=, read -ra part <<< "$1"
-  for i in "${part[@]}"; do
-    if [[ $i == *-* ]]; then out+=($(seq "${i%-*}" "${i#*-}")); else out+=("$i"); fi
-  done
-  echo "${out[*]}"
-}
-# squeeze: the level of squeeze_cpus in the cgroup file (0 = none).
-# unsynced: systemd has not taken it yet; retried every tick.
-squeeze=0; [[ -f $state/squeeze && $(<"$state/squeeze") =~ ^[0-9]+$ ]] && squeeze=$(<"$state/squeeze")
-(( squeeze > ${#squeeze_levels[@]} )) && squeeze=${#squeeze_levels[@]}
-unsynced=0; [[ -f $state/unsynced ]] && unsynced=1
-cgfile=; [[ -n $squeeze_cgroup && ${#squeeze_levels[@]} -gt 0 ]] && cgfile=$slicefile
-set_squeeze() { # level
-  local want= r
-  if (( $1 > 0 )); then want=${squeeze_levels[$1-1]}
-  else [[ -f $state/cpuset ]] && { read -r _; read -r want; } < "$state/cpuset"; fi
-  if [[ ! -f $state/cpuset ]]; then
-    printf '%s\n%s\n' "$cgfile" "$(<"$cgfile")" > "$state/cpuset" || { say cgsave "cannot save $cgfile"; return 1; }
-  fi
-  set_cpus "$want"; r=$?
-  (( r == 1 )) && { say cgw "could not set $slice to CPUs ${want:-all}"; return 1; }
-  unsay cgw
-  (( $1 != squeeze )) && logchange "$slice on CPUs ${want:-all} (level $1)"
-  squeeze=$1; echo "$squeeze" > "$state/squeeze"
-  if (( r == 2 )); then
-    say cgfb "systemd did not take $slice AllowedCPUs; the cgroup file was written instead, retrying systemd every tick"
-    unsynced=1; : > "$state/unsynced"; return 1
-  fi
-  (( unsynced )) && { log "systemd took $slice AllowedCPUs=${want:-all}"; unsay cgfb; }
-  unsynced=0; rm -f "$state/unsynced"
-  (( squeeze )) || rm -f "$state/cpuset" "$state/squeeze"
-}
-
 # The guard's own cap per device, as an index into its levels. It is read
 # from sysfs only the first time; after that sysfs is only compared and
 # written, so a cluster that comes back with the kernel's own value gets the
@@ -250,16 +136,14 @@ save_track() {
   for k in "${!track[@]}"; do echo "${caps[k]} ${track[$k]}"; done > "$state/levels" || log "cannot save the tracked caps"
 }
 
-# Percent busy since the last tick over the CPUs user.slice may use now (the
-# squeezed list, or every CPU), so 0-3 is reachable from 0-5. Per-CPU
-# counters from /proc/stat are kept in $state/stat so --tick carries them
-# (restore deletes it). iowait counts as idle. -1 until two readings, or
-# when a counter went backwards.
+# Percent busy over every CPU since the last tick. Per-CPU counters from
+# /proc/stat are kept in $state/stat so --tick carries them (restore deletes
+# it). iowait counts as idle. -1 until two readings, or when a counter went
+# backwards.
 cpu_busy() {
-  local c u n s idle io irq sirq st total b dt=0 db=0 want= line
+  local c u n s idle io irq sirq st total b dt=0 db=0
   local -A pt pb
   busy_pct=-1
-  (( squeeze )) && want=" $(expand "${squeeze_levels[squeeze-1]}") "
   if [[ -f $state/stat ]]; then
     while read -r c total b; do pt[$c]=$total; pb[$c]=$b; done < "$state/stat"
   fi
@@ -268,7 +152,6 @@ cpu_busy() {
     [[ $c =~ ^cpu([0-9]+)$ ]] || continue
     total=$((u + n + s + idle + io + irq + sirq + ${st:-0})); b=$((total - idle - io))
     new+="$c $total $b"$'\n'
-    [[ -z $want || $want == *" ${c#cpu} "* ]] || continue
     [[ -n ${pt[$c]:-} ]] || { bad=1; continue; }
     (( total >= pt[$c] && b >= pb[$c] )) || { bad=1; continue; }
     dt=$((dt + total - pt[$c])); db=$((db + b - pb[$c])); seen=1
@@ -280,7 +163,7 @@ cpu_busy() {
 
 failing=
 tick() {
-  local t v hot=0 good=0 bad= rc=0 k i n cur want floored=1 changed=0 level
+  local t v hot=0 good=0 bad= rc=0 k i n cur want changed=0
   local -a lv
   for t in "${temps[@]}"; do
     if read -r v < "$t" 2>/dev/null && [[ $v =~ ^-?[0-9]+$ ]]; then
@@ -294,16 +177,8 @@ tick() {
     failing=$bad
   fi
   if [[ -n $bad ]] || (( ${#temps[@]} != 4 )); then discover; fi
-  # nothing readable: hold the caps, but let the squeeze out (no
-  # temperature means no reason to keep the UI on fewer CPUs)
-  if (( ! good )); then
-    if [[ -n $cgfile && -r $cgfile ]] && (( squeeze || unsynced )); then
-      say nozone "no SoC zone reads: caps held, $slice let out"
-      set_squeeze 0 || return 1
-    fi
-    return 0
-  fi
-  unsay nozone
+  # nothing readable: hold the caps
+  (( good )) || return 0
   cpu_busy
   (( ${#inactive[@]} )) && { pick_up; load_track; }
   for k in "${!caps[@]}"; do
@@ -313,7 +188,7 @@ tick() {
     # after the first time.
     if ! read -r cur < "${caps[k]}" 2>/dev/null || [[ ! $cur =~ ^[0-9]+$ ]]; then
       [[ -n ${busy[$k]:-} ]] || log "${caps[k]} cannot be read (cluster offline?), skipped"
-      busy[$k]=1; floored=0; continue
+      busy[$k]=1; continue
     fi
     [[ -n ${busy[$k]:-} ]] && { log "${caps[k]} reads again"; unset 'busy[$k]'; }
     save_cap "${caps[k]}" "$cur" || rc=1
@@ -323,59 +198,21 @@ tick() {
       track[$k]=$((n - 1)); i=$((n - 1)); changed=1
     fi
     i=${track[$k]}
-    (( i == 0 )) || floored=0
     # below the floor the lowest level is never reached by stepping; in
     # the hold band the caps still climb while the CPUs are idle, so a
     # phone idling at 56-57 C does not stay ratcheted down
     if (( hot >= floor )); then i=0
     elif (( hot >= step_down )); then (( i > 1 )) && ((i--))
-    elif (( hot < step_up || (busy_pct >= 0 && busy_pct < squeeze_release_busy) )); then (( i < n - 1 )) && ((i++))
+    elif (( hot < step_up || (busy_pct >= 0 && busy_pct < idle_busy) )); then (( i < n - 1 )) && ((i++))
     fi
     (( i == track[$k] )) || { track[$k]=$i; changed=1; }
     want=${lv[i]}
     if (( want != cur )); then
       if echo "$want" > "${caps[k]}" 2>/dev/null; then unsay "cap$k"
-      else say "cap$k" "could not write ${caps[k]}"; rc=1; floored=0; fi
+      else say "cap$k" "could not write ${caps[k]}"; rc=1; fi
     fi
   done
   (( changed )) && save_track
-  [[ -n $cgfile ]] || return $rc
-  # the squeeze: one level per tick, deeper only once the caps were already
-  # at the floor; a level systemd has not taken is set again whichever way
-  # only while the CPUs are the heat source: hot but not busy (charging)
-  # lets the squeeze out at once, and very busy is needed below the floor
-  # hysteresis: in at >= squeeze_busy, out below squeeze_release_busy;
-  # below squeeze_min_cpus only at >= squeeze_deep_busy, back to it below
-  # squeeze_deep_release_busy. No reading (first tick, no saved counters, a
-  # counter went back): the squeeze holds while still >= release_below;
-  # below it cooling lets it out one level per tick as usual.
-  local deepest
-  level=$squeeze
-  if (( busy_pct < 0 )); then (( hot < release_below && squeeze > 0 )) && ((level--))
-  elif (( squeeze ? busy_pct < squeeze_release_busy : busy_pct < squeeze_busy )); then
-    level=0
-    if (( floored && hot >= squeeze_at )) && [[ ! -f $state/notbusy ]]; then
-      log "hot ($hot) but the CPUs are not busy ($busy_pct %): heat is not from the CPU (charging?), no squeeze"
-      : > "$state/notbusy"
-    fi
-  else
-    rm -f "$state/notbusy"
-    deepest=$min_level
-    (( busy_pct >= squeeze_deep_busy || (squeeze > min_level && busy_pct >= squeeze_deep_release_busy) )) && deepest=${#squeeze_levels[@]}
-    if (( squeeze > deepest )); then level=$deepest
-    elif (( floored && hot >= squeeze_at && squeeze < deepest && busy_pct >= squeeze_busy )); then ((level++))
-    elif (( hot < release_below && squeeze > 0 )); then ((level--))
-    fi
-  fi
-  (( floored && hot >= squeeze_at )) || rm -f "$state/notbusy"
-  if (( level != squeeze || unsynced )); then
-    if [[ -r $cgfile ]]; then set_squeeze "$level" || rc=1
-    else say cgmissing "$cgfile cannot be read, no squeeze"; fi
-  elif (( squeeze )) && [[ -r $cgfile && $(<"$cgfile") != "${squeeze_levels[squeeze-1]}" ]]; then
-    # a daemon-reload or someone else rewrote it
-    say cgre "$slice lost its CPU list, set again (logged once)"
-    set_squeeze "$squeeze" || rc=1
-  fi
   return $rc
 }
 

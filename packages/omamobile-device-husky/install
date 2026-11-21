@@ -68,8 +68,6 @@ install -Dm644 thermal.conf "$destination/usr/share/omamobile/thermal.conf"
 install -Dm755 bin/omamobile-husky-thermal "$destination/usr/bin/omamobile-husky-thermal"
 install -Dm644 vendor/systemd/system/omamobile-husky-thermal.service \
   "$destination/usr/lib/systemd/system/omamobile-husky-thermal.service"
-ln -sfn ../omamobile-husky-thermal.service \
-  "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-husky-thermal.service"
 install -Dm644 device.conf \
   "$destination/usr/share/omamobile/device.conf"
 install -Dm644 etc/omamobile-mirrorlist \
