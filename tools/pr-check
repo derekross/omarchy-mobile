@@ -12,6 +12,10 @@
 #     Co-Authored-By or Assisted-by trailer is fine);
 #   - every shell script the commits touch still parses.
 #
+# Identifiers, blobs and AI Signed-off-by trailers are checked on every
+# commit in the range: a later commit removing or replacing the value does
+# not clear the check; rewrite the named commit and force-push.
+#
 #   tools/pr-check [-C REPO] [BASE [HEAD]]   (default: this repository, origin/main, HEAD)
 #
 # -C checks another repository's commits the same way (tools/kernel-pr-check
@@ -49,7 +53,7 @@ fi
 # Added lines of every commit in the range (and lines newly introduced by any
 # merge commit relative to all its parents), with the commit and file each
 # came from; this file's own patterns are skipped.
-added=$(git -c core.quotePath=false log --full-history --cc --no-color --no-ext-diff --no-textconv \
+added=$(git -c core.quotePath=false -c log.showRoot=true log --full-history --cc --no-color --no-ext-diff --no-textconv \
   --src-prefix=a/ --dst-prefix=b/ --unified=0 --format='%x1f%h %P' "$range" \
   -- . ':(exclude)tools/pr-check' ':(exclude)tests/pr-check' \
   | awk '
@@ -125,9 +129,9 @@ $(sed 's/^/    /' <<<"$imeis" | head -5)"
 
 # ---------------------------------------------------------------- blobs
 blob_ext='\.(bin|img|fw|mbn|hcd|elf|ko|so|so\.[0-9.]+|apk|zip|tar|tgz|tar\.[a-z0-9]+|zst|xz|lz4|gz|7z|ftb|wmfw|bmp|tlv)$'
-raw_blobs=$(git -c core.quotePath=false log --no-merges --numstat --no-renames --diff-filter=d --format='%x1f%h' "$range" \
+raw_blobs=$(git -c core.quotePath=false -c log.showRoot=true log --no-merges --numstat --no-renames --diff-filter=d --format='%x1f%h' "$range" \
   | awk -F'\t' '/^\037/ { sha = substr($1, 2); next } $1 == "-" || $2 == "-" { print sha " " $3 }')
-raw_named=$(git -c core.quotePath=false log --no-merges --name-status --find-renames --diff-filter=AR --format='%x1f%h' "$range" \
+raw_named=$(git -c core.quotePath=false -c log.showRoot=true log --no-merges --name-status --find-renames --diff-filter=AR --format='%x1f%h' "$range" \
   | BLOB_EXT="$blob_ext" awk -F'\t' '
       BEGIN { ext = ENVIRON["BLOB_EXT"] }
       /^\037/ { sha = substr($1, 2); next }
@@ -135,7 +139,7 @@ raw_named=$(git -c core.quotePath=false log --no-merges --name-status --find-ren
       $1 ~ /^R/ && tolower($2) !~ ext { print sha " " $3 }
     ')
 if [[ -n $merges ]]; then
-  merge_blobs=$(git -c core.quotePath=false log --merges --cc --no-color --no-renames --no-ext-diff --no-textconv --unified=0 --format='%x1f%h' "$range" \
+  merge_blobs=$(git -c core.quotePath=false -c log.showRoot=true log --merges --cc --no-color --no-renames --no-ext-diff --no-textconv --unified=0 --format='%x1f%h' "$range" \
     | awk '
       /^\037/ { sha = substr($0, 2); f = ""; in_hunk = 0; changed = 0; next }
       /^diff --cc / { f = substr($0, 11); in_hunk = 0; changed = 0; next }
@@ -201,6 +205,9 @@ done < <(git diff --name-only --diff-filter=AM "$range")
 $(sed 's/^/    /' <<<"${broken%$'\n'}")"
 
 if ((fails)); then
+  if [[ -n $macs || -n $dumps || -n $serials || -n $imeis || -n $all_blobs || -n $bad_sob ]]; then
+    echo "pr-check: a later commit removing or replacing the value does not clear this check; rewrite the named commit and force-push" >&2
+  fi
   echo "pr-check: $fails check(s) failed" >&2
   exit 1
 fi
