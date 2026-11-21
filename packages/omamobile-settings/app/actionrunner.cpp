@@ -52,7 +52,7 @@ int ActionRunner::run(const QString &tool, const QStringList &args, const QStrin
         p->readAllStandardError();
         auto obj = QJsonDocument::fromJson(raw).object();
         if ((obj.isEmpty() || st != QProcess::NormalExit) && tool == "pin" && args.value(0) == "change")
-            obj = QJsonObject{{"error", QStringLiteral("the change did not report back: the PIN may or may not have changed. Try the new PIN first, then the old one.")}};
+            obj = QJsonObject{{"error", QStringLiteral("the change did not report back: the PIN may or may not have changed. Try the new PIN first, then the old one.")}, {"unknown", true}};
         else if (obj.isEmpty() || st != QProcess::NormalExit)
             obj = QJsonObject{{"error", QStringLiteral("the backend failed (exit %1)").arg(code)}};
         done(tool, args, obj.toVariantMap(), id);

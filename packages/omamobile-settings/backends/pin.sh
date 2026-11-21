@@ -32,7 +32,8 @@ change)
     [[ -n ${msg//[[:space:]]/} ]] || msg="the PIN was not changed (exit $rc)"
   fi
   # the last three lines, at most 400 characters, cut as text and escaped by python
-  printf '%s' "$msg" | /usr/bin/python3 -I -c 'import json,sys; t="\n".join(sys.stdin.buffer.read().decode(errors="replace").strip().splitlines()[-3:])[-400:]; print(json.dumps({"error": t}, separators=(",", ":")))'
+  unknown=False; (( rc == 75 )) && unknown=True
+  printf '%s' "$msg" | UNKNOWN=$unknown /usr/bin/python3 -I -c 'import json,os,sys; t="\n".join(sys.stdin.buffer.read().decode(errors="replace").strip().splitlines()[-3:])[-400:]; r={"error": t}; r.update({"unknown": True} if os.environ["UNKNOWN"] == "True" else {}); print(json.dumps(r, separators=(",", ":")))'
   exit 1
   ;;
 status)

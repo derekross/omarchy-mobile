@@ -34,7 +34,7 @@ run() { printf '%s\n' "$2" "$3" "$4" | bash "$tmp/pin.sh" "$1" 2>"$tmp/err" || t
 eq() { [[ $1 == "$2" ]] || { echo "FAIL: got $1, want $2" >&2; exit 1; }; }
 valid() { python3 -I -c 'import json,sys; json.loads(sys.argv[1])' "$1" || { echo "FAIL: not JSON: $1" >&2; exit 1; }; }
 
-maybe='{"error":"passwd did not finish after the retype: the PIN may or may not have changed. Try the new PIN first, then the old one, and don'"'"'t change it again for a minute."}'
+maybe='{"error":"passwd did not finish after the retype: the PIN may or may not have changed. Try the new PIN first, then the old one, and don'"'"'t change it again for a minute.","unknown":true}'
 eq "$(run change 5061 7384 7384)" '{"changed":true}'
 eq "$(run change 4417 7384 7384)" '{"error":"passwd: Authentication token manipulation error\npasswd: password unchanged"}'
 out=$(run change 5061 88888888 88888888); valid "$out"

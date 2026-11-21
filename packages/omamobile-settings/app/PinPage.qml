@@ -21,9 +21,14 @@ ColumnLayout {
     property int statusId: -1
     readonly property var digits: /^[0-9]{4,512}$/
     readonly property var currentDigits: /^[0-9]{1,512}$/
-    readonly property bool ready: currentDigits.test(cur.text) && digits.test(next.text) && again.text === next.text && !busy && allowed
+    readonly property bool ready: currentDigits.test(cur.text) && digits.test(next.text) && again.text === next.text && !busy && allowed && !cooling
     function reset() { cur.text = ""; next.text = ""; again.text = "" }
+    // After a change whose outcome is unknown (set-pin's status 75, or a change the runner had to stop) passwd may
+    // still be running: no second change for a minute, as set-pin's own terminal page does.
+    property bool cooling: false
+    Timer { id: cool; interval: 60000; onTriggered: page.cooling = false }
     function show(r) {
+        if (r.unknown) { cooling = true; cool.restart() }
         if (r.changed) resultText = qsTr("The PIN was changed.")
         else resultText = r.error ? r.error : qsTr("The PIN was not changed.")
     }
