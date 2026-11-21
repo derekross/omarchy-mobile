@@ -347,6 +347,142 @@ The figures are from the 2026-10-27 and 10-28 NOTES entries
   SoC busy, so this can't reproduce the cable-out figure. A PM-notifier
   module (`tegu-mif-sleep`: 421 MHz at suspend-prepare, the old rate after
   resume; the commit above) is the policy to measure with the cable out.
+- **The power domains (2026-11-18): all 26 were on, the unused ones too.**
+  Nothing in Linux manages the 9a's power domains (`pm_genpd_summary` is
+  empty), so each stays as ABL leaves it. All of this ran on the daily
+  bring-up kernel (`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`),
+  with the owner's yes for the read and again for the writes, the owner
+  within reach, and the kernel log streamed to the laptop first. The two
+  bring-up modules are in
+  [`bringup/power-domains/`](bringup/power-domains/README.md).
+
+  The first, read-only, read each `<NAME>_STATUS` word in the PMU at
+  0x15460000, at the offsets of Google's GPL `flexpmu_cal_local_zuma.h`
+  (`drivers/soc/google/cal-if/zuma/` in `kernel/google-modules/soc/gs`,
+  branch `android-gs-tegu-6.1-android16`). The kernel's PMU regmap has only
+  two of those words in its tables (ISPFE's and HSI0's), so the module goes
+  round the regmap: it maps the PMU and reads the words with plain MMIO.
+  One domain was read first (`only=tpu`), then all. For ISPFE and HSI0 it
+  also asked the regmap, and both values were the same as the MMIO read's.
+  All 26 read on, among them TPU, AUR, EH, BW, MFC, G2D, the camera stages
+  (GDC, GSE, MCSC, RGBP, TNR, YUVP) and DPUF1, which nothing in Linux uses
+  here.
+- **With unused domains off the drain read 10 to 30 mA lower, in single
+  runs with the cable in.** The second module switches a domain off from
+  the boot state with the header's off sequence: the domain CMU's
+  controller option bit 24 cleared, `<NAME>_CONFIGURATION` bit 0 cleared,
+  then a wait for `_STATUS` bit 0. It goes round the PMU regmap too: the
+  write is the EL3 call the regmap makes for its own writes (0x82000504),
+  made directly, because the regmap's tables don't have these offsets.
+  Each domain went off within 150 us. Measured with the cable in, the
+  charger's buck off, the screen off, the modem off for the boot (its unit
+  masked), MIF at 421 MHz, as 90 s means of `current_now`:
+
+  | domains off | drain |
+  | --- | --- |
+  | none (all 26 on) | 284 mA |
+  | TPU, AUR, EH, BW, MFC and G2D | 261 and 273 mA |
+  | those six and the six camera stages | 253, 256 and 252 mA |
+
+  One all-on reading is the whole baseline, and with the cable in the
+  spread between two readings of the same state was up to 30 mA that day,
+  so the table says the direction and not much more. The cable-out
+  comparison is not done.
+
+  These runs did not keep to one change per boot. The table's boot had
+  six domains switched off and then six more, one module load each with
+  a look that the palmtop still answered in between; the boot before it
+  had TPU off, on and off again. A step that fails in such a boot can't
+  be pinned on one change, and the reset below is the example.
+
+  What else the day showed:
+  - **A domain powered back on by hand reset the palmtop.** This was an
+    earlier boot than the table's, with the modem up. TPU was
+    switched off, on again five minutes later (`_STATUS` followed), and off
+    a second time 100 s after that: the first step of that second off, a read of TPU's CMU
+    at 0x1a300800, took a synchronous external abort in the module's init,
+    and the palmtop reset and booted again by itself. Our reading is that
+    the domain came back with its DTZPC at the secure default; nothing was
+    read to confirm it. The gs101 domain driver restores it with a
+    TZ-config SMC (`smc_offset`); that call was not tried here, and on the
+    Pixel 6 Pro both DTZPC SMCs hung the SoC on the AoC's block (raven
+    AUDIO-PLAN R2.1c and R2.1d, most likely EL3 touching a block that was
+    off). After the reset the modem came up (one unclean end counted,
+    since the reset boot had it up), and the NV check against the backup
+    followed at once: all the same. The published module has no
+    way back on; the undo for an off is a reboot.
+  - **With the six camera stages off, libcamera listed no cameras** (three
+    with all on).
+  - **Twelve domains stayed off through a sleep.** With the modem off
+    nothing held sleep off, and the shell's auto-sleep put the palmtop to
+    sleep with the twelve off. It left the USB bus and was first taken for
+    a hang; the owner's Power key woke it 42 minutes later, and the twelve
+    still read off. This sleep was not planned and nothing was measured in
+    it.
+  - **With only TPU, AUR, EH, BW, MFC and G2D off,** after a clean reboot
+    with the modem back, libcamera listed all three cameras, and `cam -c1`
+    captured at 10.7 fps with the modem ONLINE. With the modem up, the
+    screen off and MIF at 421 MHz, the six off read 310, 292 and 286 mA
+    against 306, 337 and 312 mA with all on that afternoon: a difference
+    the size of the spread.
+- **Awake with the screen off, the modem up: about 300 mA, and about 500
+  with data moving over the modem** (2026-11-19 and 11-20, the daily
+  bring-up kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`).
+  The 9a doesn't sleep with the modem up, so this is what a day in a pocket
+  draws.
+  - **A day's log** (8.5 hours with the cable out, a line every 30 s, no
+    sleep entered): 409 minutes with the screen off at a median of 313 mA.
+    In the 73 of those minutes with more than 100 kB per half minute over
+    `rmnet0` the median was 519 mA; with Wi-Fi as the route it was
+    292 mA.
+  - **Split by traffic** (cable in, the charger's buck off, screen off,
+    Wi-Fi off so `rmnet0` is the route, 60 s means, a 1000-byte ping out of
+    `rmnet0` as the traffic):
+
+    | traffic | drain | link power-ups a minute |
+    | --- | --- | --- |
+    | none | 285 to 316 mA | 46 to 61 |
+    | a ping every 5 s | 386 to 416 mA | 30 to 41 |
+    | a ping every second | 503 to 509 mA | 0, the link stays up |
+    | a ping every half second | 515 to 541 mA | 0 |
+
+    With no traffic the drain on mobile data is the same as on Wi-Fi (297
+    to 352 mA that night). So about 100 mA comes with the radio staying
+    connected, and about 100 mA more with the modem's PCIe link staying
+    up.
+  - **The link has no power saving while it is up.** `lspci -vv` during the
+    one-a-second run: the modem's root port and endpoint (8 GT/s, x2) both
+    read `ASPM Disabled`, with no L1 substate enabled. The Wi-Fi link reads
+    the same (`ASPM L1` in its capabilities, `ASPM Disabled`).
+  - **The link goes up and down about 50 times a minute with nothing to
+    send,** because the modem is never told the screen is off. Each time
+    costs nine kernel log lines on this kernel and eight on the
+    published one. In the day's log one two-minute stretch with traffic had
+    638 power-ups, and journald took 6.5 % of a core in such minutes. With
+    `[control] follow_screen = yes` (omamobile-modem-sit 0.3.45) the count
+    fell to 6 to 17 a minute, and the drain read 282 to 297 mA idle and 350
+    to 394 mA with a ping every 5 s: 10 to 30 mA less, inside the spread.
+    It is off again on the palmtop: no call or text was tried with it on
+    this kernel.
+  - **On the published kernel** (`omamobile` at 26867fc4e, the same
+    packages): 49 to 50 power-ups a minute with the screen off, Wi-Fi on or
+    off. No drain figure from it: the bus the charger is on isn't there, so
+    the buck stayed on, and no route came up on `rmnet0` with Wi-Fi off.
+  - **Bluetooth and NFC cost nothing measurable** (three rounds of 120 s
+    means with each off in turn: 266 to 284 mA in all nine). Powering the
+    NFC adapter off and on through neard left it dead until a reboot
+    (`nxp-nci_i2c: Read failed with error -121`), as #132 describes for a
+    kernel without linux-omarchy-mobile#131.
+  - **Wi-Fi power save: about 30 mA** (NOTES 2026-11-20, #937).
+  - **Two things about Wi-Fi that cost nothing measurable.** ASPM L1 on the
+    Wi-Fi link, set in both Link Control registers by hand (the kernel's
+    `link/l1_aspm` takes a 1 and stays 0 on this link): 264, 267 and 262 mA
+    without it, 266, 263 and 256 mA with it, 200 of 200 pings either way.
+    And the Wi-Fi chip's interrupt: about 205 a second at all times, with
+    power save on or off and with the radio off, while some 4 packets a
+    second move. With the driver loaded and the radio off the drain read
+    266, 249 and 243 mA; with the driver unloaded and no such interrupts,
+    276, 249 and 256 mA.
 - **Cluster power-down was tried** (2026-10-28) through the hint Google's
   `exynos-cpupm` writes on each idle entry (`CPU_INFORM`, PMU 0x860 + 4 x
   cpu; 1 = C2, 2 = cluster power-down). The C2 hint was stable but saved
@@ -406,6 +542,40 @@ The figures are from the 2026-10-27 and 10-28 NOTES entries
    by design), the NFC clock pad (always enabled while NFC is bound), and
    the modem when it has been started (no suspend is allowed then, by the
    inhibitor).
+
+6. **The unused power domains: 10 to 30 mA in the readings above, to be
+   measured with the cable out.** A genpd provider for zumapro's domains
+   would power the unused ones off early in boot, when the provider's
+   `sync_state` runs, as stock's drivers do through runtime PM.
+   `pd_ignore_unused` would not keep them on: it only skips the late
+   `genpd_power_off_unused()`. The kernel's `google,gs101-pd` already does
+   the PMU part on gs101 (`CONFIGURATION` bit 0, `STATUS` at +4, the
+   TZ-config SMC). On zumapro, `STATUS` bit 0 at those offsets followed
+   each switch-off in these runs, but the Pixel 8 Pro's notes say the bit
+   the gs101 driver reads does not mean powered on zuma, so each SoC's
+   status word needs checking first, and the TZ-config SMC has not run on
+   zumapro at all (above). The zumapro PMU regmap would need these offsets
+   in its tables. The Pixel 8 Pro's attempt (13 domains for genpd,
+   device/husky NOTES of 2026-11-05) reset the phone 8 to 40 s after boot,
+   together with an idle-state overlay; which of the two (or the PMU regmap
+   range additions) did it is not established.
+   The camera stages need their driver first, since libcamera lists no
+   camera without them; TPU, AUR, EH, BW, MFC and G2D are the first step.
+7. **The modem's link with data moving: about 100 mA.** While the modem
+   keeps the link up it sits in L0 (`ASPM Disabled`, no L1 substate). The
+   modem driver asks for L1 substates once the modem is up
+   (`s51xx_pcie_l1ss_ctrl(1)` in CPIF), and the link driver's
+   `gs201_pcie_cp_l1ss()` is a stub ("Not implemented yet"). Next is that
+   function, measured with the one-a-second ping above. Plain L1 on the
+   Wi-Fi link saved nothing (above), so the gain, if there is one, is in
+   the substates.
+8. **Telling the modem the screen is off** (`follow_screen`, the 7 Pro's
+   default): 10 to 30 mA in one run, and 50 link power-ups a minute down to
+   about 10. Before it is the 9a's default: a call and a text with the
+   screen dark on the kernel the palmtop runs.
+9. **The link's log lines.** Eight or nine `dev_info` lines per power-up,
+   some 500 lines a minute idle and several thousand with traffic, all
+   through journald to the disk. They belong at debug level.
 
 The CPUs' own idle state works: cpu0's `c2` was entered about a million
 times by 2026-10-29, with 1304 rejected (EINVAL); cpu4 1148 of 46339, cpu7
