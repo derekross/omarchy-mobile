@@ -267,6 +267,20 @@ images_for_device() {
   [[ $got == "$DEVICE" ]] || die "$1 holds images for '${got:-an unknown device}', not $DEVICE (run: DEVICE=$DEVICE omamobile images)"
 }
 
+# An AVB_FOOTERS image is padded to its declared partition size (bin/omamobile
+# images), because ABL reads the footer from the end of the partition: refuse a
+# short or oversized image before contacting the phone.
+check_avb_image_sizes() {
+  local img=$1 e p avb isize
+  for e in ${DEV_AVB_FOOTERS:-}; do
+    p=${e%%:*} avb=$((${e#*:}))
+    [[ -f "$img/$p.img" ]] || die "missing $img/$p.img (run: omamobile images)"
+    isize=$(stat -c %s "$img/$p.img")
+    ((isize == avb)) ||
+      die "$p.img is $isize bytes, not the $avb bytes device/$DEVICE/device.conf's AVB_FOOTERS pads it to (bin/omamobile images)"
+  done
+}
+
 # Is <image>_b on the device's storage-guard allowlist?
 slot_b_allowed() { [[ " $DEV_UFS_RW " == *" ${1}_b "* ]]; }
 
@@ -1276,6 +1290,7 @@ cmd_flash() {
   [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
     die "flash refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
+  check_avb_image_sizes "$img"
   in_fastboot || die "phone not in fastboot (try: omamobile fastboot)"
   local serial cur
   serial=$(fastboot_serial) || exit 1
@@ -1339,6 +1354,7 @@ cmd_push() {
   [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
     die "push refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
+  check_avb_image_sizes "$img"
   "$ssh" true || die "phone not reachable at 172.16.42.1"
   # Read-only, before anything else (modules-push included): push writes
   # slot B, so the phone must say it runs from B. A release installed on the
