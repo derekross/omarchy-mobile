@@ -94,8 +94,24 @@ ShellRoot {
         mode: shell.shot && shell.shot.mode === "mini" ? "mini" : "heads-up"
         nowMs: shell.now
       }
+
+      // The card as Call.qml builds it while no call is up: hidden, with
+      // its mode left at "incoming". It must not ring: its rings' endless
+      // animations would run unseen and keep the shell's animation timer
+      // ticking.
+      Call.CallCard {
+        id: idle
+        anchors.fill: parent
+        visible: false
+        call: null
+        mode: "incoming"
+        nowMs: shell.now
+      }
     }
   }
+
+  // Whether the shown card rang during an incoming shot.
+  property bool shownRang: false
 
   // The named controls and parts, as {name: {x, y, w, h}} in screen px.
   function describe(item, out) {
@@ -110,7 +126,11 @@ ShellRoot {
 
   function next() {
     index++
-    if (index >= job.shots.length) { Qt.quit(); return }
+    if (index >= job.shots.length) {
+      console.log("ringing hidden " + idle.ringing + " shown " + shell.shownRang)
+      Qt.quit()
+      return
+    }
     settle.restart()
   }
 
@@ -119,6 +139,7 @@ ShellRoot {
   function capture() {
     var s = shell.shot
     var target = s.mode === "emergency" ? emergencyInfo : (s.mode === "heads-up" || s.mode === "mini") ? top : full
+    if (s.mode === "incoming" && full.ringing) shell.shownRang = true
     console.log("geometry " + s.name + " " + screen.width + "x" + screen.height + " " + JSON.stringify(shell.describe(target, {})))
     screen.grabToImage(function(result) {
       result.saveToFile(s.png)

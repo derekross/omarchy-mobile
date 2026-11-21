@@ -209,7 +209,7 @@ Each entry gives the gotcha, then the reason or the fix. Details are in the link
 
 ### Userspace
 
-- **`grep -q` under `set -o pipefail`:** `grep -q` exits early, SIGPIPEs the writer, and the pipeline fails on large input. Use `grep -c … >/dev/null`.
+- **`grep -q` or `head` under `set -o pipefail`:** both can exit early, SIGPIPE the writer, and the pipeline fails on large input. Use `grep -c … >/dev/null`, and `sed -n '1,Np'` or `{ head -c N; cat >/dev/null; }` for `head`.
 - **Omarchy's Chromium launcher splits each line of `chromium-flags.conf` on spaces:** quote a flag whose value has spaces (`"--user-agent=…"`).
 - **Chromium needs `--force-device-scale-factor` on the phone,** even with the mobile user agent: its window layout won't go below about 500 px and the panel is 480 px wide in logical pixels, so without it the window runs off the right edge. Sites get phone layouts from the user agent.
 - **Grok Bot needs it too** (`~/.config/grok-bot-flags.conf`, read by its launcher): it won't lay out narrower than 512 px. `omamobile-setup-user` picks the factor from the panel's mode so the layout is about 578 px wide (0.83 on the 7 Pro, 0.70 on the 9a).

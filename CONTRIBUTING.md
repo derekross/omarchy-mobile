@@ -347,7 +347,8 @@ The pull request template (`.github/pull_request_template.md`) has the checklist
 - **Exceptions keep their upstream licence:**
   - the port of Google's Apache-2.0 boot-control code keeps that licence and Google's notice ([`omamobile-bootctl.c`](packages/omamobile-device-cheetah/src/omamobile-bootctl.c), with `LICENSE.Apache-2.0` beside it);
   - PKGBUILDs derived from Arch's are 0BSD;
-  - patches to Mesa, Hyprland and Omarchy are under those projects' licences.
+  - patches to Mesa, Hyprland and Omarchy are under those projects' licences;
+  - a package can be GPL-3.0 as a whole, because it is built on GPL-3.0 sources or because its author chose that licence, as the apps (`omacam`, `omatel`, `omaphone`, `omamessages`) and the keyboard layouts in `omamobile-shell` are. It is a program of its own in its own `packages/<name>/` folder: the PKGBUILD's `license=` says so, the licence text is beside it (`COPYING`), every upstream copyright and licence notice stays in the files and patches it came with, and its README names the upstream project and version. Nothing from it is copied into, or linked with, the MIT tools and packages; they may start it or talk to it as a separate program.
 - **Only use code from properly licensed sources.** Google's GPL kernel, upstream Linux, postmarketOS and Mesa are fine. Leaked or unlicensed code is not, and neither is decompiled proprietary code: describe protocols (as [USF-PROTOCOL.md](device/cheetah/USF-PROTOCOL.md) does), don't copy code.
 - **Google's proprietary firmware and binaries are never committed, attached or redistributed.** That covers Wi-Fi, Bluetooth, haptics, AoC and GNSS firmware, vendor HALs and libraries, calibration and tuning files. Our scripts take them from **the user's own factory image** on the user's own machine:
   - [`tools/extract-vendor-firmware`](tools/extract-vendor-firmware): firmware, renamed to what mainline drivers request;

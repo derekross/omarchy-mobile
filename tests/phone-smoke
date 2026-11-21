@@ -131,11 +131,16 @@ has 'of them ASoC no backend DAIs (PipeWire probe) x1, UFS dme-set 0x4021 (s2idl
 pass "counted and new lines together"
 
 # The boot and storage guard rows (--slot-from: a fake root). The boot row
-# wants the slot boot-update.conf names (b when absent); the guard row
-# allows userdata and the running slot's five boot images.
+# wants the slot boot-update.conf names (b when absent); Pixel storage checks
+# retain the userdata and active-slot allowlist for both slots.
 fr=$t/fr
 fakeroot() { # running suffix (or none), then the writable partitions
   rm -rf "$fr"; mkdir -p "$fr/proc" "$fr/etc/omamobile"
+  local disk
+  for disk in a b c d e f; do
+    mkdir -p "$fr/sys/block/sd$disk"
+    echo 1 > "$fr/sys/block/sd$disk/ro"
+  done
   echo '123.45 100.00' > "$fr/proc/uptime"
   [[ $1 == none ]] || printf 'androidboot.slot_suffix = "%s"\n' "$1" > "$fr/proc/bootconfig"
   echo 'console=ttynull' > "$fr/proc/cmdline"
@@ -154,16 +159,23 @@ fakeroot _b $B5; rows
 has 'ok|1|boot|kernel ' && has ', slot b, up 123s' && has 'ok|1|storage guard|13 partitions; only userdata and slot b' \
   || fail "a development phone on slot B, no boot-update.conf: both rows pass as before"
 pass "a development phone on slot B, no boot-update.conf: both rows pass as before"
+mkdir -p "$fr/usr/share/omamobile"
+echo 'UFS_RW="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"' > "$fr/usr/share/omamobile/device.conf"
 echo 'AUTO_WRITE=yes' > "$fr/etc/omamobile/boot-update.conf"; rows
 has 'ok|1|boot|' && has 'ok|1|storage guard|' || fail "a release on slot B whose boot-update.conf names no slot: b"
 pass "a release on slot B whose boot-update.conf names no slot: b"
-fakeroot _a $A5; printf 'AUTO_WRITE=yes\nSLOT=a\n' > "$fr/etc/omamobile/boot-update.conf"; rows
+fakeroot _a $A5; printf 'AUTO_WRITE=yes\nSLOT=a\n' > "$fr/etc/omamobile/boot-update.conf"
+mkdir -p "$fr/usr/share/omamobile"
+echo 'UFS_RW="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"' > "$fr/usr/share/omamobile/device.conf"
+rows
 has 'ok|1|boot|' && has ', slot a, up' && has 'ok|1|storage guard|13 partitions; only userdata and slot a' \
   || fail "a release on slot A with SLOT=a: both rows pass"
 pass "a release on slot A with SLOT=a: both rows pass"
 fakeroot _a $A5; rows
 has 'not ok|1|boot|' && has 'on slot a: our builds boot from slot b' || fail "slot A without SLOT=a fails the boot row"
 pass "slot A without SLOT=a fails the boot row"
+mkdir -p "$fr/usr/share/omamobile"
+echo 'UFS_RW="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"' > "$fr/usr/share/omamobile/device.conf"
 fakeroot _b $B5; printf 'SLOT="a"\n' > "$fr/etc/omamobile/boot-update.conf"; rows
 has 'not ok|1|boot|' && has 'on slot b: boot-update.conf says SLOT=a' || fail "SLOT=a booted from slot B (a fallback) fails the boot row"
 pass "SLOT=a booted from slot B (a fallback) fails the boot row"
@@ -180,6 +192,16 @@ has 'skip|1|boot|' && has 'ok|1|storage guard|13 partitions; only userdata writa
 fakeroot none $B5; rows
 has 'not ok|1|storage guard|writable outside the allowlist: ' && has ' boot_b ' || fail "no slot named: a writable boot image fails the guard row"
 pass "no slot named: the boot row skips and only userdata may be writable"
+
+fakeroot _b; mkdir -p "$fr/usr/share/omamobile"
+echo 'UFS_RW=""' > "$fr/usr/share/omamobile/device.conf"; rows
+has 'ok|1|storage guard|6 whole disks read-only; 13 partitions; no UFS writes allowed' || fail "a RAM-only descriptor allows no UFS writes"
+echo 0 > "$fr/sys/class/block/sda11/ro"; rows
+has 'not ok|1|storage guard|writable UFS nodes: disks none; partitions userdata' || fail "RAM-only refuses writable userdata"
+echo 1 > "$fr/sys/class/block/sda11/ro"
+echo 0 > "$fr/sys/block/sda/ro"; rows
+has 'not ok|1|storage guard|writable UFS nodes: disks sda; partitions none' || fail "a writable whole disk fails"
+pass "RAM-only descriptor and whole-disk guard"
 
 # From the laptop: PHONE_SSH stands in for the phone. It answers the
 # compatible question and records what the smoke run was started with.

@@ -1,0 +1,90 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+python3 - <<'PYTEST'
+"""Exercise same-version rebuild cache invalidation without Docker/signing."""
+from pathlib import Path
+import subprocess
+import tempfile
+
+root = Path.cwd()
+source = (root / 'tools/build-packages').read_text()
+a = source.index('add_to_repo() {')
+b = source.index('\n}\n', a) + 3
+function = source[a:b]
+with tempfile.TemporaryDirectory() as directory:
+    p = Path(directory)
+    for name in ('repo', 'cache/pkg', 'built'):
+        (p / name).mkdir(parents=True)
+    base = 'device-0.1.0-1-aarch64.pkg.tar.zst'
+    rebuilt = p / 'built' / base
+    rebuilt.write_text('pkgname = device\nnew bytes\n')
+    cached = p / 'cache/pkg' / base
+    signature = Path(str(cached) + '.sig')
+    unrelated = p / 'cache/pkg/other.pkg.tar.zst'
+    unrelated.write_text('untouched')
+    command = '''set -euo pipefail
+repo=$1/repo; ALARM_CACHE=$1/cache
+local_name=${2:-}
+pkginfo() { cat "$1"; }
+alarm_die() { exit 99; }
+''' + function + '\nadd_to_repo "$1/built/' + base + '"\n'
+    cached.write_text('pkgname = device\nstale bytes\n')
+    signature.write_text('stale signature')
+    subprocess.run(['bash', '-c', command, 'test', str(p)], check=True,
+                   stdout=subprocess.DEVNULL)
+    assert not cached.exists() and not signature.exists()
+    assert unrelated.read_text() == 'untouched'
+    assert (p / 'repo' / base).read_bytes() == rebuilt.read_bytes()
+    cached.write_bytes(rebuilt.read_bytes())
+    signature.write_text('matching signature')
+    subprocess.run(['bash', '-c', command, 'test', str(p)], check=True,
+                   stdout=subprocess.DEVNULL)
+    assert cached.exists() and signature.read_text() == 'matching signature'
+    imported_signature = Path(str(rebuilt) + '.sig')
+    imported_signature.write_text('imported signature')
+    subprocess.run(['bash', '-c', command, 'test', str(p), 'comet'], check=True,
+                   stdout=subprocess.DEVNULL)
+    assert (p / 'repo' / (base + '.sig')).read_text() == 'imported signature'
+print('ok - forced same-version rebuild removes stale cached bytes and signature')
+print('ok - identical and unrelated cache entries remain')
+print('ok - a local import retains its supplied signature')
+
+a = source.index('sign_and_index() {')
+b = source.index('\n}\n', a) + 3
+sign_function = source[a:b]
+with tempfile.TemporaryDirectory() as directory:
+    p = Path(directory)
+    (p / 'repo').mkdir()
+    (p / 'cache/pkg').mkdir(parents=True)
+    package = p / 'repo' / base
+    package.write_text('same package bytes')
+    repo_signature = Path(str(package) + '.sig')
+    repo_signature.write_text('new imported signature')
+    cached = p / 'cache/pkg' / base
+    cached.write_bytes(package.read_bytes())
+    cached_signature = Path(str(cached) + '.sig')
+    cached_signature.write_text('old key signature')
+    command = '''set -euo pipefail
+repo=$1/repo; ALARM_CACHE=$1/cache; key=test
+repo-add() { :; }
+gpg() { printf 'generated signature' > "${@: -1}.sig"; }
+''' + sign_function + '\nsign_and_index\n'
+    def run():
+        subprocess.run(['bash', '-c', command, 'test', str(p)], check=True,
+                       stdout=subprocess.DEVNULL)
+    run()
+    assert cached.read_bytes() == package.read_bytes()
+    assert not cached_signature.exists()
+    cached_signature.write_bytes(repo_signature.read_bytes())
+    run()
+    assert cached_signature.read_bytes() == repo_signature.read_bytes()
+    repo_signature.unlink()
+    run()
+    assert repo_signature.read_text() == 'generated signature'
+    assert not cached_signature.exists() and cached.exists()
+print('ok - imported and regenerated signatures invalidate only a stale cached signature')
+print('ok - a matching cached signature and package bytes remain')
+
+PYTEST
