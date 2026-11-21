@@ -6,7 +6,9 @@
  * sleeps), and QUP SE1 for the two M1120 hall sensors, whose supplies
  * (L7C, L8C) have no consumer in Linux and are kept on. Nothing moves until
  * omamobile-hotdog-popup is run by hand.
- * Paths, not labels, so the base DTB needs no __symbols__.
+ * Paths, not labels, so the base DTB needs no __symbols__. The RPMh
+ * regulator groups are named regulators-N, in the order of
+ * sm8150-oneplus-common.dtsi: regulators-1 is PM8150L (pmic-id "c").
  */
 /dts-v1/;
 /plugin/;
@@ -19,10 +21,10 @@
 	status = "okay";
 };
 
-&{/soc@0/rsc@18200000/pm8150l-rpmh-regulators/ldo7} {
+&{/soc@0/rsc@18200000/regulators-1/ldo7} {
 	regulator-always-on;
 };
 
-&{/soc@0/rsc@18200000/pm8150l-rpmh-regulators/ldo8} {
+&{/soc@0/rsc@18200000/regulators-1/ldo8} {
 	regulator-always-on;
 };

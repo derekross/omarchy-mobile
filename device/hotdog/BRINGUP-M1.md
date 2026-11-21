@@ -338,3 +338,31 @@ which the smoke test doesn't know yet. The modem reported `failed`
 (`sim-missing`): there was no SIM in the phone (the owner's check), as on
 the boot before from `boot_a`. The 45 s USB watcher did
 not run (`usb-recovery` no).
+
+**2026-11-21, tested by the owner on the phone:** Bluetooth audio plays,
+the phone charges, and it boots with no cable in.
+
+**2026-11-21, RAM boot of the kernel as split for linux-omarchy-mobile, with
+the owner's yes.** The kernel: the top of the stacked pull-request branches
+(board, display, fingerprint, keys, haptics, touch, Bluetooth, Wi-Fi, modem,
+sensors, CAMSS, cameras, charging, audio, IPA, voice) merged with the two
+standalone ones (QRTR, glink), with this phone's usual configuration,
+release `7.3.0-rc6-omamobile-prtest1-g884389a11b86`, modules installed
+beside the usual ones first. The initramfs, overlays and command line as
+in the entry above; `popup.dtso` with this branch's `regulators-1` path.
+Before the boot, a check of every overlay path against the new DTB and a
+diff of the two DTBs' node trees found one fault in the split, fixed in
+the camera branch before booting: the camera rails `ldo1`, `ldo3` and
+`ldo4` of PM8009 were added under the group's old node name, which the
+board branch had renamed, so they would not have registered. The boot:
+`boot_a` and the slot flags unchanged (successful yes, tries 6); up 28 s
+after `fastboot boot`, the PIN included. The UFS inline crypto engine,
+now through 7.3's ICE path in the UFS node rather than a standalone ICE
+node: AES-256-XTS, 32 keyslots on every LUN, as before. 50 regulators,
+16 video and 4 media devices, the same I2C drivers bound, nothing left
+deferred: the same as on `gf3a11a5f5062`. `tools/phone-smoke`: no failed
+units; display, GPU, session, lock, touch, buttons, Wi-Fi, Bluetooth,
+battery, sound, sensors and four cameras ok. The kernel's error lines
+were those of the boot before, plus a Bluetooth firmware download that
+needed one retry and QRTR's "failed to announce new service" at the
+modem's start; both drivers are byte for byte those of `gf3a11a5f5062`.
