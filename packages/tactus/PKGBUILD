@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: 0BSD
+#
+# Tactus, an on-screen keyboard that corrects words as they are typed.
+# Opt-in: nothing depends on it, and squeekboard stays the phone's keyboard
+# until the owner picks Tactus (Setup > Keyboard, or `omamobile-osk use
+# tactus`, from an omamobile-shell that has omamobile-osk).
+#
+# Built from Stevia 0.59.0 (https://gitlab.gnome.org/World/Phosh/stevia,
+# GPL-3.0-or-later), whose Wayland side, layout files and emoji data it keeps:
+#  - patches/0001 to 0006, each with what it does and why in its header;
+#  - source/ and tools/: Tactus's own sources (the typing engine, the
+#    autocorrection, the drawing) and the checks that run with no window.
+# The word counts the autocorrection weighs are hermitdave's FrequencyWords
+# (content/2018/en/en_50k.txt, made from OpenSubtitles 2018, CC-BY-SA-4.0),
+# fetched at a pinned commit and installed unchanged.
+#
+# Everything is under /usr/lib/tactus with its own name and its own settings
+# schemas, so it sits beside squeekboard: Arch's stevia package conflicts with
+# squeekboard (both ship mobi.phosh.OSK.service), which omamobile-shell needs.
+#  - -Ddefault_osk=false and the unit directory inside the prefix: neither
+#    the desktop file nor the unit is wanted (the package removes both), and
+#    the unit would otherwise land on squeekboard's file.
+#  - The binary is renamed to tactus: Hyprland names a virtual keyboard after
+#    its binary, and omamobile-shell's key binds go by that name
+#    (hl-virtual-keyboard-tactus).
+
+pkgname=tactus
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+_stevia=0.59.0
+_counts=34bb6447a96d4434dc2d4b24e0cf946c523090b3
+pkgdesc='An on-screen keyboard that corrects words as they are typed (opt-in; Omarchy Mobile)'
+arch=(aarch64)
+url='https://github.com/derekross/omarchy-mobile'
+license=(GPL-3.0-or-later CC-BY-SA-4.0)  # CC-BY-SA: the word counts
+depends=(cairo dconf feedbackd glib2 glibc gnome-desktop gsettings-desktop-schemas
+         gst-plugins-base-libs gstreamer gtk3 hunspell json-glib libgmobile libhandy
+         libsoup3 libxkbcommon pango systemd-libs wayland
+         hunspell-en_us     # the dictionary the autocorrection asks
+         noto-fonts-emoji)  # the emoji page
+makedepends=(meson ninja glib2-devel wayland-protocols pkgconf)
+checkdepends=(xorg-server-xvfb adwaita-fonts)  # the widget's checks draw off screen
+source=("stevia-v$_stevia.tar.gz::https://gitlab.gnome.org/World/Phosh/stevia/-/archive/v$_stevia/stevia-v$_stevia.tar.gz"
+        "en_50k-$_counts.txt::https://raw.githubusercontent.com/hermitdave/FrequencyWords/$_counts/content/2018/en/en_50k.txt")
+sha256sums=('bc2343929fd5f1b5206581aeef2293acba537b5ed5489a94634d689ada4cd397'
+            '5351ff405b1126ef555791dd4d9798a48e3e9a501a9fc481a9da957752cfb458')
+
+prepare() {
+  cd "stevia-v$_stevia"
+  local p
+  for p in "$startdir"/patches/*.patch; do
+    patch -Np1 -F0 -i "$p"
+  done
+  cp "$startdir"/source/tactus-*.[ch] src/
+  cp "$startdir"/tools/tactus-*-test.c tools/
+}
+
+build() {
+  meson setup build "stevia-v$_stevia" --prefix=/usr/lib/tactus --buildtype=plain \
+    --wrap-mode=nodownload -Db_pie=true \
+    -Dtests=false -Dman=false -Dgtk_doc=false -Duim=disabled -Dgovarnam=disabled \
+    -Ddefault_osk=false -Dsystemd_user_unit_dir=/usr/lib/tactus/lib/systemd/user
+  meson compile -C build
+}
+
+check() {
+  TACTUS_WORD_COUNTS="$srcdir/en_50k-$_counts.txt" "$startdir/test/all" --built "$srcdir/build" "$srcdir/stevia-v$_stevia"
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  local p="$pkgdir/usr/lib/tactus"
+  mv "$p/bin/phosh-osk-stevia" "$p/bin/tactus"
+  # Not started by a unit or a desktop file: omamobile-osk runs /usr/bin/tactus
+  rm -rf "$p/lib/systemd" "$p/share/applications" "$p/share/metainfo"
+  rmdir --ignore-fail-on-non-empty "$p/lib"
+  # Tactus's defaults for Stevia's settings: its own completion off
+  install -Dm644 "$startdir/tactus.gschema.override" "$p/share/glib-2.0/schemas/10_tactus.gschema.override"
+  glib-compile-schemas --strict "$p/share/glib-2.0/schemas"
+  install -Dm644 "en_50k-$_counts.txt" "$p/share/phosh-osk-stevia/en_50k.txt"
+  install -Dm755 "$startdir/tactus" "$pkgdir/usr/bin/tactus"
+  install -Dm644 "stevia-v$_stevia/COPYING" "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+  install -Dm644 "$startdir/WORD-COUNTS" "$pkgdir/usr/share/licenses/$pkgname/WORD-COUNTS"
+}

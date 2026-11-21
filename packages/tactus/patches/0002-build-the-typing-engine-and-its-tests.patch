@@ -1,0 +1,60 @@
+Subject: build: the typing engine, the drawing and their tests
+
+Adds Tactus's own sources to the library (tactus-autocorrect, tactus-draw,
+tactus-typer), links hunspell for the dictionary, tells the code where the
+package's data is (TACTUS_PKGDATADIR, for the word counts), and builds the
+checks that run with no window on screen (tools/tactus-*-test).
+---
+--- a/meson.build
++++ b/meson.build
+@@ -171,6 +171,7 @@
+ config_h.set_quoted('GETTEXT_PACKAGE', 'phosh-osk-stevia')
+ config_h.set_quoted('LOCALEDIR', localedir)
+ config_h.set_quoted('WORD_LIST', get_option('wordlist'))
++config_h.set_quoted('TACTUS_PKGDATADIR', pkgdatadir)
+ config_h.set_quoted('PHOSH_OSK_STEVIA_VERSION', meson.project_version())
+ config_h.set_quoted('POS_APP_ID', app_id)
+ config_h.set('POS_HAVE_FZF', fzf.found())
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -20,6 +20,7 @@
+   libhandy_dep,
+   libsoup_dep,
+   libsystemd_dep,
++  hunspell_dep,
+   wayland_client_dep,
+   xkbcommon_dep,
+   cc.find_library('m', required: false),
+@@ -34,6 +35,12 @@
+ )
+ 
+ libpos_sources = files(
++  'tactus-autocorrect.c',
++  'tactus-autocorrect.h',
++  'tactus-draw.c',
++  'tactus-draw.h',
++  'tactus-typer.c',
++  'tactus-typer.h',
+   'pos-app.c',
+   'pos-activation-filter.c',
+   'pos-activation-filter.h',
+--- a/tools/meson.build
++++ b/tools/meson.build
+@@ -1,3 +1,17 @@
+ 
+ 
+ executable('pos-speech-test', 'pos-speech-test.c', dependencies: libpos_dep)
++
++# Tactus, checked with no window on screen
++executable('tactus-kbd-test', 'tactus-kbd-test.c', dependencies: libpos_dep)
++executable(
++  'tactus-draw-test',
++  ['tactus-draw-test.c', '../src/tactus-draw.c'],
++  include_directories: include_directories('../src'),
++  dependencies: [dependency('pangocairo'), gio_dep, cc.find_library('m', required: false)],
++)
++executable('tactus-ac-test', 'tactus-ac-test.c', dependencies: libpos_dep)
++executable('tactus-typer-test', 'tactus-typer-test.c', dependencies: libpos_dep)
++executable('tactus-pages-test', 'tactus-pages-test.c', dependencies: libpos_dep)
++
++executable('tactus-emoji-test', 'tactus-emoji-test.c', dependencies: libpos_dep)

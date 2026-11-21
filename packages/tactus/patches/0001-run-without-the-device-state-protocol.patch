@@ -1,0 +1,29 @@
+Subject: wayland: run where the compositor has no zphoc_device_state_v1
+
+Stevia asks the compositor for phoc's device-state protocol (is a hardware
+keyboard attached?) and counts it among the globals it can't do without, so
+on a compositor without it the keyboard never becomes ready. Hyprland doesn't
+have it. The protocol is now optional: without it there is no hardware
+keyboard tracking, and everything else works.
+---
+--- a/src/pos-hw-tracker.c
++++ b/src/pos-hw-tracker.c
+@@ -72,6 +72,9 @@
+                                  gpointer      device_state)
+ {
+   self->device_state = device_state;
++  /* Not every compositor has it (Hyprland): no hardware keyboard tracking then */
++  if (!self->device_state)
++    return;
+   zphoc_device_state_v1_add_listener (self->device_state, &device_state_listener, self);
+ }
+ 
+--- a/src/pos-wayland.c
++++ b/src/pos-wayland.c
+@@ -387,6 +387,5 @@
+           self->zwlr_foreign_toplevel_manager_v1 &&
+           self->layer_shell &&
+           self->zxdg_output_manager_v1 &&
+-          self->zphoc_device_state_v1 &&
+           self->ext_data_control_manager);
+ }

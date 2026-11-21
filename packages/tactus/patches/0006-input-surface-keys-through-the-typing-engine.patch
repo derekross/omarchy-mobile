@@ -1,0 +1,969 @@
+Subject: input-surface: the keys go through the typing engine
+
+With a text field for ordinary text, the keys of a language layout and the
+emoji go to tactus-typer, which commits each key at once, keeps a copy of the
+text before the cursor, corrects a word when it is ended, starts sentences
+with a capital and turns two spaces into a full stop. Password fields, the
+terminal layout and keys with a latched modifier go the old way.
+
+Also here:
+- an answer to the text field (an empty input-method commit) when the typing
+  engine asks for one: the browser tells its text only once its last word
+  was answered;
+- Backspace held: letters, then whole words;
+- the keys under the keyboard: the emoji page, the microphone, which
+  starts the phone's dictation (omamobile.voice), and Paste, which opens
+  Omarchy's clipboard list (omarchy-menu-clipboard);
+- a swipe down puts the keyboard away, and a touch of the text field brings
+  it back;
+- the surface is as high as the page it shows and leaves the band above the
+  keys to the application: its input region ends at the panel's top. The
+  room it reserves is a little less than the panel is high (8 px on a
+  screen 360 wide), so the window in front reaches under the panel's top and
+  it is the application that shows past the panel's round corners, not the
+  wallpaper behind it. A taller page takes its room only once it is on the
+  screen, and a lower one gives it back at once, so the wallpaper doesn't
+  show between the window and the keyboard while the page changes;
+- the pages change at once, and the page follows the text field's purpose
+  (letters, numbers, the terminal's keys) each time the keyboard comes up.
+---
+--- a/src/pos-input-surface.c
++++ b/src/pos-input-surface.c
+@@ -2,6 +2,7 @@
+  * Copyright (C) 2021 Purism SPC
+  *               2022-2024 The Phosh Developers
+  *               2025 Phosh.mobi e.V.
++ *               2026 W4HO
+  *
+  * SPDX-License-Identifier: GPL-3.0-or-later
+  *
+@@ -29,7 +30,8 @@
+ #include "pos-speech-input.h"
+ #include "pos-style-manager.h"
+ #include "pos-vk-driver.h"
+-#include "pos-vk-driver.h"
++#include "tactus-draw.h"
++#include "tactus-typer.h"
+ #include "util.h"
+ 
+ #include <gmobile.h>
+@@ -47,9 +49,23 @@
+ 
+ #define MIN_Y_VELOCITY 1000
+ 
+-#define BS_KEY_REPEAT_DELAY 700
+-#define BS_KEY_REPEAT_INTERVAL_CHAR 50
+-#define BS_KEY_REPEAT_INTERVAL_WORD 150
++/* Backspace held: letters soon, whole words after a while */
++#define BS_KEY_REPEAT_DELAY 350
++#define BS_KEY_REPEAT_INTERVAL_CHAR 60
++#define BS_KEY_REPEAT_INTERVAL_WORD 140
++#define BS_KEY_REPEAT_WORDS_AFTER_US (1500 * G_TIME_SPAN_MILLISECOND)
++
++/* Swiped away, the keyboard stays away at least this long */
++#define TACTUS_SWIPED_QUIET_US (1 * G_TIME_SPAN_SECOND)
++
++/* What the Mic under the keys starts: the phone's dictation, which types what it hears */
++#define TACTUS_DICTATION \
++  "omarchy-shell shell call omamobile.voice press ''; omarchy-shell shell call omamobile.voice release ''"
++
++/* What the Paste key under the keys opens: the phone's clipboard list, where a
++ * tap on an entry pastes it into the app that had the text field (the stock
++ * keyboard's Paste key ends in the same command) */
++#define TACTUS_CLIPBOARD "omarchy-menu-clipboard"
+ 
+ /**
+  * POS_INPUT_SURFACE_IS_LANG_LAYOUT:
+@@ -104,10 +120,10 @@
+  * can easily add and remove actions.
+  */
+ struct _PosInputSurface {
+-  PhoshLayerSurface        parent;
++  PhoshLayerSurface           parent;
+ 
+-  gboolean                 surface_visible;
+-  PosInputSurfaceAnimation animation;
++  gboolean                    surface_visible;
++  PosInputSurfaceAnimation    animation;
+   guint                       min_height;
+   guint                       dead_zone;
+ 
+@@ -176,6 +192,28 @@
+   gboolean                    layout_overriden;
+   /* Keymap handling */
+   guint                       keymap_delayed_id;
++
++  /* Tactus's typing */
++  TactusTyper                *typer;
++  gboolean                    typer_on;
++  guint                       typer_wake_id;
++  gboolean                    autoshift;
++  TactusTap                   tap;
++  gboolean                    have_tap;
++  gboolean                    bs_repeating;
++  gint64                      bs_repeat_start;
++  /* Tactus's look */
++  GSettings                  *interface_settings;
++  GtkCssProvider             *tactus_css;
++  int                         clear;
++  int                         zone;      /* the room last asked of the compositor */
++  gboolean                    room_wait; /* more room is asked for after the next frame */
++  guint                       shape_id;
++  /* When the owner swiped the keyboard away, while its text field stays */
++  gint64                      swiped_at;
++  /* Searching for emoji by name: the letters type into the search */
++  GtkWidget                  *emoji_search;
++  gboolean                    searching;
+ };
+ 
+ 
+@@ -264,8 +302,20 @@
+ {
+   PosInputSurface *self = data;
+ 
++  /* After a while of letters, go on by whole words */
++  if (self->bs_mode == POS_BACKSPACE_MODE_CHAR && self->bs_repeat_start &&
++      pos_input_method_get_active (self->input_method) &&
++      g_get_monotonic_time () - self->bs_repeat_start > BS_KEY_REPEAT_WORDS_AFTER_US) {
++    pos_input_surface_set_backspace_mode (self, POS_BACKSPACE_MODE_WORD);
++    self->bs_repeat_id = g_timeout_add (BS_KEY_REPEAT_INTERVAL_WORD, on_bs_key_repeat, self);
++    g_source_set_name_by_id (self->bs_repeat_id, "[pos-bs-key-repeat]");
++    return G_SOURCE_REMOVE;
++  }
++
+   pos_input_surface_trigger_feedback (self, KEY_PRESS_EVENT);
++  self->bs_repeating = TRUE;
+   pos_input_surface_submit_symbol (self, "KEY_BACKSPACE");
++  self->bs_repeating = FALSE;
+ 
+   return G_SOURCE_CONTINUE;
+ }
+@@ -277,14 +327,9 @@
+   PosInputSurface *self = data;
+   guint interval;
+ 
+-  if (pos_input_method_get_active (self->input_method)) {
+-    interval = BS_KEY_REPEAT_INTERVAL_WORD;
+-    pos_input_surface_set_backspace_mode (self, POS_BACKSPACE_MODE_WORD);
+-  } else {
+-    /* When no input method is active we delete individual chars which should
+-     * happen faster than deleting whole words */
+-    interval = BS_KEY_REPEAT_INTERVAL_CHAR;
+-  }
++  /* Letters first (on_bs_key_repeat moves on to words) */
++  interval = BS_KEY_REPEAT_INTERVAL_CHAR;
++  self->bs_repeat_start = g_get_monotonic_time ();
+ 
+   self->bs_repeat_id = g_timeout_add (interval, on_bs_key_repeat, self);
+   g_source_set_name_by_id (self->bs_repeat_id, "[pos-bs-key-repeat]");
+@@ -332,6 +377,252 @@
+ }
+ 
+ 
++/*
++ * Tactus's typing: the keys of a language layout go through the typing
++ * engine, which corrects words and knows where sentences start
++ */
++
++static void
++tactus_op_commit (const char *text, gpointer data)
++{
++  PosInputSurface *self = POS_INPUT_SURFACE (data);
++
++  pos_input_method_send_string (self->input_method, text, TRUE);
++}
++
++
++/* A key by its name, as a key press to the application. Return held
++ * ("KEY_NEWLINE") is Return with Shift: a new line in every text field that
++ * sends on Return, and a plain new line everywhere else. */
++static void
++tactus_press_key (PosInputSurface *self, const char *symbol, PosKeycodeModifier modifiers)
++{
++  if (g_strcmp0 (symbol, POS_OSK_SYMBOL_NEWLINE) == 0) {
++    symbol = "KEY_ENTER";
++    modifiers |= POS_KEYCODE_MODIFIER_SHIFT;
++  }
++  pos_vk_driver_key_down (self->keyboard_driver, symbol, modifiers);
++  pos_vk_driver_key_up (self->keyboard_driver, symbol);
++}
++
++
++static void
++tactus_op_key (const char *symbol, gpointer data)
++{
++  tactus_press_key (POS_INPUT_SURFACE (data), symbol, POS_KEYCODE_MODIFIER_NONE);
++}
++
++
++static void
++tactus_op_erase (guint n_chars, guint n_bytes, gboolean by_keys, gpointer data)
++{
++  PosInputSurface *self = POS_INPUT_SURFACE (data);
++
++  if (!by_keys) {
++    pos_input_method_delete_surrounding_text (self->input_method, n_bytes, 0, TRUE);
++    return;
++  }
++  for (guint i = 0; i < n_chars; i++)
++    tactus_op_key ("KEY_BACKSPACE", self);
++}
++
++
++static void
++tactus_op_shift (gboolean wanted, gboolean context_changed, gpointer data)
++{
++  PosInputSurface *self = POS_INPUT_SURFACE (data);
++  GtkWidget *child = hdy_deck_get_visible_child (self->deck);
++
++  self->autoshift = wanted;
++  /* what is typed into the search for emoji is no sentence */
++  if (POS_INPUT_SURFACE_IS_LANG_LAYOUT (child))
++    pos_osk_widget_set_autoshift (POS_OSK_WIDGET (child), wanted && !self->searching, context_changed);
++}
++
++
++/* An answer with nothing in it: see the typing engine's answer() */
++static void
++tactus_op_ack (gpointer data)
++{
++  PosInputSurface *self = POS_INPUT_SURFACE (data);
++
++  if (pos_input_method_get_active (self->input_method))
++    pos_input_method_commit (self->input_method);
++}
++
++
++static void
++on_typer_wake (gpointer data)
++{
++  PosInputSurface *self = POS_INPUT_SURFACE (data);
++
++  self->typer_wake_id = 0;
++  tactus_typer_poll (self->typer);
++}
++
++
++static void
++tactus_op_wake (guint ms, gpointer data)
++{
++  PosInputSurface *self = POS_INPUT_SURFACE (data);
++
++  g_clear_handle_id (&self->typer_wake_id, g_source_remove);
++  self->typer_wake_id = g_timeout_add_once (ms, on_typer_wake, self);
++  g_source_set_name_by_id (self->typer_wake_id, "[tactus-typer-wake]");
++}
++
++/* Whether the keys go through the typing engine right now: there is a text
++ * field for ordinary text, and what shows is a language layout (or the
++ * emoji, which type into the same text) */
++static gboolean
++tactus_typer_usable (PosInputSurface *self)
++{
++  GtkWidget *child;
++
++  if (!self->typer_on || self->latched_modifiers)
++    return FALSE;
++
++  child = hdy_deck_get_visible_child (self->deck);
++  return POS_INPUT_SURFACE_IS_LANG_LAYOUT (child) || child == self->emoji_picker;
++}
++
++static void tactus_queue_shape (PosInputSurface *self);
++
++/* Searching for emoji by name, or not: the search sits on top of the letters,
++ * which type into it for as long as it is there */
++static void
++tactus_search_set (PosInputSurface *self, gboolean on)
++{
++  if (self->searching == !!on || self->emoji_search == NULL)
++    return;
++
++  self->searching = !!on;
++  if (on)
++    pos_emoji_search_reset (POS_EMOJI_SEARCH (self->emoji_search));
++  for (guint i = 0; self->osks && i < self->osks->len; i++) {
++    PosOskWidget *osk = g_ptr_array_index (self->osks, i);
++
++    pos_osk_widget_set_attached (osk, on);
++    pos_osk_widget_set_autoshift (osk, !on && self->typer_on && self->autoshift, TRUE);
++  }
++  gtk_widget_set_visible (self->emoji_search, on);
++  /* the keyboard changes its height */
++  tactus_typer_settle (self->typer, 700);
++  tactus_queue_shape (self);
++}
++
++/* The text field gave a sign of life */
++static void
++on_im_done (PosInputSurface *self, PosInputMethod *im)
++{
++  PosInputMethodHint hint = pos_input_method_get_hint (im);
++  gboolean wanted;
++  const char *text;
++  guint anchor = 0, cursor = 0;
++
++  /* Swiped away, the keyboard comes back when its text field is touched
++   * again (the field then says where its cursor is). Not at once: the field
++   * also speaks as it gets the room the keyboard left. */
++  if (!pos_input_method_get_active (im)) {
++    self->swiped_at = 0;
++    tactus_search_set (self, FALSE);
++  } else if (self->swiped_at && self->surface_visible == FALSE &&
++             g_get_monotonic_time () - self->swiped_at > TACTUS_SWIPED_QUIET_US) {
++    self->swiped_at = 0;
++    pos_input_surface_set_visible (self, TRUE);
++  }
++
++  /* Not where what is typed is hidden (a password) */
++  wanted = pos_input_method_get_active (im) &&
++    pos_input_method_get_purpose (im) == POS_INPUT_METHOD_PURPOSE_NORMAL &&
++    !(hint & TACTUS_HINT_HIDDEN);
++
++  if (wanted != self->typer_on) {
++    if (g_getenv ("TACTUS_TRACE"))
++      g_message ("text field: %s, purpose %d, hints 0x%x: the typing engine is %s",
++                 pos_input_method_get_active (im) ? "there" : "gone", pos_input_method_get_purpose (im), hint,
++                 wanted ? "on" : "off");
++    self->typer_on = wanted;
++    tactus_typer_focus (self->typer, wanted);
++    if (wanted) {
++      double dx, dy;
++
++      /* What was learned about where the owner's fingers land */
++      tactus_ac_get_bias (&dx, &dy);
++      for (guint i = 0; self->osks && i < self->osks->len; i++)
++        pos_osk_widget_set_touch_bias (g_ptr_array_index (self->osks, i), dx, dy);
++    }
++  }
++  if (!wanted)
++    return;
++
++  tactus_typer_set_hints (self->typer, hint);
++  text = pos_input_method_get_surrounding_text (im, &anchor, &cursor);
++  tactus_typer_state (self->typer, text, cursor, anchor);
++}
++
++/* A key under the keyboard that hands over to the phone's shell: where the
++ * command isn't there, the shell says so in the log and nothing else happens */
++static void
++tactus_run (const char *what, const char *command)
++{
++  const char *argv[] = { "sh", "-c", command, NULL };
++  g_autoptr (GError) err = NULL;
++
++  if (!g_spawn_async (NULL, (char **) argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &err))
++    g_warning ("%s: %s", what, err->message);
++}
++
++/* One of the keys under the keyboard */
++static void
++on_osk_strip_key (PosInputSurface *self, const char *which, GtkWidget *osk_widget)
++{
++  g_return_if_fail (POS_IS_INPUT_SURFACE (self));
++
++  if (g_strcmp0 (which, "emoji") == 0) {
++    tactus_search_set (self, FALSE);
++    if (self->action_map)
++      g_action_group_change_action_state (G_ACTION_GROUP (self->action_map), "select-layout",
++                                          g_variant_new_string ("emoji"));
++  } else if (g_strcmp0 (which, "mic") == 0) {
++    tactus_run ("Dictation", TACTUS_DICTATION);
++  } else if (g_strcmp0 (which, "paste") == 0) {
++    /* The list takes the keyboard focus, so the text field lets go of the
++     * keyboard, and its pick is pasted into the app when the list has closed */
++    tactus_run ("Paste", TACTUS_CLIPBOARD);
++  }
++}
++
++
++/* The emoji page's microphone */
++static void
++on_emoji_picker_mic (PosInputSurface *self)
++{
++  on_osk_strip_key (self, "mic", NULL);
++}
++
++/* The emoji page's search field was tapped: the letters come up, with the search on top */
++static void
++on_emoji_picker_search (PosInputSurface *self)
++{
++  if (self->last_layout == NULL)
++    return;
++  tactus_search_set (self, TRUE);
++  hdy_deck_set_visible_child (self->deck, self->last_layout);
++}
++
++/* An emoji among the ones the search found */
++static void
++on_search_emoji_picked (PosInputSurface *self, const char *emoji)
++{
++  if (tactus_typer_usable (self))
++    tactus_typer_text (self->typer, emoji, TRUE);
++  else if (pos_input_method_get_active (self->input_method))
++    pos_input_method_send_string (self->input_method, emoji, TRUE);
++  pos_input_surface_trigger_feedback (self, KEY_PRESS_EVENT);
++}
++
++
+ static void
+ on_swipe (GtkGestureSwipe *swipe, double velocity_x, double velocity_y, gpointer data)
+ {
+@@ -342,7 +633,14 @@
+   g_debug ("swipe with v_x: %f, v_y: %f", velocity_x, velocity_y);
+ 
+   if (velocity_y > MIN_Y_VELOCITY && velocity_y > 2.0 * ABS (velocity_x)) {
++    GtkWidget *child = hdy_deck_get_visible_child (self->deck);
++
+     g_debug ("Hiding the keyboard on swipe down");
++    /* The finger that swiped types nothing */
++    if (POS_IS_OSK_WIDGET (child))
++      pos_osk_widget_cancel_touches (POS_OSK_WIDGET (child));
++    pos_input_surface_set_backspace_pressed (self, NULL);
++    self->swiped_at = g_get_monotonic_time ();
+     pos_input_surface_set_visible (self, FALSE);
+   } else {
+     g_debug ("Swipe not downwards");
+@@ -578,11 +876,19 @@
+ 
+ 
+ static void
+-on_osk_key_symbol (PosInputSurface *self, const char *symbol)
++on_osk_key_symbol (PosInputSurface *self, const char *symbol, GtkWidget *osk_widget)
+ {
++  double dx = 0.0, dy = 0.0;
++
+   g_assert (POS_IS_INPUT_SURFACE (self));
+ 
++  /* Where in its key the finger was, for the typing engine */
++  self->have_tap = POS_IS_OSK_WIDGET (osk_widget) &&
++    pos_osk_widget_take_tap (POS_OSK_WIDGET (osk_widget), &dx, &dy);
++  self->tap = (TactusTap) { .dx = dx, .dy = dy, .valid = self->have_tap };
++
+   pos_input_surface_submit_symbol (self, symbol);
++  self->have_tap = FALSE;
+ }
+ 
+ 
+@@ -595,20 +901,49 @@
+ 
+   is_bs = pos_input_surface_set_backspace_pressed (self, symbol);
+ 
++  /* Searching for emoji: the keys type into the search */
++  if (self->searching) {
++    if (is_bs)
++      pos_emoji_search_backspace (POS_EMOJI_SEARCH (self->emoji_search));
++    else if (g_strcmp0 (symbol, "KEY_ENTER") == 0 || g_strcmp0 (symbol, POS_OSK_SYMBOL_NEWLINE) == 0)
++      tactus_search_set (self, FALSE);
++    else if (!g_str_has_prefix (symbol, "KEY_"))
++      pos_emoji_search_type (POS_EMOJI_SEARCH (self->emoji_search), symbol);
++    return;
++  }
++
+   /* Latched modifiers, send as virtual-keyboard */
+   if (self->latched_modifiers) {
+     PosKeycodeModifier modifier;
+ 
+     modifier = pos_vk_driver_convert_modifiers (self->keyboard_driver, self->latched_modifiers);
+-    pos_vk_driver_key_down (self->keyboard_driver, symbol, modifier);
+-    pos_vk_driver_key_up (self->keyboard_driver, symbol);
++    tactus_press_key (self, symbol, modifier);
+     pos_input_surface_unlatch_modifiers (self);
+     return;
+   }
+   /* virtual-keyboard, no input method */
+   if (!pos_input_method_get_active (self->input_method)) {
+-    pos_vk_driver_key_down (self->keyboard_driver, symbol, POS_KEYCODE_MODIFIER_NONE);
+-    pos_vk_driver_key_up (self->keyboard_driver, symbol);
++    tactus_press_key (self, symbol, POS_KEYCODE_MODIFIER_NONE);
++    return;
++  }
++
++  /* Tactus's typing */
++  if (tactus_typer_usable (self)) {
++    GtkWidget *child = hdy_deck_get_visible_child (self->deck);
++
++    /* The dictionary is English: another language's words stay as they are typed */
++    if (POS_INPUT_SURFACE_IS_LANG_LAYOUT (child))
++      tactus_typer_set_language (self->typer, pos_osk_widget_get_lang (POS_OSK_WIDGET (child)));
++
++    if (is_bs) {
++      TactusBackspace how = TACTUS_BACKSPACE_TAP;
++
++      if (self->bs_repeating)
++        how = self->bs_mode == POS_BACKSPACE_MODE_WORD ? TACTUS_BACKSPACE_WORD : TACTUS_BACKSPACE_REPEAT;
++      tactus_typer_backspace (self->typer, how);
++    } else {
++      tactus_typer_key (self->typer, symbol, self->have_tap ? &self->tap : NULL);
++    }
+     return;
+   }
+ 
+@@ -621,8 +956,7 @@
+   if (is_bs) {
+     pos_input_surface_handle_backsapce (self);
+   } else if (g_str_has_prefix (symbol, "KEY_")) {
+-    pos_vk_driver_key_down (self->keyboard_driver, symbol, POS_KEYCODE_MODIFIER_NONE);
+-    pos_vk_driver_key_up (self->keyboard_driver, symbol);
++    tactus_press_key (self, symbol, POS_KEYCODE_MODIFIER_NONE);
+   } else {
+     pos_input_method_send_string (self->input_method, symbol, TRUE);
+   }
+@@ -725,7 +1059,9 @@
+   if (gm_str_is_null_or_empty (text))
+     return;
+ 
+-  if (pos_input_method_get_active (self->input_method)) {
++  if (tactus_typer_usable (self)) {
++    tactus_typer_text (self->typer, text, FALSE);
++  } else if (pos_input_method_get_active (self->input_method)) {
+     pos_input_surface_submit_current_preedit (self);
+     pos_input_method_send_string (self->input_method, text, TRUE);
+   } else {
+@@ -789,7 +1125,9 @@
+   g_assert (POS_IS_INPUT_SURFACE (self));
+   g_assert (POS_IS_EMOJI_PICKER (emoji_picker));
+ 
+-  if (pos_input_method_get_active (self->input_method)) {
++  if (tactus_typer_usable (self)) {
++    tactus_typer_text (self->typer, emoji, TRUE);
++  } else if (pos_input_method_get_active (self->input_method)) {
+     pos_input_surface_submit_current_preedit (self);
+     pos_input_method_send_string (self->input_method, emoji, TRUE);
+   } else {
+@@ -1039,6 +1377,253 @@
+ }
+ 
+ 
++/*
++ * Tactus's look: the keyboard is a panel at the bottom of the surface.
++ * What is above it is clear: there the accents of a held key are drawn, the
++ * application shows through, and touches are the application's.
++ */
++
++static int
++tactus_measure_clear (PosInputSurface *self)
++{
++  GtkWidget *child = hdy_deck_get_visible_child (self->deck);
++  int y = 0, clear;
++
++  if (child == NULL || !gtk_widget_get_realized (GTK_WIDGET (self)))
++    return 0;
++  /* A bar above the keys reaches to the top */
++  if (gtk_widget_get_visible (GTK_WIDGET (self->shortcuts_bar)) ||
++      gtk_widget_get_visible (self->completion_bar) ||
++      (self->emoji_search && gtk_widget_get_visible (self->emoji_search)))
++    return 0;
++
++  if (!gtk_widget_translate_coordinates (child, GTK_WIDGET (self), 0, 0, NULL, &y))
++    y = 0;
++  clear = y;
++  if (POS_IS_OSK_WIDGET (child))
++    clear += pos_osk_widget_get_overhang (POS_OSK_WIDGET (child));
++
++  return MAX (clear, 0);
++}
++
++
++/* How far the windows reach under the top of the panel (tactus_panel_under) */
++static int
++tactus_under (PosInputSurface *self)
++{
++  if (self->last_layout && POS_IS_OSK_WIDGET (self->last_layout))
++    return pos_osk_widget_get_panel_under (POS_OSK_WIDGET (self->last_layout));
++
++  return tactus_panel_under (360.0 / 390.0);
++}
++
++
++/* Whether the surface has the height it last asked for. Between asking and
++ * getting it, what is drawn and what is measured belong to two pages. */
++static gboolean
++tactus_settled (PosInputSurface *self)
++{
++  int asked = 0;
++
++  g_object_get (self, "height", &asked, NULL);
++
++  return asked == gtk_widget_get_allocated_height (GTK_WIDGET (self));
++}
++
++
++static void
++tactus_keep_room (PosInputSurface *self, int room)
++{
++  self->zone = room;
++  g_debug ("Room kept for the keyboard: %d", self->zone);
++  phosh_layer_surface_set_exclusive_zone (PHOSH_LAYER_SURFACE (self), self->zone);
++  phosh_layer_surface_wl_surface_commit (PHOSH_LAYER_SURFACE (self));
++}
++
++
++/* The room the page that shows needs, as the surface is laid out now */
++static int
++tactus_room (PosInputSurface *self)
++{
++  int height = gtk_widget_get_allocated_height (GTK_WIDGET (self));
++  int clear = tactus_measure_clear (self);
++
++  if (clear >= height)
++    clear = 0;
++
++  return MAX (height - clear - tactus_under (self), 0);
++}
++
++
++/* A frame of the keyboard has gone to the compositor (GDK commits it in its
++ * own handler of this signal, connected before ours) */
++static void
++on_frame_painted (PosInputSurface *self, GdkFrameClock *clock)
++{
++  int room;
++
++  if (self->surface_visible == TRUE && self->animation.progress >= 1.0 && !tactus_settled (self))
++    return; /* the frame at the new height is yet to come */
++
++  g_signal_handlers_disconnect_by_func (clock, on_frame_painted, self);
++  self->room_wait = FALSE;
++  if (self->surface_visible != TRUE || self->animation.progress < 1.0)
++    return; /* put away meanwhile, or sliding: pos_input_surface_move sets it */
++
++  room = tactus_room (self);
++  if (room != self->zone)
++    tactus_keep_room (self, room);
++}
++
++
++/* More room for the keyboard is asked for only once the frame that shows the
++ * taller page is with the compositor. Asked for before it, the window in
++ * front is made shorter at once while the old, lower page is still on the
++ * screen, and for as long as the new page takes to draw the wallpaper shows
++ * between the two. */
++static void
++tactus_room_after_paint (PosInputSurface *self)
++{
++  GdkFrameClock *clock = gtk_widget_get_frame_clock (GTK_WIDGET (self));
++
++  if (clock == NULL)
++    return;
++  if (!self->room_wait) {
++    self->room_wait = TRUE;
++    g_signal_connect_object (clock, "after-paint", G_CALLBACK (on_frame_painted), self,
++                             G_CONNECT_SWAPPED | G_CONNECT_AFTER);
++  }
++  gtk_widget_queue_draw (GTK_WIDGET (self));
++}
++
++
++static void
++tactus_update_shape (PosInputSurface *self)
++{
++  int width, height, clear, room;
++  cairo_rectangle_int_t rect;
++  cairo_region_t *region;
++
++  /* The number pad takes the place of the keys, no more and no less */
++  if (self->last_layout && POS_IS_OSK_WIDGET (self->last_layout) && !self->searching) {
++    GtkWidget *others[] = { self->keypad };
++    int natural = 0, panel, over;
++
++    gtk_widget_get_preferred_height (self->last_layout, &natural, NULL);
++    panel = pos_osk_widget_get_panel_height (POS_OSK_WIDGET (self->last_layout));
++    over = MAX (natural - panel, 0);
++    for (guint i = 0; i < G_N_ELEMENTS (others); i++) {
++      int req = 0;
++
++      gtk_widget_get_size_request (others[i], NULL, &req);
++      if (gtk_widget_get_margin_top (others[i]) != over)
++        gtk_widget_set_margin_top (others[i], over);
++      if (req != panel)
++        gtk_widget_set_size_request (others[i], -1, panel);
++    }
++  }
++
++  if (!gtk_widget_get_realized (GTK_WIDGET (self)))
++    return;
++
++  width = gtk_widget_get_allocated_width (GTK_WIDGET (self));
++  height = gtk_widget_get_allocated_height (GTK_WIDGET (self));
++  clear = tactus_measure_clear (self);
++  if (clear >= height)
++    clear = 0;
++
++  rect = (cairo_rectangle_int_t) { 0, clear, width, height - clear };
++  region = cairo_region_create_rectangle (&rect);
++  gtk_widget_input_shape_combine_region (GTK_WIDGET (self), region);
++  cairo_region_destroy (region);
++
++  self->clear = clear;
++
++  /* Room is kept for the panel only, less the little the windows reach
++   * under its top: past the panel's round corners it is then the application
++   * that shows, not the wallpaper. Whichever page shows. Not while the
++   * keyboard slides: there pos_input_surface_move sets it. */
++  if (self->surface_visible != TRUE || self->animation.progress < 1.0)
++    return;
++
++  if (!tactus_settled (self)) {
++    /* A page of another height has just come up and the surface has asked
++     * for that height. A lower page gives its room back now, while the
++     * taller one is still on the screen; a taller one waits (below). */
++    GtkWidget *child = hdy_deck_get_visible_child (self->deck);
++    int asked = 0, above = 0;
++
++    g_object_get (self, "height", &asked, NULL);
++    if (clear > 0 && child) {
++      above = gtk_widget_get_margin_top (child);
++      if (POS_IS_OSK_WIDGET (child))
++        above += pos_osk_widget_get_overhang (POS_OSK_WIDGET (child));
++    }
++    room = MAX (asked - above - tactus_under (self), 0);
++    if (room < self->zone)
++      tactus_keep_room (self, room);
++    return;
++  }
++
++  room = MAX (height - clear - tactus_under (self), 0);
++  if (room < self->zone)
++    tactus_keep_room (self, room);
++  else if (room > self->zone)
++    tactus_room_after_paint (self);
++}
++
++
++static void
++on_shape_idle (gpointer data)
++{
++  PosInputSurface *self = POS_INPUT_SURFACE (data);
++
++  self->shape_id = 0;
++  tactus_update_shape (self);
++}
++
++
++static void
++tactus_queue_shape (PosInputSurface *self)
++{
++  if (self->shape_id == 0)
++    self->shape_id = g_idle_add_once (on_shape_idle, self);
++}
++
++/* The surface got a new size (a page of another height came up) */
++static void
++on_surface_size_allocate (PosInputSurface *self)
++{
++  tactus_queue_shape (self);
++}
++
++/* The number pad draws no ground of its own: its style's, before its keys */
++static gboolean
++on_page_draw (GtkWidget *widget, cairo_t *cr)
++{
++  gtk_render_background (gtk_widget_get_style_context (widget), cr, 0, 0,
++                         gtk_widget_get_allocated_width (widget),
++                         gtk_widget_get_allocated_height (widget));
++  return GDK_EVENT_PROPAGATE;
++}
++
++/* What isn't drawn by the keyboard itself (the emoji, the number pad, the
++ * bars) in the keyboard's colours */
++static void
++tactus_update_css (PosInputSurface *self)
++{
++  g_autofree char *scheme = g_settings_get_string (self->interface_settings, "color-scheme");
++  g_autofree char *css = NULL;
++  g_autoptr (GError) err = NULL;
++  TactusTheme theme;
++
++  tactus_theme_init (&theme, g_strcmp0 (scheme, "prefer-dark") == 0);
++  css = tactus_theme_css (&theme);
++  if (!gtk_css_provider_load_from_data (self->tactus_css, css, -1, &err))
++    g_warning ("The keyboard's colours: %s", err->message);
++}
++
++
+ static void
+ on_visible_child_changed (PosInputSurface *self)
+ {
+@@ -1048,6 +1633,11 @@
+   child = hdy_deck_get_visible_child (self->deck);
+ 
+   pos_input_surface_toggle_shortcuts_bar (self);
++  /* the pages differ in height */
++  tactus_typer_settle (self->typer, 700);
++  tactus_queue_shape (self);
++  if (!POS_INPUT_SURFACE_IS_LANG_LAYOUT (child))
++    tactus_search_set (self, FALSE);
+ 
+   if (!POS_IS_OSK_WIDGET (child))
+     return;
+@@ -1055,6 +1645,11 @@
+   osk = POS_OSK_WIDGET (child);
+   g_debug ("Switched to layout '%s'", pos_osk_widget_get_display_name (osk));
+   pos_osk_widget_set_layer (osk, POS_OSK_WIDGET_LAYER_NORMAL);
++  /* Capitals where a sentence starts, on the layouts that write sentences */
++  if (POS_INPUT_SURFACE_IS_LANG_LAYOUT (osk))
++    pos_osk_widget_set_autoshift (osk, self->typer_on && self->autoshift && !self->searching, TRUE);
++  else
++    pos_osk_widget_set_flat_top (osk, gtk_widget_get_visible (GTK_WIDGET (self->shortcuts_bar)));
+ 
+   set_keymap (self);
+ 
+@@ -1100,9 +1695,11 @@
+ 
+   if (self->animation.progress >= 1.0 && self->animation.show) {
+     /* On unfold adjust the exclusive zone at the very end to avoid flickering */
+-    phosh_layer_surface_set_exclusive_zone (PHOSH_LAYER_SURFACE (self), height);
++    self->zone = MAX (height - self->clear - tactus_under (self), 0);
++    phosh_layer_surface_set_exclusive_zone (PHOSH_LAYER_SURFACE (self), self->zone);
+   } else if (self->animation.progress <= 0.0 && !self->animation.show) {
+     /* On fold adjust the exclusive zone at the start to avoid flickering */
++    self->zone = 0;
+     phosh_layer_surface_set_exclusive_zone (PHOSH_LAYER_SURFACE (self), 0);
+   }
+ 
+@@ -1363,7 +1960,8 @@
+     pos_input_surface_set_min_height (self, g_value_get_uint (value));
+     break;
+   case PROP_DEAD_ZONE:
+-    self->dead_zone = g_value_get_uint (value);
++    /* Tactus has the strip under its keys for that */
++    self->dead_zone = 0;
+     break;
+   default:
+     G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+@@ -1630,6 +2228,7 @@
+                     on_im_text_change_cause_changed, self,
+                     "swapped-object-signal::notify::surrounding-text",
+                     on_im_surrounding_text_changed, self,
++                    "swapped-object-signal::done", on_im_done, self,
+                     NULL);
+ 
+   set_keymap (self);
+@@ -1667,6 +2266,15 @@
+   g_clear_handle_id (&self->animation.id, g_source_remove);
+   g_clear_handle_id (&self->bs_repeat_id, g_source_remove);
+   g_clear_handle_id (&self->keymap_delayed_id, g_source_remove);
++  g_clear_handle_id (&self->typer_wake_id, g_source_remove);
++  g_clear_handle_id (&self->shape_id, g_source_remove);
++  g_clear_pointer (&self->typer, tactus_typer_free);
++  if (self->tactus_css) {
++    gtk_style_context_remove_provider_for_screen (gdk_screen_get_default (),
++                                                  GTK_STYLE_PROVIDER (self->tactus_css));
++    g_clear_object (&self->tactus_css);
++  }
++  g_clear_object (&self->interface_settings);
+ 
+   g_clear_object (&self->speech_input);
+   g_clear_object (&self->logind_session);
+@@ -1813,13 +2421,12 @@
+   gtk_widget_get_preferred_size (GTK_WIDGET (self), &min, NULL);
+   g_object_get (self, "height", &height, NULL);
+ 
+-  min.height = MAX (min.height, self->min_height);
++  /* Tactus has its own measures: it is as high as it is */
+ 
+   if (gtk_widget_get_mapped (GTK_WIDGET (self)) && min.height != height) {
+     phosh_layer_surface_set_size (PHOSH_LAYER_SURFACE (self), -1, min.height);
+-    /* Don't interfere with animation */
+-    if (self->animation.progress >= 1.0)
+-      phosh_layer_surface_set_exclusive_zone (PHOSH_LAYER_SURFACE (self), min.height);
++    /* The room kept for it follows in tactus_update_shape, once the surface
++     * has its new size: asked for here it would be worked out from the old one */
+   }
+ 
+   /* Ensure unfold animation starts from the screen bottom */
+@@ -1827,6 +2434,8 @@
+     phosh_layer_surface_set_margins (PHOSH_LAYER_SURFACE (self), 0, 0, -min.height, 0);
+ 
+   GTK_CONTAINER_CLASS (pos_input_surface_parent_class)->check_resize (container);
++
++  tactus_update_shape (self);
+ }
+ 
+ 
+@@ -2073,6 +2682,7 @@
+                     "swapped-signal::notify::mode", G_CALLBACK (on_osk_mode_changed), self,
+                     "swapped-signal::popover-shown", G_CALLBACK (on_osk_popover_shown), self,
+                     "swapped-signal::popover-hidden", G_CALLBACK (on_osk_popover_hidden), self,
++                    "swapped-signal::strip-key", G_CALLBACK (on_osk_strip_key), self,
+                     NULL);
+ 
+   hdy_deck_insert_child_after (self->deck, GTK_WIDGET (osk_widget), NULL);
+@@ -2367,8 +2977,51 @@
+   g_autoptr (GError) err = NULL;
+   GAction *action;
+ 
++  static const TactusTyperOps typer_ops = {
++    .commit = tactus_op_commit,
++    .erase = tactus_op_erase,
++    .key = tactus_op_key,
++    .shift = tactus_op_shift,
++    .wake = tactus_op_wake,
++    .ack = tactus_op_ack,
++  };
++
+   gtk_widget_init_template (GTK_WIDGET (self));
+ 
++  self->typer = tactus_typer_new (&typer_ops, self);
++  self->clear = -1;
++  self->zone = -1;
++  g_signal_connect (self, "size-allocate", G_CALLBACK (on_surface_size_allocate), NULL);
++  /* The pages change at once, as keys do, and each is as high as it is */
++  hdy_deck_set_transition_duration (self->deck, 0);
++  hdy_deck_set_homogeneous (self->deck, GTK_ORIENTATION_VERTICAL, FALSE);
++  g_signal_connect_swapped (self->osk_terminal, "strip-key", G_CALLBACK (on_osk_strip_key), self);
++  g_signal_connect (self->keypad, "draw", G_CALLBACK (on_page_draw), NULL);
++  g_object_connect (self->emoji_picker,
++                    "swapped-signal::mic", G_CALLBACK (on_emoji_picker_mic), self,
++                    "swapped-signal::search", G_CALLBACK (on_emoji_picker_search), self,
++                    NULL);
++  /* The search for emoji: on top of the keys, when it is asked for */
++  {
++    GtkWidget *box = gtk_widget_get_parent (GTK_WIDGET (self->deck));
++
++    self->emoji_search = pos_emoji_search_new ();
++    gtk_widget_set_no_show_all (self->emoji_search, TRUE);
++    gtk_box_pack_start (GTK_BOX (box), self->emoji_search, FALSE, FALSE, 0);
++    gtk_box_reorder_child (GTK_BOX (box), self->emoji_search, 2);
++    g_signal_connect_swapped (self->emoji_search, "emoji-picked", G_CALLBACK (on_search_emoji_picked), self);
++  }
++
++  self->tactus_css = gtk_css_provider_new ();
++  gtk_style_context_add_provider_for_screen (gdk_screen_get_default (),
++                                             GTK_STYLE_PROVIDER (self->tactus_css),
++                                             GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 10);
++  self->interface_settings = g_settings_new ("org.gnome.desktop.interface");
++  g_signal_connect_swapped (self->interface_settings, "changed::color-scheme",
++                            G_CALLBACK (tactus_update_css), self);
++  tactus_theme_watch (self, G_CALLBACK (tactus_update_css));
++  tactus_update_css (self);
++
+   self->bs_mode = POS_BACKSPACE_MODE_CHAR;
+   self->style_manager = pos_style_manager_new ();
+   self->action_map = g_simple_action_group_new ();
+@@ -2503,6 +3156,11 @@
+ 
+   self->surface_visible = visible;
+   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_SURFACE_VISIBLE]);
++  if (!visible)
++    tactus_search_set (self, FALSE);
++  else if (!self->layout_overriden && self->input_method)
++    /* the page the text field asks for, whatever showed last */
++    select_layout_by_im_purpose (self);
+ 
+   self->animation.show = visible;
+   self->animation.last_frame = -1;
+@@ -2618,7 +3276,12 @@
+   g_autofree char *name = NULL;
+ 
+   if (g_str_equal (type, "")) {
++    gboolean was = self->layout_overriden;
++
+     self->layout_overriden = FALSE;
++    /* back to what the text field asks for, without waiting for the keyboard to go and come */
++    if (was)
++      select_layout_by_im_purpose (self);
+     return;
+   }
+ 

@@ -1,0 +1,12 @@
+The word counts (/usr/lib/tactus/share/phosh-osk-stevia/en_50k.txt)
+
+How often each of the 50,000 commonest English words is seen, from
+FrequencyWords by Hermit Dave (https://github.com/hermitdave/FrequencyWords,
+content/2018/en/en_50k.txt at commit 34bb6447a96d4434dc2d4b24e0cf946c523090b3,
+the first whose README gives the content's licence as CC-by-sa-4.0; the file
+itself is the same since it was added at 072bbed282316a23651aa7068c7173aa7898cf80),
+made from the OpenSubtitles 2018 corpus (http://opus.nlpl.eu/OpenSubtitles2018.php).
+The file is installed unchanged.
+
+Licence: Creative Commons Attribution-ShareAlike 4.0 International
+(CC-BY-SA-4.0), https://creativecommons.org/licenses/by-sa/4.0/
