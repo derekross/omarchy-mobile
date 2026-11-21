@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 /*
  * omamobile-fp-ion-shim: /dev/ion for the OnePlus 7T Pro (hotdog)
- * fingerprint chroot (device/hotdog/FINGERPRINT-PLAN.md). THEORETICAL:
- * nothing here has run on a phone.
+ * fingerprint chroot (device/hotdog/FINGERPRINT-PLAN.md). In use on the
+ * owner's phone since 2026-11-04 (FINGERPRINT-PLAN.md section 7).
  *
  * OnePlus's Goodix HAL reaches its trusted app in QSEE through Qualcomm's
  * libQSEEComAPI, and that library shares memory with the secure world in

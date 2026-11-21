@@ -198,6 +198,32 @@ grep -cx 'options qcom_qseecom_compat app_allowlist=gfp9558,keymaster64 .*' vend
 grep -cx 'Restart=no' vendor/systemd/system/omamobile-fp-hotdog.service >/dev/null ||
   { echo "not ok - omamobile-fp-hotdog must not restart"; exit 1; }
 echo "ok - fingerprint"
+# RPMB is off as packaged: the package's modprobe.d never sets allow_rpmb,
+# and only the owner's `rpmb allow` turns both gates on (the module option
+# and the consent file), `rpmb revoke` both off (against stand-in paths)
+if grep -v '^#' vendor/modprobe.d/omamobile-fp-hotdog.conf | grep -c allow_rpmb >/dev/null; then
+  echo "not ok - the package must not set allow_rpmb"; exit 1
+fi
+fp=$(mktemp -d)
+mkdir -p "$fp/params" "$fp/state"; echo N > "$fp/params/allow_rpmb"
+rpmb() {
+  OMAMOBILE_FP_TEST=1 OMAMOBILE_FP_STATE=$fp/state OMAMOBILE_FP_RUN=$fp/run OMAMOBILE_FP_UIDIR=$fp/ui \
+    OMAMOBILE_FP_CONSENT_RPMB=$fp/etc/omamobile/fp-hotdog-allow-rpmb \
+    OMAMOBILE_FP_RPMB_CONF=$fp/etc/modprobe.d/omamobile-fp-hotdog-rpmb.conf OMAMOBILE_FP_MODPARAMS=$fp/params \
+    bash lib/omamobile-fp-hotdog-chroot rpmb "$@" 2>&1
+}
+out=$(rpmb status)
+[[ $out == *"allow_rpmb this boot: N"* && $out == *"no $fp/etc/modprobe.d/"* && $out == *"no $fp/etc/omamobile/"* ]] ||
+  { echo "not ok - rpmb status ($out)"; exit 1; }
+rpmb allow >/dev/null
+grep -cx 'options qcom_qseecom_compat allow_rpmb=1' "$fp/etc/modprobe.d/omamobile-fp-hotdog-rpmb.conf" >/dev/null &&
+  [[ -s $fp/etc/omamobile/fp-hotdog-allow-rpmb ]] || { echo "not ok - rpmb allow writes both gates"; exit 1; }
+rpmb revoke >/dev/null
+[[ ! -e $fp/etc/modprobe.d/omamobile-fp-hotdog-rpmb.conf && ! -e $fp/etc/omamobile/fp-hotdog-allow-rpmb ]] ||
+  { echo "not ok - rpmb revoke removes both gates"; exit 1; }
+if rpmb on >/dev/null; then echo "not ok - rpmb refuses an unknown word"; exit 1; fi
+rm -rf "$fp"
+echo "ok - RPMB off as packaged; the owner's rpmb allow and revoke turn both gates on and off"
 # GNSS: the opt-in for omamobile-gnss's QMI LOC path, and its engine unlock
 # only while rmtfs keeps the modem's EFS writes in RAM (-r)
 grep -cx 'ENGINE_UNLOCK=1' gnss/qmi-loc.conf >/dev/null || { echo "not ok - GNSS opt-in"; exit 1; }

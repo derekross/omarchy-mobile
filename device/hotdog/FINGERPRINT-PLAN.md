@@ -286,8 +286,25 @@ qseecomd's registrations fail by design. The HAL's init commands run.
 
 ### F7: RPMB (IRREVERSIBLE: needs the owner's written decision in §7)
 
-Only if F6 showed the TA needs RPMB and the owner decided yes. Not written
-out further until then.
+Only if F6 showed the TA needs RPMB and the owner decided yes (§7,
+2026-11-04: it does, and they did). RPMB stays off as packaged: the
+package's `omamobile-fp-hotdog.conf` never sets `allow_rpmb`. The owner turns
+both gates on together, for the next boot:
+
+```sh
+/usr/lib/omamobile-fp-hotdog/omamobile-fp-hotdog-chroot rpmb status   # read-only
+/usr/lib/omamobile-fp-hotdog/omamobile-fp-hotdog-chroot rpmb allow    # as root
+```
+
+`rpmb allow` writes `/etc/modprobe.d/omamobile-fp-hotdog-rpmb.conf`
+(`options qcom_qseecom_compat allow_rpmb=1`) and the consent file
+`/etc/omamobile/fp-hotdog-allow-rpmb`. Nothing changes in the running boot:
+the module reads `allow_rpmb` when it loads, and QSEE keeps its listeners
+until a reboot. Expect after the reboot: `check` says "allow_rpmb=Y and
+/etc/omamobile/fp-hotdog-allow-rpmb exists", and the runner's log names the
+RPMB LU's bsg node. Stop: `allow_rpmb=Y without …` (the runner refuses to
+start), or no bsg node for LU 49476. `rpmb revoke` removes both files;
+what the TA already wrote to RPMB stays there (a one-way door, §3).
 
 ### F8: the bridge and enrollment (announce: the panel goes to full brightness; risk medium)
 

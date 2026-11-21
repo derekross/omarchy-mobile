@@ -2,8 +2,8 @@
 /*
  * omamobile-fp-hotdog-bridge: the client of OnePlus's Goodix fingerprint
  * HAL in the OnePlus 7T Pro (hotdog) fingerprint chroot
- * (device/hotdog/FINGERPRINT-PLAN.md). THEORETICAL: nothing here has run
- * on a phone.
+ * (device/hotdog/FINGERPRINT-PLAN.md). In use on the owner's phone since
+ * 2026-11-04 (FINGERPRINT-PLAN.md section 7).
  *
  * It serves exactly the line protocol and the --ui-state file of the Pixel
  * bridge (fingerprint/bridge/omamobile-fp-bridge.c), so libfprint's

@@ -1,4 +1,5 @@
 #%PAM-1.0
+# SPDX-License-Identifier: MIT
 # Omarchy Mobile: the lock screen's fingerprint conversation (Omarchy's own
 # setup_lock_fingerprint_pam; its omarchy-setup-security-fingerprint looks for a USB
 # reader, so the phone ships this file instead). device/hotdog/FINGERPRINT-PLAN.md.
