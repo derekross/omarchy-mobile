@@ -10,7 +10,8 @@ phone operation.
 ## 1. Goal and constraints
 
 Install Omarchy Mobile on `userdata` and boot it from the phone's single
-`boot` partition. Preserve a checked stock `boot` image as the return path.
+`boot` partition. Keep a guarded rescue image on the laptop as the first
+return path.
 The install must never write `dtbo`, bootloader, `vbmeta`, radio/modem,
 `persist`, `modemst*`, or any other calibration or identity partition.
 
@@ -19,8 +20,11 @@ write cannot fall back to another OS image. The installer must therefore
 require the §3.1 backup, use an explicitly serial-pinned fastboot session,
 check the product and unlocked state, display a dry run, and require the
 operator to type `dipper` before writing. A recovery from a failed boot uses
-Volume Down + Power to reach fastboot, then writes the verified stock `boot`
-image by its GPT name. There is no automatic reboot into stock and no
+Volume Down + Power to reach fastboot, then `fastboot boot` of the verified
+guarded rescue image without another partition write. A working installed
+system needs a verified install image or a separately reviewed restore of
+`userdata` and `boot`; the 11-09 `boot` image alone cannot supply one after
+`userdata` is replaced. There is no automatic reboot into stock and no
 unsuffixed write through a generic command-line partition argument.
 
 ## 2. Facts and evidence
@@ -37,15 +41,20 @@ unsuffixed write through a generic command-line partition argument.
   83 of 84; only `logfs` differed. The mismatch's cause is unknown, so that
   set alone is not the required pre-install backup. Capture and verify a new
   full set before any first install. Keep hashes and images off-repository.
+- The 11-09 `boot` backup came from the phone's pre-existing installation,
+  which fell back to an older writable ext4 `userdata` system. Its kernel
+  string is unknown. Once `userdata` is replaced, restoring only that image
+  is not expected to start a usable system.
 - A guarded rescue is currently in `boot`. The original manual flash command
   and serial pinning were not retained. Its current whole-partition hash and
   the limits of that evidence are recorded in the [Dipper device PR](https://github.com/derekross/omarchy-mobile/pull/714),
-  but the hash was not measured immediately after the write. The owner has
+  but the hash was not measured immediately after the write. The maintainer has
   not approved restoring or replacing it.
 - The latest current-main smoke used an already-running NFS/overlay root. It
   reached Hyprland with touch and an MSM render node, but `/` was not
-  `userdata`, the physical panel was not observed, and six kernel error lines
-  remained. This is not a clean installed-system boot.
+  `userdata`, and the physical panel was not observed. The first smoke report
+  had six kernel error lines; the second had none, without retained boot IDs
+  or uptimes to explain the difference. Neither is a clean installed-system boot.
 
 ## 3. Proposed implementation
 
@@ -57,14 +66,22 @@ builder emits Android boot header v1 with its DTB appended to the kernel;
 image method for that format and an independent `INSTALL_SLOT=single` target
 for installation. Neither value exists in the descriptor yet. `INSTALL_SLOT`
 already has `active` for manifest format 2; do not overload that contract for
-Dipper. The proposed single-target bundle is format 3, with `install.slot` set
+Dipper. If the maintainer chooses a new release format, the proposed
+single-target bundle is format 3, with `install.slot` set
 to `single`, direct install writes for `boot` and `userdata`, no
 accepted/current-slot list, no `set-active`, and a runtime storage-guard
 allowlist containing only `userdata`. The external `omamobile-installer`
 consumer must implement this format before any format-3 bundle is published,
-and must refuse it until then.
+and must refuse it until then. The maintainer will decide whether that format
+is needed now or a development install through `bin/omamobile` and
+`tools/install-phone` comes first. Do not publish a format-3 bundle before
+that decision and its consumer are complete.
 Keep the published Dipper descriptor `BOOT_METHOD=ram-only` until the shared
 path is implemented and reviewed.
+Two policy prerequisites are the maintainer's wording changes to `AGENTS.md`
+and `CONTRIBUTING.md`: a device-scoped exception for an unsuffixed `boot`
+flash and the single-slot rule that replaces `push`. The maintainer also has
+to decide whether laptop-only kernel writes apply to other single-slot phones.
 
 For a persistent Dipper descriptor, allow exactly `BOOT_IMAGES="boot"` and
 `UFS_RW="userdata"`; reject every other unsuffixed partition. The installed
@@ -99,22 +116,35 @@ descriptor decisions and fixtures do not change.
 
 ### 3.2 Install and update writers
 
-Use the existing installer flow with a Dipper-only, serial-pinned fastboot
+Use `tools/install-phone` with a Dipper-only, serial-pinned fastboot
 writer for first install. It must check exactly one attached serial,
 `getvar product=dipper`, `unlocked=yes`, the `boot` partition's actual size,
 and every image checksum before its dry run. It must then show the exact
 `boot` and `userdata` writes, the userdata erase consequence, and the
-stock-boot recovery command before requiring the typed codename. It must read
-back and hash the complete `boot` partition after writing. No tool accepts a
+guarded-rescue recovery command before requiring the typed codename. Write
+`userdata` first, after verifying that the old ext4 root lacks the expected
+new root label,
+then write `boot`. The new initramfs must refuse the old label, so an
+interruption after the first write cannot start the old root with the new
+kernel. An interruption during either write leaves no assumed bootable
+system; enter fastboot by buttons and RAM-boot the guarded rescue. Fastboot
+on this bootloader cannot read `boot` back. After fastboot confirms the write,
+RAM-boot the rescue, keep `boot` read-only there, hash the entire 64 MiB
+partition over SSH, and compare it with the padded image. A failed RAM boot,
+missing SSH, or hash mismatch stops before a normal reboot. No tool accepts a
 partition name from the caller.
 
 Do not add an automatic pacman hook that writes the single boot partition in
-this implementation. Kernel updates must stage the new `boot` image for the
-laptop's pinned fastboot writer and clearly tell the user that a reboot alone
-will not install it. Preserve the installed `userdata` filesystem on kernel
-updates; only the first-install flow may replace it. Keep this explicit
-manual update as a documented limitation until it has a separately reviewed
-recovery policy; without that step, this is not an unattended update path.
+this implementation. No Dipper kernel package is selected by the current
+RAM-only descriptor. Before installing `linux-omamobile` or another kernel
+package for Dipper, define a package hold so `omarchy update` cannot replace
+the running kernel's modules ahead of the host flash. A kernel update stages
+the new image and modules on the laptop; it keeps the old modules installed
+until the new `boot` image has been written, verified through rescue, and
+started successfully. Only then may the old modules be removed. A reboot
+alone does not install the new kernel. Preserve `userdata` on kernel updates;
+only first install may replace it. Keep this manual update as a documented
+limitation until its recovery policy and failure tests are reviewed.
 
 ### 3.3 First boot and loss of USB
 
@@ -139,7 +169,9 @@ Build the exact kernel, initramfs, rootfs and `boot.img` from reviewed
 commits. Check the Android v1 header, appended Dipper DTB, 64 MiB size limit,
 module release, root label, descriptor parity and the storage allowlist.
 Run descriptor-parity tests for `bin/omamobile`, boot-update and installer
-readers; dry-run fixtures for missing, duplicate and wrong-device partitions;
+readers; dry-run fixtures for missing, duplicate and wrong-device partitions,
+and for a cut-off between the `userdata` and `boot` writes with the old root
+label;
 bundle manifest and release-bundle checks; storage-guard tests for Dipper and
 existing A/B devices; and the full PR gate. Check the downstream desktop
 installer against the new manifest before publishing a release. Stop on any
@@ -158,10 +190,11 @@ required)
 
 Confirm the backup gate, one pinned fastboot serial, product, unlocked state,
 and recovery-button procedure. Review the dry run and exact recovery command.
-Only then may the approved installer write `boot` and `userdata`; no other
-partition is in scope. Read back the whole `boot` partition and verify its
-hash before rebooting. If any check fails, remain in fastboot and restore the
-verified stock `boot` image by its exact GPT name.
+Only then may the approved installer write `userdata` followed by `boot`; no
+other partition is in scope. RAM-boot the guarded rescue and hash the whole
+read-only `boot` partition over SSH before a normal boot. If any step fails,
+stop and use the buttons to reach fastboot, then RAM-boot rescue again. A
+fastboot OKAY alone is not a readback check.
 
 ### L4. First persistent boot (high risk; separate approval required)
 
@@ -173,7 +206,8 @@ sanitized `tools/phone-smoke` report and record `uname -r`, boot-image hash,
 root source, panel/backlight behavior and kernel errors. Verify
 `reboot-to bootloader` returns to fastboot. Stop on a watchdog reset, failed
 USB link, black panel, unexpected writable partition, or any new kernel
-error. Do not call the device supported until this clean installed-system
+error. With a dark screen and no SSH, hold Volume Down + Power to reach
+fastboot and RAM-boot the verified rescue image. Do not call the device supported until this clean installed-system
 run passes; a rescue/NFS overlay is not a substitute.
 
 ## 5. Risks and rollback
@@ -184,11 +218,12 @@ run passes; a rescue/NFS overlay is not a substitute.
   owner must decide what user data needs preserving before installation.
 - The historical non-userdata backup has one unexplained mismatch and must
   not be treated as a verified restore set for a first install.
-- A stock-boot restore is only a recovery image; it does not restore
-  `userdata`, modem state, or a complete Android installation.
+- The 11-09 `boot` image belongs to the old installation; restoring it alone
+  after replacing `userdata` does not restore a working system.
 - The boot update remains manual from fastboot until a safe single-slot
   updater has its own reviewed recovery protocol and failure tests.
 
-The only rollback proposed here is the verified stock `boot` image, written
-from fastboot with the pinned serial. This has not been run and is not
-authorized by this plan.
+The first recovery step is `fastboot boot` of the guarded rescue image, which
+does not write a partition. Restoring a working system requires a separately
+reviewed complete restore or a verified reinstall. Neither has run, and this
+plan authorizes no phone operation.
