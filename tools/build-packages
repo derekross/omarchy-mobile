@@ -20,7 +20,11 @@
 #                    A package whose test/host-tools names a command this
 #                    machine lacks runs its check() in the container anyway
 #     --import DIR   copy prebuilt *.pkg.tar.{zst,xz} from DIR into the repository
-#                    (for example Mesa from an earlier build), then sign it
+#                    (for example Mesa from an earlier build), then sign it.
+#                    It may be given more than once: every folder is checked
+#                    before any is copied, and a folder with two files of one
+#                    package, or a package whose arch is not aarch64 or any,
+#                    stops the run with nothing imported
 #     --list         print what would be built and what is up to date
 #     --resign       build nothing: sign every package in out/repo and the
 #                    database again with the release key, replacing older
@@ -71,9 +75,11 @@ repo=out/repo/aarch64
 # packages", which <repo>/../.skipped then lists: any other exit with 3 (a
 # gpg, tar or repo-add that happened to return it) becomes 1. Set before
 # anything can fail; the old list goes once the repository is known
-# (--local moves it, and never touches out/repo).
-skipfile=$(dirname "$repo")/.skipped
-trap 'rc=$?; if ((rc == 3)) && [[ ! -s $skipfile ]]; then exit 1; fi' EXIT
+# (--local moves it, and never touches out/repo). Every exit also removes
+# the --import staging folder ($stage, made below), without changing the
+# exit status.
+skipfile=$(dirname "$repo")/.skipped stage=
+trap 'rc=$?; if [[ -n $stage ]]; then rm -rf "$stage" || true; fi; if ((rc == 3)) && [[ ! -s $skipfile ]]; then exit 1; fi' EXIT
 all=0 force=0 nocheck=0 container_check=0 list=0 resign=0 imports=() dirs=() local_name=
 while (($#)); do
   case $1 in
@@ -210,22 +216,39 @@ add_to_repo() {
   done
 }
 
-for dir in "${imports[@]}"; do
-  alarm_say "Importing prebuilt packages from $dir"
-  files=()
-  for f in "$dir"/*.pkg.tar.*; do [[ $f == *.sig ]] || files+=("$f"); done
+# pkg_files DIR: DIR's package files, not their .sig, into $files
+pkg_files() { local f; files=(); for f in "$1"/*.pkg.tar.*; do [[ $f == *.sig ]] || files+=("$f"); done; }
+# Every folder is checked before the first is copied, so a refusal copies no
+# package and writes no index. Each file is checked as a copy in a private
+# folder beside the repository, and that copy is what goes in: what changes
+# in DIR after the check never reaches the repository
+((${#imports[@]} == 0)) || stage=$(mktemp -d "$(dirname "$repo")/import.XXXXXX")
+for k in "${!imports[@]}"; do
+  dir=${imports[k]}
+  pkg_files "$dir"
   ((${#files[@]})) || alarm_die "no packages in $dir"
+  mkdir "$stage/$k"
   declare -A seen=()
   for f in "${files[@]}"; do
-    info=$(pkginfo "$f" || true)
+    copy=$stage/$k/${f##*/}
+    cp "$f" "$copy"
+    # add_to_repo keeps an imported .sig only for --local
+    if [[ -n $local_name && -f $f.sig ]]; then cp "$f.sig" "$copy.sig"; fi
+    # A file cut short can print its .PKGINFO and still fail to read
+    info=$(pkginfo "$copy") || alarm_die "$f is not a package archive that can be read"
     [[ $(sed -n 's/^arch = //p' <<<"$info") =~ ^(aarch64|any)$ ]] || alarm_die "$f is not an aarch64 package"
+    name=$(sed -n 's/^pkgname = //p' <<<"$info")
+    [[ -n $name ]] || alarm_die "$f has no pkgname in its .PKGINFO"
     # add_to_repo keeps one file per package name, the last one copied, and
     # the glob puts foo-0.2.9 after foo-0.2.10
-    name=$(sed -n 's/^pkgname = //p' <<<"$info")
-    [[ -z $name || -z ${seen[$name]:-} ]] ||
-      alarm_die "$dir has two files of $name, ${seen[$name]##*/} and ${f##*/}: remove the one you don't want; nothing was imported from $dir"
-    [[ -z $name ]] || seen[$name]=$f
+    [[ -z ${seen[$name]:-} ]] ||
+      alarm_die "$dir has two files of $name, ${seen[$name]##*/} and ${f##*/}: remove the one you don't want; nothing was imported"
+    seen[$name]=$f
   done
+done
+for k in "${!imports[@]}"; do
+  alarm_say "Importing prebuilt packages from ${imports[k]}"
+  pkg_files "$stage/$k"
   add_to_repo "${files[@]}"
 done
 
