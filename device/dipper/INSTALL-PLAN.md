@@ -58,19 +58,26 @@ image method for that format and an independent `INSTALL_SLOT=single` target
 for installation. Neither value exists in the descriptor yet. `INSTALL_SLOT`
 already has `active` for manifest format 2; do not overload that contract for
 Dipper. The proposed single-target bundle is format 3, with `install.slot` set
-to `single`, direct writes for `boot` and `userdata`, no accepted/current-slot
-list, no `set-active`, and a storage-guard entry for the single boot image and
-`userdata`. The external `omamobile-installer` consumer must implement this
-format before any format-3 bundle is published, and must refuse it until then.
+to `single`, direct install writes for `boot` and `userdata`, no
+accepted/current-slot list, no `set-active`, and a runtime storage-guard
+allowlist containing only `userdata`. The external `omamobile-installer`
+consumer must implement this format before any format-3 bundle is published,
+and must refuse it until then.
 Keep the published Dipper descriptor `BOOT_METHOD=ram-only` until the shared
 path is implemented and reviewed.
 
 For a persistent Dipper descriptor, allow exactly `BOOT_IMAGES="boot"` and
-`UFS_RW="boot userdata"`; reject every other unsuffixed partition. `boot` is
-an explicit, device-scoped exception to the slot-B names, never a partition
-name accepted from a command line. A manifest must identify the device,
-`INSTALL_SLOT=single`, the exact `boot` image and the `userdata` root image.
-There is no slot query, slot switch, or `set-active` operation.
+`UFS_RW="userdata"`; reject every other unsuffixed partition. The installed
+initramfs must leave `boot` read-only: only the host-side fastboot installer
+and manual updater write it. `boot` is an explicit, device-scoped install
+target, never a partition name accepted from a command line. Shared
+descriptor readers must permit this boot image outside the runtime guard only
+for `BOOT_METHOD=android-v1` with `INSTALL_SLOT=single`; the on-device
+`omamobile-boot-update` hook must refuse it. A manifest must identify the
+device, `INSTALL_SLOT=single`, the exact `boot` image and the `userdata` root
+image. Its install write set is `boot` plus `userdata`, while its runtime
+storage-guard allowlist is only `userdata`. There is no slot query, slot
+switch, or `set-active` operation.
 
 The change has to reach every reader and writer of the descriptor: `bin/omamobile`
 and its image/fastboot/flash/push paths; `tools/install-phone`,
@@ -78,15 +85,17 @@ and its image/fastboot/flash/push paths; `tools/install-phone`,
 `packages/omamobile-boot-update` and the initramfs storage/root selection;
 release documentation and the external `omamobile-installer` bundle consumer.
 Their descriptor parsers, generated manifests and dry-run output must agree
-on the exact two writable partition names. Add fixtures for every changed
-reader; do not add Dipper to only one parser and call the device installable.
+on the install write set and the separate runtime allowlist. Add fixtures for
+every changed reader; do not add Dipper to only one parser and call the device
+installable.
 
-The initramfs allowlist for an installed system may open only `boot` and
-`userdata`. All other UFS partitions and whole disks remain read-only;
+The initramfs allowlist for an installed system may open only `userdata`.
+`boot`, every other UFS partition and all whole disks remain read-only;
 `persist`, modem and calibration partitions are never mounted. RAM rescue
 images continue to use an empty allowlist. NFS-root remains a bring-up tool,
-not the persistent install path. Tests must prove both the Dipper allowlist
-and that existing A/B descriptor decisions and fixtures do not change.
+not the persistent install path. Tests must prove the Dipper runtime
+allowlist, the host-side `boot`/`userdata` write set and that existing A/B
+descriptor decisions and fixtures do not change.
 
 ### 3.2 Install and update writers
 
