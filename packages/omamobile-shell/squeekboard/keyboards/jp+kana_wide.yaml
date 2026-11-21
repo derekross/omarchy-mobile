@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # squeekboard 1.43.1's jp+kana_wide.yaml (https://gitlab.gnome.org/World/Phosh/squeekboard,
 # tag v1.43.1, GPL-3.0-or-later), with two changes for Omarchy Mobile: the
-# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua
-# binds for squeekboard only) on top of every view, and the globe key
-# sending XF86MediaLanguageMenu (the shell's language sheet) instead of
-# opening squeekboard's popover. Made by
+# action row (Mic, Copy, Paste, Emoji, Hide; XF86 keysyms that
+# hypr/phone.lua binds for squeekboard only) on top of every view, and the
+# globe key sending XF86MediaLanguageMenu (the shell's language sheet)
+# instead of opening squeekboard's popover. Made by
 # squeekboard/generate (change the generator, not this file). The row
-# sums to the widest row's 420: 2 x 126 + 2 x 84.
+# sums to the widest row's 420: 5 x 84.
 # omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
 # Language: Japanese (Kana)
 # Based on work by: Mark Müller <markmueller86@gmail.com>
@@ -17,86 +17,87 @@ outlines:
     character-group: { width: 84, height: 42 }
     placeholder:     { width: 84, height: 42 }
     special:         { width: 84, height: 42 }
-    mic:             { width: 126, height: 32 }
-    paste:           { width: 126, height: 32 }
+    mic:             { width: 84, height: 32 }
+    copy:            { width: 84, height: 32 }
+    paste:           { width: 84, height: 32 }
     emoji:           { width: 84, height: 32 }
     hide:            { width: 84, height: 32 }
 
 views:
     base: # hiragana
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences _a ka sa BackSpace"
         - "Left ta na ha Right"
         - "カタカナ ma ya ra space"
         - "switch2roman symbols wa punct Return"
     _a:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences _A _a -- BackSpace"
         - "あ い う え お"
         - "ぁ ぃ ぅ ぇ ぉ" # 2 code points each
         - "-- -- ゔ -- --"
     ka:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences KA ka -- BackSpace"
         - "か き く け こ"
         - "が ぎ ぐ げ ご"
         - "ゕ -- -- ゖ --"
     sa:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences SA sa -- BackSpace"
         - "さ し す せ そ"
         - "ざ じ ず ぜ ぞ"
         - "-- -- -- -- --"
     ta:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences TA ta -- BackSpace"
         - "た ち つ て と"
         - "だ ぢ づ で ど"
         - "-- -- っ -- --"
     na:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences NA na -- BackSpace"
         - "な に ぬ ね の"
         - "-- -- -- -- --"
         - "-- -- -- -- --"
     ha:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences HA ha -- BackSpace"
         - "は ひ ふ へ ほ"
         - "ば び ぶ べ ぼ"
         - "ぱ ぴ ぷ ぺ ぽ"
     ma:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences MA ma -- BackSpace"
         - "ま み む め も"
         - "-- -- -- -- --"
         - "-- -- -- -- --"
     ya:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences YA ya -- BackSpace"
         - "や -- ゆ -- よ"
         - "ゃ -- ゅ -- ょ"
         - "-- -- -- -- --"
     ra:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences RA ra -- BackSpace"
         - "ら り る れ ろ"
         - "-- -- -- -- --"
         - "-- -- -- -- --"
     wa:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences WA wa -- BackSpace"
         - "わ ゐ -- ゑ を"
         - "ゎ -- -- -- --"
         - "-- -- ん -- --"
     symbols:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences punct symbols -- BackSpace"
         - "「 」 （ ） §"
         - "【 】 ＜ ＞ ＝"
         - "＋ ＊ ＆ ％ ＄ "
     punct:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences symbols punct -- BackSpace"
         - "。 、 ？ ！ ー"
         - "： ； ・ 〜 …"
@@ -116,165 +117,165 @@ views:
 #o 	ご ゴ 	ぞ ゾ 	ど ド 	ぼ ボ 	ぽ ポ 
 
     カタカナ: # katakana
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences _A KA SA BackSpace"
         - "Left TA NA HA Right"
         - "ひらがな MA YA RA space"
         - "switch2roman SYMBOLS WA PUNCT Return"
     _A:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences _a _A -- BackSpace"
         - "ア イ ウ エ オ"
         - "ァ ィ ゥ ェ ォ"
         - "-- -- ヴ -- --"
     KA:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences ka KA -- BackSpace"
         - "カ キ ク ケ コ"
         - "ガ ギ グ ゲ ゴ"
         - "ヵ -- ㇰ ヶ --"
     SA:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences sa SA -- BackSpace"
         - "サ シ ス セ ソ"
         - "ザ ジ ズ ゼ ゾ"
         - "-- ㇱ ㇲ -- --"
     TA:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences ta TA -- BackSpace"
         - "タ チ ツ テ ト"
         - "ダ ヂ ヅ デ ド"
         - "-- -- ッ -- ㇳ"
     NA: 
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences na NA -- BackSpace"
         - "ナ ニ ヌ ネ ノ"
         - "-- -- ㇴ -- --"
         - "-- -- -- -- --"
     HA:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences ha HA -- BackSpace"
         - "ハ ヒ フ ヘ ホ"
         - "バ ビ ブ ベ ボ"
         - "パ ピ プ ペ ポ"
     MA:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences ma MA -- BackSpace"
         - "マ ミ ム メ モ"
         - "-- -- ㇺ -- --"
         - "-- -- -- -- --"
     YA:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences ya YA -- BackSpace"
         - "ヤ -- ユ -- ヨ"
         - "ャ -- ュ -- ョ"
         - "-- -- -- -- --"
     RA:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences ra RA -- BackSpace"
         - "ラ リ ル レ ロ"
         - "ㇻ ㇼ ㇽ ㇾ ㇿ"
         - "-- -- -- -- --"
     WA:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences wa WA -- BackSpace"
         - "ワ ヰ -- ヱ ヲ"
         - "ヮ ヸ -- ヹ ヺ"
         - "-- -- ン -- --"
     SYMBOLS:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences PUNCT SYMBOLS -- BackSpace"
         - "「 」 （ ） §"
         - "【 】 ＜ ＞ ＝"
         - "＋ ＊ ＆ ％ ＄ "
     PUNCT:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences SYMBOLS PUNCT -- BackSpace"
         - "。 、 ？ ！ ー"
         - "： ； ・ 〜 …"
         - "♪ ” ’ ゙  ゚"
     # numbers view
     numbers:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences 1 2 3 BackSpace"
         - "Left 4 5 6 Right"
         - "roman 7 8 9 space"
         - "switch2kana * 0 # Return"
     # Roman alphabet view
     roman:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences RSYM1 ABC DEF BackSpace"
         - "Left GHI JKL MNO Right"
         - "ひらがな PQRS TUV WXYZ space"
         - "switch2num RSYM2 RSYM3 RSYM4 Return"
     RSYM1:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences -- RSYM1 -- BackSpace"
         - "@ # $ § :"
         - "| € ¥ £ --"
         - "1 -- -- -- --"
     ABC:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences -- ABC -- BackSpace"
         - "A B C Ä ç"
         - "a b c ä --"
         - "2 -- -- -- --"
     DEF:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences -- DEF -- BackSpace"
         - "D E F -- --"
         - "d e f -- --"
         - "3 -- -- -- --"
     GHI:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences -- GHI -- BackSpace"
         - "G H I -- --"
         - "g h i -- --"
         - "4 -- -- -- --"
     JKL:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences -- JKL -- BackSpace"
         - "J K L -- --"
         - "j k l -- --"
         - "5 -- -- -- --"
     MNO:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences -- MNO -- BackSpace"
         - "M N O Ö --"
         - "m n o ö --"
         - "6 -- -- -- --"
     PQRS:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences -- PQRS -- BackSpace"
         - "P Q R S --"
         - "p q r s ß"
         - "7 -- -- -- --"
     TUV:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences -- TUV -- BackSpace"
         - "T U V Ü --"
         - "t u v ü --"
         - "8 -- -- -- --"
     WXYZ:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences -- WXYZ -- BackSpace"
         - "W X Y Z --"
         - "w x y z --"
         - "9 -- -- -- --"
     RSYM2:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences -- RSYM2 -- BackSpace"
         - "( ) ' \" ~"
         - "[ ] { } _"
         - "-- -- -- -- --"
     RSYM3:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences -- RSYM3 -- BackSpace"
         - "+ - * / ="
         - "< > ^ ° --"
         - "0 -- -- -- --"
     RSYM4:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "preferences -- RSYM4 -- BackSpace"
         - ", . ? ! ;"
         - "\\ ´ ` · ¶"
@@ -610,6 +611,10 @@ buttons:
         outline: "mic"
         keysym: "XF86Dictate"
         label: "󰍬 Mic"
+    Copy:
+        outline: "copy"
+        keysym: "XF86Copy"
+        label: "󰆏 Copy"
     Paste:
         outline: "paste"
         keysym: "XF86Paste"

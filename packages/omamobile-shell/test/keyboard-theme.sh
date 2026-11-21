@@ -56,7 +56,7 @@ ret = block("#Return")
 assert ret["background"] == "#7aa2f7" and ret["color"] == "#1a1b26", ret
 assert block("sq_button.mic")["border-color"] == "#f7768e", "Mic in the recording colour"
 assert "sq_button.talk" not in css and "sq_button.ask" not in css, "no Talk or Ask any more"
-row = block("sq_button.mic, sq_button.paste, sq_button.emoji, sq_button.hide")
+row = block("sq_button.mic, sq_button.copy, sq_button.paste, sq_button.emoji, sq_button.hide")
 assert row["border"] == "2px solid #414868", row
 special = [s for s in re.findall(r"(?m)^(sq_button\.special[^{]*) \{", css)][0]
 for cls in ("term-key", "term-narrow", "small-row", "change-view", "special-3", "emoji-group"):

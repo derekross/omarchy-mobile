@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # squeekboard 1.43.1's terminal/us+dvorak.yaml (https://gitlab.gnome.org/World/Phosh/squeekboard,
 # tag v1.43.1, GPL-3.0-or-later), with two changes for Omarchy Mobile: the
-# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua
-# binds for squeekboard only) on top of every view, and the globe key
-# sending XF86MediaLanguageMenu (the shell's language sheet) instead of
-# opening squeekboard's popover. Made by
+# action row (Mic, Copy, Paste, Emoji, Hide; XF86 keysyms that
+# hypr/phone.lua binds for squeekboard only) on top of every view, and the
+# globe key sending XF86MediaLanguageMenu (the shell's language sheet)
+# instead of opening squeekboard's popover. Made by
 # squeekboard/generate (change the generator, not this file). The row
-# sums to the widest row's 404.1: 2 x 121.23 + 2 x 80.82.
+# sums to the widest row's 404.1: 5 x 80.82.
 # omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
 # Language: English (Dvorak)
 ---
@@ -21,42 +21,43 @@ outlines:
     special:       { width: 60.615,  height: 52     }
     special-2:     { width: 60.615,  height: 52     }
     special-3:     { width: 67.35,   height: 52     }
-    mic:           { width: 121.23, height: 40 }
-    paste:         { width: 121.23, height: 40 }
+    mic:           { width: 80.82, height: 40 }
+    copy:          { width: 80.82, height: 40 }
+    paste:         { width: 80.82, height: 40 }
     emoji:         { width: 80.82, height: 40 }
     hide:          { width: 80.82, height: 40 }
 
 views:
     base:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "Tab-small Ctrl Alt Shift ↑ ↓ ← →"
         - "show_upper p y f g c r l BackSpace"
         - "a o e u i d h t n s"
         - ", q j k x b m w v z"
         - "show_numbers preferences space show_actions Return"
     upper:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "Tab-small Ctrl Alt Shift PageUp PageDown Home End"
         - "show_upper P Y F G C R L BackSpace"
         - "A O E U I D H T N S"
         - ", Q J K X B M W V Z"
         - "show_numbers preferences space show_actions Return"
     numbers:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "Tab-small Ctrl Alt Shift ↑ ↓ ← →"
         - "show_symbols , \" ' : ; ! ? BackSpace"
         - "* # $ / & - _ + ( )"
         - "1 2 3 4 5 6 7 8 9 0"
         - "show_letters preferences space . Return"
     symbols:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "Tab-small Ctrl Alt Shift ↑ ↓ ← →"
         - "show_numbers_from_symbols \\ % < > = [ ] BackSpace"
         - "© ® £ € ¥ ^ ° @ { }"
         - "~ ` | · √ π τ ÷ × ¶"
         - "show_letters preferences space . Return"
     actions:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "Tab-small Ctrl Alt Shift PageUp PageDown Home End"
         - "F1  F2  F3  F4  F5  F6"
         - "F7  F8  F9  F10 F11 F12"
@@ -238,6 +239,10 @@ buttons:
         outline: "mic"
         keysym: "XF86Dictate"
         label: "󰍬 Mic"
+    Copy:
+        outline: "copy"
+        keysym: "XF86Copy"
+        label: "󰆏 Copy"
     Paste:
         outline: "paste"
         keysym: "XF86Paste"

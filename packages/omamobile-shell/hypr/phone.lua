@@ -157,7 +157,7 @@ hl.layer_rule({ match = { namespace = "^osk$" }, above_lock = 2 })
 hl.layer_rule({ match = { namespace = "^omamobile-call(-top)?$" }, above_lock = 2 })
 
 -- The on-screen keyboard's own keys (squeekboard/keyboards/: the action row
--- Mic, Paste, Emoji and Hide, and the globe). squeekboard can't run a command, so
+-- Mic, Copy, Paste, Emoji and Hide, and the globe). squeekboard can't run a command, so
 -- each key sends an XF86 keysym and these binds act on it. squeekboard puts
 -- every key on a keycode of a keymap it generates, and Hyprland resolves a
 -- bind's keysym through kb_layout unless the device resolves binds by its
@@ -178,6 +178,9 @@ end
 -- until Done, and a tap while it listens is Done.
 o.bind("XF86Dictate", "Keyboard: voice", voice("press"), { device = osk_only })
 o.bind("XF86Dictate", "Keyboard: voice released", voice("release"), { device = osk_only, release = true })
+-- Copy copies the selection of the window in front (omamobile-keyboard-copy:
+-- Ctrl+Shift+C in a terminal, where Ctrl+C would interrupt, Ctrl+C elsewhere).
+o.bind("XF86Copy", "Keyboard: copy", "omamobile-keyboard-copy", { device = osk_only })
 -- Paste opens Omarchy's clipboard history (a tap pastes an entry), Emoji its
 -- emoji picker (a tap types one; its search needs typed letters), and Hide
 -- puts the keyboard away through omamobile.keyboard.

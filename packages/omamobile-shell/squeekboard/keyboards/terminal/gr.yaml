@@ -36,8 +36,9 @@ outlines:
     small-row:     { width: 41.601,  height: 32     }
     term-key:      { width: 37.14,   height: 32     }
     term-narrow:   { width: 29.715,  height: 32     }
-    mic:           { width: 106.973, height: 36 }
-    paste:         { width: 106.973, height: 36 }
+    mic:           { width: 71.315, height: 36 }
+    copy:          { width: 71.315, height: 36 }
+    paste:         { width: 71.315, height: 36 }
     emoji:         { width: 71.315, height: 36 }
     hide:          { width: 71.315, height: 36 }
     spaceline:     { width: 130.745,  height: 52     }
@@ -47,49 +48,49 @@ outlines:
 
 views:
     base:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "Esc-small Tab-small Ctrl Alt |-small show_latin /-small ← ↑ ↓ →"
         - "; ς ε ρ τ υ θ ι ο π"
         - ".-thin α σ δ φ γ η ξ κ λ --thin"
         - "show_upper ζ χ ψ ω β ν μ BackSpace"
         - "show_numbers preferences space show_actions Return"
     latin:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "Esc-small Tab-small Ctrl Alt |-small show_latin /-small ← ↑ ↓ →"
         - "q w e r t y u i o p"
         - ".-thin a s d f g h j k l --thin"
         - "show_greek z x c v b n m BackSpace"
         - "show_numbers preferences space show_actions Return"
     upper:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "Esc-small Tab-small Ctrl Alt Shift PageUp PageDown Home End"
         - ": ! Ε Ρ Τ Υ Θ Ι Ο Π"
         - "Α Σ Δ Φ Γ Η Ξ Κ Λ show_accented"
         - "show_upper Ζ Χ Ψ Ω Β Ν Μ BackSpace"
         - "show_numbers preferences space show_actions Return"
     accented:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "Esc-small Tab-small Ctrl Alt |-small ~-small /-small ← ↑ ↓ →"
         - "ά έ ή ί ϊ ΐ ό ύ ϋ ώ"
         - "Ά Έ Ή Ί Ϊ Ό Ύ Ϋ Ώ show_accented"
         - "Ϗ ϐ ϑ ϗ ϖ ΰ ϕ – BackSpace"
         - "show_numbers preferences space show_actions Return"
     numbers:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "Esc-small Tab-small Ctrl Alt |-small ~-small /-small ← ↑ ↓ →"
         - "1 2 3 4 5 6 7 8 9 0"
         - "\\ * # $ / & - + ( ) _"
         - "show_symbols , \" ' : ; ! ? BackSpace"
         - "show_letters preferences space . Return"
     symbols:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "Esc-small Tab-small Ctrl Alt |-small ~-small /-small ← ↑ ↓ →"
         - "~ ` · √ π τ ÷ × ¶ @"
         - "\\ © ® £ € ¥ ^ ° { } _"
         - "show_numbers_from_symbols % | < > = [ ] BackSpace"
         - "show_letters preferences space . Return"
     actions:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "Esc-small Tab-small Ctrl Alt Shift PageUp PageDown Home End"
         - "F1  F2  F3  F4  F5  F6"
         - "F7  F8  F9  F10 F11 F12"
@@ -313,6 +314,10 @@ buttons:
         outline: "mic"
         keysym: "XF86Dictate"
         label: "󰍬 Mic"
+    Copy:
+        outline: "copy"
+        keysym: "XF86Copy"
+        label: "󰆏 Copy"
     Paste:
         outline: "paste"
         keysym: "XF86Paste"
