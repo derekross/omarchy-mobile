@@ -1,0 +1,52 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Synthetic ext4 vendor image only: no owner files, mounts or phone access.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+for tool in mkfs.ext4 debugfs python3; do
+  command -v "$tool" >/dev/null || { echo "ok - tegu call tuning extraction # SKIP missing $tool"; exit 0; }
+done
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+python3 - "$t/vendor" <<'PY'
+from pathlib import Path
+import sys
+r = Path(sys.argv[1])
+files = {
+    'build.prop': b'ro.product.vendor.device=tegu\nro.vendor.build.fingerprint=synthetic-test\n',
+    'firmware/fw_bcmdhd.bin': b'4383a3-roml Version=1.2.3 (synthetic)',
+    'firmware/bcmdhd.cal_4383_a3': b'NVRAMRev=synthetic\n',
+    'firmware/bcmdhd_clm.blob_4383_a3': b'synthetic',
+    'firmware/bcmdhd_txcap.blob_4383_a3': b'synthetic',
+    'firmware/brcm/BCM.hcd': b'BCM4383A3 synthetic[test]',
+    'firmware/aoc.bin': b'synthetic',
+    'etc/sensors/registry/fictional.json': b'{}\n',
+}
+for name in ('cs40l26.wmfw', 'cs40l26-calib.wmfw'):
+    files['firmware/' + name] = b'WMFW' + bytes(6) + b'\x04FIRMWARE_CS40L26 BUZZ_EFFECTS2_BUZZ_LEVEL'
+for name in ('cs40l26.bin', 'cs40l26-svc.bin', 'cs40l26-dvl.bin'):
+    files['firmware/' + name] = b'WMDR-synthetic'
+for route in ('speaker', 'handset'):
+    for name in (f'uplink_{route}_aec_on_config.pb', f'uplink_{route}_aec_off_config.pb',
+                 f'downlink_{route}_config.pb'):
+        files['etc/aoc/' + name] = b'synthetic-' + name.encode()
+for name, data in files.items():
+    path = r / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+PY
+truncate -s 16M "$t/vendor.img"
+mkfs.ext4 -q -F -d "$t/vendor" "$t/vendor.img"
+tools/extract-vendor-firmware -d tegu -o "$t/out" "$t/vendor.img" > "$t/log" 2>&1 || { cat "$t/log"; exit 1; }
+for f in "$t/vendor/etc/aoc/"*.pb; do
+  cmp "$f" "$t/out/usr/lib/firmware/updates/omamobile/tegu/aoc/$(basename "$f")"
+done
+(cd "$t/out/usr/lib/firmware/updates" && sha256sum -c "$t/out/vendor-firmware.sha256" >/dev/null)
+echo 'ok - all six tegu call tuning files copied unchanged and checksummed'
+rm "$t/vendor/etc/aoc/uplink_handset_aec_off_config.pb"
+mkfs.ext4 -q -F -d "$t/vendor" "$t/vendor.img"
+tools/extract-vendor-firmware -d tegu -o "$t/missing" "$t/vendor.img" > "$t/log" 2>&1 || { cat "$t/log"; exit 1; }
+grep -qF 'warning: /vendor/etc/aoc/uplink_handset_aec_off_config.pb is missing' "$t/log"
+[[ ! -e $t/missing/usr/lib/firmware/updates/omamobile/tegu/aoc ]] || { echo 'not ok - part of the call tuning set was kept' >&2; exit 1; }
+[[ -s $t/missing/usr/lib/firmware/updates/aoc-tegu.bin ]] || { echo 'not ok - the other files were not extracted' >&2; exit 1; }
+(cd "$t/missing/usr/lib/firmware/updates" && sha256sum -c "$t/missing/vendor-firmware.sha256" >/dev/null)
+echo 'ok - a missing call tuning file is a warning: the set is left out whole and the rest is extracted'

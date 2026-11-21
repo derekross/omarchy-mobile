@@ -26,6 +26,8 @@ from pathlib import Path
 import re
 import subprocess
 
+from aoc_tuning import TuningError, VoiceTuning
+
 # omamobile-speaker-protection's status line ("ok: stage <stage>, ...").
 PROTECTION = Path(os.environ.get('OMAMOBILE_SPK_STATUS', '/run/omamobile/speaker-protection'))
 STAGES = ('media', 'c8')
@@ -106,7 +108,7 @@ class VoiceAudio:
     # without earpiece mode (no service installed, or [audio] earpiece = no)
     earpiece_cmd = None
 
-    def __init__(self, *, mic_boost_db=6, card=None, earpiece=True):
+    def __init__(self, *, mic_boost_db=6, card=None, earpiece=True, tegu_aec=False):
         if mic_boost_db not in (0, 6):
             raise ValueError('unsupported voice microphone boost')
         self.mic_boost_db = mic_boost_db
@@ -118,6 +120,8 @@ class VoiceAudio:
             # The protection service's earpiece mode is the 7 Pro's CS35L41
             # route; the 9a's TAS2572 route sets its own gains.
             self.earpiece_cmd = None
+        self.tegu_aec = tegu_aec
+        self.tuning = None
         self.saved = []
         self.pcms = []
         self.alsa = C.CDLL('libasound.so.2')
@@ -267,11 +271,24 @@ class VoiceAudio:
             return self
         # Read everything before changing anything. Mute is first so its
         # original value is restored last, after closing the voice PCMs.
-        names = [name for name, _ in TEGU_ROUTE] + list(TEGU_GAINS)
-        saved = [(name, self.mixer_value(name)) for name in names]
+        route = list(TEGU_ROUTE)
+        aec = getattr(self, 'tegu_aec', False)
+        if aec:
+            route.insert(1, ('FT AEC Reference Source', 'SPEAKER'))
+            # The output DSP stays in Ambient unless told otherwise, and the
+            # uploaded tuning is for its APMg3 telephony mode.
+            route.insert(2, ('Audio DSP Mode', 'Telephony_APMG3'))
+            # The modem mixer's signal processing (block 19, where the tuning
+            # goes) read ASP_OFF during our calls, with the echo coming back.
+            route.insert(3, ('AoC Modem Mixer ASP Mode', 'ASP_ON'))
+        names = [name for name, _ in route] + list(TEGU_GAINS)
+        try:
+            saved = [(name, self.mixer_value(name)) for name in names]
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            raise AudioRefused('tegu call mixer state unavailable') from error
         self.saved = saved
         try:
-            for name, value in TEGU_ROUTE:
+            for name, value in route:
                 self.mixer('cset', name, value)
                 if name == 'Incall Sink Mute' and self.mixer_value(name) not in ('1', 'on'):
                     raise AudioRefused('tegu call audio refused: sink mute read-back mismatch')
@@ -283,6 +300,16 @@ class VoiceAudio:
                 self.pcms.append(pcm)
                 self.tegu_params(pcm)
                 self.check(self.alsa.snd_pcm_start(pcm), 'start')
+            # The tuning goes up once the call's streams have started: the
+            # AoC starts its voice path at the playback start ("Start voice
+            # call"), and with the tuning sent before that the echo was gone
+            # for 2-3 s only (2026-11-03). The sink is still muted here.
+            if aec:
+                try:
+                    self.tuning = VoiceTuning('speaker')
+                    self.tuning.start()
+                except (OSError, TuningError) as error:
+                    raise AudioRefused('tegu call audio refused: AoC tuning unavailable or unconfirmed') from error
             # The codec profile resets gain at playback start. These must
             # happen afterwards, while the modem downlink remains muted.
             for name in TEGU_GAINS:
@@ -297,8 +324,13 @@ class VoiceAudio:
             self.mixer('cset', 'Incall Sink Mute', '0')
             print('AoC tegu speakerphone prepared at conservative TAS gain', flush=True)
             return self
-        except BaseException:
-            self.__exit__(None, None, None)
+        except BaseException as error:
+            try:
+                self.__exit__(None, None, None)
+            except RuntimeError as cleanup:
+                if isinstance(error, AudioRefused):
+                    raise AudioRefused('tegu call audio refused; cleanup unconfirmed, sink remains muted') from cleanup
+                raise
             raise
 
     def __exit__(self, *args):
@@ -314,6 +346,13 @@ class VoiceAudio:
             if self.alsa.snd_pcm_close(pcm) < 0:
                 failures.append('PCM close')
         self.pcms.clear()
+        if getattr(self, 'tuning', None) is not None:
+            try:
+                self.tuning.close()
+            except (OSError, TuningError):
+                failures.append('AoC tuning cleanup')
+            finally:
+                self.tuning = None
         for name, value in reversed(self.saved):
             if getattr(self, 'tegu', False) and name == 'Incall Sink Mute' and failures:
                 continue  # uncertain cleanup must leave the call sink muted
