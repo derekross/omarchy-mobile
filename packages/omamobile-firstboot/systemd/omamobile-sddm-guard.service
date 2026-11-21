@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Restarts sddm once if its autologin fails in a tight loop (see
-# /usr/bin/omamobile-sddm-guard). At most one restart per 10 minutes.
+# /usr/bin/omamobile-sddm-guard). At most one restart per 10 minutes and
+# three per boot. Not enabled by the package yet; to use it:
+#   systemctl enable --now omamobile-sddm-guard
 [Unit]
 Description=Omarchy Mobile SDDM autologin loop guard
 
