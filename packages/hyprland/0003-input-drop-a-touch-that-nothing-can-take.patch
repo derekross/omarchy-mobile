@@ -1,0 +1,72 @@
+Subject: [PATCH] input: drop a touch that nothing can take
+
+Against Hyprland v0.57.0 (src/managers/input/Touch.cpp,
+src/managers/SeatManager.cpp).
+
+CInputManager::onTouchDown() keeps the window, layer and surface of the
+touch in m_touchData. With the session locked and no lock surface for the
+monitor it logs "The session is locked but can't find a lock surface" and
+goes on with what the last touch before the lock left there. If that
+surface is gone, CSeatManager::sendTouchDown() is called with an empty
+pointer and dereferences it (SIGSEGV in CWLSurfaceResource::client()), and
+the compositor takes the session with it. Seen on a Pixel 9a: a touch on
+the locked screen. If that surface is still there, the touch-down is
+sent to it: to a window behind the lock.
+
+Drop the touch in that case and forget the old window, layer and surface.
+Also drop any touch-down whose surface is empty, in onTouchDown() (with
+the rest of its sequence, as when nothing is found) and in sendTouchDown()
+itself; setKeyboardFocus() and setPointerFocus() already take an empty
+surface.
+
+diff --git i/src/managers/SeatManager.cpp w/src/managers/SeatManager.cpp
+--- i/src/managers/SeatManager.cpp
++++ w/src/managers/SeatManager.cpp
+@@ -505,6 +505,9 @@ void CSeatManager::sendPointerAxis(uint32_t timeMs, wl_pointer_axis axis, double
+ }
+ 
+ void CSeatManager::sendTouchDown(SP<CWLSurfaceResource> surf, uint32_t timeMs, int32_t id, const Vector2D& local) {
++    if (!surf)
++        return;
++
+     m_listeners.touchSurfaceDestroy.reset();
+ 
+     m_state.touchFocusResource.reset();
+diff --git i/src/managers/input/Touch.cpp w/src/managers/input/Touch.cpp
+--- i/src/managers/input/Touch.cpp
++++ w/src/managers/input/Touch.cpp
+@@ -111,10 +111,15 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
+     // could have abovelock surface, thus only use lock if no ls found
+     if (g_pSessionLockManager->isSessionLocked() && m_foundLSToFocus.expired()) {
+         m_touchData.touchFocusLockSurface = g_pSessionLockManager->getSessionLockSurfaceForMonitor(PMONITOR->m_id);
+-        if (!m_touchData.touchFocusLockSurface)
++        if (!m_touchData.touchFocusLockSurface) {
+             LOG(Log::WARN, "The session is locked but can't find a lock surface");
+-        else
+-            m_touchData.touchFocusSurface = m_touchData.touchFocusLockSurface->surface->surface();
++            // Nothing may take a touch now, least of all what took the last one before the lock.
++            m_touchData.touchFocusWindow.reset();
++            m_touchData.touchFocusSurface.reset();
++            m_touchData.touchFocusLS.reset();
++            return;
++        }
++        m_touchData.touchFocusSurface = m_touchData.touchFocusLockSurface->surface->surface();
+     } else {
+         m_touchData.touchFocusLockSurface.reset();
+         m_touchData.touchFocusWindow  = m_foundWindowToFocus;
+@@ -149,6 +154,15 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
+     } else
+         return; // oops, nothing found.
+ 
++    // What was found can have no surface (left). Then nobody can take this touch:
++    // drop it, and the rest of its sequence, as when nothing is found.
++    if (!m_touchData.touchFocusSurface) {
++        m_touchData.touchFocusLockSurface.reset();
++        m_touchData.touchFocusWindow.reset();
++        m_touchData.touchFocusLS.reset();
++        return;
++    }
++
+     g_pSeatManager->sendTouchDown(m_touchData.touchFocusSurface.lock(), e.timeMs, e.touchID, local);
+ }
+ 
