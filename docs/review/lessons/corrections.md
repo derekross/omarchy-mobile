@@ -3,6 +3,104 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **C-55 (2026-11-20). Round 61 asked kernel #255 for a `memory-region`
+  restricted pool on the Wi-Fi endpoint's node; ath11k's PCI probe treats any
+  `memory-region` there as fixed firmware memory** (`of_property_present()`),
+  so the property would have switched the driver's firmware path, with the
+  pool enabled or not. For a PCI device the pool can sit on the host
+  controller's node: `of_dma_set_restricted_buffer()` falls back to the DMA
+  parent. *Lesson:* `git grep -n '"memory-region"' drivers/<the endpoint's
+  driver>` before asking for the property on an endpoint, and name the
+  controller node as the alternative. Extends L-239, L-777 and C-4. *From:*
+  kernel #255, rounds 61 and 63.
+- **C-54 (2026-11-20, a near miss). A `while read` loop in a review script
+  ran `patch` in its body, which read the rest of the loop's list as its own
+  input: the libcamera series check "applied" one patch and reported no
+  failure.** The listing showed the tuning files missing. *Lesson:* a loop
+  whose body runs anything that reads stdin takes its list on another
+  descriptor (`while read -r p <&3; ...; done 3< list`), and its result is
+  confirmed by a file the last step creates. Extends L-293. *From:* #934,
+  round 63.
+- **C-53 (2026-11-20, a near miss). Two mutations of `omamobile-osk` in
+  #896's review proved nothing.** The first, a `sed` on `exec squeekboard`,
+  also hit the plain start path, so the suite failed in an early group; the
+  second changed nothing the test could see and "passed". Redone as a
+  replacement of one exact multi-line string, each failed on the `not ok`
+  line of the case under review. *Lesson:* a mutation is applied at one exact
+  anchor, with an assertion that the anchor was found, and the `not ok` line
+  that fires is read for its name before the result is used. Extends L-419
+  and L-742. *From:* #896, round 63.
+- **C-52 (2026-11-20, a near miss). Looking for `default/hypr/input.lua`
+  in the `omarchy` 4.5 package found nothing, which read as "the file does
+  not exist".** Omarchy 4.5's Hyprland defaults and input-method scripts are
+  in the `omarchy-settings` package. *Lesson:* `bsdtar -tf` both cached
+  packages before quoting or doubting a 4.5 path. Extends L-652 and L-498.
+  *From:* #892, round 63.
+- **C-51 (2026-11-18). Round 61's comment on #864 asked again for two
+  things the contributor had answered fifteen minutes before it was posted.**
+  The draft was written against one head; a push and a reply came between
+  the draft and the posting. *Lesson:* every draft records the head it read,
+  and the posting step compares it with `gh pr view N --json headRefOid` and
+  the newest comment's time with the draft's, and holds a draft whose PR
+  moved. Extends L-124 and L-480. *From:* #864, rounds 61-62.
+- **C-50 (2026-11-18, a near miss). A probe for #898 sourced
+  `revoked_file_check` into the review shell, where `grep` was a shell
+  function wrapping another grep that accepts a CRLF line; for a few minutes
+  that read as a hole in main's revocation check.** `/usr/bin/grep` refuses
+  the line, and so does the tool, which runs as a script and inherits no
+  unexported function. *Lesson:* `type -t grep sed awk` before trusting a
+  sourced probe (anything but `file` is a stand-in), and run such probes as
+  `env -i PATH=/usr/bin bash --noprofile --norc -c 'source <lib>; <call>'`;
+  a result that contradicts the PR's own tests is re-run that way before it
+  is written down. Extends L-454 and L-681. *From:* #898, round 62.
+- **C-49 (2026-11-18, a near miss). With `TMPDIR` set to a path with a `..`
+  component, `tests/install-phone` and `tests/install-guided` failed on
+  main's own files, and we nearly reported a regression from the morning's
+  merges.** The installer prints canonical paths and the tests grep for
+  `$t/...` as `mktemp` spelled it; with the same directory written out, all
+  cases pass. *Lesson:* give every suite a canonical `TMPDIR`
+  (`TMPDIR=$(readlink -f ...)`), and before blaming a PR or main for a local
+  failure CI doesn't show, run the same suite on main's files in the same
+  shell (L-42) and print the tool's output beside the pattern it missed.
+  Extends L-674 and L-42. *From:* #877, round 62.
+- **C-48 (2026-11-18). Our reproduction of #890's signal-handler deadlock
+  ran under a plain `timeout 5` and outlived the command's own limit, and the
+  `pkill -f <path>` meant to end it matched the review's shell.** A process
+  stuck that way ignores SIGTERM. *Lesson:* a reproduction of a hang runs
+  under `timeout -s KILL N`, and is ended with `kill -KILL <pid>` after
+  reading `pgrep -f`'s list. *From:* #890, round 62.
+- **C-47 (2026-11-18, a near miss). The first draft on #892 said its guard
+  could leave a locked phone without its keyboard for 10 s after every
+  power-key lock, because the lock poll slows to 10 s with the screen off.**
+  `next_deadline()` fixes the interval when the poll is scheduled, while the
+  screen is still on, so an ordinary lock is seen within 2 s; only a poll
+  that lands between "backlight 0" and "locked" gets the slow interval.
+  *Lesson:* before writing "up to N seconds" about a poller, write the
+  timeline (the last poll, when the next was scheduled and with which
+  interval, the event, the next poll) and find the line that assigns the
+  deadline. Extends C-41 and L-573. *From:* #892, round 62.
+- **C-46 (2026-11-17, a near miss). Round 59's unposted draft on #832 said a
+  lower clock ceiling could leave the package's `test/all` as it was.** The
+  suite also compares the 8a's settings with the 8 Pro's file and fails on
+  any other value. *Lesson:* before a draft offers "or lower the number",
+  `sed` the offered value into a scratch worktree and run `test/all`, and
+  list every `../omamobile-device-<sibling>` comparison that pins the value.
+  Extends L-270 and L-64. *From:* #832, rounds 59-60.
+- **C-45 (2026-11-17). Round 58's comment on #812 said "set it to 0.1.17",
+  and round 59's comment on #827 gave the same package the same number.**
+  #812's head still read 0.1.15 when the second check ran, since its author
+  had not pushed yet, and both authors did as asked. *Lesson:* a version a
+  draft names is checked against the versions we named in our other comments,
+  not only against open heads: `gh pr list --search "<package>"`, then grep
+  our own last comment on each hit for a version; a number promised anywhere
+  is taken. Extends L-217, L-426 and L-551. *From:* #827 with #812, round 60.
+- **C-44 (2026-11-17). A scratch probe in #850's review ran `rm -rf
+  "$t/proc"` in a loop, and the session's safety check refused it, rightly.**
+  With `$t` empty the path is `/proc`. *Lesson:* a probe never removes a path
+  built from a variable: every case gets its own numbered folder under the
+  review's scratch folder, nothing is removed in the loop, and the scratch
+  folder is removed once, by its literal path. Extends L-641. *From:* #850's
+  review, round 60.
 - **C-43 (2026-11-11). Round 50 told #226's author that the sampler test sat
   "on its own line in `tests/all`, clear of the loop that everyone else
   appends to".** It sits directly above that loop line, git merges adjacent
