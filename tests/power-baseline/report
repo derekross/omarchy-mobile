@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: MIT
 # power-baseline --report: the median and range of Part B's current, the
 # Discharging and screen-on counts, the power estimate and the names it
-# hides, from a run's files and with no phone.
+# hides, from a run's files and with no phone; names that would break a sed
+# program, a zone that didn't read, a two-word status; and --detach refusing
+# a streamed script.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.."
 t=$(mktemp -d)
@@ -11,9 +13,10 @@ fail() { echo "not ok - $*" >&2; exit 1; }
 
 cat > "$t/conditions.txt" <<'C'
 user: alice
-host: alice-phone
+host: pixel.lab
 cond: Kernel: `7.3.0-rc6-omamobile-gtest` (Google Pixel 7 Pro)
 cond: Room temperature: not measured (add it if known)
+cond: mDNS name pixel.lab.local, not pixelxlab
 C
 cat > "$t/partA.txt" <<'A'
 7.3.0-rc6-omamobile-gtest
@@ -37,6 +40,7 @@ for v in 4000000 4100000 4200000 4300000; do printf 'bl_power: %s\nvoltage_now: 
 cat > "$t/partC.txt" <<'P'
 900 interrupts/s, 1200 context switches/s
    2412 alice     20   0 2568852 916672 142868 S   4.3   7.8  15:26.27 quickshell
+    790 avahi     20   0    9080   6852   3984 S   0.7   0.1   0:02.80 avahi-daemon pixel.lab malice
 --- wakeup_sources
 P
 printf '09:50:00 cable out and screen off at 80 %%; settling 600 s\nsuspend: Suspends during Parts B and C: 0; battery at the end 78 %%, Discharging\n10:02:00 done\n' > "$t/progress.txt"
@@ -56,12 +60,63 @@ echo "ok - the battery at cable out and at the end"
 grep -F -- '- 900 interrupts/s, 1200 context switches/s.' "$r" >/dev/null || fail "Part C's rates missing"
 grep -F -- '- Suspends during Parts B and C: 0.' "$r" >/dev/null || fail "the suspend line is missing"
 echo "ok - Part C's rates and the suspend count"
-! grep -E 'alice' "$r" >/dev/null || fail "the user or host name is left in the report: $(grep alice "$r")"
+! grep -E '\balice\b|pixel\.lab' "$r" >/dev/null || fail "the user or host name is left in the report: $(grep -E 'alice|pixel' "$r")"
+grep -F -- '- mDNS name <host>.local, not pixelxlab' "$r" >/dev/null || fail "the host name isn't replaced literally: $(grep -F mDNS "$r")"
+grep -F 'avahi-daemon <host> malice' "$r" >/dev/null || fail "a name is replaced inside a longer word: $(grep -F avahi-daemon "$r")"
 
 grep -F ' <user>     20' "$r" >/dev/null || fail "top's user column isn't hidden"
 echo "ok - user and host names hidden"
 (($(grep -c '^<details>' "$r") == 3)) || fail "the report doesn't hold three <details> blocks"
 echo "ok - Parts A, B and C in <details> blocks"
+
+# a name that is a sed program (GNU sed's e runs a command) and holds / & ;
+# is replaced as text, and runs nothing
+x=$t/inject
+mkdir "$x"
+cp "$t"/*.txt "$x"/
+name="a&b/c/;e touch $x/made-by-sed;#"
+{ printf 'user: %s\n' "$name"; grep -v '^user: ' "$t/conditions.txt"; } > "$x/conditions.txt"
+printf '   2412 %s 20 quickshell\n' "$name" >> "$x/partC.txt"
+tools/power-baseline --report "$x" >/dev/null || fail "--report failed on a name with / & ;"
+[[ ! -e $x/made-by-sed ]] || fail "a name from conditions.txt ran as a command"
+grep -F '   2412 <user> 20 quickshell' "$x/report.md" >/dev/null || fail "a name with / & ; isn't replaced: $(grep -F 2412 "$x/report.md")"
+echo "ok - names replaced as text, never run"
+
+# top cuts a long user name to 7 characters and a '+'
+l=$t/long
+mkdir "$l"
+cp "$t"/*.txt "$l"/
+sed -i 's|^user: .*|user: alexandria|' "$l/conditions.txt"
+printf '   2412 alexand+  20 quickshell\n' >> "$l/partC.txt"
+tools/power-baseline --report "$l" >/dev/null || fail "--report failed on a long name"
+grep -F '   2412 <user>  20 quickshell' "$l/report.md" >/dev/null || fail "top's cut name isn't hidden: $(grep -F 2412 "$l/report.md")"
+echo "ok - top's cut user name hidden"
+
+# the second zone didn't read ('-'), and the cable went back in for one
+# sample ("Not charging", two words): names stay on their zones and the
+# current is still the field before uA
+z=$t/zones
+mkdir "$z"
+cp "$t"/*.txt "$z"/
+cat > "$z/floor.txt" <<'B'
+gauge: /sys/class/power_supply/max170xx_battery
+10:00:00 Discharging -590000 uA batt=300 zones: 53000 - 25000 30000
+10:00:15 Not charging -600000 uA batt=300 zones: 54000 - 26000 30000
+10:00:30 Discharging -610000 uA batt=300 zones: 53000 - 25000 30000
+B
+tools/power-baseline --report "$z" >/dev/null || fail "--report failed with a zone that didn't read"
+grep -F 'Thermal zones during Part B: big-thermal 53-54, mid-thermal not read, isp-thermal 25-26 °C;' "$z/report.md" >/dev/null \
+  || fail "a zone that didn't read shifts the names: $(grep -F Thermal "$z/report.md")"
+echo "ok - a zone that didn't read keeps the others' names"
+grep -F -- '**median 600 mA** (590.0 to 610.0 mA over 3 samples, mean 600.0)' "$z/report.md" >/dev/null \
+  || fail "a two-word status shifts the current: $(grep -F floor "$z/report.md")"
+grep -F 'Status Discharging in 2 of 3 samples;' "$z/report.md" >/dev/null || fail "the two-word status counts as Discharging"
+echo "ok - a two-word status keeps the current"
+
+# --detach re-runs the script from its file, so a streamed one is refused
+if out=$(bash -s -- --detach < tools/power-baseline 2>&1); then fail "--detach from bash -s didn't fail"; fi
+grep -F 'streamed' <<<"$out" >/dev/null || fail "--detach from bash -s gave no reason: $out"
+echo "ok - --detach refuses a streamed script"
 
 # a run with no Part B log has no report
 mkdir "$t/empty"
