@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # Stage omamobile-device-lynx into DESTDIR. Never activates anything: the
 # boot-success unit is enabled by a vendor wants link, as on the Pixel 7 Pro.
-# Nothing starts the radio, the charger, or a camera.
+# Nothing starts the radio, the charger, or a camera; the Bluetooth address
+# unit runs only when udev sees the controller.
 #   ./install DESTDIR [BUILDDIR]
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
@@ -18,6 +19,11 @@ ln -sfn ../omamobile-boot-success.service \
   "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-boot-success.service"
 install -Dm644 vendor/udev/rules.d/10-omamobile-storage.rules \
   "$destination/usr/lib/udev/rules.d/10-omamobile-storage.rules"
+install -Dm755 bin/omamobile-bt-addr "$destination/usr/bin/omamobile-bt-addr"
+install -Dm644 vendor/systemd/system/omamobile-bt-addr@.service \
+  "$destination/usr/lib/systemd/system/omamobile-bt-addr@.service"
+install -Dm644 vendor/udev/rules.d/80-omamobile-bt-addr.rules \
+  "$destination/usr/lib/udev/rules.d/80-omamobile-bt-addr.rules"
 install -Dm644 vendor/systemd/network/20-usb-gadget.network \
   "$destination/usr/lib/systemd/network/20-usb-gadget.network"
 install -Dm644 vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
