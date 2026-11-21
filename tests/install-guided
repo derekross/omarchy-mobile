@@ -581,7 +581,7 @@ says "Type yes to go on" && ! says "fastboot flashing unlock" && [[ $(events '^f
 if guided "yes\n\n"; then fail "a locked phone stops the install"; fi
 says "fastboot flashing unlock" && says "Unlocking is the moment the phone is erased, as the warning said" && says "hold the test keys for a while" ||
   fail "a locked phone that can be unlocked: the command to run, the wipe, the keys from the descriptor"
-[[ $(grep -n 'unlocking it (the next step) is what' "$t/out" | cut -d: -f1) -lt $(grep -n 'fastboot flashing unlock' "$t/out" | head -1 | cut -d: -f1) &&
+[[ $(grep -n 'unlocking it (the next step) is what' "$t/out" | cut -d: -f1) -lt $(grep -n 'fastboot flashing unlock' "$t/out" | sed -n 1p | cut -d: -f1) &&
    $(grep -n 'Type yes to go on' "$t/out" | cut -d: -f1) -lt $(grep -n 'Step 3 of 11: Finding the phone' "$t/out" | cut -d: -f1) ]] ||
   fail "the warning, which says the unlock erases the phone, is read and accepted before the unlock steps"
 [[ $(events 'flashing unlock') == 0 && $(events FORBIDDEN) == 0 ]] || fail "the installer never sends the unlock command"
@@ -846,7 +846,7 @@ rm -rf "$t/images2"
 # the checks; and a dry run judges the same way
 fresh; vars no
 if guided "yes\n\n"; then fail "a locked phone stops the install"; fi
-[[ $(grep -n "this phone's bootloader and baseband match Google's build" "$t/out" | head -1 | cut -d: -f1) -lt $(grep -n 'fastboot flashing unlock' "$t/out" | head -1 | cut -d: -f1) ]] ||
+[[ $(grep -n "this phone's bootloader and baseband match Google's build" "$t/out" | sed -n 1p | cut -d: -f1) -lt $(grep -n 'fastboot flashing unlock' "$t/out" | sed -n 1p | cut -d: -f1) ]] ||
   fail "the build is found in the index before the unlock steps are shown"
 ! says "leave it locked" || fail "a locked phone that can be installed is not told to leave it locked"
 fresh; vars no b
@@ -921,7 +921,7 @@ guided "$ALL" || fail "the install goes on once the warning is accepted"
 [[ $(grep -c 'Type yes to go on' "$t/out") == 1 ]] || fail "the warning is asked once"
 [[ $(grep -n 'Step 2 of 11: Read this first' "$t/out" | cut -d: -f1) -lt $(grep -n 'Step 3 of 11: Finding the phone' "$t/out" | cut -d: -f1) ]] ||
   fail "the warning is step 2, before the phone is looked for"
-[[ $(grep -n 'Type yes to go on' "$t/out" | cut -d: -f1) -lt $(grep -n 'would run: fastboot' "$t/out" | head -1 | cut -d: -f1) ]] ||
+[[ $(grep -n 'Type yes to go on' "$t/out" | cut -d: -f1) -lt $(grep -n 'would run: fastboot' "$t/out" | sed -n 1p | cut -d: -f1) ]] ||
   fail "the warning comes before the dry run and the writes"
 once "after the warning"
 # A record from before the order changed (the phone found, the warning not
@@ -1384,7 +1384,7 @@ pass "resume: the codename has to be typed; a wrong one writes nothing"
 fresh
 if guided "yes\n${OWNER}testdev\nno\n"; then fail "a declined connection stops the install"; fi
 says "Not added" && [[ $(events '^nmcli connection add') == 0 ]] || fail "the connection is added only with consent"
-[[ $(grep -n 'nmcli connection add type ethernet' "$t/out" | head -1 | cut -d: -f1) -lt $(grep -n 'Press Enter to add it' "$t/out" | cut -d: -f1) ]] ||
+[[ $(grep -n 'nmcli connection add type ethernet' "$t/out" | sed -n 1p | cut -d: -f1) -lt $(grep -n 'Press Enter to add it' "$t/out" | cut -d: -f1) ]] ||
   fail "the command is shown before the question"
 says "nmcli connection delete omamobile-phone" || fail "it says how to remove the connection"
 # What the profile really does, with no reassurance that isn't true

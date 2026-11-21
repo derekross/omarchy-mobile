@@ -57,9 +57,12 @@ added=$(git diff --unified=0 --no-color "$range" -- . ':(exclude)tools/pr-check'
 # =, : or white space. Each is read in the colon form, and one whose first
 # octet has the locally administered bit set (x2, x6, xA, xE) is made up;
 # so are all zeros, all ones and RFC 7042's documentation range
-# (00:00:5e:00:53:xx). Each address on a line is judged on its own, so an
-# exempt one doesn't hide a real one beside it. No interval expressions:
-# mawk can't parse them.
+# (00:00:5e:00:53:xx). Six decimal fields joined by hyphens that read as
+# a date and time, YY-MM-DD-HH-MM-SS (month 01-12, day 01-31, hour 00-23,
+# minute and second 00-59), are a timestamp, such as a screenshot's name;
+# with colons or bare in a MAC record the same digits are still an address.
+# Each address on a line is judged on its own, so an exempt one doesn't
+# hide a real one beside it. No interval expressions: mawk can't parse them.
 macs=$(awk 'BEGIN {
     o = "[0-9a-f][0-9a-f]"; c = o; h = o; b = o
     for (i = 1; i < 6; i++) { c = c ":" o; h = h "-" o; b = b o }
@@ -67,6 +70,7 @@ macs=$(awk 'BEGIN {
     re[2] = "(^|[^0-9a-f-]|[g-z_][0-9a-f]*-)" h "([^0-9a-f-]|$|-([^0-9a-f]|$))"
     re[3] = "(^|[^a-z])(mac([_-]?addr(ess)?)?|(hw|bd)[_-]?addr(ess)?|ether)[\"\047]?([ \t]*[=:][ \t]*|[ \t]+)[\"\047]?" b "([^0-9a-f]|$)"
     any = o "[:-]" o "|" b
+    ts = "^[0-9][0-9]:(0[1-9]|1[0-2]):(0[1-9]|[12][0-9]|3[01]):([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$"
   }
   {
     line = tolower($0); real = 0
@@ -78,6 +82,7 @@ macs=$(awk 'BEGIN {
         sub(/[^0-9a-f]+$/, "", m); gsub(/[:-]/, "", m); m = substr(m, length(m) - 11)
         for (i = 10; i > 0; i -= 2) m = substr(m, 1, i) ":" substr(m, i + 1)
         if (m ~ /^.[26ae]:/ || m == "00:00:00:00:00:00" || m == "ff:ff:ff:ff:ff:ff" || m ~ /^00:00:5e:00:53:/) continue
+        if (k == 2 && m ~ ts) continue
         real = 1
       }
     }

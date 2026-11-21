@@ -1,0 +1,108 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/fetch-ndk against a local fixture (a file:// URL, no network): an
+# archive that matches its pin is unpacked with its executables kept and the
+# archive removed, an NDK already there is used without a download, and a
+# wrong size, a wrong SHA-256, an archive without the pinned revision, a
+# different NDK in the way and a lock that isn't one are refused, leaving
+# nothing behind. --print never downloads, a host other than Google's and a
+# computer that isn't x86_64 are refused before curl is called (a stand-in
+# curl records any call), and the tool holds curl to HTTPS. Nothing is
+# downloaded without --accept-google-terms; an NDK already there needs none.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+bash -n tools/fetch-ndk
+for tool in curl python3 sha256sum; do
+  command -v "$tool" >/dev/null || { echo "ok - # skip: no $tool"; exit 0; }
+done
+command -v unzip >/dev/null || command -v bsdtar >/dev/null || { echo "ok - # skip: no unzip or bsdtar"; exit 0; }
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+fail() { echo "not ok - $*" >&2; [[ -f $t/log ]] && cat "$t/log" >&2; exit 1; }
+fetch() { tools/fetch-ndk --dir "$t/cache" --lock "$t/lock" --any-host --accept-google-terms "$@" > "$t/out" 2> "$t/log"; }
+print() { tools/fetch-ndk --dir "$t/cache" --lock "$t/lock" --print > "$t/out" 2> "$t/log"; }
+# Stand-ins that record a call: curl fails after recording one, uname says aarch64
+mkdir -p "$t/fake"
+printf '#!/bin/sh\necho "$@" >> "%s/curl-called"\nexit 7\n' "$t" > "$t/fake/curl"
+printf '#!/bin/sh\necho aarch64\n' > "$t/fake/uname"
+chmod 755 "$t/fake/curl" "$t/fake/uname"
+fake_fetch() { PATH="$t/fake:$PATH" tools/fetch-ndk --dir "$t/cache" --lock "$t/lock" "$@" > "$t/out" 2> "$t/log"; }
+
+# The fixture: an NDK-shaped tree with an executable compiler, zipped as Google zips it
+mkdir -p "$t/src/android-ndk-r9z/toolchains/llvm/prebuilt/linux-x86_64/bin"
+printf 'Pkg.Desc = Android NDK\nPkg.Revision = 9.0.1234\n' > "$t/src/android-ndk-r9z/source.properties"
+printf '#!/bin/sh\necho clang\n' > "$t/src/android-ndk-r9z/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+chmod 755 "$t/src/android-ndk-r9z/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+python3 -I - "$t/src" "$t/ndk.zip" <<'PY'
+import os, sys, zipfile
+root, out = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+    for d, _, files in os.walk(root):
+        for f in files:
+            p = os.path.join(d, f)
+            z.write(p, os.path.relpath(p, root))
+PY
+sum=$(sha256sum "$t/ndk.zip" | cut -d' ' -f1); size=$(stat -c %s "$t/ndk.zip")
+lock() { printf '# a comment\n\n%s\n' "$1" > "$t/lock"; }
+
+lock "r9z 9.0.1234 $sum $size file://$t/ndk.zip"
+if print; then fail "--print without the NDK fails"; fi
+grep -c 'fetch it first with tools/fetch-ndk --accept-google-terms' "$t/log" >/dev/null || fail "--print without the NDK says how to fetch it: $(cat "$t/log")"
+[[ ! -e $t/cache ]] || fail "--print without the NDK creates nothing: $(ls -A "$t/cache")"
+echo "ok - --print never downloads: without the NDK it says how to fetch it"
+
+fetch || fail "a matching archive is fetched"
+[[ $(cat "$t/out") == "$t/cache/android-ndk-r9z" ]] || fail "the fetch prints the NDK's path: $(cat "$t/out")"
+[[ -x $t/cache/android-ndk-r9z/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]] || fail "the compiler stays executable"
+[[ -z $(find "$t/cache" -maxdepth 1 -name '.*' -newer "$t/lock") ]] || fail "no archive or work directory is left: $(ls -A "$t/cache")"
+print || fail "--print finds the NDK once it is fetched"
+[[ $(cat "$t/out") == "$t/cache/android-ndk-r9z" ]] || fail "--print prints the NDK's path: $(cat "$t/out")"
+[[ ! -s $t/log ]] || fail "--print says nothing else"
+echo "ok - a matching archive is unpacked, its compiler executable, the archive removed; --print then prints its path"
+
+mv "$t/ndk.zip" "$t/ndk.zip.away"
+tools/fetch-ndk --dir "$t/cache" --lock "$t/lock" > "$t/out" 2> "$t/log" || fail "an NDK already there needs no download, and no option"
+grep -c 'is in' "$t/log" >/dev/null && [[ $(cat "$t/out") == "$t/cache/android-ndk-r9z" ]] || fail "it says where the NDK is"
+mv "$t/ndk.zip.away" "$t/ndk.zip"
+echo "ok - an NDK already there is used as it is"
+
+rm -rf "$t/cache"
+lock "r9z 9.0.1234 $sum $((size + 1)) file://$t/ndk.zip"
+if fetch; then fail "a wrong size is refused"; fi
+grep -c 'not the pinned' "$t/log" >/dev/null || fail "the size refusal says why"
+lock "r9z 9.0.1234 $(printf '%064d' 0) $size file://$t/ndk.zip"
+if fetch; then fail "a wrong SHA-256 is refused"; fi
+grep -c "SHA-256 is $sum" "$t/log" >/dev/null || fail "the checksum refusal says why"
+[[ -z $(ls -A "$t/cache") ]] || fail "a refused archive leaves nothing: $(ls -A "$t/cache")"
+lock "r9z 9.9.9 $sum $size file://$t/ndk.zip"
+if fetch; then fail "an archive without the pinned revision is refused"; fi
+[[ ! -e $t/cache/android-ndk-r9z ]] || fail "an archive without the pinned revision isn't put in place"
+echo "ok - a wrong size, a wrong SHA-256 or another revision is refused, leaving nothing"
+
+mkdir -p "$t/cache/android-ndk-r9z"; printf 'Pkg.Revision = 8.0.1\n' > "$t/cache/android-ndk-r9z/source.properties"
+lock "r9z 9.0.1234 $sum $size file://$t/ndk.zip"
+if fetch; then fail "another NDK in the way is refused"; fi
+grep -c 'remove it first' "$t/log" >/dev/null || fail "it says to remove the other NDK"
+rm -rf "$t/cache" "$t/curl-called"
+lock "r9z 9.0.1234 $sum $size https://example.org/android-ndk-r9z-linux.zip"
+if fake_fetch --any-host; then fail "a download from anywhere but Google is refused"; fi
+grep -c 'the NDK comes from https://dl.google.com/android/repository/' "$t/log" >/dev/null || fail "the host refusal says why: $(cat "$t/log")"
+[[ ! -e $t/curl-called ]] || fail "another host is refused before curl is called: $(cat "$t/curl-called")"
+lock "r9z 9.0.1234 $sum"
+if fetch; then fail "a short lock line is refused"; fi
+echo "ok - another NDK in the way, another host (no request made) and a broken lock are refused"
+
+rm -rf "$t/cache" "$t/curl-called"
+lock "r9z 9.0.1234 $sum $size https://dl.google.com/android/repository/android-ndk-r9z-linux.zip"
+if fake_fetch; then fail "a computer that isn't x86_64 is refused"; fi
+grep -c 'x86_64 Linux only (--any-host' "$t/log" >/dev/null || fail "the host refusal names --any-host: $(cat "$t/log")"
+[[ ! -e $t/curl-called ]] || fail "a computer that isn't x86_64 is refused before curl is called"
+if fake_fetch --any-host; then fail "without --accept-google-terms nothing is downloaded"; fi
+grep -c 'https://developer.android.com/ndk/downloads' "$t/log" >/dev/null && grep -c -- '--accept-google-terms' "$t/log" >/dev/null \
+  || fail "the stop names Google's page and the option: $(cat "$t/log")"
+[[ ! -e $t/curl-called ]] || fail "without --accept-google-terms curl isn't called"
+[[ -z $(ls -A "$t/cache") ]] || fail "without --accept-google-terms nothing is left: $(ls -A "$t/cache")"
+if fake_fetch --any-host --accept-google-terms; then fail "the stand-in curl fails the download"; fi
+grep -c -- "--proto =https,file --proto-redir =https" "$t/curl-called" >/dev/null || fail "curl is held to HTTPS: $(cat "$t/curl-called")"
+[[ -z $(ls -A "$t/cache") ]] || fail "a failed download leaves nothing: $(ls -A "$t/cache")"
+echo "ok - a computer that isn't x86_64 is refused unless --any-host; no download without --accept-google-terms; curl is held to HTTPS and a failed download leaves nothing"

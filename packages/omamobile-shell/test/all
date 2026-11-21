@@ -4,6 +4,20 @@
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+
+# A fixture home: the tests (qmltestrunner's QML disk cache among them) must
+# never write under the real user's ~/.cache, ~/.config or ~/.local.
+real_home=$(getent passwd "$(id -u)" | cut -d: -f6)
+fixture=$(mktemp -d)
+trap 'rm -rf -- "$fixture"' EXIT
+export HOME="$fixture/home"
+export XDG_CONFIG_HOME="$HOME/.config" XDG_CACHE_HOME="$HOME/.cache"
+export XDG_DATA_HOME="$HOME/.local/share" XDG_STATE_HOME="$HOME/.local/state"
+export QML_DISABLE_DISK_CACHE=1
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+if [ -z "$real_home" ] || [ "$(realpath -m -- "$HOME")" = "$(realpath -m -- "$real_home")" ]; then
+  fail "HOME is a fixture, not the real home"
+fi
 pass() { printf 'ok - %s\n' "$1"; }
 
 for manifest in plugins/*/manifest.json; do
@@ -1154,7 +1168,7 @@ python3 -B test/doubletap.py >/dev/null || { python3 -B test/doubletap.py | grep
 pass "omamobile-doubletap: double taps and the touchscreen by its capabilities"
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-weather || fail "omamobile-weather parses"
 python3 -B test/weather.py 2>/dev/null || fail "omamobile-weather"
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+tmp=$(mktemp -d); trap 'rm -rf -- "$tmp" "$fixture"' EXIT
 ./install "$tmp/root"
 [[ -x $tmp/root/usr/bin/omamobile-setup-user && -f $tmp/root/usr/share/omamobile/shell/profile/shell.json ]] \
   || fail "install stages the setup script and the profile"
