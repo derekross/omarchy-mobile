@@ -346,7 +346,7 @@ burst $((530 * 30)) > "$G/journal"; rate=9 guard || true
 n=$(grep -c '^systemctl restart sddm.service$' "$G/calls" || true)
 (( n == 3 )) || fail "a 30-minute loop restarts sddm 3 times, not $n"
 grep -q 'failed autologins in 60s, restarting sddm once' "$G/out" || fail "the guard logs why it restarts"
-[[ $(grep '^systemctl' "$G/calls" | head -n 2) == $'systemctl reset-failed sddm.service\nsystemctl restart sddm.service' ]] ||
+[[ $(grep '^systemctl' "$G/calls" | sed -n '1,2p') == $'systemctl reset-failed sddm.service\nsystemctl restart sddm.service' ]] ||
   fail "the guard clears sddm's start limit before it restarts it"
 # an hour of loop (one failure a second is enough): three restarts this boot, then one line and no more
 burst 3600 > "$G/journal"; rate=1 guard || true
