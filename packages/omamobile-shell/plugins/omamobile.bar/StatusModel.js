@@ -145,11 +145,121 @@ function batteryIcon(percent, charging, full) {
   return charging ? chargingIcons[index] : defaultIcons[index]
 }
 
+// The keyboard layout label, the way Omarchy 4.5's own bar widget makes it
+// (shell/plugins/bar/widgets/KeyboardLayoutModel.js): xkb's short code
+// ("brief", from `xkbcli list`) for the layout's description, else the first
+// word of the description, capped at 3 characters.
+function layoutBriefs(text) {
+  var briefs = {}
+  var brief = ""
+  String(text || "").split("\n").forEach(function(line) {
+    if (/^\s*- /.test(line)) brief = ""
+    var field = line.match(/^  (brief|description): (.*)$/)
+    if (!field) return
+    if (field[1] === "brief") brief = field[2].replace(/^'|'$/g, "")
+    else if (brief) { briefs[field[2]] = brief; brief = "" }
+  })
+  return briefs
+}
+function shortLabel(description, briefs) {
+  if (!description) return ""
+  var brief = (briefs || {})[description]
+  var label = typeof brief === "string" && brief ? brief.split("-")[0] : String(description).split(/\s+/)[0]
+  return label.substring(0, 3).toUpperCase()
+}
+// Keyboards nobody types on: squeekboard's virtual keyboard and pseudo ones.
+var untypedKeyboards = /^hl-virtual-keyboard|consumer-control|power-button|sleep-button|lid-switch|video-bus|radio-control|gpio-keys/
+function typedKeyboard(name) {
+  name = String(name || "")
+  return name !== "" && !untypedKeyboards.test(name)
+}
+// Hyprland's activelayout event is "keyboard,description": the layout is read
+// from the event itself, no `hyprctl` per switch. `fields` is event.parse(2)
+// where Quickshell has it (a description can hold a comma), else the raw
+// data split at the first comma. null for a keyboard nobody types on
+// (squeekboard sends these while the on-screen keyboard is used). With
+// `real` (the names of the real keyboards from the last read) a keyboard
+// not among them is null too, the same rule as the devices read (#866's
+// bus/key check), so a phone key device the name list misses never sets it.
+function eventFields(fields) {
+  if (Array.isArray(fields)) return fields.length >= 2 ? [String(fields[0]), String(fields[1])] : null
+  var s = String(fields || "")
+  var i = s.indexOf(",")
+  return i < 0 ? null : [s.slice(0, i), s.slice(i + 1)]
+}
+function eventLayout(fields, real) {
+  var f = eventFields(fields)
+  if (!f || !typedKeyboard(f[0])) return null
+  if (Array.isArray(real) && real.indexOf(f[0]) < 0) return null
+  return f[1]
+}
+// Hyprland's device names: the kernel's name lowercased, with space, ',' and
+// newline as '-' (deviceNameToInternalString).
+function hyprName(name) {
+  return String(name || "").toLowerCase().replace(/[ ,\n]/g, "-")
+}
+// Two input devices with one name get "-1", "-2", ... appended by Hyprland.
+function isRealName(real, name) {
+  var n = String(name)
+  return real.some(function(r) {
+    return n === r || (n.length > r.length + 1 && n.indexOf(r + "-") === 0 && /^[0-9]+$/.test(n.slice(r.length + 1)))
+  })
+}
+// The bar's one read: `omamobile-keyboards` (the real keyboards, #866's
+// bus/key rule), a separator line, then `hyprctl -j devices`. When
+// omamobile-keyboards is missing or fails, the read has `keyboardsFailed`
+// in place of names: no keyboard counts (the phone's keys must never show
+// the label) and `failed` is true so the bar can say why in its log.
+var readSeparator = "--hyprctl--"
+var keyboardsFailed = "--keyboards-failed--"
+function splitRead(text) {
+  var s = String(text || "")
+  var i = s.indexOf(readSeparator + "\n")
+  if (i < 0) return null
+  var lines = s.slice(0, i).split("\n").filter(function(l) { return l !== "" })
+  var failed = lines.indexOf(keyboardsFailed) >= 0
+  var real = failed ? [] : lines.map(hyprName)
+  return { real: real, failed: failed, devices: s.slice(i + readSeparator.length + 1) }
+}
+// From `hyprctl -j devices` (at start, after a config reload, for a keyboard
+// not seen before, and every few seconds while the label shows):
+// {count, description, names} of the keyboard furthest along its list, the
+// one being typed on (Omarchy's rule). With `real` (hyprName'd names from
+// omamobile-keyboards) only those count, so the phone's own key devices
+// never do, whatever they are called; without it the name list decides.
+function layoutState(text, real) {
+  var kbs
+  try { kbs = (JSON.parse(text) || {}).keyboards } catch (e) { return null }
+  if (!Array.isArray(kbs)) return null
+  var typed = kbs.filter(function(k) {
+    return k && typedKeyboard(k.name) && (!Array.isArray(real) || isRealName(real, k.name))
+  })
+  var names = typed.map(function(k) { return String(k.name) })
+  if (!typed.length) return { count: 0, description: "", names: names }
+  var kb = typed.reduce(function(a, k) { return (k.active_layout_index || 0) > (a.active_layout_index || 0) ? k : a }, typed[0])
+  var count = String(kb.layout || "").split(",").filter(function(l) { return l !== "" }).length
+  return { count: count, description: String(kb.active_keymap || ""), names: names }
+}
+// Whether a Hyprland event means `hyprctl -j devices` must be read again:
+// a config reload, or an activelayout from a typed keyboard not seen in the
+// last read (one plugged in or paired later; Hyprland has no device-added
+// event on its socket). The bar also calls it with the real keyboards as
+// `known`, for a device it saw but didn't count (read again, throttled).
+function needsDeviceRead(name, fields, known) {
+  if (name === "configreloaded") return true
+  if (name !== "activelayout") return false
+  var f = eventFields(fields)
+  return !!f && typedKeyboard(f[0]) && (known || []).indexOf(f[0]) < 0
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     findDevice: findDevice, connectedNetwork: connectedNetwork, wifiIcon: wifiIcon, networkIcon: networkIcon,
     cellularIcon: cellularIcon, cellGlyph: cellGlyph, cellText: cellText, parseCell: parseCell,
     callChip: callChip, elapsed: elapsed, batteryIcon: batteryIcon,
-    stampOf: stampOf, parseStamp: parseStamp, unreadCount: unreadCount, unreadStored: unreadStored
+    stampOf: stampOf, parseStamp: parseStamp, unreadCount: unreadCount, unreadStored: unreadStored,
+    layoutBriefs: layoutBriefs, shortLabel: shortLabel, eventLayout: eventLayout, layoutState: layoutState,
+    needsDeviceRead: needsDeviceRead, eventFields: eventFields, hyprName: hyprName, splitRead: splitRead,
+    readSeparator: readSeparator, keyboardsFailed: keyboardsFailed
   }
 }

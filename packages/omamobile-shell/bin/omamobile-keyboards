@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Print the names of the real keyboards connected, one per line.
+
+The same rule as omamobile-settings' lock page (#866): an input device udev
+marks ID_INPUT_KEYBOARD=1 on the Bluetooth bus (0005) or on USB (0003)
+outside /devices/virtual/input, with the letter keys and space, and a name
+that is not empty and not a known security token or barcode scanner. The
+phone's own keys (gpio-keys, the power button) and the on-screen keyboard
+never count. The bar's layout label matches these names against
+`hyprctl -j devices` (Hyprland lowercases them and turns spaces into '-').
+
+Test hooks: OMAMOBILE_KEYBOARDS_SYSFS and OMAMOBILE_KEYBOARDS_UDEVDATA
+stand in for /sys and /run/udev/data.
+"""
+
+import os
+import re
+import struct
+
+SYSFS = os.environ.get("OMAMOBILE_KEYBOARDS_SYSFS", "/sys")
+UDEV = os.environ.get("OMAMOBILE_KEYBOARDS_UDEVDATA", "/run/udev/data")
+LONG_BITS = struct.calcsize("l") * 8
+NEEDED = list(range(16, 26)) + list(range(30, 39)) + list(range(44, 51)) + [57]  # Q..P, A..L, Z..M, space
+NOT_KEYBOARDS = re.compile(r"yubikey|yubico|nitrokey|solokey|onlykey|token|barcode|scanner", re.I)
+
+
+def read(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def keyboards():
+    base = os.path.join(SYSFS, "class/input")
+    try:
+        events = sorted(os.listdir(base))
+    except OSError:
+        return []
+    found = []
+    for ev in events:
+        if not ev.startswith("event"):
+            continue
+        d = os.path.join(base, ev)
+        dev, bus = read(d + "/dev"), read(d + "/device/id/bustype")
+        if not dev or not bus:
+            continue
+        data = read(os.path.join(UDEV, "c" + dev)) or ""
+        if "E:ID_INPUT_KEYBOARD=1" not in data.splitlines():
+            continue
+        path = os.path.realpath(d + "/device")
+        if bus == "0005":
+            pass
+        elif bus == "0003" and "/devices/virtual/input/" not in path + "/":
+            pass
+        else:
+            continue
+        name = read(d + "/device/name")
+        if not name or NOT_KEYBOARDS.search(name):
+            continue
+        caps = (read(d + "/device/capabilities/key") or "").split()
+        try:
+            bits = sum(int(w, 16) << (i * LONG_BITS) for i, w in enumerate(reversed(caps)))
+        except ValueError:
+            continue
+        if all(bits >> k & 1 for k in NEEDED) and name not in found:
+            found.append(name)
+    return found
+
+
+if __name__ == "__main__":
+    for name in keyboards():
+        print(name)

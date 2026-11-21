@@ -70,3 +70,79 @@ assert.strictEqual(M.unreadStored("[{\"ts\": 5", 0), 0, "torn")
 assert.strictEqual(M.unreadStored(JSON.stringify([null, 4, { ts: "x" }, { ts: -1 }, {}, { ts: 5 }]), 0), 1)
 assert.strictEqual(M.unreadStored(undefined, 0), 0)
 console.log("ok - status model: unread notifications on Omarchy 4.5")
+
+// keyboard layout label (Omarchy 4.5's rules: brief from xkbcli, else the description's first word)
+const briefs = M.layoutBriefs("layouts:\n- layout: 'us'\n  variant: ''\n  brief: 'en'\n  description: English (US)\n" +
+  "- layout: 'gr'\n  variant: ''\n  brief: 'gr'\n  description: Greek\n- layout: 'xx'\n  variant: ''\n  description: Nobrief\n")
+assert.deepStrictEqual(briefs, { "English (US)": "en", "Greek": "gr" })
+assert.strictEqual(M.shortLabel("Greek", briefs), "GR")
+assert.strictEqual(M.shortLabel("English (US)", briefs), "EN")
+assert.strictEqual(M.shortLabel("Portuguese (Brazil)", briefs), "POR", "no brief: first word")
+assert.strictEqual(M.shortLabel("constructor", {}), "CON", "inherited members are not briefs")
+assert.strictEqual(M.shortLabel("", briefs), "")
+// the event carries the layout; squeekboard's and pseudo keyboards' events are ignored
+assert.strictEqual(M.eventLayout("dell-kb7120w,Greek"), "Greek")
+assert.strictEqual(M.eventLayout("dell,English (US, intl., with dead keys)"), "English (US, intl., with dead keys)")
+assert.strictEqual(M.eventLayout("hl-virtual-keyboard-squeekboard,Greek"), null)
+assert.strictEqual(M.eventLayout("gpio-keys,Greek"), null)
+assert.strictEqual(M.eventLayout("nocomma"), null)
+// devices at start: the typed keyboard furthest along, its layout count
+const dev = (o) => JSON.stringify({ keyboards: o })
+const osk = { name: "hl-virtual-keyboard-squeekboard", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek", main: true }
+assert.deepStrictEqual(M.layoutState(dev([osk])), { count: 0, description: "", names: [] }, "squeekboard alone: no label")
+assert.deepStrictEqual(M.layoutState(dev([osk, { name: "dell", layout: "us", active_layout_index: 0, active_keymap: "English (US)" }])),
+  { count: 1, description: "English (US)", names: ["dell"] })
+assert.deepStrictEqual(M.layoutState(dev([{ name: "power-button", layout: "us,gr", active_layout_index: 0, active_keymap: "English (US)" },
+  { name: "a", layout: "us,gr", active_layout_index: 0, active_keymap: "English (US)" },
+  { name: "b", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" }])), { count: 2, description: "Greek", names: ["a", "b"] })
+assert.strictEqual(M.layoutState("not json"), null)
+assert.strictEqual(M.layoutState("{}"), null)
+// a keyboard connected after start: its first activelayout triggers a devices read, known ones do not
+assert.strictEqual(M.needsDeviceRead("activelayout", "dell,Greek", []), true, "none at start, one plugged in later")
+assert.strictEqual(M.needsDeviceRead("activelayout", "dell,Greek", ["dell"]), false)
+assert.strictEqual(M.needsDeviceRead("activelayout", "hl-virtual-keyboard-squeekboard,Greek", []), false)
+assert.strictEqual(M.needsDeviceRead("activelayout", "nocomma", []), false)
+assert.strictEqual(M.needsDeviceRead("configreloaded", "", ["dell"]), true)
+assert.strictEqual(M.needsDeviceRead("workspace", "1", []), false)
+console.log("ok - status model: keyboard layout label from the event")
+// event.parse(2) fields; a description with a comma survives
+assert.strictEqual(M.eventLayout(["dell", "English (US, intl., with dead keys)"]), "English (US, intl., with dead keys)")
+assert.strictEqual(M.eventLayout(["hl-virtual-keyboard-squeekboard", "Greek"]), null)
+assert.strictEqual(M.eventLayout(["dell"]), null)
+assert.strictEqual(M.needsDeviceRead("activelayout", ["dell", "Greek"], []), true)
+assert.strictEqual(M.needsDeviceRead("activelayout", ["dell", "Greek"], ["dell"]), false)
+// only the keyboards omamobile-keyboards found count (#866's bus/key rule); the 8 Pro with none attached
+assert.strictEqual(M.hyprName("Keychron K2 Keyboard"), "keychron-k2-keyboard")
+const pixel = dev([{ name: "gpio-keys", layout: "us,gr", active_layout_index: 0, active_keymap: "English (US)" }, osk,
+  { name: "max77759-pmic-keys", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" }])
+assert.deepStrictEqual(M.layoutState(pixel, []), { count: 0, description: "", names: [] }, "no real keyboard: no label")
+const r = M.splitRead("Keychron K2 Keyboard\n" + M.readSeparator + "\n" +
+  dev([{ name: "keychron-k2-keyboard", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" },
+    { name: "max77759-pmic-keys", layout: "us,gr", active_layout_index: 0, active_keymap: "English (US)" }]))
+assert.deepStrictEqual(r.real, ["keychron-k2-keyboard"])
+assert.deepStrictEqual(M.layoutState(r.devices, r.real), { count: 2, description: "Greek", names: ["keychron-k2-keyboard"] })
+assert.deepStrictEqual(M.splitRead(M.readSeparator + "\n{}").real, [])
+assert.strictEqual(M.splitRead("no separator"), null)
+// Hyprland also turns ',' and a newline into '-', and numbers a repeated name
+assert.strictEqual(M.hyprName("Acme, Inc Keyboard"), "acme--inc-keyboard")
+assert.strictEqual(M.hyprName("a\nb"), "a-b")
+const dup = dev([{ name: "acme-kbd", layout: "us,gr", active_layout_index: 0, active_keymap: "English (US)" },
+  { name: "acme-kbd-1", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" },
+  { name: "acme-kbd-x", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" },
+  { name: "max77759-pmic-keys", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" }])
+assert.deepStrictEqual(M.layoutState(dup, ["acme-kbd"]), { count: 2, description: "Greek", names: ["acme-kbd", "acme-kbd-1"] }, "-1 suffix counts, -x and others do not")
+const comma = M.splitRead("Acme, Inc Keyboard\n" + M.readSeparator + "\n" + dev([{ name: "acme--inc-keyboard", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" }]))
+assert.strictEqual(M.layoutState(comma.devices, comma.real).count, 2, "a name with a comma still matches")
+console.log("ok - status model: real keyboards only, event.parse fields")
+// The event path follows the same real-keyboard list as the devices read
+assert.strictEqual(M.eventLayout(["max77759-pmic-keys", "Greek"], ["keychron-k2-keyboard"]), null, "a key device the name list misses")
+assert.strictEqual(M.eventLayout(["keychron-k2-keyboard", "Greek"], ["keychron-k2-keyboard"]), "Greek")
+assert.strictEqual(M.eventLayout("dell,Greek", []), null, "no real keyboard: an event sets nothing")
+// A missing or failing omamobile-keyboards: nothing counts, and it says so
+const failed = M.splitRead(M.keyboardsFailed + "\n" + M.readSeparator + "\n" +
+  dev([{ name: "keychron-k2-keyboard", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" }]))
+assert.strictEqual(failed.failed, true)
+assert.deepStrictEqual(failed.real, [])
+assert.strictEqual(M.layoutState(failed.devices, failed.real).count, 0)
+assert.strictEqual(r.failed, false)
+console.log("ok - status model: the event path uses the real keyboards, a failed omamobile-keyboards counts none")
