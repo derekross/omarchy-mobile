@@ -122,6 +122,38 @@ fi
 grep -qF "ln -sfn /dev/null \"\$d/usr/lib/systemd/user/$mask\"" install || fail "the autostart agent's unit must be masked"
 grep -qxF "ExecStartPre=-/usr/bin/systemctl --user stop ${mask//\\/\\\\}" vendor/systemd/user/omamobile-geoclue-agent.service ||
   fail "the agent unit must stop an autostart agent first (escaped once more for systemd's C escapes)"
+# The desktop's location setting follows the agent (2026-11-17, Pixel 9a):
+# false, xdg-desktop-portal's Location portal refuses every libgeoclue client.
+agent=vendor/systemd/user/omamobile-geoclue-agent.service
+grep -qxF 'ExecStartPre=-/usr/bin/gsettings set org.gnome.system.location enabled true' "$agent" &&
+  grep -qxF 'ExecStopPost=-/usr/bin/gsettings set org.gnome.system.location enabled false' "$agent" ||
+  fail "the agent unit turns the desktop's location setting on at start and off at stop"
+grep -qF 'restart omamobile-geoclue-agent.service' omamobile-gnss.install ||
+  fail "an upgrade from before 0.2.11 restarts the agent so its setting is applied"
+# GeoClue refuses a user whose agent registered again under a running
+# geoclue: on and off stop it first (the agent's start activates a fresh one),
+# and so does the upgrade that restarts the agent.
+grep -qxF 'fresh_geoclue() { systemctl stop geoclue.service 2>/dev/null || true; }' bin/omamobile-gnss ||
+  fail "fresh_geoclue stops geoclue"
+for a in on off; do
+  sed -n "/^  $a)\$/,/;;/p" bin/omamobile-gnss | grep -cx '    fresh_geoclue' >/dev/null || fail "omamobile-gnss $a stops geoclue"
+done
+awk '/systemctl stop geoclue.service/ {s=NR} /restart omamobile-geoclue-agent.service/ {r=NR} END {exit !(s && r && s < r)}' omamobile-gnss.install ||
+  fail "the upgrade stops geoclue before it restarts the agent"
+echo "ok - the location setting and a fresh geoclue follow the Location switch"
+
+# The namespace PID is the runner's own (2026-11-17, Pixel 9a): an awk wrote
+# its own PID, which was gone before anyone used it.
+grep -q "awk '/^NSpid:/" lib/omamobile-vendor-chroot && fail "the namespace PID is read by the shell itself, not a child"
+nsf=$(sed -n '/^ns_pid_record() {$/,/^}$/p' lib/omamobile-vendor-chroot)
+[[ -n $nsf ]] || fail "ns_pid_record found"
+nsd=$(mktemp -d)
+bash -c 'NSPID=$1/ns.pid; die() { exit 1; }; '"$nsf"'; ns_pid_record; true; sleep 2' _ "$nsd" &
+nsp=$!
+for _ in $(seq 1 20); do [[ -s $nsd/ns.pid ]] && break; sleep 0.1; done
+[[ $(cat "$nsd/ns.pid" 2>/dev/null) == "$nsp" ]] || { kill "$nsp" 2>/dev/null; rm -rf "$nsd"; fail "ns.pid names the runner's shell ($nsp), not $(cat "$nsd/ns.pid" 2>/dev/null)"; }
+wait "$nsp"; rm -rf "$nsd"
+echo "ok - ns.pid names the runner, so run and ns can enter its namespace"
 
 # The bionic prebuilts are built on the computer with the Android toolchain
 # and never committed; a checkout without them (CI) checks the rest only.

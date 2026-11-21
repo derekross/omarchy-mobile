@@ -215,6 +215,18 @@ setup_hosts() {
   bind "$f" "$etc/hosts" ro
 }
 
+# This shell's PID as the host sees it, for nsenter (ns, run and the
+# packages' own helpers). Read with a builtin: /proc/self in its redirection
+# is this shell. An awk here read its own status, so the file named awk's
+# short-lived PID and "run" and "ns" failed ("cannot open /proc/N/ns/mnt").
+ns_pid_record() {
+  local k v _
+  while read -r k v _; do
+    [[ $k == NSpid: ]] && { printf '%s\n' "$v" > "$NSPID"; return 0; }
+  done < /proc/self/status
+  die "no NSpid in /proc/self/status"
+}
+
 # Build the chroot in the current (private) mount namespace.
 setup() {
   local s
@@ -286,7 +298,7 @@ start() {
     exec unshare --mount --propagation private --pid --fork --kill-child \
       env OMAMOBILE_VENDOR_IN_NS=1 "$0" "$PROFILE" start
   fi
-  awk '/^NSpid:/ {print $2}' /proc/self/status > "$NSPID"
+  ns_pid_record
   trap 'stop 0' TERM INT
   setup
   if [[ $BINDER == yes ]]; then

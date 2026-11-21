@@ -14,10 +14,22 @@ post_upgrade() {
     # off (the setup step enabled only the socket), so Location read "on"
     # and no app got a position: the agent follows the switch too
     systemctl --global enable omamobile-geoclue-agent.service 2>/dev/null || true
+    # 0.2.11: an agent restarted under a running geoclue is refused (see
+    # omamobile-gnss, fresh_geoclue): stop it, D-Bus starts it again
+    if [ "$(vercmp "$2" 0.2.11)" -lt 0 ]; then
+      systemctl stop geoclue.service 2>/dev/null || true
+    fi
     # --global reaches a session only at its next login: start the agent in
     # the sessions that are running now, so the update itself is the repair
     for u in $(loginctl list-users --no-legend 2>/dev/null | awk '$1 >= 1000 {print $2}'); do
-      systemctl --user -M "$u@.host" start omamobile-geoclue-agent.service 2>/dev/null || true
+      # 0.2.11: the agent's start turns the desktop's location setting on,
+      # which an agent running from before never did: restart it (one
+      # registration, with the fresh geoclue above), else just start it
+      if [ "$(vercmp "$2" 0.2.11)" -lt 0 ]; then
+        systemctl --user -M "$u@.host" restart omamobile-geoclue-agent.service 2>/dev/null || true
+      else
+        systemctl --user -M "$u@.host" start omamobile-geoclue-agent.service 2>/dev/null || true
+      fi
     done
   fi
   if [ "$(vercmp "$2" 0.2.0)" -lt 0 ]; then

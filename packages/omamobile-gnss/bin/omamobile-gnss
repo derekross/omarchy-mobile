@@ -51,6 +51,13 @@ as_root() { # $1 action
 
 state() { systemctl "$1" "$2" 2>/dev/null || true; }
 
+# GeoClue (2.8) refuses every client of a user whose agent has gone and
+# registered again while the service kept running ("Geolocation disabled for
+# UID 1000"), so after the switch restarted the agent no app got a position
+# until geoclue itself restarted. It is D-Bus activated: stopping it here
+# lets the agent's start bring up a fresh one that takes its registration.
+fresh_geoclue() { systemctl stop geoclue.service 2>/dev/null || true; }
+
 # The chip's power: the GNSS rails (world-readable, unlike debugfs). No
 # vdd_gnss_core regulator means sec_acpm isn't loaded, so the rails are off.
 powered() {
@@ -104,12 +111,14 @@ status() {
 case ${1:-} in
   on)
     as_root on
+    fresh_geoclue
     systemctl enable --now "$SOCKET"
     [[ $ROOT == */gnss/root ]] && systemctl enable --now "$LTO_TIMER"
     systemctl --global enable "$AGENT"
     ;;
   off)
     as_root off
+    fresh_geoclue
     systemctl stop "$FORCE" "$BRIDGE" "$STACK" 2>/dev/null || true
     systemctl disable --now "$SOCKET" "$LTO_TIMER"
     systemctl --global disable "$AGENT"
