@@ -3,6 +3,30 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1097. A hardening of one reader of a checked file is followed by a grep
+  for the other readers of the same file after the same check.** #960 closed
+  `fetch-published`'s read-after-check gap on `omamobile-revoked`;
+  `signing_key_load`, `release-upload` and `repo-publish` keep the same
+  `2>/dev/null` read that fails towards "not revoked". *Check:* `git grep -n
+  '<file>' -- tools bin` and, for each reader, what a failed read decides;
+  name the follow-up or a shared helper. Extends L-788, L-803 and L-716.
+  *From:* #960, round 64, 2026-11-21.
+- **L-1096. A test runner that ends in `exec` never runs its own `trap ...
+  EXIT`, and a PR that calls it from a second path doubles the leftovers.**
+  `test/lock-glance` makes a work folder, sets the trap, then `exec`s
+  qmltestrunner, so each run leaves the folder; #957 added a second caller.
+  *Check:* `grep -n '^exec \|trap .* EXIT' <runner>` for both in one script,
+  and list `TMPDIR` after a run made with a scratch `TMPDIR`. Extends L-468
+  and L-734. *From:* #957, round 64, 2026-11-21.
+- **L-1095. A fix that stops a session service "so the other one gets there
+  first" is run with the other one failing to start.** #763's `on` began
+  stopping squeekboard before restarting fcitx5; under `set -e` a failed
+  fcitx5 restart then ended the script with no keyboard and no message, where
+  the previous head left the keyboard running. *Check:* for each new `stop X;
+  start Y; start X` in a `set -e` script, run it with Y's start exiting 1 (the
+  test's stand-ins usually allow it) and read the order log for X's start; ask
+  for an EXIT trap set right after the stop. Extends L-1087, L-962 and L-733.
+  *From:* #763, round 64, 2026-11-21.
 - **L-1088. A fix that restores state wiring is reviewed for every consumer of
   the restored state, not only the symptom in the title.** #920 restores three
   properties to the 4.5 lock view to fix a stale battery level; the same

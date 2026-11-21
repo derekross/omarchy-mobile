@@ -3,6 +3,24 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1100. A wide mechanical replacement is proved by applying the stated
+  rule to the base by script and comparing with the head, then by reading only
+  for what the rule can't know.** For #962 (no pipe into `head` under
+  pipefail) a ten-line script showed 20 files equal to "main with the rule
+  applied", which left one question per site: `head` returns after N lines and
+  `sed -n` reads to the end, so a writer that never ends would hang. *Check:*
+  `re.sub` the rule over `git show <base>:<file>` and compare with `git show
+  <head>:<file>`; then list each pipeline's first command and look for `-f`,
+  `-w`, `monitor`, device nodes and commands without their own end. Extends
+  L-896 and L-69. *From:* #962, round 64, 2026-11-21.
+- **L-1099. A rule tightened in one branch of a matcher can wake up a later
+  branch that the old rule short-circuited.** #959 changed only which first
+  octets of an address are exempt, yet 63 of its new reports were follow-up
+  addresses behind a date-shaped value that main had exempted by its bit
+  before the timestamp step ran. *Check:* in the old-against-new corpus run of
+  L-896, group the added values by the branch that reported them, not only by
+  the property the PR names, and explain each group. Extends L-896. *From:*
+  #959, round 64, 2026-11-21.
 - **L-1089. A test suite reached from only one of two version-selected paths
   stops testing when phones move to the other.** omamobile-omarchy's
   `test/lock-glance` (57 cases) is called on the 4.0.6 path only; since the

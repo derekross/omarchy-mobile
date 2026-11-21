@@ -3,6 +3,17 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1094. A draft that adds a module for a device node is grepped on main
+  for another module of the same name or node.** #374's `aoc_tuning.py` in
+  `omamobile-modem-sit` and main's `aoc_tuning.py` in
+  `omamobile-speaker-tuning` both open the AoC's audio tuning node and its
+  bulk nodes, each with its own in-process lock or none; four rounds of
+  reviews never set the two side by side. *Check:* `git ls-tree -r --name-only
+  origin/main | grep '<basename>'` and `git grep -n '<device node>'
+  origin/main -- packages` for every new file that opens a `/dev` node; list
+  which packages a phone can have installed together, and ask for a shared
+  port or a sentence saying why they can't meet. Extends L-709, L-987 and
+  L-720. *From:* #374, round 64, 2026-11-21.
 - **L-1070. A unit ordered after a service that only one device package ships
   is unordered everywhere else.** `omamobile-fp.service` relied on
   `After=omamobile-aoc.service` to have Trusty's device; panther has no such

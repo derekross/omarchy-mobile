@@ -23,14 +23,14 @@ reviews can cite them, and each number is in exactly one file
 
 | Area | Files | Entries | Read for |
 | --- | --- | --- | --- |
-| Safety model (AGENTS.md section 1) | [`safety.md`](lessons/safety.md), [`safety-2.md`](lessons/safety-2.md), [`safety-3.md`](lessons/safety-3.md) | 145 | every review |
-| Shared code and the reference device | [`shared-code.md`](lessons/shared-code.md), [`shared-code-2.md`](lessons/shared-code-2.md), [`shared-code-3.md`](lessons/shared-code-3.md) | 126 | omarchy-mobile and app pull requests |
-| Shell and scripts | [`shell.md`](lessons/shell.md), [`shell-2.md`](lessons/shell-2.md), [`shell-3.md`](lessons/shell-3.md) | 145 | omarchy-mobile and app pull requests |
-| Kernel (linux-omarchy-mobile) | [`kernel.md`](lessons/kernel.md), [`kernel-2.md`](lessons/kernel-2.md), [`kernel-3.md`](lessons/kernel-3.md), [`kernel-4.md`](lessons/kernel-4.md) | 174 | linux-omarchy-mobile pull requests |
-| The gates themselves | [`gates.md`](lessons/gates.md), [`gates-2.md`](lessons/gates-2.md), [`gates-3.md`](lessons/gates-3.md) | 135 | every review |
-| Reviews and merging | [`reviews.md`](lessons/reviews.md), [`reviews-2.md`](lessons/reviews-2.md), [`reviews-3.md`](lessons/reviews-3.md) | 153 | every review |
-| Claims and evidence | [`claims.md`](lessons/claims.md), [`claims-2.md`](lessons/claims-2.md), [`claims-3.md`](lessons/claims-3.md), [`claims-4.md`](lessons/claims-4.md) | 212 | every review |
-| Corrections (where a review was wrong) | [`corrections.md`](lessons/corrections.md) | 55 | every review |
+| Safety model (AGENTS.md section 1) | [`safety.md`](lessons/safety.md), [`safety-2.md`](lessons/safety-2.md), [`safety-3.md`](lessons/safety-3.md) | 148 | every review |
+| Shared code and the reference device | [`shared-code.md`](lessons/shared-code.md), [`shared-code-2.md`](lessons/shared-code-2.md), [`shared-code-3.md`](lessons/shared-code-3.md) | 127 | omarchy-mobile and app pull requests |
+| Shell and scripts | [`shell.md`](lessons/shell.md), [`shell-2.md`](lessons/shell-2.md), [`shell-3.md`](lessons/shell-3.md) | 148 | omarchy-mobile and app pull requests |
+| Kernel (linux-omarchy-mobile) | [`kernel.md`](lessons/kernel.md), [`kernel-2.md`](lessons/kernel-2.md), [`kernel-3.md`](lessons/kernel-3.md), [`kernel-4.md`](lessons/kernel-4.md) | 175 | linux-omarchy-mobile pull requests |
+| The gates themselves | [`gates.md`](lessons/gates.md), [`gates-2.md`](lessons/gates-2.md), [`gates-3.md`](lessons/gates-3.md) | 137 | every review |
+| Reviews and merging | [`reviews.md`](lessons/reviews.md), [`reviews-2.md`](lessons/reviews-2.md), [`reviews-3.md`](lessons/reviews-3.md) | 157 | every review |
+| Claims and evidence | [`claims.md`](lessons/claims.md), [`claims-2.md`](lessons/claims-2.md), [`claims-3.md`](lessons/claims-3.md), [`claims-4.md`](lessons/claims-4.md) | 215 | every review |
+| Corrections (where a review was wrong) | [`corrections.md`](lessons/corrections.md), [`corrections-2.md`](lessons/corrections-2.md) | 57 | every review |
 
 A numbered file (`claims-2.md`) continues the one before it; an area's parts
 are read together.
