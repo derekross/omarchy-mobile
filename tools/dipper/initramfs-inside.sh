@@ -65,6 +65,9 @@ chmod 755 "$stage/init"
 
 echo xiaomi,dipper > "$stage/etc/omamobile-compatible"
 : > "$stage/etc/omamobile-ufs-rw"
+# A single-slot RAM probe must stay in rescue when USB or NFS is unavailable.
+echo ram-rescue > "$stage/etc/omamobile-root-mode"
+echo no > "$stage/etc/omamobile-usb-recovery"
 if [ -n "${OMAMOBILE_NFSROOT:-}" ]; then
   case "$OMAMOBILE_NFSROOT" in
     *[!A-Za-z0-9.:/_-]*|*..*|*//*|:*:*) echo "invalid OMAMOBILE_NFSROOT" >&2; exit 1 ;;

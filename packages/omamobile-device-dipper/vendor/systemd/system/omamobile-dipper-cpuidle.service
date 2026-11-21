@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Disable Dipper CPU0 rail-collapse idle state
+ConditionPathExists=/sys/devices/system/cpu/cpu0/cpuidle/state1/disable
+Before=omamobile-firstboot.service display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash -c 'printf 1 > /sys/devices/system/cpu/cpu0/cpuidle/state1/disable; test "$(cat /sys/devices/system/cpu/cpu0/cpuidle/state1/disable)" = 1'
+RemainAfterExit=yes

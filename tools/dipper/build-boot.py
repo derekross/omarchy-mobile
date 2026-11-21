@@ -30,7 +30,7 @@ HDR_SIZE = 1648
 # From the phone: console on the framebuffer, early console on the SoC's UART
 # (stock passes earlycon=msm_geni_serial,0xA84000), then the shared init.
 CMDLINE = ("console=tty0 earlycon=msm_geni_serial,0xa84000 rdinit=/init "
-           "panic=10 printk.devkmsg=on rootwait")
+           "panic=10 printk.devkmsg=on rootwait systemd.firstboot=off")
 # dipper's boot partition, measured: 65536 blocks of 1 KiB.
 BOOT_PARTITION_BYTES = 64 * 1024 * 1024
 # This ABL refuses a larger kernel with only
