@@ -1,8 +1,273 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Review lessons: Shared code and the reference device (part 2 of 2)
+# Review lessons: Shared code and the reference device (part 2 of 3)
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-702. A status key rewritten for one phone's new capability is evaluated
+  with the other phones' object.** #626 changed `speaker` from "is the tegu
+  route" to `output == 'speaker'`, and `output` defaults to `speaker`
+  everywhere, so a 7 Pro earpiece call would report the loudspeaker; the test
+  used `MagicMock(tegu=True, …)` throughout. *Check:* build the reference
+  phone's object (`VoiceAudio.__new__` with `tegu = False`), diff `status()`
+  at base and head, and `git grep` the key's readers. Extends L-206 and L-608.
+  *From:* #626, round 50.
+- **L-701. Two starters that read one signal are compared for what each
+  clears.** #403's 7 Pro branch removes the counted `.refused-*` copies when
+  it finds the reboot note; the 9a's `omamobile-tegu-modem-up` (#372) removes
+  only the latch and the note, so a hang, a push and a second hang starts the
+  modem on one phone and holds it on the other. *Check:* `git grep` the
+  signal's path (`/var/lib/omamobile/deliberate-restart`) across `packages/`
+  and lay each reader's `rm` line side by side. Extends L-492 and L-444.
+  *From:* #403 with #372, round 50.
+- **L-669. A build-time switch that changes what an initramfs boots is checked
+  at the next consumer of the cached file.** #503's `OMAMOBILE_NFSROOT` is
+  validated in `cmd_initramfs`, but `images`, `flash` and `push` read
+  `initramfs.cpio.lz4` from `KERNEL_OUT` without knowing how it was built.
+  *Check:* for each new build input, name the cached artifact it lands in and
+  every command that reads it later, and ask for a visible line or a refusal
+  there. Extends L-282. *From:* #503, round 49, 2026-11-10.
+- **L-668. A fix that lets a new kind of input through the installer is
+  followed to the first boot.** #609 lets a lived-in root pass
+  `tools/install-phone`'s image check; the installer still writes
+  `firstboot.conf` into it, and firstboot's answer to an existing user is to
+  refuse and keep the file. *Check:* for each input an installer newly
+  accepts, name what each first-boot unit does with it
+  (`omamobile-firstboot`'s `validate`, the fingerprint runner's TD) and ask
+  for that boot's log. Extends L-451. *From:* #609, round 49, 2026-11-10.
+- **L-667. A new app is checked against the plan row for the app it
+  duplicates.** #611 added a Files app without mentioning that
+  `docs/TELEPHONY-APPS-PLAN.md` records "Files: reuse Nautilus", which sits in
+  Home's dock and serves the portal chooser. *Check:* `git grep -n -i "<the
+  app's role>" docs/*PLAN.md
+  packages/omamobile-shell/plugins/omamobile.home/HomeModel.js`, and the
+  `.desktop` `Name=` of what's installed; a duplicate name or a contradicted
+  plan row is the maintainer's decision before any code review. *From:* #611,
+  round 49, 2026-11-10.
+- **L-666. `~/.local/share/omarchy` is Omarchy's legacy root, not a free data
+  directory.** #610 put a browser profile (a login) under it;
+  `omarchy-upgrade-to-quattro` moves that directory to a `.bak` and replaces
+  it with a link to `/usr/share/omarchy`, and `omarchy-nvim-setup` reads it as
+  `OMARCHY_PATH`. *Check:* grep a PR's added lines for `share/omarchy`,
+  `config/omarchy` and `state/omarchy` paths it creates, then the signed
+  Omarchy package's `usr/bin` for the same path (`mv`, `rm`, `ln -sfn`, `-d`
+  tests); our own data goes under `omamobile/`. Extends L-32, L-227 and L-498.
+  *From:* #610, round 49, 2026-11-10.
+- **L-665. A shared-driver change accepted "by reading" in an early round is
+  re-checked against CONTRIBUTING §6.2 at the merge round, and "rare" is
+  traced to every caller.** Kernel #116's MIF restore passed round 29 as "one
+  ACPM read" when leaving 120 Hz; `gs_decon_crtc_atomic_disable` drops to 60
+  Hz first, so on the 7 Pro it runs at every screen-off, and it has never run
+  there. *Check:* list each ungated hunk on a reference-phone path, the
+  callers of its function and the user events that reach them, `git grep` the
+  clone's branches for its symbol, then run it or record the waiver. Extends
+  L-229, L-326 and L-342. *From:* kernel #116, round 49, 2026-11-10.
+- **L-328. Moving a CPIF watcher from open-per-poll to a held fd changes the
+  node's open count for the CP's lifetime; read open and release before
+  calling it neutral.** On our CPIF, `bootdump_open` runs `init_comm` (which
+  returns at once for SIT), `terminate_comm` is NULL, release purges the rx
+  queue on cbd's close, and a holder that never reads takes none of cbd's
+  frames, so #148 is neutral there by source. It still changes every phone's
+  modem profile, so cheetah gets a maintainer run first. *Check:* the iod's
+  open, release, poll and rx paths, and every reader of `iod->opened`. Extends
+  L-206. *From:* #148, round 29.
+- **L-327. A new `VENDOR_LIBS` entry in `extract-vendor-chroot` is unverified
+  until the extractor has run on a real image.** Every entry's NEEDED closure
+  is walked and any unresolved soname aborts the whole profile, so a GNSS-only
+  addition could take a phone's modem chroot down with it; #141's libraries
+  were copied by hand. *Check:* ask for one extractor run (its `==>` lines and
+  the new MANIFEST paths), or run it on a factory image we have; binder
+  clients often need `STUB_LIBS`. Extends L-29. *From:* #141, round 29.
+- **L-326. A "read-only, no-op on cheetah" `clk_get_rate()` on an ACPM clock
+  is a firmware call.** clk-acpm registers the gs201 and zumapro clocks with
+  `CLK_GET_RATE_NOCACHE` (gs101's aren't: corrected 2026-11-03, C-27), so
+  kernel #116's MIF restore adds one ACPM DVFS GET on cheetah at every drop
+  from 120 Hz, though it never writes there (MIF is already at its top
+  rate). *Check:* before calling a new `clk_get_rate()` on a shared path
+  free, read the provider's `flags` and `recalc_rate`, and put the call
+  count in the cheetah table. Extends L-111. *From:* kernel #116, round 29.
+- **L-325. "Shares the register map" isn't "shares the device type": a PMIC
+  change gated on `device_type` is checked against the reference phone's MFD
+  data, not its registers.** rtc-s5m gives the S2MPG12 the S2MPG10's
+  `s2mpg10_rtc_regs`, but sec-acpm's `s2mpg12_data` keeps `device_type =
+  S2MPG12`, so kernel #132's `== S2MPG10` steps skip cheetah although the
+  registers are the same; a condition on the regs pointer would have reached
+  it. *Check:* for each new condition in a shared PMIC driver, read what it
+  tests (type, regs, compatible), find cheetah's value in the MFD match data
+  and probe, and confirm with the compare's immediate in the object. Extends
+  L-206 and L-230. *From:* kernel #132, round 29.
+- **L-301. A shared-driver branch gated on what callers send counts as match
+  data under CONTRIBUTING §6.2 only if no reference-phone consumer sends it,
+  on the base and on `omamobile-int`.** Kernel #125's DCS-read path runs only
+  when a panel asks for a read, but inlining still changes the hot function's
+  machine code. *Check:* `git grep` the consumer drivers for the new API's
+  callers on `github/omamobile` and `omamobile-int`, and prefer a boot when
+  one is already planned. Extends L-206 and L-228. *From:* kernel #125, round
+  28.
+- **L-300. A touch-scaling change is cheetah-neutral only when the axis
+  maximum plus one equals the panel size.** On #135 the synaptics probe line
+  (`…, 1440x3120, 10 objects`) and no `touchscreen-size-*` in the board DT
+  showed that `scale()` is the identity on cheetah. *Check:* grep `logs/` for
+  the probe's `app fw` line and `git grep touchscreen-size` in the DTS before
+  calling such a change neutral. *From:* #135, round 28.
+- **L-299. A per-device constant given "as before" in a shared runner is
+  checked against that device's notes, not the line it replaced.** #135's
+  "cheetah 60 Hz, as before" repeated the old `op_hz`, but NOTES 2026-10-12
+  and DEVICES.md say cheetah runs at 120 Hz by default. *Check:* `grep -n` the
+  value in `device/<codename>/NOTES.md`, the subsystem plan's status line and
+  DEVICES.md. Extends L-280. *From:* #135, round 28.
+- **L-282. An env-default variable in a shared build library is an input to
+  the maintainer's builds too.** #79's `ALARM_LOCAL_KEY=${ALARM_LOCAL_KEY:-}`
+  in `tools/lib/alarm.sh` lets a leftover export widen trust in a build
+  without `--local`. *Check:* for each new `VAR=${VAR:-}` in `tools/lib/`,
+  confirm the maintainer's path sets or clears it explicitly. Extends L-7 and
+  L-171. *From:* #79, round 26.
+- **L-280. A per-device flag that gates new behaviour in a shared runner is
+  checked by building the command line under both values.** #101's
+  `MAP_STORES` adds storageproxyd arguments through an array, and an empty
+  `"${maps[@]}"` must vanish under `set -u`; a grep test can't show that. Run
+  with both images present, cheetah got the same 9 arguments as main and tegu
+  15. *Check:* extract the argument-building block and run it under `set -euo
+  pipefail` with each flag value and the triggering files present. Extends L-8
+  and L-234. *From:* #101, round 26.
+- **L-273. A before-merge Pixel 7 Pro run on `omamobile-int` compares the
+  touched file on int with the base first.** Where they differ, the run covers
+  the PR's hunk inside int's code, and the runbook and merge comment say
+  "tested on int + the commit"; where the cherry-pick conflicts, show that the
+  untestable commit is neutral on gs201. Kernel #82's `synaptics_tcm.c` and
+  #71's `net/nfc/core.c` differ between int and the base, and #88's gs-decon
+  commit doesn't apply to int. *Check:* `git rev-parse omamobile-int:<f>
+  github/omamobile:<f>`, then `git merge-tree --merge-base <c>^ omamobile-int
+  <c>`. Extends L-206 and L-45. *From:* kernel #82, #71, #88, round 25.
+- **L-268. A package that installs a hand-built prebuilt publishes a stale
+  binary when only its source changes.** fingerprint 0.1.9 changed the
+  bridge's C source, but the package installs `prebuilt/omamobile-fp-bridge`
+  as it finds it; gnss 0.2.4 builds without the 9a client and says so only in
+  the log. *Check:* for a package PR that touches a prebuilt's source, ask
+  whether the build machine rebuilt the prebuilt, and prefer a test that
+  compares the prebuilt's build ID or date with its source. Extends L-259.
+  *From:* issue #109, round 25.
+- **L-228. A board DT property that only the contributor's board sets counts
+  as its match data under CONTRIBUTING §6.2.** It holds when no base DTS,
+  cheetah overlay in `DTB_OVERLAYS` or open PR sets it, and the object diff
+  shows every new instruction behind the field it fills; for board wiring
+  (#94's REG_ON flip-flop) it's stricter than the compatible. *Check:* `git
+  grep '<property>'` on the base's `arch/` and `device/*/overlays/`, then the
+  per-function object diff. Extends L-206 and L-49. *From:* kernel #94, #95,
+  round 23; confirmed by the maintainer.
+- **L-229. An alternative we offer in a draft is held to CONTRIBUTING like
+  the main request.** Round 22 offered kernel #88 "or keep the shared lookup
+  and I'll run it on my phone"; §6.2 lets a Pixel 7 Pro run stand in only for
+  a deliberate cheetah change with a cheetah reason, and the contributor took
+  the offer. *Check:* every "or, if you prefer, …" against §6.2 before
+  posting; if the rule doesn't cover the case, fix the rule first. Extends
+  L-31. *From:* kernel #88, round 23; confirmed by the maintainer.
+- **L-230. Inserting into the middle of a shared struct or enum changes
+  cheetah's objects outside the touched function.** #62's hook in `struct
+  exynos_pmu_data` shifted later fields by 8 bytes; #101's new
+  `sec_device_type` renumbered every later type. *Check:* read each flagged
+  function's changed instructions (offset-only loads; compares only against
+  values after the insertion), confirm the reference phone's values sit
+  before it, and compare data symbols' bytes and relocations base vs head.
+  Extends L-110, L-111 and L-153. *From:* kernel #62, round 23; kernel #101,
+  round 24.
+- **L-231. A registration that opts out is not a no-op when the core's
+  default is "needed unless everyone opts out".** gs-decon's
+  `pm_vt_switch_required(dev, false)` turns the suspend VT switch off on
+  cheetah, because the PM core switches only while its list is empty or one
+  entry requires it. *Check:* for a new opt-out registration in a shared
+  driver, read the core's aggregate rule and list what else registers on the
+  reference phone. Extends L-206. *From:* kernel #116, round 24.
+- **L-232. Before calling a forked guard's behaviour a defect, diff it
+  against the shared original.** dodge's watcher skips disks with a
+  `/run/ufs-ro` marker, which looked like a gap; `initramfs/init` does the
+  same by design. *Check:* `diff` the fork's function against
+  `initramfs/init` before naming a gap. Extends L-134 and C-1. *From:* #111,
+  round 24 (a near miss).
+- **L-233. A device package's workaround for an Omarchy service is checked
+  against Omarchy's package list before it stays device-local.** #74
+  disables `linux-modules-cleanup` for tegu, but the service comes from
+  `omarchy-base.packages` and is enabled by Omarchy's installer, so it likely
+  runs on every phone. *Check:* grep the unit's package in
+  `/usr/share/omarchy/install/omarchy-base.packages`, `enable-services.sh` and
+  `rootfs/packages.omarchy-skip`, then ask for one read on cheetah. Extends
+  L-11 and L-32. *From:* #74, round 24.
+- **L-234. A shared script that branches on `/proc/device-tree` makes its
+  package test host-dependent.** #117's test passes on CI and the laptop,
+  fails in `makepkg check` on the Pixel 9a it's for, and never runs that
+  branch. *Check:* every new DT read in a package script has an override the
+  test uses, and the test runs each branch. *From:* #117, round 24.
+- **L-8. "Nothing changes for cheetah" is checked by building it.** For any
+  change to `bin/omamobile`, `initramfs/`, `rootfs/`, `tools/` or a shared
+  package: build cheetah's images with main's tool and the PR's, in separate
+  scratch output directories, and compare sha256s. *From:* #27 (all six
+  images and every DTB identical).
+- **L-9. A test whose baseline is `origin/main` stops testing once it
+  merges.** Pin the baseline (a commit, or recorded checksums). *From:* #27.
+- **L-10. Parsers of decompiled DTBs must allow labels.** Our DTBs are built
+  with `-@`, so dtc restores labels (`x: node {`) from `__symbols__`; a
+  regex for `^\t\tNAME {` misses a labelled child and passes a DTB with an
+  extra one. *Check:* feed the parser a labelled node and an extra child.
+  *From:* #27.
+- **L-11. Shared root-image changes need their own commit and a Pixel
+  rationale.** Masking `systemd-firstboot`, a coredump drop-in, a
+  `clock-epoch` file or `Wants=time-set.target` in `rootfs/build-inside`
+  changes every device's image. (systemd.special(7): order after
+  `time-set.target`, never pull it in.) *From:* #25.
+- **L-12. Package versions can collide with main.** A PR bumping a package
+  to a version main already shipped (with different contents), plus a
+  dependency `>=` that version, installs without the PR's change. *Check:*
+  `git show origin/main:packages/<p>/version` against the PR's. *From:* #17.
+- **L-13. Device-specific tool stages must refuse other devices.** A raven-only
+  AoC stage (`cycle`, `tzpc`, `pd`, `s2mpu`) accepted on cheetah power-cycles
+  the reference phone's AoC; a stage the PR's own notes say aborts the SoC
+  unless another ran first must enforce that order (a per-boot marker).
+  *From:* #22.
+- **L-32. Know what Omarchy already sets before claiming a userspace
+  default.** `omarchy-settings` ships `/etc/systemd/logind.conf.d` drop-ins
+  (`HandlePowerKey=ignore`), and Omarchy's Hyprland config binds the
+  `switch:` named "Lid Switch" to its clamshell logic. *Check:* `pacman -Ql
+  omarchy omarchy-settings | grep -E 'logind|lid'`, and on the phone
+  `busctl get-property org.freedesktop.login1 /org/freedesktop/login1
+  org.freedesktop.login1.Manager Handle…`. *From:* #29.
+- **L-37. A kernel change that needs a userspace companion merges after
+  it.** A new `SW_LID`, wakeup source, or any node whose default userspace
+  policy is harmful (logind suspending a folded phone) waits for the
+  omarchy-mobile change that handles it, so no build ever has one without
+  the other. *From:* kernel #12 with #29.
+- **L-49. "Disabled" means disabled in the DTB the phone runs: the DTS plus
+  its `DTB_OVERLAYS`.** Cheetah's DTS has `pmic-1` disabled, but its
+  `suspend-pmic-test` overlay enables it, so a new S2MPG12 cell binds on
+  the reference phone. *Check:* grep the device's `DTB_OVERLAYS` for every
+  node a PR's code binds to. *From:* kernel #27 (correction C-2).
+- **L-50. A new MFD cell binds wherever an overlay enables its parent;
+  for cheetah, ask for a read-only boot first.** Code reading said the
+  S2MPG12 regulator driver only reads; one boot with `regulator_summary`,
+  dmesg and `tools/phone-smoke` proves it. *From:* kernel #27.
+- **L-51. Error-propagation fixes in shared drivers change the reference
+  phone's failure modes.** A UFS PHY error ignored before became fatal at
+  boot, reset and resume. *Check:* list which callbacks can now fail, grep
+  cheetah's logs for those errors, and boot it once. *From:* kernel #19,
+  #22.
+- **L-67. A rail a PR touches on another phone may feed something on
+  cheetah.** felix's cover-touch LDO25M/LDO26M are cheetah's main touch
+  rails (and LDO27M/LDO28M its display rails). *Check:* look the rail up in
+  NOTES and the plans, and name those peripherals in the read-only cheetah
+  boot's Expect line. *From:* kernel #27, round 3.
+- **L-87. A new installer refusal fed by bootloader variables is checked
+  against the reference phone's real `getvar all` capture,** line endings
+  included, before it can refuse cheetah. *From:* #27, round 3 (cheetah's ABL
+  lists `partition-size` for all five `_b` partitions, so the refusal holds).
+- **L-110. A shared-driver change confined to one static function is
+  proven cheetah-neutral by comparing the object function by function.**
+  Build the `.o` at base and head with the same config and diff the
+  disassembly per function: for #42 only `exynos2200_usbdrd_phy_exit`
+  changed. Extends L-8. *From:* kernel #42.
+- **L-111. When a shared driver moves constants into per-SoC match data,
+  prove "unchanged on cheetah" with a table and a boot, not an object diff.**
+  Loads through `dc->soc` change the object anyway. *Check:* each new field's
+  gs201 value next to the constant it replaced, each new branch's gs201
+  condition, then one boot with before/after reads of the driver's own
+  counters. *From:* kernel #46.
 - **L-112. A core change that makes a reserved value valid updates the
   binding that reserved it, and names the boards that change.** reboot-mode
   has skipped a zero magic since 2016 and its binding says "non-zero".
@@ -88,224 +353,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
 - **L-414. A counter that proves "nothing happened" needs the mechanism that counts to be on.** #320's partition write counters stay 0 when `queue/iostats` is off, which turned the fail-safe back into the original bug. *Check:* for any "zero means unchanged" signal, find the switch that disables it and ask that "off" counts as "changed"; ask for one read on the phone that the counter rises after a known write and is zero after a fresh boot (C-1). *From:* #320, round 38c, 2026-11-02.
 - **L-415. Whether a check refuses or proceeds depends on where it runs relative to the irreversible step.** A refusal in a post-transaction hook (pacman has already removed the old modules) leaves a half-applied update; the same condition in the pre-transaction preflight costs only a restart. *Check:* when asking a hook to refuse, ask whether what it protects still exists at that point, and move the refusal to the earliest read-only gate when it doesn't. *From:* #320, round 38c, 2026-11-02.
 - **L-416. A packing change is a boot change.** #320's reproducible cpio dropped the `.` entry, so the initramfs root stayed at tmpfs's 1777 instead of 0755; the commit proved byte reproducibility and nothing about what the kernel unpacks. *Check:* diff both archives' listings with modes (`cpio -itv`), root entry included, and ask for one boot with `tools/phone-smoke`. *From:* #320, round 38b, 2026-11-02.
-- **L-446. An upgrade message in a shared package is scoped to the phones
-  whose default changed.** #416's first draft told every phone to "set card
-  = auto"; on the 9a that opts into an experimental speakerphone route, on
-  the 6 Pro into an unverified one, and it printed even when there was no
-  line to change. *Check:* for each `.install` echo that suggests a value,
-  ask which devices it is safe on, and gate the echo on the file's actual
-  content. Extends L-162. *From:* #416 (its review), round 39, 2026-11-03.
-- **L-449. A new "supported state" in one daemon is checked against the
-  units another PR starts at boot.** #373 made "no internet APN" a normal
-  state; #398 starts sit-data at every boot, which then waits 60 s, fails
-  and restarts every 70 s all boot, never reaching the start limit. *Check:*
-  for each new non-error state, list the units that `Requires=` or start the
-  daemon with `Restart=on-failure` and read what each does in that state.
-  Extends L-174. *From:* #373 with #398 (commit review), round 39,
-  2026-11-03.
-- **L-450. A new configuration layer is checked against every reader that
-  parses the file itself.** #416's device defaults sit before
-  `/etc/omamobile/modem-sit.conf`, but omamobile-mmd and the shell read
-  `[network]` and `[data]` from `/etc` directly and would never see a device
-  value there; the layer was limited to `[audio]`. *Check:* `git grep` the
-  config path across packages, list the sections each reader uses, and limit
-  the layer to those, or share the loader. Extends L-233. *From:* #416 (its
-  review), round 39, 2026-11-03.
-- **L-461. A device package that copies the reference phone's boot-time
-  radio start also copies, or answers for, its sleep handling of that
-  radio.** #419 took cheetah's Wi-Fi start, unit and blacklist but not
-  `omamobile-sleep`, which unloads Wi-Fi around s2idle by default and falls
-  back after a failed D3. *Check:* for each radio a device package starts at
-  boot, `git grep` the reference package's `system-sleep/` and `bin/*sleep*`
-  for that radio's modules, and ask for the hook or a sleep result. *From:*
-  #419, round 40, 2026-11-04.
-- **L-462. A change to how one surface reads a shared state is checked
-  against every other surface that shows it, and the reason each gives.**
-  #421 moved the bar to the battery's reported state, while the lock (patch
-  0026) uses charger-online on purpose and promises the bar's glyph.
-  *Check:* `git grep` the state across the shell plugins and the Omarchy
-  patch series, read each one's comment for its reasoning, and name the
-  disagreement the PR creates. *From:* #421, round 40, 2026-11-04.
-- **L-463. A file under `backup=` that another tool also writes gets an
-  upgrade message that doesn't blame the user.** omarchy-apply-lock rewrites
-  `/etc/pam.d/omarchy-lock-fingerprint` without our header, so pacman sees
-  it as edited; #440's first message said "your file was changed". Check the
-  other writer's text on main, not the text a pending PR will give it.
-  *Check:* `git grep` the path across packages and the Omarchy series before
-  writing any `.install` message about it. Extends L-450 and L-446. *From:*
-  #440, round 41, 2026-11-05.
-- **L-464. A quirk keyed on a SoC-level compatible is a reference-phone
-  change, whatever the PR's board.** #202's 32-bit DMA clamp for lynx
-  matched `google,gs201-mali`, the GPU in `gs201.dtsi` that the 7 Pro
-  enables. *Check:* for every `of_device_is_compatible()` or match entry a
-  board PR adds to a shared driver, `git grep '"<compatible>"' arch/` and
-  see which boards carry it. Extends L-206. *From:* kernel #202, round 41,
-  2026-11-05.
-- **L-465. A new controller node in a shared SoC dtsi is checked against
-  every board that includes it, first-light boards too.** #200 added
-  `pinctrl_hsi1` enabled in `zuma.dtsi`, so the 8a's first-light board
-  probes it untested, and gpiolib reads bank registers at registration.
-  *Check:* `git grep -l '"<soc>.dtsi"' arch/arm64/boot/dts/` for each new
-  node without `status`, and ask for `disabled` plus a board enable unless
-  every board has run it. Extends L-206 and L-306. *From:* kernel #200,
-  round 41, 2026-11-05.
-- **L-466. A new call with arguments can make the compiler un-specialise a
-  shared function on the reference phone's path.** #194's one
-  `DISABLE_REPORT` call with a payload changed `tcm_command`'s machine code
-  for every 7 Pro command, though the source path is the same. *Check:* the
-  per-function object diff names each changed function; for one the PR
-  didn't touch, read whether only argument setup changed. Extends L-301.
-  *From:* kernel #194, round 40, 2026-11-04.
-- **L-489. A per-SoC flag keyed on a compatible is checked for that
-  compatible's existence on the base.** Kernel #203 gated AoC behaviour on
-  `google,zuma-aoc`, which nothing on `omamobile` or in an open PR carries; it
-  came from a 132-commit test tree. *Check:* `git grep '"<compatible>"'` on
-  the base and open heads; if absent, hold the PR for the series that adds it.
-  Extends L-149 and L-189. *From:* kernel #203, round 42, 2026-11-07.
-- **L-490. A shared-path change gated on a pointer a probe-time table lookup
-  can clear runs only on boards in that table.** #202's panel-mode path needs
-  `dc->dsim`, which survives only for the 7 Pro's and 9a's DSIM timers
-  (`gs_dsim_rates[]`), so it changed the reference phones and never ran on
-  lynx. *Check:* trace which boards reach each new branch, and ask for the
-  dmesg line proving the board under test took it. Extends L-206 and L-464.
-  *From:* kernel #202, round 42, 2026-11-07.
-- **L-491. A compositor or shell patch that changes what every phone shows is
-  a reference-phone change, even when it fixes a bug the 7 Pro probably has.**
-  #446's rotation hold is untested at 120 Hz. *Check:* for patches to
-  `packages/hyprland`, `quickshell` or the shell, ask for a per-device switch
-  the contributor's device package sets, until the 7 Pro has run it. Extends
-  L-206. *From:* #446, round 42, 2026-11-07.
-- **L-492. A contributor's finding on one device's guard is checked against
-  the same rule on the reference phone.** #372's hold (the latch cleared
-  whatever the unit's result) is what the 7 Pro's `omamobile-modem-start
-  --stopped` does on main, as the script's comment credits. *Check:* open code
-  a guard comment cites ("as on the Pixel 7 Pro"); if the finding applies
-  there, it is a separate cheetah change with its own run. Extends L-444.
-  *From:* #372, round 42, 2026-11-07.
-- **L-493. A "no-op on cheetah" premise is checked against the reference
-  phone's logs, not a plan table, and a runbook's Expect is not a result.** On
-  kernel #116 we said the bootloader leaves MIF at 3172 MHz, from ACPM-PLAN's
-  ECT table and A2's Expect line; the A2 run and all 332 gs-decon probes in
-  `logs/` read 2028 MHz. *Check:* `grep -rh '<driver>.*<rate>' logs/ | sort |
-  uniq -c`, and the plan's dated result rather than its expectation. See C-31.
-  *From:* kernel #116, round 42, 2026-11-07.
-- **L-494. A link constraint one PR documents for a shared C source is checked
-  against every open PR editing that file.** #459 found the no-bootctl
-  initramfs links `reboot-to` against musl without compiler builtins, so the
-  printf family doesn't link, while #403 adds `snprintf` to the same file.
-  *Check:* `gh pr list` for PRs touching the file, grep their heads for
-  `printf`/`strto*`, and build a no-bootctl device's initramfs. Extends L-104
-  and L-423. *From:* #459 with #403, round 42, 2026-11-07.
-- **L-534. A tuning-file change is cheetah-neutral when the file's name is a
-  sensor model only another board's compatible produces.** libcamera picks
-  `<model>.yaml` by the subdev name, which `s5kgn1.c` takes from the match
-  data's `model`. *Check:* the driver's `v4l2_i2c_subdev_set_name` argument,
-  the match table, and `git grep` of the compatible in the gs201 DTs. Extends
-  L-206. *From:* #494, round 44, 2026-11-08.
-- **L-565. An error-path-only fix in a shared driver is cheetah-neutral in
-  behaviour only while that error never happens, and its object still
-  changes.** Kernel #222's one `break` reallocated registers across
-  `s3c64xx_spi_transfer_one` (and moved the readl pool into `runtime_resume`'s
-  last line), and the 7 Pro has three SPI users that chunk in PIO. *Check:*
-  grep `logs/` for the error line the new branch follows (`I/O Error: rx-`: 0
-  in 1000 logs) before calling the change invisible, and let the 7 Pro run
-  record "not exercised" with that count rather than "the fix works". Extends
-  L-51, L-206 and L-440. *From:* kernel #222, round 45, 2026-11-08.
-- **L-566. A doc change we ask for in a shared package's plan is checked for
-  which phone it claims.** On #376 we asked that the 7 Pro's MODEM-PLAN stop
-  saying "a second start isn't supported" once the code changed; the reworded
-  line states the new behaviour as a 7 Pro fact, measured only on the 9a.
-  *Check:* for each sentence a PR changes under `device/<x>/`, find the run on
-  that device that supports it, or ask for "on the <other phone>; not yet run
-  here". Extends L-188 and L-31. *From:* #376, round 45, 2026-11-08.
-- **L-567. A public device package tested next to a private companion is
-  checked for which safety nets live only in the companion.** #222's oriole
-  package installed cleanly, but only alongside a private package carrying the
-  reboot watchdog and a boot check, and `device.conf`'s `PACKAGE=` makes the
-  public one alone the image's device package. *Check:* when a smoke report's
-  package list names a `*-local-*` or private package, ask what it ships, and
-  map each safety file to the public package or to a "not supported yet" line
-  in the README. Extends L-61, L-158 and L-358. *From:* #222, round 45,
-  2026-11-08.
-- **L-568. L-8 runs without touching anyone's build directory.** Copy a kernel
-  output's `arch/arm64/boot/Image`, the device's DTBs,
-  `scripts/dtc/{dtc,fdtoverlay}`, `initramfs.cpio.lz4` and
-  `include/config/kernel.release` (and `initramfs.release`) into a scratch
-  `KERNEL_OUT`, then run `DEVICE=cheetah images` with main's `bin/omamobile`
-  (`git show origin/main:bin/omamobile`) and the PR's from the same worktree.
-  `images` writes only `$KERNEL_OUT/images`, and a stale build is fine for a
-  before/after compare. *Check:* six equal sha256s. Extends L-8 and L-194.
-  *From:* #507, round 45, 2026-11-08.
-- **L-569. A fix that updates every `cmp`-pinned copy of a shared source goes
-  stale when a new package with the same pin merges first, and then it turns
-  main red.** #459 updated seven `reboot-to.c` copies; akita's package, with
-  the same `cmp` against cheetah's file, merged two days later (#456), so #459
-  as it stands fails akita's `test/all` and needs an akita version that #509
-  is about to take. *Check:* each round, for every open PR that edits a file
-  other packages pin, `git grep -l '<pinned path>' origin/main --
-  'packages/*/test/all'` against the PR's file list, and put the missing
-  packages and their next free versions in the merge plan. Extends L-257 and
-  L-426. *From:* #459 with #456 and #509, round 45, 2026-11-08.
-- **L-570. A test kernel for `bin/omamobile push` needs four steps into its
-  `KERNEL_OUT`: `kernel`, `initramfs`, `images` (with `DEVICE=cheetah`) and
-  `modules`.** `push` refuses before any write when one is missing ("holds
-  images for … an unknown device", "build the initramfs first", the missing
-  modules tarball), so a skipped step costs a round trip, not the phone.
-  *Check:* a runbook that hands the human a test kernel lists all four with
-  the same `KERNEL_DIR`/`KERNEL_OUT`, in that order. *From:* the 2026-11-08 7
-  Pro session.
-- **L-606. A shared stop-path fix proven on one phone's unit is checked
-  against the other phone's unit settings.** #372's rfsd hold makes the 9a's
-  modem stop end in `success`, but the 9a's transient unit sends SIGINT to the
-  whole control group, while the 7 Pro's `omamobile-modem.service` uses
-  `KillMode=mixed` with SIGTERM to `unshare`, which issue #532 found doesn't
-  exit. *Check:* for a "now ends in success on both phones" claim, compare
-  `KillMode`, `KillSignal`, `TimeoutStopSec` and the main process of each unit
-  that runs the shared code, and ask for (or do) a stop on each. Extends L-206,
-  L-348 and L-492. *From:* #372 with issue #532, round 46, 2026-11-09.
-- **L-607. "Enabled" read from `systemctl is-enabled`, or from "not masked",
-  is wrong for a unit started by a vendor wants link in one device package
-  and by nothing on the others.** #555's status line did that for a shared
-  unit. *Check:* for a switch over a shared unit, list each device package's
-  `*.target.wants/` links for it, and read `systemctl show -p WantedBy` rather
-  than `is-enabled`. Extends L-137 and L-206. *From:* #555, round 46,
-  2026-11-09.
-- **L-608. A feature split into "opt-in" and "helper" parts is checked for
-  which parts are actually behind the opt-in.** #556's inhibitor waits for
-  `modem-suspend-enable`, but sitd's screen-state reporting, written as M6's
-  helper, runs on every phone with sitd. *Check:* for each new behaviour in
-  the PR, find the condition that gates it in the shipped unit or script, and
-  list the devices it reaches with the opt-in off. Extends L-206 and L-458.
-  *From:* #556, round 46, 2026-11-09.
-- **L-609. A hand copy that one PR's record reveals is checked against the
-  package another open PR ships for that phone.** #514's "Current state"
-  listed an AoC blacklist in `/etc/modprobe.d` on the 8 Pro, while #453's
-  first packaged boot was meant to test the package's own blacklist. *Check:*
-  for each hand-installed file a contributor's notes list on a phone, `git
-  grep` its role (modprobe, UCM, unit) across that author's open package PRs
-  for the device, and add it to that PR's "remove the hand copies" step.
-  Extends L-46. *From:* #453 with #514, round 46, 2026-11-09.
-- **L-610. A stacked draft that carries another open PR's commits inherits
-  that PR's pending reference-phone run, and the review says whose run it
-  is.** Kernel #164's per-function diff showed 24 changed functions in
-  cheetah's `gs201-csis.o` and 16 in `imx386.o`, all from #63 and #103, whose
-  promised 7 Pro capture (10-28) the maintainer still owed. *Check:* map each
-  changed cheetah object to the commit and PR it comes from (patch-id against
-  the open heads), and grep those threads for the promised run before asking
-  the contributor for anything. Extends L-196 and L-480. *From:* kernel #164,
-  round 46, 2026-11-09.
-- **L-611. A consumer-side "re-apply the pins" fix in a shared driver is shown
-  cheetah-neutral through the pinctrl core's early returns, node by node.**
-  For kernel #224, gs201's UFS has no `pinctrl-0`, so `dev->pins` is NULL;
-  gs101 and zuma have "default" only, so the sleep select is `IS_ERR` and the
-  default select hits `p->state == state`. *Check:* the reference phone's node
-  and overlays for `pinctrl-*`, then `pinctrl_bind_pins()` and
-  `pinctrl_select_bound_state()` on the base. Extends L-228. *From:* kernel
-  #224, round 46, 2026-11-09.
-- **L-612. Before planning a contributor's own test of a shared-driver path,
-  check that their board's DT takes it.** Kernel #223's code runs only with
-  `maxim,fg-model`, which on our tree only cheetah and panther have, so the
-  author's Pixel 6 can't exercise it with the public tree. *Check:* `git grep
-  '<property that gates the path>' github/omamobile -- arch/`, and name the
-  phones that can test it. Extends L-490. *From:* kernel #223, round 46,
-  2026-11-09.
