@@ -491,6 +491,17 @@ fi
 om twelve images && [[ $(cd "$K/images" && sha256sum *.img) == "$twelve_sums" ]] || fail "images is deterministic"
 pass "images gives the same bytes on a second run"
 
+# An images dir that is a symbolic link is refused, and the link's target
+# keeps its contents (the wipe must never follow it out of the build tree)
+mkdir -p "$t/images-real" && echo marker > "$t/images-real/marker.txt"
+rm -rf "$K/images" && ln -s "$t/images-real" "$K/images"
+if om twelve images; then fail "images refuses a symbolic-link images dir"; fi
+grep -q "refusing to wipe a symbolic link" "$t/log" || { cat "$t/log"; fail "images names the symbolic link in its refusal"; }
+[[ -f "$t/images-real/marker.txt" ]] || fail "images followed the link and wiped its target"
+[[ $(cat "$t/images-real/marker.txt") == marker ]] || fail "the marker did not survive"
+rm -rf "$K/images" "$t/images-real" && mkdir -p "$K/images"
+pass "images refuses a symbolic-link images dir and leaves its target alone"
+
 # A descriptor that sets none of the zuma keys (SOC_COMPATIBLE, AVB_FOOTERS)
 # gets the same bytes as from the tool before them: cheetah's (gs201) and
 # oriole's (gs101) images must not change. The reference is bin/omamobile
