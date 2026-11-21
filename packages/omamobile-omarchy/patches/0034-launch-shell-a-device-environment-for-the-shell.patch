@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: MIT
+# Shell launch: a device's environment for the shell process alone, from
+# NAME=value lines in /usr/lib/omamobile/shell-env.d/*.conf (a device
+# package ships them; with none, the launch is as before). The OnePlus 7T
+# Pro's Adreno 640 faulted while freedreno rendered the shell through GMEM
+# tiles (the colour cache read just before a render target), Qt lost its GL
+# context every few minutes, and after one burst the home screen and bar
+# stopped drawing for 18 hours: swipes looked dead and the battery stale.
+# With FD_MESA_DEBUG=sysmem for the shell only, 33 minutes of use had no
+# fault (2026-11-20). Setting it for the whole session would move every
+# app off GMEM too. Values are taken literally, never expanded or run.
+#
+# Against Omarchy 4.5.0 (4.5.0-3).
+diff --git i/bin/omarchy-launch-shell w/bin/omarchy-launch-shell
+--- i/bin/omarchy-launch-shell
++++ w/bin/omarchy-launch-shell
+@@ -16,8 +16,11 @@
+ # generation behind that turns the next restart's IPC kill into a crash.
+ run_shell() {
+   local startup_background
++  local -a device_env=()
+   startup_background=$(readlink -f "$HOME/.local/state/omarchy/current/background" 2>/dev/null)
+-  OMARCHY_STARTUP_BACKGROUND="$startup_background" QS_DISABLE_FILE_WATCHER=1 QS_NO_RELOAD_POPUP=1 \
++  mapfile -d '' -t device_env < <(shell_env)
++  env "${device_env[@]}" \
++    OMARCHY_STARTUP_BACKGROUND="$startup_background" QS_DISABLE_FILE_WATCHER=1 QS_NO_RELOAD_POPUP=1 \
+     systemd-cat -t omarchy-shell -- quickshell -n -p "$OMARCHY_PATH/shell" &
+   shell_pid=$!
+ 
+@@ -34,6 +37,23 @@
+   return $status
+ }
+ 
++# A device's environment for the shell alone (Omarchy Mobile): NAME=value
++# lines in /usr/lib/omamobile/shell-env.d/*.conf, read in name order. Blank
++# lines and # comments are skipped, and so is a line whose name isn't a
++# shell variable name. Values are taken literally, never expanded or run.
++# Nothing else in the session sees them: a GPU driver workaround for the
++# shell stays off the apps.
++shell_env() {
++  local file line
++  for file in "${OMARCHY_SHELL_ENV_DIR:-/usr/lib/omamobile/shell-env.d}"/*.conf; do
++    [[ -f $file ]] || continue
++    while IFS= read -r line || [[ -n $line ]]; do
++      [[ $line =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] && printf '%s\0' "$line"
++    done < "$file"
++  done
++  return 0
++}
++
+ # A compositor busy reconfiguring outputs can miss a query without being gone,
+ # and that is when the shell dies.
+ compositor_alive() {
