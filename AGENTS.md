@@ -88,6 +88,7 @@ tools/phone-ssh CMD    -> run anything; stream files with  ssh 'cat > f' < f
 | `tools/usbc-deadman` (+ `usbc-deadman-phone`) | USB-C/charger steps under a dead-man switch; `dump` is read-only |
 | `tools/display-hz` | Read-only refresh-rate measurement from DECON's frame counter |
 | `tools/power-ab` | On-phone A/B battery-drain test (runs detached; the cable is out) |
+| `tools/power-baseline` | On-phone power baseline of #867 (Parts A, B and C), detached, with a report for the device's `Power baseline` issue ([docs/POWER-BASELINE.md](docs/POWER-BASELINE.md)); holds a sleep inhibitor for the run |
 | `tools/bt-uart-test`, `cs35l41-id`, `ff-rumble`, `usf.py` | On-phone probes, streamed with `tools/phone-ssh python3 - < tool` |
 | `tools/aoc-audio-diag` | On-phone AoC playback diagnosis (`tools/phone-ssh 'EP=6 MODES=copy bash -s' < tools/aoc-audio-diag`): plays a short tone under `timeout`, snapshots mailbox IRQs, ring counters, CS35L41 registers and DAPM. `EP=` entry point, `MODES=` copy/mmap, `AOCLOG=1` records the AoC firmware log, `SETUP2=0/1` sets `ep_setup2` |
 | `tools/aoc-amp-diag` | On-phone CS35L41 check (`AMP=` top, bottom or both; `CH=` L, R or LR): a -20 dBFS tone through EP6 in stock's TDM 0 format, with both amplifiers' DAPM widgets and registers dumped mid-tone |
