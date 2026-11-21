@@ -102,6 +102,14 @@ EMERGENCY_NO_SIM = ('000', '08', '110', '118', '119', '999')
 SUBSCRIBERS = 8
 
 
+# A reconnect that comes back IPv6 only is released and tried again this many
+# times in a row, no more. On a network that only ever grants IPv6 for the
+# APN, every try sets the bearer up and releases it, holding sitd's loop each
+# time (an incoming call is presented late meanwhile), so after these the
+# bearer is kept as the network gave it.
+IPV6_ONLY_RELEASES = 3
+
+
 class UnconfirmedRelease(RuntimeError):
     """Fatal call ownership failure; never turn this into a socket reply."""
 
@@ -319,6 +327,12 @@ class Service:
         self.reconnect_tries = 0
         self.reconnecting = False
         self.reconnect_data = False
+        # Setups in a row that came back IPv6 only when IPv4 was asked for:
+        # the first IPV6_ONLY_RELEASES are released and tried again, and
+        # from then on such a bearer is kept, until a setup brings IPv4.
+        self.ipv6_only_grants = 0
+        # Such a bearer was to be released and the release did not go through
+        self.ipv6_release_owed = False
         self.sim = dict(state='unknown')
         self.radio = 'unknown'
         self.current_stage = 'starting'
@@ -565,6 +579,11 @@ class Service:
             # Not resent: the modem's own status (0x4601) or a reboot decides.
             print('Carrier manifest not accepted:', error, flush=True)
 
+    def ipv6_only(self, response_path):
+        """The bearer's setup record says IPv6 only though IPv4 was asked for."""
+        pdp = response_path.read_bytes()[4:5] if response_path.exists() else b''
+        return self.internet_setup['ip_type'] != 'ipv6' and pdp == b'\x02'
+
     def reconnect(self):
         """Set the internet bearer up again once the modem dropped it (listed
         it gone). Waits while a call is live and while not packet-registered;
@@ -573,7 +592,11 @@ class Service:
         is stopped (it holds rmnet's configuration), a bearer the modem still
         lists without a setup record (a setup that timed out) is released
         through its ownership record, a record the modem no longer lists is
-        cleared, and the bearer is set up with start-up's APN and IP type.
+        cleared, and the bearer is set up with start-up's APN and IP type; one
+        that comes back IPv6 only when IPv4 was asked for is released and
+        counts as a failed try, IPV6_ONLY_RELEASES times in a row at most:
+        after that such a bearer is kept as it is, and the next ones too,
+        until a setup brings IPv4 again.
         The route service is started again only if it was running when the
         bearer dropped (mobile data on). A failed try comes back after 15 s,
         doubling to 5 minutes, and every 30 minutes after the twelfth. A try
@@ -598,15 +621,25 @@ class Service:
                 return
             items = data_call.entries(self.client.request(0x0602, timeout=10))
             listed = next((i for i in items if i[2] == cid), None)
+            unreleased = False
             if listed is not None and response_path.exists():
-                print('Internet bearer listed again by the modem; no setup needed', flush=True)
-                self.reconnect_at = None
-                return
+                # One that is still IPv6 only was to be released, and the
+                # release did not go through: it is not the bearer asked for.
+                unreleased = self.ipv6_release_owed and self.ipv6_only(response_path)
+                if not unreleased:
+                    print('Internet bearer listed again by the modem; no setup needed', flush=True)
+                    self.reconnect_at = None
+                    return
             # Mobile data turned on since the drop counts too.
             self.reconnect_data = self.reconnect_data or subprocess.run(
                 ['systemctl', 'is-active', '--quiet', 'omamobile-sit-data.service'], check=False).returncode == 0
             subprocess.run(['systemctl', 'stop', 'omamobile-sit-data.service'], check=False)
-            if listed is not None:
+            if unreleased:
+                print('Internet bearer still listed IPv6 only (its release did not go through); releasing it first',
+                      flush=True)
+                data_call.deactivate(self.client, cid)
+                self.ipv6_release_owed = False
+            elif listed is not None:
                 # Held by the modem with no setup response: a setup that timed
                 # out. Released through its record before a new one.
                 print('Internet bearer listed without its setup; releasing it first', flush=True)
@@ -614,6 +647,9 @@ class Service:
             else:
                 state_path.unlink(missing_ok=True)
                 response_path.unlink(missing_ok=True)
+                # Gone from the modem's list, it holds nothing to release: a
+                # release owed from a try that failed is owed no more.
+                self.ipv6_release_owed = False
             # The network can end the IMS bearer together with the internet
             # one (2026-11-18 02:25, an empty list): its record then names a
             # CID the modem no longer lists, and activate() refused every try
@@ -624,12 +660,33 @@ class Service:
                 print('IMS bearer record cleared: the modem no longer lists CID', data_call.IMS_CID, flush=True)
                 ims_state.unlink()
                 ims_response.unlink(missing_ok=True)
+            kept_ipv6_only = False
             self.reconnecting = True
             try:
                 data_call.activate(self.client, self.internet_setup['apn'],
                                    ip_type=self.internet_setup['ip_type'], on_event=self.event)
             finally:
                 self.reconnecting = False
+            # The network may grant less than asked: on the 9a (2026-11-15) a
+            # reconnect asked for IPv4v6 came back IPv6 only, which the route
+            # service can't use (it needs IPv4), so mobile data stayed down.
+            # Released and tried again, as a failed setup, but not for ever:
+            # see IPV6_ONLY_RELEASES.
+            if self.ipv6_only(response_path):
+                self.ipv6_only_grants += 1
+                if self.ipv6_only_grants <= IPV6_ONLY_RELEASES:
+                    print('Internet bearer came back IPv6 only; releasing it to try again', flush=True)
+                    self.ipv6_release_owed = True
+                    data_call.deactivate(self.client, cid)
+                    self.ipv6_release_owed = False
+                    raise ValueError('the internet bearer came back without IPv4')
+                if self.ipv6_only_grants == IPV6_ONLY_RELEASES + 1:
+                    print('Internet bearer came back IPv6 only', self.ipv6_only_grants,
+                          'times in a row; keeping it as it is, and the next ones, until a setup brings IPv4',
+                          flush=True)
+                kept_ipv6_only = True
+            else:
+                self.ipv6_only_grants = 0
         except (ModemError, TimeoutError, RuntimeError, ValueError, OSError) as error:
             self.reconnect_tries += 1
             # After twelve, every 30 minutes: the record is gone by then, so
@@ -642,7 +699,12 @@ class Service:
         self.reconnect_at = None
         self.reconnect_tries = 0
         print('Internet bearer set up again', flush=True)
-        if self.reconnect_data:
+        if self.reconnect_data and kept_ipv6_only:
+            # The route service needs IPv4: started on this bearer it fails,
+            # and systemd starts it again every 10 s for the rest of the boot.
+            # Mobile data stays wanted, so the next bearer with IPv4 starts it.
+            print('Mobile data not started on an IPv6-only bearer: the route needs IPv4', flush=True)
+        elif self.reconnect_data:
             subprocess.run(['systemctl', 'start', 'omamobile-sit-data.service'], check=False)
         self.publish()
 
