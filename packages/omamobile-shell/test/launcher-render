@@ -91,7 +91,7 @@ def apart(a, b, tol=0): return a["x"] + a["w"] <= b["x"] + tol or b["x"] + b["w"
 ok = not bad and len(geo) == 3
 burst = re.findall(r"burst 10 signals (\d+) rebuilds", text)
 good = burst == ["1"]
-print("%s - %s: ten app changes in a row rebuild the drawer once%s" % ("ok" if good else "not ok", theme, "" if good else ": " + (burst[0] + " rebuilds" if burst else "no burst line")))
+print("%s - %s: ten app changes in one turn of the event loop rebuild the drawer once%s" % ("ok" if good else "not ok", theme, "" if good else ": " + (burst[0] + " rebuilds" if burst else "no burst line")))
 ok = ok and good
 if len(geo) != 3: print("not ok - %s: %d of 3 shots taken" % (theme, len(geo)))
 for l in bad: print("  " + l[:200])
