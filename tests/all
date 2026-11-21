@@ -105,3 +105,5 @@ echo "# tests/build-packages-cache"   # a forced same-version rebuild drops the 
 tests/build-packages-cache
 echo "# tests/mark-slot-b"
 tests/mark-slot-b
+echo "# tests/fetch-ndk"   # the pinned Android NDK's fetch, against a local archive and stand-ins
+tests/fetch-ndk
