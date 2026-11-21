@@ -13,30 +13,52 @@ slot switch, no active, priority, retry or unbootable change, no boot LUN
 change. Both copies of the GPT are rewritten (entries CRC, header CRC),
 the backup first, each read back from the disk before the next step.
 
+sde also holds abl_a, tz_a, aop_a and hyp_a: a GPT on sde that the boot
+chain can't read is an EDL restore, not a trip to fastboot. If a write
+stops between the two copies (the backup written, the primary not), the
+copies differ and status, dump and write refuse; restore puts back the
+bytes of the dump taken before the write, after which write can run again.
+
 Run on the phone as root, streamed:
   tools/phone-ssh 'python3 - status' < device/hotdog/slot-a-mark
   tools/phone-ssh 'python3 - dump' < device/hotdog/slot-a-mark > gpt-sde.tar
   tools/phone-ssh 'python3 - write --sha256 <the dump's sha256>' < device/hotdog/slot-a-mark
+and only after a write that stopped half way:
+  tools/phone-ssh 'cat > /root/gpt-sde.tar' < gpt-sde.tar
+  tools/phone-ssh 'python3 - restore /root/gpt-sde.tar --sha256 <its sha256>' < device/hotdog/slot-a-mark
 status and dump are read-only. write needs the sha256 that dump printed,
-so it runs only against the GPT that was saved, and is never run from a
-service or at boot (AGENTS.md section 1). It makes sde writable for the
-two writes and read-only again on every exit.
+so it runs only against the GPT that was saved; restore needs the same
+sha256, writes only the dump's bytes at the dump's offsets, and only when
+the GPT on the disk is that dump's, or that dump's with boot_a's
+successful bit set. Neither is ever run from a service or at boot
+(AGENTS.md section 1). Both make sde writable for their writes and
+read-only again on every exit.
 """
 import fcntl
 import hashlib
 import io
 import os
+import re
 import struct
 import sys
 import tarfile
 import zlib
 
-DISK = "/dev/sde"
+# Tests only (tests/hotdog-slot-a-mark): a disk image file in place of sde,
+# no root, no device tree check, no block ioctls
+TEST = os.environ.get("SLOT_A_MARK_TEST") == "1"
+DISK = os.environ["SLOT_A_MARK_DISK"] if TEST else "/dev/sde"
 SYSFS = "/sys/class/block/sde"
 NAMES = ("boot_a", "boot_b")
 SUCCESSFUL = 1 << 54
 BLKROSET = 0x125D
 BLKFLSBUF = 0x1261
+# Tests only: stop a write after its first copy, as a failure would
+STOP_AFTER_FIRST = TEST and os.environ.get("SLOT_A_MARK_STOP_AFTER_FIRST") == "1"
+
+
+class GptError(Exception):
+    pass
 
 
 def die(msg):
@@ -51,7 +73,7 @@ def say(msg):
 def read_at(fd, off, n):
     data = os.pread(fd, n, off)
     if len(data) != n:
-        die(f"short read at {off}")
+        raise GptError(f"short read at {off}")
     return data
 
 
@@ -61,22 +83,29 @@ def header_crc(hdr, size):
     return zlib.crc32(bytes(h)) & 0xFFFFFFFF
 
 
-def load(fd, bs, lba):
-    """One GPT copy: its header (block) and its entry array, both checked."""
-    blk = read_at(fd, lba * bs, bs)
+def parse(blk, ents_fn, lba):
+    """One GPT copy from its header block; ents_fn(ent_lba, size) gives its
+    entry array. Both checked: signature, place, header CRC, entries CRC."""
     if blk[:8] != b"EFI PART":
-        die(f"no GPT header at LBA {lba}")
+        raise GptError(f"no GPT header at LBA {lba}")
     hsize, hcrc, _, my_lba, alt_lba = struct.unpack_from("<IIIQQ", blk, 12)
     ent_lba, n, esize, ecrc = struct.unpack_from("<QIII", blk, 72)
     if my_lba != lba:
-        die(f"header at LBA {lba} says it is at {my_lba}")
-    if header_crc(blk, hsize) != hcrc:
-        die(f"header CRC wrong at LBA {lba}")
-    ents = read_at(fd, ent_lba * bs, n * esize)
+        raise GptError(f"header at LBA {lba} says it is at {my_lba}")
+    if not 92 <= hsize <= len(blk) or header_crc(blk, hsize) != hcrc:
+        raise GptError(f"header CRC wrong at LBA {lba}")
+    if esize != 128 or not 0 < n <= 1024:
+        raise GptError(f"unexpected entry array at LBA {lba}: {n} x {esize}")
+    ents = ents_fn(ent_lba, n * esize)
     if zlib.crc32(ents) & 0xFFFFFFFF != ecrc:
-        die(f"entry array CRC wrong for the header at LBA {lba}")
+        raise GptError(f"entry array CRC wrong for the header at LBA {lba}")
     return {"lba": lba, "alt": alt_lba, "hdr": blk, "hsize": hsize,
             "ent_lba": ent_lba, "n": n, "esize": esize, "ents": ents}
+
+
+def load(fd, bs, lba):
+    """One GPT copy on the disk: its header (block) and its entry array."""
+    return parse(read_at(fd, lba * bs, bs), lambda e, n: read_at(fd, e * bs, n), lba)
 
 
 def entries(g):
@@ -92,18 +121,37 @@ def flags(attr):
             f"successful {(a >> 6) & 1} unbootable {(a >> 7) & 1}")
 
 
+def flush(fd):
+    if not TEST:
+        fcntl.ioctl(fd, BLKFLSBUF)  # read the disk, not a cached copy
+
+
+def block_size():
+    if TEST:
+        return int(os.environ.get("SLOT_A_MARK_BS", "4096"))
+    return int(open(f"{SYSFS}/queue/logical_block_size").read())
+
+
 def open_disk(mode=os.O_RDONLY):
-    bs = int(open(f"{SYSFS}/queue/logical_block_size").read())
+    bs = block_size()
     fd = os.open(DISK, mode | os.O_CLOEXEC)
-    fcntl.ioctl(fd, BLKFLSBUF)  # read the disk, not a cached copy
+    flush(fd)
     return fd, bs
 
 
+def last_lba(fd, bs):
+    return os.lseek(fd, 0, os.SEEK_END) // bs - 1
+
+
 def both(fd, bs):
-    p = load(fd, bs, 1)
-    b = load(fd, bs, p["alt"])
+    try:
+        p = load(fd, bs, 1)
+        b = load(fd, bs, p["alt"])
+    except GptError as e:
+        die(f"{e}: stop, nothing written (status shows both copies; restore puts a dump back)")
     if p["ents"] != b["ents"]:
-        die("the primary and backup entry arrays differ: stop, nothing written")
+        die("the primary and backup entry arrays differ: stop, nothing written "
+            "(status shows both copies; restore puts a dump back)")
     return p, b
 
 
@@ -112,23 +160,49 @@ def region(g, bs):
     return [(g["lba"] * bs, g["hdr"]), (g["ent_lba"] * bs, g["ents"])]
 
 
-def snapshot(fd, bs, p, b):
-    """The exact bytes write would touch, as one sha256."""
+def snapshot_of(regions):
     h = hashlib.sha256()
-    for off, data in region(p, bs) + region(b, bs):
+    for off, data in regions:
         h.update(struct.pack("<Q", off) + data)
     return h.hexdigest()
 
 
+def snapshot(fd, bs, p, b):
+    """The exact bytes write would touch, as one sha256."""
+    return snapshot_of(region(p, bs) + region(b, bs))
+
+
+def slot_flags(g):
+    return {name: attr for _, name, attr in entries(g) if name in NAMES}
+
+
 def status():
     fd, bs = open_disk()
-    p, b = both(fd, bs)
-    for _, name, attr in entries(p):
-        if name in NAMES:
+    copies = {}
+    for tag in ("primary", "backup"):
+        try:
+            # the backup where the primary says, or else at the disk's end
+            lba = 1 if tag == "primary" else (copies["primary"] or {}).get("alt", last_lba(fd, bs))
+            copies[tag] = load(fd, bs, lba)
+        except GptError as e:
+            copies[tag] = None
+            print(f"{tag}: unreadable: {e}")
+    p, b = copies["primary"], copies["backup"]
+    if p and b and p["ents"] == b["ents"]:
+        for name, attr in slot_flags(p).items():
             print(f"{name}: {flags(attr)}")
-    print(f"GPT: primary LBA 1, backup LBA {p['alt']}, entries at {p['ent_lba']} and "
-          f"{b['ent_lba']}, block {bs}, both CRCs valid, copies identical")
-    print(f"sha256 {snapshot(fd, bs, p, b)}")
+        print(f"GPT: primary LBA 1, backup LBA {p['alt']}, entries at {p['ent_lba']} and "
+              f"{b['ent_lba']}, block {bs}, both CRCs valid, copies identical")
+        print(f"sha256 {snapshot(fd, bs, p, b)}")
+        return
+    for tag, g in (("primary", p), ("backup", b)):
+        if g:
+            for name, attr in slot_flags(g).items():
+                print(f"{tag} {name}: {flags(attr)}")
+    print("GPT: the two copies differ or one is unreadable (a write that stopped half way?). "
+          "Put the dump taken before the write back with restore, then run status, dump and "
+          "write again; keep the phone running until then")
+    sys.exit(2)
 
 
 def dump():
@@ -158,24 +232,17 @@ def patched(g, idx, bs):
     return bytes(hdr), bytes(ents)
 
 
-def write(expect):
-    fd, bs = open_disk()
-    p, b = both(fd, bs)
-    if snapshot(fd, bs, p, b) != expect:
-        die("the GPT differs from the dump whose sha256 was given: dump again first")
-    idx = [i for i, name, _ in entries(p) if name == "boot_a"]
+def boot_a_index(g):
+    idx = [i for i, name, _ in entries(g) if name == "boot_a"]
     if len(idx) != 1:
         die("boot_a not found exactly once")
-    idx = idx[0]
-    before = {name: attr for _, name, attr in entries(p) if name in NAMES}
-    if before["boot_a"] & SUCCESSFUL:
-        say(f"boot_a is already successful: {flags(before['boot_a'])}; nothing to do")
-        return
-    if not (before["boot_a"] >> 50) & 1:
-        die("boot_a is not the active slot: stop (this tool never switches slots)")
-    os.close(fd)
+    return idx[0]
 
-    ro = open(f"{SYSFS}/ro").read().strip()
+
+def writable(copies, bs, what):
+    """Write each (gpt, header, entries) in order, each read back before the
+    next; sde writable only for this, read-only again on every exit."""
+    ro = "0" if TEST else open(f"{SYSFS}/ro").read().strip()
     wfd = None
     try:
         if ro == "1":
@@ -183,16 +250,20 @@ def write(expect):
             fcntl.ioctl(rfd, BLKROSET, struct.pack("i", 0))
             os.close(rfd)
         wfd = os.open(DISK, os.O_RDWR | os.O_CLOEXEC | os.O_SYNC)
-        for g in (b, p):  # backup first: a primary that fails leaves a good backup
-            hdr, ents = patched(g, idx, bs)
-            os.pwrite(wfd, ents, g["ent_lba"] * bs)
-            os.pwrite(wfd, hdr, g["lba"] * bs)
+        for n, (lba, ent_lba, hdr, ents) in enumerate(copies):
+            os.pwrite(wfd, ents, ent_lba * bs)
+            os.pwrite(wfd, hdr, lba * bs)
             os.fsync(wfd)
-            fcntl.ioctl(wfd, BLKFLSBUF)
-            back = load(wfd, bs, g["lba"])
+            flush(wfd)
+            try:
+                back = load(wfd, bs, lba)
+            except GptError as e:
+                die(f"read-back of the copy at LBA {lba}: {e} ({what})")
             if back["hdr"] != hdr or back["ents"] != ents:
-                die(f"read-back of the copy at LBA {g['lba']} differs (sha256 before: {expect})")
-            say(f"copy at LBA {g['lba']} written and read back")
+                die(f"read-back of the copy at LBA {lba} differs ({what})")
+            say(f"copy at LBA {lba} written and read back")
+            if STOP_AFTER_FIRST and n == 0:
+                die("stopped after the first copy (test)")
     finally:
         if wfd is not None:
             os.close(wfd)
@@ -202,24 +273,116 @@ def write(expect):
             os.close(rfd)
             say("sde read-only again")
 
+
+def write(expect):
     fd, bs = open_disk()
-    p2, _ = both(fd, bs)
-    after = {name: attr for _, name, attr in entries(p2) if name in NAMES}
+    p, b = both(fd, bs)
+    if snapshot(fd, bs, p, b) != expect:
+        die("the GPT differs from the dump whose sha256 was given: dump again first")
+    idx = boot_a_index(p)
+    before = slot_flags(p)
+    if before["boot_a"] & SUCCESSFUL:
+        say(f"boot_a is already successful: {flags(before['boot_a'])}; nothing to do")
+        return
+    if not (before["boot_a"] >> 50) & 1:
+        die("boot_a is not the active slot: stop (this tool never switches slots)")
+    os.close(fd)
+
+    # backup first: a primary that fails leaves a good primary and a marked
+    # backup, which status shows and restore undoes
+    plan = []
+    for g in (b, p):
+        hdr, ents = patched(g, idx, bs)
+        plan.append((g["lba"], g["ent_lba"], hdr, ents))
+    writable(plan, bs, f"sha256 before: {expect}; restore the dump to undo")
+
+    fd, bs = open_disk()
+    p2, b2 = both(fd, bs)
+    after = slot_flags(p2)
     for name in NAMES:
         changed = before[name] ^ after[name]
         want = SUCCESSFUL if name == "boot_a" else 0
         if changed != want:
             die(f"{name}: unexpected change {changed:#x}")
         print(f"{name}: {flags(before[name])} -> {flags(after[name])}")
-    print(f"sha256 {snapshot(fd, bs, p2, _)}")
+    print(f"sha256 {snapshot(fd, bs, p2, b2)}")
+
+
+def read_dump(path, bs):
+    """The four regions of a dump, checked as GPT copies, in dump order."""
+    found = {}
+    with tarfile.open(path, mode="r:") as tar:
+        for m in tar.getmembers():
+            r = re.fullmatch(r"sde-(primary|backup)-(header|entries)-at-(\d+)\.bin", m.name)
+            if not m.isfile() or not r or (r[1], r[2]) in found:
+                die(f"{path}: unexpected member {m.name!r}: not a dump of this tool")
+            found[(r[1], r[2])] = (int(r[3]), tar.extractfile(m).read())
+    if len(found) != 4:
+        die(f"{path}: needs both copies' header and entries, has {len(found)} parts")
+    copies = {}
+    for tag in ("primary", "backup"):
+        (hoff, hdr), (eoff, ents) = found[(tag, "header")], found[(tag, "entries")]
+        if hoff % bs or eoff % bs or len(hdr) != bs:
+            die(f"{path}: the {tag} copy does not fit {bs}-byte blocks")
+        try:
+            g = parse(hdr, lambda e, n: ents if (e * bs, n) == (eoff, len(ents)) else b"", hoff // bs)
+        except GptError as e:
+            die(f"{path}: the {tag} copy is not a valid GPT copy: {e}")
+        copies[tag] = g
+    p, b = copies["primary"], copies["backup"]
+    if p["lba"] != 1 or p["alt"] != b["lba"] or b["alt"] != 1 or p["ents"] != b["ents"]:
+        die(f"{path}: its two copies do not belong together")
+    return p, b
+
+
+def restore(path, expect):
+    fd, bs = open_disk()
+    p, b = read_dump(path, bs)
+    if snapshot_of(region(p, bs) + region(b, bs)) != expect:
+        die(f"{path}'s sha256 is not the one given: check which dump this is")
+    if b["lba"] != last_lba(fd, bs):
+        die(f"the dump's backup copy is at LBA {b['lba']}, this disk ends at {last_lba(fd, bs)}: not this disk")
+    # The disk's copies, as far as they read, must be the dump's GPT, or the
+    # dump's GPT with boot_a's successful bit set: the two states a write
+    # from this dump can leave. Anything else is not this dump's disk.
+    idx = boot_a_index(p)
+    _, marked = patched(p, idx, bs)
+    readable = 0
+    for tag, lba in (("primary", 1), ("backup", b["lba"])):
+        try:
+            g = load(fd, bs, lba)
+        except GptError as e:
+            say(f"disk {tag}: unreadable ({e}); the dump's bytes replace it")
+            continue
+        readable += 1
+        if g["ents"] == p["ents"]:
+            say(f"disk {tag}: the dump's entries")
+        elif g["ents"] == marked:
+            say(f"disk {tag}: the dump's entries with boot_a marked successful")
+        else:
+            die(f"disk {tag} holds other entries than the dump's (beyond boot_a's mark): stop, nothing written")
+    if readable == 0:
+        say("neither copy on the disk reads: restoring both from the dump")
+    os.close(fd)
+
+    writable([(g["lba"], g["ent_lba"], g["hdr"], g["ents"]) for g in (b, p)], bs,
+             f"restoring {path}")
+    fd, bs = open_disk()
+    p2, b2 = both(fd, bs)
+    if snapshot(fd, bs, p2, b2) != expect:
+        die("after the restore the GPT is not the dump's")
+    for name, attr in slot_flags(p2).items():
+        print(f"{name}: {flags(attr)}")
+    print(f"restored; sha256 {expect}")
 
 
 def main():
-    if os.geteuid() != 0:
-        die("run as root")
-    compat = open("/proc/device-tree/compatible", "rb").read().split(b"\0")
-    if b"oneplus,hotdog" not in compat:
-        die("not a OnePlus 7T Pro")
+    if not TEST:
+        if os.geteuid() != 0:
+            die("run as root")
+        compat = open("/proc/device-tree/compatible", "rb").read().split(b"\0")
+        if b"oneplus,hotdog" not in compat:
+            die("not a OnePlus 7T Pro")
     args = sys.argv[1:]
     if args == ["status"]:
         status()
@@ -227,8 +390,10 @@ def main():
         dump()
     elif len(args) == 3 and args[:2] == ["write", "--sha256"]:
         write(args[2])
+    elif len(args) == 4 and args[0] == "restore" and args[2] == "--sha256":
+        restore(args[1], args[3])
     else:
-        die("usage: status | dump | write --sha256 <dump's sha256>")
+        die("usage: status | dump | write --sha256 <dump's sha256> | restore DUMP.tar --sha256 <its sha256>")
 
 
 main()
