@@ -9,6 +9,21 @@ Sources:
 - `U/`: upstream Linux v7.0, `arch/arm64/boot/dts/exynos/google/gs101*.dts(i)`.
 - `P/`: postmarketOS pmaports [`device/testing/device-google-oriole`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/device-google-oriole), [`soc-google-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/soc-google-gs101) and [`linux-postmarketos-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/linux-postmarketos-gs101) (7.0.6), which builds [gs101-mainline/linux @ d28cfa42](https://github.com/gs101-mainline/linux/tree/d28cfa4275b95e93f4b7a1e743de31b723bd21b8).
 
+## 2026-11-10: rear torch on the integration kernel
+
+[V, Pixel 6] On `7.3.0-rc6-oriole-hsi1-late-dev0-g4bd35d34abb9-dirty`,
+a private staging helper supplied the LED node to the LM3644 driver.
+The rear light visibly turned on and off. The shell's existing
+`toggleTile` action, invoked through IPC, took `white:torch` from
+brightness 0 to 2 and back to 0. The shell reported Off and the hardware
+enable line was low before the fallback timer fired.
+
+The released kernel has no Pixel 6 torch node. The proposed node in
+[kernel #242](https://github.com/derekross/linux-omarchy-mobile/pull/242)
+is disabled. Testing the public configuration requires an Oriole enable
+overlay, which still needs to be written, and an attended pulse after
+kernel #242 merges.
+
 ## 2026-11-08: offline audit of omitted startup safeguards
 
 [V, recovered private checker and unit] The companion's boot check is gated

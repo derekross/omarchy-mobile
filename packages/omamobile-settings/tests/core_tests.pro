@@ -5,5 +5,5 @@ TARGET = settings-core-tests
 TEMPLATE = app
 INCLUDEPATH += ../app
 SOURCES += core_tests.cpp ../app/actionrunner.cpp ../app/backend.cpp ../app/deviceinfocontroller.cpp
-HEADERS += ../app/actionrunner.h ../app/backend.h ../app/deviceinfocontroller.h
+HEADERS += ../app/actionrunner.h ../app/backend.h ../app/deviceinfocontroller.h home_guard.h
 RESOURCES += ../app/resources.qrc

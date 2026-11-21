@@ -3,6 +3,7 @@
 #include "actionrunner.h"
 #include "backend.h"
 #include "deviceinfocontroller.h"
+#include "home_guard.h"
 #include <QtTest>
 #include <QQmlComponent>
 #include <memory>

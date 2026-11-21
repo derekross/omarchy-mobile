@@ -13,6 +13,29 @@ hash/build ID; this dirty release is not a published kernel package.
 `[V]` marks verified observations; `[I]` marks an inference still to test.
 Raw captures, recordings, backups and vendor files remain off repository.
 
+## 2026-11-20: Wi-Fi power save
+
+Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, the daily
+bring-up kernel (brcmfmac loaded as a bring-up module). Omarchy 4.5 on the palmtop, whose
+`/etc/NetworkManager/conf.d/omarchy-wifi-powersave.conf` sets
+`wifi.powersave = 2` (off); Omarchy 4.0.6 ships the same.
+
+- [V] **Drain, screen off.** The modem up, the cable in with the charger's
+  buck off, signal -55 dBm, power save switched with `iw dev wlan0 set
+  power_save`, six alternating steps, each a 240 s mean of `current_now`:
+  off 339, 319 and 324 mA; on 298, 296 and 297 mA. About 30 mA, and every
+  "on" step was below every "off" step. The Wi-Fi interrupt rate was the same
+  in both (206 to 208 a second).
+- [V] **Latency.** 200 pings a second apart to the gateway in each mode, none
+  lost: 2.0/5.5/51 ms (min/avg/max) with power save off, 1.6/6.3/55 ms with
+  it on.
+- [I] The same file name and value as the Pixel 8 Pro's package (#836) give
+  the same result through NetworkManager; the steps above set it with `iw`,
+  and the palmtop, with a file of that value in that place under another
+  name, read `Power save: on` before the steps.
+- Not tested: a sleep with power save on (every recorded 9a sleep ran with it
+  off), a weak signal, and a call over Wi-Fi.
+
 ## 2026-11-08: swap on zram
 
 Kernel `7.3.0-rc6-omamobile-push1-ge8d722982099`, a local build, with the

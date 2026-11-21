@@ -198,7 +198,7 @@ fi
 H=$PKG/bin/has-answers
 placeholder() {   # as rootfs/placeholders makes it: comments, then spaces to 4096 bytes
   { printf '# Omarchy Mobile: the place for %s, kept by the release image.\n# Left as it is, it holds no answers.\n' "$1"
-    printf '#%*s\n' 4000 ''; } | head -c 4095; printf '\n'
+    printf '#%*s\n' 4000 ''; } | { head -c 4095; cat >/dev/null; }; printf '\n'
 }
 placeholder /etc/omamobile/firstboot.conf > "$t/ph"
 [[ $(stat -c %s "$t/ph") == 4096 ]] || fail "the test's placeholder is 4096 bytes"
