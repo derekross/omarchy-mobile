@@ -110,10 +110,17 @@ What husky's side lacks [V unless marked]:
 
 ## 4. Gates for every stage
 
-- One stage per go-ahead from @derekross, attended, phone on the USB cable, slot B's tries read and refilled
-  first (`tools/slotb-count.sh`, read-only).
+- One stage per go-ahead from @derekross, attended, phone on the USB cable. Before each stage read
+  `slot-retry-count:b` in the bootloader, and when fewer than two tries are left refill slot B to 3 from there:
+  `fastboot -s <serial> set_active b`, as in [SUSPEND-PLAN](SUSPEND-PLAN.md) and [GNSS-PLAN](GNSS-PLAN.md).
 - Read-only first. A registry load happens at most once per AoC boot: the AoC probes its sensors only then, and a
   failed probe stays failed until the AoC restarts, which means a reboot [V: cheetah AOC-PLAN C6b to C6d].
+- The proxy stays out of the boot until S4 has passed: `omamobile-sensors` is not installed yet, or
+  `omamobile-sensor-proxy` is masked (`systemctl mask omamobile-sensor-proxy`). The proxy `Requires=`
+  `omamobile-aoc.service` and `omamobile-sensors` ships its own wants link [V: `packages/omamobile-sensors/install`],
+  so once the device package has that alias (section 2, item 3) and `omamobile-sensors` is installed, the proxy
+  loads the registry at every boot. S3 does one `RegistryGet` with no load and S4 makes the one attended load, so
+  both need the proxy masked or not installed.
 - Never start the AoC twice. On the 7 Pro a second firmware write took it down until a reboot [V: C6c]. Always
   start it through the unit.
 - No `rmmod` of AoC modules, no `devmem`, no PMU or AoC register reads from user space [V: cheetah AOC-PLAN; husky
@@ -131,17 +138,25 @@ What husky's side lacks [V unless marked]:
   from the owner's factory image on the PC; the stock rails read from its dtbo. Results are in section 1.
 - **S1, read-only on the published kernel (done 2026-11-18).** `/chosen/plat` reads CDT 0x26100. Nothing else
   can be read before an AoC kernel.
-- **S2, rails, read-only.** After `pmic-2` is enabled for GNSS (GNSS-PLAN stage 3) or a sensors overlay: read
-  S2MPG15 `L5S_CTRL` (0x33) and `L7S_CTRL` (0x35) through the regmap debugfs, after a cold boot and after a warm
-  reboot, before the 30 s regulator cleanup and after it. Settles whether the bootloader leaves them on.
+- **S2, rails, read-only.** After `pmic-2` is enabled for GNSS (GNSS-PLAN stage 3) or by an overlay that enables
+  it and nothing else: read S2MPG15 `L5S_CTRL` (0x33) and `L7S_CTRL` (0x35) through the regmap debugfs, after a
+  cold boot and after a warm reboot, before the 30 s regulator cleanup and after it. Settles whether the bootloader
+  leaves them on. The read needs only `pmic-2` enabled: the sub-PMIC's regmap already allows reads of both
+  registers whether or not the device tree describes the rails [V: `drivers/mfd/sec-acpm.c`,
+  `s2mpg15_regmap_config_pmic`]. An overlay that describes `ldo5s` and `ldo7s` just to read them is not read-only:
+  a described rail with no consumer is switched off by the regulator core about 30 s into the boot [V:
+  `drivers/regulator/core.c`, `regulator_late_cleanup`]. So the two rails stay undescribed until the AoC node takes
+  them as supplies; the cleanup acts only on registered regulators, and the S2MPG15 driver registers only the
+  rails the device tree describes [V: `drivers/regulator/s2mps11.c`, `s2mpg14_regulator_is_described`].
 - **S3, the AoC test kernel, read-only.** On a kernel with Lef's zuma AoC: the AoC's services list includes
   `com.google.usf` (94 services expected on CP3A firmware), `/dev/acd-com.google.usf` and its `.non_wake_up` twin
   exist, and one `RegistryGet("/")` through `omamobile-usf`, with no load. Then sound still plays.
-- **S4, one registry load.** Rails on (and cycled if section 3 says so), then `omamobile-usf` loads the agreed
-  registry once, with CDT 0x26100. Pass: the sensor list holds the ICM45631 accelerometer and gyroscope, the
-  TMD3719 light and proximity, and the fused compass; touch still works; sound still plays. Fail or a partial
-  list: stop, reboot, report.
-- **S5, the proxy and auto-rotate.** `omamobile-sensors` with the alias and the start-script wait. Pass:
+- **S4, one registry load.** Proxy masked or not installed (section 4). Rails on (and cycled if section 3 says
+  so), then `omamobile-usf` loads the agreed registry once, with CDT 0x26100. Pass: the sensor list holds the
+  ICM45631 accelerometer and gyroscope, the TMD3719 light and proximity, and the fused compass; touch still works;
+  sound still plays. Fail or a partial list: stop, reboot, report.
+- **S5, the proxy and auto-rotate.** `omamobile-sensors` with the alias and the start-script wait, and the proxy
+  unmasked (`systemctl unmask omamobile-sensor-proxy`) if it was masked. Pass:
   `monitor-sensor` shows orientation, light and proximity changing as the phone turns and is covered; the rotation
   tile turns the display and the touch transform together (upright, left, right, upside down), with axes checked
   against the `-1 -2 3` transform; the gyroscope stream's reported rate matches what arrives.
@@ -151,8 +166,10 @@ What husky's side lacks [V unless marked]:
 ## 6. Stop at once
 
 An empty or partial physical sensor list after a load; any USF error; touch dead or doubled after a load; sound
-gone; the AoC offline; a reboot or a hang. The only recovery is a reboot. Before the next boot, disable the proxy
-(`systemctl disable omamobile-sensor-proxy`) and leave the registry unloaded until the cause is read.
+gone; the AoC offline; a reboot or a hang. The only recovery is a reboot. Before the next boot, mask the proxy
+(`systemctl mask omamobile-sensor-proxy`: `omamobile-sensors` ships its own wants link, which `disable` leaves in
+place, so the next boot would start the proxy and load the registry again) and leave the registry unloaded until
+the cause is read.
 
 ## 7. Still unknown
 
