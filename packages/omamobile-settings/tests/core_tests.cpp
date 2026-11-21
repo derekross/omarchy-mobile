@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Marsel Nenaj
+#include "actionrunner.h"
 #include "backend.h"
 #include "deviceinfocontroller.h"
-#include "actionrunner.h"
 #include "home_guard.h"
 #include <QtTest>
 #include <QQmlComponent>
@@ -32,22 +32,22 @@ private slots:
     void probeShowsTheBatteryRowOnlyWhenTheBackendSaysAvailable() {
         Backend on;
         on.setBackendDir(stubs("on"));
-        QCOMPARE(on.rows().size(), 2);
-        QTRY_COMPARE(on.rows().size(), 3);
+        QCOMPARE(on.rows().size(), 3);
+        QTRY_COMPARE(on.rows().size(), 4);
         Backend off;
         off.setBackendDir(stubs("off"));
         off.setToolAvailable("charge", true);
-        QTRY_COMPARE(off.rows().size(), 2); // the probe's answer clears it
+        QTRY_COMPARE(off.rows().size(), 3); // the probe's answer clears it
     }
     void navigationRejectsUnknownAndHiddenActions() {
         Backend backend;
         backend.setBackendDir(stubs("off"));
         QVERIFY(backend.catalogProblems().isEmpty());
-        QCOMPARE(backend.rows().size(), 2); // the Battery row waits for the charge backend, absent here
+        QCOMPARE(backend.rows().size(), 3); // the Battery row waits for the charge backend, absent here
         backend.setToolAvailable("charge", true);
-        QCOMPARE(backend.rows().size(), 3);
+        QCOMPARE(backend.rows().size(), 4);
         backend.setToolAvailable("charge", false);
-        QCOMPARE(backend.rows().size(), 2);
+        QCOMPARE(backend.rows().size(), 3);
         QVERIFY(!backend.navigate("recording"));
         backend.activate("arbitrary-command");
         QCOMPARE(backend.page(), QString("root"));
@@ -134,6 +134,97 @@ private slots:
         QVERIFY(page->property("status").toString().startsWith("Stops charging at this level"));
         QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"available", false}}));
         QCOMPARE(page->property("status").toString(), QString("Settings cannot set a charge limit on this phone."));
+    }
+    void pinPageGoesBackToRoot() {
+        Backend backend;
+        backend.setBackendDir(stubs("off"));
+        QVERIFY(backend.navigate("pin"));
+        QCOMPARE(backend.page(), QString("pin"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("root"));
+    }
+    // The PIN change finishes whether or not its page is still there: leaving the page while the stand-in for the
+    // backend is still running (it hangs for a moment after reading its input), nobody listens for the result, and
+    // the page that is opened again finds the outcome in the runner, once. A status request, which every page
+    // instance makes, is a different request: it neither counts as the change nor takes its result.
+    void aPinResultOutlivesThePage() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QFile f(dir.filePath("pin.sh"));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("#!/bin/bash\ncase $1 in\nstatus) printf '{\"type\":\"pin\",\"hasPassword\":true}\\n' ;;\n"
+                "change) read -r a; read -r b; read -r c; [[ $a == 5061 && $b == 7384 && $c == 7384 ]] || { printf '{\"error\":\"no input\"}\\n'; exit 0; }\n"
+                "sleep 1.2; printf '{\"changed\":true}\\n' ;;\nesac\n");
+        f.close();
+        ActionRunner runner;
+        runner.setBackendDir(dir.path());
+        QSignalSpy spy(&runner, &ActionRunner::finished);
+        QVERIFY(!runner.pending("pin", "change"));
+        runner.run("pin", {"change"}, "5061\n7384\n7384\n");
+        QVERIFY(runner.pending("pin", "change"));
+        // the page is left here: there is no listener, and the script is still running. The next page asks for the status.
+        QVERIFY(runner.takeLastResult("pin", "change").isEmpty());
+        runner.run("pin", {"status"});
+        QTRY_VERIFY_WITH_TIMEOUT(!runner.pending("pin", "status"), 5000);
+        QVERIFY(runner.pending("pin", "change"));
+        QCOMPARE(runner.takeLastResult("pin", "status").value("type").toString(), QString("pin"));
+        QVERIFY(runner.takeLastResult("pin", "change").isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(!runner.pending("pin", "change"), 5000);
+        const QVariantMap r = runner.takeLastResult("pin", "change");
+        QCOMPARE(r.value("changed").toBool(), true);
+        QVERIFY(runner.takeLastResult("pin", "change").isEmpty());
+        // the signal names the request: status first, change last
+        QTRY_COMPARE(spy.count(), 2);
+        QCOMPARE(spy.at(0).at(3).toString(), QString("status"));
+        QCOMPARE(spy.at(1).at(3).toString(), QString("change"));
+    }
+    void inputIsForThePinToolOnly() {
+        QTemporaryDir dir;
+        ActionRunner runner;
+        runner.setBackendDir(dir.path());
+        QSignalSpy spy(&runner, &ActionRunner::finished);
+        runner.run("display", {"get"}, "secret\n");
+        QTRY_COMPARE(spy.count(), 1);
+        QCOMPARE(spy.at(0).at(1).toMap().value("error").toString(), QString("unexpected input"));
+        QVERIFY(!runner.pending("display", "get"));
+    }
+    // A backend that is not there ends the request and clears it.
+    void aMissingBackendIsNotLeftPending() {
+        QTemporaryDir dir;
+        ActionRunner runner;
+        runner.setBackendDir(dir.path());
+        QSignalSpy spy(&runner, &ActionRunner::finished);
+        runner.run("pin", {"status"});
+        QVERIFY(runner.pending("pin", "status"));
+        QTRY_COMPARE(spy.count(), 1);
+        QVERIFY(!runner.pending("pin", "status"));
+        QVERIFY(spy.at(0).at(1).toMap().contains("error"));
+    }
+    // What bash would read from the environment before the script runs is not read: BASH_ENV names a file that
+    // would leave a marker, and the PATH the script sees is the system's.
+    void theBackendDoesNotReadTheEnvironment() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString marker = dir.filePath("marker");
+        QFile e(dir.filePath("env.sh"));
+        QVERIFY(e.open(QIODevice::WriteOnly));
+        e.write(("touch '" + marker + "'\n").toUtf8());
+        e.close();
+        QFile f(dir.filePath("pin.sh"));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("#!/bin/bash\nprintf '{\"path\":\"%s\"}\\n' \"$PATH\"\n");
+        f.close();
+        const QByteArray oldPath = qgetenv("PATH");
+        struct Restore { QByteArray path; ~Restore() { qunsetenv("BASH_ENV"); qputenv("PATH", path); } } restore{oldPath};
+        qputenv("BASH_ENV", dir.filePath("env.sh").toUtf8());
+        qputenv("PATH", "/tmp/not-the-system:/usr/bin");
+        ActionRunner runner;
+        runner.setBackendDir(dir.path());
+        QSignalSpy spy(&runner, &ActionRunner::finished);
+        runner.run("pin", {"status"});
+        QTRY_COMPARE(spy.count(), 1);
+        QCOMPARE(spy.at(0).at(1).toMap().value("path").toString(), QString("/usr/bin:/bin:/usr/share/omarchy/bin"));
+        QVERIFY(!QFile::exists(marker));
     }
     void searchHasOnlyImplementedRoutesAndBackClearsIt() {
         Backend backend;

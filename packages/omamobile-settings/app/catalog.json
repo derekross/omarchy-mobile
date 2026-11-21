@@ -18,6 +18,13 @@
         "requires": "charge"
       },
       {
+        "id": "pin",
+        "title": "Change PIN",
+        "detail": "The lock screen PIN",
+        "icon": "pin",
+        "page": "pin"
+      },
+      {
         "id": "about",
         "title": "About this device",
         "detail": "System, software and storage",
@@ -36,6 +43,10 @@
   },
   "battery": {
     "title": "Battery",
+    "rows": []
+  },
+  "pin": {
+    "title": "Change PIN",
     "rows": []
   }
 }
