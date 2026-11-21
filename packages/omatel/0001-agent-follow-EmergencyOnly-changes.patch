@@ -1,0 +1,28 @@
+diff --git a/apps/omatel-agent/src/lib.rs b/apps/omatel-agent/src/lib.rs
+index 2a7969a..b4febfa 100644
+--- a/apps/omatel-agent/src/lib.rs
++++ b/apps/omatel-agent/src/lib.rs
+@@ -380,6 +380,13 @@ async fn attach_when_present(agent: &Arc<Agent>) -> anyhow::Result<()> {
+     refresh_emergency(agent, &modem_proxy).await;
+ 
+     let mut state_changes = modem_proxy.receive_state_changed().await;
++    // ModemManager settles EmergencyOnly a moment after the state (after a
++    // SIM comes back, it is still true when "registered" arrives), so a
++    // state change alone can leave "emergency-only" standing.
++    let mut emergency_changes = match &voice {
++        Some(v) => Some(v.receive_emergency_only_changed().await),
++        None => None,
++    };
+     let mut call_added = match &voice {
+         Some(v) => Some(v.receive_call_added().await?),
+         None => None,
+@@ -406,6 +413,9 @@ async fn attach_when_present(agent: &Arc<Agent>) -> anyhow::Result<()> {
+                 refresh_modem_state(agent, &modem_proxy, voice.as_ref()).await;
+                 refresh_emergency(agent, &modem_proxy).await;
+             }
++            Some(_) = async { match emergency_changes.as_mut() { Some(s) => s.next().await, None => std::future::pending().await } } => {
++                refresh_modem_state(agent, &modem_proxy, voice.as_ref()).await;
++            }
+             Some(sig) = async { match call_added.as_mut() { Some(s) => s.next().await, None => std::future::pending().await } } => {
+                 if let Ok(a) = sig.args() {
+                     calls::track(agent.clone(), a.path.clone()).await;

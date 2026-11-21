@@ -1,0 +1,2001 @@
+From 4b11a0b5447d7906cf71d0a05dcfbe1adc4f793d Mon Sep 17 00:00:00 2001
+From: local <local@localhost>
+Date: Sat, 14 Nov 2026 18:57:09 +0100
+Subject: [PATCH] omamessages 0.3.0: pictures, attachments and group messages
+ (MMS)
+
+Threads show an MMS's pictures in its bubble (decoded at most 720 px on a
+side, kept between refreshes, held to 240x320 by clamps) and its other
+attachments as a row with the file's name and size; a tap opens either
+with the desktop's app for it (gtk::FileLauncher). The parts come from the
+store's parts table, files in the agent's data directory. The list says
+"Picture" or "Attachment" for an MMS without text, and a failed message's
+sheet gives the agent's reason ("The MMS service (mmsd-tng) isn't
+running", "Too big for MMS: ...").
+
+The attach button works: a file dialog with pictures first, several
+files at once, a preview strip above the composer with a button to take
+each out again. With attachments the message goes through omatel 0.3's
+SendToConversationWithAttachments; text alone keeps the 0.2 call, so an
+older agent still sends it. MmsUnavailable leaves the message as "Not
+sent" for Retry and says so; other failures put text and files back.
+
+Group conversations are real: sms: links with several recipients open
+one (no more "writing to the first number"), and the new-message page
+puts several people together (the + on a suggestion, chips that take a
+person out, Start). A group's thread shows "N people", who wrote each
+incoming run, and no Call button; its messages go as MMS (the agent's
+choice), so the composer stops counting SMS parts.
+
+The MMS settings group now edits mmsd-tng's MMSC, MMS proxy and MMS APN
+(src/mmsconfig.rs). mmsd-tng keeps them in ~/.mms/modemmanager/mms
+([Modem Manager] CarrierMMSC, CarrierMMSProxy, MMS_APN; empty is
+http://mms.invalid for the MMSC and NULL for the others) and writes its
+copy back when it stops, so while it runs the change goes through its
+org.ofono.mms.ModemManager.ChangeSettings (applies at once, mmsd-tng
+saves the file, then ProcessMessageQueue), and while it doesn't, into the
+file, edited in place (one line changes; comments, other keys and groups
+stay). If a running mmsd-tng refuses, it is stopped, the file written and
+it is started again (systemctl --user, mmsd-tng.service).
+
+Script steps `attach PATH` and `add NUMBER` for screenshots. Tests for the
+settings file (placeholders, in-place edits, new groups, escapes, mode
+0600), attachment stand-ins and sizes.
+
+Cargo.toml patches omatel's crates to ../omatel until omatel 0.3.0 is
+tagged; then the tag bump replaces the patch.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Cargo.lock          |  17 +-
+ Cargo.toml          |  15 +-
+ README.md           |  25 +-
+ docs/development.md |   6 +-
+ src/app.rs          | 802 +++++++++++++++++++++++++++++++++++++++-----
+ src/format.rs       |  35 ++
+ src/main.rs         |   1 +
+ src/mmsconfig.rs    | 489 +++++++++++++++++++++++++++
+ src/script.rs       |  22 +-
+ src/uri.rs          |   4 +-
+ 10 files changed, 1312 insertions(+), 104 deletions(-)
+ create mode 100644 src/mmsconfig.rs
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 384d994..f1331de 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1143,7 +1143,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "omamessages"
+-version = "0.2.2"
++version = "0.3.0"
+ dependencies = [
+  "anyhow",
+  "async-channel",
+@@ -1165,8 +1165,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "omatel-api"
+-version = "0.2.1"
+-source = "git+https://github.com/derekross/omatel?tag=v0.2.1#4537d9114df519986e872bd1210ab53b313d15dd"
++version = "0.3.0"
+ dependencies = [
+  "serde",
+  "toml 0.9.12+spec-1.1.0",
+@@ -1176,8 +1175,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "omatel-contacts"
+-version = "0.2.1"
+-source = "git+https://github.com/derekross/omatel?tag=v0.2.1#4537d9114df519986e872bd1210ab53b313d15dd"
++version = "0.3.0"
+ dependencies = [
+  "phonenumber",
+  "thiserror",
+@@ -1186,8 +1184,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "omatel-mock"
+-version = "0.2.1"
+-source = "git+https://github.com/derekross/omatel?tag=v0.2.1#4537d9114df519986e872bd1210ab53b313d15dd"
++version = "0.3.0"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -1203,8 +1200,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "omatel-store"
+-version = "0.2.1"
+-source = "git+https://github.com/derekross/omatel?tag=v0.2.1#4537d9114df519986e872bd1210ab53b313d15dd"
++version = "0.3.0"
+ dependencies = [
+  "omatel-contacts",
+  "rusqlite",
+@@ -1216,8 +1212,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "omatel-theme"
+-version = "0.2.1"
+-source = "git+https://github.com/derekross/omatel?tag=v0.2.1#4537d9114df519986e872bd1210ab53b313d15dd"
++version = "0.3.0"
+ dependencies = [
+  "gtk4",
+  "libadwaita",
+diff --git a/Cargo.toml b/Cargo.toml
+index 9a0227c..932ab9e 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,7 +1,7 @@
+ [package]
+ name = "omamessages"
+-description = "Messages: SMS conversations for Omarchy Mobile"
+-version = "0.2.2"
++description = "Messages: SMS and MMS conversations for Omarchy Mobile"
++version = "0.3.0"
+ edition = "2021"
+ license = "GPL-3.0-or-later"
+ rust-version = "1.87"
+@@ -42,3 +42,14 @@ anyhow = "1"
+ opt-level = 3
+ # Stripped by the linker, so a cross-built binary needs no aarch64 strip.
+ strip = true
++
++# MMS needs omatel 0.3's Messages1 members (SendWithAttachments, ListParts,
++# MmsReady) and store (parts, groups). Until omatel tags a release with
++# them, build against a checkout next to this one; replace this with the
++# tag bump above (and `cargo update -p omatel-api`) once it exists.
++[patch."https://github.com/derekross/omatel"]
++omatel-api = { path = "../omatel/crates/omatel-api" }
++omatel-store = { path = "../omatel/crates/omatel-store" }
++omatel-contacts = { path = "../omatel/crates/omatel-contacts" }
++omatel-theme = { path = "../omatel/crates/omatel-theme" }
++omatel-mock = { path = "../omatel/crates/omatel-mock" }
+diff --git a/README.md b/README.md
+index bc64f30..69e51fd 100644
+--- a/README.md
++++ b/README.md
+@@ -7,7 +7,9 @@ behaves like AOSP's Messaging app; none of AOSP's code is used.
+ Messages talks to the modem through **omatel-agent**, the background service
+ it shares with Phone, from the
+ [omatel](https://github.com/derekross/omatel) repository. The agent keeps
+-running when the app is closed: it stores every incoming SMS, notifies you with an inline reply, and sends messages.
++running when the app is closed: it stores every incoming SMS and MMS, notifies you with an inline reply, and sends messages.
++MMS (pictures, other attachments and group conversations) go through
++mmsd-tng, which the agent talks to.
+ Messages reads the same stores and address book as the agent, and uses
+ omatel's shared crates, pinned to an omatel release tag.
+ 
+@@ -18,14 +20,27 @@ omatel's shared crates, pinned to an omatel release tag.
+ - Threads with bubbles, day separators and the state of each message
+   (Sending, Sent, Delivered, Not sent with a tap to retry). Older messages
+   load as you scroll up. The composer counts SMS parts.
+-- Writing to a contact or to any number, blocking, and settings
+-  (notifications, what the lock screen shows, delivery reports).
++- MMS: pictures shown in their bubbles, other attachments as a file row
++  that opens in the app your desktop picks; the attach button picks
++  pictures (or any file) for the next message, shown above the composer
++  until it goes. Group conversations show who wrote each message.
++- Writing to a contact, to any number, or to several people at once (the
++  + on a suggestion adds a person to a group message), blocking, and
++  settings (notifications, what the lock screen shows, delivery reports,
++  and mmsd-tng's MMSC, MMS proxy and MMS APN).
+ - Export and import of all messages as JSON (`omamessages --export FILE`,
+   `--import FILE`; the format is in omatel's `docs/export-format.md`).
+ - `sms:`, `smsto:`, `mms:` and `mmsto:` links, with `?body=`.
+ 
+-Not yet: MMS, pictures and group messages (they arrive with mmsd-tng; the
+-attach button is there, disabled), and RCS (not planned).
++Not yet: RCS (not planned). Pictures go as they are: Messages doesn't
++shrink them to the carrier's size limit yet (the agent says when one is
++too big).
++
++**MMS settings.** mmsd-tng keeps the carrier's MMSC, MMS proxy and MMS APN
++in `~/.mms/modemmanager/mms`. Messages' settings change them through
++mmsd-tng's own D-Bus interface while it runs (they apply at once), and in
++that file while it doesn't (mmsd-tng reads it when it starts). An empty
++MMSC lets mmsd-tng look the carrier up; an empty proxy is "none".
+ 
+ ## Install
+ 
+diff --git a/docs/development.md b/docs/development.md
+index 7ada501..d57e06d 100644
+--- a/docs/development.md
++++ b/docs/development.md
+@@ -9,7 +9,9 @@ bin/install      # build and install the package (pkgbuild/PKGBUILD)
+ 
+ You need Rust, pkgconf, gtk4 (4.14 or later), libadwaita (1.5 or later)
+ and sqlite with their headers. omatel's crates come from git, at the tag
+-named in `Cargo.toml`, pinned in `Cargo.lock`.
++named in `Cargo.toml`, pinned in `Cargo.lock`. For now a `[patch]` in
++`Cargo.toml` takes them from an omatel checkout next to this one
++(`../omatel`), because MMS needs omatel 0.3's API before it is tagged.
+ 
+ ## Cross-compile for the phone
+ 
+@@ -26,7 +28,7 @@ bin/cross package     # pkgbuild/omamessages-<version>-1-aarch64.pkg.tar.zst
+ ## Tests
+ 
+ - `scripts/check.sh`: US spelling, rustfmt, clippy `-D warnings`, the unit
+-  tests (the sms: link parser, SMS part counting, time and day-separator text, snippets, the script parser).
++  tests (the sms: link parser, SMS part counting, time and day-separator text, snippets, attachment stand-ins and sizes, mmsd-tng's settings file, the script parser).
+ - `scripts/ui-shots.sh`: every page at 456x900 in a headless Weston inside
+   a container (never on your desktop), on fictional demo data
+   (`examples/demo-data.rs`), without the agent, into
+diff --git a/src/app.rs b/src/app.rs
+index ff10bf0..256fd56 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -2,9 +2,11 @@
+ //! The window: the conversation list, threads, compose, archived and
+ //! blocked pages, settings, and the script runner for screenshots.
+ //!
+-//! Data comes from the message store the agent writes; sending, retrying
+-//! and marking read go through the agent's `org.omamobile.Messages1`. With
+-//! the agent away, everything but sending still works.
++//! Data comes from the message store the agent writes (attachments are
++//! files in its data directory, listed in the store's `parts`); sending,
++//! retrying and marking read go through the agent's
++//! `org.omamobile.Messages1`, which picks SMS or MMS. With the agent away,
++//! everything but sending still works.
+ 
+ use std::cell::{Cell, RefCell};
+ use std::collections::HashMap;
+@@ -14,16 +16,17 @@ use std::time::Duration;
+ 
+ use clap::Parser;
+ use futures_util::StreamExt;
+-use gtk::{gio, glib, pango};
++use gtk::{gdk, gio, glib, pango};
+ use gtk4 as gtk;
+ use libadwaita as adw;
+ use libadwaita::prelude::*;
+ use omatel_api::settings::Settings;
+ use omatel_api::Messages1Proxy;
+ use omatel_contacts::{number, AddressBook};
+-use omatel_store::{BlockList, Conversation, Direction, Message, MessageState, MessageStore};
++use omatel_store::{BlockList, Conversation, Direction, Message, MessageState, MessageStore, Part};
+ 
+ use crate::format;
++use crate::mmsconfig;
+ use crate::script::{self, Step};
+ use crate::segments;
+ use crate::uri;
+@@ -70,8 +73,29 @@ const EXTRA_CSS: &str = "
+   color: var(--window-fg-color);
+ }
+ .send-button { min-width: 48px; min-height: 48px; }
++.bubble-picture { border-radius: 14px; }
++.bubble-file { border-radius: 14px; padding: 8px 12px; }
++.bubble-sender { font-size: 12px; opacity: 0.75; margin: 4px 10px 0 10px; }
++.attachment-strip { padding: 6px 10px 0 10px; }
++.attachment-thumb { border-radius: 10px; }
++.attachment-file { border-radius: 10px; padding: 6px 10px;
++  background-color: alpha(var(--window-fg-color), 0.08); }
++.recipient-chips { padding: 0 12px 6px 12px; }
+ ";
+ 
++/// Pictures in bubbles are drawn from a copy at most this many pixels on
++/// a side, so a camera-sized photo doesn't sit in memory at full size.
++const PICTURE_PX: i32 = 720;
++/// How many decoded pictures are kept between refreshes of a thread.
++const TEXTURES_KEPT: usize = 64;
++
++/// A file picked for the next message.
++#[derive(Debug, Clone, PartialEq, Eq)]
++struct Attachment {
++    path: PathBuf,
++    mime: String,
++}
++
+ pub fn run() -> glib::ExitCode {
+     let app = adw::Application::builder()
+         .application_id(APP_ID)
+@@ -126,6 +150,11 @@ struct Thread {
+     anchor: Cell<Option<f64>>,
+     saved_draft: RefCell<String>,
+     actions: gio::SimpleActionGroup,
++    /// Several members: everything goes as MMS.
++    group: bool,
++    attachments: RefCell<Vec<Attachment>>,
++    strip: gtk::Box,
++    strip_scroll: gtk::ScrolledWindow,
+ }
+ 
+ struct Compose {
+@@ -135,6 +164,10 @@ struct Compose {
+     /// Numbers behind the suggestion rows, in order.
+     numbers: RefCell<Vec<String>>,
+     body: RefCell<Option<String>>,
++    /// Recipients picked for a group message, as given.
++    chosen: RefCell<Vec<String>>,
++    chips: gtk::FlowBox,
++    start: gtk::Button,
+ }
+ 
+ pub struct Ui {
+@@ -152,6 +185,10 @@ pub struct Ui {
+     contacts_pending: RefCell<Option<glib::SourceId>>,
+     region: RefCell<String>,
+     proxy: RefCell<Option<Messages1Proxy<'static>>>,
++    /// The session bus, once connected (mmsd-tng's settings use it).
++    conn: RefCell<Option<zbus::Connection>>,
++    /// Decoded pictures by file, so a refresh doesn't decode them again.
++    textures: RefCell<HashMap<PathBuf, gdk::Texture>>,
+     service: Cell<bool>,
+     main_list: Rc<ConversationList>,
+     archived: RefCell<Option<Rc<ConversationList>>>,
+@@ -242,6 +279,8 @@ impl Ui {
+             contacts_pending: RefCell::new(None),
+             region: RefCell::new(region),
+             proxy: RefCell::new(None),
++            conn: RefCell::new(None),
++            textures: RefCell::new(HashMap::new()),
+             service: Cell::new(false),
+             main_list,
+             archived: RefCell::new(None),
+@@ -291,27 +330,21 @@ impl Ui {
+         } else if let Some(target) = cli.target.as_deref() {
+             let (to, body) = if uri::is_sms_uri(target) {
+                 let u = uri::parse(target).unwrap_or_default();
+-                if u.recipients.len() > 1 {
+-                    self.toast(
+-                        "Group messages arrive with MMS support; writing to the first number",
+-                    );
+-                }
+-                (u.recipients.into_iter().next(), u.body)
++                (u.recipients, u.body)
+             } else {
+-                (Some(target.to_string()), None)
++                (vec![target.to_string()], None)
+             };
+-            match to {
+-                Some(n) if !n.trim().is_empty() => {
+-                    self.open_number(&n);
+-                    if let (Some(b), Some(t)) = (body, self.thread.borrow().as_ref()) {
+-                        t.buffer.set_text(&b);
+-                    }
++            let to: Vec<String> = to.into_iter().filter(|n| !n.trim().is_empty()).collect();
++            if to.is_empty() {
++                self.open_compose();
++                if let Some(c) = self.compose.borrow().as_ref() {
++                    *c.body.borrow_mut() = body;
+                 }
+-                _ => {
+-                    self.open_compose();
+-                    if let Some(c) = self.compose.borrow().as_ref() {
+-                        *c.body.borrow_mut() = body;
+-                    }
++            } else {
++                // Several recipients make a group conversation (MMS).
++                self.open_numbers(&to);
++                if let (Some(b), Some(t)) = (body, self.thread.borrow().as_ref()) {
++                    t.buffer.set_text(&b);
+                 }
+             }
+         } else if cli.compose {
+@@ -483,6 +516,7 @@ impl Ui {
+                 return Ok(());
+             };
+             *ui.proxy.borrow_mut() = Some(proxy);
++            *ui.conn.borrow_mut() = Some(conn.clone());
+             ui.set_service(up);
+         }
+         let weak2 = weak.clone();
+@@ -693,7 +727,8 @@ impl Ui {
+         };
+         top.append(&label(&time, &["row-meta"]));
+         let bottom = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+-        let (prefix, snip) = format::snippet(c.last.as_ref(), &c.draft, 90);
++        let last = c.last.clone().map(|m| self.with_stand_in(m));
++        let (prefix, snip) = format::snippet(last.as_ref(), &c.draft, 90);
+         if !prefix.is_empty() {
+             let p = gtk::Label::new(Some(prefix));
+             p.add_css_class(match prefix {
+@@ -971,6 +1006,28 @@ impl Ui {
+         self.open_thread(id);
+     }
+ 
++    /// Open (or start) the conversation with these numbers: one is a
++    /// one-to-one thread, more a group.
++    fn open_numbers(self: &Rc<Self>, raws: &[String]) {
++        if raws.len() == 1 {
++            return self.open_number(&raws[0]);
++        }
++        let region = self.region();
++        let members: Vec<(String, String)> = raws
++            .iter()
++            .map(|r| (number::normalize(r, &region), r.trim().to_string()))
++            .filter(|(n, _)| !n.is_empty())
++            .collect();
++        if members.is_empty() {
++            self.toast("Those aren't numbers messages can go to");
++            return;
++        }
++        match self.store.conversation_for_members(&members) {
++            Ok(id) => self.open_thread(id),
++            Err(e) => tracing::warn!(error = %e, "creating a conversation failed"),
++        }
++    }
++
+     fn open_thread(self: &Rc<Self>, id: i64) {
+         let Ok(Some(c)) = self.store.conversation(id) else {
+             return;
+@@ -989,21 +1046,25 @@ impl Ui {
+     fn build_thread(self: &Rc<Self>, c: &Conversation) -> Rc<Thread> {
+         let name = self.conversation_name(c);
+         let number = Self::primary_number(c);
++        let group = c.numbers.len() > 1;
+         let shown_number = number::display(&number, &self.region());
+-        let title = adw::WindowTitle::new(
+-            &name,
+-            if name == shown_number {
+-                ""
+-            } else {
+-                &shown_number
+-            },
+-        );
++        let subtitle = if group {
++            format!("{} people", c.numbers.len())
++        } else if name == shown_number {
++            String::new()
++        } else {
++            shown_number
++        };
++        let title = adw::WindowTitle::new(&name, &subtitle);
+         let header = adw::HeaderBar::new();
+         header.set_title_widget(Some(&title));
+         let menu = gio::Menu::new();
+-        menu.append(Some("Call"), Some("thread.call"));
+-        if self.book.borrow().lookup(&number).is_none() {
+-            menu.append(Some("Add to contacts"), Some("thread.add-contact"));
++        // A group has no one number to call or to save.
++        if !group {
++            menu.append(Some("Call"), Some("thread.call"));
++            if self.book.borrow().lookup(&number).is_none() {
++                menu.append(Some("Add to contacts"), Some("thread.add-contact"));
++            }
+         }
+         let flags = gio::Menu::new();
+         flags.append(Some("Pinned"), Some("thread.pin"));
+@@ -1024,7 +1085,9 @@ impl Ui {
+                 .tooltip_text("Conversation")
+                 .build(),
+         );
+-        header.pack_end(&call);
++        if !group {
++            header.pack_end(&call);
++        }
+ 
+         let messages = gtk::Box::new(gtk::Orientation::Vertical, 0);
+         messages.add_css_class("thread-box");
+@@ -1067,8 +1130,7 @@ impl Ui {
+         attach.add_css_class("flat");
+         attach.add_css_class("circular");
+         attach.set_valign(gtk::Align::End);
+-        attach.set_sensitive(false);
+-        attach.set_tooltip_text(Some("Pictures and MMS arrive with MMS support"));
++        attach.set_tooltip_text(Some("Attach a picture or a file"));
+         let send = gtk::Button::from_icon_name("go-up-symbolic");
+         send.add_css_class("suggested-action");
+         send.add_css_class("circular");
+@@ -1080,12 +1142,24 @@ impl Ui {
+         composer.append(&attach);
+         composer.append(&frame);
+         composer.append(&send);
++        // The files picked for the next message, above the composer.
++        let strip = gtk::Box::new(gtk::Orientation::Horizontal, 8);
++        strip.add_css_class("attachment-strip");
++        let strip_scroll = gtk::ScrolledWindow::builder()
++            .vscrollbar_policy(gtk::PolicyType::Never)
++            .hscrollbar_policy(gtk::PolicyType::Automatic)
++            .child(&strip)
++            .visible(false)
++            .build();
++        let bottom = gtk::Box::new(gtk::Orientation::Vertical, 0);
++        bottom.append(&strip_scroll);
++        bottom.append(&composer);
+ 
+         let tv = adw::ToolbarView::new();
+         tv.add_top_bar(&header);
+         tv.add_top_bar(&self.banner());
+         tv.set_content(Some(&scroller));
+-        tv.add_bottom_bar(&composer);
++        tv.add_bottom_bar(&bottom);
+         tv.set_bottom_bar_style(adw::ToolbarStyle::Raised);
+         let page = adw::NavigationPage::builder()
+             .title(&name)
+@@ -1113,9 +1187,20 @@ impl Ui {
+             anchor: Cell::new(None),
+             saved_draft: RefCell::new(c.draft.clone()),
+             actions,
++            group,
++            attachments: RefCell::new(Vec::new()),
++            strip,
++            strip_scroll,
+         });
+         self.thread_actions(&t, &number);
+         self.wire_thread(&t);
++        let weak = Rc::downgrade(self);
++        let wt = Rc::downgrade(&t);
++        attach.connect_clicked(move |_| {
++            if let (Some(ui), Some(t)) = (weak.upgrade(), wt.upgrade()) {
++                ui.pick_attachments(&t);
++            }
++        });
+         t
+     }
+ 
+@@ -1262,14 +1347,16 @@ impl Ui {
+ 
+     fn update_send(&self, t: &Thread) {
+         let text = Self::composer_text(t);
+-        let has_text = !text.trim().is_empty();
+-        t.send.set_sensitive(has_text && self.service.get());
++        let has_files = !t.attachments.borrow().is_empty();
++        let has_content = !text.trim().is_empty() || has_files;
++        t.send.set_sensitive(has_content && self.service.get());
+         t.send.set_tooltip_text(Some(if self.service.get() {
+             "Send"
+         } else {
+             "The messages service isn't running"
+         }));
+-        match segments::label(&text) {
++        // An MMS has no SMS parts to count.
++        match segments::label(&text).filter(|_| !has_files && !t.group) {
+             Some(l) => {
+                 t.counter.set_label(&l);
+                 t.counter.set_visible(true);
+@@ -1278,6 +1365,133 @@ impl Ui {
+         }
+     }
+ 
++    // ---- attachments in the composer -----------------------------------------
++
++    fn pick_attachments(self: &Rc<Self>, t: &Rc<Thread>) {
++        let pictures = gtk::FileFilter::new();
++        pictures.set_name(Some("Pictures"));
++        pictures.add_mime_type("image/*");
++        let all = gtk::FileFilter::new();
++        all.set_name(Some("All files"));
++        all.add_pattern("*");
++        let filters = gio::ListStore::new::<gtk::FileFilter>();
++        filters.append(&pictures);
++        filters.append(&all);
++        let dialog = gtk::FileDialog::builder()
++            .title("Attach")
++            .filters(&filters)
++            .default_filter(&pictures)
++            .build();
++        let weak = Rc::downgrade(self);
++        let wt = Rc::downgrade(t);
++        dialog.open_multiple(Some(&self.window), gio::Cancellable::NONE, move |res| {
++            let (Some(ui), Some(t), Ok(files)) = (weak.upgrade(), wt.upgrade(), res) else {
++                return;
++            };
++            for i in 0..files.n_items() {
++                let Some(path) = files
++                    .item(i)
++                    .and_downcast::<gio::File>()
++                    .and_then(|f| f.path())
++                else {
++                    continue;
++                };
++                let mime = mime_of(&path);
++                let mut list = t.attachments.borrow_mut();
++                if !list.iter().any(|a| a.path == path) {
++                    list.push(Attachment { path, mime });
++                }
++            }
++            ui.refresh_strip(&t);
++            ui.update_send(&t);
++        });
++    }
++
++    /// The preview strip: a thumbnail (or the file's name) per attachment,
++    /// each with a button that takes it out again.
++    fn refresh_strip(self: &Rc<Self>, t: &Rc<Thread>) {
++        while let Some(c) = t.strip.first_child() {
++            t.strip.remove(&c);
++        }
++        let list = t.attachments.borrow().clone();
++        t.strip_scroll.set_visible(!list.is_empty());
++        for (i, a) in list.iter().enumerate() {
++            let preview: gtk::Widget = match self
++                .texture(&a.path)
++                .filter(|_| a.mime.starts_with("image/"))
++            {
++                Some(tex) => {
++                    let p = gtk::Picture::for_paintable(&tex);
++                    p.set_content_fit(gtk::ContentFit::Cover);
++                    p.set_size_request(72, 72);
++                    p.set_overflow(gtk::Overflow::Hidden);
++                    p.add_css_class("attachment-thumb");
++                    p.upcast()
++                }
++                None => {
++                    let l = label(&file_label(&a.path), &["attachment-file"]);
++                    l.set_max_width_chars(14);
++                    l.set_ellipsize(pango::EllipsizeMode::Middle);
++                    l.set_size_request(-1, 72);
++                    l.upcast()
++                }
++            };
++            let remove = gtk::Button::from_icon_name("window-close-symbolic");
++            remove.add_css_class("circular");
++            remove.add_css_class("osd");
++            remove.set_halign(gtk::Align::End);
++            remove.set_valign(gtk::Align::Start);
++            remove.set_tooltip_text(Some("Remove"));
++            let weak = Rc::downgrade(self);
++            let wt = Rc::downgrade(t);
++            remove.connect_clicked(move |_| {
++                if let (Some(ui), Some(t)) = (weak.upgrade(), wt.upgrade()) {
++                    {
++                        let mut list = t.attachments.borrow_mut();
++                        if i < list.len() {
++                            list.remove(i);
++                        }
++                    }
++                    ui.refresh_strip(&t);
++                    ui.update_send(&t);
++                }
++            });
++            let overlay = gtk::Overlay::new();
++            overlay.set_child(Some(&preview));
++            overlay.add_overlay(&remove);
++            t.strip.append(&overlay);
++        }
++    }
++
++    /// A picture, decoded at most [`PICTURE_PX`] on a side, kept for the
++    /// next refresh.
++    fn texture(&self, path: &Path) -> Option<gdk::Texture> {
++        if let Some(t) = self.textures.borrow().get(path) {
++            return Some(t.clone());
++        }
++        let pixbuf =
++            gtk::gdk_pixbuf::Pixbuf::from_file_at_scale(path, PICTURE_PX, PICTURE_PX, true).ok()?;
++        let texture = gdk::Texture::for_pixbuf(&pixbuf);
++        let mut cache = self.textures.borrow_mut();
++        if cache.len() >= TEXTURES_KEPT {
++            cache.clear();
++        }
++        cache.insert(path.to_path_buf(), texture.clone());
++        Some(texture)
++    }
++
++    /// Open a file with the app the desktop picks for it.
++    fn launch_file(self: &Rc<Self>, path: &Path) {
++        let launcher = gtk::FileLauncher::new(Some(&gio::File::for_path(path)));
++        let weak = Rc::downgrade(self);
++        launcher.launch(Some(&self.window), gio::Cancellable::NONE, move |r| {
++            if let (Err(e), Some(ui)) = (r, weak.upgrade()) {
++                tracing::warn!(error = %e, "no app opened the attachment");
++                ui.toast("No app here opens that file");
++            }
++        });
++    }
++
+     fn save_thread_draft(&self, t: &Thread) {
+         let text = Self::composer_text(t);
+         if *t.saved_draft.borrow() != text {
+@@ -1296,7 +1510,8 @@ impl Ui {
+ 
+     fn send(self: &Rc<Self>, t: &Rc<Thread>) {
+         let text = Self::composer_text(t).trim_end().to_string();
+-        if text.trim().is_empty() {
++        let files = t.attachments.borrow().clone();
++        if text.trim().is_empty() && files.is_empty() {
+             return;
+         }
+         let Some(proxy) = self.proxy() else {
+@@ -1306,22 +1521,56 @@ impl Ui {
+         t.buffer.set_text("");
+         *t.saved_draft.borrow_mut() = String::new();
+         let _ = self.store.set_draft(t.conv, "");
++        t.attachments.borrow_mut().clear();
++        self.refresh_strip(t);
++        self.update_send(t);
+         t.stick_bottom.set(true);
+         let conv = t.conv;
+         let weak = Rc::downgrade(self);
+         let wt = Rc::downgrade(t);
+         glib::MainContext::default().spawn_local(async move {
+-            let result = proxy.send_to_conversation(conv, &text).await;
++            // Text alone goes the 0.2 way, so an older agent still sends
++            // it; the agent turns a group's text into MMS itself.
++            let result = if files.is_empty() {
++                proxy.send_to_conversation(conv, &text).await
++            } else {
++                let owned: Vec<(String, String)> = files
++                    .iter()
++                    .map(|a| (a.path.to_string_lossy().into_owned(), a.mime.clone()))
++                    .collect();
++                let pairs: Vec<(&str, &str)> = owned
++                    .iter()
++                    .map(|(p, m)| (p.as_str(), m.as_str()))
++                    .collect();
++                proxy
++                    .send_to_conversation_with_attachments(conv, &text, &pairs)
++                    .await
++            };
+             let Some(ui) = weak.upgrade() else { return };
+             match result {
+                 Ok(id) => tracing::info!(message = id, "message handed to the service"),
++                // Kept as "Not sent" in the thread, for Retry.
++                Err(e) if error_is(&e, omatel_api::errors::MMS_UNAVAILABLE) => {
++                    ui.toast("The MMS service isn't running; the message waits as not sent");
++                }
+                 Err(e) => {
+                     tracing::warn!(error = %e, "sending failed");
+-                    ui.toast("Couldn't send the message");
++                    ui.toast(
++                        if error_is(&e, "org.freedesktop.DBus.Error.UnknownMethod") {
++                            "Pictures need a newer messages service (omatel 0.3)"
++                        } else {
++                            "Couldn't send the message"
++                        },
++                    );
+                     if let Some(t) = wt.upgrade() {
+                         if Self::composer_text(&t).is_empty() {
+                             t.buffer.set_text(&text);
+                         }
++                        if t.attachments.borrow().is_empty() {
++                            *t.attachments.borrow_mut() = files;
++                            ui.refresh_strip(&t);
++                            ui.update_send(&t);
++                        }
+                     }
+                 }
+             }
+@@ -1375,25 +1624,41 @@ impl Ui {
+         for (i, m) in msgs.iter().enumerate() {
+             let prev = i.checked_sub(1).map(|p| &msgs[p]);
+             let next = msgs.get(i + 1);
+-            if prev.is_none_or(|p| format::new_day(p.at, m.at, &tz)) {
++            let new_day = prev.is_none_or(|p| format::new_day(p.at, m.at, &tz));
++            if new_day {
+                 let sep = gtk::Label::new(Some(&format::day_separator(m.at, &now)));
+                 sep.add_css_class("day-separator");
+                 t.messages.append(&sep);
+             }
+-            let last_of_group =
+-                next.is_none_or(|n| n.direction != m.direction || n.at - m.at > 10 * 60_000);
++            let last_of_group = next.is_none_or(|n| {
++                n.direction != m.direction || n.sender != m.sender || n.at - m.at > 10 * 60_000
++            });
+             let show_meta = last_of_group
+                 || (m.direction == Direction::Out
+                     && m.state != MessageState::Sent
+                     && m.state != MessageState::Delivered);
+-            t.messages.append(&self.bubble(m, show_meta, &tz));
++            // In a group, who wrote it, above the first of their run.
++            let sender = (t.group
++                && m.direction == Direction::In
++                && !m.sender.is_empty()
++                && (new_day
++                    || prev.is_none_or(|p| p.direction != m.direction || p.sender != m.sender)))
++            .then(|| self.name_for(&m.sender));
++            t.messages
++                .append(&self.bubble(m, show_meta, sender.as_deref(), &tz));
+         }
+         if t.page.parent().is_some() && self.window.is_active() || self.script_running.get() {
+             self.mark_read(t.conv);
+         }
+     }
+ 
+-    fn bubble(self: &Rc<Self>, m: &Message, meta: bool, tz: &chrono::Local) -> gtk::Widget {
++    fn bubble(
++        self: &Rc<Self>,
++        m: &Message,
++        meta: bool,
++        sender: Option<&str>,
++        tz: &chrono::Local,
++    ) -> gtk::Widget {
+         let out = m.direction == Direction::Out;
+         let col = gtk::Box::new(gtk::Orientation::Vertical, 2);
+         col.add_css_class("bubble-row");
+@@ -1402,6 +1667,30 @@ impl Ui {
+         } else {
+             gtk::Align::Start
+         });
++        let side = if out {
++            gtk::Align::End
++        } else {
++            gtk::Align::Start
++        };
++        if let Some(name) = sender {
++            let l = label(name, &["bubble-sender"]);
++            l.set_halign(side);
++            col.append(&l);
++        }
++        let parts = if m.transport == "mms" {
++            self.store.parts(m.id).unwrap_or_default()
++        } else {
++            Vec::new()
++        };
++        for p in &parts {
++            let w = self.part_widget(p);
++            w.set_halign(side);
++            col.append(&w);
++        }
++        if m.body.is_empty() && !parts.is_empty() {
++            self.bubble_meta(&col, m, meta, side, tz);
++            return col.upcast();
++        }
+         let text = gtk::Label::builder()
+             .label(&m.body)
+             .wrap(true)
+@@ -1421,17 +1710,27 @@ impl Ui {
+             gtk::Align::Start
+         });
+         col.append(&text);
++        self.bubble_meta(&col, m, meta, side, tz);
++        col.upcast()
++    }
++
++    /// The line under a bubble, and the tap on a failed one.
++    fn bubble_meta(
++        self: &Rc<Self>,
++        col: &gtk::Box,
++        m: &Message,
++        meta: bool,
++        side: gtk::Align,
++        tz: &chrono::Local,
++    ) {
++        let out = m.direction == Direction::Out;
+         if meta {
+             let l = gtk::Label::new(Some(&format::delivery(m, tz)));
+             l.add_css_class("bubble-meta");
+             if out && m.state == MessageState::Failed {
+                 l.add_css_class("error");
+             }
+-            l.set_halign(if out {
+-                gtk::Align::End
+-            } else {
+-                gtk::Align::Start
+-            });
++            l.set_halign(side);
+             l.set_margin_start(6);
+             l.set_margin_end(6);
+             col.append(&l);
+@@ -1447,14 +1746,107 @@ impl Ui {
+             });
+             col.add_controller(click);
+         }
+-        col.upcast()
++    }
++
++    /// An attachment in a bubble: the picture itself, or a row with the
++    /// file's name and size. A tap opens it in the desktop's app for it.
++    fn part_widget(self: &Rc<Self>, p: &Part) -> gtk::Widget {
++        let path = p.path(&omatel_store::data_dir());
++        let picture = p
++            .is_image()
++            .then(|| self.texture(&path))
++            .flatten()
++            .map(|tex| {
++                let (w, h) = picture_size(tex.width(), tex.height());
++                let pic = gtk::Picture::for_paintable(&tex);
++                pic.set_content_fit(gtk::ContentFit::Cover);
++                pic.set_size_request(w, h);
++                pic.set_overflow(gtk::Overflow::Hidden);
++                pic.add_css_class("bubble-picture");
++                pic.set_can_shrink(true);
++                let weak = Rc::downgrade(self);
++                let path = path.clone();
++                let click = gtk::GestureClick::new();
++                click.connect_released(move |g, _, _, _| {
++                    g.set_state(gtk::EventSequenceState::Claimed);
++                    if let Some(ui) = weak.upgrade() {
++                        ui.launch_file(&path);
++                    }
++                });
++                pic.add_controller(click);
++                // A picture asks for its full size; the clamps hold it
++                // to the bubble's.
++                let tall = adw::Clamp::builder()
++                    .orientation(gtk::Orientation::Vertical)
++                    .maximum_size(h)
++                    .tightening_threshold(h)
++                    .child(&pic)
++                    .build();
++                adw::Clamp::builder()
++                    .maximum_size(w)
++                    .tightening_threshold(w)
++                    .child(&tall)
++                    .build()
++                    .upcast::<gtk::Widget>()
++            });
++        picture.unwrap_or_else(|| {
++            let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
++            let ct = gio::content_type_from_mime_type(&p.mime)
++                .unwrap_or_else(|| "application/octet-stream".into());
++            row.append(&gtk::Image::from_gicon(
++                &gio::content_type_get_symbolic_icon(&ct),
++            ));
++            let text = gtk::Box::new(gtk::Orientation::Vertical, 0);
++            let name = label(&file_label(&path), &[]);
++            name.set_ellipsize(pango::EllipsizeMode::Middle);
++            name.set_max_width_chars(22);
++            text.append(&name);
++            text.append(&label(
++                &format::file_size(p.size),
++                &["dim-label", "caption"],
++            ));
++            row.append(&text);
++            let b = gtk::Button::builder().child(&row).build();
++            b.add_css_class("bubble-file");
++            let weak = Rc::downgrade(self);
++            b.connect_clicked(move |_| {
++                if let Some(ui) = weak.upgrade() {
++                    ui.launch_file(&path);
++                }
++            });
++            b.upcast()
++        })
++    }
++
++    /// The message as the list shows it: an MMS without text says what it
++    /// carries ("Picture").
++    fn with_stand_in(&self, mut m: Message) -> Message {
++        if m.transport == "mms" && m.body.trim().is_empty() {
++            let parts = self.store.parts(m.id).unwrap_or_default();
++            let mimes: Vec<&str> = parts.iter().map(|p| p.mime.as_str()).collect();
++            m.body = format::parts_stand_in(&mimes).to_string();
++        }
++        m
+     }
+ 
+     fn failed_menu(self: &Rc<Self>, id: i64) {
+         let w = Rc::downgrade(self);
+         let w2 = w.clone();
++        // The agent's reason, when it gave one ("The MMS service isn't
++        // running", "Too big for MMS: ...").
++        let why = self
++            .store
++            .message(id)
++            .ok()
++            .flatten()
++            .and_then(|m| m.error)
++            .filter(|e| e.chars().next().is_some_and(char::is_uppercase));
++        let title = match &why {
++            Some(w) => format!("Not sent: {w}"),
++            None => "Message not sent".into(),
++        };
+         self.sheet(
+-            "Message not sent",
++            &title,
+             vec![
+                 (
+                     "Retry".into(),
+@@ -1539,10 +1931,24 @@ impl Ui {
+             .vexpand(true)
+             .child(&suggestions)
+             .build();
++        // The people picked for a group message, and the button that
++        // starts it. One tap on a suggestion still opens a one-to-one
++        // thread; its + adds it to the group instead.
++        let chips = gtk::FlowBox::builder()
++            .selection_mode(gtk::SelectionMode::None)
++            .max_children_per_line(3)
++            .visible(false)
++            .build();
++        chips.add_css_class("recipient-chips");
++        let start = gtk::Button::with_label("Start");
++        start.add_css_class("suggested-action");
++        start.set_visible(false);
+         let header = adw::HeaderBar::new();
++        header.pack_end(&start);
+         let tv = adw::ToolbarView::new();
+         tv.add_top_bar(&header);
+         tv.add_top_bar(&to_row);
++        tv.add_top_bar(&chips);
+         tv.set_content(Some(&scroll));
+         let page = adw::NavigationPage::builder()
+             .title("New message")
+@@ -1555,6 +1961,15 @@ impl Ui {
+             suggestions,
+             numbers: RefCell::new(Vec::new()),
+             body: RefCell::new(None),
++            chosen: RefCell::new(Vec::new()),
++            chips,
++            start,
++        });
++        let weak = Rc::downgrade(self);
++        c.start.connect_clicked(move |_| {
++            if let Some(ui) = weak.upgrade() {
++                ui.compose_start();
++            }
+         });
+         let weak = Rc::downgrade(self);
+         c.to.connect_changed(move |_| {
+@@ -1570,11 +1985,12 @@ impl Ui {
+                 .borrow()
+                 .as_ref()
+                 .and_then(|c| c.numbers.borrow().first().cloned());
+-            match first {
+-                Some(n) => ui.compose_to(&n),
+-                None if !e.text().trim().is_empty() => ui.compose_to(&e.text()),
+-                None => {}
+-            }
++            let pick = match first {
++                Some(n) => n,
++                None if !e.text().trim().is_empty() => e.text().to_string(),
++                None => return ui.compose_start(),
++            };
++            ui.pick_recipient(&pick);
+         });
+         let weak = Rc::downgrade(self);
+         c.suggestions.connect_row_activated(move |_, row| {
+@@ -1585,7 +2001,7 @@ impl Ui {
+                 .as_ref()
+                 .and_then(|c| c.numbers.borrow().get(row.index() as usize).cloned());
+             if let Some(n) = n {
+-                ui.compose_to(&n);
++                ui.pick_recipient(&n);
+             }
+         });
+         *self.compose.borrow_mut() = Some(c.clone());
+@@ -1613,6 +2029,7 @@ impl Ui {
+                 .activatable(true)
+                 .build();
+             row.add_prefix(&gtk::Image::from_icon_name("mail-send-symbolic"));
++            row.add_suffix(&self.add_button(&dial));
+             c.suggestions.append(&row);
+             numbers.push(dial);
+         }
+@@ -1630,6 +2047,7 @@ impl Ui {
+                     .activatable(true)
+                     .build();
+                 row.add_prefix(&initials_label(&name));
++                row.add_suffix(&self.add_button(&p.number));
+                 c.suggestions.append(&row);
+                 numbers.push(p.number.clone());
+             }
+@@ -1637,13 +2055,114 @@ impl Ui {
+         *c.numbers.borrow_mut() = numbers;
+     }
+ 
+-    fn compose_to(self: &Rc<Self>, raw: &str) {
++    /// A suggestion's "+": add it to the group being put together.
++    fn add_button(self: &Rc<Self>, raw: &str) -> gtk::Button {
++        let b = gtk::Button::from_icon_name("list-add-symbolic");
++        b.add_css_class("flat");
++        b.set_valign(gtk::Align::Center);
++        b.set_tooltip_text(Some("Add to a group message"));
++        let weak = Rc::downgrade(self);
++        let raw = raw.to_string();
++        b.connect_clicked(move |_| {
++            if let Some(ui) = weak.upgrade() {
++                ui.add_recipient(&raw);
++            }
++        });
++        b
++    }
++
++    /// A tapped suggestion: the thread with that person, or, while a
++    /// group is being put together, one more member.
++    fn pick_recipient(self: &Rc<Self>, raw: &str) {
++        let grouping = self
++            .compose
++            .borrow()
++            .as_ref()
++            .is_some_and(|c| !c.chosen.borrow().is_empty());
++        if grouping {
++            self.add_recipient(raw);
++        } else {
++            self.compose_to(&[raw.to_string()]);
++        }
++    }
++
++    fn add_recipient(self: &Rc<Self>, raw: &str) {
++        let Some(c) = self.compose.borrow().clone() else {
++            return;
++        };
++        let region = self.region();
++        let key = number::normalize(raw, &region);
++        if key.is_empty() {
++            return;
++        }
++        {
++            let mut chosen = c.chosen.borrow_mut();
++            if !chosen.iter().any(|n| number::normalize(n, &region) == key) {
++                chosen.push(raw.trim().to_string());
++            }
++        }
++        c.to.set_text("");
++        self.refresh_chips();
++        c.to.grab_focus();
++    }
++
++    /// The chosen people as buttons that take them out again.
++    fn refresh_chips(self: &Rc<Self>) {
++        let Some(c) = self.compose.borrow().clone() else {
++            return;
++        };
++        c.chips.remove_all();
++        let chosen = c.chosen.borrow().clone();
++        for (i, n) in chosen.iter().enumerate() {
++            let inner = gtk::Box::new(gtk::Orientation::Horizontal, 4);
++            inner.append(&label(&self.name_for(n), &[]));
++            inner.append(&gtk::Image::from_icon_name("window-close-symbolic"));
++            let chip = gtk::Button::builder().child(&inner).build();
++            chip.add_css_class("pill");
++            chip.set_halign(gtk::Align::Start);
++            chip.set_tooltip_text(Some("Remove"));
++            let weak = Rc::downgrade(self);
++            chip.connect_clicked(move |_| {
++                let Some(ui) = weak.upgrade() else { return };
++                if let Some(c) = ui.compose.borrow().as_ref() {
++                    let mut chosen = c.chosen.borrow_mut();
++                    if i < chosen.len() {
++                        chosen.remove(i);
++                    }
++                }
++                ui.refresh_chips();
++            });
++            c.chips.append(&chip);
++        }
++        c.chips.set_visible(!chosen.is_empty());
++        c.start.set_visible(!chosen.is_empty());
++    }
++
++    /// Start the message to everyone chosen (and a number still typed).
++    fn compose_start(self: &Rc<Self>) {
++        let Some(c) = self.compose.borrow().clone() else {
++            return;
++        };
++        let mut to = c.chosen.borrow().clone();
++        let typed = c.to.text().to_string();
++        let dial = number::sanitize_dial_string(&typed);
++        if dial.chars().filter(char::is_ascii_digit).count() >= 3
++            && !typed.chars().any(char::is_alphabetic)
++        {
++            to.push(dial);
++        }
++        if !to.is_empty() {
++            self.compose_to(&to);
++        }
++    }
++
++    fn compose_to(self: &Rc<Self>, raws: &[String]) {
+         let body = self
+             .compose
+             .borrow_mut()
+             .take()
+             .and_then(|c| c.body.borrow_mut().take());
+-        self.open_number(raw);
++        self.open_numbers(raws);
+         if let (Some(b), Some(t)) = (body, self.thread.borrow().as_ref()) {
+             t.buffer.set_text(&b);
+         }
+@@ -1879,18 +2398,7 @@ impl Ui {
+         sending.add(&region);
+         page.add(&sending);
+ 
+-        let mms = adw::PreferencesGroup::builder()
+-            .title("MMS")
+-            .description("Pictures, group messages and MMS arrive in a later update.")
+-            .build();
+-        for title in ["MMSC", "MMS proxy", "MMS access point (APN)"] {
+-            let row = adw::EntryRow::builder()
+-                .title(title)
+-                .sensitive(false)
+-                .build();
+-            mms.add(&row);
+-        }
+-        page.add(&mms);
++        page.add(&self.mms_settings());
+         dialog.add(&page);
+         let weak = Rc::downgrade(self);
+         dialog.connect_closed(move |_| {
+@@ -1902,6 +2410,98 @@ impl Ui {
+         *self.settings.borrow_mut() = Some(dialog);
+     }
+ 
++    /// mmsd-tng's carrier settings (see mmsconfig): through mmsd-tng
++    /// while it runs, so they apply at once, else in its file.
++    fn mms_settings(self: &Rc<Self>) -> adw::PreferencesGroup {
++        let group = adw::PreferencesGroup::builder()
++            .title("MMS")
++            .description(
++                "Pictures and group messages go through mmsd-tng. Leave the MMSC empty \
++                 to look it up for your carrier, and the proxy empty when there is none.",
++            )
++            .build();
++        let status = adw::ActionRow::builder()
++            .title("MMS service")
++            .subtitle("Checking…")
++            .build();
++        group.add(&status);
++        let rows: Vec<(&'static str, adw::EntryRow)> = [
++            (mmsconfig::MMSC, "MMSC (http://…)"),
++            (mmsconfig::PROXY, "MMS proxy (host:port)"),
++            (mmsconfig::APN, "MMS access point (APN)"),
++        ]
++        .into_iter()
++        .map(|(key, title)| {
++            let row = adw::EntryRow::builder()
++                .title(title)
++                .show_apply_button(true)
++                .input_purpose(if key == mmsconfig::MMSC {
++                    gtk::InputPurpose::Url
++                } else {
++                    gtk::InputPurpose::FreeForm
++                })
++                .sensitive(false)
++                .build();
++            group.add(&row);
++            (key, row)
++        })
++        .collect();
++        for (key, row) in &rows {
++            let weak = Rc::downgrade(self);
++            let status = status.clone();
++            let key = *key;
++            row.connect_apply(move |r| {
++                let Some(ui) = weak.upgrade() else { return };
++                if let Err(why) = mmsconfig::check(key, &r.text()) {
++                    ui.toast(why);
++                    return;
++                }
++                let text = r.text().to_string();
++                let status = status.clone();
++                let conn = ui.conn.borrow().clone();
++                glib::MainContext::default().spawn_local(async move {
++                    let saved = mmsconfig::save(conn.as_ref(), key, &text).await;
++                    ui.toast(match saved {
++                        Ok(mmsconfig::Saved::Now) => "Saved; mmsd-tng uses it now",
++                        Ok(mmsconfig::Saved::AtStart) => "Saved; mmsd-tng uses it when it starts",
++                        Ok(mmsconfig::Saved::Restarted) => "Saved, and mmsd-tng restarted",
++                        Err(e) => {
++                            tracing::warn!(error = %e, "MMS setting not saved");
++                            "Couldn't save the MMS setting"
++                        }
++                    });
++                    Ui::show_mms_status(&status, conn.as_ref()).await;
++                });
++            });
++        }
++        let conn = self.conn.borrow().clone();
++        glib::MainContext::default().spawn_local(async move {
++            let (current, _) = mmsconfig::load(conn.as_ref()).await;
++            for (key, row) in &rows {
++                row.set_text(match *key {
++                    mmsconfig::MMSC => &current.mmsc,
++                    mmsconfig::PROXY => &current.proxy,
++                    _ => &current.apn,
++                });
++                row.set_sensitive(true);
++            }
++            Ui::show_mms_status(&status, conn.as_ref()).await;
++        });
++        group
++    }
++
++    async fn show_mms_status(row: &adw::ActionRow, conn: Option<&zbus::Connection>) {
++        let running = match conn {
++            Some(c) => mmsconfig::running(c).await,
++            None => false,
++        };
++        row.set_subtitle(if running {
++            "mmsd-tng is running: changes apply at once"
++        } else {
++            "mmsd-tng isn't running: changes apply when it starts"
++        });
++    }
++
+     fn export(self: &Rc<Self>) {
+         let dialog = gtk::FileDialog::builder()
+             .title("Export messages")
+@@ -1988,6 +2588,16 @@ impl Ui {
+                             t.buffer.set_text(&text);
+                         }
+                     }
++                    Step::Attach(path) => {
++                        let thread = ui.thread.borrow().clone();
++                        if let Some(t) = thread {
++                            let mime = mime_of(&path);
++                            t.attachments.borrow_mut().push(Attachment { path, mime });
++                            ui.refresh_strip(&t);
++                            ui.update_send(&t);
++                        }
++                    }
++                    Step::Add(number) => ui.add_recipient(&number),
+                     Step::Search(text) => {
+                         ui.nav.pop_to_tag("list");
+                         ui.search.set_text(&text);
+@@ -2129,6 +2739,44 @@ impl ConversationList {
+     }
+ }
+ 
++/// A picture's size in a bubble: 240 pixels wide at most, 320 high,
++/// keeping its shape (a very thin one is cut to fit).
++fn picture_size(w: i32, h: i32) -> (i32, i32) {
++    if w <= 0 || h <= 0 {
++        return (240, 180);
++    }
++    let width = w.min(240);
++    let height = (width as i64 * h as i64 / w as i64) as i32;
++    (width, height.clamp(60, 320))
++}
++
++/// The file's name, for a row that shows it.
++fn file_label(path: &Path) -> String {
++    path.file_name()
++        .map(|n| n.to_string_lossy().into_owned())
++        .unwrap_or_default()
++}
++
++/// A file's MIME type, from its name and contents.
++fn mime_of(path: &Path) -> String {
++    gio::File::for_path(path)
++        .query_info(
++            "standard::content-type",
++            gio::FileQueryInfoFlags::NONE,
++            gio::Cancellable::NONE,
++        )
++        .ok()
++        .and_then(|i| i.content_type())
++        .and_then(|ct| gio::content_type_get_mime_type(&ct))
++        .map(|m| m.to_string())
++        .unwrap_or_else(|| "application/octet-stream".into())
++}
++
++/// Whether a D-Bus call failed with this error name.
++fn error_is(e: &zbus::Error, name: &str) -> bool {
++    matches!(e, zbus::Error::MethodError(n, _, _) if n.as_str() == name)
++}
++
+ /// Write a file only its owner can read: exports hold every message.
+ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+     use std::io::Write;
+diff --git a/src/format.rs b/src/format.rs
+index 9f42f36..472c82a 100644
+--- a/src/format.rs
++++ b/src/format.rs
+@@ -105,6 +105,29 @@ where
+     }
+ }
+ 
++/// What stands in for the text of an MMS that has none, from its parts'
++/// MIME types: "Picture", "Pictures", "Attachment" or "Attachments".
++pub fn parts_stand_in(mimes: &[&str]) -> &'static str {
++    let pictures = mimes.iter().all(|m| m.starts_with("image/"));
++    match (mimes.len(), pictures) {
++        (0, _) => "",
++        (1, true) => "Picture",
++        (_, true) => "Pictures",
++        (1, false) => "Attachment",
++        _ => "Attachments",
++    }
++}
++
++/// A file size for people: "830 bytes", "12 KB", "1.4 MB".
++pub fn file_size(bytes: i64) -> String {
++    const KB: i64 = 1024;
++    match bytes {
++        b if b < KB => format!("{b} bytes"),
++        b if b < KB * KB => format!("{} KB", (b + KB / 2) / KB),
++        b => format!("{:.1} MB", b as f64 / (KB * KB) as f64),
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -190,6 +213,18 @@ mod tests {
+         assert_eq!(snippet(None, "", 10), ("", String::new()));
+     }
+ 
++    #[test]
++    fn attachments_in_words() {
++        assert_eq!(parts_stand_in(&[]), "");
++        assert_eq!(parts_stand_in(&["image/jpeg"]), "Picture");
++        assert_eq!(parts_stand_in(&["image/jpeg", "image/png"]), "Pictures");
++        assert_eq!(parts_stand_in(&["text/x-vcard"]), "Attachment");
++        assert_eq!(parts_stand_in(&["image/png", "video/mp4"]), "Attachments");
++        assert_eq!(file_size(830), "830 bytes");
++        assert_eq!(file_size(12_300), "12 KB");
++        assert_eq!(file_size(1_468_006), "1.4 MB");
++    }
++
+     #[test]
+     fn delivery_lines() {
+         let at = ms(2026, 10, 14, 14, 5);
+diff --git a/src/main.rs b/src/main.rs
+index f50250b..2efee5c 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -7,6 +7,7 @@
+ 
+ mod app;
+ mod format;
++mod mmsconfig;
+ mod script;
+ mod segments;
+ mod uri;
+diff --git a/src/mmsconfig.rs b/src/mmsconfig.rs
+new file mode 100644
+index 0000000..9a77124
+--- /dev/null
++++ b/src/mmsconfig.rs
+@@ -0,0 +1,489 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//! mmsd-tng's carrier settings: the MMSC, the MMS proxy and the MMS APN.
++//!
++//! mmsd-tng keeps them in `$HOME/.mms/modemmanager/mms`, a GLib key file,
++//! group `[Modem Manager]`, keys `CarrierMMSC`, `CarrierMMSProxy` and
++//! `MMS_APN` (its README and `plugins/modemmanager.c`). Two values mean
++//! "none": `http://mms.invalid` for the MMSC (mmsd-tng then looks the
++//! carrier up in mobile-broadband-provider-info) and `NULL` for the proxy
++//! (and for an empty APN). Here they are shown and taken as empty fields.
++//!
++//! mmsd-tng reads the file when it starts and writes its own copy back
++//! when it stops, so the file is only edited while it isn't running.
++//! While it runs, its `org.ofono.mms.ModemManager` interface
++//! (`ViewSettings`, `ChangeSettings`) reads and changes the same settings
++//! at once and saves the file itself.
++//!
++//! The file is edited in place: only the three values change; comments,
++//! other groups and keys and their order stay as they were.
++
++use std::collections::HashMap;
++use std::path::{Path, PathBuf};
++
++use zbus::zvariant::OwnedValue;
++
++pub const GROUP: &str = "Modem Manager";
++pub const MMSC: &str = "CarrierMMSC";
++pub const PROXY: &str = "CarrierMMSProxy";
++pub const APN: &str = "MMS_APN";
++/// mmsd-tng's "look the MMSC up" placeholder.
++const NO_MMSC: &str = "http://mms.invalid";
++const NULL: &str = "NULL";
++
++/// `$HOME/.mms/modemmanager/mms`, where mmsd-tng's ModemManager plugin
++/// keeps its settings (GLib's home directory is `$HOME` when set).
++pub fn path() -> PathBuf {
++    let home = std::env::var_os("HOME").unwrap_or_default();
++    Path::new(&home).join(".mms/modemmanager/mms")
++}
++
++/// The three settings as the form shows them: empty means none.
++#[derive(Debug, Clone, Default, PartialEq, Eq)]
++pub struct MmsSettings {
++    pub mmsc: String,
++    pub proxy: String,
++    pub apn: String,
++}
++
++impl MmsSettings {
++    /// From mmsd-tng's stored values (file or ViewSettings).
++    pub fn from_values(mmsc: &str, proxy: &str, apn: &str) -> MmsSettings {
++        let shown = |v: &str, none: &str| {
++            let v = v.trim();
++            if v.eq_ignore_ascii_case(none) || v.eq_ignore_ascii_case(NULL) {
++                String::new()
++            } else {
++                v.to_string()
++            }
++        };
++        MmsSettings {
++            mmsc: shown(mmsc, NO_MMSC),
++            proxy: shown(proxy, NULL),
++            apn: shown(apn, NULL),
++        }
++    }
++
++    /// The value mmsd-tng stores for one of the keys.
++    pub fn stored(key: &str, shown: &str) -> String {
++        let v = shown.trim();
++        match (key, v.is_empty()) {
++            (MMSC, true) => NO_MMSC.into(),
++            (_, true) => NULL.into(),
++            _ => v.to_string(),
++        }
++    }
++
++    pub fn read_file(path: &Path) -> MmsSettings {
++        let file = KeyFile::parse(&std::fs::read_to_string(path).unwrap_or_default());
++        let get = |k: &str| file.get(GROUP, k).unwrap_or_default();
++        MmsSettings::from_values(&get(MMSC), &get(PROXY), &get(APN))
++    }
++
++    /// From ViewSettings' answer.
++    pub fn from_dbus(values: &HashMap<String, OwnedValue>) -> MmsSettings {
++        let get = |k: &str| {
++            values
++                .get(k)
++                .and_then(|v| <&str>::try_from(v).ok())
++                .unwrap_or_default()
++                .to_string()
++        };
++        MmsSettings::from_values(&get(MMSC), &get(PROXY), &get(APN))
++    }
++}
++
++/// Why a value can't be saved, for the form.
++pub fn check(key: &str, shown: &str) -> Result<(), &'static str> {
++    let v = shown.trim();
++    if v.chars().any(char::is_whitespace) {
++        return Err("No spaces, please");
++    }
++    if key == MMSC && !v.is_empty() && !(v.starts_with("http://") || v.starts_with("https://")) {
++        return Err("The MMSC is a web address: http://…");
++    }
++    if key == PROXY && v.contains("://") {
++        return Err("The proxy is a host and an optional port: host:port");
++    }
++    Ok(())
++}
++
++/// Set one key in the file, creating the file (mode 0600, its directory
++/// 0700) when there is none. Written to a temporary file and renamed.
++pub fn write_file(path: &Path, key: &str, shown: &str) -> std::io::Result<()> {
++    use std::io::Write;
++    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
++    let text = std::fs::read_to_string(path).unwrap_or_default();
++    let mut file = KeyFile::parse(&text);
++    file.set(GROUP, key, &MmsSettings::stored(key, shown));
++    if let Some(dir) = path.parent() {
++        std::fs::DirBuilder::new()
++            .recursive(true)
++            .mode(0o700)
++            .create(dir)?;
++    }
++    let tmp = path.with_extension("omamessages-tmp");
++    let mut f = std::fs::OpenOptions::new()
++        .write(true)
++        .create(true)
++        .truncate(true)
++        .mode(0o600)
++        .open(&tmp)?;
++    f.write_all(file.text().as_bytes())?;
++    f.sync_all()?;
++    std::fs::rename(&tmp, path)
++}
++
++/// mmsd-tng's user unit, for the restart fallback.
++pub const UNIT: &str = "mmsd-tng.service";
++
++#[zbus::proxy(
++    interface = "org.ofono.mms.ModemManager",
++    default_service = "org.ofono.mms",
++    default_path = "/org/ofono/mms"
++)]
++trait MmsdModemManager {
++    fn view_settings(&self) -> zbus::Result<HashMap<String, OwnedValue>>;
++    fn change_settings(&self, setting: &str, value: &zbus::zvariant::Value<'_>)
++        -> zbus::Result<()>;
++    fn process_message_queue(&self) -> zbus::Result<()>;
++}
++
++/// Whether mmsd-tng runs on this session bus.
++pub async fn running(conn: &zbus::Connection) -> bool {
++    let Ok(dbus) = zbus::fdo::DBusProxy::new(conn).await else {
++        return false;
++    };
++    let Ok(name) = zbus::names::BusName::try_from("org.ofono.mms") else {
++        return false;
++    };
++    dbus.name_has_owner(name).await.unwrap_or(false)
++}
++
++/// The settings, and whether mmsd-tng runs: from mmsd-tng when it does
++/// (what it uses now), else from the file.
++pub async fn load(conn: Option<&zbus::Connection>) -> (MmsSettings, bool) {
++    if let Some(c) = conn {
++        if running(c).await {
++            if let Ok(p) = MmsdModemManagerProxy::new(c).await {
++                if let Ok(v) = p.view_settings().await {
++                    return (MmsSettings::from_dbus(&v), true);
++                }
++            }
++            return (MmsSettings::read_file(&path()), true);
++        }
++    }
++    (MmsSettings::read_file(&path()), false)
++}
++
++/// How a saved setting took effect.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum Saved {
++    /// mmsd-tng runs and took it at once (and saved its file).
++    Now,
++    /// Written to the file; mmsd-tng reads it when it starts.
++    AtStart,
++    /// mmsd-tng couldn't take it while running: stopped, the file
++    /// written, started again.
++    Restarted,
++}
++
++/// The value ChangeSettings takes: an empty proxy or APN is "" there
++/// (mmsd-tng stores it as NULL itself), an empty MMSC its placeholder.
++fn dbus_value(key: &str, shown: &str) -> String {
++    if key == MMSC {
++        MmsSettings::stored(key, shown)
++    } else {
++        shown.trim().to_string()
++    }
++}
++
++/// Save one setting where mmsd-tng will use it.
++pub async fn save(
++    conn: Option<&zbus::Connection>,
++    key: &str,
++    shown: &str,
++) -> Result<Saved, String> {
++    check(key, shown).map_err(str::to_string)?;
++    if let Some(c) = conn {
++        if running(c).await {
++            match change(c, key, &dbus_value(key, shown)).await {
++                Ok(()) => return Ok(Saved::Now),
++                Err(e) => {
++                    tracing::warn!(error = %e, "mmsd-tng didn't take the setting; restarting it");
++                    return restart_with(key, shown).await;
++                }
++            }
++        }
++    }
++    write_file(&path(), key, shown).map_err(|e| e.to_string())?;
++    Ok(Saved::AtStart)
++}
++
++async fn change(conn: &zbus::Connection, key: &str, value: &str) -> zbus::Result<()> {
++    let p = MmsdModemManagerProxy::new(conn).await?;
++    p.change_settings(key, &zbus::zvariant::Value::from(value))
++        .await?;
++    // Messages queued with the old settings go again ("Modem is not
++    // connected" when there is no data: nothing to do then).
++    let _ = p.process_message_queue().await;
++    Ok(())
++}
++
++/// mmsd-tng writes its settings back when it stops, so the file is
++/// edited between a stop and a start.
++async fn restart_with(key: &str, shown: &str) -> Result<Saved, String> {
++    let (key, shown) = (key.to_string(), shown.to_string());
++    gtk4::gio::spawn_blocking(move || {
++        systemctl("stop")?;
++        let written = write_file(&path(), &key, &shown).map_err(|e| e.to_string());
++        systemctl("start")?;
++        written.map(|()| Saved::Restarted)
++    })
++    .await
++    .map_err(|_| "the restart was interrupted".to_string())?
++}
++
++fn systemctl(verb: &str) -> Result<(), String> {
++    let status = std::process::Command::new("systemctl")
++        .args(["--user", verb, UNIT])
++        .stdin(std::process::Stdio::null())
++        .stdout(std::process::Stdio::null())
++        .stderr(std::process::Stdio::null())
++        .status()
++        .map_err(|e| e.to_string())?;
++    if status.success() {
++        Ok(())
++    } else {
++        Err(format!("systemctl --user {verb} {UNIT} failed"))
++    }
++}
++
++/// A GLib key file kept as its lines, so that an edit changes one line.
++#[derive(Debug, Clone, Default, PartialEq, Eq)]
++pub struct KeyFile {
++    lines: Vec<String>,
++}
++
++fn group_of(line: &str) -> Option<&str> {
++    let t = line.trim();
++    t.strip_prefix('[')?.strip_suffix(']')
++}
++
++fn key_of(line: &str) -> Option<(&str, &str)> {
++    let t = line.trim_start();
++    if t.starts_with('#') || t.is_empty() {
++        return None;
++    }
++    let (k, v) = t.split_once('=')?;
++    Some((k.trim_end(), v.trim_start()))
++}
++
++impl KeyFile {
++    pub fn parse(text: &str) -> KeyFile {
++        KeyFile {
++            lines: text.lines().map(str::to_string).collect(),
++        }
++    }
++
++    pub fn text(&self) -> String {
++        let mut s = self.lines.join("\n");
++        s.push('\n');
++        s
++    }
++
++    /// The line range of a group's entries (after its header).
++    fn group_range(&self, group: &str) -> Option<(usize, usize)> {
++        let start = self.lines.iter().position(|l| group_of(l) == Some(group))? + 1;
++        let end = self.lines[start..]
++            .iter()
++            .position(|l| group_of(l).is_some())
++            .map_or(self.lines.len(), |i| start + i);
++        Some((start, end))
++    }
++
++    pub fn get(&self, group: &str, key: &str) -> Option<String> {
++        let (start, end) = self.group_range(group)?;
++        self.lines[start..end]
++            .iter()
++            .filter_map(|l| key_of(l))
++            .find(|(k, _)| *k == key)
++            .map(|(_, v)| unescape(v))
++    }
++
++    pub fn set(&mut self, group: &str, key: &str, value: &str) {
++        let line = format!("{key}={}", escape(value));
++        let Some((start, end)) = self.group_range(group) else {
++            if self.lines.last().is_some_and(|l| !l.trim().is_empty()) {
++                self.lines.push(String::new());
++            }
++            self.lines.push(format!("[{group}]"));
++            self.lines.push(line);
++            return;
++        };
++        if let Some(i) =
++            (start..end).find(|i| key_of(&self.lines[*i]).is_some_and(|(k, _)| k == key))
++        {
++            self.lines[i] = line;
++            return;
++        }
++        // After the group's last entry, before the blank lines that
++        // separate it from the next group.
++        let mut at = end;
++        while at > start && self.lines[at - 1].trim().is_empty() {
++            at -= 1;
++        }
++        self.lines.insert(at, line);
++    }
++}
++
++/// GLib's key file escapes: `\s` (a leading space), `\n`, `\t`, `\r`, `\\`.
++fn unescape(v: &str) -> String {
++    let mut out = String::new();
++    let mut chars = v.chars();
++    while let Some(c) = chars.next() {
++        if c != '\\' {
++            out.push(c);
++            continue;
++        }
++        match chars.next() {
++            Some('s') => out.push(' '),
++            Some('n') => out.push('\n'),
++            Some('t') => out.push('\t'),
++            Some('r') => out.push('\r'),
++            Some(o) => out.push(o),
++            None => out.push('\\'),
++        }
++    }
++    out
++}
++
++fn escape(v: &str) -> String {
++    let mut out = String::new();
++    for (i, c) in v.chars().enumerate() {
++        match c {
++            ' ' if i == 0 => out.push_str("\\s"),
++            '\\' => out.push_str("\\\\"),
++            '\n' => out.push_str("\\n"),
++            '\t' => out.push_str("\\t"),
++            '\r' => out.push_str("\\r"),
++            c => out.push(c),
++        }
++    }
++    out
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    /// The file mmsd-tng writes on its first run (values fictional).
++    const FIRST_RUN: &str = "\
++[Settings]
++UseDeliveryReports=false
++TotalMaxAttachmentSize=1100000
++MaxAttachments=25
++AutoCreateSMIL=true
++ForceCAres=false
++
++[Modem Manager]
++CarrierMMSC=http://mms.invalid
++MMS_APN=apn.example.invalid
++CarrierMMSProxy=NULL
++DefaultModemNumber=NULL
++AutoProcessOnConnection=true
++AutoProcessSMSWAP=false
++";
++
++    #[test]
++    fn reads_placeholders_as_empty() {
++        let f = KeyFile::parse(FIRST_RUN);
++        assert_eq!(f.get(GROUP, APN).as_deref(), Some("apn.example.invalid"));
++        assert_eq!(f.get("Settings", "MaxAttachments").as_deref(), Some("25"));
++        assert_eq!(f.get(GROUP, "Missing"), None);
++        let s = MmsSettings::from_values(
++            &f.get(GROUP, MMSC).unwrap(),
++            &f.get(GROUP, PROXY).unwrap(),
++            &f.get(GROUP, APN).unwrap(),
++        );
++        assert_eq!(
++            s,
++            MmsSettings {
++                mmsc: String::new(),
++                proxy: String::new(),
++                apn: "apn.example.invalid".into()
++            }
++        );
++    }
++
++    #[test]
++    fn an_edit_changes_one_line_only() {
++        let mut f = KeyFile::parse(FIRST_RUN);
++        f.set(GROUP, MMSC, "http://mmsc.example.invalid/mms");
++        f.set(GROUP, PROXY, &MmsSettings::stored(PROXY, ""));
++        let expected = FIRST_RUN.replace(
++            "CarrierMMSC=http://mms.invalid",
++            "CarrierMMSC=http://mmsc.example.invalid/mms",
++        );
++        assert_eq!(f.text(), expected);
++    }
++
++    #[test]
++    fn missing_keys_and_groups_are_added() {
++        let mut f = KeyFile::parse("# kept\n[Settings]\nAutoCreateSMIL=true\n\n[Other]\nX=1\n");
++        f.set(GROUP, APN, "apn.example.invalid");
++        f.set(GROUP, PROXY, "proxy.example.invalid:8080");
++        f.set("Settings", "UseDeliveryReports", "false");
++        assert_eq!(
++            f.text(),
++            "# kept\n[Settings]\nAutoCreateSMIL=true\nUseDeliveryReports=false\n\n[Other]\nX=1\n\n\
++             [Modem Manager]\nMMS_APN=apn.example.invalid\nCarrierMMSProxy=proxy.example.invalid:8080\n"
++        );
++        let mut empty = KeyFile::parse("");
++        empty.set(GROUP, MMSC, "http://mmsc.example.invalid");
++        assert_eq!(
++            empty.text(),
++            "[Modem Manager]\nCarrierMMSC=http://mmsc.example.invalid\n"
++        );
++    }
++
++    #[test]
++    fn stored_values_and_escapes() {
++        assert_eq!(MmsSettings::stored(MMSC, " "), "http://mms.invalid");
++        assert_eq!(MmsSettings::stored(PROXY, ""), "NULL");
++        assert_eq!(MmsSettings::stored(APN, ""), "NULL");
++        assert_eq!(
++            MmsSettings::stored(APN, " apn.example.invalid "),
++            "apn.example.invalid"
++        );
++        assert_eq!(unescape(r"\sa\\b\nc"), " a\\b\nc");
++        assert_eq!(escape(" a\\b"), r"\sa\\b");
++        assert!(check(MMSC, "mmsc.example.invalid").is_err());
++        assert!(check(MMSC, "http://mmsc.example.invalid").is_ok());
++        assert!(check(PROXY, "http://proxy.example.invalid").is_err());
++        assert!(check(PROXY, "proxy.example.invalid:80").is_ok());
++        assert!(check(APN, "two words").is_err());
++        assert!(check(APN, "").is_ok());
++    }
++
++    #[test]
++    fn file_round_trip_keeps_the_rest() {
++        let dir = std::env::temp_dir().join(format!("omamessages-mms-{}", std::process::id()));
++        let p = dir.join("modemmanager/mms");
++        let _ = std::fs::remove_dir_all(&dir);
++        // No file yet: created with the group.
++        write_file(&p, APN, "apn.example.invalid").unwrap();
++        assert_eq!(MmsSettings::read_file(&p).apn, "apn.example.invalid");
++        std::fs::write(&p, FIRST_RUN).unwrap();
++        write_file(&p, PROXY, "proxy.example.invalid:80").unwrap();
++        let s = MmsSettings::read_file(&p);
++        assert_eq!(s.proxy, "proxy.example.invalid:80");
++        assert_eq!(s.mmsc, "");
++        let text = std::fs::read_to_string(&p).unwrap();
++        assert!(text.contains("AutoProcessOnConnection=true\n"));
++        assert!(text.contains("[Settings]\nUseDeliveryReports=false\n"));
++        use std::os::unix::fs::PermissionsExt;
++        let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
++        assert_eq!(mode, 0o600);
++        std::fs::remove_dir_all(&dir).unwrap();
++    }
++}
+diff --git a/src/script.rs b/src/script.rs
+index 7c82165..70e41a5 100644
+--- a/src/script.rs
++++ b/src/script.rs
+@@ -5,9 +5,11 @@
+ //!
+ //! Steps: `wait SECONDS`, `open N` (the Nth conversation in the list,
+ //! from 0), `open-archived`, `compose`, `type TEXT` (into the composer,
+-//! or the To field on the compose page), `search TEXT` (empty clears),
+-//! `settings`, `close-settings`, `blocked`, `back`, `menu N` (the
+-//! long-press menu of row N), `close-menu`, `shot PATH` and `quit`.
++//! or the To field on the compose page), `attach PATH` (a file for the
++//! open thread's next message), `add NUMBER` (a recipient for a group, on
++//! the compose page), `search TEXT` (empty clears), `settings`,
++//! `close-settings`, `blocked`, `back`, `menu N` (the long-press menu of
++//! row N), `close-menu`, `shot PATH` and `quit`.
+ 
+ use std::path::PathBuf;
+ use std::time::Duration;
+@@ -19,6 +21,8 @@ pub enum Step {
+     OpenArchived,
+     Compose,
+     Type(String),
++    Attach(PathBuf),
++    Add(String),
+     Search(String),
+     Settings,
+     CloseSettings,
+@@ -56,6 +60,10 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
+             "open-archived" => Step::OpenArchived,
+             "compose" => Step::Compose,
+             "type" => Step::Type(arg.to_string()),
++            "attach" if !arg.is_empty() => Step::Attach(PathBuf::from(arg)),
++            "attach" => return Err("attach: needs a path".into()),
++            "add" if !arg.is_empty() => Step::Add(arg.to_string()),
++            "add" => return Err("add: needs a number".into()),
+             "search" => Step::Search(arg.to_string()),
+             "settings" => Step::Settings,
+             "close-settings" => Step::CloseSettings,
+@@ -79,8 +87,8 @@ mod tests {
+     #[test]
+     fn parses_every_step() {
+         let s = parse(
+-            "wait 0.5; open 2; open-archived\ncompose; type Hello there; search din;\
+-             search; settings; close-settings; blocked; back; menu 1; close-menu; shot /tmp/a.png; quit",
++            "wait 0.5; open 2; open-archived\ncompose; type Hello there; attach /tmp/p.png; \
++             add +12025550101; search din; search; settings; close-settings; blocked; back; menu 1; close-menu; shot /tmp/a.png; quit",
+         )
+         .unwrap();
+         assert_eq!(
+@@ -91,6 +99,8 @@ mod tests {
+                 Step::OpenArchived,
+                 Step::Compose,
+                 Step::Type("Hello there".into()),
++                Step::Attach("/tmp/p.png".into()),
++                Step::Add("+12025550101".into()),
+                 Step::Search("din".into()),
+                 Step::Search(String::new()),
+                 Step::Settings,
+@@ -110,6 +120,8 @@ mod tests {
+         assert!(parse("open x").is_err());
+         assert!(parse("wait -1").is_err());
+         assert!(parse("shot").is_err());
++        assert!(parse("attach").is_err());
++        assert!(parse("add").is_err());
+         assert!(parse("dance").is_err());
+         assert_eq!(parse(" ; ;").unwrap(), vec![]);
+     }
+diff --git a/src/uri.rs b/src/uri.rs
+index 3c44d9f..9350293 100644
+--- a/src/uri.rs
++++ b/src/uri.rs
+@@ -1,8 +1,8 @@
+ // SPDX-License-Identifier: GPL-3.0-or-later
+ //! `sms:`, `smsto:`, `mms:` and `mmsto:` links (RFC 5724 and the forms
+ //! browsers and other phones use): `sms:+12025550100?body=Hello%20there`,
+-//! `smsto:+12025550100`, `sms:+1...,+1...` (a group: MMS comes with T3,
+-//! so for now the first recipient), iOS's `sms:NUMBER&body=...`.
++//! `smsto:+12025550100`, `sms:+1...,+1...` (a group conversation, sent
++//! as MMS), iOS's `sms:NUMBER&body=...`.
+ 
+ #[derive(Debug, Clone, PartialEq, Eq, Default)]
+ pub struct SmsUri {
+-- 
+2.56.1
+
