@@ -10,8 +10,17 @@
 // changes no input method, so the keyboard stayed up over the home screen
 // (and a second double tap could re-show it on the way: "random"). So the
 // plugin remembers that it showed the keyboard, and puts such a keyboard
-// away when the home screen comes up. A keyboard squeekboard showed on its
-// own is left to squeekboard, which hides it when the field goes away.
+// away when the home screen comes up.
+//
+// A keyboard that came up for a text field mostly goes by itself: GTK and
+// the browser give their text field up when their window loses the keyboard
+// focus, and the input method deactivates. An application that keeps it (a
+// GPUI one did, on a Pixel 9a with Hyprland 0.57) leaves the input method
+// active when an empty workspace takes the focus, and the keyboard stayed up
+// over the home screen after a swipe home. So whatever keyboard is up at
+// the moment the home screen comes up is put away too (hideAsHomeComesUp).
+// One that comes up later, for the drawer's search field, is not touched:
+// the home screen was up already.
 
 // Whether the keyboard is still one shown by hand after a visibility report
 // from omamobile-osk-watch: hiding ends it, showing keeps what we knew.
@@ -32,6 +41,12 @@ function homeOnScreen(workspace) {
 // arriving after it) doesn't matter.
 function shouldHide(shownByHand, visible, home) {
   return !!(shownByHand && visible && home)
+}
+
+// Hide now: the home screen has just come up (it was not up before) and a
+// keyboard is still showing, whoever showed it.
+function hideAsHomeComesUp(wasHome, home, visible) {
+  return !!(!wasHome && home && visible)
 }
 
 // The pill's double tap: show the keyboard when it is down, hide it when
@@ -97,6 +112,7 @@ function addRows(listing) {
 
 if (typeof module !== "undefined") {
   module.exports = { shownByHandAfter: shownByHandAfter, homeOnScreen: homeOnScreen, shouldHide: shouldHide,
+                     hideAsHomeComesUp: hideAsHomeComesUp,
                      TOGGLE_SETTLE_MS: TOGGLE_SETTLE_MS, toggleTarget: toggleTarget,
                      parseListing: parseListing, languageRows: languageRows, addRows: addRows }
 }

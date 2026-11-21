@@ -296,6 +296,83 @@ Item {
       compare(keyboardCalls("Keyboard"), 0, "a swipe is no tap")
     }
 
+    // Home however far the finger went: an ordinary swipe is longer than the
+    // 120 px that opened recent apps up to 0.2.133.
+    function test_a_long_swipe_goes_home_too() {
+      var strip = find(harness, "pillStrip")
+      var x = strip.width / 2, y = strip.height / 2
+      var t = touchEvent(strip)
+      t.press(0, strip, x, y).commit()
+      for (var dy = 12; dy <= 360; dy += 12) {
+        t.move(0, strip, x, y - dy).commit()
+        wait(5)
+      }
+      t.release(0, strip, x, y - 360).commit()
+      wait(30)
+      compare(calls("omamobile.switcher"), 0, "no recent apps: " + JSON.stringify(Quickshell.executed))
+      compare(calls("hl.dsp.focus"), 1, "home")
+    }
+
+    // Recent apps while the finger is still down, as on iOS and Android. A
+    // finger at rest shifts by a pixel or two, which must not start the wait
+    // again.
+    function test_a_swipe_held_still_opens_recent_apps() {
+      var strip = find(harness, "pillStrip")
+      var x = strip.width / 2, y = strip.height / 2
+      var t = touchEvent(strip)
+      t.press(0, strip, x, y).commit()
+      for (var dy = 12; dy <= 180; dy += 12) {
+        t.move(0, strip, x, y - dy).commit()
+        wait(5)
+      }
+      compare(calls("omamobile.switcher"), 0, "not yet: " + JSON.stringify(Quickshell.executed))
+      for (var i = 0; i < 12; i++) {
+        t.move(0, strip, x + (i % 2), y - 180 - (i % 3)).commit()
+        wait(50)
+      }
+      compare(calls("omamobile.switcher"), 1, "recent apps, the finger still down: " + JSON.stringify(Quickshell.executed))
+      t.release(0, strip, x, y - 181).commit()
+      wait(30)
+      compare(calls("omamobile.switcher"), 1, "once")
+      compare(calls("hl.dsp.focus"), 0, "and not home as well")
+    }
+
+    function test_a_slow_swipe_is_no_hold() {
+      var strip = find(harness, "pillStrip")
+      var x = strip.width / 2, y = strip.height / 2
+      var t = touchEvent(strip)
+      t.press(0, strip, x, y).commit()
+      for (var dy = 12; dy <= 144; dy += 12) {
+        t.move(0, strip, x, y - dy).commit()
+        wait(100)
+      }
+      t.release(0, strip, x, y - 144).commit()
+      wait(30)
+      compare(calls("omamobile.switcher"), 0, "it kept moving: " + JSON.stringify(Quickshell.executed))
+      compare(calls("hl.dsp.focus"), 1, "home")
+    }
+
+    // Back down to where it began before it rests: neither.
+    function test_a_swipe_taken_back_does_nothing() {
+      var strip = find(harness, "pillStrip")
+      var x = strip.width / 2, y = strip.height / 2
+      var t = touchEvent(strip)
+      t.press(0, strip, x, y).commit()
+      for (var dy = 12; dy <= 96; dy += 12) {
+        t.move(0, strip, x, y - dy).commit()
+        wait(5)
+      }
+      for (dy = 84; dy >= 12; dy -= 12) {
+        t.move(0, strip, x, y - dy).commit()
+        wait(5)
+      }
+      wait(500)
+      t.release(0, strip, x, y - 12).commit()
+      wait(30)
+      compare(calls("omamobile.switcher"), 0, JSON.stringify(Quickshell.executed))
+      compare(calls("hl.dsp.focus"), 0)
+    }
+
     function test_double_tap_in_the_keyboard_strip_toggles_the_keyboard() {
       var strip = find(harness, "keyboardStrip")
       tap(strip, strip.width / 2, strip.height / 2)
