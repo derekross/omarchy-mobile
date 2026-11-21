@@ -208,6 +208,70 @@ done
 rmdir "$kr/omamobile-revoked" && : > "$kr/omamobile-revoked"
 pass "fetch-published stops at an omamobile-revoked not in RELEASES §10's form, before any download, with the signing tools' words"
 
+# A missing omamobile-revoked revokes nothing and writes nothing to stderr;
+# if an existing file vanishes, becomes unreadable, turns into a directory,
+# or changes to a malformed line between revoked_file_check and the read,
+# fetch-published stops before any download rather than continuing with an
+# empty or unparsed revocation list. A wc on PATH applies each fault after
+# revoked_file_check's final wc -l succeeds.
+rm -f "$kr/omamobile-revoked"
+(cd "$R" && OMAMOBILE_PKGS_URL=file://$t/srv tools/fetch-published "$t/revoked-missing") \
+  > "$t/log" 2> "$t/err" || { cat "$t/log" "$t/err"; fail "fetch-published allows a missing omamobile-revoked"; }
+[[ ! -s $t/err ]] || { cat "$t/err"; fail "a missing omamobile-revoked writes nothing to stderr"; }
+[[ -f $t/revoked-missing/baz-1-1-any.pkg.tar.zst && -f $t/revoked-missing/foo-0.2.10-1-any.pkg.tar.zst ]] \
+  || { cat "$t/log"; fail "fetches packages when omamobile-revoked is missing"; }
+real_wc=$(command -v wc) && mkdir -p "$t/bin-revoked"
+cat > "$t/bin-revoked/wc" <<EOF
+#!/bin/sh
+"$real_wc" "\$@" || exit \$?
+case "\${REVOKED_FAULT:-}" in
+  rm) rm -f -- "$kr/omamobile-revoked" ;;
+  chmod) chmod 000 -- "$kr/omamobile-revoked" ;;
+  dir) rm -f -- "$kr/omamobile-revoked" && mkdir -- "$kr/omamobile-revoked" ;;
+  swap) printf '%s:4:\n' "$signer" > "$kr/omamobile-revoked" ;;
+  crlf) printf '%s\r\n' "$signer" > "$kr/omamobile-revoked" ;;
+esac
+EOF
+chmod +x "$t/bin-revoked/wc"
+: > "$t/unreadable" && chmod 000 "$t/unreadable"
+for fault in rm chmod dir swap crlf; do
+  if [[ $fault == chmod && -r $t/unreadable ]]; then
+    pass "# skip: chmod 000 does not stop this user reading"
+    continue
+  fi
+  echo "$signer" > "$kr/omamobile-revoked"
+  d=$t/revoked-fault-$fault && : > "$t/curl.log"
+  if into=$d fetch PATH="$t/bin-revoked:$t/bin:$PATH" REVOKED_FAULT="$fault"; then
+    cat "$t/log"
+    fail "stops when omamobile-revoked fails after the check ($fault)"
+  fi
+  case $fault in
+    rm)
+      [[ ! -e $kr/omamobile-revoked ]] || fail "the wc wrapper removed omamobile-revoked"
+      want="error: cannot read packages/omamobile-keyring/omamobile-revoked" ;;
+    chmod)
+      [[ ! -r $kr/omamobile-revoked ]] || fail "the wc wrapper made omamobile-revoked unreadable"
+      chmod 644 "$kr/omamobile-revoked"
+      want="error: cannot read packages/omamobile-keyring/omamobile-revoked" ;;
+    dir)
+      [[ -d $kr/omamobile-revoked ]] || fail "the wc wrapper replaced omamobile-revoked with a directory"
+      rmdir "$kr/omamobile-revoked"
+      want="error: cannot read packages/omamobile-keyring/omamobile-revoked" ;;
+    swap)
+      [[ $(cat "$kr/omamobile-revoked") == "$signer:4:" ]] || fail "the wc wrapper rewrote omamobile-revoked as malformed ($fault)"
+      want="error: packages/omamobile-keyring/omamobile-revoked changed while reading" ;;
+    crlf)
+      [[ $(cat "$kr/omamobile-revoked") == $signer$'\r' ]] || fail "the wc wrapper rewrote omamobile-revoked as malformed ($fault)"
+      want="error: packages/omamobile-keyring/omamobile-revoked changed while reading" ;;
+  esac
+  grep -qxF "$want" "$t/log" \
+    || { cat "$t/log"; fail "says why omamobile-revoked failed after the check ($fault)"; }
+  [[ ! -s $t/curl.log ]] || { cat "$t/curl.log"; fail "fetches nothing when omamobile-revoked fails after the check ($fault)"; }
+  [[ ! -e $d ]] || fail "makes no DIR when omamobile-revoked fails after the check ($fault)"
+done
+: > "$kr/omamobile-revoked"
+pass "fetch-published allows a missing omamobile-revoked quietly, and stops before any download if it cannot be read or changes after the check"
+
 # --- build-packages and build-rootfs --local ---
 mv "$R/keys/panther" "$t/panther-key"
 if run tools/build-packages --local panther packages/omamobile-device-panther; then fail "build-packages --local refuses without the local key"; fi

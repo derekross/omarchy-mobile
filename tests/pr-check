@@ -101,6 +101,45 @@ for line in "wlan0 at $A" "$(ts 25 00 15 10 20 30)" "$(ts 25 13 15 10 20 30)" "$
 done
 echo "ok - past a range's edge, with a hex letter, with colons or in a MAC record, the same digits fail, and so does an address beside a timestamp, in its last field or after an exempt one there"
 
+# Locally administered unicast addresses (first octet x2, x6, xA, xE) and
+# all-ones pass in every spelling; x3, x7, xB and xF also set the group bit
+# and fail in every spelling, including ff:... other than all ones and beside
+# an exempt address. Built from octets so neither scanner finds a literal
+# address in this file.
+tail_c=$(tc 1a 2b 3c 4d 5e) tail_h=${tail_c//:/-} tail_b=${tail_c//:/}
+mac_forms() {
+  local o=$1 O=${1^^}
+  printf '%s\n' \
+    "$o:$tail_c" "$O:${tail_c^^}" \
+    "mac:$o:$tail_c" "tag:$O:${tail_c^^}" "id:$o:$tail_c" \
+    "$o-$tail_h" "$O-${tail_h^^}" "wlan0-$o-$tail_h" \
+    "mac=$o$tail_b" "mac=$O${tail_b^^}" "bd_addr: $o$tail_b" \
+    "ether $O${tail_b^^}" "\"mac_address\": \"$O${tail_b^^}\""
+}
+for o in 02 16 ca fe; do
+  while IFS= read -r line; do
+    mac_case "$line" 0
+  done < <(mac_forms "$o")
+done
+for line in "ff:ff:ff:ff:ff:ff" "FF:FF:FF:FF:FF:FF" "mac:ff:ff:ff:ff:ff:ff" \
+  "ff-ff-ff-ff-ff-ff" "FF-FF-FF-FF-FF-FF" "wlan0-ff-ff-ff-ff-ff-ff" \
+  "mac=ffffffffffff" "bd_addr: FFFFFFFFFFFF" "ether FFFFFFFFFFFF" \
+  "\"mac_address\": \"FFFFFFFFFFFF\""; do
+  mac_case "$line" 0
+done
+echo "ok - locally administered unicast MACs (x2, x6, xA, xE) and all-ones pass in every spelling"
+for o in 03 17 cb ef ff; do
+  while IFS= read -r line; do
+    mac_case "$line" 1 "MAC or Bluetooth addresses"
+  done < <(mac_forms "$o")
+  mac_case "$L $o:$tail_c" 1 "MAC or Bluetooth addresses"
+done
+near_all_ones=$(printf '%s:%s' ff:ff:ff ff:ff:fe)
+for line in "$near_all_ones" "${near_all_ones//:/-}" "mac=${near_all_ones//:/}"; do
+  mac_case "$line" 1 "MAC or Bluetooth addresses"
+done
+echo "ok - group-bit first octets (x3, x7, xB, xF, including ff:... not all-ones) fail in every spelling"
+
 case_branch getprop
 echo "[ro.boot.hardware.revision]: [MP1.0]" > notes.md
 git add -A && git commit -q -m "notes"

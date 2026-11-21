@@ -55,8 +55,8 @@ added=$(git diff --unified=0 --no-color "$range" -- . ':(exclude)tools/pr-check'
 # (mac:, id:, wlan0-) still counts. 12 bare hex digits count in a MAC
 # record: mac, macaddr, mac_address, hwaddr, bdaddr, bd_addr or ether, then
 # =, : or white space. Each is read in the colon form, and one whose first
-# octet has the locally administered bit set (x2, x6, xA, xE) is made up;
-# so are all zeros, all ones and RFC 7042's documentation range
+# octet is locally administered unicast (group bit clear: x2, x6, xA, xE) is
+# made up; so are all zeros, all ones and RFC 7042's documentation range
 # (00:00:5e:00:53:xx). Six decimal fields joined by hyphens that read as
 # a date and time, YY-MM-DD-HH-MM-SS (month 01-12, day 01-31, hour 00-23,
 # minute and second 00-59), are a timestamp, such as a screenshot's name;
