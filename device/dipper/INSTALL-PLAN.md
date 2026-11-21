@@ -182,7 +182,8 @@ mismatch; no generated image or private key goes in Git.
 From guarded RAM rescue, confirm all UFS disks and partitions report
 read-only. Re-capture every non-`userdata`, non-`super` GPT partition and
 compare each complete phone-side SHA-256 with the off-device copy. Include
-the stock `boot` image. Stop on any mismatch, missing partition, size change,
+the current guarded-rescue `boot` image and retain the older 11-09 image as
+separate historical evidence. Stop on any mismatch, missing partition, size change,
 or `ro=0`. Store the complete backup and checksum manifest off-repository.
 
 ### L3. Attended install (persistent write; high risk; maintainer approval
