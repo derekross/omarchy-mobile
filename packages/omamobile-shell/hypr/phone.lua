@@ -84,8 +84,10 @@ hl.window_rule({
 -- package: Hyprland rejects an animation whose curve it doesn't know. To get
 -- the cut back, add after the line that loads this file (looknfeel.lua):
 --   hl.animation({ leaf = "workspaces", enabled = false })
-hl.curve("omamobileWorkspaceFade", { type = "bezier", points = { { 0.23, 1 }, { 0.32, 1 } } })
-hl.animation({ leaf = "workspaces", enabled = true, speed = 2, bezier = "omamobileWorkspaceFade", style = "fade" })
+-- Under pcall: a Hyprland that refuses either call keeps its cut, and the rest
+-- of this file (the lock after boot, the binds, the device's own rules) loads.
+pcall(hl.curve, "omamobileWorkspaceFade", { type = "bezier", points = { { 0.23, 1 }, { 0.32, 1 } } })
+pcall(hl.animation, { leaf = "workspaces", enabled = true, speed = 2, bezier = "omamobileWorkspaceFade", style = "fade" })
 
 -- Lock after boot, like a phone: the session logs in automatically, then
 -- Omarchy's lock comes up with its PIN pad. Only once a PIN is set (the

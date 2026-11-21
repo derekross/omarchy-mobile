@@ -1035,6 +1035,9 @@ if [[ -n $lua ]]; then
     out=$(DEVICE_HOOK_CASE=$hook "$lua" test/phone-rules.lua) || { grep -v '^ok' <<<"$out"; fail "phone.lua with a $hook device.lua"; }
   done
   pass "phone.lua: device.lua runs after the shared rules, and an error in it leaves them standing"
+  # The workspace fade's two calls are under pcall: a Hyprland that refuses them loads the rest.
+  out=$(FADE_CASE=refused "$lua" test/phone-rules.lua) || { grep -v '^ok' <<<"$out"; fail "phone.lua with the fade's calls refused"; }
+  pass "phone.lua: a Hyprland that refuses the fade's calls keeps the cut and loads the rest"
   # Dictation keys under Omarchy 4.5's helpers: four homes, four bindings.lua
   dk=$(mktemp -d)
   mkdir -p "$dk/plain/.config/hypr" "$dk/migrated/.config/hypr" "$dk/own/.config/hypr"
