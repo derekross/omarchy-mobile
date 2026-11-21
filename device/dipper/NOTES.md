@@ -85,6 +85,10 @@ reported 0 WARN and 0 kernel error lines. Wi-Fi, Bluetooth, battery, audio,
 sensors and cameras were absent. It exited 1 only because the required root
 check failed. No boot, reboot or partition write was issued. This remains
 overlay-session evidence, not a persistent-userdata boot.
+Neither smoke capture nor the retained boot-partition audit records a boot ID
+or uptime. The six-to-zero error-line difference cannot be attributed to a
+reboot or log-buffer wrap from the retained evidence; capture both values
+with each read in the next attended session.
 
 ## 2026-11-21 — normal Qt rendering with CPU0 idle isolation
 
@@ -1336,7 +1340,11 @@ handset and operated the test.
 
 The recorded 11-09 raw boot image is the recovery source
 (`e9ef7bff84d181e09de286a95b9487ec5fcb5c0cc53db3ae780d6a64ceb4fbe8`). A
-restore has not been run. After verifying that file against this hash and
+restore has not been run. It would put back the image associated with the
+pre-existing ext4 `userdata` system that earlier fallbacks entered with a
+writable main disk. That outcome is inferred from those fallbacks, not verified
+by restoring this exact image; it is not a safe read-only rescue path. After
+verifying that file against this hash and
 confirming the target is the unlocked Dipper, the documented recovery command
 would be `fastboot -s "$FASTBOOT_SERIAL" flash boot "$BOOT_11_09_IMAGE"`,
 followed by `fastboot -s "$FASTBOOT_SERIAL" reboot`. Do not run it until the
@@ -1371,7 +1379,7 @@ worked. No UFS write occurred.
 
 The separate NFS-handoff image remained unbooted at this preflight; subsequent
 NFS attempts are recorded in the 2026-11-20 current-stack entry above. They did
-not establish a clean persistent-userdata boot. The owner has asked that no
+not establish a clean persistent-userdata boot. The maintainer has asked that no
 further phone writes be made until he replies on the boot and NFS questions.
 Clean-session phone-smoke, network status and physical-session evidence remain
 required before this device PR leaves draft.
