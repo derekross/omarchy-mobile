@@ -1,0 +1,385 @@
+<!-- SPDX-License-Identifier: MIT -->
+# Review lessons: Kernel (linux-omarchy-mobile) (part 3 of 4)
+
+Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
+
+- **L-77. A vendor CAL's version switch is narrower than the function it
+  sits in.** Google's eUSB2 init gates only the charge-pump bias clear on
+  the revision; the rest runs for every version, so "0x701's sequence"
+  overstated it. *Check:* list which writes are actually inside the version
+  test before accepting a per-revision claim. *From:* kernel #33.
+- **L-78. Balancing a shared PHY child's init count turns a once-per-boot
+  init into one that runs every cycle.** *Check:* list every board that
+  binds the wrapper, open DT PRs included, and ask for one boot with an
+  unbind/bind on one of them (L-51). *From:* kernel #33 (Pixel 8 Pro).
+- **L-79. Check linux-next for the same function before accepting a fix to
+  a shared driver.** It showed #33's coming conflict, and an upstream change
+  to cheetah's PIPE3 path that our next base move will bring (an L-51
+  event). *From:* kernel #33.
+- **L-83. A `Fixes:` id that CI calls `UNKNOWN_COMMIT_ID` may still be
+  right.** CI's clone holds only our squashed base; a clone with the upstream
+  remote resolves it. *Check:* `git log -1 <id>` there (or git.kernel.org),
+  and confirm it introduced the code being fixed (extends L-30). *From:*
+  kernel #33, round 2.
+- **L-84. For a rebased series, compare the preimages as well as the
+  results.** Identical blobs at both heads *and* both bases mean earlier
+  object comparisons (L-8) still hold without a rebuild; matching results on
+  a moved base mean they must be redone (extends L-69). *From:* kernel #33,
+  round 2.
+- **L-92. On Exynos CMUs the gate enable bit (CG_VAL, bit 21) means "on"
+  only in manual mode.** MANUAL is bit 20, auto-gating bit 28, and the CMU's
+  controller option has a global auto bit. *Check:* a read-only gate follows
+  the mode, as Google's `ra_get_gate()` does, or the PR shows the handoff
+  values; a vendor `HWACG_VCLK`/`_QCH` clock is a hint it's automatic.
+  *From:* kernel #34 (a wrong read would leave the watchdogs unowned).
+- **L-93. The unused-regulator cleanup acts only on regulators the DT
+  describes without `regulator-always-on`.** Undescribed outputs are never
+  switched off; a described one with no consumer is, about 30 s in.
+  *Check:* "keeps it out of the cleanup" claims against `of_regulator.c` and
+  `regulator_late_cleanup()`; inherited rails a board describes carry
+  always-on until a consumer owns them. Extends C-1. *From:* kernel #35.
+- **L-94. Find a vendor rail's consumer in the board dtsi's `&node {
+  …-supply }` overrides, not from its schematic name.** G4's `L8M_USB` rails
+  belong to Google's HSI0 power-domain helper, not the PHY. *From:* kernel
+  #35.
+- **L-95. A regulator node without voltage limits can't change state.** So
+  "no other rail changed" on a new PMIC regulator driver comes down to which
+  DT nodes have constraints. *From:* kernel #32, round 5.
+- **L-96. A binding describes the hardware, not Linux's power policy.** No
+  `power-domains: false` for a block stock gives a domain; match the sibling
+  SoC's rule and put "no domain because firmware leaves it on" as a comment
+  on the board node. *From:* kernel #40.
+- **L-97. dtschema's core schema rejects a string property named
+  `description`.** *Check:* when a binding types a vendor node, validate the
+  vendor's exact node against the base's schemas and the head's, and ask
+  whether the firmware needs what the schema makes the board drop. *From:*
+  kernel #37, kernel #13.
+- **L-98. A binding that requires a clock is usable only once the clock
+  provider exports it.** *Check:* grep the SoC's clock header and the open
+  clock PRs; name the missing provider as the next step. *From:* kernel #39.
+- **L-99. Read the vendor driver's read path, not only its register map.**
+  Google reports a fixed 22 °C on MAX77779 gauge firmware below 1.15, so the
+  Temp register isn't trusted there. *From:* kernel #38.
+- **L-100. Check a per-board scale value in three public places:** the board
+  node or the vendor default, the battery model's name, and a design value
+  it implies (`nDesignCap` × LSB = the rated mAh). *From:* kernel #38 (the
+  2 mΩ shunt).
+- **L-101. A Kconfig `default` tied to another symbol doesn't follow it
+  under fragment merging,** because defconfig has already written "is not
+  set". *Check:* the merged `.config`, made the way `bin/omamobile kernel`
+  makes it. *From:* #23 (`DETECT_HUNG_TASK`).
+- **L-113. Before accepting "Google's driver for <SoC> does X", find the
+  driver that SoC's defconfig builds.** soc/gs has two USB PHY drivers
+  matching `samsung,exynos-usbdrd-phy`; #42 cited `phy-exynos-usb3p1.c`, but
+  zuma builds `CONFIG_PHY_EXYNOS_USBDRD_EUSB`, and the cited function only
+  acts on USBCON v3.0 (zuma is 0x600). *Check:* the defconfig and module
+  list, the module's files in `Kbuild`, then any version test in the cited
+  function against the stock DT. Extends L-56 and L-77. *From:* kernel #42.
+- **L-114. Reserve a stock address only if Google's dtsi gives the region
+  a `reg`.** A `size` + `alloc-ranges` pool (`tui`, `mfc_fw`, `famodel`) has
+  an address only because stock allocated it there on that boot. *From:*
+  kernel #43.
+- **L-115. When a PHY driver picks its settings from `clk_get_rate()`, the
+  board's nominal fixed clocks become PHY configuration.**
+  `phy-snps-eusb2.c` takes FSEL and the PLL divider from an exact-rate table,
+  so a CAL nominal rate or a mux reading the other way decides whether the
+  PHY initialises. *Check:* trace the clock to its root and ask for the mux
+  selections and the `clk_summary` rate at handoff. Extends L-58. *From:*
+  kernel #40.
+- **L-116. A fix in a PHY's exit path also covers resume.** dwc3 calls
+  `phy_exit()` on device-mode suspend and touches the core in
+  `dwc3_phy_setup()` before `phy_init()`. *Check:* list the consumer's
+  `phy_exit` callers and the first register access after each, and name the
+  untested paths in the review. *From:* #23 tests 24-29, kernel #42.
+- **L-117. A comment that says "all variants" is checked against every
+  variant's vendor driver.** tegu ships three panels (`panel-gs-tg4a/b/c`);
+  TG4A's porches and size differ. *Check:* the device's `BUILD.bazel` for the
+  list, then each file. Extends L-56. *From:* kernel #46.
+- **L-118. On Tensor, SYSIP_DAT0 0x00 means "normal" in Google's reboot
+  driver** (`pixel-gs201-reboot.c`, `pixel-zuma-reboot.c` in
+  kernel/google-modules/power/reset). Check reboot-mode claims against that
+  file, not a contributor's harness. *From:* kernel #45.
+- **L-119. A blank line before `Signed-off-by:` takes `Link:` out of the
+  trailer block.** checkpatch doesn't flag it. *Check:* `git log -1
+  --format=%B <c> | git interpret-trailers --parse` lists every intended
+  trailer. *From:* kernel #35, round 10.
+- **L-138. "Stop where stock repairs" covers every error poll on stock's
+  path to the write decision.** FTM5's `fts_crc_check` polls config CRC
+  events 0x20/0x21 and `fts_fw_update` reflashes on them; kernel #48 read
+  and logged them, then scanned. *Check:* trace stock from probe to each
+  write decision and list every event or status that leads to a repair; the
+  driver must fail on each. Extends L-129 and L-108. *From:* kernel #48,
+  round 12.
+- **L-139. A PR that moves a compatible into its own binding is merged with
+  every open PR that uses it as a fallback, and the schemas rebuilt.** #9
+  moved `google,gs101-pmu` out of exynos-pmu.yaml while #47 added
+  `[gs201-pmu, gs101-pmu]` there: both merged as text, and dt-validate failed
+  on all four Google boards (`Duplicate compatible` from `dt-mk-schema`).
+  *Check:* `git grep` open PR heads for the moved compatible, test-merge,
+  `dt-mk-schema` and `dt-validate`. Extends L-126. *From:* kernel #9 with
+  #47, round 12.
+- **L-140. Compare an imported series against patchwork's mboxes when lore
+  is blocked.** `https://patchwork.kernel.org/api/1.3/patches/?q=<term>`
+  lists the message ids and `/project/<list>/patch/<msgid>/mbox/` gives each
+  patch; compare each commit's lines per file, and where only hunks differ,
+  apply to the base and compare the file. Extends L-62. *From:* kernel #9,
+  round 12.
+- **L-141. A gs101 power domain turned off without its DTZPC save needs the
+  save before anything powers it back on.** André's driver skips the EL3
+  save and restore for a `google,gs101-pd` without `samsung,dtzpc`, so the
+  first consumer finds the block's TrustZone settings reset, and its
+  registers SError. *Check:* a new `power-domains = <&pd_…>` on gs101 comes
+  with `samsung,dtzpc` and the block's CMU in the same series. *From:*
+  kernel #9, round 12.
+- **L-142. An enable commit before the fix for a known-bad first version is
+  a bisect hazard.** #7's raven enable commit came before the tuning that
+  stopped boot-time thermal power-offs (3 of 4 boots). *Check:* when a body
+  says "the first version did X on the phone", find that commit and ask for
+  the board enable to land last. Extends L-123. *From:* kernel #7,
+  round 12.
+- **L-143. A Kconfig guard is checked by building with the guarded symbol
+  off.** `kernel-pr-check` builds with our config (SPI on), and a
+  single-object build compiles even a driver whose symbol is off. *Check:*
+  `scripts/config -d SPI`, build the object, and `llvm-nm | grep -i spi` is
+  empty. Extends L-20. *From:* kernel #8, round 12.
+- **L-144. A vendor kernel may program what our read-only driver leaves
+  alone.** Google's `gs_tmu_v2.c` sends every non-passive DT trip to ACPM as
+  a TMU threshold; under our driver the hardware trip is whatever the
+  bootloader set. "INIT doesn't change them" isn't "they're set": ask for the
+  decoded values. Extends L-23. *From:* kernel #7, round 12.
+- **L-151. An access table on shared driver data is checked against open
+  PRs on every SoC that falls back to it.** Kernel #49 limited
+  `google,zuma-pmu`'s regmap; Tensor G4 binds the same data through its
+  fallback, and open #40 reads PMU `0x2a84` there, which the table left out:
+  tegu's HSI0 clocks, and with them its only USB link, would have failed.
+  *Check:* `git grep` the compatible's fallback users, then grep open PR heads
+  for reads and writes through that regmap. *From:* kernel #49, round 13.
+- **L-152. "Both SoCs use the same Google source" is proven by blob ids.**
+  The gitiles JSON listing of `drivers/ufs/zuma/` gave identical blob ids on
+  the Pixel 8 and Pixel 9a branches. *From:* kernel #51, round 13.
+- **L-153. A per-function object diff normalises `adrp` pages, relocation
+  addends and `.altinstr_replacement` before naming changed functions.** The
+  raw diff of #42 showed 28 changed functions where one changed. Extends
+  L-110. *From:* kernel #42, round 13.
+- **L-163. A regmap table for a new block allows writes only to what its
+  client driver writes,** not the vendor's register enum. #54's RTC table
+  could write the PMIC's SMPL, WTSR and oscillator trim. Note that
+  `update_bits` on a volatile register skips the write table when the bus has
+  `reg_update_bits`. Extends L-25. *From:* kernel #54, round 14.
+- **L-164. Re-validate an approved binding PR against every board merged
+  since.** #13's `soc_compatible: false` rule began rejecting lynx's real node
+  once #43 merged. *From:* kernel #13, round 14.
+- **L-176. A new register written through a Tensor PMU regmap goes into
+  that SoC's access table, and the write's return is checked.** #62 wrote
+  `PMU_INFORM0` on `google,zuma-pmu`, whose `wr_table` (kernel #49) lists
+  eight other registers; regmap returns -EIO before the SMC, and the PR
+  dropped the return, so on the base it would silently do nothing while the
+  phone test (from an older integration tree) showed it working. *Check:* for
+  every new `regmap_write`/`update_bits` on a `pmu_secure` regmap, find the
+  offset in `gs101-pmu.c`'s `*_pmu_registers` for that compatible, and ask
+  for the blob id of `gs101-pmu.c` in the tree that produced the evidence.
+  Extends L-151 and L-163. *From:* kernel #62, round 20.
+- **L-177. Google publishes per-device device-tree repositories for the
+  zuma-era phones, and their `*-isp-event-info.dtsi` gives every interrupt
+  register's offset.** `kernel/devices/google/zuma` (`dts/zuma-isp.dtsi`,
+  `zuma-isp-event-info.dtsi`) and `kernel/devices/google/tegu`
+  (`dts/zuma-tegu-camera.dtsi`), with the bit names in `soc/gs`'s
+  `include/dt-bindings/lwis/platform/zuma/isp_fe.h`. Kernel #63 attributed
+  the zumapro LoCH layout to the HAL's register table; the event-info DT
+  confirms the ISR/IMR offsets, and the camera DT gives the sensor power
+  sequence the commit called "stock's". *Check:* for a "from the HAL"
+  register claim, fetch the block's event-info node (`irq-src-reg`,
+  `irq-mask-reg`) and the LWIS header; for a power sequence, the device's
+  `*-camera.dtsi` `power-up-seqs`. Ask for the citation. Extends L-61 and
+  L-152. *From:* kernel #63, round 20.
+- **L-193. A CMU table's parent list is checked for registration, not only
+  for order.** Kernel #73's three CMU_TOP G3D muxes name four
+  `zumapro_shared*_d2/_d3` parents in the CAL's order, but nothing in
+  `clk-zumapro.c` registers them, so a mux left on one of them is an orphan
+  at 0 Hz; the boot evidence didn't show it because the GPU rates come from
+  the local PLLs. *Check:* extract every registered name (second argument of
+  `MUX*`/`DIV*`/`GATE`/`FFACTOR`/`FRATE`, third of `PLL`) and every name in
+  `PNAME` lists and parent fields; the difference must be only board-level
+  inputs (`oscclk`, `*-alt`, `*-tcxo`) and deliberate omissions, each named
+  in the message. The CAL's `FIXEDRATE(PLL_SHAREDn_Dm, …)` lines are the
+  factors to add. *From:* kernel #73 with #78, round 21.
+- **L-208. An OPP table is checked against the stock cpufreq domain's
+  limits, not only the firmware's rate list.** #87's little table ended at
+  1950-1954 MHz, above Google's `max-freq = <1950000>`, and `clk-acpm`
+  forwards any rate. *Check:* each cluster's top and bottom OPP against
+  `cpufreq_domainN` `min-freq`/`max-freq` in the SoC's `*-cpu.dtsi`; points a
+  few MHz apart are table entries, not frequencies. Extends L-52. *From:*
+  kernel #87, round 22.
+- **L-209. Google's ACPM DVFS ids come from the `acpm_dvfs_id` enum, not
+  `acpm_vclk_list`.** The zuma enum has 17 domains with AOC at 15; the list
+  leaves AOC out, and counting it would have called #84's ids wrong.
+  *Check:* count the enum from `MIF = ACPM_VCLK_TYPE`. *From:* kernel #84,
+  round 22 (a near miss).
+- **L-210. A register value that "follows the vendor's formula" is checked
+  by recomputing the formula for that panel.** `dsim_calc_underrun()`
+  reproduces cheetah's ABL pair but not tegu's, so #88's 120 Hz value left
+  0.98 ms of slack, not 2.46 ms. *Check:* the vendor function with the panel
+  driver's `underrun_param`, DSC and lane rate, at every rate. Extends L-61.
+  *From:* kernel #88, round 22.
+- **L-211. A board that names one panel for a model shipped with several
+  needs the identification path.** Tegu's connector lists three panels chosen
+  by ABL's `panel_name`, with different rate-switch sequences. *Check:* the
+  device's `*-connector.dtsi` and `BUILD.bazel` panel list; ask owners for the
+  panel name, and gate commands in userspace where the kernel can't read the
+  ID. Extends L-117 and L-169. *From:* kernel #90, round 22.
+- **L-212. A panel backlight's range matches the vendor's brightness
+  capability.** #89 exposed 0-4095 with a 4095 default; Google's normal range
+  ends at 3628, and 0x0FFF is HBM2, pushed on the first wake. *Check:*
+  `brightness_capability` and `default_brightness` in the vendor panel file
+  against the driver's `max` and default. *From:* kernel #89, round 22.
+- **L-213. A driver that changes PMIC or charger state on userspace request
+  restores it at `.shutdown` and reads it back at probe.** #92's inhibit
+  survived reboot, and probe's "auto" default made `auto` a no-op. *Check:*
+  for every write path, what the next boot finds and how userspace undoes it.
+  *From:* kernel #92, round 22.
+- **L-350. A flag that hands off ownership is set under the lock its
+  consumer holds, after rechecking completion.** #152's first "abandon" flag
+  was set outside `rx_lock`, so an answer drained just before the timeout
+  still leaked the slot. *Check:* for any timed-out-request cleanup, find the
+  lock the completion path holds and the order of check and set. *From:*
+  kernel #152, 2026-10-31.
+- **L-351. A helper node under `/chosen` fails dtbs_check.** dtschema's
+  `chosen.yaml` allows only `framebuffer*` and `pinctrl-N` children (#154's
+  `panel`). *Check:* run dt-validate on the DTB for any node a PR adds under
+  `/chosen`; a node at the root validates, and fw_devlink still skips it.
+  *From:* kernel #154, 2026-10-31.
+- **L-352. A per-panel constant a contributor calls "approximate" may be in
+  Google's panel driver.** The 8 Pro's 70 x 155 mm is `HK3_WIDTH_MM`/
+  `HK3_HEIGHT_MM` in `panel-gs-hk3.c`. *Check:* `kernel/devices/google/
+  <device>/display/panel-gs-*.c` before accepting an estimate. *From:*
+  kernel #154, 2026-10-31.
+- **L-447. A crash fix that moves a decode out of its condition changes what
+  the reference phone shows, and a reference-phone run lapses when the
+  commit is reworked.** Kernel #191 decodes every scanned BSS and drops 6
+  GHz ones, so a 7 Pro also loses the phantom 2.4/5 GHz entries its 6 GHz
+  neighbours made; our 11-01 run on #56 covered only the NULL check.
+  *Check:* for a new skip or early return on a shared path, list the inputs
+  that used to pass with a wrong value, say what the reference phone stops
+  showing, and diff a moved commit against the tested one. Extends L-86,
+  L-206 and L-379. *From:* kernel #191 with #56, round 39, 2026-11-03.
+- **L-448. Before accepting a driver-side way to move a second clock with a
+  GPU's rate, grep the clock driver for an existing pairing.** Kernel #189
+  added a panfrost `l2` clock and an undocumented per-OPP `l2-hz`, set L2
+  first in both directions, while `clk-acpm` already pairs G3D and G3DL2 for
+  gs201 and zumapro in the vendor's order (L2 up first, down last). *Check:*
+  `git grep -n paired drivers/clk/samsung/clk-acpm.c` and the merged
+  siblings' GPU nodes, and compare the set order with
+  `gpu_dvfs_set_new_level()`. Extends L-104. *From:* kernel #189, round 39,
+  2026-11-03.
+- **L-471. A disabled board node that an overlay will enable later carries
+  its pin states now.** #159's Bluetooth child had no `pinctrl-0`, and
+  Samsung pinctrl refuses groups that arrive by runtime overlay. *Check:*
+  for every disabled node meant for an overlay, compare with the same-SoC
+  sibling's merged node and require the same `pinctrl-*` and groups in the
+  board DTS. Extends L-240. *From:* kernel #159, round 40, 2026-11-04.
+- **L-472. When a driver gives up where the vendor driver has a fallback,
+  use the vendor's fallback.** #194 made up an identify record after a
+  missing identify report; stock's `syna_tcm_v1_detect()` sends
+  `CMD_IDENTIFY`, then `CMD_RESET`, for exactly that case, and that also
+  reports the real firmware. *Check:* for any new "carry on without X" path,
+  grep the vendor driver for what it does when X is missing. Extends L-237.
+  *From:* kernel #194, round 40, 2026-11-04.
+- **L-473. A bindings PR that documents a vendor driver's names is reviewed
+  against the hardware, not the DTs it makes pass.** #193's schemas quieted
+  `dtbs_check`, but six nodes had no resources, half the properties were
+  DPCM flags, and two reinvented `model` and `sound-name-prefix`. Before
+  saying a codec's binding "already allows" a common property through its
+  `$ref`, read its last line: `additionalProperties: false` hides the ref's
+  properties. *Check:* for each node, its DT resources; for each property,
+  `git grep` the common sound schemas; list every DT, overlay and userspace
+  matcher that would freeze the names. Extends L-96 and L-183. *From:*
+  kernel #193, round 40, 2026-11-04.
+- **L-474. A boot argument that changes every reboot is tested on every
+  reboot path.** #198's `reboot=warm` was tested with `reboot-to bootloader`
+  only; an ordinary reboot and the panic reset the initramfs safety net
+  depends on weren't. *Check:* list the reboot paths (normal, `reboot-to
+  <reason>`, panic, watchdog) and ask for each, or the device notes that
+  cover them on that SoC. Extends L-284. *From:* kernel #198, round 41,
+  2026-11-05.
+- **L-503. "Appended at the end, so no offset moves" is checked for structs
+  that embed the grown struct.** `struct aoc_chip` sits inside `struct
+  snd_card_pdata`, so #203's appended bool shifted offsets in 15 functions.
+  *Check:* `git grep 'struct <name> [a-z_]*;'`, then an object diff. Extends
+  L-230. *From:* kernel #203, round 42, 2026-11-07.
+- **L-504. A new `->set_cs` branch for GPIO chip selects is dead unless the
+  controller sets `SPI_CONTROLLER_GPIO_SS`.** Kernel #204 added the same write
+  to `set_cs` and to `set_native_cs`, which the core never calls for a
+  `cs_gpiod` device here. *Check:* read `spi_set_cs()` in the target tree and
+  grep the driver for `GPIO_SS`. *From:* kernel #204, round 42, 2026-11-07.
+- **L-505. A board PR that moves a bring-up overlay into the DTS is proven by
+  comparing DTBs, not by a new boot.** Kernel #205's base DTB with the overlay
+  applied and its head DTB decompiled identical with `dtc -s`, so the
+  overlay's boot record carries over. *Check:* build both with the build's
+  `dtc -@`/`fdtoverlay` and compare; any difference names what the record
+  doesn't cover. Extends L-122. *From:* kernel #205, round 42, 2026-11-07.
+- **L-506. A vendor command borrowed for a fallback reads its answer where the
+  vendor driver does.** #194 sent `IDENTIFY` and waited for a report, but
+  Google's `syna_tcm_v1_detect()` parses the IDENTIFY response's payload,
+  which the PR discarded. *Check:* find the vendor's read of each borrowed
+  command's response and confirm the new code reads the same place. Extends
+  L-237. *From:* kernel #194, round 42, 2026-11-07.
+- **L-507. A board DT that gives a new node a GPIO or supply is checked
+  against the board's other users of it.** Kernel #202 put the 7a panel's
+  reset and supplies on the touchscreen's gpp23-2 and LDO25M/26M; the driver's
+  "shared GPIO" workaround was the symptom. *Check:* `git grep` each new pin
+  and rail in the board DTS and Google's `*-display.dtsi`/`*-touch.dtsi`.
+  Extends L-67 and L-349. *From:* kernel #202, round 42, 2026-11-07.
+- **L-508. A "new" panel driver is diffed against the closest merged one with
+  names normalised.** #202's S6E3FC5 driver differed from S6E3HC4's in 137
+  lines, and its init still set a 1440x3120 window. *Check:* `diff` both with
+  the names `sed`-ed to one token, then compare CASET/PASET and the init with
+  the vendor driver. Extends L-61 and L-117. *From:* kernel #202, round 42,
+  2026-11-07.
+- **L-509. A board added to the base after a PR's last gate inherits its
+  shared-dtsi changes, so the re-gate validates it.** Akita (on `zuma.dtsi`)
+  landed after #187's last CI, and `dtbs_check` had never seen the
+  combination. *Check:* `git log <old base>..<new base> --
+  arch/arm64/boot/dts` for boards including a touched dtsi; `dt-validate` each
+  on the merge. Extends L-195 and L-309. *From:* kernel #187, round 42,
+  2026-11-07.
+- **L-542. "As Google's driver does" is traced to the end of the vendor
+  function, including what it does with the answer.** Kernel #194's fallback
+  follows `syna_tcm_v1_detect()` up to the `IDENTIFY`/`RESET` order, but
+  `syna_tcm_v1_parse_idinfo()` rejects a zero-length record, so on the unit
+  that needed the fix the stock driver would fail too: the empty-record path
+  is our own, and the real difference is probably earlier, in stock's
+  power-up. *Check:* follow the vendor function past the cited step to its
+  parse and error returns, and ask which branch the contributor's unit would
+  take under stock. Extends L-61 and L-77. *From:* kernel #194, round 44,
+  2026-11-08.
+- **L-543. A panel-ID guard relaxed for a new ID is checked against the byte
+  the vendor driver keys its commands on, and tested with the commands the
+  guard blocked.** Google's `tg4c_get_panel_rev()` reads only 0xDB, so kernel
+  #212's new ID3 gets the same command set; the guard existed for the rate
+  switch, which the PR hadn't run. *Check:* the vendor driver's
+  `get_panel_rev`/`read_id` for which ID bytes select commands, then ask for
+  the guarded paths (rate switch, DPMS) on the new panel. Extends L-117 and
+  L-211. *From:* kernel #212, round 44, 2026-11-08.
+- **L-544. A register map with no public source gets its provenance in the
+  commit message.** LWIS DTs give a part's address and widths but leave
+  register sequences to the HAL, so a driver whose registers can't be cited
+  says how they were found. *Check:* grep Google's GPL tree for each register;
+  if one is absent, ask. Extends L-61 and L-177. *From:* kernel #213, round
+  44, 2026-11-08.
+- **L-545. A sentence corrected on one board is grepped across every board
+  that copied it.** Kernel #214 fixes akita's "the guard runs before the disks
+  appear" (L-528). The same words are in `zuma-husky.dts` and
+  `zumapro-tegu.dts`, and UFS is built in for every phone, so they are wrong
+  there too; only husky's had been noticed. *Check:* when a review corrects
+  copied text, `git grep -n '<the sentence>' github/omamobile -- arch/
+  device/`, and judge each copy by the fact that made the first one wrong
+  (here `CONFIG_SCSI_UFS_EXYNOS=y` in the shared config). Extends L-528 and
+  L-257. *From:* kernel #214 with #206, round 44, 2026-11-08.
+- **L-546. soc/gs is one tree, so an absent call in a shared driver says
+  nothing about one SoC.** We nearly told kernel #187's author that zuma has
+  no secure-ATU SMC because Google's `pcie-exynos-rc.c` has none; that file is
+  the same on the gs201 branch, where the SMC is real, so it comes from
+  another driver. *Check:* `cmp` the file across the board branches first, and
+  find where the vendor actually issues the SMC before saying "SoC X doesn't
+  use it". Extends L-58 and L-113. *From:* kernel #187, round 44 (a near miss
+  in drafting); 2026-11-08.

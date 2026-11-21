@@ -25,5 +25,7 @@ done < <(find vendor -type l -print0)
 install -Dm644 uwsm/env.d/omamobile-tegu-graphics "$destination/usr/share/uwsm/env.d/omamobile-tegu-graphics"
 install -Dm644 device.conf "$destination/usr/share/omamobile/device.conf"
 install -Dm644 etc/omamobile-mirrorlist "$destination/etc/pacman.d/omamobile-mirrorlist"
+install -Dm644 etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf \
+  "$destination/etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf"
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-tegu/LICENSE"
 install -Dm644 version "$destination/usr/share/omamobile/device-tegu/version"

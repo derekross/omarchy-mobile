@@ -668,8 +668,8 @@ PY
 }
 
 # Identifier scan (§11.7, AGENTS.md §1) over files and directories, text and
-# binary alike: universally administered MAC addresses (locally administered
-# ones, x2/x6/xA/xE, and all zeros or all ones are made up; so are, in
+# binary alike: MAC addresses (locally administered unicast ones,
+# x2/x6/xA/xE, and all zeros or all ones are made up; so are, in
 # /etc/dnsmasq.conf alone, the group addresses and dhcp-option bytes of
 # dnsmasq's shipped example configuration), serial and IMEI
 # records, this machine's home directory (/home/<builder>: a build path that
@@ -715,7 +715,7 @@ def scan(path):
         pos = m.end(k) - 2
         whole = b":".join(re.findall(rb"[0-9a-f]{2}", m.group(k).lower()))
         first = int(whole[:2], 16)
-        if first & 2 or whole in (b"00:00:00:00:00:00", b"ff:ff:ff:ff:ff:ff"):
+        if (first & 3) == 2 or whole in (b"00:00:00:00:00:00", b"ff:ff:ff:ff:ff:ff"):
             continue
         if k == 2 and timestamp.fullmatch(whole):
             continue

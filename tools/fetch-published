@@ -47,8 +47,18 @@ GNUPGHOME=$tmp/gnupg gpg --batch --quiet --no-default-keyring --keyring "$tmp/om
   --import "$keyring/omamobile.gpg" 2>/dev/null || die "cannot read $keyring/omamobile.gpg"
 mapfile -t trusted < <(cut -d: -f1 "$keyring/omamobile-trusted" | grep -E '^[0-9A-F]{40}$')
 source tools/lib/signing.sh
-why=$(revoked_file_check .) || die "$why"
-mapfile -t revoked < <(grep -oE '^[0-9A-F]{40}' "$keyring/omamobile-revoked" 2>/dev/null || true)
+revoked=()
+if [[ -e $keyring/omamobile-revoked || -L $keyring/omamobile-revoked ]]; then
+  why=$(revoked_file_check .) || die "$why"
+  [[ -f $keyring/omamobile-revoked ]] && revoked_lines=$(cat -- "$keyring/omamobile-revoked") \
+    || die "cannot read $keyring/omamobile-revoked"
+  if [[ -n $revoked_lines ]]; then
+    mapfile -t revoked <<<"$revoked_lines"
+    for r in "${revoked[@]}"; do
+      [[ $r =~ ^[0123456789ABCDEF]{40}$ ]] || die "$keyring/omamobile-revoked changed while reading"
+    done
+  fi
+fi
 ((${#trusted[@]})) || die "no trusted keys in $keyring/omamobile-trusted"
 
 # verify SIG FILE: the primary key behind a good signature must be trusted
