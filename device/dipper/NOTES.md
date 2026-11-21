@@ -76,6 +76,16 @@ the existing session, not a new boot, persistent-userdata test or validation
 of the PR package. The sanitized report and USB status summary were posted in
 the PR thread; raw output and identifiers remain private.
 
+At 2026-11-21T03:06Z, `tools/phone-smoke` from #714 head `a0f14643` was run
+again over the same already-running session. The result again showed the
+overlay root instead of userdata, with all six disks and 85 partitions
+read-only; USB, display, render node, Hyprland/Omarchy shell, lock, STMFTS and
+buttons were present, and no system or firstboot units had failed. This run
+reported 0 WARN and 0 kernel error lines. Wi-Fi, Bluetooth, battery, audio,
+sensors and cameras were absent. It exited 1 only because the required root
+check failed. No boot, reboot or partition write was issued. This remains
+overlay-session evidence, not a persistent-userdata boot.
+
 ## 2026-11-21 — normal Qt rendering with CPU0 idle isolation
 
 Repeated the CPU0-only rail-collapse control without setting
