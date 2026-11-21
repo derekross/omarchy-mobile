@@ -222,7 +222,8 @@ if omarchy-done ensure omamobile-osk; then
 fi
 # Up to 0.2.133 that line started squeekboard itself. The line as this script
 # wrote it is changed, once; one the owner wrote or changed is left alone
-# (and then the keyboard they start is the one they get). A file that is a
+# (and then the keyboard they start is the one they get; a line here says so,
+# once, since a choice in Setup > Keyboard then never takes effect at login). A file that is a
 # link (a dotfile setup) is left as it is, with a line saying what to
 # change: the rewrite would replace the link with a copy. A file that can't
 # be written is reported, the rest of the setup goes on, and the next login
@@ -244,6 +245,12 @@ if omarchy-done ensure omamobile-osk-chosen; then
       rm -f ~/.local/state/omarchy/done/omamobile-osk-chosen
       echo "omamobile-setup-user: could not change the keyboard's start line in $autostart; the next login tries again" >&2
     fi
+  elif [[ -f $autostart ]] && ! grep -cxF "$osk_line" "$autostart" >/dev/null 2>&1 &&
+    grep -c 'launch_on_start.*squeekboard' "$autostart" >/dev/null 2>&1; then
+    # A line the owner wrote or changed (one that logs squeekboard's output, say) starts
+    # squeekboard whatever is chosen: left alone, and said once, as for the link
+    echo "omamobile-setup-user: $autostart starts squeekboard with a line of its own, left as it is; the keyboard" \
+      "chosen in Setup > Keyboard starts at login only once that line is $osk_line" >&2
   fi
 fi
 
