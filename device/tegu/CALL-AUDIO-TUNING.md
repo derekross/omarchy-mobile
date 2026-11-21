@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Pixel 9a: call tuning and the first earpiece route
+# Pixel 9a: call tuning
 
 Status, 2026-11-13: the trial has run, and the tuning doesn't cancel the
 echo. On the daily kernel
@@ -15,9 +15,9 @@ cancellation. Why the cancellation doesn't hold isn't known ("Next for the
 echo"). So `tegu_aec` stays off by default and is not a setting to turn on
 for better calls; call audio still defaults to `card = none`. What is
 proven is the transport (the tuning service takes the files and the AoC
-confirms them), the extractor and this record. The earpiece mode below is a
-conservative top-speaker route, not a reproduction of every stock codec
-profile setting, and it has not been tried in a call.
+confirms them), the extractor and this record. This change has no earpiece
+route: that is omarchy-mobile#626's. What reading stock's amplifier table
+showed for one is kept below as notes.
 
 ## Sources and the tuning transport
 
@@ -120,7 +120,7 @@ continues. Unknown setup or failed cleanup leaves the sink muted; the CP
 is never stopped or reset. Tests cover cleanup, stale/mismatched/negative
 acknowledgements, short writes and an unknown outcome blocking another call.
 
-## Earpiece mapping and the limit of the stock comparison
+## Notes for an earpiece route (not in this change) and the limit of the stock comparison
 
 The stock GPL TAS parser is
 [Google amplifiers `33976d763bc0ace11603e7ecb207fc2b6e3f2608`](https://android.googlesource.com/kernel/google-modules/amplifiers/+/33976d763bc0ace11603e7ecb207fc2b6e3f2608/tas25xx/src/tas25xx-regbin-parser.c).
@@ -136,15 +136,14 @@ table, following that parser, established:
 | EM LEFT/RIGHT = OFF | Mainline has **no EM mixer control**. The stock driver writes bits 7:6 of register 0:0:3. The examined full native profile 0 writes EM off; no userspace register write or invented control is added |
 | AoC Modem Sink Channel Bitmap | **Read-only**: its SOC_SINGLE_EXT has a get handler and NULL put. It reports a sink's active channel bitmap; it is not a writable TDM-slot selector in this kernel |
 
-For the first usable top-only mode, retain the existing **full profile 0**
-on both amplifiers, load handset AEC/downlink tuning, and attenuate/mute as
-above. Refuse earpiece audio if the selected amplifier profiles are not 0,
-or AEC was not enabled. This keeps startup on the already working native
-initialization instead of treating a profile label as sufficient evidence.
-Only the top is intended to be audible; the bottom still powers up.
-Exact stock voice-profile and per-amplifier EM control remain a separate
-firmware/kernel task if needed after this route is qualified. Gains have
-not been acoustically qualified at the ear.
+What follows from the table for whoever builds the route: a top-only mode
+can keep the existing **full profile 0** on both amplifiers, with the
+handset AEC and downlink tuning (the transport here can upload either
+device's files) and the attenuation above, and should refuse if the
+amplifier profiles are not 0. Only the top is then meant to be audible; the
+bottom still powers up. Exact stock voice-profile and per-amplifier EM
+control remain a firmware or kernel task. None of these gains has been
+tried at the ear.
 
 Configuration (changes apply on the next **fresh CP** session):
 
@@ -152,12 +151,10 @@ Configuration (changes apply on the next **fresh CP** session):
 [audio]
 card = none
 tegu_aec = no
-tegu_route = speaker
 ```
 
-The attended trial chooses `card = auto`, `tegu_aec = yes`, then `speaker`
-or `earpiece`. The earpiece mode does not affect the 7 Pro's CS35L41 route;
-there is no mid-call route switch in this change. Do not enable it globally.
+The attended trial chooses `card = auto` and `tegu_aec = yes`; the route is
+the loudspeaker. Do not enable it globally.
 
 ## Verification and the attended gate
 
@@ -183,14 +180,11 @@ profile files and their checksums, and no active call/PCMs. Keep the modem's
 sleep inhibitor and once-per-boot rule. Record the actual `uname -r` with
 results; no phone kernel release is claimed for these offline checks.
 
-Then test **speaker AEC only first**, with live kmsg streamed to the laptop,
+Then test the **speaker AEC**, with live kmsg streamed to the laptop,
 a watchdog and the human ready to recover. Check command replies, gain
-readbacks, two-way audio and the far end's echo before trying the earpiece
-on another approved fresh session. Risk **medium**: new AoC tuning and an
-unqualified acoustic path. Begin the earpiece test away from the ear at the
-fixed attenuation. Stop on an AoC timeout/reset, any NV/UFS error,
-unexpected gain, feedback, missing bottom attenuation or unconfirmed
-cleanup. Hang up and retain the mute/uncertainty state. Never retry or reset
+readbacks, two-way audio and the far end's echo. Risk **medium**: new AoC
+tuning and an unqualified acoustic path. Stop on an AoC timeout/reset, any
+NV/UFS error, unexpected gain, feedback or unconfirmed cleanup. Hang up and retain the mute/uncertainty state. Never retry or reset
 the running CP in place. Rollback is the previous package/config on an
 attended fresh boot; no automatic unit restart, warm modem restart or
 manual marker deletion.
@@ -199,7 +193,7 @@ manual marker deletion.
 
 The daily kernel, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`,
 the six files from the owner's factory image (BP3A.250905.014, matching the
-palmtop's AoC firmware), `tegu_aec = yes`, `tegu_route = speaker`, calls to
+palmtop's AoC firmware), `tegu_aec = yes`, the loudspeaker route, calls to
 the owner's iPhone, which the owner answered:
 
 1. sitd 0.3.18 (before the counter fix): the uplink upload was accepted
@@ -212,13 +206,13 @@ the owner's iPhone, which the owner answered:
    low hiss, then the echo came back with the hiss still there.
 
 So the uploads and the DSP mode take effect, but the cancellation doesn't
-hold yet. The earpiece route hasn't been tried.
+hold yet.
 
 ## Results on the palmtop, 2026-11-03 and 2026-11-11
 
 Two more changes, each tried on calls to the owner's iPhone on the
 speakerphone, the owner listening on the far end, `tegu_aec = yes`,
-`tegu_route = speaker`, the same six files, the daily kernel as above:
+the loudspeaker route, the same six files, the daily kernel as above:
 
 4. 2026-11-03, `AoC Modem Mixer ASP Mode` set to `ASP_ON` before the
    uploads (and, in another call, stock's microphone gain): no echo for
@@ -242,7 +236,7 @@ show they are not that.
 ## Results on the palmtop, 2026-11-12: the first seconds are a silent uplink
 
 The same setup (the daily kernel, sitd 0.3.37 built from this stack's
-head, `tegu_aec = yes`, `tegu_route = speaker`), with
+head, `tegu_aec = yes`, the loudspeaker route), with
 `bringup/call-audio-watch.py` running on the palmtop through each call. It
 is read-only: it prints the AoC's own log (`/dev/acd-logging`) as it
 arrives and, unless `CTL=0`, reads fifteen of the call's mixer controls

@@ -47,7 +47,7 @@ DEFAULTS = {
     'profiles': {},
     'data': {'route': 'yes', 'metric': '700', 'roaming': 'yes'},
     'control': {'group': 'wheel', 'follow_screen': 'no'},
-    'audio': {'card': 'none', 'mic_boost_db': '6', 'earpiece': 'yes', 'tegu_route': 'speaker',
+    'audio': {'card': 'none', 'mic_boost_db': '6', 'earpiece': 'yes',
               'tegu_aec': 'no'},
 }
 

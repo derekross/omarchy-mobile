@@ -180,15 +180,6 @@ class CallAudioDefaultTests(unittest.TestCase):
                 f.write(text)
         return patch.object(paths, 'DEVICE_DEFAULTS', paths.Path(directory))
 
-    def test_a_typo_in_the_tegu_route_only_matters_on_the_9a(self):
-        with patch.object(voice_audio.C, 'CDLL'), patch.object(voice_audio.shutil, 'which', return_value=None):
-            with patch.object(voice_audio, 'is_tegu_card', return_value=False):
-                audio = voice_audio.VoiceAudio(card=0, tegu_route='spekaer')    # another phone: never read
-                self.assertFalse(audio.tegu)
-            with patch.object(voice_audio, 'is_tegu_card', return_value=True):
-                with self.assertRaises(ValueError):
-                    voice_audio.VoiceAudio(card=3, tegu_route='spekaer')
-
     def test_no_call_audio_by_default(self):
         # No device package defaults (any phone but a verified one): no route.
         with self.device_defaults(None):
@@ -270,7 +261,7 @@ class CallAudioDefaultTests(unittest.TestCase):
 class TeguAudioTests(unittest.TestCase):
     def fixture(self, *, mismatch=None, unreadable=None, fail_params=False,
                 fail_start=False, fail_close=False, fail_mixer=None, fail_mute=False,
-                route='speaker', aec=False):
+                aec=False):
         controls = {name: '0' for name, _ in voice_audio.TEGU_ROUTE}
         controls.update({'BUILDIN MIC ID CAPTURE LIST': '0,1,-1,-1',
                          'Top Speaker Digital Volume': '220',
@@ -349,7 +340,6 @@ class TeguAudioTests(unittest.TestCase):
 
         audio = VoiceAudio.__new__(VoiceAudio)
         audio.tegu = True
-        audio.tegu_route = route
         audio.tegu_aec = aec
         audio.tuning = None
         audio.card = 3
@@ -435,46 +425,6 @@ class TeguAudioTests(unittest.TestCase):
                         events.index(('cset', 'Audio DSP Mode', '0')))
         self.assertLess(events.index(('aec-close',)),
                         events.index(('cset', 'AoC Modem Mixer ASP Mode', '0')))
-
-    def test_earpiece_attenuates_top_and_bottom_after_profile_start_before_unmute(self):
-        audio, events, controls, original = self.fixture(route='earpiece', aec=True)
-        with patch.object(voice_audio, 'VoiceTuning') as tuning:
-            with audio:
-                self.assertEqual(controls['Top Speaker Digital Volume'], '160')
-                self.assertEqual(controls['Bottom Speaker Digital Volume'], '0')
-                tuning.assert_called_once_with('earpiece')
-                for name, gain in (('Top Speaker Digital Volume', '160'),
-                                   ('Bottom Speaker Digital Volume', '0')):
-                    write = events.index(('cset', name, gain))
-                    read = events.index(('cget', name, None), write)
-                    self.assertLess(events.index(('start', 2)), write)
-                    self.assertLess(read, events.index(('cset', 'Incall Sink Mute', '0')))
-        self.assertEqual(controls, original)
-
-    def test_bottom_gain_must_read_back_before_earpiece_unmutes(self):
-        audio, events, controls, original = self.fixture(route='earpiece', aec=True)
-        mixer = audio.mixer
-        def wrong_bottom(action, name, value=None):
-            result = mixer(action, name, value)
-            if action == 'cget' and name == 'Bottom Speaker Digital Volume' and controls[name] == '0':
-                return '  : values=220\n'
-            return result
-        audio.mixer = wrong_bottom
-        with patch.object(voice_audio, 'VoiceTuning') as tuning, \
-                self.assertRaisesRegex(voice_audio.AudioRefused, 'gain read-back mismatch'):
-            audio.__enter__()
-        self.assertEqual(controls, original)
-        tuning.return_value.close.assert_called_once()
-        # An unmute occurs only as the final restore, after both PCMs close.
-        self.assertLess(events.index(('close', 1)), events.index(('cset', 'Incall Sink Mute', '0')))
-
-    def test_earpiece_refuses_without_tuning_or_with_an_incomplete_profile(self):
-        for aec, profile in ((False, '0'), (True, '4')):
-            audio, events, controls, _ = self.fixture(route='earpiece', aec=aec)
-            controls['Top Speaker Profile Id'] = profile
-            with self.assertRaises(voice_audio.AudioRefused):
-                audio.__enter__()
-            self.assertFalse([e for e in events if e[0] in ('cset', 'open')])
 
     def test_missing_tuning_refuses_audio_and_restores_the_mixers(self):
         audio, events, controls, original = self.fixture(aec=True)

@@ -52,7 +52,6 @@ TEGU_CARD = 'google,tegu-aoc-snd-card'
 # tas2x20_dvc_table in include/sound/tas2x20-tlv.h: index 220 is unity,
 # index 180 is -20 dB. Use the index, not the control's misleading dB TLV.
 TEGU_GAIN = '180'
-TEGU_EARPIECE_GAIN = '160'  # -30 dB; stock index 55 maps to unity (220)
 TEGU_GAINS = ('Top Speaker Digital Volume', 'Bottom Speaker Digital Volume')
 TEGU_ROUTE = (
     ('Incall Sink Mute', '1'),
@@ -109,7 +108,7 @@ class VoiceAudio:
     # without earpiece mode (no service installed, or [audio] earpiece = no)
     earpiece_cmd = None
 
-    def __init__(self, *, mic_boost_db=6, card=None, earpiece=True, tegu_route='speaker', tegu_aec=False):
+    def __init__(self, *, mic_boost_db=6, card=None, earpiece=True, tegu_aec=False):
         if mic_boost_db not in (0, 6):
             raise ValueError('unsupported voice microphone boost')
         self.mic_boost_db = mic_boost_db
@@ -121,11 +120,6 @@ class VoiceAudio:
             # The protection service's earpiece mode is the 7 Pro's CS35L41
             # route; the 9a's TAS2572 route sets its own gains.
             self.earpiece_cmd = None
-        # Only the 9a's route reads this key: a typo in it must not cost
-        # another phone its call audio.
-        if self.tegu and tegu_route not in ('speaker', 'earpiece'):
-            raise ValueError('unsupported tegu call route')
-        self.tegu_route = tegu_route
         self.tegu_aec = tegu_aec
         self.tuning = None
         self.saved = []
@@ -279,19 +273,6 @@ class VoiceAudio:
         # original value is restored last, after closing the voice PCMs.
         route = list(TEGU_ROUTE)
         aec = getattr(self, 'tegu_aec', False)
-        earpiece = getattr(self, 'tegu_route', 'speaker') == 'earpiece'
-        if earpiece:
-            if not aec:
-                raise AudioRefused('tegu earpiece needs the handset AEC tuning enabled')
-            # The supplied RCA voice-handset case is only a delta, not a
-            # standalone initialization. Retain the full profile 0 for
-            # this conservative top-only route, never guess profile 4.
-            try:
-                profiles = [self.mixer_value(amp + ' Speaker Profile Id') for amp in ('Top', 'Bottom')]
-            except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
-                raise AudioRefused('tegu earpiece amplifier profile unavailable') from error
-            if profiles != ['0', '0']:
-                raise AudioRefused('tegu earpiece requires the full amplifier profile 0')
         if aec:
             route.insert(1, ('FT AEC Reference Source', 'SPEAKER'))
             # The output DSP stays in Ambient unless told otherwise, and the
@@ -325,26 +306,23 @@ class VoiceAudio:
             # for 2-3 s only (2026-11-03). The sink is still muted here.
             if aec:
                 try:
-                    self.tuning = VoiceTuning(self.tegu_route)
+                    self.tuning = VoiceTuning('speaker')
                     self.tuning.start()
                 except (OSError, TuningError) as error:
                     raise AudioRefused('tegu call audio refused: AoC tuning unavailable or unconfirmed') from error
             # The codec profile resets gain at playback start. These must
             # happen afterwards, while the modem downlink remains muted.
-            gains = ((TEGU_GAINS[1], '0'), (TEGU_GAINS[0], TEGU_EARPIECE_GAIN)) if earpiece else tuple(
-                (name, TEGU_GAIN) for name in TEGU_GAINS)
-            for name, gain in gains:
-                self.mixer('cset', name, gain)
-            for name, expected in gains:
+            for name in TEGU_GAINS:
+                self.mixer('cset', name, TEGU_GAIN)
+            for name in TEGU_GAINS:
                 try:
                     gain = self.mixer_value(name)
                 except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
                     raise AudioRefused('tegu call audio refused: TAS gain read-back unavailable') from error
-                if gain != expected:
+                if gain != TEGU_GAIN:
                     raise AudioRefused('tegu call audio refused: TAS gain read-back mismatch')
             self.mixer('cset', 'Incall Sink Mute', '0')
-            print('AoC tegu ' + ('earpiece' if earpiece else 'speakerphone') +
-                  ' prepared at conservative TAS gain', flush=True)
+            print('AoC tegu speakerphone prepared at conservative TAS gain', flush=True)
             return self
         except BaseException as error:
             try:
