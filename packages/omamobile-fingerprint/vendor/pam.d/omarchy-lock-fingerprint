@@ -2,5 +2,9 @@
 # Omarchy Mobile: the lock screen's fingerprint conversation (Omarchy's own
 # setup_lock_fingerprint_pam; its omarchy-setup-security-fingerprint looks for a USB
 # reader, so the phone ships this file instead). FINGERPRINT-PLAN F-steps.
-auth       required                    pam_fprintd.so
+# timeout=600: the lock keeps one conversation open for the whole lock and
+# starts a new one after anything but a match, so pam_fprintd's default 30 s
+# restarted it every 30 s all night (#422). Omarchy patch 0022 writes the same
+# line, so omarchy-apply-lock can't undo it.
+auth       required                    pam_fprintd.so timeout=600
 account    include                     system-local-login
