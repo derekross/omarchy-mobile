@@ -103,7 +103,7 @@ for f in usr/bin/reboot-to usr/bin/tegu-tcpc-switch \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-tegu/version \
          usr/share/licenses/omamobile-device-tegu/LICENSE \
-         etc/pacman.d/omamobile-mirrorlist; do
+         etc/pacman.d/omamobile-mirrorlist etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
 # The sleep runs with the kernel's clock ticking, so no service watchdog may
@@ -122,6 +122,12 @@ other=../omamobile-device-cheetah/$tw
 if [[ -f $other ]]; then
   [[ $(grep -v '^#' "$tw") == $(grep -v '^#' "$other") ]] || fail "the touch-wake rule matches the 7 Pro's rule line"
 fi
+# Wi-Fi power save on, over Omarchy's laptop setting: in /etc, after "omarchy-wifi-powersave.conf" by name
+wp=$tmp/root/etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf
+[[ $(grep -v '^#' "$wp" | grep -c .) == 2 && $(grep -v '^#' "$wp" | paste -sd' ') == "[connection] wifi.powersave=3" ]] \
+  || fail "the Wi-Fi power save file turns power save on and does nothing else"
+[[ ${wp##*/} > omarchy-wifi-powersave.conf ]] || fail "the Wi-Fi power save file sorts after Omarchy's"
+grep -c '^backup=(.*etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf' PKGBUILD >/dev/null || fail "the Wi-Fi power save file is a backup file"
 # The GPU's floor: one rule line, for the 9a's GPU only, when its devfreq
 # device appears (panthor's probe, from the graphics start).
 gf=vendor/udev/rules.d/70-omamobile-tegu-gpu-floor.rules
