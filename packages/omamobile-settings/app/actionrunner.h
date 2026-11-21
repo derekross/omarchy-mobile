@@ -11,9 +11,7 @@
 class ActionRunner : public QObject {
     Q_OBJECT
 public:
-    // The backend directory is fixed in the program; a test passes its own through the constructor.
-    explicit ActionRunner(QObject *parent = nullptr, const QString &dir = QStringLiteral("/usr/lib/omamobile-settings/backends"))
-        : QObject(parent), m_dir(dir) {}
+    explicit ActionRunner(QObject *parent = nullptr) : QObject(parent) {}
     // input is for the pin tool only: its three lines go to the script's stdin.
     Q_INVOKABLE int run(const QString &tool, const QStringList &args, const QString &input = {});
     // Where the backend scripts live; tests point it at stubs so they don't depend on the host's install.
@@ -31,7 +29,7 @@ private:
     void post(const QString &tool, const QStringList &args, const QVariantMap &result, int id);
     void done(const QString &tool, const QStringList &args, const QVariantMap &result, int id);
     int m_next = 0;
-    QString m_dir;
+    QString m_dir = QStringLiteral("/usr/lib/omamobile-settings/backends");
     QHash<QString, int> m_pending;
     QHash<QString, QVariantMap> m_last;
 };

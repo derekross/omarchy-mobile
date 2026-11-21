@@ -30,7 +30,8 @@ int ActionRunner::run(const QString &tool, const QStringList &args, const QStrin
     auto fail = [this, &tool, &args, id](const QString &why) { post(tool, args, {{"error", why}}, id); return id; };
     if (!tools.contains(tool) || args.size() > 3) return fail("unknown action");
     for (const auto &a : args) if (!word.match(a).hasMatch()) return fail("bad argument");
-    if (input.size() > 256) return fail("input too long");
+    // three PINs of omamobile-set-pin's 512 bytes at most, and their newlines
+    if (input.size() > 3 * 513) return fail("input too long");
     if (!input.isEmpty() && tool != "pin") return fail("unexpected input");
     const QString &dir = m_dir;
     m_pending[key(tool, args.value(0))]++;
@@ -61,6 +62,8 @@ int ActionRunner::run(const QString &tool, const QStringList &args, const QStrin
     p->start();
     if (!input.isEmpty()) p->write(input.toUtf8());
     p->closeWriteChannel();
-    QTimer::singleShot(20000, p, [p] { if (p->state() != QProcess::NotRunning) p->kill(); });
+    // A PIN change is never cut short by the runner: omamobile-set-pin waits up to 15 s for each of passwd's
+    // prompts and 60 s after the retype, and decides itself what to say when that runs out.
+    QTimer::singleShot(tool == "pin" ? 150000 : 20000, p, [p] { if (p->state() != QProcess::NotRunning) p->kill(); });
     return id;
 }

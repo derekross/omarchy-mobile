@@ -16,4 +16,3 @@ install -Dm755 "$source_dir/libexec/charge-limit" "$dest/usr/lib/omamobile-setti
 install -Dm644 "$source_dir/vendor/systemd/system/omamobile-charge-limit@.service" "$dest/usr/lib/systemd/system/omamobile-charge-limit@.service"
 install -Dm644 "$source_dir/vendor/polkit/50-omamobile-charge-limit.rules" "$dest/usr/share/polkit-1/rules.d/50-omamobile-charge-limit.rules"
 install -Dm755 "$source_dir/backends/pin.sh" "$dest/usr/lib/omamobile-settings/backends/pin.sh"
-install -Dm644 "$source_dir/backends/pin.py" "$dest/usr/lib/omamobile-settings/backends/pin.py"

@@ -37,12 +37,14 @@ row stays hidden today: omamobile-device-husky blacklists `max77759_charger`
 until that blacklist is lifted on a kernel with
 derekross/linux-omarchy-mobile#266.
 A third page, Change PIN, changes
-the lock screen PIN, which is the account password (the lock checks it with pam_unix, and sudo does too): `backends/pin.sh` runs the
-system's own `/usr/bin/passwd` in a pseudo-terminal, as the user, with the three entries on stdin (never an argument,
-never in the environment, never logged or printed), digits only for the new PIN, 4 to 84 long (the runner carries 256 characters, three PINs of 84), and passwd is what
-checks the current PIN and any other rule. passwd runs with `LC_ALL=C` so its prompts are the ones the script
-matches, and it is killed after 12 seconds: before the retype nothing has changed, after it the result says the PIN
-may or may not have changed. The entries are held as text in the page until the call returns, then cleared; the
+the lock screen PIN, which is the account password (the lock checks it with pam_unix, and sudo does too): `backends/pin.sh` hands
+the three entries on stdin (never an argument, never in the environment, never logged or printed) to
+`omamobile-set-pin --change` from omamobile-shell, which runs the system's own `/usr/bin/passwd` in a
+pseudo-terminal, as the user. The new PIN is digits only, 4 to 512 long (set-pin's limit; the runner carries three
+of those), and passwd is what checks the current PIN and any other rule. pin.sh turns set-pin's answer into one
+line of JSON: changed, refused with passwd's or set-pin's own text, or, for set-pin's status 75, that the PIN may
+or may not have changed. `--change` doesn't record the PIN-or-password choice; that is fine here, because the page
+only runs on a phone that already unlocks with a PIN. The entries are held as text in the page until the call returns, then cleared; the
 session's memory is not wiped. A change that finishes while the page is gone is reported when the page is opened again (the runner keeps its last result); quitting the app mid-change loses it. The page is for a phone that unlocks with a PIN and has one (`omamobile-set-pin --type` and `passwd -S` say so); for a password phone or a phone without one it says where to go instead. That page runs
 `backends/pin.sh` through the same runner.
 Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management and

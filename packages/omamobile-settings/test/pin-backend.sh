@@ -1,73 +1,59 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# backends/pin.sh and pin.py against a stand-in for /usr/bin/passwd (the path and the deadline are replaced in
-# copies of the two files, nothing in the environment can do that), and `status` against stand-ins for
-# omamobile-set-pin and `passwd -S`. The stand-in asks for the current password, the new one and a
-# retype on a terminal, as passwd does, and accepts only the current password 5061. New passwords with special
-# behaviour: 00000000 is refused and asked for again (like pam_unix), 77777777 hangs at the retype, 88888888 is
-# refused by exiting. It prints Greek prompts unless it was started with LC_ALL=C, and it fails when the script's
-# own environment (its parent's) holds a PIN.
+# backends/pin.sh against stand-ins for omamobile-set-pin and `passwd -S` (the paths are replaced in a copy of the
+# script; nothing in the environment can do that). `change` is checked for each outcome of `omamobile-set-pin
+# --change`: changed (0), refused with passwd's own text, refused by set-pin's own checks, status 75 ("may or may
+# not have changed"), a helper that prints nothing, and a missing helper. The stand-in takes the three lines on
+# stdin like the real one and fails if any of them reached it as an argument or through the environment. When the
+# repository's omamobile-set-pin is next to this package, the same cases run once more through it and a passwd
+# stand-in, so the two stay in step.
 set -euo pipefail
 src=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 tmp=$(mktemp -d); trap 'rm -rf -- "$tmp"' EXIT
-cat > "$tmp/passwd" <<'EOT'
-#!/usr/bin/python3
-import getpass, os, sys, time
-if sys.argv[1:] == ["-S"]:
-    print(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "pwstatus")).read().strip()); sys.exit(0)
-if os.environ.get("LC_ALL") != "C":
-    print("Greek prompts: " + getpass.getpass("Τρέχων κωδικός: ")); sys.exit(13)
-env = open("/proc/%d/environ" % os.getppid(), "rb").read()
-if b"5061" in env or b"7384" in env: sys.exit(12)
-if getpass.getpass("Current password: ") != "5061": sys.exit(10)
-a = getpass.getpass("New password: ")
-if a == "00000000":
-    while True:
-        print("BAD PASSWORD: it is too simple")
-        getpass.getpass("New password: ")
-b = getpass.getpass("Retype new password: ")
-if a == "77777777": time.sleep(60)
-if a != b or a == "88888888": sys.exit(11)
-EOT
-chmod +x "$tmp/passwd"
-printf '#!/bin/bash\ncat "%s/type"\n' "$tmp" > "$tmp/set-pin"; chmod +x "$tmp/set-pin"
-sed -e "s|/usr/bin/passwd|$tmp/passwd|g" -e 's/^DEADLINE = 12/DEADLINE = 3/' "$src/backends/pin.py" > "$tmp/pin.py"
-sed -e "s|/usr/bin/passwd|$tmp/passwd|g" -e "s|/usr/bin/omamobile-set-pin|$tmp/set-pin|g" "$src/backends/pin.sh" > "$tmp/pin.sh"
-grep -q "$tmp/passwd" "$tmp/pin.py"; grep -q '^DEADLINE = 3' "$tmp/pin.py"; grep -q "$tmp/set-pin" "$tmp/pin.sh"
-run() { printf '%s\n' "$2" "$3" "$4" | LC_ALL=el_GR.UTF-8 bash "$tmp/pin.sh" "$1" 2>"$tmp/err" || true; }
+# stand-in for omamobile-set-pin: --type prints $tmp/type; --change behaves by the new PIN
+cat > "$tmp/set-pin" <<EOF
+#!/bin/bash
+[[ \${1:-} == --type ]] && { cat "$tmp/type"; exit 0; }
+[[ \$# == 1 && \${1:-} == --change ]] || exit 99
+env | grep -q '5061\|7384' && exit 98
+IFS= read -r old; IFS= read -r new; IFS= read -r again
+[[ \$new =~ ^[0-9]{4,}\$ ]] || { echo "The PIN must be at least 4 digits, digits only." >&2; exit 1; }
+[[ \$new == "\$again" ]] || { echo "The two PINs do not match." >&2; exit 1; }
+[[ \$old == 5061 ]] || { printf 'passwd: Authentication token manipulation error\npasswd: password unchanged\n' >&2; exit 10; }
+case \$new in
+  88888888) echo 'BAD PASSWORD: it is too simple "quoted" \\ back' >&2; exit 10 ;;
+  77777777) echo "passwd did not finish after the retype" >&2; exit 75 ;;
+  66666666) exit 3 ;;
+esac
+exit 0
+EOF
+chmod +x "$tmp/set-pin"
+mkpinsh() { sed -e "s|/usr/bin/passwd|$tmp/passwd|g" -e "s|/usr/bin/omamobile-set-pin|$1|g" "$src/backends/pin.sh" > "$tmp/pin.sh"; grep -q "$1" "$tmp/pin.sh"; }
+mkpinsh "$tmp/set-pin"
+run() { printf '%s\n' "$2" "$3" "$4" | bash "$tmp/pin.sh" "$1" 2>"$tmp/err" || true; }
 eq() { [[ $1 == "$2" ]] || { echo "FAIL: got $1, want $2" >&2; exit 1; }; }
+valid() { python3 -I -c 'import json,sys; json.loads(sys.argv[1])' "$1" || { echo "FAIL: not JSON: $1" >&2; exit 1; }; }
 
+maybe='{"error":"passwd did not finish after the retype: the PIN may or may not have changed. Try the new PIN first, then the old one, and don'"'"'t change it again for a minute."}'
 eq "$(run change 5061 7384 7384)" '{"changed":true}'
-eq "$(run change 4417 7384 7384)" '{"error":"the current PIN was not accepted"}'
-eq "$(run change 5061 88888888 88888888)" '{"error":"the system refused the new PIN"}'
-# a refusal that asks again does not hang: it is reported at once, not after the deadline
-start=$SECONDS
-eq "$(run change 5061 00000000 00000000)" '{"error":"the system refused the new PIN"}'
-(( SECONDS - start < 3 )) || { echo "FAIL: the refusal waited for the deadline" >&2; exit 1; }
-# a passwd that never finishes after the retype: said plainly, and passwd is gone afterwards
-eq "$(run change 5061 77777777 77777777)" '{"error":"passwd did not finish in time; the PIN may or may not have changed, try the new PIN first and then the old one"}'
-sleep 0.5
-! pgrep -f "$tmp/passwd" >/dev/null || { echo "FAIL: passwd was left running" >&2; exit 1; }
-eq "$(run change 5061 7384 9152)" '{"error":"the new PINs do not match"}'
-eq "$(run change 5061 5061 5061)" '{"error":"the new PIN is the same as the current one"}'
-eq "$(run change 5061 123 123)" '{"error":"the new PIN must be 4 to 84 digits"}'
-# long PINs: 70 and 84 digits go through to passwd, 85 is more than a later change could carry
-eq "$(run change 5061 1234567890123456789012345678901234567890123456789012345678901234567890 1234567890123456789012345678901234567890123456789012345678901234567890)" '{"changed":true}'
-eq "$(run change 5061 123456789012345678901234567890123456789012345678901234567890123456789012345678901234 123456789012345678901234567890123456789012345678901234567890123456789012345678901234)" '{"changed":true}'
-eq "$(run change 5061 1234567890123456789012345678901234567890123456789012345678901234567890123456789012345 1234567890123456789012345678901234567890123456789012345678901234567890123456789012345)" '{"error":"the new PIN must be 4 to 84 digits"}'
-# a 70-digit PIN is taken as the current one on the next change (the stand-in only knows 5061, so passwd says no)
-eq "$(run change 1234567890123456789012345678901234567890123456789012345678901234567890 7384 7384)" '{"error":"the current PIN was not accepted"}'
-eq "$(run change 1234567890123456789012345678901234567890123456789012345678901234567890123456789012345 7384 7384)" '{"error":"current PIN must be digits"}'
-eq "$(run change 5061 12a45 12a45)" '{"error":"the new PIN must be 4 to 84 digits"}'
-eq "$(run change abc 7384 7384)" '{"error":"current PIN must be digits"}'
-eq "$(run change 5061 '' '')" '{"error":"the new PIN must be 4 to 84 digits"}'
+eq "$(run change 4417 7384 7384)" '{"error":"passwd: Authentication token manipulation error\npasswd: password unchanged"}'
+out=$(run change 5061 88888888 88888888); valid "$out"
+eq "$out" '{"error":"BAD PASSWORD: it is too simple \"quoted\" \\ back"}'
+eq "$(run change 5061 77777777 77777777)" "$maybe"
+eq "$(run change 5061 66666666 66666666)" '{"error":"the PIN was not changed (exit 3)"}'
+eq "$(run change 5061 7384 9152)" '{"error":"The two PINs do not match."}'
+eq "$(run change 5061 123 123)" '{"error":"The PIN must be at least 4 digits, digits only."}'
 eq "$(run other 5061 7384 7384)" '{"error":"usage: change|status"}'
-eq "$(printf '5061\n' | bash "$tmp/pin.sh" change 2>/dev/null || true)" '{"error":"no new PIN"}'
-eq "$(printf '' | bash "$tmp/pin.sh" change 2>/dev/null || true)" '{"error":"no current PIN"}'
 # a PIN never shows up in what the script prints, on stdout or stderr
 out=$(run change 5061 7384 7384; cat "$tmp/err"; run change 4417 7384 7384; cat "$tmp/err")
 [[ $out != *7384* && $out != *5061* && $out != *4417* ]] || { echo "FAIL: a PIN was printed" >&2; exit 1; }
 # status: how the phone unlocks and whether the account has a password at all
+cat > "$tmp/passwd" <<EOF
+#!/bin/bash
+[[ \${1:-} == -S ]] && { cat "$tmp/pwstatus"; exit 0; }
+exit 1
+EOF
+chmod +x "$tmp/passwd"; mkpinsh "$tmp/set-pin"
 status() { bash "$tmp/pin.sh" status 2>/dev/null || true; }
 echo pin > "$tmp/type"; echo "lef P 2026-11-10 -1 -1 -1 -1" > "$tmp/pwstatus"
 eq "$(status)" '{"type":"pin","hasPassword":true}'
@@ -82,6 +68,35 @@ echo pin > "$tmp/type"; : > "$tmp/pwstatus"
 eq "$(status)" '{"error":"cannot tell how this phone unlocks"}'
 echo "lef P 2026-11-10 -1 -1 -1 -1" > "$tmp/pwstatus"; mv "$tmp/set-pin" "$tmp/set-pin.off"
 eq "$(status)" '{"error":"cannot tell how this phone unlocks"}'
+eq "$(run change 5061 7384 7384)" '{"error":"omamobile-set-pin is missing; nothing was changed"}'
 mv "$tmp/set-pin.off" "$tmp/set-pin"
 eq "$(status)" '{"type":"pin","hasPassword":true}'
+
+# the repository's own helper, with a passwd stand-in that asks like passwd does and knows only 5061
+real="$src/../omamobile-shell/bin/omamobile-set-pin"
+if [[ -f $real ]]; then
+  cat > "$tmp/passwd" <<'EOF'
+#!/usr/bin/python3
+import getpass, sys
+if getpass.getpass("Current password: ") != "5061":
+    print("passwd: Authentication token manipulation error\npasswd: password unchanged"); sys.exit(10)
+a = getpass.getpass("New password: ")
+b = getpass.getpass("Retype new password: ")
+if a == "88888888":
+    print("BAD PASSWORD: it is too simple\npasswd: password unchanged"); sys.exit(10)
+sys.exit(0 if a == b else 11)
+EOF
+  chmod +x "$tmp/passwd"
+  sed -e "s|^passwd=/usr/bin/passwd|passwd=$tmp/passwd|" "$real" > "$tmp/real-set-pin"; chmod +x "$tmp/real-set-pin"
+  grep -q "^passwd=$tmp/passwd" "$tmp/real-set-pin"
+  mkpinsh "$tmp/real-set-pin"
+  eq "$(run change 5061 7384 7384)" '{"changed":true}'
+  out=$(run change 4417 7384 7384); valid "$out"
+  [[ $out == '{"error":'*'password unchanged"}' ]] || { echo "FAIL: real helper refusal: $out" >&2; exit 1; }
+  out=$(run change 5061 88888888 88888888); valid "$out"
+  [[ $out == *'BAD PASSWORD'* ]] || { echo "FAIL: real helper refusal text: $out" >&2; exit 1; }
+  eq "$(run change 5061 123 123)" '{"error":"The PIN must be at least 4 digits, digits only."}'
+  out=$(run change 5061 7384 7384; cat "$tmp/err"; run change 4417 7384 7384; cat "$tmp/err")
+  [[ $out != *7384* && $out != *5061* && $out != *4417* ]] || { echo "FAIL: a PIN was printed (real helper)" >&2; exit 1; }
+fi
 echo "pin backend: ok"

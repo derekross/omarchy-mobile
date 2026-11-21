@@ -6,8 +6,7 @@ pkgdesc="Native mobile Settings framework and device information"
 arch=(aarch64 x86_64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
-depends=(omarchy bash coreutils systemd brightnessctl polkit python qt6-base qt6-declarative qt6-svg)
-optdepends=('omamobile-shell: omamobile-set-pin, which the Change PIN page asks how the phone unlocks')
+depends=(omarchy bash coreutils systemd brightnessctl polkit python qt6-base qt6-declarative qt6-svg 'omamobile-shell>=0.2.141')
 makedepends=(gcc make)
 checkdepends=(dbus python)
 

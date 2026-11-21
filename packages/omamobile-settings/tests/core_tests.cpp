@@ -156,7 +156,8 @@ private slots:
                 "change) read -r a; read -r b; read -r c; [[ $a == 5061 && $b == 7384 && $c == 7384 ]] || { printf '{\"error\":\"no input\"}\\n'; exit 0; }\n"
                 "sleep 1.2; printf '{\"changed\":true}\\n' ;;\nesac\n");
         f.close();
-        ActionRunner runner(nullptr, dir.path());
+        ActionRunner runner;
+        runner.setBackendDir(dir.path());
         QSignalSpy spy(&runner, &ActionRunner::finished);
         QVERIFY(!runner.pending("pin", "change"));
         runner.run("pin", {"change"}, "5061\n7384\n7384\n");
@@ -179,7 +180,8 @@ private slots:
     }
     void inputIsForThePinToolOnly() {
         QTemporaryDir dir;
-        ActionRunner runner(nullptr, dir.path());
+        ActionRunner runner;
+        runner.setBackendDir(dir.path());
         QSignalSpy spy(&runner, &ActionRunner::finished);
         runner.run("display", {"get"}, "secret\n");
         QTRY_COMPARE(spy.count(), 1);
@@ -189,7 +191,8 @@ private slots:
     // A backend that is not there ends the request and clears it.
     void aMissingBackendIsNotLeftPending() {
         QTemporaryDir dir;
-        ActionRunner runner(nullptr, dir.path());
+        ActionRunner runner;
+        runner.setBackendDir(dir.path());
         QSignalSpy spy(&runner, &ActionRunner::finished);
         runner.run("pin", {"status"});
         QVERIFY(runner.pending("pin", "status"));
@@ -215,7 +218,8 @@ private slots:
         struct Restore { QByteArray path; ~Restore() { qunsetenv("BASH_ENV"); qputenv("PATH", path); } } restore{oldPath};
         qputenv("BASH_ENV", dir.filePath("env.sh").toUtf8());
         qputenv("PATH", "/tmp/not-the-system:/usr/bin");
-        ActionRunner runner(nullptr, dir.path());
+        ActionRunner runner;
+        runner.setBackendDir(dir.path());
         QSignalSpy spy(&runner, &ActionRunner::finished);
         runner.run("pin", {"status"});
         QTRY_COMPARE(spy.count(), 1);
