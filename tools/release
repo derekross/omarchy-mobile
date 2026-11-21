@@ -273,7 +273,7 @@ st_kernel() {
   # build of it is not the release kernel, so neither counts)
   local want notes=device/$DEVICE/NOTES.md hit
   want=$(release_string "$commit")
-  hit=$(grep -nE "(^|[^A-Za-z0-9._-])${want//./\\.}([^A-Za-z0-9_-]|\$)" "$notes" 2>/dev/null | head -1 || true)
+  hit=$(grep -nE "(^|[^A-Za-z0-9._-])${want//./\\.}([^A-Za-z0-9_-]|\$)" "$notes" 2>/dev/null | sed -n 1p || true)
   if [[ -z $hit ]]; then
     die "$notes has no boot of $want (§11.1: boot the release build, then record its uname -r and the result in $notes)"
   fi
@@ -488,7 +488,7 @@ st_packages() {
     local bf=packages/$dpkg/boot-files/SHA256SUMS pf want_sum got_sum
     [[ -f $bf ]] || die "no $bf: run the images stage first"
     pf=$(bsdtar -xOf "$db" --include='*/desc' |
-      awk -v n="$dpkg" '/^%FILENAME%$/ { getline; f = $0 } /^%NAME%$/ { getline; if ($0 == n) print f }' | head -1)
+      awk -v n="$dpkg" '/^%FILENAME%$/ { getline; f = $0 } /^%NAME%$/ { getline; if ($0 == n) print f }' | sed -n 1p)
     [[ -n $pf && -f out/repo/aarch64/$pf ]] || die "out/repo has no $dpkg package file"
     want_sum=$(awk '$2 == "initramfs.cpio.lz4" { print $1 }' "$bf")
     got_sum=$({ bsdtar -xOf "out/repo/aarch64/$pf" "usr/lib/omamobile/$DEVICE/initramfs.cpio.lz4" 2>/dev/null || true; } | sha256sum | cut -d' ' -f1)
@@ -814,7 +814,7 @@ st_identifiers() {
   # the vendor chroots, Trusty state
   f=$(grep -E '^/usr/lib/firmware/(updates|omamobile/camera)(/|$)|^/usr/lib/omamobile-(fp|vendor/[a-z]+)/root/|/(aoc\.bin|cs40l26[^/]*\.(bin|wmfw)|cs35l41-dsp1-spk-prot[^/]*|BCM\.[^/]*\.hcd|fw_bcmdhd\.bin)$|^/var/lib/omamobile-fp/' \
       "$rel/rootfs-files.txt" || true)
-  [[ -z $f ]] || { echo "$f" | head -20 >&2; die "files from a factory image in the root image (above)"; }
+  [[ -z $f ]] || { echo "$f" | sed -n '1,20p' >&2; die "files from a factory image in the root image (above)"; }
   f=$(bundle_extra_files "$dir")
   [[ -z $f ]] || { echo "$f" >&2; die "files in the bundle that make-bundle does not put there (above)"; }
   note "no factory-image file in the root image; the bundle holds only make-bundle's files"

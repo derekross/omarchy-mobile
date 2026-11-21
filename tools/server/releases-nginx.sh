@@ -130,7 +130,7 @@ with_include() {
 
 if [[ ${1:-} == revert ]]; then
   [[ $(id -u) == 0 ]] || die "run with sudo"
-  last=$(ls -1t "$AVAIL".bak-releases-* 2>/dev/null | head -1 || true)
+  last=$(ls -1t "$AVAIL".bak-releases-* 2>/dev/null | sed -n 1p || true)
   [[ -n $last ]] || die "no backup of $AVAIL from this script"
   cp -a "$AVAIL" "$AVAIL.bak-before-revert-$STAMP"
   cp -a "$last" "$AVAIL"
@@ -241,7 +241,7 @@ check '^cache-control: public, max-age=31536000, immutable' "a version directory
 hdrs=$(curl -sI --max-time 20 "https://$SITE/releases/cheetah/.2026.01.01.partial/x" | tr -d '\r' || true)
 check '^HTTP/[0-9.]* 403' "upload staging directories are refused"
 # The listing, where a release exists (skipped on a server with none yet)
-for dir in "releases/cheetah/" "releases/cheetah/$(curl -s --max-time 20 "https://$SITE/releases/cheetah/latest.json" | sed -n 's/.*"version": *"\([0-9.]*\)".*/\1/p' | head -1)/"; do
+for dir in "releases/cheetah/" "releases/cheetah/$(curl -s --max-time 20 "https://$SITE/releases/cheetah/latest.json" | sed -n 's/.*"version": *"\([0-9.]*\)".*/\1/p' | sed -n 1p)/"; do
   [[ $dir == */ && $dir != *//* ]] || continue
   code=$(curl -s -o /tmp/releases-listing.$$ -w '%{http_code} %{content_type}' --max-time 20 "https://$SITE/$dir" || echo 000)
   if [[ $code == 404* ]]; then say "  skip: no $dir on this server yet"

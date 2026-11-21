@@ -63,7 +63,7 @@ if ((!here)); then
   phone() { if [[ -n ${PHONE_SSH:-} ]]; then "$PHONE_SSH" "$@"; else bash "$repo/tools/phone-ssh" "$@"; fi; }
   # The device: the phone's first compatible against the descriptors (the
   # repository's, or a bundle's one device.conf).
-  compat=$(phone "tr '\\0' '\\n' < /proc/device-tree/compatible | head -1") \
+  compat=$(phone "tr '\\0' '\\n' < /proc/device-tree/compatible | sed -n 1p") \
     || { echo "phone-smoke: the phone doesn't answer over tools/phone-ssh" >&2; exit 2; }
   device=unknown
   shopt -s nullglob
@@ -158,8 +158,8 @@ fi
 sr=$slot_from   # a test's fake root, else nothing
 release=$(uname -r)
 # The Pixel bootloaders pass androidboot.* in bootconfig, not on the command line.
-slot=$(sed -n 's/^androidboot\.slot_suffix = "\(_[ab]\)"$/\1/p' "$sr/proc/bootconfig" 2>/dev/null | head -1)
-[[ -n $slot ]] || slot=$(grep -oE 'androidboot\.slot_suffix=_[ab]' "$sr/proc/cmdline" 2>/dev/null | head -1 | cut -d= -f2)
+slot=$(sed -n 's/^androidboot\.slot_suffix = "\(_[ab]\)"$/\1/p' "$sr/proc/bootconfig" 2>/dev/null | sed -n 1p)
+[[ -n $slot ]] || slot=$(grep -oE 'androidboot\.slot_suffix=_[ab]' "$sr/proc/cmdline" 2>/dev/null | sed -n 1p | cut -d= -f2)
 up=$(cut -d. -f1 "$sr/proc/uptime" 2>/dev/null)
 # The slot this phone's system boots from: SLOT= in boot-update.conf (a
 # release installed on the slot it ran from, docs/ACTIVE-SLOT-PLAN.md §2),
@@ -366,7 +366,7 @@ if ((newerrs)); then
   # MAC-shaped octets, quoted strings and every word with a digit in it are
   # masked, which keeps addresses, serials and network names out of the row;
   # still read it before pasting the report anywhere public.
-  top=$(mask_ids <<<"$newlog" | sort | uniq -c | sort -rn | head -3 \
+  top=$(mask_ids <<<"$newlog" | sort | uniq -c | sort -rn | sed -n '1,3p' \
     | awk '{n=$1; $1=""; sub(/^ /, ""); printf "%s%s x%d", (NR > 1 ? "; " : ""), $0, n}')
   check "not ok" 0 "new dmesg errors" "$top"
 fi
