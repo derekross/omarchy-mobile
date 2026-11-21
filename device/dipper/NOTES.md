@@ -350,7 +350,9 @@ Repeated a guarded RAM rescue/chroot test using the exact shared Mesa build
 archive with SHA-256
 `774f3b799c6e0aea91f61fea2b7991af742e0a6e4fc9511491dba1b04219872b`.
 The hash was checked on the phone before interpreting the result. Kernel
-source commit was `f61e96519032e385a04ca0688a068ca6dbc56d63`, reporting release
+source commit was `f61e96519032e385a04ca0688a068ca6dbc56d63`, GitHub's
+test merge of derekross/linux-omarchy-mobile#218 into the published kernel,
+reporting release
 `7.3.0-rc6-omamobile-push1-gf61e96519032`; boot image SHA-256 was
 `022b935a0b49b703e964cbfb286805ca54a38cd9fb66d095dcca9e6b0e97145f`.
 Userdata was mounted `ro,noload`; package extraction and test configuration
