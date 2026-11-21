@@ -130,7 +130,7 @@ add_language() {
 # (the first), the next language becomes current.
 remove_language() {
   local now new
-  now=$("$GSETTINGS" get $SCHEMA sources)
+  now=$("$GSETTINGS" get $SCHEMA sources) || return 1
   grep -q "'jp+romaji'" <<<"$now" || return 0
   new=$(sed -E "s/\('xkb', 'jp\+romaji'\)(, )?//g; s/, \]/]/" <<<"$now")
   [[ $new == *"('"* ]] || new="@a(ss) []"
@@ -182,8 +182,11 @@ case ${1:-} in
     ;;
   off)
     rm -f "$FLAG" "$RESTARTED"
-    remove_language
-    us_layouts terminal/ ""
+    # The language and the layouts are tidying: a failure there (gsettings
+    # with no session bus, say) must not leave fcitx5 holding the input
+    # method while status says off.
+    remove_language || echo "omamobile-ime: couldn't take Japanese (romaji) out of the keyboard's languages" >&2
+    us_layouts terminal/ "" || echo "omamobile-ime: couldn't give English its own layout back" >&2
     "$SYSTEMCTL" --user stop omamobile-ime.service omarchy-fcitx5.service 2>/dev/null || true
     restart_squeekboard
     echo "Japanese input off"

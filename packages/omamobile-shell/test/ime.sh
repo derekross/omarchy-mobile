@@ -30,7 +30,7 @@ mkdir -p "$t/run"
 printf "[('xkb', 'us'), ('xkb', 'jp')]\n" > "$t/sources"
 run() {
   HOME=$t/home XDG_CONFIG_HOME=$t/home/.config XDG_DATA_HOME=$t/home/.local/share IME_LOG=$t/log IME_SOURCES=$t/sources OMAMOBILE_SYSTEMCTL=$t/bin/systemctl \
-    OMAMOBILE_GSETTINGS=$t/bin/gsettings OMAMOBILE_FCITX5_REMOTE=$t/bin/fcitx5-remote \
+    OMAMOBILE_GSETTINGS=${GS:-$t/bin/gsettings} OMAMOBILE_FCITX5_REMOTE=$t/bin/fcitx5-remote \
     OMAMOBILE_MOZC_ADDON=${MOZC:-$t/mozc.conf} OMAMOBILE_IME_OSK_RESTART=$t/bin/osk-restart IME_OSK=$t/osk \
     OMAMOBILE_IME_OSK_STOP=$t/bin/osk-stop IME_ORDER=$t/order OMAMOBILE_IME_SETTLE=0 \
     XDG_RUNTIME_DIR=$t/run OMAMOBILE_IME_OSK_WAIT=0 OMAMOBILE_IME_REMOTE_WAIT=${REMOTE_WAIT:-0} bin/omamobile-ime "$@"
@@ -79,6 +79,14 @@ for case in "[('xkb', 'jp+romaji'), ('xkb', 'de')]:[('xkb', 'de')]" "[('xkb', 'j
   run off >/dev/null
   [[ $(cat "$t/sources") == "${case#*:}" ]] || fail "off turns ${case%%:*} into ${case#*:}, not $(cat "$t/sources")"
 done
+# A failing gsettings doesn't stop off halfway: it warns, and still stops
+# fcitx5 and gives squeekboard the input method back.
+run on >/dev/null; : > "$t/log"; : > "$t/osk"
+printf '#!/bin/bash\nexit 1\n' > "$t/bin/gsettings-fail"; chmod +x "$t/bin/gsettings-fail"
+err=$(GS=$t/bin/gsettings-fail run off 2>&1 >/dev/null) || fail "off fails when gsettings does"
+grep -q "couldn't take Japanese" <<<"$err" || fail "off warns when the language can't be removed"
+grep -qx -- '--user stop omamobile-ime.service omarchy-fcitx5.service' "$t/log" || fail "off stops fcitx5 even when gsettings fails"
+[[ $(wc -l < "$t/osk") == 1 ]] || fail "off restarts squeekboard even when gsettings fails"
 printf "[('xkb', 'us'), ('xkb', 'jp')]\n" > "$t/sources"
 run bogus 2>/dev/null && fail "unknown commands refused"
 
