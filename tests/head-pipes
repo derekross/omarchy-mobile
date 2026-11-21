@@ -1,0 +1,48 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# No test script that sets pipefail pipes into head (AGENTS.md section 4,
+# Userspace, as tests/grep-q-pipes for grep -q): head -1, -n N, -c N or bare
+# head exits once it has its lines or bytes, a writer that writes again gets
+# SIGPIPE, and pipefail then fails the pipeline, so a check fails at random,
+# a "set -e" assignment ends the script, or an "if ...; then fail" check
+# passes. Use sed -n '1,Np' (sed -n 1p for one line) for lines, and
+# { head -c N; cat >/dev/null; } for bytes: both read all their input.
+# Comment lines don't count. Left out: packages/omamobile-modem/test/nv-overlay
+# until the fix for #457 lands, as in tests/grep-q-pipes; and one line of
+# tests/nv-backup, whose test closes nv-backup's stdout early on purpose
+# (allowed below by its whole text, so an edit to it is looked at again).
+# bin/, tools/, tools/lib and rootfs/ are not scanned yet.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+pattern='(^|[^|])\|&?[[:space:]]*head([[:space:];|&)]|$)'
+
+for bad in 'head -c 64 "$tmp" | head -1' 'x | head -1' 'x |head -n 3' 'x | head -n3' 'x | head -5' \
+           'x | head -c 300' 'x | head' 'v=$(x | head)' 'x | head; y' 'x |& head -1' 'x|head -1 | y'; do
+  grep -cE "$pattern" <<<"$bad" >/dev/null || fail "the pattern finds '$bad'"
+done
+for good in 'x || head -1 f' 'head -1 <<<"$x"' 'head -c 10 f | x' 'x | sed -n 1p' "x | sed -n '1,5p'" \
+            'x | { head -c 300; cat >/dev/null; }' 'x | header' 'x | headroom' 'x | head-of-line'; do
+  grep -cE "$pattern" <<<"$good" >/dev/null && fail "the pattern leaves '$good' alone"
+done
+
+# Each pathspec has to add a script to the scan (#597): a wildcard pathspec
+# that matched nothing would pass without reading a file.
+scan=(tests 'packages/*/test/*')
+skip=(':(exclude)tests/head-pipes' ':(exclude)packages/omamobile-modem/test/nv-overlay')
+pipefail_scripts() { git grep -l 'set -[a-z]*o pipefail' -- "$@" "${skip[@]}"; }
+for spec in "${scan[@]}"; do
+  [[ -n $(pipefail_scripts "$spec") ]] || fail "the pathspec '$spec' matches a pipefail script"
+done
+
+mapfile -t scripts < <(pipefail_scripts "${scan[@]}")
+# tests/nv-backup's closed-stdout check pipes into head on purpose; its line is
+# allowed whole (grep -x; the text holds no basic-regex special character).
+allowed='"$r/tools/nv-backup" -d testdev "$t/closed" 2>/dev/null | head -c 10 >/dev/null || true'
+if hits=$(git grep -nE "$pattern" -- "${scripts[@]}" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' |
+  grep -vx -- "tests/nv-backup:[0-9]*:$allowed"); then
+  printf '%s\n' "$hits" >&2
+  fail "no test script under pipefail pipes into head (use sed -n '1,Np', or { head -c N; cat >/dev/null; })"
+fi
+pass "no pipe into head in ${#scripts[@]} pipefail test scripts"
