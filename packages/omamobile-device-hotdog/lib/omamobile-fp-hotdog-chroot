@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 # omamobile-fp-hotdog-chroot: run OnePlus's Goodix fingerprint stack for the
 # OnePlus 7T Pro (hotdog) in a minimal chroot (device/hotdog/
-# FINGERPRINT-PLAN.md). THEORETICAL: staged in device/hotdog/fingerprint,
-# packaged nowhere, never run on a phone.
+# FINGERPRINT-PLAN.md). Packaged in omamobile-device-hotdog; on the owner's
+# phone since 2026-11-04 (FINGERPRINT-PLAN section 7).
 #
 #   omamobile-fp-hotdog-chroot check          preconditions only; changes nothing
 #   omamobile-fp-hotdog-chroot paths          the paths in use; read-only
@@ -13,6 +13,10 @@
 #   omamobile-fp-hotdog-chroot ns CMD...      a host command in the stack's
 #                                             namespaces
 #   omamobile-fp-hotdog-chroot run CMD...     an Android binary in the chroot
+#   omamobile-fp-hotdog-chroot rpmb status|allow|revoke
+#                                             the owner's RPMB opt-in (below);
+#                                             status is read-only, allow and
+#                                             revoke take effect at the next boot
 #
 # STAGE (each includes the ones before):
 #   listeners  servicemanager, vndservicemanager, hwservicemanager, qseecomd
@@ -37,11 +41,13 @@
 #   - the secure world only through our kernel's qcom_qseecom_compat, which
 #     loads only the trusted apps the human listed in its app_allowlist
 #     parameter: the runner refuses while that list is empty, and prints it;
-#   - RPMB: qcom_qseecom_compat refuses the RPMB listener unless its
-#     allow_rpmb parameter is Y. With it Y, the runner refuses too, unless
-#     /etc/omamobile/fp-hotdog-allow-rpmb exists (the human's explicit
-#     decision). And no block device, no SCSI generic node enters the
-#     chroot, so qseecomd's RPMB service has nothing to write to anyway;
+#   - RPMB: off as packaged. qcom_qseecom_compat refuses the RPMB listener
+#     unless its allow_rpmb parameter is Y, which the package never sets; the
+#     runner refuses to start with it Y unless the owner's consent file
+#     /etc/omamobile/fp-hotdog-allow-rpmb exists too. The owner turns both
+#     gates on together, from the next boot, with `rpmb allow` (and off with
+#     `rpmb revoke`). Only then does one node enter the chroot: the RPMB
+#     well-known LU's bsg node, as /dev/sg0; no block device ever does;
 #   - Android partitions: Linux never writes them. The TA's file-system
 #     listener (qseecomd) writes what stock kept in /persist and /data
 #     (templates, the TA's own state); here it gets private directories on
@@ -112,7 +118,15 @@ MARKER=$RUN/started
 ROOT=$RUN/root
 NSPID=$RUN/ns.pid
 CONSENT_RPMB=/etc/omamobile/fp-hotdog-allow-rpmb
+# The module option the owner's `rpmb allow` adds; the package's own
+# modprobe.d file never sets allow_rpmb
+RPMB_CONF=/etc/modprobe.d/omamobile-fp-hotdog-rpmb.conf
 MODPARAMS=/sys/module/qcom_qseecom_compat/parameters
+if [[ ${OMAMOBILE_FP_TEST:-} == 1 ]]; then
+  CONSENT_RPMB=${OMAMOBILE_FP_CONSENT_RPMB:-$CONSENT_RPMB}
+  RPMB_CONF=${OMAMOBILE_FP_RPMB_CONF:-$RPMB_CONF}
+  MODPARAMS=${OMAMOBILE_FP_MODPARAMS:-$MODPARAMS}
+fi
 # Our touchscreen driver's input device name (mainline s6sy761)
 TOUCH_NAME=s6sy761
 
@@ -243,6 +257,10 @@ check() {
       say "allow_rpmb=Y without $CONSENT_RPMB: refusing (RPMB writes are the human's decision)"
       ok=0
     fi
+  elif [[ -e $CONSENT_RPMB ]]; then
+    say "$CONSENT_RPMB exists but allow_rpmb is not Y: RPMB stays off this boot ('rpmb allow', then reboot, turns both on)"
+  else
+    say "RPMB off (the package default; 'rpmb allow' is the owner's opt-in)"
   fi
   [[ -x $BRIDGE ]] || say "no bridge at $BRIDGE: only stages before 'bridge' can run"
   [[ -n $(touch_event) ]] || say "no touchscreen ($TOUCH_NAME): the bridge cannot start captures"
@@ -528,6 +546,32 @@ start() {
   stop 1
 }
 
+# The owner's RPMB opt-in: both gates on (the module option and the consent
+# file) or both off, from the next boot. allow_rpmb is read when
+# qcom_qseecom_compat loads, and QSEE keeps its listeners until a reboot, so
+# nothing changes in the running boot.
+rpmb() {
+  case ${1:-} in
+    status)
+      local v; v=$(param allow_rpmb); say "allow_rpmb this boot: ${v:-unknown (qcom_qseecom_compat not loaded)}"
+      [[ -e $RPMB_CONF ]] && say "$RPMB_CONF: $(grep -v '^#' "$RPMB_CONF" | tr -s '\n' ' ')" || say "no $RPMB_CONF"
+      [[ -e $CONSENT_RPMB ]] && say "$CONSENT_RPMB exists" || say "no $CONSENT_RPMB" ;;
+    allow)
+      [[ $EUID -eq 0 || ${OMAMOBILE_FP_TEST:-} == 1 ]] || die "run as root"
+      mkdir -p -- "${RPMB_CONF%/*}" "${CONSENT_RPMB%/*}"
+      printf '%s\n' "# The owner's RPMB opt-in for the fingerprint stack ($(date -u +%F)), written by" \
+        "# omamobile-fp-hotdog-chroot rpmb allow; 'rpmb revoke' removes it" \
+        "options qcom_qseecom_compat allow_rpmb=1" > "$RPMB_CONF"
+      printf '%s\n' "The owner allowed the fingerprint stack's RPMB writes on $(date -u +%F) (rpmb allow)" > "$CONSENT_RPMB"
+      say "RPMB allowed from the next boot: $RPMB_CONF and $CONSENT_RPMB written" ;;
+    revoke)
+      [[ $EUID -eq 0 || ${OMAMOBILE_FP_TEST:-} == 1 ]] || die "run as root"
+      rm -f -- "$RPMB_CONF" "$CONSENT_RPMB"
+      say "RPMB off from the next boot: $RPMB_CONF and $CONSENT_RPMB removed" ;;
+    *) die "usage: omamobile-fp-hotdog-chroot rpmb status|allow|revoke" ;;
+  esac
+}
+
 ns_pid() {
   [[ -f $NSPID ]] || die "not running"
   cat "$NSPID"
@@ -556,6 +600,7 @@ case ${1:-} in
   start) start "${2:-bridge}" ;;
   ns) shift; ns "$@" ;;
   run) shift; run "$@" ;;
-  *) echo "usage: omamobile-fp-hotdog-chroot check | paths | start [listeners|hal|bridge] | ns CMD... | run CMD..." >&2
+  rpmb) rpmb "${2:-}" ;;
+  *) echo "usage: omamobile-fp-hotdog-chroot check | paths | start [listeners|hal|bridge] | ns CMD... | run CMD... | rpmb status|allow|revoke" >&2
      exit 2 ;;
 esac

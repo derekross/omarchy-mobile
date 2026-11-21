@@ -1,11 +1,13 @@
 <!-- SPDX-License-Identifier: MIT -->
-# hotdog fingerprint userspace (staged, theoretical)
+# hotdog fingerprint userspace
 
-**Untested: nothing here has run on a phone, and nothing here has been
-built against the owner's vendor image.** These files are staged in
-`device/hotdog/fingerprint/`. No package ships them and no unit enables
-them. The plan, its gated runbook and the kernel side are in
-[../FINGERPRINT-PLAN.md](../FINGERPRINT-PLAN.md).
+The bridge and the two shims the OnePlus 7T Pro's fingerprint stack runs
+with, built on the laptop with the NDK (`Makefile`) into
+`packages/omamobile-device-hotdog/prebuilt/`, which the device package
+installs next to its runner (`omamobile-fp-hotdog-chroot`). They have run on
+the owner's phone since 2026-11-04 ([FINGERPRINT-PLAN](../FINGERPRINT-PLAN.md)
+section 7). The owner's OxygenOS files are never shipped. The plan, its gated
+runbook and the kernel side are in [../FINGERPRINT-PLAN.md](../FINGERPRINT-PLAN.md).
 
 The design follows the Pixel stack (`fingerprint/`,
 `packages/omamobile-fingerprint`). The bridge speaks the same line
