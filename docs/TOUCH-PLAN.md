@@ -124,7 +124,7 @@ shell profile. Temporary fixtures were removed and the phone returned home.
 Policy, the complete combined shell suite and independent review passed;
 both published UX heads passed repository and every-package CI. These runtime
 results qualify the exact combined package above, not a later kernel or an
-unrelated subsequently merged shell change. The maintainer's existing/fresh-user 7 Pro checks passed on November 12; the 9a owner's one-time migration check remains before merge.
+unrelated subsequently merged shell change. The maintainer's existing/fresh-user 7 Pro checks passed on November 12; on November 15 the 9a owner ran this head's helper in a live session: Chromium's and Grok Bot's generated 0.83 lines became 0.70 once, and a second run left both files unchanged.
 No kernel or boot image was changed for this userspace verification.
 
 
