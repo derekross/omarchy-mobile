@@ -124,6 +124,8 @@ find_key (PosOskWidget *w, const char *name)
     return &w->emoji;
   if (g_strcmp0 (name, "mic") == 0)
     return &w->mic;
+  if (g_strcmp0 (name, "paste") == 0)
+    return &w->paste;
 
   for (int r = 0; r < layer->n_rows; r++) {
     PosOskWidgetRow *row = &layer->rows[r];
@@ -702,6 +704,46 @@ main (int argc, char **argv)
   check_str ("emoji and dictation", strstr (log_events->str, "strip:") ?: "", "strip:emoji down:- strip:mic ");
   check_str ("they type nothing", typed->str, "");
   reset (w);
+
+  tap (w, "paste");
+  check_str ("paste", strstr (log_events->str, "strip:") ?: "", "strip:paste ");
+  check_str ("it types nothing", typed->str, "");
+  reset (w);
+  {
+    TactusGeom *mic = find_key (w, "mic"), *paste = find_key (w, "paste"), *emoji = find_key (w, "emoji");
+    double sy = mic->vy + mic->vh / 2, wide = gtk_widget_get_allocated_width (GTK_WIDGET (w));
+    double mic_x = mic->vx + mic->vw / 2, paste_x = paste->vx + paste->vw / 2;
+    double between = (mic_x + paste_x) / 2;
+
+    check_int ("paste stands left of dictation, clear of it", paste->vx + paste->vw < mic->vx, TRUE);
+    check_int ("and right of the middle", paste->vx > wide / 2, TRUE);
+    check_int ("at dictation's height", (int) paste->vy, (int) mic->vy);
+
+    /* dictation keeps the span it had: out to the edge, and as far in as before */
+    send_touch (w, GDK_TOUCH_BEGIN, 0, between + 2, sy);
+    send_touch (w, GDK_TOUCH_END, 0, between + 2, sy);
+    check_str ("just right of half way between them: dictation", strstr (log_events->str, "strip:") ?: "", "strip:mic ");
+    reset (w);
+    send_touch (w, GDK_TOUCH_BEGIN, 0, between - 2, sy);
+    send_touch (w, GDK_TOUCH_END, 0, between - 2, sy);
+    check_str ("just left of it: paste", strstr (log_events->str, "strip:") ?: "", "strip:paste ");
+    reset (w);
+    send_touch (w, GDK_TOUCH_BEGIN, 0, wide - 1, sy);
+    send_touch (w, GDK_TOUCH_END, 0, wide - 1, sy);
+    check_str ("the right edge is dictation's", strstr (log_events->str, "strip:") ?: "", "strip:mic ");
+    reset (w);
+
+    /* the middle of the strip belongs to nobody: swipes up start there */
+    send_touch (w, GDK_TOUCH_BEGIN, 0, wide / 2 - 4, sy);
+    send_touch (w, GDK_TOUCH_END, 0, wide / 2 - 4, sy);
+    check_str ("the middle of the strip is no key", strstr (log_events->str, "strip:") ?: "", "");
+    check_str ("and types nothing", typed->str, "");
+    reset (w);
+    send_touch (w, GDK_TOUCH_BEGIN, 0, emoji->vx + emoji->vw / 2 + (mic_x - between) - 2, sy);
+    send_touch (w, GDK_TOUCH_END, 0, emoji->vx + emoji->vw / 2 + (mic_x - between) - 2, sy);
+    check_str ("emoji keeps its span", strstr (log_events->str, "strip:") ?: "", "strip:emoji ");
+    reset (w);
+  }
 
   /* return */
   type (w, "a");

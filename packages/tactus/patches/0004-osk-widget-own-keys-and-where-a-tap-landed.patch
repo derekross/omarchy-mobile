@@ -9,7 +9,8 @@ of the keyboards on current phones:
   lower keys;
 - the keys are drawn with cairo and pango from tactus-draw (panel, keys,
   labels, Shift in its three states, Delete, Return), light or dark;
-- under the keys a strip with the emoji key and the microphone;
+- under the keys a strip with the emoji key, the paste key and the
+  microphone;
 - a long press shows the letter's other forms in a bar above the key, and a
   slide along it picks one;
 - held on the space bar, a slide moves the cursor;
@@ -56,7 +57,7 @@ of the keyboards on current phones:
  G_END_DECLS
 --- a/src/pos-osk-widget.c
 +++ b/src/pos-osk-widget.c
-@@ -1,41 +1,80 @@
+@@ -1,41 +1,81 @@
  /*
   * Copyright (C) 2022-2024 The Phosh Developers
   *               2025 Phosh.mobi e.V.
@@ -110,7 +111,7 @@ of the keyboards on current phones:
 +#define PT_GAP_V        11.0
 +#define PT_KEY_H        43.0
 +#define PT_TOP_PAD      12.0
-+#define PT_STRIP_H      71.5  /* under the keys: emoji and dictation */
++#define PT_STRIP_H      71.5  /* under the keys: emoji, paste and dictation */
 +#define PT_SHIFT_GAP    7.8   /* extra room between Shift or Delete and the letters */
 +#define PT_KEY_RADIUS   6.8
 +#define PT_FONT_LOWER   23.85
@@ -118,6 +119,7 @@ of the keyboards on current phones:
 +#define PT_FONT_LABEL   18.3
 +#define PT_ICON_EDGE    42.5  /* emoji and dictation: centre, from the side */
 +#define PT_ICON_DROP    38.0  /* and below the keys */
++#define PT_PASTE_EDGE   (3 * PT_ICON_EDGE) /* paste: centre, from the right; left of dictation's span */
 +#define PT_POPUP_H      68.0
 +#define PT_POPUP_GAP    4.0
 +#define PT_POPUP_RADIUS 18.0
@@ -147,7 +149,7 @@ of the keyboards on current phones:
  
  enum {
    OSK_KEY_DOWN,
-@@ -44,6 +83,7 @@
+@@ -44,6 +84,7 @@
    OSK_KEY_SYMBOL,
    OSK_POPOVER_SHOWN,
    OSK_POPOVER_HIDDEN,
@@ -155,7 +157,7 @@ of the keyboards on current phones:
    N_SIGNALS
  };
  static guint signals[N_SIGNALS];
-@@ -60,22 +100,36 @@
+@@ -60,22 +101,37 @@
  static GParamSpec *props[PROP_LAST_PROP];
  
  typedef enum {
@@ -172,6 +174,7 @@ of the keyboards on current phones:
 +  TACTUS_ROLE_RETURN,
 +  TACTUS_ROLE_EMOJI,
 +  TACTUS_ROLE_MIC,
++  TACTUS_ROLE_PASTE,
 +} TactusRole;
 +
 +/* Where a key is: what is drawn, and the wider span that takes its touches */
@@ -199,7 +202,7 @@ of the keyboards on current phones:
    double     width;
    double     offset_x;
  } PosOskWidgetRow;
-@@ -83,19 +137,14 @@
+@@ -83,19 +139,14 @@
  /**
   * PosOskWidgetKeyboardLayer:
   * @width: The maximum width in key units
@@ -220,7 +223,7 @@ of the keyboards on current phones:
    guint           n_rows;
  } PosOskWidgetKeyboardLayer;
  
-@@ -119,6 +168,32 @@
+@@ -119,6 +170,32 @@
    double                    width;
  } PosOskWidgetLayout;
  
@@ -253,7 +256,7 @@ of the keyboards on current phones:
  /**
   * PosOskWidget:
   * @name: The name of the layout, e.g. `de`, `us`, `de+ch`
-@@ -132,207 +207,68 @@
+@@ -132,207 +209,68 @@
    GtkDrawingArea     parent;
  
    PhoshOskFeatures   features;
@@ -313,7 +316,7 @@ of the keyboards on current phones:
 +  double             s, vs;
 +  double             inset, gap_h, gap_v, key_h, pitch, top_pad, strip_h;
 +  double             overhang;
-+  TactusGeom         emoji, mic;
++  TactusGeom         emoji, mic, paste;
 +  guint              resize_id;
 +
 +  /* Fingers */
@@ -512,7 +515,7 @@ of the keyboards on current phones:
  
  
  static PosOskWidgetKeyboardLayer *
-@@ -364,16 +300,6 @@
+@@ -364,16 +302,6 @@
  }
  
  
@@ -529,7 +532,7 @@ of the keyboards on current phones:
  static guint
  pos_osk_widget_row_get_num_keys (PosOskWidgetRow *row)
  {
-@@ -393,6 +319,23 @@
+@@ -393,6 +321,23 @@
  }
  
  
@@ -553,7 +556,7 @@ of the keyboards on current phones:
  static void
  pos_osk_widget_layout_free (PosOskWidgetLayout *layout)
  {
-@@ -400,18 +343,21 @@
+@@ -400,18 +345,21 @@
    g_clear_pointer (&layout->locale, g_free);
  
    for (int l = 0; l < POS_OSK_WIDGET_LAST_LAYER + 1; l++) {
@@ -582,7 +585,7 @@ of the keyboards on current phones:
  {
    PosOskKey *key;
  
-@@ -429,7 +375,7 @@
+@@ -429,7 +377,7 @@
      key = g_object_new (POS_TYPE_OSK_KEY,
                          "symbol", "KEY_ENTER",
                          "icon", "keyboard-enter-symbolic",
@@ -591,7 +594,7 @@ of the keyboards on current phones:
                          "style", "return",
                          NULL);
      row->width += pos_osk_key_get_width (key);
-@@ -437,13 +383,15 @@
+@@ -437,13 +385,15 @@
    }
  }
  
@@ -609,7 +612,7 @@ of the keyboards on current phones:
  {
    PosOskKey *key;
  
-@@ -454,7 +402,7 @@
+@@ -454,7 +404,7 @@
        const char *label, *icon;
        switch (layer) {
        case POS_OSK_WIDGET_LAYER_SYMBOLS:
@@ -618,7 +621,7 @@ of the keyboards on current phones:
          icon = NULL;
          break;
        case POS_OSK_WIDGET_LAYER_SYMBOLS2:
-@@ -483,23 +431,12 @@
+@@ -483,23 +433,12 @@
    } else if (rownum == max_rows - 1) {
      const char *label;
  
@@ -642,7 +645,7 @@ of the keyboards on current phones:
      case POS_OSK_WIDGET_LAYER_NORMAL:
        label = "123";
        break;
-@@ -509,7 +446,7 @@
+@@ -509,7 +448,7 @@
      key = g_object_new (POS_TYPE_OSK_KEY,
                          "label", label,
                          "use", POS_OSK_KEY_USE_TOGGLE,
@@ -651,7 +654,7 @@ of the keyboards on current phones:
                          "layer", POS_OSK_WIDGET_LAYER_SYMBOLS,
                          "style", "toggle",
                          NULL);
-@@ -525,10 +462,9 @@
+@@ -525,10 +464,9 @@
  {
    if (g_strcmp0 (symbol, " ") == 0) {
      return g_object_new (POS_TYPE_OSK_KEY,
@@ -663,7 +666,7 @@ of the keyboards on current phones:
                           "expand", TRUE,
                           "style", "space",
                           NULL);
-@@ -570,6 +506,7 @@
+@@ -570,6 +508,7 @@
             guint             max_rows)
  {
    gsize num_keys;
@@ -671,7 +674,7 @@ of the keyboards on current phones:
  
    num_keys = json_array_get_length (arow);
    row->keys = g_ptr_array_new_full (num_keys + 2, g_object_unref);
-@@ -604,8 +541,11 @@
+@@ -604,8 +543,11 @@
      return;
    }
  
@@ -685,7 +688,7 @@ of the keyboards on current phones:
  }
  
  
-@@ -616,7 +556,7 @@
+@@ -616,7 +558,7 @@
    gboolean ret = FALSE;
    gdouble max_width = 0.0;
  
@@ -694,7 +697,7 @@ of the keyboards on current phones:
    layer->n_rows = num_rows;
  
    for (int r = 0; r < num_rows; r++) {
-@@ -636,13 +576,16 @@
+@@ -636,13 +578,16 @@
    }
    layer->width = max_width;
  
@@ -714,7 +717,7 @@ of the keyboards on current phones:
      for (int k = 0; k < row->keys->len; k++) {
        PosOskKey *key = g_ptr_array_index (row->keys, k);
  
-@@ -652,13 +595,26 @@
+@@ -652,13 +597,26 @@
        }
      }
  
@@ -747,7 +750,7 @@ of the keyboards on current phones:
      }
    }
  
-@@ -667,6 +623,10 @@
+@@ -667,6 +625,10 @@
      PosOskWidgetRow *row = pos_osk_widget_get_layer_row (self, l, r);
  
      row->offset_x = 0.5 * (layer->width - row->width);
@@ -758,7 +761,7 @@ of the keyboards on current phones:
    }
  
    return ret;
-@@ -785,801 +745,1131 @@
+@@ -785,801 +747,1143 @@
    return TRUE;
  }
  
@@ -1073,13 +1076,18 @@ of the keyboards on current phones:
 +      .vx = self->width - PT_ICON_EDGE * self->s - half, .vy = cy - half,
 +      .vw = 2 * half, .vh = 2 * half,
 +    };
++    self->paste = (TactusGeom) {
++      .role = TACTUS_ROLE_PASTE, .row = -1,
++      .vx = self->width - PT_PASTE_EDGE * self->s - half, .vy = cy - half,
++      .vw = 2 * half, .vh = 2 * half,
++    };
 +  }
  }
  
 -
 -static void
 -key_repeat_cancel (PosOskWidget *self)
-+/* The key (or the emoji or dictation key) a touch at this place is for */
++/* The key (or the emoji, paste or dictation key) a touch at this place is for */
 +static TactusGeom *
 +tactus_hit_test (PosOskWidget *self, double x, double y)
  {
@@ -1103,7 +1111,9 @@ of the keyboards on current phones:
 +  x -= self->bias_x * layer->key_width;
 +  y -= self->bias_y * self->pitch;
 +
-+  /* Under the keys: emoji on the left, dictation on the right */
++  /* Under the keys: emoji on the left, dictation on the right and paste
++   * beside it, each with a span as wide as the others'. The middle, where a
++   * swipe up from the screen's edge starts, stays free. */
 +  if (y >= keys_bottom + MIN (14.0 * self->vs, self->strip_h / 3)) {
 +    double reach = 2 * PT_ICON_EDGE * self->s;
 +
@@ -1111,6 +1121,8 @@ of the keyboards on current phones:
 +      return &self->emoji;
 +    if (x > self->width - reach)
 +      return &self->mic;
++    if (x > self->width - 2 * reach && x > reach)
++      return &self->paste;
 +    return NULL;
 +  }
 +  /* Well above the keys */
@@ -1909,6 +1921,7 @@ of the keyboards on current phones:
 +    break;
 +  case TACTUS_ROLE_EMOJI:
 +  case TACTUS_ROLE_MIC:
++  case TACTUS_ROLE_PASTE:
 +    t->kind = TACTUS_TOUCH_STRIP;
 +    g_signal_emit (self, signals[OSK_KEY_DOWN], 0, NULL);
 +    break;
@@ -2178,7 +2191,8 @@ of the keyboards on current phones:
 +    case TACTUS_TOUCH_STRIP:
 +      if (t->geom)
 +        g_signal_emit (self, signals[OSK_STRIP_KEY], 0,
-+                       t->geom->role == TACTUS_ROLE_EMOJI ? "emoji" : "mic");
++                       t->geom->role == TACTUS_ROLE_EMOJI ? "emoji" :
++                       t->geom->role == TACTUS_ROLE_PASTE ? "paste" : "mic");
 +      break;
 +    case TACTUS_TOUCH_SYM2:
 +    default:
@@ -2417,6 +2431,7 @@ of the keyboards on current phones:
 +  case TACTUS_ROLE_SPACE:
 +  case TACTUS_ROLE_EMOJI:
 +  case TACTUS_ROLE_MIC:
++  case TACTUS_ROLE_PASTE:
 +  default:
 +    break;
    }
@@ -2467,7 +2482,7 @@ of the keyboards on current phones:
  }
  
  
-@@ -1587,48 +1877,76 @@
+@@ -1587,48 +1891,78 @@
  pos_osk_widget_draw (GtkWidget *widget, cairo_t *cr)
  {
    PosOskWidget *self = POS_OSK_WIDGET (widget);
@@ -2508,6 +2523,8 @@ of the keyboards on current phones:
 +                     self->vs, theme, tactus_is_pressed (self, &self->emoji) ? 0.45 : 1.0);
 +  tactus_icon_mic (cr, self->mic.vx + self->mic.vw / 2, self->mic.vy + self->mic.vh / 2,
 +                   self->vs, theme, tactus_is_pressed (self, &self->mic) ? 0.45 : 1.0);
++  tactus_icon_paste (cr, self->paste.vx + self->paste.vw / 2, self->paste.vy + self->paste.vh / 2,
++                     self->vs, theme, tactus_is_pressed (self, &self->paste) ? 0.45 : 1.0);
  
 -      draw_key (self, key, cr);
 -    }
@@ -2568,7 +2585,7 @@ of the keyboards on current phones:
  }
  
  
-@@ -1639,10 +1957,11 @@
+@@ -1639,10 +1973,11 @@
  {
    PosOskWidget *self = POS_OSK_WIDGET (widget);
  
@@ -2582,7 +2599,7 @@ of the keyboards on current phones:
  static void
  pos_osk_widget_get_preferred_width  (GtkWidget       *widget,
                                       gint            *minimum_width,
-@@ -1651,6 +1970,96 @@
+@@ -1651,6 +1986,96 @@
    *minimum_width = *natural_width = MINIMUM_WIDTH;
  }
  
@@ -2679,7 +2696,7 @@ of the keyboards on current phones:
  
  static void
  pos_osk_widget_class_init (PosOskWidgetClass *klass)
-@@ -1716,7 +2125,7 @@
+@@ -1716,7 +2141,7 @@
    /**
     * PosOskWidget:key-height
     *
@@ -2688,16 +2705,16 @@ of the keyboards on current phones:
     */
    props[PROP_KEY_HEIGHT] =
      g_param_spec_uint ("key-height", "", "",
-@@ -1798,89 +2207,48 @@
+@@ -1798,89 +2223,48 @@
                                                0, NULL, NULL, NULL,
                                                G_TYPE_NONE,
                                                0);
 +  /**
 +   * PosOskWidget::strip-key
 +   * @self: The osk widget
-+   * @which: `emoji` or `mic`
++   * @which: `emoji`, `paste` or `mic`
 +   *
-+   * One of the two keys under the keyboard was tapped.
++   * One of the keys under the keyboard was tapped.
 +   */
 +  signals[OSK_STRIP_KEY] = g_signal_new ("strip-key",
 +                                         G_TYPE_FROM_CLASS (klass),
@@ -2804,7 +2821,7 @@ of the keyboards on current phones:
  }
  
  
-@@ -1901,37 +2269,27 @@
+@@ -1901,37 +2285,27 @@
    return self->layer;
  }
  
@@ -2856,7 +2873,7 @@ of the keyboards on current phones:
  }
  
  
-@@ -2000,14 +2358,9 @@
+@@ -2000,14 +2374,9 @@
    if (g_strcmp0 (self->name, name) == 0)
      return TRUE;
  
@@ -2874,7 +2891,7 @@ of the keyboards on current phones:
  
    if (!gm_str_is_null_or_empty (variant))
      path = g_strdup_printf ("/mobi/phosh/stevia/layouts/%s+%s.json", layout, variant);
-@@ -2018,6 +2371,14 @@
+@@ -2018,6 +2387,14 @@
    if (data == NULL)
      return FALSE;
  
@@ -2889,7 +2906,7 @@ of the keyboards on current phones:
    g_ptr_array_free (self->symbols, TRUE);
    self->symbols = g_ptr_array_new ();
  
-@@ -2026,6 +2387,14 @@
+@@ -2026,6 +2403,14 @@
  
    parse_lang (self, layout, variant);
  
@@ -2904,7 +2921,7 @@ of the keyboards on current phones:
    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_NAME]);
  
    return ret;
-@@ -2071,15 +2440,7 @@
+@@ -2071,15 +2456,7 @@
    g_debug ("Switching to mode: %d", mode);
    self->mode = mode;
  
@@ -2920,7 +2937,7 @@ of the keyboards on current phones:
    gtk_widget_queue_draw (GTK_WIDGET (self));
  }
  
-@@ -2172,7 +2533,7 @@
+@@ -2172,7 +2549,7 @@
    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_FEATURES]);
  }
  
@@ -2929,7 +2946,7 @@ of the keyboards on current phones:
  void
  pos_osk_widget_set_key_height (PosOskWidget *self, guint key_height)
  {
-@@ -2181,8 +2542,6 @@
+@@ -2181,8 +2558,6 @@
  
    self->key_height = key_height;
    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_KEY_HEIGHT]);
@@ -2938,7 +2955,7 @@ of the keyboards on current phones:
  }
  
  
-@@ -2193,3 +2552,166 @@
+@@ -2193,3 +2568,166 @@
  
    return self->layout.n_rows;
  }

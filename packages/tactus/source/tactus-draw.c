@@ -575,6 +575,52 @@ tactus_icon_mic (cairo_t *cr, double cx, double cy, double scale, const TactusTh
 }
 
 /*
+ * The paste key: a clipboard with two lines of writing on it. As the other
+ * two, in outline on a light keyboard and solid on a dark one with the writing
+ * cut out; the clip stands clear of the board on both.
+ */
+void
+tactus_icon_paste (cairo_t *cr, double cx, double cy, double scale, const TactusTheme *theme,
+                   double alpha)
+{
+  const TactusRgb *ink = &theme->icon;
+  const TactusRgb *writing = theme->dark ? &theme->panel : &theme->icon;
+
+  icon_begin (cr, cx, cy, scale);
+  cairo_push_group (cr);
+  tactus_set_source (cr, ink, 1.0);
+
+  /* the board */
+  if (theme->dark) {
+    tactus_rounded_rect (cr, -9.6, -11.0, 19.2, 24.4, 3.4);
+    cairo_fill (cr);
+  } else {
+    tactus_rounded_rect (cr, -8.75, -10.15, 17.5, 22.7, 2.6);
+    cairo_stroke (cr);
+  }
+  /* room around the clip, which sits over the board's top edge */
+  tactus_set_source (cr, &theme->panel, 1.0);
+  tactus_rounded_rect (cr, -6.6, -15.4, 13.2, 8.4, 3.0);
+  cairo_fill (cr);
+  /* the clip */
+  tactus_set_source (cr, ink, 1.0);
+  tactus_rounded_rect (cr, -4.9, -13.7, 9.8, 5.0, 1.8);
+  cairo_fill (cr);
+
+  /* the writing */
+  tactus_set_source (cr, writing, 1.0);
+  cairo_move_to (cr, -4.7, 0.6);
+  cairo_line_to (cr, 4.7, 0.6);
+  cairo_move_to (cr, -4.7, 6.2);
+  cairo_line_to (cr, 1.6, 6.2);
+  cairo_stroke (cr);
+
+  cairo_pop_group_to_source (cr);
+  cairo_paint_with_alpha (cr, alpha);
+  cairo_restore (cr);
+}
+
+/*
  * The emoji page
  */
 

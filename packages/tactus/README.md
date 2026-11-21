@@ -34,6 +34,7 @@ The package sits beside squeekboard: everything is under `/usr/lib/tactus`, with
 - **A long press** on a letter offers its accented forms. Held on the space bar, a slide moves the cursor. Backspace held deletes letters, then whole words. **Return held types a new line** where a tap on it would send what was written (a message, a search): it goes to the application as Return with Shift, and the line break appears while the key is still held.
 - **An emoji page:** large emoji in four rows that slide sideways, the ones used lately first, a sign for each kind, a search by name, skin tones on a long press.
 - **A microphone key** that starts the phone's dictation (`omamobile.voice`), and a swipe down that puts the keyboard away.
+- **A Paste key** beside the microphone, which opens Omarchy's clipboard list (`omarchy-menu-clipboard`, what squeekboard's Paste key opens): a tap on an entry there pastes it into the application. The list takes the keyboard's place while it is open.
 - **Past its round top corners the application shows,** not the wallpaper: the keyboard asks for a little less room than its panel is high (8 px on a screen 360 wide), so the window in front reaches that far under the panel's top. That much of the window's lower edge is behind the keyboard.
 - It learns where the owner's fingers land (`~/.local/state/tactus/touch`) and shifts the keys' touch targets by it, within narrow limits.
 
@@ -44,10 +45,9 @@ Password fields get none of this: the typing engine is off wherever what is type
 - **English only.** The dictionary is hunspell's en_US and the word counts are English. With another language's layout the keys type as they are, without corrections, and that has not been tried on a phone. There is no globe key and no way from Tactus to the shell's language sheet.
 - **It corrects, it doesn't predict:** there is no row of suggestions. Stevia's own word completion is off: Tactus's settings default says so (`tactus.gschema.override`), and Stevia's hunspell completer looks for its dictionary under `/usr/lib/tactus` and finds none, which it says once at every start (`Failed to init default completer 'hunspell'`). That line in the journal is expected. Stevia's `osk-features` setting does nothing here: the keys are Tactus's own.
 - It knows how common the 50,000 commonest words are. A slip in a rarer form of a common word (`corects`) can stay as typed.
-- No Paste key (Omarchy's clipboard menu is on squeekboard's action row).
 - **An application that doesn't say what its field is for gets corrections there too.** The typing engine runs only where a field's purpose is plain text (text-input's "normal"): a field that declares a password, a PIN, a number, a phone number, a name, an e-mail or web address, a date or a terminal gets each key as typed. But "normal" is also what a field that declares nothing reads as, so a GPUI editor or a terminal that doesn't say it is one is treated like a chat field. Backspace right after a correction puts the word back.
 - **Not tried on the lock screen's password field.** The typing engine is off wherever the field says what is typed is hidden, as a password field should; whether the lock's field says so has not been checked on a phone, so until it has, unlock with squeekboard or the PIN pad if a password matters.
-- The shell's home strip stays under it, as under squeekboard, so the microphone and emoji keys sit above the strip.
+- The shell's home strip stays under it, as under squeekboard, so the microphone, paste and emoji keys sit above the strip.
 
 ## Its colours
 

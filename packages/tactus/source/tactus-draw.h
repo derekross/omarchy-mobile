@@ -70,6 +70,8 @@ void   tactus_icon_delete     (cairo_t *cr, double cx, double cy, double scale, 
 void   tactus_icon_return     (cairo_t *cr, double cx, double cy, double scale);
 void   tactus_icon_emoji      (cairo_t *cr, double cx, double cy, double scale, const TactusTheme *theme,
                                double alpha);
+void   tactus_icon_paste      (cairo_t *cr, double cx, double cy, double scale, const TactusTheme *theme,
+                               double alpha);
 void   tactus_icon_mic        (cairo_t *cr, double cx, double cy, double scale, const TactusTheme *theme,
                                double alpha);
 
