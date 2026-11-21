@@ -184,6 +184,33 @@ for bad in "wlan0 at $uaa" "$(ts 25 00 15 10 20 30)" "$(ts 25 13 15 10 20 30)" "
   printf '%s\n' "$bad" > "$t/scan/bad.bin"
   if run scan "$t/scan"; then fail "the scan finds: $bad"; fi
 done
+# Any other exempt address (all zeros, all ones, locally administered, or a
+# chain of exempt addresses) hides no real address starting in its last field,
+# in either separator direction or as a bare MAC record; overlapping real
+# addresses report both, exempt overlaps and 7-octet runs still pass, and
+# chains report each real address once.
+restc=${rest//-/:}
+for bad in "00-00-00-00-00-00:$restc" "00:00:00:00:00:00-$rest" \
+  "02-00-00-00-00-00:$restc" "02:00:00:00:00:00-$rest" \
+  "02-00-00-00-00-02:00:00:00:00:02-00-00-00-00-00:$restc" \
+  "00-00-00-00-00-00:00:00:00:00:00-$rest" \
+  "02-00-00-00-00-bd_addr $bare" "02:00:00:00:00:bd-addr $bare"; do
+  printf '%s\n' "$bad" > "$t/scan/bad.bin"
+  if run scan "$t/scan"; then fail "the scan finds: $bad"; fi
+  grep -qx '    1 finding(s)' "$t/log" || fail "the scan reports once: $bad"
+done
+for bad in "$hy:$restc" "$mac-$rest"; do
+  printf '%s\n' "$bad" > "$t/scan/bad.bin"
+  if run scan "$t/scan"; then fail "the scan finds overlapping real addresses: $bad"; fi
+  grep -qx '    2 finding(s)' "$t/log" || fail "the scan reports both overlapping real addresses: $bad"
+done
+for ok in "00-00-00-00-00-00:00:00:00:00:00" "ff-ff-ff-ff-ff-ff:ff:ff:ff:ff:ff" \
+  "ff:ff:ff:ff:ff:ff-ff-ff-ff-ff-ff" "02-00-00-00-00-02:$restc" "02:00:00:00:00:02-$rest" \
+  "$(ts 25 11 15 10 20 02):00:00:00:00:00" \
+  "00-00-00-00-00-00:$restc:6f" "00:00:00:00:00:00-$rest-6f"; do
+  printf '%s\n' "$ok" > "$t/scan/bad.bin"
+  run scan "$t/scan" || fail "the scan passes: $ok"
+done
 rm "$t/scan/bad.bin"
 # The holder of a copyright notice is named on purpose (2026.11.12: Omarchy's
 # licence header in a patch). Only that form passes: the same name anywhere
@@ -207,6 +234,16 @@ printf 'dhcp-host=%s,192.168.0.61\n' "$doc" >> "$t/scan/etc/dnsmasq.conf"
 if run scan "$t/scan"; then fail "a unicast dhcp-host in etc/dnsmasq.conf is found"; fi
 printf '#dhcp-option=128,%s # %s\n' "$opt" "$doc" > "$t/scan/etc/dnsmasq.conf"
 if run scan "$t/scan"; then fail "a real address after an exempt value on one line is found"; fi
+grp0=$(tc 11 22 33 44 55 60)
+for bad in "#dhcp-host=${grp0//:/-}:$restc" "#dhcp-host=$grp0-$rest"; do
+  printf '%s\n' "$bad" > "$t/scan/etc/dnsmasq.conf"
+  if run scan "$t/scan"; then fail "a real address overlapping a dnsmasq group address is found: $bad"; fi
+  grep -qx '    1 finding(s)' "$t/log" || fail "the scan reports once in dnsmasq.conf: $bad"
+done
+for ok in "#dhcp-host=$(ts 11 22 33 44 55 61):$restc" "#dhcp-option=128,${opt//:/-}:$restc"; do
+  printf '%s\n' "$ok" > "$t/scan/etc/dnsmasq.conf"
+  run scan "$t/scan" || fail "exempt overlap in etc/dnsmasq.conf passes: $ok"
+done
 rm "$t/scan/etc/dnsmasq.conf"
 printf 'paired %s\n' "$grp" > "$t/scan/etc/other.conf"
 if run scan "$t/scan"; then fail "a group-looking address outside etc/dnsmasq.conf is found"; fi
