@@ -157,6 +157,25 @@ grep -c 'if (which === "settings" && settingsUnsaved) askDiscard()' "$hs" >/dev/
 grep -c 'label: "Discard changes"' "$hs" >/dev/null || fail "unsaved settings are dropped only by Discard changes"
 grep -c 'Keys.onEscapePressed: root.backOneLevel()' plugins/omamobile.home/Home.qml >/dev/null || fail "the home screen's Escape goes one level, as Back"
 bash -n bin/omamobile-home || fail "omamobile-home parses"
+# The keyboard's Copy key: Ctrl+Shift+C in a terminal (Ctrl+C would be
+# SIGINT there), Ctrl+C elsewhere, through fake hyprctl and wtype.
+bash -n bin/omamobile-keyboard-copy || fail "omamobile-keyboard-copy parses"
+if command -v jq >/dev/null; then
+  kc=$(mktemp -d)
+  printf '#!/bin/sh\nprintf "%%s" "$KC_WINDOW"\n' > "$kc/hyprctl"
+  printf '#!/bin/sh\necho "$*"\n' > "$kc/wtype"
+  chmod +x "$kc/hyprctl" "$kc/wtype"
+  kcopy() { KC_WINDOW=$1 OMAMOBILE_HYPRCTL=$kc/hyprctl OMAMOBILE_WTYPE=$kc/wtype bin/omamobile-keyboard-copy; }
+  [ "$(kcopy '{"class":"foot","tags":["terminal*"]}')" = "-M ctrl -M shift -k c -m shift -m ctrl" ] || fail "Copy in a terminal is Ctrl+Shift+C"
+  [ "$(kcopy '{"class":"foot","tags":["terminal"]}')" = "-M ctrl -M shift -k c -m shift -m ctrl" ] || fail "Copy reads a static terminal tag too"
+  [ "$(kcopy '{"class":"chromium","tags":[]}')" = "-M ctrl -k c -m ctrl" ] || fail "Copy elsewhere is Ctrl+C"
+  [ "$(kcopy '{}')" = "-M ctrl -k c -m ctrl" ] || fail "Copy with no window in front is Ctrl+C"
+  [ "$(kcopy '{"class":"x","tags":["terminalish"]}')" = "-M ctrl -k c -m ctrl" ] || fail "Copy matches the terminal tag exactly"
+  [ -z "$(kcopy 'not json')" ] || fail "Copy sends nothing when the window can't be read"
+  printf '#!/bin/sh\nexit 1\n' > "$kc/hyprctl"
+  [ -z "$(kcopy '{}')" ] || fail "Copy sends nothing without hyprctl"
+  rm -rf "$kc"
+fi
 # Home pill: a 44 px strip and a pill with an outline.
 l=plugins/omamobile.launcher/Launcher.qml
 grep -c 'readonly property int stripHeight: touch' "$l" >/dev/null || fail "the home pill's strip is a touch target tall"
@@ -478,7 +497,7 @@ if command -v node >/dev/null; then
 fi
 pass "a keyboard shown by hand goes away on the home screen"
 
-# The keyboard in the Omarchy theme and its action row (Mic, Paste, Emoji,
+# The keyboard in the Omarchy theme and its action row (Mic, Copy, Paste, Emoji,
 # Hide): the stylesheet from a sample theme, the layouts as
 # squeekboard parses them, and the binds (test/phone-rules.lua).
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-keyboard-theme || fail "omamobile-keyboard-theme parses"

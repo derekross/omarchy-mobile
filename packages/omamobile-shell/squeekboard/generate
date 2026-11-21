@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 """Generate squeekboard/keyboards/ from squeekboard's own layouts: each one
-with the action row (Mic, Paste, Emoji, Hide) on top of every view, and the
+with the action row (Mic, Copy, Paste, Emoji, Hide) on top of every view, and the
 globe key sending a keysym instead of opening squeekboard's popover.
 
     squeekboard/generate UPSTREAM_KEYBOARDS_DIR   write keyboards/
@@ -12,8 +12,8 @@ globe key sending a keysym instead of opening squeekboard's popover.
 UPSTREAM_KEYBOARDS_DIR is data/keyboards/ of squeekboard 1.43.1 (tag
 v1.43.1, https://gitlab.gnome.org/World/Phosh/squeekboard), the version
 Arch Linux ARM ships. The upstream file is kept byte for byte; the
-generator adds lines (a header, four outlines, the row at the top of each
-view and four buttons) and changes one: the globe key's
+generator adds lines (a header, five outlines, the row at the top of each
+view and five buttons) and changes one: the globe key's
 `action: "show_prefs"` becomes `keysym: "XF86MediaLanguageMenu"`. --check
 takes those lines out again (and puts the action back), runs the generator
 on what is left and compares, so the upstream copies need not be in this
@@ -26,7 +26,7 @@ keysym (KEY_LANGUAGE's) is bound in hypr/phone.lua, for squeekboard only, to
 the shell's language sheet (omamobile.keyboard `languages`).
 
 The row is as wide as the layout's widest row (squeekboard centres
-narrower rows): Mic and Paste 30 % each, Emoji and Hide 20 % each, and 10/13
+narrower rows), each of its five keys 20 % of it, and 10/13
 of the letter keys' height. terminal/us.yaml is ours by hand (it adds a
 terminal row as well) and is left alone. The emoji, number and PIN layouts
 get no row: the emoji list has its own keys, and a PIN pad (the lock
@@ -43,11 +43,12 @@ import yaml
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "keyboards")
 VERSION = "1.43.1"
-ACTION_ROW = "Mic Paste Emoji Hide"
+ACTION_ROW = "Mic Copy Paste Emoji Hide"
 # (name, outline, share of the row, keysym, label)
 KEYS = [
-    ("Mic", "mic", 0.3, "XF86Dictate", "\U000f036c Mic"),
-    ("Paste", "paste", 0.3, "XF86Paste", "\U000f0192 Paste"),
+    ("Mic", "mic", 0.2, "XF86Dictate", "\U000f036c Mic"),
+    ("Copy", "copy", 0.2, "XF86Copy", "\U000f018f Copy"),
+    ("Paste", "paste", 0.2, "XF86Paste", "\U000f0192 Paste"),
     ("Emoji", "emoji", 0.2, "XF86EmojiPicker", "\U000f0785 Emoji"),
     ("Hide", "hide", 0.2, "XF86Keyboard", "\U000f030f Hide"),
 ]
@@ -191,17 +192,16 @@ def generate(upstream, rel):
     assert len(globes) == 1, (rel, "one show_prefs key", len(globes))
     lines[globes[0]] = lines[globes[0]].replace(GLOBE_UPSTREAM, GLOBE)
 
-    a, b = shares["mic"], shares["emoji"]
     header = [
         "# SPDX-License-Identifier: GPL-3.0-or-later",
         "# squeekboard %s's %s (https://gitlab.gnome.org/World/Phosh/squeekboard," % (VERSION, rel),
         "# tag v%s, GPL-3.0-or-later), with two changes for Omarchy Mobile: the" % VERSION,
-        "# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua",
-        "# binds for squeekboard only) on top of every view, and the globe key",
-        "# sending XF86MediaLanguageMenu (the shell's language sheet) instead of",
-        "# opening squeekboard's popover. Made by",
+        "# action row (Mic, Copy, Paste, Emoji, Hide; XF86 keysyms that",
+        "# hypr/phone.lua binds for squeekboard only) on top of every view, and the",
+        "# globe key sending XF86MediaLanguageMenu (the shell's language sheet)",
+        "# instead of opening squeekboard's popover. Made by",
         "# squeekboard/generate (change the generator, not this file). The row",
-        "# sums to the widest row's %s: 2 x %s + 2 x %s." % (num(width), a, b),
+        "# sums to the widest row's %s: 5 x %s." % (num(width), shares["mic"]),
         HEADER_END,
     ]
     if greek:

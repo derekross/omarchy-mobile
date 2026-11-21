@@ -165,6 +165,7 @@ check(one("XF86Dictate", false, "omarchy-shell shell call omamobile.voice press 
   and one("XF86Dictate", true, "omarchy-shell shell call omamobile.voice release ''"),
   "Mic: press opens the voice bar (push-to-talk), release stops a hold")
 check(#find("XF86Assistant") == 0, "no Ask key any more: Mic is the one voice key")
+check(one("XF86Copy", false, "omamobile-keyboard-copy") and #find("XF86Copy") == 1, "Copy copies the selection (omamobile-keyboard-copy), on press only")
 check(one("XF86Paste", false, "omarchy-menu-clipboard"), "Paste opens Omarchy's clipboard")
 check(one("XF86EmojiPicker", false, "omarchy-menu-emoji"), "Emoji opens Omarchy's emoji picker")
 check(one("XF86Keyboard", false, "omarchy-shell shell call omamobile.keyboard hideKeyboard ''"), "Hide hides the keyboard")

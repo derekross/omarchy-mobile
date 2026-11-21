@@ -25,8 +25,8 @@ except ImportError:
     print("skip: no PyYAML")
     sys.exit(77)
 
-ACTION_ROW = "Mic Paste Emoji Hide"
-ACTION_KEYSYMS = {"Mic": "XF86Dictate", "Paste": "XF86Paste",
+ACTION_ROW = "Mic Copy Paste Emoji Hide"
+ACTION_KEYSYMS = {"Mic": "XF86Dictate", "Copy": "XF86Copy", "Paste": "XF86Paste",
                   "Emoji": "XF86EmojiPicker", "Hide": "XF86Keyboard"}
 GLOBE_KEYSYM = "XF86MediaLanguageMenu"
 BUTTON_FIELDS = {"label", "icon", "outline", "text", "keysym", "action", "modifier"}
