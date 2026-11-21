@@ -108,12 +108,21 @@ Item {
   // after configreloaded, when an activelayout comes from a keyboard not in
   // the last read (one connected later), and every 10 s while the label
   // shows, so it goes away when the keyboard does. A read that started
-  // before a switch keeps the switch's layout. `xkbcli list` runs once, when
+  // before a switch keeps the switch's layout. A switch event counts only
+  // from a keyboard the last read found real; one from a device it has not
+  // seen at all starts a read, and one from a device it saw but didn't find
+  // real starts one 10 s after the last read at the earliest (deferred, not
+  // dropped: udev may not have tagged a keyboard yet at the first read). If
+  // omamobile-keyboards is missing or fails, no label shows and the log says
+  // why, once. `xkbcli list` runs once, when
   // a label is first needed.
   property int layoutCount: 0
   property string layoutDescription: ""
   property var layoutBriefs: ({})
   property var layoutKeyboards: []
+  property var layoutSeen: []
+  property bool layoutWarned: false
+  property double layoutReadMs: 0
   property bool layoutReread: false
   property int layoutSwitches: 0
   readonly property string layoutLabel: layoutCount > 1 ? StatusModel.shortLabel(layoutDescription, layoutBriefs) : ""
@@ -125,19 +134,24 @@ Item {
   Process {
     id: layoutRead
     property int switchesAtStart: 0
-    command: ["sh", "-c", "omamobile-keyboards; echo " + StatusModel.readSeparator + "; exec hyprctl -j devices"]
+    command: ["sh", "-c", "omamobile-keyboards || { echo; echo " + StatusModel.keyboardsFailed + "; }; echo " + StatusModel.readSeparator + "; exec hyprctl -j devices"]
     running: true
-    onRunningChanged: if (running) switchesAtStart = root.layoutSwitches
+    onRunningChanged: if (running) { switchesAtStart = root.layoutSwitches; root.layoutReadMs = Date.now() }
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
         const r = StatusModel.splitRead(text)
         const st = r ? StatusModel.layoutState(r.devices, r.real) : null
         if (!st) return
+        if (r.failed && !root.layoutWarned) {
+          root.layoutWarned = true
+          console.warn("bar: omamobile-keyboards is missing or failed, so no keyboard layout label")
+        }
         root.layoutCount = st.count
         // a switch's event arrived while this read ran: its layout is newer
         if (layoutRead.switchesAtStart === root.layoutSwitches) root.layoutDescription = st.description
         root.layoutKeyboards = st.names
+        root.layoutSeen = (StatusModel.layoutState(r.devices) || st).names
       }
     }
     onExited: if (root.layoutReread) { root.layoutReread = false; running = true }
@@ -148,6 +162,9 @@ Item {
     running: root.layoutLabel !== ""
     onTriggered: root.readLayouts()
   }
+  // a seen-but-not-real device's event: read again when 10 s have passed
+  // since the last read, so the switch isn't lost
+  Timer { id: layoutLater; onTriggered: root.readLayouts() }
   Process {
     id: briefsRead
     property bool ran: false
@@ -164,10 +181,14 @@ Item {
       if (event.name !== "activelayout" && event.name !== "configreloaded") return
       const fields = event.name === "activelayout" && typeof event.parse === "function" ? event.parse(2) : event.data
       if (event.name === "activelayout") {
-        const d = StatusModel.eventLayout(fields)
+        const d = StatusModel.eventLayout(fields, root.layoutKeyboards)
         if (d !== null) { root.layoutDescription = d; root.layoutSwitches++ }
       }
-      if (StatusModel.needsDeviceRead(event.name, fields, root.layoutKeyboards)) root.readLayouts()
+      if (StatusModel.needsDeviceRead(event.name, fields, root.layoutSeen)) root.readLayouts()
+      else if (StatusModel.needsDeviceRead(event.name, fields, root.layoutKeyboards) && !layoutLater.running) {
+        layoutLater.interval = Math.max(0, 10000 - (Date.now() - root.layoutReadMs))
+        layoutLater.start()
+      }
     }
   }
 

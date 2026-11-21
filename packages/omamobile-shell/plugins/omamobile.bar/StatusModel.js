@@ -177,16 +177,20 @@ function typedKeyboard(name) {
 // from the event itself, no `hyprctl` per switch. `fields` is event.parse(2)
 // where Quickshell has it (a description can hold a comma), else the raw
 // data split at the first comma. null for a keyboard nobody types on
-// (squeekboard sends these while the on-screen keyboard is used).
+// (squeekboard sends these while the on-screen keyboard is used). With
+// `real` (the names of the real keyboards from the last read) a keyboard
+// not among them is null too, the same rule as the devices read (#866's
+// bus/key check), so a phone key device the name list misses never sets it.
 function eventFields(fields) {
   if (Array.isArray(fields)) return fields.length >= 2 ? [String(fields[0]), String(fields[1])] : null
   var s = String(fields || "")
   var i = s.indexOf(",")
   return i < 0 ? null : [s.slice(0, i), s.slice(i + 1)]
 }
-function eventLayout(fields) {
+function eventLayout(fields, real) {
   var f = eventFields(fields)
   if (!f || !typedKeyboard(f[0])) return null
+  if (Array.isArray(real) && real.indexOf(f[0]) < 0) return null
   return f[1]
 }
 // Hyprland's device names: the kernel's name lowercased, with space, ',' and
@@ -202,14 +206,20 @@ function isRealName(real, name) {
   })
 }
 // The bar's one read: `omamobile-keyboards` (the real keyboards, #866's
-// bus/key rule), a separator line, then `hyprctl -j devices`.
+// bus/key rule), a separator line, then `hyprctl -j devices`. When
+// omamobile-keyboards is missing or fails, the read has `keyboardsFailed`
+// in place of names: no keyboard counts (the phone's keys must never show
+// the label) and `failed` is true so the bar can say why in its log.
 var readSeparator = "--hyprctl--"
+var keyboardsFailed = "--keyboards-failed--"
 function splitRead(text) {
   var s = String(text || "")
   var i = s.indexOf(readSeparator + "\n")
   if (i < 0) return null
-  var real = s.slice(0, i).split("\n").filter(function(l) { return l !== "" }).map(hyprName)
-  return { real: real, devices: s.slice(i + readSeparator.length + 1) }
+  var lines = s.slice(0, i).split("\n").filter(function(l) { return l !== "" })
+  var failed = lines.indexOf(keyboardsFailed) >= 0
+  var real = failed ? [] : lines.map(hyprName)
+  return { real: real, failed: failed, devices: s.slice(i + readSeparator.length + 1) }
 }
 // From `hyprctl -j devices` (at start, after a config reload, for a keyboard
 // not seen before, and every few seconds while the label shows):
@@ -233,7 +243,8 @@ function layoutState(text, real) {
 // Whether a Hyprland event means `hyprctl -j devices` must be read again:
 // a config reload, or an activelayout from a typed keyboard not seen in the
 // last read (one plugged in or paired later; Hyprland has no device-added
-// event on its socket).
+// event on its socket). The bar also calls it with the real keyboards as
+// `known`, for a device it saw but didn't count (read again, throttled).
 function needsDeviceRead(name, fields, known) {
   if (name === "configreloaded") return true
   if (name !== "activelayout") return false
@@ -249,6 +260,6 @@ if (typeof module !== "undefined") {
     stampOf: stampOf, parseStamp: parseStamp, unreadCount: unreadCount, unreadStored: unreadStored,
     layoutBriefs: layoutBriefs, shortLabel: shortLabel, eventLayout: eventLayout, layoutState: layoutState,
     needsDeviceRead: needsDeviceRead, eventFields: eventFields, hyprName: hyprName, splitRead: splitRead,
-    readSeparator: readSeparator
+    readSeparator: readSeparator, keyboardsFailed: keyboardsFailed
   }
 }

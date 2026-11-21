@@ -134,3 +134,15 @@ assert.deepStrictEqual(M.layoutState(dup, ["acme-kbd"]), { count: 2, description
 const comma = M.splitRead("Acme, Inc Keyboard\n" + M.readSeparator + "\n" + dev([{ name: "acme--inc-keyboard", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" }]))
 assert.strictEqual(M.layoutState(comma.devices, comma.real).count, 2, "a name with a comma still matches")
 console.log("ok - status model: real keyboards only, event.parse fields")
+// The event path follows the same real-keyboard list as the devices read
+assert.strictEqual(M.eventLayout(["max77759-pmic-keys", "Greek"], ["keychron-k2-keyboard"]), null, "a key device the name list misses")
+assert.strictEqual(M.eventLayout(["keychron-k2-keyboard", "Greek"], ["keychron-k2-keyboard"]), "Greek")
+assert.strictEqual(M.eventLayout("dell,Greek", []), null, "no real keyboard: an event sets nothing")
+// A missing or failing omamobile-keyboards: nothing counts, and it says so
+const failed = M.splitRead(M.keyboardsFailed + "\n" + M.readSeparator + "\n" +
+  dev([{ name: "keychron-k2-keyboard", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" }]))
+assert.strictEqual(failed.failed, true)
+assert.deepStrictEqual(failed.real, [])
+assert.strictEqual(M.layoutState(failed.devices, failed.real).count, 0)
+assert.strictEqual(r.failed, false)
+console.log("ok - status model: the event path uses the real keyboards, a failed omamobile-keyboards counts none")
