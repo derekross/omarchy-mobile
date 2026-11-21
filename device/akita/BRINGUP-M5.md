@@ -3,7 +3,7 @@
 
 **Status (2026-11-15):** **M5 is complete on the phone.** The CPUs scale to the 8a's caps (mid +33 %, big +84 % on one core), nine cores at full load for 3 minutes peaked at 71 C without throttling, and the GPU renders the session. It's "definitely better but not perfectly responsive": what's left is the display path, simpledrm copying every frame, which needs the display driver (the next milestone). See [Results](#results).
 
-The kernel side is the two board-file commits in linux-omarchy-mobile#264 (CPU DVFS with the 8a's caps, and the GPU), on `omamobile` at `317d87dc2`, which already has #158 (CPU DVFS, thermal) and #157's GPU commits. M4 is complete ([BRINGUP-M4](BRINGUP-M4.md)).
+The kernel side is linux-omarchy-mobile#264, merged on 2026-11-21: three commits on `omamobile` at `26867fc4e` (CPU DVFS with the 8a's caps; the GPU's levels moved into `zuma.dtsi` for both zuma boards; the 8a's GPU, to 723 MHz), on top of #158 (CPU DVFS, thermal) and #157's GPU commits. The device package's GPU ceiling is omarchy-mobile#832, merged the same day. M4 is complete ([BRINGUP-M4](BRINGUP-M4.md)).
 
 ## Goal
 
