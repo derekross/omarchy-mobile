@@ -268,8 +268,8 @@ if [[ ${here##*/} == tools && -f $here/../device.conf && -d $here/../images && -
   conf=$top/device.conf tools=$here
   local_index=$top/factory-builds.json keyring=$top/omamobile.gpg
   [[ -z $device ]] || die "--device is only available in repository mode"
-  release=$(sed -n 's/^version: //p' "$top/MANIFEST" 2>/dev/null | head -1)
-  label=$(sed -n 's/^label: //p' "$top/MANIFEST" 2>/dev/null | head -1)
+  release=$(sed -n 's/^version: //p' "$top/MANIFEST" 2>/dev/null | sed -n 1p)
+  label=$(sed -n 's/^label: //p' "$top/MANIFEST" 2>/dev/null | sed -n 1p)
   self="bash install --guided"
   INSTALL_PHONE=${INSTALL_PHONE:-$top/install}
 else
@@ -719,7 +719,7 @@ step_phone() {
       fi
       # Read-only: whether "OEM unlocking" is switched on in Android
       ability=$("$FASTBOOT" -s "$serial" flashing get_unlock_ability 2>&1 |
-        sed -nE 's/.*get_unlock_ability:[ ]*([01]).*/\1/p' | head -1)
+        sed -nE 's/.*get_unlock_ability:[ ]*([01]).*/\1/p' | sed -n 1p)
       if [[ $ability == 1 ]]; then
         guide "The phone is in Fastboot Mode, and its bootloader is still locked." \
           "Unlocking is the moment the phone is erased, as the warning said: copy off" \
@@ -1014,8 +1014,8 @@ slots_check() {
     return 0
   fi
 
-  bl_a=$(sed -nE 's/^version-bootloader[-_:]a:[ ]*//p' <<<"$vars" | head -1)
-  bl_b=$(sed -nE 's/^version-bootloader[-_:]b:[ ]*//p' <<<"$vars" | head -1)
+  bl_a=$(sed -nE 's/^version-bootloader[-_:]a:[ ]*//p' <<<"$vars" | sed -n 1p)
+  bl_b=$(sed -nE 's/^version-bootloader[-_:]b:[ ]*//p' <<<"$vars" | sed -n 1p)
   if [[ -n $bl_a && -n $bl_b ]]; then
     [[ $bl_a != "$bl_b" ]] || return 0
     stop_final "The phone keeps two copies of its system (slot A and slot B), each with its own" \
@@ -1075,8 +1075,8 @@ slot_probe_allowed() {
   local flag_s flag_u
   [[ ${D[BOOTLOADER_SLOT_PROBE]:-no} == yes && $(var current-slot) == a ]] || return 1
   ! has_pass --reinstall || return 1
-  flag_s=$(sed -nE 's/^slot-successful:b:[ ]*//p' <<<"$vars" | head -1)
-  flag_u=$(sed -nE 's/^slot-unbootable:b:[ ]*//p' <<<"$vars" | head -1)
+  flag_s=$(sed -nE 's/^slot-successful:b:[ ]*//p' <<<"$vars" | sed -n 1p)
+  flag_u=$(sed -nE 's/^slot-unbootable:b:[ ]*//p' <<<"$vars" | sed -n 1p)
   [[ $flag_u == yes || $flag_s == no ]]
 }
 # The owner's yes to the measurement, asked once a run, of an unlocked phone
@@ -1144,7 +1144,7 @@ images_fit() {
   for p in ${D[BOOT_IMAGES]:-}; do
     # Step 1 (install-phone --verify-only) has refused a bad name or a missing file
     [[ $p =~ ^[a-z_]+$ && -f $dir/$p.img ]] || continue
-    psize=$(sed -nE "s/^partition-size:${p}_$slot:[ ]*(0x[0-9a-fA-F]{1,12})\$/\1/p" <<<"$vars" | head -1)
+    psize=$(sed -nE "s/^partition-size:${p}_$slot:[ ]*(0x[0-9a-fA-F]{1,12})\$/\1/p" <<<"$vars" | sed -n 1p)
     [[ -n $psize ]] ||
       stop_final "The phone doesn't tell the size of one of the areas Omarchy Mobile is written" \
         "to (${p}_$slot), so the installer can't check that this download fits this phone." \
@@ -1880,8 +1880,8 @@ phone_answers() { phone --fresh true >/dev/null 2>&1; }
 # the release's identifier scan takes a line that has it for a leaked serial.) "no-serial" when
 # the phone has none of them.
 # shellcheck disable=SC2016 # the phone's shell expands these, not this one
-PHONE_ID='v=$(sed -n '\''s/^androidboot\.serialno[[:space:]]*=[[:space:]]*"\([^"]*\)".*$/\1/p'\'' /proc/bootconfig 2>/dev/null | head -n 1)
-[ -n "$v" ] || v=$(tr " " "\n" < /proc/cmdline 2>/dev/null | sed -n '\''s/^androidboot\.serialno=//p'\'' | head -n 1)
+PHONE_ID='v=$(sed -n '\''s/^androidboot\.serialno[[:space:]]*=[[:space:]]*"\([^"]*\)".*$/\1/p'\'' /proc/bootconfig 2>/dev/null | sed -n 1p)
+[ -n "$v" ] || v=$(tr " " "\n" < /proc/cmdline 2>/dev/null | sed -n '\''s/^androidboot\.serialno=//p'\'' | sed -n 1p)
 [ -n "$v" ] || v=$(tr -d "\000" < /proc/device-tree/serial-number 2>/dev/null)
 if [ -n "$v" ]; then printf %s "$v" | sha256sum | cut -d" " -f1; else echo no-serial; fi'
 # written_phone: stops unless the phone that answers over USB SSH is the one

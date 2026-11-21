@@ -161,7 +161,7 @@ up_to_date() {
   local dir=$1 want name f
   want=$(pkg_version "$dir")
   for name in $(pkg_names "$dir"); do
-    f=$(ls "$repo/$name-$want"-*.pkg.tar.* 2>/dev/null | grep -v '\.sig$' | head -1)
+    f=$(ls "$repo/$name-$want"-*.pkg.tar.* 2>/dev/null | grep -v '\.sig$' | sed -n 1p)
     [[ -n $f ]] || return 1
   done
 }

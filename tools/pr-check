@@ -89,20 +89,20 @@ macs=$(awk 'BEGIN {
     if (real) print
   }' <<<"$added")
 [[ -z $macs ]] && pass "no MAC or Bluetooth addresses" || fail "MAC or Bluetooth addresses (use a placeholder such as <MAC>):
-$(sed 's/^/    /' <<<"$macs" | head -10)"
+$(sed 's/^/    /' <<<"$macs" | sed -n '1,10p')"
 
 dumps=$(grep -E '\[(ro|persist|vendor|sys)\.[a-z0-9_.]+\]: \[' <<<"$added" || true)
 [[ -z $dumps ]] && pass "no getprop dumps" || fail "getprop output (quote single facts, never a dump):
-$(sed 's/^/    /' <<<"$dumps" | head -5)"
+$(sed 's/^/    /' <<<"$dumps" | sed -n '1,5p')"
 
 serials=$(grep -iE '(serialno|ro\.serialno|androidboot\.serialno|serial[ _-]?(number)?)[[:space:]]*[:=][[:space:]]*["'\'']?[0-9A-Z]{8,}' <<<"$added" \
   | grep -viE '<serial>|SERIAL_PLACEHOLDER|FAKE[0-9A-Z]*|\$\{?[a-z_]+' || true)
 [[ -z $serials ]] && pass "no serial numbers" || fail "serial numbers (use <SERIAL>):
-$(sed 's/^/    /' <<<"$serials" | head -5)"
+$(sed 's/^/    /' <<<"$serials" | sed -n '1,5p')"
 
 imeis=$(grep -iE 'imei[^0-9]{0,12}[0-9]{15}([^0-9]|$)' <<<"$added" || true)
 [[ -z $imeis ]] && pass "no IMEIs" || fail "IMEIs:
-$(sed 's/^/    /' <<<"$imeis" | head -5)"
+$(sed 's/^/    /' <<<"$imeis" | sed -n '1,5p')"
 
 # ---------------------------------------------------------------- blobs
 blob_ext='\.(bin|img|fw|mbn|hcd|elf|ko|so|so\.[0-9.]+|apk|zip|tar|tgz|tar\.[a-z0-9]+|zst|xz|lz4|gz|7z|ftb|wmfw|bmp|tlv)$'
@@ -110,7 +110,7 @@ blobs=$(git diff --numstat --no-renames "$range" | awk -F'\t' '$1 == "-" || $2 =
 named=$(git diff --name-only --diff-filter=A "$range" | grep -iE "$blob_ext" || true)
 all_blobs=$(printf '%s\n%s\n' "$blobs" "$named" | sed '/^$/d' | sort -u)
 [[ -z $all_blobs ]] && pass "no vendor blobs or binaries" || fail "binaries or vendor files (our scripts extract firmware from the user's own factory image; nothing is committed):
-$(sed 's/^/    /' <<<"$all_blobs" | head -10)"
+$(sed 's/^/    /' <<<"$all_blobs" | sed -n '1,10p')"
 
 # ---------------------------------------------------------------- trailers
 # Each name as a whole word (no letter either side), so a person called

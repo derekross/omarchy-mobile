@@ -796,7 +796,7 @@ declare -A slot_flags=()
 # The probe's only way to the phone: three commands, each with a time limit
 pfb() { timeout "$SLOT_PROBE_CALL_TIMEOUT" "$FASTBOOT" -s "$serial" "$@"; }
 phone_listed() { "$FASTBOOT" devices 2>/dev/null | awk -v s="$serial" '$1 == s && $2 == "fastboot" { n = 1 } END { exit !n }'; }
-slot_flag() { sed -nE "s/^slot-$1:$2:[ ]*//p" <<<"$vars" | head -1; }  # FLAG SLOT, from $vars
+slot_flag() { sed -nE "s/^slot-$1:$2:[ ]*//p" <<<"$vars" | sed -n 1p; }  # FLAG SLOT, from $vars
 slot_flags_read() {  # WHEN
   local s f
   for s in a b; do
@@ -1007,8 +1007,8 @@ fi
 # after a system update unless the owner says it is a reinstall
 if ((fmt == 1)); then
   # Per-slot bootloader versions, where the bootloader reports them
-  bl_a=$(sed -nE 's/^version-bootloader[-_:]a:[ ]*//p' <<<"$vars" | head -1)
-  bl_b=$(sed -nE 's/^version-bootloader[-_:]b:[ ]*//p' <<<"$vars" | head -1)
+  bl_a=$(sed -nE 's/^version-bootloader[-_:]a:[ ]*//p' <<<"$vars" | sed -n 1p)
+  bl_b=$(sed -nE 's/^version-bootloader[-_:]b:[ ]*//p' <<<"$vars" | sed -n 1p)
   if [[ -n $bl_a && -n $bl_b ]]; then
     [[ $bl_a == "$bl_b" ]] || die "the bootloader slots differ (a: $bl_a, b: $bl_b). $SLOTS_DIFFER"
     note "bootloader $bl_a on both slots"
@@ -1055,7 +1055,7 @@ fi
 # running slot's), an AVB_FOOTERS image exactly.
 declare -A part_size=()
 for p in $BOOT_IMAGES; do
-  psize=$(sed -nE "s/^partition-size:${p}_$target:[ ]*(0x[0-9a-fA-F]{1,12})\$/\1/p" <<<"$vars" | head -1)
+  psize=$(sed -nE "s/^partition-size:${p}_$target:[ ]*(0x[0-9a-fA-F]{1,12})\$/\1/p" <<<"$vars" | sed -n 1p)
   [[ -n $psize ]] || die "the phone reports no partition-size for ${p}_$target"
   psize=$((psize)) isize=$(stat -c %s "$images/$p.img")
   part_size[$p]=$psize

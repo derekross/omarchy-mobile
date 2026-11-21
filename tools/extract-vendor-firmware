@@ -330,7 +330,7 @@ trap cleanup EXIT
 magic_at() { od -An -tx4 -j "$2" -N4 "$1" | tr -d ' \n'; }
 
 # A zip member whose name ends in $2 (first match), or nothing.
-zip_member() { unzip -Z1 "$1" | grep -E "(^|/)$2\$" | head -1 || true; }
+zip_member() { unzip -Z1 "$1" | grep -E "(^|/)$2\$" | sed -n 1p || true; }
 
 # Get vendor.img out of SOURCE into $WORK/vendor.img.
 fetch_vendor() {
@@ -428,10 +428,10 @@ fi
 # The board list in android-info.txt is shared by pantah devices; the vendor
 # partition itself says which device it was built for.
 if get_file build.prop "$WORK/build.prop"; then
-  dev=$(sed -n 's/^ro.product.vendor.device=//p' "$WORK/build.prop" | head -1)
+  dev=$(sed -n 's/^ro.product.vendor.device=//p' "$WORK/build.prop" | sed -n 1p)
   [[ "$dev" == "$DEVICE" || -n "$FORCE" ]] ||
     die "vendor partition is for '${dev:-unknown}', not $DEVICE; use -f to override"
-  say "Vendor partition: $(sed -n 's/^ro.vendor.build.fingerprint=//p' "$WORK/build.prop" | head -1)"
+  say "Vendor partition: $(sed -n 's/^ro.vendor.build.fingerprint=//p' "$WORK/build.prop" | sed -n 1p)"
 else
   [[ -n "$FORCE" ]] || die "build.prop can't be read from vendor.img${reason:+: $reason}; use -f to override"
 fi
@@ -529,9 +529,9 @@ if [[ $DEVICE == panther ]]; then
   mfc_ver=$(od -An -tx4 -j $((mfc_size - 4)) -N4 "$dest/s5p-mfc-v15.fw" | tr -d ' ')
 fi
 
-ver=$(grep -ao 'Version=[0-9.]* ([^)]*)' "$brcm/$FW_BASE.$BOARD.bin" | head -1)
+ver=$(grep -ao 'Version=[0-9.]* ([^)]*)' "$brcm/$FW_BASE.$BOARD.bin" | sed -n 1p)
 bt=""
-[[ -z $BT_CHIP ]] || bt=$(grep -ao "$BT_CHIP [^[]*" "$brcm/BCM.$BOARD.hcd" | head -1)
+[[ -z $BT_CHIP ]] || bt=$(grep -ao "$BT_CHIP [^[]*" "$brcm/BCM.$BOARD.hcd" | sed -n 1p)
 (cd "$dest" && find . -type f -printf '%P\n' | LC_ALL=C sort | xargs sha256sum -- > "$new/vendor-firmware.sha256")
 # The checksum list names exactly the mapped files
 for entry in "${MAP[@]}"; do printf '%s\n' "${entry#*|}"; done | LC_ALL=C sort > "$stage/expected"

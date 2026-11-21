@@ -62,7 +62,7 @@ while (($#)); do
 done
 
 [[ -f $lock ]] || die "no lock file $lock"
-read -r release revision sum size url < <(grep -v '^[[:space:]]*\(#\|$\)' "$lock" | head -1) || true
+read -r release revision sum size url < <(grep -v '^[[:space:]]*\(#\|$\)' "$lock" | sed -n 1p) || true
 [[ $release =~ ^r[0-9]+[a-z]?$ && $revision =~ ^[0-9]+(\.[0-9]+)+$ && $sum =~ ^[0-9a-f]{64}$ && $size =~ ^[0-9]+$ ]] ||
   die "$lock: one line of RELEASE REVISION SHA256 SIZE URL"
 [[ $url == https://dl.google.com/android/repository/* || $url == file://* ]] ||

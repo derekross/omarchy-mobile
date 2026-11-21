@@ -1,17 +1,20 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# No test script that sets pipefail pipes into head (AGENTS.md section 4,
-# Userspace, as tests/grep-q-pipes for grep -q): head -1, -n N, -c N or bare
-# head exits once it has its lines or bytes, a writer that writes again gets
-# SIGPIPE, and pipefail then fails the pipeline, so a check fails at random,
-# a "set -e" assignment ends the script, or an "if ...; then fail" check
-# passes. Use sed -n '1,Np' (sed -n 1p for one line) for lines, and
+# No test script, and no script in bin/, tools/ or rootfs/ (including embedded
+# phone-side command strings), that sets pipefail pipes into head (AGENTS.md
+# section 4, Userspace, as tests/grep-q-pipes for grep -q): head -1, -n N,
+# -c N or bare head exits once it has its lines or bytes, a writer that writes
+# again gets SIGPIPE, and pipefail then fails the pipeline, so a check fails
+# at random, a "set -e" assignment ends the script, or an "if ...; then fail"
+# check passes. Use sed -n '1,Np' (sed -n 1p for one line) for lines, and
 # { head -c N; cat >/dev/null; } for bytes: both read all their input.
 # Comment lines don't count. Left out: packages/omamobile-modem/test/nv-overlay
 # until the fix for #457 lands, as in tests/grep-q-pipes; and one line of
 # tests/nv-backup, whose test closes nv-backup's stdout early on purpose
-# (allowed below by its whole text, so an edit to it is looked at again).
-# bin/, tools/, tools/lib and rootfs/ are not scanned yet.
+# (allowed below by its whole text, so an edit to it is looked at again). The
+# single-line scan also intentionally leaves out tools/install-guided's
+# two-line curl | head -c download-size cap (which handles curl exit 23).
+# tools/lib's files are sourced by pipefail scripts, so they count too.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -29,20 +32,21 @@ done
 
 # Each pathspec has to add a script to the scan (#597): a wildcard pathspec
 # that matched nothing would pass without reading a file.
-scan=(tests 'packages/*/test/*')
+scan=(tests 'packages/*/test/*' bin tools rootfs)
 skip=(':(exclude)tests/head-pipes' ':(exclude)packages/omamobile-modem/test/nv-overlay')
 pipefail_scripts() { git grep -l 'set -[a-z]*o pipefail' -- "$@" "${skip[@]}"; }
 for spec in "${scan[@]}"; do
   [[ -n $(pipefail_scripts "$spec") ]] || fail "the pathspec '$spec' matches a pipefail script"
 done
+[[ -n $(git ls-files tools/lib) ]] || fail "the pathspec 'tools/lib' matches a file"
 
-mapfile -t scripts < <(pipefail_scripts "${scan[@]}")
+mapfile -t scripts < <({ pipefail_scripts "${scan[@]}"; git ls-files tools/lib; } | sort -u)
 # tests/nv-backup's closed-stdout check pipes into head on purpose; its line is
 # allowed whole (grep -x; the text holds no basic-regex special character).
 allowed='"$r/tools/nv-backup" -d testdev "$t/closed" 2>/dev/null | head -c 10 >/dev/null || true'
 if hits=$(git grep -nE "$pattern" -- "${scripts[@]}" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' |
   grep -vx -- "tests/nv-backup:[0-9]*:$allowed"); then
   printf '%s\n' "$hits" >&2
-  fail "no test script under pipefail pipes into head (use sed -n '1,Np', or { head -c N; cat >/dev/null; })"
+  fail "no script under pipefail pipes into head (use sed -n '1,Np', or { head -c N; cat >/dev/null; })"
 fi
-pass "no pipe into head in ${#scripts[@]} pipefail test scripts"
+pass "no pipe into head in ${#scripts[@]} pipefail scripts"

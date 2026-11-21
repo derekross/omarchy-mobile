@@ -390,7 +390,7 @@ cmd_kernel() {
   # MANIFEST: clang's own version line (the Android build and llvm-project
   # commit) and the directory's name, never a path (MANIFEST is published)
   {
-    echo "clang: $("$CLANG_DIR/bin/clang" --version | head -1)"
+    echo "clang: $("$CLANG_DIR/bin/clang" --version | sed -n 1p)"
     echo "clang source: $CLANG_SOURCE, $(basename "$CLANG_DIR")"
   } > "$KERNEL_OUT/toolchain.txt"
   say "$(head -1 "$KERNEL_OUT/toolchain.txt")"
@@ -639,7 +639,7 @@ pack_initramfs_modules() {
   mkdir -p "$dest"
   for m in "$@"; do
     [[ $m =~ ^[a-z0-9_-]+$ ]] || die "INITRAMFS_MODULES: bad module name '$m'"
-    ko=$(find "$mdir" -name "$m.ko" | head -1)
+    ko=$(find "$mdir" -name "$m.ko" | sed -n 1p)
     if [[ -z $ko ]] && grep -q "/$m\.ko\$" "$mdir/modules.builtin" 2>/dev/null; then
       say "INITRAMFS_MODULES: $m is built in"
       continue
@@ -823,7 +823,7 @@ cmd_initramfs() {
   if [[ -f $ROOT/packages/$DEV_PACKAGE/src/omamobile-bootctl.c ]]; then
     [[ -n ${CLANG_DIR:-} && -d $CLANG_DIR ]] || die "no clang found: run tools/fetch-toolchain (or 'lineage-ref sync', or set CLANG_DIR)"
     sysroot=$(alpine_sysroot)
-    builtins=$(find "$CLANG_DIR/lib/clang" -name 'libclang_rt.builtins-aarch64-android.a' | head -1)
+    builtins=$(find "$CLANG_DIR/lib/clang" -name 'libclang_rt.builtins-aarch64-android.a' | sed -n 1p)
     "$CLANG_DIR/bin/clang" --target=aarch64-linux-musl --sysroot="$sysroot" -fuse-ld=lld -static -nostdlib -O2 \
       -o "$stage/usr/local/bin/devmem" "$sysroot/usr/lib/crt1.o" "$sysroot/usr/lib/crti.o" \
       "$ROOT/tools/devmem.c" -L"$sysroot/usr/lib" -lc "$builtins" "$sysroot/usr/lib/crtn.o"
@@ -1285,7 +1285,7 @@ cmd_flash() {
   # from stock Android on A, which a development phone falls back to (and
   # `omamobile fastboot` crashes it into), so that case is named by hand
   # with --from-slot-a.
-  cur=$(timeout 10 fastboot -s "$serial" getvar current-slot 2>&1 | sed -n 's/^current-slot: *_\{0,1\}\([ab]\)$/\1/p' | head -1)
+  cur=$(timeout 10 fastboot -s "$serial" getvar current-slot 2>&1 | sed -n 's/^current-slot: *_\{0,1\}\([ab]\)$/\1/p' | sed -n 1p)
   if [[ $cur == a ]]; then
     ((from_a)) || die "this phone runs from slot A (a release from slot A, or stock Android); flash writes slot B and makes it active, development only. A development phone that fell back to stock on slot A: omamobile flash --from-slot-a"
     printf '\e[1;31m' >&2
