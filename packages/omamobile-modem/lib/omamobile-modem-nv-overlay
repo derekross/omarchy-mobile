@@ -71,7 +71,14 @@ FORMAT = 'omamobile-modem-nv-overlay 1'
 # The filesystems the chroot gets read-write (RAM copies), as DIR/<name>.
 PARTS = ('efs', 'efs_backup', 'modem_userdata')
 # The checksum lines the overlay is bound to: every image the profile copies.
-IMAGES = ('efs.img', 'efs_backup.img', 'modem_a.img', 'modem_userdata.img', 'persist.img')
+# The modem image is the profile's slot's (modem_a on every phone so far:
+# the profile's rule, slot_suffix below, selects nothing else yet), and
+# its line is bound by role: hashed under MODEM_ROLE whichever partition it
+# came from, the name it has always had, so today's bindings are unchanged.
+PROC = Path(os.environ.get('OMAMOBILE_MODEM_PROC', '/proc'))
+BOOT_UPDATE_CONF = Path(os.environ.get('OMAMOBILE_MODEM_BOOT_UPDATE_CONF', '/etc/omamobile/boot-update.conf'))
+IMAGES_BUT_MODEM = ('efs.img', 'efs_backup.img', 'modem_userdata.img', 'persist.img')
+MODEM_ROLE = 'modem_a.img'
 NV_SALT = b'Samsung_SIT_RIL'
 
 # What may come from the overlay: groups of files kept together, each with
@@ -137,8 +144,64 @@ def enabled():
 
 # -- the base and the binding ------------------------------------------------
 
+def lines_of(data):
+    """Lines as grep and sed see them: split on \\n only, so a CR or
+    another separator stays part of the line."""
+    return data.split(b'\n')
+
+
+def boot_suffix():
+    """androidboot.slot_suffix as the storage guard reads it: PROC/bootconfig
+    alone when it carries the key, else the first line of PROC/cmdline;
+    None unless exactly one of _a and _b. The profile's modem_boot_suffix is
+    the same rule in shell, and the package's test feeds both one table."""
+    try:
+        lines = lines_of((PROC / 'bootconfig').read_bytes())
+    except OSError:
+        lines = []
+    if any(re.match(rb'androidboot\.slot_suffix *=', l) for l in lines):
+        found = (re.fullmatch(rb'androidboot\.slot_suffix *= *"(.*)" *', l) for l in lines)
+        values = {m.group(1) for m in found if m}
+    else:
+        try:
+            words = re.split(rb'[ \t]+', lines_of((PROC / 'cmdline').read_bytes())[0])
+        except OSError:
+            words = []
+        values = {w.split(b'=', 1)[1] for w in words if w.startswith(b'androidboot.slot_suffix=')}
+    return values.pop().decode() if len(values) == 1 and values <= {b'_a', b'_b'} else None
+
+
+def slot_suffix():
+    """The profile's modem slot (modem_slot_suffix in profiles/modem.conf):
+    _a when boot-update.conf is absent, names no SLOT= or says SLOT=b, which
+    omamobile-boot-update documents as its default (every phone so far);
+    with SLOT=a, _a only while the boot runs from slot A. Nothing selects
+    _b yet."""
+    if not os.path.lexists(BOOT_UPDATE_CONF):
+        return '_a'
+    try:
+        if not BOOT_UPDATE_CONF.is_file():
+            raise OSError('not a regular file')
+        lines = [l for l in lines_of(BOOT_UPDATE_CONF.read_bytes()) if l.startswith(b'SLOT=')]
+    except OSError as error:
+        raise Invalid(f'{BOOT_UPDATE_CONF} is there but cannot be read ({error}): which modem image is unknown')
+    if not lines:
+        return '_a'
+    m = re.fullmatch(rb'SLOT="?([ab])"?', lines[0]) if len(lines) == 1 else None
+    if not m:
+        raise Invalid(f'{BOOT_UPDATE_CONF}: SLOT= is not one a or b line: which modem image is unknown')
+    if m.group(1) == b'b':
+        return '_a'
+    if boot_suffix() != '_a':
+        raise Invalid(f'{BOOT_UPDATE_CONF} says SLOT=a, but this boot is not from slot A: which modem image is unknown')
+    return '_a'
+
+
 def binding(sums):
-    """SHA-256 of this backup's lines for IMAGES, normalised and sorted."""
+    """SHA-256 of this backup's lines for the images the profile copies,
+    normalised and sorted."""
+    modem = f'modem{slot_suffix()}.img'
+    IMAGES = IMAGES_BUT_MODEM + (modem,)
     found = {}
     for line in Path(sums).read_text().splitlines():
         fields = line.split()
@@ -152,7 +215,9 @@ def binding(sums):
     missing = [name for name in IMAGES if name not in found]
     if missing:
         raise Invalid(f'{sums} has no line for {", ".join(missing)}')
-    return sha256(''.join(f'{found[name]}  {name}\n' for name in sorted(IMAGES)).encode())
+    # The modem line by role (MODEM_ROLE), not by partition name
+    found[MODEM_ROLE] = found.pop(modem)
+    return sha256(''.join(f'{found[name]}  {name}\n' for name in sorted(found)).encode())
 
 
 def scan(root):
