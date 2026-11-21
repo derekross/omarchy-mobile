@@ -53,7 +53,7 @@ added=$(comm -23 <(echo "$now") <(echo "$before") || true)
 pattern=$(echo "$added" | grep -E '^(HomeSheets|Home)\.qml	unqualified	' || true)
 added=$(echo "$added" | grep -vE '^(HomeSheets|Home)\.qml	unqualified	' || true)
 [[ -n $pattern ]] && echo "# $(echo "$pattern" | wc -l) unqualified accesses in Home.qml/HomeSheets.qml follow those files' existing pattern"
-"$qmllint" --version 2>/dev/null | head -1
+"$qmllint" --version 2>/dev/null | sed -n 1p
 if [[ -n $added ]]; then
   echo "$added"
   echo "not ok - $(echo "$added" | wc -l) new qmllint warnings"

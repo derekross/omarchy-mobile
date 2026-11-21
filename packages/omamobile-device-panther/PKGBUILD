@@ -8,6 +8,7 @@ arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
 depends=(bash systemd omamobile-keyring i2c-tools)
+optdepends=('omamobile-audio>=0.5.16: the speakers on the default calibration without speaker.cal')
 provides=(omamobile-device)
 conflicts=(omamobile-device)
 backup=(etc/pacman.d/omamobile-mirrorlist)

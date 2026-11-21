@@ -273,7 +273,7 @@ st_kernel() {
   # build of it is not the release kernel, so neither counts)
   local want notes=device/$DEVICE/NOTES.md hit
   want=$(release_string "$commit")
-  hit=$(grep -nE "(^|[^A-Za-z0-9._-])${want//./\\.}([^A-Za-z0-9_-]|\$)" "$notes" 2>/dev/null | head -1 || true)
+  hit=$(grep -nE "(^|[^A-Za-z0-9._-])${want//./\\.}([^A-Za-z0-9_-]|\$)" "$notes" 2>/dev/null | sed -n 1p || true)
   if [[ -z $hit ]]; then
     die "$notes has no boot of $want (§11.1: boot the release build, then record its uname -r and the result in $notes)"
   fi
@@ -488,7 +488,7 @@ st_packages() {
     local bf=packages/$dpkg/boot-files/SHA256SUMS pf want_sum got_sum
     [[ -f $bf ]] || die "no $bf: run the images stage first"
     pf=$(bsdtar -xOf "$db" --include='*/desc' |
-      awk -v n="$dpkg" '/^%FILENAME%$/ { getline; f = $0 } /^%NAME%$/ { getline; if ($0 == n) print f }' | head -1)
+      awk -v n="$dpkg" '/^%FILENAME%$/ { getline; f = $0 } /^%NAME%$/ { getline; if ($0 == n) print f }' | sed -n 1p)
     [[ -n $pf && -f out/repo/aarch64/$pf ]] || die "out/repo has no $dpkg package file"
     want_sum=$(awk '$2 == "initramfs.cpio.lz4" { print $1 }' "$bf")
     got_sum=$({ bsdtar -xOf "out/repo/aarch64/$pf" "usr/lib/omamobile/$DEVICE/initramfs.cpio.lz4" 2>/dev/null || true; } | sha256sum | cut -d' ' -f1)
@@ -668,8 +668,8 @@ PY
 }
 
 # Identifier scan (§11.7, AGENTS.md §1) over files and directories, text and
-# binary alike: universally administered MAC addresses (locally administered
-# ones, x2/x6/xA/xE, and all zeros or all ones are made up; so are, in
+# binary alike: MAC addresses (locally administered unicast ones,
+# x2/x6/xA/xE, and all zeros or all ones are made up; so are, in
 # /etc/dnsmasq.conf alone, the group addresses and dhcp-option bytes of
 # dnsmasq's shipped example configuration), serial and IMEI
 # records, this machine's home directory (/home/<builder>: a build path that
@@ -689,6 +689,8 @@ mac = re.compile(rb"(?i)(?=[0-9a-f:\-hm])(?:"
                  rb"(?:(?<![0-9a-f:])|(?<=[g-z_])[0-9a-f]*:)([0-9a-f]{2}(?::[0-9a-f]{2}){5})(?![0-9a-f]|:[0-9a-f])"
                  rb"|(?:(?<![0-9a-f-])|(?<=[g-z_])[0-9a-f]*-)([0-9a-f]{2}(?:-[0-9a-f]{2}){5})(?![0-9a-f]|-[0-9a-f])"
                  rb"|(?<![a-z])(?:mac(?:[_-]?addr(?:ess)?)?|(?:hw|bd)[_-]?addr(?:ess)?|ether)[\"']?(?:[ \t]*[=:][ \t]*|[ \t]+)[\"']?([0-9a-f]{12})(?![0-9a-f]))")
+# A hyphenated date and time (group 2), as tools/pr-check reads one
+timestamp = re.compile(rb"[0-9]{2}:(0[1-9]|1[0-2]):(0[1-9]|[12][0-9]|3[01]):([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]")
 rules = [("serial record", re.compile(rb"(?i)(ro\.serialno|androidboot\.serialno)[^\n]{0,40}")),
          ("IMEI", re.compile(rb"(?i)\bIMEI\b[=: ]+[0-9]{15}\b")),
          ("builder's home", re.compile(rb"/home/" + re.escape(builder.encode()) + rb"(?![A-Za-z0-9_-])"))]
@@ -705,11 +707,17 @@ def scan(path):
         data = open(path, "rb").read()
     except OSError:
         return
-    for m in mac.finditer(data):
+    pos = 0
+    while m := mac.search(data, pos):
         k = m.lastindex
+        # a match's last field can still start an address in another form, so
+        # resume there instead of skipping past it
+        pos = m.end(k) - 2
         whole = b":".join(re.findall(rb"[0-9a-f]{2}", m.group(k).lower()))
         first = int(whole[:2], 16)
-        if first & 2 or whole in (b"00:00:00:00:00:00", b"ff:ff:ff:ff:ff:ff"):
+        if (first & 3) == 2 or whole in (b"00:00:00:00:00:00", b"ff:ff:ff:ff:ff:ff"):
+            continue
+        if k == 2 and timestamp.fullmatch(whole):
             continue
         # dnsmasq's shipped example configuration only: its group address
         # (no Wi-Fi or Ethernet card has one, but a Bluetooth LE random
@@ -803,7 +811,7 @@ st_identifiers() {
   # the vendor chroots, Trusty state
   f=$(grep -E '^/usr/lib/firmware/(updates|omamobile/camera)(/|$)|^/usr/lib/omamobile-(fp|vendor/[a-z]+)/root/|/(aoc\.bin|cs40l26[^/]*\.(bin|wmfw)|cs35l41-dsp1-spk-prot[^/]*|BCM\.[^/]*\.hcd|fw_bcmdhd\.bin)$|^/var/lib/omamobile-fp/' \
       "$rel/rootfs-files.txt" || true)
-  [[ -z $f ]] || { echo "$f" | head -20 >&2; die "files from a factory image in the root image (above)"; }
+  [[ -z $f ]] || { echo "$f" | sed -n '1,20p' >&2; die "files from a factory image in the root image (above)"; }
   f=$(bundle_extra_files "$dir")
   [[ -z $f ]] || { echo "$f" >&2; die "files in the bundle that make-bundle does not put there (above)"; }
   note "no factory-image file in the root image; the bundle holds only make-bundle's files"
