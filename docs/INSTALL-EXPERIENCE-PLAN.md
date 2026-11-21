@@ -290,8 +290,8 @@ install on the computer against doing it on the phone.
 
 Today: `omamobile-firstboot` reads `firstboot.conf`, creates the user, SSH,
 ufw, runs Omarchy's setup and our user setup, and deletes the file **[V]**.
-`systemd-firstboot` failed once on that boot (gap G3) in images up to
-2026.11.08; later images mask it.
+`systemd-firstboot` failed once on that boot (gap G3) in images built before
+this change (2026.11.15 and earlier); images built with it mask the unit.
 
 Unchanged in substance. The installer shows the phone's progress (growing
 the root, creating the user, setting up Omarchy) from the install link

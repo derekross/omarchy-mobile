@@ -125,18 +125,22 @@ unit_rows() {
   # omamobile-firstboot ran (it runs only while the installer's firstboot.conf
   # exists). A unit that failed then is not in `systemctl --failed` after a
   # restart, and the smoke test usually runs after one (INSTALL-EXPERIENCE-PLAN
-  # G3: systemd-firstboot failed once on every first boot, unnoticed). A
+  # G3: systemd-firstboot failed once on every first boot, unnoticed). Only
+  # the unit's own output is matched (_SYSTEMD_UNIT=), never UNIT=: on every
+  # later boot systemd logs the unit's skipped start (its ConditionPathExists=
+  # no longer holds) with a UNIT= field, so that match would take the oldest
+  # boot the journal still holds for the first one. A
   # journal that has dropped that boot's early entries can't show them: the
   # row then says less than it should, so it is evidence, not a gate.
   boot=$(journalctl -q --no-pager -o cat --output-fields=_BOOT_ID \
-           _SYSTEMD_UNIT=omamobile-firstboot.service + UNIT=omamobile-firstboot.service 2>/dev/null </dev/null | awk 'NR == 1')
+           _SYSTEMD_UNIT=omamobile-firstboot.service 2>/dev/null </dev/null | awk 'NR == 1')
   if [[ ! $boot =~ ^[0-9a-f]{32}$ ]]; then
     check skip 0 "first boot units" "the first boot isn't in the journal (no omamobile-firstboot run found)"
     return
   fi
   first=$(journalctl -q --no-pager -o json --output-fields=UNIT,USER_UNIT \
             "_BOOT_ID=$boot" "MESSAGE_ID=$unit_failed_id" 2>/dev/null </dev/null |
-          grep -oE '"(USER_)?UNIT":"[^"]*"' | sed -E 's/^"USER_UNIT":"(.*)"$/\1 (user)/; s/^"UNIT":"(.*)"$/\1/' | sort -u)
+          grep -oE '"(USER_)?UNIT":"[^"]*"' | sed -E 's/^"USER_UNIT":"(.*)"$/\1 (user)/; s/^"UNIT":"(.*)"$/\1/' | LC_ALL=C sort -u)
   n=$(grep -c . <<<"$first" || true)
   if ((n == 0)); then
     check ok 0 "first boot units" "none failed on the first boot"

@@ -229,7 +229,9 @@ pass "in a release bundle the device is the bundle's device.conf"
 # --- the systemd unit rows ---------------------------------------------------
 # Stand-ins on PATH: systemctl lists $t/failed-now as this boot's failed
 # units; journalctl answers the two questions the first-boot row asks (which
-# boots omamobile-firstboot ran in, oldest first, from $t/firstboot-boots;
+# boots omamobile-firstboot's own output is in, oldest first, from
+# $t/firstboot-boots; the older query that also matched UNIT=, which the skip
+# entry of every later boot carries, from $t/firstboot-skip-boots;
 # the "Unit failed with result" entries of one boot, from $t/failed.<boot
 # id>) and fails on anything else; loginctl finds no desktop user
 mkdir -p "$t/bin"
@@ -243,6 +245,9 @@ cat > "$t/bin/journalctl" <<EOF
 echo "\$*" >> "$t/journalctl.calls"
 case " \$* " in
   *" _SYSTEMD_UNIT=omamobile-firstboot.service + UNIT=omamobile-firstboot.service "*)
+    [[ " \$* " == *" --output-fields=_BOOT_ID "* ]] || exit 1
+    cat "$t/firstboot-skip-boots" 2>/dev/null ;;
+  *" _SYSTEMD_UNIT=omamobile-firstboot.service "*)
     [[ " \$* " == *" --output-fields=_BOOT_ID "* ]] || exit 1
     cat "$t/firstboot-boots" 2>/dev/null ;;
   *" MESSAGE_ID=d9b373ed55a64feb8242e02dbe79a49c "*)
@@ -295,6 +300,19 @@ units
 has 'skip|0|first boot units|the first boot isn'"'"'t in the journal' || fail "without the first boot in the journal the row is skipped"
 [[ $(grep -c MESSAGE_ID "$t/journalctl.calls") == 0 ]] || fail "no failed-unit query without a first boot"
 pass "without the first boot in the journal the row is skipped"
+
+# The journal holds only a later boot: omamobile-firstboot didn't run in it,
+# but systemd logged its skipped start there with a UNIT= field, and a unit
+# failed in it. That boot is not the first boot: skipped, and not asked about
+printf '%s\n' "$second" > "$t/firstboot-skip-boots"; : > "$t/journalctl.calls"
+entry UNIT omamobile-modem.service | sed "s/$first/$second/" > "$t/failed.$second"
+units
+has 'skip|0|first boot units' || fail "a boot with only the unit's skipped start is not the first boot"
+has 'omamobile-modem.service' && fail "a later boot's failed units aren't the first boot's"
+[[ $(grep -c 'UNIT=omamobile-firstboot.service + ' "$t/journalctl.calls") == 0 ]] || fail "the first boot is found by the unit's own output alone"
+[[ $(grep -c MESSAGE_ID "$t/journalctl.calls") == 0 ]] || fail "no failed-unit query for a boot the unit only skipped in"
+rm -f "$t/firstboot-skip-boots"
+pass "a later boot's skipped start of omamobile-firstboot is not taken for the first boot"
 
 # This boot's failed units, as before
 printf '%s\n' "$first" > "$t/firstboot-boots"; : > "$t/failed.$first"
