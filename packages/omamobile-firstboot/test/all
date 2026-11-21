@@ -159,6 +159,7 @@ touch -d @2000000060 "$R/usr/share/pacman/keyrings/omamobile.gpg"
 for cmd in pacman-key systemctl ufw chown hostname nmcli usermod omamobile-setup-system; do
   fake "$cmd" 'echo "$(basename "$0") $*" >> "$CALLS"'
 done
+fake systemctl 'echo "systemctl $*" >> "$CALLS"; [[ ${FAIL_DAEMON_RELOAD:-0} != 1 || $1 != daemon-reload ]] || exit 1'
 fake useradd 'echo "useradd $*" >> "$CALLS"; u=${@: -1}; echo "$u:x:1000:1000::/home/$u:/bin/bash" >> "$R/etc/passwd"; mkdir -p "$R/home/$u"'
 fake chpasswd 'echo "chpasswd $* $(cat)" >> "$CALLS.secret"'
 fake id 'echo 1000'
@@ -245,6 +246,16 @@ grep -q '^clock-set' "$CALLS" && fail "an accurate clock is never moved backward
 grep -q '^usermod -aG wheel,audio,video,input' "$CALLS" || fail "a second run updates the user it made"
 [[ $(grep -cxF "$KEY" "$R/home/alice/.ssh/authorized_keys") == 1 ]] || fail "a second run doesn't duplicate the key"
 pass "running again is safe"
+
+: > "$CALLS"
+good | sed '/^WIFI_/d' > "$R/etc/omamobile/firstboot.conf"
+export FAIL_DAEMON_RELOAD=1
+run || { cat "$t/run.out"; fail "a failed daemon-reload does not stop firstboot"; }
+unset FAIL_DAEMON_RELOAD
+grep -q '^    could not reload systemd; the new units apply from the next boot$' "$t/run.out" || fail "a failed reload is reported"
+grep -q '^ufw allow in on usb0 to any port 22 proto tcp$' "$CALLS" || fail "a failed reload does not skip the SSH firewall rule"
+grep -qx 'ENABLED=yes' "$R/etc/ufw/ufw.conf" || fail "a failed reload does not skip enabling the firewall"
+pass "a failed systemd reload still configures the firewall"
 
 # The name and email are optional: without them git is left alone
 : > "$CALLS"
