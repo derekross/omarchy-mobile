@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+# OnePlus 7T Pro: the alert slider (gpio-keys, ABS_SND_PROFILE) for the
+# seat's user, whose omamobile-hotdog-alert-slider service reads it. Before
+# 73-seat-late.rules, which turns the uaccess tag into the ACL.
+ACTION=="remove", GOTO="omamobile_hotdog_keys_end"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Alert slider", TAG+="uaccess"
+LABEL="omamobile_hotdog_keys_end"

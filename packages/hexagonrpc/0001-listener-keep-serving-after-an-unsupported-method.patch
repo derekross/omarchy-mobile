@@ -1,0 +1,39 @@
+SPDX-License-Identifier: GPL-3.0-or-later
+
+hexagonrpcd: listener: keep serving after an unsupported method
+
+From device/dodge/sensors/hexagonrpc-da7a374-omamobile.patch (the listener part).
+
+A remote call hexagonrpcd does not implement (apps_std method 36 on the
+SM8750 ADSP, first seen on dodge) ended the listener loop, so hexagonrpcd
+quit and the sensors PD lost its file server. Report the error to the DSP
+and go on serving instead.
+
+diff --git a/hexagonrpcd/listener.c b/hexagonrpcd/listener.c
+index 3414974..891fcf4 100644
+--- a/hexagonrpcd/listener.c
++++ b/hexagonrpcd/listener.c
+@@ -588,12 +588,21 @@ int run_fastrpc_listener(int fd,
+ 
+ 		if (returned != NULL)
+ 			iobuf_free(n_outbufs, returned);
++		returned = NULL;
+ 
+ 		ret = invoke_requested_procedure(n_ifaces, ifaces,
+ 						 handle, sc, &result,
+ 						 decoded, &returned);
+-		if (ret)
+-			break;
++		if (ret) {
++			/* Report the error to the DSP and keep serving. */
++			if (decoded != NULL)
++				iobuf_free(REMOTE_SCALARS_INBUFS(sc), decoded);
++			decoded = NULL;
++			sc = REMOTE_SCALARS_MAKE(0, 0, 0);
++			n_outbufs = 0;
++			ret = 0;
++			continue;
++		}
+ 
+ 		if (decoded != NULL)
+ 			iobuf_free(REMOTE_SCALARS_INBUFS(sc), decoded);

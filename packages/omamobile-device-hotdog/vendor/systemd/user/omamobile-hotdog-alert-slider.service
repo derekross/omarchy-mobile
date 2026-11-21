@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# OnePlus 7T Pro: the alert slider sets feedbackd's profile (Silent,
+# Vibrate, Ring). Reads the "Alert slider" input device, which udev gives
+# the seat's user (72-omamobile-hotdog-keys.rules). Exits at once on a
+# kernel without the slider. Runs for the graphical session: started at
+# login it had no OMARCHY_PATH yet (the session imports it), and the OSD
+# stayed silent. Never in root's or a system user's manager (an SSH login
+# as root starts one): two copies set and announced every move twice.
+[Unit]
+Description=Alert slider for the OnePlus 7T Pro
+ConditionUser=!@system
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/lib/omamobile/hotdog/omamobile-hotdog-alert-slider
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

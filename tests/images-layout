@@ -18,7 +18,10 @@
 # images match the tool at $IMAGES_BASELINE (default 1e7a998, the last tool
 # before them) byte for byte; an android-v0 (header v0) descriptor yields
 # one boot.img: the gzip kernel with its DTB appended, the initramfs, the
-# descriptor's load offsets and CMDLINE. Only the image tests skip, when AOSP's mkbootimg
+# descriptor's load offsets and CMDLINE; the shipped hotdog descriptor
+# (qcom-abl-v2, header v2) yields one boot.img whose kernel carries ABL's
+# UNCOMPRESSED_IMG tag with the DTB appended, and the DTB again in its DTB
+# section. Only the image tests skip, when AOSP's mkbootimg
 # isn't under $SRC_DIR, or no dtc is found: $DTC, then dtc on PATH, then a
 # kernel build's scripts/dtc/dtc ($KERNEL_OUT, or ~/android/mainline/out*).
 set -euo pipefail
@@ -427,6 +430,40 @@ cmp -s "$t/u/boot/ramdisk" "$K/initramfs.cpio.lz4" || fail "android-v0 layout: t
 vzero_sum=$(sha256sum < "$K/images/boot.img")
 om vzero images && [[ $(sha256sum < "$K/images/boot.img") == "$vzero_sum" ]] || fail "android-v0 images are deterministic"
 pass "android-v0 descriptor: one header-v0 boot.img (gzip kernel + DTB, initramfs, offsets, CMDLINE), deterministic"
+
+# qcom-abl-v2, the shipped hotdog descriptor: one header-v2 boot.img whose
+# kernel is ABL's "UNCOMPRESSED_IMG" tag, the Image's size and the Image
+# with the DTB appended; the same DTB in the v2 DTB section, the initramfs as
+# the ramdisk, mkbootimg's offsets on base 0, CMDLINE (plus CMDLINE_APPEND)
+# in the header; nothing else is made, and the bytes repeat run to run
+mkdir -p "$R/device/hotdog" "$K/arch/arm64/boot/dts/qcom"
+cp device/hotdog/device.conf "$R/device/hotdog/"
+hotdog_dtb=$K/arch/arm64/boot/dts/qcom/sm8150-oneplus-hotdog.dtb
+printf '/dts-v1/;\n/ {\n\tcompatible = "oneplus,hotdog", "qcom,sm8150";\n\t#address-cells = <2>;\n\t#size-cells = <2>;\n\tchosen { };\n};\n' \
+  | "$dtc" -q -I dts -O dtb -o "$hotdog_dtb" -
+om hotdog images || { cat "$t/log"; fail "images builds the shipped hotdog descriptor (qcom-abl-v2)"; }
+[[ $(built) == "boot.img " ]] || fail "qcom-abl-v2 layout: boot.img only (got $(built))"
+unpack boot
+hotdog_cmdline=$(source device/hotdog/device.conf && echo "$CMDLINE")
+[[ $(field boot 'boot image header version') == 2 ]] || fail "qcom-abl-v2 layout: header version 2"
+[[ $(field boot 'page size') == 4096 ]] || fail "qcom-abl-v2 layout: page size 4096 (got $(field boot 'page size'))"
+[[ $(field boot 'kernel load address') == 0x00008000 && $(field boot 'ramdisk load address') == 0x01000000 &&
+   $(field boot 'kernel tags load address') == 0x00000100 && $(field boot 'dtb address') == 0x0000000001f00000 ]] \
+  || { cat "$t/u/boot.txt"; fail "qcom-abl-v2 layout: mkbootimg's load addresses on base 0"; }
+[[ $(field boot 'command line args') == "$hotdog_cmdline" ]] || fail "qcom-abl-v2 layout: the header carries CMDLINE"
+cmp -s "$t/u/boot/kernel" <(printf UNCOMPRESSED_IMG; python3 -I -c 'import struct,sys; sys.stdout.buffer.write(struct.pack("<I", int(sys.argv[1])))' \
+    "$(stat -c %s "$K/arch/arm64/boot/Image")"; cat "$K/arch/arm64/boot/Image" "$hotdog_dtb") \
+  || fail "qcom-abl-v2 layout: the kernel is UNCOMPRESSED_IMG, the Image's size, the Image and the DTB"
+cmp -s "$t/u/boot/dtb" "$hotdog_dtb" || fail "qcom-abl-v2 layout: the v2 DTB section is the DTB"
+cmp -s "$t/u/boot/ramdisk" "$K/initramfs.cpio.lz4" || fail "qcom-abl-v2 layout: the ramdisk is the initramfs"
+[[ $(cat "$K/images/DEVICE") == hotdog ]] || fail "images records the device"
+hotdog_sum=$(sha256sum < "$K/images/boot.img")
+om hotdog images && [[ $(sha256sum < "$K/images/boot.img") == "$hotdog_sum" ]] || fail "qcom-abl-v2 images are deterministic"
+(cd "$R" && KERNEL_OUT=$K DEVICE=hotdog CMDLINE_APPEND=omamobile.initramfs PATH="$t/bin:$PATH" bin/omamobile images) > "$t/log" 2>&1 \
+  || { cat "$t/log"; fail "images builds hotdog with CMDLINE_APPEND"; }
+unpack boot
+[[ $(field boot 'command line args') == "$hotdog_cmdline omamobile.initramfs" ]] || fail "qcom-abl-v2 layout: CMDLINE_APPEND follows CMDLINE"
+pass "qcom-abl-v2 (the shipped hotdog descriptor): one header-v2 boot.img (tagged Image + DTB, DTB section, initramfs, offsets, CMDLINE), deterministic"
 cp "$R/device/eight/device.conf" "$t/eight.conf"
 sed -i 's/b1-foplp:0x9865:1:1:0/b1-foplp:0x9865:1:2:0/' "$R/device/eight/device.conf"
 if om eight images; then fail "images refuses a DTB whose /soc_compatible differs from SOC_COMPATIBLE"; fi

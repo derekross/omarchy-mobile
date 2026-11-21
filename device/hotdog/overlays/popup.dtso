@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up (CAMERA-PLAN.md, step P1): the pop-up camera's motor and hall
+ * sensors. Enables the PM8150L LPG, whose default pin state puts the
+ * stepper driver's pins in stock's settings (nSLEEP low: the driver
+ * sleeps), and QUP SE1 for the two M1120 hall sensors, whose supplies
+ * (L7C, L8C) have no consumer in Linux and are kept on. Nothing moves until
+ * omamobile-hotdog-popup is run by hand.
+ * Paths, not labels, so the base DTB needs no __symbols__. The RPMh
+ * regulator groups are named regulators-N, in the order of
+ * sm8150-oneplus-common.dtsi: regulators-1 is PM8150L (pmic-id "c").
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/spmi@c440000/pmic@5/pwm} {
+	status = "okay";
+};
+
+&{/soc@0/geniqup@8c0000/i2c@884000} {
+	status = "okay";
+};
+
+&{/soc@0/rsc@18200000/regulators-1/ldo7} {
+	regulator-always-on;
+};
+
+&{/soc@0/rsc@18200000/regulators-1/ldo8} {
+	regulator-always-on;
+};

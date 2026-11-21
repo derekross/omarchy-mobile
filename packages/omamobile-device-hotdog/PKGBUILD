@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: MIT
+pkgname=omamobile-device-hotdog
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omarchy Mobile support for the OnePlus 7T Pro (hotdog): storage guard, USB networking, modem (rmtfs, tqftpserv, ModemManager), call audio, Bluetooth address, sound profile, alert slider, fingerprint, pop-up camera, GNSS through the modem, suspend, light and proximity (SLPI sensors)"
+arch=(aarch64)
+url="https://github.com/derekross/omarchy-mobile"
+# The package's own files are MIT; the Bluetooth address helper is
+# Apache-2.0; qrtr, rmtfs and tqftpserv (linux-msm) are BSD-3-Clause.
+license=(MIT Apache-2.0 BSD-3-Clause)
+depends=(bash systemd systemd-libs util-linux bluez-utils zstd xz python modemmanager python-gobject alsa-lib alsa-utils e2fsprogs hexagonrpc libssc iio-sensor-proxy)
+backup=(etc/pacman.d/omamobile-mirrorlist etc/pam.d/omarchy-lock-fingerprint etc/geoclue/conf.d/92-omamobile-hotdog.conf)
+optdepends=('mmsd-tng: MMS through ModemManager (packaged with the MMS pull request, #936; start it in the session with systemctl --user enable mmsd-tng)'
+            'feedbackd: the alert slider sets its profile (Silent, Vibrate, Ring)'
+            'fprintd: fingerprint unlock through PAM'
+            'omamobile-gnss: Location (GNSS) through the modem (QMI LOC)'
+            'libfprint: the Omarchy Mobile build, with the omamobile_udfps driver')
+makedepends=(gcc)
+# The fingerprint programs are bionic (NDK) binaries tested as built:
+# makepkg's strip (binutils) must not rewrite them
+options=(!strip !debug)
+# The modem's file services, from linux-msm. The kernel has the QRTR name
+# server and the protection-domain mapper built in, so only their library
+# is needed, compiled into the two tools.
+_qrtr=1.2 _rmtfs=1.3 _tqftpserv=1.3
+source=("qrtr-$_qrtr.tar.gz::https://github.com/linux-msm/qrtr/archive/refs/tags/v$_qrtr.tar.gz"
+        "rmtfs-$_rmtfs.tar.gz::https://github.com/linux-msm/rmtfs/archive/refs/tags/v$_rmtfs.tar.gz"
+        "tqftpserv-$_tqftpserv.tar.gz::https://github.com/linux-msm/tqftpserv/archive/refs/tags/v$_tqftpserv.tar.gz")
+sha256sums=('7a82bf80246fe71287b13c66c0466208822e8337fcd4aaf302eee6c5fcb48a52'
+            '4b6c398806a1046e2256a685d592833de0f37b7245b8adc4797e1791f0e117ee'
+            '87a3845e8f47b42f31d8aaad04c5e0707e391b3954d096aeff6f0a03467dc33f')
+
+build() {
+  "$startdir/build" "$srcdir" "$srcdir/build"
+}
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir" "$srcdir/build"
+  for p in qrtr-$_qrtr rmtfs-$_rmtfs tqftpserv-$_tqftpserv; do
+    install -Dm644 "$srcdir/$p/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE.${p%-*}"
+  done
+}

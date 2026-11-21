@@ -1,0 +1,20 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# OnePlus 7T Pro: turn the kernel's recovery of a crashed modem on or off.
+#   omamobile-hotdog-modem-recovery enabled|disabled
+# omamobile-rmtfs.service turns it off before it ends rmtfs, so that a modem
+# that crashes without its file server, while the system shuts down, is not
+# booted again in the middle of the reboot, and on again when rmtfs starts
+# (device/hotdog/MODEM-PLAN.md R9).
+set -euo pipefail
+mode=${1:-}
+[[ $mode == enabled || $mode == disabled ]] || { echo "usage: ${0##*/} enabled|disabled" >&2; exit 2; }
+root=${OMAMOBILE_SYSFS:-/sys}
+for r in "$root"/class/remoteproc/remoteproc*; do
+  [[ -r $r/name && $(<"$r/name") == modem ]] || continue
+  echo "$mode" > "$r/recovery"
+  echo "modem recovery $mode"
+  exit 0
+done
+echo "no modem remoteproc" >&2
+exit 1

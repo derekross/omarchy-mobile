@@ -126,8 +126,8 @@ load_device() {
     fi
   done < "$file"
   case $DEV_BOOT_METHOD in
-    android-v4|android-v0|qcom-abl|ram-only) ;;
-    *) die "$file: unsupported BOOT_METHOD=$DEV_BOOT_METHOD; this command supports android-v4, android-v0, qcom-abl and ram-only" ;;
+    android-v4|android-v0|qcom-abl|qcom-abl-v2|ram-only) ;;
+    *) die "$file: unsupported BOOT_METHOD=$DEV_BOOT_METHOD; this command supports android-v4, android-v0, qcom-abl, qcom-abl-v2 and ram-only" ;;
   esac
   [[ $DEV_CODENAME == "$DEVICE" ]] || die "$file: CODENAME=$DEV_CODENAME, expected $DEVICE"
   if [[ $DEV_BOOT_METHOD == ram-only ]]; then
@@ -188,6 +188,16 @@ load_device() {
     done
     [[ $seen == *" boot "* ]] || die "$file: BOOT_IMAGES must include boot"
     slot_b_allowed boot || die "$file: boot_b is not in UFS_RW"
+  elif [[ $DEV_BOOT_METHOD == qcom-abl-v2 ]]; then
+    for key in CODENAME SOC PACKAGE DTB BOOT_IMAGES UFS_RW INITRAMFS_INIT PANEL_SIZE CMDLINE BOOT_PAGESIZE; do
+      p="DEV_$key"
+      [[ -n ${!p:-} ]] || die "$file: $key is missing"
+    done
+    # One header-v2 boot.img that the human writes by fastboot, never a
+    # tool of ours: Linux writes no boot partition, so UFS_RW is userdata.
+    [[ $DEV_BOOT_IMAGES == boot ]] || die "$file: qcom-abl-v2 BOOT_IMAGES must be boot alone"
+    [[ $DEV_UFS_RW == userdata ]] || die "$file: qcom-abl-v2 UFS_RW must be userdata alone (no boot partition is written from Linux)"
+    [[ $DEV_BOOT_PAGESIZE =~ ^(2048|4096)$ ]] || die "$file: BOOT_PAGESIZE must be 2048 or 4096"
   else
     for key in CODENAME SOC PACKAGE DTB DTBO_SOURCE DTBO_BOARD_ID DTBO_BOARD_REV VENDOR_CMDLINE \
         VENDOR_PAGESIZE OS_VERSION OS_PATCH_LEVEL BOOT_IMAGES UFS_RW INITRAMFS_INIT PANEL_SIZE; do
@@ -542,6 +552,10 @@ initramfs_config() {
   if [[ -n ${DEV_BRINGUP_PROBE:-} ]]; then
     [[ $DEV_BRINGUP_PROBE == 1 ]] || die "BRINGUP_PROBE must be 1 or absent"
   fi
+  if [[ -n ${DEV_INITRAMFS_USERDATA_WAIT+x} ]]; then
+    [[ $DEV_INITRAMFS_USERDATA_WAIT =~ ^[1-9][0-9]{0,2}$ && $DEV_INITRAMFS_USERDATA_WAIT -le 600 ]] ||
+      die "INITRAMFS_USERDATA_WAIT must be 1-600 seconds or absent"
+  fi
   if [[ -n ${DEV_INITRAMFS_ROOT_LABEL+x} ]]; then
     [[ $DEV_INITRAMFS_ROOT_LABEL == omamobile-root ]] ||
       die "INITRAMFS_ROOT_LABEL must be omamobile-root or absent"
@@ -604,6 +618,10 @@ initramfs_config() {
   # still refuses them when the board does not match COMPATIBLE.
   if [[ -n ${DEV_BRINGUP_PROBE:-} ]]; then
     : > "$etc/omamobile-bringup-probe"
+  fi
+  # How long the init waits for userdata to appear (absent: it looks once)
+  if [[ -n ${DEV_INITRAMFS_USERDATA_WAIT:-} ]]; then
+    printf '%s\n' "$DEV_INITRAMFS_USERDATA_WAIT" > "$etc/omamobile-userdata-wait"
   fi
   # The storage guard's allowlist. Without this file the init leaves every
   # partition read-only.
@@ -912,7 +930,10 @@ cmd_images() {
     [[ $(cat "$KERNEL_OUT/initramfs.release" 2>/dev/null) == "$(cat "$KERNEL_OUT/include/config/kernel.release")" ]] ||
       die "the initramfs modules are not from this kernel build: omamobile modules && omamobile initramfs"
   fi
-  if [[ $DEV_BOOT_METHOD != qcom-abl ]]; then
+  if [[ $DEV_BOOT_METHOD == qcom-abl-v2 ]]; then
+    [[ -f $tools/mkbootimg.py ]] ||
+      die "no mkbootimg.py in $tools: run tools/fetch-toolchain, or set SRC_DIR to an Android checkout (or MKBOOTIMG_DIR)"
+  elif [[ $DEV_BOOT_METHOD != qcom-abl ]]; then
     [[ -f $tools/mkbootimg.py ]] ||
       die "no mkbootimg.py in $tools: run tools/fetch-toolchain, or set SRC_DIR to an Android checkout (or MKBOOTIMG_DIR)"
   fi
@@ -947,6 +968,35 @@ cmd_images() {
     dtb="$img/$DEV_CODENAME-overlaid.dtb"
   fi
 
+  if [[ $DEV_BOOT_METHOD == qcom-abl-v2 ]]; then
+    # Qualcomm ABL with a header-v2 boot.img (OnePlus 7T Pro): an
+    # uncompressed Image needs ABL's "UNCOMPRESSED_IMG" tag and its size in
+    # front, with the DTB appended; ABL boots the DTB from the v2 DTB
+    # section. Its own command line goes into the header. The offsets are
+    # mkbootimg's defaults on base 0. CMDLINE_APPEND adds words for a test
+    # image (omamobile.initramfs: stay in the initramfs).
+    local cmdline="$DEV_CMDLINE${CMDLINE_APPEND:+ $CMDLINE_APPEND}"
+    say "Boot image (qcom-abl-v2, header v2): $cmdline"
+    python3 -I - "$boot/Image" "$dtb" "$img/kernel" <<'PY'
+import struct, sys
+img = open(sys.argv[1], "rb").read()
+dtb = open(sys.argv[2], "rb").read()
+open(sys.argv[3], "wb").write(b"UNCOMPRESSED_IMG" + struct.pack("<I", len(img)) + img + dtb)
+PY
+    cp -- "$dtb" "$img/dtb"
+    python3 "$tools/mkbootimg.py" --header_version 2 --base 0x0 --pagesize "$DEV_BOOT_PAGESIZE" \
+      --kernel "$img/kernel" --ramdisk "$KERNEL_OUT/initramfs.cpio.lz4" --dtb "$img/dtb" \
+      --cmdline "$cmdline" --output "$img/boot.img" || die "mkbootimg failed"
+    rm -f -- "$img/kernel"
+    printf '%s\n' "$DEV_CODENAME" > "$img/DEVICE"
+    {
+      cat "$KERNEL_OUT/toolchain.txt" 2>/dev/null || echo "clang: not recorded (the kernel build predates toolchain.txt)"
+      echo "mkbootimg.py: sha256 $(sha256sum < "$tools/mkbootimg.py" | cut -d' ' -f1)"
+    } > "$img/TOOLCHAIN"
+    ls -lh "$img/boot.img"
+    sha256sum "$img/boot.img"
+    return 0
+  fi
   if [[ $DEV_BOOT_METHOD == android-v0 ]]; then
     # This ABL gunzips the kernel and takes the DTB appended to it; the
     # ramdisk is the shared initramfs. gzip -n keeps no name or time, so
@@ -1228,6 +1278,10 @@ cmd_fastboot() {
     die "fastboot refuses BOOT_METHOD=android-v0 (RAM-only: reach fastboot by the buttons, see device/$DEVICE/NOTES.md)"
   [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
     die "fastboot refuses BOOT_METHOD=qcom-abl (panic path uncharacterized on this ABL; use the buttons — see device/$DEVICE/BRINGUP-M1.md)"
+  # No crash fallback: there is no stock slot to fall back to, a panic
+  # reboots into the same image
+  [[ $DEV_BOOT_METHOD != qcom-abl-v2 ]] ||
+    die "fastboot refuses BOOT_METHOD=qcom-abl-v2: use reboot-to bootloader over SSH, or the buttons (device/$DEVICE/BRINGUP-M1.md)"
   in_fastboot && { say "Already in fastboot"; return 0; }
   for i in $(seq 1 12); do
     if adb get-state 2>/dev/null | grep -c device >/dev/null; then
@@ -1275,6 +1329,10 @@ cmd_flash() {
     die "flash refuses BOOT_METHOD=android-v0 (RAM-only: fastboot boot \$KERNEL_OUT/images/boot.img)"
   [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
     die "flash refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
+  # This phone has no slot B of ours: its one boot image is written by a
+  # human, by fastboot, after a RAM boot (device/$DEVICE/BRINGUP-M1.md)
+  [[ $DEV_BOOT_METHOD != qcom-abl-v2 ]] ||
+    die "flash refuses BOOT_METHOD=qcom-abl-v2 (no slot B; fastboot boot the image, then follow device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
   in_fastboot || die "phone not in fastboot (try: omamobile fastboot)"
   local serial cur
@@ -1338,6 +1396,8 @@ cmd_push() {
     die "push refuses BOOT_METHOD=android-v0 (RAM-only: fastboot boot \$KERNEL_OUT/images/boot.img)"
   [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
     die "push refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
+  [[ $DEV_BOOT_METHOD != qcom-abl-v2 ]] ||
+    die "push refuses BOOT_METHOD=qcom-abl-v2 (Linux writes no boot partition here; use modules-push, then fastboot; device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
   "$ssh" true || die "phone not reachable at 172.16.42.1"
   # Read-only, before anything else (modules-push included): push writes

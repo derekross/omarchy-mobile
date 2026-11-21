@@ -1,0 +1,53 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# rootfs/local-key.sh on a stand-in root (no container, no image): only a
+# local-channel image built with a key gets it, as the omamobile-local
+# keyring with its fingerprint trusted; a stable or development image, or a
+# local one without a key, gets nothing, even with LOCAL_KEY set; a missing
+# or empty key file stops the build. rootfs/build-inside sources and calls
+# it, and tools/build-rootfs passes a key only to a --local build
+# (tests/build-rootfs checks that end).
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+command -v gpg >/dev/null || { echo "ok - # skip: no gpg"; exit 0; }
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+# shellcheck source=../rootfs/local-key.sh
+source rootfs/local-key.sh
+
+export GNUPGHOME=$t/gnupg
+mkdir -m 700 "$GNUPGHOME"
+gpg -q --batch --pinentry-mode loopback --passphrase '' --quick-gen-key 'local test key' ed25519 sign never 2>/dev/null
+gpg -q --batch --armor --export > "$t/public.asc"
+want=$(gpg --with-colons --list-keys 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}')
+[[ $want =~ ^[0-9A-F]{40}$ ]] || fail "the test key has a fingerprint"
+
+k=usr/share/pacman/keyrings
+out=$(ship_local_key "$t/local" local "$t/public.asc") || fail "a local image with a key builds"
+[[ $out == "$want" ]] || fail "ship_local_key prints the fingerprint it shipped"
+cmp -s "$t/local/$k/omamobile-local.gpg" "$t/public.asc" || fail "the key ships as the omamobile-local keyring"
+[[ $(cat "$t/local/$k/omamobile-local-trusted") == "$want:4:" ]] || fail "its fingerprint is trusted"
+[[ $(stat -c %a "$t/local/$k/omamobile-local.gpg" "$t/local/$k/omamobile-local-trusted" | sort -u) == 644 ]] || fail "both files are 0644"
+pass "a local image with a key gets it as the omamobile-local keyring, trusted"
+
+for c in stable development; do
+  mkdir -p "$t/$c"
+  out=$(ship_local_key "$t/$c" "$c" "$t/public.asc") || fail "a $c image builds"
+  [[ -z $out && -z $(find "$t/$c" -mindepth 1) ]] || fail "a $c image gets no local key, even with LOCAL_KEY set"
+done
+mkdir -p "$t/nokey"
+out=$(ship_local_key "$t/nokey" local "") || fail "a local image without a key builds"
+[[ -z $out && -z $(find "$t/nokey" -mindepth 1) ]] || fail "a local image without a key gets none"
+pass "stable and development images, and a local one without a key, get no local key"
+
+if ship_local_key "$t/missing" local "$t/no-such.asc" 2>/dev/null; then fail "a missing key file stops the build"; fi
+: > "$t/empty.asc"
+if ship_local_key "$t/empty" local "$t/empty.asc" 2>/dev/null; then fail "a key file with no key stops the build"; fi
+[[ ! -e $t/missing && ! -e $t/empty ]] || fail "a refused key writes nothing"
+pass "a missing or empty key file stops the build and writes nothing"
+
+grep -qF 'source /src/rootfs/local-key.sh' rootfs/build-inside &&
+  grep -qF 'ship_local_key "$T" "$CHANNEL" "${LOCAL_KEY:-}"' rootfs/build-inside ||
+  fail "rootfs/build-inside sources local-key.sh and calls it with the image's channel"
+pass "rootfs/build-inside sources and calls it"
