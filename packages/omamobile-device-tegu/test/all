@@ -45,7 +45,7 @@ fi
 # tried a second time (#619), and nothing that hibernates. Checked by its
 # settings: the 7 Pro's copy gets SuspendState in a change of its own.
 sleepconf=vendor/systemd/sleep.conf.d/10-omamobile.conf
-[[ $(grep -v '^#' "$sleepconf" | grep -c .) -eq 6 && $(grep -v '^#' "$sleepconf" | head -1) == "[Sleep]" ]] || fail "the sleep drop-in has other lines than its five settings"
+[[ $(grep -v '^#' "$sleepconf" | grep -c .) -eq 6 && $(grep -v '^#' "$sleepconf" | sed -n 1p) == "[Sleep]" ]] || fail "the sleep drop-in has other lines than its five settings"
 for line in SuspendState=freeze MemorySleepMode=s2idle AllowHibernation=no AllowHybridSleep=no AllowSuspendThenHibernate=no; do
   grep -qx "$line" "$sleepconf" || fail "the sleep drop-in lacks $line"
 done
@@ -96,14 +96,14 @@ for f in usr/bin/reboot-to usr/bin/tegu-tcpc-switch \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
          usr/lib/udev/rules.d/10-omamobile-storage.rules usr/lib/udev/rules.d/20-omamobile-torch.rules \
          usr/lib/udev/rules.d/70-omamobile-dma-heap.rules usr/lib/udev/rules.d/72-omamobile-feedbackd.rules \
-         usr/lib/udev/rules.d/70-omamobile-touch-wake.rules \
+         usr/lib/udev/rules.d/70-omamobile-touch-wake.rules usr/lib/udev/rules.d/70-omamobile-tegu-gpu-floor.rules \
          usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
          usr/share/uwsm/env.d/omamobile-tegu-graphics \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-tegu/version \
          usr/share/licenses/omamobile-device-tegu/LICENSE \
-         etc/pacman.d/omamobile-mirrorlist; do
+         etc/pacman.d/omamobile-mirrorlist etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
 # The sleep runs with the kernel's clock ticking, so no service watchdog may
@@ -122,6 +122,17 @@ other=../omamobile-device-cheetah/$tw
 if [[ -f $other ]]; then
   [[ $(grep -v '^#' "$tw") == $(grep -v '^#' "$other") ]] || fail "the touch-wake rule matches the 7 Pro's rule line"
 fi
+# Wi-Fi power save on, over Omarchy's laptop setting: in /etc, after "omarchy-wifi-powersave.conf" by name
+wp=$tmp/root/etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf
+[[ $(grep -v '^#' "$wp" | grep -c .) == 2 && $(grep -v '^#' "$wp" | paste -sd' ') == "[connection] wifi.powersave=3" ]] \
+  || fail "the Wi-Fi power save file turns power save on and does nothing else"
+[[ ${wp##*/} > omarchy-wifi-powersave.conf ]] || fail "the Wi-Fi power save file sorts after Omarchy's"
+grep -c '^backup=(.*etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf' PKGBUILD >/dev/null || fail "the Wi-Fi power save file is a backup file"
+# The GPU's floor: one rule line, for the 9a's GPU only, when its devfreq
+# device appears (panthor's probe, from the graphics start).
+gf=vendor/udev/rules.d/70-omamobile-tegu-gpu-floor.rules
+[[ $(grep -v '^#' "$gf") == 'ACTION=="add", SUBSYSTEM=="devfreq", KERNEL=="1f000000.gpu", ATTR{min_freq}="419000000"' ]] \
+  || fail "the GPU floor rule sets the 9a GPU's lowest level to 419 MHz and nothing else"
 [[ -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-wifi && -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-nfc &&
    -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-cpuidle ]] \
   || fail "the sleep hooks are not executable"

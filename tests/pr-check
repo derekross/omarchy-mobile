@@ -78,6 +78,29 @@ for line in "mac:$L" "${L//:/-}" "mac=${L//:/}" "00-00-00-00-00-00" "macaddr=000
 done
 echo "ok - made-up and documentation MACs in those forms, longer runs, mixed separators, IPv6, UUIDs and bare hex outside a MAC record pass"
 
+# Six decimal fields joined by hyphens that read as YY-MM-DD-HH-MM-SS are a
+# timestamp, such as a screenshot's name (#842). Past a range's edge, with a
+# hex letter, with colons or bare in a MAC record, they are still an address,
+# and a timestamp hides no address beside it, starting in its last field or
+# after an exempt one that starts there.
+ts() { local IFS=-; echo "$*"; }
+tc() { local IFS=:; echo "$*"; }
+S=$(ts 25 11 15 10 20 30) A=$(ts 00 1a 2b 3c 4d 5e)
+C=${A#00-}
+for line in "screenshot-$S.png" "screenshot-$(ts 26 11 15 10 20 30).png" "$(ts 25 01 15 10 20 30)" "$(ts 25 12 15 10 20 30)" \
+  "$(ts 25 11 01 10 20 30)" "$(ts 25 11 31 10 20 30)" "$(ts 25 11 15 00 00 00)" "$(ts 25 11 15 23 59 59)"; do
+  mac_case "$line" 0
+done
+echo "ok - a hyphenated date and time passes, at each range's edges"
+for line in "wlan0 at $A" "$(ts 25 00 15 10 20 30)" "$(ts 25 13 15 10 20 30)" "$(ts 25 11 00 10 20 30)" "$(ts 25 11 32 10 20 30)" \
+  "$(ts 25 11 15 24 20 30)" "$(ts 25 11 15 10 60 30)" "$(ts 25 11 15 10 20 60)" "$(ts 2c 11 15 10 20 30)" "$(ts 25 1b 15 10 20 30)" \
+  "$(ts 25 11 1d 10 20 30)" "$(ts 25 11 15 1f 20 30)" "$(ts 25 11 15 10 2e 30)" "$(ts 25 11 15 10 20 3a)" "${S//-/:}" "mac=${S//-/}" \
+  "screenshot-$S.png wlan0 at $A" "$S:${C//-/:}" "screenshot-$(ts 25 11 15 10 20 26):$(tc 1a 2b 3c 4d):$A" \
+  "$(ts 25 11 15 10 20 32):$(tc 10 20 30 40):$(ts 50 1a 2b 3c 4d 5e)" "$(ts 25 11 15 10 20 26):$(tc 1a 2b 3c 4d):$(ts 50 1a 2b 3c 4d 5e)"; do
+  mac_case "$line" 1 "MAC or Bluetooth addresses"
+done
+echo "ok - past a range's edge, with a hex letter, with colons or in a MAC record, the same digits fail, and so does an address beside a timestamp, in its last field or after an exempt one there"
+
 case_branch getprop
 echo "[ro.boot.hardware.revision]: [MP1.0]" > notes.md
 git add -A && git commit -q -m "notes"

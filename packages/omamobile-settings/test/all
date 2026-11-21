@@ -14,7 +14,7 @@ chmod 700 "$fixture/runtime"
 cd "$build_dir"
 qmake6 "$source_dir/tests/core_tests.pro"
 make -j1
-HOME="$fixture" XDG_CONFIG_HOME="$fixture/config" XDG_CACHE_HOME="$fixture/cache" \
+HOME="$fixture" XDG_STATE_HOME="$fixture/state" XDG_DATA_HOME="$fixture/data" XDG_CONFIG_HOME="$fixture/config" XDG_CACHE_HOME="$fixture/cache" \
   XDG_RUNTIME_DIR="$fixture/runtime" QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
   QT_QPA_PLATFORMTHEME= NO_AT_BRIDGE=1 GSETTINGS_BACKEND=memory ./settings-core-tests
 
@@ -24,7 +24,7 @@ mkdir -p "$lifetime"
   cd "$lifetime"
   qmake6 "$source_dir/tests/deviceinfo_lifetime_tests.pro"
   make -j1
-  HOME="$fixture" XDG_CONFIG_HOME="$fixture/config" XDG_RUNTIME_DIR="$fixture/runtime" \
+  HOME="$fixture" XDG_STATE_HOME="$fixture/state" XDG_DATA_HOME="$fixture/data" XDG_CONFIG_HOME="$fixture/config" XDG_RUNTIME_DIR="$fixture/runtime" \
     QT_QPA_PLATFORMTHEME= NO_AT_BRIDGE=1 ./settings-deviceinfo-lifetime-tests
 )
 session="$build_dir/session"
@@ -34,7 +34,7 @@ mkdir -p "$session"
   qmake6 "$source_dir/tests/session_app.pro"
   make -j1
 )
-HOME="$fixture" XDG_CONFIG_HOME="$fixture/config" XDG_CACHE_HOME="$fixture/cache" \
+HOME="$fixture" XDG_STATE_HOME="$fixture/state" XDG_DATA_HOME="$fixture/data" XDG_CONFIG_HOME="$fixture/config" XDG_CACHE_HOME="$fixture/cache" \
   XDG_RUNTIME_DIR="$fixture/runtime" QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
   QT_QPA_PLATFORMTHEME= NO_AT_BRIDGE=1 GSETTINGS_BACKEND=memory dbus-run-session -- python3 "$source_dir/test/single-instance.py" \
   "$session/settings-session-test-app"

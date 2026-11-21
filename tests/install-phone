@@ -643,7 +643,7 @@ pass "slot check: the yes is the caller's --measure-other-slot or typed on a ter
 phone
 install --dry-run || { cat "$t/out"; fail "a dry run with an unmeasured slot succeeds"; }
 [[ $(probe_calls) == "$get" ]] || { probe_calls; fail "a dry run sends none of the slot check"; }
-[[ $(grep 'would run:' "$t/out" | head -7) == "    would run: fastboot -s FAKE123 --set-active=b
+[[ $(grep 'would run:' "$t/out" | sed -n '1,7p') == "    would run: fastboot -s FAKE123 --set-active=b
     would run: fastboot -s FAKE123 getvar all
     would run: fastboot -s FAKE123 reboot bootloader
     would run: fastboot -s FAKE123 getvar all

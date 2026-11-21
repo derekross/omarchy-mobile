@@ -10,6 +10,13 @@ Sources:
 - `P/`: postmarketOS pmaports `device/testing` (2026-10-21).
 - `G/`: Google's GPL kernel for this phone, `android-gs-shusky-6.1-android16` ([source.android.com: Build Pixel kernels](https://source.android.com/docs/setup/build/building-pixel-kernels)).
 
+## 2026-11-18: the torch tile and a held volume key, the third phone
+
+Colin's phone, published `omamobile` at `82f31d3a7`, omamobile-shell 0.2.108,
+omamobile-device-husky 0.1.16: the quick-settings torch tile turns the LED on
+and off, and holding Volume Up gives no stutter (the ROADMAP's Buttons note is
+from Lef's phone). Checked by eye, nothing logged.
+
 ## 2026-11-15: Bluetooth, haptics, the torch and the gauge on merged `omamobile`, a third phone
 
 Colin's phone, the third unit (Samsung 128 GB UFS 3.1, SKU G1MNW; [2026-11-08](#2026-11-08-a-third-phone-samsung-128-gb-ufs-31-still-locked)), unlocked since, with Google's CP3A.261005.005 on slot A and Omarchy on slot B. Kernel: `omamobile` at `82f31d3a7`, unchanged (`7.3.0-rc6-omamobile-push1-g82f31d3a7a35`, flashed with `bin/omamobile flash` on 2026-11-13). Firmware from the owner's own factory image with `tools/extract-vendor-firmware -d husky -s G1MNW` ([#722](https://github.com/derekross/omarchy-mobile/pull/722)), installed under `/usr/lib/firmware/updates`. `omamobile-device-husky` 0.1.13 from [#752](https://github.com/derekross/omarchy-mobile/pull/752) (0.1.12 plus the Bluetooth address step; merged 2026-11-15). Each item below was checked by a person at the phone.
