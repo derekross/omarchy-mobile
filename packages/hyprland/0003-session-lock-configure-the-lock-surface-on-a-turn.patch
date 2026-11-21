@@ -1,0 +1,87 @@
+Subject: [PATCH] session-lock: configure the lock surface when the monitor is turned
+
+Against Hyprland v0.57.0 (src/protocols/SessionLock.cpp, SessionLock.hpp).
+
+A lock surface gets its size in ext_session_lock_surface_v1.configure, and
+CSessionLockSurface sends one whenever its monitor emits modeChanged. Since
+the monitor rules are split into hard and soft properties, a rule change
+that only differs in the transform is applied by
+CMonitor::applyMonitorRuleSoft(): it gives the monitor its turned size, the
+layout is arranged again (layer surfaces are configured, xdg_output sends
+the new logical size), but modeChanged is not emitted. So a lock surface is
+never told about a quarter turn: the client keeps drawing at the size the
+surface was made with, and the renderer draws that buffer stretched over
+the turned output until the session is unlocked. Touch no longer lines up
+with what is drawn either.
+
+Seen on a phone whose screen follows the accelerometer: locked on its side,
+the screen is turned back to portrait a moment after the lock surface is
+made, and the lock screen stays squeezed. With WAYLAND_DEBUG on a lock
+client (1080x2424 at scale 8/3): ext_session_lock_surface_v1.configure(405,
+909) at the lock, then none for four quarter turns, while
+zxdg_output_v1.logical_size went to 909x405 and back each time.
+
+Have the lock surface follow the monitor layout as well, as xdg_output
+does, and send a configure when the monitor's size is no longer the one it
+last sent.
+
+diff --git i/src/protocols/SessionLock.cpp w/src/protocols/SessionLock.cpp
+--- i/src/protocols/SessionLock.cpp
++++ w/src/protocols/SessionLock.cpp
+@@ -7,6 +7,7 @@
+ #include "../output/Monitor.hpp"
+ #include "../render/Renderer.hpp"
+ #include "../desktop/state/FocusState.hpp"
++#include "../event/EventBus.hpp"
+ 
+ CSessionLockSurface::CSessionLockSurface(SP<CExtSessionLockSurfaceV1> resource_, SP<CWLSurfaceResource> surface_, PHLMONITOR pMonitor_, WP<CSessionLock> owner_) :
+     m_resource(resource_), m_sessionLock(owner_), m_surface(surface_), m_monitor(pMonitor_) {
+@@ -68,6 +69,15 @@
+             m_surface->enter(m_monitor.lock());
+ 
+         m_listeners.monitorMode = m_monitor->m_events.modeChanged.listen([this] { sendConfigure(); });
++
++        // A rule change that only turns the monitor goes through applyMonitorRuleSoft(),
++        // which gives it its new size without modeChanged. Follow the layout as well, or
++        // the lock surface keeps the size it was made with and is drawn stretched over
++        // the turned output until the session is unlocked.
++        m_listeners.monitorLayout = Event::bus()->m_events.monitor.layoutChanged.listen([this] {
++            if (m_monitor && m_monitor->m_size != m_configuredSize)
++                sendConfigure();
++        });
+     }
+ 
+     sendConfigure();
+@@ -88,6 +98,7 @@
+     }
+ 
+     const auto SERIAL = g_pSeatManager->nextSerial(g_pSeatManager->seatResourceForClient(m_resource->client()));
++    m_configuredSize  = m_monitor->m_size;
+     m_resource->sendConfigure(SERIAL, m_monitor->m_size.x, m_monitor->m_size.y);
+ }
+ 
+diff --git i/src/protocols/SessionLock.hpp w/src/protocols/SessionLock.hpp
+--- i/src/protocols/SessionLock.hpp
++++ w/src/protocols/SessionLock.hpp
+@@ -5,6 +5,7 @@
+ #include "WaylandProtocol.hpp"
+ #include "ext-session-lock-v1.hpp"
+ #include "../helpers/signal/Signal.hpp"
++#include "../helpers/math/Math.hpp"
+ 
+ class CSessionLock;
+ class CWLSurfaceResource;
+@@ -33,11 +34,13 @@
+ 
+     bool                         m_ackdConfigure = false;
+     bool                         m_committed     = false;
++    Vector2D                     m_configuredSize;
+ 
+     void                         sendConfigure();
+ 
+     struct {
+         CHyprSignalListener monitorMode;
++        CHyprSignalListener monitorLayout;
+         CHyprSignalListener surfaceCommit;
+         CHyprSignalListener surfaceDestroy;
+     } m_listeners;
