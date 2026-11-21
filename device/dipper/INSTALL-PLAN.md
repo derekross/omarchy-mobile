@@ -122,11 +122,11 @@ writer for first install. It must check exactly one attached serial,
 and every image checksum before its dry run. It must then show the exact
 `boot` and `userdata` writes, the userdata erase consequence, and the
 guarded-rescue recovery command before requiring the typed codename. Write
-`userdata` first, after verifying that the old ext4 root lacks the expected
-new root label,
-then write `boot`. The new initramfs must refuse the old label, so an
-interruption after the first write cannot start the old root with the new
-kernel. An interruption during either write leaves no assumed bootable
+`userdata` first, using the `omamobile-root` label from `tools/build-rootfs`,
+then write `boot`. Stop before writing if the old root already has that label.
+A cut-off between the writes leaves new `userdata` with the previous rescue
+in `boot`. The new initramfs must independently refuse any root without
+the expected label. An interruption during either write leaves no assumed bootable
 system; enter fastboot by buttons and RAM-boot the guarded rescue. Fastboot
 on this bootloader cannot read `boot` back. After fastboot confirms the write,
 RAM-boot the rescue, keep `boot` read-only there, hash the entire 64 MiB
@@ -170,8 +170,8 @@ commits. Check the Android v1 header, appended Dipper DTB, 64 MiB size limit,
 module release, root label, descriptor parity and the storage allowlist.
 Run descriptor-parity tests for `bin/omamobile`, boot-update and installer
 readers; dry-run fixtures for missing, duplicate and wrong-device partitions,
-and for a cut-off between the `userdata` and `boot` writes with the old root
-label;
+for a cut-off after `userdata` but before `boot` (the previous rescue remains
+in `boot`), and for refusal to mount an old root with a different label;
 bundle manifest and release-bundle checks; storage-guard tests for Dipper and
 existing A/B devices; and the full PR gate. Check the downstream desktop
 installer against the new manifest before publishing a release. Stop on any
