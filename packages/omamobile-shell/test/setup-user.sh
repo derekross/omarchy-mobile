@@ -452,7 +452,26 @@ grep -cx 'o.launch_on_start("squeekboard")' "$ho4/.config/hypr/autostart.lua" >/
 rmdir "$ho4/.config/hypr/autostart.lua.new"
 RUN_HOME=$ho4 run
 [[ $(grep -cxF "$osk_line" "$ho4/.config/hypr/autostart.lua") == 1 ]] || fail "the next login changes the line"
-pass "which keyboard: the session starts the owner's choice, an older start line is changed once (a linked file left as it is, an unwritable one tried again), Setup > Keyboard"
+# A start line the owner changed (here: one that logs squeekboard's output): left alone, and the setup
+# says once that the choice in Setup > Keyboard won't start at login with it. A file that starts no
+# keyboard at all gets no such line.
+ho5=$t/keyboard-own-line; mkdir -p "$ho5/.config/hypr" "$ho5/.config/omarchy/extensions" "$ho5/.local/state/omarchy/done"
+cp "$H"/.config/hypr/{looknfeel,monitors}.lua "$ho5/.config/hypr/"
+printf -- '-- autostart\no.launch_on_start([[sh -c '"'"'exec squeekboard >"$HOME/.cache/squeekboard.log" 2>&1'"'"']])\n' >"$ho5/.config/hypr/autostart.lua"
+touch "$ho5/.local/state/omarchy/done/omamobile-osk"
+before=$(sha256sum <"$ho5/.config/hypr/autostart.lua")
+RUN_HOME=$ho5 run
+[[ $(sha256sum <"$ho5/.config/hypr/autostart.lua") == "$before" ]] || fail "a start line the owner changed is left as it is"
+grep -c 'starts squeekboard with a line of its own, left as it is' "$t/out" >/dev/null || fail "the setup says that the owner's own start line keeps squeekboard"
+RUN_HOME=$ho5 run
+if grep -c 'starts squeekboard with a line of its own' "$t/out" >/dev/null; then fail "that is said once, not at every login"; fi
+ho6=$t/keyboard-none; mkdir -p "$ho6/.config/hypr" "$ho6/.config/omarchy/extensions" "$ho6/.local/state/omarchy/done"
+cp "$H"/.config/hypr/{looknfeel,monitors}.lua "$ho6/.config/hypr/"
+printf -- '-- autostart\n' >"$ho6/.config/hypr/autostart.lua"
+touch "$ho6/.local/state/omarchy/done/omamobile-osk"
+RUN_HOME=$ho6 run
+if grep -c 'starts squeekboard with a line of its own' "$t/out" >/dev/null; then fail "a file that starts no keyboard gets no line about one"; fi
+pass "which keyboard: the session starts the owner's choice, an older start line is changed once (a linked file left as it is, an unwritable one tried again, the owner's own line left and named), Setup > Keyboard"
 
 # A layout of the user's own stays theirs
 hk=$t/keyboard-own; mkdir -p "$hk/.config/hypr" "$hk/.config/omarchy/extensions" "$hk/.local/share/squeekboard/keyboards"
