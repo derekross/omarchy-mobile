@@ -20,8 +20,9 @@
 # the PIN pad (omamobile-keys wake, from here), and a lit screen never sleeps.
 # While something below refuses sleep and the screen stays dark, the refusal
 # is checked again every OMAMOBILE_SLEEP_RECHECK seconds (30); the polls in
-# between read the backlight only, so a refusal that lasts (a modem's
-# inhibitor) costs next to nothing, and its end is seen within that time.
+# between read only the backlight and the count of completed suspends, so a
+# refusal that lasts (a modem's inhibitor) costs next to nothing, its end is
+# seen within that time, and a resume logind didn't announce is seen at once.
 #
 # Never while:
 #   - the toggle is off, the screen is on, or the lock isn't secure;
@@ -134,6 +135,9 @@ refusal() {
 }
 
 count() { local v; v=$(cat "$sys/power/suspend_stats/$1" 2>/dev/null); echo "${v:-0}"; }
+# No suspend has completed since the watcher last looked (its last_ok), read
+# without starting a process: the quiet polls ask this.
+no_resume() { local v=; read -r v 2>/dev/null <"$sys/power/suspend_stats/success"; [[ ${v:-0} == "$last_ok" ]]; }
 
 wake_reason() {
   local irq name
@@ -221,8 +225,11 @@ watch() {
     now
     [[ -n ${OMAMOBILE_SLEEPD_STOP_AT:-} ]] && ((t >= OMAMOBILE_SLEEPD_STOP_AT)) && return 0
     # Sleep refused not long ago, the screen still dark, no power key and no
-    # resume since: nothing to check yet.
-    if [[ -n $refused_at ]] && ((!evt && t < refused_at + recheck)) && dark; then
+    # resume since: nothing to check yet. The resume is looked for twice: by
+    # logind's signal (evt) and in suspend_stats, since a raw freeze sends no
+    # signal and a power-key wake after one must light the PIN pad now, not
+    # at the next full check.
+    if [[ -n $refused_at ]] && ((!evt && t < refused_at + recheck)) && dark && no_resume; then
       pause "$poll"
       continue
     fi

@@ -26,7 +26,11 @@ fi
 if [[ -f $T/off_at ]] && (( $(cat "$T/clock") >= $(cat "$T/off_at") )); then rm -f "$T/off_at"; echo 4 >"$T/sys/class/backlight/panel/bl_power"; fi
 # "the screen lights up" at a given time; "the inhibitor is released" at a given time.
 if [[ -f $T/lit_at ]] && (( $(cat "$T/clock") >= $(cat "$T/lit_at") )); then rm -f "$T/lit_at"; echo 0 >"$T/sys/class/backlight/panel/bl_power"; echo true >"$T/dpms"; fi
-if [[ -f $T/release_at ]] && (( $(cat "$T/clock") >= $(cat "$T/release_at") )); then rm -f "$T/release_at"; : >"$T/inhibitors"; fi'
+if [[ -f $T/release_at ]] && (( $(cat "$T/clock") >= $(cat "$T/release_at") )); then rm -f "$T/release_at"; : >"$T/inhibitors"; fi
+# "a sleep logind never announced ends" at a given time (a raw freeze, as a sleep series does it): the
+# count of completed suspends goes up and the wake reason is set, with no signal to the watcher.
+if [[ -f $T/woke_at ]] && (( $(cat "$T/clock") >= $(cat "$T/woke_at") )); then rm -f "$T/woke_at"
+  echo $(( $(cat "$T/sys/power/suspend_stats/success") + 1 )) >"$T/sys/power/suspend_stats/success"; cat "$T/wake_irq" >"$T/sys/power/pm_wakeup_irq"; fi'
 fake omarchy-toggle-enabled '[[ $1 == omamobile-sleep && -f $T/toggle ]]'
 fake omarchy-hw-display 'echo panel'
 fake hyprctl '[[ $1 == monitors ]] && printf "[{\"dpmsStatus\": %s}]\n" "$(cat "$T/dpms")"'
@@ -60,7 +64,7 @@ reset() {
   printf ' 145:          3          0  s2mpg12-pmic   0 Edge      rtc-alarm0\n' >"$t/proc/interrupts"
   printf ' 111:         76          1  gpa10   0 Edge      KEY_POWER\n' >>"$t/proc/interrupts"
   printf ' 59:         12          0  gpa4   0 Edge      Power\n' >>"$t/proc/interrupts"
-  rm -f "$t/wake_irq" "$t/sys/power/pm_wakeup_irq" "$t/on_resume" "$t/now_at" "$t/off_at" "$t/lit_at" "$t/release_at" "$t/active" "$t/home/.local/state/omarchy/indicators/stay-awake"
+  rm -f "$t/wake_irq" "$t/sys/power/pm_wakeup_irq" "$t/on_resume" "$t/now_at" "$t/off_at" "$t/lit_at" "$t/release_at" "$t/woke_at" "$t/active" "$t/home/.local/state/omarchy/indicators/stay-awake"
   : >"$t/lockcalls"
 }
 # Watch until the fake clock reaches 1000 + $1.
@@ -109,7 +113,7 @@ refused "Stay awake" 'mkdir -p "$t/home/.local/state/omarchy/indicators"; touch 
 echo "ok - sleepd: never with the toggle off, the screen on, an insecure lock, SSH, an inhibitor, media or Stay awake"
 
 # A refusal that holds (the 9a's modem keeps its inhibitor for the whole boot): checked again every
-# OMAMOBILE_SLEEP_RECHECK seconds (30), with only the backlight read by the 2 s polls between. The
+# OMAMOBILE_SLEEP_RECHECK seconds (30), with only the backlight and suspend_stats read by the 2 s polls between. The
 # shell is asked for the lock's state at each full check, so those asks are counted.
 inh='["sleep","Omarchy Mobile modem","The modem is up","block",0,77]'
 reset; echo "$inh" >"$t/inhibitors"; watch 330
@@ -123,11 +127,17 @@ at=$(first_at); [[ -n $at ]] && ((at >= 1200 && at <= 1234)) || fail "held: a re
 # The screen lit and dark again between checks: seen at the next poll, and the wait after the screen goes off starts again
 reset; echo "$inh" >"$t/inhibitors"; echo 1100 >"$t/lit_at"; echo 1110 >"$t/off_at"; watch 200
 [[ $(grep -c 'not sleeping: a sleep inhibitor is held' "$t/out") == 2 ]] || fail "held: a lit screen between checks is seen ($(grep -c 'not sleeping' "$t/out") refusals logged)"
+# A power-key wake between checks from a sleep logind didn't announce (no signal, only suspend_stats):
+# the PIN pad is lit at the next poll, not at the next full check
+reset; echo "$inh" >"$t/inhibitors"; echo 111 >"$t/wake_irq"; echo 1040 >"$t/woke_at"; watch 100
+at=$(sed -n 's/^omamobile-keys wake at //p' "$t/log" | head -n 1)
+[[ -n $at ]] && ((at >= 1040 && at <= 1044)) || fail "held: a power-key wake after an unannounced sleep lights the PIN pad at the next poll (at ${at:-never})"
+grep -c 'resumed, woken by IRQ 111' "$t/out" >/dev/null || fail "held: the unannounced resume is logged"
 # No panel to read the backlight from: every poll is a full one, as before
 reset; echo "$inh" >"$t/inhibitors"; fake omarchy-hw-display 'true'; watch 120
 n=$(grep -c . "$t/lockcalls" || true); ((n >= 60)) || fail "held: with no panel known every poll checks in full ($n asks in 120 s)"
 fake omarchy-hw-display 'echo panel'
-echo "ok - sleepd: a refusal that holds is checked again every 30 s, the polls between start nothing; a release or a lit screen is still seen"
+echo "ok - sleepd: a refusal that holds is checked again every 30 s, the polls between only sleep; a release, a lit screen or an unannounced resume is still seen"
 
 # Delay-mode inhibitors (NetworkManager, the lock) and idle sinks don't count.
 reset
