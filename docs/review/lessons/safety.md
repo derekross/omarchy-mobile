@@ -3,6 +3,15 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1108. A stop rule that says "before the next boot, mask X" is walked for
+  the hang case, where nobody can type before that boot.** #929's section 6
+  lists "a reboot or a hang" among its stops and then prescribes a mask; that
+  works for the stages that run with the unit already masked, and not for the
+  one where the unit starts at boot. *Check:* for each stop condition that
+  includes a hang or a reset, name the stage in which the guarded unit is
+  boot-started, and ask what the following boot does there: a hang marker, or
+  the unit kept out of the boot for the first run. Extends L-830, L-1076 and
+  L-170. *From:* #929, round 65, 2026-11-21.
 - **L-1093. A plan that keeps the boot partition read-only on the phone is
   walked through a package update of the kernel.** #964's host-only boot
   writer leaves a pacman transaction able to replace the modules of the kernel

@@ -3,6 +3,37 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1111. A helper that replaces several "check, then read again" call sites
+  is reviewed as a per-caller table of what a failed read decided before and
+  after, and each caller gets two mutations: "ignores the result" and "goes on
+  after the helper fails".** #969's four callers each had a different old
+  shape (one with no check at all), and only the table showed that none got
+  weaker; the two mutations per caller showed that each is held by its own
+  test, not only the helper. *Check:* `git grep -n '<file>' <base> -- tools
+  bin` for the old readers, one table row each, then `sed` the caller's `||
+  die` into `|| var=` and its match into `if false`, and read the `not ok`
+  line for that caller's name. Extends L-1097 and L-742. *From:* #969, round
+  65, 2026-11-21.
+- **L-1110. A pipe from a producer into a remote "unpack, then swap" is asked
+  what the producer writes when it fails.** GNU tar exits 1 or 2 on a source
+  file it can't read and still closes a valid, shorter archive, so the
+  consumer's own exit status says nothing, and `pipefail` reports the failure
+  only after the remote swap has happened: `tools/repo-push` would have
+  replaced the phone's repository with a partial one and deleted the old copy.
+  *Check:* `git grep -n 'tar c.* | .*ssh\|tar c.* | tools/phone-ssh' -- tools
+  bin` for other pushes of this shape, and for each ask whether the receiving
+  side replaces something on success; the fix is to finish and check the
+  archive before the link is opened. Extends L-15. *From:* #965, round 65,
+  2026-11-21.
+- **L-1109. A measuring tool that takes its sleep inhibitor after its first
+  readings measures whatever auto-sleep leaves.** #953's first run was
+  suspended for four seconds during its first part and lost its Wi-Fi line to
+  the sleep hook; the author found it in the journal only because we asked why
+  one line was empty. *Check:* in any on-phone measuring script, find the line
+  that takes the inhibitor and list every reading above it; ask for a suspend
+  count over the whole run in the output (`/sys/power/suspend_stats/success`
+  at start and end). Extends L-1013 and L-725. *From:* #953, rounds 63 and 65,
+  2026-11-21.
 - **L-1097. A hardening of one reader of a checked file is followed by a grep
   for the other readers of the same file after the same check.** #960 closed
   `fetch-published`'s read-after-check gap on `omamobile-revoked`;
@@ -384,11 +415,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   without its record), say what clears the flag in each, and run the PR's
   fixture through the branch that doesn't. Extends L-614 and L-502. *From:*
   #837, round 61, 2026-11-18.
-- **L-897. `| head -1` under `pipefail` is the `grep -q` gotcha with another
-  reader, and it only shows with a `head` that writes twice.** uutils 0.10.0's
-  `head -c` splices again at end of file; GNU's doesn't, so CI and laptops
-  never saw it and the build machine did, about once in 3,000 runs. *Check:*
-  `git grep -n '| *head -n\?1\b'` in scripts under `set -o pipefail`, outside
-  failure messages; test such a line with a stand-in writer that writes once
-  more after a delay. Extends L-15, L-511 and L-765. *From:* #884 (after
-  #842), round 61, 2026-11-18.
