@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* Pixel 9 Pro XL ABL board selector. Hardware belongs in the kernel DTS. */
+/dts-v1/;
+/plugin/;
+
+/ {
+	board_id = <0x60806>;
+	board_rev = <0x10000>;
+
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+		};
+	};
+};
