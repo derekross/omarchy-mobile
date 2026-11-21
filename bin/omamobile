@@ -87,8 +87,8 @@ Usage: [DEVICE=<codename>] omamobile <command>
                    and jump into them (no reboot or fastboot). Device tree changes
                    still need: omamobile images, then flash the image holding the
                    DTB (vendor_kernel_boot, or vendor_boot without it)
-  fastboot         Get the phone into fastboot without buttons (adb, reboot-to,
-                   or crash until ABL falls back to stock Android on slot A)
+  fastboot         Get the phone into fastboot without buttons (adb or reboot-to;
+                   fallback behavior follows the device's boot method)
   flash            Flash the experiment images to slot B and boot them
                    (--from-slot-a: a development phone that fell back to stock on slot A)
   push             Write the images into slot B from the running phone over SSH,
@@ -126,10 +126,15 @@ load_device() {
     fi
   done < "$file"
   case $DEV_BOOT_METHOD in
-    android-v4|android-v0|qcom-abl) ;;
-    *) die "$file: unsupported BOOT_METHOD=$DEV_BOOT_METHOD; this command supports android-v4, android-v0 and qcom-abl" ;;
+    android-v4|android-v0|qcom-abl|ram-only) ;;
+    *) die "$file: unsupported BOOT_METHOD=$DEV_BOOT_METHOD; this command supports android-v4, android-v0, qcom-abl and ram-only" ;;
   esac
   [[ $DEV_CODENAME == "$DEVICE" ]] || die "$file: CODENAME=$DEV_CODENAME, expected $DEVICE"
+  if [[ $DEV_BOOT_METHOD == ram-only ]]; then
+    [[ ${DEV_BOOT_IMAGES+x} && -z $DEV_BOOT_IMAGES && ${DEV_UFS_RW+x} && -z $DEV_UFS_RW ]] \
+      || die "$file: ram-only requires empty BOOT_IMAGES and UFS_RW"
+    return 0
+  fi
   # Safety: the guard's allowlist may name slot B's boot images and userdata
   # only, must hold userdata, and every boot image we write must be on it.
   # initramfs packs this list into the image, and the init checks it again.
@@ -618,6 +623,7 @@ initramfs_config() {
 cmd_initramfs_config() {
   [[ -n ${1:-} ]] || die "usage: omamobile initramfs-config <dir>"
   load_device
+  [[ $DEV_BOOT_METHOD != ram-only ]] || die "initramfs-config refuses BOOT_METHOD=ram-only"
   initramfs_config "$1"
   ls -l "$1"
 }
@@ -668,6 +674,7 @@ cmd_initramfs() {
   old_umask=$(umask)
   umask 022
   load_device
+  [[ $DEV_BOOT_METHOD != ram-only ]] || die "initramfs refuses BOOT_METHOD=ram-only"
   # A leading slash is repo-root relative, so devices share initramfs/init.
   # Anything else is relative to device/<codename>/.
   local init
@@ -884,6 +891,7 @@ cmd_images() {
   # Pixels: the pinned mkbootimg or the checkout's (MKBOOTIMG_DIR).
   # Tree-local mkbootimg is for qcom-abl.
   local tools="$MKBOOTIMG_DIR"
+  [[ $DEV_BOOT_METHOD != ram-only ]] || die "images refuses BOOT_METHOD=ram-only"
   if [[ $DEV_BOOT_METHOD == qcom-abl ]]; then
     tools="$ROOT/system/tools/mkbootimg"
     [[ -f $tools/mkbootimg.py ]] || tools="$SRC_DIR/system/tools/mkbootimg"
@@ -1223,6 +1231,8 @@ cmd_fastboot() {
       "$ssh" '(sleep 1; PATH=/usr/local/bin:$PATH reboot-to bootloader) >/dev/null 2>&1 &' || true
       sleep 25
       if ! in_fastboot && "$ssh" true 2>/dev/null; then
+        [[ $DEV_BOOT_METHOD != ram-only ]] \
+          || die "reboot-to bootloader did not reach fastboot; use the buttons (see device/$DEVICE/BRINGUP-M1.md)"
         say "Bootloader ignored the reason; crashing so it falls back to slot A"
         "$ssh" '(sleep 1; echo c > /proc/sysrq-trigger) >/dev/null 2>&1 &' || true
       fi
@@ -1247,6 +1257,7 @@ cmd_flash() {
   esac
   (($# <= 1)) || die "usage: omamobile flash [--from-slot-a]"
   load_device
+  [[ $DEV_BOOT_METHOD != ram-only ]] || die "flash refuses BOOT_METHOD=ram-only (no persistent install path)"
   # Qualcomm ABL keeps slot flags in the GPT. A fastboot set_active can clear
   # successful and refill retries; the bit-54 mark has no §3.1 entry yet.
   # Refuse here; day-2 updates use push once that path is viable, and the
@@ -1311,6 +1322,7 @@ WARN
 cmd_push() {
   local img="$KERNEL_OUT/images" ssh="$ROOT/tools/phone-ssh" p dev want got rel
   load_device
+  [[ $DEV_BOOT_METHOD != ram-only ]] || die "push refuses BOOT_METHOD=ram-only (no persistent install path)"
   # Same class of refusal as flash: boot_b is on sde here, and there is no
   # in-tree day-2 rewrite path for qcom-abl yet. Refuse before any phone I/O
   # (modules-push would otherwise rewrite the running root's modules).
