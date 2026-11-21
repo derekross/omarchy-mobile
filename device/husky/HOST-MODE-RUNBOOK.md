@@ -1,4 +1,6 @@
 <!-- SPDX-License-Identifier: MIT -->
+**Pixel 8 Pro (husky, `google,zuma-husky`) only.** Nothing here applies to the Pixel 8a or any other board; `tools/husky-deadman-phone` refuses `b4-tcpm`, `b5-host`, their undos and `baseline` anywhere else.
+
 # Pixel 8 Pro (husky): sourcing 5 V on the USB-C port from userspace, stage (a) runbook
 
 Last updated: 2026-11-02 (second revision, after the maintainer's review of the draft). Draft, for review. **Nothing in this document runs until the maintainer says go.** The one sourcing run that has happened (2026-11-01, before the review, over Wi-Fi with nothing attached; the undo brought the port to 0 V within a second) is described in [BATTERY-NOTES.md](BATTERY-NOTES.md) and in the pull request; it used an earlier version of the tool and is not a result of this runbook.

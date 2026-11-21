@@ -289,6 +289,8 @@ chg_vs_baseline() {
 # in $BASE for this boot (boot_id). No write anywhere.
 baseline() {
   local n r v rc=0
+  [[ " $STEPS " == *" b5-host "* ]] ||
+    { echo "refused: baseline is for b5-host, not a step the ${BOARD:-unknown board} may run (${STEPS:-none})"; return 1; }
   [[ -n "$BUS" ]] || { echo "refused: no i2c bus for 10cb0000.i2c"; return 1; }
   [[ $(udc_state) != configured ]] || { echo "refused: USB gadget is configured, the cable is in"; return 1; }
   vbus_valid && { echo "refused: charger CHG_DETAILS_00 $(rd $CHG 0xb5) says CHGIN valid: a cable is in"; return 1; }
@@ -1236,7 +1238,14 @@ mkdir -p $D
 case "$cmd" in
   run) run "$step" ;;
   confirm) touch $D/confirm; echo "confirmed $(date +%T)" ;;
-  undo) revert "$step" ;;
+  undo)
+    # b4-tcpm and b5-host write the TCPC, GPIO5 and the USB switch: only on a
+    # board whose step list has them (the 8a's wiring for those lines is unread)
+    case "$step" in
+      b4-tcpm|b5-host) [[ " $STEPS " == *" $step "* ]] ||
+        { echo "refused: undo $step: not a step the ${BOARD:-unknown board} may run (${STEPS:-none})"; exit 1; } ;;
+    esac
+    revert "$step" ;;
   dump) dump ;;
   status) cat $D/result 2>/dev/null || echo none ;;
   baseline) baseline ;;

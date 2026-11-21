@@ -415,3 +415,22 @@ wait $pid || true
 r=$(result); [[ $r == "tripped: CC_STATUS"* ]] || { cat "$t/run.out"; tail -20 $LOG; fail "CC trip (got '$r')"; }
 [[ $(reg 0x25 0x92) == 0x00 && $(cat "$HDT_STATE/gpio5") == 0 && ! -e $MARK && ! -e $UNIT ]] || fail "state after the CC trip"
 pass "a partner Rp appearing mid-soak trips the undo, which disarms the unit"
+
+# ---- 11. the Pixel 8a (google,zuma-akita): b4-tcpm, b5-host, their undos and baseline are refused, nothing written ----
+printf 'google,zuma-akita\0google,zuma\0' > /proc/device-tree/compatible
+rm -f $D/result; : > "$HDT_STATE/writes"
+"$tool" run b5-host --meter > "$t/a.out" 2>&1 || true
+[[ $(result) == "refused: step b5-host is not one the Pixel 8a may run"* ]] || { cat "$t/a.out"; fail "8a run b5-host refused (got '$(result)')"; }
+rm -f $D/result
+"$tool" run b4-tcpm > "$t/a.out" 2>&1 || true
+[[ $(result) == "refused: step b4-tcpm is not one the Pixel 8a may run"* ]] || { cat "$t/a.out"; fail "8a run b4-tcpm refused (got '$(result)')"; }
+for s in b5-host b4-tcpm; do
+  "$tool" undo $s > "$t/a.out" 2>&1 && fail "8a undo $s exited 0"
+  grep -q "^refused: undo $s: not a step the Pixel 8a may run" "$t/a.out" || { cat "$t/a.out"; fail "8a undo $s refused"; }
+done
+"$tool" baseline > "$t/a.out" 2>&1 && fail "8a baseline exited 0"
+grep -q '^refused: baseline is for b5-host' "$t/a.out" || { cat "$t/a.out"; fail "8a baseline refused"; }
+[[ ! -s "$HDT_STATE/writes" ]] || fail "the 8a refusals wrote: $(cat "$HDT_STATE/writes")"
+[[ ! -e $UNIT && ! -e $MARK ]] || fail "the 8a refusals armed the undo unit"
+printf 'google,zuma-husky\0google,zuma\0' > /proc/device-tree/compatible
+pass "on the Pixel 8a, run b5-host --meter, run b4-tcpm, both undos and baseline are refused and nothing is written"
