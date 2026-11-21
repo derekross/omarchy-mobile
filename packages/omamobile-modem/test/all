@@ -36,6 +36,34 @@ out=$(bash -c '
 [[ $out == alive ]] || fail "a daemon exiting 3 leaves spawn_optional's job alive (got: $out)"
 pass "spawn_optional survives a failing daemon"
 
+# gnssd's RIL library: the stub goes over it read-only when both exist, and
+# nothing is mounted (or written) otherwise.
+sitril=$(sed -n '/^SITRIL_GPS=/p; /^SITRIL_GPS_STUB=/p; /^modem_gnss_sitril() {$/,/^}$/p' profiles/modem.conf)
+[[ $sitril == *modem_gnss_sitril* ]] || fail "modem_gnss_sitril found in modem.conf"
+st=$(mktemp -d)
+mkdir -p "$st/root/vendor/lib64" "$st/stubs"
+run_sitril() {
+  bash -c '
+    set -euo pipefail
+    ROOT=$1/root STUBS=$1/stubs
+    say() { echo "say: $*"; }
+    mount() { echo "mount $*"; }
+    '"$sitril"'
+    modem_gnss_sitril
+  ' _ "$st"
+}
+[[ -z $(run_sitril) ]] || fail "no libsitril-gps.so in the image: nothing mounted"
+echo real > "$st/root/vendor/lib64/libsitril-gps.so"
+[[ $(run_sitril) == "say: no "*"(omamobile-gnss)"* ]] || fail "no stub: a note and no mount"
+echo stub > "$st/stubs/libomamobile-sitril-gps.so"
+out=$(run_sitril)
+[[ $out == "mount --bind $st/stubs/libomamobile-sitril-gps.so $st/root/vendor/lib64/libsitril-gps.so"$'\n'"mount -o remount,bind,ro $st/root/vendor/lib64/libsitril-gps.so" ]] ||
+  fail "the stub is bound read-only over libsitril-gps.so (got: $out)"
+[[ $(cat "$st/root/vendor/lib64/libsitril-gps.so") == real ]] || fail "the image's library is left as it was"
+rm -rf "$st"
+grep -q '^    modem_gnss_sitril$' profiles/modem.conf || fail "profile_setup binds the stub with the GNSS devices"
+pass "gnssd gets the SIT RIL GPS stub instead of the binder library"
+
 # rfsd's job: an exit is a crash (the supervisor stops the profile) unless
 # this invocation's stop intent is in place; then it stays open for systemd.
 python3 test/rfsd-lifecycle.py || fail "rfsd's job through an orderly stop"
@@ -149,9 +177,12 @@ grep -qx 'persist.vendor.modem.efs.clear.action=none' modem/props.conf ||
   fail "efs.clear.action is pinned to none (empty clears NV)"
 grep -qx 'vendor.modem.bin.path=/mnt/vendor/modem_img/images/default/modem.bin' modem/props.conf ||
   fail "rfsd reads its TOC from the firmware file (vendor.modem.bin.path)"
+# Only what systemd-analyze says about the staged unit counts: it also loads the
+# host's own units, and a warning about one of those (they begin with the host's
+# unit path) failed the nightly publish on the build host on 2026-11-18.
 if command -v systemd-analyze >/dev/null; then
   systemd-analyze verify --man=no "$stage"/usr/lib/systemd/system/omamobile-modem{.service,-inhibit.service,-boot.target} 2>&1 |
-    grep -v -e 'not executable' -e 'No such file' -e 'omamobile-aoc.service' -e 'omamobile-audio.service' \
+    grep -v -e '^/usr/lib/systemd/' -e '^/lib/systemd/' -e '^/etc/systemd/' -e '^/run/systemd/' -e 'not executable' -e 'No such file' -e 'omamobile-aoc.service' -e 'omamobile-audio.service' \
       -e 'omamobile-sitd.service' -e 'omamobile-sit-data.service' -e 'omamobile-mmd.service' -e '^$' &&
     fail "unit verify" || true
 fi
@@ -216,7 +247,7 @@ pass "a refused start leaves the persistent marker as it was"
 # (it needs CPIF's ports) with the latch removed on a refusal, READY after
 # the check, and the profile last.
 s=lib/omamobile-modem-start
-lineof() { grep -n "$1" $s | head -1 | cut -d: -f1; }
+lineof() { grep -n "$1" $s | sed -n 1p | cut -d: -f1; }
 l_prov_refuse=$(lineof "isn't provisioned"); l_mark_refuse=$(lineof 'never reached ONLINE; skipping'); l_up_refuse=$(lineof 'refuse_unclean$')
 l_inhibit=$(lineof 'no sleep inhibitor held'); l_latch=$(lineof '> "\$MARK"'); l_latch_sync=$(awk -v n="$l_latch" 'NR == n + 1' $s)
 l_modprobe=$(lineof '^[[:space:]]*modprobe '); l_check=$(lineof 'omamobile-vendor-chroot" modem check'); l_rm=$(lineof '^  rm -f "\$MARK"')
@@ -502,7 +533,7 @@ grep -qx 'DefaultDependencies=no' systemd/omamobile-modem-boot.target || fail "t
 grep -qx 'WantedBy=multi-user.target' systemd/omamobile-modem-boot.target || fail "the boot target is enabled under multi-user.target"
 grep -q 'systemctl mask omamobile-modem-boot.target' systemd/omamobile-modem-boot.target || fail "the target says how to keep the stack off (a vendor link survives disable)"
 ! grep -q '^Requires=' systemd/omamobile-modem-boot.target || fail "the boot target only wants (a missing unit is fine)"
-[[ -z $(find "$stage" -name '*.wants' -o -name '*.requires' | head -1) ]] || fail "no wants or requires link is shipped: $(find "$stage" -name '*.wants' -o -name '*.requires')"
+[[ -z $(find "$stage" -name '*.wants' -o -name '*.requires' | sed -n 1p) ]] || fail "no wants or requires link is shipped: $(find "$stage" -name '*.wants' -o -name '*.requires')"
 ! grep -rq 'systemctl enable' install || fail "the install script enables nothing"
 pass "the inhibitor, the modem unit and the target (enabled by the device package, not here)"
 

@@ -205,9 +205,12 @@ done
 # on by default, with this runner: the package itself enables the unit
 [[ $(readlink "$stage/usr/lib/systemd/system/multi-user.target.wants/omamobile-fp.service") == ../omamobile-fp.service ]] ||
   fail "the package enables omamobile-fp (vendor wants link)"
+# Only what systemd-analyze says about the staged unit counts: it also loads the
+# host's own units, and a warning about one of those (they begin with the host's
+# unit path) failed the nightly publish on the build host on 2026-11-18.
 if command -v systemd-analyze >/dev/null; then
   out=$(systemd-analyze verify --man=no "$stage/usr/lib/systemd/system/omamobile-fp.service" 2>&1 || true)
-  out=$(grep -v -e 'not executable' -e 'No such file' -e 'is not a regular file' -e '^$' <<<"$out" || true)
+  out=$(grep -v -e '^/usr/lib/systemd/' -e '^/lib/systemd/' -e '^/etc/systemd/' -e '^/run/systemd/' -e 'not executable' -e 'No such file' -e 'is not a regular file' -e '^$' <<<"$out" || true)
   [[ -z $out ]] || fail "unit: $out"
 fi
 echo "omamobile-fingerprint: ok"

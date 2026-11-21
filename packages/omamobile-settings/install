@@ -11,3 +11,7 @@ install -Dm644 "$source_dir/org.omamobile.Settings.desktop" "$dest/usr/share/app
 install -Dm644 "$source_dir/org.omamobile.Settings.svg" "$dest/usr/share/icons/hicolor/scalable/apps/org.omamobile.Settings.svg"
 install -Dm644 "$source_dir/LICENSE" "$dest/usr/share/licenses/omamobile-settings/LICENSE"
 install -Dm755 "$source_dir/backends/display.sh" "$dest/usr/lib/omamobile-settings/backends/display.sh"
+install -Dm755 "$source_dir/backends/charge.sh" "$dest/usr/lib/omamobile-settings/backends/charge.sh"
+install -Dm755 "$source_dir/libexec/charge-limit" "$dest/usr/lib/omamobile-settings/charge-limit"
+install -Dm644 "$source_dir/vendor/systemd/system/omamobile-charge-limit@.service" "$dest/usr/lib/systemd/system/omamobile-charge-limit@.service"
+install -Dm644 "$source_dir/vendor/polkit/50-omamobile-charge-limit.rules" "$dest/usr/share/polkit-1/rules.d/50-omamobile-charge-limit.rules"
