@@ -331,7 +331,7 @@ mkroot() { # R [slot the phone runs from, writable to the guard: b]
     echo $((s / 512)) > "$R/sys/block/sda/sda$i/size"
     echo '0 0 0 0 0 0 0 0 0 0 0' > "$R/sys/block/sda/sda$i/stat"
     # Old contents: every partition distinct, so any stray write shows
-    { printf "OLD %s\n" "$p"; head -c $((s)) /dev/zero | tr "\0" o; } | head -c $((s)) > "$R/dev/sda$i"
+    { printf "OLD %s\n" "$p"; head -c $((s)) /dev/zero | tr "\0" o; } | { head -c $((s)); cat >/dev/null; } > "$R/dev/sda$i"
   done
   mkdir -p "$R/sys/block/sda/queue" && echo 1 > "$R/sys/block/sda/queue/iostats"
   printf 'MAJOR=8\nPARTNAME=bootloader_b\n' > "$R/sys/block/sdb/sdb1/uevent"; echo 1 > "$R/sys/block/sdb/sdb1/ro"; echo 128 > "$R/sys/block/sdb/sdb1/size"
@@ -773,7 +773,7 @@ keep=$(cd "$S/previous" && sha256sum boot.img)
 addrel "$R" 7.3.0-rc6-omamobile-00480-geeeeeeeeeeee
 run hook || { cat "$t/out"; fail "SLOT=a: a write over a slot-B previous/"; }
 grep -c 'moved aside to' "$t/out" >/dev/null || { cat "$t/out"; fail "it says the slot-B set was moved aside"; }
-aside=$(ls -d "$S"/previous.slot-b-* | head -1)
+aside=$(ls -d "$S"/previous.slot-b-* | sed -n 1p)
 [[ -n $aside && $(cd "$aside" && sha256sum boot.img) == "$keep" && $(cat "$S/previous/SLOT") == a ]] \
   || fail "the slot-B set is kept aside intact, previous/ is slot A's"
 echo a > "$S/previous/SLOT"

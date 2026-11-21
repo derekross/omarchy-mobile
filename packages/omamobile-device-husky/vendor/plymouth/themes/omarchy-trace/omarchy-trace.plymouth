@@ -1,0 +1,9 @@
+[Plymouth Theme]
+Name=Omarchy Trace
+Description=Omarchy's logo traced in outline, then filled, on the Omarchy background.
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/omarchy-trace
+ScriptFile=/usr/share/plymouth/themes/omarchy-trace/omarchy-trace.script
+ConsoleLogBackgroundColor=0x1a1b26

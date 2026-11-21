@@ -43,7 +43,12 @@ Item {
   signal reply(string text)
   signal fold()
 
-  readonly property bool ringing: mode === "incoming"
+  // Only while the card is shown. Call.qml builds it whether or not a call
+  // is up, hidden and with its mode at "incoming", and the rings' and the
+  // wiggle's endless animations ran unseen all the time: they kept the
+  // shell's animation timer ticking at the panel's rate (about 120 wake-ups
+  // a second on a 120 Hz panel), screen off too.
+  readonly property bool ringing: mode === "incoming" && visible
   readonly property color foreground: Commons.Color.foreground
   readonly property color accent: Commons.Color.accent
   // Answer and end are the colours every phone uses for them; the rest

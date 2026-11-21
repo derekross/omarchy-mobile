@@ -62,6 +62,72 @@ Priorities: **P1** broken, unsafe, or a dead end on a phone; **P2** noticeably a
 - **3.6 Haptics (P3):** none in the shell. A small helper for long-press, the switcher hold and the answer threshold (cs40l26 exists). It buzzes: announce before testing.
 - **3.7 Polish (P3):** QS edit mode's "−" badges and Reset confirm; Wi-Fi/Bluetooth Forget confirm or undo; "Added to home" feedback after a drawer long-press; the missing-app tile says "Not installed" instead of its raw id; switcher cards show the app's name, not its id (0.2.43: the desktop entry's name, web apps included, centred over a card that snaps to the centre); OWL slider drags only on their own axis; a fade on the drawer's clipped last row; a safe-area token for the rounded corners; a pull-down strip over fullscreen apps; a Gestures table in the shell README.
 
+## Shared Chromium and Grok Bot fitting revision, 2026-11-10 (3.1)
+
+The combined package passed the Pixel 6a checks recorded below. Both apps
+share the established
+578 px layout target and internal geometry detection, including simpledrm.
+The 7 Pro's 480 logical px retains 0.83, the 9a's 405 gets 0.70, and the
+6a's 360 gets 0.62 for a fresh default. The owner's custom 0.70 and site
+zoom stay unchanged. Historical setup markers preserve deleted flags;
+defaults and the exact generated-scale migration run once. Chrome is deferred
+until the launcher prerequisite is released. The maintainer assigns the
+package version at merge.
+
+Geometry-free Chromium defaults run even before panel geometry is available;
+only the scale waits. A separate defaults marker preserves removals before
+the phone bar retries the helper at shell start with live monitor geometry,
+including computed/auto Lua scales. A failed helper never aborts user setup. Fresh defaults deliberately use a generic Android mobile user agent without a device model; existing user-agent choices are preserved.
+
+November 14 parser follow-up: an unquoted app URL fragment must not hide
+later custom scale or user-agent flags. Comment recognition now follows
+unquoted token boundaries; the new preservation regression fails with the
+previous parser and passes with the correction. This edge-case correction
+has offline test evidence only and was not in the historical package below.
+
+Runbook (low risk, userspace only):
+
+1. Run the shell package suite and policy gate. Expect no failures; stop on
+   any new failure. Save the installed package, both apps' flags, all
+   `omamobile-chromium-*`, `omamobile-grok-bot-fit` and
+   `omamobile-browser-fit-*` and `omamobile-browser-defaults-*` markers, and the
+   user's shell profile/plugins.
+2. Announce the package installation and browser restart. Install the full
+   candidate package. Run user setup and inspect flags: custom 0.70 and UA/IME
+   removals must survive; fresh scratch defaults at 360 px must be 0.62 for
+   both apps. Stop and restore if a user override changes.
+3. Reopen through normal desktop/browser and web-app entry points. Expect a
+   complete UA as one argument, working keyboard input, and equal viewport,
+   client and scroll widths on the diagnostic page. Check Gmail's saved zoom
+   and the personal transparent clock. Stop on overflow or lost settings.
+4. Rollback: restore the prior package, flags, done markers and shell profile
+   and plugins, restart the shell if needed and reopen the apps normally.
+
+### Pixel 6a verification, 2026-11-11
+
+The exact tested combined package is `omamobile-shell 0.2.119-1`, integration
+[`83326ed6d09684ae80f38c9360e8c4e864d32614`](https://github.com/latentoperator/omarchy-mobile/commit/83326ed6d09684ae80f38c9360e8c4e864d32614) on the fork's `bringup/bluejay-userspace-tested-20261111` branch, SHA-256
+`02e0acadd2568bf167946a87c740626fffb59068918271bdb2026fac799e0270`, on
+`7.3.0-rc6-omamobile-bluejay-input-gated0`. Installation and cold shell restart
+were performed while unlocked. All six required phone-smoke checks passed;
+package verification found 370 files and none altered.
+
+The installed helper wrote UA/IME/first-run defaults in an isolated home
+without geometry, then obtained actual live monitor geometry for a computed
+Lua scale and fitted both apps to 0.62. Removing UA/IME flags before that retry
+left them removed. Normal Chromium launch with an isolated profile and the
+owner's existing 0.70 gave equal viewport/client/scroll widths of 515 and a
+complete mobile UA. Personal browser flags, saved Chrome zoom and the clock
+were preserved. Only main's expected remote-session disable was added to the
+shell profile. Temporary fixtures were removed and the phone returned home.
+
+Policy, the complete combined shell suite and independent review passed;
+both published UX heads passed repository and every-package CI. These runtime
+results qualify the exact combined package above, not a later kernel or an
+unrelated subsequently merged shell change. The maintainer's existing/fresh-user 7 Pro checks passed on November 12; on November 15 the 9a owner ran this head's helper in a live session: Chromium's and Grok Bot's generated 0.83 lines became 0.70 once, and a second run left both files unchanged.
+No kernel or boot image was changed for this userspace verification.
+
+
 ## Omarchy patches this needs (upstreamable)
 
 1. Notifications: swipe to dismiss and a touch close button (1.1). Patch 0017, omamobile-omarchy 0.1.10 (built and tested offline, not yet checked on the phone). The shade under quick settings lists the toasts and history, and a sideways swipe on a row forgets that one notification through the service (patch 0019, omamobile-omarchy 0.1.11, omamobile-shell 0.2.28; offline as above).

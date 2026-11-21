@@ -10,7 +10,14 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
 [[ -f out/repo/aarch64/omamobile.db ]] || { echo "Run tools/build-packages (or tools/repo-build) first" >&2; exit 1; }
-tar cf - -C out/repo aarch64 | tools/phone-ssh '
+tmp=$(mktemp -d out/.repo-push.XXXXXX)
+trap 'rm -rf -- "$tmp"' EXIT
+tar cf "$tmp/repo.tar" -C out/repo aarch64 || {
+  rc=$?
+  echo "repo-push: failed to archive out/repo/aarch64 (tar exited $rc); phone repository left unchanged" >&2
+  exit "$rc"
+}
+tools/phone-ssh '
   set -e
   rm -rf /var/lib/omamobile/repo.new && mkdir -p /var/lib/omamobile/repo.new
   tar xf - -C /var/lib/omamobile/repo.new --no-same-owner
@@ -21,4 +28,4 @@ tar cf - -C out/repo aarch64 | tools/phone-ssh '
   ls /var/lib/omamobile/repo/aarch64 | grep -c "pkg.tar.*[^g]$"
   grep -qx "Server = file:///var/lib/omamobile/repo/\$arch" /etc/pacman.d/omamobile-mirrorlist ||
     echo "note: this phone does not follow the local channel, so pacman will not read what was pushed;" \
-         "switch with: sudo omamobile-update channel local" >&2'
+         "switch with: sudo omamobile-update channel local" >&2' < "$tmp/repo.tar"

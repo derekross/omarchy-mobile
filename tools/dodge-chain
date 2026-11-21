@@ -223,8 +223,8 @@ cmd_pack() {
       2>/dev/null || true
   done
   local x="$work/x" lzma zstd
-  lzma=$(find "$x/usr/lib" -name "liblzma.so.5.*" -type f | head -1)
-  zstd=$(find "$x/usr/lib" -name "libzstd.so.1.*" -type f | head -1)
+  lzma=$(find "$x/usr/lib" -name "liblzma.so.5.*" -type f | sed -n 1p)
+  zstd=$(find "$x/usr/lib" -name "libzstd.so.1.*" -type f | sed -n 1p)
   [[ -x $x/bin/busybox.static && -x $x/usr/sbin/kexec && -f $lzma && -f $zstd ]] \
     || die "Alpine packages incomplete under $x"
   printf '%s\n' "$STAGE2_CMDLINE" > "$work/cmdline"
