@@ -258,7 +258,10 @@ with open(sys.argv[1], "r+b") as f:
     f.seek(lba * 4096); f.write(h)
 EOF
 }
-flip() { printf '\xff' | dd of="$t/disk.img" bs=1 seek="$1" count=1 conv=notrunc status=none; }
+# Inverts the byte: a fixed 0xff changed nothing when the disk GUID's random byte was already 0xff (one run in 256)
+flip() { /usr/bin/python3 -c 'import sys
+with open(sys.argv[1], "r+b") as f:
+    o = int(sys.argv[2]); f.seek(o); b = f.read(1)[0]; f.seek(o); f.write(bytes([b ^ 0xff]))' "$t/disk.img" "$1"; }
 refuses() { mark > "$t/out" 2>&1 && fail "takes $2"; grep -q "$1" "$t/out" || { cat "$t/out"; fail "$2 refused for the wrong reason"; }; cp "$t/disk.orig" "$t/disk.img"; }
 cp "$t/disk.orig" "$t/disk.img"
 hdr_set "$a" 32 $((d - 1)); refuses "headers do not describe each other" "a primary header pointing elsewhere"
