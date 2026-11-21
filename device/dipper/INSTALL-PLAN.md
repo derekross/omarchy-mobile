@@ -55,9 +55,15 @@ The existing `BOOT_METHOD` describes how a boot image is built. Dipper's
 builder emits Android boot header v1 with its DTB appended to the kernel;
 `android-v0` and `qcom-abl` describe different layouts. Add an `android-v1`
 image method for that format and an independent `INSTALL_SLOT=single` target
-for installation. Neither value exists in the descriptor yet. Keep the
-published Dipper descriptor `BOOT_METHOD=ram-only` until the shared path is
-implemented and reviewed.
+for installation. Neither value exists in the descriptor yet. `INSTALL_SLOT`
+already has `active` for manifest format 2; do not overload that contract for
+Dipper. The proposed single-target bundle is format 3, with `install.slot` set
+to `single`, direct writes for `boot` and `userdata`, no accepted/current-slot
+list, no `set-active`, and a storage-guard entry for the single boot image and
+`userdata`. The external `omamobile-installer` consumer must implement this
+format before any format-3 bundle is published, and must refuse it until then.
+Keep the published Dipper descriptor `BOOT_METHOD=ram-only` until the shared
+path is implemented and reviewed.
 
 For a persistent Dipper descriptor, allow exactly `BOOT_IMAGES="boot"` and
 `UFS_RW="boot userdata"`; reject every other unsuffixed partition. `boot` is
