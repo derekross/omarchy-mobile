@@ -343,3 +343,32 @@ release, boot-image hash and kernel source revision for this console session
 were not retained. The available contemporaneous smoke summary says the GPU
 render node and display passed, while the session check reported Hyprland and
 the shell were not running. Do not describe this as a Hyprland renderer test.
+
+## 2026-11-20 — exact shared Mesa archive repeat
+
+Repeated a guarded RAM rescue/chroot test using the exact shared Mesa build
+archive with SHA-256
+`774f3b799c6e0aea91f61fea2b7991af742e0a6e4fc9511491dba1b04219872b`.
+The hash was checked on the phone before interpreting the result. Kernel
+source commit was `f61e96519032e385a04ca0688a068ca6dbc56d63`, reporting release
+`7.3.0-rc6-omamobile-push1-gf61e96519032`; boot image SHA-256 was
+`022b935a0b49b703e964cbfb286805ca54a38cd9fb66d095dcca9e6b0e97145f`.
+Userdata was mounted `ro,noload`; package extraction and test configuration
+stayed in RAM. The complete Mesa library path, DRI and GBM binds, shared-memory
+tmpfs and devpts were provided for the rescue chroot.
+
+GBM and Wayland EGL core, compatibility and GLES all reported FD630. Xwayland
+`glxinfo -B` reported `Accelerated: yes`, `OpenGL renderer string: FD630`,
+and Mesa `26.2.4-arch1.1.5.omamobile5`. GLX gears reported 277 frames in
+5 seconds (55.215 FPS), then 299 (59.782 FPS). With udev input metadata and
+the temporary diagnostic keyboard, native Wayland GLES gears reported
+301 frames in 5 seconds (60.008 FPS), then 299 (59.788 FPS). A software
+renderer also appeared as a separate enumerated EGL device; the GBM and
+Wayland results used FD630.
+
+This is hardware renderer evidence for the shared archive, not a clean
+installed-system test. Normal-system phone-smoke, a clean installed desktop,
+physical panel observation and the maintainer's Pixel Panthor check remain
+outstanding. All 91 UFS flags read back as `1`; the rescue reboot helper
+returned the phone to fastboot. No UFS write occurred. Raw output remains
+private off-repository.
