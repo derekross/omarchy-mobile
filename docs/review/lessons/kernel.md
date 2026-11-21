@@ -3,6 +3,15 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1098. A message-only push that answers a wording request is checked for
+  the wrapping it had before.** Kernel #249's body gained the requested
+  sentence and lost every line break in the same amend; the tree was
+  identical, CI stayed green, and only checkpatch's `COMMIT_LOG_LONG_LINE`
+  warning, printed under an `ok` line, showed it. *Check:* `git log -1
+  --format=%B <old> | awk '{print length}' | sort -n | tail -1` against the
+  new head's, and read the warnings under "checkpatch --strict: no errors" on
+  every message-only push. Extends L-743 and L-216. *From:* kernel #249, round
+  64, 2026-11-21.
 - **L-1079. A restricted DMA pool is checked against the driver's largest
   single coherent allocation, not only against total size.** swiotlb serves at
   most `IO_TLB_SEGSIZE` x 2 KiB (256 KiB) per allocation, and ath11k's MHI

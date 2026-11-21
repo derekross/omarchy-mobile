@@ -3,6 +3,32 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1093. A plan that keeps the boot partition read-only on the phone is
+  walked through a package update of the kernel.** #964's host-only boot
+  writer leaves a pacman transaction able to replace the modules of the kernel
+  that is still in `boot`. *Check:* for any design where the kernel image and
+  its modules are written by different actors, list what each update leaves on
+  disk between the two writes and what the next start finds; ask what holds
+  the kernel package and where the previous modules stay. Extends L-415 and
+  L-308. *From:* #964, round 64, 2026-11-21.
+- **L-1092. A single-slot install plan is read for a verification step that
+  fastboot cannot perform.** #964 asked its installer to "read back and hash
+  the complete `boot` partition" before rebooting; fastboot has no partition
+  read on that bootloader, and the same author's record on #714 could only
+  hash through a later Linux boot. *Check:* for every "read back", "verify" or
+  "hash" in a plan's fastboot stage, name the command (`fastboot fetch` exists
+  only in fastbootd); if there is none, the plan gets a RAM boot of a guarded
+  image as its own step, with `boot` read-only and a stop condition. Extends
+  L-856 and L-226. *From:* #964, round 64, 2026-11-21.
+- **L-1091. A "restore the backup image" step is asked what that image boots,
+  and into what.** #714's documented way back writes a saved `boot` image
+  which, by the same notes, started an older install with a writable main disk
+  and whose kernel was never identified; #964 calls it the "stock boot image".
+  *Check:* for every restore step in a single-slot plan, find the notes entry
+  that identifies the image (kernel string, ramdisk, whether the storage guard
+  is in it) and the root it expects on `userdata` after the planned writes;
+  "restores the previous state" is not automatically "safe". Extends L-698,
+  L-186 and L-205. *From:* #714 with #964, round 64, 2026-11-21.
 - **L-1083. A loss of the USB link at the last boot try needs its own line in
   a runbook.** On Tensor phones an unplug ends the link until a Type-C driver
   owns the charger chip (AGENTS "USB"), so the owner's natural next step is a

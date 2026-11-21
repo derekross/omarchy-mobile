@@ -3,6 +3,42 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1104. Two follow-ups invited in one review, on one function, conflict
+  with each other; say the order when inviting them.** Round 63 named two gaps
+  in `scan_identifiers`; the two PRs arrived an hour apart, each clean against
+  main, and conflict on the line both needed. *Check:* when a review invites
+  more than one follow-up in the same function, name which goes first, and at
+  the next round build the combination once and run both PRs' tests on it.
+  Extends L-104 and L-253. *From:* #959 with #961, round 64, 2026-11-21.
+- **L-1103. A request for a run on a contributor's phone is checked against
+  every hold we have placed on that phone.** Kernel #218's "one more boot" and
+  #839's first-boot test both wait behind the pause asked on #714; a review
+  that repeats the request without naming the hold asks for something its own
+  author has forbidden. *Check:* before writing "please run", `gh pr list
+  --author <login>` in both repositories and grep our last comments for
+  "don't", "pause" and "until I"; name the hold and the order in the comment.
+  Extends L-1044, L-557 and L-284. *From:* kernel #218 with #714 and #839,
+  round 64, 2026-11-21.
+- **L-1102. When a contributor repairs an undone commit by cherry-picking it
+  back, the proof is the patch id, and the squash body is written by hand.**
+  #917's re-applied commit and main's original have one `git patch-id
+  --stable`, which closes L-1028's point in one line; but a COMMIT_MESSAGES
+  squash would then land that commit's subject, body and trailers a second
+  time under another PR's title, and credit its author for a change main
+  already has. *Check:* `git show <c> | git patch-id --stable` for both; `git
+  log --format='%an %s%n%(trailers:only)' base..head`; leave the re-applied
+  commit's message and trailers out of the squash body. Extends L-1028, L-312
+  and L-481. *From:* #917, round 64, 2026-11-21.
+- **L-1101. A conflict in a one-line-per-device table is first asked "which
+  row did main change?"; it can be the neighbour's.** #912's `docs/DEVICES.md`
+  conflict read as "#912 and something else both changed the 9a's row";
+  per-cell hashes at the base, main and the head showed main had changed no
+  cell of it, only the Pixel 8 Pro's row on the next line, which git folds
+  into the same hunk. *Check:* `git diff <merge-base> origin/main --
+  docs/DEVICES.md | grep '^[-+]' | cut -c1-60` before writing who collides
+  with whom, then the per-cell compare of L-836; the resolution is then
+  "main's file with the PR's row". Extends L-836 and C-43. *From:* #912, round
+  64, 2026-11-21.
 - **L-1085. A round's brief can call a PR unreviewed when an earlier round
   posted on it; the thread decides.** Kernel #261 was listed as "no review";
   its thread held a posted review of the same head from two days before.

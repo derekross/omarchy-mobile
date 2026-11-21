@@ -3,6 +3,34 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1107. A hardware request written as a list is answered clause by clause
+  from each record, with "seen" kept apart from "read back".** Kernel #218's
+  description shows the panel lit once on an unidentified tree, and on the
+  exact merge shows state values for brightness and blanking that nobody
+  watched; laid in a table against the five things asked, the gap is two
+  observations, not "a test". *Check:* split our own request at its commas,
+  give each record a column, and mark each cell seen, read back or absent;
+  then ask only for the absent cells, and say which later PR could carry them.
+  Extends L-811, L-380 and L-724. *From:* kernel #218, round 64, 2026-11-21.
+- **L-1106. Two reports "from the same running session" are compared field by
+  field before the claim "no boot in between" is carried forward.** #714's two
+  `phone-smoke` reports, two and a half hours apart, went from six `dmesg`
+  error lines to none, and a third comment named the session differently; each
+  said no boot was started. *Check:* diff the two reports' kernel-health,
+  package and thermal rows; where a boot-time line disappears, ask for
+  `/proc/sys/kernel/random/boot_id` and uptime with every later report from a
+  phone under a hold, and ask that `tools/phone-smoke` print both in its
+  header. Extends L-1086, L-1011 and L-557. *From:* #714, round 64,
+  2026-11-21.
+- **L-1105. A `g<hash>` in a contributor's kernel release that is on no branch
+  can be GitHub's own test merge of an open PR.** #500's and kernel #218's
+  records name one such hash; `gh api repos/<r>/commits/<hash>` answers "Merge
+  <PR head> into <base>", which says the tested tree was exactly the published
+  base plus that PR, and the file's blob id can be read from the same ref.
+  *Check:* before calling a release's hash unpublished, ask the API for the
+  commit in the upstream repository as well as the fork, and read its two
+  parents. Extends L-202 and L-65. *From:* #500 with kernel #218, round 64,
+  2026-11-21.
 - **L-1090. A claim about a third-party type's behaviour across suspend is
   settled by reading its source at the packaged commit, timer by timer.** #924
   said Quickshell's `SystemClock` shows the old time for up to a minute after
