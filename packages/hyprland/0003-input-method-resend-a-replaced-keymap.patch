@@ -1,0 +1,41 @@
+Subject: [PATCH] input-method: resend the keymap when a keyboard replaces it
+
+Against Hyprland v0.57.0 (src/protocols/InputMethodV2.{cpp,hpp}).
+
+The keyboard grab sends a keymap only when the keyboard changes. An
+on-screen keyboard (squeekboard, through virtual-keyboard-v1) replaces its
+keymap while it stays the same keyboard, for example on a layout change,
+so an input method holding the grab (fcitx5) kept decoding its keycodes
+with the old keymap: squeekboard's space reached fcitx5 as "l". Letters
+happened to keep their codes.
+
+Compare the keymap too, and resend it when it changed.
+
+--- i/src/protocols/InputMethodV2.cpp
++++ w/src/protocols/InputMethodV2.cpp
+@@ -29,10 +29,14 @@
+ 
+ void CInputMethodKeyboardGrabV2::sendKeyboardData(SP<IKeyboard> keyboard) {
+ 
+-    if (keyboard == m_lastKeyboard)
++    // A virtual keyboard (an on-screen keyboard) replaces its keymap while it
++    // stays the same keyboard, so compare the keymap too, or the input method
++    // keeps decoding its keycodes with the old one.
++    if (keyboard == m_lastKeyboard && keyboard->m_xkbKeymapV1String == m_lastKeymap)
+         return;
+ 
+     m_lastKeyboard = keyboard;
++    m_lastKeymap   = keyboard->m_xkbKeymapV1String;
+ 
+     auto keymapFD = allocateSHMFile(keyboard->m_xkbKeymapV1String.length() + 1);
+     if UNLIKELY (!keymapFD.isValid()) {
+--- i/src/protocols/InputMethodV2.hpp
++++ w/src/protocols/InputMethodV2.hpp
+@@ -98,6 +98,7 @@
+     WP<CInputMethodV2>                m_owner;
+ 
+     WP<IKeyboard>                     m_lastKeyboard;
++    std::string                       m_lastKeymap;
+ };
+ 
+ class CInputMethodPopupV2 {

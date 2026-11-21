@@ -14,6 +14,7 @@ reported the screen off, but the CRTC never turned off. See
 | `nvidia-egl-teardown.patch`, `wl-output-global-grace.patch`, `monitor-rule-vrr.patch` | Omarchy's patches from the same commit, unchanged (what they fix: their comments in `prepare()`) |
 | `0001-dpms-keep-retrying-a-refused-dpms-commit.patch` | The Omarchy Mobile change to `src/output/Monitor.cpp` |
 | `0002-render-hold-the-last-frame-across-a-rotation.patch` | The Omarchy Mobile change to `src/render/Renderer.cpp` and `src/render/OpenGL.cpp` (the rotation hold, below) |
+| `0003-input-method-resend-a-replaced-keymap.patch` | The Omarchy Mobile change to `src/protocols/InputMethodV2.{cpp,hpp}` (the input method's keymap, below) |
 
 ## What differs from Omarchy's `hyprland` 0.57.0-2
 
@@ -32,11 +33,17 @@ reported the screen off, but the CRTC never turned off. See
   Hyprland's environment (read once at startup): `omamobile-device-panther`
   sets it in `environment.d`, and the other phones rotate as before until
   it has run on them.
-- `pkgrel=3.3`: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
+- The input method's keymap (0003). The keyboard grab resends the keymap
+  when a keyboard replaces it, not only when the keyboard changes.
+  squeekboard replaces its virtual keyboard's keymap on a layout change, so
+  fcitx5 holding the grab decoded its space as "l" (Japanese input,
+  `omamobile-ime`).
+- `pkgrel=3.4`: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
   (`extra/hyprland` 0.57.0-3, a rebuild for aquamarine 0.16.0 and
   hyprgraphics 0.6.0) release, plus `.1`, so it sorts above both; `.2` for
   the rotation hold, since 3.1 is published; `.3` for the half turn's
-  383 ms and the alpha-out curve, since 3.2 is published.
+  383 ms and the alpha-out curve, since 3.2 is published; `.4` for the
+  input method's keymap.
 - `arch=(aarch64)` only.
 - `build()` runs the two cmake steps of `make release` itself:
   - with Arch's `-DCMAKE_SKIP_RPATH=ON` (Arch's PKGBUILD seds it into the
