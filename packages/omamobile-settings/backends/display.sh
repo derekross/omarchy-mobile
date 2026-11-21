@@ -21,6 +21,22 @@ fail() { printf '{"error":"%s"}\n' "$1"; exit 2; }
 fake=''
 [[ -z $fake || -r $fake ]] || fail "cannot read the test file"
 
+# Settings started from a login outside the graphical session (for example over SSH) runs without
+# HYPRLAND_INSTANCE_SIGNATURE, and hyprctl then finds no Hyprland: no refresh rates. Take it from $XDG_RUNTIME_DIR/hypr/<sig>/.socket.sock, the
+# newest socket by mtime if there are several (a crashed Hyprland's stale socket file is not told apart).
+find_hypr() {
+  [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] && return 0
+  local d best='' sig
+  for d in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/hypr/*/; do
+    [[ -S $d.socket.sock ]] || continue
+    if [[ -z $best || $d.socket.sock -nt $best.socket.sock ]]; then best=$d; fi
+  done
+  [[ -n $best ]] || return 0
+  sig=${best%/}; sig=${sig##*/}
+  export HYPRLAND_INSTANCE_SIGNATURE=$sig
+}
+find_hypr
+
 get_brightness() {
   local v dev
   if [[ -n $fake ]]; then v=$(sed -n 1p "$fake")
@@ -35,8 +51,24 @@ get_brightness() {
 set_brightness() {
   local dev
   dev=$(omarchy-hw-display 2>/dev/null || true)
-  if [[ -n $dev ]]; then brightnessctl -d "$dev" --quiet set "${1}%" >/dev/null 2>&1
-  else brightnessctl --class=backlight --quiet set "${1}%" >/dev/null 2>&1; fi
+  if [[ -n $dev ]]; then brightnessctl -d "$dev" --quiet set "${1}%" >/dev/null 2>&1 && return 0
+  else brightnessctl --class=backlight --quiet set "${1}%" >/dev/null 2>&1 && return 0; fi
+  set_brightness_session "$1" "$dev"
+}
+
+# brightnessctl asks logind for the caller's own session. When Settings is started from a login outside
+# the graphical session (for example over SSH), that is not the session owning the screen and logind
+# refuses; ask for the user's graphical session.
+set_brightness_session() {
+  local pct=$1 dev=$2 sid path max
+  [[ -n $dev ]] || dev=$(ls /sys/class/backlight 2>/dev/null | head -n1)
+  [[ -n $dev && -r /sys/class/backlight/$dev/max_brightness ]] || return 1
+  max=$(cat "/sys/class/backlight/$dev/max_brightness") || return 1
+  sid=$(loginctl show-user "$(id -un)" -p Display --value 2>/dev/null) || return 1
+  [[ -n $sid ]] || return 1
+  path=$(busctl call org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager GetSession s "$sid" 2>/dev/null | awk '{print $2}' | tr -d '"') || return 1
+  [[ $path == /org/freedesktop/login1/session/* ]] || return 1
+  busctl call org.freedesktop.login1 "$path" org.freedesktop.login1.Session SetBrightness ssu backlight "$dev" $(( max * pct / 100 )) >/dev/null 2>&1
 }
 monitors_json() {
   if [[ -n $fake ]]; then sed -n 2p "$fake"; else hyprctl monitors -j 2>/dev/null; fi

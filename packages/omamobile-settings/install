@@ -15,3 +15,8 @@ install -Dm755 "$source_dir/backends/charge.sh" "$dest/usr/lib/omamobile-setting
 install -Dm755 "$source_dir/libexec/charge-limit" "$dest/usr/lib/omamobile-settings/charge-limit"
 install -Dm644 "$source_dir/vendor/systemd/system/omamobile-charge-limit@.service" "$dest/usr/lib/systemd/system/omamobile-charge-limit@.service"
 install -Dm644 "$source_dir/vendor/polkit/50-omamobile-charge-limit.rules" "$dest/usr/share/polkit-1/rules.d/50-omamobile-charge-limit.rules"
+install -Dm755 "$source_dir/backends/lock.sh" "$dest/usr/lib/omamobile-settings/backends/lock.sh"
+# Display > "Lock after 30 minutes while a keyboard is connected": the unit is enabled per user by the
+# page's toggle (lock.sh set keyboard on), never by the package.
+install -Dm755 "$source_dir/libexec/omamobile-lock-keyboard" "$dest/usr/lib/omamobile-settings/omamobile-lock-keyboard"
+install -Dm644 "$source_dir/systemd/user/omamobile-lock-keyboard.service" "$dest/usr/lib/systemd/user/omamobile-lock-keyboard.service"

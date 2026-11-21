@@ -45,3 +45,25 @@ eq "$(run get)" '{"brightness":50,"refresh":120,"rates":[60,120]}'
 sed -i '2s/.*/not json/' "$fake"
 eq "$(run get)" '{"brightness":50,"refresh":-1,"rates":[]}'
 echo "display backend: ok"
+
+# no HYPRLAND_INSTANCE_SIGNATURE in the environment: it is found from the newest live socket under
+# $XDG_RUNTIME_DIR/hypr, and hyprctl is run with it (a copy with `fake` empty, fake tools on PATH)
+bin=$tmp/bin; rt=$tmp/rt; mkdir -p "$bin" "$rt/hypr/old" "$rt/hypr/new" "$rt/hypr/dead"
+printf '#!/bin/sh\necho 50,x,x,50%%,x\n' > "$bin/brightnessctl"
+printf '#!/bin/sh\necho panel\n' > "$bin/omarchy-hw-display"
+cat > "$bin/hyprctl" <<'EOS'
+#!/bin/sh
+[ "$HYPRLAND_INSTANCE_SIGNATURE" = new ] || { echo "[]"; exit 0; }
+echo '[{"name":"DSI-1","width":1344,"height":2992,"x":0,"y":0,"scale":3.2,"refreshRate":120.0,"availableModes":["1344x2992@120.00Hz","1344x2992@60.00Hz"]}]'
+EOS
+chmod +x "$bin"/*
+mksock() { python3 -I -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$1"; }
+mksock "$rt/hypr/old/.socket.sock"; touch -d '-1 hour' "$rt/hypr/old/.socket.sock"
+mksock "$rt/hypr/new/.socket.sock"
+touch "$rt/hypr/dead/.socket.sock"  # a plain file, not a socket: skipped although newest
+sed "s|^fake=.*|fake=''|" "$src/backends/display.sh" > "$tmp/live.sh"
+live() { env -u HYPRLAND_INSTANCE_SIGNATURE PATH="$bin:$PATH" XDG_RUNTIME_DIR="$rt" bash "$tmp/live.sh" "$@" || true; }
+eq "$(live get)" '{"brightness":50,"refresh":120,"rates":[60,120]}'
+# a signature already in the environment is kept
+eq "$(HYPRLAND_INSTANCE_SIGNATURE=old PATH="$bin:$PATH" XDG_RUNTIME_DIR="$rt" bash "$tmp/live.sh" get || true)" '{"brightness":50,"refresh":-1,"rates":[]}'
+echo "display backend (no signature): ok"
