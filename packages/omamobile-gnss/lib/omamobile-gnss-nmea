@@ -4,7 +4,8 @@
 
 Broadcom's gpsd in the gnss vendor chroot writes NMEA sentences to a FIFO
 (gps.xml NmeaOutName, /var/lib/omamobile-vendor/gnss/data/vendor/gps/nmea_out
-on the host). This daemon reads it and serves every complete, checksummed
+on the host; on a Qualcomm phone omamobile-gnss-qmi-loc writes
+/run/omamobile-gnss/nmea_out). This daemon reads it and serves every complete, checksummed
 sentence to:
 
   - a Unix stream socket, /run/omamobile-gnss/nmea.sock, which GeoClue reads
@@ -31,9 +32,11 @@ import sys
 import time
 import tty
 
-# the Pixel 7 Pro's gnss profile, then the Pixel 9a's gnss-slsi
+# the Pixel 7 Pro's gnss profile, the Pixel 9a's gnss-slsi, then a Qualcomm
+# modem's (omamobile-gnss-qmi-loc)
 FIFOS = ("/var/lib/omamobile-vendor/gnss/data/vendor/gps/nmea_out",
-         "/var/lib/omamobile-vendor/gnss-slsi/data/vendor/gps/nmea_out")
+         "/var/lib/omamobile-vendor/gnss-slsi/data/vendor/gps/nmea_out",
+         "/run/omamobile-gnss/nmea_out")
 FIFO = FIFOS[0]
 RUN = "/run/omamobile-gnss"
 MAX_LINE = 1024

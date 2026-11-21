@@ -16,6 +16,18 @@ SESSION=/run/omamobile-gnss/session
 STOP_REQUEST=/run/omamobile-gnss/stop-request
 say() { printf 'omamobile-gnss: %s\n' "$*" >&2; }
 
+# A Qualcomm phone's GNSS is in its modem, answering QMI LOC over QRTR: the
+# device package opts in with qmi-loc.conf, and omamobile-gnss-qmi-loc runs
+# the session and writes the FIFO the bridge reads. No driver loads and no
+# chroot runs, so no hang marker; SIGTERM ends the session.
+QMI_LOC_CONF=${OMAMOBILE_GNSS_QMI_LOC_CONF:-/usr/share/omamobile/gnss/qmi-loc.conf}
+if [[ -f $QMI_LOC_CONF ]]; then
+  case ${1:-} in
+    --stop|--stopped) exit 0 ;;
+  esac
+  exec /usr/lib/omamobile-vendor/omamobile-gnss-qmi-loc --conf "$QMI_LOC_CONF"
+fi
+
 # the Pixel 9a (zumapro-tegu) runs the gnss-slsi profile, the Pixel 7 Pro gnss
 # OMAMOBILE_DT lets the tests run both branches on any machine (as
 # omamobile-setup-user does).

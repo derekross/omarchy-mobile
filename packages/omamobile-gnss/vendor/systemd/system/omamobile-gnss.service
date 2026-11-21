@@ -3,13 +3,16 @@
 # chroot (device/cheetah/GNSS-PLAN.md). Never enabled on its own: the NMEA
 # bridge pulls it in while something wants positions, and it stops when the
 # bridge does (StopWhenUnneeded), which closes /dev/ttyBCM and powers the
-# chip off.
+# chip off. On a Qualcomm phone (qmi-loc.conf from its device package) the
+# main process is omamobile-gnss-qmi-loc, and its stop ends the modem's
+# LOC session.
 [Unit]
-Description=Omarchy Mobile GNSS (Pixel 7 Pro: BCM4775x, stock lhd and gpsd; Pixel 9a: the modem's Kepler through the stock HAL)
+Description=Omarchy Mobile GNSS (Pixel 7 Pro: BCM4775x, stock lhd and gpsd; Pixel 9a: the modem's Kepler through the stock HAL; Qualcomm phones: the modem's QMI LOC)
 After=network-online.target
 StopWhenUnneeded=yes
 ConditionPathExists=|/usr/lib/omamobile-vendor/gnss/root
 ConditionPathExists=|/usr/lib/omamobile-vendor/gnss-slsi/root
+ConditionPathExists=|/usr/share/omamobile/gnss/qmi-loc.conf
 
 [Service]
 # A location session keeps the phone awake: while the stack runs it holds a
