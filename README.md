@@ -30,6 +30,8 @@ tools/phone-provision --first-install --nv-backup DIR FACTORY.zip   # firmware f
 
 The kernel and boot images come from `bin/omamobile kernel`, `modules`, `initramfs` and `images` (CONTRIBUTING.md §4). Step by step, with what to expect at each point: [device/cheetah/REINSTALL-RUNBOOK.md](device/cheetah/REINSTALL-RUNBOOK.md).
 
+On an idle phone, `omamobile-sit own-number [--json]` explicitly reads the SIM-stored phone number over the private daemon socket; it may be empty or outdated. Keep its output private. See [MODEM-PLAN](device/cheetah/MODEM-PLAN.md#read-only-sim-number-query-2026-11-14) for the limits and test runbook.
+
 ## Layout
 
 | Path | What it is |

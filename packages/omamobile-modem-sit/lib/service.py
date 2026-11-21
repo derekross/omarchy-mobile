@@ -6,9 +6,10 @@ Starts on a CP that the modem unit (omamobile-modem.service) has brought
 ONLINE; --bringup registers it first (bringup.py). Then it serves calls, SMS
 and status on a Unix socket, /run/omamobile-sit/socket: one JSON request per
 line, one JSON reply per line. Root and members of [control] group may use
-it. No radio, NV, SIM or raw-request command is exposed.
+it. No NV, SIM-write or raw-request command is exposed.
 
   {"action": "status"}                      modem, calls, audio
+  {"action": "own-number"}                  private, read-only USIM number query
   {"action": "dial", "number": "+1..."}     an IMS voice call
   {"action": "accept"|"hangup"|"delete-call", "id": "..."}
   {"action": "dtmf", "id": "...", "keys": "12#"}
@@ -905,6 +906,17 @@ class Service:
             return dict(screen_on=self.screen_on, indications=dict(self.indication_counts))
         if action == 'status':
             return self.status()
+        if action == 'own-number':
+            # Explicit, private, read-only: do not cache this result in
+            # status(), state.json, subscriptions, the database or a log.
+            if set(request) != {'action'}:
+                raise ValueError('The SIM number query takes no arguments')
+            if self.live():
+                raise RuntimeError('End the current call before reading the SIM number')
+            from msisdn import read_numbers
+            result = read_numbers(self.client)
+            self.pump()
+            return result
         if action == 'sms-list':
             return [dict(id='sit:'+r['id'], number=r['number'], text=r['text'], timestamp=r['timestamp'],
                          data=r['data'], state='received')
@@ -1133,7 +1145,8 @@ def main():
         return probe()
     client = Sit(allow_sms=True, allow_calls=True,
                  allow_manifest=bool(settings['network'].get('carrier_manifest', '').strip()),
-                 allow_isim_pcscf=settings['network'].getboolean('ims_pcscf_from_isim', True))
+                 allow_isim_pcscf=settings['network'].getboolean('ims_pcscf_from_isim', True),
+                 allow_msisdn=True)
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     service = None
     stopping = False
