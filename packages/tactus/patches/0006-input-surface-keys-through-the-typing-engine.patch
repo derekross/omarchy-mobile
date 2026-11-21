@@ -150,7 +150,7 @@ Also here:
  
    self->bs_repeat_id = g_timeout_add (interval, on_bs_key_repeat, self);
    g_source_set_name_by_id (self->bs_repeat_id, "[pos-bs-key-repeat]");
-@@ -332,6 +372,228 @@
+@@ -332,6 +372,240 @@
  }
  
  
@@ -168,13 +168,25 @@ Also here:
 +}
 +
 +
++/* A key by its name, as a key press to the application. Return held
++ * ("KEY_NEWLINE") is Return with Shift: a new line in every text field that
++ * sends on Return, and a plain new line everywhere else. */
++static void
++tactus_press_key (PosInputSurface *self, const char *symbol, PosKeycodeModifier modifiers)
++{
++  if (g_strcmp0 (symbol, POS_OSK_SYMBOL_NEWLINE) == 0) {
++    symbol = "KEY_ENTER";
++    modifiers |= POS_KEYCODE_MODIFIER_SHIFT;
++  }
++  pos_vk_driver_key_down (self->keyboard_driver, symbol, modifiers);
++  pos_vk_driver_key_up (self->keyboard_driver, symbol);
++}
++
++
 +static void
 +tactus_op_key (const char *symbol, gpointer data)
 +{
-+  PosInputSurface *self = POS_INPUT_SURFACE (data);
-+
-+  pos_vk_driver_key_down (self->keyboard_driver, symbol, POS_KEYCODE_MODIFIER_NONE);
-+  pos_vk_driver_key_up (self->keyboard_driver, symbol);
++  tactus_press_key (POS_INPUT_SURFACE (data), symbol, POS_KEYCODE_MODIFIER_NONE);
 +}
 +
 +
@@ -379,7 +391,7 @@ Also here:
  static void
  on_swipe (GtkGestureSwipe *swipe, double velocity_x, double velocity_y, gpointer data)
  {
-@@ -342,7 +604,14 @@
+@@ -342,7 +616,14 @@
    g_debug ("swipe with v_x: %f, v_y: %f", velocity_x, velocity_y);
  
    if (velocity_y > MIN_Y_VELOCITY && velocity_y > 2.0 * ABS (velocity_x)) {
@@ -394,7 +406,7 @@ Also here:
      pos_input_surface_set_visible (self, FALSE);
    } else {
      g_debug ("Swipe not downwards");
-@@ -578,11 +847,19 @@
+@@ -578,11 +859,19 @@
  
  
  static void
@@ -415,7 +427,7 @@ Also here:
  }
  
  
-@@ -595,6 +872,17 @@
+@@ -595,20 +884,49 @@
  
    is_bs = pos_input_surface_set_backspace_pressed (self, symbol);
  
@@ -423,7 +435,7 @@ Also here:
 +  if (self->searching) {
 +    if (is_bs)
 +      pos_emoji_search_backspace (POS_EMOJI_SEARCH (self->emoji_search));
-+    else if (g_strcmp0 (symbol, "KEY_ENTER") == 0)
++    else if (g_strcmp0 (symbol, "KEY_ENTER") == 0 || g_strcmp0 (symbol, POS_OSK_SYMBOL_NEWLINE) == 0)
 +      tactus_search_set (self, FALSE);
 +    else if (!g_str_has_prefix (symbol, "KEY_"))
 +      pos_emoji_search_type (POS_EMOJI_SEARCH (self->emoji_search), symbol);
@@ -433,10 +445,22 @@ Also here:
    /* Latched modifiers, send as virtual-keyboard */
    if (self->latched_modifiers) {
      PosKeycodeModifier modifier;
-@@ -612,6 +900,26 @@
+ 
+     modifier = pos_vk_driver_convert_modifiers (self->keyboard_driver, self->latched_modifiers);
+-    pos_vk_driver_key_down (self->keyboard_driver, symbol, modifier);
+-    pos_vk_driver_key_up (self->keyboard_driver, symbol);
++    tactus_press_key (self, symbol, modifier);
+     pos_input_surface_unlatch_modifiers (self);
      return;
    }
- 
+   /* virtual-keyboard, no input method */
+   if (!pos_input_method_get_active (self->input_method)) {
+-    pos_vk_driver_key_down (self->keyboard_driver, symbol, POS_KEYCODE_MODIFIER_NONE);
+-    pos_vk_driver_key_up (self->keyboard_driver, symbol);
++    tactus_press_key (self, symbol, POS_KEYCODE_MODIFIER_NONE);
++    return;
++  }
++
 +  /* Tactus's typing */
 +  if (tactus_typer_usable (self)) {
 +    GtkWidget *child = hdy_deck_get_visible_child (self->deck);
@@ -454,13 +478,20 @@ Also here:
 +    } else {
 +      tactus_typer_key (self->typer, symbol, self->have_tap ? &self->tap : NULL);
 +    }
-+    return;
-+  }
-+
-   if (pos_input_surface_is_completion_mode (self)) {
-     handled = pos_completer_feed_symbol (self->completer, symbol);
-     if (handled)
-@@ -725,7 +1033,9 @@
+     return;
+   }
+ 
+@@ -621,8 +939,7 @@
+   if (is_bs) {
+     pos_input_surface_handle_backsapce (self);
+   } else if (g_str_has_prefix (symbol, "KEY_")) {
+-    pos_vk_driver_key_down (self->keyboard_driver, symbol, POS_KEYCODE_MODIFIER_NONE);
+-    pos_vk_driver_key_up (self->keyboard_driver, symbol);
++    tactus_press_key (self, symbol, POS_KEYCODE_MODIFIER_NONE);
+   } else {
+     pos_input_method_send_string (self->input_method, symbol, TRUE);
+   }
+@@ -725,7 +1042,9 @@
    if (gm_str_is_null_or_empty (text))
      return;
  
@@ -471,7 +502,7 @@ Also here:
      pos_input_surface_submit_current_preedit (self);
      pos_input_method_send_string (self->input_method, text, TRUE);
    } else {
-@@ -789,7 +1099,9 @@
+@@ -789,7 +1108,9 @@
    g_assert (POS_IS_INPUT_SURFACE (self));
    g_assert (POS_IS_EMOJI_PICKER (emoji_picker));
  
@@ -482,7 +513,7 @@ Also here:
      pos_input_surface_submit_current_preedit (self);
      pos_input_method_send_string (self->input_method, emoji, TRUE);
    } else {
-@@ -1039,6 +1351,253 @@
+@@ -1039,6 +1360,253 @@
  }
  
  
@@ -736,7 +767,7 @@ Also here:
  static void
  on_visible_child_changed (PosInputSurface *self)
  {
-@@ -1048,6 +1607,11 @@
+@@ -1048,6 +1616,11 @@
    child = hdy_deck_get_visible_child (self->deck);
  
    pos_input_surface_toggle_shortcuts_bar (self);
@@ -748,7 +779,7 @@ Also here:
  
    if (!POS_IS_OSK_WIDGET (child))
      return;
-@@ -1055,6 +1619,11 @@
+@@ -1055,6 +1628,11 @@
    osk = POS_OSK_WIDGET (child);
    g_debug ("Switched to layout '%s'", pos_osk_widget_get_display_name (osk));
    pos_osk_widget_set_layer (osk, POS_OSK_WIDGET_LAYER_NORMAL);
@@ -760,7 +791,7 @@ Also here:
  
    set_keymap (self);
  
-@@ -1100,9 +1669,11 @@
+@@ -1100,9 +1678,11 @@
  
    if (self->animation.progress >= 1.0 && self->animation.show) {
      /* On unfold adjust the exclusive zone at the very end to avoid flickering */
@@ -773,7 +804,7 @@ Also here:
      phosh_layer_surface_set_exclusive_zone (PHOSH_LAYER_SURFACE (self), 0);
    }
  
-@@ -1363,7 +1934,8 @@
+@@ -1363,7 +1943,8 @@
      pos_input_surface_set_min_height (self, g_value_get_uint (value));
      break;
    case PROP_DEAD_ZONE:
@@ -783,7 +814,7 @@ Also here:
      break;
    default:
      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
-@@ -1630,6 +2202,7 @@
+@@ -1630,6 +2211,7 @@
                      on_im_text_change_cause_changed, self,
                      "swapped-object-signal::notify::surrounding-text",
                      on_im_surrounding_text_changed, self,
@@ -791,7 +822,7 @@ Also here:
                      NULL);
  
    set_keymap (self);
-@@ -1667,6 +2240,15 @@
+@@ -1667,6 +2249,15 @@
    g_clear_handle_id (&self->animation.id, g_source_remove);
    g_clear_handle_id (&self->bs_repeat_id, g_source_remove);
    g_clear_handle_id (&self->keymap_delayed_id, g_source_remove);
@@ -807,7 +838,7 @@ Also here:
  
    g_clear_object (&self->speech_input);
    g_clear_object (&self->logind_session);
-@@ -1813,13 +2395,12 @@
+@@ -1813,13 +2404,12 @@
    gtk_widget_get_preferred_size (GTK_WIDGET (self), &min, NULL);
    g_object_get (self, "height", &height, NULL);
  
@@ -824,7 +855,7 @@ Also here:
    }
  
    /* Ensure unfold animation starts from the screen bottom */
-@@ -1827,6 +2408,8 @@
+@@ -1827,6 +2417,8 @@
      phosh_layer_surface_set_margins (PHOSH_LAYER_SURFACE (self), 0, 0, -min.height, 0);
  
    GTK_CONTAINER_CLASS (pos_input_surface_parent_class)->check_resize (container);
@@ -833,7 +864,7 @@ Also here:
  }
  
  
-@@ -2073,6 +2656,7 @@
+@@ -2073,6 +2665,7 @@
                      "swapped-signal::notify::mode", G_CALLBACK (on_osk_mode_changed), self,
                      "swapped-signal::popover-shown", G_CALLBACK (on_osk_popover_shown), self,
                      "swapped-signal::popover-hidden", G_CALLBACK (on_osk_popover_hidden), self,
@@ -841,7 +872,7 @@ Also here:
                      NULL);
  
    hdy_deck_insert_child_after (self->deck, GTK_WIDGET (osk_widget), NULL);
-@@ -2367,8 +2951,51 @@
+@@ -2367,8 +2960,51 @@
    g_autoptr (GError) err = NULL;
    GAction *action;
  
@@ -893,7 +924,7 @@ Also here:
    self->bs_mode = POS_BACKSPACE_MODE_CHAR;
    self->style_manager = pos_style_manager_new ();
    self->action_map = g_simple_action_group_new ();
-@@ -2503,6 +3130,11 @@
+@@ -2503,6 +3139,11 @@
  
    self->surface_visible = visible;
    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_SURFACE_VISIBLE]);
@@ -905,7 +936,7 @@ Also here:
  
    self->animation.show = visible;
    self->animation.last_frame = -1;
-@@ -2618,7 +3250,12 @@
+@@ -2618,7 +3259,12 @@
    g_autofree char *name = NULL;
  
    if (g_str_equal (type, "")) {

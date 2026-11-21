@@ -744,11 +744,14 @@ type_other (TactusTyper *self, const char *text, gboolean ends)
 }
 
 
+/* Return, or (@newline) Return held: a line break that an application which
+ * sends on Return keeps as a line break. A new line is running text by
+ * definition, so the word before it is corrected even when it stands alone. */
 static void
-type_enter (TactusTyper *self)
+type_enter (TactusTyper *self, gboolean newline)
 {
   guint s = word_start (self), line = s;
-  gboolean prose = FALSE;
+  gboolean prose = newline;
 
   /* Only in running text: a lone word sent off with Return (a search, a name) stays as typed */
   while (line > 0 && char_at (self, line - 1)->c != '\n') {
@@ -768,7 +771,7 @@ type_enter (TactusTyper *self)
     model_reset (self, TRUE);
     sent (self, TACTUS_OP_OTHER, FALSE);
   }
-  self->ops.key ("KEY_ENTER", self->data);
+  self->ops.key (newline ? "KEY_NEWLINE" : "KEY_ENTER", self->data);
 }
 
 /* A key that moves the cursor, or one we know nothing about */
@@ -859,7 +862,9 @@ act_key (TactusTyper *self, const char *symbol, const TactusTap *tap)
 
   if (g_str_has_prefix (symbol, "KEY_")) {
     if (g_str_equal (symbol, "KEY_ENTER"))
-      type_enter (self);
+      type_enter (self, FALSE);
+    else if (g_str_equal (symbol, "KEY_NEWLINE"))
+      type_enter (self, TRUE);
     else
       type_key (self, symbol);
     update_shift (self, FALSE);
@@ -914,7 +919,7 @@ may_replace (TactusTyper *self, const TactusInput *in)
     return in->ends_word && word;
   case TACTUS_IN_KEY:
   default:
-    if (g_str_equal (in->text, "KEY_ENTER"))
+    if (g_str_equal (in->text, "KEY_ENTER") || g_str_equal (in->text, "KEY_NEWLINE"))
       return word;
     if (g_str_has_prefix (in->text, "KEY_"))
       return FALSE;

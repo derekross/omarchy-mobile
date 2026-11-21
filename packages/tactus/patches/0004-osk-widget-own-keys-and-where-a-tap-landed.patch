@@ -25,7 +25,17 @@ of the keyboards on current phones:
 ---
 --- a/src/pos-osk-widget.h
 +++ b/src/pos-osk-widget.h
-@@ -42,4 +42,18 @@
+@@ -15,6 +15,9 @@
+ 
+ #define POS_OSK_WIDGET_KEY_HEIGHT_DEFAULT 50
+ #define POS_OSK_WIDGET_KEY_HEIGHT_MAX 100
++/* What holding Return emits: a new line where Return would send (Shift+Return
++ * to the application). Tactus's own; no layout file names it. */
++#define POS_OSK_SYMBOL_NEWLINE "KEY_NEWLINE"
+ 
+ #define POS_TYPE_OSK_WIDGET (pos_osk_widget_get_type ())
+ 
+@@ -42,4 +45,18 @@
  void              pos_osk_widget_set_key_height (PosOskWidget *self, guint key_height);
  guint             pos_osk_widget_max_rows (PosOskWidget *self);
  
@@ -748,7 +758,7 @@ of the keyboards on current phones:
    }
  
    return ret;
-@@ -785,801 +745,1114 @@
+@@ -785,801 +745,1131 @@
    return TRUE;
  }
  
@@ -1511,11 +1521,11 @@ of the keyboards on current phones:
  {
 -  PosOskWidget *self = POS_OSK_WIDGET (widget);
 -  PosOskKey *key;
--
--  if ((event->state & GDK_BUTTON1_MASK) == 0)
--    return GDK_EVENT_PROPAGATE;
 +  int idx = floor ((x - self->popup.x) / self->popup.cell);
  
+-  if ((event->state & GDK_BUTTON1_MASK) == 0)
+-    return GDK_EVENT_PROPAGATE;
+-
 -  key = pos_osk_widget_locate_key (self, event->x, event->y);
 -  if (self->current && key != self->current) {
 -    gboolean accept = !!(self->features & PHOSH_OSK_FEATURE_KEY_DRAG);
@@ -1549,10 +1559,10 @@ of the keyboards on current phones:
 +  TactusTouch *t = self->popup.touch;
 +  PosOskWidgetLayer typed_on = self->layer;
 +  g_autofree char *symbol = NULL;
++
++  symbol = g_strdup (g_ptr_array_index (self->popup.options, self->popup.selected));
  
 -  g_signal_emit (self, signals[OSK_KEY_DOWN], 0, symbol);
-+  symbol = g_strdup (g_ptr_array_index (self->popup.options, self->popup.selected));
-+
 +  self->tap_valid = FALSE;
    g_signal_emit (self, signals[OSK_KEY_SYMBOL], 0, symbol);
    g_signal_emit (self, signals[OSK_KEY_UP], 0, symbol);
@@ -1589,14 +1599,30 @@ of the keyboards on current phones:
 -  PosOskKey *key = pos_osk_widget_locate_key (self, x, y);
 -  GStrv symbols = NULL;
 -  GdkRectangle rect = { 0 };
+-
+-  g_debug ("Long press '%s'", pos_osk_key_get_label (key) ?: pos_osk_key_get_symbol (key));
+-
+-  if (g_strcmp0 (pos_osk_key_get_symbol (key), POS_OSK_SYMBOL_SPACE) == 0) {
+-    key_repeat_cancel (self);
+-    /* Remember the key we want to untoggle when mode ends */
+-    self->space = key;
+-    pos_osk_widget_set_mode (self, POS_OSK_WIDGET_MODE_CURSOR);
+-    return;
 +  while (x - self->cursor_x >= CURSOR_STEP_X) {
 +    self->cursor_x += CURSOR_STEP_X;
 +    g_signal_emit (self, signals[OSK_KEY_SYMBOL], 0, POS_OSK_SYMBOL_RIGHT);
-+  }
+   }
+-
+-  if (pos_osk_key_get_use (key) == POS_OSK_KEY_USE_TOGGLE &&
+-      pos_osk_key_get_layer (key) == POS_OSK_WIDGET_LAYER_CAPS) {
+-    g_debug ("Enabling caps lock");
+-    set_caps_lock (self, TRUE);
+-    pos_osk_widget_cancel_press (self);
+-    return;
 +  while (self->cursor_x - x >= CURSOR_STEP_X) {
 +    self->cursor_x -= CURSOR_STEP_X;
 +    g_signal_emit (self, signals[OSK_KEY_SYMBOL], 0, POS_OSK_SYMBOL_LEFT);
-+  }
+   }
 +  while (y - self->cursor_y >= CURSOR_STEP_Y) {
 +    self->cursor_y += CURSOR_STEP_Y;
 +    g_signal_emit (self, signals[OSK_KEY_SYMBOL], 0, POS_OSK_SYMBOL_DOWN);
@@ -1607,15 +1633,13 @@ of the keyboards on current phones:
 +  }
 +}
  
--  g_debug ("Long press '%s'", pos_osk_key_get_label (key) ?: pos_osk_key_get_symbol (key));
- 
--  if (g_strcmp0 (pos_osk_key_get_symbol (key), POS_OSK_SYMBOL_SPACE) == 0) {
--    key_repeat_cancel (self);
--    /* Remember the key we want to untoggle when mode ends */
--    self->space = key;
--    pos_osk_widget_set_mode (self, POS_OSK_WIDGET_MODE_CURSOR);
+-  symbols = pos_osk_key_get_symbols (key);
+-  if (symbols == NULL || symbols[0] == NULL)
 -    return;
--  }
+ 
+-  pos_osk_widget_cancel_press (self);
+-  g_clear_pointer (&self->char_popup, phosh_cp_widget_destroy);
+-  self->char_popup = GTK_WIDGET (pos_char_popup_new (GTK_WIDGET (self), symbols));
 +static void
 +tactus_cursor_end (PosOskWidget *self)
 +{
@@ -1623,41 +1647,11 @@ of the keyboards on current phones:
 +  pos_osk_widget_set_mode (self, POS_OSK_WIDGET_MODE_KEYBOARD);
 +}
  
--  if (pos_osk_key_get_use (key) == POS_OSK_KEY_USE_TOGGLE &&
--      pos_osk_key_get_layer (key) == POS_OSK_WIDGET_LAYER_CAPS) {
--    g_debug ("Enabling caps lock");
--    set_caps_lock (self, TRUE);
--    pos_osk_widget_cancel_press (self);
--    return;
--  }
+-  get_popup_pos (key, &rect);
+-  gtk_popover_set_pointing_to (GTK_POPOVER (self->char_popup), &rect);
 +/*
 + * Fingers
 + */
- 
--  symbols = pos_osk_key_get_symbols (key);
--  if (symbols == NULL || symbols[0] == NULL)
--    return;
-+static gboolean
-+on_long_press (gpointer data)
-+{
-+  TactusTouch *t = data;
-+  PosOskWidget *self = t->widget;
- 
--  pos_osk_widget_cancel_press (self);
--  g_clear_pointer (&self->char_popup, phosh_cp_widget_destroy);
--  self->char_popup = GTK_WIDGET (pos_char_popup_new (GTK_WIDGET (self), symbols));
-+  t->long_id = 0;
-+  if (!t->active || t->consumed || t->geom == NULL || t->kind != TACTUS_TOUCH_KEY)
-+    return G_SOURCE_REMOVE;
-+  if (self->popup.active || self->cursor_touch)
-+    return G_SOURCE_REMOVE;
- 
--  get_popup_pos (key, &rect);
--  gtk_popover_set_pointing_to (GTK_POPOVER (self->char_popup), &rect);
-+  if (t->geom->role == TACTUS_ROLE_SPACE)
-+    tactus_cursor_begin (self, t);
-+  else if (t->geom->role == TACTUS_ROLE_CHAR)
-+    tactus_popup_open (self, t);
  
 -  g_signal_connect_object (self->char_popup, "selected",
 -                           G_CALLBACK (on_symbol_selected),
@@ -1669,82 +1663,92 @@ of the keyboards on current phones:
 -                           G_CONNECT_SWAPPED);
 -  gtk_popover_popup (GTK_POPOVER (self->char_popup));
 -  g_signal_emit (self, signals[OSK_POPOVER_SHOWN], 0, symbols);
-+  return G_SOURCE_REMOVE;
++/* Return held: a new line where a tap would send what was written off (a
++ * message, a search, a form). It is typed the moment the hold is long enough,
++ * so the line break showing is the sign that it took; letting go then types
++ * nothing more. */
++static void
++tactus_newline (PosOskWidget *self, TactusTouch *t)
++{
++  t->consumed = TRUE;
++  g_signal_emit (self, signals[OSK_KEY_SYMBOL], 0, POS_OSK_SYMBOL_NEWLINE);
++  g_signal_emit (self, signals[OSK_KEY_UP], 0, POS_OSK_SYMBOL_NEWLINE);
++  gtk_widget_queue_draw (GTK_WIDGET (self));
  }
  
--
-+/* Holding the space bar moves the cursor; holding a letter that has them shows its accents */
- static void
+ 
+-static void
 -render_outline (cairo_t *cr, GtkStyleContext *context, const GdkRectangle *box)
-+tactus_arm_long_press (PosOskWidget *self, TactusTouch *t, gboolean space_too)
++static gboolean
++on_long_press (gpointer data)
  {
 -  GtkBorder margin, border;
 -  double x, y, width, height;
-+  g_clear_handle_id (&t->long_id, g_source_remove);
++  TactusTouch *t = data;
++  PosOskWidget *self = t->widget;
  
 -  gtk_style_context_get_margin (context, GTK_STATE_FLAG_NORMAL, &margin);
 -  gtk_style_context_get_border (context, GTK_STATE_FLAG_NORMAL, &border);
-+  if (t->geom == NULL || t->geom->key == NULL)
-+    return;
++  t->long_id = 0;
++  if (!t->active || t->consumed || t->geom == NULL || t->kind != TACTUS_TOUCH_KEY)
++    return G_SOURCE_REMOVE;
++  if (self->popup.active || self->cursor_touch)
++    return G_SOURCE_REMOVE;
  
 -  x = margin.left + border.left;
 -  y = margin.top + border.top;
 -  width = box->width - x - margin.right - border.right;
 -  height = box->height - y - margin.bottom - border.bottom;
++  if (t->geom->role == TACTUS_ROLE_SPACE)
++    tactus_cursor_begin (self, t);
++  else if (t->geom->role == TACTUS_ROLE_CHAR)
++    tactus_popup_open (self, t);
++  else if (t->geom->role == TACTUS_ROLE_RETURN)
++    tactus_newline (self, t);
+ 
+-  gtk_render_background (context, cr, x, y, width, height);
+-  gtk_render_frame (context, cr, x, y, width, height);
++  return G_SOURCE_REMOVE;
+ }
+ 
++/* Holding the space bar moves the cursor; holding a letter that has them
++ * shows its accents; holding Return types a new line */
++static void
++tactus_arm_long_press (PosOskWidget *self, TactusTouch *t, gboolean space_too)
++{
++  g_clear_handle_id (&t->long_id, g_source_remove);
+ 
+-#if !PANGO_VERSION_CHECK (1, 50, 0)
+-G_DEFINE_AUTOPTR_CLEANUP_FUNC (PangoLayout, g_object_unref)
+-G_DEFINE_AUTOPTR_CLEANUP_FUNC (PangoFontDescription, pango_font_description_free)
+-#endif
++  if (t->geom == NULL || t->geom->key == NULL)
++    return;
+ 
 +  if (t->geom->role == TACTUS_ROLE_SPACE) {
 +    if (!space_too)
 +      return;
 +  } else if (t->geom->role == TACTUS_ROLE_CHAR) {
 +    GStrv alts = pos_osk_key_get_symbols (t->geom->key);
  
--  gtk_render_background (context, cr, x, y, width, height);
--  gtk_render_frame (context, cr, x, y, width, height);
-+    if (alts == NULL || alts[0] == NULL)
-+      return;
-+  } else {
-+    return;
-+  }
-+
-+  t->long_id = g_timeout_add (LONG_PRESS_MS, on_long_press, t);
-+  g_source_set_name_by_id (t->long_id, "[pos-osk-widget] long press");
- }
- 
- 
--#if !PANGO_VERSION_CHECK (1, 50, 0)
--G_DEFINE_AUTOPTR_CLEANUP_FUNC (PangoLayout, g_object_unref)
--G_DEFINE_AUTOPTR_CLEANUP_FUNC (PangoFontDescription, pango_font_description_free)
--#endif
-+static TactusTouch *
-+tactus_find_touch (PosOskWidget *self, GdkEventSequence *seq)
-+{
-+  for (int i = 0; i < MAX_TOUCHES; i++) {
-+    if (self->touches[i].active && self->touches[i].seq == seq)
-+      return &self->touches[i];
-+  }
-+  return NULL;
-+}
- 
- 
- static void
+-static void
 -render_label (cairo_t *cr, GtkStyleContext *context, const char *label, const GdkRectangle *box)
-+tactus_touch_begin (PosOskWidget *self, GdkEventSequence *seq, double x, double y)
- {
+-{
 -  g_autoptr (PangoLayout) layout = pango_cairo_create_layout (cr);
 -  g_autoptr (PangoFontDescription) font = NULL;
 -  PangoRectangle extents = { 0, };
 -  GdkRGBA color = {0};
 -  GtkStateFlags state;
-+  TactusTouch *t = NULL;
-+  TactusGeom *g;
-+  const char *symbol;
++    if (alts == NULL || alts[0] == NULL)
++      return;
++  } else if (t->geom->role != TACTUS_ROLE_RETURN) {
++    return;
++  }
  
 -  cairo_save (cr);
-+  /* One finger chooses an accent or moves the cursor: others wait */
-+  if (self->popup.active || self->cursor_touch)
-+    return;
-+  /* The same finger can't come down twice */
-+  if (tactus_find_touch (self, seq))
-+    return;
++  t->long_id = g_timeout_add (LONG_PRESS_MS, on_long_press, t);
++  g_source_set_name_by_id (t->long_id, "[pos-osk-widget] long press");
++}
  
 -  state = gtk_style_context_get_state (context);
 -  gtk_style_context_get (context, state, "font", &font, NULL);
@@ -1767,26 +1771,23 @@ of the keyboards on current phones:
 -                         color.blue,
 -                         color.alpha);
 -  pango_cairo_show_layout (cr, layout);
-+  if (tactus_hit_test (self, x, y) == NULL)
-+    return;
  
 -  cairo_restore (cr);
--}
-+  /* A key another finger still holds is typed first */
++static TactusTouch *
++tactus_find_touch (PosOskWidget *self, GdkEventSequence *seq)
++{
 +  for (int i = 0; i < MAX_TOUCHES; i++) {
-+    TactusTouch *o = &self->touches[i];
- 
-+    if (o->active && !o->consumed && o->kind == TACTUS_TOUCH_KEY) {
-+      g_clear_handle_id (&o->long_id, g_source_remove);
-+      if (o->geom)
-+        tactus_commit_key (self, o);
-+      o->consumed = TRUE;
-+    }
++    if (self->touches[i].active && self->touches[i].seq == seq)
++      return &self->touches[i];
 +  }
++  return NULL;
+ }
  
--static void
+ 
+ static void
 -render_hint (cairo_t *cr, GtkStyleContext *context, const char *hint, const GdkRectangle *box)
--{
++tactus_touch_begin (PosOskWidget *self, GdkEventSequence *seq, double x, double y)
+ {
 -  g_autoptr (PangoLayout) layout = pango_cairo_create_layout (cr);
 -  g_autoptr (PangoFontDescription) font = NULL;
 -  PangoRectangle extents = { 0, };
@@ -1797,12 +1798,69 @@ of the keyboards on current phones:
 -  /* TODO: this should come from css */
 -  int hint_margin = 1;
 -  float hint_scale = 0.75;
++  TactusTouch *t = NULL;
++  TactusGeom *g;
++  const char *symbol;
+ 
+-  cairo_save (cr);
++  /* One finger chooses an accent or moves the cursor: others wait */
++  if (self->popup.active || self->cursor_touch)
++    return;
++  /* The same finger can't come down twice */
++  if (tactus_find_touch (self, seq))
++    return;
+ 
+-  gtk_style_context_set_state (context, state);
+-  gtk_style_context_add_class (context, "hint");
++  if (tactus_hit_test (self, x, y) == NULL)
++    return;
+ 
+-  gtk_style_context_get (context, state, "font", &font, NULL);
+-  size = pango_font_description_get_size (font);
+-  pango_font_description_set_size (font, hint_scale * size);
+-  pango_layout_set_font_description (layout, font);
+-
+-  pango_layout_set_text (layout, hint, -1);
+-  pango_layout_set_alignment (layout, PANGO_ALIGN_CENTER);
+-
+-  gtk_style_context_get_margin (context, state, &margin);
+-  gtk_style_context_get_border (context, state, &border);
+-
+-  pango_layout_get_extents (layout, NULL, &extents);
+-
+-  x = box->width - border.left - margin.left - margin.right - border.right
+-    - (extents.width / PANGO_SCALE) - hint_margin;
+-  y = margin.top + border.top + hint_margin;
+-
+-  gtk_style_context_get_color (context, state, &color);
+-
+-  cairo_move_to (cr, x, y);
+-  cairo_set_source_rgba (cr,
+-                         color.red,
+-                         color.green,
+-                         color.blue,
+-                         color.alpha);
+-  pango_cairo_show_layout (cr, layout);
++  /* A key another finger still holds is typed first */
++  for (int i = 0; i < MAX_TOUCHES; i++) {
++    TactusTouch *o = &self->touches[i];
+ 
+-  cairo_restore (cr);
+-  gtk_style_context_remove_class (context, "hint");
+-  gtk_style_context_set_state (context, GTK_STATE_FLAG_NORMAL);
++    if (o->active && !o->consumed && o->kind == TACTUS_TOUCH_KEY) {
++      g_clear_handle_id (&o->long_id, g_source_remove);
++      if (o->geom)
++        tactus_commit_key (self, o);
++      o->consumed = TRUE;
++    }
++  }
++
 +  /* That may have changed the page */
 +  g = tactus_hit_test (self, x, y);
 +  if (g == NULL)
 +    return;
- 
--  cairo_save (cr);
++
 +  for (int i = 0; i < MAX_TOUCHES; i++) {
 +    if (!self->touches[i].active) {
 +      t = &self->touches[i];
@@ -1811,9 +1869,7 @@ of the keyboards on current phones:
 +  }
 +  if (t == NULL)
 +    return;
- 
--  gtk_style_context_set_state (context, state);
--  gtk_style_context_add_class (context, "hint");
++
 +  *t = (TactusTouch) {
 +    .widget = self, .active = TRUE, .seq = seq,
 +    .geom = g, .down_role = g->role,
@@ -1866,40 +1922,11 @@ of the keyboards on current phones:
 +    tactus_arm_long_press (self, t, TRUE);
 +    break;
 +  }
- 
--  gtk_style_context_get (context, state, "font", &font, NULL);
--  size = pango_font_description_get_size (font);
--  pango_font_description_set_size (font, hint_scale * size);
--  pango_layout_set_font_description (layout, font);
--
--  pango_layout_set_text (layout, hint, -1);
--  pango_layout_set_alignment (layout, PANGO_ALIGN_CENTER);
--
--  gtk_style_context_get_margin (context, state, &margin);
--  gtk_style_context_get_border (context, state, &border);
--
--  pango_layout_get_extents (layout, NULL, &extents);
--
--  x = box->width - border.left - margin.left - margin.right - border.right
--    - (extents.width / PANGO_SCALE) - hint_margin;
--  y = margin.top + border.top + hint_margin;
--
--  gtk_style_context_get_color (context, state, &color);
--
--  cairo_move_to (cr, x, y);
--  cairo_set_source_rgba (cr,
--                         color.red,
--                         color.green,
--                         color.blue,
--                         color.alpha);
--  pango_cairo_show_layout (cr, layout);
++
 +  /* The page may have changed under the finger */
 +  if (t->geom && t->geom->row >= 0)
 +    t->geom = tactus_hit_test (self, x, y);
- 
--  cairo_restore (cr);
--  gtk_style_context_remove_class (context, "hint");
--  gtk_style_context_set_state (context, GTK_STATE_FLAG_NORMAL);
++
 +  gtk_widget_queue_draw (GTK_WIDGET (self));
  }
  
@@ -1922,12 +1949,10 @@ of the keyboards on current phones:
 -  g_autoptr (GdkPixbuf) pixbuf = NULL;
 +  if (t == NULL)
 +    return;
- 
--  icon_info = gtk_icon_theme_lookup_icon_for_scale (icon_theme, icon, icon_size, scale, 0);
++
 +  t->x = x;
 +  t->y = y;
- 
--  pixbuf = gtk_icon_info_load_symbolic_for_context (icon_info, context, NULL, NULL);
++
 +  if (self->popup.active && self->popup.touch == t) {
 +    tactus_popup_track (self, x);
 +    return;
@@ -1939,16 +1964,12 @@ of the keyboards on current phones:
 +  if (t->consumed)
 +    return;
  
--  surface = gdk_cairo_surface_create_from_pixbuf (pixbuf, scale, NULL);
--  gtk_render_icon_surface (context, cr, surface,
--                           (box->width - icon_size) / 2,
--                           (box->height - icon_size) / 2);
--  cairo_surface_destroy (surface);
--}
+-  icon_info = gtk_icon_theme_lookup_icon_for_scale (icon_theme, icon, icon_size, scale, 0);
 +  g = tactus_hit_test (self, x, y);
 +  if (g == t->geom)
 +    return;
  
+-  pixbuf = gtk_icon_info_load_symbolic_for_context (icon_info, context, NULL, NULL);
 +  switch (t->kind) {
 +  case TACTUS_TOUCH_KEY:
 +    /* The finger slid to another key: that one is typed when it lifts */
@@ -1996,9 +2017,15 @@ of the keyboards on current phones:
 +    break;
 +  }
  
+-  surface = gdk_cairo_surface_create_from_pixbuf (pixbuf, scale, NULL);
+-  gtk_render_icon_surface (context, cr, surface,
+-                           (box->width - icon_size) / 2,
+-                           (box->height - icon_size) / 2);
+-  cairo_surface_destroy (surface);
 +  gtk_widget_queue_draw (GTK_WIDGET (self));
-+}
-+
+ }
+ 
+-
 +/* Shift was let go */
  static void
 -draw_key (PosOskWidget *self, PosOskKey *key, cairo_t *cr)
@@ -2440,7 +2467,7 @@ of the keyboards on current phones:
  }
  
  
-@@ -1587,48 +1860,76 @@
+@@ -1587,48 +1877,76 @@
  pos_osk_widget_draw (GtkWidget *widget, cairo_t *cr)
  {
    PosOskWidget *self = POS_OSK_WIDGET (widget);
@@ -2541,7 +2568,7 @@ of the keyboards on current phones:
  }
  
  
-@@ -1639,10 +1940,11 @@
+@@ -1639,10 +1957,11 @@
  {
    PosOskWidget *self = POS_OSK_WIDGET (widget);
  
@@ -2555,7 +2582,7 @@ of the keyboards on current phones:
  static void
  pos_osk_widget_get_preferred_width  (GtkWidget       *widget,
                                       gint            *minimum_width,
-@@ -1651,6 +1953,96 @@
+@@ -1651,6 +1970,96 @@
    *minimum_width = *natural_width = MINIMUM_WIDTH;
  }
  
@@ -2652,7 +2679,7 @@ of the keyboards on current phones:
  
  static void
  pos_osk_widget_class_init (PosOskWidgetClass *klass)
-@@ -1716,7 +2108,7 @@
+@@ -1716,7 +2125,7 @@
    /**
     * PosOskWidget:key-height
     *
@@ -2661,7 +2688,7 @@ of the keyboards on current phones:
     */
    props[PROP_KEY_HEIGHT] =
      g_param_spec_uint ("key-height", "", "",
-@@ -1798,89 +2190,48 @@
+@@ -1798,89 +2207,48 @@
                                                0, NULL, NULL, NULL,
                                                G_TYPE_NONE,
                                                0);
@@ -2777,7 +2804,7 @@ of the keyboards on current phones:
  }
  
  
-@@ -1901,37 +2252,27 @@
+@@ -1901,37 +2269,27 @@
    return self->layer;
  }
  
@@ -2829,7 +2856,7 @@ of the keyboards on current phones:
  }
  
  
-@@ -2000,14 +2341,9 @@
+@@ -2000,14 +2358,9 @@
    if (g_strcmp0 (self->name, name) == 0)
      return TRUE;
  
@@ -2847,7 +2874,7 @@ of the keyboards on current phones:
  
    if (!gm_str_is_null_or_empty (variant))
      path = g_strdup_printf ("/mobi/phosh/stevia/layouts/%s+%s.json", layout, variant);
-@@ -2018,6 +2354,14 @@
+@@ -2018,6 +2371,14 @@
    if (data == NULL)
      return FALSE;
  
@@ -2862,7 +2889,7 @@ of the keyboards on current phones:
    g_ptr_array_free (self->symbols, TRUE);
    self->symbols = g_ptr_array_new ();
  
-@@ -2026,6 +2370,14 @@
+@@ -2026,6 +2387,14 @@
  
    parse_lang (self, layout, variant);
  
@@ -2877,7 +2904,7 @@ of the keyboards on current phones:
    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_NAME]);
  
    return ret;
-@@ -2071,15 +2423,7 @@
+@@ -2071,15 +2440,7 @@
    g_debug ("Switching to mode: %d", mode);
    self->mode = mode;
  
@@ -2893,7 +2920,7 @@ of the keyboards on current phones:
    gtk_widget_queue_draw (GTK_WIDGET (self));
  }
  
-@@ -2172,7 +2516,7 @@
+@@ -2172,7 +2533,7 @@
    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_FEATURES]);
  }
  
@@ -2902,7 +2929,7 @@ of the keyboards on current phones:
  void
  pos_osk_widget_set_key_height (PosOskWidget *self, guint key_height)
  {
-@@ -2181,8 +2525,6 @@
+@@ -2181,8 +2542,6 @@
  
    self->key_height = key_height;
    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_KEY_HEIGHT]);
@@ -2911,7 +2938,7 @@ of the keyboards on current phones:
  }
  
  
-@@ -2193,3 +2535,166 @@
+@@ -2193,3 +2552,166 @@
  
    return self->layout.n_rows;
  }

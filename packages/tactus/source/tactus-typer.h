@@ -38,7 +38,8 @@ typedef struct {
   /* Take away what is before the cursor: with the text field's own means (so
    * many bytes), or, where it has none, as so many presses of Backspace */
   void (*erase)  (guint n_chars, guint n_bytes, gboolean by_keys, gpointer data);
-  /* Press a key: "KEY_BACKSPACE", "KEY_ENTER", "KEY_LEFT" … */
+  /* Press a key: "KEY_BACKSPACE", "KEY_ENTER", "KEY_LEFT" …; "KEY_NEWLINE" is
+   * Return with Shift held, a line break where Return alone would send */
   void (*key)    (const char *symbol, gpointer data);
   /* Whether the next letter should be a capital; @context_changed when the
    * text or the cursor changed by other means than a key of ours */

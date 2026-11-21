@@ -666,6 +666,19 @@ main (int argc, char **argv)
   check_str ("a tap on e", typed->str, "e");
   reset (w);
 
+  /* Return held: a new line, typed while it is held and once */
+  down (w, 1, "return");
+  wait_ms (LONG_PRESS_MS + 80);
+  check_str ("holding Return: a new line while it is held", typed->str, "<NEWLINE>");
+  wait_ms (LONG_PRESS_MS + 80);
+  check_str ("held on: still the one", typed->str, "<NEWLINE>");
+  up (w, 1, "return");
+  check_str ("letting go types nothing more", typed->str, "<NEWLINE>");
+  reset (w);
+  tap (w, "return");
+  check_str ("a tap on Return is Return", typed->str, "\n");
+  reset (w);
+
   /* the space bar as a touch pad */
   down (w, 1, "space");
   wait_ms (LONG_PRESS_MS + 80);

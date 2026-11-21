@@ -281,6 +281,9 @@ op_key (const char *symbol, gpointer data)
     } else {
       op_commit ("\n", f);
     }
+  } else if (g_str_equal (symbol, "KEY_NEWLINE")) {
+    /* Return with Shift: a line break in a field that sends on Return too */
+    op_commit ("\n", f);
   } else if (g_str_equal (symbol, "KEY_LEFT")) {
     if (f->cursor > 0) {
       f->cursor = g_utf8_find_prev_char (f->text->str, f->text->str + f->cursor) - f->text->str;
@@ -710,6 +713,28 @@ test_enter (void)
   expect_shift (f, "the next message", TRUE);
   type (f, "sure ");
   expect (f, "the next message", "Sure ");
+  field_free (f);
+
+  /* Return held: a line break where Return sends */
+  f = field_new (FALSE);
+  f->enter_sends = TRUE;
+  type (f, "first line");
+  press (f, "KEY_NEWLINE");
+  expect (f, "Return held keeps what was written", "First line\n");
+  expect_shift (f, "a capital after the new line", TRUE);
+  type (f, "helo");
+  press (f, "KEY_NEWLINE");
+  expect (f, "a lone word before a new line is corrected: it is running text", "First line\nHello\n");
+  type (f, "ok\n");
+  expect (f, "Return itself still sends", "");
+  field_free (f);
+
+  f = field_new (TRUE);
+  type (f, "one teh");
+  press (f, "KEY_NEWLINE");
+  type (f, "two");
+  expect (f, "Return held in a field that tells what it holds", "One the\nTwo");
+  expect_copy (f, "the copy");
   field_free (f);
 }
 
