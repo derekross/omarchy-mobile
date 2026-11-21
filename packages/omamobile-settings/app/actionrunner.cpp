@@ -51,7 +51,9 @@ int ActionRunner::run(const QString &tool, const QStringList &args, const QStrin
         const auto raw = p->readAllStandardOutput().left(4096);
         p->readAllStandardError();
         auto obj = QJsonDocument::fromJson(raw).object();
-        if (obj.isEmpty() || st != QProcess::NormalExit)
+        if ((obj.isEmpty() || st != QProcess::NormalExit) && tool == "pin" && args.value(0) == "change")
+            obj = QJsonObject{{"error", QStringLiteral("the change did not report back: the PIN may or may not have changed. Try the new PIN first, then the old one.")}};
+        else if (obj.isEmpty() || st != QProcess::NormalExit)
             obj = QJsonObject{{"error", QStringLiteral("the backend failed (exit %1)").arg(code)}};
         done(tool, args, obj.toVariantMap(), id);
         p->deleteLater();
@@ -64,6 +66,6 @@ int ActionRunner::run(const QString &tool, const QStringList &args, const QStrin
     p->closeWriteChannel();
     // A PIN change is never cut short by the runner: omamobile-set-pin waits up to 15 s for each of passwd's
     // prompts and 60 s after the retype, and decides itself what to say when that runs out.
-    QTimer::singleShot(tool == "pin" ? 150000 : 20000, p, [p] { if (p->state() != QProcess::NotRunning) p->kill(); });
+    QTimer::singleShot(tool == "pin" && args.value(0) == "change" ? 150000 : 20000, p, [p] { if (p->state() != QProcess::NotRunning) p->kill(); });
     return id;
 }

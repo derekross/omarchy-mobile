@@ -84,6 +84,8 @@ a = getpass.getpass("New password: ")
 b = getpass.getpass("Retype new password: ")
 if a == "88888888":
     print("BAD PASSWORD: it is too simple\npasswd: password unchanged"); sys.exit(10)
+if a == "77777777":
+    import time; time.sleep(20)
 sys.exit(0 if a == b else 11)
 EOF
   chmod +x "$tmp/passwd"
@@ -96,7 +98,15 @@ EOF
   out=$(run change 5061 88888888 88888888); valid "$out"
   [[ $out == *'BAD PASSWORD'* ]] || { echo "FAIL: real helper refusal text: $out" >&2; exit 1; }
   eq "$(run change 5061 123 123)" '{"error":"The PIN must be at least 4 digits, digits only."}'
+  eq "$(run change 5061 7384 9152)" '{"error":"The two PINs do not match."}'
+  # status 75 through the real helper: passwd hangs after the retype, set-pin gives up after 1 s and pin.sh
+  # returns at once (the detached cat set-pin leaves behind does not hold the output open)
+  start=$SECONDS
+  eq "$(printf '%s\n' 5061 77777777 77777777 | OMAMOBILE_PIN_DONE_WAIT=1 bash "$tmp/pin.sh" change 2>/dev/null || true)" "$maybe"
+  (( SECONDS - start < 10 )) || { echo "FAIL: status 75 took too long" >&2; exit 1; }
   out=$(run change 5061 7384 7384; cat "$tmp/err"; run change 4417 7384 7384; cat "$tmp/err")
   [[ $out != *7384* && $out != *5061* && $out != *4417* ]] || { echo "FAIL: a PIN was printed (real helper)" >&2; exit 1; }
+else
+  echo "pin backend: omamobile-set-pin not found next to this package, real-helper cases skipped"
 fi
 echo "pin backend: ok"

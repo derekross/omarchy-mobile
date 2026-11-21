@@ -28,10 +28,11 @@ change)
   if (( rc == 75 )); then
     msg="passwd did not finish after the retype: the PIN may or may not have changed. Try the new PIN first, then the old one, and don't change it again for a minute."
   else
-    msg=$(printf '%s\n' "$err" | /usr/bin/tail -n 3 | /usr/bin/head -c 400)
-    [[ -n $msg ]] || msg="the PIN was not changed (exit $rc)"
+    msg=$err
+    [[ -n ${msg//[[:space:]]/} ]] || msg="the PIN was not changed (exit $rc)"
   fi
-  printf '%s' "$msg" | /usr/bin/python3 -I -c 'import json,sys; print(json.dumps({"error": sys.stdin.read().strip()}, separators=(",", ":"), ensure_ascii=False))'
+  # the last three lines, at most 400 characters, cut as text and escaped by python
+  printf '%s' "$msg" | /usr/bin/python3 -I -c 'import json,sys; t="\n".join(sys.stdin.buffer.read().decode(errors="replace").strip().splitlines()[-3:])[-400:]; print(json.dumps({"error": t}, separators=(",", ":")))'
   exit 1
   ;;
 status)
