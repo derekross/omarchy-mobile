@@ -15,6 +15,11 @@ KERNEL_DIR=${KERNEL_DIR:-$repo/../linux}
 KERNEL_OUT=${KERNEL_OUT:-$KERNEL_DIR}
 OUT=${OUT:-$repo/out/dipper}
 die() { echo "error: $*" >&2; exit 1; }
+descriptor=$repo/device/dipper/device.conf
+overlay_lines=$(grep -c '^DTB_OVERLAYS=' "$descriptor" || true)
+[[ $overlay_lines == 1 ]] || die "expected one DTB_OVERLAYS setting in $descriptor"
+DTB_OVERLAYS=$(sed -n 's/^DTB_OVERLAYS="\([a-z0-9 -]*\)"$/\1/p' "$descriptor")
+[[ -n $DTB_OVERLAYS ]] || die "invalid DTB_OVERLAYS setting in $descriptor"
 : "${SSH_PUBKEY:?set SSH_PUBKEY to your authorized public key}"
 ALPINE=${ALPINE:-alpine:3.22}
 if [[ -n ${OMAMOBILE_NFSROOT:-} ]]; then
@@ -58,7 +63,25 @@ docker run --rm --platform linux/arm64 \
 
 # Pack a copy of the DTB so nothing we do can dirty the kernel tree.
 packdtb=$OUT/sdm845-xiaomi-dipper.dtb
-cp "$dtb" "$packdtb"
+if [[ -n ${DTB_OVERLAYS:-} ]]; then
+  dtc=$KERNEL_OUT/scripts/dtc/dtc
+  fdtoverlay=$KERNEL_OUT/scripts/dtc/fdtoverlay
+  [[ -x $dtc && -x $fdtoverlay ]] || die "kernel build has no dtc/fdtoverlay"
+  overlay_dir=$OUT/overlays
+  mkdir -p "$overlay_dir"
+  overlays=()
+  for ov in $DTB_OVERLAYS; do
+    [[ $ov =~ ^[a-z0-9-]+$ ]] || die "bad DTB overlay name: $ov"
+    src=$repo/device/dipper/overlays/$ov.dtso
+    [[ -f $src ]] || die "no overlay $src"
+    out=$overlay_dir/$ov.dtbo
+    "$dtc" -q -@ -I dts -O dtb -o "$out" "$src" || die "overlay $ov does not compile"
+    overlays+=("$out")
+  done
+  "$fdtoverlay" -i "$dtb" -o "$packdtb" "${overlays[@]}" || die "applying Dipper overlays failed"
+else
+  cp "$dtb" "$packdtb"
+fi
 kernel_image=$image
 if command -v zopfli >/dev/null; then
   echo "compressing the kernel with zopfli for dipper's ABL size limit"

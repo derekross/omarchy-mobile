@@ -13,9 +13,16 @@ assert 'patch-init.py "$stage/init"' in script
 assert 'OMAMOBILE_NFSROOT' in Path('tools/dipper/build').read_text()
 assert 'omamobile-nfsroot' in script
 builder = Path('tools/dipper/build').read_text()
+descriptor = Path('device/dipper/device.conf').read_text()
+overlay = Path('device/dipper/overlays/fts5-touchscreen.dtso').read_text()
 assert 'OUT=${OUT:-$repo/out/dipper}' in builder
 assert 'modules_install' not in builder
 assert 'FIRMWARE_DIR' not in builder
+assert 'source "$repo/device/dipper/device.conf"' not in builder
+assert 'sed -n' in builder and 'DTB_OVERLAYS' in builder
+assert 'DTB_OVERLAYS="fts5-touchscreen"' in descriptor
+assert '&touchscreen' in overlay and 'status = "okay"' in overlay
+assert '"$fdtoverlay" -i "$dtb" -o "$packdtb"' in builder
 assert 'fastboot -s <serial> boot boot.img' in builder
 assert 'panel-samsung-ea8074' not in script
 for path in ('init', 'prune-modules.py', 'patch-init.py', 'initramfs-inside.sh',
@@ -23,6 +30,27 @@ for path in ('init', 'prune-modules.py', 'patch-init.py', 'initramfs-inside.sh',
     assert f':/input/{path}:ro' in builder, f'missing read-only container mount for /input/{path}'
 assert 'sh /input/initramfs-inside.sh' in builder
 print('ok - Dipper initramfs patch anchors and RAM-only builder inputs')
+# Execute the builder's policy-writing block, with and without an NFS request.
+import os
+import subprocess
+import tempfile
+policy = script[script.index('echo xiaomi,dipper'):script.index("echo 'Xiaomi Mi 8 Omarchy'")]
+for spec in ('', '172.16.42.2:/srv/nfs/dipper'):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / 'etc').mkdir()
+        subprocess.run(['sh', '-eu', '-c', policy], check=True,
+                       env={**os.environ, 'stage': tmp, 'OMAMOBILE_NFSROOT': spec})
+        assert (root / 'etc/omamobile-ufs-rw').read_text() == ''
+        assert (root / 'etc/omamobile-root-mode').read_text() == 'ram-rescue\n'
+        assert (root / 'etc/omamobile-usb-recovery').read_text() == 'no\n'
+        nfs = root / 'etc/omamobile-nfsroot'
+        if spec:
+            assert nfs.read_text() == spec + '\n'
+        else:
+            assert not nfs.exists()
+print('ok - generated RAM rescue policy holds without USB or after failed NFS')
+
 PY
 
 python3 - <<'PY'
@@ -61,6 +89,7 @@ with tempfile.TemporaryDirectory() as tmp:
                    check=True, capture_output=True, text=True)
     manifest = json.loads((out / 'BOOT-MANIFEST.json').read_text())
     assert manifest['hardware_boot_tested'] is False
+    assert 'systemd.firstboot=off' in manifest['cmdline']
     assert (out / 'boot.img').read_bytes().startswith(b'ANDROID!')
     kernel.write_bytes(b'k' * 0xF80001)
     result = subprocess.run(['python3', 'tools/dipper/build-boot.py', '--kernel', str(kernel),
