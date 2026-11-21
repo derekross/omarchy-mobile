@@ -277,6 +277,66 @@ chmod 644 "$kr/omamobile-revoked"
 : > "$kr/omamobile-revoked"
 pass "an omamobile-revoked that can't be read as a file is refused before upload; a missing one revokes nothing"
 
+# If an existing omamobile-revoked vanishes, becomes unreadable, turns into a
+# directory, or changes to a malformed line between revoked_file_check and the
+# read, release-upload refuses before anything is sent rather than continuing
+# with an empty revocation list. A wc on PATH applies each fault after
+# revoked_file_check's final wc -l succeeds.
+real_wc=$(command -v wc) && mkdir -p "$t/bin-revoked"
+cat > "$t/bin-revoked/wc" <<EOF
+#!/bin/sh
+"$real_wc" "\$@" || exit \$?
+if [ -n "\${REVOKED_WC_ON:-}" ]; then
+  n=0
+  [ -f "$t/wc.count" ] && read -r n < "$t/wc.count"
+  n=\$((n + 1))
+  printf '%s\n' "\$n" > "$t/wc.count"
+  [ "\$n" = "\$REVOKED_WC_ON" ] || exit 0
+fi
+case "\${REVOKED_FAULT:-}" in
+  rm) rm -f -- "$kr/omamobile-revoked" ;;
+  chmod) chmod 000 -- "$kr/omamobile-revoked" ;;
+  dir) rm -f -- "$kr/omamobile-revoked" && mkdir -- "$kr/omamobile-revoked" ;;
+  swap) printf '%s:4:\n' "$release" > "$kr/omamobile-revoked" ;;
+  crlf) printf '%s\r\n' "$release" > "$kr/omamobile-revoked" ;;
+esac
+EOF
+chmod +x "$t/bin-revoked/wc"
+: > "$t/mode000-probe" && chmod 000 "$t/mode000-probe"
+for fault in rm chmod dir swap crlf; do
+  if [[ $fault == chmod && -r $t/mode000-probe ]]; then
+    pass "# skip: chmod 000 does not stop this user reading"
+    continue
+  fi
+  echo "$release" > "$kr/omamobile-revoked"
+  rm -f "$t/wc.count"
+  before=$(wc -l < "$t/rsync.log")
+  if (cd "$R" && PATH="$t/bin-revoked:$t/bin:$PATH" REVOKED_WC_ON=1 REVOKED_FAULT="$fault" tools/release-upload "$B2") > "$t/log" 2>&1; then
+    fail "release-upload stops when omamobile-revoked fails after the check ($fault)"
+  fi
+  [[ $(cat "$t/wc.count" 2>/dev/null || true) == 1 ]] || fail "the wc wrapper fired once ($fault)"
+  case $fault in
+    rm) [[ ! -e $kr/omamobile-revoked ]] || fail "the wc wrapper removed omamobile-revoked" ;;
+    chmod)
+      [[ ! -r $kr/omamobile-revoked ]] || fail "the wc wrapper made omamobile-revoked unreadable"
+      chmod 644 "$kr/omamobile-revoked" ;;
+    dir)
+      [[ -d $kr/omamobile-revoked ]] || fail "the wc wrapper replaced omamobile-revoked with a directory"
+      rmdir "$kr/omamobile-revoked" ;;
+    swap) [[ $(cat "$kr/omamobile-revoked") == "$release:4:" ]] || fail "the wc wrapper rewrote omamobile-revoked ($fault)" ;;
+    crlf) [[ $(cat "$kr/omamobile-revoked") == $release$'\r' ]] || fail "the wc wrapper rewrote omamobile-revoked ($fault)" ;;
+  esac
+  case $fault in
+    rm|chmod|dir) want="release-upload: cannot read packages/omamobile-keyring/omamobile-revoked" ;;
+    *) want="release-upload: packages/omamobile-keyring/omamobile-revoked changed while reading" ;;
+  esac
+  grep -qxF "$want" "$t/log" || fail "release-upload says why omamobile-revoked failed after the check ($fault)"
+  [[ $(wc -l < "$t/rsync.log") == "$before" && ! -e $pub/.$V2.partial && ! -e $pub/$V2 ]] \
+    || fail "release-upload sends nothing when omamobile-revoked fails after the check ($fault)"
+done
+: > "$kr/omamobile-revoked"
+pass "release-upload refuses before upload if omamobile-revoked cannot be read or changes after the check"
+
 # The one-file download's refusals, before anything is sent
 T2=$R/out/bundle/omamobile-cheetah-$V2.tar
 mkbundle "$V2"

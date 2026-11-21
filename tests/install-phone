@@ -643,7 +643,7 @@ pass "slot check: the yes is the caller's --measure-other-slot or typed on a ter
 phone
 install --dry-run || { cat "$t/out"; fail "a dry run with an unmeasured slot succeeds"; }
 [[ $(probe_calls) == "$get" ]] || { probe_calls; fail "a dry run sends none of the slot check"; }
-[[ $(grep 'would run:' "$t/out" | head -7) == "    would run: fastboot -s FAKE123 --set-active=b
+[[ $(grep 'would run:' "$t/out" | sed -n '1,7p') == "    would run: fastboot -s FAKE123 --set-active=b
     would run: fastboot -s FAKE123 getvar all
     would run: fastboot -s FAKE123 reboot bootloader
     would run: fastboot -s FAKE123 getvar all
@@ -745,15 +745,34 @@ INIT_BOOT_SIZE= vars "" "" $'version-bootloader-a:x\nversion-bootloader-b:x'
 refuse "a partition the phone gives no size for"; grep -q 'no partition-size for init_boot_b' "$t/out" || fail "names the partition with no size"
 vars "" "" $'version-bootloader-a:x\nversion-bootloader-b:x'
 printf 'AVB_FOOTERS="boot:0x4000000 init_boot:0x800000"\n' >> "$R/device/testdev/device.conf"
-install --dry-run || { cat "$t/out"; fail "AVB_FOOTERS sizes that match the phone's partitions pass"; }
+# An AVB_FOOTERS image must already be padded to its declared partition size
+# before any phone query (--verify-only and --dry-run alike).
+for flag in --dry-run --verify-only; do
+  if install "$flag"; then cat "$t/out"; fail "refuses an AVB image shorter than AVB_FOOTERS ($flag)"; fi
+  [[ ! -s $t/fastboot.log ]] || fail "a short AVB image is refused before any fastboot command ($flag)"
+  grep -qF 'boot.img is 11 bytes, not the 67108864 bytes' "$t/out" || { cat "$t/out"; fail "names the short AVB image and both sizes ($flag)"; }
+done
+truncate -s $((0x4000000)) "$t/images/boot.img"
+truncate -s $((0x800000 + 1)) "$t/images/init_boot.img"
+for flag in --dry-run --verify-only; do
+  if install "$flag"; then cat "$t/out"; fail "refuses an AVB image larger than AVB_FOOTERS ($flag)"; fi
+  [[ ! -s $t/fastboot.log ]] || fail "an oversized AVB image is refused before any fastboot command ($flag)"
+  grep -qF 'init_boot.img is 8388609 bytes, not the 8388608 bytes' "$t/out" || { cat "$t/out"; fail "names the oversized AVB image and both sizes ($flag)"; }
+done
+truncate -s $((0x800000)) "$t/images/init_boot.img"
+install --verify-only || { cat "$t/out"; fail "AVB_FOOTERS images padded to their declared sizes pass --verify-only"; }
+install --dry-run || { cat "$t/out"; fail "AVB_FOOTERS sizes that match the images and the phone's partitions pass"; }
 descriptor > "$R/device/testdev/device.conf"
-printf 'AVB_FOOTERS="boot:0x4000000 init_boot:0x1000000"\n' >> "$R/device/testdev/device.conf"
-refuse "an AVB_FOOTERS size that is not the partition's"; grep -q 'pads init_boot to 16777216 bytes, but init_boot_b is 8388608' "$t/out" || fail "names the AVB size and the partition's"
+printf 'AVB_FOOTERS="boot:0x4000000 init_boot:0x400000"\n' >> "$R/device/testdev/device.conf"
+truncate -s $((0x400000)) "$t/images/init_boot.img"
+refuse "an AVB_FOOTERS size that is not the partition's"; grep -q 'pads init_boot to 4194304 bytes, but init_boot_b is 8388608' "$t/out" || fail "names the AVB size and the partition's"
+echo "boot image" > "$t/images/boot.img"
+echo "init_boot image" > "$t/images/init_boot.img"
 descriptor > "$R/device/testdev/device.conf"
 printf 'AVB_FOOTERS="boot:0x10000000000000000"\n' >> "$R/device/testdev/device.conf"
 refuse "an AVB_FOOTERS size too long to be one"; grep -q 'AVB_FOOTERS entries are image:partition_size' "$t/out" || fail "refuses an overlong AVB size"
 descriptor > "$R/device/testdev/device.conf"
-pass "refuses an image larger than its partition, a partition with no size, an AVB_FOOTERS size that is not the partition's"
+pass "refuses an image larger than its partition, a partition with no size, an AVB_FOOTERS image not padded to its declared size, or an AVB_FOOTERS size that is not the partition's"
 
 # Explicit android-v4 is equivalent to the legacy descriptor (omitted method).
 printf '\nBOOT_METHOD=android-v4\n' >> "$R/device/testdev/device.conf"
@@ -902,6 +921,16 @@ grep -q "would run: fastboot -s FAKE123 flash boot_b $BD/images/boot.img" "$t/ou
 tinstall --verify-only --unsigned || { cat "$t/out"; fail "--verify-only passes a good bundle"; }
 [[ ! -s $t/fastboot.log ]] || fail "--verify-only never runs fastboot"
 grep -q 'the phone was not contacted' "$t/out" || fail "--verify-only says the phone was not contacted"
+cp "$BD/device.conf" "$t/bd-device.conf"
+printf 'AVB_FOOTERS="boot:0x4000000"\n' >> "$BD/device.conf"
+manifest
+(cd "$BD" && find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.sig -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS)
+if tinstall --verify-only --unsigned; then cat "$t/out"; fail "bundle --verify-only refuses a short AVB_FOOTERS image"; fi
+[[ ! -s $t/fastboot.log ]] || fail "a bundle short AVB image is refused before any fastboot command"
+grep -qF 'boot.img is 11 bytes, not the 67108864 bytes' "$t/out" || { cat "$t/out"; fail "bundle names the short AVB image and both sizes"; }
+cp "$t/bd-device.conf" "$BD/device.conf"
+manifest
+(cd "$BD" && find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.sig -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS)
 echo tampered >> "$BD/images/dtbo.img"
 if tinstall --verify-only --unsigned; then fail "--verify-only refuses a bundle file that doesn't match"; fi
 [[ ! -s $t/fastboot.log ]] || fail "a refused --verify-only never runs fastboot"

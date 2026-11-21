@@ -51,4 +51,40 @@ print('ok - forced same-version rebuild removes stale cached bytes and signature
 print('ok - identical and unrelated cache entries remain')
 print('ok - a local import retains its supplied signature')
 
+a = source.index('sign_and_index() {')
+b = source.index('\n}\n', a) + 3
+sign_function = source[a:b]
+with tempfile.TemporaryDirectory() as directory:
+    p = Path(directory)
+    (p / 'repo').mkdir()
+    (p / 'cache/pkg').mkdir(parents=True)
+    package = p / 'repo' / base
+    package.write_text('same package bytes')
+    repo_signature = Path(str(package) + '.sig')
+    repo_signature.write_text('new imported signature')
+    cached = p / 'cache/pkg' / base
+    cached.write_bytes(package.read_bytes())
+    cached_signature = Path(str(cached) + '.sig')
+    cached_signature.write_text('old key signature')
+    command = '''set -euo pipefail
+repo=$1/repo; ALARM_CACHE=$1/cache; key=test
+repo-add() { :; }
+gpg() { printf 'generated signature' > "${@: -1}.sig"; }
+''' + sign_function + '\nsign_and_index\n'
+    def run():
+        subprocess.run(['bash', '-c', command, 'test', str(p)], check=True,
+                       stdout=subprocess.DEVNULL)
+    run()
+    assert cached.read_bytes() == package.read_bytes()
+    assert not cached_signature.exists()
+    cached_signature.write_bytes(repo_signature.read_bytes())
+    run()
+    assert cached_signature.read_bytes() == repo_signature.read_bytes()
+    repo_signature.unlink()
+    run()
+    assert repo_signature.read_text() == 'generated signature'
+    assert not cached_signature.exists() and cached.exists()
+print('ok - imported and regenerated signatures invalidate only a stale cached signature')
+print('ok - a matching cached signature and package bytes remain')
+
 PYTEST
