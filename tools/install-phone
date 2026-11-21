@@ -116,10 +116,10 @@
 #                            (the guided installer) passes it, so the phone
 #                            it looked at is the one that is written
 #     --verify-only          check the files (a bundle's signature, checksums,
-#                            manifest.json, root image and slot B's ramdisk,
-#                            read in a directory of its own in --work that
-#                            it removes) and stop before the phone is
-#                            contacted
+#                            manifest.json, root image, AVB_FOOTERS image sizes
+#                            and slot B's ramdisk, read in a directory of its
+#                            own in --work that it removes) and stop before
+#                            the phone is contacted
 #
 # Answers are read from standard input, so they can be piped for tests and by
 # the guided installer, which sets OMAMOBILE_INSTALL_GUIDED=1: the questions
@@ -692,8 +692,18 @@ PY
 ramdisk_image=""
 if [[ " $BOOT_IMAGES " == *" vendor_kernel_boot "* ]]; then ramdisk_image=vendor_kernel_boot
 elif [[ " $BOOT_IMAGES " == *" vendor_boot "* ]]; then ramdisk_image=vendor_boot; fi
+[[ -z $ramdisk_image || -z ${avb_size[$ramdisk_image]:-} ]] ||
+  die "$conf: AVB_FOOTERS names $ramdisk_image, which carries the ramdisk: the owner's key can't be added to a signed image"
+# An AVB_FOOTERS image is padded to its declared partition size (bin/omamobile
+# images), because ABL reads the footer from the end of the partition: refuse a
+# short or oversized image before contacting the phone (and in --verify-only).
+for p in $BOOT_IMAGES; do
+  [[ -n ${avb_size[$p]:-} ]] || continue
+  isize=$(stat -c %s "$images/$p.img")
+  ((isize == avb_size[$p])) ||
+    die "$p.img is $isize bytes, not the ${avb_size[$p]} bytes $conf's AVB_FOOTERS pads it to (bin/omamobile images)"
+done
 if [[ -n $ramdisk_image ]]; then
-  [[ -z ${avb_size[$ramdisk_image]:-} ]] || die "$conf: AVB_FOOTERS names $ramdisk_image, which carries the ramdisk: the owner's key can't be added to a signed image"
   mkdir -p "$work" && verify_dir=$(mktemp -d "$work/verify.XXXXXX") ||
     die "can't create or write to the work directory $work (give one you can write to with --work DIR)"
   trap 'rm -rf "$verify_dir"' EXIT
