@@ -28,7 +28,7 @@ def handler(name):
     raise AssertionError("unterminated handler")
 
 
-h = {"armed": handler("onArmedChanged"), "active": handler("onActiveChanged")}
+h = {"armed": handler("onArmedChanged"), "active": handler("onActiveChanged").replace("ToplevelManager.activeToplevel", "manager.activeToplevel")}
 if args.negative:
     h["armed"] = h["armed"].replace("armed && !feedbackSent", "armed")
 
@@ -40,6 +40,7 @@ TestCase {
  property int backs:0
  function haptic(){ticks++}
  function back(){backs++}
+ QtObject {id:manager;property var activeToplevel:null}
  QtObject {id:win;property bool rightEdge:false}
  QtObject {id:centroid;property point position:Qt.point(0,20)}
  QtObject {
@@ -48,6 +49,7 @@ TestCase {
  property bool armed:false
  property bool wasArmed:false
  property bool feedbackSent:false
+ property var startedToplevel:null
  property real atY:0
  onArmedChanged: ARMED
  onActiveChanged: ACTIVE

@@ -111,7 +111,7 @@ for sc in 3 '8 \/ 3'; do
   t=$(printf 'local omarchy_monitor_scale = 2\n' | sed "s/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = $sc/")
   [[ $t == 'local omarchy_monitor_scale = 3' || $t == 'local omarchy_monitor_scale = 8 / 3' ]] || fail "the seeded scale line ($t)"
 done
-grep -c 'Quickshell.execDetached(BackModel.ESCAPE_ARGV)' "$b" >/dev/null || fail "back sends Escape through BackModel"
+grep -c 'Quickshell.execDetached(browser ? BackModel.BROWSER_BACK_ARGV : BackModel.ESCAPE_ARGV)' "$b" >/dev/null || fail "back sends Escape through BackModel"
 grep -c 'WlrLayershell.namespace: "omamobile-back"' "$b" >/dev/null || fail "back strips' namespace"
 grep -c 'mask: Region { item: strip }' "$b" >/dev/null || fail "only the edge strip takes touches"
 grep -c 'exclusionMode: ExclusionMode.Normal' "$b" >/dev/null || fail "back strips stay clear of the bar and the keyboard"
@@ -1383,3 +1383,11 @@ else
   pass "Back threshold feedback: once per gesture, both edges and retreat"
 fi
 env -u OMAMOBILE_POWER_KEY_ANDROID bash test/power-overlap.sh || fail "overlapping power-key presses"
+rc=0; out=$(python3 -B test/back-navigation.py 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "Back navigation # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" >&2; fail "Back navigation"
+else
+  pass "Back navigation"
+fi
