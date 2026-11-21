@@ -208,6 +208,70 @@ done
 rmdir "$kr/omamobile-revoked" && : > "$kr/omamobile-revoked"
 pass "fetch-published stops at an omamobile-revoked not in RELEASES §10's form, before any download, with the signing tools' words"
 
+# A missing omamobile-revoked revokes nothing and writes nothing to stderr;
+# if an existing file vanishes, becomes unreadable, turns into a directory,
+# or changes to a malformed line between revoked_file_check and the read,
+# fetch-published stops before any download rather than continuing with an
+# empty or unparsed revocation list. A wc on PATH applies each fault after
+# revoked_file_check's final wc -l succeeds.
+rm -f "$kr/omamobile-revoked"
+(cd "$R" && OMAMOBILE_PKGS_URL=file://$t/srv tools/fetch-published "$t/revoked-missing") \
+  > "$t/log" 2> "$t/err" || { cat "$t/log" "$t/err"; fail "fetch-published allows a missing omamobile-revoked"; }
+[[ ! -s $t/err ]] || { cat "$t/err"; fail "a missing omamobile-revoked writes nothing to stderr"; }
+[[ -f $t/revoked-missing/baz-1-1-any.pkg.tar.zst && -f $t/revoked-missing/foo-0.2.10-1-any.pkg.tar.zst ]] \
+  || { cat "$t/log"; fail "fetches packages when omamobile-revoked is missing"; }
+real_wc=$(command -v wc) && mkdir -p "$t/bin-revoked"
+cat > "$t/bin-revoked/wc" <<EOF
+#!/bin/sh
+"$real_wc" "\$@" || exit \$?
+case "\${REVOKED_FAULT:-}" in
+  rm) rm -f -- "$kr/omamobile-revoked" ;;
+  chmod) chmod 000 -- "$kr/omamobile-revoked" ;;
+  dir) rm -f -- "$kr/omamobile-revoked" && mkdir -- "$kr/omamobile-revoked" ;;
+  swap) printf '%s:4:\n' "$signer" > "$kr/omamobile-revoked" ;;
+  crlf) printf '%s\r\n' "$signer" > "$kr/omamobile-revoked" ;;
+esac
+EOF
+chmod +x "$t/bin-revoked/wc"
+: > "$t/unreadable" && chmod 000 "$t/unreadable"
+for fault in rm chmod dir swap crlf; do
+  if [[ $fault == chmod && -r $t/unreadable ]]; then
+    pass "# skip: chmod 000 does not stop this user reading"
+    continue
+  fi
+  echo "$signer" > "$kr/omamobile-revoked"
+  d=$t/revoked-fault-$fault && : > "$t/curl.log"
+  if into=$d fetch PATH="$t/bin-revoked:$t/bin:$PATH" REVOKED_FAULT="$fault"; then
+    cat "$t/log"
+    fail "stops when omamobile-revoked fails after the check ($fault)"
+  fi
+  case $fault in
+    rm)
+      [[ ! -e $kr/omamobile-revoked ]] || fail "the wc wrapper removed omamobile-revoked"
+      want="error: cannot read packages/omamobile-keyring/omamobile-revoked" ;;
+    chmod)
+      [[ ! -r $kr/omamobile-revoked ]] || fail "the wc wrapper made omamobile-revoked unreadable"
+      chmod 644 "$kr/omamobile-revoked"
+      want="error: cannot read packages/omamobile-keyring/omamobile-revoked" ;;
+    dir)
+      [[ -d $kr/omamobile-revoked ]] || fail "the wc wrapper replaced omamobile-revoked with a directory"
+      rmdir "$kr/omamobile-revoked"
+      want="error: cannot read packages/omamobile-keyring/omamobile-revoked" ;;
+    swap)
+      [[ $(cat "$kr/omamobile-revoked") == "$signer:4:" ]] || fail "the wc wrapper rewrote omamobile-revoked as malformed ($fault)"
+      want="error: packages/omamobile-keyring/omamobile-revoked changed while reading" ;;
+    crlf)
+      [[ $(cat "$kr/omamobile-revoked") == $signer$'\r' ]] || fail "the wc wrapper rewrote omamobile-revoked as malformed ($fault)"
+      want="error: packages/omamobile-keyring/omamobile-revoked changed while reading" ;;
+  esac
+  grep -qxF "$want" "$t/log" \
+    || { cat "$t/log"; fail "says why omamobile-revoked failed after the check ($fault)"; }
+  [[ ! -s $t/curl.log ]] || { cat "$t/curl.log"; fail "fetches nothing when omamobile-revoked fails after the check ($fault)"; }
+  [[ ! -e $d ]] || fail "makes no DIR when omamobile-revoked fails after the check ($fault)"
+done
+: > "$kr/omamobile-revoked"
+pass "fetch-published allows a missing omamobile-revoked quietly, and stops before any download if it cannot be read or changes after the check"
+
 # --- build-packages and build-rootfs --local ---
 mv "$R/keys/panther" "$t/panther-key"
 if run tools/build-packages --local panther packages/omamobile-device-panther; then fail "build-packages --local refuses without the local key"; fi
@@ -237,10 +301,10 @@ pass "build-rootfs --local checks the device, the key and out/NAME/repo"
 # stand-in, as in tests/build-packages-host-tools: without pacman's, the
 # tool would fetch it from the Arch Linux ARM tarball
 command -v bsdtar >/dev/null || command -v zstd >/dev/null || { pass "# skip: no bsdtar or zstd"; exit 0; }
-mkpkg() {  # mkpkg DIR NAME VER-REL [FILE]: a package file (NAME-VER-REL-any.pkg.tar.zst) with its .PKGINFO
+mkpkg() {  # mkpkg DIR NAME VER-REL [FILE [ARCH]]: a package file (NAME-VER-REL-any.pkg.tar.zst) with its .PKGINFO
   local file=$1/${4:-$2-$3-any.pkg.tar.zst}
   mkdir -p "$t/pkginfo" "$1"
-  printf 'pkgname = %s\npkgver = %s\narch = any\n' "$2" "$3" > "$t/pkginfo/.PKGINFO"
+  printf 'pkgname = %s\npkgver = %s\narch = %s\n' "$2" "$3" "${5:-any}" > "$t/pkginfo/.PKGINFO"
   if command -v bsdtar >/dev/null; then bsdtar --zstd -cf "$file" -C "$t/pkginfo" .PKGINFO
   else tar --zstd -cf "$file" -C "$t/pkginfo" .PKGINFO; fi
 }
@@ -248,6 +312,34 @@ mkdir -p "$t/bin-import"
 printf '#!/bin/bash\nwhile [[ $1 == -* ]]; do [[ $1 == --key ]] && shift; shift; done\ntouch "$1"; ln -sf "$1" omamobile.db\n' > "$t/bin-import/repo-add"
 chmod +x "$t/bin-import/repo-add"
 r=$R/out/panther/repo/aarch64
+# Two folders, the fault in the second: every folder is checked before the
+# first is copied, so the first folder's packages stay out too, and the
+# folder the checks copy into is gone
+mkpkg "$t/first" foo 0.2.10-1 && mkpkg "$t/first" bar 1-1
+mkpkg "$t/pair" baz 1.9-1 && mkpkg "$t/pair" baz 1.10-1
+mkpkg "$t/arch" baz 1-1 baz-1-1-x86_64.pkg.tar.zst x86_64
+mkpkg "$t/nameless" "" 1-1 nameless-1-1-any.pkg.tar.zst
+# A package cut short, as an interrupted copy leaves it: a .PKGINFO longer
+# than one tar block, cut after that block, so the reader prints pkgname and
+# arch and then fails (a plain tar, which both readers take: the suite may
+# have no zstd program to compress it)
+{ printf 'pkgname = baz\npkgver = 1-1\narch = any\n'; printf '#%0600d\n' 0; } > "$t/pkginfo/.PKGINFO"
+if command -v bsdtar >/dev/null; then bsdtar --format=ustar -cf "$t/cut.tar" -C "$t/pkginfo" .PKGINFO
+else tar --format=ustar -cf "$t/cut.tar" -C "$t/pkginfo" .PKGINFO; fi
+mkdir -p "$t/cut" && head -c 1024 "$t/cut.tar" > "$t/cut/baz-1-1-any.pkg.tar.zst"
+for bad in pair arch nameless cut; do
+  case $bad in
+    pair) what="two files of one package" want="$t/pair has two files of baz" ;;
+    arch) what="an x86_64 package" want="$t/arch/baz-1-1-x86_64.pkg.tar.zst is not an aarch64 package" ;;
+    nameless) what="a package with no pkgname" want="$t/nameless/nameless-1-1-any.pkg.tar.zst has no pkgname in its .PKGINFO" ;;
+    cut) what="a package cut short" want="$t/cut/baz-1-1-any.pkg.tar.zst is not a package archive that can be read" ;;
+  esac
+  if run env PATH="$t/bin-import:$PATH" tools/build-packages --local panther --import "$t/first" --import "$t/$bad"; then cat "$t/log"; fail "--import refuses a second folder with $what"; fi
+  grep -qF "$want" "$t/log" || { cat "$t/log"; fail "says why a second folder with $what is refused"; }
+  [[ -z $(ls -A "$r" 2>/dev/null) ]] || { ls -A "$r"; cat "$t/log"; fail "copies nothing from either folder and writes no index ($what in the second)"; }
+  [[ $(ls -A "$R/out/panther/repo") == aarch64 ]] || { ls -A "$R/out/panther/repo"; fail "leaves no folder of its own beside the repository ($what in the second)"; }
+done
+pass "build-packages --import checks every folder before the first copy: two files of one package, an x86_64 package, one with no pkgname, or one cut short, in the second adds nothing"
 mkpkg "$t/same" foo 0.2.9-1 renamed-0.2.9-1-any.pkg.tar.zst && mkpkg "$t/same" foo 0.2.10-1 && mkpkg "$t/same" bar 1-1
 if run env PATH="$t/bin-import:$PATH" tools/build-packages --local panther --import "$t/same"; then cat "$t/log"; fail "--import refuses a folder with two files of one package"; fi
 line=$(grep -F 'two files of foo' "$t/log") || { cat "$t/log"; fail "says the folder has two files of foo"; }
@@ -261,3 +353,25 @@ gpgconf --homedir "$R/keys/panther/gnupg" --kill gpg-agent 2>/dev/null || true
 [[ -f $r/foo-0.2.10-1-any.pkg.tar.zst && -f $r/foo-utils-1-1-any.pkg.tar.zst && -f $r/bar-1-1-any.pkg.tar.zst && -e $r/omamobile.db ]] \
   || { ls -A "$r"; cat "$t/log"; fail "all three packages and the index are in the repository"; }
 pass "build-packages --import still takes a folder of different packages, foo and foo-utils among them"
+# Two folders that both import, each with a package found in no other
+# folder, so both must be copied. A cp on PATH, at the first copy into the
+# repository (after the checks), moves an x86_64 package into the second
+# folder and writes an x86_64 archive over the second folder's grault, in
+# place: neither reaches the repository, because what goes in is the copy
+# that was checked
+mkpkg "$t/first" corge 1-1 && mkpkg "$t/different" grault 1-1
+late=qux-1-1-x86_64.pkg.tar.zst && mkpkg "$t/late" qux 1-1 "$late" x86_64 && mkdir -p "$t/bin-late"
+mkpkg "$t/late" zed 1-1 zed.pkg.tar.zst x86_64
+printf '#!/bin/bash\ncommand -p cp "$@" || exit\n[[ ${!#} == */repo/aarch64/* && -e %q ]] || exit 0\nmv %q %q\ncommand -p cp %q %q\n' \
+  "$t/late/$late" "$t/late/$late" "$t/different/" "$t/late/zed.pkg.tar.zst" "$t/different/grault-1-1-any.pkg.tar.zst" > "$t/bin-late/cp" && chmod +x "$t/bin-late/cp"
+grault=$(sha256sum < "$t/different/grault-1-1-any.pkg.tar.zst")
+run env PATH="$t/bin-late:$t/bin-import:$PATH" tools/build-packages --local panther --import "$t/first" --import "$t/different" \
+  || { cat "$t/log"; fail "--import takes two folders of packages"; }
+gpgconf --homedir "$R/keys/panther/gnupg" --kill gpg-agent 2>/dev/null || true
+[[ -f $r/corge-1-1-any.pkg.tar.zst && -f $r/grault-1-1-any.pkg.tar.zst ]] || { ls -A "$r"; cat "$t/log"; fail "copies the packages of both folders"; }
+[[ -f $t/different/$late && ! -e $r/$late ]] || { ls -A "$r" "$t/different"; cat "$t/log"; fail "copies only the files it checked (an x86_64 package that came after the checks)"; }
+[[ $(sha256sum < "$t/different/grault-1-1-any.pkg.tar.zst") != "$grault" ]] || fail "the cp on PATH wrote an x86_64 archive over the second folder's grault"
+[[ $(sha256sum < "$r/grault-1-1-any.pkg.tar.zst") == "$grault" ]] \
+  || { cat "$t/log"; fail "copies the grault it checked, not the x86_64 archive written over it after the checks"; }
+[[ $(ls -A "$R/out/panther/repo") == aarch64 ]] || { ls -A "$R/out/panther/repo"; fail "leaves no folder of its own beside the repository after an import"; }
+pass "build-packages --import copies every folder, and only what it checked: not a file that came into a folder, or one put over a checked file, after the checks"

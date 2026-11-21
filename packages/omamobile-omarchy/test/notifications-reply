@@ -75,7 +75,7 @@ check "after Send the field is closed, the toast gone and focus released" '[[ $l
 check "NotificationReplied carries the text, then the toast closes as dismissed" '[[ $signals == "NotificationReplied   1   \"On my way\" NotificationClosed   1   2" ]]'
 if ((status)); then
   echo "# log: $log"; echo "# signals: $signals"
-  grep -E "Error|error" "$t/qs.log" | head -5 | sed 's/^/# /'
+  grep -E "Error|error" "$t/qs.log" | sed -n '1,5p' | sed 's/^/# /'
 fi
 rm -rf "$t"
 exit $status

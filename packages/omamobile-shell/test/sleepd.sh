@@ -78,7 +78,7 @@ sleepd() {
     OMAMOBILE_SLEEP_CLOCK="$t/clock" bash "$here/bin/omamobile-sleepd" "$@"
 }
 suspends() { grep -c '^systemctl suspend' "$t/log" || true; }
-first_at() { sed -n 's/^systemctl suspend at //p' "$t/log" | head -n 1; }
+first_at() { sed -n 's/^systemctl suspend at //p' "$t/log" | sed -n 1p; }
 
 reset; watch 100
 [[ $(suspends) -ge 1 ]] || fail "screen off and locked: it sleeps"
@@ -130,7 +130,7 @@ reset; echo "$inh" >"$t/inhibitors"; echo 1100 >"$t/lit_at"; echo 1110 >"$t/off_
 # A power-key wake between checks from a sleep logind didn't announce (no signal, only suspend_stats):
 # the PIN pad is lit at the next poll, not at the next full check
 reset; echo "$inh" >"$t/inhibitors"; echo 111 >"$t/wake_irq"; echo 1040 >"$t/woke_at"; watch 100
-at=$(sed -n 's/^omamobile-keys wake at //p' "$t/log" | head -n 1)
+at=$(sed -n 's/^omamobile-keys wake at //p' "$t/log" | sed -n 1p)
 [[ -n $at ]] && ((at >= 1040 && at <= 1044)) || fail "held: a power-key wake after an unannounced sleep lights the PIN pad at the next poll (at ${at:-never})"
 grep -c 'resumed, woken by IRQ 111' "$t/out" >/dev/null || fail "held: the unannounced resume is logged"
 # No panel to read the backlight from: every poll is a full one, as before
