@@ -1308,7 +1308,8 @@ it marks the whole disk read-only and checks it at hand-over.
 
 A second RAM-only image, SHA-256
 `06a8cc368ce86ae6ba570208d0291c642f143019283dd0a88d99ef2365d746b3`,
-included #919's exact `initramfs/init`, `ram-rescue` mode, no NFS request,
+included `initramfs/init` from #919 commit
+`2c33e4ba14a8c6725262bc1d2e9f3ae89245aec3`, `ram-rescue` mode, no NFS request,
 disabled automatic USB-failure panic, and a static `reboot-to` in RAM.
 `fastboot boot` reached an SSH shell on kernel `7.3.0-rc6-omamobile-push1`;
 `/` remained rootfs, all six UFS disk flags and all 85 partition flags read
