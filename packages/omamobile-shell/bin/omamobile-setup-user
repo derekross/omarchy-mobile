@@ -20,7 +20,7 @@ set -euo pipefail
 # step the user does want can be had by removing its marker from
 # ~/.local/state/omarchy/done/ before the next login.
 if [[ ${1:-} == --adopt ]]; then
-  adopt=" omamobile-shell-profile omamobile-monitor-scale omamobile-hide-cursor omamobile-osk omamobile-screensaver omamobile-files-single-tap "
+  adopt=" omamobile-shell-profile omamobile-monitor-scale omamobile-hide-cursor omamobile-osk omamobile-screensaver omamobile-files-single-tap omamobile-foot-selection "
   omarchy-done() {
     if [[ $1 == ensure && $adopt == *" $2 "* ]]; then
       command omarchy-done check "$2" 2>/dev/null || { command omarchy-done mark "$2"; echo "omamobile-setup-user: adopted $2 (marked done, not run)"; }
@@ -444,6 +444,35 @@ if [[ -f $foot ]] && omarchy-done ensure omamobile-foot-touch; then
     -e '/^\[scrollback\]$/,/^\[/s/^multiplier=7\.0$/multiplier=3.0/' "$foot"
   if ! grep -c '^\[touch\]' "$foot" >/dev/null; then
     printf '\n[touch]\nlong-press-delay=300\n' >>"$foot"
+  fi
+fi
+
+# A selection in foot goes to the clipboard too, not only the primary
+# selection: on a phone there's no middle click to paste the primary, so a
+# touch selection (hold, then drag) or a search + Enter (Ctrl+Shift+R) had
+# nothing to paste with Ctrl+Shift+V or another app's paste. Once, and only
+# when foot.ini doesn't set selection-target itself.
+if [[ -f $foot ]] && omarchy-done ensure omamobile-foot-selection; then
+  if ! grep -Ec '^[[:space:]]*selection-target[[:space:]]*=' "$foot" >/dev/null; then
+    main='^\[main\][[:space:]]*(#.*)?$'
+    if grep -Ec "$main" "$foot" >/dev/null; then
+      # sed -i writes a temp file next to foot.ini; if it can't, the step runs again next login
+      if ! sed -i --follow-symlinks -E "0,/$main/s//&\nselection-target=both/" "$foot"; then
+        rm -f "$HOME/.local/state/omarchy/done/omamobile-foot-selection"
+      fi
+    else
+      # Keys above the first section are foot's [main], so a [main] on top changes nothing else
+      # Through a temp file, written back in place so a symlinked foot.ini stays a link; a failed
+      # write leaves the step for the next login instead of a cut file
+      tmp=
+      if tmp=$(mktemp "${foot%/*}/.foot.ini.XXXXXX") \
+        && { printf '[main]\nselection-target=both\n\n'; cat "$foot"; } >"$tmp" && cat "$tmp" >"$foot"; then
+        rm -f "$tmp"
+      else
+        [[ -z $tmp ]] || rm -f "$tmp"
+        rm -f "$HOME/.local/state/omarchy/done/omamobile-foot-selection"
+      fi
+    fi
   fi
 fi
 
