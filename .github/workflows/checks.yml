@@ -24,7 +24,8 @@ jobs:
     name: Policy (identifiers, blobs, sign-offs)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      # actions/checkout v5.1.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           fetch-depth: 0
       - name: tools/pr-check
@@ -40,11 +41,17 @@ jobs:
   tests:
     name: Tests (tests/all, every package)
     runs-on: ubuntu-24.04
-    container: archlinux:latest
+    # archlinux image index resolved on 2026-11-16 (the amd64 image inside is
+    # from 2026-11-09); bump deliberately:
+    #   docker buildx imagetools inspect archlinux:latest
+    container: archlinux@sha256:d4594bb2300cba11f41c2f27923eb56f63d9988909c402f9c95517d1e362c899
     timeout-minutes: 45
     steps:
       - name: Packages the tests use
         run: |
+          # An older pinned base can carry a keyring older than a packager's
+          # newest key; refresh it before anything else verifies signatures.
+          pacman -Sy --noconfirm --needed archlinux-keyring
           pacman -Syu --noconfirm --needed git base-devel e2fsprogs zstd lz4 openssl \
             python python-dbus python-gobject dbus nodejs dtc cpio file jq busybox \
             xz gzip qt6-declarative qt6-svg shellcheck rsync android-tools unzip \
@@ -59,7 +66,8 @@ jobs:
               https://archive.archlinux.org/packages/s/simdjson/simdjson-1:5.0.5-1-x86_64.pkg.tar.zst
             node --version
           fi
-      - uses: actions/checkout@v5
+      # actions/checkout v5.1.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: A normal user (some tests check what a user may not do)
         run: |
           useradd -m ci
