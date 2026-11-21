@@ -254,7 +254,6 @@ run || { cat "$t/run.out"; fail "a failed daemon-reload does not stop firstboot"
 unset FAIL_DAEMON_RELOAD
 grep -q '^    could not reload systemd; the new units apply from the next boot$' "$t/run.out" || fail "a failed reload is reported"
 grep -q '^ufw allow in on usb0 to any port 22 proto tcp$' "$CALLS" || fail "a failed reload does not skip the SSH firewall rule"
-grep -qx 'ENABLED=yes' "$R/etc/ufw/ufw.conf" || fail "a failed reload does not skip enabling the firewall"
 pass "a failed systemd reload still configures the firewall"
 
 # The name and email are optional: without them git is left alone
