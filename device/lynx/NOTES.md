@@ -3,6 +3,30 @@
 
 Findings from real hardware, newest first. Tracking issue: #36.
 
+## 2026-11-14: later old-kernel Wi-Fi restoration receipts reconciled
+
+Private receipts saved after the earlier report record guarded startup after
+the owner's reboot on `7.3.0-rc6-omamobile-lynx-msi-20261113+`: Trusty/AoC,
+82 services with zero restarts, PCIe/MSI, one firmware load and passive scan
+(21 BSS entries). An associated activation stopped when its immediate IPv4
+check raced DHCP; rollback/disarm succeeded. A revised activation with a
+bounded DHCP-readiness wait then passed DHCP, gateway pings, Wi-Fi-bound and
+ordinary HTTPS 200 with TLS verification, and fresh USB SSH. That revised
+activation did not reload firmware/modules or reboot. All six protected
+hashes and required smoke checks passed; no stage watchdog or network rollback
+timer remained active at close.
+
+This adds a second boot's historical success and preserves its initial
+failure. It does not qualify a counted cold-start/reconnect/endurance series,
+prove current connectivity, or establish the MSI candidate as a stable fix.
+Startup remained manual after reboot. The separate signed integration at
+`dfdf8ce251c89d3cd05a6325c61ed7ea1c61a741` booted on November 15 with AoC
+and WLAN held off. Its Wi-Fi paths still need their own qualification. No hardware action was performed
+to reconcile these receipts. Details and limits: [AOC-WIFI-PLAN.md](AOC-WIFI-PLAN.md).
+
+The November 13 entry below describes the earlier report's evidence cutoff;
+its then-pending post-reboot startup is superseded by the later receipts above.
+
 ## 2026-11-13: AoC-first Wi-Fi scan and one guarded traffic test
 
 - **AoC-first ordering reproduced on this lynx.** Trusty IPC and AoC came
