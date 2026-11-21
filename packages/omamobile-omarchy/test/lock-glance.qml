@@ -721,7 +721,13 @@ Item {
       compare(harness.view.pinVisible, true)
       compare(one("lockPinClock").visible, false)
       compare(one("lockEmergencyCall").visible, false)
-      verify(findAll(harness.view, function(i) { return i.visible && String(i.text) === "Enter Password" }).length > 0)
+      // Omarchy's own prompt, whatever it says: a literal on 4.0.6, a
+      // translation on 4.5 (its key here, where no catalog is at hand).
+      // test/patches.py checks that our patches leave that expression alone.
+      var prompt = String(harness.view.placeholderText)
+      verify(prompt.length > 0 && prompt !== "Enter PIN", "a computer's lock asks for the password, not a PIN: " + prompt)
+      verify(findAll(harness.view, function(i) { return i.visible && String(i.text) === prompt }).length > 0,
+             "the password prompt shows: " + prompt)
       harness.wakes = 0
       mouseClick(harness.view, 240, 300)
       compare(harness.wakes, 1, "one click wakes a computer's dark lock (0029 is touch-only)")
