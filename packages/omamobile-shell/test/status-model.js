@@ -123,4 +123,14 @@ assert.deepStrictEqual(r.real, ["keychron-k2-keyboard"])
 assert.deepStrictEqual(M.layoutState(r.devices, r.real), { count: 2, description: "Greek", names: ["keychron-k2-keyboard"] })
 assert.deepStrictEqual(M.splitRead(M.readSeparator + "\n{}").real, [])
 assert.strictEqual(M.splitRead("no separator"), null)
+// Hyprland also turns ',' and a newline into '-', and numbers a repeated name
+assert.strictEqual(M.hyprName("Acme, Inc Keyboard"), "acme--inc-keyboard")
+assert.strictEqual(M.hyprName("a\nb"), "a-b")
+const dup = dev([{ name: "acme-kbd", layout: "us,gr", active_layout_index: 0, active_keymap: "English (US)" },
+  { name: "acme-kbd-1", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" },
+  { name: "acme-kbd-x", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" },
+  { name: "max77759-pmic-keys", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" }])
+assert.deepStrictEqual(M.layoutState(dup, ["acme-kbd"]), { count: 2, description: "Greek", names: ["acme-kbd", "acme-kbd-1"] }, "-1 suffix counts, -x and others do not")
+const comma = M.splitRead("Acme, Inc Keyboard\n" + M.readSeparator + "\n" + dev([{ name: "acme--inc-keyboard", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" }]))
+assert.strictEqual(M.layoutState(comma.devices, comma.real).count, 2, "a name with a comma still matches")
 console.log("ok - status model: real keyboards only, event.parse fields")

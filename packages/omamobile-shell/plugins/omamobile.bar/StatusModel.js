@@ -189,9 +189,17 @@ function eventLayout(fields) {
   if (!f || !typedKeyboard(f[0])) return null
   return f[1]
 }
-// Hyprland's device names: the kernel's name lowercased, spaces as '-'.
+// Hyprland's device names: the kernel's name lowercased, with space, ',' and
+// newline as '-' (deviceNameToInternalString).
 function hyprName(name) {
-  return String(name || "").toLowerCase().replace(/ /g, "-")
+  return String(name || "").toLowerCase().replace(/[ ,\n]/g, "-")
+}
+// Two input devices with one name get "-1", "-2", ... appended by Hyprland.
+function isRealName(real, name) {
+  var n = String(name)
+  return real.some(function(r) {
+    return n === r || (n.length > r.length + 1 && n.indexOf(r + "-") === 0 && /^[0-9]+$/.test(n.slice(r.length + 1)))
+  })
 }
 // The bar's one read: `omamobile-keyboards` (the real keyboards, #866's
 // bus/key rule), a separator line, then `hyprctl -j devices`.
@@ -214,7 +222,7 @@ function layoutState(text, real) {
   try { kbs = (JSON.parse(text) || {}).keyboards } catch (e) { return null }
   if (!Array.isArray(kbs)) return null
   var typed = kbs.filter(function(k) {
-    return k && typedKeyboard(k.name) && (!Array.isArray(real) || real.indexOf(String(k.name)) >= 0)
+    return k && typedKeyboard(k.name) && (!Array.isArray(real) || isRealName(real, k.name))
   })
   var names = typed.map(function(k) { return String(k.name) })
   if (!typed.length) return { count: 0, description: "", names: names }
