@@ -46,7 +46,7 @@ fi
 # settings, as the 9a's package does: the 7 Pro's copy gets SuspendState in a
 # change of its own.
 sleepconf=vendor/systemd/sleep.conf.d/10-omamobile.conf
-[[ $(grep -v '^#' "$sleepconf" | grep -c .) -eq 6 && $(grep -v '^#' "$sleepconf" | head -1) == "[Sleep]" ]] || fail "the sleep drop-in has other lines than its five settings"
+[[ $(grep -v '^#' "$sleepconf" | grep -c .) -eq 6 && $(grep -v '^#' "$sleepconf" | sed -n 1p) == "[Sleep]" ]] || fail "the sleep drop-in has other lines than its five settings"
 for line in SuspendState=freeze MemorySleepMode=s2idle AllowHibernation=no AllowHybridSleep=no AllowSuspendThenHibernate=no; do
   grep -qx "$line" "$sleepconf" || fail "the sleep drop-in lacks $line"
 done
@@ -73,6 +73,7 @@ for f in usr/bin/reboot-to \
          usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
+         etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
          usr/lib/modprobe.d/omamobile-husky-clk-acpm.conf \
          usr/lib/modprobe.d/omamobile-husky-display.conf \
@@ -85,6 +86,9 @@ for f in usr/bin/reboot-to \
          usr/bin/omamobile-bt-addr usr/lib/systemd/system/omamobile-bt-addr@.service \
          usr/lib/udev/rules.d/80-omamobile-bt-addr.rules \
          usr/share/omamobile/device.conf \
+         usr/share/omamobile/charge-limit.conf \
+         usr/lib/udev/rules.d/75-omamobile-charge-limit.rules \
+         usr/lib/systemd/system/omamobile-charge-limit-apply.service \
          usr/share/omamobile/device-husky/version \
          usr/share/licenses/omamobile-device-husky/LICENSE \
          etc/pacman.d/omamobile-mirrorlist; do
@@ -150,6 +154,31 @@ grep -q '^ExecStart=/usr/bin/omamobile-usb-rescue$' vendor/systemd/system/omamob
   || fail "the USB rescue is enabled by a vendor wants link"
 grep -q 'i2c-tools' PKGBUILD || fail "the USB rescue needs i2cget and i2cset"
 pass "the USB replug rescue is installed, enabled by a wants link, and writes one register"
+# The omarchy-trace Plymouth theme (#266): 30 frames rendered from Omarchy's
+# logo by tools/gen-plymouth-trace.py, and the script and .plymouth file that
+# name them.
+theme=$tmp/root/usr/share/plymouth/themes/omarchy-trace
+[[ -f $theme/omarchy-trace.plymouth && -f $theme/omarchy-trace.script ]] || fail "the trace theme's .plymouth or .script is not staged"
+grep -qx 'ModuleName=script' "$theme/omarchy-trace.plymouth" || fail "the trace theme must use the script module"
+grep -qx 'ScriptFile=/usr/share/plymouth/themes/omarchy-trace/omarchy-trace.script' "$theme/omarchy-trace.plymouth" \
+  || fail "the .plymouth file names another script"
+grep -qx 'ImageDir=/usr/share/plymouth/themes/omarchy-trace' "$theme/omarchy-trace.plymouth" || fail "the .plymouth file names another image dir"
+frames=$(find "$theme" -name 'trace-[0-9][0-9].png' | wc -l)
+((frames == 30)) || fail "the trace theme has $frames frames, not 30"
+grep -q 'global.frame_count = 30;' "$theme/omarchy-trace.script" || fail "the script's frame count is not 30"
+grep -q '"trace-0" + i + ".png"' "$theme/omarchy-trace.script" && grep -q '"trace-" + i + ".png"' "$theme/omarchy-trace.script" \
+  || fail "the script does not load the trace-NN.png frames"
+for n in $(seq -w 1 30); do
+  [[ $(head -c 8 "$theme/trace-$n.png" | od -An -tx1 | tr -d ' ') == 89504e470d0a1a0a ]] || fail "trace-$n.png is not a PNG"
+  [[ $(od -An -tu1 -j16 -N8 "$theme/trace-$n.png" | awk '{print $3*256+$4 "x" $7*256+$8}') == 800x188 ]] || fail "trace-$n.png is not 800x188"
+done
+grep -q 'Plymouth.SetQuitFunction(quit_callback);' "$theme/omarchy-trace.script" || fail "a quit must jump to the last frame"
+# The held frame must be Omarchy's logo exactly (default/plymouth/logo.png in
+# basecamp/omarchy, git blob f185b266), so the end matches the static splash.
+[[ $(git hash-object "$theme/trace-30.png") == f185b2660763bebf2343775d2a682133d5bf78d2 ]] \
+  || fail "trace-30.png is not Omarchy's logo.png"
+pass "the last trace frame is Omarchy's logo.png unchanged"
+pass "the omarchy-trace theme: 30 800x188 frames, and the script and .plymouth file name them"
 splash=vendor/systemd/system/plymouth-quit.service.d/10-omamobile-retain-splash.conf
 if [[ -f ../omamobile-device-raven/$splash ]]; then
   [[ $(grep -v '^#' "$splash") == "$(grep -v '^#' "../omamobile-device-raven/$splash")" ]] \
@@ -172,6 +201,11 @@ pass "install stages the udev rule, the USB link, the mirrorlist and the display
 [[ ! -e $tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf ]] \
   || fail "husky has no lid: no lid drop-in"
 pass "no lid drop-in"
+grep -qx 'supply=max77759-charger' "$tmp/root/usr/share/omamobile/charge-limit.conf" \
+  || fail "husky declares its charge limit on max77759-charger"
+[[ ! -e $tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-charge-limit-apply.service ]] \
+  || fail "the apply unit is pulled in by udev, not enabled"
+pass "the charge limit declaration, its udev rule and the apply unit are staged; the unit is not enabled"
 
 
 # --- the AoC start: hang marker, nothing without the node ------------------
@@ -267,3 +301,7 @@ bash -n bin/omamobile-bt-addr || fail "the Bluetooth address script parses"
 grep -q 'chosen/config/bt_addr' bin/omamobile-bt-addr || fail "the Bluetooth address comes from the bootloader's DT"
 grep -q 'DRIVERS=="hci_uart_bcm"' vendor/udev/rules.d/80-omamobile-bt-addr.rules || fail "the rule matches the BCM UART controller only"
 pass "the Bluetooth address is read at run time, with the 9a's script"
+ps="$tmp/root/etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf"
+grep -qx '\[connection\]' "$ps" || fail "the Wi-Fi power save file needs a [connection] header"
+grep -qx 'wifi.powersave=3' "$ps" || fail "Wi-Fi power save is on by default (3 = enable)"
+pass "Wi-Fi power save is on by default"

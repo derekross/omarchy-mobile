@@ -104,26 +104,49 @@ else case $slot in
 esac; fi
 
 # ---------------------------------------------------------------- storage
-# Every UFS partition is read-only except userdata and the running slot's
-# boot images (the guard maps its list to the slot the phone runs from; with
-# no slot named, only userdata).
+# Keep the existing Pixel policy: allow userdata and the running slot's boot images.
 allowed=" userdata "
 [[ -z $slot ]] || allowed+="boot$slot init_boot$slot vendor_boot$slot vendor_kernel_boot$slot dtbo$slot "
-rw=() total=0
+descriptor="$sr/usr/share/omamobile/device.conf"
+ram_only=0
+if [[ -r $descriptor ]] && grep -Fxq 'UFS_RW=""' "$descriptor"; then
+  ram_only=1
+fi
+rw=() disks=0 total=0
+if ((ram_only)); then
+  disk_rw=()
+  for s in "$sr"/sys/block/sd[a-f]; do
+    [[ -r $s/ro ]] || continue
+    disks=$((disks + 1))
+    [[ $(<"$s/ro") == 1 ]] || disk_rw+=("${s##*/}")
+  done
+fi
 for s in "$sr"/sys/class/block/sd*; do
   [[ -r $s/partition && -r $s/uevent ]] || continue
   name=$(sed -n 's/^PARTNAME=//p' "$s/uevent")
   [[ -n $name ]] || continue
   total=$((total + 1))
-  [[ $(<"$s/ro") == 0 && $allowed != *" $name "* ]] && rw+=("$name")
+  if ((ram_only)); then
+    [[ $(<"$s/ro") == 0 ]] && rw+=("$name")
+  else
+    [[ $(<"$s/ro") == 0 && $allowed != *" $name "* ]] && rw+=("$name")
+  fi
 done
 if ((total == 0)); then
   check skip 1 "storage guard" "no named UFS partitions"
-elif ((${#rw[@]})); then
+elif ((ram_only)) && ((disks == 0)); then
+  check "not ok" 1 "storage guard" "no named UFS whole-disk nodes"
+elif ((ram_only)) && ((${#disk_rw[@]} || ${#rw[@]})); then
+  check "not ok" 1 "storage guard" "writable UFS nodes: disks ${disk_rw[*]:-none}; partitions ${rw[*]:-none}"
+elif ((!ram_only)) && ((${#rw[@]})); then
   check "not ok" 1 "storage guard" "writable outside the allowlist: ${rw[*]}"
 else
-  imgs=""; [[ -z $slot ]] || imgs=" and slot ${slot#_}'s boot images"
-  check ok 1 "storage guard" "$total partitions; only userdata$imgs writable"
+  if ((ram_only)); then
+    check ok 1 "storage guard" "$disks whole disks read-only; $total partitions; no UFS writes allowed"
+  else
+    imgs=""; [[ -z $slot ]] || imgs=" and slot ${slot#_}'s boot images"
+    check ok 1 "storage guard" "$total partitions; only userdata$imgs writable"
+  fi
 fi
 if [[ -n $slot_from ]]; then
   printf '%s\n' "${results[@]}"
@@ -132,8 +155,11 @@ fi
 
 rootdev=$(findmnt -no SOURCE / 2>/dev/null)
 rootpart=$(sed -n 's/^PARTNAME=//p' "/sys/class/block/${rootdev#/dev/}/uevent" 2>/dev/null)
+rootfs=$(findmnt -no FSTYPE / 2>/dev/null)
 if [[ $rootpart == userdata ]]; then
   check ok 1 "root" "$(findmnt -no FSTYPE /) on userdata, $(df -h --output=avail / | tail -1 | tr -d ' ') free"
+elif [[ $rootfs == nfs || $rootfs == nfs4 ]]; then
+  check skip 0 "root" "$rootfs test root; not persistent"
 else
   check "not ok" 1 "root" "root is on ${rootpart:-$rootdev}, not userdata"
 fi

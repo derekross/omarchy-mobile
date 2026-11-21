@@ -10,7 +10,7 @@ license=(MIT)
 depends=(bash systemd omamobile-keyring i2c-tools 'omamobile-audio>=0.5.18')
 provides=(omamobile-device)
 conflicts=(omamobile-device)
-backup=(etc/pacman.d/omamobile-mirrorlist)
+backup=(etc/pacman.d/omamobile-mirrorlist etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf)
 install=omamobile-device-husky.install
 makedepends=(gcc)
 

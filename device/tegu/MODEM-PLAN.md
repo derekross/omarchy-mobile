@@ -1906,6 +1906,107 @@ charger, on the CP not ONLINE, and on a UFS error line or an oops in
 `dmesg`.
 Then a call answered after it woke the palmtop, and a sleep of hours.
 
+### Suspend with the modem on, on the published branch: every sleep woke with data back, and the palmtop hangs awake at a link power-up (2026-11-16)
+
+Every run here was under #809's terms as AGENTS.md has them: unattended, on
+the charger, each boot that had a sleep with the modem up ended in
+`systemctl reboot` with the modem's stop confirmed, a new kernel's first run
+ten sleeps at most. The script is `modem-sleep-series.sh` (#758) with
+`WIFI=off`, so `rmnet0` is the only route, and with a ping and a DNS lookup
+over it 5 s after every wake, sitd's data-call lines from that sleep beside
+them. The modem's inhibitor and the rule in AGENTS.md stand as they are.
+
+**The test kernel once more** (`7.3.0-rc6-omamobile-push1-g716f6d8ef355`:
+#232, #258's line and #247; `omamobile-modem-sit` 0.3.43). Before it the NV
+partitions read SAME against the backup; the two boots before had ended
+uncleanly (a forced reboot and a flat battery), both after ONLINE.
+
+- 10 requests of 60 s: 10 entered and woke, all on `cp2ap_wakeup`, after 1
+  to 29 s. None reached its alarm.
+- 46 requests of 120 s: 45 entered and woke, 1 refused (`suspend_cp: abort
+  suspend`, -16). The script then stopped itself with the cable in: the pack
+  had filled, the charger held it, and the average current read about 0,
+  which the check took for "off the charger". It now goes by the battery's
+  status (Charging or Full).
+- 100 requests of 120 s: 98 entered and woke, 2 refused by the link's
+  notifier before the freeze. All 98 woke on `cp2ap_wakeup` after 1 to 43 s,
+  2,503 s asleep in all.
+- After every wake the CP was ONLINE and sitd active with no failed poll,
+  and there was no new UFS line and no oops. DNS over `rmnet0` answered 5 s
+  after every wake, 155 of 155. sitd logged a `Data-call list changed` at
+  each wake with the internet bearer (CID 1) keeping its addresses, and no
+  `Internet bearer set up again`: on this network the 9a's bearer wasn't
+  dropped in 155 wakes, where the 7 Pro's was every few minutes (#799).
+- **The ping got 1 of 3 back at every wake, and that was our route, not the
+  modem.** Awake, with the modem told "screen off" and the link down for 6
+  to 25 s, the same ping got 3 of 3 five times out of five. In the series
+  `omamobile-sit-data` takes its default route away at the sleep
+  announcement and, with no Wi-Fi to wait for, put it back 10 s after the
+  wake (#750's fallback): the 99th wake was at 23:04:22.33, the route was
+  back at 23:04:32.64, and the ping ran from about 23:04:31. So mobile data
+  was off for 10 s after every wake with Wi-Fi off. omarchy-mobile#837 puts
+  the route back at once when there is no Wi-Fi to wait for.
+
+**The published branch as it is**
+(`7.3.0-rc6-omamobile-push1-g26867fc4e826`: `omamobile` at `26867fc4e`,
+which has #224, #232, #247, #258 and #234; defconfig plus main's
+`omamobile.config`, nothing added; `omamobile-modem-sit` 0.3.44, #837's
+branch). Before it, `zumapro_gpio_peric0` read `CLK_IS_CRITICAL`.
+
+- 10 requests of 120 s: 9 entered and woke, 1 refused (-16). The nine woke
+  on `cp2ap_wakeup` after 3 to 25 s.
+- 79 requests of 120 s, of 200 asked for: 77 entered and woke, 2 refused
+  (-16). The 77 woke on `cp2ap_wakeup` after 3 to 29 s, 1,492 s asleep in
+  all.
+- **So 86 of 86 sleeps that were entered woke, each ended by the modem
+  within 29 s. None reached its alarm: these say nothing about a
+  timer-woken sleep.** After every one the CP was ONLINE, sitd active with
+  no failed poll, no new UFS line, no oops.
+- Data 5 s after every wake, with #837's route fix: the ping got 3 of 3 and
+  DNS answered, 89 of 89 (the three refused requests included). No bearer
+  was dropped or set up again.
+
+**The hang, awake, twice that day.** It is the hang of the section above,
+on the published code this time.
+
+1. In the run of 79, about 30 s after the 79th wake, while the series
+   waited for the link to go idle before its 80th request, the palmtop hung
+   and the cluster watchdog reset it. The console in ramoops ends with the
+   link going up and down several times a second, three `Reserve doorbell
+   interrupt` lines (the last `PCI on/off working` at 4682.9 s), and at
+   4704.1 s `rcu_preempt detected stalls on CPUs/tasks` for CPUs 0, 4 and
+   7, detected by CPU 6, 5,255 jiffies in. Nothing after that until the
+   bootloader; no oops, no UFS line. After the reset the modem came up
+   again (the first unclean end, its marker moved aside by the starter) and
+   the NV partitions read SAME against the backup.
+2. The same morning in everyday use, on a build of the same tip plus
+   linux-omarchy-mobile#193, #164 and #165 (sound, cameras, fingerprint;
+   none touches PCIe or CPIF). No sleep test: the modem was up, Wi-Fi was
+   connected, and the palmtop froze about five minutes after it came off
+   the cable. The screen and the Power key were dead, and it took Power +
+   Volume Up. The journal's last 3 s, 07:45:29 to 07:45:32, are `link up:
+   Gen3 x2`, `iATU ... restored`, `wake disabled/enabled for irq 91`, `link
+   down, PHY powered down`, about once a second, and then nothing. The
+   saved console holds only the bootloader's part, so there is no RCU line
+   for this one. The NV partitions were checked on 2026-11-17, with
+   the modem off for the boot (`tools/nv-backup -d tegu --check`): `efs`,
+   `efs_backup`, `modem_userdata`, `persist`, `modem_a` and `modem_b` all
+   read SAME against the backup.
+
+What the two share: the modem is up and idle, CPIF powers the link up and
+down about once a second, and one of those power-ups never comes back, with
+no oops and no UFS line. The daily kernel
+(`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, the bring-up
+link modules, none of #187, #232 or #258) has run the modem for days
+without it, so the cause is in the in-tree link path. It is open, and the
+palmtop went back to the daily kernel that morning.
+
+What this leaves: the sleeps themselves are no longer what keeps the
+modem's inhibitor on the 9a. The hang awake is, since a palmtop that sleeps
+with the modem up is one whose link cycles all day; and a timer-woken
+sleep with the modem up has not been seen, because the modem ends every
+sleep within half a minute.
+
 ### M2: the link only (modem link driver, `allow_hw=1`; risk: medium)
 
 One step per run, the CPIF overlay not applied, the link overlay applied

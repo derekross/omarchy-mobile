@@ -22,7 +22,7 @@ ln -s "$src/packages/omamobile-shell/plugins/omamobile.home/owl" "$h/ours"
 ln -s /ref/omarchy-widgets/runtimes/quickshell "$h/ref"
 cp "$here"/*.qml "$h/"
 node "$here/jobs.js" "$out" /ref/omarchy-widgets/widgets > "$h/job.json"
-QT_SCALE_FACTOR=3 OWL_JOB="$h/job.json" timeout 600 quickshell -p "$h/tiles.qml" 2>&1 | grep -E "rendered|ERROR|rror|report:" | grep -v "^.*DEBUG.*rendered" | head -40 || true
+QT_SCALE_FACTOR=3 OWL_JOB="$h/job.json" timeout 600 quickshell -p "$h/tiles.qml" 2>&1 | grep -E "rendered|ERROR|rror|report:" | grep -v "^.*DEBUG.*rendered" | sed -n '1,40p' || true
 node "$here/compare.js" "$out"
 
 # Every store widget without data.
@@ -80,7 +80,7 @@ if [[ -d /omarchy-shell ]]; then
       for theme in tokyo-night catppuccin-latte; do
         node "$here/layout-jobs.js" "$side" "$out/screens" /ref/omarchy-widgets/widgets "$theme" > "$lh/job-$theme.json"
         HOME=/tmp/home-$theme QT_SCALE_FACTOR=3 OWL_LAYOUT_JOB="$lh/job-$theme.json" timeout 300 quickshell -p "$lh/layout.qml" 2>&1 \
-          | grep -E "shot |Error|TypeError|ReferenceError" | grep -v hyprctl | head -20 || true
+          | grep -E "shot |Error|TypeError|ReferenceError" | grep -v hyprctl | sed -n '1,20p' || true
       done
     done
   fi
@@ -90,6 +90,6 @@ if [[ -d /omarchy-shell ]]; then
     ln -sfn "/themes/$theme" "$home/.local/state/omarchy/current/theme"
     node "$here/home-jobs.js" "$out/screens" /ref/omarchy-widgets/widgets "$theme" > "$hh/job-$theme.json"
     HOME=$home QT_SCALE_FACTOR=3 OWL_HOME_JOB="$hh/job-$theme.json" timeout 600 quickshell -p "$hh/home.qml" 2>&1 \
-      | grep -E "shot |owl report|Error|error:|ReferenceError|TypeError" | grep -v hyprctl | head -40 || true
+      | grep -E "shot |owl report|Error|error:|ReferenceError|TypeError" | grep -v hyprctl | sed -n '1,40p' || true
   done
 fi
