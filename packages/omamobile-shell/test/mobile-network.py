@@ -141,5 +141,112 @@ class Cli(unittest.TestCase):
         self.assertEqual(self.run_tool('modem', 'restart').returncode, 2)
 
 
+def mm(**over):
+    base = dict(state=8, failed=0, unlock=1, quality=(54, True), tech=1 << 14, registration=1,
+                operator='Example', voice=True, sms=True, initial_apn='internet.example', bearer_apn='')
+    base.update(over)
+    return base
+
+
+class ModemManager(unittest.TestCase):
+    """Phones without omamobile-modem-sit: ModemManager and NetworkManager."""
+
+    def test_registered_without_profile(self):
+        v = mn.describe_mm(mm(), None)
+        self.assertEqual((v['installed'], v['running'], v['carrier'], v['registration'], v['tech'], v['signal']),
+                         (True, True, 'Example', 'home', 'LTE', 54))
+        self.assertEqual(v['data'], dict(enabled=False, up=False, available=True))
+        self.assertEqual((v['apn']['in_use'], v['apn']['source'], v['apn']['configured']),
+                         ('internet.example', 'network', 'auto'))
+        self.assertEqual(v['sim']['state'], 'ready')
+
+    def test_connected_profile(self):
+        profile = dict(uuid='u', autoconnect=True, apn='internet.example', home_only=True, active=True)
+        v = mn.describe_mm(mm(state=11, registration=5, bearer_apn='internet.example'), profile)
+        self.assertEqual(v['data'], dict(enabled=True, up=True, available=True))
+        self.assertEqual((v['registration'], v['roaming']), ('roaming', dict(now=True, allowed=False)))
+        self.assertEqual(v['apn']['configured'], 'auto')
+        typed = dict(profile, apn='web.example')
+        self.assertEqual(mn.describe_mm(mm(), typed)['apn']['configured'], 'web.example')
+
+    def test_sim_states(self):
+        self.assertEqual(mn.describe_mm(mm(state=-1, failed=2), None)['sim']['state'], 'absent')
+        self.assertEqual(mn.describe_mm(mm(state=2, unlock=2), None)['sim']['state'], 'pin')
+        self.assertEqual(mn.describe_mm(mm(state=2, unlock=4), None)['sim']['state'], 'puk')
+        # PIN2 (fixed dialling) on a registered modem is no SIM problem
+        self.assertEqual(mn.describe_mm(mm(state=8, unlock=3), None)['sim']['state'], 'ready')
+        v = mn.describe_mm(mm(state=-1, failed=2), None)
+        self.assertEqual((v['registration'], v['carrier'], v['tech']), ('unknown', '', ''))
+
+    def test_tile(self):
+        self.assertEqual(mn.mm_tile(None, None), ['data=none'])
+        self.assertEqual(mn.mm_tile(mm(), None), ['data=off', 'data_signal=54', 'data_status=Example LTE'])
+        self.assertEqual(mn.mm_tile(mm(operator='00101'), None), ['data=off', 'data_signal=54', 'data_status=LTE'])
+        self.assertEqual(mn.mm_tile(mm(registration=2), None), ['data=off', 'data_signal=-1', 'data_status=No signal'])
+
+    def test_commands(self):
+        calls = []
+        profile = dict(uuid='u1', autoconnect=False, apn='internet.example', home_only=False, active=True)
+
+        class Done:
+            returncode = 0
+            stdout = ''
+
+        def fake(*args, check=False):
+            calls.append(list(args))
+            return Done()
+        saved = (mn.nmcli, mn.nm_profile)
+        mn.nmcli, mn.nm_profile = fake, lambda: profile
+        try:
+            self.assertEqual(mn.mm_command(['data', 'on'], mm()), 0)
+            self.assertEqual(mn.mm_command(['data', 'off'], mm()), 0)
+            self.assertEqual(mn.mm_command(['roaming', 'off'], mm()), 0)
+            self.assertEqual(mn.mm_command(['apn', 'auto'], mm()), 0)
+            self.assertEqual(mn.mm_command(['attach-apn', 'ims'], mm()), 1)
+        finally:
+            mn.nmcli, mn.nm_profile = saved
+        self.assertEqual(calls, [
+            ['connection', 'modify', 'u1', 'connection.autoconnect', 'yes'], ['connection', 'up', 'u1'],
+            ['connection', 'modify', 'u1', 'connection.autoconnect', 'no'], ['connection', 'down', 'u1'],
+            ['connection', 'modify', 'u1', 'gsm.home-only', 'yes'],
+            ['connection', 'modify', 'u1', 'gsm.apn', 'internet.example'], ['connection', 'up', 'u1']])
+
+    def test_never_an_empty_apn_profile_from_auto(self):
+        # ModemManager 1.24.2 crashed reconnecting on an empty APN: "auto"
+        # is the network's APN
+        calls = []
+
+        class Done:
+            returncode = 0
+            stdout = ''
+        saved = (mn.nmcli, mn.nm_profile)
+        mn.nmcli = lambda *a, check=False: (calls.append(list(a)), Done())[1]
+        mn.nm_profile = lambda: dict(uuid='u1', autoconnect=True, apn='x', home_only=False, active=False)
+        try:
+            mn.mm_command(['apn', ''], mm(initial_apn='internet.example'))
+        finally:
+            mn.nmcli, mn.nm_profile = saved
+        self.assertEqual(calls, [['connection', 'modify', 'u1', 'gsm.apn', 'internet.example']])
+
+
+class OptIn(unittest.TestCase):
+    """The ModemManager path runs only where the device package opts in."""
+
+    def test_off_without_the_file(self):
+        def boom():
+            raise AssertionError('ModemManager asked without the opt-in')
+        saved = (mn.mm_snapshot, mn.MM_ENABLE, mn.installed)
+        mn.mm_snapshot, mn.MM_ENABLE, mn.installed = boom, '/nonexistent/mobile-network-modemmanager', lambda: False
+        try:
+            import contextlib
+            import io
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(mn.main(['tile']), 0)
+            self.assertEqual(out.getvalue().strip(), 'data=none')
+        finally:
+            mn.mm_snapshot, mn.MM_ENABLE, mn.installed = saved
+
+
 if __name__ == '__main__':
     unittest.main()

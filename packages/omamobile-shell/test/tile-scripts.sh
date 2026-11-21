@@ -138,6 +138,43 @@ expect "$out" "data_status=Off after a hang or reset" "the start script's reason
 printf '%s\n' "$(printf 'x%.0s' $(seq 60))" > "$tmp/state/refused"
 out=$(no_modem)
 expect "$out" "data_status=$(printf 'x%.0s' $(seq 48))" "the reason is cut to 48 characters"
+
+# A modem ModemManager drives itself (no omamobile-sit): the tile's lines
+# come from omamobile-mobile-network tile, and the tile switches data
+# through it; its "data=none" falls back to the no-modem lines.
+mmfake=$tmp/mmfake; mkdir -p "$mmfake"
+cat > "$mmfake/omamobile-mobile-network" <<'MM'
+#!/bin/sh
+case "$1" in
+  tile) cat "$MM_TILE" ;;
+  data) echo "omamobile-mobile-network $*" >> "$MM_LOG" ;;
+esac
+MM
+chmod +x "$mmfake/omamobile-mobile-network"
+mmon=$tmp/state/mm-enable; : > "$mmon"
+mm_state() { printf '%s\n' "$1" > "$tmp/state/mm-tile"; env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" \
+  OMAMOBILE_MOBILE_NETWORK_MM="${MM_ENABLE_FILE-$mmon}" OMAMOBILE_SIT_STATE="$tmp/state/missing.json" OMAMOBILE_MODEM_REFUSED="$tmp/state/none" MM_TILE="$tmp/state/mm-tile" \
+  PATH="$mmfake:$basic" sh "$dir/tile-state.sh"; }
+out=$(mm_state "$(printf 'data=on\ndata_signal=54\ndata_status=Example LTE')")
+expect "$out" "data=on" "ModemManager's path: data on from the helper"
+expect "$out" "data_status=Example LTE" "ModemManager's path: the helper's status"
+out=$(mm_state "data=none")
+expect "$out" "data=none" "the helper without a modem is no modem"
+[[ $(grep -c '^data=' <<<"$out") -eq 1 ]] || fail "one data= line only (got: $(tr '\n' ' ' <<<"$out"))"
+: > "$tmp/state/mm-log"
+env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" MM_LOG="$tmp/state/mm-log" OMAMOBILE_MOBILE_NETWORK_MM="$mmon" PATH="$mmfake:$basic" \
+  sh "$dir/tile-action.sh" mobile-data on
+grep -cx "omamobile-mobile-network data on" "$tmp/state/mm-log" >/dev/null || fail "the tile switches data through the helper without omamobile-sit"
+# Without the device package's opt-in, a phone without omamobile-sit keeps
+# the old tile: no modem, and the helper is never asked
+out=$(MM_ENABLE_FILE=$tmp/state/no-such-file mm_state "$(printf 'data=on\ndata_signal=54\ndata_status=Example LTE')")
+expect "$out" "data=none" "without the opt-in the helper's ModemManager lines are not used"
+: > "$tmp/state/mm-log"
+env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" MM_LOG="$tmp/state/mm-log" OMAMOBILE_MOBILE_NETWORK_MM="$tmp/state/no-such-file" \
+  PATH="$mmfake:$basic" sh "$dir/tile-action.sh" mobile-data on 2>/dev/null || true
+[[ ! -s $tmp/state/mm-log ]] || fail "without the opt-in the tile does not switch data through the helper"
+pass "tile-state.sh and tile-action.sh take ModemManager's path without omamobile-sit"
+
 # The modem switched off for this boot on the Mobile network page: still
 # no modem for the tile, but data_switch=off keeps the chevron to the page
 # that turns it back on, and the status says so. A switch that reports the

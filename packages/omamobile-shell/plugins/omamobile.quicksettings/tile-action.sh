@@ -86,6 +86,12 @@ case $tile in
     fi
     ;;
   mobile-data)
+    # omamobile-mobile-network takes ModemManager's path on phones without
+    # omamobile-modem-sit whose device package opts in
+    if ! command -v omamobile-sit >/dev/null 2>&1 && [ -e "${OMAMOBILE_MOBILE_NETWORK_MM:-/usr/share/omamobile/mobile-network-modemmanager}" ] &&
+       command -v omamobile-mobile-network >/dev/null 2>&1; then
+      exec omamobile-mobile-network data "$want"
+    fi
     exec omamobile-sit data "$want"
     ;;
   dictation)

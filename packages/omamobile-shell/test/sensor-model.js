@@ -14,11 +14,18 @@ const line = '{"op":"auth","finger":false,"x":717,"y":2360,"r":121,"w":1440,"h":
 test("parses the bridge's state line", () => {
   const s = M.parse(line)
   assert.deepStrictEqual(s, { op: "auth", finger: false, x: 717, y: 2360, r: 121, w: 1440, h: 3120,
-                             seq: 0, acquired: 0, remaining: -1, error: 0, last: "none", contact: null })
+                             seq: 0, acquired: 0, remaining: -1, error: 0, last: "none", contact: null,
+                             illuminate: false })
   assert.ok(M.active(s))
   assert.ok(M.active(M.parse(line.replace("auth", "enroll"))))
   assert.ok(!M.active(M.parse(line.replace("auth", "idle"))))
   assert.strictEqual(M.parse(line.replace("false", "true")).finger, true)
+})
+
+test("a panel without LHBM asks the shell for the light", () => {
+  const lit = M.parse(line.replace("}", ',"illuminate":true}'))
+  assert.strictEqual(lit.illuminate, true)
+  assert.strictEqual(M.parse(line.replace("}", ',"illuminate":"yes"}')).illuminate, false)
 })
 
 test("rejects anything else", () => {

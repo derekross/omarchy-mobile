@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# The screen off at the ear in calls (bin/omamobile-call-proximity), for
+# every user's graphical session. Idle outside calls. Runs only where the
+# device package opts in with /usr/share/omamobile/call-proximity.
+[Unit]
+Description=Omarchy Mobile screen off at the ear in calls
+PartOf=graphical-session.target
+After=graphical-session.target
+ConditionPathExists=/usr/share/omamobile/call-proximity
+
+[Service]
+ExecStart=/usr/bin/omamobile-call-proximity
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

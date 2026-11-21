@@ -57,6 +57,9 @@ ln -sfn ../omamobile-sleepd.service "$destination/usr/lib/systemd/user/graphical
 # every user's graphical session.
 install -Dm644 systemd/user/omamobile-doubletap.service "$destination/usr/lib/systemd/user/omamobile-doubletap.service"
 ln -sfn ../omamobile-doubletap.service "$destination/usr/lib/systemd/user/graphical-session.target.wants/omamobile-doubletap.service"
+# The screen off at the ear in calls, for every user's session.
+install -Dm644 systemd/user/omamobile-call-proximity.service "$destination/usr/lib/systemd/user/omamobile-call-proximity.service"
+ln -sfn ../omamobile-call-proximity.service "$destination/usr/lib/systemd/user/graphical-session.target.wants/omamobile-call-proximity.service"
 # The lock screen's weather, at login and every 30 minutes, for every user's
 # graphical session; it fetches nothing until a place is set.
 install -Dm644 systemd/user/omamobile-weather.service "$destination/usr/lib/systemd/user/omamobile-weather.service"

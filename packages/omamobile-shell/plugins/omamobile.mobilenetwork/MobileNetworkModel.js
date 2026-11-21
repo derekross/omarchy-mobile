@@ -62,7 +62,8 @@ var SIM = {
 }
 var SOURCES = {
   "manual": "Typed in settings", "override": "Chosen from your SIM",
-  "carrier-database": "Chosen from your SIM", "none": "None found for this SIM"
+  "carrier-database": "Chosen from your SIM", "none": "None found for this SIM",
+  "network": "Given by the network"
 }
 
 // The page as one object: whether it has a modem at all, a headline, and
