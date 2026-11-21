@@ -100,34 +100,53 @@ Item {
   Timer { id: cellRestart; interval: 5000; onTriggered: cellWatch.running = true }
 
   // The hardware keyboard's layout (EN, GR...) beside the clock, only while
-  // the typed keyboard has more than one layout. A switch is read from the
-  // activelayout event itself (keyboard,description), as Omarchy 4.5's bar
-  // widget does; squeekboard's own events are ignored. `hyprctl -j devices`
-  // runs at start, after configreloaded and when an activelayout comes from a
-  // keyboard not in the last read (one connected later), for the count and the
-  // label; `xkbcli list` once, when a label is first needed.
+  // a real keyboard has more than one layout. A switch is read from the
+  // activelayout event itself (keyboard,description, via event.parse(2)), as
+  // Omarchy 4.5's bar widget does; squeekboard's own events are ignored.
+  // The devices are read (omamobile-keyboards for which ones are real
+  // keyboards, by #866's bus/key rule, then `hyprctl -j devices`) at start,
+  // after configreloaded, when an activelayout comes from a keyboard not in
+  // the last read (one connected later), and every 10 s while the label
+  // shows, so it goes away when the keyboard does. A read that started
+  // before a switch keeps the switch's layout. `xkbcli list` runs once, when
+  // a label is first needed.
   property int layoutCount: 0
   property string layoutDescription: ""
   property var layoutBriefs: ({})
   property var layoutKeyboards: []
   property bool layoutReread: false
+  property int layoutSwitches: 0
   readonly property string layoutLabel: layoutCount > 1 ? StatusModel.shortLabel(layoutDescription, layoutBriefs) : ""
   onLayoutCountChanged: if (layoutCount > 1 && !briefsRead.ran) { briefsRead.ran = true; briefsRead.running = true }
+  function readLayouts() {
+    if (layoutRead.running) layoutReread = true
+    else layoutRead.running = true
+  }
   Process {
     id: layoutRead
-    command: ["hyprctl", "-j", "devices"]
+    property int switchesAtStart: 0
+    command: ["sh", "-c", "omamobile-keyboards; echo " + StatusModel.readSeparator + "; exec hyprctl -j devices"]
     running: true
+    onRunningChanged: if (running) switchesAtStart = root.layoutSwitches
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        const st = StatusModel.layoutState(text)
+        const r = StatusModel.splitRead(text)
+        const st = r ? StatusModel.layoutState(r.devices, r.real) : null
         if (!st) return
         root.layoutCount = st.count
-        root.layoutDescription = st.description
+        // a switch's event arrived while this read ran: its layout is newer
+        if (layoutRead.switchesAtStart === root.layoutSwitches) root.layoutDescription = st.description
         root.layoutKeyboards = st.names
       }
     }
     onExited: if (root.layoutReread) { root.layoutReread = false; running = true }
+  }
+  Timer {
+    interval: 10000
+    repeat: true
+    running: root.layoutLabel !== ""
+    onTriggered: root.readLayouts()
   }
   Process {
     id: briefsRead
@@ -142,14 +161,13 @@ Item {
     target: Hyprland
     function onRawEvent(event) {
       if (!event) return
+      if (event.name !== "activelayout" && event.name !== "configreloaded") return
+      const fields = event.name === "activelayout" && typeof event.parse === "function" ? event.parse(2) : event.data
       if (event.name === "activelayout") {
-        const d = StatusModel.eventLayout(event.data)
-        if (d !== null) root.layoutDescription = d
+        const d = StatusModel.eventLayout(fields)
+        if (d !== null) { root.layoutDescription = d; root.layoutSwitches++ }
       }
-      if (StatusModel.needsDeviceRead(event.name, event.data, root.layoutKeyboards)) {
-        if (layoutRead.running) root.layoutReread = true
-        else layoutRead.running = true
-      }
+      if (StatusModel.needsDeviceRead(event.name, fields, root.layoutKeyboards)) root.readLayouts()
     }
   }
 

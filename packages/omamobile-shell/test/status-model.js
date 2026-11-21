@@ -105,3 +105,22 @@ assert.strictEqual(M.needsDeviceRead("activelayout", "nocomma", []), false)
 assert.strictEqual(M.needsDeviceRead("configreloaded", "", ["dell"]), true)
 assert.strictEqual(M.needsDeviceRead("workspace", "1", []), false)
 console.log("ok - status model: keyboard layout label from the event")
+// event.parse(2) fields; a description with a comma survives
+assert.strictEqual(M.eventLayout(["dell", "English (US, intl., with dead keys)"]), "English (US, intl., with dead keys)")
+assert.strictEqual(M.eventLayout(["hl-virtual-keyboard-squeekboard", "Greek"]), null)
+assert.strictEqual(M.eventLayout(["dell"]), null)
+assert.strictEqual(M.needsDeviceRead("activelayout", ["dell", "Greek"], []), true)
+assert.strictEqual(M.needsDeviceRead("activelayout", ["dell", "Greek"], ["dell"]), false)
+// only the keyboards omamobile-keyboards found count (#866's bus/key rule); the 8 Pro with none attached
+assert.strictEqual(M.hyprName("Keychron K2 Keyboard"), "keychron-k2-keyboard")
+const pixel = dev([{ name: "gpio-keys", layout: "us,gr", active_layout_index: 0, active_keymap: "English (US)" }, osk,
+  { name: "max77759-pmic-keys", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" }])
+assert.deepStrictEqual(M.layoutState(pixel, []), { count: 0, description: "", names: [] }, "no real keyboard: no label")
+const r = M.splitRead("Keychron K2 Keyboard\n" + M.readSeparator + "\n" +
+  dev([{ name: "keychron-k2-keyboard", layout: "us,gr", active_layout_index: 1, active_keymap: "Greek" },
+    { name: "max77759-pmic-keys", layout: "us,gr", active_layout_index: 0, active_keymap: "English (US)" }]))
+assert.deepStrictEqual(r.real, ["keychron-k2-keyboard"])
+assert.deepStrictEqual(M.layoutState(r.devices, r.real), { count: 2, description: "Greek", names: ["keychron-k2-keyboard"] })
+assert.deepStrictEqual(M.splitRead(M.readSeparator + "\n{}").real, [])
+assert.strictEqual(M.splitRead("no separator"), null)
+console.log("ok - status model: real keyboards only, event.parse fields")

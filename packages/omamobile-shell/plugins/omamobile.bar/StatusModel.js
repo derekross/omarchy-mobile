@@ -174,22 +174,48 @@ function typedKeyboard(name) {
   return name !== "" && !untypedKeyboards.test(name)
 }
 // Hyprland's activelayout event is "keyboard,description": the layout is read
-// from the event itself, no `hyprctl` per switch. null for a keyboard nobody
-// types on (squeekboard sends these while the on-screen keyboard is used).
-function eventLayout(data) {
-  var s = String(data || "")
+// from the event itself, no `hyprctl` per switch. `fields` is event.parse(2)
+// where Quickshell has it (a description can hold a comma), else the raw
+// data split at the first comma. null for a keyboard nobody types on
+// (squeekboard sends these while the on-screen keyboard is used).
+function eventFields(fields) {
+  if (Array.isArray(fields)) return fields.length >= 2 ? [String(fields[0]), String(fields[1])] : null
+  var s = String(fields || "")
   var i = s.indexOf(",")
-  if (i < 0 || !typedKeyboard(s.slice(0, i))) return null
-  return s.slice(i + 1)
+  return i < 0 ? null : [s.slice(0, i), s.slice(i + 1)]
 }
-// From `hyprctl -j devices` (at start and after a config reload only):
-// {count, description} of the typed keyboard furthest along its list, the one
-// being typed on (Omarchy's rule).
-function layoutState(text) {
+function eventLayout(fields) {
+  var f = eventFields(fields)
+  if (!f || !typedKeyboard(f[0])) return null
+  return f[1]
+}
+// Hyprland's device names: the kernel's name lowercased, spaces as '-'.
+function hyprName(name) {
+  return String(name || "").toLowerCase().replace(/ /g, "-")
+}
+// The bar's one read: `omamobile-keyboards` (the real keyboards, #866's
+// bus/key rule), a separator line, then `hyprctl -j devices`.
+var readSeparator = "--hyprctl--"
+function splitRead(text) {
+  var s = String(text || "")
+  var i = s.indexOf(readSeparator + "\n")
+  if (i < 0) return null
+  var real = s.slice(0, i).split("\n").filter(function(l) { return l !== "" }).map(hyprName)
+  return { real: real, devices: s.slice(i + readSeparator.length + 1) }
+}
+// From `hyprctl -j devices` (at start, after a config reload, for a keyboard
+// not seen before, and every few seconds while the label shows):
+// {count, description, names} of the keyboard furthest along its list, the
+// one being typed on (Omarchy's rule). With `real` (hyprName'd names from
+// omamobile-keyboards) only those count, so the phone's own key devices
+// never do, whatever they are called; without it the name list decides.
+function layoutState(text, real) {
   var kbs
   try { kbs = (JSON.parse(text) || {}).keyboards } catch (e) { return null }
   if (!Array.isArray(kbs)) return null
-  var typed = kbs.filter(function(k) { return k && typedKeyboard(k.name) })
+  var typed = kbs.filter(function(k) {
+    return k && typedKeyboard(k.name) && (!Array.isArray(real) || real.indexOf(String(k.name)) >= 0)
+  })
   var names = typed.map(function(k) { return String(k.name) })
   if (!typed.length) return { count: 0, description: "", names: names }
   var kb = typed.reduce(function(a, k) { return (k.active_layout_index || 0) > (a.active_layout_index || 0) ? k : a }, typed[0])
@@ -200,14 +226,11 @@ function layoutState(text) {
 // a config reload, or an activelayout from a typed keyboard not seen in the
 // last read (one plugged in or paired later; Hyprland has no device-added
 // event on its socket).
-function needsDeviceRead(name, data, known) {
+function needsDeviceRead(name, fields, known) {
   if (name === "configreloaded") return true
   if (name !== "activelayout") return false
-  var s = String(data || "")
-  var i = s.indexOf(",")
-  if (i < 0) return false
-  var kb = s.slice(0, i)
-  return typedKeyboard(kb) && (known || []).indexOf(kb) < 0
+  var f = eventFields(fields)
+  return !!f && typedKeyboard(f[0]) && (known || []).indexOf(f[0]) < 0
 }
 
 if (typeof module !== "undefined") {
@@ -217,6 +240,7 @@ if (typeof module !== "undefined") {
     callChip: callChip, elapsed: elapsed, batteryIcon: batteryIcon,
     stampOf: stampOf, parseStamp: parseStamp, unreadCount: unreadCount, unreadStored: unreadStored,
     layoutBriefs: layoutBriefs, shortLabel: shortLabel, eventLayout: eventLayout, layoutState: layoutState,
-    needsDeviceRead: needsDeviceRead
+    needsDeviceRead: needsDeviceRead, eventFields: eventFields, hyprName: hyprName, splitRead: splitRead,
+    readSeparator: readSeparator
   }
 }
