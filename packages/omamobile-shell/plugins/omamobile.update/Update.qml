@@ -649,7 +649,7 @@ Item {
             textFormat: Text.PlainText
             // three lines are kept for it, so Details under it doesn't move
             // when the line wraps to two or three
-            height: Math.ceil(progressMetrics.lineSpacing * 3)
+            height: Math.ceil(progressMetrics.lineSpacing) * 3
             text: root.progressText
             color: root.foreground
             opacity: 0.75
