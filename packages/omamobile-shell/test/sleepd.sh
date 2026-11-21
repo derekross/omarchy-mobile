@@ -70,7 +70,7 @@ sleepd() {
     OMAMOBILE_SLEEP_CLOCK="$t/clock" bash "$here/bin/omamobile-sleepd" "$@"
 }
 suspends() { grep -c '^systemctl suspend' "$t/log" || true; }
-first_at() { sed -n 's/^systemctl suspend at //p' "$t/log" | head -n 1; }
+first_at() { sed -n 's/^systemctl suspend at //p' "$t/log" | sed -n 1p; }
 
 reset; watch 100
 [[ $(suspends) -ge 1 ]] || fail "screen off and locked: it sleeps"
