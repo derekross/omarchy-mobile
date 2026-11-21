@@ -7,7 +7,8 @@ fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 
 # A fixture home: the tests (qmltestrunner's QML disk cache among them) must
 # never write under the real user's ~/.cache, ~/.config or ~/.local.
-real_home=$(getent passwd "$(id -u)" | cut -d: -f6)
+# A uid with no passwd entry (a container run with -u) has no home to protect.
+real_home=$(getent passwd "$(id -u)" | cut -d: -f6) || real_home=
 fixture=$(mktemp -d)
 trap 'rm -rf -- "$fixture"' EXIT
 export HOME="$fixture/home"
@@ -15,7 +16,7 @@ export XDG_CONFIG_HOME="$HOME/.config" XDG_CACHE_HOME="$HOME/.cache"
 export XDG_DATA_HOME="$HOME/.local/share" XDG_STATE_HOME="$HOME/.local/state"
 export QML_DISABLE_DISK_CACHE=1
 mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
-if [ -z "$real_home" ] || [ "$(realpath -m -- "$HOME")" = "$(realpath -m -- "$real_home")" ]; then
+if [ -n "$real_home" ] && [ "$(realpath -m -- "$HOME")" = "$(realpath -m -- "$real_home")" ]; then
   fail "HOME is a fixture, not the real home"
 fi
 pass() { printf 'ok - %s\n' "$1"; }
