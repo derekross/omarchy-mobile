@@ -171,21 +171,21 @@ cs40l26-dvl.bin
 cs40l26-svc.bin
 cs40l26.bin
 cs40l26.wmfw"
-DIPPER_FILES="Xiaomi/dipper/crbtfw21.tlv
-Xiaomi/dipper/crnv21.bin
+DIPPER_FILES="cdsp.b00
+cdsp.mdt
+qca/Xiaomi/dipper/crnv21.bin
+qca/crbtfw21.tlv
 qcom/sdm845/Xiaomi/dipper/a630_zap.b00
 qcom/sdm845/Xiaomi/dipper/a630_zap.mbn
 qcom/sdm845/Xiaomi/dipper/adsp.b00
 qcom/sdm845/Xiaomi/dipper/adsp.mbn
-qcom/sdm845/Xiaomi/dipper/cdsp.b00
-qcom/sdm845/Xiaomi/dipper/cdsp.mbn
 qcom/sdm845/Xiaomi/dipper/ipa_fws.b00
 qcom/sdm845/Xiaomi/dipper/ipa_fws.mbn
 qcom/sdm845/Xiaomi/dipper/mba.mbn
 qcom/sdm845/Xiaomi/dipper/modem.b00
 qcom/sdm845/Xiaomi/dipper/modem.mbn
-qcom/sdm845/Xiaomi/dipper/venus.b00
-qcom/sdm845/Xiaomi/dipper/venus.mbn"
+qcom/venus-5.2/venus.b00
+qcom/venus-5.2/venus.mbn"
 
 # run VENDOR IMG ARGS...: the tool with the stand-ins first on PATH
 run() {
@@ -244,7 +244,13 @@ if run "$t/dipper-source" "$t/dipper-source" -d dipper -o "$o"; then
   [[ $(cat "$o/$FW/qcom/sdm845/Xiaomi/dipper/a630_zap.mbn") == "a630_zap metadata" &&
      $(cat "$o/$FW/qcom/sdm845/Xiaomi/dipper/a630_zap.b00") == "a630_zap segment" &&
      $(cat "$o/$FW/qcom/sdm845/Xiaomi/dipper/adsp.mbn") == "adsp metadata" &&
-     $(cat "$o/$FW/qcom/sdm845/Xiaomi/dipper/adsp.b00") == "adsp segment" ]] ||
+     $(cat "$o/$FW/qcom/sdm845/Xiaomi/dipper/adsp.b00") == "adsp segment" &&
+     $(cat "$o/$FW/cdsp.mdt") == "cdsp metadata" &&
+     $(cat "$o/$FW/cdsp.b00") == "cdsp segment" &&
+     $(cat "$o/$FW/qcom/venus-5.2/venus.mbn") == "venus metadata" &&
+     $(cat "$o/$FW/qcom/venus-5.2/venus.b00") == "venus segment" &&
+     $(cat "$o/$FW/qca/Xiaomi/dipper/crnv21.bin") == "crnv" &&
+     $(cat "$o/$FW/qca/crbtfw21.tlv") == "crbtfw" ]] ||
     fail "dipper: vendor and modem MDT metadata keep their split segments"
   (cd "$o/$FW" && sha256sum --quiet -c "$o/vendor-firmware.sha256") || fail "dipper: output checksums match"
   pass_since "$n" "dipper: partition roots map firmware and split modem segments"
@@ -261,7 +267,7 @@ grep -qF 'vendor/firmware/a630_zap has no .bNN segment' "$t/log" || fail "dipper
 mv "$t/a630_zap.b00" "$t/dipper-source/vendor/firmware/a630_zap.b00"
 cp "$t/dipper-source/vendor/build.prop" "$t/build.prop"
 echo 'ro.product.vendor.device=other' > "$t/dipper-source/vendor/build.prop"
-if run "$t/dipper-source" "$t/dipper-source" -d dipper -o "$t/dipper-wrong-device"; then
+if run "$t/dipper-source" "$t/dipper-source" -d dipper -f -o "$t/dipper-wrong-device"; then
   fail "dipper: a backup for another device is refused"
 fi
 grep -qF "vendor/build.prop identifies 'other', not dipper" "$t/log" || fail "dipper: source device mismatch is named"

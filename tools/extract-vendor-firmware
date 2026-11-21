@@ -52,11 +52,13 @@
 #
 #   vendor/firmware/{a630_zap,ipa_fws}.mdt      -> qcom/sdm845/Xiaomi/dipper/*.mbn
 #   vendor/firmware/{a630_zap,ipa_fws}.bNN      -> beside the matching .mbn
-#   modem/image/{adsp,cdsp,modem,venus}.mdt     -> qcom/sdm845/Xiaomi/dipper/*.mbn
-#   modem/image/{adsp,cdsp,modem,venus}.bNN     -> beside the matching .mbn
+#   modem/image/{adsp,modem}.mdt                -> qcom/sdm845/Xiaomi/dipper/*.mbn
+#   modem/image/{adsp,modem}.bNN                -> beside the matching .mbn
+#   modem/image/cdsp.{mdt,bNN}                  -> firmware root
+#   modem/image/venus.{mdt,bNN}                 -> qcom/venus-5.2/
 #   modem/image/mba.mbn                         -> qcom/sdm845/Xiaomi/dipper/mba.mbn
-#   bluetooth/image/crnv21.bin                  -> Xiaomi/dipper/crnv21.bin
-#   bluetooth/image/crbtfw21.tlv                -> Xiaomi/dipper/crbtfw21.tlv
+#   bluetooth/image/crnv21.bin                  -> qca/Xiaomi/dipper/crnv21.bin
+#   bluetooth/image/crbtfw21.tlv                -> qca/crbtfw21.tlv
 #
 # The Pixel 9a (-d tegu; <board> is "google,zumapro-tegu"):
 #
@@ -175,7 +177,8 @@ Usage: extract-vendor-firmware [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
   -w DIR   scratch directory for the ~1 GB vendor.img (default: a temp dir in \$TMPDIR)
   -d DEV   cheetah (default), panther, raven, tegu, husky or dipper
   -s SKU   husky: the hardware SKU (androidboot.hardware.sku), which picks the NVRAM
-  -f       skip the device checks (android-info.txt board=$DEVICE, the vendor build.prop)
+  -f       skip the device checks (android-info.txt board=$DEVICE, the vendor build.prop);
+           dipper always requires vendor/build.prop to identify the backup as dipper
   -c FILE  also copy the camera HAL APEX (/vendor/apex/com.google.pixel.camera.hal.apex)
            to FILE, for tools/extract-camera-data --apex (tools/phone-provision uses it)
 
@@ -298,12 +301,12 @@ case $DEVICE_OPT in
       "vendor/firmware/a630_zap.mdt|qcom/sdm845/Xiaomi/dipper/a630_zap.mbn"
       "vendor/firmware/ipa_fws.mdt|qcom/sdm845/Xiaomi/dipper/ipa_fws.mbn"
       "modem/image/adsp.mdt|qcom/sdm845/Xiaomi/dipper/adsp.mbn"
-      "modem/image/cdsp.mdt|qcom/sdm845/Xiaomi/dipper/cdsp.mbn"
+      "modem/image/cdsp.mdt|cdsp.mdt"
       "modem/image/mba.mbn|qcom/sdm845/Xiaomi/dipper/mba.mbn"
       "modem/image/modem.mdt|qcom/sdm845/Xiaomi/dipper/modem.mbn"
-      "modem/image/venus.mdt|qcom/sdm845/Xiaomi/dipper/venus.mbn"
-      "bluetooth/image/crnv21.bin|Xiaomi/dipper/crnv21.bin"
-      "bluetooth/image/crbtfw21.tlv|Xiaomi/dipper/crbtfw21.tlv"
+      "modem/image/venus.mdt|qcom/venus-5.2/venus.mbn"
+      "bluetooth/image/crnv21.bin|qca/Xiaomi/dipper/crnv21.bin"
+      "bluetooth/image/crbtfw21.tlv|qca/crbtfw21.tlv"
     ) ;;
   *) die "unknown device $DEVICE_OPT (cheetah, panther, raven, tegu, husky or dipper)" ;;
 esac
@@ -323,7 +326,12 @@ if [[ $DEVICE == dipper ]]; then
     for src in "$SRC"/"$srcdir"/"$name".b[0-9][0-9]; do
       [[ -f $src ]] || continue
       segments=$((segments + 1))
-      MAP+=("${src#"$SRC"/}|qcom/sdm845/Xiaomi/dipper/${src##*/}")
+      case $name in
+        cdsp) segment_dir= ;;
+        venus) segment_dir=qcom/venus-5.2/ ;;
+        *) segment_dir=qcom/sdm845/Xiaomi/dipper/ ;;
+      esac
+      MAP+=("${src#"$SRC"/}|${segment_dir}${src##*/}")
     done
     ((segments > 0)) || die "$srcdir/$name has no .bNN segment in the Dipper backup"
   done
@@ -493,9 +501,12 @@ dest="$new/$DEST_REL"
 for entry in "${MAP[@]}"; do
   from=${entry%%|*} to=${entry#*|}
   mkdir -p "$dest/$(dirname "$to")"
-  source_label=/vendor
-  [[ $DEVICE != dipper ]] || source_label="local Dipper backup"
-  get_file "$from" "$dest/$to" || die "$source_label/$from is missing from this source or could not be copied"
+  if ! get_file "$from" "$dest/$to"; then
+    if [[ $DEVICE == dipper ]]; then
+      die "local Dipper backup/$from is missing or could not be copied"
+    fi
+    die "/vendor/$from is missing from this image or could not be copied"
+  fi
   chmod 0644 "$dest/$to"
   if [[ $DEVICE == dipper ]]; then
     printf '  /%-52s -> /%s/%s\n' "$from" "$DEST_REL" "$to"
