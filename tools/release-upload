@@ -115,8 +115,8 @@ fpr=$(tr -d '[:space:]' < "$fpr_file")
 [[ $fpr =~ ^[0-9A-F]{40}$ ]] || die "keys/fingerprint.release does not hold a 40-digit fingerprint"
 cut -d: -f1 "$keyring/omamobile-trusted" | grep -cxF "$fpr" >/dev/null || die "omamobile-keyring does not trust the release key $fpr"
 source tools/lib/signing.sh
-why=$(revoked_file_check "$ROOT") || die "$why"
-if cut -d: -f1 "$keyring/omamobile-revoked" 2>/dev/null | grep -cxF "$fpr" >/dev/null; then
+revoked=$(revoked_list "$ROOT") || die "$revoked"
+if [[ $'\n'$revoked$'\n' == *$'\n'"$fpr"$'\n'* ]]; then
   die "the release key $fpr is revoked in omamobile-keyring"
 fi
 tmp=$(mktemp -d)

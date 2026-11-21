@@ -230,11 +230,13 @@ case "\${REVOKED_FAULT:-}" in
   dir) rm -f -- "$kr/omamobile-revoked" && mkdir -- "$kr/omamobile-revoked" ;;
   swap) printf '%s:4:\n' "$signer" > "$kr/omamobile-revoked" ;;
   crlf) printf '%s\r\n' "$signer" > "$kr/omamobile-revoked" ;;
+  blank) printf '%s\n\n' "$signer" > "$kr/omamobile-revoked" ;;
+  nonl) printf '%s' "$signer" > "$kr/omamobile-revoked" ;;
 esac
 EOF
 chmod +x "$t/bin-revoked/wc"
 : > "$t/unreadable" && chmod 000 "$t/unreadable"
-for fault in rm chmod dir swap crlf; do
+for fault in rm chmod dir swap crlf blank nonl; do
   if [[ $fault == chmod && -r $t/unreadable ]]; then
     pass "# skip: chmod 000 does not stop this user reading"
     continue
@@ -246,23 +248,21 @@ for fault in rm chmod dir swap crlf; do
     fail "stops when omamobile-revoked fails after the check ($fault)"
   fi
   case $fault in
-    rm)
-      [[ ! -e $kr/omamobile-revoked ]] || fail "the wc wrapper removed omamobile-revoked"
-      want="error: cannot read packages/omamobile-keyring/omamobile-revoked" ;;
+    rm) [[ ! -e $kr/omamobile-revoked ]] || fail "the wc wrapper removed omamobile-revoked" ;;
     chmod)
       [[ ! -r $kr/omamobile-revoked ]] || fail "the wc wrapper made omamobile-revoked unreadable"
-      chmod 644 "$kr/omamobile-revoked"
-      want="error: cannot read packages/omamobile-keyring/omamobile-revoked" ;;
+      chmod 644 "$kr/omamobile-revoked" ;;
     dir)
       [[ -d $kr/omamobile-revoked ]] || fail "the wc wrapper replaced omamobile-revoked with a directory"
-      rmdir "$kr/omamobile-revoked"
-      want="error: cannot read packages/omamobile-keyring/omamobile-revoked" ;;
-    swap)
-      [[ $(cat "$kr/omamobile-revoked") == "$signer:4:" ]] || fail "the wc wrapper rewrote omamobile-revoked as malformed ($fault)"
-      want="error: packages/omamobile-keyring/omamobile-revoked changed while reading" ;;
-    crlf)
-      [[ $(cat "$kr/omamobile-revoked") == $signer$'\r' ]] || fail "the wc wrapper rewrote omamobile-revoked as malformed ($fault)"
-      want="error: packages/omamobile-keyring/omamobile-revoked changed while reading" ;;
+      rmdir "$kr/omamobile-revoked" ;;
+    swap) [[ $(cat "$kr/omamobile-revoked") == "$signer:4:" ]] || fail "the wc wrapper rewrote omamobile-revoked as malformed ($fault)" ;;
+    crlf) [[ $(cat "$kr/omamobile-revoked") == $signer$'\r' ]] || fail "the wc wrapper rewrote omamobile-revoked as malformed ($fault)" ;;
+    blank) [[ $(wc -l < "$kr/omamobile-revoked") == 2 ]] || fail "the wc wrapper rewrote omamobile-revoked as malformed ($fault)" ;;
+    nonl) [[ $(wc -l < "$kr/omamobile-revoked") == 0 ]] || fail "the wc wrapper rewrote omamobile-revoked as malformed ($fault)" ;;
+  esac
+  case $fault in
+    rm|chmod|dir) want="error: cannot read packages/omamobile-keyring/omamobile-revoked" ;;
+    *) want="error: packages/omamobile-keyring/omamobile-revoked changed while reading" ;;
   esac
   grep -qxF "$want" "$t/log" \
     || { cat "$t/log"; fail "says why omamobile-revoked failed after the check ($fault)"; }

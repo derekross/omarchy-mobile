@@ -11,7 +11,7 @@
 # packages/omamobile-keyring trusts and has not revoked, and every package
 # must match the SHA-256 the signed index gives for it; anything else stops
 # the run. So does an omamobile-revoked not in the form docs/RELEASES.md §10
-# gives, before any download (tools/lib/signing.sh's revoked_file_check).
+# gives, before any download (tools/lib/signing.sh's revoked_list).
 # Files already in DIR that still verify are not downloaded again.
 # Once all of them verify, each package file directly in DIR (*.pkg.tar.zst
 # or .xz, or a link to one: the link goes, never its target) whose name the
@@ -48,17 +48,8 @@ GNUPGHOME=$tmp/gnupg gpg --batch --quiet --no-default-keyring --keyring "$tmp/om
 mapfile -t trusted < <(cut -d: -f1 "$keyring/omamobile-trusted" | grep -E '^[0-9A-F]{40}$')
 source tools/lib/signing.sh
 revoked=()
-if [[ -e $keyring/omamobile-revoked || -L $keyring/omamobile-revoked ]]; then
-  why=$(revoked_file_check .) || die "$why"
-  [[ -f $keyring/omamobile-revoked ]] && revoked_lines=$(cat -- "$keyring/omamobile-revoked") \
-    || die "cannot read $keyring/omamobile-revoked"
-  if [[ -n $revoked_lines ]]; then
-    mapfile -t revoked <<<"$revoked_lines"
-    for r in "${revoked[@]}"; do
-      [[ $r =~ ^[0123456789ABCDEF]{40}$ ]] || die "$keyring/omamobile-revoked changed while reading"
-    done
-  fi
-fi
+revoked_lines=$(revoked_list .) || die "$revoked_lines"
+[[ -z $revoked_lines ]] || mapfile -t revoked <<<"$revoked_lines"
 ((${#trusted[@]})) || die "no trusted keys in $keyring/omamobile-trusted"
 
 # verify SIG FILE: the primary key behind a good signature must be trusted
