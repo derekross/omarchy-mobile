@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* Take over the measured Komodo handoff with flip-only KMS and fbcon. */
+/dts-v1/;
+/plugin/;
+
+&{/reserved-memory} {
+	komodo_boot_fb: framebuffer@fac00000 {
+		reg = <0x0 0xfac00000 (1344 * 2992 * 4)>;
+		no-map;
+	};
+
+	komodo_display_pool: display-pool {
+		compatible = "shared-dma-pool";
+		reusable;
+		size = <0x04000000>;
+		alignment = <0x0 0x00200000>;
+		alloc-ranges = <0x0 0xc4000000 0x10000000>;
+	};
+};
+
+&decon0 {
+	compatible = "google,zumapro-komodo-decon", "google,zumapro-decon";
+	memory-region = <&komodo_display_pool>, <&komodo_boot_fb>;
+	memory-region-names = "pool", "boot-framebuffer";
+	status = "okay";
+};

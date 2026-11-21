@@ -1,0 +1,75 @@
+// SPDX-License-Identifier: MIT
+/* Komodo Synaptics S3908 touchscreen bring-up. */
+/dts-v1/;
+/plugin/;
+
+/* Zumapro's USI2 SPI20 is the touch bus on Komodo. */
+&apm_sram {
+	status = "okay";
+};
+
+&cmu_apm {
+	status = "okay";
+};
+
+&cmu_hsi0 {
+	status = "okay";
+};
+
+&cmu_peric0 {
+	status = "okay";
+};
+
+&sysreg_apm {
+	status = "okay";
+};
+
+&sysreg_hsi0 {
+	status = "okay";
+};
+
+&sysreg_peric0 {
+	status = "okay";
+};
+
+&pinctrl_peric0 {
+	status = "okay";
+
+	touch_reset_held: touch-reset-held-pins {
+		samsung,pins = "gpp1-1";
+		samsung,pin-function = <1>; /* output */
+		samsung,pin-val = <0>; /* hold reset asserted until the driver probes */
+	};
+};
+
+&pinctrl_custom_alive {
+	status = "okay";
+};
+
+/* GPN0 needs its wired parent interrupt for GPIO 0 to become a Linux IRQ. */
+&gpn0 {
+	interrupt-controller;
+	#interrupt-cells = <2>;
+	interrupts = <0 0 4>; /* GIC_SPI 0, IRQ_TYPE_LEVEL_HIGH (Zumapro Tegu) */
+};
+
+&usi2_hsi0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&touch_reset_held>;
+	status = "okay";
+};
+
+&spi20 {
+	status = "okay";
+
+	touchscreen@0 {
+		compatible = "syna,s3908";
+		reg = <0>;
+		spi-max-frequency = <10000000>;
+		interrupt-parent = <&gpn0>;
+		interrupts = <0 8>; /* IRQ_TYPE_LEVEL_LOW */
+		reset-gpios = <&gpp1 1 1>; /* GPIO_ACTIVE_LOW */
+		avdd-supply = <&touch_avdd>;
+		vdd-supply = <&touch_vdd>;
+	};
+};
