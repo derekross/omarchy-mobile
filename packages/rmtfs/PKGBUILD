@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: 0BSD
+# Omarchy Mobile build of rmtfs 1.2, derived from https://aur.archlinux.org/cgit/aur.git/tree/PKGBUILD?h=rmtfs&id=bc730f5b88a99df11393ed2a9269eb1b5bac992b.
+# Upstream source: https://github.com/linux-msm/rmtfs/tree/v1.2 (14cb1ee69f556873dc271832b77163669e1d6459).
+# Maintainer: Super Tecno Gym <banana@grrlz.net>
+# Contributor: Sam Day <me@samcday.com>
+
+pkgname="rmtfs"
+pkgdesc="Qualcomm Remote Filesystem Service Implementation"
+pkgver=1.2
+pkgrel=1
+arch=(aarch64 x86_64)
+url="https://github.com/linux-msm/rmtfs"
+license=("BSD-3-Clause")
+depends=(qrtr libudev.so)
+_srcname="${pkgname}-${pkgver}"
+source=(
+	"${_srcname}.tar.gz::https://github.com/linux-msm/rmtfs/archive/refs/tags/v${pkgver}.tar.gz"
+	"udev.rules"
+	)
+
+sha256sums=(
+	'5be459af54b5ff0f1447fc265246e526d27e8250212f5f380458f9ee551bd3a3'
+        'b329490952eca456fcbfb3c3ca6b82850310f64fd63a6de25d4c56f091d5cea3'
+)
+
+build() {
+	cd "$_srcname"
+
+	make prefix=/usr
+}
+
+package() {
+	cd "$_srcname"
+
+	make prefix=/usr DESTDIR="$pkgdir/" install
+	install -Dm644 "$srcdir"/udev.rules "$pkgdir/usr/lib/udev/rules.d/65-$pkgname.rules"
+	install -Dm644 LICENSE "$pkgdir"/usr/share/licenses/$pkgname/COPYING
+}

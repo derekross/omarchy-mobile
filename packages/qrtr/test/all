@@ -1,0 +1,9 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+bash -n PKGBUILD
+grep -q -- '-Dqrtr-ns=disabled' PKGBUILD
+grep -q 'linux-msm/qrtr/tree/v1.2' PKGBUILD
+! grep -Eq '^(conflicts|groups)=' PKGBUILD
+echo 'ok - qrtr build configuration and provenance'
