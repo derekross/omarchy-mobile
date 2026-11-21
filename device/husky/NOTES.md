@@ -12,10 +12,22 @@ Sources:
 
 ## 2026-11-18: the torch tile and a held volume key, the third phone
 
-Colin's phone, published `omamobile` at `82f31d3a7`, omamobile-shell 0.2.108,
-omamobile-device-husky 0.1.16: the quick-settings torch tile turns the LED on
-and off, and holding Volume Up gives no stutter (the ROADMAP's Buttons note is
-from Lef's phone). Checked by eye, nothing logged.
+Colin's phone, published `omamobile` at `82f31d3a7` (the kernel). The two packages
+did not come from one update. omamobile-shell 0.2.108 (built 2026-11-09) came in the
+root image built on 2026-11-09: `tools/build-rootfs` with the signed packages from
+`tools/fetch-published --channel development`, an image that follows the stable
+channel; it has not been updated since. omamobile-device-husky 0.1.16 was built on
+the phone on 2026-11-18 from a checkout of `main` (17f9a3cd) with
+`tools/phone-install-package` and installed with `pacman -U`, not from a channel
+(development's own 0.1.16 was built on 2026-11-19, after this install; stable has
+0.1.13).
+
+The quick-settings torch tile turns the LED on and off, and holding Volume Up gives
+no stutter (the ROADMAP's Buttons note is from Lef's phone). Checked by eye, nothing
+logged. Hyprland on this phone reports `input:repeat_rate` 40 and
+`input:repeat_delay` 250 (read 2026-11-20): Omarchy's defaults, from
+`/usr/share/omarchy/default/hypr/input.lua` in `omarchy-settings` 4.0.6. The user's
+`input.lua` has both lines commented out, and no package of ours sets either.
 
 ## 2026-11-15: Bluetooth, haptics, the torch and the gauge on merged `omamobile`, a third phone
 
