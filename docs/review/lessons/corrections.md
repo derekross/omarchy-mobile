@@ -3,6 +3,40 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **C-61 (2026-11-21). A round 65 reviewer read 9 of the 25 lesson files to
+  save context,** and said so in its report, which is the only reason it is
+  known. The index says which areas every review reads, and a lesson that was
+  not read cannot be applied or cited. *Lesson:* a report that read fewer
+  files than the index asks for names the ones it left out, as this one did,
+  and each pull request those files bear on gets them read anyway before its
+  review is used, by the same reviewer or a second one; to save context,
+  review fewer pull requests per run, not fewer lessons. Extends L-772 and
+  C-57. *From:* round 65.
+- **C-60 (2026-11-21). Round 63 verified that #905's `Qt.callLater` handler
+  folds ten signals in a row into one rebuild, and took the title's "once per
+  rescan" with it;** a third party's run on the 7 Pro then showed three rounds
+  of signals 200 ms apart and three rebuilds, because the fold covers one
+  event-loop turn only. Our own suggestion of the simpler form (L-1003) rested
+  on the same probe. *Lesson:* a "once per burst" fix is probed with the burst
+  in the shape a phone delivers it (some signals at once, some from a 200 ms
+  timer), and the phone run is asked for the signals' timestamps, not only the
+  count of rebuilds. Extends L-1003, L-954 and L-724. *From:* #905, rounds 63
+  and 65.
+- **C-59 (2026-11-21, a near miss). Removing #968's moved ramdisk-footer
+  refusal left `tests/install-phone` green on the review laptop, and the line
+  was nearly reported as untested:** its case lives in
+  `tests/install-phone-initramfs`, which prints `ok - # skip: no dtc` locally
+  and ran in full in CI. *Lesson:* before calling a line untested, `git grep
+  -n '<the refusal's words>' -- tests`, and for a suite that skips here read
+  its own `ok` lines in CI's log (`gh run view <id> --log | grep -A8 '#
+  tests/<suite>'`). Extends L-103 and L-742. *From:* #968, round 65.
+- **C-58 (2026-11-21, a near miss). Comparing the added lines main's scanner
+  and #966's read, four of 112 pull requests looked like lost lines:** a file
+  added under one name and renamed later is listed under its first name by a
+  per-commit scan and under its last by a range diff. The lines were all there
+  once the comparison dropped the name. *Lesson:* when two scanners' dumps are
+  compared, key on content before file name (`sed 's/^[^:]*: //'` on both
+  before `comm -23`). Extends L-896. *From:* #966, round 65.
 - **C-57 (2026-11-21, a near miss). A round 64 reviewer told to read "the
   lesson files" read the shared checkout's copies, which were 36 commits
   behind `origin/main`:** the index there listed 15 files where main had 24,

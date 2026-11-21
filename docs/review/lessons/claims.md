@@ -3,6 +3,23 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1119. A notes entry that explains how two packages got onto a phone is
+  read through the newer package's `depends=`.** #970 answered "which of the
+  two came from where" exactly, and the locally installed device package's
+  versioned dependency on `omamobile-audio` shows a third package had to move
+  with it, from the phone's channel. *Check:* `git show
+  <commit>:packages/<p>/PKGBUILD | grep depends` for the locally installed
+  package, compare each versioned entry with the date of the image the entry
+  names, and ask for `pacman -Q` of whatever must have come along. Extends
+  L-1075 and L-358. *From:* #970, round 65, 2026-11-21.
+- **L-1118. When a contributor's reply says "fixed, and here is a short run",
+  the run's stop point is compared with the lines the fix changed.** #953's
+  run of the new head ended before its second part, while the commit rewrote
+  that part's sampling line; the description still offered the first commit's
+  full run as the evidence. *Check:* for each on-phone run named in a reply,
+  list which numbered steps of the tool it reached, and `git diff <old head>
+  <new head>` for hunks in the steps it didn't; ask for the run that reaches
+  them. Extends L-936 and L-109. *From:* #953, round 65, 2026-11-21.
 - **L-1107. A hardware request written as a list is answered clause by clause
   from each record, with "seen" kept apart from "read back".** Kernel #218's
   description shows the panel lit once on an unidentified tree, and on the

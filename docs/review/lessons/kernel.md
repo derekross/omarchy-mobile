@@ -3,6 +3,17 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1112. A "return early unless the board has X" fix for new PM hooks is
+  confirmed in three places: the statements above the test, which tables set
+  X, and what the base did with the same work item.** For kernel #267 that was
+  one `dev_get_drvdata()` line above the test, one table with the field, and a
+  base with no PM ops and an autocancelled delayed work on `system_wq`; the
+  three together are what "unchanged on the reference phone" means, and they
+  also answered the author's own follow-up question (the work keeps running
+  across sleep there, as published). *Check:* `awk '/^static int
+  <driver>_suspend/,/^}/'` on the head, `grep -n '<field>'` for the tables,
+  and `git grep -c 'PM_OPS\|dev_pm_ops' <base> -- <file>`. Extends L-997 and
+  L-206. *From:* kernel #267, round 65, 2026-11-21.
 - **L-1098. A message-only push that answers a wording request is checked for
   the wrapping it had before.** Kernel #249's body gained the requested
   sentence and lost every line break in the same amend; the tree was

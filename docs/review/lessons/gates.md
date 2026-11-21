@@ -3,6 +3,38 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1115. A tool that gains a refusal is fed the real inputs it will meet
+  before it merges: every released bundle for an installer, the repository's
+  own file for a publish tool.** #968's new size refusal was answered for
+  seven released bundles on the review laptop by `stat` against each bundle's
+  own `device.conf`, with no installer run and no phone; #969 makes the
+  nightly `repo-publish` die on a malformed `omamobile-revoked`, and the
+  helper called on main's actual file returned cleanly, which is what makes
+  the stop safe to land. *Check:* for a refusal keyed on a file's size, magic
+  or name, list `out/bundle/*/images/` and compare with each bundle's
+  descriptor, where one mismatch means a published release would be stopped;
+  for a stop on a tracked file, source the helper from the head and call it on
+  a worktree of `origin/main`. Extends L-778, L-420 and L-893. *From:* #968
+  and #969, round 65, 2026-11-21.
+- **L-1114. A per-commit scanner is fed the two histories its range arithmetic
+  can skip: a side commit dropped by an `-s ours` merge, and a head that is
+  only a merge of base commits.** Both passed #966's suite with the rule
+  removed, and the second passed main's tool as "no commits to check".
+  *Check:* `git merge -s ours <side with a finding>` on the branch, and `git
+  commit-tree <tree with a finding> -p <base> -p <base>~1`; run the tool on
+  each and mutate `--full-history` and the empty-range condition. Extends
+  L-684 and L-742. *From:* #966, round 65, 2026-11-21.
+- **L-1113. A gate that moves from `git diff` to `git log` is run under the
+  `log.*` settings a user can have, a root commit in the range included.**
+  #966's per-commit scan lost a root commit's patch under `log.showRoot=false`
+  (reachable through a merge of an unrelated history), where main's `git diff`
+  was immune; its explicit options held against ten other settings. *Check:*
+  build one scratch repository with `GIT_CONFIG_GLOBAL=/dev/null`, then run
+  the old and the new tool with `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=<setting>
+  GIT_CONFIG_VALUE_0=<value>` for `log.showRoot`, `log.showSignature`,
+  `diff.noprefix`, `diff.mnemonicPrefix`, `diff.renames` and `color.ui`, and
+  compare the results. Extends L-155 and L-896. *From:* #966, round 65,
+  2026-11-21.
 - **L-1100. A wide mechanical replacement is proved by applying the stated
   rule to the base by script and comparing with the head, then by reading only
   for what the rule can't know.** For #962 (no pipe into `head` under

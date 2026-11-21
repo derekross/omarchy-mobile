@@ -3,6 +3,26 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1117. Agreeing on "one helper for both" moves three things besides the
+  code: an optional dependency becomes a versioned one, the helper's
+  exit-status protocol has to be mapped to the caller's result format, and the
+  merge order is fixed.** On #630 the page's `optdepends` on the shell, the
+  runner's JSON-only reading of results and #954's status 75 would each have
+  surfaced one round apart if only "drop the page's own copy" had been
+  confirmed. *Check:* when confirming a consolidation, list the caller's
+  `depends`, how it reads results, and each exit status and stream of the
+  helper, in the same comment. Extends L-987, L-819 and L-911. *From:* #630
+  with #954, round 65, 2026-11-21.
+- **L-1116. When a contributor declines to delete a secret from an edit
+  history, the review stops asking and puts the admin's own delete to the
+  maintainer, with the author's reason beside it.** #630's author answered the
+  third request with a plain no (a throwaway value on a development phone); a
+  fourth request would only repeat the earlier rounds, while L-930 already
+  says an admin can remove one revision without the author. *Check:* re-read
+  the history through the API with the digits masked, name the revision by its
+  timestamp, and write the two options (delete it yourself, or close the point
+  on the author's word) into the maintainer's list, not into another request.
+  Extends L-930 and L-688. *From:* #630, round 65, 2026-11-21.
 - **L-1104. Two follow-ups invited in one review, on one function, conflict
   with each other; say the order when inviting them.** Round 63 named two gaps
   in `scan_identifiers`; the two PRs arrived an hour apart, each clean against
@@ -396,11 +416,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   "main's row with this PR's cell N" in the comment; do the same for the
   Wanted row (L-132). Extends L-184 and L-354. *From:* #98 with #751, round
   60, 2026-11-17.
-- **L-828. A tested commit that a force-push took off the PR branch is fetched
-  by its full id and diffed by tree.** #438's run was on a commit two pushes
-  behind kernel #202's head; `gh api repos/<r>/commits/<short id>` gave the
-  full id, `git fetch <remote> <full id>:<own ref>` brought it, and `git diff
-  --stat <tested> <head>` showed two files, neither on the unit's path.
-  *Check:* resolve the short id through the API, fetch it into a ref of your
-  own, and compare blobs for the files the run exercised. Extends L-166, L-45
-  and L-646. *From:* #438 with kernel #202, round 60, 2026-11-17.

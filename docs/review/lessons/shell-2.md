@@ -3,6 +3,14 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-897. `| head -1` under `pipefail` is the `grep -q` gotcha with another
+  reader, and it only shows with a `head` that writes twice.** uutils 0.10.0's
+  `head -c` splices again at end of file; GNU's doesn't, so CI and laptops
+  never saw it and the build machine did, about once in 3,000 runs. *Check:*
+  `git grep -n '| *head -n\?1\b'` in scripts under `set -o pipefail`, outside
+  failure messages; test such a line with a stand-in writer that writes once
+  more after a delay. Extends L-15, L-511 and L-765. *From:* #884 (after
+  #842), round 61, 2026-11-18.
 - **L-892. A program that becomes required in the installer is added
   everywhere an owner is told what the install needs, with its package per
   distribution.** #877 made `img2simg` a hard requirement of

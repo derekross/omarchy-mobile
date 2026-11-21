@@ -3,6 +3,14 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-828. A tested commit that a force-push took off the PR branch is fetched
+  by its full id and diffed by tree.** #438's run was on a commit two pushes
+  behind kernel #202's head; `gh api repos/<r>/commits/<short id>` gave the
+  full id, `git fetch <remote> <full id>:<own ref>` brought it, and `git diff
+  --stat <tested> <head>` showed two files, neither on the unit's path.
+  *Check:* resolve the short id through the API, fetch it into a ref of your
+  own, and compare blobs for the files the run exercised. Extends L-166, L-45
+  and L-646. *From:* #438 with kernel #202, round 60, 2026-11-17.
 - **L-814. Two PRs from one contributor that claim one version are also
   checked against what that contributor's phone has installed.** #806's test
   put a locally built `0.1.14-1` on the phone; #836's later package under the
