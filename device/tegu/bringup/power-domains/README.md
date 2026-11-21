@@ -46,7 +46,12 @@ The offsets and the off sequence are from Google's GPL
   of TPU's CMU took a synchronous external abort and reset the palmtop.
   Switch off from the boot state only, one domain per load, with the modem
   stopped cleanly first (a reset with the modem up counts as an unclean
-  end); the undo is a reboot.
+  end); the undo is a reboot. Hold a block sleep inhibitor for as long as
+  any domain is off (`systemd-inhibit --what=sleep --mode=block ...`): on
+  2026-11-18 the shell's auto-sleep put the palmtop to sleep with twelve
+  domains off, and for 42 minutes that looked like a hang. The runs of
+  that day also switched several domains in one boot; one change per boot
+  is the rule, and a run that breaks it says so in its record.
 
 The copies here differ from the ones that ran in two ways: the Pixel 9a
 check, and `on=` removed. They build against the daily bring-up kernel's

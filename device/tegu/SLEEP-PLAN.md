@@ -389,8 +389,15 @@ The figures are from the 2026-10-27 and 10-28 NOTES entries
   so the table says the direction and not much more. The cable-out
   comparison is not done.
 
+  These runs did not keep to one change per boot. The table's boot had
+  six domains switched off and then six more, one module load each with
+  a look that the palmtop still answered in between; the boot before it
+  had TPU off, on and off again. A step that fails in such a boot can't
+  be pinned on one change, and the reset below is the example.
+
   What else the day showed:
-  - **A domain powered back on by hand reset the palmtop.** TPU was
+  - **A domain powered back on by hand reset the palmtop.** This was an
+    earlier boot than the table's, with the modem up. TPU was
     switched off, on again five minutes later (`_STATUS` followed), and off
     a second time 100 s after that: the first step of that second off, a read of TPU's CMU
     at 0x1a300800, took a synchronous external abort in the module's init,
@@ -400,8 +407,9 @@ The figures are from the 2026-10-27 and 10-28 NOTES entries
     TZ-config SMC (`smc_offset`); that call was not tried here, and on the
     Pixel 6 Pro both DTZPC SMCs hung the SoC on the AoC's block (raven
     AUDIO-PLAN R2.1c and R2.1d, most likely EL3 touching a block that was
-    off). After the reset the modem came up (one unclean end counted),
-    and the NV partitions matched the backup. The published module has no
+    off). After the reset the modem came up (one unclean end counted,
+    since the reset boot had it up), and the NV check against the backup
+    followed at once: all the same. The published module has no
     way back on; the undo for an off is a reboot.
   - **With the six camera stages off, libcamera listed no cameras** (three
     with all on).
