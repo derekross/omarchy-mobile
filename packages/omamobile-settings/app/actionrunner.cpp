@@ -16,7 +16,7 @@ void ActionRunner::post(const QString &tool, const QVariantMap &result, int id) 
 
 int ActionRunner::run(const QString &tool, const QStringList &args) {
     static const QRegularExpression word("\\A[a-z0-9]{1,16}\\z");
-    static const QStringList tools = {"display", "charge"};
+    static const QStringList tools = {"display", "charge", "security"};
     const int id = ++m_next;
     auto fail = [this, &tool, id](const QString &why) { post(tool, {{"error", why}}, id); return id; };
     if (!tools.contains(tool) || args.size() > 3) return fail("unknown action");
@@ -43,6 +43,9 @@ int ActionRunner::run(const QString &tool, const QStringList &args) {
     });
     p->start();
     p->closeWriteChannel();
-    QTimer::singleShot(20000, p, [p] { if (p->state() != QProcess::NotRunning) p->kill(); });
+    // the firewall switch: up to three reads (10 s each at worst) and systemctl start (cut at 62 s; the unit's limit is
+    // 60 s): 92 s, so 100 s
+    const bool firewallSet = tool == "security" && args.value(0) == "set";
+    QTimer::singleShot(firewallSet ? 100000 : 20000, p, [p] { if (p->state() != QProcess::NotRunning) p->kill(); });
     return id;
 }

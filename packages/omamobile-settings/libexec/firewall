@@ -1,0 +1,94 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Turns UFW on or off for the Settings app's Security & privacy page. Runs as root, from omamobile-firewall@on|off.service
+# (the polkit rule 50-omamobile-firewall.rules lets the active local user start those two instances and nothing else).
+#   firewall on    `ufw --force enable`; refused while sshd.service or sshd.socket is enabled or running (or can't be
+#                  read) and no rule lets port 22 in on usb0 ahead of any rule that could drop it (IPv4, and IPv6 when
+#                  ufw uses it: IPV6= in /etc/default/ufw, then /etc/ufw/ufw.conf), and while omamobile-hotspot.service runs
+#   firewall off   `ufw disable`; never refused (it cannot cut SSH off)
+# Neither touches the rules: user.rules and user6.rules (the hotspot's rules among them) stay as they are, and ENABLED=
+# in /etc/ufw/ufw.conf is read back afterwards. The test sets OMAMOBILE_FIREWALL_ROOT to a scratch root with stubs on PATH.
+set -uo pipefail
+export LC_ALL=C
+root=${OMAMOBILE_FIREWALL_ROOT:-}
+if [[ -n $root ]]; then [[ $root == /* && $root != / && -d $root ]] || exit 2; fi
+log() { echo "omamobile-firewall: $*"; }
+want=${1:-}
+[[ $# -eq 1 && ( $want == on || $want == off ) ]] || { log "usage: firewall on|off"; exit 2; }
+command -v ufw >/dev/null 2>&1 || { log "ufw is not installed"; exit 1; }
+conf=$root/etc/ufw/ufw.conf
+# ufw's chains are first match: a DROP, REJECT or limit line that could match tcp port 22 on usb0 (no -i or -i usb0,
+# any source, since the USB peer's address isn't known here; tcp or all; port 22, no port, or anything but a plain
+# number, such as a range or a service name; any line with a `!`) ahead of the usb0 allow means it is never reached.
+# backends/security.sh and libexec/firewall keep the same copy of this and of ipv6_yes.
+could_deny() {
+  local l=$1 v
+  [[ $l =~ ^-A\ ufw6?-user-input\  && $l =~ \ -j\ (DROP|REJECT|ufw6?-user-limit)(\ |$) ]] || return 1
+  [[ $l == *" ! "* ]] && return 0   # a negation (! -p, ! --dport, ! -s ...) is not read: it could match
+  if [[ $l =~ \ -i\ ([^ ]+) ]]; then [[ ${BASH_REMATCH[1]} == usb0 ]] || return 1; fi
+  if [[ $l =~ \ -p\ ([^ ]+) ]]; then [[ ${BASH_REMATCH[1]} =~ ^(tcp|all|6)$ ]] || return 1; fi
+  if [[ $l =~ \ --dport\ ([^ ]+) ]]; then v=${BASH_REMATCH[1]}; [[ $v =~ ^[0-9]+$ && $v != 22 ]] && return 1; fi
+  return 0
+}
+# ufw reads /etc/default/ufw, then /etc/ufw/ufw.conf (a later IPV6= wins). A line counts when it matches ufw's pattern
+# ^\w+="?\w+"?; the key and value are lowercased and quotes stripped, and IPv6 is used only for "yes"
+# (ufw/backend.py _get_defaults, use_ipv6). The value is the word that pattern matches. An IPV6= line ufw would skip
+# (IPV6='yes') is taken as yes here: asking for the IPv6 rule too is the safe side.
+ipv6_yes() {
+  local f line key val r=''
+  for f in "$1" "$2"; do
+    [[ -r $f ]] || continue
+    while IFS= read -r line || [[ -n $line ]]; do
+      key=${line%%=*}
+      [[ $line == *=* && ${key,,} == ipv6 ]] || continue
+      # the word ufw's pattern matches: IPV6=yes #keep reads yes (requiring the IPv6 rule is the safe side)
+      if [[ $line =~ ^[A-Za-z0-9_]+=\"?([A-Za-z0-9_]+) ]]; then
+        r=${BASH_REMATCH[1],,}
+      else
+        r=yes
+      fi
+    done < <(head -c 65536 -- "$f" 2>/dev/null)
+  done
+  [[ $r == yes ]]
+}
+usb_allows() {
+  local file=$1 re=$2 line
+  [[ -r $file ]] || return 1
+  while IFS= read -r line || [[ -n $line ]]; do
+    could_deny "$line" && return 1
+    [[ $line =~ $re ]] && return 0
+  done < <(head -c 262144 -- "$file")
+  return 1
+}
+# The unit's TimeoutStartSec is 60 s. Worst case here: five reads of at most 3 s (15 s) and ufw cut at 25 s and killed
+# 5 s later (30 s): 45 s.
+
+if [[ $want == on ]]; then
+  hs=$(timeout 3 systemctl is-active omamobile-hotspot.service 2>/dev/null) || :
+  if [[ ! $hs =~ ^(inactive|failed)$ ]]; then
+    log "refusing: the hotspot is running (its UFW rules are added only when it starts with the firewall on)"; exit 1
+  fi
+  ssh_a=$(timeout 3 systemctl is-active sshd.service 2>/dev/null) || :
+  ssh_e=$(timeout 3 systemctl is-enabled sshd.service 2>/dev/null) || :
+  # socket activation: sshd.socket starts sshd on the first connection, so it counts as SSH on as well
+  sock_a=$(timeout 3 systemctl is-active sshd.socket 2>/dev/null) || :
+  sock_e=$(timeout 3 systemctl is-enabled sshd.socket 2>/dev/null) || :
+  # sshd counts as off only when clearly stopped and clearly not started at boot; a failed read counts as on
+  if ! [[ $ssh_a =~ ^(inactive|failed)$ && $ssh_e =~ ^(disabled|masked|not-found)$
+          && $sock_a =~ ^(inactive|failed)$ && $sock_e =~ ^(disabled|masked|not-found)$ ]]; then
+    re4='^-A ufw-user-input -i usb0 -p tcp( -m tcp)? --dport 22 -j ACCEPT$'
+    re6='^-A ufw6-user-input -i usb0 -p tcp( -m tcp)? --dport 22 -j ACCEPT$'
+    usb_allows "$root/etc/ufw/user.rules" "$re4" || { log "refusing: sshd is on and no IPv4 rule lets port 22 in on usb0"; exit 1; }
+    if ipv6_yes "$root/etc/default/ufw" "$conf"; then
+      usb_allows "$root/etc/ufw/user6.rules" "$re6" || { log "refusing: sshd is on and no IPv6 rule lets port 22 in on usb0"; exit 1; }
+    fi
+  fi
+  timeout -k 5 25 ufw --force enable >/dev/null 2>&1 || { log "ufw enable failed"; exit 1; }
+  expect=yes
+else
+  timeout -k 5 25 ufw disable >/dev/null 2>&1 || { log "ufw disable failed"; exit 1; }
+  expect=no
+fi
+got=$(sed -n 's/^ENABLED=//p' "$conf" 2>/dev/null | tail -n 1 | tr -d '"')
+[[ $got == "$expect" ]] || { log "ufw.conf says ENABLED=$got after $want"; exit 1; }
+log "firewall $want"

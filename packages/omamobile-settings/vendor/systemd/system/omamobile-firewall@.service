@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# The Settings app's firewall switch: runs "/usr/lib/omamobile-settings/firewall %i" (on or off) as root. The polkit
+# rule 50-omamobile-firewall.rules lets the active local user start omamobile-firewall@on and @off and nothing else;
+# the script refuses any other value. Not enabled.
+[Unit]
+Description=Firewall %i
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/omamobile-settings/firewall %i
+TimeoutStartSec=60

@@ -36,6 +36,21 @@ row stays hidden today: omamobile-device-husky blacklists `max77759_charger`
 (`omamobile-max77759.conf`), so there is no `max77759-charger` power supply
 until that blacklist is lifted on a kernel with
 derekross/linux-omarchy-mobile#266.
+
+A third page, Security & privacy, turns the UFW firewall on or off and shows the SSH server. The page runs
+`backends/security.sh`, which reads `ENABLED=` in `/etc/ufw/ufw.conf`, the port 22 rules in `/etc/ufw/user.rules` and
+`user6.rules` (read only; `ufw status` needs root and is not called) and `systemctl is-active|is-enabled` for
+`sshd.service` and `omamobile-hotspot.service`. A switch starts `omamobile-firewall@on|off.service`, which runs
+`libexec/firewall` (installed as `/usr/lib/omamobile-settings/firewall`) as root: `ufw --force enable` or `ufw disable`,
+then reads `ufw.conf` back. The polkit rule `50-omamobile-firewall.rules` lets the active local user start those two
+instances only, with no password prompt for either; Off needs none, as with the charge-limit rule. On is refused, by
+the backend and again by the root helper, while `sshd.service` or `sshd.socket` is running or enabled (or its state
+can't be read) and no rule lets port 22 in on `usb0` ahead of any rule that could drop it (ufw is first match; IPv4,
+and IPv6 when ufw uses it, read from `IPV6=` in `/etc/default/ufw` and then `/etc/ufw/ufw.conf` as ufw does), since
+that could cut SSH over USB, and while `omamobile-hotspot.service` is running or starting. Only port 22 is checked: an
+SSH server on another port isn't. A `ufw limit` rule for SSH on `usb0` doesn't count as the USB allow (On is
+refused), and neither does a usb0 allow behind a deny with any source, a `!` or a port name. "On" means `ENABLED=yes` in `ufw.conf`. Off asks first and is never refused. The
+UFW rules are never changed. SSH is shown, not switched.
 Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management and
 recording controls are separate future contributions with their own runtime
 contracts and tests; this catalog does not offer those routes.
