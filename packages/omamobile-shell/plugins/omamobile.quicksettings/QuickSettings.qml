@@ -844,7 +844,9 @@ Item {
 
   function refreshDnd() {
     if (dndProc.running) return
-    dndProc.command = ["qs", "ipc", "-p", Quickshell.shellDir, "call", "notifications", "dndState"]
+    // Omarchy 4.5 calls the read isDnd; 4.0 called it dndState, and each
+    // answers "Function not found" to the other's name. Ask 4.5's first.
+    dndProc.command = ["sh", "-c", "for m in isDnd dndState; do v=$(qs ipc -p \"$1\" call notifications $m 2>/dev/null); case $v in on|off) echo $v; exit 0;; esac; done", "sh", Quickshell.shellDir]
     dndProc.running = true
   }
 
@@ -868,11 +870,17 @@ Item {
   // Clear all goes through the service's own IPC, on this shell instance like
   // the DND tile: dismissAll moves the toasts on screen into history, then
   // clear empties history (both run in order on the service's file queue).
+  // Omarchy 4.5 keeps them in live.json and history.json in the same
+  // directory instead, and has no clear: where history.json exists, the
+  // shade reads those two files, and Clear all forgets every notification
+  // it read once dismissAll has closed the toasts (they keep their keys).
   readonly property string notificationsDir: Quickshell.env("HOME") + "/.local/state/omarchy/notifications"
   // Where the bar's unread count starts from: the newest notification the
   // shade has shown (omamobile.bar reads it at start and hears it by IPC).
   readonly property string stateDir: Quickshell.env("HOME") + "/.local/state/omamobile"
   property var notifications: []
+  // The forget name of every notification the last read found.
+  property var notificationFiles: []
   property double nowMs: Date.now()
   property double seenStamp: 0
   property double seenWritten: 0
@@ -927,13 +935,16 @@ Item {
 
   Process {
     id: notificationsRead
-    command: ["sh", "-c", "for f in \"$1\"/*.json \"$1\"/history/*.json; do [ -f \"$f\" ] && awk 1 \"$f\"; done; exit 0",
+    command: ["sh", "-c",
+              "if [ -e \"$1/history.json\" ]; then for f in \"$1/live.json\" \"$1/history.json\"; do [ -f \"$f\" ] && awk 1 \"$f\"; done; "
+              + "else for f in \"$1\"/*.json \"$1\"/history/*.json; do [ -f \"$f\" ] && awk 1 \"$f\"; done; fi; exit 0",
               "sh", root.notificationsDir]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
         var view = NotificationsModel.shown(text, root.hiddenNotifications, Date.now())
         root.hiddenNotifications = view.hidden
+        root.notificationFiles = view.files
         // Only a change replaces the rows: a new list rebuilds every row, and
         // one being swiped would be dropped from under the finger.
         if (JSON.stringify(view.entries) !== JSON.stringify(root.notifications))
@@ -994,8 +1005,10 @@ Item {
     notifications = []
     if (clearProc.running) return
     clearProc.command = ["sh", "-c",
-      "qs ipc -p \"$1\" call notifications dismissAll; qs ipc -p \"$1\" call notifications clear",
-      "sh", Quickshell.shellDir]
+      "if [ -e \"$2/history.json\" ]; then shell=$1; shift 2; qs ipc -p \"$shell\" call notifications dismissAll; "
+      + "for name; do qs ipc -p \"$shell\" call notifications forget \"$name\"; done; "
+      + "else qs ipc -p \"$1\" call notifications dismissAll; qs ipc -p \"$1\" call notifications clear; fi; exit 0",
+      "sh", Quickshell.shellDir, root.notificationsDir].concat(notificationFiles)
     clearProc.running = true
   }
 
@@ -1078,8 +1091,10 @@ Item {
     function toggle() { if (available) root.runTileAction("mobile-data", !enabled) }
     // The chevron (and a long press): the Mobile network page
     // (omamobile.mobilenetwork), through the CLI, since a plugin only
-    // summons its own panels. Shown with a modem only.
-    readonly property bool details: available
+    // summons its own panels. Shown with a modem, and with one the owner
+    // switched off on that page, which is where it is switched back on.
+    readonly property bool details: available || detailsUnavailable
+    readonly property bool detailsUnavailable: !available && root.probed.data_switch === "off"
     function openDetails() {
       root.dismiss()
       Quickshell.execDetached(["omarchy-shell", "shell", "summon", "omamobile.mobilenetwork", "{}"])
@@ -2130,6 +2145,7 @@ Item {
     available: !!backend && backend.available
     busy: !!backend && backend.busy === true
     details: !!backend && backend.details === true
+    detailsUnavailable: !!backend && backend.detailsUnavailable === true
     longPress: !!backend && backend.longPress === true
     onClicked: if (backend) backend.toggle()
     onDetailsRequested: if (backend && typeof backend.openDetails === "function") backend.openDetails()

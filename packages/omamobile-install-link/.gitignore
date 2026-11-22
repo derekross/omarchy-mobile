@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+# The pinned source, fetched and unpacked by ./fetch-source (test/all)
+src-cache/
+# makepkg
+src/
+pkg/
+*.tar.gz

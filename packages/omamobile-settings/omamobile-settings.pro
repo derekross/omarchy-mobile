@@ -4,8 +4,8 @@ CONFIG += c++17 release no_include_pwd
 TEMPLATE = app
 TARGET = omamobile-settings
 INCLUDEPATH += $$PWD/app
-HEADERS += app/backend.h app/deviceinfocontroller.h
-SOURCES += app/main.cpp app/backend.cpp app/deviceinfocontroller.cpp
+HEADERS += app/backend.h app/deviceinfocontroller.h app/actionrunner.h
+SOURCES += app/main.cpp app/backend.cpp app/deviceinfocontroller.cpp app/actionrunner.cpp
 RESOURCES += app/resources.qrc
 include(version.pri)
 

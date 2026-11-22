@@ -171,6 +171,12 @@ fi
 # Which drivers: the kernel's own, or the bring-up modules
 if [[ -e $DT/cpif ]] && modinfo -n cpif >/dev/null 2>&1 && modinfo -n pcie_gs201_cp >/dev/null 2>&1; then
   in_tree=1
+  # The link driver takes its PHY from phy_zuma_pcie, which the guards keep
+  # from autoloading and which otherwise only the Wi-Fi start loads, and only
+  # on a phone with the Wi-Fi firmware. A kernel without it (built without
+  # CONFIG_PHY_ZUMA_PCIE) can't bring the link up: refuse before the latch.
+  modinfo -n phy_zuma_pcie >/dev/null 2>&1 ||
+    { say "the kernel has the CP drivers but not the PCIe PHY's (phy_zuma_pcie, CONFIG_PHY_ZUMA_PCIE): the modem link can't come up"; exit 1; }
 else
   in_tree=0
   for f in tegu-modem-cpif-activate.ko tegu-pcie0-cp.ko shm_ipc.ko cpif.ko cpif-keep-link.ko gnss_spi.ko gnssif.ko; do
@@ -197,6 +203,7 @@ if ((in_tree)); then
     [[ $(cat "$SYS/module/pcie_gs201_cp/parameters/allow_hw" 2>/dev/null) == Y ]] ||
       { say "pcie_gs201_cp is loaded without allow_hw=1: reboot first"; exit 1; }
   fi
+  modprobe phy_zuma_pcie
   modprobe pcie_gs201_cp allow_hw=1
   modprobe shm_ipc
   modprobe cpif

@@ -1,0 +1,59 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The pinned source of the install link's daemon (source.conf): GitHub's
+# archive of that commit of derekross/omamobile-installer, checked against
+# its SHA-256, unpacked into src-cache/ (gitignored) with patches/ applied,
+# as makepkg's prepare() does. For test/all, which runs the source's gadget
+# test and, where cargo is, the daemon itself; makepkg fetches on its own.
+#
+#   ./fetch-source          fetch (once), check, unpack; print the tree's path
+#   ./fetch-source --offline  the same from src-cache/ only, never the network
+#
+# Exit 0 with the path on standard output; 1 when the archive can't be had
+# (no network, no curl) or fails its checksum, with the reason on standard
+# error. Nothing outside src-cache/ is written.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+offline=0
+case ${1:-} in
+  --offline) offline=1 ;;
+  "") ;;
+  *) echo "usage: ./fetch-source [--offline]" >&2; exit 2 ;;
+esac
+commit=$(sed -n 's/^COMMIT=\([0-9a-f]\{40\}\)$/\1/p' source.conf)
+sum=$(sed -n 's/^SHA256=\([0-9a-f]\{64\}\)$/\1/p' source.conf)
+[[ -n $commit && -n $sum ]] || { echo "fetch-source: source.conf needs COMMIT and SHA256" >&2; exit 1; }
+cache=src-cache
+archive=$cache/omamobile-installer-$commit.tar.gz
+tree=$cache/omamobile-installer-$commit
+# The patches the tree was made with: a change to them makes it again
+patches=$(cat patches/*.patch 2>/dev/null | sha256sum | cut -d' ' -f1)
+if [[ -f $tree/.omamobile-patched && $(cat "$tree/.omamobile-patched") == "$patches" ]]; then
+  echo "$PWD/$tree"
+  exit 0
+fi
+mkdir -p "$cache"
+if [[ ! -f $archive ]]; then
+  ((offline == 0)) || { echo "fetch-source: no $archive (offline)" >&2; exit 1; }
+  command -v curl >/dev/null || { echo "fetch-source: no curl" >&2; exit 1; }
+  curl -fsSL --retry 2 --max-time 120 -o "$archive.part" \
+    "https://github.com/derekross/omamobile-installer/archive/$commit.tar.gz" ||
+    { rm -f "$archive.part"; echo "fetch-source: the archive of $commit could not be fetched" >&2; exit 1; }
+  mv "$archive.part" "$archive"
+fi
+got=$(sha256sum < "$archive" | cut -d' ' -f1)
+if [[ $got != "$sum" ]]; then
+  rm -f "$archive"
+  echo "fetch-source: the archive of $commit has SHA-256 $got, not source.conf's $sum" >&2
+  exit 1
+fi
+rm -rf "$tree" "$tree.new"
+mkdir "$tree.new"
+tar -xzf "$archive" -C "$tree.new" --strip-components=1
+for p in patches/*.patch; do
+  [[ -e $p ]] || continue
+  patch -s -N -p1 -d "$tree.new" < "$p" || { rm -rf "$tree.new"; echo "fetch-source: $p does not apply" >&2; exit 1; }
+done
+echo "$patches" > "$tree.new/.omamobile-patched"
+mv "$tree.new" "$tree"
+echo "$PWD/$tree"

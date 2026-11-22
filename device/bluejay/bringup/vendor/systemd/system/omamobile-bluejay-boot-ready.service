@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Complete Bluejay development boot after USB SSH is available
+Requires=sshd.service omamobile-bluejay-check.service
+After=sshd.service omamobile-bluejay-check.service systemd-networkd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-bluejay-boot-ready
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -40,3 +40,25 @@ resolve_all() {
   done
   unmet_why=$(awk 'NF && !seen[$0]++ { print "    " $0 }' <<<"$unmet_why")
 }
+
+# omarchy_packages INSTALL_DIR: Omarchy's default packages for a plain
+# aarch64 computer, one name per line, each once, in list order. Omarchy 4.0
+# had one list, omarchy-base.packages. Omarchy 4.5 composes it (as its
+# omarchy-pkg-defaults does): the base list, plus omarchy-aarch64.packages
+# (zram-generator, rtkit), minus omarchy-x86_64-only.packages. A phone is
+# never one of its named platforms (Apple, Snapdragon laptops), so their
+# lists are not read. Fails when the base list isn't there.
+omarchy_packages() {
+  local dir=$1 files=() names
+  names() { sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$@"; }
+  [[ -f $dir/omarchy-base.packages ]] || return 1
+  files=("$dir/omarchy-base.packages")
+  [[ ! -f $dir/omarchy-aarch64.packages ]] || files+=("$dir/omarchy-aarch64.packages")
+  if [[ -f $dir/omarchy-x86_64-only.packages ]]; then
+    names "${files[@]}" | awk -v skips=<(names "$dir/omarchy-x86_64-only.packages") '
+      BEGIN { while ((getline name < skips) > 0) skip[name] = 1 }
+      !skip[$0] && !seen[$0]++'
+  else
+    names "${files[@]}" | awk '!seen[$0]++'
+  fi
+}

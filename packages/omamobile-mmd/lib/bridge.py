@@ -157,6 +157,8 @@ class Bridge:
     def on_lost(self):
         if self.modem is None:
             return
+        for path in list(self.calls):
+            self.finish_pending_delete(path, MMError('Failed', 'omamobile-sitd went away before call release'))
         for path in list(self.calls) + list(self.messages) + [self.sim, self.bearer]:
             if path:
                 self.x.remove(path)
@@ -315,7 +317,10 @@ class Bridge:
             self.call_state(path, CALL_STATES.get(c['state'], mm.CALL_UNKNOWN), c.get('reason', ''))
         for sid, path in list(self.sitd_calls.items()):
             if sid not in seen and path in self.calls and self.calls[path]['seen']:
-                # sitd forgot it (another client deleted it): it has ended.
+                # sitd only drops a call after it has ended (delete-call needs
+                # terminated; a restart restores live calls), so a call it no
+                # longer lists is over, whether or not our hangup was what
+                # ended it: terminated, and a pending Delete completes.
                 self.call_state(path, mm.CALL_TERMINATED, '')
         self.forgotten &= seen
 
@@ -324,7 +329,7 @@ class Bridge:
         reason = (mm.REASON_INCOMING_NEW if direction == mm.DIRECTION_INCOMING and state != mm.CALL_UNKNOWN
                   else mm.REASON_OUTGOING_STARTED if state != mm.CALL_UNKNOWN else mm.REASON_UNKNOWN)
         self.calls[path] = dict(sid=sid, direction=direction, number=number, state=state, busy=False,
-                                seen=sid is not None)
+                                seen=sid is not None, releasing=False, pending_delete=None)
         if sid:
             self.sitd_calls[sid] = path
         self.x.add(path, {mm.CALL: dict(State=state, StateReason=reason, Direction=direction,
@@ -358,8 +363,55 @@ class Bridge:
         self.x.emit(path, mm.CALL, 'StateChanged', '(iiu)', (old, state, reason))
         print(f'Call {path}: {CALL_STATE_NAMES.get(old, old)} -> {CALL_STATE_NAMES.get(state, state)}',
               flush=True)
+        if state == mm.CALL_TERMINATED:
+            self.finish_pending_delete(path)
+
+    def start_release(self, call):
+        """One hang-up outstanding at a time, for 20 s at most: sitd answers
+        the request as soon as it has sent the release, so a release that is
+        accepted but never completes must not block the user's next press
+        for good. With today's sitd the window never runs out that way: when
+        the call is still there 12 s after the hang-up, sitd turns the radio
+        off and stops for an attended reboot (unconfirmed_release in
+        omamobile-modem-sit), the bridge withdraws the modem with its calls,
+        and the next press finds no call, an error rather than a second
+        hang-up at the modem. The window is for a sitd that stays up. The
+        bridge never retries on its own."""
+        call['releasing'] = True
+        if call.get('release_timer'):
+            GLib.source_remove(call['release_timer'])
+
+        def expire():
+            call['release_timer'] = 0
+            call['releasing'] = False
+            return False
+        call['release_timer'] = GLib.timeout_add_seconds(20, expire)
+
+    def end_release(self, call):
+        call['releasing'] = False
+        if call.get('release_timer'):
+            GLib.source_remove(call['release_timer'])
+            call['release_timer'] = 0
+
+    def finish_pending_delete(self, path, error=None):
+        call = self.calls.get(path)
+        pending = call and call.get('pending_delete')
+        if pending is None:
+            return
+        call['pending_delete'] = None
+        if pending['timer']:
+            GLib.source_remove(pending['timer'])
+        if error is not None:
+            pending['reply'].error(error)
+        else:
+            if call['sid']:
+                self.link.request('delete-call', lambda result, error: None, id=call['sid'])
+            self.delete_call(path)
+            pending['reply'].ok()
 
     def delete_call(self, path):
+        if path in self.calls:
+            self.end_release(self.calls[path])
         call = self.calls.pop(path)
         if call['sid']:
             self.sitd_calls.pop(call['sid'], None)
@@ -536,31 +588,71 @@ class Bridge:
             if path not in self.calls:
                 raise MMError('NotFound', 'No such call')
             call = self.calls[path]
+            if call['busy'] or call['pending_delete'] is not None:
+                raise MMError('InProgress', 'The call is being changed')
+            if call['sid'] and call['state'] not in (*LIVE, mm.CALL_TERMINATED):
+                raise MMError('WrongState', 'The call state is not known')
             if call['sid'] and call['state'] in LIVE:
-                # MM hangs up a call that is deleted while it lasts.
+                # Keep the object until sitd reports that release completed.
+                # A hang-up that sitd refused, or that was never confirmed,
+                # leaves no block: the next DeleteCall or Hangup from the user
+                # tries once more; the bridge never retries on its own.
+                pending = dict(reply=reply, timer=0)
+                call['pending_delete'] = pending
+
+                def release_timeout():
+                    if path in self.calls and self.calls[path].get('pending_delete') is pending:
+                        pending['timer'] = 0
+                        self.finish_pending_delete(path, MMError('Failed', 'Call release was not confirmed'))
+                    return False
+
+                pending['timer'] = GLib.timeout_add_seconds(20, release_timeout)
+                if call['releasing']:
+                    return
+                self.start_release(call)
+
                 def hung(result, error):
-                    if path in self.calls:
-                        self.delete_call(path)
-                    reply.ok()
+                    if error is not None and self.calls.get(path) is call:
+                        self.end_release(call)
+                        self.finish_pending_delete(path, sitd_error(error))
                 return self.link.request('hangup', hung, id=call['sid'])
             if call['sid']:
                 self.link.request('delete-call', lambda result, error: None, id=call['sid'])
             self.delete_call(path)
             return reply.ok()
         if method == 'HangupAll':
-            live = [c['sid'] for c in self.calls.values() if c['sid'] and c['state'] in LIVE]
+            if any(c['busy'] for c in self.calls.values()):
+                raise MMError('InProgress', 'A call is being placed')
+            live = [(path, c) for path, c in self.calls.items()
+                    if c['sid'] and c['state'] in LIVE and not c['releasing']]
+            skipped = [path for path, c in self.calls.items()
+                       if c['sid'] and c['state'] in LIVE and c['releasing']]
             for path, c in self.calls.items():
                 if not c['sid'] and c['state'] == mm.CALL_UNKNOWN:
                     self.call_state(path, mm.CALL_TERMINATED, 'terminated')
             failures = []
+            if skipped:
+                failures.append(MMError('InProgress', 'Call release is already in progress'))
 
-            def next_hangup(result=None, error=None):
-                if error is not None:
-                    failures.append(error)
-                if live:
-                    return self.link.request('hangup', next_hangup, id=live.pop(0))
+            def next_hangup():
+                while live:
+                    path, call = live.pop(0)
+                    if (self.calls.get(path) is not call or call['state'] not in LIVE
+                            or call['releasing']):
+                        continue
+                    self.start_release(call)
+
+                    def hung(result, error, path=path, call=call):
+                        if error is not None:
+                            failure = sitd_error(error)
+                            failures.append(failure)
+                            if self.calls.get(path) is call:
+                                self.end_release(call)
+                                self.finish_pending_delete(path, failure)
+                        next_hangup()
+                    return self.link.request('hangup', hung, id=call['sid'])
                 if failures:
-                    return reply.error(sitd_error(failures[0]))
+                    return reply.error(failures[0])
                 reply.ok()
             return next_hangup()
         raise unsupported(method)
@@ -604,7 +696,16 @@ class Bridge:
                     raise MMError('InProgress', 'The call is being placed')
                 self.call_state(path, mm.CALL_TERMINATED, 'terminated')
                 return reply.ok()
-            return self.link.request('hangup', self.answer(reply), id=call['sid'])
+            if call['releasing']:
+                raise MMError('InProgress', 'Call release is already in progress')
+            self.start_release(call)
+
+            def hung(result, error):
+                if error is not None and self.calls.get(path) is call:
+                    self.end_release(call)
+                    self.finish_pending_delete(path, sitd_error(error))
+                self.answer(reply)(result, error)
+            return self.link.request('hangup', hung, id=call['sid'])
         if method == 'SendDtmf':
             keys = args[0]
             if not re.fullmatch(r'[0-9*#]{1,32}', keys or ''):

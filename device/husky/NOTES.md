@@ -10,6 +10,65 @@ Sources:
 - `P/`: postmarketOS pmaports `device/testing` (2026-10-21).
 - `G/`: Google's GPL kernel for this phone, `android-gs-shusky-6.1-android16` ([source.android.com: Build Pixel kernels](https://source.android.com/docs/setup/build/building-pixel-kernels)).
 
+## 2026-11-18: the torch tile and a held volume key, the third phone
+
+Colin's phone, published `omamobile` at `82f31d3a7` (the kernel). The two packages
+did not come from one update. omamobile-shell 0.2.108 (built 2026-11-09) came in the
+root image built on 2026-11-09: `tools/build-rootfs` with the signed packages from
+`tools/fetch-published --channel development`, an image that follows the stable
+channel; it has not been updated since. omamobile-device-husky 0.1.16 was built on
+the phone on 2026-11-18 from a checkout of `main` (17f9a3cd) with
+`tools/phone-install-package` and installed with `pacman -U`, not from a channel
+(development's own 0.1.16 was built on 2026-11-19, after this install; stable has
+0.1.13).
+
+The quick-settings torch tile turns the LED on and off, and holding Volume Up gives
+no stutter (the ROADMAP's Buttons note is from Lef's phone). Checked by eye, nothing
+logged. Hyprland on this phone reports `input:repeat_rate` 40 and
+`input:repeat_delay` 250 (read 2026-11-20): Omarchy's defaults, from
+`/usr/share/omarchy/default/hypr/input.lua` in `omarchy-settings` 4.0.6. The user's
+`input.lua` has both lines commented out, and no package of ours sets either.
+
+## 2026-11-15: Bluetooth, haptics, the torch and the gauge on merged `omamobile`, a third phone
+
+Colin's phone, the third unit (Samsung 128 GB UFS 3.1, SKU G1MNW; [2026-11-08](#2026-11-08-a-third-phone-samsung-128-gb-ufs-31-still-locked)), unlocked since, with Google's CP3A.261005.005 on slot A and Omarchy on slot B. Kernel: `omamobile` at `82f31d3a7`, unchanged (`7.3.0-rc6-omamobile-push1-g82f31d3a7a35`, flashed with `bin/omamobile flash` on 2026-11-13). Firmware from the owner's own factory image with `tools/extract-vendor-firmware -d husky -s G1MNW` ([#722](https://github.com/derekross/omarchy-mobile/pull/722)), installed under `/usr/lib/firmware/updates`. `omamobile-device-husky` 0.1.13 from [#752](https://github.com/derekross/omarchy-mobile/pull/752) (0.1.12 plus the Bluetooth address step; merged 2026-11-15). Each item below was checked by a person at the phone.
+
+- **Bluetooth** [V]: hci0 loads the patch (`BCM4398D0 G5SN_V17_HK3 REL BR:0169 FW:b8718197dc`), is powered at boot and takes the bootloader's address (#752). A pair of AirPods Pro paired from the Settings page, connected on PipeWire's `a2dp-sink` profile, and a quiet 440 Hz tone played through them was heard (2026-11-13). The same pairing and tone had also worked on 2026-11-12 on a test kernel with device-husky 0.1.10, before the address step. Calls over the Handsfree profile were not tried.
+- **Haptics** [V]: `cs40l26-vibra 1-0043: Firmware 0x1800d4 rev 7.2.91 running` and its input device; two 500 ms `FF_RUMBLE` effects (strong 0x6000) uploaded through `EVIOCSFF` and played, and both were felt (2026-11-15).
+- **Torch** [V]: `white:torch` (`lm3644` at `0-0063`, `led-max-microamp` 50000, `max_brightness` 17) set to 17 and back to 0 by sysfs: the LED lit and went out, seen twice (2026-11-15). One earlier on/off right after the haptics test wasn't noticed; the next two were.
+- **Battery** [V]: `max170xx_battery` is there at boot with no overlay (the bus is on by default since [kernel #205](https://github.com/derekross/linux-omarchy-mobile/pull/205)): capacity, voltage, current and temperature read, and status `Charging` on the USB cable at about +0.8 to +0.9 A from a PC port with the charger driver not loaded. The published tree gives the gauge no battery model (its comment on `hsi2c_11` says so), and `charge_full_design` reads 3000000 against the pack's 4950 mAh, so the percentage is the gauge's default model's: it read 100 % at 4.328 V on 2026-11-11, which isn't comparable with a modelled gauge (#761). UPower acted on its level: on 2026-11-13 at 04:25, off the charger, its critical-battery action suspended the phone, and the phone didn't come back from that sleep ([SUSPEND-PLAN](SUSPEND-PLAN.md) §4, [#724](https://github.com/derekross/omarchy-mobile/pull/724)).
+- **Also on this boot** [V]: Wi-Fi joined a 5 GHz network at -38 dBm; the GPU at 150-890 MHz through panthor; three cpufreq policies on schedutil; `mem_sleep_default=s2idle` is in `/proc/cmdline` ([kernel #244](https://github.com/derekross/linux-omarchy-mobile/pull/244)) and `/sys/power/mem_sleep` reads `[s2idle] deep`; the RTC is `rtc0` (`s5m-rtc s2mpg14-rtc: registered as rtc0` at 2.6 s, then `setting system clock`), `wakealarm` is there, and the `s2mpg14-pmic` interrupt count stays at 0 while idle ([kernel #243](https://github.com/derekross/linux-omarchy-mobile/pull/243)); `spm_lvl` 5; no NFC device; `running`, no failed units.
+
+## 2026-11-13: display, GPU and CPU DVFS on merged `omamobile`
+
+[Kernel #160](https://github.com/derekross/linux-omarchy-mobile/pull/160) (merged 2026-11-10) and [#157](https://github.com/derekross/linux-omarchy-mobile/pull/157) with [#158](https://github.com/derekross/linux-omarchy-mobile/pull/158) (merged 2026-11-13) booted from `omamobile` itself, at `82f31d3a7` (#158's last commit), on Brett's phone (Samsung UFS 3.1): `7.3.0-rc6-omamobile-push1-g82f31d3a7a35`, the repository's husky config, the pinned clang (`clang-r596125`), `modules-push`, slot B flashed with `bin/omamobile flash`. The initramfs was the one from the 2026-11-01 test set, unchanged (husky packs no modules into it), and `omamobile-device-husky` was 0.1.8, so the kernel was the only change on this boot. Before the flash, slot B's retry count read 2 after one boot, and entering fastboot with `reboot-to bootloader` didn't change it [V].
+
+- **CPU DVFS** [V]: cpufreq-dt with schedutil on three policies: CPUs 0-3 up to 1704 MHz, 4-7 up to 1945 MHz and 8 up to 2294 MHz, the battery current limiter's caps, with boost off (the turbo levels unused). The energy model has its three perf domains (`cpu0`, `cpu4`, `cpu8`) and logs no `EM: invalid perf. state`.
+- **Thermal** [V]: big 49, mid 50, little 49 and gpu 50 °C at 52 s, idle.
+- **GPU** [V]: panthor renders the session; its devfreq idles at 150 MHz.
+- **Display** [V]: gs-decon with the HK3 on DSIM0, `card2-DSI-1` connected at 1344x2992. The HK3's one refused brightness write before `allow_tx` (`sending dcs data 51 02 bc failed: -1`) is still there, as on the test trees. 120 Hz was measured on the test tree with the same code (`husky-test-20261109-t1`, [kernel #160](https://github.com/derekross/linux-omarchy-mobile/pull/160#issuecomment-6748459836)), not again here.
+- **The rest of the boot** [V]: the S2MPG14 RTC registers as `rtc0` ([kernel #243](https://github.com/derekross/linux-omarchy-mobile/pull/243)) and `/sys/power/mem_sleep` reads `[s2idle] deep` ([kernel #244](https://github.com/derekross/linux-omarchy-mobile/pull/244)). `tools/phone-smoke` passes every check: Wi-Fi joins (`wlp1s0`, brcmfmac), Bluetooth powers on, the battery charges. The test trees' `No PKTID available` and `exynos-clkout` probe lines are gone ([kernel #235](https://github.com/derekross/linux-omarchy-mobile/pull/235), [#209](https://github.com/derekross/linux-omarchy-mobile/pull/209)). The new error-level lines it lists are the BCM4398's Bluetooth ID lines, brcmfmac's `TxCap blob found, loading` and the HK3 write above.
+
+## 2026-11-09: NFC on the 8 Pro: the pad clock and the controller, two boots on the head of kernel #209
+
+My phone (the Kioxia unit), slot B. Kernel PR [#209](https://github.com/derekross/linux-omarchy-mobile/pull/209) (the `exynos-clkout` match for zuma, plus the `nfc@8` node from #208) was tested at its head, `e9c3fa348` (a8087e225 plus the two optional edits Derek suggested, a DTS comment and a commit message line); the kernel is `7.3.0-rc6-omamobile-push1-ge9c3fa348c8a`, built with my test kernel's config. That head has no HK3 display driver and no PCIe PHY symbol, so these boots had a simple framebuffer, no Wi-Fi and no sound; the phone was driven over USB ssh. Each boot spent one slot B try; the count was refilled to 3 with `fastboot set_active b` before each flash.
+
+The overlay of boot 1 was one local file, `nfc-test.dtso`, not in the repository, added to the usual battery, panel and gauge overlays of my image set (the plain set of boot 2 is the same without it):
+
+```
+/dts-v1/;
+/plugin/;
+
+&nfc {
+	status = "okay";
+};
+```
+
+- **Boot 1, with the overlay** [V] (uptime 213 s): `nxp_nci_i2c` bound on `2-0008`, `nfc0` present, `pmu-clkout0` enable count 1 and prepare count 1 in `clk_summary`, and a Type 2 (MIFARE) tag read through neard with one URI record (only the shape of the record was looked at, not its content). The one failed unit was my local thermal script, which wants a cpufreq policy this kernel doesn't have.
+- **Boot 2, the same kernel with the plain image set (no overlay)** [V] (uptime 205 s): no `2-0008` device and no `nfc0` (the node is in the device tree, disabled), the `exynos-clkout` device bound with its clock registered, `pmu-clkout0` enable count 0 and prepare count 0: nothing is enabled.
+- **After the two boots** [V]: the phone went back to the usual image set and was fine (AoC card up, 94 services, Wi-Fi, Hyprland).
+- **Not done** [U]: **s2idle with the clkout driver bound** is still open and has to be tested before NFC is turned on in the device package (Derek's note on #209). It is a hang-class test, so it needs someone with the buttons in reach. Card emulation was not tested, and the eSE side (spi_12) is not described and was not touched.
+
 ## 2026-11-08: a third phone: Samsung 128 GB, UFS 3.1, still locked
 
 A third retail Pixel 8 Pro, offered in [#1](https://github.com/derekross/omarchy-mobile/issues/1). `R3/` below means read-only queries of this phone (`adb shell getprop` while booted, `fastboot getvar all` on the locked bootloader), facts only, no serial, IMEI or MACs. Nothing has been unlocked, flashed or booted on it yet.
@@ -35,7 +94,7 @@ Lef's phone (Kioxia unit), slot B, while looking for the cause of a ~520 mA idle
 
 ## 2026-10-31: Wi-Fi
 
-Wi-Fi works on a test kernel, [kernel #156](https://github.com/derekross/linux-omarchy-mobile/pull/156) (a draft, stacked on #153, #143 and #56), at `f47c5bd34` on greenbrettmichael/linux-omarchy-mobile `omamobile-zuma-husky-wifi`, with the repository's husky config (`CONFIG_PHY_ZUMA_PCIE=m` is in #214), `modules-push` and the firmware from [#214](https://github.com/derekross/omarchy-mobile/pull/214). The phone joins its network at boot through NetworkManager. #156 has since been rebased to `717fba4f`; the only change is #143's join-parameter struct (`chanspec_list[1]` to `chanspec_list[]`). The phone joined at boot on that head too, as part of the display test kernel (tag `husky-test-20261031-d3`, which contains `717fba4f`), on 2026-10-31.
+Wi-Fi works on a test kernel, [kernel #156](https://github.com/derekross/linux-omarchy-mobile/pull/156) (it was a draft, stacked on #153, #143 and #56; closed on 2026-11-09 because its commits landed through [#187](https://github.com/derekross/linux-omarchy-mobile/pull/187), and the open gaps below stay in these notes), at `f47c5bd34` on greenbrettmichael/linux-omarchy-mobile `omamobile-zuma-husky-wifi`, with the repository's husky config (`CONFIG_PHY_ZUMA_PCIE=m` is in #214), `modules-push` and the firmware from [#214](https://github.com/derekross/omarchy-mobile/pull/214). The phone joins its network at boot through NetworkManager. #156 has since been rebased to `717fba4f`; the only change is #143's join-parameter struct (`chanspec_list[1]` to `chanspec_list[]`). The phone joined at boot on that head too, as part of the display test kernel (tag `husky-test-20261031-d3`, which contains `717fba4f`), on 2026-10-31.
 
 - **The chip** [V]: a BCM4398 D0 (chip `0x4398` rev 3, PCI `14e4:4444`) on pcie_1, one Gen3 lane, as on stock.
   - Its backplane is Broadcom's newer NCI interconnect (socitype 6), not AI. #156 ports enough of Google's `nciutils.c` to brcmfmac to find the cores and run the ARM.
@@ -59,6 +118,7 @@ Wi-Fi works on a test kernel, [kernel #156](https://github.com/derekross/linux-o
   - P2P: `brcmf_p2p_create_p2pdev: timeout occurred` at load, since the firmware never confirms the P2P device interface. Station mode doesn't need it.
   - A reload after a real firmware crash, which can't take the trap, is untested.
   - Bluetooth.
+- **Power save** [V]: the trade behind `wifi.powersave=3` in omamobile-device-husky 0.1.15 ([#836](https://github.com/derekross/omarchy-mobile/pull/836)). Battery current with the cable out and the screen off, 2026-11-14, six steps of about 4 minutes (16 readings each): step medians 537, 541, 532 and 543 mA with it off, 509 and 508 mA with it on, so about 30 mA less with it on. 200 pings at 0.2 s from the desktop, off, on, off again: average 2.26, 2.52 and 2.27 ms, maximum 5.8, 71.2 and 6.1 ms, no loss. So power save adds an occasional spike of up to about 71 ms.
 - **Lesson** [V]: a raw `/dev/mem` read of the Wi-Fi chip's BAR0 while it was in a bad state hung the phone, which panicked and rebooted. Don't read the endpoint's BARs from userspace.
 
 ## 2026-10-31: a second phone: Kioxia 256 GB, UFS 4.0

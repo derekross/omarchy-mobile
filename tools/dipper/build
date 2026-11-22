@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Build a RAM-only Dipper probe: an initramfs (in an aarch64 container), then
+# an Android v1 boot image with the DTB appended to the kernel. This tool does
+# not flash or push anything to a phone.
+#
+# Needs: the kernel already built in $KERNEL_SRC (Image.gz, the dipper DTB and
+# modules), docker with arm64 emulation registered, zopfli, and SSH_PUBKEY.
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(cd "$here/../.." && pwd)
+
+KERNEL_DIR=${KERNEL_DIR:-$repo/../linux}
+KERNEL_OUT=${KERNEL_OUT:-$KERNEL_DIR}
+OUT=${OUT:-$repo/out/dipper}
+die() { echo "error: $*" >&2; exit 1; }
+: "${SSH_PUBKEY:?set SSH_PUBKEY to your authorized public key}"
+ALPINE=${ALPINE:-alpine:3.22}
+if [[ -n ${OMAMOBILE_NFSROOT:-} ]]; then
+  [[ $OMAMOBILE_NFSROOT =~ ^[A-Za-z0-9.-]+:/[A-Za-z0-9._/-]+$ && $OMAMOBILE_NFSROOT != *..* && $OMAMOBILE_NFSROOT != *//* ]] ||
+    die "OMAMOBILE_NFSROOT must be a host and absolute export path, for example 172.16.42.2:/srv/nfs/dipper"
+fi
+
+[[ -d $KERNEL_DIR && -d $KERNEL_OUT ]] || die "set KERNEL_DIR and KERNEL_OUT to the kernel source and build directories"
+image=$KERNEL_OUT/arch/arm64/boot/Image.gz
+dtb=$KERNEL_OUT/arch/arm64/boot/dts/qcom/sdm845-xiaomi-dipper.dtb
+[[ -f $image ]] || die "no $image -- build the kernel first"
+[[ -f $dtb ]] || die "no $dtb -- build qcom/sdm845-xiaomi-dipper.dtb first"
+[[ -r $SSH_PUBKEY ]] || die "no SSH public key at $SSH_PUBKEY (set SSH_PUBKEY)"
+grep -q '^ssh-' "$SSH_PUBKEY" || die "$SSH_PUBKEY is not an OpenSSH public key"
+command -v docker >/dev/null || die "docker is needed for the aarch64 initramfs"
+
+release=$(cat "$KERNEL_OUT/include/config/kernel.release")
+echo "kernel release: $release"
+
+umask 077
+mkdir -p "$OUT"; chmod 700 "$OUT"
+mods=$OUT/modules
+rm -rf "$mods" "$KERNEL_OUT/modules-staging"
+DEVICE=dipper KERNEL_DIR="$KERNEL_DIR" KERNEL_OUT="$KERNEL_OUT" \
+  "$repo/bin/omamobile" modules
+mkdir -p "$mods/lib/modules"
+tar --zstd -xf "$KERNEL_OUT/modules-$release.tar.zst" -C "$mods/lib/modules"
+
+echo "building the initramfs in $ALPINE (linux/arm64)"
+docker run --rm --platform linux/arm64 \
+  -v "$repo/initramfs/init:/input/init:ro" \
+  -v "$repo/tools/dipper/prune-modules.py:/input/prune-modules.py:ro" \
+  -v "$repo/tools/dipper/patch-init.py:/input/patch-init.py:ro" \
+  -v "$repo/tools/dipper/initramfs-inside.sh:/input/initramfs-inside.sh:ro" \
+  -v "$repo/packages/omamobile-device-cheetah/src/reboot-to.c:/input/reboot-to.c:ro" \
+  -v "$mods:/modules:ro" -v "$SSH_PUBKEY:/input/key.pub:ro" \
+  -v "$OUT:/out" \
+  -e "KERNEL_RELEASE=$release" -e "OUT_UID=$(id -u)" -e "OUT_GID=$(id -g)" \
+  -e "OMAMOBILE_NFSROOT=${OMAMOBILE_NFSROOT:-}" \
+  "$ALPINE" sh /input/initramfs-inside.sh
+
+# Pack a copy of the DTB so nothing we do can dirty the kernel tree.
+packdtb=$OUT/sdm845-xiaomi-dipper.dtb
+cp "$dtb" "$packdtb"
+kernel_image=$image
+if command -v zopfli >/dev/null; then
+  echo "compressing the kernel with zopfli for dipper's ABL size limit"
+  zopfli -c --i1 "$KERNEL_OUT/arch/arm64/boot/Image" > "$OUT/Image.gz"
+  kernel_image=$OUT/Image.gz
+fi
+# A failed size check must not leave an older boot.img under the current name.
+rm -f "$OUT/images/boot.img" "$OUT/images/BOOT-MANIFEST.json"
+"$here/build-boot.py" --kernel "$kernel_image" --dtb "$packdtb" \
+  --ramdisk "$OUT/initramfs.cpio.gz" --out "$OUT/images"
+
+echo
+echo "artefacts in $OUT/images:"
+ls -l "$OUT/images"
+cat <<'NOTE'
+
+To try it without writing to the phone (nothing persists):
+
+    fastboot -s <serial> boot boot.img
+
+Do not flash this image. Dipper has no second OS slot and this RAM-only path
+has no persistent update or recovery flow.
+NOTE

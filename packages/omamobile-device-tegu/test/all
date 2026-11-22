@@ -40,11 +40,16 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
     ../omamobile-device-cheetah/omamobile-device-cheetah.install \
     || fail "the pacman install script drifted from the cheetah package"
   pass "the pacman install script matches the cheetah package"
-  cmp -s vendor/systemd/sleep.conf.d/10-omamobile.conf \
-    ../omamobile-device-cheetah/vendor/systemd/sleep.conf.d/10-omamobile.conf \
-    || fail "the sleep drop-in drifted from the cheetah package"
-  pass "the sleep drop-in matches the cheetah package"
 fi
+# The sleep drop-in: suspend-to-idle only, one state so a refused sleep isn't
+# tried a second time (#619), and nothing that hibernates. Checked by its
+# settings: the 7 Pro's copy gets SuspendState in a change of its own.
+sleepconf=vendor/systemd/sleep.conf.d/10-omamobile.conf
+[[ $(grep -v '^#' "$sleepconf" | grep -c .) -eq 6 && $(grep -v '^#' "$sleepconf" | sed -n 1p) == "[Sleep]" ]] || fail "the sleep drop-in has other lines than its five settings"
+for line in SuspendState=freeze MemorySleepMode=s2idle AllowHibernation=no AllowHybridSleep=no AllowSuspendThenHibernate=no; do
+  grep -qx "$line" "$sleepconf" || fail "the sleep drop-in lacks $line"
+done
+pass "the sleep drop-in: one sleep state (freeze), s2idle, no hibernation"
 grep -q 'omamobile-keyring' PKGBUILD || fail "pacman needs omamobile-keyring"
 grep -q '^install=omamobile-device-tegu.install$' PKGBUILD \
   || fail "the pacman install script is not named"
@@ -87,18 +92,47 @@ for f in usr/bin/reboot-to usr/bin/tegu-tcpc-switch \
          usr/lib/systemd/system-sleep/omamobile-tegu-cpuidle \
          usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-tegu.conf \
          usr/lib/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf \
+         usr/lib/systemd/system/service.d/10-omamobile-tegu-sleep-watchdog.conf \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
          usr/lib/udev/rules.d/10-omamobile-storage.rules usr/lib/udev/rules.d/20-omamobile-torch.rules \
          usr/lib/udev/rules.d/70-omamobile-dma-heap.rules usr/lib/udev/rules.d/72-omamobile-feedbackd.rules \
+         usr/lib/udev/rules.d/70-omamobile-touch-wake.rules usr/lib/udev/rules.d/70-omamobile-tegu-gpu-floor.rules \
          usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
          usr/share/uwsm/env.d/omamobile-tegu-graphics \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-tegu/version \
          usr/share/licenses/omamobile-device-tegu/LICENSE \
-         etc/pacman.d/omamobile-mirrorlist; do
+         etc/pacman.d/omamobile-mirrorlist etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
+# The sleep runs with the kernel's clock ticking, so no service watchdog may
+# outlast it: one drop-in for every service, and nothing else in it.
+wd=$tmp/root/usr/lib/systemd/system/service.d/10-omamobile-tegu-sleep-watchdog.conf
+[[ $(grep -v '^#' "$wd" | grep -c .) == 2 && $(grep -v '^#' "$wd" | paste -sd' ') == "[Service] WatchdogSec=0" ]] \
+  || fail "the service drop-in turns the watchdogs off and does nothing else"
+[[ $(find "$tmp/root/usr/lib/systemd/system/service.d" -type f | wc -l) == 1 ]] || fail "one drop-in for all services, no more"
+! grep -rl '^WatchdogSec=' vendor/systemd/system --include='*.service' || fail "a unit of this package sets a watchdog the sleep would trip"
+# Double tap from sleep: the same rule line as the 7 Pro's, the same driver
+# (compared in the repository; a build of this package alone skips that).
+tw=vendor/udev/rules.d/70-omamobile-touch-wake.rules
+[[ $(grep -v '^#' "$tw") == 'ACTION=="add|bind", SUBSYSTEM=="spi", DRIVER=="synaptics-tcm", TEST=="power/wakeup", ATTR{power/wakeup}="enabled"' ]] \
+  || fail "the touch-wake rule turns on the synaptics-tcm touchscreen's power/wakeup and nothing else"
+other=../omamobile-device-cheetah/$tw
+if [[ -f $other ]]; then
+  [[ $(grep -v '^#' "$tw") == $(grep -v '^#' "$other") ]] || fail "the touch-wake rule matches the 7 Pro's rule line"
+fi
+# Wi-Fi power save on, over Omarchy's laptop setting: in /etc, after "omarchy-wifi-powersave.conf" by name
+wp=$tmp/root/etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf
+[[ $(grep -v '^#' "$wp" | grep -c .) == 2 && $(grep -v '^#' "$wp" | paste -sd' ') == "[connection] wifi.powersave=3" ]] \
+  || fail "the Wi-Fi power save file turns power save on and does nothing else"
+[[ ${wp##*/} > omarchy-wifi-powersave.conf ]] || fail "the Wi-Fi power save file sorts after Omarchy's"
+grep -c '^backup=(.*etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf' PKGBUILD >/dev/null || fail "the Wi-Fi power save file is a backup file"
+# The GPU's floor: one rule line, for the 9a's GPU only, when its devfreq
+# device appears (panthor's probe, from the graphics start).
+gf=vendor/udev/rules.d/70-omamobile-tegu-gpu-floor.rules
+[[ $(grep -v '^#' "$gf") == 'ACTION=="add", SUBSYSTEM=="devfreq", KERNEL=="1f000000.gpu", ATTR{min_freq}="419000000"' ]] \
+  || fail "the GPU floor rule sets the 9a GPU's lowest level to 419 MHz and nothing else"
 [[ -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-wifi && -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-nfc &&
    -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-cpuidle ]] \
   || fail "the sleep hooks are not executable"
@@ -106,11 +140,19 @@ for unit in omamobile-tegu-graphics omamobile-tegu-usb-rescue; do
   [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/$unit.service") == ../$unit.service ]] \
     || fail "$unit is enabled by a vendor wants link"
 done
-# The modem's boot start is opt-in: installed, never enabled by the package
+# The modem's boot start is opt-in: installed, never enabled by the package.
+# Enabled by the owner, it is skipped, not failed, on a phone without the
+# provisioning or the CP drivers
 [[ -f $tmp/root/usr/lib/systemd/system/omamobile-tegu-modem-boot.service ]] || fail "install stages the modem's boot start"
 [[ -e $tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-tegu-modem-boot.service ]] \
   && fail "the modem's boot start is enabled by the package (it must be opt-in)"
 grep -q 'omamobile-tegu-modem-boot' omamobile-device-tegu.install && fail "the install scriptlet must not enable the modem's boot start"
+for c in /usr/lib/omamobile-vendor/modem/root /etc/omamobile/modem-nv.sha256 /var/lib/omamobile-vendor/modem/props.conf; do
+  grep -qx "ConditionPathExists=$c" vendor/systemd/system/omamobile-tegu-modem-boot.service || fail "the boot start is skipped without $c"
+done
+grep -qx 'ConditionPathExists=|/proc/device-tree/cpif' vendor/systemd/system/omamobile-tegu-modem-boot.service &&
+  grep -qx 'ConditionPathExists=|/var/lib/omamobile-tegu/modem/cpif.ko' vendor/systemd/system/omamobile-tegu-modem-boot.service \
+  || fail "the boot start is skipped without CP drivers, the kernel's or the bring-up modules"
 grep -qx 'ExecStart=/usr/bin/omamobile-tegu-modem-up --phone --gnss' vendor/systemd/system/omamobile-tegu-modem-boot.service \
   || fail "the boot start brings gnssd up with the modem, for the Location switch"
 # The AoC start runs at every boot (its condition skips a DTB without the
@@ -166,7 +208,7 @@ grep -qx 'Environment=OMAMOBILE_SIT_SCREEN_ON_AT_START=1' vendor/systemd/system/
   || fail "only the 9a sets the start-up screen-on"
 pass "install stages the package, enables only the guards, and nothing that marks a slot"
 
-for m in cpif shm_ipc pcie_gs201_cp; do
+for m in cpif shm_ipc pcie_gs201_cp gnss_spi gnssif; do
   grep -qx "blacklist $m" "$tmp/root/usr/lib/modprobe.d/omamobile-tegu-guards.conf" \
     || fail "the modem policy must prevent $m from autoloading"
 done

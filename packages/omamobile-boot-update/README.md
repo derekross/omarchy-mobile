@@ -16,14 +16,25 @@ overlays or the initramfs. It writes slot B only when
 `tools/install-phone` writes on a release install. A development phone has
 no such file, and `bin/omamobile push` stays slot B's only writer there.
 
-It writes only `<image>_b` for the descriptor's `BOOT_IMAGES`, found by GPT
-name on the main UFS LUN, on the storage guard's allowlist and left writable
-by the guard, and reads every image back. It never reboots. The kernel it
-builds from is the release the installed `linux-omamobile` names
-(`/usr/share/omamobile/linux/kernel.release`), never the newest-looking
-directory in `/usr/lib/modules` (kernel-modules-hook leaves a copy of the
-running release there after every upgrade). It refuses a boot that doesn't
-name slot B.
+It writes only `<image>_<SLOT>` for the descriptor's `BOOT_IMAGES`, found by
+GPT name on the main UFS LUN, on the storage guard's allowlist (in slot form,
+`<image>_b`) and left writable by the guard, and reads every image back. It
+never reboots. The kernel it builds from is the release the installed
+`linux-omamobile` names (`/usr/share/omamobile/linux/kernel.release`), never
+the newest-looking directory in `/usr/lib/modules` (kernel-modules-hook
+leaves a copy of the running release there after every upgrade).
+
+`SLOT` is `b` unless `boot-update.conf` says `SLOT=a`, which a release
+installer writes for a phone it installed on the slot it ran from, slot A
+([ACTIVE-SLOT-PLAN](../../docs/ACTIVE-SLOT-PLAN.md) §2). It refuses a boot
+that isn't from `SLOT` (`androidboot.slot_suffix` in `/proc/bootconfig` and
+`/proc/cmdline`), so a release on slot A that fell back to a development
+system on slot B never writes B. For a `SLOT` other than `b` it also
+refuses a device package whose initramfs lacks the running-slot guard
+(`etc/omamobile-ufs-rw-slot`): an older init opens slot B's images whatever
+slot boots. `previous/` and `current/` record the slot they describe; a
+rollback refuses a set saved from the other slot. Before 0.2.0 the tool
+refused any `SLOT=` line, so a phone with an older package fails closed.
 
 ## Commands
 

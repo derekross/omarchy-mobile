@@ -65,6 +65,27 @@ Item {
     queue = AccessModel.remove(queue, r.id)
   }
 
+  // Back (omamobile.back's BackLink.js): the sheet never takes the keyboard,
+  // so Escape went to the app under it. Back closes the request without an
+  // answer: nothing is remembered, and the app asks again next time. Only a
+  // tap on a button allows or refuses for good.
+  function back() {
+    var r = current
+    if (!r) return false
+    Quickshell.execDetached(AccessModel.dismissArgv(r.id))
+    queue = AccessModel.remove(queue, r.id)
+    return true
+  }
+
+  Loader {
+    source: Qt.resolvedUrl("../omamobile.back/BackLinkClient.qml")
+    onLoaded: {
+      item.name = "permission sheet"
+      item.handler = function() { return root.back() }
+      item.active = Qt.binding(function() { return root.opened })
+    }
+  }
+
   // ---------------------------------------------------------------- surface
 
   property real reveal: opened ? 1 : 0

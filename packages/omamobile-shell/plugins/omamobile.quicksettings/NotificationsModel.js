@@ -13,6 +13,14 @@
 // named <timestamp>-<id>.json, the timestamp in milliseconds since the epoch.
 // One notification is taken away by that name through the service's forget
 // call (omamobile-omarchy patch 0019), never by deleting the file here.
+//
+// Omarchy 4.5 keeps the same notifications in two files instead (its
+// shell/plugins/notifications/Store.js): live.json, the toasts on screen,
+// and history.json, the closed ones, newest first. Each is one line, a JSON
+// array of rows named by a `key` ("n" and base-36 digits), with `ts`, when
+// the notification arrived, in seconds. Its forget call (patch 0019 for
+// 4.5) takes that key. parse() reads either layout: a line holding an array
+// is 4.5's, a line holding an object is one 4.0 file.
 
 var LIMIT = 10
 
@@ -69,10 +77,34 @@ function entry(value) {
   }
 }
 
+// One row of Omarchy 4.5's live.json or history.json, in the shape entry()
+// gives a 4.0 file: the key is the row's own, and so is the name forget
+// takes (`file`); `ts` turns into milliseconds. Null for anything that
+// isn't a row with a key 4.5 itself would accept (Store.js KEY).
+function storeEntry(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  var key = str(value.key)
+  if (!/^[A-Za-z0-9_-]{1,120}$/.test(key)) return null
+  var ts = Number(value.ts)
+  var timestamp = isFinite(ts) && ts > 0 ? Math.round(ts * 1000) : 0
+  return {
+    key: key,
+    file: key,
+    app: str(value.app),
+    summary: str(value.summary).trim(),
+    body: plainBody(value.body),
+    glyph: str(value.glyph),
+    execArgv: str(value.execArgv),
+    urgency: typeof value.urgency === "number" ? value.urgency : 1,
+    timestamp: timestamp
+  }
+}
+
 // The concatenation of every history and on-screen file (`awk 1` over both
-// directories), newest first, each notification once (a toast moving into
-// history can be read in both places), at most `limit`. Torn lines from a
-// crash mid-write are skipped, as Omarchy skips them.
+// directories on 4.0, live.json and history.json on 4.5), newest first,
+// each notification once (a toast moving into history can be read in both
+// places), at most `limit`. Torn lines from a crash mid-write are skipped,
+// as Omarchy skips them.
 function parse(raw, limit) {
   var max = typeof limit === "number" ? Math.max(0, limit) : LIMIT
   var lines = str(raw).split("\n")
@@ -83,12 +115,17 @@ function parse(raw, limit) {
     if (!line) continue
     var value = null
     try { value = JSON.parse(line) } catch (error) { continue }
-    if (!value || typeof value !== "object" || Array.isArray(value)) continue
-    var e = entry(value)
-    if (!e.summary && !e.body) continue
-    if (seen[e.key]) continue
-    seen[e.key] = true
-    out.push(e)
+    var rows
+    if (Array.isArray(value)) rows = value.map(storeEntry)
+    else if (value && typeof value === "object") rows = [entry(value)]
+    else continue
+    for (var j = 0; j < rows.length; j++) {
+      var e = rows[j]
+      if (!e || (!e.summary && !e.body)) continue
+      if (seen[e.key]) continue
+      seen[e.key] = true
+      out.push(e)
+    }
   }
   out.sort(function(a, b) { return b.timestamp - a.timestamp })
   return out.slice(0, max)
@@ -100,7 +137,8 @@ function parse(raw, limit) {
 // file, the row stays out; a mark older than graceMs (a forget that never
 // happened, say on an Omarchy without the forget call) lapses, and the row
 // comes back rather than staying hidden for a notification that is still
-// there. Returns the rows and the marks still needed.
+// there. Returns the rows, the marks still needed and the forget name of
+// every notification read, shown or not (Clear all on 4.5 forgets them).
 function shown(raw, hidden, now, graceMs) {
   var marks = hidden || {}
   var grace = typeof graceMs === "number" ? graceMs : 15000
@@ -113,7 +151,7 @@ function shown(raw, hidden, now, graceMs) {
     if (Number(now) - Number(marks[key]) <= grace) kept[key] = marks[key]
   }
   var out = all.filter(function(e) { return !kept.hasOwnProperty(e.key) })
-  return { entries: out.slice(0, LIMIT), hidden: kept }
+  return { entries: out.slice(0, LIMIT), hidden: kept, files: all.map(function(e) { return e.file }) }
 }
 
 function without(entries, key) {
@@ -174,6 +212,7 @@ if (typeof module !== "undefined") {
     plainBody: plainBody,
     execArgv: execArgv,
     entry: entry,
+    storeEntry: storeEntry,
     parse: parse,
     shown: shown,
     without: without,

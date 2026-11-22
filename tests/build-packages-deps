@@ -1,0 +1,129 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/lib/alarm-deps.sh: a package's dependencies into tools/build-packages'
+# container, against a stand-in pacman (no Docker, no network). The stand-in
+# can be a current image or one that has fallen behind a library change, as
+# Arch Linux ARM's openssl 3 to 4 change left the build image on 2026-11-14:
+# there a full dependency resolution of rust (cargo) or systemd fails
+# (`pacman -Sp`), installing them fails until the image is upgraded
+# (`pacman -Su`), and both still exist in the repositories (`pacman -Sddp`).
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+mkdir -p "$t/bin"
+
+# STATE: the stand-in's folder. stale: the image is behind (until -Su);
+# su-fails: the upgrade fails; drops-cargo: -S says yes but leaves rust out.
+# Every call is logged to $STATE/calls.
+cat > "$t/bin/pacman" <<'P'
+#!/bin/bash
+s=$STATE
+echo "$*" >> "$s/calls"
+repo=" rust patch python systemd gcc-libs "
+name() { case $1 in cargo) echo rust ;; *) echo "$1" ;; esac; }
+stale() { [[ -e $s/stale && ! -e $s/upgraded ]]; }
+needs_new() { [[ $1 == rust || $1 == systemd ]]; }
+case $1 in
+  -Sddp)
+    shift 3   # --print-format %n
+    n=$(name "$1")
+    [[ $repo == *" $n "* ]] || { echo "error: target not found: $1" >&2; exit 1; }
+    echo "$n" ;;
+  -Sp)
+    shift 3
+    n=$(name "$1")
+    [[ $repo == *" $n "* ]] || { echo "error: target not found: $1" >&2; exit 1; }
+    if stale && needs_new "$n"; then echo "error: failed to prepare transaction (could not satisfy dependencies)" >&2; exit 1; fi
+    echo "$n" ;;
+  -S)
+    pkgs=()
+    shift
+    while (($#)); do
+      case $1 in --overwrite) shift ;; -*) ;; *) pkgs+=("$(name "$1")") ;; esac
+      shift
+    done
+    for p in "${pkgs[@]}"; do
+      if stale && needs_new "$p"; then
+        echo "error: failed to commit transaction (conflicting files)" >&2
+        echo "openssl-3: /usr/lib/libcrypto.so.3 exists in filesystem (owned by openssl)" >&2
+        exit 1
+      fi
+    done
+    for p in "${pkgs[@]}"; do
+      [[ -e $s/drops-cargo && $p == rust ]] && continue
+      echo "$p" >> "$s/installed"
+    done ;;
+  -Su)
+    [[ ! -e $s/su-fails ]] || { echo "error: failed to commit transaction" >&2; exit 1; }
+    touch "$s/upgraded" ;;
+  -T)
+    shift
+    rc=0
+    for d; do grep -qxF "$(name "$d")" "$s/installed" 2>/dev/null || { echo "$d"; rc=127; }; done
+    exit $rc ;;
+  *) echo "stand-in pacman: unexpected $*" >&2; exit 2 ;;
+esac
+P
+chmod +x "$t/bin/pacman"
+
+# omamobile-install-link's dependency fields, as makepkg --printsrcinfo
+# prints them, with one of ours (in no repository yet) beside them
+srcinfo='pkgbase = omamobile-install-link
+	pkgver = 0.1.0
+	makedepends = cargo
+	makedepends = patch
+	checkdepends = python
+	checkdepends = systemd
+	depends = gcc-libs
+	depends = systemd>=258
+	depends = omamobile-not-built-yet
+pkgname = omamobile-install-link'
+
+run() {  # run CASE [stale] [su-fails] [drops-cargo]: alarm_install_deps on srcinfo
+  local c=$1; shift
+  mkdir -p "$t/$c"
+  for f; do touch "$t/$c/$f"; done
+  ( export PATH=$t/bin:$PATH STATE=$t/$c
+    source tools/lib/alarm-deps.sh
+    alarm_install_deps <<<"$srcinfo" ) > "$t/$c/out" 2>&1
+}
+installed() { sort -u "$t/$1/installed" 2>/dev/null | tr '\n' ' '; }
+want="gcc-libs patch python rust systemd "
+
+run current || { cat "$t/current/out"; fail "a current image installs the dependencies"; }
+[[ $(installed current) == "$want" ]] || fail "every dependency a repository has goes in, ours that aren't built are left out (got: $(installed current))"
+grep -c -- '^-Su' "$t/current/calls" >/dev/null && fail "a current image is not upgraded"
+pass "a current image: the dependencies go in once, without an upgrade, and ours not yet built stay out"
+
+run stale stale || { cat "$t/stale/out"; fail "an image behind the openssl change still gets its dependencies"; }
+[[ $(installed stale) == "$want" ]] || fail "behind the openssl change, cargo and systemd still go in (got: $(installed stale))"
+grep -c -- '^-Su' "$t/stale/calls" >/dev/null || fail "the stale image is upgraded"
+grep -c 'the build image is behind the repositories' "$t/stale/out" >/dev/null || fail "the upgrade is announced"
+pass "an image behind the openssl change: the install fails, the image is upgraded, cargo and systemd go in"
+
+grep -c -- '^-Sp ' "$t/stale/calls" >/dev/null && fail "the dependency list never asks pacman for a full resolution (-Sp): on a stale image it drops cargo"
+grep -c -- '^-Sddp --print-format %n cargo$' "$t/stale/calls" >/dev/null || fail "the dependency list asks only whether a repository has the name (-Sddp)"
+pass "which dependencies a repository has is asked without resolving them (pacman -Sddp), so a stale image doesn't drop cargo"
+
+run sufail stale su-fails && { cat "$t/sufail/out"; fail "a failed upgrade stops the build"; }
+pass "an upgrade that fails stops the build"
+
+run dropped drops-cargo && { cat "$t/dropped/out"; fail "a dependency still missing after the install stops the build"; }
+grep -c 'dependencies still not installed: cargo' "$t/dropped/out" >/dev/null || { cat "$t/dropped/out"; fail "and names it"; }
+pass "a dependency still missing after the install stops the build here, by name (pacman -T), not later in prepare()"
+
+mkdir -p "$t/none"
+( export PATH=$t/bin:$PATH STATE=$t/none; source tools/lib/alarm-deps.sh
+  alarm_install_deps <<<$'pkgbase = x\n\tdepends = omamobile-not-built-yet' ) || fail "a package with nothing from a repository builds"
+grep -c -- '^-S ' "$t/none/calls" >/dev/null && fail "and installs nothing"
+pass "a package with no dependency in a repository installs nothing"
+
+# tools/build-packages runs it in the container, and builds omamobile-install-link by default again
+grep -c -- '-v "$ROOT/tools/lib/alarm-deps.sh:/alarm-deps.sh:ro"' tools/build-packages >/dev/null || fail "the container gets tools/lib/alarm-deps.sh"
+grep -c '^      alarm_install_deps <<<"\$info"$' tools/build-packages >/dev/null || fail "and installs a package's dependencies with it"
+grep -c 'pacman -Sp ' tools/build-packages >/dev/null && fail "tools/build-packages no longer resolves dependencies with pacman -Sp"
+grep -qxF 'NAMED_ONLY=(linux-omamobile)' tools/build-packages || fail "omamobile-install-link is in the default build again"
+pass "tools/build-packages installs dependencies through it, and builds omamobile-install-link by default"

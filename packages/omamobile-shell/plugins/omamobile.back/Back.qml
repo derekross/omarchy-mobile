@@ -6,12 +6,15 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
 import "BackModel.js" as BackModel
+import "BackLink.js" as BackLink
 
 // The back gesture, as on Android (TOUCH-PLAN 1.2): swipe in from the left
 // or right edge of the screen and let go to go back. "Back" is Escape, sent
 // to whatever has the keyboard focus (BackModel.js has how): it closes app
 // dialogs, menus and popovers that have no other way out on a touch screen,
-// and the shell's own sheets and drawer, which all close on Escape.
+// and the shell's own sheets and drawer, which all close on Escape. An app
+// goes back one level on it, and at its top level asks for the home screen
+// (omamobile-home), as Back at an app's first screen does on Android.
 //
 // Each edge is a thin strip on the Overlay layer, like the home pill: its
 // window is wide enough to draw the arrow that follows the finger, but its
@@ -36,9 +39,24 @@ Item {
   }
   function close() {}
 
-  // `shell call omamobile.back back ''`: the same as the gesture.
+  // `shell call omamobile.back back ''`: the same as the gesture. One Back
+  // does one thing (BackLink.js): the on-screen keyboard is put away, or
+  // else the topmost shell surface that registered closes, or else Escape
+  // goes to the focused window. Returns what used it.
   function back() {
+    var used = BackLink.back()
+    if (used !== "") {
+      console.log("omamobile-back:", used)
+      return used
+    }
     Quickshell.execDetached(BackModel.ESCAPE_ARGV)
+    return "ok"
+  }
+
+  // `shell call omamobile.back home ''`: the home screen, as an app at its
+  // top level asks for it (bin/omamobile-home).
+  function home() {
+    Quickshell.execDetached(BackModel.HOME_ARGV)
     return "ok"
   }
 
@@ -49,7 +67,8 @@ Item {
 
   // `shell call omamobile.back state ''`
   function state() {
-    return JSON.stringify({ fullscreen: fullscreenOnScreen, strips: !fullscreenOnScreen, edge: edge, threshold: BackModel.THRESHOLD })
+    return JSON.stringify({ fullscreen: fullscreenOnScreen, strips: !fullscreenOnScreen, edge: edge, threshold: BackModel.THRESHOLD,
+                            asks: BackLink.names() })
   }
 
   // The touchable strip at each edge, and the width its window draws in.

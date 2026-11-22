@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/dts-v1/;
+/plugin/;
+
+/* Requires the held input-controller overlay and blacklisted SPI/ALIX modules. */
+&bluejay_touch {
+	status = "okay";
+};

@@ -15,16 +15,32 @@ fake() { printf '#!/bin/bash\nT=%q\n%s\n' "$t" "$2" >"$F/$1"; chmod +x "$F/$1"; 
 fake sleep 'echo $(( $(cat "$T/clock") + ${1%%.*} )) >"$T/clock"
 # "the user presses power" at a given time: the watcher gets its signal.
 if [[ -f $T/now_at ]] && (( $(cat "$T/clock") >= $(cat "$T/now_at") )); then rm -f "$T/now_at"; kill -USR1 $PPID; fi
+# A one-shot real hang that moves no clock: the frozen sleep of a phone that
+# is asleep. The "logind" signal arrives 0.3 s later (events in $T/evts).
+if [[ -f $T/hang ]]; then
+  rm -f "$T/hang"
+  ( /usr/bin/sleep 0.3; for e in $(cat "$T/evts"); do printf "{\"type\":\"b\",\"data\":[%s]}\n" "$e" >"$T/evt"; /usr/bin/sleep 0.1; done ) >/dev/null 2>&1 &
+  exec /usr/bin/sleep 20
+fi
 # "the panel finishes powering off" at a given time.
-if [[ -f $T/off_at ]] && (( $(cat "$T/clock") >= $(cat "$T/off_at") )); then rm -f "$T/off_at"; echo 4 >"$T/sys/class/backlight/panel/bl_power"; fi'
+if [[ -f $T/off_at ]] && (( $(cat "$T/clock") >= $(cat "$T/off_at") )); then rm -f "$T/off_at"; echo 4 >"$T/sys/class/backlight/panel/bl_power"; fi
+# "the screen lights up" at a given time; "the inhibitor is released" at a given time.
+if [[ -f $T/lit_at ]] && (( $(cat "$T/clock") >= $(cat "$T/lit_at") )); then rm -f "$T/lit_at"; echo 0 >"$T/sys/class/backlight/panel/bl_power"; echo true >"$T/dpms"; fi
+if [[ -f $T/release_at ]] && (( $(cat "$T/clock") >= $(cat "$T/release_at") )); then rm -f "$T/release_at"; : >"$T/inhibitors"; fi
+# "a sleep logind never announced ends" at a given time (a raw freeze, as a sleep series does it): the
+# count of completed suspends goes up and the wake reason is set, with no signal to the watcher.
+if [[ -f $T/woke_at ]] && (( $(cat "$T/clock") >= $(cat "$T/woke_at") )); then rm -f "$T/woke_at"
+  echo $(( $(cat "$T/sys/power/suspend_stats/success") + 1 )) >"$T/sys/power/suspend_stats/success"; cat "$T/wake_irq" >"$T/sys/power/pm_wakeup_irq"; fi'
 fake omarchy-toggle-enabled '[[ $1 == omamobile-sleep && -f $T/toggle ]]'
 fake omarchy-hw-display 'echo panel'
 fake hyprctl '[[ $1 == monitors ]] && printf "[{\"dpmsStatus\": %s}]\n" "$(cat "$T/dpms")"'
-fake omarchy-shell '[[ "$*" == "lock status" ]] && printf "{\"locked\":true,\"secure\":%s}\n" "$(cat "$T/secure")"
+fake omarchy-shell '[[ "$*" == "lock status" ]] && echo x >>"$T/lockcalls" && printf "{\"locked\":true,\"secure\":%s}\n" "$(cat "$T/secure")"
 [[ "$*" == "lock dark" ]] && echo "omarchy-shell lock dark at $(cat "$T/clock")" >>"$T/log"
 true'
 fake ss 'cat "$T/ssh"'
-fake busctl 'printf "{\"type\":\"a(ssssuu)\",\"data\":[[%s]]}\n" "$(cat "$T/inhibitors")"'
+fake busctl '# the resume listener (busctl wait): a FIFO stands in for the logind signals; none: it fails and the poll carries on
+if [[ " $* " == *" wait "* ]]; then echo "$*" >"$T/wait-args"; [[ -p $T/evt ]] || exit 1; exec cat "$T/evt"; fi
+printf "{\"type\":\"a(ssssuu)\",\"data\":[[%s]]}\n" "$(cat "$T/inhibitors")"'
 fake pactl 'cat "$T/sinks"'
 fake omamobile-keys 'echo "omamobile-keys $* at $(cat "$T/clock")" >>"$T/log"'
 fake systemctl 'echo "systemctl $* at $(cat "$T/clock")" >>"$T/log"
@@ -48,7 +64,8 @@ reset() {
   printf ' 145:          3          0  s2mpg12-pmic   0 Edge      rtc-alarm0\n' >"$t/proc/interrupts"
   printf ' 111:         76          1  gpa10   0 Edge      KEY_POWER\n' >>"$t/proc/interrupts"
   printf ' 59:         12          0  gpa4   0 Edge      Power\n' >>"$t/proc/interrupts"
-  rm -f "$t/wake_irq" "$t/sys/power/pm_wakeup_irq" "$t/on_resume" "$t/now_at" "$t/off_at" "$t/active" "$t/home/.local/state/omarchy/indicators/stay-awake"
+  rm -f "$t/wake_irq" "$t/sys/power/pm_wakeup_irq" "$t/on_resume" "$t/now_at" "$t/off_at" "$t/lit_at" "$t/release_at" "$t/woke_at" "$t/active" "$t/home/.local/state/omarchy/indicators/stay-awake"
+  : >"$t/lockcalls"
 }
 # Watch until the fake clock reaches 1000 + $1.
 watch() {
@@ -61,7 +78,7 @@ sleepd() {
     OMAMOBILE_SLEEP_CLOCK="$t/clock" bash "$here/bin/omamobile-sleepd" "$@"
 }
 suspends() { grep -c '^systemctl suspend' "$t/log" || true; }
-first_at() { sed -n 's/^systemctl suspend at //p' "$t/log" | head -n 1; }
+first_at() { sed -n 's/^systemctl suspend at //p' "$t/log" | sed -n 1p; }
 
 reset; watch 100
 [[ $(suspends) -ge 1 ]] || fail "screen off and locked: it sleeps"
@@ -94,6 +111,33 @@ refused "a RUNNING sink" 'printf "50\talsa_output.aoc\tPipeWire\ts16le 2ch 48000
 grep -c 'not sleeping: audio is playing (alsa_output.aoc)' "$t/out" >/dev/null || fail "the playing sink is named"
 refused "Stay awake" 'mkdir -p "$t/home/.local/state/omarchy/indicators"; touch "$t/home/.local/state/omarchy/indicators/stay-awake"'
 echo "ok - sleepd: never with the toggle off, the screen on, an insecure lock, SSH, an inhibitor, media or Stay awake"
+
+# A refusal that holds (the 9a's modem keeps its inhibitor for the whole boot): checked again every
+# OMAMOBILE_SLEEP_RECHECK seconds (30), with only the backlight and suspend_stats read by the 2 s polls between. The
+# shell is asked for the lock's state at each full check, so those asks are counted.
+inh='["sleep","Omarchy Mobile modem","The modem is up","block",0,77]'
+reset; echo "$inh" >"$t/inhibitors"; watch 330
+[[ $(suspends) == 0 ]] || fail "held: no sleep while the inhibitor is held"
+n=$(grep -c . "$t/lockcalls" || true)
+((n <= 40)) || fail "held: the shell was asked about the lock $n times in 330 s (at most 40 with a check every 30 s)"
+[[ $(grep -c 'not sleeping: a sleep inhibitor is held' "$t/out") == 1 ]] || fail "held: the refusal is logged once"
+# Released between checks: it sleeps at the next one
+reset; echo "$inh" >"$t/inhibitors"; echo 1200 >"$t/release_at"; watch 300
+at=$(first_at); [[ -n $at ]] && ((at >= 1200 && at <= 1234)) || fail "held: a released inhibitor lets it sleep within 30 s (at ${at:-never})"
+# The screen lit and dark again between checks: seen at the next poll, and the wait after the screen goes off starts again
+reset; echo "$inh" >"$t/inhibitors"; echo 1100 >"$t/lit_at"; echo 1110 >"$t/off_at"; watch 200
+[[ $(grep -c 'not sleeping: a sleep inhibitor is held' "$t/out") == 2 ]] || fail "held: a lit screen between checks is seen ($(grep -c 'not sleeping' "$t/out") refusals logged)"
+# A power-key wake between checks from a sleep logind didn't announce (no signal, only suspend_stats):
+# the PIN pad is lit at the next poll, not at the next full check
+reset; echo "$inh" >"$t/inhibitors"; echo 111 >"$t/wake_irq"; echo 1040 >"$t/woke_at"; watch 100
+at=$(sed -n 's/^omamobile-keys wake at //p' "$t/log" | sed -n 1p)
+[[ -n $at ]] && ((at >= 1040 && at <= 1044)) || fail "held: a power-key wake after an unannounced sleep lights the PIN pad at the next poll (at ${at:-never})"
+grep -c 'resumed, woken by IRQ 111' "$t/out" >/dev/null || fail "held: the unannounced resume is logged"
+# No panel to read the backlight from: every poll is a full one, as before
+reset; echo "$inh" >"$t/inhibitors"; fake omarchy-hw-display 'true'; watch 120
+n=$(grep -c . "$t/lockcalls" || true); ((n >= 60)) || fail "held: with no panel known every poll checks in full ($n asks in 120 s)"
+fake omarchy-hw-display 'echo panel'
+echo "ok - sleepd: a refusal that holds is checked again every 30 s, the polls between only sleep; a release, a lit screen or an unannounced resume is still seen"
 
 # Delay-mode inhibitors (NetworkManager, the lock) and idle sinks don't count.
 reset
@@ -167,6 +211,44 @@ reset; sleepd now >"$t/out"
 reset; echo false >"$t/secure"; sleepd now >"$t/out"
 [[ $(suspends) == 0 ]] || fail "now with no watcher still checks the lock"
 echo "ok - sleepd: now (the power key) sleeps within 2 s through the watcher, and does nothing with the toggle off"
+
+fake systemctl 'echo "systemctl $* at $(cat "$T/clock")" >>"$T/log"
+case "$*" in
+  suspend)
+    echo $(( $(cat "$T/sys/power/suspend_stats/success") + 1 )) >"$T/sys/power/suspend_stats/success"
+    cat "$T/wake_irq" 2>/dev/null >"$T/sys/power/pm_wakeup_irq" || echo 145 >"$T/sys/power/pm_wakeup_irq"
+    echo $(( $(cat "$T/clock") + 600 )) >"$T/clock"
+    [[ -f $T/on_resume ]] && bash "$T/on_resume"
+    exit 0 ;;
+  "--user --quiet is-active omamobile-sleepd.service") [[ -f $T/active ]] ;;
+esac'
+# The resume event: a power-key wake while the watcher sits in a long sleep
+# (the real one is frozen inside it, so the rest of it runs after the resume).
+# Without the event the 20 s real hang below would outlast the 10 s limit.
+watchto() {
+  timeout 10 env HOME="$t/home" PATH="$F:$PATH" OMAMOBILE_SLEEP_SYSFS="$t/sys" OMAMOBILE_SLEEP_PROCFS="$t/proc" \
+    OMAMOBILE_SLEEP_CLOCK="$t/clock" OMAMOBILE_SLEEPD_STOP_AT=$((1000 + $1)) bash "$here/bin/omamobile-sleepd" >"$t/out" 2>&1
+}
+lit='echo 0 >"%s"; echo true >"%s"; touch "%s"\n'
+pkey() { reset; mkfifo "$t/evt"; echo 111 >"$t/wake_irq"; printf "$lit" "$t/sys/class/backlight/panel/bl_power" "$t/dpms" "$t/hang" >"$t/on_resume"; echo "$1" >"$t/evts"; }
+# PrepareForSleep(false) ends the wait at once.
+pkey false; watchto 700 || fail "event: PrepareForSleep(false) ends the sleeping watcher's wait (timed out)"
+grep -c '^omamobile-keys wake' "$t/log" >/dev/null || fail "event: the power-key wake lights the PIN pad"
+[[ $(<"$t/wait-args") == *"wait org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager PrepareForSleep"* ]] || fail "event: the listener names logind as the sender ($(<"$t/wait-args"))"
+rm -f "$t/evt"
+# A true ahead of the false (the signal before a sleep) is read and ignored: the false after it still arrives.
+pkey "true false"; watchto 700 || fail "event: only the false signal ends the wait (timed out)"
+[[ $(suspends) == 1 ]] || fail "event: PrepareForSleep(true) does not start a sleep"
+grep -c "no more resume events from logind" "$t/out" >/dev/null && fail "event: a true then a false keeps the listener going"
+rm -f "$t/evt"
+# No signal source at all (busctl wait fails): the poll carries on as before.
+reset; echo 111 >"$t/wake_irq"; printf 'echo 0 >"%s"; echo true >"%s"\n' "$t/sys/class/backlight/panel/bl_power" "$t/dpms" >"$t/on_resume"; watch 700
+grep -c '^omamobile-keys wake' "$t/log" >/dev/null || fail "event: with no listener the poll still lights the PIN pad"
+grep -c "no more resume events from logind: back to polling" "$t/out" >/dev/null || fail "event: a listener that gives up says so"
+# Nothing of the listener is left behind.
+sleep 0.5; pgrep -f "cat $t/evt" >/dev/null && fail "event: the listener's busctl is killed with the watcher"
+rm -f "$t/evt" "$t/evts"
+echo "ok - sleepd: logind's PrepareForSleep(false) ends the wait at once, true is ignored, the poll is the fallback, nothing is left running"
 
 reset; out=$(sleepd check) || fail "check: exit 0 when nothing stops sleep"
 [[ $out == "nothing stops sleep" ]] || fail "check: says so ($out)"

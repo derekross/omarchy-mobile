@@ -22,8 +22,12 @@ packaged yet. What is here is what runs on in-tree drivers.
 | `vendor/systemd/system-sleep/omamobile-tegu-wifi` | `/usr/lib/systemd/system-sleep` | Keeps Wi-Fi loaded across s2idle when `/etc/omamobile/wifi-keep-across-sleep` exists (the chip reloads its firmware on resume and iwd reconnects; the hook checks that from a transient unit, `omamobile-tegu-wifi-check`, so the lock screen doesn't wait for it), otherwise unloads and reloads brcmfmac around the sleep; after a sleep that lost Wi-Fi it unloads for the rest of the boot. It reloads the in-tree `brcmfmac`; a phone still running an out-of-tree build of it keeps its own hook until the Wi-Fi series lands |
 | `vendor/systemd/system-sleep/omamobile-tegu-nfc` | `/usr/lib/systemd/system-sleep` | Stops neard's poll loop before a sleep (polling through s2idle reset the palmtop; with it stopped, 35 of 35 cycles woke), reads `Polling` back and logs it, and starts the loop again after the wake if it was on. Powering the ST54L off as well, the workaround for a controller that did not answer on I2C after a wake (issue #132; fixed by linux-omarchy-mobile #131), runs only while `/etc/omamobile/nfc-power-off-across-sleep` exists: off by default, since its record is one wake that needed the power key and one that worked. Log: `/var/log/omamobile/nfc-sleep.log` |
 | `vendor/systemd/system-sleep/omamobile-tegu-cpuidle` | `/usr/lib/systemd/system-sleep` | Keeps the cores out of the core power-down state (C2) through a sleep: with every core in C2 during s2idle the palmtop sometimes never woke (6 to 135 sleeps), and with C2 off for the sleep 300 of 300 came back. Disables every idle state deeper than state0 before the sleep and enables the ones it disabled after the wake, so the cores still power down while awake; does nothing on a kernel without deeper states, or while `/etc/omamobile/cpuidle-keep-across-sleep` exists (for testing C2 in the sleep). A sleep written straight to `/sys/power/state` skips it. [SLEEP-PLAN](../../device/tegu/SLEEP-PLAN.md) S1 |
+| `vendor/systemd/system/service.d/10-omamobile-tegu-sleep-watchdog.conf` | `/usr/lib/systemd/system` | No service watchdogs, for every system service: a 9a sleep runs with the kernel's clock ticking (no idle state is entered through s2idle), so after a sleep longer than a service's `WatchdogSec` systemd aborted it at the thaw, journald and logind among them, and with logind gone the lock screen was unusable until a reboot ([#765](https://github.com/derekross/omarchy-mobile/issues/765)). To be removed when a sleep stops the clock |
 | `vendor/systemd/system/linux-modules-cleanup.service.d/10-omamobile-tegu.conf` | `/usr/lib/systemd/system` | Holds off Arch's old-module cleanup: our kernels come as module tarballs, not pacman packages, and the next-boot and rollback trees must stay |
-| `vendor/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf`, `sleep.conf.d/10-omamobile.conf` | `/usr/lib/systemd` | A hung shutdown resets the phone after a minute; suspend means s2idle (no SoC sleep sequence yet, and `deep` does not wake) |
+| `vendor/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf`, `sleep.conf.d/10-omamobile.conf` | `/usr/lib/systemd` | A hung shutdown resets the phone after a minute; suspend means s2idle (no SoC sleep sequence yet, and `deep` does not wake), written to the kernel as one state (`SuspendState=freeze`), so a sleep a driver refused isn't tried a second time |
+| `vendor/udev/rules.d/70-omamobile-touch-wake.rules` | `/usr/lib/udev/rules.d` | Lets a touch wake the palmtop from suspend-to-idle (double tap, with omamobile-shell's `omamobile-doubletap`): turns on the touchscreen's `power/wakeup`, which linux-omarchy-mobile#248 makes available and leaves off. The same rule line as the 7 Pro's; does nothing on a kernel without #248 |
+| `etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf` | `/etc/NetworkManager/conf.d` | Wi-Fi power save on (`wifi.powersave=3`), as the Pixel 8 Pro's package has it, under the same file name. Omarchy turns it off for laptops in `/etc/NetworkManager/conf.d/omarchy-wifi-powersave.conf`; NetworkManager reads `/usr/lib` first and `/etc` in name order, so this file is in `/etc` and sorts after it. NetworkManager applies it when a connection comes up, not to a link that is already up. Only a file in `/etc/NetworkManager/conf.d` whose name sorts after this one wins over it; the simple way to turn it off is to edit this file, which `backup=` keeps across upgrades. A saved network with its own `802-11-wireless.powersave` (2 or 3) keeps that value. Measured on 2026-11-20 with the screen off, the modem up and the cable in with the charger's buck off, as six alternating 240 s means: 339, 319 and 324 mA with power save off, 298, 296 and 297 mA with it on, about 30 mA; 200 pings to the gateway lost none either way ([NOTES](../../device/tegu/NOTES.md#2026-11-20-wi-fi-power-save)). Sleep with power save on is not tested. |
+| `vendor/udev/rules.d/70-omamobile-tegu-gpu-floor.rules` | `/usr/lib/udev/rules.d` | Sets the GPU's lowest level to 419 MHz rather than 150 MHz when panthor's devfreq device appears. A swipe or an app opening after a quiet moment otherwise starts at 150 MHz, and its first frames are late while simple_ondemand (one look every 50 ms) catches up. Idle, panthor suspends the GPU, so the floor costs nothing there |
 | `vendor/udev/rules.d/10-omamobile-storage.rules` | `/usr/lib/udev/rules.d` | Continues the initramfs storage guard: Android partitions stay hidden and the whole-disk node unusable |
 | `vendor/udev/rules.d/20-omamobile-torch.rules`, `70-omamobile-dma-heap.rules`, `72-omamobile-feedbackd.rules` | `/usr/lib/udev/rules.d` | The torch tile may set the LED's brightness; libcamera's software ISP gets the DMA-BUF heaps; feedbackd gets the haptics |
 | `vendor/systemd/network/20-usb-gadget.network`, `vendor/NetworkManager/conf.d/10-omamobile-usb.conf` | `/usr/lib/systemd/network`, `/usr/lib/NetworkManager/conf.d` | USB networking to a host (172.16.42.1, the host as a fallback route behind Wi-Fi); NetworkManager stays off the link |
@@ -201,25 +205,42 @@ before the reboot, isn't the reset loop the latch guards against, and the
 reboot takes the CP down with the SoC. On the 9a that path passed once, on
 2026-11-03 (TELEPHONY-PLAN 2.7).
 
-The in-tree driver branch (the kernel's `cpif` and `pcie_gs201_cp`) hasn't
-run through this script yet; the in-tree drivers have run from the
-bring-up runners.
+The in-tree driver branch (the kernel's `cpif` and `pcie_gs201_cp`, taken
+when the device tree has a `cpif` node) first ran through this script on
+2026-11-09, on a published-style kernel with the device's `modem-cpif`
+overlay: three boots by the boot unit, two confirmed stops and four GNSS
+sessions (TELEPHONY-PLAN 2.9).
 
 ### Starting it at boot
 
 `omamobile-tegu-modem-boot.service` runs `omamobile-tegu-modem-up --phone
---gnss` at boot. The package installs it disabled. Before enabling it:
+--gnss` at boot. The package installs it disabled: it is opt-in while
+marking slot B on the 9a is on hold, because the unit can't tell whether B
+is marked and a reset with B unmarked spends one of ABL's three tries.
+Before enabling it:
 
 - **Slot B marked successful.** Otherwise every reset spends one of ABL's
   three tries, and at zero it boots stock on slot A, which has overwritten
   `userdata`.
 - **A kernel with linux-omarchy-mobile#172** (the PERIC0 GPIO bus clock
   kept on). Without it the modem's GPIO writes hang the palmtop within
-  minutes.
+  minutes. The published kernel has it; a test kernel built from an older
+  tree may not: check that
+  `/sys/kernel/debug/clk/zumapro_gpio_peric0/clk_flags` reads
+  `CLK_IS_CRITICAL`.
 - **The charger in** for the first boots.
 
 Then `systemctl enable omamobile-tegu-modem-boot`. With it on the battery
 drains as if awake, since the palmtop no longer suspends.
+
+An enabled unit is skipped, not failed, on a phone that can't run it:
+without the three files `tools/phone-provision` puts on the phone (the modem
+chroot, the NV checksums, the board properties), or without CP drivers.
+The drivers are the kernel's when the device tree has a `cpif` node, or else
+the owner's bring-up modules in `/var/lib/omamobile-tegu/modem`. The board's
+own device tree has only the `modem` node under the PCIe link; the `cpif`
+node comes from the device's `modem-cpif` overlay, which
+`bin/omamobile images` applies from the descriptor's `DTB_OVERLAYS`.
 
 **Rollback:** `systemctl disable omamobile-tegu-modem-boot`, then reboot.
 If the palmtop resets before you can log in, the latch does the work: the

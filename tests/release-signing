@@ -5,9 +5,12 @@
 # network, no Docker, no phone; the real keys/ and out/ are never touched):
 # build-packages and repo-publish refuse without keys/gnupg.release, never
 # fall back to the original keys/gnupg, and refuse a key omamobile-keyring
-# doesn't trust; build-packages --resign moves a repository signed with the
-# original key to the release key, package bytes unchanged; repo-publish
-# publishes only what the release key signed (a dry run, with rsync faked).
+# doesn't trust or revokes, or an omamobile-revoked that can't be read as a
+# file or has any line that isn't one fingerprint in capitals with its
+# newline, in any locale; build-packages --resign moves a repository signed
+# with the original key to the release key, package bytes unchanged;
+# repo-publish publishes only what the release key signed (a dry run, with
+# rsync faked).
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -92,7 +95,7 @@ echo "$other" > "$R/keys/fingerprint.release"
 if run tools/build-packages --resign; then fail "refuses a key omamobile-keyring doesn't trust"; fi
 grep -q 'does not trust' "$t/log" || { cat "$t/log"; fail "says the key is not trusted"; }
 echo "$release" > "$R/keys/fingerprint.release"
-echo "$release:4:" > "$kr/omamobile-revoked"
+echo "$release" > "$kr/omamobile-revoked"
 if run tools/build-packages --resign; then fail "refuses a revoked key"; fi
 grep -q 'is revoked' "$t/log" || { cat "$t/log"; fail "says the key is revoked"; }
 : > "$kr/omamobile-revoked"
@@ -120,6 +123,164 @@ done
 ls "$repo" | grep -c '\.new$' >/dev/null && fail "no half-done signatures are left"
 pass "build-packages --resign signs every package and the index with the release key, bytes unchanged"
 
+# --- omamobile-revoked is read only when every line is well formed ---
+# One 40-digit fingerprint in capitals per line, with its newline
+# (docs/RELEASES.md §10): any other line stops the tools before they sign,
+# whichever key it names.
+nl=$'\n'
+sigs() { cat "$repo"/*.sig | sha256sum; }
+malformed() {  # malformed WHAT LINE CONTENT: omamobile-revoked holds CONTENT
+  local before
+  printf '%s' "$3" > "$kr/omamobile-revoked"
+  before=$(sigs)
+  if run tools/build-packages --resign; then fail "$1 is refused"; fi
+  grep -c "omamobile-revoked is malformed at line $2: " "$t/log" >/dev/null || { cat "$t/log"; fail "$1: names line $2 of omamobile-revoked"; }
+  if grep -c 'is revoked' "$t/log" >/dev/null; then cat "$t/log"; fail "$1: doesn't say the key is revoked"; fi
+  [[ $(sigs) == "$before" ]] || fail "$1: nothing is signed"
+}
+malformed "the release key in lowercase" 1 "${release,,}$nl"
+malformed "the release key in omamobile-trusted's FPR:4: form" 1 "$release:4:$nl"
+malformed "the release key with a word after it" 1 "$release revoked$nl"
+malformed "the release key with a CRLF" 1 "$release"$'\r\n'
+malformed "39 digits" 1 "${release:0:39}$nl"
+malformed "41 digits" 1 "${release}0$nl"
+malformed "a digit that isn't hex" 1 "${release:0:39}G$nl"
+malformed "a blank line before the release key" 1 "$nl$release$nl"
+malformed "a blank line after the release key" 2 "$release$nl$nl"
+malformed "the release key without its newline" 1 "$release"
+malformed "a last line without its newline" 2 "$original$nl$release"
+malformed "another key in the FPR:4: form" 1 "$original:4:$nl"
+malformed "another key in lowercase, on line 2" 2 "$original$nl${original,,}$nl"
+malformed "a blank line, then a lowercase one" 2 "$original$nl$nl${release,,}$nl"
+echo "$original" > "$kr/omamobile-revoked"
+run tools/build-packages --resign || { cat "$t/log"; fail "a well-formed line for another key lets the release key sign"; }
+: > "$kr/omamobile-revoked"
+run tools/build-packages --resign || { cat "$t/log"; fail "an empty omamobile-revoked lets the release key sign"; }
+echo "$release" > "$kr/omamobile-revoked"
+if run tools/build-packages --resign; then fail "a well-formed line for the release key refuses it"; fi
+grep -c 'is revoked' "$t/log" >/dev/null || { cat "$t/log"; fail "a well-formed line for the release key says it is revoked"; }
+: > "$kr/omamobile-revoked"
+pass "a malformed omamobile-revoked stops build-packages before it signs, naming the line; a well-formed one is read as before"
+
+# A missing omamobile-revoked revokes nothing, as before; anything else in
+# its place that can't be read as a file stops the tools, never reads as
+# a file that lists nothing.
+unreadable() {  # unreadable WHAT: omamobile-revoked's place holds WHAT
+  local before
+  before=$(sigs)
+  if run tools/build-packages --resign; then fail "$1 is refused"; fi
+  grep -c 'omamobile-revoked cannot be read: ' "$t/log" >/dev/null || { cat "$t/log"; fail "$1: says omamobile-revoked cannot be read"; }
+  if grep -c 'is revoked' "$t/log" >/dev/null; then cat "$t/log"; fail "$1: doesn't say the key is revoked"; fi
+  [[ $(sigs) == "$before" ]] || fail "$1: nothing is signed"
+}
+rm "$kr/omamobile-revoked"
+run tools/build-packages --resign || { cat "$t/log"; fail "a missing omamobile-revoked lets the release key sign"; }
+mkdir "$kr/omamobile-revoked"
+unreadable "a directory"
+rmdir "$kr/omamobile-revoked"
+ln -s /dev/null "$kr/omamobile-revoked"
+unreadable "a link to /dev/null"
+ln -sfn nowhere "$kr/omamobile-revoked"
+unreadable "a link to nowhere"
+rm "$kr/omamobile-revoked"
+echo "$release" > "$kr/omamobile-revoked"
+chmod 000 "$kr/omamobile-revoked"
+if [[ -r $kr/omamobile-revoked ]]; then
+  pass "# skip: this user reads a mode-000 file (root), so it can't stand for one it can't read"
+else
+  unreadable "a mode-000 file that revokes the release key"
+fi
+chmod 644 "$kr/omamobile-revoked"
+: > "$kr/omamobile-revoked"
+pass "an omamobile-revoked that can't be read as a file stops build-packages before it signs; a missing one revokes nothing"
+
+# If an existing omamobile-revoked vanishes, becomes unreadable, turns into a
+# directory, or changes to a malformed line between revoked_file_check and the
+# read, signing_key_load stops before signing rather than continuing with an
+# empty revocation list. A wc on PATH applies each fault after
+# revoked_file_check's final wc -l succeeds.
+real_wc=$(command -v wc) && mkdir -p "$t/bin-revoked"
+cat > "$t/bin-revoked/wc" <<EOF
+#!/bin/sh
+"$real_wc" "\$@" || exit \$?
+if [ -n "\${REVOKED_WC_ON:-}" ]; then
+  n=0
+  [ -f "$t/wc.count" ] && read -r n < "$t/wc.count"
+  n=\$((n + 1))
+  printf '%s\n' "\$n" > "$t/wc.count"
+  [ "\$n" = "\$REVOKED_WC_ON" ] || exit 0
+fi
+case "\${REVOKED_FAULT:-}" in
+  rm) rm -f -- "$kr/omamobile-revoked" ;;
+  chmod) chmod 000 -- "$kr/omamobile-revoked" ;;
+  dir) rm -f -- "$kr/omamobile-revoked" && mkdir -- "$kr/omamobile-revoked" ;;
+  swap) printf '%s:4:\n' "\${REVOKED_FPR:-$release}" > "$kr/omamobile-revoked" ;;
+  crlf) printf '%s\r\n' "\${REVOKED_FPR:-$release}" > "$kr/omamobile-revoked" ;;
+  blank) printf '%s\n\n' "\${REVOKED_FPR:-$release}" > "$kr/omamobile-revoked" ;;
+  nonl) printf '%s' "\${REVOKED_FPR:-$release}" > "$kr/omamobile-revoked" ;;
+  nul) printf '%s\0\n' "\${REVOKED_FPR:-$release}" > "$kr/omamobile-revoked" ;;
+esac
+EOF
+chmod +x "$t/bin-revoked/wc"
+: > "$t/mode000-probe" && chmod 000 "$t/mode000-probe"
+for fault in rm chmod dir swap crlf blank nonl nul; do
+  if [[ $fault == chmod && -r $t/mode000-probe ]]; then
+    pass "# skip: chmod 000 does not stop this user reading"
+    continue
+  fi
+  echo "$release" > "$kr/omamobile-revoked"
+  before=$(sigs)
+  if run env PATH="$t/bin-revoked:$t/bin:$PATH" REVOKED_FAULT="$fault" tools/build-packages --resign; then
+    cat "$t/log"
+    fail "signing_key_load stops when omamobile-revoked fails after the check ($fault)"
+  fi
+  case $fault in
+    rm) [[ ! -e $kr/omamobile-revoked ]] || fail "the wc wrapper removed omamobile-revoked" ;;
+    chmod)
+      [[ ! -r $kr/omamobile-revoked ]] || fail "the wc wrapper made omamobile-revoked unreadable"
+      chmod 644 "$kr/omamobile-revoked" ;;
+    dir)
+      [[ -d $kr/omamobile-revoked ]] || fail "the wc wrapper replaced omamobile-revoked with a directory"
+      rmdir "$kr/omamobile-revoked" ;;
+    swap) [[ $(cat "$kr/omamobile-revoked") == "$release:4:" ]] || fail "the wc wrapper rewrote omamobile-revoked ($fault)" ;;
+    crlf) [[ $(cat "$kr/omamobile-revoked") == $release$'\r' ]] || fail "the wc wrapper rewrote omamobile-revoked ($fault)" ;;
+    blank) [[ $(wc -l < "$kr/omamobile-revoked") == 2 ]] || fail "the wc wrapper rewrote omamobile-revoked ($fault)" ;;
+    nonl) [[ $(wc -l < "$kr/omamobile-revoked") == 0 ]] || fail "the wc wrapper rewrote omamobile-revoked ($fault)" ;;
+    nul)
+      [[ $(stat -c %s "$kr/omamobile-revoked") == 42 && $(tr -dc '\0' < "$kr/omamobile-revoked" | wc -c) == 1 ]] \
+        || fail "the wc wrapper rewrote omamobile-revoked ($fault)" ;;
+  esac
+  case $fault in
+    rm|chmod|dir) want="error: cannot read packages/omamobile-keyring/omamobile-revoked" ;;
+    *) want="error: packages/omamobile-keyring/omamobile-revoked changed while reading" ;;
+  esac
+  grep -qxF "$want" "$t/log" || { cat "$t/log"; fail "signing_key_load says why omamobile-revoked failed after the check ($fault)"; }
+  [[ $(sigs) == "$before" ]] || fail "signing_key_load signs nothing when omamobile-revoked fails after the check ($fault)"
+done
+: > "$kr/omamobile-revoked"
+pass "signing_key_load stops build-packages before signing if omamobile-revoked cannot be read or changes after the check"
+
+# The check reads in the C locale. In a locale whose ranges follow its
+# collation, [0-9A-F] can take a letter that isn't hex: build en_US.UTF-8 in
+# scratch, and use it only if it does take this line's É.
+line=$'\xc3\x89'${release:1}
+mkdir "$t/locale"
+if command -v localedef >/dev/null &&
+   localedef --no-archive -i en_US -f UTF-8 "$t/locale/en_US.UTF-8" >/dev/null 2>&1 &&
+   env LOCPATH="$t/locale" LC_ALL=en_US.UTF-8 grep -cxE '[0-9A-F]{40}' <<<"$line" >/dev/null; then
+  printf '%s\n' "$line" > "$kr/omamobile-revoked"
+  before=$(sigs)
+  if run env LOCPATH="$t/locale" LC_ALL=en_US.UTF-8 tools/build-packages --resign; then
+    fail "a line with an É is refused in a locale whose [0-9A-F] takes it"
+  fi
+  grep -c 'omamobile-revoked is malformed at line 1: ' "$t/log" >/dev/null || { cat "$t/log"; fail "a line with an É: names line 1"; }
+  [[ $(sigs) == "$before" ]] || fail "a line with an É: nothing is signed"
+  : > "$kr/omamobile-revoked"
+  pass "a line the locale's collation would take for a fingerprint is refused all the same"
+else
+  pass "# skip: no en_US.UTF-8 here (localedef) whose [0-9A-F] takes É"
+fi
+
 # --- and publishing takes it ---
 run tools/repo-publish --no-build --dry-run development || { cat "$t/log"; fail "repo-publish takes the re-signed repository"; }
 grep -q 'signed by the release key' "$t/log" || { cat "$t/log"; fail "says it checked the release key"; }
@@ -143,3 +304,94 @@ cmp -s "$R/out/publish/development/aarch64/omamobile.db.tar.gz" "$R/out/publish/
 cmp -s "$R/out/publish/development/aarch64/foo-1-1-any.pkg.tar.zst.sig" "$R/out/publish/stable/aarch64/foo-1-1-any.pkg.tar.zst.sig" ||
   fail "the packages' signatures are promoted unchanged"
 pass "repo-publish stable --expect-index promotes only the tested index, unchanged (dry run)"
+
+# --- repo-publish reads omamobile-revoked through the checked helper ---
+# When original is revoked and release is valid, repo-publish omits original
+# from index.html. When omamobile-revoked is missing, repo-publish runs quietly
+# with nothing on stderr and keeps both trusted keys. If omamobile-revoked fails
+# or turns malformed after signing_key_load (during gpg --import) or after
+# repo-publish's own revoked_file_check (on the 2nd wc call), repo-publish stops
+# before writing index.html or syncing.
+echo "$original" > "$kr/omamobile-revoked"
+rm -rf "$R/out/publish"
+run tools/repo-publish --no-build --dry-run development || { cat "$t/log"; fail "repo-publish runs with original revoked"; }
+grep -qF "$release" "$R/out/publish/index.html" || fail "index.html lists the release key"
+if grep -qF "$original" "$R/out/publish/index.html"; then fail "index.html omits the revoked original key"; fi
+
+rm -f "$kr/omamobile-revoked"
+rm -rf "$R/out/publish"
+(cd "$R" && PATH="$t/bin:$PATH" tools/repo-publish --no-build --dry-run development) > "$t/log" 2> "$t/err" \
+  || { cat "$t/log" "$t/err"; fail "repo-publish allows a missing omamobile-revoked"; }
+[[ ! -s $t/err ]] || { cat "$t/err"; fail "repo-publish writes nothing to stderr when omamobile-revoked is missing"; }
+grep -qF "$original" "$R/out/publish/index.html" && grep -qF "$release" "$R/out/publish/index.html" \
+  || fail "missing omamobile-revoked keeps both trusted keys in index.html"
+
+real_gpg=$(command -v gpg) && mkdir -p "$t/bin-gpg-fault"
+cat > "$t/bin-gpg-fault/gpg" <<EOF
+#!/bin/sh
+"$real_gpg" "\$@" || exit \$?
+for arg in "\$@"; do
+  if [ "\$arg" = "--import" ]; then
+    case "\${GPG_REVOKED_FAULT:-}" in
+      dir) rm -f -- "$kr/omamobile-revoked" && mkdir -- "$kr/omamobile-revoked" ;;
+      chmod) chmod 000 -- "$kr/omamobile-revoked" ;;
+      malformed) printf '%s:4:\n' "$original" > "$kr/omamobile-revoked" ;;
+    esac
+    break
+  fi
+done
+EOF
+chmod +x "$t/bin-gpg-fault/gpg"
+for fault in dir chmod malformed; do
+  if [[ $fault == chmod && -r $t/mode000-probe ]]; then
+    pass "# skip: chmod 000 does not stop this user reading"
+    continue
+  fi
+  echo "$original" > "$kr/omamobile-revoked"
+  rm -rf "$R/out/publish" && : > "$t/rsync.log"
+  if run env PATH="$t/bin-gpg-fault:$t/bin:$PATH" GPG_REVOKED_FAULT="$fault" tools/repo-publish --no-build --dry-run development; then
+    cat "$t/log"
+    fail "repo-publish stops when omamobile-revoked fails after signing_key_load ($fault)"
+  fi
+  case $fault in
+    dir)
+      [[ -d $kr/omamobile-revoked ]] || fail "the gpg wrapper replaced omamobile-revoked with a directory"
+      rmdir "$kr/omamobile-revoked"
+      want="repo-publish: packages/omamobile-keyring/omamobile-revoked cannot be read: it must be a file this user can read (docs/RELEASES.md §10)" ;;
+    chmod)
+      [[ ! -r $kr/omamobile-revoked ]] || fail "the gpg wrapper made omamobile-revoked unreadable"
+      chmod 644 "$kr/omamobile-revoked"
+      want="repo-publish: packages/omamobile-keyring/omamobile-revoked cannot be read: it must be a file this user can read (docs/RELEASES.md §10)" ;;
+    malformed)
+      [[ $(cat "$kr/omamobile-revoked") == "$original:4:" ]] || fail "the gpg wrapper rewrote omamobile-revoked as malformed"
+      want="repo-publish: packages/omamobile-keyring/omamobile-revoked is malformed at line 1: each line must be one 40-digit fingerprint in capitals, ending with a newline (docs/RELEASES.md §10)" ;;
+  esac
+  grep -qxF "$want" "$t/log" || { cat "$t/log"; fail "repo-publish says why omamobile-revoked failed after signing_key_load ($fault)"; }
+  [[ ! -e $R/out/publish/index.html && ! -s $t/rsync.log ]] || fail "repo-publish writes no index.html and syncs nothing ($fault)"
+done
+
+for fault in rm dir swap; do
+  echo "$original" > "$kr/omamobile-revoked"
+  rm -f "$t/wc.count" && rm -rf "$R/out/publish" && : > "$t/rsync.log"
+  if run env PATH="$t/bin-revoked:$t/bin:$PATH" REVOKED_WC_ON=2 REVOKED_FAULT="$fault" REVOKED_FPR="$original" \
+      tools/repo-publish --no-build --dry-run development; then
+    cat "$t/log"
+    fail "repo-publish stops when omamobile-revoked fails after its own check ($fault)"
+  fi
+  [[ $(cat "$t/wc.count" 2>/dev/null || true) == 2 ]] || fail "the wc wrapper fired on repo-publish's own check ($fault)"
+  case $fault in
+    rm) [[ ! -e $kr/omamobile-revoked ]] || fail "the wc wrapper removed omamobile-revoked" ;;
+    dir)
+      [[ -d $kr/omamobile-revoked ]] || fail "the wc wrapper replaced omamobile-revoked with a directory"
+      rmdir "$kr/omamobile-revoked" ;;
+    swap) [[ $(cat "$kr/omamobile-revoked") == "$original:4:" ]] || fail "the wc wrapper rewrote omamobile-revoked ($fault)" ;;
+  esac
+  case $fault in
+    rm|dir) want="repo-publish: cannot read packages/omamobile-keyring/omamobile-revoked" ;;
+    *) want="repo-publish: packages/omamobile-keyring/omamobile-revoked changed while reading" ;;
+  esac
+  grep -qxF "$want" "$t/log" || { cat "$t/log"; fail "repo-publish says why omamobile-revoked failed after its own check ($fault)"; }
+  [[ ! -e $R/out/publish/index.html && ! -s $t/rsync.log ]] || fail "repo-publish writes no index.html and syncs nothing after its own check ($fault)"
+done
+: > "$kr/omamobile-revoked"
+pass "repo-publish allows a missing omamobile-revoked quietly, and stops before writing index.html if it fails or changes after the check"

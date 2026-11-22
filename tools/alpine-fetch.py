@@ -7,7 +7,7 @@ Prints the paths of the downloaded .apk files. Exits, before downloading or
 printing anything, if a package or a dependency has no package or provider in
 either index.
 """
-import base64, hashlib, io, re, sys, tarfile, urllib.request
+import base64, hashlib, io, os, re, sys, tarfile, urllib.request
 from pathlib import Path
 
 version, dest, wanted = sys.argv[1], Path(sys.argv[2]), sys.argv[3:]
@@ -53,10 +53,21 @@ if missing:
 for name in sorted(seen):
     p = pkgs[name]
     path = dest / f"{name}-{p['V']}.apk"
-    if not path.exists():
+    # A cached file counts only at the index's size. Each run writes its own
+    # temporary file beside it and renames it into place, so a write cut off
+    # part-way (a full disk, a killed run) never lands under the package's name
+    if not path.exists() or ("S" in p and path.stat().st_size != int(p["S"])):
         data = urllib.request.urlopen(f"{p['repo']}/{path.name}").read()
         # C: is "Q1" + base64(sha1) of the control section; check the whole file's size instead
         if int(p["S"]) != len(data):
             sys.exit(f"size mismatch for {path.name}")
-        path.write_bytes(data)
+        part = f"{path}.{os.urandom(4).hex()}.part"  # this run's own, created exclusively
+        fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            os.replace(part, path)
+        except BaseException:
+            os.unlink(part)
+            raise
     print(path)
