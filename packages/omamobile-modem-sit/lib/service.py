@@ -47,6 +47,7 @@ from at import radio
 from calls import call_status, dial_payload, ring
 import data_call
 from data_call import paths as bearer_paths
+import ims
 from ims import REGISTRATION, record_registration
 from inbox import persist_sms
 from sit import Sit, ModemError
@@ -321,6 +322,19 @@ class Service:
         self.reconnect_data = False
         self.sim = dict(state='unknown')
         self.radio = 'unknown'
+        # The functionality level sitd itself last set through the radio
+        # action (0 off, 1 on); None: as start-up left it. GET_RADIO_POWER
+        # went on reading "on" on a Pixel 9a after AT+CFUN=0 (2026-11-21),
+        # so the radio the owner switched off is reported from this.
+        self.cfun = None
+        # How start-up set up sitd's own IMS bearer (bringup.start: apn,
+        # ip_type, apn_types, pcscf_required, isim), for setting IMS up
+        # again after the owner's radio on; None before start-up, without
+        # IMS or with IMS on the modem's own attach bearer. A restore is due
+        # at ims_restore_at (monotonic), its tries counted for the backoff.
+        self.ims_setup = None
+        self.ims_restore_at = None
+        self.ims_restore_tries = 0
         self.current_stage = 'starting'
         # IMS as start-up left it: unknown (no start-up), off, pending, failed, registered.
         self.ims_state = 'unknown'
@@ -581,6 +595,10 @@ class Service:
         setup), so none starts while a call is live."""
         if self.reconnect_at is None or time.monotonic() < self.reconnect_at or not self.internet_setup:
             return
+        if self.cfun == 0:
+            # Switched off by the owner (airplane mode): waits for radio on.
+            self.reconnect_at = time.monotonic() + 30
+            return
         if self.radio == 'off':
             print('Internet bearer not set up again: the radio is off', flush=True)
             self.reconnect_at = None
@@ -644,6 +662,72 @@ class Service:
         print('Internet bearer set up again', flush=True)
         if self.reconnect_data:
             subprocess.run(['systemctl', 'start', 'omamobile-sit-data.service'], check=False)
+        self.publish()
+
+    def ims_off(self):
+        """Before the owner's radio off: the IMS PDN information withdrawn
+        (DEL_PDN_INFO, as stock withdraws it when the PDN goes), so the IMS
+        stack deregisters while it still can, and the registration record
+        goes. A refusal is logged; the radio goes off all the same."""
+        if not REGISTRATION.exists():
+            return
+        try:
+            ims.unregister(self.client)
+        except (ModemError, TimeoutError, RuntimeError, OSError) as error:
+            print('IMS PDN information not withdrawn before radio off:', type(error).__name__, error, flush=True)
+            REGISTRATION.unlink(missing_ok=True)
+
+    def radio_back(self):
+        """After the owner's radio on: the internet bearer and IMS come back
+        by themselves. The internet one through reconnect() (its drop was
+        seen while the radio went off; scheduled here if it wasn't), IMS
+        through restore_ims(), with sitd's own IMS bearer only."""
+        if self.internet_setup and self.reconnect_at is None and not self.reconnecting:
+            self.reconnect_at = time.monotonic() + 3
+            self.reconnect_tries = 0
+        if self.ims_setup is None:
+            if self.ims_state not in ('off', 'unknown'):
+                print('IMS not set up again after radio on: start-up used the modem\'s attach bearer'
+                      ' (calls and SMS come back with a reboot)', flush=True)
+            return
+        self.ims_state = 'pending'
+        self.ims_restore_at = time.monotonic() + 3
+        self.ims_restore_tries = 0
+
+    def restore_ims(self):
+        """IMS set up again after the owner's radio on (radio_back): once
+        packet-registered and the internet bearer's reconnect is done, the IMS
+        bearer as start-up set it up and ADD_PDN_INFO again (bringup.
+        restore_ims); the registration comes by its indication. Waits while a
+        call is live. A failed try comes back after 15 s, doubling to 5
+        minutes; after eight, calls and SMS wait for a reboot."""
+        if self.ims_restore_at is None or time.monotonic() < self.ims_restore_at:
+            return
+        if self.cfun == 0:
+            self.ims_restore_at = None
+            return
+        if self.live() or self.reconnect_at is not None or self.reconnecting:
+            self.ims_restore_at = time.monotonic() + 5
+            return
+        from bringup import restore_ims
+        try:
+            restore_ims(self)
+        except (ModemError, TimeoutError, RuntimeError, ValueError, OSError) as error:
+            self.ims_restore_tries += 1
+            if self.ims_restore_tries >= 8:
+                self.ims_restore_at = None
+                self.ims_state = 'failed'
+                print('IMS not set up again after radio on:', type(error).__name__, error,
+                      '(eight tries; calls and SMS come back with a reboot)', flush=True)
+            else:
+                delay = min(15 * 2 ** (self.ims_restore_tries - 1), 300)
+                self.ims_restore_at = time.monotonic() + delay
+                print('IMS setup after radio on failed:', type(error).__name__, error,
+                      f'(try {self.ims_restore_tries}; next in {delay} s)', flush=True)
+            self.publish()
+            return
+        self.ims_restore_at = None
+        self.ims_restore_tries = 0
         self.publish()
 
     def poll(self):
@@ -741,11 +825,17 @@ class Service:
         self.db.commit()
         return dict(state=state, error=error, completed=completed)
 
+    def radio_now(self):
+        """The radio as the owner sees it: off after sitd's own radio off
+        (whatever GET_RADIO_POWER says), else the modem's own report."""
+        return 'off' if self.cfun == 0 else self.radio
+
     def status(self, *, public=False):
         reg = self.registration()
-        voice = reg.get('state') == 2 and reg.get('features', 0) & 1 != 0
-        sms = reg.get('state') == 2 and reg.get('features', 0) & 2 != 0
-        data = bearer_paths(data_call.INTERNET_CID)[0].exists()
+        on = self.cfun != 0
+        voice = on and reg.get('state') == 2 and reg.get('features', 0) & 1 != 0
+        sms = on and reg.get('state') == 2 and reg.get('features', 0) & 2 != 0
+        data = on and bearer_paths(data_call.INTERNET_CID)[0].exists()
         modem = dict(present=True, stage=self.current_stage, ready=voice,
                      state='registered' if self.net['reg'] in ('home', 'roaming') else 'searching',
                      registration=self.net['reg'], tech=self.net['rat'],
@@ -753,8 +843,8 @@ class Service:
                      plmn=self.net['plmn'], operator_name=self.net['operator'],
                      voice=voice, sms=sms, data=data,
                      signal=self.signal if self.net['reg'] in ('home', 'roaming') else 0, audio=True,
-                     radio=self.radio, sim=dict(self.sim),
-                     ims='registered' if voice or sms else self.ims_state,
+                     radio=self.radio_now(), sim=dict(self.sim),
+                     ims='registered' if voice or sms else ('off' if not on else self.ims_state),
                      apn=dict(self.apn), data_available=self.apn.get('source') != 'none',
                      emergency_numbers=list(EMERGENCY + (EMERGENCY_NO_SIM if self.sim['state'] == 'absent' else ())))
         calls = [{k: v for k, v in c.items() if k != 'modem_id'} for c in self.calls.values()]
@@ -898,8 +988,16 @@ class Service:
                 raise ValueError('Radio state must be boolean')
             if not on and self.live():
                 raise RuntimeError('Call in progress')
+            if not on:
+                self.ims_off()
             radio(on)
+            self.cfun = 1 if on else 0
             self.next_poll = 0
+            if on:
+                self.radio_back()
+            else:
+                self.ims_restore_at = None
+            self.publish()
             return dict(radio='on' if on else 'off')
         if action == 'power-status':
             return dict(screen_on=self.screen_on, indications=dict(self.indication_counts))
@@ -1185,6 +1283,7 @@ def main():
             if args.bringup:  # without it the service writes nothing to the modem
                 service.follow_screen()
                 service.reconnect()
+                service.restore_ims()
             if time.monotonic() >= next_cp_check:
                 if not cp.online():
                     raise RuntimeError('CP left ONLINE; the modem unit keeps its crash record')

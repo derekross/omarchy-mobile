@@ -19,7 +19,8 @@ is followed by an IMS registration (state 2, voice|SMS); a dial goes
 dialing -> active, a hangup ends it; --incoming-sms delivers one SMS after
 the IMS registration. GET_RADIO_POWER answers POWER_OFF (3) until the
 first AT+CFUN, then STOP_NETWORK (1) or START_NETWORK (2), each change
-announced with IND_RADIO_STATE_CHANGED. Every value is made up: numbers are
+announced with IND_RADIO_STATE_CHANGED; AT+CFUN=0 ends every bearer (an
+empty IND_DATA_CALL_LIST_CHANGED). Every value is made up: numbers are
 fictional 555-01xx ones, addresses are from the documentation ranges.
 
   tools/sit-sim --ipc PATH --router PATH [--transcript FILE] [--search-polls N]
@@ -128,6 +129,11 @@ class Sim:
                 self.radio_state = 2 if self.radio else 1
                 conn.send(b'\r\nOK\r\n')
                 self.indicate(0x0802, struct.pack('<I', self.radio_state))
+                if not self.radio and self.bearers:
+                    # As the Pixel 9a's modem: the radio off ends every
+                    # bearer, announced as an empty data-call list.
+                    self.bearers.clear()
+                    self.indicate(0x0604, bytes([0]))
             elif line == 'AT+CFUN?':
                 conn.send(b'\r\n+CFUN: %d\r\n\r\nOK\r\n' % self.radio)
             else:
@@ -157,6 +163,7 @@ class Sim:
         self.respond(mid, token)
 
     r_0613 = r_0625 = r_0d39 = r_0d07 = r_0d1d = r_0102 = r_0902 = r_0928 = ok
+    r_0d38 = ok                                 # AIMS_DEL_PDN_INFO
 
     def r_0603(self, mid, token, p):            # SET_INITIAL_ATTACH_APN
         self.log(event='initial_attach', apn=p[4:0xd9 - 12].split(b'\0')[0].decode('ascii', 'replace'))

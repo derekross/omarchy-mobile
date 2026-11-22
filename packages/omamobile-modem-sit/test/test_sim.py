@@ -176,6 +176,52 @@ class SimulatorTests(unittest.TestCase):
         self.assertEqual(self.daemon.wait(15), 0)
         self.assertFalse((self.dir / 'run' / 'socket').exists())
 
+    def wait_status(self, predicate, seconds=40):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            modem = json.loads(self.cli('status', '--json'))['modem']
+            if predicate(modem):
+                return modem
+            time.sleep(.2)
+        self.fail('status never came: ' + json.dumps(modem) + (self.dir / 'daemon.log').read_text()[-3000:])
+
+    def test_radio_off_and_on_brings_ims_and_data_back(self):
+        # Airplane mode: the owner's radio off and on, as the quick-settings
+        # tile sends them. The radio off ends both bearers (the simulator,
+        # like the Pixel 9a's modem, lists none after AT+CFUN=0).
+        self.start()
+        self.wait_ready()
+        self.wait_status(lambda m: m['voice'] and m['data'])
+        self.assertEqual(self.cli('radio', 'off').strip(), 'off')
+        modem = json.loads(self.cli('status', '--json'))['modem']
+        # The status says what the owner did, at once: not the last
+        # registration (a Pixel 9a's GET_RADIO_POWER went on reading "on").
+        self.assertEqual((modem['radio'], modem['voice'], modem['sms'], modem['data'], modem['ims']),
+                         ('off', False, False, False, 'off'))
+        self.assertIn('radio: off', self.cli('status'))
+        time.sleep(2)            # the internet bearer's drop seen; nothing set up while off
+        entries = self.transcript_entries()
+        ids = [e['id'] for e in entries if e.get('type') == 'req']
+        at = [i for i, e in enumerate(entries) if e.get('cmd') == 'AT+CFUN=0']
+        withdraw = [i for i, e in enumerate(entries) if e.get('type') == 'req' and e['id'] == 0x0d38]
+        self.assertEqual(len(withdraw), 1)
+        self.assertLess(withdraw[0], at[-1])             # the IMS PDN withdrawn before the radio goes off
+        setups_before = len([e for e in entries if e.get('event') == 'setup_data_call'])
+        self.assertEqual(self.cli('radio', 'on').strip(), 'on')
+        modem = self.wait_status(lambda m: m['voice'] and m['sms'] and m['data'])
+        self.assertEqual((modem['radio'], modem['ims']), ('on', 'registered'))
+        entries = self.transcript_entries()
+        self.assertFalse([e for e in entries if 'violation' in e])
+        setups = [(e['cid'], e['apn'], e['ip']) for e in entries if e.get('event') == 'setup_data_call']
+        # Both bearers set up again, the internet first, IMS as start-up made it.
+        self.assertEqual(setups[setups_before:], [(1, 'internet.example', 3), (2, 'ims', 2)])
+        ids = [e['id'] for e in entries if e.get('type') == 'req']
+        self.assertEqual(ids.count(0x0d08), 2)           # ADD_PDN_INFO once at start-up, once after radio on
+        self.assertEqual(ids.count(0x0d39), 1)           # the IMS stack started once
+        log = (self.dir / 'daemon.log').read_text()
+        self.assertIn('IMS PDN information sent again after radio on', log)
+        self.assertIn('Internet bearer set up again', log)
+
     def control(self, command):
         with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
             sock.sendto(command.encode(), str(self.dir / 'control'))

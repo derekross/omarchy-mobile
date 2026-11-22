@@ -260,6 +260,66 @@ class ServiceTests(unittest.TestCase):
         struct.pack_into('<I', payload, 2 + 0x40, rsrp)
         return struct.pack('<BBHH', 2, 0, 0x0906, 8 + len(payload)) + bytes(2) + bytes(payload)
 
+    def test_radio_off_is_reported_as_off_whatever_the_modem_reads(self):
+        # A Pixel 9a's GET_RADIO_POWER went on reading "on" after AT+CFUN=0,
+        # and the last IMS registration stayed "registered" (2026-11-21).
+        app_service.REGISTRATION.write_text(json.dumps(dict(state=2, features=3)))
+        data_call_paths = app_service.bearer_paths(app_service.data_call.INTERNET_CID)[0]
+        data_call_paths.write_text('{}')
+        self.service.radio = 'on'
+        self.service.cfun = 0
+        modem = self.service.status()['modem']
+        self.assertEqual((modem['radio'], modem['voice'], modem['sms'], modem['data'], modem['ims']),
+                         ('off', False, False, False, 'off'))
+        self.service.cfun = 1
+        modem = self.service.status()['modem']
+        self.assertEqual((modem['radio'], modem['voice'], modem['data']), ('on', True, True))
+    def test_radio_action_withdraws_ims_first_and_schedules_its_return(self):
+        app_service.REGISTRATION.write_text(json.dumps(dict(state=2, features=3)))
+        order = []
+        self.client.request.side_effect = lambda ident, *a, **k: order.append(ident) or b''
+        self.service.ims_setup = dict(apn='ims', ip_type='ipv6', apn_types=None, pcscf_required=True, isim=False)
+        self.service.internet_setup = dict(apn='internet', ip_type='ipv4v6')
+        with patch.object(app_service, 'radio', side_effect=lambda on: order.append('on' if on else 'off')), \
+                patch('builtins.print'):
+            self.assertEqual(self.service.dispatch(dict(action='radio', on=False)), dict(radio='off'))
+            self.assertEqual(order, [0x0d38, 'off'])          # DEL_PDN_INFO before the radio goes off
+            self.assertFalse(app_service.REGISTRATION.exists())
+            self.assertIsNone(self.service.ims_restore_at)
+            self.assertEqual(self.service.dispatch(dict(action='radio', on=True)), dict(radio='on'))
+        self.assertEqual(self.service.cfun, 1)
+        self.assertIsNotNone(self.service.ims_restore_at)
+        self.assertIsNotNone(self.service.reconnect_at)
+        self.assertEqual(self.service.ims_state, 'pending')
+    def test_ims_restore_waits_for_the_internet_and_backs_off(self):
+        self.service.ims_setup = dict(apn='ims', ip_type='ipv6', apn_types=None, pcscf_required=True, isim=False)
+        self.service.cfun = 1
+        self.service.ims_restore_at = 0
+        self.service.reconnect_at = 10 ** 9                # the internet bearer's reconnect first
+        with patch('bringup.restore_ims') as restore:
+            self.service.restore_ims()
+            restore.assert_not_called()
+            self.assertIsNotNone(self.service.ims_restore_at)   # deferred, not dropped
+            self.service.reconnect_at = None
+            self.service.ims_restore_at = 0
+            restore.side_effect = RuntimeError('PS network is not registered yet')
+            with patch('builtins.print'):
+                self.service.restore_ims()
+            self.assertEqual(self.service.ims_restore_tries, 1)
+            self.assertGreater(self.service.ims_restore_at, app_service.time.monotonic() + 10)
+            self.service.ims_restore_at = 0
+            self.service.cfun = 0                           # switched off again: no more tries
+            self.service.restore_ims()
+            self.assertIsNone(self.service.ims_restore_at)
+            self.assertEqual(restore.call_count, 1)
+    def test_owners_radio_off_keeps_the_internet_reconnect_waiting(self):
+        self.service.internet_setup = dict(apn='internet', ip_type='ipv4v6')
+        self.service.reconnect_at = 0
+        self.service.radio = 'off'
+        self.service.cfun = 0
+        self.service.reconnect()
+        self.assertIsNotNone(self.service.reconnect_at)      # not given up: the radio comes back on
+        self.client.request.assert_not_called()
     def test_radio_state_10_is_on(self):
         self.assertEqual(app_service.RADIO[10], 'on')
 
