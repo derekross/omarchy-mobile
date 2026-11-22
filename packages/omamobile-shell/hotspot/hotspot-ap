@@ -17,8 +17,11 @@
 #                     17 in a test on the 8 Pro, no association at all on the 9a). Devices without 802.11w can't join.
 #                     Why the forwarding: the kernel forwards by the flag of the link a packet arrives on.
 #                     NetworkManager's ipv4.forwarding "auto" turns it on, while a shared connection is up, on links it
-#                     manages; mobile data on the 9a (rmnet0) isn't one of them, so this is in case its flag is 0 there
-#                     (not confirmed on the 9a yet).
+#                     manages; mobile data on the 9a (rmnet0) isn't one of them, and there its flag was 0: replies only
+#                     reached the clients with it on (den-kloot's run on #1001).
+#                     The bind also sets proto rsn, pairwise and group ccmp (pmf 3 needs them; without proto
+#                     wpa_supplicant tries a WPA v1 element too and the access point fails to start), written into the
+#                     profile like band and pmf.
 #   hotspot-ap down   (ExecStopPost, so it runs after every end, also a failed start) takes all of that away again:
 #                     profile down, the UFW rules out, forwarding set back, ap0 deleted; if the client Wi-Fi lost its
 #                     route, its reconnect is started as a transient unit (hotspot-ap reconnect) so the stop does not wait.
@@ -27,6 +30,8 @@
 #   stop_temp_mc=N   SoC millidegrees that end it (unset: off)
 # What the client Wi-Fi does meanwhile depends on the phone and the home network (it can drop for a few seconds and move
 # to the hotspot's 2.4 GHz channel); the helper only brings it back if it has no route after the stop.
+# Seen on brcmfmac (9a): with no channel in the profile the access point comes up on channel 6, and each start spends
+# about 2.7 s on wpa_supplicant's P2P device for ap0, which the firmware refuses (p2p-dev-ap0, err=-5); harmless.
 # Why it stopped is left in /run/omamobile-hotspot/last-stop (too-hot, ended, failed: ...), for a look after the fact.
 set -uo pipefail
 export LC_ALL=C
@@ -70,35 +75,36 @@ hsuuid() {
   return 1
 }
 # the device of the default IPv4 route that is not ap0 (Wi-Fi, USB or mobile data), for the log only
-uplink() { ip -4 route show default 2>/dev/null | awk -v ap="$AP" '{ for (i = 1; i < NF; i++) if ($i == "dev" && $(i+1) != ap) { print $(i+1); exit } }'; }
+uplink() { ip -4 route show default 2>/dev/null | awk -v ap="$AP" '/ linkdown/ { next } { for (i = 1; i < NF; i++) if ($i == "dev" && $(i+1) != ap) { print $(i+1); exit } }'; }
 ufw_on() { command -v ufw >/dev/null 2>&1 && (( $(timeout 8 ufw status 2>/dev/null | grep -c '^Status: active' || true) > 0 )); }
 # DHCP and DNS from the clients to NetworkManager's dnsmasq, and forwarding from ap0 to any uplink (it can change while
 # the hotspot is on). The same fixed set is added by run and deleted by down, so a crash leaves nothing down cannot remove.
 RULES=("allow in on $AP to any port 67 proto udp" "allow in on $AP to any port 53 proto udp" "allow in on $AP to any port 53 proto tcp" "route allow in on $AP")
+# How each rule shows in `ufw status` (its usual form, e.g. "67/udp on ap0 ALLOW IN Anywhere"), to find an owner's own
+# equal rule: ufw can't hold ours beside it and would put our comment on theirs, so the stop would delete it.
+STATUS_OF=("67/udp on $AP ALLOW IN" "53/udp on $AP ALLOW IN" "53/tcp on $AP ALLOW IN" "on $AP ALLOW FWD")
 ufw_add() {
-  local r
-  # word splitting of $r is wanted: the rule's words are ufw's arguments
-  # shellcheck disable=SC2086
-  for r in "${RULES[@]}"; do timeout 8 ufw $r comment omamobile-hotspot >/dev/null 2>&1 || log "ufw refused: $r"; done
+  local i st
+  st=$(timeout 8 ufw status 2>/dev/null | grep -v '# omamobile-hotspot' | tr -s ' ') || st=''
+  for i in "${!RULES[@]}"; do
+    # the owner already allows this on the interface (untagged): leave it as theirs and don't add ours
+    if [[ $st == *"${STATUS_OF[$i]}"* ]]; then log "keeping the owner's own rule: ${STATUS_OF[$i]}"; continue; fi
+    # word splitting is wanted: the rule's words are ufw's arguments
+    # shellcheck disable=SC2086
+    timeout 8 ufw ${RULES[$i]} comment omamobile-hotspot >/dev/null 2>&1 || log "ufw refused: ${RULES[$i]}"
+  done
 }
 ufw_del() {
   local r n i
   command -v ufw >/dev/null 2>&1 || return 0
-  # shellcheck disable=SC2086
-  for r in "${RULES[@]}"; do
-    if [[ $r == route\ * ]]; then
-      timeout 8 ufw --force route delete ${r#route } comment omamobile-hotspot >/dev/null 2>&1 || timeout 8 ufw --force route delete ${r#route } >/dev/null 2>&1 || :
-    else
-      timeout 8 ufw --force delete $r comment omamobile-hotspot >/dev/null 2>&1 || timeout 8 ufw --force delete $r >/dev/null 2>&1 || :
-    fi
-  done
-  # then anything still tagged by this script on ap0 (IPv4 and IPv6 copies), by number, highest first
-  for ((i = 0; i < 10; i++)); do
+  # only the rules tagged by this script on ap0 (IPv4 and IPv6 copies), by number, highest first: a delete by spec would
+  # also take the owner's own equal rule, which ufw can't hold beside ours
+  for ((i = 0; i < 20; i++)); do
     n=$(timeout 8 ufw status numbered 2>/dev/null | awk -v ap=" on $AP" 'index($0, ap) && /# omamobile-hotspot/ && match($0, /\[ *[0-9]+\]/) { v = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", v); n = v } END { print n }')
     [[ $n =~ ^[0-9]+$ ]] || break
     timeout 8 ufw --force delete "$n" >/dev/null 2>&1 || break
   done
-  (( $(timeout 8 ufw status 2>/dev/null | grep -c " on $AP" || true) > 0 )) && log "UFW rules on $AP are left; check ufw status"
+  (( $(timeout 8 ufw status numbered 2>/dev/null | grep " on $AP" | grep -c "# omamobile-hotspot" || true) > 0 )) && log "tagged UFW rules on $AP are left; check ufw status"
   return 0
 }
 # connected clients for the page and the tile (the station list needs no root on every kernel, so root writes it):
@@ -174,7 +180,8 @@ fwd_restore() {
   return 0
 }
 # every device with a default route except the access point (Wi-Fi, mobile data, USB)
-uplinks() { ip -4 route show default 2>/dev/null | awk -v ap="$AP" '{ for (i = 1; i < NF; i++) if ($i == "dev" && $(i+1) != ap) print $(i+1) }' | sort -u; }
+# (a route marked linkdown, like usb0 with no cable, carries nothing and is skipped)
+uplinks() { ip -4 route show default 2>/dev/null | awk -v ap="$AP" '/ linkdown/ { next } { for (i = 1; i < NF; i++) if ($i == "dev" && $(i+1) != ap) print $(i+1) }' | sort -u; }
 
 run() {
   mkdir -p "$RUN"; rm -f "$RUN/last-stop" "$RUN/clients"
@@ -216,7 +223,8 @@ run() {
     save_uplink "$sta"
   fi
   nm connection modify uuid "$hs" connection.interface-name "$AP" connection.autoconnect no 802-11-wireless.mode ap \
-    802-11-wireless.band bg 802-11-wireless-security.pmf 3 ipv4.method shared ipv6.method ignore >/dev/null 2>&1 \
+    802-11-wireless.band bg 802-11-wireless-security.pmf 3 \
+    802-11-wireless-security.proto rsn 802-11-wireless-security.pairwise ccmp 802-11-wireless-security.group ccmp ipv4.method shared ipv6.method ignore >/dev/null 2>&1 \
     || { stopped "failed: could not bind the Hotspot settings"; exit 1; }
   # rules persist across a power loss while on: clear any left, then add the set once
   if ufw_on; then ufw_del; ufw_add; fi

@@ -33,15 +33,20 @@ stub iw 'case "$*" in
   *) exit 1 ;;
 esac'
 stub ufw 'case "$*" in
-  "status numbered") echo "Status: active"; [[ -e $ST/leftover ]] && printf "[ 1] 22/tcp ALLOW IN Anywhere\n[ 7] Anywhere on ap0 ALLOW FWD Anywhere # omamobile-hotspot\n"; true ;;
-  status) echo "Status: active"; [[ -e $ST/leftover ]] && echo "Anywhere on ap0 ALLOW FWD Anywhere"; true ;;
+  "status numbered") echo "Status: active"; [[ -e $ST/ownerdel ]] || echo "[ 3] 67/udp on ap0 ALLOW IN Anywhere"
+    [[ -e $ST/leftover ]] && printf "[ 1] 22/tcp ALLOW IN Anywhere\n[ 7] Anywhere on ap0 ALLOW FWD Anywhere # omamobile-hotspot\n"
+    [[ -e $ST/leftover_wl ]] && echo "[ 9] 67/udp on wlp1s0 ALLOW IN Anywhere # omamobile-hotspot"; true ;;
+  status) echo "Status: active"; [[ -e $ST/leftover ]] && echo "Anywhere on ap0 ALLOW FWD Anywhere"
+    [[ -e $ST/ownerrule ]] && echo "67/udp on ap0              ALLOW IN    Anywhere"; true ;;
   "--force delete 7") rm -f "$ST/leftover" ;;
+  "--force delete 9") rm -f "$ST/leftover_wl" ;;
+  "--force delete 3") touch "$ST/ownerdel" ;;
   "--force delete "[0-9]*) exit 1 ;;
   "--force delete "*|"--force route delete "*) ;;
   allow*|route*) ;;
   *) exit 1 ;;
 esac'
-stub ip '[[ -e $ST/route ]] && echo "default via 10.0.0.1 dev wlp1s0"; [[ -e $ST/linkdown ]] && echo "default via 10.0.0.1 dev wlp1s0 linkdown"; [[ -e $ST/rmnet ]] && echo "default dev rmnet0 proto static metric 700"; true'
+stub ip '[[ -e $ST/route ]] && echo "default via 10.0.0.1 dev wlp1s0"; [[ -e $ST/linkdown ]] && echo "default via 10.0.0.1 dev wlp1s0 linkdown"; [[ -e $ST/rmnet ]] && echo "default dev rmnet0 proto static metric 700"; [[ -e $ST/usbdown ]] && echo "default via 172.16.42.2 dev usb1 linkdown"; true'
 stub ping '[[ ! -e $ST/silentgw ]]'
 stub systemd-notify 'true'
 # the reconnect unit: run at once (the tests read its result); a failing systemd-run is the fallback case
@@ -68,7 +73,7 @@ echo 50000 > "$tmp/temp"
 : > "$st/log"
 ap run >/dev/null
 grep -q "iw phy phy0 interface add ap0 type __ap" "$st/log" || { echo "FAIL: no ap0" >&2; exit 1; }
-grep -q "connection modify uuid $U connection.interface-name ap0 .*802-11-wireless-security.pmf 3 ipv4.method shared" "$st/log" || { echo "FAIL: not bound to ap0" >&2; exit 1; }
+grep -q "connection modify uuid $U connection.interface-name ap0 .*802-11-wireless-security.pmf 3 .*ipv4.method shared" "$st/log" || { echo "FAIL: not bound to ap0" >&2; exit 1; }
 eq "$(grep -c '^ufw allow in on ap0\|^ufw route allow in on ap0' "$st/log")" 4
 (( $(grep '^ufw ' "$st/log" | grep -v status | grep -cv ' on ap0' || true) > 0 )) && { echo "FAIL: a UFW rule not on ap0" >&2; exit 1; }
 eq "$(cat "$tmp/run/last-stop")" ended
@@ -89,10 +94,18 @@ eq "$(cat "$tmp/run/clients")" "$(printf '02:bb:cc:dd:ee:01\t\t\n02:22:33:44:55:
 : > "$st/stations"; ap run >/dev/null
 [[ -e $tmp/run/clients && ! -s $tmp/run/clients ]] || { echo "FAIL: list not emptied" >&2; exit 1; }
 mv "$tmp/leases.k" "$tmp/leases"; rm -f "$st/stations"; ap run >/dev/null
+# an owner's own rule equal to one of ours: ours isn't added (ufw would put our comment on theirs), the rest are
+touch "$st/ownerrule"; : > "$st/log"; ap run >/dev/null 2>&1 || true
+grep -c '^ufw allow in on ap0 to any port 67 proto udp' "$st/log" >/dev/null && { echo "FAIL: added a rule equal to the owner's" >&2; exit 1; }
+eq "$(grep -c '^ufw allow in on ap0\|^ufw route allow in on ap0' "$st/log")" 3
+rm -f "$st/ownerrule"; ap down >/dev/null 2>&1 || true
+ap run >/dev/null
 # down: profile down, the same rules deleted, ap0 gone, the saved client connection brought up again even with a route
 rm -f "$st/route"; touch "$st/leftover"; : > "$st/log"
 ap down >/dev/null
-eq "$(grep -c '^ufw --force delete allow.*comment\|^ufw --force route delete allow.*comment' "$st/log")" 4
+# never by spec (that would take the owner's own equal rule too), and the owner's untagged rule on ap0 stays
+eq "$(grep -c '^ufw --force delete allow\|^ufw --force route delete' "$st/log" || true)" 0
+[[ -e $st/ownerdel ]] && { echo "FAIL: the owner's own rule on ap0 was deleted" >&2; exit 1; }
 grep -qx 'ufw --force delete 7' "$st/log" || { echo "FAIL: a tagged leftover rule was not deleted by number" >&2; exit 1; }
 [[ -e $st/leftover ]] && { echo "FAIL: leftover rule kept" >&2; exit 1; }
 [[ -e $st/ap0 ]] && { echo "FAIL: ap0 left" >&2; exit 1; }
@@ -111,7 +124,7 @@ echo 0 > "$st/up"; ap run >/dev/null; rm -f "$st/route"; touch "$st/linkdown"; :
 ap down >/dev/null; rm -f "$st/linkdown"
 grep -q "connection up uuid $W ifname wlp1s0" "$st/log" || { echo "FAIL: a linkdown route was taken as working" >&2; exit 1; }
 # a gateway that drops ping but is REACHABLE: the working Wi-Fi is left alone
-stub ip '[[ $1 == -4 && $2 == neigh ]] && { echo "10.0.0.1 lladdr aa:bb:cc:dd:ee:ff REACHABLE"; exit 0; }; [[ -e $ST/route ]] && echo "default via 10.0.0.1 dev wlp1s0"; [[ -e $ST/linkdown ]] && echo "default via 10.0.0.1 dev wlp1s0 linkdown"; [[ -e $ST/rmnet ]] && echo "default dev rmnet0 proto static metric 700"; true'
+stub ip '[[ $1 == -4 && $2 == neigh ]] && { echo "10.0.0.1 lladdr aa:bb:cc:dd:ee:ff REACHABLE"; exit 0; }; [[ -e $ST/route ]] && echo "default via 10.0.0.1 dev wlp1s0"; [[ -e $ST/linkdown ]] && echo "default via 10.0.0.1 dev wlp1s0 linkdown"; [[ -e $ST/rmnet ]] && echo "default dev rmnet0 proto static metric 700"; [[ -e $ST/usbdown ]] && echo "default via 172.16.42.2 dev usb1 linkdown"; true'
 echo 0 > "$st/up"; ap run >/dev/null; touch "$st/route" "$st/silentgw"; : > "$st/log"
 ap down >/dev/null; rm -f "$st/silentgw"
 grep -q "connection up uuid $W" "$st/log" && { echo "FAIL: bounced a working Wi-Fi whose gateway drops ping" >&2; exit 1; }
@@ -146,9 +159,9 @@ grep -q '^ufw allow in on wlp1s0 to any port 67' "$st/log" || { echo "FAIL: UFW 
 grep -q '^iw dev wlp1s0 station dump' "$st/log" || { echo "FAIL: stations not read on wlp1s0" >&2; exit 1; }
 grep -q '^iw dev ap0 station dump' "$st/log" && { echo "FAIL: stations read on ap0 in wlp1s0 mode" >&2; exit 1; }
 echo interface=ap0 > "$tmp/hotspot.conf"     # a changed value: down still uses the interface run used
-: > "$st/log"; ap down >/dev/null
+: > "$st/log"; touch "$st/leftover_wl"; ap down >/dev/null
 grep -q 'iw dev wlp1s0 del\|iw dev ap0 del' "$st/log" && { echo "FAIL: deleted an interface it did not make" >&2; exit 1; }
-grep -q '^ufw --force delete allow in on wlp1s0' "$st/log" || { echo "FAIL: wlp1s0 rules not removed" >&2; exit 1; }
+grep -qx 'ufw --force delete 9' "$st/log" && [[ ! -e $st/leftover_wl ]] || { echo "FAIL: tagged wlp1s0 rules not removed by number" >&2; exit 1; }
 grep -q "connection up uuid $W ifname wlp1s0" "$st/log" || { echo "FAIL: client Wi-Fi not brought back" >&2; exit 1; }
 echo interface=ap0 > "$tmp/hotspot.conf"; rm -rf "$tmp/sys/net/ap0"
 cp "$tmp/nmcli.orig" "$tmp/bin/nmcli"
@@ -193,7 +206,7 @@ ap run >/dev/null 2>&1 && { echo "FAIL: started with an empty password" >&2; exi
 eq "$(cat "$tmp/run/last-stop")" "failed: the Hotspot settings have no password"
 rm -f "$st/nopsk"; ap down >/dev/null 2>&1 || true
 # the bind asks for PMF required (pmf 3): the only setting clients can join on this firmware (#523)
-grep -c "connection modify uuid $U .*802-11-wireless.band bg 802-11-wireless-security.pmf 3" "$st/log" >/dev/null || { echo "FAIL: the profile is not bound with pmf 3" >&2; exit 1; }
+grep -c "connection modify uuid $U .*802-11-wireless.band bg 802-11-wireless-security.pmf 3 802-11-wireless-security.proto rsn 802-11-wireless-security.pairwise ccmp 802-11-wireless-security.group ccmp" "$st/log" >/dev/null || { echo "FAIL: the profile is not bound with pmf 3 and RSN/CCMP" >&2; exit 1; }
 # no stop temperature set (the default): a hot phone still starts, and the watch never ends it for heat
 ap down >/dev/null 2>&1 || true
 rm -f "$tmp/hotspot.conf" "$tmp/run/last-stop"; echo 61000 > "$tmp/temp"; : > "$st/log"
@@ -208,9 +221,12 @@ eq "$(cat "$tmp/run/last-stop")" too-hot
 rm -f "$tmp/hotspot.conf" "$tmp/run/last-stop"; echo 50000 > "$tmp/temp"
 for l in all ap0 wlp1s0 rmnet0 usb0; do mkdir -p "$tmp/sysctl/$l"; echo 0 > "$tmp/sysctl/$l/forwarding"; done
 echo 1 > "$tmp/sysctl/usb0/forwarding"; touch "$st/route"; rm -f "$st/rmnet"
+mkdir -p "$tmp/sysctl/usb1"; echo 0 > "$tmp/sysctl/usb1/forwarding"
+touch "$st/usbdown"   # a default route marked linkdown (usb1, no cable) carries nothing: no forwarding for it
 echo -6 > "$st/upstart"; ( sleep 0.35; touch "$st/rmnet" ) &
 ap run >/dev/null 2>&1 || true; wait; rm -f "$st/upstart"
 eq "$(cat "$tmp/sysctl/all/forwarding")" 0
+eq "$(cat "$tmp/sysctl/usb1/forwarding")" 0
 eq "$(cat "$tmp/sysctl/ap0/forwarding") $(cat "$tmp/sysctl/wlp1s0/forwarding") $(cat "$tmp/sysctl/rmnet0/forwarding")" "1 1 1"
 [[ -e $tmp/run/fwd/usb0 ]] && { echo "FAIL: a link already forwarding was recorded" >&2; exit 1; }
 # a second run before any down (a crash; the link back at 0) keeps the first values
@@ -223,6 +239,7 @@ eq "$(cat "$tmp/run/fwd/wlp1s0")" 0
 ap down >/dev/null 2>&1 || true
 eq "$(cat "$tmp/sysctl/ap0/forwarding") $(cat "$tmp/sysctl/wlp1s0/forwarding") $(cat "$tmp/sysctl/rmnet0/forwarding") $(cat "$tmp/sysctl/usb0/forwarding") $(cat "$tmp/sysctl/all/forwarding")" "0 0 0 1 0"
 [[ -z $(ls -A "$tmp/run/fwd" 2>/dev/null) ]] || { echo "FAIL: forwarding records left after down" >&2; exit 1; }
+rm -f "$st/usbdown"
 rm -f "$st/rmnet"
 # a link that is gone at down drops its record; one whose write fails keeps it
 mkdir -p "$tmp/run/fwd"; echo 0 > "$tmp/run/fwd/gone0"; echo 0 > "$tmp/run/fwd/ro0"
