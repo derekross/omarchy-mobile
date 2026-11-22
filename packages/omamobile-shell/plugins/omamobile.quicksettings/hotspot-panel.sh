@@ -6,6 +6,8 @@
 #   hotspot-panel.sh set NAME PASS    a new network name and password; a running
 #                                     hotspot restarts with them. Prints
 #                                     "ok: ..." or "error: ..."
+#   hotspot-panel.sh on|off           turn the hotspot on or off (the tile and the
+#                                     page's switch, through tile-action.sh)
 #   hotspot-panel.sh share on|off     "Share VPN": devices on the hotspot reach
 #                                     what the phone's VPN reaches
 #   hotspot-panel.sh alltraffic on|off
@@ -33,7 +35,11 @@
 # (OMAMOBILE_HOTSPOT_SYSTEM_BACKEND names another path, the test's scratch
 # one; or ~/.config/omamobile/hotspot-backend, for the owner's own) that takes
 # the same verbs and prints the same lines replaces everything below; this
-# script then only draws the QR code for it.
+# script then only draws the QR code for it. "on" and "off" go to it too, so
+# the tile starts the device's hotspot and not NetworkManager's (tile-action.sh
+# and tile-state.sh ask this script). A backend may also answer "active" with
+# just on or off, which the tile's state uses; without it the state line is
+# read.
 #
 # The QR code is the usual WIFI: string, drawn by qrencode into the runtime
 # directory; without qrencode the page shows no code.
@@ -119,9 +125,33 @@ case ${1:-} in
     if [[ -n $backend ]]; then "$backend" set "$name" "$pass"; else nm_set "$name" "$pass"; fi
     rm -f "$QR"
     ;;
+  backend)
+    # for tile-action.sh and tile-state.sh: exit 0 when a device backend answers
+    [[ -n $backend ]]
+    ;;
+  active)
+    # the tile's state, cheaply: a backend's own "active" (on or off) when it has
+    # one, else its state line; no QR code here
+    [[ -n $backend ]] || { echo "usage: active needs a device backend" >&2; exit 2; }
+    a=$("$backend" active 2>/dev/null) || a=''
+    if [[ $a != on && $a != off ]]; then
+      a=$("$backend" state 2>/dev/null | python3 -c 'import json,sys
+try: print("on" if json.loads(sys.stdin.readline()).get("hotspot") == "on" else "off")
+except Exception: print("off")')
+    fi
+    echo "$a"
+    ;;
+  on|off)
+    if [[ -n $backend ]]; then exec "$backend" "$1"; fi
+    if [[ $1 == on ]]; then
+      nmcli radio wifi on
+      exec nmcli device wifi hotspot con-name "$NM_CON"
+    fi
+    exec nmcli connection down "$NM_CON"
+    ;;
   share|alltraffic)
     case ${2:-} in on|off) ;; *) echo "usage: hotspot-panel.sh $1 on|off" >&2; exit 2 ;; esac
     if [[ -n $backend ]]; then "$backend" "$1" "$2"; else nm_share; fi
     ;;
-  *) echo "usage: hotspot-panel.sh state | set NAME PASSWORD | share on|off | alltraffic on|off" >&2; exit 2 ;;
+  *) echo "usage: hotspot-panel.sh state | active | backend | on | off | set NAME PASSWORD | share on|off | alltraffic on|off" >&2; exit 2 ;;
 esac

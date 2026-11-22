@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# The Wi-Fi hotspot, on its own firmware interface ap0 (see /usr/lib/omamobile-shell/hotspot/hotspot-ap). Started and
+# stopped by the shell's Hotspot tile and page (hotspot-backend) as the active local user, through the polkit rule
+# 50-omamobile-hotspot.rules (start and stop of this unit only). Never enabled: the hotspot is off after a reboot.
+[Unit]
+Description=Wi-Fi hotspot (ap0)
+After=NetworkManager.service
+Requires=NetworkManager.service
+# only on a phone whose device package asks for this hotspot
+ConditionPathExists=/usr/share/omamobile/hotspot.conf
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+NotifyAccess=all
+ExecStart=/usr/lib/omamobile-shell/hotspot/hotspot-ap run
+ExecStopPost=/usr/lib/omamobile-shell/hotspot/hotspot-ap down
+TimeoutStartSec=120
+TimeoutStopSec=150

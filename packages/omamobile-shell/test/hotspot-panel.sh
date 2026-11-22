@@ -30,7 +30,7 @@ case "$*" in
   "-t -f TYPE connection show --active") echo 802-11-wireless ;;
   "-t -f DEVICE,NAME connection show --active") [ -e '"$tmp"'/active ] && echo "wlan0:Hotspot" ;;
   "connection modify Hotspot 802-11-wireless.ssid "*) echo "nmcli $*" >>'"$log"'; echo "$5" >'"$tmp"'/ssid; echo "$7" >'"$tmp"'/psk ;;
-  "connection up Hotspot") echo "nmcli $*" >>'"$log"' ;;
+  "connection up Hotspot"|"radio wifi on"|"device wifi hotspot con-name Hotspot"|"connection down Hotspot") echo "nmcli $*" >>'"$log"' ;;
   *) echo "nmcli: unexpected $*" >&2; exit 1 ;;
 esac'
 stub iw 'printf "Station aa\nStation bb\n"'
@@ -105,7 +105,7 @@ echo "backend $*" >>"$LOG"
 case $1 in
   state) echo '{"backend":"own","hotspot":"on","vpn":"on","share":"on","share_available":true,"prefer_share":true,"all_traffic_available":true,"all_traffic":false,"editable":true,"ssid":"Own","psk":"ownpassword","clients":1,"uplink_note":"Shares mobile data only."}' ;;
   set) echo "ok: own set" ;;
-  share|alltraffic) echo ok ;;
+  share|alltraffic|on|off) echo ok ;;
 esac
 EOF
 chmod +x "$tmp/home/.config/omamobile/hotspot-backend"
@@ -120,6 +120,11 @@ own set "Own" "ownpassword" | grep -c '^ok: own set' >/dev/null || fail "set goe
 own share on | grep -c '^ok' >/dev/null && grep -q 'backend share on' "$log" || fail "share goes to the device's backend"
 own alltraffic off | grep -c '^ok' >/dev/null && grep -q 'backend alltraffic off' "$log" || fail "alltraffic goes to the device's backend"
 (own set "Own" "short" || true) | grep -c '^error:' >/dev/null || fail "the checks run before any backend"
+own on | grep -c '^ok' >/dev/null && grep -q 'backend on' "$log" || fail "on goes to the device's backend"
+own off | grep -c '^ok' >/dev/null && grep -q 'backend off' "$log" || fail "off goes to the device's backend"
+own backend || fail "the backend verb says a device backend answers"
+# a backend without the "active" verb (this one answers it with nothing): its state line decides
+[[ $(own active) == on ]] || fail "active falls back to the backend's state line"
 pass "hotspot-panel.sh: a device's own backend"
 
 # ---- the system backend (its path from OMAMOBILE_HOTSPOT_SYSTEM_BACKEND)
@@ -131,3 +136,15 @@ chmod +x "$sysbackend"
 rm "$tmp/home/.config/omamobile/hotspot-backend"
 [[ $(own state | field backend) == system ]] || fail "the system backend answers at its configured path"
 pass "hotspot-panel.sh: the system backend's path is configurable"
+
+# ---- no system backend either: the backend verb says none
+rm -f "$sysbackend"
+if run backend; then fail "no backend: the backend verb says none"; fi
+
+# ---- no backend: on and off are NetworkManager's hotspot, as the tile did before
+: >"$log"
+run on >/dev/null; grep -q '^nmcli radio wifi on' "$log" && grep -q '^nmcli device wifi hotspot con-name Hotspot' "$log" || fail "on without a backend is NetworkManager's hotspot"
+run off >/dev/null; grep -q '^nmcli connection down Hotspot' "$log" || fail "off without a backend downs the Hotspot connection"
+grep -cF 'exec bash "${0%/*}/hotspot-panel.sh" "$want"' plugins/omamobile.quicksettings/tile-action.sh >/dev/null || fail "the tile turns the hotspot on and off through hotspot-panel.sh"
+grep -c 't bash "$hs_panel" backend' plugins/omamobile.quicksettings/tile-state.sh >/dev/null || fail "the tile's state asks a device backend first"
+pass "hotspot-panel.sh: on and off, with and without a backend"

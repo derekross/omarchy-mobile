@@ -12,7 +12,7 @@ pass() { printf 'ok - %s\n' "$1"; }
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 fake=$tmp/bin; basic=$tmp/basic; log=$tmp/log
 mkdir -p "$fake" "$basic" "$tmp/home/.local/state/omarchy/current" "$tmp/state"
-for tool in sh awk sort cat head grep mkdir rm timeout printf; do
+for tool in sh bash awk sort cat head grep mkdir rm timeout printf; do
   ln -s "$(command -v "$tool")" "$basic/$tool"
 done
 : >"$log"
@@ -40,7 +40,9 @@ stub omarchy-powerprofiles-set 'echo "powerprofiles $*" >>'"$log"
 stub omamobile-sit 'echo "sit $*" >>'"$log"
 stub pgrep 'exit 1'
 
-run() { env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" PATH="$fake:$basic" sh "$@"; }
+# the hotspot goes through hotspot-panel.sh, which looks for a device backend;
+# its system path points at a scratch file, so the machine's /etc never counts
+run() { env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" PATH="$fake:$basic" OMAMOBILE_HOTSPOT_SYSTEM_BACKEND="$tmp/no-backend" sh "$@"; }
 
 printf 'wlan unblocked\nbluetooth blocked\nnfc unblocked\n' >"$tmp/state/rfkill"
 echo dark >"$tmp/state/mode"
@@ -191,3 +193,17 @@ for line in "omamobile-voice start" "omamobile-voice done"; do
   grep -cxF "$line" "$log" >/dev/null || fail "tile-action.sh runs: $line"
 done
 pass "dictation follows voxtype's service and state, opens and finishes the voice bar by direction"
+
+# a device's hotspot backend: the tile's state and its on/off go to it, not to nmcli
+printf '#!/bin/sh\necho "backend $*" >>"$LOG"\ncase $1 in active) cat "$STATE" ;; esac\n' >"$tmp/no-backend"
+chmod +x "$tmp/no-backend"
+brun() { env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" PATH="$fake:$basic" OMAMOBILE_HOTSPOT_SYSTEM_BACKEND="$tmp/no-backend" LOG="$log" STATE="$tmp/state/hs" sh "$@"; }
+echo on >"$tmp/state/hs"
+grep -cx "hotspot=on" <<<"$(brun "$dir/tile-state.sh")" >/dev/null || fail "tile-state.sh reads the hotspot from the device backend"
+echo off >"$tmp/state/hs"
+grep -cx "hotspot=off" <<<"$(brun "$dir/tile-state.sh")" >/dev/null || fail "tile-state.sh reads off from the device backend"
+: >"$log"; brun "$dir/tile-action.sh" hotspot on
+grep -cx "backend on" "$log" >/dev/null || fail "the tile turns the device's hotspot on through its backend"
+(( $(grep -c '^nmcli' "$log" || true) == 0 )) || fail "with a backend the tile leaves NetworkManager's hotspot alone"
+rm -f "$tmp/no-backend"
+pass "tile-state.sh and tile-action.sh use a device's hotspot backend"

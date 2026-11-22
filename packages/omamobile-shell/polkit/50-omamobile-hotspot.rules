@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: MIT
+// The shell's Hotspot tile and page (through /etc/omamobile/hotspot-backend): let the active local user start and stop
+// omamobile-hotspot.service, which runs "/usr/lib/omamobile-shell/hotspot/hotspot-ap" as root. Nothing else.
+polkit.addRule(function(action, subject) {
+  if (action.id == "org.freedesktop.systemd1.manage-units" &&
+      subject.local && subject.active &&
+      action.lookup("unit") == "omamobile-hotspot.service" &&
+      (action.lookup("verb") == "start" || action.lookup("verb") == "stop")) {
+    return polkit.Result.YES;
+  }
+});
