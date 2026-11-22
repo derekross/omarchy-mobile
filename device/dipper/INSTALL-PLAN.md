@@ -135,9 +135,11 @@ missing SSH, or hash mismatch stops before a normal reboot. No tool accepts a
 partition name from the caller.
 
 Do not add an automatic pacman hook that writes the single boot partition in
-this implementation. No Dipper kernel package is selected by the current
-RAM-only descriptor. Before installing `linux-omamobile` or another kernel
-package for Dipper, define a package hold so `omarchy update` cannot replace
+this implementation. For a development install, take the modules from the
+matching kernel build's tarball, as `tools/build-rootfs` does for device
+packages without `OMAMOBILE_BOOT_FILES`. This path does not install
+`linux-omamobile` or `omamobile-boot-update`. Before adopting a kernel package
+for Dipper, define a package hold so `omarchy update` cannot replace
 the running kernel's modules ahead of the host flash. A kernel update stages
 the new image and modules on the laptop; it keeps the old modules installed
 until the new `boot` image has been written, verified through rescue, and
