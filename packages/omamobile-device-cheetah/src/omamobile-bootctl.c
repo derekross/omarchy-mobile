@@ -84,8 +84,8 @@
 #define DEVINFO_MIN_VERSION	0x00030003u	/* "only version 3.3+ supports A/B data" */
 
 /*
- * The only layout version this port has been checked against (Pixel 7 Pro,
- * cheetah, stock CP2A bootloader, devinfo 3.15). Writes refuse anything else.
+ * The reference layout for general slot updates (Pixel 7 Pro, cheetah, stock
+ * CP2A bootloader). Later layouts can support fewer operations.
  */
 #define VERIFIED_VER_MAJOR	3
 #define VERIFIED_VER_MINOR	15
@@ -151,7 +151,32 @@ static uint8_t *read_region(const char *path, size_t *len)
 	return buf;
 }
 
-static int check_header(const uint8_t *d, int for_write)
+enum slot_write_scope {
+	READ_ONLY,
+	MARK_ACTIVE_B_ONLY,
+	GENERAL_SLOT_UPDATES,
+};
+
+static enum slot_write_scope slot_write_scope(const uint8_t *d)
+{
+	uint16_t minor = rd16(d + OFF_VER_MINOR);
+
+	if (rd16(d + OFF_VER_MAJOR) != VERIFIED_VER_MAJOR)
+		return READ_ONLY;
+	if (minor == VERIFIED_VER_MINOR)
+		return GENERAL_SLOT_UPDATES;
+#ifdef OMAMOBILE_CHEETAH_DEVINFO_319
+	if (minor == 19)
+		return MARK_ACTIVE_B_ONLY;
+#endif
+#ifdef OMAMOBILE_DEVINFO_EXTRA_MINOR
+	if (minor != 19 && minor == OMAMOBILE_DEVINFO_EXTRA_MINOR)
+		return GENERAL_SLOT_UPDATES;
+#endif
+	return READ_ONLY;
+}
+
+static int check_header(const uint8_t *d)
 {
 	uint32_t magic = rd32(d + OFF_MAGIC);
 	uint16_t maj = rd16(d + OFF_VER_MAJOR), min = rd16(d + OFF_VER_MINOR);
@@ -163,16 +188,31 @@ static int check_header(const uint8_t *d, int for_write)
 		fprintf(stderr, "%s: devinfo version %u.%u has no A/B data (need 3.3+)\n", argv0, maj, min);
 		return -1;
 	}
-	if (for_write && (maj != VERIFIED_VER_MAJOR || min != VERIFIED_VER_MINOR)
-#ifdef OMAMOBILE_DEVINFO_EXTRA_MINOR
-	    && (maj != 3 || min != OMAMOBILE_DEVINFO_EXTRA_MINOR)
-#endif
-	    ) {
-		fprintf(stderr, "%s: devinfo version %u.%u is not the verified %u.%u layout; refusing to write\n",
-			argv0, maj, min, VERIFIED_VER_MAJOR, VERIFIED_VER_MINOR);
+	return 0;
+}
+
+static int check_slot_update(const uint8_t *d, int slot, int set_active)
+{
+	switch (slot_write_scope(d)) {
+	case GENERAL_SLOT_UPDATES:
+		return 0;
+	case MARK_ACTIVE_B_ONLY: {
+		uint8_t a = d[OFF_SLOTS + SLOT_FLAGS];
+		uint8_t b = d[OFF_SLOTS + SLOT_SIZE + SLOT_FLAGS];
+
+		if (!set_active && slot == 1 && !(a & FLAG_ACTIVE) &&
+		    (b & (FLAG_ACTIVE | FLAG_UNBOOTABLE)) == FLAG_ACTIVE)
+			return 0;
+		fprintf(stderr, "%s: devinfo 3.19 allows only mark-successful on an active, "
+			"bootable slot B with slot A inactive; refusing to write\n", argv0);
 		return -1;
 	}
-	return 0;
+	case READ_ONLY:
+		fprintf(stderr, "%s: devinfo version %u.%u is not the verified %u.%u layout; refusing to write\n",
+			argv0, rd16(d + OFF_VER_MAJOR), rd16(d + OFF_VER_MINOR),
+			VERIFIED_VER_MAJOR, VERIFIED_VER_MINOR);
+	}
+	return -1;
 }
 
 static int parse_slot(const char *s)
@@ -215,15 +255,25 @@ static int cmd_dump(const char *path)
 	uint8_t *d = read_region(path, &len);
 	if (!d)
 		return 1;
-	if (check_header(d, 0)) {
+	if (check_header(d)) {
 		free(d);
 		return 1;
 	}
 	printf("devinfo: %s (%zu bytes)\n", path, len);
 	printf("magic:   0x%08x \"DEVI\"\n", rd32(d + OFF_MAGIC));
-	printf("version: %u.%u%s\n", rd16(d + OFF_VER_MAJOR), rd16(d + OFF_VER_MINOR),
-	       rd16(d + OFF_VER_MAJOR) == VERIFIED_VER_MAJOR && rd16(d + OFF_VER_MINOR) == VERIFIED_VER_MINOR
-	       ? " (verified layout)" : " (NOT the verified layout: read-only)");
+	const char *layout = "NOT the verified layout: read-only";
+	switch (slot_write_scope(d)) {
+	case GENERAL_SLOT_UPDATES:
+		layout = rd16(d + OFF_VER_MINOR) == VERIFIED_VER_MINOR
+			? "verified layout" : "extra layout enabled at build time";
+		break;
+	case MARK_ACTIVE_B_ONLY:
+		layout = "only mark-successful on active, bootable slot B with slot A inactive";
+		break;
+	case READ_ONLY:
+		break;
+	}
+	printf("version: %u.%u (%s)\n", rd16(d + OFF_VER_MAJOR), rd16(d + OFF_VER_MINOR), layout);
 	for (int i = 0; i < DEVINFO_AB_SLOT_COUNT; i++)
 		print_slot(d, i);
 	printf("active slot (HAL rule: slot b if its active bit is set, else a): %c\n",
@@ -265,7 +315,7 @@ static int cmd_write(const char *path, int slot, int set_active, int confirmed)
 	uint8_t *orig = read_region(path, &len);
 	if (!orig)
 		return 1;
-	if (check_header(orig, 1)) {
+	if (check_header(orig) || check_slot_update(orig, slot, set_active)) {
 		free(orig);
 		return 1;
 	}
