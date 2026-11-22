@@ -27,6 +27,7 @@ each part is described in the plan it came from under
 | `NetworkManager/conf.d/10-omamobile-usb.conf`, `network/20-usb-gadget.network` | | USB networking to the laptop (172.16.42.1) |
 | `logind.conf.d`, `system.conf.d/10-omamobile-reboot-watchdog.conf` | | The power key, and the reboot watchdog |
 | `vendor/omamobile/shell-env.d/50-hotdog-gpu.conf` | `/usr/lib/omamobile/shell-env.d/` | `FD_MESA_DEBUG=sysmem` for the shell process alone: through GMEM the Adreno 640 faulted and Qt lost the shell's GL context, which froze the home screen and bar. Read by `omamobile-omarchy` 0.1.50's launcher patch 0034 (its own pull request); without it the file does nothing |
+| `vendor/environment.d/40-omamobile-fp-hotdog.conf` | `/usr/lib/environment.d/` | Where the shell and onboarding find this phone's fingerprint runner and image (`OMAMOBILE_FP_RUNNER`, `OMAMOBILE_FP_IMAGE`). Without them the shell looks for the Pixels' runner, and when the bridge starts after the shell it never reads the bridge's state: no glyph and no white disc, so the optical sensor sees an unlit finger |
 | `etc/omamobile-mirrorlist` | `/etc/pacman.d/` | Where pacman gets `[omamobile]`: the phone's own repository (`local`) until this port's packages are published; the published Mesa has no Adreno driver |
 | `/etc/systemd/system/systemd-firstboot.service` → `/dev/null` | | systemd-firstboot would prompt on the panel console, which has no keyboard; omamobile-firstboot sets the same things |
 

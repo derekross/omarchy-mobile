@@ -17,6 +17,17 @@ grep -cx 'FD_MESA_DEBUG=sysmem' vendor/omamobile/shell-env.d/50-hotdog-gpu.conf 
 [[ $(grep -cv '^#\|^$' vendor/omamobile/shell-env.d/50-hotdog-gpu.conf) == 1 ]] ||
   { echo "not ok - the shell's environment file sets nothing else"; exit 1; }
 echo "ok - the shell renders without GMEM"
+# The shell and onboarding find this phone's fingerprint runner (the Pixels'
+# path is their default), so the shell reads the bridge's state and lights
+# the sensor
+f=vendor/environment.d/40-omamobile-fp-hotdog.conf
+grep -cx 'OMAMOBILE_FP_RUNNER=/usr/lib/omamobile-fp-hotdog/omamobile-fp-hotdog-chroot' "$f" >/dev/null &&
+  grep -cx 'OMAMOBILE_FP_IMAGE=/usr/lib/omamobile-fp-hotdog/root' "$f" >/dev/null ||
+  { echo "not ok - the shell finds the fingerprint runner"; exit 1; }
+grep -cx 'install -Dm755 lib/omamobile-fp-hotdog-chroot "$fp/omamobile-fp-hotdog-chroot"' install >/dev/null &&
+  grep -cx 'fp=$destination/usr/lib/omamobile-fp-hotdog' install >/dev/null ||
+  { echo "not ok - the runner is installed where the environment says"; exit 1; }
+echo "ok - the shell finds the fingerprint runner"
 python3 -B test/call-audio.py
 echo "ok - call audio routes and restores"
 # The SIM selection against a recorded card status (no ICCID in it): it
