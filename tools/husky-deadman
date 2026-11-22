@@ -23,8 +23,14 @@
 #   --confirm SECS   phone waits this long for our confirmation (default 90)
 #   --grace SECS     after its undo, wait this long again (default 60)
 #   --soak SECS      keep guarding after the confirmation (default 600)
-#   --ilim UA        b3-charger: default_ilim_ua (default 500000, max 900000)
 #                    (the confirmation is only 'SSH still works': the soak is the gate)
+#   --ilim UA        b3-charger: default_ilim_ua (default 500000, max 900000).
+#                    Passed to the driver, but it does NOT cap the input yet:
+#                    the driver leaves CHG_CNFG_09's NO_AUTOIBUS clear, so the
+#                    chip does not keep to it (linux-omarchy-mobile#288).
+#                    Nothing here limits the draw from the port: the DT charge
+#                    current and float bound the battery side, and the guard
+#                    only trips on battery voltage, current and temperature.
 #   --allow-soc      run b3-charger outside 30..80 % battery
 #   --no-watchdog    phone falls back to a crash (panic=10) instead of the
 #                    watchdog if the undo fails too
