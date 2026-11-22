@@ -1,0 +1,42 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up (AUDIO-PLAN.md, stage P2): everything the AoC core needs, i.e.
+ * the GSA mailbox, Trusty, the AoC System MMU, the three AoC mailboxes and
+ * the AoC node, as device/cheetah/overlays/aoc-core-test.dtso, with the
+ * Pixel 7's AoC board id and revision: the stock dtbo for board 0x30406
+ * sets aoc-board-id 0x30401 and aoc-board-rev 0x10000 (the Pixel 7 Pro's
+ * says 0x30301). The modules stay blacklisted from autoload. Paths, not
+ * labels, so the base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/trusty} {
+	status = "okay";
+};
+
+&{/soc@0/gsa@17c90000} {
+	status = "okay";
+};
+
+&{/soc@0/sysmmu@1a090000} {
+	status = "okay";
+};
+
+&{/soc@0/mailbox@18300000} {
+	status = "okay";
+};
+
+&{/soc@0/mailbox@18320000} {
+	status = "okay";
+};
+
+&{/soc@0/mailbox@18340000} {
+	status = "okay";
+};
+
+&{/soc@0/aoc@181d0000} {
+	google,board-id = <0x30401>;
+	google,board-rev = <0x10000>;
+	status = "okay";
+};
