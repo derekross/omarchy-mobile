@@ -16,11 +16,19 @@ void ActionRunner::post(const QString &tool, const QVariantMap &result, int id) 
 
 int ActionRunner::run(const QString &tool, const QStringList &args) {
     static const QRegularExpression word("\\A[a-z0-9]{1,16}\\z");
-    static const QStringList tools = {"display", "charge"};
+    // an app's desktop ID (org.foo.Bar, foo-bar): no slash, no leading dot or dash, no ".." (the backend checks it again
+    // and only matches it against the IDs it scans; it never builds a path from it)
+    static const QRegularExpression appId("\\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\z");
+    static const QStringList tools = {"display", "charge", "apps"};
     const int id = ++m_next;
     auto fail = [this, &tool, id](const QString &why) { post(tool, {{"error", why}}, id); return id; };
-    if (!tools.contains(tool) || args.size() > 3) return fail("unknown action");
-    for (const auto &a : args) if (!word.match(a).hasMatch()) return fail("bad argument");
+    if (!tools.contains(tool) || args.size() > (tool == "apps" ? 2 : 3)) return fail("unknown action");
+    for (qsizetype i = 0; i < args.size(); ++i) {
+        const QString &a = args.at(i);
+        // apps: the verb is a word, the second argument a desktop ID
+        const bool ok = (tool == "apps" && i == 1) ? appId.match(a).hasMatch() && !a.contains(QLatin1String("..")) : word.match(a).hasMatch();
+        if (!ok) return fail("bad argument");
+    }
     auto *p = new QProcess(this);
     // bash would run a startup file named by these
     auto env = QProcessEnvironment::systemEnvironment();
@@ -30,7 +38,8 @@ int ActionRunner::run(const QString &tool, const QStringList &args) {
     p->setProgram("/usr/bin/bash");
     p->setArguments(QStringList{m_dir + "/" + tool + ".sh"} + args);
     connect(p, &QProcess::finished, this, [this, p, tool, id](int code, QProcess::ExitStatus st) {
-        const auto raw = p->readAllStandardOutput().left(4096);
+        // the Apps list can be up to 64 KiB (backends/apps.sh cuts it below that); every other answer is small
+        const auto raw = p->readAllStandardOutput().left(tool == "apps" ? 65536 : 4096);
         p->readAllStandardError();
         auto obj = QJsonDocument::fromJson(raw).object();
         if (obj.isEmpty() || st != QProcess::NormalExit)

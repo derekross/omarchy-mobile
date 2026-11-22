@@ -14,6 +14,8 @@
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QIcon>
+#include "appiconprovider.h"
 #include <cstdio>
 
 int main(int argc, char **argv) {
@@ -72,6 +74,10 @@ int main(int argc, char **argv) {
     actions.setBackendDir(testBackends);
 #endif
     QQmlApplicationEngine engine;
+    if (QIcon::themeName().isEmpty()) QIcon::setThemeName(QStringLiteral("hicolor"));
+    QIcon::setFallbackThemeName(QStringLiteral("hicolor"));
+    QIcon::setFallbackSearchPaths(QIcon::fallbackSearchPaths() << QStringLiteral("/usr/share/pixmaps"));
+    engine.addImageProvider(QStringLiteral("appicon"), new AppIconProvider);
     engine.rootContext()->setContextProperty("backend", &backend);
     engine.rootContext()->setContextProperty("deviceInfo", &deviceInfo);
     engine.rootContext()->setContextProperty("actions", &actions);

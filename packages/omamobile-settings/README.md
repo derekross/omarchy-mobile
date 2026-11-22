@@ -36,7 +36,14 @@ row stays hidden today: omamobile-device-husky blacklists `max77759_charger`
 (`omamobile-max77759.conf`), so there is no `max77759-charger` power supply
 until that blacklist is lifted on a kernel with
 derekross/linux-omarchy-mobile#266.
-Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management and
+
+A third page, Apps, lists the apps the app drawer shows (the same desktop entries, Hidden/NoDisplay/OnlyShowIn/NotShowIn
+filters and Omarchy's `launcher.hides`), and for one app shows its package, version and installed size from pacman
+(`pacman -Qo`, `-Qi`, read-only) and an Open button (`omamobile-launch`, `gtk-launch` without it). The page runs
+`backends/apps.sh`; the list loads only when the page opens, shows the last saved list
+(`~/.cache/omamobile/apps.json`) at once and replaces it with a fresh scan at nice 10 and idle I/O. Uninstalling is not
+offered: removing a package can take parts of the phone's system with it.
+Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management (beyond the Apps list) and
 recording controls are separate future contributions with their own runtime
 contracts and tests; this catalog does not offer those routes.
 
