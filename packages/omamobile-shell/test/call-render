@@ -112,6 +112,10 @@ for name, controls in expect.items():
     if "replySheet" in g:
         sheet_ok = on_screen(g["replySheet"], name) and ("caller" in g and apart(g["caller"], g["replySheet"]))
         print("%s - %s %s: the replies cover no caller" % ("ok" if sheet_ok else "not ok", theme, name)); ok = ok and sheet_ok
+m = re.search(r"ringing hidden (\w+) shown (\w+)", text)
+rings = bool(m) and m.group(1) == "false" and m.group(2) == "true"
+print("%s - %s: a hidden card doesn't ring, a shown incoming one does" % ("ok" if rings else "not ok", theme))
+ok = ok and rings
 for l in bad:
     print("  " + l)
 sys.exit(0 if ok else 1)

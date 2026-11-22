@@ -91,6 +91,7 @@ for f in usr/bin/reboot-to \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
          usr/lib/modprobe.d/omamobile-max77759.conf \
+         usr/lib/modprobe.d/omamobile-akita-clk-acpm.conf \
          usr/bin/omamobile-usb-rescue \
          usr/lib/systemd/system/omamobile-usb-rescue.service \
          usr/share/omamobile/device.conf \
@@ -99,8 +100,8 @@ for f in usr/bin/reboot-to \
          etc/pacman.d/omamobile-mirrorlist; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
-[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 14 ]] \
-  || fail "install stages exactly these fourteen files (the rescue's wants link is the fourteenth): $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
+[[ $(find "$tmp/root" -type f -o -type l | wc -l) -eq 15 ]] \
+  || fail "install stages exactly these fifteen files (the rescue's wants link is one of them): $(cd "$tmp/root" && find . -type f -o -type l | sort | tr '\n' ' ')"
 grep -qx 'MemorySleepMode=s2idle' "$tmp/root/usr/lib/systemd/sleep.conf.d/10-omamobile.conf" \
   || fail "suspend must use s2idle: the kernel's default is deep, which zuma can't wake from yet"
 grep -qx 'AllowHibernation=no' "$tmp/root/usr/lib/systemd/sleep.conf.d/10-omamobile.conf" \
@@ -135,6 +136,12 @@ for m in max77759_charger tcpci_maxim gpio_max77759 nvmem_max77759; do
 done
 ! grep -qE '^blacklist (max17042_battery|max77759)$' "$conf" || fail "the fuel gauge and the MFD core keep autoloading"
 pass "the MAX77759 cell drivers and the Type-C driver are blacklisted, the gauge and the MFD core are not"
+grep -qE '^options clk_acpm zuma_gpu_max_khz=[0-9]+$' "$tmp/root/usr/lib/modprobe.d/omamobile-akita-clk-acpm.conf" \
+  || fail "the GPU clock file sets clk_acpm's zuma_gpu_max_khz"
+# The 8a's BCL caps its GPU at 723 MHz at most (vdroop1, zuma-akita-bcl.dtsi)
+(( $(sed -n 's/^options clk_acpm zuma_gpu_max_khz=//p' vendor/modprobe.d/omamobile-akita-clk-acpm.conf) <= 723000 )) \
+  || fail "the GPU's ceiling stays at or below the 8a's highest BCL cap, 723 MHz"
+pass "the GPU clock file sets a ceiling of at most 723 MHz"
 bash -n bin/omamobile-usb-rescue || fail "the USB rescue parses"
 grep -q '10cb0000.i2c' bin/omamobile-usb-rescue || fail "the USB rescue watches akita's bus (hsi2c_11)"
 grep -q 'i2cset -f -y "$bus" $tcpc 0x93 0x09' bin/omamobile-usb-rescue || fail "the USB rescue closes the data switch"

@@ -99,7 +99,7 @@ fi
 if [[ -n ${FAIL_DD:-} && $* == dd\ * ]]; then
   echo x >> "$PHONE_LOG.dds"
   if [[ $FAIL_DD == all || $(wc -l < "$PHONE_LOG.dds") == "$FAIL_DD" ]]; then
-    bash -c "$*" | head -c 300
+    bash -c "$*" | { head -c 300; cat >/dev/null; }
     exit 255
   fi
 fi
@@ -108,7 +108,7 @@ fi
 if [[ -n ${SHORT_DD:-} && $* == dd\ * ]]; then
   echo x >> "$PHONE_LOG.short"
   if [[ $SHORT_DD == all || $(wc -l < "$PHONE_LOG.short") == "$SHORT_DD" ]]; then
-    bash -c "$*" | head -c 300
+    bash -c "$*" | { head -c 300; cat >/dev/null; }
     exit 0
   fi
 fi
@@ -273,7 +273,7 @@ pass "a chunk that comes back short with status 0 is caught by its size check an
 "$r/tools/nv-backup" -d testdev "$t/closed" 2>/dev/null | head -c 10 >/dev/null || true
 [[ -f $t/closed/SHA256SUMS && $(wc -l < "$t/closed/SHA256SUMS") == 7 ]] || fail "a verified backup survives a closed stdout"
 (cd "$t/closed" && sha256sum -c --quiet --strict SHA256SUMS) || fail "the backup behind a closed stdout checks"
-pass "a verified backup survives a closed stdout (| head) during the banner"
+pass "a verified backup survives a closed stdout during the banner"
 
 # --- A partition that changes during the copy --------------------------------------
 # After the seventh (last) verifying read, one partition turns writable,

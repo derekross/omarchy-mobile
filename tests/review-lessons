@@ -21,7 +21,7 @@ done
 echo "ok - ${#files[@]} lesson files, each under $max bytes and in the index"
 for kind in L C; do
   ids=$(cat "${files[@]}" | sed -n "s/^- \*\*$kind-\([0-9][0-9]*\).*/\1/p" | sort -n)
-  dup=$(uniq -d <<<"$ids" | head -n 3 | tr '\n' ' ')
+  dup=$(uniq -d <<<"$ids" | sed -n '1,3p' | tr '\n' ' ')
   [[ -z $dup ]] || fail "$kind- numbers used twice: $dup"
   last=$(tail -n 1 <<<"$ids")
   count=$(grep -c . <<<"$ids")
