@@ -729,13 +729,14 @@ POLKIT_XML = '''<node><interface name="org.freedesktop.PolicyKit1.Authority">
 <arg type="(bba{ss})" direction="out"/></method></interface></node>'''
 
 
-class NoMmsDaemon(BridgeTests):
-    """A phone without mmsd-tng: nothing would take a WAP push, so it goes
-    to Messages as the placeholder text."""
+class DataOnlyMessage(BridgeTests):
+    """A message with data and no text (a WAP push, the MMS notification) is
+    exported as sitd lists it: the Data, and no Text. Whether a notification
+    nothing can fetch becomes a text instead is sitd's decision, at its join
+    of a multi-part one; the bridge adds nothing."""
     status = staticmethod(registered_status)
-    mmd_args = ('--mms-daemon', '/nonexistent/mmsdtng')
 
-    def test_mms_notification_is_a_placeholder_text(self):
+    def test_mms_notification_is_exported_as_data(self):
         wap = bytes.fromhex('0106226170706c69636174696f6e2f766e642e7761702e6d6d732d6d65737361676500') + b'x'
         messages = [dict(id='sit:b', number=SENDER, text='', timestamp='2026-09-29T12:35:00+00:00',
                          data=wap.hex(), state='received')]
@@ -744,7 +745,7 @@ class NoMmsDaemon(BridgeTests):
         self.push()
         wait_until(lambda: len(self.client.named('Added')) == 1, 5, 'WAP push')
         push = self.client.props(self.modem('Messages', mm.MESSAGING)[0], mm.SMS)
-        self.assertEqual((push['Text'], bytes(push['Data'])), (bridge.NO_MMS_TEXT, b''))
+        self.assertEqual((push['Text'], bytes(push['Data'])), ('', wap))
 
 
 class Polkit(BridgeTests):

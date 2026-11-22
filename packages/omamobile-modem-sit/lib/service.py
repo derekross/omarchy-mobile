@@ -31,6 +31,7 @@ import grp
 import hashlib
 import json
 import os
+from pathlib import Path
 import re
 import select
 import signal
@@ -50,9 +51,14 @@ from data_network import configuration as internet_addresses
 from ims import REGISTRATION, record_registration
 from inbox import persist_sms
 from sit import Sit, ModemError
-from sms_codec import submit, received_pdu, number
+from sms_codec import submit, received_pdu, number, NO_MMS_TEXT
 import carrier_manifest
 from voice_audio import AudioRefused, VoiceAudio, aoc_card
+
+# What fetches a picture message from its notification (a WAP push): mmsd-tng,
+# by its binary. Where it isn't installed, a joined multi-part notification
+# is listed as a text saying a message came, not as data nobody takes.
+MMS_DAEMON = Path('/usr/bin/mmsdtng')
 
 STATES = {0: 'active', 1: 'held', 2: 'dialing', 3: 'ringing-out', 4: 'ringing-in', 5: 'waiting',
           6: 'terminated', 7: 'held', 8: 'active'}
@@ -372,6 +378,14 @@ class Service:
                     if data and ports != {2948}:
                         data = ''
                         sms['text'] = 'Received an unsupported binary message.'
+                    elif data and not MMS_DAEMON.exists():
+                        # A multi-part MMS notification on a phone where
+                        # nothing fetches the message: Messages shows that
+                        # one came, as it did when the later parts decoded
+                        # as that text. A single-part notification goes on
+                        # as data there, as it always has.
+                        data = ''
+                        sms['text'] = NO_MMS_TEXT
                     sms['timestamp'] = by_seq[1]['timestamp']
                     self.db.execute('INSERT OR IGNORE INTO received(id,number,text,timestamp,data) VALUES (?,?,?,?,?)',
                                     (key, sms['number'], sms['text'], sms['timestamp'], data))

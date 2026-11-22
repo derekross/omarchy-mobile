@@ -78,6 +78,7 @@ def submit(destination, text):
 
 
 WAP_PUSH = 2948
+NO_MMS_TEXT = 'Received a multimedia or binary message that this phone cannot display yet.'
 
 
 def deliver(pdu):
@@ -128,7 +129,7 @@ def deliver(pdu):
     elif alphabet==1 and (port==WAP_PUSH or (concat and port is None)) and not (dcs&0xc0==0 and dcs&0x20):
         if length>len(data) or length<header: raise ValueError('Truncated WAP push')
         return dict(number=sender,text='',timestamp=timestamp,concat=concat,port=port,data=bytes(data[header:length]))
-    else: text='Received a multimedia or binary message that this phone cannot display yet.'
+    else: text=NO_MMS_TEXT
     return dict(number=sender,text=text,timestamp=timestamp,concat=concat,port=port,data=b'')
 
 

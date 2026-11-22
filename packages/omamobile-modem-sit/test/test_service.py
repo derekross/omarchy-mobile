@@ -19,8 +19,10 @@ class ServiceTests(unittest.TestCase):
         self.client=Mock(); self.client.next_indication.return_value=None
         self.service=app_service.Service(self.client,self.db)
         self.service.ready=Mock()
+        # As on a phone with mmsd-tng installed, unless a test says otherwise.
+        self.daemon=patch.object(app_service,'MMS_DAEMON',Path(os.devnull)); self.daemon.start()
     def tearDown(self):
-        self.db.close(); self.paths.stop(); self.temp.cleanup()
+        self.daemon.stop(); self.db.close(); self.paths.stop(); self.temp.cleanup()
     def test_wap_port_only_in_first_part_arriving_last(self):
         inbox = self.root/'inbox'; inbox.mkdir()
         for seq, body in ((2, b'\x00\xffsecond'), (1, b'\x01\x06first')):
@@ -117,6 +119,45 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(len(listed),1)
         self.assertEqual((listed[0]['number'],listed[0]['text'],listed[0]['data']),('+12025550123','',b''.join(pieces).hex()))
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM parts').fetchone()[0],0)
+    def wap_push(self, pieces):
+        """An MMS notification as the modem delivers it: one message, or
+        the parts of a concatenated one (the first names port 2948)."""
+        inbox=self.root/'inbox'; inbox.mkdir()
+        for seq,piece in enumerate(pieces,1):
+            header=bytes.fromhex('0605040b8423f0') if len(pieces)==1 else \
+                bytes.fromhex('0b05040b8423f000030902')+bytes([seq])
+            ud=header+piece
+            tpdu=bytes.fromhex('440b912120550521f3000462909221436500')+bytes([len(ud)])+ud
+            data=bytes.fromhex('07912120550521f3')+tpdu
+            path=inbox/f'{seq}.sit'
+            path.write_bytes(bytes(2)+struct.pack('<H',0x0d1e)+bytes(5)+bytes([len(data)])+data)
+            self.service.ingest(path)
+        return self.service.dispatch(dict(action='sms-list'))
+
+    def test_multi_part_notification_without_an_mms_daemon_is_the_notice(self):
+        # Nothing on the phone fetches the message: Messages shows that one
+        # came, as main did (its later parts decoded as that text), and no
+        # data goes on for nobody to take.
+        with patch.object(app_service,'MMS_DAEMON',self.root/'no-mmsdtng'):
+            listed=self.wap_push([bytes(range(0,100)),bytes(range(100,160))])
+        self.assertEqual(len(listed),1)
+        self.assertEqual((listed[0]['text'],listed[0]['data']),
+                         ('Received a multimedia or binary message that this phone cannot display yet.',''))
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM parts').fetchone()[0],0)
+
+    def test_single_part_notification_without_an_mms_daemon_stays_data(self):
+        # As on main: only the multi-part case ever showed the notice.
+        piece=bytes(range(0,60))
+        with patch.object(app_service,'MMS_DAEMON',self.root/'no-mmsdtng'):
+            listed=self.wap_push([piece])
+        self.assertEqual(len(listed),1)
+        self.assertEqual((listed[0]['text'],listed[0]['data']),('',piece.hex()))
+
+    def test_single_part_notification_with_an_mms_daemon_is_data(self):
+        piece=bytes(range(0,60))
+        listed=self.wap_push([piece])
+        self.assertEqual((listed[0]['text'],listed[0]['data']),('',piece.hex()))
+
     def test_restart_does_not_retry_pending_sms(self):
         self.db.execute('INSERT INTO outgoing VALUES (?,?,?,?,?)',('a'*32,'digest','sending','',0)); self.db.commit()
         other=app_service.database(self.root/'db')
