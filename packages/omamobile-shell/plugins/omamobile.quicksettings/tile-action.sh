@@ -12,9 +12,18 @@ case $want in on | off) ;; *) echo "usage: tile-action.sh TILE on|off" >&2; exit
 
 case $tile in
   airplane)
-    # Wi-Fi, Bluetooth and WWAN switches only: NFC keeps its own tile, as on
-    # Android. Turning airplane mode off unblocks what was on before it, so a
-    # radio the user had switched off stays off.
+    # With omamobile-sitd running, airplane mode is the cellular radio
+    # (omamobile-sit radio: AT+CFUN, calls, SMS and data set up again by sitd
+    # when it comes back on); Wi-Fi and Bluetooth stay as the owner has them,
+    # and their own tiles still switch them. The session user is in sitd's
+    # control group.
+    sit_state=${OMAMOBILE_SIT_STATE:-/run/omamobile-sit/state.json}
+    if command -v omamobile-sit >/dev/null 2>&1 && [ -r "$sit_state" ]; then
+      if [ "$want" = on ]; then exec omamobile-sit radio off; else exec omamobile-sit radio on; fi
+    fi
+    # Without sitd: Wi-Fi, Bluetooth and WWAN switches only: NFC keeps its own
+    # tile, as on Android. Turning airplane mode off unblocks what was on
+    # before it, so a radio the user had switched off stays off.
     restore="$state_dir/airplane-restore"
     if [ "$want" = on ]; then
       mkdir -p "$state_dir"

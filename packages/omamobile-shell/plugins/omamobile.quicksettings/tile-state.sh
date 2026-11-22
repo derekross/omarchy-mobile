@@ -6,8 +6,10 @@
 # Nothing here writes; each probe is bounded by timeout so a hung daemon
 # cannot hold the sheet's refresh.
 #
-#   airplane      on when every Wi-Fi, Bluetooth and WWAN rfkill switch is
-#                 soft-blocked (none without such a switch)
+#   airplane      with omamobile-sitd running: on while its public state
+#                 says the cellular radio is off; otherwise on when every
+#                 Wi-Fi, Bluetooth and WWAN rfkill switch is soft-blocked
+#                 (none without such a switch)
 #   hotspot       on while NetworkManager's "Hotspot" connection is up
 #   powerprofile  power-profiles-daemon's active profile
 #   theme_mode    light or dark, as Omarchy resolves the current theme
@@ -36,8 +38,19 @@
 t() { timeout 3 "$@" 2>/dev/null; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
-# airplane
-if have rfkill; then
+# airplane: the cellular radio where sitd runs (the Pixel 9a has no WWAN
+# rfkill switch, and airplane mode is the cell radio, not Wi-Fi or Bluetooth)
+sit_state=${OMAMOBILE_SIT_STATE:-/run/omamobile-sit/state.json}
+if have omamobile-sit && [ -r "$sit_state" ] && have python3; then
+  python3 -I -c '
+import json, sys
+try:
+    m = json.load(open(sys.argv[1])).get("modem") or {}
+except (OSError, ValueError):
+    m = {}
+print("airplane=" + ("on" if isinstance(m, dict) and m.get("radio") == "off" else "off"))
+' "$sit_state"
+elif have rfkill; then
   t rfkill -rn -o TYPE,SOFT | awk '
     $1 == "wlan" || $1 == "bluetooth" || $1 == "wwan" { n++; if ($2 == "blocked") b++ }
     END { print "airplane=" (n == 0 ? "none" : (b == n ? "on" : "off")) }'

@@ -65,6 +65,27 @@ grep -cx "wlan unblocked" "$tmp/state/rfkill" >/dev/null || fail "airplane off u
 grep -cx "bluetooth blocked" "$tmp/state/rfkill" >/dev/null || fail "airplane off keeps Bluetooth off when it was off before"
 pass "airplane mode restores the radios it found on"
 
+# With sitd running: airplane mode is the cellular radio, from sitd's public
+# state, and Wi-Fi and Bluetooth are left as they are.
+ln -sf "$(command -v python3)" "$basic/python3"
+printf 'wlan unblocked\nbluetooth unblocked\nnfc unblocked\n' >"$tmp/state/rfkill"
+sit_run() { env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" OMAMOBILE_SIT_STATE="$tmp/state/sit.json" \
+  PATH="$fake:$basic" sh "$@"; }
+printf '{"modem":{"radio":"on","state":"registered"}}\n' >"$tmp/state/sit.json"
+grep -cx "airplane=off" <<<"$(sit_run "$dir/tile-state.sh")" >/dev/null || fail "airplane is off while sitd's radio is on"
+sit_run "$dir/tile-action.sh" airplane on
+grep -cx "sit radio off" "$log" >/dev/null || fail "airplane on switches the cellular radio off"
+sit_run "$dir/tile-action.sh" airplane off
+grep -cx "sit radio on" "$log" >/dev/null || fail "airplane off switches the cellular radio on"
+[[ $(grep -c "^rfkill" "$log") == 4 ]] || fail "airplane mode with sitd leaves Wi-Fi and Bluetooth alone (rfkill: $(grep -c "^rfkill" "$log"))"
+grep -cx "wlan unblocked" "$tmp/state/rfkill" >/dev/null || fail "Wi-Fi stays on in airplane mode with sitd"
+printf '{"modem":{"radio":"off","state":"searching"}}\n' >"$tmp/state/sit.json"
+grep -cx "airplane=on" <<<"$(sit_run "$dir/tile-state.sh")" >/dev/null || fail "airplane is on while sitd's radio is off"
+printf 'not json' >"$tmp/state/sit.json"
+grep -cx "airplane=off" <<<"$(sit_run "$dir/tile-state.sh")" >/dev/null || fail "an unreadable state reads as airplane off"
+rm -f "$tmp/state/sit.json"
+pass "airplane mode with sitd switches the cellular radio only"
+
 # Dark theme: the theme being left is remembered for its mode.
 run "$dir/tile-action.sh" dark-theme off
 grep -cx "theme-set catppuccin-latte" "$log" >/dev/null || fail "light theme defaults to catppuccin-latte"
