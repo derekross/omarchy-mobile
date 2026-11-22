@@ -102,7 +102,7 @@ Item {
 
   Process {
     id: cellWatch
-    command: ["omamobile-cell-watch"]
+    command: ["omamobile-shell-child", "omamobile-cell-watch"]
     // Driven from showCell below, not bound: the restart timer sets
     // running, which would break a binding.
     stdout: SplitParser {
@@ -126,7 +126,7 @@ Item {
 
   Process {
     id: callWatch
-    command: ["omamobile-call-watch", "--observe"]
+    command: ["omamobile-shell-child", "omamobile-call-watch", "--observe"]
     running: true
     stdout: SplitParser { onRead: function(line) { root.callLine = String(line) } }
     onExited: { root.callLine = ""; callRestart.restart() }

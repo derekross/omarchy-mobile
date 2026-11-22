@@ -188,7 +188,7 @@ Item {
 
   Process {
     id: agent
-    command: ["omamobile-bt-agent"]
+    command: ["omamobile-shell-child", "omamobile-bt-agent"]
     stdinEnabled: true
     stdout: SplitParser {
       onRead: function(line) { root.helperEvent(BluetoothModel.parseHelperLine(line)) }

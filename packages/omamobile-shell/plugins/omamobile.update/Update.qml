@@ -237,7 +237,7 @@ Item {
 
   Process {
     id: tailProc
-    command: ["tail", "-n", "+1", "-F", root.eventsPath]
+    command: ["omamobile-shell-child", "tail", "-n", "+1", "-F", root.eventsPath]
     stdout: SplitParser { onRead: function(line) { root.handleEvent(line) } }
   }
 

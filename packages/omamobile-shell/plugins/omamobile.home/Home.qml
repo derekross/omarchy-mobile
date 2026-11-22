@@ -347,7 +347,7 @@ Item {
   // Same watch as Omarchy's PluginRegistry on ~/.config/omarchy/plugins.
   Process {
     id: widgetWatcher
-    command: ["inotifywait", "-m", "-r", "-q", "-e", "close_write,create,delete,move", "--format", "%w%f", root.widgetsDir]
+    command: ["omamobile-shell-child", "inotifywait", "-m", "-r", "-q", "-e", "close_write,create,delete,move", "--format", "%w%f", root.widgetsDir]
     stdout: SplitParser {
       onRead: function(path) { widgetScanTimer.restart() }
     }
