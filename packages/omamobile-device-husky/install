@@ -64,6 +64,11 @@ install -Dm644 vendor/udev/rules.d/75-omamobile-charge-limit.rules \
   "$destination/usr/lib/udev/rules.d/75-omamobile-charge-limit.rules"
 install -Dm644 vendor/systemd/system/omamobile-charge-limit-apply.service \
   "$destination/usr/lib/systemd/system/omamobile-charge-limit-apply.service"
+# the hotspot: this phone opts in to omamobile-shell's shared one (an access point on ap0 with PMF required, #523):
+# its settings, and the link the shell's Hotspot tile and page look for
+install -Dm644 hotspot.conf "$destination/usr/share/omamobile/hotspot.conf"
+install -d "$destination/etc/omamobile"
+ln -sfn /usr/lib/omamobile-shell/hotspot/hotspot-backend "$destination/etc/omamobile/hotspot-backend"
 install -Dm644 device.conf \
   "$destination/usr/share/omamobile/device.conf"
 install -Dm644 etc/omamobile-mirrorlist \

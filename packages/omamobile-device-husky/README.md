@@ -43,3 +43,18 @@ The kernel side merged on 2026-11-09 through [kernel #187](https://github.com/de
 The same run also stages the Bluetooth patch (`brcm/BCM.google,zuma-husky.hcd`, stock's `BCM.hcd`) and the five CS40L26 haptics files (`cs40l26.wmfw`, `cs40l26.bin` and the three tuning files) from the same image.
 
 Since 0.1.13 the controller takes the phone's own address at boot (`omamobile-bt-addr`, above). Pairings made before 0.1.13, on the placeholder address, have to be made again once.
+
+## Hotspot
+
+The Pixel 8 Pro can't start an access point on `wlp1s0` (the firmware answers the beacon-period set with `-52`), so
+it uses omamobile-shell's shared hotspot (`omamobile-hotspot.service`, an access point on a second interface `ap0`
+beside the client Wi-Fi, NetworkManager's `Hotspot` profile with PMF required; see #523 for why pmf 3). This package
+only turns it on for this phone: `/usr/share/omamobile/hotspot.conf` (`interface=ap0`) and the link
+`/etc/omamobile/hotspot-backend` that the shell's Hotspot tile and page look for. `/etc/omamobile/hotspot.conf`
+overrides its values (`interface=`, and `stop_temp_mc=`, which is off by default), but doesn't turn the hotspot on by
+itself.
+
+On the 8 Pro: the client Wi-Fi drops for a few seconds when the hotspot starts; with a 2.4 GHz home network it moved
+to the hotspot's channel; a 5 GHz-only home network is untested. Devices without 802.11w can't join. The 8 Pro has no
+mobile data yet, so the uplink is the home Wi-Fi. A hotspot client can reach the home LAN too (forwarding isn't limited
+to one uplink yet).

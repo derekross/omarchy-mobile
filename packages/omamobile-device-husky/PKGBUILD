@@ -7,7 +7,8 @@ pkgdesc="Omarchy Mobile support for the Google Pixel 8 Pro (husky): storage guar
 arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
-depends=(bash systemd omamobile-keyring i2c-tools 'omamobile-audio>=0.5.18')
+depends=(bash systemd omamobile-keyring i2c-tools 'omamobile-audio>=0.5.18' 'omamobile-shell>=0.2.143' iw iproute2 networkmanager dnsmasq polkit)
+optdepends=('ufw: the hotspot opens DHCP, DNS and forwarding on ap0 while it is on')
 provides=(omamobile-device)
 conflicts=(omamobile-device)
 backup=(etc/pacman.d/omamobile-mirrorlist etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf)
