@@ -27,27 +27,32 @@ private slots:
             QFile f(stubs(it.key()) + "/charge.sh");
             QVERIFY(f.open(QIODevice::WriteOnly));
             f.write("printf '%s\\n' '" + it.value() + "'\n");
+            QFile a(stubs(it.key()) + "/accessibility.sh");
+            QVERIFY(a.open(QIODevice::WriteOnly));
+            a.write(it.key() == "on"
+                ? "printf '%s\\n' '{\"text\":{\"available\":true,\"size\":14,\"sizes\":[12,14,16,18]},\"animations\":{\"available\":true,\"on\":false}}'\n"
+                : "printf '%s\\n' '{\"text\":{\"available\":false},\"animations\":{\"available\":false}}'\n");
         }
     }
     void probeShowsTheBatteryRowOnlyWhenTheBackendSaysAvailable() {
         Backend on;
         on.setBackendDir(stubs("on"));
-        QCOMPARE(on.rows().size(), 2);
-        QTRY_COMPARE(on.rows().size(), 3);
+        QCOMPARE(on.rows().size(), 3);
+        QTRY_COMPARE(on.rows().size(), 4);
         Backend off;
         off.setBackendDir(stubs("off"));
         off.setToolAvailable("charge", true);
-        QTRY_COMPARE(off.rows().size(), 2); // the probe's answer clears it
+        QTRY_COMPARE(off.rows().size(), 3); // the probe's answer clears it
     }
     void navigationRejectsUnknownAndHiddenActions() {
         Backend backend;
         backend.setBackendDir(stubs("off"));
         QVERIFY(backend.catalogProblems().isEmpty());
-        QCOMPARE(backend.rows().size(), 2); // the Battery row waits for the charge backend, absent here
+        QCOMPARE(backend.rows().size(), 3); // the Battery row waits for the charge backend, absent here
         backend.setToolAvailable("charge", true);
-        QCOMPARE(backend.rows().size(), 3);
+        QCOMPARE(backend.rows().size(), 4);
         backend.setToolAvailable("charge", false);
-        QCOMPARE(backend.rows().size(), 2);
+        QCOMPARE(backend.rows().size(), 3);
         QVERIFY(!backend.navigate("recording"));
         backend.activate("arbitrary-command");
         QCOMPARE(backend.page(), QString("root"));
@@ -79,6 +84,43 @@ private slots:
         backend.search("charge limit");
         QCOMPARE(backend.rows().size(), 1);
         QCOMPARE(backend.rows().first().toMap()["id"].toString(), QString("battery"));
+    }
+    void accessibilityPageGoesBackToRoot() {
+        Backend backend;
+        backend.setBackendDir(stubs("off"));
+        QVERIFY(backend.navigate("accessibility"));
+        QCOMPARE(backend.page(), QString("accessibility"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("root"));
+        backend.search("Accessibility");
+        QCOMPARE(backend.rows().size(), 1);
+        QCOMPARE(backend.rows().first().toMap()["id"].toString(), QString("accessibility"));
+    }
+    void accessibilityPageShowsTheBackendAnswer_data() {
+        QTest::addColumn<QString>("stub");
+        QTest::newRow("available") << "on";
+        QTest::newRow("not available") << "off";
+    }
+    void accessibilityPageShowsTheBackendAnswer() {
+        QFETCH(QString, stub);
+        ActionRunner runner;
+        runner.setBackendDir(stubs(stub));
+        Backend backend; // outlives the engine: the style singleton reads it until the engine goes
+        backend.setBackendDir(stubs(stub));
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty("backend", &backend);
+        engine.rootContext()->setContextProperty("actions", &runner);
+        QQmlComponent component(&engine, QUrl("qrc:/AccessibilityPage.qml"));
+        std::unique_ptr<QObject> page(component.create());
+        QVERIFY2(page, qPrintable(component.errorString()));
+        // the page runs `accessibility get` through the runner (the stub, not an installed backend) and shows its answer
+        QTRY_VERIFY(!page->property("busy").toBool());
+        QCOMPARE(page->property("textAvailable").toBool(), stub == "on");
+        QCOMPARE(page->property("animAvailable").toBool(), stub == "on");
+        if (stub == "on") {
+            QCOMPARE(page->property("textSize").toInt(), 14);
+            QCOMPARE(page->property("anim").toString(), QString("off"));
+        }
     }
     void runnerKnowsChargeAndRejectsOthers() {
         ActionRunner runner;
@@ -296,8 +338,9 @@ private slots:
 
     }
 private:
-    // Stand-ins for backends/charge.sh, so no test reads the backend installed on the host: "on" answers like a
-    // phone with a declared charge limit, "off" like any other.
+    // Stand-ins for backends/charge.sh and backends/accessibility.sh, so no test reads a backend installed on the
+    // host: "on" answers like a phone with a declared charge limit and both Omarchy accessibility commands, "off" like
+    // one with neither.
     QString stubs(const QString &name) const { return m_stubs.filePath(name); }
     QTemporaryDir m_stubs;
 };
