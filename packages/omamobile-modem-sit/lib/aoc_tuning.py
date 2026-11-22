@@ -5,6 +5,13 @@ Only the APMg3 telephony component on audio_output_tuning is addressed.
 The GPL AoC interface defines CMD_HDR / SET_PARAMETER_BULK; the route
 adapter adds an envelope with tag 2 around each unchanged protobuf. No
 vendor executable, shared memory mapping, or arbitrary command API.
+
+omamobile-speaker-tuning (the 7 Pro's speaker tuning) has an aoc_tuning.py
+of its own that talks to the same AoC nodes, one exchange at a time. The 9a
+doesn't install that package, so the two can't meet today; if both ever ran
+on one phone they would need one owner for the nodes (or a lock around each
+exchange), since neither expects another writer between a bulk record and
+its command.
 """
 import os
 from pathlib import Path
@@ -31,15 +38,14 @@ def package(data, operation):
 
 
 class VoiceTuning:
-    def __init__(self, route, *, root=ROOT):
-        if route not in ('speaker', 'earpiece'):
-            raise ValueError('Unsupported tegu tuning route')
-        device = 'speaker' if route == 'speaker' else 'handset'
+    def __init__(self, *, root=ROOT):
+        # The speaker's files only: nothing here asks for the handset's (an
+        # earpiece route that wants them brings that choice back with it).
         # Load all three before touching any service. An off package is
         # required for cleanup even if the on package is the only big one.
-        self.on = self.read(root / f'uplink_{device}_aec_on_config.pb', 19)
-        self.off = self.read(root / f'uplink_{device}_aec_off_config.pb', 19)
-        self.downlink = self.read(root / f'downlink_{device}_config.pb', 20)
+        self.on = self.read(root / 'uplink_speaker_aec_on_config.pb', 19)
+        self.off = self.read(root / 'uplink_speaker_aec_off_config.pb', 19)
+        self.downlink = self.read(root / 'downlink_speaker_config.pb', 20)
         self.command_fd = self.bulk_fd = None
         self.counter = 0
         self.touched = False

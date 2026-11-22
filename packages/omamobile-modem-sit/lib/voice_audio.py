@@ -306,7 +306,7 @@ class VoiceAudio:
             # for 2-3 s only (2026-11-03). The sink is still muted here.
             if aec:
                 try:
-                    self.tuning = VoiceTuning('speaker')
+                    self.tuning = VoiceTuning()
                     self.tuning.start()
                 except (OSError, TuningError) as error:
                     raise AudioRefused('tegu call audio refused: AoC tuning unavailable or unconfirmed') from error

@@ -59,11 +59,10 @@ class TuningTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
         self.marker = self.root / 'uncertain'
-        for route in ('speaker', 'handset'):
-            for name, value in ((f'uplink_{route}_aec_on_config.pb', b'\x08\x01'),
-                                (f'uplink_{route}_aec_off_config.pb', b'\x08\x00'),
-                                (f'downlink_{route}_config.pb', b'\x10\x01')):
-                (self.root / name).write_bytes(value)
+        for name, value in (('uplink_speaker_aec_on_config.pb', b'\x08\x01'),
+                            ('uplink_speaker_aec_off_config.pb', b'\x08\x00'),
+                            ('downlink_speaker_config.pb', b'\x10\x01')):
+            (self.root / name).write_bytes(value)
         self.io = Services()
         for target, name, value in ((tuning, 'UNCERTAIN', self.marker),
                                     (tuning.os, 'open', self.io.open),
@@ -75,8 +74,8 @@ class TuningTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def voice(self, route='speaker'):
-        return tuning.VoiceTuning(route, root=self.root)
+    def voice(self):
+        return tuning.VoiceTuning(root=self.root)
 
     def test_bulk_envelopes_and_confirmed_off_cleanup(self):
         voice = self.voice()
@@ -99,12 +98,17 @@ class TuningTests(unittest.TestCase):
         voice.close()
         self.assertEqual(self.io.written, before)
 
-    def test_earpiece_uses_handset_files(self):
+    def test_only_the_speaker_files_are_read(self):
+        # The handset's files may be there (the extractor takes all six) or
+        # not: the transport asks for the speaker's three and nothing else.
         (self.root / 'uplink_handset_aec_on_config.pb').write_bytes(b'handset-test')
-        voice = self.voice('earpiece')
+        (self.root / 'uplink_speaker_aec_on_config.pb').write_bytes(b'speaker-test')
+        voice = self.voice()
         voice.start()
-        self.assertEqual(self.io.written[0][1][12:24], b'handset-test')
+        self.assertEqual(self.io.written[0][1][12:24], b'speaker-test')
         voice.close()
+        with self.assertRaises(TypeError):
+            tuning.VoiceTuning('earpiece', root=self.root)
 
     def test_missing_or_oversized_files_fail_before_open(self):
         path = self.root / 'downlink_speaker_config.pb'

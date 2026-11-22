@@ -414,7 +414,7 @@ class TeguAudioTests(unittest.TestCase):
                 # The tuning goes up after both streams have started, before unmute
                 self.assertLess(events.index(('start', 2)), events.index(('aec-start',)))
                 self.assertLess(events.index(('aec-start',)), events.index(('cset', 'Incall Sink Mute', '0')))
-            tuning.assert_called_once_with('speaker')
+            tuning.assert_called_once_with()
             tuning.return_value.start.assert_called_once()
             tuning.return_value.close.assert_called_once()
         self.assertEqual(controls, original)
