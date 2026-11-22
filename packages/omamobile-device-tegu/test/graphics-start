@@ -57,11 +57,15 @@ export TEST_SYSTEMCTL=$tmp/systemctl
 cat > "$tmp/bin/systemctl" <<'EOF'
 #!/bin/bash
 echo "$*" >> "$TEST_SYSTEMCTL"
+# a start records whether the marker was still down and what had loaded
+[[ $1 != start ]] || { [[ -e $TEST_MARKER ]] && echo "at start: marker down" >> "$TEST_SYSTEMCTL"; echo "at start, loaded: $(tr '\n' ' ' < "$TEST_LOG")" >> "$TEST_SYSTEMCTL"; }
 case $1 in
   show) echo "${BACKLIGHT_STATE:-inactive}" ;;
   start) [[ -z ${BACKLIGHT_START_FAILS:-} ]] ;;
 esac
 EOF
+# timeout: records its limit, then runs the command (no real waiting)
+printf '#!/bin/bash\necho "timeout $1" >> "$TEST_SYSTEMCTL"\nshift\nexec "$@"\n' > "$tmp/bin/timeout"
 printf '#!/bin/bash\necho synced >> "$TEST_LOG"\n' > "$tmp/bin/sync"
 printf '#!/bin/bash\nexit 0\n' > "$tmp/bin/sleep"
 chmod +x "$tmp/bin/"*
@@ -237,6 +241,17 @@ grep -qx "reset-failed $unit" "$TEST_SYSTEMCTL" && grep -qx "start $unit" "$TEST
   || fail "start before reset-failed (the start limit would refuse it)"
 [[ $out == *"19440000.dsi.0: the saved brightness"*"is restored"* ]] || fail "the restore is not logged: $out"
 [[ $(loads) == "$all" && ! -e $marker ]] || fail "the restore changed the start: $(loads)"
+# the start is bounded, and runs after the last driver step with the marker clear
+grep -qx 'timeout 10' "$TEST_SYSTEMCTL" || fail "the restore's start is not bounded: $(cat "$TEST_SYSTEMCTL")"
+[[ $(grep -n '^timeout 10' "$TEST_SYSTEMCTL" | cut -d: -f1) -lt $(grep -n '^start ' "$TEST_SYSTEMCTL" | cut -d: -f1) ]] \
+  || fail "timeout is not what starts the unit"
+! grep -qx 'at start: marker down' "$TEST_SYSTEMCTL" || fail "the restore ran while the marker was down"
+[[ $(grep '^at start, loaded: ' "$TEST_SYSTEMCTL") == "at start, loaded: $(tr '\n' ' ' < "$TEST_LOG")" ]] \
+  || fail "the restore ran before the last driver step: $(cat "$TEST_SYSTEMCTL")"
+# a display that did not come up: no restore, whether the load or the bind failed
+reset; mkdir -p "$bl"
+BACKLIGHT_STATE=failed FAIL_MODULE=gs_decon "$script" >/dev/null || true
+! grep -qE '^(start|reset-failed)' "$TEST_SYSTEMCTL" || fail "the restore ran after gs_decon failed"
 # a restore that worked, or one udev hasn't started yet, is left alone
 for st in active inactive; do
   reset; mkdir -p "$bl"

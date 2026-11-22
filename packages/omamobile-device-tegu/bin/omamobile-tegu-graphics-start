@@ -80,7 +80,10 @@ panel_name() {
 # gets EPERM, fails and hits the start limit (#512). Once allow_tx is on,
 # a restore that failed is run again (after waiting out one still running).
 # Only a failed one: a restore that worked, or that udev hasn't started
-# yet, is left alone.
+# yet, is left alone. It runs at the very end, after the last driver step
+# and after the marker is cleared, and each start is bounded to 10 s (the
+# unit's own timeout is 90 s): a brightness write that hangs costs neither
+# the later steps their time nor the next boot its GPU, display and Wi-Fi.
 restore_backlight() {
   local b unit state i
   for b in "$root"/sys/class/backlight/*; do
@@ -93,10 +96,10 @@ restore_backlight() {
     done
     [[ $state == failed ]] || continue
     systemctl reset-failed "$unit" 2>/dev/null
-    if systemctl start "$unit" 2>/dev/null; then
+    if timeout 10 systemctl start "$unit" 2>/dev/null; then
       log "${b##*/}: the saved brightness, refused before DSI commands were allowed, is restored"
     else
-      log "${b##*/}: restoring the saved brightness failed again (systemctl status $unit)"
+      log "${b##*/}: restoring the saved brightness failed again or took over 10 s (systemctl status $unit)"
     fi
   done
 }
@@ -125,6 +128,9 @@ if [[ ${1:-} != --retry ]] && { loaded panthor || loaded gs_decon; }; then
 fi
 
 mkdir -p "$state" "$root/run"
+# Set only by the display step: allow_tx written, and gs_decon loaded and bound.
+dsi_allowed=0
+display_up=0
 # The marker names the step in progress, so a hang is easy to place.
 phase() { printf '%s %s\n' "$(date -Is)" "$1" > "$marker"; sync -f "$marker" 2>/dev/null || sync; }
 finish() { rm -f "$marker"; sync -f "$state" 2>/dev/null || sync; }
@@ -158,7 +164,6 @@ if [[ -e $decon ]]; then
   # when it already is) makes the parameter file exist before the write.
   modprobe gs_dsim_cmd 2>/dev/null || true
   panel=$(panel_name)
-  dsi_allowed=0
   # the bootloader appends the panel's id (google-tg4c.2d008004 on the palmtop)
   if [[ $panel == google-tg4c || $panel == google-tg4c.* ]]; then
     if echo 1 > "$allow_tx" 2>/dev/null; then
@@ -182,9 +187,8 @@ if [[ -e $decon ]]; then
     card=$(readlink -f "$root/dev/dri/by-path/platform-19470000.display-controller-card" 2>/dev/null || true)
     [[ -n $card ]] && printf '%s\n' "${card#"$root"}" > "$root/run/omamobile-tegu-display-card"
     up+="${up:+, }display"
+    display_up=1
   fi
-  # (Not read back from allow_tx: the kernel shows the bool as Y, not 1.)
-  (( dsi_allowed )) && restore_backlight
 else
   log "no display controller in this DTB; skipped"
 fi
@@ -290,6 +294,9 @@ else
 fi
 
 finish
+# Only where the display came up (allow_tx is not read back: the kernel
+# shows the bool as Y, not 1).
+(( dsi_allowed && display_up )) && restore_backlight
 log "up: ${up:-nothing}"
 if [[ -n $failed ]]; then
   log "failed: $failed (these loads returned, so the marker is clear; --retry tries them again)"
