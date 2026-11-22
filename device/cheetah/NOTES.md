@@ -17,7 +17,10 @@ the same state. There was no slot selection between these two boots.
 | Slot B boot | A bytes (0x30–33) | B bytes (0x34–37) | Fastboot |
 | --- | --- | --- | --- |
 | First | `01 08 00 00` | `02 04 00 00` | B active, both slots bootable and unsuccessful, A retry 1, B retry 2 |
-| Second | `01 08 00 00` | `01 0c 00 00` | Same flags, A retry 1, B retry 1 |
+| Second | `01 08 00 00` | `01 0c 00 00` | B active, both slots bootable and unsuccessful, A retry 1, B retry 1 |
+
+B also gained the `fastboot_ok` bit between the Linux readings. The
+Fastboot comparison covered the active slot, bootability, success and retries.
 
 On a later normal boot, the installed 0.1.60-1 boot-success unit ran the
 candidate ARM64 helper through a service-specific read-only bind mount.
