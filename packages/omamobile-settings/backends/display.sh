@@ -61,7 +61,7 @@ set_brightness() {
 # refuses; ask for the user's graphical session.
 set_brightness_session() {
   local pct=$1 dev=$2 sid path max
-  [[ -n $dev ]] || dev=$(ls /sys/class/backlight 2>/dev/null | head -n1)
+  [[ -n $dev ]] || dev=$(ls /sys/class/backlight 2>/dev/null | sed -n 1p)
   [[ -n $dev && -r /sys/class/backlight/$dev/max_brightness ]] || return 1
   max=$(cat "/sys/class/backlight/$dev/max_brightness") || return 1
   sid=$(loginctl show-user "$(id -un)" -p Display --value 2>/dev/null) || return 1
