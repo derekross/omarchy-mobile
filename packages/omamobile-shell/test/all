@@ -145,7 +145,7 @@ grep -c 'Quickshell.execDetached(AccessModel.dismissArgv(r.id))' plugins/omamobi
 # One level at a time where Escape closed too much: a quick-settings panel
 # goes back to quick settings, "Show with…" to the window's menu, and a
 # widget's unsaved settings are asked about.
-for panel in WifiPanel BluetoothPanel; do
+for panel in WifiPanel BluetoothPanel HotspotPanel; do
   grep -c 'else root.backRequested()' "plugins/omamobile.quicksettings/$panel.qml" >/dev/null || fail "$panel: Escape goes back to quick settings"
 done
 grep -c 'Keys.onEscapePressed: root.backRequested()' plugins/omamobile.quicksettings/RecordPanel.qml >/dev/null || fail "RecordPanel: Escape goes back to quick settings"

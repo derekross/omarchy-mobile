@@ -890,7 +890,7 @@ back instead; start it further in.
 3. **Escape, to whatever has the keyboard focus**: an app, or a shell sheet
    that takes the keyboard (quick settings and its panels, the drawer,
    recent apps, the update sheet, Mobile network). Those go one level on it:
-   a Wi-Fi, Bluetooth or Record panel back to quick settings, "Show with…"
+   a Wi-Fi, Bluetooth, Hotspot or Record panel back to quick settings, "Show with…"
    back to the window's menu.
 
 A new surface that doesn't take the keyboard joins the list with a `Loader`

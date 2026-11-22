@@ -204,7 +204,12 @@ Item {
       padding: root.pad
 
       focus: root.opened
-      Keys.onEscapePressed: root.close()
+      // Back goes one level: out of the name and password edit, else back
+      // to quick settings. The scrim tap and the swipe still leave.
+      Keys.onEscapePressed: {
+        if (root.editing) root.cancelEdit()
+        else root.backRequested()
+      }
 
       MouseArea { anchors.fill: parent }
 

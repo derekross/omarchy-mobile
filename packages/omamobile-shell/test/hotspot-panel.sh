@@ -40,7 +40,10 @@ qrencode_fake='echo "qrencode args: $*" >>'"$log"'; echo "qrencode stdin: $(cat)
 stub qrencode "$qrencode_fake"
 echo "Phone" >"$tmp/ssid"; echo "correct horse battery" >"$tmp/psk"
 
-run() { env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" PATH="$fake:$basic" bash "$script" "$@"; }
+# The system backend's path points into the scratch directory, so a phone
+# with /etc/omamobile/hotspot-backend runs the NetworkManager checks too.
+sysbackend=$tmp/etc/omamobile/hotspot-backend
+run() { env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" PATH="$fake:$basic" OMAMOBILE_HOTSPOT_SYSTEM_BACKEND="$sysbackend" bash "$script" "$@"; }
 field() { python3 -c 'import json,sys; v=json.load(sys.stdin)[sys.argv[1]]; print(v if not isinstance(v,bool) else str(v).lower())' "$1"; }
 
 # ---- NetworkManager backend, hotspot off
@@ -107,7 +110,7 @@ esac
 EOF
 chmod +x "$tmp/home/.config/omamobile/hotspot-backend"
 stub qrencode "$qrencode_fake"
-own() { env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" PATH="$fake:$basic" LOG="$log" bash "$script" "$@"; }
+own() { env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" PATH="$fake:$basic" OMAMOBILE_HOTSPOT_SYSTEM_BACKEND="$sysbackend" LOG="$log" bash "$script" "$@"; }
 s=$(own state)
 [[ $(echo "$s" | field backend) == own && $(echo "$s" | field share_available) == true ]] || fail "the device's backend answers the state"
 [[ $(echo "$s" | field qr) == "$tmp/run/omamobile-hotspot/wifi-qr.png" ]] || fail "the QR code is added to the backend's state"
@@ -118,3 +121,13 @@ own share on | grep -c '^ok' >/dev/null && grep -q 'backend share on' "$log" || 
 own alltraffic off | grep -c '^ok' >/dev/null && grep -q 'backend alltraffic off' "$log" || fail "alltraffic goes to the device's backend"
 (own set "Own" "short" || true) | grep -c '^error:' >/dev/null || fail "the checks run before any backend"
 pass "hotspot-panel.sh: a device's own backend"
+
+# ---- the system backend (its path from OMAMOBILE_HOTSPOT_SYSTEM_BACKEND)
+# answers when the owner has none of their own
+mkdir -p "${sysbackend%/*}"
+sed 's/"backend":"own"/"backend":"system"/' "$tmp/home/.config/omamobile/hotspot-backend" >"$sysbackend"
+chmod +x "$sysbackend"
+[[ $(own state | field backend) == own ]] || fail "the owner's backend goes before the system one"
+rm "$tmp/home/.config/omamobile/hotspot-backend"
+[[ $(own state | field backend) == system ]] || fail "the system backend answers at its configured path"
+pass "hotspot-panel.sh: the system backend's path is configurable"

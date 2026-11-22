@@ -30,7 +30,8 @@
 #
 # A device may bring its own hotspot (its own hostapd, its own firewall)
 # and with it the VPN boxes: an executable at /etc/omamobile/hotspot-backend
-# (or ~/.config/omamobile/hotspot-backend, for the owner's own) that takes
+# (OMAMOBILE_HOTSPOT_SYSTEM_BACKEND names another path, the test's scratch
+# one; or ~/.config/omamobile/hotspot-backend, for the owner's own) that takes
 # the same verbs and prints the same lines replaces everything below; this
 # script then only draws the QR code for it.
 #
@@ -44,7 +45,7 @@ NM_CON=${OMAMOBILE_HOTSPOT_CONNECTION:-Hotspot}
 json_str() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
 
 backend=""
-for b in "${XDG_CONFIG_HOME:-$HOME/.config}/omamobile/hotspot-backend" /etc/omamobile/hotspot-backend; do
+for b in "${XDG_CONFIG_HOME:-$HOME/.config}/omamobile/hotspot-backend" "${OMAMOBILE_HOTSPOT_SYSTEM_BACKEND:-/etc/omamobile/hotspot-backend}"; do
   [[ -x $b ]] && { backend=$b; break; }
 done
 

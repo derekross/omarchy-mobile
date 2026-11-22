@@ -69,6 +69,7 @@ Item {
     }
     wifiPicker.close()
     bluetoothPanelItem.close()
+    hotspotPanelItem.close()
     if (editing) finishEditing()
     expanded = payload.expanded === true
     if (payload.page === "edit") startEditing()
