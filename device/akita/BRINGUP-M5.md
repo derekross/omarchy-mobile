@@ -202,4 +202,6 @@ The kernel: `7.3.0-rc6-omamobile-push1-g9cf0719104a1`, `omamobile` at `26867fc4e
 | --- | --- | --- | --- |
 | 62 | The GPU's top | `clk_acpm`'s `zuma_gpu_max_khz` reads 723000. devfreq: `simple_ondemand`, 150 to 723 MHz, ten levels (150, 302, 337, 376, 419, 467, 521, 580, 649, 723). During 15 s of swiping it went to 723 MHz (1.2 s there in total) and no higher, with 46 transitions, then back to 150 MHz; the zones read 44 to 46 C afterwards. The CPU tops are unchanged (1425, 1418, 2147 MHz). `tools/phone-smoke`: every required row ok, GPU ok, no failed units, 3 known error lines and 0 new | The 8a's GPU stops at its highest BCL cap, held by both the device tree and the package |
 
+Test 62's `tools/phone-smoke` read "hottest zone 65 °C" twelve seconds after boot. On a later boot (2026-11-22, `7.3.0-rc6-omamobile-push1-g82e3cf0b7f74`, `omamobile` at `82e3cf0b7` with nothing added, on slot B by `modules-push`, then `flash`), every zone was read from the first seconds: big/mid/little/gpu were 50/49/49/48 °C at 8 s, **62**/61/59/51 °C at 13 s, 54/55/53/53 °C at 19 s and 50/50/49/49 °C at 24 s, with the battery at 33 °C throughout. So the hottest zone at boot is `big-thermal`, peaking while the session starts and every core is busy, well under its 80 °C trip; test 62's 65 °C was almost certainly that zone in the same startup burst.
+
 Slot B: 2 tries left.
