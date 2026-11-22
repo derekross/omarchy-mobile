@@ -16,7 +16,7 @@ void ActionRunner::post(const QString &tool, const QVariantMap &result, int id) 
 
 int ActionRunner::run(const QString &tool, const QStringList &args) {
     static const QRegularExpression word("\\A[a-z0-9]{1,16}\\z");
-    static const QStringList tools = {"display", "charge"};
+    static const QStringList tools = {"display", "charge", "notifications"};
     const int id = ++m_next;
     auto fail = [this, &tool, id](const QString &why) { post(tool, {{"error", why}}, id); return id; };
     if (!tools.contains(tool) || args.size() > 3) return fail("unknown action");
@@ -43,6 +43,8 @@ int ActionRunner::run(const QString &tool, const QStringList &args) {
     });
     p->start();
     p->closeWriteChannel();
-    QTimer::singleShot(20000, p, [p] { if (p->state() != QProcess::NotRunning) p->kill(); });
+    // clearing notifications: up to 200 forget calls, one at a time; the backend stops its loop 55 s after it started and ends by about 78 s, so 90 s
+    const bool clearNotes = tool == "notifications" && args.value(0) == "clear";
+    QTimer::singleShot(clearNotes ? 90000 : 20000, p, [p] { if (p->state() != QProcess::NotRunning) p->kill(); });
     return id;
 }

@@ -36,6 +36,14 @@ row stays hidden today: omamobile-device-husky blacklists `max77759_charger`
 (`omamobile-max77759.conf`), so there is no `max77759-charger` power supply
 until that blacklist is lifted on a kernel with
 derekross/linux-omarchy-mobile#266.
+
+A third page, Notifications, has two parts, each shown only when it works on the phone. Hide notification text on the
+lock screen sets Omarchy's `lock-hide-notification-text` flag through `omarchy-toggle` and reads it back with
+`omarchy-toggle-enabled` (offered only when the installed lock screen's `LockGlance.qml` reads that flag; it is shown
+only with the keypad lock on, which the page says). Notification history shows how many notifications are stored and
+clears them, after a confirm, through the notification service's own calls (`omarchy-shell notifications dismissAll`,
+then `forget KEY` for each key in its `live.json` and `history.json`, read only); Settings writes no file itself. The
+page runs `backends/notifications.sh`.
 Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management and
 recording controls are separate future contributions with their own runtime
 contracts and tests; this catalog does not offer those routes.
