@@ -47,14 +47,32 @@ Item {
   property var manifest: null
 
   readonly property string pluginId: (manifest && manifest.id) || "omamobile.home"
-  readonly property var appLibrary: shell && shell.appLibrary ? shell.appLibrary : localLibrary.item
+  readonly property var appLibrary: shell && shell.appLibrary ? shell.appLibrary : (drawerLibrary || localLibrary.item)
 
-  // As in omamobile.launcher: a panel plugin gets no application library
-  // from the host, so run Omarchy's own type here.
+  // A panel plugin gets no application library from the host. The app
+  // drawer (omamobile.launcher, reached through DrawerLinkClient.qml below)
+  // runs Omarchy's AppLibrary for itself, so use that one: each instance
+  // rescans hidden entries and app icons on every desktop-entry change, and
+  // a package install changes them many times. Only while the drawer is out
+  // of reach for 5 s (disabled, not up yet) run our own; the wait starts
+  // again each time the drawer's goes, so a launcher reload (gone for a
+  // moment) does not build and drop a whole library.
+  readonly property var drawerLibrary: drawer && drawer.appLibrary ? drawer.appLibrary : null
+  // Set only by the timer, after the drawer's has been gone for the whole 5 s,
+  // and cleared on every change, so the own library never starts in between.
+  property bool ownLibraryWanted: false
+  onDrawerLibraryChanged: { ownLibraryWanted = false; if (!drawerLibrary) libraryGrace.restart() }
   Loader {
     id: localLibrary
-    active: !!root.shell && !root.shell.appLibrary
+    active: !!root.shell && !root.shell.appLibrary && root.ownLibraryWanted
     sourceComponent: Component { OmarchyServices.AppLibrary { } }
+    onLoaded: console.info("omamobile.home: own app library (the drawer's is out of reach)")
+  }
+  Timer {
+    id: libraryGrace
+    interval: 5000
+    running: true
+    onTriggered: if (!root.drawerLibrary) root.ownLibraryWanted = true
   }
 
   // ---------------------------------------------------------------- look
@@ -80,14 +98,20 @@ Item {
   readonly property bool wantsKeyboard: sheet === "apps" || sheet === "settings" || sheet === "create" || owlTyping
 
   // Bumped when desktop entries change, so app tiles look themselves up again.
+  // Quickshell signals once per row it inserts or removes, so one rescan
+  // during a package install can signal dozens of times; the bump waits
+  // until they stop for 400 ms, or about 2.4 s at most.
   property int appsRevision: 0
+  property double appsFirstChange: 0
   Connections {
     target: DesktopEntries.applications
     function onValuesChanged() {
-      root.appsRevision += 1
+      if (!appsSettle.running) root.appsFirstChange = Date.now()
+      if (Date.now() - root.appsFirstChange < 2000) appsSettle.restart()
       if (root.waitingForApps) root.makeDefault(false)
     }
   }
+  Timer { id: appsSettle; interval: 400; onTriggered: root.appsRevision += 1 }
 
   function availableAppIds() {
     var values = DesktopEntries.applications.values || []

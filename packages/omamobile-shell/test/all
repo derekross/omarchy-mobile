@@ -691,6 +691,14 @@ done
 if [[ -n ${OMAMOBILE_HOME_RENDER:-} ]]; then
   bash test/home-render "$OMAMOBILE_HOME_RENDER" >/dev/null || fail "home screen render"
 fi
+# The home screen shares the drawer's AppLibrary and settles a burst of
+# desktop-entry changes into one bump (test/applib-share, OWL container).
+if [[ -n ${OMAMOBILE_APPLIB_SHARE:-} ]]; then
+  bash test/applib-share >/dev/null || fail "home screen shares the drawer's app library"
+fi
+grep -c 'readonly property var drawerLibrary: drawer && drawer.appLibrary' plugins/omamobile.home/Home.qml >/dev/null || fail "the home screen uses the drawer's app library"
+grep -c 'function onAppsChanged() { Qt.callLater(root.refreshApps) }' plugins/omamobile.launcher/Launcher.qml >/dev/null || fail "the drawer refreshes once per burst of app changes"
+pass "home screen and drawer share one app library (the drawer's coalescing is checked by this grep only)"
 pass "home screens in landscape"
 
 # The built-ins from omarchy-widgets are the OWL originals now (the
