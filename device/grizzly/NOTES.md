@@ -472,6 +472,13 @@ An off-device OpenSSL run verified the same raw SHA-256 in
 6.952 seconds and reached the isolated systemd target. D1
 advertises SHA-2 instructions on all seven CPU cores.
 
+The v19 fixture uses OpenSSL for the same raw SHA-256 gate.
+In the exact-kernel arm64 VM it verified the reference image
+in 7.515 seconds, reached the isolated systemd target and
+powered off on schedule. Rescue rejected a valid compressed
+image with a wrong digest. The package passed the five-image
+stage-only simulation.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
