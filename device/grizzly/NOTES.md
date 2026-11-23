@@ -248,6 +248,19 @@ variant. The live `vendor_boot_b` readback matched all
 8,192 supplied image bytes. A remained active and successful,
 and B reported three tries.
 
+The attended DWC3 timing trial produced no USB logging port.
+DBL and ABL record a cold charger-mode boot 82 seconds after
+the first B boot, with the expected initrd on both. The
+charger-mode PMIC and watchdog fields match the prior timed
+trials. This fits the earliest timer and places the transition
+before either extension could have fired.
+
+The result points to the DWC3 child and UDC going unobserved.
+No direct marker was recovered to establish PID 1 causation
+or sysfs availability. The next trace target is the wrapper's
+PHY and repeater prerequisites, including CPM regulator
+registration. Stock A booted again with verity enforcing.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
