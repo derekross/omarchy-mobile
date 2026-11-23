@@ -413,6 +413,23 @@ the new tagged console.
 The next change can give this MAX77779 sink a fresh CC and VBUS
 sample after startup reset, using the normal TCPM attach path.
 
+The signed v16 candidate adds that opt-in and queues the existing
+VBUS and CC events when the sink leaves reset. Offline tests
+covered the guards, debounce, and missing CC or VBUS. The Mac
+VM confirmed the tagged warm restart. On 2026-11-23, Fastboot
+accepted all five B images and the `vendor_boot_b` readback
+matched all 8,192 supplied bytes. A remained active and
+successful and B was bootable with three tries.
+
+On hardware, v16 attached with the USB cable continuously
+connected. TCPM sampled VBUS present and unchanged CC1 Rp
+after reset, used its normal 200 ms debounce, and reached
+`SNK_READY`. The UDC reached `configured` at high speed. The
+Mac enumerated the Grizzly ACM interface and read 29,950 bytes
+of live kernel log. The warm recovery returned to stock A with
+verity enforcing. Pstore, `SYSTEM_LAST_KMSG`, and the first stock
+bugreport contained the tagged console.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
