@@ -33,6 +33,15 @@ and had no failed systemd units. The modem reported ONLINE after its
 manifest was refreshed from the same phone's post-Recovery backup. All
 six radio and calibration partitions still matched that backup.
 
+The extractor produced the same four sensor files and DC-PHY settings
+from the July and November factory images. After installing the five
+November files and rebooting into B, the main, front, ultrawide and
+telephoto cameras each delivered four nonempty 640×480 RGBA frames
+through PipeWire. Each GStreamer pipeline reached end of stream and
+discarded the frames. The matching libcamera tools listed all four
+cameras. The modem remained ONLINE on this boot. The optional kernel-log
+check still reported three CPIF receive errors for an unopened channel.
+
 The factory index keeps the November build untested pending a signed
 release containing the repair.
 
