@@ -488,6 +488,16 @@ D1 booted again from slot A with verity enforcing. Pstore,
 `SYSTEM_LAST_KMSG`, and the first stock bugreport contain
 the matching userspace check and reset markers.
 
+The v20 trial started OpenSSH after systemd took over and
+bound it to the USB IPv6 address on port 2222. The Mac used
+the same pinned Ed25519 host key as in rescue and opened an
+interactive PTY. The shell confirmed systemd PID 1, read-only
+ext4 on the RAM-backed loop device, and zero SCSI disks.
+The warm timer returned the device to Fastboot and stock D1
+booted again on slot A with verity enforcing.
+Pstore, `SYSTEM_LAST_KMSG`, and the first stock bugreport
+contain the matching systemd, SSH PTY, and warm reset markers.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
