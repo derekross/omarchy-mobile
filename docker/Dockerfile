@@ -13,13 +13,29 @@ ARG GID=1000
 
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Set by BuildKit from the build platform (amd64, arm64)
+ARG TARGETARCH
+
+# The multilib and lib32 packages exist only for x86 (they serve the
+# LineageOS reference build). An arm64 builder can't run the pinned
+# linux-x86 Android clang, so it gets Ubuntu's LLVM in the image instead,
+# at the path where bin/omamobile mounts the clang on x86 (CONTAINER_CLANG);
+# on an arm64 host bin/omamobile mounts nothing over it.
+RUN if [ "$TARGETARCH" = amd64 ]; then \
+      arch_pkgs="g++-multilib gcc-multilib lib32readline-dev lib32z1-dev"; \
+    else \
+      arch_pkgs="clang-20 lld-20 llvm-20"; \
+    fi \
+    && apt-get update && apt-get install -y --no-install-recommends \
       bc bison build-essential ca-certificates ccache curl erofs-utils flex \
-      g++-multilib gcc-multilib git git-lfs gnupg gperf imagemagick \
-      protobuf-compiler python3-protobuf lib32readline-dev lib32z1-dev \
+      git git-lfs gnupg gperf imagemagick \
+      protobuf-compiler python3-protobuf $arch_pkgs \
       libdw-dev libelf-dev libgnutls28-dev lz4 libsdl1.2-dev libssl-dev \
       libxml2 libxml2-utils lzop pngcrush python-is-python3 rsync schedtool \
       squashfs-tools xsltproc xxd zip unzip zlib1g-dev openssh-client zstd \
+    && if [ "$TARGETARCH" != amd64 ]; then \
+      mkdir -p /opt/omamobile && ln -s /usr/lib/llvm-20 /opt/omamobile/clang; \
+    fi \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o /usr/local/bin/repo \
