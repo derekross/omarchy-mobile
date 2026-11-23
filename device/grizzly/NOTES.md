@@ -437,7 +437,19 @@ exact phone payload passed the 90-second warm-restart check.
 On 2026-11-23, Fastboot accepted all five images and the
 `vendor_boot_b` readback matched all 8,192 supplied bytes. A
 remained active and successful and B was bootable with three
-tries. Device NCM and SSH still need the attended trial.
+tries.
+
+The attended v17 hardware boot exposed NCM and ACM with the
+cable continuously connected. The Mac verified the SSH host
+key over ACM and authenticated over the NCM IPv6 link-local
+route. The session observed `ram-rescue`, a `rootfs` mount at
+`/`, and zero UFS disks, then retrieved the live kernel log.
+The timed warm restart reached Fastboot and stock Android
+booted again on A with verity enforcing. Pstore,
+`SYSTEM_LAST_KMSG`, and the first stock bugreport contained
+the tagged console. The bootloader archive recorded the DBL
+warm boot with CDD reason `0xbaba` and the subsequent cold
+boot entering Fastboot with Volume Down.
 
 ## Before first light
 
