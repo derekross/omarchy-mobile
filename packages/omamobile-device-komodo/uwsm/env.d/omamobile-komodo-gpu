@@ -1,0 +1,15 @@
+# Komodo's display controller drives the panel; Panthor renders through the
+# separate render node. Fall back to llvmpipe if the guarded probe did not pass.
+if [ -c /dev/dri/card0 ]; then
+  export AQ_DRM_DEVICES=/dev/dri/card0
+fi
+if [ -c /dev/dri/renderD128 ] && [ -s /run/omamobile-komodo-gpu-ready.json ]; then
+  export LIBGL_ALWAYS_SOFTWARE=0
+  unset GALLIUM_DRIVER QT_QUICK_BACKEND
+  export QSG_RHI_BACKEND=opengl
+else
+  export LIBGL_ALWAYS_SOFTWARE=1
+  export GALLIUM_DRIVER=llvmpipe
+  export QT_QUICK_BACKEND=software
+  unset QSG_RHI_BACKEND
+fi

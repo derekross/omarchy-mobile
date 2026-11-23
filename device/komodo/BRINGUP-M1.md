@@ -5,9 +5,11 @@
 (Arch Linux ARM, Hyprland, mainline Linux), not Omarchy-in-Termux/PRoot. The
 Pixel 9 Pro XL (`komodo`) is not a supported installer target. Omarchy boots
 from slot B into a usable 1344x2992 GUI; USB SSH/internet, touch input, flip-only
-KMS and the Mali-G715 Panthor render node have all been observed working. A
-local watchdog-guarded package enables the GPU before the session; it is not
-part of this PR pending package scaffolding and review. Idle CPU
+KMS and the Mali-G715 Panthor render node have all been observed working on a
+local integration build. The exact signed kernel PR head has been rebuilt but
+not yet boot-smoked on hardware. This PR includes the watchdog-guarded GPU
+package and its offline test; it remains experimental and needs maintainer
+review before release. Idle CPU
 samples improved after hardware rendering was enabled, but this was not a
 controlled benchmark. Internal Wi-Fi is not working: its PCI host enumerates,
 but the first `bcmdhd` probe failed coherent DMA allocation and oopsed in its
@@ -18,8 +20,9 @@ unverified. WhatsApp is not linked and no real messages were read. See
 [NOTES.md](NOTES.md) for evidence and chronology. The owner authorized
 experimental writes to slot B and
 `userdata`; slot A and firmware/calibration partitions remain untouched. No
-personal content was queried. Kernel worktree: `~/omamobile-kernel/wt-komodo-m1`;
-test builds are under `~/omamobile-kernel/out-komodo-*`.
+personal content was queried. Current kernel worktree:
+`~/dev/omamobile-kernel/wt-komodo-m3`; matching build outputs are under
+`~/dev/omamobile-kernel/out-komodo-*`.
 
 ## 1. Goal
 
@@ -37,7 +40,7 @@ supported slot-B and userdata install paths.
 - `R/` — private, owner-only read-only capture at
   `~/android/reference/komodo-stock/`; never commit raw captures.
 - `G/` — public Google GPL reference checkout at
-  `~/omamobile-kernel/google-caimito`, branch
+  `~/dev/omamobile-kernel/google-caimito`, branch
   `android-gs-caimito-6.1-android16`, commit `38a058681d6c`.
   Public sources: [`zumapro-komodo-mp.dts`](https://android.googlesource.com/kernel/devices/google/caimito/+/38a058681d6cefbb95200dc8a5348939773eb9d6/dts/zumapro-komodo-mp.dts)
   and [`constants.bzl`](https://android.googlesource.com/kernel/devices/google/caimito/+/38a058681d6cefbb95200dc8a5348939773eb9d6/constants.bzl).
@@ -154,7 +157,7 @@ required for this owner-authorized experiment.
   candidate at DTBO index 34. Exact Android 17 artifact correspondence is
   unresolved.
 - 2026-11-18: `linux-omarchy-mobile` worktree
-  `~/omamobile-kernel/wt-komodo-m1`, branch `omamobile-komodo-m1`, now contains
+  `~/dev/omamobile-kernel/wt-komodo-m1`, branch `omamobile-komodo-m1`, now contains
   a minimal `zumapro-komodo.dts`, Makefile entry, and Google compatible enum.
   The DTS builds; focused Google binding validation and `dt-validate` on the
   Komodo DTB reported no diagnostics. A full arm64 `Image` and all arm64 DTBs
@@ -206,7 +209,7 @@ required for this owner-authorized experiment.
   empty board DTS are retained outside this repository under the kernel
   worktree's `bringup-artifacts/ramtest-2026-11-18/` directory.
 - 2026-11-18: Prepared a diagnostic rebuild at
-  `~/omamobile-kernel/out-komodo-diag-2026-11-18/images/`. It reuses the exact
+  `~/dev/omamobile-kernel/out-komodo-diag-2026-11-18/images/`. It reuses the exact
   tested kernel, initramfs, DTB and overlays, adding only `omamobile.debug` to
   the vendor command line. This enables the existing initramfs USB, interrupt
   and uptime diagnostics on the display; its NCM+ACM gadget and serial shell
@@ -232,7 +235,7 @@ required for this owner-authorized experiment.
   controller address is `0x108d0000`. The shared init already supports this
   switch: when configured, it reads register `0x93` and writes `0x09` only if
   needed. A corrected diagnostic candidate is built at
-  `~/omamobile-kernel/out-komodo-usbswitch-2026-11-19/images/` with
+  `~/dev/omamobile-kernel/out-komodo-usbswitch-2026-11-19/images/` with
   `USB_SWITCH="108d0000.i2c 0x25"` and the required I2C tools. Image sizes,
   packed descriptor, and checksums were verified. The candidate was later
   rebuilt with the Komodo DTB enabling both cluster watchdogs and the PMU
@@ -293,7 +296,7 @@ required for this owner-authorized experiment.
   working rescue path; the next display milestone needs a Komodo-verified
   handoff or a minimal KM4 driver with source-backed panel power/reset details.
 - 2026-11-19: The DECON stage-0 RAM-rescue candidate at
-  `~/omamobile-kernel/bringup-artifacts/ramtest-2026-11-18/decon-stage0/images/` was flashed
+  `~/dev/omamobile-kernel/bringup-artifacts/ramtest-2026-11-18/decon-stage0/images/` was flashed
   to slot B and booted. Linux read DECON version `0x07060000`, active command
   mode (`GLOBAL_CON=0x133`), a 1344x2992 DPP0 image, and base address
   `0xfac00000`; SSH remained available. The live `/proc/iomem` calls that
@@ -308,7 +311,7 @@ required for this owner-authorized experiment.
   saved privately under
   `bringup-artifacts/ramtest-2026-11-18/decon-stage1/`.
 - 2026-11-19: Built and booted stage 2 from slot B at
-  `~/omamobile-kernel/out-komodo-decon-stage2-2026-11-19/images/`. It adds a
+  `~/dev/omamobile-kernel/out-komodo-decon-stage2-2026-11-19/images/`. It adds a
   64 MiB shared scanout pool in the live-verified System RAM range below 4 GiB,
   registers flip-only KMS, and enables the DRM fbdev console. There is no DSI
   link or panel node in this overlay, so it cannot send panel commands. Live
@@ -379,10 +382,22 @@ required for this owner-authorized experiment.
   touched DT binding passed `dt_binding_check`.
 - The output is a 42 MiB uncompressed arm64 `Image` and a 45 KiB Komodo DTB.
   The temporary Android-v4 images were test artifacts, not a supported device
-  package. The USB test overlay is only a source/build artifact; its hardware
-  behavior remains unverified.
+  package. USB2 gadget networking was observed on the integration build; the
+  separate Type-C-controller test overlay remains unverified.
 - Open: verify notification wake behavior, bring up internal Wi-Fi, match the
   Android 17 source/DTBO, port the full panel
   driver, and test the remaining peripherals. Persistent userspace, USB SSH,
   touch, flip-only KMS, and the GPU are proven on this one test device;
   `boot_a` remains unreadable through Fastboot.
+
+## 2026-11-23 PR handoff checkpoint
+
+The kernel PR head now contains the board description for the measured
+display handoff, UFS, USB2 and boot-critical SoC blocks; optional Type-C,
+touchscreen, WLAN and GPU nodes remain disabled in the board DTS. Its exact
+signed commit was rebuilt into `out-komodo-m2`, but the phone was not available
+over USB for an exact-head smoke test. The successful persistent GUI, touch
+and GPU observations came from the preceding local integration build and do
+not substitute for that test. The Omarchy Mobile PR includes the experimental
+device package, README and offline package test. Wi-Fi remains excluded from
+the selected overlays until the DMA-pool and driver failure are resolved.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Empty board overlay for local Pixel 9 Pro XL image construction. */
+/* Pixel 9 Pro XL ABL board selector. Hardware belongs in the kernel DTS. */
 /dts-v1/;
 /plugin/;
 

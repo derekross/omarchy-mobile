@@ -1,0 +1,57 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+
+[[ -f ../../device/komodo/device.conf ]] || fail "device descriptor exists"
+cmp -s device.conf ../../device/komodo/device.conf || fail "package descriptor matches device descriptor"
+pass "package descriptor matches device descriptor"
+
+dtbo_source=$(sed -n 's/^DTBO_SOURCE=//p' device.conf)
+[[ -f "../../device/komodo/$dtbo_source" ]] || fail "descriptor's ABL selector source exists"
+overlay_list=$(sed -n 's/^DTB_OVERLAYS="\(.*\)"$/\1/p' device.conf)
+for overlay in $overlay_list; do
+  [[ -f "../../device/komodo/overlays/$overlay.dtso" ]] || fail "selected overlay $overlay exists"
+done
+pass "ABL selector and selected overlays exist"
+
+bash -n PKGBUILD bin/omamobile-komodo-root-ready bin/omamobile-komodo-gpu-start || fail "package scripts parse"
+grep -q '^check()' PKGBUILD || fail "PKGBUILD runs this test"
+pass "package scripts parse and PKGBUILD enables the check"
+
+source <(sed -n '1,/^package() {/p' PKGBUILD | sed '$d')
+[[ $pkgname == omamobile-device-komodo && $pkgver == "$(<version)" ]] || fail "PKGBUILD metadata is current"
+[[ " ${depends[*]} " == *' systemd '* && " ${depends[*]} " == *' kmod '* ]] || fail "GPU guard runtime dependencies are declared"
+pass "PKGBUILD metadata and runtime dependencies are current"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+startdir=$PWD pkgdir="$tmp/pkg" bash -c 'source ./PKGBUILD; package'
+for path in \
+  usr/share/omamobile/device.conf \
+  usr/bin/omamobile-komodo-root-ready \
+  usr/bin/omamobile-komodo-gpu-start \
+  usr/lib/systemd/system/omamobile-komodo-root-ready.service \
+  usr/lib/systemd/system/omamobile-komodo-gpu.service \
+  usr/lib/modprobe.d/omamobile-komodo-gpu.conf \
+  usr/lib/systemd/system/multi-user.target.wants/omamobile-komodo-root-ready.service \
+  usr/lib/systemd/system/multi-user.target.wants/omamobile-komodo-gpu.service \
+  usr/lib/systemd/network/20-usb-gadget.network \
+  usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
+  usr/share/uwsm/env.d/omamobile-komodo-gpu \
+  usr/share/licenses/omamobile-device-komodo/LICENSE; do
+  [[ -e "$tmp/pkg/$path" ]] || fail "package installs $path"
+done
+pass "package() stages every declared runtime file"
+
+grep -q '/dev/watchdog0' bin/omamobile-komodo-gpu-start || fail "GPU start requires the hardware watchdog"
+grep -qxF 'blacklist panthor' vendor/modprobe.d/omamobile-komodo-gpu.conf || fail "Panthor is blacklisted from unguarded modalias loads"
+marker_line=$(grep -nF 'gpu > "$marker"' bin/omamobile-komodo-gpu-start | cut -d: -f1)
+probe_line=$(grep -nF 'if ! modprobe panthor;' bin/omamobile-komodo-gpu-start | cut -d: -f1)
+[[ -n $marker_line && -n $probe_line && $marker_line -lt $probe_line ]] || fail "GPU attempt marker precedes probe"
+[[ $(grep -cF 'if ! modprobe panthor;' bin/omamobile-komodo-gpu-start) == 1 ]] || fail "GPU driver is loaded only by the guard"
+[[ " $(sed -n 's/^DTB_OVERLAYS="\(.*\)"$/\1/p' device.conf) " != *' wifi-host-test '* ]] || fail "unverified Wi-Fi overlay is not selected"
+grep -q '^DTB_OVERLAYS="synaptics-touch-test gpu-test"$' device.conf || fail "only the individually qualified touch and guarded GPU overlays are selected"
+pass "unverified Wi-Fi is excluded and GPU loading stays guarded"

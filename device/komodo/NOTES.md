@@ -133,7 +133,7 @@ used. Results are in the private R/ capture.
   source matching, Wi-Fi, the full KM4 panel path, and other peripherals are
   separate remaining work.
 - A public Google GPL source checkout is now available locally at
-  `~/omamobile-kernel/google-caimito`. Kernel DTS work belongs in
+  `~/dev/omamobile-kernel/google-caimito`. Kernel DTS work belongs in
   `linux-omarchy-mobile`, not this repository; see the initial gate plan in
   [`BRINGUP-M1.md`](BRINGUP-M1.md).
 
@@ -254,9 +254,10 @@ a controlled benchmark. The graphics session was restarted once and the
 WhatsApp Web pairing page reopened. The five slot-B boot images were
 read-back verified; slot A and userdata were not written.
 
-Package version 0.0.4 is a local experimental bring-up artifact; its source is
-not included in this PR because it still needs the repository's package
-README/test scaffolding and release review.
+Package version 0.0.4 is included in this PR with package documentation and an
+offline test for descriptor consistency, install staging, and the GPU guard.
+It remains experimental and is not a supported installer target; release use
+requires maintainer review and hardware qualification.
 
 ## 2026-11-20 synthetic notification check
 

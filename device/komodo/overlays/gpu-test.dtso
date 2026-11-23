@@ -1,39 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Komodo MP1.0: expose the Zumapro GPU with the two lowest Tegu-tested OPPs. */
+/* Enable the Komodo GPU nodes described by the kernel board DTS. */
 /dts-v1/;
 /plugin/;
-
-/ {
-	fragment@20 {
-		target-path = "/";
-		__overlay__ {
-			komodo_gpu_opp: opp-table-gpu {
-				compatible = "operating-points-v2";
-
-				opp-150000000 {
-					opp-hz = /bits/ 64 <150000000>;
-				};
-
-				opp-302000000 {
-					opp-hz = /bits/ 64 <302000000>;
-				};
-			};
-		};
-	};
-};
-
-&acpm_ipc {
-	status = "okay";
-};
 
 &cmu_g3d {
 	status = "okay";
 };
 
+&komodo_gpu_opp {
+	status = "okay";
+};
+
 &gpu {
-	clocks = <&acpm_ipc 17>,
-		 <&cmu_g3d 18>,
-		 <&cmu_g3d 19>;
-	operating-points-v2 = <&komodo_gpu_opp>;
 	status = "okay";
 };

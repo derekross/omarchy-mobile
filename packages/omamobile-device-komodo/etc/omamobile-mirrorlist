@@ -1,0 +1,5 @@
+## Omarchy Mobile package repositories
+## The image builder enables one Server line for the chosen channel.
+# Server = https://pkgs.omamobile.org/stable/$arch
+# Server = https://pkgs.omamobile.org/development/$arch
+# Server = file:///var/lib/omamobile/repo/$arch

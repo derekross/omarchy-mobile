@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: MIT
+pkgname=omamobile-device-komodo
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Experimental Pixel 9 Pro XL first-light support"
+arch=(aarch64)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+depends=(bash iproute2 kmod systemd)
+provides=(omamobile-device)
+conflicts=(omamobile-device)
+backup=(etc/pacman.d/omamobile-mirrorlist)
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  install -Dm644 "$startdir/device.conf" \
+    "$pkgdir/usr/share/omamobile/device.conf"
+  install -Dm644 "$startdir/etc/omamobile-mirrorlist" \
+    "$pkgdir/etc/pacman.d/omamobile-mirrorlist"
+  install -Dm755 "$startdir/bin/omamobile-komodo-root-ready" \
+    "$pkgdir/usr/bin/omamobile-komodo-root-ready"
+  install -Dm644 "$startdir/systemd/omamobile-komodo-root-ready.service" \
+    "$pkgdir/usr/lib/systemd/system/omamobile-komodo-root-ready.service"
+  install -Dm755 "$startdir/bin/omamobile-komodo-gpu-start" \
+    "$pkgdir/usr/bin/omamobile-komodo-gpu-start"
+  install -Dm644 "$startdir/systemd/omamobile-komodo-gpu.service" \
+    "$pkgdir/usr/lib/systemd/system/omamobile-komodo-gpu.service"
+  install -Dm644 "$startdir/uwsm/env.d/omamobile-komodo-gpu" \
+    "$pkgdir/usr/share/uwsm/env.d/omamobile-komodo-gpu"
+  install -Dm644 "$startdir/vendor/modprobe.d/omamobile-komodo-gpu.conf" \
+    "$pkgdir/usr/lib/modprobe.d/omamobile-komodo-gpu.conf"
+  install -Dm644 "$startdir/vendor/systemd/network/20-usb-gadget.network" \
+    "$pkgdir/usr/lib/systemd/network/20-usb-gadget.network"
+  install -Dm644 "$startdir/vendor/NetworkManager/conf.d/10-omamobile-usb.conf" \
+    "$pkgdir/usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf"
+  install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+  ln -s ../omamobile-komodo-root-ready.service \
+    "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/omamobile-komodo-root-ready.service"
+  ln -s ../omamobile-komodo-gpu.service \
+    "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/omamobile-komodo-gpu.service"
+  install -Dm644 "$startdir/LICENSE" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Complete Komodo development boot after USB SSH is available
+Requires=sshd.service
+After=sshd.service systemd-networkd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-komodo-root-ready
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
