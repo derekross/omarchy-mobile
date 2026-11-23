@@ -96,6 +96,14 @@ could explain both warnings. The trigger remains unknown. The
 device tests used stock images throughout.
 [Android Verified Boot error handling](https://source.android.com/docs/security/features/verifiedboot/verified-boot#handle-verification-errors)
 
+A second full stock D1 OTA from Recovery on B activated A with
+three boot tries. The first stock boot on A still showed the red
+warning. After acknowledging it, Android reached the home screen.
+ADB confirmed a completed D1 boot on A with the factory AVB digest
+and `ro.boot.veritymode=eio`. The same-build repair restored the
+Android boot after acknowledgment. The EIO warning persists and its
+trigger remains unknown.
+
 The signed five-part M1 candidate passed host AVB signature, image
 layout and checksum checks. A loopback Fastboot mock verified writes
 to exactly the five slot-B destinations, a matching `vendor_boot_b`
@@ -108,10 +116,11 @@ through AP UART or ramoops remain open.
 
 ## Before first light
 
-- Establish a clean stock Android boot with A available for recovery.
-  Recheck slot flags and the stock Recovery transport before any M1
-  writes. Verify the live board selector and bootloader-provided
-  memory reservations during the first hardware trial.
+- Verify a repeatable stock Android and Recovery path on A, and
+  resolve the remaining EIO warning. Recheck slot flags and the
+  Recovery transport before any M1 writes. Verify the live board
+  selector and bootloader-provided memory reservations during the
+  first hardware trial.
 - Bring up the shared Malibu kernel support and a Grizzly board DTS in
   [linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile).
   Use the B0 observation to guide the first candidate and keep the stock
