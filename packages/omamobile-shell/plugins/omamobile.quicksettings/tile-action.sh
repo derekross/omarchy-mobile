@@ -79,8 +79,10 @@ case $tile in
   screen-record)
     # omamobile-screenrecord: Omarchy's gpu-screen-recorder can't drive the
     # phone's Mali (Mesa) GPU; this records with wf-recorder instead.
+    # The page passes its choices after "on": --audio A --area full|pick.
     if [ "$want" = on ]; then
-      exec omamobile-screenrecord start ${3:-}
+      shift 2
+      exec omamobile-screenrecord start "$@"
     else
       exec omamobile-screenrecord stop
     fi

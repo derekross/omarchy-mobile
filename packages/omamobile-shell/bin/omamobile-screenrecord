@@ -1,88 +1,420 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Screen recording on the phone, for the Screen record tile.
-#   omamobile-screenrecord start [mic|system|none]|stop|status
-# Omarchy's recorder (gpu-screen-recorder) supports AMD, Intel and NVIDIA GPUs
-# only; on the phone's Mali (Mesa) it stops with "unknown gpu vendor". This
-# records through the compositor's screencopy with wf-recorder and encodes on
-# the CPU (x264 ultrafast), at half the panel's resolution by default.
+# Screen recording on the phone, for the Screen record tile and its page.
+#
+#   omamobile-screenrecord start [--audio none|both|system|mic] [--area full|pick]
+#                                [--geometry "X,Y WxH"]
+#   omamobile-screenrecord start mic|system|none     (the older form)
+#   omamobile-screenrecord stop | status | call-status
+#   omamobile-screenrecord heat     (prints "<hottest C> <HEAT_START>")
+#
+# Omarchy's recorder (gpu-screen-recorder) can't drive the phone's Mali
+# (Mesa) GPU: it reports an unknown vendor, software H.264 only and portal
+# capture only. This records through the compositor's screencopy with
+# wf-recorder and encodes on the CPU (x264 ultrafast, capped threads), at
+# up to 720 px wide by default. Nothing is re-encoded after stop.
+#
+# Audio: none; both = what the phone plays + the microphone, mixed through
+# a temporary null sink (as Omarchy's wf-recorder path); system = the
+# default sink's monitor; mic = the default source. Devices are resolved at
+# start, so headphones or Bluetooth count.
+#
+# A supervisor runs for as long as the recording does (under a
+# systemd-inhibit idle/sleep lock). It stops and keeps the file when the
+# phone reaches HEAT_STOP, when the screen goes off, after MAX_MIN minutes
+# or when free space drops under STOP_FREE_MB, and it cleans up (audio
+# modules, state, notification) however wf-recorder ended.
+#
 # Settings: ~/.config/omamobile/screenrecord.conf, KEY=value lines (read as
 # data, never sourced), or the same names as OMAMOBILE_RECORD_* variables:
-#   AUDIO  mic (default: the built-in microphone, for narration), system (what
-#          the phone plays), none
-#   WIDTH  720 (default; "native" keeps the panel's size)
-#   FPS    30 (default)
+#   AUDIO mic   WIDTH 720 ("native" keeps the size)   FPS 30   THREADS 2
+#   HEAT_START 59 (starts at or below, C)   HEAT_STOP 60 (stops at or above, C)
+#   MAX_MIN 30   MIN_FREE_MB 500   STOP_FREE_MB 200
 # Videos go to XDG_VIDEOS_DIR (default ~/Videos).
 set -euo pipefail
 
 state=${XDG_RUNTIME_DIR:-/tmp}/omamobile-screenrecord
 pidfile=$state/pid
+supfile=$state/supervisor
+startedfile=$state/started
+modfile=$state/modules
+cancelfile=$state/cancel
+reasonfile=$state/stop-reason
+thermal_glob=${OMAMOBILE_RECORD_THERMAL_GLOB:-/sys/class/thermal/thermal_zone*}
+tick=${OMAMOBILE_RECORD_TICK:-5}
+callrec_data=${OMAMOBILE_RECORD_CALLREC_DATA:-/usr/share/omamobile/callrec/countries.tsv}
+
 notify() {
-  if command -v omarchy-notification-send >/dev/null 2>&1; then omarchy-notification-send -t 3000 "$@"
-  elif command -v notify-send >/dev/null 2>&1; then notify-send -t 3000 "$@"; fi
+  if command -v omarchy-notification-send >/dev/null 2>&1; then omarchy-notification-send -t 4000 "$@" >/dev/null 2>&1 || true
+  elif command -v notify-send >/dev/null 2>&1; then notify-send -t 4000 "$@" || true; fi
 }
-running() { [[ -s $pidfile ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; }
+alive() { [[ $1 =~ ^[0-9]+$ ]] && kill -0 "$1" 2>/dev/null; }
+running() { [[ -s $pidfile ]] && alive "$(cat "$pidfile")"; }
 conf() { # conf KEY DEFAULT: the env var, else the config file, else DEFAULT
-  local env="OMAMOBILE_RECORD_$1" v=""
+  local env="OMAMOBILE_RECORD_$1" v="" f=${XDG_CONFIG_HOME:-$HOME/.config}/omamobile/screenrecord.conf
   if [[ -n ${!env:-} ]]; then v=${!env}
-  elif [[ -r ${XDG_CONFIG_HOME:-$HOME/.config}/omamobile/screenrecord.conf ]]; then
-    v=$(sed -n "s/^[[:space:]]*$1=[\"']\{0,1\}\([^\"']*\)[\"']\{0,1\}[[:space:]]*\$/\1/p" \
-      "${XDG_CONFIG_HOME:-$HOME/.config}/omamobile/screenrecord.conf" | tail -1)
+  elif [[ -r $f ]]; then
+    v=$(sed -n "s/^[[:space:]]*$1=[\"']\{0,1\}\([^\"']*\)[\"']\{0,1\}[[:space:]]*\$/\1/p" "$f" | tail -1)
   fi
   echo "${v:-$2}"
 }
+int_conf() { local v; v=$(conf "$1" "$2"); [[ $v =~ ^[0-9]{1,6}$ ]] && echo "$((10#$v))" || echo "$2"; }
+# notify_saved TITLE BODY FILE: with an Open action where the notifier has one.
+notify_saved() {
+  if command -v omarchy-notification-send >/dev/null 2>&1; then
+    omarchy-notification-send -t 10000 "$1" "$2" --action "Open" xdg-open --with "$3" >/dev/null 2>&1 || true
+  else notify "$1" "$2"; fi
+}
+
+# The hottest of the SoC zones (big/mid/little/gpu, as phone-pacman-cool.sh),
+# in whole degrees C; empty when none can be read.
+heat() {
+  local z t max=""
+  for z in $thermal_glob; do
+    case $(cat "$z/type" 2>/dev/null) in
+      big-thermal|mid-thermal|little-thermal|gpu-thermal)
+        t=$(cat "$z/temp" 2>/dev/null) || continue
+        [[ $t =~ ^-?[0-9]+$ ]] || continue
+        t=$((t / 1000))
+        if [[ -z $max || $t -gt $max ]]; then max=$t; fi ;;
+    esac
+  done
+  echo "${max:--}"
+}
+
+free_mb() { { df -Pm -- "$1" 2>/dev/null || true; } | awk 'NR==2 {print $4}'; }
+
+# Unload the null sink + loopbacks of a "both" recording: the ids we saved
+# (loopbacks first, in reverse), then any omamobile_screenrec module a crash
+# left behind.
+unload_modules() {
+  local m
+  if [[ -f $modfile ]]; then
+    tac "$modfile" 2>/dev/null | while read -r m; do
+      [[ $m =~ ^[0-9]+$ ]] && pactl unload-module "$m" 2>/dev/null || true
+    done
+    rm -f "$modfile"
+  fi
+  command -v pactl >/dev/null 2>&1 || return 0
+  { pactl list short modules 2>/dev/null || true; } | awk '/omamobile_screenrec/ {print $1}' | sort -rn | while read -r m; do
+    pactl unload-module "$m" 2>/dev/null || true
+  done || true
+}
+
+# Prints the wf-recorder audio device for a mode, or nothing for none.
+audio_device() {
+  local sink source m
+  case $1 in
+    none) return 0 ;;
+    mic) source=$(pactl get-default-source 2>/dev/null) && [[ -n $source ]] && echo "$source" ;;
+    system) sink=$(pactl get-default-sink 2>/dev/null) && [[ -n $sink ]] && echo "$sink.monitor" ;;
+    both)
+      sink=$(pactl get-default-sink 2>/dev/null) || sink=""
+      source=$(pactl get-default-source 2>/dev/null) || source=""
+      [[ -n $sink && -n $source ]] || return 1
+      m=$(pactl load-module module-null-sink sink_name=omamobile_screenrec \
+        sink_properties=device.description=omamobile_screenrec 2>/dev/null) || return 1
+      echo "$m" >"$modfile"
+      m=$(pactl load-module module-loopback source="$sink.monitor" sink=omamobile_screenrec latency_msec=20 2>/dev/null) \
+        || { unload_modules; return 1; }
+      echo "$m" >>"$modfile"
+      m=$(pactl load-module module-loopback source="$source" sink=omamobile_screenrec latency_msec=20 2>/dev/null) \
+        || { unload_modules; return 1; }
+      echo "$m" >>"$modfile"
+      echo "omamobile_screenrec.monitor" ;;
+  esac
+}
+
+focused_output() {
+  { hyprctl monitors -j 2>/dev/null || true; } | python3 -c 'import json,sys
+m=json.load(sys.stdin); f=[x for x in m if x.get("focused")] or m
+print(f[0]["name"] if f else "")' 2>/dev/null || true
+}
+# "yes" when every monitor's dpmsStatus is off (the phone's screen is off).
+screen_off() {
+  hyprctl monitors -j 2>/dev/null | python3 -c 'import json,sys
+m=json.load(sys.stdin); print("yes" if m and not any(x.get("dpmsStatus", True) for x in m) else "no")' 2>/dev/null || echo no
+}
+
+# Stops wf-recorder (INT finalises the mp4), TERM after 10 s.
+end_recorder() {
+  local pid=$1 i
+  kill -INT "$pid" 2>/dev/null || return 0
+  for i in $(seq 1 50); do alive "$pid" || return 0; sleep 0.2; done
+  kill -TERM "$pid" 2>/dev/null || true
+  for i in $(seq 1 25); do alive "$pid" || return 0; sleep 0.2; done
+  kill -KILL "$pid" 2>/dev/null || true
+}
+
+refresh_ui() {
+  command -v omarchy-shell >/dev/null 2>&1 && omarchy-shell -q omarchy.indicators refresh >/dev/null 2>&1 || true
+}
+
+supervise() {
+  local pid file start hot=0 t reason elapsed max_s stop_t stop_free
+  # stop sends USR1 so a finished recording is cleaned up at once, not a tick later.
+  trap 'true' USR1
+  echo $$ >"$supfile"   # our own pid (systemd-inhibit's was written first)
+  pid=$(cat "$pidfile" 2>/dev/null || true)
+  file=$(cat "$state/file" 2>/dev/null || true)
+  start=$(cat "$startedfile" 2>/dev/null || date +%s)
+  max_s=$(( $(int_conf MAX_MIN 30) * 60 )); (( max_s >= 60 )) || max_s=60
+  stop_t=$(int_conf HEAT_STOP 60)
+  stop_free=$(int_conf STOP_FREE_MB 200)
+  rm -f "$reasonfile"
+  while alive "$pid"; do
+    reason=""
+    t=$(heat)
+    if [[ $t =~ ^-?[0-9]+$ && $t -ge $stop_t ]]; then hot=$((hot + 1)); else hot=0; fi
+    elapsed=$(( $(date +%s) - start ))
+    if (( hot >= 2 )); then reason="heat:$t"
+    elif [[ $(screen_off) == yes ]]; then reason=screen
+    elif (( elapsed >= max_s )); then reason=time
+    else
+      t=$(free_mb "$(dirname -- "$file")")
+      [[ $t =~ ^[0-9]+$ ]] && (( t < stop_free )) && reason=space
+    fi
+    if [[ -n $reason ]]; then
+      [[ -s $reasonfile ]] || echo "$reason" >"$reasonfile"
+      end_recorder "$pid"
+      break
+    fi
+    sleep "$tick" &
+    wait $! || true
+  done
+  reason=$(cat "$reasonfile" 2>/dev/null || true)
+  echo "$(date +%T) stopped: ${reason:-the recorder exited}" >>"$state/log"
+  # Only this recording's state: a new recording may already own the files.
+  if [[ $(cat "$pidfile" 2>/dev/null || true) == "$pid" ]]; then
+    unload_modules
+    rm -f "$pidfile" "$startedfile" "$supfile" "$reasonfile"
+  fi
+  refresh_ui
+  local why=""
+  case $reason in
+    heat:*) why="Stopped: the phone reached ${reason#heat:} C. " ;;
+    screen) why="Stopped: the screen went off. " ;;
+    time) why="Stopped after $(( max_s / 60 )) minutes. " ;;
+    space) why="Stopped: storage is almost full. " ;;
+  esac
+  if [[ -s $file ]]; then
+    notify_saved "Screen recording saved" "${why}${file/#$HOME/\~}" "$file"
+  else
+    notify "Screen recording failed" "${why}$(tail -1 "$state/log" 2>/dev/null || true)"
+  fi
+}
+
+# Validates "X,Y WxH" and prints it back with even W and H (yuv420p).
+clean_geometry() {
+  [[ $1 =~ ^(-?[0-9]+),(-?[0-9]+)[[:space:]]+([0-9]+)x([0-9]+)$ ]] || return 1
+  local w=$((BASH_REMATCH[3] / 2 * 2)) h=$((BASH_REMATCH[4] / 2 * 2))
+  (( w >= 16 && h >= 16 )) || return 1
+  echo "${BASH_REMATCH[1]},${BASH_REMATCH[2]} ${w}x${h}"
+}
+
+# Runs the picker in the background so a stop (the cancel file) closes it.
+pick_area() {
+  # Let the Screen record page fade out of the picture first.
+  sleep "${OMAMOBILE_RECORD_PICK_DELAY:-0.4}"
+  local cmd=(omarchy-capture-region region) out=$state/pick pid
+  command -v omarchy-capture-region >/dev/null 2>&1 || cmd=(slurp)
+  : >"$out"
+  timeout "${OMAMOBILE_RECORD_PICK_TIMEOUT:-30}" "${cmd[@]}" >"$out" 2>/dev/null 8>&- &
+  pid=$!
+  while alive "$pid"; do
+    if [[ -e $cancelfile ]]; then kill "$pid" 2>/dev/null || true; pkill -P "$pid" 2>/dev/null || true; break; fi
+    sleep 0.1
+  done
+  wait "$pid" 2>/dev/null || true
+  tail -1 "$out"
+}
+
+start() {
+  local audio="" area=full geometry=""
+  case ${1:-} in mic|system|none|both) audio=$1; shift ;; esac
+  while (( $# )); do
+    case $1 in
+      --audio|--area|--geometry)
+        (( $# >= 2 )) || { echo "$1 needs a value" >&2; exit 2; }
+        case $1 in --audio) audio=$2 ;; --area) area=$2 ;; --geometry) geometry=$2 ;; esac
+        shift 2 ;;
+      *) echo "unknown option: $1" >&2; exit 2 ;;
+    esac
+  done
+  [[ -n $audio ]] || audio=$(conf AUDIO mic)
+  [[ $audio =~ ^(mic|system|none|both)$ ]] || audio=mic
+  [[ $area == full || $area == pick ]] || area=full
+
+  mkdir -p "$state"
+  rm -f "$cancelfile"
+  exec 8>"$state/lock"
+  if ! flock -n 8; then echo "a recording is starting or stopping" >&2; exit 0; fi
+  running && { echo "already recording" >&2; exit 0; }
+  # A supervisor still finishing the last recording: let it clean up first.
+  local old i
+  old=$(cat "$supfile" 2>/dev/null || true)
+  if alive "$old"; then
+    for i in $(seq 1 75); do alive "$old" || break; sleep 0.2; done
+  fi
+  command -v wf-recorder >/dev/null || { notify "Screen recording needs wf-recorder"; exit 1; }
+
+  local t gate
+  t=$(heat) gate=$(int_conf HEAT_START 59)
+  if [[ $t =~ ^-?[0-9]+$ && $t -gt $gate ]]; then
+    notify "Screen recording not started" "The phone is warm (${t} C). It starts at ${gate} C or cooler."
+    exit 3
+  fi
+
+  local dir=${XDG_VIDEOS_DIR:-$HOME/Videos} free
+  mkdir -p "$dir"
+  free=$(free_mb "$dir")
+  if [[ $free =~ ^[0-9]+$ ]] && (( free < $(int_conf MIN_FREE_MB 500) )); then
+    notify "Screen recording not started" "Less than $(int_conf MIN_FREE_MB 500) MB free."
+    exit 1
+  fi
+
+  unload_modules   # left over from a recording that crashed
+
+  local output geo_args=()
+  output=$(focused_output)
+  [[ -n $output ]] || { notify "Screen recording: no display found"; exit 1; }
+  if [[ $area == pick ]]; then
+    [[ -n $geometry ]] || geometry=$(pick_area || true)
+    [[ -e $cancelfile ]] && { rm -f "$cancelfile"; exit 1; }
+    geometry=$(clean_geometry "$geometry") || { echo "area pick cancelled" >&2; exit 1; }
+    geo_args=(-g "$geometry")
+  fi
+
+  local width fps threads scale
+  width=$(conf WIDTH 720) fps=$(int_conf FPS 30) threads=$(int_conf THREADS 2)
+  (( fps >= 1 && fps <= 60 )) || fps=30
+  (( threads >= 1 && threads <= 8 )) || threads=2
+  if [[ $width == native ]]; then
+    scale="scale=trunc(iw/2)*2:trunc(ih/2)*2"
+  else
+    [[ $width =~ ^[0-9]+$ ]] || width=720
+    # Never upscale (min), and keep the width even for yuv420p.
+    width=$((width / 2 * 2))
+    scale="scale='trunc(min($width,iw)/2)*2':-2"
+  fi
+  # BT.709, full range, tagged (wf-recorder marks the stream full range).
+  local filter=(-F "$scale:out_color_matrix=bt709:out_range=pc"
+    -p "x264-params=colorprim=bt709:transfer=bt709:colormatrix=bt709:range=pc:threads=$threads")
+
+  local dev sound=() what="no sound"
+  if ! dev=$(audio_device "$audio"); then
+    notify "Screen recording: sound unavailable" "Recording without sound."
+    audio=none dev=""
+  fi
+  if [[ -n $dev ]]; then
+    sound=(--audio="$dev" -R 48000)
+    case $audio in
+      both) what="with the phone's sound and the microphone" ;;
+      system) what="with the phone's sound" ;;
+      mic) what="with the microphone" ;;
+    esac
+  fi
+
+  local file
+  file=$dir/screenrecording-$(date +%Y-%m-%d_%H-%M-%S).mp4
+  echo "$file" >"$state/file"
+  setsid nice -n 10 wf-recorder -o "$output" "${geo_args[@]}" -c libx264 -p preset=ultrafast -p crf=23 \
+    "${filter[@]}" -r "$fps" "${sound[@]}" -f "$file" -y </dev/null >"$state/log" 2>&1 8>&- &
+  echo $! >"$pidfile"
+  date +%s >"$startedfile"
+  sleep 1
+  if ! running; then
+    unload_modules
+    rm -f "$pidfile" "$startedfile"
+    notify "Screen recording failed to start" "$(tail -1 "$state/log" 2>/dev/null || true)"
+    exit 1
+  fi
+  local inhibit=()
+  command -v systemd-inhibit >/dev/null 2>&1 && inhibit=(systemd-inhibit --what=idle:sleep \
+    --who=omamobile-screenrecord --why="Recording the screen" --mode=block)
+  rm -f "$supfile"
+  setsid "${inhibit[@]}" "$0" supervise </dev/null >>"$state/log" 2>&1 8>&- &
+  local sup=$!
+  # The supervisor writes its own pid; until it has, keep the launcher's.
+  for i in 1 2 3 4 5 6 7 8 9 10; do [[ -s $supfile ]] && break; sleep 0.1; done
+  [[ -s $supfile ]] || echo "$sup" >"$supfile"
+  if ! alive "$(cat "$supfile")" && running; then
+    # systemd-inhibit could not take its lock: supervise without it.
+    setsid "$0" supervise </dev/null >>"$state/log" 2>&1 8>&- &
+    echo $! >"$supfile"
+  fi
+  refresh_ui
+  notify "Recording the screen, $what" "Tap the red dot in the bar, or Screen record, to stop"
+}
+
+stop() {
+  mkdir -p "$state"
+  # A start in progress: cancel its pick, then wait for it to finish, so a
+  # recording it already launched is stopped here, once, with its supervisor.
+  exec 8>"$state/lock"
+  if ! flock -n 8; then
+    touch "$cancelfile"
+    flock -w 45 8 || { echo "a start is still running" >&2; exit 1; }
+  fi
+  rm -f "$cancelfile"
+  if ! running; then
+    # Nothing records: clear whatever a dead recording left (bar chip, mic loopbacks).
+    unload_modules
+    rm -f "$pidfile" "$startedfile" "$supfile"
+    refresh_ui
+    exit 0
+  fi
+  echo user >"$reasonfile"
+  local pid sup i
+  pid=$(cat "$pidfile")
+  sup=$(cat "$supfile" 2>/dev/null || true)
+  end_recorder "$pid"
+  if alive "$sup"; then
+    kill -USR1 "$sup" 2>/dev/null || true
+    for i in $(seq 1 50); do alive "$sup" || break; sleep 0.2; done
+  else
+    # No supervisor (killed): clean up here.
+    "$0" supervise 8>&-
+  fi
+}
+
+# Call recording's state for the Screen record page, as one JSON line:
+# state needs-modem | blocked | consent | allowed, with country and reason.
+# There is no call recording backend yet (it needs the modem's in-call
+# capture), so this is needs-modem until omamobile-callrec exists. The
+# country comes from the network's MCC, else the system region; its policy
+# from countries.tsv (MCC, ISO code, allowed|blocked). An unknown country
+# shows the row with a consent notice.
+call_status() {
+  if ! command -v omamobile-callrec >/dev/null 2>&1; then
+    echo '{"state":"needs-modem","country":"","reason":"Needs the modem"}'; return
+  fi
+  local mcc="" cc="" policy="" op
+  if command -v mmcli >/dev/null 2>&1; then
+    op=$({ mmcli -m any -K 2>/dev/null || true; } | sed -n 's/^modem\.3gpp\.operator-code *: *\([0-9]\{5,6\}\).*/\1/p' | head -1)
+    mcc=${op:0:3}
+  fi
+  if [[ -n $mcc && -r $callrec_data ]]; then
+    read -r cc policy < <(awk -F'\t' -v m="$mcc" '$1==m {print $2, $3; exit}' "$callrec_data") || true
+  fi
+  if [[ -z $cc ]]; then
+    cc=$({ locale 2>/dev/null || true; } | sed -n 's/^LC_TELEPHONE="\{0,1\}[a-z]*_\([A-Z][A-Z]\).*/\1/p' | head -1)
+    [[ -n $cc && -r $callrec_data ]] && policy=$(awk -F'\t' -v c="$cc" '$2==c {print $3; exit}' "$callrec_data")
+  fi
+  cc=${cc//[^A-Z]/}; cc=${cc:0:2}; policy=${policy//$'\r'/}
+  case $policy in
+    blocked) printf '{"state":"blocked","country":"%s","reason":"Call recording is not allowed by law in %s"}\n' "$cc" "$cc" ;;
+    allowed) printf '{"state":"allowed","country":"%s","reason":""}\n' "$cc" ;;
+    *) printf '{"state":"consent","country":"%s","reason":"Recording laws where you are are unknown. Tell everyone on the call that it is recorded."}\n' "$cc" ;;
+  esac
+}
 
 case ${1:-} in
-  status)
-    running && echo on || echo off ;;
-  start)
-    running && { echo "already recording" >&2; exit 0; }
-    command -v wf-recorder >/dev/null || { notify "Screen recording needs wf-recorder"; exit 1; }
-    dir=${XDG_VIDEOS_DIR:-$HOME/Videos}
-    mkdir -p "$dir" "$state"
-    output=$(hyprctl monitors -j | python3 -c 'import json,sys
-m=json.load(sys.stdin); f=[x for x in m if x.get("focused")] or m
-print(f[0]["name"] if f else "")')
-    [[ -n $output ]] || { notify "Screen recording: no display found"; exit 1; }
-    width=$(conf WIDTH 720) fps=$(conf FPS 30) audio=${2:-$(conf AUDIO mic)}
-    [[ $audio == mic || $audio == system || $audio == none ]] || audio=mic
-    [[ $fps =~ ^[0-9]+$ ]] || fps=30
-    # HD video in BT.709, tagged as such. Untagged output left players
-    # guessing the color matrix, and the usual guess played it back duller.
-    # Full range, because wf-recorder marks the stream full range anyway
-    # (yuv420p(pc)): limited-range data under that flag would look washed out.
-    scale="scale=iw:ih"
-    if [[ $width != native ]]; then
-      [[ $width =~ ^[0-9]+$ ]] || width=720
-      scale="scale=$width:-2"
-    fi
-    filter=(-F "$scale:out_color_matrix=bt709:out_range=pc"
-      -p x264-params=colorprim=bt709:transfer=bt709:colormatrix=bt709:range=pc)
-    sound=() what="no sound"
-    case $audio in
-      mic) sound=(--audio) what="with the microphone" ;;   # PipeWire's default source: the built-in mic
-      system)
-        sink=$(pactl get-default-sink 2>/dev/null || true)
-        [[ -n $sink ]] && sound=(--audio="$sink.monitor") what="with the phone's sound" ;;
-    esac
-    file=$dir/screenrecording-$(date +%Y-%m-%d_%H-%M-%S).mp4
-    echo "$file" > "$state/file"
-    setsid wf-recorder -o "$output" -c libx264 -p preset=ultrafast -p crf=23 "${filter[@]}" -r "$fps" "${sound[@]}" \
-      -f "$file" -y </dev/null >"$state/log" 2>&1 &
-    echo $! > "$pidfile"
-    sleep 1
-    if running; then notify "Recording the screen, $what" "Tap Screen record again to stop"
-    else notify "Screen recording failed to start" "$(tail -1 "$state/log")"; rm -f "$pidfile"; exit 1; fi ;;
-  stop)
-    running || { rm -f "$pidfile"; exit 0; }
-    pid=$(cat "$pidfile")
-    kill -INT "$pid" 2>/dev/null || true
-    for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
-    kill -0 "$pid" 2>/dev/null && kill -TERM "$pid" 2>/dev/null || true
-    rm -f "$pidfile"
-    file=$(cat "$state/file" 2>/dev/null || true)
-    if [[ -s $file ]]; then notify "Screen recording saved" "${file/#$HOME/\~}"
-    else notify "Screen recording failed" "$(tail -1 "$state/log" 2>/dev/null)"; fi ;;
-  *)
-    echo "usage: omamobile-screenrecord start [mic|system|none]|stop|status" >&2; exit 2 ;;
+  status) running && echo on || echo off ;;
+  start) shift; start "$@" ;;
+  stop) stop ;;
+  heat) echo "$(heat) $(int_conf HEAT_START 59)" ;;
+  call-status) call_status ;;
+  supervise) supervise ;;
+  *) echo "usage: omamobile-screenrecord start [--audio none|both|system|mic] [--area full|pick] [--geometry 'X,Y WxH']|stop|status|heat|call-status" >&2; exit 2 ;;
 esac

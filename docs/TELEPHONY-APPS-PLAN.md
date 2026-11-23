@@ -323,7 +323,7 @@ AOSP Dialer's bottom navigation has four tabs: speed dial, call log, contacts an
 | Voicemail (OMTP, CVVM, VVM3) | `voicemail/impl/` (protocol, SMS, IMAP, sync); UI in `dialer/voicemail/listui/` | **Plain voicemail** (call the mailbox, long-press 1) first. **Visual voicemail through vvmd** later (§5.3) |
 | Blocked numbers, spam | `dialer/blocking/` (uses `BlockedNumberContract`); `dialer/spam/` is a stub (Google's spam service isn't in AOSP) | **Block list yes** (shared). Spam: unknown-caller silencing as a setting; no spam database |
 | RTT, assisted dialing, call composer, Duo | `dialer/rtt/`, `assisteddialing/`, `callcomposer/`, `duo/` | No. Assisted dialing (adding the country code when roaming) later, with the `phonenumber` crate |
-| Call recording | none | No (path 2 of §2.2 would allow it; legality varies; not planned) |
+| Call recording | none | Planned, after the modem works: path 2 of §2.2 (the AoC's in-call capture). The Screen record page in quick settings lists it now, greyed out ("Needs the modem"). Once it works, it stays greyed out in countries where the law does not allow it, with a message that says so; the country comes from the network's MCC, else the system region (`omamobile-screenrecord call-status`, policy in /usr/share/omamobile/callrec/countries.tsv, each line with a cited source). Where the country is unknown, it shows with a consent notice. |
 | Emergency dialer | not in Dialer: `packages/services/Telephony/src/com/android/phone/EmergencyDialer.java` | **In the shell's lock screen** and in the app's dialpad (§3, §7.3) |
 | USSD | through Telephony | **Yes** (codes like `*#...#` through `Modem3gpp.Ussd`), T8 |
 

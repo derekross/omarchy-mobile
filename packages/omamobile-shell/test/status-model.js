@@ -94,3 +94,7 @@ assert.strictEqual(M.batteryLow(10, true), false, "charging is never the low col
 assert.strictEqual(M.batteryLow(11, false), false)
 assert.strictEqual(M.batteryLow(-1, false), false, "no reading is not low")
 console.log("ok - status model: battery styles, icon switches, the bolt")
+assert.strictEqual(M.recChip(0, 5000), "")
+assert.strictEqual(M.recChip(100, 165000), "1:05")
+assert.strictEqual(M.recChip(100, 50000), "0:00", "clock behind the start")
+console.log("ok - status model: screen recording chip")

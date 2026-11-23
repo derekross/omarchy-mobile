@@ -562,7 +562,8 @@ Item {
 
   // Screen recording through omamobile-screenrecord (wf-recorder; Omarchy's
   // gpu-screen-recorder can't drive the phone's GPU). A tap while off opens
-  // the Screen record page to choose the sound; a tap while recording stops.
+  // the Screen record page to choose the area and sound; a tap while
+  // recording stops.
   QtObject {
     id: screenRecord
     readonly property bool available: root.probedHas("record")
@@ -576,11 +577,12 @@ Item {
       Quickshell.execDetached(["sh", root.scriptPath("tile-action.sh"), "screen-record", "off"])
       probeLater.restart()
     }
-    function start(audio) {
+    function start(audio, area) {
       recordPanelItem.close()
       root.setOptimistic("screen-record", true)
       root.dismiss()
-      Quickshell.execDetached(["sh", root.scriptPath("tile-action.sh"), "screen-record", "on", audio])
+      Quickshell.execDetached(["sh", root.scriptPath("tile-action.sh"), "screen-record", "on",
+        "--audio", audio, "--area", area === "pick" ? "pick" : "full"])
       probeLater.restart()
     }
   }
@@ -720,7 +722,7 @@ Item {
   RecordPanel {
     id: recordPanelItem
     onBackRequested: root.backToSheet(recordPanelItem)
-    onStartRequested: function(audio) { screenRecord.start(audio) }
+    onStartRequested: function(audio, area) { screenRecord.start(audio, area) }
   }
 
   // A page's back glyph: close it and bring the sheet back.
