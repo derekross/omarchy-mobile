@@ -451,6 +451,16 @@ the tagged console. The bootloader archive recorded the DBL
 warm boot with CDD reason `0xbaba` and the subsequent cold
 boot entering Fastboot with Volume Down.
 
+An arm64 VM running the v17 kernel booted the signed Omarchy
+Mobile 2026.11.15 Cheetah reference root through `switch_root`.
+Systemd ran as PID 1 with read-only ext4 on a RAM-backed loop
+device and zero SCSI disks. The isolated target checked the
+Omarchy packages and ran `Hyprland --version`. The reference
+device's firstboot, slot-success and USB rescue units were
+unavailable to PID 1. A truncated stream stopped before the
+handoff. The next Grizzly trial still needs the USB stream
+and timed return verified on hardware.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
