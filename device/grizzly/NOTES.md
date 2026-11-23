@@ -498,6 +498,16 @@ booted again on slot A with verity enforcing.
 Pstore, `SYSTEM_LAST_KMSG`, and the first stock bugreport
 contain the matching systemd, SSH PTY, and warm reset markers.
 
+Stock D1 logs from that run show five direct-access UFS LUNs
+and three well-known LUNs. The disabled Malibu resource
+description now matches D1's eight register windows, HSIO-S
+host interrupt, 16 direct IRQs, and AMB SMMU stream. The
+LUN-only diagnostic keeps SCSI discovery while excluding block
+and raw-command interfaces. An arm64 VM verified that policy
+with a disposable USB-attached disk. Power sequencing and the
+Malibu host/PHY variant remain the gates for the first phone
+scan.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
