@@ -206,6 +206,19 @@ so the exact PID 1 execution and watchdog service are still
 unconfirmed. Fastboot returned on manual key entry and stock A
 again completed a D1 boot with verity enforcing.
 
+The USB timed variant uses the corrected USB kernel, DTB and ACM
+relay. Its PID 1 requests shutdown at 70 seconds, extended to
+110 if the DWC3 UDC appeared in sysfs by the first deadline.
+The VM confirmed both timings, using a simulated UDC path for
+the later case. A hardware trial can capture the Linux log if
+ACM enumerates or use a timed charger transition as indirect
+evidence of controller registration.
+
+The variant was staged on Grizzly. Fastboot acknowledged all
+five B writes and the `vendor_boot_b` readback matched the
+8,192-byte image prefix. A remained active and successful and
+B reported three tries.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
