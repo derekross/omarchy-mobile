@@ -261,6 +261,20 @@ or sysfs availability. The next trace target is the wrapper's
 PHY and repeater prerequisites, including CPM regulator
 registration. Stock A booted again with verity enforcing.
 
+A CPM regulator diagnostic samples the three expected sysfs
+rail names at 70 seconds after PID 1 and searches its retained
+printk records for CPM's regulator rejection warning. The
+shutdown timer is 70 seconds when the evidence is inconclusive,
+110 seconds when it finds the rejection warning and an
+incomplete name set, or 150 seconds when all three names are
+visible. The Mac VM confirmed the three timings with simulated
+warning and sysfs inputs.
+
+Fastboot acknowledged all five B writes for the regulator
+diagnostic. The live `vendor_boot_b` readback matched the
+8,192 supplied bytes. Fastboot verified A active and successful
+and B bootable with three tries.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
