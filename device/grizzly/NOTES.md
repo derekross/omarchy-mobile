@@ -394,6 +394,13 @@ sink sets Rd during reset and again on return to `SNK_UNATTACHED`.
 An attended reconnect after reset can test whether a fresh CC
 event gets the same v15 images past attach wait.
 
+A v15 rerun kept the cable connected throughout. The bugreport
+records the warm reboot, the cold follow-up handing off v15 on B
+again, and a long-key master disconnect clearing nonsecure memory
+before manual Fastboot entry. Stock A booted with verity enforcing.
+Pstore had no console and `SYSTEM_LAST_KMSG` contained only
+previous captures. The post-reset reconnect remains untested.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
