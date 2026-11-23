@@ -297,6 +297,21 @@ Fastboot accepted all five B writes for this variant.
 The live `vendor_boot_b` readback matched all 8,192 supplied
 bytes. A remained active and successful and B had three tries.
 
+The hardware trial recovered the actual slot B Linux console
+from stock A's pstore and `SYSTEM_LAST_KMSG`. It records PID 1
+entry, six deferred-probe snapshots and an orderly warm restart.
+DBL reported a warm restart, ABL requested its automatic cold
+follow-up, and Volume Down took that cold boot to Fastboot.
+Stock D1 then booted on A with verity enforcing.
+
+DWC3 `a200028.usb` reports `supplier system-controller not ready`.
+Earlier in the same console, `google-malibu-cpm-io` failed with
+`error -EBUSY: failed to get CPM response channel`. The mailbox
+core reported the error from the MBA startup callback. This pins
+the first failure to CPM RX mailbox startup, before regulator
+registration. The captured log does not identify which mailbox
+queue predicate returned `-EBUSY`.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
