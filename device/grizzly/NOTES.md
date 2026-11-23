@@ -341,6 +341,17 @@ the startup guard. A follow-up boot should check that CPM
 acquires both channels and completes its handshake, then check
 DWC3 probe and USB enumeration.
 
+The v14 candidate applies that acknowledgement and adds
+console markers for the CPM and DWC3 driver binds and for UDC
+registration. Offline checks covered the observed RX state,
+unrelated interrupt bits, and the existing startup guard. The
+Mac VM confirmed the tagged warm restart.
+
+On 2026-11-23, Fastboot accepted all five v14 slot B images.
+The `vendor_boot_b` readback matched all 8,192 supplied bytes.
+Stock A remained active and successful, and B was bootable with
+three tries. The attended v14 boot is still pending.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
