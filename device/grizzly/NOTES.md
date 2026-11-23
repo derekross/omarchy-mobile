@@ -399,7 +399,19 @@ records the warm reboot, the cold follow-up handing off v15 on B
 again, and a long-key master disconnect clearing nonsecure memory
 before manual Fastboot entry. Stock A booted with verity enforcing.
 Pstore had no console and `SYSTEM_LAST_KMSG` contained only
-previous captures. The post-reset reconnect remains untested.
+previous captures.
+
+In the attended reconnect test, the same v15 images returned to
+`SNK_UNATTACHED` after reset. Disconnecting produced CC open and
+VBUS off. Reconnecting produced fresh CC and VBUS events, the
+MAX77779 data gate read back `0x9`, and TCPM reached `SNK_READY`.
+The UDC reported `configured` at `high-speed`. The Mac saw the
+Grizzly ACM gadget, and the warm recovery returned to stock A.
+Pstore, `SYSTEM_LAST_KMSG`, and the first stock bugreport contained
+the new tagged console.
+
+The next change can give this MAX77779 sink a fresh CC and VBUS
+sample after startup reset, using the normal TCPM attach path.
 
 ## Before first light
 
