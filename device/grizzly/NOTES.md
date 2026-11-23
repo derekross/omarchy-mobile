@@ -324,8 +324,22 @@ The Mac VM confirmed the tagged warm restart used to recover
 this diagnostic. On 2026-11-23, Fastboot accepted all five B
 images, and the live `vendor_boot_b` readback matched the
 8,192 supplied bytes. A remained active and successful. B was
-bootable with three tries. The mailbox values still need an
-attended B boot and stock A log readout.
+bootable with three tries.
+
+The attended trial recovered the tagged kernel console from
+stock A's pstore and `SYSTEM_LAST_KMSG`. The first stock
+bugreport corroborated the diagnostic and warm/cold sequence.
+At `ea61000.mailbox`, startup recorded `used=0 outstanding=0x0
+irq_status=0x1`.
+The pending RX interrupt alone caused `-EBUSY`. DWC3 still
+waited on CPM and the host saw no USB ACM port. Stock A booted
+with verity enforcing after the trial.
+
+The next targeted change is to mirror D1's masked interrupt
+acknowledgement before mailbox controller registration and keep
+the startup guard. A follow-up boot should check that CPM
+acquires both channels and completes its handshake, then check
+DWC3 probe and USB enumeration.
 
 ## Before first light
 
