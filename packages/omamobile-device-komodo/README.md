@@ -5,9 +5,11 @@ Experimental first-light support for the Google Pixel 9 Pro XL (`komodo`,
 Tensor G4 / `zumapro`). This package and descriptor are for development only;
 Komodo is not a supported installer or release target.
 
-The descriptor follows the existing Komodo first-light target. Its selected
-overlays only enable the touchscreen and GPU nodes described by the matching
-kernel board DTS. The GPU overlay is usable only with this package's guarded
+The descriptor follows the first-light metadata recorded in
+[#567](https://github.com/derekross/omarchy-mobile/pull/567). Its selected
+development overlays only enable touchscreen and GPU nodes described by the
+matching kernel board DTS. They are for attended experimental images, not a
+supported release. The GPU overlay is usable only with this package's guarded
 GPU start service: it writes a persistent attempt marker before loading
 Panthor, while a modprobe blacklist prevents an earlier modalias load, and
 leaves the GPU disabled on the next boot if the probe does not complete.

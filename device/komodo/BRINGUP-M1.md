@@ -17,23 +17,24 @@ error path. A corrected shared-DMA-pool configuration has not yet been
 verified with the driver. Local synthetic notifications appear in both the
 logged-in session and on the lock screen; whether they wake the display is
 unverified. WhatsApp is not linked and no real messages were read. See
-[NOTES.md](NOTES.md) for evidence and chronology. The owner authorized
-experimental writes to slot B and
-`userdata`; slot A and firmware/calibration partitions remain untouched. No
-personal content was queried. Current kernel worktree:
+[NOTES.md](NOTES.md) for evidence and chronology. Historical test writes were
+limited to slot B and `userdata` through the documented project tools; slot A
+and firmware/calibration partitions were not written. These records do not
+authorize repeating those operations. No personal content was queried. Current
+kernel worktree:
 `~/dev/omamobile-kernel/wt-komodo-m3`; matching build outputs are under
 `~/dev/omamobile-kernel/out-komodo-*`.
 
 ## 1. Goal
 
-Get a usable Omarchy Mobile system booting on this Pixel as quickly as
-possible. The owner has explicitly made phone data disposable and does not
-want stock recovery or a separate recovery runbook treated as gates. Move
-directly from the now-working USB rescue and DECON/KMS handoff to a local
-rootfs install, then bring up the minimum input and network needed to use it.
-Do not wait for a complete KM4 panel port, 120 Hz, or every peripheral before
-booting userspace. Continue to keep all persistent writes inside the project's
-supported slot-B and userdata install paths.
+Record the experimental first-light work and gate any further device
+operations on current owner authorization, the project safety rules, and a
+reviewed recovery path. The existing USB rescue and DECON/KMS handoff enabled
+a development rootfs; later tests brought up touch and a guarded GPU. A complete
+KM4 panel port, 120 Hz, and other peripherals remain separate work. Keep any
+future persistent writes inside the project's supported slot-B and userdata
+paths, with fresh backups and recovery planning where the subsystem requires
+them.
 
 ## 2. Evidence and source paths
 
@@ -79,12 +80,11 @@ supported slot-B and userdata install paths.
   not expose `dtbo_idx` through `getvar`; the earlier ADB read reported 34.
   (R/ `fastboot-postupdate-targeted.txt`, `post-unlock-targeted.txt`, and
   `fastboot-inventory-2026-11-18.txt`.)
-- **[V]** User authorized bootloader unlock, its factory reset, and experimental
-  device operations, and later explicitly declared the phone's data disposable
-  and authorized flashing/erasure to reach Omarchy. Stage 2 first wrote only
-  the five slot-B boot images. The subsequent supported rootfs install wrote
-  those five images and `userdata`; slot A and firmware/calibration partitions
-  were not written.
+- **[V]** Historical first-light work wrote the five slot-B boot images, then
+  used the supported installer for the development rootfs on `userdata`. The
+  recorded operations did not write slot A or firmware/calibration partitions.
+  This history is not authorization to repeat them; current owner approval and
+  the applicable safety checks are required for future device operations.
 - **[V]** `fastboot fetch boot_a` failed while locked and was refused again
   after unlock with `Fetching restricted partition: boot_a is not allowed`.
   The later failed attempt left a zero-byte local placeholder, which was
@@ -139,9 +139,16 @@ supported slot-B and userdata install paths.
 
 Keep build outputs and hardware captures in the isolated worktrees and
 `bringup-artifacts/`; keep device-specific unproven settings out of shared
-configs. Use `bin/omamobile flash|push` for development boot images and the
-supported installer for userdata. No extra recovery-analysis milestone is
-required for this owner-authorized experiment.
+configs. Before any future device operation, follow the project safety rules and obtain
+current owner authorization for its operation class. Verify the current backup
+and recovery requirements first. Use `bin/omamobile flash|push` only for
+development boot images and the supported installer for userdata.
+
+The USB Type-C node is enabled only by the optional development overlay. The
+kernel board DTS in [linux-omarchy-mobile #276](
+https://github.com/derekross/linux-omarchy-mobile/pull/276) must keep the
+connector's power role at `sink` until VBUS sourcing has its own review; this
+overlay does not provide VBUS.
 
 ## 4. Risks and gates
 
