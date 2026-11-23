@@ -20,7 +20,8 @@ REFERENCE_DIR="${REFERENCE_DIR:-$WORK/reference}"
 # The toolchain: the pinned one tools/fetch-toolchain verified into
 # OMAMOBILE_TOOLCHAIN (tools/toolchain.lock) when it is there, else the
 # Android checkout under SRC_DIR. CLANG_DIR, MKBOOTIMG_DIR, MKDTBOIMG,
-# AVBTOOL and AVB_KEY each override one piece.
+# AVBTOOL and AVB_KEY each override one piece; DTC and FDTOVERLAY replace
+# the kernel build's own dtc tools for images.
 TOOLCHAIN_DIR="${OMAMOBILE_TOOLCHAIN:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile/toolchain}"
 TOOLCHAIN_LOCK="$ROOT/tools/toolchain.lock"
 # True when every lock entry under $1 was fetched and verified at the lock's
@@ -299,6 +300,12 @@ reproducible_env() {
 # its include directory lands in the debug info of the compat vDSO, whose
 # build ID is in the Image, so the clang's host path would change the Image.
 CONTAINER_CLANG=/opt/omamobile/clang
+# An arm64 builder can't run the linux-x86 Android clang. Its build image
+# carries Ubuntu's LLVM at CONTAINER_CLANG instead (docker/Dockerfile), so the
+# kernel is built with that, and CLANG_DIR is only the host's own LLVM, for
+# the initramfs's helpers. Not for releases: they use the pinned clang.
+HOST_ARM64=0
+[[ $(uname -m) == aarch64 ]] && HOST_ARM64=1
 
 # Run a command in the build container with the work tree, the kernel tree,
 # this repo and the clang (read-only, at CONTAINER_CLANG) mounted.
@@ -307,7 +314,7 @@ in_container() {
   [[ -t 0 && -t 1 ]] && tty=(-it)
   [[ $KERNEL_BASE == "$WORK" || $KERNEL_BASE == "$WORK"/* || ! -d $KERNEL_BASE ]] ||
     kernel=(-v "$KERNEL_BASE:$KERNEL_BASE")
-  [[ -z $CLANG_DIR || ! -d $CLANG_DIR ]] || clang=(-v "$CLANG_DIR:$CONTAINER_CLANG:ro")
+  ((HOST_ARM64)) || [[ -z $CLANG_DIR || ! -d $CLANG_DIR ]] || clang=(-v "$CLANG_DIR:$CONTAINER_CLANG:ro")
   reproducible_env
   docker run --rm "${tty[@]}" \
     --hostname omamobile-build \
@@ -356,7 +363,9 @@ cmd_kernel() {
   esac
   (($# <= 1)) || die "kernel: expected --release or no argument"
   [[ -d "$KERNEL_DIR" ]] || die "no kernel tree at $KERNEL_DIR"
-  [[ -n "$CLANG_DIR" ]] || die "no clang found: run tools/fetch-toolchain (or 'lineage-ref sync', or set CLANG_DIR)"
+  ((HOST_ARM64)) || [[ -n "$CLANG_DIR" ]] || die "no clang found: run tools/fetch-toolchain (or 'lineage-ref sync', or set CLANG_DIR)"
+  ((release == 0 || HOST_ARM64 == 0)) ||
+    die "kernel --release needs the pinned clang (docs/RELEASES.md §9), which runs only on an x86-64 builder"
   # The codename goes into a path below, as in load_device
   [[ $DEVICE =~ ^[a-z0-9]+$ ]] || die "DEVICE must be a codename, not '$DEVICE'"
   local fragment="$ROOT/device/$DEVICE/kernel.config" localversion=""
@@ -389,10 +398,17 @@ cmd_kernel() {
   # The compiler this build used, for images' TOOLCHAIN and the bundle's
   # MANIFEST: clang's own version line (the Android build and llvm-project
   # commit) and the directory's name, never a path (MANIFEST is published)
-  {
-    echo "clang: $("$CLANG_DIR/bin/clang" --version | sed -n 1p)"
-    echo "clang source: $CLANG_SOURCE, $(basename "$CLANG_DIR")"
-  } > "$KERNEL_OUT/toolchain.txt"
+  if ((HOST_ARM64)); then
+    {
+      echo "clang: $(in_container "$CONTAINER_CLANG/bin/clang --version" | sed -n 1p)"
+      echo "clang source: build image (arm64 builder)"
+    } > "$KERNEL_OUT/toolchain.txt"
+  else
+    {
+      echo "clang: $("$CLANG_DIR/bin/clang" --version | sed -n 1p)"
+      echo "clang source: $CLANG_SOURCE, $(basename "$CLANG_DIR")"
+    } > "$KERNEL_OUT/toolchain.txt"
+  fi
   say "$(head -1 "$KERNEL_OUT/toolchain.txt")"
   # The release string the tree gave: never -push1 or -dirty (RELEASES §4)
   if ((release)); then
@@ -822,8 +838,15 @@ cmd_initramfs() {
   mkdir -p "$stage/usr/local/bin"
   if [[ -f $ROOT/packages/$DEV_PACKAGE/src/omamobile-bootctl.c ]]; then
     [[ -n ${CLANG_DIR:-} && -d $CLANG_DIR ]] || die "no clang found: run tools/fetch-toolchain (or 'lineage-ref sync', or set CLANG_DIR)"
+    "$CLANG_DIR/bin/clang" --version >/dev/null 2>&1 ||
+      die "$CLANG_DIR/bin/clang does not run on this host: set CLANG_DIR to an LLVM built for it (clang, ld.lld and compiler-rt's aarch64 builtins)"
     sysroot=$(alpine_sysroot)
     builtins=$(find "$CLANG_DIR/lib/clang" -name 'libclang_rt.builtins-aarch64-android.a' | sed -n 1p)
+    # A clang that is not Android's (an arm64 builder's own LLVM) ships
+    # compiler-rt's generic Linux builtins instead, often behind a symlink
+    [[ -n $builtins ]] ||
+      builtins=$(find -L "$CLANG_DIR/lib/clang" -path '*/linux/libclang_rt.builtins-aarch64.a' | sed -n 1p)
+    [[ -n $builtins ]] || die "no aarch64 compiler-rt builtins under $CLANG_DIR/lib/clang"
     "$CLANG_DIR/bin/clang" --target=aarch64-linux-musl --sysroot="$sysroot" -fuse-ld=lld -static -nostdlib -O2 \
       -o "$stage/usr/local/bin/devmem" "$sysroot/usr/lib/crt1.o" "$sysroot/usr/lib/crti.o" \
       "$ROOT/tools/devmem.c" -L"$sysroot/usr/lib" -lc "$builtins" "$sysroot/usr/lib/crtn.o"
@@ -896,8 +919,12 @@ cmd_images() {
     tools="$ROOT/system/tools/mkbootimg"
     [[ -f $tools/mkbootimg.py ]] || tools="$SRC_DIR/system/tools/mkbootimg"
   fi
-  local dtc="$KERNEL_OUT/scripts/dtc/dtc" boot="$KERNEL_OUT/arch/arm64/boot"
+  # The kernel build's dtc runs on the host here. DTC and FDTOVERLAY name a
+  # host dtc instead where the container's can't run (NixOS: no FHS loader)
+  local dtc="${DTC:-$KERNEL_OUT/scripts/dtc/dtc}" boot="$KERNEL_OUT/arch/arm64/boot"
   local dtb="$boot/dts/$DEV_DTB"
+  [[ ! -e $dtc ]] || "$dtc" --version >/dev/null 2>&1 ||
+    die "$dtc does not run on this host: set DTC and FDTOVERLAY to a host dtc and fdtoverlay"
   # qcom-abl needs the device's chainload dir before we touch a build.
   if [[ $DEV_BOOT_METHOD == qcom-abl ]]; then
     local chainload="$ROOT/device/$DEVICE/chainload"
@@ -934,7 +961,7 @@ cmd_images() {
   # and applied onto the kernel's DTB, in order. The kernel's own DTB is left
   # as built; the images carry the overlaid copy.
   if [[ -n ${DEV_DTB_OVERLAYS:-} ]]; then
-    local ov ovdir="$img/overlays" ovs=() fdtoverlay="$KERNEL_OUT/scripts/dtc/fdtoverlay"
+    local ov ovdir="$img/overlays" ovs=() fdtoverlay="${FDTOVERLAY:-$KERNEL_OUT/scripts/dtc/fdtoverlay}"
     mkdir -p "$ovdir"
     say "DTB overlays: $DEV_DTB_OVERLAYS"
     for ov in $DEV_DTB_OVERLAYS; do

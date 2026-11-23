@@ -62,6 +62,8 @@ alarm_die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 # enabled and its flags: line must contain F, or the container cannot run it.
 alarm_require_binfmt() {
   local node=/proc/sys/fs/binfmt_misc/aarch64-linux
+  # An aarch64 laptop runs the container natively: no emulator needed
+  [[ $(uname -m) == aarch64 ]] && return 0
   if [[ -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ]]; then
     return 0
   fi
