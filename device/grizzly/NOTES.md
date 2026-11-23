@@ -479,6 +479,15 @@ powered off on schedule. Rescue rejected a valid compressed
 image with a wrong digest. The package passed the five-image
 stage-only simulation.
 
+On hardware, v19 verified the RAM image with OpenSSL in
+37.199 seconds and reached Omarchy's systemd as PID 1. The
+isolated service confirmed read-only ext4 on a RAM-backed
+loop device, zero SCSI disks, and the return helper after
+handoff. The warm reset fired at 420.013 seconds, and stock
+D1 booted again from slot A with verity enforcing. Pstore,
+`SYSTEM_LAST_KMSG`, and the first stock bugreport contain
+the matching userspace check and reset markers.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
