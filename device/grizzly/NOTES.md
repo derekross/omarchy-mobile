@@ -235,6 +235,19 @@ a PID 1, UDC or shutdown marker to attribute the transition.
 Following manual Fastboot entry, stock D1 booted again on A
 with verity enforcing.
 
+The DWC3 timing variant records the furthest USB stage observed
+in the first 70 seconds of PID 1. It requests power-off at
+70 seconds if neither path appeared, 110 seconds if it observed
+the DWC3 platform child, or 150 seconds if it observed the UDC.
+The Mac VM confirmed all three timers with simulated device
+paths for the latter two. On Grizzly, the charger transition
+can provide indirect evidence if the USB log port stays absent.
+
+Fastboot acknowledged all five B writes for the DWC3 timing
+variant. The live `vendor_boot_b` readback matched all
+8,192 supplied image bytes. A remained active and successful,
+and B reported three tries.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
