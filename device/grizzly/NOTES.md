@@ -458,8 +458,19 @@ device and zero SCSI disks. The isolated target checked the
 Omarchy packages and ran `Hyprland --version`. The reference
 device's firstboot, slot-success and USB rescue units were
 unavailable to PID 1. A truncated stream stopped before the
-handoff. The next Grizzly trial still needs the USB stream
-and timed return verified on hardware.
+handoff.
+
+The v18 phone trial moved the 3.08 GB reference stream over
+authenticated USB NCM and decoded the full 11.54 GB ext4
+image into tmpfs. The raw SHA-256 pass had read 7.20 GB as
+the handoff window closed and systemd stayed pending. The
+independent return helper requested a warm reset at 420.013
+seconds. Fastboot returned and stock D1 booted again from
+slot A with verity enforcing. Pstore, `SYSTEM_LAST_KMSG`
+and the first stock bugreport matched the four tagged lines.
+An off-device OpenSSL run verified the same raw SHA-256 in
+6.952 seconds and reached the isolated systemd target. D1
+advertises SHA-2 instructions on all seven CPU cores.
 
 ## Before first light
 
