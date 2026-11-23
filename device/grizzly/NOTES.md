@@ -135,6 +135,12 @@ B reported three tries and its successful flag cleared. A 64 MiB
 `vendor_boot.img` prefix. The phone stayed in Fastboot with A active.
 Slot B activation and kernel boot remain pending.
 
+The USB-logging variant was then staged through the same workflow.
+It changes only `vendor_kernel_boot.img` relative to the standard
+package. All five Fastboot writes and the `vendor_boot_b` readback
+passed again. A stayed active and successful, and B has three tries.
+The physical USB console still needs validation during a boot.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
