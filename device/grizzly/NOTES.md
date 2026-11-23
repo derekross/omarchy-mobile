@@ -104,6 +104,19 @@ and `ro.boot.veritymode=eio`. The same-build repair restored the
 Android boot after acknowledgment. The EIO warning persists and its
 trigger remains unknown.
 
+An Android bugreport from A still reported managed EIO. Its retained
+kernel log began 3.210 seconds into the boot and showed no explicit
+dm-verity block failure or block I/O error in the captured window.
+The vendor bootloader attachment recorded red-warning acknowledgment
+timeouts in earlier attempts on both slots. It did not identify a
+failed partition.
+
+Stock Recovery on A exposed the ADB sideload transport. The first
+return to Android ended at a dark screen. After entering Fastboot and
+rebooting A again with timely acknowledgment, ADB confirmed D1
+completed boot with the same factory AVB digest and managed EIO still
+active. This is a verified attended stock fallback.
+
 The signed five-part M1 candidate passed host AVB signature, image
 layout and checksum checks. A loopback Fastboot mock verified writes
 to exactly the five slot-B destinations, a matching `vendor_boot_b`
@@ -116,11 +129,10 @@ through AP UART or ramoops remain open.
 
 ## Before first light
 
-- Verify a repeatable stock Android and Recovery path on A, and
-  resolve the remaining EIO warning. Recheck slot flags and the
-  Recovery transport before any M1 writes. Verify the live board
-  selector and bootloader-provided memory reservations during the
-  first hardware trial.
+- Keep stock A as the attended recovery path. Recheck slot flags
+  and stock Recovery transport before any M1 writes. Verify the
+  live board selector and bootloader-provided memory reservations
+  during the first hardware trial.
 - Bring up the shared Malibu kernel support and a Grizzly board DTS in
   [linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile).
   Use the B0 observation to guide the first candidate and keep the stock
