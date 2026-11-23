@@ -430,6 +430,15 @@ of live kernel log. The warm recovery returned to stock A with
 verity enforcing. Pstore, `SYSTEM_LAST_KMSG`, and the first stock
 bugreport contained the tagged console.
 
+The v17 trial uses the shared Omarchy initramfs in RAM rescue
+mode with the proven v16 kernel and disabled UFS node. A VM
+passed an authenticated SSH command over virtual NCM and the
+exact phone payload passed the 90-second warm-restart check.
+On 2026-11-23, Fastboot accepted all five images and the
+`vendor_boot_b` readback matched all 8,192 supplied bytes. A
+remained active and successful and B was bootable with three
+tries. Device NCM and SSH still need the attended trial.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
