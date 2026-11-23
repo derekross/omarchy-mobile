@@ -312,6 +312,21 @@ the first failure to CPM RX mailbox startup, before regulator
 registration. The captured log does not identify which mailbox
 queue predicate returned `-EBUSY`.
 
+The next kernel adds one warning at the MBA startup rejection.
+It records the Linux `used` flag, the raw queue value at
+`+0x10` and the raw interrupt status at `+0x08`. On this
+board the CPM response queue is at `0x0ea61000`. Stock D1's
+mailbox driver acknowledges pending RX and TX interrupts
+before registering the controller. The new warning keeps the
+existing startup guard and will show which conditions it saw.
+
+The Mac VM confirmed the tagged warm restart used to recover
+this diagnostic. On 2026-11-23, Fastboot accepted all five B
+images, and the live `vendor_boot_b` readback matched the
+8,192 supplied bytes. A remained active and successful. B was
+bootable with three tries. The mailbox values still need an
+attended B boot and stock A log readout.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
