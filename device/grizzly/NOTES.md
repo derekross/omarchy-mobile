@@ -219,6 +219,22 @@ five B writes and the `vendor_boot_b` readback matched the
 8,192-byte image prefix. A remained active and successful and
 B reported three tries.
 
+The attended USB timed boot produced no ACM port during the
+155-second capture. The operator reported the charging screen
+by 113.6 seconds after the reboot request. The recovery log
+confirms a separate cold B boot into charger mode using the
+same timed USB initrd. The first B boot reached late ABL
+handoff at about 11.6 seconds, and the charger epoch matches
+the earlier timed control's Main-PMIC event, `CHG_IN` and zero
+APC watchdog subreason. Neither epoch records a RED EIO timeout.
+
+DBL and ABL both recorded an 82-second interval between the
+two B boots, matching the previous timed control. This fits
+the 70-second branch plus ABL handoff. The recovery log lacks
+a PID 1, UDC or shutdown marker to attribute the transition.
+Following manual Fastboot entry, stock D1 booted again on A
+with verity enforcing.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
