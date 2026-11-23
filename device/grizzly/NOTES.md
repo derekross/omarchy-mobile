@@ -189,7 +189,22 @@ an arm64 VM 70.009 seconds after PID 1 entry.
 All five B writes for the timed variant passed on Grizzly. The
 live `vendor_boot_b` readback matched the 8,192-byte image prefix.
 Fastboot confirmed A active and successful and B bootable with
-three tries. The timed shutdown still needs an attended B boot.
+three tries.
+
+During the attended timed trial the operator reported a restart
+followed by a battery icon. The Mac recorded those reports 99
+and 108 seconds after the reboot request. The stock recovery log
+shows a normal B boot and a separate cold B boot with
+`bootmode:charger`. Both loaded the timed fixture's initrd and
+reached ABL's system-handoff callback. The charger boot records
+`CHG_IN`, a main PMIC event and APC watchdog subreason `0x00`.
+The retained candidate epochs include no RED EIO timeout.
+
+The charger transition supports the timed shutdown. The
+recovery log has no M1 marker or explicit PSCI shutdown record,
+so the exact PID 1 execution and watchdog service are still
+unconfirmed. Fastboot returned on manual key entry and stock A
+again completed a D1 boot with verity enforcing.
 
 ## Before first light
 
