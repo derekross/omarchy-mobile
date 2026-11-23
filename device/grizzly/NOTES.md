@@ -154,8 +154,10 @@ UFS paths used by D1's FDT fixups, and preserves the expected USB-C
 connector path. The three added controller nodes use stock
 addresses and remain disabled without Linux driver bindings.
 The USB ramdisk stays byte-identical. The corrected package passed
-host schema, handoff and loopback staging checks. The Pixel is
-running stock A pending a separate hardware retry.
+host schema, handoff and loopback staging checks. A live stage-only
+pass then wrote the corrected package to B and verified the
+`vendor_boot_b` image prefix again. The Pixel is in Fastboot with
+stock A active and B ready for a separate hardware retry.
 
 ## Before first light
 
@@ -173,4 +175,4 @@ running stock A pending a separate hardware retry.
   to the shared initramfs on slot B. Keep stock slot A available for recovery
   and leave `userdata` out of the first boot test.
 
-The next device trial needs the corrected FDT paths.
+The corrected FDT paths are staged for the next device trial.
