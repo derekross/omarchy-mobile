@@ -133,13 +133,29 @@ live Grizzly through the stage-only workflow. Fastboot returned
 B reported three tries and its successful flag cleared. A 64 MiB
 `vendor_boot_b` readback matched all 8,192 bytes of the staged
 `vendor_boot.img` prefix. The phone stayed in Fastboot with A active.
-Slot B activation and kernel boot remain pending.
 
 The USB-logging variant was then staged through the same workflow.
 It changes only `vendor_kernel_boot.img` relative to the standard
 package. All five Fastboot writes and the `vendor_boot_b` readback
 passed again. A stayed active and successful, and B has three tries.
 The physical USB console still needs validation during a boot.
+
+The first attended B boot returned to Fastboot in about three
+seconds with all three tries remaining. The Mac saw no USB logging
+interface. ABL continued past the connector path warning, then
+failed to resolve the `serial0` alias during its FDT fixups.
+The UART disable operation returned `-5`, and ABL entered Fastboot
+with reason `boot failure`. Linux handoff and USB enumeration remain
+unverified. Returning to stock D1 on A completed successfully. ADB
+reported the factory AVB digest and verity mode `enforcing`.
+
+The rebuilt diagnostic supplies the stock `serial0`, pinctrl and
+UFS paths used by D1's FDT fixups, and preserves the expected USB-C
+connector path. The three added controller nodes use stock
+addresses and remain disabled without Linux driver bindings.
+The USB ramdisk stays byte-identical. The corrected package passed
+host schema, handoff and loopback staging checks. The Pixel is
+running stock A pending a separate hardware retry.
 
 ## Before first light
 
@@ -157,4 +173,4 @@ The physical USB console still needs validation during a boot.
   to the shared initramfs on slot B. Keep stock slot A available for recovery
   and leave `userdata` out of the first boot test.
 
-The M1 candidate is host-validated and awaits its first device boot.
+The next device trial needs the corrected FDT paths.
