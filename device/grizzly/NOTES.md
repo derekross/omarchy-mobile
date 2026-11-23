@@ -284,6 +284,19 @@ shows CPM regulator rejection or publication, leaving both
 open. Stock D1 finished booting again on A with verity
 enforcing.
 
+The deferred-probe capture variant copies Linux's
+`devices_deferred` into the ramoops console and requests an
+ordinary warm restart after reading back the reboot mode.
+The initramfs suppresses another request if the previous
+console already contains its marker. An arm64 VM recovered a
+verbatim simulated deferred-probe line across a RAM-preserving
+kernel transition. D1's archive and stock readout still need
+the attended hardware test.
+
+Fastboot accepted all five B writes for this variant.
+The live `vendor_boot_b` readback matched all 8,192 supplied
+bytes. A remained active and successful and B had three tries.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
