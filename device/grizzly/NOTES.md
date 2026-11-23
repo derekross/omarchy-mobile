@@ -376,7 +376,23 @@ VM confirmed the diagnostic's tagged warm restart.
 On 2026-11-23, Fastboot accepted all five v15 images on B.
 The `vendor_boot_b` readback matched all 8,192 supplied bytes.
 Stock A remained active and successful, and B was bootable with
-three tries. The attended test will show where enumeration stops.
+three tries.
+
+The attended v15 console records MAX77779 port and IRQ readiness
+and an initial CC1 source advertisement. TCPM went from
+`SNK_UNATTACHED` to `SNK_ATTACH_WAIT`, then the startup reset
+returned it to `SNK_UNATTACHED` after the 920 ms wait. No later
+CC or power alert or device-role request appeared in the capture.
+The six snapshots show no Type-C partner and UDC `not attached`
+with unknown speed despite the ACM gadget bind. The Mac saw no
+USB enumeration. Stock A booted with verity enforcing and the
+tagged console was verified in pstore, `SYSTEM_LAST_KMSG`, and
+the first bugreport.
+
+TCPM samples CC before it forces the startup reset. The Grizzly
+sink sets Rd during reset and again on return to `SNK_UNATTACHED`.
+An attended reconnect after reset can test whether a fresh CC
+event gets the same v15 images past attach wait.
 
 ## Before first light
 
