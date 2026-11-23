@@ -367,6 +367,17 @@ data role, and the Malibu wrapper's role callback together during
 the next trial. The wrapper starts the PHY and repeater in the
 disconnected role.
 
+The v15 diagnostic records Type-C attachment and TCPM events,
+MAX77779 data-gate readback, the Malibu role callback, and UDC
+state and speed. Stock D1 reports a configured USB connection
+on the same Mac cable in Type-C sink/device mode. The arm64
+VM confirmed the diagnostic's tagged warm restart.
+
+On 2026-11-23, Fastboot accepted all five v15 images on B.
+The `vendor_boot_b` readback matched all 8,192 supplied bytes.
+Stock A remained active and successful, and B was bootable with
+three tries. The attended test will show where enumeration stops.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
