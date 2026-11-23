@@ -60,11 +60,58 @@ Headers were read with AOSP `unpack_bootimg`, DTB nodes with `fdtdump` and
   Malibu PHY, clock, reset and power-domain dependencies. Neither console
   path has been verified under the Omarchy kernel.
 
+## November D1 recovery and first-light checks
+
+On 2026-11-23, the retail Grizzly booted stock `CP4A.261105.040.D1`
+from slot B after a same-build full OTA sideload from Recovery on
+slot A. The OTA checksum and signature matched the official package
+and stock Recovery certificate. Before unlock, both slots had
+completed a locked D1 Android boot with green Verified Boot and the
+same factory AVB chain digest.
+[Grizzly full OTA](https://developers.google.cn/android/ota?hl=en#grizzly)
+
+Locked bootloader Fastboot reported D1 ABL `spacecraft-17.4-16729013`,
+both slots successful and bootable, two tries per slot, and snapshot
+update status `none`. It rejected active-slot selection while locked.
+Live sizes matched the D1 factory files and were identical on A and B.
+
+| Partition | Bytes | MiB |
+| --- | ---: | ---: |
+| `boot` | 67,108,864 | 64 |
+| `init_boot` | 8,388,608 | 8 |
+| `vendor_boot` | 67,108,864 | 64 |
+| `vendor_kernel_boot` | 67,108,864 | 64 |
+| `dtbo` | 16,777,216 | 16 |
+
+After the standard bootloader unlock, Fastboot reported
+`unlocked:yes`. Normal boot attempts on A and B both showed the red
+device corruption warning. At the next Fastboot check each slot was
+still marked bootable, with one try and its successful flag cleared.
+Stock D1 Recovery on B reached ADB after the warning was acknowledged.
+It reported orange Verified Boot and `ro.boot.veritymode=eio`. Its
+AVB digest still matched the factory chain
+(`291428847dd4ceb93428928f14712738b2994281f10c212501ca42ab2fbcbd8b`).
+A persistent managed-verity decision shared by the matching chains
+could explain both warnings. The trigger remains unknown. The
+device tests used stock images throughout.
+[Android Verified Boot error handling](https://source.android.com/docs/security/features/verifiedboot/verified-boot#handle-verification-errors)
+
+The signed five-part M1 candidate passed host AVB signature, image
+layout and checksum checks. A loopback Fastboot mock verified writes
+to exactly the five slot-B destinations, a matching `vendor_boot_b`
+readback prefix, and slot A remaining active after staging. In an
+arm64 VM the experimental USB variant recovered early kernel records and all
+three M1 markers through CDC ACM after a simulated disconnect and
+reconnect. The host reader passed pseudo-terminal tests on macOS and
+Linux. Physical USB enumeration, on-device M1 boot and capture
+through AP UART or ramoops remain open.
+
 ## Before first light
 
-- Establish an exact stock reference for the test build. Verify the live
-  board selector and bootloader-provided memory reservations, partition
-  sizes and both slots' recovery state before proposing a flash plan.
+- Establish a clean stock Android boot with A available for recovery.
+  Recheck slot flags and the stock Recovery transport before any M1
+  writes. Verify the live board selector and bootloader-provided
+  memory reservations during the first hardware trial.
 - Bring up the shared Malibu kernel support and a Grizzly board DTS in
   [linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile).
   Use the B0 observation to guide the first candidate and keep the stock
@@ -75,4 +122,4 @@ Headers were read with AOSP `unpack_bootimg`, DTB nodes with `fdtdump` and
   to the shared initramfs on slot B. Keep stock slot A available for recovery
   and leave `userdata` out of the first boot test.
 
-No Omarchy images have been built or booted for this capture.
+The M1 candidate is host-validated and awaits its first device boot.
