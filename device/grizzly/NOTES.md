@@ -350,7 +350,22 @@ Mac VM confirmed the tagged warm restart.
 On 2026-11-23, Fastboot accepted all five v14 slot B images.
 The `vendor_boot_b` readback matched all 8,192 supplied bytes.
 Stock A remained active and successful, and B was bootable with
-three tries. The attended v14 boot is still pending.
+three tries.
+
+The attended v14 console records `ea61000.mailbox` acknowledging
+IRQ status `0x1`. CPM and DWC3 stayed bound, the UDC was registered
+in all six snapshots, and all six deferred-device samples were
+empty. Linux bound the ACM gadget to `a210000.usb`. The Mac saw
+no Grizzly USB enumeration. The warm restart returned to Fastboot,
+and stock A booted with verity enforcing. Its pstore and
+`SYSTEM_LAST_KMSG` returned the tagged v14 console, also present
+in the first stock bugreport.
+
+The remaining USB check is between gadget binding and host
+enumeration. Capture the UDC state and speed, Type-C partner and
+data role, and the Malibu wrapper's role callback together during
+the next trial. The wrapper starts the PHY and repeater in the
+disconnected role.
 
 ## Before first light
 
