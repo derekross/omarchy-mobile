@@ -180,6 +180,17 @@ console attachment or M1 markers. Linux entry and PID 1 liveness
 remain unverified. Stock D1 finished booting again from A with the
 factory AVB digest and verity mode `enforcing`.
 
+A diagnostic variant uses a minimal PID 1 that requests normal
+Linux shutdown 70 seconds after entry. It uses the same kernel and
+corrected ABL paths, with the watchdog and ramoops overlays and
+the USB overlay omitted. The exact kernel and initramfs shut down
+an arm64 VM 70.009 seconds after PID 1 entry.
+
+All five B writes for the timed variant passed on Grizzly. The
+live `vendor_boot_b` readback matched the 8,192-byte image prefix.
+Fastboot confirmed A active and successful and B bootable with
+three tries. The timed shutdown still needs an attended B boot.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
