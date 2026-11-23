@@ -275,6 +275,15 @@ diagnostic. The live `vendor_boot_b` readback matched the
 8,192 supplied bytes. Fastboot verified A active and successful
 and B bootable with three tries.
 
+The attended regulator trial produced no USB serial port.
+DBL and ABL put the second B boot into charger mode 82 and
+83 seconds after the first, respectively. Both boot records
+identify the expected regulator diagnostic initrd. The timing
+fits the inconclusive 70-second branch. No recovered marker
+shows CPM regulator rejection or publication, leaving both
+open. Stock D1 finished booting again on A with verity
+enforcing.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
