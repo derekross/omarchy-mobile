@@ -127,12 +127,20 @@ reconnect. The host reader passed pseudo-terminal tests on macOS and
 Linux. Physical USB enumeration, on-device M1 boot and capture
 through AP UART or ramoops remain open.
 
+The standard signed watchdog and ramoops M1 package was staged on
+live Grizzly through the stage-only workflow. Fastboot returned
+`OKAY` for all five B partitions. A remained active and successful.
+B reported three tries and its successful flag cleared. A 64 MiB
+`vendor_boot_b` readback matched all 8,192 bytes of the staged
+`vendor_boot.img` prefix. The phone stayed in Fastboot with A active.
+Slot B activation and kernel boot remain pending.
+
 ## Before first light
 
 - Keep stock A as the attended recovery path. Recheck slot flags
-  and stock Recovery transport before any M1 writes. Verify the
-  live board selector and bootloader-provided memory reservations
-  during the first hardware trial.
+  and stock Recovery transport before activation. Verify the live
+  board selector and bootloader-provided memory reservations during
+  the first hardware trial.
 - Bring up the shared Malibu kernel support and a Grizzly board DTS in
   [linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile).
   Use the B0 observation to guide the first candidate and keep the stock
