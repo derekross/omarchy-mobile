@@ -156,8 +156,29 @@ addresses and remain disabled without Linux driver bindings.
 The USB ramdisk stays byte-identical. The corrected package passed
 host schema, handoff and loopback staging checks. A live stage-only
 pass then wrote the corrected package to B and verified the
-`vendor_boot_b` image prefix again. The Pixel is in Fastboot with
-stock A active and B ready for a separate hardware retry.
+`vendor_boot_b` image prefix again.
+
+The corrected B trial reached the G logo and produced no M1 USB
+gadget or ACM interface during a 145-second observation. Fastboot
+returned after manual key entry with reason `vol down pressed` and
+two B retries remaining.
+
+The post-trial stock A bugreport records D1 ABL selecting diagnostic
+DTB index 0 and reporting `serial0 disabled ret=0`. ABL passed the
+board FDT fixup and recorded the initrd at
+`0x86000000` through `0x8627bc51`. ABL reached its final
+system-handoff callback. A missing AVB boot fingerprint logged a
+message and took the fallback that rejoins the normal path. The
+retained B trace ends during display PHY power-off in that
+callback. The preceding 10-second gap matches the D1 warning
+display timeout.
+
+The recovery log records a cold reset with the long Power key
+reason and APC watchdog subreason `0x00`. The retained traces lack
+an explicit Linux entry message, and the bugreport has no pstore
+console attachment or M1 markers. Linux entry and PID 1 liveness
+remain unverified. Stock D1 finished booting again from A with the
+factory AVB digest and verity mode `enforcing`.
 
 ## Before first light
 
@@ -174,5 +195,3 @@ stock A active and B ready for a separate hardware retry.
   confirmed. Validate the five images offline before an attended first boot
   to the shared initramfs on slot B. Keep stock slot A available for recovery
   and leave `userdata` out of the first boot test.
-
-The corrected FDT paths are staged for the next device trial.
