@@ -38,7 +38,9 @@ or the guard fails, stop and use the stock A return.
 
 The original v29 link fixture stops before LUN discovery. An enumerating
 Grizzly RAM rescue with a closed write allowlist and enough time to finish
-the backup is still needed to exercise the mainline backup path.
+the backup is still needed to exercise the mainline backup path. For a
+backup now, use the [stock D1 RAM rescue](#stock-d1-read-only-ram-rescue),
+which uses the factory UFS power sequence and already enumerated all nine targets.
 The standalone Grizzly staging helper is already in
 `device/grizzly/bringup/`. The shared `flash` command follows its normal
 `load_device` and allowlist path.
@@ -3336,9 +3338,8 @@ dispatch and timed return, ARM64 reader refusal after guard
 changes, and an exact 8 MiB serial frame. The macOS bridge and
 `tools/nv-backup` completed a nine-partition synthetic copy
 and verification across a local pseudo-terminal. A wrong
-phone-side hash removed the partial backup. Hardware reader
-startup, sustained throughput and the real copy remain to
-be verified in an attended boot.
+phone-side hash removed the partial backup. The attended run
+below verified hardware startup and full-size copy throughput.
 
 #### Attended full NV backup
 
@@ -3364,3 +3365,35 @@ Fastboot 32 seconds after `finish`, selected A and started
 stock D1. ADB confirmed Android completed boot with enforcing
 verity and the original factory VBMeta digest. The backup
 contains the pre-return NV state.
+
+#### Stock D1 read-only RAM rescue
+
+Run the stock inventory packer on the Mac with `--usb2-test
+--usb2-nv-reader READER_ELF ISOLATION_DTBO` and the matching isolation
+board DTB as described above. The packer now emits `images/` and a
+standalone `host-tools/` directory together. For the bridge and backup
+commands above, set `bundle` to the generated `host-tools/` directory.
+The descriptor has an empty `UFS_RW` and exactly nine backup labels.
+
+The rescue keeps the factory D1 kernel, UFS module and UFS regulator
+settings. The isolation DTBO changes USB setup. PID 1 enumerates GPT
+metadata, sets and verifies all UFS parents and partitions read-only,
+and then starts the restricted ACM service. There is no Android or
+installed root, shell service, raw SCSI service or other partition
+payload reader. `tools/nv-backup` is the first payload reader through
+ACM. The service allows 1,140 seconds for the copy and its independent
+on-phone hash pass, with the 1,200-second return timer armed by PID 1.
+The previous full copy and verification took 303 seconds.
+
+The offline repack passed all five image hashes, AVB, saved slot size
+and handoff bounds checks. Its `init_boot` SHA-256 is
+`0c0405256bd3fb214c340721b16588e82f02096a02d115a36cc6d030b757e175`.
+It keeps the previously tested reader binary and packs the current PID 1.
+The bundled host tools completed a synthetic nine-partition backup and
+rejected a separate bad-hash test. This repack awaits its first boot.
+
+Keep the images and the backup off-repo. Use the attended staging and
+return sequence only after approval. Stop if the guard or descriptor
+check fails, any target is missing, or a hash differs. An incomplete
+copy does not qualify as a backup. Use the timed return and select
+stock A if the bridge cannot finish.

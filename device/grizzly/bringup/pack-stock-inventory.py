@@ -364,7 +364,16 @@ def pack(args):
         if args.ufs_cpm_trace:
             print("UFS CPM trace prototype pairs stock MBFS votes and decoded firmware PSM1 events.")
         if reader is not None:
+            host = args.output / "host-tools"
+            write_payload(host / "device.conf", (HERE / "d1-nv-backup.conf").read_bytes(), 0o600)
+            write_payload(host / "tools/nv-backup",
+                          (HERE.parents[2] / "tools/nv-backup").read_bytes(), 0o700)
+            write_payload(host / "tools/stock-nv-transport.py",
+                          (HERE / "stock-nv-transport.py").read_bytes(), 0o700)
+            write_payload(host / "tools/check-stock-usb2.py",
+                          (HERE / "check-stock-usb2.py").read_bytes(), 0o600)
             print("USB2 NV reader serves guarded, read-only partitions over the tested ACM gadget.")
+            print(f"Host backup tools and read-only Grizzly descriptor: {host}")
         elif args.usb2_test:
             print(f"USB2 prototype loads {len(USB2_MODULES)} modules after the NV guard "
                   "and sends 65536 synthetic bytes on request.")
