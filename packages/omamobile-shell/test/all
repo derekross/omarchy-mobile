@@ -316,6 +316,7 @@ grep -cF '"/.local/state/omarchy/notifications/history"' plugins/omamobile.bar/B
 [ "$(awk '/^        Row \{$/,/^        \}$/' plugins/omamobile.bar/Bar.qml | grep -c 'id: status')" = 1 ] || fail "the bar's right-hand row isn't where this test looks"
 [ "$(awk '/^        Row \{$/,/^        \}$/' plugins/omamobile.bar/Bar.qml | grep -c 'unreadNotifications')" = 0 ] || fail "the unread count is in the bar's right-hand row again (it ends under the camera cutout)"
 awk '/objectName: "unreadNotifications"/,/radius:/' plugins/omamobile.bar/Bar.qml | grep -cF 'anchors.left: callChipPill.visible ? callChipPill.right : clockText.right' >/dev/null || fail "the unread count follows the clock (or the call chip)"
+awk '/objectName: "recChip"/,/radius:/' plugins/omamobile.bar/Bar.qml | grep -cF 'anchors.left: unreadPill.visible ? unreadPill.right : callChipPill.visible ? callChipPill.right : clockText.right' >/dev/null || fail "the recording chip follows the unread count (else both draw on one spot)"
 grep -cF '"/.local/state/omarchy/notifications/history.json"' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar counts Omarchy 4.5's history.json"
 # Omarchy 4.0's files and 4.5's live.json and history.json, chosen by what
 # exists: test/notifications-store.sh runs the shade's own commands on both.
