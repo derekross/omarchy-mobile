@@ -1115,6 +1115,20 @@ fi
 if [[ -n ${OMAMOBILE_CALL_RENDER:-} ]]; then
   bash test/call-render "$OMAMOBILE_CALL_RENDER" >/dev/null || fail "call card render"
 fi
+# The bar wires the status keys: the battery is BatteryIndicator in the
+# picked style, each icon has its switch, and the cell watcher follows its
+# switch (started and stopped by hand, not bound: the restart timer sets it).
+bar=plugins/omamobile.bar/Bar.qml
+grep -cF 'style: root.batteryStyle' "$bar" >/dev/null && grep -c '^ *BatteryIndicator {' "$bar" >/dev/null || fail "the bar draws BatteryIndicator in the picked style"
+for flag in showBluetooth showWifi showCell showDnd showUnread; do
+  grep -cE "visible: root\.$flag &&" "$bar" >/dev/null || fail "the bar hides an icon by $flag"
+done
+grep -cF 'onShowCellChanged: { if (!showCell) cellRestart.stop(); cellWatch.running = showCell }' "$bar" >/dev/null || fail "the cell watcher follows its switch"
+grep -cF 'Component.onCompleted: cellWatch.running = showCell' "$bar" >/dev/null || fail "the cell watcher starts with its switch"
+grep -cE '^ *running: (root\.)?showCell' "$bar" >/dev/null && fail "the cell watcher's running is not bound"
+if [[ -n ${OMAMOBILE_BAR_RENDER:-} ]]; then
+  bash test/bar-render "$OMAMOBILE_BAR_RENDER" >/dev/null || fail "status bar render"
+fi
 if command -v node >/dev/null; then
   node test/status-model.js >/dev/null || { node test/status-model.js; fail "status bar model"; }
   node test/battery-state.js || fail "battery state bindings"
