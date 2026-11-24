@@ -2084,7 +2084,28 @@ handoff bounds and saved D1 slot capacities passed. Manifest SHA-256
 `35ec623a13ed8859116289ac03d110c6db1e44c62a508a310b7ab539dc1d76be`.
 Archive SHA-256
 `0933993bfe03cec6508186b8e98fcc8e93d14b906d1b4a7dc0b53f0002e55ca9`.
-v41 awaits its first hardware boot.
+
+#### Attended v41 slot B trial
+
+On 2026-11-24 the owner approved one trial using the existing
+nine-partition NV backup. The Mac rechecked the private backup's sizes,
+hashes and modes before staging. All five slot B writes passed and the
+`vendor_boot_b` readback matched all 8,192 supplied bytes.
+
+Prep registered with `on=1 stay_on=1` at 0.193464 s. The sweep queued
+prep at 0.232418 s and its worker reached `entry-gate` at 0.232447 s.
+At that gate, `on=1 stay_on=1`, `always_on=0`, `rpm_always_on=0`,
+`prepared=0`, `subdomains_on=0` and `devices=0`. This directly confirms
+the boot-on latch blocked prep before the provider OFF callback. Core
+was already logically OFF. The trace contains no prep `provider-off`
+or `of-provider-sync` record.
+
+The two-second observation stayed at `WAIT_OFF`. At 10.473131 s CPM
+reported `sync_state() pending due to 3c2d0000.ufs`. Ramoops and
+`SYSTEM_LAST_KMSG` agree on the genpd gate and pending consumer. The
+late sample retained HC `0x10` and PHY `0x11`. Fastboot returned 133
+seconds after the B boot request. Stock D1 completed boot on A with
+enforcing verity and the original factory VBMeta digest.
 
 ## Staging and return sequence used for D1
 
