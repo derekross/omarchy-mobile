@@ -55,7 +55,8 @@
 #               charger-less (max77759_charger not loaded: tcpm only reports),
 #               or AFTER b3-charger in the same boot (b3-done present and
 #               default_ilim_ua > 0): the charger then follows the tcpm psy
-#               (online + current_max -> input limit 0xc2, offline -> mode OFF)
+#               (online + current_max -> 0xc2 CHGIN_ILIM, which nothing
+#               enforces until linux-omarchy-mobile#288; offline -> mode OFF)
 #               and the guard logs tcpm/charger/battery every 10 s.
 #               Undo: modprobe -r tcpci_maxim tcpci tcpm, USBSW_CTRL 0x93 =
 #               0x09 if VBUS is valid, start omamobile-usb-rescue; then, if the
