@@ -22,6 +22,7 @@ case $1 in
 esac
 EOT
 printf '#!/bin/bash\nsleep 1\n' > "$tmp/bin/toyapp"
+printf '#!/bin/bash\n[[ -e $DOZE_ON ]]\n' > "$tmp/bin/omarchy-toggle-enabled"
 # systemctl: --user units from $UNITS ("unit slice cgroup" lines); anything else is unexpected
 cat > "$tmp/bin/systemctl" <<'EOT'
 #!/bin/bash
@@ -37,10 +38,10 @@ case $1 in
 esac
 EOT
 chmod +x "$tmp/bin/"*
-export PAC=$P UNITS=$tmp/units
+export PAC=$P UNITS=$tmp/units DOZE_ON=$tmp/doze-on
 : > "$UNITS"
 run() { env -i PATH="$tmp/bin:/usr/bin:/bin" HOME="$H" XDG_DATA_DIRS="$S" XDG_CONFIG_HOME="$H/.config" XDG_CACHE_HOME="$tmp/cache" \
-  XDG_CURRENT_DESKTOP=Hyprland PAC="$P" UNITS="$UNITS" \
+  XDG_CURRENT_DESKTOP=Hyprland PAC="$P" UNITS="$UNITS" DOZE_ON="$DOZE_ON" \
   OMAMOBILE_APPMGR_CGROOT="${OMAMOBILE_APPMGR_CGROOT:-}" OMAMOBILE_APPMGR_PROC="${OMAMOBILE_APPMGR_PROC:-}" \
   bash -p "$src/backends/appmgr.sh" "$@" || true; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -53,9 +54,27 @@ has "$(run state)" '"error":"usage'
 has "$(run state ../x)" '"error":"bad app id"'
 has "$(run state nosuch)" '"error":"no such app"'
 has "$(run remove org.test.Toy 0000000000000000)" '"error":"usage'
-has "$(run policy org.test.Toy restricted)" '"error":"usage'
+has "$(run policy org.test.Toy sometimes)" '"error":"bad policy'
+has "$(run policy org.test.Toy)" '"error":"usage'
 out=$(run state org.test.Toy); has "$out" '"package":"toy-pkg"'; has "$out" '"units":[]'
 lacks "$out" '"removable"'; lacks "$out" '"hash"'
+has "$out" '"policy":"optimized"'; has "$out" '"doze":"missing"'
+# with omamobile-dozed installed (on PATH): off or on by its toggle
+printf '#!/bin/bash\n' > "$tmp/bin/omamobile-dozed"; chmod +x "$tmp/bin/omamobile-dozed"
+has "$(run state org.test.Toy)" '"doze":"off"'
+: > "$DOZE_ON"; has "$(run state org.test.Toy)" '"doze":"on"'; rm -f "$DOZE_ON" "$tmp/bin/omamobile-dozed"
+# policy: written per app with its unit keys, optimized removes the line, a link is not followed
+pf=$H/.config/omamobile/app-policy
+has "$(run policy org.test.Toy restricted)" '"policy":"restricted"'
+grep -qxF "org.test.Toy	restricted	org.test.Toy toyapp" "$pf" || fail "policy file: $(cat "$pf")"
+has "$(run state org.test.Toy)" '"policy":"restricted"'
+has "$(run policy needed unrestricted)" '"policy":"unrestricted"'
+has "$(run policy org.test.Toy optimized)" '"policy":"optimized"'
+! grep -q '^org.test.Toy' "$pf" || fail "optimized left a line"
+grep -q '^needed	unrestricted' "$pf" || fail "other app's line lost"
+mv "$pf" "$tmp/pol"; ln -s "$tmp/pol" "$pf"
+has "$(run policy needed restricted)" 'is a link'
+rm "$pf"; mv "$tmp/pol" "$pf"
 # stop: only this app's units in app*.slice; never another app's, never one outside app.slice
 printf '%s\n' 'app-Hyprland-toyapp-1a2b3c4d.scope app-graphical.slice' 'app-Hyprland-org.test.Toy@5e6f.service app-graphical.slice' \
   'app-Hyprland-toyappx-11111111.scope app-graphical.slice' 'app-Hyprland-toyapp-22222222.scope session.slice' > "$UNITS"

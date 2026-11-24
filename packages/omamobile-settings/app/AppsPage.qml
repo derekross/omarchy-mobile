@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Apps: the apps the app drawer shows (the same desktop entries and filters), and one app's detail: its package,
-// version and installed size from pacman (read-only), Open, and Stop for this session (appmgr.sh). The list loads only
-// when this page opens: the saved list shows at once, a fresh scan (nice 10, idle I/O) replaces it. Uninstalling is not
-// offered (see the note).
+// version and installed size from pacman (read-only), Open, then Manage (appmgr.sh): battery policy (Unrestricted /
+// Optimized / Restricted, read by Doze) and Stop for this session. The list loads only when this page opens: the saved
+// list shows at once, a fresh scan (nice 10, idle I/O) replaces it. Uninstalling is not offered (see the note).
 import QtQuick
 import QtQuick.Layouts
 import "."
@@ -28,9 +28,15 @@ ColumnLayout {
     property string mgrStatus: ""
     property int mgrReq: -1
     property int actReq: -1
+    property bool policyBusy: false     // one policy write at a time: a later tap must not lose to a slower earlier one
     readonly property bool canGoBack: app !== null
-    function goBack() { app = null; info = ({}); infoStatus = ""; infoReq = -1; openReq = -1; mgr = ({}); mgrStatus = ""; mgrReq = -1; actReq = -1 }
+    function goBack() { app = null; info = ({}); infoStatus = ""; infoReq = -1; openReq = -1; mgr = ({}); mgrStatus = ""; mgrReq = -1; actReq = -1; policyBusy = false }
     function loadMgr() { mgrBusy = true; mgrReq = actions.run("appmgr", ["state", app.id]) }
+    function policyText(p) {
+        return p === "unrestricted" ? qsTr("Unrestricted: never frozen, also with the screen off")
+             : p === "restricted" ? qsTr("Restricted: frozen as soon as the screen is off and the phone is locked")
+             : qsTr("Optimized: frozen when the phone dozes (default)")
+    }
     function iconSource(name) {
         const n = String(name || "")
         // encodeURI leaves # and ? alone, and a URL would cut the path there
@@ -41,7 +47,7 @@ ColumnLayout {
     function showApp(entry) {
         // a late answer for the previous app (its info or open) must not land on this one
         app = entry; info = ({}); infoStatus = ""; infoBusy = false; infoReq = -1; openReq = -1
-        mgr = ({}); mgrStatus = ""; mgrReq = -1; actReq = -1
+        mgr = ({}); mgrStatus = ""; mgrReq = -1; actReq = -1; policyBusy = false
         if (entry.open === false) { infoStatus = qsTr("Settings cannot show or open this app: its ID (%1) has characters Settings does not accept. Open it from the app drawer.").arg(entry.id); return }
         infoBusy = true
         infoReq = actions.run("apps", ["info", entry.id])
@@ -68,6 +74,7 @@ ColumnLayout {
             if (tool === "appmgr") {
                 if (id === page.mgrReq) { page.mgrBusy = false; if (r.error) page.mgrStatus = r.error; else page.mgr = r }
                 else if (id === page.actReq) {
+                    page.policyBusy = false
                     page.mgrStatus = r.error ? r.error : r.stopped ? qsTr("Stopped.") : ""
                     page.loadMgr()
                 }
@@ -176,15 +183,34 @@ ColumnLayout {
                     SettingsLabel { text: String(modelData.value); color: backend.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true }
                 }
             }
-            // Manage: stop
+            // Manage: battery, stop
             ColumnLayout {
                 objectName: "appManage"
                 visible: page.mgr.id !== undefined
                 Layout.fillWidth: true; spacing: 8
+                SettingsLabel { visible: page.mgr.doze !== "missing"; text: qsTr("Battery"); color: backend.foreground; font.weight: Font.DemiBold; Layout.fillWidth: true; topPadding: 8 }
+                Repeater {
+                    // no Doze daemon installed: no choices (they would only write a file nothing reads)
+                    model: page.mgr.doze === "missing" ? [] : ["unrestricted", "optimized", "restricted"]
+                    delegate: SettingsButton {
+                        required property string modelData
+                        objectName: "policy_" + modelData
+                        text: page.policyText(modelData)
+                        highlighted: page.mgr.policy === modelData
+                        enabled: !page.policyBusy
+                        Layout.fillWidth: true
+                        onClicked: { page.mgrStatus = ""; page.policyBusy = true; page.actReq = actions.run("appmgr", ["policy", page.app.id, modelData]) }
+                    }
+                }
+                SettingsLabel {
+                    visible: page.mgr.doze === "off"
+                    text: qsTr("Doze is off: these choices take effect once it is on.")
+                    color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13); wrapMode: Text.Wrap; Layout.fillWidth: true
+                }
                 SettingsButton {
                     objectName: "stopApp"
                     text: qsTr("Stop for this session")
-                    enabled: (page.mgr.units || []).length > 0
+                    enabled: (page.mgr.units || []).length > 0 && !page.policyBusy
                     Layout.fillWidth: true
                     onClicked: { page.mgrStatus = ""; page.actReq = actions.run("appmgr", ["stop", page.app.id]) }
                 }

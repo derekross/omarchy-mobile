@@ -45,6 +45,9 @@ filters and Omarchy's `launcher.hides`), and for one app shows its package, vers
 (`backends/appmgr.sh`) stops only the app's own units in `app*.slice`, in the user session. Stop on a browser also ends the web apps running in that browser's scope. Uninstalling is not
 offered yet: it comes back once the phone has a PIN prompt for admin actions. Until then the page shows the
 `sudo pacman -R` command to run from a terminal.
+With `omamobile-dozed` installed, Battery offers Unrestricted (never frozen), Optimized (frozen when the phone dozes,
+the default) and Restricted (frozen as soon as the screen is off behind a secure lock), saved in
+`~/.config/omamobile/app-policy` for the daemon to read; without it the choices are not shown.
 The hidden rules are copied from Omarchy's `shell/services/hidden-entries.sh` and `shell/services/AppLibrary.qml`
 (under `/usr/share/omarchy`); when those change, update `apps.sh` to match.
 Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management beyond Stop and

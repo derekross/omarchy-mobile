@@ -20,7 +20,7 @@
       {
         "id": "apps",
         "title": "Apps",
-        "detail": "Installed apps: open, stop, package and version",
+        "detail": "Installed apps: open, battery use, stop, package and version",
         "icon": "system",
         "page": "apps"
       },

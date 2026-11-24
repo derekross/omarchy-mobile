@@ -1,9 +1,13 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# App manager for the Settings app's Apps page: one app's running units and Stop. Prints one line of JSON.
-#   appmgr.sh state ID             {"id","name","package","units":[..]}
+# App manager for the Settings app's Apps page: one app's running units, battery policy and Stop. Prints one line of JSON.
+#   appmgr.sh state ID             {"id","name","package","units":[..],"policy","doze"}
+#   appmgr.sh policy ID unrestricted|optimized|restricted     saved in $XDG_CONFIG_HOME/omamobile/app-policy
 #   appmgr.sh stop ID              systemctl --user stop of the app's own units (app*.slice, its ID or command in the name)
-# The unit keys are the names systemd gives the app's units (app-<launcher>-<KEY>-<random>.scope or app-<launcher>-<KEY>@<random>.service).
+# Battery policy (read by omamobile-dozed): unrestricted = never frozen, optimized = frozen in Doze (default),
+# restricted = frozen as soon as the screen is off and locked, and kept frozen through Doze's maintenance windows.
+# Lines in app-policy: "ID<TAB>policy<TAB>unit-key ..." (optimized is not written). The unit keys are the names
+# systemd gives the app's units (app-<launcher>-<KEY>-<random>.scope or app-<launcher>-<KEY>@<random>.service).
 # Stop never goes by process name and never touches anything outside app*.slice. Uninstall is not offered here.
 set -euo pipefail
 set +x
@@ -12,8 +16,9 @@ here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 verb=${1:-}
 fail() { printf '{"error":"%s"}\n' "$1"; exit 2; }
 case $verb in
-  state | stop) [[ $# -eq 2 ]] || fail "usage: state ID|stop ID" ;;
-  *) fail "usage: state ID|stop ID" ;;
+  state | stop) [[ $# -eq 2 ]] || fail "usage: state ID|policy ID P|stop ID" ;;
+  policy) [[ $# -eq 3 ]] || fail "usage: state ID|policy ID P|stop ID" ;;
+  *) fail "usage: state ID|policy ID P|stop ID" ;;
 esac
 id=$2
 [[ $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ && $id != *..* ]] || fail "bad app id"
@@ -84,6 +89,31 @@ launched_id() {
   return 0
 }
 
+conf=${XDG_CONFIG_HOME:-}; [[ $conf == /* ]] || conf=$HOME/.config
+pfile=$conf/omamobile/app-policy
+policy_of() {
+  local a p
+  [[ -f $pfile && ! -L $pfile ]] || { echo optimized; return; }
+  while IFS=$'\t' read -r a p _ || [[ -n $a ]]; do [[ $a == "$id" && $p =~ ^(unrestricted|restricted)$ ]] && { echo "$p"; return; }; done <"$pfile"
+  echo optimized
+}
+
+if [[ $verb == policy ]]; then
+  want=$3
+  [[ $want =~ ^(unrestricted|optimized|restricted)$ ]] || fail "bad policy"
+  [[ ! -L $conf/omamobile && ! -L $pfile ]] || fail "the policy file is a link; not written"
+  mkdir -p -- "$conf/omamobile"
+  # one writer at a time: two quick taps must not lose another app's line
+  { exec 9>"$conf/omamobile/.app-policy.lock"; } 2>/dev/null || fail "cannot write the policy"
+  flock -w 5 9 || fail "the policy file is busy"
+  t=$(mktemp -- "$conf/omamobile/.app-policy.XXXXXX") || fail "cannot write the policy"
+  if [[ -f $pfile ]]; then awk -F'\t' -v id="$id" '$1 != id' "$pfile" >"$t" || { rm -f -- "$t"; fail "cannot read the policy file"; }; fi
+  [[ $want == optimized ]] || printf '%s\t%s\t%s\n' "$id" "$want" "${keys[*]}" >>"$t"
+  mv -f -- "$t" "$pfile" || { rm -f -- "$t"; fail "cannot write the policy"; }
+  printf '{"ok":true,"policy":"%s"}\n' "$(policy_of)"
+  exit 0
+fi
+
 if [[ $verb == stop ]]; then
   mapfile -t units < <(app_units)
   ((${#units[@]})) || fail "the app is not running in its own unit: nothing to stop"
@@ -94,4 +124,11 @@ fi
 
 # state
 mapfile -t units < <(app_units)
-printf '{"id":%s,"name":%s,"package":%s,"units":%s}\n' "$(js "$id")" "$(js "$name")" "$(js "$pkg")" "$(jarr "${units[@]}")"
+# doze: "missing" when omamobile-dozed is not installed (the page then shows no Battery choices), else on/off by
+# its toggle
+doze=missing
+if command -v omamobile-dozed >/dev/null 2>&1; then
+  doze=off; omarchy-toggle-enabled omamobile-doze >/dev/null 2>&1 && doze=on
+fi
+printf '{"id":%s,"name":%s,"package":%s,"units":%s,"policy":"%s","doze":"%s"}\n' "$(js "$id")" "$(js "$name")" "$(js "$pkg")" \
+  "$(jarr "${units[@]}")" "$(policy_of)" "$doze"

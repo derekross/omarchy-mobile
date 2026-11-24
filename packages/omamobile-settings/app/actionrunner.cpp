@@ -22,10 +22,12 @@ int ActionRunner::run(const QString &tool, const QStringList &args) {
     static const QStringList tools = {"display", "charge", "apps", "appmgr"};
     const int id = ++m_next;
     auto fail = [this, &tool, id](const QString &why) { post(tool, {{"error", why}}, id); return id; };
-    if (!tools.contains(tool) || args.size() > ((tool == "apps" || tool == "appmgr") ? 2 : 3)) return fail("unknown action");
+    // appmgr takes a third argument only for policy (ID and a policy word)
+    const qsizetype most = tool == "apps" ? 2 : tool == "appmgr" ? (args.value(0) == QLatin1String("policy") ? 3 : 2) : 3;
+    if (!tools.contains(tool) || args.size() > most) return fail("unknown action");
     for (qsizetype i = 0; i < args.size(); ++i) {
         const QString &a = args.at(i);
-        // apps, appmgr: the verb is a word, the second argument a desktop ID
+        // apps, appmgr: the verb is a word, the second argument a desktop ID (appmgr policy's third: a policy word)
         const bool ok = ((tool == "apps" || tool == "appmgr") && i == 1) ? appId.match(a).hasMatch() && !a.contains(QLatin1String("..")) : word.match(a).hasMatch();
         if (!ok) return fail("bad argument");
     }

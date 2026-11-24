@@ -39,7 +39,7 @@ private slots:
             QFile mgr(stubs(it.key()) + "/appmgr.sh");
             QVERIFY(mgr.open(QIODevice::WriteOnly));
             mgr.write("case $1 in\n"
-                      "  state) printf '{\"id\":\"%s\",\"name\":\"B\",\"package\":\"bpkg\",\"units\":[\"app-x-b-1.scope\"]}\\n' \"$2\" ;;\n"
+                      "  state) printf '{\"id\":\"%s\",\"name\":\"B\",\"package\":\"bpkg\",\"units\":[\"app-x-b-1.scope\"],\"policy\":\"optimized\",\"doze\":\"off\"}\\n' \"$2\" ;;\n"
                       "  stop) printf '%s\\n' \"$*\" > \"${0%/*}/stopped\"; printf '{\"ok\":true,\"stopped\":[\"app-x-b-1.scope\"]}\\n' ;;\n"
                       "  *) printf '{\"args\":\"%s\"}\\n' \"$*\" ;;\n"
                       "esac\n");
@@ -157,16 +157,16 @@ private slots:
         ActionRunner runner;
         runner.setBackendDir(stubs("on"));
         QSignalSpy done(&runner, &ActionRunner::finished);
-        const int ok = runner.run("appmgr", {"stop", "org.a.B"});
+        const int ok = runner.run("appmgr", {"policy", "org.a.B", "unrestricted"});
         QStringList bad;
         bad << QString::number(runner.run("appmgr", {"stop", "../x"}));
         bad << QString::number(runner.run("appmgr", {"stop", "a;b"}));
-        // only a verb and an ID: a third argument (the old uninstall's hash) is refused
+        // a third argument only for policy: the old uninstall's hash is refused
         const int tooMany = runner.run("appmgr", {"remove", "org.a.B", "00112233445566ff"});
         QTRY_COMPARE(done.count(), bad.size() + 2);
         for (const auto &call : done) {
             const int id = call.at(2).toInt();
-            if (id == ok) QCOMPARE(call.at(1).toMap().value("ok").toBool(), true);
+            if (id == ok) QCOMPARE(call.at(1).toMap().value("args").toString(), QString("policy org.a.B unrestricted"));
             else if (id == tooMany) QCOMPARE(call.at(1).toMap().value("error").toString(), QString("unknown action"));
             else { QVERIFY(bad.contains(QString::number(id))); QCOMPARE(call.at(1).toMap().value("error").toString(), QString("bad argument")); }
         }
