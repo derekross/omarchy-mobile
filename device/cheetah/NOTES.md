@@ -2,6 +2,28 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-11-24: the release kernel for kernel-2026.11.24 boots
+
+The kernel that will be tagged `kernel-2026.11.24` is linux-omamobile's
+`omamobile` at `00860bdedea4`: `kernel-2026.11.15` plus 76 commits. For the
+Pixel 7 Pro the ones that touch shared code are the gs201 memory-interface
+devfreq driver (#279, its node disabled on cheetah), the gs201 CSIS memory
+floor (#293, a no-op without a MIF node), the S2MPG12/13 power meters (#278's
+MFD cells, disabled `power-meter` children on cheetah) and the PCI `dwc`
+gs201 changes; the rest are the zuma MFC (#289, node disabled), the Pixel 7's
+speaker amplifiers and Wi-Fi (#287, #195), the Pixel 9a's fingerprint (#165)
+and device trees for other phones. Its release build,
+`7.3.0-rc6-omamobile-g00860bdedea4` (`bin/omamobile kernel --release` from a
+clean checkout of `00860bdedea4`), was pushed to the reference phone with the
+modem stopped first (the phone was reinstalled from the 2026.11.15 bundle the
+same morning and runs the development channel, omamobile-shell 0.2.147) and
+booted: `tools/phone-smoke` passed every required check (storage guard, root,
+kernel health with no oops or BUG and 0 WARN, USB gadget, session, lock) and
+display, GPU on Panthor, touch, buttons, Wi-Fi, Bluetooth, battery, the AoC
+sound card and sensors; no unit failed on this boot, no UFS line, the modem
+came up registered (IMS voice and SMS, data bearer up, pings over `rmnet2`),
+and slot B was marked successful.
+
 ## 2026-11-14: the release kernel for kernel-2026.11.15 boots, with the modem's sleep series
 
 The kernel that will be tagged `kernel-2026.11.15` is linux-omamobile's
