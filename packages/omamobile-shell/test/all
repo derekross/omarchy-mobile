@@ -593,7 +593,11 @@ out=$(cd "$fake/run" && printf '0000\n4321\n4321\n' | OMAMOBILE_PIN_WAIT=1 OMAMO
 (( rc != 0 && rc != 124 )) && [[ $out == *"may or may not have changed"* ]] || fail "the slow passwd is reported as maybe changed (rc $rc): $out"
 (( rc == 75 )) || fail "a maybe-changed PIN exits with status 75 (rc $rc)"
 keeper=0
-for d in /proc/[0-9]*; do
+# only this user's cats: a fork per /proc entry took 5 s on a busy build host,
+# longer than the fake passwd lives, and the keeper had left before the scan
+# reached it
+for p in $(pgrep -u "$(id -u)" -x cat); do
+  d=/proc/$p
   if [[ $(readlink "$d/cwd" 2>/dev/null) == "$fake/run" && $(readlink "$d/fd/0" 2>/dev/null) == */ptmx && $(tr '\0' ' ' <"$d/cmdline" 2>/dev/null) == "cat " ]]; then keeper=1; fi
 done
 (( keeper )) || fail "the keeper is a plain cat on the pty, not the python that held the PINs"
