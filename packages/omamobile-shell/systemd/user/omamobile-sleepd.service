@@ -5,7 +5,7 @@
 # OMAMOBILE_SLEEP_AFTER_OFF (seconds, default 30, at least 5) and
 # OMAMOBILE_SLEEP_GRACE (default 5) can be set in ~/.config/environment.d.
 [Unit]
-Description=Omarchy Mobile sleep on screen-off
+Description=Omamobile sleep on screen-off
 PartOf=graphical-session.target
 After=graphical-session.target
 

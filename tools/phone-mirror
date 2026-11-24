@@ -6,7 +6,7 @@
 #   tools/phone-mirror [--keep] [--fit] [--viewer tigervnc|gvncviewer|remmina] [--height PX]
 #
 # Starts mirroring on the phone (omamobile-mirror on, package omamobile-mirror),
-# opens a VNC viewer on 172.16.42.1:5900 titled "Omarchy Mobile phone", and turns
+# opens a VNC viewer on 172.16.42.1:5900 titled "Omamobile phone", and turns
 # mirroring off again when the viewer closes (--keep leaves it on).
 #   --fit      the whole phone in the window, no scrolling: TigerVNC runs inside
 #              gamescope on this computer, which scales its 1440x3120 picture
@@ -21,7 +21,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
 ADDRESS=172.16.42.1
 PORT=5900
-TITLE="Omarchy Mobile phone"
+TITLE="Omamobile phone"
 PHONE_W=1440 PHONE_H=3120	# the panel in pixels, what wayvnc sends (portrait): read from the phone below
 KEEP=0 FIT=0 VIEWER= HEIGHT=900
 
@@ -137,7 +137,7 @@ EOF
       gamescope -W "$WIDTH" -H "$HEIGHT" -w "$PHONE_W" -h "$PHONE_H" -S fit -F linear -- \
         vncviewer -FullScreen=1 -RemoteResize=0 -Shared=1 "$ADDRESS::$PORT" || true
     else
-      # Title "Omarchy Mobile phone - TigerVNC". TigerVNC does not scale: the
+      # Title "Omamobile phone - TigerVNC". TigerVNC does not scale: the
       # window shows the phone at full size and scrolls (--fit: no scrolling).
       vncviewer -geometry "${WIDTH}x${HEIGHT}" -RemoteResize=0 -Shared=1 "$ADDRESS::$PORT" || true
     fi ;;

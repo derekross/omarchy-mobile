@@ -1,5 +1,5 @@
 pkgbase = mesa
-	pkgdesc = Open-source OpenGL drivers (Omarchy Mobile: Mali-G710, Mali-G78, Mali-G715)
+	pkgdesc = Open-source OpenGL drivers (Omamobile: Mali-G710, Mali-G78, Mali-G715)
 	pkgver = 26.2.4
 	pkgrel = 1.4
 	epoch = 1
@@ -118,7 +118,7 @@ pkgname = mesa
 	replaces = mesa-libgl<17.0.1-2
 
 pkgname = vulkan-panfrost
-	pkgdesc = Open-source Vulkan driver for Mali GPUs (Omarchy Mobile: Mali-G710)
+	pkgdesc = Open-source Vulkan driver for Mali GPUs (Omamobile: Mali-G710)
 	depends = expat
 	depends = glibc
 	depends = libdisplay-info

@@ -2,7 +2,7 @@
 # The xdg-desktop-portal Access backend: permission questions as the phone
 # shell's sheet. Started by D-Bus activation when the portal first needs it.
 [Unit]
-Description=Omarchy Mobile permission sheet (portal Access backend)
+Description=Omamobile permission sheet (portal Access backend)
 PartOf=graphical-session.target
 
 [Service]

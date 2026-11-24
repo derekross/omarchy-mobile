@@ -76,10 +76,16 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   A/B; a stock run that differs in host and timing at once rules out
   neither.)
 - **L-216. A re-push that answers our requests is trailer-checked on every
-  commit.** #77's re-push appended our sentence below its `Link:`, turning
-  the trailer into body text. *Check:* `git interpret-trailers --parse` on
-  each commit of the new head against the old head's. Extends L-119 and
-  L-183. *From:* kernel #77, round 22.
+  commit.** #77's re-push appended our sentence below its `Link:`, turning the
+  trailer into body text. *Check:* `git interpret-trailers --parse` on each
+  commit of the new head against the old head's. Extends L-119 and L-183.
+  *From:* kernel #77, round 22. (Extended 2026-11-23: a trailer can also
+  vanish. Every commit of #931 to #936 lost its `Co-Authored-By` line in one
+  re-push, and the new sibling #974 had none; neither `tools/pr-check` nor a
+  range-diff summary flags a removed trailer. Compare `git log --format='%h
+  %(trailers:only,unfold)'` on the old and new heads for every PR of the
+  author, and ask once for the series. *From:* #931 to #936 with #974, round
+  66.)
 - **L-217. A version we ask a contributor to take can be taken by main
   first.** We asked #78 for 0.2.30; #90 shipped it an hour after his push.
   *Check:* list the maintainer's open and local branches' versions of the

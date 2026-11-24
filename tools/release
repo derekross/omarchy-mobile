@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Cut an Omarchy Mobile release: docs/RELEASES.md §11 as one guided
+# Cut an Omamobile release: docs/RELEASES.md §11 as one guided
 # procedure, one stage per step, run in order. Each stage checks what the
 # stages before it recorded, stops at the first failure, and with --dry-run
 # only reads and prints what it would run. RELEASES §11 lists the stages
@@ -9,7 +9,7 @@
 #   tools/release [--dry-run] [--version V] [--kernel-tag T] STAGE [ARGS]
 #     --version V      the release, by the calendar: YYYY.MM.DD (.1, .2 for a
 #                      respin the same day; default today)
-#     --kernel-tag T   the kernel release tag on linux-omarchy-mobile's
+#     --kernel-tag T   the kernel release tag on linux-omamobile's
 #                      omamobile (default kernel-V; recorded by `kernel`)
 #     --dry-run        read-only: check, and print the commands a stage
 #                      would run
@@ -91,7 +91,7 @@ ROOT=$PWD
 # The release key's primary (docs/RELEASES.md §10): what every release
 # signature must come from. tools/install-phone matches the same fingerprint.
 RELEASE_KEY=20567593566EEEE2DD8864608632C8075EB94673
-KERNEL_REMOTE=${PUBLISH_KERNEL_REMOTE:-https://github.com/derekross/linux-omarchy-mobile.git}
+KERNEL_REMOTE=${PUBLISH_KERNEL_REMOTE:-https://github.com/derekross/linux-omamobile.git}
 if [[ -z ${KERNEL_BASE:-} ]]; then
   KERNEL_BASE=$HOME/omamobile-kernel
   [[ -d $KERNEL_BASE || ! -d $HOME/android/mainline ]] || KERNEL_BASE=$HOME/android/mainline
@@ -221,7 +221,7 @@ db_sums() {
 
 # ------------------------------------------------------------------ stages
 st_status() {
-  say "Omarchy Mobile $version for $DEVICE ($rel)"
+  say "Omamobile $version for $DEVICE ($rel)"
   local s k v next=""
   for s in kernel build images packages rootfs bundle test-install identifiers verify upload promote tag; do
     k=${s//-/_}_done
@@ -899,14 +899,14 @@ st_tag() {
   if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
     [[ $(git rev-parse "$tag^{commit}") == "$head" ]] || die "$tag exists on another commit; a respin is release-$version.1"
   else
-    run git tag -a "$tag" -m "Omarchy Mobile $version (developer preview)
+    run git tag -a "$tag" -m "Omamobile $version (developer preview)
 
 Kernel: $ktag, uname -r $krel
 Packages: [omamobile] stable index $(get repo_index)
 Root image: $(basename "$(get rootfs)")" "$head"
   fi
   derek "git push origin $tag" \
-        "gh release create $tag -R derekross/omarchy-mobile --title 'Omarchy Mobile $version (developer preview)' --notes-file $notes"
+        "gh release create $tag -R derekross/omamobile --title 'Omamobile $version (developer preview)' --notes-file $notes"
   put tag_done "$tag on ${head:0:12} (local; push it)"
 }
 

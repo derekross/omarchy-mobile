@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 7 (panther) touch: the supplies, then the chip ID
 
-Status (2026-10-29): all gates passed (T2 stopped on its voltage rule, which T2b fixed): the FT3658 answers with chip ID 0x56 once its supplies are on, reports touches with the axes right, and the lock screen PIN was entered by touch. Autoload passed too: the touch comes up on its own at boot. T6 (2026-10-29) booted the final node, [linux-omarchy-mobile#134](https://github.com/derekross/linux-omarchy-mobile/pull/134), since merged, with the driver's review fixes, [#133](https://github.com/derekross/linux-omarchy-mobile/pull/133): it passes the same way ([NOTES.md](NOTES.md)).
+Status (2026-10-29): all gates passed (T2 stopped on its voltage rule, which T2b fixed): the FT3658 answers with chip ID 0x56 once its supplies are on, reports touches with the axes right, and the lock screen PIN was entered by touch. Autoload passed too: the touch comes up on its own at boot. T6 (2026-10-29) booted the final node, [linux-omamobile#134](https://github.com/derekross/linux-omamobile/pull/134), since merged, with the driver's review fixes, [#133](https://github.com/derekross/linux-omamobile/pull/133): it passes the same way ([NOTES.md](NOTES.md)).
 
 The touch controller is a FocalTech FT3658 (chip ID 0x56) on USI0 SPI,
 wired as the Pixel 7 Pro's S3908. A local driver
@@ -23,7 +23,7 @@ S2MPG12 regulator driver, then reads the chip ID.
 | On panther, ABL hands the touch over held in reset (`gpp23-2` output low) | BRINGUP-M1.md, boot 8 [V] |
 | On panther, ABL leaves LDO25M/LDO26M off | [I], read in T2 |
 | Google's power-on: reset low, AVDD on, VDD on, 1 ms, reset high; power-off: reset low, 1 ms, AVDD off, VDD off. No voltage is set | Google's GPL `focaltech_core.c`, `fts_power_source_ctrl()` [V] |
-| The S2MPG12 LDO driver exists: linux-omarchy-mobile#27, merged into `omamobile` but not in the `omamobile-int` snapshot. It registered all 28 LDOs read-only on the Pixel 7 Pro, and drives the Fold's cover touch rails | device/cheetah/NOTES.md, 2026-10-23; device/felix/NOTES.md [V] |
+| The S2MPG12 LDO driver exists: linux-omamobile#27, merged into `omamobile` but not in the `omamobile-int` snapshot. It registered all 28 LDOs read-only on the Pixel 7 Pro, and drives the Fold's cover touch rails | device/cheetah/NOTES.md, 2026-10-23; device/felix/NOTES.md [V] |
 | #27's PM regmap can write only the interrupt masks and L1M_CTRL-LDO_CTRL2 (0x2b-0x49); buck control and SW_RESET stay outside | #27, `mfd: sec: s2mpg12: open the LDO control registers` [V] |
 | Without `regulator-min/max-microvolt`, the regulator core never sets a voltage; without `regulator-always-on`, a consumer may switch the rail | `drivers/regulator/of_regulator.c` (`apply_uV`, `REGULATOR_CHANGE_STATUS`) [V] |
 | The core's unused-rail cleanup runs once, about 30 s after boot, and only switches off rails that are on, unused and switchable | `drivers/regulator/core.c` [V] |

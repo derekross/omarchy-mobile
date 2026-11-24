@@ -23,7 +23,7 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
 - **L-194. A review's clone goes on disk, and a gate's worktree is sparse:
   the scratch `/tmp` is a 16 GB tmpfs shared by every parallel review.** A
   `--depth 60` clone of the SM8150 tree for #52 and three full checkouts of
-  omarchy-mobile (about 1 GB each, `phone/screenshots` and all) each filled
+  omamobile (about 1 GB each, `phone/screenshots` and all) each filled
   it, and a command of another review lost its output. *Check:* `df -h` the
   scratch volume before any clone or build over a few hundred MB; trees go
   under `~/android/mainline/wt-review-<topic>`; a gate's checkout is `git

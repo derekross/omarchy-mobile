@@ -120,8 +120,8 @@ want=("${ok_pkgs[@]}") unavailable=("${absent_pkgs[@]}")
 say "Omarchy's package list: ${#want[@]} packages (${#unavailable[@]} not built for aarch64, ${#skip[@]} skipped)"
 pacstrap -C /etc/pacman.conf -c -M "$T" --needed "${want[@]}" >/var/log/pacstrap-omarchy.log 2>&1 || { tail -40 /var/log/pacstrap-omarchy.log; die "pacstrap (Omarchy's list) failed"; }
 
-say "Omarchy Mobile packages: ${ours_present[*]}"
-pacstrap -C /etc/pacman.conf -c -M "$T" --needed "${ours_present[@]}" >/var/log/pacstrap-omamobile.log 2>&1 || { tail -40 /var/log/pacstrap-omamobile.log; die "pacstrap (Omarchy Mobile) failed"; }
+say "Omamobile packages: ${ours_present[*]}"
+pacstrap -C /etc/pacman.conf -c -M "$T" --needed "${ours_present[@]}" >/var/log/pacstrap-omamobile.log 2>&1 || { tail -40 /var/log/pacstrap-omamobile.log; die "pacstrap (Omamobile) failed"; }
 
 say "pacman.conf and the [omamobile] repository"
 sed "s/@OMARCHY_CHANNEL@/$OMARCHY_CHANNEL/" /src/rootfs/pacman.conf > "$T/etc/pacman.conf"
@@ -269,7 +269,7 @@ fi
 
 say "MANIFEST"
 {
-  echo "# Omarchy Mobile root image"
+  echo "# Omamobile root image"
   echo "version: $VERSION"
   echo "device: $DEVICE ($DEVICE_PACKAGE${ROOTFS_PACKAGES:+ $ROOTFS_PACKAGES})"
   echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"

@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # omamobile-device-raven
 
-The Google Pixel 6 Pro's (raven, gs101) system files for Omarchy Mobile,
+The Google Pixel 6 Pro's (raven, gs101) system files for Omamobile,
 the counterpart of `omamobile-device-cheetah`. Bring-up and results:
 [device/raven](../../device/raven/NOTES.md).
 

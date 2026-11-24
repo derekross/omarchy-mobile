@@ -127,7 +127,7 @@ placeholder() {
   rem=$((4096 - ${#text}))
   printf '%s#%*s\n' "$text" $((rem - 2)) ''
 }
-placeholder $'# Omarchy Mobile: the place for /etc/omamobile/firstboot.conf\n' > "$t/empty.conf"
+placeholder $'# Omamobile: the place for /etc/omamobile/firstboot.conf\n' > "$t/empty.conf"
 [[ $(stat -c %s "$t/empty.conf") == 4096 ]] || fail "the test's placeholder is one block"
 out=$(check "$t/empty.conf") || fail "--check takes a placeholder: $out"
 grep -q '^no answers' <<<"$out" || fail "--check says a placeholder holds no answers: $out"

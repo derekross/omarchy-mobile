@@ -3,9 +3,9 @@
 pkgname=omamobile-device-dodge
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile support for the OnePlus 13 (dodge): reboot-to-fastboot and USB networking"
+pkgdesc="Omamobile support for the OnePlus 13 (dodge): reboot-to-fastboot and USB networking"
 arch=(aarch64)
-url="https://github.com/derekross/omarchy-mobile"
+url="https://github.com/derekross/omamobile"
 license=(MIT)
 depends=(bash systemd)
 

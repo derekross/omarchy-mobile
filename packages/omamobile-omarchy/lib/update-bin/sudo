@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile (on PATH only during omamobile-update). From the update sheet
+# Omamobile (on PATH only during omamobile-update). From the update sheet
 # nobody can answer a password prompt: sudo answers from the timestamp
 # omamobile-update set when the update started (and keeps fresh), or fails at
 # once instead of waiting on a prompt nobody sees.

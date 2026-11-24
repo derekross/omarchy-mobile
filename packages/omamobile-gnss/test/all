@@ -103,7 +103,7 @@ grep -c 'gnss-slsi/data/vendor/gps' vendor/systemd/system/omamobile-gnss-nmea.se
 # --stop comes before the hang marker, so a leftover marker never skips a stop
 [[ $(grep -n -- '--stop' lib/omamobile-gnss-start | sed -n 1p | cut -d: -f1) -lt $(grep -n 'elif \[\[ -e \$MARK' lib/omamobile-gnss-start | cut -d: -f1) ]] || fail "--stop before the marker"
 # A running stack keeps the phone awake (SUSPEND-PLAN 6.1).
-grep -qx 'ExecStart=/usr/bin/systemd-inhibit --what=sleep --mode=block "--who=Omarchy Mobile GNSS" "--why=A location session is running" /usr/lib/omamobile-vendor/omamobile-gnss-start' \
+grep -qx 'ExecStart=/usr/bin/systemd-inhibit --what=sleep --mode=block "--who=Omamobile GNSS" "--why=A location session is running" /usr/lib/omamobile-vendor/omamobile-gnss-start' \
   vendor/systemd/system/omamobile-gnss.service || fail "the stack holds a sleep inhibitor while it runs"
 # One GeoClue agent, ours (2026-11-02): geoclue's XDG autostart of its demo
 # agent ran at login, our unit exited as a second instance and stayed

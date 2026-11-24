@@ -1,6 +1,6 @@
 # omatel
 
-`omatel-agent`, the background service behind Omarchy Mobile's Phone
+`omatel-agent`, the background service behind Omamobile's Phone
 ([packages/omaphone](../omaphone)) and Messages
 ([packages/omamessages](../omamessages)) apps
 ([TELEPHONY-APPS-PLAN](../../docs/TELEPHONY-APPS-PLAN.md) T6/T7, §10.1b).
