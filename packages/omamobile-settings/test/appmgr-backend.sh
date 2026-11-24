@@ -36,6 +36,9 @@ wrappkg|1.0-1|Explicitly installed|WRAP|None
 noentry-pkg|1.0-1|Explicitly installed|None|None
 leave-pkg|1.0-1|Explicitly installed|None|None
 leftdep|1.0-1|Installed as a dependency for another package|leave-pkg|None
+omaphone|1.0-1|Explicitly installed|None|None
+omamessages|1.0-1|Explicitly installed|None|None
+omacam|1.0-1|Explicitly installed|None|None
 EOT
 printf '%s\n' "$S/applications/org.test.Toy.desktop toy-pkg" "$S/applications/needed.desktop needed-pkg" \
   "$S/applications/shellish.desktop hyprlock" "$S/applications/depdrag.desktop depdrag-pkg" "$tmp/bin/toyapp toy-pkg" \
@@ -45,7 +48,8 @@ for p in defpkg deppkg wrappkg; do printf '%s 1.0-1\n' "$p" > "$P/plan.$p"; done
 printf 'leave-pkg 1.0-1\nleftdep 1.0-1\n' > "$P/plan.leave-pkg"; printf 'leave-pkg 1.0-1\n' > "$P/dropplan.leave-pkg"; : > "$P/dropplan.leftdep"
 echo /usr/share/applications/leave.desktop > "$P/files.leave-pkg"
 printf 'noentry-pkg 1.0-1\n' > "$P/plan.noentry-pkg"; echo /usr/bin/noentry > "$P/files.noentry-pkg"
-for p in toy-pkg needed-pkg hyprlock depdrag-pkg defpkg deppkg wrappkg; do echo "/usr/share/applications/$p.desktop" > "$P/files.$p"; done
+for p in omaphone omamessages omacam; do printf '%s 1.0-1\n' "$p" > "$P/plan.$p"; done
+for p in toy-pkg needed-pkg hyprlock depdrag-pkg defpkg deppkg wrappkg omaphone omamessages omacam; do echo "/usr/share/applications/$p.desktop" > "$P/files.$p"; done
 printf 'toy-pkg 1.0-1\nlibtoy 2.0-1\n' > "$P/plan.toy-pkg"
 # a long file list with the entry first: a grep -q on a pipe would stop early and SIGPIPE pacman
 seq -f '/usr/lib/toy/f%g' 1 50000 >> "$P/files.toy-pkg"
@@ -80,7 +84,6 @@ for p in "$@"; do f=$PAC/plan.$p; [[ -f $PAC/dropplan.$p ]] && f=$PAC/dropplan.$
 EOT
 printf '#!/bin/bash\nprintf "%%s\\n" base hyprland defpkg\n' > "$tmp/bin/omarchy-pkg-defaults"
 printf '#!/bin/bash\nsleep 1\n' > "$tmp/bin/toyapp"
-printf '#!/bin/bash\n[[ -e $DOZE_ON ]]\n' > "$tmp/bin/omarchy-toggle-enabled"
 cat > "$tmp/bin/omarchy-webapp-remove" <<'EOT'
 #!/bin/bash
 [[ $OMARCHY_REMOVE_NOTIFY == false ]] || exit 1
@@ -110,10 +113,10 @@ OMAMOBILE_APPMGR_ROOT=$ROOT OMAMOBILE_APPMGR_GUARD=$LIBDIR/app-guard OMAMOBILE_A
 EOT
 chmod +x "$tmp/bin/"*
 cp "$src/libexec/app-guard" "$src/libexec/app-remove" "$L/"
-export PAC=$P ROOT=$R LIBDIR=$L PROT=$src/vendor/app-protected LOCK=$tmp/db.lck UNITS=$tmp/units DOZE_ON=$tmp/doze-on
+export PAC=$P ROOT=$R LIBDIR=$L PROT=$src/vendor/app-protected LOCK=$tmp/db.lck UNITS=$tmp/units
 : > "$UNITS"
-run() { env -i PATH="$tmp/bin:/usr/bin:/bin" OMAMOBILE_APPMGR_DOZED="$tmp/bin/omamobile-dozed" HOME="$H" XDG_DATA_DIRS="$S" XDG_CONFIG_HOME="$H/.config" XDG_CACHE_HOME="$tmp/cache" \
-  XDG_CURRENT_DESKTOP=Hyprland PAC="$P" ROOT="$R" LIBDIR="$L" PROT="$PROT" LOCK="$LOCK" UNITS="$UNITS" DOZE_ON="$DOZE_ON" \
+run() { env -i PATH="$tmp/bin:/usr/bin:/bin" HOME="$H" XDG_DATA_DIRS="$S" XDG_CONFIG_HOME="$H/.config" XDG_CACHE_HOME="$tmp/cache" \
+  XDG_CURRENT_DESKTOP=Hyprland PAC="$P" ROOT="$R" LIBDIR="$L" PROT="$PROT" LOCK="$LOCK" UNITS="$UNITS" \
   OMAMOBILE_APPMGR_CGROOT="${OMAMOBILE_APPMGR_CGROOT:-}" OMAMOBILE_APPMGR_PROC="${OMAMOBILE_APPMGR_PROC:-}" OMAMOBILE_APPMGR_LIB="$L" OMAMOBILE_APPMGR_RUN="$R/run/omamobile-settings" OMAMOBILE_APPMGR_PROTECTED="$PROT" OMAMOBILE_APPMGR_LOCK="$LOCK" \
   bash -p "$src/backends/appmgr.sh" "$@" || true; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -126,7 +129,7 @@ has "$(run)" '"error":"usage'
 has "$(run state)" '"error":"usage'
 has "$(run state ../x)" '"error":"bad app id"'
 has "$(run state nosuch)" '"error":"no such app"'
-has "$(run policy org.test.Toy sometimes)" '"error":"bad policy"'
+has "$(run policy org.test.Toy restricted)" '"error":"usage'
 
 # state of a removable package: targets from the dry run, hash, reinstall line, no protected target
 out=$(run state org.test.Toy)
@@ -134,11 +137,7 @@ out=$(run state org.test.Toy)
 [[ $(field "$out" removable) == true ]] || fail "removable: $out"
 [[ $(field "$out" targets.0.name) == '"libtoy"' ]] || fail "targets: $out"
 [[ $(field "$out" reinstall) == '"sudo pacman -S toy-pkg"' ]] || fail "reinstall: $out"
-[[ $(field "$out" policy) == '"optimized"' && $(field "$out" doze) == '"missing"' ]] || fail "policy: $out"
-# with a Doze daemon installed: off or on by its toggle
-printf '#!/bin/bash\n' > "$tmp/bin/omamobile-dozed"; chmod +x "$tmp/bin/omamobile-dozed"
-[[ $(field "$(run state org.test.Toy)" doze) == '"off"' ]] || fail "doze off"
-: > "$DOZE_ON"; [[ $(field "$(run state org.test.Toy)" doze) == '"on"' ]] || fail "doze on"; rm -f "$DOZE_ON" "$tmp/bin/omamobile-dozed"
+lacks "$out" '"policy"'; lacks "$out" '"doze"'
 hash=$(field "$out" hash | tr -d '"'); [[ $hash =~ ^[0-9a-f]{16}$ ]] || fail "hash: $out"
 
 # refusals, each with its reason: required by another package, a protected package, a protected dependency, no package
@@ -169,19 +168,13 @@ mv "$tmp/defaults.off" "$tmp/bin/omarchy-pkg-defaults"
 # the protected list unreadable: the same
 out=$(env -i PATH="$tmp/bin:/usr/bin:/bin" HOME="$H" XDG_DATA_DIRS="$S" PAC="$P" OMAMOBILE_APPMGR_PROTECTED="$tmp/none" \
   OMAMOBILE_APPMGR_LOCK="$LOCK" "$L/app-guard" toy-pkg); has "$out" 'could not read its protected list'
+# the phone's own apps are protected by name (not only because omamobile-apps depends on them)
+for p in omaphone omamessages omacam; do
+  out=$(env -i PATH="$tmp/bin:/usr/bin:/bin" HOME="$H" PAC="$P" OMAMOBILE_APPMGR_PROTECTED="$PROT" OMAMOBILE_APPMGR_LOCK="$LOCK" "$L/app-guard" "$p")
+  has "$out" "refuse	$p is protected: "
+done
 # pacman locked: refused
 : > "$LOCK"; has "$(run state org.test.Toy)" 'pacman is locked'; rm -f "$LOCK"
-
-# policy: written per app with its unit keys, optimized removes the line, a link is not followed
-has "$(run policy org.test.Toy restricted)" '"policy":"restricted"'
-grep -qxF "org.test.Toy	restricted	org.test.Toy toyapp" "$H/.config/omamobile/app-policy" || fail "policy file: $(cat "$H/.config/omamobile/app-policy")"
-has "$(run policy Mine unrestricted)" '"policy":"unrestricted"'
-has "$(run policy org.test.Toy optimized)" '"policy":"optimized"'
-! grep -q '^org.test.Toy' "$H/.config/omamobile/app-policy" || fail "optimized left a line"
-grep -q '^Mine	unrestricted' "$H/.config/omamobile/app-policy" || fail "other app's line lost"
-mv "$H/.config/omamobile/app-policy" "$tmp/pol"; ln -s "$tmp/pol" "$H/.config/omamobile/app-policy"
-has "$(run policy Mine restricted)" 'is a link'
-rm "$H/.config/omamobile/app-policy"; mv "$tmp/pol" "$H/.config/omamobile/app-policy"
 
 # stop: only this app's units in app*.slice; never another app's, never one outside app.slice
 printf '%s\n' 'app-Hyprland-toyapp-1a2b3c4d.scope app-graphical.slice' 'app-Hyprland-org.test.Toy@5e6f.service app-graphical.slice' \

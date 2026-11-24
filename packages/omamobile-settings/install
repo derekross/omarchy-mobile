@@ -13,7 +13,7 @@ install -Dm644 "$source_dir/LICENSE" "$dest/usr/share/licenses/omamobile-setting
 install -Dm755 "$source_dir/backends/display.sh" "$dest/usr/lib/omamobile-settings/backends/display.sh"
 install -Dm755 "$source_dir/backends/charge.sh" "$dest/usr/lib/omamobile-settings/backends/charge.sh"
 install -Dm755 "$source_dir/backends/apps.sh" "$dest/usr/lib/omamobile-settings/backends/apps.sh"
-# Apps: battery policy, stop and uninstall (the backend, the protection check, the root helper, its unit and polkit rule)
+# Apps: stop and uninstall (the backend, the protection check, the root helper, its unit and polkit rule)
 install -Dm755 "$source_dir/backends/appmgr.sh" "$dest/usr/lib/omamobile-settings/backends/appmgr.sh"
 install -Dm755 "$source_dir/libexec/app-guard" "$dest/usr/lib/omamobile-settings/app-guard"
 install -Dm755 "$source_dir/libexec/app-remove" "$dest/usr/lib/omamobile-settings/app-remove"

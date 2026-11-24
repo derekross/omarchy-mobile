@@ -25,7 +25,7 @@ int ActionRunner::run(const QString &tool, const QStringList &args) {
     if (!tools.contains(tool) || args.size() > (tool == "apps" ? 2 : 3)) return fail("unknown action");
     for (qsizetype i = 0; i < args.size(); ++i) {
         const QString &a = args.at(i);
-        // apps, appmgr: the verb is a word, the second argument a desktop ID (appmgr's third: a policy word or a 16-digit hash)
+        // apps, appmgr: the verb is a word, the second argument a desktop ID (appmgr's third: a 16-digit hash)
         const bool ok = ((tool == "apps" || tool == "appmgr") && i == 1) ? appId.match(a).hasMatch() && !a.contains(QLatin1String("..")) : word.match(a).hasMatch();
         if (!ok) return fail("bad argument");
     }

@@ -1,18 +1,14 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# App manager for the Settings app's Apps page: one app's battery policy, stop, and uninstall. Prints one line of JSON.
-#   appmgr.sh state ID             {"id","name","kind","package","units":[..],"policy","doze","removable","why",
+# App manager for the Settings app's Apps page: one app's stop and uninstall. Prints one line of JSON.
+#   appmgr.sh state ID             {"id","name","kind","package","units":[..],"removable","why",
 #                                   "targets":[{"name","version","protected","why"}],"required_by","optional_for","hash",
 #                                   "reinstall"}
 #       kind: package (pacman), webapp / tui (Omarchy's web app and TUI launchers), user (a launcher in your folder),
 #       other (Flatpak and the rest: not removed here)
-#   appmgr.sh policy ID unrestricted|optimized|restricted     saved in $XDG_CONFIG_HOME/omamobile/app-policy
 #   appmgr.sh stop ID              systemctl --user stop of the app's own units (app*.slice, its ID or command in the name)
 #   appmgr.sh remove ID HASH       uninstalls; HASH is state's "hash", the target list the user confirmed
-# Battery policy (read by omamobile-dozed): unrestricted = never frozen, optimized = frozen in Doze (default),
-# restricted = frozen as soon as the screen is off and locked, and kept frozen through Doze's maintenance windows.
-# Lines in app-policy: "ID<TAB>policy<TAB>unit-key ..." (optimized is not written). The unit keys are the names
-# systemd gives the app's units (app-<launcher>-<KEY>-<random>.scope or app-<launcher>-<KEY>@<random>.service).
+# The unit keys are the names systemd gives the app's units (app-<launcher>-<KEY>-<random>.scope or app-<launcher>-<KEY>@<random>.service).
 # Uninstall reuses Omarchy's own scripts, as omarchy-remove-launcher-entry dispatches: a web app goes through
 # omarchy-webapp-remove, a TUI through omarchy-tui-remove, a pacman package through omarchy-pkg-drop in the root helper
 # (omamobile-app-remove@PKG:HASH.service, after app-guard allows it; see libexec/app-remove), a launcher in your own
@@ -27,9 +23,9 @@ run_dir=${OMAMOBILE_APPMGR_RUN:-/run/omamobile-settings}
 verb=${1:-}
 fail() { printf '{"error":"%s"}\n' "$1"; exit 2; }
 case $verb in
-  state | stop) [[ $# -eq 2 ]] || fail "usage: state ID|policy ID P|stop ID|remove ID HASH" ;;
-  policy | remove) [[ $# -eq 3 ]] || fail "usage: state ID|policy ID P|stop ID|remove ID HASH" ;;
-  *) fail "usage: state ID|policy ID P|stop ID|remove ID HASH" ;;
+  state | stop) [[ $# -eq 2 ]] || fail "usage: state ID|stop ID|remove ID HASH" ;;
+  remove) [[ $# -eq 3 ]] || fail "usage: state ID|stop ID|remove ID HASH" ;;
+  *) fail "usage: state ID|stop ID|remove ID HASH" ;;
 esac
 id=$2
 [[ $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ && $id != *..* ]] || fail "bad app id"
@@ -46,7 +42,7 @@ jget() { python3 -I -c 'import json,sys; v=json.loads(sys.argv[1]).get(sys.argv[
 [[ $info == '{"id":'* ]] || fail "no such app"
 name=$(jget name) path=$(jget path) pkg=$(jget package)
 [[ -f $path ]] || fail "no such app"
-exec_line=$(sed -n '/^\[Desktop Entry\]/,/^\[/{s/^Exec=//p}' -- "$path" 2>/dev/null | head -n 1)
+exec_line=$(sed -n '/^\[Desktop Entry\]/,/^\[/{/^Exec=/{s/^Exec=//p;q}}' -- "$path" 2>/dev/null) || exec_line=''
 data_home=${XDG_DATA_HOME:-}; [[ $data_home == /* ]] || data_home=$HOME/.local/share
 kind=other
 own=false; [[ ${path%/*} == "$data_home/applications" ]] && own=true
@@ -63,7 +59,7 @@ case $cmd in '' | sh | bash | env | flatpak | uwsm | uwsm-app | app2unit | omamo
   *) # only when the command is the app's own program: the same package owns it (never a browser, interpreter or terminal
      # some other app shares)
      if [[ $cmd =~ ^[A-Za-z0-9._+-]{1,64}$ && -n $pkg ]] && cp=$(command -v -- "$cmd" 2>/dev/null) \
-        && [[ $(timeout 5 pacman -Qqo -- "$cp" 2>/dev/null | head -n 1) == "$pkg" ]]; then
+        && [[ $(timeout 5 pacman -Qqo -- "$cp" 2>/dev/null | sed -n 1p) == "$pkg" ]]; then
        keys+=("$(systemd-escape -- "$cmd")")
      fi ;; esac
 # running units of this app: under app*.slice, and named app-<launcher>-<key>-<hex>.scope or app-<launcher>-<key>@<x>.service
@@ -108,31 +104,6 @@ launched_id() {
   return 0
 }
 
-conf=${XDG_CONFIG_HOME:-}; [[ $conf == /* ]] || conf=$HOME/.config
-pfile=$conf/omamobile/app-policy
-policy_of() {
-  local a p
-  [[ -f $pfile && ! -L $pfile ]] || { echo optimized; return; }
-  while IFS=$'\t' read -r a p _ || [[ -n $a ]]; do [[ $a == "$id" && $p =~ ^(unrestricted|restricted)$ ]] && { echo "$p"; return; }; done <"$pfile"
-  echo optimized
-}
-
-if [[ $verb == policy ]]; then
-  want=$3
-  [[ $want =~ ^(unrestricted|optimized|restricted)$ ]] || fail "bad policy"
-  [[ ! -L $conf/omamobile && ! -L $pfile ]] || fail "the policy file is a link; not written"
-  mkdir -p -- "$conf/omamobile"
-  # one writer at a time: two quick taps must not lose another app's line
-  { exec 9>"$conf/omamobile/.app-policy.lock"; } 2>/dev/null || fail "cannot write the policy"
-  flock -w 5 9 || fail "the policy file is busy"
-  t=$(mktemp -- "$conf/omamobile/.app-policy.XXXXXX") || fail "cannot write the policy"
-  if [[ -f $pfile ]]; then awk -F'\t' -v id="$id" '$1 != id' "$pfile" >"$t" || { rm -f -- "$t"; fail "cannot read the policy file"; }; fi
-  [[ $want == optimized ]] || printf '%s\t%s\t%s\n' "$id" "$want" "${keys[*]}" >>"$t"
-  mv -f -- "$t" "$pfile" || { rm -f -- "$t"; fail "cannot write the policy"; }
-  printf '{"ok":true,"policy":"%s"}\n' "$(policy_of)"
-  exit 0
-fi
-
 if [[ $verb == stop ]]; then
   mapfile -t units < <(app_units)
   ((${#units[@]})) || fail "the app is not running in its own unit: nothing to stop"
@@ -163,7 +134,7 @@ case $kind in
       rc=0; si=$(timeout 10 pacman -Si -- "$pkg" 2>&1 >/dev/null) || rc=$?
       if ((rc == 0)); then reinstall="sudo pacman -S $pkg"
       elif [[ $si == *"was not found"* ]]; then
-        cached=$(compgen -G "/var/cache/pacman/pkg/$pkg-${pkgver:-*}-*.pkg.tar.*" | grep -v '\.sig$' | head -n 1) || cached=''
+        cached=$(compgen -G "/var/cache/pacman/pkg/$pkg-${pkgver:-*}-*.pkg.tar.*" | grep -v '\.sig$' | sed -n 1p) || cached=''
         if [[ -n $cached ]]; then reinstall="sudo pacman -U $cached"
         else reinstall="not in a repository and not in pacman's cache: keep its package file if you want it back"; fi
       else reinstall="sudo pacman -S $pkg (if it came from a repository)"; fi
@@ -183,7 +154,7 @@ case $kind in
       done < <(find -H "$d/applications" \( -type f -o -type l \) -name '*.desktop' -print0 2>/dev/null)
     done
     if [[ -n $shadow ]]; then
-      sp=$(timeout 5 pacman -Qqo -- "$shadow" 2>/dev/null | head -n 1) || sp=''
+      sp=$(timeout 5 pacman -Qqo -- "$shadow" 2>/dev/null | sed -n 1p) || sp=''
       why="this is your own copy of a system launcher ($shadow${sp:+, package $sp}); delete the copy in ${path%/*} to manage the system app here"
     else removable=true; why=''; fi ;;
   *) why="Settings cannot uninstall this kind of app (not from a pacman package or an Omarchy launcher)" ;;
@@ -191,13 +162,8 @@ esac
 
 if [[ $verb == state ]]; then
   mapfile -t units < <(app_units)
-  # doze: "missing" when no Doze daemon is installed (the page then shows no Battery choices), else on/off by its toggle
-  doze=missing
-  if command -v omamobile-dozed >/dev/null 2>&1 || [[ -x ${OMAMOBILE_APPMGR_DOZED:-/usr/local/bin/omamobile-dozed} ]]; then
-    doze=off; omarchy-toggle-enabled omamobile-doze >/dev/null 2>&1 && doze=on
-  fi
-  printf '{"id":%s,"name":%s,"kind":"%s","package":%s,"units":%s,"policy":"%s","doze":"%s","removable":%s,"why":%s,"targets":[%s],"required_by":%s,"optional_for":%s,"hash":"%s","reinstall":%s}\n' \
-    "$(js "$id")" "$(js "$name")" "$kind" "$(js "$pkg")" "$(jarr "${units[@]}")" "$(policy_of)" "$doze" "$removable" "$(js "$why")" \
+  printf '{"id":%s,"name":%s,"kind":"%s","package":%s,"units":%s,"removable":%s,"why":%s,"targets":[%s],"required_by":%s,"optional_for":%s,"hash":"%s","reinstall":%s}\n' \
+    "$(js "$id")" "$(js "$name")" "$kind" "$(js "$pkg")" "$(jarr "${units[@]}")" "$removable" "$(js "$why")" \
     "$targets_json" "$(js "$reqby")" "$(js "$optfor")" "$hash" "$(js "$reinstall")"
   exit 0
 fi
@@ -218,7 +184,7 @@ case $kind in
     timeout -k 5 330 systemctl --no-ask-password start -- "$unit" >/dev/null 2>&1 || true
     last=''
     # only an answer written for this run counts (an earlier run with the same hash leaves its file behind)
-    [[ $run_dir/app-remove.$want -nt $mark ]] && { last=$(head -c 2048 -- "$run_dir/app-remove.$want" 2>/dev/null | head -n 1) || last=''; }
+    [[ $run_dir/app-remove.$want -nt $mark ]] && { last=$(head -c 2048 -- "$run_dir/app-remove.$want" 2>/dev/null | sed -n 1p) || last=''; }
     rm -f -- "$mark"
     # pacman is the judge: the package must be gone, and the helper's line must be about this request
     if timeout 10 pacman -Q -- "$pkg" >/dev/null 2>&1; then

@@ -39,7 +39,7 @@ private slots:
             QFile mgr(stubs(it.key()) + "/appmgr.sh");
             QVERIFY(mgr.open(QIODevice::WriteOnly));
             mgr.write("case $1 in\n"
-                      "  state) printf '{\"id\":\"%s\",\"kind\":\"package\",\"package\":\"bpkg\",\"units\":[],\"policy\":\"optimized\",\"doze\":\"off\",\"removable\":true,\"why\":\"\",\"targets\":[{\"name\":\"bpkg\",\"version\":\"1-1\",\"protected\":false,\"why\":\"\"}],\"required_by\":\"\",\"optional_for\":\"\",\"hash\":\"00112233445566ff\",\"reinstall\":\"sudo pacman -S bpkg\"}\\n' \"$2\" ;;\n"
+                      "  state) printf '{\"id\":\"%s\",\"kind\":\"package\",\"package\":\"bpkg\",\"units\":[],\"removable\":true,\"why\":\"\",\"targets\":[{\"name\":\"bpkg\",\"version\":\"1-1\",\"protected\":false,\"why\":\"\"}],\"required_by\":\"\",\"optional_for\":\"\",\"hash\":\"00112233445566ff\",\"reinstall\":\"sudo pacman -S bpkg\"}\\n' \"$2\" ;;\n"
                       "  remove) printf '%s\\n' \"$*\" > \"${0%/*}/removed\"; printf '{\"ok\":true,\"kind\":\"package\",\"reinstall\":\"sudo pacman -S bpkg\"}\\n' ;;\n"
                       "  *) printf '{\"args\":\"%s\"}\\n' \"$*\" ;;\n"
                       "esac\n");
@@ -142,7 +142,7 @@ private slots:
         QFile::remove(stubs("on") + "/removed");
         QMetaObject::invokeMethod(page.get(), "showApp", Q_ARG(QVariant, page->property("apps").toList().at(0)));
         QTRY_COMPARE(page->property("mgr").toMap().value("hash").toString(), QString("00112233445566ff"));
-        // policy buttons and the wizard: Uninstall... opens the confirm step, nothing is removed before Uninstall
+        // the wizard: Uninstall... opens the confirm step, nothing is removed before Uninstall
         QObject *open = page->findChild<QObject *>("uninstallApp");
         QVERIFY(open && open->property("enabled").toBool());
         QMetaObject::invokeMethod(open, "clicked");
@@ -162,7 +162,7 @@ private slots:
         ActionRunner runner;
         runner.setBackendDir(stubs("on"));
         QSignalSpy done(&runner, &ActionRunner::finished);
-        const int ok = runner.run("appmgr", {"policy", "org.a.B", "unrestricted"});
+        const int ok = runner.run("appmgr", {"stop", "org.a.B"});
         QStringList bad;
         bad << QString::number(runner.run("appmgr", {"remove", "../x", "00112233445566ff"}));
         bad << QString::number(runner.run("appmgr", {"remove", "org.a.B", "0011223344556677ff"}));  // 18 digits
@@ -171,7 +171,7 @@ private slots:
         QTRY_COMPARE(done.count(), bad.size() + 2);
         for (const auto &call : done) {
             const int id = call.at(2).toInt();
-            if (id == ok) QCOMPARE(call.at(1).toMap().value("args").toString(), QString("policy org.a.B unrestricted"));
+            if (id == ok) QCOMPARE(call.at(1).toMap().value("args").toString(), QString("stop org.a.B"));
             else if (id == tooMany) QCOMPARE(call.at(1).toMap().value("error").toString(), QString("unknown action"));
             else { QVERIFY(bad.contains(QString::number(id))); QCOMPARE(call.at(1).toMap().value("error").toString(), QString("bad argument")); }
         }

@@ -42,6 +42,9 @@ libqmi	telephony
 libmbim	telephony
 ofono	telephony
 omatel*	telephony
+omaphone	the phone app
+omamessages	messages (SMS)
+omacam	the camera
 pipewire*	audio
 wireplumber	audio
 alsa-*	audio
