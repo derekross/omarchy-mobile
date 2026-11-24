@@ -21,7 +21,7 @@ The local board file enables the USB controller and the cover framebuffer
 the bootloader is already scanning, and it relies on the SoC tree for the
 cluster watchdogs. Both panel nodes, both touch controllers, the GPU, and
 UFS stay disabled. That board file is not in this repository. It will be
-proposed against linux-omarchy-mobile, branch `omamobile`.
+proposed against linux-omamobile, branch `omamobile`.
 
 The shared init writes this device's `SIMPLEFB_TRIG_CON`, one pair per
 line after the packer splits it. That is the cover pair and the inner pair.
@@ -39,4 +39,4 @@ Stop if the cover brightness changes on its own, or if the phone does not
 come back. The way back is fastboot from the buttons, then the last
 known-good slot B set with `DEVICE=felix bin/omamobile flash`. Do not
 treat a slot A boot as stock Android. What was written to slot A is
-recorded on omarchy-mobile#35.
+recorded on omamobile#35.

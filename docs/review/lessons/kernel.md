@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Review lessons: Kernel (linux-omarchy-mobile) (part 1 of 4)
+# Review lessons: Kernel (linux-omamobile) (part 1 of 4)
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
@@ -245,7 +245,7 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   for where the booting description lives.** Kernel #276's 41-line board file
   enables nothing; #914's plan shows two watchdog resets with such a file and
   SSH only after uncommitted board changes, with node descriptions in
-  omarchy-mobile overlays. *Check:* count the enabled nodes of the head's DTB
+  omamobile overlays. *Check:* count the enabled nodes of the head's DTB
   (`dtc -I dtb -O dts | grep -c 'status = "okay"'`), grep the companion's plan
   for `watchdog`, `-dirty` and "board DTS now", and ask for the description to
   move into the board file before the overlay PR is read. Extends L-109, L-149

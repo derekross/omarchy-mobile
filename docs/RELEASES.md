@@ -1,11 +1,11 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Builds and releases for many devices
 
-How Omarchy Mobile goes from one hand-built Pixel 7 Pro to a project that builds and releases for several Pixels with the same tools. This is the design; the order of the work is the "Multi-device builds and releases" track in [ROADMAP.md](ROADMAP.md) §3.8. Status (2026-10-13): step 1 (the device descriptor and `DEVICE=` in `bin/omamobile`) is done for cheetah, and so is most of §6: the root image (`tools/build-rootfs`), the installer (`tools/install-phone`, the bundle's `install`), the first-boot setup (`omamobile-firstboot`), the bundle (`tools/make-bundle`), aarch64 package builds without a phone (`tools/build-packages`) and per-phone provisioning (`tools/phone-provision`). They are tested offline (`tests/all`) and not yet run on a phone: [REINSTALL-RUNBOOK](../device/cheetah/REINSTALL-RUNBOOK.md) is their first use. The kernel package (§4) and the package hook (§5) are built and tested offline (2026-11-01: `packages/linux-omamobile`, `packages/omamobile-boot-update`, `tools/stage-boot-files`; §4.1 and §5.5 say what exists) and not yet run on a phone; signed releases (§7-§11) are still design.
+How Omamobile goes from one hand-built Pixel 7 Pro to a project that builds and releases for several Pixels with the same tools. This is the design; the order of the work is the "Multi-device builds and releases" track in [ROADMAP.md](ROADMAP.md) §3.8. Status (2026-10-13): step 1 (the device descriptor and `DEVICE=` in `bin/omamobile`) is done for cheetah, and so is most of §6: the root image (`tools/build-rootfs`), the installer (`tools/install-phone`, the bundle's `install`), the first-boot setup (`omamobile-firstboot`), the bundle (`tools/make-bundle`), aarch64 package builds without a phone (`tools/build-packages`) and per-phone provisioning (`tools/phone-provision`). They are tested offline (`tests/all`) and not yet run on a phone: [REINSTALL-RUNBOOK](../device/cheetah/REINSTALL-RUNBOOK.md) is their first use. The kernel package (§4) and the package hook (§5) are built and tested offline (2026-11-01: `packages/linux-omamobile`, `packages/omamobile-boot-update`, `tools/stage-boot-files`; §4.1 and §5.5 say what exists) and not yet run on a phone; signed releases (§7-§11) are still design.
 
 The safety model in [CONTRIBUTING.md](../CONTRIBUTING.md) §3 and [AGENTS.md](../AGENTS.md) §1 is not up for redesign here. Every tool, hook and installer below keeps it:
 
-- Omarchy Mobile lives on **slot B and `userdata` only**. Slot A keeps stock Android as the way back.
+- Omamobile lives on **slot B and `userdata` only**. Slot A keeps stock Android as the way back.
 - Nothing ever writes `bootloader`, `abl`, `radio`/`modem`, `devinfo` (apart from the existing boot-success marker), `persist`, `efs*`, `modem_userdata` or `vbmeta`. Nothing runs an unsuffixed `fastboot flash`, `fastboot -w`, `--slot=all` or `flashing lock`.
 - The initramfs storage guard runs before anything else, and its allowlist works by GPT name.
 - Google's firmware and binaries are extracted on the user's own machine from the user's own factory image, and never redistributed: not in packages, not in bundles, not in CI artifacts.
@@ -13,7 +13,7 @@ The safety model in [CONTRIBUTING.md](../CONTRIBUTING.md) §3 and [AGENTS.md](..
 
 ## 1. The model
 
-- **One kernel for every device.** One arm64 `Image` and one set of modules, built from `linux-omarchy-mobile`, with every board's DTB side by side in the kernel tree: `gs201-cheetah.dts` today, `gs201-panther.dts`, `gs201-lynx.dts`, `gs101-oriole.dts`, `gs101-raven.dts` later. A board needs its own DTB, not its own kernel.
+- **One kernel for every device.** One arm64 `Image` and one set of modules, built from `linux-omamobile`, with every board's DTB side by side in the kernel tree: `gs201-cheetah.dts` today, `gs201-panther.dts`, `gs201-lynx.dts`, `gs101-oriole.dts`, `gs101-raven.dts` later. A board needs its own DTB, not its own kernel.
 - **Per device, five things:**
   1. the board DTB (in the kernel);
   2. bootloader glue: the `soc_id` copies of the DTB, the board `dtbo` with its `board_id`/`board_rev`, the boot image set and header values;
@@ -21,7 +21,7 @@ The safety model in [CONTRIBUTING.md](../CONTRIBUTING.md) §3 and [AGENTS.md](..
   4. firmware, extracted from the user's factory image by a per-device map;
   5. `omamobile-device-<codename>`, the userspace support package.
 - **One descriptor per device**, `device/<codename>/device.conf`, holds the values of 2 and 3 and points at 4 and 5, so no tool carries a codename in its code.
-- **One kernel source.** Releases are built from a tag on `linux-omarchy-mobile`'s published `omamobile` branch (§8).
+- **One kernel source.** Releases are built from a tag on `linux-omamobile`'s published `omamobile` branch (§8).
 - **Releases** ship through the signed `[omamobile]` pacman repository: a `linux-omamobile` kernel package (`Image`, modules, all DTBs), device packages that pick their DTB and write slot B through a pacman hook, and, for first installs, per-device flashable bundles.
 
 ## 2. What is cheetah-specific today
@@ -61,7 +61,7 @@ Bring-up tools (`*-stage`, `display-hz`, `usbc-deadman`) stay per plan: they pok
 | --- | --- | --- |
 | `CODENAME` | `cheetah` | Must equal the directory name and `DEVICE` |
 | `NAME` | `Pixel 7 Pro` | Marketing name, for messages and bundle READMEs, and the USB product string when `USB_PRODUCT` is unset |
-| `USB_PRODUCT` | `Pixel 7 Pro (M1)` | Optional. The USB gadget's product string, packed into the initramfs as `/etc/omamobile-usb-product`; defaults to `NAME`. Printable ASCII, at most 126 characters. With neither key the init says `Omarchy Mobile` |
+| `USB_PRODUCT` | `Pixel 7 Pro (M1)` | Optional. The USB gadget's product string, packed into the initramfs as `/etc/omamobile-usb-product`; defaults to `NAME`. Printable ASCII, at most 126 characters. With neither key the init says `Omamobile` |
 | `SOC` | `gs201` | SoC family |
 | `COMPATIBLE` | `google,gs201-cheetah` | First DT root compatible; firmware names and the device check at install time use it |
 | `PACKAGE` | `omamobile-device-cheetah` | The device's package (and, for now, where the initramfs C helpers' sources live) |
@@ -199,7 +199,7 @@ Step 1 changed no output for cheetah: `images` produced the same checksums for e
 
 One package for every device, in `[omamobile]`.
 
-- **Source:** a release tag (`kernel-<YYYY.MM.DD>`) on `linux-omarchy-mobile`'s `omamobile` branch (§8), built from a clean checkout of the tag with `kernel/configs/omamobile.config` on arm64 `defconfig`.
+- **Source:** a release tag (`kernel-<YYYY.MM.DD>`) on `linux-omamobile`'s `omamobile` branch (§8), built from a clean checkout of the tag with `kernel/configs/omamobile.config` on arm64 `defconfig`.
 - **Contents**, following Arch Linux ARM's layout:
   - `/usr/lib/modules/<release>/vmlinuz`: the uncompressed arm64 `Image` (the hook compresses it with lz4 for `boot.img`);
   - `/usr/lib/modules/<release>/kernel/…`, `modules.*`: stripped modules, as `bin/omamobile modules` packs them today;
@@ -216,7 +216,7 @@ One package for every device, in `[omamobile]`.
 
 `packages/linux-omamobile`, tested offline (`test/all`: a fake kernel build, the refusals, the layout, and `makepkg -A` where it is installed). It packs a kernel output directory, whatever made it; for a release that is the cross build of §12 decision 1, `bin/omamobile kernel --release` (the release `LOCALVERSION` `-omamobile`, no device fragment, a clean tree) then `bin/omamobile modules`, in a clean checkout of the `kernel-<date>` tag.
 
-- **`stage KERNEL_OUT [PREBUILT]`**, on the build machine, after `bin/omamobile kernel` and `modules` (or anything that leaves the same files): copies `include/config/kernel.release`, `arch/arm64/boot/Image`, every DTB under `arch/arm64/boot/dts/exynos/google` (`DTB_DIRS` adds others) and `modules-<release>.tar.zst` into the package's gitignored `prebuilt/`, with `SHA256SUMS`. `KERNEL_DIR` must be the clean checkout of a published release: its HEAD the release's commit and carrying a `kernel-<YYYY.MM.DD>[.N]` tag, the tag on the published repository (`LINUX_OMAMOBILE_REMOTE`, default GitHub's `linux-omarchy-mobile`) pointing at that commit, and the commit on its `omamobile` branch. `git rev-list --count HEAD` is the commit count for pkgver; the commit, the count and the tag go in `SOURCE`, which `install` requires. `stage --verify` checks a staged `prebuilt/` again (checksums, `SOURCE`, the tag on the published repository).
+- **`stage KERNEL_OUT [PREBUILT]`**, on the build machine, after `bin/omamobile kernel` and `modules` (or anything that leaves the same files): copies `include/config/kernel.release`, `arch/arm64/boot/Image`, every DTB under `arch/arm64/boot/dts/exynos/google` (`DTB_DIRS` adds others) and `modules-<release>.tar.zst` into the package's gitignored `prebuilt/`, with `SHA256SUMS`. `KERNEL_DIR` must be the clean checkout of a published release: its HEAD the release's commit and carrying a `kernel-<YYYY.MM.DD>[.N]` tag, the tag on the published repository (`LINUX_OMAMOBILE_REMOTE`, default GitHub's `linux-omamobile`) pointing at that commit, and the commit on its `omamobile` branch. `git rev-list --count HEAD` is the commit count for pkgver; the commit, the count and the tag go in `SOURCE`, which `install` requires. `stage --verify` checks a staged `prebuilt/` again (checksums, `SOURCE`, the tag on the published repository).
 - **Refusals:** a development release (`-omamobile-push1-…`, or any release not of the form `<version>[-rcN]-omamobile[-<n>]-g<sha>`), a `-dirty` tree, no `KERNEL_DIR`, a `KERNEL_DIR` at another commit or with uncommitted changes, a commit without a release tag (a test build or an `omamobile-int` snapshot), a tag the published repository doesn't have or that isn't on its `omamobile`, an `Image` without arm64's header magic, a modules tarball of another release or without `modules.order`, no DTBs, and at packing time a `prebuilt/` that fails its checksums.
 - **pkgver** from the staged release (`lib/pkgver`, as §4 and §7 say), **pkgrel** from the package's `version` file (packaging changes only). With nothing staged pkgver is `0` and `package()` refuses. `tools/build-packages` builds it only when named, never by default or with `--all` (so a `prebuilt/` staged for a test never reaches the daily publish, which carries `prebuilt/` directories along), and runs `stage --verify` first.
 - **`/usr/share/omamobile/linux/kernel.release`** names the release the package installed, for the boot hook (§5.3), and `SOURCE` beside it the tag and commit.
@@ -430,7 +430,7 @@ automatic boot-update policy.
 
 | Thing | Version | Where it is recorded |
 | --- | --- | --- |
-| Kernel | `uname -r`: `7.3.0-rc6-omamobile-g<sha12>`; pkgver `7.3.0rc6.r<n>.g<sha12>` (§4) | annotated tag `kernel-<YYYY.MM.DD>` (`.1`, `.2` for a respin) on `omamobile` in linux-omarchy-mobile; the scheme is a proposal for the maintainer to confirm |
+| Kernel | `uname -r`: `7.3.0-rc6-omamobile-g<sha12>`; pkgver `7.3.0rc6.r<n>.g<sha12>` (§4) | annotated tag `kernel-<YYYY.MM.DD>` (`.1`, `.2` for a respin) on `omamobile` in linux-omamobile; the scheme is a proposal for the maintainer to confirm |
 | Packages | each package's `version` file, bumped in the commit that changes it (CONTRIBUTING §6.3) | the package |
 | Descriptor | none of its own; a change to it is a device-package change and bumps that package | `omamobile-device-<codename>` |
 | Bundle | calendar version `<YYYY.MM.DD>`, with `.1`, `.2` for a respin the same day | tag `release-<YYYY.MM.DD>` in this repository, covering every device released that day; `MANIFEST` pins the kernel tag, every package version and both commits |

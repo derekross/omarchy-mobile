@@ -5,7 +5,7 @@
 /*
  * Pixel 9a bring-up only; in no device's default DTB_OVERLAYS
  * (MODEM-PLAN G3, resolved; the palmtop's run kit applies it): the GNSS SPI's
- * pins. Replaced upstream by linux-omarchy-mobile#151, which describes the
+ * pins. Replaced upstream by linux-omamobile#151, which describes the
  * same pins in zumapro-tegu.dts. Our SPI21 node has no pinctrl, so the bus runs on the
  * bootloader's pin state: gpp22-0..3 in function 2 at drive 0, gpp22-2
  * pulled down. This gives them function 2 and drive 3 (as gpp21, the

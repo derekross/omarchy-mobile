@@ -232,7 +232,7 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
 - **L-37. A kernel change that needs a userspace companion merges after
   it.** A new `SW_LID`, wakeup source, or any node whose default userspace
   policy is harmful (logind suspending a folded phone) waits for the
-  omarchy-mobile change that handles it, so no build ever has one without
+  omamobile change that handles it, so no build ever has one without
   the other. *From:* kernel #12 with #29.
 - **L-49. "Disabled" means disabled in the DTB the phone runs: the DTS plus
   its `DTB_OVERLAYS`.** Cheetah's DTS has `pmic-1` disabled, but its

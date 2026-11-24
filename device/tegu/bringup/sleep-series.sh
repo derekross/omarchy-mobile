@@ -24,7 +24,7 @@ modem_up && { echo "the modem is up: stop" >> $L; exit 1; }
 uid=$(id -u mobile)
 hy() { runuser -u mobile -- env XDG_RUNTIME_DIR=/run/user/$uid HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/$uid/hypr | head -1) hyprctl dispatch "hl.dsp.dpms({ action = \"$1\" })" >/dev/null 2>&1; }
 cs_before=$(cat /sys/module/printk/parameters/console_suspend)
-# The cpuidle sleep hook (omarchy-mobile#591; an earlier hook of this name was withdrawn in #255): when it is
+# The cpuidle sleep hook (omamobile#591; an earlier hook of this name was withdrawn in #255): when it is
 # installed and its keep flag is absent, every sleep of the series runs in WFI whatever WFI= says. Noted, not refused.
 if [ -e /usr/lib/systemd/system-sleep/omamobile-tegu-cpuidle ]; then echo "cpuidle hook installed, keep flag $([ -e /etc/omamobile/cpuidle-keep-across-sleep ] && echo present || echo absent)" >> $L; fi
 # The modem boot unit's state is put back as it was found, not forced on.

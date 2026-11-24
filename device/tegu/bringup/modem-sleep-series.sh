@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # On the palmtop: N systemd sleeps of S seconds with the modem up, for a kernel whose
-# link driver has the sleep guard on for zumapro (linux-omarchy-mobile#232; MODEM-PLAN,
+# link driver has the sleep guard on for zumapro (linux-omamobile#232; MODEM-PLAN,
 # "Suspend with the modem on, with the sleep guard"). On a kernel without it one sleep
 # costs the phone service until a reboot: use modem-sleep-test.sh there, attended.
 # Before each request the modem is told "screen off" through sitd's socket and the
@@ -10,13 +10,13 @@
 # alarm is the wake. The cellular data service is started if it isn't running, and the
 # default routes are logged before each request: with Wi-Fi connected and the service
 # as on main, the bearer's route is the only one left at the freeze and every request
-# is refused (fixed by omarchy-mobile#556). 5 s after each wake: a ping and a DNS lookup over the
+# is refused (fixed by omamobile#556). 5 s after each wake: a ping and a DNS lookup over the
 # bearer's interface (rmnet0), so mobile data is checked after every sleep, not only at the
 # end, with sitd's data-call lines from that sleep ("Data-call list changed", "Internet
 # bearer set up again", #817) beside it; 20 s after: the CP's state, sitd, its failed polls
 # and Wi-Fi. WIFI=off turns the Wi-Fi radio off for the run (back on when the script ends,
 # however it ends), so mobile data is the only route at each wake, the shape that lost data
-# on the 7 Pro (omarchy-mobile#799, SUSPEND-PLAN M6-D). Stops itself, as omarchy-mobile#809
+# on the 7 Pro (omamobile#799, SUSPEND-PLAN M6-D). Stops itself, as omamobile#809
 # asks: off the charger (and refuses to start there), on the CP not ONLINE, and on a new UFS
 # error line or an oops, both read from dmesg, which is in memory, so the check still works
 # if storage is what failed. The end counts the boot's "Reserve doorbell interrupt" and

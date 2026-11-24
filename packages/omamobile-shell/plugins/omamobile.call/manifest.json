@@ -3,7 +3,7 @@
   "id": "omamobile.call",
   "name": "Calls",
   "version": "0.1.0",
-  "author": "Omarchy Mobile",
+  "author": "Omamobile",
   "license": "MIT",
   "description": "Incoming calls over the lock screen, a heads-up card when unlocked, and in-call controls over the lock, from omatel's agent.",
   "kinds": ["panel"],

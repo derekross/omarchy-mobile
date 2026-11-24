@@ -242,7 +242,7 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   that device, other owners' included.** Kernel #90 was accepted on W4HO's
   promise that `allow_tx` is set only for `google-tg4c`; h4rkl's #74 sets
   `allow_tx=1` for every panel, and our #74 review missed it (C-18). *Check:*
-  `git grep -n '<option>'` across the open omarchy-mobile PR heads for
+  `git grep -n '<option>'` across the open omamobile PR heads for
   `packages/omamobile-device-<codename>`. Extends L-219. *From:* kernel #90
   with #74, round 25.
 - **L-275. Squash-merged stacks always conflict on the package `version` file,
@@ -265,8 +265,8 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   and §6's gates. Extends L-229; see C-16. *From:* kernel #98, round 25.
 - **L-265. A bare `#N` links to the repository the comment is in.** W4HO's
   tables on issue #28 named kernel PRs as `#119` and `#122`, which link to an
-  omarchy-mobile PR and issue. *Check:* write
-  `derekross/linux-omarchy-mobile#N` when a comment names the other
+  omamobile PR and issue. *Check:* write
+  `derekross/linux-omamobile#N` when a comment names the other
   repository's PRs, and read cross-repository tables in a thread with that in
   mind. *From:* issue #28, round 25.
 - **L-263. A squash title that names a package version must agree with the

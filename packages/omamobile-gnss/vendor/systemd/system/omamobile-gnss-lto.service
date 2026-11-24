@@ -4,7 +4,7 @@
 # (/etc/omamobile/gnss.conf). A plain HTTP download, no identifiers. Started
 # by omamobile-gnss-lto.timer, which "omamobile-gnss on" enables.
 [Unit]
-Description=Omarchy Mobile GNSS orbit predictions (LTO) download
+Description=Omamobile GNSS orbit predictions (LTO) download
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=/usr/lib/omamobile-vendor/gnss/root

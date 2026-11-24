@@ -265,12 +265,12 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   default when the property is absent. Extends L-149, L-187 and L-242. *From:*
   #714, round 61; #917, round 63, 2026-11-20.
 - **L-941. A draft kernel PR that says "nothing was built from this commit"
-  is checked against the device's notes on omarchy-mobile's main, and a commit
+  is checked against the device's notes on omamobile's main, and a commit
   they pin is compared with the head by blob.** Kernel #249's body disclaims
   any test, while `device/dipper/NOTES.md` records two RAM boots of the same
   node and pins the PR at an older head; the dtsi blob was identical, so the
   evidence carries and the message can cite it. *Check:* `git grep -n
-  '#<N>\|<file>' origin/main -- device/<codename>` in omarchy-mobile, then
+  '#<N>\|<file>' origin/main -- device/<codename>` in omamobile, then
   `git rev-parse <pinned>:<file> <head>:<file>`. Extends L-106, L-373 and
   L-131. *From:* kernel #249, round 61, 2026-11-18.
 - **L-939. An Omarchy patch tested on a phone that has not yet updated is
