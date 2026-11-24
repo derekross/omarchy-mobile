@@ -15,9 +15,9 @@
 pkgname=omamobile-install-link
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile install link: the phone finishes its setup with the installer, over USB"
+pkgdesc="Omamobile install link: the phone finishes its setup with the installer, over USB"
 arch=(aarch64)
-url="https://github.com/derekross/omarchy-mobile"
+url="https://github.com/derekross/omamobile"
 license=(MIT)
 # systemd: the units, systemctl, systemd-run, systemd-inhibit; util-linux:
 # mount, umount, mountpoint (the gadget script); python: the session agent;

@@ -3,7 +3,7 @@
 # Runs once inside a fresh Arch Linux ARM container (tools/lib/alarm.sh,
 # alarm_build_image): keyrings, the build pacman.conf, base-devel and the
 # unprivileged "builder" account makepkg needs. /setup holds Omarchy's and
-# Omarchy Mobile's keyring files, and local.asc when a local key is in use.
+# Omamobile's keyring files, and local.asc when a local key is in use.
 set -euo pipefail
 
 pacman-key --init >/dev/null 2>&1

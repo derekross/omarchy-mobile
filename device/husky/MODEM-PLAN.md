@@ -5,8 +5,8 @@ Status (2026-11-08): on hold. Stages S1 to S5e have been run; none of them
 hung, oopsed or raised a UFS error (S5c stopped on its own current abort,
 see below). No modem step and no power-line step has been run since S5e
 ended at 2026-11-07 21:21 UTC (23:21 here), and I take none on the 8 Pro
-until derekross answers the question on omarchy-mobile#472
-(https://github.com/derekross/omarchy-mobile/pull/472#issuecomment-6711065625;
+until derekross answers the question on omamobile#472
+(https://github.com/derekross/omamobile/pull/472#issuecomment-6711065625;
 see "Current state: on hold" below).
 
 I asked that question on 2026-11-07 at 18:04 UTC and wrote that I would not
@@ -29,10 +29,10 @@ each [I] names the step that would settle it.
 Stock references are Google's tree `kernel/google-modules/radio/samsung/s5300`,
 branch `android-gs-shusky-6.1-android16` (the stock CPIF, `modem_ctrl_s5100.c`,
 `s5300` node). The line numbers below are the ones derekross checked in that
-tree on omarchy-mobile#514; my own copy was the `soc-gs` tree, where the same
+tree on omamobile#514; my own copy was the `soc-gs` tree, where the same
 functions sit at different lines (`gpio_power_off_cp()` at 874, for example).
 The PCIe side is `pcie-gs201-cp` from W4HO's stack in
-linux-omarchy-mobile#187.
+linux-omamobile#187.
 
 ## Test kernels
 
@@ -101,7 +101,7 @@ still answers (touch and power key dead): it records while I touch and press
 power in a 12 s window, and only then do I wake the screen
 (`omamobile-remote wake`) and read the uptime, the DRM state and
 `hyprctl monitors -j`, and ask whether the panel is lit; the case is
-linux-omarchy-mobile#215.
+linux-omamobile#215.
 
 ## S1: PCIe controller and PHY loaded, no hardware access (2026-11-07 20:47)
 
@@ -378,13 +378,13 @@ Two battery-only runs, three power-on phases, one phone and one gauge.
 ## Current state: on hold
 
 - S3, S4, S5a, S5b, S5c, S5d and S5e ran after my question on
-  omarchy-mobile#472 (2026-11-07 18:04 UTC) and before any answer to it.
+  omamobile#472 (2026-11-07 18:04 UTC) and before any answer to it.
   So the hold now covers S6 and any repeat, but it came too late for S3 to
   S5e, which should have waited as well.
 - No further modem step and no power-line step on the 8 Pro until derekross
-  answers the question on omarchy-mobile#472
-  (https://github.com/derekross/omarchy-mobile/pull/472#issuecomment-6711065625);
-  his instruction to wait is on linux-omarchy-mobile#187.
+  answers the question on omamobile#472
+  (https://github.com/derekross/omamobile/pull/472#issuecomment-6711065625);
+  his instruction to wait is on linux-omamobile#187.
 - The hook is on the branch `husky-modem-cpif-test-hook` of
   Somnius/linux-omarchy-mobile (commit 058a439b3). It is test only and not
   for merge.

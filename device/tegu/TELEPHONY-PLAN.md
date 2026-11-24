@@ -120,7 +120,7 @@ Opt-in and attended at first, with sleep blocked for the boot.
 ### 2.7 Enabling the boot start (gated runbook, #372)
 
 Attended, on the charger, one step per boot. Preconditions: slot B marked
-successful, a kernel with linux-omarchy-mobile#172, an off-repo NV backup.
+successful, a kernel with linux-omamobile#172, an off-repo NV backup.
 
 | Step / risk | Commands | Expect / pass | Stop condition | Rollback |
 | --- | --- | --- | --- | --- |
@@ -282,7 +282,7 @@ for a channel nobody has opened); neither came with a fault.
 
 The 2.8 boots took the starter's bring-up branch ("drivers: the bring-up
 modules"), because the board's device tree has no `cpif` node: it comes
-from the device's `modem-cpif` overlay ([#594](https://github.com/derekross/omarchy-mobile/pull/594)).
+from the device's `modem-cpif` overlay ([#594](https://github.com/derekross/omamobile/pull/594)).
 With that overlay on the published DTB, on
 `7.3.0-rc6-omamobile-push1-g773b4102f5ec` (`omamobile` at `abcd6aac51cf`
 plus kernel #224, kernel #236 and the 9a's GNSS nodes; defconfig, the shared

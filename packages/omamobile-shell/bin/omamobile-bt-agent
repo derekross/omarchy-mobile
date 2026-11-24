@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Omarchy Mobile's Bluetooth pairing agent, for the quick-settings Bluetooth panel.
+"""Omamobile's Bluetooth pairing agent, for the quick-settings Bluetooth panel.
 
 Quickshell.Bluetooth can pair, connect and forget but registers no BlueZ
 agent, so it can't answer a numeric comparison, a passkey or a PIN, and it

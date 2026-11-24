@@ -3,7 +3,7 @@
   "id": "countdown",
   "name": "Countdown",
   "version": "1.0.0",
-  "author": "Omarchy Mobile",
+  "author": "Omamobile",
   "description": "Days left until a date you set.",
   "kinds": ["home-widget"],
   "entryPoints": { "homeWidget": "Widget.qml" },

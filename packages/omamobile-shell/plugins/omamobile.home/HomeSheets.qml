@@ -706,7 +706,7 @@ Item {
 
         Label {
           width: parent.width
-          text: "This OWL widget runs inside the home screen, as you. Omarchy Mobile read its file and lists everything it can do below. Nothing runs until you allow it, and if the widget changes what it runs, it asks again."
+          text: "This OWL widget runs inside the home screen, as you. Omamobile read its file and lists everything it can do below. Nothing runs until you allow it, and if the widget changes what it runs, it asks again."
         }
 
         Section {
@@ -811,7 +811,7 @@ Item {
         Label {
           width: parent.width
           text: (approveFlick.builtin
-            ? "A built-in widget: " + HomeModel.owlStoreId(sheets.home.owlApproveId) + " from the OWL widget store, reviewed there and shipped with Omarchy Mobile."
+            ? "A built-in widget: " + HomeModel.owlStoreId(sheets.home.owlApproveId) + " from the OWL widget store, reviewed there and shipped with Omamobile."
             : "From your widgets folder (" + UserWidgets.tildePath(sheets.home.widgetsDir, sheets.home.homeDir) + "/" + sheets.home.owlApproveId + "). Nobody reviewed it.")
             + " This is a guard rail, not a sandbox: an allowed command runs with your rights."
         }

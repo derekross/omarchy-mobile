@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 10 Pro XL (mustang) bring-up notes
 
-Findings for the Pixel 10 Pro XL port (SoC laguna, Tensor G5), newest first. Tracking issue: [#18](https://github.com/derekross/omarchy-mobile/issues/18). Nothing here has booted or flashed anything of ours: stage 0 is read-only.
+Findings for the Pixel 10 Pro XL port (SoC laguna, Tensor G5), newest first. Tracking issue: [#18](https://github.com/derekross/omamobile/issues/18). Nothing here has booted or flashed anything of ours: stage 0 is read-only.
 
 The parts below are a fact dump. A fact that a tool printed is marked [V], with its source. Every inference, hypothesis and open question is kept out of them and collected in "Interpretation and open questions" near the end, as items I1 to I21; a fact that has one points to it. Anything about the Tensor G5 that is not marked [V] is unverified.
 
@@ -9,7 +9,7 @@ The parts below are a fact dump. A fact that a tool printed is marked [V], with 
 
 - `F/`: Google's factory image for the same build ID, `mustang-cp3a.261005.005-factory-099acc44.zip` (SHA-256 `099acc44e2f87fe2735d92952081d64550ff08b4a6390bb6b001c8451695657e`, checked against Google's page), read on the laptop with `unzip`, `unpack_bootimg`, `avbtool`, `dtc` and `mkdtboimg`. Nothing was run on the phone for these.
 - `R/`: read-only `adb` and `fastboot` queries of the phone, by exact name (no `getprop` dump, no `fastboot getvar all`, no shell with write access): facts only, no serial, IMEI or MACs. The phone runs GrapheneOS's own build, so a build fact (the kernel string, say) can differ from Google's. Hardware facts (SoC, board revision, which `dtbo` entry) don't.
-- `K/`: `arch/arm64/boot/dts/exynos/google/gs201.dtsi` from the `omamobile` branch of [linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile), as the reference for the comparison in part 4.
+- `K/`: `arch/arm64/boot/dts/exynos/google/gs201.dtsi` from the `omamobile` branch of [linux-omamobile](https://github.com/derekross/linux-omamobile), as the reference for the comparison in part 4.
 
 ## How this was produced
 
@@ -28,7 +28,7 @@ dtc -I dtb -O dts -o 00.dts 00.dtb                   # decompile a base DTB
 mkdtboimg dump dtbo.img -b entry                     # the board dtbo table, one file per entry
 ```
 
-The `dtb` section of `vendor_kernel_boot` is several DTBs back to back. Each starts with the magic `0xd00dfeed` and carries its total size as a big-endian 32-bit number at offset 4, so a short loop splits them (two DTBs here). Compatible strings were collected with `grep -o 'compatible = "[^;]*;'` on the decompiled files and compared with `comm` on the sorted lists. `gs201.dtsi` came from `raw.githubusercontent.com/derekross/linux-omarchy-mobile/omamobile/arch/arm64/boot/dts/exynos/google/gs201.dtsi` (`K/`).
+The `dtb` section of `vendor_kernel_boot` is several DTBs back to back. Each starts with the magic `0xd00dfeed` and carries its total size as a big-endian 32-bit number at offset 4, so a short loop splits them (two DTBs here). Compatible strings were collected with `grep -o 'compatible = "[^;]*;'` on the decompiled files and compared with `comm` on the sorted lists. `gs201.dtsi` came from `raw.githubusercontent.com/derekross/linux-omamobile/omamobile/arch/arm64/boot/dts/exynos/google/gs201.dtsi` (`K/`).
 
 **Phone** (`R/`, parts 2, 3 and 5), read-only, by exact name:
 
@@ -66,7 +66,7 @@ Over `adb`, as the shell user, on the GrapheneOS phone [V] (R/). `/proc/device-t
 
 ## 2026-10-30: stage 0, part 4: laguna's base device tree against gs201.dtsi
 
-Asked for on #18. Method: the two base DTBs from `vendor_kernel_boot` (part 1) decompiled with `dtc`, compared by structure and by compatible string with `gs201.dtsi` from the `omamobile` branch of linux-omarchy-mobile (`K/`, fetched 2026-10-30, 1,163 lines). It is not a line-by-line diff: `gs201.dtsi` is a compact mainline-style description, while laguna's A0 DTB decompiles to about 29,100 lines of Google's Android device tree. A0 and B0 share 218 of their 221 distinct compatible strings (the differences are per-revision `*_dvfs` and `*_ptde` strings and an EHLD debug string each) and have the same GIC [V].
+Asked for on #18. Method: the two base DTBs from `vendor_kernel_boot` (part 1) decompiled with `dtc`, compared by structure and by compatible string with `gs201.dtsi` from the `omamobile` branch of linux-omamobile (`K/`, fetched 2026-10-30, 1,163 lines). It is not a line-by-line diff: `gs201.dtsi` is a compact mainline-style description, while laguna's A0 DTB decompiles to about 29,100 lines of Google's Android device tree. A0 and B0 share 218 of their 221 distinct compatible strings (the differences are per-revision `*_dvfs` and `*_ptde` strings and an EHLD debug string each) and have the same GIC [V].
 
 - **Layout** [V]. Laguna's tree is flat: there is no `soc` bus node, and peripherals are direct children of the root. `gs201.dtsi` puts them under `soc@0` (`simple-bus`).
 - **Almost no names carry over** [V]. Laguna has 221 distinct compatible strings and `gs201.dtsi` has 56. They share only 9, all generic: `arm,armv8-timer`, `arm,gic-v3`, `arm,idle-state`, `arm,psci-1.0`, `fixed-clock`, `operating-points-v2`, `simple-bus`, `snps,dwc3`, `syscon`. Of laguna's 143 `google,*` strings only one carries a gs101 name, `google,gs101-gsa-v1` (the security processor interface); 24 are `google,lga-*`.

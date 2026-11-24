@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile's system setup for the Pixel 9a: what a platform's
+# Omamobile's system setup for the Pixel 9a: what a platform's
 # "setup-system" step does in Omarchy's lifecycle contract (omamobile-firstboot
 # runs it). Runs as root; safe to rerun. The same as the Pixel 7 Pro's, with
 # the 9a's own list of services.
@@ -18,7 +18,7 @@ if [[ -n ${1:-} ]]; then
 fi
 systemctl enable --now systemd-timesyncd >/dev/null 2>&1 || true
 
-# The phone's services from the other Omarchy Mobile packages: enabled here,
+# The phone's services from the other Omamobile packages: enabled here,
 # once, because packages don't enable units themselves (this package ships
 # its own boot units as .wants links). Not on the 9a yet: the fingerprint
 # service (its first start writes Trusty's secure storage), speaker

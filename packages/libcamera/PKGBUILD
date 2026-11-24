@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: 0BSD
 #
-# Omarchy Mobile build of libcamera for the Pixel 7 Pro (gs201 CSIS receiver).
+# Omamobile build of libcamera for the Pixel 7 Pro (gs201 CSIS receiver).
 #
 # Derived from Arch Linux's libcamera PKGBUILD, tag 0.7.2-4
 # (https://gitlab.archlinux.org/archlinux/packaging/packages/libcamera, 0BSD),
-# which Arch Linux ARM builds unchanged for aarch64. Omarchy Mobile changes:
+# which Arch Linux ARM builds unchanged for aarch64. Omamobile changes:
 #  - 0001-pipeline-simple-Add-the-Google-gs201-CSIS-receiver.patch: one
 #    entry in the simple pipeline handler's supportedDevices table, so a
 #    media device whose driver is "gs201-csis" is matched, with the software
@@ -198,7 +198,7 @@ pkgname=(
 )
 pkgver=0.7.2
 pkgrel=4.23
-pkgdesc="A complex camera support library for Linux, Android, and ChromeOS (Omarchy Mobile: gs201 CSIS)"
+pkgdesc="A complex camera support library for Linux, Android, and ChromeOS (Omamobile: gs201 CSIS)"
 arch=(aarch64)
 url="https://libcamera.org/"
 _url=https://git.libcamera.org/libcamera/libcamera.git

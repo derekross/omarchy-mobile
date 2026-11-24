@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# OWL widgets on Omarchy Mobile: review package (milestone 1, round 2, and the OWL built-ins)
+# OWL widgets on Omamobile: review package (milestone 1, round 2, and the OWL built-ins)
 
 **Status (2026-10-13, round 2 the same night):** built and tested on the laptop only, on branch `owl-widgets`. Round 2 added screens, `stream`, file watching, `Terminal`, the panel-off pause, haptics and the torch behind the approval sheet, the store package and its Store tab, the credited OWL guide, and layout checks for every store widget (what changed is marked **New** below). **Nothing has been installed on the phone, and nothing will be until you have reviewed this and said yes.** Everything is behind a feature flag that is off by default, so even an installed package changes nothing on its own.
 
@@ -15,7 +15,7 @@ Contents: [the built-ins are OWL now](#the-built-ins-are-owl-now-p9) · [how it 
 
 **What changed.** The home screen's built-ins from Simon Schubert's omarchy-widgets (`widgets/simonschubert/`, MIT) are no longer our 47 QML ports: they are his OWL originals, from the pinned store package `omamobile-owl-widgets` (which `omamobile-shell` 0.2.0 now depends on), run by our OWL runtime. The ports (`plugins/omamobile.home/ported/`, their 47 wrapper files, `PortedWidget.qml`) and their tests are removed. **Every one of the 47 ports has an OWL original; no port stays as it was.** Our own built-ins (clock, weather, battery, media, calendar, note, toggles, text or command) are unchanged.
 
-In the Widgets sheet the built-ins keep their names, icons and sizes on our grid. Each is type `owl:<author>.<name>` (`owl:simonschubert.today`). They are always on (the `owlWidgets` flag still gates only your own OWL folders and the Store tab). A built-in that needs approval opens the approval sheet ("A built-in widget: simonschubert/earthquakes from the OWL widget store, reviewed there and shipped with Omarchy Mobile") before it is added.
+In the Widgets sheet the built-ins keep their names, icons and sizes on our grid. Each is type `owl:<author>.<name>` (`owl:simonschubert.today`). They are always on (the `owlWidgets` flag still gates only your own OWL folders and the Store tab). A built-in that needs approval opens the approval sheet ("A built-in widget: simonschubert/earthquakes from the OWL widget store, reviewed there and shipped with Omamobile") before it is added.
 
 **Your layout migrates when the home screen next reads it:**
 
@@ -122,7 +122,7 @@ The words, as the phone shows them (screenshots: [earthquakes](screens/approve-e
 
 > **Allow "earthquakes"?**
 >
-> This OWL widget runs inside the home screen, as you. Omarchy Mobile read its file and lists everything it can do below. Nothing runs until you allow it, and if the widget changes what it runs, it asks again.
+> This OWL widget runs inside the home screen, as you. Omamobile read its file and lists everything it can do below. Nothing runs until you allow it, and if the widget changes what it runs, it asks again.
 >
 > **Runs this command** — the full text of every command, in a box.
 >

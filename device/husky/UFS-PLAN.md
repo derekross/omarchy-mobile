@@ -3,7 +3,7 @@
 
 Goal: the mainline UFS driver brings up husky's UFS behind the read-only storage guard, the init's UFS probe report lists every LUN and partition by name, and the guard leaves only `UFS_RW` (slot B's boot images and `userdata`) writable. After that, the Arch root on `userdata` (as cheetah, [BRINGUP-M1](../cheetah/BRINGUP-M1.md)).
 
-**Status (2026-10-30):** U1-U4 done. UFS links at HS-G4 on two lanes behind the guard, Arch runs from `userdata`, and Omarchy's image, built from the signed repository's development channel, boots to Omarchy's lock screen (results below). The kernel side is derekross/linux-omarchy-mobile#13, #49 (PMU tables), #50 (pinctrl), #51 (UFS bindings) and #53 (the DT follow-up), all merged. U5 and U6 are next for UFS.
+**Status (2026-10-30):** U1-U4 done. UFS links at HS-G4 on two lanes behind the guard, Arch runs from `userdata`, and Omarchy's image, built from the signed repository's development channel, boots to Omarchy's lock screen (results below). The kernel side is derekross/linux-omamobile#13, #49 (PMU tables), #50 (pinctrl), #51 (UFS bindings) and #53 (the DT follow-up), all merged. U5 and U6 are next for UFS.
 
 Path abbreviations as in [BRINGUP-M1.md](BRINGUP-M1.md). `GU/` = Google's GPL UFS driver, `GM/drivers/ufs` (`ufs-exynos.c`, `zuma/ufs-cal*.h`, `zuma/ufs-cal-if.c`). Facts are [V] (checked, with the source) or [I] (an inference to check).
 
@@ -24,7 +24,7 @@ Path abbreviations as in [BRINGUP-M1.md](BRINGUP-M1.md). `GU/` = Google's GPL UF
 | CAL variant | `evt version : 0, board: 1`: the `*_evt0` tables, board mask `BRD_SMDK` | R/dmesg; GU/`zuma/ufs-cal-if.h` [V] |
 | CAL tables | `init_cfg_evt0` (pre-link), `post_init_cfg_evt0`, `calib_of_pwm`, `calib_of_hs_rate_a/b` with their `post_*`, `post_ah8_cfg_evt0`, `post_h8_enter`, `pre_h8_exit`, `lane1_sq_off` | GU/`zuma/ufs-cal.h` [V] |
 | LUNs | `sda`: `persist`, `efs`, `efs_backup`, `modem_*`, `metadata`, slot A and B boot images, `userdata` (`sda34`). `sdb`, `sdc`: the two boot LUNs (`bl1`, `abl`, `gsa`…). `sdd`: `devinfo`, `blenv`, `mfg_data`. The same shape as cheetah's, so the guard's name allowlist and its deletion of `/dev/sda` apply unchanged | R/partitions.txt [V] |
-| Mainline | `ufs-exynos` and `phy-samsung-ufs` support gs101 and gs201 (gs201 merged here, derekross/linux-omarchy-mobile#4: the gs101 sequences with gs201's PMA table, no pinctrl, a fixed always-on VCC) | L/ [V] |
+| Mainline | `ufs-exynos` and `phy-samsung-ufs` support gs101 and gs201 (gs201 merged here, derekross/linux-omamobile#4: the gs101 sequences with gs201's PMA table, no pinctrl, a fixed always-on VCC) | L/ [V] |
 
 ## Design
 

@@ -90,7 +90,7 @@ mir=$pkg/bin/omamobile-mirror
 argv=$(cat "$t/wayvnc.argv")
 [[ $(tail -n1 "$t/wayvnc.argv") == 172.16.42.1:5900 ]] || fail "listen address/port: $argv"
 grep -qx -- '--max-fps=30' "$t/wayvnc.argv" || fail "default fps: $argv"
-grep -qx -- '--name=Omarchy Mobile phone' "$t/wayvnc.argv" || fail "desktop name: $argv"
+grep -qx -- '--name=Omamobile phone' "$t/wayvnc.argv" || fail "desktop name: $argv"
 grep -qx -- '--disable-input' "$t/wayvnc.argv" && fail "input must be on by default"
 grep -qx 'address=172.16.42.1' "$t/wayvnc.conf" || fail "config address"
 grep -qx 'port=5900' "$t/wayvnc.conf" || fail "config port"

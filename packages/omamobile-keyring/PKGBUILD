@@ -3,9 +3,9 @@
 pkgname=omamobile-keyring
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="The key that signs Omarchy Mobile's packages, for pacman"
+pkgdesc="The key that signs Omamobile's packages, for pacman"
 arch=(any)
-url="https://github.com/derekross/omarchy-mobile"
+url="https://github.com/derekross/omamobile"
 license=(MIT)
 install=omamobile-keyring.install
 

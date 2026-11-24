@@ -14,7 +14,7 @@ default from `omamobile-device-cheetah` 0.1.43 (M4.6b, B6-B9b passed,
 #398). Kernel `7.3.0-rc6-omamobile-g2219cc6cda77`, the release kernel.
 Suspend with the modem up (section 7, M6) passed on the reference phone on
 2026-11-14 and is on by default from `omamobile-modem` 0.1.26 and
-device-cheetah 0.1.57, on a kernel with linux-omarchy-mobile#232's early
+device-cheetah 0.1.57, on a kernel with linux-omamobile#232's early
 refusal (kernel-2026.11.15 and later; 7.5). Open: other
 networks, cpif's `oem_ipc0` "is not opened" lines after sitd starts
 (nothing opens the OEM IPC channel), and the UFS error-handler pass at a
@@ -378,7 +378,7 @@ reboot or `blockdev --setrw`):**
 
 ```sh
 tools/phone-ssh 'cat > /etc/udev/rules.d/60-omamobile-modem-nv-ro.rules' <<'EOF'
-# Omarchy Mobile: the modem's NV and firmware partitions are never written from Linux
+# Omamobile: the modem's NV and firmware partitions are never written from Linux
 SUBSYSTEM=="block", ENV{ID_PART_ENTRY_NAME}=="efs|efs_backup|modem_userdata|modem_a|modem_b", RUN+="/usr/bin/blockdev --setro $devnode"
 EOF
 tools/phone-ssh 'udevadm control --reload; udevadm trigger -s block -c change;
@@ -2348,7 +2348,7 @@ GET_SMSC_ADDR error 11 (no SIM), radio state 3. Idle link
 "Trying to free nonexistent resource", no oops**; back on SSH in 23 s.
 New boot: 0 failed units, fingerprint listed, AoC, speaker protection,
 the four sensors and Wi-Fi up. M3.5 after: unchanged. Published as
-linux-omarchy-mobile `omamobile-int` snapshot `c237ad9d1`.
+linux-omamobile `omamobile-int` snapshot `c237ad9d1`.
 
 **Before M4.2:** M4.1i passed; a SIM with its PIN lock off in the phone
 (M4.2's preconditions), the carrier's APN in
@@ -3572,7 +3572,7 @@ and runs warm. This section is the way to lift that, staged.
 
 | What | Where | For | Note |
 |---|---|---|---|
-| K1: noirq sleep ops in the link driver ([linux-omarchy-mobile#232](https://github.com/derekross/linux-omarchy-mobile/pull/232), with K1b and K1c) | `drivers/pci/controller/dwc/pcie-gs201-cp.c` (none today, driver struct :1975-1985) | M6.2 | `suspend_noirq`: refuse with -EBUSY and a log line if the link is up or the PHY isn't isolated (PMU 0x3ec0, through the SMC regmap); otherwise nothing. `resume_noirq`: a log line. Stock's RC only isolates a down link there (`pcie-exynos-rc.c` :5823-5935), which ours already does at every `link_down`. Without it the PCI core may put the root port in D3hot on a live link: our endpoint driver has no PM ops (inferred from `pci-driver.c` :917-950). K1b and K1c, found in M6.2 and M6.3 (7.4): the root port is `PCI_DEV_FLAGS_NO_D3` and the modem's `d3cold_delay` 0, or a sleep with the link down leaves the modem disconnected |
+| K1: noirq sleep ops in the link driver ([linux-omamobile#232](https://github.com/derekross/linux-omamobile/pull/232), with K1b and K1c) | `drivers/pci/controller/dwc/pcie-gs201-cp.c` (none today, driver struct :1975-1985) | M6.2 | `suspend_noirq`: refuse with -EBUSY and a log line if the link is up or the PHY isn't isolated (PMU 0x3ec0, through the SMC regmap); otherwise nothing. `resume_noirq`: a log line. Stock's RC only isolates a down link there (`pcie-exynos-rc.c` :5823-5935), which ours already does at every `link_down`. Without it the PCI core may put the root port in D3hot on a live link: our endpoint driver has no PM ops (inferred from `pci-driver.c` :917-950). K1b and K1c, found in M6.2 and M6.3 (7.4): the root port is `PCI_DEV_FLAGS_NO_D3` and the modem's `d3cold_delay` 0, or a sleep with the link down leaves the modem disconnected |
 | K2: power-down pin states for the AP2CP outputs | the cpif overlay (`modem-cpif-test.dtso`) | only if needed | stock: gph0-2/3, gph1-1/2/3/6 with `pin-con-pdn` 3 (keep the level), no pull. Needed only if HSI1's pads lose their state in s2idle: check first (M6.0) |
 | U1: a conditional inhibitor | `omamobile-modem-inhibit.service` | M6.2 | Skipped only when `omamobile-modem-sleep-policy` says yes (its `ExecCondition=`; the start script asks the same policy, 7.5): from `omamobile-modem` 0.1.26 the device's `/usr/lib/omamobile-modem/suspend-verified` (device-cheetah only; before, the runbook's `/etc/omamobile/modem-suspend-enable` beside `/usr/lib/omamobile-modem/suspend-runbook`, which still counts), no owner's `/etc/omamobile/modem-suspend-disable`, and a kernel with #232's early refusal. On the 9a or the 6 Pro the owner's file alone changes nothing. Calls keep `omamobile-call-watch`'s inhibitor |
 | U2: the screen state told before a sleep | `omamobile-modem-sit`'s systemd-sleep hook | M6.4 | found in M6.3 (7.4): `systemctl suspend` with the panel lit froze before sitd's 2 s backlight check told the modem "off". With `follow_screen = yes`, the hook asks sitd for "off" with a 10 s hold before every sleep; after the wake sitd's own check restores "on" if the panel is lit. A call refuses it, and the sleep goes ahead either way |
@@ -3780,7 +3780,7 @@ NV files 3 of 3), and the package versions didn't matter (0.1.18 and
   12 boots on `…-g80f9610feb26` on 2026-11-11).
 - Fix: sitd sets the mode only right after radio on, still before
   registration. It is its own pull request,
-  [#701](https://github.com/derekross/omarchy-mobile/pull/701) (`[network]
+  [#701](https://github.com/derekross/omamobile/pull/701) (`[network]
   nr_after_radio_on`, off by default), since the reference 7 Pro, on the
   same `kernel-2026.11.08`, gets the refusal and registers with today's
   order. With it on, this phone registered on `…-ga353a0190151` with EAS

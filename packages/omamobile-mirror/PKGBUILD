@@ -3,9 +3,9 @@
 pkgname=omamobile-mirror
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile screen mirroring: the phone's screen and input on a computer over the USB cable (wayvnc)"
+pkgdesc="Omamobile screen mirroring: the phone's screen and input on a computer over the USB cable (wayvnc)"
 arch=(any)
-url="https://github.com/derekross/omarchy-mobile"
+url="https://github.com/derekross/omamobile"
 license=(MIT)
 depends=(bash wayvnc iproute2 systemd polkit)
 optdepends=('ufw: the port is opened on usb0 only while mirroring runs'

@@ -6,7 +6,7 @@
 # for a user that firstboot has set up already: the profile marker is its
 # first run's.
 [Unit]
-Description=Omarchy Mobile user setup (what package updates add)
+Description=Omamobile user setup (what package updates add)
 ConditionPathExists=%h/.local/state/omarchy/done/omamobile-shell-profile
 Before=graphical-session-pre.target
 
