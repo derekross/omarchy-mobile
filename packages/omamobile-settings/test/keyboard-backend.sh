@@ -10,7 +10,6 @@ cat > "$tmp/bin/hyprctl" <<'EOT'
 #!/bin/bash
 printf '%s\n' "$*" >> "$FAKE_LOG"
 case "$1 $2" in
-  "-j devices") cat "$FAKE_DEVICES" ;;
   "-j getoption") k=${3#input:}; [[ -e $FAKE_OPTS/$k ]] || { [[ $k == kb_options ]] && printf 'omarchy:shift_caps_compose' > "$FAKE_OPTS/$k"; }
     python3 -c 'import json,sys; print(json.dumps({"option": sys.argv[1], "str": sys.argv[2], "set": True}))' "$3" "$(cat "$FAKE_OPTS/$k" 2>/dev/null)" ;;
   eval*) [[ -n ${FAKE_EVAL_FAIL:-} ]] && { echo "error: no eval"; exit 0; }
@@ -44,9 +43,8 @@ cat > "$tmp/rules.lst" <<'EOT'
   intl            us: English (US, intl., with dead keys)
   T3              de: German (T3)
 EOT
-echo '{"keyboards":[{"name":"hl-virtual-keyboard-squeekboard","active_layout_index":0},{"name":"dell-kb7120w","layout":"us,gr","active_layout_index":1,"main":true}]}' > "$tmp/devices.json"
 for f in gr de ru; do : > "$tmp/keyboards/$f.yaml"; done
-export PATH="$tmp/bin:$PATH" FAKE_LOG="$tmp/log" FAKE_DEVICES="$tmp/devices.json" FAKE_OPTS="$tmp/opts"
+export PATH="$tmp/bin:$PATH" FAKE_LOG="$tmp/log" FAKE_OPTS="$tmp/opts"
 export HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/home/.config" XDG_STATE_HOME="$tmp/home/.local/state"
 export XDG_RUNTIME_DIR="$tmp/run" HYPRLAND_INSTANCE_SIGNATURE=test
 export OMAMOBILE_KBD_RULES="$tmp/rules.lst" OMAMOBILE_KEYBOARDS_DIR="$tmp/keyboards" OMAMOBILE_KBD_LANGUAGES=langs
@@ -67,10 +65,11 @@ EOT
 cp "$input" "$tmp/stock.lua"
 printf 'us' > "$tmp/opts/kb_layout"
 
-# get with no store: Hyprland's value, default switch key, the main real keyboard's index
+# get with no store: Hyprland's value, default switch key, and no device list read
 r=$(run get)
 eq "$(j "$r" 'd["layouts"]')" "[{'layout': 'us', 'variant': ''}]"
-eq "$(j "$r" 'd["switchKey"], d["active"], d["override"]')" "('default', 1, '')"
+eq "$(j "$r" 'd["switchKey"], "active" in d, d["override"]')" "('default', False, '')"
+grep -q -- '-j devices' "$tmp/log" && { echo "FAIL: get read hyprctl -j devices" >&2; exit 1; }
 
 # a layouts save writes Omarchy's store only; input.lua stays byte-identical; live via one eval
 : > "$tmp/log"

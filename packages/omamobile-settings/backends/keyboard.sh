@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Keyboard layouts and the hardware switch key for the Settings app, on Omarchy 4.5's own store.
-#   keyboard.sh get                  {"layouts":[{"layout":"us","variant":""}],"switchKey":"default","active":0,"override":""}
+#   keyboard.sh get                  {"layouts":[{"layout":"us","variant":""}],"switchKey":"default","override":""}
 #   keyboard.sh list                 {"layouts":[{"layout":"us","name":"English (US)"}],"switchKeys":[...]}
 #   keyboard.sh set layouts us,gr[:variant]   1 to 4 layouts from the xkb rules list
 #   keyboard.sh set switch-key NAME           alt_shift, ctrl_shift, caps or default
@@ -80,7 +80,6 @@ MAX = 4
 STORE, STATE = os.environ["KBD_STORE"], os.environ["KBD_STATE"]
 INPUT = os.path.realpath(os.environ["KBD_INPUT"])  # a symlinked input.lua stays a link
 KEYBOARDS = os.environ.get("OMAMOBILE_KEYBOARDS_DIR", "/usr/share/omamobile/squeekboard/keyboards")
-PSEUDO_RE = re.compile(r"hl-virtual-keyboard|.*(consumer-control|power-button|video-bus|radio-control|gpio-keys)")
 
 def out(obj):
     print(json.dumps(obj, separators=(",", ":")))
@@ -250,17 +249,6 @@ def switch_name(block, custom):
         return next((k for k, v in SWITCH.items() if v == block), "custom")
     return "custom" if custom else "default"
 
-def active():
-    try:
-        kbs = json.loads(run(["hyprctl", "-j", "devices"]))["keyboards"]
-    except (TypeError, ValueError, KeyError):
-        return None
-    real = [k for k in kbs if not PSEUDO_RE.match(str(k.get("name", "")))]
-    multi = [k for k in real if len([l for l in str(k.get("layout", "")).split(",") if l]) > 1]
-    pick = [k for k in real if k.get("main")] or multi or real
-    i = pick[0].get("active_layout_index") if pick else None
-    return i if isinstance(i, int) and i >= 0 else None
-
 def rules(names=None):
     lay, var, sec = set(), set(), None
     try:
@@ -314,7 +302,7 @@ def apply_live(lay, var, opts, override):
 
 def state(lay, var, block, custom, override):
     return {"layouts": [{"layout": l, "variant": v} for l, v in zip(lay, var)],
-            "switchKey": switch_name(block, custom), "active": active(), "override": override}
+            "switchKey": switch_name(block, custom), "override": override}
 
 def input_state(text):
     rest, block = split_block(text)

@@ -35,9 +35,9 @@ private slots:
                 "case $1 in\n"
                 "list) echo '{\"layouts\":[{\"layout\":\"us\",\"name\":\"English (US)\"},{\"layout\":\"gr\",\"name\":\"Greek\"}],"
                 "\"switchKeys\":[{\"option\":\"alt_shift\",\"name\":\"Alt+Shift\"},{\"option\":\"default\",\"name\":\"Omarchy default\"}]}' ;;\n"
-                "get) echo '{\"layouts\":[{\"layout\":\"us\",\"variant\":\"\"}],\"switchKey\":\"default\",\"active\":0,\"override\":\"\"}' ;;\n"
+                "get) echo '{\"layouts\":[{\"layout\":\"us\",\"variant\":\"\"}],\"switchKey\":\"default\",\"override\":\"\"}' ;;\n"
                 "set) echo '{\"layouts\":[{\"layout\":\"us\",\"variant\":\"\"},{\"layout\":\"gr\",\"variant\":\"\"}],"
-                "\"switchKey\":\"default\",\"active\":0,\"override\":\"\",\"note\":\"us goes first\"}' ;;\n"
+                "\"switchKey\":\"default\",\"override\":\"\",\"note\":\"us goes first\"}' ;;\n"
                 "esac\n");
     }
     void probeShowsTheBatteryRowOnlyWhenTheBackendSaysAvailable() {
