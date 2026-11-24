@@ -1,8 +1,40 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Review lessons: Safety model (AGENTS.md section 1) (part 1 of 3)
+# Review lessons: Safety model (AGENTS.md section 1) (part 1 of 4)
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1162. A driver that starts writing a PMIC function's shadow registers is
+  checked against the vendor's load for any command that commits them to
+  non-volatile memory, and the write table is compared with the vendor's list
+  register by register.** Kernel #294 turned the 9a's read-only gauge driver
+  into a model loader at the chip's second address; reading Google's
+  `max77779_update_custom_parameters()` beside the PR's `max77779_nvm_reg()`
+  showed the same 21 shadow registers, at the addresses Google's
+  `max77779_v20240115_regs.h` gives, and no NV-copy command, which is what
+  makes "writes only shadow registers" true rather than assumed. *Check:*
+  `grep -n 'COMMAND\|CMD\|COPY\|0xe904\|_nv' <vendor file>` and list every
+  register the vendor writes at the second address against the PR's
+  `writeable_reg`; any extra register or a commit command goes to the
+  maintainer as a write to non-volatile memory. Extends L-2, L-163 and L-542.
+  *From:* kernel #294, round 67, 2026-11-24.
+- **L-1161. A new early branch in `cmd_flash` or `cmd_push` is listed against
+  every check the normal path runs before its first write.** #1002's
+  `--stage-only` returns before `load_device`, so `BOOT_METHOD`'s refusals,
+  `check_avb_image_sizes`, `in_fastboot` and `slot_b_allowed` don't run, with
+  a device script's own checks in their place. *Check:* `awk '/^cmd_flash\(\)
+  \{/,/^}/' bin/omamobile`, list each `die` or check above the first `fastboot
+  … flash`, and mark which ones the new branch reaches; a branch that sources
+  a file under `device/` is a device path in a shared tool. Extends L-1029 and
+  L-1121. *From:* #1002, round 67, 2026-11-24.
+- **L-1160. A generated list of people in a shipped app is read for the
+  guesses that made it, not only for emails.** #1030's credits generator kept
+  emails out and printed its guesses, but one of them links a commit name to a
+  GitHub login by matching letters alone, and the result goes to every phone.
+  *Check:* for a PR that adds contributor names to a package, read the
+  generator for every rule that joins two identities, name the data behind
+  each (GitHub's email-to-login mapping is data, a spelling match is not), and
+  put "ship it, and how" to the maintainer under the privacy rule. Extends
+  L-563 and L-324. *From:* #1030, round 67, 2026-11-24.
 - **L-1126. A polkit rule copied from an accepted one is judged by what its
   action does when a process outside the page starts it, not by the
   precedent.** #1009's firewall rule has the shape of main's charge-limit
@@ -383,41 +415,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   wording; an excused line gets its own counted check beside the helper,
   never an entry in the must-be-empty pattern. Extends L-756 and L-183.
   *From:* #835, round 61, 2026-11-18.
-- **L-868. A raised limit carried in a device tree follows the kernel image
-  wherever it boots; a limit raised by a running guard doesn't.** Kernel #267
-  put husky's 4.45 V float in the battery node; the author's daily kernel,
-  built from the same tree, then charged at 4.45 V on a morning when he had
-  promised no raised-float runs. *Check:* for a DT value that is only safe
-  with a driver option or a userspace file, ask what a boot without that
-  option does (L-458), and prefer the value being applied by the code path
-  that provides the protection. Extends L-458, L-411 and L-284. *From:*
-  kernel #267 with #761, round 61, 2026-11-18.
-- **L-867. A contributor's hold on a hardware state is checked against the
-  kernel each new report ran on, and a second passing gets a mechanism, not a
-  second reminder.** On kernel #266 and #836 the smoke report's release was
-  the local kernel with the raised float, about 80 minutes before the author
-  noticed it himself: the evidence for one PR had been gathered inside the
-  state another thread had put on hold. *Check:* for every report from a
-  contributor with an open hold, compare its `uname -r` with the kernel the
-  hold names; when a hold is passed by accident, ask for a safeguard that
-  doesn't depend on memory (a distinct `LOCALVERSION`, a read before the
-  step, an option set by hand). Extends L-557, L-694 and L-378. *From:*
-  kernel #266 with #836 and #761, round 61, 2026-11-18.
-- **L-856. A safety account that says "restored, verified" or "revalidated the
-  backup" is asked where the bytes were read from.** fastboot doesn't
-  normally read a partition back, so kernel #260's md5 check was either a
-  read from Linux with the unguarded eMMC enabled or a check of the files
-  that were sent; #714's revalidation re-hashed the backup files on the
-  laptop and said nothing about the phone's partitions after boots of an
-  unguarded install. *Check:* for every "verified" in a restore or backup
-  report, name the tool that read the partition, the kernel it ran under and
-  whether that boot was guarded, or say that only the archive was hashed.
-  Extends L-649, L-600 and L-168. *From:* kernel #260, round 60, 2026-11-17;
-  #714, round 61, 2026-11-18.
-- **L-831. An undo that writes back a saved register is run with another field
-  changed in between.** #815's steps change one bit and say so, but the undo
-  restored the whole byte, the input-limit field included; the stub run
-  showed it only when that field was changed by hand between apply and undo.
-  *Check:* in the stub, change every other field of the register after the
-  apply and run the undo; ask for a restore of the changed bits alone.
-  Extends L-419 and L-727. *From:* #815, round 60, 2026-11-17.

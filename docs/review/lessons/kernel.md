@@ -3,6 +3,24 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1173. A retry loop whose first step is "nothing to do if the state is
+  already good" can skip the cleanup a failed previous attempt left undone.**
+  In kernel #294, an attempt that loaded the model but failed to lock is
+  followed by one that sees POR clear and returns success without locking.
+  *Check:* for each retried function with an early "already done" return, walk
+  the case where the previous attempt finished the main work and failed its
+  last step, and see whether the early return restores that step. Extends
+  L-727 and L-757. *From:* kernel #294, round 67, 2026-11-24.
+- **L-1172. A guard-state fix tabulated for the rows its thread names is also
+  run for a mid-charge miss followed by a neighbour band's edge.** Kernel
+  #290's table (boot, in-band, hot and cold inhibits) was right, and a harness
+  row the thread hadn't named showed that a miss while charging lets the next
+  reading skip the inter-band hysteresis once, less restrictive than both the
+  base and a run with no miss. *Check:* for each band, a row "inside band k
+  near its edge, miss, just across into the less restrictive neighbour", run
+  on base and head, and say in the review whether the result is the PR's
+  stated intent. Extends L-1138 and L-1001. *From:* kernel #290, round 67,
+  2026-11-24.
 - **L-1146. An out-of-tree patch carried from another downstream tree is
   looked up on patchwork by its subject before its code is reviewed, because a
   newer posting may fix it.** Kernel #285 carried the 2023 v1 of a glink
@@ -399,11 +417,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   change only the compatible, compile it and `dt-validate` it against the PR's
   processed schema. Extends L-102 and L-236. *From:* kernel #271, round 61,
   2026-11-18.
-- **L-878. A dwc3 glue built on `dwc3_core_probe()` is checked for the
-  runtime PM callbacks the core expects.** The core enables runtime PM itself;
-  a glue with only sleep callbacks leaves a device that userspace can mark
-  runtime-suspended with no resume path, and the gadget then disables its own
-  interrupt. *Check:* `grep -n 'RUNTIME_PM_OPS\|pm_runtime' <glue>` against
-  `dwc3-generic-plat.c`, and `grep -n 'pm_runtime_suspended'
-  drivers/usb/dwc3/gadget.c` for what a suspended status does. *From:* kernel
-  #271, round 61, 2026-11-18.
