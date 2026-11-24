@@ -340,6 +340,8 @@ rm -rf "$t/husky-badmfc"; cp -r "$t/husky" "$t/husky-badmfc"
 printf 'not a firmware %4096s' x > "$t/husky-badmfc/firmware/mfc_fw.bin"
 refuses "husky: an MFC firmware without an ARM vector table" "mfc_fw.bin does not start with an ARM vector table" \
   "$t/husky-badmfc" "$t/ext4.img" -d husky
+rm -rf "$t/husky-nomfc"; cp -r "$t/husky" "$t/husky-nomfc"; rm "$t/husky-nomfc/firmware/mfc_fw.bin"
+refuses "husky: a missing MFC firmware" "/vendor/firmware/mfc_fw.bin is missing" "$t/husky-nomfc" "$t/ext4.img" -d husky
 rm -rf "$t/v2-missing"; cp -r "$t/v2" "$t/v2-missing"; rm "$t/v2-missing/firmware/aoc.bin"
 refuses "a missing ext4 file with an older copy in OUT" "/vendor/firmware/aoc.bin is missing" "$t/v2-missing" "$t/ext4.img"
 refuses "a missing EROFS file with an older copy in OUT" "/vendor/firmware/aoc.bin is missing" "$t/v2-missing" "$t/erofs.img"
