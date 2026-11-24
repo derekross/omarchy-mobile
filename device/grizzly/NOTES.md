@@ -1,9 +1,15 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 11 Pro (grizzly) bring-up notes
 
-Tracking [#26](https://github.com/derekross/omarchy-mobile/issues/26).
-Stage 0, 2026-11-22. The retail phone was queried over USB ADB on locked
-stock Android. Factory-image analysis was done separately on the host.
+Tracking [#26](https://github.com/derekross/omamobile/issues/26).
+On November D1, the unlocked test phone boots stock Android from A
+with verity enforcing. Attended slot B trials reached systemd and USB
+SSH with a read-only RAM root and zero SCSI disks. The later UFS
+diagnostics stop before PHY readiness. See the [bring-up plan](BRINGUP-M1.md)
+and [trial sources and fixtures](bringup/README.md).
+
+The first snapshot on 2026-11-22 used USB ADB on locked stock Android.
+Factory-image analysis was done separately on the host.
 
 ## Live stock phone
 
@@ -101,8 +107,8 @@ three boot tries. The first stock boot on A still showed the red
 warning. After acknowledging it, Android reached the home screen.
 ADB confirmed a completed D1 boot on A with the factory AVB digest
 and `ro.boot.veritymode=eio`. The same-build repair restored the
-Android boot after acknowledgment. The EIO warning persists and its
-trigger remains unknown.
+Android boot after acknowledgment. Managed EIO persisted through
+that repair and the following Recovery round trip.
 
 An Android bugreport from A still reported managed EIO. Its retained
 kernel log began 3.210 seconds into the boot and showed no explicit
@@ -148,6 +154,14 @@ The UART disable operation returned `-5`, and ABL entered Fastboot
 with reason `boot failure`. Linux handoff and USB enumeration remain
 unverified. Returning to stock D1 on A completed successfully. ADB
 reported the factory AVB digest and verity mode `enforcing`.
+
+Fastboot reported `avb-hastree-error-mode:eio` before B was
+selected and `restart` after that first failed B attempt, before
+returning to A. The change therefore occurred in ABL before
+Linux ran. D1 ABL can clear the shared managed-verity marker
+when the loaded VBMeta digest differs. This is consistent with
+the captured sequence. The exact branch taken and original EIO
+trigger remain unverified.
 
 The rebuilt diagnostic supplies the stock `serial0`, pinctrl and
 UFS paths used by D1's FDT fixups, and preserves the expected USB-C
@@ -508,18 +522,25 @@ with a disposable USB-attached disk. Power sequencing and the
 Malibu host/PHY variant remain the gates for the first phone
 scan.
 
-## Before first light
+## Current UFS status
 
-- Keep stock A as the attended recovery path. Recheck slot flags
-  and stock Recovery transport before activation. Verify the live
-  board selector and bootloader-provided memory reservations during
-  the first hardware trial.
-- Bring up the shared Malibu kernel support and a Grizzly board DTS in
-  [linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile).
-  Use the B0 observation to guide the first candidate and keep the stock
-  tree comparison tied to its build. Verify the timer, watchdog and one
-  observable console path.
-- Stage a descriptor and Grizzly selector overlay after those values are
-  confirmed. Validate the five images offline before an attended first boot
-  to the shared initramfs on slot B. Keep stock slot A available for recovery
-  and leave `userdata` out of the first boot test.
+v21 hit a CPM timeout before the rescue marker. ABL handed
+off to it twice after one boot request and a warm crash reset.
+v22–v28 reached RAM rescue and exercised the early Malibu
+UFS sequence on D1. The v28 log records HC PSM
+`0x10` and PHY PSM `0x11` before GPIO setup, through both
+clock requests, PMIC decoupling and both domain votes.
+The final PHY poll timed out at `0x11` (`-110`) after 10 ms.
+The driver skipped the TOP bit 4 poll and retained its votes.
+Stock A completed boot with verity enforcing and its original
+VBMeta digest.
+
+The offline v29 fixture samples PSMs before the CPM startup
+frame, around acquisition of HSIO-S, and around SGIA IRQ
+setup. It reads HC and PHY after the wrapper reports `0x10`.
+The v29 hardware run is pending. The
+[bring-up plan](BRINGUP-M1.md) covers the gates for that
+trial and for the first storage-visible Grizzly rescue.
+
+Coordinate device findings with [#26](https://github.com/derekross/omamobile/issues/26).
+That report covers a second MP1.0 Grizzly on the October build.

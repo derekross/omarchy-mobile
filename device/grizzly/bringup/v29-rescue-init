@@ -1,0 +1,59 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+log() {
+    printf '<6>omamobile: grizzly UFS UIC %s\n' "$*" >/dev/kmsg
+}
+
+(
+    tree=/sys/firmware/devicetree/base
+    ufs="$tree/ufs@3c2d0000"
+    i=0
+    while [ "$i" -lt 15 ] && { [ ! -c /dev/kmsg ] || [ ! -d "$tree" ]; }; do
+        sleep 1
+        i=$((i + 1))
+    done
+    [ -c /dev/kmsg ] || exit 0
+    [ -d "$ufs" ] || { log 'live UFS FDT node unavailable'; exit 0; }
+
+    canonical=no
+    if [ -r "$tree/aliases/ufs0" ] &&
+        [ "$(tr -d '\000' <"$tree/aliases/ufs0")" = /ufs@3c2d0000 ]; then
+        canonical=yes
+    fi
+    calibration=0
+    [ ! -r "$ufs/phy-cal-data" ] || calibration=$(wc -c <"$ufs/phy-cal-data")
+    trim=0
+    [ ! -r "$ufs/google,rext-val" ] || trim=$(wc -c <"$ufs/google,rext-val")
+    mode=absent
+    [ ! -e "$ufs/google,enable-hs-lss" ] || mode=present
+    log "live FDT alias=$canonical phy-cal-data-bytes=$((calibration)) rext-val-bytes=$((trim)) hs-lss=$mode"
+) &
+
+(
+    sleep 90
+
+    pstore=/run/grizzly-pstore
+    marker='warm restart requested [ufs-uic-v29]'
+    if ! grep -q '^ramoops' /proc/consoles ||
+        ! mkdir -p "$pstore" || ! mount -t pstore pstore "$pstore"; then
+        log 'warm restart skipped: ramoops console unavailable'
+        exit 0
+    fi
+    if grep -Fq "$marker" "$pstore/console-ramoops-0" 2>/dev/null; then
+        log 'prior warm restart marker present'
+        exit 0
+    fi
+    if printf 'warm\n' >/sys/kernel/reboot/mode &&
+        grep -qx warm /sys/kernel/reboot/mode; then
+        log "$marker"
+        sleep 1
+        reboot -f
+        log 'warm restart returned'
+    else
+        log 'warm restart skipped: warm reboot mode unavailable'
+    fi
+) &
+
+exec /omamobile-init

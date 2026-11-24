@@ -1,0 +1,47 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/dts-v1/;
+/plugin/;
+
+/* Grizzly UIC diagnostic only. Leave ABL's per-device PHY fixups untouched. */
+
+&cpm_tx {
+	status = "okay";
+};
+
+&cpm_rx {
+	status = "okay";
+};
+
+&cpm {
+	status = "okay";
+};
+
+&{/system-controller/ufs-regulators} {
+	status = "okay";
+};
+
+&fabstby_sgia {
+	status = "okay";
+};
+
+&amb_smmu {
+	status = "okay";
+};
+
+&hsios_ufs_sgia {
+	status = "okay";
+};
+
+&hsios_ufs_gpio {
+	status = "okay";
+};
+
+&hsios_ufs_stby {
+	status = "okay";
+};
+
+&ufs {
+	/* Request ABL's resistor trim fixup without supplying a trim value. */
+	google,rext-internal;
+	status = "okay";
+};

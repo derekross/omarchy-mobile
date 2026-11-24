@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/dts-v1/;
+/plugin/;
+
+&{/reserved-memory/crash-log@95200000} {
+	compatible = "ramoops";
+	console-size = <0x200000>;
+	pmsg-size = <0x200000>;
+};
