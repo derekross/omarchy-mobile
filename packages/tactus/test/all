@@ -85,13 +85,13 @@ else
 fi
 # Nor do the debug lines (G_MESSAGES_DEBUG): none of them takes a string
 if grep -n 'g_debug (' source/tactus-typer.c source/tactus-autocorrect.c | grep -c '%s' >/dev/null; then
-  fail "a debug line in the typing engine or the autocorrection takes a string: $(grep -n 'g_debug (' source/tactus-typer.c source/tactus-autocorrect.c | grep '%s' | head -2)"
+  fail "a debug line in the typing engine or the autocorrection takes a string: $(grep -n 'g_debug (' source/tactus-typer.c source/tactus-autocorrect.c | grep '%s' | sed -n '1,2p')"
 else
   pass "the debug lines take counts only"
 fi
 # --- Stevia's settings as Tactus wants them
 grep -qx 'completion-mode=\[\]' tactus.gschema.override && grep -q '^\[mobi.phosh.osk\]$' tactus.gschema.override \
-  && [[ $(grep -n 'tactus.gschema.override' PKGBUILD | head -1 | cut -d: -f1) -lt $(grep -n 'glib-compile-schemas' PKGBUILD | head -1 | cut -d: -f1) ]] \
+  && [[ $(grep -n 'tactus.gschema.override' PKGBUILD | sed -n 1p | cut -d: -f1) -lt $(grep -n 'glib-compile-schemas' PKGBUILD | sed -n 1p | cut -d: -f1) ]] \
   && pass "Stevia's own completion is off by default, in an override compiled with the private schemas" \
   || fail "the settings override is missing, or installed after the schemas are compiled"
 
@@ -120,11 +120,11 @@ if [[ -n $built ]]; then
   tmp2=$(mktemp -d)
   export XDG_DATA_HOME=$tmp2/data XDG_STATE_HOME=$tmp2/state XDG_CONFIG_HOME=$tmp2/config
   out=$("$built/tools/tactus-typer-test" 2>&1); rc=$?
-  [[ $rc == 0 ]] && pass "typing: $(tail -1 <<<"$out")" || fail "typing: $(grep -E 'FAIL|failed|no dictionary' <<<"$out" | head -5 | tr '\n' ' ')"
+  [[ $rc == 0 ]] && pass "typing: $(tail -1 <<<"$out")" || fail "typing: $(grep -E 'FAIL|failed|no dictionary' <<<"$out" | sed -n '1,5p' | tr '\n' ' ')"
   out=$("$built/tools/tactus-paste-test" 2>&1); rc=$?
-  [[ $rc == 0 ]] && pass "what there is to paste: $(tail -1 <<<"$out")" || fail "what there is to paste: $(grep -E 'FAIL|failed' <<<"$out" | head -5 | tr '\n' ' ')"
+  [[ $rc == 0 ]] && pass "what there is to paste: $(tail -1 <<<"$out")" || fail "what there is to paste: $(grep -E 'FAIL|failed' <<<"$out" | sed -n '1,5p' | tr '\n' ' ')"
   out=$("$built/tools/tactus-ac-test" 2>&1); rc=$?
-  [[ $rc == 0 ]] && pass "words: $(tail -1 <<<"$out")" || fail "words: $(grep -E 'FAIL|failed|no dictionary' <<<"$out" | head -5 | tr '\n' ' ')"
+  [[ $rc == 0 ]] && pass "words: $(tail -1 <<<"$out")" || fail "words: $(grep -E 'FAIL|failed|no dictionary' <<<"$out" | sed -n '1,5p' | tr '\n' ' ')"
   # The trace and the debug lines, on: what they say of a run that types these words must not hold one
   out=$(TACTUS_TRACE=1 G_MESSAGES_DEBUG=all "$built/tools/tactus-typer-test" 2>&1 | grep -E -- '-Message: |DEBUG' || true)
   if ! grep -c -- '-Message: ' <<<"$out" >/dev/null; then
@@ -132,7 +132,7 @@ if [[ -n $built ]]; then
   elif ! grep -c 'DEBUG' <<<"$out" >/dev/null; then
     fail "no debug lines with G_MESSAGES_DEBUG=all"
   elif grep -qiE 'teh|wrold|zorblat|tomorow|github|bob@' <<<"$out"; then
-    fail "the trace or a debug line holds typed text: $(grep -iE 'teh|wrold|zorblat|tomorow|github|bob@' <<<"$out" | head -2)"
+    fail "the trace or a debug line holds typed text: $(grep -iE 'teh|wrold|zorblat|tomorow|github|bob@' <<<"$out" | sed -n '1,2p')"
   else
     pass "the trace and the debug lines ($(wc -l <<<"$out") lines) hold nothing that was typed"
   fi
@@ -147,9 +147,9 @@ if [[ -n $built ]]; then
         && pass "a new user's keyboard has Stevia's completion off" || fail "completion-mode defaults to $(gsettings get mobi.phosh.osk completion-mode 2>&1)"
     fi
     out=$(xvfb-run -a -s "-screen 0 1280x1024x24" "$built/tools/tactus-kbd-test" "$tmp2/out/kbd" 2>&1); rc=$?
-    [[ $rc == 0 ]] && pass "the keys: $(grep -E 'checks' <<<"$out" | tail -1)" || fail "the keys: $(grep -E 'FAIL|not ok|checks' <<<"$out" | head -5 | tr '\n' ' ')"
+    [[ $rc == 0 ]] && pass "the keys: $(grep -E 'checks' <<<"$out" | tail -1)" || fail "the keys: $(grep -E 'FAIL|not ok|checks' <<<"$out" | sed -n '1,5p' | tr '\n' ' ')"
     out=$(xvfb-run -a -s "-screen 0 1280x1024x24" "$built/tools/tactus-emoji-test" 2>&1); rc=$?
-    [[ $rc == 0 ]] && pass "the emoji page: $(grep -E 'checks' <<<"$out" | tail -1)" || fail "the emoji page: $(grep -E 'FAIL|not ok|checks' <<<"$out" | head -5 | tr '\n' ' ')"
+    [[ $rc == 0 ]] && pass "the emoji page: $(grep -E 'checks' <<<"$out" | tail -1)" || fail "the emoji page: $(grep -E 'FAIL|not ok|checks' <<<"$out" | sed -n '1,5p' | tr '\n' ' ')"
   else
     pass "the keys and the emoji page # SKIP no xvfb-run"
   fi
