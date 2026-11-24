@@ -10,9 +10,9 @@
 pkgname=omamobile-hotspot
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile shared Wi-Fi hotspot on its own interface (opt-in per device)"
+pkgdesc="Omamobile shared Wi-Fi hotspot on its own interface (opt-in per device)"
 arch=(aarch64)
-url="https://github.com/derekross/omarchy-mobile"
+url="https://github.com/derekross/omamobile"
 license=(MIT)
 depends=(bash systemd iw iproute2 networkmanager dnsmasq polkit)
 optdepends=('ufw: the hotspot opens DHCP, DNS and forwarding on its interface while it is on')
