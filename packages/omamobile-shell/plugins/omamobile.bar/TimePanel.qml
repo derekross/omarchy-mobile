@@ -146,10 +146,18 @@ Panel {
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.bodySmall
         }
-        Item { width: Math.max(0, zoneRow.width - zoneLabel.implicitWidth - zoneValue.implicitWidth - zoneRow.spacing * 2); height: 1 }
+        Item { width: Math.max(0, zoneRow.width - zoneLabel.implicitWidth - zoneValue.width - zoneRow.spacing * 2); height: 1 }
+        // A zone's abbreviation is shown when it is one (POSIX gives them
+        // three to six characters: HST, CEST, +0530); a zone file may carry
+        // a longer label there, which would only repeat the name. A long name
+        // is cut at the card's edge.
         Text {
           id: zoneValue
-          text: root.zone.replace(/_/g, " ") + (root.zoneAbbreviation ? " (" + root.zoneAbbreviation + ")" : "")
+          width: Math.min(implicitWidth, zoneRow.width - zoneLabel.implicitWidth - zoneRow.spacing * 2)
+          elide: Text.ElideRight
+          horizontalAlignment: Text.AlignRight
+          text: root.zone.replace(/_/g, " ")
+            + (root.zoneAbbreviation.length >= 3 && root.zoneAbbreviation.length <= 6 ? " (" + root.zoneAbbreviation + ")" : "")
           textFormat: Text.PlainText
           color: root.bar.foreground
           font.family: root.bar.fontFamily
