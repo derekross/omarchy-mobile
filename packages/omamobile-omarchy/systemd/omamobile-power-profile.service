@@ -1,0 +1,15 @@
+[Unit]
+Description=Omamobile: power profiles set the CPU ceilings
+Documentation=https://github.com/derekross/omamobile/issues/1027
+After=power-profiles-daemon.service
+Wants=power-profiles-daemon.service
+ConditionPathExists=/sys/devices/system/cpu/cpufreq/policy0
+
+[Service]
+ExecStart=/usr/lib/omamobile-omarchy/power-profile watch
+ExecStopPost=/usr/lib/omamobile-omarchy/power-profile restore
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
