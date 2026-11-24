@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# tools/extract-camera-data's AArch64 'adrp' decoding (no phone, no HAL, no
+# Camera HAL layouts and AArch64 'adrp' decoding (no phone, no HAL, no
 # unicorn or pyelftools needed): the page displacement is a signed 21-bit
 # page count, so a reference to a lower page must not land 8 GiB too high.
 # Synthetic instruction words in a stand-in image go through the tool's own
@@ -221,9 +221,61 @@ for label, pc, at in (("22 pages back", 0x18000, 0x2340),
     check(f"string reference, string {label}",
           lambda: tool.str_xrefs(img, KEY), [pc])
 
+# A November mode vector has a register list at the same offset in every
+# record. A second register list in some records must not hide the main one.
+stride = 1432
+modes = [(i * stride + 488, i) for i in range(4)]
+partial = [(stride + 424, 100), (3 * stride + 424, 101)]
+alternate = [(i * stride + 424, i) for i in range(4)]
+def layout(recs, size=4 * stride, rec_size=1424):
+    return tool.samsung_mode_layout(size, sorted(recs), rec_size)
+
+check("November records ignore incomplete alternate lists",
+      lambda: layout(modes + partial), (stride, modes))
+check("November records reject an unfamiliar size",
+      lambda: layout(modes, 4 * 1440), None)
+check("November records reject a missing register vector",
+      lambda: layout(modes[:-1]), None)
+check("November records reject two complete series",
+      lambda: layout(modes + alternate), None)
+check("incomplete November vector cannot fall back to a single July list",
+      lambda: layout(modes[:1]), None)
+july = [(488, 0), (488 + 1424, 1)]
+check("incomplete November vector cannot fall back to July list spacing",
+      lambda: layout(july), None)
+check("July vector still uses July spacing", lambda: layout(july, 2 * 1424), (1424, july))
+part = [(488, 0), (488 + 1264, 1)]
+check("part-specific vector keeps its configured stride",
+      lambda: layout(part, 2 * 1264, 1264), (1264, part))
+common = 254896  # 178 November records or 179 July records
+old = [(off, 0) for off in range(488, common, 1424)]
+new = [(off, 0) for off in range(424, common, stride)]
+check("byte size shared by both layouts can have one complete series",
+      lambda: layout(new, common), (stride, new))
+check("byte size shared by both layouts rejects two complete series",
+      lambda: layout(set(old + new), common), None)
+
+# These synthetic C-PHY operations have one lane. The renamed calls should
+# produce the same operations as the original layout, with no mixed layouts.
+def phy_layout(write, update):
+    calls = [(write, 10, 0x100, 0, 0),
+             (write, 10, 0x1000, 7, 0),
+             (update, 10, 0x130, 3, 0xff)]
+    try:
+        return tool.phy_ops(calls, tool.DCPHY_CPHY, 1)
+    except SystemExit as error:
+        return str(error)
+
+ops = [(tool.DCPHY_BIAS, tool.DCPHY_WRITE, 0, 7, 0),
+       (tool.DCPHY_LANE, tool.DCPHY_UPDATE, 0x30, 3, 0xff)]
+check("original PHY write slots", lambda: phy_layout(0x60, 0x70), ops)
+check("November PHY write slots", lambda: phy_layout(0x68, 0x78), ops)
+check("mixed PHY write slots are rejected", lambda: phy_layout(0x60, 0x78),
+      "error: PHY setup: unexpected call slot 0x78")
+
 if failures:
-    sys.exit(f"not ok - {len(failures)} adrp decoding check(s) failed")
-print("ok - adrp page displacements are signed in every finder")
+    sys.exit(f"not ok - {len(failures)} camera extractor check(s) failed")
+print("ok - camera extractor checks passed")
 PY
 
 python3 -I -B tests/extract-camera-sve.py

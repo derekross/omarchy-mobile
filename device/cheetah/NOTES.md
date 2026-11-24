@@ -2,6 +2,49 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-11-22: slot B boot success on the November Android 17 base
+
+The signed 2026.11.15 release booted on a Pixel 7 Pro running stock
+`CP4A.261105.040.A1` firmware (bootloader `cloudripper-17.0-16466937`,
+baseband `g5300q-260818-261007-B-16536936`). Its boot-success service
+refused the phone's 3.19 `devinfo` layout. The kernel throughout was
+`7.3.0-rc6-omamobile-gda171eae4cb7`.
+
+On each diagnostic boot, Linux read the eight slot bytes with the storage
+guard closed. A direct restart into Fastboot gave the bootloader's flags for
+the same state. There was no slot selection between these two boots.
+
+| Slot B boot | A bytes (0x30–33) | B bytes (0x34–37) | Fastboot |
+| --- | --- | --- | --- |
+| First | `01 08 00 00` | `02 04 00 00` | B active, both slots bootable and unsuccessful, A retry 1, B retry 2 |
+| Second | `01 08 00 00` | `01 0c 00 00` | B active, both slots bootable and unsuccessful, A retry 1, B retry 1 |
+
+B also gained the `fastboot_ok` bit between the Linux readings. The
+Fastboot comparison covered the active slot, bootability, success and retries.
+
+On a later normal boot, the installed 0.1.60-1 boot-success unit ran the
+candidate ARM64 helper through a service-specific read-only bind mount.
+A read-only preflight saved the complete 8192 bytes before the service
+ran. The subsequent read differed only at offset `0x35` (`04` to `06`).
+Both the partition and its parent disk were read-only again. Fastboot
+reported B successful and bootable with one retry. A further normal B
+boot saw the existing mark, passed all six required `phone-smoke` checks,
+and had no failed systemd units. The modem reported ONLINE after its
+manifest was refreshed from the same phone's post-Recovery backup. All
+six radio and calibration partitions still matched that backup.
+
+The extractor produced the same four sensor files and DC-PHY settings
+from the July and November factory images. After installing the five
+November files and rebooting into B, the main, front, ultrawide and
+telephoto cameras each delivered four nonempty 640×480 RGBA frames
+through PipeWire. Each GStreamer pipeline reached end of stream and
+discarded the frames. The matching libcamera tools listed all four
+cameras. The modem remained ONLINE on this boot. The optional kernel-log
+check still reported three CPIF receive errors for an unopened channel.
+
+The factory index keeps the November build untested pending a signed
+release containing the repair.
+
 ## 2026-11-14: the release kernel for kernel-2026.11.15 boots, with the modem's sleep series
 
 The kernel that will be tagged `kernel-2026.11.15` is linux-omamobile's

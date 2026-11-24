@@ -28,8 +28,9 @@ in the virtual table changes between HAL builds, so the tool searches a
 few slots for them and prints the ones whose lists pass its checks.
 
 Checked against the Pixel 7 Pro's camera HAL from the factory images
-CP2A.260705.006 (liblyric_hwl.so sha256 ce9acaad...) and
-CP3A.261005.002.A1 (d8f9abb0...): both give the same five files.
+CP2A.260705.006 (liblyric_hwl.so sha256 ce9acaad...),
+CP3A.261005.002.A1 (d8f9abb0...) and CP4A.261105.040.A1 (8b62c456...):
+all give the same five files.
 
 Every run also writes the DC-PHY receive settings (gs201-dcphy.bin), for
 D-PHY and C-PHY links alike: the HAL's PHY setup function is run once per
@@ -705,9 +706,11 @@ SAMSUNG_THIS_SIZE = 0x4000
 SAMSUNG_PAGE = 0xFCFC           # direct-access page; 0x4000 holds the CCS registers
 SAMSUNG_CCS_PAGE = 0x4000
 SAMSUNG_DELAY = 2**64 - 1       # a list record that is a delay in us, not a write
-# The HAL's mode records [HAL layout]: 1424 bytes, the pixel rate (pixels/s)
-# as a 32-bit word at 0x150. A part's "rec" overrides both.
+# The Pixel 7 Pro's July and October HALs use 1424-byte mode records.
+# November uses 1432 bytes; the pixel rate remains a 32-bit word at
+# 0x150. A part's "rec" overrides the default size and rate offset.
 SAMSUNG_REC_SIZE = 1424
+SAMSUNG_NOVEMBER_REC_SIZE = 1432
 SAMSUNG_REC_PIXEL_RATE = 0x150
 
 
@@ -868,15 +871,40 @@ def samsung_list(emu, ptr, count):
 
 
 def samsung_mode_vector(emu, begin):
-    """The [begin, end) vector a mode selector returned the begin of."""
+    """The byte size and register lists of a mode selector's vector."""
     for a in range(HEAP_BASE, emu.heap, 8):
         if emu.u64(a) == begin:
             end = emu.u64(a + 8)
             if begin < end <= emu.heap:
                 recs = gn1_mode_records(emu, begin, end)
                 if recs:
-                    return recs
+                    return end - begin, recs
     return None
+
+
+def samsung_mode_layout(size, recs, rec_size):
+    """Select a supported record stride and its register lists."""
+    if rec_size != SAMSUNG_REC_SIZE or size % SAMSUNG_NOVEMBER_REC_SIZE:
+        # The older HAL and parts with their own layout use consecutive lists.
+        if recs and all(b[0] - a[0] == rec_size for a, b in zip(recs, recs[1:])):
+            return rec_size, recs
+        return None
+
+    # November's vector size identifies it even if just one list survives
+    # the register checks, or if a partial series looks like July's spacing.
+    # When both strides divide the byte size, require a unique complete series.
+    complete = []
+    for stride in (SAMSUNG_NOVEMBER_REC_SIZE, rec_size):
+        count, remainder = divmod(size, stride)
+        if remainder or count < 2:
+            continue
+        groups = {}
+        for off, regs in recs:
+            groups.setdefault(off % stride, []).append((off, regs))
+        for offset, group in groups.items():
+            if offset + 24 <= stride and [off for off, _ in group] == list(range(offset, size, stride)):
+                complete.append((stride, group))
+    return complete[0] if len(complete) == 1 else None
 
 
 def samsung_ccs(regs, page=SAMSUNG_CCS_PAGE):
@@ -892,7 +920,7 @@ def samsung_ccs(regs, page=SAMSUNG_CCS_PAGE):
 
 
 def samsung_candidates(emu, chip, rec_size=SAMSUNG_REC_SIZE, name=None):
-    """(init, [(record address, mode list)]) per driver variant."""
+    """(init, [(record address, mode list)], stride) per driver variant."""
     fn = samsung_model_fn(emu, chip)
     tables = gn1_vtables(emu, fn)
     if not tables:
@@ -921,20 +949,20 @@ def samsung_candidates(emu, chip, rec_size=SAMSUNG_REC_SIZE, name=None):
                 count = emu.uc.reg_read(A.UC_ARM64_REG_X1)
                 init = samsung_list(emu, ptr, count) if 0 < count < 20000 else None
                 begin = emu.call(modes_fn, obj)
-                recs = samsung_mode_vector(emu, begin) if init else None
+                vector = samsung_mode_vector(emu, begin) if init else None
             except EMU_ERRORS:
                 continue
-            if not recs:
+            if not vector:
                 continue
-            offs = [off for off, _ in recs]
-            stride = offs[1] - offs[0] if len(offs) > 1 else rec_size
-            if stride != rec_size or any(b - a != stride for a, b in
-                                                 zip(offs, offs[1:])):
-                strides.add(stride)
+            size, recs = vector
+            layout = samsung_mode_layout(size, recs, rec_size)
+            if layout is None:
+                strides.update(b[0] - a[0] for a, b in zip(recs, recs[1:]))
                 continue
-            first = offs[0] % stride
+            stride, recs = layout
+            first = recs[0][0] % stride
             out.append((init, [(begin + off - first, [(r, v, 0) for r, v in regs])
-                               for off, regs in recs]))
+                               for off, regs in recs], stride))
         return out
 
     out = find_layout(emu, name or f"0x{chip:04x}", tables, probe)
@@ -970,7 +998,7 @@ def samsung_mode_info(emu, init, rec, regs, part=None):
         # the record's first words: its minimum and maximum frame rate
         # (floats) and its output size [HAL layout]
         _, max_fps, rw, rh = struct.unpack("<ffII", emu.read(rec, 16))
-        if (rw, rh) != (w, h) or abs(max_fps - fps) > fps / 200:
+        if (rw, rh) != (w, h) or not abs(max_fps - fps) <= fps / 200:
             die(f"mode {w}x{h}: the record says {rw}x{rh} at {max_fps:.2f} fps, "
                 f"the registers {fps:.2f}: unknown HAL version")
     if "link_rec" in p:
@@ -1001,7 +1029,9 @@ def build_samsung(hal, part):
     cands.sort(key=lambda c: -len(c[1]))
     if len(cands) > 1 and len(cands[0][1]) == len(cands[1][1]):
         die(f"{part}: {len(cands)} drivers with {len(cands[0][1])} modes, can't choose")
-    init, recs = cands[0]
+    init, recs, stride = cands[0]
+    if stride == SAMSUNG_NOVEMBER_REC_SIZE:
+        p = dict(p, rec=(stride, SAMSUNG_REC_PIXEL_RATE))
     n = len(p["reset"])
     if [(r, v) for r, v, _ in init[:n]] != p["reset"]:
         die(f"{part}: the init list doesn't start with the expected soft reset")
@@ -1083,10 +1113,10 @@ def build_imx712(hal):
             if not init or 0x0136 not in regs_dict(init):
                 return []
             begin = emu.call(modes_sel, this)
-            recs = samsung_mode_vector(emu, begin)
+            vector = samsung_mode_vector(emu, begin)
         except EMU_ERRORS:
             return []
-        return [(init, begin, recs)] if recs else []
+        return [(init, begin, vector[1])] if vector else []
 
     found = find_layout(emu, "IMX712", tables, probe)
     if len(found) != 1:
@@ -1128,10 +1158,11 @@ DCPHY_WRITE, DCPHY_UPDATE, DCPHY_RATE = 0, 1, 2     # operations
 # (HAL layout): region 10 is the DC-PHY, the bias block at 0x1000; from the
 # link's base, its clock lane (D-PHY) and then one 0x100 block per data lane
 # or trio. The access object's virtual table has a write at 0x60 and a
-# masked write at 0x70. Its arguments: (this, lanes or trios, rate in Hz
-# (signed 32-bit), C-PHY flag, base).
+# masked write at 0x70, moved one slot forward in November. Its arguments:
+# (this, lanes or trios, rate in Hz (signed 32-bit), C-PHY flag, base).
 PHY_REGION = 0xA
 PHY_SLOT_WRITE, PHY_SLOT_UPDATE = 0x60, 0x70
+PHY_NOVEMBER_SLOTS = (0x68, 0x78)
 PHY_BIAS = 0x1000
 PHY_LANE = 0x100
 PHY_GNR_CON0 = 0x00         # lane enable
@@ -1206,12 +1237,15 @@ def phy_ops(calls, kind, lanes):
     bias, then the clock lane (D-PHY), then each lane with the same writes.
     The lane-disable writes ahead of the bias block are dropped: the driver
     turns the lanes off itself first. Returns one lane's operations."""
+    write_slot, update_slot = PHY_SLOT_WRITE, PHY_SLOT_UPDATE
+    if {slot for slot, *_ in calls} == set(PHY_NOVEMBER_SLOTS):
+        write_slot, update_slot = PHY_NOVEMBER_SLOTS
     out = []
     started = False
     for slot, region, off, val, mask in calls:
         if region != PHY_REGION:
             die(f"PHY setup wrote region {region}, expected {PHY_REGION}")
-        if slot not in (PHY_SLOT_WRITE, PHY_SLOT_UPDATE):
+        if slot not in (write_slot, update_slot):
             die(f"PHY setup: unexpected call slot {slot:#x}")
         if PHY_BIAS <= off < PHY_BIAS + PHY_LANE:
             block, lane, o = DCPHY_BIAS, None, off - PHY_BIAS
@@ -1225,10 +1259,10 @@ def phy_ops(calls, kind, lanes):
         else:
             die(f"PHY setup wrote unexpected offset {off:#x}")
         if not started:
-            if slot != PHY_SLOT_WRITE or o != PHY_GNR_CON0 or val:
+            if slot != write_slot or o != PHY_GNR_CON0 or val:
                 die("PHY setup: a write other than a lane disable before the bias block")
             continue
-        if slot == PHY_SLOT_WRITE:
+        if slot == write_slot:
             out.append((block, lane, DCPHY_WRITE, o, val, 0))
         else:
             if not mask or val & ~mask:

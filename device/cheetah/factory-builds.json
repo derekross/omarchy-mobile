@@ -1,8 +1,19 @@
 {
   "format": 1,
   "codename": "cheetah",
-  "updated": "2026-11-10",
+  "updated": "2026-11-22",
   "builds": [
+    {
+      "build": "CP4A.261105.040.A1",
+      "bootloader": "cloudripper-17.0-16466937",
+      "baseband": "g5300q-260818-261007-B-16536936",
+      "zip": "cheetah-cp4a.261105.040.a1-factory-b255f8dd.zip",
+      "url": "https://dl.google.com/dl/android/aosp/cheetah-cp4a.261105.040.a1-factory-b255f8dd.zip",
+      "page": "https://developers.google.com/android/images#cheetah",
+      "sha256": "b255f8dd30041fad74cb4985f26770b37643914f9fa5eea5a18b1f92e0b45e91",
+      "size": 3945810576,
+      "tested": false
+    },
     {
       "build": "CP3A.261005.002.A1",
       "bootloader": "cloudripper-17.0-15902555",

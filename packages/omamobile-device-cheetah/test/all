@@ -53,6 +53,9 @@ grep -q '0x35: 04 -> 06' <<<"$plan" || fail "mark-successful plans one byte (0x3
 cmp -s "$tmp/devinfo" "$tmp/devinfo.orig" || fail "a dry run writes nothing"
 pass "bootctl dry run plans one byte and writes nothing"
 
+python3 test/bootctl-layout.py "$tmp/build/omamobile-bootctl"
+pass "bootctl 3.19 marks only active, bootable B and preserves all other bytes"
+
 # The [omamobile] channel: installed phones follow stable, the file is kept
 # across upgrades (backup=), and a phone that read its own repository keeps
 # reading it after the upgrade that changes the default.

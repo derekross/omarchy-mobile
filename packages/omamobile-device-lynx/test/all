@@ -130,6 +130,23 @@ if grep -q 'OMAMOBILE_DEVINFO_EXTRA_MINOR' build; then
 fi
 pass "bootctl refuses 3.14 and the shipped build refuses 3.11"
 
+# Use an otherwise eligible, active B to check that 3.19 stays read-only on lynx.
+python3 - "$tmp/devinfo" "$tmp/devinfo319" <<'PY'
+from pathlib import Path
+import sys
+
+image = bytearray(Path(sys.argv[1]).read_bytes())
+image[6:8] = (19).to_bytes(2, 'little')
+Path(sys.argv[2]).write_bytes(image)
+PY
+cp "$tmp/devinfo319" "$tmp/devinfo319.orig"
+if "$tmp/build/omamobile-bootctl" mark-successful "$tmp/devinfo319" b --i-understand >"$tmp/refusal" 2>&1; then
+  fail "the lynx build accepted devinfo 3.19"
+fi
+grep -q 'refusing to write' "$tmp/refusal" && cmp -s "$tmp/devinfo319.orig" "$tmp/devinfo319" \
+  || fail "the lynx build must refuse 3.19 without changing the image"
+pass "cheetah's devinfo 3.19 support stays out of the lynx build"
+
 ./install "$tmp/root" "$tmp/build"
 for f in usr/bin/reboot-to usr/bin/omamobile-bootctl usr/bin/omamobile-boot-success \
          usr/lib/systemd/system/omamobile-boot-success.service \
