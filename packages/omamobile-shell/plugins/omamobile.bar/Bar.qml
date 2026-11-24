@@ -3,6 +3,7 @@ import QtQuick
 import Qt.labs.folderlistmodel
 import Quickshell
 import Quickshell.Bluetooth
+import Quickshell.Hyprland
 import Quickshell.Io
 import Quickshell.Networking
 import Quickshell.Services.UPower
@@ -104,6 +105,99 @@ Item {
     onExited: { root.cell = null; cellRestart.restart() }
   }
   Timer { id: cellRestart; interval: 5000; onTriggered: cellWatch.running = true }
+
+  // The hardware keyboard's layout (EN, GR...) beside the clock, only while
+  // a real keyboard has more than one layout. A switch is read from the
+  // activelayout event itself (keyboard,description, via event.parse(2)), as
+  // Omarchy 4.5's bar widget does; squeekboard's own events are ignored.
+  // The devices are read (omamobile-keyboards for which ones are real
+  // keyboards, by #866's bus/key rule, then `hyprctl -j devices`) at start,
+  // after configreloaded, when an activelayout comes from a keyboard not in
+  // the last read (one connected later), and every 10 s while the label
+  // shows, so it goes away when the keyboard does. A read that started
+  // before a switch keeps the switch's layout. A switch event counts only
+  // from a keyboard the last read found real; one from a device it has not
+  // seen at all starts a read, and one from a device it saw but didn't find
+  // real starts one 10 s after the last read at the earliest (deferred, not
+  // dropped: udev may not have tagged a keyboard yet at the first read). If
+  // omamobile-keyboards is missing or fails, no label shows and the log says
+  // why, once. `xkbcli list` runs once, when
+  // a label is first needed.
+  property int layoutCount: 0
+  property string layoutDescription: ""
+  property var layoutBriefs: ({})
+  property var layoutKeyboards: []
+  property var layoutSeen: []
+  property bool layoutWarned: false
+  property double layoutReadMs: 0
+  property bool layoutReread: false
+  property int layoutSwitches: 0
+  readonly property string layoutLabel: layoutCount > 1 ? StatusModel.shortLabel(layoutDescription, layoutBriefs) : ""
+  onLayoutCountChanged: if (layoutCount > 1 && !briefsRead.ran) { briefsRead.ran = true; briefsRead.running = true }
+  function readLayouts() {
+    if (layoutRead.running) layoutReread = true
+    else layoutRead.running = true
+  }
+  Process {
+    id: layoutRead
+    property int switchesAtStart: 0
+    command: ["sh", "-c", "omamobile-keyboards || { echo; echo " + StatusModel.keyboardsFailed + "; }; echo " + StatusModel.readSeparator + "; exec hyprctl -j devices"]
+    running: true
+    onRunningChanged: if (running) { switchesAtStart = root.layoutSwitches; root.layoutReadMs = Date.now() }
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        const r = StatusModel.splitRead(text)
+        const st = r ? StatusModel.layoutState(r.devices, r.real) : null
+        if (!st) return
+        if (r.failed && !root.layoutWarned) {
+          root.layoutWarned = true
+          console.warn("bar: omamobile-keyboards is missing or failed, so no keyboard layout label")
+        }
+        root.layoutCount = st.count
+        // a switch's event arrived while this read ran: its layout is newer
+        if (layoutRead.switchesAtStart === root.layoutSwitches) root.layoutDescription = st.description
+        root.layoutKeyboards = st.names
+        root.layoutSeen = (StatusModel.layoutState(r.devices) || st).names
+      }
+    }
+    onExited: if (root.layoutReread) { root.layoutReread = false; running = true }
+  }
+  Timer {
+    interval: 10000
+    repeat: true
+    running: root.layoutLabel !== ""
+    onTriggered: root.readLayouts()
+  }
+  // a seen-but-not-real device's event: read again when 10 s have passed
+  // since the last read, so the switch isn't lost
+  Timer { id: layoutLater; onTriggered: root.readLayouts() }
+  Process {
+    id: briefsRead
+    property bool ran: false
+    command: ["xkbcli", "list", "--load-exotic"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.layoutBriefs = StatusModel.layoutBriefs(text)
+    }
+  }
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      if (!event) return
+      if (event.name !== "activelayout" && event.name !== "configreloaded") return
+      const fields = event.name === "activelayout" && typeof event.parse === "function" ? event.parse(2) : event.data
+      if (event.name === "activelayout") {
+        const d = StatusModel.eventLayout(fields, root.layoutKeyboards)
+        if (d !== null) { root.layoutDescription = d; root.layoutSwitches++ }
+      }
+      if (StatusModel.needsDeviceRead(event.name, fields, root.layoutSeen)) root.readLayouts()
+      else if (StatusModel.needsDeviceRead(event.name, fields, root.layoutKeyboards) && !layoutLater.running) {
+        layoutLater.interval = Math.max(0, 10000 - (Date.now() - root.layoutReadMs))
+        layoutLater.start()
+      }
+    }
+  }
 
   // A call in progress: a chip with its time beside the clock. omatel's
   // agent through bin/omamobile-call-watch --observe (the call card runs
@@ -313,6 +407,21 @@ Item {
           font.bold: true
         }
 
+        Text {
+          id: layoutText
+          objectName: "layoutLabel"
+          visible: root.layoutLabel !== ""
+          anchors.left: clockText.right
+          anchors.leftMargin: Style.spacing.lg
+          anchors.verticalCenter: parent.verticalCenter
+          textFormat: Text.PlainText
+          text: root.layoutLabel
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          font.bold: true
+        }
+
         // The call in progress, beside the clock; a tap opens the Phone
         // app's in-call screen (the bar is never shown over the lock).
         Rectangle {
@@ -320,7 +429,8 @@ Item {
           objectName: "callChip"
           visible: root.callChip !== ""
           z: 2
-          anchors.left: clockText.right
+          // after the layout label, or the clock when the label is hidden
+          anchors.left: layoutText.visible ? layoutText.right : clockText.right
           anchors.leftMargin: Style.spacing.lg
           anchors.verticalCenter: parent.verticalCenter
           height: Math.round(root.barSize * 0.66)
