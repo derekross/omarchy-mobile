@@ -12,33 +12,46 @@ case $want in on | off) ;; *) echo "usage: tile-action.sh TILE on|off" >&2; exit
 
 case $tile in
   airplane)
-    # With omamobile-sitd running and its state saying the owner's radio
-    # choice (radio_choice), airplane mode is the cellular radio (omamobile-sit
-    # radio: AT+CFUN, calls, SMS and data set up again by sitd when it comes
-    # back on); Wi-Fi and Bluetooth stay as the owner has them, and their own
-    # tiles still switch them. The session user is in sitd's control group.
-    # An older sitd's state doesn't follow its own radio off, so the tile could
-    # only ever turn the radio off: there it keeps to the rfkill switches.
-    sit_state=${OMAMOBILE_SIT_STATE:-/run/omamobile-sit/state.json}
-    if command -v omamobile-sit >/dev/null 2>&1 && [ -r "$sit_state" ] \
-        && grep -c '"radio_choice"' "$sit_state" >/dev/null 2>&1; then
-      if [ "$want" = on ]; then exec omamobile-sit radio off; else exec omamobile-sit radio on; fi
-    fi
-    # Without sitd: Wi-Fi, Bluetooth and WWAN switches only: NFC keeps its own
-    # tile, as on Android. Turning airplane mode off unblocks what was on
-    # before it, so a radio the user had switched off stays off.
+    # Wi-Fi, Bluetooth and WWAN switches, and the cellular radio where sitd
+    # can switch it: NFC keeps its own tile, as on Android. Turning airplane
+    # mode off unblocks what was on before it, so a radio the user had
+    # switched off stays off; Wi-Fi and Bluetooth can be turned back on by
+    # hand in airplane mode with their own tiles.
     restore="$state_dir/airplane-restore"
-    if [ "$want" = on ]; then
+    radios_off() {
       mkdir -p "$state_dir"
       rfkill -rn -o TYPE,SOFT | awk '($1 == "wlan" || $1 == "bluetooth" || $1 == "wwan") && $2 == "unblocked" { print $1 }' \
         | sort -u >"$restore"
       for type in wlan bluetooth wwan; do rfkill block "$type" 2>/dev/null; done
-    else
+    }
+    radios_back() {
       types=$(cat "$restore" 2>/dev/null)
       [ -n "$types" ] || types="wlan bluetooth"
       for type in $types; do rfkill unblock "$type" 2>/dev/null; done
       rm -f "$restore"
+    }
+    # The cellular radio goes through omamobile-sitd (omamobile-sit radio:
+    # AT+CFUN, calls, SMS and data set up again by sitd when it comes back
+    # on) only when its state says the owner's radio choice (radio_choice).
+    # An older sitd's state doesn't follow its own radio off, so the tile
+    # could only ever turn the radio off: there it keeps to the switches. The
+    # session user is in sitd's control group.
+    sit_state=${OMAMOBILE_SIT_STATE:-/run/omamobile-sit/state.json}
+    if command -v omamobile-sit >/dev/null 2>&1 && [ -r "$sit_state" ] \
+        && grep -c '"radio_choice"' "$sit_state" >/dev/null 2>&1; then
+      if [ "$want" = on ]; then
+        # The cellular radio first: sitd refuses during a call, and then
+        # nothing else changes either.
+        omamobile-sit radio off || exit 1
+        radios_off
+      else
+        omamobile-sit radio on; status=$?
+        radios_back
+        exit "$status"
+      fi
+      exit 0
     fi
+    if [ "$want" = on ]; then radios_off; else radios_back; fi
     exit 0
     ;;
   hotspot)

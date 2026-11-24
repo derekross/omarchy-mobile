@@ -6,8 +6,9 @@
 # Nothing here writes; each probe is bounded by timeout so a hung daemon
 # cannot hold the sheet's refresh.
 #
-#   airplane      with omamobile-sitd running: on while its public state
-#                 says the cellular radio is off; otherwise on when every
+#   airplane      with omamobile-sitd running (and its state saying the
+#                 owner's radio choice): on while its public state says the
+#                 cellular radio is off; otherwise on when every
 #                 Wi-Fi, Bluetooth and WWAN rfkill switch is soft-blocked
 #                 (none without such a switch)
 #   hotspot       on while NetworkManager's "Hotspot" connection is up
