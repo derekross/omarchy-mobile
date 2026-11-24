@@ -677,12 +677,32 @@ PY
 # in Neovim plugins and Alpine's libc), and each literal of the identifiers
 # file as a whole word (not where it is the holder of a copyright notice,
 # "Copyright (c) YEAR <name>": Omarchy's licence header in a patch names the
-# project's, as LICENSE does). Prints each finding; fails when there is one.
+# project's, as LICENSE does). Prints each finding and any input that can't
+# be read or is of an unsupported type; exits 1 on findings, 2 on unreadable
+# or unsupported inputs, 3 on both.
 scan_identifiers() {
   python3 -I - "$(id -un)" "$@" <<'PY'
-import os, re, sys
+import errno, os, re, stat, sys
 builder, ids_file, paths = sys.argv[1], sys.argv[2], sys.argv[3:]
-lits = [l.strip() for l in open(ids_file, encoding="utf-8") if l.strip() and not l.lstrip().startswith("#")]
+errors = 0
+def error(path, what, msg):
+    global errors
+    errors += 1
+    if errors <= 40:
+        if isinstance(msg, OSError):
+            msg = msg.strerror or str(msg)
+        print("    %s: %s: %s" % (path, what, str(msg)[:120]))
+MODES = {stat.S_IFIFO: "FIFO", stat.S_IFSOCK: "socket", stat.S_IFBLK: "block device", stat.S_IFCHR: "character device"}
+def mode_name(mode):
+    fmt = stat.S_IFMT(mode)
+    return MODES.get(fmt, "mode %#o" % fmt)
+try:
+    with open(ids_file, encoding="utf-8") as fh:
+        lits = [l.strip() for l in fh if l.strip() and not l.lstrip().startswith("#")]
+except OSError as e:
+    error(ids_file, "unreadable identifiers file", e)
+    print("    %d unreadable input(s)" % errors)
+    sys.exit(2)
 # A MAC as tools/pr-check reads one (see its comment), each judged in the
 # colon form; the lookahead only skips offsets where no match can start
 mac = re.compile(rb"(?i)(?=[0-9a-f:\-hm])(?:"
@@ -705,8 +725,10 @@ def report(path, what, text):
 def scan(path, data=None):
     if data is None:
         try:
-            data = open(path, "rb").read()
-        except OSError:
+            with open(path, "rb") as fh:
+                data = fh.read()
+        except OSError as e:
+            error(path, "unreadable file", e)
             return
     pos = 0
     while m := mac.search(data, pos):
@@ -741,16 +763,30 @@ def scan_link(path):
     try:
         target = os.fsencode(os.readlink(path))
     except OSError as e:
-        report(path + " (symlink target)", "unreadable link", str(e).encode("utf-8", "replace"))
+        error(path + " (symlink target)", "unreadable link", e)
         return
     scan(path + " (symlink target)", target)
 for p in paths:
-    # Strip trailing slashes so islink sees an explicit directory symlink itself.
+    # Strip trailing slashes so lstat sees an explicit directory symlink itself.
     q = p.rstrip("/") or p[:1]
-    if os.path.islink(q):
+    try:
+        lst = os.lstat(q)
+    except OSError as e:
+        error(p, "unreadable input", e)
+        continue
+    if stat.S_ISLNK(lst.st_mode):
         scan_link(q)
-    if os.path.isdir(p):
-        for top, dirs, names in os.walk(p):
+        try:
+            st = os.stat(p)
+        except OSError as e:
+            # An explicit dangling symlink (no trailing slash) has only its link text to scan.
+            if e.errno not in (errno.ENOENT, errno.ENOTDIR) or p != q:
+                error(p, "unreadable input", e)
+            continue
+    else:
+        st = lst
+    if stat.S_ISDIR(st.st_mode):
+        for top, dirs, names in os.walk(p, onerror=lambda e, r=p: error(e.filename or r, "unreadable directory", e)):
             # os.walk puts directory symlinks in dirs without descending into them.
             for n in dirs:
                 f = os.path.join(top, n)
@@ -758,16 +794,38 @@ for p in paths:
                     scan_link(f)
             for n in names:
                 f = os.path.join(top, n)
-                if os.path.islink(f):
+                try:
+                    nst = os.lstat(f)
+                except OSError as e:
+                    error(f, "unreadable input", e)
+                    continue
+                if stat.S_ISLNK(nst.st_mode):
                     scan_link(f)
-                elif os.path.isfile(f):
+                elif stat.S_ISREG(nst.st_mode):
                     scan(f)
-    elif os.path.isfile(p):
+                else:
+                    error(f, "unsupported input", mode_name(nst.st_mode))
+    elif stat.S_ISREG(st.st_mode):
         scan(p)
+    else:
+        error(p, "unsupported input", mode_name(st.st_mode))
 if found:
     print("    %d finding(s)" % found)
-    sys.exit(1)
+if errors:
+    print("    %d unreadable input(s)" % errors)
+if found or errors:
+    sys.exit((1 if found else 0) | (2 if errors else 0))
 PY
+}
+
+scan_fail() {
+  local rc=$1 release=${2:-}
+  case $rc in
+    1) die "identifiers found (above)${release:+; nothing ships until they are gone}" ;;
+    2) die "scan could not read every input (above)${release:+; nothing ships without a complete scan}" ;;
+    3) die "identifiers found and some inputs could not be read (above)${release:+; nothing ships until both are fixed}" ;;
+    *) die "identifier scan failed (exit $rc)${release:+; nothing ships without a complete scan}" ;;
+  esac
 }
 
 # Files in bundle DIR that tools/make-bundle doesn't put there, one per line.
@@ -821,10 +879,13 @@ st_identifiers() {
   # The release initramfs the boot images carry
   mkdir -p "$t/initramfs"
   lz4 -dc "$RELEASE_KERNEL_OUT/initramfs.cpio.lz4" | (cd "$t/initramfs" && cpio -id --quiet --no-absolute-filenames 2>/dev/null) || true
+  # debugfs rdump and cpio -id keep the image's modes, so a mode-0000 file or
+  # directory in the image would otherwise be unreadable to the builder
+  chmod -R u+rX -- "$t/rootfs" "$t/initramfs"
   list=("$dir" "$rel/rootfs-files.txt" "$t/rootfs" "$t/initramfs" "$manifest")
   if [[ -f $notes ]]; then list+=("$notes"); else note "no $notes yet: run this stage again once it is written (the tag stage needs it)"; fi
   say "Scanning the bundle, the root image's file list and configuration, the initramfs, the MANIFESTs$([[ -f $notes ]] && echo ', the notes')"
-  scan_identifiers "$ids" "${list[@]}" || die "identifiers found (above); nothing ships until they are gone"
+  scan_identifiers "$ids" "${list[@]}" || scan_fail "$?" release
   note "no MAC address, serial, IMEI, builder's home path or listed identifier"
   # No file from a factory image: tools/extract-vendor-firmware's targets,
   # the vendor chroots, Trusty state
@@ -953,7 +1014,7 @@ case $stage in
     (($#)) || die "scan needs files or directories"
     ids=${RELEASE_IDENTIFIERS:-$HOME/.config/omamobile/release-identifiers}
     [[ -f $ids ]] || die "no $ids (or set RELEASE_IDENTIFIERS)"
-    scan_identifiers "$ids" "$@" || die "identifiers found (above)"
+    scan_identifiers "$ids" "$@" || scan_fail "$?"
     note "no MAC address, serial, IMEI, builder's home path or listed identifier in $*"
     ;;
   *) die "unknown stage $stage (see --help)" ;;
