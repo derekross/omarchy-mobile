@@ -117,9 +117,9 @@
 #                            it looked at is the one that is written
 #     --verify-only          check the files (a bundle's signature, checksums,
 #                            manifest.json, root image, AVB_FOOTERS image sizes
-#                            and slot B's ramdisk, read in a directory of its
-#                            own in --work that it removes) and stop before
-#                            the phone is contacted
+#                            and footers, and slot B's ramdisk, read in a
+#                            directory of its own in --work that it removes)
+#                            and stop before the phone is contacted
 #
 # Answers are read from standard input, so they can be piped for tests and by
 # the guided installer, which sets OMAMOBILE_INSTALL_GUIDED=1: the questions
@@ -694,14 +694,36 @@ if [[ " $BOOT_IMAGES " == *" vendor_kernel_boot "* ]]; then ramdisk_image=vendor
 elif [[ " $BOOT_IMAGES " == *" vendor_boot "* ]]; then ramdisk_image=vendor_boot; fi
 [[ -z $ramdisk_image || -z ${avb_size[$ramdisk_image]:-} ]] ||
   die "$conf: AVB_FOOTERS names $ramdisk_image, which carries the ramdisk: the owner's key can't be added to a signed image"
-# An AVB_FOOTERS image is padded to its declared partition size (bin/omamobile
-# images), because ABL reads the footer from the end of the partition: refuse a
-# short or oversized image before contacting the phone (and in --verify-only).
+# An AVB_FOOTERS image is padded to its declared partition size and carries a
+# 64-byte AVB footer starting with "AVBf" at the end of the image
+# (bin/omamobile images), because ABL reads the footer from the end of the
+# partition: refuse a short, oversized or footerless image before contacting
+# the phone (and in --verify-only).
 for p in $BOOT_IMAGES; do
   [[ -n ${avb_size[$p]:-} ]] || continue
   isize=$(stat -c %s "$images/$p.img")
   ((isize == avb_size[$p])) ||
     die "$p.img is $isize bytes, not the ${avb_size[$p]} bytes $conf's AVB_FOOTERS pads it to (bin/omamobile images)"
+  avb_rc=0
+  python3 -I - "$images/$p.img" <<'PY' || avb_rc=$?
+import os, sys
+try:
+    with open(sys.argv[1], "rb") as f:
+        f.seek(0, os.SEEK_END)
+        if f.tell() < 64:
+            sys.exit(1)
+        f.seek(-64, os.SEEK_END)
+        if f.read(4) != b"AVBf":
+            sys.exit(1)
+except OSError as e:
+    print(f"{sys.argv[1]}: {e.strerror}", file=sys.stderr)
+    sys.exit(2)
+PY
+  if ((avb_rc == 2)); then
+    die "can't read $p.img"
+  elif ((avb_rc != 0)); then
+    die "$p.img has no AVB footer (expected AVBf at the start of its last 64 bytes; bin/omamobile images)"
+  fi
 done
 if [[ -n $ramdisk_image ]]; then
   mkdir -p "$work" && verify_dir=$(mktemp -d "$work/verify.XXXXXX") ||
