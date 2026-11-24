@@ -303,7 +303,7 @@ def main():
 
     install = {
         "tool": "fastboot",
-        "product": codename,
+        "product": d.get("FASTBOOT_PRODUCT") or codename,
         "require_unlocked_bootloader": True,
         "require_matching_bootloader_slots": True,
         "storage_guard_allowlist": allow,
@@ -333,7 +333,7 @@ def main():
         fmt = 2
         install = {
             "tool": "fastboot",
-            "product": codename,
+            "product": d.get("FASTBOOT_PRODUCT") or codename,
             "require_unlocked_bootloader": True,
             "slot": "active",
             "accept_current_slots": accept,

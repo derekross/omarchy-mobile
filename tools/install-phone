@@ -43,8 +43,8 @@
 # runs with --reinstall, or when slot B's flags look like an installed system.
 #
 # Before anything it checks: the phone answers in fastboot, its product is the
-# descriptor's CODENAME, the bootloader is unlocked, both bootloader slots
-# carry the same version, and each image fits its slot B partition (an
+# descriptor's CODENAME (or FASTBOOT_PRODUCT), the bootloader is unlocked,
+# both bootloader slots carry the same version, and each image fits its slot B partition (an
 # AVB_FOOTERS image exactly). A bundle's manifest.json (tools/bundle-manifest)
 # states the same checks and writes as data, for this script, a web flasher
 # and a desktop installer alike; it is covered by the (signed) checksums and
@@ -55,7 +55,8 @@
 # COPY of the root image with debugfs (no root needed), with
 # /etc/omamobile/boot-update.conf (AUTO_WRITE defaults to yes; descriptors
 # may set BOOT_UPDATE_AUTO_WRITE=no to keep development kernel updates off
-# slot B, docs/RELEASES.md §5.3), shows exactly what it will run, and waits
+# slot B, docs/RELEASES.md §5.3; android-v0 gets no, as omamobile-boot-update
+# has no android-v0 path, so its kernel updates go by push), shows exactly what it will run, and waits
 # for the codename to be typed. The phone's first boot
 # (omamobile-firstboot) creates the user from that file and deletes it.
 # The key also goes into a copy of slot B's ramdisk image, as
@@ -88,7 +89,11 @@
 #     --bootloader-slots-match VERSION
 #                            when the bootloader reports no per-slot versions:
 #                            you checked the other slot carries VERSION too
-#                            (it must equal the current slot's). Without it
+#                            (it must equal the current slot's); "unreported"
+#                            when the bootloader reports no version at all,
+#                            only for a descriptor saying
+#                            BOOTLOADER_VERSION=unreported: you compared every
+#                            firmware partition on _a and _b. Without it
 #                            the installer stops and asks for it, unless the
 #                            descriptor says BOOTLOADER_SLOT_PROBE=yes: then
 #                            a first install reads the other slot itself
@@ -114,7 +119,10 @@
 #                            refused before it is asked a single question. A
 #                            caller that has already looked at the phone
 #                            (the guided installer) passes it, so the phone
-#                            it looked at is the one that is written
+#                            it looked at is the one that is written.
+#                            Required when the descriptor's FASTBOOT_PRODUCT
+#                            differs from its CODENAME (a SoC name other
+#                            phones share)
 #     --verify-only          check the files (a bundle's signature, checksums,
 #                            manifest.json, root image, AVB_FOOTERS image sizes
 #                            and footers, and slot B's ramdisk, read in a
@@ -226,21 +234,46 @@ while IFS= read -r line || [[ -n $line ]]; do
 done < "$conf"
 CODENAME=${D[CODENAME]:-}
 [[ $CODENAME =~ ^[a-z0-9]+$ ]] || die "$conf: no CODENAME"
-BOOT_UPDATE_AUTO_WRITE=${D[BOOT_UPDATE_AUTO_WRITE]-yes}
+[[ $mode == bundle || $CODENAME == "$device" ]] || die "$conf: CODENAME=$CODENAME, expected $device"
+# Legacy descriptors omit BOOT_METHOD (Android v4). android-v0 is a header v0
+# boot.img with the DTB appended (enchilada). Refuse anything else before
+# image preparation or any fastboot query/write.
+BOOT_METHOD=${D[BOOT_METHOD]-android-v4}
+[[ $BOOT_METHOD == android-v4 || $BOOT_METHOD == android-v0 ]] ||
+  die "$conf: unsupported BOOT_METHOD=$BOOT_METHOD; install-phone supports android-v4 and android-v0"
+# omamobile-boot-update has no android-v0 path (it refuses the descriptor), so
+# an android-v0 phone gets AUTO_WRITE=no: its kernel updates go by push
+auto_write_default=yes
+[[ $BOOT_METHOD == android-v4 ]] || auto_write_default=no
+BOOT_UPDATE_AUTO_WRITE=${D[BOOT_UPDATE_AUTO_WRITE]-$auto_write_default}
 [[ $BOOT_UPDATE_AUTO_WRITE == yes || $BOOT_UPDATE_AUTO_WRITE == no ]] ||\
   die "$conf: BOOT_UPDATE_AUTO_WRITE must be yes or no"
-[[ $mode == bundle || $CODENAME == "$device" ]] || die "$conf: CODENAME=$CODENAME, expected $device"
-# Legacy descriptors omit BOOT_METHOD; only their Android v4 path is installable.
-# Refuse before image preparation or any fastboot query/write.
-BOOT_METHOD=${D[BOOT_METHOD]-android-v4}
-[[ $BOOT_METHOD == android-v4 ]] || die "$conf: unsupported BOOT_METHOD=$BOOT_METHOD; install-phone supports only android-v4"
-# The descriptor names how ABL picks the base DTB: SOC_IDS (/soc_id, gs101
-# and gs201) or SOC_COMPATIBLE (/soc_compatible, zuma), exactly one, as
+[[ $BOOT_METHOD == android-v4 || $BOOT_UPDATE_AUTO_WRITE == no ]] ||
+  die "$conf: BOOT_UPDATE_AUTO_WRITE=yes with BOOT_METHOD=$BOOT_METHOD: omamobile-boot-update has no $BOOT_METHOD path"
+# What the bootloader's "getvar product" must say: the codename, or the
+# descriptor's FASTBOOT_PRODUCT (a SoC name such as sdm845, shared with other
+# phones, so there the pinned serial and the typed codename identify the phone)
+PRODUCT=${D[FASTBOOT_PRODUCT]:-$CODENAME}
+[[ $PRODUCT =~ ^[a-z0-9_-]+$ ]] || die "$conf: FASTBOOT_PRODUCT must be a fastboot product name"
+[[ $PRODUCT == "$CODENAME" || -n $want_serial || $verify_only == 1 ]] ||
+  die "$conf: the bootloader names this phone '$PRODUCT', as it does other phones: pass --serial SERIAL (from 'fastboot devices') so only this phone is written"
+# A bootloader that reports no version-bootloader (OnePlus ABL) can't have its
+# slots compared here; the descriptor says so, and the owner confirms both
+BOOTLOADER_VERSION=${D[BOOTLOADER_VERSION]:-}
+[[ -z $BOOTLOADER_VERSION || $BOOTLOADER_VERSION == unreported ]] ||
+  die "$conf: BOOTLOADER_VERSION must be unreported or absent"
+[[ $slots_match != unreported || $BOOTLOADER_VERSION == unreported ]] ||
+  die "--bootloader-slots-match unreported, but $conf doesn't say BOOTLOADER_VERSION=unreported"
+# An android-v4 descriptor names how ABL picks the base DTB: SOC_IDS (/soc_id,
+# gs101 and gs201) or SOC_COMPATIBLE (/soc_compatible, zuma), exactly one, as
 # bin/omamobile checks. A staged descriptor names neither and is refused.
-if [[ -n ${D[SOC_IDS]:-} && -n ${D[SOC_COMPATIBLE]:-} ]]; then
-  die "$conf: SOC_IDS and SOC_COMPATIBLE are exclusive"
-elif [[ -z ${D[SOC_IDS]:-} && -z ${D[SOC_COMPATIBLE]:-} ]]; then
-  die "$conf: SOC_IDS is missing (or SOC_COMPATIBLE); this device can't be installed yet"
+# android-v0 appends its one DTB to the kernel, so it names neither.
+if [[ $BOOT_METHOD == android-v4 ]]; then
+  if [[ -n ${D[SOC_IDS]:-} && -n ${D[SOC_COMPATIBLE]:-} ]]; then
+    die "$conf: SOC_IDS and SOC_COMPATIBLE are exclusive"
+  elif [[ -z ${D[SOC_IDS]:-} && -z ${D[SOC_COMPATIBLE]:-} ]]; then
+    die "$conf: SOC_IDS is missing (or SOC_COMPATIBLE); this device can't be installed yet"
+  fi
 fi
 # BOOTLOADER_SLOT_PROBE=yes turns on slot_probe below for this phone: the
 # round trip that reads the other slot's bootloader version. Off unless set,
@@ -270,6 +303,10 @@ case $INSTALL_SLOT in
 esac
 fmt=1
 [[ $INSTALL_SLOT != active ]] || fmt=2
+# android-v0 installs on slot B only: the running-slot path checks a ramdisk
+# image's storage guard, and a v0 phone has no vendor_boot
+[[ $BOOT_METHOD == android-v4 || $fmt == 1 ]] ||
+  die "$conf: BOOT_METHOD=$BOOT_METHOD installs on slot B only, not INSTALL_SLOT=active"
 # The slot written: B for format 1; for format 2 the phone's current slot,
 # set once the phone has been read (and read again before the first flash)
 target=b
@@ -493,8 +530,8 @@ PY
   # The format is the descriptor's: 2 exactly when it says INSTALL_SLOT=active
   [[ ${M[format]} == "$fmt" ]] ||
     die "manifest.json has format ${M[format]}, but the descriptor says INSTALL_SLOT=$INSTALL_SLOT (format $fmt)"
-  [[ ${M[codename]} == "$CODENAME" && ${M[product]} == "$CODENAME" ]] ||
-    die "manifest.json is for ${M[codename]} (product ${M[product]}), but the descriptor is $CODENAME"
+  [[ ${M[codename]} == "$CODENAME" && ${M[product]} == "$PRODUCT" ]] ||
+    die "manifest.json is for ${M[codename]} (product ${M[product]}), but the descriptor is $CODENAME (product $PRODUCT)"
   [[ ${M[require_unlocked_bootloader]} == true ]] || die "manifest.json must require an unlocked bootloader"
   read -ra allow <<<"$UFS_RW"
   want_writes=()
@@ -689,6 +726,8 @@ with open(sys.argv[4], "wb") as f:
     f.write(head + ramdisk + bytes(pad(len(ramdisk)) - len(ramdisk)) + tail)
 PY
 }
+# android-v0 (BOOT_IMAGES=boot) has none, so the owner's key is not added to
+# its initramfs: it reaches root's authorized_keys on the root image only
 ramdisk_image=""
 if [[ " $BOOT_IMAGES " == *" vendor_kernel_boot "* ]]; then ramdisk_image=vendor_kernel_boot
 elif [[ " $BOOT_IMAGES " == *" vendor_boot "* ]]; then ramdisk_image=vendor_boot; fi
@@ -1003,7 +1042,7 @@ read_vars() { vars=$(fb getvar all 2>&1 | sed -E 's/^\(bootloader\) //'); }
 read_vars
 var() { awk -F: -v k="$1" '$1 == k { sub(/^[^:]*:[ ]*/, ""); print; exit }' <<<"$vars"; }
 product=$(var product)
-[[ $product == "$CODENAME" ]] || die "the phone is '${product:-unknown}', not $CODENAME (${D[NAME]:-}): wrong descriptor or wrong phone"
+[[ $product == "$PRODUCT" ]] || die "the phone is '${product:-unknown}', not $PRODUCT ($CODENAME, ${D[NAME]:-}): wrong descriptor or wrong phone"
 [[ $(var unlocked) == yes ]] || die "the bootloader is locked: unlock it first (this erases the phone; see CONTRIBUTING.md)"
 current_slot=$(var current-slot)
 # Slot b is refused below without --reinstall, so a phone that doesn't say
@@ -1012,7 +1051,18 @@ current_slot=$(var current-slot)
 [[ $current_slot == a || $current_slot == b ]] ||
   die "the phone doesn't report its current slot as a or b (current-slot: '$current_slot'). Which slot is written depends on it, so the installer goes on only when it knows which slot the phone runs from"
 current_bl=$(var version-bootloader)
-[[ -n $current_bl ]] || die "the phone reports no version-bootloader"
+bl_unreported=0
+if [[ -z $current_bl ]]; then
+  # OnePlus ABL reports no version at all: only a descriptor that says so, and
+  # the owner's word that every firmware partition matches on both slots
+  # (for enchilada, the read-only backup compared _a and _b, NOTES.md)
+  [[ $BOOTLOADER_VERSION == unreported ]] || die "the phone reports no version-bootloader"
+  [[ $slots_match == unreported ]] || die "the phone reports no bootloader version, so the slots can't be compared here. Setting slot B active runs slot B's bootloader: check that every firmware partition (xbl, abl, ...) is the same on _a and _b, from a read-only backup, then rerun with --bootloader-slots-match unreported"
+  bl_unreported=1
+  current_bl=unreported
+elif [[ $slots_match == unreported ]]; then
+  die "--bootloader-slots-match unreported, but the phone reports bootloader $current_bl: pass that version instead"
+fi
 if ((fmt == 2)); then
   # The running slot (format 2): the bootloader that starts Omamobile is
   # the one answering now, so the other slot's version, the slot check,
@@ -1041,7 +1091,9 @@ if ((fmt == 1)); then
   # Per-slot bootloader versions, where the bootloader reports them
   bl_a=$(sed -nE 's/^version-bootloader[-_:]a:[ ]*//p' <<<"$vars" | sed -n 1p)
   bl_b=$(sed -nE 's/^version-bootloader[-_:]b:[ ]*//p' <<<"$vars" | sed -n 1p)
-  if [[ -n $bl_a && -n $bl_b ]]; then
+  if ((bl_unreported)); then
+    note "bootloader version not reported; both slots confirmed by you (--bootloader-slots-match unreported)"
+  elif [[ -n $bl_a && -n $bl_b ]]; then
     [[ $bl_a == "$bl_b" ]] || die "the bootloader slots differ (a: $bl_a, b: $bl_b). $SLOTS_DIFFER"
     note "bootloader $bl_a on both slots"
   elif [[ -n $slots_match ]]; then
@@ -1346,6 +1398,10 @@ else
   echo "userdata will be ERASED: stock Android's data is lost, and stock Android on"
   echo "slot A will need a factory reset if you ever boot it again. Slot A itself,"
   echo "the bootloader, radio, persist, efs, modem and devinfo are not touched."
+  if [[ $BOOT_METHOD == android-v0 ]]; then
+    echo "Slot B starts once ABL takes it as bootable: mark it with tools/mark-slot-b"
+    echo "after its first good boot (device/$CODENAME/SLOT-B-RUNBOOK.md)."
+  fi
 fi
 echo
 answer=$(ask "Type the phone's codename ($CODENAME) to go ahead")
@@ -1361,7 +1417,7 @@ fi
 if ((fmt == 2 && !dry)); then
   phone_listed || die "the phone (serial $serial) is no longer in fastboot mode; nothing was written"
   read_vars
-  [[ $(var product) == "$CODENAME" ]] || die "the phone no longer reports product $CODENAME; nothing was written"
+  [[ $(var product) == "$PRODUCT" ]] || die "the phone no longer reports product $PRODUCT; nothing was written"
   [[ -z $(var serialno) || $(var serialno) == "$serial" ]] || die "the phone reports another serial than $serial; nothing was written"
   [[ $(var current-slot) == "$target" ]] ||
     die "the phone's current slot changed from $target to '$(var current-slot)' since it was checked; nothing was written. Run the install again"
