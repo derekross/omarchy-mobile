@@ -88,13 +88,26 @@ Item {
     var pending = []
     for (var i = 0; i < list.length; i++) pending.push({ toplevel: list[i], address: addressOf(list[i]) })
     console.log("omamobile-switcher: clear all, closing " + list.length + (list.length === 1 ? " window" : " windows"))
-    for (var j = 0; j < list.length; j++) list[j].close()
+    // The cards' live copies stop now; the windows are asked a moment later
+    // (see the card's ScreencopyView).
+    closingAll = true
     clearAllPending = pending
-    clearAllCheck.restart()
-    dismiss()
+    clearAllSend.restart()
   }
 
   property var clearAllPending: []
+  property bool closingAll: false
+
+  Timer {
+    id: clearAllSend
+    interval: 120
+    onTriggered: {
+      for (var i = 0; i < root.clearAllPending.length; i++) root.clearAllPending[i].toplevel.close()
+      clearAllCheck.restart()
+      root.dismiss()
+      root.closingAll = false
+    }
+  }
 
   Timer {
     id: clearAllCheck
@@ -375,7 +388,11 @@ Item {
           ScreencopyView {
             anchors.fill: parent
             anchors.margins: card.border.width
-            captureSource: root.opened ? slot.modelData : null
+            // No live copy of a window that is about to be closed: with the copy
+            // still running, the compositor ended it with the window and the
+            // shell's next request was a protocol error, which took the whole
+            // shell down (it restarted, home screen and all).
+            captureSource: root.opened && !root.closingAll && !card.closing ? slot.modelData : null
             live: true
           }
 
@@ -408,10 +425,20 @@ Item {
             duration: 160; easing.type: Easing.OutCubic
           }
 
+          // The card's copy stops first and the window is asked to close after
+          // the card has flown off, 160 ms later. A window that stays (an app
+          // asking about unsaved work) gets its copy back.
+          property bool closing: false
           SequentialAnimation {
             id: closeOut
+            ScriptAction { script: card.closing = true }
             NumberAnimation { target: drag; property: "lift"; to: -card.height * 1.2; duration: 160; easing.type: Easing.InCubic }
-            ScriptAction { script: { slot.modelData.close(); drag.lift = 0 } }
+            ScriptAction { script: { slot.modelData.close(); drag.lift = 0; stillThere.restart() } }
+          }
+          Timer {
+            id: stillThere
+            interval: 1500
+            onTriggered: card.closing = false
           }
         }
       }
