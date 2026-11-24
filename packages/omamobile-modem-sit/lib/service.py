@@ -327,6 +327,10 @@ class Service:
         # went on reading "on" on a Pixel 9a after AT+CFUN=0 (2026-11-21),
         # so the radio the owner switched off is reported from this.
         self.cfun = None
+        # ims_off() withdrew the IMS PDN information for a radio off: set
+        # until the next radio on brings IMS back, also when the modem then
+        # refused the radio off and the radio stayed on.
+        self.ims_withdrawn = False
         # How start-up set up sitd's own IMS bearer (bringup.start: apn,
         # ip_type, apn_types, pcscf_required, isim), for setting IMS up
         # again after the owner's radio on; None before start-up, without
@@ -671,6 +675,7 @@ class Service:
         goes. A refusal is logged; the radio goes off all the same."""
         if not REGISTRATION.exists():
             return
+        self.ims_withdrawn = True
         try:
             ims.unregister(self.client)
         except (ModemError, TimeoutError, RuntimeError, OSError) as error:
@@ -1000,9 +1005,12 @@ class Service:
             radio(on)
             self.cfun = 1 if on else 0
             self.next_poll = 0
-            if on and was_off:
-                # Only after the owner's own radio off: an "on" with the radio
-                # already on would withdraw a working IMS registration.
+            if on and (was_off or self.ims_withdrawn):
+                # Only after the owner's own radio off, or one the modem
+                # refused after IMS was already withdrawn: an "on" with the
+                # radio on and IMS in place would withdraw a working
+                # registration.
+                self.ims_withdrawn = False
                 self.radio_back()
             else:
                 self.ims_restore_at = None

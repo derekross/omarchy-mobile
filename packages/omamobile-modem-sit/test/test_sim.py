@@ -250,6 +250,38 @@ class SimulatorTests(unittest.TestCase):
         self.assertFalse([e for e in new if e.get('event') == 'setup_data_call'])
         self.assertEqual(json.loads(self.cli('status', '--json'))['modem']['ims'], 'registered')
 
+    def test_refused_radio_off_then_on_brings_ims_back(self):
+        # The modem refuses the owner's radio off after IMS was withdrawn:
+        # the radio stays on without IMS, and the next "radio on" sets IMS up
+        # again rather than skipping it as a repeat.
+        self.start()
+        self.wait_ready()
+        self.wait_status(lambda m: m['voice'] and m['sms'] and m['data'])
+        self.control('refuse-radio-off')
+        time.sleep(.2)
+        result = subprocess.run([sys.executable, str(BIN / 'omamobile-sit'), 'radio', 'off'], env=self.env,
+                                capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(result.returncode, 0)
+        entries = self.transcript_entries()
+        self.assertTrue([e for e in entries if e.get('event') == 'radio off refused'])
+        ids = [e['id'] for e in entries if e.get('type') == 'req']
+        self.assertEqual(ids.count(0x0d38), 1)           # IMS withdrawn before the refused radio off
+        self.assertEqual(ids.count(0x0d08), 1)
+        self.assertEqual(json.loads(self.cli('status', '--json'))['modem']['radio_choice'], 'on')
+        self.assertEqual(self.cli('radio', 'on').strip(), 'on')
+        modem = self.wait_status(lambda m: m['voice'] and m['sms'] and m['ims'] == 'registered')
+        self.assertEqual((modem['radio'], modem['radio_choice']), ('on', 'on'))
+        entries = self.transcript_entries()
+        self.assertFalse([e for e in entries if 'violation' in e])
+        ids = [e['id'] for e in entries if e.get('type') == 'req']
+        self.assertEqual(ids.count(0x0d08), 2)           # ADD_PDN_INFO again after the radio on
+        self.assertIn('IMS PDN information sent again after radio on', (self.dir / 'daemon.log').read_text())
+        # Once IMS is back, a further "radio on" is a repeat again.
+        self.assertEqual(self.cli('radio', 'on').strip(), 'on')
+        time.sleep(5)
+        ids = [e['id'] for e in self.transcript_entries() if e.get('type') == 'req']
+        self.assertEqual((ids.count(0x0d08), ids.count(0x0d38)), (2, 1))
+
     def control(self, command):
         with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
             sock.sendto(command.encode(), str(self.dir / 'control'))
