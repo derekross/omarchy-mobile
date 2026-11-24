@@ -468,7 +468,7 @@ def xkb_generate(name, wide):
         "# from people who type it are welcome (docs/KEYBOARD-LAYOUTS.md).",
         "# With the action row and the globe key of every layout. Made by",
     ]
-    end = out.index("# opening squeekboard's popover. Made by")
+    end = next(i for i, l in enumerate(out) if l.endswith("squeekboard's popover. Made by"))
     return "\n".join(head + out[end + 1:])
 
 
