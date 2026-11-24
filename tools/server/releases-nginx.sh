@@ -61,8 +61,8 @@ EOF
 
 write_snippet() {
   cat <<EOF
-# /releases/ on $SITE: Omarchy Mobile release bundles and root images
-# (omarchy-mobile docs/RELEASES.md §6), uploaded by tools/release-upload.
+# /releases/ on $SITE: Omamobile release bundles and root images
+# (omamobile docs/RELEASES.md §6), uploaded by tools/release-upload.
 # Written by tools/server/releases-nginx.sh on $STAMP; included from the HTTPS
 # server block of $AVAIL.
 #
@@ -123,7 +123,7 @@ with_include() {
     { print }
     /listen 443/ { tls = 1 }
     tls && !done && /^[ \t]*if \(\$request_method !~/ {
-      print ""; print "    # Release bundles and root images (omarchy-mobile tools/server/releases-nginx.sh)"; print inc; done = 1
+      print ""; print "    # Release bundles and root images (omamobile tools/server/releases-nginx.sh)"; print inc; done = 1
     }
     END { if (!done) exit 1 }' "$1"
 }

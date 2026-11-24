@@ -162,7 +162,7 @@ In order of likely weight:
   ADD_PDN with an empty P-CSCF list was accepted but never led to a
   registration (0.3.13).
 
-## 6. Design for Omarchy Mobile (every carrier)
+## 6. Design for Omamobile (every carrier)
 
 **Data sources (all from the owner's own factory image, extracted on the
 laptop like the vendor chroot, never hosted or committed):**

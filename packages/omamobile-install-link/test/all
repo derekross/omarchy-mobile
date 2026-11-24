@@ -197,7 +197,7 @@ fi
 # --- has-answers ------------------------------------------------------------------
 H=$PKG/bin/has-answers
 placeholder() {   # as rootfs/placeholders makes it: comments, then spaces to 4096 bytes
-  { printf '# Omarchy Mobile: the place for %s, kept by the release image.\n# Left as it is, it holds no answers.\n' "$1"
+  { printf '# Omamobile: the place for %s, kept by the release image.\n# Left as it is, it holds no answers.\n' "$1"
     printf '#%*s\n' 4000 ''; } | { head -c 4095; cat >/dev/null; }; printf '\n'
 }
 placeholder /etc/omamobile/firstboot.conf > "$t/ph"
@@ -359,7 +359,7 @@ if [[ -n $BIN && -x $BIN/omamobile-linkd ]]; then
       "$r/usr/bin" "$r/usr/lib/omamobile-install-link" "$r/fake-systemd"
     : > "$r/etc/omamobile/install-link"
     printf 'CODENAME=cheetah\nNV_PARTS="efs"\n' > "$r/usr/share/omamobile/device.conf"
-    printf '# Omarchy Mobile root image\nversion: 2026.01.01\n' > "$r/usr/share/omamobile/rootfs/MANIFEST"
+    printf '# Omamobile root image\nversion: 2026.01.01\n' > "$r/usr/share/omamobile/rootfs/MANIFEST"
     printf 'androidboot.serialno = "SERIAL-PLACEHOLDER"\n' > "$r/proc/bootconfig"
     echo "$BOOT" > "$r/proc/sys/kernel/random/boot_id"
     echo 7.0.0-test > "$r/proc/sys/kernel/osrelease"

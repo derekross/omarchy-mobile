@@ -5,11 +5,11 @@
 /*
  * Pixel 9a bring-up only; in no device's default DTB_OVERLAYS
  * (USB-HOST-PLAN H2b): the MAX77779 PMIC block at 0x66 on hsi2c6
- * (maxim,max77779-pmic, linux-omarchy-mobile#139) with the chip's
+ * (maxim,max77779-pmic, linux-omamobile#139) with the chip's
  * interrupt line on gpa8-0, pinned as stock's if_pmic_irq (EINT, pull-up),
  * and the RT9470 boost's interrupt on its SGPIO6 with a pull-up, as stock's
  * zumapro-buck-charge-rt9471.dtsi has it (rt,intr_gpio). The PMIC node and
- * the pin are those of linux-omarchy-mobile#127 at 5ada9ab0f, as an overlay
+ * the pin are those of linux-omamobile#127 at 5ada9ab0f, as an overlay
  * on the palmtop's gn3 DTB (which has the hsi2c6, pinctrl_alive, gpa8 and
  * otg_boost labels). Not the boost's enable-gpios (stock's rt,ceb_gpio on
  * SGPIO7): that pin is the RT9470's charge enable, and driving it with

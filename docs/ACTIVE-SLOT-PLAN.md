@@ -5,7 +5,7 @@ Status (2026-11-16): **approved by the maintainer; not built.** Decided on 2026-
 
 ## 0. The idea, and what shapes it
 
-A release install writes the five boot images of the slot the phone runs from now (`current-slot`), then `userdata`, then sends `reboot`. It sends no `set_active`. The bootloader that starts Omarchy Mobile is the one that just answered fastboot, and its version is the `version-bootloader` the build index already matches. So the bootloader-version check, the owner's `--bootloader-slots-match` statement, the slot probe and the "what does slot B hold?" question all leave the release write path. A first install from stock Android becomes as simple as a reinstall, in the desktop app and the web page as well as on the command line.
+A release install writes the five boot images of the slot the phone runs from now (`current-slot`), then `userdata`, then sends `reboot`. It sends no `set_active`. The bootloader that starts Omamobile is the one that just answered fastboot, and its version is the `version-bootloader` the build index already matches. So the bootloader-version check, the owner's `--bootloader-slots-match` statement, the slot probe and the "what does slot B hold?" question all leave the release write path. A first install from stock Android becomes as simple as a reinstall, in the desktop app and the web page as well as on the command line.
 
 What the code says:
 
@@ -36,7 +36,7 @@ What the code says:
 
 **First install or reinstall:** the writes are the same either way. For the steps after the write the installer stops asking: it always takes a fresh radio backup into a new folder and provisions with `--first-install`, and offers `--restore` of settings only when its own record on this computer holds a `phone-config.tar` for this phone. The slot-B question, the `runs-from-slot-b` stop, `--reinstall`, the probe and the override stay for format-1 releases only.
 
-**A phone that ran Omarchy Mobile on slot B in development:** running from A, it is a first install on A, and slot B is left as it is (the confirmation says so when B reads successful). Running from B: with `b` accepted, an install on B; with `a` only, the stop "not supported yet", never advice to `--set-active=a` (that starts A's bootloader at an unknown version). Both slots share one `userdata`.
+**A phone that ran Omamobile on slot B in development:** running from A, it is a first install on A, and slot B is left as it is (the confirmation says so when B reads successful). Running from B: with `b` accepted, an install on B; with `a` only, the stop "not supported yet", never advice to `--set-active=a` (that starts A's bootloader at an unknown version). Both slots share one `userdata`.
 
 ## 2. Kernel and boot updates after such an install
 

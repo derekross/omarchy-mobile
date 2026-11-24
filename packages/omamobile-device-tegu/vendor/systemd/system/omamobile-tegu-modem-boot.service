@@ -13,7 +13,7 @@
 # one of ABL's three tries, and at zero stock boots and has overwritten
 # userdata; marking B on the 9a is on hold, and the unit can't tell whether
 # it is marked. Before enabling it (README, "Starting it at boot"): slot B
-# marked successful, a kernel with linux-omarchy-mobile#172, and the charger
+# marked successful, a kernel with linux-omamobile#172, and the charger
 # in for the first boots.
 #
 # An enabled unit is skipped, not failed, on a phone that can't run it:

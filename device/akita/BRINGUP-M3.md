@@ -4,7 +4,7 @@
 **Status (2026-11-11):** **M3 is complete on the phone.** The buttons passed gate (f) and touch passed gate (g): Power wakes the screen, the PIN pad unlocks by touch, and the shell and on-screen keyboard work by hand ([Results](#results)).
 
 The kernel side:
-- linux-omarchy-mobile#238 (the buttons and `mem_sleep_default=s2idle`), merged on 2026-11-11;
+- linux-omamobile#238 (the buttons and `mem_sleep_default=s2idle`), merged on 2026-11-11;
 - #240 (a voltage setter for the S2MPG14's two touch supplies), open as of 2026-11-11;
 - #241 (the touch supplies, the touchscreen and the panel size, stacked on #240), open as of 2026-11-11; it lands #240's commit with it.
 
@@ -68,7 +68,7 @@ So the buttons are a copy of husky's node, and touch is husky's bus and pins wit
 Each boot needs the human's go and changes one thing. Every boot is from slot B: check the tries, and `--set-active=b` as needed. **Each step's results end with slot B's tries left.**
 
 ### M3.0 Before anything (laptop only)
-- Rebase onto `omamobile`, which has linux-omarchy-mobile#209 (the zuma clkout entry), and build M3.1's kernel.
+- Rebase onto `omamobile`, which has linux-omamobile#209 (the zuma clkout entry), and build M3.1's kernel.
 - Find which Berlin IC the 8a has: the stock firmware's header.
 
 ### M3.1 Buttons and the sleep default (gate f)
@@ -130,7 +130,7 @@ Test numbers continue from [BRINGUP-M2](BRINGUP-M2.md)'s.
 ### 2026-11-10: the touch chip and the buttons (M3.0, M3.1, gate f)
 
 - **M3.0:**
-  - **The kernel:** `omamobile` at `253208c11`, which has linux-omarchy-mobile#209.
+  - **The kernel:** `omamobile` at `253208c11`, which has linux-omamobile#209.
   - **The chip:** F/'s vendor image carries `goodix_firmware_ak3a.bin` (215552 bytes) and `goodix_firmware_ak3b.bin` (231936 bytes), one per panel. Both start with the Berlin header `BERLIN` … `9895`, so the chip is a **GT9895**.
 - **M3.1's kernel:** `7.3.0-rc6-omamobile-push1-g23120efb6488`: the buttons and the sleep default on `253208c11`, the same tree #238 merged.
 

@@ -35,7 +35,7 @@ by its own script) is not declared, so Settings leaves it alone. On husky the
 row stays hidden today: omamobile-device-husky blacklists `max77759_charger`
 (`omamobile-max77759.conf`), so there is no `max77759-charger` power supply
 until that blacklist is lifted on a kernel with
-derekross/linux-omarchy-mobile#266.
+derekross/linux-omamobile#266.
 Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management and
 recording controls are separate future contributions with their own runtime
 contracts and tests; this catalog does not offer those routes.

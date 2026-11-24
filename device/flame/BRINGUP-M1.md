@@ -67,7 +67,7 @@ this gate; no claim of working Wi-Fi follows from another distribution's tests.
 - [V, source] The [postmarketOS device package][devicepkg] uses this kernel
   with U-Boot and EFI. Its [device page][wiki] reports display, touch, GPU,
   Wi-Fi, Bluetooth, battery and USB networking. These are **upstream reports**,
-  not results from this Omarchy Mobile port.
+  not results from this Omamobile port.
 - [V, source] Andrew Gigena's [U-Boot flame branch][uboot], commit
   `0c42ac323aea8368b0624e405ded403351022df2`, has a flame DTS and configuration.
   For a RAM-only probe, omit its storage-scan preboot, start USB fastboot,

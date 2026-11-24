@@ -3,6 +3,87 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1180. When a reply lists trials that ran after a "before the next boot"
+  request, the trial rows are asked for times, and the source commits' dates
+  bound the window.** #1002's notes record v21 to v28 on the phone with no
+  dates; v21's source commit is from 17:46Z the day before and the provenance
+  commits from 05:05Z, so the boots fall on either side of our 01:11Z request
+  and the record can't say which. *Check:* for each trial a reply adds, `gh
+  api repos/<fork>/commits/<sha> --jq .commit.author.date` for its source
+  commit, lay those beside our comment's `submitted_at` in UTC, and ask for
+  the boot times when the window straddles it. Extends L-1024 and L-557.
+  *From:* #1002, round 67, 2026-11-24.
+- **L-1179. A table assembled from several threads is checked cell by cell
+  against the comment each row links, and a figure found only in another
+  thread gets that link.** #1029's 9a row carried a night-before mean that is
+  in kernel #280's description and not in the #867 comment its Source cell
+  names. *Check:* for each row, fetch the linked comment (`gh api
+  repos/<r>/issues/comments/<id>`) and grep it for every number in the row;
+  for each miss, search the author's other threads (`gh api
+  repos/<r>/pulls/<n> --jq .body`) and ask for the second link. Extends L-438
+  and L-1023. *From:* #1029, round 67, 2026-11-24.
+- **L-1178. A generated overlay that "carries what stock writes" rather than
+  the source file's values is checked against the stock driver's types, not
+  only its arithmetic.** #1023's nMiscCfg differs from Google's battery file
+  because Google's driver ORs `fus << 12` into a `u16`; reading
+  `max77779_fg.h` for the field's type is what showed that 0xf870 is the value
+  the gauge really gets. *Check:* for each value a generator rewrites "as the
+  driver does", fetch the driver function and the struct field it lands in on
+  the same branch (`?format=TEXT | base64 -d`), and compute the stored value
+  with the field's width. Extends L-985 and L-441. *From:* #1023, round 67,
+  2026-11-24.
+- **L-1159. A plan finding written the same day as the fix that answers it is
+  checked against main's log for that afternoon.** #711's §11.1 says the
+  extraction tools sort with the locale's collation; #712 had made all four
+  sorts `LC_ALL=C` and merged half an hour after the record was written, so
+  the PR's own base already had the fix and the "open" item was closed.
+  *Check:* for each open item in a draft's body or plan, `git log -S'<the
+  fix's token>' <the record's date>..origin/main -- <the files it names>`, and
+  `git grep` the PR's base for it. Extends L-971 and L-936. *From:* #711,
+  round 66, 2026-11-23.
+- **L-1158. A page over an existing radio feature waits on a run of the
+  feature itself on the reference phone, before the page's own run.** #539's
+  NetworkManager hotspot path had waited two weeks for its 7 Pro run while two
+  other brcmfmac phones showed that the tile's AP mode doesn't start at all
+  (#523), and nothing on main records the 7 Pro's AP mode. *Check:* `git grep
+  -n -i '<feature>' origin/main -- device/cheetah docs/DEVICES.md` for a
+  recorded run of what the page drives; if there is none, the phone test's
+  first step is main's own path, with a stop and a decision written for "it
+  doesn't start". Extends L-651 and L-574. *From:* #539 with #523, round 66,
+  2026-11-23.
+- **L-1157. A GPU cell is read against the session's renderer environment, not
+  the kernel driver.** #993's row said the PowerVR GPU "works" because
+  `pvrsrvkm` binds, while its own `uwsm/env.d` file forced llvmpipe for every
+  session. *Check:* `git grep -n
+  'LIBGL_ALWAYS_SOFTWARE\|GALLIUM_DRIVER\|QT_QUICK_BACKEND' <head> --
+  packages/omamobile-device-<x>` before accepting a GPU "works"; if the
+  session falls back to software, the legend's word is "boots". Extends L-28
+  and L-1015. *From:* #993, round 66, 2026-11-23.
+- **L-1156. A draft titled "stage 0" is read by its commit subjects before its
+  title, because a day of flashes can arrive as notes commits.** #1002 opened
+  as read-only stock facts on a locked phone; 33 commits the next day recorded
+  an unlock and about thirteen slot B flashes and boots, while the title,
+  description and Wanted row stayed "stock facts". *Check:* `git log
+  --format='%cI %s' origin/main..<head> | grep -i -E
+  'flash|stag|boot|hardware|trial|unlock|verify'`; any hit turns a docs draft
+  into a bring-up record, read against L-109 and CONTRIBUTING §3.2 and §3.3.
+  Extends L-486 and L-922. *From:* #1002, round 66, 2026-11-23.
+- **L-1155. A notes table of slot bytes is read across every boot it skips,
+  not only the rows it shows.** #1011's two diagnostic rows were consistent
+  with Fastboot, but the bytes just before the write (0x35 `04`, from `0c`)
+  and the retry count Fastboot read afterwards could only come from an
+  unrecorded step between them. *Check:* lay each recorded byte from every
+  read (rows, preflight copies, "differed only at") in boot order, apply what
+  each boot and Fastboot visit should change, and ask for every step a jump
+  needs. Extends L-884 and L-1082. *From:* #1011, round 66, 2026-11-23.
+- **L-1154. A record of "an image built from this branch" is read for its
+  "plus" clauses before it counts as a boot of the branch.** #931's RAM boot
+  carried the owner's local disk-encryption unlock in the init, needed because
+  that phone's root is LUKS2, so the shared init that ran was not the PR's,
+  and the merged descriptor can't boot that phone. *Check:* `grep -n -i
+  'plus\|not part of\|local\|on top' <the record>` around each boot a PR
+  cites, and name which shared files ran as written. Extends L-802, L-436 and
+  L-361. *From:* #931, round 66, 2026-11-23.
 - **L-1119. A notes entry that explains how two packages got onto a phone is
   read through the newer package's `depends=`.** #970 answered "which of the
   two came from where" exactly, and the locally installed device package's
@@ -213,12 +294,12 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   default when the property is absent. Extends L-149, L-187 and L-242. *From:*
   #714, round 61; #917, round 63, 2026-11-20.
 - **L-941. A draft kernel PR that says "nothing was built from this commit"
-  is checked against the device's notes on omarchy-mobile's main, and a commit
+  is checked against the device's notes on omamobile's main, and a commit
   they pin is compared with the head by blob.** Kernel #249's body disclaims
   any test, while `device/dipper/NOTES.md` records two RAM boots of the same
   node and pins the PR at an older head; the dtsi blob was identical, so the
   evidence carries and the message can cite it. *Check:* `git grep -n
-  '#<N>\|<file>' origin/main -- device/<codename>` in omarchy-mobile, then
+  '#<N>\|<file>' origin/main -- device/<codename>` in omamobile, then
   `git rev-parse <pinned>:<file> <head>:<file>`. Extends L-106, L-373 and
   L-131. *From:* kernel #249, round 61, 2026-11-18.
 - **L-939. An Omarchy patch tested on a phone that has not yet updated is
@@ -334,77 +415,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   4 for each mechanism a device plan explains (the PMIC, the driver, the flag)
   and name the 7 Pro run in the review's notes. Extends L-492 and L-657.
   *From:* #852, round 60, 2026-11-17.
-- **L-823. A status line that quotes several measured numbers is checked for
-  the condition each was measured under.** #852's "284 mA at 2028 MHz, 184-200
-  mA at 1014 MHz, 52 mA more with Wi-Fi kept" set a Wi-Fi-kept figure beside
-  Wi-Fi-unloaded ones, doubling the apparent gain of the bus rate; the body
-  copied it. *Check:* for each number in a status line, find its results table
-  and write down every setting that differs between the runs being compared;
-  the line carries them. Extends L-529 and L-438. *From:* #852, round 60,
-  2026-11-17.
-- **L-821. A fix for "the setting only applies after a restart" is read one
-  layer down before the workaround or its patch header is accepted: the
-  component's bindings, the library's setter, and the first statement where
-  the working path and the failing path differ.** #866 and #879 blamed
-  Omarchy's idle service; it only binds `IdleMonitor.timeout`, and the
-  workaround (off, then on) differs from the failing path in one thing inside
-  Quickshell: the notification pointer passes through null, where a
-  replacement object at the same address is an equal value and never notifies.
-  *Check:* find the status IPC that prints the live value (`omarchy-shell idle
-  status`) and ask for it before and after the write; fetch the library at the
-  packaged commit, find the setter both paths share, and ask for its debug log
-  (`QT_LOGGING_RULES=<category>.debug=true`). Extends C-30, L-204 and L-652.
-  *From:* #866, round 60; #879, round 61, 2026-11-18.
-- **L-820. "logind refuses because the app is outside a session" is checked
-  against `session/auto`.** `brightnessctl` calls `SetBrightness` on
-  `/org/freedesktop/login1/session/auto`, which logind resolves to the user's
-  display session for a caller without one; a refusal points at a caller
-  inside another session (an SSH login), that is, at how the test was
-  launched. *Check:* `strings /usr/bin/brightnessctl | grep login1`, and
-  `systemd-run --user --pipe busctl get-property org.freedesktop.login1
-  /org/freedesktop/login1/session/auto org.freedesktop.login1.Session Id`
-  (read-only); ask how the app was started before accepting a session
-  workaround. Extends L-29 and L-46. *From:* #866, round 60, 2026-11-17.
-- **L-811. A stage recorded as "passed" is laid against every clause of its
-  Pass line, and a stop rule written as "any X error" against the lines the
-  run logged and kept going through.** #835's H1 passed on its kernel criteria
-  with three of its listed after-checks not done, and logged a UFS `dme-set`
-  failure line under stop conditions that begin "any UFS error"; the line is
-  benign (the 9a's plan has it on every healthy wake), but the plan didn't say
-  so. *Check:* split the Pass line at its semicolons and tick each clause
-  against the result; grep the result paragraph for `failed\|error` and match
-  each hit to a stop condition or to a sentence that excuses it by name, with
-  the sibling plan that records it (`git grep -n '<line>' origin/main --
-  device/`). Extends L-435 and L-756. *From:* #835, round 60, 2026-11-17.
-- **L-810. A phone test of a packaged drop-in starts with the merged view,
-  because a hand copy of the same name in `/etc` silently replaces the
-  package's file.** On #806 the contributor's 8 Pro had
-  `/etc/systemd/sleep.conf.d/10-omamobile.conf` from an earlier experiment;
-  with it in place the test would have "passed" on the old settings. *Check:*
-  when asking for a phone run of any `/usr/lib/systemd/*.d`, `modprobe.d`,
-  `udev/rules.d` or NetworkManager `conf.d` file, ask first for
-  `systemd-analyze cat-config`, `modprobe -c` or `NetworkManager
-  --print-config`, and for `pacman -Qo` on every file it lists under `/etc`;
-  pass the finding on to the device's other owners. Extends L-362 and L-46.
-  *From:* #806, round 60, 2026-11-17.
-- **L-802. A fix "tested on the phone" by swapping a file into the extracted
-  image by hand has not run its own code path.** #863's stub was copied over
-  the image's library, and the new function ran once inside a live namespace;
-  the profile's start, where the function sits under `set -e` before cbd,
-  never ran with it. *Check:* for a profile or runner change, ask which
-  invocation executed the new lines (the unit's start, or a hand call), and
-  whether the hand-modified image was restored before the run that counts.
-  Extends L-361 and L-436. *From:* #863, round 60, 2026-11-17.
-- **L-801. A sleep series is described by what ended each sleep and how long
-  it was, and it counts only for the path that was run.** #846's 86 of 86 were
-  all modem wakes within 29 s, while the failures being closed came on
-  RTC-woken sleeps of 120 s with the modem off; its later 300 of 300 held four
-  wakes on the touchscreen's interrupt with nobody at the phone; #912's 470
-  sleeps were `systemctl suspend -i` with 60 s alarms, for a default that
-  enables sleeps of hours with no alarm. *Check:* ask for `pm_wakeup_irq` (or
-  sleepd's "woken by" line) and the length per cycle next to any "N of N
-  woke"; name the command, wake source and length range of the path the change
-  turns on, and find rows with those on the same kernel and package; for a
-  source that isn't the test's own, `git log -S` when it became a wake source
-  and name the PR that would make it a default. Extends L-345, L-482 and
-  L-625. *From:* #846 with #758, rounds 60 and 61; #912, round 63, 2026-11-20.

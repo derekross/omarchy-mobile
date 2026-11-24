@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 11 Pro XL (kodiak) bringup notes
 
-Tracking: https://github.com/derekross/omarchy-mobile/pull/231
+Tracking: https://github.com/derekross/omamobile/pull/231
 
 ## Current state
 - Bootloader unlocked

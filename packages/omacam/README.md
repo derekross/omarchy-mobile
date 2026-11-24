@@ -1,6 +1,6 @@
 # omacam
 
-Omarchy Mobile's camera app, shown as "Camera": all four cameras on
+Omamobile's camera app, shown as "Camera": all four cameras on
 libcamera directly, one zoom control from the ultrawide to the telephoto,
 full-resolution photos, tap to focus ([CAMERA-APP-PLAN](../../docs/CAMERA-APP-PLAN.md)).
 It lives in its own repository, [github.com/derekross/omacam](https://github.com/derekross/omacam)

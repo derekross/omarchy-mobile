@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 post_install() {
-  echo "Run 'omamobile-setup-user' as each phone user (Omarchy Mobile's first run does this)."
+  echo "Run 'omamobile-setup-user' as each phone user (Omamobile's first run does this)."
 }
 
 # Hyprland reads hypr/phone.lua (the phone's key binds and layer rules) when

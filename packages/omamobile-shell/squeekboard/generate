@@ -217,7 +217,7 @@ def generate(upstream, rel, extra=None):
     header = [
         "# SPDX-License-Identifier: GPL-3.0-or-later",
         "# squeekboard %s's %s (https://gitlab.gnome.org/World/Phosh/squeekboard," % (VERSION, rel),
-        "# tag v%s, GPL-3.0-or-later), with two changes for Omarchy Mobile: the" % VERSION,
+        "# tag v%s, GPL-3.0-or-later), with two changes for Omamobile: the" % VERSION,
         "# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua",
         "# binds for squeekboard only) on top of every view, and the globe key",
         "# sending XF86MediaLanguageMenu (the shell's language sheet) instead of",

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 /*
  * omamobile-fp-shim: LD_PRELOAD library for the Android binaries in the
- * Omarchy Mobile fingerprint chroot (device/cheetah/FINGERPRINT-RESEARCH.md).
+ * Omamobile fingerprint chroot (device/cheetah/FINGERPRINT-RESEARCH.md).
  *
  * The chroot runs Google's fingerprint, Gatekeeper and KeyMint HALs,
  * storageproxyd, trusty_apploader and the two service managers unmodified,

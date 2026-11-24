@@ -43,21 +43,21 @@ smoke checks passed after the boot. Automatic boot-image writing and
 boot-success marking stayed off.
 
 This is the saved observation reported in
-[#252](https://github.com/derekross/omarchy-mobile/issues/252#issuecomment-6856940843),
+[#252](https://github.com/derekross/omamobile/issues/252#issuecomment-6856940843),
 not a new recovery run or permission to change the current routine. The
-maintainer's [ruling](https://github.com/derekross/omarchy-mobile/issues/252#issuecomment-6858586731)
+maintainer's [ruling](https://github.com/derekross/omamobile/issues/252#issuecomment-6858586731)
 keeps manual GS101 success marking on hold and requires a known-good image
 flash before the boot that would spend B's final try. This note changes no
 tool, guard, package or runbook and performs no phone operation.
 
 ## 2026-11-09: review split and slot-success audit (offline)
 
-The development source remains inspectable in [#543](https://github.com/derekross/omarchy-mobile/pull/543).
+The development source remains inspectable in [#543](https://github.com/derekross/omamobile/pull/543).
 As of 2026-11-10, it is closed unmerged in favour of documentation
-[#561](https://github.com/derekross/omarchy-mobile/pull/561), initramfs
-[#562](https://github.com/derekross/omarchy-mobile/pull/562), installer
-[#563](https://github.com/derekross/omarchy-mobile/pull/563) and bring-up
-[#565](https://github.com/derekross/omarchy-mobile/pull/565).
+[#561](https://github.com/derekross/omamobile/pull/561), initramfs
+[#562](https://github.com/derekross/omamobile/pull/562), installer
+[#563](https://github.com/derekross/omamobile/pull/563) and bring-up
+[#565](https://github.com/derekross/omamobile/pull/565).
 The exact tested kernel is `c934e316b` in the contributor's
 `bringup/bluejay-tested-20261108` branch; the revised [kernel topics #225 through #231](UPSTREAM.md#kernel-topics-in-review) are not a new hardware-qualified stack. This documentation submission
 changes no package, descriptor, initramfs, startup service or phone.
@@ -81,7 +81,7 @@ executable, so the precise binary provenance is not established by those logs.
 
 This was an actual protected-data write and is not covered by the statement
 that no radio NV/calibration was changed. Further gs101 slot marking is on
-hold under [#252](https://github.com/derekross/omarchy-mobile/issues/252).
+hold under [#252](https://github.com/derekross/omamobile/issues/252).
 No slot write, reboot, hardware probe or fresh device backup was performed for
 this offline revision. A fresh read-only backup and independent validation
 remain required before further hardware work; do not restore the old devinfo
@@ -128,8 +128,8 @@ expected `-ECANCELED` USI hold before manual initialization. Audio, modem,
 Bluetooth, battery/charging, sensors, cameras and suspend are not qualified.
 
 
-The Pixel 6a's tracking thread is [#348](https://github.com/derekross/omarchy-mobile/issues/348).
-The earlier shared GS101 effort is [#2](https://github.com/derekross/omarchy-mobile/issues/2).
+The Pixel 6a's tracking thread is [#348](https://github.com/derekross/omamobile/issues/348).
+The earlier shared GS101 effort is [#2](https://github.com/derekross/omamobile/issues/2).
 Facts are marked [V] (checked, with a source) or [I] (inferred).
 The dated stage-0 entries below predate the first phone boot and describe
 what was known from public GPL sources and the factory image at that time.
@@ -172,7 +172,7 @@ From a retail 6a, read-only, before anything is written (CONTRIBUTING §5.1 firs
 
 - **Bluejay boots the same two base DTBs as oriole and raven** [V] (G/ `Makefile`, `gs101_dtbs`): `gs101/gs101-a0.dtb` and `gs101/gs101-b0.dtb`, with the board as a dtbo overlay on top. So, as on oriole, our board DTS is the base DTB and ABL picks it by `soc_id`.
 - **`soc_id` A0 is `<0x09845000 0x0>`, B0 is `<0x09845001 0x0>`** [V] (S/ `gs101-a0.dts`, `gs101-b0.dts`, line 12 of each). This settles the label that O/ left [I]: `0x...001` is B0, as cheetah's `0x9855001` is. Which of the two a retail 6a has is still [I]; `bin/omamobile images` ships both.
-- **The first-light board DTS** (`gs101-bluejay.dts`, [kernel #179](https://github.com/derekross/linux-omarchy-mobile/pull/179), merged 2026-11-02 without a boot, as oriole's first board was) is oriole's file with bluejay's model and compatible (`google,gs101-bluejay`, `google,gs101`), `soc_id` set to B0, `/chosen/bootargs` with `panic=10`, the 1080x2400 framebuffer and splash carve-out, and without the two LDOs described next. U/ `master` has no bluejay binding or DTS; the binding entry goes in the same pull request.
+- **The first-light board DTS** (`gs101-bluejay.dts`, [kernel #179](https://github.com/derekross/linux-omamobile/pull/179), merged 2026-11-02 without a boot, as oriole's first board was) is oriole's file with bluejay's model and compatible (`google,gs101-bluejay`, `google,gs101`), `soc_id` set to B0, `/chosen/bootargs` with `panic=10`, the 1080x2400 framebuffer and splash carve-out, and without the two LDOs described next. U/ `master` has no bluejay binding or DTS; the binding entry goes in the same pull request.
 
 ### Board dtbo
 
@@ -210,7 +210,7 @@ The descriptor carries no comments; this table is its provenance.
 | `CODENAME`, `NAME`, `SOC` | bluejay, Pixel 6a, gs101 | [V] | G/, the kernel binding |
 | `COMPATIBLE` | `google,gs101-bluejay` | [V] | the first-light DTS and its binding entry |
 | `PACKAGE` | `omamobile-device-bluejay` | the package doesn't exist yet; `bin/omamobile initramfs` falls back when its `omamobile-bootctl.c` is missing, as for oriole | |
-| `DTB` | `exynos/google/gs101-bluejay.dtb` | [V] | the Makefile line in [kernel #179](https://github.com/derekross/linux-omarchy-mobile/pull/179), merged; `DEVICE=bluejay bin/omamobile images` builds from a kernel after it |
+| `DTB` | `exynos/google/gs101-bluejay.dtb` | [V] | the Makefile line in [kernel #179](https://github.com/derekross/linux-omamobile/pull/179), merged; `DEVICE=bluejay bin/omamobile images` builds from a kernel after it |
 | `SOC_IDS` | `b0:0x9845001 a0:0x9845000` | [V] | S/ `gs101-b0.dts`, `gs101-a0.dts` |
 | `DTBO_SOURCE`, `DTBO_BOARD_ID`, `DTBO_BOARD_REV` | the empty overlay, 0x20506, 0x10000 | [V] for the MP 1.0 entry (index 9 of stock's `dtbo.img`), [I] that retail boots it | G/ `gs101-bluejay-mp1_0.dts`; F/ `dtbo.img` (2026-11-02) |
 | `VENDOR_CMDLINE` | oriole's line: `earlycon` at `0x10A00000`, the gs101 UART | [V] | F/ `vendor_boot`'s DTBs, `/chosen/bootargs` (2026-11-02); O/ |

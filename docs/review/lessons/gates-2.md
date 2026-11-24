@@ -3,6 +3,57 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-817. `tests/grep-q-pipes` doesn't scan package `libexec`, `bin` or
+  `backends` directories.** #860's root helper piped into `grep -qx` under
+  `pipefail` and the lint passed. *Check:* until the lint's pathspecs cover
+  them, `git grep -nE '\|[[:space:]]*grep -q' <head> -- 'packages/*/libexec'
+  'packages/*/bin' 'packages/*/backends'` on every package PR. Extends L-683
+  and L-15. *From:* #860, round 60, 2026-11-17.
+- **L-796. A package test that runs a start script calling the host's `sync`
+  fails under a loaded review machine.** `omamobile-modem`'s `test/all` gives
+  three `sync`s 20 s; with parallel reviews building, one case ended with rc
+  124 on #850's tree and passed on the next run. *Check:* on a timeout in a
+  case the PR doesn't touch, read `uptime`, time a `sync`, and rerun on main
+  and on the head before calling it the PR's; the script could take its `sync`
+  from a variable the test overrides. Extends L-42 and L-346. *From:* #850,
+  round 60, 2026-11-17.
+- **L-793. A docs PR that adds a place to download a program is checked for
+  what verifies the download.** The release bundle is verified by signature
+  whatever its URL; the installer app's files had a checksum file beside them
+  and nothing else. *Check:* for each new download link, name the file, what
+  the reader is told to check it against, and whether that check is anchored
+  in a key or only in the same page. Extends L-632 and L-422. *From:* #843,
+  round 60, 2026-11-17.
+- **L-785. A tool that starts keeping state under the user's home is run by the
+  tests with that home in scratch.** #855's `mkdir` under `XDG_DATA_HOME` made
+  `tests/phone-ssh` and `tests/make-bundle` write into the tester's real home,
+  and made the tool exit under `set -u` where `HOME` is unset. *Check:* run
+  the suite with `HOME` and `XDG_*` pointed at an empty scratch directory and
+  list it afterwards; run the tool's first lines with both unset. Extends
+  L-454 and L-681. *From:* #855, round 60, 2026-11-17.
+- **L-783. A base image pinned by digest under a rolling-release `pacman -Syu`
+  needs a keyring refresh and a named bump step.** The pin fixes the trust
+  root and nothing else; without a refresh the job fails some months later on
+  every PR at once. *Check:* for a digest pin of a rolling distribution's
+  image, find who bumps it (Dependabot, a comment with the command) and
+  whether the first package step updates the keyring. *From:* #853, round 60,
+  2026-11-17.
+- **L-782. A pin of a moving tag is compared with what the tag resolves to
+  today, not only with the release the PR names.** #853 pinned
+  `actions/checkout` to v5.0.0's commit, which is genuine, while `@v5` had
+  been at v5.1.0 for four months, so "no behaviour change" moved CI back three
+  commits, a security default among them. *Check:* `git ls-remote
+  https://github.com/<owner>/<action> 'refs/tags/v<N>*'`: the pinned id is a
+  tag's target in the action's own repository (a fork's commit also resolves
+  under the parent's name) and equals the major tag's target unless the PR
+  says why not; for a container digest, compare with the registry's
+  `docker-content-digest` for the tag and read the index for its platforms and
+  build date. *From:* #853, round 60, 2026-11-17.
+- **L-781. "The builds are run by hand, so there is no test" is checked against
+  the test file's own stand-ins.** `tests/kernel-pr-check` has had a stand-in
+  `make` for `--build` since the device-tree comparison. *Check:* `grep -n
+  'stand-in\|fake' tests/<the tool's test>` before accepting that a path can't
+  be tested. Extends L-454. *From:* #851, round 60, 2026-11-17.
 - **L-780. A gate fallback for "this file can't be checked the usual way" is
   fed a file that is simply broken, on the real build, and the summary line is
   read for what it counts.** #851 built an included `.c` through its includer;
@@ -33,7 +84,12 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   one-word identifiers file, and feed both a known address first so that an
   empty result means something; the dump is read-only, so `chmod -R u+w`
   before deleting it. Extends L-538, L-634 and L-102. *From:* #842, round 60,
-  2026-11-17.
+  2026-11-17. (Extended 2026-11-24: a scanner that gains a new input kind is
+  run with that kind counted, so "nothing found" is a number. #1031 starts
+  reading symlink targets; the 2026.11.15 dump holds 1,036 links (`find <dump>
+  -type l | wc -l`), and main's and the head's scans agreed on zero findings
+  there next to a control link only the head reports; put the count and the
+  control in the review. *From:* #1031, round 67.)
 - **L-771. `tools/pr-check` doesn't read licence headers, so a file moved in
   from the kernel tree is checked for the SPDX line it brought along.**
   #666's `tools/ncm-transfer` arrived as `GPL-2.0` in an MIT repository.
@@ -216,7 +272,7 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
 - **L-271. An AI author address on an early commit of a squash-merged PR lands
   on main as `Co-authored-by:`,** even after later commits fix the identity,
   and `tools/pr-check` checks only `Signed-off-by:`. *Check:* `git log
-  --format='%an <%ae>' base..head` on omarchy-mobile PRs; ask for a
+  --format='%an <%ae>' base..head` on omamobile PRs; ask for a
   self-squash or strip the trailer at merge. *From:* #98, round 25.
 - **L-262. An AGENTS or CONTRIBUTING line links only tracked files.** #125
   linked `docs/HANDOFF.md`, which doesn't exist, and a script under the
@@ -349,15 +405,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   rejects, so `pr-check` failed every change there while CI's gawk passed.
   *Check:* after any edit to a gate, run its tests in `omamobile-build:24.04`
   too. Extends L-30. *From:* round 13.
-- **L-156. A bindings-only PR gets no `dtbs_check`** from CI or
-  `kernel-pr-check` ("device trees: none touched"), so no board's DTB is
-  checked against the new schema. *Check:* validate the affected boards'
-  DTBs by hand; dtschema's schema checks run in the container with a stub
-  `libfdt`, only `dt-validate` needs the real one. Extends L-126. *From:*
-  kernel #51, round 13.
-- **L-178. A rejected property in a dt-validate known-failure feed can read
-  "False schema does not allow 0", without the property's name.** A `prop:
-  false` under `then:` reports the value, not the key, so grepping the output
-  for the property name says "not rejected" when it was. *Check:* grep the
-  feed's output by node name and compare base against head line by line.
-  Extends L-102. *From:* kernel #63, round 20.

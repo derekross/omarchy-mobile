@@ -1,8 +1,77 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Review lessons: Kernel (linux-omarchy-mobile) (part 3 of 4)
+# Review lessons: Kernel (linux-omamobile) (part 3 of 4)
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-23. Thermal: the hardware trip is the last line of defence.** A driver
+  that sends ACPM's TMU init must show the firmware's hardware thermal trip
+  survives it; blocks with only a 110 °C critical trip need a reason.
+  *From:* kernel #7.
+- **L-24. Alive pin banks have no power-down configuration.**
+  `samsung,pin-con-pdn`/`pin-pud-pdn` on an alive bank (gpa*) return -EINVAL,
+  which `samsung_pinconf_group_set()` ignores, so the DT describes a sleep
+  state that's never applied. *From:* kernel #12.
+- **L-25. A regmap without a read table exposes the whole block through
+  debugfs.** On gs201 one PMU read crashed the phone; a PMU regmap should
+  list the offsets it uses (`rd_table`/`wr_table`). *From:* kernel #15.
+- **L-26. A hall sensor reported as `SW_LID` makes logind treat a folded
+  phone as a closed lid** (suspend by default). Fine in the kernel; the
+  device's userspace must handle it. *From:* kernel #12.
+- **L-27. gs101 and gs201 numbers differ.** Interrupts, sysreg offsets and
+  EINT numbering (gs201 skips EINT19) must come from that SoC's stock DT or
+  Google's tree for it, never from the other SoC. *Check:* compare against
+  stock's node (USI6 on gs201: GIC SPI 679, `0x1014`). *From:* kernel #10
+  (correct).
+- **L-52. Regulator nodes use the stock board's voltage, min = max.** A full
+  selector range lets any consumer set any voltage; min = max also means
+  registering writes nothing when the rail is already there. *Check:* the
+  stock board dtsi's `regulator-min/max-microvolt`. *From:* kernel #27.
+- **L-53. Identical driver data calls for a binding fallback, not a driver
+  match.** A new SoC whose block is the same as an older one's gets
+  `items: [new, old]` in the binding and no driver change; upstream expects
+  it, and stock zumapro itself uses the zuma compatibles. *From:* kernel
+  #29, #30, #31.
+- **L-54. Diff a new SoC's stock dtsi against the file it includes.** That
+  is where its overrides hide (zumapro's `phy_eusb_version` 0x701 over
+  zuma's 0x700). *From:* kernel #29.
+- **L-55. When a driver hands chip select to the SPI core, its own transfer
+  path must stop driving it.** Otherwise it re-asserts on every transfer and
+  overrides the core's `cs_off`. *From:* kernel #21.
+- **L-56. Google sometimes ships more than one driver for the same chip;
+  check which one the board builds** (`BUILD.bazel` under
+  `kernel/devices/google/<board>`). Cheetah's and tegu's S3908 drivers
+  power the supplies in opposite orders. *From:* kernel #26.
+- **L-57. On arm64 a divide-by-zero guard changes nothing observable.**
+  UDIV by zero returns 0 without trapping; disassemble before and after
+  before calling such a patch a behaviour change or a hidden bug. *From:*
+  kernel #25.
+- **L-58. Google's `soc/gs` tree is one tree for every Pixel, and CMUCAL's
+  `OSCCLK_* = 26 MHz` is nominal.** G4 builds from zuma sources, so a zuma
+  citation for a G4 block can be right; and work out a PLL table entry
+  before accepting a 26 MHz input (the real oscillator is 24.576 MHz).
+  *From:* kernel #19, #23.
+- **L-68. Narrowing a regulator to min = max writes nothing if the rail is
+  already there.** `of_regulator` sets `apply_uV` for any range, but the
+  core only moves a rail that is out of range, so a test made with the wider
+  range still stands. *Check:* the measured voltage is an exact selector
+  (min + n × step, n < n_voltages). *From:* kernel #27, round 3.
+- **L-72. A chip id the vendor driver checks belongs in the compatible's
+  match data, not in a DT property.** Google keeps `st,dchip_id` because one
+  `st,fts` compatible serves two parts (`36 40` SALIXP, `36 48` ALIX).
+  *Check:* grep the vendor header for every value the property takes; name
+  the part (L-21). *From:* kernel #32.
+- **L-74. A Tensor PMU binding without `syscon` is a safety property.**
+  With `syscon`, a consumer that probes before the PMU driver gets a plain
+  MMIO regmap, where PMU writes are silently ignored (AGENTS.md section 1);
+  without it, the lookup defers until the SMC-backed regmap exists. *Check:*
+  new Tensor PMU bindings and board nodes leave `syscon` out, even though
+  stock DTs have it. *From:* kernel #31, round 2 (for #22).
+- **L-75. Map every property of a cited vendor block to its upstream
+  equivalent.** Stock tegu's touch `controller-data` also has
+  `cs-clock-delay = <2>`, a 2 µs CS-to-clock wait, which upstream spells
+  `spi-cs-setup-delay-ns`. *Check:* read the whole block, not only the
+  property the PR cites, and say why each one is or isn't needed. *From:*
+  kernel #21, round 2.
 - **L-77. A vendor CAL's version switch is narrower than the function it
   sits in.** Google's eUSB2 init gates only the charge-pump bias clear on
   the revision; the rest runs for every version, so "0x701's sequence"
@@ -366,20 +435,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   says how they were found. *Check:* grep Google's GPL tree for each register;
   if one is absent, ask. Extends L-61 and L-177. *From:* kernel #213, round
   44, 2026-11-08.
-- **L-545. A sentence corrected on one board is grepped across every board
-  that copied it.** Kernel #214 fixes akita's "the guard runs before the disks
-  appear" (L-528). The same words are in `zuma-husky.dts` and
-  `zumapro-tegu.dts`, and UFS is built in for every phone, so they are wrong
-  there too; only husky's had been noticed. *Check:* when a review corrects
-  copied text, `git grep -n '<the sentence>' github/omamobile -- arch/
-  device/`, and judge each copy by the fact that made the first one wrong
-  (here `CONFIG_SCSI_UFS_EXYNOS=y` in the shared config). Extends L-528 and
-  L-257. *From:* kernel #214 with #206, round 44, 2026-11-08.
-- **L-546. soc/gs is one tree, so an absent call in a shared driver says
-  nothing about one SoC.** We nearly told kernel #187's author that zuma has
-  no secure-ATU SMC because Google's `pcie-exynos-rc.c` has none; that file is
-  the same on the gs201 branch, where the SMC is real, so it comes from
-  another driver. *Check:* `cmp` the file across the board branches first, and
-  find where the vendor actually issues the SMC before saying "SoC X doesn't
-  use it". Extends L-58 and L-113. *From:* kernel #187, round 44 (a near miss
-  in drafting); 2026-11-08.
