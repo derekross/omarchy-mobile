@@ -123,7 +123,9 @@ and every image checksum before its dry run. It must then show the exact
 `boot` and `userdata` writes, the userdata erase consequence, and the
 guarded-rescue recovery command before requiring the typed codename. Write
 `userdata` first, using the `omamobile-root` label from `tools/build-rootfs`,
-then write `boot`. Stop before writing if the old root already has that label.
+then write `boot`. The dry run must show the old label recorded at L2.
+Stop before writing if that record is missing, inconclusive, or shows
+`omamobile-root`.
 A cut-off between the writes leaves new `userdata` with the previous rescue
 in `boot`. The new initramfs must independently refuse any root without
 the expected label. An interruption during either write leaves no assumed bootable
@@ -152,7 +154,10 @@ limitation until its recovery policy and failure tests are reviewed.
 
 Build a production initramfs that mounts the installed ext4 root from
 `userdata`, verifies its expected label, and has the exact Dipper boot image's
-modules. The no-USB-host behavior must not reboot into the same unverified
+modules. For development, L1 checks that the image packs
+`/etc/omamobile-root-label` as `omamobile-root` and
+`/etc/omamobile-root-mode` as `persistent-development`.
+The no-USB-host behavior must not reboot into the same unverified
 single-slot image. On a missing USB host, failed root mount, or failed
 firstboot, stay in the initramfs rescue state with the console and USB SSH
 available where possible; do not fall through to an older root or request
@@ -187,6 +192,12 @@ compare each complete phone-side SHA-256 with the off-device copy. Include
 the current guarded-rescue `boot` image and retain the older 11-09 image as
 separate historical evidence. Stop on any mismatch, missing partition, size change,
 or `ro=0`. Store the complete backup and checksum manifest off-repository.
+
+While still in guarded rescue, identify `userdata` by its GPT name, verify
+it is read-only, and run `dumpe2fs -h` against it. Record the filesystem
+label (including a confirmed absence of a label) with the backup on the
+laptop. If the read fails or the label is `omamobile-root`, stop. The
+installer uses this record because Dipper fastboot cannot read `userdata`.
 
 ### L3. Attended install (persistent write; high risk; maintainer approval
 required)
