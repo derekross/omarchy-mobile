@@ -1,6 +1,6 @@
 .pragma library
 // SPDX-License-Identifier: MIT
-// OWL values for Omarchy Mobile's own OWL runtime (docs/WIDGET-INTEROP-PLAN.md).
+// OWL values for Omamobile's own OWL runtime (docs/WIDGET-INTEROP-PLAN.md).
 //
 // A value is null, a number, a string, a boolean, a list (JS array), a map
 // (JS Map, which keeps keys in the order they came, "10" before "2" too), or

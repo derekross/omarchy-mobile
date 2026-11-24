@@ -4,7 +4,7 @@
 These files were split from #543. They are not installed by the passive device
 package and no service is enabled by this source tree. The original tested
 snapshot remains at commit 6ad4651f8ac151333345c72db99f1fd83259696f in the
-contributor's omarchy-mobile fork. The revised files have not run on a phone.
+contributor's omamobile fork. The revised files have not run on a phone.
 
 The hardware, Wi-Fi and GPU helpers retain their exact tested release/module
 pins and explicit opt-ins. They target the tested kernel source `c934e316b`

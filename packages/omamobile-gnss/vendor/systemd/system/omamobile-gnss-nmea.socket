@@ -3,7 +3,7 @@
 # first connection starts the bridge and with it the GNSS stack. Enabled by
 # "omamobile-gnss on" (the Location switch), not by default.
 [Unit]
-Description=Omarchy Mobile GNSS NMEA socket (location on demand)
+Description=Omamobile GNSS NMEA socket (location on demand)
 
 [Socket]
 ListenStream=/run/omamobile-gnss/nmea.sock

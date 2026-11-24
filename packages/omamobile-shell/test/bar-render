@@ -1,0 +1,76 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Offscreen review shots of the status bar's battery styles and icon switches
+# (shell.json bar.batteryStyle, bar.statusIcons), 412 px wide at the bar's height, in a
+# dark and a light Omarchy theme, with checks: the bolt shows while charging
+# in every style, low battery takes the urgent colour, every style fits.
+# Runs inside the OWL conformance container, never on a desktop:
+#
+#   docker run --rm --network none -u "$(id -u):$(id -g)" -v "$PWD:/src" \
+#     -v /usr/share/omarchy/themes:/themes:ro -v /usr/share/omarchy/shell:/omarchy-shell:ro \
+#     omamobile-owl-conformance:p1 bash /src/packages/omamobile-shell/test/bar-render /src/logs/bar-render
+#
+# test/all runs it when OMAMOBILE_BAR_RENDER names an output directory.
+# The glyph row is a stand-in for Bar.qml's (the icon shots show what
+# iconShown hides, not Bar.qml itself); the battery is the bar's own component.
+set -euo pipefail
+out=${1:?Usage: bar-render OUTDIR}
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+[[ -d /omarchy-shell && -d /themes ]] || { echo "bar-render: needs /omarchy-shell and /themes (the container's mounts)" >&2; exit 2; }
+command -v quickshell >/dev/null || { echo "bar-render: no quickshell" >&2; exit 2; }
+mkdir -p "$out" /tmp/xdg
+export XDG_RUNTIME_DIR=/tmp/xdg QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
+h=/tmp/bar-harness
+rm -rf "$h"; mkdir -p "$h"
+for m in Commons Ui services; do cp -r "/omarchy-shell/$m" "$h/$m"; done
+find "$h/Commons" "$h/Ui" "$h/services" -name '*.qml' -exec sed -i -E \
+  -e 's/(^|[^.[:alnum:]_])Color\./\1Commons.Color./g' \
+  -e '0,/^import qs\.Commons$/s//import qs.Commons\nimport qs.Commons as Commons/' {} +
+for f in "$h"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
+cp -r "$here/../plugins/omamobile.bar" "$h/bar"
+cp "$here/bar-render.qml" "$h/"
+status=0
+for theme in tokyo-night catppuccin-latte; do
+  home=/tmp/bar-home-$theme
+  mkdir -p "$home/.local/state/omarchy/current"
+  ln -sfn "/themes/$theme" "$home/.local/state/omarchy/current/theme"
+  python3 - "$out" "$theme" > "$h/job-$theme.json" <<'PY'
+import json, sys
+out, theme = sys.argv[1:]
+shots = []
+for style in ["icon", "percent", "icon-percent", "horizontal", "horizontal-percent"]:
+    for pct, chg in [(100, False), (50, False), (50, True), (8, False), (8, True)]:
+        name = "%s-%d%s" % (style, pct, "-charging" if chg else "")
+        shots.append({"name": name, "png": "%s/bar-%s-%s.png" % (out, name, theme), "percent": pct, "charging": chg,
+                      "config": {"batteryStyle": style}})
+for name, icons in [("hidden-bt-wifi", {"bluetooth": False, "wifi": False}),
+                    ("hidden-all", {k: False for k in ["bluetooth", "wifi", "cell", "dnd", "unread"]})]:
+    shots.append({"name": name, "png": "%s/bar-%s-%s.png" % (out, name, theme), "percent": 64, "charging": False,
+                  "config": {"batteryStyle": "horizontal-percent", "statusIcons": icons}})
+shots.append({"name": "legacy-no-percent", "png": "%s/bar-legacy-no-percent-%s.png" % (out, theme), "percent": 64, "charging": False,
+              "config": {"showBatteryPercent": False}})
+print(json.dumps({"shots": shots}))
+PY
+  HOME=$home QT_SCALE_FACTOR=3 BAR_JOB="$h/job-$theme.json" timeout 120 quickshell -p "$h/bar-render.qml" > "$h/log-$theme" 2>&1 || true
+  grep -E "battery |shot |Error" "$h/log-$theme" | sed -E 's/^.*(battery |shot |Error)/\1/' | tee -a "$out/bar-render.txt" >/dev/null || true
+  python3 - "$h/log-$theme" "$theme" <<'PY' || status=1
+import re, sys
+log, theme = sys.argv[1:]
+text = open(log).read()
+bad = [l for l in text.splitlines() if re.search(r"(TypeError|ReferenceError|is not a type|Error:)", l)]
+rows = re.findall(r"battery (\S+) style (\S+) (\d+)x(\d+) bolt (\w+) low (\w+) strip (\d+)", text)
+ok = len(rows) == 28 and not bad
+if len(rows) != 28: print("not ok - %s: %d of 28 shots" % (theme, len(rows)))
+for name, style, w, h, bolt, low, strip in rows:
+    charging = name.endswith("-charging")
+    good = (bolt == "true") == charging and int(h) <= int(strip) and 0 < int(w) <= 120
+    if re.search(r"-8$", name): good = good and low == "true"
+    if charging: good = good and low == "false"
+    if name == "legacy-no-percent": good = good and style == "icon"
+    print("%s - %s %s (%s): %sx%s bolt %s low %s" % ("ok" if good else "not ok", theme, name, style, w, h, bolt, low))
+    ok = ok and good
+for l in bad: print("  " + l)
+sys.exit(0 if ok else 1)
+PY
+done
+exit $status

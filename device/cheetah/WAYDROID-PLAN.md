@@ -90,9 +90,10 @@ downloads the system and vendor images from Waydroid's OTA channels
   For push notifications, microG can be installed as ordinary apps: the
   LineageOS-for-Waydroid VANILLA build allows signature spoofing for
   microG's own key only.
-- **GAPPS:** Google Play. The device must be registered once, by its owner,
-  at google.com/android/uncertified with the GSF android_id; never paste
-  that ID into the repository or a plan.
+- **GAPPS:** not offered (decided 2026-11-24). The project neither ships nor
+  documents Google apps: decisions put user privacy and security first.
+  `omamobile-waydroid` accepts only VANILLA and FOSS; an owner who wants
+  Google Play can set it up inside Waydroid on their own.
 - Switching system type later means a fresh `data` directory; keep the old
   one aside rather than deleting it.
 

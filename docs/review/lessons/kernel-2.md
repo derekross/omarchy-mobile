@@ -1,8 +1,106 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Review lessons: Kernel (linux-omarchy-mobile) (part 2 of 4)
+# Review lessons: Kernel (linux-omamobile) (part 2 of 4)
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-877. A glue driver that orders a PHY before its core is checked against
+  how the same-SoC sibling's board node solves it, and against the PHY
+  driver's history for the hang it names.** Kernel #271 initialises the USB2
+  PHY before `dwc3_core_probe()` and holds it powered across sleep; the 9a's
+  merged node gives plain `snps,dwc3` the sub-control clock for exactly that
+  early register access, and `da56cbe9ff2f` had already fixed the zuma hang in
+  the PHY's exit, with a measured A/B that contradicts the PR's reasoning.
+  *Check:* `git grep -n -B6 -A12 '^&usb {' <base> --
+  arch/arm64/boot/dts/exynos/google/<soc>-*.dts`, `git log <base> --
+  drivers/phy/samsung/phy-exynos5-usbdrd.c` for the words of the hang, and ask
+  for one boot on the published base with the sibling's node before a second
+  compatible for the same block. Extends L-105, L-113 and L-116. *From:*
+  kernel #271, round 61, 2026-11-18.
+- **L-876. A fix for a warning is checked for whether any published board can
+  raise it.** The `gpiolib.c` warning kernel #270 fixed needs a GPIO shared by
+  two DT nodes; no board on `omamobile` has one and 1,051 logs have no such
+  line, so the patch had no user on the base and no test there. *Check:* grep
+  `logs/` for the warning's file:line, and name the DT construct that triggers
+  it and the PR that brings it. Extends L-317 and L-489. *From:* kernel #270,
+  round 61, 2026-11-18.
+- **L-875. Adding a gpiolib callback to a shared `gpio_chip` is read through
+  every gpiolib call site that tests for it, registration first.** Kernel
+  #270's `get_direction()` looked like "one read when the proxy asks", but
+  `gpiochip_add_data_with_key()` calls it for every line of every bank at
+  probe, `gpiod_request_commit()` on every request, and
+  `gpiochip_lock_as_irq()` starts refusing outputs, which
+  `exynos_irq_request_resources()` calls before it sets the EINT function.
+  *Check:* `git grep -n '->get_direction' <base> -- drivers/gpio/gpiolib*.c`
+  (the same for any new `gpio_chip` or `pinctrl_ops` member), list what each
+  caller now does on the reference phone, and for a new probe-time register
+  read walk every enabled controller of every SoC against AGENTS' "registers
+  that abort" list (gs101's `pinctrl_gsactrl` is enabled in `gs101.dtsi`).
+  Extends L-465, L-206 and L-51. *From:* kernel #270, round 61, 2026-11-18.
+- **L-866. A change from "round up" to "round down" on a linear-range lookup
+  is checked at the top of the range and for the caller's "property missing"
+  value.** `linear_range_get_selector_low_array()` returns the highest
+  selector, with no error, for any value above the range, where the `_high_`
+  variant with `found` refused it; kernel #266's rounding commit so turned a
+  battery node without `constant-charge-current-max-microamp` (`-EINVAL`
+  copied into a `u32`) from a failed probe into a 4 A charge current. *Check:*
+  read both helpers' out-of-range returns in `lib/linear_ranges.c`, feed the
+  setter `(u32)-EINVAL`, max + 1 and min - 1 (by reading or a KUnit case) and
+  compare with the base; `git grep -n 'get_battery_info' <driver>` for fields
+  copied without a `>= 0` test. Extends L-208 and L-52. *From:* kernel #266,
+  round 61, 2026-11-18.
+- **L-865. "As stock does" for an end-of-charge rule is read at the vendor's
+  tier test as well as its margin.** Kernel #267 copied `max77759_is_full()`'s
+  50 mV and 200 mV but acted only in the last tier, where stock's function
+  returns false for every other tier; the vendor's own comment names the
+  small-adapter case the PR's phone was in. *Check:* list the vendor
+  function's early returns and what each means for the caller, and compare
+  with the new code's `DONE_NONE` paths. Extends L-542 and L-77. *From:*
+  kernel #267, round 60, 2026-11-17.
+- **L-864. State that a PR resets "per plug-in" is traced to the event that
+  resets it, on the board the feature is for.** Kernel #267's restart budget
+  was cleared by a flag set only from the `tcpm-source` notifier, and husky's
+  Type-C node is disabled, so "five per plug-in" was five per boot. *Check:*
+  `grep -n '<flag> = true'`, follow the caller to its trigger, and read that
+  trigger's node status in the board DTS. Extends L-438 and L-396. *From:*
+  kernel #267, round 60, 2026-11-17.
+- **L-863. A guard that reads another supply is checked on a unit running the
+  published device tree, not the author's.** Kernel #267's temperature tiers
+  read the gauge; the author's 8 Pro had a local gauge model and read 37-39 C,
+  while a second 8 Pro on the published kernel read 22.0 C in 2450 samples.
+  *Check:* name the supply and property each guard input comes from, read the
+  published DTS for what configures it (a model, a thermistor setting), and
+  search the device's issues for another owner's log of that property; a
+  constant input is a blind guard. Extends L-99, L-629 and L-169. *From:*
+  kernel #267 with #761, round 60, 2026-11-17.
+- **L-862. A float voltage in a battery node is checked against three places
+  in the vendor's GPL data: the board maximum, the top of the step table, and
+  the aging schedule.** Kernel #267's 4.45 V for husky was "a bit under
+  stock"; Google's `fv-max-uv` and top tier are 4.48 V, and
+  `aafv-ref-cycles`/`aafv-ref-offset` in `zuma-husky-battery.dtsi` lower the
+  float 20 mV per 200 cycles to 4.38 V. *Check:* fetch
+  `<soc>-<board>-battery.dtsi` and `-charging.dtsi` from
+  `kernel/devices/google/<device>`, grep `fv-max-uv`, `chg-cv-limits`, `aafv`
+  and `aact`, read `gbms_aafv_get_offset()` for how the schedule indexes, and
+  ask for the unit's `cycle_count`; the DTS comment cites the file. Extends
+  L-52, L-100 and L-208. *From:* kernel #267, round 60, 2026-11-17.
+- **L-861. A charge limit or defender polled by a work item is asked "what
+  happens asleep on the charger" before its settings page is reviewed.**
+  Kernel #266's thresholds run from the guard's delayed work, which s2idle
+  stops while the chip charges on; the author's phone held a sleep inhibitor
+  that no PR ships, and #860's "held at 90 % overnight" rested on it. *Check:*
+  find what schedules the limit's check and whether it runs in s2idle; grep
+  the dependent userspace PR's evidence for an inhibitor or a local unit; ask
+  for the decision (stay awake, wake for it, or say so). Extends L-367 and
+  L-651. *From:* kernel #266 with #860, round 60, 2026-11-17.
+- **L-860. Marking registers volatile in an MFD's regmap is a change for every
+  board that binds the chip, whatever the commit that needs it gates on.**
+  Kernel #266 made CHG_CNFG_00..04 volatile for a husky read-back; with it
+  every `regmap_update_bits()` on mode, current and float reads the chip first
+  on the 7 Pro too. *Check:* `git grep` the MFD's compatible across board DTS
+  files, list each driver call on the range, and say for the reference phone
+  what used to come from the cache; grep open PRs for messages that rely on
+  "the cache skips the write". Extends L-151 and L-369. *From:* kernel #266
+  with #261, round 60, 2026-11-17.
 - **L-859. "This board's value is an exact step, so nothing changes there" is
   checked through every value the driver computes, not only the one it
   reads.** Kernel #266's round-down left cheetah's 1466730 uA alone at probe,
@@ -34,7 +132,7 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   FT3658/FT8756" for all devices, and the Pixel 7's fingerprint service finds
   its touchscreen by the exact string "FocalTech FT3658". *Check:* `git diff`
   the driver for `input->name`, `dev_info` and `MODULE_ALIAS` changes, then
-  `git grep -n '<old name>' origin/main -- packages tools` in omarchy-mobile;
+  `git grep -n '<old name>' origin/main -- packages tools` in omamobile;
   a per-part name goes in match data. Extends L-8 and L-277. *From:* kernel
   #260, round 60, 2026-11-17.
 - **L-850. A "Sources:" or "Tested-on:" paragraph added below the trailers
@@ -50,7 +148,7 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   `supports-clkreq` is on no Exynos board, so kernel #269 changes no phone,
   and the first board to add it carries the phone test. *Check:* `git grep -n
   '<property>' <base> -- arch/arm64/boot/dts` and the devices' overlays in
-  omarchy-mobile. Extends L-206. *From:* kernel #269, round 60, 2026-11-17.
+  omamobile. Extends L-206. *From:* kernel #269, round 60, 2026-11-17.
 - **L-848. "The value Google's driver uses" is read on every kernel branch the
   phone shipped with, and in both repositories.** For kernel #269 the Pixel
   7's 5.10 driver (`kernel/gs`) writes T_POWER_ON 130 us in
@@ -118,7 +216,7 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   Google's closed firmware and DMA to all RAM below 4 GiB; stock's
   `gs201-mfc.dtsi` puts two System MMUs and `samsung,tzmp` in front of it, and
   `gs201-s2mpu.dtsi` two S2MPUs. The maintainer's decision (2026-11-15): such a
-  node stays `disabled`, and an omarchy-mobile overlay turns it on, until the
+  node stays `disabled`, and an omamobile overlay turns it on, until the
   IOMMU is described. *Check:* for any new DMA master a board enables, grep
   Google's SoC dtsi for its `iommus`, `s2mpu` and `tzmp` lines, say what
   confines it in our tree (an IOMMU, a restricted pool, nothing), and ask for
@@ -130,7 +228,7 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   the whole string.** Husky's `klog.dtso` and `panic-probe.dtso` (and akita's
   `ufs-probe.dtso`) set their own `bootargs` without `mem_sleep_default`, so
   a boot with one of them loses what kernel #244 adds. *Check:* `git grep -l
-  'bootargs =' origin/main -- device/<codename>` in omarchy-mobile, look for
+  'bootargs =' origin/main -- device/<codename>` in omamobile, look for
   the new argument in each hit, and name in the review the overlays that
   reach the Arch session without it. Extends L-49, L-207 and L-315. *From:*
   kernel #244, round 52, 2026-11-11.
@@ -315,64 +413,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   `samsung,pin-con-pdn`/`pin-pud-pdn` on an alive bank (gpa*) return -EINVAL,
   which `samsung_pinconf_group_set()` ignores, so the DT describes a sleep
   state that's never applied. *From:* kernel #12.
-- **L-25. A regmap without a read table exposes the whole block through
-  debugfs.** On gs201 one PMU read crashed the phone; a PMU regmap should
-  list the offsets it uses (`rd_table`/`wr_table`). *From:* kernel #15.
-- **L-26. A hall sensor reported as `SW_LID` makes logind treat a folded
-  phone as a closed lid** (suspend by default). Fine in the kernel; the
-  device's userspace must handle it. *From:* kernel #12.
-- **L-27. gs101 and gs201 numbers differ.** Interrupts, sysreg offsets and
-  EINT numbering (gs201 skips EINT19) must come from that SoC's stock DT or
-  Google's tree for it, never from the other SoC. *Check:* compare against
-  stock's node (USI6 on gs201: GIC SPI 679, `0x1014`). *From:* kernel #10
-  (correct).
-- **L-52. Regulator nodes use the stock board's voltage, min = max.** A full
-  selector range lets any consumer set any voltage; min = max also means
-  registering writes nothing when the rail is already there. *Check:* the
-  stock board dtsi's `regulator-min/max-microvolt`. *From:* kernel #27.
-- **L-53. Identical driver data calls for a binding fallback, not a driver
-  match.** A new SoC whose block is the same as an older one's gets
-  `items: [new, old]` in the binding and no driver change; upstream expects
-  it, and stock zumapro itself uses the zuma compatibles. *From:* kernel
-  #29, #30, #31.
-- **L-54. Diff a new SoC's stock dtsi against the file it includes.** That
-  is where its overrides hide (zumapro's `phy_eusb_version` 0x701 over
-  zuma's 0x700). *From:* kernel #29.
-- **L-55. When a driver hands chip select to the SPI core, its own transfer
-  path must stop driving it.** Otherwise it re-asserts on every transfer and
-  overrides the core's `cs_off`. *From:* kernel #21.
-- **L-56. Google sometimes ships more than one driver for the same chip;
-  check which one the board builds** (`BUILD.bazel` under
-  `kernel/devices/google/<board>`). Cheetah's and tegu's S3908 drivers
-  power the supplies in opposite orders. *From:* kernel #26.
-- **L-57. On arm64 a divide-by-zero guard changes nothing observable.**
-  UDIV by zero returns 0 without trapping; disassemble before and after
-  before calling such a patch a behaviour change or a hidden bug. *From:*
-  kernel #25.
-- **L-58. Google's `soc/gs` tree is one tree for every Pixel, and CMUCAL's
-  `OSCCLK_* = 26 MHz` is nominal.** G4 builds from zuma sources, so a zuma
-  citation for a G4 block can be right; and work out a PLL table entry
-  before accepting a 26 MHz input (the real oscillator is 24.576 MHz).
-  *From:* kernel #19, #23.
-- **L-68. Narrowing a regulator to min = max writes nothing if the rail is
-  already there.** `of_regulator` sets `apply_uV` for any range, but the
-  core only moves a rail that is out of range, so a test made with the wider
-  range still stands. *Check:* the measured voltage is an exact selector
-  (min + n × step, n < n_voltages). *From:* kernel #27, round 3.
-- **L-72. A chip id the vendor driver checks belongs in the compatible's
-  match data, not in a DT property.** Google keeps `st,dchip_id` because one
-  `st,fts` compatible serves two parts (`36 40` SALIXP, `36 48` ALIX).
-  *Check:* grep the vendor header for every value the property takes; name
-  the part (L-21). *From:* kernel #32.
-- **L-74. A Tensor PMU binding without `syscon` is a safety property.**
-  With `syscon`, a consumer that probes before the PMU driver gets a plain
-  MMIO regmap, where PMU writes are silently ignored (AGENTS.md section 1);
-  without it, the lookup defers until the SMC-backed regmap exists. *Check:*
-  new Tensor PMU bindings and board nodes leave `syscon` out, even though
-  stock DTs have it. *From:* kernel #31, round 2 (for #22).
-- **L-75. Map every property of a cited vendor block to its upstream
-  equivalent.** Stock tegu's touch `controller-data` also has
-  `cs-clock-delay = <2>`, a 2 µs CS-to-clock wait, which upstream spells
-  `spi-cs-setup-delay-ns`. *Check:* read the whole block, not only the
-  property the PR cites, and say why each one is or isn't needed. *From:*
-  kernel #21, round 2.

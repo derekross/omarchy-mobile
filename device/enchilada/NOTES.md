@@ -3,7 +3,7 @@
 
 Findings from one retail OnePlus 6 (`ONEPLUS A6000`, `oneplus,enchilada`,
 Qualcomm SDM845 / Snapdragon 845), newest first. Claim and discussion:
-[#432](https://github.com/derekross/omarchy-mobile/issues/432). Captures
+[#432](https://github.com/derekross/omamobile/issues/432). Captures
 (`fastboot getvar all`, the partition map, command lines) stay off the
 repository; facts from them are quoted here. Dates and times are US Eastern
 (UTC−5).
@@ -20,7 +20,7 @@ distributed with, and the upstream `qcom/sdm845-oneplus-enchilada.dtb`:
 - **the netfilter kernel**: the same, plus the six netfilter matches in
   the 2026-11-05 firewall entry.
 
-linux-omarchy-mobile, which carries the same upstream DTS, has not been
+linux-omamobile, which carries the same upstream DTS, has not been
 tried yet; it is next.
 
 [sdm845-tag]: https://gitlab.com/sdm845-mainline/linux/-/tree/sdm845-7.1-rc1-r0
@@ -29,7 +29,7 @@ tried yet; it is next.
 
 **Slot A does not hold stock Android.** This is a §3.1 event, recorded
 here as the maintainer asked on #432. Putting stock back on slot A is
-outside the project ([the maintainer's decision on #432](https://github.com/derekross/omarchy-mobile/issues/432#issuecomment-6708103355)):
+outside the project ([the maintainer's decision on #432](https://github.com/derekross/omamobile/issues/432#issuecomment-6708103355)):
 this tree only writes slot B and `userdata`, and never `vbmeta`. If it is done, it is the owner's own step, with
 OnePlus's own images, and it is recorded on #432 (slot flags before
 and after, what was flashed and from which image, then a fresh
@@ -85,7 +85,7 @@ and A's retry count went from 6 to 5. Neither slot is marked unbootable.
 
 Slot A is not marked successful, but a rescue boot does not spend one of
 its tries here: after one more rescue boot A was still at 5 and B at 7
-([#432](https://github.com/derekross/omarchy-mobile/issues/432#issuecomment-6716747930)). What took A from 6 to 5 between the first two reads is not
+([#432](https://github.com/derekross/omamobile/issues/432#issuecomment-6716747930)). What took A from 6 to 5 between the first two reads is not
 known. Neither slot is near 0.
 
 **The slot-A rescue.** It is not the shared init and has no initramfs (an
@@ -209,7 +209,7 @@ kernel's `boot_b` image sent to RAM, slot A still active, root on
 `IP6_NF_MATCH_RT`), firstboot completed, `ufw status` was active with
 `22/tcp on usb0 ALLOW IN` (IPv4 and IPv6), and fresh SSH sessions
 worked. `kernel/configs/omamobile.config` already enables the same
-matches, so linux-omarchy-mobile should not need this.
+matches, so linux-omamobile should not need this.
 
 On the very first boot only, SSH on `usb0` was blocked for about 100 s:
 `ufw.service` starts default-deny about 5 s into boot, and the `usb0`

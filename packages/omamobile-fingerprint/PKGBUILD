@@ -3,14 +3,14 @@
 pkgname=omamobile-fingerprint
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile fingerprint for the Pixel 7 Pro: Google's HAL in a chroot, bridged to fprintd"
+pkgdesc="Omamobile fingerprint for the Pixel 7 Pro: Google's HAL in a chroot, bridged to fprintd"
 arch=(aarch64)
-url="https://github.com/derekross/omarchy-mobile"
+url="https://github.com/derekross/omamobile"
 license=(MIT)
 backup=(etc/pam.d/omarchy-lock-fingerprint)
 depends=(bash python util-linux coreutils diffutils systemd kmod fprintd e2fsprogs)
 optdepends=('fprintd: fingerprint unlock and sudo through PAM'
-            'libfprint: the Omarchy Mobile build, with the omamobile_udfps driver')
+            'libfprint: the Omamobile build, with the omamobile_udfps driver')
 install=omamobile-fingerprint.install
 
 check() {
