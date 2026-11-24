@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 8 Pro (husky): Type-C and fast charging, plan
 
-Last updated: 2026-11-02. Written 2026-11-01 from source reading and that day's measurements; stages 0, 3 and 4 have run (results in [BATTERY-NOTES.md](BATTERY-NOTES.md) section 7.2). Claims: **[V]** checked in a file or on the phone, **[I]** inferred, with what settles it.
+Last updated: 2026-11-24. Written 2026-11-01 from source reading and that day's measurements; stages 0, 3 and 4 have run (results in [BATTERY-NOTES.md](BATTERY-NOTES.md) section 7.2). Claims: **[V]** checked in a file or on the phone, **[I]** inferred, with what settles it.
 
 ## 1. Where things stood before the Type-C step (2026-11-01, kernel `7.3.0-rc6-omamobile-push1-g5899fec2bd28`)
 

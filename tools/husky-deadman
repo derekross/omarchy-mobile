@@ -47,7 +47,8 @@
 #   Two cases: charger-less (max77759_charger not loaded), or AFTER b3-charger
 #   in the same boot (b3-charger soaked, then b4-tcpm): the charger then follows
 #   tcpm's current limit (Rp 3 A -> 0xc2 asks for 3 A, not enforced until
-#   linux-omarchy-mobile#288; battery still capped at 1.485 A by the DT) and the b4 undo also undoes b3 (charging ends off).
+#   linux-omarchy-mobile#288; battery still capped at 1.485 A by the DT) and
+#   the b4 undo also undoes b3 (charging ends off).
 #   The phone refuses b4 if the charger was loaded any other way, or with
 #   default_ilim_ua 0. b3-charger refuses while a Type-C driver is loaded.
 #
