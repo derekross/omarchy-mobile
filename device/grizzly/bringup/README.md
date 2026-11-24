@@ -63,6 +63,11 @@ adds the provider-only idle prep experiment at
 [v40 runbook](../BRINGUP-M1.md#mainline-v40-idle-prep-diagnostic)
 for its vote ownership and PSM1 gates.
 
+The [v41 diagnostic branch](https://github.com/adrienlacombe/linux-omarchy-mobile/tree/grizzly-ufs-bringup-v41)
+adds genpd idle-release logging at `e040f855e9ca3eb513734e5bad5c176497446ec6`.
+See the [v41 runbook](../BRINGUP-M1.md#mainline-v41-genpd-idle-release-trace)
+for the stock D1 comparison and expected gate records.
+
 The earlier first-light sources are published on the
 [grizzly-first-light-archive branch](https://github.com/adrienlacombe/linux-omarchy-mobile/tree/grizzly-first-light-archive).
 The table distinguishes

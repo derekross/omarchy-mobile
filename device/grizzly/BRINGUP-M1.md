@@ -2033,14 +2033,58 @@ stage=0`, which is `MALIBU_UFS_IDLE_WAIT_OFF`. The retained log
 contains no prep OFF callback records. The release gate therefore
 blocked both diagnostic resume votes. The trial did not exercise
 the `0x3` to `0x2` prep transition or issue core ON. PHY remained
-`0x11` at the two-second and 21.481198 s samples. Why prep had
-not reached the OFF callback remains open.
+`0x11` at the two-second and 21.481198 s samples.
 
 The timed restart reached Fastboot 133 seconds after the B boot
 request. Stock D1 completed boot on A with enforcing verity and
 the original factory VBMeta digest. `SYSTEM_LAST_KMSG` matched the
 ramoops diagnostic records for the failed release gate and late
 PHY sample.
+
+### Mainline v41 genpd idle-release trace
+
+The same v40 console and `SYSTEM_LAST_KMSG` report `sync_state()
+pending due to 3c2d0000.ufs` for the CPM provider at 10.473236 s.
+The fixture enables the UFS device-tree node so the diagnostic can
+attach its power domains. The UFS host driver is compiled out, so the
+device stays unbound and its managed CPM supplier link stays inactive.
+
+In v40, `malibu_cpm_register_domains()` registers prep logically ON
+after the initial vote. Mainline `pm_genpd_init()` sets `stay_on` for
+boot-on OF domains unless the provider opts out. `genpd_power_off()`
+checks this latch before the provider callback. The CPM provider's OF
+`sync_state` would clear it and retry, but the inactive UFS consumer
+holds off that sync. The sweep message alone shows work was queued.
+The v40 source and retained provider message identify the expected
+veto. The new trace will capture the actual gate values at work time.
+
+Stock D1's GKI at `f5369e7496cb231d2b41cbca078b8b69160ac22d`
+also queues unused-domain work. Its genpd has no boot-on `stay_on`
+gate. Stock prep and core each recorded one successful logical OFF
+before `ufs.ko` loaded, despite a later supplier sync warning. That
+boot measured prep PSM1 `0x3` before and `0x2` after the prep ON vote.
+
+[v41 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/e040f855e9ca3eb513734e5bad5c176497446ec6)
+adds a default-off diagnostic for the two named UFS domains. It logs
+registration, sweep queue, worker, blocking predicates, provider sync
+and OFF callback entry. It keeps v40's domain flags, sync policy,
+vote sequence, disabled UFS host and 90-second warm return.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match the v41 source, image manifest and v40 safety configuration below. | Keep stock A selected if any check fails. |
+| One attended slot B boot, power-control risk | With separate approval and the NV backup gate satisfied, expect `malibu-ufs-genpd` registration, `sweep-queue` and `worker` records for prep. The expected `entry-gate` has `on=1 stay_on=1` with no other blocking flags, no prep `provider-off`, and the pending UFS consumer message. | Preserve any differing first gate. Use the timed warm return and select stock A. Abort further trials if a preflight check fails, the recovery path is lost, or a disk appears. |
+
+Offline build `7.3.0-rc6-omamobile-grizzly-uic-v41` passed strict
+checkpatch and `W=1` for the genpd object. The config delta is the
+trace option and release suffix. The DTB and rescue ramdisk match v40.
+DT schema validation returns the same three baseline diagnostics.
+All five image hashes, both AVB signatures, unpacked payload, ABL
+handoff bounds and saved D1 slot capacities passed. Manifest SHA-256
+`35ec623a13ed8859116289ac03d110c6db1e44c62a508a310b7ab539dc1d76be`.
+Archive SHA-256
+`0933993bfe03cec6508186b8e98fcc8e93d14b906d1b4a7dc0b53f0002e55ca9`.
+v41 awaits its first hardware boot.
 
 ## Staging and return sequence used for D1
 
