@@ -169,9 +169,9 @@ mv "$tmp/defaults.off" "$tmp/bin/omarchy-pkg-defaults"
 out=$(env -i PATH="$tmp/bin:/usr/bin:/bin" HOME="$H" XDG_DATA_DIRS="$S" PAC="$P" OMAMOBILE_APPMGR_PROTECTED="$tmp/none" \
   OMAMOBILE_APPMGR_LOCK="$LOCK" "$L/app-guard" toy-pkg); has "$out" 'could not read its protected list'
 # the phone's own apps are protected by name (not only because omamobile-apps depends on them)
-for p in omaphone omamessages omacam; do
-  out=$(env -i PATH="$tmp/bin:/usr/bin:/bin" HOME="$H" PAC="$P" OMAMOBILE_APPMGR_PROTECTED="$PROT" OMAMOBILE_APPMGR_LOCK="$LOCK" "$L/app-guard" "$p")
-  has "$out" "refuse	$p is protected: "
+for p in 'omaphone:the phone app' 'omamessages:messages (SMS)' 'omacam:the camera'; do
+  out=$(env -i PATH="$tmp/bin:/usr/bin:/bin" HOME="$H" PAC="$P" OMAMOBILE_APPMGR_PROTECTED="$PROT" OMAMOBILE_APPMGR_LOCK="$LOCK" "$L/app-guard" "${p%%:*}")
+  has "$out" "refuse	${p%%:*} is protected: ${p#*:}"
 done
 # pacman locked: refused
 : > "$LOCK"; has "$(run state org.test.Toy)" 'pacman is locked'; rm -f "$LOCK"

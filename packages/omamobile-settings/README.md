@@ -41,11 +41,14 @@ A third page, Apps, lists the apps the app drawer shows (the same desktop entrie
 filters and Omarchy's `launcher.hides`), and for one app shows its package, version and installed size from pacman
 (`pacman -Qo`, `-Qi`, read-only) and an Open button (`omamobile-launch`, `gtk-launch` without it). The page runs
 `backends/apps.sh`; the list loads only when the page opens, shows the last saved list
-(`~/.cache/omamobile/apps.json`) at once and replaces it with a fresh scan at nice 10 and idle I/O. Uninstalling is not
-offered: removing a package can take parts of the phone's system with it.
+(`~/.cache/omamobile/apps.json`) at once and replaces it with a fresh scan at nice 10 and idle I/O. Under Manage (`backends/appmgr.sh`), Stop for this
+session stops only the app's own units in `app*.slice`, and Uninstall shows pacman's own dry run first. It refuses
+anything another package needs, Omarchy's default packages and the globs in `vendor/app-protected` (the phone's
+system, and omaphone, omamessages and omacam), and removes a package through Omarchy's `omarchy-pkg-drop` in a root
+unit (`libexec/app-remove`) only when the list is the one you confirmed.
 The hidden rules are copied from Omarchy's `shell/services/hidden-entries.sh` and `shell/services/AppLibrary.qml`
 (under `/usr/share/omarchy`); when those change, update `apps.sh` to match.
-Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management (beyond the Apps list) and
+Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management beyond Stop and Uninstall and
 recording controls are separate future contributions with their own runtime
 contracts and tests; this catalog does not offer those routes.
 
