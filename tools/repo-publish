@@ -154,7 +154,8 @@ keyhome=$(mktemp -d /dev/shm/omamobile-verify.XXXXXX)
 trap 'GNUPGHOME=$keyhome gpgconf --kill gpg-agent 2>/dev/null; rm -rf -- "$keyhome"' EXIT
 chmod 700 "$keyhome"
 GNUPGHOME=$keyhome gpg -q --batch --import packages/omamobile-keyring/omamobile.gpg 2>/dev/null
-mapfile -t trusted < <(cut -d: -f1 packages/omamobile-keyring/omamobile-trusted | grep -vxFf <(cut -d: -f1 packages/omamobile-keyring/omamobile-revoked | grep . || echo none))
+revoked=$(revoked_list "$ROOT") || die "$revoked"
+mapfile -t trusted < <(cut -d: -f1 packages/omamobile-keyring/omamobile-trusted | grep -vxFf <(printf '%s\n' "$revoked"))
 ((${#trusted[@]})) || die "omamobile-keyring trusts no key"
 signed_ok() {
   local status signer

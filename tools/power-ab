@@ -92,7 +92,7 @@ for d in /sys/class/power_supply/*; do
 done
 [[ -n "$bat" ]] || { echo "power-ab: no battery with current_now (is max17042_battery loaded?)" >&2; exit 1; }
 
-ufs=$(ls -d /sys/bus/platform/devices/*.ufs 2>/dev/null | head -n1)
+ufs=$(ls -d /sys/bus/platform/devices/*.ufs 2>/dev/null | sed -n 1p)
 eas=/proc/sys/kernel/sched_energy_aware
 idle_states=(/sys/devices/system/cpu/cpu[0-7]/cpuidle/state1/disable)
 

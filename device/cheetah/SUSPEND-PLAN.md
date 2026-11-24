@@ -421,6 +421,15 @@ the inhibitor above covers calls only once the AP is awake), and recording
     `systemctl suspend` (logind, so inhibitors and the hook apply). A
     refusal is logged once per reason (`omamobile-sleepd: not sleeping: an
     SSH session is open`), not at every poll.
+  - While a refusal holds and the screen stays dark, the full check (the
+    toggle, the lock, SSH, the inhibitors, the sinks) runs again every
+    `OMAMOBILE_SLEEP_RECHECK` seconds (default 30, never under 5), not at
+    every 2 s poll. The polls between read two files and start only their
+    own `sleep`: the panel's `bl_power`, so a lit screen is seen at once,
+    and `suspend_stats/success`, so a resume that logind didn't announce (a
+    raw freeze) is too. The power key's signal and logind's resume signal
+    also end the wait. A phone with no panel `omarchy-hw-display` can name
+    checks in full at every poll, as before.
   - Resume is seen in `suspend_stats/success`; it logs the wake IRQ by name
     (`pm_wakeup_irq` and `/proc/interrupts`, as the hook). Any wake that
     leaves the screen off and the lock secure is dark: it asks again after

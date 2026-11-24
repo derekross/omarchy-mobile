@@ -50,7 +50,8 @@ def keysym_ok(sym):
     return xkb is None or xkb.xkb_keysym_from_name(sym.encode(), 0) != 0
 
 
-HAND_MADE = {"squeekboard/keyboards/terminal/us.yaml", "squeekboard/keyboards/terminal/us_wide.yaml"}
+HAND_MADE = {"squeekboard/keyboards/terminal/us.yaml", "squeekboard/keyboards/terminal/us_wide.yaml",
+             "squeekboard/keyboards/terminal/gr.yaml", "squeekboard/keyboards/terminal/gr_wide.yaml"}
 GENERATED = "# squeekboard/generate (change the generator, not this file)."
 paths = sorted(glob.glob("squeekboard/keyboards/**/*.yaml", recursive=True))
 names = {p[len("squeekboard/keyboards/"):] for p in paths}
@@ -159,6 +160,53 @@ for rel in ("gr.yaml", "gr_wide.yaml"):
     if not any("show_accented" in r for r in views["base"]):
         fail(path, "the base view still opens the accents view")
 print("ok - the Greek layouts have the accent row, 1 key per vowel, in the base and shift views")
+
+# Greek in a terminal: terminal/gr and terminal/gr_wide, written by hand from
+# terminal/us with the Greek letter rows, the terminal row kept in every view
+for rel in ("terminal/gr.yaml", "terminal/gr_wide.yaml"):
+    path = "squeekboard/keyboards/" + rel
+    with open(path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    views, buttons = data["views"], data["buttons"]
+    base, upper = views["base"], views["upper"]
+    if base[2:5] != ["; ς ε ρ τ υ θ ι ο π", ".-thin α σ δ φ γ η ξ κ λ --thin", "show_upper ζ χ ψ ω β ν μ BackSpace"]:
+        fail(path, "the base view has the Greek letter rows, with . and - like terminal/us")
+    if buttons.get(".-thin", {}).get("text") != "." or buttons.get("--thin", {}).get("text") != "-":
+        fail(path, ".-thin types . and --thin types -")
+    used = {k for rows in views.values() for r in rows for k in r.split()}
+    for unused in sorted(k for k in buttons if k.endswith("-thin") and k not in used):
+        fail(path, "the %s button is used" % unused)
+    if views.get("accented", [])[2:6] != ["ά έ ή ί ϊ ΐ ό ύ ϋ ώ", "Ά Έ Ή Ί Ϊ Ό Ύ Ϋ Ώ show_accented",
+                                          "Ϗ ϐ ϑ ϗ ϖ ΰ ϕ – BackSpace",
+                                          "show_numbers preferences space show_actions Return"]:
+        fail(path, "the accents view has the accented letters, the rare ones and the en dash")
+    if upper[2:5] != [": ! Ε Ρ Τ Υ Θ Ι Ο Π", "Α Σ Δ Φ Γ Η Ξ Κ Λ show_accented", "show_upper Ζ Χ Ψ Ω Β Ν Μ BackSpace"]:
+        fail(path, "the shift view has the Greek capitals")
+    for vname, rows in views.items():
+        if not rows[1].startswith("Esc-small Tab-small Ctrl Alt"):
+            fail(path, "view %s keeps the terminal row under the action row" % vname)
+    if "accented" not in views or buttons.get("show_accented", {}).get("action", {}).get("locking", {}).get("lock_view") != "accented":
+        fail(path, "show_accented opens the accents view")
+    if any(b.get("label") == "ABC" for b in buttons.values()):
+        fail(path, "no key is still labelled ABC")
+    if not any(b.get("label") == "ΑΒΓ" for b in buttons.values()):
+        fail(path, "the way back to the letters is labelled ΑΒΓ")
+    # foot sends Ctrl+ψ as CSI 27;5;<keysym>~, so Ctrl combos need Latin letters
+    if views.get("latin", [])[2:5] != ["q w e r t y u i o p", ".-thin a s d f g h j k l --thin",
+                                       "show_greek z x c v b n m BackSpace"]:
+        fail(path, "the latin view has the Latin letters for Ctrl and Alt combos")
+    lock = buttons.get("show_latin", {}).get("action", {}).get("locking", {})
+    if (lock.get("lock_view"), lock.get("unlock_view")) != ("latin", "base"):
+        fail(path, "the abc key latches the latin view and unlocks to base")
+    # a second tap locks only when the same key is on the latin view too
+    for vname in ("base", "latin"):
+        if views.get(vname, ["", ""])[1].split()[5:6] != ["show_latin"]:
+            fail(path, "the abc key is in the same place in the %s view" % vname)
+    if not any(buttons.get(k, {}).get("text", k) == "~" for k in used):
+        fail(path, "~ can still be typed in some view")
+    if buttons.get("show_greek", {}).get("action", {}).get("set_view") != "base":
+        fail(path, "show_greek goes back to the Greek letters")
+print("ok - the Greek terminal layouts have the Greek letters, the terminal row and a Latin view")
 
 for line in failures:
     print("not ok - " + line)

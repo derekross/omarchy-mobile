@@ -78,9 +78,11 @@
 #                            image for this device in out/, or the exact
 #                            image named by a signed bundle's MANIFEST)
 #     --work DIR             where the local image copy goes (default
-#                            ~/.cache/omamobile-install; needs the image's
-#                            size free). The next run that finds no other
-#                            run live removes killed runs' verify.*
+#                            ~/.cache/omamobile-install; needs room for the
+#                            image's used blocks twice, the copy and its
+#                            sparse conversion, plus 1 GiB). The next run
+#                            that finds no other run live removes killed
+#                            runs' verify.*
 #                            directories; ones left by installers without
 #                            this cleanup are kept
 #     --bootloader-slots-match VERSION
@@ -114,10 +116,10 @@
 #                            (the guided installer) passes it, so the phone
 #                            it looked at is the one that is written
 #     --verify-only          check the files (a bundle's signature, checksums,
-#                            manifest.json, root image and slot B's ramdisk,
-#                            read in a directory of its own in --work that
-#                            it removes) and stop before the phone is
-#                            contacted
+#                            manifest.json, root image, AVB_FOOTERS image sizes
+#                            and footers, and slot B's ramdisk, read in a
+#                            directory of its own in --work that it removes)
+#                            and stop before the phone is contacted
 #
 # Answers are read from standard input, so they can be piped for tests and by
 # the guided installer, which sets OMAMOBILE_INSTALL_GUIDED=1: the questions
@@ -281,8 +283,8 @@ if [[ $mode == repository ]]; then
   [[ $built_for == "$CODENAME" ]] \
     || die "$images holds images for '${built_for:-an unknown device}', not $CODENAME (run: DEVICE=$CODENAME bin/omamobile images)"
 fi
-for tool in "$FASTBOOT" debugfs dumpe2fs e2fsck zstd openssl sha256sum lz4 cpio python3 timeout; do
-  command -v "$tool" >/dev/null || die "$tool not found (fastboot: android-tools; debugfs: e2fsprogs; lz4: lz4; cpio: cpio)"
+for tool in "$FASTBOOT" debugfs dumpe2fs e2fsck img2simg zstd openssl sha256sum lz4 cpio python3 timeout; do
+  command -v "$tool" >/dev/null || die "$tool not found (fastboot, img2simg: android-tools, or fastboot and android-sdk-libsparse-utils on Debian and Ubuntu; debugfs: e2fsprogs; lz4: lz4; cpio: cpio)"
 done
 BOOT_IMAGES=${D[BOOT_IMAGES]:-} UFS_RW=${D[UFS_RW]:-}
 [[ -n $BOOT_IMAGES && -n $UFS_RW ]] || die "$conf: BOOT_IMAGES and UFS_RW are required"
@@ -690,8 +692,40 @@ PY
 ramdisk_image=""
 if [[ " $BOOT_IMAGES " == *" vendor_kernel_boot "* ]]; then ramdisk_image=vendor_kernel_boot
 elif [[ " $BOOT_IMAGES " == *" vendor_boot "* ]]; then ramdisk_image=vendor_boot; fi
+[[ -z $ramdisk_image || -z ${avb_size[$ramdisk_image]:-} ]] ||
+  die "$conf: AVB_FOOTERS names $ramdisk_image, which carries the ramdisk: the owner's key can't be added to a signed image"
+# An AVB_FOOTERS image is padded to its declared partition size and carries a
+# 64-byte AVB footer starting with "AVBf" at the end of the image
+# (bin/omamobile images), because ABL reads the footer from the end of the
+# partition: refuse a short, oversized or footerless image before contacting
+# the phone (and in --verify-only).
+for p in $BOOT_IMAGES; do
+  [[ -n ${avb_size[$p]:-} ]] || continue
+  isize=$(stat -c %s "$images/$p.img")
+  ((isize == avb_size[$p])) ||
+    die "$p.img is $isize bytes, not the ${avb_size[$p]} bytes $conf's AVB_FOOTERS pads it to (bin/omamobile images)"
+  avb_rc=0
+  python3 -I - "$images/$p.img" <<'PY' || avb_rc=$?
+import os, sys
+try:
+    with open(sys.argv[1], "rb") as f:
+        f.seek(0, os.SEEK_END)
+        if f.tell() < 64:
+            sys.exit(1)
+        f.seek(-64, os.SEEK_END)
+        if f.read(4) != b"AVBf":
+            sys.exit(1)
+except OSError as e:
+    print(f"{sys.argv[1]}: {e.strerror}", file=sys.stderr)
+    sys.exit(2)
+PY
+  if ((avb_rc == 2)); then
+    die "can't read $p.img"
+  elif ((avb_rc != 0)); then
+    die "$p.img has no AVB footer (expected AVBf at the start of its last 64 bytes; bin/omamobile images)"
+  fi
+done
 if [[ -n $ramdisk_image ]]; then
-  [[ -z ${avb_size[$ramdisk_image]:-} ]] || die "$conf: AVB_FOOTERS names $ramdisk_image, which carries the ramdisk: the owner's key can't be added to a signed image"
   mkdir -p "$work" && verify_dir=$(mktemp -d "$work/verify.XXXXXX") ||
     die "can't create or write to the work directory $work (give one you can write to with --work DIR)"
   trap 'rm -rf "$verify_dir"' EXIT
@@ -794,7 +828,7 @@ declare -A slot_flags=()
 # The probe's only way to the phone: three commands, each with a time limit
 pfb() { timeout "$SLOT_PROBE_CALL_TIMEOUT" "$FASTBOOT" -s "$serial" "$@"; }
 phone_listed() { "$FASTBOOT" devices 2>/dev/null | awk -v s="$serial" '$1 == s && $2 == "fastboot" { n = 1 } END { exit !n }'; }
-slot_flag() { sed -nE "s/^slot-$1:$2:[ ]*//p" <<<"$vars" | head -1; }  # FLAG SLOT, from $vars
+slot_flag() { sed -nE "s/^slot-$1:$2:[ ]*//p" <<<"$vars" | sed -n 1p; }  # FLAG SLOT, from $vars
 slot_flags_read() {  # WHEN
   local s f
   for s in a b; do
@@ -1005,8 +1039,8 @@ fi
 # after a system update unless the owner says it is a reinstall
 if ((fmt == 1)); then
   # Per-slot bootloader versions, where the bootloader reports them
-  bl_a=$(sed -nE 's/^version-bootloader[-_:]a:[ ]*//p' <<<"$vars" | head -1)
-  bl_b=$(sed -nE 's/^version-bootloader[-_:]b:[ ]*//p' <<<"$vars" | head -1)
+  bl_a=$(sed -nE 's/^version-bootloader[-_:]a:[ ]*//p' <<<"$vars" | sed -n 1p)
+  bl_b=$(sed -nE 's/^version-bootloader[-_:]b:[ ]*//p' <<<"$vars" | sed -n 1p)
   if [[ -n $bl_a && -n $bl_b ]]; then
     [[ $bl_a == "$bl_b" ]] || die "the bootloader slots differ (a: $bl_a, b: $bl_b). $SLOTS_DIFFER"
     note "bootloader $bl_a on both slots"
@@ -1053,7 +1087,7 @@ fi
 # running slot's), an AVB_FOOTERS image exactly.
 declare -A part_size=()
 for p in $BOOT_IMAGES; do
-  psize=$(sed -nE "s/^partition-size:${p}_$target:[ ]*(0x[0-9a-fA-F]{1,12})\$/\1/p" <<<"$vars" | head -1)
+  psize=$(sed -nE "s/^partition-size:${p}_$target:[ ]*(0x[0-9a-fA-F]{1,12})\$/\1/p" <<<"$vars" | sed -n 1p)
   [[ -n $psize ]] || die "the phone reports no partition-size for ${p}_$target"
   psize=$((psize)) isize=$(stat -c %s "$images/$p.img")
   part_size[$p]=$psize
@@ -1200,13 +1234,21 @@ cmp -s <(debugfs -R "cat /root/.ssh/authorized_keys" "$copy" 2>/dev/null) "$keys
 cmp -s <(debugfs -R "cat /etc/omamobile/boot-update.conf" "$copy" 2>/dev/null) "$boot_conf" || die "writing boot-update.conf into the image copy failed"
 e2fsck -fn "$copy" >/dev/null 2>&1 || die "the image copy doesn't check clean after the writes"
 note "firstboot.conf, root's authorized_keys and boot-update.conf (AUTO_WRITE=$BOOT_UPDATE_AUTO_WRITE$( ((fmt == 1)) || printf ', SLOT=%s' "$target")) written, file system checks clean"
-userdata_image=$copy
-if command -v img2simg >/dev/null; then
-  img2simg "$copy" "$sparse"
-  rm -f "$copy"
-  userdata_image=$sparse
-  note "converted to an Android sparse image ($(du -h "$sparse" | cut -f1))"
-fi
+# userdata is always flashed as an Android sparse image: one path, the one
+# the dry run prints. The sparse copy takes about the raw copy's used blocks
+# (decompressed with --sparse, so far fewer than its apparent size): check
+# for that much free plus 1 GiB rather than let img2simg run out of room.
+used_bytes=$(du -k "$copy" | awk '{printf "%.0f\n", $1 * 1024}')
+free_bytes=$(df -Pk "$work" | awk 'NR == 2 {printf "%.0f\n", $4 * 1024}')
+[[ $used_bytes =~ ^[0-9]+$ && $free_bytes =~ ^[0-9]+$ ]] ||
+  die "can't tell the image copy's size or the free space in $work"
+need=$((used_bytes + 1073741824))
+((free_bytes >= need)) ||
+  die "$work has $free_bytes bytes free; the sparse copy needs $need (give a --work DIR on a larger file system)"
+img2simg "$copy" "$sparse" || die "img2simg failed to convert the image copy in $work"
+rm -f "$copy"
+userdata_image=$sparse
+note "converted to an Android sparse image ($(du -h "$sparse" | cut -f1))"
 
 # --- The owner's key in slot B's initramfs -----------------------------------
 # omamobile-boot-update builds slot B's ramdisk with root's authorized_keys

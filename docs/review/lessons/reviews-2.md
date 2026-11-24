@@ -1,366 +1,378 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Review lessons: Reviews and merging (part 2 of 2)
+# Review lessons: Reviews and merging (part 2 of 3)
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
-- **L-185. A rule can change between our comment and the contributor's
-  push.** AGENTS' `userdata`-through-`install-phone` exception (`10daf5f`)
-  landed after our follow-up on #25 and before its next push, so a PR that
-  did everything asked now broke a rule its author never saw. *Check:* `git
-  log --since=<our last comment> -- AGENTS.md CONTRIBUTING.md` before judging
-  a re-push, and say in the comment which rule is new. Extends L-31 and
-  L-124. *From:* #25, round 20.
-- **L-196. A stack of N PRs is gated once at its top and read N times.**
-  Kernel #73-#79 are one linear chain on today's base; `kernel-pr-check
-  --build --merge` on each head rebuilt the same objects seven times, while
-  the per-commit builds (L-179) and the parent-name audit (L-193) on the top
-  head covered everything in one pass. *Check:* `git log base..headN` for
-  each PR to prove the chain, gate the top head, build the chain commit by
-  commit, and give one merge plan (merge the top PR, close the rest) next to
-  the one-by-one order. *From:* kernel #73-#79, round 21.
-- **L-197. A status word we ask for is checked against the legend and the
-  site's parser before we post it.** Our "the matrix row says 'in review'"
-  on #52 produced a row whose every cell the website renders as "no"
-  (`devices.ts` `parseCell`). *Check:* `grep` the legend in DEVICES.md and
-  `STATUS_WORDS` in `omamobile-website/src/lib/devices.ts` for any status
-  wording we prescribe. Extends L-31 and L-66. *From:* #52, round 21.
-- **L-198. When the contributor says the record doesn't exist, the file
-  records that it doesn't, and a baseline taken over an unexplained change
-  is downgraded, not adopted.** #35's reply gave a negative record (no date,
-  tool, partition list or boot list) and accepted the hold, while the plan
-  still said "the new baseline" and "a Linux slot A boot does not run the
-  modem stack". *Check:* the negative facts land in NOTES and Risks in the
-  contributor's words; the unexplained copy is "current contents, cause
-  unknown"; the baseline becomes the backup after the next stock boot.
-  Extends L-34, L-168 and L-186. *From:* #35, round 21.
-- **L-199. A read point we prescribe is named relative to the driver's last
-  write, not to a phase.** "Right after link-up, before MHI power-up" under
-  ath11k is after `ath11k_pci_soc_global_reset()`, and the read hung; the
-  same phase on stock (`linkup`, no reset) read fine six times. *Check:*
-  before asking for a register read, list the driver's writes to the block
-  up to that point in both trees, and name the read as "after write X,
-  before write Y". Extends L-135 and C-7. *From:* issue #36, round 21.
-- **L-215. A vendor-kernel A/B outranks host-side hypotheses.** On issue
-  #36 the stock kernel stalled exactly like mainline, retiring every
-  host-driver difference at once, while we were still asking for host-side
-  changes. *Check:* before asking for one, ask whether the stock kernel ran in
-  the failing shape, and list what differs between the stock run that works
-  and the one that doesn't. Extends L-204. *From:* issue #36, round 22.
-  (Corrected 2026-10-28, C-12: "a vendor-kernel A/B" means a one-variable
-  A/B; a stock run that differs in host and timing at once rules out
-  neither.)
-- **L-216. A re-push that answers our requests is trailer-checked on every
-  commit.** #77's re-push appended our sentence below its `Link:`, turning
-  the trailer into body text. *Check:* `git interpret-trailers --parse` on
-  each commit of the new head against the old head's. Extends L-119 and
-  L-183. *From:* kernel #77, round 22.
-- **L-217. A version we ask a contributor to take can be taken by main
-  first.** We asked #78 for 0.2.30; #90 shipped it an hour after his push.
-  *Check:* list the maintainer's open and local branches' versions of the
-  package and ask for the first free one, or say "the next free version at
-  merge" and set it ourselves. Extends L-12. *From:* #78, round 22.
-- **L-353. A same-day notes PR on one device conflicts with its sibling.**
-  Both add their section at the top of NOTES (#208, #209). *Check:*
-  merge-tree the second PR onto the first one's squash and plan the order
-  before merging the first. *From:* #208 and #209, 2026-10-31.
-- **L-354. A contributor's "kept your rows" after merging the maintainer's
-  push is checked by a merge simulation, and so is the maintainer's own
-  pass.** #165's merge brought back old husky and panther rows; then, rebased
-  onto our DEVICES pass, it dropped its own works/testing row because it
-  assumed the pass carried it, and the 9a read WIP everywhere until the row
-  was restored from the PR's force-push history. *Check:* word-diff
-  `origin/main` against the merge-tree result for every line outside the
-  PR's own row, and after a contributor "reduces" a PR to what the pass
-  lacks, diff the pass against their previous head. *From:* #165,
-  2026-10-31.
-- **L-355. A stacked PR whose author merges main instead of rebasing still
-  carries its bottom's old head.** #115 and #117 carried an old #99, so they
-  conflicted once #99 landed. *Check:* `git merge-base --is-ancestor <bottom
-  head> <PR head>`; hand over (or land) a file-level rebuild from the PR's
-  own files, checked to reproduce its tree. *From:* #115 and #117,
-  2026-10-31.
-- **L-356. A version renumbered by a merge leaves the title on the old
-  version.** #115, #117, #124 and #183 all named older versions than their
-  `version` files. *Check:* compare every title with the head's version on
-  each push, and write the squash subject from the file. *From:* round of
-  2026-10-31.
-- **L-357. A contributor's merge of main can resolve to main's tree and drop
-  the PR.** #99's b3ceaf1 left the branch identical to main; the push of the
-  maintainer's merge was then rejected as non-fast-forward. *Check:* `git
-  diff origin/main <head>` is not empty before reviewing or pushing on top.
-  *From:* #99, 2026-10-31.
-- **L-423. Cross-PR interactions are re-checked on every round, including a PR's diff against another's tracked sources.** Round 38 said #324's `repo-publish` would auto-merge with #320; a follow-up then made them collide on one option line. #326 edits `device/cheetah/device.conf`, one of #320's boot-file sources, so merged after the staging it would make the nightly skip device-cheetah. *Check:* rerun `git merge-tree` for related PRs each round, intersect each diff with the other's source list (`tools/stage-boot-files --sources <codename>`), and order staging after both merge. Extends L-253. *From:* #320 with #324 and #326, rounds 38b-38c, 2026-11-02.
-- **L-424. A shared tool that gains a required input breaks every open PR whose test calls the real tool with its own fixture.** #326 made `release-upload` require the `.tar`; #324's `tests/release` builds a bundle by hand and runs the real tool, so the pair turns main red though each is green alone. *Check:* `git grep -n '<tool>' <each open PR head> -- tests/`, rebuild those fixtures against the new tool, and give the merge order in both reviews. Extends L-104 and L-214. *From:* #326 with #324, round 38, 2026-11-02.
-- **L-426. Two open PRs that bump a package to the same version merge
-  silently, in either order.** Both write the same `version` line, so `git
-  merge-tree` shows no conflict and the second merge ships new contents
-  under a published version: #407 and #403 (device-tegu 0.2.9), #389 and
-  #403 (omamobile-modem 0.1.17), #400 and #403 (device-raven 0.1.31). And a
-  "merging at version X" in our own comment goes stale: #373 took the 0.3.29
-  we had promised #367. *Check:* each round, list `packages/*/version` on
-  every open PR head and flag equal values; before every squash, compare the
-  branch's file and subject with `git show
-  origin/main:packages/<p>/version`. Extends L-12, L-217 and L-404. *From:*
-  #407, #389, #400, #367, round 39, 2026-11-03.
-  Again in round 46, in most of the round's reviews: #553 and #557 both claim
-  omamobile-shell 0.2.108 with a clean `merge-tree` including `version`; #539
-  and #542 claim 0.2.107, which main already shipped; #371 collided on four
-  packages at once. The rule since: the maintainer sets every version by hand
-  at merge (file and squash subject), and each review lists the collisions it
-  found rather than asking the contributor to renumber.
-- **L-427. A change under a boot-files device package's `src/` makes its
-  staged boot files stale, and that strands a sibling's new dependency on
-  it.** `tools/stage-boot-files` hashes `packages/<device>/src`, so #403's
-  `reboot-to.c` holds device-cheetah back from the nightly until the
-  maintainer restages; #371 makes modem-sit require a policy only the new
-  device-cheetah provides, so publishing #371 first would break `omarchy
-  update` on every 7 Pro. *Check:* `tools/stage-boot-files --sources
-  <codename> | grep <touched path>`; if listed, put the restage in the merge
-  plan before any dependent PR. Extends L-420 and L-423. *From:* #403 with
-  #371, round 39, 2026-11-03.
-  Again in round 45: overlays count too. #517 renamed two nodes in cheetah's
-  `aoc-sound-test.dtso` (listed in `DTB_OVERLAYS`) and bumped nothing because
-  the package directory didn't change; the merge plan pairs such a PR with the
-  device package's next version and a restage, and names the boot that checks
-  the new DTB.
-- **L-428. `Fixes #N` on a PR that answers part of an issue closes the rest
-  at merge.** #403 deferred #390's second point (an inhibitor left after a
-  failed start) and still said "Fixes #390". *Check:* read the issue's
-  comments for each distinct report; ask for "Part of #N" or a new issue.
-  *From:* #403, round 39, 2026-11-03.
-- **L-429. One author's PRs with the same head commit are one PR, and a fix
-  they say is done may sit on another branch of their fork.** #412 and #231
-  both pointed at `8f2dc60d`, so #412's sources couldn't be in it; #231's
-  format fix had been committed a day earlier on a side branch and reached
-  the PR only as a merge. *Check:* at the start of a round compare
-  `headRefOid` across an author's open PRs, and when "done" isn't in the
-  head, `git ls-remote <fork>` for the commit. Extends L-29 and L-248.
-  *From:* #412 with #231, round 39, 2026-11-03.
-- **L-430. Siblings that add blocks to one board file get `merge-tree`
-  re-run every round, with and without the disputed commit.** Kernel #162's
-  sound card and #187's Wi-Fi regulator both add a root block at the end of
-  `zumapro-tegu.dts`; an earlier "merges cleanly" held only without the
-  card. *Check:* `git merge-tree` of each pair on today's base, both ways,
-  and keep the resolved file in the review. Extends L-253 and L-423. *From:*
-  kernel #162 with #187, round 39, 2026-11-03.
-  Again in round 45: round 44's "#503 and #484 merge cleanly" stopped holding
-  after #503's rework, whose `sda` branch conflicts with #484's whole-disk
-  rule; a "merges cleanly" in our own comment is re-checked after every
-  rework.
-- **L-431. A conflict resolution that keeps both sides' tests runs both
-  suites in the order they end up in.** Resolving #288 by appending main's
-  `--no-checkpatch` test after #288's checker tests left it running on a
-  tree with no commits to check, and it failed; the same blocks in the other
-  order pass. *Check:* after any resolution that keeps both sides, run the
-  touched suites on the merged tree, and read what state each block leaves
-  for the next. Extends L-184. *From:* the merges of #287 and #288, round
-  39, 2026-11-03.
-- **L-432. A squash merge carries a body that says why.** Three round-39
-  merges went in with `--body ""` and landed with a subject only; main isn't
-  rewritten for that. *Check:* every `gh pr merge --squash` gets
-  `--body-file` written from the PR's own commit message (with record ids or
-  merge noise removed, L-372), and no squash runs without one. Extends
-  L-372. *From:* #408, #369, #411, round 39, 2026-11-03.
-- **L-477. A rebase over a merged PR that took the same version can drop or
-  equal a stacked PR's bump, and its dependency is then met by the wrong
-  package.** #371's device-cheetah stayed at 0.1.44 with a new `provides`
-  after #416 shipped 0.1.44 without it, and its device-tegu bump vanished
-  after #407 shipped 0.2.9, so its own `>=0.2.9` dependency is met by the
-  published package without the feature. *Check:* in every range-diff after
-  a rebase, grep the changed commits for removed or equal `version` hunks,
-  and confirm each changed package's version is above main's. Extends L-404,
-  L-426 and L-427. *From:* #371 with #416 and #407, rounds 40-41.
-- **L-478. Two open PRs that edit the same package test file pass CI
-  separately but are never tested together.** #389 and #424 both edit
-  `omamobile-modem/test/all`, and CI builds each against main only. *Check:*
-  run the suite on `git merge-tree --write-tree <A> <B>` before merging the
-  second. Extends L-431. *From:* #389 with #424, round 40, 2026-11-04.
-- **L-479. Every round, open PRs on one SoC are checked for new clock IDs in
-  the same CMU block, not only for textual conflicts.** #200's CMU_TOP 22-27
-  and #157's 22-34 share a block of `google,zuma.h`, and `merge-tree`
-  auto-merged it with both. *Check:* `git diff <base> <head> --
-  include/dt-bindings/clock/<soc>.h | grep '^+#define'` per open PR, grouped
-  by CMU block. Extends L-384. *From:* kernel #200 with #157, round 41,
-  2026-11-05.
-- **L-480. A promise in our own comment ("I'll approve CI", "still needs X")
-  is re-checked at the next round and before posting.** Kernel #192's run
-  was still `action_required` a day after we said we'd approve it, and our
-  #374 comment, drafted a day before posting, asked for a #378 rebase that
-  had already happened. *Check:* `gh run list --branch <head>` for each PR
-  whose last comment promised an approval, and re-read each "still needs"
-  against the head at posting time. Extends L-59, L-124 and L-281. *From:*
-  kernel #192 and #378, rounds 40-41.
-- **L-481. A hand-written squash body keeps the PR's attribution trailers.**
-  Three of round 41's four squashes (#396, #395, #410) dropped their
-  commits' `Co-Authored-By:` lines, which CONTRIBUTING §6.3 asks for.
-  *Check:* `git log --format='%(trailers:only)' base..head` on the PR, and
-  carry each distinct trailer into `--body-file`. Extends L-432. *From:* the
-  2026-11-04 merges, round 41, 2026-11-05.
-- **L-519. A request or merge order that rests on another decision is
-  re-derived when that decision changes.** Round 41 asked #431 to move to the
-  4.5 port, then phones were pinned to 4.0.6; #371 was ordered after #403 only
-  for a restage, and #403 went on hold. *Check:* write down why for each "redo
-  for" or "after X", and re-check it when a pin, hold or channel lands.
-  Extends L-250 and L-427. *From:* #431 and #371, round 42, 2026-11-07.
-- **L-520. A general call to affected users is checked against the thread
-  above it.** Our pin announcement on #434 asked owners to speak up three
-  hours after one had, and his report went unanswered. *Check:* read the
-  comments since our last post and answer them first. Extends L-124. *From:*
-  issue #434, round 42, 2026-11-07.
-- **L-521. A hand-written squash subject is checked against the PR's own
-  files.** #231 was merged as "the Pixel 8 Pro's sibling"; kodiak is the Pixel
-  11 Pro XL. *Check:* read the device descriptor or plan the PR touches before
-  typing a device name. *From:* #231, round 42, 2026-11-07.
-- **L-522. A GitHub comment draft is reflowed, never inside code fences.** A
-  draft wrapped at 120 columns renders its hard line breaks. *Check:* join
-  each paragraph's lines before posting, leaving fenced and indented code
-  blocks as written. *From:* round 42's posts, round 42, 2026-11-07.
-- **L-523. When a series selector accepts exact versions, removing a pin moves
-  the hold rather than lifting it.** #471's `default_series` refuses anything
-  but 4.0.6 or 4.5.0, so dropping the pin would hand phones whatever 4.5.x
-  shipped that day. *Check:* read what the selector accepts, and plan to
-  replace the pinned files with the rehearsed version. *From:* #471, round 42,
-  2026-11-07.
-- **L-550. A series split, or any rename of a directory, moves every open PR's
-  new file under the old path into the new meaning of that path.** #471 makes
-  `patches/` the Omarchy 4.5 family and moves 4.0.6's to `legacy-4.0.6/`;
-  #420's new `patches/0029-…` (a 4.0.6 patch) then merges into the 4.5 family
-  with only a `version` conflict, misses every 4.0.6 phone and probably breaks
-  the 4.5 family's all-or-nothing apply. *Check:* for each open PR that adds
-  files under a directory another open PR renames or repurposes, simulate the
-  merge both ways, `git ls-tree` where each new file lands, apply each new
-  file to the family it was written for, and give the merge order and the move
-  in both reviews. Extends L-104, L-423, L-424 and L-426. *From:* #420 with
-  #471, round 44, 2026-11-08.
-  Again in round 46: #471 against main after #420 conflicted only on
-  `version`, yet the plain resolution dropped 0029 from every 4.0.6 phone, and
-  CI couldn't see it because its 0029 assertion sits in the real-package block
-  CI skips (L-548). For each file main added under the repurposed directory
-  since the PR's base, run `test/all` with `OMARCHY_PKG` for each family on
-  the resolved tree.
-- **L-551. A version we write into "I'll title it X" goes stale like any other
-  promise; check it again when merging.** On 11-05 we promised #421 the title
-  `shell 0.2.101`; #464 shipped 0.2.101 two days later, and the branch's
-  identical bump would have merged silently. *Check:* before every squash,
-  `git show origin/main:packages/<p>/version` and the versions on the open PR
-  heads (`gh api …/contents/packages/<p>/version?ref=<sha>`), then write the
-  next free number into the subject. Extends L-217, L-426 and L-480. *From:*
-  #421, round 44, 2026-11-08.
-- **L-552. A sibling's descriptor list that changes between rounds is compared
-  with the PR's copy.** #456 took the 7 Pro's `NV_BACKUP_EXTRA="devinfo"`. Two
-  hours after our round asked about akita's NV list, husky's #449 added
-  `trusty_persist trusty_userdata` on the same SoC, and the reply's new NOTES
-  list still left `trusty_userdata` out. *Check:* every round, `git log <PR
-  base>..origin/main -- packages/omamobile-device-<same-SoC
-  sibling>/device.conf device/<sibling>/device.conf`, and diff each key the PR
-  sets against the sibling's current value. Extends L-195 and L-257. *From:*
-  #456 with #449, round 44, 2026-11-08.
-- **L-553. A fix found in a builder copied from a sibling is checked in the
-  sibling's builder.** Akita's `build-u3-root` is husky's with the names
-  changed; the depmod gap #456's second tester found is in both, and only
-  akita's was fixed. *Check:* `diff <(sed s/<a>/X/g A) <(sed s/<b>/X/g B)` for
-  any device script the PR says it copied, then list the sibling's copy for
-  the maintainer. Extends L-492. *From:* #456, round 44, 2026-11-08.
-- **L-554. A promised pre-merge build of a new package is checked against the
-  state of the output it writes.** With `out/repo` pinned as a release index,
-  `tools/build-packages` (which iterates `packages/*/`) would have added
-  #463's packages to it. *Check:* before advising "build it through
-  build-packages", read the current release state; use `--local <name>` (its
-  own `out/<name>/` and key) or the publish machine. Extends L-7. *From:*
-  #463, round 44, 2026-11-08.
-- **L-555. "No phone test while phones stay on version X" is checked against
-  the phones that already left X.** #471's selector applies the 4.5 family to
-  any phone on Omarchy 4.5.0. #434 records a Pixel 7 Pro that took 4.5.0-3
-  before the pin, and pacman won't move it back, so the merge is that phone's
-  first hardware run of an unqualified series. *Check:* for a selector or gate
-  keyed on an installed version, grep the pin's issue and the device threads
-  for phones already past the pin, and plan their first run before publishing.
-  Extends L-444, L-519 and L-523. *From:* #471, round 44, 2026-11-08.
-- **L-556. A stacked PR's conflict can belong to its merged bottom's
-  commits.** #371's DEVICES.md conflict came from #367's old commits
-  underneath, and main already held their text. *Check:* before asking the
-  contributor to resolve, merge only the PR's own range (`git merge-tree
-  --merge-base=<bottom head> origin/main <head>`), and grep main for the
-  strings the bottom's commits added. Extends L-275 and L-355. *From:* #371,
-  round 44, 2026-11-08.
-- **L-557. A contributor's "I won't run it until I hear from you" is a hold we
-  track.** Somnius asked on #472 at 18:04Z, then reported modem power-line
-  steps on kernel #187 at 22:20Z, in the other repository, with no answer in
-  between. *Check:* before replying in any thread from that contributor, list
-  their hardware results posted after the hold, with times (`gh api
-  repos/<r>/issues/comments?since=<hold time>` in both repositories, filtered
-  to the user). Extends L-109 and L-124. *From:* kernel #187 with #472, round
-  44, 2026-11-08.
-- **L-590. "Merge, then run it on a phone before it's published" doesn't exist
-  while the development channel publishes `origin/main` daily.**
-  `omamobile-publish.timer` runs at 04:00 from a clean `origin/main`, so a
-  merged package is on `pkgs.omamobile.org/development` the next morning.
-  *Check:* when a review puts a phone run "before publishing", either make it
-  a before-merge gate or say that the maintainer pauses the timer (`systemctl
-  --user stop omamobile-publish.timer` on the build machine) until the run.
-  Extends L-444 and L-250. *From:* #471, round 45, 2026-11-08.
-- **L-591. A record without a time zone is placed in UTC before it is compared
-  with thread times.** #514's stage times read as if the modem steps came
-  after the 22:20Z report (S5e ending "23:21"); the contributor's commits are
-  `+0200`, which puts S3 at 19:15Z, 71 minutes after the hold question.
-  *Check:* take the zone from the contributor's commit dates (`git log
-  --format=%ci`) or the log's own stamps, convert every step to UTC, and lay
-  it next to the thread's times before saying what ran before or after what.
-  Extends L-344 and L-557. *From:* #514, round 45, 2026-11-08.
-- **L-592. A follow-up report is counted against the full record when it
-  arrives.** The kernel #187 report described three power-on phases; the plan
-  written afterwards shows five power-ups, two with the charger in and music
-  playing. *Check:* when a contributor's plan follows a thread report,
-  tabulate the plan's write steps and compare the count with the report before
-  replying to either. Extends L-345 and L-488. *From:* #514 with kernel #187,
-  round 45, 2026-11-08.
-- **L-641. Parallel reviewers work under a per-review topic, in ref names and
-  in a per-review scratch subfolder, and never glob-delete shared names.** In
-  round 46 one reviewer deleted others' refs with a `review/*-r46-*` glob and
-  ran `rm -f merge-*` in the round's shared folder; another lost
-  `review/pr471-r46-om` mid-review ("om" is too generic) and went on from the
-  commit id; a third wrote `threads.txt` and `pr-check-main` at the round
-  folder's top level, where other reviews keep files of the same names.
-  *Check:* `ls` the round folder and `git branch --list "review/*-<topic>"`
-  first (both empty for a topic unique to the run), write only under
-  `round<N>/<topic>/`, delete only by the exact names recorded at creation,
-  and pass commit ids to every later command. Extends L-43, L-127 and L-364.
-  *From:* #471, #530 and the round's cleanup, round 46, 2026-11-09.
-- **L-642. After a maintainer fixup to a contributor branch, run the touched
-  package's whole `test/all`, not a subset.** The #371 fixup changed a
-  version and `depends` line, and that package's own test hard-coded the old
-  value, so CI failed. *Check:* for each package directory
-  the fixup touches, `packages/<p>/test/all` (and `tests/packages` for the
-  depends graph) on the fixed-up head before pushing it. Extends L-408.
-  *From:* #371, round 46, 2026-11-09.
-- **L-643. A maintainer fixup on a contributor's branch is a new commit on
-  top, not an amend.** An amended commit that is already on the branch can
-  only be pushed with a force push, which rewrites the contributor's history.
-  *Check:* `git merge-base --is-ancestor <branch's remote head> HEAD` before
-  every push to someone else's branch; if it fails, redo the change as a new
-  commit. *From:* #371, round 46, 2026-11-09.
-- **L-644. A stacked branch under a squash-merged base is rebased with
-  `--onto <base head>`, and the review says so.** #540 and #541 each carry
-  #493's four commits; after a squash merge none of them is patch-identical to
-  main's squash commit, so a plain `git rebase origin/main` replays them and
-  conflicts. *Check:* when a contributor says "I'll rebase once X merges",
-  give them `git rebase --onto origin/main <X's head> <branch>`. *From:* #493
-  with #540 and #541, round 46, 2026-11-09.
-- **L-645. An expectation we write into one PR about another PR's head goes
-  stale when that PR is fixed, and the contributor may copy it into a
-  runbook.** Round 45 told #505 "the screen will most likely go dark" because
-  of kernel #220's supply move; #220 was fixed 40 minutes later, and #505's
-  runbook now expects the old fault. *Check:* each round, for every cross-PR
-  expectation in our last comments, re-derive it on the other PR's current
-  head before reading the runbook that quotes it, and own the correction.
-  Extends L-250 and L-403. *From:* #505 with kernel #220, rounds 45-46,
-  2026-11-09.
-- **L-646. "The tested tree carries over" is checked per file by blob against
-  a reconstructed tested tree, when the tested kernel was a local merge.**
-  For kernel #187 the 7 Pro ran `a3e96faa` plus #191; `git merge-tree
-  --write-tree <#191's merged commit> <tested head>` rebuilt it, and every
-  non-zuma file the PR touches had the same blob at the rebased head, which
-  answered "does the run stand?" without a rebuild or a reboot. *Check:*
-  rebuild the tested combination with `merge-tree`, then `git rev-parse
-  <tree>:<f>` against `<head>:<f>` for each touched file. Extends L-45, L-483
-  and L-547. *From:* kernel #187, round 46, 2026-11-09.
+- **L-828. A tested commit that a force-push took off the PR branch is fetched
+  by its full id and diffed by tree.** #438's run was on a commit two pushes
+  behind kernel #202's head; `gh api repos/<r>/commits/<short id>` gave the
+  full id, `git fetch <remote> <full id>:<own ref>` brought it, and `git diff
+  --stat <tested> <head>` showed two files, neither on the unit's path.
+  *Check:* resolve the short id through the API, fetch it into a ref of your
+  own, and compare blobs for the files the run exercised. Extends L-166, L-45
+  and L-646. *From:* #438 with kernel #202, round 60, 2026-11-17.
+- **L-814. Two PRs from one contributor that claim one version are also
+  checked against what that contributor's phone has installed.** #806's test
+  put a locally built `0.1.14-1` on the phone; #836's later package under the
+  same number would not install as an upgrade there, whatever order they merge
+  in. *Check:* read the sibling PR's test report for `pacman -Q` and give the
+  second PR the next number in its review. Extends L-426 and L-755. *From:*
+  #836 with #806, round 60, 2026-11-17.
+- **L-797. A plan PR that merges on "the points are in" leaves a list of what
+  its thread reported after the last push, and the safety part of that list
+  goes to the maintainer the same day.** #758's branch stopped at 04:21Z; by
+  15:01Z its thread held two SoC hangs on the published kernel, which #846 was
+  already citing and no issue or AGENTS line recorded. *Check:* at the merge
+  round, list every result posted after the head's commit time, ask for the
+  follow-up by name, and for any hang, reset or data loss on a published
+  kernel check that an issue exists (`gh issue list --search`) before the PR
+  closes. Extends L-266, L-339 and L-657. *From:* #758 with #846, round 60,
+  2026-11-17.
+- **L-790. A PR that merged main after a redesign of its file is reviewed as
+  `git diff origin/main <head>`, and its title and first commit are read
+  against that diff.** #841's 31 lines after #848 were a hoist of #848's own
+  checks; the commit body still said it replaced a check that main kept.
+  *Check:* `git merge-base origin/main <head>` equal to main's tip means the
+  two-dot diff is the whole change; then grep the first commit's body for
+  "replaces", "removes" and "only" and test each against the head. Extends
+  L-340 and L-372. *From:* #841 with #848, round 60, 2026-11-17.
+- **L-773. A PR that keeps a "switch off" copy of main's functions is merged
+  by hand onto today's main and tested under both switch values, even when
+  GitHub shows no conflict in that file.** #577's off block copies the old
+  `short_press`, so git applied #640's hunk (a new `panel_dark` and
+  `wait_screen_off`) to the copy: two `panel_dark` definitions, the helper
+  missing with the switch on, and main's new test failing there. *Check:* `git
+  merge --no-commit` in a scratch worktree, `grep -n '^[a-z_]*() '` for a name
+  defined twice, and each test with the switch on and off. Extends L-423 and
+  L-280. *From:* #577 with #640, round 52, 2026-11-11.
+- **L-772. A document an agent is told to read in full is kept small enough
+  to read in one go, and the reader reports what it actually read.**
+  `docs/review/LESSONS.md` had outgrown one read, and six of round 52's eight
+  reviewers read only its first 700 or 2,250 lines, which showed only when
+  they reported it. The lessons are now split into `docs/review/lessons/*.md`,
+  each fitting one read. *Check:* `tests/review-lessons` (it fails on a file
+  over 40 kB, a number used twice or missing, and an unlisted file), and each
+  review lists the lesson files it read, with their line counts. *From:*
+  round 52, 2026-11-11.
+- **L-745. "I'll set the version when I merge" is a push to the branch, not a merge option.** A squash lands the branch's files as they are, and a `version` equal to main's raises no conflict; #628 came back with both requests met and the version still at the number main had taken, as we had told its author to leave it. *Check:* when a draft promises a version at merge, the merge plan carries an explicit "push `<version>` to `<owner>:<branch>`" step before the squash, and the next round compares `git show <head>:packages/<p>/version` with main again. Extends L-426, L-404 and L-551. *From:* #628, #640, #642, round 51, 2026-11-11.
+- **L-722. A conflict with a same-day redesign of the same handler is reviewed
+  as "what does the PR still add", never resolved in a scratch merge.** #582
+  and #612 conflict with #643's Back (`BackLink.js`); taking #582's side drops
+  keyboard-first and terminals-go-home, and keeping both in #612 compiles and
+  puts Search ahead of the keyboard. *Check:* per conflicted file, list main's
+  behaviours the PR's side lacks, read main's header comment and the tests
+  that enumerate participants (`test/back-surfaces.py`'s `EXPECT`), and ask
+  for a rebuild on main with the PR's additions named. Extends L-184 and
+  L-431. *From:* #582 and #612 with #637 and #643, round 50.
+- **L-721. Two open PRs where one parses a line of a user's file and the other
+  rewrites it are a design conflict git doesn't show.** #581 reads `local
+  omarchy_monitor_scale = <number>` with a regex; #635 turns that line into a
+  function call, after which #581's helper defers at every login and writes no
+  defaults. *Check:* `git grep -n '<the line's left-hand side>'` over every
+  open PR head that touches the script seeding it, and say in both reviews
+  which merges first. Extends L-424 and L-478. *From:* #581 with #635, round
+  50.
+- **L-720. A second contributor's feature for a phone is checked against the
+  first owner's open draft for the same thing.** #626 and #374 both add a 9a
+  earpiece route, 10 dB apart and with different tuning. *Check:* `gh pr list
+  --search "<device> <feature>"`, grep the open drafts' diffs for the controls
+  the PR writes, and name the difference for the maintainer before either
+  merges. Extends L-169 and L-277. *From:* #626 with #374, round 50.
+- **L-719. A merge condition that waits for a rare failure to recur gets a
+  bound for the case where it doesn't.** We held kernel #224 for "one console
+  that places the core"; at about 1 in 150 sleeps the hang may not return for
+  nights, and absence can't meet a condition phrased as a console. *Check:*
+  when setting such a condition, say in the same comment how many clean cycles
+  with the instrumentation on are enough to merge without it. Extends L-440
+  and L-482. *From:* kernel #224, round 50.
+- **L-718. A guard change left without a version bump "for the merge" is
+  re-checked when its trigger merges.** #594's two blacklist lines had no
+  bump, harmless until kernel #237 merged the nodes that make udev load the
+  modules, the same day. *Check:* for a guard change without a version, list
+  what triggers the guarded thing (a DT node, a config line) and whether it
+  merged since the last round; if so, the bump and the merge go first. Extends
+  L-37 and L-442. *From:* #594 with kernel #237, round 50.
+- **L-690. A third party's failure report on a draft is checked against main
+  before the design discussion goes on.** On #582 a 9a owner reported that the
+  Escape dispatch main ships answers "key not found" under Hyprland 0.57,
+  after our round-48 comment had said every phone runs it and asked the author
+  to prove the failure. *Check:* grep main for the failing command
+  (`BackModel.js`), compare the version its comment names (0.56) with what
+  phones run (0.57.0), and put a reference-phone reproduction in the round's
+  decisions; a bug on main gets its own issue or PR. Extends L-520 and L-492.
+  *From:* #582, round 49, 2026-11-10.
+- **L-689. A commit-body line that starts with `#N` is deleted when a rebase
+  re-edits the message.** Git takes it for a comment: #389's `76dc2a29` lost a
+  line beginning "#398 added …" and now reads as a broken sentence. *Check:*
+  read the message hunks of every range-diff after a rebase; with
+  `COMMIT_MESSAGES` squashes the broken body lands on main unless the squash
+  body is written by hand. Extends L-312. *From:* #389, round 49, 2026-11-10.
+- **L-688. Requests left unanswered after a contributor's push are re-listed
+  in full in the numbered list, wording points included.** #330's four points
+  were posted five minutes before an unrelated correction and went unanswered
+  through two more pushes; "stock" was corrected on neither #330 nor #505
+  after round 48, having sat under "two wording points" at the end. *Check:*
+  `git grep -n` the exact strings each open point asked for (hashes, phrases,
+  the word) on the head, in the sibling PR's files too; when all are missing,
+  compare timestamps for a crossing before reading it as a refusal. Extends
+  L-648 and L-124. *From:* #330 and #505, round 49, 2026-11-10.
+- **L-687. A merge condition "shown not to be this PR's" names its
+  discriminator when it is set.** Kernel #224 waited on a comparison run
+  without its commits; at a failure rate near 1 in 150, with the unfixed bug
+  ending the comparison first, that run can't answer in a night, and the
+  thread drifted to "it isn't against this PR" by inference. *Check:* when a
+  merge waits on attributing a rare failure, estimate the runs needed from the
+  observed rate, and prefer evidence one failure can give (`pm_print_times`,
+  `pm_debug_messages`, `panic_on_rcu_stall`, a stack). Extends L-482. *From:*
+  kernel #224, round 49, 2026-11-10.
+- **L-686. A lesson that names an open PR is run as a check in that PR's next
+  round, not left as a note.** L-494 had named #403's `snprintf` in
+  `reboot-to.c` since round 42, but the thread never got it; linking the file
+  the no-bootctl way (two minutes, no network) made it a blocking finding.
+  *Check:* at the start of a later round, `grep -rn '#<N>'
+  docs/review/lessons` and run each check the hits name. *From:* #403, round
+  49, 2026-11-10.
+- **L-340. After a rework that narrows a PR to one device, the description and
+  the first commit still describe the old scope, and a squash publishes
+  them.** #135's body and first commit say the reorder and the rate in `state`
+  apply to every phone (cheetah 60 Hz); the second commit made both 9a-only.
+  *Check:* after a narrowing rework, read the body and every commit message
+  against the head's code, and have the maintainer write the squash body.
+  Extends L-279 and L-312. *From:* #135, round 29.
+- **L-339. A docs PR that grows after "ready to merge" is re-read push by
+  push, with a duplicate check.** #138 gained eight commits (166 lines) after
+  our near-final comment: the title went stale again, one paragraph landed
+  twice verbatim, and the new "next step" was an unattended run that accepts
+  watchdog resets with the modem up. *Check:* `git log <last reviewed
+  head>..<head>`, then `awk 'length>200' <file> | sort | uniq -d` for repeated
+  paragraphs, and grep the new text for "hands-free", "unattended" and "at the
+  price of". Offer a split when the late commits are another subject. Extends
+  L-274 and L-34. *From:* #138, round 29.
+- **L-338. A survey across open PRs uses `gh` or `ls-remote`, never a wildcard
+  fetch into the shared clone.** In round 29 a `git fetch origin
+  '+refs/pull/*/head:refs/remotes/origin-pr/*'` created 122 refs in the
+  maintainer's checkout (removed again, each checked by its reflog's creation
+  line). *Check:* survey with `gh api repos/<r>/contents/<path>?ref=<sha>`, or
+  fetch per-PR `review/prN-rR-<topic>` refs that go on the cleanup list.
+  Extends L-127 and L-194. *From:* round 29 (a near miss).
+- **L-337. A request to put an option in a device `kernel.config` is checked
+  against RELEASES first.** That fragment is for options that would break
+  another device, and only during bring-up: the release kernel (§4) is one
+  build from the shared fragment. We asked panther for `FT3658=m` there, which
+  no other phone minds, so a release kernel would have shipped panther without
+  touch. *Check:* before asking for a device-only config line, ask whether the
+  option can break another phone; if not, ask for it in
+  `kernel/configs/omamobile.config`, or say it's bring-up only and when it
+  moves. Extends L-31 and narrows L-314's last sentence; see C-21. *From:*
+  kernel #109 with #149, round 29.
+- **L-312. With `squash_merge_commit_message: COMMIT_MESSAGES`, a squash
+  carries every commit's body, including wording the review rejected.** #125's
+  first commit says "mark B successful on the first good boot after a flash",
+  the standing permission round 25 turned down. *Check:* `gh api repos/<r>
+  --jq .squash_merge_commit_message`, then read each commit body on a safety
+  PR; any body the final text contradicts means writing the squash body by
+  hand. Extends L-279. *From:* #125, round 27.
+- **L-292. Merge only after every check has finished, not on the first
+  green.** #126 was merged with the policy job passed and the tests job still
+  pending; the tests passed afterwards, but the merge didn't know that.
+  *Check:* `gh pr checks N` shows no pending job (or `gh run watch
+  --exit-status`) before `gh pr merge`. Extends C-15. *From:* #126,
+  2026-10-28.
+- **L-291. When the bottom of a squash-merged stack moves after we've posted a
+  cherry-pick plan, re-simulate the plan.** #115 and #117 still carry #99's
+  old head, and #117's list grew from two commits to three. *Check:* squash
+  the new bottom onto main, cherry-pick the listed commits, and diff the
+  result against the top head, expecting only the bottom's new change. Extends
+  L-195 and L-214. *From:* #99, #115, #117, round 26.
+- **L-287. A silent re-push is diffed per PR before any reply.** The tegu
+  stack's 20:38Z push looked like an answer to everything but carried only the
+  Makefile resolution; #106's and #122's points were untouched. *Check:* `git
+  range-diff` against the last round's refs, then one status line per open
+  point rather than a re-post. Extends L-183 and L-248. *From:* kernel #80 to
+  #122, round 26.
+- **L-279. A PR that carries a merged fix PR's commits is diffed against main,
+  and its squash body written by hand.** #101 still carried #107's audio
+  commits; `git diff origin/main <head> -- packages/omamobile-audio` was
+  empty, but GitHub's default squash body would still list "omamobile-audio
+  0.5.5" under the fingerprint title. *Check:* after the fix PR merges, diff
+  each rider against main for the fix's package. Extends L-255. *From:* #101,
+  round 26.
+- **L-278. A re-pushed stack with identical sources is proved once.** Where
+  every PR's tree id equals the old head's, the review is tree ids plus a
+  range-diff per PR, then one gate on a scratch rebase of the top; DTB hashes
+  of old head and rebased head carry the earlier content review over. *From:*
+  the tegu stack, round 25 (12 heads, one message change).
+- **L-277. A promised userspace guard is checked in every open package for
+  that device, other owners' included.** Kernel #90 was accepted on W4HO's
+  promise that `allow_tx` is set only for `google-tg4c`; h4rkl's #74 sets
+  `allow_tx=1` for every panel, and our #74 review missed it (C-18). *Check:*
+  `git grep -n '<option>'` across the open omarchy-mobile PR heads for
+  `packages/omamobile-device-<codename>`. Extends L-219. *From:* kernel #90
+  with #74, round 25.
+- **L-275. Squash-merged stacks always conflict on the package `version` file,
+  and a PR carrying a merged fix's commits can't simply be rebased.** #115
+  carried #107's three commits, which main has as one squash. *Check:*
+  simulate the chain with `git merge-tree --write-tree` and `commit-tree`, one
+  squash after another, then hand over a cherry-pick of only the PR's own
+  commits, verified to reproduce the head's package tree. Extends L-39, L-214
+  and L-255. *From:* #115 and #117, round 25.
+- **L-274. A PR we marked "nothing more needed" is checked push by push from
+  the head our comment named.** Kernel #82 was pushed at 21:43Z without a
+  comment and again at 01:04Z; comparing only the last two heads would skip
+  the one we reviewed. *Check:* list every force-push event since our comment
+  and range-diff each. Extends L-34 and L-166. *From:* kernel #82, round 25.
+- **L-270. An "or keep X and say so" we offer must pass the gates the same
+  review names.** Round 24 on kernel #98 asked for the eight required
+  supplies, which `dtbs_check` enforces, and also offered keeping the fixed
+  regulator, which can't pass CONTRIBUTING's no-new-warnings rule. *Check:*
+  run each alternative in a draft past every blocking point in the same draft
+  and §6's gates. Extends L-229; see C-16. *From:* kernel #98, round 25.
+- **L-265. A bare `#N` links to the repository the comment is in.** W4HO's
+  tables on issue #28 named kernel PRs as `#119` and `#122`, which link to an
+  omarchy-mobile PR and issue. *Check:* write
+  `derekross/linux-omarchy-mobile#N` when a comment names the other
+  repository's PRs, and read cross-repository tables in a thread with that in
+  mind. *From:* issue #28, round 25.
+- **L-263. A squash title that names a package version must agree with the
+  `version` file it lands.** #112 landed as "device-raven 0.1.26" with the
+  file still at 0.1.25, so a publish would reuse a version with new contents
+  (fixed by #126). *Check:* on each squash merge, and on the next PR for that
+  package, compare `git show origin/main:packages/<p>/version` with the last
+  squash subject that touched it. Extends L-12 and L-217. *From:* #112 with
+  #113, round 25.
+- **L-248. A reply that says "pushed" is checked against that PR's own head,
+  not the stack's.** #87's reply described fixes that existed only below #90
+  and #96; its own branch stayed put, with green CI. *Check:* `git ls-remote
+  <remote> refs/pull/N/head` and `git range-diff` per PR; when every commit
+  is `=`, grep the open heads above it for the fixed commits. Extends L-166
+  and L-183. *From:* kernel #87, round 23.
+- **L-249. A "tested blob" from an unpublished tree can be a blob from our
+  own earlier review ref.** #88's and #89's tested files were the previous
+  heads' blobs. *Check:* `git cat-file -t <blob>`, then `git diff <blob>
+  <new head>:<path>`. Extends L-131. *From:* kernel #88, #89, round 23.
+- **L-250. A merge plan carried over from an earlier round is re-read
+  against the rules that landed since.** Round 20 planned #71's Pixel 7 Pro
+  check after the merge; CONTRIBUTING §6.2 then made it a before-merge rule.
+  *Check:* `git log --since=<our last comment> -- CONTRIBUTING.md AGENTS.md`,
+  then every "merge, then check" in the plan. Extends L-31 and L-185.
+  *From:* kernel #71, round 23.
+- **L-251. When a stack is re-pushed onto one line, the landing PR moves to
+  the top, and the boot is asked of the top.** With #84, #89 and #95 merged,
+  #80-#96 became one chain; a boot of #80 alone would test a tree that never
+  lands. *Check:* `git log base..head` per PR; ask for evidence on the commit
+  that will be merged. Extends L-196. *From:* kernel #80-#96, round 24.
+- **L-252. A "sync to the phone's tree" commit is diffed against the base
+  for deletions the series never meant.** #115's last commit overwrote two
+  Kconfig files with a private tree's copies and dropped two other phones'
+  drivers. *Check:* `git diff --stat base head` against the PR's feature
+  list, and `git log -S'<symbol>'` for every removed `config` line. *From:*
+  kernel #115, round 24.
+- **L-253. One contributor's board PRs that all append to one DTS conflict
+  pairwise: build the combined resolution once and hand over an order.**
+  *Check:* `git merge-tree` per pair; cherry-pick all onto the base, build
+  and `dt-validate` that tree, and ask for a stack next time. Extends L-104
+  and L-196. *From:* kernel #111-#116, round 24.
+- **L-254. Scratch merges in the shared kernel clone run with rerere off.**
+  The clone has `rerere.enabled=true`, so a review's scratch cherry-picks
+  recorded resolutions (one wrong) that a later real merge could replay.
+  *Check:* `git -c rerere.enabled=false cherry-pick|merge …`, or `git
+  merge-tree` only. Extends L-43 and L-127. *From:* round 24.
+- **L-255. A fix copied onto several squash-merged PRs merges first.**
+  #107's audio 0.5.5 rode on #100, #101, #115 and #117; squashing any of
+  those first lands the bump under the wrong title. *Check:* `git rev-parse
+  <head>:packages/<p>` across the PRs, then merge the fix PR first. Extends
+  L-12 and L-217. *From:* #107, round 24.
+- **L-31. Our review requests must agree with CONTRIBUTING.** Round one of
+  kernel #11 asked for a squash that §6.2's "disabled, then a separate
+  enabling commit" rule contradicted. Since 2026-10-22 §6.2 allows a board
+  node already proven on a same-SoC phone to be added enabled in one
+  commit; otherwise, when a request and a rule disagree, fix one of them.
+  *From:* kernel #11.
+- **L-34. Before a second round, check the head moved.** Compare the PR's
+  head with the `commit_id` of our last review and read the timeline:
+  comments and cross-references also change the "updated" time. Answers
+  given only in comments must still land in the files. *From:* #24,
+  round 2.
+- **L-39. A rebase or squash merge gives new commit ids, so a stacked PR
+  must be rebased before it merges.** After #11 was rebase-merged, #12 still
+  carried #11's old commit underneath and couldn't merge as it stood. *Check:*
+  when merging a PR another one is stacked on, ask the second one's author to
+  rebase onto the branch, and merge in order. *From:* kernel #11 and #12.
+- **L-43. Parallel reviewers use unique ref names.** They share the kernel
+  clone, and one deleted another's `review/pr12` mid-review. *Check:* name
+  refs `review/prN-<round>` (now `review/prN-rR-<topic>`, L-127) and pass commit ids to the gates. *From:* kernel
+  #12, round 3.
+- **L-44. A staged descriptor's refusal depends on the tooling PRs in
+  flight.** Tegu added `SOC_COMPATIBLE` while #27 was about to make either
+  key acceptable, so merging both would have made tegu installable without
+  the AVB footers its bootloader needs. *Check:* test a staged descriptor
+  against the heads of open PRs that touch `bin/omamobile` or
+  `tools/install-phone`. *From:* #24 with #27.
+- **L-71. Our requests say which repository each piece goes in.** "A kernel
+  PR … with an overlay that enables it" put a bring-up overlay in the kernel,
+  against CONTRIBUTING §6.1 (extends L-31). *From:* issue #3 and kernel #32.
+- **L-104. Run `git merge-tree` across every pair of open PRs that touch the
+  same files,** one contributor's parallel PRs included, and give the merge
+  order in each review. Look for duplicate mechanisms too (#34's
+  `ro_gate_clks` beside #40's private read-only gates). Extends L-39 and
+  L-73. *From:* kernel #34 with #40, #37 with #39.
+- **L-105. When a contributor writes a private driver after we asked for
+  the common helper, find what pushed them off it** (here a PMU check that
+  can't defer inside the `__init` probe) and answer that, not only the
+  request again. *From:* kernel #40.
+- **L-123. A fix-up commit on a rebase-merged PR is folded in.** Kernel
+  PRs land commit by commit, so #34's watchdog commit would have landed with
+  the CG_VAL-only read (a bisect could stop there with the watchdogs
+  unowned), and #38's driver commit claiming temperature. *Check:* `git
+  range-diff` for a new commit that only changes lines an earlier commit of
+  the same PR added; read the earlier messages against the new head.
+  *From:* kernel #34, #35, #38, round 10.
+- **L-124. Before asking again, check whether the contributor's report
+  crossed our post.** The 23:11Z husky report answered round 9 before round 9
+  was posted. *Check:* compare comment times with our post time. *From:*
+  kernel #33, round 10.
+- **L-125. Check a whitespace nit by column, not by counting tabs.**
+  `expand` the hunk with its neighbours: `google,zumapro.h` gives every name
+  of that length two tabs. *From:* kernel #34, round 10 (withdrawn nit).
+- **L-126. A binding PR's SoC condition can reject another open board's
+  DTB without a textual conflict.** #13's `soc_compatible: false` for
+  non-zuma boards fails lynx (gs201 IPOP). *Check:* merge each open board PR
+  with each open binding PR on the same schema and run `CHECK_DTBS=y`.
+  Extends L-104. *From:* kernel #43 with #13 and #37.
+- **L-127. Parallel reviewers suffix refs with their topic, and delete only
+  refs they created.** In round 10 several used `review/prN-r10`, and one
+  deleted (then restored) refs another was using. *Check:*
+  `review/prN-r<round>-<topic>`; clean up from a list recorded at fetch time.
+  Extends L-43. *From:* round 10.
+- **L-147. Before re-checking an earlier round's request, re-derive it from
+  what has landed since.** Round 11 asked #22 to gate `aoc-stage s2mpu` on a
+  `tzpc` restore, from the tool's header alone; raven's plans (#41) show
+  that SMC hung the SoC and that the `pd` stage made the read safe, so the
+  gate could only be passed by a known hang (C-6). *Check:* for every safety
+  gate we asked for, find the plan row it rests on and confirm the step it
+  requires passed there. Extends L-31. *From:* #22, round 12.
+- **L-148. `git merge-tree` exiting 1 can mean a missing ref, not a
+  conflict.** Another reviewer deleted their refs mid-review. *Check:* read
+  the message, and use commit ids for other reviewers' PRs. Extends L-127.
+  *From:* round 12.
+- **L-165. "No checks reported" can mean the PR conflicts with its base,**
+  since GitHub runs no `pull_request` workflow then. *From:* kernel #53,
+  round 14.
+- **L-166. When a PR is force-pushed after its phone test, diff the old head
+  against the new.** GraphQL's `HeadRefForcePushedEvent.beforeCommit` gives
+  the old id; REST's timeline omits it. *From:* kernel #54, round 14.
+- **L-167. Posting scripts split drafts by heading, never by line number,
+  and each posted file is checked first.** Round 13's line ranges put #49's
+  last bullet at the top of #50's comment. *From:* round 13 (found in 14).
+- **L-182. "My merged PR isn't on the branch" after a rebase merge is
+  checked by patch-id and the branch's push events, not by ancestor.** A
+  rebase merge lands the commit under a new id, so the PR's head is never an
+  ancestor and GitHub shows no merge commit; two merged commits came back as
+  new PRs (kernel #67, #68), and merging a resubmission onto the base gives
+  the base's own tree, which the gate can't tell from a real change.
+  *Check:* `git show <merged id> | git patch-id` against the resubmission;
+  `gh api repos/<r>/branches/<b>` for the head and `events` (or
+  `activity?ref=`) for pushes since the merge, all fast-forwards; `git
+  merge-base --is-ancestor <merge> <tip>`; and `git merge-tree --write-tree
+  base head` compared with `base^{tree}`. Extends L-39. *From:* kernel #67,
+  #68, round 20.
