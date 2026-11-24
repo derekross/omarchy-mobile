@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: MIT
--- Omarchy Mobile's Hyprland rules for a phone, loaded after Omarchy's defaults
+-- Omamobile's Hyprland rules for a phone, loaded after Omarchy's defaults
 -- (from the user's looknfeel.lua). Package updates reach them.
 
 -- Apps fill the screen between the bar and the dock, like Android. Omarchy's
@@ -246,4 +246,15 @@ elseif o.cmd_present("voxtype") then
     { "Start dictation (push-to-talk)", "voxtype record start" },
     { "Stop dictation (push-to-talk)", "voxtype record stop", { release = true } },
   })
+end
+
+-- Device packages may add their own session settings in one optional file,
+-- loaded after the shared rules above. pcall: a broken device file logs its
+-- error and the shared rules stay in force. No file, no change.
+local device_hook = "/usr/share/omamobile/hypr/device.lua"
+local device_file = io.open(device_hook, "r")
+if device_file then
+  device_file:close()
+  local ok, err = pcall(dofile, device_hook)
+  if not ok then print("omamobile: " .. device_hook .. ": " .. tostring(err)) end
 end

@@ -15,9 +15,12 @@
 # files' times). A rebuild replaces the bundle directory and leaves nothing
 # else in out/bundle, and one that fails moving the new directory in puts
 # the old one back; after a run killed there, the next run puts it back,
-# even one an input check refuses. A second run for the same bundle while
-# one runs is refused, and the first one completes. The bundled nv-backup
-# reads the bundle's device.conf.
+# even one an input check refuses. A rebuild whose tar, the tar's rename or
+# its checksum fails stops and keeps the earlier .tar and .tar.sha256;
+# bundle_tar on its own returns non-zero when the new .tar can't be
+# renamed. A second run for the same bundle while one runs is refused, and
+# the first one completes. The bundled nv-backup reads the bundle's
+# device.conf.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 SRC=$PWD
@@ -27,7 +30,13 @@ for tool in python3 flock; do command -v "$tool" >/dev/null || { echo "ok - # sk
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
 r=$t/repo k=$t/kernel
-tools="phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data"
+# make-bundle's own list, which must hold phone-provision and what it runs,
+# nv-backup, and the guided install with what it runs (#guidedbundle)
+tools=$(sed -n 's/^provision_tools="\(.*\)"$/\1/p' tools/make-bundle)
+for f in phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data \
+  install-guided phone-smoke factory-index camera-requirements.txt; do
+  [[ " $tools " == *" $f "* ]] || fail "make-bundle's provision_tools has $f"
+done
 mkdir -p "$r/tools/lib" "$r/docs" "$r/device/testdev" "$r/packages/omamobile-keyring" "$r/out" \
   "$k/include/config" "$k/images"
 cp tools/make-bundle tools/bundle-manifest tools/install-phone "$r/tools/"
@@ -53,11 +62,16 @@ b=$r/out/bundle/omamobile-testdev-2026.11.01
 pass "an unsigned development bundle assembles"
 
 for f in $tools; do
-  [[ -x $b/tools/$f ]] || fail "the bundle has an executable tools/$f"
+  if [[ $f == *.txt ]]; then
+    [[ -f $b/tools/$f && ! -x $b/tools/$f ]] || fail "the bundle has tools/$f, not executable"
+  else
+    [[ -x $b/tools/$f ]] || fail "the bundle has an executable tools/$f"
+  fi
   cmp -s "$b/tools/$f" "tools/$f" || fail "tools/$f is the repository's"
 done
 cmp -s "$b/INSTALL.md" docs/INSTALL.md || fail "the bundle carries docs/INSTALL.md as INSTALL.md"
-pass "the bundle carries INSTALL.md and phone-provision with everything it runs"
+[[ ! -e $b/images/DEVICE ]] || fail "the bundle's images/ has no DEVICE file: its device is its device.conf"
+pass "the bundle carries INSTALL.md, phone-provision with everything it runs, and the guided install with what it runs"
 
 # Exercise the bundled wrapper's explicit transport without SSH/network IO.
 mkdir -p "$t/stubs"
@@ -93,6 +107,7 @@ if grep -c 'from the repository' "$b/README.txt" >/dev/null; then fail "README.t
 grep -c 'INSTALL.md' "$b/README.txt" >/dev/null || fail "README.txt points to INSTALL.md"
 grep -c '  bash tools/nv-backup DIR$' "$b/README.txt" >/dev/null || fail "README.txt gives the backup command"
 grep -c 'run "bash install" from this directory' "$b/README.txt" >/dev/null || fail "README.txt says bash install"
+grep -c '^  bash install --guided$' "$b/README.txt" >/dev/null || fail "README.txt gives the guided install's command"
 if grep -c '\./install' "$b/README.txt" >/dev/null; then fail "README.txt no longer says ./install"; fi
 grep -c 'sha256sum -c omamobile-testdev-2026.11.01.tar.sha256' "$b/README.txt" >/dev/null || fail "README.txt names the one-file download's check"
 pass "README.txt points to INSTALL.md, the bundled nv-backup and phone-provision, and says bash install"
@@ -156,6 +171,34 @@ out=$(PATH=$t/failmv:$PATH DEVICE=testdev KERNEL_OUT=$k KERNEL_DIR=$r "$r/tools/
   fail "a rebuild whose move into place fails says so: $out"
 intact || fail "a failed move into place puts the old bundle back: $(ls -A "$r/out/bundle")"
 pass "a rebuild that fails moving the new bundle in puts the old one back"
+
+# A tar that writes part of the download and fails (a full disk), a failed
+# rename of the new .tar and a failed checksum of it: each stops the
+# rebuild, and the earlier .tar and its .tar.sha256 stay and still match
+mkdir "$t/failtar" "$t/failtarmv" "$t/failsum"
+printf '#!/bin/bash\nfor a; do [[ ${p:-} != -cf ]] || { printf partial > "$a"; echo "tar: $a: Cannot write" >&2; exit 2; }; p=$a; done\nPATH=${PATH#*:} exec tar "$@"\n' > "$t/failtar/tar"
+printf '#!/bin/sh\ncase "$*" in *".tar.new "*) exit 1 ;; esac\nPATH=${PATH#*:} exec mv "$@"\n' > "$t/failtarmv/mv"
+printf '#!/bin/sh\ncase $(readlink /proc/$$/fd/0) in *.tar) exit 1 ;; esac\nPATH=${PATH#*:} exec sha256sum "$@"\n' > "$t/failsum/sha256sum"
+chmod +x "$t/failtar/tar" "$t/failtarmv/mv" "$t/failsum/sha256sum"
+for s in failtar failtarmv failsum; do
+  out=$(PATH=$t/$s:$PATH DEVICE=testdev KERNEL_OUT=$k KERNEL_DIR=$r "$r/tools/make-bundle" --unsigned --version 2026.11.01 --rootfs "$root" 2>&1) &&
+    fail "a rebuild with the $s stand-in fails: $out"
+  grep -cF "writing out/bundle/omamobile-testdev-2026.11.01.tar failed" <<<"$out" >/dev/null || fail "the $s rebuild says the .tar failed: $out"
+  intact && [[ $(cat "$tarball.sha256") == "$first" ]] && (cd "$r/out/bundle" && sha256sum -c --quiet --strict "${tarball##*/}.sha256") ||
+    fail "the $s rebuild keeps the earlier .tar and its .tar.sha256: $(ls -A "$r/out/bundle")"
+done
+pass "a rebuild whose tar, its rename or its checksum fails stops, and the earlier .tar stays with its .tar.sha256"
+# bundle_tar called on its own (tests/release does), in a directory that
+# already holds a good .tar: a failed rename of the new one returns
+# non-zero, rather than checksumming the old .tar, and the pair stays
+cp -a "$r/out/bundle" "$t/direct"
+if (PATH=$t/failtarmv:$PATH; source "$r/tools/lib/bundle-tar.sh"
+  bundle_tar "$t/direct" omamobile-testdev-2026.11.01 "${root##*/}" 2026.11.01) 2>/dev/null; then
+  fail "bundle_tar returns non-zero when the new .tar can't be renamed"
+fi
+cmp -s "$t/direct/${tarball##*/}" "$tarball" && cmp -s "$t/direct/${tarball##*/}.sha256" "$tarball.sha256" &&
+  (cd "$t/direct" && sha256sum -c --quiet --strict "${tarball##*/}.sha256") || fail "a failed bundle_tar keeps the .tar and .tar.sha256 already there"
+pass "bundle_tar on its own returns non-zero when the new .tar can't be renamed, and keeps the pair already there"
 
 # A run killed (SIGKILL, no trap) between the two renames leaves the old
 # bundle in the build directory; the next run puts it back, even one that an
@@ -237,3 +280,131 @@ if out=$(bundle); then fail "a build index that fails its own check stops the bu
 grep -c "factory-index check" <<<"$out" >/dev/null || fail "the refusal names the check: $out"
 [[ $(cd "$b" && sha256sum SHA256SUMS) == "$before" ]] || fail "a refused rebuild leaves the bundle as it was"
 pass "a build index that fails tools/factory-index check stops the bundle, and the earlier bundle stays"
+
+# The install link: manifest.json says install_link with its protocol only
+# for a root image built for the link (its MANIFEST's "install link:"
+# line), and an image line this tool does not know stops the bundle
+rm -f "$r/device/testdev/factory-builds.json"
+link_of() { python3 -I -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1])).get("install_link")))' "$b/manifest.json"; }
+out=$(bundle) || fail "a bundle without the link assembles: $out"
+[[ $(link_of) == null ]] || fail "an image from before the link: no install_link"
+mf=${root%.img.zst}.MANIFEST
+cp "$mf" "$t/MANIFEST.saved"
+echo 'install link: none' >> "$mf"
+out=$(bundle) || fail "a bundle of an image not for the link assembles: $out"
+[[ $(link_of) == null ]] || fail "an image not for the link: no install_link"
+cp "$t/MANIFEST.saved" "$mf"; echo 'install link: protocol 1 (marker /etc/omamobile/install-link)' >> "$mf"
+out=$(bundle) || fail "a bundle of an image for the link assembles: $out"
+[[ $(link_of) == '{"protocol": 1}' ]] || fail "an image for the link: install_link is {\"protocol\": 1} ($(link_of))"
+(cd "$b" && sha256sum -c --quiet SHA256SUMS) || fail "SHA256SUMS covers the manifest.json with install_link"
+cp "$t/MANIFEST.saved" "$mf"; echo 'install link: maybe' >> "$mf"
+if out=$(bundle); then fail "an install link line this tool does not know stops the bundle"; fi
+grep -c "install link line this tool does not know" <<<"$out" >/dev/null || fail "the refusal says why: $out"
+cp "$t/MANIFEST.saved" "$mf"
+pass "manifest.json's install_link: only for an image built for the link, with its protocol"
+
+# The install plan writes only slot B's five boot images and userdata
+# (AGENTS.md §1): a descriptor whose BOOT_IMAGES or UFS_RW names any other
+# partition, here with its own allowlist entry beside it, stops the bundle
+# with the name, and the earlier bundle stays
+conf=$r/device/testdev/device.conf
+descriptor() { printf 'CODENAME=testdev\nNAME="Test device"\nBOOT_IMAGES="%s"\nUFS_RW="%s"\n' "$1" "$2" > "$conf"; }
+printf modem > "$k/images/modem.img"
+printf vbmeta > "$k/images/vbmeta.img"
+before=$(cd "$b" && sha256sum SHA256SUMS)
+for c in "boot dtbo modem|boot_b dtbo_b modem_b userdata|BOOT_IMAGES.* not modem" \
+  "boot dtbo vbmeta|boot_b dtbo_b vbmeta_b userdata|BOOT_IMAGES.* not vbmeta" \
+  "boot dtbo|boot_b dtbo_b modem_b userdata|UFS_RW.* not modem_b"; do
+  IFS='|' read -r images rw says <<<"$c"
+  descriptor "$images" "$rw"
+  if out=$(bundle); then fail "BOOT_IMAGES=\"$images\" UFS_RW=\"$rw\" stops the bundle: it wrote $(grep -o '"partition": "[a-z_]*"' "$b/manifest.json" | cut -d'"' -f4 | xargs)"; fi
+  grep -cE "^bundle-manifest: .*$says\$" <<<"$out" >/dev/null || fail "the refusal names the partition ($says): $out"
+  [[ $(cd "$b" && sha256sum SHA256SUMS) == "$before" ]] && intact || fail "a refused descriptor leaves the bundle as it was"
+done
+descriptor "boot dtbo" "boot_b dtbo_b userdata"
+pass "a descriptor naming modem, vbmeta or modem_b stops the bundle, and the earlier bundle stays"
+
+# Format 1, for every device today (no INSTALL_SLOT): manifest.json's install
+# plan and README.txt's two slot paragraphs as they were before format 2
+python3 -I - "$b/manifest.json" <<'PY' || fail "a slot-B bundle's install plan is format 1's, unchanged"
+import json, sys
+m = json.load(open(sys.argv[1]))
+want = {"after": ["set-active b", "reboot"],
+        "never": ["slot A (any *_a partition)", "an unsuffixed partition name", "bootloader", "radio", "persist", "efs",
+                  "modem", "devinfo", "vbmeta", "fastboot -w", "fastboot --slot", "fastboot flashing", "fastboot erase",
+                  "fastboot format", "fastboot oem"],
+        "product": "testdev", "require_matching_bootloader_slots": True, "require_unlocked_bootloader": True,
+        "storage_guard_allowlist": ["boot_b", "dtbo_b", "userdata"], "tool": "fastboot",
+        "writes": [{"partition": "boot_b", "partition_size": None, "size": 4, "source": "images/boot.img"},
+                   {"partition": "dtbo_b", "partition_size": None, "size": 4, "source": "images/dtbo.img"},
+                   {"erases_userdata": True, "partition": "userdata", "source": "root_image"}]}
+assert m["format"] == 1, m["format"]
+assert m["install"] == want, m["install"]
+PY
+readme_slot_b="What it writes: slot B's boot images (boot_b dtbo_b ) and
+userdata (the Arch root). That ERASES userdata. It never touches slot A,
+the bootloader, radio, persist, efs, modem, devinfo or vbmeta."
+readme_way_back='Going back to stock: stock Android is still on slot A. In fastboot,
+"fastboot --set-active=a" and reboot, then factory-reset Android (its data
+was erased). Or flash Google'"'"'s factory image for testdev.'
+grep -cxF -- "$(head -1 <<<"$readme_slot_b")" "$b/README.txt" >/dev/null && [[ $(cat "$b/README.txt") == *"$readme_slot_b"* && $(cat "$b/README.txt") == *"$readme_way_back" ]] ||
+  fail "a slot-B bundle's README.txt keeps its slot B paragraphs, word for word"
+pass "format 1 (no INSTALL_SLOT): manifest.json's install plan and README.txt's slot B paragraphs are as before"
+
+# Format 2 (INSTALL_SLOT=active; no device has it yet): the install plan of
+# the shared contract, with the slot the phone runs from read at the install;
+# README.txt's way back is Google's factory image; and a ramdisk image whose
+# initramfs lacks the storage guard's running-slot marker is refused
+command -v lz4 >/dev/null && command -v cpio >/dev/null || { echo "ok - # skip: no lz4 or cpio for format 2"; exit 0; }
+vendor_boot() {  # RAMDISK-DIR OUT: a v4 vendor boot image holding that directory as its lz4 ramdisk
+  (cd "$1" && find . | LC_ALL=C sort | cpio -o -H newc --quiet) | lz4 -l -9 -q > "$t/rd.lz4"
+  python3 -I -c '
+import struct, sys
+rd, page = open(sys.argv[1], "rb").read(), 4096
+pad = lambda b: b + bytes(-len(b) % page)
+hdr = struct.pack("<8s5I2048sI16s2IQ4I", b"VNDRBOOT", 4, page, 0, 0, len(rd), b"", 0, b"", 2128, 3, 0, 108, 1, 108, 0)
+table = struct.pack("<3I32s", len(rd), 0, 1, b"") + bytes(64)
+open(sys.argv[2], "wb").write(pad(hdr) + pad(rd) + pad(b"dtb") + pad(table))
+' "$t/rd.lz4" "$2"
+}
+mkdir -p "$t/rd/etc" && echo init > "$t/rd/init" && echo running > "$t/rd/etc/omamobile-ufs-rw-slot"
+vendor_boot "$t/rd" "$k/images/vendor_boot.img"
+touch "$k/images/boot.img" "$k/images/dtbo.img"
+printf 'CODENAME=testdev\nNAME="Test device"\nBOOT_IMAGES="boot vendor_boot dtbo"\nUFS_RW="boot_b vendor_boot_b dtbo_b userdata"\nINSTALL_SLOT=active\nINSTALL_ACTIVE_SLOTS=a\n' > "$r/device/testdev/device.conf"
+out=$(bundle) || fail "an INSTALL_SLOT=active bundle assembles: $out"
+python3 -I - "$b/manifest.json" <<'PY' || fail "an INSTALL_SLOT=active bundle's manifest.json is format 2, the shared contract's install plan"
+import json, sys
+m = json.load(open(sys.argv[1]))
+assert m["format"] == 2, m["format"]
+i = m["install"]
+want = {"tool": "fastboot", "product": "testdev", "require_unlocked_bootloader": True, "slot": "active",
+        "accept_current_slots": ["a"], "after": ["reboot"],
+        "never": ["the slot the phone does not run from (any *_<other> partition)", "an unsuffixed partition name but userdata",
+                  "bootloader", "radio", "persist", "efs", "modem", "devinfo", "vbmeta", "fastboot -w", "fastboot --slot",
+                  "fastboot --set-active", "fastboot flashing", "fastboot erase", "fastboot format", "fastboot oem"],
+        "storage_guard": {"slot": "running", "images": ["boot", "vendor_boot", "dtbo"], "also": ["userdata"],
+                          "marker": "/etc/omamobile-ufs-rw-slot"}}
+for k, v in want.items():
+    assert i[k] == v, (k, i[k])
+assert sorted(i) == sorted(list(want) + ["writes"]), sorted(i)
+assert [w.get("image") for w in i["writes"][:-1]] == ["boot", "vendor_boot", "dtbo"]
+assert all("partition" not in w for w in i["writes"][:-1])
+assert i["writes"][-1] == {"partition": "userdata", "source": "root_image", "erases_userdata": True}
+PY
+grep -cF "Google's Android Flash Tool" "$b/README.txt" >/dev/null && grep -cF 'REPLACES Android on this phone' "$b/README.txt" >/dev/null ||
+  fail "an INSTALL_SLOT=active bundle's README.txt says Android is replaced and the way back is Google's factory image"
+if grep -cF -- '--set-active=a' "$b/README.txt" >/dev/null || grep -cF "slot B's boot images" "$b/README.txt" >/dev/null; then
+  fail "an INSTALL_SLOT=active bundle's README.txt has none of slot B's words"
+fi
+(cd "$b" && sha256sum -c --quiet SHA256SUMS) || fail "SHA256SUMS holds for the format 2 bundle"
+pass "format 2 (INSTALL_SLOT=active): manifest.json has the shared contract's install plan, README.txt's way back is Google's factory image"
+before=$(cd "$b" && sha256sum SHA256SUMS)
+rm "$t/rd/etc/omamobile-ufs-rw-slot"
+vendor_boot "$t/rd" "$k/images/vendor_boot.img"
+if out=$(bundle); then fail "a format 2 bundle without the storage guard's running-slot marker is refused"; fi
+grep -cF 'no storage guard for the running slot' <<<"$out" >/dev/null || fail "the refusal names the missing marker: $out"
+echo b > "$t/rd/etc/omamobile-ufs-rw-slot"
+vendor_boot "$t/rd" "$k/images/vendor_boot.img"
+if out=$(bundle); then fail "a format 2 bundle whose marker doesn't read running is refused"; fi
+[[ $(cd "$b" && sha256sum SHA256SUMS) == "$before" ]] || fail "a refused format 2 rebuild leaves the bundle as it was"
+pass "format 2: a ramdisk image without the storage guard's running-slot marker stops the bundle, and the earlier bundle stays"

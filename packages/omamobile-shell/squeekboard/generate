@@ -56,7 +56,7 @@ HEADER_END = "# omamobile-setup-user links it into ~/.local/share/squeekboard/ke
 # The globe key: squeekboard's popover out, our language sheet in
 GLOBE_UPSTREAM = 'action: "show_prefs"'
 GLOBE = 'keysym: "XF86MediaLanguageMenu"'
-HAND_MADE = {"terminal/us.yaml", "terminal/us_wide.yaml"}
+HAND_MADE = {"terminal/us.yaml", "terminal/us_wide.yaml", "terminal/gr.yaml", "terminal/gr_wide.yaml"}
 # Greek (gr, gr_wide): a row of its own under the action row with the accented
 # vowels, one key each, so ά is one tap and not two (open the accents view,
 # then tap; it closes itself after one key). The accents view stays for the rest of what is only there.
@@ -195,7 +195,7 @@ def generate(upstream, rel):
     header = [
         "# SPDX-License-Identifier: GPL-3.0-or-later",
         "# squeekboard %s's %s (https://gitlab.gnome.org/World/Phosh/squeekboard," % (VERSION, rel),
-        "# tag v%s, GPL-3.0-or-later), with two changes for Omarchy Mobile: the" % VERSION,
+        "# tag v%s, GPL-3.0-or-later), with two changes for Omamobile: the" % VERSION,
         "# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua",
         "# binds for squeekboard only) on top of every view, and the globe key",
         "# sending XF86MediaLanguageMenu (the shell's language sheet) instead of",

@@ -29,7 +29,7 @@ ob() {
     PATH="$F:/usr/bin:/bin" bash bin/omamobile-onboarding "$@" >"$t/out" 2>&1
 }
 reset() { rm -rf "$t/pin" "$t/yes" "$t/listing" "$t/failed" "$t/image" "$t/ui" "$t/log"; rm -rf "$t/home/.local"; : >"$t/log"; }
-ready() { printf '{"event": "fingers", "fingers": [%s], "stages": 12, "device": "Omarchy Mobile UDFPS"}\n' "${1:-}" >"$t/listing"; }
+ready() { printf '{"event": "fingers", "fingers": [%s], "stages": 12, "device": "Omamobile UDFPS"}\n' "${1:-}" >"$t/listing"; }
 
 # Setup: the PIN is set, then the fingerprint is offered and taken
 reset; ready; touch "$t/yes"

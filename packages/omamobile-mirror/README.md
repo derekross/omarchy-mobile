@@ -12,7 +12,7 @@ tools/phone-mirror ──ssh──> omamobile-mirror on
                               ├─ omamobile-mirror-firewall.service (root):
                               │    ufw allow in on usb0 to 172.16.42.1 port 5900 proto tcp
                               └─ omamobile-mirror.service (user unit, the session's user):
-                                   wayvnc --max-fps=30 --name="Omarchy Mobile phone" 172.16.42.1:5900
+                                   wayvnc --max-fps=30 --name="Omamobile phone" 172.16.42.1:5900
 VNC viewer  <──────── 172.16.42.1:5900 ────────>  wayvnc (screencopy + virtual pointer/keyboard)
 ```
 
@@ -52,7 +52,7 @@ if there is none:
 
 | Viewer | Install (Arch) | Notes |
 | --- | --- | --- |
-| TigerVNC `vncviewer` (default) | `sudo pacman -S tigervnc` | fast, full quality; title "Omarchy Mobile phone - TigerVNC". It has no scaling, so the 1440x3120 picture scrolls in the window, unless `--fit` |
+| TigerVNC `vncviewer` (default) | `sudo pacman -S tigervnc` | fast, full quality; title "Omamobile phone - TigerVNC". It has no scaling, so the 1440x3120 picture scrolls in the window, unless `--fit` |
 | TigerVNC in gamescope (`--fit`) | `sudo pacman -S tigervnc gamescope` | the whole phone in the window: gamescope scales TigerVNC's full-screen 1440x3120 picture into the window on the computer's GPU and scales the mouse back |
 | `gvncviewer` | `sudo pacman -S gtk-vnc` | scales to the window, but slowly |
 | Remmina | `sudo pacman -S remmina libvncserver` | only with `--viewer remmina`; its VNC plugin rejects the frame ("Rect too large") |
@@ -151,7 +151,7 @@ tools/phone-ssh true && tools/phone-ssh 'systemctl stop fw-deadman.timer'   # a 
 ## Recording
 
 - **Live demos, streaming: OBS.** Add a *Window Capture (PipeWire)* source
-  and pick the viewer window ("Omarchy Mobile phone"). On Hyprland the portal asks
+  and pick the viewer window ("Omamobile phone"). On Hyprland the portal asks
   which window; the choice can be remembered.
 - **The smoothest recordings: on the phone.** Omarchy's own screen recording
   (gpu-screen-recorder) records the panel at its real frame rate with no

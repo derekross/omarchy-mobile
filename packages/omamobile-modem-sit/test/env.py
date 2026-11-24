@@ -19,6 +19,7 @@ os.environ.update({
     'OMAMOBILE_SIT_DEVICE': 'unix:' + os.path.join(TMP, 'ipc0'),
     'OMAMOBILE_SIT_ROUTER': 'unix:' + os.path.join(TMP, 'router'),
     'OMAMOBILE_SIT_BOOT': 'none',
+    'OMAMOBILE_SIT_BACKLIGHT': os.path.join(TMP, 'backlight'),  # never the host's panel
 })
 os.makedirs(os.path.join(TMP, 'run'), mode=0o700)
 if LIB not in sys.path:

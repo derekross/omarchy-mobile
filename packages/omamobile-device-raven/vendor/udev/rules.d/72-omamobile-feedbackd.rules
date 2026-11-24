@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile: let feedbackd drive the Cirrus Logic CS40L25A haptics
+# Omamobile: let feedbackd drive the Cirrus Logic CS40L25A haptics
 # (cs40l25-vibra), in the same form as feedbackd's own 72-feedbackd.rules.
 # The motor's input device appears only once its firmware has loaded, about
 # 5 s into the boot; a feedbackd that started before it never picks it up

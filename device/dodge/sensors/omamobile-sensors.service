@@ -1,5 +1,5 @@
 [Unit]
-Description=Omarchy Mobile dodge: hexagonrpcd for the ADSP sensors PD (read-only file server)
+Description=Omamobile dodge: hexagonrpcd for the ADSP sensors PD (read-only file server)
 ConditionPathExists=/etc/omamobile/sensors.enable
 ConditionPathExists=/var/lib/omamobile/sensors/root/sensors/registry
 After=omamobile-adsp-battery.service

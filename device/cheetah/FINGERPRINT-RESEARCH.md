@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Pixel 7 Pro (cheetah) fingerprint on Omarchy Mobile: plan
+# Pixel 7 Pro (cheetah) fingerprint on Omamobile: plan
 
 Status (2026-10-12): research and design. **The current status and the
 runbook are in [FINGERPRINT-PLAN.md](FINGERPRINT-PLAN.md)**, which supersedes
@@ -168,7 +168,7 @@ hits this; Linux userspace (power tuning, screen-off hooks) can. Two commits:
   Suspend, hibernation (`cpuhp_tasks_frozen`), shutdown, reboot and kexec
   (`system_state != SYSTEM_RUNNING`) and driver removal still take CPUs down.
 
-Anything in Omarchy Mobile that wants to offline CPUs for power must instead use
+Anything in Omamobile that wants to offline CPUs for power must instead use
 cpufreq/idle states, or set `allow_cpu_offline=1` and accept that
 fingerprint can hang.
 
@@ -403,7 +403,7 @@ fprintd, `pam_fprintd` and `/etc/pam.d/omarchy-lock-fingerprint` are then
 used unchanged. The password stays as the fallback.
 
 Lock screen: draw a target at the sensor while waiting for a finger
-(Omarchy Mobile's lock plugin). The screen must be lit (LHBM works only on a lit
+(Omamobile's lock plugin). The screen must be lit (LHBM works only on a lit
 panel), so unlock is "wake, then touch".
 
 ### 4.8 systemd

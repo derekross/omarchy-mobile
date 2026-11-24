@@ -29,6 +29,13 @@ Item {
   property var pluginRegistry: null
   property var barConfig: ({})
 
+  // setup-user runs before the compositor. Retry its once-only browser fit
+  // here, where live monitor geometry also resolves computed/auto Lua scales.
+  Process {
+    command: ["omamobile-browser-setup"]
+    running: true
+  }
+
   // Scalar bar state the host mirrors to other plugins (notifications and the
   // OSD place themselves clear of the bar with these).
   readonly property bool barHidden: false

@@ -1,17 +1,15 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Installing Omarchy Mobile on a Pixel 7 Pro
+# Installing Omamobile on a Pixel 7 Pro
 
-This guide installs a release of Omarchy Mobile on a Pixel 7 Pro (codename `cheetah`). Releases are developer previews, named by date (for example `2026.11.15`). Releases are listed at [omamobile.org/download](https://omamobile.org/download), and each phone's page lists what works and what doesn't yet ([Pixel 7 Pro](https://omamobile.org/devices/cheetah), from [DEVICES.md](https://github.com/derekross/omarchy-mobile/blob/main/docs/DEVICES.md)).
+This guide installs a release of Omamobile on a Pixel 7 Pro (codename `cheetah`). Releases are developer previews, named by date (for example `2026.11.15`). Releases are listed at [omamobile.org/download](https://omamobile.org/download), and each phone's page lists what works and what doesn't yet ([Pixel 7 Pro](https://omamobile.org/devices/cheetah), from [DEVICES.md](https://github.com/derekross/omamobile/blob/main/docs/DEVICES.md)).
 
-Omarchy Mobile is a community project built on [Omarchy](https://omarchy.org). It isn't an official Omarchy or Basecamp product.
+Omamobile is a community project built on [Omarchy](https://omarchy.org). It isn't an official Omarchy or Basecamp product.
 
-It takes about an hour, most of it downloads and waiting. You type a few commands in a terminal on your computer; each step says what you should see.
-
-Today these steps are manual. Where the install is going, one guided step from a web page or a desktop app with the phone's firmware fetched for you, is in the [install experience plan](https://github.com/derekross/omarchy-mobile/blob/main/docs/INSTALL-EXPERIENCE-PLAN.md).
+It takes about an hour, most of it downloads and waiting. **New to this? Use [the guided install](#the-guided-install): one command, run from the release you download, that does every step below and tells you what to do at each point.** The numbered steps after it are the same install by hand, for when you want to do each part yourself. Installing from a web page or a desktop app is planned ([install experience plan](https://github.com/derekross/omamobile/blob/main/docs/INSTALL-EXPERIENCE-PLAN.md)).
 
 ## Before you start: what happens to your phone
 
-- **Installing erases the phone's data.** Unlocking the bootloader erases it, and the installer replaces the user data partition (`userdata`) with Omarchy Mobile. Copy off anything you want to keep first: photos, messages, two-factor codes.
+- **Installing erases the phone's data.** Unlocking the bootloader erases it, and the installer replaces the user data partition (`userdata`) with Omamobile. Copy off anything you want to keep first: photos, messages, two-factor codes.
 - **Android stays on the phone as your way back.** A Pixel has two copies of its system, slot A and slot B. The installer writes only slot B and `userdata`. Stock Android stays on slot A, untouched, and [Going back to Android](#going-back-to-android) shows how to switch back.
 - **The installer never touches the bootloader, the radio, or the partitions that hold your phone's identity and calibration** (`persist`, `efs`, `modem`, `devinfo`, `vbmeta`). It checks the phone before writing anything, shows every command it will run, and waits for you to type the phone's codename.
 - **This is a developer preview.** Calls, SMS and mobile data work on the one network tested so far (a Verizon-network SIM), with the carrier's APNs set by hand after the install (the release notes say how), and the phone doesn't yet go to sleep by itself when the screen turns off. Check the [device page](https://omamobile.org/devices/cheetah) for the current list.
@@ -26,7 +24,7 @@ Today these steps are manual. Where the install is going, one guided step from a
   sudo pacman -S --needed android-tools e2fsprogs zstd lz4 cpio openssl gnupg python unzip binutils erofs-utils
   ```
 
-  On other distributions, install the packages with the same names (Android's tools are often split into `fastboot`, `adb` and a "libsparse" package for `img2simg` and `simg2img`).
+  On other distributions, install the packages with the same names. Android's tools are often split into `fastboot`, `adb` and a "libsparse" package for `img2simg` and `simg2img` (`android-sdk-libsparse-utils` on Debian and Ubuntu), and the installer needs `img2simg`: Google's platform-tools download doesn't have it.
 - **Free disk space:** about 35 GB (the downloads, Google's factory image and a working copy of the system image while installing).
 - **An SSH key.** The installer puts your public key on the phone so your computer can reach it over USB later. If `~/.ssh/id_ed25519.pub` doesn't exist, make one:
 
@@ -37,7 +35,35 @@ Today these steps are manual. Where the install is going, one guided step from a
 - **The release,** from [omamobile.org/download](https://omamobile.org/download), in one of two ways:
   - **one file** (the easy way): `omamobile-cheetah-<version>.tar` (about 2.8 GB) and its checksum file `omamobile-cheetah-<version>.tar.sha256`, downloaded into the same folder (and `omamobile-cheetah-<version>.tar.sha256.sig` too, for step 2's optional signature check). Step 2 checks and unpacks it.
   - **file by file:** the bundle (a folder named `omamobile-cheetah-<version>`) and the root image (`omamobile-rootfs-cheetah-<version>-aarch64.img.zst`), side by side in the same folder. Downloads often lose the files' execute permission, so run `chmod +x tools/*` once inside the bundle folder (`tools/phone-provision` runs the other tools there directly).
-- **Google's factory image for your phone,** from [Google's factory images page](https://developers.google.com/android/images#cheetah): the build your phone runs now (Settings > About phone > Build number). Check its SHA-256 against the one on Google's page (`sha256sum cheetah-*.zip`). Omarchy Mobile never ships Google's files: after the install, a tool copies the firmware your phone needs (Wi-Fi, Bluetooth, audio, haptics, the camera) out of this image, on your computer, and onto your phone.
+- **Google's factory image for your phone,** from [Google's factory images page](https://developers.google.com/android/images#cheetah): the build your phone runs now (Settings > About phone > Build number). Check its SHA-256 against the one on Google's page (`sha256sum cheetah-*.zip`). Omamobile never ships Google's files: after the install, a tool copies the firmware your phone needs (Wi-Fi, Bluetooth, audio, haptics, the camera) out of this image, on your computer, and onto your phone. The guided install gets this file for you, straight from Google once you have accepted Google's terms, or uses the one you already saved in your Downloads folder.
+
+## The guided install
+
+1. Download the release's one file, `omamobile-cheetah-<version>.tar`, and its `omamobile-cheetah-<version>.tar.sha256`, into one folder. In a terminal in that folder, check and unpack it:
+
+   ```sh
+   sha256sum -c omamobile-cheetah-<version>.tar.sha256
+   tar -xf omamobile-cheetah-<version>.tar
+   ```
+
+   The first command should print `OK` (step 2 below says more).
+2. Connect the phone with a USB cable that carries data. It can be running Android, or be in Fastboot Mode, or run an earlier Omamobile.
+3. Go into the bundle folder and start the install:
+
+   ```sh
+   cd omamobile-cheetah-<version>
+   bash install --guided
+   ```
+
+That is the whole install. It needs no options: it uses the release's own signed files and checks them first. It then shows the one warning (the phone is erased), finds the phone and shows only what is left to do on it (turning on Developer options, or the bootloader unlock, which you run yourself), gets Google's factory image for your phone, asks your user name, PIN or password and Wi-Fi, shows what it will write and waits for you to type `cheetah`, adds the USB connection to the phone (it shows it and asks first), waits for the first start, backs up the radio partitions into `~/omamobile-backup/`, adds the phone's firmware, restarts the phone and checks it.
+
+When it needs you, or something isn't right yet, it stops and says why, and the last line is the command to run next: the same `bash install --guided`, which goes on from where it stopped. A program missing on your computer is named with the package that has it (on Arch Linux and Omarchy, and on Debian and Ubuntu) and the one command that installs it.
+
+To reinstall, run the same command. If the phone runs from slot B it asks "Is this phone already running Omamobile?", and if this computer installed the phone before it asks "Install again from the start? This erases the phone." `bash install --guided --dry-run` goes as far as the plan without writing anything.
+
+**Not yet on a first install:** the Pixel 7 Pro's bootloader tells only the version of the system copy it runs, and Omamobile needs both copies' bootloaders to match. Until the installer can read the other copy itself, a first install (Android running from slot A) stops there and says what you can do; [open an issue](https://github.com/derekross/omamobile/issues) and we'll help. A reinstall over Omamobile doesn't stop there.
+
+The rest of this guide is the install by hand.
 
 ## 1. Unlock the bootloader (this erases the phone)
 
@@ -59,7 +85,7 @@ Skip this step if your bootloader is already unlocked.
 
    On the phone, use the volume keys to choose "Unlock the bootloader" and press Power. The phone erases itself and starts Android again.
 
-From now on the phone shows a warning that its bootloader is unlocked each time it starts. That is normal. **Never lock the bootloader again** (`fastboot flashing lock`) while Omarchy Mobile is on the phone: a locked bootloader refuses to start anything that isn't Google's.
+From now on the phone shows a warning that its bootloader is unlocked each time it starts. That is normal. **Never lock the bootloader again** (`fastboot flashing lock`) while Omamobile is on the phone: a locked bootloader refuses to start anything that isn't Google's.
 
 ## 2. Check the release
 
@@ -70,9 +96,9 @@ sha256sum -c omamobile-cheetah-<version>.tar.sha256
 tar -xf omamobile-cheetah-<version>.tar
 ```
 
-The first command should print `omamobile-cheetah-<version>.tar: OK`. If it says `FAILED`, download the `.tar` again. Unpacking gives the bundle folder and the root image side by side, as the installer expects; you can delete the `.tar` afterwards. The `.tar.sha256` is itself signed with Omarchy Mobile's release key (`omamobile-cheetah-<version>.tar.sha256.sig`, key fingerprint `2056 7593 566E EEE2 DD88 6460 8632 C807 5EB9 4673`): if you already have that key in `gpg`, `gpg --verify omamobile-cheetah-<version>.tar.sha256.sig` checks it too.
+The first command should print `omamobile-cheetah-<version>.tar: OK`. If it says `FAILED`, download the `.tar` again. Unpacking gives the bundle folder and the root image side by side, as the installer expects; you can delete the `.tar` afterwards. The `.tar.sha256` is itself signed with Omamobile's release key (`omamobile-cheetah-<version>.tar.sha256.sig`, key fingerprint `2056 7593 566E EEE2 DD88 6460 8632 C807 5EB9 4673`): if you already have that key in `gpg`, `gpg --verify omamobile-cheetah-<version>.tar.sha256.sig` checks it too.
 
-Either way, the installer checks the release by itself before it touches the phone: the bundle's signature (Omarchy Mobile's release key, which it carries), every file's checksum, and that the root image is the one the signed bundle names. If anything doesn't match, it stops.
+Either way, the installer checks the release by itself before it touches the phone: the bundle's signature (Omamobile's release key, which it carries), every file's checksum, and that the root image is the one the signed bundle names. If anything doesn't match, it stops.
 
 If you downloaded file by file and want to check the downloads yourself first, compare their SHA-256 with the ones on the download page:
 
@@ -82,7 +108,8 @@ sha256sum omamobile-rootfs-cheetah-<version>-aarch64.img.zst
 
 ## 3. Install
 
-Stock Android must be running from slot A, because Omarchy Mobile goes on slot B and stock stays on A as your way back. An Android system update can leave stock running from slot B; the installer refuses such a phone and says so. Then, in Fastboot Mode, make slot A active (`fastboot --set-active=a`), flash Google's factory image for your phone onto it with Google's own `flash-all` script (it erases Android's data: back up anything you want to keep first), check that Android starts, and come back to this step. The installer then may ask you to confirm the other slot's bootloader version with `--bootloader-slots-match`, as it explains. Reinstalling over an earlier Omarchy Mobile install, which runs from slot B, is the one case for `bash install --reinstall`.
+Stock Android must be running from slot A, because Omamobile goes on slot B and stock stays on A as your way back. An Android system update can leave stock running from slot B; the installer refuses such a phone and says so. Then, in Fastboot Mode, make slot A active (`fastboot --set-active=a`), flash Google's factory image for your phone onto it with Google's own `flash-all` script (it erases Android's data: back up anything you want to keep first), check that Android starts, and come back to this step. The installer then may ask you to confirm the other slot's bootloader version with `--bootloader-slots-match`, as it explains. Reinstalling over an earlier Omamobile install, which runs from slot B, is the one case for `bash install --reinstall` (it needs no `--bootloader-slots-match`: the bootloader the phone reports is slot B's own, which it already runs; the guided install asks instead).
+
 
 1. Put the phone in Fastboot Mode. Either run `adb reboot bootloader` while Android is running, or, with the phone off, hold **Volume Down**, then also hold **Power**, and keep both held until "Fastboot Mode" appears (up to about 20 seconds).
 2. Connect the phone and check that the computer sees it:
@@ -110,7 +137,7 @@ Stock Android must be running from slot A, because Omarchy Mobile goes on slot B
 
    Then it shows the plan: five `fastboot flash` lines, each for a partition ending in `_b`, one `fastboot flash userdata`, then `fastboot --set-active=b` and `fastboot reboot`. Nothing else. Type `cheetah` when it asks, and it prints the commands instead of running them.
 
-   **If it stops about the bootloader slots** (both slots must carry the same bootloader version, and on some phones the bootloader only reports one of them), don't work around it: [open an issue](https://github.com/derekross/omarchy-mobile/issues) and we'll help.
+   **If it stops about the bootloader slots** (both slots must carry the same bootloader version, and on some phones the bootloader only reports one of them), don't work around it: [open an issue](https://github.com/derekross/omamobile/issues) and we'll help.
 4. Install for real:
 
    ```sh
@@ -153,7 +180,7 @@ You should see the phone's kernel version (it contains `omamobile`). If it says 
 
 ## 6. Back up the phone's radio partitions
 
-Before the phone ever starts its modem, make a copy of the partitions that hold its radio calibration and identity (including the IMEI), and keep it. Nothing Omarchy Mobile does writes these partitions (they're read-only while it runs), but stock Android writes some of them, and this copy is what tells the phone later that they're still the ones it expects. This step only reads from the phone.
+Before the phone ever starts its modem, make a copy of the partitions that hold its radio calibration and identity (including the IMEI), and keep it. Nothing Omamobile does writes these partitions (they're read-only while it runs), but stock Android writes some of them, and this copy is what tells the phone later that they're still the ones it expects. This step only reads from the phone.
 
 **This backup is private.** It holds your phone's IMEI and serial numbers. Keep it on your own storage (a second copy elsewhere is a good idea), and never post, share or attach it, not even in a bug report.
 
@@ -192,7 +219,7 @@ bash tools/phone-provision --dry-run --first-install --nv-backup "$B" ~/Download
 bash tools/phone-provision --first-install --nv-backup "$B" ~/Downloads/cheetah-<build>-factory-<id>.zip
 ```
 
-`--first-install` says there is no earlier Omarchy Mobile system whose data should be put back. `--nv-backup DIR` alone means the same, so the command a bundle up to 2026.11.08 prints still works; those bundles don't know `--first-install`, so leave it out there.
+`--first-install` says there is no earlier Omamobile system whose data should be put back. `--nv-backup DIR` alone means the same, so the command a bundle up to 2026.11.08 prints still works; those bundles don't know `--first-install`, so leave it out there.
 
 The real run takes several minutes. Each copy to the phone ends with `verified`. If it stops with an error, nothing half-done is left behind: fix the cause and run it again (it's safe to repeat).
 
@@ -208,7 +235,7 @@ After the restart, Wi-Fi, Bluetooth, sound, haptics, the sensors and the cameras
 
 ## Getting updates
 
-The phone updates like Omarchy: run `omarchy update` in a terminal, or use the update notice and Update in the phone's menu. It updates Omarchy's packages and Omarchy Mobile's own, including the kernel, from the signed `[omamobile]` repository at `pkgs.omamobile.org`. It refuses to start on a low battery unless the phone is charging. When an update needs a restart, the phone tells you; it never restarts by itself.
+The phone updates like Omarchy: run `omarchy update` in a terminal, or use the update notice and Update in the phone's menu. It updates Omarchy's packages and Omamobile's own, including the kernel, from the signed `[omamobile]` repository at `pkgs.omamobile.org`. It refuses to start on a low battery unless the phone is charging. When an update needs a restart, the phone tells you; it never restarts by itself.
 
 There are two channels:
 
@@ -231,17 +258,17 @@ Stock Android is still on slot A.
    fastboot reboot
    ```
 
-3. Android starts into its recovery screen, because its data was erased. Choose "Factory data reset", and Android starts as a new phone. Fingers enrolled on Omarchy Mobile don't carry over: Android's setup asks for fingerprints as usual, and after you come back you enroll them again (reinstalling erases them).
+3. Android starts into its recovery screen, because its data was erased. Choose "Factory data reset", and Android starts as a new phone. Fingers enrolled on Omamobile don't carry over: Android's setup asks for fingerprints as usual, and after you come back you enroll them again (reinstalling erases them).
 
-To remove Omarchy Mobile completely, flash Google's factory image for your phone with Google's own tools (the [Android Flash Tool](https://flash.android.com) or the `flash-all.sh` script in the factory image). Don't lock the bootloader afterwards unless you're sure both slots hold Google's images; if in doubt, ask in an issue first.
+To remove Omamobile completely, flash Google's factory image for your phone with Google's own tools (the [Android Flash Tool](https://flash.android.com) or the `flash-all.sh` script in the factory image). Don't lock the bootloader afterwards unless you're sure both slots hold Google's images; if in doubt, ask in an issue first.
 
-To come back to Omarchy Mobile later, run the installer again (step 3). Take a new radio backup (step 6) after the first start, because Android rewrote some of those partitions.
+To come back to Omamobile later, run the installer again (step 3). Take a new radio backup (step 6) after the first start, because Android rewrote some of those partitions.
 
 ## If something goes wrong
 
-- **The phone shows Android's recovery screen with "Try again" and "Factory data reset" while you expected Omarchy Mobile:** choose neither. Hold **Volume Down** and **Power** for about 20 seconds to reach Fastboot Mode, and ask in an issue.
+- **The phone shows Android's recovery screen with "Try again" and "Factory data reset" while you expected Omamobile:** choose neither. Hold **Volume Down** and **Power** for about 20 seconds to reach Fastboot Mode, and ask in an issue.
 - **A restart seems stuck:** wait a minute; the phone resets itself. If it's still stuck, hold **Power** for about 30 seconds, then press it again.
 - **The phone doesn't answer at all:** hold **Volume Down** and **Power** for about 20 seconds to reach Fastboot Mode. From there you can run the installer again, or go back to Android.
-- **To ask for help,** [open an issue](https://github.com/derekross/omarchy-mobile/issues) with what you ran and what it printed. Remove serial numbers, your IMEI, your Wi-Fi network's name and MAC addresses before you post, and never attach the radio backup.
+- **To ask for help,** [open an issue](https://github.com/derekross/omamobile/issues) with what you ran and what it printed. Remove serial numbers, your IMEI, your Wi-Fi network's name and MAC addresses before you post, and never attach the radio backup.
 
-The full developer runbook behind this guide, with every check, is [device/cheetah/REINSTALL-RUNBOOK.md](https://github.com/derekross/omarchy-mobile/blob/main/device/cheetah/REINSTALL-RUNBOOK.md).
+The full developer runbook behind this guide, with every check, is [device/cheetah/REINSTALL-RUNBOOK.md](https://github.com/derekross/omamobile/blob/main/device/cheetah/REINSTALL-RUNBOOK.md).

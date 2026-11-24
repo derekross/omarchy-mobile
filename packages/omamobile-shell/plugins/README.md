@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Omarchy Mobile plugins
+# Omamobile plugins
 
 Phone surfaces for Omarchy's own shell, written as ordinary third-party
 Omarchy plugins. Nothing in Omarchy is patched: each directory here is a

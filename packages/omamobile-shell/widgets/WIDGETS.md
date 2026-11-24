@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Omarchy Mobile home-screen widgets
+# Omamobile home-screen widgets
 
-This is the contract for writing your own widgets for Omarchy Mobile's home
+This is the contract for writing your own widgets for Omamobile's home
 screens, by hand or with a coding agent. It is installed as
 `/usr/share/omamobile/shell/WIDGETS.md` and linked from
 `~/.config/omamobile/widgets/WIDGETS.md`.

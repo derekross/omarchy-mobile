@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Settings
-Comment=System and device information for Omarchy Mobile
+Comment=System and device information for Omamobile
 Exec=omamobile-settings
 Icon=org.omamobile.Settings
 Categories=Settings;System;

@@ -3,6 +3,167 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-227. `ln -sf` or `mv -f` onto a state path is a delete; in Trusty or
+  calibration code it's a finding.** #101's `ln -sfn` over `persist-ss/0`
+  would remove cheetah's provisioned copy if one existed. *Check:* grep the
+  diff for `ln -sf`, `mv -f`, `rm` and `>` onto the package's state
+  directory, and find who creates those files (`tools/phone-provision`, the
+  plans). Extends L-2. *From:* #101, round 24.
+- **L-1. Shared boot code runs under busybox, not util-linux.** The Pixel
+  initramfs has busybox only: `blkid -s LABEL -o value` prints the whole
+  `LABEL=… UUID=…` line there, so a label check that works on a device whose
+  initramfs adds util-linux fails on every Pixel. *Check:* any new command or
+  option in `initramfs/init`, against busybox 1.37's applets; prefer tools
+  `init` already uses (`dumpe2fs -h`). A test that stubs the command
+  (a shell function named `blkid`) proves nothing about it. *From:* #25.
+- **L-2. Writes past the storage guard are a policy decision, not a code
+  review.** Raw SCSI WRITE through `SG_IO` on a read-only partition fd, an
+  unsuffixed `fastboot flash userdata`, a `devinfo` write: each needs the
+  maintainer's explicit go and a named exception, however well guarded.
+  *Check:* `grep -nE 'SG_IO|0x2285|fastboot( -s [^ ]+)? (flash|erase) [a-z_]+( |$)|devinfo'`
+  in the diff, and every `flash`/`erase` target ends in `_b` or is
+  `userdata` through the guarded path. *From:* #17, #24.
+- **L-3. Mismatched slot firmware is stop-and-ask (CONTRIBUTING §3.1).**
+  A kernel workaround that's needed only on a phone with different
+  bootloaders on its two slots (HCRX_EL2 with KVM off) is most likely the
+  old firmware, not the SoC. Ask for both slots' bootloader versions, both
+  slots on one build, and a re-test without the workaround before any of it
+  reaches the kernel. *From:* #24.
+- **L-4. A display-register write in a descriptor must be the device's own
+  address, behind the COMPATIBLE gate.** `SIMPLEFB_TRIG_CON` is the one
+  register write the initramfs makes. *Check:* the address is that SoC's
+  DECON base (from the device's own live DT or Google's GPL CAL for that SoC)
+  plus the `TRIG_CON` offset, not cheetah's `0x1c240030`; the value is the
+  same bit change cheetah's pair makes (DISPLAY-PLAN); `COMPATIBLE` is
+  unique to the board, so `board_matches()` in `initramfs/init` means
+  something. *From:* #23 (correct: husky's `0x19470030 0x3061`).
+- **L-5. Tools that talk to fastboot pin the serial.** With two phones in
+  fastboot (the maintainer's Pixel on the desk), checks and writes without
+  `-s <serial>` can reach different devices. *Check:* every `fastboot` call in
+  an installer passes `-s`. *From:* #25.
+- **L-6. A device whose buttons don't reset it under our kernel needs a way
+  out of a hang.** Once a watchdog driver stops ABL's watchdogs, a hang that
+  never panics lasts until the battery is flat. *Check:* panic-on-lockup
+  arguments (`softlockup_panic`, `hung_task_panic`, `panic=`) in the shipped
+  bootargs, or the watchdog left armed and fed. *From:* #23.
+- **L-7. Contributors' builds stay out of the maintainer's keys and
+  outputs.** A port that reuses `keys/gnupg`, rebuilds `omamobile-keyring`
+  into `out/repo`, or names its root images `out/omamobile-rootfs-*` mixes
+  into what `tools/repo-push` publishes and what `install-phone` picks by
+  default. *Check:* new build scripts write under `out/<device>/` and
+  `keys/<device>/`. *From:* #25.
+- **L-35. A changed `vbmeta` flags byte on slot A means slot A was
+  written.** The flags field starts at offset 120 of the vbmeta header;
+  byte 123 = 3 is what `fastboot --disable-verity --disable-verification`
+  writes, and it also breaks the signature. Treat it as a CONTRIBUTING §3.1
+  event: record it, correct any "no verification-state change" claim, and
+  have the OTA-twice equalisation restore flags 0 on both slots, then a
+  read-only check and a fresh backup. *From:* #24, round 2.
+- **L-36. Evidence that a `devinfo` layout matches comes from ABL's own
+  reads and writes.** The version (3.15) alone doesn't prove the slot bytes
+  mean the same on another SoC. *Check:* `fastboot getvar slot-successful`,
+  `slot-unbootable` and `slot-retry-count` for both slots next to
+  `omamobile-bootctl dump`'s bytes 0x30-0x37 for the same state, then again
+  across a change ABL makes itself (a retry spent on an unmarked boot). Ask
+  for those eight bytes and the version only, never a full dump. *From:* #24,
+  round 2.
+- **L-47. Every tool that talks to fastboot pins the serial, ours too.**
+  L-5 covered installers; `bin/omamobile flash` and `capture` didn't pin
+  either (fixed in c202b6d: one phone or `FASTBOOT_SERIAL`). *Check:* every
+  `fastboot` call passes `-s`, and several phones are refused. *From:* #24,
+  round 4.
+- **L-48. When a PMU readback surprises, ask which write path ran and
+  whether the restore was masked.** Mainline writes through atomic
+  set/clear aliases (offset | 0xc000 / 0x8000), Google through a
+  read-modify-write SMC; only a masked restore tells hardware status bits
+  from stored ones. *Check:* the probe's call, the restore's mask, and
+  Google's own users of that `pmu-offset`. *From:* issue #28.
+- **L-81. A request that cycles USB comes with its own way back.** The
+  gadget is the phone's only link, so "unbind and rebind dwc3" ends the
+  session that would rebind it. *Check:* any requested step that touches
+  dwc3, the USB PHY or the gadget gives one detached job (`systemd-run
+  --unit=…`), a dead-man reboot armed first, the configfs `UDC` re-attach, a
+  fresh SSH login to confirm, and a stop condition (AGENTS.md section 1).
+  *From:* kernel #33, round 2 (correcting round 1's bare request).
+- **L-82. A runbook that avoids `bin/omamobile flash|push` needs a reason we
+  can trace to the code.** #34's plan had the operator write slot B by hand,
+  blaming `push` for a slot A fallback that comes from the initramfs USB-host
+  safety net (no host in 45 s, crash, ABL falls back), whatever wrote the
+  images. *Check:* grep plans for "do not use … flash/push" and hand-written
+  `dd` or `fastboot flash` steps; if the tool really is wrong, fix the tool.
+  *From:* #34, round 2.
+- **L-88. A dead-man for a driver-cycle test must not go through the path
+  under test.** `reboot-to` runs `device_shutdown`, which husky's DWC3 cycle
+  hung. *Check:* the runbook arms an independent `echo b >
+  /proc/sysrq-trigger` job (it skips driver shutdown), is run attended, and
+  has a view that isn't USB (`printk` at 8 on the panel). Extends L-81.
+  *From:* kernel #33, husky test 23. (See C-3: the cycle froze the SoC; it
+  didn't hang shutdown.)
+- **L-89. A guarded tool that contributors can't use gets bypassed.** With
+  an SSH key that needs a tap per connection, `push` asked for about 25
+  taps, so the felix contributor wrote slot B by hand. *Check:* when a
+  runbook avoids a tool, find the friction and fix the tool, not only the
+  rule. Extends L-82. *From:* #34, round 3.
+- **L-90. A touch controller's firmware update can erase its calibration.**
+  FTM5's `flash_burn` erases the on-chip flash that also holds CX (whether it
+  survives depends on `keep_cx`). *Check:* a plan for such a part says that
+  nothing writes or erases that flash without the maintainer's go, and asks
+  its firmware questions read-only. *From:* #35.
+- **L-91. A button finding names the exact combination, and the recovery
+  docs follow it.** On husky Power alone does nothing; Power + Volume Up for
+  15-30 s resets it, so CONTRIBUTING's "hold Power" fails there. *Check:* a
+  new device's recovery keys reach CONTRIBUTING §3.4 and AGENTS.md. *From:*
+  #23.
+- **L-108. A touch controller can rewrite its own calibration without a
+  firmware flash.** ST FTM5 built with `COMPUTE_INIT_METHOD` (felix's
+  `fts.h`) runs a full panel init when the AFE versions differ or the MP flag
+  isn't a factory value, saving new CX and the MP flag to the chip's flash.
+  *Check:* a "no flash writes" rule for such a part also forbids panel init,
+  CX tuning or save commands and MP flag writes; read the init-method
+  `#define` in the vendor header. Extends L-90. *From:* #35, round 10.
+- **L-109. Phone results posted ahead of the plan are recorded, and their
+  code published, before the next boot.** #35's plan said "no phone step"
+  while its comments reported reads from a kernel in no repository. *Check:*
+  the boot goes into Results with `uname -r`, the tree and how slot B was
+  written, and the code is pushed (branch or draft PR) with a runbook before
+  it boots again. Extends L-34. *From:* #35, round 10.
+- **L-133. A dead-man's confirmation comes after the risky step.** felix's
+  cover-touch step 8 armed the timer, confirmed over a fresh login, then
+  loaded the driver and stopped the timer, so the timer could never fire on
+  the load. *Check:* every runbook goes arm → act → confirm with
+  `tools/phone-ssh --fresh` → stop the timer, and a driver load streams kmsg
+  to the laptop first, because an unbind timer can't undo a hang. Extends
+  L-81 and L-88. *From:* #35, round 12.
+- **L-134. A device's own `INITRAMFS_INIT` is a fork of the storage guard.**
+  raven's copy predated the final `ufs_unguarded` check and the fail-closed
+  allowlist, and `tests/storage-guard` tests the shared script only.
+  *Check:* `grep INITRAMFS_INIT device/*/device.conf`; for a value without a
+  leading `/`, diff that init against `initramfs/init` and list each guard
+  commit (`git log -- initramfs/init`) it lacks. Ask for the shared init with
+  descriptor-driven steps. *From:* #41, round 12.
+- **L-135. "Can't test on stock" is a §3.1 finding about the contributor's
+  phone.** A device without a bootable slot A has no way back. Ask for stock
+  back on slot A, and offer a read-only proxy for the test it blocks.
+  (Corrected 2026-10-27, C-7: this entry offered a `pd_ignore_unused` boot
+  after a warm reset for gs101 power domains; on 7.3 `of_genpd_sync_state()`
+  powers the unused domains off regardless, so read each domain's
+  `active_time` in `debugfs/pm_genpd/` instead.) *From:* kernel #9, round 12.
+- **L-157. A runbook that relies on a watchdog names what arms and feeds
+  it.** `s3c2410_wdt` stops ABL's watchdogs at probe and nothing feeds
+  `/dev/watchdog0`, so felix's step 8 ("the watchdogs are the reset") had
+  nothing to reset a hang. *Check:* a feeder such as `--watchdog`, or the
+  button recovery and "run attended" in the step. Extends L-6 and L-133.
+  *From:* #35, round 14.
+- **L-158. A device package without boot-success makes the slot A fallback
+  part of every root-image runbook.** ABL falls back after three unmarked
+  boots; stock then offers to reset an Arch `userdata`, and its boot writes
+  `efs`/`persist`. *Check:* the runbook says how to get back to B, "decline
+  the reset" and "back up after a stock boot". *From:* #42, round 14. **Also
+  (#414, round 39):** say what the third boot does on a phone with no
+  boot-success marker (the tries run out and stock boots on slot A), and
+  when a device's bootloader keeps `VENDOR_CMDLINE`, read that line word by
+  word against the DTB bootargs: arguments that were dead text on other
+  Pixels (`splash`, `printk.devkmsg=on`, `bootconfig` on akita) take effect.
 - **L-159. A storage power test runs where the root isn't on the device
   under test, and reads with `iflag=direct`,** or the page cache answers and
   the device never wakes. *From:* #42, round 14.

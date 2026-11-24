@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Android apps through Waydroid on Omarchy Mobile (device/cheetah/WAYDROID-PLAN.md).
+# Android apps through Waydroid on Omamobile (device/cheetah/WAYDROID-PLAN.md).
 #
 #   omamobile-waydroid check            read-only: kernel, GPU, cgroups, hardening
 #   omamobile-waydroid init             download and set up the Android images

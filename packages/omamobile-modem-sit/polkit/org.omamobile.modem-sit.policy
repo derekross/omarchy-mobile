@@ -6,8 +6,8 @@
      /etc/omamobile/modem-sit.conf, for the user at the phone (the active
      local session), through a helper that changes nothing else. -->
 <policyconfig>
-  <vendor>Omarchy Mobile</vendor>
-  <vendor_url>https://github.com/derekross/omarchy-mobile</vendor_url>
+  <vendor>Omamobile</vendor>
+  <vendor_url>https://github.com/derekross/omamobile</vendor_url>
   <action id="org.omamobile.modem-sit.configure">
     <description>Change the mobile network's APN and data roaming</description>
     <message>Authentication is required to change the mobile network settings</message>
