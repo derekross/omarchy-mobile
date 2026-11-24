@@ -3,6 +3,74 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1126. A polkit rule copied from an accepted one is judged by what its
+  action does when a process outside the page starts it, not by the
+  precedent.** #1009's firewall rule has the shape of main's charge-limit
+  rule, but where that one moves a battery threshold, this one turns the
+  phone's inbound filter off, silently and across reboots, for any process in
+  the session; the page's confirm dialog doesn't count, since the rule
+  bypasses it. *Check:* for each new `polkit.Result.YES`, write down what the
+  unit does with each allowed instance, whether it lowers a security default,
+  whether it persists, and whether anything tells the user. Extends L-171 and
+  L-285. *From:* #1009 and #1015, round 66, 2026-11-23.
+- **L-1125. A device PR that fills an empty `DTB_OVERLAYS` is read overlay by
+  overlay for which ones its title names.** #1005's title is "the AoC's sound
+  and sensors", and three of its six overlays (fingerprint, Trusty, torch),
+  plus a package in `ROOTFS_PACKAGES`, turn other subsystems on by default,
+  one of them an RPMB writer at first start. *Check:* `git diff origin/main
+  <head> -- device/<x>/device.conf | grep
+  '^+.*\(DTB_OVERLAYS\|ROOTFS_PACKAGES\)'`, list each added name with the
+  subsystem it enables and whether the title or a commit subject names it;
+  anything unnamed goes to the maintainer as its own default-on decision.
+  Extends L-1060, L-137 and L-340. *From:* #1005, round 66, 2026-11-23.
+- **L-1124. A plan's "first UFS probe" is read for the one write mainline's
+  UFS core makes to the device on its own: `bRefClkFreq`.**
+  `ufshcd_set_dev_ref_clk()` (`drivers/ufs/core/ufshcd.c`, before the gear-up)
+  reads the attribute and writes it when it differs from the rate of the
+  host's `ref_clk` clock in the device tree; the storage guard can't stop a
+  query UPIU, and #1002's next step was a first probe with a newly described
+  host. *Check:* for a new board's UFS node, name its `ref_clk` rate, compare
+  it with stock's (the live DT or the stock driver's log), and put that
+  comparison in the runbook's Expect before the first probe. Extends L-1077
+  and CONTRIBUTING §3.2. *From:* #1002, round 66, 2026-11-23.
+- **L-1123. A record that boots another device's release root image on a new
+  phone is checked for what that image's device package does once storage
+  appears.** #1002 ran the 7 Pro's 2026.11.15 root as PID 1 on a Pixel 11 Pro
+  with no disks; with UFS up, `omamobile-device-cheetah`'s boot-success unit
+  would make another phone's `devinfo` and its LUN writable, and write it if
+  the layout read 3.15. *Check:* for any "reference root" in a new port's
+  notes, list the reference device package's boot-started units (`git ls-tree
+  -r origin/main packages/omamobile-device-<ref>/vendor/systemd/system | grep
+  wants`) and say which of them write storage. Extends L-567 and L-285.
+  *From:* #1002, round 66, 2026-11-23.
+- **L-1122. `CONFIG_STRICT_DEVMEM` turned off in a device fragment is a
+  security change to the installed system, and the code that wanted it is
+  found.** #993's `kernel.config` paired `DEVMEM=y` and no `STRICT_DEVMEM`
+  with a userspace program that writes display, PHY and GPIO registers through
+  `/dev/mem` at every boot. *Check:* `git grep -n 'DEVMEM\|IO_STRICT_DEVMEM'
+  <head> -- 'device/*/kernel.config' kernel/configs`, then `git grep -n
+  '/dev/mem' <head>` for its user. Extends L-1012 and L-1039. *From:* #993,
+  round 66, 2026-11-23.
+- **L-1121. A device's own builder that patches `initramfs/init` by string
+  replacement is a fork of the storage guard, and is reviewed as one.** #993's
+  `patch-init.py` rewrote the guard loop, the allowlist disk test and
+  `boot_arch` for eMMC; its `assert` only proves the anchors still match, and
+  `tests/storage-guard` runs the unpatched file. *Check:* `git grep -n
+  'initramfs/init' <head> -- tools device` for any tool that copies or edits
+  it, list each replaced line by function, and ask for the change in the
+  shared init with a test case, under the guard's own review. Extends L-134
+  and L-855. *From:* #993, round 66, 2026-11-23.
+- **L-1120. A new device package is diffed by file list against its siblings
+  on the same SoC, because its own test checks only what it ships.** #914's
+  `omamobile-device-komodo` passed its test and every suite while missing
+  `10-omamobile-storage.rules`, which all nine device packages on main carry
+  and which is the Arch half of CONTRIBUTING §3.2's guard; without it the main
+  LUN's whole-disk node was left to udev. *Check:* `comm -13` of the new
+  package's and a sibling's `git ls-tree -r --name-only` lists with the
+  package directory cut off, and for each file the sibling has and the new one
+  lacks, name the rule it serves (storage, sleep, reboot watchdog, boot
+  success) or the reason it doesn't apply. Extends L-567, L-207 and L-442.
+  *From:* #914, round 66, 2026-11-23.
 - **L-1108. A stop rule that says "before the next boot, mask X" is walked for
   the hang case, where nobody can type before that boot.** #929's section 6
   lists "a reboot or a hang" among its stops and then prescribes a mask; that
@@ -28,7 +96,13 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   "hash" in a plan's fastboot stage, name the command (`fastboot fetch` exists
   only in fastbootd); if there is none, the plan gets a RAM boot of a guarded
   image as its own step, with `boot` read-only and a stop condition. Extends
-  L-856 and L-226. *From:* #964, round 64, 2026-11-21.
+  L-856 and L-226. *From:* #964, round 64, 2026-11-21. (Extended 2026-11-23:
+  when a plan is corrected for one such step, every other read in the same
+  fastboot stage is checked too; #964's round 64 fix moved the `boot` readback
+  into a RAM boot of the rescue, while the same paragraph's new "stop if the
+  old root already has that label" still sat in the fastboot install. Grep the
+  stage for `label\|hash\|read\|already\|verify` and name the stage and
+  command for each. *From:* #964, round 66.)
 - **L-1091. A "restore the backup image" step is asked what that image boots,
   and into what.** #714's documented way back writes a saved `boot` image
   which, by the same notes, started an older install with a writable main disk
@@ -347,72 +421,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   *Check:* in the stub, change every other field of the register after the
   apply and run the undo; ask for a restore of the changed bits alone.
   Extends L-419 and L-727. *From:* #815, round 60, 2026-11-17.
-- **L-830. A runbook that masks a boot-started unit "after boot" leaves it
-  running for that boot.** #815's K1b.3 masked `omamobile-modem-boot.target`
-  after the push's reboot had started the modem, so the next step's
-  watchdog-armed write would have run with the modem up, against the plan's
-  own Setup. *Check:* for each `mask` or `disable` in a runbook, name the
-  boot it first takes effect on and the step that needs the unit down; if
-  they are the same boot, the mask goes before the reboot, or a stop is
-  written into the step. Extends L-564 and L-445. *From:* #815, round 60,
-  2026-11-17.
-- **L-825. A fallback that "landed in stock recovery" is asked whether Android
-  itself started.** #852 recorded a slot A fallback ending in recovery and
-  `adb reboot bootloader`, with no word on a backup; CONTRIBUTING §3.3's rule
-  is about a stock Android boot, and a recovery screen alone doesn't run the
-  modem stack. *Check:* grep a docs PR for "recovery", "fell to" and "slot
-  A", and ask which of the two it was. Extends L-726 and L-186. *From:* #852,
-  round 60, 2026-11-17.
-- **L-812. "One stage per go-ahead" in a runbook names whose go-ahead.**
-  #835's H1 ran twenty minutes after H0b on the go-ahead given for H0b; the
-  plan's rule didn't say the maintainer's. *Check:* for each per-stage
-  consent rule in a plan, find the comment that gave it for the stage
-  recorded, by time (author dates in UTC against the thread), and ask that
-  the rule name the person. Extends L-663 and L-694. *From:* #835, round 60,
-  2026-11-17.
-- **L-809. A "default for every new device" is checked at the selector's
-  fall-through, not only at the variable's default.** #874's
-  `FIRST_START=${FIRST_START:-owner}` was the default for a new `case` entry,
-  but `fp_device` mapped every unknown board to cheetah, whose entry says
-  `auto`. *Check:* run the tool with the selector unreadable and with an
-  unknown board, and read the value it prints (here `first_start=auto`).
-  Extends L-757 and L-13. *From:* #874, round 60, 2026-11-17.
-- **L-807. Moving a module load from a unit's `ExecStartPre` into a tolerant
-  line of the script moves the failure past whatever the script does next.**
-  #874 replaced `ExecStartPre=modprobe goodix_fp` (the unit fails before the
-  runner) by the runner's `modprobe ... || true`, so a missing sensor driver
-  would let storageproxyd start before the HAL stage died. *Check:* for each
-  removed `ExecStartPre=`, `Requires=` or `Condition*=`, name the first
-  irreversible step of `ExecStart` and where the same failure now stops.
-  Extends L-754 and L-415. *From:* #874, round 60, 2026-11-17.
-- **L-787. A cleanup added to a tool that takes a caller-named folder is run
-  once on the folder the next tool in the flow writes.** #824's removal was
-  exact in its own download folder; pointed at `out/<codename>/repo/aarch64`
-  it removed the port's own package and left the index that lists it.
-  *Check:* list the folders the neighbouring tools create (`out/repo`,
-  `out/<codename>/repo`, the bundle folder), run the new cleanup on a fixture
-  of each with one marker file per kind, and ask for a refusal keyed on a
-  file only that folder has (`omamobile.db`). Extends L-7, L-227 and L-554.
-  *From:* #824, round 60, 2026-11-17.
-- **L-776. A helper that "falls back to the old path on failure" is checked
-  against every exception the transport under it raises, not only the ones
-  the tests inject.** #754's `reconcile()` caught `ModemError`, `TimeoutError`
-  and `OSError`, while `Sit.request()` also raises a bare `RuntimeError` and
-  `EOFError`; either one skipped the unconfirmed release's radio-off that the
-  helper sits in front of, and all of the PR's tests stayed green. *Check:*
-  `grep -n 'raise ' <transport>` for every exception class the helper's call
-  can raise, then run the PR's fixture with each as the side effect and count
-  the safety calls on main and on the head; prefer `except Exception`
-  returning "not handled". Extends L-757 and L-716. *From:* #754, round 57,
-  2026-11-14.
-- **L-757. A safety or recovery call that a PR puts behind a selector or a
-  helper is run with the selector wrong and with a stop arriving mid-start,
-  and the hardware calls are counted on main and on the head.** #669's profile
-  lookup raised on an unknown value inside the `except` that swallows
-  transport errors, so a typo turned the uncertain-call radio-off into nothing
-  (0 AT calls, 1 on main); its `stopped()` test before the default path
-  dropped main's AT off/on when a stop came during the state read, with every
-  clean-start test green. *Check:* the selector unknown, for another board and
-  unreadable, then each condition the helper tests; an unresolvable selector
-  falls back to the old call. Extends L-161, L-458 and L-608. *From:* #669,
-  round 52, 2026-11-11.

@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 7 (panther) Bluetooth: the BCM4389 on the APM UART
 
-Status (2026-11-16): BT0 to BT3 passed on 2026-11-01. The kernel side merged as [linux-omarchy-mobile#196](https://github.com/derekross/linux-omarchy-mobile/pull/196), and the options for BLE mice and headphone buttons as omarchy-mobile#304. The package side, Bluetooth up at boot with the phone's own firmware and address (BT3, a local build numbered 0.1.7), is a pull request to come, with the address rule's fix from #423. With it the shell's panel, a BLE mouse and headphones (A2DP, AVRCP) work. `BT_RFCOMM` is left out of #304 (the headset profile, below).
+Status (2026-11-16): BT0 to BT3 passed on 2026-11-01. The kernel side merged as [linux-omamobile#196](https://github.com/derekross/linux-omamobile/pull/196), and the options for BLE mice and headphone buttons as omamobile#304. The package side, Bluetooth up at boot with the phone's own firmware and address (BT3, a local build numbered 0.1.7), is a pull request to come, with the address rule's fix from #423. With it the shell's panel, a BLE mouse and headphones (A2DP, AVRCP) work. `BT_RFCOMM` is left out of #304 (the headset profile, below).
 
 The Pixel 7 has the same Broadcom BCM4389 as the Pixel 7 Pro, with the
 same wiring. The Pixel 7 Pro's Bluetooth works through upstream `hci_bcm`
@@ -160,7 +160,7 @@ moved and hid at the first touch.
 
 ### 2026-11-02: the headset profile and WirePlumber's switch
 
-Asked on omarchy-mobile#304: with `CONFIG_BT_RFCOMM`, does a recording switch headphones from A2DP to the headset profile, and does playback survive? On kernel `7.3.0-rc6-omamobile-push1-gdb341d1e29e7` (which has `BT_RFCOMM`), with the WF-1000XM5 and a video playing in mpv, the card's active profile was logged once a second:
+Asked on omamobile#304: with `CONFIG_BT_RFCOMM`, does a recording switch headphones from A2DP to the headset profile, and does playback survive? On kernel `7.3.0-rc6-omamobile-push1-gdb341d1e29e7` (which has `BT_RFCOMM`), with the WF-1000XM5 and a video playing in mpv, the card's active profile was logged once a second:
 
 - **Before the test,** the card was already on `headset-head-unit` (mSBC, a 16 kHz mono sink), with nothing recording. The video was audible at call quality. What switched it there wasn't caught.
 - **Set to `a2dp-sink` by hand,** the sound was back to normal quality.

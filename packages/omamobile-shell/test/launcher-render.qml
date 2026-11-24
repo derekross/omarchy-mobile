@@ -11,7 +11,8 @@ import "launcher" as L
 // 1040x480, its application library a stand-in over the job's apps, each
 // shot in $LAUNCHER_JOB (the drawer open, a search) saved as a PNG with the
 // sheet's, the header's, the input's and every cell's geometry printed for
-// the checks. Then it quits.
+// the checks, after a burst of ten "apps changed" signals whose rebuilds
+// are counted. Then it quits.
 ShellRoot {
   id: harness
 
@@ -21,12 +22,19 @@ ShellRoot {
   readonly property var shot: harness.index >= 0 && harness.index < harness.job.shots.length ? harness.job.shots[harness.index] : null
 
   // What Omarchy's AppLibrary gives the drawer, over the job's apps: an
-  // object, since the drawer connects to the library's signals.
+  // object, since the drawer connects to the library's signals. A rescan
+  // gives new entry objects, as Quickshell's DesktopEntries does for an app
+  // with a copy in ~/.local/share/applications.
   readonly property QtObject library: QtObject {
     signal appsChanged()
+    property var entries: harness.job.apps
+    function rescan() {
+      entries = harness.job.apps.map(function(a) { return Object.assign({}, a) })
+      appsChanged()
+    }
     function sortedEntries(query) {
       var q = String(query || "").toLowerCase()
-      return harness.job.apps.filter(function(a) { return !q || a.name.toLowerCase().indexOf(q) >= 0 }).map(function(a) { return { entry: a } })
+      return entries.filter(function(a) { return !q || a.name.toLowerCase().indexOf(q) >= 0 }).map(function(a) { return { entry: a } })
     }
     function entryName(entry) { return entry ? String(entry.name) : "" }
     function iconSource(icon) { return icon ? "file://" + icon : "" }
@@ -100,5 +108,16 @@ ShellRoot {
     })
   }
 
-  Timer { interval: 800; running: true; onTriggered: harness.next() }
+  // A rescan of the desktop entries says "changed" several times in a row:
+  // ten signals in one go should rebuild the drawer's list once.
+  property int appsChanges: 0
+  Connections { target: launcher; function onAppsChanged() { harness.appsChanges++ } }
+  function burst() {
+    harness.appsChanges = 0
+    for (var i = 0; i < 10; i++) harness.library.rescan()
+    burstDone.start()
+  }
+  Timer { id: burstDone; interval: 300; onTriggered: { console.log("burst 10 signals " + harness.appsChanges + " rebuilds"); harness.next() } }
+
+  Timer { interval: 800; running: true; onTriggered: harness.burst() }
 }

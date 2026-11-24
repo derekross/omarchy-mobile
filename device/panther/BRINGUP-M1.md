@@ -11,8 +11,8 @@ driver loaded, because its supplies were off; [TOUCH-PLAN.md](TOUCH-PLAN.md)
 switched them on, and touch works from its T4 on. Kernel 7.3.0-rc6,
 local branch `panther-first-light` on `omamobile-int`; the board file was
 merged into `omamobile` as
-[linux-omarchy-mobile#108](https://github.com/derekross/linux-omarchy-mobile/pull/108), and the FT3658 driver as
-[#109](https://github.com/derekross/linux-omarchy-mobile/pull/109) (later boots are in [NOTES.md](NOTES.md)). Stock Android is on slot A, with its
+[linux-omamobile#108](https://github.com/derekross/linux-omamobile/pull/108), and the FT3658 driver as
+[#109](https://github.com/derekross/linux-omamobile/pull/109) (later boots are in [NOTES.md](NOTES.md)). Stock Android is on slot A, with its
 `userdata` erased.
 
 ## What booted

@@ -7,7 +7,8 @@ fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 
 # A fixture home: the tests (qmltestrunner's QML disk cache among them) must
 # never write under the real user's ~/.cache, ~/.config or ~/.local.
-real_home=$(getent passwd "$(id -u)" | cut -d: -f6)
+# A uid with no passwd entry (a container run with -u) has no home to protect.
+real_home=$(getent passwd "$(id -u)" | cut -d: -f6) || real_home=
 fixture=$(mktemp -d)
 trap 'rm -rf -- "$fixture"' EXIT
 export HOME="$fixture/home"
@@ -15,7 +16,7 @@ export XDG_CONFIG_HOME="$HOME/.config" XDG_CACHE_HOME="$HOME/.cache"
 export XDG_DATA_HOME="$HOME/.local/share" XDG_STATE_HOME="$HOME/.local/state"
 export QML_DISABLE_DISK_CACHE=1
 mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
-if [ -z "$real_home" ] || [ "$(realpath -m -- "$HOME")" = "$(realpath -m -- "$real_home")" ]; then
+if [ -n "$real_home" ] && [ "$(realpath -m -- "$HOME")" = "$(realpath -m -- "$real_home")" ]; then
   fail "HOME is a fixture, not the real home"
 fi
 pass() { printf 'ok - %s\n' "$1"; }
@@ -592,7 +593,11 @@ out=$(cd "$fake/run" && printf '0000\n4321\n4321\n' | OMAMOBILE_PIN_WAIT=1 OMAMO
 (( rc != 0 && rc != 124 )) && [[ $out == *"may or may not have changed"* ]] || fail "the slow passwd is reported as maybe changed (rc $rc): $out"
 (( rc == 75 )) || fail "a maybe-changed PIN exits with status 75 (rc $rc)"
 keeper=0
-for d in /proc/[0-9]*; do
+# only this user's cats: a fork per /proc entry took 5 s on a busy build host,
+# longer than the fake passwd lives, and the keeper had left before the scan
+# reached it
+for p in $(pgrep -u "$(id -u)" -x cat); do
+  d=/proc/$p
   if [[ $(readlink "$d/cwd" 2>/dev/null) == "$fake/run" && $(readlink "$d/fd/0" 2>/dev/null) == */ptmx && $(tr '\0' ' ' <"$d/cmdline" 2>/dev/null) == "cat " ]]; then keeper=1; fi
 done
 (( keeper )) || fail "the keeper is a plain cat on the pty, not the python that held the PINs"
@@ -853,7 +858,7 @@ if [[ $rc == 77 ]]; then
 elif [[ $rc != 0 ]]; then
   printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "recent apps under touch (test/switcher-touch)"
 else
-  pass "recent apps under touch: Clear all, Home, a near miss, a card, app names, a centred card, the cards on their side"
+  pass "recent apps under touch: Clear all, Home, a near miss, a card, app names, a centred card, the cards on their side, no live copy of a window being closed"
 fi
 rc=0; out=$(bash test/shade-touch 2>&1) || rc=$?
 if [[ $rc == 77 ]]; then
@@ -1109,6 +1114,20 @@ if grep -nE 'Dial|execDetached\(\["(sh|bash)' plugins/omamobile.call/*.qml plugi
 fi
 if [[ -n ${OMAMOBILE_CALL_RENDER:-} ]]; then
   bash test/call-render "$OMAMOBILE_CALL_RENDER" >/dev/null || fail "call card render"
+fi
+# The bar wires the status keys: the battery is BatteryIndicator in the
+# picked style, each icon has its switch, and the cell watcher follows its
+# switch (started and stopped by hand, not bound: the restart timer sets it).
+bar=plugins/omamobile.bar/Bar.qml
+grep -cF 'style: root.batteryStyle' "$bar" >/dev/null && grep -c '^ *BatteryIndicator {' "$bar" >/dev/null || fail "the bar draws BatteryIndicator in the picked style"
+for flag in showBluetooth showWifi showCell showDnd showUnread; do
+  grep -cE "visible: root\.$flag &&" "$bar" >/dev/null || fail "the bar hides an icon by $flag"
+done
+grep -cF 'onShowCellChanged: { if (!showCell) cellRestart.stop(); cellWatch.running = showCell }' "$bar" >/dev/null || fail "the cell watcher follows its switch"
+grep -cF 'Component.onCompleted: cellWatch.running = showCell' "$bar" >/dev/null || fail "the cell watcher starts with its switch"
+grep -cE '^ *running: (root\.)?showCell' "$bar" >/dev/null && fail "the cell watcher's running is not bound"
+if [[ -n ${OMAMOBILE_BAR_RENDER:-} ]]; then
+  bash test/bar-render "$OMAMOBILE_BAR_RENDER" >/dev/null || fail "status bar render"
 fi
 if command -v node >/dev/null; then
   node test/status-model.js >/dev/null || { node test/status-model.js; fail "status bar model"; }

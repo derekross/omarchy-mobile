@@ -419,7 +419,7 @@ node, so kmsro fails. Expect the GPU to be picked up automatically once
 
 How to ship:
 
-1. **Now:** a patched `mesa` in the Omarchy Mobile repo. Take Arch's
+1. **Now:** a patched `mesa` in the Omamobile repo. Take Arch's
    `mesa 1:26.2.4` PKGBUILD, add `0001-panfrost-add-Mali-G710.patch`, bump
    `pkgrel` to `…-1.1omamobile`, and build in the aarch64 docker
    (`docker/Dockerfile`). Ship `vulkan-panfrost` from the same build; it is

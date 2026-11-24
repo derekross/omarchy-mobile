@@ -3,7 +3,7 @@
   "id": "omamobile.update",
   "name": "Phone update sheet",
   "version": "0.1.0",
-  "author": "Omarchy Mobile",
+  "author": "Omamobile",
   "license": "MIT",
   "description": "Omarchy's update for a phone: what's new, a battery check, the phone patches' state, the PIN, a progress view with the output under Details, and the result. Runs omamobile-update; replaces Omarchy's terminal update on the phone.",
   "kinds": ["panel"],

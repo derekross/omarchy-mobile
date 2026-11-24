@@ -53,7 +53,7 @@ fi
 gitc() { git -c user.name=t -c user.email=t@example.invalid -c init.defaultBranch=omamobile "$@"; }
 src=$t/src && mkdir -p "$src"
 ( cd "$src" && gitc init -q && for i in 1 2 3; do echo $i > f; git add f; gitc commit -qm "c$i"; done
-  gitc tag -a kernel-2026.11.01 -m "Omarchy Mobile kernel 2026.11.01" )
+  gitc tag -a kernel-2026.11.01 -m "Omamobile kernel 2026.11.01" )
 gitc clone -q --bare "$src" "$t/published.git"
 export KERNEL_DIR=$src LINUX_OMAMOBILE_REMOTE=$t/published.git
 unset KERNEL_COMMITS

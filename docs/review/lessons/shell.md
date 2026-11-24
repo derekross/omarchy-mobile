@@ -1,8 +1,67 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Review lessons: Shell and scripts (part 1 of 3)
+# Review lessons: Shell and scripts (part 1 of 4)
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1135. A Dockerfile branch on a BuildKit automatic argument is read for
+  what the legacy builder leaves in it.** #1016's `TARGETARCH` test picks the
+  non-amd64 branch when the argument is empty, which `DOCKER_BUILDKIT=0` and
+  older builders give, so an x86 machine would build the arm64 image. *Check:*
+  `grep -n 'TARGET\|BUILDPLATFORM' docker/Dockerfile`, and for each test name
+  the value when the argument is unset; prefer `dpkg --print-architecture` (or
+  `uname -m`) inside the `RUN`, with a refusal for anything unplanned. Extends
+  L-282 and L-783. *From:* #1016, round 66, 2026-11-23.
+- **L-1134. A tile that toggles from another package's published state is
+  walked with that package at main's version: does the second tap undo the
+  first?** #996's tile sends `radio off` and then reads `modem.radio`, which
+  main's sitd takes from the modem's indications and which didn't follow
+  `AT+CFUN=0` on the 9a; with sitd 0.3.44 every tap would read "off" and send
+  `radio off` again, so the radio could be turned off from the tile and never
+  back on. Its test set the state file by hand. *Check:* for each
+  `*-state.sh`/`*-action.sh` pair, find the writer of the field the state
+  reads (`git grep -n '<field>' origin/main -- packages/<writer>`), run the
+  action and then the state against what main's writer would publish after it,
+  and ask for a guard keyed on a field only the new writer has, or a versioned
+  `depends`. Extends L-911, L-616 and L-161. *From:* #996 with #995, round 66,
+  2026-11-23.
+- **L-1133. A new state-restoring action is checked for being idempotent: run
+  it twice in the state it restores to.** #995's `radio on` calls
+  `radio_back()` whatever the previous level was, so a repeat while IMS is
+  registered withdraws and re-sends the registration. *Check:* for each new
+  "after X comes back, set Y up again" hook, read the guard that decides
+  whether X actually went away, and write the repeat case into the test.
+  Extends L-757 and L-913. *From:* #995, round 66, 2026-11-23.
+- **L-1132. A simulator change that makes the fake modem end bearers (or raise
+  any new event) is run with a logging stand-in for `systemctl` first on
+  `PATH`, because the real daemon's recovery paths call the host's systemd.**
+  #995's `sit-sim` now ends every bearer at `AT+CFUN=0`, so `test_sim` reached
+  `reconnect()`, which stops and starts `omamobile-sit-data.service` on the
+  machine running the test; main's suite never got there, and
+  `tools/phone-install-package` runs `check()` on a phone. *Check:* `grep -n
+  'subprocess.run(\[.systemctl' <daemon>` for every recovery path a new
+  simulated event can reach, then run base and head with `PATH=<logging
+  stand-in>:$PATH` and compare the logs. Extends L-410, L-454 and L-681.
+  *From:* #995, round 66, 2026-11-23.
+- **L-1131. A test case that hides a stand-in to test "the program is missing"
+  reaches the host's copy when the stand-ins sit in front of the host's
+  `PATH`, and a package that depends on the program has it on every phone that
+  runs `check()`.** #1014's "no wf-recorder" case hid its fake recorder; with
+  any `wf-recorder` later on `PATH`, the script started it on the screen's
+  output and the cleanup killed only the fake's path. *Check:* for every
+  `hide`, `mv`, `rm` or `chmod -x` of a stand-in in a test, grep the package's
+  `depends` for the program; if it is listed, put a stand-in "host" copy later
+  on `PATH` and run the case, which must not start it. Ask for the program's
+  path in a variable the test sets. Extends L-961 and L-454. *From:* #1014,
+  round 66, 2026-11-23.
+- **L-1130. An exception raised from a signal handler is caught by every
+  `except Exception` in the code it interrupts, so a "handle SIGTERM like the
+  normal exit" fix is read for those blocks.** #932's `Stop(Exception)` is
+  swallowed inside the iio-sensor-proxy calls ("keep the last state"), and the
+  tool runs on until SIGKILL. *Check:* `grep -n 'signal.signal' -A3` for a
+  handler that raises, then `grep -n 'except Exception\|except:'` in the same
+  module and ask whether each wraps a blocking call; prefer a `BaseException`
+  subclass or a flag the loop reads. Extends L-734 and L-960. *From:* #932,
+  round 66, 2026-11-23.
 - **L-1111. A helper that replaces several "check, then read again" call sites
   is reviewed as a per-caller table of what a failed read decided before and
   after, and each caller gets two mutations: "ignores the result" and "goes on
@@ -265,13 +324,19 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   nothing attached, and `git grep -n 'ID_INPUT_KEYBOARD\|bustype\|untyped'`
   over the author's open heads for a second definition. Extends L-469 and
   L-720. *From:* #949 with #866, round 63, 2026-11-20.
-- **L-982. A test that waits for a background job with `kill -0` hangs in
-  CI's container.** A job reparented to the container's PID 1 is never reaped,
-  and `kill -0` succeeds on a zombie; #866's race test waited forever in CI
-  and passed on a desktop, where systemd reaps. *Check:* `grep -n 'kill -0'`
-  in new tests; ask for a done file or `wait` on a child of the test's own
-  shell, and a bound. Extends L-453 and L-674. *From:* #866 (found and fixed
-  by its author), round 63, 2026-11-20.
+- **L-982. A test that waits for a background job with `kill -0` hangs in CI's
+  container.** A job reparented to the container's PID 1 is never reaped, and
+  `kill -0` succeeds on a zombie; #866's race test waited forever in CI and
+  passed on a desktop, where systemd reaps. *Check:* `grep -n 'kill -0'` in
+  new tests; ask for a done file or `wait` on a child of the test's own shell,
+  and a bound. Extends L-453 and L-674. *From:* #866 (found and fixed by its
+  author), round 63, 2026-11-20. (Extended 2026-11-23: the mirror case fails
+  instead of hanging. #998's `kill -0` asserting that a helper had ended after
+  its parent-death signal passed where systemd reaps and failed in GitHub's
+  job container, whose PID 1 (`tail`) left the helper as `Z` with parent 1.
+  Where the expectation is "gone", ask for a state check (`/proc/<pid>/stat`
+  field 3 not `Z`); reproduce with `docker run -d <image> sleep 600` and
+  `docker exec`, against `docker run --init`. *From:* #998, round 66.)
 - **L-975. A service that exits 0 with "nothing to do" behind a socket a
   daemon reconnects to at once turns "not ready yet" into a start-limit
   failure for the boot.** On the 9a, `omamobile-gnss-start` returns while
@@ -343,75 +408,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   `HOME` and the real `omarchy-done`, make each write fail in turn (read-only
   file, read-only directory), and list the marker and whether the script went
   on. Extends L-468 and L-613. *From:* #895, round 62, 2026-11-18.
-- **L-949. An allow-list that guards a credential path is run over the
-  system's real catalogue, both ways.** #892's 35 "Latin" layouts refused
-  `jp`, `al`, `vn`, `mt` and `kr` and accepted `us:rus` and `us:chr`; its
-  test's rules file had four layouts. *Check:* run the backend with the host's
-  `/usr/share/X11/xkb/rules/base.lst` (stand-ins for everything it would
-  write), feed five layouts from outside the list and the variants upstream
-  calls out, and compare with the upstream rule if one exists. Extends L-454
-  and L-633. *From:* #892, round 62, 2026-11-18.
-- **L-947. A change handler added to a QML service fires during the
-  component's first binding evaluation, so a "when X changes" fix is also an
-  "at every start" change.** #879's `onFirstIdleTimeoutSecondsChanged` re-arms
-  the idle monitor on a timeout change and, by the same handler, at every
-  shell start on every phone; the contributor's phone cases all began after a
-  start. *Check:* for each `on<Property>Changed` a patch adds, model it in a
-  ten-line QML file with a stand-in for the object it gates (`qml6`
-  offscreen), log the gated property from creation, read the output for
-  "Binding loop detected", and ask for the fresh-start case by name. Extends
-  L-618 and L-444. *From:* #879, round 62, 2026-11-18.
-- **L-933. A Qt test that builds the app's own runner or backend object runs
-  whatever that object runs on the host, and an assertion written for "nothing
-  installed here" fails on the phone the feature is for.** #860's page test
-  ran the real `charge get` from `/usr/lib/omamobile-settings/backends` and
-  asserted "not available"; on a phone with the package installed and the
-  charger live it fails, and `tools/phone-install-package` runs `check()`.
-  *Check:* in every new test, list the objects constructed (`ActionRunner`,
-  `Backend`) and the fixed paths they open (`grep -n '"/usr/' app/*.cpp`),
-  find the test's override for each, and read every "absent here" comment as a
-  claim about the build host. Extends L-454, L-410 and L-234. *From:* #860,
-  round 61, 2026-11-18.
-- **L-926. When a "hide if we showed it" rule becomes "hide whatever is
-  there", the trigger's false positives are re-read.** `homeOnScreen` (no
-  window on the focused workspace) was a safe trigger while it could only hide
-  a keyboard the plugin itself had raised; applied to every keyboard in #887,
-  a transient empty workspace costs the user their keyboard in an app.
-  *Check:* list the events that make the trigger true (a window closing as
-  another opens, a new empty workspace during a launch) and ask for each
-  during the phone run. Extends L-622 and L-738. *From:* #887, round 61,
-  2026-11-18.
-- **L-925. A gesture threshold a PR removes is traced to what it was
-  compensating for.** The pill's "past 120 px: recent apps" looked like a
-  design choice; it existed because the hold timer restarted on every pixel of
-  movement and never fired under a real finger. #887 is right only because it
-  fixes the hold in the same change. *Check:* `git log -S'<the threshold>'`
-  for where it came from, then read the sibling path to the same destination
-  (here the `hold` timer) and ask whether it works without the threshold on
-  real glass, not only at the test's exact coordinates. Extends L-160 and
-  L-620. *From:* #887, round 61, 2026-11-18.
-- **L-924. `sed -i` on a user's config replaces a symlink with a regular
-  file.** #727 appended with `>>`, which writes through a link; #886 inserts
-  with `sed -i`, which renames a new file over the name, so a dotfiles link is
-  silently broken, and the failure for an unwritable directory moves from the
-  file to the directory. *Check:* run the step once against a symlinked target
-  and once in a `chmod 555` directory, and read what `set -e` skips after it
-  by the step's position in the script. Extends L-227 and L-468. *From:* #886,
-  round 61, 2026-11-18.
-- **L-920. A registry read moved behind a Loader gains a "not ready" branch
-  that skips every participant.** `BackLink.back()` was unconditional on main;
-  behind `backLink.item` in #582 it is skipped when the item is null, and the
-  first thing skipped is the keyboard-first rule. *Check:* for any
-  `Loader`-mediated call a PR puts in front of an ordered handler list, read
-  what runs when `item` is null and compare with main's first step. Extends
-  L-161 and L-617. *From:* #582, round 61, 2026-11-18.
-- **L-913. A flag set before a fallible step and cleared after it is walked
-  through the paths where the step's subject disappears by itself.** #837's
-  `ipv6_release_owed` is cleared only by a later successful release; when the
-  modem drops the bearer on its own after a failed release, the flag survives
-  and a later, deliberately kept bearer gets one release it wasn't owed
-  (probed: 2 releases became 3). *Check:* for every "owed" or "pending" flag,
-  list each branch of the next pass (the thing listed, not listed, listed
-  without its record), say what clears the flag in each, and run the PR's
-  fixture through the branch that doesn't. Extends L-614 and L-502. *From:*
-  #837, round 61, 2026-11-18.

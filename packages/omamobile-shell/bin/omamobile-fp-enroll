@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Omarchy Mobile's fingerprint enrollment helper, for the omamobile.fingerprint
+"""Omamobile's fingerprint enrollment helper, for the omamobile.fingerprint
 shell plugin. It drives fprintd over D-Bus, as the user, so fprintd stays
 the only client of the sensor (omamobile-fp-bridge serves one client at a
 time; the lock screen and sudo reach it through fprintd too). fprintd asks

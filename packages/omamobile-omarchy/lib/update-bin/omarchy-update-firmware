@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile (on PATH only during omamobile-update): no fwupd. The phone's
+# Omamobile (on PATH only during omamobile-update): no fwupd. The phone's
 # firmware is Google's, on partitions only stock Android updates; fwupd's UFS
 # and other plugins have no business on them.
 echo "Firmware updates (fwupd) are not for the phone." >&2

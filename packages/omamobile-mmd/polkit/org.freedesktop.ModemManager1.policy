@@ -7,8 +7,8 @@
      -Dpolkit=permissive: the active local session may use the phone without a
      password prompt; Control and Firmware need an administrator. -->
 <policyconfig>
-  <vendor>Omarchy Mobile</vendor>
-  <vendor_url>https://github.com/derekross/omarchy-mobile</vendor_url>
+  <vendor>Omamobile</vendor>
+  <vendor_url>https://github.com/derekross/omamobile</vendor_url>
   <icon_name>phone</icon_name>
   <action id="org.freedesktop.ModemManager1.Control">
     <description>Control the modem manager</description>

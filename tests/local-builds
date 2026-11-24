@@ -3,7 +3,7 @@
 # A contributor's local builds (no phone, no network, no Docker): every run
 # happens in a copy of the repository, so the real keys/ and out/ are never
 # touched. tools/local-key-init makes keys/NAME once; tools/fetch-published
-# takes only what a trusted, unrevoked Omarchy Mobile key signed, against a
+# takes only what a trusted, unrevoked Omamobile key signed, against a
 # fake server (file://) and a test keyring; build-packages and build-rootfs
 # --local refuse before any build without the local key, and never fall
 # back to the maintainer's keys/ or out/repo.
@@ -271,6 +271,135 @@ for fault in rm chmod dir swap crlf blank nonl; do
 done
 : > "$kr/omamobile-revoked"
 pass "fetch-published allows a missing omamobile-revoked quietly, and stops before any download if it cannot be read or changes after the check"
+
+# Failed fetches stage outside DIR: a missing .sig, a SHA-256 mismatch or an
+# untrusted signature leaves no unverified bytes or .sig in DIR, keeps any
+# existing verified pair byte for byte, and leaves no staging folder behind.
+echo "verified v1" > "$srv/foo-1-1-any.pkg.tar.zst"
+sign signer "$srv/foo-1-1-any.pkg.tar.zst"
+make_index signer foo-1-1-any.pkg.tar.zst
+d=$t/stage-keep
+into=$d fetch || { cat "$t/log"; fail "fetch-published seeds a verified pair"; }
+cp "$d/foo-1-1-any.pkg.tar.zst" "$t/keep-pkg" && cp "$d/foo-1-1-any.pkg.tar.zst.sig" "$t/keep-sig"
+[[ $(ls -A "$d" | LC_ALL=C sort) == $'foo-1-1-any.pkg.tar.zst\nfoo-1-1-any.pkg.tar.zst.sig' ]] \
+  || { ls -A "$d"; fail "a clean fetch leaves only the verified pair in DIR"; }
+
+for bad in missing-sig bad-sha untrusted-sig; do
+  echo "republished $bad" > "$srv/foo-1-1-any.pkg.tar.zst"
+  make_index signer foo-1-1-any.pkg.tar.zst
+  case $bad in
+    missing-sig) rm -f "$srv/foo-1-1-any.pkg.tar.zst.sig"; want='foo-1-1-any.pkg.tar.zst has no signature' ;;
+    bad-sha) sign signer "$srv/foo-1-1-any.pkg.tar.zst"; echo "tampered" >> "$srv/foo-1-1-any.pkg.tar.zst"; want='foo-1-1-any.pkg.tar.zst does not match the index' ;;
+    untrusted-sig) sign other "$srv/foo-1-1-any.pkg.tar.zst"; want='foo-1-1-any.pkg.tar.zst is not signed by a trusted' ;;
+  esac
+  fresh=$t/stage-fresh-$bad
+  if into=$fresh fetch; then cat "$t/log"; fail "refuses $bad into a fresh DIR"; fi
+  grep -qF "$want" "$t/log" || { cat "$t/log"; fail "names the refusal for $bad into a fresh DIR"; }
+  [[ -z $(ls -A "$fresh" 2>/dev/null) ]] || { ls -la "$fresh"; fail "leaves no files in a fresh DIR after $bad"; }
+  if into=$d fetch; then cat "$t/log"; fail "refuses $bad over an existing verified pair"; fi
+  grep -qF "$want" "$t/log" || { cat "$t/log"; fail "names the refusal for $bad over an existing pair"; }
+  cmp -s "$d/foo-1-1-any.pkg.tar.zst" "$t/keep-pkg" && cmp -s "$d/foo-1-1-any.pkg.tar.zst.sig" "$t/keep-sig" \
+    || fail "keeps the existing verified pair byte for byte after $bad"
+  [[ $(ls -A "$d" | LC_ALL=C sort) == $'foo-1-1-any.pkg.tar.zst\nfoo-1-1-any.pkg.tar.zst.sig' ]] \
+    || { ls -la "$d"; fail "leaves no extra or staging files in DIR after $bad"; }
+done
+
+# When a second package fails, the first (already verified) stays, the failed
+# package and its .sig are absent, and no staging folder remains.
+echo "first valid" > "$srv/aaa-1-1-any.pkg.tar.zst" && sign signer "$srv/aaa-1-1-any.pkg.tar.zst"
+echo "second untrusted" > "$srv/zzz-1-1-any.pkg.tar.zst" && sign other "$srv/zzz-1-1-any.pkg.tar.zst"
+make_index signer aaa-1-1-any.pkg.tar.zst zzz-1-1-any.pkg.tar.zst
+d2=$t/stage-second
+if into=$d2 fetch; then cat "$t/log"; fail "refuses an untrusted second package"; fi
+grep -qF 'zzz-1-1-any.pkg.tar.zst is not signed by a trusted' "$t/log" \
+  || { cat "$t/log"; fail "names the untrusted second package refusal"; }
+[[ $(ls -A "$d2" | LC_ALL=C sort) == $'aaa-1-1-any.pkg.tar.zst\naaa-1-1-any.pkg.tar.zst.sig' ]] \
+  || { ls -la "$d2"; fail "keeps only the verified first package, with no failed package or staging folder"; }
+cmp -s "$d2/aaa-1-1-any.pkg.tar.zst" "$srv/aaa-1-1-any.pkg.tar.zst" && cmp -s "$d2/aaa-1-1-any.pkg.tar.zst.sig" "$srv/aaa-1-1-any.pkg.tar.zst.sig" \
+  || fail "the verified first pair matches the server's bytes"
+
+# Real directories at the target .sig or package name are refused before any
+# package download and left intact (along with any old package beside a .sig
+# directory). Symlinks at either target are replaced with regular files without
+# touching their outside targets, and placement moves from an in-DIR stage.
+echo "verified v2" > "$srv/foo-1-1-any.pkg.tar.zst" && sign signer "$srv/foo-1-1-any.pkg.tar.zst"
+make_index signer foo-1-1-any.pkg.tar.zst
+
+for kind in sig pkg; do
+  d_dir=$t/stage-dir-$kind
+  [[ $kind == sig ]] && target=foo-1-1-any.pkg.tar.zst.sig || target=foo-1-1-any.pkg.tar.zst
+  mkdir -p "$d_dir/$target" && echo "keep" > "$d_dir/$target/marker"
+  [[ $kind != sig ]] || cp "$t/keep-pkg" "$d_dir/foo-1-1-any.pkg.tar.zst"
+  was=$(state "$d_dir") && : > "$t/curl.log"
+  if into=$d_dir fetch PATH="$t/bin:$PATH"; then cat "$t/log"; fail "refuses a real directory at the $kind target"; fi
+  grep -qF "$d_dir/$target is a directory" "$t/log" || { cat "$t/log"; fail "says the $kind target is a directory"; }
+  ! grep -qF 'foo-1-1-any.pkg.tar.zst' "$t/curl.log" || { cat "$t/curl.log"; fail "stops before downloading when the $kind target is a directory"; }
+  [[ -d $d_dir/$target && ! -L $d_dir/$target && $(state "$d_dir") == "$was" ]] \
+    || { state "$d_dir"; fail "leaves the $kind directory and DIR unchanged"; }
+  [[ $kind != sig ]] || cmp -s "$d_dir/foo-1-1-any.pkg.tar.zst" "$t/keep-pkg" \
+    || fail "keeps the old package unchanged when the .sig target is a directory"
+done
+
+real_mv=$(command -v mv) && mkdir -p "$t/bin-mv"
+cat > "$t/bin-mv/mv" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$t/mv.log"
+[[ -n \${MV_FAIL_PKG:-} && \${!#} == */foo-1-1-any.pkg.tar.zst ]] && exit 1
+exec "$real_mv" "\$@"
+EOF
+chmod +x "$t/bin-mv/mv"
+
+d_sym=$t/stage-sym && mkdir -p "$d_sym" "$t/stage-out-dir"
+echo "outside bytes" > "$t/stage-out-file"
+ln -s "$t/stage-out-file" "$d_sym/foo-1-1-any.pkg.tar.zst"
+ln -s "$t/stage-out-dir" "$d_sym/foo-1-1-any.pkg.tar.zst.sig"
+: > "$t/mv.log"
+into=$d_sym fetch PATH="$t/bin-mv:$PATH" || { cat "$t/log"; fail "replaces symlinks at package and .sig targets"; }
+for f in foo-1-1-any.pkg.tar.zst foo-1-1-any.pkg.tar.zst.sig; do
+  [[ -f $d_sym/$f && ! -L $d_sym/$f ]] || { ls -la "$d_sym"; fail "replaces the $f symlink with a regular file"; }
+  cmp -s "$d_sym/$f" "$srv/$f" || fail "the replaced $f holds the server's bytes"
+done
+[[ $(cat "$t/stage-out-file") == "outside bytes" ]] || fail "leaves the outside file symlink target unchanged"
+[[ -z $(ls -A "$t/stage-out-dir") ]] || { ls -la "$t/stage-out-dir"; fail "leaves the outside directory symlink target empty"; }
+src=$(awk -v dst="$d_sym/foo-1-1-any.pkg.tar.zst" '$NF == dst {print $(NF-1)}' "$t/mv.log")
+[[ $src == "$d_sym"/.fetch-published.*/pkg && ${src#"$d_sym/.fetch-published."} != */*/* ]] \
+  || { cat "$t/mv.log"; fail "places the package from a .fetch-published.* stage inside DIR"; }
+
+# While another process holds the exclusive flock on DIR, fetch-published
+# refuses before downloading and leaves DIR byte for byte as before.
+d_lock=$t/stage-lock && mkdir -p "$d_lock"
+cp "$t/keep-pkg" "$d_lock/foo-1-1-any.pkg.tar.zst" && cp "$t/keep-sig" "$d_lock/foo-1-1-any.pkg.tar.zst.sig"
+: > "$t/curl.log" && exec {lock_fd}<"$d_lock" && flock -n "$lock_fd" || fail "test acquires flock on $d_lock"
+rc=0
+(exec {lock_fd}<&-; cd "$R" && PATH="$t/bin:$PATH" OMAMOBILE_PKGS_URL=file://$t/srv timeout 30 tools/fetch-published "$d_lock") > "$t/log" 2>&1 || rc=$?
+exec {lock_fd}<&-
+((rc != 0)) || { cat "$t/log"; fail "refuses when another fetch-published holds the lock on DIR"; }
+((rc != 124)) || { cat "$t/log"; fail "timed out waiting for flock on DIR (expected non-blocking refusal)"; }
+grep -qF "another fetch-published is writing $d_lock" "$t/log" || { cat "$t/log"; fail "says another fetch-published is writing DIR"; }
+[[ ! -s $t/curl.log ]] || { cat "$t/curl.log"; fail "downloads nothing when DIR is locked"; }
+[[ $(ls -A "$d_lock" | LC_ALL=C sort) == $'foo-1-1-any.pkg.tar.zst\nfoo-1-1-any.pkg.tar.zst.sig' ]] \
+  || { ls -la "$d_lock"; fail "leaves DIR listing unchanged when locked"; }
+cmp -s "$d_lock/foo-1-1-any.pkg.tar.zst" "$t/keep-pkg" && cmp -s "$d_lock/foo-1-1-any.pkg.tar.zst.sig" "$t/keep-sig" \
+  || fail "keeps DIR byte for byte when locked"
+into=$d_lock fetch || { cat "$t/log"; fail "succeeds once the lock on DIR is released"; }
+cmp -s "$d_lock/foo-1-1-any.pkg.tar.zst" "$srv/foo-1-1-any.pkg.tar.zst" || fail "updates DIR after the lock is released"
+
+# Placement removes any old package before placing the new .sig and renames
+# the package last: a stop right before the final package rename never leaves
+# a package without a .sig or an old package beside a new .sig, and EXIT
+# cleanup only rmdirs an empty stage (never rm of named files in DIR), so the
+# unplaced package stays inside the hidden .fetch-published.* stage.
+for target in "$t/stage-mid-fresh" "$d"; do
+  if into=$target fetch PATH="$t/bin-mv:$PATH" MV_FAIL_PKG=1; then cat "$t/log"; fail "stops when the final package rename fails ($target)"; fi
+  [[ $(ls "$target") == foo-1-1-any.pkg.tar.zst.sig ]] \
+    || { ls -la "$target"; fail "leaves only the verified .sig visible in DIR when stopped mid-placement ($target)"; }
+  cmp -s "$target/foo-1-1-any.pkg.tar.zst.sig" "$srv/foo-1-1-any.pkg.tar.zst.sig" \
+    || fail "placed the new verified .sig before stopping ($target)"
+  stages=("$target"/.fetch-published.*)
+  [[ ${#stages[@]} -eq 1 && -f ${stages[0]}/pkg ]] \
+    || { ls -la "$target"; fail "cleanup leaves unplaced staged files in the hidden stage rather than deleting named files in DIR ($target)"; }
+done
+pass "fetch-published locks DIR, stages downloads outside DIR, keeps existing verified pairs on failure, and places .sig before the package"
 
 # --- build-packages and build-rootfs --local ---
 mv "$R/keys/panther" "$t/panther-key"

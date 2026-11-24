@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Cut an Omarchy Mobile release: docs/RELEASES.md §11 as one guided
+# Cut an Omamobile release: docs/RELEASES.md §11 as one guided
 # procedure, one stage per step, run in order. Each stage checks what the
 # stages before it recorded, stops at the first failure, and with --dry-run
 # only reads and prints what it would run. RELEASES §11 lists the stages
@@ -9,7 +9,7 @@
 #   tools/release [--dry-run] [--version V] [--kernel-tag T] STAGE [ARGS]
 #     --version V      the release, by the calendar: YYYY.MM.DD (.1, .2 for a
 #                      respin the same day; default today)
-#     --kernel-tag T   the kernel release tag on linux-omarchy-mobile's
+#     --kernel-tag T   the kernel release tag on linux-omamobile's
 #                      omamobile (default kernel-V; recorded by `kernel`)
 #     --dry-run        read-only: check, and print the commands a stage
 #                      would run
@@ -91,7 +91,7 @@ ROOT=$PWD
 # The release key's primary (docs/RELEASES.md §10): what every release
 # signature must come from. tools/install-phone matches the same fingerprint.
 RELEASE_KEY=20567593566EEEE2DD8864608632C8075EB94673
-KERNEL_REMOTE=${PUBLISH_KERNEL_REMOTE:-https://github.com/derekross/linux-omarchy-mobile.git}
+KERNEL_REMOTE=${PUBLISH_KERNEL_REMOTE:-https://github.com/derekross/linux-omamobile.git}
 if [[ -z ${KERNEL_BASE:-} ]]; then
   KERNEL_BASE=$HOME/omamobile-kernel
   [[ -d $KERNEL_BASE || ! -d $HOME/android/mainline ]] || KERNEL_BASE=$HOME/android/mainline
@@ -221,7 +221,7 @@ db_sums() {
 
 # ------------------------------------------------------------------ stages
 st_status() {
-  say "Omarchy Mobile $version for $DEVICE ($rel)"
+  say "Omamobile $version for $DEVICE ($rel)"
   local s k v next=""
   for s in kernel build images packages rootfs bundle test-install identifiers verify upload promote tag; do
     k=${s//-/_}_done
@@ -667,9 +667,9 @@ print("\n".join(sorted(out)))
 PY
 }
 
-# Identifier scan (§11.7, AGENTS.md §1) over files and directories, text and
-# binary alike: MAC addresses (locally administered unicast ones,
-# x2/x6/xA/xE, and all zeros or all ones are made up; so are, in
+# Identifier scan (§11.7, AGENTS.md §1) over files, directories and symlink
+# targets, text and binary alike: MAC addresses (locally administered unicast
+# ones, x2/x6/xA/xE, and all zeros or all ones are made up; so are, in
 # /etc/dnsmasq.conf alone, the group addresses and dhcp-option bytes of
 # dnsmasq's shipped example configuration), serial and IMEI
 # records, this machine's home directory (/home/<builder>: a build path that
@@ -702,11 +702,12 @@ def report(path, what, text):
     found += 1
     if found <= 40:
         print("    %s: %s: %s" % (path, what, text.decode("utf-8", "replace")[:120]))
-def scan(path):
-    try:
-        data = open(path, "rb").read()
-    except OSError:
-        return
+def scan(path, data=None):
+    if data is None:
+        try:
+            data = open(path, "rb").read()
+        except OSError:
+            return
     pos = 0
     while m := mac.search(data, pos):
         k = m.lastindex
@@ -736,12 +737,30 @@ def scan(path):
                 continue
             report(path, what, m.group(0))
             break
+def scan_link(path):
+    try:
+        target = os.fsencode(os.readlink(path))
+    except OSError as e:
+        report(path + " (symlink target)", "unreadable link", str(e).encode("utf-8", "replace"))
+        return
+    scan(path + " (symlink target)", target)
 for p in paths:
+    # Strip trailing slashes so islink sees an explicit directory symlink itself.
+    q = p.rstrip("/") or p[:1]
+    if os.path.islink(q):
+        scan_link(q)
     if os.path.isdir(p):
         for top, dirs, names in os.walk(p):
+            # os.walk puts directory symlinks in dirs without descending into them.
+            for n in dirs:
+                f = os.path.join(top, n)
+                if os.path.islink(f):
+                    scan_link(f)
             for n in names:
                 f = os.path.join(top, n)
-                if os.path.isfile(f) and not os.path.islink(f):
+                if os.path.islink(f):
+                    scan_link(f)
+                elif os.path.isfile(f):
                     scan(f)
     elif os.path.isfile(p):
         scan(p)
@@ -899,14 +918,14 @@ st_tag() {
   if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
     [[ $(git rev-parse "$tag^{commit}") == "$head" ]] || die "$tag exists on another commit; a respin is release-$version.1"
   else
-    run git tag -a "$tag" -m "Omarchy Mobile $version (developer preview)
+    run git tag -a "$tag" -m "Omamobile $version (developer preview)
 
 Kernel: $ktag, uname -r $krel
 Packages: [omamobile] stable index $(get repo_index)
 Root image: $(basename "$(get rootfs)")" "$head"
   fi
   derek "git push origin $tag" \
-        "gh release create $tag -R derekross/omarchy-mobile --title 'Omarchy Mobile $version (developer preview)' --notes-file $notes"
+        "gh release create $tag -R derekross/omamobile --title 'Omamobile $version (developer preview)' --notes-file $notes"
   put tag_done "$tag on ${head:0:12} (local; push it)"
 }
 

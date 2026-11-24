@@ -3,6 +3,42 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-840. A PR that waits on our own phone run is given a merge slot ahead of
+  sibling PRs on the same board file, and the wait is counted in rebases.**
+  Kernel #181 had been ready for four days and was rebased again only because
+  another PR landed in `gs201-panther.dts`; two more were queued behind the
+  same file. *Check:* each round, for a PR whose only blocker is the
+  maintainer's run, list the open PRs that touch its files and put it first in
+  the round's merge order, or run the test before merging any of them. Extends
+  L-253 and L-719. *From:* kernel #181, round 60, 2026-11-17.
+- **L-839. A request left open on a PR at the top of an unmerged stack is
+  re-listed when the stack's bottom is reviewed.** Kernel #120's message fix
+  and our own 7 Pro capture sat for 20 days because #63 and #103 were the
+  active threads. *Check:* when reviewing a stack's bottom PR, `gh pr list
+  --search` for PRs whose head contains it and carry their open points into
+  the same round. Extends L-196 and L-688. *From:* kernel #120 with #63 and
+  #103, round 60, 2026-11-17.
+- **L-838. "The contributor replied" is checked for who replied and whether
+  the head moved.** On kernel #120 the new comment was a third party's data
+  from another phone on an unpublished tree; the author's two open points, 20
+  days old, were untouched. *Check:* `gh pr view --json comments` for each new
+  comment's `author.login` against the PR's author, the force-push events
+  since our last comment, and `git log -1 --format=%cI <head>`; list our open
+  requests against the head before reading the new comment as an answer.
+  Extends L-34 and L-688. *From:* kernel #120, round 60, 2026-11-17.
+- **L-837. When main fixed the sentence a PR also fixes, the rebase drops the
+  PR's hunk.** #98's WIFI-PLAN line and main's said the same thing in
+  different words. *Check:* read both sides of a docs conflict for meaning
+  before asking for "both"; name the side to keep. Extends L-184 and L-556.
+  *From:* #98, round 60, 2026-11-17.
+- **L-836. A one-line-per-device table row conflicts whenever two PRs change
+  different cells of it, and the review hands over the answer cell by cell.**
+  #98's Bluetooth cell and #751's Wi-Fi cell are the same line of DEVICES.md,
+  and the Wanted row repeats both. *Check:* split the row on ` | ` at the
+  base, main and the head, list which cells each side changed, and write
+  "main's row with this PR's cell N" in the comment; do the same for the
+  Wanted row (L-132). Extends L-184 and L-354. *From:* #98 with #751, round
+  60, 2026-11-17.
 - **L-828. A tested commit that a force-push took off the PR branch is fetched
   by its full id and diffed by tree.** #438's run was on a commit two pushes
   behind kernel #202's head; `gh api repos/<r>/commits/<short id>` gave the
@@ -206,7 +242,7 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   that device, other owners' included.** Kernel #90 was accepted on W4HO's
   promise that `allow_tx` is set only for `google-tg4c`; h4rkl's #74 sets
   `allow_tx=1` for every panel, and our #74 review missed it (C-18). *Check:*
-  `git grep -n '<option>'` across the open omarchy-mobile PR heads for
+  `git grep -n '<option>'` across the open omamobile PR heads for
   `packages/omamobile-device-<codename>`. Extends L-219. *From:* kernel #90
   with #74, round 25.
 - **L-275. Squash-merged stacks always conflict on the package `version` file,
@@ -229,8 +265,8 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   and §6's gates. Extends L-229; see C-16. *From:* kernel #98, round 25.
 - **L-265. A bare `#N` links to the repository the comment is in.** W4HO's
   tables on issue #28 named kernel PRs as `#119` and `#122`, which link to an
-  omarchy-mobile PR and issue. *Check:* write
-  `derekross/linux-omarchy-mobile#N` when a comment names the other
+  omamobile PR and issue. *Check:* write
+  `derekross/linux-omamobile#N` when a comment names the other
   repository's PRs, and read cross-repository tables in a thread with that in
   mind. *From:* issue #28, round 25.
 - **L-263. A squash title that names a package version must agree with the
