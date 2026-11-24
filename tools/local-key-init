@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Make a contributor's local signing key for a device port's own packages
 # (docs/RELEASES.md §10, "Contributors' builds"; review lesson L-7). It is
-# not Omarchy Mobile's key: phones and the published repository never trust
+# not Omamobile's key: phones and the published repository never trust
 # it. Run once per port:
 #
 #   tools/local-key-init CODENAME
@@ -26,7 +26,7 @@ command -v gpg >/dev/null || die "gpg is needed"
 mkdir -p "$dir/gnupg"
 chmod 700 "$dir" "$dir/gnupg"
 export GNUPGHOME=$PWD/$dir/gnupg
-uid="Omarchy Mobile local build ($name) <local-$name@omamobile.invalid>"
+uid="Omamobile local build ($name) <local-$name@omamobile.invalid>"
 gpg --batch --quiet --passphrase '' --quick-generate-key "$uid" ed25519 sign never
 fpr=$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" {print $10; exit}')
 [[ $fpr =~ ^[0-9A-F]{40}$ ]] || die "no fingerprint for the new key"

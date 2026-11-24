@@ -22,7 +22,7 @@ Tracking issue: #36.
 
 ## What booted at first light (historical)
 
-The original board file (linux-omarchy-mobile, `gs201-lynx.dts`) enabled the USB
+The original board file (linux-omamobile, `gs201-lynx.dts`) enabled the USB
 controller and relies on the SoC tree for the cluster watchdogs. UFS, the
 panel, touch, the GPU and the radios stay disabled. It carries
 `/soc_compatible/B0_IPOP` instead of `/soc_id`, because lynx's ABL matches
@@ -97,7 +97,7 @@ One register write, made by the shared init at boot and only when the
 board's compatible is `google,gs201-lynx`: `SIMPLEFB_TRIG_CON="0x1c240030
 0x3061"`, DECON0's `TRIG_CON`, the same unmask the Pixel 7 Pro uses. It
 needs the kernel's `simple-framebuffer` on ABL's scanout buffer at
-`0xfac00000`, reserved by the board file (linux-omarchy-mobile #44); never
+`0xfac00000`, reserved by the board file (linux-omamobile #44); never
 run the write on a kernel without that reservation.
 
 Expect: `TRIG_CON` reads `0x3070` before the write and `0x3061` after (the

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 /*
  * omamobile-fp-bridge: the client of Google's fingerprint HAL in the
- * Omarchy Mobile fingerprint chroot (device/cheetah/FINGERPRINT-PLAN.md).
+ * Omamobile fingerprint chroot (device/cheetah/FINGERPRINT-PLAN.md).
  *
  * On Android, FingerprintService, keystore, LockSettingsService and SystemUI
  * drive the HAL. Here this one program does their part, and serves a small

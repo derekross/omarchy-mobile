@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile (on PATH only during omamobile-update): the confirmation is
+# Omamobile (on PATH only during omamobile-update): the confirmation is
 # omamobile-update's own (the update sheet's Update button, or the terminal
 # run's battery and repository checks), never gum on a phone.
 exit 0

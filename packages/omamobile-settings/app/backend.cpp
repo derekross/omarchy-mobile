@@ -6,6 +6,7 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QSet>
 #include <QTimer>
@@ -30,8 +31,40 @@ Backend::Backend(QObject *parent) : QObject(parent) {
     });
     reloadTheme();
     rebuild();
+    QTimer::singleShot(0, this, [this] { probe("charge"); });
+}
+void Backend::probe(const QString &tool) {
+    // The same fixed-argument call the page makes (actionrunner.cpp): bash, no startup file, one `get`.
+    auto *p = &m_chargeProbe;
+    connect(p, &QProcess::finished, this, [this, p, tool](int code, QProcess::ExitStatus status) {
+        const auto raw = p->readAllStandardOutput().left(4096);
+        p->readAllStandardError();
+        const auto obj = QJsonDocument::fromJson(raw).object();
+        setToolAvailable(tool, code == 0 && status == QProcess::NormalExit && obj["available"].toBool());
+    });
+    auto env = QProcessEnvironment::systemEnvironment();
+    env.remove("BASH_ENV");
+    env.remove("ENV");
+    p->setProcessEnvironment(env);
+    p->start("/usr/bin/bash", {m_backendDir + "/" + tool + ".sh", "get"});
+    p->closeWriteChannel();
+    QTimer::singleShot(5000, p, [p] { if (p->state() != QProcess::NotRunning) p->kill(); });
+}
+void Backend::setToolAvailable(const QString &tool, bool available) {
+    if (available == m_availableTools.contains(tool)) return;
+    if (available) m_availableTools.insert(tool); else m_availableTools.remove(tool);
+    rebuild();
+}
+bool Backend::shown(const QJsonObject &row) const {
+    const auto tool = row["requires"].toString();
+    return tool.isEmpty() || m_availableTools.contains(tool);
 }
 Backend::~Backend() {
+    m_chargeProbe.disconnect(this);
+    if (m_chargeProbe.state() != QProcess::NotRunning) {
+        m_chargeProbe.kill();
+        m_chargeProbe.waitForFinished(1000);
+    }
     m_roundingQuery.disconnect(this);
     if (m_roundingQuery.state() != QProcess::NotRunning) {
         m_roundingQuery.kill();
@@ -80,12 +113,12 @@ void Backend::rebuild() {
     m_rows.clear();
     if (!searching()) {
         for (const auto &row : m_catalog[m_page].toObject()["rows"].toArray())
-            m_rows.append(row.toObject().toVariantMap());
+            if (shown(row.toObject())) m_rows.append(row.toObject().toVariantMap());
     } else {
         for (const auto &page : m_catalog) {
             for (const auto &value : page.toObject()["rows"].toArray()) {
                 const auto row = value.toObject();
-                if ((row["title"].toString() + " " + row["detail"].toString()).contains(m_query, Qt::CaseInsensitive))
+                if (shown(row) && (row["title"].toString() + " " + row["detail"].toString()).contains(m_query, Qt::CaseInsensitive))
                     m_rows.append(row.toVariantMap());
             }
         }

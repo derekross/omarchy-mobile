@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile build environment: Ubuntu LTS with the LineageOS build packages.
+# Omamobile build environment: Ubuntu LTS with the LineageOS build packages.
 # Pinned by digest (docs/RELEASES.md §9): ubuntu:24.04's multi-arch index on
 # Docker Hub, resolved 2026-11-01. Bump it on purpose, never by a rebuild.
 # The apt packages below still come from the archive of the day the image is
@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       protobuf-compiler python3-protobuf lib32readline-dev lib32z1-dev \
       libdw-dev libelf-dev libgnutls28-dev lz4 libsdl1.2-dev libssl-dev \
       libxml2 libxml2-utils lzop pngcrush python-is-python3 rsync schedtool \
-      squashfs-tools xsltproc xxd zip unzip zlib1g-dev openssh-client \
+      squashfs-tools xsltproc xxd zip unzip zlib1g-dev openssh-client zstd \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o /usr/local/bin/repo \

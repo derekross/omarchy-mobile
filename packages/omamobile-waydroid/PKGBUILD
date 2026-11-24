@@ -3,9 +3,9 @@
 pkgname=omamobile-waydroid
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile Waydroid integration: kernel checks, container hardening, Mali-G710 Mesa overlay, ufw rules"
+pkgdesc="Omamobile Waydroid integration: kernel checks, container hardening, Mali-G710 Mesa overlay, ufw rules"
 arch=(any)
-url="https://github.com/derekross/omarchy-mobile"
+url="https://github.com/derekross/omamobile"
 license=(MIT)
 depends=(bash python waydroid lxc nftables dnsmasq e2fsprogs systemd)
 optdepends=('ufw: omamobile-waydroid firewall on')

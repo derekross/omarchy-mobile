@@ -9,15 +9,18 @@ the facts needed for review.
 
 | Date | `boot.img` SHA-256 | Source, as recorded | `/dev/sda` and UFS partitions | Checks and gaps |
 | --- | --- | --- | --- | --- |
+| 2026-11-12 | `ac93a5d9f6787153cf620704f192c22da91cf2041789f16f4214111b8458d226` | Test kernel source: base `2a318a96ae9d4c87e061da1da13c05b11d305658` plus the FTS5 DTS change now proposed as kernel PR #249 commit `0d548847248512b1e8e1d40d66a85b81fe5ed471`; enabled directly for this test | `/dev/sda` absent (disk flag not applicable); `sdb`–`sdf` disk flags not read; all 85 partition flags `ro=1` | Full reserved range, kernel `7.3.0-rc6-omamobile-push1`, `stmfts` on `event2`, no Oops/BUG/panic/WARN. `qcom_wdt` and feeder state: not read. Exact touch X/Y extrema were not retained. No physical touch event captured; no UFS write. |
+| 2026-11-12 | `1bf0ffd5302fff7fa75f49382567063d7e03bd52083baa81a88107a47dcbdbd2` | The booted test overlay itself defined the full touch node; its exact source was not retained. The later rebuild uses #249's disabled node plus [`device/dipper/overlays/fts5-touchscreen.dtso`](overlays/fts5-touchscreen.dtso), blob `f09381d59a110d02a8b8819f585e304efb1870a3`; both proposed sources postdate the boot. | `/dev/sda` absent (disk flag not applicable); `sdb`–`sdf` disk flags not read; all 85 partition flags `ro=1` | `0x85fc0000–0x8a8fffff` reserved; `stmfts` exposed `event2` on I2C14; physical input included contact, changing X/Y coordinates and `ABS_MT_TRACKING_ID=-1` release. `qcom_wdt` was bound; feeder state: not read. Exact touch X/Y extrema were not retained. No UFS write. |
+| 2026-11-12 (superseded) | `e37196952fca14d5a9152871927039b2ac1d311ec500710f8611f9ac6eff8072` | The booted test overlay itself defined the full touch node; its exact source was not retained. The later rebuild uses #249's disabled node plus [`device/dipper/overlays/fts5-touchscreen.dtso`](overlays/fts5-touchscreen.dtso), blob `f09381d59a110d02a8b8819f585e304efb1870a3`; both proposed sources postdate the boot. The exact source commit for the stale `base-panel.dtb` was not retained. | `/dev/sda` absent (disk flag not applicable); `sdb`–`sdf` disk flags not read; all 85 partition flags `ro=1` | Touch events worked, but the DTB omitted `removed-region@86200000` and `removed-region@89100000`; `/proc/iomem` exposed those areas as System RAM. This was noticed when reviewing `/proc/iomem` after the boot's touch test. Replaced by the corrected image above. No UFS write. |
 | 2026-11-11 | `665fcbd682cd8e64b3ffec1ff7f4ab9ca33a26b9b47b11073be7a3c267abf2b1` | #505 `2d67708e07728b13b5d2a9eda299ace8a1608163`; kernel/DTS #220 `26aa77c317cd029d16e58890c532562ca275c9f0` | Node absent, disk `ro=0`; all 85 partitions `ro=1`; `sdb`–`sdf` `ro=1` | `uname -r` `7.3.0-rc6-omamobile-push1`; `qcom_wdt` bound and feeder running; simpledrm fb0, USB/SSH and reserved `0x85fc0000–0x8a8fffff` passed. Physical screen, keys, touch, GPU and Wi-Fi not tested. RAM boot only; no UFS write. |
 | 2026-11-10 | `540b5d31ea73a31ade9a8d8cb5152cf701dc3c2ad8256734790b0ef2db6dbdd0` | Combined #503/#505; kernel/DTS #220 `055a4019998f22cc0e2a8afef7650274a6ce0657` | Node absent, disk `ro=0`; all 85 partitions `ro=1`; `sdb`–`sdf` `ro=1` | Watchdog/feeder, simpledrm, USB/SSH, reserved TZ range, pinned host key and `reboot-to bootloader` passed; physical keys not captured. |
 | 2026-11-10 | `a2d435a7430e7e4c145c61cdb9866d16929731859d91c7105e6bfcaf9e3e9dd7` | Rebased #503 NFS image with #220 `055a4019998f22cc0e2a8afef7650274a6ce0657` | `/dev/sda` present, set `ro=1`; six disks and all 85 partitions read back `ro=1` | `uname`, NFS root, multi-user systemd, watchdog and SSH passed; generic Arch test root only; link-loss recovery and Omarchy desktop untested. |
 | 2026-11-10 | `0ee4f11d1973085c434e741a2e9dd73af5a9cd157296c25801ed5a92a6b9e9d9` | #505 `994944d7ecbacd69444221e6951153cb329a374e`; kernel/DTS #220 `055a4019998f22cc0e2a8afef7650274a6ce0657` | Node absent, disk `ro=0`; all 85 partitions `ro=1`; `sdb`–`sdf` `ro=1` | Watchdog/feeder, framebuffer, USB/SSH, reserved TZ range and `reboot-to` passed; physical keys not captured. |
 | 2026-11-10 | `e2cdb765de21a5869a1db314c19f1fddb668219a51d3c9ce81a1a083536d711e` | Older rescue image; exact source commit unknown; its init differs from the shared init | Node present, disk `ro=0`; all 85 partition flags recorded `ro=1`, including `sda21` | Kernel `7.3.0-rc6-omamobile-push1`, initramfs root; no `logdump` or whole-disk removal in init, so not the October diagnostic init. SSH host key verified but key was not authorized. No UFS write. |
 | 2026-11-09 | `e2cdb765de21a5869a1db314c19f1fddb668219a51d3c9ce81a1a083536d711e` | Image was reported booted; exact build/init source unknown | `/dev/sda` reported present with `ro=0`; partition details for this session unknown | The retained 08:53 capture is a dirty-kernel writable-root observation; whether it came from this exact image is unknown. |
-| 2026-11-09 | `0f0ec9d62ebe57bef9ae8a4804bb23728f624daab824a0bf7dee18f63c2a3d59` | `linux-omarchy-mobile` panel test tree with EA8074 from #218; exact combined revision unknown | `/dev/sda` absent; all 85 partitions `ro=1`; `sdb`–`sdf` present, `ro=1` | Panel/DRM, backlight 0→511, DPMS off/on passed; `vdda` used a dummy regulator, GPU rendering and touch untested. |
+| 2026-11-09 | `0f0ec9d62ebe57bef9ae8a4804bb23728f624daab824a0bf7dee18f63c2a3d59` | `linux-omamobile` panel test tree with EA8074 from #218; exact combined revision unknown | `/dev/sda` absent; all 85 partitions `ro=1`; `sdb`–`sdf` present, `ro=1` | Panel/DRM, backlight 0→511, DPMS off/on passed; `vdda` used a dummy regulator, GPU rendering and touch untested. |
 | 2026-11-09 | Same boot as panel test, `0f0ec9d6…` | Same as panel test | Same as panel test | Full backup of 84 non-`userdata`, non-`super` GPT partitions was read from this guarded boot and every source hash/size verified; separate userdata archive was file-level and non-atomic. |
-| 2026-11-09 | Unknown; exact image hash not retained | Omarchy Mobile RAM kernel; exact build unknown | Disk and partition flags not recorded | Power-only 10-second restart passed from Android and RAM kernel; no UFS write was attempted. |
+| 2026-11-09 | Unknown; exact image hash not retained | Omamobile RAM kernel; exact build unknown | Disk and partition flags not recorded | Power-only 10-second restart passed from Android and RAM kernel; no UFS write was attempted. |
 | 2026-11-09 | `2244d74aea472b0c595b2056ad8618f614e6a9161b5b264c7f898939e626f318` | Initial NFS-root image reused the earlier #505 kernel and DTB | `/dev/sda` present and set `ro=1`; all six disks and 85 partitions logged `ro=1` | NFS root and SSH worked; systemd reported `RuntimeWatchdogUSec=20s`. Direct `uname`/sysfs reads were not captured. |
 | 2026-11-09 | `f2f5cb2e3da8fe992d366dba36e059c0d9106cf14a7d1c8872c61ee144a4474b` | Earlier #505 image after `qcom-pon` was built in; exact kernel/DTS heads unknown | `/dev/sda` absent, disk `ro=0`; all 85 partitions and other disks `ro=1` | PMIC keys registered and Volume Down produced `KEY_VOLUMEDOWN`; watchdog/feeder, framebuffer and USB/SSH worked. |
 | 2026-11-09 | `93484a91103c294f6c73799ae6cb7161019129b9f89ab331222ae04f10ecf3e1` | First #505 image before `qcom-pon` was built in; exact kernel/DTS heads unknown | `/dev/sda` absent, disk `ro=0`; all 85 partitions and other disks `ro=1` | Console, framebuffer, USB/SSH and watchdog/feeder worked; no physical key event was captured. |
@@ -26,6 +29,43 @@ The original 10-29 count of 92 `/dev/block/by-name/` entries was not saved as a
 name list. The retained backup and kernel records cover 84 non-userdata GPT
 partitions plus `userdata`; the other seven names cannot be identified from the
 retained artifacts and remain unknown.
+
+## 2026-11-12 — corrected FTS5 RAM image
+
+The first active-low FTS5 image (`e37196952fca14d5a9152871927039b2ac1d311ec500710f8611f9ac6eff8072`)
+bound `st,stmfts5` on I2C14 and physical taps produced touch, multitouch X/Y
+and release events inside the 1080×2248 panel. Its `base-panel.dtb` was stale:
+the merged DTB omitted `removed-region@86200000` and
+`removed-region@89100000`, exposing both ranges as System RAM in `/proc/iomem`.
+The base DTB was reused from an earlier local build output; its exact source
+commit was not retained. The missing reservation was noticed when reviewing
+`/proc/iomem` after the boot's touch test, not before boot. The image is
+superseded even though all 85 UFS partition flags were read-only.
+
+Rebuilt the base DTB from the current preprocessed Dipper DTS, then reapplied
+the same FTS5 overlay. The corrected RAM image
+`1bf0ffd5302fff7fa75f49382567063d7e03bd52083baa81a88107a47dcbdbd2` booted on
+kernel `7.3.0-rc6-omamobile-push1`. `/proc/iomem` showed
+`0x85fc0000–0x8a8fffff` reserved; all 85 UFS partition flags were `ro=1`,
+`/dev/sda` was absent, and `stmfts` plus `qcom_wdt` bound. The kernel reported
+no Oops, BUG, panic or WARN. Physical touch on `/dev/input/event2` produced
+`ABS_MT_TRACKING_ID`, changing `ABS_MT_POSITION_X/Y` values, and a release
+event (`ABS_MT_TRACKING_ID=-1`). No UFS partition was written. The node is now
+proposed disabled in kernel PR #249 at
+`0d548847248512b1e8e1d40d66a85b81fe5ed471`; enabling it with the repository
+overlay [`device/dipper/overlays/fts5-touchscreen.dtso`](overlays/fts5-touchscreen.dtso),
+blob `f09381d59a110d02a8b8819f585e304efb1870a3`, rebuilds the tested node.
+Both proposed sources postdate the historical boots.
+
+Then booted a RAM image with the same FTS5 node enabled directly in the kernel
+DTS. Image SHA-256:
+`ac93a5d9f6787153cf620704f192c22da91cf2041789f16f4214111b8458d226`.
+`stmfts` registered on `event2`; all 85 UFS partitions remained read-only,
+`/dev/sda` was absent, and `/proc/iomem` retained the complete
+`0x85fc0000–0x8a8fffff` reserved range. No Oops, BUG, panic or WARN appeared.
+A physical touch event was not captured during this direct-DTS boot; the
+preceding overlay boot with identical node properties captured contact,
+changing X/Y and release. No UFS partition was written.
 
 ## 2026-11-11 — rebuilt #505 RAM image
 
@@ -94,7 +134,7 @@ string and whether it matches the recovery build remain unknown.
 
 Before entering fastboot, the handset answered over USB SSH; no restart was
 needed to restore SSH. Holding Power alone for 10 seconds restarted the phone
-back into Android both from the installed system and under the Omarchy Mobile
+back into Android both from the installed system and under the Omamobile
 RAM kernel. Volume Down + Power then entered fastboot. Read-only fastboot
 variables reported product `dipper` and an unlocked bootloader.
 
@@ -158,8 +198,9 @@ the owner confirmed the console was visible on the lit panel. All 85 partition
 flags were `ro=1`; `/dev/sda` was absent, while `/dev/sdb` through `/dev/sdf`
 remained present and had `ro=1` on this pre-#484 image. Backlight value 0 was
 accepted and restored to 511 (maximum 1023). Framebuffer blanking changed
-DRM `dpms` from `On` to `Off` and back to `On`. The FTS5 touch input still needs
-a test on the current kernel. The panel log included a missing DSI `vdda`
+DRM `dpms` from `On` to `Off` and back to `On`. FTS5 contact, coordinate
+changes and release were later captured on 2026-11-12; see above. Hyprland
+delivery remains untested. The panel log included a missing DSI `vdda`
 supply (dummy regulator) and missing `a630_sqe.fw`; the display initialized,
 but GPU rendering was not tested. The RAM image had no Arch root, and the probe
 did not write UFS. The installed-system backup checksums were verified before
@@ -203,9 +244,9 @@ procedure and supported single-slot writer are still required before a flash.
   fts,reset-gpio = <&tlmm 32 ...>; fts,default-fw-name = "st_fts_e1.ftb"; }`, with
   `fts,tp-vendor = <0x48>`. The running kernel's input device is `N: Name="fts"`.
   An `atmel,mxt-ts@4a` node exists as the alternate vendor and is not the active one.
-  **Open:** mainline's ST driver is `st,stmfts` (`drivers/input/touchscreen/stmfts.c`),
-  a different driver from Xiaomi's downstream `st_fts`; the current FTS5 driver
-  has not been tested with Dipper's DTS node. No sibling board helps —
+  Mainline's ST driver is `st,stmfts` (`drivers/input/touchscreen/stmfts.c`),
+  a different driver from Xiaomi's downstream `st_fts`; tested on Dipper
+  2026-11-12, see above. No sibling board helps —
   polaris uses `syna,rmi4-i2c@20`, beryllium a FocalTech/Novatek part.
 - **Audio** `sdm845-tavil-snd-card` (WCD9340). **Fingerprint** Goodix, capacitive
   (`fingerprint_goodix`, `uinput-goodix`); no mainline driver, out of scope.
@@ -219,11 +260,11 @@ procedure and supported single-slot writer are still required before a flash.
 the image used kernel release
 `7.3.0-rc6-omamobile-push1-g2a318a96ae9d-dirty` with its matching DTB: UFS up
 (all six LUNs, ext4 mounts), USB NCM gadget, dropbear, gpio-keys, 8 CPUs and
-5.7 GB RAM. This records the historical first-light tree; kernel PRs [#218](https://github.com/derekross/linux-omarchy-mobile/pull/218),
-[#219](https://github.com/derekross/linux-omarchy-mobile/pull/219) and
-[#220](https://github.com/derekross/linux-omarchy-mobile/pull/220) are later
+5.7 GB RAM. This records the historical first-light tree; kernel PRs [#218](https://github.com/derekross/linux-omamobile/pull/218),
+[#219](https://github.com/derekross/linux-omamobile/pull/219) and
+[#220](https://github.com/derekross/linux-omamobile/pull/220) are later
 successor changes and are not the code tested in that boot; FTS5 PR #219 is now
-merged into linux-omarchy-mobile. The diagnostic image's guard allowed `userdata` and `logdump`
+merged into linux-omamobile. The diagnostic image's guard allowed `userdata` and `logdump`
 writes. A temporary init widened the allowlist to include `logdump` and used
 `dd` to copy the kernel log there every two seconds during the 2026-10-29
 diagnostic boot. The 2026-11-09 read-only check was on this dirty October
@@ -289,7 +330,9 @@ light was built in (`=y`).
 ### Touch: first failed probe (historical)
 
 The original FTS4-only driver bound and timed out. These observations describe that
-kernel revision; they are not results from the current FTS5 driver:
+kernel revision; they are not results from the current FTS5 driver. The current
+driver and Dipper node were tested on 2026-11-12; see the corrected FTS5 RAM image
+above:
 
 - `i2c-14` and `i2c-5` come up; the touch device **exists as `14-0049`**, so the bus and
   address in the DTS are right.
@@ -314,8 +357,9 @@ At the time, it was unknown whether GENI/GPI or the FTS5 protocol caused the tim
 The live controller is FTS5. A separate historical RAM boot on 2026-10-30, using
 the unpublished kernel release above, registered `stmfts` and a physical tap
 produced `ABS_MT_POSITION_X`. That observation is not a test of the current
-kernel PRs. The public successor series and its binding are in
-[kernel PR #219](https://github.com/derekross/linux-omarchy-mobile/pull/219).
+kernel PRs. The current driver and Dipper node were tested on 2026-11-12; see
+the corrected FTS5 RAM image above. The public successor series and its binding are in
+[kernel PR #219](https://github.com/derekross/linux-omamobile/pull/219).
 The upstream v8 cover letter states it was tested on Xiaomi Mi 8:
 [FTS5 v8 cover letter](https://lists.openwall.net/linux-kernel/2026/09/25/2211),
 [FTS5 driver patch](https://lists.openwall.net/linux-kernel/2026/09/25/2213),

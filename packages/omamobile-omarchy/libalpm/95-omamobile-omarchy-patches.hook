@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Re-apply Omarchy Mobile's Omarchy patches after every transaction that
+# Re-apply Omamobile's Omarchy patches after every transaction that
 # installs or upgrades Omarchy (which overwrites the patched files) or this
 # package (a new series). All or nothing: on a failure Omarchy's own files
 # stay in place, the log says why and the phone's user gets a notification.
@@ -12,6 +12,6 @@ Target = omarchy-dev
 Target = omamobile-omarchy
 
 [Action]
-Description = Applying Omarchy Mobile's patches to Omarchy...
+Description = Applying Omamobile's patches to Omarchy...
 When = PostTransaction
 Exec = /usr/bin/omamobile-omarchy-patches apply --hook

@@ -280,7 +280,7 @@ case "$stage" in
       mark "about to load aoc.bin through aoc_core"
       phone "echo aoc.bin > $node/firmware; echo fw-exit=\$?;
         for i in \$(seq 75); do grep -q '^Services : [1-9]' $node/services 2>/dev/null && break; sleep 0.2; done;
-        head -1 $node/services; cat $node/revision 2>/dev/null | head -1; ls /dev/acd-* 2>/dev/null | wc -l;
+        head -1 $node/services; cat $node/revision 2>/dev/null | sed -n 1p; ls /dev/acd-* 2>/dev/null | wc -l;
         cat /proc/asound/cards" | tee -a "$log" || result=fail
     fi
     ;;

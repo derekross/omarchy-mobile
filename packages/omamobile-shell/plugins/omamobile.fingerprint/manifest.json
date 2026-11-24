@@ -3,7 +3,7 @@
   "id": "omamobile.fingerprint",
   "name": "Fingerprint",
   "version": "0.1.0",
-  "author": "Omarchy Mobile",
+  "author": "Omamobile",
   "license": "MIT",
   "description": "The under-display fingerprint sensor, like Android: a faint target over the sensor while a fingerprint is checked, no desktop gestures meanwhile, and an on-screen enrollment flow through fprintd.",
   "kinds": [

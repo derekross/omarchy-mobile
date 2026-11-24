@@ -140,8 +140,8 @@ rt=/run/user/$uid
 
 # Hyprland's environment, for grim, wf-recorder, hyprctl and omarchy-shell.
 session_env=()
-hpid=$(pgrep -u "$uid" -x Hyprland </dev/null | head -1)
-[[ -n $hpid ]] || hpid=$(pgrep -u "$uid" -x hyprland </dev/null | head -1)
+hpid=$(pgrep -u "$uid" -x Hyprland </dev/null | sed -n 1p)
+[[ -n $hpid ]] || hpid=$(pgrep -u "$uid" -x hyprland </dev/null | sed -n 1p)
 if [[ -n $hpid && -r /proc/$hpid/environ ]]; then
   while IFS= read -r -d '' kv; do
     case $kv in

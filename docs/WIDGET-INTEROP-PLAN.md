@@ -1,8 +1,8 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Widget interop plan: OWL widgets on the Omarchy Mobile home screen
+# Widget interop plan: OWL widgets on the Omamobile home screen
 
 **Status (2026-10-14):** merged into main after the owner's review on the phone: P1-P5, P8, P9 (the 47 built-ins are the OWL originals; layouts migrate) and P11, parts of P6-P7; the user's own OWL folders and the Store tab sit behind `{"owlWidgets": true}` in `~/.config/omamobile/features.json`. Review package and runbook in [owl-review/](owl-review/README.md). Left: phone measurements, the first haptic and torch tests, OWL Input with squeekboard, P7 and P10. Originally design only. Written 2026-10-13 and revised the same day: we write our own OWL runtime instead of vendoring Simon Schubert's. Implementation starts after the installer and reinstall work ([RELEASES](RELEASES.md) §6).
-**Goal:** one widget catalogue for Omalauncher and Omarchy Mobile. A widget written for one runs on the other, and a person who uses both phones has one set of widgets.
+**Goal:** one widget catalogue for Omalauncher and Omamobile. A widget written for one runs on the other, and a person who uses both phones has one set of widgets.
 **Recommendation in one line:** write **our own OWL runtime for Quickshell** from the language specification, held to Simon's runtime by a conformance suite that runs on the laptop (§7). Make OWL the default format for new and AI-made widgets, and keep QML widgets for power users. Replace our 47 hand ports with the upstream `.owl` files as our runtime passes conformance for each one.
 
 Sources read for this plan (all MIT, Copyright (c) 2026 Simon Schubert and contributors):
@@ -413,7 +413,7 @@ L4 and L5 need a Qt scene graph without a compositor:
 
 ### 8.1 Pin and compatibility matrix
 
-* We **pin a language level** (initially 7) and a pair of reference commits (omarchy-widgets and omalauncher). The runtime exposes `LEVEL = 7`. A widget that declares more is refused with "needs owl N; update Omarchy Mobile".
+* We **pin a language level** (initially 7) and a pair of reference commits (omarchy-widgets and omalauncher). The runtime exposes `LEVEL = 7`. A widget that declares more is refused with "needs owl N; update Omamobile".
 * `owl/COMPATIBILITY.md` is the matrix, one row per feature: the level that introduced it, our status (supported, partial, not yet, never on Linux), the phase that delivers it, the conformance tests that cover it, and the `SPEC-NOTES` decisions that touch it. The **store coverage** (how many of the 105 widgets pass L1-L4) is the headline number.
 
 ### 8.2 Following new levels
@@ -421,7 +421,7 @@ L4 and L5 need a Qt scene graph without a compositor:
 1. **Watch** both repositories by hand (a laptop task, about monthly, or when Simon announces a level): diff the guide since the last pin and list the new features and any changed wording.
 2. **Write tests first**: guide examples and edge cases for each new feature, then refresh the fixtures from the new reference.
 3. **Implement, then run conformance**, and bump `LEVEL` only when the new features pass and nothing older regressed.
-4. **Ship** in an `omamobile-shell` release. Until then, store widgets that need the new level appear as "needs a newer Omarchy Mobile" in the Store tab.
+4. **Ship** in an `omamobile-shell` release. Until then, store widgets that need the new level appear as "needs a newer Omamobile" in the Store tab.
 5. **Ambiguities** go to Simon as an issue on the spec (below), not just into our notes.
 
 Expect a new level every few weeks while the language is young (it went from 1 to 7 within weeks). Each one costs us roughly 1-3 days.
@@ -430,7 +430,7 @@ Expect a new level every few weeks while the language is young (it went from 1 t
 
 * Move the full guide (the launcher's `widgets/README.md`) into the store repository as `docs/LANGUAGE.md`, **versioned per level**, with a changelog that names each level's features and promises that a level never changes meaning once released.
 * Publish the conformance fixtures in a runtime-neutral form (a widget, its source data, the expected render-tree JSON), so every runtime (Compose, his Quickshell runtime, ours) tests against the same files. We'd contribute ours.
-* **Shared ownership**: spec changes as pull requests to that file, with both runtimes' maintainers reviewing; Omarchy Mobile-specific needs (phone sizes, location, settings, time format, touch targets) proposed there instead of as private extensions.
+* **Shared ownership**: spec changes as pull requests to that file, with both runtimes' maintainers reviewing; Omamobile-specific needs (phone sizes, location, settings, time format, touch targets) proposed there instead of as private extensions.
 
 ---
 

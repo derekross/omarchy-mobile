@@ -27,6 +27,8 @@ if [[ $1 == list-keys && $2 == org.gnome.nautilus.preferences ]]; then
 fi'
 # systemctl: logs calls; fails while $HOME/systemctl-fails exists (no user manager)
 fake systemctl 'echo "systemctl $*" >>"$HOME/calls"; [[ ! -e $HOME/systemctl-fails ]]'
+ln -s "$pkg/bin/omamobile-browser-setup" "$F/omamobile-browser-setup"
+fake hyprctl 'exit 1'
 fake chromium 'echo "Chromium 153.0.0.0"'
 fake omamobile-keyboard-theme 'echo "omamobile-keyboard-theme $*" >>"$HOME/calls"'
 for f in monitors looknfeel autostart; do echo "-- $f" >"$H/.config/hypr/$f.lua"; done
@@ -75,6 +77,7 @@ run() {
     OMAMOBILE_VOICE_MODELS="${RUN_VOICE_MODELS:-$t/no-voice-models}" OMAMOBILE_VOXTYPE="${RUN_VOXTYPE:-voxtype}" \
     OMARCHY_PATH="${RUN_OMARCHY_PATH:-$t/omarchy}" \
     OMAMOBILE_USER_UNITS="${RUN_USER_UNITS:-$t/no-user-units}" \
+    OMAMOBILE_AUTO_SLEEP_DEFAULT="${RUN_AUTO_SLEEP:-$t/no-auto-sleep-default}" \
     bash bin/omamobile-setup-user "$@" >"$t/out" 2>&1 || { cat "$t/out"; fail "omamobile-setup-user runs"; }
 }
 run
@@ -195,12 +198,19 @@ grep -cx 'pad=6x6' "$foot" >/dev/null && ! grep -c '^pad=14x14' "$foot" >/dev/nu
 grep -cx 'multiplier=3.0' "$foot" >/dev/null || fail "foot's scrollback multiplier is 3"
 [[ $(grep -c '^\[touch\]$' "$foot") == 1 && $(grep -cx 'long-press-delay=300' "$foot") == 1 ]] || fail "foot's [touch] long press is 300 ms, once"
 grep -cx 'style=block' "$foot" >/dev/null || fail "the rest of foot.ini is kept"
+[[ $(grep -cx 'selection-target=both' "$foot") == 1 ]] || fail "foot's selection goes to the clipboard too, once"
+[[ $(sed -n '/^\[main\]$/{n;p;q}' "$foot") == selection-target=both ]] || fail "selection-target is in [main]"
 # Chromium's input method flags (TOUCH-PLAN 3.1), once each
 flags=$H/.config/chromium-flags.conf
 for flag in --enable-wayland-ime --wayland-text-input-version=3 --force-device-scale-factor=0.83; do
   [[ $(grep -cx -- "$flag" "$flags") == 1 ]] || fail "chromium-flags.conf has $flag once"
 done
-grep -c '^"--user-agent=.*Mobile Safari/537.36"$' "$flags" >/dev/null || fail "the mobile user agent stays quoted on its line"
+python3 - "$flags" <<'PYUA' || fail "the mobile user agent parses as one argument"
+import shlex, sys
+flags = shlex.split(open(sys.argv[1]).read(), comments=True)
+ua = [f for f in flags if f.startswith("--user-agent=")]
+assert len(ua) == 1 and ua[0].endswith("Chrome/153.0.0.0 Mobile Safari/537.36"), ua
+PYUA
 # Grok Bot's flags: the 7 Pro's factor, once, after two logins
 gflags=$H/.config/grok-bot-flags.conf
 [[ $(grep -cx -- --force-device-scale-factor=0.83 "$gflags") == 1 ]] || fail "grok-bot-flags.conf has the 7 Pro's factor once"
@@ -222,7 +232,35 @@ printf '[main]\npad=10x10\n\n[scrollback]\nmultiplier=5.0\n\n[touch]\nlong-press
 cp "$h/.config/foot/foot.ini" "$t/custom-foot.ini"
 RUN_HOME=$h run
 grep -cx 'local omarchy_gdk_scale = 2' "$h/.config/hypr/monitors.lua" >/dev/null || fail "GDK_SCALE stays with a user's own monitor scale"
-cmp -s "$h/.config/foot/foot.ini" "$t/custom-foot.ini" || fail "a user's own foot values stay theirs"
+grep -v '^selection-target=both$' "$h/.config/foot/foot.ini" | cmp -s - "$t/custom-foot.ini" || fail "a user's own foot values stay theirs"
+# selection-target: an existing one (spaces allowed) is kept, a file without [main] gets one on top
+for c in 'selection-target = primary' '  selection-target=primary'; do
+  hs=$t/home-sel; rm -rf "$hs"; mkdir -p "$hs/.config/hypr" "$hs/.config/omarchy" "$hs/.config/foot"
+  cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hs/.config/hypr/"; printf '[main]\n%s\n' "$c" >"$hs/.config/foot/foot.ini"
+  RUN_HOME=$hs run
+  [[ $(grep -c 'selection-target' "$hs/.config/foot/foot.ini") == 1 ]] || fail "an existing selection-target ($c) is kept alone"
+done
+hs=$t/home-sel; rm -rf "$hs"; mkdir -p "$hs/.config/hypr" "$hs/.config/omarchy" "$hs/.config/foot"
+cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hs/.config/hypr/"; printf 'font=x:size=9\n\n[colors]\nalpha=1\n' >"$hs/.config/foot/foot.ini"
+RUN_HOME=$hs run
+[[ $(head -2 "$hs/.config/foot/foot.ini") == $'[main]\nselection-target=both' ]] && grep -cx 'font=x:size=9' "$hs/.config/foot/foot.ini" >/dev/null || fail "a foot.ini without [main] gets one on top and keeps its keys"
+
+# A foot.ini in a read-only directory (sed -i and mktemp can't make their temp file), with
+# and without [main]: nothing is written, the marker is taken back and the login goes on
+if [[ $(id -u) != 0 ]]; then
+  for c in '[main]\nfont=x:size=9\n' 'font=x:size=9\n'; do
+    hs=$t/home-sel; chmod -R u+w "$hs" 2>/dev/null || true; rm -rf "$hs"
+    mkdir -p "$hs/.config/hypr" "$hs/.config/omarchy" "$hs/.config/foot" "$hs/.local/state/omarchy/done"
+    cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hs/.config/hypr/"; printf "$c" >"$hs/.config/foot/foot.ini"
+    : >"$hs/.local/state/omarchy/done/omamobile-screensaver"; : >"$hs/.local/state/omarchy/done/omamobile-foot-touch"
+    cp "$hs/.config/foot/foot.ini" "$t/ro-foot.ini"; chmod a-w "$hs/.config/foot"
+    RUN_HOME=$hs run || fail "a read-only foot directory doesn't stop the login ($c)"
+    chmod u+w "$hs/.config/foot"
+    cmp -s "$hs/.config/foot/foot.ini" "$t/ro-foot.ini" || fail "a failed foot write leaves foot.ini as it was ($c)"
+    [[ ! -e $hs/.local/state/omarchy/done/omamobile-foot-selection ]] || fail "a failed foot write leaves the step for the next login ($c)"
+    [[ -z $(find "$hs/.config/foot" -name '.foot.ini.*') ]] || fail "a failed foot write leaves no temp file ($c)"
+  done
+fi
 [[ -e $h/.local/state/omarchy/done/omamobile-foot-touch ]] || fail "the foot step runs once foot.ini is there"
 [[ $(grep -cx -- --enable-wayland-ime "$h/.config/chromium-flags.conf") == 1 ]] || fail "a flag the user has isn't added twice"
 grep -cx -- --wayland-text-input-version=3 "$h/.config/chromium-flags.conf" >/dev/null || fail "the missing flag is added"
@@ -244,13 +282,29 @@ grep -cx -- --force-device-scale-factor=0.70 "$h9/.config/grok-bot-flags.conf" >
 pass "the Pixel 9a's scale: 8 / 3, GDK_SCALE left at 2, Grok Bot at 0.70"
 
 # Grok Bot's factor follows the panel: 0.62 for a 1080 px panel at scale 3
-# (360 px), and 0.83 when no panel mode can be read
-for c in 1080x2400:0.62 none:0.83; do
+# (360 px); no geometry defers only scale, keeping Chromium's other defaults
+for c in 1080x2400:0.62; do
   hg=$t/grok-${c%%:*}; mkdir -p "$hg/.config/hypr" "$hg/.config/omarchy/extensions"
   cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hg/.config/hypr/"
   RUN_HOME=$hg RUN_DRM=$t/drm-${c%%:*} run
   grep -cx -- "--force-device-scale-factor=${c#*:}" "$hg/.config/grok-bot-flags.conf" >/dev/null \
     || fail "Grok Bot's factor with panel ${c%%:*} is ${c#*:}"
+done
+hg=$t/grok-none; mkdir -p "$hg/.config/hypr" "$hg/.config/omarchy/extensions"
+cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hg/.config/hypr/"
+RUN_HOME=$hg RUN_DRM=$t/drm-none run
+[[ ! -e $hg/.config/grok-bot-flags.conf ]] || fail "no panel defers Grok's scale"
+python3 - "$hg/.config/chromium-flags.conf" <<'PYDEFAULTS'
+import shlex, sys
+flags = shlex.split(open(sys.argv[1]).read(), comments=True)
+assert '--no-first-run' in flags and '--enable-wayland-ime' in flags
+assert '--wayland-text-input-version=3' in flags
+assert len([f for f in flags if f.startswith('--user-agent=')]) == 1
+assert not any(f.startswith('--force-device-scale-factor=') for f in flags)
+PYDEFAULTS
+RUN_HOME=$hg RUN_DRM=$t/drm-1080x2400 run
+for app in grok-bot chromium; do
+  grep -cx -- --force-device-scale-factor=0.62 "$hg/.config/$app-flags.conf" >/dev/null || fail "$app retries with geometry"
 done
 pass "Grok Bot's scale factor gives about 578 px of layout width on any panel"
 
@@ -373,7 +427,7 @@ pass "voice out of the box: Omarchy's config and the shipped base.en once, the d
 # The keyboard: every layout the package carries linked (the terminal's, and
 # each language's from squeekboard/generate), the theme written at every
 # login, its gtk.css import and theme-set hook added once (H ran three times).
-for layout in terminal/us.yaml terminal/us_wide.yaml us.yaml us_wide.yaml de.yaml fr_wide.yaml url/us.yaml terminal/de.yaml; do
+for layout in terminal/us.yaml terminal/us_wide.yaml terminal/gr.yaml terminal/gr_wide.yaml us.yaml us_wide.yaml de.yaml fr_wide.yaml url/us.yaml terminal/de.yaml; do
   [[ $(readlink "$H/.local/share/squeekboard/keyboards/$layout") == "/usr/share/omamobile/squeekboard/keyboards/$layout" ]] \
     || fail "the $layout layout is linked"
 done
@@ -484,3 +538,27 @@ for gliff in no yes; do
 done
 rm -f "$F/gliff-server"
 pass "Omarchy's remote session is off on every phone, once, with or without gliff, and a user can turn it back on"
+
+# Auto-sleep: on once where the device package says suspend is verified;
+# off by default elsewhere; a user who turns it off keeps it off.
+ha=$t/auto-sleep; mkdir -p "$ha/.config/hypr" "$ha/.local/state/omarchy/done"
+cp "$H"/.config/hypr/*.lua "$ha/.config/hypr/"
+touch "$ha/.local/state/omarchy/done/omamobile-shell-profile"
+RUN_HOME=$ha run
+[[ ! -e $ha/.local/state/omarchy/toggles/omamobile-sleep ]] || fail "no device flag: auto-sleep stays off"
+touch "$t/auto-sleep-default"
+RUN_HOME=$ha RUN_AUTO_SLEEP=$t/auto-sleep-default run
+[[ -e $ha/.local/state/omarchy/toggles/omamobile-sleep ]] || fail "the device flag turns auto-sleep on"
+rm "$ha/.local/state/omarchy/toggles/omamobile-sleep"
+RUN_HOME=$ha RUN_AUTO_SLEEP=$t/auto-sleep-default run
+[[ ! -e $ha/.local/state/omarchy/toggles/omamobile-sleep ]] || fail "a user who turns auto-sleep off keeps it off"
+pass "auto-sleep: on once where the device says suspend is verified, a user's off kept"
+
+# Browser setup is optional: a broken helper must not skip later login steps.
+rm "$F/omamobile-browser-setup"
+fake omamobile-browser-setup 'exit 1'
+rm -f "$H/.local/state/omarchy/done/omamobile-menu-hide-unlock"
+run
+grep -q 'browser setup failed; continuing' "$t/out" || fail "browser helper failure is reported"
+[[ -f $H/.local/state/omarchy/done/omamobile-menu-hide-unlock ]] || fail "user setup continues after browser helper failure"
+pass "browser helper failure does not stop later user setup"

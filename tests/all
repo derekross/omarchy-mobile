@@ -7,10 +7,12 @@
 # against a stand-in phone tree,
 # tools/phone-install-package against a stand-in phone, the initramfs's
 # first-boot growth, the bring-up overlays, the simplefb trigger, the init's per-board steps, the storage guard's packed
-# allowlist and the USB product string, no pipefail script piping into grep -q,
+# allowlist and the USB product string, no pipefail script piping into grep -q
+# or head,
 # bin/omamobile's boot-image layouts
 # (and omamobile-boot-update building the same bytes on the phone)
-# and flash against a fake fastboot, omamobile-firstboot's own tests, and the
+# and flash against a fake fastboot, omamobile-firstboot's own tests, the
+# root image's placeholders for the answers in a small real ext4 image, and the
 # smoke test of the newest root image in out/ if there is one, the felix,
 # lynx and panther device packages' own tests, tools/alarm-wake-test's
 # check, and a contributor's local builds (tools/local-key-init,
@@ -19,21 +21,24 @@
 # (tools/lib/signing.sh, build-packages --resign, repo-publish), the pinned
 # upstream packages (rootfs/packages.pinned),
 # tools/fetch-toolchain against local fixtures, tools/release-upload against
-# a scratch server, tools/extract-camera-data's adrp decoding,
+# a scratch server, tools/build-host-sync against stand-ins for the build
+# host, tools/extract-camera-data's adrp decoding,
 # tools/phone-smoke's dmesg error classification, the OWL conformance
 # report's differences on the host, bin/lineage-ref sync's branch handling
 # against stand-ins for docker and repo, tools/repo-publish --from-main's
 # copy of the prebuilt binaries into a fixture's publish tree,
 # tools/repo-publish's staging, tools/extract-vendor-firmware's output
-# generations (made-up files, no factory image), the callers of
+# generations (made-up files, no factory image), the two chroot
+# extractors' message when build.prop can't be read, the callers of
 # tools/alpine-fetch.py stopping when it fails, and its dependency
 # resolution against synthetic indexes, and the tools' --help from their
-# header comments (tools/lib/usage.sh).
+# header comments (tools/lib/usage.sh), and the descriptor's INSTALL_SLOT
+# and INSTALL_ACTIVE_SLOTS read alike by every reader.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 for f in tools/install-guided tools/install-phone tools/phone-provision tools/nv-backup tools/build-rootfs tools/build-packages tools/make-bundle \
-         tools/local-key-init tools/fetch-published tools/fetch-toolchain tools/repo-publish tools/repo-build tools/release tools/release-upload tools/server/releases-nginx.sh \
-         tools/lib/alarm.sh tools/lib/alarm-setup tools/lib/signing.sh tools/lib/bundle-tar.sh tools/lib/usage.sh rootfs/build-inside rootfs/resolve.sh tests/*; do
+         tools/local-key-init tools/fetch-published tools/fetch-toolchain tools/repo-publish tools/repo-build tools/release tools/build-host-sync tools/release-upload tools/server/releases-nginx.sh \
+         tools/lib/alarm.sh tools/lib/alarm-deps.sh tools/lib/alarm-setup tools/lib/signing.sh tools/lib/bundle-tar.sh tools/lib/usage.sh rootfs/build-inside rootfs/resolve.sh rootfs/first-boot.sh tests/*; do
   [[ -f $f ]] || continue   # tests/owl is the OWL conformance suite's folder
   [[ $f == *.py ]] && continue
   bash -n "$f" || { echo "not ok - $f parses" >&2; exit 1; }
@@ -49,7 +54,7 @@ python3 tests/boot-arch-label.py
 python3 tests/persistent-root-boot.py
 python3 tests/initramfs-root-policy.py
 python3 tests/bt-uart-gpio.py
-for t in tests/pr-check tests/kernel-pr-check tests/phone-smoke tests/alarm-wake-test tests/install-phone tests/build-rootfs tests/rootfs-resolve tests/phone-provision tests/nv-backup tests/initramfs-grow tests/images-layout tests/boot-update-parity tests/stage-boot-files tests/build-packages-host-tools tests/initramfs-reproducible tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/grep-q-pipes tests/boot-method tests/modules-push tests/make-bundle-keys tests/make-bundle tests/release-signing tests/pinned-packages tests/flame-probe tests/dipper-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all packages/omamobile-device-lynx/test/all packages/omamobile-device-panther/test/all tests/local-builds tests/phone-install-package tests/publish-kernel tests/fetch-toolchain tests/release-upload tests/extract-camera-data tests/release tests/lineage-ref tests/repo-publish tests/repo-publish-stage tests/extract-vendor-firmware tests/alpine-fetch-callers tests/alpine-fetch tests/tools-help tests/install-phone-initramfs; do
+for t in tests/pr-check tests/kernel-pr-check tests/phone-smoke tests/alarm-wake-test tests/install-phone tests/build-rootfs tests/rootfs-placeholders tests/rootfs-resolve tests/phone-provision tests/nv-backup tests/initramfs-grow tests/images-layout tests/boot-update-parity tests/stage-boot-files tests/build-packages-host-tools tests/initramfs-reproducible tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/grep-q-pipes tests/boot-method tests/modules-push tests/make-bundle-keys tests/make-bundle tests/release-signing tests/pinned-packages tests/flame-probe tests/dipper-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all packages/omamobile-device-lynx/test/all packages/omamobile-device-panther/test/all tests/local-builds tests/phone-install-package tests/publish-kernel tests/fetch-toolchain tests/release-upload tests/extract-camera-data tests/release tests/build-host-sync tests/lineage-ref tests/repo-publish tests/repo-publish-stage tests/extract-vendor-firmware tests/alpine-fetch-callers tests/alpine-fetch tests/tools-help tests/install-phone-initramfs tests/install-slot-descriptor; do
   echo "# $t"
   "$t"
 done
@@ -72,6 +77,8 @@ fi
 python3 tests/bluejay-root-ready.py
 echo "# tests/phone-ssh"
 tests/phone-ssh
+echo "# tests/ncm-transfer"
+tests/ncm-transfer
 echo "# tests/module-load-once"
 tests/module-load-once
 # One suite per line from here on, so two pull requests that each add one
@@ -80,9 +87,27 @@ echo "# tests/power-ab/samples.py"
 python3 tests/power-ab/samples.py
 echo "# tests/review-lessons"
 tests/review-lessons
+echo "# tests/head-pipes"   # no pipefail script pipes into head
+tests/head-pipes
 echo "# tests/factory-index"   # the build index of Google's factory images, against a made-up zip
 tests/factory-index
 echo "# tests/phone-demo-notes"
 tests/phone-demo-notes
 echo "# tests/install-guided"   # the guided install, against stand-ins for the phone and this computer's network
 tests/install-guided
+echo "# tests/chroot-extractors"
+tests/chroot-extractors
+echo "# tests/repo-push"
+tests/repo-push
+echo "# tests/rootfs-smoke-link"   # the smoke test's install-link checks, on small made-up images
+tests/rootfs-smoke-link
+echo "# tests/build-packages-deps"   # a package's dependencies into the build container, behind a library change too
+tests/build-packages-deps
+echo "# tests/build-packages-cache"   # a forced same-version rebuild drops the stale cached package
+tests/build-packages-cache
+echo "# tests/mark-slot-b"
+tests/mark-slot-b
+echo "# tests/fetch-ndk"   # the pinned Android NDK's fetch, against a local archive and stand-ins
+tests/fetch-ndk
+echo "# tests/rootfs-first-boot"
+tests/rootfs-first-boot

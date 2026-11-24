@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile (on PATH only during omamobile-update): orphans are listed,
+# Omamobile (on PATH only during omamobile-update): orphans are listed,
 # never removed. Omarchy asks with gum on a terminal, which nobody answers
 # from the phone's update sheet; removal stays a decision for a human.
 mapfile -t orphans < <(pacman -Qtdq 2>/dev/null)

@@ -3,18 +3,196 @@
 
 Findings from real hardware, newest first. Tracking issue: #36.
 
+## 2026-11-14: later old-kernel Wi-Fi restoration receipts reconciled
+
+Private receipts saved after the earlier report record guarded startup after
+the owner's reboot on `7.3.0-rc6-omamobile-lynx-msi-20261113+`: Trusty/AoC,
+82 services with zero restarts, PCIe/MSI, one firmware load and passive scan
+(21 BSS entries). An associated activation stopped when its immediate IPv4
+check raced DHCP; rollback/disarm succeeded. A revised activation with a
+bounded DHCP-readiness wait then passed DHCP, gateway pings, Wi-Fi-bound and
+ordinary HTTPS 200 with TLS verification, and fresh USB SSH. That revised
+activation did not reload firmware/modules or reboot. All six protected
+hashes and required smoke checks passed; no stage watchdog or network rollback
+timer remained active at close.
+
+This adds a second boot's historical success and preserves its initial
+failure. It does not qualify a counted cold-start/reconnect/endurance series,
+prove current connectivity, or establish the MSI candidate as a stable fix.
+Startup remained manual after reboot. The separate signed integration at
+`dfdf8ce251c89d3cd05a6325c61ed7ea1c61a741` booted on November 15 with AoC
+and WLAN held off. Its Wi-Fi paths still need their own qualification. No hardware action was performed
+to reconcile these receipts. Details and limits: [AOC-WIFI-PLAN.md](AOC-WIFI-PLAN.md).
+
+The November 13 entry below describes the earlier report's evidence cutoff;
+its then-pending post-reboot startup is superseded by the later receipts above.
+
+## 2026-11-13: AoC-first Wi-Fi scan and one guarded traffic test
+
+- **AoC-first ordering reproduced on this lynx.** Trusty IPC and AoC came
+  up before WLAN power, followed by PCIe/MSI and stock ath11k firmware.
+  AoC reported 82 services with zero restarts. The first firmware/scan
+  build was `7.3.0-rc6-omamobile-lynx-wifi-aoc-20261113+`.
+- **An earlier connection failed.** A readiness-corrected attempt stalled
+  the WMI/TX queues and lost USB. The bounded guard recovered the phone;
+  the protected hashes and required smoke checks passed afterwards.
+- **One connection and traffic test passed** on
+  `7.3.0-rc6-omamobile-lynx-msi-20261113+`: passive scan (24 BSS entries),
+  association, DHCPv4, three gateway pings and Wi-Fi-bound HTTPS (HTTP 200,
+  577 bytes, TLS verified). Fresh SSH still reached the phone over USB.
+  No new WMI/TX timeout, oops or panic appeared in that connection capture.
+- **Qualification remains narrow.** This is one successful run with a local
+  MSI edge-rearm candidate, not proof of the earlier failure's cause or a
+  stable fix. Reconnect, endurance, suspend/resume, Bluetooth coexistence
+  and unattended startup were not tested. The kernel changes are not
+  published. Drivers remain blacklisted at boot; after the owner's later
+  reboot, home/touch work and Wi-Fi startup is still pending.
+- **Safety checks passed:** six protected hashes matched, storage guards
+  held, no units failed and all six required smoke checks passed on the
+  qualified boot. Raw captures, calibration hashes and firmware stay
+  private. No phone operation was needed to prepare this documentation.
+
+Build provenance, the chronological results and remaining gates are in
+[AOC-WIFI-PLAN.md](AOC-WIFI-PLAN.md). The older ROM-stall investigation and
+its stop conditions remain in [WIFI-PLAN.md](WIFI-PLAN.md).
+
+## devinfo 3.11 read-only evidence (2026-11-06)
+
+The Android 15 unit reports `devinfo` version 3.11. With slot B active,
+not marked successful, the eight bytes at `0x30-0x37` were:
+
+```
+03 00 00 00 00 0c 00 00
+```
+
+The same bytes and the same fastboot state were read after one unmarked
+boot through the bootloader:
+
+```
+slot-successful:b   no
+slot-unbootable:b   no
+slot-retry-count:b  1
+current-slot:       b
+```
+
+`devinfo` is read-only (`blockdev --getro` = 1) on this unit, and no
+write was forced while 3.11 is not in the merged table. A marked-state
+row still needs either the maintainer's approval to write 3.11 or a
+bootloader action that marks the slot itself.
+
+Both slots on this unit carry bootloader `lynx-15.2`.
+
+These bytes and the fastboot lines above were taken at different moments
+(Linux after a boot; `getvar` from the bootloader in a separate cycle), so
+this is **provisional**, not a same-state row: the retry byte reads 0 where
+`getvar` reports 1, and slot A's flags differ from the 3.15 table. A
+same-moment table still has to be captured.
+
+
+Stock Android on 11-06 was a deliberate restore, not a fallback: the
+factory images were flashed to slot B and Android booted from it. Stock
+rewrites `efs`, `persist` and `modem_userdata`, so a fresh read-only
+backup is required before any radio work.
+
+A same-moment row on 2026-11-13: slot B after a boot read
+`03 00 00 00 01 0c 00 00` at `0x30-0x37`, then the bootloader was
+entered with the buttons and read before anything booted:
+
+```
+slot-successful:b   no
+slot-unbootable:b   no
+slot-retry-count:b  1
+current-slot:       b
+```
+
+The retry byte (`0x34`) is 1 in both reads, and `0x35` is `0x0c`.
+
+## 2026-10-30: published kernel on an Android 15 unit; devinfo 3.11
+
+- **The published `omamobile` kernel brings up lynx touch on this unit.** With
+  the merged GT9895 node and the S2MPG12 LDO25M/LDO26M regulators, the
+  touchscreen binds as `Goodix Berlin Capacitive TouchScreen` (`event0`) and
+  Hyprland uses it. Kernel release
+  `7.3.0-rc6-omamobile-push1-gfbbcac19d8ea`.
+- **This unit's bootloader reports devinfo 3.11, not 3.15.** It is still on the
+  Android 15 factory build (`BP1A.250505.005.B1`, bootloader `lynx-15.2`).
+  `omamobile-device-lynx` 0.2.0 only accepted 3.15, so
+  `omamobile-boot-success` refused to write; whether the slot was later
+  marked by hand is not recorded.
+- **The A/B bytes are readable at the same offsets in 3.11 and 3.15.** A
+  read-only `omamobile-bootctl dump` decoded slot a and b on 3.11; layout
+  equivalence is not yet confirmed (see the provisional table below).
+- **The earlier write is not recorded.** The `0x04` -> `0x06` figure came
+  from the 3.15 test and table, not from a phone reading. 0.2.0 refuses a
+  3.11 header, and the binary that wrote slot B on 10-30 is not recorded;
+  no read-only `devinfo` backup was taken before it.
+- **Fix:** the shared source has the `#ifdef` for 3.11 and the 7 Pro's
+  3.15 condition. lynx's build does not pass the define yet, so 3.11
+  writes stay off until the table is confirmed; the package test builds
+  its own copy with the define and rejects an unverified 3.14.
+## 2026-10-29: Bluetooth
+
+The WCN6855 BT core works on the APM USI1 UART (`serial@181b0000`, ttySAC18
+in Google's kernel), the shape of cheetah's BCM4389. Kernel side, merged as
+[linux-omamobile#98](https://github.com/derekross/linux-omamobile/pull/98):
+`cmu_apm`, `usi_apm1`, `serial_apm1`, `pinctrl_peric0`, `pinctrl_hsi2`, and a
+`qcom,wcn6855-bt` node fed by a `qcom,wcn6855-pmu` node (`pwrseq-qcom-wcn`):
+the 0.95 V buck on `gph2-5` as a fixed regulator with a 7 ms ramp, then BT_EN
+on `gpp16-2`, then 50 ms, as stock's `btpower` does. Power-off drops BT_EN,
+then the buck. The PMU's other inputs are an always-on fixed stand-in: stock's
+device tree names no supply on its `cnss2` or `btpower` node.
+
+| Fact | Value | Source |
+| --- | --- | --- |
+| Kernel | `7.3.0-rc6-omamobile-lynx-wifi1` (integration tree `1cb4bd36f3be`) with the DTB built from kernel #98's file on `omamobile` at `cb71d6ef8129`; the drivers on the Bluetooth path are byte-identical between the two trees | [V] `uname -r`; the kernel #98 review |
+| Driver, firmware | `hci_uart` + `btqca`; `qca/hpbtfw21.tlv`, `qca/hpnv21.bin` from `linux-firmware-atheros`. `hci_qca`, `btqca` and `pwrseq-qcom-wcn` come from defconfig, nothing to add to `omamobile.config` for them | [V] dmesg: `QCA setup on UART is completed` at 3 s; `merge_config` of defconfig and `omamobile.config` |
+| Chip | QCA product 0x13, SOC version `0x400c0210`, ROM 0x0201 (stock `cnss` says family 0x4, device 0xc, major 0x2, minor 0x10) | [V] dmesg, stock dmesg |
+| Power sequence | `pwrseq_qcom_wcn` held by `hci_uart`; the buck enabled with five users; `gpp16-2` and `gph2-5` output high, `gph2-4` (WLAN_EN) low. `echo serial0-0 > /sys/bus/serial/drivers/hci_uart_qca/unbind` drops both pins and the buck (0 users); bind again and the controller is back, powered | [V] `lsmod`, `/sys/class/regulator`, pinctrl debugfs, `bluetoothctl show` |
+| Module order | `systemd-modules-load` inserts in parallel, so `hci_uart` may come before `pwrseq-qcom-wcn`; the kernel then defers the probe and retries once the sequencer is there. No `softdep` needed | [V] dmesg across boots; the kernel #98 review |
+| UART speed | `max-speed = <3000000>`. 3.2 Mbaud fails every TLV segment (`Frame reassembly failed (-84)`, `command 0xfc00 tx timeout`); 1, 2 and 3 Mbaud work | [V] three re-probes with the speed as the only change |
+| UART clocks | `gout_apm_apm_usi1_uart_ipclk` 197 MHz, pclk 394 MHz, as stock logs | [V] `clk_summary` |
+| Address | The controller comes up unconfigured (`btmgmt config`: missing `public-address`), so bluez ignores it until one is set. `omamobile-bt-addr` (device-lynx 0.2.6, started by udev when `hci0` appears) sets the address the bootloader publishes in `/chosen/config/bt_addr`, or a locally administered one made once from `machine-id`. After a rebind udev fires before the index is registered (`Invalid Index`), so it retries for 10 s. Cheetah's wait on `btmgmt info` and its power cycle don't apply: an unconfigured controller answers neither | [V] `btmgmt`, live DT, unbind and bind |
+| Scan | 22 devices in a 20 s `bluetoothctl scan on` | [V] |
+| Runtime overlay | Enabling `cmu_apm` after boot oopses: `gs201_cmu_probe` is `__init`. The nodes must be in the boot DTB | [V] kernel oops in `of_overlay_fdt_apply` |
+| PAN | `CONFIG_BT_BNEP` was off; `kernel/configs/omamobile.config` turns it on, with its two filters, for tethering | [V] `/proc/config.gz` |
+
+2026-11-12, the boot asked for at review: `omamobile-device-lynx` built on
+the phone from this branch with `tools/phone-install-package` (`pacman -Q`
+reported `0.2.3-1`, the branch's number that day; `check` passed once
+`diffutils` was installed). Kernel `7.3.0-rc6-omamobile-lynx-wifi1`, a local
+build, not the published one. The modules (`hci_uart`, `btqca`,
+`pwrseq-qcom-wcn`, `bnep`) came from my local `omamobile-lynx-bluetooth`
+0.1.2 package: out-of-tree copies for that kernel in `updates/`, a
+`modules-load.d` file for `hci_uart` and `bnep`, a `softdep` so the
+sequencer loads first, and `linux-firmware-atheros` as a dependency. Its own
+address service and udev rule were masked and emptied, so only
+`omamobile-bt-addr@hci0` ran: at boot it set the bootloader's address at
+3.85 s and was done in 0.05 s; after `unbind` and `bind` of `serial0-0` it
+took 1.07 s, two `Invalid Index` retries, then `Set Public Address
+complete`. `btmgmt info` and `bluetoothctl show` showed the controller
+powered with the public address both times. The firmware files are in
+`linux-firmware-atheros`, which the image does not install, so device-lynx
+now depends on it. Not yet booted on the published kernel, where the modules
+are in-tree and the local package should not be needed.
+
+Not done yet: pairing and PAN tethering with another phone. Bench note for
+Wi-Fi work: with these nodes the PMU owns `gph2-5` and `hci_qca` drops it
+whenever Bluetooth goes down (stock `btpower` never does); unbind `serial0-0`
+from `hci_uart_qca` before a Wi-Fi harness takes the pin, and record whether
+a Wi-Fi run's kernel had the Bluetooth node.
+
 ## 2026-10-27: Wi-Fi parked
 
 - **The chip's boot ROM stops at its authentication stage,** `pbl_auth.c`, after reading only the ELF header and the hash segment of an image byte-identical to stock's. Every host-side difference two testers could act on was tried, one change per boot, and all were negative. The write-up, the ruled-out list, both stop conditions and what is left are in [WIFI-PLAN.md](WIFI-PLAN.md). The maintainer agreed on #36 that parking here is the right call.
 - **Stock-side read done.** `WLAN_SECURE_BOOTN` (`0x1E22B24`), the register that stage consults, reads `0x0` under stock's `cnss2` in the link-up pre-BHI state and in mission mode (six reads), not the `0x11111111` seen on mainline after the stall. Two more registers differ: `PBL_WLAN_BOOT_CFG` `0x200` and `TLMM_PBL_BOOTSTRAP_STATUS` `0x40` under stock, 0 on mainline. Read with stock Android restored to slot A for an afternoon (Magisk root, `userdata` backed up first and Arch put back the same evening). None of the windowed reads hung on stock.
 - **Two stop conditions.** No windowed chip register reads before `mhi_sync_power_up()` (that read hung HSI2 and rebooted the other tester's phone), and no userspace reads of the HSI2 SysMMU or iATU blocks (`devmem` of `0x145c000c` reset this one). WIFI-PLAN.md section 6.
-- **State:** the published kernel has no PCIe node for lynx and the Wi-Fi branch stays local; on the test phone `pcie_gs201` and `ath11k_pci` stay blacklisted. Bluetooth, on the same chip, waits on the same question.
+- **State:** the published kernel has no PCIe node for lynx and the Wi-Fi branch stays local; on the test phone `pcie_gs201` and `ath11k_pci` stay blacklisted. Bluetooth, on the same chip, works over its own UART (the 2026-10-29 entry).
 - **Reinstalling Arch after the stock afternoon** needed `install-phone --bootloader-slots-match lynx-17.0-15199429` again. The root image carried package 0.1.0, without the marker, so the slot was marked successful once by hand with 0.2.0's `omamobile-boot-success` and its unit enabled. The PMIC RTC came back with stock's date; `hwclock -w` after setting the clock fixed it.
 
 ## 2026-10-24: Wi-Fi bring-up (not working yet)
 
 - **The Wi-Fi chip is a Qualcomm QCA6490 (`17cb:1103`, subsystem `17cb:0108`) on PCIe channel 1,** not the Broadcom part in the Pixel 7 Pro. Linux drives it as WCN6855 hw2.1 through ath11k. Bluetooth is on the same chip.
-- **Power pins, from the stock tree:** `gph2-5` enables the 0.95 V buck (stock name `bt-0p95-en`), and `gph2-4` is WLAN_EN. Stock raises the buck, then WLAN_EN, then waits 1 ms and brings up the link. BT_EN is `gpp16-2` on the PERIC1 pin controller (`0x10840000`), which our tree does not describe yet. The PCIe wake line `gpa6-1` only lets the chip wake the host.
+- **Power pins, from the stock tree:** `gph2-5` enables the 0.95 V buck (stock name `bt-0p95-en`), and `gph2-4` is WLAN_EN. Stock raises the buck, then WLAN_EN, then waits 1 ms and brings up the link. BT_EN is `gpp16-2` on `pinctrl_peric0` (`0x10840000`), described since kernel #98. The PCIe wake line `gpa6-1` only lets the chip wake the host.
 - **Local, unsigned kernel branch `omamobile-gs201-lynx-wifi`** (on the touch branch). It imports the gs201 PCIe host, PHY and SysMMU drivers from `omamobile-int`. The board commit describes the two power pins as the root port's supply, with no restricted DMA pool: such a pool hands out at most 256 KiB in one piece, and MHI needs 512 KiB. A test-only `msi=1` adds MSI through iMSI-RX. A test-only `skip_soc_reset` stops ath11k from resetting the chip. Test-only `bhi_zero_from` and `bhi_flip_at` corrupt the image MHI hands over.
 - **Working:** link Gen2 x1, enumeration, 32 MSI vectors, and the chip reading host memory.
 - **Not working:** the chip's boot ROM stalls during the first firmware load (BHI), after about 20 s MHI times out with -110. `TCSR_PBL_LOGGING` reads `0xef0a0002`. `BHI_STATUS` stays 0, no MSI arrives, and neither end logs an AER error or completion timeout.
@@ -66,7 +244,7 @@ Findings from real hardware, newest first. Tracking issue: #36.
 
 ## 2026-10-23: first light
 
-- **Slot B boots and SSH comes up at `root@172.16.42.1`.** Kernel 7.3.0-rc6 from linux-omarchy-mobile. Both cluster watchdogs are stopped at probe. Slot B is not marked successful. Slot A is stock CP2A.260705.006 with Magisk on `init_boot_a`.
+- **Slot B boots and SSH comes up at `root@172.16.42.1`.** Kernel 7.3.0-rc6 from linux-omamobile. Both cluster watchdogs are stopped at probe. Slot B is not marked successful. Slot A is stock CP2A.260705.006 with Magisk on `init_boot_a`.
 - **ABL needs AVB footers on `boot` and `init_boot`.** Stock signs both with their own SHA256_RSA4096 keys, rollback index `1783209600`, and vbmeta chains them. With no footer, unlocked ABL never showed the orange warning for slot B. The screen went black, ABL retried until `slot-retry-count:b` reached 0, then booted slot A. Nothing reached USB and pstore stayed empty. Putting stock's own IPOP DTB into our `vendor_kernel_boot` failed the same way, so the DTB was not the cause. With `AVB_FOOTERS`, `AVB_ROLLBACK_INDEX` and `AVB_SECURITY_PATCH` (stock's values, from `avbtool info_image`) the next boot reached our kernel. The Pixel 7 Pro's stock `vbmeta` also chains `boot` and `init_boot`, with the same rollback index, and its bootloader is the same build (15199429), yet it boots our images without footers (checked by the maintainer on review). So this is the 7a's bootloader, not gs201 or the vbmeta layout. `vendor_boot`, `vendor_kernel_boot` and `dtbo` carry only unsigned hash footers on stock, and ours have none.
 - **The DTB is matched on `/soc_compatible`.** The SoC is the IPOP package (`ro.boot.hw.soc.pkg_mode` 1, `ro.boot.hw.soc.rev` 2). Stock's `vendor_kernel_boot` holds three DTBs: `soc_id` 0x9855000, `soc_id` 0x9855001, and `/soc_compatible/B0_IPOP { product_id 0x9855, major 1, minor 0, pkg_mode 1 }`. The live stock tree is the third. One DTB with that node and no `soc_id` was accepted (`SOC_COMPATIBLE="b0-ipop:0x9855:1:0:1"`). Whether ABL would also take a `soc_id` DTB on this chip was not tried. Fastboot's screen says "Product revision: lynx MP1.0 B0".
 - **ABL adds `sec_dram` (0xb7200000), `sec_pt` (0xe0000000) and `pkvm_guest_firmware` to the tree it hands over.** On our boot it put `pkvm_guest_firmware` at 0xb5000000, not 0x8b000000 as on stock. Stock's `tui` (48 MiB), `mfc_fw` and `famodel` are not fixed regions: Google's `gs101-dma-heap.dtsi` gives them a `size` and `alloc-ranges` only, and 0xf3200000 is just where stock's kernel placed `tui` on that boot (it goes to the secure world only during a Trusted UI session). The board file reserves none of them; an earlier version reserved `tui` at that address for nothing.
@@ -125,7 +303,7 @@ Findings from real hardware, newest first. Tracking issue: #36.
   of `ramoops@fd3ff000`, although that pair is not printed in this capture.
   These are overlapping allocations, not evidence that all warnings are
   harmless duplicates. The shared debug reservation has since been fixed
-  in `gs201.dtsi` (linux-omarchy-mobile #58 shrinks `debug@fd3f0000`), so
+  in `gs201.dtsi` (linux-omamobile #58 shrinks `debug@fd3f0000`), so
   a kernel from the current `omamobile` branch prints one overlap fewer.
 
   The later curated first-light capture, `lynx-m1-omamobile-20261023/dmesg.txt`

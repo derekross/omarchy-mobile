@@ -4,7 +4,8 @@
 #
 #   out/bundle/omamobile-<codename>-<version>/
 #     README.txt     what it is, what it touches, how to go back to stock
-#     install        tools/install-phone
+#     install        tools/install-phone; "bash install --guided" runs the
+#                    guided install, tools/install-guided below
 #     device.conf    the descriptor the images were built from
 #     images/        the BOOT_IMAGES (boot init_boot vendor_boot vendor_kernel_boot dtbo)
 #     omamobile.gpg  the public key SHA256SUMS.sig is checked against
@@ -13,7 +14,14 @@
 #                    extract-* tools), so a user provisions from the bundle
 #                    without the repository; they extract Google's files on
 #                    the user's machine, and none of those files ship here;
-#                    and tools/nv-backup, the read-only radio backup it needs
+#                    tools/nv-backup, the read-only radio backup it needs;
+#                    and the guided install (tools/install-guided) with what
+#                    it runs that the rest doesn't: tools/phone-smoke (the
+#                    check at its end), tools/factory-index (it reads the
+#                    build index) and tools/camera-requirements.txt (the
+#                    camera's two Python modules, pinned by SHA-256). The
+#                    bundle's device is its device.conf: images/ carries no
+#                    DEVICE file, and install-phone's bundle mode reads none
 #     factory-builds.json
 #                    the device's build index (device/<codename>/, kept by
 #                    tools/factory-index), when the device has one: which of
@@ -22,9 +30,18 @@
 #                    it only through the signed checksums below
 #     MANIFEST       kernel release, root image, both repositories' commits, toolchain
 #     manifest.json  the same and more as data (tools/bundle-manifest): every
-#                    file with size and SHA-256, the root image, the release
+#                    file with size and SHA-256, the root image (and where in
+#                    it the placeholders for the owner's answers are, from
+#                    its MANIFEST, checked against the image; and, for an
+#                    image built for the install link, install_link with its
+#                    protocol, from the same MANIFEST), the release
 #                    version and label, and the install plan and its checks,
-#                    which tools/install-phone (and later a web flasher) enforce
+#                    which tools/install-phone (and later a web flasher) enforce.
+#                    Format 1 (slot B) unless the descriptor says
+#                    INSTALL_SLOT=active (no device does yet): then format 2,
+#                    the slot the phone runs from, and bundle-manifest refuses
+#                    a ramdisk image whose initramfs lacks the storage guard's
+#                    running-slot marker (/etc/omamobile-ufs-rw-slot)
 #     SHA256SUMS     checksums of everything above
 #     SHA256SUMS.sig signed with the release key (keys/gnupg.release,
 #                    tools/lib/signing.sh; maintainer only; --unsigned skips)
@@ -113,12 +130,16 @@ if ((unsigned == 0)); then
 fi
 conf=device/$DEVICE/device.conf
 [[ -f $conf ]] || die "no $conf"
-provision_tools="phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data"
+provision_tools="phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data install-guided phone-smoke factory-index camera-requirements.txt"
 for f in $provision_tools; do [[ -f tools/$f ]] || die "no tools/$f"; done
 [[ -f docs/INSTALL.md ]] || die "no docs/INSTALL.md"
 [[ -f tools/lib/bundle-tar.sh ]] || die "no tools/lib/bundle-tar.sh"
 boot_images=$(sed -n 's/^BOOT_IMAGES="\(.*\)"$/\1/p' "$conf")
 [[ -n $boot_images ]] || die "$conf has no BOOT_IMAGES"
+# Where the release installs (tools/bundle-manifest checks the value): slot
+# B, or the slot the phone runs from (docs/ACTIVE-SLOT-PLAN.md §1)
+install_slot=$(sed -nE 's/^INSTALL_SLOT="?([^"]*)"?$/\1/p' "$conf" | tail -1)
+install_slot=${install_slot:-b}
 if [[ -z $rootfs ]]; then
   shopt -s nullglob
   for f in out/omamobile-rootfs-*-aarch64.img.zst; do
@@ -141,6 +162,18 @@ channel=$(sed -n 's/^omamobile channel: \([a-z]*\)$/\1/p' "$manifest")
 if ((unsigned == 0)) && [[ $channel != stable ]]; then
   die "the root image follows the '${channel:-local (built before channels)}' channel; a signed release follows stable (tools/build-rootfs --channel stable)"
 fi
+# An image built for the install link (tools/build-rootfs --install-link)
+# says so with its protocol; manifest.json then carries install_link, a key
+# installers older than the link refuse (docs/INSTALL-LINK-PLAN.md §3.3)
+link_line=$(sed -n 's/^install link: //p' "$manifest")
+link_protocol=""
+case $link_line in
+  "" | none) ;;
+  "protocol "[1-9]*" (marker /etc/omamobile/install-link)")
+    link_protocol=${link_line#protocol }; link_protocol=${link_protocol%% *} ;;
+  *) die "the root image's MANIFEST has an install link line this tool does not know: $link_line" ;;
+esac
+[[ -z $link_protocol || $link_protocol =~ ^[1-9][0-9]{0,3}$ ]] || die "the install link's protocol is not a number: $link_protocol"
 root_digest=$(sha256sum < "$rootfs" | cut -d' ' -f1)
 [[ $(cut -d' ' -f1 "$rootfs.sha256") == "$root_digest" ]] || die "$rootfs doesn't match its .sha256"
 if ((unsigned == 0)); then
@@ -176,7 +209,10 @@ install -m644 docs/INSTALL.md "$dir/INSTALL.md"
 # so in the bundle it finds tools/phone-ssh and tools/extract-* beside it
 mkdir -p "$dir/tools"
 for f in $provision_tools; do
-  install -m755 "tools/$f" "$dir/tools/$f"
+  # A program is executable; a data file (camera-requirements.txt) is not
+  mode=755
+  [[ $f != *.txt ]] || mode=644
+  install -m"$mode" "tools/$f" "$dir/tools/$f"
 done
 for p in $boot_images; do
   install -m644 "$KERNEL_OUT/images/$p.img" "$dir/images/$p.img"
@@ -197,7 +233,7 @@ for f in "$rootfs" "$rootfs.sha256" "${rootfs%.img.zst}.MANIFEST"; do
 done
 kernel_commit=$(git -C "${KERNEL_DIR:-$KERNEL_BASE/wt-int}" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 {
-  echo "# Omarchy Mobile $version ($label) for $(sed -n 's/^NAME="\(.*\)"$/\1/p' "$conf") ($DEVICE)"
+  echo "# Omamobile $version ($label) for $(sed -n 's/^NAME="\(.*\)"$/\1/p' "$conf") ($DEVICE)"
   echo "version: $version"
   echo "label: $label"
   echo "device: $DEVICE"
@@ -216,8 +252,29 @@ kernel_commit=$(git -C "${KERNEL_DIR:-$KERNEL_BASE/wt-int}" rev-parse --short=12
   echo "# boot images"
   (cd "$dir/images" && sha256sum -- *.img)
 } > "$dir/MANIFEST"
+# The two paragraphs that differ with where the release installs
+if [[ $install_slot == active ]]; then
+  what_it_writes="What it writes: the boot images of the slot the phone runs from now
+($(for p in $boot_images; do printf '%s ' "$p"; done)as <image>_a or <image>_b, whichever slot the phone
+reports) and userdata (the Arch root). That REPLACES Android on this phone
+and ERASES userdata. It switches no slot, and never touches the other slot,
+the bootloader, radio, persist, efs, modem, devinfo or vbmeta."
+  way_back="Going back to Android: Android is replaced, so the way back is Google's
+factory image for $DEVICE, written by Google's Android Flash Tool
+(https://flash.android.com) or by the factory image's flash-all script from
+fastboot mode (the bootloader is still unlocked). It puts Android back and
+erases userdata. Don't lock the bootloader unless both slots hold Google's
+images."
+else
+  what_it_writes="What it writes: slot B's boot images ($(for p in $boot_images; do printf '%s_b ' "$p"; done)) and
+userdata (the Arch root). That ERASES userdata. It never touches slot A,
+the bootloader, radio, persist, efs, modem, devinfo or vbmeta."
+  way_back="Going back to stock: stock Android is still on slot A. In fastboot,
+\"fastboot --set-active=a\" and reboot, then factory-reset Android (its data
+was erased). Or flash Google's factory image for $DEVICE."
+fi
 cat > "$dir/README.txt" <<EOF
-Omarchy Mobile $version for the $(sed -n 's/^NAME="\(.*\)"$/\1/p' "$conf") ($DEVICE)
+Omamobile $version for the $(sed -n 's/^NAME="\(.*\)"$/\1/p' "$conf") ($DEVICE)
 $(printf '%s' "$label" | tr '[:lower:]' '[:upper:]')
 
 This is a $label: it installs and runs, but some hardware is still being
@@ -226,28 +283,38 @@ phone), it needs fastboot and your own factory image, and installing erases
 the phone's data. Keep stock Android's way back (below) in mind.
 
 Native Omarchy (Arch Linux ARM, Hyprland, Omarchy's packages) on the phone,
-with a mainline kernel and no Android. https://github.com/derekross/omarchy-mobile
+with a mainline kernel and no Android. https://github.com/derekross/omamobile
 INSTALL.md in this directory is the step-by-step guide; read it first.
 
-Install: put the phone in fastboot mode (bootloader unlocked), connect it, and
-run "bash install" from this directory ("bash install" works even when a
-download lost the file's execute bit). $rootname must be next to
-this directory: unpacking $name.tar (the one-file download, checked
-with "sha256sum -c $name.tar.sha256") puts both side by side. If
-you downloaded this directory file by file, run "chmod +x tools/*" in it
-once. It needs fastboot (android-tools), e2fsprogs, zstd, lz4, cpio,
-openssl, gpg and python3 on this computer. The installer checks the phone first, asks for your user
+$rootname must be next to this directory: unpacking $name.tar
+(the one-file download, checked with "sha256sum -c $name.tar.sha256")
+puts both side by side. If you downloaded this directory file by file, run
+"chmod +x tools/*" in it once.
+
+The guided install (the easy way): connect the phone and run, from this
+directory:
+  bash install --guided
+It checks this computer and this download, finds the phone and says what
+is left to do on it (the bootloader unlock too), gets Google's factory
+image for it, asks your answers, writes the phone, backs up its radio
+partitions, adds its firmware and checks it, stopping at each step that
+needs you. Run it again after any stop: it goes on from there.
+
+Install by hand: put the phone in fastboot mode (bootloader unlocked),
+connect it, and run "bash install" from this directory ("bash install"
+works even when a download lost the file's execute bit). It needs fastboot
+and img2simg (android-tools), e2fsprogs, zstd, lz4, cpio, openssl, gpg and python3 on
+this computer. The installer checks the phone first, asks for your user
 name, password, Wi-Fi and SSH key, shows exactly what it will write, and
 waits for you to type "$DEVICE".
 
-What it writes: slot B's boot images ($(for p in $boot_images; do printf '%s_b ' "$p"; done)) and
-userdata (the Arch root). That ERASES userdata. It never touches slot A,
-the bootloader, radio, persist, efs, modem, devinfo or vbmeta.
+$what_it_writes
 
-After the first boot: take the read-only backup of the modem's partitions
-into a new directory DIR with tools/nv-backup (INSTALL.md, "Back up"), then
-run tools/phone-provision from this directory with that backup and your own
-factory image for $DEVICE:
+After the first boot (by hand; the guided install does this itself): take
+the read-only backup of the modem's partitions into a new directory DIR
+with tools/nv-backup (INSTALL.md, "Back up"), then run tools/phone-provision
+from this directory with that backup and your own factory image for
+$DEVICE:
   bash tools/nv-backup DIR
   bash tools/phone-provision --first-install --nv-backup DIR FACTORY.zip
 The backup holds this phone's IMEI and calibration: keep it, never share
@@ -262,14 +329,14 @@ installs what is new there.
 manifest.json: this release as data (files, sizes, checksums, the install
 plan and its checks), covered by SHA256SUMS and its signature.
 
-Going back to stock: stock Android is still on slot A. In fastboot,
-"fastboot --set-active=a" and reboot, then factory-reset Android (its data
-was erased). Or flash Google's factory image for $DEVICE.
+$way_back
 EOF
 python3 -I tools/bundle-manifest --bundle "$dir" --rootfs "$rootfs" --rootfs-sha256 "$root_digest" \
+  --rootfs-manifest "$manifest" \
   --version "$version" --kernel-release "$release" --kernel-commit "$kernel_commit" \
   --commit "$(git rev-parse --short=12 HEAD)$(git diff --quiet HEAD || echo -dirty)" \
-  --channel "${channel:-unknown}" --label "$label" --base-url "$base_url" || die "writing manifest.json failed"
+  --channel "${channel:-unknown}" --label "$label" --base-url "$base_url" \
+  ${link_protocol:+--install-link-protocol "$link_protocol"} || die "writing manifest.json failed"
 (cd "$dir" && find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.sig -printf '%P\n' | sort | xargs sha256sum -- > SHA256SUMS)
 if ((unsigned)); then
   say "Unsigned bundle (--unsigned): install needs --unsigned too"

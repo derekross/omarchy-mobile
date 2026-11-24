@@ -61,7 +61,7 @@ matched startup/recovery path and its boot qualification first; this PR does
 not import the private stack or enable services to approximate it.
 
 Boot-success marking is separate and remains outside this package, pending
-[#252](https://github.com/derekross/omarchy-mobile/issues/252) and Oriole's
+[#252](https://github.com/derekross/omamobile/issues/252) and Oriole's
 qualification. On an unmarked B slot, ABL can exhaust its retry budget
 (normally three attempts) and select A. The staged-start guard does not reset
 that budget. With native Linux on userdata, selecting stock A is not a usable
