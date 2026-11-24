@@ -1,8 +1,9 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # extract-vendor-firmware: stage device-specific firmware from the owner's
-# own image. Pixel factory images support cheetah, panther, raven, tegu and
-# husky; dipper takes vendor, modem and Bluetooth partition roots (-d).
+# own image. Pixel factory images support cheetah, panther, raven, tegu,
+# husky and sargo; dipper takes vendor, modem and Bluetooth partition roots
+# (-d).
 #
 # Proprietary firmware is not ours to redistribute, so Omamobile never
 # ships it. This stages files from the user's own image and renames them to
@@ -58,6 +59,21 @@
 #   modem/image/venus.{mdt,bNN}                 -> qcom/venus-5.2/
 #   modem/image/mba.mbn                         -> qcom/sdm845/Xiaomi/dipper/mba.mbn
 #   bluetooth/image/crnv21.bin                  -> qca/Xiaomi/dipper/crnv21.bin
+#
+# The Pixel 3a (-d sargo, Qualcomm SDM670) takes its files from the vendor
+# partition of its factory image, under the names the SDM670 device trees
+# request (qcom/sdm670/sargo/; upstream's sdm670-google-sargo.dts names only
+# the GPU's zap shader so far). The split ELFs keep their .bNN segments
+# beside the .mdt, renamed .mbn, as dipper's do; every one in the image is
+# copied. Not yet run on a real image (device/sargo/NOTES.md):
+#
+#   vendor/firmware/{a615_zap,ipa_fws}.mdt      -> qcom/sdm670/sargo/*.mbn
+#   vendor/firmware/{a615_zap,ipa_fws}.bNN      -> beside the matching .mbn
+#   vendor/firmware/{adsp,cdsp,venus,wlanmdsp}.mbn -> qcom/sdm670/sargo/
+#   vendor/firmware/{adspr,adspua,cdspr,modemuw}.jsn -> qcom/sdm670/sargo/
+#
+# The modem's own mba.mbn and modem.mbn are not in the vendor partition (they
+# are on the phone's modem partition) and are not staged here.
 #   bluetooth/image/crbtfw21.tlv                -> qca/crbtfw21.tlv
 #
 # The Pixel 9a (-d tegu; <board> is "google,zumapro-tegu"):
@@ -170,12 +186,13 @@ usage() {
 Usage: extract-vendor-firmware [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
 
   SOURCE   Google factory zip (<device>-*-factory-*.zip), the image-<device>-*.zip
-           inside it, or a raw/sparse vendor.img. For dipper, a local backup
+           inside it, or a raw/sparse vendor.img (sargo: the Pixel 3a's own
+           factory image). For dipper, a local backup
            directory containing vendor/, modem/ and bluetooth/ partition copies.
   -o DIR   staging root to write into (default: ./out/vendor-firmware); a
            successful run replaces this script's earlier outputs there
   -w DIR   scratch directory for the ~1 GB vendor.img (default: a temp dir in \$TMPDIR)
-  -d DEV   cheetah (default), panther, raven, tegu, husky or dipper
+  -d DEV   cheetah (default), panther, raven, tegu, husky, sargo or dipper
   -s SKU   husky: the hardware SKU (androidboot.hardware.sku), which picks the NVRAM
   -f       skip the device checks (android-info.txt board=$DEVICE, the vendor build.prop);
            dipper always requires vendor/build.prop to identify the backup as dipper
@@ -308,7 +325,25 @@ case $DEVICE_OPT in
       "bluetooth/image/crnv21.bin|qca/Xiaomi/dipper/crnv21.bin"
       "bluetooth/image/crbtfw21.tlv|qca/crbtfw21.tlv"
     ) ;;
-  *) die "unknown device $DEVICE_OPT (cheetah, panther, raven, tegu, husky or dipper)" ;;
+  sargo)
+    # Pixel 3a: the remote processors', GPU zap shader's and IPA's files
+    # (the header); the split ELFs' .bNN segments are added once the image
+    # is open, below. The GPU's microcode (a630_sqe.fw, a630_gmu.bin) comes
+    # from linux-firmware.
+    DEVICE=sargo
+    MAP=(
+      "firmware/a615_zap.mdt|qcom/sdm670/sargo/a615_zap.mbn"
+      "firmware/ipa_fws.mdt|qcom/sdm670/sargo/ipa_fws.mbn"
+      "firmware/adsp.mbn|qcom/sdm670/sargo/adsp.mbn"
+      "firmware/cdsp.mbn|qcom/sdm670/sargo/cdsp.mbn"
+      "firmware/venus.mbn|qcom/sdm670/sargo/venus.mbn"
+      "firmware/wlanmdsp.mbn|qcom/sdm670/sargo/wlanmdsp.mbn"
+      "firmware/adspr.jsn|qcom/sdm670/sargo/adspr.jsn"
+      "firmware/adspua.jsn|qcom/sdm670/sargo/adspua.jsn"
+      "firmware/cdspr.jsn|qcom/sdm670/sargo/cdspr.jsn"
+      "firmware/modemuw.jsn|qcom/sdm670/sargo/modemuw.jsn"
+    ) ;;
+  *) die "unknown device $DEVICE_OPT (cheetah, panther, raven, tegu, husky, sargo or dipper)" ;;
 esac
 [[ $DEVICE == husky || -z $SKU ]] || die "-s is for husky only"
 # The camera data flow (tools/extract-camera-data) exists for cheetah only
@@ -492,6 +527,24 @@ else
   [[ -n "$FORCE" ]] || die "build.prop can't be read from vendor.img${reason:+: $reason}; use -f to override"
 fi
 
+# sargo's split ELFs: every .bNN segment of each .mdt the map names, read
+# from a copy of /vendor/firmware (qcom_mdt_load requests them beside the
+# .mbn it was asked for)
+if [[ $DEVICE == sargo ]]; then
+  get_dir firmware "$WORK/vendor-fw" ||
+    die "/vendor/firmware is missing from this image or could not be copied"
+  for name in a615_zap ipa_fws; do
+    segments=0
+    for src in "$WORK/vendor-fw/firmware/$name".b[0-9][0-9]; do
+      [[ -f $src ]] || continue
+      segments=$((segments + 1))
+      MAP+=("firmware/${src##*/}|qcom/sdm670/sargo/${src##*/}")
+    done
+    ((segments > 0)) || die "/vendor/firmware/$name has no .bNN segment in this image"
+  done
+  rm -rf "$WORK/vendor-fw"
+fi
+
 # The new generation: everything below is written into $new, which starts
 # empty, so no file from an earlier run can stand in for a missing one.
 mkdir -p "$OUT"
@@ -518,7 +571,7 @@ done
 # The AoC's sensor registry (which sensors this board has, their buses and
 # settings), read by omamobile-sensor-proxy; without it only virtual sensors.
 # husky has no AoC driver yet, so it skips the registry.
-if [[ $DEVICE != husky && $DEVICE != dipper ]]; then
+if [[ $DEVICE != husky && $DEVICE != dipper && $DEVICE != sargo ]]; then
   reg="$new/usr/share/omamobile/sensors"
   get_dir etc/sensors/registry "$reg" ||
     die "/vendor/etc/sensors/registry is missing from this image or could not be copied"
@@ -536,7 +589,7 @@ fi
 
 # Sanity checks: right chip, text NVRAM, Cirrus file formats.
 brcm="$dest/brcm"
-if [[ $DEVICE != dipper ]]; then
+if [[ $DEVICE != dipper && $DEVICE != sargo ]]; then
   grep -aq "$WIFI_CHIP-roml" "$brcm/$FW_BASE.$BOARD.bin" ||
     die "fw_bcmdhd.bin is not a $WIFI_CHIP PCIe firmware"
   [[ -z $BT_CHIP ]] || grep -aq "$BT_CHIP" "$brcm/BCM.$BOARD.hcd" ||
@@ -585,6 +638,15 @@ if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu || $DEVICE == 
   done
 fi
 
+# sargo's firmware and split-ELF headers are ELF files (the .bNN segments
+# are raw and the .jsn files JSON, so neither is checked)
+if [[ $DEVICE == sargo ]]; then
+  for f in a615_zap ipa_fws adsp cdsp venus wlanmdsp; do
+    [[ "$(od -An -c -N4 "$dest/qcom/sdm670/sargo/$f.mbn" | tr -d ' ')" == '177ELF' ]] ||
+      die "/vendor/firmware/$f is not an ELF file"
+  done
+fi
+
 # The MFC firmware: a vector table of eight ARM branches (cond AL, opcode
 # 0xea in each word's top byte), and its version as the last word
 if [[ $DEVICE == panther ]]; then
@@ -597,7 +659,7 @@ if [[ $DEVICE == panther ]]; then
 fi
 
 ver= bt=""
-if [[ $DEVICE != dipper ]]; then
+if [[ $DEVICE != dipper && $DEVICE != sargo ]]; then
   ver=$(grep -ao 'Version=[0-9.]* ([^)]*)' "$brcm/$FW_BASE.$BOARD.bin" | sed -n 1p)
   [[ -z $BT_CHIP ]] || bt=$(grep -ao "$BT_CHIP [^[]*" "$brcm/BCM.$BOARD.hcd" | sed -n 1p)
 fi
@@ -609,6 +671,8 @@ cut -c67- "$new/vendor-firmware.sha256" | cmp -s - "$stage/expected" ||
 
 if [[ $DEVICE == dipper ]]; then
   say "Mapped Dipper firmware and split Qualcomm modem segments"
+elif [[ $DEVICE == sargo ]]; then
+  say "Mapped Pixel 3a firmware and the split zap shader and IPA segments"
 else
 say "Wi-Fi firmware: ${ver:-unknown version}"
 fi
@@ -616,7 +680,7 @@ if [[ $DEVICE == husky ]]; then
   say "NVRAM: /vendor/firmware/$nvram${SKU:+ (SKU $SKU)}"
   [[ -n $SKU ]] || say "No -s SKU: stock's default NVRAM; pass the phone's SKU for its region's"
 fi
-[[ -z $BT_CHIP ]] || say "Bluetooth patch: ${bt:-unknown version}"
+[[ -z $BT_CHIP || $DEVICE == dipper || $DEVICE == sargo ]] || say "Bluetooth patch: ${bt:-unknown version}"
 [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu || $DEVICE == husky ]] &&
   say "Haptics firmware: cs40l26.wmfw ($(stat -c %s "$dest/cs40l26.wmfw") bytes) and its wavetable"
 [[ $DEVICE == panther ]] &&

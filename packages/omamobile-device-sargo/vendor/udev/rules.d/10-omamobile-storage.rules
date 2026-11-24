@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# Omamobile storage guard, continued in Arch, for the Pixel 3a's eMMC. The
+# initramfs marks every eMMC partition read-only except the running slot's
+# boot and userdata, sets the hardware boot areas mmcblk0boot0/1 read-only,
+# and removes the whole-disk node and the RPMB node. udev would recreate
+# them, so make those nodes inaccessible and keep desktop tools from
+# touching any Android partition.
+SUBSYSTEM=="block", KERNEL=="mmcblk0", MODE="0000", ENV{UDISKS_IGNORE}="1"
+SUBSYSTEM=="block", KERNEL=="mmcblk0boot[0-9]", MODE="0000", ENV{UDISKS_IGNORE}="1"
+SUBSYSTEM=="block", KERNEL=="mmcblk0p[0-9]*", ENV{ID_PART_ENTRY_NAME}!="userdata", ENV{UDISKS_IGNORE}="1"
+KERNEL=="mmcblk0rpmb", MODE="0000"
+SUBSYSTEM=="rpmb", MODE="0000"

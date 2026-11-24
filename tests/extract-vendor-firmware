@@ -274,6 +274,45 @@ grep -qF "vendor/build.prop identifies 'other', not dipper" "$t/log" || fail "di
 mv "$t/build.prop" "$t/dipper-source/vendor/build.prop"
 pass "dipper: wrong-device and missing split firmware backups are refused"
 
+# sargo reads its factory image's vendor partition: unsplit Qualcomm ELFs, the
+# remote processors' .jsn files, and the split zap shader and IPA firmware,
+# whose every .bNN segment lands beside the .mbn
+mkdir -p "$t/sargo/firmware"
+printf 'ro.product.vendor.device=sargo\nro.vendor.build.fingerprint=fictional/sargo\n' > "$t/sargo/build.prop"
+for f in a615_zap ipa_fws; do printf '\177ELF %s metadata' "$f" > "$t/sargo/firmware/$f.mdt"; done
+for f in a615_zap.b00 a615_zap.b01 ipa_fws.b00 ipa_fws.b01 ipa_fws.b02; do echo "$f segment" > "$t/sargo/firmware/$f"; done
+for f in adsp cdsp venus wlanmdsp; do printf '\177ELF %s' "$f" > "$t/sargo/firmware/$f.mbn"; done
+for f in adspr adspua cdspr modemuw; do echo "{\"$f\": 1}" > "$t/sargo/firmware/$f.jsn"; done
+echo "not mapped" > "$t/sargo/firmware/unrelated.b00"
+SARGO_FILES=$(printf 'qcom/sdm670/sargo/%s\n' a615_zap.b00 a615_zap.b01 a615_zap.mbn adsp.mbn adspr.jsn \
+  adspua.jsn cdsp.mbn cdspr.jsn ipa_fws.b00 ipa_fws.b01 ipa_fws.b02 ipa_fws.mbn modemuw.jsn venus.mbn wlanmdsp.mbn |
+  LC_ALL=C sort)
+o=$t/sargo-out n=$failed
+if run "$t/sargo" "$t/ext4.img" -d sargo -o "$o"; then
+  [[ $(listed "$o") == "$SARGO_FILES" ]] || { listed "$o"; fail "sargo: checksum list names the mapped files and every segment"; }
+  [[ $(cat "$o/$FW/qcom/sdm670/sargo/a615_zap.b01") == "a615_zap.b01 segment" &&
+     $(cat "$o/$FW/qcom/sdm670/sargo/a615_zap.mbn") == $'\177ELF a615_zap metadata' ]] ||
+    fail "sargo: the zap shader's metadata is renamed .mbn and its segments sit beside it"
+  [[ ! -e $o/$REG ]] || fail "sargo: no sensor registry"
+  (cd "$o/$FW" && sha256sum --quiet -c "$o/vendor-firmware.sha256") || fail "sargo: output checksums match"
+  pass_since "$n" "sargo: the vendor partition maps its firmware and the split segments"
+else
+  cat "$t/log"; fail "sargo: extraction from a vendor image succeeds"
+fi
+mv "$t/sargo/firmware/ipa_fws.b00" "$t/sargo/firmware/ipa_fws.b00.x"
+mv "$t/sargo/firmware/ipa_fws.b01" "$t/sargo/firmware/ipa_fws.b01.x"
+mv "$t/sargo/firmware/ipa_fws.b02" "$t/sargo/firmware/ipa_fws.b02.x"
+run "$t/sargo" "$t/ext4.img" -d sargo -o "$t/sargo-nosegment" && fail "sargo: a split ELF without segments is refused"
+says "sargo: a split ELF without segments" "error: /vendor/firmware/ipa_fws has no .bNN segment in this image"
+for f in b00 b01 b02; do mv "$t/sargo/firmware/ipa_fws.$f.x" "$t/sargo/firmware/ipa_fws.$f"; done
+echo "not an ELF" > "$t/sargo/firmware/adsp.mbn"
+run "$t/sargo" "$t/ext4.img" -d sargo -o "$t/sargo-notelf" && fail "sargo: a firmware that is not an ELF is refused"
+says "sargo: a firmware that is not an ELF" "error: /vendor/firmware/adsp is not an ELF file"
+printf '\177ELF adsp' > "$t/sargo/firmware/adsp.mbn"
+sed -i 's/=sargo$/=bonito/' "$t/sargo/build.prop"
+run "$t/sargo" "$t/ext4.img" -d sargo -o "$t/sargo-bonito" && fail "sargo: the Pixel 3a XL's vendor partition is refused"
+says "sargo: the Pixel 3a XL's vendor partition" "error: vendor partition is for 'bonito', not sargo; use -f to override"
+
 # --- A reused output directory -------------------------------------------------
 o=$t/reuse n=$failed
 seed "$o"
