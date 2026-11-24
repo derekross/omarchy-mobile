@@ -38,6 +38,16 @@ class SimulatorTests(unittest.TestCase):
             '[audio]\ncard = none\n')
         self.transcript = self.dir / 'transcript.jsonl'
         self.procs = []
+        # A stand-in systemctl first on PATH: sitd's reconnect stops and starts
+        # the route service, and a test must not reach the machine's own
+        # systemd (tools/phone-install-package runs check() on a phone). It
+        # answers 0 to everything and logs its arguments, one call a line.
+        stub = self.dir / 'bin'
+        stub.mkdir()
+        (stub / 'systemctl').write_text('#!/bin/sh\necho "$*" >> "$(dirname "$0")/systemctl.log"\nexit 0\n')
+        (stub / 'systemctl').chmod(0o755)
+        self.systemctl_log = stub / 'systemctl.log'
+        self.env['PATH'] = str(stub) + os.pathsep + self.env.get('PATH', '')
 
     def tearDown(self):
         for proc in reversed(self.procs):
@@ -221,6 +231,22 @@ class SimulatorTests(unittest.TestCase):
         log = (self.dir / 'daemon.log').read_text()
         self.assertIn('IMS PDN information sent again after radio on', log)
         self.assertIn('Internet bearer set up again', log)
+        # The route service went down for the reconnect and came back after it
+        # (the stand-in says it was running).
+        calls = self.systemctl_log.read_text().splitlines()
+        self.assertIn('stop omamobile-sit-data.service', calls)
+        self.assertLess(calls.index('stop omamobile-sit-data.service'),
+                        calls.index('start omamobile-sit-data.service'))
+        # A second "radio on" with the radio already on changes nothing:
+        # no withdrawal, no new IMS PDN information, no new bearer.
+        before = self.transcript_entries()
+        self.assertEqual(self.cli('radio', 'on').strip(), 'on')
+        time.sleep(5)
+        after = self.transcript_entries()
+        new = after[len(before):]
+        self.assertFalse([e for e in new if e.get('type') == 'req' and e['id'] in (0x0d08, 0x0d38)])
+        self.assertFalse([e for e in new if e.get('event') == 'setup_data_call'])
+        self.assertEqual(json.loads(self.cli('status', '--json'))['modem']['ims'], 'registered')
 
     def control(self, command):
         with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:

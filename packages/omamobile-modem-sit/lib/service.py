@@ -988,12 +988,15 @@ class Service:
                 raise ValueError('Radio state must be boolean')
             if not on and self.live():
                 raise RuntimeError('Call in progress')
+            was_off = self.cfun == 0
             if not on:
                 self.ims_off()
             radio(on)
             self.cfun = 1 if on else 0
             self.next_poll = 0
-            if on:
+            if on and was_off:
+                # Only after the owner's own radio off: an "on" with the radio
+                # already on would withdraw a working IMS registration.
                 self.radio_back()
             else:
                 self.ims_restore_at = None
