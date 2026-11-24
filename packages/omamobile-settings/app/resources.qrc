@@ -5,6 +5,7 @@
     <file>AboutPage.qml</file>
     <file>DisplayPage.qml</file>
     <file>BatteryPage.qml</file>
+    <file>AppsPage.qml</file>
     <file>icons/battery.svg</file>
     <file>icons/display.svg</file>
     <file>catalog.json</file>

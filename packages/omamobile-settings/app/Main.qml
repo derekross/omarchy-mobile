@@ -22,9 +22,11 @@ ApplicationWindow {
         search.focus = false
         Qt.inputMethod.hide()
         if (backend.searching) search.clear()
+        // a page with an inner level (a detail view) steps out of it first
+        else if (pageLoader.item && pageLoader.item.canGoBack === true) { pageLoader.item.goBack(); return }
         backend.back()
     }
-    readonly property var customPages: ({ display: "DisplayPage.qml", battery: "BatteryPage.qml" })
+    readonly property var customPages: ({ display: "DisplayPage.qml", battery: "BatteryPage.qml", apps: "AppsPage.qml" })
     readonly property string customSource: backend.searching ? "" : (customPages[backend.page] || "")
     readonly property bool showingAbout: backend.page === "about" && !backend.searching
     Connections {
