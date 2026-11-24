@@ -134,7 +134,7 @@ The retry byte (`0x34`) is 1 in both reads, and `0x35` is `0x0c`.
 
 The WCN6855 BT core works on the APM USI1 UART (`serial@181b0000`, ttySAC18
 in Google's kernel), the shape of cheetah's BCM4389. Kernel side, merged as
-[linux-omarchy-mobile#98](https://github.com/derekross/linux-omarchy-mobile/pull/98):
+[linux-omamobile#98](https://github.com/derekross/linux-omamobile/pull/98):
 `cmu_apm`, `usi_apm1`, `serial_apm1`, `pinctrl_peric0`, `pinctrl_hsi2`, and a
 `qcom,wcn6855-bt` node fed by a `qcom,wcn6855-pmu` node (`pwrseq-qcom-wcn`):
 the 0.95 V buck on `gph2-5` as a fixed regulator with a 7 ms ramp, then BT_EN
@@ -244,7 +244,7 @@ a Wi-Fi run's kernel had the Bluetooth node.
 
 ## 2026-10-23: first light
 
-- **Slot B boots and SSH comes up at `root@172.16.42.1`.** Kernel 7.3.0-rc6 from linux-omarchy-mobile. Both cluster watchdogs are stopped at probe. Slot B is not marked successful. Slot A is stock CP2A.260705.006 with Magisk on `init_boot_a`.
+- **Slot B boots and SSH comes up at `root@172.16.42.1`.** Kernel 7.3.0-rc6 from linux-omamobile. Both cluster watchdogs are stopped at probe. Slot B is not marked successful. Slot A is stock CP2A.260705.006 with Magisk on `init_boot_a`.
 - **ABL needs AVB footers on `boot` and `init_boot`.** Stock signs both with their own SHA256_RSA4096 keys, rollback index `1783209600`, and vbmeta chains them. With no footer, unlocked ABL never showed the orange warning for slot B. The screen went black, ABL retried until `slot-retry-count:b` reached 0, then booted slot A. Nothing reached USB and pstore stayed empty. Putting stock's own IPOP DTB into our `vendor_kernel_boot` failed the same way, so the DTB was not the cause. With `AVB_FOOTERS`, `AVB_ROLLBACK_INDEX` and `AVB_SECURITY_PATCH` (stock's values, from `avbtool info_image`) the next boot reached our kernel. The Pixel 7 Pro's stock `vbmeta` also chains `boot` and `init_boot`, with the same rollback index, and its bootloader is the same build (15199429), yet it boots our images without footers (checked by the maintainer on review). So this is the 7a's bootloader, not gs201 or the vbmeta layout. `vendor_boot`, `vendor_kernel_boot` and `dtbo` carry only unsigned hash footers on stock, and ours have none.
 - **The DTB is matched on `/soc_compatible`.** The SoC is the IPOP package (`ro.boot.hw.soc.pkg_mode` 1, `ro.boot.hw.soc.rev` 2). Stock's `vendor_kernel_boot` holds three DTBs: `soc_id` 0x9855000, `soc_id` 0x9855001, and `/soc_compatible/B0_IPOP { product_id 0x9855, major 1, minor 0, pkg_mode 1 }`. The live stock tree is the third. One DTB with that node and no `soc_id` was accepted (`SOC_COMPATIBLE="b0-ipop:0x9855:1:0:1"`). Whether ABL would also take a `soc_id` DTB on this chip was not tried. Fastboot's screen says "Product revision: lynx MP1.0 B0".
 - **ABL adds `sec_dram` (0xb7200000), `sec_pt` (0xe0000000) and `pkvm_guest_firmware` to the tree it hands over.** On our boot it put `pkvm_guest_firmware` at 0xb5000000, not 0x8b000000 as on stock. Stock's `tui` (48 MiB), `mfc_fw` and `famodel` are not fixed regions: Google's `gs101-dma-heap.dtsi` gives them a `size` and `alloc-ranges` only, and 0xf3200000 is just where stock's kernel placed `tui` on that boot (it goes to the secure world only during a Trusted UI session). The board file reserves none of them; an earlier version reserved `tui` at that address for nothing.
@@ -303,7 +303,7 @@ a Wi-Fi run's kernel had the Bluetooth node.
   of `ramoops@fd3ff000`, although that pair is not printed in this capture.
   These are overlapping allocations, not evidence that all warnings are
   harmless duplicates. The shared debug reservation has since been fixed
-  in `gs201.dtsi` (linux-omarchy-mobile #58 shrinks `debug@fd3f0000`), so
+  in `gs201.dtsi` (linux-omamobile #58 shrinks `debug@fd3f0000`), so
   a kernel from the current `omamobile` branch prints one overlap fewer.
 
   The later curated first-light capture, `lynx-m1-omamobile-20261023/dmesg.txt`

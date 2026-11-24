@@ -9,7 +9,7 @@ set -euo pipefail
 ADDRESS=172.16.42.1	# the phone's end of the USB gadget link (usb0); never anything else
 PORT=5900
 IFACE=usb0
-NAME="Omarchy Mobile phone"	# the desktop name: the viewer's window title
+NAME="Omamobile phone"	# the desktop name: the viewer's window title
 CONF=${OMAMOBILE_MIRROR_CONF:-${XDG_CONFIG_HOME:-$HOME/.config}/omamobile/mirror.conf}
 
 die() { echo "omamobile-mirror: $*" >&2; exit 1; }

@@ -7,8 +7,8 @@
      that only masks or unmasks omamobile-modem-boot.target and starts it
      when this boot's modem never started. -->
 <policyconfig>
-  <vendor>Omarchy Mobile</vendor>
-  <vendor_url>https://github.com/derekross/omarchy-mobile</vendor_url>
+  <vendor>Omamobile</vendor>
+  <vendor_url>https://github.com/derekross/omamobile</vendor_url>
   <action id="org.omamobile.modem.switch">
     <description>Turn the modem on or off</description>
     <message>Authentication is required to turn the modem on or off</message>

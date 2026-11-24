@@ -4,7 +4,7 @@
 **Status (2026-11-12):** the newest RAM boot used the Dipper FTS5 node enabled directly in a local kernel tree. `stmfts` registered as `event2`; the screen was not visually verified, and no physical touch was captured on that boot. The preceding corrected overlay boot captured contact, changing X/Y and release. All recorded UFS partition flags were read-only, `/dev/sda` was absent, and `0x85fc0000–0x8a8fffff` remained reserved. No UFS partition was written. Rebuildable kernel DTS and repository overlay sources are now proposed in kernel PR #249 and this PR; the test images predate those commits. Earlier boots are recorded in [NOTES.md].
 
 A separate RAM NFS-root run used image `a2d435a7430e7e4c145c61cdb9866d16929731859d91c7105e6bfcaf9e3e9dd7` with the rebased #503 init. BusyBox `mount` switched to the test NFS root; all six disk flags and all 85 partition flags were `ro=1`. Systemd reached the multi-user target with `RuntimeWatchdogSec=60s`, and SSH remained available. `reboot-to bootloader` returned the phone to fastboot. The exported root was a generic Arch base; this did not test the Omarchy desktop or link-loss recovery. Full results are in [NOTES.md].
-The FTS5 driver from [touch #219] is merged into linux-omarchy-mobile. The
+The FTS5 driver from [touch #219] is merged into linux-omamobile. The
 Dipper board DTS from [DTS #220] is merged too (2026-11-11), and the EA8074
 panel driver is under review in [panel #218].
 The EA8074 panel test and the corrected FTS5 touchscreen hardware test are
@@ -48,7 +48,7 @@ archive's checksum file. Do not boot if either backup is missing or fails.
 3. **Recovery gate** — Fastboot entry uses **Volume Down + Power**; the forced
    restart is separate. On 2026-11-09, an attended test found that holding
    **Power alone for 10 seconds** restarted into Android from both installed
-   Android and the Omarchy Mobile RAM kernel. Volume Down + Power then entered
+   Android and the Omamobile RAM kernel. Volume Down + Power then entered
    fastboot from Android. Expect: the Power-only hold restarts the phone. Pass:
    the observed procedure above is recorded and the phone can enter fastboot.
    Stop if Power alone does not restart it. Rollback: do not start a RAM boot
@@ -89,7 +89,7 @@ push`, or the installer. Keep the phone and USB cable present during a probe.
 ## Build and probe
 
 Build a kernel checkout containing the Dipper kernel PRs with
-`device/dipper/kernel.config` merged after the shared Omarchy Mobile fragment.
+`device/dipper/kernel.config` merged after the shared Omamobile fragment.
 Set `DEVICE=dipper`, `KERNEL_DIR` (source), and `KERNEL_OUT` (build output), then
 run `bin/omamobile kernel`. The output must include `Image`, `Image.gz`,
 `arch/arm64/boot/dts/qcom/sdm845-xiaomi-dipper.dtb`, and modules from that same
@@ -135,7 +135,7 @@ driver to select the bootloader and writes no UFS partition. The PMIC reset path
 was verified on the handset on 2026-11-09. The packaged helper returned the
 running image to fastboot on 2026-11-09 without writing UFS.
 
-[panel #218]: https://github.com/derekross/linux-omarchy-mobile/pull/218
-[touch #219]: https://github.com/derekross/linux-omarchy-mobile/pull/219
-[DTS #220]: https://github.com/derekross/linux-omarchy-mobile/pull/220
+[panel #218]: https://github.com/derekross/linux-omamobile/pull/218
+[touch #219]: https://github.com/derekross/linux-omamobile/pull/219
+[DTS #220]: https://github.com/derekross/linux-omamobile/pull/220
 [NOTES.md]: NOTES.md

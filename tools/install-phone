@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# install-phone: install Omarchy Mobile on a phone in fastboot mode, from the
+# install-phone: install Omamobile on a phone in fastboot mode, from the
 # laptop (docs/RELEASES.md §6). In a release bundle this file is "install";
 # it also runs from a bundle's tools/ directory, where a guided installer
 # can call it: first with --verify-only, then with --dry-run, then for the
@@ -100,7 +100,7 @@
 #                            terminal only, never from piped answers. Every
 #                            stop of the slot check comes before any write
 #                            and ends with exit status 3
-#     --reinstall            slot B is the current slot and holds Omarchy Mobile
+#     --reinstall            slot B is the current slot and holds Omamobile
 #                            (a reinstall); without it, a phone running from
 #                            slot B is refused, since that is where stock
 #                            Android runs after a system update. A reinstall
@@ -136,7 +136,7 @@ shopt -s nullglob
 export LC_ALL=C
 
 FASTBOOT=${FASTBOOT:-fastboot}
-# Omarchy Mobile's keys (packages/omamobile-keyring): the release key, and the
+# Omamobile's keys (packages/omamobile-keyring): the release key, and the
 # original package key until it is retired. A subkey's signature reports its
 # primary's fingerprint, which is what is matched.
 SIGNING_KEYS='20567593566EEEE2DD8864608632C8075EB94673|6C84FE3D240709E70E27CC94B301F5EA62B249FE'
@@ -342,7 +342,7 @@ if [[ $mode == bundle ]]; then
     status=$(gpg --homedir "$gnupg" --batch --status-fd 1 --verify "$here/SHA256SUMS.sig" "$here/SHA256SUMS" 2>/dev/null || true)
     rm -rf "$gnupg"
     signer=$(grep -Eo "^\[GNUPG:\] VALIDSIG .* ($SIGNING_KEYS)\$" <<<"$status" | awk '{ print $NF }') ||
-      die "SHA256SUMS is not signed by the Omarchy Mobile key (${SIGNING_KEYS//|/ or })"
+      die "SHA256SUMS is not signed by the Omamobile key (${SIGNING_KEYS//|/ or })"
     note "SHA256SUMS signed by $signer"
   else
     ((unsigned)) || die "the bundle is not signed (SHA256SUMS.sig); --unsigned accepts a development bundle"
@@ -551,7 +551,7 @@ PY
     [[ ${M[kernel_release]} == "$(sed -n 's/^kernel release: //p' "$here/MANIFEST")" ]] ||
       die "manifest.json and MANIFEST name different kernels"
   fi
-  note "manifest.json: Omarchy Mobile ${M[version]} (${M[label]}), its plan matches the descriptor"
+  note "manifest.json: Omamobile ${M[version]} (${M[label]}), its plan matches the descriptor"
 fi
 if [[ -z $rootfs ]]; then
   if [[ -n $root_name ]]; then
@@ -985,7 +985,7 @@ slot_probe() {
 }
 SLOTS_DIFFER="Never flash a bootloader partition by hand (CONTRIBUTING §3.1): from stock Android, sideload the full OTA for your build twice, so each slot gets the same bootloader, then rerun. If that doesn't make them match, stop and ask in an issue"
 refuse_stock_on_b() {
-  die "the phone runs from slot b. If stock Android is on slot b (after an Android system update), installing would overwrite it: make slot a active (fastboot --set-active=a), flash Google's factory image onto it, check Android starts, then rerun. If slot b holds Omarchy Mobile (a reinstall), rerun with --reinstall"
+  die "the phone runs from slot b. If stock Android is on slot b (after an Android system update), installing would overwrite it: make slot a active (fastboot --set-active=a), flash Google's factory image onto it, check Android starts, then rerun. If slot b holds Omamobile (a reinstall), rerun with --reinstall"
 }
 
 # --- The phone ---------------------------------------------------------------
@@ -1014,21 +1014,21 @@ current_slot=$(var current-slot)
 current_bl=$(var version-bootloader)
 [[ -n $current_bl ]] || die "the phone reports no version-bootloader"
 if ((fmt == 2)); then
-  # The running slot (format 2): the bootloader that starts Omarchy Mobile is
+  # The running slot (format 2): the bootloader that starts Omamobile is
   # the one answering now, so the other slot's version, the slot check,
   # --bootloader-slots-match and --reinstall have no part in it. The slot
   # must be one the descriptor accepts; the stop names no way round it, and
   # never "--set-active": that would start the other slot's bootloader at a
   # version nothing here has read.
   [[ " $ACTIVE_SLOTS " == *" $current_slot "* ]] ||
-    die "the phone runs from slot $current_slot, and this release installs only on slot ${ACTIVE_SLOTS// / or } (current-slot-not-accepted): installing on slot $current_slot is not supported yet. Don't switch the phone's slot to get past this; ask in an issue (https://github.com/derekross/omarchy-mobile/issues)"
+    die "the phone runs from slot $current_slot, and this release installs only on slot ${ACTIVE_SLOTS// / or } (current-slot-not-accepted): installing on slot $current_slot is not supported yet. Don't switch the phone's slot to get past this; ask in an issue (https://github.com/derekross/omamobile/issues)"
   target=$current_slot
   ((reinstall == 0 && measure_ok == 0)) && [[ -z $slots_match ]] ||
     note "--reinstall, --bootloader-slots-match and --measure-other-slot are not used: this release installs on the slot the phone runs from"
   other=b
   [[ $target == b ]] && other=a
   slot_flags_read before
-  note "bootloader $current_bl on slot $target, the slot the phone runs from; it starts Omarchy Mobile, and no slot is switched"
+  note "bootloader $current_bl on slot $target, the slot the phone runs from; it starts Omamobile, and no slot is switched"
   note "$CODENAME, unlocked, current slot $current_slot"
   slot_flags_line before "slot flags"
   if [[ $(slot_flag successful "$other") == yes && $(slot_flag unbootable "$other") != yes ]]; then
@@ -1063,12 +1063,12 @@ if ((fmt == 1)); then
     fi
     # "First install" is all fastboot can show of it: on slot a, no --reinstall,
     # and slot b not looking like a system that has started and can still
-    # start. That look (successful yes, unbootable no) is an installed Omarchy
-    # Mobile with the phone sent back to slot a, and also stock after a system
+    # start. That look (successful yes, unbootable no) is an installed Omamobile
+    # with the phone sent back to slot a, and also stock after a system
     # update; the two can't be told apart from here, so neither gets the round
     # trip. Flags the phone doesn't report count as that look too.
     if [[ $(slot_flag unbootable b) != yes && $(slot_flag successful b) != no ]]; then
-      die "$unmeasured. The installer does not switch slots to measure it on this phone as it is: slot b reads successful '$(slot_flag successful b)', unbootable '$(slot_flag unbootable b)', and a slot that has started and can still start is what an installed Omarchy Mobile looks like from fastboot (stock Android after a system update looks the same). Switching slots would clear that mark. If slot b holds Omarchy Mobile, this is a reinstall: say --reinstall as well"
+      die "$unmeasured. The installer does not switch slots to measure it on this phone as it is: slot b reads successful '$(slot_flag successful b)', unbootable '$(slot_flag unbootable b)', and a slot that has started and can still start is what an installed Omamobile looks like from fastboot (stock Android after a system update looks the same). Switching slots would clear that mark. If slot b holds Omamobile, this is a reinstall: say --reinstall as well"
     fi
     slot_probe
   fi
@@ -1076,12 +1076,12 @@ if ((fmt == 1)); then
   # Stock Android must be the one on slot A. An Android system update writes the
   # other slot and switches to it, so a phone that took one can run stock from
   # slot B, and writing slot B would overwrite the stock system in use. From
-  # fastboot alone a reinstall (Omarchy Mobile on B) looks the same, so the
+  # fastboot alone a reinstall (Omamobile on B) looks the same, so the
   # owner says which it is.
   if [[ $current_slot == b && $reinstall != 1 ]]; then
     refuse_stock_on_b
   fi
-  [[ $current_slot == b ]] && note "slot b holds Omarchy Mobile (--reinstall): it will be replaced"
+  [[ $current_slot == b ]] && note "slot b holds Omamobile (--reinstall): it will be replaced"
 fi
 # Each image must fit the partition it is written to (slot B's, or the
 # running slot's), an AVB_FOOTERS image exactly.
@@ -1198,7 +1198,7 @@ say "Preparing a local copy of the root image in $work"
 rm -f "$copy" "$sparse"
 zstd -q -d --sparse -f "$rootfs" -o "$copy"
 [[ $(dumpe2fs -h "$copy" 2>/dev/null | sed -n 's/^Filesystem volume name: *//p') == omamobile-root ]] ||
-  die "$rootfs is not an Omarchy Mobile root image (label omamobile-root)"
+  die "$rootfs is not an Omamobile root image (label omamobile-root)"
 # debugfs's mkdir on a directory that already exists (a restored or
 # lived-in root) still allocates the inode, then fails to link it, which
 # leaves an unconnected directory: make only the missing ones.
@@ -1335,7 +1335,7 @@ echo "    fastboot flash userdata $userdata_image"
 echo "    fastboot reboot"
 echo
 if ((fmt == 2)); then
-  echo "Android on this phone is REPLACED: Omarchy Mobile is written over the system"
+  echo "Android on this phone is REPLACED: Omamobile is written over the system"
   echo "the phone runs from (slot $target), and userdata is ERASED, so Android and its"
   echo "data are gone. The phone keeps starting from slot $target; no slot is switched."
   echo "The way back to Android is Google's factory image for this phone (Google's"
@@ -1373,7 +1373,7 @@ if ((fmt == 2 && !dry)); then
   # Read back (read-only): still the same slot, and its flags after the writes
   read_vars
   [[ $(var current-slot) == "$target" ]] ||
-    die "after the writes the phone reports current slot '$(var current-slot)', not $target: it is not restarted. Ask in an issue before you restart it (https://github.com/derekross/omarchy-mobile/issues)"
+    die "after the writes the phone reports current slot '$(var current-slot)', not $target: it is not restarted. Ask in an issue before you restart it (https://github.com/derekross/omamobile/issues)"
   slot_flags_read after
   slot_flags_line after "after the writes"
 fi
@@ -1386,7 +1386,7 @@ if ((dry)); then
   fi
 else
   if ((fmt == 2)); then
-    say "Done. The phone starts Omarchy Mobile from slot $target; the first boot sets up $username (a few minutes)."
+    say "Done. The phone starts Omamobile from slot $target; the first boot sets up $username (a few minutes)."
   else
     say "Done. The phone boots slot B; the first boot sets up $username (a few minutes)."
   fi

@@ -5,7 +5,7 @@
 # do that through /usr/share/polkit-1/rules.d/50-omamobile-mirror.rules.
 # Stopping it at shutdown removes the rule again.
 [Unit]
-Description=Omarchy Mobile screen mirroring: VNC port on the USB link
+Description=Omamobile screen mirroring: VNC port on the USB link
 After=ufw.service
 
 [Service]

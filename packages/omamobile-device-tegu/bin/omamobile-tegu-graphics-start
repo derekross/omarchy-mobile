@@ -225,7 +225,7 @@ fi
 # Wi-Fi: the PCIe host for channel 1, whose probe brings the link up, then
 # the BCM4383 on brcmfmac. The host is the shared zuma-family pair
 # (phy_zuma_pcie, then pcie_gs201) when the node says google,zuma-pcie
-# (linux-omarchy-mobile#178), else the older standalone pcie_zumapro (#168).
+# (linux-omamobile#178), else the older standalone pcie_zumapro (#168).
 # Only with the host's node, the restricted DMA pool the endpoint needs, and
 # the owner's firmware (tools/extract-vendor-firmware). Never unloaded: a
 # reboot undoes it.

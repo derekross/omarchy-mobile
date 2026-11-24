@@ -3,6 +3,49 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-811. A stage recorded as "passed" is laid against every clause of its
+  Pass line, and a stop rule written as "any X error" against the lines the
+  run logged and kept going through.** #835's H1 passed on its kernel criteria
+  with three of its listed after-checks not done, and logged a UFS `dme-set`
+  failure line under stop conditions that begin "any UFS error"; the line is
+  benign (the 9a's plan has it on every healthy wake), but the plan didn't say
+  so. *Check:* split the Pass line at its semicolons and tick each clause
+  against the result; grep the result paragraph for `failed\|error` and match
+  each hit to a stop condition or to a sentence that excuses it by name, with
+  the sibling plan that records it (`git grep -n '<line>' origin/main --
+  device/`). Extends L-435 and L-756. *From:* #835, round 60, 2026-11-17.
+- **L-810. A phone test of a packaged drop-in starts with the merged view,
+  because a hand copy of the same name in `/etc` silently replaces the
+  package's file.** On #806 the contributor's 8 Pro had
+  `/etc/systemd/sleep.conf.d/10-omamobile.conf` from an earlier experiment;
+  with it in place the test would have "passed" on the old settings. *Check:*
+  when asking for a phone run of any `/usr/lib/systemd/*.d`, `modprobe.d`,
+  `udev/rules.d` or NetworkManager `conf.d` file, ask first for
+  `systemd-analyze cat-config`, `modprobe -c` or `NetworkManager
+  --print-config`, and for `pacman -Qo` on every file it lists under `/etc`;
+  pass the finding on to the device's other owners. Extends L-362 and L-46.
+  *From:* #806, round 60, 2026-11-17.
+- **L-802. A fix "tested on the phone" by swapping a file into the extracted
+  image by hand has not run its own code path.** #863's stub was copied over
+  the image's library, and the new function ran once inside a live namespace;
+  the profile's start, where the function sits under `set -e` before cbd,
+  never ran with it. *Check:* for a profile or runner change, ask which
+  invocation executed the new lines (the unit's start, or a hand call), and
+  whether the hand-modified image was restored before the run that counts.
+  Extends L-361 and L-436. *From:* #863, round 60, 2026-11-17.
+- **L-801. A sleep series is described by what ended each sleep and how long
+  it was, and it counts only for the path that was run.** #846's 86 of 86 were
+  all modem wakes within 29 s, while the failures being closed came on
+  RTC-woken sleeps of 120 s with the modem off; its later 300 of 300 held four
+  wakes on the touchscreen's interrupt with nobody at the phone; #912's 470
+  sleeps were `systemctl suspend -i` with 60 s alarms, for a default that
+  enables sleeps of hours with no alarm. *Check:* ask for `pm_wakeup_irq` (or
+  sleepd's "woken by" line) and the length per cycle next to any "N of N
+  woke"; name the command, wake source and length range of the path the change
+  turns on, and find rows with those on the same kernel and package; for a
+  source that isn't the test's own, `git log -S` when it became a wake source
+  and name the PR that would make it a default. Extends L-345, L-482 and
+  L-625. *From:* #846 with #758, rounds 60 and 61; #912, round 63, 2026-11-20.
 - **L-800. When a cell's "works once X" condition is met, the new word is
   still read against the legend, the diff against the caveats it drops, and
   any "that belongs to the other cell" against the other cell.** #846 moved

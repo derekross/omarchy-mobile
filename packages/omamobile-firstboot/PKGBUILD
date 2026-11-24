@@ -3,9 +3,9 @@
 pkgname=omamobile-firstboot
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile first boot: the user, SSH key, firewall and Omarchy's setup from the installer's answers"
+pkgdesc="Omamobile first boot: the user, SSH key, firewall and Omarchy's setup from the installer's answers"
 arch=(any)
-url="https://github.com/derekross/omarchy-mobile"
+url="https://github.com/derekross/omamobile"
 license=(MIT)
 depends=(bash coreutils grep sed gawk shadow sudo systemd openssh ufw networkmanager pacman util-linux)
 checkdepends=(diffutils)

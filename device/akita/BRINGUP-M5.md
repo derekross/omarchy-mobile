@@ -3,7 +3,7 @@
 
 **Status (2026-11-15):** **M5 is complete on the phone.** The CPUs scale to the 8a's caps (mid +33 %, big +84 % on one core), nine cores at full load for 3 minutes peaked at 71 C without throttling, and the GPU renders the session. It's "definitely better but not perfectly responsive": what's left is the display path, simpledrm copying every frame, which needs the display driver (the next milestone). See [Results](#results).
 
-The kernel side is linux-omarchy-mobile#264, merged on 2026-11-21: three commits on `omamobile` at `26867fc4e` (CPU DVFS with the 8a's caps; the GPU's levels moved into `zuma.dtsi` for both zuma boards; the 8a's GPU, to 723 MHz), on top of #158 (CPU DVFS, thermal) and #157's GPU commits. The device package's GPU ceiling is omarchy-mobile#832, merged the same day. M4 is complete ([BRINGUP-M4](BRINGUP-M4.md)).
+The kernel side is linux-omamobile#264, merged on 2026-11-21: three commits on `omamobile` at `26867fc4e` (CPU DVFS with the 8a's caps; the GPU's levels moved into `zuma.dtsi` for both zuma boards; the 8a's GPU, to 723 MHz), on top of #158 (CPU DVFS, thermal) and #157's GPU commits. The device package's GPU ceiling is omamobile#832, merged the same day. M4 is complete ([BRINGUP-M4](BRINGUP-M4.md)).
 
 ## Goal
 
@@ -24,7 +24,7 @@ Slot A stays stock. Only slot B's boot images and `userdata` are written.
 - **Kernel, merged on `omamobile`:**
   - **#158:** `zuma.dtsi` has the three CPU clusters' level tables (`cpucl0_opp`, `cpucl1_opp`, `cpucl2_opp`), with each level's power from stock's energy model, the ACPM TMU and the CPU thermal zones. **The tables are only used where a board file points its CPUs at them,** and today only `zuma-husky.dts` does. The reason is the levels marked `turbo-mode`: they're the 8 Pro's battery-limiter (BCL) caps, and "a board whose BCL caps are lower needs tables of its own" (`zuma.dtsi`). The maintainer raised this for the 8a on #158.
   - **#157:** CMU_G3D, the GPU node, zuma's `clk-acpm` variant with the paired "gpu" clock, and a GPU thermal zone. `zuma-husky.dts` enables `&cmu_g3d` and `&gpu` and gives it a 13-level table up to 890 MHz.
-- **omarchy-mobile:** husky's device package lets the ACPM GPU clock reach stock's 890 MHz (`omamobile-husky-clk-acpm.conf`).
+- **omamobile:** husky's device package lets the ACPM GPU clock reach stock's 890 MHz (`omamobile-husky-clk-acpm.conf`).
 - **husky's lessons:**
   - software video decode took the SoC to 86 C, so the 8 Pro's test phone runs lowered trips and CPU caps as a stopgap (ROADMAP, Thermal row);
   - panthor logs `no regulator (mali)` for its levels, not yet explained.

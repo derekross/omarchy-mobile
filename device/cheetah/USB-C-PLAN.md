@@ -879,7 +879,7 @@ a third 7 Pro read `0x13` on flat boots on 11-15 and 11-17 (#169). Another candi
 USB-PD stack, which we don't have), so a warm reboot from slot A could carry
 it over if the bit survives a reboot, which K1b.4 finds out.
 
-**The fix**, linux-omarchy-mobile#261, `omamobile-charger-autoibus` (one
+**The fix**, linux-omamobile#261, `omamobile-charger-autoibus` (one
 commit on `github/omamobile` @ `d49d68c764d4`):
 `max77759_charger_start_default()` clears `NO_AUTOIBUS` after setting the
 default limit (a failure is a warning, not a failed probe), and the `found:`

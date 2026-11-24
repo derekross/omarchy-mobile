@@ -3,7 +3,7 @@
 # for gpsd users: holds the bridge (and so the stack) up and stops the
 # bridge's idle exit while it is active.
 [Unit]
-Description=Omarchy Mobile GNSS, kept running
+Description=Omamobile GNSS, kept running
 Wants=omamobile-gnss-nmea.service
 After=omamobile-gnss-nmea.socket
 

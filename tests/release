@@ -74,7 +74,7 @@ git -C "$t/ksrc" tag kernel-2026.11.05 && git -C "$t/ksrc" push -q "$K" refs/tag
 if run --version "$V" kernel; then fail "a lightweight tag is refused"; fi
 grep -q 'lightweight' "$t/log" || fail "says the tag is lightweight"
 git -C "$t/ksrc" push -q "$K" :refs/tags/kernel-2026.11.05 && git -C "$t/ksrc" tag -d kernel-2026.11.05 >/dev/null
-git -C "$t/ksrc" tag -a -m "Omarchy Mobile kernel 2026.11.05" kernel-2026.11.05 && git -C "$t/ksrc" push -q "$K" refs/tags/kernel-2026.11.05
+git -C "$t/ksrc" tag -a -m "Omamobile kernel 2026.11.05" kernel-2026.11.05 && git -C "$t/ksrc" push -q "$K" refs/tags/kernel-2026.11.05
 if run --version "$V" kernel; then fail "a missing release worktree is refused"; fi
 grep -q 'worktree add --detach' "$t/log" || fail "says how to make the release worktree"
 git clone -q -b omamobile "$K" "$RELEASE_KERNEL_DIR"
@@ -379,7 +379,7 @@ if trun --version "$V" test-install --passed 7.3.0-rc6-omamobile-push1-gdeadbeef
 pass "test-install asks whether stable has an index: none prints the one-time promotion and stops, no answer stops, one lets the steps through"
 printf 'promote_done=x\nkernel_tag=kernel-2026.11.05\nidentifiers_done=clean\n' >> "$st"
 mkdir -p "$R/docs/release-notes"
-printf '# Omarchy Mobile 2026.MM.DD\nkernel-2026.11.05\n' > "$R/docs/release-notes/$V.md"
+printf '# Omamobile 2026.MM.DD\nkernel-2026.11.05\n' > "$R/docs/release-notes/$V.md"
 if run --version "$V" tag; then fail "notes with placeholders are refused"; fi
 grep -q 'placeholders' "$t/log" || fail "says the notes have placeholders"
 pass "test-install records only the release kernel on a signed bundle; tag refuses unfinished notes"

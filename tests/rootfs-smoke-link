@@ -38,7 +38,7 @@ base() {
   for u in sshd NetworkManager systemd-networkd sddm; do ln -s "/usr/lib/systemd/system/$u.service" "etc/systemd/system/multi-user.target.wants/$u.service"; done
   : > usr/lib/modules/7.0.0-test/modules.dep
   echo uninitialized > etc/machine-id
-  printf '# Omarchy Mobile root image\nversion: fixture\nomamobile channel: stable\nkernel modules: 7.0.0-test (tarball sha256 0)\n\n# packages (name version repository)\nomamobile-device-fixture 0.1-1 omamobile\n' \
+  printf '# Omamobile root image\nversion: fixture\nomamobile channel: stable\nkernel modules: 7.0.0-test (tarball sha256 0)\n\n# packages (name version repository)\nomamobile-device-fixture 0.1-1 omamobile\n' \
     > usr/share/omamobile/rootfs/MANIFEST
   cd - >/dev/null
 }
