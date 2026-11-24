@@ -13,6 +13,33 @@ hash/build ID; this dirty release is not a published kernel package.
 `[V]` marks verified observations; `[I]` marks an inference still to test.
 Raw captures, recordings, backups and vendor files remain off repository.
 
+## 2026-11-23: the battery model after a flat pack
+
+Kernel `7.3.0-rc6-omamobile-push1-daily102-gf054c72f8707` (the published tip of
+2026-11-20 with kernel #164, #124, #165 and #193), with linux-omamobile#294's
+`max77779_battery` built as a module.
+
+- [V] **What a flat pack costs.** The palmtop's pack ran flat on 2026-11-22. After it the
+  gauge reported Status 0x0002 (power-on reset), DesignCap and nFullCapNom at the defaults'
+  0x0d48, and the driver withheld the charges and the time estimates, as 97324d08f
+  intends: UPower showed 0 Wh and no time left, and the shell's battery panel "0Wh".
+- [V] **The load.** `overlays/gauge-model-lwn.dtso` added to the DTB, then the module of
+  #294: with `load_model=0` no register changed; the load took one attempt and left
+  Status, POR in FG_INT_STS and Cycles at 0, USR locked (0x0e), DesignCap, FullCapRep and
+  nFullCapNom 0x0800, Config2 0x0081. sysfs: `charge_full_design` and `charge_full`
+  5120000, `cycle_count` 0; UPower 22.1 Wh. The percentage went from 100 % to 88 % on the
+  charger.
+- [I] **Which pack.** Google's 9a battery data has two packs, ATL (ID 1, nDesignCap
+  0x07fc, 5110 mAh) and LWN (ID 4, 0x0800, 5120 mAh), told apart by byte 0x17 of the
+  pack's EEPROM, which our device tree doesn't describe. On 2026-10-24, with stock's
+  model still loaded, this gauge reported 5120 mAh, so this pack is taken to be LWN.
+  Another 9a may have the ATL pack: `overlays/gauge-model-atl.dtso` is for that one.
+- Both overlays are opt-in, never in the default DTB list, and come from
+  `tools/gen-gauge-overlay-tegu.py` with Google's
+  `dts/zuma-tegu-battery-data.dtsi` (kernel/devices/google/tegu, branch
+  android-gs-tegu-6.1-android16). Once loaded, the model stays in the gauge until its
+  next power-on reset; the overlay only matters at the first boot after a flat pack.
+
 ## 2026-11-20: Wi-Fi power save
 
 Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, the daily
