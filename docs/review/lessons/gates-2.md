@@ -3,6 +3,51 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-796. A package test that runs a start script calling the host's `sync`
+  fails under a loaded review machine.** `omamobile-modem`'s `test/all` gives
+  three `sync`s 20 s; with parallel reviews building, one case ended with rc
+  124 on #850's tree and passed on the next run. *Check:* on a timeout in a
+  case the PR doesn't touch, read `uptime`, time a `sync`, and rerun on main
+  and on the head before calling it the PR's; the script could take its `sync`
+  from a variable the test overrides. Extends L-42 and L-346. *From:* #850,
+  round 60, 2026-11-17.
+- **L-793. A docs PR that adds a place to download a program is checked for
+  what verifies the download.** The release bundle is verified by signature
+  whatever its URL; the installer app's files had a checksum file beside them
+  and nothing else. *Check:* for each new download link, name the file, what
+  the reader is told to check it against, and whether that check is anchored
+  in a key or only in the same page. Extends L-632 and L-422. *From:* #843,
+  round 60, 2026-11-17.
+- **L-785. A tool that starts keeping state under the user's home is run by the
+  tests with that home in scratch.** #855's `mkdir` under `XDG_DATA_HOME` made
+  `tests/phone-ssh` and `tests/make-bundle` write into the tester's real home,
+  and made the tool exit under `set -u` where `HOME` is unset. *Check:* run
+  the suite with `HOME` and `XDG_*` pointed at an empty scratch directory and
+  list it afterwards; run the tool's first lines with both unset. Extends
+  L-454 and L-681. *From:* #855, round 60, 2026-11-17.
+- **L-783. A base image pinned by digest under a rolling-release `pacman -Syu`
+  needs a keyring refresh and a named bump step.** The pin fixes the trust
+  root and nothing else; without a refresh the job fails some months later on
+  every PR at once. *Check:* for a digest pin of a rolling distribution's
+  image, find who bumps it (Dependabot, a comment with the command) and
+  whether the first package step updates the keyring. *From:* #853, round 60,
+  2026-11-17.
+- **L-782. A pin of a moving tag is compared with what the tag resolves to
+  today, not only with the release the PR names.** #853 pinned
+  `actions/checkout` to v5.0.0's commit, which is genuine, while `@v5` had
+  been at v5.1.0 for four months, so "no behaviour change" moved CI back three
+  commits, a security default among them. *Check:* `git ls-remote
+  https://github.com/<owner>/<action> 'refs/tags/v<N>*'`: the pinned id is a
+  tag's target in the action's own repository (a fork's commit also resolves
+  under the parent's name) and equals the major tag's target unless the PR
+  says why not; for a container digest, compare with the registry's
+  `docker-content-digest` for the tag and read the index for its platforms and
+  build date. *From:* #853, round 60, 2026-11-17.
+- **L-781. "The builds are run by hand, so there is no test" is checked against
+  the test file's own stand-ins.** `tests/kernel-pr-check` has had a stand-in
+  `make` for `--build` since the device-tree comparison. *Check:* `grep -n
+  'stand-in\|fake' tests/<the tool's test>` before accepting that a path can't
+  be tested. Extends L-454. *From:* #851, round 60, 2026-11-17.
 - **L-780. A gate fallback for "this file can't be checked the usual way" is
   fed a file that is simply broken, on the real build, and the summary line is
   read for what it counts.** #851 built an included `.c` through its includer;

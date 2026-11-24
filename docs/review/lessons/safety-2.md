@@ -3,6 +3,75 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-830. A runbook that masks a boot-started unit "after boot" leaves it
+  running for that boot.** #815's K1b.3 masked `omamobile-modem-boot.target`
+  after the push's reboot had started the modem, so the next step's
+  watchdog-armed write would have run with the modem up, against the plan's
+  own Setup. *Check:* for each `mask` or `disable` in a runbook, name the
+  boot it first takes effect on and the step that needs the unit down; if
+  they are the same boot, the mask goes before the reboot, or a stop is
+  written into the step. Extends L-564 and L-445. *From:* #815, round 60,
+  2026-11-17.
+- **L-825. A fallback that "landed in stock recovery" is asked whether Android
+  itself started.** #852 recorded a slot A fallback ending in recovery and
+  `adb reboot bootloader`, with no word on a backup; CONTRIBUTING §3.3's rule
+  is about a stock Android boot, and a recovery screen alone doesn't run the
+  modem stack. *Check:* grep a docs PR for "recovery", "fell to" and "slot
+  A", and ask which of the two it was. Extends L-726 and L-186. *From:* #852,
+  round 60, 2026-11-17.
+- **L-812. "One stage per go-ahead" in a runbook names whose go-ahead.**
+  #835's H1 ran twenty minutes after H0b on the go-ahead given for H0b; the
+  plan's rule didn't say the maintainer's. *Check:* for each per-stage
+  consent rule in a plan, find the comment that gave it for the stage
+  recorded, by time (author dates in UTC against the thread), and ask that
+  the rule name the person. Extends L-663 and L-694. *From:* #835, round 60,
+  2026-11-17.
+- **L-809. A "default for every new device" is checked at the selector's
+  fall-through, not only at the variable's default.** #874's
+  `FIRST_START=${FIRST_START:-owner}` was the default for a new `case` entry,
+  but `fp_device` mapped every unknown board to cheetah, whose entry says
+  `auto`. *Check:* run the tool with the selector unreadable and with an
+  unknown board, and read the value it prints (here `first_start=auto`).
+  Extends L-757 and L-13. *From:* #874, round 60, 2026-11-17.
+- **L-807. Moving a module load from a unit's `ExecStartPre` into a tolerant
+  line of the script moves the failure past whatever the script does next.**
+  #874 replaced `ExecStartPre=modprobe goodix_fp` (the unit fails before the
+  runner) by the runner's `modprobe ... || true`, so a missing sensor driver
+  would let storageproxyd start before the HAL stage died. *Check:* for each
+  removed `ExecStartPre=`, `Requires=` or `Condition*=`, name the first
+  irreversible step of `ExecStart` and where the same failure now stops.
+  Extends L-754 and L-415. *From:* #874, round 60, 2026-11-17.
+- **L-787. A cleanup added to a tool that takes a caller-named folder is run
+  once on the folder the next tool in the flow writes.** #824's removal was
+  exact in its own download folder; pointed at `out/<codename>/repo/aarch64`
+  it removed the port's own package and left the index that lists it.
+  *Check:* list the folders the neighbouring tools create (`out/repo`,
+  `out/<codename>/repo`, the bundle folder), run the new cleanup on a fixture
+  of each with one marker file per kind, and ask for a refusal keyed on a
+  file only that folder has (`omamobile.db`). Extends L-7, L-227 and L-554.
+  *From:* #824, round 60, 2026-11-17.
+- **L-776. A helper that "falls back to the old path on failure" is checked
+  against every exception the transport under it raises, not only the ones
+  the tests inject.** #754's `reconcile()` caught `ModemError`, `TimeoutError`
+  and `OSError`, while `Sit.request()` also raises a bare `RuntimeError` and
+  `EOFError`; either one skipped the unconfirmed release's radio-off that the
+  helper sits in front of, and all of the PR's tests stayed green. *Check:*
+  `grep -n 'raise ' <transport>` for every exception class the helper's call
+  can raise, then run the PR's fixture with each as the side effect and count
+  the safety calls on main and on the head; prefer `except Exception`
+  returning "not handled". Extends L-757 and L-716. *From:* #754, round 57,
+  2026-11-14.
+- **L-757. A safety or recovery call that a PR puts behind a selector or a
+  helper is run with the selector wrong and with a stop arriving mid-start,
+  and the hardware calls are counted on main and on the head.** #669's profile
+  lookup raised on an unknown value inside the `except` that swallows
+  transport errors, so a typo turned the uncertain-call radio-off into nothing
+  (0 AT calls, 1 on main); its `stopped()` test before the default path
+  dropped main's AT off/on when a stop came during the state read, with every
+  clean-start test green. *Check:* the selector unknown, for another board and
+  unreadable, then each condition the helper tests; an unresolvable selector
+  falls back to the old call. Extends L-161, L-458 and L-608. *From:* #669,
+  round 52, 2026-11-11.
 - **L-756. A decision that rested on a slot's or firmware's state, and every
   stop condition written about that state, are re-read when either changes.**
   On issue #143 comet "doesn't need B marked" was agreed while slot A was
@@ -310,29 +379,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   through a slot A write. *Check:* every hand-written `fastboot` line in a
   runbook uses only options in `fastboot --help`. Extends L-205 and C-13.
   *From:* #35, round 24.
-- **L-227. `ln -sf` or `mv -f` onto a state path is a delete; in Trusty or
-  calibration code it's a finding.** #101's `ln -sfn` over `persist-ss/0`
-  would remove cheetah's provisioned copy if one existed. *Check:* grep the
-  diff for `ln -sf`, `mv -f`, `rm` and `>` onto the package's state
-  directory, and find who creates those files (`tools/phone-provision`, the
-  plans). Extends L-2. *From:* #101, round 24.
-- **L-1. Shared boot code runs under busybox, not util-linux.** The Pixel
-  initramfs has busybox only: `blkid -s LABEL -o value` prints the whole
-  `LABEL=… UUID=…` line there, so a label check that works on a device whose
-  initramfs adds util-linux fails on every Pixel. *Check:* any new command or
-  option in `initramfs/init`, against busybox 1.37's applets; prefer tools
-  `init` already uses (`dumpe2fs -h`). A test that stubs the command
-  (a shell function named `blkid`) proves nothing about it. *From:* #25.
-- **L-2. Writes past the storage guard are a policy decision, not a code
-  review.** Raw SCSI WRITE through `SG_IO` on a read-only partition fd, an
-  unsuffixed `fastboot flash userdata`, a `devinfo` write: each needs the
-  maintainer's explicit go and a named exception, however well guarded.
-  *Check:* `grep -nE 'SG_IO|0x2285|fastboot( -s [^ ]+)? (flash|erase) [a-z_]+( |$)|devinfo'`
-  in the diff, and every `flash`/`erase` target ends in `_b` or is
-  `userdata` through the guarded path. *From:* #17, #24.
-- **L-3. Mismatched slot firmware is stop-and-ask (CONTRIBUTING §3.1).**
-  A kernel workaround that's needed only on a phone with different
-  bootloaders on its two slots (HCRX_EL2 with KVM off) is most likely the
-  old firmware, not the SoC. Ask for both slots' bootloader versions, both
-  slots on one build, and a re-test without the workaround before any of it
-  reaches the kernel. *From:* #24.
