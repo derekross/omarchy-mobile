@@ -38,18 +38,26 @@
 t() { timeout 3 "$@" 2>/dev/null; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
-# airplane: the cellular radio where sitd runs (the Pixel 9a has no WWAN
-# rfkill switch, and airplane mode is the cell radio, not Wi-Fi or Bluetooth)
+# airplane: the cellular radio where sitd runs and its state says the
+# owner's radio choice (radio_choice: a sitd that keeps radio "off" after its
+# own AT+CFUN=0; the Pixel 9a has no WWAN rfkill switch, and airplane mode is
+# the cell radio). An older sitd's state goes on reading "on" after a radio
+# off, so with it the tile stays on the rfkill switches.
 sit_state=${OMAMOBILE_SIT_STATE:-/run/omamobile-sit/state.json}
+sit_airplane=
 if have omamobile-sit && [ -r "$sit_state" ] && have python3; then
-  python3 -I -c '
+  sit_airplane=$(python3 -I -c '
 import json, sys
 try:
     m = json.load(open(sys.argv[1])).get("modem") or {}
 except (OSError, ValueError):
     m = {}
-print("airplane=" + ("on" if isinstance(m, dict) and m.get("radio") == "off" else "off"))
-' "$sit_state"
+if isinstance(m, dict) and "radio_choice" in m:
+    print("on" if m.get("radio") == "off" else "off")
+' "$sit_state")
+fi
+if [ -n "$sit_airplane" ]; then
+  echo "airplane=$sit_airplane"
 elif have rfkill; then
   t rfkill -rn -o TYPE,SOFT | awk '
     $1 == "wlan" || $1 == "bluetooth" || $1 == "wwan" { n++; if ($2 == "blocked") b++ }

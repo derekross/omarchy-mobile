@@ -12,13 +12,16 @@ case $want in on | off) ;; *) echo "usage: tile-action.sh TILE on|off" >&2; exit
 
 case $tile in
   airplane)
-    # With omamobile-sitd running, airplane mode is the cellular radio
-    # (omamobile-sit radio: AT+CFUN, calls, SMS and data set up again by sitd
-    # when it comes back on); Wi-Fi and Bluetooth stay as the owner has them,
-    # and their own tiles still switch them. The session user is in sitd's
-    # control group.
+    # With omamobile-sitd running and its state saying the owner's radio
+    # choice (radio_choice), airplane mode is the cellular radio (omamobile-sit
+    # radio: AT+CFUN, calls, SMS and data set up again by sitd when it comes
+    # back on); Wi-Fi and Bluetooth stay as the owner has them, and their own
+    # tiles still switch them. The session user is in sitd's control group.
+    # An older sitd's state doesn't follow its own radio off, so the tile could
+    # only ever turn the radio off: there it keeps to the rfkill switches.
     sit_state=${OMAMOBILE_SIT_STATE:-/run/omamobile-sit/state.json}
-    if command -v omamobile-sit >/dev/null 2>&1 && [ -r "$sit_state" ]; then
+    if command -v omamobile-sit >/dev/null 2>&1 && [ -r "$sit_state" ] \
+        && grep -c '"radio_choice"' "$sit_state" >/dev/null 2>&1; then
       if [ "$want" = on ]; then exec omamobile-sit radio off; else exec omamobile-sit radio on; fi
     fi
     # Without sitd: Wi-Fi, Bluetooth and WWAN switches only: NFC keeps its own
