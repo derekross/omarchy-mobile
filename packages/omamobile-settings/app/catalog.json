@@ -28,6 +28,29 @@
   },
   "about": {
     "title": "About this device",
+    "rows": [
+      {
+        "id": "credits",
+        "title": "Credits",
+        "detail": "The people who work on Omamobile",
+        "icon": "system",
+        "page": "credits"
+      },
+      {
+        "id": "disclaimer",
+        "title": "Disclaimer",
+        "detail": "Project status, support and licence",
+        "icon": "system",
+        "page": "disclaimer"
+      }
+    ]
+  },
+  "credits": {
+    "title": "Credits",
+    "rows": []
+  },
+  "disclaimer": {
+    "title": "Disclaimer",
     "rows": []
   },
   "display": {
