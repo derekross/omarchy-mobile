@@ -1,8 +1,54 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Review lessons: Shell and scripts (part 3 of 3)
+# Review lessons: Shell and scripts (part 3 of 4)
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-675. A timeout change in a request/response transport is judged by what
+  happens to an answer that did arrive, and per timer by whose clock it
+  follows.** #595 discarded a matching reply once the deadline had passed, so
+  the SMS path reported a sent message as "delivery uncertain"; and a request
+  deadline on `CLOCK_BOOTTIME` fails every request in flight across a sleep,
+  though its reply arrives on resume. *Check:* `git grep -n TimeoutError` the
+  callers and write down what the user is told for each non-idempotent request
+  (send, dial, hang up); mark every `monotonic()` deadline "our wait" or "the
+  network's time". *From:* #595 with #556, round 49, 2026-11-10.
+- **L-674. A stand-in server in a test applies its rules to the request, not
+  to its own storage path.** #593's fake `curl` matched nginx's dot-name deny
+  against `$S/<url path>`, so the test failed for anyone whose `$TMPDIR` had a
+  dot component and never on CI. *Check:* run a test whose stand-in filters by
+  name once with `TMPDIR` under a dot directory and once under one with a
+  space. Extends L-454. *From:* #593 with #586, round 49, 2026-11-10.
+- **L-673. A new shell surface is checked for how it draws icons and for new
+  theme keys, not only for colours and spacing.** #612 used Commons tokens
+  throughout but drew its marks as inline SVG data URIs, where the launcher's
+  pill a tap away uses the icon font. *Check:* `grep -n 'data:image\|\.svg'
+  <new qml>` against the neighbouring component's glyphs, and grep for
+  `styleAlpha(`, `styleNum(` or `styleString(` with a key no Omarchy theme
+  defines. *From:* #612, round 49, 2026-11-10.
+- **L-672. Moving a row's removal behind a reply is probed with two rows in
+  flight.** In #533 each acknowledgment replaced the JS-array model, the
+  Repeater rebuilt every delegate, and a second swiped row still waiting came
+  back at full height until its own reply; the PR's tests covered one row.
+  *Check:* in the PR's Qt fixture swipe two rows, answer `ok` for the first,
+  and read the second's `fold` and whether it is the same delegate; ask where
+  a new delegate gets per-delegate state from. Extends L-616. *From:* #533,
+  round 49, 2026-11-10.
+- **L-671. A fix that makes a long-failing restore succeed applies whatever
+  was saved before it started failing.** systemd-backlight saves in
+  `ExecStop`, which never runs for a unit that failed at boot, so #600's first
+  boot restores the level from the last shutdown at which the unit was active.
+  *Check:* find when the state was last saved and what saves it from now on
+  (here also a zero backlight behind the lock), and ask for one boot that
+  shows it. Extends L-623. *From:* #600, round 49, 2026-11-10.
+- **L-670. A blocking `systemctl start` inside a hang-marker phase inherits
+  the started unit's timeout.** #600 starts `systemd-backlight@` (90 s) from
+  the `display` phase of a start with `TimeoutStartSec=120`; a hung restore
+  would leave the marker and turn the next boot's graphics and Wi-Fi off.
+  *Check:* for every `systemctl start|restart` a boot script adds, read the
+  target's `TimeoutStartSec` against the caller's and the marker phase it runs
+  in; ask for `timeout N` or `--no-block`, and for cosmetic steps after the
+  last guarded one. Extends L-170, L-174 and L-613. *From:* #600, round 49,
+  2026-11-10.
 - **L-303. Powering an NFC adapter off through neard needs the poll loop
   stopped first.** neard 0.20's `Powered=false` is a bare `NFC_CMD_DEV_DOWN`,
   which `nfc_dev_down()` refuses with EBUSY while the device polls, so a hook
@@ -359,45 +405,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   for any new drag that moves its own parent, run the probe, or read whether
   the delta is taken in scene or window coordinates. *From:* #553, round 46,
   2026-11-09.
-- **L-621. A surface condition that adds "or the keyboard is up" is checked
-  against every client that raises the keyboard, not only the one the PR is
-  about.** #557 meant the dock's and drawer's search, but `oskOpen` follows
-  squeekboard's visibility for any surface, so the strip (and its
-  drawer-opening swipe) also appears under quick settings' Wi-Fi password on
-  the home screen. *Check:* find where the flag comes from
-  (`omamobile-osk-watch`), list the surfaces with text fields that can be up
-  on the home screen (Wi-Fi, Bluetooth, Hotspot, the lock), and walk the new
-  branch for each. Extends L-160. *From:* #557, round 46, 2026-11-09.
-- **L-622. Relaxing one term of a visibility condition can expose an old race
-  that the term used to mask.** In #557, `appOnScreen` kept the strip off
-  under a lock taken from the home screen whatever `sessionLocked` said; with
-  `|| oskOpen`, the asynchronous lock query's stale answer now matters there
-  too. *Check:* for each term a PR loosens, list the other terms that are
-  asynchronous or cached and ask what they read in the window the old term
-  covered. *From:* #557, round 46, 2026-11-09.
-- **L-623. When a fix removes an error, check what that error was stopping.**
-  `omamobile-update` run as root over SSH had no `OMARCHY_PATH`, and Omarchy
-  4.0.6's `omarchy-update-dev` died on the unbound variable before anything
-  ran; #548's first change passed `OMARCHY_PATH` on, which would have let a
-  root run go on to Omarchy's migrations, and Omarchy keeps the per-user
-  record of which ran in `$HOME`, so a root run re-runs every one as root (59
-  on the 11-09 test install, through the NOTES gotcha's `OMARCHY_PATH=…`).
-  #548 now refuses root. *Check:* for a fix that makes a failing path
-  succeed, run the path with the fix and list what now executes after the old
-  failure point, as which user and with which `$HOME`, and ask which of those
-  steps keep per-user state. Extends L-29 and L-499. *From:* #548 with #560,
-  round 46, 2026-11-09.
-- **L-624. A fix that refuses a command is grepped against our own runbooks
-  for that command.** #548 refuses `omarchy update` as root, while
-  `tools/release`'s test-install steps print it under "over USB SSH", where
-  the login is root, and that runbook is what led to the 11-09 run.
-  *Check:* for any new refusal, `git grep` the command in `tools/release`,
-  `docs/`, `device/*/*-PLAN.md` and the NOTES gotchas, and check the user each
-  one runs as (`tools/phone-ssh` is root). *From:* #548 with #560, round 46,
-  2026-11-09.
-- **L-625. A sleep test run through a direct `/sys/power/state` freeze doesn't
-  cover hooks added in the same PR.** #556's cycles were `rtcwake` runs, which
-  skip `system-sleep` hooks (AGENTS §4, the 9a NFC gotcha). *Check:* compare
-  each hook's commit time with the runs, and ask for cycles through
-  `systemctl suspend` for any new or changed `system-sleep` hook. Extends
-  L-392. *From:* #556, round 46, 2026-11-09.

@@ -3,6 +3,116 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1146. An out-of-tree patch carried from another downstream tree is
+  looked up on patchwork by its subject before its code is reviewed, because a
+  newer posting may fix it.** Kernel #285 carried the 2023 v1 of a glink
+  wakeup patch; a v2 posted the day before the review fixed a NULL and
+  freed-`rpdev` dereference in the rx interrupt and a `CONFIG_PM_SLEEP=n`
+  build break, both in the one line the PR adds. *Check:*
+  `https://patchwork.kernel.org/api/1.3/patches/?project=<list>&q=<subject
+  words>`, list every version with its date and state, diff the newest against
+  the PR, and read its changelog for bugs the PR still has. Extends L-580,
+  L-581 and L-140. *From:* kernel #285, round 66, 2026-11-23.
+- **L-1145. A buffer registered with firmware is kept, not freed, when its
+  deregistration fails, and a deregistration the author marks unverified is
+  read as one that can fail.** Kernel #283 freed a listener's carve-out pages
+  after an unconfirmed deregister call failed, so QSEE could write into the
+  next allocation. *Check:* for each register/deregister pair with firmware,
+  read the deregister's failure path to the free; the memory stays referenced
+  (leaked until reboot, with a log line) unless the firmware confirmed the
+  release. Extends L-304 and L-757. *From:* kernel #283, round 66, 2026-11-23.
+- **L-1144. A name allow-list in front of a firmware "load this image" call is
+  checked for whether the firmware call takes the name at all.** Kernel #283's
+  TA allow-list compared the caller's `img_name`, while QSEE's `APP_START`
+  takes only lengths and a physical address and names the app from its signed
+  image, so any signed TA could load under an allowed name. *Check:* for every
+  allow-list a PR puts in front of a firmware or SCM call, write out the
+  call's arguments; if the checked field isn't among them, ask for a read-back
+  after the call (here `qcom_scm_qseecom_app_get_id()` against the returned
+  id) that ties the two together. Extends L-2 and L-458. *From:* kernel #283,
+  round 66, 2026-11-23.
+- **L-1143. A ramoops size that is not a power of two is rounded down at
+  probe, so a layout argument built on it is checked against
+  `ramoops_probe()`.** Kernel #282's `pmsg-size = <0x201000>` was meant to
+  absorb downstream's extra zone; the kernel runs it as 0x200000 and grows the
+  dmesg area instead. *Check:* for each `*-size` in a ramoops node,
+  `is_power_of_2`; if not, recompute the zone offsets the way
+  `ramoops_probe()` and `ramoops_init_przs()` do and compare with the comment.
+  Extends L-245. *From:* kernel #282, round 66, 2026-11-23.
+- **L-1142. "Without the property nothing changes" is read against where the
+  PR sets the property: a SoC dtsi sets it for every board of that SoC.**
+  Kernel #282 gated an RPMh read refusal on a new DT flag and then set the
+  flag in `sm8150.dtsi`, so five other SM8150 boards changed on one phone's
+  evidence; the binding and driver commits read as inert. *Check:* `git grep
+  -n '<property>' <head> -- arch/`, and for each hit in a `.dtsi` list the
+  boards that include it (`git grep -l '#include "<dtsi>"'`) and decompile one
+  sibling's head DTB for the property. Extends L-849 and L-206. *From:* kernel
+  #282, round 66, 2026-11-23.
+- **L-1141. A new compatible a board adds to a shared SoC driver's match table
+  is checked against the open PRs that change the same driver's data struct,
+  which may already give the per-board choice.** Kernel #276 added
+  `google,zumapro-komodo-decon` to carry a panel's modes while #181 was
+  turning `modes` into per-SoC mode sets chosen by the bootloader's scanout
+  size and #202 chose by the panel compatible: three mechanisms for one table,
+  and only the new one changes the binding. *Check:* `gh pr list --json
+  number,files` filtered to the driver file, `git diff <base> <head> --
+  <driver> | grep '^[-+]struct\|^[-+].*_data = {'` per open PR, and name the
+  mechanism the board should use. Extends L-104 and L-479. *From:* kernel #276
+  with #181 and #202, round 66, 2026-11-23.
+- **L-1140. A "the hardware does X whatever we program" claim in a
+  shared-driver fix is checked against the vendor driver's register options
+  for the same block before the workaround is accepted.** Kernel #291 changed
+  s5p-mfc's VP9 NV12 layout because the v15 core "writes rows aligned to 16,
+  whatever DPB stride it is given"; Google's
+  `mfc_core_set_dec_codec_buffers()` writes a two-bit VP9 stride-alignment
+  field in `D_INIT_BUFFER_OPTIONS` (2 when the DT's `vp9_stride_align` feature
+  is set, as on gs201 and zuma), and 16 is that field's default. *Check:* grep
+  the vendor driver's register setup (`mfc_core_reg_api.c`) for the codec with
+  "align" or "stride", then the vendor DT for the feature flag that enables
+  the branch; when there is one, ask for it to be tried before the layout
+  changes. Extends L-61, L-113 and L-542. *From:* kernel #291, round 66,
+  2026-11-23.
+- **L-1139. An energy model added from a vendor profile is run through
+  `em_compute_costs()` before its numbers are called "only an estimate".**
+  Kernel #280's cl0 values give a cost per MHz of 45.1 at 324-820 MHz and 35.9
+  at 1197, so the EM marks five OPPs inefficient and schedutil's
+  `CPUFREQ_RELATION_LE` skips them: the little cores' floor moves from 324 to
+  1197 MHz, a scheduling change the message didn't mention. *Check:* per
+  cluster, `power / freq` from the top OPP down, flagging each state whose
+  cost is not below the running minimum (an `awk` over the DTB's `opp-hz` and
+  `opp-microwatt`), compare with the sibling SoC's table, and read the release
+  config's default governor. Extends L-208 and L-823. *From:* kernel #280,
+  round 66, 2026-11-23.
+- **L-1138. A reset of a guard's state variable is tabulated from every prior
+  state, the protective one included, before it is called a fix.** Kernel #290
+  sent "no reading" to the "first reading" state so a boot near a band edge
+  would charge, and from the out-of-range state the same line dropped the hot
+  and cold hysteresis; a third party's harness found it the same day. *Check:*
+  for a change to how a state machine leaves an error, write the table prior
+  state x event -> next state for base and head (here -2, a band and -1, each
+  followed by a miss and an in-band reading near an edge), and mark every row
+  where the head is less restrictive than the base. Extends L-866, L-859 and
+  L-1001. *From:* kernel #290, round 66, 2026-11-23.
+- **L-1137. A new writable `power_supply` property is checked against the open
+  PRs on the same driver for a property that serves the same purpose.** Kernel
+  #281's `charge_behaviour` and kernel #266's `charge_control_*_threshold`
+  both stop charging at a user's limit on the same `max77759-charger` supply;
+  they conflict as text, but the design conflict (two writers of one inhibit)
+  would survive a clean rebase. *Check:* `gh pr list --state open --json
+  number,files` for the driver's path, then `git diff <base>...<head> | grep
+  '^+.*POWER_SUPPLY_PROP_'` on each, and put the choice to the maintainer in
+  every PR involved. Extends L-720, L-923 and L-104. *From:* kernel #281 with
+  #266, round 66, 2026-11-23.
+- **L-1136. An edge-triggered listener that reads its pin in a threaded
+  handler is checked for edges it counts as nothing.** Kernel #274's boot
+  record had `/proc/interrupts` at 1 on two lines while the driver's own count
+  stayed 0: a rising edge whose level was gone by the read, which the driver
+  drops silently. *Check:* for a GPIO-interrupt driver that decides on
+  `gpiod_get_value()` in its handler, compare the `/proc/interrupts` count
+  with the driver's event count in the same report; a difference is a short
+  pulse or a pinmux latch, and which one is asked before the driver is trusted
+  to act on real events. Extends L-380 and L-1064. *From:* kernel #274, round
+  66, 2026-11-23.
 - **L-1112. A "return early unless the board has X" fix for new PM hooks is
   confirmed in three places: the statements above the test, which tables set
   X, and what the base did with the same work item.** For kernel #267 that was
@@ -259,13 +369,18 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   https://android.googlesource.com/kernel/devices/google/<codename>`, then
   `.../+/<commit>/dts/<file>?format=TEXT | base64 -d`. Extends L-177 and
   L-220. *From:* kernel #272 and #273, round 61, 2026-11-18.
-- **L-881. Before calling an ungated fix "another phone's", grep the
-  reference phone's logs for its error line.** `ak7375_vcm_resume I2C failure:
-  -6` was in a 7 Pro log from three days before kernel #272, which turned
-  "gate it on the Fold" into "a 7 Pro change with a 7 Pro reason: run it
-  there". *Check:* `grep -rh '<the message>' logs/ | sed 's/^.*kernel: //' |
-  sort | uniq -c`, and read which code path prints it. Extends L-565 and
-  L-493. *From:* kernel #272, round 61, 2026-11-18.
+- **L-881. Before calling an ungated fix "another phone's", grep the reference
+  phone's logs for its error line.** `ak7375_vcm_resume I2C failure: -6` was
+  in a 7 Pro log from three days before kernel #272, which turned "gate it on
+  the Fold" into "a 7 Pro change with a 7 Pro reason: run it there". *Check:*
+  `grep -rh '<the message>' logs/ | sed 's/^.*kernel: //' | sort | uniq -c`,
+  and read which code path prints it. Extends L-565 and L-493. *From:* kernel
+  #272, round 61, 2026-11-18. (Extended 2026-11-23: the evidence can also be
+  in the commit message of the code the fix changes. "Every boot of a Pixel 7
+  Pro starts with no reading" in `1a9d1d4e9289` made kernel #290 a 7 Pro fix
+  with a 7 Pro reason, while the review laptop's logs had no such line; read
+  `git log --format=%B -3 -- <file>` or `git log -L` for the touched function
+  before writing "another phone's fix". *From:* kernel #290, round 66.)
 - **L-880. "Nothing changes for existing boards" for a media driver is
   checked against the reference phone's overlays and its camera start, not the
   board DTS's `status`.** Kernel #272 read as a Fold-only PR, but cheetah's
@@ -292,101 +407,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   `dwc3-generic-plat.c`, and `grep -n 'pm_runtime_suspended'
   drivers/usb/dwc3/gadget.c` for what a suspended status does. *From:* kernel
   #271, round 61, 2026-11-18.
-- **L-877. A glue driver that orders a PHY before its core is checked against
-  how the same-SoC sibling's board node solves it, and against the PHY
-  driver's history for the hang it names.** Kernel #271 initialises the USB2
-  PHY before `dwc3_core_probe()` and holds it powered across sleep; the 9a's
-  merged node gives plain `snps,dwc3` the sub-control clock for exactly that
-  early register access, and `da56cbe9ff2f` had already fixed the zuma hang in
-  the PHY's exit, with a measured A/B that contradicts the PR's reasoning.
-  *Check:* `git grep -n -B6 -A12 '^&usb {' <base> --
-  arch/arm64/boot/dts/exynos/google/<soc>-*.dts`, `git log <base> --
-  drivers/phy/samsung/phy-exynos5-usbdrd.c` for the words of the hang, and ask
-  for one boot on the published base with the sibling's node before a second
-  compatible for the same block. Extends L-105, L-113 and L-116. *From:*
-  kernel #271, round 61, 2026-11-18.
-- **L-876. A fix for a warning is checked for whether any published board can
-  raise it.** The `gpiolib.c` warning kernel #270 fixed needs a GPIO shared by
-  two DT nodes; no board on `omamobile` has one and 1,051 logs have no such
-  line, so the patch had no user on the base and no test there. *Check:* grep
-  `logs/` for the warning's file:line, and name the DT construct that triggers
-  it and the PR that brings it. Extends L-317 and L-489. *From:* kernel #270,
-  round 61, 2026-11-18.
-- **L-875. Adding a gpiolib callback to a shared `gpio_chip` is read through
-  every gpiolib call site that tests for it, registration first.** Kernel
-  #270's `get_direction()` looked like "one read when the proxy asks", but
-  `gpiochip_add_data_with_key()` calls it for every line of every bank at
-  probe, `gpiod_request_commit()` on every request, and
-  `gpiochip_lock_as_irq()` starts refusing outputs, which
-  `exynos_irq_request_resources()` calls before it sets the EINT function.
-  *Check:* `git grep -n '->get_direction' <base> -- drivers/gpio/gpiolib*.c`
-  (the same for any new `gpio_chip` or `pinctrl_ops` member), list what each
-  caller now does on the reference phone, and for a new probe-time register
-  read walk every enabled controller of every SoC against AGENTS' "registers
-  that abort" list (gs101's `pinctrl_gsactrl` is enabled in `gs101.dtsi`).
-  Extends L-465, L-206 and L-51. *From:* kernel #270, round 61, 2026-11-18.
-- **L-866. A change from "round up" to "round down" on a linear-range lookup
-  is checked at the top of the range and for the caller's "property missing"
-  value.** `linear_range_get_selector_low_array()` returns the highest
-  selector, with no error, for any value above the range, where the `_high_`
-  variant with `found` refused it; kernel #266's rounding commit so turned a
-  battery node without `constant-charge-current-max-microamp` (`-EINVAL`
-  copied into a `u32`) from a failed probe into a 4 A charge current. *Check:*
-  read both helpers' out-of-range returns in `lib/linear_ranges.c`, feed the
-  setter `(u32)-EINVAL`, max + 1 and min - 1 (by reading or a KUnit case) and
-  compare with the base; `git grep -n 'get_battery_info' <driver>` for fields
-  copied without a `>= 0` test. Extends L-208 and L-52. *From:* kernel #266,
-  round 61, 2026-11-18.
-- **L-865. "As stock does" for an end-of-charge rule is read at the vendor's
-  tier test as well as its margin.** Kernel #267 copied `max77759_is_full()`'s
-  50 mV and 200 mV but acted only in the last tier, where stock's function
-  returns false for every other tier; the vendor's own comment names the
-  small-adapter case the PR's phone was in. *Check:* list the vendor
-  function's early returns and what each means for the caller, and compare
-  with the new code's `DONE_NONE` paths. Extends L-542 and L-77. *From:*
-  kernel #267, round 60, 2026-11-17.
-- **L-864. State that a PR resets "per plug-in" is traced to the event that
-  resets it, on the board the feature is for.** Kernel #267's restart budget
-  was cleared by a flag set only from the `tcpm-source` notifier, and husky's
-  Type-C node is disabled, so "five per plug-in" was five per boot. *Check:*
-  `grep -n '<flag> = true'`, follow the caller to its trigger, and read that
-  trigger's node status in the board DTS. Extends L-438 and L-396. *From:*
-  kernel #267, round 60, 2026-11-17.
-- **L-863. A guard that reads another supply is checked on a unit running the
-  published device tree, not the author's.** Kernel #267's temperature tiers
-  read the gauge; the author's 8 Pro had a local gauge model and read 37-39 C,
-  while a second 8 Pro on the published kernel read 22.0 C in 2450 samples.
-  *Check:* name the supply and property each guard input comes from, read the
-  published DTS for what configures it (a model, a thermistor setting), and
-  search the device's issues for another owner's log of that property; a
-  constant input is a blind guard. Extends L-99, L-629 and L-169. *From:*
-  kernel #267 with #761, round 60, 2026-11-17.
-- **L-862. A float voltage in a battery node is checked against three places
-  in the vendor's GPL data: the board maximum, the top of the step table, and
-  the aging schedule.** Kernel #267's 4.45 V for husky was "a bit under
-  stock"; Google's `fv-max-uv` and top tier are 4.48 V, and
-  `aafv-ref-cycles`/`aafv-ref-offset` in `zuma-husky-battery.dtsi` lower the
-  float 20 mV per 200 cycles to 4.38 V. *Check:* fetch
-  `<soc>-<board>-battery.dtsi` and `-charging.dtsi` from
-  `kernel/devices/google/<device>`, grep `fv-max-uv`, `chg-cv-limits`, `aafv`
-  and `aact`, read `gbms_aafv_get_offset()` for how the schedule indexes, and
-  ask for the unit's `cycle_count`; the DTS comment cites the file. Extends
-  L-52, L-100 and L-208. *From:* kernel #267, round 60, 2026-11-17.
-- **L-861. A charge limit or defender polled by a work item is asked "what
-  happens asleep on the charger" before its settings page is reviewed.**
-  Kernel #266's thresholds run from the guard's delayed work, which s2idle
-  stops while the chip charges on; the author's phone held a sleep inhibitor
-  that no PR ships, and #860's "held at 90 % overnight" rested on it. *Check:*
-  find what schedules the limit's check and whether it runs in s2idle; grep
-  the dependent userspace PR's evidence for an inhibitor or a local unit; ask
-  for the decision (stay awake, wake for it, or say so). Extends L-367 and
-  L-651. *From:* kernel #266 with #860, round 60, 2026-11-17.
-- **L-860. Marking registers volatile in an MFD's regmap is a change for every
-  board that binds the chip, whatever the commit that needs it gates on.**
-  Kernel #266 made CHG_CNFG_00..04 volatile for a husky read-back; with it
-  every `regmap_update_bits()` on mode, current and float reads the chip first
-  on the 7 Pro too. *Check:* `git grep` the MFD's compatible across board DTS
-  files, list each driver call on the range, and say for the reference phone
-  what used to come from the cache; grep open PRs for messages that rely on
-  "the cache skips the write". Extends L-151 and L-369. *From:* kernel #266
-  with #261, round 60, 2026-11-17.
