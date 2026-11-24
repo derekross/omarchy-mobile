@@ -43,6 +43,8 @@ filters and Omarchy's `launcher.hides`), and for one app shows its package, vers
 `backends/apps.sh`; the list loads only when the page opens, shows the last saved list
 (`~/.cache/omamobile/apps.json`) at once and replaces it with a fresh scan at nice 10 and idle I/O. Uninstalling is not
 offered: removing a package can take parts of the phone's system with it.
+The hidden rules are copied from Omarchy's `shell/services/hidden-entries.sh` and `shell/services/AppLibrary.qml`
+(under `/usr/share/omarchy`); when those change, update `apps.sh` to match.
 Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management (beyond the Apps list) and
 recording controls are separate future contributions with their own runtime
 contracts and tests; this catalog does not offer those routes.

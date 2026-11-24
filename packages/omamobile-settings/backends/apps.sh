@@ -51,7 +51,7 @@ cache_dir=$cache_dir/omamobile
 if [[ $verb == cached ]]; then
   line=''
   if [[ -f $cache_dir/apps.json && ! -L $cache_dir/apps.json ]]; then
-    line=$(head -c 65536 -- "$cache_dir/apps.json" 2> /dev/null | head -n 1) || line=''
+    line=$(head -c 65536 -- "$cache_dir/apps.json" 2> /dev/null | sed -n 1p) || line=''
   fi
   re='^\{"apps":\[.*\],"partial":(true|false),"at":[0-9]+\}$'
   if [[ $line =~ $re ]]; then printf '%s\n' "$line"; else printf '{"apps":null}\n'; fi
@@ -179,10 +179,10 @@ fi
 
 pkg='' version='' size=''
 if command -v pacman > /dev/null 2>&1; then
-  pkg=$(timeout 5 pacman -Qqo -- "$found" 2> /dev/null | head -n 1) || pkg=''
+  pkg=$(timeout 5 pacman -Qqo -- "$found" 2> /dev/null | sed -n 1p) || pkg=''
   if [[ -z $pkg ]]; then
     real=$(readlink -f -- "$found" 2> /dev/null) || real=''
-    [[ -n $real && $real != "$found" ]] && { pkg=$(timeout 5 pacman -Qqo -- "$real" 2> /dev/null | head -n 1) || pkg=''; }
+    [[ -n $real && $real != "$found" ]] && { pkg=$(timeout 5 pacman -Qqo -- "$real" 2> /dev/null | sed -n 1p) || pkg=''; }
   fi
   if [[ -n $pkg ]]; then
     while IFS= read -r line; do
