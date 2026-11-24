@@ -206,8 +206,10 @@ class SimulatorTests(unittest.TestCase):
         modem = json.loads(self.cli('status', '--json'))['modem']
         # The status says what the owner did, at once: not the last
         # registration (a Pixel 9a's GET_RADIO_POWER went on reading "on").
-        self.assertEqual((modem['radio'], modem['voice'], modem['sms'], modem['data'], modem['ims']),
-                         ('off', False, False, False, 'off'))
+        self.assertEqual((modem['radio'], modem['radio_choice'], modem['voice'], modem['sms'], modem['data'],
+                          modem['ims']), ('off', 'off', False, False, False, 'off'))
+        state = json.loads((self.dir / 'run' / 'state.json').read_text())['modem']
+        self.assertEqual((state['radio'], state['radio_choice']), ('off', 'off'))
         self.assertIn('radio: off', self.cli('status'))
         time.sleep(2)            # the internet bearer's drop seen; nothing set up while off
         entries = self.transcript_entries()
@@ -219,7 +221,7 @@ class SimulatorTests(unittest.TestCase):
         setups_before = len([e for e in entries if e.get('event') == 'setup_data_call'])
         self.assertEqual(self.cli('radio', 'on').strip(), 'on')
         modem = self.wait_status(lambda m: m['voice'] and m['sms'] and m['data'])
-        self.assertEqual((modem['radio'], modem['ims']), ('on', 'registered'))
+        self.assertEqual((modem['radio'], modem['radio_choice'], modem['ims']), ('on', 'on', 'registered'))
         entries = self.transcript_entries()
         self.assertFalse([e for e in entries if 'violation' in e])
         setups = [(e['cid'], e['apn'], e['ip']) for e in entries if e.get('event') == 'setup_data_call']

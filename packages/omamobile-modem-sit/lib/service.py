@@ -843,7 +843,13 @@ class Service:
                      plmn=self.net['plmn'], operator_name=self.net['operator'],
                      voice=voice, sms=sms, data=data,
                      signal=self.signal if self.net['reg'] in ('home', 'roaming') else 0, audio=True,
-                     radio=self.radio_now(), sim=dict(self.sim),
+                     radio=self.radio_now(),
+                     # The owner's choice through the radio action, as sitd
+                     # set it (start-up counts as on). Its presence tells
+                     # clients this sitd keeps radio="off" after its own radio
+                     # off (0.3.44 and older don't), so a tile can switch it.
+                     radio_choice='off' if self.cfun == 0 else 'on',
+                     sim=dict(self.sim),
                      ims='registered' if voice or sms else ('off' if not on else self.ims_state),
                      apn=dict(self.apn), data_available=self.apn.get('source') != 'none',
                      emergency_numbers=list(EMERGENCY + (EMERGENCY_NO_SIM if self.sim['state'] == 'absent' else ())))
