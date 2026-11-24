@@ -10,10 +10,11 @@ import qs.Ui
 // The page behind the Screen record tile, after the Wi-Fi and Bluetooth
 // pickers: choose what to record (full screen, or an area picked by touch
 // after Start) and the sound (none, the phone's sound + the microphone,
-// the phone's sound, the microphone), and start. Call recording is listed
-// greyed out until it can work (omamobile-screenrecord call-status). Start
-// is disabled while the phone is above the start limit (59 C). The owner records through omamobile-screenrecord; a
-// tap on the tile while recording stops it without this page.
+// the phone's sound, the microphone), and start. Start is disabled while
+// the phone is above the start limit, only when HEAT_START is set in
+// screenrecord.conf (off by default). The owner records through
+// omamobile-screenrecord; a tap on the tile while recording stops it
+// without this page.
 Item {
   id: root
 
@@ -23,11 +24,11 @@ Item {
   property string audio: "mic"
   // "full" | "pick"
   property string area: "full"
-  // From omamobile-screenrecord heat / call-status, read when the page opens.
+  // From omamobile-screenrecord heat, read when the page opens; heatStart
+  // stays -1 when the limit is off ("<hottest C> off").
   property int heat: -1
-  property int heatStart: 59
-  readonly property bool tooWarm: heat > heatStart
-  property var callState: ({ state: "needs-modem", reason: "Needs the modem" })
+  property int heatStart: -1
+  readonly property bool tooWarm: heatStart >= 0 && heat > heatStart
 
   // The back glyph: the owner closes this and brings quick settings back.
   signal backRequested()
@@ -40,7 +41,6 @@ Item {
   function open() {
     opened = true
     if (!heatProc.running) heatProc.running = true
-    if (!callProc.running) callProc.running = true
   }
   function close() { opened = false }
 
@@ -65,22 +65,10 @@ Item {
         var f = String(text).trim().split(/\s+/)
         var n = parseInt(f[0], 10), g = parseInt(f[1], 10)
         root.heat = isNaN(n) ? -1 : n
-        if (!isNaN(g)) root.heatStart = g
+        root.heatStart = isNaN(g) ? -1 : g
       }
     }
   }
-  Process {
-    id: callProc
-    command: ["omamobile-screenrecord", "call-status"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        try { root.callState = JSON.parse(String(text).trim()) }
-        catch (e) { root.callState = { state: "needs-modem", reason: "Needs the modem" } }
-      }
-    }
-  }
-
   property real reveal: opened ? 1 : 0
   Behavior on reveal { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
 
@@ -206,22 +194,6 @@ Item {
                 selected: root.audio === modelData.id
                 onPicked: root.audio = modelData.id
               }
-            }
-
-            // Call recording: greyed out until the modem works, and where
-            // the law does not allow it; a consent notice where unknown.
-            ChoiceRow {
-              objectName: "callRecordingRow"
-              fg: root.foreground
-              minHeight: root.touchSize
-              choice: ({ glyph: "󰏻", title: "Call recording",
-                detail: root.callState.state === "needs-modem" ? "Needs the modem"
-                  : root.callState.state === "blocked" ? "Unavailable for legal reasons: " + root.callState.reason
-                  : root.callState.state === "consent" ? root.callState.reason
-                  : "Records both sides of a call" })
-              selected: false
-              enabled: false
-              opacity: 0.45
             }
 
             Text {

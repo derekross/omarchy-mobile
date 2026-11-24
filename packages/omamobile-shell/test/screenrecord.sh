@@ -19,6 +19,9 @@ export T=$t HOME=$t/home XDG_RUNTIME_DIR=$t/run XDG_VIDEOS_DIR=$t/videos XDG_CON
 export OMAMOBILE_RECORD_THERMAL_GLOB="$t/thermal/z*" OMAMOBILE_RECORD_TICK=0.2
 export OMAMOBILE_RECORD_PICK_DELAY=0 OMAMOBILE_RECORD_CALLREC_DATA=$t/countries.tsv
 export PATH="$t/bin:$PATH"
+# The recorder by path, never by name, so a real wf-recorder later on PATH is never started.
+export OMAMOBILE_RECORD_WF=$t/bin/wf-recorder
+unset OMAMOBILE_RECORD_HEAT_START OMAMOBILE_RECORD_HEAT_STOP
 echo big-thermal >"$t/thermal/z0/type"; echo gpu-thermal >"$t/thermal/z1/type"; echo battery >"$t/thermal/z2/type"
 temps() { echo "$1" >"$t/thermal/z0/temp"; echo "$2" >"$t/thermal/z1/temp"; echo 90000 >"$t/thermal/z2/temp"; }
 temps 50000 48000
@@ -71,7 +74,6 @@ cat >"$t/bin/omarchy-capture-region" <<'EOF'
 cat "$T/pick" 2>/dev/null
 EOF
 chmod +x "$t/bin"/*
-hide() { mv "$t/bin/$1" "$t/bin/.$1"; }
 
 arg() { grep -qxF -- "$1" "$t/wf-args"; }
 wait_stopped() { local i; for i in $(seq 1 100); do [[ ! -e $t/run/omamobile-screenrecord/supervisor ]] && return 0; sleep 0.1; done; return 1; }
@@ -193,10 +195,19 @@ pass "prompt stop and an immediate restart"
 reset
 
 # --- unknown heat prints -
-mkdir -p "$t/thermal-none"; OMAMOBILE_RECORD_THERMAL_GLOB="$t/thermal-none/z*" "$rec" heat | grep -qx -- "- 59" || fail "unknown heat prints -"
+mkdir -p "$t/thermal-none"; OMAMOBILE_RECORD_THERMAL_GLOB="$t/thermal-none/z*" "$rec" heat | grep -cx -- "- off" >/dev/null || fail "unknown heat prints -"
 pass "unknown heat"
 
-# --- heat gate (59 C) and heat stop (60 C, file kept)
+# --- heat limits are off by default: starts and keeps running when hot
+temps 75000 40000
+"$rec" start --audio none; [[ $("$rec" status) == on ]] || fail "starts hot with no HEAT_START"
+sleep 1; [[ $("$rec" status) == on ]] || fail "no heat stop without HEAT_STOP"
+[[ $("$rec" heat) == "75 off" ]] || fail "heat prints off without a limit"
+pass "heat: no start refusal and no heat stop by default"
+reset
+
+# --- heat gate (HEAT_START=59) and heat stop (HEAT_STOP=60, file kept), opted in
+export OMAMOBILE_RECORD_HEAT_START=59 OMAMOBILE_RECORD_HEAT_STOP=60
 temps 60000 40000
 rc=0; "$rec" start --audio none || rc=$?
 [[ $rc == 3 ]] || fail "refuses at 60 C (rc $rc)"
@@ -210,7 +221,8 @@ ls "$t/videos"/*.mp4 >/dev/null 2>&1 || fail "file kept on the heat stop"
 grep -q "reached 61 C" "$t/notes" || fail "heat stop notification"
 grep -q "stopped: heat:61" "$t/run/omamobile-screenrecord/log" || fail "heat stop reason in the log"
 [[ $("$rec" heat) == "61 59" ]] || fail "heat ignores the battery zone, prints the limit"
-pass "heat: starts at 59 C, refuses above, stops at 60 C with the file kept"
+unset OMAMOBILE_RECORD_HEAT_START OMAMOBILE_RECORD_HEAT_STOP
+pass "heat opted in: starts at 59 C, refuses above, stops at 60 C with the file kept"
 temps 50000 48000
 reset
 mkdir -p "$t/home/.config/omamobile"; echo "HEAT_START=45" >"$t/home/.config/omamobile/screenrecord.conf"
@@ -236,10 +248,10 @@ exec 7>&-
 pass "start lock"
 reset
 
-# --- no wf-recorder
-hide wf-recorder
-rc=0; "$rec" start --audio none >/dev/null 2>&1 || rc=$?; [[ $rc == 1 ]] || fail "needs wf-recorder"
-mv "$t/bin/.wf-recorder" "$t/bin/wf-recorder"
+# --- no recorder: a path that doesn't exist, never a lookup on PATH
+rc=0; OMAMOBILE_RECORD_WF=$t/no-such/wf-recorder "$rec" start --audio none >/dev/null 2>&1 || rc=$?
+[[ $rc == 1 ]] || fail "needs wf-recorder"
+[[ -e $t/wf-args ]] && fail "no recorder started when it is missing"
 pass "missing wf-recorder"
 
 # --- call-status

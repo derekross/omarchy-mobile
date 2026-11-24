@@ -6,7 +6,7 @@
 #                                [--geometry "X,Y WxH"]
 #   omamobile-screenrecord start mic|system|none     (the older form)
 #   omamobile-screenrecord stop | status | call-status
-#   omamobile-screenrecord heat     (prints "<hottest C> <HEAT_START>")
+#   omamobile-screenrecord heat     (prints "<hottest C> <HEAT_START or off>")
 #
 # Omarchy's recorder (gpu-screen-recorder) can't drive the phone's Mali
 # (Mesa) GPU: it reports an unknown vendor, software H.264 only and portal
@@ -21,15 +21,20 @@
 #
 # A supervisor runs for as long as the recording does (under a
 # systemd-inhibit idle/sleep lock). It stops and keeps the file when the
-# phone reaches HEAT_STOP, when the screen goes off, after MAX_MIN minutes
+# phone reaches HEAT_STOP (if set), when the screen goes off, after MAX_MIN minutes
 # or when free space drops under STOP_FREE_MB, and it cleans up (audio
 # modules, state, notification) however wf-recorder ended.
 #
 # Settings: ~/.config/omamobile/screenrecord.conf, KEY=value lines (read as
 # data, never sourced), or the same names as OMAMOBILE_RECORD_* variables:
 #   AUDIO mic   WIDTH 720 ("native" keeps the size)   FPS 30   THREADS 2
-#   HEAT_START 59 (starts at or below, C)   HEAT_STOP 60 (stops at or above, C)
+#   HEAT_START (unset: no limit; else starts only at or below, C)
+#   HEAT_STOP (unset: no heat stop; else stops at or above, C)
 #   MAX_MIN 30   MIN_FREE_MB 500   STOP_FREE_MB 200
+# Both heat limits are off by default: these phones idle at 54-62 C (a 7 Pro
+# GPU zone, an 8 Pro on the charger), so a fixed limit stops most recordings.
+# OMAMOBILE_RECORD_WF names the recorder (default wf-recorder; the tests
+# point it at a stand-in).
 # Videos go to XDG_VIDEOS_DIR (default ~/Videos).
 set -euo pipefail
 
@@ -42,6 +47,7 @@ cancelfile=$state/cancel
 reasonfile=$state/stop-reason
 thermal_glob=${OMAMOBILE_RECORD_THERMAL_GLOB:-/sys/class/thermal/thermal_zone*}
 tick=${OMAMOBILE_RECORD_TICK:-5}
+wf=${OMAMOBILE_RECORD_WF:-wf-recorder}
 callrec_data=${OMAMOBILE_RECORD_CALLREC_DATA:-/usr/share/omamobile/callrec/countries.tsv}
 
 notify() {
@@ -159,13 +165,13 @@ supervise() {
   file=$(cat "$state/file" 2>/dev/null || true)
   start=$(cat "$startedfile" 2>/dev/null || date +%s)
   max_s=$(( $(int_conf MAX_MIN 30) * 60 )); (( max_s >= 60 )) || max_s=60
-  stop_t=$(int_conf HEAT_STOP 60)
+  stop_t=$(int_conf HEAT_STOP "")
   stop_free=$(int_conf STOP_FREE_MB 200)
   rm -f "$reasonfile"
   while alive "$pid"; do
     reason=""
     t=$(heat)
-    if [[ $t =~ ^-?[0-9]+$ && $t -ge $stop_t ]]; then hot=$((hot + 1)); else hot=0; fi
+    if [[ -n $stop_t && $t =~ ^-?[0-9]+$ ]] && (( t >= stop_t )); then hot=$((hot + 1)); else hot=0; fi
     elapsed=$(( $(date +%s) - start ))
     if (( hot >= 2 )); then reason="heat:$t"
     elif [[ $(screen_off) == yes ]]; then reason=screen
@@ -256,11 +262,11 @@ start() {
   if alive "$old"; then
     for i in $(seq 1 75); do alive "$old" || break; sleep 0.2; done
   fi
-  command -v wf-recorder >/dev/null || { notify "Screen recording needs wf-recorder"; exit 1; }
+  command -v "$wf" >/dev/null || { notify "Screen recording needs ${wf##*/}"; exit 1; }
 
   local t gate
-  t=$(heat) gate=$(int_conf HEAT_START 59)
-  if [[ $t =~ ^-?[0-9]+$ && $t -gt $gate ]]; then
+  t=$(heat) gate=$(int_conf HEAT_START "")
+  if [[ -n $gate && $t =~ ^-?[0-9]+$ ]] && (( t > gate )); then
     notify "Screen recording not started" "The phone is warm (${t} C). It starts at ${gate} C or cooler."
     exit 3
   fi
@@ -318,7 +324,7 @@ start() {
   local file
   file=$dir/screenrecording-$(date +%Y-%m-%d_%H-%M-%S).mp4
   echo "$file" >"$state/file"
-  setsid nice -n 10 wf-recorder -o "$output" "${geo_args[@]}" -c libx264 -p preset=ultrafast -p crf=23 \
+  setsid nice -n 10 "$wf" -o "$output" "${geo_args[@]}" -c libx264 -p preset=ultrafast -p crf=23 \
     "${filter[@]}" -r "$fps" "${sound[@]}" -f "$file" -y </dev/null >"$state/log" 2>&1 8>&- &
   echo $! >"$pidfile"
   date +%s >"$startedfile"
@@ -413,7 +419,7 @@ case ${1:-} in
   status) running && echo on || echo off ;;
   start) shift; start "$@" ;;
   stop) stop ;;
-  heat) echo "$(heat) $(int_conf HEAT_START 59)" ;;
+  heat) g=$(int_conf HEAT_START ""); echo "$(heat) ${g:-off}" ;;
   call-status) call_status ;;
   supervise) supervise ;;
   *) echo "usage: omamobile-screenrecord start [--audio none|both|system|mic] [--area full|pick] [--geometry 'X,Y WxH']|stop|status|heat|call-status" >&2; exit 2 ;;
