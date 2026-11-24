@@ -12,13 +12,21 @@
 # must match the SHA-256 the signed index gives for it; anything else stops
 # the run. So does an omamobile-revoked not in the form docs/RELEASES.md §10
 # gives, before any download (tools/lib/signing.sh's revoked_list).
-# Files already in DIR that still verify are not downloaded again.
+# Files already in DIR that still verify are not downloaded again. One run
+# writes DIR at a time (a second run refuses before downloading). Each
+# package is verified in a private folder first and placed into DIR only
+# once its SHA-256 and signature pass, so a failed download or check leaves
+# DIR as it was (packages placed earlier in the run stay). For a package
+# being placed, a stop after unlinking the old package and before the last
+# rename can leave a lone .sig (old or new), which --import skips; a stop
+# partway can also leave a hidden .fetch-published.* folder (any unplaced
+# verified files), which --import never takes and no later run removes.
 # Once all of them verify, each package file directly in DIR (*.pkg.tar.zst
 # or .xz, or a link to one: the link goes, never its target) whose name the
 # index doesn't list goes, with its .sig file, so DIR holds only the
 # published set; other files and sub-directories stay. A run that stops
-# before then removes nothing. A DIR that holds a repository index
-# (omamobile.db or omamobile.db.tar.gz) is refused before any download.
+# before then removes no unlisted package. A DIR that holds a repository
+# index (omamobile.db or omamobile.db.tar.gz) is refused before any download.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -38,10 +46,15 @@ done
 [[ ! -e $dir/omamobile.db && ! -e $dir/omamobile.db.tar.gz ]] ||
   die "$dir is a package repository (it holds omamobile.db): give fetch-published a folder of its own, such as out/<codename>/published"
 url=${OMAMOBILE_PKGS_URL:-https://pkgs.omamobile.org}/$channel/aarch64
-command -v gpgv >/dev/null && command -v curl >/dev/null || die "gpgv and curl are needed"
+command -v gpgv >/dev/null && command -v curl >/dev/null && command -v flock >/dev/null || die "gpgv, curl and flock are needed"
 
 keyring=packages/omamobile-keyring
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+tmp=$(mktemp -d) stage=""
+cleanup() {
+  rm -rf -- "$tmp"
+  [[ -z $stage ]] || rmdir -- "$stage" 2>/dev/null || true
+}
+trap cleanup EXIT
 mkdir -m 700 "$tmp/gnupg"
 GNUPGHOME=$tmp/gnupg gpg --batch --quiet --no-default-keyring --keyring "$tmp/omamobile.kbx" \
   --import "$keyring/omamobile.gpg" 2>/dev/null || die "cannot read $keyring/omamobile.gpg"
@@ -62,6 +75,8 @@ verify() {
 }
 
 mkdir -p "$dir"
+exec {lock}<"$dir"
+flock -n "$lock" || die "another fetch-published is writing $dir"
 echo "==> $url"
 curl -fsS --globoff -o "$tmp/omamobile.db" "$url/omamobile.db" || die "cannot fetch the index"
 curl -fsS --globoff -o "$tmp/omamobile.db.sig" "$url/omamobile.db.sig" || die "the index has no signature"
@@ -83,10 +98,17 @@ for desc in "$tmp"/db/*/desc; do
      && [[ $(sha256sum < "$dir/$file" | cut -d' ' -f1) == "$sum" ]] && verify "$dir/$file.sig" "$dir/$file"; then
     echo "    have $file"
   else
-    curl -fsS --globoff -o "$dir/$file" "$url/$file" || die "cannot fetch $file"
-    curl -fsS --globoff -o "$dir/$file.sig" "$url/$file.sig" || die "$file has no signature"
-    [[ $(sha256sum < "$dir/$file" | cut -d' ' -f1) == "$sum" ]] || die "$file does not match the index"
-    verify "$dir/$file.sig" "$dir/$file" || die "$file is not signed by a trusted Omamobile key"
+    [[ ! -d $dir/$file.sig || -L $dir/$file.sig ]] || die "$dir/$file.sig is a directory"
+    [[ ! -d $dir/$file || -L $dir/$file ]] || die "$dir/$file is a directory"
+    curl -fsS --globoff -o "$tmp/pkg" "$url/$file" || die "cannot fetch $file"
+    curl -fsS --globoff -o "$tmp/pkg.sig" "$url/$file.sig" || die "$file has no signature"
+    [[ $(sha256sum < "$tmp/pkg" | cut -d' ' -f1) == "$sum" ]] || die "$file does not match the index"
+    verify "$tmp/pkg.sig" "$tmp/pkg" || die "$file is not signed by a trusted Omamobile key"
+    [[ -n $stage ]] || stage=$(mktemp -d "$dir/.fetch-published.XXXXXX")
+    mv -f -- "$tmp/pkg" "$tmp/pkg.sig" "$stage/"
+    [[ ! -e $dir/$file && ! -L $dir/$file ]] || rm -f -- "$dir/$file"
+    mv -fT -- "$stage/pkg.sig" "$dir/$file.sig"
+    mv -fT -- "$stage/pkg" "$dir/$file"
     echo "    got  $file"
   fi
   listed[$file]=1 n=$((n + 1))
