@@ -766,6 +766,9 @@ step_phone() {
               "$keys_fastboot. Then run the dry run again."
           fi
           ask "    Press Enter to restart the phone into Fastboot Mode: "
+          [[ -z $REPLY ]] ||
+            stop "Not restarted. Put the phone in Fastboot Mode yourself:" \
+              "$keys_fastboot."
           "$ADB" -s "$adb_serial" reboot bootloader ||
             stop "The phone didn't take the restart. Put it in Fastboot Mode by hand:" "$keys_fastboot."
           note "waiting for Fastboot Mode"

@@ -617,6 +617,16 @@ if guided "\n$REST"; then fail "another model running Android stops the install"
 says "is a 'Other Phone' (otherdev)" && says "It was not restarted" && [[ $(events '^adb .*reboot') == 0 ]] || fail "another model on adb: named, and not restarted"
 ! says "To go on from here, run:" || fail "another model: no promise that a rerun goes on"
 adb_phone ADBSERIAL testdev Test_Phone > "$t/adb-devices"
+# Only an empty reply (Enter) restarts the phone; declining or EOF stops cleanly
+for reply in no later yes; do
+  if guided "${reply}\n$REST"; then fail "replying '$reply' at the Android restart prompt stops the install"; fi
+  says "Not restarted." && says "hold the test keys for a while" && says "To go on from here, run:" &&
+    [[ $(events '^adb .*reboot') == 0 && -z $(writes) && -z $(record phone) ]] ||
+    fail "replying '$reply' at the Android restart prompt: stops cleanly, sends no restart, writes nothing"
+done
+if guided ""; then fail "EOF at the Android restart prompt stops the install"; fi
+says "Press Enter to restart the phone into Fastboot Mode" && says "No answer, so the install stops here." && [[ $(events '^adb .*reboot') == 0 && -z $(writes) ]] ||
+  fail "EOF at the Android restart prompt: stops without restarting"
 guided "\n$REST" || fail "from Android with USB debugging on, the install goes through"
 [[ $(events '^adb -s ADBSERIAL reboot bootloader$') == 1 ]] || fail "after Enter, the phone is restarted into Fastboot Mode over adb"
 [[ $(grep -n 'Press Enter to restart the phone into Fastboot Mode' "$t/out" | cut -d: -f1) -gt $(grep -n 'A Test Phone (testdev) is connected, running Android' "$t/out" | cut -d: -f1) ]] &&
