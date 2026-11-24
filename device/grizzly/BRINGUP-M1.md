@@ -3390,10 +3390,36 @@ and handoff bounds checks. Its `init_boot` SHA-256 is
 `0c0405256bd3fb214c340721b16588e82f02096a02d115a36cc6d030b757e175`.
 It keeps the previously tested reader binary and packs the current PID 1.
 The bundled host tools completed a synthetic nine-partition backup and
-rejected a separate bad-hash test. This repack awaits its first boot.
+rejected a separate bad-hash test.
 
 Keep the images and the backup off-repo. Use the attended staging and
 return sequence only after approval. Stop if the guard or descriptor
 check fails, any target is missing, or a hash differs. An incomplete
 copy does not qualify as a backup. Use the timed return and select
 stock A if the bridge cannot finish.
+
+On 2026-11-24 one slot B boot of this repack verified the five image
+writes and the full `vendor_boot_b` readback. The retained console
+records five read-only UFS parents and nine read-only targets at
+4.571028 s, before the USB gadget was ready at 4.912065 s. The Mac
+accepted the guarded inventory and started `nv-backup` 19 seconds
+after the B boot request. No other partition payload reader ran.
+
+The first copy lost the USB stream during `modem_a` with the default
+8 MiB chunks. `nv-backup` removed the incomplete copy. The ACM port
+remained present, but a fresh probe encountered bytes from the
+interrupted reply. The host drained those bytes without saving them,
+re-probed the same guarded inventory, and retried within the same
+boot with `NV_CHUNK_BLOCKS=4`. The cause of the first interruption
+remains unknown.
+
+The retry copied all nine partitions to the Mac and checked them
+against independent phone-side hashes in 356 seconds. A separate Mac
+pass verified all sizes and SHA-256
+hashes, the inventory, and file and directory permissions for
+3,392,151,552 bytes. The verified backup is private and outside the
+checkout. `finish` completed at USB high speed and restored sysfs
+read-only before the warm return. Fastboot appeared 32 seconds after
+the host requested `finish`. Stock D1 completed boot on A with
+enforcing verity and the original VBMeta digest. The snapshot records
+the NV state before that stock boot.
