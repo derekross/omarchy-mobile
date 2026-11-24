@@ -27,6 +27,9 @@
 # Fcitx: Omarchy's picker also updates the Fcitx group after a save; this doesn't. fcitx5 is installed
 # but not running in the phone session, so nothing changes there; if you start fcitx5 by hand, run
 # Omarchy's Setup > Keyboard once to update its group.
+# Any live kb_layout/kb_variant/kb_options assignment in input.lua counts as the user's own, wherever it
+# sits (a variable's table, a per-device block too), so it is never overridden. A failed OSK add is kept
+# in the state dir and tried again on the next layouts save while the layout is still listed.
 # State (lock, the input.lua backup) lives in ${XDG_STATE_HOME:-~/.local/state}/omamobile.
 # Prints one line of JSON. Test hooks: OMAMOBILE_KBD_RULES (xkb .lst), OMAMOBILE_KEYBOARDS_DIR,
 # OMAMOBILE_KBD_LANGUAGES (the languages tool); the test puts a fake hyprctl first on PATH.
@@ -71,6 +74,8 @@ END = "-- omamobile-settings: switch key (end)"
 # block out also drops the newline we added and the file is restored byte for byte.
 BEGIN_NL = BEGIN[:-1] + "; newline added)"
 NAME_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
+# xkb variants can have capitals (de:T3, ru:phonetic_YAZHERTY)
+VAR_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}")
 MAX = 4
 STORE, STATE = os.environ["KBD_STORE"], os.environ["KBD_STATE"]
 INPUT = os.path.realpath(os.environ["KBD_INPUT"])  # a symlinked input.lua stays a link
@@ -104,15 +109,18 @@ def osk_add(name):
     return r.returncode == 0
 
 osk_old = False
+osk_pending_lost = False
 
-# Lua tokens, enough to see live `key = "string"` assignments; comments and long strings are skipped.
+# Lua tokens, enough to see live `key = value` assignments; comments and long strings are skipped.
 def tokens(text):
     i, n = 0, len(text)
     while i < n:
-        m = re.compile(r"--\[(=*)\[").match(text, i)
-        if m:
+        m = re.compile(r"(?:--)?\[(=*)\[").match(text, i)
+        if m:  # --[[ comment ]] or a [[ long string ]]
             e = text.find("]" + m.group(1) + "]", m.end())
             i = n if e < 0 else e + len(m.group(1)) + 2
+            if not m.group(0).startswith("--"):
+                yield ("string", "")
             continue
         if text.startswith("--", i):
             e = text.find("\n", i)
@@ -125,7 +133,7 @@ def tokens(text):
         if c in "\"'":
             m = re.compile(r"(?:\\.|[^\\\n%s])*" % c, re.S).match(text, i + 1)
             i = m.end() + 1
-            yield ("string", "")
+            yield ("string", m.group(0))
             continue
         m = re.compile(r"[A-Za-z_][A-Za-z0-9_]*").match(text, i)
         if m:
@@ -136,28 +144,30 @@ def tokens(text):
         i += 2 if text.startswith("==", i) else 1
 
 def live_keys(text):
-    """The kb_* keys set inside an `input = { }` table (not per-device blocks or variables)."""
-    t, found, stack = list(tokens(text)), set(), []
+    """Every live assignment of a kb_* key, as `kb_x =` or `["kb_x"] =`, anywhere in the file: in
+    hl.config's input table, in a table kept in a variable (t.kb_x = too), or in a per-device block. Counting all of
+    them is on purpose: a setting of the user's that we can't place is left alone."""
+    t, found = list(tokens(text)), set()
+    keys = ("kb_layout", "kb_variant", "kb_options")
     for i, a in enumerate(t):
-        if a == ("other", "{"):
-            stack.append(i >= 2 and t[i - 2] == ("ident", "input") and t[i - 1][0] == "eq")
-        elif a == ("other", "}"):
-            if stack:
-                stack.pop()
-        elif a[0] == "ident" and a[1] in ("kb_layout", "kb_variant", "kb_options") and stack and stack[-1] \
-                and i + 1 < len(t) and t[i + 1][0] == "eq":
+        if a[0] == "ident" and a[1] in keys and i + 1 < len(t) and t[i + 1][0] == "eq":
+            found.add(a[1])
+        elif a[0] == "string" and a[1] in keys and i > 0 and t[i - 1] == ("other", "[") \
+                and i + 2 < len(t) and t[i + 1] == ("other", "]") and t[i + 2][0] == "eq":
             found.add(a[1])
     return found
 
-def read_input():
+def read_input(limit=True):
     try:
         with open(INPUT, "rb") as f:
-            data = f.read(1 << 20)
+            data = f.read((1 << 20) + 1 if limit else -1)
             st = os.fstat(f.fileno())
     except FileNotFoundError:
         return None, None, ""
     except OSError:
         fail("cannot read input.lua")
+    if limit and len(data) > 1 << 20:
+        fail("input.lua is over 1 MiB; nothing read or written")
     try:
         return data, st, data.decode("utf-8")
     except UnicodeDecodeError:
@@ -207,9 +217,12 @@ def current_layouts():
     raw_l, raw_v = vals.get("XKBLAYOUT"), vals.get("XKBVARIANT", "")
     if not raw_l:  # no store yet: what Hyprland runs with now (vconsole.conf on Omarchy), else us
         raw_l, raw_v = getoption("kb_layout") or "us", getoption("kb_variant") or ""
-    lay = [l for l in fields(raw_l) if NAME_RE.fullmatch(l)] or ["us"]
-    var = [v if NAME_RE.fullmatch(v) else "" for v in fields(raw_v)][:len(lay)]
-    return lay, var + [""] * (len(lay) - len(var))
+    ls, vs = fields(raw_l), fields(raw_v)
+    vs = vs + [""] * (len(ls) - len(vs))
+    # a layout we can't name drops with its own variant, so the rest stay paired
+    pairs = [(l, v if VAR_RE.fullmatch(v) else "") for l, v in zip(ls, vs) if NAME_RE.fullmatch(l)]
+    pairs = pairs or [("us", "")]
+    return [p[0] for p in pairs], [p[1] for p in pairs]
 
 def non_latin(l, v):
     return l in NON_LATIN or (l == "us" and v in NON_LATIN_US)
@@ -287,8 +300,12 @@ def atomic(path, data, mode=0o644):
         return False
     return True
 
-def apply_live(lay, var, opts):
+def apply_live(lay, var, opts, override):
     kv = {"kb_layout": ",".join(lay), "kb_variant": ",".join(var) if any(var) else "", "kb_options": opts}
+    if override:  # the user's own live layouts stay; only the switch key goes live
+        kv = {"kb_options": opts}
+    if any(re.search(r'["\\\n]', v) for v in kv.values()):  # never build Lua from a value that could break the quotes
+        return False
     r = run(["hyprctl", "eval", "hl.config({ input = { %s } })"
              % ", ".join('%s = "%s"' % (k, v) for k, v in kv.items())])
     if r is None or "error" in r.lower():
@@ -314,7 +331,7 @@ if verb == "list":
          "switchKeys": [{"option": n, "name": d} for n, d in SWITCH_NAMES]})
     sys.exit(0)
 if verb == "get":
-    _, _, text = read_input()
+    _, _, text = read_input(limit=False)
     _, block, custom, override = input_state(text)
     lay, var = current_layouts()
     out(state(lay, var, block, custom, override))
@@ -330,7 +347,7 @@ if key == "layouts":
     new_l, new_v = [], []
     for it in items:
         l, _, v = it.partition(":")
-        if not NAME_RE.fullmatch(l) or (v and not NAME_RE.fullmatch(v)):
+        if not NAME_RE.fullmatch(l) or (v and not VAR_RE.fullmatch(v)):
             fail("bad layout name")
         if l not in lay_ok or (v and (l, v) not in var_ok):
             fail("unknown layout: " + it)
@@ -349,7 +366,7 @@ try:
     fcntl.flock(lockf, fcntl.LOCK_EX)
 except OSError:
     fail("cannot lock the keyboard settings")
-data, st, text = read_input()
+data, st, text = read_input(limit=key == "switch-key")
 rest, block, custom, override = input_state(text)
 lay, var = current_layouts()
 osk_ok = True
@@ -362,10 +379,26 @@ if key == "layouts":
         fail("cannot write ~/.config/omarchy/keyboard-layouts")
     lay, var = new_l, new_v
     carried = os.path.isdir(KEYBOARDS)
+    pending_f = os.path.join(STATE, "keyboard-osk-pending")
+    try:
+        with open(pending_f, encoding="utf-8") as f:
+            pending = set(f.read().split())
+    except OSError:
+        pending = set()
+    failed = []
     for l, v in zip(lay, var):
         n = l + ("+" + v if v else "")
-        if n not in old and (not carried or os.path.isfile(os.path.join(KEYBOARDS, n + ".yaml"))):
-            osk_ok = osk_add(n) and osk_ok
+        if (n not in old or n in pending) and (not carried or os.path.isfile(os.path.join(KEYBOARDS, n + ".yaml"))):
+            if not osk_add(n):
+                osk_ok = False
+                failed.append(n)
+    if failed and not atomic(pending_f, ("\n".join(failed) + "\n").encode()):
+        osk_pending_lost = True
+    elif pending:
+        try:
+            os.unlink(pending_f)
+        except OSError:
+            pass
 else:
     if custom:
         fail("input.lua sets its own kb_options; nothing written")
@@ -385,22 +418,35 @@ else:
         except OSError:
             fail("cannot back up input.lua, nothing written")
         with open(INPUT, "rb") as f:
-            now = f.read(1 << 20)
+            now = f.read((1 << 20) + 1)
             nst = os.fstat(f.fileno())
         if hashlib.sha256(now).digest() != hashlib.sha256(data).digest() or nst.st_mtime_ns != st.st_mtime_ns:
             fail("input.lua changed while saving, nothing written")
         if not atomic(INPUT, new.encode("utf-8"), st.st_mode & 0o777):
             fail("cannot write input.lua")
         block = new_block
+note = ""
+if key == "layouts" and [l + (":" + v if v else "") for l, v in zip(lay, var)] != items:
+    note = "us goes first: passwords on the lock screen are typed in the first layout"
+def fail_saved(msg):
+    out({"error": msg, "note": note} if note else {"error": msg})
+    sys.exit(2)
+if override:  # grp:alts_toggle follows the live layouts, not the store's
+    live = getoption("kb_layout")
+    if live:
+        lay = fields(live)
+        var = (fields(getoption("kb_variant") or "") + [""] * len(lay))[:len(lay)]
 opts = options_for(lay, var, block, custom)
-if opts is None or not apply_live(lay, var, opts):
-    fail("saved, applies at next login (Hyprland did not take it live)"
+if opts is None or not apply_live(lay, var, opts, override):
+    fail_saved("saved, applies at next login (Hyprland did not take it live)"
          + ("" if osk_ok else ", and the on-screen keyboard list was not updated"))
 if not osk_ok:
-    fail("saved and applied, but the on-screen keyboard list was not updated"
-         + (" (omamobile-shell is too old: its omamobile-keyboard-languages has no add)" if osk_old else ""))
+    fail_saved("saved and applied, but the on-screen keyboard list was not updated"
+         + (" (omamobile-shell is too old: its omamobile-keyboard-languages has no add)" if osk_old else "")
+         + ("; it won't be tried again, remove and add the layout" if osk_pending_lost else ""))
+lay, var = current_layouts()
 res = state(lay, var, block, custom, override)
-if key == "layouts" and [l + (":" + v if v else "") for l, v in zip(lay, var)] != items:
-    res["note"] = "us goes first: passwords on the lock screen are typed in the first layout"
+if note:
+    res["note"] = note
 out(res)
 PY

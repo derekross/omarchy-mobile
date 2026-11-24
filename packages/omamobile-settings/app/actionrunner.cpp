@@ -17,7 +17,7 @@ void ActionRunner::post(const QString &tool, const QVariantMap &result, int id) 
 int ActionRunner::run(const QString &tool, const QStringList &args) {
     static const QRegularExpression word("\\A[a-z0-9]{1,16}\\z");
     // keyboard takes layout lists (us,gr:polytonic), and switch-key names (alt_shift, ctrl_shift, caps, default)
-    static const QRegularExpression kbdWord("\\A[a-z][a-z0-9_:,-]{0,159}\\z");
+    static const QRegularExpression kbdWord("\\A[a-z][A-Za-z0-9_:,-]{0,159}\\z");
     static const QStringList tools = {"display", "charge", "keyboard"};
     const int id = ++m_next;
     auto fail = [this, &tool, id](const QString &why) { post(tool, {{"error", why}}, id); return id; };

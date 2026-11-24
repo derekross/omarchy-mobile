@@ -12,7 +12,7 @@ printf '%s\n' "$*" >> "$FAKE_LOG"
 case "$1 $2" in
   "-j devices") cat "$FAKE_DEVICES" ;;
   "-j getoption") k=${3#input:}; [[ -e $FAKE_OPTS/$k ]] || { [[ $k == kb_options ]] && printf 'omarchy:shift_caps_compose' > "$FAKE_OPTS/$k"; }
-    printf '{"option":"%s","str":"%s","set":true}\n' "$3" "$(cat "$FAKE_OPTS/$k" 2>/dev/null)" ;;
+    python3 -c 'import json,sys; print(json.dumps({"option": sys.argv[1], "str": sys.argv[2], "set": True}))' "$3" "$(cat "$FAKE_OPTS/$k" 2>/dev/null)" ;;
   eval*) [[ -n ${FAKE_EVAL_FAIL:-} ]] && { echo "error: no eval"; exit 0; }
     # store what the eval set, so getoption reads it back
     for k in kb_layout kb_variant kb_options; do
@@ -42,6 +42,7 @@ cat > "$tmp/rules.lst" <<'EOT'
   polytonic       gr: Greek (polytonic)
   rus             us: Russian (US, phonetic)
   intl            us: English (US, intl., with dead keys)
+  T3              de: German (T3)
 EOT
 echo '{"keyboards":[{"name":"hl-virtual-keyboard-squeekboard","active_layout_index":0},{"name":"dell-kb7120w","layout":"us,gr","active_layout_index":1,"main":true}]}' > "$tmp/devices.json"
 for f in gr de ru; do : > "$tmp/keyboards/$f.yaml"; done
@@ -136,13 +137,50 @@ cp "$store" "$tmp/store.before"
 r=$(run get); eq "$(j "$r" 'd["override"] != "", d["switchKey"]')" "(True, 'custom')"
 r=$(run set layouts us,gr); has <(echo "$r") 'nothing written'; cmp -s "$store" "$tmp/store.before"
 r=$(run set switch-key caps); has <(echo "$r") 'nothing written'; hasnt "$input" grp:caps_toggle
+# kb_layout in a variable's table, as a ["kb_layout"] key, or after a [[long string]] still counts
+for lua in 'local kb = { kb_layout = "us,dk" }\nhl.config({ input = kb })\n' \
+    'hl.config({ input = { ["kb_layout"] = "us,dk" } })\n' \
+    'local s = [[ -- " { ]]\nhl.config({ input = { kb_layout = "us,dk" } })\n'; do
+  printf "$lua" > "$input"; r=$(run get); eq "$(j "$r" 'd["override"] != ""')" "True"
+done
+printf 'local i = {}\ni.kb_layout = "us,dk"\nhl.config({ input = i })\n' > "$input"; eq "$(j "$(run get)" 'd["override"] != ""')" "True"
 cp "$tmp/stock.lua" "$input"
+
+# only a live kb_layout of the user's: a switch-key save writes the block and evals only kb_options
+printf 'hl.config({ input = { kb_layout = "us,dk" } })\n' > "$input"; printf 'us,dk' > "$tmp/opts/kb_layout"
+: > "$tmp/log"; r=$(run set switch-key ctrl_shift); eq "$(j "$r" 'd.get("error")')" "None"
+has "$tmp/log" 'eval hl.config({ input = { kb_options = "omarchy:shift_caps_compose,grp:ctrl_shift_toggle" } })'
+hasnt "$tmp/log" 'kb_layout = "'
+run set switch-key default >/dev/null
+cp "$tmp/stock.lua" "$input"
+
+# the user's own kb_options with a quote in it never goes into the eval
+printf 'hl.config({ input = { kb_options = "x" } })\n' > "$input"; printf 'compose:caps", kb_layout = "zz' > "$tmp/opts/kb_options"
+: > "$tmp/log"; r=$(run set layouts us,gr); has <(echo "$r") 'next login'; hasnt "$tmp/log" 'zz'
+rm -f "$tmp/opts/kb_options"; cp "$tmp/stock.lua" "$input"
+
+# an input.lua over 1 MiB is refused, not truncated
+head -c 1100000 /dev/zero | tr '\0' ' ' > "$input"; cp "$input" "$tmp/big.lua"
+r=$(run set switch-key caps); has <(echo "$r") 'over 1 MiB'; cmp -s "$input" "$tmp/big.lua"
+r=$(run get); eq "$(j "$r" 'd.get("error")')" "None"
+cp "$tmp/stock.lua" "$input"
+
+# a variant with capitals stays paired with its layout
+r=$(run set layouts us,de:T3); eq "$(j "$r" 'd.get("error")')" "None"; eq "$(cat "$store")" $'XKBLAYOUT=us,de\nXKBVARIANT=,T3'
+eq "$(j "$(run get)" 'd["layouts"][1]')" "{'layout': 'de', 'variant': 'T3'}"
+# a layout name we can't read drops with its own variant
+printf 'XKBLAYOUT=us,nec_vndr/jp,gr\nXKBVARIANT=,x,polytonic\n' > "$store"
+eq "$(j "$(run get)" '[(l["layout"], l["variant"]) for l in d["layouts"]]')" "[('us', ''), ('gr', 'polytonic')]"
 
 # a failed live apply or OSK add is an error, the file stays saved
 FAKE_EVAL_FAIL=1 r=$(FAKE_EVAL_FAIL=1 run set layouts us,gr); has <(echo "$r") 'next login'
+r=$(FAKE_EVAL_FAIL=1 run set layouts gr); has <(echo "$r") 'us goes first'
 eq "$(head -1 "$store")" 'XKBLAYOUT=us,gr'
 r=$(FAKE_LANGS_FAIL=1 run set layouts us,gr,ru); has <(echo "$r") 'on-screen keyboard list was not updated'
 eq "$(head -1 "$store")" 'XKBLAYOUT=us,gr,ru'
+# the failed add of ru is tried again on the next save while ru is still listed, then forgotten
+: > "$tmp/log"; run set layouts us,gr,ru >/dev/null; has "$tmp/log" 'langs add ru'
+: > "$tmp/log"; run set layouts us,gr,ru >/dev/null; hasnt "$tmp/log" 'langs add ru'
 # an omamobile-shell without the add verb (usage, exit 2) is named in the error
 r=$(FAKE_LANGS_OLD=1 run set layouts us,gr,ru,de); has <(echo "$r") 'omamobile-shell is too old'
 

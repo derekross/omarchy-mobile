@@ -71,6 +71,7 @@ private slots:
     }
     void keyboardPageGoesBackToRoot() {
         Backend backend;
+        backend.setBackendDir(stubs("off"));
         QVERIFY(backend.navigate("keyboard"));
         QCOMPARE(backend.page(), QString("keyboard"));
         backend.back();

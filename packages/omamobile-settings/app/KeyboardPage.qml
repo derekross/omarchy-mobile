@@ -36,7 +36,7 @@ Flickable {
         if (r.error) {
             // A set can fail half way (file saved, live apply or OSK not): read the real state again so
             // the next change is not built from a stale list, and keep the error on screen.
-            if (lastError === "") { lastError = r.error; status = r.error; busy = true; reqId = actions.run("keyboard", ["get"]) }
+            if (lastError === "") { lastError = r.note ? r.error + " " + r.note : r.error; status = r.error; busy = true; reqId = actions.run("keyboard", ["get"]) }
             else { status = lastError; lastError = "" }
             return
         }
