@@ -224,6 +224,10 @@ enum {	/* IGatekeeper */
 static const char *socket_path = "/dev/socket/omamobile-fp/bridge.sock";
 static const char *state_dir = "/data/vendor/omamobile-fp";
 static const char *touch_path = "/dev/input/touchscreen";
+/* --touch-name, --touch-dir: where to find the touchscreen again by its
+ * name once the device at touch_path is gone (its driver rebound) */
+static const char *touch_name;
+static const char *touch_dir = "/dev/input";
 static const char *lhbm_path = "/sys/class/backlight/panel0-backlight/local_hbm_mode";
 static const char *ui_state_path;	/* --ui-state: off unless given */
 static const char *inhibit_dir;		/* --inhibit: off unless given */
@@ -1070,11 +1074,83 @@ static int32_t scale(int32_t v, int32_t max, int32_t panel)
 	return max > 0 ? (int32_t)((int64_t)v * panel / (max + 1)) : v;
 }
 
+#define EVIOCGNAME_(len)	_IOC(_IOC_READ, 'E', 0x06, len)
+
+/* An evdev node that is the touchscreen: with --touch-name, by its name. */
+static int touch_open_checked(const char *path)
+{
+	char name[128] = "";
+	int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+
+	if (fd < 0 || !touch_name)
+		return fd;
+	if (ioctl(fd, EVIOCGNAME_(sizeof(name) - 1), name) >= 0 && !strcmp(name, touch_name))
+		return fd;
+	close(fd);
+	return -1;
+}
+
+static int open_touch(void)
+{
+	char path[300];
+	struct dirent *e;
+	DIR *d;
+	int fd = touch_open_checked(touch_path);
+
+	if (fd >= 0 || !touch_name || !(d = opendir(touch_dir)))
+		return fd;
+	while (fd < 0 && (e = readdir(d))) {
+		if (strncmp(e->d_name, "event", 5))
+			continue;
+		snprintf(path, sizeof(path), "%s/%s", touch_dir, e->d_name);
+		fd = touch_open_checked(path);
+	}
+	closedir(d);
+	return fd;
+}
+
+static int64_t touch_retry_at;
+
+/*
+ * The touchscreen went away under us (its driver unbound and bound again,
+ * which gives it a new node). Reading the old one fails at once, and poll
+ * reports it at once, so without this the main loop spun on it. Close it,
+ * end a contact that was on the sensor, and look for the device again.
+ */
+static void touch_lost(void)
+{
+	say("touchscreen gone (%s): looking for it again", strerror(errno));
+	close(touch_fd);
+	touch_fd = -1;
+	touch_tracking = -1;
+	sensor_contact = false;
+	if (finger)
+		pointer(false);
+	touch_retry_at = now_ms() + 2000;
+}
+
+static void touch_reopen(void)
+{
+	if (touch_fd >= 0 || now_ms() < touch_retry_at)
+		return;
+	touch_fd = open_touch();
+	if (touch_fd < 0) {
+		touch_retry_at = now_ms() + 2000;
+		return;
+	}
+	say("touchscreen back");
+	touch_range();
+}
+
 static void touch_events(bool capturing)
 {
 	struct input_event_ ev[32];
 	ssize_t n = read(touch_fd, ev, sizeof(ev));
 
+	if (n < 0 && errno != EAGAIN && errno != EINTR) {
+		touch_lost();
+		return;
+	}
 	for (ssize_t i = 0; i < n / (ssize_t)sizeof(*ev); i++) {
 		if (ev[i].type == EV_ABS_) {
 			if (ev[i].code == ABS_MT_SLOT_)
@@ -1489,6 +1565,7 @@ static int open_listener(void)
 static void usage(void)
 {
 	say("usage: omamobile-fp-bridge [--socket PATH] [--state DIR] [--touch EVDEV]\n"
+	    "                           [--touch-name NAME] [--touch-dir DIR]\n"
 	    "                           [--lhbm PATH] [--settle MS] [--ui-state PATH]\n"
 	    "                           [--inhibit DIR] [--panel WxH] [--lhbm-first 0|1]");
 	exit(2);
@@ -1508,6 +1585,10 @@ int main(int argc, char **argv, char **envp)
 			state_dir = v;
 		else if (!strcmp(argv[i], "--touch"))
 			touch_path = v;
+		else if (!strcmp(argv[i], "--touch-name"))
+			touch_name = v;
+		else if (!strcmp(argv[i], "--touch-dir"))
+			touch_dir = v;
 		else if (!strcmp(argv[i], "--lhbm"))
 			lhbm_path = v;
 		else if (!strcmp(argv[i], "--settle"))
@@ -1547,7 +1628,7 @@ int main(int argc, char **argv, char **envp)
 		say("warning: no auth-token key; enrollment will be refused");
 	open_session();
 
-	touch_fd = open(touch_path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+	touch_fd = open_touch();
 	if (touch_fd < 0)
 		say("no touchscreen at %s (%s): captures will not start", touch_path,
 		    strerror(errno));
@@ -1573,8 +1654,11 @@ int main(int argc, char **argv, char **envp)
 			return 1;
 		if (fds[0].revents & POLLIN && read(events[0], &e, sizeof(e)) == sizeof(e))
 			hal_event(&e);
-		if (fds[3].revents & POLLIN)
+		if (touch_fd >= 0 && fds[3].revents & (POLLERR | POLLHUP | POLLNVAL))
+			touch_lost();
+		else if (fds[3].revents & POLLIN)
 			touch_events(capturing());
+		touch_reopen();
 		if (fds[1].revents & POLLIN)
 			new_client();
 		if (client_fd >= 0 && fds[2].revents & (POLLIN | POLLHUP | POLLERR))

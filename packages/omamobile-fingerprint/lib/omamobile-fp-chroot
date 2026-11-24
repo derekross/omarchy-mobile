@@ -514,6 +514,9 @@ setup_dev() {
   local ev
   ev=$(touch_event)
   [[ -n $ev ]] && bind "/dev/input/$ev" "$dev/input/touchscreen" ro
+  # The host's input nodes, read-only, so the bridge finds the touchscreen
+  # again by its name when its driver rebinds and it gets a new node.
+  bind /dev/input "$dev/input-host" ro
   [[ -c /dev/trusty-log0 ]] && bind /dev/trusty-log0 "$dev/trusty-log0"
   [[ -c /dev/goodix_fp ]] && bind /dev/goodix_fp "$dev/goodix_fp"
   # RPMB only: no other SCSI generic node enters the chroot
@@ -744,6 +747,7 @@ start() {
   if [[ $stage == bridge ]]; then
     spawn bridge vendor /omamobile/omamobile-fp-bridge \
       --socket /dev/socket/omamobile-fp/bridge.sock --touch /dev/input/touchscreen \
+      --touch-name "$TOUCH_NAME" --touch-dir /dev/input-host \
       --ui-state /dev/socket/omamobile-fp-ui/state.json \
       --inhibit /dev/socket/omamobile-fp-ui/inhibit --panel "$PANEL" \
       --lhbm-first "$LHBM_FIRST" \
