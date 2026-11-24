@@ -39,8 +39,8 @@ private slots:
             QFile mgr(stubs(it.key()) + "/appmgr.sh");
             QVERIFY(mgr.open(QIODevice::WriteOnly));
             mgr.write("case $1 in\n"
-                      "  state) printf '{\"id\":\"%s\",\"kind\":\"package\",\"package\":\"bpkg\",\"units\":[],\"removable\":true,\"why\":\"\",\"targets\":[{\"name\":\"bpkg\",\"version\":\"1-1\",\"protected\":false,\"why\":\"\"}],\"required_by\":\"\",\"optional_for\":\"\",\"hash\":\"00112233445566ff\",\"reinstall\":\"sudo pacman -S bpkg\"}\\n' \"$2\" ;;\n"
-                      "  remove) printf '%s\\n' \"$*\" > \"${0%/*}/removed\"; printf '{\"ok\":true,\"kind\":\"package\",\"reinstall\":\"sudo pacman -S bpkg\"}\\n' ;;\n"
+                      "  state) printf '{\"id\":\"%s\",\"name\":\"B\",\"package\":\"bpkg\",\"units\":[\"app-x-b-1.scope\"]}\\n' \"$2\" ;;\n"
+                      "  stop) printf '%s\\n' \"$*\" > \"${0%/*}/stopped\"; printf '{\"ok\":true,\"stopped\":[\"app-x-b-1.scope\"]}\\n' ;;\n"
                       "  *) printf '{\"args\":\"%s\"}\\n' \"$*\" ;;\n"
                       "esac\n");
         }
@@ -126,7 +126,7 @@ private slots:
             else { QVERIFY(bad.contains(QString::number(id))); QCOMPARE(call.at(1).toMap().value("error").toString(), QString("bad argument")); }
         }
     }
-    void appsPageUninstallWizardSendsTheShownHash() {
+    void appsPageStopSendsStopAndShowsNoUninstall() {
         ActionRunner runner;
         runner.setBackendDir(stubs("on"));
         Backend backend;
@@ -139,24 +139,19 @@ private slots:
         std::unique_ptr<QObject> page(component.create());
         QVERIFY2(page, qPrintable(component.errorString()));
         QTRY_VERIFY(!page->property("scanning").toBool());
-        QFile::remove(stubs("on") + "/removed");
+        QFile::remove(stubs("on") + "/stopped");
         QMetaObject::invokeMethod(page.get(), "showApp", Q_ARG(QVariant, page->property("apps").toList().at(0)));
-        QTRY_COMPARE(page->property("mgr").toMap().value("hash").toString(), QString("00112233445566ff"));
-        // the wizard: Uninstall... opens the confirm step, nothing is removed before Uninstall
-        QObject *open = page->findChild<QObject *>("uninstallApp");
-        QVERIFY(open && open->property("enabled").toBool());
-        QMetaObject::invokeMethod(open, "clicked");
-        QCOMPARE(page->property("wizard").toString(), QString("confirm"));
-        QVERIFY(!QFile::exists(stubs("on") + "/removed"));
-        QMetaObject::invokeMethod(page->findChild<QObject *>("confirmUninstall"), "clicked");
-        QTRY_COMPARE(page->property("wizard").toString(), QString("done"));
-        QVERIFY(page->property("doneText").toString().contains("sudo pacman -S bpkg"));
-        QFile f(stubs("on") + "/removed");
+        QTRY_COMPARE(page->property("mgr").toMap().value("units").toList().size(), 1);
+        // no uninstall control at all: it waits for a PIN prompt for admin actions
+        QVERIFY(!page->findChild<QObject *>("uninstallApp"));
+        QVERIFY(!page->findChild<QObject *>("confirmUninstall"));
+        QObject *stop = page->findChild<QObject *>("stopApp");
+        QVERIFY(stop && stop->property("enabled").toBool());
+        QMetaObject::invokeMethod(stop, "clicked");
+        QTRY_COMPARE(page->property("mgrStatus").toString(), QString("Stopped."));
+        QFile f(stubs("on") + "/stopped");
         QVERIFY(f.open(QIODevice::ReadOnly));
-        QCOMPARE(QString::fromUtf8(f.readAll()).trimmed(), QString("remove org.a.B 00112233445566ff"));
-        // back from the result goes to the list
-        QMetaObject::invokeMethod(page.get(), "goBack");
-        QVERIFY(!page->property("canGoBack").toBool());
+        QCOMPARE(QString::fromUtf8(f.readAll()).trimmed(), QString("stop org.a.B"));
     }
     void runnerTakesAppmgrArguments() {
         ActionRunner runner;
@@ -164,14 +159,14 @@ private slots:
         QSignalSpy done(&runner, &ActionRunner::finished);
         const int ok = runner.run("appmgr", {"stop", "org.a.B"});
         QStringList bad;
-        bad << QString::number(runner.run("appmgr", {"remove", "../x", "00112233445566ff"}));
-        bad << QString::number(runner.run("appmgr", {"remove", "org.a.B", "0011223344556677ff"}));  // 18 digits
-        bad << QString::number(runner.run("appmgr", {"remove", "org.a.B", "a;b"}));
-        const int tooMany = runner.run("appmgr", {"remove", "a", "b", "c"});
+        bad << QString::number(runner.run("appmgr", {"stop", "../x"}));
+        bad << QString::number(runner.run("appmgr", {"stop", "a;b"}));
+        // only a verb and an ID: a third argument (the old uninstall's hash) is refused
+        const int tooMany = runner.run("appmgr", {"remove", "org.a.B", "00112233445566ff"});
         QTRY_COMPARE(done.count(), bad.size() + 2);
         for (const auto &call : done) {
             const int id = call.at(2).toInt();
-            if (id == ok) QCOMPARE(call.at(1).toMap().value("args").toString(), QString("stop org.a.B"));
+            if (id == ok) QCOMPARE(call.at(1).toMap().value("ok").toBool(), true);
             else if (id == tooMany) QCOMPARE(call.at(1).toMap().value("error").toString(), QString("unknown action"));
             else { QVERIFY(bad.contains(QString::number(id))); QCOMPARE(call.at(1).toMap().value("error").toString(), QString("bad argument")); }
         }

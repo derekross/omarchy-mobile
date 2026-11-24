@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Apps: the apps the app drawer shows (the same desktop entries and filters), and one app's detail: its package,
-// version and installed size from pacman and Open, then Manage (appmgr.sh): Stop for this session, and an Uninstall wizard: what gets removed (pacman's own dry run,
-// protected packages and why), confirm, result with the reinstall command. The list loads only when this page opens:
-// the saved list shows at once, a fresh scan (nice 10, idle I/O) replaces it.
+// version and installed size from pacman (read-only), Open, and Stop for this session (appmgr.sh). The list loads only
+// when this page opens: the saved list shows at once, a fresh scan (nice 10, idle I/O) replaces it. Uninstalling is not
+// offered (see the note).
 import QtQuick
 import QtQuick.Layouts
 import "."
@@ -28,14 +28,8 @@ ColumnLayout {
     property string mgrStatus: ""
     property int mgrReq: -1
     property int actReq: -1
-    property string wizard: ""           // "" | "confirm" | "removing" | "done"
-    property string doneText: ""
     readonly property bool canGoBack: app !== null
-    function goBack() {
-        if (wizard === "removing") return
-        if (wizard !== "") { wizard = ""; if (doneText !== "") { doneText = ""; app = null; mgr = ({}); listReq = actions.run("apps", ["list"]) } return }
-        app = null; info = ({}); infoStatus = ""; infoReq = -1; openReq = -1; mgr = ({}); mgrStatus = ""; mgrReq = -1; actReq = -1
-    }
+    function goBack() { app = null; info = ({}); infoStatus = ""; infoReq = -1; openReq = -1; mgr = ({}); mgrStatus = ""; mgrReq = -1; actReq = -1 }
     function loadMgr() { mgrBusy = true; mgrReq = actions.run("appmgr", ["state", app.id]) }
     function iconSource(name) {
         const n = String(name || "")
@@ -47,7 +41,7 @@ ColumnLayout {
     function showApp(entry) {
         // a late answer for the previous app (its info or open) must not land on this one
         app = entry; info = ({}); infoStatus = ""; infoBusy = false; infoReq = -1; openReq = -1
-        mgr = ({}); mgrStatus = ""; mgrReq = -1; actReq = -1; wizard = ""; doneText = ""
+        mgr = ({}); mgrStatus = ""; mgrReq = -1; actReq = -1
         if (entry.open === false) { infoStatus = qsTr("Settings cannot show or open this app: its ID (%1) has characters Settings does not accept. Open it from the app drawer.").arg(entry.id); return }
         infoBusy = true
         infoReq = actions.run("apps", ["info", entry.id])
@@ -74,14 +68,8 @@ ColumnLayout {
             if (tool === "appmgr") {
                 if (id === page.mgrReq) { page.mgrBusy = false; if (r.error) page.mgrStatus = r.error; else page.mgr = r }
                 else if (id === page.actReq) {
-                    if (page.wizard === "removing") {
-                        page.wizard = "done"
-                        page.doneText = r.error ? "" : (r.reinstall ? qsTr("Uninstalled. To install it again from a terminal: %1").arg(r.reinstall) : qsTr("Uninstalled."))
-                        if (r.error) { page.mgrStatus = r.error; page.wizard = ""; page.loadMgr() }
-                    } else {
-                        page.mgrStatus = r.error ? r.error : r.stopped ? qsTr("Stopped.") : ""
-                        page.loadMgr()
-                    }
+                    page.mgrStatus = r.error ? r.error : r.stopped ? qsTr("Stopped.") : ""
+                    page.loadMgr()
                 }
                 return
             }
@@ -167,7 +155,6 @@ ColumnLayout {
             SettingsButton {
                 objectName: "openApp"
                 text: qsTr("Open")
-                visible: page.wizard === ""
                 enabled: page.app !== null && page.app.open !== false
                 Layout.fillWidth: true
                 onClicked: { page.infoStatus = ""; page.openReq = actions.run("apps", ["open", page.app.id]) }
@@ -189,10 +176,10 @@ ColumnLayout {
                     SettingsLabel { text: String(modelData.value); color: backend.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true }
                 }
             }
-            // Manage: stop, uninstall
+            // Manage: stop
             ColumnLayout {
                 objectName: "appManage"
-                visible: page.wizard === "" && page.mgr.id !== undefined
+                visible: page.mgr.id !== undefined
                 Layout.fillWidth: true; spacing: 8
                 SettingsButton {
                     objectName: "stopApp"
@@ -206,77 +193,15 @@ ColumnLayout {
                     text: qsTr("Not running in its own unit (or not running): nothing to stop.")
                     color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13); wrapMode: Text.Wrap; Layout.fillWidth: true
                 }
-                SettingsButton {
-                    objectName: "uninstallApp"
-                    text: qsTr("Uninstall...")
-                    enabled: page.mgr.removable === true
-                    Layout.fillWidth: true
-                    onClicked: { page.mgrStatus = ""; page.wizard = "confirm" }
-                }
-                SettingsLabel {
-                    visible: page.mgr.removable !== true && page.mgr.why !== ""
-                    text: qsTr("Cannot be uninstalled: %1").arg(page.mgr.why)
-                    color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13); wrapMode: Text.Wrap; Layout.fillWidth: true
-                }
             }
-            SettingsLabel { visible: page.mgrBusy && page.wizard === ""; text: qsTr("Checking what can be done..."); color: backend.muted; Layout.fillWidth: true }
+            SettingsLabel { visible: page.mgrBusy; text: qsTr("Checking what can be done..."); color: backend.muted; Layout.fillWidth: true }
             SettingsLabel { objectName: "mgrStatus"; visible: page.mgrStatus !== ""; text: page.mgrStatus; color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13); wrapMode: Text.Wrap; Layout.fillWidth: true }
-
-            // Uninstall wizard: exactly what goes, then the result
-            ColumnLayout {
-                objectName: "uninstallWizard"
-                visible: page.wizard !== ""
-                Layout.fillWidth: true; spacing: 8
-                SettingsLabel {
-                    text: page.wizard === "done" ? qsTr("Done") : page.wizard === "removing" ? qsTr("Uninstalling...") : qsTr("Uninstall %1?").arg(page.app ? page.app.name : "")
-                    color: backend.foreground; font.pixelSize: SettingsStyle.fontPx(18); font.weight: Font.DemiBold; wrapMode: Text.Wrap; Layout.fillWidth: true
-                }
-                SettingsLabel {
-                    visible: page.wizard === "confirm"
-                    text: page.mgr.kind === "package" ? qsTr("These packages will be removed (pacman -Rns, through Omarchy's omarchy-pkg-drop):")
-                          : page.mgr.kind === "webapp" ? qsTr("The web app's launcher and icon will be removed (Omarchy's omarchy-webapp-remove). Its browser data stays.")
-                          : page.mgr.kind === "tui" ? qsTr("The terminal app's launcher and icon will be removed (Omarchy's omarchy-tui-remove). The program itself stays.")
-                          : qsTr("The launcher file in your folder will be deleted.")
-                    color: backend.muted; wrapMode: Text.Wrap; Layout.fillWidth: true
-                }
-                Repeater {
-                    model: page.wizard === "confirm" ? (page.mgr.targets || []) : []
-                    delegate: SettingsLabel {
-                        required property var modelData
-                        text: "• " + modelData.name + " " + modelData.version + (modelData.protected ? "  (" + qsTr("protected: %1").arg(modelData.why) + ")" : "")
-                        color: backend.foreground; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true
-                    }
-                }
-                SettingsLabel {
-                    visible: page.wizard === "confirm" && (page.mgr.optional_for || "") !== ""
-                    text: qsTr("Optional for: %1. Those keep working, without what this app added to them.").arg(page.mgr.optional_for)
-                    color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13); wrapMode: Text.Wrap; Layout.fillWidth: true
-                }
-                SettingsLabel {
-                    visible: page.wizard === "confirm" && (page.mgr.reinstall || "") !== ""
-                    text: qsTr("To install it again later: %1").arg(page.mgr.reinstall)
-                    color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13); wrapMode: Text.WrapAnywhere; Layout.fillWidth: true
-                }
-                SettingsButton {
-                    objectName: "confirmUninstall"
-                    visible: page.wizard === "confirm"
-                    text: qsTr("Uninstall")
-                    Layout.fillWidth: true
-                    onClicked: { page.wizard = "removing"; page.actReq = actions.run("appmgr", ["remove", page.app.id, page.mgr.hash || "0"]) }
-                }
-                SettingsButton {
-                    visible: page.wizard === "confirm"
-                    text: qsTr("Cancel")
-                    Layout.fillWidth: true
-                    onClicked: page.wizard = ""
-                }
-                SettingsLabel { objectName: "doneText"; visible: page.wizard === "done"; text: page.doneText; color: backend.foreground; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true }
-                SettingsButton {
-                    visible: page.wizard === "done"
-                    text: qsTr("Back to apps")
-                    Layout.fillWidth: true
-                    onClicked: page.goBack()
-                }
+            SettingsLabel {
+                visible: !page.infoBusy && page.info.id !== undefined
+                text: page.info.package
+                      ? qsTr("Uninstalling is not offered here: removing a package can take parts of the phone's system with it. To remove it from a terminal: sudo pacman -R %1").arg(page.info.package)
+                      : qsTr("Uninstalling is not offered here.")
+                color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13); wrapMode: Text.Wrap; Layout.fillWidth: true
             }
             SettingsLabel { visible: page.infoStatus !== ""; text: page.infoStatus; color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13); wrapMode: Text.Wrap; Layout.fillWidth: true }
         }
