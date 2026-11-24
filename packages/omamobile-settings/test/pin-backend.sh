@@ -15,7 +15,7 @@ cat > "$tmp/set-pin" <<EOF
 #!/bin/bash
 [[ \${1:-} == --type ]] && { cat "$tmp/type"; exit 0; }
 [[ \$# == 1 && \${1:-} == --change ]] || exit 99
-env | grep -q '5061\|7384' && exit 98
+env | grep -c '5061\|7384' >/dev/null && exit 98
 IFS= read -r old; IFS= read -r new; IFS= read -r again
 [[ \$new =~ ^[0-9]{4,}\$ ]] || { echo "The PIN must be at least 4 digits, digits only." >&2; exit 1; }
 [[ \$new == "\$again" ]] || { echo "The two PINs do not match." >&2; exit 1; }
