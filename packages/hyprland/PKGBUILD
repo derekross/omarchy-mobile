@@ -20,12 +20,31 @@
 #    fading out over it on Android's alpha-out curve).
 #    Only with OMAMOBILE_ROTATION_HOLD=1 in Hyprland's environment, which
 #    device-panther sets; other phones rotate as before.
+#  - 0003-output-send-the-whole-state-with-done.patch: a rotation changes the
+#    transform but not the mode, so Hyprland sent wl_output.done without a new
+#    wl_output.geometry, and clients bound before the rotation kept the old
+#    transform. squeekboard, bound at login, then sized itself for portrait in
+#    landscape and covered the whole screen. Every done now carries the whole
+#    state. Drop it once upstream resends the geometry on a transform change.
+#  - 0004-input-bring-the-keyboard-up-on-a-touch.patch: a text field that
+#    takes focus on its own (Chromium's address bar when a window opens)
+#    brought up the on-screen keyboard over half the screen. With
+#    OMAMOBILE_IME_ON_TOUCH=1 in Hyprland's environment the input method is
+#    activated only for a field enabled within 800 ms of a touch or click, or
+#    200 ms after a later touch ends while the field is still focused and
+#    enabled, as on Android. Off by default, read once at startup.
+#  - 0005-input-method-apply-a-deactivation-with-done.patch: when the window
+#    of a focused text field closed, the input method got deactivate with no
+#    done, so it stayed active; a keyboard hidden by hand then never came back
+#    for later fields until squeekboard was restarted. The done is sent now.
 #  - pkgrel 3.2: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
 #    (0.57.0-3) release plus .1, so it sorts above both, and .2 for the
 #    rotation hold (3.1 is published); [omamobile] comes before [omarchy] and
 #    [extra] in pacman.conf, so pacman takes this build either way.
 #  - pkgrel 3.3: the rotation hold's half turn over Android's 383 ms and the
 #    old frame faded out on Android's alpha-out curve (3.2 is published).
+#  - pkgrel 3.4: the wl_output geometry after a rotation (3.3 is published).
+#  - pkgrel 3.5: the keyboard on a touch and the input method's done.
 #  - arch=(aarch64) only.
 #  - build() runs the two cmake steps of `make release` itself, with
 #    CMAKE_SKIP_RPATH (Arch's Makefile sed) and the job count from MAKEFLAGS
@@ -36,8 +55,8 @@
 
 pkgname=(hyprland hyprpm)
 pkgver=0.57.0
-pkgrel=3.3
-pkgdesc='a highly customizable dynamic tiling Wayland compositor (Omarchy Mobile: DPMS retry, rotation hold)'
+pkgrel=3.5
+pkgdesc='a highly customizable dynamic tiling Wayland compositor (Omarchy Mobile: DPMS retry, rotation hold, wl_output geometry on rotation, keyboard on a touch)'
 arch=(aarch64)
 url="https://github.com/hyprwm/Hyprland"
 license=(BSD-3-Clause)
@@ -104,13 +123,19 @@ source=("$_archive.tar.gz::$url/releases/download/v$pkgver/source-v$pkgver.tar.g
         wl-output-global-grace.patch
         monitor-rule-vrr.patch
         0001-dpms-keep-retrying-a-refused-dpms-commit.patch
-        0002-render-hold-the-last-frame-across-a-rotation.patch)
+        0002-render-hold-the-last-frame-across-a-rotation.patch
+        0003-output-send-the-whole-state-with-done.patch
+        0004-input-bring-the-keyboard-up-on-a-touch.patch
+        0005-input-method-apply-a-deactivation-with-done.patch)
 sha256sums=('82d006ba9264fe67266c7d583c16f1a6c64d51424dbdc472c3e9c9d5ddfcd559'
             '26d62139b8ae55e286bcdff1838a6bc01a021d8f1039b40b8fa523df83f61610'
             '8fa0f57dc1b3246ab4e30ae81419150f4af7767fb31e739e36c824c6d99fab73'
             'c14fb0ec02d97100bcfa4e5c8daaf524972fa5c665e04960619744ba01c73c39'
             'a5670d9a6cdee3f3990a81cdecfd5e1f95771ebd1d7b1e2622ac7187684b8836'
-            'c69e64fe55a25a7baa2751ff795ae1f8a1ddfc1d162b9b35f9d821675be02bb7')
+            'c69e64fe55a25a7baa2751ff795ae1f8a1ddfc1d162b9b35f9d821675be02bb7'
+            '2537015f3a03419bfe540622f073c0c5377883f3305c503b80a546f98c106946'
+            '9cbc5cca5f0e95b18c7bbcf41dbf9367d01d722262f0aa953595797e29086784'
+            'e8c163b9adbfce75cf26af235dbb20bb7ab57016ab17ec2897254257f549421b')
 
 prepare() {
 	ln -sf hyprland-source "$_archive"
@@ -125,6 +150,12 @@ prepare() {
 	patch -Np1 --fuzz=0 -i "$srcdir/0001-dpms-keep-retrying-a-refused-dpms-commit.patch"
 	# Omarchy Mobile: hold the last frame across a rotation until the layers have drawn, then turn it in as Android does
 	patch -Np1 --fuzz=0 -i "$srcdir/0002-render-hold-the-last-frame-across-a-rotation.patch"
+	# Omarchy Mobile: send wl_output's whole state, geometry and transform included, with every done
+	patch -Np1 --fuzz=0 -i "$srcdir/0003-output-send-the-whole-state-with-done.patch"
+	# Omarchy Mobile: with OMAMOBILE_IME_ON_TOUCH=1, bring the keyboard up for a touched text field only
+	patch -Np1 --fuzz=0 -i "$srcdir/0004-input-bring-the-keyboard-up-on-a-touch.patch"
+	# Omarchy Mobile: send the done that applies an input method deactivation when the text input is gone
+	patch -Np1 --fuzz=0 -i "$srcdir/0005-input-method-apply-a-deactivation-with-done.patch"
 	sed -i -e '/find_package.glaze/s/7...<8 //' {.,hyprpm,start}/CMakeLists.txt
 }
 

@@ -1,0 +1,215 @@
+--- a/src/managers/input/InputManager.hpp
++++ b/src/managers/input/InputManager.hpp
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include <chrono>
+ #include "../../defines.hpp"
+ #include <list>
+ #include <any>
+@@ -229,6 +230,10 @@
+ 
+     // for hiding cursor on touch
+     bool m_lastInputTouch = false;
++    // when a finger or a button last went down or up (OMAMOBILE_IME_ON_TOUCH)
++    std::chrono::steady_clock::time_point m_lastPressTime = {};
++    // the surface that finger or button went down on (OMAMOBILE_IME_ON_TOUCH)
++    WP<CWLSurfaceResource> m_lastPressSurface;
+ 
+     // for hiding cursor on tablet
+     bool m_lastInputTablet = false;
+--- a/src/managers/input/InputManager.cpp
++++ b/src/managers/input/InputManager.cpp
+@@ -718,6 +718,12 @@
+ }
+ 
+ void CInputManager::onMouseButton(IPointer::SButtonEvent e, SP<IPointer> mouse) {
++    m_lastPressTime = std::chrono::steady_clock::now();
++    if (e.state == WL_POINTER_BUTTON_STATE_PRESSED)
++        m_lastPressSurface = g_pSeatManager->m_state.pointerFocus;
++    if (e.state == WL_POINTER_BUTTON_STATE_RELEASED)
++        textInputPressEnded();
++
+     Event::SCallbackInfo info;
+     Event::bus()->m_events.input.mouse.button.emit(e, info);
+     if (info.cancelled)
+--- a/src/managers/input/Touch.cpp
++++ b/src/managers/input/Touch.cpp
+@@ -16,6 +16,9 @@
+ 
+ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
+     m_lastInputTouch = true;
++    // set below once the touch reaches a surface; a touch that returns early counts on none
++    m_lastPressTime  = std::chrono::steady_clock::now();
++    m_lastPressSurface.reset();
+ 
+     static auto PSWIPETOUCH  = CConfigValue<Config::INTEGER>("gestures:workspace_swipe_touch");
+     static auto PGAPSOUTDATA = CConfigValue<Config::IComplexConfigValue>("general:gaps_out");
+@@ -149,11 +152,14 @@
+     } else
+         return; // oops, nothing found.
+ 
++    m_lastPressSurface = m_touchData.touchFocusSurface;
+     g_pSeatManager->sendTouchDown(m_touchData.touchFocusSurface.lock(), e.timeMs, e.touchID, local);
+ }
+ 
+ void CInputManager::onTouchUp(ITouch::SUpEvent e, SP<ITouch> device) {
+     m_lastInputTouch = true;
++    m_lastPressTime  = std::chrono::steady_clock::now();
++    textInputPressEnded();
+ 
+     Event::SCallbackInfo info;
+     Event::bus()->m_events.input.touch.up.emit(e, info);
+--- a/src/managers/input/TextInput.hpp
++++ b/src/managers/input/TextInput.hpp
+@@ -28,6 +28,7 @@
+     void                   onDisabled();
+     void                   onCommit();
+     void                   onReset();
++    void                   activateDeferredIME();
+ 
+     bool                   isEnabled();
+     bool                   hasCursorRectangle();
+@@ -43,6 +44,9 @@
+ 
+     WP<CWLSurfaceResource> m_focusedSurface;
+     int                    m_enterLocks = 0;
++    // enabled with no touch or click just before it: the input method waits
++    // for one (OMAMOBILE_IME_ON_TOUCH)
++    bool                   m_imeDeferred = false;
+     WP<CTextInputV3>       m_v3Input;
+     WP<CTextInputV1>       m_v1Input;
+ 
+@@ -56,3 +60,6 @@
+         CHyprSignalListener surfaceDestroy;
+     } m_listeners;
+ };
++
++// a touch or a click ended (OMAMOBILE_IME_ON_TOUCH)
++void textInputPressEnded();
+--- a/src/managers/input/TextInput.cpp
++++ b/src/managers/input/TextInput.cpp
+@@ -5,6 +5,68 @@
+ #include "../../protocols/TextInputV3.hpp"
+ #include "../../protocols/InputMethodV2.hpp"
+ #include "../../protocols/core/Compositor.hpp"
++#include "../eventLoop/EventLoopManager.hpp"
++#include "../eventLoop/EventLoopTimer.hpp"
++#include <chrono>
++#include <cstdlib>
++#include <string_view>
++
++// OMAMOBILE_IME_ON_TOUCH=1 (read once): a text field that takes focus on its
++// own, as Chromium's address bar does when a window opens, does not bring up
++// the on-screen keyboard; it comes up when the field is touched, as on
++// Android. A field enabled within 800 ms of a touch or click activates the
++// input method at once. One enabled without it waits: 200 ms after the next
++// touch or click ends, if it is still the focused, enabled field (the tap was
++// on it, not on a link that took the focus away), it activates. Clients such
++// as Chromium send no text-input request after that tap until the input
++// method is active, so the compositor has to decide. Only a touch or click on
++// the field's own client counts: a back gesture or a tap on a recent app's
++// card (the shell's surfaces) that brings an app forward leaves it down.
++static bool imeOnTouch() {
++    static const bool ON = [] {
++        const char* e = std::getenv("OMAMOBILE_IME_ON_TOUCH");
++        return e && std::string_view{e} == "1";
++    }();
++    return ON;
++}
++
++static bool pressedOn(SP<CWLSurfaceResource> surface) {
++    const auto PRESSED = g_pInputManager->m_lastPressSurface.lock();
++    return surface && PRESSED && PRESSED->client() == surface->client();
++}
++
++static bool pressedRecentlyOn(SP<CWLSurfaceResource> surface) {
++    return std::chrono::steady_clock::now() - g_pInputManager->m_lastPressTime < std::chrono::milliseconds(800) && pressedOn(surface);
++}
++
++void CTextInput::activateDeferredIME() {
++    if (!m_imeDeferred || !isEnabled() || !pressedOn(focusedSurface()))
++        return;
++
++    LOG(Log::DEBUG, "TI touched: activating the input method");
++    m_imeDeferred = false;
++    g_pInputManager->m_relay.activateIME(this);
++}
++
++void textInputPressEnded() {
++    if (!imeOnTouch())
++        return;
++
++    static SP<CEventLoopTimer> timer;
++    if (!timer) {
++        timer = makeShared<CEventLoopTimer>(
++            std::nullopt,
++            [](SP<CEventLoopTimer> self, void* data) {
++                const auto TI = g_pInputManager->m_relay.getFocusedTextInput();
++                if (TI)
++                    TI->activateDeferredIME();
++            },
++            nullptr);
++        g_pEventLoopManager->addTimer(timer);
++    }
++
++    timer->updateTimeout(std::chrono::milliseconds(200));
++}
+ 
+ CTextInput::CTextInput(WP<CTextInputV1> ti) : m_v1Input(ti) {
+     initCallbacks();
+@@ -63,6 +125,13 @@
+         enter(surfV1);
+     }
+ 
++    if (imeOnTouch() && !pressedRecentlyOn(focusedSurface())) {
++        LOG(Log::DEBUG, "TI ENABLE with no touch: the input method waits for one");
++        m_imeDeferred = true;
++        return;
++    }
++
++    m_imeDeferred = false;
+     g_pInputManager->m_relay.activateIME(this);
+ }
+ 
+@@ -72,6 +141,10 @@
+         return;
+     }
+ 
++    // never activated: nothing to deactivate (a keyboard shown by hand stays)
++    const bool WASDEFERRED = m_imeDeferred;
++    m_imeDeferred          = false;
++
+     if (!isV3())
+         leave();
+ 
+@@ -85,6 +158,9 @@
+     if (!PFOCUSEDTI || PFOCUSEDTI != this)
+         return;
+ 
++    if (WASDEFERRED)
++        return;
++
+     g_pInputManager->m_relay.deactivateIME(this);
+ }
+ 
+@@ -92,6 +168,9 @@
+     if (g_pInputManager->m_relay.m_inputMethod.expired())
+         return;
+ 
++    if (m_imeDeferred)
++        return;
++
+     if (!focusedSurface())
+         return;
+ 
+@@ -114,6 +193,9 @@
+         return;
+     }
+ 
++    if (m_imeDeferred)
++        return;
++
+     g_pInputManager->m_relay.commitIMEState(this);
+ }
+ 
