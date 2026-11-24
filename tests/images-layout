@@ -7,7 +7,9 @@
 # image too big for its partition before writing any, writes and verifies the
 # images and tells a reboot that did not happen from a phone that never came
 # back; both refuse a phone that runs from slot A (a release there), flash
-# unless --from-slot-a names a development phone fallen back to stock. Then, with a stub kernel output (a random Image, minimal DTBs, a
+# unless --from-slot-a names a development phone fallen back to stock, and both
+# refuse an AVB_FOOTERS image missing or of any size other than its declared
+# size before contacting the phone. Then, with a stub kernel output (a random Image, minimal DTBs, a
 # random initramfs), a gs201-style descriptor yields its five boot images and
 # a gs101-style one (no init_boot or vendor_kernel_boot) yields boot (ramdisk
 # and OS version), vendor_boot (DTB and initramfs) and dtbo; a zuma-style one
@@ -203,6 +205,41 @@ bad "AVB_FOOTERS without a rollback index" 's/^SOC_IDS=.*/&\nAVB_FOOTERS="boot:8
 bad "AVB_FOOTERS without a security patch" 's/^SOC_IDS=.*/&\nAVB_FOOTERS="boot:8388608"\nAVB_ROLLBACK_INDEX=1/' "needs AVB_SECURITY_PATCH"
 bad "an AVB rollback index without AVB_FOOTERS" 's/^SOC_IDS=.*/&\nAVB_ROLLBACK_INDEX=1/' "belong with AVB_FOOTERS"
 
+# An AVB_FOOTERS image must exist and be padded to its declared partition size
+# before flash contacts fastboot.
+cp "$R/device/six/device.conf" "$t/good.conf"
+cp "$K/images/boot.img" "$t/boot.img"
+cp "$K/images/dtbo.img" "$t/dtbo.img"
+printf 'AVB_FOOTERS="boot:0x4000000"\nAVB_ROLLBACK_INDEX=1\nAVB_SECURITY_PATCH=2026-10-05\n' >> "$R/device/six/device.conf"
+: > "$t/fastboot.log"
+if om six flash; then fail "flash refuses an AVB_FOOTERS image shorter than declared"; fi
+[[ ! -s $t/fastboot.log ]] || fail "flash refuses a short AVB_FOOTERS image before any fastboot command"
+grep -qF "boot.img is 32768 bytes, not the 67108864 bytes device/six/device.conf's AVB_FOOTERS pads it to (bin/omamobile images)" "$t/log" || { cat "$t/log"; fail "flash names the short AVB_FOOTERS image and both sizes"; }
+truncate -s $((0x4000000 + 1)) "$K/images/boot.img"
+: > "$t/fastboot.log"
+if om six flash; then fail "flash refuses an AVB_FOOTERS image larger than declared"; fi
+[[ ! -s $t/fastboot.log ]] || fail "flash refuses an oversized AVB_FOOTERS image before any fastboot command"
+grep -qF "boot.img is 67108865 bytes, not the 67108864 bytes device/six/device.conf's AVB_FOOTERS pads it to (bin/omamobile images)" "$t/log" || { cat "$t/log"; fail "flash names the oversized AVB_FOOTERS image and both sizes"; }
+truncate -s $((0x4000000)) "$K/images/boot.img"
+: > "$t/fastboot.log"
+om six flash || { cat "$t/log"; fail "flash writes an AVB_FOOTERS image padded to its declared size"; }
+[[ $(flashed) == "boot_b vendor_boot_b dtbo_b " ]] || fail "flash writes all images when AVB_FOOTERS size matches (got $(flashed))"
+sed -i 's/AVB_FOOTERS="boot:0x4000000"/AVB_FOOTERS="boot:0x4000000 dtbo:32768"/' "$R/device/six/device.conf"
+: > "$t/fastboot.log"
+om six flash || { cat "$t/log"; fail "flash accepts a multi-entry AVB_FOOTERS with a decimal size"; }
+truncate -s 32767 "$K/images/dtbo.img"; : > "$t/fastboot.log"
+if om six flash; then fail "flash refuses a short second AVB_FOOTERS entry"; fi
+[[ ! -s $t/fastboot.log ]] && grep -qF "dtbo.img is 32767 bytes, not the 32768 bytes device/six/device.conf's AVB_FOOTERS pads it to (bin/omamobile images)" "$t/log" || { cat "$t/log"; fail "flash refuses a short second AVB_FOOTERS entry before fastboot"; }
+cp "$t/dtbo.img" "$K/images/dtbo.img"
+rm -f "$K/images/boot.img"
+: > "$t/fastboot.log"
+if om six flash; then fail "flash refuses a missing AVB_FOOTERS image"; fi
+[[ ! -s $t/fastboot.log ]] || fail "flash refuses a missing AVB_FOOTERS image before any fastboot command"
+grep -q 'missing .*boot\.img (run: omamobile images)' "$t/log" || { cat "$t/log"; fail "flash names the missing AVB_FOOTERS image"; }
+cp "$t/boot.img" "$K/images/boot.img"
+cp "$t/good.conf" "$R/device/six/device.conf"
+pass "flash refuses a short, oversized or missing AVB_FOOTERS image before fastboot and writes a padded one"
+
 # push against a fake phone: phone-ssh answers each command push sends and
 # keeps what dd writes, so the checksum check reads it back. The boot_id
 # answers follow $T/phone/script, one line per read (old, new or down; the
@@ -218,6 +255,7 @@ chmod +x "$t/bin/sleep"
 cat > "$R/tools/phone-ssh" <<'PHONE'
 #!/bin/bash
 P=$T/phone cmd="$*"
+echo "$cmd" >> "$P/ssh.log"
 case $cmd in
   true|*'command -v reboot-to'*) exit 0 ;;
   *androidboot*slot_suffix*) [[ ${PHONE_SLOT-} != FAIL ]] || exit 255; printf '%s\n' "${PHONE_SLOT-androidboot.slot_suffix = \"_b}" ;;
@@ -243,7 +281,7 @@ esac
 PHONE
 chmod +x "$R/tools/phone-ssh"
 push() { # the boot_id answers, one per argument
-  rm -f "$P/reads" "$P/log" "$P"/sd[a-z][0-9]*
+  rm -f "$P/reads" "$P/log" "$P/ssh.log" "$P"/sd[a-z][0-9]*
   printf '%s\n' "$@" > "$P/script"
   om six push
 }
@@ -276,15 +314,29 @@ if SECTORS=32 push old new; then fail "push refuses an image larger than its par
 grep -q 'larger than boot_b' "$t/log" || { cat "$t/log"; fail "push names the image too big for its partition"; }
 [[ $(find "$P" -name 'sd[a-z][0-9]*' | wc -l) == 0 && ! -s $P/log ]] || fail "push writes nothing, and does not reboot, when an image does not fit"
 pass "push checks every image against its partition's size before writing any"
-# An AVB_FOOTERS image's partition must be exactly the descriptor's size
+# An AVB_FOOTERS image must exist and be padded to the descriptor's size before
+# contacting the phone, and its partition must be exactly that size
 cp "$R/device/six/device.conf" "$t/six.conf"
 printf 'AVB_FOOTERS="boot:0x4000000"\nAVB_ROLLBACK_INDEX=1\nAVB_SECURITY_PATCH=2026-10-05\n' >> "$R/device/six/device.conf"
+if push old new; then fail "push refuses an AVB_FOOTERS image shorter than declared"; fi
+[[ ! -s $P/ssh.log ]] || fail "push refuses a short AVB_FOOTERS image before contacting the phone"
+grep -qF "boot.img is 32768 bytes, not the 67108864 bytes device/six/device.conf's AVB_FOOTERS pads it to (bin/omamobile images)" "$t/log" || { cat "$t/log"; fail "push names the short AVB_FOOTERS image and both sizes"; }
+truncate -s $((0x4000000 + 1)) "$K/images/boot.img"
+if push old new; then fail "push refuses an AVB_FOOTERS image larger than declared"; fi
+[[ ! -s $P/ssh.log ]] || fail "push refuses an oversized AVB_FOOTERS image before contacting the phone"
+grep -qF "boot.img is 67108865 bytes, not the 67108864 bytes device/six/device.conf's AVB_FOOTERS pads it to (bin/omamobile images)" "$t/log" || { cat "$t/log"; fail "push names the oversized AVB_FOOTERS image and both sizes"; }
+truncate -s $((0x4000000)) "$K/images/boot.img"
 push old new || { cat "$t/log"; fail "push writes an AVB_FOOTERS image to a partition of its size"; }
 if SECTORS=262144 push old new; then fail "push refuses an AVB_FOOTERS size that is not the partition's"; fi
 grep -q 'AVB_FOOTERS pads boot to 67108864 bytes, but boot_b' "$t/log" || { cat "$t/log"; fail "push names the AVB size and the partition's"; }
 [[ $(find "$P" -name 'sd[a-z][0-9]*' | wc -l) == 0 ]] || fail "push writes nothing when an AVB size is wrong"
+rm -f "$K/images/boot.img"
+if push old new; then fail "push refuses a missing AVB_FOOTERS image"; fi
+[[ ! -s $P/ssh.log ]] || fail "push refuses a missing AVB_FOOTERS image before contacting the phone"
+grep -q 'missing .*boot\.img (run: omamobile images)' "$t/log" || { cat "$t/log"; fail "push names the missing AVB_FOOTERS image"; }
+cp "$t/boot.img" "$K/images/boot.img"
 cp "$t/six.conf" "$R/device/six/device.conf"
-pass "push refuses an AVB_FOOTERS image whose partition is not the descriptor's size"
+pass "push refuses a short, oversized or missing AVB_FOOTERS image before contacting the phone, and refuses a partition size mismatch"
 # A second LUN: push looks for slot B's images only on sda and the
 # descriptor's UFS_RW_LUNS, the LUNs the init guards
 if FAKE_LUN=sde push old new; then fail "push finds no image on a LUN the descriptor does not name"; fi
