@@ -42,7 +42,11 @@
 #   wd-drill    applies nothing and stops feeding the watchdog: the phone MUST
 #               reset by itself within ~15-20 s. Needs the user present.
 #   b3-charger  modprobe max77759_charger default_ilim_ua=UA temp_guard=1
-#               guard_psy=max170xx_battery.
+#               guard_psy=max170xx_battery. default_ilim_ua is not enforced
+#               until linux-omarchy-mobile#288 is fixed (NO_AUTOIBUS stays
+#               clear), so --ilim is not a cap. Nothing here limits the draw
+#               from the port; the guard only trips on battery voltage,
+#               current and temperature.
 #   b4-tcpm     stop omamobile-usb-rescue, modprobe tcpci_maxim (pulls tcpci
 #               and tcpm; the DT keeps pd-disable: Rp sensing only, no PD).
 #               Needs Wi-Fi up, the Type-C node enabled (typec-test overlay)

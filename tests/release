@@ -162,6 +162,55 @@ for ok in "mac:$lam" "${lam//:/-}" "mac=${lam//:/}" "00-00-00-00-00-00" "macaddr
   printf '%s\n' "$ok" > "$t/scan/bad.bin"
   run scan "$t/scan" || fail "the scan passes: $ok"
 done
+# A hyphenated date and time, YY-MM-DD-HH-MM-SS, is a timestamp (#842), as
+# in tools/pr-check; past a range's edge, with a hex letter, with colons or
+# bare in a MAC record it is still an address, and it hides no address
+# beside it, starting in its last field or after an exempt one that starts
+# there. Built as above.
+ts() { local IFS=-; echo "$*"; }
+tc() { local IFS=:; echo "$*"; }
+stamp=$(ts 25 11 15 10 20 30) uaa=$(ts 00 1a 2b 3c 4d 5e)
+rest=${uaa#00-}
+for ok in "screenshot-$stamp.png" "screenshot-$(ts 26 11 15 10 20 30).png" "$(ts 25 01 15 10 20 30)" "$(ts 25 12 15 10 20 30)" \
+  "$(ts 25 11 01 10 20 30)" "$(ts 25 11 31 10 20 30)" "$(ts 25 11 15 00 00 00)" "$(ts 25 11 15 23 59 59)"; do
+  printf '%s\n' "$ok" > "$t/scan/bad.bin"
+  run scan "$t/scan" || fail "the scan passes: $ok"
+done
+for bad in "wlan0 at $uaa" "$(ts 25 00 15 10 20 30)" "$(ts 25 13 15 10 20 30)" "$(ts 25 11 00 10 20 30)" "$(ts 25 11 32 10 20 30)" \
+  "$(ts 25 11 15 24 20 30)" "$(ts 25 11 15 10 60 30)" "$(ts 25 11 15 10 20 60)" "$(ts 2c 11 15 10 20 30)" "$(ts 25 1b 15 10 20 30)" \
+  "$(ts 25 11 1d 10 20 30)" "$(ts 25 11 15 1f 20 30)" "$(ts 25 11 15 10 2e 30)" "$(ts 25 11 15 10 20 3a)" "${stamp//-/:}" "mac=${stamp//-/}" \
+  "screenshot-$stamp.png wlan0 at $uaa" "$stamp:${rest//-/:}" "screenshot-$(ts 25 11 15 10 20 26):$(tc 1a 2b 3c 4d):$uaa" \
+  "$(ts 25 11 15 10 20 32):$(tc 10 20 30 40):$(ts 50 1a 2b 3c 4d 5e)" "$(ts 25 11 15 10 20 26):$(tc 1a 2b 3c 4d):$(ts 50 1a 2b 3c 4d 5e)"; do
+  printf '%s\n' "$bad" > "$t/scan/bad.bin"
+  if run scan "$t/scan"; then fail "the scan finds: $bad"; fi
+done
+# Any other exempt address (all zeros, all ones, locally administered, or a
+# chain of exempt addresses) hides no real address starting in its last field,
+# in either separator direction or as a bare MAC record; overlapping real
+# addresses report both, exempt overlaps and 7-octet runs still pass, and
+# chains report each real address once.
+restc=${rest//-/:}
+for bad in "00-00-00-00-00-00:$restc" "00:00:00:00:00:00-$rest" \
+  "02-00-00-00-00-00:$restc" "02:00:00:00:00:00-$rest" \
+  "02-00-00-00-00-02:00:00:00:00:02-00-00-00-00-00:$restc" \
+  "00-00-00-00-00-00:00:00:00:00:00-$rest" \
+  "02-00-00-00-00-bd_addr $bare" "02:00:00:00:00:bd-addr $bare"; do
+  printf '%s\n' "$bad" > "$t/scan/bad.bin"
+  if run scan "$t/scan"; then fail "the scan finds: $bad"; fi
+  grep -qx '    1 finding(s)' "$t/log" || fail "the scan reports once: $bad"
+done
+for bad in "$hy:$restc" "$mac-$rest"; do
+  printf '%s\n' "$bad" > "$t/scan/bad.bin"
+  if run scan "$t/scan"; then fail "the scan finds overlapping real addresses: $bad"; fi
+  grep -qx '    2 finding(s)' "$t/log" || fail "the scan reports both overlapping real addresses: $bad"
+done
+for ok in "00-00-00-00-00-00:00:00:00:00:00" "ff-ff-ff-ff-ff-ff:ff:ff:ff:ff:ff" \
+  "ff:ff:ff:ff:ff:ff-ff-ff-ff-ff-ff" "02-00-00-00-00-02:$restc" "02:00:00:00:00:02-$rest" \
+  "$(ts 25 11 15 10 20 02):00:00:00:00:00" \
+  "00-00-00-00-00-00:$restc:6f" "00:00:00:00:00:00-$rest-6f"; do
+  printf '%s\n' "$ok" > "$t/scan/bad.bin"
+  run scan "$t/scan" || fail "the scan passes: $ok"
+done
 rm "$t/scan/bad.bin"
 # The holder of a copyright notice is named on purpose (2026.11.12: Omarchy's
 # licence header in a patch). Only that form passes: the same name anywhere
@@ -185,6 +234,16 @@ printf 'dhcp-host=%s,192.168.0.61\n' "$doc" >> "$t/scan/etc/dnsmasq.conf"
 if run scan "$t/scan"; then fail "a unicast dhcp-host in etc/dnsmasq.conf is found"; fi
 printf '#dhcp-option=128,%s # %s\n' "$opt" "$doc" > "$t/scan/etc/dnsmasq.conf"
 if run scan "$t/scan"; then fail "a real address after an exempt value on one line is found"; fi
+grp0=$(tc 11 22 33 44 55 60)
+for bad in "#dhcp-host=${grp0//:/-}:$restc" "#dhcp-host=$grp0-$rest"; do
+  printf '%s\n' "$bad" > "$t/scan/etc/dnsmasq.conf"
+  if run scan "$t/scan"; then fail "a real address overlapping a dnsmasq group address is found: $bad"; fi
+  grep -qx '    1 finding(s)' "$t/log" || fail "the scan reports once in dnsmasq.conf: $bad"
+done
+for ok in "#dhcp-host=$(ts 11 22 33 44 55 61):$restc" "#dhcp-option=128,${opt//:/-}:$restc"; do
+  printf '%s\n' "$ok" > "$t/scan/etc/dnsmasq.conf"
+  run scan "$t/scan" || fail "exempt overlap in etc/dnsmasq.conf passes: $ok"
+done
 rm "$t/scan/etc/dnsmasq.conf"
 printf 'paired %s\n' "$grp" > "$t/scan/etc/other.conf"
 if run scan "$t/scan"; then fail "a group-looking address outside etc/dnsmasq.conf is found"; fi
@@ -195,6 +254,62 @@ if run scan "$t/scan"; then fail "a file named like etc/dnsmasq.conf but not it 
 rm -r "$t/scan/xetc"
 rm -r "$t/scan/etc"
 pass "the scan finds real MACs, serial records, the builder's home and listed identifiers, not made-up MACs or example paths"
+
+# First-octet rule: locally administered unicast (x2, x6, xA, xE) and all-ones
+# pass in every spelling (including NUL-delimited binary MAC records); x3, x7,
+# xB and xF also set the group bit and are found outside etc/dnsmasq.conf
+# (including ff:... other than all-ones, beside an exempt address, and in
+# binary records), while etc/dnsmasq.conf still allows group addresses via
+# first & 1. Built from octets so neither scanner finds a literal address in
+# this file.
+tail_c=$(tc 1a 2b 3c 4d 5e) tail_h=${tail_c//:/-} tail_b=${tail_c//:/}
+mac_forms() {
+  local o=$1 O=${1^^}
+  printf '%s\n' \
+    "$o:$tail_c" "$O:${tail_c^^}" \
+    "mac:$o:$tail_c" "tag:$O:${tail_c^^}" "id:$o:$tail_c" \
+    "$o-$tail_h" "$O-${tail_h^^}" "wlan0-$o-$tail_h" \
+    "mac=$o$tail_b" "mac=$O${tail_b^^}" "bd_addr: $o$tail_b" \
+    "ether $O${tail_b^^}" "\"mac_address\": \"$O${tail_b^^}\""
+}
+for o in 02 16 ca fe; do
+  while IFS= read -r line; do
+    printf '%s\n' "$line" > "$t/scan/bad.bin"
+    run scan "$t/scan" || fail "the scan passes unicast locally administered: $line"
+  done < <(mac_forms "$o")
+  printf 'x\0mac=%s%s\0y' "$o" "$tail_b" > "$t/scan/bad.bin"
+  run scan "$t/scan" || fail "the scan passes binary unicast locally administered: $o"
+done
+for ok in "ff:ff:ff:ff:ff:ff" "FF:FF:FF:FF:FF:FF" "mac:ff:ff:ff:ff:ff:ff" \
+  "ff-ff-ff-ff-ff-ff" "FF-FF-FF-FF-FF-FF" "wlan0-ff-ff-ff-ff-ff-ff" \
+  "mac=ffffffffffff" "bd_addr: FFFFFFFFFFFF" "ether FFFFFFFFFFFF" \
+  "\"mac_address\": \"FFFFFFFFFFFF\""; do
+  printf '%s\n' "$ok" > "$t/scan/bad.bin"
+  run scan "$t/scan" || fail "the scan passes all-ones: $ok"
+done
+for o in 03 17 cb ef ff; do
+  while IFS= read -r line; do
+    printf '%s\n' "$line" > "$t/scan/bad.bin"
+    if run scan "$t/scan"; then fail "the scan finds group-bit first octet: $line"; fi
+  done < <(mac_forms "$o")
+  printf '%s\n' "$lam $o:$tail_c" > "$t/scan/bad.bin"
+  if run scan "$t/scan"; then fail "the scan finds group-bit beside exempt: $lam $o:$tail_c"; fi
+  printf 'x\0mac=%s%s\0y' "$o" "$tail_b" > "$t/scan/bad.bin"
+  if run scan "$t/scan"; then fail "the scan finds binary group-bit first octet: $o"; fi
+done
+near_all_ones=$(printf '%s:%s' ff:ff:ff ff:ff:fe)
+for bad in "$near_all_ones" "${near_all_ones//:/-}" "mac=${near_all_ones//:/}"; do
+  printf '%s\n' "$bad" > "$t/scan/bad.bin"
+  if run scan "$t/scan"; then fail "the scan finds near-all-ones: $bad"; fi
+done
+rm "$t/scan/bad.bin"
+mkdir -p "$t/scan/etc"
+for o in 03 17 cb ef ff; do
+  printf '#dhcp-host=%s:%s,192.168.0.60\n' "$o" "$tail_c" > "$t/scan/etc/dnsmasq.conf"
+  run scan "$t/scan" || fail "group-bit first octet $o passes in etc/dnsmasq.conf"
+done
+rm -r "$t/scan/etc"
+pass "only locally administered unicast MACs (x2, x6, xA, xE) and all-ones pass; x3, x7, xB and xF fail outside etc/dnsmasq.conf"
 
 # --- packages: only the release key's index ---
 gpg --batch --quiet --passphrase '' --quick-gen-key "other <x@invalid>" ed25519 sign never >/dev/null 2>&1

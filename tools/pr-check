@@ -12,6 +12,10 @@
 #     Co-Authored-By or Assisted-by trailer is fine);
 #   - every shell script the commits touch still parses.
 #
+# Identifiers, blobs and AI Signed-off-by trailers are checked on every
+# commit in the range: a later commit removing or replacing the value does
+# not clear the check; rewrite the named commit and force-push.
+#
 #   tools/pr-check [-C REPO] [BASE [HEAD]]   (default: this repository, origin/main, HEAD)
 #
 # -C checks another repository's commits the same way (tools/kernel-pr-check
@@ -39,27 +43,49 @@ fail() { echo "not ok - $*"; fails=$((fails + 1)); }
 pass() { echo "ok - $*"; }
 
 commits=$(git rev-list --no-merges "$range")
-if [[ -z $commits ]]; then
+merges=$(git rev-list --merges "$range")
+if [[ -z $commits && -z $merges ]]; then
   pass "no commits to check against $base"
   exit 0
 fi
 
 # ---------------------------------------------------------------- identifiers
-# Added lines only, with the file each came from; this file's own patterns
-# are skipped.
-added=$(git diff --unified=0 --no-color "$range" -- . ':(exclude)tools/pr-check' ':(exclude)tests/pr-check' \
-  | awk '/^\+\+\+ /{f=substr($0, 7); next} /^\+/{print f ": " substr($0, 2)}')
+# Added lines of every commit in the range (and lines newly introduced by any
+# merge commit relative to all its parents), with the commit and file each
+# came from; this file's own patterns are skipped.
+added=$(git -c core.quotePath=false -c log.showRoot=true log --full-history --cc --no-color --no-ext-diff --no-textconv \
+  --src-prefix=a/ --dst-prefix=b/ --unified=0 --format='%x1f%h %P' "$range" \
+  -- . ':(exclude)tools/pr-check' ':(exclude)tests/pr-check' \
+  | awk '
+    /^\037/ {
+      sha = substr($1, 2)
+      np = NF - 1; if (np < 1) np = 1
+      plus = ""; for (i = 0; i < np; i++) plus = plus "+"
+      f = ""; in_hunk = 0; next
+    }
+    /^diff --(git|cc) / { f = ""; in_hunk = 0; next }
+    !in_hunk && /^\+\+\+ b\// { f = substr($0, 7); next }
+    !in_hunk && /^\+\+\+ "b\// { f = substr($0, 8); sub(/"$/, "", f); next }
+    !in_hunk && /^\+\+\+ \/dev\/null$/ { f = ""; next }
+    /^@@+ / { in_hunk = 1; next }
+    in_hunk && f != "" && substr($0, 1, np) == plus {
+      print sha " " f ": " substr($0, np + 1)
+    }
+  ')
 
 # A MAC is six octets joined all by colons or all by hyphens, in any case,
 # with no hex digit or further octet on either side; a label before it
 # (mac:, id:, wlan0-) still counts. 12 bare hex digits count in a MAC
 # record: mac, macaddr, mac_address, hwaddr, bdaddr, bd_addr or ether, then
 # =, : or white space. Each is read in the colon form, and one whose first
-# octet has the locally administered bit set (x2, x6, xA, xE) is made up;
-# so are all zeros, all ones and RFC 7042's documentation range
-# (00:00:5e:00:53:xx). Each address on a line is judged on its own, so an
-# exempt one doesn't hide a real one beside it. No interval expressions:
-# mawk can't parse them.
+# octet is locally administered unicast (group bit clear: x2, x6, xA, xE) is
+# made up; so are all zeros, all ones and RFC 7042's documentation range
+# (00:00:5e:00:53:xx). Six decimal fields joined by hyphens that read as
+# a date and time, YY-MM-DD-HH-MM-SS (month 01-12, day 01-31, hour 00-23,
+# minute and second 00-59), are a timestamp, such as a screenshot's name;
+# with colons or bare in a MAC record the same digits are still an address.
+# Each address on a line is judged on its own, so an exempt one doesn't
+# hide a real one beside it. No interval expressions: mawk can't parse them.
 macs=$(awk 'BEGIN {
     o = "[0-9a-f][0-9a-f]"; c = o; h = o; b = o
     for (i = 1; i < 6; i++) { c = c ":" o; h = h "-" o; b = b o }
@@ -67,6 +93,7 @@ macs=$(awk 'BEGIN {
     re[2] = "(^|[^0-9a-f-]|[g-z_][0-9a-f]*-)" h "([^0-9a-f-]|$|-([^0-9a-f]|$))"
     re[3] = "(^|[^a-z])(mac([_-]?addr(ess)?)?|(hw|bd)[_-]?addr(ess)?|ether)[\"\047]?([ \t]*[=:][ \t]*|[ \t]+)[\"\047]?" b "([^0-9a-f]|$)"
     any = o "[:-]" o "|" b
+    ts = "^[0-9][0-9]:(0[1-9]|1[0-2]):(0[1-9]|[12][0-9]|3[01]):([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$"
   }
   {
     line = tolower($0); real = 0
@@ -78,34 +105,70 @@ macs=$(awk 'BEGIN {
         sub(/[^0-9a-f]+$/, "", m); gsub(/[:-]/, "", m); m = substr(m, length(m) - 11)
         for (i = 10; i > 0; i -= 2) m = substr(m, 1, i) ":" substr(m, i + 1)
         if (m ~ /^.[26ae]:/ || m == "00:00:00:00:00:00" || m == "ff:ff:ff:ff:ff:ff" || m ~ /^00:00:5e:00:53:/) continue
+        if (k == 2 && m ~ ts) continue
         real = 1
       }
     }
     if (real) print
   }' <<<"$added")
 [[ -z $macs ]] && pass "no MAC or Bluetooth addresses" || fail "MAC or Bluetooth addresses (use a placeholder such as <MAC>):
-$(sed 's/^/    /' <<<"$macs" | head -10)"
+$(sed 's/^/    /' <<<"$macs" | sed -n '1,10p')"
 
 dumps=$(grep -E '\[(ro|persist|vendor|sys)\.[a-z0-9_.]+\]: \[' <<<"$added" || true)
 [[ -z $dumps ]] && pass "no getprop dumps" || fail "getprop output (quote single facts, never a dump):
-$(sed 's/^/    /' <<<"$dumps" | head -5)"
+$(sed 's/^/    /' <<<"$dumps" | sed -n '1,5p')"
 
 serials=$(grep -iE '(serialno|ro\.serialno|androidboot\.serialno|serial[ _-]?(number)?)[[:space:]]*[:=][[:space:]]*["'\'']?[0-9A-Z]{8,}' <<<"$added" \
   | grep -viE '<serial>|SERIAL_PLACEHOLDER|FAKE[0-9A-Z]*|\$\{?[a-z_]+' || true)
 [[ -z $serials ]] && pass "no serial numbers" || fail "serial numbers (use <SERIAL>):
-$(sed 's/^/    /' <<<"$serials" | head -5)"
+$(sed 's/^/    /' <<<"$serials" | sed -n '1,5p')"
 
 imeis=$(grep -iE 'imei[^0-9]{0,12}[0-9]{15}([^0-9]|$)' <<<"$added" || true)
 [[ -z $imeis ]] && pass "no IMEIs" || fail "IMEIs:
-$(sed 's/^/    /' <<<"$imeis" | head -5)"
+$(sed 's/^/    /' <<<"$imeis" | sed -n '1,5p')"
 
 # ---------------------------------------------------------------- blobs
 blob_ext='\.(bin|img|fw|mbn|hcd|elf|ko|so|so\.[0-9.]+|apk|zip|tar|tgz|tar\.[a-z0-9]+|zst|xz|lz4|gz|7z|ftb|wmfw|bmp|tlv)$'
-blobs=$(git diff --numstat --no-renames "$range" | awk -F'\t' '$1 == "-" || $2 == "-" {print $3}' | grep -vE '\.(png|jpe?g|svg|webp|ico|woff2?|ttf|otf)$' || true)
-named=$(git diff --name-only --diff-filter=A "$range" | grep -iE "$blob_ext" || true)
+raw_blobs=$(git -c core.quotePath=false -c log.showRoot=true log --no-merges --numstat --no-renames --diff-filter=d --format='%x1f%h' "$range" \
+  | awk -F'\t' '/^\037/ { sha = substr($1, 2); next } $1 == "-" || $2 == "-" { print sha " " $3 }')
+raw_named=$(git -c core.quotePath=false -c log.showRoot=true log --no-merges --name-status --find-renames --diff-filter=AR --format='%x1f%h' "$range" \
+  | BLOB_EXT="$blob_ext" awk -F'\t' '
+      BEGIN { ext = ENVIRON["BLOB_EXT"] }
+      /^\037/ { sha = substr($1, 2); next }
+      $1 == "A" { print sha " " $2; next }
+      $1 ~ /^R/ && tolower($2) !~ ext { print sha " " $3 }
+    ')
+if [[ -n $merges ]]; then
+  merge_blobs=$(git -c core.quotePath=false -c log.showRoot=true log --merges --cc --no-color --no-renames --no-ext-diff --no-textconv --unified=0 --format='%x1f%h' "$range" \
+    | awk '
+      /^\037/ { sha = substr($0, 2); f = ""; in_hunk = 0; changed = 0; next }
+      /^diff --cc / { f = substr($0, 11); in_hunk = 0; changed = 0; next }
+      !in_hunk && /^index / {
+        i = index($2, "..")
+        if (i > 0) {
+          res = substr($2, i + 2)
+          n = split(substr($2, 1, i - 1), p, ",")
+          changed = (res !~ /^0+$/)
+          for (j = 1; j <= n; j++) if (p[j] == res) changed = 0
+        }
+        next
+      }
+      /^@@+ / { in_hunk = 1; next }
+      !in_hunk && /^new file mode / && f != "" { print "N " sha " " f; next }
+      !in_hunk && /^Binary files differ$/ && changed && f != "" { print "B " sha " " f }
+    ')
+  while IFS= read -r line; do
+    case $line in
+      'B '*) raw_blobs+=${raw_blobs:+$'\n'}${line#B } ;;
+      'N '*) raw_named+=${raw_named:+$'\n'}${line#N } ;;
+    esac
+  done <<<"$merge_blobs"
+fi
+blobs=$(grep -vE '\.(png|jpe?g|svg|webp|ico|woff2?|ttf|otf)$' <<<"$raw_blobs" || true)
+named=$(grep -iE "$blob_ext" <<<"$raw_named" || true)
 all_blobs=$(printf '%s\n%s\n' "$blobs" "$named" | sed '/^$/d' | sort -u)
 [[ -z $all_blobs ]] && pass "no vendor blobs or binaries" || fail "binaries or vendor files (our scripts extract firmware from the user's own factory image; nothing is committed):
-$(sed 's/^/    /' <<<"$all_blobs" | head -10)"
+$(sed 's/^/    /' <<<"$all_blobs" | sed -n '1,10p')"
 
 # ---------------------------------------------------------------- trailers
 # Each name as a whole word (no letter either side), so a person called
@@ -142,6 +205,9 @@ done < <(git diff --name-only --diff-filter=AM "$range")
 $(sed 's/^/    /' <<<"${broken%$'\n'}")"
 
 if ((fails)); then
+  if [[ -n $macs || -n $dumps || -n $serials || -n $imeis || -n $all_blobs || -n $bad_sob ]]; then
+    echo "pr-check: a later commit removing or replacing the value does not clear this check; rewrite the named commit and force-push" >&2
+  fi
   echo "pr-check: $fails check(s) failed" >&2
   exit 1
 fi

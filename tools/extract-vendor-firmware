@@ -1,15 +1,12 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# extract-vendor-firmware: copy the Wi-Fi, Bluetooth, haptics and speaker
-# amplifier firmware the Pixel 7 Pro (cheetah) needs out of a Google factory
-# image, on the user's own machine. The Pixel 7 (panther), the Pixel 6 Pro
-# (raven), the Pixel 9a (tegu) and the Pixel 8 Pro (husky: Wi-Fi, Bluetooth
-# and haptics) are options (-d).
+# extract-vendor-firmware: stage device-specific firmware from the owner's
+# own image. Pixel factory images support cheetah, panther, raven, tegu and
+# husky; dipper takes vendor, modem and Bluetooth partition roots (-d).
 #
-# Google's firmware is not ours to redistribute, so Omarchy Mobile never ships it.
-# Like LineageOS's extract-files, this pulls it from an image the user already
-# has (the factory zip from developers.google.com/android/images, or the
-# image-*.zip inside it) and renames it to what the mainline drivers request:
+# Proprietary firmware is not ours to redistribute, so Omarchy Mobile never
+# ships it. This stages files from the user's own image and renames them to
+# what the mainline drivers request:
 #
 #   vendor/firmware/fw_bcmdhd.bin     -> brcm/brcmfmac4389c1-pcie.<board>.bin       (brcmfmac)
 #   vendor/firmware/bcmdhd.cal        -> brcm/brcmfmac4389c1-pcie.<board>.txt       (NVRAM)
@@ -47,6 +44,21 @@
 # with that core's vector table (eight ARM branch instructions) and ends with
 # its version word, the one the MFC reports in FW_VERSION once it runs
 # (0x44250901 in the image this was tested with).
+#
+# Xiaomi Mi 8 (dipper) takes files copied from its own partitions into a
+# local directory containing vendor/, modem/ and bluetooth/ roots. The split
+# Qualcomm ELF files keep their .bNN sidecars because
+# qcom_mdt_load requests them beside the .mbn metadata file:
+#
+#   vendor/firmware/{a630_zap,ipa_fws}.mdt      -> qcom/sdm845/Xiaomi/dipper/*.mbn
+#   vendor/firmware/{a630_zap,ipa_fws}.bNN      -> beside the matching .mbn
+#   modem/image/{adsp,modem}.mdt                -> qcom/sdm845/Xiaomi/dipper/*.mbn
+#   modem/image/{adsp,modem}.bNN                -> beside the matching .mbn
+#   modem/image/cdsp.{mdt,bNN}                  -> firmware root
+#   modem/image/venus.{mdt,bNN}                 -> qcom/venus-5.2/
+#   modem/image/mba.mbn                         -> qcom/sdm845/Xiaomi/dipper/mba.mbn
+#   bluetooth/image/crnv21.bin                  -> qca/Xiaomi/dipper/crnv21.bin
+#   bluetooth/image/crbtfw21.tlv                -> qca/crbtfw21.tlv
 #
 # The Pixel 9a (-d tegu; <board> is "google,zumapro-tegu"):
 #
@@ -158,13 +170,15 @@ usage() {
 Usage: extract-vendor-firmware [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
 
   SOURCE   Google factory zip (<device>-*-factory-*.zip), the image-<device>-*.zip
-           inside it, or a raw/sparse vendor.img
+           inside it, or a raw/sparse vendor.img. For dipper, a local backup
+           directory containing vendor/, modem/ and bluetooth/ partition copies.
   -o DIR   staging root to write into (default: ./out/vendor-firmware); a
            successful run replaces this script's earlier outputs there
   -w DIR   scratch directory for the ~1 GB vendor.img (default: a temp dir in \$TMPDIR)
-  -d DEV   cheetah (default), panther, raven, tegu or husky
+  -d DEV   cheetah (default), panther, raven, tegu, husky or dipper
   -s SKU   husky: the hardware SKU (androidboot.hardware.sku), which picks the NVRAM
-  -f       skip the device checks (android-info.txt board=$DEVICE, the vendor build.prop)
+  -f       skip the device checks (android-info.txt board=$DEVICE, the vendor build.prop);
+           dipper always requires vendor/build.prop to identify the backup as dipper
   -c FILE  also copy the camera HAL APEX (/vendor/apex/com.google.pixel.camera.hal.apex)
            to FILE, for tools/extract-camera-data --apex (tools/phone-provision uses it)
 
@@ -281,13 +295,49 @@ case $DEVICE_OPT in
       "firmware/cs40l26-dvl.bin|cs40l26-dvl.bin"
       "firmware/cs40l26-calib.wmfw|cs40l26-calib.wmfw"
     ) ;;
-  *) die "unknown device $DEVICE_OPT (cheetah, panther, raven, tegu or husky)" ;;
+  dipper)
+    DEVICE=dipper
+    MAP=(
+      "vendor/firmware/a630_zap.mdt|qcom/sdm845/Xiaomi/dipper/a630_zap.mbn"
+      "vendor/firmware/ipa_fws.mdt|qcom/sdm845/Xiaomi/dipper/ipa_fws.mbn"
+      "modem/image/adsp.mdt|qcom/sdm845/Xiaomi/dipper/adsp.mbn"
+      "modem/image/cdsp.mdt|cdsp.mdt"
+      "modem/image/mba.mbn|qcom/sdm845/Xiaomi/dipper/mba.mbn"
+      "modem/image/modem.mdt|qcom/sdm845/Xiaomi/dipper/modem.mbn"
+      "modem/image/venus.mdt|qcom/venus-5.2/venus.mbn"
+      "bluetooth/image/crnv21.bin|qca/Xiaomi/dipper/crnv21.bin"
+      "bluetooth/image/crbtfw21.tlv|qca/crbtfw21.tlv"
+    ) ;;
+  *) die "unknown device $DEVICE_OPT (cheetah, panther, raven, tegu, husky or dipper)" ;;
 esac
 [[ $DEVICE == husky || -z $SKU ]] || die "-s is for husky only"
 # The camera data flow (tools/extract-camera-data) exists for cheetah only
 [[ $DEVICE == cheetah || -z $CAMERA_APEX ]] || die "-c is cheetah's (no camera support for $DEVICE yet)"
 SRC=$(readlink -f "$1")
-[[ -f "$SRC" ]] || die "no such file: $1"
+if [[ $DEVICE == dipper ]]; then
+  [[ -d $SRC ]] || die "dipper SOURCE must be a local backup directory containing vendor/, modem/ and bluetooth/"
+  [[ -s $SRC/vendor/build.prop ]] || die "vendor/build.prop is missing from the Dipper backup"
+  dev=$(sed -n 's/^ro.product.vendor.device=//p' "$SRC/vendor/build.prop" | sed -n 1p)
+  [[ $dev == dipper ]] || die "vendor/build.prop identifies '${dev:-unknown}', not dipper"
+  for name in adsp cdsp modem venus a630_zap ipa_fws; do
+    srcdir=modem/image
+    [[ $name != a630_zap && $name != ipa_fws ]] || srcdir=vendor/firmware
+    segments=0
+    for src in "$SRC"/"$srcdir"/"$name".b[0-9][0-9]; do
+      [[ -f $src ]] || continue
+      segments=$((segments + 1))
+      case $name in
+        cdsp) segment_dir= ;;
+        venus) segment_dir=qcom/venus-5.2/ ;;
+        *) segment_dir=qcom/sdm845/Xiaomi/dipper/ ;;
+      esac
+      MAP+=("${src#"$SRC"/}|${segment_dir}${src##*/}")
+    done
+    ((segments > 0)) || die "$srcdir/$name has no .bNN segment in the Dipper backup"
+  done
+else
+  [[ -f "$SRC" ]] || die "no such file: $1"
+fi
 # Absolute, because the checksum step runs from inside the staging dir
 OUT=$(realpath -m -- "$OUT")
 # Publishing replaces whole directories under OUT, so OUT=/ would replace this
@@ -330,7 +380,7 @@ trap cleanup EXIT
 magic_at() { od -An -tx4 -j "$2" -N4 "$1" | tr -d ' \n'; }
 
 # A zip member whose name ends in $2 (first match), or nothing.
-zip_member() { unzip -Z1 "$1" | grep -E "(^|/)$2\$" | head -1 || true; }
+zip_member() { unzip -Z1 "$1" | grep -E "(^|/)$2\$" | sed -n 1p || true; }
 
 # Get vendor.img out of SOURCE into $WORK/vendor.img.
 fetch_vendor() {
@@ -374,6 +424,9 @@ fetch_vendor() {
   rm -rf "$WORK/super" "$WORK/super.img"
 }
 
+if [[ $DEVICE == dipper ]]; then
+  get_file() { [[ -s "$SRC/$1" ]] && cp -- "$SRC/$1" "$2"; }
+else
 fetch_vendor "$SRC"
 img="$WORK/vendor.img"
 if [[ "$(magic_at "$img" 0)" == ed26ff3a ]]; then
@@ -424,14 +477,17 @@ elif [[ "$(magic_at "$img" 1024)" == e0f5e1e2 ]]; then
 else
   die "vendor.img is neither ext4 nor EROFS"
 fi
+fi
 
 # The board list in android-info.txt is shared by pantah devices; the vendor
 # partition itself says which device it was built for.
-if get_file build.prop "$WORK/build.prop"; then
-  dev=$(sed -n 's/^ro.product.vendor.device=//p' "$WORK/build.prop" | head -1)
+if [[ $DEVICE == dipper ]]; then
+  say "Source: local Dipper vendor, modem and Bluetooth backup copies"
+elif get_file build.prop "$WORK/build.prop"; then
+  dev=$(sed -n 's/^ro.product.vendor.device=//p' "$WORK/build.prop" | sed -n 1p)
   [[ "$dev" == "$DEVICE" || -n "$FORCE" ]] ||
     die "vendor partition is for '${dev:-unknown}', not $DEVICE; use -f to override"
-  say "Vendor partition: $(sed -n 's/^ro.vendor.build.fingerprint=//p' "$WORK/build.prop" | head -1)"
+  say "Vendor partition: $(sed -n 's/^ro.vendor.build.fingerprint=//p' "$WORK/build.prop" | sed -n 1p)"
 else
   [[ -n "$FORCE" ]] || die "build.prop can't be read from vendor.img${reason:+: $reason}; use -f to override"
 fi
@@ -445,15 +501,24 @@ dest="$new/$DEST_REL"
 for entry in "${MAP[@]}"; do
   from=${entry%%|*} to=${entry#*|}
   mkdir -p "$dest/$(dirname "$to")"
-  get_file "$from" "$dest/$to" || die "/vendor/$from is missing from this image or could not be copied"
+  if ! get_file "$from" "$dest/$to"; then
+    if [[ $DEVICE == dipper ]]; then
+      die "local Dipper backup/$from is missing or could not be copied"
+    fi
+    die "/vendor/$from is missing from this image or could not be copied"
+  fi
   chmod 0644 "$dest/$to"
-  printf '  /vendor/%-28s -> /%s/%s\n' "$from" "$DEST_REL" "$to"
+  if [[ $DEVICE == dipper ]]; then
+    printf '  /%-52s -> /%s/%s\n' "$from" "$DEST_REL" "$to"
+  else
+    printf '  /vendor/%-28s -> /%s/%s\n' "$from" "$DEST_REL" "$to"
+  fi
 done
 
 # The AoC's sensor registry (which sensors this board has, their buses and
 # settings), read by omamobile-sensor-proxy; without it only virtual sensors.
 # husky has no AoC driver yet, so it skips the registry.
-if [[ $DEVICE != husky ]]; then
+if [[ $DEVICE != husky && $DEVICE != dipper ]]; then
   reg="$new/usr/share/omamobile/sensors"
   get_dir etc/sensors/registry "$reg" ||
     die "/vendor/etc/sensors/registry is missing from this image or could not be copied"
@@ -471,12 +536,14 @@ fi
 
 # Sanity checks: right chip, text NVRAM, Cirrus file formats.
 brcm="$dest/brcm"
-grep -aq "$WIFI_CHIP-roml" "$brcm/$FW_BASE.$BOARD.bin" ||
-  die "fw_bcmdhd.bin is not a $WIFI_CHIP PCIe firmware"
-[[ -z $BT_CHIP ]] || grep -aq "$BT_CHIP" "$brcm/BCM.$BOARD.hcd" ||
-  die "BCM.hcd is not a ${BT_NAME:-$BT_CHIP} Bluetooth patch"
-grep -aq '^NVRAMRev=' "$brcm/$FW_BASE.$BOARD.txt" ||
-  die "bcmdhd.cal does not look like a Broadcom text NVRAM"
+if [[ $DEVICE != dipper ]]; then
+  grep -aq "$WIFI_CHIP-roml" "$brcm/$FW_BASE.$BOARD.bin" ||
+    die "fw_bcmdhd.bin is not a $WIFI_CHIP PCIe firmware"
+  [[ -z $BT_CHIP ]] || grep -aq "$BT_CHIP" "$brcm/BCM.$BOARD.hcd" ||
+    die "BCM.hcd is not a ${BT_NAME:-$BT_CHIP} Bluetooth patch"
+  grep -aq '^NVRAMRev=' "$brcm/$FW_BASE.$BOARD.txt" ||
+    die "bcmdhd.cal does not look like a Broadcom text NVRAM"
+fi
 wmfw_halo() { # WMFW, Halo core (4): what cs_dsp accepts for this part
   [[ "$(head -c4 "$dest/$1")" == WMFW && "$(od -An -tu1 -j10 -N1 "$dest/$1" | tr -d ' ')" == 4 ]] ||
     die "$1 is not a Halo Core WMFW firmware"
@@ -529,16 +596,22 @@ if [[ $DEVICE == panther ]]; then
   mfc_ver=$(od -An -tx4 -j $((mfc_size - 4)) -N4 "$dest/s5p-mfc-v15.fw" | tr -d ' ')
 fi
 
-ver=$(grep -ao 'Version=[0-9.]* ([^)]*)' "$brcm/$FW_BASE.$BOARD.bin" | head -1)
-bt=""
-[[ -z $BT_CHIP ]] || bt=$(grep -ao "$BT_CHIP [^[]*" "$brcm/BCM.$BOARD.hcd" | head -1)
+ver= bt=""
+if [[ $DEVICE != dipper ]]; then
+  ver=$(grep -ao 'Version=[0-9.]* ([^)]*)' "$brcm/$FW_BASE.$BOARD.bin" | sed -n 1p)
+  [[ -z $BT_CHIP ]] || bt=$(grep -ao "$BT_CHIP [^[]*" "$brcm/BCM.$BOARD.hcd" | sed -n 1p)
+fi
 (cd "$dest" && find . -type f -printf '%P\n' | LC_ALL=C sort | xargs sha256sum -- > "$new/vendor-firmware.sha256")
 # The checksum list names exactly the mapped files
 for entry in "${MAP[@]}"; do printf '%s\n' "${entry#*|}"; done | LC_ALL=C sort > "$stage/expected"
 cut -c67- "$new/vendor-firmware.sha256" | cmp -s - "$stage/expected" ||
   die "the staged firmware is not exactly the mapped files"
 
+if [[ $DEVICE == dipper ]]; then
+  say "Mapped Dipper firmware and split Qualcomm modem segments"
+else
 say "Wi-Fi firmware: ${ver:-unknown version}"
+fi
 if [[ $DEVICE == husky ]]; then
   say "NVRAM: /vendor/firmware/$nvram${SKU:+ (SKU $SKU)}"
   [[ -n $SKU ]] || say "No -s SKU: stock's default NVRAM; pass the phone's SKU for its region's"
@@ -574,4 +647,8 @@ fi
 publishing=""   # published: nothing below may undo it
 [[ -z $CAMERA_APEX ]] || say "Camera HAL APEX copied to $CAMERA_APEX"
 say "Staged in $OUT (checksums in $OUT/vendor-firmware.sha256)"
-echo "This is Google's proprietary firmware from your own factory image. Do not redistribute it."
+if [[ $DEVICE == dipper ]]; then
+  echo "This is proprietary firmware from your own device image. Do not redistribute it."
+else
+  echo "This is Google's proprietary firmware from your own factory image. Do not redistribute it."
+fi

@@ -283,8 +283,8 @@ read -r a _ < "$tmp/g1/functions/ncm.usb0/host_addr"; read -r b _ < "$tmp/g1/fun
 [[ ! -e $tmp/state/usb-mac-cycle-started ]] || fail "the hang marker is removed once the gadget is back together"
 # The addresses are never printed in the log
 grep -qiE '([0-9a-f]{2}:){5}[0-9a-f]{2}' "$tmp/usbmac.log" && fail "the log carries no MAC address"
-[[ $(grep -n 'ncm.usb0' "$tmp/ops" | head -1) == 1:* ]] || fail "NCM is linked first"
-[[ $(grep -n 'acm.GS0' "$tmp/ops" | head -1) == 2:* ]] || fail "ACM is linked second"
+[[ $(grep -n 'ncm.usb0' "$tmp/ops" | sed -n 1p) == 1:* ]] || fail "NCM is linked first"
+[[ $(grep -n 'acm.GS0' "$tmp/ops" | sed -n 1p) == 2:* ]] || fail "ACM is linked second"
 
 # A second boot: the kernel made new random addresses, the saved ones go back on
 printf '02:00:00:00:00:c1 \n' > "$tmp/g1/functions/ncm.usb0/host_addr"
