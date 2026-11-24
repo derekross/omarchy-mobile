@@ -153,7 +153,7 @@ fi
 # when PARTNAME isn't found, many when it is found more than once). Every
 # name is [a-z0-9_] and R is checked above, so nothing here needs quoting.
 probe() {
-  phone "c=\$(tr '\\0' '\\n' < $R/proc/device-tree/compatible 2>/dev/null | head -1)
+  phone "c=\$(tr '\\0' '\\n' < $R/proc/device-tree/compatible 2>/dev/null | sed -n 1p)
 echo \"compatible \${c:-none}\"
 for p in ${parts[*]}; do
   m=\$(grep -lx \"PARTNAME=\$p\" $R/sys/class/block/*/uevent 2>/dev/null)
@@ -347,7 +347,7 @@ cat <<EOF
   control (a second copy there is a good idea), and never share, post,
   upload or attach it, not even in a bug report.
 
-  Next: tools/phone-provision --nv-backup $dir FACTORY.zip
+  Next: tools/phone-provision --first-install --nv-backup $dir FACTORY.zip
   Later: tools/nv-backup --check $dir compares the phone with it.
   After any stock Android boot, take a new backup into a new directory.
 EOF

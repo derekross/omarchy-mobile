@@ -99,8 +99,10 @@ good | sed 's/^PASSWORD_HASH=.*/PASSWORD_HASH=hunter2/' | refuse "a plain-text p
 good | sed 's/^PASSWORD_HASH=.*/PASSWORD_HASH=$1$abc$def/' | refuse "an md5-crypt hash"
 good | sed 's/^HOSTNAME=.*/HOSTNAME=-bad/' | refuse "a bad host name"
 good | sed 's/^TIMEZONE=.*/TIMEZONE=..\/..\/etc\/passwd/' | refuse "a time zone outside zoneinfo"
-good | sed 's/^TIMEZONE=.*/TIMEZONE=Mars\/Base/' | refuse "an unknown time zone"
 good | sed 's/^SSH_KEY=.*/SSH_KEY=not a key/' | refuse "a bad SSH key"
+good | sed "s/^SSH_KEY=.*/SSH_KEY=no-pty $KEY/" | refuse "an SSH key with options"
+out=$(good | sed "s/^SSH_KEY=.*/SSH_KEY=no-pty $KEY/" > "$t/badkey.conf"; check "$t/badkey.conf") && fail "refuses an SSH key with options"
+grep -qF "${KEY:12:20}" <<<"$out" && fail "a refused key is not repeated in the message: $out"
 good | sed 's/^WIFI_PSK=.*/WIFI_PSK=short/' | refuse "a short passphrase"
 good | sed '/^WIFI_SSID=/d' | refuse "a passphrase without a network"
 good | sed 's/^CREDENTIAL=.*/CREDENTIAL=pattern/' | refuse "an unknown credential type"
@@ -110,6 +112,30 @@ good | sed 's/^FULL_NAME=.*/FULL_NAME=a:b/' | refuse "a colon in the full name"
 { good; echo 'not a line'; } | refuse "a line that isn't KEY=value"
 { good; printf 'EMAIL=a@b\x07c\n'; } | sed '/^EMAIL=alice/d' | refuse "a control character"
 pass "--check refuses bad confs"
+
+# A zone this phone doesn't have: UTC, with a warning, never a stopped first start
+good | sed 's/^TIMEZONE=.*/TIMEZONE=Mars\/Base/' > "$t/tz.conf"
+out=$(check "$t/tz.conf") || fail "an unknown time zone falls back: $out"
+grep -q "warning: TIMEZONE 'Mars/Base'" <<<"$out" && grep -q 'time zone: UTC' <<<"$out" || fail "an unknown time zone becomes UTC, with a warning: $out"
+pass "a time zone the phone lacks becomes UTC"
+
+# The release image's placeholder (rootfs/placeholders): comments and a
+# padding line of spaces to 4096 bytes. Left as it is it holds no answers;
+# filled, the answers are read and the padding is skipped.
+placeholder() {
+  local text=$1 rem
+  rem=$((4096 - ${#text}))
+  printf '%s#%*s\n' "$text" $((rem - 2)) ''
+}
+placeholder $'# Omarchy Mobile: the place for /etc/omamobile/firstboot.conf\n' > "$t/empty.conf"
+[[ $(stat -c %s "$t/empty.conf") == 4096 ]] || fail "the test's placeholder is one block"
+out=$(check "$t/empty.conf") || fail "--check takes a placeholder: $out"
+grep -q '^no answers' <<<"$out" || fail "--check says a placeholder holds no answers: $out"
+placeholder "$(good)"$'\n' > "$t/filled.conf"
+[[ $(stat -c %s "$t/filled.conf") == 4096 ]] || fail "the filled placeholder is one block"
+out=$(check "$t/filled.conf") || fail "a filled placeholder passes: $out"
+grep -q 'user:      alice' <<<"$out" || fail "a filled placeholder's answers are read"
+pass "a placeholder holds no answers; filled, its padding is skipped"
 
 # A value is data: a $(...) in it is never run
 mark=$t/ran
@@ -153,7 +179,17 @@ echo 'touch "$R/ran-omarchy-apply-lock"' > "$O/install/config/lockscreen-pam.sh"
 echo 'touch "$R/ran-other-leaf"' > "$O/install/config/other.sh"
 run() { OMAMOBILE_FIRSTBOOT_ROOT=$R OMARCHY_PATH=$O OMAMOBILE_LOCK_PAM=$F/lock-pam PATH="$F:$PATH" bin/omamobile-firstboot > "$t/run.out" 2>&1; }
 
-good > "$R/etc/omamobile/firstboot.conf"
+# The image's placeholder, left as it is: nothing runs, and it stays
+cp "$t/empty.conf" "$R/etc/omamobile/firstboot.conf"
+run || { cat "$t/run.out"; fail "a placeholder run succeeds"; }
+[[ ! -s $CALLS ]] || fail "with the placeholder alone, nothing runs"
+grep -q 'holds no answers' "$t/run.out" || fail "a placeholder run says why it does nothing"
+cmp -s "$t/empty.conf" "$R/etc/omamobile/firstboot.conf" || fail "the placeholder is left as it is"
+[[ ! -e $R/var/lib/omamobile/firstboot/done ]] || fail "a placeholder run records no first boot"
+pass "the image's placeholder, unfilled: nothing to do"
+
+# The answers as an installer puts them in the placeholder
+cp "$t/filled.conf" "$R/etc/omamobile/firstboot.conf"
 run || { cat "$t/run.out"; fail "a run with a good conf succeeds"; }
 grep -qx 'clock-set 2000000060' "$CALLS" || fail "clock advances to the newest installed keyring"
 [[ $(head -1 "$CALLS") == 'clock-set 2000000060' ]] || fail "clock is seeded before pacman-key"
@@ -167,6 +203,10 @@ grep -qx '%wheel ALL=(ALL:ALL) ALL' "$R/etc/sudoers.d/00-omarchy-wheel" || fail 
 grep -qxF "$KEY" "$R/root/.ssh/authorized_keys" || fail "root gets the SSH key"
 grep -qxF "$KEY" "$R/home/alice/.ssh/authorized_keys" || fail "the user gets the SSH key"
 [[ $(stat -c %a "$R/home/alice/.ssh/authorized_keys") == 600 ]] || fail "authorized_keys is private"
+[[ $(stat -c %a "$R/root/.ssh/authorized_keys") == 600 && $(stat -c %a "$R/root/.ssh") == 700 ]] || fail "root's authorized_keys is private"
+grep -c "^chown -R root:root $R/root/.ssh\$" "$CALLS" >/dev/null && grep -c "^chown -R alice:alice $R/home/alice/.ssh\$" "$CALLS" >/dev/null ||
+  fail "each authorized_keys belongs to its user"
+grep -qF "${KEY:12:30}" "$R/var/log/omamobile/firstboot.log" "$t/run.out" && fail "the log never has the SSH key"
 grep -q '^ufw allow in on usb0 to any port 22 proto tcp$' "$CALLS" || fail "ufw allows SSH on usb0"
 grep -qx 'ENABLED=yes' "$R/etc/ufw/ufw.conf" || fail "ufw is on from the next boot"
 for unit in sshd.service systemd-networkd.service NetworkManager.service sddm.service ufw.service; do
@@ -182,6 +222,8 @@ grep -qx pin "$R/home/alice/.config/omamobile/credential" || fail "the credentia
 [[ -e $R/home/alice/.local/state/omarchy/toggles/lock-on-start ]] || fail "the phone locks after boot"
 grep -qF "$PSK" "$R/var/log/omamobile/firstboot.log" "$t/run.out" && fail "the log never has the passphrase"
 grep -qF "$HASH" "$R/var/log/omamobile/firstboot.log" "$t/run.out" && fail "the log never has the hash"
+grep -c ' git config --global user.name Alice Example$' "$CALLS" >/dev/null || fail "git gets the owner's name, whatever Omarchy's user setup does"
+grep -c ' git config --global user.email alice@example.org$' "$CALLS" >/dev/null || fail "git gets the owner's email"
 pass "a run sets everything up and deletes the conf"
 
 [[ -e $R/ran-other-leaf ]] || fail "Omarchy's setup leaves run"
@@ -199,6 +241,17 @@ grep -q '^clock-set' "$CALLS" && fail "an accurate clock is never moved backward
 grep -q '^usermod -aG wheel,audio,video,input' "$CALLS" || fail "a second run updates the user it made"
 [[ $(grep -cxF "$KEY" "$R/home/alice/.ssh/authorized_keys") == 1 ]] || fail "a second run doesn't duplicate the key"
 pass "running again is safe"
+
+# The name and email are optional: without them git is left alone
+: > "$CALLS"
+good | sed '/^WIFI_/d; /^FULL_NAME=/d; /^EMAIL=/d' > "$R/etc/omamobile/firstboot.conf"
+run || { cat "$t/run.out"; fail "a run without a name and email succeeds"; }
+grep -c ' git config ' "$CALLS" >/dev/null && fail "without a name and email git's config is not written"
+# ... and the rest of user setup still runs: the step is optional, so a death
+# in it (an unset key under set -u, 0.1.4) left the run's exit status at 0.
+grep -c 'unbound variable' "$t/run.out" >/dev/null && { cat "$t/run.out"; fail "a run without a name and email reads no unset key"; }
+grep -c 'with warnings' "$t/run.out" >/dev/null && { cat "$t/run.out"; fail "a run without a name and email ends without warnings"; }
+pass "the installer's name and email reach git; without them git is left alone"
 
 : > "$CALLS"
 rm "$R/usr/share/pacman/keyrings/"*.gpg
@@ -235,3 +288,129 @@ rm "$t/sddm/autologin.conf"
 ( source "$t/scriptlet"; post_install ) || fail "no drop-in, nothing to do"
 [[ ! -e $t/sddm/autologin.conf ]] || fail "no drop-in is made"
 pass "upgrades add Relogin=true to an existing autologin drop-in"
+
+# The SDDM loop guard: fed a fake journal, it restarts sddm once when failed
+# autologins pass the threshold, and not again within the cooldown
+bash -n bin/omamobile-sddm-guard || fail "the guard parses"
+[[ -e $t/stage/usr/lib/systemd/system/omamobile-sddm-guard.service ]] || fail "the guard unit is installed"
+[[ ! -e $t/stage/usr/lib/systemd/system/multi-user.target.wants/omamobile-sddm-guard.service ]] ||
+  fail "the guard unit is not enabled by the package (yet)"
+G=$t/guard; mkdir -p "$G/bin"
+printf '[Autologin]\nUser=alice\nSession=hyprland\nRelogin=true\n' > "$G/autologin.conf"
+cat > "$G/bin/journalctl" <<'J'
+#!/bin/bash
+echo "journalctl $*" >> "$GUARD_CALLS"
+cat "$GUARD_JOURNAL"
+J
+cat > "$G/bin/systemctl" <<'J'
+#!/bin/bash
+echo "systemctl $*" >> "$GUARD_CALLS"
+exit "${GUARD_SYSTEMCTL_RC:-0}"
+J
+# loginctl: one session, with the properties in $GUARD_SESSION
+cat > "$G/bin/loginctl" <<'J'
+#!/bin/bash
+case $1 in
+  list-sessions) echo "loginctl" >> "$GUARD_CALLS"; echo "  3 1000 alice seat0 tty1" ;;
+  show-session) printf '%s\n' $GUARD_SESSION ;;
+esac
+J
+# the guard's clock: call n reads $GUARD_BASE + (n / $GUARD_RATE) * $GUARD_STEP
+cat > "$G/clock" <<'J'
+#!/bin/bash
+n=$(cat "$GUARD_TICKS"); echo $((n + 1)) > "$GUARD_TICKS"
+echo $((GUARD_BASE + n / GUARD_RATE * GUARD_STEP))
+J
+chmod +x "$G/bin/"* "$G/clock"
+guard() {
+  : > "$G/calls"; echo 0 > "$G/ticks"; [[ -n ${keep_state:-} ]] || rm -rf "$G/state"
+  GUARD_CALLS=$G/calls GUARD_JOURNAL=$G/journal GUARD_TICKS=$G/ticks GUARD_BASE=${base:-1000} \
+  GUARD_RATE=${rate:-10} GUARD_STEP=${step:-1} GUARD_SESSION=${session:-Name=alice Type=tty Active=no State=closing} \
+  OMAMOBILE_SDDM_GUARD_AUTOLOGIN=${conf:-$G/autologin.conf} OMAMOBILE_SDDM_GUARD_STATE=$G/state OMAMOBILE_SDDM_GUARD_CLOCK=${guard_clock:-$G/clock} PATH="$G/bin:$PATH" bin/omamobile-sddm-guard > "$G/out" 2> "$G/err"
+}
+burst() { local n=$1 i; for ((i = 0; i < n; i++)); do echo "Auth: sddm-helper exited with 5"; done; }
+# 20 failures in a minute, plus other lines: no restart
+{ echo "Display server started."; burst 20; } > "$G/journal"
+guard && fail "the guard exits non-zero when the journal follow ends"
+grep -q 'journal follow ended' "$G/err" || fail "the guard says why it exits"
+grep -q '^journalctl -f -n 0 -o cat -u sddm.service$' "$G/calls" || fail "the guard follows sddm's journal"
+grep -q '^systemctl' "$G/calls" && fail "20 failures a minute is under the threshold"
+# exactly threshold + 1: one restart
+burst 21 > "$G/journal"; guard || true
+(( $(grep -c '^systemctl restart sddm.service$' "$G/calls" || true) == 1 )) || fail "21 failures a minute restart sddm once"
+# failures spread out over minutes: no restart
+burst 60 > "$G/journal"; rate=1 step=10 guard || true
+grep -q '^systemctl' "$G/calls" && fail "slow failures are not a loop"
+# a loop: 530 a minute for 30 minutes means one restart, then one per 10 minutes
+burst $((530 * 30)) > "$G/journal"; rate=9 guard || true
+n=$(grep -c '^systemctl restart sddm.service$' "$G/calls" || true)
+(( n == 3 )) || fail "a 30-minute loop restarts sddm 3 times, not $n"
+grep -q 'failed autologins in 60s, restarting sddm once' "$G/out" || fail "the guard logs why it restarts"
+[[ $(grep '^systemctl' "$G/calls" | sed -n '1,2p') == $'systemctl reset-failed sddm.service\nsystemctl restart sddm.service' ]] ||
+  fail "the guard clears sddm's start limit before it restarts it"
+# an hour of loop (one failure a second is enough): three restarts this boot, then one line and no more
+burst 3600 > "$G/journal"; rate=1 guard || true
+n=$(grep -c '^systemctl restart sddm.service$' "$G/calls" || true)
+(( n == 3 )) || fail "an hour-long loop restarts sddm 3 times per boot, not $n"
+n=$(grep -c 'giving up until a reboot' "$G/out" || true)
+(( n == 1 )) || fail "the cap is logged once, not $n times"
+[[ $(cat "$G/state/restarts") == 3 ]] || fail "the restart count is saved"
+# the cap survives a guard restart, and is not logged again
+keep_state=1 base=99999 guard || true
+grep -q '^systemctl restart' "$G/calls" && fail "a restarted guard keeps the cap"
+grep -q 'giving up' "$G/out" && fail "a restarted guard does not log the cap again"
+# a loop that stops, then a new one under a session, gets its five minutes again
+# (the clock reads one time per call from $G/times; call 0 is the guard's start)
+cat > "$G/clock-list" <<'J'
+#!/bin/bash
+n=$(cat "$GUARD_TICKS"); echo $((n + 1)) > "$GUARD_TICKS"
+sed -n "$((n + 1))p" "$GUARD_TIMES"
+J
+chmod +x "$G/clock-list"
+{ echo 1000; for ((i = 0; i < 240; i++)); do echo $((1000 + i)); done
+  echo 1300; echo 1400
+  for ((i = 0; i < 240; i++)); do echo $((1500 + i)); done; } > "$G/times"
+burst $((240 * 2 + 2)) > "$G/journal"
+GUARD_TIMES=$G/times session="Name=alice Type=wayland Active=yes State=active" guard_clock=$G/clock-list guard || true
+grep -q '^systemctl' "$G/calls" && fail "a new loop under a session gets its own five minutes"
+grep -q 'looping for 0s' "$G/out" || fail "the second loop's clock starts over"
+# a failed restart is logged
+burst 21 > "$G/journal"; GUARD_SYSTEMCTL_RC=1 guard || true
+grep -q 'restarting sddm failed' "$G/err" || fail "a failed restart is logged"
+# the owner's active wayland session: log, never restart
+session='Name=alice Type=wayland Active=yes State=active' guard || true
+grep -q '^systemctl' "$G/calls" && fail "an active owner session is never restarted"
+grep -q 'active wayland session, so sddm is left alone' "$G/out" || fail "the guard logs why it skips"
+active='Name=alice Type=wayland Active=yes State=active'
+# the owner's SSH login and another user's wayland session (the greeter) are
+# not the owner's graphical session: the guard restarts sddm
+session='Name=alice Type=tty Active=yes State=active' guard || true
+grep -q '^systemctl restart' "$G/calls" || fail "the owner's SSH login doesn't hold sddm back"
+session='Name=sddm Type=wayland Active=yes State=active' guard || true
+grep -q '^systemctl restart' "$G/calls" || fail "the greeter's session doesn't hold sddm back"
+# the owner comes from autologin.conf, not uid 1000
+conf=$G/none session=$active guard || true
+grep -q '^systemctl restart' "$G/calls" || fail "without an autologin user no session holds sddm back"
+grep -q 'no autologin user' "$G/err" || fail "a missing autologin user is logged"
+# a 3-minute loop with an active session: no restart, one skip log and one
+# session check a minute (9 lines a second, so ~1600 failures)
+burst $((9 * 180)) > "$G/journal"; rate=9 session=$active guard || true
+grep -q '^systemctl' "$G/calls" && fail "a 3-minute loop with an active session is left alone"
+n=$(grep -c 'so sddm is left alone' "$G/out" || true); (( n == 3 )) || fail "the skip is logged once a minute, not $n times"
+n=$(grep -c '^loginctl$' "$G/calls" || true); (( n == 3 )) || fail "the session is checked once a minute, not $n times"
+# a loop that goes on 6 minutes despite the session: one restart at 5 minutes
+burst $((9 * 360)) > "$G/journal"; rate=9 session=$active guard || true
+n=$(grep -c '^systemctl restart sddm.service$' "$G/calls" || true); (( n == 1 )) || fail "a 5-minute loop restarts sddm despite the session, $n times"
+grep -q 'looping for 300s despite alice.s active wayland session, restarting sddm anyway' "$G/out" || fail "the guard logs why it restarts anyway"
+# the cooldown survives a guard restart, kept on the uptime clock
+burst 21 > "$G/journal"; guard || true
+[[ $(cat "$G/state/last-restart") == 1002 ]] || fail "the restart time is saved"
+keep_state=1 base=1100 guard || true
+grep -q '^systemctl' "$G/calls" && fail "a restarted guard keeps the cooldown"
+keep_state=1 base=1700 guard || true
+grep -q '^systemctl restart' "$G/calls" || fail "after the cooldown a restarted guard restarts sddm"
+echo 99999 > "$G/state/last-restart"; keep_state=1 guard || true
+grep -q '^systemctl restart' "$G/calls" || fail "a saved time in the future (an old boot) is ignored"
+grep -qx 'RuntimeDirectory=omamobile-sddm-guard' systemd/omamobile-sddm-guard.service || fail "the guard unit has a runtime directory"
+grep -qx 'Restart=always' systemd/omamobile-sddm-guard.service || fail "the guard unit always restarts"
+pass "the SDDM loop guard restarts sddm at most once per cooldown and three times per boot"

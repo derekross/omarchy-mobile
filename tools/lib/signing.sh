@@ -15,13 +15,70 @@
 #     exports GNUPGHOME=ROOT/keys/gnupg.release and sets SIGNING_KEY to the
 #     primary's fingerprint, after checking that omamobile-keyring trusts it
 #     and hasn't revoked it; on failure says why on stderr and returns 1.
+#   revoked_file_check ROOT || ...
+#     checks ROOT/packages/omamobile-keyring/omamobile-revoked as a whole, in
+#     the form docs/RELEASES.md §10 gives: empty, or one 40-digit fingerprint
+#     in capitals on every line, each ending with a newline. If not, prints
+#     why, naming the first wrong line, and returns 1; the same if it can't
+#     be read as a file (a missing one revokes nothing).
+#   revoked_list ROOT || ...
+#     runs revoked_file_check ROOT, reads omamobile-revoked as a regular file,
+#     re-checks every line read, and prints the revoked fingerprints one per
+#     line (nothing if the file is missing or empty). On any check, read or
+#     concurrent-change failure, prints why on stdout and returns 1.
+#     signing_key_load, tools/release-upload, tools/repo-publish and
+#     tools/fetch-published all read omamobile-revoked through it.
 #
 # Nothing here reads, prints or copies secret key material.
+
+revoked_file_check() {
+  local file=$1/packages/omamobile-keyring/omamobile-revoked bad= end= lines=0 rc=2
+  # Missing: nothing revoked, as before. A link to nowhere is not missing.
+  [[ -e $file || -L $file ]] || return 0
+  # The first line that isn't a fingerprint (grep exits 1 when there is
+  # none), else a last line without its newline. What isn't a regular file,
+  # and any read here that fails, is refused, never taken as listing nothing.
+  if [[ -f $file ]]; then
+    rc=0
+    bad=$(LC_ALL=C grep -anvxE -m1 '[0-9A-F]{40}' -- "$file" | cut -d: -f1
+          exit $((PIPESTATUS[1] ? 2 : PIPESTATUS[0]))) || rc=$?
+  fi
+  if ((rc == 1)); then
+    end=$(tail -c1 -- "$file") && lines=$(wc -l < "$file") && rc=0 || rc=2
+    [[ -z $end ]] || bad=$((lines + 1))
+  fi
+  if ((rc)); then
+    echo "packages/omamobile-keyring/omamobile-revoked cannot be read: it must be a file this user can read (docs/RELEASES.md §10)"
+    return 1
+  fi
+  [[ -n $bad ]] || return 0
+  echo "packages/omamobile-keyring/omamobile-revoked is malformed at line $bad: each line must be one 40-digit fingerprint in capitals, ending with a newline (docs/RELEASES.md §10)"
+  return 1
+}
+
+revoked_list() {
+  local root=${1:?revoked_list needs the repository root}
+  local file=$root/packages/omamobile-keyring/omamobile-revoked out
+  local re=$'^([0123456789ABCDEF]{40}\n)*$'
+  # Missing: nothing revoked, quietly. A link to nowhere is not missing.
+  [[ -e $file || -L $file ]] || return 0
+  out=$(revoked_file_check "$root") || { printf '%s\n' "$out"; return 1; }
+  if ! [[ -f $file ]] || ! out=$(tr '\0' '?' 2>/dev/null < "$file" && printf x); then
+    echo "cannot read packages/omamobile-keyring/omamobile-revoked"
+    return 1
+  fi
+  out=${out%x}
+  if ! (shopt -u nocasematch; [[ $out =~ $re ]]); then
+    echo "packages/omamobile-keyring/omamobile-revoked changed while reading"
+    return 1
+  fi
+  printf '%s' "$out"
+}
 
 signing_key_load() {
   local root=${1:?signing_key_load needs the repository root}
   local home=$root/keys/gnupg.release file=$root/keys/fingerprint.release
-  local keyring=$root/packages/omamobile-keyring fpr
+  local keyring=$root/packages/omamobile-keyring fpr revoked
   if [[ ! -d $home || ! -f $file ]]; then
     {
       echo "error: no release signing key: keys/gnupg.release and keys/fingerprint.release are missing."
@@ -40,7 +97,11 @@ signing_key_load() {
     echo "error: omamobile-keyring does not trust $fpr (keys/fingerprint.release): phones would refuse what it signs" >&2
     return 1
   fi
-  if cut -d: -f1 "$keyring/omamobile-revoked" 2>/dev/null | grep -cx "$fpr" >/dev/null; then
+  if ! revoked=$(revoked_list "$root"); then
+    echo "error: $revoked" >&2
+    return 1
+  fi
+  if [[ $'\n'$revoked$'\n' == *$'\n'"$fpr"$'\n'* ]]; then
     echo "error: $fpr (keys/fingerprint.release) is revoked in omamobile-keyring" >&2
     return 1
   fi

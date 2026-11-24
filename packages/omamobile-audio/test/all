@@ -87,12 +87,12 @@ grep -c "find-device:type=pcm,stream=capture,field=id,regex='^EP1 capture'" ucm2
   fail "UCM: the Mic PCM is found by its id"
 # The 9a's profile is found through the card's long name: the UCM file must be
 # named exactly after the card name the WirePlumber rule matches.
-tegu_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/52-omamobile-tegu-aoc.conf | head -1)
+tegu_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/52-omamobile-tegu-aoc.conf | sed -n 1p)
 [[ $tegu_card == google,tegu-aoc-snd-card ]] || fail "52-omamobile-tegu-aoc.conf matches the 9a's card name"
 [[ -f "ucm2/conf.d/aoc-snd-card/$tegu_card.conf" ]] || fail "tegu long-name UCM file is named exactly $tegu_card.conf"
 grep -c "channelmix.max-volume = 0.562" wireplumber/52-omamobile-tegu-aoc.conf >/dev/null || fail "the 9a's speaker sink is capped (channelmix.max-volume)"
 grep -c "CAPTURE LIST' 0,1,-1,-1" ucm2/Google/tegu/HiFi.conf >/dev/null || fail "tegu HiFi must set its own mic list (cheetah's 0,3,2 kills the AoC)"
-husky_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/55-omamobile-husky-aoc.conf | head -1)
+husky_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/55-omamobile-husky-aoc.conf | sed -n 1p)
 [[ $husky_card == google,husky-aoc-snd-card ]] || fail "55-omamobile-husky-aoc.conf matches husky's card name"
 [[ -f "ucm2/conf.d/aoc-snd-card/$husky_card.conf" ]] || fail "husky long-name UCM file is named exactly $husky_card.conf"
 ! grep -q "husky" ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf || fail "cheetah's shared profile has no husky branch"
@@ -121,7 +121,7 @@ echo "cset \"name='Top Analog PCM Volume' 10\"" > "$ceil"
 ! husky_over "$ceil" Analog 10 || fail "the ceiling check passes analog 10"
 ! husky_over ucm2/Google/husky/HiFi.conf Analog 10 || fail "husky's analog volume stays at 10 or below"
 ! husky_over ucm2/Google/husky/HiFi.conf Digital 737 || fail "husky's digital volume stays at 737 or below"
-raven_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/53-omamobile-raven-aoc.conf | head -1)
+raven_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/53-omamobile-raven-aoc.conf | sed -n 1p)
 [[ $raven_card == google,raven-aoc-snd-card ]] || fail "53-omamobile-raven-aoc.conf matches raven's card name"
 [[ -f "ucm2/conf.d/aoc-snd-card/$raven_card.conf" ]] || fail "raven long-name UCM file is named exactly $raven_card.conf"
 ! grep -c "raven" ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf >/dev/null || fail "cheetah's shared profile has no raven branch"
@@ -255,7 +255,7 @@ muted() { [[ $(val "Top Digital PCM Volume") == 0 && $(val "Bottom Digital PCM V
 # set a DSP word (by key, through the wm_adsp naming)
 dspset() {  # AMP KEY VALUE
   local n
-  n=$(amx controls | sed -n "s/^numid=1,iface=MIXER,name='\($1 DSP1 .*\)'\$/\1/p" | grep -E "[ _]${2#BDLOG_}\$|$2\$" | head -n1)
+  n=$(amx controls | sed -n "s/^numid=1,iface=MIXER,name='\($1 DSP1 .*\)'\$/\1/p" | grep -E "[ _]${2#BDLOG_}\$|$2\$" | sed -n 1p)
   amx cset "name=$n" "$(printf '0x%02x,0x%02x,0x%02x,0x%02x' $(($3 >> 24 & 255)) $(($3 >> 16 & 255)) $(($3 >> 8 & 255)) $(($3 & 255)))" >/dev/null
 }
 # a kernel log record at kernel time T seconds
@@ -1051,8 +1051,11 @@ assert l == 0 and abs(20 * math.log10(r) + 20) < 0.5
 PY
 pass "test signals: multitone at its RMS level with peaks below -1 dBFS, one-sided tone"
 
-# the real alsa-lib path, against any card this machine has (read-only)
-if [[ -e /dev/snd/controlC0 ]]; then
+# the real alsa-lib path, against any card this machine has (read-only).
+# Only where this user may open the card: a build server has one it can't
+# (root:audio, no seat), and the check then failed the whole nightly build
+# (ms01, 2026-11-10).
+if [[ -r /dev/snd/controlC0 && -w /dev/snd/controlC0 ]]; then
   python3 -I - "$here/lib" <<'PY' || fail "alsa-lib control access"
 import sys
 sys.path.insert(0, sys.argv[1])
@@ -1064,6 +1067,8 @@ read = [n for n in names[:40] if c.read(n) is not None]
 assert read, 'nothing readable'
 PY
   pass "alsa-lib control access (ctypes) lists and reads a real card"
+else
+  pass "alsa-lib control access # SKIP no sound card this user can open"
 fi
 
 # --- the speaker filter and its tone controls (C9g) -------------------------------

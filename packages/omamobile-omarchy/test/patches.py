@@ -338,6 +338,15 @@ def real_package(t):
     if version.startswith("4.5.0-"):
         import port45
         port45.actual(t, ex, version, make_root, run, ok, read, selected_series, PKG, qml_parse)
+        # About's layouts by terminal size (0030), run on the patched 4.5
+        # files (port45 ends by restoring its own root)
+        root45, _ = make_root("real45-about", os.path.join(ex, ".MTREE"))
+        rc, out = run(root45, "apply", series=selected_series)
+        ok(rc == 0, "real4.5: the series applies to a second root (%s)" % out.strip().splitlines()[-1])
+        show_logo(t, root45, centred=True)
+        about_layout(t, root45, tools=os.path.join(root45, "usr/bin"))
+        # The glance under qmltestrunner, on the family phones run
+        lock_glance_run(root45, ex, "real4.5")
         return
 
     root, _ = make_root("real", os.path.join(ex, ".MTREE"))
@@ -389,7 +398,7 @@ def real_package(t):
        "real omarchy: Backspace and Left still go back (0018)")
     ok("property bool cardSettled: false" in menu, "real omarchy: the menu-first-frame bridge applies after 0018")
     qml_parse(root, selected_series)
-    lock_glance(root)
+    lock_glance(root, ex)
     lock_battery(t, root)
     lock_media(root)
     app_icons_largest(root)
@@ -448,7 +457,8 @@ def real_package(t):
 def qml_parse(root, series=None):
     """Every QML file the series touches still parses, when qmlformat is at
     hand (it reports syntax errors without needing the shell's imports)."""
-    tool = shutil.which("qmlformat") or ("/usr/lib/qt6/bin/qmlformat" if os.path.isfile("/usr/lib/qt6/bin/qmlformat") else "")
+    tool = shutil.which("qmlformat") or next(
+        (p for p in ("/usr/lib/qt6/bin/qmlformat", "/usr/lib64/qt6/bin/qmlformat") if os.path.isfile(p)), "")
     if not tool:
         print("ok - real omarchy: the patched QML parses # SKIP no qmlformat")
         return
@@ -498,7 +508,7 @@ def app_icons_largest(root):
        "real omarchy: the icon index keeps the largest size, an SVG over any PNG (0024: %s)" % (got or p.stderr.strip()[:120]))
 
 
-def lock_glance(root):
+def lock_glance(root, ex):
     """Patch 0023: the lock's glance view. Static checks on the patched
     files, then test/lock-glance (qmltestrunner, offscreen) against them."""
     lock = "usr/share/omarchy/shell/plugins/lock/"
@@ -532,14 +542,30 @@ def lock_glance(root):
     ok("function darkTapWakes()" in view and "if (root.displayDark && !root.darkTapWakes()) return" in view
        and "if (lock.darkTapWakes()) {" in read(root, lock + "LockGlance.qml"),
        "real omarchy: a dark touch-only lock leaves the double tap to omamobile-doubletap (0029)")
+    lock_glance_run(root, ex, "real omarchy")
+
+
+def lock_glance_run(root, ex, label):
+    """test/lock-glance (qmltestrunner, offscreen) against a patched root of
+    either family. ex is the package as extracted, unpatched: the computer
+    lock's password prompt is Omarchy's own expression, a literal on 4.0.6
+    and a translation on 4.5. Our patches put the PIN prompt in front of it
+    (0003, 0011) and must leave it as the other branch; the suite then checks
+    that a computer's lock shows what the view declares."""
+    view = "usr/share/omarchy/shell/plugins/lock/LockView.qml"
+    decl = "  readonly property string placeholderText: "
+    theirs, ours = ([l[len(decl):] for l in (read(d, view) or "").splitlines() if l.startswith(decl)] for d in (ex, root))
+    ok(len(theirs) == 1 and len(ours) == 1 and theirs[0].strip()
+       and ours[0] in (theirs[0], 'padShown ? "Enter PIN" : ' + theirs[0]),
+       "%s: the computer lock's password prompt is Omarchy's own (0003, 0011)" % label)
     p = subprocess.run(["bash", os.path.join(HERE, "lock-glance"), os.path.join(root, "usr/share/omarchy/shell")],
                        capture_output=True, text=True)
     if p.returncode == 77:
-        print("ok - real omarchy: the glance under qmltestrunner # SKIP no qmltestrunner")
+        print("ok - %s: the glance under qmltestrunner # SKIP no qmltestrunner" % label)
         return
     out = p.stdout + p.stderr
     totals = [l for l in out.splitlines() if l.startswith("Totals:")]
-    ok(p.returncode == 0, "real omarchy: the glance under qmltestrunner (0023: %s)" % (totals[-1] if totals else "no result"))
+    ok(p.returncode == 0, "%s: the glance under qmltestrunner (0023: %s)" % (label, totals[-1] if totals else "no result"))
     if p.returncode != 0:
         print("\n".join(l for l in out.splitlines() if l.startswith(("FAIL", "   ", "QWARN")))[:4000])
 
@@ -776,11 +802,12 @@ def screensaver_launcher(t, launcher):
     ok(osk() == "true" and not os.path.exists(marker), "0006: a launcher stopped by a signal turns the keyboard back on")
 
 
-def show_logo(t, root):
+def show_logo(t, root, centred=False):
     """Patch 0028: omarchy-show-logo in terminals of several widths (script(1)
     gives it one): the wide logo where it fits, the stacked one where only
     that fits, none below, and the wide one with no terminal at all.
-    logo.txt is omarchy-settings', so an 81-column stand-in here."""
+    logo.txt is omarchy-settings', so an 81-column stand-in here. The 4.5
+    family centres the stacked logo; the 4.0.6 one leaves it at the left."""
     narrow = os.path.join(root, "usr/share/omarchy/logo-narrow.txt")
     ok(os.path.isfile(narrow), "0028: logo-narrow.txt is created")
     widest = max(len(l) for l in open(narrow, encoding="utf-8").read().splitlines())
@@ -788,7 +815,7 @@ def show_logo(t, root):
     if not shutil.which("script"):
         print("ok - 0028: the logo by terminal width # SKIP no script(1)")
         return
-    path = os.path.join(t, "logo-path")
+    path = os.path.join(t, "logo-path-centred" if centred else "logo-path")
     os.makedirs(path)
     shutil.copy(narrow, path)
     with open(os.path.join(path, "logo.txt"), "w", encoding="utf-8") as f:
@@ -805,12 +832,28 @@ def show_logo(t, root):
     ok(lines(120) == (9, 81) and lines(81) == (9, 81), "0028: a terminal as wide as the logo shows it as before")
     ok(lines(80)[0] == 17 and lines(66)[0] == 17 and lines(48)[0] == 17, "0028: a narrower one shows it stacked")
     ok(lines(47)[0] == 0, "0028: one too narrow for that shows none, not a wrapped one")
+
+    def margins(cols):
+        """The columns left free on each side of the logo's widest rows."""
+        cmd = "stty cols %d rows 40; bash %s" % (cols, show)
+        out = subprocess.run(["script", "-qec", cmd, "/dev/null"], env={"PATH": "/usr/bin:/bin", "OMARCHY_PATH": path,
+                             "TERM": "xterm"}, stdin=subprocess.DEVNULL, capture_output=True, timeout=20).stdout
+        rows = [l for l in out.decode("utf-8", "replace").replace("\r", "").split("\n") if "█" in l]
+        left = min(len(l) - len(l.lstrip(" ")) for l in rows)
+        return left, cols - max(len(l.rstrip()) for l in rows)
+
+    if centred:
+        ok(margins(66) == (9, 9) and margins(49) == (0, 1) and margins(48) == (0, 0),
+           "0028: the stacked logo is centred in the terminal (%s at 66 columns)" % (margins(66),))
+    else:
+        ok(margins(66) == (0, 18), "0028 (4.0.6): the stacked logo is at the left, as before")
+    ok(margins(120)[0] == 0, "0028: the wide logo stays where Omarchy puts it")
     out = subprocess.run(["setsid", "-w", "bash", show], env={"PATH": "/usr/bin:/bin", "OMARCHY_PATH": path},
                          stdin=subprocess.DEVNULL, capture_output=True, timeout=20).stdout
     ok(out.decode("utf-8", "replace").count("█" * 81) == 9, "0028: no terminal: the wide logo, as before")
 
 
-def about_layout(t, root):
+def about_layout(t, root, tools=None):
     """Patch 0030: the About layout by terminal size. A stand-in fastfetch
     whose modules are as big as Omarchy's on a phone (54 columns, 28 rows
     with the closing break) and a 54x26 logo, as Omarchy's about.txt is: side
@@ -843,7 +886,8 @@ def about_layout(t, root):
         return h
 
     def env(h):
-        return {"PATH": stub + ":/usr/bin:/bin", "HOME": h, "TERM": "xterm",
+        # tools: the package's own commands the launcher sources or calls (4.5)
+        return {"PATH": stub + (":" + tools if tools else "") + ":/usr/bin:/bin", "HOME": h, "TERM": "xterm",
                 "FASTFETCH_LOG": os.path.join(h, "fastfetch.log")}
 
     sizes = [(61, 63), (57, 63), (56, 63), (41, 63), (61, 56), (61, 55), (61, 117), (29, 118), (26, 136)]

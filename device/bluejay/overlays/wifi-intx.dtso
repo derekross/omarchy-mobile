@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/dts-v1/;
+/plugin/;
+
+/* pci_irqd_intx_xlate() expects PCI pins 1-4, then subtracts one. */
+&bluejay_pcie1 {
+	#address-cells = <3>;
+	#interrupt-cells = <1>;
+	interrupt-map = <0 0 0 1 &bluejay_pcie1_intc 1>,
+			<0 0 0 2 &bluejay_pcie1_intc 2>,
+			<0 0 0 3 &bluejay_pcie1_intc 3>,
+			<0 0 0 4 &bluejay_pcie1_intc 4>;
+};

@@ -5,15 +5,27 @@
 # that refuses any other URL. A package or dependency with no package or
 # provider in either index must stop it before it downloads or prints
 # anything; minirootfs packages, providers (so:, /bin/sh), version
-# constraints and conflicts (!name) must not.
+# constraints and conflicts (!name) must not. A write cut off part-way (a
+# full disk, stood in for by ulimit -f) must leave nothing in the cache, even
+# while another run of the same package waits to rename its own (the stand-in
+# pauses a run just before its rename); a cached file that isn't the index's
+# size is fetched again, and one whose index entry has no S: is used as it is.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
-t=$(mktemp -d); trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
+# Run A (pause_a), if a check fails while it is paused: stopped and waited
+# for before its files are removed, and only while it is this suite's child
+stop_a() {
+  local j
+  for j in $(jobs -pr); do
+    if [[ $j == "${a:-}" ]]; then kill "$a" 2>/dev/null || true; wait "$a" 2>/dev/null || true; fi
+  done
+}
+t=$(mktemp -d); trap 'stop_a; [[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
 
 cat > "$t/run.py" <<'EOF'
-import io, runpy, sys, tarfile, urllib.request
+import io, os, runpy, sys, tarfile, time, urllib.request
 
 script, log = sys.argv[1], sys.argv[2]
 cdn = "https://dl-cdn.alpinelinux.org/alpine/v3.22"
@@ -28,14 +40,17 @@ index = {
         dict(P="musl", V="1-r0"),
         dict(P="needs-ghost", V="1-r0", D="c ghost"),
         dict(P="needs-ghost-lib", V="1-r0", D="so:libghost.so.1"),
+        dict(P="big", V="1-r0"),
+        dict(P="nosize", V="1-r0"),
     ],
     "community": [dict(P="e", V="5-r0")],
 }
 urls = {}
 for repo, entries in index.items():
     for e in entries:
-        size = len(e["P"]) + 100
-        e["S"] = str(size)
+        size = 9000 if e["P"] == "big" else len(e["P"]) + 100
+        if e["P"] != "nosize":
+            e["S"] = str(size)
         urls[f"{cdn}/{repo}/aarch64/{e['P']}-{e['V']}.apk"] = b"\0" * size
     data = ("\n\n".join("\n".join(f"{k}:{v}" for k, v in e.items()) for e in entries) + "\n").encode()
     buf = io.BytesIO()
@@ -53,17 +68,44 @@ def urlopen(url):
     return io.BytesIO(urls[url])
 
 urllib.request.urlopen = urlopen
+pause = os.environ.get("PAUSE_AT_RENAME")
+if pause:  # wait just before the rename until the test says go
+    rename = os.replace
+    def replace(src, dst):
+        open(f"{pause}.paused", "w").close()
+        for _ in range(2000):
+            if os.path.exists(f"{pause}.go"):
+                return rename(src, dst)
+            time.sleep(0.01)
+        raise OSError("test: never told to go on")
+    os.replace = replace
 sys.argv = [script, "3.22.1", *sys.argv[3:]]
 runpy.run_path(script, run_name="__main__")
 EOF
 
-# The packages; leaves stdout, stderr, the URLs and the status in $t
-fetch() {
-  rm -rf "$t/apks"; : > "$t/urls"
+# The packages; leaves stdout, stderr, the URLs and the status in $t.
+# fetch_again keeps what earlier runs left in $t/apks; FSIZE= is a ulimit -f.
+fetch() { rm -rf "$t/apks"; fetch_again "$@"; }
+fetch_again() {
+  : > "$t/urls"
   status=0
-  python3 -I "$t/run.py" tools/alpine-fetch.py "$t/urls" "$t/apks" "$@" > "$t/out" 2> "$t/err" || status=$?
+  ([[ -z ${FSIZE:-} ]] || ulimit -f "$FSIZE"; exec python3 -I "$t/run.py" tools/alpine-fetch.py "$t/urls" "$t/apks" "$@") \
+    > "$t/out" 2> "$t/err" || status=$?
 }
 downloads() { { grep -v APKINDEX "$t/urls" || true; } | sed 's,.*/,,' | sort | tr '\n' ' '; }
+# Run A: fetch big in the background, paused just before its rename until
+# resume_a; its stdout, stderr and status in $t/a.out, $t/a.err, $a_status
+pause_a() {
+  rm -f "$t/a.paused" "$t/a.go"
+  PAUSE_AT_RENAME=$t/a python3 -I "$t/run.py" tools/alpine-fetch.py "$t/urls" "$t/apks" big > "$t/a.out" 2> "$t/a.err" & a=$!
+  for _ in {1..200}; do
+    [[ -e $t/a.paused ]] && return
+    kill -0 "$a" 2>/dev/null || break
+    sleep 0.05
+  done
+  cat "$t/a.err"; fail "run A pauses just before its rename"
+}
+resume_a() { touch "$t/a.go"; a_status=0; wait "$a" || a_status=$?; a=; }
 
 fetch a
 [[ $status == 0 ]] || { cat "$t/err"; fail "a resolves"; }
@@ -93,3 +135,37 @@ refuses "a package no index has" "nope (needed by the command line)" a nope
 refuses "a dependency no index has" "ghost (needed by needs-ghost)" needs-ghost
 refuses "a so: dependency nothing provides" "so:libghost.so.1 (needed by needs-ghost-lib)" needs-ghost-lib
 refuses "a conflict asked for on the command line" "!x (needed by the command line)" '!x'
+
+FSIZE=4 fetch big
+[[ $status != 0 ]] || fail "a write cut off at 4 KiB fails"
+[[ ! -e $t/apks/big-1-r0.apk ]] || fail "a write cut off at 4 KiB leaves nothing under the package's name ($(stat -c %s "$t/apks/big-1-r0.apk") bytes)"
+[[ -z $(ls -A "$t/apks") ]] || fail "a write cut off at 4 KiB leaves nothing in the cache ($(ls -A "$t/apks"))"
+pass "a write cut off part-way fails and leaves nothing in the cache"
+head -c 4096 /dev/zero > "$t/apks/big-1-r0.apk"
+fetch_again big
+[[ $status == 0 && $(< "$t/out") == "$t/apks/big-1-r0.apk" ]] || { cat "$t/err"; fail "a short cached file is fetched again"; }
+[[ $(downloads) == "big-1-r0.apk " && $(stat -c %s "$t/apks/big-1-r0.apk") == 9000 ]] || fail "a short cached file is fetched again, whole"
+pass "a cached file shorter than the index's size is fetched again, whole"
+fetch_again big
+[[ $status == 0 && $(< "$t/out") == "$t/apks/big-1-r0.apk" && -z $(downloads) ]] || fail "a whole cached file is not fetched again"
+pass "a cached file of the index's size is used as it is"
+
+rm -rf "$t/apks"
+pause_a
+FSIZE=4 fetch_again big
+resume_a
+[[ $status != 0 ]] || fail "run B, cut off at 4 KiB while A waits to rename, fails"
+[[ $a_status == 0 && $(< "$t/a.out") == "$t/apks/big-1-r0.apk" ]] || { cat "$t/a.err"; fail "run A, written whole, succeeds after B is cut off"; }
+[[ $(stat -c %s "$t/apks/big-1-r0.apk") == 9000 && $(ls -A "$t/apks") == big-1-r0.apk ]] || fail "run A's file is whole and B leaves nothing ($(ls -A "$t/apks"))"
+pass "a run cut off while another waits to rename leaves the other's file whole"
+rm -rf "$t/apks"
+pause_a
+fetch_again big
+resume_a
+[[ $status == 0 && $a_status == 0 ]] || { cat "$t/err" "$t/a.err"; fail "two runs at once both succeed"; }
+[[ $(stat -c %s "$t/apks/big-1-r0.apk") == 9000 && $(ls -A "$t/apks") == big-1-r0.apk ]] || fail "two runs at once leave one whole file ($(ls -A "$t/apks"))"
+pass "two runs at once both succeed and leave one whole file"
+rm -rf "$t/apks"; mkdir -p "$t/apks"; head -c 50 /dev/zero > "$t/apks/nosize-1-r0.apk"
+fetch_again nosize
+[[ $status == 0 && $(< "$t/out") == "$t/apks/nosize-1-r0.apk" && -z $(downloads) ]] || { cat "$t/err"; fail "a cached file whose index entry has no S: is used as it is"; }
+pass "a cached file whose index entry has no S: is used as it is"

@@ -147,3 +147,9 @@ grep -q 'ENV{SYSTEMD_WANTS}+="omamobile-feedbackd-rescan.service"' "$rule" || fa
 grep -qx 'ExecStart=-/usr/bin/pkill -x feedbackd' vendor/systemd/system/omamobile-feedbackd-rescan.service \
   || fail "the rescan stops only feedbackd, and no feedbackd is not an error"
 pass "feedbackd picks up the haptics motor"
+
+# Location's agent goes with its socket (2026.11.08 enabled only the socket)
+grep -A1 -F 'systemctl is-enabled -q omamobile-gnss-nmea.socket' bin/omamobile-setup-system |
+  grep -cF -- '--global enable omamobile-geoclue-agent.service' >/dev/null ||
+  fail "omamobile-setup-system enables GeoClue's agent with the Location socket"
+pass "the setup step turns GeoClue's agent on with the Location socket"

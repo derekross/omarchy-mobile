@@ -51,3 +51,22 @@ assert.strictEqual(M.unreadCount([], 0), 0)
 assert.strictEqual(M.unreadCount(files.filter((f) => f !== "3000-3.json"), "2000"), 0, "the unread one forgotten")
 assert.strictEqual(M.unreadCount(files.filter((f) => f !== "1000-1.json"), "2000"), 1, "a seen one forgotten")
 console.log("ok - status model: unread notifications")
+
+// Omarchy 4.5: history.json, a JSON array of rows with `ts` in seconds (as
+// 4.5.0-3's Store.closedEntry writes them); the shade's mark is the newest
+// ts it showed, in milliseconds.
+const hist45 = JSON.stringify([{ key: "n3", ts: 3, closed_ts: 9, closed_reason: "dismissed" },
+                               { key: "n2", ts: 2.0004, closed_ts: 8, closed_reason: "expired" },
+                               { key: "n1", ts: 1, closed_ts: 7, closed_reason: "dismissed" }]) + "\n"
+assert.strictEqual(M.unreadStored(hist45, 0), 3, "nothing seen yet: every history row")
+assert.strictEqual(M.unreadStored(hist45, "2000"), 1, "only what arrived after the newest one the shade showed")
+assert.strictEqual(M.unreadStored(hist45, 3000), 0)
+assert.strictEqual(M.unreadStored(JSON.stringify([{ ts: 1.9996 }]), 2000), 0, "rounded as the shade rounds")
+assert.strictEqual(M.unreadStored("", 0), 0, "the empty file the service creates")
+assert.strictEqual(M.unreadStored("[]\n", 0), 0)
+assert.strictEqual(M.unreadStored("{\"ts\": 5}", 0), 0, "not an array")
+assert.strictEqual(M.unreadStored(JSON.stringify({ length: 1, 0: { ts: 5 } }), 0), 0, "not an array, even one that looks like it")
+assert.strictEqual(M.unreadStored("[{\"ts\": 5", 0), 0, "torn")
+assert.strictEqual(M.unreadStored(JSON.stringify([null, 4, { ts: "x" }, { ts: -1 }, {}, { ts: 5 }]), 0), 1)
+assert.strictEqual(M.unreadStored(undefined, 0), 0)
+console.log("ok - status model: unread notifications on Omarchy 4.5")

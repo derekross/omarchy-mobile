@@ -22,6 +22,7 @@ Omarchy Mobile's phone profile for Omarchy's own shell. It isn't a fork: these a
 | `profile/shell.json` | The phone layout the setup seeds once |
 | `bin/omamobile-setup-user` | Omarchy Mobile's per-user setup (Omarchy lifecycle `setup-user`); at every login it also enables and starts the Phone and Messages agent's user unit (`omatel-agent.service`, when installed), so calls and texts notify with no app open; `--adopt`, for a user set up by hand rather than by firstboot, marks the once-only steps that would overwrite or repeat what that user has (the shell profile, the monitor scale, the cursor and keyboard lines, the screensaver, Files' click policy) done without running them; the other steps run as for a new user (missing phone plugins and an idle block go into `shell.json`, Chromium's flags are written), and the setup service then runs at each login |
 | `bin/omamobile-launch` | One app per screen: every launch from the shell (drawer, home screen, widgets, links, the agent) gets a new empty workspace through a per-launch Hyprland exec rule, or focuses the app's open window; and the switcher's "Show with…" and "Move to its own screen" |
+| `bin/omamobile-home` | The home screen, as the home pill's swipe shows it (an empty workspace and the home page). An app runs it when Back (Escape, from the edge swipe) reaches its top level, so Back is phone-wide and no app needs a Hyprland call: [plugins/README.md](plugins/README.md#omamobileback) |
 | `bin/omamobile-osk-watch` | Reports squeekboard's visibility (sm.puri.OSK0) to the fingerprint, keyboard and launcher plugins |
 | `bin/omamobile-screenshot-open` | What a screenshot toast's tap ("Tap to view", patch 0020) opens on a phone (`OMARCHY_SCREENSHOT_EDITOR`, set in `environment.d/30-omamobile-screenshot.conf`; Omarchy passes the saved file's path): the screenshot in Loupe (omamobile-apps), fitted, with touch zoom, pan and swipe, and Loupe's copy, share and delete. Tensaku, Omarchy's default, can't be panned or zoomed by touch; without Loupe it is the fallback, through `omamobile-screenshot-edit` |
 | `bin/omamobile-screenshot-edit` | Tensaku as Omarchy opens a screenshot in it (`tensaku-edit`), with GTK's simple input-method context so the on-screen keyboard doesn't come up over the image (show it by hand for the text tool). `omamobile-setup-user` gives Tensaku's own entry (drawer, Loupe's Open With) the same context once, and `hypr/phone.lua` maximizes its window, which Omarchy floats by class |
@@ -102,3 +103,32 @@ Open, save and choose-a-folder requests through the portal (Qt, GTK, Electron an
 The package contract follows omarchy-mac's: `./install DESTDIR` stages files and enables nothing, `test/all` runs the package's own tests, and `version` holds the version.
 
 Develop on a desktop with `phone/dev/run-desktop` from the repo root.
+
+### Chromium and Grok Bot sizing
+
+`omamobile-browser-setup`, called by user setup and again by the phone bar at
+shell start, fits both apps to the same
+578 px layout from the internal output's short logical side. It keeps the
+reference phone's 0.83 cap: 480 px gives 0.83, 405 px gives 0.70 and 360 px
+gives 0.62. Geometry comes from Hyprland when available, or an internal DRM
+mode plus the numeric scale in `hypr/monitors.lua` before the compositor runs.
+DSI, eDP and simpledrm's Unknown outputs are supported; external outputs are
+ignored. Missing geometry defers only the scale factor. Chromium's user agent,
+input-method and no-first-run defaults are written independently. The shell
+retry obtains live geometry for an auto or computed Lua scale; helper failure
+does not stop the remaining user setup.
+
+Defaults run once, tracked by `omamobile-browser-fit-chromium` and
+`omamobile-browser-fit-grok-bot` in Omarchy's done directory, with
+`omamobile-browser-defaults-chromium` preserving removals while scale is
+deferred. Old Chromium
+per-feature markers also count: deleting a mobile UA, input-method flag or
+scale after its original setup remains a user choice. Only the exact generated,
+unquoted 0.83 scale line migrates once; custom values and quoted overrides
+stay. Chromium's version is read only immediately before writing a missing UA.
+No browser profile or site zoom changes. Chrome defaults are deferred until
+its quote-aware launcher is released separately in omarchy-pkgs.
+
+## Device settings
+
+After the shared rules, `hypr/phone.lua` loads `/usr/share/omamobile/hypr/device.lua` if a device package installs one, for settings only that phone needs (an inner and an outer panel, its own input devices). Every session that loads `phone.lua` (setup-user adds it to `looknfeel.lua`) gets it, new and existing users alike. It runs under `pcall`: a syntax or runtime error in the device file is logged and the shared rules stay in force. With no device file nothing changes, so every phone today is unaffected.

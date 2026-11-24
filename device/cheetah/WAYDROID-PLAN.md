@@ -199,7 +199,19 @@ Waydroid 1.6.3 does three things that are wrong on this phone:
   sysfs) is the one the file allows (`c 226:128`), before every start.
 - `verify` (`ExecStartPre` too) refuses to start the container unless all
   of it is in place. `waydroid upgrade` regenerates the config, so this runs
-  before every start.
+  before every container service start (Waydroid's own `lxc-start` comes later,
+  when a session starts, and rewrites `config_session` just before it). It also
+  refuses a hand-opened config: any uncommented `lxc.cgroup2.devices.allow`
+  (or the older `lxc.cgroup.devices.allow`) line in Waydroid's generated
+  `config`, `config_nodes` or `config_session` fails it (`FAIL
+  <file>:<line>: a device allow rule, which Waydroid never writes`), so such an
+  edit fails closed instead of relying on where it sits relative to our
+  include. Waydroid writes no allow line there itself, and our own binder and
+  render-node paths live in our include, which `verify` does not scan. It
+  refuses every allow rather than a list of open forms (`a`, a `b` device,
+  `c *:*`, an absolute path, which LXC 7 `stat()`s and allows as whatever type
+  it finds), because LXC's own parser accepts more than a list can name, such
+  as a value in quotes.
 
 Sound reaches Android only through PipeWire's PulseAudio socket (no
 `/dev/snd` is bound), so the speaker stages and protection in
@@ -376,6 +388,11 @@ tools/phone-ssh 'systemctl start waydroid-container; sleep 5; systemctl --no-pag
 # is "inaccessible or not found" (rc=127), which looks like a refusal.
 tools/phone-ssh 'lxc-attach -P /var/lib/waydroid/lxc -n waydroid -- /system/bin/sh -c \
   "export PATH=/system/bin:\$PATH; toybox mknod /dev/omtest b 7 0; echo mknod_rc=\$?; toybox head -c 1 /dev/omtest > /dev/null; echo head_rc=\$?; toybox rm -f /dev/omtest"'
+# The character side: major 1, minor 1 is /dev/mem (toybox takes MAJOR MINOR as two words; `c 1:1` is a usage error, not a refusal), which no allow line lists. mknod only,
+# never read or open the node: if the rule ever failed, reading /dev/mem could
+# crash the phone.
+tools/phone-ssh 'lxc-attach -P /var/lib/waydroid/lxc -n waydroid -- /system/bin/sh -c \
+  "export PATH=/system/bin:\$PATH; toybox mknod /dev/omtest2 c 1 1; echo mknod2_rc=\$?; toybox rm -f /dev/omtest2"'
 tools/phone-ssh 'lxc-attach -P /var/lib/waydroid/lxc -n waydroid -- /system/bin/sh -c \
   "export PATH=/system/bin:\$PATH; toybox ls /sys/kernel/debug /dev | toybox head"'
 ```
@@ -386,11 +403,14 @@ starts with a session, run them after W5's session start instead.
 - **Expect:** the service is active (its three `ExecStartPre` lines passed);
   `binder`, `vndbinder`, `hwbinder` in `/dev/binderfs`; `toybox mknod`
   prints `mknod: /dev/omtest: Operation not permitted` (that line is the pass
-  condition, not a nonzero rc: a missing command also gives one);
+  condition, not a nonzero rc: a missing command also gives one), and so
+  does `toybox mknod /dev/omtest2 c 1 1` (`mknod: /dev/omtest2: Operation not
+  permitted`);
   `/sys/kernel/debug` empty or
   missing inside; no `video*` or `fb*` in the container's `/dev`.
-- **Stop:** the block read succeeds (stop the container at once and fix
-  the device rule before anything else); any oops; any
+- **Stop:** the block read succeeds, or `mknod /dev/omtest2 c 1 1` succeeds
+  (stop the container at once and fix the device rule before anything else;
+  never read `/omtest2`); any oops; any
   `ufshcd_err_handler`; binder errors repeating in dmesg.
 - **Rollback:** `systemctl stop waydroid-container`.
 

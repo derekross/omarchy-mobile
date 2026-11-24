@@ -1,0 +1,7 @@
+# Commands test/all needs on the machine that runs it (tools/build-packages:
+# without one of them, check() runs in the build container instead)
+qmake6
+make
+g++
+dbus-run-session
+python3

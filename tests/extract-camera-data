@@ -36,6 +36,39 @@ tool = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.na
 loader.exec_module(tool)
 
 
+def check_missing_cpr_api():
+    # Run the production constructor with old or incomplete binding surfaces.
+    # Refusal must precede opening the HAL or configuring the emulated CPU.
+    original = tool.unicorn
+    for missing in ("cpr_read", "cpr_write"):
+        for value in (None, "not callable"):
+            api = {"cpr_read": lambda *args: 0,
+                   "cpr_write": lambda *args: None}
+            if value is None:
+                del api[missing]
+            else:
+                api[missing] = value
+            tool.unicorn = types.SimpleNamespace(
+                Uc=lambda *args: types.SimpleNamespace(**api),
+                UC_ARCH_ARM64=0, UC_MODE_ARM=0)
+            try:
+                tool.Emu("/nonexistent/omamobile-synthetic-hal.so")
+            except SystemExit as error:
+                message = str(error)
+                assert message.startswith("error: "), message
+                assert "cpr_read/cpr_write" in message, message
+                assert "upgrade unicorn" in message, message
+                assert "2.1.4" in message and "--help" in message, message
+            else:
+                raise AssertionError(f"Missing {missing} did not refuse")
+            finally:
+                tool.unicorn = original
+    print("ok - actual Emu refuses incomplete CPR bindings with upgrade guidance")
+
+
+check_missing_cpr_api()
+
+
 def adrp(rd, pages):
     imm = pages & 0x1FFFFF
     return 0x90000000 | (imm & 3) << 29 | (imm >> 2) << 5 | rd

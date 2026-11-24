@@ -61,6 +61,7 @@ def main():
     runner = (
         shutil.which("qmltestrunner6")
         or shutil.which("/usr/lib/qt6/bin/qmltestrunner")
+        or shutil.which("/usr/lib64/qt6/bin/qmltestrunner")
         or shutil.which("qmltestrunner")
     )
     if not runner:

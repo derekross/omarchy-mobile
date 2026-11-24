@@ -31,6 +31,27 @@ has_identity() {
   [[ -n $(git config --global user.name) && -n $(git config --global user.email) ]]
 }
 
+# The owner's name and email, for git and the Compose shortcuts. Omarchy 4.5
+# has one command for both (omarchy-setup-git, which sets what it is given
+# and asks nothing); Omarchy 4.0 had two install scripts, of which 4.5 kept
+# only the Compose one. A blank value is left as it was, as before.
+# OMAMOBILE_SETUP_GIT names another command, for the tests.
+save_identity() {
+  local name=$1 email=$2 setup=${OMAMOBILE_SETUP_GIT:-omarchy-setup-git} args=()
+  [[ -z ${name//[[:space:]]/} ]] || args+=(--name "$name")
+  [[ -z ${email//[[:space:]]/} ]] || args+=(--email "$email")
+  (( ${#args[@]} )) || return 0
+  if command -v "$setup" >/dev/null 2>&1; then
+    "$setup" "${args[@]}"
+    return
+  fi
+  [[ -z ${name//[[:space:]]/} ]] || git config --global user.name "$name" || return 1
+  [[ -z ${email//[[:space:]]/} ]] || git config --global user.email "$email" || return 1
+  if [[ -f $omarchy_path/install/user/xcompose.sh ]]; then
+    OMARCHY_USER_NAME=$name OMARCHY_USER_EMAIL=$email bash "$omarchy_path/install/user/xcompose.sh" || return 1
+  fi
+}
+
 has_pin() {
   ! printf '' | unix_chkpwd "$USER" nullok 2>/dev/null
 }
@@ -162,10 +183,12 @@ case "${1:-}" in
     echo
     name=$(gum input --header "Your name" --placeholder "Ada Lovelace" --value "$(git config --global user.name)")
     email=$(gum input --header "Your email" --placeholder "ada@example.com" --value "$(git config --global user.email)")
-    if [[ -n $name || -n $email ]]; then
-      OMARCHY_USER_NAME=$name OMARCHY_USER_EMAIL=$email bash "$omarchy_path/install/user/git.sh"
-      OMARCHY_USER_NAME=$name OMARCHY_USER_EMAIL=$email bash "$omarchy_path/install/user/xcompose.sh"
-      echo "Saved."
+    if [[ -n ${name//[[:space:]]/} || -n ${email//[[:space:]]/} ]]; then
+      if save_identity "$name" "$email"; then
+        echo "Saved."
+      else
+        echo "Your name and email could not be saved. Set them later with: omamobile-onboarding"
+      fi
     fi
     echo
     if has_pin; then

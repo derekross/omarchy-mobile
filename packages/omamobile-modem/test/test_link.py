@@ -8,6 +8,7 @@ import tempfile
 import unittest
 
 SOURCE = (Path(__file__).resolve().parents[1] / 'lib/omamobile-modem-start').read_text()
+POLICY = (Path(__file__).resolve().parents[1] / 'lib/omamobile-modem-sleep-policy').read_text()
 
 
 class LinkTests(unittest.TestCase):
@@ -38,7 +39,7 @@ class LinkTests(unittest.TestCase):
             self.assertNotEqual(self.run_value(value, wanted), 0)
 
     def test_device_modules_load_in_order_with_arguments(self):
-        loop = re.search(r'for entry in "\$\{LINK_MODULES\[@\]\}"; do\n  read -r -a words <<< "\$entry"\n  modprobe "\$\{words\[@\]\}"\ndone', SOURCE).group()
+        loop = re.search(r'for entry in "\$\{LINK_MODULES\[@\]\}"; do\n  read -r -a words <<< "\$entry"\n  modprobe "\$\{words\[@\]\}" \|\| refuse "Off: \$\{words\[0\]\} didn\'t load"\ndone', SOURCE).group()
         script = ('LINK_MODULES=("first allow_hw=1" "second cpif=1")\n'
                   'modprobe() { printf "%s " "$@"; printf "\\n"; }\n' + loop)
         result = subprocess.run(['bash', '-c', script], text=True, capture_output=True, check=True)
@@ -61,7 +62,9 @@ class LinkTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0 if value == 'Y' else 7)
             self.assertEqual('load-reached' in result.stdout, value == 'Y')
 
-    def run_starter(self, config, loaded=None):
+    def run_starter(self, config, loaded=None, fail_module=None, inhibitor=False,
+                    lock=True, suspend_enable=False, runbook=True, verified=False,
+                    disable=False, kernel_ok=True, policy=True):
         """Run actual starter with only paths redirected and inert external tools."""
         config_path = self.root / 'link.conf'
         if config is not None:
@@ -74,6 +77,14 @@ class LinkTests(unittest.TestCase):
         profile = vendor / 'omamobile-vendor-chroot'
         profile.write_text('#!/bin/bash\necho profile-$2 >> "$TRACE"\nexit 1\n')
         profile.chmod(0o700)
+        if policy:
+            (vendor / 'omamobile-modem-sleep-policy').write_text(POLICY)
+            (vendor / 'omamobile-modem-sleep-policy').chmod(0o700)
+        # The running kernel's link module: with #232's early refusal (its
+        # log line) or without (an older kernel's module).
+        link_module = self.root / 'pcie-gs201-cp.ko'
+        link_module.write_bytes(b'\x7fELF\0' + (b'\0016sleep refused before the freeze: link %s, PHY %s\n'
+                                                if kernel_ok else b'\0016modem PCIe ch0 bring-up\n'))
         sysfs = self.root / 'sys'
         sysfs.mkdir()
         if loaded is not None:
@@ -84,9 +95,12 @@ class LinkTests(unittest.TestCase):
         tools = self.root / 'bin'
         tools.mkdir()
         for name, body in {
-            'systemd-inhibit': 'echo inhibitor >> "$TRACE"; echo "omamobile-modem held"',
+            'systemd-inhibit': 'echo inhibitor >> "$TRACE"; [[ -n ${NO_LOCK:-} ]] || echo "omamobile-modem held"',
+            'sleep': ':',
             'sync': ':',
-            'modprobe': 'test -f "$OMAMOBILE_MODEM_LATCH" || exit 23; echo "load:$*" >> "$TRACE"',
+            'modprobe': 'test -f "$OMAMOBILE_MODEM_LATCH" || exit 23; echo "load:$*" >> "$TRACE"; '
+                        '[[ $1 != "${FAIL_MODULE:-}" ]] || exit 1; mkdir -p "$SYSMODULE/${1//-/_}"',
+            'systemctl': 'case $1 in is-active) test -e "$INHIBIT_ACTIVE";; *) echo "systemctl:$*" >> "$TRACE";; esac',
         }.items():
             tool = tools / name
             tool.write_text('#!/bin/bash\n' + body + '\n')
@@ -108,7 +122,31 @@ class LinkTests(unittest.TestCase):
                    OMAMOBILE_MODEM_REFUSED=str(self.root / 'refused'),
                    OMAMOBILE_MODEM_CHROOT=str(provision),
                    OMAMOBILE_MODEM_NV_SUMS=str(provision),
-                   OMAMOBILE_MODEM_PROPS=str(provision))
+                   OMAMOBILE_MODEM_PROPS=str(provision),
+                   # Never the machine's own file: on a phone running the M6
+                   # runbook it exists, and the starter would skip the lock.
+                   OMAMOBILE_MODEM_SUSPEND_ENABLE=str(self.root / 'suspend-enable'),
+                   OMAMOBILE_MODEM_SUSPEND_RUNBOOK=str(self.root / 'suspend-runbook'),
+                   OMAMOBILE_MODEM_SUSPEND_VERIFIED=str(self.root / 'suspend-verified'),
+                   OMAMOBILE_MODEM_SUSPEND_DISABLE=str(self.root / 'suspend-disable'),
+                   OMAMOBILE_MODEM_LINK_MODULE=str(link_module),
+                   NO_LOCK='' if lock else '1')
+        if verified:
+            (self.root / 'suspend-verified').touch()
+        if disable:
+            (self.root / 'suspend-disable').touch()
+        if suspend_enable:
+            (self.root / 'suspend-enable').touch()
+        if runbook:
+            (self.root / 'suspend-runbook').touch()
+        modules = self.root / 'loaded'
+        modules.mkdir()
+        if inhibitor:
+            (self.root / 'inhibit-active').touch()
+        env.update(OMAMOBILE_MODEM_SYSMODULE=str(modules), SYSMODULE=str(modules),
+                   OMAMOBILE_MODEM_SYSTEMCTL=str(tools / 'systemctl'),
+                   INHIBIT_ACTIVE=str(self.root / 'inhibit-active'),
+                   FAIL_MODULE=fail_module or '')
         env.pop('OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS', None)
         result = subprocess.run(['bash', str(starter)], env=env,
                                 capture_output=True, text=True, timeout=5)
@@ -119,6 +157,108 @@ class LinkTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)  # inert profile check deliberately refuses
         self.assertEqual(trace, ['inhibitor', 'inhibitor', 'load:first allow_hw=1',
                                 'load:second cpif=1', 'load:shm_ipc', 'load:cpif', 'profile-check'])
+
+    def test_first_module_failing_refuses_and_releases_the_sleep_block(self):
+        result, trace = self.run_starter('first allow_hw=1\nsecond cpif=1\n', 'Y',
+                                         fail_module='first', inhibitor=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(trace, ['inhibitor', 'inhibitor', 'load:first allow_hw=1',
+                                 'systemctl:kill omamobile-modem-inhibit.service'])
+        self.assertEqual((self.root / 'refused').read_text().strip(), "Off: first didn't load")
+        self.assertTrue((self.root / 'latch').exists())
+
+    def test_later_module_failing_keeps_the_sleep_block(self):
+        # Only first is loaded, a module known by its name in link.conf alone.
+        result, trace = self.run_starter('first allow_hw=1\nsecond cpif=1\n', 'Y',
+                                         fail_module='second', inhibitor=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(trace, ['inhibitor', 'inhibitor', 'load:first allow_hw=1',
+                                 'load:second cpif=1'])
+        self.assertEqual((self.root / 'refused').read_text().strip(), "Off: second didn't load")
+
+    def test_no_enable_file_and_no_lock_refuses_before_loading(self):
+        result, trace = self.run_starter('first allow_hw=1\nsecond cpif=1\n', 'Y', lock=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn('load:first allow_hw=1', trace)
+        self.assertEqual(trace[-1], 'inhibitor')
+        self.assertEqual((self.root / 'refused').read_text().strip(), 'Off: no sleep inhibitor')
+        self.assertFalse((self.root / 'latch').exists())
+
+    def assert_loads_without_waiting(self, result, trace):
+        self.assertEqual(result.returncode, 1)  # inert profile check deliberately refuses
+        self.assertNotIn('inhibitor', trace)
+        self.assertEqual(trace, ['load:first allow_hw=1', 'load:second cpif=1',
+                                 'load:shm_ipc', 'load:cpif', 'profile-check'])
+        self.assertIn('the phone may sleep with the modem up', result.stderr)
+
+    def assert_refuses_without_lock(self, result, trace):
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse([t for t in trace if t.startswith('load:')])
+        self.assertEqual(trace[-1], 'inhibitor')
+        self.assertEqual((self.root / 'refused').read_text().strip(), 'Off: no sleep inhibitor')
+        self.assertFalse((self.root / 'latch').exists())
+
+    def test_verified_device_and_kernel_load_without_waiting(self):
+        # The 7 Pro's default: device-cheetah's suspend-verified, a kernel
+        # with #232's early refusal, no file of the owner's.
+        result, trace = self.run_starter('first allow_hw=1\nsecond cpif=1\n', 'Y', lock=False,
+                                         verified=True, runbook=False)
+        self.assert_loads_without_waiting(result, trace)
+
+    def test_verified_device_on_an_old_kernel_keeps_the_inhibitor(self):
+        result, trace = self.run_starter('first allow_hw=1\nsecond cpif=1\n', 'Y', lock=False,
+                                         verified=True, runbook=False, kernel_ok=False)
+        self.assert_refuses_without_lock(result, trace)
+        self.assertIn('lacks the modem link\'s early sleep refusal', result.stderr)
+
+    def test_verified_device_on_an_old_kernel_with_the_lock_loads_as_before(self):
+        result, trace = self.run_starter('first allow_hw=1\nsecond cpif=1\n', 'Y',
+                                         verified=True, runbook=False, kernel_ok=False)
+        self.assertEqual(trace, ['inhibitor', 'inhibitor', 'load:first allow_hw=1',
+                                 'load:second cpif=1', 'load:shm_ipc', 'load:cpif', 'profile-check'])
+
+    def test_owner_opt_out_keeps_the_inhibitor(self):
+        result, trace = self.run_starter('first allow_hw=1\nsecond cpif=1\n', 'Y', lock=False,
+                                         verified=True, runbook=False, disable=True)
+        self.assert_refuses_without_lock(result, trace)
+        self.assertIn('the owner keeps the modem\'s sleep inhibitor', result.stderr)
+
+    def test_missing_policy_keeps_the_wait_for_the_lock(self):
+        # A policy that can't run skips the inhibitor unit (ExecCondition=),
+        # but the starter then waits for a lock that never comes.
+        result, trace = self.run_starter('first allow_hw=1\nsecond cpif=1\n', 'Y', lock=False,
+                                         verified=True, runbook=False, policy=False)
+        self.assert_refuses_without_lock(result, trace)
+
+    def test_enable_file_and_no_lock_loads_without_waiting(self):
+        # The attended runbook's pair from before (#556) still counts.
+        result, trace = self.run_starter('first allow_hw=1\nsecond cpif=1\n', 'Y', lock=False,
+                                         suspend_enable=True)
+        self.assert_loads_without_waiting(result, trace)
+
+    def test_enable_file_and_runbook_on_an_old_kernel_keeps_the_inhibitor(self):
+        result, trace = self.run_starter('first allow_hw=1\nsecond cpif=1\n', 'Y', lock=False,
+                                         suspend_enable=True, kernel_ok=False)
+        self.assert_refuses_without_lock(result, trace)
+
+    def test_enable_file_without_runbook_keeps_the_inhibitor(self):
+        # A phone whose device package ships no M6 runbook (the 9a, the 6 Pro):
+        # the owner's file alone changes nothing, and no lock still refuses.
+        result, trace = self.run_starter('first allow_hw=1\nsecond cpif=1\n', 'Y', lock=False,
+                                         suspend_enable=True, runbook=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn('load:first allow_hw=1', trace)
+        self.assertEqual(trace[-1], 'inhibitor')
+        self.assertEqual((self.root / 'refused').read_text().strip(), 'Off: no sleep inhibitor')
+        self.assertFalse((self.root / 'latch').exists())
+        self.assertIn("ignored: this phone's device package doesn't declare", result.stderr)
+
+    def test_enable_file_without_runbook_with_lock_loads_as_before(self):
+        result, trace = self.run_starter('first allow_hw=1\nsecond cpif=1\n', 'Y',
+                                         suspend_enable=True, runbook=False)
+        self.assertEqual(result.returncode, 1)  # inert profile check deliberately refuses
+        self.assertEqual(trace, ['inhibitor', 'inhibitor', 'load:first allow_hw=1',
+                                 'load:second cpif=1', 'load:shm_ipc', 'load:cpif', 'profile-check'])
 
     def test_no_config_preserves_real_default_load(self):
         result, trace = self.run_starter(None)

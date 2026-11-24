@@ -218,11 +218,26 @@ Item {
 
   // The file is replaced with rename(2) on every change; a quick re-read
   // while anything shows makes sure a missed change cannot leave it stale.
+  // Without the file (the fingerprint stack starts after the shell, or
+  // stopped) there is nothing to watch, so look for it again until it
+  // appears; each reload() sets the watch up again (FileView::reload runs
+  // updatePath, and so updateWatchedFiles), so it follows the file from
+  // then on. Only where the stack is installed: elsewhere the file never
+  // appears.
   Timer {
     interval: root.screenOpen ? 500 : 2000
     repeat: true
-    running: root.shown || root.screenOpen
+    running: root.shown || root.screenOpen || (root.sensor === null && root.stackInstalled)
     onTriggered: stateFile.reload()
+  }
+
+  // The fingerprint stack's runner, as the Setup menu's Fingerprint entry
+  // tests for it.
+  property bool stackInstalled: false
+  Process {
+    command: ["test", "-x", Quickshell.env("OMAMOBILE_FP_RUNNER") || "/usr/lib/omamobile-fp/omamobile-fp-chroot"]
+    running: true
+    onExited: function(exitCode) { root.stackInstalled = exitCode === 0 }
   }
 
   // ---------------------------------------------------------------- geometry
@@ -447,6 +462,27 @@ Item {
     onTriggered: {
       if (enrollProc.running) enrollProc.running = false
       if (deleteProc.running) deleteProc.running = false
+    }
+  }
+
+  // Back (omamobile.back's BackLink.js): the screen never takes the keyboard,
+  // so Escape went to the app under it. Back is the screen's own way out:
+  // Done after an enrollment, Cancel everywhere else (which stops one that
+  // is running).
+  function back() {
+    if (!screenOpen) return false
+    if (page === "done") closeScreen()
+    else cancelEnroll()
+    return true
+  }
+
+  Loader {
+    source: Qt.resolvedUrl("../omamobile.back/BackLinkClient.qml")
+    onLoaded: {
+      item.name = "fingerprint setup"
+      item.handler = function() { return root.back() }
+      // Not while polkit asks: its prompt has the keyboard and takes Escape.
+      item.active = Qt.binding(function() { return root.screenOpen && !root.authPending })
     }
   }
 

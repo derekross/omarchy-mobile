@@ -5,6 +5,64 @@ Findings from real hardware, newest first. [BRINGUP-M1.md](BRINGUP-M1.md) is the
 
 The board file (`gs201-panther.dts`) was merged as [linux-omarchy-mobile#108](https://github.com/derekross/linux-omarchy-mobile/pull/108), and the FT3658 driver as [#109](https://github.com/derekross/linux-omarchy-mobile/pull/109); the test kernels below add one local commit each on top.
 
+## 2026-11-17: GNSS, bring-up overlay (overlays/gnss.dtso)
+
+The Pixel 7's stock dtbo (board 0x30406) describes the BCM4775x receiver
+exactly as the Pixel 7 Pro's: Google's source has one file for both
+(`gs201-common-gps.dtsi`), and the rails LDO9S-LDO11S come from the shared
+`gs201-pmic.dtsi`. So panther gets cheetah's node (linux-omarchy-mobile
+PR: the GNSS node, the rails and the pins, all disabled), and
+`overlays/gnss.dtso` turns on the sub-PMIC, the three rails, USI5 and its
+SPI, as cheetah's `gnss-pmic-test.dtso` and `gnss-test.dtso` do together,
+and gph2's pin controller (`pinctrl@14440000`, disabled in `gs201.dtsi`),
+which `mcu_resp` and `nstandby` need. It isn't in `DTB_OVERLAYS`, and it
+needs a kernel with [linux-omarchy-mobile#268](https://github.com/derekross/linux-omarchy-mobile/pull/268):
+on a kernel without it, `fdtoverlay` refuses the overlay, as the three
+rails aren't in the base DTB.
+
+To try it:
+
+1. Install `omamobile-gnss` first. Its blacklist keeps `bcm4775x-gnss`
+   from loading by itself (`omamobile-gnss-start` loads it); the Pixel 7's
+   image and device package don't install it, so without it the driver
+   would load at the first boot with the overlay.
+2. The first boot with the overlay should show `bcm4775x-gnss` not loaded,
+   the three `vdd_gnss_*` rails registered and off, and USB and the
+   fingerprint sensor as before.
+3. The way back is the DTB without the overlay.
+
+Tested on a Pixel 7 (angelrenefm) on 2026-11-04, with a local kernel whose
+node is the same as the PR's (the built DTB against the phone's live tree:
+the same properties, other than phandles and `status`) and the stock
+GNSS daemons in `omamobile-gnss`'s vendor chroot: 8 minutes of NMEA
+outdoors from a cold start, the first fix 178 s in, then 303 fixes, up to
+16 satellites. Indoors, 60 s, no fix. That boot ran
+`7.3.0-rc6-omamobile-push1-g44048a9aa795` with `omamobile-gnss` 0.2.7
+(built on the phone). On 2026-11-17, the same kernel with
+`omamobile-gnss` 0.2.9, indoors: `omamobile-gnss force` bound
+`bcm4775x-gnss` on `spi0.0` and gave 1089 NMEA sentences in 20 s (GPS,
+GLONASS, Galileo, BeiDou, QZSS), no fix. Applied with `fdtoverlay` to the
+PR's `gs201-panther.dtb`, the overlay changes those six `status` lines and
+nothing else, and it applies together with `fingerprint-sensor.dtso`
+(seven with gph2's pin controller, checked again on 2026-11-18 against
+#268's DTB at `070e5489d`). Not
+tested: the overlay through `omamobile-boot-update`, and a warm start with
+fresh orbit predictions (`omamobile-gnss-lto`).
+
+## 2026-11-15: hardware video, off by default (overlays/mfc.dtso)
+
+The MFC v15 (hardware H.264, HEVC, VP8 and VP9 decode and H.264, HEVC
+and VP8 encode, linux-omarchy-mobile#250 and #256) is described in the
+kernel with its 256 MiB pool but left disabled. Its two System MMUs and
+the S2MPUs in front of it are not described yet, so they stay in bypass,
+and Google's closed firmware, parsing whatever video an app hands it, can
+reach all memory below 4 GiB, the kernel's included. That isn't wanted on
+every Pixel 7 by default (the maintainer's decision on #250).
+`overlays/mfc.dtso` enables it for an owner who accepts that; it also
+needs `s5p-mfc-v15.fw`, which `tools/extract-vendor-firmware` takes from
+the owner's own factory image (#747). The `iommus` and S2MPU description,
+as its own series, is what would turn it on by default.
+
 ## 2026-11-03: a second unit (angelrenefm)
 
 A stock factory Pixel 7 (CP3A.261005.002.A1 on both slots), offered on [#342](https://github.com/derekross/omarchy-mobile/issues/342). It booted Arch on slot B once the boot images carried AVB footers ([#396](https://github.com/derekross/omarchy-mobile/pull/396)); `tools/phone-smoke` passed everything required. What differs from the first unit, all read-only:

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Marsel Nenaj
 #include "backend.h"
 #include "deviceinfocontroller.h"
+#include "actionrunner.h"
 #include <QGuiApplication>
 #include <QDBusConnection>
 #include <QDBusInterface>
@@ -38,7 +39,11 @@ int main(int argc, char **argv) {
     QQuickStyle::setStyle("Basic");
     Backend backend;
 #ifdef OMAMOBILE_SETTINGS_TEST_DEVICE_INFO
-    // Only the separately built test entrypoint fixes read-only model data.
+    // Only the separately built test entrypoint fixes read-only model data,
+    // and it never runs the backends installed on the machine
+    const QString testBackends = qEnvironmentVariable("OMAMOBILE_SETTINGS_TEST_BACKENDS",
+                                                      QStringLiteral("/nonexistent/omamobile-settings-test"));
+    backend.setBackendDir(testBackends);
     DeviceInfoController deviceInfo(true);
 #else
     DeviceInfoController deviceInfo(preview);
@@ -62,9 +67,14 @@ int main(int argc, char **argv) {
         if (!bus.registerObject("/Settings", &backend, QDBusConnection::ExportScriptableSlots
                                 | QDBusConnection::ExportScriptableInvokables)) return 1;
     }
+    ActionRunner actions;
+#ifdef OMAMOBILE_SETTINGS_TEST_DEVICE_INFO
+    actions.setBackendDir(testBackends);
+#endif
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("backend", &backend);
     engine.rootContext()->setContextProperty("deviceInfo", &deviceInfo);
+    engine.rootContext()->setContextProperty("actions", &actions);
     engine.load(QUrl("qrc:/Main.qml"));
     if (engine.rootObjects().isEmpty()) return 1;
     return app.exec();

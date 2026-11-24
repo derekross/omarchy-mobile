@@ -10,10 +10,11 @@ pass() { printf 'ok - %s\n' "$1"; }
 export PYTHONDONTWRITEBYTECODE=1
 cp=lib/omamobile-modem-cp
 
-bash -n install && bash -n lib/omamobile-modem-start && bash -n profiles/modem.conf || fail "shell syntax"
+bash -n install && bash -n lib/omamobile-modem-start && bash -n profiles/modem.conf &&
+  bash -n lib/omamobile-modem-switch || fail "shell syntax"
 python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$cp" || fail "$cp parses"
 if command -v shellcheck >/dev/null; then
-  shellcheck -S warning lib/omamobile-modem-start install || fail "shellcheck"
+  shellcheck -S warning lib/omamobile-modem-start lib/omamobile-modem-switch install || fail "shellcheck"
 fi
 pass "scripts parse"
 python3 test/test_link.py || fail "device link module parameters and load order"
@@ -34,6 +35,83 @@ out=$(bash -c '
 ' 2>&1)
 [[ $out == alive ]] || fail "a daemon exiting 3 leaves spawn_optional's job alive (got: $out)"
 pass "spawn_optional survives a failing daemon"
+
+# gnssd's RIL library: the stub goes over it read-only when both exist, and
+# nothing is mounted (or written) otherwise.
+sitril=$(sed -n '/^SITRIL_GPS=/p; /^SITRIL_GPS_STUB=/p; /^modem_gnss_sitril() {$/,/^}$/p' profiles/modem.conf)
+[[ $sitril == *modem_gnss_sitril* ]] || fail "modem_gnss_sitril found in modem.conf"
+st=$(mktemp -d)
+mkdir -p "$st/root/vendor/lib64" "$st/stubs"
+run_sitril() {
+  bash -c '
+    set -euo pipefail
+    ROOT=$1/root STUBS=$1/stubs
+    say() { echo "say: $*"; }
+    mount() { echo "mount $*"; }
+    '"$sitril"'
+    modem_gnss_sitril
+  ' _ "$st"
+}
+[[ -z $(run_sitril) ]] || fail "no libsitril-gps.so in the image: nothing mounted"
+echo real > "$st/root/vendor/lib64/libsitril-gps.so"
+[[ $(run_sitril) == "say: no "*"(omamobile-gnss)"* ]] || fail "no stub: a note and no mount"
+echo stub > "$st/stubs/libomamobile-sitril-gps.so"
+out=$(run_sitril)
+[[ $out == "mount --bind $st/stubs/libomamobile-sitril-gps.so $st/root/vendor/lib64/libsitril-gps.so"$'\n'"mount -o remount,bind,ro $st/root/vendor/lib64/libsitril-gps.so" ]] ||
+  fail "the stub is bound read-only over libsitril-gps.so (got: $out)"
+[[ $(cat "$st/root/vendor/lib64/libsitril-gps.so") == real ]] || fail "the image's library is left as it was"
+rm -rf "$st"
+grep -q '^    modem_gnss_sitril$' profiles/modem.conf || fail "profile_setup binds the stub with the GNSS devices"
+pass "gnssd gets the SIT RIL GPS stub instead of the binder library"
+
+# rfsd's job: an exit is a crash (the supervisor stops the profile) unless
+# this invocation's stop intent is in place; then it stays open for systemd.
+python3 test/rfsd-lifecycle.py || fail "rfsd's job through an orderly stop"
+pass "rfsd's exit ends the profile except during this invocation's orderly stop"
+
+# power-off: 0 only on the boot device's own OFFLINE
+python3 test/power-off.py || fail "omamobile-modem-cp power-off"
+pass "power-off confirms OFFLINE from the device, never from its absence"
+
+# The stop witness: profile_stop, with a stand-in CP helper and capture. A
+# failed power-off still captures the NV but fails the stop and leaves no
+# witness; a confirmed one writes its invocation's witness once; no main
+# process, or no invocation, means no witness.
+w=$(mktemp -d)
+cat > "$w/fake-cp" <<'EOF'
+#!/bin/bash
+[[ $1 == power-off ]] || exit 2
+exit "$CP_RESULT"
+EOF
+chmod +x "$w/fake-cp"
+stop_function=$(sed -n '/^profile_stop() {$/,/^}$/p' profiles/modem.conf)
+[[ -n $stop_function ]] || fail "profile_stop found in modem.conf"
+run_profile_stop() { # CP_RESULT INVOCATION [MAINPID]
+  CP_RESULT=$1 INVOCATION_ID=$2 MAINPID=${3:-$$} SERVICE_RESULT=success OMAMOBILE_MODEM_RUN=$w/run MODEM_CP=$w/fake-cp \
+    CAPTURE_LOG=$w/capture bash -c '
+      set -euo pipefail
+      say() { :; }
+      modem_nv_capture() { printf "%s\n" "$1" >> "$CAPTURE_LOG"; }
+      eval "$1"
+      profile_stop
+    ' _ "$stop_function"
+}
+id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+run_profile_stop 1 "$id" && fail "a failed CP power-off fails the stop"
+[[ $(cat "$w/capture") == stop && ! -e $w/run/stop-$id ]] || fail "a failed stop still captures the NV, and writes no witness"
+rm -f "$w/run/intent-$id"
+run_profile_stop 0 "$id" || fail "a confirmed power-off is a clean stop"
+[[ $(cat "$w/run/stop-$id") == "$id" ]] || fail "a confirmed stop writes its invocation's witness"
+run_profile_stop 0 "$id" 2>/dev/null && fail "a witness is never overwritten"
+[[ $(cat "$w/run/stop-$id") == "$id" ]] || fail "the witness is intact"
+rm -f "$w/run/stop-$id" "$w/run/intent-$id"
+run_profile_stop 0 "$id" 0 || fail "a stop after the main process is gone succeeds"
+[[ ! -e $w/run/stop-$id ]] || fail "no main process, no witness"
+run_profile_stop 0 invalid || fail "a stop by hand, without a unit invocation, succeeds"
+[[ ! -e $w/run/stop-invalid ]] || fail "no invocation, no witness"
+[[ $(cat modem/stop-witness-version) == 1 ]] || fail "the stop witness contract file says 1"
+rm -rf "$w"
+pass "profile_stop witnesses only a confirmed power-off, once, for a running unit invocation"
 
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
 # A made-up modem.bin: TOC, BOOT, INFO entries (32 bytes each; the TOC
@@ -91,16 +169,20 @@ for f in usr/share/doc/omamobile-modem/README.md usr/lib/omamobile-vendor/omamob
          usr/lib/omamobile-vendor/profiles/modem.conf usr/lib/omamobile-vendor/modem/props.conf \
          usr/lib/systemd/system/omamobile-modem.service usr/lib/udev/rules.d/60-omamobile-modem-nv-ro.rules \
          usr/lib/omamobile-vendor/omamobile-modem-nv-overlay usr/bin/omamobile-modem \
-         usr/lib/systemd/system/omamobile-modem-nv-overlay.service usr/lib/systemd/system/omamobile-modem-nv-overlay.timer; do
+         usr/lib/systemd/system/omamobile-modem-nv-overlay.service usr/lib/systemd/system/omamobile-modem-nv-overlay.timer \
+         usr/lib/omamobile-vendor/omamobile-modem-switch usr/lib/omamobile-vendor/omamobile-modem-sleep-policy usr/share/polkit-1/actions/org.omamobile.modem.policy; do
   [[ -e $stage/$f ]] || fail "staged $f"
 done
 grep -qx 'persist.vendor.modem.efs.clear.action=none' modem/props.conf ||
   fail "efs.clear.action is pinned to none (empty clears NV)"
 grep -qx 'vendor.modem.bin.path=/mnt/vendor/modem_img/images/default/modem.bin' modem/props.conf ||
   fail "rfsd reads its TOC from the firmware file (vendor.modem.bin.path)"
+# Only what systemd-analyze says about the staged unit counts: it also loads the
+# host's own units, and a warning about one of those (they begin with the host's
+# unit path) failed the nightly publish on the build host on 2026-11-18.
 if command -v systemd-analyze >/dev/null; then
   systemd-analyze verify --man=no "$stage"/usr/lib/systemd/system/omamobile-modem{.service,-inhibit.service,-boot.target} 2>&1 |
-    grep -v -e 'not executable' -e 'No such file' -e 'omamobile-aoc.service' -e 'omamobile-audio.service' \
+    grep -v -e '^/usr/lib/systemd/' -e '^/lib/systemd/' -e '^/etc/systemd/' -e '^/run/systemd/' -e 'not executable' -e 'No such file' -e 'omamobile-aoc.service' -e 'omamobile-audio.service' \
       -e 'omamobile-sitd.service' -e 'omamobile-sit-data.service' -e 'omamobile-mmd.service' -e '^$' &&
     fail "unit verify" || true
 fi
@@ -165,7 +247,7 @@ pass "a refused start leaves the persistent marker as it was"
 # (it needs CPIF's ports) with the latch removed on a refusal, READY after
 # the check, and the profile last.
 s=lib/omamobile-modem-start
-lineof() { grep -n "$1" $s | head -1 | cut -d: -f1; }
+lineof() { grep -n "$1" $s | sed -n 1p | cut -d: -f1; }
 l_prov_refuse=$(lineof "isn't provisioned"); l_mark_refuse=$(lineof 'never reached ONLINE; skipping'); l_up_refuse=$(lineof 'refuse_unclean$')
 l_inhibit=$(lineof 'no sleep inhibitor held'); l_latch=$(lineof '> "\$MARK"'); l_latch_sync=$(awk -v n="$l_latch" 'NR == n + 1' $s)
 l_modprobe=$(lineof '^[[:space:]]*modprobe '); l_check=$(lineof 'omamobile-vendor-chroot" modem check'); l_rm=$(lineof '^  rm -f "\$MARK"')
@@ -199,6 +281,11 @@ pass "start script: markers before the drivers, the check after them, READY befo
 m=$t/markers; mkdir -p "$m/root"; : > "$m/nv.sha256"; printf 'ro.boot.cdt_hwid=TESTID\n' > "$m/props.conf"
 export OMAMOBILE_MODEM_LATCH=$m/latch OMAMOBILE_MODEM_UP_MARK=$m/up OMAMOBILE_MODEM_HOLD=$m/hold OMAMOBILE_MODEM_REFUSED=$m/run/refused
 export OMAMOBILE_MODEM_CHROOT=$m/root OMAMOBILE_MODEM_NV_SUMS=$m/nv.sha256 OMAMOBILE_MODEM_PROPS=$m/props.conf
+# What a refusal releases: a fake systemctl that logs its arguments, and an
+# empty module directory (no modem driver loaded) unless a test adds one.
+mkdir -p "$m/sysmodule"
+printf '#!/bin/sh\ncase $1 in is-active) [ -e %s/inhibit-active ];; *) echo "$*" >> %s/systemctl.log;; esac\n' "$m" "$m" > "$m/systemctl"; chmod +x "$m/systemctl"
+export OMAMOBILE_MODEM_SYSMODULE=$m/sysmodule OMAMOBILE_MODEM_SYSTEMCTL=$m/systemctl
 start() { timeout 20 bash $s "$@" 2>&1; }
 past() { OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS=1 start "$@"; }
 stop_line='past the marker checks, stopping here (test only)'
@@ -225,6 +312,72 @@ done
 grep -q 'CHROOT=\${OMAMOBILE_MODEM_CHROOT:-\$LIB/modem/root}' $s && grep -q 'NV_SUMS=\${OMAMOBILE_MODEM_NV_SUMS:-/etc/omamobile/modem-nv.sha256}' $s &&
   grep -q 'PROPS=\${OMAMOBILE_MODEM_PROPS:-/var/lib/omamobile-vendor/modem/props.conf}' $s || fail "the script checks the same three paths as the units"
 pass "a phone that isn't provisioned is refused quietly, by the units' conditions and by the script"
+# M6 (MODEM-PLAN section 7): omamobile-modem-sleep-policy decides where the
+# phone may sleep with the modem up, for the inhibitor unit (ExecCondition=,
+# inverted: exit 0 holds the lock) and the start script (check) alike; the
+# script's behaviour with it is in test_link.py. Here the policy itself runs
+# for every combination, with the device's files, the owner's files and the
+# kernel's link module all under $m.
+unit=systemd/omamobile-modem-inhibit.service
+grep -qx 'ExecCondition=/usr/lib/omamobile-vendor/omamobile-modem-sleep-policy inhibit' $unit ||
+  fail "the inhibitor unit asks the sleep policy (inhibit) before it takes the lock"
+[[ $(grep -c '^ExecCondition=' $unit) == 1 && $(grep -c '^ConditionPathExists=|' $unit) == 0 ]] ||
+  fail "the policy is the unit's only sleep decision (no triggering path conditions left)"
+grep -q 'SLEEP_POLICY=\${OMAMOBILE_MODEM_SLEEP_POLICY:-\$LIB/omamobile-modem-sleep-policy}' $s ||
+  fail "the start script asks the same policy"
+[[ $(lineof 'if "\$SLEEP_POLICY" check; then') -lt $l_inhibit ]] || fail "the policy is asked before the inhibitor refusal"
+pol=lib/omamobile-modem-sleep-policy
+! grep -q '^set -e' $pol || fail "the policy has no set -e: an error must fall through to keeping the inhibitor"
+mkdir -p "$m/m6"
+policy() { # policy MODE: the answer's exit code; its line in $m/m6/why
+  OMAMOBILE_MODEM_SUSPEND_VERIFIED=$m/m6/verified OMAMOBILE_MODEM_SUSPEND_RUNBOOK=$m/m6/runbook \
+  OMAMOBILE_MODEM_SUSPEND_ENABLE=$m/m6/enable OMAMOBILE_MODEM_SUSPEND_DISABLE=$m/m6/disable \
+  OMAMOBILE_MODEM_LINK_MODULE=$m/m6/link.ko bash $pol "$1" 2> "$m/m6/why"
+}
+new_kernel() { printf '\x7fELF\0\0016sleep refused before the freeze: link %%s, PHY %%s\n' > "$m/m6/link.ko"; }
+sym_kernel() { printf '\x7fELF\0gs201_pcie_cp_pm_notify\0gs201_pcie_cp_suspend_noirq\0' > "$m/m6/link.ko"; }
+old_kernel() { printf '\x7fELF\0gs201_pcie_cp_suspend_noirq\0\0016modem PCIe ch0 bring-up\n' > "$m/m6/link.ko"; }
+expect() { # expect yes|no WHAT: check and inhibit agree, inverted
+  local c i
+  c=0; policy check || c=$?; i=0; policy inhibit || i=$?
+  if [[ $1 == yes ]]; then [[ $c == 0 && $i == 1 ]] || fail "$2: may sleep with the modem up (check $c, inhibit $i): $(cat "$m/m6/why")"
+  else [[ $c == 1 && $i == 0 ]] || fail "$2: the inhibitor holds (check $c, inhibit $i): $(cat "$m/m6/why")"; fi
+}
+reset_m6() { rm -f "$m/m6"/{verified,runbook,enable,disable,link.ko}; }
+reset_m6; new_kernel
+expect no "no device declaration, no owner's file"
+touch "$m/m6/enable"; expect no "the owner's enable file alone (a phone whose device ships no marker: the 9a, the 6 Pro)"
+grep -c "ignored" "$m/m6/why" >/dev/null || fail "the enable file alone is reported as ignored: $(cat "$m/m6/why")"
+rm "$m/m6/enable"; touch "$m/m6/runbook"; expect no "the runbook marker alone"
+touch "$m/m6/enable"; expect yes "the attended runbook's pair (#556's enable file beside the runbook marker)"
+reset_m6; new_kernel; touch "$m/m6/verified"; expect yes "the device's suspend-verified on a kernel with #232 (the 7 Pro's default)"
+grep -c "may sleep with the modem up" "$m/m6/why" >/dev/null || fail "the yes says so: $(cat "$m/m6/why")"
+sym_kernel; expect yes "a kernel module with the notifier's symbol only"
+old_kernel; expect no "the device's suspend-verified on a kernel without #232's early refusal"
+grep -c "lacks the modem link's early sleep refusal" "$m/m6/why" >/dev/null || fail "the old kernel is named as the reason: $(cat "$m/m6/why")"
+rm -f "$m/m6/link.ko"; expect no "no link module for the running kernel"
+: > "$m/m6/link.ko"; chmod 000 "$m/m6/link.ko"
+[[ -r $m/m6/link.ko ]] || expect no "a link module that can't be read"
+chmod 644 "$m/m6/link.ko"
+new_kernel; touch "$m/m6/disable"; expect no "the owner's modem-suspend-disable beside the device's declaration"
+grep -c "the owner keeps" "$m/m6/why" >/dev/null || fail "the opt-out is named: $(cat "$m/m6/why")"
+touch "$m/m6/enable" "$m/m6/runbook"; expect no "the opt-out wins over the runbook pair too"
+reset_m6; touch "$m/m6/verified"
+if command -v zstd >/dev/null; then
+  printf '\x7fELF\0\0016sleep refused before the freeze\n' | zstd -q -o "$m/m6/link.ko.zst"
+  OMAMOBILE_MODEM_SUSPEND_VERIFIED=$m/m6/verified OMAMOBILE_MODEM_SUSPEND_DISABLE=$m/m6/disable \
+    OMAMOBILE_MODEM_LINK_MODULE=$m/m6/link.ko.zst bash $pol check 2>/dev/null || fail "a zstd-compressed module with #232 is read"
+  rm -f "$m/m6/link.ko.zst"
+fi
+# Without a named module, the running kernel's is looked up with modinfo; a
+# modinfo that finds no pcie_gs201_cp (as on a laptop; makepkg's check on the
+# phone finds the real one) means no.
+mkdir -p "$m/m6/bin"; printf '#!/bin/sh\nexit 1\n' > "$m/m6/bin/modinfo"; chmod +x "$m/m6/bin/modinfo"
+PATH=$m/m6/bin:$PATH OMAMOBILE_MODEM_SUSPEND_VERIFIED=$m/m6/verified OMAMOBILE_MODEM_SUSPEND_DISABLE=$m/m6/disable \
+  OMAMOBILE_MODEM_LINK_MODULE= bash $pol inhibit 2>/dev/null || fail "no link module found by modinfo: the inhibitor holds"
+rc=0; bash $pol bogus 2>/dev/null || rc=$?; [[ $rc == 2 ]] || fail "an unknown mode is a usage error"
+reset_m6
+pass "the sleep policy: the device's declaration, no owner's opt-out and a kernel with #232's early refusal, or the inhibitor holds"
 # The bring-up latch: refused until --retry (a hang in the bring-up never repeats on its own).
 printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$m/latch"
 out=$(start) && fail "a bring-up latch is refused"
@@ -232,27 +385,46 @@ out=$(start) && fail "a bring-up latch is refused"
 [[ -e $m/latch && $(cat "$m/run/refused") == "Off: last bring-up hung" ]] || fail "the latch stays, with its reason for the tile"
 out=$(start) && fail "the latch refuses the boot after too"
 rm -f "$m/latch"
+# A refusal before any modem driver loads releases the sleep block; with a
+# driver loaded (here cpif) it stays until the reboot, and an inhibitor that
+# isn't running (an unprovisioned phone skips it) is left alone.
+rm -f "$m/systemctl.log"; printf 'x boot y\n' > "$m/latch"
+out=$(start) && fail "a latch refusal fails"
+[[ ! -e $m/systemctl.log ]] || fail "no inhibitor running: nothing to release"
+: > "$m/inhibit-active"
+out=$(start) && fail "a latch refusal fails"
+[[ $(cat "$m/systemctl.log" 2>/dev/null) == "kill omamobile-modem-inhibit.service" && $out == *"sleep is no longer blocked"* ]] ||
+  fail "a refusal with no modem driver loaded kills the inhibitor: $(cat "$m/systemctl.log" 2>/dev/null) / $out"
+rm -f "$m/systemctl.log"; mkdir -p "$m/sysmodule/cpif"
+out=$(start) && fail "a latch refusal fails"
+[[ ! -e $m/systemctl.log && $out != *"no longer blocked"* ]] || fail "with a modem driver loaded the inhibitor stays: $(cat "$m/systemctl.log" 2>/dev/null)"
+rmdir "$m/sysmodule/cpif"; mkdir -p "$m/sysmodule/pcie_gs201_cp"
+out=$(start) && fail "a latch refusal fails"
+[[ ! -e $m/systemctl.log ]] || fail "with the link driver loaded (pcie-gs201-cp as pcie_gs201_cp) the inhibitor stays"
+rmdir "$m/sysmodule/pcie_gs201_cp"; rm -f "$m/latch" "$m/systemctl.log" "$m/inhibit-active"
+# A driver that doesn't load is a refusal too (so it can release the block),
+# not an exit through set -e.
+[[ $(grep -c '^[[:space:]]*modprobe .*|| refuse "Off: ' $s) -eq 3 ]] || fail "every modprobe refuses when it fails"
+grep -q 'release_inhibitor$' $s && [[ $(grep -c 'release_inhibitor' $s) -eq 2 ]] || fail "only refuse() releases the inhibitor"
+pass "a refusal before any modem driver loads releases the sleep block; after one, it stays"
 # A stale modem-up marker (a boot that ended with the modem up and no clean
-# stop) refuses once: the marker moves aside, named by the time, and the
-# next boot gets past the markers (here: to the test stop point, with the
-# refused copy still beside the marker's place and no latch written). The
-# earlier refusal's reason stays until the inhibitor check has passed, which
-# the stop point comes before.
+# stop: a flat battery, or an owner who held the keys on a frozen phone) is
+# counted and the modem starts all the same (0.1.19; before, it cost that
+# boot its modem with nothing on the screen saying why): the marker moves
+# aside, named by the time, and the start gets past the markers (here: to
+# the test stop point, with the copy beside the marker's place, no latch
+# written and no refusal for the tile).
 stale() { printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$m/up"; }
+rm -f "$m/run/refused"
 stale
-out=$(start) && fail "a modem-up marker is refused"
-[[ $out == *"ended without a clean stop"* && $out == *"journalctl -b -1"* ]] || fail "the modem-up refusal says where to look: $out"
-[[ $out == *"the next boot starts the modem again"* ]] || fail "the refusal says the next boot starts: $out"
+out=$(past) || fail "one unclean end doesn't cost the next boot its modem (rc=$?): $out"
+[[ $out == *"ended without a clean stop"* && $out == *"journalctl -b -1"* ]] || fail "the start says what it found and where to look: $out"
+[[ $out == *"the modem starts on this boot all the same"* && $out == *"$stop_line"* && $out != *"never reached ONLINE"* ]] ||
+  fail "after one unclean end the start goes on: $out"
 [[ ! -e $m/up && ! -e $m/latch ]] || fail "the stale marker is moved aside, nothing else written"
-[[ $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] || fail "the refused marker is kept beside the marker's place: $(ls "$m")"
-grep -q "0000-000000000000" "$m"/up.refused-* || fail "the kept copy is the stale marker's content"
-[[ $(cat "$m/run/refused") == "Off after a hang or reset" ]] || fail "the reason for the tile: $(cat "$m/run/refused")"
-out=$(past) || fail "the boot after a refused one gets past the markers (rc=$?): $out"
-[[ $out == *"$stop_line"* && $out != *"ended without a clean stop"* && $out != *"never reached ONLINE"* ]] ||
-  fail "the boot after a refused one starts the modem again: $out"
-[[ ! -e $m/up && ! -e $m/latch && $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] ||
-  fail "a start past the markers writes nothing before the stop point and keeps the refused copy: $(ls "$m")"
-[[ $(cat "$m/run/refused") == "Off after a hang or reset" ]] || fail "the reason stays until every refusal has passed: $(cat "$m/run/refused")"
+[[ $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] || fail "the counted marker is kept beside the marker's place: $(ls "$m")"
+grep -c "0000-000000000000" "$m"/up.refused-* >/dev/null || fail "the kept copy is the stale marker's content"
+[[ ! -e $m/run/refused ]] || fail "one unclean end leaves no refusal for the tile: $(cat "$m/run/refused")"
 # The second refusal holds: the retry's boot ended unclean too (a stale
 # marker with the refused copy still beside it), so the marker stays, no
 # second copy is made, and every boot refuses until --retry. A clean stop of
@@ -266,12 +438,42 @@ out=$(start) && fail "the second unclean boot in a row is refused"
 [[ $(cat "$m/run/refused") == "Off after a hang or reset (held)" ]] || fail "the held reason for the tile: $(cat "$m/run/refused")"
 out=$(start) && fail "the held marker refuses the boot after too"
 [[ $out == *"no clean stop since the last refusal"* && -e $m/up && $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] || fail "held: the marker and the one copy stay: $out"
+# reboot-to's note (in a directory of its own, so the state above is kept):
+# a modem-up marker from the boot the note names ended on purpose (push, a
+# reboot to the bootloader) and isn't counted: the marker and the note go and
+# the start gets past the markers, also where an unclean end is already
+# counted. That counted copy stays: the note doesn't end a streak, so a hang,
+# a push and a second hang are held. A note naming another boot changes
+# nothing: the marker is counted as an unclean end as above, and with one
+# already counted it is held.
+n=$t/note-markers; mkdir -p "$n/run"
+nstart() { OMAMOBILE_MODEM_LATCH=$n/latch OMAMOBILE_MODEM_UP_MARK=$n/up OMAMOBILE_MODEM_HOLD=$n/hold OMAMOBILE_MODEM_REFUSED=$n/run/refused \
+  OMAMOBILE_DELIBERATE_RESTART=$n/note OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS=1 timeout 20 bash $s 2>&1; }
+printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$n/up"
+printf '%s\n' 11111111-1111-1111-1111-111111111111 > "$n/note"
+out=$(nstart) || fail "a note from another boot leaves the first unclean end to start as without it (rc=$?): $out"
+[[ -e $n/note && $out == *"ended without a clean stop"* && $out != *"ended with reboot-to"* ]] || fail "a note from another boot clears nothing: $out"
+[[ ! -e $n/up && $(ls "$n"/up.refused-* | wc -l) -eq 1 ]] || fail "a note from another boot: the marker is counted as an unclean end: $(ls "$n")"
+printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$n/up"
+out=$(nstart) && fail "a note from another boot doesn't save the second unclean end from the hold: $out"
+[[ -e $n/note && -e $n/up && $out == *"no clean stop since the last refusal"* && $out != *"ended with reboot-to"* ]] || fail "a note from another boot, a second unclean end: held: $out"
+rm -f "$n"/up* "$n/note" "$n/run/refused"
+printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$n/up"
+: > "$n/up.refused-x"
+printf '%s\n' 00000000-0000-0000-0000-000000000000 > "$n/note"
+out=$(nstart) || fail "a deliberate restart gets past the markers (rc=$?): $out"
+[[ $out == *"ended with reboot-to"* && $out == *"$stop_line"* && $out != *"ended without a clean stop"* ]] || fail "a deliberate restart isn't a hang: $out"
+[[ ! -e $n/up && ! -e $n/note && ! -e $n/latch ]] || fail "the note clears the marker and itself, and writes no latch: $(ls "$n")"
+[[ -e $n/up.refused-x ]] || fail "the note keeps an unclean end already counted: $(ls "$n")"
+printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 22222222-2222-2222-2222-222222222222 > "$n/up"
+out=$(nstart) && fail "a hang, a deliberate restart and a second hang are held: $out"
+[[ -e $n/up && $out == *"no clean stop since the last refusal"* ]] || fail "the streak outlives a deliberate restart: $out"
 printf '%s boot %s\n' "$(date -Is)" "$(cat /proc/sys/kernel/random/boot_id)" > "$m/up"
 out=$(SERVICE_RESULT=success bash $s --stopped 2>&1) || fail "--stopped exits 0"
 [[ ! -e $m/up && -z $(ls "$m"/up.refused-* 2>/dev/null) ]] || fail "a clean stop of this boot's marker removes the refused copies: $(ls "$m")"
 stale
-out=$(start) && fail "after a clean stop a stale marker is refused once again"
-[[ $out == *"the next boot starts the modem again"* && ! -e $m/up && $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] ||
+out=$(past) || fail "after a clean stop one unclean end starts the modem again (rc=$?): $out"
+[[ $out == *"the modem starts on this boot all the same"* && ! -e $m/up && $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] ||
   fail "the streak starts over after a clean stop: $out $(ls "$m")"
 rm -f "$m"/up.refused-*
 # The owner's hard stop: with the hold flag the marker stays, and every
@@ -331,7 +533,7 @@ grep -qx 'DefaultDependencies=no' systemd/omamobile-modem-boot.target || fail "t
 grep -qx 'WantedBy=multi-user.target' systemd/omamobile-modem-boot.target || fail "the boot target is enabled under multi-user.target"
 grep -q 'systemctl mask omamobile-modem-boot.target' systemd/omamobile-modem-boot.target || fail "the target says how to keep the stack off (a vendor link survives disable)"
 ! grep -q '^Requires=' systemd/omamobile-modem-boot.target || fail "the boot target only wants (a missing unit is fine)"
-[[ -z $(find "$stage" -name '*.wants' -o -name '*.requires' | head -1) ]] || fail "no wants or requires link is shipped: $(find "$stage" -name '*.wants' -o -name '*.requires')"
+[[ -z $(find "$stage" -name '*.wants' -o -name '*.requires' | sed -n 1p) ]] || fail "no wants or requires link is shipped: $(find "$stage" -name '*.wants' -o -name '*.requires')"
 ! grep -rq 'systemctl enable' install || fail "the install script enables nothing"
 pass "the inhibitor, the modem unit and the target (enabled by the device package, not here)"
 
@@ -345,6 +547,95 @@ printf 'ro.boot.cdt_hwid=TESTID\npersist.vendor.modem.cdt_hwid=TESTID\n' > "$t/p
 printf 'ro.boot.cdt_hwid=TESTID\n' > "$t/p4"; cdt "$t/p4" || fail "the persist copy is optional"
 cdt "$t/missing" && fail "a missing props file is refused"
 pass "board id required"
+
+# The on/off switch (the shell's Mobile network page): a fake systemctl
+# records what it's asked. "off" only masks; "on" unmasks and starts the
+# target only when this boot's modem never started and the phone is
+# provisioned; status reads without root. The switch exists only where the
+# target is wanted at boot (SW_WANTED: the 7 Pro's vendor link) or masked.
+sw=lib/omamobile-modem-switch
+mkdir -p "$t/sw/bin" "$t/sw/prov"
+cat > "$t/sw/bin/systemctl" <<'SH'
+#!/bin/bash
+echo "$*" >> "$SW_LOG"
+case $1 in
+  is-enabled) if [[ -e $SW_MASKED ]]; then echo masked; else echo disabled; fi ;;
+  is-active) if [[ $3 == omamobile-modem-inhibit.service ]]; then [[ -e $SW_INHIBIT ]]; else [[ -e $SW_ACTIVE ]]; fi ;;
+  show) [[ $2 == -p && $3 == WantedBy ]] || exit 1; [[ -e $SW_WANTED ]] && echo "multi-user.target" || echo ;;
+  mask) touch "$SW_MASKED" ;;
+  unmask) rm -f "$SW_MASKED" ;;
+esac
+SH
+chmod +x "$t/sw/bin/systemctl"
+: > "$t/sw/prov/a"; : > "$t/sw/wanted"
+swrun() {
+  SW_LOG=$t/sw/log SW_MASKED=$t/sw/masked SW_ACTIVE=$t/sw/active SW_WANTED=$t/sw/wanted SW_INHIBIT=$t/sw/inhibit \
+    OMAMOBILE_SYSTEMCTL=$t/sw/bin/systemctl OMAMOBILE_MODEM_BOOT_MARK=$t/sw/mark \
+    OMAMOBILE_MODEM_PROVISION="${SW_PROV:-$t/sw/prov/a}" "$@"
+}
+swfield() { python3 -c 'import json,sys; print(str(json.loads(sys.stdin.read())[sys.argv[1]]).lower())' "$1"; }
+[[ $(swrun "$sw" status | swfield enabled) == true ]] || fail "switch: on by default"
+[[ $(swrun "$sw" status | swfield available) == true ]] || fail "switch: available where the target is wanted at boot"
+[[ $(swrun "$sw" status | swfield sleep_blocked) == false ]] || fail "switch: no inhibitor, no sleep block"
+: > "$t/sw/inhibit"
+[[ $(swrun "$sw" status | swfield sleep_blocked) == true ]] || fail "switch: the inhibitor reads as the sleep block"
+rm -f "$t/sw/inhibit"
+OMAMOBILE_MODEM_SWITCH_UID=1000 swrun "$sw" off 2>/dev/null && fail "switch: off needs root"
+rm -f "$t/sw/log"
+out=$(OMAMOBILE_MODEM_SWITCH_UID=0 swrun "$sw" off)
+[[ $(swfield enabled <<< "$out") == false ]] || fail "switch: off masks"
+grep -c -e stop -e start "$t/sw/log" >/dev/null && fail "switch: off stops or starts nothing"
+# Off while this boot's modem runs: a restart is needed.
+date > "$t/sw/mark"; : > "$t/sw/active"
+[[ $(swrun "$sw" status | swfield restart_needed) == true ]] || fail "switch: off with the modem up needs a restart"
+# On again, the modem already started: unmasked, nothing started.
+rm -f "$t/sw/log"
+out=$(OMAMOBILE_MODEM_SWITCH_UID=0 swrun "$sw" on)
+[[ $(swfield enabled <<< "$out") == true && $(swfield restart_needed <<< "$out") == false ]] || fail "switch: on again with the modem up"
+grep -c start "$t/sw/log" >/dev/null && fail "switch: never a second start in a boot"
+# Started and stopped this boot, switched on: a restart, not a start.
+rm -f "$t/sw/active" "$t/sw/log"
+out=$(OMAMOBILE_MODEM_SWITCH_UID=0 swrun "$sw" on)
+grep -c start "$t/sw/log" >/dev/null && fail "switch: a stopped modem is not started again in the boot"
+[[ $(swfield restart_needed <<< "$out") == true ]] || fail "switch: a stopped modem needs a restart"
+# Never started this boot (masked at boot), switched on: started now.
+rm -f "$t/sw/mark" "$t/sw/log"
+OMAMOBILE_MODEM_SWITCH_UID=0 swrun "$sw" off >/dev/null
+OMAMOBILE_MODEM_SWITCH_UID=0 swrun "$sw" on >/dev/null
+grep -qx 'start --no-block omamobile-modem-boot.target' "$t/sw/log" || fail "switch: on starts a modem that never started this boot"
+# Not provisioned: unmasked, not started.
+rm -f "$t/sw/log" "$t/sw/prov/a"
+OMAMOBILE_MODEM_SWITCH_UID=0 swrun "$sw" on >/dev/null
+grep -c start "$t/sw/log" >/dev/null && fail "switch: an unprovisioned phone is not started"
+[[ $(swrun "$sw" status | swfield provisioned) == false ]] || fail "switch: provisioned reads the files"
+# props.conf sits in a root-only folder on the phone, and status runs as
+# the user: a folder that can't be searched counts, a missing one doesn't.
+mkdir -p "$t/sw/priv"; : > "$t/sw/priv/props.conf"; chmod 000 "$t/sw/priv"
+[[ $(SW_PROV="$t/sw/priv/props.conf" swrun "$sw" status | swfield provisioned) == true ]] ||
+  fail "switch: a file in a root-only folder reads as provisioned"
+[[ $(SW_PROV="$t/sw/none/props.conf" swrun "$sw" status | swfield provisioned) == false ]] ||
+  fail "switch: a missing folder is not provisioned"
+chmod 700 "$t/sw/priv"
+[[ $(SW_PROV="$t/sw/prov/a $t/sw/none/x" swrun "$sw" status | swfield provisioned) == false ]] ||
+  fail "switch: every file in the override list counts"
+swrun "$sw" reboot 2>/dev/null && fail "switch: unknown commands refused"
+# Not masked and not wanted at boot (the 9a, the 6 Pro): no switch, and
+# "on" and "off" refuse without touching systemd.
+: > "$t/sw/prov/a"; rm -f "$t/sw/wanted" "$t/sw/masked" "$t/sw/mark" "$t/sw/active" "$t/sw/log"
+out=$(swrun "$sw" status)
+[[ $(swfield available <<< "$out") == false && $(swfield enabled <<< "$out") == false ]] ||
+  fail "switch: not masked, not wanted reads as not available and not on"
+OMAMOBILE_MODEM_SWITCH_UID=0 swrun "$sw" on 2>/dev/null && fail "switch: on refused where nothing starts the modem at boot"
+OMAMOBILE_MODEM_SWITCH_UID=0 swrun "$sw" off 2>/dev/null && fail "switch: off refused where nothing starts the modem at boot"
+grep -c -e mask -e start "$t/sw/log" >/dev/null && fail "switch: a refusal touches nothing"
+# Masked by hand on such a phone: "on" unmasks, and starts nothing.
+: > "$t/sw/masked"; rm -f "$t/sw/log"
+OMAMOBILE_MODEM_SWITCH_UID=0 swrun "$sw" on >/dev/null
+grep -c start "$t/sw/log" >/dev/null && fail "switch: on starts nothing that isn't wanted at boot"
+[[ $(swrun "$sw" status | swfield available) == false ]] || fail "switch: unmasked and not wanted is not available"
+grep -q 'exec.path">/usr/lib/omamobile-vendor/omamobile-modem-switch<' polkit/org.omamobile.modem.policy ||
+  fail "switch: the polkit action names the helper"
+pass "on/off switch: off masks only, on starts only a modem that never started this boot"
 
 # The NV overlay: its own tests (synthetic NV-like files only).
 test/nv-overlay

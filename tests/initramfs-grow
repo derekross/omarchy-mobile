@@ -14,8 +14,8 @@ for tool in mkfs.ext4 dumpe2fs resize2fs e2fsck; do command -v $tool >/dev/null 
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
 
 init=initramfs/init
-grep -q '^  grow_root "\$dev"$' "$init" || fail "boot_arch grows the root before mounting it"
-awk '/^  grow_root "\$dev"$/ {g = NR} /^  mount -t ext4/ {m = NR} END {exit !(g && m && g < m)}' "$init" || fail "grow_root runs before mount"
+grep -q '^[[:space:]]*grow_root "\$dev"$' "$init" || fail "boot_arch grows the root before mounting it"
+awk '/^[[:space:]]*grow_root "\$dev"$/ {g = NR} /^  mount -t ext4/ {m = NR} END {exit !(g && m && g < m)}' "$init" || fail "grow_root runs before mount"
 grep -q 'e2fsprogs-extra' bin/omamobile || fail "bin/omamobile initramfs includes resize2fs (e2fsprogs-extra)"
 sed -n '/^grow_root() {$/,/^}$/p' "$init" > "$t/grow.sh"
 [[ -s $t/grow.sh ]] || fail "grow_root found in $init"

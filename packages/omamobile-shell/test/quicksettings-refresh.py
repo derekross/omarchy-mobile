@@ -23,7 +23,7 @@ def main():
     template = Path(__file__).with_name("quicksettings-refresh.qml.in").read_text()
     if template.count("SCHEDULER") != 1:
         raise RuntimeError("Unexpected scheduler template")
-    runner = shutil.which("qmltestrunner6") or shutil.which("/usr/lib/qt6/bin/qmltestrunner") or shutil.which("qmltestrunner")
+    runner = shutil.which("qmltestrunner6") or shutil.which("/usr/lib/qt6/bin/qmltestrunner") or shutil.which("/usr/lib64/qt6/bin/qmltestrunner") or shutil.which("qmltestrunner")
     if not runner:
         print("quicksettings-refresh: no qmltestrunner")
         return 77

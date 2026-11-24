@@ -17,6 +17,10 @@ install -Dm644 vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
   "$destination/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
 install -Dm644 vendor/NetworkManager/conf.d/10-omamobile-usb.conf \
   "$destination/usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf"
+install -Dm644 vendor/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf \
+  "$destination/etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf"
+install -Dm644 vendor/systemd/sleep.conf.d/10-omamobile.conf \
+  "$destination/usr/lib/systemd/sleep.conf.d/10-omamobile.conf"
 install -Dm644 vendor/modprobe.d/omamobile-husky-clk-acpm.conf \
   "$destination/usr/lib/modprobe.d/omamobile-husky-clk-acpm.conf"
 install -Dm644 vendor/modprobe.d/omamobile-husky-display.conf \
@@ -37,8 +41,16 @@ install -Dm644 vendor/systemd/system/omamobile-usb-rescue.service \
   "$destination/usr/lib/systemd/system/omamobile-usb-rescue.service"
 ln -sfn ../omamobile-usb-rescue.service \
   "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service"
+install -Dm755 bin/omamobile-bt-addr "$destination/usr/bin/omamobile-bt-addr"
+install -Dm644 vendor/systemd/system/omamobile-bt-addr@.service \
+  "$destination/usr/lib/systemd/system/omamobile-bt-addr@.service"
+install -Dm644 vendor/udev/rules.d/80-omamobile-bt-addr.rules \
+  "$destination/usr/lib/udev/rules.d/80-omamobile-bt-addr.rules"
 install -Dm644 vendor/systemd/system/plymouth-quit.service.d/10-omamobile-retain-splash.conf \
   "$destination/usr/lib/systemd/system/plymouth-quit.service.d/10-omamobile-retain-splash.conf"
+for f in vendor/plymouth/themes/omarchy-trace/*; do
+  install -Dm644 "$f" "$destination/usr/share/plymouth/themes/omarchy-trace/${f##*/}"
+done
 install -Dm755 bin/omamobile-husky-aoc-start "$destination/usr/bin/omamobile-husky-aoc-start"
 install -Dm644 vendor/systemd/system/omamobile-husky-aoc.service \
   "$destination/usr/lib/systemd/system/omamobile-husky-aoc.service"
@@ -46,6 +58,12 @@ ln -sfn ../omamobile-husky-aoc.service \
   "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-husky-aoc.service"
 install -Dm644 vendor/modprobe.d/omamobile-husky-aoc.conf \
   "$destination/usr/lib/modprobe.d/omamobile-husky-aoc.conf"
+install -Dm644 charge-limit.conf \
+  "$destination/usr/share/omamobile/charge-limit.conf"
+install -Dm644 vendor/udev/rules.d/75-omamobile-charge-limit.rules \
+  "$destination/usr/lib/udev/rules.d/75-omamobile-charge-limit.rules"
+install -Dm644 vendor/systemd/system/omamobile-charge-limit-apply.service \
+  "$destination/usr/lib/systemd/system/omamobile-charge-limit-apply.service"
 install -Dm644 device.conf \
   "$destination/usr/share/omamobile/device.conf"
 install -Dm644 etc/omamobile-mirrorlist \

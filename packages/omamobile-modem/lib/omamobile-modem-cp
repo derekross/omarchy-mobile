@@ -73,32 +73,47 @@ def ioctl(command, arg=0):
         os.close(fd)
 
 
-def state():
+def state(missing_is_offline=True):
+    """The CP's state; with no boot device (CPIF not loaded) OFFLINE, unless
+    the caller needs the device's own word (power-off), when it raises."""
     try:
         return ioctl(IOCTL_GET_CP_STATUS)
     except FileNotFoundError:
-        return 0
+        if missing_is_offline:
+            return 0
+        raise
 
 
-def wait_for(target, seconds):
+def wait_for(target, seconds, missing_is_offline=True):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        if state() == target:
+        if state(missing_is_offline=missing_is_offline) == target:
             return True
         time.sleep(.25)
     return False
 
 
 def power_off():
-    if state() == 0:
-        say('CP already OFFLINE')
-        return 0
+    """0 only when the boot device itself reported OFFLINE: the profile's
+    stop witness rests on it, so a missing device is not OFFLINE here."""
+    try:
+        if state(missing_is_offline=False) == 0:
+            say('CP already OFFLINE')
+            return 0
+    except OSError as error:
+        say(f'cannot read the CP state ({error}): the power-off is unconfirmed')
+        return 1
     previous = ALLOW.read_text().strip() if ALLOW.exists() else None
     try:
         if previous is not None:
             ALLOW.write_text('Y')
         ioctl(IOCTL_POWER_OFF)
-        if not wait_for(0, 15):
+        try:
+            offline = wait_for(0, 15, missing_is_offline=False)
+        except OSError as error:
+            say(f'cannot read the CP state ({error}): the power-off is unconfirmed')
+            return 1
+        if not offline:
             say('CP did not reach OFFLINE: rfsd is kept until reboot')
             return 1
         say('CP OFFLINE')
