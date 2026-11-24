@@ -58,7 +58,9 @@ has "$(run policy org.test.Toy sometimes)" '"error":"bad policy'
 has "$(run policy org.test.Toy)" '"error":"usage'
 out=$(run state org.test.Toy); has "$out" '"package":"toy-pkg"'; has "$out" '"units":[]'
 lacks "$out" '"removable"'; lacks "$out" '"hash"'
-has "$out" '"policy":"optimized"'; has "$out" '"doze":"missing"'
+has "$out" '"policy":"optimized"'
+# "missing" only where the host has no omamobile-dozed of its own (run keeps /usr/bin on PATH)
+[[ -e /usr/bin/omamobile-dozed || -e /bin/omamobile-dozed ]] || has "$out" '"doze":"missing"'
 # with omamobile-dozed installed (on PATH): off or on by its toggle
 printf '#!/bin/bash\n' > "$tmp/bin/omamobile-dozed"; chmod +x "$tmp/bin/omamobile-dozed"
 has "$(run state org.test.Toy)" '"doze":"off"'
@@ -75,6 +77,9 @@ grep -q '^needed	unrestricted' "$pf" || fail "other app's line lost"
 mv "$pf" "$tmp/pol"; ln -s "$tmp/pol" "$pf"
 has "$(run policy needed restricted)" 'is a link'
 rm "$pf"; mv "$tmp/pol" "$pf"
+rm -f "$H/.config/omamobile/.app-policy.lock"; ln -s "$tmp/victim" "$H/.config/omamobile/.app-policy.lock"
+has "$(run policy needed restricted)" 'is a link'; [[ ! -e $tmp/victim ]] || fail "followed the lock link"
+rm "$H/.config/omamobile/.app-policy.lock"
 # stop: only this app's units in app*.slice; never another app's, never one outside app.slice
 printf '%s\n' 'app-Hyprland-toyapp-1a2b3c4d.scope app-graphical.slice' 'app-Hyprland-org.test.Toy@5e6f.service app-graphical.slice' \
   'app-Hyprland-toyappx-11111111.scope app-graphical.slice' 'app-Hyprland-toyapp-22222222.scope session.slice' > "$UNITS"

@@ -28,7 +28,7 @@ ColumnLayout {
     property string mgrStatus: ""
     property int mgrReq: -1
     property int actReq: -1
-    property bool policyBusy: false     // one policy write at a time: a later tap must not lose to a slower earlier one
+    property bool policyBusy: false     // one action (a policy write or Stop) at a time: a later tap must not take the earlier one's answer
     readonly property bool canGoBack: app !== null
     function goBack() { app = null; info = ({}); infoStatus = ""; infoReq = -1; openReq = -1; mgr = ({}); mgrStatus = ""; mgrReq = -1; actReq = -1; policyBusy = false }
     function loadMgr() { mgrBusy = true; mgrReq = actions.run("appmgr", ["state", app.id]) }
@@ -212,7 +212,7 @@ ColumnLayout {
                     text: qsTr("Stop for this session")
                     enabled: (page.mgr.units || []).length > 0 && !page.policyBusy
                     Layout.fillWidth: true
-                    onClicked: { page.mgrStatus = ""; page.actReq = actions.run("appmgr", ["stop", page.app.id]) }
+                    onClicked: { page.mgrStatus = ""; page.policyBusy = true; page.actReq = actions.run("appmgr", ["stop", page.app.id]) }
                 }
                 SettingsLabel {
                     visible: (page.mgr.units || []).length === 0

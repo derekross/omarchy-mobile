@@ -102,12 +102,13 @@ if [[ $verb == policy ]]; then
   want=$3
   [[ $want =~ ^(unrestricted|optimized|restricted)$ ]] || fail "bad policy"
   [[ ! -L $conf/omamobile && ! -L $pfile ]] || fail "the policy file is a link; not written"
+  [[ ! -L $conf/omamobile/.app-policy.lock ]] || fail "the policy lock file is a link; not written"
   mkdir -p -- "$conf/omamobile"
   # one writer at a time: two quick taps must not lose another app's line
   { exec 9>"$conf/omamobile/.app-policy.lock"; } 2>/dev/null || fail "cannot write the policy"
   flock -w 5 9 || fail "the policy file is busy"
   t=$(mktemp -- "$conf/omamobile/.app-policy.XXXXXX") || fail "cannot write the policy"
-  if [[ -f $pfile ]]; then awk -F'\t' -v id="$id" '$1 != id' "$pfile" >"$t" || { rm -f -- "$t"; fail "cannot read the policy file"; }; fi
+  if [[ -f $pfile ]]; then awk -F'\t' -v id="$id" '$1 "" != id ""' "$pfile" >"$t" || { rm -f -- "$t"; fail "cannot read the policy file"; }; fi
   [[ $want == optimized ]] || printf '%s\t%s\t%s\n' "$id" "$want" "${keys[*]}" >>"$t"
   mv -f -- "$t" "$pfile" || { rm -f -- "$t"; fail "cannot write the policy"; }
   printf '{"ok":true,"policy":"%s"}\n' "$(policy_of)"
