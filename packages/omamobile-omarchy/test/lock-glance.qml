@@ -316,6 +316,19 @@ Item {
       tryCompare(glance(), "showing", true, 2500)
     }
 
+    // Patch 0032: Quickshell's clock sleeps through a sleep, so it is off
+    // while the display is dark and on again at a wake, which reads the time.
+    function test_clock_is_off_while_dark_and_on_at_a_wake() {
+      var clock = findChild(glance(), "lockGlanceClock")
+      if (!clock) skip("this family has no patch 0032")
+      compare(clock.enabled, true, "lit: the clock runs")
+      blank()
+      compare(clock.enabled, false, "dark: the clock is off")
+      harness.view.wakeSerial += 1
+      harness.view.displayDark = false
+      compare(clock.enabled, true, "woken: the clock is on again")
+    }
+
     function test_blank_on_pin_view_returns_to_glance() {
       toPin()
       harness.password = "12"
