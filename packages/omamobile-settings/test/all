@@ -33,6 +33,19 @@ if [ "$status" != 2 ] || ! grep -q "refusing to run" "$fixture/guard.out"; then
   exit 1
 fi
 
+# And the "must exist" rule: the main run's environment with XDG_CACHE_HOME
+# pointing at a directory that doesn't exist (inside the fixture) also stops
+# with exit 2.
+status=0
+HOME="$fixture" XDG_STATE_HOME="$fixture/state" XDG_DATA_HOME="$fixture/data" XDG_CONFIG_HOME="$fixture/config" XDG_CACHE_HOME="$fixture/no-such-cache" \
+  XDG_RUNTIME_DIR="$fixture/runtime" QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
+  QT_QPA_PLATFORMTHEME= NO_AT_BRIDGE=1 GSETTINGS_BACKEND=memory DBUS_SESSION_BUS_ADDRESS=disabled: ./settings-core-tests >"$fixture/guard.out" 2>&1 || status=$?
+if [ "$status" != 2 ] || ! grep -q "points to a directory that does not exist" "$fixture/guard.out" || [ -e "$fixture/no-such-cache" ]; then
+  cat "$fixture/guard.out" >&2
+  echo "not ok - settings-core-tests refuses an XDG_*_HOME that doesn't exist (exit $status)" >&2
+  exit 1
+fi
+
 lifetime="$build_dir/lifetime"
 mkdir -p "$lifetime"
 (
