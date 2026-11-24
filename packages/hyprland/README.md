@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# hyprland (Omarchy Mobile build)
+# hyprland (Omamobile build)
 
 This is Omarchy's Hyprland 0.57.0-2 recipe (`hyprland` and `hyprpm`), built
 for aarch64 with two changes. Hyprland gave up on a refused DPMS commit after
@@ -12,8 +12,8 @@ reported the screen off, but the CRTC never turned off. See
 | --- | --- |
 | `PKGBUILD` | Omarchy's `pkgbuilds/hyprland/PKGBUILD` at `347f3d791489` (omacom-io/omarchy-pkgs), changes in its header |
 | `nvidia-egl-teardown.patch`, `wl-output-global-grace.patch`, `monitor-rule-vrr.patch` | Omarchy's patches from the same commit, unchanged (what they fix: their comments in `prepare()`) |
-| `0001-dpms-keep-retrying-a-refused-dpms-commit.patch` | The Omarchy Mobile change to `src/output/Monitor.cpp` |
-| `0002-render-hold-the-last-frame-across-a-rotation.patch` | The Omarchy Mobile change to `src/render/Renderer.cpp` and `src/render/OpenGL.cpp` (the rotation hold, below) |
+| `0001-dpms-keep-retrying-a-refused-dpms-commit.patch` | The Omamobile change to `src/output/Monitor.cpp` |
+| `0002-render-hold-the-last-frame-across-a-rotation.patch` | The Omamobile change to `src/render/Renderer.cpp` and `src/render/OpenGL.cpp` (the rotation hold, below) |
 
 ## What differs from Omarchy's `hyprland` 0.57.0-2
 

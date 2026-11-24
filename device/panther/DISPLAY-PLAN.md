@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 7 (panther) display: DCS brightness, then flip-only KMS
 
-Status (2026-11-01): G1, D1 and D2 passed (kernel: [linux-omarchy-mobile#177](https://github.com/derekross/linux-omarchy-mobile/pull/177), in review): the panel driver takes the panel over, and brightness and display off/on work over DCS, including from the shell's slider. device-panther 0.1.4 ships `allow_tx=1`, and at its boots `allow_tx` reads Y with no hand-written option. Next: D3 (flip-only KMS).
+Status (2026-11-01): G1, D1 and D2 passed (kernel: [linux-omamobile#177](https://github.com/derekross/linux-omamobile/pull/177), in review): the panel driver takes the panel over, and brightness and display off/on work over DCS, including from the shell's slider. device-panther 0.1.4 ships `allow_tx=1`, and at its boots `allow_tx` reads Y with no hand-written option. Next: D3 (flip-only KMS).
 
 Today the Pixel 7 shows the bootloader's framebuffer through simplefb and
 simpledrm: no brightness control, no screen off, no vsync. The Pixel 7 Pro
@@ -40,7 +40,7 @@ modules stay on the phone until `linux-modules-cleanup` moves them.
 | `gs-decon` on gs201 offers only the Pixel 7 Pro's 1440x3120 modes, and refuses to run when ABL's size differs | `gs-decon.c` (`gs201_decon_data`, the size check at probe) [V] |
 | The DSI command path, the panel driver and `gs-decon` are modules autoloaded from the DT; `allow_tx` and `screen_off` are set by the Pixel 7 Pro's device package | `kernel/configs/omamobile.config`, `omamobile-device-cheetah` `modprobe.d/omamobile-display.conf` [V] |
 
-## The changes ([linux-omarchy-mobile#177](https://github.com/derekross/linux-omarchy-mobile/pull/177))
+## The changes ([linux-omamobile#177](https://github.com/derekross/linux-omamobile/pull/177))
 
 1. `dt-bindings: display: panel: add Samsung S6E3FC3 P10`.
 2. `drm/panel: add Samsung S6E3FC3 command-mode panel`. It follows the

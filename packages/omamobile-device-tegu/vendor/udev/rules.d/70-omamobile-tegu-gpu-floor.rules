@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile: the GPU's lowest level on the Pixel 9a is 419 MHz, not
+# Omamobile: the GPU's lowest level on the Pixel 9a is 419 MHz, not
 # 150 MHz. simple_ondemand looks at the load every 50 ms, so a swipe or an app
 # opening after a quiet moment started at 150 MHz, and its first frames were
 # late while the governor caught up. Idle, panthor suspends the GPU (about 99 %

@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# dodge-login-sddm: start the desktop the stock Omarchy Mobile way, SDDM
+# dodge-login-sddm: start the desktop the stock Omamobile way, SDDM
 # autologin into Omarchy's session (omamobile-firstboot's s_login), instead of
 # dodge's omamobile-hyprland.service (uwsm on tty1 under PAM "login"). The
 # lock (lock-on-start, setup-stock) then asks for the PIN, as on stock.

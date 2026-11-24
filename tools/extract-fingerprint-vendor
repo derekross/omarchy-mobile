@@ -4,10 +4,10 @@
 # the Pixel 7 Pro (cheetah), the Pixel 7 (-d panther) or, with -d tegu, the
 # Pixel 9a out of a Google factory image, on the user's own machine.
 #
-# Fingerprint on Omarchy Mobile runs Google's own fingerprint HAL against the
+# Fingerprint on Omamobile runs Google's own fingerprint HAL against the
 # Goodix trusted application (g7.app) in Trusty, inside a small chroot
 # (device/cheetah/FINGERPRINT-RESEARCH.md). Those binaries are Google's and
-# not ours to redistribute, so Omarchy Mobile never ships them: this tool pulls
+# not ours to redistribute, so Omamobile never ships them: this tool pulls
 # exactly what the chroot needs from an image the user already has (the
 # factory zip from developers.google.com/android/images, or the
 # image-*.zip inside it) and nothing else.

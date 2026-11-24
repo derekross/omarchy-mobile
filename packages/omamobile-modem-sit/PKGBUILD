@@ -3,9 +3,9 @@
 pkgname=omamobile-modem-sit
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile SIT RIL for the Pixel 7 Pro's S5300: LTE registration, IMS calls and SMS, cellular data on rmnet0"
+pkgdesc="Omamobile SIT RIL for the Pixel 7 Pro's S5300: LTE registration, IMS calls and SMS, cellular data on rmnet0"
 arch=(aarch64)
-url="https://github.com/derekross/omarchy-mobile"
+url="https://github.com/derekross/omamobile"
 license=(MIT)
 # mobile-broadband-provider-info: the carrier database the automatic APN
 # reads (GNOME, CC-PDDC; arch "any", NetworkManager already pulls it in).

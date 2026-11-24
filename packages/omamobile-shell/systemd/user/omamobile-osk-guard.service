@@ -3,7 +3,7 @@
 # screensaver running (TOUCH-PLAN 0.5). Enabled for every user by a vendor
 # wants link; runs for the graphical session.
 [Unit]
-Description=Omarchy Mobile on-screen keyboard safety net
+Description=Omamobile on-screen keyboard safety net
 PartOf=graphical-session.target
 After=graphical-session.target
 

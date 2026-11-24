@@ -22,7 +22,7 @@
 # Only a published release is packaged (docs/RELEASES.md §4, §8): KERNEL_DIR
 # is the clean checkout of a release tag, kernel-YYYY.MM.DD[.N], whose HEAD
 # is the release's commit; the tag must be on the published repository
-# (LINUX_OMAMOBILE_REMOTE, default GitHub's linux-omarchy-mobile) pointing at
+# (LINUX_OMAMOBILE_REMOTE, default GitHub's linux-omamobile) pointing at
 # that commit, and the commit must be on its omamobile branch. A test build,
 # an omamobile-int snapshot or a local tag is refused, so a staged prebuilt/
 # can never become a published package by accident. `git rev-list --count
@@ -39,7 +39,7 @@
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 die() { printf 'stage: %s\n' "$*" >&2; exit 1; }
-REMOTE=${LINUX_OMAMOBILE_REMOTE:-https://github.com/derekross/linux-omarchy-mobile.git}
+REMOTE=${LINUX_OMAMOBILE_REMOTE:-https://github.com/derekross/linux-omamobile.git}
 TAG_RE='^kernel-[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$'
 
 # published TAG COMMIT: the published repository has TAG, pointing at COMMIT

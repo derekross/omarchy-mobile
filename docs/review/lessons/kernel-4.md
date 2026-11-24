@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Review lessons: Kernel (linux-omarchy-mobile) (part 4 of 4)
+# Review lessons: Kernel (linux-omamobile) (part 4 of 4)
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 

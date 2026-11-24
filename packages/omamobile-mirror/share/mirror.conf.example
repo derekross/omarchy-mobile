@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile screen mirroring: copy to ~/.config/omamobile/mirror.conf.
+# Omamobile screen mirroring: copy to ~/.config/omamobile/mirror.conf.
 # KEY=value lines; read by omamobile-mirror-run when mirroring starts.
 # The listen address is always 172.16.42.1:5900 (the USB link). ADDRESS may
 # be set only to that; anything else is refused.

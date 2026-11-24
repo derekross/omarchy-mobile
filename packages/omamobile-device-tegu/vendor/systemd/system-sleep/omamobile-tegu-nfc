@@ -10,8 +10,8 @@
 # Powering the adapter off as well (the kernel refuses a device-down while
 # polling, EBUSY, so the poll loop stops first) was the workaround for a
 # controller that didn't answer on I2C after a wake: the symptom is
-# https://github.com/derekross/omarchy-mobile/issues/132, the fix
-# https://github.com/derekross/linux-omarchy-mobile/pull/131. That step is
+# https://github.com/derekross/omamobile/issues/132, the fix
+# https://github.com/derekross/linux-omamobile/pull/131. That step is
 # off by default: it runs only while /etc/omamobile/nfc-power-off-across-sleep
 # exists (its record is one wake that needed the power key and one that
 # worked), and then the adapter is powered on again after the wake.

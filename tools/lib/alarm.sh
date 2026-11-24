@@ -205,7 +205,7 @@ alarm_base_image() {
 }
 
 # The build image: the base plus initialised keyrings (Arch Linux ARM's,
-# Omarchy's from this laptop, Omarchy Mobile's from packages/, and
+# Omarchy's from this laptop, Omamobile's from packages/, and
 # $ALARM_LOCAL_KEY when set, which is part of the image's hash), the build
 # pacman.conf, base-devel, arch-install-scripts and a "builder" user with
 # this laptop's uid. Prints its tag. $1: the repository root.

@@ -4,7 +4,7 @@
 # three per boot. Not enabled by the package yet; to use it:
 #   systemctl enable --now omamobile-sddm-guard
 [Unit]
-Description=Omarchy Mobile SDDM autologin loop guard
+Description=Omamobile SDDM autologin loop guard
 
 [Service]
 ExecStart=/usr/bin/omamobile-sddm-guard

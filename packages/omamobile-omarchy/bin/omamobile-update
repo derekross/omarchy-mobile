@@ -318,7 +318,7 @@ def set_channel(name, path=None):
             lines = f.read().splitlines()
         mode = stat.S_IMODE(os.stat(path).st_mode)
     except FileNotFoundError:
-        lines, mode = ["# Where pacman gets Omarchy Mobile's packages ([omamobile] in /etc/pacman.conf)."], 0o644
+        lines, mode = ["# Where pacman gets Omamobile's packages ([omamobile] in /etc/pacman.conf)."], 0o644
     except OSError as e:
         return "cannot read %s: %s" % (path, e.strerror)
     out, found = [], False
@@ -806,7 +806,7 @@ def inner(args):
             return 3
         env["OMAMOBILE_UPDATE_NONINTERACTIVE"] = "1"
     else:
-        print("Omarchy Mobile update: sudo asks for your PIN or password once.", flush=True)
+        print("Omamobile update: sudo asks for your PIN or password once.", flush=True)
         if subprocess.run([SUDO, "-v"]).returncode != 0:
             return 3
     stop = threading.Event()
@@ -886,7 +886,7 @@ def start(args):
         os.write(fd, (secret + "\n").encode())
         secret = None
         cmd = [SYSTEMD_RUN, "--user", "--unit=" + UNIT, "--collect", "--quiet",
-               "--description=Omarchy Mobile update", "--setenv=PATH=" + os.environ.get("PATH", "/usr/bin"),
+               "--description=Omamobile update", "--setenv=PATH=" + os.environ.get("PATH", "/usr/bin"),
                "--", os.path.abspath(__file__), "run", "--auth-fifo", fifo] + extra
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if out.returncode != 0:

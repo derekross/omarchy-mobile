@@ -36,7 +36,7 @@
 #               reset by itself within ~15-20 s. Needs the user present.
 #   b3-charger  modprobe max77759_charger default_ilim_ua=UA temp_guard=1
 #               guard_psy=max170xx_battery. default_ilim_ua is not enforced
-#               until linux-omarchy-mobile#288 is fixed (NO_AUTOIBUS stays
+#               until linux-omamobile#288 is fixed (NO_AUTOIBUS stays
 #               clear), so --ilim is not a cap. Nothing here limits the draw
 #               from the port; the guard only trips on battery voltage,
 #               current and temperature.

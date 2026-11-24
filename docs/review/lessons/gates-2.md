@@ -261,7 +261,7 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
 - **L-271. An AI author address on an early commit of a squash-merged PR lands
   on main as `Co-authored-by:`,** even after later commits fix the identity,
   and `tools/pr-check` checks only `Signed-off-by:`. *Check:* `git log
-  --format='%an <%ae>' base..head` on omarchy-mobile PRs; ask for a
+  --format='%an <%ae>' base..head` on omamobile PRs; ask for a
   self-squash or strip the trailer at merge. *From:* #98, round 25.
 - **L-262. An AGENTS or CONTRIBUTING line links only tracked files.** #125
   linked `docs/HANDOFF.md`, which doesn't exist, and a script under the

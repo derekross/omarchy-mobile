@@ -4,7 +4,7 @@
 Status (2026-10-28): charging works at stock limits with the temperature guard (section 4, C0-C5 passed). USB 2 device mode works (NCM and ACM, SSH at
 172.16.42.1) with a raven-only DT change that makes dwc3 a USB 2
 peripheral and drops `orientation-switch` from the PHY. The PR review of
-the boot glue (derekross/linux-omarchy-mobile#2) asked to keep upstream's
+the boot glue (derekross/linux-omamobile#2) asked to keep upstream's
 USB description in `gs101-pixel-common.dtsi`, so that change now lives
 only in `omamobile-gs101-int`, as a NOT FOR MERGE commit. Open: U1, does
 upstream's description work as it is?
@@ -102,14 +102,14 @@ description. Kernel `omamobile-gs101-charging` (`83a07fa16` label the
 PMIC, `75a486ca3` the battery: 4905 mAh, 4.45 V, 1466730 uA, from stock's
 `google,battery`/`google,charger` in `dtbo_idx` 6), cherry-picked onto
 `omamobile-gs101-int-power`; upstream as
-derekross/linux-omarchy-mobile#112. checkpatch clean, W=1 device trees with no
+derekross/linux-omamobile#112. checkpatch clean, W=1 device trees with no
 new warning, dt-validate with no new finding (raven's one finding,
 `soc_id`, is the base's). The package side (C4) adds
 `omamobile-charge-guard` (cheetah's) and loads the charger at boot.
 The guard's bands are raven's own, not only cheetah's: raven's stock
 `google,chg-temp-limits`, `chg-cv-limits` and `chg-cc-limits` (`dtbo_idx` 6)
 are identical to the table in the charger's temperature guard (checked in
-review, derekross/linux-omarchy-mobile#112).
+review, derekross/linux-omamobile#112).
 
 **C0 (2026-10-28, `g97f09c8cfada`, read-only, on the wall charger at
 21 %): passed.** `i2cget -f -y 2` (bus `i2c-2`, `10d50000.i2c`):

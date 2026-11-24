@@ -341,8 +341,8 @@ install --dry-run --bootloader-slots-match cloudripper-17.0-15199429 || { cat "$
 CURRENT_SLOT=b vars
 refuse "a phone running from slot b (stock there after a system update)" --bootloader-slots-match cloudripper-17.0-15199429
 grep -q -- '--reinstall' "$t/out" || fail "says how to confirm a reinstall"
-install --dry-run --reinstall --bootloader-slots-match cloudripper-17.0-15199429 || { cat "$t/out"; fail "a reinstall over Omarchy Mobile on slot b passes"; }
-grep -q 'slot b holds Omarchy Mobile' "$t/out" || fail "a reinstall says slot b will be replaced"
+install --dry-run --reinstall --bootloader-slots-match cloudripper-17.0-15199429 || { cat "$t/out"; fail "a reinstall over Omamobile on slot b passes"; }
+grep -q 'slot b holds Omamobile' "$t/out" || fail "a reinstall says slot b will be replaced"
 # The reinstall rule (2026-11-13): on slot b with --reinstall, the version
 # the phone reports is slot B's own, and no slot is switched
 install --dry-run --reinstall || { cat "$t/out"; fail "a reinstall on slot b needs no --bootloader-slots-match"; }
@@ -670,7 +670,7 @@ phone current=b active=b unbootable_b=no
 PROBE=yes stops "slot b without --reinstall" "$get"
 ((rc == 1)) || fail "a stop that is not the slot check's keeps status 1, not $rc"
 grep -c -- 'rerun with --reinstall' "$t/out" >/dev/null || fail "slot b without --reinstall gets the stock-on-b refusal, not the slot check"
-# On slot a with a slot b that has started and can still start: Omarchy Mobile
+# On slot a with a slot b that has started and can still start: Omamobile
 # after "going back to Android", or stock after a system update. Fastboot
 # can't tell which, so neither gets the round trip.
 phone unbootable_b=no
@@ -866,7 +866,7 @@ if command -v gpg >/dev/null; then
   gpg --homedir "$G" -q --batch --export > "$BD/omamobile.gpg"
   gpg --homedir "$G" -q --batch --detach-sign -o "$BD/SHA256SUMS.sig" "$BD/SHA256SUMS"
   if binstall --dry-run; then fail "refuses a bundle signed by another key"; fi
-  grep -q 'not signed by the Omarchy Mobile key' "$t/out" || fail "says the signature is not the release key's"
+  grep -q 'not signed by the Omamobile key' "$t/out" || fail "says the signature is not the release key's"
 
   # Trust only this ephemeral key in the copied installer. Sign and verify
   # real bundle bytes with GPG; production's pinned keys stay unchanged.
@@ -912,7 +912,7 @@ if command -v gpg >/dev/null; then
   # manifest check can refuse it.
   seal
   binstall --dry-run || { cat "$t/out"; fail "a signed bundle with its manifest.json installs"; }
-  grep -q 'manifest.json: Omarchy Mobile 2026.10.13 (developer preview), its plan matches the descriptor' "$t/out" \
+  grep -q 'manifest.json: Omamobile 2026.10.13 (developer preview), its plan matches the descriptor' "$t/out" \
     || { cat "$t/out"; fail "says the manifest's plan matches"; }
   mrefuse() {  # WHY PYTHON-EDIT EXPECTED-MESSAGE
     manifest
@@ -1195,7 +1195,7 @@ want="-s FAKE123 flash boot_a $t/images2/boot.img
 -s FAKE123 reboot"
 [[ $(flashing_calls) == "$want" ]] || { flashing_calls; fail "a format 2 run sends exactly slot a's images, userdata and reboot"; }
 [[ $(grep -c '^-s FAKE123 getvar all$' "$t/fastboot.log") == 3 ]] || fail "the phone is read three times: the first look, the gate before the first flash, the read-back"
-grep -c 'Done. The phone starts Omarchy Mobile from slot a' "$t/out" >/dev/null || fail "a format 2 run ends with the slot it wrote"
+grep -c 'Done. The phone starts Omamobile from slot a' "$t/out" >/dev/null || fail "a format 2 run ends with the slot it wrote"
 flashed=$t/userdata.flashed
 if command -v simg2img >/dev/null && [[ $(head -c4 "$flashed" | od -An -tx1 | tr -d ' ') == 3aff26ed ]]; then
   simg2img "$flashed" "$t/flashed.img"; flashed=$t/flashed.img

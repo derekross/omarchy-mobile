@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Review lessons: Kernel (linux-omarchy-mobile) (part 2 of 4)
+# Review lessons: Kernel (linux-omamobile) (part 2 of 4)
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
@@ -132,7 +132,7 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   FT3658/FT8756" for all devices, and the Pixel 7's fingerprint service finds
   its touchscreen by the exact string "FocalTech FT3658". *Check:* `git diff`
   the driver for `input->name`, `dev_info` and `MODULE_ALIAS` changes, then
-  `git grep -n '<old name>' origin/main -- packages tools` in omarchy-mobile;
+  `git grep -n '<old name>' origin/main -- packages tools` in omamobile;
   a per-part name goes in match data. Extends L-8 and L-277. *From:* kernel
   #260, round 60, 2026-11-17.
 - **L-850. A "Sources:" or "Tested-on:" paragraph added below the trailers
@@ -148,7 +148,7 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   `supports-clkreq` is on no Exynos board, so kernel #269 changes no phone,
   and the first board to add it carries the phone test. *Check:* `git grep -n
   '<property>' <base> -- arch/arm64/boot/dts` and the devices' overlays in
-  omarchy-mobile. Extends L-206. *From:* kernel #269, round 60, 2026-11-17.
+  omamobile. Extends L-206. *From:* kernel #269, round 60, 2026-11-17.
 - **L-848. "The value Google's driver uses" is read on every kernel branch the
   phone shipped with, and in both repositories.** For kernel #269 the Pixel
   7's 5.10 driver (`kernel/gs`) writes T_POWER_ON 130 us in
@@ -216,7 +216,7 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   Google's closed firmware and DMA to all RAM below 4 GiB; stock's
   `gs201-mfc.dtsi` puts two System MMUs and `samsung,tzmp` in front of it, and
   `gs201-s2mpu.dtsi` two S2MPUs. The maintainer's decision (2026-11-15): such a
-  node stays `disabled`, and an omarchy-mobile overlay turns it on, until the
+  node stays `disabled`, and an omamobile overlay turns it on, until the
   IOMMU is described. *Check:* for any new DMA master a board enables, grep
   Google's SoC dtsi for its `iommus`, `s2mpu` and `tzmp` lines, say what
   confines it in our tree (an IOMMU, a restricted pool, nothing), and ask for
@@ -228,7 +228,7 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   the whole string.** Husky's `klog.dtso` and `panic-probe.dtso` (and akita's
   `ufs-probe.dtso`) set their own `bootargs` without `mem_sleep_default`, so
   a boot with one of them loses what kernel #244 adds. *Check:* `git grep -l
-  'bootargs =' origin/main -- device/<codename>` in omarchy-mobile, look for
+  'bootargs =' origin/main -- device/<codename>` in omamobile, look for
   the new argument in each hit, and name in the review the overlays that
   reach the Arch session without it. Extends L-49, L-207 and L-315. *From:*
   kernel #244, round 52, 2026-11-11.
