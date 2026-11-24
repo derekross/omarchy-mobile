@@ -697,7 +697,7 @@ if [[ -n ${OMAMOBILE_APPLIB_SHARE:-} ]]; then
   bash test/applib-share >/dev/null || fail "home screen shares the drawer's app library"
 fi
 grep -c 'readonly property var drawerLibrary: drawer && drawer.appLibrary' plugins/omamobile.home/Home.qml >/dev/null || fail "the home screen uses the drawer's app library"
-pass "home screen and drawer share one app library"
+pass "the home screen uses the drawer's app library (the shared-library run is test/applib-share, with OMAMOBILE_APPLIB_SHARE set)"
 pass "home screens in landscape"
 
 # The built-ins from omarchy-widgets are the OWL originals now (the
