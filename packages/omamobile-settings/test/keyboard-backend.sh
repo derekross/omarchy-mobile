@@ -150,14 +150,13 @@ r=$(FAKE_LANGS_OLD=1 run set layouts us,gr,ru,de); has <(echo "$r") 'omamobile-s
 r=$(run list); eq "$(j "$r" '[k["option"] for k in d["switchKeys"]]')" "['alt_shift', 'ctrl_shift', 'caps', 'default']"
 eq "$(j "$r" 'len(d["layouts"])')" 8
 
-# the non-Latin copy matches Omarchy's installed input.lua (skipped where Omarchy is not installed)
-omarchy=/usr/share/omarchy/default/hypr/input.lua
-if [[ -r $omarchy ]]; then
-  want=$(sed -n '/^local non_latin_layouts =/{n;p}' "$omarchy" | tr -s ' ' | sed 's/^ *"\? *//; s/ *"\? *$//')
-  got=$(sed -n 's/^NON_LATIN = set("\(.*\)".split())$/\1/p' "$src/backends/keyboard.sh")
-  eq "$got" "$want"
-  grep -qF 'local non_latin_us_variants = " chr rus "' "$omarchy" || { echo "FAIL: Omarchy's us variants changed" >&2; exit 1; }
-else
-  echo "skip: Omarchy's input.lua not installed"
-fi
+# the copies in the backend match Omarchy's own lines, from a pinned file (never the machine's
+# /usr/share/omarchy): the non-Latin list, the us variants, and the kb_options the switch-key block copies
+pin="$src/test/omarchy-input-4.5.0-3.lua"
+want=$(sed -n '/^local non_latin_layouts =/{n;p}' "$pin" | sed 's/^ *" *//; s/ *" *$//')
+got=$(sed -n 's/^NON_LATIN = set("\(.*\)".split())$/\1/p' "$src/backends/keyboard.sh")
+eq "$got" "$want"
+eq "$(sed -n 's/^local non_latin_us_variants = " *\(.*[^ ]\) *"$/\1/p' "$pin")" "$(sed -n 's/^NON_LATIN_US = {"\(.*\)", "\(.*\)"}$/\1 \2/p' "$src/backends/keyboard.sh")"
+eq "$(sed -n 's/^local kb_options = "\(.*\)"$/\1/p' "$pin")" "$(sed -n 's/^COMPOSE = "\(.*\)"$/\1/p' "$src/backends/keyboard.sh")"
+grep -c 'kb_options .. ",grp:alts_toggle"' "$pin" >/dev/null || { echo "FAIL: pinned grp:alts_toggle line" >&2; exit 1; }
 echo "keyboard backend: ok"

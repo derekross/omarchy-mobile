@@ -9,7 +9,7 @@
 # (XKBLAYOUT=, XKBVARIANT=; typing_setup.py save_keyboard). Omarchy's default/hypr/input.lua reads that
 # file at config load. Nothing about layouts is written to ~/.config/hypr/input.lua.
 # Latin rule: Omarchy's non-Latin list (NON_LATIN below, a copy of default/hypr/input.lua; the test
-# compares it with the installed file). A non-Latin first layout gets us in front, as Omarchy does (an
+# compares it, NON_LATIN_US and COMPOSE with a pinned copy of those lines, test/omarchy-input-4.5.0-3.lua). A non-Latin first layout gets us in front, as Omarchy does (an
 # existing Latin us entry moves); a leading us:rus or us:chr counts as non-Latin too. The answer says
 # what was saved. More than 4 after that is refused.
 # Switch key: Omarchy has no store for it, so it is one marked block in the user's input.lua that sets
@@ -24,6 +24,9 @@
 # refresh rate and re-runs phone.lua). A read-back that differs is an error; the files stay.
 # On-screen keyboard: only ever add, through `omamobile-keyboard-languages add NAME` (one writer), for
 # each new layout squeekboard has a file for.
+# Fcitx: Omarchy's picker also updates the Fcitx group after a save; this doesn't. fcitx5 is installed
+# but not running in the phone session, so nothing changes there; if you start fcitx5 by hand, run
+# Omarchy's Setup > Keyboard once to update its group.
 # State (lock, the input.lua backup) lives in ${XDG_STATE_HOME:-~/.local/state}/omamobile.
 # Prints one line of JSON. Test hooks: OMAMOBILE_KBD_RULES (xkb .lst), OMAMOBILE_KEYBOARDS_DIR,
 # OMAMOBILE_KBD_LANGUAGES (the languages tool); the test puts a fake hyprctl first on PATH.

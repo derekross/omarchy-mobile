@@ -36,6 +36,18 @@ row stays hidden today: omamobile-device-husky blacklists `max77759_charger`
 (`omamobile-max77759.conf`), so there is no `max77759-charger` power supply
 until that blacklist is lifted on a kernel with
 derekross/linux-omarchy-mobile#266.
+A Keyboard page sets the hardware keyboard's layouts (1 to 4) and its switch
+key, through `backends/keyboard.sh`. Layouts go to Omarchy 4.5's own store,
+`~/.config/omarchy/keyboard-layouts` (the two lines Omarchy's picker writes),
+and apply live with one `hyprctl eval`, never a reload. A non-Latin first
+layout gets `us` in front, as Omarchy does, and the page says what was saved.
+The switch key (Alt+Shift, Ctrl+Shift, Caps Lock, or Omarchy default) is one
+marked block in `~/.config/hypr/input.lua` that sets only `kb_options`;
+"Omarchy default" takes it out. A live `kb_layout` or `kb_options` of your own
+in `input.lua` is left alone and the page says so. New layouts are added to the
+on-screen keyboard's list through `omamobile-keyboard-languages add` (needs an
+omamobile-shell with that verb), never removed. Omarchy's picker also updates
+Fcitx's group; this page doesn't (fcitx5 doesn't run in the phone session).
 Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management and
 recording controls are separate future contributions with their own runtime
 contracts and tests; this catalog does not offer those routes.
