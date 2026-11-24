@@ -83,7 +83,6 @@ Edit `/etc/omamobile/waydroid.conf` before `init`:
 | --- | --- |
 | `VANILLA` (default) | LineageOS without Google. Install F-Droid and other APKs yourself. For push notifications, microG can be installed as ordinary apps |
 | `FOSS` | Like VANILLA, with a few open-source apps preinstalled |
-| `GAPPS` | Google Play. After the first boot, register the device once at `google.com/android/uncertified` with its GSF Android ID (Waydroid's documentation, "Google Play Certification", shows how to read it from `sudo waydroid shell`). The ID identifies your phone: never paste it into an issue, a plan or a commit |
 
 Switching later needs a fresh Android data directory. Move the old one aside
 (`~/.local/share/waydroid/data`) rather than deleting it.
