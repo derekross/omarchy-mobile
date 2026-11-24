@@ -17,8 +17,8 @@ The prebuilt v29 package has SHA-256
   separate review item.
 - `check-handoff.py` validates the five-image handoff layout.
   `check-slot-b.py` validates saved Fastboot variables, image sizes and
-  hashes, and an optional full `vendor_boot_b` readback. `stage-slot-b.sh`
-  is the implementation of the shared CLI's Grizzly stage-only command.
+  hashes, and an optional full `vendor_boot_b` readback. The standalone
+  `stage-slot-b.sh` stages the five Grizzly images while A remains active.
 - Building another package requires a local AVB signing key. The signing
   key and per-device calibration and capture data stay private.
 

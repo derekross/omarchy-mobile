@@ -1,23 +1,40 @@
+#!/bin/bash
 # SPDX-License-Identifier: MIT
+# Stage the five reviewed Grizzly images while stock A remains selected.
+set -euo pipefail
 
-stage_grizzly_m1() {
-  local img=$1 version=$2 serial vars cur
-  [[ $DEVICE == grizzly ]] || die "--stage-only is for the Grizzly M1 diagnostic"
-  [[ -n ${FASTBOOT_SERIAL:-} ]] || die "--stage-only requires FASTBOOT_SERIAL"
-  [[ $version =~ ^[a-zA-Z0-9.-]+$ ]] || die "--bootloader-slots-match needs a verified bootloader version"
-  images_for_device "$img"
-  serial=$(fastboot_serial) || exit 1
-  vars=$(timeout 10 fastboot -s "$serial" getvar all 2>&1) \
-    || die "could not read the phone's Fastboot variables"
-  # D1 reports the executing bootloader version. Include the independently
-  # verified version from the operator, checking for conflicts if both exist.
-  python3 "$ROOT/device/grizzly/bringup/check-slot-b.py" "$img" "$img/SHA256SUMS" \
-    --fastboot-vars /dev/stdin --require-healthy-a <<< "$vars"$'\n'"version-bootloader:b: $version" \
-    || die "Grizzly preflight failed; no images were written"
-  flash_slot_b "$serial" "$img" boot init_boot vendor_boot vendor_kernel_boot dtbo
-  cur=$(timeout 10 fastboot -s "$serial" getvar current-slot 2>&1) \
-    || die "slot B was staged, but Fastboot did not confirm the active slot; resolve before booting"
-  [[ $(sed -n 's/^current-slot: *_\{0,1\}\([ab]\)$/\1/p' <<< "$cur") == a ]] \
-    || die "slot B was staged, but Fastboot did not confirm slot A active; resolve before booting"
-  say "Grizzly M1 staged to slot B. Fastboot confirms slot A active"
-}
+die() { printf '%s\n' "$*" >&2; exit 1; }
+
+[[ $# == 3 && $2 == --bootloader-slots-match ]] ||
+  die "usage: FASTBOOT_SERIAL=SERIAL $0 IMAGES --bootloader-slots-match VERSION"
+images=$1
+version=$3
+serial=${FASTBOOT_SERIAL:-}
+[[ -n $serial ]] || die "FASTBOOT_SERIAL is required"
+[[ $version =~ ^[a-zA-Z0-9.-]+$ ]] || die "an independently verified slot B bootloader version is required"
+[[ $(cat "$images/DEVICE" 2>/dev/null) == grizzly ]] ||
+  die "the image bundle must identify Grizzly"
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+devices=$(timeout 3 fastboot devices) || die "could not list Fastboot devices"
+awk -v serial="$serial" '$1 == serial && $2 == "fastboot" { count++ } END { exit count != 1 }' <<<"$devices" ||
+  die "FASTBOOT_SERIAL is not a phone in Fastboot"
+vars=$(timeout 10 fastboot -s "$serial" getvar all 2>&1) ||
+  die "could not read the phone's Fastboot variables"
+
+# D1 reports the running bootloader. The operator supplies the verified B version.
+python3 "$here/check-slot-b.py" "$images" "$images/SHA256SUMS" \
+  --fastboot-vars /dev/stdin --require-healthy-a <<< "$vars"$'\n'"version-bootloader:b: $version" ||
+  die "Grizzly preflight failed. No images were written."
+
+for image in boot init_boot vendor_boot vendor_kernel_boot dtbo; do
+  if ! output=$(timeout 60 fastboot -s "$serial" flash "${image}_b" "$images/$image.img" 2>&1); then
+    die "flashing ${image}_b failed. Leave B inactive until staging passes. $output"
+  fi
+  printf '%s\n' "$image: staged"
+done
+
+slot=$(timeout 10 fastboot -s "$serial" getvar current-slot 2>&1) ||
+  die "slot B was staged, but Fastboot did not confirm the active slot"
+[[ $(sed -n 's/^current-slot: *_\{0,1\}\([ab]\)$/\1/p' <<<"$slot") == a ]] ||
+  die "slot B was staged, but Fastboot did not confirm slot A active"
+printf '%s\n' "Grizzly M1 staged to slot B. Fastboot confirms slot A active."

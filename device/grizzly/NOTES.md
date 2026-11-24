@@ -526,6 +526,22 @@ scan.
 
 ## Current UFS status
 
+The host recorded these UTC times immediately before issuing each
+Fastboot reboot request for slot B.
+
+| Trial | Boot request (UTC) |
+| --- | --- |
+| v21 | 2026-11-23 18:02:12 |
+| v22 | 2026-11-23 18:34:46 |
+| v23 | 2026-11-23 19:00:52 |
+| v24 | 2026-11-23 19:19:36 |
+| v25 | 2026-11-23 19:36:58 |
+| v26 | 2026-11-23 19:50:58 |
+| v27 | 2026-11-23 20:11:07 |
+| v28 | 2026-11-23 20:35:03 |
+
+All eight requests preceded the 2026-11-24 01:11 UTC review.
+
 v21 hit a CPM timeout before the rescue marker. ABL handed
 off to it twice after one boot request and a warm crash reset.
 v22–v28 reached RAM rescue and exercised the early Malibu
@@ -540,7 +556,9 @@ VBMeta digest.
 The full v29 fixture samples PSMs before the CPM startup
 frame, around acquisition of HSIO-S, and around SGIA IRQ
 setup. It reads HC and PHY after the wrapper reports `0x10`.
-The link diagnostic remains pending. A handoff-only repack
+The full link diagnostic remains on hold pending the maintainer's
+answer about the rail and backup ordering. A handoff-only repack
+was requested at 05:43:57 UTC on 2026-11-24, after that review. It
 confirmed HSIO-S and HC at `0x10` and PHY at `0x11` before
 the CPM startup frame, with the UFS driver blacklisted.
 The [bring-up plan](BRINGUP-M1.md#v29-handoff-only-result)

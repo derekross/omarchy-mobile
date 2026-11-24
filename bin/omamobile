@@ -91,7 +91,6 @@ Usage: [DEVICE=<codename>] omamobile <command>
                    fallback behavior follows the device's boot method)
   flash            Flash the experiment images to slot B and boot them
                    (--from-slot-a: a development phone that fell back to stock on slot A)
-                   Grizzly M1: --stage-only --bootloader-slots-match VERSION
                    stages B with A active (FASTBOOT_SERIAL required)
   push             Write the images into slot B from the running phone over SSH,
                    verify them, and reboot into them (no fastboot)
@@ -1286,13 +1285,6 @@ flash_slot_b() {
 
 cmd_flash() {
   local img="$KERNEL_OUT/images" p from_a=0
-  if [[ ${1:-} == --stage-only ]]; then
-    [[ $# == 3 && $2 == --bootloader-slots-match ]] \
-      || die "usage: omamobile flash --stage-only --bootloader-slots-match VERSION"
-    source "$ROOT/device/grizzly/bringup/stage-slot-b.sh"
-    stage_grizzly_m1 "$img" "$3"
-    return
-  fi
   case ${1:-} in
     "") ;;
     --from-slot-a) from_a=1 ;;

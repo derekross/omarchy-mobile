@@ -33,6 +33,10 @@ The prior UFS trials stalled before they could expose storage.
 
 ## v29 handoff-only result
 
+The full v29 link fixture remains on hold pending the maintainer's
+answer on the rail and backup ordering. The recorded boot below is
+the handoff-only repack requested on 2026-11-24 at 05:43:57 UTC.
+
 On 2026-11-24, the Mac staged all five slot B images and matched all
 8,192 supplied bytes in the `vendor_boot_b` readback. One attended boot
 of `7.3.0-rc6-omamobile-grizzly-uic-v29` reached USB SSH in RAM rescue.
@@ -1972,8 +1976,8 @@ the executing slot. Keep the raw captures and partition readback private.
 ```sh
 adb -s "$GRIZZLY_SERIAL" reboot bootloader
 fastboot -s "$GRIZZLY_SERIAL" getvar all > "$CAPTURE/fastboot-before.txt" 2>&1
-DEVICE=grizzly KERNEL_OUT="$GRIZZLY_M1_DIR" FASTBOOT_SERIAL="$GRIZZLY_SERIAL" \
-    bin/omamobile flash --stage-only --bootloader-slots-match "$VERIFIED_SLOT_B_BOOTLOADER"
+FASTBOOT_SERIAL="$GRIZZLY_SERIAL" device/grizzly/bringup/stage-slot-b.sh \
+    "$GRIZZLY_M1_DIR/images" --bootloader-slots-match "$VERIFIED_SLOT_B_BOOTLOADER"
 fastboot -s "$GRIZZLY_SERIAL" fetch vendor_boot_b "$CAPTURE/vendor_boot_b.readback.img"
 fastboot -s "$GRIZZLY_SERIAL" getvar all > "$CAPTURE/fastboot-staged.txt" 2>&1
 printf 'version-bootloader:b: %s\n' "$VERIFIED_SLOT_B_BOOTLOADER" >> "$CAPTURE/fastboot-staged.txt"
