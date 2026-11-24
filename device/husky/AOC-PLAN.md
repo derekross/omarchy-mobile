@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 8 Pro (husky): AoC and sound plan
 
-Status 2026-11-07: kernel pull requests 203 and 204 (derekross/linux-omarchy-mobile) and package pull request 453 (derekross/omarchy-mobile) now carry the work below. Status 2026-11-06: **the AoC runs on the 8 Pro and the speakers play** (a test branch on one phone, not in a pull request). Sound goes through Google's AoC (the audio DSP): the AoC core and ALSA drivers ported from the 7 Pro's, a zuma System MMU programmer, the two CS35L41 amplifiers and Google's speaker-protection firmware. Mics, the earpiece and headset paths, calibration and the husky speaker ceilings are not done. [V] = read in a file or seen on the phone, [I] = inferred, [U] = unknown. The model is `device/cheetah/AOC-PLAN.md` (the 7 Pro's AoC is online; its Stages C0 to C10 are the template).
+Status 2026-11-07: kernel pull requests 203 and 204 (derekross/linux-omamobile) and package pull request 453 (derekross/omamobile) now carry the work below. Status 2026-11-06: **the AoC runs on the 8 Pro and the speakers play** (a test branch on one phone, not in a pull request). Sound goes through Google's AoC (the audio DSP): the AoC core and ALSA drivers ported from the 7 Pro's, a zuma System MMU programmer, the two CS35L41 amplifiers and Google's speaker-protection firmware. Mics, the earpiece and headset paths, calibration and the husky speaker ceilings are not done. [V] = read in a file or seen on the phone, [I] = inferred, [U] = unknown. The model is `device/cheetah/AOC-PLAN.md` (the 7 Pro's AoC is online; its Stages C0 to C10 are the template).
 
 The code that ran is public: branch `husky-e1-aoc-20261106` and tag `husky-test-20261106-e1-aoc` on https://github.com/Somnius/linux-omarchy-mobile (commit `7fa4d8b91`; the `uname -r` of its last build is `7.3.0-rc6-omamobile-push1-g1f109674c767`). It is Brett's c6 tag plus my commits, all "TEST ONLY": nothing there is meant to go upstream as it is. Two of the commit messages were reworded for publishing, so the commit ids in the `uname -r` of the later builds differ from the branch (the trees are the same); the table below gives both. No firmware, calibration or other blob is in the branch.
 
@@ -31,7 +31,7 @@ From Google's GPL tree (`android-gs-shusky-6.1-android16`; `kernel/devices/googl
 | Z7c | ALSA card, amplifiers linked into it, protection firmware | 2026-11-05, `g757721ba1a81` | the card `google,aoc-snd-card` with 30 PCM devices and the amplifiers' controls; protection firmware loads on both |
 | Z7d | first sound | 2026-11-05, `g74d6ba329f68` | the speaker route is the deep-buffer entry point (`TDM_0_RX Mixer EP6`); EP1 (UltraLL) hangs the AoC (see 5) |
 | Z7e | PipeWire / browser sound, boot unit | 2026-11-05, `g69c83385020e`, `gd0d87517121a` | works (see 6) |
-| Z8 | the packaged start: `omamobile-husky-aoc.service` and its script from derekross/omarchy-mobile#453 (local builds of omamobile-device-husky 0.1.9 and omamobile-audio 0.5.18 from `aafe089` and `80e5905`), no hand steps | 2026-11-09, `ga291900124c4` | see "The packaged start" below |
+| Z8 | the packaged start: `omamobile-husky-aoc.service` and its script from derekross/omamobile#453 (local builds of omamobile-device-husky 0.1.9 and omamobile-audio 0.5.18 from `aafe089` and `80e5905`), no hand steps | 2026-11-09, `ga291900124c4` | see "The packaged start" below |
 
 ### The packaged start (2026-11-09, one phone, kernel `ga291900124c4`)
 
@@ -71,7 +71,7 @@ The 7 Pro's stages (`omamobile-audio`): `media` is digital at most 737 and analo
 ## 8. Next
 
 1. This document and the public branch (done with this change).
-   Now in review: kernel pull requests derekross/linux-omarchy-mobile#203 and #204. Merged 2026-11-09: package pull request derekross/omarchy-mobile#453 (the AoC start with a hang marker and the UCM2 profile; results in "The packaged start" above).
+   Now in review: kernel pull requests derekross/linux-omamobile#203 and #204. Merged 2026-11-09: package pull request derekross/omamobile#453 (the AoC start with a hang marker and the UCM2 profile; results in "The packaged start" above).
 2. The spi-s3c64xx change as a pull request against `omamobile`, with cheetah's object file before and after, the 9a's SPI nodes, and the check that a write to one amplifier does not reach the other.
 3. The zuma System MMU v9 file beside `gs201-aoc-sysmmu.c`, with its own compatible and table.
 4. The driver changes of section 6 behind zuma's match data, with the 7 Pro's objects shown unchanged.

@@ -7,7 +7,8 @@ fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 
 # A fixture home: the tests (qmltestrunner's QML disk cache among them) must
 # never write under the real user's ~/.cache, ~/.config or ~/.local.
-real_home=$(getent passwd "$(id -u)" | cut -d: -f6)
+# A uid with no passwd entry (a container run with -u) has no home to protect.
+real_home=$(getent passwd "$(id -u)" | cut -d: -f6) || real_home=
 fixture=$(mktemp -d)
 trap 'rm -rf -- "$fixture"' EXIT
 export HOME="$fixture/home"
@@ -15,7 +16,7 @@ export XDG_CONFIG_HOME="$HOME/.config" XDG_CACHE_HOME="$HOME/.cache"
 export XDG_DATA_HOME="$HOME/.local/share" XDG_STATE_HOME="$HOME/.local/state"
 export QML_DISABLE_DISK_CACHE=1
 mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
-if [ -z "$real_home" ] || [ "$(realpath -m -- "$HOME")" = "$(realpath -m -- "$real_home")" ]; then
+if [ -n "$real_home" ] && [ "$(realpath -m -- "$HOME")" = "$(realpath -m -- "$real_home")" ]; then
   fail "HOME is a fixture, not the real home"
 fi
 pass() { printf 'ok - %s\n' "$1"; }
@@ -592,7 +593,11 @@ out=$(cd "$fake/run" && printf '0000\n4321\n4321\n' | OMAMOBILE_PIN_WAIT=1 OMAMO
 (( rc != 0 && rc != 124 )) && [[ $out == *"may or may not have changed"* ]] || fail "the slow passwd is reported as maybe changed (rc $rc): $out"
 (( rc == 75 )) || fail "a maybe-changed PIN exits with status 75 (rc $rc)"
 keeper=0
-for d in /proc/[0-9]*; do
+# only this user's cats: a fork per /proc entry took 5 s on a busy build host,
+# longer than the fake passwd lives, and the keeper had left before the scan
+# reached it
+for p in $(pgrep -u "$(id -u)" -x cat); do
+  d=/proc/$p
   if [[ $(readlink "$d/cwd" 2>/dev/null) == "$fake/run" && $(readlink "$d/fd/0" 2>/dev/null) == */ptmx && $(tr '\0' ' ' <"$d/cmdline" 2>/dev/null) == "cat " ]]; then keeper=1; fi
 done
 (( keeper )) || fail "the keeper is a plain cat on the pty, not the python that held the PINs"

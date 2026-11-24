@@ -7,7 +7,7 @@
 # partition or the modem. Does nothing unless
 # /etc/omamobile/modem-nv-overlay-enable exists.
 [Unit]
-Description=Omarchy Mobile modem: keep the modem's NV writes (overlay capture)
+Description=Omamobile modem: keep the modem's NV writes (overlay capture)
 Requisite=omamobile-modem.service
 After=omamobile-modem.service
 ConditionPathExists=/etc/omamobile/modem-nv-overlay-enable

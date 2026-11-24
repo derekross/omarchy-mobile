@@ -143,7 +143,7 @@ CPU cooling (`4fd3f0dd1`); `CONFIG_GS101_ACPM_THERMAL=m`.
 
 ## 4. Review checks for PRs #6-#9 (runbook, 2026-10-26)
 
-Derek's reviews of linux-omarchy-mobile #6-#9 asked for things only the
+Derek's reviews of linux-omamobile #6-#9 asked for things only the
 phone can show. Every step below is gated: the human runs or approves it.
 The phone runs `7.3.0-rc6-omamobile-push1-g0422abf64c05`
 (`omamobile-gs101-int` 0422abf64, images in

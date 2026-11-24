@@ -190,7 +190,7 @@ function nameFrom(description) {
 // The agent's prompt. The description goes in verbatim; the whole prompt is
 // one argv element from here to the agent (agentArgv), never a shell string.
 function createPrompt(description, dir, contract) {
-  return "Build an Omarchy Mobile home-screen widget in this folder (" + dir + ").\n"
+  return "Build an Omamobile home-screen widget in this folder (" + dir + ").\n"
     + "First read " + (contract || CONTRACT) + ", the widget contract, and follow it exactly.\n"
     + "The folder already holds a working starter: edit manifest.json (keep its id) and Widget.qml.\n"
     + "Rules: work only inside this folder; don't create, change or delete anything outside it; never use sudo or any other root tool; "
@@ -201,7 +201,7 @@ function createPrompt(description, dir, contract) {
 
 function editPrompt(description, dir, contract, name, errors) {
   var ask = String(description || "").trim()
-  return "Change the Omarchy Mobile home-screen widget \"" + (name || "") + "\" in this folder (" + dir + ").\n"
+  return "Change the Omamobile home-screen widget \"" + (name || "") + "\" in this folder (" + dir + ").\n"
     + "First read " + (contract || CONTRACT) + ", the widget contract, and follow it exactly.\n"
     + "Rules: work only inside this folder; don't create, change or delete anything outside it; never use sudo or any other root tool; "
     + "don't install packages. Keep the manifest's id. When done, run `" + TOOL + " check .` and fix every error it reports.\n"

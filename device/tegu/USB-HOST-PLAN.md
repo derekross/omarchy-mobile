@@ -4,11 +4,13 @@
 Status (2026-10-29): host mode worked end to end on 2026-10-28 (NOTES, "USB-C
 host mode through TCPM"). This plan is the setup that run used and the
 runbook for the next one, which adds two measurements for
-derekross/linux-omarchy-mobile#124: unbinding the charger with a drive
+derekross/linux-omamobile#124: unbinding the charger with a drive
 attached, and a reset without shutdown with host mode on. The device tree and
 the RT9470 module are on the kernel bring-up branch
-derekross/linux-omarchy-mobile#127 (`tegu-usb-host-bringup`, now at
-`5ada9ab0f`, not for merge: after the `5dd15e31c` the DTB comparison below
+derekross/linux-omamobile#127 (`tegu-usb-host-bringup`, at
+`5ada9ab0f` for these runs, not for merge; the branch has been rebased
+since, and the tag `tegu-usb-host-h2-record` on W4HO-ham's fork keeps
+that commit and the three named here: after the `5dd15e31c` the DTB comparison below
 used, `0caff021a` only changed a comment, `6c5d97e18` reworks the boost
 driver and `5ada9ab0f` adds the PMIC node and the boost's lines; H2b boots
 gn3 plus the overlay below, `usb-host-pmic.dtso`, not #127's DTB). The boot
@@ -18,7 +20,7 @@ helpers are in `device/tegu/usb-host/`.
 
 | Piece | Where |
 | --- | --- |
-| Board DT: fuel gauge, TCPC node | derekross/linux-omarchy-mobile#119 |
+| Board DT: fuel gauge, TCPC node | derekross/linux-omamobile#119 |
 | `usi10`/`hsi2c10`, its pins, the RT9470 node, the TCPC as dual-role with `vbus-supply`, the graph to dwc3 | #127 (USI10 clocks: #102, merged) |
 | RT9470 OTG boost module (`tegu-rt9471-boost`) | #127. Since `6c5d97e18` (the #131 follow-up) the driver keeps the RT9470's 40 s watchdog and services it from the PMIC interrupt, or from a 20 s kernel timer without it, as stock does, instead of clearing it; JEITA is off only while the boost is enabled |
 | MAX77779 charger and its `chgin-otg` regulator | #92, #124 (head `4970bcdc3820`) |
@@ -177,7 +179,8 @@ enable are the MAX77779's SGPIO6 and SGPIO7, and stock services the boost's
 40 s watchdog from that interrupt. #127 now carries the PMIC block on the
 board (`5ada9ab0f`, with its gpa8-0 line pinned as stock's `if_pmic_irq`)
 and the boost reworked to keep the watchdog and kick it from the interrupt
-(`6c5d97e18`); the block's driver is linux-omarchy-mobile#139 (`a6e10f2ba`).
+(`6c5d97e18`); the block's driver is linux-omamobile#155. These runs used
+its earlier version, #139's head (`a6e10f2ba`); #139 is closed.
 One boot before H3, with the boost module still blacklisted from H2:
 
 1. Modules: already done by H2, which installed #139's driver
@@ -490,7 +493,8 @@ hand on the current boot. The logs quoted above stay under
   driver services the 40 s watchdog from that interrupt. Until 10-29 our
   kernel had no MAX77779 sGPIO driver, so the bring-up node had no
   interrupt and the boost ran with the watchdog off. Now the reworked boost
-  driver on derekross/linux-omarchy-mobile#127 (`6c5d97e18`) keeps the
+  driver on derekross/linux-omamobile#127 (`6c5d97e18`) keeps the
   RT9470's watchdog and services it from the interrupt, or from a 20 s
   timer when the node has none, as stock does, instead of clearing it
-  (the follow-up Derek asked for on #131); the sGPIO driver is #139.
+  (the follow-up Derek asked for on #131); the sGPIO driver is
+  linux-omamobile#155 (#139, whose head these runs used, is closed).

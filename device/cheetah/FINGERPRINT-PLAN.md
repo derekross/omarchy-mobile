@@ -59,7 +59,7 @@ Omarchy lock (Quickshell PAM "omarchy-lock-fingerprint") / sudo / polkit
 | Piece | State |
 |---|---|
 | Trusty driver (`trusty_core/log/ipc/virtio`) | **On the phone** (int): loaded by `omamobile-aoc-start`; `/dev/trusty-ipc-dev0` exists; `hwmgr.aoc` answers |
-| Trusty CPU hotplug (`kthread_set_per_cpu`, `allow_cpu_offline=0`) | In int. Nothing in Omarchy Mobile takes CPUs offline today; keep it that way (section 4) |
+| Trusty CPU hotplug (`kthread_set_per_cpu`, `allow_cpu_offline=0`) | In int. Nothing in Omamobile takes CPUs offline today; keep it that way (section 4) |
 | `goodix-fp` (`/dev/goodix_fp`, netlink 25) | Built, not run. Blacklisted from autoload |
 | Sensor supply S2MPG13 LDO15S | **New**: described under `pmic-2` (stock range 2.5-3.3 V) and wired as the sensor's `vdd-supply`. The sub-PMIC path is proven by GNSS G1/G2 |
 | PERIC0 pinctrl (reset `gpp1-1`) | In int already, enabled (Bluetooth uses it) |
@@ -574,7 +574,7 @@ tools/phone-ssh 'U=$(loginctl list-users --no-legend | awk "\$2 != \"root\" {pri
 ```
 
 Expect fprintd to list the device "Under-display fingerprint
-sensor (Omarchy Mobile)"; enroll with ~20 stages; verify-match. **Stop** if
+sensor (Omamobile)"; enroll with ~20 stages; verify-match. **Stop** if
 fprintd sees no device (the drop-in, `systemctl show fprintd -p Environment`)
 or Omarchy's `libfprint-git` replaced ours (`pacman -Q libfprint`).
 Rollback: `fprintd-delete <user>`.

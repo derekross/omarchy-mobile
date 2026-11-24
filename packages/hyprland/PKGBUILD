@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: 0BSD
 #
-# Omarchy Mobile build of Hyprland for the Pixel 7 Pro.
+# Omamobile build of Hyprland for the Pixel 7 Pro.
 #
 # Derived from Omarchy's hyprland PKGBUILD, 0.57.0-2
 # (https://github.com/omacom-io/omarchy-pkgs, pkgbuilds/hyprland at
 # 347f3d791489), itself Arch Linux's hyprland PKGBUILD carrying Omarchy's
 # nvidia-egl-teardown, wl-output-global-grace and monitor-rule-vrr patches
-# (unchanged here). Omarchy Mobile changes:
+# (unchanged here). Omamobile changes:
 #  - 0001-dpms-keep-retrying-a-refused-dpms-commit.patch: Hyprland retried a
 #    refused DPMS commit once, so DPMS off was lost whenever a client kept
 #    a page flip in flight (device/cheetah/DISPLAY-PLAN.md, D3b-1). Drop it
@@ -37,7 +37,7 @@
 pkgname=(hyprland hyprpm)
 pkgver=0.57.0
 pkgrel=3.3
-pkgdesc='a highly customizable dynamic tiling Wayland compositor (Omarchy Mobile: DPMS retry, rotation hold)'
+pkgdesc='a highly customizable dynamic tiling Wayland compositor (Omamobile: DPMS retry, rotation hold)'
 arch=(aarch64)
 url="https://github.com/hyprwm/Hyprland"
 license=(BSD-3-Clause)
@@ -121,9 +121,9 @@ prepare() {
 	patch -Np1 --fuzz=0 -i "$srcdir/wl-output-global-grace.patch"
 	# Omarchy's: a reload ignored a monitor rule's vrr unless something else about the rule changed
 	patch -Np1 --fuzz=0 -i "$srcdir/monitor-rule-vrr.patch"
-	# Omarchy Mobile: retry a refused DPMS commit for up to a second
+	# Omamobile: retry a refused DPMS commit for up to a second
 	patch -Np1 --fuzz=0 -i "$srcdir/0001-dpms-keep-retrying-a-refused-dpms-commit.patch"
-	# Omarchy Mobile: hold the last frame across a rotation until the layers have drawn, then turn it in as Android does
+	# Omamobile: hold the last frame across a rotation until the layers have drawn, then turn it in as Android does
 	patch -Np1 --fuzz=0 -i "$srcdir/0002-render-hold-the-last-frame-across-a-rotation.patch"
 	sed -i -e '/find_package.glaze/s/7...<8 //' {.,hyprpm,start}/CMakeLists.txt
 }

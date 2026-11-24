@@ -55,6 +55,10 @@ archive=$t/out/modules-$rel.tar.zst
 tar -C "$t/archive" -cf - "$rel" | zstd -q -o "$archive"
 checksum=$(sha256sum < "$archive" | cut -d' ' -f1)
 for image in boot init_boot vendor_boot vendor_kernel_boot dtbo; do : > "$t/out/images/$image.img"; done
+# Cheetah's device.conf declares AVB_FOOTERS for boot and init_boot; push checks
+# that their image files match those exact sizes before contacting the phone.
+truncate -s $((0x4000000)) "$t/out/images/boot.img"
+truncate -s $((0x800000)) "$t/out/images/init_boot.img"
 fail() { echo "not ok - $*" >&2; cat "$t/log" >&2; exit 1; }
 pass() { echo "ok - $*"; }
 reset_tree() {

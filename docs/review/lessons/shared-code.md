@@ -3,6 +3,35 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1129. A package file that is safe only on a fixed kernel is reviewed for
+  the phones whose kernel doesn't come with the package.** On the 7 Pro the
+  upower power-off drop-in and its kernel ship together; 8 Pro owners flash
+  their own kernels, so #997's "ready once a tag exists" leaves every owner on
+  an older kernel with a restart loop at 3 % that spends slot B's tries.
+  *Check:* for a device package change whose README says "needs kernel X",
+  `grep -n 'linux-omamobile\|KERNEL' device/<x>/device.conf
+  packages/omamobile-device-<x>/PKGBUILD` for whether the kernel reaches the
+  phone through a package; if not, ask what the package can read from the
+  running kernel, or put the gate to the maintainer. Extends L-1006 and L-868.
+  *From:* #997, round 66, 2026-11-23.
+- **L-1128. "Where daemon X runs" in a shared package is a list of phones, and
+  the reference phone is usually on it.** #996 described its new path as the
+  9a's, with "phones without sitd unchanged"; the 7 Pro starts sitd at every
+  boot, so it was the first phone reached, against its own plan's radio off/on
+  limit. *Check:* for a condition on a daemon, a file in `/run` or an
+  installed package, `git grep -n '<unit or file>' origin/main --
+  'packages/omamobile-device-*'` for the device packages that start or ship
+  it, and name the phones in the review. Extends L-989 and L-608. *From:*
+  #996, round 66, 2026-11-23.
+- **L-1127. Before calling a package "unprotected" by a removal guard, its
+  `Required By` is read through the image's meta-packages.** In #1015's review
+  the Phone, Messages and Camera apps matched neither the protected globs nor
+  Omarchy's defaults and read as removable; `omamobile-apps` depends on all
+  three, so the guard's "required by" refusal keeps them, and the finding
+  shrank to a hardening note. *Check:* for each package a guard's lists miss,
+  `git grep -n '<name>' origin/main -- 'packages/*/PKGBUILD'` for a `depends=`
+  that names it, and say which rule refuses it. Extends L-639 and L-442.
+  *From:* #1015 (a near miss in drafting), round 66, 2026-11-23.
 - **L-1094. A draft that adds a module for a device node is grepped on main
   for another module of the same name or node.** #374's `aoc_tuning.py` in
   `omamobile-modem-sit` and main's `aoc_tuning.py` in

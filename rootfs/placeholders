@@ -66,7 +66,7 @@ pad() {
 
 marker() {
   known "$1" >/dev/null
-  pad "# Omarchy Mobile: the place for $1, kept by the release image.
+  pad "# Omamobile: the place for $1, kept by the release image.
 # An installer that streams the image puts the owner's answers in these
 # $LENGTH bytes. Left as it is, it holds no answers: this file is read as
 # if it were not here.

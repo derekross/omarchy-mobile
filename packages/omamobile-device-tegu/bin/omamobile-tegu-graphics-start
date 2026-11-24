@@ -74,6 +74,36 @@ panel_name() {
   echo ""
 }
 
+# The panel's backlight is registered when gs_dsim_cmd binds the panel,
+# before this start allows DSI commands, and udev starts
+# systemd-backlight@ for it right then: its restore of the saved brightness
+# gets EPERM, fails and hits the start limit (#512). Once allow_tx is on,
+# a restore that failed is run again (after waiting out one still running).
+# Only a failed one: a restore that worked, or that udev hasn't started
+# yet, is left alone. It runs at the very end, after the last driver step
+# and after the marker is cleared, and each start is bounded to 10 s (the
+# unit's own timeout is 90 s): a brightness write that hangs costs neither
+# the later steps their time nor the next boot its GPU, display and Wi-Fi.
+restore_backlight() {
+  local b unit state i
+  for b in "$root"/sys/class/backlight/*; do
+    [[ -e $b ]] || continue
+    unit="systemd-backlight@backlight:${b##*/}.service"
+    for ((i = 0; i < 20; i++)); do
+      state=$(systemctl show -P ActiveState "$unit" 2>/dev/null) || state=
+      [[ $state == activating ]] || break
+      sleep 0.25
+    done
+    [[ $state == failed ]] || continue
+    systemctl reset-failed "$unit" 2>/dev/null
+    if timeout 10 systemctl start "$unit" 2>/dev/null; then
+      log "${b##*/}: the saved brightness, refused before DSI commands were allowed, is restored"
+    else
+      log "${b##*/}: restoring the saved brightness failed again or took over 10 s (systemctl status $unit)"
+    fi
+  done
+}
+
 case ${1:-} in
   '') ;;
   --retry) rm -f "$marker" ;;
@@ -98,6 +128,9 @@ if [[ ${1:-} != --retry ]] && { loaded panthor || loaded gs_decon; }; then
 fi
 
 mkdir -p "$state" "$root/run"
+# Set only by the display step: allow_tx written, and gs_decon loaded and bound.
+dsi_allowed=0
+display_up=0
 # The marker names the step in progress, so a hang is easy to place.
 phase() { printf '%s %s\n' "$(date -Is)" "$1" > "$marker"; sync -f "$marker" 2>/dev/null || sync; }
 finish() { rm -f "$marker"; sync -f "$state" 2>/dev/null || sync; }
@@ -134,6 +167,7 @@ if [[ -e $decon ]]; then
   # the bootloader appends the panel's id (google-tg4c.2d008004 on the palmtop)
   if [[ $panel == google-tg4c || $panel == google-tg4c.* ]]; then
     if echo 1 > "$allow_tx" 2>/dev/null; then
+      dsi_allowed=1
       log "panel $panel: DSI commands allowed (gs_dsim_cmd.allow_tx=1)"
     else
       log "panel $panel: could not write $allow_tx; the display stays read-only at 60 Hz"
@@ -153,6 +187,7 @@ if [[ -e $decon ]]; then
     card=$(readlink -f "$root/dev/dri/by-path/platform-19470000.display-controller-card" 2>/dev/null || true)
     [[ -n $card ]] && printf '%s\n' "${card#"$root"}" > "$root/run/omamobile-tegu-display-card"
     up+="${up:+, }display"
+    display_up=1
   fi
 else
   log "no display controller in this DTB; skipped"
@@ -225,7 +260,7 @@ fi
 # Wi-Fi: the PCIe host for channel 1, whose probe brings the link up, then
 # the BCM4383 on brcmfmac. The host is the shared zuma-family pair
 # (phy_zuma_pcie, then pcie_gs201) when the node says google,zuma-pcie
-# (linux-omarchy-mobile#178), else the older standalone pcie_zumapro (#168).
+# (linux-omamobile#178), else the older standalone pcie_zumapro (#168).
 # Only with the host's node, the restricted DMA pool the endpoint needs, and
 # the owner's firmware (tools/extract-vendor-firmware). Never unloaded: a
 # reboot undoes it.
@@ -259,6 +294,9 @@ else
 fi
 
 finish
+# Only where the display came up (allow_tx is not read back: the kernel
+# shows the bool as Y, not 1).
+(( dsi_allowed && display_up )) && restore_backlight
 log "up: ${up:-nothing}"
 if [[ -n $failed ]]; then
   log "failed: $failed (these loads returned, so the marker is clear; --retry tries them again)"

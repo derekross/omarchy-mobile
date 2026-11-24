@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 8a (akita) bring-up notes
 
-Findings for the Pixel 8a port, newest first. akita shares the zuma SoC (Tensor G3) with the Pixel 8 Pro (husky) and the Pixel 8 (shiba), tracked in [issue #1](https://github.com/derekross/omarchy-mobile/issues/1), so the SoC work is shared with [husky's port](../husky/NOTES.md). Facts are marked [V] (checked, with the source) or [I] (an inference to check on a phone). Stage 0 flashed and booted nothing of ours: its only write by hand was a Magisk-patched stock `init_boot_b`, for root on stock, and slot A's five boot images are Google's factory images byte for byte.
+Findings for the Pixel 8a port, newest first. akita shares the zuma SoC (Tensor G3) with the Pixel 8 Pro (husky) and the Pixel 8 (shiba), tracked in [issue #1](https://github.com/derekross/omamobile/issues/1), so the SoC work is shared with [husky's port](../husky/NOTES.md). Facts are marked [V] (checked, with the source) or [I] (an inference to check on a phone). Stage 0 flashed and booted nothing of ours: its only write by hand was a Magisk-patched stock `init_boot_b`, for root on stock, and slot A's five boot images are Google's factory images byte for byte.
 
 Sources:
 
@@ -23,7 +23,7 @@ CPU frequency scaling, thermal and the GPU. The steps and results are in [BRINGU
 
 ## 2026-11-13: battery and charging (M4)
 
-The battery: the fuel gauge, the charger's state, the USB link across an unplug, charging under Linux (gate h) and the PMIC's interrupt. The steps and results are in [BRINGUP-M4](BRINGUP-M4.md). The kernel side is linux-omarchy-mobile#246.
+The battery: the fuel gauge, the charger's state, the USB link across an unplug, charging under Linux (gate h) and the PMIC's interrupt. The steps and results are in [BRINGUP-M4](BRINGUP-M4.md). The kernel side is linux-omamobile#246.
 
 - **The battery hardware is husky's** [V]: the MAX77759 gauge (0x36) and PMIC (0x66, its charger at 0x69) on `hsi2c_11`, with the same interrupt lines, and the pack's 24c08 EEPROM on `hsi2c_9` (G/, R/). The bus is pulled up, as in `zuma-pinctrl.dtsi` (R/'s live tree overrides G/'s `PULL_NONE`).
 - **This phone's pack is the ATL one** [V] (EEPROM byte 0x17 = 1). With Google's `atl-a1-1k` model the gauge reads a real temperature and 4486 mAh. Without a model it reads 22.0 C, stuck, and a level 4 points high.
@@ -35,7 +35,7 @@ The battery: the fuel gauge, the charger's state, the USB link across an unplug,
 
 ## 2026-11-11: buttons and touch (M3)
 
-The buttons (gate f) and touch (gate g), so the phone is usable by hand. The steps and results are in [BRINGUP-M3](BRINGUP-M3.md). The kernel side is linux-omarchy-mobile#238 (the buttons and `mem_sleep_default=s2idle`, merged), #240 (the S2MPG14 supply setter) and #241 (the touch supplies, the touchscreen and the panel size).
+The buttons (gate f) and touch (gate g), so the phone is usable by hand. The steps and results are in [BRINGUP-M3](BRINGUP-M3.md). The kernel side is linux-omamobile#238 (the buttons and `mem_sleep_default=s2idle`, merged), #240 (the S2MPG14 supply setter) and #241 (the touch supplies, the touchscreen and the panel size).
 
 - **The buttons are wired as on husky** [V]: volume down `gpa4-1`, volume up `gpa6-2`, power `gpa4-0` (G/ `zuma-common.dtsi`; R/ `/proc/interrupts`).
 - **The touchscreen is a Goodix GT9895** [V], the Pixel 7a's chip, on husky's bus and lines (USI2_HSI0 SPI, interrupt `gpn0-0` falling, reset `gpp21-2`). Both of stock's firmware files (`goodix_firmware_ak3a.bin`, `_ak3b.bin`, in F/'s vendor image) carry `9895` in their Berlin header.
@@ -45,7 +45,7 @@ The buttons (gate f) and touch (gate g), so the phone is usable by hand. The ste
 
 ## 2026-11-06: storage and the Arch root (M2)
 
-UFS with the storage guard (gate c) and Arch on `userdata` (gate d). The steps and results are in [BRINGUP-M2](BRINGUP-M2.md). The kernel side is linux-omarchy-mobile#206, merged as `75b9c0b73`.
+UFS with the storage guard (gate c) and Arch on `userdata` (gate d). The steps and results are in [BRINGUP-M2](BRINGUP-M2.md). The kernel side is linux-omamobile#206, merged as `75b9c0b73`.
 
 - **UFS links at stock's mode** [V]: `FAST series_B G_4 L_2`, with husky's three board nodes (VCC on `gpp0-1`). All 62 partitions appear on stock's device nodes, and the guard leaves exactly `UFS_RW` writable, in the initramfs and under Arch.
 - **The disks attach before PID 1** [V]: at 0.26 s, with `/init` starting at 0.28 s, because UFS is built in. The guard has flagged every partition by 0.61 s, and nothing is mounted before then.
@@ -56,7 +56,7 @@ UFS with the storage guard (gate c) and Arch on `userdata` (gate d). The steps a
   - `pinfo`, `fips` and `blenv`, whose contents haven't been read [I].
 
   None is on `UFS_RW`, so the guard keeps them read-only, and all are in M2.4's full backup. Since stage 0's clean backup, `mfg_data`, `pinfo`, `fips`, `blenv` and `trusty_userdata` are unchanged, and `trusty_persist` changed (stock ran) [V]. The two Trusty partitions are now in `NV_BACKUP_EXTRA`, as on the Pixel 8 Pro, so `tools/nv-backup --check` shows when Android has written Trusty's storage.
-- **A second retail 8a passed M2.3, M2.4 and M2.6** on the same branch, with the same link, partition map and guard results ([#456](https://github.com/derekross/omarchy-mobile/pull/456)).
+- **A second retail 8a passed M2.3, M2.4 and M2.6** on the same branch, with the same link, partition map and guard results ([#456](https://github.com/derekross/omamobile/pull/456)).
 
 ## 2026-11-03: first light (M1.3) and the console (M1.4)
 
@@ -85,7 +85,7 @@ Our kernel booted from slot B with the first-light board file, which has USB and
 
   All three are husky's values (H/, [BRINGUP-M1](../husky/BRINGUP-M1.md) test 20). ABL's splash is at 0xfac00000, and the trigger is masked: `HW_TRIG_MASK_DECON` (bit 4) is set and `HW_TRIG_EN` (bit 0) clear.
 - **The panel runs in DSI command mode** [V]. No mode in Google's driver (`display/panel-google-ak3b.c`, in the same repository as G/) sets `MIPI_DSI_MODE_VIDEO`; its modes set only `MIPI_DSI_CLOCK_NON_CONTINUOUS`. So, as on husky, frames reach the panel only once DECON0's trigger is unmasked. 0x3061 clears bit 4 and sets bit 0, hence `SIMPLEFB_TRIG_CON="0x19470030 0x3061"`.
-- **The same driver gives the panel as 70 × 149 mm** (`width_mm`, `height_mm`) [V], which is where stock's reported DPI comes from: `dumpsys display` reads xDpi 391.885 and yDpi 409.127 for 1080x2400, which is 70.0 × 149.0 mm. That is larger than the glass: a 6.1-inch 20:9 panel is about 64 × 141 mm, and Google's touch node says `goodix,panel-height-mm = <141>`. The lit area measures 64 × 141 mm with a ruler [V], and that's what the board file carries since M3 (linux-omarchy-mobile#241), with stock's 70 × 149 named in its comment.
+- **The same driver gives the panel as 70 × 149 mm** (`width_mm`, `height_mm`) [V], which is where stock's reported DPI comes from: `dumpsys display` reads xDpi 391.885 and yDpi 409.127 for 1080x2400, which is 70.0 × 149.0 mm. That is larger than the glass: a 6.1-inch 20:9 panel is about 64 × 141 mm, and Google's touch node says `goodix,panel-height-mm = <141>`. The lit area measures 64 × 141 mm with a ruler [V], and that's what the board file carries since M3 (linux-omamobile#241), with stock's 70 × 149 named in its comment.
 - **There is no `/sys/devices/soc0`** [V]: our kernel has no chip-id driver for zuma, so the silicon revision (B0 or B1) is still open.
 
 ## 2026-11-02: stage 0: a retail Pixel 8a (stock, rooted, bootloader unlocked)
@@ -148,9 +148,9 @@ The descriptor carries no comments; this table is its provenance.
 | Key | Value | Mark | Source |
 | --- | --- | --- | --- |
 | `CODENAME`, `NAME`, `SOC` | akita, Pixel 8a, zuma | [V] | R/ `ro.product.device`, `ro.product.model`, `ro.boot.hardware.platform` |
-| `COMPATIBLE` | `google,zuma-akita` | [V] | husky's upstream style (H/); the board DTS's first compatible, with its binding entry, in [linux-omarchy-mobile#192](https://github.com/derekross/linux-omarchy-mobile/pull/192) |
+| `COMPATIBLE` | `google,zuma-akita` | [V] | husky's upstream style (H/); the board DTS's first compatible, with its binding entry, in [linux-omamobile#192](https://github.com/derekross/linux-omamobile/pull/192) |
 | `PACKAGE` | `omamobile-device-akita` | | the package doesn't exist yet; `bin/omamobile initramfs` builds the freestanding helpers when a package has no `omamobile-bootctl.c`, as for husky |
-| `DTB` | `exynos/google/zuma-akita.dtb` | [V] | built from the board DTS in [linux-omarchy-mobile#192](https://github.com/derekross/linux-omarchy-mobile/pull/192); `bin/omamobile images` packs it ([BRINGUP-M1](BRINGUP-M1.md) M1.1) |
+| `DTB` | `exynos/google/zuma-akita.dtb` | [V] | built from the board DTS in [linux-omamobile#192](https://github.com/derekross/linux-omamobile/pull/192); `bin/omamobile images` packs it ([BRINGUP-M1](BRINGUP-M1.md) M1.1) |
 | `SOC_COMPATIBLE` | `b0-ipop:0x9865:1:0:1 b1-ipop:0x9865:1:1:1` | [V] | R/ live DT `/soc_compatible`; S/ `zuma-b0-ipop.dts` |
 | `AVB_FOOTERS`, `AVB_ROLLBACK_INDEX`, `AVB_SECURITY_PATCH` | `boot:0x4000000 init_boot:0x800000`, 1791158400, 2026-10-05 | [V] | F/ `vbmeta.img` chain descriptors and the stock footers; R/ `getvar partition-size` |
 | `DTBO_SOURCE`, `DTBO_BOARD_ID`, `DTBO_BOARD_REV` | the empty overlay, 0x40406, 0x10000 | [V] | F/ `dtbo.img` entry 18; R/ `androidboot.dtbo_idx`; G/ `zuma-akita-mp.dts` |

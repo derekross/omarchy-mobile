@@ -179,7 +179,7 @@ case "${1:-}" in
     fp_enroll
     ;;
   --inner)
-    echo "Welcome to Omarchy Mobile. A few quick steps."
+    echo "Welcome to Omamobile. A few quick steps."
     echo
     name=$(gum input --header "Your name" --placeholder "Ada Lovelace" --value "$(git config --global user.name)")
     email=$(gum input --header "Your email" --placeholder "ada@example.com" --value "$(git config --global user.email)")
