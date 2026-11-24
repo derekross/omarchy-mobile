@@ -175,7 +175,8 @@ done
 grep -q 'Plymouth.SetQuitFunction(quit_callback);' "$theme/omarchy-trace.script" || fail "a quit must jump to the last frame"
 # The held frame must be Omarchy's logo exactly (default/plymouth/logo.png in
 # basecamp/omarchy, git blob f185b266), so the end matches the static splash.
-[[ $(git hash-object "$theme/trace-30.png") == f185b2660763bebf2343775d2a682133d5bf78d2 ]] \
+# sha256 of that file, pinned so the test needs nothing beyond coreutils.
+[[ $(sha256sum < "$theme/trace-30.png") == "ba8f1547a02ab5db64fe3923d0b834a220e2c3798c1674374a0eb92a18dfddfb  -" ]] \
   || fail "trace-30.png is not Omarchy's logo.png"
 pass "the last trace frame is Omarchy's logo.png unchanged"
 pass "the omarchy-trace theme: 30 800x188 frames, and the script and .plymouth file name them"
