@@ -1964,6 +1964,43 @@ at 90.915341 s and Fastboot returned 134 s after the boot
 request. D1 stock A finished booting with enforcing
 verity and the original VBMeta digest.
 
+### Mainline v40 idle prep diagnostic
+
+The [v40 kernel source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/341a5e41a7836e346ba6bdabfed818ac1dd938de)
+adds `COMMON_CLK_GOOGLE_MALIBU_CPM_UFS_IDLE_DIAG` on top of the
+initial-vote diagnostic. The option defaults off and requires the
+UFS host driver to be disabled. The Grizzly firmware mapping and the
+HSIO-S wrapper guard qualify every child PSM sample.
+
+| Phase | Pass condition | Stop and return |
+| --- | --- | --- |
+| Initial votes | Keep HSIO-S on. At the known inherited HC `0x10` and PHY `0x11` handoff, acquire the prep vote if the client has none. | A different handoff state stops prep seeding. An inherited prep vote remains untouched. |
+| Idle release | Stock-style genpd idle work releases the diagnostic-owned prep vote once. The CPM core client vote must first read zero, and the guarded physical state must be PSM1 0 with PHY `0x11`. Require physical PSM1 3 after release. | An unowned prep vote, an active core client vote, a failed mailbox request or an unexpected PSM state stops the sequence. Keep HSIO-S on and preserve logs. |
+| Prep resume | At the delayed observation, attach to the existing UFS node's prep and core domains. Confirm both are logically off, then require guarded PSM1 3 before prep ON and 2 after its successful reply. | Missing domains, an inherited vote or an unexpected PSM stops core resume. Retain any successfully acquired prep reference through the return. |
+| Core resume | Recheck guarded PSM1 2 and PHY `0x11` immediately before issuing core ON. Record the vote result and HC/PHY after it. | A failed guard blocks the request. A failed vote ends the sequence. The fixture retains the timed stock A return and keeps HCI disconnected. |
+
+The experiment exercises prep's idle OFF and resume. It starts
+with the core client vote off and skips stock's separate core-OFF
+phase and TOP programming. A successful core reply therefore
+establishes the mailbox outcome. PHY readiness remains a separate
+measurement. Retain the full v29 hold and the backup and attended
+return prerequisites before any hardware work. Nine offline
+cases cover the transition, vote ownership, timeout, invalid
+states, and repeated-release veto. Strict checkpatch passed.
+
+The offline ARM64 build uses release
+`7.3.0-rc6-omamobile-grizzly-uic-v40` and Debian Clang
+19.1.7. The CPM object passed `W=1`. The bundle retains
+v39's RAM rescue, four disabled UFS supplier nodes, and
+the 90-second warm return. The five image checksums,
+both AVB signatures, unpacked payload, D1 handoff and
+saved slot capacity checks passed. The manifest SHA-256
+is `2ea36f14275f9ba31822c7b3d0279f4f38d11f8be06c9e9ca52d68fccd43a679`.
+The archive SHA-256 is
+`ec6aab8feeebfb4e61db6ee605e8f6683886f1e22347647aa46dc3f0a0ee4ff0`.
+Physical prep release and the ensuing core request remain
+untested. No phone operations were used.
+
 ## Staging and return sequence used for D1
 
 These commands describe the attended workflow used by the trials.

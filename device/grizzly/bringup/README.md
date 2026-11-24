@@ -57,6 +57,12 @@ The same branch carries the
 [read-only bRefClkFreq guard](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/af719fb07680986d5e2ad0a3f798f0c55f7306fe)
 for future full-device initialization.
 
+The [v40 diagnostic branch](https://github.com/adrienlacombe/linux-omarchy-mobile/tree/grizzly-ufs-bringup-v40)
+adds the provider-only idle prep experiment at
+`341a5e41a7836e346ba6bdabfed818ac1dd938de`. See the
+[v40 runbook](../BRINGUP-M1.md#mainline-v40-idle-prep-diagnostic)
+for its vote ownership and PSM1 gates.
+
 The earlier first-light sources are published on the
 [grizzly-first-light-archive branch](https://github.com/adrienlacombe/linux-omarchy-mobile/tree/grizzly-first-light-archive).
 The table distinguishes
