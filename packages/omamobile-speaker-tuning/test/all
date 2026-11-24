@@ -18,7 +18,9 @@ for f in bin/omamobile-speaker-tuning lib/*.py test/*.py test/fake-waves-host; d
 done
 pass "scripts parse"
 
-out=$(python3 -W ignore::ResourceWarning -m unittest -q test/test_tuning.py 2>&1) || {
+# from inside test/: a path makes the module test.test_tuning, which a Python
+# that ships its own test package (Ubuntu's) imports from the standard library
+out=$(cd test && python3 -W ignore::ResourceWarning -m unittest -q test_tuning 2>&1) || {
   printf '%s\n' "$out" >&2; fail "unit tests"; }
 pass "protocol, allowlist, fake AoC, helper protocol, tuner, triggers"
 

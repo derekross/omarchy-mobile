@@ -8,8 +8,9 @@
 # plan naming the commit, a -push1 or -dirty build don't count) and its
 # record, the build stage refusing an output directory that holds a
 # development kernel, the identifier scan (real MACs, serial records, the
-# builder's home and listed identifiers found; made-up MACs and example paths
-# not), the packages stage refusing an index the release key didn't sign,
+# builder's home and listed identifiers found in files and symlink targets;
+# made-up MACs and example paths not), the packages stage refusing an index
+# the release key didn't sign,
 # test-install asking whether stable has an index before the attended steps
 # (none: the one-time promotion; no answer: stop),
 # the test-install record, the tag stage refusing notes with placeholders,
@@ -310,6 +311,75 @@ for o in 03 17 cb ef ff; do
 done
 rm -r "$t/scan/etc"
 pass "only locally administered unicast MACs (x2, x6, xA, xE) and all-ones pass; x3, x7, xB and xF fail outside etc/dnsmasq.conf"
+
+# Symlink targets (walked file, directory and dangling links, plus explicit
+# link arguments) are scanned with the same rules without following walked
+# links or double-reporting a regular file through a link.
+mkdir -p "$t/scan/clean-dir"
+printf 'clean\n' > "$t/scan/clean-dir/ok.txt"
+ln -s clean-dir/ok.txt "$t/scan/clean-file-link"
+ln -s clean-dir "$t/scan/clean-dir-link"
+ln -s /nonexistent/clean "$t/scan/clean-dangling"
+run scan "$t/scan" || fail "clean symlinks pass the scan"
+run scan "$t/scan/clean-file-link" || fail "an explicit clean symlink passes the scan"
+run scan "$t/scan/clean-dangling" || fail "an explicit clean dangling symlink passes the scan"
+rm -r "$t/scan/clean-file-link" "$t/scan/clean-dir-link" "$t/scan/clean-dangling" "$t/scan/clean-dir"
+printf 'clean\n' > "$t/scan/serial-ABC123-file"
+ln -s serial-ABC123-file "$t/scan/file-link"
+ln -s scan/serial-ABC123-file "$t/explicit-file-link"
+if run scan "$t/scan"; then fail "the scan finds a walked file symlink target"; fi
+grep -Fq "    $t/scan/file-link (symlink target): listed identifier: serial-ABC123" "$t/log" || fail "the scan names the walked file symlink"
+if run scan "$t/explicit-file-link"; then fail "the scan finds an explicit file symlink target"; fi
+grep -Fq "    $t/explicit-file-link (symlink target): listed identifier: serial-ABC123" "$t/log" || fail "the scan names the explicit file symlink"
+rm "$t/scan/file-link" "$t/explicit-file-link" "$t/scan/serial-ABC123-file"
+mkdir -p "$t/scan/serial-ABC123-dir"
+printf 'clean\n' > "$t/scan/serial-ABC123-dir/ok.txt"
+ln -s serial-ABC123-dir "$t/scan/dir-link"
+if run scan "$t/scan"; then fail "the scan finds a walked directory symlink target"; fi
+grep -Fq "    $t/scan/dir-link (symlink target): listed identifier: serial-ABC123" "$t/log" || fail "the scan names the walked directory symlink"
+if run scan "$t/scan/dir-link/"; then fail "the scan finds an explicit directory symlink target with trailing slash"; fi
+grep -Fq "    $t/scan/dir-link (symlink target): listed identifier: serial-ABC123" "$t/log" || fail "the scan names the explicit directory symlink"
+rm -r "$t/scan/dir-link" "$t/scan/serial-ABC123-dir"
+ln -s "/home/$(id -un)/x" "$t/scan/dangling-link"
+if run scan "$t/scan"; then fail "the scan finds a walked dangling symlink target"; fi
+grep -Fq "    $t/scan/dangling-link (symlink target): builder's home: /home/$(id -un)" "$t/log" || fail "the scan names the walked dangling symlink"
+if run scan "$t/scan/dangling-link"; then fail "the scan finds an explicit dangling symlink target"; fi
+grep -Fq "    $t/scan/dangling-link (symlink target): builder's home: /home/$(id -un)" "$t/log" || fail "the scan names the explicit dangling symlink"
+rm "$t/scan/dangling-link"
+ln -s "wlan0-$mac" "$t/scan/mac-link"
+if run scan "$t/scan"; then fail "the scan finds a MAC address in a symlink target"; fi
+grep -Fq "    $t/scan/mac-link (symlink target): MAC address: $mac" "$t/log" || fail "the scan names the symlink with a MAC target"
+rm "$t/scan/mac-link"
+mkdir -p "$t/scan/sub"
+printf 'device serial-ABC123 here\n' > "$t/scan/sub/real.txt"
+ln -s sub/real.txt "$t/scan/ref-file-link"
+ln -s sub "$t/scan/ref-dir-link"
+ln -s scan/sub/real.txt "$t/explicit-file-ref"
+ln -s scan/sub "$t/explicit-dir-ref"
+if run scan "$t/scan"; then fail "the scan finds a regular file beside symlinks to it"; fi
+grep -Fq "    $t/scan/sub/real.txt: listed identifier: serial-ABC123" "$t/log" || fail "the scan reports the regular file"
+grep -qx '    1 finding(s)' "$t/log" || fail "walked symlinks do not double-report their referent"
+if run scan "$t/explicit-file-ref"; then fail "an explicit symlink still scans its referent"; fi
+grep -Fq "    $t/explicit-file-ref: listed identifier: serial-ABC123" "$t/log" || fail "the scan reports the explicit symlink referent"
+grep -qx '    1 finding(s)' "$t/log" || fail "an explicit clean symlink reports its referent once"
+if run scan "$t/explicit-dir-ref"; then fail "an explicit directory symlink still scans its referent tree"; fi
+grep -Fq "    $t/explicit-dir-ref/real.txt: listed identifier: serial-ABC123" "$t/log" || fail "the scan reports the file under an explicit directory symlink"
+grep -qx '    1 finding(s)' "$t/log" || fail "an explicit clean directory symlink reports its referent once"
+rm -r "$t/scan/ref-file-link" "$t/scan/ref-dir-link" "$t/explicit-file-ref" "$t/explicit-dir-ref" "$t/scan/sub"
+ln -s clean "$t/scan/unreadable-link"
+mkdir -p "$t/py-stub"
+cat > "$t/py-stub/python3" <<EOF
+#!/bin/sh
+while [ "\$#" -gt 0 ] && [ "\$1" != - ]; do shift; done; [ "\$#" -gt 0 ] && shift
+exec "$(command -v python3)" -I -c 'import os, sys
+os.readlink = lambda p: (_ for _ in ()).throw(OSError("readlink denied"))
+exec(compile(sys.stdin.read(), "<stdin>", "exec"), {"__name__": "__main__"})' "\$@"
+EOF
+chmod +x "$t/py-stub/python3"
+if (cd "$R" && PATH="$t/py-stub:$PATH" tools/release scan "$t/scan") > "$t/log" 2>&1; then fail "an unreadable symlink fails the scan"; fi
+grep -Fq "    $t/scan/unreadable-link (symlink target): unreadable link: readlink denied" "$t/log" || fail "the scan reports an unreadable symlink with its OS error"
+rm -r "$t/scan/unreadable-link" "$t/py-stub"
+pass "the scan checks walked file, directory, dangling and explicit symlink targets without double-reporting referents"
 
 # --- packages: only the release key's index ---
 gpg --batch --quiet --passphrase '' --quick-gen-key "other <x@invalid>" ed25519 sign never >/dev/null 2>&1

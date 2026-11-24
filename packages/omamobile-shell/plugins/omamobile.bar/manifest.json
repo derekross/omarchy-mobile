@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "author": "Omamobile",
   "license": "MIT",
-  "description": "Phone status bar: clock on the left, connectivity and battery on the right, clear of the camera cutout. A tap on an item opens its card (Omarchy's own for the battery, Wi-Fi and Bluetooth); a pull opens quick settings.",
+  "description": "Phone status bar: clock on the left, connectivity and battery on the right, clear of the camera cutout. Tap or pull down to open quick settings; with bar.cardsOnTap, a tap on an item opens its card (Omarchy's own for the battery, Wi-Fi and Bluetooth).",
   "kinds": ["bar"],
   "entryPoints": {
     "bar": "Bar.qml"

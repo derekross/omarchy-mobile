@@ -13,7 +13,7 @@ logical at scale 3).
 
 | Plugin | Kind | What it is |
 | --- | --- | --- |
-| `omamobile.bar` | `bar` | Status bar: clock, connectivity, battery; a tap on each opens its card, a pull opens quick settings |
+| `omamobile.bar` | `bar` | Status bar: clock, connectivity, battery; tap or pull down for quick settings, or with `cardsOnTap` a tap on an item for its card |
 | `omamobile.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: up to 21 tiles the user arranges, brightness and volume, a Settings gear, media controls and the notification history; Wi-Fi picker and Bluetooth panel |
 | `omamobile.launcher` | `panel` (keepLoaded) | Home bar: app search, app grid and coding-agent prompt in one input |
 | `omamobile.home` | `panel` (keepLoaded) | Home screens: pages of apps and widgets on the wallpaper, with an edit mode |
@@ -32,7 +32,7 @@ logical at scale 3).
 
 ```json
 {
-  "bar": { "id": "omamobile.bar", "clockFormat": "HH:mm", "showBatteryPercent": true,
+  "bar": { "id": "omamobile.bar", "clockFormat": "HH:mm", "batteryStyle": "icon-percent",
            "quickSettings": "omamobile.quicksettings" },
   "plugins": [
     { "id": "omamobile.quicksettings" },
@@ -55,9 +55,10 @@ there is one), do-not-disturb (when on), Bluetooth (when on), cellular
 signal (when a modem exists), Wi-Fi or Ethernet, battery glyph and
 percentage. The centre is left empty for the camera cutout.
 
-A downward pull past ~14 px anywhere on the strip opens quick settings, as on
-a phone; a tap on an empty part does nothing. A tap on an item opens its card,
-as a click on the same item does in Omarchy's bar:
+A downward pull past ~14 px anywhere on the strip opens quick settings, and a
+tap toggles it. With `cardsOnTap` set (off by default), a tap on an item opens
+its card instead, as a click on the same item does in Omarchy's bar, and a tap
+on an empty part does nothing:
 
 | Item | Card |
 | --- | --- |
@@ -88,8 +89,16 @@ Settings live on the `bar` object in `shell.json`:
 | Key | Default | |
 | --- | --- | --- |
 | `clockFormat` | `"HH:mm"` | Qt date format |
-| `showBatteryPercent` | `true` | |
+| `showBatteryPercent` | `true` | Older switch: `false` is `batteryStyle: "icon"`; used only without `batteryStyle` |
+| `batteryStyle` | `"icon-percent"` | `icon`, `percent`, `icon-percent`, `horizontal`, `horizontal-percent` |
+| `statusIcons` | all shown | `{"bluetooth","wifi","cell","dnd","unread"}`: `false` hides one (Wi-Fi covers Ethernet too) |
 | `quickSettings` | `"omamobile.quicksettings"` | Plugin id the bar opens |
+| `cardsOnTap` | `false` | A tap on an item opens its card (below); a pull opens quick settings |
+
+The charging bolt has no setting: while charging it shows in every battery
+style. Low battery (10 % and under, not charging) takes the urgent colour.
+The call chip has no switch. A hidden mobile signal stops
+`omamobile-cell-watch`.
 
 **Unread notifications:** an accent pill with the number of files in
 Omarchy's notification history (`~/.local/state/omarchy/notifications/history/`,

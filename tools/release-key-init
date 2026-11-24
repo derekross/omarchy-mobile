@@ -25,10 +25,14 @@ die() { echo "release-key-init: $*" >&2; exit 1; }
 
 out=${1:-}
 [[ -n $out ]] || die "usage: tools/release-key-init OFFLINE_DIR"
+[[ $out != *$'\n'* ]] || die "OFFLINE_DIR can't contain a newline"
 [[ ! -e keys/gnupg.release ]] || die "keys/gnupg.release exists; move it away first"
+umask 077
 mkdir -p -- "$out"
 out=$(cd -- "$out" && pwd)
-[[ -z $(ls -A -- "$out") ]] || die "$out is not empty"
+[[ $out -ef $1 ]] || die "$1 resolves to $out, another directory; give its real path"
+entries=$(ls -Aq -- "$out") || die "can't list $out"
+[[ -z $entries ]] || die "$out is not empty"
 case $out in
   "$PWD"/*|"$HOME"/*)
     echo "warning: $out is not on removable media; the primary key belongs offline"
@@ -64,6 +68,8 @@ sub=$(gpg --batch --with-colons --list-keys "$fpr" | awk -F: '$1 == "fpr" { n++ 
 [[ -n $fpr && -n $sub ]] || die "key generation failed"
 
 # The offline copy: everything needed to revoke or certify later.
+chmod 700 -- "$out" 2>/dev/null ||
+  echo "release-key-init: warning: could not set mode 700 on $out; its filesystem or owner decides who can read it" >&2
 gpg --batch --armor --export "$fpr" > "$out/omamobile-release.pub.asc"
 gpp --armor --export-secret-keys "$fpr" > "$out/omamobile-release.secret.asc"
 cp -- "$GNUPGHOME/openpgp-revocs.d/$fpr.rev" "$out/omamobile-release.revoke.asc"
