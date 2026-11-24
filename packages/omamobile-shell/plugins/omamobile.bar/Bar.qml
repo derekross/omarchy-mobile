@@ -227,6 +227,32 @@ Item {
   readonly property string batteryIcon: StatusModel.batteryIcon(batteryPercent, charging,
     hasBattery && battery.state === UPowerDeviceState.FullyCharged)
 
+  // ------------------------------------------------- Omarchy's power panel
+  // A tap on the battery opens Omarchy's own power panel (plugins/panels/power,
+  // the popup omarchy.bar opens on a click on its battery icon), loaded from
+  // Omarchy's shell, with the few bar calls its popup makes answered here.
+  readonly property color barForeground: foreground
+  property var activePopout: null
+  property var clickTargets: []
+  function barSizeFor(screenName) { return barSize }
+  function requestPopout(owner) {
+    if (activePopout === owner) return
+    if (activePopout && "close" in activePopout) activePopout.close()
+    activePopout = owner
+  }
+  function releasePopout(owner) { if (activePopout === owner) activePopout = null }
+  function notePopoutCard(card) {}
+  function popoutCardFor(owner) { return null }
+  function targetBelongsToWindow(target, window) {
+    return !!target && !!window && !!target.QsWindow && target.QsWindow.window === window
+  }
+  function switchPanelFrom(owner, direction) { return false }
+  // Omarchy's widget buttons ask the bar for a tooltip; a touch bar shows none.
+  readonly property bool foregroundAnimationEnabled: false
+  function showTooltip() {}
+  function hideTooltip() {}
+  function run(command) { Quickshell.execDetached(["sh", "-c", String(command)]) }
+
   // ---------------------------------------------------------------- host API
 
   // The host calls these on whatever bar is active. A phone bar hosts no
@@ -313,6 +339,31 @@ Item {
           font.bold: true
         }
 
+        // The time card (TimePanel.qml), unseen but for its popup, opened by a
+        // tap on the clock; a pull still opens quick settings.
+        TimePanel {
+          id: timeCard
+          anchors.fill: clockText
+          bar: root
+          opacity: 0
+        }
+
+        MouseArea {
+          x: clockText.x - Style.space(8)
+          width: clockText.width + Style.space(16)
+          height: parent.height
+          property real pressY: 0
+          property bool pulled: false
+          onPressed: function(mouse) { pressY = mouse.y; pulled = false }
+          onPositionChanged: function(mouse) {
+            if (!pulled && mouse.y - pressY > Style.space(14)) { pulled = true; root.openQuickSettings() }
+          }
+          onClicked: if (!pulled) timeCard.toggle()
+          function triggerPress(button) { timeCard.toggle() }
+          Component.onCompleted: root.clickTargets = root.clickTargets.concat([this])
+          Component.onDestruction: root.clickTargets = root.clickTargets.filter(function(t) { return t !== this }, this)
+        }
+
         // The call in progress, beside the clock; a tap opens the Phone
         // app's in-call screen (the bar is never shown over the lock).
         Rectangle {
@@ -381,54 +432,184 @@ Item {
             text: "󰂛"
           }
 
-          StatusGlyph {
+          Item {
             visible: !!root.btAdapter && root.btAdapter.enabled
-            text: root.bluetoothConnected ? "󰂱" : "󰂯"
-          }
-
-          Row {
-            visible: root.cellGlyph !== ""
-            spacing: Style.spacing.xs
             anchors.verticalCenter: parent.verticalCenter
-            opacity: root.cell && root.cell.state === "searching" ? 0.55 : 1
-
-            StatusGlyph { text: root.cellGlyph }
-            Text {
-              visible: text !== ""
-              anchors.verticalCenter: parent.verticalCenter
-              textFormat: Text.PlainText
-              text: root.cellText
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-              font.bold: true
-            }
-          }
-
-          StatusGlyph {
-            visible: root.networkIcon !== ""
-            text: root.networkIcon
-            opacity: root.networkKind === "off" || root.networkKind === "disconnected" ? 0.55 : 1
-          }
-
-          Row {
-            visible: root.hasBattery
-            spacing: Style.spacing.xs
-            anchors.verticalCenter: parent.verticalCenter
+            implicitWidth: bluetoothGlyph.implicitWidth
+            implicitHeight: barWindow.height
 
             StatusGlyph {
-              text: root.batteryIcon
-              color: root.batteryPercent >= 0 && root.batteryPercent <= 10 && !root.charging ? root.urgent : root.foreground
+              id: bluetoothGlyph
+              text: root.bluetoothConnected ? "󰂱" : "󰂯"
             }
 
-            Text {
-              visible: root.showBatteryPercent
+            // Omarchy's bluetooth panel, unseen but for its popup, opened by a tap.
+            Loader {
+              id: bluetoothPanel
+              anchors.fill: parent
+              source: "file://" + root.omarchyPath + "/shell/plugins/panels/bluetooth/Panel.qml"
+              onLoaded: { item.bar = root; item.opacity = 0 }
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              anchors.leftMargin: -Style.space(8)
+              anchors.rightMargin: -Style.space(8)
+              property real pressY: 0
+              property bool pulled: false
+              onPressed: function(mouse) { pressY = mouse.y; pulled = false }
+              onPositionChanged: function(mouse) {
+                if (!pulled && mouse.y - pressY > Style.space(14)) { pulled = true; root.openQuickSettings() }
+              }
+              onClicked: if (!pulled && bluetoothPanel.item) bluetoothPanel.item.toggle()
+              function triggerPress(button) { if (bluetoothPanel.item) bluetoothPanel.item.toggle() }
+              Component.onCompleted: root.clickTargets = root.clickTargets.concat([this])
+              Component.onDestruction: root.clickTargets = root.clickTargets.filter(function(t) { return t !== this }, this)
+            }
+          }
+
+          Item {
+            visible: root.cellGlyph !== ""
+            anchors.verticalCenter: parent.verticalCenter
+            implicitWidth: cellRow.implicitWidth
+            implicitHeight: barWindow.height
+
+            Row {
+              id: cellRow
+                spacing: Style.spacing.xs
               anchors.verticalCenter: parent.verticalCenter
-              textFormat: Text.PlainText
-              text: root.batteryPercent + "%"
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
+              opacity: root.cell && root.cell.state === "searching" ? 0.55 : 1
+
+
+              StatusGlyph { text: root.cellGlyph }
+              Text {
+                visible: text !== ""
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: root.cellText
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: true
+              }
+            }
+
+            // A tap opens the mobile network card; a pull opens quick settings.
+            MouseArea {
+              anchors.fill: parent
+              anchors.leftMargin: -Style.space(8)
+              anchors.rightMargin: -Style.space(8)
+              property real pressY: 0
+              property bool pulled: false
+              onPressed: function(mouse) { pressY = mouse.y; pulled = false }
+              onPositionChanged: function(mouse) {
+                if (!pulled && mouse.y - pressY > Style.space(14)) { pulled = true; root.openQuickSettings() }
+              }
+              onClicked: if (!pulled) cellCard.toggle()
+              function triggerPress(button) { cellCard.toggle() }
+              Component.onCompleted: root.clickTargets = root.clickTargets.concat([this])
+              Component.onDestruction: root.clickTargets = root.clickTargets.filter(function(t) { return t !== this }, this)
+            }
+
+            // The mobile network card (CellularPanel.qml), unseen but for its popup.
+            CellularPanel {
+              id: cellCard
+              anchors.fill: parent
+              bar: root
+              glyph: root.cellGlyph
+              opacity: 0
+            }
+          }
+
+          Item {
+            visible: root.networkIcon !== ""
+            anchors.verticalCenter: parent.verticalCenter
+            implicitWidth: networkGlyph.implicitWidth
+            implicitHeight: barWindow.height
+
+            StatusGlyph {
+              id: networkGlyph
+              text: root.networkIcon
+              opacity: root.networkKind === "off" || root.networkKind === "disconnected" ? 0.55 : 1
+            }
+
+            // Omarchy's network panel, unseen but for its popup, opened by a tap.
+            Loader {
+              id: networkPanel
+              anchors.fill: parent
+              source: "file://" + root.omarchyPath + "/shell/plugins/panels/network/Panel.qml"
+              onLoaded: { item.bar = root; item.opacity = 0 }
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              anchors.leftMargin: -Style.space(8)
+              anchors.rightMargin: -Style.space(8)
+              property real pressY: 0
+              property bool pulled: false
+              onPressed: function(mouse) { pressY = mouse.y; pulled = false }
+              onPositionChanged: function(mouse) {
+                if (!pulled && mouse.y - pressY > Style.space(14)) { pulled = true; root.openQuickSettings() }
+              }
+              onClicked: if (!pulled && networkPanel.item) networkPanel.item.toggle()
+              function triggerPress(button) { if (networkPanel.item) networkPanel.item.toggle() }
+              Component.onCompleted: root.clickTargets = root.clickTargets.concat([this])
+              Component.onDestruction: root.clickTargets = root.clickTargets.filter(function(t) { return t !== this }, this)
+            }
+          }
+
+          Item {
+            visible: root.hasBattery
+            anchors.verticalCenter: parent.verticalCenter
+            implicitWidth: batteryRow.implicitWidth
+            implicitHeight: barWindow.height
+
+            Row {
+              id: batteryRow
+              spacing: Style.spacing.xs
+              anchors.verticalCenter: parent.verticalCenter
+
+              StatusGlyph {
+                text: root.batteryIcon
+                color: root.batteryPercent >= 0 && root.batteryPercent <= 10 && !root.charging ? root.urgent : root.foreground
+              }
+
+              Text {
+                visible: root.showBatteryPercent
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: root.batteryPercent + "%"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+            }
+
+            // Omarchy's power widget, unseen: only its panel is used, placed
+            // under the battery and opened by a tap on it.
+            Loader {
+              id: powerPanel
+              anchors.fill: parent
+              active: root.hasBattery
+              source: "file://" + root.omarchyPath + "/shell/plugins/panels/power/Panel.qml"
+              onLoaded: { item.bar = root; item.opacity = 0 }
+            }
+
+            // A tap opens Omarchy's power panel; a pull still opens quick settings.
+            MouseArea {
+              anchors.fill: parent
+              anchors.leftMargin: -Style.space(8)
+              anchors.rightMargin: -Style.space(8)
+              property real pressY: 0
+              property bool pulled: false
+              onPressed: function(mouse) { pressY = mouse.y; pulled = false }
+              onPositionChanged: function(mouse) {
+                if (!pulled && mouse.y - pressY > Style.space(14)) { pulled = true; root.openQuickSettings() }
+              }
+              onClicked: if (!pulled && powerPanel.item) powerPanel.item.toggle()
+              function triggerPress(button) { if (powerPanel.item) powerPanel.item.toggle() }
+              Component.onCompleted: root.clickTargets = root.clickTargets.concat([this])
+              Component.onDestruction: root.clickTargets = root.clickTargets.filter(function(t) { return t !== this }, this)
             }
           }
         }
@@ -450,7 +631,7 @@ Item {
             root.openQuickSettings()
           }
         }
-        onClicked: if (!pulled) root.toggleQuickSettings()
+        // A tap on an empty part of the bar does nothing; a pull opens quick settings.
       }
     }
   }
