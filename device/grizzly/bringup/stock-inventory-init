@@ -1,0 +1,508 @@
+#!/grizzly-inventory/busybox sh
+# SPDX-License-Identifier: MIT
+
+# PID 1 does not search the factory ramdisk's executable directories.
+# shellcheck disable=SC2123
+PATH=/grizzly-inventory
+export PATH
+umask 077
+set -f
+bb=/grizzly-inventory/busybox
+mainline_marker=/grizzly-inventory/mainline-inventory
+inventory_prefix=grizzly-stock-inventory
+if [ -e "$mainline_marker" ] || [ -L "$mainline_marker" ]; then
+    inventory_prefix=grizzly-mainline-inventory
+fi
+
+stock_inventory_log() {
+    if [ -c /dev/kmsg ]; then
+        printf '<6>%s: %s\n' "$inventory_prefix" "$*" > /dev/kmsg
+    else
+        printf '%s: %s\n' "$inventory_prefix" "$*" >&2
+    fi
+}
+
+end_inventory() {
+    stock_inventory_log "$*"
+    while :; do "$bb" sleep 60; done
+}
+
+start_return_timer() {
+    (
+        case $fixture in
+            inventory|mainline-inventory) delay=90 ;;
+            nv-reader) delay=1200 ;;
+            *) delay=20 ;;
+        esac
+        stock_inventory_log "return timer armed delay_s=$delay"
+        if ! "$bb" sleep "$delay"; then
+            stock_inventory_log "return timer sleep failed delay_s=$delay"
+            exit 1
+        fi
+        case $fixture in
+            handoff-only)
+                if stock_inventory_handoff /proc/modules /sys/class/block; then
+                    stock_inventory_log "before restart modules=0 scsi_disks=0"
+                else
+                    stock_inventory_log "before restart module or SCSI disk present, or state unreadable"
+                fi ;;
+            preloads-only)
+                check_factory_preloads before-restart ||
+                    stock_inventory_log "preloads-only checks failed before restart" ;;
+            mainline-inventory)
+                stock_inventory_log 'warm restart requested [mainline-inventory]'
+                "$bb" sleep 1 || exit 1 ;;
+        esac
+        stock_inventory_log "timed restart requested delay_s=$delay"
+        "$bb" reboot -f
+        stock_inventory_log "timed restart returned; manual Fastboot return required"
+    ) &
+}
+
+mount_inventory_filesystems() {
+    "$bb" mkdir -p /dev /proc /sys &&
+        "$bb" mount -t tmpfs -o mode=0755,nosuid,noexec,size=64k tmpfs /dev &&
+        "$bb" mknod -m 0600 /dev/kmsg c 1 11 &&
+        "$bb" mknod -m 0600 /dev/null c 1 3 &&
+        "$bb" mknod -m 0600 /dev/console c 5 1 &&
+        "$bb" mount -t proc -o nosuid,nodev,noexec proc /proc &&
+        "$bb" mount -t sysfs -o ro,nosuid,nodev,noexec sysfs /sys
+}
+
+# Keep the diagnostic from repeating its RAM stage after a missed Fastboot return.
+check_mainline_previous_boot() {
+    mainline_pstore=/run/prior-pstore
+    mainline_console=$mainline_pstore/console-ramoops-0
+    if ! { "$bb" mkdir "$mainline_pstore" &&
+           "$bb" mount -t pstore -o ro,nosuid,nodev,noexec pstore "$mainline_pstore"; }; then
+        end_inventory 'cannot mount retained console'
+    fi
+    mainline_prior=1
+    if [ -e "$mainline_console" ] || [ -L "$mainline_console" ]; then
+        if [ ! -f "$mainline_console" ] || [ -L "$mainline_console" ]; then
+            mainline_prior=2
+        else
+            mainline_prior=0
+            "$bb" grep -Fq 'warm restart requested [mainline-inventory]' "$mainline_console" ||
+                mainline_prior=$?
+        fi
+    fi
+    "$bb" umount "$mainline_pstore" || end_inventory 'cannot unmount retained console'
+    case $mainline_prior in
+        0) end_inventory 'prior warm restart marker found, manual Fastboot return required' ;;
+        1) ;;
+        *) end_inventory 'cannot read retained console' ;;
+    esac
+}
+
+run_mainline_inventory() {
+    [ -f "$mainline_marker" ] && [ ! -L "$mainline_marker" ] ||
+        end_inventory 'invalid mainline inventory marker'
+    for conflict in /stock-inventory.modules /etc/omamobile-ufs-rw \
+        /grizzly-inventory/handoff-only /grizzly-inventory/preloads-only \
+        /grizzly-inventory/preloaded.modules /grizzly-inventory/nv-guard-only \
+        /grizzly-inventory/nv-reader-mode /grizzly-inventory/ufs-refclk-only \
+        /grizzly-inventory/ufs-power-trace /grizzly-inventory/usb2-test; do
+        if [ -e "$conflict" ] || [ -L "$conflict" ]; then
+            end_inventory 'ambiguous mainline inventory fixture'
+        fi
+    done
+
+    "$bb" grep -Eq '^ramoops(-?[0-9]+)?[[:space:]].*\(E' /proc/consoles ||
+        end_inventory 'ramoops console missing'
+    if ! { "$bb" mkdir -p /run &&
+           "$bb" mount -t tmpfs -o mode=0700,nosuid,noexec,size=128k tmpfs /run; }; then
+        end_inventory 'cannot mount private inventory workspace'
+    fi
+    check_mainline_previous_boot
+    start_return_timer
+
+    if [ -e /proc/sys/kernel/modprobe ]; then
+        if ! printf '\n' > /proc/sys/kernel/modprobe ||
+           ! IFS= read -r mainline_helper < /proc/sys/kernel/modprobe || [ -n "$mainline_helper" ]; then
+            end_inventory 'cannot disable kernel module autoload'
+        fi
+    fi
+    [ -f /grizzly-inventory/nv-guard.sh ] && [ ! -L /grizzly-inventory/nv-guard.sh ] ||
+        end_inventory 'mainline NV guard unavailable'
+    # shellcheck source=stock-nv-guard.sh
+    . /grizzly-inventory/nv-guard.sh
+    tries=0
+    while [ "$tries" -lt 20 ]; do
+        stock_inventory_scan /sys/class/block no && break
+        "$bb" sleep 1 || break
+        tries=$((tries + 1))
+    done
+    if ! stock_inventory_scan /sys/class/block no; then
+        stock_inventory_scan /sys/class/block yes
+        end_inventory 'mainline UFS inventory incomplete'
+    fi
+    stock_nv_guard "$bb" /sys/class/block /proc/self/mountinfo /run/nv-ro ||
+        end_inventory 'mainline NV guard failed'
+    stock_inventory_scan /sys/class/block yes ||
+        end_inventory 'mainline UFS inventory changed after guard'
+    end_inventory 'mainline guarded UFS metadata complete'
+}
+
+check_factory_preloads() {
+    phase=$1
+    # The stock kernel attempts the protected loads before PID 1.
+    if ! verified_preloads=$(stock_inventory_preloads "$bb" /grizzly-inventory/preloaded.modules /proc/modules); then
+        stock_inventory_log "factory preload check failed phase=$phase: $verified_preloads"
+        return 1
+    fi
+    if ! pkvm_status=$(stock_inventory_pkvm_ready "$bb" /sys/bus/platform); then
+        stock_inventory_log "pKVM readiness check failed phase=$phase: $pkvm_status"
+        return 1
+    fi
+    if ! stock_inventory_no_scsi_disks /sys/class/block; then
+        stock_inventory_log "SCSI disk present or block class unavailable phase=$phase"
+        return 1
+    fi
+    stock_inventory_log "factory preloads verified phase=$phase modules=$verified_preloads amb=kvm-arm-smmu-v3 scsi_disks=0"
+}
+
+stock_inventory_modules() (
+    mode=$1
+    seen=
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Manifest fields are whitespace-delimited and globbing is disabled.
+        # shellcheck disable=SC2086
+        set -- $line
+        [ "$#" -gt 0 ] || continue
+        case $1 in \#*) continue ;; esac
+        module=$1
+        shift
+        case $module in
+            [!a-zA-Z0-9]*|*[!a-zA-Z0-9_.-]*|sg.ko|pixel-reboot.ko|*rpmb*.ko)
+                stock_inventory_log "invalid module manifest entry"
+                return 1 ;;
+            *.ko) ;;
+            *) return 1 ;;
+        esac
+        module_name=$(printf '%s' "${module%.ko}" | "$bb" tr '-' '_') || return 1
+        case " $seen " in
+            *" $module_name "*) stock_inventory_log "duplicate module=$module"; return 1 ;;
+        esac
+        seen="$seen $module_name"
+        file=/lib/modules/$module
+        if [ ! -f "$file" ] || [ -L "$file" ]; then
+            stock_inventory_log "missing module=$module"
+            return 1
+        fi
+        for arg do
+            case $arg in
+                *=?*)
+                    key=${arg%%=*}
+                    value=${arg#*=}
+                    case $key in ''|[!a-zA-Z_]*|*[!a-zA-Z0-9_]*) return 1 ;; esac
+                    case $value in *[!a-zA-Z0-9_,.+-]*) return 1 ;; esac ;;
+                *) return 1 ;;
+            esac
+        done
+        if [ "$mode" = load ]; then
+            case " $verified_preloads " in
+                *" $module_name "*)
+                    stock_inventory_log "already preloaded module=$module"
+                    continue ;;
+            esac
+            if [ "$module" = ufs.ko ] && [ "${ufs_cpm_requested:-no}" = yes ]; then
+                stock_ufs_cpm_trace_before_probe "$ufs_trace_instance" || {
+                    stock_inventory_log "UFS CPM ring or pre-probe clock sample unavailable"
+                    return 1
+                }
+            fi
+            if [ "$module" = ufs.ko ] && [ "${ufs_psm1_prep_requested:-no}" = yes ]; then
+                stock_ufs_genpd_snapshot || stock_inventory_log "UFS genpd pre-load snapshot incomplete"
+            fi
+            stock_inventory_log "loading module=$module"
+            "$bb" insmod "$file" "$@" >/dev/kmsg 2>&1 || return 1
+        fi
+    done < /stock-inventory.modules
+
+    for module_name in $verified_preloads; do
+        case " $seen " in
+            *" $module_name "*) ;;
+            *) stock_inventory_log "preload missing from module manifest: $module_name"; return 1 ;;
+        esac
+    done
+    case " $seen " in
+        *" ufs "*) return 0 ;;
+        *) stock_inventory_log "manifest missing ufs.ko"; return 1 ;;
+    esac
+)
+
+if ! mount_inventory_filesystems; then
+    end_inventory "bootstrap failed"
+fi
+exec </dev/null >/dev/null 2>&1
+stock_inventory_log "PID 1 started"
+[ -r /grizzly-inventory/scan.sh ] || end_inventory "inventory library missing"
+# shellcheck source=stock-inventory-scan.sh
+. /grizzly-inventory/scan.sh
+
+if ! "$bb" tr '\000' '\n' < /sys/firmware/devicetree/base/compatible |
+    (IFS= read -r compatible && [ "$compatible" = google,malibu-grizzly ]); then
+    end_inventory "board identity check failed"
+fi
+stock_inventory_slot_b /proc/bootconfig /proc/cmdline || end_inventory "slot B required"
+if [ "$inventory_prefix" = grizzly-mainline-inventory ]; then
+    stock_inventory_log 'Grizzly mainline slot B verified'
+else
+    stock_inventory_log 'stock Grizzly slot B verified'
+fi
+
+# Set the in-memory kernel reboot policy before loading additional suppliers.
+# Always attempt to seal sysfs read-only, even if the mode write fails.
+"$bb" mount -t sysfs -o remount,rw,nosuid,nodev,noexec sysfs /sys ||
+    end_inventory "cannot set warm reboot mode on read-only sysfs"
+warm_requested=no
+if printf 'warm\n' > /sys/kernel/reboot/mode; then
+    warm_requested=yes
+fi
+"$bb" mount -t sysfs -o remount,ro,nosuid,nodev,noexec sysfs /sys ||
+    end_inventory "cannot remount sysfs read-only"
+if [ "$warm_requested" != yes ] ||
+   ! IFS= read -r reboot_mode < /sys/kernel/reboot/mode ||
+   [ "$reboot_mode" != warm ]; then
+    end_inventory "warm reboot mode unavailable"
+fi
+stock_inventory_log "reboot_mode=$reboot_mode sysfs=ro"
+fixture=inventory
+if [ "$inventory_prefix" = grizzly-mainline-inventory ]; then
+    fixture=mainline-inventory
+    run_mainline_inventory
+elif [ -e /grizzly-inventory/handoff-only ] || [ -L /grizzly-inventory/handoff-only ]; then
+    fixture=handoff-only
+elif [ -e /grizzly-inventory/preloads-only ] || [ -L /grizzly-inventory/preloads-only ]; then
+    fixture=preloads-only
+elif [ -e /grizzly-inventory/nv-reader-mode ] || [ -L /grizzly-inventory/nv-reader-mode ]; then
+    fixture=nv-reader
+fi
+start_return_timer
+
+"$bb" grep -Eq '^ramoops(-?[0-9]+)?[[:space:]].*\(E' /proc/consoles ||
+    end_inventory "ramoops console missing"
+stock_inventory_log "ramoops console registered" || end_inventory "kmsg write failed"
+
+if ! printf '\n' > /proc/sys/kernel/modprobe ||
+   ! IFS= read -r helper < /proc/sys/kernel/modprobe || [ -n "$helper" ]; then
+    end_inventory "cannot disable kernel module autoload"
+fi
+case $fixture in
+    handoff-only)
+        if [ ! -f /grizzly-inventory/handoff-only ] || [ -L /grizzly-inventory/handoff-only ] ||
+           [ -e /grizzly-inventory/preloads-only ] || [ -L /grizzly-inventory/preloads-only ] ||
+           [ -e /stock-inventory.modules ] || [ -L /stock-inventory.modules ] ||
+           [ -e /grizzly-inventory/preloaded.modules ] || [ -L /grizzly-inventory/preloaded.modules ]; then
+            end_inventory "ambiguous handoff fixture"
+        fi
+        stock_inventory_handoff /proc/modules /sys/class/block ||
+            end_inventory "handoff failed: module or SCSI disk present, or state unreadable"
+        end_inventory "handoff complete modules=0 scsi_disks=0" ;;
+    preloads-only)
+        if [ ! -f /grizzly-inventory/preloads-only ] || [ -L /grizzly-inventory/preloads-only ] ||
+           [ -e /stock-inventory.modules ] || [ -L /stock-inventory.modules ]; then
+            end_inventory "ambiguous preloads-only fixture"
+        fi
+        check_factory_preloads startup || end_inventory "preloads-only startup checks failed"
+        end_inventory "preloads-only complete" ;;
+esac
+if [ ! -f /stock-inventory.modules ] || [ -L /stock-inventory.modules ]; then
+    end_inventory "module manifest missing"
+fi
+nv_guard_marker=/grizzly-inventory/nv-guard-only
+usb2_requested=no
+refclk_requested=no
+ufs_trace_requested=no
+ufs_cpm_requested=no
+ufs_pre_on_requested=no
+ufs_psm1_requested=no
+ufs_psm1_prep_requested=no
+if [ -e /grizzly-inventory/usb2-test ] || [ -L /grizzly-inventory/usb2-test ]; then
+    if [ -e "$nv_guard_marker" ] || [ -L "$nv_guard_marker" ] ||
+       [ ! -f /grizzly-inventory/usb2-test.sh ] || [ -L /grizzly-inventory/usb2-test.sh ]; then
+        end_inventory "USB2 fixture is ambiguous or incomplete"
+    fi
+    nv_guard_marker=/grizzly-inventory/usb2-test
+    usb2_requested=yes
+fi
+refclk_marker=/grizzly-inventory/ufs-refclk-only
+if [ -e "$refclk_marker" ] || [ -L "$refclk_marker" ]; then
+    if [ "$usb2_requested" = yes ] ||
+       [ -e "$nv_guard_marker" ] || [ -L "$nv_guard_marker" ] ||
+       [ ! -f /grizzly-inventory/ufs-refclk.sh ] || [ -L /grizzly-inventory/ufs-refclk.sh ]; then
+        end_inventory "UFS reference-clock fixture is ambiguous or incomplete"
+    fi
+    nv_guard_marker=$refclk_marker
+    refclk_requested=yes
+fi
+ufs_trace_marker=/grizzly-inventory/ufs-power-trace
+if [ -e "$ufs_trace_marker" ] || [ -L "$ufs_trace_marker" ]; then
+    if [ "$usb2_requested" = yes ] || [ "$refclk_requested" = yes ] ||
+       [ -e "$nv_guard_marker" ] || [ -L "$nv_guard_marker" ] ||
+       [ ! -f /grizzly-inventory/ufs-power-trace.sh ] || [ -L /grizzly-inventory/ufs-power-trace.sh ]; then
+        end_inventory "UFS power trace fixture is ambiguous or incomplete"
+    fi
+    nv_guard_marker=$ufs_trace_marker
+    ufs_trace_requested=yes
+fi
+ufs_cpm_marker=/grizzly-inventory/ufs-cpm-trace
+if [ -e "$ufs_cpm_marker" ] || [ -L "$ufs_cpm_marker" ]; then
+    if [ "$ufs_trace_requested" != yes ] || [ ! -f "$ufs_cpm_marker" ] || [ -L "$ufs_cpm_marker" ] ||
+       [ ! -f /grizzly-inventory/stock-ufs-cpm-trace.sh ] || [ -L /grizzly-inventory/stock-ufs-cpm-trace.sh ] ||
+       [ ! -f /grizzly-inventory/stock-ufs-cpm-trace.awk ] || [ -L /grizzly-inventory/stock-ufs-cpm-trace.awk ]; then
+        end_inventory "UFS CPM trace fixture is incomplete"
+    fi
+    ufs_cpm_requested=yes
+fi
+ufs_pre_on_marker=/grizzly-inventory/ufs-pre-on-trace
+if [ -e "$ufs_pre_on_marker" ] || [ -L "$ufs_pre_on_marker" ]; then
+    if [ "$ufs_trace_requested" != yes ] || [ "$ufs_cpm_requested" = yes ] ||
+       [ ! -f "$ufs_pre_on_marker" ] || [ -L "$ufs_pre_on_marker" ]; then
+        end_inventory "UFS PRE_ON trace fixture is ambiguous or incomplete"
+    fi
+    ufs_pre_on_requested=yes
+fi
+ufs_psm1_marker=/grizzly-inventory/ufs-psm1-trace
+if [ -e "$ufs_psm1_marker" ] || [ -L "$ufs_psm1_marker" ]; then
+    if [ "$ufs_trace_requested" != yes ] || [ "$ufs_cpm_requested" = yes ] ||
+       [ "$ufs_pre_on_requested" = yes ] ||
+       [ ! -f "$ufs_psm1_marker" ] || [ -L "$ufs_psm1_marker" ]; then
+        end_inventory "UFS PSM1 trace fixture is ambiguous or incomplete"
+    fi
+    ufs_psm1_requested=yes
+fi
+ufs_psm1_prep_marker=/grizzly-inventory/ufs-psm1-prep-trace
+if [ -e "$ufs_psm1_prep_marker" ] || [ -L "$ufs_psm1_prep_marker" ]; then
+    if [ "$ufs_psm1_requested" != yes ] ||
+       [ ! -f "$ufs_psm1_prep_marker" ] || [ -L "$ufs_psm1_prep_marker" ]; then
+        end_inventory "UFS prep PSM1 trace fixture is incomplete"
+    fi
+    ufs_psm1_prep_requested=yes
+fi
+nv_snapshot_output=
+if [ "$fixture" = nv-reader ]; then
+    if [ "$usb2_requested" != yes ] ||
+       [ ! -f /grizzly-inventory/nv-reader-mode ] || [ -L /grizzly-inventory/nv-reader-mode ] ||
+       [ ! -f /grizzly-inventory/nv-reader ] || [ -L /grizzly-inventory/nv-reader ] ||
+       [ ! -x /grizzly-inventory/nv-reader ] ||
+       [ -e /grizzly-inventory/usb2-ep0 ] || [ -L /grizzly-inventory/usb2-ep0 ]; then
+        end_inventory "NV reader fixture is ambiguous or incomplete"
+    fi
+    nv_snapshot_output=/grizzly-inventory/nv-verified
+fi
+nv_guard_requested=no
+if [ -e "$nv_guard_marker" ] || [ -L "$nv_guard_marker" ]; then
+    if [ ! -f "$nv_guard_marker" ] || [ -L "$nv_guard_marker" ] ||
+       [ ! -f /grizzly-inventory/nv-guard.sh ] || [ -L /grizzly-inventory/nv-guard.sh ]; then
+        end_inventory "NV guard fixture is incomplete"
+    fi
+    # shellcheck source=stock-nv-guard.sh
+    . /grizzly-inventory/nv-guard.sh
+    command -v stock_nv_guard >/dev/null || end_inventory "NV guard unavailable"
+    nv_guard_requested=yes
+fi
+check_factory_preloads startup || end_inventory "inventory startup checks failed"
+stock_inventory_modules check || end_inventory "module manifest rejected"
+if [ "$ufs_trace_requested" = yes ]; then
+    # shellcheck source=stock-ufs-power-trace.sh
+    . /grizzly-inventory/ufs-power-trace.sh
+    trace_clock=mono
+    if [ "$ufs_cpm_requested" = yes ]; then
+        # shellcheck source=stock-ufs-cpm-trace.sh
+        . /grizzly-inventory/stock-ufs-cpm-trace.sh
+        trace_clock=boot
+    fi
+    if ! stock_ufs_power_trace_start "$bb" "$trace_clock" "$ufs_pre_on_requested"; then
+        stock_ufs_power_trace_close || stock_inventory_log "UFS power trace cleanup failed"
+        end_inventory "cannot arm UFS power trace"
+    fi
+    if [ "$ufs_cpm_requested" = yes ] && ! stock_ufs_cpm_trace_mount "$bb"; then
+        stock_ufs_cpm_trace_unmount || stock_inventory_log "UFS CPM debugfs cleanup failed"
+        stock_ufs_power_trace_close || stock_inventory_log "UFS power trace cleanup failed"
+        end_inventory "cannot mount UFS CPM debugfs"
+    fi
+    if [ "$ufs_psm1_requested" = yes ] && ! stock_ufs_psm1_arm "$ufs_psm1_marker"; then
+        stock_ufs_power_trace_close || stock_inventory_log "UFS power trace cleanup failed"
+        end_inventory "cannot arm UFS PSM1 sampler"
+    fi
+fi
+if ! stock_inventory_modules load; then
+    if [ "$ufs_cpm_requested" = yes ]; then
+        stock_ufs_cpm_trace_unmount || stock_inventory_log "UFS CPM debugfs cleanup failed"
+    fi
+    if [ "$ufs_psm1_requested" = yes ]; then
+        stock_ufs_psm1_close || stock_inventory_log "UFS PSM1 sampler capture or cleanup failed"
+    fi
+    if [ "$ufs_trace_requested" = yes ]; then
+        stock_ufs_power_trace_close || stock_inventory_log "UFS power trace cleanup failed"
+    fi
+    end_inventory "module load failed"
+fi
+
+tries=0
+while [ "$tries" -lt 20 ]; do
+    stock_inventory_scan /sys/class/block no && break
+    "$bb" sleep 1 || break
+    tries=$((tries + 1))
+done
+cpm_trace_ok=yes
+if [ "$ufs_cpm_requested" = yes ]; then
+    stock_ufs_cpm_trace_capture "$ufs_trace_instance" || cpm_trace_ok=no
+    stock_ufs_cpm_trace_unmount || cpm_trace_ok=no
+    if [ "$cpm_trace_ok" != yes ]; then
+        stock_inventory_log "UFS CPM trace capture or cleanup failed"
+    fi
+fi
+psm1_capture_ok=yes
+if [ "$ufs_psm1_requested" = yes ]; then
+    stock_ufs_psm1_close || psm1_capture_ok=no
+fi
+ap_trace_ok=yes
+if [ "$ufs_trace_requested" = yes ] && ! stock_ufs_power_trace_close; then
+    if [ "$ufs_psm1_requested" != yes ]; then
+        end_inventory "UFS power trace capture or cleanup failed"
+    fi
+    ap_trace_ok=no
+    stock_inventory_log "UFS power trace capture or cleanup failed"
+fi
+if stock_inventory_scan /sys/class/block yes; then
+    if [ "$nv_guard_requested" = yes ]; then
+        stock_nv_guard "$bb" /sys/class/block /proc/self/mountinfo /grizzly-inventory/nv-ro "$nv_snapshot_output" ||
+            end_inventory "NV guard failed"
+        if [ "$ufs_cpm_requested" = yes ]; then
+            end_inventory "UFS CPM trace and NV guard finished capture_ok=$cpm_trace_ok"
+        fi
+        if [ "$ufs_psm1_requested" = yes ]; then
+            end_inventory "UFS PSM1 trace and NV guard finished sample_ok=$psm1_capture_ok ap_trace_ok=$ap_trace_ok"
+        fi
+        if [ "$ufs_trace_requested" = yes ]; then
+            end_inventory "UFS power trace and NV guard complete"
+        fi
+        if [ "$refclk_requested" = yes ]; then
+            # shellcheck source=stock-ufs-refclk.sh
+            . /grizzly-inventory/ufs-refclk.sh
+            command -v stock_ufs_refclk >/dev/null || end_inventory "UFS reference-clock helper unavailable"
+            stock_ufs_refclk "$bb" /sys || end_inventory "UFS reference-clock diagnostic failed"
+            end_inventory "UFS reference-clock diagnostic complete"
+        fi
+        if [ "$usb2_requested" = yes ]; then
+            stock_inventory_log "NV guard complete before USB2 setup"
+            # shellcheck source=stock-usb2-test.sh
+            . /grizzly-inventory/usb2-test.sh
+            command -v stock_usb2_test >/dev/null || end_inventory "USB2 test unavailable"
+            if [ "$fixture" = nv-reader ]; then
+                stock_usb2_test "$bb" nv-reader || end_inventory "NV restricted reader failed"
+                stock_inventory_log "NV restricted reader closed, requesting warm return"
+                "$bb" reboot -f
+                end_inventory "NV return reboot did not complete"
+            fi
+            stock_usb2_test "$bb" dummy || end_inventory "USB2 dummy test failed"
+            end_inventory "USB2 dummy test complete"
+        fi
+        end_inventory "NV guard complete"
+    fi
+    end_inventory "inventory complete"
+fi
+end_inventory "inventory incomplete"

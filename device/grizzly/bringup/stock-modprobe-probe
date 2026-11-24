@@ -1,0 +1,15 @@
+#!/grizzly-inventory/busybox sh
+# SPDX-License-Identifier: MIT
+
+# Use the kernel helper's standard descriptors so ramoops records this before PID 1.
+if [ "$#" -ne 3 ] || [ "$1" != -q ] || [ "$2" != -- ] || [ "$3" != goog-mba-ctrl ]; then
+    printf '<6>grizzly-preinit-probe: refused module invocation\n' >&2
+    exit 125
+fi
+
+printf '<6>grizzly-preinit-probe: factory helper help start\n' >&2
+/grizzly-inventory/factory/modprobe --help
+help_result=$?
+printf '<6>grizzly-preinit-probe: factory helper help status=%s wrapper_status=125\n' "$help_result" >&2
+# Report a failed load to the kernel regardless of the factory helper's exit status.
+exit 125

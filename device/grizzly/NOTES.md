@@ -60,7 +60,9 @@ Headers were read with AOSP `unpack_bootimg`, DTB nodes with `fdtdump` and
   hash descriptors. The two chained images have ML-DSA-65 AVB metadata,
   rollback index `1791158400` and patch property `2026-10-05`. Their factory
   image sizes are `0x4000000` and `0x800000` bytes. The existing image
-  builder emits RSA-4096 footers. Acceptance by unlocked Grizzly is open.
+  builder emits RSA-4096 footers. Unlocked D1 later booted the v38 bundle
+  with two test RSA-4096 leaves. The stock handoff-only trial also reached
+  PID 1 with a factory ML-DSA-65 `boot` and a test RSA-4096 `init_boot`.
 - The stock tree points to a DesignWare UART at `0x3bdd6000` in `/chosen`.
   For USB, it describes a DWC3 core behind `google,dwc3-mbu`, with
   Malibu PHY, clock, reset and power-domain dependencies. Neither console
@@ -535,12 +537,60 @@ The driver skipped the TOP bit 4 poll and retained its votes.
 Stock A completed boot with verity enforcing and its original
 VBMeta digest.
 
-The offline v29 fixture samples PSMs before the CPM startup
+The full v29 fixture samples PSMs before the CPM startup
 frame, around acquisition of HSIO-S, and around SGIA IRQ
 setup. It reads HC and PHY after the wrapper reports `0x10`.
-The v29 hardware run is pending. The
-[bring-up plan](BRINGUP-M1.md) covers the gates for that
-trial and for the first storage-visible Grizzly rescue.
+The link diagnostic remains pending. A handoff-only repack
+confirmed HSIO-S and HC at `0x10` and PHY at `0x11` before
+the CPM startup frame, with the UFS driver blacklisted.
+The [bring-up plan](BRINGUP-M1.md#v29-handoff-only-result)
+records the live sample and retained logs.
+
+The v30 link diagnostic decoded LPCM8 PSM1 to the HC status
+word at `0x3c00c210`. Before and after both issued votes, PSM1
+was 0, HC was `0x10` and PHY was `0x11`. Both votes returned 0.
+The PHY poll timed out and stock A completed boot after the warm
+return. [v30 trial](BRINGUP-M1.md#v30-slot-b-result)
+
+The v31 trial decoded PSM3 descriptor `0x00021325` to
+`0x3c00e108` in all four samples. The address fell outside that
+fixture's allowlist, leaving PSM3 state unknown. PSM1 remained 0,
+HC `0x10` and PHY `0x11` across both votes. Stock A completed boot.
+[v31 trial](BRINGUP-M1.md#v31-slot-b-result)
+
+The v32 trial read PSM3 state `1` at `0x3c00e108` before and after
+both votes. PSM1 remained `0`, HC `0x10` and PHY `0x11`. The PHY
+poll timed out and stock A completed boot after the warm return.
+[v32 trial](BRINGUP-M1.md#v32-slot-b-result)
+
+v33 found BUCK11S and BUCK13S enabled at the stock selectors before
+core-on and after the PHY timeout. Both retained consoles agree.
+Stock A completed boot. [v33 trial](BRINGUP-M1.md#v33-slot-b-result)
+
+v34 read PHY reset acknowledgment `0x1001` at `0x3c01b05c`.
+Bit 12 showed reset released while PHY readiness timed out at
+`0x11`. Stock A completed boot. [v34 trial](BRINGUP-M1.md#v34-slot-b-result)
+
+v39 inherited the HSIO-S ON vote and issued the UFS prep and core
+ON votes successfully. HC was `0x10` and PHY was `0x11` before
+the CPM startup handshake, around each vote and through the
+21.48-second sample. Stock A completed boot. A prepared
+[stock consumer trace](BRINGUP-M1.md#stock-d1-ufs-consumer-trace)
+captures existing UFS driver reads and MBFS events to compare
+stock's later probe with v39. The stock trace recorded PHY
+`0x11` then `0x10` 390 µs later, followed by the core ON notifier
+reading TOP bit 4 set. Stock reached HS gear 5, and the inventory
+and NV guard passed. Ring overwrite left the preceding votes
+unresolved. [Stock trace result](BRINGUP-M1.md#stock-d1-slot-b-trace-result)
+
+The corrected stock trace captured successful MBFS prep and core
+ON requests. Later stock trials measured PSM1 `0x3` before prep ON
+and `0x2` after it, with `0x2` still present before core ON. PHY
+reached `0x10` 4 µs after the core reply, followed by TOP bit 4 and
+HS gear 5. Genpd showed one completed idle transition each for
+prep and core before UFS loaded. The NV guard passed and stock A
+booted with enforcing verity.
+[Prep PSM1 and genpd trial](BRINGUP-M1.md#d1-prep-psm1-and-genpd-hardware-result)
 
 Coordinate device findings with [#26](https://github.com/derekross/omamobile/issues/26).
 That report covers a second MP1.0 Grizzly on the October build.

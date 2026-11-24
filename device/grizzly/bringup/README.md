@@ -24,7 +24,7 @@ The prebuilt v29 package has SHA-256
 
 ## Kernel provenance
 
-The current sources are published on the
+The v14–v29 sources are published on the
 [grizzly-ufs-bringup-v29 branch](https://github.com/adrienlacombe/linux-omarchy-mobile/tree/grizzly-ufs-bringup-v29).
 The v21 row records the original build commit. The v22–v29 commits were reconstructed from the saved
 incremental build inputs and have the exact recorded source trees.
@@ -46,6 +46,13 @@ The v17–v20 bundles reused the v16 kernel byte for byte.
 | v27 | `7.3.0-rc6-omamobile-grizzly-uic-v27` | `d7f14a149fa53698909573c69f40524fe0ee1156` |
 | v28 | `7.3.0-rc6-omamobile-grizzly-uic-v28` | `66718fcd0432e029d2f57070adcfebfa02ccb3e0` |
 | v29 | `7.3.0-rc6-omamobile-grizzly-uic-v29` | `401ec7a0581a508ec414b5cdb5328b2d93f5a2ac` |
+
+The [v39 diagnostic branch](https://github.com/adrienlacombe/linux-omarchy-mobile/tree/grizzly-ufs-bringup-v39)
+contains the v30–v39 source history. Commit
+`8ba5fdb292d5229c01d6b4948b21306721e5360f` records the
+initial-vote patch used to build v39 on top of the v38 source.
+The [v39 trial](../BRINGUP-M1.md#v39-slot-b-result) records the
+original build provenance and hardware results.
 
 The earlier first-light sources are published on the
 [grizzly-first-light-archive branch](https://github.com/adrienlacombe/linux-omarchy-mobile/tree/grizzly-first-light-archive).
