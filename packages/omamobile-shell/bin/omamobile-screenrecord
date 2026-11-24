@@ -5,7 +5,7 @@
 #   omamobile-screenrecord start [--audio none|both|system|mic] [--area full|pick]
 #                                [--geometry "X,Y WxH"]
 #   omamobile-screenrecord start mic|system|none     (the older form)
-#   omamobile-screenrecord stop | status | call-status
+#   omamobile-screenrecord stop | status
 #   omamobile-screenrecord heat     (prints "<hottest C> <HEAT_START or off>")
 #
 # Omarchy's recorder (gpu-screen-recorder) can't drive the phone's Mali
@@ -48,7 +48,6 @@ reasonfile=$state/stop-reason
 thermal_glob=${OMAMOBILE_RECORD_THERMAL_GLOB:-/sys/class/thermal/thermal_zone*}
 tick=${OMAMOBILE_RECORD_TICK:-5}
 wf=${OMAMOBILE_RECORD_WF:-wf-recorder}
-callrec_data=${OMAMOBILE_RECORD_CALLREC_DATA:-/usr/share/omamobile/callrec/countries.tsv}
 
 notify() {
   if command -v omarchy-notification-send >/dev/null 2>&1; then omarchy-notification-send -t 4000 "$@" >/dev/null 2>&1 || true
@@ -384,43 +383,11 @@ stop() {
   fi
 }
 
-# Call recording's state for the Screen record page, as one JSON line:
-# state needs-modem | blocked | consent | allowed, with country and reason.
-# There is no call recording backend yet (it needs the modem's in-call
-# capture), so this is needs-modem until omamobile-callrec exists. The
-# country comes from the network's MCC, else the system region; its policy
-# from countries.tsv (MCC, ISO code, allowed|blocked). An unknown country
-# shows the row with a consent notice.
-call_status() {
-  if ! command -v omamobile-callrec >/dev/null 2>&1; then
-    echo '{"state":"needs-modem","country":"","reason":"Needs the modem"}'; return
-  fi
-  local mcc="" cc="" policy="" op
-  if command -v mmcli >/dev/null 2>&1; then
-    op=$({ mmcli -m any -K 2>/dev/null || true; } | sed -n 's/^modem\.3gpp\.operator-code *: *\([0-9]\{5,6\}\).*/\1/p' | head -1)
-    mcc=${op:0:3}
-  fi
-  if [[ -n $mcc && -r $callrec_data ]]; then
-    read -r cc policy < <(awk -F'\t' -v m="$mcc" '$1==m {print $2, $3; exit}' "$callrec_data") || true
-  fi
-  if [[ -z $cc ]]; then
-    cc=$({ locale 2>/dev/null || true; } | sed -n 's/^LC_TELEPHONE="\{0,1\}[a-z]*_\([A-Z][A-Z]\).*/\1/p' | head -1)
-    [[ -n $cc && -r $callrec_data ]] && policy=$(awk -F'\t' -v c="$cc" '$2==c {print $3; exit}' "$callrec_data")
-  fi
-  cc=${cc//[^A-Z]/}; cc=${cc:0:2}; policy=${policy//$'\r'/}
-  case $policy in
-    blocked) printf '{"state":"blocked","country":"%s","reason":"Call recording is not allowed by law in %s"}\n' "$cc" "$cc" ;;
-    allowed) printf '{"state":"allowed","country":"%s","reason":""}\n' "$cc" ;;
-    *) printf '{"state":"consent","country":"%s","reason":"Recording laws where you are are unknown. Tell everyone on the call that it is recorded."}\n' "$cc" ;;
-  esac
-}
-
 case ${1:-} in
   status) running && echo on || echo off ;;
   start) shift; start "$@" ;;
   stop) stop ;;
   heat) g=$(int_conf HEAT_START ""); echo "$(heat) ${g:-off}" ;;
-  call-status) call_status ;;
   supervise) supervise ;;
-  *) echo "usage: omamobile-screenrecord start [--audio none|both|system|mic] [--area full|pick] [--geometry 'X,Y WxH']|stop|status|heat|call-status" >&2; exit 2 ;;
+  *) echo "usage: omamobile-screenrecord start [--audio none|both|system|mic] [--area full|pick] [--geometry 'X,Y WxH']|stop|status|heat" >&2; exit 2 ;;
 esac

@@ -74,4 +74,3 @@ install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-shell/LICENSE"
 # come from omamobile-owl-widgets, which ships the store's licence.
 install -Dm644 widgets/LICENSE-owl-guide "$destination/usr/share/licenses/omamobile-shell/LICENSE-owl-guide"
 install -Dm644 version "$destination/usr/share/omamobile/shell/version"
-install -Dm644 callrec/countries.tsv "$destination/usr/share/omamobile/callrec/countries.tsv"

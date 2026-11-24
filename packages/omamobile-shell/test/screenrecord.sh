@@ -4,7 +4,7 @@
 # hyprctl, slurp, systemd-inhibit and the thermal zones: the arguments per
 # audio mode and area, the null sink's modules and their cleanup, the heat
 # gate and the heat stop (file kept), the screen-off stop, a cancelled
-# pick, the start lock, the older positional form and call-status.
+# pick, the start lock, and the older positional form.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -17,7 +17,7 @@ rec=$PWD/bin/omamobile-screenrecord
 mkdir -p "$t/bin" "$t/run" "$t/videos" "$t/thermal"/{z0,z1,z2} "$t/home"
 export T=$t HOME=$t/home XDG_RUNTIME_DIR=$t/run XDG_VIDEOS_DIR=$t/videos XDG_CONFIG_HOME=$t/home/.config
 export OMAMOBILE_RECORD_THERMAL_GLOB="$t/thermal/z*" OMAMOBILE_RECORD_TICK=0.2
-export OMAMOBILE_RECORD_PICK_DELAY=0 OMAMOBILE_RECORD_CALLREC_DATA=$t/countries.tsv
+export OMAMOBILE_RECORD_PICK_DELAY=0
 export PATH="$t/bin:$PATH"
 # The recorder by path, never by name, so a real wf-recorder later on PATH is never started.
 export OMAMOBILE_RECORD_WF=$t/bin/wf-recorder
@@ -253,19 +253,6 @@ rc=0; OMAMOBILE_RECORD_WF=$t/no-such/wf-recorder "$rec" start --audio none >/dev
 [[ $rc == 1 ]] || fail "needs wf-recorder"
 [[ -e $t/wf-args ]] && fail "no recorder started when it is missing"
 pass "missing wf-recorder"
-
-# --- call-status
-[[ $("$rec" call-status) == *'"state":"needs-modem"'* ]] || fail "call-status needs-modem without a backend"
-printf '#!/bin/sh\n' >"$t/bin/omamobile-callrec"
-printf '#!/bin/sh\necho "modem.3gpp.operator-code : 20201"\n' >"$t/bin/mmcli"
-chmod +x "$t/bin/omamobile-callrec" "$t/bin/mmcli"
-printf '# header\n202\tGR\tallowed\n' >"$t/countries.tsv"
-[[ $("$rec" call-status) == *'"state":"allowed","country":"GR"'* ]] || fail "call-status allowed by MCC"
-printf '202\tGR\tblocked\n' >"$t/countries.tsv"
-[[ $("$rec" call-status) == *'"state":"blocked"'* ]] || fail "call-status blocked by MCC"
-: >"$t/countries.tsv"
-[[ $("$rec" call-status) == *'"state":"consent"'* ]] || fail "call-status consent when unknown"
-pass "call-status: needs-modem, allowed, blocked, consent"
 
 # --- the tile passes the page's choices through
 grep -q 'exec omamobile-screenrecord start "\$@"' plugins/omamobile.quicksettings/tile-action.sh || fail "tile-action passes all arguments"

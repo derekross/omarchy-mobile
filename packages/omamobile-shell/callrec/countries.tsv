@@ -1,5 +1,0 @@
-# SPDX-License-Identifier: MIT
-# MCC	ISO 3166 code	allowed|blocked
-# Call recording policy per country, read by omamobile-screenrecord call-status.
-# Empty until each line has a cited legal source (see docs/TELEPHONY-APPS-PLAN.md).
-# A country not listed shows the call recording row with a consent notice.
