@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+#
+# The shared hotspot's root side, for phones whose Wi-Fi can't start an access
+# point on its client interface (brcmfmac, #523): a helper run as root by
+# omamobile-hotspot.service, the backend the shell's Hotspot tile and page call,
+# and a polkit rule for starting and stopping that one unit. Opt-in: only a
+# device package that depends on it installs it, and the unit does nothing
+# without that device's /usr/share/omamobile/hotspot.conf.
+pkgname=omamobile-hotspot
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omarchy Mobile shared Wi-Fi hotspot on its own interface (opt-in per device)"
+arch=(aarch64)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+depends=(bash systemd iw iproute2 networkmanager dnsmasq polkit)
+optdepends=('ufw: the hotspot opens DHCP, DNS and forwarding on its interface while it is on')
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}

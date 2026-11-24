@@ -47,9 +47,9 @@ Since 0.1.13 the controller takes the phone's own address at boot (`omamobile-bt
 ## Hotspot
 
 The Pixel 8 Pro can't start an access point on `wlp1s0` (the firmware answers the beacon-period set with `-52`), so
-it uses omamobile-shell's shared hotspot (`omamobile-hotspot.service`, an access point on a second interface `ap0`
+it uses the shared hotspot from `omamobile-hotspot`, which this package depends on (`omamobile-hotspot.service`, an access point on a second interface `ap0`
 beside the client Wi-Fi, NetworkManager's `Hotspot` profile with PMF required; see #523 for why pmf 3). This package
-only turns it on for this phone: `/usr/share/omamobile/hotspot.conf` (`interface=ap0`) and the link
+turns it on for this phone: `/usr/share/omamobile/hotspot.conf` (`interface=ap0`) and the link
 `/etc/omamobile/hotspot-backend` that the shell's Hotspot tile and page look for. `/etc/omamobile/hotspot.conf`
 overrides its values (`interface=`, and `stop_temp_mc=`, which is off by default), but doesn't turn the hotspot on by
 itself.

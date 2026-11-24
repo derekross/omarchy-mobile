@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# hotspot/hotspot-ap against stub nmcli, iw, ufw, ip and systemd-notify: nothing on this machine is touched.
+# lib/hotspot-ap against stub nmcli, iw, ufw, ip and systemd-notify: nothing on this machine is touched.
 set -euo pipefail
 src=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 tmp=$(mktemp -d); trap 'rm -rf -- "$tmp"' EXIT
@@ -53,7 +53,7 @@ stub systemd-notify 'true'
 stub systemd-run '[[ -e $ST/norun ]] && exit 1; while [[ $1 == --* ]]; do shift; done; "$@"'
 stub systemctl '[[ $1 == show ]] && { cat "$ST/unit" 2>/dev/null || echo inactive; }; true'
 mkdir -p "$tmp/sys/net/wlp1s0/phy80211"; echo phy0 > "$tmp/sys/net/wlp1s0/phy80211/name"
-cp "$src/hotspot/hotspot-ap" "$tmp/hotspot-ap"
+cp "$src/lib/hotspot-ap" "$tmp/hotspot-ap"
 printf '1700000000 02:bb:cc:dd:ee:01 10.42.0.23 OnePlus-13 01:aa\n' > "$tmp/leases"
 echo 50000 > "$tmp/temp"; touch "$st/route"
 export ST=$st

@@ -31,14 +31,6 @@ done < <(find squeekboard/keyboards -type f -name '*.yaml' -print0)
 # Omarchy hook scripts that omamobile-setup-user links into the user's
 # ~/.config/omarchy/hooks/ (the keyboard's theme-set hook)
 install -Dm755 hooks/theme-set-keyboard "$destination/usr/share/omamobile/shell/hooks/theme-set-keyboard"
-# The shared hotspot for phones that need an access point on its own interface (brcmfmac, #523): the root helper,
-# its unit (which does nothing unless a device package ships /usr/share/omamobile/hotspot.conf) and the polkit
-# rule for starting and stopping that one unit. The device package opts in with that file and the
-# /etc/omamobile/hotspot-backend link.
-install -Dm755 hotspot/hotspot-ap "$destination/usr/lib/omamobile-shell/hotspot/hotspot-ap"
-install -Dm755 hotspot/hotspot-backend "$destination/usr/lib/omamobile-shell/hotspot/hotspot-backend"
-install -Dm644 systemd/omamobile-hotspot.service "$destination/usr/lib/systemd/system/omamobile-hotspot.service"
-install -Dm644 polkit/50-omamobile-hotspot.rules "$destination/usr/share/polkit-1/rules.d/50-omamobile-hotspot.rules"
 install -Dm644 systemd/omamobile-nfc-open.service "$destination/usr/lib/systemd/system/omamobile-nfc-open.service"
 install -Dm644 systemd/user/omarchy-fcitx5-omamobile.conf "$destination/usr/lib/systemd/user/omarchy-fcitx5.service.d/omamobile.conf"
 # The permission sheet: the portal's Access backend, its D-Bus activation and

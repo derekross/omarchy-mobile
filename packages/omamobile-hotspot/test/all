@@ -1,0 +1,24 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-hotspot: the helper and the backend against stubs, the unit, the
+# polkit rule and the staged layout. Nothing on this machine is touched.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { echo "FAIL: $*" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+bash -n lib/hotspot-ap && bash -n lib/hotspot-backend && bash -n install || fail "the scripts parse"
+bash test/hotspot-ap.sh >/dev/null 2>&1 || fail "hotspot-ap (test/hotspot-ap.sh)"
+bash test/hotspot-backend.sh >/dev/null 2>&1 || fail "hotspot-backend (test/hotspot-backend.sh)"
+u=omamobile-hotspot.service
+grep -qx 'ConditionPathExists=/usr/share/omamobile/hotspot.conf' $u || fail "the unit only runs where a device opted in"
+grep -qx 'ExecStart=/usr/lib/omamobile-hotspot/hotspot-ap run' $u || fail "the unit runs the helper"
+grep -qx 'ExecStopPost=/usr/lib/omamobile-hotspot/hotspot-ap down' $u || fail "the unit's stop runs the helper"
+grep -q '"omamobile-hotspot.service"' 50-omamobile-hotspot.rules || fail "the polkit rule names only this unit"
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+./install "$tmp/root"
+for f in usr/lib/omamobile-hotspot/hotspot-ap usr/lib/omamobile-hotspot/hotspot-backend; do
+  [[ -x $tmp/root/$f ]] || fail "staged executable: $f"
+done
+[[ -f $tmp/root/usr/lib/systemd/system/$u && -f $tmp/root/usr/share/polkit-1/rules.d/50-omamobile-hotspot.rules ]] || fail "unit and polkit rule staged"
+[[ ! -e $tmp/root/etc ]] || fail "the package itself turns nothing on (no /etc)"
+pass "helper, backend, unit and polkit rule"

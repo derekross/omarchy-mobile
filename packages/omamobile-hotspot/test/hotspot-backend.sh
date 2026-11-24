@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# hotspot/hotspot-backend against stub nmcli and systemctl: nothing on this machine is touched.
+# lib/hotspot-backend against stub nmcli and systemctl: nothing on this machine is touched.
 set -euo pipefail
 src=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 tmp=$(mktemp -d); trap 'rm -rf -- "$tmp"' EXIT
@@ -20,7 +20,7 @@ esac'
 stub systemctl 'case "$1" in show) cat "$ST/unit" 2>/dev/null || echo inactive ;; esac; [[ ! -e $ST/sysfail ]]'
 stub hostname 'echo husky'
 touch "$tmp/devconf"
-be() { PATH="$tmp/bin:/usr/bin" OMAMOBILE_HOTSPOT_RUN="$tmp/run" OMAMOBILE_HOTSPOT_DEVCONF="$tmp/devconf" bash "$src/hotspot/hotspot-backend" "$@"; }
+be() { PATH="$tmp/bin:/usr/bin" OMAMOBILE_HOTSPOT_RUN="$tmp/run" OMAMOBILE_HOTSPOT_DEVCONF="$tmp/devconf" bash "$src/lib/hotspot-backend" "$@"; }
 field() { python3 -c 'import json,sys; v=json.load(sys.stdin)[sys.argv[1]]; print(v if not isinstance(v,bool) else str(v).lower())' "$1"; }
 
 # no profile yet: off, empty name, no VPN boxes, the uplink note

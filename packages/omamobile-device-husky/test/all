@@ -305,11 +305,12 @@ ps="$tmp/root/etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf"
 grep -qx '\[connection\]' "$ps" || fail "the Wi-Fi power save file needs a [connection] header"
 grep -qx 'wifi.powersave=3' "$ps" || fail "Wi-Fi power save is on by default (3 = enable)"
 pass "Wi-Fi power save is on by default"
-[[ $(readlink "$tmp/root/etc/omamobile/hotspot-backend") == /usr/lib/omamobile-shell/hotspot/hotspot-backend ]] ||
+[[ $(readlink "$tmp/root/etc/omamobile/hotspot-backend") == /usr/lib/omamobile-hotspot/hotspot-backend ]] ||
   fail "the shell finds the shared hotspot backend at /etc/omamobile/hotspot-backend"
 grep -qx 'interface=ap0' "$tmp/root/usr/share/omamobile/hotspot.conf" || fail "the hotspot runs on ap0"
-[[ ! -e $tmp/root/usr/lib/omamobile-shell ]] || fail "the hotspot helper stays in omamobile-shell"
-if [[ -f ../omamobile-shell/hotspot/hotspot-backend ]]; then
-  [[ -x ../omamobile-shell/hotspot/hotspot-backend ]] || fail "the link points at an executable backend"
+[[ ! -e $tmp/root/usr/lib/omamobile-hotspot ]] || fail "the hotspot helper stays in omamobile-hotspot"
+grep -q "omamobile-hotspot)" PKGBUILD || fail "this phone opts in by depending on omamobile-hotspot"
+if [[ -f ../omamobile-hotspot/lib/hotspot-backend ]]; then
+  [[ -x ../omamobile-hotspot/lib/hotspot-backend ]] || fail "the link points at an executable backend"
 fi
-pass "the hotspot: this phone opts in to the shell's shared one on ap0"
+pass "the hotspot: this phone opts in to omamobile-hotspot's shared one on ap0"
