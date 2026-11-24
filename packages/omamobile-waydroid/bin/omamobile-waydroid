@@ -82,7 +82,7 @@ cmd_init() {
   need_root
   "$LIB/omamobile-waydroid-check" >/dev/null || die "the kernel is missing options; run omamobile-waydroid check"
   "$LIB/omamobile-waydroid-harden" patch / || die "Waydroid's Python could not be hardened; not continuing"
-  case $SYSTEM_TYPE in VANILLA|GAPPS|FOSS) ;; *) die "SYSTEM_TYPE must be VANILLA, GAPPS or FOSS ($CONF)";; esac
+  case $SYSTEM_TYPE in VANILLA|FOSS) ;; *) die "SYSTEM_TYPE must be VANILLA or FOSS ($CONF)";; esac
   waydroid init -s "$SYSTEM_TYPE"
   harden_config
   cmd_mesa

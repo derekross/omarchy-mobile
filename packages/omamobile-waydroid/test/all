@@ -27,6 +27,9 @@ for f in usr/bin/omamobile-waydroid usr/lib/omamobile-waydroid/omamobile-waydroi
   [[ -e $t/stage/$f ]] || fail "not staged: $f"
 done
 grep -q 'lxc-omamobile.conf' lib/omamobile-waydroid-harden || fail "harden does not include lxc-omamobile.conf"
+# the project neither ships nor sets up Google apps: init accepts VANILLA and FOSS only
+grep -q 'case $SYSTEM_TYPE in VANILLA|FOSS) ;;' bin/omamobile-waydroid || fail "init does not limit SYSTEM_TYPE to VANILLA and FOSS"
+if grep -qi 'gapps' bin/omamobile-waydroid etc/omamobile/waydroid.conf; then fail "GAPPS is offered"; fi
 grep -qx 'lxc.cgroup2.devices.deny = b \*:\* rwm' lib/lxc-omamobile.conf || fail "block devices not denied"
 # LXC 7 allows nothing when there is only a deny rule, so the file carries an
 # allow list. Block devices stay out because no rule allows a "b" device; the
