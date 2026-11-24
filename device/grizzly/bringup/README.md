@@ -68,6 +68,11 @@ adds genpd idle-release logging at `e040f855e9ca3eb513734e5bad5c176497446ec6`.
 See the [v41 runbook](../BRINGUP-M1.md#mainline-v41-genpd-idle-release-trace)
 for the stock D1 comparison and expected gate records.
 
+The [v42 diagnostic branch](https://github.com/adrienlacombe/linux-omarchy-mobile/tree/grizzly-ufs-bringup-v42)
+adds the prep-only latch opt-out at `0d5e4078f0a7d2f6be666948820ea04b96e7cd96`.
+See the [v42 runbook](../BRINGUP-M1.md#mainline-v42-guarded-prep-idle-release)
+for the guarded OFF and resume sequence.
+
 The earlier first-light sources are published on the
 [grizzly-first-light-archive branch](https://github.com/adrienlacombe/linux-omarchy-mobile/tree/grizzly-first-light-archive).
 The table distinguishes

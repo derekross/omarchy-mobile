@@ -2107,6 +2107,32 @@ late sample retained HC `0x10` and PHY `0x11`. Fastboot returned 133
 seconds after the B boot request. Stock D1 completed boot on A with
 enforcing verity and the original factory VBMeta digest.
 
+### Mainline v42 guarded prep idle release
+
+[v42 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/0d5e4078f0a7d2f6be666948820ea04b96e7cd96)
+sets `GENPD_FLAG_NO_STAY_ON` before `pm_genpd_init()` for diagnostic
+prep only, after it successfully acquires its own initial ON vote.
+An inherited vote keeps the latch. The default-off build option
+requires the v41 genpd tracing option. The v41 logs and the existing
+OFF ownership, core vote, wrapper, PSM1 and PHY guards remain in use.
+The UFS host remains disabled and HSIO-S stays held on.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match the source, image manifest and safety configuration below. | Keep stock A selected if any check fails. |
+| One attended slot B boot, power-control risk | With separate approval and the NV backup gate satisfied, confirm prep `on=1 stay_on=0` and `provider-off`. Capture the core client vote and guarded prep OFF samples. If OFF leaves PSM1 `0x3`, capture PSM1 before and after prep ON. After a qualified `0x3` to `0x2` transition, capture the core ON reply and guarded PHY sample against the stock `0x10` target. | Preserve the first rejected gate or unexpected sample. Use the 90-second warm return and select stock A. Stop further trials if the recovery path is lost or any disk appears. |
+
+The ARM64 `7.3.0-rc6-omamobile-grizzly-uic-v42` build passed strict
+checkpatch and `W=1` for the CPM and genpd objects. Six registration
+flag cases and the nine existing idle transition cases passed offline.
+The DTB and RAM rescue match v41, with the same three baseline schema
+diagnostics. All five hashes, both AVB signatures, unpacked payload,
+ABL handoff bounds and saved D1 slot capacities passed. Manifest SHA-256
+`5f2422cb1856f0bba2c72c7a205eed89d8811cda811142422541f5636e1e4446`.
+Archive SHA-256
+`6e55eeef5052bd8c475be9d50adab6b793ef4a01a2bb2db1340eaae15c5a34f0`.
+v42 awaits its first hardware boot.
+
 ## Staging and return sequence used for D1
 
 These commands describe the attended workflow used by the trials.
