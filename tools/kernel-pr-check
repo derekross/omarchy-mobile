@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# The checks a linux-omarchy-mobile pull request must pass before review
+# The checks a linux-omamobile pull request must pass before review
 # (CONTRIBUTING.md section 6.2), on the commits between BASE and HEAD of a
 # kernel tree:
 #

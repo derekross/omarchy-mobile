@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile's system setup: what a platform's "setup-system" step does in
+# Omamobile's system setup: what a platform's "setup-system" step does in
 # Omarchy's lifecycle contract. Runs as root; safe to rerun.
 #   omamobile-setup-system [timezone]
 set -euo pipefail
@@ -16,7 +16,7 @@ if [[ -n ${1:-} ]]; then
 fi
 systemctl enable --now systemd-timesyncd >/dev/null 2>&1 || true
 
-# The phone's services from the other Omarchy Mobile packages: enabled here,
+# The phone's services from the other Omamobile packages: enabled here,
 # once, because packages don't enable units themselves (the device package
 # ships its own boot units as .wants links). The fingerprint service stays
 # off: its first start writes Trusty's secure storage (FINGERPRINT-PLAN).

@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 7 (panther) suspend: s2idle, on the Pixel 7 Pro's path
 
-Status (2026-11-16): Z1, Z3, Z4 and P7 passed; Z2 found its cause. The screen comes back after s2idle (DISPLAY-PLAN D5, to come with the 90 Hz pull request), the RTC alarm wakes the phone ([linux-omarchy-mobile#201](https://github.com/derekross/linux-omarchy-mobile/pull/201), merged), and Power and Volume Down wake it too. Wi-Fi's hang after a resume is the firmware trapping on the freeze path (Z2g to Z2k); on `systemctl suspend` it hasn't trapped in 256 resumes. So device-panther unloads Wi-Fi around sleep by default (#475), and a check that reloads it when it is kept loaded (Z2l, Z2m) and two brcmfmac patches are pull requests to come. Z6 has standby numbers (Z6b to Z6k): asleep with Wi-Fi kept, about 284-296 mA with the memory bus at 2028 MHz (Z6c, Z6j) and 248-251 mA at 1014 MHz (Z6j, Z6k; the 1014 MHz floor is a kernel pull request to come); at 1014 MHz with Wi-Fi unloaded, 184-200 mA (Z6k). Power off powers off on a kernel with [linux-omarchy-mobile#233](https://github.com/derekross/linux-omarchy-mobile/pull/233) (P7); the kernel releases since `kernel-2026.11.13` carry it, so the upower drop-in waits only for off-mode charging (#788). Z5 hasn't run.
+Status (2026-11-16): Z1, Z3, Z4 and P7 passed; Z2 found its cause. The screen comes back after s2idle (DISPLAY-PLAN D5, to come with the 90 Hz pull request), the RTC alarm wakes the phone ([linux-omamobile#201](https://github.com/derekross/linux-omamobile/pull/201), merged), and Power and Volume Down wake it too. Wi-Fi's hang after a resume is the firmware trapping on the freeze path (Z2g to Z2k); on `systemctl suspend` it hasn't trapped in 256 resumes. So device-panther unloads Wi-Fi around sleep by default (#475), and a check that reloads it when it is kept loaded (Z2l, Z2m) and two brcmfmac patches are pull requests to come. Z6 has standby numbers (Z6b to Z6k): asleep with Wi-Fi kept, about 284-296 mA with the memory bus at 2028 MHz (Z6c, Z6j) and 248-251 mA at 1014 MHz (Z6j, Z6k; the 1014 MHz floor is a kernel pull request to come); at 1014 MHz with Wi-Fi unloaded, 184-200 mA (Z6k). Power off powers off on a kernel with [linux-omamobile#233](https://github.com/derekross/linux-omamobile/pull/233) (P7); the kernel releases since `kernel-2026.11.13` carry it, so the upower drop-in waits only for off-mode charging (#788). Z5 hasn't run.
 
 The Pixel 7 Pro (cheetah, the same gs201) has done this work:
 `device/cheetah/SUSPEND-PLAN.md` explains s2idle on gs201, the wake
@@ -392,7 +392,7 @@ had the spurious PME on the root port after the hot resume.
 - The D3 series works on this phone, but not every time: 1 hang in 11
   resumes, against the Pixel 7 Pro's 31 of 31 (S5c).
 - This kernel's PCIe GEN4A_1 description comes from
-  linux-omarchy-mobile#195, the Pixel 7 Pro's from its own board file.
+  linux-omamobile#195, the Pixel 7 Pro's from its own board file.
   Comparing the two (the root port's PME and wake set-up, ASPM, the
   `pcie-gs201` link state across s2idle) is the next step, along with
   more loops to get a rate.
@@ -1263,7 +1263,7 @@ today:
 So `deep` stays a PMU sleep driver plus the list in cheetah's section 5:
 no short PR.
 
-**Nearer: what the Pixel 6 already did.** linux-omarchy-mobile#9 (merged
+**Nearer: what the Pixel 6 already did.** linux-omamobile#9 (merged
 2026-10-27) gave gs101 André Draszik's `google,gs101-pd` series with the
 blocks nothing uses (TPU, BO, MFC, G2D, the camera pipeline) as disabled
 domains that genpd powers off, and set ACPM's MIF to 1014 MHz with
@@ -1420,7 +1420,7 @@ cause, not yet tested:
   `resume_noirq` that way is the one hardware action this kernel adds to a
   suspend, and a reset at that point fits it (Z6h confirms the cause).
 - The same hierarchy is in `gs101.dtsi`, and raven enables PDP, IPP, ITP
-  and DNS. linux-omarchy-mobile#9 says "Not tested: suspend with the domains
+  and DNS. linux-omamobile#9 says "Not tested: suspend with the domains
   off", so the Pixel 6 may hit this too.
 
 Test for it, one change: `ptest-daily9-pd` without the two parent links
@@ -1462,7 +1462,7 @@ Takeaways:
   already off. With parent links they reset the phone on resume. Not worth
   a panther PR; MIF is the lever that pays.
 - raven enables the same PDP→IPP and ITP→DNS hierarchy, and
-  linux-omarchy-mobile#9 lists suspend with the domains off as untested.
+  linux-omamobile#9 lists suspend with the domains off as untested.
 - To compare kernels fairly, measure `ptest-daily8` and `ptest-daily9-mif`
   again on the same day under the same conditions.
 
@@ -1473,7 +1473,7 @@ on that for a reset from below the kernel. That reading was wrong.
 `systemd-pstore` is enabled on the phone: at every boot it moves the
 ramoops record out of `/sys/fs/pstore` into
 `/var/lib/systemd/pstore/console-ramoops-0`, always the same file name, so
-each boot overwrites the last one's record (derekross/omarchy-mobile#578
+each boot overwrites the last one's record (derekross/omamobile#578
 found the same on the 8 Pro). By the time it was looked for, the reset's
 record had already been replaced by four later boots; checked on
 2026-11-09, only the newest file is there.
@@ -1556,7 +1556,7 @@ both. Against the mean of the two mif2 runs:
 - s2idle: **-46 mA (-16 %)**, about 17 h instead of 14.5 h on about
   4300 mAh.
 
-Close to the Pixel 6's 70 mA (linux-omarchy-mobile#9). This compares
+Close to the Pixel 6's 70 mA (linux-omamobile#9). This compares
 2028 against 1014 MHz as a whole; Z6i already shows the 1352 → 1014 step
 alone hardly shows with the screen off.
 
@@ -1638,7 +1638,7 @@ Takeaways:
 
 The Pixel 7 Pro's P7 on this phone, on `ptest-daily10`
 (`7.3.0-rc6-omamobile-push1-g78a54921b02a`): `omamobile` 82f31d3a7, which
-carries linux-omarchy-mobile#233 (the S2MPG12's WTSR and SMPL restarts
+carries linux-omamobile#233 (the S2MPG12's WTSR and SMPL restarts
 disarmed at power off), plus the charger DT, #181 with the 90 Hz series,
 #195, the brcmfmac wake and trap commits and the MIF commit. Loaded with
 `flash`; its first boot came up at 90 Hz with MIF at 1014 MHz and Wi-Fi

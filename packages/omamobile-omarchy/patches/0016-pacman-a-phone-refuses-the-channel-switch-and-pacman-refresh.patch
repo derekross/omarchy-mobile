@@ -22,7 +22,7 @@ diff --git i/bin/omarchy-channel-set w/bin/omarchy-channel-set
 +# A phone's pinned package repository and Arch Linux ARM mirrors are owned
 +# by omamobile-update, never the desktop channel/reset commands.
 +if [[ -x /usr/bin/omamobile-update ]]; then
-+  echo "omarchy-channel-set: use 'omarchy update' on Omarchy Mobile; see docs/RELEASES.md 5.4." >&2
++  echo "omarchy-channel-set: use 'omarchy update' on Omamobile; see docs/RELEASES.md 5.4." >&2
 +  exit 1
 +fi
 +
@@ -38,7 +38,7 @@ diff --git i/bin/omarchy-refresh-pacman w/bin/omarchy-refresh-pacman
 +# A phone's pinned package repository and Arch Linux ARM mirrors are owned
 +# by omamobile-update, never the desktop channel/reset commands.
 +if [[ -x /usr/bin/omamobile-update ]]; then
-+  echo "omarchy-refresh-pacman: use 'omarchy update' on Omarchy Mobile; see docs/RELEASES.md 5.4." >&2
++  echo "omarchy-refresh-pacman: use 'omarchy update' on Omamobile; see docs/RELEASES.md 5.4." >&2
 +  exit 1
 +fi
 +

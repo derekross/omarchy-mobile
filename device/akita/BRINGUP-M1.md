@@ -3,7 +3,7 @@
 
 **Status (2026-11-03):** stage 0 done ([NOTES.md](NOTES.md), #308). **M1 is complete.**
 
-The kernel side is [derekross/linux-omarchy-mobile#192](https://github.com/derekross/linux-omarchy-mobile/pull/192), on `omamobile` `fe9627c00`:
+The kernel side is [derekross/linux-omamobile#192](https://github.com/derekross/linux-omamobile/pull/192), on `omamobile` `fe9627c00`:
 - the binding, `7385cab4b`;
 - the first-light DTS, `1253914a9`;
 - the framebuffer, `6a2999804`.
@@ -28,7 +28,7 @@ Husky's first light found and fixed what a zuma phone needs, and all of it is in
 - The eUSB2 PHY and USB DRD PHY drivers (tests 16-18), built in (`CONFIG_PHY_SNPS_EUSB2=y` in `kernel/configs/omamobile.config`), with their nodes in `zuma.dtsi`.
 - The zuma watchdog driver (tests 18-19). Without it, ABL's cluster watchdogs reset the phone about 80 s into each boot.
 - `syscon-reboot-mode` and `reboot=warm` (test 22): `reboot-to bootloader` reaches fastboot.
-- The PHY exit fix (linux-omarchy-mobile#42, tests 23-29) and the PMU tables (#49, test 30).
+- The PHY exit fix (linux-omamobile#42, tests 23-29) and the PMU tables (#49, test 30).
 
 ## Path abbreviations
 

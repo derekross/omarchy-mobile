@@ -4,7 +4,7 @@
 # D-Bus activated: stopping a running one makes the next request start it
 # again with the motor. No feedbackd running: nothing to do.
 [Unit]
-Description=Omarchy Mobile: let feedbackd pick up the haptics motor
+Description=Omamobile: let feedbackd pick up the haptics motor
 
 [Service]
 Type=oneshot

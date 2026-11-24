@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# dodge-setup-ui: the stock Omarchy Mobile display setup for the OnePlus 13,
+# dodge-setup-ui: the stock Omamobile display setup for the OnePlus 13,
 # plus the dodge overrides (shell.toml here). Run as the desktop user (not
 # root), from this directory or with it as $1. Idempotent.
 #

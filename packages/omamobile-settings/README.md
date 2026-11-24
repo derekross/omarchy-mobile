@@ -35,7 +35,7 @@ by its own script) is not declared, so Settings leaves it alone. On husky the
 row stays hidden today: omamobile-device-husky blacklists `max77759_charger`
 (`omamobile-max77759.conf`), so there is no `max77759-charger` power supply
 until that blacklist is lifted on a kernel with
-derekross/linux-omarchy-mobile#266.
+derekross/linux-omamobile#266.
 
 A third page, Security & privacy, turns the UFW firewall on or off and shows the SSH server. The page runs
 `backends/security.sh`, which reads `ENABLED=` in `/etc/ufw/ufw.conf`, the port 22 rules in `/etc/ufw/user.rules` and

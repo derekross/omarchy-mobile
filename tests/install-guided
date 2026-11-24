@@ -635,12 +635,12 @@ says "More than one phone" || fail "two phones: said plainly"
 # Slot B: the owner is asked the plain question, not told to type an option
 fresh; vars yes b
 if guided "yes\nmaybe\nno\n$REST"; then fail "a phone running Android from slot B is stopped"; fi
-says "Is this phone already running Omarchy Mobile? (yes/no)" && says "Type yes or no." && says "Android has to be put on" &&
+says "Is this phone already running Omamobile? (yes/no)" && says "Type yes or no." && says "Android has to be put on" &&
   ! says "user name on the phone" && ! says "--reinstall" && [[ -z $(writes) ]] ||
   fail "slot B, \"no\": asked plainly (anything but yes or no asks again), stopped before any question about the owner, no option to type"
-[[ $(grep -c 'Is this phone already running Omarchy Mobile' "$t/out") == 2 ]] || fail "slot B: an answer that isn't yes or no asks again"
+[[ $(grep -c 'Is this phone already running Omamobile' "$t/out") == 2 ]] || fail "slot B: an answer that isn't yes or no asks again"
 guided "yes\n$REST" || fail "slot B, \"yes\": a reinstall goes through with no option"
-says "a reinstall: Omarchy Mobile on slot B is replaced" && says "slot b holds Omarchy Mobile (--reinstall): it will be replaced" ||
+says "a reinstall: Omamobile on slot B is replaced" && says "slot b holds Omamobile (--reinstall): it will be replaced" ||
   fail "slot B, \"yes\": --reinstall is handed to install-phone, which says it replaces slot B"
 once "a reinstall"
 # The reinstall rule (decided 2026-11-13): on slot B with the reinstall
@@ -655,10 +655,10 @@ once "a reinstall with one bootloader version"
 fresh; SLOTS=$'version-bootloader-a:testloader-1.0-111\nversion-bootloader-b:testloader-0.9-000' vars yes b
 if guided "yes\nyes\n$REST"; then fail "a reinstall with two different bootloaders stops"; fi
 says "on this phone they differ" && [[ -z $(writes) ]] || fail "a reinstall: two different per-slot versions still stop"
-# A locked phone on slot B is never asked: it can't be running Omarchy Mobile
+# A locked phone on slot B is never asked: it can't be running Omamobile
 fresh; vars no b
 if guided "yes\nyes\n"; then fail "a locked phone on slot B stops"; fi
-! says "Is this phone already running Omarchy Mobile" || fail "a locked phone on slot B: the reinstall question isn't asked"
+! says "Is this phone already running Omamobile" || fail "a locked phone on slot B: the reinstall question isn't asked"
 fresh; SLOTS="" vars
 if guided "$ALL"; then fail "an unknown other bootloader slot stops the install"; fi
 says "only tells the version of the copy" && says "ask in an issue" && says "wait for the next release" && [[ -z $(writes) ]] ||
@@ -760,7 +760,7 @@ MUST_UNLOCK=1 locked_stop "Android on slot B" "running from its second system co
 says "That can't be done while the bootloader is locked" && says "needs an unlocked bootloader, and unlocking erases the phone" &&
   says "everything on this phone is lost either way" && says "Copy off what you want to keep" && says "step 1 unlocks the bootloader" && says "step 3 says how to put Android on slot A" ||
   fail "a locked phone on slot B: the way back needs the unlock, which erases the phone, so back up first"
-! says "--reinstall" && ! says "To go on from here, run:" || fail "a locked phone on slot B: no reinstall is offered (a locked phone can't be running Omarchy Mobile), and no promise of a rerun"
+! says "--reinstall" && ! says "To go on from here, run:" || fail "a locked phone on slot B: no reinstall is offered (a locked phone can't be running Omamobile), and no promise of a rerun"
 # A phone that doesn't say which slot it runs from, or says something else,
 # is stopped: it is not taken for slot A (the phone here is on slot B)
 for line in "" "current-slot:" "current-slot:_b"; do
@@ -792,14 +792,24 @@ locked_stop "a file larger than its partition" "This download doesn't fit this p
 says "dtbo.img" && says "(dtbo_b) is 4 bytes" || fail "a file that doesn't fit: the file and the area are named"
 # An image with an AVB footer is made for one partition size: another
 # size, even a larger one that the file fits, stops (boot_b is 0x4000000)
+avb_footer_image() {  # FILE SIZE (writes AVBf at -64)
+  python3 -I - "$@" <<'PY'
+import sys
+path, size = sys.argv[1], int(sys.argv[2], 0)
+with open(path, "wb") as f:
+    f.truncate(size)
+    f.seek(size - 64)
+    f.write(b"AVBf")
+PY
+}
 fresh; vars no; { descriptor; echo 'AVB_FOOTERS="boot:0x2000000"'; } > "$R/device/testdev/device.conf"
-truncate -s $((0x2000000)) "$t/images/boot.img"
+avb_footer_image "$t/images/boot.img" $((0x2000000))
 locked_stop "an AVB footer made for another partition size" "This download doesn't fit this phone"
 says "boot.img" && says "(made for an area of exactly 33554432 bytes)" && says "(boot_b) is 67108864 bytes" ||
   fail "an AVB footer for another size: the file, the size it was made for and the area's size are named"
 fresh; vars no; { descriptor; echo 'AVB_FOOTERS="boot:0x4000000 dtbo:16777216"'; } > "$R/device/testdev/device.conf"
-truncate -s $((0x4000000)) "$t/images/boot.img"
-truncate -s 16777216 "$t/images/dtbo.img"
+avb_footer_image "$t/images/boot.img" $((0x4000000))
+avb_footer_image "$t/images/dtbo.img" 16777216
 if guided "yes\n\n"; then fail "a locked phone stops the install"; fi
 says "fastboot flashing unlock" && ! says "doesn't fit" || fail "AVB footers made for exactly the phone's partition sizes pass (hex and decimal)"
 echo "boot image" > "$t/images/boot.img"
@@ -988,7 +998,7 @@ says "\"Downloading of the system image and use of the device software is subjec
   says "\"may also be subject to certain third-party" && says "terms of service, which can be found in Settings > About phone > Legal" && says "information\"" && says "Google says:" ||
   fail "the terms step quotes Google's three sentences, with Google's addresses"
 says "In our own words: Google's page says these files are for use only on your own" && says "Pixel and may not be redistributed." &&
-  says "from Google to this computer, for this phone. Omarchy Mobile does not host" && says "Google's files and does not pass them on." ||
+  says "from Google to this computer, for this phone. Omamobile does not host" && says "Google's files and does not pass them on." ||
   fail "the terms step says in our own words what Google's page asks, and that the project hosts and passes on nothing"
 says "https://developers.google.com/android/images#testdev" && says "$URL" && says "The file: $zipname" || fail "the terms step shows Google's page for the build, the file and where it comes from"
 [[ $(grep -n "Type yes to accept Google's terms and download the file" "$t/out" | cut -d: -f1) -lt $(grep -n "downloading $zipname from Google" "$t/out" | cut -d: -f1) ]] ||
@@ -1174,13 +1184,13 @@ no_update_advice() {  # WHAT NEWEST|"": never told to update, and why
     says "Updating Android would not help: this is the newest build in the list" && says "update cannot be undone." || fail "$1: says that updating Android would not help"
   fi
   ! says "System update" && ! says "so update Android" && ! says "The newest build in the list has been tested" || fail "$1: not told to update Android"
-  says "Wait until a release of Omarchy Mobile has been tested with" && says "https://github.com/derekross/omarchy-mobile/issues" || fail "$1: to wait, or to ask in an issue"
+  says "Wait until a release of Omamobile has been tested with" && says "https://github.com/derekross/omamobile/issues" || fail "$1: to wait, or to ask in an issue"
   says "Running this again will stop here again until then." && ! says "To go on from here, run:" || fail "$1: a rerun stops again"
 }
 for tested in true false; do
   fresh; index 2026-11-01 otherband-1 $tested > "$R/device/testdev/factory-builds.json"
   if guided "$ALL"; then fail "a build with the same bootloader and another baseband is not used (tested: $tested)"; fi
-  says "no build in the" && says "isn't one Omarchy Mobile knows yet" && [[ -z $(writes) && -z $(record factory) ]] ||
+  says "no build in the" && says "isn't one Omamobile knows yet" && [[ -z $(writes) && -z $(record factory) ]] ||
     fail "no build with both versions: nothing taken or written (tested: $tested)"
   [[ $(events '^xdg-open') == 0 ]] || fail "no page is opened for a build that doesn't match"
   if [[ $tested == true ]]; then
@@ -1195,7 +1205,7 @@ fresh
 guided "$ALL" || fail "the exact build is used"
 says "this phone's bootloader and baseband match Google's build AB1C.230101.001" && ! says "this phone runs" ||
   fail "the match is said as a match of the two versions, not as the build the phone runs"
-says "which Omarchy Mobile was tested with" || fail "a tested build is said to be tested"
+says "which Omamobile was tested with" || fail "a tested build is said to be tested"
 # The exact build, marked tested, or the install stops (decided 2026-11-12).
 # A build that is listed and not tested is "not tested yet". "Update
 # Android" is said only when the update lands on a tested build: Android's
@@ -1204,8 +1214,8 @@ says "which Omarchy Mobile was tested with" || fail "a tested build is said to b
 not_tested() {  # WHAT: the stand-in's index holds the phone's build, untested
   if guided "$ALL"; then fail "$1: a build that isn't marked tested is not used"; fi
   says "This phone's Android is not tested yet." && says "Google's build AB1C.230101.001:" && says "bootloader: $BL" && says "baseband:   $BB" &&
-    says "No release of Omarchy Mobile has been tested with that build" || fail "$1: said to be not tested yet, with the build"
-  ! says "isn't one Omarchy Mobile knows yet" || fail "$1: not said to be unknown"
+    says "No release of Omamobile has been tested with that build" || fail "$1: said to be not tested yet, with the build"
+  ! says "isn't one Omamobile knows yet" || fail "$1: not said to be unknown"
   [[ -z $(writes) && -z $(record factory) && $(events '^xdg-open') == 0 ]] || fail "$1: nothing taken, opened or written"
   ! says "user name on the phone" && ! says "Google's factory image for this phone" || fail "$1: stopped at the phone step"
 }
@@ -1230,7 +1240,7 @@ no_update_advice "a tested build between the phone's and an untested newest one"
 fresh; sed -i 's/^version-baseband:.*/version-baseband:oldband-1/' "$t/vars"
 index_list 2026-11-01 "AB1C.230301.004 newband-3 false" "AB1C.230201.002 otherband-2 true" > "$R/device/testdev/factory-builds.json"
 if guided "$ALL"; then fail "an unlisted build with an untested newest build stops"; fi
-says "isn't one Omarchy Mobile knows yet" || fail "an unlisted build is said to be unknown"
+says "isn't one Omamobile knows yet" || fail "an unlisted build is said to be unknown"
 no_update_advice "an unlisted build, the newest build untested, an older one tested" AB1C.230301.004
 # An index in which an older build stands above a newer one is refused
 # whole: nothing is read from an order nobody kept
@@ -1261,7 +1271,7 @@ if guided "yes\n"; then fail "setup: an install stopped at the owner's questions
 [[ $(grep -c "match Google's build" "$t/out") == 1 ]] || fail "the match is said once, however often the phone is looked at"
 sed -i 's/^version-baseband:.*/version-baseband:newband-7/' "$t/vars"   # a build the list doesn't have
 if guided "$REST"; then fail "a phone whose Android changed to an unlisted build stops, with the factory image already taken"; fi
-says "isn't one Omarchy Mobile knows yet" && ! says "user name on the phone" && [[ -z $(writes) ]] || fail "the build is judged again on a rerun: an unlisted one stops before the write"
+says "isn't one Omamobile knows yet" && ! says "user name on the phone" && [[ -z $(writes) ]] || fail "the build is judged again on a rerun: an unlisted one stops before the write"
 [[ $(record factory) == "done" ]] || fail "a stop for the build leaves the record of the factory image alone"
 index_list 2026-11-01 "AB1C.230201.002 otherband-2 true" "AB1C.230101.001 $BB true" "AB1C.221201.003 newband-7 false" > "$R/device/testdev/factory-builds.json"
 if guided "$REST"; then fail "a phone whose Android changed to an untested build stops, with the factory image already taken"; fi
@@ -1399,7 +1409,7 @@ says "a plain link between this computer and the phone" && says "internet connec
 says "matched by driver (cdc_ncm)" && says "USB-C docks" && says "no saved" && says "priority (-100) is below every connection you have saved" && says "stays saved" ||
   fail "the description says what the driver match can catch, the priority, and that it stays"
 ! says "Nothing else on this computer changes" && ! says "applies only to" && ! says "shares this computer's internet" || fail "the connection's description makes no promise it can't keep"
-says "Omarchy Mobile is written to the phone, and what the install has done so" && ! says "Nothing has been written" || fail "after the write, a stop says the phone is written"
+says "Omamobile is written to the phone, and what the install has done so" && ! says "Nothing has been written" || fail "after the write, a stop says the phone is written"
 touch "$t/fail-nmcli"
 if guided "\n"; then fail "a connection NetworkManager refuses stops the install"; fi
 rm "$t/fail-nmcli"
@@ -1850,8 +1860,8 @@ bguided() {
 fresh
 bguided "$ALL" || fail "a signed bundle installs with bash install --guided and no option"
 once "from a bundle"
-says "Omarchy Mobile 2026.11.01 for the Test Phone" && says "release 2026.11.01 (developer preview)" || fail "a bundle names its release"
-says "the download is complete and signed by Omarchy Mobile" || fail "the bundle's signature, checksums and root image are checked (install-phone --verify-only)"
+says "Omamobile 2026.11.01 for the Test Phone" && says "release 2026.11.01 (developer preview)" || fail "a bundle names its release"
+says "the download is complete and signed by Omamobile" || fail "the bundle's signature, checksums and root image are checked (install-phone --verify-only)"
 grep -c '^nv-backup [^-]' "$t/events" >/dev/null || fail "in a bundle nv-backup reads the bundle's own descriptor"
 [[ $(record release) == 2026.11.01 ]] || fail "the record names the bundle's release"
 pass "a bundle as make-bundle makes it, unpacked: bash install --guided installs it with no option, from the bundle's own signed files"
@@ -1863,13 +1873,13 @@ says "Install again from the start? This erases the phone. (yes/no)" && says "No
   cmp -s "$t/events" "$t/events.finished" || fail "a finished install, no answer: asked, nothing forgotten, nothing run"
 bguided "no\n" && says "Nothing was changed" && [[ -n $(record finished) ]] || fail "a finished install, \"no\": nothing forgotten"
 # 2026-11-13, as it went then: a reinstall of the phone the record names,
-# which runs Omarchy Mobile from slot B and reports one bootloader version
+# which runs Omamobile from slot B and reports one bootloader version
 # only. It needed --start-over, --reinstall and --bootloader-slots-match
 # typed by hand; now it is three questions
 : > "$t/events"; echo FAKE123 > "$t/fb-devices"; touch "$t/ssh-down"; rm -f "$t/firstboot-done"
 SLOTS="" vars yes b
 bguided "yes\nyes\nyes\n${OWNER}testdev\n" || fail "a reinstall from the bundle, answered with yes three times"
-says "The record of the earlier install is forgotten" && says "Is this phone already running Omarchy Mobile? (yes/no)" &&
+says "The record of the earlier install is forgotten" && says "Is this phone already running Omamobile? (yes/no)" &&
   says "slot B's bootloader, which the phone already runs; the install switches no slot" || fail "the reinstall: start again, slot B and its bootloader, each said"
 ADDS=0 once "a reinstall from the bundle"
 pass "a finished install run again asks \"Install again from the start?\"; a reinstall on slot B needs no option"
@@ -1938,9 +1948,9 @@ fastboot -s FAKE123 reboot'
 fresh; SLOTS=$'version-bootloader-a:testloader-1.0-111\nversion-bootloader-b:testloader-0.9-000' vars
 guided2 "$ALL" || fail "a format 2 install from slot A succeeds"
 once "a format 2 install"
-! says "Is this phone already running Omarchy Mobile" && ! says "Measure slot B's bootloader" && ! says "two copies differ" ||
+! says "Is this phone already running Omamobile" && ! says "Measure slot B's bootloader" && ! says "two copies differ" ||
   fail "format 2: no slot-B question and no bootloader-slot check"
-says "Android does not stay on the phone" && says "Omarchy Mobile is written over it" && ! says "Android stays on the phone, unused" ||
+says "Android does not stay on the phone" && says "Omamobile is written over it" && ! says "Android stays on the phone, unused" ||
   fail "format 2: the warning says Android is replaced and the way back is Google's tools"
 says "slot A, the copy the phone runs from, in place of Android" || fail "format 2: after the dry run it says what is written in place of Android"
 says "Android on this phone is REPLACED" || fail "format 2: install-phone's plan is shown"
@@ -1963,7 +1973,7 @@ pass "format 2: a whole install from slot A, no slot question or slot check, And
 fresh; SLOTS="" vars yes b
 if guided2 "$ALL"; then fail "format 2: a phone on slot B is stopped when only slot A is accepted"; fi
 says "not supported yet (current-slot-not-accepted)" && says "Don't switch the phone to the other copy" || fail "format 2: says slot B is not supported yet"
-! says "Is this phone already running Omarchy Mobile" && ! says "fastboot --set-active" || fail "format 2: no reinstall question and no --set-active advice"
+! says "Is this phone already running Omamobile" && ! says "fastboot --set-active" || fail "format 2: no reinstall question and no --set-active advice"
 [[ -z $(writes) ]] || fail "format 2: a phone on slot B is not written"
 fresh; SLOTS="" vars no b
 if guided2 "yes\n\n"; then fail "format 2: a locked phone on slot B is stopped"; fi

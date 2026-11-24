@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # OnePlus 13 (dodge)
 
-Status (2026-10-30): native Arch Linux ARM / Omarchy Mobile on Qualcomm SM8750
+Status (2026-10-30): native Arch Linux ARM / Omamobile on Qualcomm SM8750
 (`7.3.0-rc6-dodge-gpu2` lineage on the installed slot B; #115 head smoke via
 RAM-only `fastboot boot`). Display, GPU (Adreno 830), touch, Wi-Fi,
 Bluetooth pairing, speakers/mics, sensors (autorotate), USB gadget networking
@@ -13,8 +13,8 @@ this repository. Fingerprint, cameras and NFC are not started.
 Kernel: SoC stack lives in the contributor fork
 [`mrlund/linux-omarchy-mobile`, tag `dodge-v3-20261101`][dodge-kernel-tag]
 (`6cc4b65df980`; subsystem-split; gpu2 + IPA), on the `omamobile` base from
-[derekross/linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile).
-Closed review history: [kernel #115](https://github.com/derekross/linux-omarchy-mobile/pull/115).
+[derekross/linux-omamobile](https://github.com/derekross/linux-omamobile).
+Closed review history: [kernel #115](https://github.com/derekross/linux-omamobile/pull/115).
 Device tree: `arch/arm64/boot/dts/qcom/sm8750-oneplus-dodge.dts`. Userspace:
 this tree's `device/dodge/` and `packages/omamobile-device-dodge` (0.1.0).
 
@@ -48,7 +48,7 @@ and [BRINGUP-M1.md](BRINGUP-M1.md) §4 / §6.
 
 | Block | Status | Notes |
 | --- | --- | --- |
-| Boot | testing | Omarchy on `boot_b` (2026-10-28); stock `boot_a` kept; GPT bit 54 marked by hand (kernel in the contributor's fork; [kernel #115](https://github.com/derekross/linux-omarchy-mobile/pull/115) closed) |
+| Boot | testing | Omarchy on `boot_b` (2026-10-28); stock `boot_a` kept; GPT bit 54 marked by hand (kernel in the contributor's fork; [kernel #115](https://github.com/derekross/linux-omamobile/pull/115) closed) |
 | Storage | testing | UFS; guard allowlists `boot_b` and `userdata` (shared `initramfs/init`) |
 | Display | testing | Samsung panel through msm/dpu; brightness and DPMS; warm-boot drop fixed (QTB read) |
 | GPU | testing | Adreno 830 (gpu2); glmark2 / Freedreno on the phone; Vulkan untested |
@@ -72,7 +72,7 @@ and [BRINGUP-M1.md](BRINGUP-M1.md) §4 / §6.
 
 Phone-verified summary for [docs/DEVICES.md](../../docs/DEVICES.md). Companion
 kernel in review as
-[linux-omarchy-mobile #115](https://github.com/derekross/linux-omarchy-mobile/pull/115).
+[linux-omamobile #115](https://github.com/derekross/linux-omamobile/pull/115).
 Full narrative for the slot-B move is in [BRINGUP-M1.md](BRINGUP-M1.md) §5.
 
 | Block | What was run on the phone | Status word |
@@ -92,7 +92,7 @@ Full narrative for the slot-B move is in [BRINGUP-M1.md](BRINGUP-M1.md) §5.
 
 ## Provenance
 
-- Board DTS and driver enablement authored for Omarchy Mobile from public
+- Board DTS and driver enablement authored for Omamobile from public
   mainline SM8750 support, OnePlus 13 DT fragments, and bring-up on this phone.
 - Audio codec unmute and panel sequence: see kernel commit messages and
   `Assisted-by` / `Signed-off-by` trailers.
@@ -113,4 +113,4 @@ never committed.
 `device/dodge/desktop/setup-stock` takes a required `USER` argument (no
 default account name). It deliberately skips Omarchy's ufw step so root SSH
 over Wi-Fi keeps working on this phone; that is an owner choice, not stock
-Omarchy Mobile policy. USB-net SSH is unaffected either way.
+Omamobile policy. USB-net SSH is unaffected either way.
