@@ -10,6 +10,17 @@ Sources:
 - `P/`: postmarketOS pmaports `device/testing` (2026-10-21).
 - `G/`: Google's GPL kernel for this phone, `android-gs-shusky-6.1-android16` ([source.android.com: Build Pixel kernels](https://source.android.com/docs/setup/build/building-pixel-kernels)).
 
+## 2026-11-24: hardware video, off by default (overlays/mfc.dtso)
+
+The MFC v16.6 (hardware H.264, HEVC and VP9 decode and H.264 encode tested; Google's tables also name VP8) is described in zuma.dtsi by [linux-omamobile#289](https://github.com/derekross/linux-omamobile/pull/289), disabled and with no memory. Its System MMU (0x1a470000) and the S2MPU in front of it are not described, so they stay as the bootloader leaves them, and Google's closed firmware, parsing whatever video an app hands it, can reach all memory below 4 GiB, the kernel's included: the same reason panther's MFC is off by default. `overlays/mfc.dtso` turns it on for an owner who accepts that. Unlike panther's, it also adds the memory: a reusable 256 MiB pool below 4 GiB (size and alloc-ranges, no fixed address), because zuma-husky.dts has none.
+
+- It needs `s5p-mfc-v16.fw`, which `tools/extract-vendor-firmware -d husky` stages from mfc_fw.bin in the owner's own factory image [V: cp4a.261105.040.a1 has it, 722056 bytes, eight ARM branches at the start, version word 0x44250901 at the end].
+- pd_mfc and CMU_MFC aren't described, so the block runs on what the bootloader leaves on. That holds only while husky boots with `clk_ignore_unused pd_ignore_unused` (VENDOR_CMDLINE). If the power-domain work drops `pd_ignore_unused`, don't use this overlay until pd_mfc is described.
+- Tested on one 8 Pro, 2026-11-23, with #289's commits and a test overlay carrying this same pool, applied by label [V]: the pool landed at 0xc8000000, the default 384 MiB CMA kept its place, display and GPU came up; FFmpeg decode bit-exact against software for H.264 (240p and 1080p), HEVC 1080p and VP9 1080p, and Big Buck Bunny 1080p30/60 (first 60 frames); no buffer landed below the firmware base (with 128 MiB, 10-19 per 1080p session did). H.264 encode 720p at 4 Mbit/s, 43.4 dB PSNR (the 128 MiB day).
+- This file, which targets by path, was only checked on the desktop: it compiles with `dtc -@` and applies with `fdtoverlay` to zuma-husky.dtb built from `omamobile` with #289, giving the node `status = "okay"` and a `memory-region` on the new pool [V]. It has not booted as is.
+- Known limit: 4K (2160p30) doesn't decode. REQBUFS on the capture queue fails with ENOMEM inside the 256 MiB pool and the large fallback allocation logs a page_alloc WARNING (no oops). Also untested: suspend/resume with the module loaded, HEVC/VP8 encode, power in mA.
+- What would turn it on by default: the System MMU and S2MPU described (`iommus`), as their own series, then pd_mfc.
+
 ## 2026-11-18: the torch tile and a held volume key, the third phone
 
 Colin's phone, published `omamobile` at `82f31d3a7` (the kernel). The two packages
