@@ -5,6 +5,7 @@
 #include "actionrunner.h"
 #include "home_guard.h"
 #include <QtTest>
+#include <QPointer>
 #include <QQmlComponent>
 #include <memory>
 #include <QDir>
@@ -32,22 +33,22 @@ private slots:
     void probeShowsTheBatteryRowOnlyWhenTheBackendSaysAvailable() {
         Backend on;
         on.setBackendDir(stubs("on"));
-        QCOMPARE(on.rows().size(), 2);
-        QTRY_COMPARE(on.rows().size(), 3);
+        QCOMPARE(on.rows().size(), 3);
+        QTRY_COMPARE(on.rows().size(), 4);
         Backend off;
         off.setBackendDir(stubs("off"));
         off.setToolAvailable("charge", true);
-        QTRY_COMPARE(off.rows().size(), 2); // the probe's answer clears it
+        QTRY_COMPARE(off.rows().size(), 3); // the probe's answer clears it
     }
     void navigationRejectsUnknownAndHiddenActions() {
         Backend backend;
         backend.setBackendDir(stubs("off"));
         QVERIFY(backend.catalogProblems().isEmpty());
-        QCOMPARE(backend.rows().size(), 2); // the Battery row waits for the charge backend, absent here
+        QCOMPARE(backend.rows().size(), 3); // the Battery row waits for the charge backend, absent here
         backend.setToolAvailable("charge", true);
-        QCOMPARE(backend.rows().size(), 3);
+        QCOMPARE(backend.rows().size(), 4);
         backend.setToolAvailable("charge", false);
-        QCOMPARE(backend.rows().size(), 2);
+        QCOMPARE(backend.rows().size(), 3);
         QVERIFY(!backend.navigate("recording"));
         backend.activate("arbitrary-command");
         QCOMPARE(backend.page(), QString("root"));
@@ -134,6 +135,40 @@ private slots:
         QVERIFY(page->property("status").toString().startsWith("Stops charging at this level"));
         QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"available", false}}));
         QCOMPARE(page->property("status").toString(), QString("Settings cannot set a charge limit on this phone."));
+    }
+    void hapticsPageGoesBackToRoot() {
+        Backend backend;
+        backend.setBackendDir(stubs("off"));
+        QVERIFY(backend.navigate("haptics"));
+        QCOMPARE(backend.page(), QString("haptics"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("root"));
+    }
+    void hapticsTryFieldExistsAndIsClearedOnLeaving() {
+        Backend backend;
+        backend.setBackendDir(stubs("off"));
+        backend.setHomeCommand({});
+        ActionRunner runner;
+        runner.setBackendDir(stubs("off"));
+        DeviceInfoController info(true);
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("backend", &backend);
+        engine.rootContext()->setContextProperty("actions", &runner);
+        engine.rootContext()->setContextProperty("deviceInfo", &info);
+        engine.load(QUrl("qrc:/Main.qml"));
+        QCOMPARE(engine.rootObjects().size(), 1);
+        auto *window = engine.rootObjects().first();
+        QVERIFY(backend.navigate("haptics"));
+        QTRY_VERIFY(window->findChild<QObject *>("hapticsTryField"));
+        QPointer<QObject> field = window->findChild<QObject *>("hapticsTryField");
+        field->setProperty("text", "typed");
+        QCOMPARE(field->property("text").toString(), QString("typed"));
+        QVERIFY(QMetaObject::invokeMethod(window, "goBack"));
+        QCOMPARE(backend.page(), QString("root"));
+        QTRY_VERIFY(!field || field->property("text").toString().isEmpty());
+        QVERIFY(backend.navigate("haptics"));
+        QTRY_VERIFY(window->findChild<QObject *>("hapticsTryField"));
+        QCOMPARE(window->findChild<QObject *>("hapticsTryField")->property("text").toString(), QString());
     }
     void searchHasOnlyImplementedRoutesAndBackClearsIt() {
         Backend backend;
