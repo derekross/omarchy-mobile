@@ -328,3 +328,77 @@ out=$("$bd/tools/nv-backup" "$t/from-bundle" 2>&1) || fail "the bundled tool tak
 if out=$("$bd/tools/nv-backup" -d cheetah "$t/from-bundle-2" 2>&1); then fail "the bundled tool refuses another device"; fi
 grep -c 'is for testdev, not cheetah' <<<"$out" >/dev/null || fail "says the bundle is for another device: $out"
 pass "the bundled tool reads the bundle's device.conf"
+
+# --- From a restricted reader without an SSH shell ------------------------------------
+cat > "$t/transport" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$TRANSPORT_LOG"
+case $1 in
+  probe)
+    [[ $# == 1 ]] || exit 1
+    echo "compatible test,board-testdev"
+    for p in $TRANSPORT_PARTS; do
+      d=$(grep -lx "PARTNAME=$p" "$TRANSPORT_PHONE"/sys/class/block/*/uevent)
+      d=${d%/uevent}; d=${d##*/}
+      bytes=$(stat -c %s "$TRANSPORT_PHONE/dev/$d")
+      if [[ ${TRANSPORT_PROBE:-} == resize && $p == efs && $(grep -cx probe "$TRANSPORT_LOG") == 2 ]]; then
+        bytes=$((bytes + 512))
+      fi
+      echo "$p $d block 1 0 $bytes"
+      if [[ ${TRANSPORT_PROBE:-} == duplicate && $p == efs ]]; then echo "$p $d block 1 0 $bytes"; fi
+    done ;;
+  read|sha256)
+    [[ " $TRANSPORT_PARTS " == *" $2 "* ]] || exit 1
+    d=$(grep -lx "PARTNAME=$2" "$TRANSPORT_PHONE"/sys/class/block/*/uevent)
+    d=${d%/uevent}; d=${d##*/}
+    if [[ $1 == read ]]; then
+      [[ $# == 4 && $3 =~ ^[0-9]+$ && $4 =~ ^[1-9][0-9]*$ ]] || exit 1
+      (( $3 % 512 == 0 && $4 % 512 == 0 && $4 <= 8388608 )) || exit 1
+      length=$4
+      if [[ ${TRANSPORT_SHORT_FIRST:-0} == 1 && $2 == efs && $3 == 0 &&
+            $(grep -c '^read efs 0 ' "$TRANSPORT_LOG") == 1 ]]; then length=512; fi
+      dd if="$TRANSPORT_PHONE/dev/$d" bs=512 skip=$(($3 / 512)) count=$((length / 512)) status=none
+    else
+      [[ $# == 2 ]] || exit 1
+      sha256sum < "$TRANSPORT_PHONE/dev/$d" | cut -d' ' -f1
+    fi ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$t/transport"
+export TRANSPORT_LOG=$t/transport.log TRANSPORT_PHONE=$P TRANSPORT_PARTS=$parts
+transport_backup() {
+  env -u PHONE_SSH -u NV_PHONE_ROOT NV_BACKUP_TRANSPORT="$t/transport" "$bd/tools/nv-backup" "$@"
+}
+before=$(tree_state)
+: > "$TRANSPORT_LOG"
+out=$(TRANSPORT_SHORT_FIRST=1 transport_backup "$t/structured" 2>&1) || fail "a structured backup: $out"
+[[ $(grep -cx probe "$TRANSPORT_LOG") == 2 ]] || fail "the transport probes both before and after reading"
+[[ $(grep -cx 'read efs 0 1024' "$TRANSPORT_LOG") == 2 ]] || fail "a short transport chunk is retried"
+grep -qx 'read efs 1024 512' "$TRANSPORT_LOG" || fail "the final transport chunk has the exact byte length"
+for p in $parts; do
+  grep -qx "sha256 $p" "$TRANSPORT_LOG" || fail "the transport independently hashes $p"
+  cmp -s "$t/structured/$p.img" "$P/dev/$(dev_of "$p")" || fail "the transport copied $p exactly"
+done
+(cd "$t/structured" && sha256sum -c --quiet --strict SHA256SUMS) || fail "the transport backup uses the standard manifest"
+out=$(transport_backup --check "$t/structured" 2>&1) || fail "--check with a structured transport: $out"
+[[ $(grep -c ': SAME$' <<<"$out") == 7 ]] || fail "--check verifies each transport copy"
+pass "structured reads take labels and exact byte ranges, retry short data, and verify every partition"
+
+: > "$TRANSPORT_LOG"
+if out=$(TRANSPORT_PROBE=duplicate transport_backup "$t/structured-duplicate" 2>&1); then fail "refuses a duplicate transport probe row"; fi
+grep -q 'invalid probe response' <<<"$out" || fail "the duplicate probe is diagnosed: $out"
+if grep -q '^read ' "$TRANSPORT_LOG"; then fail "nothing is copied after a duplicate transport probe"; fi
+: > "$TRANSPORT_LOG"
+if out=$(TRANSPORT_PROBE=resize transport_backup "$t/structured-resize" 2>&1); then fail "refuses a resized partition after copy"; fi
+grep -q 'efs changed size during the copy' <<<"$out" || fail "the changed size is diagnosed: $out"
+[[ ! -e "$t/structured-resize" ]] || fail "a changed size removes the incomplete backup"
+if out=$(NV_BACKUP_TRANSPORT="$t/transport" "$bd/tools/nv-backup" "$t/mixed-transport" 2>&1); then fail "refuses mixed transport modes"; fi
+grep -q 'cannot be combined with PHONE_SSH or NV_PHONE_ROOT' <<<"$out" || fail "the mixed transport is diagnosed: $out"
+: > "$TRANSPORT_LOG"
+if out=$(NV_CHUNK_BLOCKS=16385 transport_backup "$t/big-transport-read" 2>&1); then fail "refuses a transport chunk over 8 MiB"; fi
+grep -q 'must fit in 8 MiB chunks' <<<"$out" || fail "the oversized chunk is diagnosed: $out"
+[[ ! -s $TRANSPORT_LOG ]] || fail "an oversized chunk is refused before contacting the transport"
+[[ $(tree_state) == "$before" ]] || fail "the structured backup left the stand-in phone unchanged"
+pass "structured transport refuses duplicate inventory, changed sizes, mixed modes and oversized reads"
