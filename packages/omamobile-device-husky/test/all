@@ -308,7 +308,7 @@ pass "Wi-Fi power save is on by default"
 [[ $(readlink "$tmp/root/etc/omamobile/hotspot-backend") == /usr/lib/omamobile-hotspot/hotspot-backend ]] ||
   fail "the shell finds the shared hotspot backend at /etc/omamobile/hotspot-backend"
 grep -qx 'interface=ap0' "$tmp/root/usr/share/omamobile/hotspot.conf" || fail "the hotspot runs on ap0"
-[[ ! -e $tmp/root/usr/lib/omamobile-hotspot ]] || fail "the hotspot helper stays in omamobile-hotspot"
+[[ ! -e $tmp/root/usr/lib/omamobile-hotspot ]] || fail "husky must not ship the hotspot helper itself"
 grep -q "omamobile-hotspot)" PKGBUILD || fail "this phone opts in by depending on omamobile-hotspot"
 if [[ -f ../omamobile-hotspot/lib/hotspot-backend ]]; then
   [[ -x ../omamobile-hotspot/lib/hotspot-backend ]] || fail "the link points at an executable backend"

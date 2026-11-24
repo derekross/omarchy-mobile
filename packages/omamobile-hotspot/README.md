@@ -8,4 +8,4 @@ The root side of the shared Wi-Fi hotspot, for phones whose Wi-Fi can't start an
 
 It is opt-in per device. omamobile-shell doesn't depend on it, so no phone gets this root surface unless its device package asks for it: the device package depends on this one, ships `/usr/share/omamobile/hotspot.conf` (without it the unit doesn't start) and the link `/etc/omamobile/hotspot-backend` -> `/usr/lib/omamobile-hotspot/hotspot-backend`. On other phones the shell's Hotspot page stays on plain NetworkManager.
 
-Not ready to ship: the hotspot's clients can reach the networks the phone is on (the home LAN as well as the internet), because forwarding isn't limited to the uplink yet. It stays unpublished until client isolation lands.
+Not ready to ship: the hotspot's clients can reach the networks the phone is on (the home LAN as well as the internet), because forwarding isn't limited to the uplink yet. This pull request stays a draft, and the package is not merged, until client isolation lands.
