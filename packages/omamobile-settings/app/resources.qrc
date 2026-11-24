@@ -5,8 +5,10 @@
     <file>AboutPage.qml</file>
     <file>DisplayPage.qml</file>
     <file>BatteryPage.qml</file>
+    <file>NotificationsPage.qml</file>
     <file>icons/battery.svg</file>
     <file>icons/display.svg</file>
+    <file>icons/notifications.svg</file>
     <file>catalog.json</file>
     <file>icons/system.svg</file>
     <file>SettingsStyle.qml</file>

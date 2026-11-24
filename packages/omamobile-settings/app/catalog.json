@@ -18,6 +18,13 @@
         "requires": "charge"
       },
       {
+        "id": "notifications",
+        "title": "Notifications",
+        "detail": "Hide text on the lock screen, clear notification history",
+        "icon": "notifications",
+        "page": "notifications"
+      },
+      {
         "id": "about",
         "title": "About this device",
         "detail": "System, software and storage",
@@ -36,6 +43,10 @@
   },
   "battery": {
     "title": "Battery",
+    "rows": []
+  },
+  "notifications": {
+    "title": "Notifications",
     "rows": []
   }
 }

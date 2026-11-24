@@ -27,27 +27,32 @@ private slots:
             QFile f(stubs(it.key()) + "/charge.sh");
             QVERIFY(f.open(QIODevice::WriteOnly));
             f.write("printf '%s\\n' '" + it.value() + "'\n");
+            QFile n(stubs(it.key()) + "/notifications.sh");
+            QVERIFY(n.open(QIODevice::WriteOnly));
+            n.write(it.key() == "on"
+                ? "printf '{\"lock\":{\"available\":true,\"hide\":false,\"keypad\":true},\"history\":{\"available\":true,\"count\":3},\"args\":\"%s\"}\\n' \"$*\"\n"
+                : "printf '%s\\n' '{\"lock\":{\"available\":false},\"history\":{\"available\":false}}'\n");
         }
     }
     void probeShowsTheBatteryRowOnlyWhenTheBackendSaysAvailable() {
         Backend on;
         on.setBackendDir(stubs("on"));
-        QCOMPARE(on.rows().size(), 2);
-        QTRY_COMPARE(on.rows().size(), 3);
+        QCOMPARE(on.rows().size(), 3);
+        QTRY_COMPARE(on.rows().size(), 4);
         Backend off;
         off.setBackendDir(stubs("off"));
         off.setToolAvailable("charge", true);
-        QTRY_COMPARE(off.rows().size(), 2); // the probe's answer clears it
+        QTRY_COMPARE(off.rows().size(), 3); // the probe's answer clears it
     }
     void navigationRejectsUnknownAndHiddenActions() {
         Backend backend;
         backend.setBackendDir(stubs("off"));
         QVERIFY(backend.catalogProblems().isEmpty());
-        QCOMPARE(backend.rows().size(), 2); // the Battery row waits for the charge backend, absent here
+        QCOMPARE(backend.rows().size(), 3); // the Battery row waits for the charge backend, absent here
         backend.setToolAvailable("charge", true);
-        QCOMPARE(backend.rows().size(), 3);
+        QCOMPARE(backend.rows().size(), 4);
         backend.setToolAvailable("charge", false);
-        QCOMPARE(backend.rows().size(), 2);
+        QCOMPARE(backend.rows().size(), 3);
         QVERIFY(!backend.navigate("recording"));
         backend.activate("arbitrary-command");
         QCOMPARE(backend.page(), QString("root"));
@@ -79,6 +84,93 @@ private slots:
         backend.search("charge limit");
         QCOMPARE(backend.rows().size(), 1);
         QCOMPARE(backend.rows().first().toMap()["id"].toString(), QString("battery"));
+    }
+    void notificationsPageGoesBackToRoot() {
+        Backend backend;
+        backend.setBackendDir(stubs("off"));
+        QVERIFY(backend.navigate("notifications"));
+        QCOMPARE(backend.page(), QString("notifications"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("root"));
+        backend.search("lock screen");
+        QCOMPARE(backend.rows().size(), 1);
+        QCOMPARE(backend.rows().first().toMap()["id"].toString(), QString("notifications"));
+    }
+    void runnerTakesTheNotificationsVerbs() {
+        ActionRunner runner;
+        runner.setBackendDir(stubs("on"));
+        QSignalSpy done(&runner, &ActionRunner::finished);
+        const int ok = runner.run("notifications", {"set", "lockhide", "on"});
+        const int bad = runner.run("notifications", {"set", "lock-hide", "on"});
+        QTRY_COMPARE(done.count(), 2);
+        for (const auto &call : done) {
+            if (call.at(2).toInt() == ok) QCOMPARE(call.at(1).toMap().value("args").toString(), QString("set lockhide on"));
+            else { QCOMPARE(call.at(2).toInt(), bad); QCOMPARE(call.at(1).toMap().value("error").toString(), QString("bad argument")); }
+        }
+    }
+    void notificationsPageShowsOnlyWhatTheBackendOffers_data() {
+        QTest::addColumn<QString>("stub");
+        QTest::newRow("available") << "on";
+        QTest::newRow("not available") << "off";
+    }
+    void notificationsPageShowsOnlyWhatTheBackendOffers() {
+        QFETCH(QString, stub);
+        ActionRunner runner;
+        runner.setBackendDir(stubs(stub));
+        Backend backend; // outlives the engine: the style singleton reads it until the engine goes
+        backend.setBackendDir(stubs(stub));
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty("backend", &backend);
+        engine.rootContext()->setContextProperty("actions", &runner);
+        QQmlComponent component(&engine, QUrl("qrc:/NotificationsPage.qml"));
+        std::unique_ptr<QObject> page(component.create());
+        QVERIFY2(page, qPrintable(component.errorString()));
+        // the page runs `notifications get` through the runner (the stub, not an installed backend) and shows its answer
+        QTRY_VERIFY(!page->property("busy").toBool());
+        QCOMPARE(page->property("lockAvailable").toBool(), stub == "on");
+        QCOMPARE(page->property("histAvailable").toBool(), stub == "on");
+        QCOMPARE(page->property("count").toInt(), stub == "on" ? 3 : -1);
+        QCOMPARE(page->property("hide").toString(), stub == "on" ? QString("off") : QString());
+        QCOMPARE(page->property("status").toString().isEmpty(), stub == "on");
+        if (stub == "off") return;
+        const QVariantMap lockOn{{"available", true}, {"hide", true}, {"keypad", true}};
+        // a failed clear keeps its error over the next refresh; a timed-out history read is shown
+        page->setProperty("setting", true);
+        QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"lock", lockOn}, {"history", QVariantMap{{"available", true}, {"count", 1}}}, {"error", "some notifications are still stored"}}));
+        QCOMPARE(page->property("count").toInt(), 1);
+        QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"lock", lockOn}, {"history", QVariantMap{{"available", true}, {"count", 1}}}}));
+        QCOMPARE(page->property("status").toString(), QString("some notifications are still stored"));
+        page->setProperty("failed", false);
+        QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"lock", lockOn}, {"history", QVariantMap{{"available", true}, {"count", 2}, {"error", "the notification service did not answer in time"}}}}));
+        QCOMPARE(page->property("status").toString(), QString("the notification service did not answer in time"));
+        // an answer with no state (the runner's own error) keeps what is shown
+        QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"error", "x"}}));
+        QCOMPARE(page->property("count").toInt(), 2);
+        QCOMPARE(page->property("hide").toString(), QString("on"));
+        // a failed lock screen set stays over a poll that finds nothing stored; a failed clear does not
+        page->setProperty("failed", false);
+        page->setProperty("setting", true);
+        page->setProperty("action", "set");
+        QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"lock", lockOn}, {"history", QVariantMap{{"available", true}, {"count", 2}}}, {"error", "the lock screen setting did not change"}}));
+        QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"lock", lockOn}, {"history", QVariantMap{{"available", true}, {"count", 0}}}}));
+        QCOMPARE(page->property("status").toString(), QString("the lock screen setting did not change"));
+        page->setProperty("failed", false);
+        page->setProperty("setting", true);
+        page->setProperty("action", "clear");
+        QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"lock", lockOn}, {"history", QVariantMap{{"available", true}, {"count", 1}}}, {"error", "some notifications are still stored"}, {"still_stored", true}}));
+        QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"lock", lockOn}, {"history", QVariantMap{{"available", true}, {"count", 0}}}}));
+        QCOMPARE(page->property("status").toString(), QString());
+        // a clear whose dismissAll failed (cards on screen not cleared) keeps its error over a poll that finds 0 stored
+        page->setProperty("failed", false);
+        page->setProperty("setting", true);
+        page->setProperty("action", "clear");
+        QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"lock", lockOn}, {"history", QVariantMap{{"available", true}, {"count", 0}}}, {"error", "the notification service did not clear the notifications on screen"}}));
+        QMetaObject::invokeMethod(page.get(), "apply", QVariant(QVariantMap{{"lock", lockOn}, {"history", QVariantMap{{"available", true}, {"count", 0}}}}));
+        QCOMPARE(page->property("status").toString(), QString("the notification service did not clear the notifications on screen"));
+        // while a clear runs, the page says so (the stub answers it afterwards)
+        QMetaObject::invokeMethod(page.get(), "run", Q_ARG(QVariant, QVariantList{"clear"}));
+        QCOMPARE(page->property("status").toString(), QString("Clearing notifications..."));
+        QTRY_VERIFY(!page->property("busy").toBool());
     }
     void runnerKnowsChargeAndRejectsOthers() {
         ActionRunner runner;
@@ -212,6 +304,7 @@ private slots:
         backend.setBackendDir(stubs("off"));
         QVERIFY(backend.icon("../catalog").isEmpty());
         QVERIFY(backend.icon("unknown").isEmpty());
+        QVERIFY(backend.icon("notifications").startsWith("data:image/svg+xml;base64,"));
         QVERIFY(backend.icon("system").startsWith("data:image/svg+xml;base64,"));
     }
     void atomicThemeReplacementIsObserved() {
@@ -296,8 +389,9 @@ private slots:
 
     }
 private:
-    // Stand-ins for backends/charge.sh, so no test reads the backend installed on the host: "on" answers like a
-    // phone with a declared charge limit, "off" like any other.
+    // Stand-ins for backends/charge.sh and backends/notifications.sh, so no test reads a backend installed on the host:
+    // "on" answers like a phone with a declared charge limit, the lock screen setting and the notification history,
+    // "off" like one with none of them.
     QString stubs(const QString &name) const { return m_stubs.filePath(name); }
     QTemporaryDir m_stubs;
 };
