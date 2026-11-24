@@ -42,7 +42,7 @@ filters and Omarchy's `launcher.hides`), and for one app shows its package, vers
 (`pacman -Qo`, `-Qi`, read-only) and an Open button (`omamobile-launch`, `gtk-launch` without it). The page runs
 `backends/apps.sh`; the list loads only when the page opens, shows the last saved list
 (`~/.cache/omamobile/apps.json`) at once and replaces it with a fresh scan at nice 10 and idle I/O. Stop for this session
-(`backends/appmgr.sh`) stops only the app's own units in `app*.slice`, in the user session. Uninstalling is not
+(`backends/appmgr.sh`) stops only the app's own units in `app*.slice`, in the user session. Stop on a browser also ends the web apps running in that browser's scope. Uninstalling is not
 offered yet: it comes back once the phone has a PIN prompt for admin actions. Until then the page shows the
 `sudo pacman -R` command to run from a terminal.
 The hidden rules are copied from Omarchy's `shell/services/hidden-entries.sh` and `shell/services/AppLibrary.qml`
