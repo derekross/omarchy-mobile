@@ -524,6 +524,12 @@ printf -- '-- autostart\n' >"$ho6/.config/hypr/autostart.lua"
 touch "$ho6/.local/state/omarchy/done/omamobile-osk"
 RUN_HOME=$ho6 run
 if grep -c 'starts squeekboard with a line of its own' "$t/out" >/dev/null; then fail "a file that starts no keyboard gets no line about one"; fi
+ho7=$t/keyboard-commented; mkdir -p "$ho7/.config/hypr" "$ho7/.config/omarchy/extensions" "$ho7/.local/state/omarchy/done"
+cp "$H"/.config/hypr/{looknfeel,monitors}.lua "$ho7/.config/hypr/"
+printf -- '-- autostart\n-- o.launch_on_start([[sh -c '"'"'exec squeekboard >/dev/null'"'"']])\n' >"$ho7/.config/hypr/autostart.lua"
+touch "$ho7/.local/state/omarchy/done/omamobile-osk"
+RUN_HOME=$ho7 run
+if grep -c 'starts squeekboard with a line of its own' "$t/out" >/dev/null; then fail "a commented-out squeekboard line gets no line about it"; fi
 pass "which keyboard: the session starts the owner's choice, an older start line is changed once (a linked file left as it is, an unwritable one tried again, the owner's own line left and named), Setup > Keyboard"
 
 # A layout of the user's own stays theirs

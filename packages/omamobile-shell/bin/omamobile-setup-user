@@ -246,7 +246,7 @@ if omarchy-done ensure omamobile-osk-chosen; then
       echo "omamobile-setup-user: could not change the keyboard's start line in $autostart; the next login tries again" >&2
     fi
   elif [[ -f $autostart ]] && ! grep -cxF "$osk_line" "$autostart" >/dev/null 2>&1 &&
-    grep -c 'launch_on_start.*squeekboard' "$autostart" >/dev/null 2>&1; then
+    grep -c '^[[:space:]]*o\.launch_on_start.*squeekboard' "$autostart" >/dev/null 2>&1; then
     # A line the owner wrote or changed (one that logs squeekboard's output, say) starts
     # squeekboard whatever is chosen: left alone, and said once, as for the link
     echo "omamobile-setup-user: $autostart starts squeekboard with a line of its own, left as it is; the keyboard" \
