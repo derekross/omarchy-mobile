@@ -2022,14 +2022,23 @@ Stock D1's UFS `mphy_ref_clk` selects LPCM8 clock 1 at 38.4 MHz. The
 v29 packed DT connects `mphy-ref` to the same clock. The external
 device REFCLK and the device attribute remain unmeasured. The
 diagnostic checks the configured M-PHY rate and stops at link/Hibern8.
-A future full-discovery path
-must verify the device's existing `bRefClkFreq` before allowing the
-generic UFS core to write a mismatching attribute.
+The [Malibu reference-clock guard](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/af719fb07680986d5e2ad0a3f798f0c55f7306fe)
+uses the configured `mphy-ref` rate as the expected code
+(`0x2` for 38.4 MHz). When a full-device fixture reaches
+`ufshcd_post_device_init()`, the guard issues `READ_ATTR(0x0a)`
+and logs the raw and expected values before HS gear selection
+or LUN discovery. It returns an error on a mismatch, failed read,
+or invalid host rate. This path never issues `WRITE_ATTR` for
+`bRefClkFreq`. Other UFS hosts retain the generic behavior.
+The current link/Hibern8 fixture lacks the transfer queue required
+to run this query. Both affected ARM64 objects passed the
+`W=1` build and 11 offline tests covered the guard and default
+paths. The device attribute still requires a hardware measurement.
 
 The exact v29 ramdisk already carries the shared initramfs in RAM rescue
-and omits its write allowlist. The normal Android-v4 descriptor packaging
-path emits the configured boot-image and userdata allowlist. The first
-storage-visible Grizzly fixture must preserve the shared guard's
+and omits its write allowlist. The historical `d1-packaging.conf`
+also omits `UFS_RW`. The first storage-visible Grizzly fixture
+must preserve the shared guard's
 all-read-only behavior. Verify this in the finished ramdisk and then
 verify every relevant LUN on the phone before reading data. The
 `tools/nv-backup` descriptor requires a verified Grizzly NV inventory.
@@ -2089,9 +2098,9 @@ clock. The stock RAM fixture can qualify the device's raw
 `bRefClkFreq` through the read-only
 `attributes/reference_clock_frequency` sysfs path once UFS
 has initialized. The current mainline link-only probe has
-no transfer queues for that query. Generic mainline device
-initialization can write the attribute on a mismatch,
-independently of block read-only flags.
+no transfer queues for that query. The Malibu full-init guard
+above is independent of block read-only flags and refuses to
+change the attribute.
 
 ### Mainline inventory-only RAM rescue
 

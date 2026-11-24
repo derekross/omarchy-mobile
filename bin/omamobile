@@ -91,7 +91,6 @@ Usage: [DEVICE=<codename>] omamobile <command>
                    fallback behavior follows the device's boot method)
   flash            Flash the experiment images to slot B and boot them
                    (--from-slot-a: a development phone that fell back to stock on slot A)
-                   stages B with A active (FASTBOOT_SERIAL required)
   push             Write the images into slot B from the running phone over SSH,
                    verify them, and reboot into them (no fastboot)
   kernel-shell     Open a shell in the build environment, in the kernel tree
@@ -1271,18 +1270,6 @@ cmd_fastboot() {
   die "could not reach fastboot; use the buttons (Power 30 s, then Volume Down + Power 20 s)"
 }
 
-flash_slot_b() {
-  local serial=$1 img=$2 p out rc
-  shift 2
-  for p in "$@"; do
-    rc=0
-    out=$(timeout 60 fastboot -s "$serial" flash "${p}_b" "$img/$p.img" 2>&1) || rc=$?
-    echo "$out" | grep -E 'OKAY|FAIL' | tail -1 | sed "s/^/$p: /" || true
-    # Stop before activating or rebooting into a half-written slot B.
-    ((rc == 0)) || die "flashing ${p}_b failed (exit $rc): slot B is incomplete, flash again before rebooting"
-  done
-}
-
 cmd_flash() {
   local img="$KERNEL_OUT/images" p from_a=0
   case ${1:-} in
@@ -1336,7 +1323,14 @@ WARN
     slot_b_allowed "$p" || die "${p}_b is not on device/$DEVICE's storage-guard allowlist; refusing"
     [[ -f "$img/$p.img" ]] || die "missing $img/$p.img (run: omamobile images)"
   done
-  flash_slot_b "$serial" "$img" $DEV_BOOT_IMAGES
+  local out rc
+  for p in $DEV_BOOT_IMAGES; do
+    rc=0
+    out=$(timeout 60 fastboot -s "$serial" flash "${p}_b" "$img/$p.img" 2>&1) || rc=$?
+    echo "$out" | grep -E 'OKAY|FAIL' | tail -1 | sed "s/^/$p: /" || true
+    # Stop before activating or rebooting into a half-written slot B
+    ((rc == 0)) || die "flashing ${p}_b failed (exit $rc): slot B is incomplete, flash again before rebooting"
+  done
   timeout 20 fastboot -s "$serial" --set-active=b >/dev/null 2>&1
   timeout 20 fastboot -s "$serial" reboot >/dev/null 2>&1
   say "Booting slot B; waiting for SSH"

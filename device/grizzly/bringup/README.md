@@ -53,6 +53,9 @@ contains the v30–v39 source history. Commit
 initial-vote patch used to build v39 on top of the v38 source.
 The [v39 trial](../BRINGUP-M1.md#v39-slot-b-result) records the
 original build provenance and hardware results.
+The same branch carries the
+[read-only bRefClkFreq guard](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/af719fb07680986d5e2ad0a3f798f0c55f7306fe)
+for future full-device initialization.
 
 The earlier first-light sources are published on the
 [grizzly-first-light-archive branch](https://github.com/adrienlacombe/linux-omarchy-mobile/tree/grizzly-first-light-archive).
