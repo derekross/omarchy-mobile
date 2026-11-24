@@ -26,16 +26,28 @@ the October-build Grizzly in [#26](https://github.com/derekross/omamobile/issues
 | Back up calibration and radio partitions | The first storage-visible boot runs Grizzly RAM rescue. Verify expected partitions by unique GPT label, `ro=1` and unmounted state. The first reads are through `tools/nv-backup`. Complete the backup and check its hashes in a private off-repo directory. Size the attended return window for the reads and verification pass. | Missing or ambiguous labels, any writable or mounted target, a failed hash, or not enough time to finish. | Keep files private, return to stock A, and defer further CPM, PMIC and charger experiments until a verified backup exists. |
 | Install Grizzly userspace | A Grizzly-specific root and boot policy pass their own review and tested recovery procedure. | A Cheetah device package, boot-success unit or AoC service in the storage-visible root, or an unverified recovery path. | Keep Grizzly in RAM rescue or return to stock A. |
 
-The full link diagnostic includes the existing PMIC decoupling writes.
-Resolve the order of the read-only NV backup and any further PMIC or
-CPM hardware work before running it.
-The prior UFS trials stalled before they could expose storage.
+### Maintainer decision on the first NV backup
+
+[Derek approved the v29 UFS rail requests before the NV backup](https://github.com/derekross/omamobile/pull/1002#issuecomment-7142236516)
+because storage needs those rails. Use only the stock voltage settings.
+During the rescue boot, keep every partition read-only under the storage
+guard and run `tools/nv-backup` as soon as the guarded storage is available,
+before any other partition consumer. Verify the backup privately before
+further CPM, PMIC or charger experiments. If storage does not enumerate
+or the guard fails, stop and use the stock A return.
+
+The original v29 link fixture stops before LUN discovery. An enumerating
+Grizzly RAM rescue with a closed write allowlist and enough time to finish
+the backup is still needed to exercise the mainline backup path.
+The standalone Grizzly staging helper is already in
+`device/grizzly/bringup/`. The shared `flash` command follows its normal
+`load_device` and allowlist path.
 
 ## v29 handoff-only result
 
-The full v29 link fixture remains on hold pending the maintainer's
-answer on the rail and backup ordering. The recorded boot below is
-the handoff-only repack requested on 2026-11-24 at 05:43:57 UTC.
+The recorded boot below is the handoff-only repack requested on
+2026-11-24 at 05:43:57 UTC. See the maintainer's later decision above
+for the full v29 rail requests and NV backup order.
 
 On 2026-11-24, the Mac staged all five slot B images and matched all
 8,192 supplied bytes in the `vendor_boot_b` readback. One attended boot
@@ -1983,8 +1995,9 @@ The experiment exercises prep's idle OFF and resume. It starts
 with the core client vote off and skips stock's separate core-OFF
 phase and TOP programming. A successful core reply therefore
 establishes the mailbox outcome. PHY readiness remains a separate
-measurement. Retain the full v29 hold and the backup and attended
-return prerequisites before any hardware work. Nine offline
+measurement. The v29 rail decision applies to the backup path.
+v40's prep release is separate power-control work and needs its
+own attended approval and backup check. Nine offline
 cases cover the transition, vote ownership, timeout, invalid
 states, and repeated-release veto. Strict checkpatch passed.
 

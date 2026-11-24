@@ -556,13 +556,14 @@ VBMeta digest.
 The full v29 fixture samples PSMs before the CPM startup
 frame, around acquisition of HSIO-S, and around SGIA IRQ
 setup. It reads HC and PHY after the wrapper reports `0x10`.
-The full link diagnostic remains on hold pending the maintainer's
-answer about the rail and backup ordering. A handoff-only repack
-was requested at 05:43:57 UTC on 2026-11-24, after that review. It
+A handoff-only repack was requested at 05:43:57 UTC on 2026-11-24,
+after that review. It
 confirmed HSIO-S and HC at `0x10` and PHY at `0x11` before
 the CPM startup frame, with the UFS driver blacklisted.
 The [bring-up plan](BRINGUP-M1.md#v29-handoff-only-result)
 records the live sample and retained logs.
+The [maintainer later approved the v29 rail and backup ordering](BRINGUP-M1.md#maintainer-decision-on-the-first-nv-backup)
+for a read-only rescue boot using stock voltage settings.
 
 The v30 link diagnostic decoded LPCM8 PSM1 to the HC status
 word at `0x3c00c210`. Before and after both issued votes, PSM1
