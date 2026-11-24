@@ -36,6 +36,12 @@ row stays hidden today: omamobile-device-husky blacklists `max77759_charger`
 (`omamobile-max77759.conf`), so there is no `max77759-charger` power supply
 until that blacklist is lifted on a kernel with
 derekross/linux-omarchy-mobile#266.
+
+A third page, Accessibility, sets the text size (12, 14, 16 or 18 px) and turns animations on or off, each through
+Omarchy's own command: `omarchy-display-text-size` (the shell's font base-size, GTK's text-scaling-factor and the
+terminals' font size) and `omarchy-hyprland-toggle no-animations` (also blur and shadows; Hyprland reloads). The page
+runs `backends/accessibility.sh`, which reads the size back from `~/.config/omarchy/shell.toml` and the animations from
+the running Hyprland, and puts the flag back when Hyprland didn't take it (with no running Hyprland it keeps the flag for the next start and says so). A control whose command is missing isn't shown.
 Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management and
 recording controls are separate future contributions with their own runtime
 contracts and tests; this catalog does not offer those routes.
@@ -57,7 +63,7 @@ the implemented detail page directly.
 
 The application reads the current theme's colors.toml and observes atomic theme
 replacements. Rounded corners follow Hyprland's read-only decoration:rounding
-option. Apart from the Display page's live refresh rate it does not change compositor settings. A session D-Bus service handles
+option. Apart from the Display page's live refresh rate and the Accessibility page's animations switch (Omarchy's own toggle, which reloads Hyprland) it does not change compositor settings. A session D-Bus service handles
 repeat launches.
 
 Copyright 2026 Marsel Nenaj, MIT; see LICENSE. Extracted from my own native

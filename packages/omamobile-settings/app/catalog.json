@@ -18,6 +18,13 @@
         "requires": "charge"
       },
       {
+        "id": "accessibility",
+        "title": "Accessibility",
+        "detail": "Text size and animations",
+        "icon": "display",
+        "page": "accessibility"
+      },
+      {
         "id": "about",
         "title": "About this device",
         "detail": "System, software and storage",
@@ -36,6 +43,10 @@
   },
   "battery": {
     "title": "Battery",
+    "rows": []
+  },
+  "accessibility": {
+    "title": "Accessibility",
     "rows": []
   }
 }
