@@ -47,18 +47,18 @@ fi
 ufs_ro_log() { echo "omamobile: ufs-ro: $*" > /dev/kmsg; }
 # Storage guard. Everything on the UFS is read-only except an allowlist of
 # partitions we own: the running slot's boot images (in-place kernel
-# updates) and userdata (the Arch root). The kernel only lets a partition be written if
-# its whole disk is writable too, so the main disk (sda) stays writable but
-# its whole-disk node is removed, so nothing can write across partitions by
-# accident; a LUN the descriptor's UFS_RW_LUNS names is guarded the same way.
+# updates) and userdata (the Arch root). The kernel only lets a partition be
+# written if its whole disk is writable too. When the effective allowlist is
+# nonempty, the main disk (sda) stays writable but its whole-disk node is
+# removed. A LUN the descriptor's UFS_RW_LUNS names is guarded the same way.
 # The other LUNs (on Pixels sdb, sdc, sdd: bootloader images) are read-only
 # at the disk level. Calibration partitions (efs, persist, modem_userdata...)
 # and all of the other slot stay read-only.
 # The allowlist is the descriptor's UFS_RW, which bin/omamobile initramfs
 # checks and packs into /etc/omamobile-ufs-rw. It fails closed: a missing,
-# empty or malformed file leaves every partition read-only, so Arch does not
-# start and the initramfs shell stays up over SSH. Whatever the file says,
-# only slot B's boot images and userdata can be named.
+# empty or malformed file leaves every disk and partition read-only. The
+# initramfs stays up with its SSH shell. Only slot B's boot images and
+# userdata can be named.
 # The packed names are in slot form: X_b means "X of the slot this boot runs
 # from" (docs/ACTIVE-SLOT-PLAN.md §4). The slot is the bootloader's
 # androidboot.slot_suffix, from /proc/bootconfig, else /proc/cmdline. On
@@ -69,8 +69,11 @@ ufs_ro_log() { echo "omamobile: ufs-ro: $*" > /dev/kmsg; }
 # say this init maps the list so; any other content in it closes the guard.
 UFS_RW=""
 UFS_RW_LUNS=""
-# Is $1 a disk that holds allowlisted partitions? sda always.
-ufs_rw_disk() { case " sda $UFS_RW_LUNS " in *" $1 "*) true ;; *) false ;; esac; }
+# Is $1 a parent exempted from the disk-level guard for the effective allowlist?
+ufs_rw_disk() {
+  [ -n "$UFS_RW" ] || return 1
+  case " sda $UFS_RW_LUNS " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
 # The running slot's suffix: _a or _b, or nothing. Run it in a subshell
 # ($(...)): it turns off globbing for the command line's words.
 ufs_slot_add() { # one value: the first is kept, another one makes it unknown
@@ -140,14 +143,17 @@ ufs_rw_load() {
       *) mapped="$mapped $p" ;;
     esac
   done
-  if [ -n "$slot" ]; then
-    ufs_ro_log "running from slot ${slot#_}: its boot images are the allowlisted ones, the other slot stays read-only"
-  else
-    ufs_ro_log "no slot suffix in /proc/bootconfig or /proc/cmdline: every boot partition read-only, userdata writable"
-  fi
   # shellcheck disable=SC2086 # split into names on purpose
   set -- $mapped
   UFS_RW="$*"
+  if [ -n "$slot" ]; then
+    ufs_ro_log "running from slot ${slot#_}: its boot images are the allowlisted ones, the other slot stays read-only"
+  elif [ -n "$UFS_RW" ]; then
+    ufs_ro_log "no slot suffix in /proc/bootconfig or /proc/cmdline: every boot partition read-only, userdata writable"
+  else
+    ufs_ro_log "no slot suffix and no writable partitions: every disk and partition read-only"
+    return 0
+  fi
   ufs_ro_log "allowlist: $UFS_RW"
   # LUNs besides sda that hold allowlisted partitions (the descriptor's
   # UFS_RW_LUNS: enchilada's boot_b is on sde). Each is guarded as sda is.
@@ -171,25 +177,13 @@ ufs_rw_load
 mkdir -p /run/ufs-ro
 ufs_partname() { sed -n 's/^PARTNAME=//p' "$1/uevent" 2>/dev/null; }
 ufs_ro_pass() {
-  local s ro name part disk
+  local s ro name part
   for s in /sys/block/sd* /sys/block/sd*/sd*; do
     [ -r "$s/ro" ] || continue
     name=${s##*/}
     [ -e "/run/ufs-ro/$name" ] && continue
     [ -b "/dev/$name" ] || continue  # devtmpfs node not there yet: next pass
     if ufs_rw_disk "$name"; then
-      if [ -s /etc/omamobile-nfsroot ]; then
-        blockdev --setro "/dev/$name"
-        read -r ro < "$s/ro"
-        if [ "$ro" = 1 ]; then
-          : > "/run/ufs-ro/$name"
-          ufs_ro_log "/dev/$name set read-only for NFS root"
-          continue
-        fi
-        ufs_ro_log "FAILED to set /dev/$name read-only for NFS root"
-        echo "omamobile: WARNING: /dev/$name is NOT read-only" > /dev/tty0 2>/dev/null
-        continue
-      fi
       rm -f "/dev/$name"
       : > "/run/ufs-ro/$name"
       ufs_ro_log "/dev/$name: whole-disk node removed (partitions guarded individually)"
@@ -202,9 +196,7 @@ ufs_ro_pass() {
       ufs_ro_log "/dev/$name ($part) left writable (allowlist)"
       continue
     fi
-    blockdev --setro "/dev/$name"
-    read -r ro < "$s/ro"
-    if [ "$ro" = 1 ]; then
+    if blockdev --setro "/dev/$name" && read -r ro < "$s/ro" && [ "$ro" = 1 ]; then
       : > "/run/ufs-ro/$name"
       ufs_ro_log "/dev/$name${part:+ ($part)} set read-only"
     elif [ ! -e "/run/ufs-ro/$name.failed" ]; then
@@ -214,14 +206,14 @@ ufs_ro_pass() {
     fi
   done
 }
-# Prints every disk or partition that is writable but not on the allowlist
-# (sda itself excepted: its node is removed). Empty means the guard holds.
+# Prints writable disks and partitions outside the effective allowlist.
+# Exempt parent disks have had their whole-disk nodes removed.
 ufs_unguarded() {
   local s name part ro
   for s in /sys/block/sd* /sys/block/sd*/sd*; do
     [ -r "$s/ro" ] || continue
     name=${s##*/}
-    ufs_rw_disk "$name" && [ ! -s /etc/omamobile-nfsroot ] && continue
+    ufs_rw_disk "$name" && continue
     read -r ro < "$s/ro"
     [ "$ro" = 0 ] || continue
     part=$(ufs_partname "$s")
