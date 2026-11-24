@@ -1,41 +1,41 @@
 // SPDX-License-Identifier: MIT
 /*
  * Opt-in: hardware video decode and encode (the MFC v16.6, s5p-mfc's
- * google,zuma-mfc) on the Pixel 8 Pro. The kernel (linux-omamobile#289)
- * describes the MFC in zuma.dtsi but leaves it disabled and gives it no
- * memory: its System MMU and the S2MPU in front of it are not described,
- * so they stay as the bootloader leaves them, and Google's closed
- * firmware, parsing whatever video an app hands it, can reach all memory
- * below 4 GiB, the kernel's included. Enable it only if you accept that.
+ * google,zuma-mfc) on the Pixel 8 Pro. The kernel describes the MFC
+ * (linux-omamobile#289) and its 256 MiB pool below 4 GiB
+ * (linux-omamobile#297) but leaves both disabled: the MFC's System MMU
+ * and the S2MPU in front of it are not described, so they stay as the
+ * bootloader leaves them, and Google's closed firmware, parsing whatever
+ * video an app hands it, can reach all memory below 4 GiB, the kernel's
+ * included. Enable it only if you accept that. This overlay only switches
+ * the pool and the MFC on.
  *
- * The MFC takes 32-bit addresses and the firmware rejects any buffer
- * below its own base, so the firmware and every buffer come from one
- * contiguous pool below 4 GiB, firmware first: 256 MiB, as panther's.
- * Reusable, so the pages serve movable allocations while no video runs.
- * No fixed address: a size and alloc-ranges, as Google's own pool.
+ * Minimum kernel: linux-omamobile's omamobile branch with both PRs above.
+ * Neither is in any kernel-* release tag yet; on kernel-2026.11.15 and
+ * older, or on a kernel with #289 but not the pool, a node is missing and
+ * the overlay won't apply. Enable the pool with the MFC, never the MFC
+ * alone: the kernel then probes it with no pool and no error.
  *
  * pd_mfc and CMU_MFC aren't described either: the block runs on the power
  * domain and clocks the bootloader leaves on, which holds only while
  * husky boots with clk_ignore_unused and pd_ignore_unused (device.conf).
  * It also needs the firmware, mfc_fw.bin from your own factory image,
  * which tools/extract-vendor-firmware stages as s5p-mfc-v16.fw.
+ *
+ * s5p_mfc has never been autoloaded at boot on husky. Before the first
+ * boot with this overlay, blacklist it (a modprobe.d file with
+ * "blacklist s5p_mfc"), then load it by hand with "dmesg -w" running in
+ * another shell, so a failure shows up there and not at boot.
+ *
  * Paths, not labels, so the base DTB needs no __symbols__.
  */
 /dts-v1/;
 /plugin/;
 
-&{/reserved-memory} {
-	mfc_pool: mfc-pool {
-		compatible = "shared-dma-pool";
-		reusable;
-		size = <0x10000000>;
-		/* read with the root's #address-cells (2), not #size-cells */
-		alignment = <0x0 0x200000>;
-		alloc-ranges = <0x0 0x80000000 0x80000000>;
-	};
+&{/reserved-memory/mfc-pool} {
+	status = "okay";
 };
 
 &{/soc@0/video-codec@1a4d0000} {
-	memory-region = <&mfc_pool>;
 	status = "okay";
 };
