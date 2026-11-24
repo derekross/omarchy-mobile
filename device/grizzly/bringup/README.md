@@ -24,10 +24,9 @@ The prebuilt v29 package has SHA-256
 
 ## Kernel provenance
 
-The local source branch is `grizzly-ufs-bringup-v29` in
-`linux-omarchy-mobile`. Publish the branch for review before the
-next attended B trial. The v21 row records the original build
-commit. The v22–v29 commits were reconstructed from the saved
+The current sources are published on the
+[grizzly-ufs-bringup-v29 branch](https://github.com/adrienlacombe/linux-omarchy-mobile/tree/grizzly-ufs-bringup-v29).
+The v21 row records the original build commit. The v22–v29 commits were reconstructed from the saved
 incremental build inputs and have the exact recorded source trees.
 The v17–v20 bundles reused the v16 kernel byte for byte.
 
@@ -48,8 +47,9 @@ The v17–v20 bundles reused the v16 kernel byte for byte.
 | v28 | `7.3.0-rc6-omamobile-grizzly-uic-v28` | `66718fcd0432e029d2f57070adcfebfa02ccb3e0` |
 | v29 | `7.3.0-rc6-omamobile-grizzly-uic-v29` | `401ec7a0581a508ec414b5cdb5328b2d93f5a2ac` |
 
-The earlier first-light fixtures are preserved on the local
-`grizzly-first-light-archive` branch. The table distinguishes
+The earlier first-light sources are published on the
+[grizzly-first-light-archive branch](https://github.com/adrienlacombe/linux-omarchy-mobile/tree/grizzly-first-light-archive).
+The table distinguishes
 the kernel binary source from the board DT source for the
 DT-only repacks. These archived commits reproduce the recorded
 trees. All rows used kernel release `7.3.0-rc6-omamobile-push1`.
