@@ -78,6 +78,7 @@ run() {
     OMARCHY_PATH="${RUN_OMARCHY_PATH:-$t/omarchy}" \
     OMAMOBILE_USER_UNITS="${RUN_USER_UNITS:-$t/no-user-units}" \
     OMAMOBILE_AUTO_SLEEP_DEFAULT="${RUN_AUTO_SLEEP:-$t/no-auto-sleep-default}" \
+    OMAMOBILE_PORTALS_CONF="$pkg/portal/hyprland-portals.conf" \
     bash bin/omamobile-setup-user "$@" >"$t/out" 2>&1 || { cat "$t/out"; fail "omamobile-setup-user runs"; }
 }
 run
@@ -562,3 +563,46 @@ run
 grep -q 'browser setup failed; continuing' "$t/out" || fail "browser helper failure is reported"
 [[ -f $H/.local/state/omarchy/done/omamobile-menu-hide-unlock ]] || fail "user setup continues after browser helper failure"
 pass "browser helper failure does not stop later user setup"
+
+# Omarchy's Secret-portal migration writes the user's own hyprland-portals.conf,
+# which hides the phone's in /etc. Each login adds the phone's lines the file
+# doesn't name yet, once, restarts the portal only then, and keeps the user's own.
+hp=$t/portals; mkdir -p "$hp/.config/hypr" "$hp/.config/xdg-desktop-portal"; cp "$H"/.config/hypr/*.lua "$hp/.config/hypr/"
+up=$hp/.config/xdg-desktop-portal/hyprland-portals.conf
+printf '[preferred]\ndefault=hyprland;gtk\norg.freedesktop.impl.portal.Secret=gnome-keyring\n' >"$up"
+RUN_HOME=$hp run; RUN_HOME=$hp run
+grep -qx 'org.freedesktop.impl.portal.FileChooser=gnome;gtk' "$up" || fail "the user's portals file gets the phone's file chooser"
+grep -qx 'org.freedesktop.impl.portal.Access=omamobile;gtk' "$up" || fail "the user's portals file gets the phone's permission sheet"
+grep -qx 'org.freedesktop.impl.portal.Secret=gnome-keyring' "$up" || fail "Omarchy's Secret line stays"
+[[ $(grep -c '^org.freedesktop.impl.portal.FileChooser=' "$up") == 1 ]] || fail "two logins add the file chooser once"
+[[ $(grep -c 'try-restart xdg-desktop-portal' "$hp/calls") == 1 ]] || fail "the portal restarts once, when lines were added"
+sed -i 's|^org.freedesktop.impl.portal.FileChooser=.*|org.freedesktop.impl.portal.FileChooser=gtk|' "$up"
+RUN_HOME=$hp run
+grep -qx 'org.freedesktop.impl.portal.FileChooser=gtk' "$up" || fail "a file chooser the user picked stays"
+[[ $(grep -c '^org.freedesktop.impl.portal.FileChooser=' "$up") == 1 ]] || fail "a user's own file chooser line isn't joined by the phone's"
+[[ ! -e $H/.config/xdg-desktop-portal/hyprland-portals.conf ]] || fail "without a user portals file none is made"
+# A user's line written with blanks around the = counts as theirs, and a dot
+# in the key isn't a wildcard (an "orgXfreedesktop" line doesn't count).
+printf '[preferred]\ndefault=hyprland;gtk\norg.freedesktop.impl.portal.FileChooser = kde\norgXfreedesktopXimplXportalXAccess=gtk\n' >"$up"
+RUN_HOME=$hp run
+[[ $(grep -c 'portal.FileChooser' "$up") == 1 ]] || fail "a user's 'FileChooser = kde' isn't joined by the phone's line"
+grep -qx 'org.freedesktop.impl.portal.Access=omamobile;gtk' "$up" || fail "a key with other characters in place of the dots doesn't hide the phone's line"
+# The lines go at the end, so only while [preferred] is the last group.
+printf '[preferred]\ndefault=hyprland;gtk\n[other]\nkey=value\n' >"$up"
+cp "$up" "$t/portals-other.conf"
+RUN_HOME=$hp run
+cmp -s "$up" "$t/portals-other.conf" || fail "a file whose last group isn't [preferred] is left alone"
+grep -q "doesn't end in its \[preferred\] group" "$t/out" || fail "a file left alone for its last group says so"
+# A symlinked file (dotfiles) or a read-only one is left alone, and the login goes on.
+printf '[preferred]\ndefault=hyprland;gtk\n' >"$t/dotfiles-portals.conf"
+rm "$up"; ln -s "$t/dotfiles-portals.conf" "$up"
+RUN_HOME=$hp run
+[[ -L $up ]] || fail "the symlink stays a symlink"
+[[ $(cat "$t/dotfiles-portals.conf") == $'[preferred]\ndefault=hyprland;gtk' ]] || fail "nothing is written through a symlinked portals file"
+grep -q 'is a symlink or not writable' "$t/out" || fail "a symlinked portals file left alone says so"
+rm "$up"; printf '[preferred]\ndefault=hyprland;gtk\n' >"$up"; chmod a-w "$up"
+RUN_HOME=$hp run
+[[ $(grep -c '^org.freedesktop.impl.portal.' "$up") == 0 ]] || fail "a read-only portals file is left alone"
+grep -q 'is a symlink or not writable' "$t/out" || fail "a read-only portals file left alone says so"
+chmod u+w "$up"
+pass "the user's portals file (Omarchy's Secret migration) gets the phone's file chooser and permission sheet, once, and a symlinked, read-only or other-group file is left alone"
