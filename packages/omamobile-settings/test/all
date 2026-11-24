@@ -6,6 +6,11 @@ build_dir=${OMAMOBILE_SETTINGS_TEST_BUILD_DIR:-"$source_dir/build/tests"}
 "$source_dir/bin/build"
 "$source_dir/test/display-backend.sh"
 "$source_dir/test/charge-backend.sh"
+"$source_dir/test/apps-backend.sh"
+"$source_dir/test/appmgr-backend.sh"
+# the uninstall wizard sends the hash it showed, and only from its confirm step; the polkit rule allows only start of the remove unit
+grep -qF 'page.actReq = actions.run("appmgr", ["remove", page.app.id, page.mgr.hash || "0"])' "$source_dir/app/AppsPage.qml" || { echo "FAIL: wizard does not send the confirmed hash" >&2; exit 1; }
+grep -qF 'action.lookup("verb") == "start"' "$source_dir/vendor/polkit/50-omamobile-app-remove.rules" || { echo "FAIL: app-remove rule not limited to start" >&2; exit 1; }
 mkdir -p "$build_dir"
 fixture=$(mktemp -d)
 trap 'rm -rf -- "$fixture"' EXIT HUP INT TERM

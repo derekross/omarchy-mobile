@@ -3,6 +3,7 @@
 #include "backend.h"
 #include "deviceinfocontroller.h"
 #include "actionrunner.h"
+#include "appiconprovider.h"
 #include "home_guard.h"
 #include <QtTest>
 #include <QQmlComponent>
@@ -27,27 +28,42 @@ private slots:
             QFile f(stubs(it.key()) + "/charge.sh");
             QVERIFY(f.open(QIODevice::WriteOnly));
             f.write("printf '%s\\n' '" + it.value() + "'\n");
+            QFile apps(stubs(it.key()) + "/apps.sh");
+            QVERIFY(apps.open(QIODevice::WriteOnly));
+            apps.write("case $1 in\n"
+                       "  list) printf '%s\\n' '{\"apps\":[{\"id\":\"org.a.B\",\"name\":\"B\",\"icon\":\"b\"},{\"id\":\"c\",\"name\":\"C\",\"icon\":\"/c.png\"}],\"at\":1}' ;;\n"
+                       "  cached) printf '%s\\n' '{\"apps\":null}' ;;\n"
+                       "  info) printf '{\"id\":\"%s\",\"name\":\"B\",\"icon\":\"b\",\"path\":\"/x\",\"package\":\"bpkg\",\"version\":\"1-1\",\"size\":\"1.0 MiB\"}\\n' \"$2\" ;;\n"
+                       "  *) printf '{\"args\":\"%s\"}\\n' \"$*\" ;;\n"
+                       "esac\n");
+            QFile mgr(stubs(it.key()) + "/appmgr.sh");
+            QVERIFY(mgr.open(QIODevice::WriteOnly));
+            mgr.write("case $1 in\n"
+                      "  state) printf '{\"id\":\"%s\",\"kind\":\"package\",\"package\":\"bpkg\",\"units\":[],\"removable\":true,\"why\":\"\",\"targets\":[{\"name\":\"bpkg\",\"version\":\"1-1\",\"protected\":false,\"why\":\"\"}],\"required_by\":\"\",\"optional_for\":\"\",\"hash\":\"00112233445566ff\",\"reinstall\":\"sudo pacman -S bpkg\"}\\n' \"$2\" ;;\n"
+                      "  remove) printf '%s\\n' \"$*\" > \"${0%/*}/removed\"; printf '{\"ok\":true,\"kind\":\"package\",\"reinstall\":\"sudo pacman -S bpkg\"}\\n' ;;\n"
+                      "  *) printf '{\"args\":\"%s\"}\\n' \"$*\" ;;\n"
+                      "esac\n");
         }
     }
     void probeShowsTheBatteryRowOnlyWhenTheBackendSaysAvailable() {
         Backend on;
         on.setBackendDir(stubs("on"));
-        QCOMPARE(on.rows().size(), 2);
-        QTRY_COMPARE(on.rows().size(), 3);
+        QCOMPARE(on.rows().size(), 3);
+        QTRY_COMPARE(on.rows().size(), 4);
         Backend off;
         off.setBackendDir(stubs("off"));
         off.setToolAvailable("charge", true);
-        QTRY_COMPARE(off.rows().size(), 2); // the probe's answer clears it
+        QTRY_COMPARE(off.rows().size(), 3); // the probe's answer clears it
     }
     void navigationRejectsUnknownAndHiddenActions() {
         Backend backend;
         backend.setBackendDir(stubs("off"));
         QVERIFY(backend.catalogProblems().isEmpty());
-        QCOMPARE(backend.rows().size(), 2); // the Battery row waits for the charge backend, absent here
+        QCOMPARE(backend.rows().size(), 3); // the Battery row waits for the charge backend, absent here
         backend.setToolAvailable("charge", true);
-        QCOMPARE(backend.rows().size(), 3);
+        QCOMPARE(backend.rows().size(), 4);
         backend.setToolAvailable("charge", false);
-        QCOMPARE(backend.rows().size(), 2);
+        QCOMPARE(backend.rows().size(), 3);
         QVERIFY(!backend.navigate("recording"));
         backend.activate("arbitrary-command");
         QCOMPARE(backend.page(), QString("root"));
@@ -79,6 +95,157 @@ private slots:
         backend.search("charge limit");
         QCOMPARE(backend.rows().size(), 1);
         QCOMPARE(backend.rows().first().toMap()["id"].toString(), QString("battery"));
+    }
+    void appsPageGoesBackToRoot() {
+        Backend backend;
+        backend.setBackendDir(stubs("off"));
+        QVERIFY(backend.navigate("apps"));
+        QCOMPARE(backend.page(), QString("apps"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("root"));
+        backend.search("Installed apps");
+        QCOMPARE(backend.rows().size(), 1);
+        QCOMPARE(backend.rows().first().toMap()["id"].toString(), QString("apps"));
+    }
+    void runnerTakesAppIdsOnlyForApps() {
+        ActionRunner runner;
+        runner.setBackendDir(stubs("on"));
+        QSignalSpy done(&runner, &ActionRunner::finished);
+        const int ok = runner.run("apps", {"open", "org.a.B"});
+        QStringList bad;
+        for (const auto &id : {QString("../x"), QString("-x"), QString(".x"), QString("a/b"), QString("a..b"), QString("a b"), QString(129, QChar('a'))})
+            bad << QString::number(runner.run("apps", {"open", id}));
+        bad << QString::number(runner.run("apps", {"Org.a.B", "x"}));      // the verb stays a plain word
+        bad << QString::number(runner.run("display", {"set", "org.a.B"})); // other tools keep the plain word
+        const int tooMany = runner.run("apps", {"open", "a", "b"});
+        QTRY_COMPARE(done.count(), bad.size() + 2);
+        for (const auto &call : done) {
+            const int id = call.at(2).toInt();
+            if (id == ok) QCOMPARE(call.at(1).toMap().value("args").toString(), QString("open org.a.B"));
+            else if (id == tooMany) QCOMPARE(call.at(1).toMap().value("error").toString(), QString("unknown action"));
+            else { QVERIFY(bad.contains(QString::number(id))); QCOMPARE(call.at(1).toMap().value("error").toString(), QString("bad argument")); }
+        }
+    }
+    void appsPageUninstallWizardSendsTheShownHash() {
+        ActionRunner runner;
+        runner.setBackendDir(stubs("on"));
+        Backend backend;
+        backend.setBackendDir(stubs("off"));
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty("backend", &backend);
+        engine.rootContext()->setContextProperty("actions", &runner);
+        engine.addImageProvider(QStringLiteral("appicon"), new AppIconProvider);
+        QQmlComponent component(&engine, QUrl("qrc:/AppsPage.qml"));
+        std::unique_ptr<QObject> page(component.create());
+        QVERIFY2(page, qPrintable(component.errorString()));
+        QTRY_VERIFY(!page->property("scanning").toBool());
+        QFile::remove(stubs("on") + "/removed");
+        QMetaObject::invokeMethod(page.get(), "showApp", Q_ARG(QVariant, page->property("apps").toList().at(0)));
+        QTRY_COMPARE(page->property("mgr").toMap().value("hash").toString(), QString("00112233445566ff"));
+        // the wizard: Uninstall... opens the confirm step, nothing is removed before Uninstall
+        QObject *open = page->findChild<QObject *>("uninstallApp");
+        QVERIFY(open && open->property("enabled").toBool());
+        QMetaObject::invokeMethod(open, "clicked");
+        QCOMPARE(page->property("wizard").toString(), QString("confirm"));
+        QVERIFY(!QFile::exists(stubs("on") + "/removed"));
+        QMetaObject::invokeMethod(page->findChild<QObject *>("confirmUninstall"), "clicked");
+        QTRY_COMPARE(page->property("wizard").toString(), QString("done"));
+        QVERIFY(page->property("doneText").toString().contains("sudo pacman -S bpkg"));
+        QFile f(stubs("on") + "/removed");
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        QCOMPARE(QString::fromUtf8(f.readAll()).trimmed(), QString("remove org.a.B 00112233445566ff"));
+        // back from the result goes to the list
+        QMetaObject::invokeMethod(page.get(), "goBack");
+        QVERIFY(!page->property("canGoBack").toBool());
+    }
+    void runnerTakesAppmgrArguments() {
+        ActionRunner runner;
+        runner.setBackendDir(stubs("on"));
+        QSignalSpy done(&runner, &ActionRunner::finished);
+        const int ok = runner.run("appmgr", {"stop", "org.a.B"});
+        QStringList bad;
+        bad << QString::number(runner.run("appmgr", {"remove", "../x", "00112233445566ff"}));
+        bad << QString::number(runner.run("appmgr", {"remove", "org.a.B", "0011223344556677ff"}));  // 18 digits
+        bad << QString::number(runner.run("appmgr", {"remove", "org.a.B", "a;b"}));
+        const int tooMany = runner.run("appmgr", {"remove", "a", "b", "c"});
+        QTRY_COMPARE(done.count(), bad.size() + 2);
+        for (const auto &call : done) {
+            const int id = call.at(2).toInt();
+            if (id == ok) QCOMPARE(call.at(1).toMap().value("args").toString(), QString("stop org.a.B"));
+            else if (id == tooMany) QCOMPARE(call.at(1).toMap().value("error").toString(), QString("unknown action"));
+            else { QVERIFY(bad.contains(QString::number(id))); QCOMPARE(call.at(1).toMap().value("error").toString(), QString("bad argument")); }
+        }
+    }
+    void appsPageListsAndShowsOneApp() {
+        ActionRunner runner;
+        runner.setBackendDir(stubs("on"));
+        Backend backend; // outlives the engine: the style singleton reads it until the engine goes
+        backend.setBackendDir(stubs("off"));
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty("backend", &backend);
+        engine.rootContext()->setContextProperty("actions", &runner);
+        engine.addImageProvider(QStringLiteral("appicon"), new AppIconProvider);
+        QQmlComponent component(&engine, QUrl("qrc:/AppsPage.qml"));
+        std::unique_ptr<QObject> page(component.create());
+        QVERIFY2(page, qPrintable(component.errorString()));
+        // the page runs `apps cached` and `apps list` through the runner (the stub, not an installed backend)
+        QTRY_VERIFY(!page->property("scanning").toBool());
+        QVERIFY2(page->property("apps").toList().size() == 2, qPrintable(page->property("status").toString()));
+        QCOMPARE(page->property("status").toString(), QString());
+        QVERIFY(!page->property("canGoBack").toBool());
+        QVariant icon;
+        QMetaObject::invokeMethod(page.get(), "iconSource", Q_RETURN_ARG(QVariant, icon), Q_ARG(QVariant, QString("/opt/a b/x#1?.png")));
+        QCOMPARE(icon.toString(), QString("file:///opt/a%20b/x%231%3F.png"));
+        QMetaObject::invokeMethod(page.get(), "iconSource", Q_RETURN_ARG(QVariant, icon), Q_ARG(QVariant, QString("we#ird?n")));
+        QCOMPARE(icon.toString(), QString("image://appicon/we%23ird%3Fn"));
+        AppIconProvider provider;   // decodes the name: a theme lookup of "we#ird?n" (missing, so the fallback), never empty
+        QSize got;
+        QVERIFY(!provider.requestPixmap("we%23ird%3Fn", &got, QSize(24, 24)).isNull());
+        QMetaObject::invokeMethod(page.get(), "showApp", Q_ARG(QVariant, page->property("apps").toList().at(0)));
+        QVERIFY(page->property("canGoBack").toBool());
+        QTRY_COMPARE(page->property("info").toMap().value("package").toString(), QString("bpkg"));
+        QCOMPARE(page->property("info").toMap().value("id").toString(), QString("org.a.B"));
+        QMetaObject::invokeMethod(page.get(), "goBack");
+        QVERIFY(!page->property("canGoBack").toBool());
+        // an ID the runner refuses is shown but not asked about, and a late answer for the app before it is dropped
+        QMetaObject::invokeMethod(page.get(), "showApp", Q_ARG(QVariant, page->property("apps").toList().at(0)));
+        const int late = page->property("infoReq").toInt();
+        QVERIFY(late > 0);
+        const QVariant odd = QVariantMap{{"id", "My App"}, {"name", "My App"}, {"icon", ""}, {"open", false}};
+        QMetaObject::invokeMethod(page.get(), "showApp", Q_ARG(QVariant, odd));
+        QVERIFY(!page->property("infoBusy").toBool());
+        QVERIFY(page->property("infoStatus").toString().contains("Open it from the app drawer"));
+        QCOMPARE(page->property("infoReq").toInt(), -1);
+        QTest::qWait(300);   // the earlier info answer arrives now
+        QCOMPARE(page->property("info").toMap().value("package").toString(), QString());
+        QVERIFY(page->property("infoStatus").toString().contains("Open it from the app drawer"));
+    }
+    void backLeavesAnAppsDetailFirst() {
+        Backend backend;
+        backend.setBackendDir(stubs("off"));
+        backend.setHomeCommand({});
+        DeviceInfoController info(true);
+        ActionRunner runner;
+        runner.setBackendDir(stubs("on"));
+        QQmlApplicationEngine engine;
+        engine.addImageProvider(QStringLiteral("appicon"), new AppIconProvider);
+        engine.rootContext()->setContextProperty("backend", &backend);
+        engine.rootContext()->setContextProperty("deviceInfo", &info);
+        engine.rootContext()->setContextProperty("actions", &runner);
+        engine.load(QUrl("qrc:/Main.qml"));
+        QCOMPARE(engine.rootObjects().size(), 1);
+        auto *window = engine.rootObjects().first();
+        QVERIFY(backend.navigate("apps"));
+        QObject *page = nullptr;
+        QTRY_VERIFY((page = window->findChild<QObject *>("appsPage")) != nullptr);
+        QTRY_COMPARE(page->property("apps").toList().size(), 2);
+        QMetaObject::invokeMethod(page, "showApp", Q_ARG(QVariant, page->property("apps").toList().at(0)));
+        QVERIFY(page->property("canGoBack").toBool());
+        QVERIFY(QMetaObject::invokeMethod(window, "goBack"));   // the detail goes back to the list
+        QCOMPARE(backend.page(), QString("apps"));
+        QVERIFY(!page->property("canGoBack").toBool());
+        QVERIFY(QMetaObject::invokeMethod(window, "goBack"));   // the list goes back to the root
+        QCOMPARE(backend.page(), QString("root"));
     }
     void runnerKnowsChargeAndRejectsOthers() {
         ActionRunner runner;
@@ -296,8 +463,8 @@ private slots:
 
     }
 private:
-    // Stand-ins for backends/charge.sh, so no test reads the backend installed on the host: "on" answers like a
-    // phone with a declared charge limit, "off" like any other.
+    // Stand-ins for backends/charge.sh and backends/apps.sh, so no test reads a backend installed on the host: "on"
+    // answers like a phone with a declared charge limit, "off" like any other; both answer the same two apps.
     QString stubs(const QString &name) const { return m_stubs.filePath(name); }
     QTemporaryDir m_stubs;
 };

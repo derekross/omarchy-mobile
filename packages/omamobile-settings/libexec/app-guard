@@ -1,0 +1,108 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# app-guard PKG: may Settings uninstall this package, and what goes with it? Read-only. The Apps page's backend
+# (appmgr.sh, as the user) shows its answer on the confirm screen; the root helper (app-remove, as root) asks it again
+# and removes only when the answer is "ok" and the hash of the targets is the one the user confirmed.
+# Output, tab-separated lines:
+#   ok|refuse <TAB> reason                  the verdict (reason empty when ok)
+#   hash <TAB> HEX16                        sha256 of the sorted "name version" target lines, first 16 hex digits
+#   target <TAB> name <TAB> version <TAB> 0|1 <TAB> why      every package `pacman -Rns` would remove; 1 = protected
+#   requiredby <TAB> names                  what needs PKG (any = refused)
+#   optionalfor <TAB> names                 what can use PKG (a warning only)
+# The dry run is -Rs (pacman refuses -n with --print; -n only skips .pacsave files): the same targets omarchy-pkg-drop's -Rns removes.
+# Protected (fails closed: an unreadable list protects everything):
+#   - every package Omarchy installs by default (omarchy-pkg-defaults)
+#   - the globs in /usr/share/omamobile-settings/app-protected (the phone's system: shell, lock, keyboards, network,
+#     audio, telephony, core, Omarchy Mobile's own packages)
+#   - anything another installed package requires (checked for PKG; the others in the set are required only by it)
+# PKG itself must be installed, explicitly installed and own a desktop entry under /usr/share/applications.
+# Test hooks: OMAMOBILE_APPMGR_PROTECTED (the glob file), OMAMOBILE_APPMGR_LOCK (the pacman lock file).
+set -uo pipefail
+export LC_ALL=C
+pkg=${1:-}
+[[ $# -eq 1 && $pkg =~ ^[a-z0-9@_+][a-z0-9@._+-]{0,127}$ ]] || { echo "usage: app-guard PKG" >&2; exit 2; }
+protected_file=${OMAMOBILE_APPMGR_PROTECTED:-/usr/share/omamobile-settings/app-protected}
+lock=${OMAMOBILE_APPMGR_LOCK:-/var/lib/pacman/db.lck}
+verdict() { printf '%s\t%s\n' "$1" "$2"; }
+
+info=$(timeout 10 pacman -Qi -- "$pkg" 2>/dev/null) || { verdict refuse "$pkg is not installed"; exit 0; }
+# pacman -Qi wraps long fields onto indented lines: join them, then read one field
+field() { awk -v k="$1" '
+  /^[A-Za-z][A-Za-z ]*[^ ] *: / { cur=$0; sub(/ *:.*/, "", cur); if (cur == k) { v=$0; sub(/^[^:]*: /, "", v); on=1 } else on=0; next }
+  on && /^ +/ { s=$0; sub(/^ +/, " ", s); v=v s }
+  END { print v }' <<<"$info"; }
+reason=$(field "Install Reason")
+reqby=$(field "Required By"); [[ $reqby == None ]] && reqby=''
+optfor=$(field "Optional For"); [[ $optfor == None ]] && optfor=''
+
+# protected globs, "glob<TAB>why" per line; # comments
+declare -a globs=() whys=()
+globs_ok=1
+if [[ -r $protected_file ]]; then
+  while IFS=$'\t' read -r g w || [[ -n $g ]]; do
+    [[ -z $g || $g == \#* ]] && continue
+    globs+=("$g"); whys+=("${w:-part of the phone system}")
+  done <"$protected_file"
+  ((${#globs[@]})) || globs_ok=0
+else
+  globs_ok=0
+fi
+declare -A defaults=()
+defaults_ok=1
+if dl=$(timeout 10 omarchy-pkg-defaults 2>/dev/null) && [[ -n $dl ]]; then
+  while read -r d; do [[ -n $d && $d != \#* ]] && defaults[$d]=1; done <<<"$dl"
+else
+  defaults_ok=0
+fi
+why_protected() {
+  local n=$1 i
+  ((globs_ok)) || { echo "Settings could not read its protected list"; return; }
+  ((defaults_ok)) || { echo "Omarchy's default package list could not be read"; return; }
+  [[ -n ${defaults[$n]+set} ]] && { echo "installed by Omarchy as part of the system"; return; }
+  for i in "${!globs[@]}"; do
+    # shellcheck disable=SC2053
+    [[ $n == ${globs[i]} ]] && { echo "${whys[i]}"; return; }
+  done
+}
+
+# -n (no .pacsave) changes no target and pacman refuses it with --print, so the dry run is -Rs
+plan=$(timeout 30 pacman -Rs --print --print-format '%n %v' -- "$pkg" 2>&1) || plan_fail=$plan
+targets=()
+badline=''
+if [[ -z ${plan_fail:-} ]]; then
+  mapfile -t targets < <(grep -E '^[a-z0-9@_+][a-z0-9@._+-]* [^ ]+$' <<<"$plan" | sort -u)
+  # any other line on a dry run that worked: refuse rather than remove something not shown
+  badline=$(grep -vE '^[a-z0-9@_+][a-z0-9@._+-]* [^ ]+$|^$' <<<"$plan" | head -n 1)
+fi
+hash=$(printf '%s\n' "${targets[@]}" | sha256sum | cut -c1-16)
+
+refuse=''
+[[ -e $lock ]] && refuse="Another install or update is running (pacman is locked). Try again when it has finished."
+[[ -z $refuse && -n ${plan_fail:-} ]] && { pf=${plan_fail//$'\n'/ }; refuse="pacman cannot remove $pkg on its own: $pf"; }
+[[ -z $refuse && -n $badline ]] && refuse="pacman's plan has a line Settings does not understand: ${badline:0:120}"
+[[ -z $refuse && ${#targets[@]} -eq 0 ]] && refuse="pacman listed nothing to remove"
+[[ -z $refuse && $reason != "Explicitly installed" ]] && refuse="$pkg was installed as a dependency of something else, not as an app"
+[[ -z $refuse && -n $reqby ]] && refuse="Other packages need $pkg: $reqby"
+if [[ -z $refuse ]]; then
+  # read the whole list first: grep -q stopping early would SIGPIPE pacman and pipefail would call it a miss
+  files=$(timeout 10 pacman -Qlq -- "$pkg" 2>/dev/null) || files=''
+  grep -qE '^/usr/share/applications/[^/]+\.desktop$' <<<"$files" \
+    || refuse="$pkg has no app entry: it is not an app"
+fi
+out=()
+for t in "${targets[@]}"; do
+  n=${t% *} v=${t#* }
+  w=$(why_protected "$n")
+  if [[ -n $w ]]; then
+    out+=("$(printf 'target\t%s\t%s\t1\t%s' "$n" "$v" "$w")")
+    [[ -z $refuse ]] && refuse="$n is protected: $w"
+  else
+    out+=("$(printf 'target\t%s\t%s\t0\t' "$n" "$v")")
+  fi
+done
+if [[ -n $refuse ]]; then verdict refuse "${refuse:0:600}"; else verdict ok ''; fi
+printf 'hash\t%s\n' "$hash"
+((${#out[@]})) && printf '%s\n' "${out[@]}"
+printf 'requiredby\t%s\n' "$reqby"
+printf 'optionalfor\t%s\n' "$optfor"
+exit 0
