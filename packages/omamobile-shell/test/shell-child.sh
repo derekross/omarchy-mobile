@@ -22,8 +22,11 @@ pass "shell child: no descriptor of the shell's past stderr"
 # 2. The parent dies (as a crashed Quickshell does): the helper goes with it.
 bash -c '"$1" sleep 4242 & echo $! > "$2"; sleep 0.5' sh "$child" "$t/pid"
 pid=$(cat "$t/pid")
-for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
-kill -0 "$pid" 2>/dev/null && fail "the helper outlives the process that started it"
+# alive: the process exists and is not a zombie (in a container whose PID 1
+# never reaps, an ended helper stays a zombie, and kill -0 still succeeds)
+alive() { local s; s=$(sed -E 's/^.*\) //' "/proc/$1/stat" 2>/dev/null) || return 1; [[ ${s%% *} != Z ]]; }
+for _ in $(seq 1 20); do alive "$pid" || break; sleep 0.1; done
+alive "$pid" && fail "the helper outlives the process that started it"
 # The same without the wrapper stays: the test can tell the difference.
 bash -c 'sleep 4242 & echo $! > "$1"; sleep 0.2' sh "$t/pid2"
 sleep 0.5; kill -0 "$(cat "$t/pid2")" 2>/dev/null || fail "test: a plain child should have outlived its parent"
