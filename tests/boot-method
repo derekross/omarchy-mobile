@@ -643,3 +643,30 @@ grep -q 'modprobe:qcom_q6v5_pas\|modprobe:qcom-q6v5-pas' "$tad/log" \
 grep -q 'modprobe:fastrpc' "$tad/log" || fail "adsp-battery should modprobe fastrpc"
 grep -q 'insmod:' "$tad/log" && { cat "$tad/log"; fail "adsp-battery must not insmod when modprobe works"; }
 echo "ok - adsp-battery prefers modprobe over held kos"
+
+# An aarch64 host has no pinned clang (it is linux-x86 only), so
+# `kernel --release` must refuse there before any container starts. The
+# x86-64 case is the control: there the refusal must not fire.
+tar=$(mktemp -d); mkdir -p "$tar/bin" "$tar/kernel" "$tar/toolchain"
+for cmd in docker fastboot adb ssh; do
+  # shellcheck disable=SC2016 # fake command reads the exported fixture path
+  printf '#!/bin/sh\necho called >> "$CALLS"\nexit 97\n' > "$tar/bin/$cmd"
+done
+chmod +x "$tar/bin/"*
+rm -f "$CALLS"
+for arch in aarch64 x86_64; do
+  printf '#!/bin/sh\n[ "$1" = -m ] && echo %s || exec /usr/bin/env -u PATH uname "$@"\n' "$arch" > "$tar/bin/uname"
+  chmod +x "$tar/bin/uname"
+  if PATH="$tar/bin:$PATH" DEVICE=cheetah KERNEL_DIR="$tar/kernel" KERNEL_OUT="$tar/out" \
+    OMAMOBILE_TOOLCHAIN="$tar/toolchain" CLANG_DIR='' "$t/repo/bin/omamobile" kernel --release > "$t/log" 2>&1; then
+    rm -rf "$tar"; fail "kernel --release succeeded with uname -m $arch"
+  fi
+  if [[ $arch == aarch64 ]]; then
+    grep -q 'kernel --release needs the pinned clang' "$t/log" || { rm -rf "$tar"; fail "aarch64 kernel --release fails for the wrong reason"; }
+  else
+    grep -q 'kernel --release needs the pinned clang' "$t/log" && { rm -rf "$tar"; fail "x86_64 kernel --release took the aarch64 refusal"; }
+  fi
+done
+[[ ! -e $CALLS ]] || { rm -rf "$tar"; fail "kernel --release reached docker or a phone"; }
+rm -rf "$tar"
+echo 'ok - kernel --release refuses on an aarch64 host before any container, and only there'

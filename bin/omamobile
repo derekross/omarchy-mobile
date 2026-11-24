@@ -925,6 +925,9 @@ cmd_images() {
   local dtb="$boot/dts/$DEV_DTB"
   [[ ! -e $dtc ]] || "$dtc" --version >/dev/null 2>&1 ||
     die "$dtc does not run on this host: set DTC and FDTOVERLAY to a host dtc and fdtoverlay"
+  # Either one changes what packs the DTBs, so say so, and TOOLCHAIN records it
+  [[ -z ${DTC:-} ]] || say "dtc from DTC: $DTC"
+  [[ -z ${FDTOVERLAY:-} ]] || say "fdtoverlay from FDTOVERLAY: $FDTOVERLAY"
   # qcom-abl needs the device's chainload dir before we touch a build.
   if [[ $DEV_BOOT_METHOD == qcom-abl ]]; then
     local chainload="$ROOT/device/$DEVICE/chainload"
@@ -1166,6 +1169,9 @@ if got != want:
     if [[ -n ${DEV_AVB_FOOTERS:-} ]]; then
       echo "avbtool.py: $(python3 -I "$AVBTOOL" version), sha256 $(sha256sum < "$AVBTOOL" | cut -d' ' -f1)"
     fi
+    # Only when set: a build with the kernel's own dtc keeps TOOLCHAIN as before
+    [[ -z ${DTC:-} ]] || echo "dtc (DTC): $DTC, $("$DTC" --version 2>&1 | sed -n 1p)"
+    [[ -z ${FDTOVERLAY:-} ]] || echo "fdtoverlay (FDTOVERLAY): $FDTOVERLAY, $("$FDTOVERLAY" --version 2>&1 | sed -n 1p)"
   } > "$img/TOOLCHAIN"
   ls -lh "$img"/*.img
 }
