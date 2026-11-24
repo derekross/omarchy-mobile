@@ -11,7 +11,7 @@ ListView {
     Component.onCompleted: positionViewAtBeginning()
     header: SettingsLabel {
         width: page.width; bottomPadding: 12
-        text: qsTr("The people who work on Omamobile, from the commit history of omamobile, merged pull requests to linux-omamobile and the GitHub contributors of the project's repositories.")
+        text: qsTr("The people who work on Omamobile, by GitHub username: the contributors of the project's repositories and the authors of merged pull requests to linux-omamobile.")
         wrapMode: Text.Wrap; color: backend.muted; font.pixelSize: SettingsStyle.fontPx(14)
     }
     delegate: Rectangle {
@@ -25,11 +25,10 @@ ListView {
             id: row
             anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 12 }
             spacing: 2
-            SettingsLabel { Layout.fillWidth: true; text: modelData.name; wrapMode: Text.WrapAtWordBoundaryOrAnywhere; color: backend.foreground; font.pixelSize: SettingsStyle.fontPx(16) }
             SettingsLabel {
-                Layout.fillWidth: true; visible: !!modelData.login
-                text: "@" + (modelData.login || ""); wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13)
+                Layout.fillWidth: true
+                text: "@" + modelData.login; wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                color: backend.foreground; font.pixelSize: SettingsStyle.fontPx(16)
             }
         }
     }

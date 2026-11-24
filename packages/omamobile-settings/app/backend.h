@@ -46,7 +46,7 @@ public:
     // name a stand-in, or nothing.
     void setHomeCommand(const QStringList &command) { m_homeCommand = command; }
     Q_INVOKABLE QString icon(const QString &name) const;
-    // The people on the Credits page: name and optional GitHub login, from the credits.json that
+    // The people on the Credits page: GitHub logins only (no names), from the credits.json that
     // tools/gen-credits.py writes. Parsing is strict; a malformed file gives an empty list.
     Q_INVOKABLE QVariantList credits() const;
     static QVariantList parseCredits(const QByteArray &json, QString *problem = nullptr);

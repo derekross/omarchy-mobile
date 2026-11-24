@@ -145,18 +145,12 @@ QVariantList Backend::parseCredits(const QByteArray &json, QString *problem) {
     for (const auto &value : people.toArray()) {
         const auto person = value.toObject();
         for (auto key = person.begin(); key != person.end(); ++key)
-            if (key.key() != "name" && key.key() != "login") return fail("unknown key " + key.key());
-        const auto name = person["name"].toString().trimmed();
+            if (key.key() != "login") return fail("unknown key " + key.key());
         const auto login = person["login"].toString();
-        if (name.isEmpty() || name.size() > 100 || name.contains('@') || name.contains('<')) return fail("bad name");
-        if (person.contains("login") && !loginPattern.match(login).hasMatch()) return fail("bad login");
-        if (seen.contains("n:" + name.toLower() + "/" + login.toLower())) return fail("duplicate person");
-        if (!login.isEmpty() && seen.contains("l:" + login.toLower())) return fail("duplicate login");
-        seen.insert("n:" + name.toLower() + "/" + login.toLower());
-        if (!login.isEmpty()) seen.insert("l:" + login.toLower());
-        QVariantMap row{{"name", name}};
-        if (!login.isEmpty()) row["login"] = login;
-        out.append(row);
+        if (!loginPattern.match(login).hasMatch()) return fail("bad login");
+        if (seen.contains(login.toLower())) return fail("duplicate login");
+        seen.insert(login.toLower());
+        out.append(QVariantMap{{"login", login}});
     }
     return out;
 }

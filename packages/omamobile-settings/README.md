@@ -51,15 +51,12 @@ Disclaimer page (`app/DisclaimerPage.qml`) states the project's status, that
 support differs per phone (docs/DEVICES.md), what installing erases, and the MIT
 licence's no-warranty line; each part restates LICENSE, README.md,
 docs/INSTALL.md or docs/DEVICES.md, so change it there first. Credits opens a
-page listing the people who work on Omamobile, read from `app/credits.json`
-(names and GitHub logins, no emails), which `tools/gen-credits.py` writes from
-`git shortlog` of this repo, GitHub's commit and contributor lists for
-derekross/omamobile, the contributors of the family's other repositories
-(`FAMILY_REPOS` in the script) and the authors of merged pull requests to
-derekross/linux-omamobile (GitHub logins; emails only match people and are
-never written). The script prints each guess it makes (one name, one login)
-to stderr. To refresh it, run `tools/gen-credits.py` in a fetched clone of
-derekross/omamobile (needs an authenticated `gh`) and commit the file;
+page listing the people who work on Omamobile by GitHub login only (no names,
+no emails), read from `app/credits.json`, which `tools/gen-credits.py` writes
+from GitHub's contributor lists of derekross/omamobile and the family's other
+repositories (`FAMILY_REPOS` in the script) and the authors of merged pull
+requests to derekross/linux-omamobile. To refresh it, run `tools/gen-credits.py`
+(needs an authenticated `gh`) and commit the file;
 `test/credits.py` checks its format. Credits and Disclaimer are also found by search.
 
 Build with `bin/build`, test with `test/all`, and stage with `install DESTDIR`.

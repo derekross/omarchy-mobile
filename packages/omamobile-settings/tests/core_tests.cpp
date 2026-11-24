@@ -306,11 +306,10 @@ private slots:
     }
     void creditsFileFormat() {
         QString why;
-        QCOMPARE(Backend::parseCredits(R"({"people":[{"name":"A B","login":"ab-1"},{"name":"C"}]})", &why).size(), 2);
-        for (const char *bad : {"", "[]", R"({"people":[]})", R"({"people":[{"login":"x"}]})",
-                R"({"people":[{"name":"A","email":"a@b.c"}]})", R"({"people":[{"name":"a@b.c"}]})",
-                R"({"people":[{"name":"A","login":"bad login"}]})", R"({"people":[{"name":"A"},{"name":"a"}]})",
-                R"({"people":[{"name":"A","login":"x"},{"name":"B","login":"X"}]})"}) {
+        QCOMPARE(Backend::parseCredits(R"({"people":[{"login":"ab-1"},{"login":"C"}]})", &why).size(), 2);
+        for (const char *bad : {"", "[]", R"({"people":[]})", R"({"people":[{"name":"A"}]})",
+                R"({"people":[{"name":"A","login":"x"}]})", R"({"people":[{"login":"x","email":"a@b.c"}]})",
+                R"({"people":[{"login":"bad login"}]})", R"({"people":[{"login":"x"},{"login":"X"}]})"}) {
             why.clear();
             QVERIFY2(Backend::parseCredits(bad, &why).isEmpty(), bad);
             QVERIFY2(!why.isEmpty(), bad);
@@ -322,7 +321,10 @@ private slots:
         backend.setHomeCommand({});
         const auto people = backend.credits();
         QVERIFY(people.size() > 5);
-        for (const auto &p : people) QVERIFY(!p.toMap()["name"].toString().isEmpty());
+        for (const auto &p : people) {
+            QVERIFY(!p.toMap()["login"].toString().isEmpty());
+            QVERIFY(!p.toMap().contains("name"));
+        }
         QVERIFY(backend.catalogProblems().isEmpty());
         QVERIFY(backend.navigate("about"));
         QVERIFY(backend.navigate("credits"));

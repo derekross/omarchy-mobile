@@ -1,147 +1,109 @@
 {
  "people": [
   {
-   "name": "Derek Ross",
    "login": "derekross"
   },
   {
-   "name": "W4HO",
    "login": "W4HO-ham"
   },
   {
-   "name": "Victor",
    "login": "only21mil"
   },
   {
-   "name": "Lef",
    "login": "Somnius"
   },
   {
-   "name": "angelrenefm",
    "login": "angelrenefm"
   },
   {
-   "name": "Latent Operator",
-   "login": "latentoperator"
-  },
-  {
-   "name": "marselnenaj",
-   "login": "marselnenaj"
-  },
-  {
-   "name": "Colin Lundholm",
-   "login": "gitColinX"
-  },
-  {
-   "name": "Gr-linkk",
-   "login": "Gr-linkk"
-  },
-  {
-   "name": "quatrixone",
-   "login": "quatrixone"
-  },
-  {
-   "name": "Darek",
-   "login": "aninmucek"
-  },
-  {
-   "name": "Alejandro García León",
-   "login": "nesmeck"
-  },
-  {
-   "name": "kloot",
-   "login": "den-kloot"
-  },
-  {
-   "name": "Roboto Saith",
    "login": "robotosaith"
   },
   {
-   "name": "Brett-Michael Green",
-   "login": "greenbrettmichael"
+   "login": "latentoperator"
   },
   {
-   "name": "GrendelRTG",
-   "login": "matthewjaybarr-png"
+   "login": "marselnenaj"
   },
   {
-   "name": "Jeremy Joplin",
-   "login": "jkjoplin"
-  },
-  {
-   "name": "azazelpy",
-   "login": "azazelpy"
-  },
-  {
-   "name": "Nate C",
-   "login": "kdegeek"
-  },
-  {
-   "name": "solfredag",
-   "login": "nosmokinghere"
-  },
-  {
-   "name": "cx3301J",
-   "login": "cx3301J"
-  },
-  {
-   "name": "Hiroyuki Ikegami",
-   "login": "ikegam"
-  },
-  {
-   "name": "hårkl",
-   "login": "h4rkl"
-  },
-  {
-   "name": "mrlund",
-   "login": "mrlund"
-  },
-  {
-   "name": "Nerkyator",
-   "login": "Nerkyator"
-  },
-  {
-   "name": "PeterXMR",
-   "login": "PeterXMR"
-  },
-  {
-   "name": "Steve",
-   "login": "mptfire"
-  },
-  {
-   "name": "Version Tracker",
-   "login": "FlorencioJP"
-  },
-  {
-   "name": "Adrian Schupp"
-  },
-  {
-   "name": "Joe Alicata",
-   "login": "wirelessjoe"
-  },
-  {
-   "name": "johnbrady833",
-   "login": "johnbrady833"
-  },
-  {
-   "name": "Uriel Curiel",
-   "login": "UrielCuriel"
-  },
-  {
-   "name": "bilacc",
-   "login": "bilacc"
-  },
-  {
-   "name": "boozedog",
    "login": "boozedog"
   },
   {
-   "name": "haudamekki",
-   "login": "haudamekki"
+   "login": "Gr-linkk"
   },
   {
-   "name": "HemangKumawat",
+   "login": "quatrixone"
+  },
+  {
+   "login": "gitColinX"
+  },
+  {
+   "login": "greenbrettmichael"
+  },
+  {
+   "login": "aninmucek"
+  },
+  {
+   "login": "den-kloot"
+  },
+  {
+   "login": "nesmeck"
+  },
+  {
+   "login": "bilacc"
+  },
+  {
+   "login": "matthewjaybarr-png"
+  },
+  {
+   "login": "jkjoplin"
+  },
+  {
+   "login": "kdegeek"
+  },
+  {
+   "login": "azazelpy"
+  },
+  {
+   "login": "nosmokinghere"
+  },
+  {
+   "login": "h4rkl"
+  },
+  {
+   "login": "mrlund"
+  },
+  {
+   "login": "cx3301J"
+  },
+  {
+   "login": "FlorencioJP"
+  },
+  {
+   "login": "wirelessjoe"
+  },
+  {
+   "login": "ikegam"
+  },
+  {
+   "login": "Nerkyator"
+  },
+  {
+   "login": "mptfire"
+  },
+  {
+   "login": "PeterXMR"
+  },
+  {
    "login": "HemangKumawat"
+  },
+  {
+   "login": "UrielCuriel"
+  },
+  {
+   "login": "johnbrady833"
+  },
+  {
+   "login": "haudamekki"
   }
  ]
 }
