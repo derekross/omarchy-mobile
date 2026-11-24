@@ -8,7 +8,9 @@
 #     is run, only ufw.conf is read)
 #   security.sh set firewall on|off
 #     saved and applied as root by omamobile-firewall@on|off.service (the polkit rule 50-omamobile-firewall.rules lets
-#     the active local user start those two and nothing else), then read back; prints the get answer
+#     the active local user start those two and nothing else, and asks for the admin PIN through the shell's polkit
+#     prompt both ways), then read back; prints the get answer. A PIN prompt that is cancelled or fails gives
+#     {"error":"not changed: the PIN was not entered",...} with the state read again.
 # The firewall state is ENABLED= in /etc/ufw/ufw.conf (what `ufw enable|disable` writes and what ufw.service applies at
 # boot). ufw.service is a oneshot with RemainAfterExit, so its "active" does not change on `ufw disable` and is not used.
 # SSH is shown, never switched: USB SSH is the same sshd as any other SSH, so a switch here could take away the only
@@ -19,7 +21,8 @@
 # (both IPv4 and, when ufw uses IPv6, IPv6), and while the hotspot runs (its own UFW rules
 # are added only when it starts with the firewall on). Turning it off is never refused.
 # The test runs a copy of this script with `fake` set to a scratch root for /etc and /usr/bin, and stub commands on PATH;
-# `set` then runs the helper's logic nowhere: it writes ENABLED= in the scratch ufw.conf. Nothing in the environment sets it.
+# `set` still calls the (stub) systemctl start, then writes ENABLED= in the scratch ufw.conf in place of the root
+# helper. Nothing in the environment sets it.
 set -euo pipefail
 set +x
 export LC_ALL=C
@@ -139,15 +142,23 @@ set)
   fi
   # a failed set prints the state read again, with the error, so the page never keeps a stale state
   setfail() { local st; st=$(get); printf '{"error":"%s",%s\n' "$1" "${st#\{}"; exit 2; }
+  # systemctl may ask for a password here: the polkit rule answers AUTH_ADMIN_KEEP, so systemctl asks the session's polkit agent (the
+  # shell's PIN pad) and waits for the owner. The unit's own limit is TimeoutStartSec=60 once it starts; the owner gets
+  # about 60 s more to type the PIN, so 122 s is the backstop. With the two reads around it (five systemctl calls of at
+  # most 2 s each: 10 s) and the read of a failed set (10 s more), a set ends by 10 + 122 + 10 + 10 = 152 s; the app's
+  # runner kills it at 160 s.
+  err=$(timeout 122 systemctl start "omamobile-firewall@$value.service" 2>&1 >/dev/null) || {
+    # a cancelled, failed or unanswered PIN prompt: systemctl says "Access denied" or "Interactive authentication
+    # required"; timeout's 124 is a prompt nobody answered
+    rc=$?
+    if [[ $err == *'Access denied'* || $err == *'nteractive authentication'* || $rc == 124 ]]; then
+      setfail "not changed: the PIN was not entered"
+    fi
+    setfail "could not turn the firewall $value"
+  }
   if [[ -n $fake ]]; then
     [[ $value == on ]] && v=yes || v=no
     sed -i "s/^ENABLED=.*/ENABLED=$v/" "$conf"
-  else
-    # the unit's own limit is TimeoutStartSec=60, so systemctl answers by then; 62 s is only a backstop. With the two
-    # reads around it (five systemctl calls of at most 2 s each: 10 s) and the read of a failed set (10 s more), a set
-    # ends by 10 + 62 + 10 + 10 = 92 s; the app's runner kills it at 100 s.
-    timeout 62 systemctl start --no-ask-password "omamobile-firewall@$value.service" >/dev/null 2>&1 \
-      || setfail "could not turn the firewall $value"
   fi
   state=$(get)
   [[ $state == *"\"firewall\":\"$value\""* ]] || setfail "the firewall did not turn $value"

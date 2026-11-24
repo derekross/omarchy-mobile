@@ -43,9 +43,9 @@ int ActionRunner::run(const QString &tool, const QStringList &args) {
     });
     p->start();
     p->closeWriteChannel();
-    // the firewall switch: up to three reads (10 s each at worst) and systemctl start (cut at 62 s; the unit's limit is
-    // 60 s): 92 s, so 100 s
+    // the firewall switch: up to three reads (10 s each at worst) and systemctl start, which waits for the owner's PIN
+    // (cut at 122 s: 60 s for the PIN and the unit's 60 s limit): 152 s, so 160 s
     const bool firewallSet = tool == "security" && args.value(0) == "set";
-    QTimer::singleShot(firewallSet ? 100000 : 20000, p, [p] { if (p->state() != QProcess::NotRunning) p->kill(); });
+    QTimer::singleShot(firewallSet ? 160000 : 20000, p, [p] { if (p->state() != QProcess::NotRunning) p->kill(); });
     return id;
 }

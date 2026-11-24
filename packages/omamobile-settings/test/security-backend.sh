@@ -33,6 +33,11 @@ case $* in
   "is-enabled sshd.socket") [[ $c == socket ]] && { echo enabled; exit 0; }; echo disabled; exit 1 ;;
   "is-active omamobile-hotspot.service") [[ $c == hotspot ]] && { echo active; exit 0; }; echo inactive; exit 3 ;;
   "is-active "*) echo inactive; exit 3 ;;
+  "start omamobile-firewall@on.service"|"start omamobile-firewall@off.service")
+    echo "$*" >> "$START_LOG"
+    [[ $c == denied ]] && { echo "Failed to start ${2}: Access denied" >&2; exit 1; }
+    [[ $c == startfail ]] && { echo "Job for $2 failed." >&2; exit 1; }
+    exit 0 ;;
   *) echo "unexpected: $*" >&2; exit 1 ;;
 esac
 EOT
@@ -47,10 +52,10 @@ case $* in
 esac
 EOT
 chmod +x "$tmp/bin/"*
-export CASE_FILE=$tmp/case UFW_LOG=$tmp/ufw.log
+export CASE_FILE=$tmp/case UFW_LOG=$tmp/ufw.log START_LOG=$tmp/start.log
 # env -i: only the stubs, /usr/bin, a scratch HOME and the stubs' two files reach the scripts
 mkdir -p "$tmp/home"
-clean=(env -i HOME="$tmp/home" PATH="$tmp/bin:/usr/bin" CASE_FILE="$CASE_FILE" UFW_LOG="$UFW_LOG")
+clean=(env -i HOME="$tmp/home" PATH="$tmp/bin:/usr/bin" CASE_FILE="$CASE_FILE" UFW_LOG="$UFW_LOG" START_LOG="$START_LOG")
 run() { "${clean[@]}" /usr/bin/bash "$tmp/security.sh" "$@" || true; }
 eq() { [[ $1 == "$2" ]] || { echo "FAIL: got $1, want $2" >&2; exit 1; }; }
 has() { [[ $1 == *"$2"* ]] || { echo "FAIL: $1 lacks $2" >&2; exit 1; }; }
@@ -61,6 +66,27 @@ eq "$(run get)" '{"firewall":"on","ssh_active":"active","ssh_enabled":"enabled",
 sum=$(cat "$tmp/root/etc/ufw/user.rules" "$tmp/root/etc/ufw/user6.rules" | sha256sum)
 has "$(run set firewall off)" '"firewall":"off"'
 has "$(run set firewall on)" '"firewall":"on"'
+# both directions go through systemctl start without --no-ask-password, so polkit can ask for the PIN
+eq "$(cat "$START_LOG")" $'start omamobile-firewall@off.service\nstart omamobile-firewall@on.service'
+# the PIN prompt cancelled or failed (systemctl: Access denied): an error, the state unchanged, both ways
+echo denied > "$CASE_FILE"
+out=$(run set firewall off); has "$out" '"error":"not changed: the PIN was not entered"'; has "$out" '"firewall":"on"'
+grep -q '^ENABLED=yes' "$tmp/root/etc/ufw/ufw.conf"
+echo normal > "$CASE_FILE"; run set firewall off >/dev/null; echo denied > "$CASE_FILE"
+out=$(run set firewall on); has "$out" '"error":"not changed: the PIN was not entered"'; has "$out" '"firewall":"off"'
+grep -q '^ENABLED=no' "$tmp/root/etc/ufw/ufw.conf"
+python3 -I -c 'import json,sys; json.loads(sys.argv[1])' "$out"
+echo startfail > "$CASE_FILE"
+out=$(run set firewall on); has "$out" '"error":"could not turn the firewall on"'; has "$out" '"firewall":"off"'
+echo normal > "$CASE_FILE"; run set firewall on >/dev/null; grep -q '^ENABLED=yes' "$tmp/root/etc/ufw/ufw.conf"
+# the polkit rule: the PIN (AUTH_ADMIN_KEEP) for on and off, never YES, and only start of those two units
+rule=$src/vendor/polkit/50-omamobile-firewall.rules
+eq "$(grep -c 'polkit.Result' "$rule")" 1
+grep -q 'return polkit.Result.AUTH_ADMIN_KEEP;' "$rule"
+! grep -q 'Result.YES' "$rule" || { echo "FAIL: the firewall rule returns YES" >&2; exit 1; }
+grep -qF '/^omamobile-firewall@(on|off)\.service$/' "$rule"
+grep -q 'action.lookup("verb") == "start"' "$rule"
+! grep -q -- '--no-ask-password' "$src/backends/security.sh" || { echo "FAIL: --no-ask-password in security.sh" >&2; exit 1; }
 # the firewall line alone (what Developer options shows)
 eq "$(run firewall)" on
 has "$(run firewall x)" '"error":"usage: firewall"'

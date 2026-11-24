@@ -43,7 +43,9 @@ A third page, Security & privacy, turns the UFW firewall on or off and shows the
 `sshd.service` and `omamobile-hotspot.service`. A switch starts `omamobile-firewall@on|off.service`, which runs
 `libexec/firewall` (installed as `/usr/lib/omamobile-settings/firewall`) as root: `ufw --force enable` or `ufw disable`,
 then reads `ufw.conf` back. The polkit rule `50-omamobile-firewall.rules` lets the active local user start those two
-instances only, with no password prompt for either; Off needs none, as with the charge-limit rule. On is refused, by
+instances only, and both On and Off ask for the PIN through the shell's polkit prompt (`auth_admin_keep`), so no
+other process in the session can switch the firewall without the owner. A cancelled PIN leaves the firewall as it was
+and the page says so. On is refused, by
 the backend and again by the root helper, while `sshd.service` or `sshd.socket` is running or enabled (or its state
 can't be read) and no rule lets port 22 in on `usb0` ahead of any rule that could drop it (ufw is first match; IPv4,
 and IPv6 when ufw uses it, read from `IPV6=` in `/etc/default/ufw` and then `/etc/ufw/ufw.conf` as ufw does), since

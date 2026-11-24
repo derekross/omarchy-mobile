@@ -1,7 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Turns UFW on or off for the Settings app's Security & privacy page. Runs as root, from omamobile-firewall@on|off.service
-# (the polkit rule 50-omamobile-firewall.rules lets the active local user start those two instances and nothing else).
+# (the polkit rule 50-omamobile-firewall.rules lets the active local user start those two instances, after the admin
+# PIN both ways, and nothing else).
 #   firewall on    `ufw --force enable`; refused while sshd.service or sshd.socket is enabled or running (or can't be
 #                  read) and no rule lets port 22 in on usb0 ahead of any rule that could drop it (IPv4, and IPv6 when
 #                  ufw uses it: IPV6= in /etc/default/ufw, then /etc/ufw/ufw.conf), and while omamobile-hotspot.service runs
