@@ -55,6 +55,9 @@
 # effect), and only after `packages/linux-omamobile/stage --verify` confirms
 # the staged build is a kernel-<date> tag on the published omamobile branch.
 #
+# omamobile-dozed freezes apps in the background, so it is built only when
+# named too, until it has run overnight as a package on a phone (#1025).
+#
 # A device package that ships boot files (its install reads
 # OMAMOBILE_BOOT_FILES) refuses to build without its boot-files/; before it
 # is built here, tools/stage-boot-files --check must find them matching this
@@ -68,8 +71,8 @@ ROOT=$PWD
 source tools/lib/alarm.sh
 
 SLOW=(mesa hyprland libcamera)
-# Packed from a staged kernel build: built only when named (see above)
-NAMED_ONLY=(linux-omamobile)
+# Built only when named (see above): the staged kernel, and omamobile-dozed
+NAMED_ONLY=(linux-omamobile omamobile-dozed)
 repo=out/repo/aarch64
 # Exit 3 means exactly "built and signed everything but the skipped device
 # packages", which <repo>/../.skipped then lists: any other exit with 3 (a
@@ -176,7 +179,11 @@ if ((list)); then
   done
   for name in "${NAMED_ONLY[@]}"; do
     [[ -d packages/$name && " ${dirs[*]} " != *" packages/$name "* ]] || continue
-    echo "named only  packages/$name (stage a release with packages/$name/stage, then name it)"
+    if [[ -x packages/$name/stage ]]; then
+      echo "named only  packages/$name (stage a release with packages/$name/stage, then name it)"
+    else
+      echo "named only  packages/$name (name it to build it)"
+    fi
   done
   exit 0
 fi

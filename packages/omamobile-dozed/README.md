@@ -41,7 +41,7 @@ A freeze is written to `$XDG_RUNTIME_DIR/omamobile-doze/applied` before it is ma
 
 ## Superwhisper (opt-in)
 
-Superwhisper isn't frozen by default: it isn't in this repository, and frozen it can't answer the keyboard's Mic. To freeze it while you are not dictating, add `OMAMOBILE_DOZE_EXTRA_UNITS=superwhisper.service` to the unit's environment and link the wrapper ahead of the real command in the session's PATH:
+Superwhisper itself is not part of Omamobile; this helper is opt-in, for those who installed it themselves. It isn't frozen by default, since frozen it can't answer the keyboard's Mic. To freeze it while you are not dictating, add `OMAMOBILE_DOZE_EXTRA_UNITS=superwhisper.service` to the unit's environment and link the wrapper ahead of the real command in the session's PATH:
 
     ln -s /usr/lib/omamobile-dozed/superwhisper-thaw ~/.local/bin/superwhisper   # if ~/.local/bin comes first
 

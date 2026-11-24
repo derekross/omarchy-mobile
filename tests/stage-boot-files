@@ -46,6 +46,7 @@ grep -qF "':(glob)packages/**/boot-files/**'" tools/repo-publish || fail "repo-p
 grep -qF 'tools/stage-boot-files --check "$d/boot-files"' tools/build-packages || fail "build-packages checks the boot files before building"
 grep -qF '"$d/stage" --verify "$d/prebuilt"' tools/build-packages || fail "build-packages verifies the staged kernel before building"
 grep -qE '^NAMED_ONLY=\(linux-omamobile( [a-z0-9-]+)*\)$' tools/build-packages || fail "linux-omamobile is built only when named"
+grep -qE '^NAMED_ONLY=\(.* omamobile-dozed( |\))' tools/build-packages || fail "omamobile-dozed is built only when named until it has run overnight on a phone (#1025)"
 grep -qF '[[ " ${NAMED_ONLY[*]} " != *" $name "* ]] || continue' tools/build-packages || fail "and never by default or with --all"
 pass "repo-publish carries boot-files/; build-packages checks them, verifies the kernel, and builds linux-omamobile only when named"
 

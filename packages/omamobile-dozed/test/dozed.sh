@@ -8,6 +8,11 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 root=$(mktemp -d); trap 'rm -rf "$root"' EXIT
 fail=0; n=0; ok() { n=$((n+1)); echo "ok - $1"; }; bad() { n=$((n+1)); echo "FAIL - $1"; fail=1; }
 check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
+# the daemon prefers XDG_CONFIG_HOME, and reads OMAMOBILE_DOZE_*: none of the tester's own
+while read -r v; do unset "$v"; done < <(compgen -v OMAMOBILE_DOZE_)
+unset OMAMOBILE_TEST_HOOK
+export HOME=$root/home XDG_CONFIG_HOME=$root/home/.config
+mkdir -p "$XDG_CONFIG_HOME"
 export OMAMOBILE_DOZE_SYSFS=$root/sys
 
 # ---- charging()

@@ -5,7 +5,7 @@ pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
 pkgdesc="Doze for Omamobile: freezes background apps while the screen is off behind a secure lock, thaws them every hour and on wake. Off until the omamobile-doze toggle is on"
 arch=(any)
-url="https://github.com/derekross/omarchy-mobile"
+url="https://github.com/derekross/omamobile"
 license=(MIT)
 depends=(bash coreutils findutils gawk grep hyprland iproute2 jq libpulse sed systemd util-linux omamobile-shell)  # omarchy-toggle-enabled and omarchy-shell come with omamobile-shell
 
