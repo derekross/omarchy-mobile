@@ -39,7 +39,7 @@ ColumnLayout {
                : firewall === "unknown" ? qsTr("The firewall state could not be read.") : ""
         if (wasSet && status === "") status = firewall === "on" ? qsTr("The firewall is on.") : qsTr("The firewall is off.")
     }
-    function run(args) { confirming = false; setting = true; busy = true; reqId = actions.run("security", args) }
+    function run(args) { confirming = false; setting = true; busy = true; status = qsTr("Enter your PIN to change the firewall."); reqId = actions.run("security", args) }
     Connections { target: actions; function onFinished(tool, r, id) { if (tool === "security" && id === page.reqId) page.apply(r) } }
     Component.onCompleted: reqId = actions.run("security", ["get"])
     SettingsLabel { visible: page.status !== ""; text: page.status; color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13); wrapMode: Text.Wrap; Layout.fillWidth: true }
