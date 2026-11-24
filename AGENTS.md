@@ -236,7 +236,7 @@ Each entry gives the gotcha, then the reason or the fix. Details are in the link
 | `initramfs/init` | Storage guard, USB gadget, SSH, switch to Arch |
 | `kernel/configs/omamobile.config` | Config fragment on top of arm64 `defconfig`, commented by plan |
 | `packages/omamobile-device-cheetah` | Boot-success marker, Wi-Fi and AoC start scripts, udev, modprobe and systemd policy |
-| `packages/omamobile-shell`, `-sensors`, `-gnss`, `-audio`, `-remote` (opt-in, with `wlrctl`), `-fingerprint`, `-modem` (chroot profile), `libfprint`, `neard`, `mesa`, `hyprland`, `omamobile-keyring` | Userspace packages |
+| `packages/omamobile-shell`, `-sensors`, `-gnss`, `-audio`, `-remote` (opt-in, with `wlrctl`), `-dozed` (opt-in), `-fingerprint`, `-modem` (chroot profile), `libfprint`, `neard`, `mesa`, `hyprland`, `omamobile-keyring` | Userspace packages |
 | `packages/omamobile-omarchy/{legacy-4.0.6,patches}/` | Version-selected Omarchy families: fixes belong in the 4.5 `patches/` family, which `patches/omarchy/` links to; `legacy-4.0.6/` serves phones that haven't updated to 4.5 yet |
 | `docs/DEVICES.md` | Supported-devices matrix |
 | `~/omamobile-kernel/linux`, `wt-*`, `out-*` | The kernel clone, its worktrees and build outputs (outside the repo; `~/android/mainline` on older setups) |

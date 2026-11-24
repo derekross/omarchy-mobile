@@ -1,0 +1,32 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-dozed's tests, no phone: the scripts parse, what gets installed,
+# then test/dozed.sh (the daemon against a fake sysfs, /proc and stubs).
+set -euo pipefail
+cd "$(dirname "$(readlink -f "$0")")/.."
+fails=0
+fail() { echo "FAIL: $*" >&2; fails=$((fails + 1)); }
+pass() { echo "ok: $*"; }
+check() { local what=$1; shift; if "$@"; then pass "$what"; else fail "$what"; fi; }
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+
+for f in bin/omamobile-dozed lib/superwhisper-thaw install test/all test/dozed.sh; do
+  bash -n "$f" || fail "bash -n $f"
+done
+if command -v shellcheck >/dev/null; then
+  check "shellcheck bin/omamobile-dozed lib/superwhisper-thaw" shellcheck -S warning bin/omamobile-dozed lib/superwhisper-thaw
+fi
+
+stage=$tmp/stage
+./install "$stage" >/dev/null
+check "installs the daemon and its user unit" test -x "$stage/usr/bin/omamobile-dozed" -a -f "$stage/usr/lib/systemd/user/omamobile-dozed.service"
+check "the unit is wanted by the graphical session" \
+  test "$(readlink "$stage/usr/lib/systemd/user/graphical-session.target.wants/omamobile-dozed.service")" = ../omamobile-dozed.service
+check "the unit runs the installed path" grep -qx 'ExecStart=/usr/bin/omamobile-dozed' "$stage/usr/lib/systemd/user/omamobile-dozed.service"
+check "the superwhisper wrapper is not on PATH" test ! -e "$stage/usr/bin/superwhisper"
+check "no root unit, polkit or udev rule, sysusers or etc file" \
+  test -z "$(find "$stage" \( -path '*/systemd/system/*' -o -path '*/polkit-1/*' -o -path '*/udev/*' -o -path '*/sysusers.d/*' -o -path "$stage/etc/*" -o -path "$stage/usr/local/*" \) -print -quit)"
+check "install refuses a relative DESTDIR" bash -c '! ./install relative-dir >/dev/null 2>&1'
+
+if test/dozed.sh; then pass "test/dozed.sh"; else fail "test/dozed.sh"; fi
+((fails == 0)) && echo "omamobile-dozed: all pass" || { echo "omamobile-dozed: $fails failed" >&2; exit 1; }

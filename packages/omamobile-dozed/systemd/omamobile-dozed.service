@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Doze stages while the screen is off behind a secure lock. Does nothing until
+# "omarchy-toggle omamobile-doze on". s2idle stays omamobile-sleepd's job.
+[Unit]
+Description=Omamobile Doze (freezes background apps while the screen is off)
+PartOf=graphical-session.target
+After=graphical-session.target omamobile-sleepd.service
+
+[Service]
+ExecStart=/usr/bin/omamobile-dozed
+ExecStopPost=/usr/bin/omamobile-dozed restore
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

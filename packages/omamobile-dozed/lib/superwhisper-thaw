@@ -1,0 +1,24 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Opt-in (README): linked as superwhisper ahead of the real one in the
+# session PATH, for when OMAMOBILE_DOZE_EXTRA_UNITS lists superwhisper.service.
+# When omamobile-dozed has frozen superwhisper.service, it thaws it before the
+# real command runs, so the keyboard Mic works from Doze.
+# The frozen check reads cgroup.events (no D-Bus, instant); the thaw is one
+# systemctl call capped at 2 s so the Mic's 3 s status budget is kept.
+# Only thaws; dozed freezes it again within OMAMOBILE_DOZE_REFREEZE_EVERY.
+real=${OMAMOBILE_SUPERWHISPER_REAL:-}
+if [[ -z $real ]]; then
+  for real in /usr/bin/superwhisper /opt/superwhisper/run.sh ""; do [[ -x $real ]] && break; done
+  [[ -n $real ]] || { echo "superwhisper: real binary not found" >&2; exit 127; }
+fi
+# never this wrapper itself (linked in place of the real one): that would exec forever
+[[ $(readlink -f -- "$real") != "$(readlink -f -- "$0")" ]] || { echo "superwhisper: the wrapper is linked in place of the real binary" >&2; exit 127; }
+ev=${OMAMOBILE_SUPERWHISPER_CGEVENTS:-/sys/fs/cgroup/user.slice/user-$UID.slice/user@$UID.service/app.slice/superwhisper.service/cgroup.events}
+fz=${ev%/cgroup.events}/cgroup.freeze
+if grep -qx 'frozen 1' "$ev" 2>/dev/null || grep -qx 1 "$fz" 2>/dev/null; then
+  # tell dozed not to freeze it again for a minute (the Mic's start follows)
+  d=${XDG_RUNTIME_DIR:-/run/user/$UID}/omamobile-doze; mkdir -p "$d" 2>/dev/null && : >"$d/thawed-superwhisper.service"
+  timeout -k 0.5 2 systemctl --user --no-ask-password thaw superwhisper.service >/dev/null 2>&1
+fi
+exec "$real" "$@"

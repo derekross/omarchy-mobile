@@ -1,0 +1,503 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-dozed: Doze-like stages while the screen is off behind a secure
+# lock: background apps (units under app.slice) are frozen with the cgroup
+# freezer, thawed for a maintenance window every hour and on wake. Off until:
+#
+#   omarchy-toggle omamobile-doze on
+#
+#   omamobile-dozed           watch (omamobile-dozed.service)
+#   omamobile-dozed status    print state and what is applied
+#   omamobile-dozed restore   undo everything recorded (also on start/stop)
+#   omamobile-dozed check     print what keeps Doze out now; exit 0 if nothing
+#
+# s2idle is NOT done here: omamobile-sleepd owns it.
+set -u
+
+int() { [[ $1 =~ ^[1-9][0-9]{0,6}$ ]] && echo "$1" || echo "$2"; }  # whole seconds, at least 1
+t_light=$(int "${OMAMOBILE_DOZE_LIGHT_AFTER:-300}" 300)     # screen off -> LIGHT
+t_deep=$(int "${OMAMOBILE_DOZE_DEEP_AFTER:-1800}" 1800)     # screen off -> DEEP
+maint_every=$(int "${OMAMOBILE_DOZE_MAINT_EVERY:-3600}" 3600)
+maint_len=$(int "${OMAMOBILE_DOZE_MAINT_LEN:-60}" 60)
+# 1 (default): on the charger, an SSH session or the charger's own sleep
+# inhibitor, Doze still freezes (LIGHT, with a thaw window every maint_every)
+# but never goes DEEP. 0: those refuse Doze.
+plugged_doze=${OMAMOBILE_DOZE_PLUGGED:-1}
+# Processes whose unit is never frozen, by comm (15 chars): keyboards, dictation, audio.
+never_comm=${OMAMOBILE_DOZE_NEVER_COMM:-phosh-osk-stevi squeekboard wvkbd voxtype pipewire wireplumber}
+# Units outside the app-* names that are frozen too (exact names), none by
+# default. superwhisper.service can go here only together with the thaw
+# wrapper (README): without it the keyboard Mic stays frozen until wake.
+extra_units=${OMAMOBILE_DOZE_EXTRA_UNITS:-}
+refreeze_every=$(int "${OMAMOBILE_DOZE_REFREEZE_EVERY:-300}" 300)
+poll=$(int "${OMAMOBILE_DOZE_POLL:-5}" 5)        # as sleepd
+idle_poll=$(int "${OMAMOBILE_DOZE_IDLE_POLL:-30}" 30)  # toggle off
+# Test hooks, as omamobile-sleepd.
+sys=${OMAMOBILE_DOZE_SYSFS:-/sys}
+proc=${OMAMOBILE_DOZE_PROC:-/proc}
+if [[ -n ${OMAMOBILE_DOZE_STATE:-} ]]; then state_dir=$OMAMOBILE_DOZE_STATE
+elif [[ -n ${XDG_RUNTIME_DIR:-} ]]; then state_dir=$XDG_RUNTIME_DIR/omamobile-doze
+else echo "omamobile-dozed: XDG_RUNTIME_DIR is not set, refusing" >&2; exit 1; fi
+conf=${XDG_CONFIG_HOME:-}; [[ $conf == /* ]] || conf=$HOME/.config   # as the Settings app's appmgr.sh
+allow_file=${OMAMOBILE_DOZE_ALLOW:-$conf/omamobile/doze-allow}
+# Per-app battery policy from Settings > Apps: "ID<TAB>unrestricted|restricted<TAB>unit keys". Unrestricted: never
+# frozen. Restricted: frozen as soon as the screen is off behind a secure lock, and again after each maintenance thaw.
+# Optimized (no line): the stages above. The never-freeze names and built-in skips always win over Restricted.
+policy_file=${OMAMOBILE_DOZE_APP_POLICY:-$conf/omamobile/app-policy}
+stay_awake=$HOME/.local/state/omarchy/indicators/stay-awake
+journal=$state_dir/applied      # thaw undo lines (gone with the runtime dir, as freezes are)
+lockf=$state_dir/lock
+me=omamobile-dozed
+# Never block on a polkit prompt; never hang the loop on the bus.
+sctl() { timeout -k 1 5 systemctl --no-ask-password "$@"; }
+to() { timeout -k 1 3 "$@"; }  # every other fork in the loop: a hang must not stop thaws
+
+log() { echo "omamobile-dozed: $*"; }
+clock() {
+  if [[ -n ${OMAMOBILE_DOZE_CLOCK:-} ]]; then cat "$OMAMOBILE_DOZE_CLOCK"; else printf '%(%s)T\n' -1; fi
+}
+enabled() { to omarchy-toggle-enabled omamobile-doze; }
+
+# ---- the same checks as omamobile-sleepd ----
+# Hyprland dpms decides when it answers (bl_power reads 4 with dpms off on
+# husky mct1121 and 0 on older kernels); bl_power is the fallback only.
+screen_off() {
+  local device j
+  if j=$(to hyprctl monitors -j 2>/dev/null) && [[ $j == \[* ]]; then
+    to jq -e 'length > 0 and all(.[]; .dpmsStatus == false or .dpmsStatus == 0)' <<<"$j" >/dev/null 2>&1
+    return
+  fi
+  device=$(to omarchy-hw-display 2>/dev/null)
+  if [[ -n $device && -r $sys/class/backlight/$device/bl_power ]] &&
+     [[ $(<"$sys/class/backlight/$device/bl_power") != 0 ]]; then
+    return 0
+  fi
+  return 1
+}
+# Only a definite answer from Hyprland that a monitor is on (a failed hyprctl is no answer).
+screen_seen_on() {
+  local j
+  j=$(to hyprctl monitors -j 2>/dev/null) && [[ $j == \[* ]] || return 1
+  to jq -e 'any(.[]; .dpmsStatus == true or .dpmsStatus == 1)' <<<"$j" >/dev/null 2>&1
+}
+secure() { [[ $(to omarchy-shell lock status 2>/dev/null) == *'"secure":true'* ]]; }
+ssh_open() {
+  local out
+  out=$(to ss -Htn state established '( sport = :22 )' 2>/dev/null) || return 0
+  [[ -n $out ]]
+}
+inhibitors() {
+  to busctl --system --json=short call org.freedesktop.login1 /org/freedesktop/login1 \
+    org.freedesktop.login1.Manager ListInhibitors 2>/dev/null
+}
+# sleep or idle block inhibitors, except our own maintenance hold (sleepd counts sleep only)
+blockers() {
+  local j
+  j=$(inhibitors) || { echo "(inhibitor list unreadable)"; return; }
+  to jq -r --arg me "$me" '.data[0][] | select(.[3] == "block" and .[1] != $me and .[1] != "omamobile-charger" and
+      (.[0] | split(":") | (index("sleep") != null or index("idle") != null))) | .[1]' <<<"$j" 2>/dev/null || echo "(inhibitor list unreadable)"
+}
+# a running playback or capture stream (monitor sources excluded)
+playing() {
+  local a b
+  a=$(to pactl list short sinks 2>/dev/null) && b=$(to pactl list short sources 2>/dev/null) ||
+    { echo "(audio state unreadable)"; return; }
+  { echo "$a"; awk -F'\t' '$2 !~ /\.monitor$/' <<<"$b"
+  } | awk -F'\t' '$NF == "RUNNING" { print $2; exit }'
+}
+# ---------------------------------------------------------------------------
+
+# Any external power source online.
+charging() {
+  local d
+  for d in "$sys"/class/power_supply/*; do
+    [[ -r $d/type && -r $d/online ]] || continue
+    case $(<"$d/type") in USB|Mains|Wireless) [[ $(<"$d/online") == 1 ]] && return 0 ;; esac
+  done
+  return 1
+}
+
+charger_hold() {
+  local j
+  j=$(inhibitors) || return 0  # unreadable: assume held (stay LIGHT)
+  to jq -e '.data[0][] | select(.[1] == "omamobile-charger" and .[3] == "block")' <<<"$j" >/dev/null 2>&1
+}
+# Why Doze must stay at LIGHT (no DEEP); prints nothing and fails when DEEP is fine.
+# $1=full adds the forking checks.
+light_only() {
+  charging && { echo "on charger"; return 0; }
+  [[ ${1:-} == full ]] || return 1
+  ssh_open && { echo "an SSH session is open"; return 0; }
+  charger_hold && { echo "the charger holds sleep"; return 0; }
+  return 1
+}
+
+# $1=full adds the forking checks (ss, busctl, pactl); cheap otherwise.
+refusal() {
+  local who
+  enabled || { echo "the omamobile-doze toggle is off"; return 0; }
+  screen_off || { echo "the screen is on"; return 0; }
+  secure || { echo "the lock isn't secure"; return 0; }
+  [[ $plugged_doze == 1 ]] || ! charging || { echo "on charger"; return 0; }
+  [[ -e $stay_awake ]] && { echo "Stay awake is on"; return 0; }
+  [[ ${1:-} == full ]] || return 1
+  [[ $plugged_doze == 1 ]] || ! ssh_open || { echo "an SSH session is open"; return 0; }
+  [[ $plugged_doze == 1 ]] || ! charger_hold || { echo "an inhibitor is held (omamobile-charger)"; return 0; }
+  who=$(blockers | head -n 1); [[ -n $who ]] && { echo "an inhibitor is held ($who)"; return 0; }
+  who=$(playing); [[ -n $who ]] && { echo "audio is playing ($who)"; return 0; }
+  return 1
+}
+
+# ---- journal: intent is written before each change ----
+record() { mkdir -p "$(dirname "$1")"; mkdir -p "$state_dir"; ( flock -w 10 9 || exit 1; echo "$2" >>"$1" ) 9>>"$lockf"; }
+unrecord() {
+  ( flock -w 10 9 || exit 1; [[ -e $1 ]] || exit 0
+    grep -vxF -- "$2" "$1" >"$1.tmp"; mv "$1.tmp" "$1" ) 9>>"$lockf"
+}
+
+frozen() { [[ $(sctl --user show -P FreezerState "$1" 2>/dev/null) == frozen* ]]; }
+
+# One undo; exit 0 only when the change is gone.
+undo() {
+  local a b st
+  read -r a b <<<"$1"
+  case $a in
+    thaw)
+      sctl --user thaw "$b" >/dev/null 2>&1 && return 0
+      # done only when systemd answers that it runs (a unit that is gone reads running too); no answer: retry later
+      st=$(sctl --user show -P FreezerState "$b" 2>/dev/null) || return 1
+      [[ $st == running ]] ;;
+    *) return 0 ;;
+  esac
+}
+
+# Undo every recorded line, newest first. Lines whose undo fails stay in the
+# journal and are retried later.
+restore() {
+  local line rc=0
+  local -a lines left=()
+  mkdir -p "$state_dir"
+  if [[ -s $journal ]]; then
+    exec 9>>"$lockf"
+    # no lock in 10 s: thaw anyway (a stop must never leave apps frozen), the journal is rewritten next time
+    if ! flock -w 10 9; then
+      exec 9>&-
+      while IFS= read -r line; do [[ -z $line ]] || undo "$line" || true; done < <(tac "$journal")
+      log "journal busy: thaw tried without the lock, the journal is cleaned up next time"; return 1
+    fi
+    mapfile -t lines < <(tac "$journal")
+    for line in "${lines[@]}"; do [[ -z $line ]] || undo "$line" || left+=("$line"); done
+    if ((${#left[@]})); then
+      printf '%s\n' "${left[@]}" | tac >"$journal.tmp" && mv "$journal.tmp" "$journal"
+      # said once per set of stuck lines, not at every poll
+      [[ ${left[*]} == "${kept_said:-}" ]] || log "undo failed, kept for retry: ${left[*]}"
+      kept_said=${left[*]}; rc=1
+    else
+      : >"$journal"; kept_said=
+    fi
+    exec 9>&-
+  fi
+  ((rc)) || log "restored"
+  return $rc
+}
+
+# On start: thaw by fact, not only by journal (a crash between act and
+# record, or a lost runtime dir).
+sweep() {
+  local u
+  # shellcheck disable=SC2086
+  for u in $(sctl --user list-units --all --plain --no-legend 'app-*.scope' 'app-*.service' $extra_units 2>/dev/null | awk '{print $1}'); do
+    frozen "$u" && { sctl --user thaw "$u" >/dev/null 2>&1 && log "thawed leftover $u" || log "could not thaw $u"; }
+  done
+}
+
+# Freeze again what the journal says is frozen but runs (thawed from outside,
+# e.g. the superwhisper wrapper on a Mic press), so one thaw doesn't last the
+# whole stage. A capture stream refuses Doze before this runs.
+refreeze() {
+  local line u
+  [[ -s $journal ]] || return 0
+  while IFS= read -r line; do
+    [[ $line == "thaw "* ]] || continue; u=${line#thaw }
+    [[ $(sctl --user show -P FreezerState "$u" 2>/dev/null) == running ]] || continue
+    # thawed on purpose in the last minute (the superwhisper wrapper on a Mic press)
+    [[ -n $(find "$state_dir/thawed-$u" -newermt '-60 seconds' 2>/dev/null) ]] && continue
+    sctl --user freeze "$u" >/dev/null 2>&1 && log "froze $u again"
+  done < <(sort -u "$journal")
+}
+
+pending() { [[ -s $journal ]]; }
+
+# cgroups of processes that hold any logind inhibitor
+inhibitor_cgroups() {
+  local pid
+  # only sleep/idle inhibitors protect an app: a shutdown one alone does not
+  for pid in $(inhibitors | to jq -r '.data[0][] | select(.[0] | split(":") | (index("sleep") != null or index("idle") != null)) | .[5]' 2>/dev/null); do
+    [[ $pid =~ ^[0-9]+$ ]] && sed -n 's/^0:://p' "$proc/$pid/cgroup" 2>/dev/null
+  done
+}
+
+# The unit runs a process on the never list (cgroup v2 path from systemd).
+# Fails closed: a unit whose cgroup can't be read counts as protected.
+never_proc() {
+  local cg p c f
+  cg=$(sctl --user show -P ControlGroup "$1" 2>/dev/null)
+  [[ -n $cg && -r $sys/fs/cgroup$cg/cgroup.procs ]] || return 0
+  while IFS= read -r f; do
+    [[ -r $f ]] || return 0  # vanished or unreadable: protected
+    while read -r p; do
+      c=$(cat "$proc/$p/comm" 2>/dev/null) || continue
+      [[ " $never_comm " == *" $c "* ]] && return 0
+    done <"$f"
+  done < <(find "$sys/fs/cgroup$cg" -name cgroup.procs 2>/dev/null || echo /nonexistent)
+  return 1
+}
+# The desktop ID gtk-launch recorded in a unit's processes (sub/foo.desktop folds to sub-foo), or nothing.
+launched_id() {
+  local found=''
+  local cg p
+  cg=$(sctl --user show -P ControlGroup "$1" 2>/dev/null)
+  [[ -n $cg && -r $sys/fs/cgroup$cg/cgroup.procs ]] || return 0
+  while read -r p; do
+    [[ $p =~ ^[0-9]+$ ]] || continue
+    # only the process gtk-launch started (its own PID in GIO_LAUNCHED_DESKTOP_FILE_PID): children inherit the variable
+    local v f='' fp=''
+    { while IFS= read -r -d '' v; do
+        case $v in GIO_LAUNCHED_DESKTOP_FILE=*) f=${v#*=} ;; GIO_LAUNCHED_DESKTOP_FILE_PID=*) fp=${v#*=} ;; esac
+      done <"$proc/$p/environ"; } 2>/dev/null
+    [[ $fp == "$p" && $f == */applications/*.desktop ]] || continue
+    f=${f#*/applications/}; f=${f%.desktop}; f=${f//\//-}
+    # every app in the unit, once each (app_policy decides what two different apps mean)
+    [[ $'\n'$found == *$'\n'"$f"$'\n'* ]] || found+=$f$'\n'
+  done <"$sys/fs/cgroup$cg/cgroup.procs"
+  printf '%s' "$found"
+  return 0
+}
+# the policy file is read only when neither it nor its folder is a link (the writer refuses both too)
+policy_ok() { [[ -r $policy_file && ! -L $policy_file && ! -L ${policy_file%/*} ]]; }
+# The app policy of a unit, by the key in its name (app-<launcher>-<KEY>-<hex>.scope, app-<launcher>-<KEY>@x.service).
+app_policy() {
+  local mid='' id p keys k ks gid
+  policy_ok || { echo optimized; return; }
+  if [[ $1 =~ ^app-[^-]+-(.+)-[[:alnum:]]+\.scope$ || $1 =~ ^app-[^-]+-(.+)@[^@]*\.service$ || $1 =~ ^app-[^-]+-(.+)\.service$ ]]; then mid=${BASH_REMATCH[1]}; fi
+  # apps from the drawer run as `uwsm-app -- gtk-launch ID.desktop` (unit named after gtk-launch): their ID is in
+  # their environment (GIO_LAUNCHED_DESKTOP_FILE), matched against the line's ID
+  gid=''
+  [[ $mid == 'gtk\x2dlaunch' ]] && gid=$(launched_id "$1")
+  # the IDs from the environment win over the name keys, whatever the line order. Several apps in one unit: any
+  # Unrestricted one keeps the unit unfrozen; Restricted only when it is the only app in it
+  if [[ -n $gid ]]; then
+    local g n=0 pol=optimized gp
+    while IFS= read -r g; do
+      [[ -n $g ]] || continue; n=$((n + 1)); gp=optimized
+      while IFS=$'\t' read -r id p keys || [[ -n $id ]]; do
+        [[ ($p == unrestricted || $p == restricted) && $id == "$g" ]] && { gp=$p; break; }
+      done < <(head -c 65536 -- "$policy_file")
+      [[ $gp == unrestricted ]] && { echo unrestricted; return; }
+      [[ $gp == restricted ]] && pol=restricted
+    done <<<"$gid"
+    ((n == 1)) && { echo "$pol"; return; }
+    echo optimized; return
+  fi
+  [[ -n $mid ]] || { echo optimized; return; }
+  # every line counts (two apps can share a command key): any Unrestricted match wins over Restricted
+  local pol=optimized
+  while IFS=$'\t' read -r id p keys || [[ -n $id ]]; do
+    [[ $p == unrestricted || $p == restricted ]] || continue
+    read -ra ks <<<"$keys"   # no glob expansion of a key
+    for k in "${ks[@]}"; do
+      [[ $k == "$mid" ]] || continue
+      [[ $p == unrestricted ]] && { echo unrestricted; return; }
+      pol=restricted
+    done
+  done < <(head -c 65536 -- "$policy_file")
+  echo "$pol"
+}
+# Units under app.slice that are running and not allowlisted.
+# freeze_candidates restricted: only those whose app policy is Restricted.
+freeze_candidates() {
+  local u pat skip cg icg inh pol only=${1:-} names g
+  inh=$(inhibitor_cgroups)
+  # shellcheck disable=SC2086
+  sctl --user list-units --plain --no-legend --state=running 'app-*.scope' 'app-*.service' $extra_units 2>/dev/null |
+    awk '{print $1}' | while read -r u; do
+      [[ $(sctl --user show -P Slice "$u" 2>/dev/null) == app*.slice ]] || continue
+      skip=0
+      # a drawer launch is named after gtk-launch: its app IDs (as app-<ID>) are checked by the same names
+      names=$u
+      if [[ $u == *'-gtk\x2dlaunch'[-@.]* ]]; then
+        while IFS= read -r g; do [[ -n $g ]] || continue; g=$(LC_ALL=C tr '[:upper:]' '[:lower:]' <<<"$g") || continue; names+=$'\n'"app-$g"; done < <(launched_id "$u")
+      fi
+      while IFS= read -r g; do
+        for pat in 'app-*quickshell*' 'app-*omamobile*' 'app-*mako*' 'app-*swaync*' 'app-*pipewire*' \
+                   'app-*wireplumber*' 'app-*lock*' 'app-*hypridle*' 'app-*polkit*' 'app-*portal*' \
+                   'app-*squeekboard*' 'app-*wvkbd*' 'app-*stevia*' 'app-*osk*' 'app-*voxtype*' 'app-*omatel*' \
+                   'app-*omaphone*' 'app-*omamessages*' 'app-*clock*' 'app-*alarm*' 'app-*ModemManager*' 'app-*modemmanager*' 'app-*mmcli*'; do
+          # shellcheck disable=SC2053  # a glob on purpose
+          [[ $g == $pat ]] && skip=1
+        done
+      done <<<"$names"
+      ((skip)) || ! never_proc "$u" || skip=1
+      if [[ -r $allow_file ]]; then
+        while IFS= read -r pat || [[ -n $pat ]]; do
+          pat=${pat%$'\r'}; pat=${pat%"${pat##*[![:space:]]}"}
+          [[ -z $pat || $pat == \#* ]] && continue
+          # shellcheck disable=SC2053  # doze-allow lines are globs
+          [[ $u == $pat ]] && skip=1
+        done <"$allow_file"
+      fi
+      if ((!skip)) && [[ -n $inh ]]; then
+        cg=$(sctl --user show -P ControlGroup "$u" 2>/dev/null)
+        while read -r icg; do
+          [[ -n $cg && ( $icg == "$cg" || $icg == "$cg"/* ) ]] && skip=1
+        done <<<"$inh"
+      fi
+      if ((!skip)); then
+        pol=$(app_policy "$u")
+        [[ $pol == unrestricted ]] && skip=1
+        [[ $only == restricted && $pol != restricted ]] && skip=1
+      fi
+      ((skip)) || echo "$u"
+    done
+}
+
+has_restricted() { policy_ok && grep -qE $'^[^\t]+\trestricted(\t|$)' "$policy_file" 2>/dev/null; }
+stage_freeze() {
+  local u
+  # the Restricted pass costs a unit scan (busctl, systemctl): only when some app is Restricted
+  [[ ${1:-} != restricted ]] || has_restricted || return 0
+  for u in $(freeze_candidates "${1:-}"); do
+    # a slow scan must not freeze on after the screen came back on
+    ! screen_seen_on || { log "screen on during the freeze pass, stopped"; return 0; }
+    grep -qxF "thaw $u" "$journal" 2>/dev/null && continue   # already frozen by an earlier pass (Restricted at screen off)
+    record "$journal" "thaw $u" || { log "journal busy, $u not frozen"; continue; }
+    if sctl --user freeze "$u" >/dev/null 2>&1; then
+      log "froze $u"
+    else
+      # a timed-out freeze can still land: thaw it, and keep the line unless systemd says it runs
+      log "could not freeze $u"
+      undo "thaw $u" && unrecord "$journal" "thaw $u"
+    fi
+  done
+}
+
+# Thaw everything for a maintenance window.
+maint_open() {
+  restore || true
+  # keep sleepd from suspending inside the window (sleepd refuses on block inhibitors)
+  systemd-inhibit --what=sleep --mode=block --who="$me" --why="Doze maintenance window" \
+    sleep "$maint_len" >/dev/null 2>&1 &
+  hold=$!
+}
+# kill the holder only while bash still lists it as a running job (once it has ended, its PID may be someone else's)
+maint_close() {
+  local j
+  if [[ -n ${hold:-} ]]; then j=$(jobs -pr); [[ $'\n'$j$'\n' == *$'\n'"$hold"$'\n'* ]] && kill "$hold" 2>/dev/null; fi
+  hold=
+}
+
+suspend_count() { cat "$sys/power/suspend_stats/success" 2>/dev/null || echo 0; }
+
+watch() {
+  local rs_at=0 rf_at=0 lo='' lo_said='' lo_at=0 t last_t='' off_since='' state=ACTIVE reason said='' maint_until=0 next_maint=0 sc sc_last slept wait level
+  hold=
+  trap 'maint_close; restore; exit 0' TERM INT
+  sweep
+  restore
+  sc_last=$(suspend_count)
+  log "watching: LIGHT ${t_light} s, DEEP ${t_deep} s after screen off behind a secure lock"
+  while :; do
+    t=$(clock)
+    [[ -n ${OMAMOBILE_DOZED_STOP_AT:-} ]] && ((t >= OMAMOBILE_DOZED_STOP_AT)) && { maint_close; restore; return 0; }
+    # Timers count awake time: after a suspend, push them by the time asleep,
+    # so no stage fires in the wake path or in sleepd's grace.
+    sc=$(suspend_count)
+    if [[ $sc != "$sc_last" && -n $last_t ]]; then
+      slept=$((t - last_t - poll)); ((slept < 0)) && slept=0
+      [[ -n $off_since ]] && off_since=$((off_since + slept))
+      ((next_maint)) && next_maint=$((next_maint + slept))
+      ((maint_until)) && maint_until=$((maint_until + slept))
+      log "resume seen: timers moved by ${slept} s"
+    fi
+    sc_last=$sc; last_t=$t
+    level=cheap
+    [[ $state != ACTIVE && $state != SCREEN_OFF ]] && level=full
+    pending && level=full   # something is frozen (Restricted at screen off): audio and inhibitors must thaw it
+    [[ -n $off_since ]] && ((t - off_since + poll >= t_light)) && level=full
+    wait=$poll
+    if reason=$(refusal "$level"); then
+      if [[ $state != ACTIVE ]]; then log "exit ($reason)"; maint_close; restore; state=ACTIVE
+      elif pending; then restore   # retry undos that failed before
+      fi
+      [[ $reason == "$said" ]] || { [[ $reason != "the screen is on" ]] && log "not dozing: $reason"; said=$reason; }
+      off_since=; next_maint=0; maint_until=0; lo=; lo_said=; lo_at=0; rf_at=0; rs_at=0
+      [[ $reason == "the omamobile-doze toggle is off" ]] && ! pending && wait=$idle_poll
+    else
+      said=
+      [[ -n $off_since ]] || { off_since=$t; state=SCREEN_OFF; rs_at=$t; }
+      # Restricted apps freeze from screen off, once a minute until LIGHT, when the full checks (audio, inhibitors,
+      # SSH) would let Doze in too
+      if [[ $state == SCREEN_OFF ]] && ((t >= rs_at)); then
+        rs_at=$((t + 60))
+        if has_restricted && ! refusal full >/dev/null; then stage_freeze restricted; fi
+      fi
+      if [[ $state == SCREEN_OFF ]] && ((t - off_since >= t_light)); then
+        state=LIGHT; log "LIGHT_DOZE"; stage_freeze
+      fi
+      if [[ $state == LIGHT || $state == DEEP ]] && ((t >= rf_at)); then
+        ((rf_at)) && refreeze; rf_at=$((t + refreeze_every))
+      fi
+      if [[ $state == LIGHT ]] && ((next_maint == 0)); then next_maint=$((t + maint_every)); fi
+      if [[ $state == LIGHT ]] && ((t >= next_maint)); then
+        state=MAINT_L; maint_until=$((t + maint_len)); log "maintenance window ${maint_len} s (light)"; maint_open; stage_freeze restricted
+      fi
+      if [[ $state == MAINT_L ]] && ((t >= maint_until)); then
+        maint_close
+        state=LIGHT; log "back to LIGHT_DOZE"; stage_freeze
+        next_maint=$((t + maint_every)); maint_until=0
+      fi
+      # light_only forks (ss, busctl): look at most once a minute
+      if [[ $state == LIGHT ]] && ((t - off_since >= t_deep && t >= lo_at)); then
+        lo_at=$((t + 60)); lo=$(light_only full) || lo=
+      fi
+      if [[ $state == LIGHT ]] && ((t - off_since >= t_deep)) && [[ -z $lo && $lo_at -gt 0 ]]; then
+        # DEEP freezes what LIGHT does; it marks where platform savers will hook in
+        state=DEEP; log "DEEP_DOZE"; next_maint=$((t + maint_every))
+      elif [[ $state == LIGHT && -n $lo && $lo != "$lo_said" ]]; then
+        log "staying in LIGHT ($lo)"; lo_said=$lo
+      fi
+      # plug-in / SSH / charger hold while DEEP or in its window: back to LIGHT
+      if [[ $state == DEEP || $state == MAINT ]] && { charging || ((t >= lo_at)); }; then
+        lo_at=$((t + 60)); lo=$(light_only full) || lo=
+        if [[ -n $lo ]]; then
+          maint_close
+          state=LIGHT; log "back to LIGHT_DOZE ($lo)"; lo_said=$lo; stage_freeze; next_maint=$((t + maint_every))
+        fi
+      fi
+      if [[ $state == DEEP ]] && ((t >= next_maint)); then
+        state=MAINT; maint_until=$((t + maint_len)); log "maintenance window ${maint_len} s"; maint_open; stage_freeze restricted
+      fi
+      if [[ $state == MAINT ]] && ((t >= maint_until)); then
+        maint_close
+        state=DEEP; log "back to DEEP_DOZE"; stage_freeze
+        next_maint=$((t + maint_every)); maint_until=0
+      fi
+    fi
+    mkdir -p "$state_dir"; echo "$state" >"$state_dir/state"
+    sleep "$wait"
+  done
+}
+
+case "${1:-}" in
+  "") watch ;;
+  restore) restore ;;
+  status)
+    echo "state: $(cat "$state_dir/state" 2>/dev/null || echo unknown)"
+    echo "applied:"; sed 's/^/  undo: /' "$journal" 2>/dev/null
+    ;;
+  check)
+    if reason=$(refusal full); then echo "not dozing: $reason"; exit 1; fi
+    echo "nothing stops Doze"
+    ;;
+  *) echo "Usage: omamobile-dozed [status|restore|check]" >&2; exit 2 ;;
+esac
