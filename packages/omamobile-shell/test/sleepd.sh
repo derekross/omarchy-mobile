@@ -104,8 +104,8 @@ refused "an SSH session is open" 'echo "0 0 172.16.42.1:22 172.16.42.2:51234" >"
 [[ $(grep -c 'not sleeping: an SSH session is open' "$t/out") == 1 ]] || fail "a refusal is logged once, not at every poll"
 refused "ss can't answer" 'fake ss "exit 1"'
 fake ss 'cat "$T/ssh"'
-refused "a block sleep inhibitor" 'echo "[\"sleep\",\"Omarchy Mobile GNSS\",\"A location session is running\",\"block\",0,77]" >"$t/inhibitors"'
-grep -c 'not sleeping: a sleep inhibitor is held (Omarchy Mobile GNSS)' "$t/out" >/dev/null || fail "the inhibitor's holder is named"
+refused "a block sleep inhibitor" 'echo "[\"sleep\",\"Omamobile GNSS\",\"A location session is running\",\"block\",0,77]" >"$t/inhibitors"'
+grep -c 'not sleeping: a sleep inhibitor is held (Omamobile GNSS)' "$t/out" >/dev/null || fail "the inhibitor's holder is named"
 refused "a block shutdown:sleep inhibitor" 'echo "[\"shutdown:sleep\",\"x\",\"y\",\"block\",0,77]" >"$t/inhibitors"'
 refused "a RUNNING sink" 'printf "50\talsa_output.aoc\tPipeWire\ts16le 2ch 48000Hz\tRUNNING\n" >"$t/sinks"'
 grep -c 'not sleeping: audio is playing (alsa_output.aoc)' "$t/out" >/dev/null || fail "the playing sink is named"
@@ -115,7 +115,7 @@ echo "ok - sleepd: never with the toggle off, the screen on, an insecure lock, S
 # A refusal that holds (the 9a's modem keeps its inhibitor for the whole boot): checked again every
 # OMAMOBILE_SLEEP_RECHECK seconds (30), with only the backlight and suspend_stats read by the 2 s polls between. The
 # shell is asked for the lock's state at each full check, so those asks are counted.
-inh='["sleep","Omarchy Mobile modem","The modem is up","block",0,77]'
+inh='["sleep","Omamobile modem","The modem is up","block",0,77]'
 reset; echo "$inh" >"$t/inhibitors"; watch 330
 [[ $(suspends) == 0 ]] || fail "held: no sleep while the inhibitor is held"
 n=$(grep -c . "$t/lockcalls" || true)

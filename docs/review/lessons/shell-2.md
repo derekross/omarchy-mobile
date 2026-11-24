@@ -1,8 +1,80 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Review lessons: Shell and scripts (part 2 of 3)
+# Review lessons: Shell and scripts (part 2 of 4)
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-949. An allow-list that guards a credential path is run over the
+  system's real catalogue, both ways.** #892's 35 "Latin" layouts refused
+  `jp`, `al`, `vn`, `mt` and `kr` and accepted `us:rus` and `us:chr`; its
+  test's rules file had four layouts. *Check:* run the backend with the host's
+  `/usr/share/X11/xkb/rules/base.lst` (stand-ins for everything it would
+  write), feed five layouts from outside the list and the variants upstream
+  calls out, and compare with the upstream rule if one exists. Extends L-454
+  and L-633. *From:* #892, round 62, 2026-11-18.
+- **L-947. A change handler added to a QML service fires during the
+  component's first binding evaluation, so a "when X changes" fix is also an
+  "at every start" change.** #879's `onFirstIdleTimeoutSecondsChanged` re-arms
+  the idle monitor on a timeout change and, by the same handler, at every
+  shell start on every phone; the contributor's phone cases all began after a
+  start. *Check:* for each `on<Property>Changed` a patch adds, model it in a
+  ten-line QML file with a stand-in for the object it gates (`qml6`
+  offscreen), log the gated property from creation, read the output for
+  "Binding loop detected", and ask for the fresh-start case by name. Extends
+  L-618 and L-444. *From:* #879, round 62, 2026-11-18.
+- **L-933. A Qt test that builds the app's own runner or backend object runs
+  whatever that object runs on the host, and an assertion written for "nothing
+  installed here" fails on the phone the feature is for.** #860's page test
+  ran the real `charge get` from `/usr/lib/omamobile-settings/backends` and
+  asserted "not available"; on a phone with the package installed and the
+  charger live it fails, and `tools/phone-install-package` runs `check()`.
+  *Check:* in every new test, list the objects constructed (`ActionRunner`,
+  `Backend`) and the fixed paths they open (`grep -n '"/usr/' app/*.cpp`),
+  find the test's override for each, and read every "absent here" comment as a
+  claim about the build host. Extends L-454, L-410 and L-234. *From:* #860,
+  round 61, 2026-11-18.
+- **L-926. When a "hide if we showed it" rule becomes "hide whatever is
+  there", the trigger's false positives are re-read.** `homeOnScreen` (no
+  window on the focused workspace) was a safe trigger while it could only hide
+  a keyboard the plugin itself had raised; applied to every keyboard in #887,
+  a transient empty workspace costs the user their keyboard in an app.
+  *Check:* list the events that make the trigger true (a window closing as
+  another opens, a new empty workspace during a launch) and ask for each
+  during the phone run. Extends L-622 and L-738. *From:* #887, round 61,
+  2026-11-18.
+- **L-925. A gesture threshold a PR removes is traced to what it was
+  compensating for.** The pill's "past 120 px: recent apps" looked like a
+  design choice; it existed because the hold timer restarted on every pixel of
+  movement and never fired under a real finger. #887 is right only because it
+  fixes the hold in the same change. *Check:* `git log -S'<the threshold>'`
+  for where it came from, then read the sibling path to the same destination
+  (here the `hold` timer) and ask whether it works without the threshold on
+  real glass, not only at the test's exact coordinates. Extends L-160 and
+  L-620. *From:* #887, round 61, 2026-11-18.
+- **L-924. `sed -i` on a user's config replaces a symlink with a regular
+  file.** #727 appended with `>>`, which writes through a link; #886 inserts
+  with `sed -i`, which renames a new file over the name, so a dotfiles link is
+  silently broken, and the failure for an unwritable directory moves from the
+  file to the directory. *Check:* run the step once against a symlinked target
+  and once in a `chmod 555` directory, and read what `set -e` skips after it
+  by the step's position in the script. Extends L-227 and L-468. *From:* #886,
+  round 61, 2026-11-18.
+- **L-920. A registry read moved behind a Loader gains a "not ready" branch
+  that skips every participant.** `BackLink.back()` was unconditional on main;
+  behind `backLink.item` in #582 it is skipped when the item is null, and the
+  first thing skipped is the keyboard-first rule. *Check:* for any
+  `Loader`-mediated call a PR puts in front of an ordered handler list, read
+  what runs when `item` is null and compare with main's first step. Extends
+  L-161 and L-617. *From:* #582, round 61, 2026-11-18.
+- **L-913. A flag set before a fallible step and cleared after it is walked
+  through the paths where the step's subject disappears by itself.** #837's
+  `ipv6_release_owed` is cleared only by a later successful release; when the
+  modem drops the bearer on its own after a failed release, the flag survives
+  and a later, deliberately kept bearer gets one release it wasn't owed
+  (probed: 2 releases became 3). *Check:* for every "owed" or "pending" flag,
+  list each branch of the next pass (the thing listed, not listed, listed
+  without its record), say what clears the flag in each, and run the PR's
+  fixture through the branch that doesn't. Extends L-614 and L-502. *From:*
+  #837, round 61, 2026-11-18.
 - **L-897. `| head -1` under `pipefail` is the `grep -q` gotcha with another
   reader, and it only shows with a `head` that writes twice.** uutils 0.10.0's
   `head -c` splices again at end of file; GNU's doesn't, so CI and laptops
@@ -288,49 +360,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   *Check:* for every `debugfs -w` script (`git grep -n 'debugfs -w'`), run it
   on a fixture that already holds each path it creates, then `e2fsck -fn`.
   Extends L-635. *From:* #609 with issue #608, round 49, 2026-11-10.
-- **L-675. A timeout change in a request/response transport is judged by what
-  happens to an answer that did arrive, and per timer by whose clock it
-  follows.** #595 discarded a matching reply once the deadline had passed, so
-  the SMS path reported a sent message as "delivery uncertain"; and a request
-  deadline on `CLOCK_BOOTTIME` fails every request in flight across a sleep,
-  though its reply arrives on resume. *Check:* `git grep -n TimeoutError` the
-  callers and write down what the user is told for each non-idempotent request
-  (send, dial, hang up); mark every `monotonic()` deadline "our wait" or "the
-  network's time". *From:* #595 with #556, round 49, 2026-11-10.
-- **L-674. A stand-in server in a test applies its rules to the request, not
-  to its own storage path.** #593's fake `curl` matched nginx's dot-name deny
-  against `$S/<url path>`, so the test failed for anyone whose `$TMPDIR` had a
-  dot component and never on CI. *Check:* run a test whose stand-in filters by
-  name once with `TMPDIR` under a dot directory and once under one with a
-  space. Extends L-454. *From:* #593 with #586, round 49, 2026-11-10.
-- **L-673. A new shell surface is checked for how it draws icons and for new
-  theme keys, not only for colours and spacing.** #612 used Commons tokens
-  throughout but drew its marks as inline SVG data URIs, where the launcher's
-  pill a tap away uses the icon font. *Check:* `grep -n 'data:image\|\.svg'
-  <new qml>` against the neighbouring component's glyphs, and grep for
-  `styleAlpha(`, `styleNum(` or `styleString(` with a key no Omarchy theme
-  defines. *From:* #612, round 49, 2026-11-10.
-- **L-672. Moving a row's removal behind a reply is probed with two rows in
-  flight.** In #533 each acknowledgment replaced the JS-array model, the
-  Repeater rebuilt every delegate, and a second swiped row still waiting came
-  back at full height until its own reply; the PR's tests covered one row.
-  *Check:* in the PR's Qt fixture swipe two rows, answer `ok` for the first,
-  and read the second's `fold` and whether it is the same delegate; ask where
-  a new delegate gets per-delegate state from. Extends L-616. *From:* #533,
-  round 49, 2026-11-10.
-- **L-671. A fix that makes a long-failing restore succeed applies whatever
-  was saved before it started failing.** systemd-backlight saves in
-  `ExecStop`, which never runs for a unit that failed at boot, so #600's first
-  boot restores the level from the last shutdown at which the unit was active.
-  *Check:* find when the state was last saved and what saves it from now on
-  (here also a zero backlight behind the lock), and ask for one boot that
-  shows it. Extends L-623. *From:* #600, round 49, 2026-11-10.
-- **L-670. A blocking `systemctl start` inside a hang-marker phase inherits
-  the started unit's timeout.** #600 starts `systemd-backlight@` (90 s) from
-  the `display` phase of a start with `TimeoutStartSec=120`; a hung restore
-  would leave the marker and turn the next boot's graphics and Wi-Fi off.
-  *Check:* for every `systemctl start|restart` a boot script adds, read the
-  target's `TimeoutStartSec` against the caller's and the marker phase it runs
-  in; ask for `timeout N` or `--no-block`, and for cosmetic steps after the
-  last guarded one. Extends L-170, L-174 and L-613. *From:* #600, round 49,
-  2026-11-10.

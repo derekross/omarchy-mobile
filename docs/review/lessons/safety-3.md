@@ -3,6 +3,32 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-227. `ln -sf` or `mv -f` onto a state path is a delete; in Trusty or
+  calibration code it's a finding.** #101's `ln -sfn` over `persist-ss/0`
+  would remove cheetah's provisioned copy if one existed. *Check:* grep the
+  diff for `ln -sf`, `mv -f`, `rm` and `>` onto the package's state
+  directory, and find who creates those files (`tools/phone-provision`, the
+  plans). Extends L-2. *From:* #101, round 24.
+- **L-1. Shared boot code runs under busybox, not util-linux.** The Pixel
+  initramfs has busybox only: `blkid -s LABEL -o value` prints the whole
+  `LABEL=… UUID=…` line there, so a label check that works on a device whose
+  initramfs adds util-linux fails on every Pixel. *Check:* any new command or
+  option in `initramfs/init`, against busybox 1.37's applets; prefer tools
+  `init` already uses (`dumpe2fs -h`). A test that stubs the command
+  (a shell function named `blkid`) proves nothing about it. *From:* #25.
+- **L-2. Writes past the storage guard are a policy decision, not a code
+  review.** Raw SCSI WRITE through `SG_IO` on a read-only partition fd, an
+  unsuffixed `fastboot flash userdata`, a `devinfo` write: each needs the
+  maintainer's explicit go and a named exception, however well guarded.
+  *Check:* `grep -nE 'SG_IO|0x2285|fastboot( -s [^ ]+)? (flash|erase) [a-z_]+( |$)|devinfo'`
+  in the diff, and every `flash`/`erase` target ends in `_b` or is
+  `userdata` through the guarded path. *From:* #17, #24.
+- **L-3. Mismatched slot firmware is stop-and-ask (CONTRIBUTING §3.1).**
+  A kernel workaround that's needed only on a phone with different
+  bootloaders on its two slots (HCRX_EL2 with KVM off) is most likely the
+  old firmware, not the SoC. Ask for both slots' bootloader versions, both
+  slots on one build, and a re-test without the workaround before any of it
+  reaches the kernel. *From:* #24.
 - **L-4. A display-register write in a descriptor must be the device's own
   address, behind the COMPATIBLE gate.** `SIMPLEFB_TRIG_CON` is the one
   register write the initramfs makes. *Check:* the address is that SoC's

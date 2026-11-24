@@ -2,9 +2,9 @@
 pkgname=omamobile-device-raven
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile support for the Google Pixel 6 Pro (raven): boot-slot success, USB rescue, display, power and module policy"
+pkgdesc="Omamobile support for the Google Pixel 6 Pro (raven): boot-slot success, USB rescue, display, power and module policy"
 arch=(aarch64)
-url="https://github.com/derekross/omarchy-mobile"
+url="https://github.com/derekross/omamobile"
 license=(MIT Apache-2.0)
 depends=(bash iproute2 jq systemd util-linux i2c-tools 'omamobile-audio>=0.5.15')
 # The modem's drivers stay blacklisted until its runtime loads them

@@ -3,10 +3,10 @@ The OWL language guide, by Simon Schubert and contributors, shipped with
 credit under its MIT licence (full text at the end of this file).
 Source: https://github.com/SimonSchubert/omalauncher
   app/src/main/assets/widgets/README.md at commit d355bdb2789f7bd1023d88b17f8a2898dc0ffa2b
-The guide below is unchanged. Omarchy Mobile's notes on it follow it.
+The guide below is unchanged. Omamobile's notes on it follow it.
 -->
 
-> **About this copy.** This is the OWL widget language guide written by **Simon Schubert** for [Omalauncher](https://github.com/SimonSchubert/omalauncher) (`app/src/main/assets/widgets/README.md` at commit [`d355bdb`](https://github.com/SimonSchubert/omalauncher/blob/d355bdb2789f7bd1023d88b17f8a2898dc0ffa2b/app/src/main/assets/widgets/README.md)), shipped here unchanged under its MIT licence, with thanks. It describes OWL as the Android launcher runs it. Omarchy Mobile runs the same files with its own runtime; where that differs on this phone, see [Omarchy Mobile's notes](#omarchy-mobiles-notes) after the guide.
+> **About this copy.** This is the OWL widget language guide written by **Simon Schubert** for [Omalauncher](https://github.com/SimonSchubert/omalauncher) (`app/src/main/assets/widgets/README.md` at commit [`d355bdb`](https://github.com/SimonSchubert/omalauncher/blob/d355bdb2789f7bd1023d88b17f8a2898dc0ffa2b/app/src/main/assets/widgets/README.md)), shipped here unchanged under its MIT licence, with thanks. It describes OWL as the Android launcher runs it. Omamobile runs the same files with its own runtime; where that differs on this phone, see [Omamobile's notes](#omamobiles-notes) after the guide.
 
 # Home-screen widgets
 
@@ -540,16 +540,16 @@ and the message goes to `.errors/`.
 
 ---
 
-## Omarchy Mobile's notes
+## Omamobile's notes
 
-Omarchy Mobile runs OWL widgets with its own runtime (`/usr/share/omamobile/shell/plugins/omamobile.home/owl/`), held to the reference runtime by a conformance suite. Where the guide is silent, the decisions are in [SPEC-NOTES.md](https://github.com/derekross/omarchy-mobile/blob/main/packages/omamobile-shell/plugins/omamobile.home/owl/SPEC-NOTES.md) (installed as `/usr/share/omamobile/shell/plugins/omamobile.home/owl/SPEC-NOTES.md`). Where this phone differs from the guide:
+Omamobile runs OWL widgets with its own runtime (`/usr/share/omamobile/shell/plugins/omamobile.home/owl/`), held to the reference runtime by a conformance suite. Where the guide is silent, the decisions are in [SPEC-NOTES.md](https://github.com/derekross/omamobile/blob/main/packages/omamobile-shell/plugins/omamobile.home/owl/SPEC-NOTES.md) (installed as `/usr/share/omamobile/shell/plugins/omamobile.home/owl/SPEC-NOTES.md`). Where this phone differs from the guide:
 
 - **Where widgets live.** One folder per widget, `~/.config/omamobile/widgets/<author>.<name>/widget.owl`, not `NN-name.owl` files; `page:` and `order:` are ignored (the home screen places widgets). There is no `owl-check` or `owl-send` yet; `omarchy-shell shell call omamobile.home owlStatus <id>` reports whether a widget compiles, its problems, its commands and its approval.
 - **Approval.** Nothing runs until the user approves the widget's exact list of commands, web addresses and files (and, separately, the internet, vibration and the torch). A widget that changes that list asks again.
 - **Grid and sizes.** Our home screen's grid is 4x6 by default; sizes convert from the guide's 6-column grid, and `cols`, `rows`, `tileWidth` and `tileHeight` describe our card.
 - **Limits.** Commands run at most every 2 s, time out after 30 s at most, and their output is cut at 64 KiB; `http` runs at most every 60 s, and only with the internet turned on; two `stream`s at most on the home screen; one action a second.
 - **Dependencies.** `requires` is shown, never installed by the widget.
-- **Screens** open in place of the tile (with "‹" to go back), as Omarchy Mobile's own widgets show their longer views.
+- **Screens** open in place of the tile (with "‹" to go back), as Omamobile's own widgets show their longer views.
 - **Pictures** load from local files and embedded assets only, not from web addresses.
 - **Android.** `android.notifications` and `android.alarm` are empty; `androidApp()` and `notification()` do nothing (no Android here); `android.media`, `volume`, `modes` and `system` come from MPRIS, PipeWire, the torch LED, mako and `/proc`. `Shader` draws its `fallback`.
 - **`on x { }`** doesn't fire for x's first value, as the guide says.

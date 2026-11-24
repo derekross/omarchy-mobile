@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Download Omarchy Mobile's published packages (pkgs.omamobile.org,
+# Download Omamobile's published packages (pkgs.omamobile.org,
 # docs/RELEASES.md §10) with their signatures, for a contributor's local
 # repository: tools/build-packages --local CODENAME --import DIR keeps those
 # signatures, so only the port's own packages carry the local key.
@@ -65,7 +65,7 @@ mkdir -p "$dir"
 echo "==> $url"
 curl -fsS --globoff -o "$tmp/omamobile.db" "$url/omamobile.db" || die "cannot fetch the index"
 curl -fsS --globoff -o "$tmp/omamobile.db.sig" "$url/omamobile.db.sig" || die "the index has no signature"
-verify "$tmp/omamobile.db.sig" "$tmp/omamobile.db" || die "the index is not signed by a trusted Omarchy Mobile key"
+verify "$tmp/omamobile.db.sig" "$tmp/omamobile.db" || die "the index is not signed by a trusted Omamobile key"
 
 mkdir -p "$tmp/db" && tar -xzf "$tmp/omamobile.db" -C "$tmp/db"
 # The globs below decide what is listed and what goes, so glob options bash
@@ -86,7 +86,7 @@ for desc in "$tmp"/db/*/desc; do
     curl -fsS --globoff -o "$dir/$file" "$url/$file" || die "cannot fetch $file"
     curl -fsS --globoff -o "$dir/$file.sig" "$url/$file.sig" || die "$file has no signature"
     [[ $(sha256sum < "$dir/$file" | cut -d' ' -f1) == "$sum" ]] || die "$file does not match the index"
-    verify "$dir/$file.sig" "$dir/$file" || die "$file is not signed by a trusted Omarchy Mobile key"
+    verify "$dir/$file.sig" "$dir/$file" || die "$file is not signed by a trusted Omamobile key"
     echo "    got  $file"
   fi
   listed[$file]=1 n=$((n + 1))
@@ -101,4 +101,4 @@ for f in "$dir"/*.pkg.tar.zst "$dir"/*.pkg.tar.xz; do
   [[ ! -f $f.sig ]] || rm -f -- "$f.sig"
   echo "    gone $file"
 done
-echo "==> $n packages in $dir, each signed by a trusted Omarchy Mobile key"
+echo "==> $n packages in $dir, each signed by a trusted Omamobile key"

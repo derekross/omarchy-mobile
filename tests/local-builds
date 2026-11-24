@@ -3,7 +3,7 @@
 # A contributor's local builds (no phone, no network, no Docker): every run
 # happens in a copy of the repository, so the real keys/ and out/ are never
 # touched. tools/local-key-init makes keys/NAME once; tools/fetch-published
-# takes only what a trusted, unrevoked Omarchy Mobile key signed, against a
+# takes only what a trusted, unrevoked Omamobile key signed, against a
 # fake server (file://) and a test keyring; build-packages and build-rootfs
 # --local refuse before any build without the local key, and never fall
 # back to the maintainer's keys/ or out/repo.

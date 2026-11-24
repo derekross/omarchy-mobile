@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Maintainer: Derek Ross <derekross@gmail.com>
 #
-# omamessages: Omarchy Mobile's Messages app (docs/TELEPHONY-APPS-PLAN.md
+# omamessages: Omamobile's Messages app (docs/TELEPHONY-APPS-PLAN.md
 # T6/T7). Rust, GTK 4 and libadwaita, from its own repository
 # (github.com/derekross/omamessages, GPL-3.0-or-later). It talks to the modem
 # through omatel-agent (packages/omatel) and uses omatel's crates, which
