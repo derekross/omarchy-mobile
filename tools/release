@@ -667,9 +667,9 @@ print("\n".join(sorted(out)))
 PY
 }
 
-# Identifier scan (§11.7, AGENTS.md §1) over files and directories, text and
-# binary alike: MAC addresses (locally administered unicast ones,
-# x2/x6/xA/xE, and all zeros or all ones are made up; so are, in
+# Identifier scan (§11.7, AGENTS.md §1) over files, directories and symlink
+# targets, text and binary alike: MAC addresses (locally administered unicast
+# ones, x2/x6/xA/xE, and all zeros or all ones are made up; so are, in
 # /etc/dnsmasq.conf alone, the group addresses and dhcp-option bytes of
 # dnsmasq's shipped example configuration), serial and IMEI
 # records, this machine's home directory (/home/<builder>: a build path that
@@ -702,11 +702,12 @@ def report(path, what, text):
     found += 1
     if found <= 40:
         print("    %s: %s: %s" % (path, what, text.decode("utf-8", "replace")[:120]))
-def scan(path):
-    try:
-        data = open(path, "rb").read()
-    except OSError:
-        return
+def scan(path, data=None):
+    if data is None:
+        try:
+            data = open(path, "rb").read()
+        except OSError:
+            return
     pos = 0
     while m := mac.search(data, pos):
         k = m.lastindex
@@ -736,12 +737,30 @@ def scan(path):
                 continue
             report(path, what, m.group(0))
             break
+def scan_link(path):
+    try:
+        target = os.fsencode(os.readlink(path))
+    except OSError as e:
+        report(path + " (symlink target)", "unreadable link", str(e).encode("utf-8", "replace"))
+        return
+    scan(path + " (symlink target)", target)
 for p in paths:
+    # Strip trailing slashes so islink sees an explicit directory symlink itself.
+    q = p.rstrip("/") or p[:1]
+    if os.path.islink(q):
+        scan_link(q)
     if os.path.isdir(p):
         for top, dirs, names in os.walk(p):
+            # os.walk puts directory symlinks in dirs without descending into them.
+            for n in dirs:
+                f = os.path.join(top, n)
+                if os.path.islink(f):
+                    scan_link(f)
             for n in names:
                 f = os.path.join(top, n)
-                if os.path.isfile(f) and not os.path.islink(f):
+                if os.path.islink(f):
+                    scan_link(f)
+                elif os.path.isfile(f):
                     scan(f)
     elif os.path.isfile(p):
         scan(p)
