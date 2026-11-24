@@ -152,6 +152,16 @@ reg() { awk -v a="$1" -v r="$2" '$1==a && $2==r {print $3}' "$HDT_STATE/regs"; }
 D=/run/husky-deadman MARK=/var/lib/husky-deadman/undo-pending UNIT=/etc/systemd/system/husky-deadman-undo.service
 LOG=/var/log/husky-deadman.log
 result() { cat $D/result 2>/dev/null || echo none; }
+# wait_for TENTHS CMD...: polls CMD every 0.1 s, up to TENTHS times, so the
+# soak cases wait for the tool's own writes instead of fixed sleeps
+wait_for() { local n=$1; shift; until "$@"; do (( n-- > 0 )) || return 1; sleep 0.1; done; }
+sourcing() { [[ $(reg 0x25 0x92) == 0x01 && $(cat "$HDT_STATE/gpio5" 2>/dev/null) == 1 ]]; }
+confirmed() { [[ $(result) == confirmed ]]; }
+soak_started() {   # the port is sourcing, then confirm, then the soak has begun
+  wait_for 150 sourcing || { cat "$t/run.out"; fail "the port is not sourcing within 15 s"; }
+  "$tool" confirm > /dev/null
+  wait_for 150 confirmed || { cat "$t/run.out"; fail "the confirmation is not seen within 15 s"; }
+}
 run_b5() {   # run_b5 [opts]; confirms after 2 s; prints the result
   : > "$HDT_STATE/writes"
   "$tool" run b5-host --confirm 6 --grace 3 --soak "${SOAK:-3}" "$@" > "$t/run.out" 2>&1 &
@@ -213,7 +223,7 @@ pass "clean run: unit enabled before the first write, Google's order, soak ends 
 rm -f $D/b5-done; : > "$HDT_STATE/writes"
 SOAK=20 "$tool" run b5-host --meter --confirm 6 --grace 3 --soak 20 > "$t/run.out" 2>&1 &
 pid=$!
-sleep 2; "$tool" confirm > /dev/null; sleep 2
+soak_started
 [[ -e $UNIT && -e $MARK ]] || fail "unit or marker missing during the soak"
 grep -q "^ConditionPathExists=$MARK$" $UNIT || { cat $UNIT; fail "unit is conditioned on the marker"; }
 grep -q '^ExecStart=/usr/local/bin/husky-deadman-phone boot-undo$' $UNIT || fail "unit runs boot-undo"
@@ -247,7 +257,7 @@ mkdir -p /run/husky-deadman; touch /run/husky-deadman/b4-done
 "$tool" baseline > /dev/null 2>&1 || fail "baseline (boot 2)"
 rm -f $D/b5-done
 SOAK=20 "$tool" run b5-host --meter --confirm 6 --grace 3 --soak 20 > "$t/run.out" 2>&1 &
-pid=$!; sleep 2; "$tool" confirm > /dev/null; sleep 2
+pid=$!; soak_started
 kill -9 $pid; wait $pid 2>/dev/null || true; pkill -9 -f 'husky-deadman-phone' 2>/dev/null || true; pkill -9 -x gpioset 2>/dev/null || true; sleep 1
 rm -rf $D; echo "boot-3" > /proc/sys/kernel/random/boot_id
 touch "$HDT_STATE/charger-loaded"; : > "$HDT_STATE/writes"
