@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # squeekboard 1.43.1's jp_wide.yaml (https://gitlab.gnome.org/World/Phosh/squeekboard,
 # tag v1.43.1, GPL-3.0-or-later), with two changes for Omarchy Mobile: the
-# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua
-# binds for squeekboard only) on top of every view, and the globe key
-# sending XF86MediaLanguageMenu (the shell's language sheet) instead of
-# opening squeekboard's popover. Made by
+# action row (Mic, Copy, Paste, Emoji, Hide; XF86 keysyms that
+# hypr/phone.lua binds for squeekboard only) on top of every view, and the
+# globe key sending XF86MediaLanguageMenu (the shell's language sheet)
+# instead of opening squeekboard's popover. Made by
 # squeekboard/generate (change the generator, not this file). The row
-# sums to the widest row's 672: 2 x 201.6 + 2 x 134.4.
+# sums to the widest row's 672: 5 x 134.4.
 # omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
 # Language: Japanese
 ---
@@ -23,105 +23,106 @@ outlines:
     special-2:     { width: 56,     height: 42 }
     special-3:     { width: 100.8,  height: 42 }
     thin:          { width: 51.692, height: 42 }
-    mic:           { width: 201.6, height: 32 }
-    paste:         { width: 201.6, height: 32 }
+    mic:           { width: 134.4, height: 32 }
+    copy:          { width: 134.4, height: 32 }
+    paste:         { width: 134.4, height: 32 }
     emoji:         { width: 134.4, height: 32 }
     hide:          { width: 134.4, height: 32 }
 
 views:
     base:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "ぬ ふ あ う え お や ゆ よ わ ほ へ"
         - "た て い す か ん な に ら せ  ゙  ゚ "
         - "ち と し は き く ま の り れ け む"
         - "show_hiragana_upper つ さ そ ひ こ み も ね る め ろ BackSpace"
         - "show_numbers show_romaji preferences fullwidth-space --- show_katakana Return"
     hiragana_upper:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "ぬ ふ ぁ ぅ ぇ ぉ ゃ ゅ ょ を ほ ゑ"
         - "た て ぃ す ヵ ん な に ら せ  ゙ 「"
         - "ち と し ゎ き く ま の り れ ヶ 」"
         - "show_hiragana_upper っ さ そ ゐ こ み も 、 。 ・ ー BackSpace"
         - "show_numbers show_romaji preferences fullwidth-space --- show_katakana Return"
     katakana:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "ヌ フ ア ウ エ オ ヤ ユ ヨ ワ ホ ヘ"
         - "タ テ イ ス カ ン ナ ニ ラ セ  ゙  ゚ "
         - "チ ト シ ハ キ ク マ ノ リ レ ケ ム"
         - "show_katakana_upper ツ サ ソ ヒ コ ミ モ ネ ル メ ロ BackSpace"
         - "show_numbers show_romaji preferences fullwidth-space katakana_width_toggle_half show_hiragana Return"
     katakana_upper:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "ヌ フ ァ ゥ ェ ォ ャ ュ ョ ヲ ホ ヱ"
         - "タ テ ィ ス ヵ ン ナ ニ ラ セ  ゙ 「"
         - "チ ト シ ハ キ ク マ ノ リ レ ケ 」"
         - "show_katakana_upper ッ サ ソ ヰ コ ミ モ 、 。 ・ ー BackSpace"
         - "show_numbers show_romaji preferences fullwidth-space katakana_width_toggle_half show_hiragana Return"
     katakana_halfwidth:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "ﾇ ﾌ ｱ ｳ ｴ ｵ ﾔ ﾕ ﾖ ﾜ ﾎ ﾍ"
         - "ﾀ ﾃ ｲ ｽ ｶ ﾝ ﾅ ﾆ ﾗ ｾ  ゙  ゚ "
         - "ﾁ ﾄ ｼ ﾊ ｷ ｸ ﾏ ﾉ ﾘ ﾚ ｹ ﾑ"
         - "show_katakana_halfwidth_upper ﾂ ｻ ｿ ﾋ ｺ ﾐ ﾓ ﾈ ﾙ ﾒ ﾛ BackSpace"
         - "show_numbers show_romaji preferences space katakana_halfwidth_width_toggle_full show_hiragana Return"
     katakana_halfwidth_upper:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "ﾇ ﾌ ｧ ｩ ｪ ｫ ｬ ｭ ｮ ｦ ｪ ﾍ"
         - "ﾀ ﾃ ｨ ｽ ｶ ﾝ ﾅ ﾆ ﾗ ｾ  ゙ ｢"
         - "ﾁ ﾄ ｼ ﾜ ｷ ｸ ﾏ ﾉ ﾘ ﾚ ｹ ｣"
         - "show_katakana_halfwidth_upper ｯ ｻ ｿ ﾋ ｺ ﾐ ﾓ ､ ｡ ･ ｰ BackSpace"
         - "show_numbers show_romaji preferences space katakana_halfwidth_width_toggle_full show_hiragana Return"
     numbers:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - " … -- -- -- -- -- -- -- ² ³"
         - "1 2 3 4 5 6 7 8 9 0"
         - "@ # ¥ % & - _ + ( )"
         - "show_symbols ; \" ' : = < > BackSpace-wide"
         - "show_hiragana show_romaji preferences space numbers_width_toggle_full , . Return"
     numbers_fullwidth:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "゠ -- -- -- -- -- -- -- -- --"
         - "１ ２ ３ ４ ５ ６ ７ ８ ９ ０"
         - "＠ ＃ ￥ ％ ＆ － ＿ ＋ （ ）"
         - "show_symbols_fullwidth ； ＂ ＇ ： ＝ ＜ ＞ BackSpace-wide"
         - "show_hiragana show_romaji_fullwidth preferences fullwidth-space numbers_fullwidth_width_toggle_half ， ． Return"
     symbols:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "ヽ ♪ -- -- -- -- -- ヿ 【 】"
         - "~ ` ´ | · √ µ ÷ × ¶"
         - "© ® £ $ € ^ ° * { }"
         - "show_numbers_from_symbols \\ / § π τ [ ] BackSpace-wide"
         - "show_hiragana show_romaji preferences space symbols_width_toggle_full ! ? Return"
     symbols_fullwidth:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "￣ ￤ -- -- -- -- -- ￢ ｟ ｠"
         - "～ ｀ -- ｜ -- -- -- -- -- --"
         - "-- -- ￡ ＄ -- ＾ -- ＊ ｛ ｝"
         - "show_numbers_fullwidth_from_symbols ＼ ／ -- -- -- ［ ］ BackSpace-wide"
         - "show_hiragana show_romaji_fullwidth preferences fullwidth-space symbols_fullwidth_width_toggle_half ！ ？ Return"
     romaji:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "1 2 3 4 5 6 7 8 9 0"
         - "q w e r t y u i o p"
         - "a s d f g h j k l --"
         - "show_romaji_upper z x c v b n m BackSpace-wide"
         - "show_numbers show_hiragana preferences space romaji_width_toggle_full , . Return"
     romaji_upper:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "1 2 3 4 5 6 7 8 9 0"
         - "Q W E R T Y U I O P"
         - "A S D F G H J K L --"
         - "show_romaji_upper Z X C V B N M BackSpace-wide"
         - "show_numbers show_hiragana preferences space romaji_width_toggle_full ! ? Return"
     romaji_fullwidth:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "１ ２ ３ ４ ５ ６ ７ ８ ９ ０"
         - "ｑ ｗ ｅ ｒ ｔ ｙ ｕ ｉ ｏ ｐ"
         - "ａ ｓ ｄ ｆ ｇ ｈ ｊ ｋ ｌ --"
         - "show_romaji_fullwidth_upper ｚ ｘ ｃ ｖ ｂ ｎ ｍ BackSpace-wide"
         - "show_numbers_fullwidth show_hiragana preferences fullwidth-space romaji_fullwidth_width_toggle_half ， ． Return"
     romaji_fullwidth_upper:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "１ ２ ３ ４ ５ ６ ７ ８ ９ ０"
         - "Ｑ Ｗ Ｅ Ｒ Ｔ Ｙ Ｕ Ｉ Ｏ Ｐ"
         - "Ａ Ｓ Ｄ Ｆ Ｇ Ｈ Ｊ Ｋ Ｌ --"
@@ -821,6 +822,10 @@ buttons:
         outline: "mic"
         keysym: "XF86Dictate"
         label: "󰍬 Mic"
+    Copy:
+        outline: "copy"
+        keysym: "XF86Copy"
+        label: "󰆏 Copy"
     Paste:
         outline: "paste"
         keysym: "XF86Paste"

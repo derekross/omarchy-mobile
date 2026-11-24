@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # squeekboard 1.43.1's de+neo_wide.yaml (https://gitlab.gnome.org/World/Phosh/squeekboard,
 # tag v1.43.1, GPL-3.0-or-later), with two changes for Omarchy Mobile: the
-# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua
-# binds for squeekboard only) on top of every view, and the globe key
-# sending XF86MediaLanguageMenu (the shell's language sheet) instead of
-# opening squeekboard's popover. Made by
+# action row (Mic, Copy, Paste, Emoji, Hide; XF86 keysyms that
+# hypr/phone.lua binds for squeekboard only) on top of every view, and the
+# globe key sending XF86MediaLanguageMenu (the shell's language sheet)
+# instead of opening squeekboard's popover. Made by
 # squeekboard/generate (change the generator, not this file). The row
-# sums to the widest row's 537.592: 2 x 161.278 + 2 x 107.518.
+# sums to the widest row's 537.592: 5 x 107.518.
 # omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
 # Language: German (Neo 2)
 ---
@@ -19,38 +19,39 @@ outlines:
     special-2:          { width: 73.308,  height: 42 }
     subtle-highlight:   { width: 48.872,  height: 42 }
     subtle-highlight-2: { width: 97.744,  height: 42 }
-    mic:                { width: 161.278, height: 32 }
-    paste:              { width: 161.278, height: 32 }
+    mic:                { width: 107.518, height: 32 }
+    copy:               { width: 107.518, height: 32 }
+    paste:              { width: 107.518, height: 32 }
     emoji:              { width: 107.518, height: 32 }
     hide:               { width: 107.518, height: 32 }
 
 views:
     base:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "x v l c w k h g f q ß"
         - "u i a e o s n r t d y"
         - "show_upper ü ö ä p z b m j BackSpace"
         - "show_numbers show_eschars preferences space , . Return"
     upper:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "X V L C W K H G F Q ẞ"
         - "U I A E O S N R T D Y"
         - "show_upper Ü Ö Ä P Z B M J BackSpace"
         - "show_numbers show_eschars preferences space ! ? Return"
     numbers:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "1 2 3 4 5 6 7 8 9 0 ²"
         - "@ # € % & - _ + ( ) ³"
         - "show_symbols ; \" ' : = < > BackSpace"
         - "show_letters show_eschars preferences space , . Return"
     symbols:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "~ ` ´ | · √ µ ÷ × ¶ ²"
         - "© ® £ $ ¥ ^ ° * { } ³"
         - "show_numbers \\ / § π τ [ ] BackSpace"
         - "show_letters show_eschars preferences space , . Return"
     eschars:
-        - "Mic Paste Emoji Hide"
+        - "Mic Copy Paste Emoji Hide"
         - "ä-subtle-highlight è é ö-subtle-highlight ü-subtle-highlight-2 Ä-subtle-highlight È É Ö-subtle-highlight Ü-subtle-highlight"
         - "à â ê î ô À Â Ê Î Ô"
         - "show_numbers « » ç Ç æ œ ß-subtle-highlight BackSpace"
@@ -135,6 +136,10 @@ buttons:
         outline: "mic"
         keysym: "XF86Dictate"
         label: "󰍬 Mic"
+    Copy:
+        outline: "copy"
+        keysym: "XF86Copy"
+        label: "󰆏 Copy"
     Paste:
         outline: "paste"
         keysym: "XF86Paste"

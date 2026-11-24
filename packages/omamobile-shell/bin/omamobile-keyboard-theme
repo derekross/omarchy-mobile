@@ -28,7 +28,7 @@ moment if it was up.
 The look follows Omarchy's: square keys (Omarchy's default corners), the
 theme's monospace font, letters on the theme's lighter background, modifier and
 layout keys a step lighter, the accent on Enter and on a latched or locked
-modifier (Ctrl held), and the action row (Mic, Paste, Emoji, Hide)
+modifier (Ctrl held), and the action row (Mic, Copy, Paste, Emoji, Hide)
 outlined: Mic in the theme's red (recording, as the voice bar), the rest in
 its muted colour.
 """
@@ -207,7 +207,7 @@ def stylesheet(colors, font, theme_name=""):
     w("}")
     w("")
     w("/* The action row (terminal/us.yaml, us.yaml): outlined keys */")
-    w("sq_button.mic, sq_button.paste, sq_button.emoji, sq_button.hide {")
+    w("sq_button.mic, sq_button.copy, sq_button.paste, sq_button.emoji, sq_button.hide {")
     w("    background: %s;" % p["key"])
     w("    border: 2px solid %s;" % p["outline"])
     w("    color: %s;" % p["text"])
@@ -223,12 +223,12 @@ def stylesheet(colors, font, theme_name=""):
     w("    color: %s;" % p["on_accent"])
     w("}")
     w("")
-    w("sq_button.paste:active, sq_button.emoji:active, sq_button.hide:active {")
+    w("sq_button.copy:active, sq_button.paste:active, sq_button.emoji:active, sq_button.hide:active {")
     w("    background: %s;" % p["pressed"])
     w("}")
     w("")
     w("/* The short rows' labels (squeekboard's small-row is 0.575em) */")
-    w("sq_button.term-key, sq_button.term-narrow, sq_button.mic, sq_button.paste, sq_button.emoji, sq_button.hide {")
+    w("sq_button.term-key, sq_button.term-narrow, sq_button.mic, sq_button.copy, sq_button.paste, sq_button.emoji, sq_button.hide {")
     w("    font-size: 0.6em;")
     w("}")
     return "\n".join(out) + "\n"
