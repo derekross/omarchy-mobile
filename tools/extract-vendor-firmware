@@ -97,6 +97,7 @@
 #   vendor/firmware/bcmdhd_txcap.blob_4398_d0 -> brcm/brcmfmac4398d0-pcie.<board>.txcap_blob  (TX capabilities)
 #   vendor/firmware/brcm/BCM.hcd              -> brcm/BCM.<board>.hcd                         (btbcm)
 #   vendor/firmware/cs40l26*.{wmfw,bin}       -> the same five files as cheetah's
+#   vendor/firmware/mfc_fw.bin                -> s5p-mfc-v16.fw                               (s5p-mfc, the MFC v16.6)
 #
 # The radio is a BCM4398 D0. Stock picks the CLM and TX capability files by
 # chip revision (_4398_d0), but the NVRAM by the phone's hardware SKU
@@ -113,8 +114,10 @@
 # module and the board ("G5SN_V17_HK3 REL ..."), not the chip, so that is
 # what the sanity check looks for. The haptics chip is a CS40L26, as on the
 # 7 Pro and the 9a (kernel #200); stock's cs40l26-dbc.bin has no user in
-# cs40l26-vibra and is not copied. The AoC's and the speaker amplifiers'
-# files wait for their drivers (device/husky/ROADMAP.md). An OTA's vendor.img
+# cs40l26-vibra and is not copied. mfc_fw.bin is the video codec's firmware,
+# checked like panther's (kernel #289; the MFC stays off unless the owner
+# turns on device/husky/overlays/mfc.dtso). The AoC's and the speaker
+# amplifiers' files wait for their drivers (device/husky/ROADMAP.md). An OTA's vendor.img
 # (from its payload.bin) works as SOURCE as well as a factory image.
 #
 # Output is a tree rooted at /, under usr/lib/firmware/updates (searched before
@@ -142,6 +145,8 @@ FW_BASE="brcmfmac4389c1-pcie"
 # and in BCM.hcd ("BCM<CHIP> <release>")
 WIFI_CHIP="4389c1"
 BT_CHIP="BCM4389C1"
+# The MFC firmware's staged name, for the devices that copy it (else empty)
+MFC_FW=""
 # What the Bluetooth refusal calls the patch, where BT_CHIP is a pattern
 BT_NAME=""
 DEST_REL="usr/lib/firmware/updates"
@@ -216,9 +221,9 @@ case $DEVICE_OPT in
     DEVICE="panther"
     MAP=("${MAP[@]//google,gs201-cheetah/$BOARD}")
     MAP=("${MAP[@]//cheetah/$DEVICE}")
-    # The video codec (kernel: s5p-mfc's google,gs201-mfc), described for
-    # panther only so far
-    MAP+=("firmware/mfc_fw.bin|s5p-mfc-v15.fw") ;;
+    # The video codec (kernel: s5p-mfc's google,gs201-mfc)
+    MFC_FW="s5p-mfc-v15.fw"
+    MAP+=("firmware/mfc_fw.bin|$MFC_FW") ;;
   raven)
     # Pixel 6 Pro: Wi-Fi, Bluetooth, the AoC, the speaker amplifiers'
     # protection firmware and the AoC's sensor registry (device/raven/WIFI-PLAN.md,
@@ -294,7 +299,10 @@ case $DEVICE_OPT in
       "firmware/cs40l26-svc.bin|cs40l26-svc.bin"
       "firmware/cs40l26-dvl.bin|cs40l26-dvl.bin"
       "firmware/cs40l26-calib.wmfw|cs40l26-calib.wmfw"
-    ) ;;
+    )
+    # The video codec (kernel: s5p-mfc's google,zuma-mfc, #289)
+    MFC_FW="s5p-mfc-v16.fw"
+    MAP+=("firmware/mfc_fw.bin|$MFC_FW") ;;
   dipper)
     DEVICE=dipper
     MAP=(
@@ -587,13 +595,13 @@ fi
 
 # The MFC firmware: a vector table of eight ARM branches (cond AL, opcode
 # 0xea in each word's top byte), and its version as the last word
-if [[ $DEVICE == panther ]]; then
-  od -An -tx1 -w32 -N32 "$dest/s5p-mfc-v15.fw" |
+if [[ -n $MFC_FW ]]; then
+  od -An -tx1 -w32 -N32 "$dest/$MFC_FW" |
     awk '{ for (i = 4; i <= 32; i += 4) if ($i != "ea") exit 1 } END { if (NR != 1) exit 1 }' ||
     die "mfc_fw.bin does not start with an ARM vector table"
-  mfc_size=$(stat -c %s "$dest/s5p-mfc-v15.fw")
+  mfc_size=$(stat -c %s "$dest/$MFC_FW")
   (( mfc_size >= 4096 && mfc_size % 4 == 0 )) || die "mfc_fw.bin is not a whole number of words"
-  mfc_ver=$(od -An -tx4 -j $((mfc_size - 4)) -N4 "$dest/s5p-mfc-v15.fw" | tr -d ' ')
+  mfc_ver=$(od -An -tx4 -j $((mfc_size - 4)) -N4 "$dest/$MFC_FW" | tr -d ' ')
 fi
 
 ver= bt=""
@@ -619,8 +627,8 @@ fi
 [[ -z $BT_CHIP ]] || say "Bluetooth patch: ${bt:-unknown version}"
 [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu || $DEVICE == husky ]] &&
   say "Haptics firmware: cs40l26.wmfw ($(stat -c %s "$dest/cs40l26.wmfw") bytes) and its wavetable"
-[[ $DEVICE == panther ]] &&
-  say "Video codec firmware: s5p-mfc-v15.fw (version 0x$mfc_ver)"
+[[ -z $MFC_FW ]] ||
+  say "Video codec firmware: $MFC_FW (version 0x$mfc_ver)"
 [[ $DEVICE == tegu ]] &&
   say "AoC firmware: aoc-tegu.bin ($(stat -c %s "$dest/aoc-tegu.bin") bytes)"
 [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == raven ]] &&
