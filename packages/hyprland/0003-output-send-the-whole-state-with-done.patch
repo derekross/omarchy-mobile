@@ -1,0 +1,16 @@
+--- a/src/protocols/core/Output.cpp
++++ b/src/protocols/core/Output.cpp
+@@ -194,7 +194,12 @@
+     if UNLIKELY (m_defunct)
+         return;
+ 
++    // A done closes a batch of changes, and a transform change comes only
++    // this way (xdg-output's update schedules it): the mode stays the same,
++    // so modeChanged and updateState never run and wl_output.geometry kept
++    // the old transform for clients bound before the rotation. Send the whole
++    // state, geometry included, which ends with the done.
+     for (auto const& r : m_outputs) {
+-        r->m_resource->sendDone();
++        r->updateState();
+     }
+ }
