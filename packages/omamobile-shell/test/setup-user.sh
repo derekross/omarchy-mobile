@@ -466,6 +466,23 @@ rm "$hm/systemctl-fails"
 if grep -c 'omatel-agent' "$H/calls" >/dev/null 2>&1; then fail "nothing is enabled without the agent's unit"; fi
 pass "the Phone and Messages agent is enabled and started at each login where its unit is installed"
 
+# Omarchy's Bluetooth agent: enabled and started once where its unit is
+# installed; a failed enable is tried again at the next login; never again
+# after it worked (a user who turns it off keeps it off)
+U2=$t/user-units-bt; mkdir -p "$U2"; touch "$U2/bt-agent.service"
+hb=$t/home-bt; mkdir -p "$hb/.config/hypr" "$hb/.config/omarchy/extensions"
+cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hb/.config/hypr/"
+touch "$hb/systemctl-fails"
+RUN_HOME=$hb RUN_USER_UNITS=$U2 run
+grep -c 'could not enable bt-agent.service' "$t/out" >/dev/null || fail "a failed bt-agent enable is reported, not fatal"
+rm "$hb/systemctl-fails"
+RUN_HOME=$hb RUN_USER_UNITS=$U2 run
+RUN_HOME=$hb RUN_USER_UNITS=$U2 run
+[[ $(grep -cx 'systemctl --user enable --now bt-agent.service' "$hb/calls") == 2 ]] \
+  || fail "bt-agent.service is enabled once it works, then left alone ($(grep -cx 'systemctl --user enable --now bt-agent.service' "$hb/calls") calls)"
+if grep -c 'bt-agent' "$hm/calls" >/dev/null 2>&1; then fail "nothing is enabled without the agent's unit"; fi
+pass "Omarchy's Bluetooth agent is enabled and started once where its unit is installed"
+
 # --adopt: a user set up by hand, with no markers, keeps the files the
 # overwriting steps would change (shell.json, the scale, the cursor and
 # keyboard lines, the screensaver), while the steps that check before they

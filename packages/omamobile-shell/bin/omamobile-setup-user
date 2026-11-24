@@ -546,6 +546,19 @@ if [[ -f $units/omatel-agent.service ]]; then
   systemctl --user enable --now omatel-agent.service ||
     echo "omamobile-setup-user: could not enable omatel-agent.service; trying again at the next login" >&2
 fi
+# Omarchy's Bluetooth pairing agent (bt-agent.service), which Omarchy's first
+# run enables. A phone whose user was set up without that step has none, and
+# then BlueZ never makes the adapter bondable: a pairing made from the
+# Bluetooth card keeps no key, and headphones need their pairing mode again
+# after the next disconnect (the Pixel 9a's AirPods Max, 2026-11-24). Once,
+# where the unit is installed, so a user who turns it off keeps it off.
+if [[ -f $units/bt-agent.service ]] && ! omarchy-done check omamobile-bt-agent-enabled; then
+  if systemctl --user enable --now bt-agent.service; then
+    omarchy-done mark omamobile-bt-agent-enabled
+  else
+    echo "omamobile-setup-user: could not enable bt-agent.service; trying again at the next login" >&2
+  fi
+fi
 # Voxtype on the phone (docs/VOICE-PLAN.md, phase 3): Omarchy's base.en
 # stays the model, with Whisper's audio context cut to the clip's length
 # (context_window_optimization, for clips under 22.5 s). On the Pixel 7 Pro
