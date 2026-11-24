@@ -72,6 +72,19 @@ ShellRoot {
     update.stepText = "Installing 23 packages"
     update.progressText = "(14/23) upgrading mesa"
     update.page = s.page
+    if (s.page === "progress") {
+      // A long download: Details opens on the newest lines with pacman's live bar line at the end
+      var lines = []
+      for (var i = 1; i <= 120; i++) lines.push("(" + i + "/120) upgrading package-" + i)
+      update.detailLines = lines
+      update.liveLine = "chromium-157.0.8...  74.3 MiB  124 KiB/s 06:46 [#####-------------]  41%"
+      update.progressText = update.liveLine
+      update.detailsOpen = true
+    } else {
+      update.detailLines = s.page === "result" ? ["== Update system packages", "(1/1) upgrading mesa"] : []
+      update.liveLine = ""
+      update.detailsOpen = false
+    }
     settle.restart()
   }
 

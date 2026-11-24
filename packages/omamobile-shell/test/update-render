@@ -59,6 +59,7 @@ print(json.dumps({"info": info, "result": result, "shots": [
     shot("portrait", 480, 1040, "overview"),
     shot("landscape", 1040, 480, "overview"),
     shot("landscape-auth", 1040, 480, "auth"),
+    shot("portrait-progress", 480, 1040, "progress"),
     shot("landscape-progress", 1040, 480, "progress"),
     shot("landscape-result", 1040, 480, "result"),
 ]}))
@@ -74,8 +75,8 @@ geo = {}
 for n, w, h, g in re.findall(r"geometry (\S+) (\d+)x(\d+) (\{.*\})", text):
     geo[n] = dict(json.loads(g), screen={"x": 0, "y": 0, "w": int(w), "h": int(h)})
 def inside(a, b, tol=0): return a["x"] >= b["x"] - tol and a["y"] >= b["y"] - tol and a["x"] + a["w"] <= b["x"] + b["w"] + tol and a["y"] + a["h"] <= b["y"] + b["h"] + tol
-ok = not bad and len(geo) == 5
-if len(geo) != 5: print("not ok - %s: %d of 5 shots taken" % (theme, len(geo)))
+ok = not bad and len(geo) == 6
+if len(geo) != 6: print("not ok - %s: %d of 6 shots taken" % (theme, len(geo)))
 for l in bad: print("  " + l[:200])
 def check(name, good, why=""):
     global ok
