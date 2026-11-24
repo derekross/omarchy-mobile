@@ -5,7 +5,12 @@ Status (2026-11-22): **P1-P5 passed on a Pixel 7; on by default.** The
 amplifier nodes are in gs201-panther, disabled (linux-omarchy-mobile, "add the
 speaker amplifiers"); the overlays `audio-amps-test`, `aoc-core-test` and
 `aoc-sound-test` in [`overlays/`](overlays) turn them and the AoC on, and
-`device.conf` lists them. `omamobile-device-panther` 0.1.19 starts the AoC
+`device.conf` lists them. `audio-amps-test` and `aoc-sound-test` need a
+kernel with
+[linux-omarchy-mobile#287](https://github.com/derekross/linux-omarchy-mobile/pull/287)
+(the amplifier nodes): on a kernel without it, `fdtoverlay` stops at
+`audio-amps-test` with `FDT_ERR_NOTFOUND`, and the images can't be built.
+`omamobile-device-panther` 0.1.19 starts the AoC
 with the Pixel 7 Pro's `omamobile-aoc-start`. The speakers run on the
 protection firmware's default calibration (`OMAMOBILE_SPK_DEFAULT_CAL=1`,
 `omamobile-audio` 0.5.16, #427/#496), as a stock Pixel 7 without
@@ -133,6 +138,9 @@ laptop. Pass: near -60 dBFS quiet, louder with speech (raven measured -64.5 and
 -48 to -56 dBFS). **Stop if** silence (all zeros) or a constant full-scale signal.
 
 ### P5 speakers: blocked
+History: this was the plan before the default calibration; P5 passed on
+2026-11-22 (status at the top).
+
 Needs a calibration first. Options, none designed yet: run the stock
 `cs35l41-dsp1-spk-cali` firmware once at room temperature to measure each
 coil (a new procedure; it plays a signal), or find where this phone's stock
