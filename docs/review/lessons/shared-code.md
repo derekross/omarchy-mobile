@@ -3,6 +3,18 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1163. An opt-in overlay that adds a node instead of only switching one
+  on is read against CONTRIBUTING §6.1, and a reserved-memory node is checked
+  for what it moves on every phone that boots the board without the overlay.**
+  #1028's overlay carries a 256 MiB pool that panther keeps in its board DTS;
+  added to the board always-on, it would have moved the 8 Pro's display pool
+  to the edge of its window on every phone, while `fdt_scan_reserved_mem()`
+  skips a child whose `status` is `disabled`, which gives the kernel-side node
+  at no cost. *Check:* `grep -n '{$' <overlay>` for node bodies that aren't
+  `&label` or `&{/path}` status flips; for a reserved-memory node, the boot
+  log's `Reserved memory:` lines with and without it, and `git grep -n
+  'device_is_available' drivers/of/of_reserved_mem.c`. Extends L-71, L-1060
+  and L-777. *From:* #1028, round 67, 2026-11-24.
 - **L-1129. A package file that is safe only on a fixed kernel is reviewed for
   the phones whose kernel doesn't come with the package.** On the 7 Pro the
   upower power-off drop-in and its kernel ship together; 8 Pro owners flash
@@ -378,11 +390,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   one, defeating the helpers' `uname -r` pin. *Check:* `git grep -n
   'device/\$DEVICE/' bin tools` for the file's name, and grep any fragment for
   `LOCALVERSION`. Extends L-149 and L-337. *From:* #565, round 50.
-- **L-703. A once-only step keyed on a default value reaches every device that
-  still has the default, and "unchanged on the 7 Pro" covers the result, not
-  the mechanism.** #635's step matches scale `= 3` or `"auto"`, so the 8 Pro
-  would rescale at its next login; on the 7 Pro the scale stays 3 (71x155 mm,
-  also at ±2 mm) but the session gains a rewritten user file and a module run
-  at every reload. *Check:* a table of DEVICES.md's devices with each one's
-  input and result, and a list of the side effects that don't depend on the
-  result. Extends L-608 and L-299. *From:* #635, round 50.

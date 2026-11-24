@@ -3,6 +3,17 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **C-64 (2026-11-24). Round 66 told #1009's maintainer that there was no
+  polkit agent on the phone, and offered options on that basis; Omarchy 4.5's
+  shell has one.** `plugins/polkit/PolkitAgent.qml` ships in the signed
+  `omarchy-4.5.0-3`, our patches 0010 and 0011 adapt it to the on-screen
+  keyboard and the PIN pad, and `omamobile-shell`'s
+  `49-omamobile-admin-self.rules` makes it ask the owner for their own PIN;
+  the maintainer's decision used it. *Lesson:* before writing that a phone has
+  no prompt or agent for something, `bsdtar -tf` the pinned Omarchy packages
+  for it and `git grep -n -i '<it>' origin/main --
+  packages/omamobile-omarchy/patches packages/*/polkit`. Extends C-52 and
+  C-36. *From:* #1009, rounds 66 and 67.
 - **C-63 (2026-11-23). Round 64 asked kernel #249 to drop the angle brackets
   around a 40-hex blob id in its commit message;** checkpatch exempts a 12-40
   hex word only inside `<...>` or `[...]`, so the change the author made as

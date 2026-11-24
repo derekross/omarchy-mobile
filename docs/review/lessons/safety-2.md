@@ -1,8 +1,46 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Review lessons: Safety model (AGENTS.md section 1) (part 2 of 3)
+# Review lessons: Safety model (AGENTS.md section 1) (part 2 of 4)
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-868. A raised limit carried in a device tree follows the kernel image
+  wherever it boots; a limit raised by a running guard doesn't.** Kernel #267
+  put husky's 4.45 V float in the battery node; the author's daily kernel,
+  built from the same tree, then charged at 4.45 V on a morning when he had
+  promised no raised-float runs. *Check:* for a DT value that is only safe
+  with a driver option or a userspace file, ask what a boot without that
+  option does (L-458), and prefer the value being applied by the code path
+  that provides the protection. Extends L-458, L-411 and L-284. *From:*
+  kernel #267 with #761, round 61, 2026-11-18.
+- **L-867. A contributor's hold on a hardware state is checked against the
+  kernel each new report ran on, and a second passing gets a mechanism, not a
+  second reminder.** On kernel #266 and #836 the smoke report's release was
+  the local kernel with the raised float, about 80 minutes before the author
+  noticed it himself: the evidence for one PR had been gathered inside the
+  state another thread had put on hold. *Check:* for every report from a
+  contributor with an open hold, compare its `uname -r` with the kernel the
+  hold names; when a hold is passed by accident, ask for a safeguard that
+  doesn't depend on memory (a distinct `LOCALVERSION`, a read before the
+  step, an option set by hand). Extends L-557, L-694 and L-378. *From:*
+  kernel #266 with #836 and #761, round 61, 2026-11-18.
+- **L-856. A safety account that says "restored, verified" or "revalidated the
+  backup" is asked where the bytes were read from.** fastboot doesn't
+  normally read a partition back, so kernel #260's md5 check was either a
+  read from Linux with the unguarded eMMC enabled or a check of the files
+  that were sent; #714's revalidation re-hashed the backup files on the
+  laptop and said nothing about the phone's partitions after boots of an
+  unguarded install. *Check:* for every "verified" in a restore or backup
+  report, name the tool that read the partition, the kernel it ran under and
+  whether that boot was guarded, or say that only the archive was hashed.
+  Extends L-649, L-600 and L-168. *From:* kernel #260, round 60, 2026-11-17;
+  #714, round 61, 2026-11-18.
+- **L-831. An undo that writes back a saved register is run with another field
+  changed in between.** #815's steps change one bit and say so, but the undo
+  restored the whole byte, the input-limit field included; the stub run
+  showed it only when that field was changed by hand between apply and undo.
+  *Check:* in the stub, change every other field of the register after the
+  apply and run the undo; ask for a restore of the changed bits alone.
+  Extends L-419 and L-727. *From:* #815, round 60, 2026-11-17.
 - **L-830. A runbook that masks a boot-started unit "after boot" leaves it
   running for that boot.** #815's K1b.3 masked `omamobile-modem-boot.target`
   after the push's reboot had started the modem, so the next step's
@@ -336,46 +374,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   decide", walk the owner's next routine step with X missing, and give the
   safe interim path (here, `push` only). Extends L-81 and L-158. *From:* #125,
   round 26 (a near miss in drafting).
-- **L-267. A recovery report that says "marked again" is a `devinfo`
-  question.** On the 9a, marking slot B successful is a `devinfo` write,
-  agreed only through `omamobile-bootctl` with a fresh backup and a full
-  before/after compare. A thread or an AGENTS rule that cites another tool, or
-  one outside the repository (`logs/…py`), is a second writer. *Check:* `git
-  grep` the tool's name, then the device NOTES for the agreed operation and
-  its preconditions. Extends L-36 and L-186. *From:* issue #28 with #125,
-  round 25.
-- **L-261. A safety rule that prescribes a protected-partition write is held
-  to the exact approval on record.** #125 turned the one approved tegu
-  `devinfo` operation (`omamobile-bootctl mark-successful`, with a fresh
-  backup and before/after bytes) into a standing "after every flash" step, run
-  by an unreviewed script. *Check:* for any AGENTS or CONTRIBUTING text that
-  tells people to write `devinfo`, the GPT or `persist`, find the approving
-  review and diff the tool and conditions against it; ask whether writes
-  already made met it. Extends L-2 and L-224. *From:* #125, round 25.
-- **L-223. An installer step that writes the phone runs after the typed
-  codename and is listed in the "only these commands" banner.** #111's
-  `install-phone` RAM-booted a bootloader copy straight after `getvar`, before
-  the questions and the banner. *Check:* list every command that can write
-  (including ones a helper runs over SSH) and its line relative to the
-  codename prompt; a dry-run test that skips the helper proves nothing about
-  the order. Extends L-2 and L-5. *From:* #111, round 24.
-- **L-224. A policy exception written by the PR that needs it is a finding,
-  however well specified.** #111 added its own CONTRIBUTING §3.1 entry and
-  AGENTS line for a 33-partition firmware copy. *Check:* `git diff base head
-  -- CONTRIBUTING.md AGENTS.md` on every device PR; a new exception goes to the
-  maintainer and out of the PR. Extends L-2 and L-31. *From:* #111, round 24.
-- **L-225. A pinned AVB rollback index is held to the oldest stock any owner
-  runs.** #104 pinned a newer build's index for every cheetah, above the
-  maintainer's slot A; rollback locations are device-wide, and libavb stores
-  any higher non-zero index once a slot is marked successful, which
-  `omamobile-boot-success` does. *Check:* `avbtool info_image` on each
-  owner's stock `boot.img` (or ask for the build) against
-  `AVB_ROLLBACK_INDEX`, `AVB_SECURITY_PATCH` and `OS_PATCH_LEVEL`; prefer the
-  oldest, or 0 where a phone has shown it boots (#74). Extends L-169.
-  *From:* #104, round 24.
-- **L-226. `fastboot-info.txt` syntax isn't fastboot command-line
-  syntax.** Told to follow felix's file exactly, #35 copied `flash
-  --apply-vbmeta vbmeta` into a CLI line that fastboot rejects, mid-way
-  through a slot A write. *Check:* every hand-written `fastboot` line in a
-  runbook uses only options in `fastboot --help`. Extends L-205 and C-13.
-  *From:* #35, round 24.

@@ -3,6 +3,86 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1171. A test that reads the real machine (a fixed system path, the real
+  `systemctl`) passes on a laptop and fails on a provisioned phone, where
+  `tools/phone-install-package` runs `check()`, and a test that leans on the
+  host's speed fails on the slower build host.** #933's "not installed" case
+  read `/usr/lib/omamobile-vendor/gnss/root`, which a provisioned phone has;
+  the set-pin keeper test forked once per `/proc` entry and raced on the build
+  host (#1017). *Check:* `grep -n '"/usr/\|"/etc/\|"/var/\|/proc\|systemctl'
+  <test>` for every path or command the test doesn't point at a stand-in, and
+  say what a provisioned phone holds there; for a test that waits on a scan or
+  a loop of forks, ask for a bound that doesn't depend on the host's speed.
+  Extends L-933, L-1132 and L-454. *From:* #933 and #1017, the maintainer's
+  assistant, 2026-11-24.
+- **L-1170. A test that binds a Unix socket under its temporary folder fails
+  where that path passes about 108 bytes (`AF_UNIX path too long`), and a
+  phone's build folder does.** `tools/phone-install-package
+  packages/omamobile-shell` could not install any shell on the Pixel 7 Pro
+  until #1037 bound the install-hook test's socket by its short name from
+  inside the folder; the tests of install-link, mmd, modem-sit and libfprint
+  still bind full paths. *Check:* for a test that makes a socket (`AF_UNIX`,
+  `UNIX-LISTEN`, `nc -lU`, `QLocalServer`), ask for a short name bound from
+  inside the folder, or run it once with `TMPDIR` set to a folder whose path
+  is 100 bytes long. Extends L-589 and L-334. *From:* #1037, the maintainer's
+  assistant, 2026-11-24.
+- **L-1169. A fix that relies on the parent-death signal is checked against
+  how the parent's supervisor restarts it: an in-place restart under the same
+  PID sends no signal.** #998's `setpriv --pdeathsig` covered the shell's end
+  and an ordinary restart, and the author's palmtop run found that
+  Quickshell's crash handler restarts the shell under its own PID, so the old
+  helpers stayed and a second set started. *Check:* for a `pdeathsig`,
+  `PR_SET_PDEATHSIG` or `prctl` change, find out whether the parent can
+  restart without exiting (an `exec` of itself, a crash handler), and ask for
+  a run of that path with the children counted. Extends L-734 and L-468.
+  *From:* #998, round 67, 2026-11-24.
+- **L-1168. An idempotency guard added on a review's suggestion is walked
+  through the failure of the step between the saved state and the new one.**
+  #995's `was_off = self.cfun == 0` made a repeated `radio on` harmless, and
+  also made a `radio on` after a failed `AT+CFUN=0` (IMS already withdrawn,
+  level unchanged) skip the restore that the earlier head would have run.
+  *Check:* for a guard keyed on a state variable, list each step between
+  reading the variable and updating it, make each raise in turn in the
+  simulator, and ask what the next call does; a side effect done before the
+  failing step needs its own flag. Extends L-1133 and L-757. *From:* #995,
+  round 67, 2026-11-24.
+- **L-1167. An Omarchy patch that changes layout by width is computed with the
+  rounding of both sides and the phone's margin before a reference-phone run
+  is asked for.** #1026's condition compares two rounded values
+  (`fittedContentWidth` and `Style.space`), so it is false at full width by
+  construction; with `availableCardWidth = screenW - 2 * Style.gapsOut`, the 7
+  Pro's 480 px keeps the old branch. *Check:* read the helper that produces
+  each side of the comparison in the pinned package (`bsdtar -xOf` the signed
+  package), write the reference phone's value of each, and say which branch it
+  takes; ask for a run only if it takes the new one. Extends L-703 and L-491.
+  *From:* #1026, round 67, 2026-11-24.
+- **L-1166. A shell PR that loads an upstream component unchanged is reviewed
+  for everything that component offers, not only what the PR's description
+  shows.** #1024 loads Omarchy's power, network and Bluetooth panels for their
+  cards; with them come power profiles, a DNS changer, Wi-Fi sharing and a
+  speed test, none named in the description. *Check:* `bsdtar -xOf` the signed
+  package's file, list its buttons and the commands behind them (`grep -n
+  'onClicked\|command:\|execDetached\|bar.run'`), and put each that changes
+  system state or reaches a network on the maintainer's list. Extends L-818
+  and L-1125. *From:* #1024, round 67, 2026-11-24.
+- **L-1165. A daemon's test that sets `HOME` for a scratch config also sets
+  every `XDG_*` variable the code prefers over `HOME`, or it reads the
+  tester's own files.** #1025's `test/dozed.sh` set `HOME`, the daemon reads
+  `${XDG_CONFIG_HOME:-$HOME/.config}`, and on a desktop session 7 of 52 checks
+  read the reviewer's real `~/.config/omamobile/`. *Check:* `grep -n
+  'XDG_[A-Z_]*HOME' <the code>` against the variables the test exports; run
+  the suite once with `XDG_CONFIG_HOME` set to an empty folder outside the
+  scratch tree, once unset, and compare. Extends L-1034 and L-454. *From:*
+  #1025, round 67, 2026-11-24.
+- **L-1164. A value a backend adds to its answer is grepped for in the page
+  before the code that computes it is reviewed.** #1022's `get` returns
+  `active`, computed by a new name list of "real keyboards" and a `hyprctl -j
+  devices` call at every read; `KeyboardPage.qml` never reads it, so the only
+  effect of the code was a third keyboard rule against the maintainer's
+  one-writer decision. *Check:* for each key in a backend's JSON
+  (`out({...})`, `state()`), `grep -n '<key>' app/*.qml` on the head; a key no
+  page reads is asked out with its helper. Extends L-983 and L-1094. *From:*
+  #1022, round 67, 2026-11-24.
 - **L-1135. A Dockerfile branch on a BuildKit automatic argument is read for
   what the legacy builder leaves in it.** #1016's `TARGETARCH` test picks the
   non-amd64 branch when the argument is empty, which `DOCKER_BUILDKIT=0` and
@@ -324,87 +404,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   nothing attached, and `git grep -n 'ID_INPUT_KEYBOARD\|bustype\|untyped'`
   over the author's open heads for a second definition. Extends L-469 and
   L-720. *From:* #949 with #866, round 63, 2026-11-20.
-- **L-982. A test that waits for a background job with `kill -0` hangs in CI's
-  container.** A job reparented to the container's PID 1 is never reaped, and
-  `kill -0` succeeds on a zombie; #866's race test waited forever in CI and
-  passed on a desktop, where systemd reaps. *Check:* `grep -n 'kill -0'` in
-  new tests; ask for a done file or `wait` on a child of the test's own shell,
-  and a bound. Extends L-453 and L-674. *From:* #866 (found and fixed by its
-  author), round 63, 2026-11-20. (Extended 2026-11-23: the mirror case fails
-  instead of hanging. #998's `kill -0` asserting that a helper had ended after
-  its parent-death signal passed where systemd reaps and failed in GitHub's
-  job container, whose PID 1 (`tail`) left the helper as `Z` with parent 1.
-  Where the expectation is "gone", ask for a state check (`/proc/<pid>/stat`
-  field 3 not `Z`); reproduce with `docker run -d <image> sleep 600` and
-  `docker exec`, against `docker run --init`. *From:* #998, round 66.)
-- **L-975. A service that exits 0 with "nothing to do" behind a socket a
-  daemon reconnects to at once turns "not ready yet" into a start-limit
-  failure for the boot.** On the 9a, `omamobile-gnss-start` returns while
-  gnssd is still inside its start delay, GeoClue reconnects five times in a
-  second, and the NMEA socket stays failed until a toggle. *Check:* for each
-  early `exit 0` in a socket-activated unit's start script, ask what the
-  client does next and how fast, and whether the unready state ends by itself;
-  a bounded wait before the hang marker beats an instant exit. Extends L-449
-  and L-302. *From:* a second owner's run on #864, round 62, 2026-11-18.
-- **L-965. A fetch tool's "print the path" mode is checked for whether it
-  fetches.** #900's `--print` downloads 740 MB silently when the cache is
-  empty, inside the `$(...)` its own docs recommend. *Check:* run each
-  read-looking option of a download tool against an empty cache with a fake
-  `curl`, and count the calls. Extends L-539. *From:* #900, round 62,
-  2026-11-18.
-- **L-962. A fallback for "not installed" is asked about "installed and
-  exits".** #896's keyboard chooser returns to squeekboard when the chosen
-  keyboard is removed, but `exec`s one that may crash at start, and a session
-  without a keyboard can't type a lock password. *Check:* for every `exec
-  "$(chosen)"`-style launcher of something the session can't do without, run
-  the PR's fixture with the chosen program replaced by `exit 1` and see what
-  is left running. Extends L-161 and L-712. *From:* #896, round 62,
-  2026-11-18.
-- **L-961. When a review finds a host-reading test in one file of a PR, every
-  other test the same PR adds is grepped for the same `PATH`.** We asked #888
-  to take `/usr/bin` out of `test/osk.sh`; the re-push did, and its new block
-  in `test/setup-user.sh` ran the start line with
-  `PATH="<fakes>:/usr/bin:/bin"`, where an installed `omamobile-osk` answers
-  for "the script is gone" and can start the real keyboard inside `check()`.
-  *Check:* `git diff base...head -- 'packages/*/test' | grep -n
-  '^+.*PATH=.*/usr/bin'`; for each hit, name the command the case expects to
-  be missing and ask whether the package under test installs it. Extends L-454
-  and L-681. *From:* #896, round 62, 2026-11-18.
-- **L-960. A signal handler in a Python tool is read for every lock it can
-  take, `threading.Event.set()` first.** In #890, `Event.set()` takes the
-  event's non-reentrant lock, the same thread's `Event.wait()` holds it
-  between bytecodes, and a handler runs in the main thread, so a SIGTERM at
-  the wrong bytecode deadlocks the process, which then ignores SIGTERM too.
-  *Check:* `grep -n 'signal.signal' -A6 <tool>` and list each handler's calls
-  that lock (`Event.set`, `Queue.put`, `logging`, `print` to a full pipe); ask
-  for a plain assignment, and for a limit the kernel keeps (`signal.alarm`
-  with `SIG_DFL`) where a script promises "ends after N seconds whatever
-  happens". Reproduce under `timeout -s KILL`: a plain `timeout` can't end it.
-  Extends L-734 and L-468. *From:* #890, round 62, 2026-11-18.
-- **L-956. A sleep or wake lock that follows a sysfs value is probed with the
-  read failing while the file exists.** #899's blocker tests `"$(cat online)"
-  = 1`, and `online` is two I2C reads in the driver; with a directory in place
-  of the file the lock was dropped within a second, the unsafe side for a lock
-  that exists because a guard stops in sleep. *Check:* run the script against
-  a stand-in `systemd-inhibit` that logs take and release, swap the watched
-  file for a directory mid-hold, and ask that only an explicit off value
-  releases. Extends L-161 and L-716. *From:* #899, round 62, 2026-11-18.
-- **L-954. A follow-the-end list is probed with the PR's own handlers before
-  a phone run is asked for, and the probe names what it can't show.** For #894
-  a 50-line `qmltestrunner` case with the PR's `stick` handlers over a growing
-  Text answered "does it follow, stop on a scroll up, and follow again" in two
-  seconds at the phones' Qt version, which left the phone run the things only
-  a finger and a panel show (jumps when the line above changes height,
-  reopening mid-run). *Check:* copy the changed Flickable's handlers into a
-  scratch test outside the worktree, drive append, drag, hide and show, then
-  list for the phone run what the probe skipped. Extends L-618 and L-619.
-  *From:* #894, round 62, 2026-11-18.
-- **L-951. A "failed write is retried next login" fix in a once-only step is
-  checked on every write in the step, with the marker's state read after
-  each.** #895 took the marker back when the `cat` into `foot.ini` failed, but
-  a failing `sed -i` in the other branch, or a failing `mktemp`, ends the
-  script under `set -e` with the marker set and the later steps skipped.
-  *Check:* cut the step out, run it under `set -euo pipefail` with a scratch
-  `HOME` and the real `omarchy-done`, make each write fail in turn (read-only
-  file, read-only directory), and list the marker and whether the script went
-  on. Extends L-468 and L-613. *From:* #895, round 62, 2026-11-18.

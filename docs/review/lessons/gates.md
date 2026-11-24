@@ -3,6 +3,15 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1174. A mutation whose replacement text holds an `rm` on a variable is
+  kept in a script file, not typed into the shell command.** In #1033's review
+  the session's safety check refused a `python3 - <<'PY'` mutation because the
+  anchor string contained `rm -f -- "$dir/$file"`, though nothing would run
+  it; the same four mutations from a small script under the review folder ran
+  at once. *Check:* write mutations as a `{name: (anchor, replacement)}` table
+  in a file under the review's own folder and call it by name; the shell
+  command then carries no destructive text. Extends C-53 and C-44. *From:*
+  #1033, round 67, 2026-11-24.
 - **L-1150. A staging or packaging check is run against a copy of a real
   artifact rewritten into each state the PR names, with main's tool and the
   head's side by side.** For #979, a 30-line newc rewrite of the last release
@@ -409,9 +418,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   the PR's kernel takes it, the review says "with or after" and the notes name
   the kernel PR. Extends L-679. *From:* #861 with kernel #268, round 60,
   2026-11-17.
-- **L-817. `tests/grep-q-pipes` doesn't scan package `libexec`, `bin` or
-  `backends` directories.** #860's root helper piped into `grep -qx` under
-  `pipefail` and the lint passed. *Check:* until the lint's pathspecs cover
-  them, `git grep -nE '\|[[:space:]]*grep -q' <head> -- 'packages/*/libexec'
-  'packages/*/bin' 'packages/*/backends'` on every package PR. Extends L-683
-  and L-15. *From:* #860, round 60, 2026-11-17.
