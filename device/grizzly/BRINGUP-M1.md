@@ -2013,8 +2013,34 @@ saved slot capacity checks passed. The manifest SHA-256
 is `2ea36f14275f9ba31822c7b3d0279f4f38d11f8be06c9e9ca52d68fccd43a679`.
 The archive SHA-256 is
 `ec6aab8feeebfb4e61db6ee605e8f6683886f1e22347647aa46dc3f0a0ee4ff0`.
-Physical prep release and the ensuing core request remain
-untested. No phone operations were used.
+These build checks were performed offline.
+
+#### Attended v40 slot B trial
+
+On 2026-11-24 the owner approved one trial using the verified
+nine-partition NV backup. Before staging, the Mac independently
+rechecked the backup sizes, hashes and private file modes. The
+backup captures NV before the most recent stock A boot. All five
+slot B writes and the full `vendor_boot_b` readback passed.
+
+The retained `7.3.0-rc6-omamobile-grizzly-uic-v40` console shows
+an inherited HSIO-S vote and an issued initial prep ON vote with
+`ret=0` at 0.192848 s. The guarded readings stayed at HSIO-S
+`0x10`, HC `0x10` (PSM1 `0x0`) and PHY `0x11` before and after
+that vote. Genpd began its unused-domain sweep at 0.228547 s.
+At 2.217212 s the diagnostic reported `idle release not qualified
+stage=0`, which is `MALIBU_UFS_IDLE_WAIT_OFF`. The retained log
+contains no prep OFF callback records. The release gate therefore
+blocked both diagnostic resume votes. The trial did not exercise
+the `0x3` to `0x2` prep transition or issue core ON. PHY remained
+`0x11` at the two-second and 21.481198 s samples. Why prep had
+not reached the OFF callback remains open.
+
+The timed restart reached Fastboot 133 seconds after the B boot
+request. Stock D1 completed boot on A with enforcing verity and
+the original factory VBMeta digest. `SYSTEM_LAST_KMSG` matched the
+ramoops diagnostic records for the failed release gate and late
+PHY sample.
 
 ## Staging and return sequence used for D1
 
