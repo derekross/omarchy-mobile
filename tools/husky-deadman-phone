@@ -638,9 +638,9 @@ preflight_tcpm() {
     [[ -e $D/b3-done ]] || { refuse "max77759_charger is loaded but not by b3-charger in this boot (no b3-done): the undo does not own it; reboot, then b3-charger before b4-tcpm"; return 1; }
     p=$(cat /sys/module/max77759_charger/parameters/default_ilim_ua 2>/dev/null)
     { [[ $p =~ ^[0-9]+$ ]] && (( p > 0 )); } || { refuse "max77759_charger default_ilim_ua is '$p': with tcpm up and default Rp the charger would switch off"; return 1; }
-    log "case: charger + tcpm. max77759_charger loaded by b3-charger with default_ilim_ua=$p: tcpm online + current_max 0 keeps that limit; Rp 1.5/3 A raises 0xc2 to that value (battery trip $I_TRIP uA stays; the b4 undo also undoes b3)"
+    log "case: charger + tcpm. max77759_charger loaded by b3-charger with default_ilim_ua=$p: tcpm online + current_max 0 keeps that limit; Rp 1.5/3 A asks 0xc2 CHGIN_ILIM for that value, not enforced while NO_AUTOIBUS is clear (battery trip $I_TRIP uA stays; the b4 undo also undoes b3)"
   else
-    log "case: charger-less. tcpm only reports; input limit register 0xc2 stays as the bootloader left it"
+    log "case: charger-less. tcpm only reports; 0xc2 CHGIN_ILIM (asked for, not enforced while NO_AUTOIBUS is clear, linux-omarchy-mobile#288) stays as the bootloader left it"
   fi
   [[ $(rd $TCPC 0x93) == 0x09 ]] || { refuse "USBSW_CTRL 0x93 is $(rd $TCPC 0x93), not 0x09 before the step (rescue not done, or no VBUS)"; return 1; }
   return 0
@@ -832,7 +832,7 @@ revert() {
         log "charger was loaded by b3-charger: running the b3-charger undo too (charging ends off)"
         revert b3-charger || rc=1
       elif charger_loaded; then
-        log "WARNING: max77759_charger is loaded but not by b3-charger (no b3-done): left alone at its last input limit 0xc2 $(rd $CHG 0xc2), mode 0xb9 $(rd $CHG 0xb9)"
+        log "WARNING: max77759_charger is loaded but not by b3-charger (no b3-done): left alone at its last 0xc2 CHGIN_ILIM $(rd $CHG 0xc2) (asked for, not enforced while NO_AUTOIBUS is clear), mode 0xb9 $(rd $CHG 0xb9)"
       fi
       log "undo done (rc $rc): USBSW_CTRL $(rd $TCPC 0x93), udc $(udc_state), wifi $(wifi_up && echo up || echo down), charger loaded: $(charger_loaded && echo yes || echo no)"
       return $rc ;;
