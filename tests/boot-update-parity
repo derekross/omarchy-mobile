@@ -154,7 +154,7 @@ mkdir -p "$R/initramfs" && echo '#!/bin/sh' > "$R/initramfs/init"
 git -C "$R" init -q && git -C "$R" add -A
 release_rd() { # extra file in the initramfs, or none
   rm -rf "$t/rd2" && mkdir -p "$t/rd2/etc" && cp "$R/initramfs/init" "$t/rd2/init"
-  echo "boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata" > "$t/rd2/etc/omamobile-ufs-rw"
+  (cd "$R" && DEVICE=twelve bin/omamobile initramfs-config "$t/rd2/etc") >/dev/null
   if [[ -n ${1:-} ]]; then mkdir -p "$t/rd2/${1%/*}"; echo k > "$t/rd2/$1"; fi
   (cd "$t/rd2" && find . | cpio -o -H newc --quiet) | lz4 -l -9 -q -f - "$K/initramfs.cpio.lz4"
 }

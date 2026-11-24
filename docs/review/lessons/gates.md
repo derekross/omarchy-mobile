@@ -3,6 +3,57 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1174. A mutation whose replacement text holds an `rm` on a variable is
+  kept in a script file, not typed into the shell command.** In #1033's review
+  the session's safety check refused a `python3 - <<'PY'` mutation because the
+  anchor string contained `rm -f -- "$dir/$file"`, though nothing would run
+  it; the same four mutations from a small script under the review folder ran
+  at once. *Check:* write mutations as a `{name: (anchor, replacement)}` table
+  in a file under the review's own folder and call it by name; the shell
+  command then carries no destructive text. Extends C-53 and C-44. *From:*
+  #1033, round 67, 2026-11-24.
+- **L-1150. A staging or packaging check is run against a copy of a real
+  artifact rewritten into each state the PR names, with main's tool and the
+  head's side by side.** For #979, a 30-line newc rewrite of the last release
+  initramfs (swap `init`, add or omit one `etc/` file) turned "fixtures pass"
+  into a table: identical `SHA256SUMS` for the good build, and main staging a
+  stale build and another phone's build that the head refuses. *Check:* copy
+  the artifact to scratch, rewrite members with a script outside the worktree
+  (key on the name without `./`), run both tools with `DEST` in scratch, and
+  diff their outputs for the pass case. Extends L-1115 and L-896. *From:*
+  #979, round 66, 2026-11-23.
+- **L-1149. A protected-write PR built with a compile-time switch is proved by
+  running every build it produces (with the switch, without it, and main's)
+  over the whole input space in scratch, and diffing exit status and written
+  bytes.** For #1011, three binaries over 11,520 synthetic `devinfo` cases
+  (five layout versions, all 256 flag pairs, every verb on each slot, dry and
+  confirmed) showed in seconds that lynx, the initramfs copy and the reference
+  phone's 3.15 path are unchanged and that the new write is exactly the 32
+  flag pairs the description names; six mutations of the condition then each
+  failed the PR's own test. *Check:* `git show` main's and the head's source
+  into scratch, `cc` each with and without the PR's `-D`, loop over generated
+  images with each binary on its own copy, and print only the cases where
+  status or bytes differ. Extends L-664, L-457 and L-8. *From:* #1011, round
+  66, 2026-11-23.
+- **L-1148. Two open PRs that each change a generator's output format are
+  merged together in review, and the generator's own `--check` modes run on
+  the merge.** #952 finds the end of the generated header by one exact line,
+  which #977 rewraps; each PR is green with main, `merge-tree` reports only
+  two docs conflicts, and the combination fails `--check-xkb` with a
+  `ValueError`. *Check:* for open PRs touching one generator (`gh pr list
+  --json files`), `git merge --no-commit` the heads in a scratch worktree and
+  run every check mode the generator has; look for `.index("<literal line>")`
+  against text another PR rewrites. Extends L-721 and L-478. *From:* #952 with
+  #977, round 66, 2026-11-23.
+- **L-1147. A contributor's "the gate rejects the prefix upstream uses" is
+  checked against the regex and upstream's log, and fixed in the tool.**
+  Kernel #279's author kept `PM/devfreq:` because `kernel-pr-check` refuses
+  `PM / devfreq:`, which 68 of the last 80 `drivers/devfreq` commits in `v7.0`
+  use. *Check:* read the subject rule in `tools/kernel-pr-check`, and `git log
+  --oneline -80 <upstream tag> -- <dir> | sed 's/^[0-9a-f]* //' | cut -d: -f1
+  | sort | uniq -c`; a mismatch is a tool finding for the maintainer, not a
+  request to the author. Extends L-30 and L-452. *From:* kernel #279, round
+  66, 2026-11-23.
 - **L-1115. A tool that gains a refusal is fed the real inputs it will meet
   before it merges: every released bundle for an installer, the repository's
   own file for a publish tool.** #968's new size refusal was answered for
@@ -367,54 +418,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   the PR's kernel takes it, the review says "with or after" and the notes name
   the kernel PR. Extends L-679. *From:* #861 with kernel #268, round 60,
   2026-11-17.
-- **L-817. `tests/grep-q-pipes` doesn't scan package `libexec`, `bin` or
-  `backends` directories.** #860's root helper piped into `grep -qx` under
-  `pipefail` and the lint passed. *Check:* until the lint's pathspecs cover
-  them, `git grep -nE '\|[[:space:]]*grep -q' <head> -- 'packages/*/libexec'
-  'packages/*/bin' 'packages/*/backends'` on every package PR. Extends L-683
-  and L-15. *From:* #860, round 60, 2026-11-17.
-- **L-796. A package test that runs a start script calling the host's `sync`
-  fails under a loaded review machine.** `omamobile-modem`'s `test/all` gives
-  three `sync`s 20 s; with parallel reviews building, one case ended with rc
-  124 on #850's tree and passed on the next run. *Check:* on a timeout in a
-  case the PR doesn't touch, read `uptime`, time a `sync`, and rerun on main
-  and on the head before calling it the PR's; the script could take its `sync`
-  from a variable the test overrides. Extends L-42 and L-346. *From:* #850,
-  round 60, 2026-11-17.
-- **L-793. A docs PR that adds a place to download a program is checked for
-  what verifies the download.** The release bundle is verified by signature
-  whatever its URL; the installer app's files had a checksum file beside them
-  and nothing else. *Check:* for each new download link, name the file, what
-  the reader is told to check it against, and whether that check is anchored
-  in a key or only in the same page. Extends L-632 and L-422. *From:* #843,
-  round 60, 2026-11-17.
-- **L-785. A tool that starts keeping state under the user's home is run by the
-  tests with that home in scratch.** #855's `mkdir` under `XDG_DATA_HOME` made
-  `tests/phone-ssh` and `tests/make-bundle` write into the tester's real home,
-  and made the tool exit under `set -u` where `HOME` is unset. *Check:* run
-  the suite with `HOME` and `XDG_*` pointed at an empty scratch directory and
-  list it afterwards; run the tool's first lines with both unset. Extends
-  L-454 and L-681. *From:* #855, round 60, 2026-11-17.
-- **L-783. A base image pinned by digest under a rolling-release `pacman -Syu`
-  needs a keyring refresh and a named bump step.** The pin fixes the trust
-  root and nothing else; without a refresh the job fails some months later on
-  every PR at once. *Check:* for a digest pin of a rolling distribution's
-  image, find who bumps it (Dependabot, a comment with the command) and
-  whether the first package step updates the keyring. *From:* #853, round 60,
-  2026-11-17.
-- **L-782. A pin of a moving tag is compared with what the tag resolves to
-  today, not only with the release the PR names.** #853 pinned
-  `actions/checkout` to v5.0.0's commit, which is genuine, while `@v5` had
-  been at v5.1.0 for four months, so "no behaviour change" moved CI back three
-  commits, a security default among them. *Check:* `git ls-remote
-  https://github.com/<owner>/<action> 'refs/tags/v<N>*'`: the pinned id is a
-  tag's target in the action's own repository (a fork's commit also resolves
-  under the parent's name) and equals the major tag's target unless the PR
-  says why not; for a container digest, compare with the registry's
-  `docker-content-digest` for the tag and read the index for its platforms and
-  build date. *From:* #853, round 60, 2026-11-17.
-- **L-781. "The builds are run by hand, so there is no test" is checked against
-  the test file's own stand-ins.** `tests/kernel-pr-check` has had a stand-in
-  `make` for `--build` since the device-tree comparison. *Check:* `grep -n
-  'stand-in\|fake' tests/<the tool's test>` before accepting that a path can't
-  be tested. Extends L-454. *From:* #851, round 60, 2026-11-17.

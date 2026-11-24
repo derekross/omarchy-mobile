@@ -2,7 +2,7 @@
 # Omarchy Trace: plays trace-01.png .. trace-30.png once (Omarchy's logo
 # outlined, then filled; made by tools/gen-plymouth-trace.py) and holds the
 # last frame, which is Omarchy's logo.png unchanged, until Plymouth quits.
-# Plymouth lives about 2 s on husky, so the animation takes 0.6 s, and a
+# Plymouth lives about 1.6 s on husky, so the animation takes 0.6 s, and a
 # quit before it ends jumps to the last frame, so the image kept on screen
 # by --retain-splash is always the whole logo.
 

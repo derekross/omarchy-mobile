@@ -2,7 +2,7 @@
 # Screen mirroring: wayvnc on the USB link (172.16.42.1:5900) only.
 # On demand, never enabled: omamobile-mirror on|off starts and stops it.
 [Unit]
-Description=Omarchy Mobile screen mirroring (VNC on the USB link)
+Description=Omamobile screen mirroring (VNC on the USB link)
 After=graphical-session.target
 PartOf=graphical-session.target
 StartLimitIntervalSec=60

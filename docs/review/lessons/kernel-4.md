@@ -1,8 +1,25 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Review lessons: Kernel (linux-omarchy-mobile) (part 4 of 4)
+# Review lessons: Kernel (linux-omamobile) (part 4 of 4)
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-545. A sentence corrected on one board is grepped across every board
+  that copied it.** Kernel #214 fixes akita's "the guard runs before the disks
+  appear" (L-528). The same words are in `zuma-husky.dts` and
+  `zumapro-tegu.dts`, and UFS is built in for every phone, so they are wrong
+  there too; only husky's had been noticed. *Check:* when a review corrects
+  copied text, `git grep -n '<the sentence>' github/omamobile -- arch/
+  device/`, and judge each copy by the fact that made the first one wrong
+  (here `CONFIG_SCSI_UFS_EXYNOS=y` in the shared config). Extends L-528 and
+  L-257. *From:* kernel #214 with #206, round 44, 2026-11-08.
+- **L-546. soc/gs is one tree, so an absent call in a shared driver says
+  nothing about one SoC.** We nearly told kernel #187's author that zuma has
+  no secure-ATU SMC because Google's `pcie-exynos-rc.c` has none; that file is
+  the same on the gs201 branch, where the SMC is real, so it comes from
+  another driver. *Check:* `cmp` the file across the board branches first, and
+  find where the vendor actually issues the SMC before saying "SoC X doesn't
+  use it". Extends L-58 and L-113. *From:* kernel #187, round 44 (a near miss
+  in drafting); 2026-11-08.
 - **L-547. A phone run on a test kernel carries over a new base conflict when
   the tested-to-resolved diff equals the base's own movement.** Kernel #187's
   `zuma.dtsi` aliases conflicted hours after we said "merges cleanly"; the two

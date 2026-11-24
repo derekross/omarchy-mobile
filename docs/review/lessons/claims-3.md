@@ -3,6 +3,43 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-130. Before putting a bootloader requirement down to the SoC,
+  compare the reference phone's stock images.** Cheetah's stock vbmeta chains
+  `boot` and `init_boot` with the same rollback index and ABL build as lynx,
+  yet boots footerless images: lynx's AVB footers are its ABL's
+  configuration. *Check:* `avbtool info_image` on the stock vbmeta in
+  `~/android/reference` (read-only). *From:* #37.
+  (Corrected 2026-10-28, C-14: the comparison used the factory vbmeta, not
+  the phone's non-stock `vbmeta_b`; a stock `vbmeta_b` needs footers on
+  cheetah too.)
+- **L-131. Evidence cites the tested file's blob id, not a commit id.**
+  `git rev-parse <commit>:<path>` survives the folds and rebases we ask for,
+  and ties an out-of-tree module to its source. Extends L-45. *From:* kernel
+  #38 with #39.
+- **L-132. A device can appear twice on DEVICES.md (matrix row and Wanted
+  list); an edit to one must agree with the other**, and the plain words that
+  say the evidence isn't public must survive. *Check:* `grep -n <codename>
+  docs/DEVICES.md`. Extends L-28, L-66 and L-107. *From:* #39.
+- **L-149. A descriptor's overlays and config symbols must exist in the
+  published kernel or an open kernel PR.** raven's targeted nodes and
+  options in neither, so its images can't be built from our trees. *Check:*
+  `git grep` each overlay target and `CONFIG_` symbol against
+  `github/omamobile` and the open PR heads; whatever is missing means the
+  matrix cells name the port branch. Extends L-28 and L-61. *From:* #41,
+  round 12.
+- **L-150. Read every plan in the PR before quoting one plan's status.**
+  raven's BLUETOOTH-PLAN said "broken" while a later POWER-PLAN result said it
+  "works again". *Check:* `git grep -n` the subsystem across the PR's plans
+  and go by the newest dated result. *From:* #41, round 12.
+- **L-186. A slot A fallback record without Android symptoms makes "what is
+  on slot A?" the first question.** #35's answer to "did the lock screen
+  appear, did it offer to reset `userdata`" was "slot A is another Omarchy
+  install", which the notes on main contradicted and which means the phone
+  has no Android fallback and that slot A's images were written. *Check:*
+  whenever a fallback is reported, ask for the OS on slot A, when and how it
+  got there, and whether its initramfs has the storage guard; a Linux slot A
+  is a §3.1 event (L-135) even when nothing else went wrong. *From:* #35,
+  round 20.
 - **L-187. Check a plan's prose against the descriptor at the same head.**
   #38's `BRINGUP-M1.md` still said `SIMPLEFB_TRIG_CON` is unset while the
   same commit's `device.conf` set it. *Check:* `grep -n <KEY>

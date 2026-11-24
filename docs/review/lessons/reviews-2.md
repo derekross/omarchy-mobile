@@ -1,8 +1,82 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Review lessons: Reviews and merging (part 2 of 3)
+# Review lessons: Reviews and merging (part 2 of 4)
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-887. A "lands together with X" in our own comment is re-derived when
+  the PR is cut down.** Round 52 tied #204 to #203 because it seeded a
+  descriptor value; the cut-down hook reads nothing from #203, yet the
+  coupling would have held an inert, tested change behind a PR waiting on
+  decisions and a kernel. *Check:* after a rework, `git grep` the sibling PR's
+  head for each path and key the reworked PR still reads; if none, say the
+  coupling is gone and let the maintainer choose. Extends L-519 and L-250.
+  *From:* #204 with #203, round 61, 2026-11-18.
+- **L-852. When a fix adds the right lookup, grep for the wrong one it
+  replaces.** Kernel #202 added `gs_decon_pick_lynx_soc()` in probe and left
+  the broken `of_graph_get_remote_node()` test from the round before in
+  `gs_decon_get_dsim()`, dead, on a path every board runs. *Check:* `git grep
+  -n '<the compatible or symbol the fix keys on>' <head> -- <file>` and expect
+  one hit. Extends L-183. *From:* kernel #202, round 60, 2026-11-17.
+- **L-846. A review written but not posted is re-run against the head and the
+  base, and its draft says how long the contributor has waited.** Kernel
+  #264's file was held for two days; the head was unchanged, the base had
+  moved under it, and the gate and the vendor's values were re-checked before
+  reuse. *Check:* `git rev-parse` the head against the file's first line, `git
+  diff --stat <old base> <new base> -- <the PR's directories>`, rerun the
+  gate, then reuse. Extends L-195 and L-480. *From:* kernel #264, round 60,
+  2026-11-17.
+- **L-844. When the bottom of a stack is rebased, the PR above it is rebuilt
+  on the new bottom with `git merge-tree --merge-base=<old bottom head>` and
+  gated there, and the `--onto` command we hand over names the old bottom
+  head.** Kernel #263 carried #181's previous head after #181's rebase; GitHub
+  showed CONFLICTING with no CI, while the one commit applied cleanly on the
+  new bottom with the same patch id. *Check:* `git merge-base --is-ancestor
+  <bottom's current head> <top head>`; if it fails, find the old bottom head
+  in the top's history, rebuild, compare `git patch-id --stable`, gate the
+  rebuilt commit against the new bottom, and say whose conflict it is. Extends
+  L-291, L-355 and L-644. *From:* kernel #263 with #181, round 60, 2026-11-17.
+  (Extended 2026-11-24: the bottom can also move by a decision rather than a
+  rebase. #1025 sat on #1015's `646f4e4e`, and #1015's `5594d02b` then removed
+  the uninstall root helper and its polkit rule after the maintainer's
+  decision, which #1025 still shipped; when the ancestor check fails, `git
+  diff <bottom's current head> <head> --stat` lists the files the bottom
+  deleted, and the review names each. *From:* #1025 with #1015, round 67.)
+- **L-840. A PR that waits on our own phone run is given a merge slot ahead of
+  sibling PRs on the same board file, and the wait is counted in rebases.**
+  Kernel #181 had been ready for four days and was rebased again only because
+  another PR landed in `gs201-panther.dts`; two more were queued behind the
+  same file. *Check:* each round, for a PR whose only blocker is the
+  maintainer's run, list the open PRs that touch its files and put it first in
+  the round's merge order, or run the test before merging any of them. Extends
+  L-253 and L-719. *From:* kernel #181, round 60, 2026-11-17.
+- **L-839. A request left open on a PR at the top of an unmerged stack is
+  re-listed when the stack's bottom is reviewed.** Kernel #120's message fix
+  and our own 7 Pro capture sat for 20 days because #63 and #103 were the
+  active threads. *Check:* when reviewing a stack's bottom PR, `gh pr list
+  --search` for PRs whose head contains it and carry their open points into
+  the same round. Extends L-196 and L-688. *From:* kernel #120 with #63 and
+  #103, round 60, 2026-11-17.
+- **L-838. "The contributor replied" is checked for who replied and whether
+  the head moved.** On kernel #120 the new comment was a third party's data
+  from another phone on an unpublished tree; the author's two open points, 20
+  days old, were untouched. *Check:* `gh pr view --json comments` for each new
+  comment's `author.login` against the PR's author, the force-push events
+  since our last comment, and `git log -1 --format=%cI <head>`; list our open
+  requests against the head before reading the new comment as an answer.
+  Extends L-34 and L-688. *From:* kernel #120, round 60, 2026-11-17.
+- **L-837. When main fixed the sentence a PR also fixes, the rebase drops the
+  PR's hunk.** #98's WIFI-PLAN line and main's said the same thing in
+  different words. *Check:* read both sides of a docs conflict for meaning
+  before asking for "both"; name the side to keep. Extends L-184 and L-556.
+  *From:* #98, round 60, 2026-11-17.
+- **L-836. A one-line-per-device table row conflicts whenever two PRs change
+  different cells of it, and the review hands over the answer cell by cell.**
+  #98's Bluetooth cell and #751's Wi-Fi cell are the same line of DEVICES.md,
+  and the Wanted row repeats both. *Check:* split the row on ` | ` at the
+  base, main and the head, list which cells each side changed, and write
+  "main's row with this PR's cell N" in the comment; do the same for the
+  Wanted row (L-132). Extends L-184 and L-354. *From:* #98 with #751, round
+  60, 2026-11-17.
 - **L-828. A tested commit that a force-push took off the PR branch is fetched
   by its full id and diffed by tree.** #438's run was on a commit two pushes
   behind kernel #202's head; `gh api repos/<r>/commits/<short id>` gave the
@@ -206,7 +280,7 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   that device, other owners' included.** Kernel #90 was accepted on W4HO's
   promise that `allow_tx` is set only for `google-tg4c`; h4rkl's #74 sets
   `allow_tx=1` for every panel, and our #74 review missed it (C-18). *Check:*
-  `git grep -n '<option>'` across the open omarchy-mobile PR heads for
+  `git grep -n '<option>'` across the open omamobile PR heads for
   `packages/omamobile-device-<codename>`. Extends L-219. *From:* kernel #90
   with #74, round 25.
 - **L-275. Squash-merged stacks always conflict on the package `version` file,
@@ -229,8 +303,8 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   and §6's gates. Extends L-229; see C-16. *From:* kernel #98, round 25.
 - **L-265. A bare `#N` links to the repository the comment is in.** W4HO's
   tables on issue #28 named kernel PRs as `#119` and `#122`, which link to an
-  omarchy-mobile PR and issue. *Check:* write
-  `derekross/linux-omarchy-mobile#N` when a comment names the other
+  omamobile PR and issue. *Check:* write
+  `derekross/linux-omamobile#N` when a comment names the other
   repository's PRs, and read cross-repository tables in a thread with that in
   mind. *From:* issue #28, round 25.
 - **L-263. A squash title that names a package version must agree with the
@@ -339,40 +413,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   non-zuma boards fails lynx (gs201 IPOP). *Check:* merge each open board PR
   with each open binding PR on the same schema and run `CHECK_DTBS=y`.
   Extends L-104. *From:* kernel #43 with #13 and #37.
-- **L-127. Parallel reviewers suffix refs with their topic, and delete only
-  refs they created.** In round 10 several used `review/prN-r10`, and one
-  deleted (then restored) refs another was using. *Check:*
-  `review/prN-r<round>-<topic>`; clean up from a list recorded at fetch time.
-  Extends L-43. *From:* round 10.
-- **L-147. Before re-checking an earlier round's request, re-derive it from
-  what has landed since.** Round 11 asked #22 to gate `aoc-stage s2mpu` on a
-  `tzpc` restore, from the tool's header alone; raven's plans (#41) show
-  that SMC hung the SoC and that the `pd` stage made the read safe, so the
-  gate could only be passed by a known hang (C-6). *Check:* for every safety
-  gate we asked for, find the plan row it rests on and confirm the step it
-  requires passed there. Extends L-31. *From:* #22, round 12.
-- **L-148. `git merge-tree` exiting 1 can mean a missing ref, not a
-  conflict.** Another reviewer deleted their refs mid-review. *Check:* read
-  the message, and use commit ids for other reviewers' PRs. Extends L-127.
-  *From:* round 12.
-- **L-165. "No checks reported" can mean the PR conflicts with its base,**
-  since GitHub runs no `pull_request` workflow then. *From:* kernel #53,
-  round 14.
-- **L-166. When a PR is force-pushed after its phone test, diff the old head
-  against the new.** GraphQL's `HeadRefForcePushedEvent.beforeCommit` gives
-  the old id; REST's timeline omits it. *From:* kernel #54, round 14.
-- **L-167. Posting scripts split drafts by heading, never by line number,
-  and each posted file is checked first.** Round 13's line ranges put #49's
-  last bullet at the top of #50's comment. *From:* round 13 (found in 14).
-- **L-182. "My merged PR isn't on the branch" after a rebase merge is
-  checked by patch-id and the branch's push events, not by ancestor.** A
-  rebase merge lands the commit under a new id, so the PR's head is never an
-  ancestor and GitHub shows no merge commit; two merged commits came back as
-  new PRs (kernel #67, #68), and merging a resubmission onto the base gives
-  the base's own tree, which the gate can't tell from a real change.
-  *Check:* `git show <merged id> | git patch-id` against the resubmission;
-  `gh api repos/<r>/branches/<b>` for the head and `events` (or
-  `activity?ref=`) for pushes since the merge, all fast-forwards; `git
-  merge-base --is-ancestor <merge> <tip>`; and `git merge-tree --write-tree
-  base head` compared with `base^{tree}`. Extends L-39. *From:* kernel #67,
-  #68, round 20.

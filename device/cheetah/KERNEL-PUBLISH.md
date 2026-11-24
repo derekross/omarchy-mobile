@@ -10,7 +10,7 @@ below (the replay and force push in 5.4) are history; see
 [RELEASES](../../docs/RELEASES.md) §8.
 
 Earlier status (2026-10-19): **published.** `omamobile` is on GitHub
-(linux-omarchy-mobile, 146 commits on v7.3-rc6) and moves forward without
+(linux-omamobile, 146 commits on v7.3-rc6) and moves forward without
 rewriting published commits: `tools/publish-kernel` fast-forwards when the
 published tip's tree matches a local commit. Community kernel PRs are reviewed
 against it (felix's board file and UFS are merged). First patch sent
@@ -26,7 +26,7 @@ v7.3-rc6). Nothing here has run on the phone as this exact tree; see
 section 5 before publishing.
 
 **Kernel branches renamed (2026-10-13).** With the project's rename to
-Omarchy Mobile, every local kernel branch moved from `omandroid*` to
+Omamobile, every local kernel branch moved from `omandroid*` to
 `omamobile*` (`omandroid` -> `omamobile`, `omandroid-int` -> `omamobile-int`,
 `omandroid-<subsystem>` -> `omamobile-<subsystem>`, `publish/omandroid*` ->
 `publish/omamobile*`); the `wt-*` worktree directories and the
@@ -310,7 +310,7 @@ tools/publish-kernel                         # defaults: branch omamobile, tag v
 
 `tools/publish-kernel` replays the 123 commits on the squashed v7.3-rc6
 base in a throwaway worktree, checks the tree matches `omamobile`, and
-force-pushes `publish/omamobile` to `github.com/derekross/linux-omarchy-mobile`.
+force-pushes `publish/omamobile` to `github.com/derekross/linux-omamobile`.
 Pass: "Published omamobile (123 commits on v7.3-rc6)". Rollback: the
 previous published head is `publish/omamobile` before the run
 (`056bfe463`); `git push --force <remote> 056bfe463:refs/heads/omamobile`
@@ -409,5 +409,5 @@ Uptime 87 s, then 180 s on the same boot. `tools/phone-smoke`: every check
 ok, no failed units.
 
 **6.2 Publish.** After a passing boot: sign off, then open the six commits
-as a pull request against linux-omarchy-mobile's `omamobile`, so CI gates
+as a pull request against linux-omamobile's `omamobile`, so CI gates
 them like any other, and merge with a rebase.

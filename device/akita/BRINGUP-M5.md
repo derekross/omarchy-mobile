@@ -3,7 +3,7 @@
 
 **Status (2026-11-15):** **M5 is complete on the phone.** The CPUs scale to the 8a's caps (mid +33 %, big +84 % on one core), nine cores at full load for 3 minutes peaked at 71 C without throttling, and the GPU renders the session. It's "definitely better but not perfectly responsive": what's left is the display path, simpledrm copying every frame, which needs the display driver (the next milestone). See [Results](#results).
 
-The kernel side is the two board-file commits in linux-omarchy-mobile#264 (CPU DVFS with the 8a's caps, and the GPU), on `omamobile` at `317d87dc2`, which already has #158 (CPU DVFS, thermal) and #157's GPU commits. M4 is complete ([BRINGUP-M4](BRINGUP-M4.md)).
+The kernel side is linux-omamobile#264, merged on 2026-11-21: three commits on `omamobile` at `26867fc4e` (CPU DVFS with the 8a's caps; the GPU's levels moved into `zuma.dtsi` for both zuma boards; the 8a's GPU, to 723 MHz), on top of #158 (CPU DVFS, thermal) and #157's GPU commits. The device package's GPU ceiling is omamobile#832, merged the same day. M4 is complete ([BRINGUP-M4](BRINGUP-M4.md)).
 
 ## Goal
 
@@ -24,7 +24,7 @@ Slot A stays stock. Only slot B's boot images and `userdata` are written.
 - **Kernel, merged on `omamobile`:**
   - **#158:** `zuma.dtsi` has the three CPU clusters' level tables (`cpucl0_opp`, `cpucl1_opp`, `cpucl2_opp`), with each level's power from stock's energy model, the ACPM TMU and the CPU thermal zones. **The tables are only used where a board file points its CPUs at them,** and today only `zuma-husky.dts` does. The reason is the levels marked `turbo-mode`: they're the 8 Pro's battery-limiter (BCL) caps, and "a board whose BCL caps are lower needs tables of its own" (`zuma.dtsi`). The maintainer raised this for the 8a on #158.
   - **#157:** CMU_G3D, the GPU node, zuma's `clk-acpm` variant with the paired "gpu" clock, and a GPU thermal zone. `zuma-husky.dts` enables `&cmu_g3d` and `&gpu` and gives it a 13-level table up to 890 MHz.
-- **omarchy-mobile:** husky's device package lets the ACPM GPU clock reach stock's 890 MHz (`omamobile-husky-clk-acpm.conf`).
+- **omamobile:** husky's device package lets the ACPM GPU clock reach stock's 890 MHz (`omamobile-husky-clk-acpm.conf`).
 - **husky's lessons:**
   - software video decode took the SoC to 86 C, so the 8 Pro's test phone runs lowered trips and CPU caps as a stopgap (ROADMAP, Thermal row);
   - panthor logs `no regulator (mali)` for its levels, not yet explained.
@@ -201,5 +201,7 @@ The kernel: `7.3.0-rc6-omamobile-push1-g9cf0719104a1`, `omamobile` at `26867fc4e
 | # | Test | Seen | Meaning |
 | --- | --- | --- | --- |
 | 62 | The GPU's top | `clk_acpm`'s `zuma_gpu_max_khz` reads 723000. devfreq: `simple_ondemand`, 150 to 723 MHz, ten levels (150, 302, 337, 376, 419, 467, 521, 580, 649, 723). During 15 s of swiping it went to 723 MHz (1.2 s there in total) and no higher, with 46 transitions, then back to 150 MHz; the zones read 44 to 46 C afterwards. The CPU tops are unchanged (1425, 1418, 2147 MHz). `tools/phone-smoke`: every required row ok, GPU ok, no failed units, 3 known error lines and 0 new | The 8a's GPU stops at its highest BCL cap, held by both the device tree and the package |
+
+Test 62's `tools/phone-smoke` read "hottest zone 65 °C" twelve seconds after boot. On a later boot (2026-11-22, `7.3.0-rc6-omamobile-push1-g82e3cf0b7f74`, `omamobile` at `82e3cf0b7` with nothing added, on slot B by `modules-push`, then `flash`), every zone was read from the first seconds: big/mid/little/gpu were 50/49/49/48 °C at 8 s, **62**/61/59/51 °C at 13 s, 54/55/53/53 °C at 19 s and 50/50/49/49 °C at 24 s, with the battery at 33 °C throughout. So the hottest zone at boot is `big-thermal`, peaking while the session starts and every core is busy, well under its 80 °C trip; test 62's 65 °C was almost certainly that zone in the same startup burst.
 
 Slot B: 2 tries left.

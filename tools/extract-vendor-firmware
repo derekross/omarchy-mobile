@@ -4,7 +4,7 @@
 # own image. Pixel factory images support cheetah, panther, raven, tegu and
 # husky; dipper takes vendor, modem and Bluetooth partition roots (-d).
 #
-# Proprietary firmware is not ours to redistribute, so Omarchy Mobile never
+# Proprietary firmware is not ours to redistribute, so Omamobile never
 # ships it. This stages files from the user's own image and renames them to
 # what the mainline drivers request:
 #

@@ -5,8 +5,8 @@
 # the owner how to finish an unfinished setup at the next three logins.
 # The daemon talks only to the account first boot made.
 [Unit]
-Description=Omarchy Mobile install link: the setup notice
-Documentation=https://github.com/derekross/omarchy-mobile/blob/main/docs/INSTALL-LINK-PLAN.md
+Description=Omamobile install link: the setup notice
+Documentation=https://github.com/derekross/omamobile/blob/main/docs/INSTALL-LINK-PLAN.md
 PartOf=graphical-session.target
 After=graphical-session.target
 ConditionPathExists=|/etc/omamobile/install-link

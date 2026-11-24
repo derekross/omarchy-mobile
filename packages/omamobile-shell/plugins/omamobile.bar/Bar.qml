@@ -56,7 +56,15 @@ Item {
   }
 
   readonly property string clockFormat: String(setting("clockFormat", "HH:mm"))
-  readonly property bool showBatteryPercent: setting("showBatteryPercent", true) !== false
+  // shell.json bar.batteryStyle and bar.statusIcons (StatusModel.batteryStyle
+  // and iconShown). The shell hands a new barConfig on
+  // `omarchy-shell shell reloadConfig`.
+  readonly property string batteryStyle: StatusModel.batteryStyle(barConfig)
+  readonly property bool showBluetooth: StatusModel.iconShown(barConfig, "bluetooth")
+  readonly property bool showWifi: StatusModel.iconShown(barConfig, "wifi")
+  readonly property bool showCell: StatusModel.iconShown(barConfig, "cell")
+  readonly property bool showDnd: StatusModel.iconShown(barConfig, "dnd")
+  readonly property bool showUnread: StatusModel.iconShown(barConfig, "unread")
   readonly property string quickSettingsId: String(setting("quickSettings", "omamobile.quicksettings"))
 
   // A full bar may read the notification service's do-not-disturb state
@@ -86,7 +94,8 @@ Item {
 
   // The mobile network, from ModemManager's API through
   // bin/omamobile-cell-watch (omamobile-mmd serves it on the Pixel 7 Pro).
-  // No modem, no icon.
+  // No modem, no icon. With the icon hidden (bar.statusIcons.cell false)
+  // the watcher is not run.
   property var cell: null
   readonly property string cellGlyph: StatusModel.cellGlyph(cell)
   readonly property string cellText: StatusModel.cellText(cell)
@@ -94,16 +103,19 @@ Item {
   Process {
     id: cellWatch
     command: ["omamobile-cell-watch"]
-    running: true
+    // Driven from showCell below, not bound: the restart timer sets
+    // running, which would break a binding.
     stdout: SplitParser {
       onRead: function(line) {
         var c = StatusModel.parseCell(line)
         if (c) root.cell = c
       }
     }
-    onExited: { root.cell = null; cellRestart.restart() }
+    onExited: { root.cell = null; if (root.showCell) cellRestart.restart() }
   }
-  Timer { id: cellRestart; interval: 5000; onTriggered: cellWatch.running = true }
+  Timer { id: cellRestart; interval: 5000; onTriggered: if (root.showCell) cellWatch.running = true }
+  onShowCellChanged: { if (!showCell) cellRestart.stop(); cellWatch.running = showCell }
+  Component.onCompleted: cellWatch.running = showCell
 
   // A call in progress: a chip with its time beside the clock. omatel's
   // agent through bin/omamobile-call-watch --observe (the call card runs
@@ -224,8 +236,6 @@ Item {
   readonly property bool hasBattery: !!battery && battery.isPresent === true
   readonly property int batteryPercent: hasBattery ? Math.round(battery.percentage * 100) : -1
   readonly property bool charging: hasBattery && battery.state === UPowerDeviceState.Charging
-  readonly property string batteryIcon: StatusModel.batteryIcon(batteryPercent, charging,
-    hasBattery && battery.state === UPowerDeviceState.FullyCharged)
 
   // ---------------------------------------------------------------- host API
 
@@ -355,7 +365,7 @@ Item {
         // opens the shade.
         Rectangle {
           objectName: "unreadNotifications"
-          visible: root.unread > 0
+          visible: root.showUnread && root.unread > 0
           anchors.left: callChipPill.visible ? callChipPill.right : clockText.right
           anchors.leftMargin: Style.spacing.lg
           anchors.verticalCenter: parent.verticalCenter
@@ -383,17 +393,17 @@ Item {
           spacing: Style.spacing.xl
 
           StatusGlyph {
-            visible: root.doNotDisturb
+            visible: root.showDnd && root.doNotDisturb
             text: "󰂛"
           }
 
           StatusGlyph {
-            visible: !!root.btAdapter && root.btAdapter.enabled
+            visible: root.showBluetooth && !!root.btAdapter && root.btAdapter.enabled
             text: root.bluetoothConnected ? "󰂱" : "󰂯"
           }
 
           Row {
-            visible: root.cellGlyph !== ""
+            visible: root.showCell && root.cellGlyph !== ""
             spacing: Style.spacing.xs
             anchors.verticalCenter: parent.verticalCenter
             opacity: root.cell && root.cell.state === "searching" ? 0.55 : 1
@@ -412,30 +422,27 @@ Item {
           }
 
           StatusGlyph {
-            visible: root.networkIcon !== ""
+            visible: root.showWifi && root.networkIcon !== ""
             text: root.networkIcon
             opacity: root.networkKind === "off" || root.networkKind === "disconnected" ? 0.55 : 1
           }
 
-          Row {
+          // The charging bolt shows in every style (BatteryIndicator).
+          BatteryIndicator {
+            objectName: "battery"
             visible: root.hasBattery
-            spacing: Style.spacing.xs
             anchors.verticalCenter: parent.verticalCenter
-
-            StatusGlyph {
-              text: root.batteryIcon
-              color: root.batteryPercent >= 0 && root.batteryPercent <= 10 && !root.charging ? root.urgent : root.foreground
-            }
-
-            Text {
-              visible: root.showBatteryPercent
-              anchors.verticalCenter: parent.verticalCenter
-              textFormat: Text.PlainText
-              text: root.batteryPercent + "%"
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-            }
+            style: root.batteryStyle
+            percent: root.batteryPercent
+            charging: root.charging
+            full: root.hasBattery && root.battery.state === UPowerDeviceState.FullyCharged
+            foreground: root.foreground
+            background: root.background
+            urgent: root.urgent
+            fontFamily: root.fontFamily
+            iconPx: Style.font.iconLarge
+            textPx: Style.font.body
+            barSize: root.barSize
           }
         }
       }
