@@ -35,6 +35,8 @@ cleanup() { gpgconf --homedir "$GNUPGHOME" --kill gpg-agent 2>/dev/null || true;
 trap cleanup EXIT
 export GIT_AUTHOR_NAME=Test GIT_AUTHOR_EMAIL=t@invalid GIT_COMMITTER_NAME=Test GIT_COMMITTER_EMAIL=t@invalid
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+# The maintainer's own build host and upload account must not leak in
+unset BUILD_HOST BUILD_HOST_REPO OMAMOBILE_PKGS_HOST
 
 R=$t/repo
 mkdir -p "$R/tools/lib" "$R/device/testdev" "$R/packages/omamobile-keyring" "$R/rootfs" "$R/tests" "$R/out/repo/aarch64"
@@ -703,7 +705,7 @@ fi
 mkdir -p "$t/stub"
 for c in ssh rsync curl; do printf '#!/bin/sh\necho "%s $*" >> %s/stub.log\nexit 1\n' "$c" "$t" > "$t/stub/$c"; done
 chmod +x "$t/stub/"*
-printf 'verify_done=verified\nbundle=%s\n' "$B" >> "$st"
+printf 'verify_done=verified\nbundle=%s\nrootfs=out/%s\n' "$B" "$rootname" >> "$st"
 # The identifiers stage's bundle check on that layout
 run check-bundle "$R/$B" || fail "a bundle laid out as make-bundle builds it passes the bundle check"
 echo x > "$R/$B/tools/extra-tool"
@@ -727,6 +729,54 @@ grep -q 'dry run, nothing uploaded' "$t/log" || fail "release-upload finished it
 grep -q "tools/release-upload --full --latest $B" "$t/log" || fail "prints the real upload for the maintainer"
 grep -q 'upload --done' "$t/log" || fail "says how to record the upload"
 [[ ! -s $t/stub.log ]] || fail "the dry run called a network tool: $(cat "$t/stub.log")"
+grep -cx "    tools/release-upload --full --latest $B" "$t/log" >/dev/null || fail "without a build host, the upload is printed to run here"
+if grep -c 'ssh -t\|build host' "$t/log" >/dev/null; then fail "without a build host, no build-host route is printed"; fi
+pass "without a build host, the upload stage prints the upload to run here"
+
+# --- upload and promote through the build host (BUILD_HOST), whose omapub
+# alone may write the server: printed, never run ---
+H=omapub@build.invalid
+echo "BUILD_HOST=$H" > "$R/omamobile.local.conf"
+if urun --version "$V" upload; then fail "the upload stage stops for the maintainer with a build host"; fi
+rr=Projects/omarchy-mobile
+r=out/bundle/$rootname
+grep -cxF "    rsync -a --partial -- $B $B.tar $B.tar.sha256 $B.tar.sha256.sig $r $r.sha256 ${r%.img.zst}.MANIFEST $H:$rr/out/bundle/" "$t/log" >/dev/null ||
+  fail "prints the rsync of the bundle, its .tar's three files and the root image's three to the build host's out/bundle/"
+grep -cxF "    ssh $H 'git -C ~/$rr pull --ff-only origin main'" "$t/log" >/dev/null || fail "prints the build host's checkout update"
+grep -cxF "    ssh -t $H 'cd ~/$rr && OMAMOBILE_PKGS_HOST=omapub@nostr01.derekross.me tools/release-upload --dry-run $B'" "$t/log" >/dev/null ||
+  fail "prints release-upload's dry run on the build host, as omapub"
+grep -cxF "    ssh -t $H 'cd ~/$rr && OMAMOBILE_PKGS_HOST=omapub@nostr01.derekross.me tools/release-upload --full --latest $B'" "$t/log" >/dev/null ||
+  fail "prints the real upload on the build host, as omapub"
+grep -cF "upload --done" "$t/log" >/dev/null || fail "then the --done check here"
+if grep -cx "    tools/release-upload --full --latest $B" "$t/log" >/dev/null; then fail "with a build host, the upload is not printed to run here"; fi
+[[ ! -s $t/stub.log ]] || fail "the build-host route called a network tool: $(cat "$t/stub.log")"
+printf 'upload_done=x\n' >> "$st"
+pidx=$(sed -n 's/^repo_index=//p' "$st" | tail -n 1)
+if urun --version "$V" promote; then fail "the promote stage stops for the maintainer"; fi
+grep -cxF "    ssh -t $H 'cd ~/$rr && OMAMOBILE_PKGS_HOST=omapub@nostr01.derekross.me tools/repo-publish --dry-run stable --expect-index $pidx'" "$t/log" >/dev/null ||
+  fail "prints the promotion's dry run on the build host"
+grep -cxF "    ssh -t $H 'cd ~/$rr && OMAMOBILE_PKGS_HOST=omapub@nostr01.derekross.me tools/repo-publish stable --expect-index $pidx'" "$t/log" >/dev/null ||
+  fail "prints the promotion on the build host with a terminal for its question"
+if grep -c -- '--yes' "$t/log" >/dev/null; then fail "a printed promotion never answers its question with --yes"; fi
+grep -cF "promote --done" "$t/log" >/dev/null || fail "then the --done check here"
+printf 'BUILD_HOST=%s\nBUILD_HOST_REPO=/srv/omamobile\n' "$H" > "$R/omamobile.local.conf"
+if urun --version "$V" promote; then fail "the promote stage stops with a BUILD_HOST_REPO"; fi
+grep -cF "ssh -t $H 'cd /srv/omamobile && " "$t/log" >/dev/null || fail "uses BUILD_HOST_REPO for the checkout"
+for bad in "build.invalid" "omapub@ms01;id" "omapub@ms01 x" "-oProxyCommand=x@y" "-oX@y" "omapub@-y"; do
+  printf 'BUILD_HOST=%q\n' "$bad" > "$R/omamobile.local.conf"
+  if urun --version "$V" promote; then fail "a BUILD_HOST of '$bad' is refused"; fi
+  grep -c 'is not USER@HOST' "$t/log" >/dev/null || fail "says why '$bad' is refused"
+  if grep -c 'repo-publish' "$t/log" >/dev/null; then fail "nothing is printed for '$bad'"; fi
+done
+printf 'BUILD_HOST=%s\nBUILD_HOST_REPO=%q\n' "$H" '~/x;id' > "$R/omamobile.local.conf"
+if urun --version "$V" upload; then fail "a BUILD_HOST_REPO that is not a plain path is refused"; fi
+grep -c 'is not a plain path' "$t/log" >/dev/null || fail "says why the BUILD_HOST_REPO is refused"
+rm "$R/omamobile.local.conf"
+if urun --version "$V" promote; then fail "the promote stage stops without a build host"; fi
+grep -cx "    tools/repo-publish stable --expect-index $pidx" "$t/log" >/dev/null || fail "without a build host, the promotion is printed to run here"
+if grep -c 'ssh' "$t/log" >/dev/null; then fail "without a build host, no ssh is printed for the promotion"; fi
+sed -i '/^upload_done=/d' "$st"
+pass "with a BUILD_HOST, upload and promote print the build-host route (the seven files, ssh -t, never --yes); a bad host is refused"
 echo tampered >> "$R/$B/install"
 if urun --version "$V" upload; then fail "a bundle changed after signing is refused"; fi
 grep -q "release-upload --dry-run refuses" "$t/log" || fail "says release-upload refused the bundle"
