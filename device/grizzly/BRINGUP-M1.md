@@ -2131,7 +2131,38 @@ ABL handoff bounds and saved D1 slot capacities passed. Manifest SHA-256
 `5f2422cb1856f0bba2c72c7a205eed89d8811cda811142422541f5636e1e4446`.
 Archive SHA-256
 `6e55eeef5052bd8c475be9d50adab6b793ef4a01a2bb2db1340eaae15c5a34f0`.
-v42 awaits its first hardware boot.
+
+#### Attended v42 slot B trial
+
+On 2026-11-25 the owner approved one v42 boot with the verified
+nine-partition NV snapshot. The Mac rechecked the snapshot's hashes,
+sizes and modes. All five slot B writes passed and the `vendor_boot_b`
+readback matched all 8,192 supplied bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 0.137805 | Prep registration | `on=1 stay_on=0` after an owned prep seed |
+| 0.180536 | Prep provider OFF callback | Core client vote then read `0` |
+| 0.180725–0.181016 | Prep OFF samples | HC `0x10` to `0x13`, PSM1 `0x0` to `0x3`, PHY `0x11` |
+| 2.154182 | Virtual-domain attachments | Prep and core both logically OFF |
+| 2.154463–2.154820 | Prep ON samples | HC `0x13` to `0x12`, PSM1 `0x3` to `0x2`, PHY `0x11` |
+| 2.155012–2.155384 | Core ON samples | HC `0x12` to `0x10`, PHY `0x11` to `0x10` |
+| 10.477439 | CPM supplier sync | Still pending due to `3c2d0000.ufs` |
+| 21.481400 | Late sample | HC and PHY both `0x10` |
+
+The packed DT maps the UFS `prep` and `core` phandles to CPM
+onecell indices `6` and `7`. The named attachments create runtime-PM
+devices and leave both domains OFF until the explicit resumes, as the
+live log confirmed. Prep OFF, prep ON and core ON each returned `0`.
+The prep-only latch opt-out reproduced the physical PSM1 and PHY
+transitions measured on stock D1 with CPM supplier sync still pending.
+The UFS host remained disabled. This fixture establishes PHY power
+readiness. UIC link startup and LUN discovery still need hardware tests.
+
+Ramoops and `SYSTEM_LAST_KMSG` matched the diagnostic records.
+Fastboot returned 133 seconds after the B boot request. Stock D1
+completed boot on A with enforcing verity and the original factory
+VBMeta digest.
 
 ## Staging and return sequence used for D1
 
