@@ -20,8 +20,10 @@
 # mkdtboimg with the descriptor's board id and revision), the overlays are
 # compiled with the kernel build's dtc, and the initramfs is KERNEL_OUT's,
 # which must be a release one (`bin/omamobile initramfs --release`): no SSH
-# keys of the builder, no dropbear host keys, and the descriptor's storage
-# guard allowlist packed in it. A device whose initramfs carries kernel
+# keys of the builder, no dropbear host keys, no development boot policy
+# (no NFS root or root mode; USB recovery yes), and every packed
+# etc/omamobile-* setting matching what bin/omamobile initramfs-config
+# writes for this device. A device whose initramfs carries kernel
 # modules (INITRAMFS_MODULES) is refused: its initramfs belongs to one
 # kernel release, not to the device package.
 #
@@ -84,6 +86,21 @@ bu_load_descriptor "$conf"
 [[ $DEV_CODENAME == "$DEVICE" ]] || die "$conf: CODENAME=$DEV_CODENAME, expected $DEVICE"
 [[ -z ${DEV_INITRAMFS_MODULES:-} ]] \
   || die "$DEVICE's initramfs carries kernel modules (INITRAMFS_MODULES): it belongs to one kernel release, not to the device package"
+# Refusals bin/omamobile initramfs --release makes beyond initramfs-config
+[[ -z ${DEV_INITRAMFS_ROOT_MODE+x} ]] \
+  || die "$conf: INITRAMFS_ROOT_MODE is for local bring-up only, not --release"
+[[ ${DEV_INITRAMFS_USB_RECOVERY:-yes} != no ]] \
+  || die "$conf: INITRAMFS_USB_RECOVERY=no is for local bring-up only, not --release"
+[[ -z ${DEV_INITRAMFS_I2C_TOOLS:-} || $DEV_INITRAMFS_I2C_TOOLS == 1 ]] \
+  || die "$conf: INITRAMFS_I2C_TOOLS must be 1 or absent"
+[[ -x $ROOT/bin/omamobile ]] || die "no $ROOT/bin/omamobile"
+want_etc=$(mktemp -d)
+trap 'rm -rf "$want_etc"' EXIT
+if ! cfg_err=$(DEVICE=$DEVICE "$ROOT/bin/omamobile" initramfs-config "$want_etc" 2>&1); then
+  cfg_err=$(printf '%s' "$cfg_err" | sed $'s/\033\\[[0-9;]*m//g')
+  die "$conf: bin/omamobile initramfs-config failed: $cfg_err"
+fi
+
 dest=${1:-$ROOT/packages/$DEV_PACKAGE/boot-files}
 
 dtc=${DTC:-$KERNEL_OUT/scripts/dtc/dtc}
@@ -110,10 +127,92 @@ fi
 initramfs=$KERNEL_OUT/initramfs.cpio.lz4
 [[ -s $initramfs ]] || die "no $initramfs (DEVICE=$DEVICE KERNEL_OUT=$KERNEL_OUT bin/omamobile initramfs --release)"
 list=$(lz4 -dc "$initramfs" | cpio -it --quiet 2>/dev/null | sed 's|^\./||') || die "$initramfs is not an lz4 cpio"
+bad_path=$(awk '/^\// || /\/\// || /(^|\/)\.\// || /\/\.$/ || /(^|\/)\.\.(\/|$)/ { print; exit }' <<<"$list")
+[[ -z $bad_path ]] || die "$initramfs carries non-canonical member path '$bad_path'"
+vlist=$(lz4 -dc "$initramfs" | LC_ALL=C cpio -itvn --quiet 2>/dev/null) || die "$initramfs is not an lz4 cpio"
 grep -cx 'root/\.ssh/authorized_keys' <<<"$list" >/dev/null && die "$initramfs carries the builder's SSH keys: build it with --release"
 grep -cE '^etc/dropbear/dropbear_.*_host_key$' <<<"$list" >/dev/null && die "$initramfs carries dropbear host keys: build it with --release"
-rw=$(lz4 -dc "$initramfs" | cpio -i --quiet --to-stdout etc/omamobile-ufs-rw ./etc/omamobile-ufs-rw 2>/dev/null || true)
-[[ $rw == "$(read -ra a <<<"$DEV_UFS_RW"; echo "${a[*]}")" ]] || die "$initramfs packs allowlist '$rw', not $DEVICE's UFS_RW (built for another device?)"
+# Development boot policies: only what --release packs passes at these paths
+grep -cx 'etc/omamobile-nfsroot' <<<"$list" >/dev/null && die "$initramfs carries etc/omamobile-nfsroot (OMAMOBILE_NFSROOT, bring-up only): build it with --release"
+grep -cx 'etc/omamobile-root-mode' <<<"$list" >/dev/null && die "$initramfs carries a root mode (INITRAMFS_ROOT_MODE, bring-up only): build it with --release"
+usbs=$(grep -cx 'etc/omamobile-usb-recovery' <<<"$list") || true
+usb=yes
+((usbs == 1)) && { usb=$(lz4 -dc "$initramfs" | cpio -i --quiet --to-stdout etc/omamobile-usb-recovery ./etc/omamobile-usb-recovery) || die "can't read etc/omamobile-usb-recovery from $initramfs"; }
+((usbs < 2)) && [[ $usb == yes ]] || die "$initramfs carries an etc/omamobile-usb-recovery that is not one file saying yes (INITRAMFS_USB_RECOVERY, bring-up only): build it with --release"
+
+# Compare every packed etc/omamobile-* setting against bin/omamobile initramfs-config.
+fmt_setting() {
+  local s=$1
+  s=${s%$'\n'}
+  s=${s//$'\n'/; }
+  printf '%s' "$s"
+}
+
+fmt_raw_desc() {
+  local LC_ALL=C size=$1 raw=$2 empty_label=$3
+  if ((size == 0)); then
+    printf '%s' "$empty_label"
+  elif ((size != ${#raw})); then
+    printf 'binary data (%s bytes)' "$size"
+  elif [[ $raw == $'\n' ]]; then
+    printf 'blank line'
+  elif [[ $raw != *$'\n' ]]; then
+    printf '%s (no trailing newline)' "$(fmt_setting "$raw")"
+  else
+    fmt_setting "$raw"
+  fi
+}
+
+cpio_reg_size() {
+  awk -v p="$1" '
+    # $2 == 1 refuses hard links whose data newc stores on another entry
+    NF == 9 && ($9 == p || $9 == "./" p) && $1 ~ /^-/ && $2 == 1 && $5 ~ /^[0-9]+$/ { print $5; n++ }
+    END { exit n != 1 }
+  ' <<<"$vlist"
+}
+
+bad_setting() {
+  die "$initramfs $1; expected '$2' for $DEVICE (built for another device or stale?)"
+}
+
+check_setting() {
+  local LC_ALL=C path=$1 want_file=$2 count size raw want_raw="" got_desc want_desc
+  if [[ -e $want_file ]]; then
+    want_raw=$(cat "$want_file" && printf x)
+    want_raw=${want_raw%x}
+    if [[ -z $want_raw ]]; then want_desc="empty file"; else want_desc=$(fmt_setting "$want_raw"); fi
+  else
+    want_desc=absent
+  fi
+  count=$(grep -cxF -- "$path" <<<"$list") || true
+  if [[ ! -e $want_file ]]; then
+    ((count == 0)) && return 0
+  elif ((count == 0)); then
+    bad_setting "has no $path" "$want_desc"
+  fi
+  ((count <= 1)) || bad_setting "lists $path $count times" "$want_desc"
+  size=$(cpio_reg_size "$path") || bad_setting "packs $path (not a regular file)" "$want_desc"
+  raw=$(lz4 -dc "$initramfs" | cpio -i --quiet --to-stdout "$path" "./$path" && printf x) \
+    || die "can't read $path from $initramfs"
+  raw=${raw%x}
+  if [[ ! -e $want_file ]]; then
+    got_desc=$(fmt_raw_desc "$size" "$raw" "present (empty file)")
+    bad_setting "packs $path '$got_desc'" "$want_desc"
+  fi
+  ((size == ${#raw})) && [[ $raw == "$want_raw" ]] && return 0
+  got_desc=$(fmt_raw_desc "$size" "$raw" "empty file")
+  bad_setting "packs $path '$got_desc'" "$want_desc"
+}
+
+checked=0
+while IFS= read -r path; do
+  check_setting "$path" "$want_etc/${path#etc/}"
+  checked=$((checked + 1))
+done < <({
+  find "$want_etc" -maxdepth 1 -type f -name 'omamobile-*' -printf 'etc/%f\n'
+  grep -E '^etc/omamobile-' <<<"$list" | grep -vxE 'etc/omamobile-(nfsroot|root-mode)' || true
+} | LC_ALL=C sort -u)
+((checked > 0)) || die "no etc/omamobile-* settings checked"
 # The initramfs must come from this tree: its init is INITRAMFS_INIT's, so
 # SOURCES (this tree at staging time) also says what built it
 if [[ $DEV_INITRAMFS_INIT == /* ]]; then init_src=$ROOT$DEV_INITRAMFS_INIT; else init_src=$ROOT/device/$DEVICE/$DEV_INITRAMFS_INIT; fi

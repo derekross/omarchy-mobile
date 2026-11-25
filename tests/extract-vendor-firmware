@@ -8,21 +8,24 @@
 # reused output directory keeps no firmware or sensor registry file from
 # an earlier run (another device's, or one the new image doesn't have),
 # and leaves the rest of the directory alone; a husky run drops an earlier
-# registry; a successful run's checksum list names exactly the mapped
+# registry; a panther run adds the video codec's firmware and reports its
+# version, and refuses one that doesn't start with an ARM vector table; a successful run's checksum list names exactly the mapped
 # files; a failed run (a missing file or registry, debugfs reporting a
 # short write, also under a file size limit, a failed sanity check, a
 # missing camera APEX) leaves the previous outputs and the -c file byte
 # for byte, so an older file can't pass for a missing one; an image whose
 # build.prop is missing, empty or not copied is refused, as it can't be
-# checked, and staged with -f; a -c that is a directory or inside the
-# outputs is refused; an -o that resolves to / is refused before anything
-# is written; and a move that fails while publishing puts the previous
-# outputs back. With mkfs.ext4 and debugfs on the host, the same on a real
-# ext4 image whose registry belongs to root, work and output paths with a
-# space and a double quote in them, a copy that a file size limit cuts
-# short, and an image without build.prop. EVF=path
-# runs another copy of the tool (a negative control), so every check runs
-# and the failures are counted rather than stopping at the first.
+# checked, with debugfs's reason when it gave one, and staged with -f; a
+# -c that is a directory or inside the outputs is refused; an -o that
+# resolves to / is refused before anything is written; and a move that
+# fails while publishing puts the previous outputs back. With mkfs.ext4
+# and debugfs on the host, the same on a real ext4 image whose registry
+# belongs to root, work and output paths with a space and a double quote
+# in them, a copy that a file size limit cuts short, and images without
+# build.prop or with a damaged superblock, whose refusals end with
+# debugfs's own last line. EVF=path runs another copy of the tool (a
+# negative control), so every check runs and the failures are counted
+# rather than stopping at the first.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 repo=$PWD
@@ -52,7 +55,7 @@ if [[ -f $FAKE_VENDOR/.fail-dump && $src == "/$(cat "$FAKE_VENDOR/.fail-dump")" 
    [[ $cmd == rdump && -f $FAKE_VENDOR/.fail-rdump ]]; then
   if [[ $cmd == dump ]]; then
     echo partial > "$out"
-    echo "dump_file: File too large while writing file \"$src\"" >&2
+    echo "dump: No space left on device while writing file" >&2
   else   # after many real notes, an error whose file name holds their words
     mkdir -p "$out/${src##*/}" && echo partial > "$out/${src##*/}/part.json"
     for n in $(seq 800); do
@@ -67,7 +70,7 @@ case $cmd in
   rdump) [[ -d $FAKE_VENDOR$src ]] && cp -r "$FAKE_VENDOR$src" "$out/" &&
          echo "dump_file: Operation not permitted while changing ownership of $out/${src##*/}/x" >&2 &&
          echo "rdump: Operation not permitted while changing ownership of $out/${src##*/}" >&2 ;;
-esac || echo "$cmd: File not found by ext2_lookup while looking up $src" >&2
+esac || echo "$src: File not found by ext2_lookup " >&2   # with its trailing blank
 exit 0
 EOF
 cat > "$t/bin/fsck.erofs" <<'EOF'
@@ -119,10 +122,37 @@ make_vendor() {
   echo '3,1,3' > "$v/firmware/fast_switch4.txt"
   echo "{\"accel\": \"$g\"}" > "$v/etc/sensors/registry/fictional_accel.json"
   echo "apex $g" > "$v/apex/com.google.pixel.camera.hal.apex"
+  mfc_fw "$g" > "$v/firmware/mfc_fw.bin"
+}
+# A 4 KiB stand-in MFC firmware: eight ARM branches (0xea top bytes), the
+# generation padded with spaces, and the version word 0x44250901 last
+mfc_fw() {
+  local i
+  for i in 1 2 3 4 5 6 7 8; do printf '\001\000\000\352'; done
+  printf '%-4060s' "$1"
+  printf '\001\011\045\104'
 }
 make_vendor "$t/v1" cheetah gen1
 make_vendor "$t/v2" cheetah gen2
 make_vendor "$t/husky" husky gen3
+make_vendor "$t/panther" panther gen4
+
+# Dipper reads local backup copies and keeps the split modem firmware beside
+# each renamed MDT header.
+mkdir -p "$t/dipper-source/vendor/firmware" "$t/dipper-source/vendor" \
+  "$t/dipper-source/modem/image" "$t/dipper-source/bluetooth/image"
+echo 'ro.product.vendor.device=dipper' > "$t/dipper-source/vendor/build.prop"
+for f in a630_zap ipa_fws; do
+  echo "$f metadata" > "$t/dipper-source/vendor/firmware/$f.mdt"
+  echo "$f segment" > "$t/dipper-source/vendor/firmware/$f.b00"
+done
+for f in adsp cdsp modem venus; do
+  echo "$f metadata" > "$t/dipper-source/modem/image/$f.mdt"
+  echo "$f segment" > "$t/dipper-source/modem/image/$f.b00"
+done
+echo mba > "$t/dipper-source/modem/image/mba.mbn"
+echo crnv > "$t/dipper-source/bluetooth/image/crnv21.bin"
+echo crbtfw > "$t/dipper-source/bluetooth/image/crbtfw21.tlv"
 
 FW=usr/lib/firmware/updates
 REG=usr/share/omamobile/sensors/registry
@@ -141,6 +171,21 @@ cs40l26-dvl.bin
 cs40l26-svc.bin
 cs40l26.bin
 cs40l26.wmfw"
+DIPPER_FILES="cdsp.b00
+cdsp.mdt
+qca/Xiaomi/dipper/crnv21.bin
+qca/crbtfw21.tlv
+qcom/sdm845/Xiaomi/dipper/a630_zap.b00
+qcom/sdm845/Xiaomi/dipper/a630_zap.mbn
+qcom/sdm845/Xiaomi/dipper/adsp.b00
+qcom/sdm845/Xiaomi/dipper/adsp.mbn
+qcom/sdm845/Xiaomi/dipper/ipa_fws.b00
+qcom/sdm845/Xiaomi/dipper/ipa_fws.mbn
+qcom/sdm845/Xiaomi/dipper/mba.mbn
+qcom/sdm845/Xiaomi/dipper/modem.b00
+qcom/sdm845/Xiaomi/dipper/modem.mbn
+qcom/venus-5.2/venus.b00
+qcom/venus-5.2/venus.mbn"
 
 # run VENDOR IMG ARGS...: the tool with the stand-ins first on PATH
 run() {
@@ -173,6 +218,12 @@ refuses() { # NAME EXPECTED-ERROR VENDOR IMG ARGS...
   [[ $(snap "$o") == "$before" ]] || { diff <(echo "$before") <(snap "$o") || true; fail "$name: the previous outputs stay as they were"; return; }
   pass "$name: refused, the previous outputs untouched"
 }
+# says NAME LINE: the last run's error line is LINE, byte for byte
+says() {
+  local got
+  got=$(sed -n '/^error: /p' "$t/log")
+  if [[ $got == "$2" ]]; then pass "$1: says $2"; else printf '%s\n' "$got"; fail "$1: says $2"; fi
+}
 
 # --- A fresh run ---------------------------------------------------------------
 o=$t/fresh n=$failed
@@ -186,6 +237,42 @@ if run "$t/v1" "$t/ext4.img" -o "$o"; then
 else
   cat "$t/log"; fail "fresh: a first run succeeds"
 fi
+
+o=$t/dipper
+if run "$t/dipper-source" "$t/dipper-source" -d dipper -o "$o"; then
+  [[ $(listed "$o") == "$DIPPER_FILES" ]] || fail "dipper: checksum list names DTS firmware and modem segments"
+  [[ $(cat "$o/$FW/qcom/sdm845/Xiaomi/dipper/a630_zap.mbn") == "a630_zap metadata" &&
+     $(cat "$o/$FW/qcom/sdm845/Xiaomi/dipper/a630_zap.b00") == "a630_zap segment" &&
+     $(cat "$o/$FW/qcom/sdm845/Xiaomi/dipper/adsp.mbn") == "adsp metadata" &&
+     $(cat "$o/$FW/qcom/sdm845/Xiaomi/dipper/adsp.b00") == "adsp segment" &&
+     $(cat "$o/$FW/cdsp.mdt") == "cdsp metadata" &&
+     $(cat "$o/$FW/cdsp.b00") == "cdsp segment" &&
+     $(cat "$o/$FW/qcom/venus-5.2/venus.mbn") == "venus metadata" &&
+     $(cat "$o/$FW/qcom/venus-5.2/venus.b00") == "venus segment" &&
+     $(cat "$o/$FW/qca/Xiaomi/dipper/crnv21.bin") == "crnv" &&
+     $(cat "$o/$FW/qca/crbtfw21.tlv") == "crbtfw" ]] ||
+    fail "dipper: vendor and modem MDT metadata keep their split segments"
+  (cd "$o/$FW" && sha256sum --quiet -c "$o/vendor-firmware.sha256") || fail "dipper: output checksums match"
+  pass_since "$n" "dipper: partition roots map firmware and split modem segments"
+else
+  cat "$t/log"; fail "dipper: partition-root extraction succeeds"
+fi
+
+cp "$t/dipper-source/vendor/firmware/a630_zap.b00" "$t/a630_zap.b00"
+rm "$t/dipper-source/vendor/firmware/a630_zap.b00"
+if run "$t/dipper-source" "$t/dipper-source" -d dipper -o "$t/dipper-missing-segment"; then
+  fail "dipper: missing split firmware segment is refused"
+fi
+grep -qF 'vendor/firmware/a630_zap has no .bNN segment' "$t/log" || fail "dipper: missing split segment is named"
+mv "$t/a630_zap.b00" "$t/dipper-source/vendor/firmware/a630_zap.b00"
+cp "$t/dipper-source/vendor/build.prop" "$t/build.prop"
+echo 'ro.product.vendor.device=other' > "$t/dipper-source/vendor/build.prop"
+if run "$t/dipper-source" "$t/dipper-source" -d dipper -f -o "$t/dipper-wrong-device"; then
+  fail "dipper: a backup for another device is refused"
+fi
+grep -qF "vendor/build.prop identifies 'other', not dipper" "$t/log" || fail "dipper: source device mismatch is named"
+mv "$t/build.prop" "$t/dipper-source/vendor/build.prop"
+pass "dipper: wrong-device and missing split firmware backups are refused"
 
 # --- A reused output directory -------------------------------------------------
 o=$t/reuse n=$failed
@@ -217,11 +304,33 @@ else
   cat "$t/log"; fail "husky: a run over a cheetah generation succeeds"
 fi
 
+o=$t/panther-out n=$failed
+rm -rf "$o"
+if run "$t/panther" "$t/ext4.img" -d panther -o "$o"; then
+  [[ $(listed "$o") == "$( (printf '%s\n' "$CHEETAH_FILES" | sed 's/cheetah/panther/g'; echo s5p-mfc-v15.fw) | LC_ALL=C sort)" ]] ||
+    fail "panther: the checksum list names cheetah's files under panther's names, and the MFC firmware"
+  cmp -s "$t/panther/firmware/mfc_fw.bin" "$o/$FW/s5p-mfc-v15.fw" || fail "panther: s5p-mfc-v15.fw is mfc_fw.bin"
+  grep -qF 'Video codec firmware: s5p-mfc-v15.fw (version 0x44250901)' "$t/log" ||
+    fail "panther: the MFC firmware's version is reported"
+  pass_since "$n" "panther: a run stages the MFC firmware as s5p-mfc-v15.fw"
+else
+  cat "$t/log"; fail "panther: a run succeeds"
+fi
+
 # --- Failed runs leave the previous generation ----------------------------------
+rm -rf "$t/panther-badmfc"; cp -r "$t/panther" "$t/panther-badmfc"
+printf 'not a firmware %4096s' x > "$t/panther-badmfc/firmware/mfc_fw.bin"
+refuses "panther: an MFC firmware without an ARM vector table" "mfc_fw.bin does not start with an ARM vector table" \
+  "$t/panther-badmfc" "$t/ext4.img" -d panther
+rm -rf "$t/panther-nomfc"; cp -r "$t/panther" "$t/panther-nomfc"; rm "$t/panther-nomfc/firmware/mfc_fw.bin"
+refuses "panther: a missing MFC firmware" "/vendor/firmware/mfc_fw.bin is missing" "$t/panther-nomfc" "$t/ext4.img" -d panther
 # husky's BCM.hcd names the module and board, not the chip: another phone's
 # patch (here the 7 Pro's) is refused
 rm -rf "$t/husky-otherbt"; cp -r "$t/husky" "$t/husky-otherbt"; echo "BCM4389C1 fictional" > "$t/husky-otherbt/firmware/brcm/BCM.hcd"
-refuses "husky: another chip's Bluetooth patch" "BCM.hcd is not a" "$t/husky-otherbt" "$t/ext4.img" -d husky
+refuses "husky: another chip's Bluetooth patch" "BCM.hcd is not a Pixel 8 Pro (G5SN_V<n>_HK3) Bluetooth patch" "$t/husky-otherbt" "$t/ext4.img" -d husky
+# husky runs the haptics checks too: a Halo WMFW that isn't the CS40L26's is refused
+rm -rf "$t/husky-otherhap"; cp -r "$t/husky" "$t/husky-otherhap"; halo "calib fictional" > "$t/husky-otherhap/firmware/cs40l26.wmfw"
+refuses "husky: another part's haptics firmware" "cs40l26.wmfw is not a CS40L26 firmware" "$t/husky-otherhap" "$t/ext4.img" -d husky
 rm -rf "$t/v2-missing"; cp -r "$t/v2" "$t/v2-missing"; rm "$t/v2-missing/firmware/aoc.bin"
 refuses "a missing ext4 file with an older copy in OUT" "/vendor/firmware/aoc.bin is missing" "$t/v2-missing" "$t/ext4.img"
 refuses "a missing EROFS file with an older copy in OUT" "/vendor/firmware/aoc.bin is missing" "$t/v2-missing" "$t/erofs.img"
@@ -249,10 +358,18 @@ pass_since "$n" "a registry short write under a file size limit: refused, the pr
 rm -rf "$t/v2-noprop"; cp -r "$t/v2" "$t/v2-noprop"; rm "$t/v2-noprop/build.prop"
 rm -rf "$t/v2-emptyprop"; cp -r "$t/v2" "$t/v2-emptyprop"; : > "$t/v2-emptyprop/build.prop"
 rm -rf "$t/v2-propfail"; cp -r "$t/v2" "$t/v2-propfail"; echo build.prop > "$t/v2-propfail/.fail-dump"
+# The refusal passes on debugfs's last line, its reason (a lookup error's
+# trailing blank dropped); only its banner adds none, and nothing reaches
+# the EROFS refusal, not even a "reason" in the environment
+msg="error: build.prop can't be read from vendor.img" use_f="; use -f to override"
 refuses "no build.prop (ext4)" "build.prop can't be read from vendor.img" "$t/v2-noprop" "$t/ext4.img"
-refuses "no build.prop (EROFS)" "build.prop can't be read from vendor.img" "$t/v2-noprop" "$t/erofs.img"
+says "no build.prop (ext4)" "$msg: /build.prop: File not found by ext2_lookup$use_f"
+reason="a stale reason" refuses "no build.prop (EROFS)" "build.prop can't be read from vendor.img" "$t/v2-noprop" "$t/erofs.img"
+says "no build.prop (EROFS)" "$msg$use_f"
 refuses "an empty build.prop" "build.prop can't be read from vendor.img" "$t/v2-emptyprop" "$t/ext4.img"
+says "an empty build.prop" "$msg$use_f"
 refuses "a build.prop whose copy fails" "build.prop can't be read from vendor.img" "$t/v2-propfail" "$t/ext4.img"
+says "a build.prop whose copy fails" "$msg: dump: No space left on device while writing file$use_f"
 o=$t/noprop-forced
 seed "$o"
 if run "$t/v2-noprop" "$t/ext4.img" -f -o "$o" && [[ $(listed "$o") == "$CHEETAH_FILES" ]]; then
@@ -386,14 +503,25 @@ if realdfs=$(command -v debugfs) && mkfs.ext4 -q -F -d "$t/v2" "$t/real.img" 8M 
   else
     pass "real ext4: a missing file with an older copy in OUT is refused, the previous outputs untouched"
   fi
-  before=$(snap "$o")
-  if "$EVF" -w "$t/work" -o "$o" "$t/real-noprop.img" > "$t/log" 2>&1; then
-    fail "real ext4: an image without build.prop is refused"
-  elif ! grep -qF "build.prop can't be read from vendor.img" "$t/log" || [[ $(snap "$o") != "$before" ]]; then
-    cat "$t/log"; fail "real ext4: an image without build.prop is refused, the previous outputs untouched"
-  else
-    pass "real ext4: an image without build.prop is refused, the previous outputs untouched"
-  fi
+  # The refusal ends with the last line the host's debugfs itself writes for
+  # the image: one without build.prop, and one whose superblock's block size
+  # is damaged (the magic intact), where debugfs first says it can't open it
+  cp "$t/real.img" "$t/real-sb.img"
+  printf '\xff\xff\xff\x7f' | dd of="$t/real-sb.img" bs=1 seek=1048 conv=notrunc status=none
+  for image in noprop sb; do
+    why=$("$realdfs" -R "dump /build.prop \"$t/probe.prop\"" "$t/real-$image.img" 2>&1 >/dev/null)
+    why=${why##*$'\n'} why=${why% }
+    before=$(snap "$o")
+    if [[ -z $why || $why == "debugfs "[0-9]* || -e $t/probe.prop ]]; then
+      fail "real ext4 $image: debugfs itself fails to copy build.prop, with a reason"
+    elif "$EVF" -w "$t/work" -o "$o" "$t/real-$image.img" > "$t/log" 2>&1; then
+      fail "real ext4 $image: build.prop that can't be read is refused"
+    elif [[ $(sed -n '/^error: /p' "$t/log") != "$msg: $why$use_f" || $(snap "$o") != "$before" ]]; then
+      cat "$t/log"; fail "real ext4 $image: refused with debugfs's last line, the previous outputs untouched"
+    else
+      pass "real ext4 $image: refused with debugfs's last line, the previous outputs untouched"
+    fi
+  done
   before=$(snap "$o")
   if PATH=$t/limited:$PATH "$EVF" -w "$t/work" -o "$o" "$t/real-big.img" > "$t/log" 2>&1; then
     fail "real ext4: a copy cut short by debugfs is refused"

@@ -1,0 +1,26 @@
+# Network panel: one label/value pair a row when the card is squeezed. The
+# details under the network's name (ping, packet loss, transfer, IP address,
+# gateway) are a four-column grid, two pairs a row, sized for the card's 380
+# px. On a screen narrower than that the card gets less (about 340 px on a
+# Pixel 9a upright), and an IPv4 address ran into its label ("IP
+# Address192.168…"). When the card is narrower than it asks for, the grid
+# takes two columns, one pair a row; at full width it is as before. Candidate
+# for upstream Omarchy.
+#
+# Against Omarchy 4.5.0-3.
+
+diff --git i/shell/plugins/panels/network/Panel.qml w/shell/plugins/panels/network/Panel.qml
+--- i/shell/plugins/panels/network/Panel.qml
++++ w/shell/plugins/panels/network/Panel.qml
+@@ -1391,7 +1391,10 @@
+ 
+         GridLayout {
+           width: parent.width
+-          columns: 4
++          // Two label/value pairs a row while the card has its full width;
++          // one pair a row when a narrow screen squeezes it, so an address
++          // doesn't run into its label.
++          columns: panel.contentWidth < Style.space(380) ? 2 : 4
+           columnSpacing: Style.space(20)
+           rowSpacing: Style.spacing.labelGap
+ 

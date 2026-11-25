@@ -5,7 +5,7 @@ Status (2026-10-15): **M1 and M2 done: Omarchy with the mobile shell runs
 from slot B on our own kernel, from `userdata`, and slot B is marked
 successful at every boot.** Kernel branches `omamobile-gs101-boot`,
 `-touch`, `-gpu`, `-thermal`, `-power`, `-bluetooth`, `-wifi`, `-display`
-and `-aoc` on linux-omarchy-mobile, one subsystem each, all off
+and `-aoc` on linux-omamobile, one subsystem each, all off
 `omamobile-gs101-boot` (which is off `omamobile`). They replace the stacked
 bring-up branches (`omamobile-raven-dts` ... `-aoc`) that the commit hashes
 in the results below come from. Slot A holds GrapheneOS (reinstalled 2026-10-27, NOTES); it is a
@@ -93,7 +93,7 @@ KERNEL_OUT=~/android/mainline/out-raven DEVICE=raven bin/omamobile flash
 ```
 
 Expect: three `OKAY`s, the unlocked-bootloader warning, then the Google logo
-stays. Within about 30 s the laptop sees a USB device "Omarchy Mobile /
+stays. Within about 30 s the laptop sees a USB device "Omamobile /
 Pixel 6 Pro": a network interface (the laptop sets 172.16.42.2/24 itself,
 CONTRIBUTING.md section 2: the initramfs runs no DHCP server) and
 `/dev/ttyACM0`.

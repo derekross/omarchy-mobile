@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: MIT
 # tools/stage-boot-files --check, as tools/build-packages runs it before it
 # builds a device package that ships boot files: current files pass; stale,
-# tampered or SOURCES-less ones, or none, refuse. No kernel build needed.
+# tampered or SOURCES-less ones, or none, refuse. Staging refuses an
+# initramfs with a development boot policy or mismatched, missing or
+# unexpected etc/omamobile-* settings (checked against bin/omamobile
+# initramfs-config). No kernel build needed.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { echo "not ok - $*" >&2; exit 1; }
@@ -44,9 +47,230 @@ pass "--check refuses stale, tampered, SOURCES-less or missing boot files"
 grep -qF "':(glob)packages/**/boot-files/**'" tools/repo-publish || fail "repo-publish --from-main carries boot-files/ into its clean tree"
 grep -qF 'tools/stage-boot-files --check "$d/boot-files"' tools/build-packages || fail "build-packages checks the boot files before building"
 grep -qF '"$d/stage" --verify "$d/prebuilt"' tools/build-packages || fail "build-packages verifies the staged kernel before building"
-grep -qE '^NAMED_ONLY=\(linux-omamobile\)$' tools/build-packages || fail "linux-omamobile is built only when named"
+grep -qE '^NAMED_ONLY=\(linux-omamobile( [a-z0-9-]+)*\)$' tools/build-packages || fail "linux-omamobile is built only when named"
 grep -qF '[[ " ${NAMED_ONLY[*]} " != *" $name "* ]] || continue' tools/build-packages || fail "and never by default or with --all"
 pass "repo-publish carries boot-files/; build-packages checks them, verifies the kernel, and builds linux-omamobile only when named"
+
+# Staging takes what bin/omamobile initramfs --release builds for $DEVICE and
+# nothing it refuses to build: a member etc/omamobile-nfsroot or
+# etc/omamobile-root-mode, whatever its type, an etc/omamobile-usb-recovery
+# listed twice, not saying yes or not readable, or any packed etc/omamobile-*
+# setting that does not match $DEVICE's descriptor (another device's archive,
+# missing, extra, wrong value, symlink, directory, FIFO, hard link, NUL byte,
+# duplicate, non-empty marker or unreadable) is refused, and DEST keeps its earlier staging. Members are
+# matched by name as the listing gives them (etc/x or ./etc/x), as the SSH-key
+# check matches them. A stand-in for dtc and mkdtboimg writes their output
+# files: tests/boot-update-parity checks the bytes.
+if command -v cpio >/dev/null && command -v lz4 >/dev/null; then
+  K=$t/kout && mkdir -p "$K" "$t/sbin"
+  printf '#!/bin/bash\n[[ $1 == create ]] && { echo dtbo > "$2"; exit 0; }\nwhile (($#)); do [[ $1 == -o ]] && echo dtb > "$2"; shift; done\n' > "$t/sbin/dt"
+  chmod +x "$t/sbin/dt"
+  pack() { # baseline from bin/omamobile initramfs-config for PACK_DEV (default DEV/cheetah),
+           # then member edits: -path removes it, path=line writes line+\n ("path=" an empty
+           # file), path~raw writes exact bytes, path%fmt writes printf %b bytes (for NUL),
+           # path/ a directory, path| a FIFO, path@target a symlink, path&alias a hard link
+           # to path, +path that member packed once more, +path@target appended once more
+           # as a symlink, ^path appended verbatim (GNU cpio's --append)
+    local pdev=${PACK_DEV:-${DEV:-cheetah}} prepo=${REPO:-.} f more="" app="" raw_app=""
+    rm -rf "$t/rd" && mkdir -p "$t/rd/etc" && cp "$prepo/initramfs/init" "$t/rd/init"
+    (cd "$prepo" && DEVICE=$pdev bin/omamobile initramfs-config "$t/rd/etc") >/dev/null
+    for f in "$@"; do
+      case $f in
+        ^*) raw_app=${f#^} ;;
+        +*@*) app=${f#+} ;;
+        +*) more+="./${f#+}"$'\n' ;;
+        -*) rm -rf "$t/rd/${f#-}" ;;
+        */) rm -rf "$t/rd/${f%/}" && mkdir -p "$t/rd/${f%/}" ;;
+        *\|) rm -rf "$t/rd/${f%|}" && mkfifo "$t/rd/${f%|}" ;;
+        *@*) rm -rf "$t/rd/${f%%@*}" && ln -s "${f#*@}" "$t/rd/${f%%@*}" ;;
+        *\&*) rm -rf "$t/rd/${f#*&}" && ln "$t/rd/${f%%&*}" "$t/rd/${f#*&}" ;;
+        *%*) rm -rf "$t/rd/${f%%%*}" && printf '%b' "${f#*%}" > "$t/rd/${f%%%*}" ;;
+        *~*) rm -rf "$t/rd/${f%%~*}" && printf '%s' "${f#*~}" > "$t/rd/${f%%~*}" ;;
+        *=) rm -rf "$t/rd/${f%=}" && : > "$t/rd/${f%=}" ;;
+        *) rm -rf "$t/rd/${f%%=*}" && printf '%s\n' "${f#*=}" > "$t/rd/${f%%=*}" ;;
+      esac
+    done
+    # (bsdcpio warns as it truncates inode numbers to newc's 32 bits)
+    (cd "$t/rd" && { find . | LC_ALL=C sort; printf %s "$more"; } | $packer -o -H newc --quiet 2>/dev/null) > "$t/rd.cpio"
+    [[ -z $app ]] || (cd "$t/rd" && rm -rf "${app%%@*}" && ln -sf "${app#*@}" "${app%%@*}" && echo "${app%%@*}" | cpio -o -A -H newc --quiet -O "$t/rd.cpio")
+    [[ -z $raw_app ]] || (cd "$t/rd" && printf '%s\n' "$raw_app" | cpio -o -A -H newc --quiet -O "$t/rd.cpio")
+    lz4 -l -9 -q -f "$t/rd.cpio" "$K/initramfs.cpio.lz4"
+  }
+  sbf() {
+    local prepo=${REPO:-.}
+    (cd "$prepo" && DEVICE=${DEV:-cheetah} KERNEL_OUT=$K DTC=$t/sbin/dt MKDTBOIMG=$t/sbin/dt "$S" "$t/staged") > "$t/out" 2>&1
+  }
+  stages() { # what, files
+    local what=$1; shift; pack "$@"
+    sbf || { cat "$t/out"; fail "$packer archive: stages $what"; }
+    cmp -s "$t/staged/initramfs.cpio.lz4" "$K/initramfs.cpio.lz4" || fail "$packer archive: $what is the staged initramfs"
+  }
+  refuses_rd() { # what, message, files
+    local what=$1 msg=$2 earlier; shift 2; pack "$@"
+    earlier=$(cat "$t/staged/SHA256SUMS")
+    if sbf; then fail "$packer archive: refuses $what"; fi
+    grep -qF -- "$msg" "$t/out" || { cat "$t/out"; fail "$packer archive, $what: says '$msg'"; }
+    [[ $(cat "$t/staged/SHA256SUMS") == "$earlier" ]] && (cd "$t/staged" && sha256sum --quiet --strict -c SHA256SUMS) && [[ ! -e $t/staged.new ]] \
+      || fail "$packer archive, $what: DEST keeps its earlier staging, and no DEST.new is left"
+  }
+  mismatch() { # what, path, got_fragment, want_value, files
+    local what=$1 path=$2 got=$3 want=$4; shift 4
+    refuses_rd "$what" "$path" "$@"
+    grep -qF -- "$got" "$t/out" || { cat "$t/out"; fail "$packer archive, $what: says '$got'"; }
+    grep -qF -- "expected '$want'" "$t/out" || { cat "$t/out"; fail "$packer archive, $what: says \"expected '$want'\""; }
+  }
+  # A stand-in cpio for one staging call: the tool's read of a named setting prints a value and fails; every other call is cpio's
+  mkdir -p "$t/failread"
+  cat > "$t/failread/cpio" <<EOF
+#!/bin/bash
+[[ "\$*" == *"--to-stdout etc/omamobile-usb-recovery"* ]] && { printf yes; exit 1; }
+[[ "\$*" == *"--to-stdout etc/omamobile-compatible"* ]] && { printf 'google,gs201-cheetah\n'; exit 1; }
+exec $(printf '%q' "$(command -v cpio)") "\$@"
+EOF
+  chmod +x "$t/failread/cpio"
+  # Scratch checkout for custom descriptor combinations (all optional keys, no board step, no NAME/USB_PRODUCT, invalid keys)
+  DR=$t/drepo
+  mkdir -p "$DR/bin" "$DR/tools" "$DR/packages/omamobile-boot-update/lib" "$DR/initramfs" "$DR/device/testdev"
+  cp bin/omamobile "$DR/bin/"
+  cp tools/stage-boot-files "$DR/tools/"
+  cp omamobile.conf "$DR/"
+  cp packages/omamobile-boot-update/lib/descriptor.sh "$DR/packages/omamobile-boot-update/lib/"
+  cp initramfs/init "$DR/initramfs/init"
+  cp device/cheetah/cheetah-m1-overlay.dts "$DR/device/testdev/testdev-overlay.dts"
+  base_desc() {
+    cat <<'DESC'
+CODENAME=testdev
+NAME="Test Device"
+SOC=gs201
+COMPATIBLE="google,gs201-testdev"
+PACKAGE=omamobile-device-testdev
+DTB=exynos/google/gs201-testdev.dtb
+SOC_IDS="b0:0x9855001 a0:0x9855000"
+DTBO_SOURCE=testdev-overlay.dts
+DTBO_BOARD_ID=0x30306
+DTBO_BOARD_REV=0x10000
+VENDOR_CMDLINE="console=tty0"
+VENDOR_PAGESIZE=0x800
+OS_VERSION=17.0.0
+OS_PATCH_LEVEL=2026-10
+BOOT_IMAGES="boot init_boot vendor_boot vendor_kernel_boot dtbo"
+UFS_RW="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
+INITRAMFS_INIT=/initramfs/init
+PANEL_SIZE=1080x2400
+DESC
+  }
+  base_desc > "$DR/device/testdev/device.conf"
+  (cd "$DR" && git init -q && git add -A)
+  # GNU cpio packs etc/x (as bin/omamobile does); bsdcpio packs ./etc/x
+  packers=cpio; command -v bsdcpio >/dev/null && packers+=" bsdcpio"
+  for packer in $packers; do
+    rm -rf "$t/staged"
+    stages "a release initramfs (cheetah)"
+    nfs="carries etc/omamobile-nfsroot (OMAMOBILE_NFSROOT, bring-up only): build it with --release"
+    refuses_rd "an NFS root" "$nfs" etc/omamobile-nfsroot=192.0.2.1:/srv/nfs/sample
+    refuses_rd "an empty etc/omamobile-nfsroot" "$nfs" etc/omamobile-nfsroot=
+    refuses_rd "etc/omamobile-nfsroot as a symlink to an NFS root" "$nfs" etc/nfs=192.0.2.1:/srv/nfs/sample etc/omamobile-nfsroot@nfs
+    refuses_rd "etc/omamobile-nfsroot as a directory" "$nfs" etc/omamobile-nfsroot/
+    mode="carries a root mode (INITRAMFS_ROOT_MODE, bring-up only): build it with --release"
+    refuses_rd "root mode persistent-development" "$mode" etc/omamobile-root-label=omamobile-root etc/omamobile-root-mode=persistent-development
+    refuses_rd "an empty root mode, which the init holds in RAM" "$mode" etc/omamobile-root-mode=
+    usb="carries an etc/omamobile-usb-recovery that is not one file saying yes (INITRAMFS_USB_RECOVERY, bring-up only): build it with --release"
+    refuses_rd "USB recovery off" "$usb" etc/omamobile-usb-recovery=no
+    refuses_rd "etc/omamobile-usb-recovery as a symlink to no" "$usb" etc/usb=no etc/omamobile-usb-recovery@usb
+    refuses_rd "etc/omamobile-usb-recovery twice, saying no" "$usb" etc/omamobile-usb-recovery=no +etc/omamobile-usb-recovery
+    # GNU cpio only: bsdcpio can't append
+    if [[ $packer == cpio ]]; then
+      refuses_rd "etc/omamobile-usb-recovery saying yes, then again as a symlink to no" "$usb" etc/usb=no etc/omamobile-usb-recovery=yes +etc/omamobile-usb-recovery@usb
+      refuses_rd "non-canonical double-slash member path" "carries non-canonical member path 'etc//omamobile-compatible'" '^etc//omamobile-compatible'
+      refuses_rd "non-canonical /./ member path" "carries non-canonical member path 'etc/./omamobile-ufs-rw'" '^etc/./omamobile-ufs-rw'
+      refuses_rd "non-canonical trailing /. member path" "carries non-canonical member path 'etc/.'" '^etc/.'
+      refuses_rd "non-canonical .. member path" "carries non-canonical member path 'etc/../etc/omamobile-compatible'" '^etc/../etc/omamobile-compatible'
+      refuses_rd "non-canonical absolute member path" "carries non-canonical member path '$t/rd/etc/omamobile-compatible'" "^$t/rd/etc/omamobile-compatible"
+    fi
+    PATH=$t/failread:$PATH refuses_rd "a USB recovery read that fails after printing yes" "can't read etc/omamobile-usb-recovery from" etc/omamobile-usb-recovery=yes
+    PATH=$t/failread:$PATH refuses_rd "a compatible read that fails" "can't read etc/omamobile-compatible from"
+
+    # Per-setting and member-type checks on cheetah
+    rw_exp="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
+    mismatch "missing etc/omamobile-ufs-rw" etc/omamobile-ufs-rw "has no etc/omamobile-ufs-rw" "$rw_exp" -etc/omamobile-ufs-rw
+    mismatch "wrong etc/omamobile-ufs-rw" etc/omamobile-ufs-rw "'boot_b userdata'" "$rw_exp" "etc/omamobile-ufs-rw=boot_b userdata"
+    mismatch "duplicate etc/omamobile-ufs-rw" etc/omamobile-ufs-rw "lists etc/omamobile-ufs-rw 2 times" "$rw_exp" +etc/omamobile-ufs-rw
+    mismatch "wrong etc/omamobile-ufs-rw-slot" etc/omamobile-ufs-rw-slot "'b'" running etc/omamobile-ufs-rw-slot=b
+    mismatch "unexpected etc/omamobile-ufs-rw-luns" etc/omamobile-ufs-rw-luns "'sde'" absent etc/omamobile-ufs-rw-luns=sde
+    mismatch "wrong etc/omamobile-compatible" etc/omamobile-compatible "'google,gs201-felix'" "google,gs201-cheetah" etc/omamobile-compatible=google,gs201-felix
+    mismatch "symlink etc/omamobile-compatible" etc/omamobile-compatible "(not a regular file)" "google,gs201-cheetah" etc/omamobile-compatible@other
+    mismatch "hard-linked etc/omamobile-compatible" etc/omamobile-compatible "(not a regular file)" "google,gs201-cheetah" etc/omamobile-compatible\&etc/compat-link
+    mismatch "NUL byte in etc/omamobile-compatible" etc/omamobile-compatible "binary data" "google,gs201-cheetah" 'etc/omamobile-compatible%google,gs201-cheetah\000\n'
+    mismatch "wrong etc/omamobile-simplefb-trig" etc/omamobile-simplefb-trig "'0x19470030 0x3061'" "0x1c240030 0x3061" "etc/omamobile-simplefb-trig=0x19470030 0x3061"
+    mismatch "non-empty etc/omamobile-bringup-probe" etc/omamobile-bringup-probe "'1'" "empty file" etc/omamobile-bringup-probe=1
+    mismatch "directory etc/omamobile-bringup-probe" etc/omamobile-bringup-probe "(not a regular file)" "empty file" etc/omamobile-bringup-probe/
+    mismatch "FIFO etc/omamobile-bringup-probe" etc/omamobile-bringup-probe "(not a regular file)" "empty file" 'etc/omamobile-bringup-probe|'
+    mismatch "unexpected etc/omamobile-usb-switch" etc/omamobile-usb-switch "'10d50000.i2c 0x25'" absent "etc/omamobile-usb-switch=10d50000.i2c 0x25"
+    mismatch "unexpected etc/omamobile-fb-wait" etc/omamobile-fb-wait "'present (empty file)'" absent etc/omamobile-fb-wait=
+    mismatch "wrong etc/omamobile-usb-product" etc/omamobile-usb-product "'Pixel Fold'" "Pixel 7 Pro (M1)" "etc/omamobile-usb-product=Pixel Fold"
+    mismatch "unexpected etc/omamobile-root-label" etc/omamobile-root-label "'omamobile-root'" absent etc/omamobile-root-label=omamobile-root
+    mismatch "unexpected etc/omamobile-usb-recovery=yes" etc/omamobile-usb-recovery "'yes'" absent etc/omamobile-usb-recovery=yes
+    mismatch "unknown etc/omamobile-future" etc/omamobile-future "'1'" absent etc/omamobile-future=1
+
+    # Cross-device reuse of KERNEL_OUT (same UFS_RW and initramfs/init) and multi-line formatting
+    DEV=felix stages "felix's release initramfs (multi-line SIMPLEFB_TRIG_CON, NAME fallback)"
+    DEV=felix PACK_DEV=cheetah mismatch "cheetah's initramfs staged as felix" \
+      etc/omamobile-bringup-probe "'present (empty file)'" absent
+    DEV=felix mismatch "felix with only one SIMPLEFB_TRIG_CON pair" \
+      etc/omamobile-simplefb-trig "'0x1c241030 0x01003061'" "0x1c241030 0x01003061; 0x1c240030 0x00003061" \
+      "etc/omamobile-simplefb-trig=0x1c241030 0x01003061"
+    DEV=felix mismatch "felix with an extra blank line in SIMPLEFB_TRIG_CON" \
+      etc/omamobile-simplefb-trig "'0x1c241030 0x01003061; 0x1c240030 0x00003061; '" "0x1c241030 0x01003061; 0x1c240030 0x00003061" \
+      "etc/omamobile-simplefb-trig="$'0x1c241030 0x01003061\n0x1c240030 0x00003061\n'
+    DEV=felix mismatch "felix with no trailing newline in SIMPLEFB_TRIG_CON" \
+      etc/omamobile-simplefb-trig "(no trailing newline)" "0x1c241030 0x01003061; 0x1c240030 0x00003061" \
+      "etc/omamobile-simplefb-trig~"$'0x1c241030 0x01003061\n0x1c240030 0x00003061'
+    DEV=felix mismatch "felix with unexpected etc/omamobile-bringup-probe" \
+      etc/omamobile-bringup-probe "'present (empty file)'" absent etc/omamobile-bringup-probe=
+    DEV=panther stages "panther's release initramfs"
+    DEV=panther PACK_DEV=felix mismatch "felix's initramfs staged as panther" \
+      etc/omamobile-compatible "'google,gs201-felix'" "google,gs201-panther"
+
+    # Custom descriptor: all optional release settings enabled (UFS_RW_LUNS, USB_SWITCH+I2C_TOOLS, FB_WAIT, ROOT_LABEL, USB_RECOVERY=yes)
+    { base_desc
+      printf 'UFS_RW_LUNS="sde"\nUSB_SWITCH="10d50000.i2c 0x25"\nINITRAMFS_I2C_TOOLS=1\nINITRAMFS_FB_WAIT=1\nINITRAMFS_ROOT_LABEL=omamobile-root\nINITRAMFS_USB_RECOVERY=yes\n'
+    } > "$DR/device/testdev/device.conf"
+    REPO=$DR DEV=testdev stages "custom descriptor with UFS_RW_LUNS, USB_SWITCH, INITRAMFS_FB_WAIT, INITRAMFS_ROOT_LABEL and INITRAMFS_USB_RECOVERY=yes"
+    REPO=$DR DEV=testdev mismatch "wrong etc/omamobile-ufs-rw-luns" etc/omamobile-ufs-rw-luns "'sdb'" sde etc/omamobile-ufs-rw-luns=sdb
+    REPO=$DR DEV=testdev mismatch "wrong etc/omamobile-usb-switch" etc/omamobile-usb-switch "'10d50000.i2c 0x26'" "10d50000.i2c 0x25" "etc/omamobile-usb-switch=10d50000.i2c 0x26"
+    REPO=$DR DEV=testdev mismatch "non-empty etc/omamobile-fb-wait" etc/omamobile-fb-wait "'1'" "empty file" etc/omamobile-fb-wait=1
+    REPO=$DR DEV=testdev mismatch "wrong etc/omamobile-root-label" etc/omamobile-root-label "'other'" omamobile-root etc/omamobile-root-label=other
+    REPO=$DR DEV=testdev mismatch "missing etc/omamobile-usb-recovery when descriptor sets yes" etc/omamobile-usb-recovery "has no etc/omamobile-usb-recovery" yes -etc/omamobile-usb-recovery
+    REPO=$DR DEV=testdev refuses_rd "etc/omamobile-usb-recovery=no when descriptor sets yes" "$usb" etc/omamobile-usb-recovery=no
+
+    # Custom descriptor: no board step and no NAME/USB_PRODUCT (compatible and usb-product must both be absent)
+    base_desc | grep -v '^NAME=' > "$DR/device/testdev/device.conf"
+    REPO=$DR DEV=testdev stages "custom descriptor with no board step and no NAME/USB_PRODUCT"
+    REPO=$DR DEV=testdev mismatch "unexpected etc/omamobile-compatible without board step" etc/omamobile-compatible "'google,gs201-testdev'" absent etc/omamobile-compatible=google,gs201-testdev
+    REPO=$DR DEV=testdev mismatch "unexpected etc/omamobile-usb-product without NAME/USB_PRODUCT" etc/omamobile-usb-product "'Test'" absent etc/omamobile-usb-product=Test
+  done
+
+  # Descriptor refusals beyond initramfs-config and initramfs-config error forwarding
+  packer=cpio
+  base_desc > "$DR/device/testdev/device.conf"
+  REPO=$DR DEV=testdev stages "descriptor validation baseline"
+  refuses_desc() { # what, message, extra descriptor lines
+    local what=$1 msg=$2 extra=$3 earlier
+    { base_desc; printf '%s\n' "$extra"; } > "$DR/device/testdev/device.conf"
+    earlier=$(cat "$t/staged/SHA256SUMS")
+    if REPO=$DR DEV=testdev sbf; then fail "descriptor validation refuses $what"; fi
+    grep -qF -- "$msg" "$t/out" || { cat "$t/out"; fail "descriptor validation, $what: says '$msg'"; }
+    [[ $(cat "$t/staged/SHA256SUMS") == "$earlier" ]] && [[ ! -e $t/staged.new ]] || fail "descriptor validation, $what: keeps DEST"
+  }
+  refuses_desc "INITRAMFS_ROOT_MODE set for release" "INITRAMFS_ROOT_MODE is for local bring-up only" $'INITRAMFS_ROOT_LABEL=omamobile-root\nINITRAMFS_ROOT_MODE=persistent-development'
+  refuses_desc "INITRAMFS_USB_RECOVERY=no for release" "INITRAMFS_USB_RECOVERY=no is for local bring-up only" 'INITRAMFS_USB_RECOVERY=no'
+  refuses_desc "invalid INITRAMFS_I2C_TOOLS" "INITRAMFS_I2C_TOOLS must be 1 or absent" 'INITRAMFS_I2C_TOOLS=2'
+  refuses_desc "bin/omamobile initramfs-config failure (malformed SIMPLEFB_TRIG_CON)" "bin/omamobile initramfs-config failed" 'SIMPLEFB_TRIG_CON="not-hex"'
+  ! LC_ALL=C grep -q $'\033' "$t/out" || { cat "$t/out"; fail "initramfs-config failure output contains ANSI escape"; }
+  pass "staging refuses dev boot policies, mismatched/missing/extra/bad-type/hardlink/NUL/duplicate/unreadable etc/omamobile-* settings and release-forbidden descriptor keys, and keeps DEST; it stages what --release builds ($packers)"
+else
+  pass "staging's release policies # SKIP no cpio or lz4"
+fi
 
 # build-packages with a device package whose boot files are missing: that
 # package is skipped, the rest is built and signed, and the run exits 3

@@ -6,7 +6,7 @@
 # 20 s before that, and a try up to 20 s after), and gives up without
 # failing the unit when it doesn't come.
 [Unit]
-Description=Omarchy Mobile weather for the lock screen
+Description=Omamobile weather for the lock screen
 
 [Service]
 Type=oneshot

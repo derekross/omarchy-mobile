@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Reinstall runbook (cheetah): a clean Omarchy Mobile install with the installer
+# Reinstall runbook (cheetah): a clean Omamobile install with the installer
 
 Status (2026-10-13; updated 2026-11-02): **the first clean reinstall passed** (section 10
 lists the steps that passed and what was fixed afterwards). That run was

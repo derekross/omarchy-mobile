@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# The pull-request gate for derekross/linux-omarchy-mobile, kept here with
+# The pull-request gate for derekross/linux-omamobile, kept here with
 # the tool it runs (tools/kernel-pr-check). It belongs at
 # .github/workflows/checks.yml on the kernel repository's omamobile branch;
 # see CONTRIBUTING.md section 6.2. It checks out the pull request's commits
@@ -38,8 +38,8 @@ jobs:
         run: git -C linux fetch --no-tags origin "+refs/heads/${{ github.event.pull_request.base.ref }}:refs/remotes/origin/base"
       - uses: actions/checkout@v5
         with:
-          repository: derekross/omarchy-mobile
-          path: omarchy-mobile
+          repository: derekross/omamobile
+          path: omamobile
       - name: Tools
         run: |
           sudo apt-get update -qq
@@ -47,5 +47,5 @@ jobs:
           pip install --break-system-packages dtschema
       - name: tools/kernel-pr-check
         run: |
-          omarchy-mobile/tools/kernel-pr-check -C linux --build "$RUNNER_TEMP/kbuild" --merge \
+          omamobile/tools/kernel-pr-check -C linux --build "$RUNNER_TEMP/kbuild" --merge \
             origin/base "${{ github.event.pull_request.head.sha }}"

@@ -1,0 +1,46 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (as device/cheetah/overlays/gnss-pmic-test.dtso and
+ * gnss-test.dtso together, device/cheetah/GNSS-PLAN.md G1-G5): enable the
+ * sub-PMIC and its GNSS rails LDO9S-LDO11S (disabled in the base DTB like
+ * the fingerprint's LDO15S, so the fingerprint overlay leaves them alone),
+ * PERIC0 USI5 in SPI mode with its SPI controller, and gph2's pin
+ * controller (pinctrl@14440000, disabled in gs201.dtsi; mcu_resp and
+ * nstandby are on gph2), so the BCM4775x node binds. Needs a kernel with
+ * panther's GNSS node (linux-omamobile#268): without it fdtoverlay
+ * refuses this, as the three rails aren't there. Install omamobile-gnss
+ * first: its blacklist keeps bcm4775x-gnss from loading by itself, and
+ * omamobile-gnss-start loads it. The driver keeps the chip in standby and
+ * its rails off until /dev/ttyBCM is opened. Paths, not labels, so the
+ * base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/firmware/power-management/pmic-2} {
+	status = "okay";
+};
+
+&{/firmware/power-management/pmic-2/regulators/ldo9s} {
+	status = "okay";
+};
+
+&{/firmware/power-management/pmic-2/regulators/ldo10s} {
+	status = "okay";
+};
+
+&{/firmware/power-management/pmic-2/regulators/ldo11s} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109400c0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109400c0/spi@10940000} {
+	status = "okay";
+};
+
+&{/soc@0/pinctrl@14440000} {
+	status = "okay";
+};

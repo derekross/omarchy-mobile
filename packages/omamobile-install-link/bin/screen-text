@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""A development stand-in for the first-start screen (INSTALL-LINK-PLAN
+§3.3), for runbook steps R2 to R6 on the development phone, before
+omamobile-install-screen exists.
+
+  sudo /usr/lib/omamobile-install-link/screen-text
+
+It connects to the daemon's screen socket (/run/omamobile-install-link/screen,
+root's) and prints each line the daemon sends to this terminal, the pairing
+code among them; a line typed here (Enter) is a volume key, "an act at the
+phone" (§2.5). The code is in this terminal's scrollback and nowhere else:
+no file, no journal. Never part of an owner's install; no unit starts it.
+"""
+import os
+import select
+import socket
+import sys
+
+ROOT = os.environ.get("OMAMOBILE_LINK_ROOT", "")
+SOCKET = ROOT + "/run/omamobile-install-link/screen"
+SAY = {
+    "code": "Code for the installer: %s",
+    "wrong-code": "Wrong code (%s tries before a wait)",
+    "locked": "Too many wrong codes: wait %s s, or press Enter (a volume key) for a new code",
+    "paired": "Paired with the installer",
+    "version": "The installer speaks another protocol version",
+    "setup": "Setting up the phone",
+    "stopped": "Setup stopped at: %s",
+    "no-space": "Not enough space",
+    "damaged": "The file from the computer was damaged. Sending again.",
+    "off": "The install link is off",
+}
+
+
+def main():
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.connect(SOCKET)
+    except OSError as e:
+        print("screen-text: no daemon at %s (%s)" % (SOCKET, e.strerror), file=sys.stderr)
+        return 1
+    print("screen-text: connected; Enter stands for a volume key, Ctrl-C ends", flush=True)
+    buf = b""
+    while True:
+        r, _, _ = select.select([s, sys.stdin], [], [])
+        if sys.stdin in r:
+            if not sys.stdin.readline():
+                return 0
+            s.sendall(b"key\n")
+        if s in r:
+            data = s.recv(4096)
+            if not data:
+                print("screen-text: the daemon closed the screen socket")
+                return 0
+            buf += data
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                words = line.decode("ascii", "replace").split(maxsplit=1)
+                if not words:
+                    continue
+                fmt = SAY.get(words[0])
+                if fmt is None:
+                    print(line.decode("ascii", "replace"), flush=True)
+                else:
+                    print(fmt % words[1] if "%s" in fmt and len(words) > 1 else fmt.replace(" %s", ""), flush=True)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(0)

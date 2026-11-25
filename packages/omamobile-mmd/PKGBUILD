@@ -3,9 +3,9 @@
 pkgname=omamobile-mmd
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile ModemManager-compatible bridge: org.freedesktop.ModemManager1 served from omamobile-sitd"
+pkgdesc="Omamobile ModemManager-compatible bridge: org.freedesktop.ModemManager1 served from omamobile-sitd"
 arch=(aarch64)
-url="https://github.com/derekross/omarchy-mobile"
+url="https://github.com/derekross/omamobile"
 license=(MIT)
 # modem-sit from the version that reports the internet bearer's device,
 # address and DNS in its status: with an older one the bearer's Interface

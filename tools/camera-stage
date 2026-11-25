@@ -162,9 +162,9 @@ if ((watchdog)); then
 fi
 
 # Read-only views. Regmap debugfs over ACPM (never the PMU: AGENTS.md).
-gpio_regs='f=$(ls -d /sys/kernel/debug/regmap/*pmic-2*-gpio 2>/dev/null | head -1);
+gpio_regs='f=$(ls -d /sys/kernel/debug/regmap/*pmic-2*-gpio 2>/dev/null | sed -n 1p);
   if [ -n "$f" ]; then echo "S2MPG13 GPIO block ($f): 04 status, 05-0c pin 0-7 control"; cat "$f/registers"; else echo "no S2MPG13 gpio regmap (pmic-2 not bound)"; fi'
-ldo12s_reg='f=$(ls -d /sys/kernel/debug/regmap/*pmic-2*-pmic 2>/dev/null | head -1);
+ldo12s_reg='f=$(ls -d /sys/kernel/debug/regmap/*pmic-2*-pmic 2>/dev/null | sed -n 1p);
   if [ -n "$f" ]; then echo "LDO12S control (PM 0x37; bit 7 = on, bits 5:0 = selector, 0x2c = 1.8 V):"; grep -E "^37:" "$f/registers"; else echo "no S2MPG13 pmic regmap"; fi'
 cam_pins='grep -hE "\((gpp3-0|gpp6-[0-3])\)" /sys/kernel/debug/pinctrl/*10840000*/pins 2>/dev/null || echo "no PERIC0 pin list"'
 regulators='grep -E "PP3200|PP1300|vddio_cam|vdda_|vddd_|vdd_main_af|vdd_tele|cam_sw" /sys/kernel/debug/regulator/regulator_summary 2>/dev/null || echo "no regulator summary"'
@@ -224,7 +224,7 @@ case "$stage" in
     mark "about to load gs201_cam_power (nothing powered at probe)"
     phone 'modprobe gs201_cam_power; echo modprobe-exit=$?; sleep 1; ls '"$CP" | tee -a "$log" || result=fail
     mark "about to power the ultrawide EEPROM (LDO12S on), one-byte read, power off"
-    phone 'd=$(ls -d '"$CP"'/*-0050 | head -1); echo 1 > $d/power && echo "eeprom: $(cat $d/ack)"; echo 0 > $d/power; echo "power=$(cat $d/power)"' | tee -a "$log" || result=fail
+    phone 'd=$(ls -d '"$CP"'/*-0050 | sed -n 1p); echo 1 > $d/power && echo "eeprom: $(cat $d/ack)"; echo 0 > $d/power; echo "power=$(cat $d/power)"' | tee -a "$log" || result=fail
     phone "$ldo12s_reg; $regulators" | tee -a "$log" || result=fail
     ;;
   u1)
@@ -234,14 +234,14 @@ case "$stage" in
     loaded slg51002_regulator || phone 'modprobe slg51002_regulator; sleep 1'
     loaded gs201_cam_power || phone 'modprobe gs201_cam_power; sleep 1'
     mark "about to power the ultrawide sensor up in stock's order (PP3200, PP1300, LDO12S, LDO6, LDO2, MCLK, reset)"
-    phone 'd=$(ls -d '"$CP"'/*-001a | head -1); echo 1 > $d/power; echo "power=$(cat $d/power)"' | tee -a "$log" || result=fail
+    phone 'd=$(ls -d '"$CP"'/*-001a | sed -n 1p); echo 1 > $d/power; echo "power=$(cat $d/power)"' | tee -a "$log" || result=fail
     phone "$regulators; $cam_pins" | tee -a "$log"
     for r in $regs; do
       mark "about to read sensor register $r"
-      phone 'd=$(ls -d '"$CP"'/*-001a | head -1); echo '"$r"' > $d/read && cat $d/read' | tee -a "$log" || result=fail
+      phone 'd=$(ls -d '"$CP"'/*-001a | sed -n 1p); echo '"$r"' > $d/read && cat $d/read' | tee -a "$log" || result=fail
     done
     mark "about to power the ultrawide sensor down"
-    phone 'd=$(ls -d '"$CP"'/*-001a | head -1); echo 0 > $d/power; echo "power=$(cat $d/power)"' | tee -a "$log" || result=fail
+    phone 'd=$(ls -d '"$CP"'/*-001a | sed -n 1p); echo 0 > $d/power; echo "power=$(cat $d/power)"' | tee -a "$log" || result=fail
     phone "$regulators" | tee -a "$log"
     ;;
   x)

@@ -4,7 +4,7 @@
 Status (2026-10-29): boots native Arch / Omarchy on SM8750 from slot B's
 `boot` partition. Companion kernel in the contributor fork:
 [`mrlund/linux-omarchy-mobile` tag `dodge-v3-20261101`](https://github.com/mrlund/linux-omarchy-mobile/tree/dodge-v3-20261101)
-(`6cc4b65df980`; review history [kernel #115](https://github.com/derekross/linux-omarchy-mobile/pull/115), closed).
+(`6cc4b65df980`; review history [kernel #115](https://github.com/derekross/linux-omamobile/pull/115), closed).
 This document is the CONTRIBUTING §5 / §6 first-light **record** of how this
 phone was installed. It is not a procedure for other owners: the guarded
 inactive-slot installer and firmware-match helper are deferred to a later PR.
@@ -12,11 +12,11 @@ inactive-slot installer and firmware-match helper are deferred to a later PR.
 ## 1. Sources
 
 - **Kernel base:** `omamobile` on
-  [derekross/linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile).
+  [derekross/linux-omamobile](https://github.com/derekross/linux-omamobile).
 - **SoC / board series (fork):** tag [`dodge-v3-20261101`](https://github.com/mrlund/linux-omarchy-mobile/tree/dodge-v3-20261101) on
   [mrlund/linux-omarchy-mobile](https://github.com/mrlund/linux-omarchy-mobile) (`6cc4b65df980`; subsystem-split; gpu2 + IPA).
   Same model as Pixel 4 XL's companion sources. Closed review:
-  [kernel #115](https://github.com/derekross/linux-omarchy-mobile/pull/115).
+  [kernel #115](https://github.com/derekross/linux-omamobile/pull/115).
 - **Device tree:** `arch/arm64/boot/dts/qcom/sm8750-oneplus-dodge.dts`
   (`compatible = "oneplus,dodge", …`).
 - **Userspace:** `device/dodge/` and `packages/omamobile-device-dodge` in this
@@ -131,9 +131,9 @@ each session. Those backups are never in git.
   behaviour on this ABL is still uncharacterized, so `bin/omamobile` now
   refuses `BOOT_METHOD=qcom-abl` before any phone I/O (same class as
   `flash` / `push`). Prefer the buttons. Button behaviour on this phone
-  (Omarchy Mobile on slot B; confirmed 2026-10-31):
+  (Omamobile on slot B; confirmed 2026-10-31):
   - **Forced restart (working):** holding **Power** alone does **not** force
-    a restart under Omarchy Mobile — it opens the Omarchy power menu
+    a restart under Omamobile — it opens the Omarchy power menu
     (tested 2026-10-31). Holding **Power + Volume Up + Volume Down** until
     the phone resets is what has worked for us when hung (confirmed; no
     specific hold time claimed).
