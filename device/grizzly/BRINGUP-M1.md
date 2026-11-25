@@ -3579,6 +3579,29 @@ Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
 after 133 seconds. Stock D1 A was restarted at 15:41:02 UTC and
 booted with enforcing verity and the pretrial VBMeta digest.
 
+### Mainline v63 preserve the diagnostic TUR CDB
+
+[v63 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/6138d5b281be0b4801b91f4de5139e8d519e7dad)
+clears legacy CDB LUN encoding on the diagnostic pseudo-device
+before arming TEST UNIT READY. The one-command gate still
+requires the six-byte all-zero CDB and a zero-length payload.
+The UPIU explicitly targets LUN 0. The fixture still keeps
+automatic scanning disabled, attaches no real SCSI device and
+removes the host after the test.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match the kernel commit, all five image hashes and the saved slot capacity checks. The vendor DTB and RAM rescue match v62. | Leave stock A selected on a mismatch. |
+| One attended slot B boot | Capture `ufs-uic-v63 TUR pseudo-device lun_in_cdb=0`, gate acceptance, mapping `ret=0`, the doorbell event, the v61 completion IRQ and TUR `ret=0`. Verify host removal, Hibern8 on success, zero disks and the timed return to stock A. | Keep the first rejection, error or timeout and its cleanup logs. Return to stock A without retrying and verify Android completes boot. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v63` passed
+strict checkpatch, targeted arm64 `W=1` compilation and eleven
+mocked cases covering CDB preservation, preflight rejection and
+timeout cleanup. Both AVB signatures, the unpacked kernel and
+ramdisk, ABL handoff and saved D1 slot capacity checks passed.
+Manifest SHA-256 `52e1c1489b1dd344c5aa9b8f3bbd63b00d3ee0967bea5b40feb7fe9fa51136a3`.
+Archive SHA-256 `2326f96b449b8dcd4184f4f493dae75b03b2a40021d18ddcc17555875eac8945`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
