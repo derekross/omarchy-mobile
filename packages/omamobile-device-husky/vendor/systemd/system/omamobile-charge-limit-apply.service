@@ -4,7 +4,8 @@
 # (75-omamobile-charge-limit.rules); without a saved file the helper does nothing. The helper is omamobile-settings'.
 # Not enabled. RemainAfterExit= keeps it active after one run, so the charger's change events (each one
 # re-wants it) do not start it again (6968 starts in one boot on 2026-11-25 without it). StopWhenUnneeded= stops
-# it when the charger device goes away, so a real replug (add) runs it again.
+# it when the charger device goes away (driver unbind or module reload), so the next add runs it again. A cable
+# replug does not remove the device; the driver keeps the limit across it (checked 2026-11-25).
 [Unit]
 Description=Apply the saved charge limit
 After=local-fs.target
