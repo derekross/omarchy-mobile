@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: MIT -->
 # Power baselines
 
 One row per device and run, so the battery figures posted in the baseline issues can be compared without opening each one. The recipe (Parts A, B and C) is in [#867](https://github.com/derekross/omamobile/issues/867); the issue or comment in the last column has the full report.
