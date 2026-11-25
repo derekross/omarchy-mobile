@@ -115,10 +115,27 @@ for id in update.channel update.channel.stable update.channel.rc update.channel.
   [[ $(grep -c "\"$id\"" "$ext") == 1 ]] || fail "Menu row $id is named once after two logins"
 done
 grep -qx 'system.logout true' <<<"$menu" || fail "a row the user set is left as they set it"
+# Typing shows only while fcitx5 is on, and a reused id replaces Omarchy's
+# entry, so each row carries its own label, icon and action
+typing=$(python3 -I - "$ext" <<'PY2'
+import json, re, sys
+text = open(sys.argv[1]).read()
+text = re.sub(r'^\s*//.*$', '', text, flags=re.M)
+text = re.sub(r',(\s*[}\]])', r'\1', text)
+for key, value in json.loads(text).items():
+    if key.startswith("setup.typing"):
+        print(key, value["icon"] == "\uf11c", value["label"], value.get("action", "-"), value["when"], sep="|")
+PY2
+)
+[[ $typing == $'setup.typing|True|Typing|-|test -e ~/.config/omamobile/fcitx5\nsetup.typing.keyboard|True|Keyboard Layouts|omarchy-setup-keyboard|test -e ~/.config/omamobile/fcitx5\nsetup.typing.input|True|Input Methods|omarchy-setup-input|test -e ~/.config/omamobile/fcitx5' ]] ||
+  fail "Setup > Typing shows only with fcitx5 on, with its label, icon and action: $typing"
+for id in setup.typing setup.typing.keyboard setup.typing.input; do
+  [[ $(grep -c "\"$id\"" "$ext") == 1 ]] || fail "Menu row $id is named once after two logins"
+done
 for id in style.bar.position.top appearance.top-bar.position.top appearance.top-bar.indicators update.omarchy install.gaming.retroarch; do
   grep -q "^$id false" <<<"$menu" && fail "Menu row $id stays"
 done
-pass "menu rows that break the phone are hidden once, by content, and a user's own entry is kept"
+pass "menu rows that break the phone are hidden once, by content, Typing only without fcitx5, and a user's own entry is kept"
 
 U=$H/.local/share/applications
 for id in org.gnome.DiskUtility org.gnome.Evince cups; do
