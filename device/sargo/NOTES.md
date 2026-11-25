@@ -52,6 +52,93 @@ owner's go:
   26.3.1-3 (signatures checked), and the vendor firmware from
   `tools/extract-vendor-firmware -d sargo`.
 
+## 2026-11-25: the modem runs and Wi-Fi scans (bring-up, by hand)
+
+Kernel `7.3.0-rc6-omamobile-push1-gcf6151c19800`: the Bluetooth branch
+below plus a local branch `omamobile-sargo-wifi` (not published; the
+built tree is the branch's, before one commit message was reworded):
+"arm64: dts: qcom: sdm670: Add modem and Wi-Fi", "remoteproc:
+qcom_q6v5_mss: Add SDM670 MSS", "arm64: dts: qcom: sdm670-google-common:
+Enable modem and Wi-Fi" and "soc: qcom: Add modemsmem driver" (Richard
+Acayan's, from the sdm670-mainline tree). Six SDM670 compatibles in them
+still need binding entries (`dtbs_check`).
+
+**Backup first.** `NV_PARTS` in [`device.conf`](device.conf) now names
+the radio and calibration partitions (`modemst1`, `modemst2`, `fsg`,
+`fsc`, `modemcal`, `persist`, `modem_a`, `modem_b`, `cdt`, with
+`devinfo` as an extra), and `tools/nv-backup` copied them from the eMMC
+unchanged, its checks included (run on the phone, whose bash has
+associative arrays). Before and after every modem start below, all nine
+read `ro=1` and matched the backup.
+
+**What the modem runs on.** The SDM670 modem is SDM845's: stock's
+`qcom,mss@4080000` has SDM845's registers, clocks, halt and reset
+registers and `qcom,qdsp6v65-1-0`, and its SMP2P, GLINK and
+`qcom,icnss` interrupts, mailbox bits and SMMU stream match SDM845's, so
+the nodes follow `sdm845.dtsi`. Its firmware is the phone's own `modem`
+partition (FAT: `mba.mbn`, `modem.mdt` with `b00`-`b30`, `qdsp6m.qdb`,
+`modemr.jsn`; MPSS.AT.4.0.2.c4.1-00120, the same on both slots), copied
+to `qcom/sdm670/sargo/` with `modem.mdt` as `modem.mbn`. Its image spans
+0x8b000000-0x94800000, exactly upstream sargo's larger `mpss` region.
+
+rmtfs serves the modem RAM copies of the four EFS partitions (`rmtfs -o`
+on a tmpfs directory, never `-P`): the modem wrote `modem_fs1` during a
+session, and that write stayed in RAM. Recovery is turned off before the
+first start, and `qcom_q6v5_mss` and `ath10k_snoc` are blacklisted
+(`/etc/modprobe.d/omamobile-sargo-modem-bringup.conf`) so nothing starts
+at boot.
+
+What failed first, in order, each found from the kernel log:
+
+- **The SoC hung while the MBA checked the image's metadata** (four of
+  six starts; watchdog resets, or a stall that needed the buttons). The
+  driver put the metadata in an ordinary DMA buffer; SDM845 reserves a
+  16 KiB region for it between 0xa0000000 and 0xc0000000, and with that
+  region (`mdata_mem`, at 0xbfffc000) the hang is gone. The one start that
+  passed before had been lucky with the buffer's address. No ramoops
+  record survived these resets, in a region of our own or in stock's; the
+  log came over netconsole to the laptop (a debug-only kernel option).
+- **QRTR's name service failed to announce our services at the modem's
+  hello** ("failed to announce new service"), so the modem never found
+  rmtfs and crashed 40 s later. Services registered after the modem is up
+  are broadcast and reach it: rmtfs and tqftpserv are started after the
+  start returns, and the kernel's PD mapper (`qcom_pd_mapper`) is reloaded
+  then. The cause in the name service is not found yet.
+- **The modem's RF task crashed right after reading the EFS**
+  (`[rf]EX:kernel:0:rf:171`, the same PC every time) with the rmtfs
+  buffer at SDM845's 0x88f00000. With the buffer at 0xfc201000 between
+  guard pages and the SoC description in SMEM item 134
+  (`google,modemsmem`), both from the sdm670-mainline tree's sargo DT,
+  the modem stays up. Both changed together, so which one the RF task
+  needed is not known.
+
+With all three, the modem came up 2 s after the start, registered some
+forty QMI services (voice, network access, data, SIM, SMS, location among
+them) and stayed up. Its TFTP requests for `/readwrite/ota_firewall` and
+`modem_efs` and for `/readonly/vendor/mbn/mcfg_*` fail, as stock's
+`persist` and tqftpserv's paths would have them fail; `modem_fsg_oem_1`
+and `_2` are refused by rmtfs, as by stock's `rmt_storage`.
+
+**Wi-Fi.** After the PD mapper was reloaded the modem started its WLAN
+domain, and `ath10k_snoc` came up (chip 0x30214, board id 0xff, firmware
+WLAN.HL.2.2.5-00426, `wlan0`); `wlanmdsp.mbn` is Google's, served by
+tqftpserv. Board data: linux-firmware's `board-2.bin` has no
+`google_sargo` entry, so a `board-2.bin` with all of its entries plus
+Google's `bdwlan-sargo.bin` under
+`bus=snoc,qmi-board-id=ff,qmi-chip-id=30214,variant=google_sargo` sits in
+`firmware/updates/ath10k/WCN3990/hw1.0/`; with a file holding only that
+entry Wi-Fi came up the same, so it is the one used. A scan saw 32 to 43
+networks on 2.4 and 5 GHz. Not tested yet: a connection (no network is
+configured on the phone), the MAC address (ath10k picks a random one; the
+bootloader writes one into `/chosen/cdt/cdb2/`), Google's regional board
+files (`-ROW`, `-USA`, `-JPN`, `-VZW`), mobile data (IPA) and calls.
+
+On the phone by hand, not packaged yet: the blacklist above, `qrtr`,
+`rmtfs` and `tqftpserv` from linux-msm under `/opt/omamobile-bringup`,
+the modem files and the board file in `/usr/lib/firmware/updates`,
+`linux-firmware-atheros` (Arch Linux ARM, signature checked), and the
+start script (`/run/modem-try.sh`, gone at reboot).
+
 ## 2026-11-25: Bluetooth (omamobile-device-sargo 0.1.2), and a boot that stayed in RAM
 
 Kernel `7.3.0-rc6-omamobile-push1-g07598f0b0ecc`: the fuel gauge branch
@@ -300,7 +387,10 @@ card probes).
    the shared config, or the phone keeps a development kernel.
 3. This phone's CONTRIBUTING.md §3.1 entry (slot B's GPT mark), then
    `flash`/`push` and the installer for `android-v2`.
-4. The fuel gauge and Bluetooth into linux-omamobile, then Wi-Fi: the modem
-   processor first (remoteproc nodes for SDM670, `rmtfs` read-only from RAM,
-   and a read-only backup of `modemst1`, `modemst2`, `fsg` and `persist`,
-   which `tools/nv-backup` can't read from eMMC yet).
+4. The fuel gauge, Bluetooth and modem branches into linux-omamobile
+   (binding entries for the six SDM670 compatibles first).
+5. The modem and Wi-Fi as packages: `qrtr`, `rmtfs` and `tqftpserv`, a
+   start unit that keeps rmtfs on RAM copies and orders the services after
+   the modem (or a fix for the name service's announce), the modem
+   firmware from the `modem` partition and the board file in
+   `tools/extract-vendor-firmware`, and the Wi-Fi MAC from the bootloader.
