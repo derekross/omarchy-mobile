@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Connect tools/nv-backup to a guarded Grizzly reader over macOS USB ACM."""
+"""Back up Grizzly NV partitions through the guarded macOS USB reader."""
 
 import argparse
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import fcntl
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -357,6 +359,75 @@ def request_local(path, request):
         return body
 
 
+def backup_request(path, operation, *arguments):
+    fields = ["NV1", operation, *map(str, arguments)]
+    request = parse_request((" ".join(fields) + "\n").encode("ascii"))
+    for attempt in range(5):
+        try:
+            return request_local(path, request)
+        except (OSError, TransportError):
+            if attempt == 4:
+                raise
+            time.sleep(2)
+
+
+def copy_backup(path, destination):
+    """Publish the manifest after all partition images have been verified."""
+    before = check_probe(backup_request(path, "PROBE"))
+    destination.mkdir(mode=0o700)
+    written = []
+    hashes = {}
+
+    def save_file(name, data):
+        target = destination / name
+        with target.open("xb") as out:
+            written.append(target)
+            out.write(data)
+
+    try:
+        for label, (_, size) in sorted(before.items()):
+            target = destination / f"{label}.img"
+            with target.open("xb") as out:
+                written.append(target)
+                for offset in range(0, size, MAX_CHUNK):
+                    length = min(MAX_CHUNK, size - offset)
+                    chunk = backup_request(path, "READ", label, offset, length)
+                    if len(chunk) != length or out.write(chunk) != length:
+                        raise TransportError(f"incomplete copy of {label}")
+
+            saved_hash = hashlib.sha256()
+            with target.open("rb") as saved:
+                for chunk in iter(lambda: saved.read(MAX_CHUNK), b""):
+                    saved_hash.update(chunk)
+            digest = saved_hash.hexdigest()
+            expected = backup_request(path, "SHA256", label)
+            if expected != f"{digest}\n".encode("ascii"):
+                raise TransportError(f"independent digest mismatch for {label}")
+            hashes[label] = digest
+
+        if check_probe(backup_request(path, "PROBE")) != before:
+            raise TransportError("partition identity, size or guard changed during backup")
+
+        save_file("partitions.txt", "".join(
+            f"{label} {node.decode('ascii')} ro=1 mounted=0 {size}\n"
+            for label, (node, size) in sorted(before.items())).encode("ascii"))
+        date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        checked = " ".join(sorted(before.keys() - {"devinfo"}))
+        save_file("NV-BACKUP", (
+            "# Grizzly stock RAM rescue: read-only NV backup\n"
+            f"device: grizzly\ndate: {date}\nchecked: {checked}\ncopied, may change: devinfo\n"
+        ).encode("ascii"))
+        save_file("SHA256SUMS", "".join(
+            f"{digest}  {label}.img\n" for label, digest in hashes.items()).encode("ascii"))
+    except BaseException:
+        for target in written:
+            with suppress(OSError):
+                target.unlink()
+        with suppress(OSError):
+            destination.rmdir()
+        raise
+
+
 def discovery_timeout(value):
     try:
         seconds = float(value)
@@ -381,6 +452,8 @@ def main():
     chunk.add_argument("length")
     commands.add_parser("sha256").add_argument("label")
     commands.add_parser("finish")
+    backup = commands.add_parser("backup", help="copy and verify all nine partitions into a new private directory")
+    backup.add_argument("directory", type=Path)
     args = parser.parse_args()
     if sys.platform != "darwin":
         parser.error("this transport requires macOS")
@@ -391,6 +464,11 @@ def main():
         path = os.environ.get("GRIZZLY_NV_SOCKET")
         if not path:
             raise TransportError("set GRIZZLY_NV_SOCKET to the private bridge socket")
+        if args.command == "backup":
+            os.umask(0o077)
+            copy_backup(path, args.directory)
+            print("Grizzly NV backup complete. All nine partitions verified.")
+            return
         operation = "DONE" if args.command == "finish" else args.command.upper()
         fields = ["NV1", operation]
         if args.command in ("read", "sha256"):

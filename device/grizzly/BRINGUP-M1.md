@@ -104,11 +104,18 @@ whether it predated a stock boot.
 | [v70](#attended-v70-slot-b-trial) | After v69. Stock D1 A preflight matched the prior return. The v70 boot was requested at 18:34:28 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 | [v71](#attended-v71-slot-b-trial) | After v70. Stock D1 A preflight matched the prior return. The v71 boot was requested at 20:45:44 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 
-The maintainer's [review on backup freshness](https://github.com/derekross/omamobile/pull/1002#pullrequestreview-6060450538)
-leaves open whether to take a fresh rescue backup before each
-further power or CPM trial or to use the existing copy as the
-reference for boots with no discovered disks. The one-trial
-approvals record the runs above. They do not settle that policy.
+[Maintainer decision on backup freshness](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035).
+Take a fresh read-only backup of all nine partitions after the latest
+stock Android boot, including a fallback to A, and before each further
+power or CPM trial. Use the guarded stock D1 RAM reader and a new
+private directory. Verify every local copy against the separate
+phone-side digest and record which stock boot preceded the backup.
+The earlier one-trial approvals above are historical.
+
+If a power or CPM trial will follow the backup, catch the reader's warm
+return in Fastboot and keep it there until the separately approved trial
+is staged. Another stock Android boot, even when used to retrieve logs,
+invalidates the backup for the next power or CPM trial.
 
 ## v29 handoff-only result
 
@@ -4910,20 +4917,15 @@ a holder, a wrong size, changing topology and failed RO ioctls.
 Four more tested the PID 1 dispatch and its missing-guard and
 failure exits. The checks did not use phone storage.
 
-The host `tools/nv-backup` now accepts `NV_BACKUP_TRANSPORT`
-for a restricted reader executable. Its operations are `probe`,
-`read LABEL OFFSET_BYTE LENGTH_BYTE` and `sha256 LABEL`.
-The tool accepts at most 8 MiB per read, verifies the exact
-chunk length, compares an independent phone-side hash with
-each copy, and checks identity, size and read-only state again
-at the end. The structured protocol uses GPT labels as request
-arguments. It does not give the host a device shell. The backup
-format stays `SHA256SUMS`, `partitions.txt` and `NV-BACKUP`.
-The host suite passed the existing SSH tests and structured
-transport mocks, and the structured path passed a macOS smoke
-test with Homebrew Bash and GNU coreutils. The local host bundle
-uses a private Grizzly descriptor with the eight primary
-partitions, separate `devinfo` and an empty write allowlist.
+The Grizzly-only host bridge offers a `backup DIRECTORY` command
+through `stock-nv-transport.py`. It uses the restricted reader's
+`probe`, `read LABEL OFFSET_BYTE LENGTH_BYTE` and `sha256 LABEL`
+operations. Each read is capped at 8 MiB and checked for exact length.
+The bridge compares each saved image with a separate phone-side
+SHA-256 and rechecks the board, partition identity, size and read-only
+state after the last copy. It writes `SHA256SUMS`, `partitions.txt`
+and `NV-BACKUP` in the private destination. The transport only
+accepts the nine Grizzly labels and exposes no shell.
 
 The target-side reader and the stock USB link are separate
 dependencies for the full backup. The read-only trial should
@@ -5261,40 +5263,42 @@ gadget and USB roles are cleaned up. Hold Volume Down when
 cued for that return, or before the timer expires if the
 connection fails.
 
-Start the macOS bridge before booting slot B. Use the private
-host bundle with the Grizzly descriptor and the GNU
-coreutils directory on PATH.
+Start the macOS bridge before booting slot B. The generated
+`host-tools/` directory contains the Grizzly bridge and USB checker.
+Set `bundle` to that directory.
 
 ```sh
 bridge_dir=$(mktemp -d /private/tmp/grizzly-nv.XXXXXXXX)
 export GRIZZLY_NV_SOCKET="$bridge_dir/bridge.sock"
-export NV_BACKUP_TRANSPORT="$bundle/tools/stock-nv-transport.py"
-"$NV_BACKUP_TRANSPORT" serve "$GRIZZLY_NV_SOCKET" --wait 100
+"$bundle/tools/stock-nv-transport.py" serve "$GRIZZLY_NV_SOCKET" --wait 100
 ```
 
-In a separate shell with the same two environment variables,
-wait for `Grizzly NV reader ready` before starting the copy.
+In a separate shell with the same socket path, wait for
+`Grizzly NV reader ready` before starting the copy. Use an
+existing private parent directory and a new backup directory
+outside the checkout.
 
 ```sh
-PATH="/opt/homebrew/opt/coreutils/libexec/gnubin:$PATH" \
-  /opt/homebrew/bin/bash "$bundle/tools/nv-backup" -d grizzly "$backup_dir"
+"$bundle/tools/stock-nv-transport.py" backup "$backup_dir"
+(cd "$backup_dir" && shasum -a 256 -c SHA256SUMS)
 ```
 
-Use a new private backup directory outside the checkout.
-After all nine hashes and the bundle manifest verify, cue
-Volume Down, then send `"$NV_BACKUP_TRANSPORT" finish`.
-Select and start stock A from Fastboot. Treat this copy as a
-recovery snapshot. Returning to stock A can change the NV
-contents, so the freshness check before later PMIC work
-still applies.
+After all nine hashes and the bundle manifest verify, cue Volume
+Down and run `"$bundle/tools/stock-nv-transport.py" finish`.
+To use this backup for an upcoming power or CPM trial, leave the
+phone in Fastboot after the reader's warm return. If the session
+ends here, select and boot stock A. That makes this copy a recovery
+snapshot and requires another fresh backup before a later power
+or CPM trial.
 
-Offline tests covered verified-topology publication, PID 1
-dispatch and timed return, ARM64 reader refusal after guard
-changes, and an exact 8 MiB serial frame. The macOS bridge and
-`tools/nv-backup` completed a nine-partition synthetic copy
-and verification across a local pseudo-terminal. A wrong
-phone-side hash removed the partial backup. The attended run
-below verified hardware startup and full-size copy throughput.
+Offline tests covered verified-topology publication, PID 1 dispatch
+and timed return, ARM64 reader refusals after guard changes, and an
+exact 8 MiB serial frame. The Grizzly backup command also passed a
+synthetic nine-partition copy over the macOS socket and refused a bad
+digest, a changed inventory, an unguarded partition, and an existing
+destination. The historical attended run below verified
+hardware startup and full-size copy throughput with the same guarded
+reader protocol.
 
 #### Attended full NV backup
 
@@ -5328,15 +5332,15 @@ Run the stock inventory packer on the Mac with `--usb2-test
 board DTB as described above. The packer now emits `images/` and a
 standalone `host-tools/` directory together. For the bridge and backup
 commands above, set `bundle` to the generated `host-tools/` directory.
-The descriptor has an empty `UFS_RW` and exactly nine backup labels.
+The host bridge and guarded reader accept exactly nine backup labels.
 
 The rescue keeps the factory D1 kernel, UFS module and UFS regulator
 settings. The isolation DTBO changes USB setup. PID 1 enumerates GPT
 metadata, sets and verifies all UFS parents and partitions read-only,
 and then starts the restricted ACM service. There is no Android or
 installed root, shell service, raw SCSI service or other partition
-payload reader. `tools/nv-backup` is the first payload reader through
-ACM. The service allows 1,140 seconds for the copy and its independent
+payload reader. The Grizzly backup command is the first payload reader
+through ACM. The service allows 1,140 seconds for the copy and its independent
 on-phone hash pass, with the 1,200-second return timer armed by PID 1.
 The previous full copy and verification took 303 seconds.
 
@@ -5348,7 +5352,7 @@ The bundled host tools completed a synthetic nine-partition backup and
 rejected a separate bad-hash test.
 
 Keep the images and the backup off-repo. Use the attended staging and
-return sequence only after approval. Stop if the guard or descriptor
+return sequence only after approval. Stop if the guard or USB descriptor
 check fails, any target is missing, or a hash differs. An incomplete
 copy does not qualify as a backup. Use the timed return and select
 stock A if the bridge cannot finish.
