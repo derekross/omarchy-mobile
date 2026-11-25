@@ -207,6 +207,15 @@ grep -qx 'supply=max77759-charger' "$tmp/root/usr/share/omamobile/charge-limit.c
 [[ ! -e $tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-charge-limit-apply.service ]] \
   || fail "the apply unit is pulled in by udev, not enabled"
 pass "the charge limit declaration, its udev rule and the apply unit are staged; the unit is not enabled"
+rule=vendor/udev/rules.d/75-omamobile-charge-limit.rules
+grep -qx 'SUBSYSTEM=="power_supply", KERNEL=="max77759-charger", TAG+="systemd"' "$rule" \
+  || fail "the charger keeps its systemd tag on every event"
+grep -qx 'SUBSYSTEM=="power_supply", KERNEL=="max77759-charger", ACTION=="add", ENV{SYSTEMD_WANTS}+="omamobile-charge-limit-apply.service"' "$rule" \
+  || fail "the apply unit is wanted on add only"
+[[ $(grep -c 'SYSTEMD_WANTS' "$rule") -eq 1 ]] || fail "one SYSTEMD_WANTS line, the add one"
+! grep -q '^StartLimitIntervalSec=0' vendor/systemd/system/omamobile-charge-limit-apply.service \
+  || fail "systemd's start limit stays on for the apply unit"
+pass "the charge limit unit is wanted on add only, the tag stays on every event, and its start limit is on"
 
 
 # --- the AoC start: hang marker, nothing without the node ------------------

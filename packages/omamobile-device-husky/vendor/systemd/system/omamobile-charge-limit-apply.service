@@ -5,7 +5,6 @@
 # Not enabled.
 [Unit]
 Description=Apply the saved charge limit
-StartLimitIntervalSec=0
 After=local-fs.target
 ConditionFileIsExecutable=/usr/lib/omamobile-settings/charge-limit
 
