@@ -546,6 +546,23 @@ if [[ -f $units/omatel-agent.service ]]; then
   systemctl --user enable --now omatel-agent.service ||
     echo "omamobile-setup-user: could not enable omatel-agent.service; trying again at the next login" >&2
 fi
+# Omarchy's bt-agent.service (`bt-agent -c NoInputNoOutput`, accepting every
+# pairing) is held off on the phone by the package's drop-in
+# (bt-agent.service.d/omamobile.conf, a ConditionPathExists on
+# ~/.config/omamobile/bt-agent); the Bluetooth panel's own agent asks the
+# owner. A user manager that was already running when the package came in
+# hasn't read the drop-in, and may still run the agent: reload it, and stop
+# the agent. Every login, and nothing changes the unit's enabled state, so
+# the owner's opt-in file brings it back as before.
+if [[ -f $units/bt-agent.service && ! -e ~/.config/omamobile/bt-agent ]]; then
+  if [[ $(systemctl --user show -p DropInPaths --value bt-agent.service 2>/dev/null) != *bt-agent.service.d/omamobile.conf* ]]; then
+    systemctl --user daemon-reload || true
+  fi
+  if systemctl --user is-active --quiet bt-agent.service; then
+    systemctl --user stop bt-agent.service ||
+      echo "omamobile-setup-user: could not stop bt-agent.service; trying again at the next login" >&2
+  fi
+fi
 # Voxtype on the phone (docs/VOICE-PLAN.md, phase 3): Omarchy's base.en
 # stays the model, with Whisper's audio context cut to the clip's length
 # (context_window_optimization, for clips under 22.5 s). On the Pixel 7 Pro
