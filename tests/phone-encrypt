@@ -1,0 +1,260 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/phone-encrypt and tools/phone-unlock against a stand-in phone (no
+# phone, no root, no real disk): the phone's scripts run in this shell with
+# their paths moved into a temporary directory, userdata and the encrypted
+# volume are directories, and cryptsetup, mount and mkfs are recorded
+# stubs. GNU tar, sha256sum and find run for real, so the backup, the restore
+# and their digests are the real ones.
+#
+# Checks: --keep backs up, checks three digests and the entry count, asks for
+# the codename and "erase", formats with the plan's parameters, puts the PIN
+# in keyslot 0 and the recovery key in slot 1 (on stdin only: never in a
+# script), restores the same tree (xattrs, hard links, a sparse file) and
+# hands the boot back; a phone whose second read differs, a wrong codename,
+# a mounted root, an initramfs without /etc/omamobile-crypt or another board
+# erase nothing; --restore-plain wipes the LUKS header and restores the tree;
+# --fresh refuses a PIN that isn't the image's password and writes the image
+# whole; phone-unlock sends the PIN on stdin.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+repo=$PWD
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+t=$(mktemp -d)
+trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
+PIN=13579024
+# The phone's tar digest helper, built for this machine
+mkdir -p "$t/bin"
+cc -O2 -Wall -Werror -o "$t/bin/omamobile-tarnorm" initramfs/tarnorm/tarnorm.c
+export PATH=$t/bin:$PATH
+
+# --- The stand-in phone ---
+cat > "$t/fake-phone" <<'EOF'
+#!/bin/bash
+# Runs what tools/phone-ssh would send, as the phone's shell would: "$*"
+script="$*"
+printf '%s\n----\n' "$script" >> "$F/scripts"
+script=${script//\/sys\/block\/sda/$F/sys/block/sda}
+script=${script//\/mnt\//$F/mnt/}
+script=${script//\/run\//$F/run/}
+script=${script//\/proc\//$F/proc/}
+script=${script//\/dev\/mapper\/root/$F/dev/mapper-root}
+script=${script//\/etc\/omamobile-crypt/$F/etc/omamobile-crypt}
+script=${script//\/usr\/local\/bin\/omamobile-unlock/omamobile-unlock}
+script=${script//\[ -b /[ -e }
+script=${script//export PATH=\/usr\/local\/bin:\/usr\/sbin:\/usr\/bin:\/sbin:\/bin/:}
+stubs='
+log() { echo "$*" >> "$F/calls"; }
+disk() { case $1 in /dev/sda48) echo "$F/disk/userdata" ;; "$F/dev/mapper-root") echo "$F/disk/crypt" ;; *) echo "$F/disk/unknown" ;; esac; }
+omamobile-unlock() {
+  case $1 in
+    --status) cat "$F/unlock-state" ;;
+    *) IFS= read -r p; [ "$p" = "$(cat "$F/luks/slot0" 2>/dev/null)" ] && { log "unlock ok"; touch "$F/dev/mapper-root"; return 0; }; log "unlock wrong"; return 2 ;;
+  esac
+}
+cryptsetup() {
+  local op=$1; shift
+  case $op in
+    isLuks) [ -e "$F/disk/luks" ] ;;
+    luksFormat) log "luksFormat $*"; mkdir -p "$F/luks"; cat > "$F/luks/slot0"; touch "$F/disk/luks" ;;
+    luksAddKey) log "luksAddKey $*"; local given; given=$(cat); [ "$given" = "$(cat "$F/luks/slot0")" ] || return 2
+      eval "cp \"\${$#}\" \"$F/luks/slot1\"" ;;
+    open) log "open $*"; local given; given=$(cat)
+      [ "$given" = "$(cat "$F/luks/slot0")" ] || [ "$given" = "$(cat "$F/luks/slot1" 2>/dev/null)" ] || return 2
+      touch "$F/dev/mapper-root"; mkdir -p "$F/disk/crypt" ;;
+    close) log "close $*"; rm -f "$F/dev/mapper-root" ;;
+    luksDump) # each keyslot at the cost its luksFormat/luksAddKey call asked for
+      local n=0 line m t slots=""
+      while IFS= read -r line; do
+        case $line in "luksFormat "*) n=0 slots="" ;; "luksAddKey "*) ;; *) continue ;; esac
+        m=${line#*--pbkdf-memory }; m=${m%% *}
+        case $line in *--pbkdf-force-iterations*) t=${line#*--pbkdf-force-iterations }; t=${t%% *} ;; *) t=5 ;; esac
+        slots=$slots$(printf "  %s: luks2\n\tPBKDF:      argon2id\n\tTime cost:  %s\n\tMemory:     %s\n\tThreads:    4\n_" "$n" "$t" "${WEAK_MEMORY:-$m}")
+        slots=${slots%_}
+        n=$((n + 1))
+      done < "$F/calls"
+      printf "Keyslots:\n%sTokens:\n" "$slots" ;;
+    luksHeaderBackup) log "luksHeaderBackup $*"; echo LUKS-HEADER > "${2#--header-backup-file=}"; [ "$2" = --header-backup-file ] && echo LUKS-HEADER > "$3" ;;
+    *) log "cryptsetup $op $*"; return 1 ;;
+  esac
+}
+dumpe2fs() { [ -e "$F/disk/luks" ] && return 1; echo "Filesystem volume name:   omamobile-root"; }
+e2fsck() { log "e2fsck $*"; return "${FSCK_RC:-0}"; }
+mkfs.ext4() { local d; d=$(disk "${!#}"); log "mkfs.ext4 $*"; rm -rf "$d"; mkdir -p "$d"; }
+mount() { local ro="" src dst; [ "$1" = -o ] && { ro=$2; shift 2; }; src=$1 dst=$2; log "mount $ro $src"
+  rm -rf "$dst"; ln -sfn "$(disk "$src")" "$dst"; }
+umount() { [ -L "$1" ] || return 1; log "umount"; rm -f "$1"; }
+df() { echo "Filesystem 1K-blocks Used Available Use% Mounted"; echo "x 1 $(du -sk "$(readlink -f "$2")" | cut -f1) 1 1% /"; }
+dd() { case "$*" in *of=/dev/sda*) log "dd $*"; rm -f "$F/disk/luks" ;; *) command dd "$@" ;; esac; }
+sync() { :; }
+date() { case "$*" in *-s*) log "date $*" ;; *) command date "$@" ;; esac; }
+'
+if [[ -n ${SECOND_READ_DIFFERS:-} ]]; then
+  stubs+='
+tar() { command tar "$@"; [ "$1" = -c ] && [ -e "$F/read-once" ] && head -c 512 /dev/urandom; touch "$F/read-once"; }'
+fi
+cd "$F"
+exec bash -c "$stubs$script"
+EOF
+chmod +x "$t/fake-phone"
+
+# A phone: the hold done, the new initramfs, a plain root with a bit of everything
+phone_new() {
+  F=$t/phone; rm -rf "$F"
+  mkdir -p "$F"/{sys/block/sda/sda48,mnt,run,proc/device-tree,dev,etc,disk/userdata,luks}
+  echo PARTNAME=userdata > "$F/sys/block/sda/sda48/uevent"
+  printf 'google,gs201-cheetah\0google,gs201\0' > "$F/proc/device-tree/compatible"
+  : > "$F/proc/mounts"
+  : > "$F/etc/omamobile-crypt"
+  echo held > "$F/unlock-state"
+  local r=$F/disk/userdata
+  mkdir -p "$r/etc" "$r/home/owner/.ssh" "$r/usr/bin" "$r/lost+found" "$r/empty"
+  echo 'owner:$6$x$y:1:0:99999:7:::' > "$r/etc/shadow"
+  chmod 600 "$r/etc/shadow"
+  echo hello > "$r/home/owner/notes.txt"
+  ln "$r/home/owner/notes.txt" "$r/home/owner/notes-link.txt"
+  ln -s ../home/owner/notes.txt "$r/etc/symlink"
+  truncate -s 10M "$r/usr/bin/sparse.img"
+  printf 'data' | dd of="$r/usr/bin/sparse.img" bs=1 seek=5000000 conv=notrunc 2>/dev/null
+  printf '#!/bin/sh\n' > "$r/usr/bin/tool"; chmod 4755 "$r/usr/bin/tool"
+  setfattr -n user.omamobile -v kept "$r/home/owner/notes.txt" 2>/dev/null || true
+  touch -d @1700000000 "$r/home/owner" "$r/etc"
+  rm -rf "$t/original"; cp -a "$r" "$t/original"
+  export F
+}
+export OMAMOBILE_PHONE_RUN="$t/fake-phone" DEVICE=cheetah
+
+# Run phone-encrypt with answers; the recovery key's last group is read from
+# its output. $1: answers before the key ("-" for none), then the arguments.
+encrypt() {
+  local answers=$1; shift
+  rm -f "$t/out"
+  local from to pid line key=""
+  coproc ENC { timeout 60 tools/phone-encrypt "$@" 2>&1; echo "exit $?"; }
+  # bash drops ENC when the tool ends: keep its ends
+  exec {from}<&"${ENC[0]}" {to}>&"${ENC[1]}"
+  pid=$ENC_PID
+  [[ $answers == - ]] || printf '%s\n' "$answers" >&"$to" 2>/dev/null || true
+  while IFS= read -r line <&"$from"; do
+    printf '%s\n' "$line" >> "$t/out"
+    if [[ $line =~ ^\ +([0-9]{6}\ ){7}[0-9]{6}\ ?$ ]]; then
+      key=${line// /}
+      printf '%s\n' "${key: -6}" >&"$to" 2>/dev/null || true
+    fi
+  done
+  exec {from}<&- {to}>&-
+  wait "$pid" 2>/dev/null || true
+  printf '%s' "$key" > "$t/recovery"   # this runs in $(...)
+  tail -1 "$t/out" | sed 's/^exit //'
+}
+
+# --- keyslots below the planned cost (cryptsetup cut the memory) ---
+phone_new
+rc=$(WEAK_MEMORY=65536 encrypt $'cheetah\nerase\n'"$PIN"$'\n'"$PIN" --keep "$t/backup-weak")
+[[ $rc != 0 ]] && grep -c "not at the planned cost" "$t/out" >/dev/null || { cat "$t/out"; fail "weak keyslots stop the run"; }
+! grep -c '^open ' "$F/calls" >/dev/null || fail "weak keyslots: the volume is not opened"
+pass "keyslots below 1 GiB stop the run before the volume is opened"
+
+# --- --keep ---
+phone_new
+rc=$(encrypt $'cheetah\nerase\n'"$PIN"$'\n'"$PIN" --keep "$t/backup")
+[[ $rc == 0 ]] || { cat "$t/out"; fail "--keep finishes"; }
+pass "--keep runs through on a held phone"
+[[ -f $t/backup/root.tar.zst && -f $t/backup/MANIFEST && -f $t/backup/luks-header.img ]] || fail "--keep leaves the backup, its MANIFEST and the header"
+[[ $(stat -c %a "$t/backup") == 700 && $(stat -c %a "$t/backup/luks-header.img") == 600 ]] || fail "the backup is private"
+pass "the backup, MANIFEST and LUKS header are kept, private"
+grep -c 'luksFormat --batch-mode --type luks2 --label omamobile-crypt --cipher aes-xts-plain64 --key-size 512 --pbkdf argon2id --pbkdf-memory 1048576 --pbkdf-parallel 4 --pbkdf-force-iterations 4 --key-slot 0 --key-file=- /dev/sda48' "$F/calls" >/dev/null ||
+  fail "luksFormat with the plan's parameters"
+grep -c 'open --persistent --allow-discards --perf-no_read_workqueue --perf-no_write_workqueue --key-file=- /dev/sda48 root' "$F/calls" >/dev/null ||
+  fail "the volume opened with the persistent flags"
+pass "LUKS2, aes-xts-plain64, Argon2id 1 GiB / 4 threads / 4 iterations, persistent discard and workqueue flags"
+grep -c '^date -u -s @[0-9]' "$F/calls" >/dev/null || fail "the phone's clock is set from the laptop"
+pass "the phone's clock is set from the laptop before the copy"
+
+RECOVERY=$(cat "$t/recovery")
+[[ $(cat "$F/luks/slot0") == "$PIN" && $(cat "$F/luks/slot1") == "$RECOVERY" && ${#RECOVERY} == 48 ]] ||
+  fail "slot 0 holds the PIN, slot 1 the 48-digit recovery key"
+pass "keyslot 0 is the PIN and keyslot 1 the 48-digit recovery key, both exact"
+! grep -c -e "$PIN" -e "$RECOVERY" "$F/scripts" >/dev/null || fail "a secret reached a phone command line"
+[[ ! -e $F/run/omamobile-rk ]] || fail "the recovery key file is removed"
+pass "the PIN and the key never appear in what the phone runs"
+diff -r "$t/original" "$F/disk/crypt" >/dev/null || fail "the encrypted root holds the same files"
+[[ $(stat -c %h "$F/disk/crypt/home/owner/notes.txt") == 2 ]] || fail "hard link kept"
+[[ $(stat -c %a "$F/disk/crypt/usr/bin/tool") == 4755 ]] || fail "setuid mode kept"
+(( $(du -k "$F/disk/crypt/usr/bin/sparse.img" | cut -f1) < 1024 )) || fail "the sparse file stays sparse"
+if getfattr -n user.omamobile "$t/original/home/owner/notes.txt" >/dev/null 2>&1; then
+  [[ $(getfattr --absolute-names --only-values -n user.omamobile "$F/disk/crypt/home/owner/notes.txt") == kept ]] || fail "xattr kept"
+fi
+pass "the restored root matches: hard links, modes, sparse files, xattrs"
+grep -c 'restored [0-9a-f]\{64\}' "$t/out" >/dev/null || fail "the restore was read back"
+[[ -e $F/run/omamobile-continue && ! -e $F/dev/mapper-root ]] || fail "the volume is closed and the boot handed back"
+pass "the volume is closed and the init asked to go on"
+first_format=$(grep -n '^luksFormat' "$F/calls" | cut -d: -f1)
+last_backup_read=$(grep -n '^mount ro /dev/sda48' "$F/calls" | tail -1 | cut -d: -f1)
+((last_backup_read < first_format)) || fail "both backup reads come before the format"
+pass "userdata is formatted only after both backup reads"
+
+# --- Refusals that write nothing ---
+refuses() {  # $1: what, $2: expected text; the phone's luks state must not change
+  local what=$1 want=$2; shift 2
+  rm -rf "$t/b2"
+  rc=$(encrypt "$@")
+  [[ $rc != 0 ]] || fail "$what: refused"
+  grep -c -- "$want" "$t/out" >/dev/null || { cat "$t/out"; fail "$what: says '$want'"; }
+  ! grep -c '^luksFormat\|^mkfs\|^dd' "$F/calls" >/dev/null 2>&1 || fail "$what: nothing written"
+  pass "$what: refused, nothing written"
+}
+phone_new
+refuses "a wrong codename" "not confirmed" $'dodge\nerase' --keep "$t/b2"
+phone_new
+SECOND_READ_DIFFERS=1 refuses "a second read that differs" "can't be trusted" $'cheetah\nerase' --keep "$t/b2"
+phone_new; echo "x /newroot ext4" > "$F/proc/mounts"
+refuses "a mounted root" "the root is mounted" - --keep "$t/b2"
+phone_new; rm "$F/etc/omamobile-crypt"
+refuses "an initramfs without encryption" "can't open an encrypted root" - --keep "$t/b2"
+phone_new; echo waiting > "$F/unlock-state"
+refuses "a boot waiting for its PIN" "was not held" - --keep "$t/b2"
+phone_new
+DEVICE=bluejay refuses "another board than DEVICE" "but DEVICE=bluejay" - --keep "$t/b2"
+phone_new; FSCK_RC=4 refuses "a root with file system errors" "has errors" - --keep "$t/b2"
+
+# --- --restore-plain ---
+phone_new
+rm -rf "$F/disk/userdata"; mkdir -p "$F/disk/userdata"; touch "$F/disk/luks"
+rc=$(encrypt $'cheetah\nerase' --restore-plain "$t/backup")
+[[ $rc == 0 ]] || { cat "$t/out"; fail "--restore-plain finishes"; }
+grep -c '^dd if=/dev/zero of=/dev/sda48 bs=1M count=32' "$F/calls" >/dev/null && [[ ! -e $F/disk/luks ]] || fail "the LUKS header is zeroed"
+diff -r "$t/original" "$F/disk/userdata" >/dev/null || fail "the plain root holds the same files"
+pass "--restore-plain zeroes the LUKS header and restores the same tree"
+sed -i 's/^board: .*/board: google,gs101-bluejay/' "$t/backup/MANIFEST"
+phone_new
+refuses "a backup of another phone" "not this phone" - --restore-plain "$t/backup"
+
+# --- --fresh ---
+mkdir -p "$t/img/etc/omamobile"
+hash=$(openssl passwd -6 -salt abcdefgh "$PIN")
+printf 'USERNAME=owner\nPASSWORD_HASH=%s\n' "$hash" > "$t/img/etc/omamobile/firstboot.conf"
+mkfs.ext4 -q -F -L omamobile-root -d "$t/img" "$t/root.img" 16M
+phone_new
+refuses "a PIN that isn't the image's password" "not the password" $'11112222\n11112222' --fresh "$t/root.img"
+phone_new
+rc=$(encrypt "$PIN"$'\n'"$PIN"$'\ncheetah\nerase' --fresh "$t/root.img")
+[[ $rc == 0 ]] || { cat "$t/out"; fail "--fresh finishes"; }
+want=$(sha256sum < "$t/root.img" | cut -d' ' -f1)
+grep -c "^ *image $want" "$t/out" >/dev/null && grep -c "^ *phone $want" "$t/out" >/dev/null ||
+  fail "the image is written whole and read back"
+[[ -e $F/run/omamobile-continue ]] || fail "--fresh hands the boot back"
+pass "--fresh checks the PIN against firstboot.conf, writes the image whole and reads it back"
+
+# --- phone-unlock ---
+phone_new; echo waiting > "$F/unlock-state"; echo -n "$PIN" > "$F/luks/slot0"
+out=$(OMAMOBILE_DISK_PIN_CMD="echo $PIN" tools/phone-unlock --wait 5 2>&1) || fail "phone-unlock: $out"
+grep -c '^unlock ok' "$F/calls" >/dev/null || fail "phone-unlock opened the disk"
+! grep -c -- "$PIN" "$F/scripts" >/dev/null || fail "phone-unlock put the PIN on a command line"
+pass "phone-unlock sends the PIN on stdin, never on a command line"
+out=$(OMAMOBILE_DISK_PIN_CMD="echo 999999" tools/phone-unlock --wait 5 2>&1) && fail "a wrong PIN fails"
+pass "phone-unlock: a wrong PIN from OMAMOBILE_DISK_PIN_CMD fails"
+echo plain > "$F/unlock-state"
+out=$(OMAMOBILE_DISK_PIN_CMD="echo $PIN" tools/phone-unlock --wait 5 2>&1) && fail "phone-unlock refuses a phone that waits for nothing"
+pass "phone-unlock refuses a phone with no PIN to wait for"

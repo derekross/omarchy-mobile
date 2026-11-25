@@ -1,0 +1,101 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Checks for omamobile-crypt: syntax, the staged layout, omamobile-pin
+# against a real LUKS2 volume in a file (cryptsetup works on a file without
+# root) with a stand-in chpasswd: the disk's keyslot 0 and the account change
+# to the same PIN, a wrong current PIN changes nothing, a disk change that
+# fails leaves the password alone, and --recovery-key replaces keyslot 1;
+# omamobile-encrypt-hold's marker, its refusal on an initramfs that can't
+# hold, and --cancel.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { echo "FAIL: $*" >&2; exit 1; }
+ok() { echo "ok - $*"; }
+for f in bin/omamobile-pin bin/omamobile-encrypt-hold install; do
+  bash -n "$f" || fail "syntax: $f"
+done
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+
+./install "$t/stage"
+for f in usr/bin/omamobile-pin usr/bin/omamobile-encrypt-hold usr/share/licenses/omamobile-crypt/LICENSE \
+         usr/share/omamobile/crypt/version usr/share/doc/omamobile-crypt/README.md; do
+  [[ -e $t/stage/$f ]] || fail "not staged: $f"
+done
+ok "staged layout"
+
+# --- omamobile-encrypt-hold ---
+mkdir -p "$t/root" "$t/run/omamobile"
+hold() { OMAMOBILE_ROOT=$t/root OMAMOBILE_RUN=$t/run bin/omamobile-encrypt-hold "$@"; }
+hold > "$t/out" 2>&1 && fail "holds with an initramfs that can't"
+[[ ! -e $t/root/.omamobile-hold ]] || fail "no marker without hold support"
+grep -c "can't hold" "$t/out" >/dev/null || fail "says why it refuses"
+echo "crypt hold" > "$t/run/omamobile/initramfs-features"
+hold >/dev/null || fail "holds"
+[[ -e $t/root/.omamobile-hold ]] || fail "the marker is written"
+[[ $(hold --status) == *"holds"* ]] || fail "--status"
+hold --cancel >/dev/null && [[ ! -e $t/root/.omamobile-hold ]] || fail "--cancel"
+ok "omamobile-encrypt-hold: refuses an old initramfs, holds once, cancels"
+
+# --- omamobile-pin ---
+if ! command -v cryptsetup >/dev/null; then
+  echo "ok - # SKIP omamobile-pin: no cryptsetup here"
+  exit 0
+fi
+pbkdf="--pbkdf argon2id --pbkdf-memory 32768 --pbkdf-parallel 1 --iter-time 50"
+img=$t/userdata.img
+truncate -s 20M "$img"
+# shellcheck disable=SC2086
+printf %s 11223344 | cryptsetup luksFormat --batch-mode --type luks2 $pbkdf --key-slot 0 --key-file=- "$img" ||
+  { echo "ok - # SKIP omamobile-pin: cryptsetup can't format a file here"; exit 0; }
+# shellcheck disable=SC2086
+cryptsetup luksAddKey --batch-mode $pbkdf --key-slot 1 --key-file <(printf %s 11223344) "$img" <(printf %s 999888777666) ||
+  fail "test volume's recovery key"
+mkdir -p "$t/bin"
+printf '#!/bin/sh\ncat >> "%s"\n' "$t/chpasswd.log" > "$t/bin/chpasswd"
+chmod +x "$t/bin/chpasswd"
+opens() { cryptsetup open --test-passphrase --key-slot "$1" --key-file <(printf %s "$2") "$img" 2>/dev/null; }
+pin() { PATH=$t/bin:$PATH SUDO_USER=owner OMAMOBILE_CRYPT_ROOT_DEVICE=$img OMAMOBILE_CRYPT_TEST_PBKDF=$pbkdf bin/omamobile-pin "$@"; }
+
+printf '00000000\n' | pin > "$t/out" 2>&1 && fail "a wrong current PIN is refused"
+opens 0 11223344 && [[ ! -e $t/chpasswd.log ]] || fail "a wrong current PIN changes nothing"
+ok "omamobile-pin: a wrong current PIN changes nothing"
+
+printf '11223344\n55667788\n55667788\n' | pin > "$t/out" 2>&1 || { cat "$t/out"; fail "changes the PIN"; }
+opens 0 55667788 || fail "keyslot 0 takes the new PIN"
+opens 0 11223344 && fail "keyslot 0 no longer takes the old PIN"
+opens 1 999888777666 || fail "the recovery key still works"
+[[ $(cat "$t/chpasswd.log") == "owner:55667788" ]] || fail "the account gets the same PIN"
+ok "omamobile-pin: keyslot 0 and the account change to the same PIN; the recovery key stays"
+
+rm -f "$t/chpasswd.log"
+printf '55667788\n12\n12\n' | timeout 20 pin > "$t/out" 2>&1 && fail "a short PIN is refused"
+opens 0 55667788 && [[ ! -e $t/chpasswd.log ]] || fail "a refused PIN changes nothing"
+ok "omamobile-pin: a PIN that breaks the rules changes nothing"
+
+chmod 444 "$img"
+printf '55667788\n24681357\n24681357\n' | pin > "$t/out" 2>&1 && fail "a disk change that fails fails"
+chmod 644 "$img"
+[[ ! -e $t/chpasswd.log ]] || fail "the password stays when the disk change fails"
+opens 0 55667788 || fail "the old PIN still opens the disk"
+ok "omamobile-pin: when the disk change fails, the password is left alone"
+
+# The new key's last group, read from the tool's own output
+coproc P { pin --recovery-key 2>&1; echo "exit $?"; }
+exec {from}<&"${P[0]}" {to}>&"${P[1]}"
+printf '55667788\n' >&"$to"
+key=""
+while IFS= read -r line <&"$from"; do
+  if [[ $line =~ ^\ +([0-9]{6}\ ){7}[0-9]{6}\ ?$ ]]; then
+    key=${line// /}
+    printf '%s\n' "${key: -6}" >&"$to"
+  fi
+  last=$line
+done
+[[ $last == "exit 0" && ${#key} == 48 ]] || fail "--recovery-key runs ($last)"
+opens 1 "$key" || fail "keyslot 1 takes the new recovery key"
+opens 1 999888777666 && fail "the old recovery key no longer opens the disk"
+opens 0 55667788 || fail "the PIN still opens the disk"
+ok "omamobile-pin --recovery-key: a new 48-digit key in keyslot 1, the old one gone, the PIN kept"
+
+[[ $(OMAMOBILE_CRYPT_ROOT_DEVICE=$img bin/omamobile-pin --status) == *encrypted* ]] || fail "--status"
+ok "omamobile-pin --status"

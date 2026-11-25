@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+pkgname=omamobile-crypt
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omamobile's encrypted root, on the phone: one PIN for the disk, the lock screen and sudo (omamobile-pin), and the hold for tools/phone-encrypt"
+arch=(any)
+url="https://github.com/derekross/omamobile"
+license=(MIT)
+depends=(bash cryptsetup util-linux shadow python)
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}

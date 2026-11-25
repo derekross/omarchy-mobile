@@ -1,0 +1,45 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-encrypt-hold: make the next boot stop in the initramfs with the
+# root not mounted, so tools/phone-encrypt can work on it over USB SSH
+# (docs/SECURITY-PLAN.md §11.6).
+#
+#   sudo omamobile-encrypt-hold           hold the next boot (then reboot)
+#   sudo omamobile-encrypt-hold --cancel  don't
+#   omamobile-encrypt-hold --status
+#
+# It writes /.omamobile-hold; the init sees it after mounting the root,
+# deletes it, unmounts and stays in the initramfs, once. It refuses when the
+# running boot's initramfs can't hold (no "hold" in
+# /run/omamobile/initramfs-features), since that one would ignore the marker
+# and a later one would hold by surprise. It never reboots: that is the
+# owner's call.
+#
+# OMAMOBILE_ROOT and OMAMOBILE_RUN replace / and /run (tests).
+set -euo pipefail
+root=${OMAMOBILE_ROOT:-}
+run=${OMAMOBILE_RUN:-/run}
+marker=$root/.omamobile-hold
+die() { printf 'omamobile-encrypt-hold: %s\n' "$*" >&2; exit 1; }
+
+case ${1:-} in
+  --status)
+    [[ -e $marker ]] && echo "The next boot holds in the initramfs." || echo "No hold."
+    exit 0 ;;
+  -h|--help) awk 'NR > 2 && !/^#/ { exit } NR > 2' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  --cancel|'') ;;
+  *) die "usage: sudo omamobile-encrypt-hold [--cancel] | --status" ;;
+esac
+[[ -n $root ]] || ((EUID == 0)) || die "run it with sudo"
+if [[ ${1:-} == --cancel ]]; then
+  rm -f "$marker"
+  sync
+  echo "No hold: the next boot starts the phone as usual."
+  exit 0
+fi
+grep -qw hold "$run/omamobile/initramfs-features" 2>/dev/null ||
+  die "this boot's initramfs can't hold (it was built without INITRAMFS_CRYPT=yes, or predates it): put such a boot image on first"
+: > "$marker"
+sync
+echo "The next boot stops in the initramfs, with the root not mounted, once."
+echo "Reboot when ready, then run tools/phone-encrypt on the laptop."
