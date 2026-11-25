@@ -291,6 +291,19 @@ long-press opens the panel, the back glyph returns to quick settings.
   six digits with Pair/Cancel; a keyboard shows the passkey to type, lighting
   up digits as they're typed; a PIN or passkey request gets a field above the
   on-screen keyboard. A device pairing *to* the phone gets the same sheets.
+* **When the phone accepts pairing** (BlueZ's `Pairable`): only while the
+  owner pairs a device from the panel, and while the phone is visible with
+  the helper running; it goes off when visibility ends (the countdown, the
+  switch, or BlueZ's `DiscoverableTimeout`), when the panel closes and when
+  the helper exits, and BlueZ ends it on its own after the same two minutes
+  (`PairableTimeout`, which the helper sets and BlueZ keeps in its adapter
+  settings). BlueZ turns `Pairable` on whenever a default agent registers
+  (unless `AlwaysPairable` is set in `/etc/bluetooth/main.conf`; it is off by
+  default), so the helper turns it off again after registering. An adapter
+  that was already pairable when the panel opened (the owner's own agent, or
+  `AlwaysPairable = true`) is left as it was. Omarchy's own auto-accepting
+  agent, `bt-agent.service`, doesn't run on the phone (the package's
+  drop-in; `touch ~/.config/omamobile/bt-agent` runs it anyway).
 
 Quickshell.Bluetooth provides the devices, power, visibility, disconnect,
 forget and rename, but no pairing agent, RSSI, device class or failure
@@ -303,11 +316,13 @@ PINs travel only over stdin and D-Bus and are never printed. If the helper
 can't start, the banner says so and the panel falls back to Quickshell's own
 discovery and Just Works pairing. The pure logic is in `BluetoothModel.js`
 (`test/bluetooth-model.js`); the helper's pure parts are tested by
-`test/bt-agent.py`.
+`test/bt-agent.py`, its pairing window on a private bus against a stand-in
+for BlueZ by `test/bt-agent-bus.py`, and the panel's side of the window, with
+real Qt bindings, by `test/bluetooth-pairable.py`.
 
 Limits: no file transfer or per-profile toggles (media/calls); the panel only
 answers the agent while it is open, so pairing *to* the phone needs the panel
-up (which visibility does anyway).
+up and the phone visible.
 
 IPC:
 

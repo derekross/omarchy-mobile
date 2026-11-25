@@ -40,14 +40,15 @@
 #   tools/repo-publish --no-build development
 #   tools/repo-publish stable          (when stable should carry it too)
 #
-# Server: OMAMOBILE_PKGS_HOST (raven@nostr01.derekross.me), port
+# Server: OMAMOBILE_PKGS_HOST (omapub@nostr01.derekross.me), port
 # OMAMOBILE_PKGS_PORT (1022), path OMAMOBILE_PKGS_PATH
-# (/var/www/html/pkgs.omamobile.org). The account must be in `deployers`.
+# (/var/www/html/pkgs.omamobile.org). The account must be in `deployers`;
+# since 2026-11-17 only omapub, with the build host's key, may write there.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
 
-HOST=${OMAMOBILE_PKGS_HOST:-raven@nostr01.derekross.me}
+HOST=${OMAMOBILE_PKGS_HOST:-omapub@nostr01.derekross.me}
 PORT=${OMAMOBILE_PKGS_PORT:-1022}
 DEST=${OMAMOBILE_PKGS_PATH:-/var/www/html/pkgs.omamobile.org}
 URL=https://pkgs.omamobile.org

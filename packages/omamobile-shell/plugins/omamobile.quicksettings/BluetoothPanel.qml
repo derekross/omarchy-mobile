@@ -29,6 +29,14 @@ import "Readable.js" as Readable
 // come back with BlueZ's reason. Without the helper the panel still lists,
 // pairs (Just Works only) and connects through Quickshell.
 //
+// Pairing (BlueZ's Pairable) is on only while the owner pairs a device from
+// here, or while the phone is visible and the helper's agent can show the
+// confirmation sheets; it goes off when visibility ends, when the panel
+// closes and when the helper exits. BlueZ itself also turns it off after
+// visibleSeconds (PairableTimeout, which the helper sets). A phone whose
+// adapter was already pairable when the panel opened (the owner's own agent,
+// or AlwaysPairable in main.conf) is left as it was.
+//
 // The window sits on the top layer with normal exclusion, like the Wi-Fi
 // picker, so the rename and PIN fields stay above the on-screen keyboard.
 Item {
@@ -60,12 +68,18 @@ Item {
     pairing = BluetoothModel.pairingStep(null, { event: "reset" })
     cancelSheet()
     helperError = ""
+    // Pairable is the panel's to turn on and off only if it was off when the
+    // panel opened (pairableWanted in BluetoothModel.js).
+    pairableOwned = !(adapter && adapter.pairable)
+    panelPairable = false
     agent.running = true
     syncRows(true)
   }
 
   function close() {
     if (!opened) return
+    // pairableWanted turns false here: pairing off first, through the helper
+    // while it still runs.
     opened = false
     cancelSheet()
     pairing = BluetoothModel.pairingStep(null, { event: "reset" })
@@ -75,6 +89,11 @@ Item {
     // Visibility belongs to the panel, as on Android.
     if (madeVisible && adapter && adapter.discoverable) adapter.discoverable = false
     madeVisible = false
+    // The helper turns pairing off as it exits, and BlueZ does too once its
+    // agent is gone; a fallback write of ours is undone here.
+    if (pairableOwned && adapter && (panelPairable || adapter.pairable)) adapter.pairable = false
+    panelPairable = false
+    pairableOwned = false
   }
 
   // `shell call omamobile.quicksettings bluetoothPanel` returns this. Never
@@ -91,6 +110,7 @@ Item {
       enabled: enabled,
       discovering: !!adapter && adapter.discovering,
       visible: !!adapter && adapter.discoverable,
+      pairable: !!adapter && adapter.pairable,
       helper: helperReady ? "ready" : (helperError || (agent.running ? "starting" : "stopped")),
       paired: lists.paired.map(brief),
       available: lists.available.map(brief),
@@ -136,6 +156,15 @@ Item {
 
   property bool madeVisible: false
   property int visibleRemaining: 0
+
+  // The pairing window (see the header): whether the panel may change the
+  // adapter's Pairable, whether it set it itself through Quickshell (no
+  // helper yet), and whether pairing should be on now.
+  property bool pairableOwned: false
+  property bool panelPairable: false
+  readonly property bool pairableWanted: BluetoothModel.pairableWanted({
+    opened: opened, visible: visibleRemaining > 0, pairing: actionKind === "pair", helper: helperReady })
+  onPairableWantedChanged: applyPairable()
 
   onDeviceObjectsChanged: syncRows(false)
   onEnabledChanged: syncRows(true)
@@ -188,7 +217,10 @@ Item {
 
   Process {
     id: agent
-    command: ["omamobile-shell-child", "omamobile-bt-agent"]
+    // --pairable-window: the helper owns Pairable (off at its start, on only
+    // when the panel asks, off at its exit) and BlueZ's PairableTimeout.
+    command: root.pairableOwned ? ["omamobile-shell-child", "omamobile-bt-agent", "--pairable-window", String(root.visibleSeconds)]
+                                : ["omamobile-shell-child", "omamobile-bt-agent"]
     stdinEnabled: true
     stdout: SplitParser {
       onRead: function(line) { root.helperEvent(BluetoothModel.parseHelperLine(line)) }
@@ -196,6 +228,8 @@ Item {
     onRunningChanged: if (!running) root.helperReady = false
     onExited: function(exitCode) {
       root.helperReady = false
+      // Its agent is gone, so pairing goes off (BlueZ does it too).
+      if (root.opened && root.pairableOwned && root.adapter && root.adapter.pairable) root.adapter.pairable = false
       if (exitCode !== 0 && root.opened && !root.helperError) root.helperError = "Pairing helper stopped"
     }
   }
@@ -210,6 +244,7 @@ Item {
     case "ready":
       helperReady = true
       helperError = ""
+      applyPairable()
       break
     case "error":
       helperReady = false
@@ -300,11 +335,13 @@ Item {
 
   // ---------------------------------------------------------------- visibility
 
+  // Pairing follows the visible window (pairableWanted): on with it, through
+  // the helper, whose agent shows the sheets; off when it ends, whether the
+  // owner ends it, the countdown reaches 0 or BlueZ's DiscoverableTimeout.
   function setVisible(on) {
     if (!adapter || !enabled) return
     if (on) {
       adapter.discoverableTimeout = visibleSeconds
-      adapter.pairable = true
       adapter.discoverable = true
       madeVisible = true
       visibleRemaining = visibleSeconds
@@ -319,6 +356,27 @@ Item {
     repeat: true
     running: root.visibleRemaining > 0
     onTriggered: root.visibleRemaining = Math.max(0, root.visibleRemaining - 1)
+  }
+
+  // Pairable on or off to match pairableWanted, for a panel that owns it:
+  // whenever pairableWanted changes, and when the helper is ready (its
+  // agent's registration turned Pairable on in BlueZ).
+  // The helper does it when it's there (it can restart BlueZ's timeout,
+  // which Quickshell's setters skip when the value is unchanged); without
+  // it, only the owner's own pairing turns it on, through Quickshell.
+  function applyPairable() {
+    if (!pairableOwned || !adapter) return
+    if (helperReady) {
+      send({ cmd: "pairable", on: pairableWanted })
+      panelPairable = false
+    } else if (pairableWanted) {
+      adapter.pairableTimeout = visibleSeconds
+      adapter.pairable = true
+      panelPairable = true
+    } else if (panelPairable) {
+      adapter.pairable = false
+      panelPairable = false
+    }
   }
 
   // ---------------------------------------------------------------- actions
@@ -396,6 +454,8 @@ Item {
   }
 
   function pairDevice(address) {
+    // runAction makes pairableWanted true, so pairing is on before the Pair
+    // call: a pairing keeps its key only while the adapter is pairable.
     if (!runAction("pair", address)) return
     if (helperReady) {
       pairing = BluetoothModel.pairingStep(pairing, { event: "start", address: address })

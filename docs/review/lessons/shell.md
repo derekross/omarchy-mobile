@@ -3,6 +3,16 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1184. A change that makes a daemon offer a mode it didn't offer before
+  is read against what upstream's own scripts pick when that mode appears.**
+  #1045's stand-in driver adds `performance`, and Omarchy's
+  `omarchy-powerprofiles-set` picks it on AC by default at every session
+  start; the PR's description and test covered only the owner's explicit
+  choice. *Check:* `bsdtar -xOf` the pinned package's callers of the daemon
+  (`grep -a -l '<daemon CLI>'` over its files), find each default and fallback
+  branch that names the new value, and walk a fresh session on each power
+  source with no saved state. Extends L-1166 and L-818. *From:* #1045, round
+  68, 2026-11-25.
 - **L-1171. A test that reads the real machine (a fixed system path, the real
   `systemctl`) passes on a laptop and fails on a provisioned phone, where
   `tools/phone-install-package` runs `check()`, and a test that leans on the
