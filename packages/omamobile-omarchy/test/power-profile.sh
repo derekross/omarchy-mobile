@@ -9,7 +9,7 @@ pass() { printf 'ok - %s\n' "$1"; }
 
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
 tool=$PWD/lib/power-profile
-export OMAMOBILE_CPUFREQ=$t/cpufreq OMAMOBILE_POWER_PROFILE_CONF=$t/power-profile.conf
+export OMAMOBILE_CPUFREQ=$t/cpufreq OMAMOBILE_POWER_PROFILE_CONF=$t/power-profile.conf OMAMOBILE_POWER_PROFILE_OFF=$t/off
 
 policy() { # NAME TOP STEPS...
   local d=$t/cpufreq/$1; mkdir -p "$d"
@@ -59,6 +59,15 @@ rm "$t/cpufreq/policy4/scaling_available_frequencies"
 [[ $(cat "$t/cpufreq/policy4/scaling_max_freq") == $((2367000 * 60 / 100)) ]] || fail "no step list: the plain 60 %"
 "$tool" restore >/dev/null
 pass "a cluster with no step list gets the plain percentage"
+
+touch "$t/off"
+echo 1098000 > "$t/cpufreq/policy0/scaling_max_freq"
+for c in "apply power-saver" "apply balanced" "restore"; do
+  "$tool" $c >/dev/null || fail "off: $c succeeds"
+done
+[[ $(cat "$t/cpufreq/policy0/scaling_max_freq") == 1098000 ]] || fail "off: a cap someone else set stays, restore included"
+rm "$t/off"; "$tool" restore >/dev/null
+pass "a device that ships power-profile-off: nothing is written, restore included"
 
 "$tool" apply 'power saver' >/dev/null 2>&1 && fail "a malformed profile is refused"
 "$tool" bogus >/dev/null 2>&1 && fail "an unknown command is refused"

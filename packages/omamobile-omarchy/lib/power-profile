@@ -15,14 +15,11 @@
 # A phone starts on Balanced for both sources unless the owner picks
 # otherwise: Omarchy picks Performance on AC when it is offered and nothing is
 # saved, so omamobile-setup-user (omamobile-shell 0.2.154) saves Balanced once.
-# Other writers of the same files: a device's thermal guard that caps
-# scaling_max_freq (the Pixel 8 Pro's omamobile-husky-thermal, #946) rewrites
-# its own cap at every tick, so there Power-saver's ceiling lasts only until
-# the guard's next tick, and a profile change can lift the guard's cap for up
-# to one tick. Performance's
-# floor never goes above the guard's cap: the kernel keeps the minimum at or
-# under the maximum. restore gives the full range back, and the guard puts its
-# cap back at its next tick.
+# A device whose own thermal guard writes the same files (the Pixel 8 Pro's
+# omamobile-husky-thermal, #946) ships /usr/share/omamobile/power-profile-off
+# in its device package: there this changes nothing, not even at restore,
+# since a guard's cap lifted for one tick on a hot phone is what it guards
+# against. The unit doesn't start there either.
 #   power-profile watch          follow power-profiles-daemon (the service)
 #   power-profile apply PROFILE  set the limits for PROFILE once
 #   power-profile restore        give every cluster its full range back
@@ -31,6 +28,7 @@
 set -euo pipefail
 cpufreq=${OMAMOBILE_CPUFREQ:-/sys/devices/system/cpu/cpufreq}
 conf=${OMAMOBILE_POWER_PROFILE_CONF:-/etc/omamobile/power-profile.conf}
+off=${OMAMOBILE_POWER_PROFILE_OFF:-/usr/share/omamobile/power-profile-off}
 bus=org.freedesktop.UPower.PowerProfiles
 path=/org/freedesktop/UPower/PowerProfiles
 
@@ -99,6 +97,11 @@ watch() {
   apply balanced >/dev/null
   exit 1
 }
+
+if [[ -e $off ]]; then
+  echo "power-profile: off on this device ($off): its thermal guard owns the CPU limits"
+  case ${1:-} in watch | apply | restore) exit 0 ;; esac
+fi
 
 case ${1:-} in
   watch) watch ;;

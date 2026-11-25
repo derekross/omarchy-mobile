@@ -7,6 +7,8 @@ After=power-profiles-daemon.service
 # systemd dropped this unit at boot
 BindsTo=power-profiles-daemon.service
 ConditionPathExists=/sys/devices/system/cpu/cpufreq/policy0
+# A device whose thermal guard writes the same limits says so (lib/power-profile)
+ConditionPathExists=!/usr/share/omamobile/power-profile-off
 
 [Service]
 ExecStart=/usr/lib/omamobile-omarchy/power-profile watch

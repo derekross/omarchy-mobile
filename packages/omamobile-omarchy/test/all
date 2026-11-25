@@ -68,6 +68,8 @@ bash test/run-mode.sh || fail "the /run mode rule"
 [[ -x $t/stage/usr/lib/omamobile-omarchy/power-profile ]] || fail "power-profile staged executable"
 [[ $(readlink "$u/power-profiles-daemon.service.wants/omamobile-power-profile.service") == ../omamobile-power-profile.service ]] \
   || fail "the power-profile unit starts with the daemon"
+grep -qxF 'ConditionPathExists=!/usr/share/omamobile/power-profile-off' "$u/omamobile-power-profile.service" \
+  || fail "the power-profile unit stays off on a device that ships power-profile-off"
 grep -qxF 'ExecStart=/usr/lib/omamobile-omarchy/power-profile watch' "$u/omamobile-power-profile.service" || fail "the unit follows the profile"
 grep -qxF 'ExecStopPost=/usr/lib/omamobile-omarchy/power-profile restore' "$u/omamobile-power-profile.service" \
   || fail "the unit gives the top frequency back when it stops"
