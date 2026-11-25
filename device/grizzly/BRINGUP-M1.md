@@ -2415,6 +2415,33 @@ trace the HCI cleanup boundary before changing shutdown order.
 Stock D1 completed boot on A with enforcing verity and the original
 factory VBMeta digest.
 
+### Mainline v47 HCI cleanup with Deep H8 held
+
+[v47 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/ccb9a4a7940a9bfa3200450cd676e4e5af617c5f)
+applies the v46 DME pair and checks the same fresh Hibern8 IRQ and
+dual `0x11` PSM gate. After qualification the diagnostic keeps the
+Deep H8 clock prepared. It logs entry to HCI cleanup, the existing
+interrupt-mask write and readback, HCI stop entry and return, and
+completion of IRQ release. These markers add no HCI accesses. The
+link-only host still retains prep and core votes and exits before
+transfer queues or disk discovery.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match source, manifest and the v46 packed DTB and rescue ramdisk. | Leave stock A selected on any mismatch. |
+| One attended slot B boot, power-control risk | With approval and the verified NV backup, confirm both DME replies, fresh Hibern8, both PSMs at `0x11` and the held-clock marker. Capture HCI stop, IRQ release and the post-cleanup PSM sample. Expect the 90-second return. | On an early reset or missing marker, preserve the last cleanup step in ramoops and select stock A. Confirm Android completes boot. |
+
+ARM64 `7.3.0-rc6-omamobile-grizzly-uic-v47` passed strict checkpatch,
+`W=1` for the UFS core and host, and source checks for cleanup order
+and the held-clock branch. The built kernel contains all seven new
+markers. The packed DTB and rescue ramdisk match v46 byte for byte.
+All five hashes, AVB signatures, unpacked payload, handoff and saved
+D1 slot capacities passed offline. Manifest SHA-256
+`2f00a9299f568e85739a868bb44f285a9c63ae603a3e1f5c1eb338530fc810fe`.
+Archive SHA-256
+`a1c87c17ba9156f6351a199c8fe14e137aed644c58eea41b7481ec5ad29e327e`.
+Whether HCI cleanup completes with Deep H8 held remains a hardware test.
+
 ## Staging and return sequence used for D1
 
 These commands describe the attended workflow used by the trials.
