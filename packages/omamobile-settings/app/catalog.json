@@ -27,7 +27,7 @@
       {
         "id": "security",
         "title": "Security & privacy",
-        "detail": "Firewall on or off, who may connect over SSH",
+        "detail": "Firewall, SSH, microphone and camera access",
         "icon": "pin",
         "page": "security"
       },

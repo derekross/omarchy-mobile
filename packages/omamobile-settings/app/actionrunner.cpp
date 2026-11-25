@@ -20,7 +20,7 @@ void ActionRunner::post(const QString &tool, const QVariantMap &result, int id) 
 
 int ActionRunner::run(const QString &tool, const QStringList &args) {
     static const QRegularExpression word("\\A[a-z0-9]{1,16}\\z");
-    static const QStringList tools = {"display", "charge", "security", "nfc"};
+    static const QStringList tools = {"display", "charge", "security", "nfc", "privacy"};
     const int id = ++m_next;
     auto fail = [this, &tool, id](const QString &why) { post(tool, {{"error", why}}, id); return id; };
     if (!tools.contains(tool) || args.size() > 3) return fail("unknown action");
@@ -49,8 +49,9 @@ int ActionRunner::run(const QString &tool, const QStringList &args) {
     p->closeWriteChannel();
     // the firewall switch: up to three reads (10 s each at worst) and systemctl start, which waits for the owner's PIN
     // (cut at 122 s: 60 s for the PIN and the unit's 60 s limit): 152 s, so 160 s
-    // NFC on or off (nfc set nfc on|off) waits for the PIN the same way: 122 s plus two reads, so 160 s as well
-    const bool pinSet = (tool == "security" || tool == "nfc") && args.value(0) == "set";
+    // NFC on or off (nfc set nfc on|off) and microphone or camera access (privacy set mic|camera on|off) wait for the
+    // PIN the same way: 122 s plus two reads (and a 5 s journal read on a failure), so 160 s as well
+    const bool pinSet = (tool == "security" || tool == "nfc" || tool == "privacy") && args.value(0) == "set";
     QTimer::singleShot(pinSet ? 160000 : 20000, p, [p] { if (p->state() != QProcess::NotRunning) p->kill(); });
     return id;
 }

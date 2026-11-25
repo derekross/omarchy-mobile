@@ -32,6 +32,11 @@ private slots:
             sec.write(it.key() == "on"
                 ? "printf '{\"firewall\":\"off\",\"ssh_active\":\"active\",\"ssh_enabled\":\"enabled\",\"ssh_allowed\":[\"USB\"],\"usb_ssh_rule\":true,\"hotspot\":false,\"can_enable\":true,\"why\":\"\",\"args\":\"%s\"}\\n' \"$*\"\n"
                 : "printf '%s\\n' '{\"firewall\":\"not installed\",\"ssh_active\":\"inactive\",\"ssh_enabled\":\"disabled\",\"ssh_allowed\":[],\"usb_ssh_rule\":false,\"hotspot\":false,\"can_enable\":false,\"why\":\"UFW is not installed.\"}'\n");
+            QFile priv(stubs(it.key()) + "/privacy.sh");
+            QVERIFY(priv.open(QIODevice::WriteOnly));
+            priv.write(it.key() == "on"
+                ? "printf '{\"switchable\":true,\"mic\":\"off\",\"camera\":\"on\",\"cameras\":0,\"args\":\"%s\"}\\n' \"$*\"\n"
+                : "printf '%s\\n' '{\"switchable\":false,\"mic\":\"on\",\"camera\":\"on\",\"cameras\":0}'\n");
         }
     }
     void probeShowsTheBatteryRowOnlyWhenTheBackendSaysAvailable() {
@@ -96,6 +101,18 @@ private slots:
         QCOMPARE(backend.rows().size(), 1);
         QCOMPARE(backend.rows().first().toMap()["id"].toString(), QString("security"));
     }
+    void runnerTakesThePrivacySwitch() {
+        ActionRunner runner;
+        runner.setBackendDir(stubs("on"));
+        QSignalSpy done(&runner, &ActionRunner::finished);
+        const int ok = runner.run("privacy", {"set", "mic", "off"});
+        const int bad = runner.run("privacy", {"set", "mic", "off/x"});
+        QTRY_COMPARE(done.count(), 2);
+        for (const auto &call : done) {
+            if (call.at(2).toInt() == ok) QCOMPARE(call.at(1).toMap().value("args").toString(), QString("set mic off"));
+            else { QCOMPARE(call.at(2).toInt(), bad); QCOMPARE(call.at(1).toMap().value("error").toString(), QString("bad argument")); }
+        }
+    }
     void runnerTakesTheFirewallSwitch() {
         ActionRunner runner;
         runner.setBackendDir(stubs("on"));
@@ -159,10 +176,21 @@ private slots:
             QCOMPARE(page->property("firewall").toString(), QString("not installed"));
             QVERIFY(!page->property("canEnable").toBool());
             QVERIFY(page->property("status").toString().contains("not installed"));
+            // without omamobile-shell's switch the microphone and camera sections stay hidden
+            QTRY_VERIFY(page->property("privRead").toBool());
+            QCOMPARE(page->property("mic").toString(), QString());
             return;
         }
         QCOMPARE(page->property("firewall").toString(), QString("off"));
         QVERIFY(page->property("canEnable").toBool());
+        // microphone and camera access: the page reads `privacy get` through the runner too
+        QTRY_COMPARE(page->property("mic").toString(), QString("off"));
+        QCOMPARE(page->property("camera").toString(), QString("on"));
+        QMetaObject::invokeMethod(page.get(), "applyPrivacy", QVariant(QVariantMap{{"switchable", true}, {"mic", "on"}, {"camera", "off"}, {"cameras", 0},
+                                                                                  {"error", "not changed: the PIN was not entered"}}));
+        QCOMPARE(page->property("camera").toString(), QString("off"));
+        QCOMPARE(page->property("privStatus").toString(), QString("not changed: the PIN was not entered"));
+        QVERIFY(!page->property("privSetting").toBool());
         QCOMPARE(page->property("sshAllowed").toList().size(), 1);
         const QVariantMap on{{"firewall", "on"}, {"ssh_active", "active"}, {"ssh_enabled", "enabled"},
                              {"ssh_allowed", QVariantList{"USB", "Wi-Fi from 10.0.0.0/24"}}, {"usb_ssh_rule", true}, {"hotspot", false}, {"can_enable", true}, {"why", ""}};
