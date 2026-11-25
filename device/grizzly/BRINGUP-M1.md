@@ -2971,6 +2971,32 @@ signatures, the unpacked payload, ABL handoff and saved D1 slot sizes
 passed. Manifest SHA-256 `a74f941f328ba1788db6063463739970a21bf33a164260b5140986a5833f7aec`.
 Archive SHA-256 `57c53e5879cdc2dfcca3f1d1200f7aed831dbb141a093fea6b703b182ed2679a`.
 
+#### Attended v53 slot B trial
+
+On 2026-11-25 one v53 boot used the verified nine-partition NV backup.
+All five slot B writes passed. The readback matched all 8,192 supplied
+`vendor_boot_b` bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 0.164711–0.165020 | Prep OFF | First post-vote sample was HC `0x13`, PHY `0x11`. Qualification passed in 4 µs with `saw_hc_0x32=0`. |
+| 2.210085–2.215160 | Link and initialization | Link startup and NOP passed. `bRefClkFreq=0x2` and the first read of `fDeviceInit` returned clear. |
+| 2.215448–2.215479 | INQUIRY | The transfer IRQ arrived. INQUIRY returned GOOD with zero residual and `result=0`. |
+| 2.215599–2.215619 | READ CAPACITY(10) | A separate transfer IRQ arrived. OCS `0x0` and UPIU `0x21` reached the host, with response code `0x1`, SCSI status `0x2` (CHECK CONDITION), and `result=-5`. |
+| 2.215638–2.215703 | Cleanup | The command failure skipped the Hibern8 check (`-ECANCELED`). HCI stop completed and the IRQ was freed. |
+| 90.209453–91.212357 | Timed warm return | Zero SCSI disks at RAM startup and before restart. |
+
+The second IRQ confirms that the host received the device response.
+The diagnostic did not parse geometry after CHECK CONDITION. It also
+did not log sense data, so the device's reason is unknown. Before
+changing the command sequence or retrying automatically, validate the
+sense length and decode the sense key, ASC and ASCQ from the response
+UPIU if present.
+
+Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
+after 133 seconds. Stock D1 booted on A with enforcing verity and
+the expected factory VBMeta digest.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
