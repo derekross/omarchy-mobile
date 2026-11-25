@@ -9,7 +9,8 @@ the repository; facts from them are quoted here. The Pixel 3a XL (`bonito`)
 shares the SoC and the bootloader's board name but not the panel.
 
 Every kernel here is linux-omamobile at `00860bdedea4`
-(`7.3.0-rc6-omamobile-push1-g00860bdedea4`), arm64 defconfig plus
+(`7.3.0-rc6-omamobile-push1-g00860bdedea4`; from the battery entry of
+2026-11-25, that plus the fuel gauge commits named there), arm64 defconfig plus
 `kernel/configs/omamobile.config` plus [`kernel.config`](kernel.config),
 built with Debian's clang 19 instead of the pinned Android clang, and the
 upstream `qcom/sdm670-google-sargo.dtb`.
@@ -50,6 +51,54 @@ owner's go:
   ARM's `mesa`, `vulkan-mesa-implicit-layers` and `vulkan-freedreno`
   26.3.1-3 (signatures checked), and the vendor firmware from
   `tools/extract-vendor-firmware -d sargo`.
+
+## 2026-11-25: battery and charging (charger, RRADC, fuel gauge)
+
+Kernel `7.3.0-rc6-omamobile-push1-gd230b9b46eaf`: linux-omamobile at
+`00860bdedea4` plus a local branch `omamobile-sargo-fg` (not published),
+four commits:
+
+- "dt-bindings: power: supply: Add schema for Qualcomm pmi8998 fuel gauge",
+  "power: supply: Add driver for Qualcomm PMI8998 fuel gauge" (Joel
+  Selvaraj) and "arm64: dts: qcom: pm660: Add fuel gauge" (Richard Acayan),
+  patches 1, 2 and 4 of the RFC series "Qualcomm 3rd gen fuel gauge
+  support" (David Heidelberg, linux-kernel, 2025-11-24), applied unchanged;
+  the driver's author gave his Signed-off-by on the list afterwards;
+- the FG node enabled in `sdm670-google-common.dtsi` beside the charger
+  (the series' 8/8 enables it in `sdm670-google-sargo.dts`, which in this
+  tree holds only what the 3a and 3a XL don't share).
+
+The charger (`qcom,pm660-charger`, `qcom_smbx`) and the RRADC were already
+upstream and enabled in the board DTS; arm64 defconfig builds neither.
+[`kernel.config`](kernel.config) now sets all three as modules, and they
+load from the DT on their own. The driver reads the FG's results and writes
+only its memory-interface controls, never the battery profile in FG memory.
+
+On the phone, on the laptop's USB port (a CDP, 875 mA input limit):
+
+- `pm660-charger`: online, CDP, health Good. It reports `voltage_now` and
+  `current_now` only while charging, 0 otherwise (by design in the
+  driver); the RRADC read the USB input at 5.23 V, 60 mA.
+- `qcom-battery`: capacity 99 %, 4.23 V, 26.0-26.5 °C, Li-ion, 3000 mAh
+  design (from the board DTS); UPower's display device showed 99 %,
+  `fully-charged`.
+- USB input paused for 3 minutes (`Unknown` written to the charger's
+  `status`, which sets the PMIC's USBIN suspend bit; a dead-man timer would
+  have cleared it): the charger went offline, the battery drew 45-95 mA
+  (`current_now` negative) and fell from 4.232 to 4.207 V, and USB data
+  stayed up. Input back on: 20 mA into the battery, status Full (99 % is
+  above the recharge threshold, so a full charge cycle is not shown yet).
+- The image was RAM-booted first (`fastboot boot`), then written to
+  `boot_b` from the running system (read back by sha256) and booted from
+  there; the earlier `boot_b` is kept off the repository as the rollback.
+
+Known gaps: the battery's status follows the charger only when the charger
+signals a change. Pausing the input by register write signals nothing, so
+the battery stayed `Full` while discharging; a real unplug raises the
+`usb-plugin` interrupt and should signal it, but that is untested, since
+the cable is the only link. Charging from below the recharge threshold,
+the readings near empty, and UPower's critical-battery power-off on this
+phone are not qualified yet.
 
 ## 2026-11-25: the clock keeps time across reboots (omamobile-device-sargo 0.1.1)
 
@@ -124,7 +173,8 @@ What it took, each a step that failed first:
   (`date -s`) until the phone has network time or an RTC offset (the
   offset came on 2026-11-25, above).
 
-Not working yet: battery and charging (no power supply registers), Wi-Fi,
+Not working yet (on that kernel; battery and charging came on 2026-11-25,
+above): battery and charging (no power supply registers), Wi-Fi,
 Bluetooth, modem, audio, sensors, cameras, suspend. Plymouth's unit fails.
 
 ## 2026-11-24: the eMMC guard on the phone (RAM boot)
@@ -196,7 +246,7 @@ card probes).
    the shared config, or the phone keeps a development kernel.
 3. This phone's CONTRIBUTING.md §3.1 entry (slot B's GPT mark), then
    `flash`/`push` and the installer for `android-v2`.
-4. Battery and charging (PM660), then Bluetooth and Wi-Fi: the modem
+4. The fuel gauge into linux-omamobile, then Bluetooth and Wi-Fi: the modem
    processor first (remoteproc nodes for SDM670, `rmtfs` read-only from RAM,
    and a read-only backup of `modemst1`, `modemst2`, `fsg` and `persist`,
    which `tools/nv-backup` can't read from eMMC yet).
