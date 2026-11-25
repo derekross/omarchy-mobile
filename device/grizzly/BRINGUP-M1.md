@@ -3147,6 +3147,30 @@ AVB signatures, the unpacked payload, ABL handoff and saved D1
 slot sizes passed. Manifest SHA-256 `cd4d02fab1396dc22087470ca17743bd9652da35f3ccc5507753b55f48c61a10`.
 Archive SHA-256 `4ed896bd54e6548359418470815403a9986db9e3e9cf1987714c44149e6c25bc`.
 
+#### Attended v56 slot B trial
+
+On 2026-11-25 one v56 boot used the verified nine-partition NV backup.
+All five slot B writes passed, and readback matched all 8,192
+supplied `vendor_boot_b` bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 0.156509–0.156814 | Prep OFF | HC reached `0x13`, PHY stayed at `0x11`, and qualification passed in 4 µs with `saw_hc_0x32=0`. |
+| 2.210073–2.215641 | Link, initialization and INQUIRY | Link and NOP passed, `bRefClkFreq=0x2`, the first `fDeviceInit` read returned clear, and INQUIRY returned GOOD through its IRQ. |
+| 2.215761–2.215952 | READ CAPACITY(10) | Current `06/29/00` triggered one retry, which returned GOOD with zero residual, last LBA 12,801,023 and logical block size 4,096 bytes. |
+| 2.216256–2.216283 | One READ(10) on LUN 0, LBA 0 | Completion IRQ observed, OCS `0x0`, UPIU `0x21`, GOOD status and zero residual. `bytes=4096 dma_changed=1 mbr_signature=1`, `result=0`. |
+| 2.216429–2.216693 | Cleanup | Hibern8 passed. HC and PHY reached `0x11`. Deep H8 stayed prepared through HCI IRQ release. |
+| 90.201086–91.203706 | Timed warm return | Zero SCSI disks before restart and at RAM startup. |
+
+This verifies one 4 KiB logical-block read via the diagnostic IRQ
+path. The MBR signature was observed. GPT validation and normal
+SCSI host registration remain untested. The early
+`device_links_no_driver()` warning recurred.
+
+Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
+after 133 seconds. Stock D1 booted on A with enforcing verity and
+the expected factory VBMeta digest.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
