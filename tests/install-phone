@@ -857,6 +857,18 @@ if binstall --dry-run; then fail "refuses an unsigned bundle"; fi
 grep -q 'not signed' "$t/out" || fail "says the bundle is unsigned"
 binstall --dry-run --unsigned || { cat "$t/out"; fail "a development bundle installs with --unsigned"; }
 grep -q 'would run: fastboot -s FAKE123 flash boot_b' "$t/out" || fail "a bundle uses its own images"
+# A symlink in the bundle is refused even when its target has the right bytes (#941)
+mv "$BD/images/dtbo.img" "$t/dtbo.outside"
+ln -s "$t/dtbo.outside" "$BD/images/dtbo.img"
+if binstall --dry-run --unsigned; then fail "refuses a bundle with a symlink"; fi
+grep -q 'the bundle holds images/dtbo.img, which is not a plain file' "$t/out" || { cat "$t/out"; fail "names the symlink"; }
+rm "$BD/images/dtbo.img"; mv "$t/dtbo.outside" "$BD/images/dtbo.img"
+ln -s MANIFEST "$BD/stray-link"
+if binstall --dry-run --unsigned; then fail "refuses a symlink SHA256SUMS doesn't list"; fi
+grep -q 'the bundle holds stray-link' "$t/out" || { cat "$t/out"; fail "names the unlisted symlink"; }
+rm "$BD/stray-link"
+binstall --dry-run --unsigned || { cat "$t/out"; fail "the bundle installs again without the links"; }
+pass "a bundle entry that is a symlink is refused, listed or not"
 echo tampered >> "$BD/images/dtbo.img"
 if binstall --dry-run --unsigned; then fail "refuses a bundle file that doesn't match SHA256SUMS"; fi
 (cd "$BD" && find . -type f ! -name SHA256SUMS -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS)
