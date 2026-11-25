@@ -3,6 +3,16 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-128. Read the host's USB log before interpreting a phone's
+  "re-enumeration".** The laptop's `journalctl -k` timestamps the gadget
+  leaving and arriving, and survives a phone whose RAM log is lost: husky
+  test 23's "re-enumerated after 22 s" was the boot itself. *From:* kernel
+  #33, round 10.
+- **L-129. A CRC "clear" covers only what that register checks.** FTM5's
+  CRC register is the base check; config and CX errors come as events after a
+  reset. *Check:* which check covers the calibration area, and whether it
+  needs a reset, before a plan says a read answers "is it valid". *From:*
+  #35, round 10.
 - **L-130. Before putting a bootloader requirement down to the SoC,
   compare the reference phone's stock images.** Cheetah's stock vbmeta chains
   `boot` and `init_boot` with the same rollback index and ABL build as lynx,
