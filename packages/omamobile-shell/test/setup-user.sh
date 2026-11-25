@@ -554,8 +554,8 @@ RUN_HOME=$ha RUN_AUTO_SLEEP=$t/auto-sleep-default run
 [[ ! -e $ha/.local/state/omarchy/toggles/omamobile-sleep ]] || fail "a user who turns auto-sleep off keeps it off"
 pass "auto-sleep: on once where the device says suspend is verified, a user's off kept"
 
-# Power profiles: both sources start on Balanced, once, where nothing is
-# saved; an owner's saved choice stays. Then Omarchy's own
+# Power profiles: a source with nothing saved gets Balanced at every login;
+# an owner's saved choice stays. Then Omarchy's own
 # omarchy-powerprofiles-set, when its package is at hand, run on AC with a
 # daemon that offers all three (omamobile-omarchy's fake driver): with no
 # state it picks Performance, after this step Balanced.
@@ -568,6 +568,9 @@ pps=$hp/.local/state/omarchy/powerprofiles
 echo power-saver >"$pps/battery"
 RUN_HOME=$hp run
 [[ $(cat "$pps/battery") == power-saver ]] || fail "a profile picked later stays"
+rm "$pps/ac"
+RUN_HOME=$hp run
+[[ $(cat "$pps/ac") == balanced ]] || fail "a source whose choice is gone gets Balanced again at the next login"
 ho=$t/power-owner; mkdir -p "$ho/.config/hypr" "$ho/.local/state/omarchy/done" "$ho/.local/state/omarchy/powerprofiles"
 cp "$H"/.config/hypr/*.lua "$ho/.config/hypr/"
 touch "$ho/.local/state/omarchy/done/omamobile-shell-profile"
@@ -575,7 +578,7 @@ echo performance >"$ho/.local/state/omarchy/powerprofiles/ac"
 RUN_HOME=$ho run
 [[ $(cat "$ho/.local/state/omarchy/powerprofiles/ac") == performance ]] || fail "an owner's saved AC choice is kept"
 [[ $(cat "$ho/.local/state/omarchy/powerprofiles/battery") == balanced ]] || fail "the source with nothing saved starts on Balanced"
-pass "power profiles: both sources start on Balanced once where nothing is saved, an owner's choice kept"
+pass "power profiles: a source with nothing saved gets Balanced at every login, an owner's choice kept"
 opkg=${OMARCHY_PKG:-$(ls ~/.cache/omamobile-rootfs/pkg/omarchy-[0-9]*-aarch64.pkg.tar.* 2>/dev/null | grep -v '\.sig$' | sort | tail -1 || true)}
 if [[ -n $opkg ]] && command -v bsdtar >/dev/null &&
    bsdtar -xf "$opkg" -C "$t" usr/bin/omarchy-powerprofiles-set 2>/dev/null; then

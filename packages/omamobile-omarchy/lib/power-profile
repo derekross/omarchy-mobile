@@ -12,9 +12,10 @@
 #   performance  floor at the highest step at or below PERFORMANCE_PERCENT of
 #                the top (50 by default), ceiling at the top
 # schedutil still picks the speed between them, and thermal limits still win.
-# A phone starts on Balanced for both sources unless the owner picks
-# otherwise: Omarchy picks Performance on AC when it is offered and nothing is
-# saved, so omamobile-setup-user (omamobile-shell 0.2.154) saves Balanced once.
+# A phone is on Performance only when its owner picks it: Omarchy picks it on
+# AC when it is offered and nothing is saved for that source, so
+# omamobile-setup-user (omamobile-shell 0.2.154) saves Balanced for a source
+# with nothing saved, at every login, before the session starts.
 # A device whose own thermal guard writes the same files (the Pixel 8 Pro's
 # omamobile-husky-thermal, #946) ships /usr/share/omamobile/power-profile-off
 # in its device package: there this changes nothing, not even at restore,

@@ -323,19 +323,17 @@ if [[ -e ${OMAMOBILE_AUTO_SLEEP_DEFAULT:-/usr/share/omamobile/auto-sleep-default
 fi
 
 # Power profiles: Omarchy's omarchy-powerprofiles-set, which its autostart
-# runs at every session start, picks Performance on AC whenever the daemon
-# offers it and the owner hasn't chosen a profile for that source.
-# omamobile-omarchy's fake driver offers it, and on a phone that would hold
-# every cluster's floor at half its top while charging. So both sources start
-# on Balanced, once, where no choice is saved; a profile the owner picks in
-# the power card later is saved over it and stays.
-if omarchy-done ensure omamobile-power-profile-balanced; then
-  profiles=${OMARCHY_POWERPROFILES_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/powerprofiles}
-  mkdir -p "$profiles"
-  for source in ac battery; do
-    [[ -s $profiles/$source ]] || echo balanced >"$profiles/$source"
-  done
-fi
+# runs at every session start (and its battery service at every change
+# between AC and battery), picks Performance on AC whenever the daemon offers
+# it and nothing is saved for that source. omamobile-omarchy's fake driver
+# offers it, and on a phone that would hold every cluster's floor at half its
+# top while charging. So at every login, before the session starts, a source
+# with nothing saved gets Balanced: the phone is on Performance only when the
+# owner picks it in the power card, which saves that choice over this one.
+profiles=${OMARCHY_POWERPROFILES_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/powerprofiles}
+for source in ac battery; do
+  [[ -s $profiles/$source ]] || { mkdir -p "$profiles" && echo balanced >"$profiles/$source"; }
+done
 
 # Lock screen: Omarchy's lock with a number pad (lock-keypad toggle, see
 # patches/omarchy/0003-*), since its session lock hides the on-screen keyboard.
