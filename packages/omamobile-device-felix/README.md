@@ -1,6 +1,6 @@
 # omamobile-device-felix
 
-Omarchy Mobile's first userspace package for the Google Pixel Fold (codename felix, Tensor G2 / gs201). It hides the Android partitions from desktop tools, holds the USB address, and gives pacman the same `[omamobile]` repository as the Pixel 7 Pro. It does not drive the radio, the charger, or a camera, and it does not mark a boot slot successful.
+Omamobile's first userspace package for the Google Pixel Fold (codename felix, Tensor G2 / gs201). It hides the Android partitions from desktop tools, holds the USB address, and gives pacman the same `[omamobile]` repository as the Pixel 7 Pro. It does not drive the radio, the charger, or a camera, and it does not mark a boot slot successful.
 
 | Path | Installs to | What it does |
 | --- | --- | --- |

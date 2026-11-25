@@ -567,7 +567,7 @@ case "${1:-}" in
     # window under it whatever the screen's state, so a tap on a dark
     # unlocked phone reached an app no one could see. As on Android, a dark
     # phone is a locked one: lock now, behind the dark panel, and the lock's
-    # surface takes those touches (derekross/omarchy-mobile#420's review).
+    # surface takes those touches (derekross/omamobile#420's review).
     locked && exit 0
     screen_off || exit 0
     omarchy-system-lock

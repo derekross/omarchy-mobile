@@ -2,7 +2,7 @@
 # The root image's own packages from Arch Linux ARM, installed first
 # (tools/build-rootfs). Omarchy's list comes next, from the omarchy package
 # itself (install/omarchy-base.packages, minus packages.omarchy-skip), then
-# Omarchy Mobile's (packages.omamobile). One name per line; # comments.
+# Omamobile's (packages.omamobile). One name per line; # comments.
 base
 sudo
 openssh

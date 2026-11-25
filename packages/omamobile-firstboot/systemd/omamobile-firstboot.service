@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile first boot: creates the user and finishes the setup that
+# Omamobile first boot: creates the user and finishes the setup that
 # tools/install-phone asked for on the laptop (/etc/omamobile/firstboot.conf).
 # Runs only while that file exists, before the login screen. SSH over USB
 # works meanwhile (root, with the installer's key); the log is
 # /var/log/omamobile/firstboot.log.
 [Unit]
-Description=Omarchy Mobile first-boot setup
+Description=Omamobile first-boot setup
 ConditionPathExists=/etc/omamobile/firstboot.conf
 After=local-fs.target systemd-user-sessions.service systemd-networkd.service network.target
 Before=display-manager.service

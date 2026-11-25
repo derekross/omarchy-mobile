@@ -3,7 +3,7 @@
   "id": "omamobile.switcher",
   "name": "App switcher",
   "version": "0.2.0",
-  "author": "Omarchy Mobile",
+  "author": "Omamobile",
   "license": "MIT",
   "description": "Android-style recent apps: swipe up from the dock to see open windows as cards. Tap one to switch to it, flick it up to close it, hold it to show it with another app or move it back to its own screen, or go home.",
   "kinds": [

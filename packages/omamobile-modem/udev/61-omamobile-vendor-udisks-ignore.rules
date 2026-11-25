@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile: the vendor chroots loop-mount RAM copies of the modem's NV and
+# Omamobile: the vendor chroots loop-mount RAM copies of the modem's NV and
 # firmware from /run/omamobile-vendor. Keep udisks (and so the desktop's
 # automounter) away from them: udiskie tried to mount each one at modem
 # start, and each attempt raised an administrator password prompt.

@@ -3,9 +3,9 @@
 pkgname=omamobile-device-cheetah
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile support for the Google Pixel 7 Pro (cheetah): boot-slot success, storage guard, USB networking"
+pkgdesc="Omamobile support for the Google Pixel 7 Pro (cheetah): boot-slot success, storage guard, USB networking"
 arch=(aarch64)
-url="https://github.com/derekross/omarchy-mobile"
+url="https://github.com/derekross/omamobile"
 license=(MIT Apache-2.0)
 depends=(bash systemd util-linux omamobile-keyring i2c-tools
          python)  # omamobile-charger-mode

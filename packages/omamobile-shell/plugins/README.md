@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Omarchy Mobile plugins
+# Omamobile plugins
 
 Phone surfaces for Omarchy's own shell, written as ordinary third-party
 Omarchy plugins. Nothing in Omarchy is patched: each directory here is a
@@ -32,7 +32,7 @@ logical at scale 3).
 
 ```json
 {
-  "bar": { "id": "omamobile.bar", "clockFormat": "HH:mm", "showBatteryPercent": true,
+  "bar": { "id": "omamobile.bar", "clockFormat": "HH:mm", "batteryStyle": "icon-percent",
            "quickSettings": "omamobile.quicksettings" },
   "plugins": [
     { "id": "omamobile.quicksettings" },
@@ -50,10 +50,11 @@ The phone has no touch lock yet (below), so idle stays off for now.
 
 A full bar that replaces `omarchy.bar`. It is 44 px tall (or the theme's bar
 size if larger), anchored to the top, and reserves its height so windows tile
-below it. Left: the clock. Right: the unread notification count (when
-there is one), do-not-disturb (when on), Bluetooth (when on), cellular
+below it. Left: the clock, then the unread notification count (when there
+is one). Right: do-not-disturb (when on), Bluetooth (when on), cellular
 signal (when a modem exists), Wi-Fi or Ethernet, battery glyph and
-percentage. The centre is left empty for the camera cutout.
+percentage. The centre is left empty for the camera cutout; the count is on
+the left because the right-hand row grows towards it with every glyph.
 
 The whole strip is one touch target: a tap toggles quick settings, a downward
 pull past ~14 px opens it.
@@ -68,8 +69,15 @@ Settings live on the `bar` object in `shell.json`:
 | Key | Default | |
 | --- | --- | --- |
 | `clockFormat` | `"HH:mm"` | Qt date format |
-| `showBatteryPercent` | `true` | |
+| `showBatteryPercent` | `true` | Older switch: `false` is `batteryStyle: "icon"`; used only without `batteryStyle` |
+| `batteryStyle` | `"icon-percent"` | `icon`, `percent`, `icon-percent`, `horizontal`, `horizontal-percent` |
+| `statusIcons` | all shown | `{"bluetooth","wifi","cell","dnd","unread"}`: `false` hides one (Wi-Fi covers Ethernet too) |
 | `quickSettings` | `"omamobile.quicksettings"` | Plugin id the bar opens |
+
+The charging bolt has no setting: while charging it shows in every battery
+style. Low battery (10 % and under, not charging) takes the urgent colour.
+The call chip has no switch. A hidden mobile signal stops
+`omamobile-cell-watch`.
 
 **Unread notifications:** an accent pill with the number of files in
 Omarchy's notification history (`~/.local/state/omarchy/notifications/history/`,

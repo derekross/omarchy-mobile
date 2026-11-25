@@ -1,5 +1,5 @@
 pkgbase = libcamera
-	pkgdesc = A complex camera support library for Linux, Android, and ChromeOS (Omarchy Mobile: gs201 CSIS)
+	pkgdesc = A complex camera support library for Linux, Android, and ChromeOS (Omamobile: gs201 CSIS)
 	pkgver = 0.7.2
 	pkgrel = 4.21
 	url = https://libcamera.org/
@@ -226,7 +226,7 @@ pkgname = libcamera
 	provides = libcamera-base.so
 
 pkgname = libcamera-ipa
-	pkgdesc = A complex camera support library for Linux, Android, and ChromeOS (Omarchy Mobile: gs201 CSIS) - signed IPA
+	pkgdesc = A complex camera support library for Linux, Android, and ChromeOS (Omamobile: gs201 CSIS) - signed IPA
 	license = BSD-2-Clause
 	license = CC-BY-SA-4.0
 	license = CC0-1.0
@@ -241,7 +241,7 @@ pkgname = libcamera-ipa
 	options = !strip
 
 pkgname = libcamera-tools
-	pkgdesc = A complex camera support library for Linux, Android, and ChromeOS (Omarchy Mobile: gs201 CSIS) - tools
+	pkgdesc = A complex camera support library for Linux, Android, and ChromeOS (Omamobile: gs201 CSIS) - tools
 	license = BSD-2-Clause
 	license = CC0-1.0
 	license = GPL-2.0-or-later
@@ -284,7 +284,7 @@ pkgname = gst-plugin-libcamera
 	depends = libstdc++
 
 pkgname = python-libcamera
-	pkgdesc = A complex camera support library for Linux, Android, and ChromeOS (Omarchy Mobile: gs201 CSIS) - Python integration
+	pkgdesc = A complex camera support library for Linux, Android, and ChromeOS (Omamobile: gs201 CSIS) - Python integration
 	license = CC0-1.0
 	license = LGPL-2.1-or-later
 	depends = glibc

@@ -5,7 +5,7 @@
 # auto-rotation holds the accelerometer. Enable with
 #   systemctl --user enable --now omamobile-speaker-orient
 [Unit]
-Description=Omarchy Mobile: speaker channels follow the phone's orientation
+Description=Omamobile: speaker channels follow the phone's orientation
 After=pipewire.service
 PartOf=pipewire.service
 

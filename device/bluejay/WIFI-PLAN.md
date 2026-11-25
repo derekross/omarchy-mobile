@@ -31,8 +31,8 @@ verified restricted DMA below 4 GiB, then one managed station obtained DHCP
 and completed interface-bound HTTPS (HTTP 200, 16,932 bytes); IRQ counts
 increased from 725 to 744 and `tx_oversize_dropped` was zero. This does not
 exercise intentional oversized-frame drops. The public runtime reports are
-on [PCIe #227](https://github.com/derekross/linux-omarchy-mobile/pull/227) and
-[Wi-Fi #228](https://github.com/derekross/linux-omarchy-mobile/pull/228).
+on [PCIe #227](https://github.com/derekross/linux-omamobile/pull/227) and
+[Wi-Fi #228](https://github.com/derekross/linux-omamobile/pull/228).
 
 Offline verification compiles and applies the overlays to the integration's
 base DTB and compares every node/property with both silicon DT variants
@@ -53,9 +53,9 @@ Hardware stages carry medium risk; compiling/applying/comparing DTBs
 offline has no phone risk. The recorded results do not qualify a release
 installer, native panel modesetting, roaming, hotspot, suspend or endurance.
 The dependency order remains kernel
-[#227](https://github.com/derekross/linux-omarchy-mobile/pull/227) and
-[#228](https://github.com/derekross/linux-omarchy-mobile/pull/228) before
-[#230](https://github.com/derekross/linux-omarchy-mobile/pull/230)'s two own commits.
+[#227](https://github.com/derekross/linux-omamobile/pull/227) and
+[#228](https://github.com/derekross/linux-omamobile/pull/228) before
+[#230](https://github.com/derekross/linux-omamobile/pull/230)'s two own commits.
 
 ## Historical development kernel: November 8
 

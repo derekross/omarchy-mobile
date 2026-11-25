@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # squeekboard 1.43.1's terminal/us_wide.yaml, its landscape terminal layout
-# (https://gitlab.gnome.org/World/Phosh/squeekboard, tag v1.43.1, GPL-3.0-or-later), changed for Omarchy Mobile:
+# (https://gitlab.gnome.org/World/Phosh/squeekboard, tag v1.43.1, GPL-3.0-or-later), changed for Omamobile:
 #   - an action row on top (Mic, Paste, Emoji, Hide). Each sends an XF86
 #     keysym that hypr/phone.lua binds, for squeekboard's virtual keyboard only
 #     (the voice bar through omamobile.voice, Omarchy's clipboard and

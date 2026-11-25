@@ -13,7 +13,7 @@
 # the runner refuses a second start until a reboot, and a failed unit stays
 # failed: the lock screen uses the PIN, and a reboot starts it again.
 [Unit]
-Description=Omarchy Mobile fingerprint (vendor HAL and bridge)
+Description=Omamobile fingerprint (vendor HAL and bridge)
 Documentation=file:///usr/share/doc/omamobile/FINGERPRINT-PLAN.md
 # Trusty comes up with the AoC (omamobile-aoc-start loads trusty_*)
 After=omamobile-aoc.service systemd-modules-load.service

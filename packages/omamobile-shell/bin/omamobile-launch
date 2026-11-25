@@ -10,7 +10,10 @@
   omamobile-launch own-screen ADDR          window ADDR gets a screen again
   omamobile-launch match DESKTOP_ID         print the window `app` would focus
 
-A launch runs through Hyprland's exec with a per-launch rule, so only the
+Both `app` and `cmd` start through uwsm-app, so every app the phone shell
+starts has a systemd scope of its own under the user's app-graphical.slice
+(a widget that launches by a bare command, a terminal, the agent). A launch
+runs through Hyprland's exec with a per-launch rule, so only the
 windows of the process it starts land on a new empty workspace; the app's
 own dialogs follow it there, and nothing else is moved. Hyprland 0.56 tracks
 the process by an HL_EXEC_RULE_TOKEN in its environment, which survives
@@ -354,12 +357,33 @@ def cmd_app(args):
     return 0 if launch(["uwsm-app", "--", "gtk-launch", app_id + ".desktop"]) else 1
 
 
+# Launchers that already give what they start a systemd unit of its own.
+SCOPED = {"uwsm-app", "uwsm", "systemd-run"}
+
+
+def scoped(argv):
+    """argv through uwsm-app, as an app from its desktop entry is started.
+
+    A bare command run by Hyprland's exec stays in the compositor's own
+    cgroup (the session's wayland-wm@ unit): it has no unit of its own, so
+    nothing can account for what it uses, limit it or pause it by itself,
+    and it shares the compositor's fate. uwsm-app gives it a scope under the
+    user's app-graphical.slice. Left as it is where the command already
+    brings its own unit, or uwsm-app isn't installed."""
+    if os.path.basename(argv[0]) in SCOPED:
+        return argv
+    for directory in (os.environ.get("PATH") or os.defpath).split(os.pathsep):
+        if directory and os.access(os.path.join(directory, "uwsm-app"), os.X_OK):
+            return ["uwsm-app", "--"] + list(argv)
+    return argv
+
+
 def cmd_cmd(args):
     if args and args[0] == "--":
         args = args[1:]
     if not args:
         return usage()
-    return 0 if launch(args) else 1
+    return 0 if launch(scoped(args)) else 1
 
 
 def default_browser():

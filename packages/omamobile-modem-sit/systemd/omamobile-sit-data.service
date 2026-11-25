@@ -4,7 +4,7 @@
 # after omamobile-sitd is ready (it set up the internet bearer);
 # "omamobile-sit data on|off" starts and stops it.
 [Unit]
-Description=Omarchy Mobile cellular data fallback (rmnet)
+Description=Omamobile cellular data fallback (rmnet)
 Requires=omamobile-sitd.service
 After=omamobile-sitd.service
 

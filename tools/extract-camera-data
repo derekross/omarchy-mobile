@@ -13,7 +13,7 @@ and writes them, with the mode geometry computed from the standard CCS
 registers in each list, into the data file the imx386 kernel driver loads
 (/usr/lib/firmware/omamobile/camera/imx386-uw.bin).
 
-Nothing from Google's software is stored in the Omarchy Mobile repository: this
+Nothing from Google's software is stored in the Omamobile repository: this
 tool only knows how to find the functions (CAMERA-PLAN.md section 5.3). The
 output is for the user's own phone; don't redistribute it.
 

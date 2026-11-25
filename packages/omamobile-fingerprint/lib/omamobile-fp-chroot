@@ -28,7 +28,7 @@
 #   bridge     + omamobile-fp-bridge, fprintd's way in (default)
 #
 # The Android files come from tools/extract-fingerprint-vendor (Google's,
-# never shipped by Omarchy Mobile) in $IMAGE; our preload shim in $SHIM. The
+# never shipped by Omamobile) in $IMAGE; our preload shim in $SHIM. The
 # chroot is a private mount namespace on a tmpfs: the image is bind-mounted
 # read-only, and only $STATE (Trusty's secure storage files, the HAL's data)
 # persists. It shares the host's network namespace on purpose: the sensor

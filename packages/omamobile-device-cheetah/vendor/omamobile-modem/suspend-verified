@@ -6,7 +6,7 @@
 # (device/cheetah/SUSPEND-PLAN.md). With this file omamobile-modem's sleep
 # policy skips the modem's sleep inhibitor at boot, but only on a kernel
 # whose modem link refuses a sleep early while the link is up
-# (linux-omarchy-mobile#232, kernel-2026.11.15 and later), and not where the
+# (linux-omamobile#232, kernel-2026.11.15 and later), and not where the
 # owner has opted out (/etc/omamobile/modem-suspend-disable). It came out
 # in 0.1.59 when mobile data died across sleeps (the network dropped the
 # internet bearer and nothing set it up again) and is back in 0.1.60 with

@@ -4,7 +4,7 @@
 # minutes after the modem starts (after registration, when a carrier profile
 # has been applied). The capture at the modem's stop doesn't wait for this.
 [Unit]
-Description=Omarchy Mobile modem: periodic NV overlay capture
+Description=Omamobile modem: periodic NV overlay capture
 PartOf=omamobile-modem.service
 
 [Timer]
