@@ -472,7 +472,7 @@ The figures are from the 2026-10-27 and 10-28 NOTES entries
     means with each off in turn: 266 to 284 mA in all nine). Powering the
     NFC adapter off and on through neard left it dead until a reboot
     (`nxp-nci_i2c: Read failed with error -121`), as #132 describes for a
-    kernel without linux-omarchy-mobile#131.
+    kernel without linux-omamobile#131.
   - **Wi-Fi power save: about 30 mA** (NOTES 2026-11-20, #937).
   - **Two things about Wi-Fi that cost nothing measurable.** ASPM L1 on the
     Wi-Fi link, set in both Link Control registers by hand (the kernel's
