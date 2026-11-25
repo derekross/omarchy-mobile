@@ -2315,8 +2315,33 @@ sizes passed. Manifest SHA-256
 `4f738b788a2593a8c58e8302517eff3d3a8ba9456ab3d1abb192922a2b1b1e62`.
 Archive SHA-256
 `d820562ef78e54911d4b033e47feb54efb30161a94b7606ab53f5641fc8e7763`.
-The 10 ms settling window and the v44 cleanup fix still need an
-attended hardware boot.
+
+#### Attended v45 slot B trial
+
+On 2026-11-25 one slot B boot used the verified nine-partition NV
+snapshot. All five writes passed and the `vendor_boot_b` readback
+matched all 8,192 supplied bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 0.144568–0.144590 | Prep OFF qualification | HC `0x13` (PSM1 `0x3`) and PHY `0x11` on the first sample, `qualification=0`, elapsed 4 µs |
+| 2.153328–2.155396 | Host release and prep ON gates | Stage `1` then `2`, PSM1 `0x2` after prep ON |
+| 2.156431–2.156475 | Core ON and readiness | HC and PHY `0x10`, TOP bit 4 set |
+| 2.177963–2.178100 | Link and IRQ-backed Hibern8 | `link=0 hibern8=0` |
+| 2.188125–2.188144 | Deep H8 gate | Initial HC/PHY `0x10`/`0x10`, final `0x11`/`0x10` after 10,013 µs, `-ETIMEDOUT` |
+| 2.188231 | After HCI cleanup | HC and PHY both `0x10` |
+
+The first post-reply sample passed. The 4 µs value is the time to
+qualify that sample. This boot did not exercise the delayed settling
+branch seen to be necessary in v44. The driver kept Deep H8 prepared
+and retained the remaining votes after the gate timed out. The
+link-only cleanup ran without the v43 debugfs workqueue warning.
+The separate early `device_links_no_driver()` warning recurred before
+the host probe. No disk discovery was attempted.
+
+Ramoops and `SYSTEM_LAST_KMSG` agree on these results. Fastboot
+returned after 133 seconds. Stock D1 completed boot on A with
+enforcing verity and the original factory VBMeta digest.
 
 ## Staging and return sequence used for D1
 
