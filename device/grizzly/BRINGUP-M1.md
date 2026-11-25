@@ -2655,20 +2655,19 @@ For a future mainline storage-visible boot, check label
 uniqueness, size and controller ancestry before accepting
 the layout. Linux device names can change with probe order.
 Prove read-only state for each parent and target before
-permitting storage reads. The shared initramfs now applies
-`BLKROSET` to all SCSI parents when the effective write
-allowlist is empty. It checks for ioctl success and sysfs
-`ro=1`, retries failures, and includes writable parents in
-the unguarded-device report. Valid writable-root allowlists
-retain their normal whole-disk node policy. The storage-guard
-tests passed with Linux `sh` and Grizzly's ARM64 BusyBox ash.
-The root-policy and persistent-root tests passed as well.
+permitting storage reads. The shared initramfs change is tracked
+separately. It applies `BLKROSET` to all SCSI parents when the
+effective write allowlist is empty, and retains whole-disk node
+removal for the protected parents. A failed read-only change
+keeps the writable sysfs state visible to the handover check.
+The standalone change passed synthetic Bash and Dash tests.
+[Shared storage-guard draft PR](https://github.com/derekross/omamobile/pull/1074)
 
-The packed v39 ramdisk predates this change and is suitable
-for its zero-disk test. The shared initramfs starts the
-rescue shells before the optional UFS probe report. A first
-storage-visible fixture still needs an early inventory gate
-such as the stock reader's parent and partition checks.
+The packed v39 ramdisk was used for its zero-disk trial. The
+storage-visible backup trial used the stock-kernel RAM rescue
+and its own guard. A future mainline storage-visible fixture
+still needs an early inventory gate such as the stock reader's
+parent and partition checks.
 
 The backup contains partition contents and inventory, so it
 cannot establish PHY readiness or the device's reference
