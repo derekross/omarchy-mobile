@@ -39,13 +39,15 @@ import hashlib
 import io
 import os
 import re
+import stat
 import struct
 import sys
 import tarfile
 import zlib
 
 # Tests only (tests/hotdog-slot-a-mark): a disk image file in place of sde,
-# no root, no device tree check, no block ioctls
+# no root, no device tree check, no block ioctls. The test mode takes only a
+# regular file, never a symlink or a device, so it can't be aimed at a disk
 TEST = os.environ.get("SLOT_A_MARK_TEST") == "1"
 DISK = os.environ["SLOT_A_MARK_DISK"] if TEST else "/dev/sde"
 SYSFS = "/sys/class/block/sde"
@@ -132,9 +134,21 @@ def block_size():
     return int(open(f"{SYSFS}/queue/logical_block_size").read())
 
 
+def disk_fd(mode):
+    """Open DISK; in the test mode only a regular file (no symlink is
+    followed, and what was opened is checked, not just the name)."""
+    if not TEST:
+        return os.open(DISK, mode | os.O_CLOEXEC)
+    fd = os.open(DISK, mode | os.O_CLOEXEC | os.O_NOFOLLOW)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        die(f"test mode: {DISK} is not a regular file")
+    return fd
+
+
 def open_disk(mode=os.O_RDONLY):
     bs = block_size()
-    fd = os.open(DISK, mode | os.O_CLOEXEC)
+    fd = disk_fd(mode)
     flush(fd)
     return fd, bs
 
@@ -249,7 +263,7 @@ def writable(copies, bs, what):
             rfd = os.open(DISK, os.O_RDONLY)
             fcntl.ioctl(rfd, BLKROSET, struct.pack("i", 0))
             os.close(rfd)
-        wfd = os.open(DISK, os.O_RDWR | os.O_CLOEXEC | os.O_SYNC)
+        wfd = disk_fd(os.O_RDWR | os.O_SYNC)
         for n, (lba, ent_lba, hdr, ents) in enumerate(copies):
             os.pwrite(wfd, ents, ent_lba * bs)
             os.pwrite(wfd, hdr, lba * bs)
@@ -377,6 +391,13 @@ def restore(path, expect):
 
 
 def main():
+    if TEST:
+        try:
+            st = os.lstat(DISK)
+        except OSError as e:
+            die(f"test mode: {DISK}: {e.strerror}")
+        if not stat.S_ISREG(st.st_mode):
+            die(f"test mode: {DISK} is not a regular file (a disk image, never a device or a symlink)")
     if not TEST:
         if os.geteuid() != 0:
             die("run as root")

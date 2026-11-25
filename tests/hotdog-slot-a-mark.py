@@ -156,3 +156,17 @@ with tempfile.TemporaryDirectory() as t:
     if r.returncode == 0 or "other entries than the dump's" not in r.stderr or sha(disk) != original:
         fail(f"restore refuses a dump of another GPT: {r.stdout}{r.stderr}")
     ok("restore refuses a dump of another GPT and writes nothing")
+
+    # The test mode takes only a regular file: never a device, a symlink
+    # (even to an image) or a folder, so it can't be aimed at a real disk
+    link = os.path.join(t, "link.img")
+    os.symlink(disk, link)
+    before = sha(disk)
+    for target in ("/dev/null", link, t):
+        for args in (("status",), ("write", "--sha256", s), ("restore", tar, "--sha256", s)):
+            r = run(target, *args)
+            if r.returncode != 1 or "is not a regular file" not in r.stderr:
+                fail(f"test mode refuses {target} for {args[0]}: {r.stdout}{r.stderr}")
+    if sha(disk) != before:
+        fail("a refused symlink wrote through to the image")
+    ok("the test mode refuses a device, a symlink and a folder")
