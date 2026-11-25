@@ -3202,6 +3202,27 @@ both AVB signatures, the unpacked payload, ABL handoff and saved
 D1 slot sizes passed. Manifest SHA-256 `9962a2aa65f28398446aa6ebfaedaa055dc6e5ee289175cbfe7853613c310721`.
 Archive SHA-256 `2f0026bbe1524b3b6650710b49175be14c2a1daecc5f10daf8376e4726adeab8`.
 
+#### Attended v57 slot B trial
+
+On 2026-11-25 one v57 boot used the verified nine-partition NV backup.
+All five slot B writes passed, and readback matched all 8,192
+supplied `vendor_boot_b` bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 0.131488 | Prep OFF | Qualification passed in 4 µs. |
+| 2.183304–2.183922 | Initialization, INQUIRY and capacity | The first `fDeviceInit` read returned clear. INQUIRY passed, and capacity confirmed last LBA 12,801,023 with 4,096-byte blocks. |
+| 2.184382–2.184410 | READ(10) at LUN 0, LBA 0 | Completion IRQ observed, GOOD status and zero residual. DMA changed the buffer and the MBR signature was present. |
+| 2.184617–2.184637 | READ(10) at LUN 0, LBA 1 | Separate completion IRQ, GOOD status and zero residual. The primary GPT header format and CRC passed, with `GPT header result=0`. |
+| 2.184783–2.184973 | Cleanup | Hibern8 passed, HCI stopped and its IRQ was freed. |
+| 90.176255–91.179181 | Timed warm return | Zero SCSI disks at RAM startup and before restart. |
+
+This verifies the primary GPT header on LUN 0. The partition entry
+array, backup GPT and normal SCSI discovery remain untested.
+Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
+after 132 seconds. Stock D1 booted on A with enforcing verity and
+the expected factory VBMeta digest.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
