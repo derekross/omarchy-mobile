@@ -21,6 +21,7 @@ typedef struct {
   const char *want;  /* NULL: stays as typed */
   gboolean    start; /* it starts a sentence */
   gboolean    taps;  /* only with taps to go by */
+  const char *aim;   /* the keys the fingers aimed at, letter by letter (NULL: @want's) */
 } Case;
 
 static const Case cases[] = {
@@ -63,6 +64,18 @@ static const Case cases[] = {
   { "Zorblat", NULL }, { "NASA", NULL }, { "GitHub", NULL }, { "kernel", NULL },
   { "linux", NULL }, { "sudo", NULL }, { "laptop", NULL }, { "dictation", NULL },
   { "Paris", NULL, TRUE }, { "The", NULL, TRUE }, { "I", NULL },
+  /* short forms people write */
+  { "msgs", NULL }, { "msg", NULL }, { "pics", NULL }, { "pic", NULL }, { "vids", NULL },
+  { "vid", NULL }, { "convo", NULL }, { "ppl", NULL }, { "tactus", NULL }, { "Tactus", NULL, TRUE },
+  /* a slip into a word the word list doesn't count, but the dictionary knows */
+  { "widgrt", "widget", FALSE, TRUE }, { "widgrt", NULL, FALSE, TRUE, "widgrt" },
+  /* a rarer word where the taps point to it */
+  { "lics", "pics", FALSE, TRUE }, { "pahsijg", "pausing", FALSE, TRUE },
+  /* a tap too many, and a key next to the one meant */
+  { "ipgone", "phone", FALSE, TRUE, "iphone" },
+  /* a name: only by the taps, and only to a word or name the dictionary knows */
+  { "Vigip", "Vigil", FALSE, TRUE }, { "Carmos", "Carlos", FALSE, TRUE }, { "Mivhwel", "Michael", FALSE, TRUE },
+  { "Zorblat", NULL, FALSE, TRUE, "Zorblat" }, { "Hemko", NULL, FALSE, TRUE, "Hemko" },
 };
 
 
@@ -88,7 +101,7 @@ key_pos (char c, double *x, double *y)
 /* Taps as of a finger that aimed at @want and landed on @typed's keys: inside
  * each key that was hit, toward the key that was meant */
 static TactusTap *
-near_miss (const char *typed, const char *want)
+near_miss (const char *typed, const char *want, double off)
 {
   size_t n = strlen (typed);
   TactusTap *taps = g_new0 (TactusTap, n);
@@ -99,17 +112,17 @@ near_miss (const char *typed, const char *want)
     taps[i].valid = TRUE;
     if (!want || strlen (want) != n || !key_pos (typed[i], &tx, &ty) || !key_pos (want[i], &wx, &wy))
       continue;
-    taps[i].dx = CLAMP (0.42 * (wx - tx), -0.48, 0.48);
-    taps[i].dy = CLAMP (0.42 * (wy - ty), -0.48, 0.48);
+    taps[i].dx = CLAMP (off * (wx - tx), -0.48, 0.48);
+    taps[i].dy = CLAMP (off * (wy - ty), -0.48, 0.48);
   }
   return taps;
 }
 
 
 static int
-run (const Case *c, gboolean with_taps)
+run_off (const Case *c, gboolean with_taps, double off)
 {
-  g_autofree TactusTap *taps = with_taps ? near_miss (c->typed, c->want) : NULL;
+  g_autofree TactusTap *taps = with_taps ? near_miss (c->typed, c->aim ?: c->want, off) : NULL;
   g_autofree char *got = tactus_ac_correct (c->typed, taps, taps ? strlen (c->typed) : 0, c->start);
   gboolean ok = g_strcmp0 (got, c->want) == 0;
 
@@ -118,6 +131,13 @@ run (const Case *c, gboolean with_taps)
     printf (" wanted %s", c->want ?: "(stays)");
   printf ("\n");
   return ok ? 0 : 1;
+}
+
+
+static int
+run (const Case *c, gboolean with_taps)
+{
+  return run_off (c, with_taps, 0.42);
 }
 
 
@@ -158,6 +178,20 @@ main (int argc, char **argv)
     printf ("== at the edge of a key\n");
     for (guint i = 0; i < G_N_ELEMENTS (edge); i++)
       failed += run (&edge[i], TRUE);
+  }
+
+  /* A word people write, hit off the centre of a key but well inside it, next
+   * to a likelier word: it stays */
+  {
+    static const Case inside[] = {
+      { "bot", NULL, FALSE, TRUE, "boy" }, { "pics", NULL, FALSE, TRUE, "lice" },
+      { "relayed", NULL, FALSE, TRUE, "related" }, { "msgs", NULL, FALSE, TRUE, "mags" },
+      { "vids", NULL, FALSE, TRUE, "bids" },
+    };
+
+    printf ("== a third of a key off the centre\n");
+    for (guint i = 0; i < G_N_ELEMENTS (inside); i++)
+      failed += run_off (&inside[i], TRUE, 0.3);
   }
 
   t0 = g_get_monotonic_time ();

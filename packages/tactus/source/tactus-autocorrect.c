@@ -6,7 +6,9 @@
  * by how common each word is, and by the usual slips (two letters swapped,
  * one missed or doubled, a missed space, a missing apostrophe). A word the
  * dictionary knows is replaced only when the taps themselves were close
- * calls; a word the owner took back once is left alone from then on.
+ * calls; a word the owner took back once is left alone from then on. A word
+ * with a capital in mid sentence is a name: it is changed only by the taps,
+ * and only to a word or name the dictionary knows.
  *
  * English on a QWERTY keyboard only.
  *
@@ -76,9 +78,18 @@
 #define FIX_COMMON   1000
 /* The dictionary's own guess may differ by two letters only if it is a very common word */
 #define GUESS_TWO    20000
+/* … and may be a word the word list counts as rare, or not at all ("widget"),
+ * if a typed word this long has one key hit beside it, as a close call */
+#define GUESS_SLIP   5
 /* A known word gives way only to a clearly likelier one, and only when the taps were close calls */
 #define KNOWN_MARGIN 4.0
 #define KNOWN_REACH  1.5
+/* A tap is a close call for the key beside it when it is a third of the way
+ * there or more: the word it would make costs at most this much of what it
+ * costs from the middle of the key */
+#define CLOSE_CALL   0.3
+/* … and where it would make two slips at once (a tap too many as well), a fifth */
+#define CLOSE_TIGHT  0.2
 #define OTHER_MARGIN 1.0
 /* How fast the keyboard learns where this owner's fingers land, and how far it may go */
 #define BIAS_RATE    0.01
@@ -121,6 +132,7 @@ static const char *const informal[] = {
   "hotspot", "online", "offline", "email", "emails", "internet", "website", "smartphone",
   "laptop", "linux", "github", "ssh", "sudo", "repo", "config", "kernel", "bluetooth",
   "screenshot", "livestream", "inbox", "unfollow", "hashtag", "admin", "sync",
+  "msg", "msgs", "pic", "pics", "vid", "vids", "convo", "convos", "ppl", "txt", "tactus",
   NULL,
 };
 
@@ -464,6 +476,17 @@ tactus_ac_learn (const char *word)
 }
 
 
+/* A word as typed: its letters, where each finger landed, and how far that
+ * was from the key it was read as */
+typedef struct {
+  char     letters[MAX_LEN + 1];
+  double   tx[MAX_LEN], ty[MAX_LEN], own[MAX_LEN];
+  size_t   n;
+  double   cost;       /* all of @own */
+  gboolean have_taps;
+} Typed;
+
+
 typedef struct {
   char    text[2 * MAX_LEN + 4];
   double  score;
@@ -489,6 +512,83 @@ consider (Best *best, const char *text, double cost, guint count, double typed_c
   best->reach = cost - typed_cost;
   best->by_taps = by_taps;
   best->found = TRUE;
+}
+
+/* Whether the tap for letter @i of @t was a close call for @key: on its way
+ * there by @close of the distance from the middle of the key it hit or more */
+static gboolean
+close_call (const Typed *t, size_t i, char key, double close)
+{
+  double x, y, ox, oy, c;
+
+  if (!t->have_taps || !key_pos (key, &x, &y) || !key_pos (t->letters[i], &ox, &oy))
+    return FALSE;
+  c = KX * (t->tx[i] - x) * (t->tx[i] - x) + KY * (t->ty[i] - y) * (t->ty[i] - y);
+  return c - t->own[i] <= close * (KX * (ox - x) * (ox - x) + KY * (oy - y) * (oy - y));
+}
+
+/* The words of as many letters as @t, weighed tap by tap. A word seen fewer
+ * than @floor times, or any word if @close_only, is offered only where the
+ * taps were close calls (@close) for each letter it changes. @extra is added
+ * to what each costs, and @typed_cost is what the word as typed costs. */
+static void
+weigh_taps (Best *best, const Typed *t, guint floor, gboolean close_only, double close,
+            double reach_max, double extra, double typed_cost, gboolean by_taps)
+{
+  for (guint w = 0; w < by_len[t->n]->len; w++) {
+    Entry *e = &g_array_index (by_len[t->n], Entry, w);
+    double cost = 0.0;
+    gboolean out = FALSE, near = TRUE;
+    guint changed = 0;
+
+    if (e->count < OFFERED || strcmp (e->display, t->letters) == 0)
+      continue;
+    if ((e->count < floor || close_only) && !t->have_taps)
+      continue;
+    for (size_t i = 0; i < t->n; i++) {
+      double x = 0.0, y = 0.0, c;
+
+      key_pos (e->letters[i], &x, &y);
+      c = KX * (t->tx[i] - x) * (t->tx[i] - x) + KY * (t->ty[i] - y) * (t->ty[i] - y);
+      if (c > LETTER_MAX) {
+        out = TRUE;
+        break;
+      }
+      cost += c;
+      if (e->letters[i] != t->letters[i]) {
+        changed++;
+        near = near && close_call (t, i, e->letters[i], close);
+      }
+    }
+    if (out || cost - t->cost > reach_max)
+      continue;
+    if ((e->count < floor || close_only) && !(changed > 0 && near))
+      continue;
+    consider (best, e->display, typed_cost + extra + cost - t->cost, e->count, typed_cost, by_taps);
+  }
+}
+
+/* Which letter of @a was hit as the key beside it to make @b; -1 if that isn't all */
+static int
+one_slip (const char *a, const char *b)
+{
+  size_t n = strlen (a);
+  int at = -1;
+  double ax, ay, bx, by;
+
+  if (strlen (b) != n)
+    return -1;
+  for (size_t i = 0; i < n; i++) {
+    if (a[i] != b[i]) {
+      if (at >= 0)
+        return -1;
+      at = i;
+    }
+  }
+  if (at < 0 || !key_pos (a[at], &ax, &ay) || !key_pos (b[at], &bx, &by) ||
+      (ax - bx) * (ax - bx) + (ay - by) * (ay - by) > 1.3)
+    return -1;
+  return at;
 }
 
 /* The count and the written form of a word of these letters, if it may be offered */
@@ -566,8 +666,9 @@ tactus_ac_correct (const char *word, const TactusTap *taps, guint n_taps, gboole
   static const char *const i_tails[] = { "m", "ll", "ve", "d", NULL };
   g_autofree char *lower = NULL;
   size_t n;
-  gboolean have_taps, solid, seen;
-  double tx[MAX_LEN], ty[MAX_LEN];
+  gboolean have_taps, solid, seen, name;
+  Typed t = { .n = 0 };
+  double *tx = t.tx, *ty = t.ty;
   double typed_cost = 0.0, typed_score, reach_max;
   guint typed_count, floor;
   Best best = { .found = FALSE };
@@ -596,8 +697,7 @@ tactus_ac_correct (const char *word, const TactusTap *taps, guint n_taps, gboole
     if (i > 0 && g_ascii_isupper (word[i]))
       return NULL;
   }
-  if (g_ascii_isupper (word[0]) && !sentence_start)
-    return NULL;
+  name = g_ascii_isupper (word[0]) && !sentence_start;
 
   lower = g_ascii_strdown (word, -1);
   if (strcmp (lower, "i") == 0)
@@ -610,7 +710,7 @@ tactus_ac_correct (const char *word, const TactusTap *taps, guint n_taps, gboole
 
   typed_count = count_of (lower);
 
-  if (g_strv_contains (acronyms, lower)) {
+  if (!name && g_strv_contains (acronyms, lower)) {
     char *upper = g_ascii_strup (lower, -1);
 
     if (strcmp (upper, word) != 0)
@@ -626,6 +726,9 @@ tactus_ac_correct (const char *word, const TactusTap *taps, guint n_taps, gboole
     if (hun_ok (capital))
       return strcmp (capital, word) == 0 ? NULL : g_steal_pointer (&capital);
   }
+  /* A short form people write ("pics", "msgs") is as likely meant as a word they write */
+  if (g_strv_contains (informal, lower))
+    typed_count = MAX (typed_count, COMMON);
 
   /* How the word stands: solid (the dictionary's, the owner's, everyday
    * writing), seen (not a word, but people do write it: "alot", "goin"), or
@@ -651,36 +754,60 @@ tactus_ac_correct (const char *word, const TactusTap *taps, guint n_taps, gboole
     if (have_taps) {
       tx[i] += taps[i].dx - bias_x;
       ty[i] += taps[i].dy - bias_y;
-      typed_cost += KX * (tx[i] - x) * (tx[i] - x) + KY * (ty[i] - y) * (ty[i] - y);
+      t.own[i] = KX * (tx[i] - x) * (tx[i] - x) + KY * (ty[i] - y) * (ty[i] - y);
+      typed_cost += t.own[i];
     }
   }
+  memcpy (t.letters, lower, n + 1);
+  t.n = n;
+  t.cost = typed_cost;
+  t.have_taps = have_taps;
 
-  /* Words of as many letters, tap by tap; among them the same letters with an apostrophe */
+  /* How much further from the taps than the word as typed a word may be */
   if (have_taps)
     reach_max = REACH_TAPS + REACH_MORE * MAX ((int) n - REACH_LONG, 0);
   else
     reach_max = n <= 4 ? REACH_SHORT : REACH_BLIND;
-  for (guint w = 0; w < by_len[n]->len; w++) {
-    Entry *e = &g_array_index (by_len[n], Entry, w);
-    double cost = 0.0;
-    gboolean out = FALSE;
 
-    if (e->count < floor || strcmp (e->display, lower) == 0)
-      continue;
-    for (size_t i = 0; i < n; i++) {
-      double x = 0.0, y = 0.0, c;
+  /* A name that isn't one the dictionary knows (nor a word people write) is
+   * changed only where the taps were close calls toward one it does know:
+   * "Vigip" for "Vigil". With no taps to go by, it stays. */
+  if (name) {
+    if (!have_taps || solid || typed_count >= COMMON)
+      return NULL;
+    weigh_taps (&best, &t, OFFERED, TRUE, CLOSE_CALL, reach_max, 0.0, typed_cost, TRUE);
+    typed_score = typed_cost - log ((double) MAX (typed_count, 1)) + UNKNOWN;
+    g_debug ("a name of %u letters (%.1f) against one of %u (%.1f): replaced %d", (guint) n, typed_score,
+             best.found ? (guint) strlen (best.text) : 0, best.score,
+             best.found && best.score < typed_score - OTHER_MARGIN);
+    if (best.found && best.score < typed_score - OTHER_MARGIN)
+      return with_case (word, best.text);
+    return NULL;
+  }
 
-      key_pos (e->letters[i], &x, &y);
-      c = KX * (tx[i] - x) * (tx[i] - x) + KY * (ty[i] - y) * (ty[i] - y);
-      if (c > LETTER_MAX) {
-        out = TRUE;
-        break;
+  /* Words of as many letters, tap by tap (among them the same letters with an
+   * apostrophe); a rarer one only where the taps point to it */
+  weigh_taps (&best, &t, floor, FALSE, CLOSE_CALL, reach_max, 0.0, typed_cost, TRUE);
+
+  /* A tap too many, and among the rest a key hit beside the one meant:
+   * "ipgone" for "phone". Only where the taps were close calls. */
+  if (!solid && have_taps && n >= 5) {
+    for (size_t skip = 0; skip < n; skip++) {
+      Typed less = { .n = n - 1, .have_taps = TRUE };
+
+      for (size_t i = 0, j = 0; i < n; i++) {
+        if (i == skip)
+          continue;
+        less.letters[j] = lower[i];
+        less.tx[j] = tx[i];
+        less.ty[j] = ty[i];
+        less.own[j] = t.own[i];
+        less.cost += t.own[i];
+        j++;
       }
-      cost += c;
+      less.letters[n - 1] = '\0';
+      weigh_taps (&best, &less, floor, TRUE, CLOSE_TIGHT, reach_max, COST_EXTRA, typed_cost, FALSE);
     }
-    if (out || cost - typed_cost > reach_max)
-      continue;
-    consider (&best, e->display, cost, e->count, typed_cost, TRUE);
   }
 
   /* The usual slips of a word that isn't one: two letters swapped, a letter
@@ -772,6 +899,7 @@ tactus_ac_correct (const char *word, const TactusTap *taps, guint n_taps, gboole
         const char *guess = guesses[g];
         gboolean plain = g_str_is_ascii (guess);
         guint far;
+        int at;
 
         for (const char *q = guess; plain && *q; q++)
           plain = g_ascii_islower (*q);
@@ -779,7 +907,12 @@ tactus_ac_correct (const char *word, const TactusTap *taps, guint n_taps, gboole
           continue;
         far = edits (lower, guess);
         count = count_of (guess);
-        if (count < floor)
+        /* one key beside the right one in a longer word, and the tap was a
+         * close call: the word list may just not have it */
+        if (count < floor && n >= GUESS_SLIP && (at = one_slip (lower, guess)) >= 0 &&
+            close_call (&t, at, guess[at], CLOSE_CALL))
+          count = MAX (count, OFFERED);
+        else if (count < floor)
           continue;
         if (far == 1 || (far == 2 && n >= GUESS_LONG && count >= GUESS_TWO))
           consider (&best, guess, typed_cost + COST_GUESS * far + 0.2 * g, count, typed_cost, FALSE);
