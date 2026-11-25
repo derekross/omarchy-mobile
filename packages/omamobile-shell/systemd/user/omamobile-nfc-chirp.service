@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# The NFC detect sound (bin/omamobile-nfc-chirp): a chirp when the phone
+# finds a tag, for every user's graphical session. Silent until neard runs.
+[Unit]
+Description=Omamobile NFC detect sound
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/omamobile-nfc-chirp
+# always: when the system bus goes away, GLib ends it with SIGTERM
+# (g_bus_get's exit-on-close), which systemd counts as a clean exit
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

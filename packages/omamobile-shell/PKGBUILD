@@ -11,7 +11,8 @@ depends=(omarchy omamobile-apps 'omamobile-omarchy>=0.1.11' 'omamobile-owl-widge
          which  # voice input: voxtype finds wtype and wl-copy with which
          wtype  # the back gesture's Escape (a virtual keyboard: Hyprland's send_key_state
                 # is answered "ok" and never reaches the app); voice input types with it too
-         pipewire-audio pipewire-pulse pipewire-alsa wireplumber
+         pipewire-audio  # pw-play: the NFC detect sound (omamobile-nfc-chirp)
+         pipewire-pulse pipewire-alsa wireplumber
          inotify-tools qt6-declarative
          iproute2 jq  # omamobile-sleepd: ss for SSH sessions; jq also for omamobile-keys
          # Both are in Omarchy's base package list, which root images install.
