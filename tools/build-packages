@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Build Omarchy Mobile's packages for aarch64 on this laptop, without a phone:
+# Build Omamobile's packages for aarch64 on this laptop, without a phone:
 # makepkg in an Arch Linux ARM container (Docker + qemu-user, tools/lib/alarm.sh),
 # then sign them and the database with the release key (keys/gnupg.release,
 # tools/lib/signing.sh; docs/RELEASES.md §10), into the
@@ -161,7 +161,7 @@ up_to_date() {
   local dir=$1 want name f
   want=$(pkg_version "$dir")
   for name in $(pkg_names "$dir"); do
-    f=$(ls "$repo/$name-$want"-*.pkg.tar.* 2>/dev/null | grep -v '\.sig$' | head -1)
+    f=$(ls "$repo/$name-$want"-*.pkg.tar.* 2>/dev/null | grep -v '\.sig$' | sed -n 1p)
     [[ -n $f ]] || return 1
   done
 }

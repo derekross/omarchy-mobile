@@ -13,7 +13,7 @@
 #
 # Cheetah's run is one of two, and you say which; nothing is guessed from
 # what happens to be on this computer, and no backup directory is assumed:
-#   --first-install   no earlier Omarchy Mobile system's data to put back: the
+#   --first-install   no earlier Omamobile system's data to put back: the
 #                     modem's board id from the phone itself, its NV checksums
 #                     from --nv-backup DIR (required). What docs/INSTALL.md
 #                     runs, and a later reinstall too unless you kept a
@@ -181,7 +181,7 @@ phone() { "$PHONE_SSH" "$@"; }
 board_id() {
   phone "BOOTCONFIG='$bootconfig' ACTION=$1 sh -s" <<'SH'
 set -eu
-v=$(sed -n 's/^androidboot\.cdt_hwid[[:space:]]*=[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' "$BOOTCONFIG" 2>/dev/null | head -n 1) || v=
+v=$(sed -n 's/^androidboot\.cdt_hwid[[:space:]]*=[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' "$BOOTCONFIG" 2>/dev/null | sed -n 1p) || v=
 [ -n "$v" ] || exit 3
 case $v in 0x?*) ;; *) exit 5 ;; esac
 case ${v#0x} in *[!0-9a-fA-F]*) exit 5 ;; esac
@@ -367,7 +367,7 @@ if [[ $device == raven ]]; then
   mkdir -p "$W/modem-stage/var/lib/omamobile-vendor/modem" "$W/modem-stage/etc/omamobile"
   props=$W/modem-stage/var/lib/omamobile-vendor/modem/props.conf
   for k in ro.boot.cdt_hwid ro.hardware ro.boot.hardware.platform; do
-    v=$(sed -n "s/^\[$k\]: \[\(.*\)\]\$/\1/p" "$getprop" | head -1)
+    v=$(sed -n "s/^\[$k\]: \[\(.*\)\]\$/\1/p" "$getprop" | sed -n 1p)
     [[ -n $v ]] || die "$getprop has no $k"
     printf '%s=%s\n' "$k" "$v" >> "$props"
     [[ $k == ro.boot.cdt_hwid ]] && printf 'persist.vendor.modem.cdt_hwid=%s\n' "$v" >> "$props"

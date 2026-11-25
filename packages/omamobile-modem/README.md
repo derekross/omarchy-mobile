@@ -63,7 +63,7 @@ the start script alike. It is skipped only when all three hold:
 - the owner hasn't opted out: `touch /etc/omamobile/modem-suspend-disable`
   keeps the inhibitor from the next boot;
 - the running kernel's modem link module (`pcie-gs201-cp`) has the early
-  sleep refusal of linux-omarchy-mobile#232 (kernel-2026.11.15 and later),
+  sleep refusal of linux-omamobile#232 (kernel-2026.11.15 and later),
   found in the module file itself. On an older kernel, or an older slot, the
   inhibitor holds.
 

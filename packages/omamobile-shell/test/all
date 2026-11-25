@@ -7,7 +7,8 @@ fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 
 # A fixture home: the tests (qmltestrunner's QML disk cache among them) must
 # never write under the real user's ~/.cache, ~/.config or ~/.local.
-real_home=$(getent passwd "$(id -u)" | cut -d: -f6)
+# A uid with no passwd entry (a container run with -u) has no home to protect.
+real_home=$(getent passwd "$(id -u)" | cut -d: -f6) || real_home=
 fixture=$(mktemp -d)
 trap 'rm -rf -- "$fixture"' EXIT
 export HOME="$fixture/home"
@@ -15,7 +16,7 @@ export XDG_CONFIG_HOME="$HOME/.config" XDG_CACHE_HOME="$HOME/.cache"
 export XDG_DATA_HOME="$HOME/.local/share" XDG_STATE_HOME="$HOME/.local/state"
 export QML_DISABLE_DISK_CACHE=1
 mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
-if [ -z "$real_home" ] || [ "$(realpath -m -- "$HOME")" = "$(realpath -m -- "$real_home")" ]; then
+if [ -n "$real_home" ] && [ "$(realpath -m -- "$HOME")" = "$(realpath -m -- "$real_home")" ]; then
   fail "HOME is a fixture, not the real home"
 fi
 pass() { printf 'ok - %s\n' "$1"; }
@@ -310,6 +311,11 @@ grep -cF '"else qs ipc -p \"$1\" call notifications dismissAll; qs ipc -p \"$1\"
 grep -cF 'Quickshell.execDetached(["omarchy-menu", "summon", "root"])' "$qs" >/dev/null || fail "the gear opens Omarchy's root menu"
 grep -cF '"/.local/state/omarchy/notifications"' "$qs" >/dev/null || fail "the shade reads Omarchy's notification files"
 grep -cF '"/.local/state/omarchy/notifications/history"' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar counts Omarchy's notification history"
+# The count sits beside the clock, not in the right-hand row: that row grows
+# leftwards with every glyph and its first item ended under the camera cutout.
+[ "$(awk '/^        Row \{$/,/^        \}$/' plugins/omamobile.bar/Bar.qml | grep -c 'id: status')" = 1 ] || fail "the bar's right-hand row isn't where this test looks"
+[ "$(awk '/^        Row \{$/,/^        \}$/' plugins/omamobile.bar/Bar.qml | grep -c 'unreadNotifications')" = 0 ] || fail "the unread count is in the bar's right-hand row again (it ends under the camera cutout)"
+awk '/objectName: "unreadNotifications"/,/radius:/' plugins/omamobile.bar/Bar.qml | grep -cF 'anchors.left: callChipPill.visible ? callChipPill.right : clockText.right' >/dev/null || fail "the unread count follows the clock (or the call chip)"
 grep -cF '"/.local/state/omarchy/notifications/history.json"' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar counts Omarchy 4.5's history.json"
 # Omarchy 4.0's files and 4.5's live.json and history.json, chosen by what
 # exists: test/notifications-store.sh runs the shade's own commands on both.
@@ -539,6 +545,116 @@ fake=$(mktemp -d)
 [[ $(HOME=$fake bash bin/omamobile-set-pin --type) == pin ]] || fail "a phone without a record counts as PIN"
 mkdir -p "$fake/.config/omamobile"; echo password >"$fake/.config/omamobile/credential"
 [[ $(HOME=$fake bash bin/omamobile-set-pin --type) == password ]] || fail "a password user reads as password"
+# a PIN is at least 4 digits (no maximum), typed twice, then fed to a fake passwd (never the real one)
+cat >"$fake/passwd" <<'STUB'
+#!/bin/bash
+read -rsp "Current password: " a; read -rsp "New password: " b; read -rsp "Retype new password: " c
+printf '%s %s %s\n' "$a" "$b" "$c" >"${0%/*}/got"
+STUB
+chmod +x "$fake/passwd"
+sed "s|^passwd=/usr/bin/passwd$|passwd=$fake/passwd|" bin/omamobile-set-pin >"$fake/set-pin"
+grep -q "^passwd=$fake/passwd$" "$fake/set-pin" || fail "the test swaps in the fake passwd"
+for bad in 123 12a4 "" " 1234" 12345678901234567890x; do
+  printf '0000\n%s\n%s\n' "$bad" "$bad" | bash "$fake/set-pin" --change 2>/dev/null && fail "set-pin refuses PIN '$bad'"
+done
+printf '0000\n1234\n1235\n' | bash "$fake/set-pin" --change 2>/dev/null && fail "set-pin refuses PINs that differ"
+[[ ! -e $fake/got ]] || fail "a refused PIN never reaches passwd"
+printf '0000\n4321\n4321\n' | timeout 10 bash "$fake/set-pin" --change || fail "a 4-digit PIN is set"
+[[ $(cat "$fake/got") == "0000 4321 4321" ]] || fail "passwd gets current, new, new"
+long=$(printf '7%.0s' {1..200})
+printf '0000\n%s\n%s\n' "$long" "$long" | timeout 10 bash "$fake/set-pin" --change || fail "a 200-digit PIN is not capped"
+[[ $(cat "$fake/got") == "0000 $long $long" ]] || fail "passwd gets the whole long PIN"
+# passwd's own error is shown, and its exit code fails the change
+cat >"$fake/passwd" <<'STUB'
+#!/bin/bash
+read -rsp "Current password: " a; echo; echo "passwd: Authentication token manipulation error"; exit 10
+STUB
+out=$(printf '0000\n4321\n4321\n' | timeout 10 bash "$fake/set-pin" --change 2>&1) && fail "a failing passwd fails the change"
+[[ $out == *"Authentication token manipulation error"* ]] || fail "passwd's error reaches the user: $out"
+# an unexpected prompt cannot hang: passwd is killed after OMAMOBILE_PIN_WAIT
+cat >"$fake/passwd" <<'STUB'
+#!/bin/bash
+read -rp "Enter your favourite colour: " a; touch "${0%/*}/answered"
+STUB
+start=$SECONDS; rc=0
+out=$(printf '0000\n4321\n4321\n' | OMAMOBILE_PIN_WAIT=1 timeout 10 bash "$fake/set-pin" --change 2>&1) || rc=$?
+(( rc != 0 && rc != 124 && SECONDS - start < 5 )) || fail "an unexpected prompt times out (rc $rc)"
+[[ $out == *"favourite colour"* && $out == *"unexpected"* && ! -e $fake/answered ]] || fail "the unexpected prompt is shown and never answered: $out"
+# a passwd that goes quiet after the retype is not killed at once and the owner is told the PIN may have changed
+cat >"$fake/passwd" <<'STUB'
+#!/bin/bash
+read -rsp "Current password: " a; read -rsp "New password: " b; read -rsp "Retype new password: " c; sleep 5
+STUB
+rc=0
+out=$(printf '0000\n4321\n4321\n' | OMAMOBILE_PIN_WAIT=1 OMAMOBILE_PIN_DONE_WAIT=1 timeout 10 bash "$fake/set-pin" --change 2>&1) || rc=$?
+(( rc != 0 && rc != 124 )) && [[ $out == *"may or may not have changed"* ]] || fail "a timeout after the retype says the PIN may have changed (rc $rc): $out"
+# ...and passwd is still allowed to finish after the helper has left
+cat >"$fake/passwd" <<'STUB'
+#!/bin/bash
+read -rsp "Current password: " a; read -rsp "New password: " b; read -rsp "Retype new password: " c; sleep 3; touch "${0%/*}/finished"
+STUB
+rm -f "$fake/finished"; rc=0; mkdir -p "$fake/run"
+out=$(cd "$fake/run" && printf '0000\n4321\n4321\n' | OMAMOBILE_PIN_WAIT=1 OMAMOBILE_PIN_DONE_WAIT=1 timeout 10 bash "$fake/set-pin" --change 2>&1) || rc=$?
+(( rc != 0 && rc != 124 )) && [[ $out == *"may or may not have changed"* ]] || fail "the slow passwd is reported as maybe changed (rc $rc): $out"
+(( rc == 75 )) || fail "a maybe-changed PIN exits with status 75 (rc $rc)"
+keeper=0
+# only this user's cats: a fork per /proc entry took 5 s on a busy build host,
+# longer than the fake passwd lives, and the keeper had left before the scan
+# reached it
+for p in $(pgrep -u "$(id -u)" -x cat); do
+  d=/proc/$p
+  if [[ $(readlink "$d/cwd" 2>/dev/null) == "$fake/run" && $(readlink "$d/fd/0" 2>/dev/null) == */ptmx && $(tr '\0' ' ' <"$d/cmdline" 2>/dev/null) == "cat " ]]; then keeper=1; fi
+done
+(( keeper )) || fail "the keeper is a plain cat on the pty, not the python that held the PINs"
+sleep 4
+[[ -e $fake/finished ]] || fail "passwd is not hung up when the helper leaves: it finishes"
+# in the terminal flow: no "Try again?" after a maybe-changed PIN, but one after a plain refusal
+mkdir -p "$fake/bin"
+cat >"$fake/bin/gum" <<'STUB'
+#!/bin/bash
+case $1 in choose) echo "PIN (numbers only)" ;; confirm) touch "${0%/*}/../asked"; exit 1 ;; esac
+STUB
+chmod +x "$fake/bin/gum"
+cat >"$fake/passwd" <<'STUB'
+#!/bin/bash
+read -rsp "Current password: " a; read -rsp "New password: " b; read -rsp "Retype new password: " c; sleep 5
+STUB
+rm -f "$fake/asked"
+out=$(printf '0000\n4321\n4321\n' | HOME=$fake/home PATH="$fake/bin:$PATH" OMAMOBILE_PIN_WAIT=1 OMAMOBILE_PIN_DONE_WAIT=1 timeout 15 bash "$fake/set-pin" --inner 2>&1) && fail "--inner fails after a maybe-changed PIN"
+[[ ! -e $fake/asked && $out == *"passwd -S"* ]] || fail "no retry is offered after a maybe-changed PIN: $out"
+cat >"$fake/passwd" <<'STUB'
+#!/bin/bash
+read -rsp "Current password: " a; echo; echo "passwd: refused"; exit 10
+STUB
+printf '0000\n4321\n4321\n' | HOME=$fake/home PATH="$fake/bin:$PATH" timeout 15 bash "$fake/set-pin" --inner >/dev/null 2>&1 || true
+[[ -e $fake/asked ]] || fail "a plain refusal still offers Try again"
+# a slow but finishing passwd (longer than the idle wait) still succeeds
+cat >"$fake/passwd" <<'STUB'
+#!/bin/bash
+read -rsp "Current password: " a; read -rsp "New password: " b; read -rsp "Retype new password: " c; sleep 2; echo; echo "passwd: password updated successfully"
+STUB
+out=$(printf '0000\n4321\n4321\n' | OMAMOBILE_PIN_WAIT=1 OMAMOBILE_PIN_DONE_WAIT=10 timeout 20 bash "$fake/set-pin" --change 2>&1) || fail "a slow passwd after the retype is waited for: $out"
+# the pty never echoes a PIN: a stub that reads without -s would make the pty print it back
+cat >"$fake/passwd" <<'STUB'
+#!/bin/bash
+read -rp "Current password: " a; read -rp "New password: " b; read -rp "Retype new password: " c; echo; echo "passwd: refused"; exit 1
+STUB
+out=$(printf '0123\n4321\n4321\n' | timeout 10 bash "$fake/set-pin" --change 2>&1) && fail "the echo stub fails the change"
+[[ $out == *refused* && $out != *4321* && $out != *0123* ]] || fail "no PIN is ever echoed back: $out"
+# a password that is not UTF-8 gets through, and 512 bytes is the most
+cat >"$fake/passwd" <<'STUB'
+#!/bin/bash
+read -rsp "Current password: " a; read -rsp "New password: " b; read -rsp "Retype new password: " c
+printf '%s %s %s\n' "$a" "$b" "$c" >"${0%/*}/got"
+STUB
+rm -f "$fake/got"
+printf '\xff\xfe\n4321\n4321\n' | timeout 10 bash "$fake/set-pin" --change || fail "a non-UTF-8 current password does not crash the change"
+[[ -s $fake/got ]] || fail "the non-UTF-8 current password reaches passwd"
+max=$(printf '7%.0s' {1..512}); over=${max}7; rm -f "$fake/got"
+printf '0000\n%s\n%s\n' "$max" "$max" | timeout 10 bash "$fake/set-pin" --change || fail "a 512-digit PIN is set"
+rm -f "$fake/got"
+printf '0000\n%s\n%s\n' "$over" "$over" | timeout 10 bash "$fake/set-pin" --change 2>/dev/null && fail "513 digits are refused"
+[[ ! -e $fake/got ]] || fail "a too-long PIN never reaches passwd"
 rm -rf "$fake"
 grep -c 'namespace = "^osk\$" }, above_lock = 2' hypr/phone.lua >/dev/null || fail "the on-screen keyboard works above the lock"
 pass "PIN or password"
@@ -747,7 +863,7 @@ if [[ $rc == 77 ]]; then
 elif [[ $rc != 0 ]]; then
   printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "recent apps under touch (test/switcher-touch)"
 else
-  pass "recent apps under touch: Clear all, Home, a near miss, a card, app names, a centred card, the cards on their side"
+  pass "recent apps under touch: Clear all, Home, a near miss, a card, app names, a centred card, the cards on their side, no live copy of a window being closed"
 fi
 rc=0; out=$(bash test/shade-touch 2>&1) || rc=$?
 if [[ $rc == 77 ]]; then
@@ -1004,6 +1120,20 @@ fi
 if [[ -n ${OMAMOBILE_CALL_RENDER:-} ]]; then
   bash test/call-render "$OMAMOBILE_CALL_RENDER" >/dev/null || fail "call card render"
 fi
+# The bar wires the status keys: the battery is BatteryIndicator in the
+# picked style, each icon has its switch, and the cell watcher follows its
+# switch (started and stopped by hand, not bound: the restart timer sets it).
+bar=plugins/omamobile.bar/Bar.qml
+grep -cF 'style: root.batteryStyle' "$bar" >/dev/null && grep -c '^ *BatteryIndicator {' "$bar" >/dev/null || fail "the bar draws BatteryIndicator in the picked style"
+for flag in showBluetooth showWifi showCell showDnd showUnread; do
+  grep -cE "visible: root\.$flag &&" "$bar" >/dev/null || fail "the bar hides an icon by $flag"
+done
+grep -cF 'onShowCellChanged: { if (!showCell) cellRestart.stop(); cellWatch.running = showCell }' "$bar" >/dev/null || fail "the cell watcher follows its switch"
+grep -cF 'Component.onCompleted: cellWatch.running = showCell' "$bar" >/dev/null || fail "the cell watcher starts with its switch"
+grep -cE '^ *running: (root\.)?showCell' "$bar" >/dev/null && fail "the cell watcher's running is not bound"
+if [[ -n ${OMAMOBILE_BAR_RENDER:-} ]]; then
+  bash test/bar-render "$OMAMOBILE_BAR_RENDER" >/dev/null || fail "status bar render"
+fi
 if command -v node >/dev/null; then
   node test/status-model.js >/dev/null || { node test/status-model.js; fail "status bar model"; }
   node test/battery-state.js || fail "battery state bindings"
@@ -1187,7 +1317,7 @@ fi
 [[ -x $tmp/root/usr/bin/omamobile-launch ]] || fail "install stages omamobile-launch"
 [[ -x $tmp/root/usr/bin/omamobile-screenshot-open && -x $tmp/root/usr/bin/omamobile-screenshot-edit && -f $tmp/root/usr/lib/environment.d/30-omamobile-screenshot.conf ]] \
   || fail "install stages the screenshot editor and its session variable"
-for layout in terminal/us.yaml terminal/us_wide.yaml us.yaml us_wide.yaml; do
+for layout in terminal/us.yaml terminal/us_wide.yaml terminal/gr.yaml terminal/gr_wide.yaml us.yaml us_wide.yaml; do
   [[ -f $tmp/root/usr/share/omamobile/squeekboard/keyboards/$layout ]] || fail "install stages the $layout layout"
 done
 [[ -x $tmp/root/usr/bin/omamobile-keyboard-theme && -x $tmp/root/usr/share/omamobile/shell/hooks/theme-set-keyboard ]] \

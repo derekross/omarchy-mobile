@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- SPDX-License-Identifier: MIT -->
-<!-- Omarchy Mobile additions to the LineageOS manifest. Copied into .repo/local_manifests/ by `lineage-ref sync`. -->
+<!-- Omamobile additions to the LineageOS manifest. Copied into .repo/local_manifests/ by `lineage-ref sync`. -->
 <manifest>
   <!-- Pixel 7 Pro proprietary vendor files (matches stock Android 17 firmware) -->
   <project name="TheMuppets/proprietary_vendor_google_cheetah" path="vendor/google/cheetah"

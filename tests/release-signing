@@ -10,7 +10,7 @@
 # newline, in any locale; build-packages --resign moves a repository signed
 # with the original key to the release key, package bytes unchanged;
 # repo-publish publishes only what the release key signed (a dry run, with
-# rsync faked).
+# rsync faked); release-key-init keeps OFFLINE_DIR and its exports private.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -194,6 +194,72 @@ chmod 644 "$kr/omamobile-revoked"
 : > "$kr/omamobile-revoked"
 pass "an omamobile-revoked that can't be read as a file stops build-packages before it signs; a missing one revokes nothing"
 
+# If an existing omamobile-revoked vanishes, becomes unreadable, turns into a
+# directory, or changes to a malformed line between revoked_file_check and the
+# read, signing_key_load stops before signing rather than continuing with an
+# empty revocation list. A wc on PATH applies each fault after
+# revoked_file_check's final wc -l succeeds.
+real_wc=$(command -v wc) && mkdir -p "$t/bin-revoked"
+cat > "$t/bin-revoked/wc" <<EOF
+#!/bin/sh
+"$real_wc" "\$@" || exit \$?
+if [ -n "\${REVOKED_WC_ON:-}" ]; then
+  n=0
+  [ -f "$t/wc.count" ] && read -r n < "$t/wc.count"
+  n=\$((n + 1))
+  printf '%s\n' "\$n" > "$t/wc.count"
+  [ "\$n" = "\$REVOKED_WC_ON" ] || exit 0
+fi
+case "\${REVOKED_FAULT:-}" in
+  rm) rm -f -- "$kr/omamobile-revoked" ;;
+  chmod) chmod 000 -- "$kr/omamobile-revoked" ;;
+  dir) rm -f -- "$kr/omamobile-revoked" && mkdir -- "$kr/omamobile-revoked" ;;
+  swap) printf '%s:4:\n' "\${REVOKED_FPR:-$release}" > "$kr/omamobile-revoked" ;;
+  crlf) printf '%s\r\n' "\${REVOKED_FPR:-$release}" > "$kr/omamobile-revoked" ;;
+  blank) printf '%s\n\n' "\${REVOKED_FPR:-$release}" > "$kr/omamobile-revoked" ;;
+  nonl) printf '%s' "\${REVOKED_FPR:-$release}" > "$kr/omamobile-revoked" ;;
+  nul) printf '%s\0\n' "\${REVOKED_FPR:-$release}" > "$kr/omamobile-revoked" ;;
+esac
+EOF
+chmod +x "$t/bin-revoked/wc"
+: > "$t/mode000-probe" && chmod 000 "$t/mode000-probe"
+for fault in rm chmod dir swap crlf blank nonl nul; do
+  if [[ $fault == chmod && -r $t/mode000-probe ]]; then
+    pass "# skip: chmod 000 does not stop this user reading"
+    continue
+  fi
+  echo "$release" > "$kr/omamobile-revoked"
+  before=$(sigs)
+  if run env PATH="$t/bin-revoked:$t/bin:$PATH" REVOKED_FAULT="$fault" tools/build-packages --resign; then
+    cat "$t/log"
+    fail "signing_key_load stops when omamobile-revoked fails after the check ($fault)"
+  fi
+  case $fault in
+    rm) [[ ! -e $kr/omamobile-revoked ]] || fail "the wc wrapper removed omamobile-revoked" ;;
+    chmod)
+      [[ ! -r $kr/omamobile-revoked ]] || fail "the wc wrapper made omamobile-revoked unreadable"
+      chmod 644 "$kr/omamobile-revoked" ;;
+    dir)
+      [[ -d $kr/omamobile-revoked ]] || fail "the wc wrapper replaced omamobile-revoked with a directory"
+      rmdir "$kr/omamobile-revoked" ;;
+    swap) [[ $(cat "$kr/omamobile-revoked") == "$release:4:" ]] || fail "the wc wrapper rewrote omamobile-revoked ($fault)" ;;
+    crlf) [[ $(cat "$kr/omamobile-revoked") == $release$'\r' ]] || fail "the wc wrapper rewrote omamobile-revoked ($fault)" ;;
+    blank) [[ $(wc -l < "$kr/omamobile-revoked") == 2 ]] || fail "the wc wrapper rewrote omamobile-revoked ($fault)" ;;
+    nonl) [[ $(wc -l < "$kr/omamobile-revoked") == 0 ]] || fail "the wc wrapper rewrote omamobile-revoked ($fault)" ;;
+    nul)
+      [[ $(stat -c %s "$kr/omamobile-revoked") == 42 && $(tr -dc '\0' < "$kr/omamobile-revoked" | wc -c) == 1 ]] \
+        || fail "the wc wrapper rewrote omamobile-revoked ($fault)" ;;
+  esac
+  case $fault in
+    rm|chmod|dir) want="error: cannot read packages/omamobile-keyring/omamobile-revoked" ;;
+    *) want="error: packages/omamobile-keyring/omamobile-revoked changed while reading" ;;
+  esac
+  grep -qxF "$want" "$t/log" || { cat "$t/log"; fail "signing_key_load says why omamobile-revoked failed after the check ($fault)"; }
+  [[ $(sigs) == "$before" ]] || fail "signing_key_load signs nothing when omamobile-revoked fails after the check ($fault)"
+done
+: > "$kr/omamobile-revoked"
+pass "signing_key_load stops build-packages before signing if omamobile-revoked cannot be read or changes after the check"
+
 # The check reads in the C locale. In a locale whose ranges follow its
 # collation, [0-9A-F] can take a letter that isn't hex: build en_US.UTF-8 in
 # scratch, and use it only if it does take this line's É.
@@ -238,3 +304,182 @@ cmp -s "$R/out/publish/development/aarch64/omamobile.db.tar.gz" "$R/out/publish/
 cmp -s "$R/out/publish/development/aarch64/foo-1-1-any.pkg.tar.zst.sig" "$R/out/publish/stable/aarch64/foo-1-1-any.pkg.tar.zst.sig" ||
   fail "the packages' signatures are promoted unchanged"
 pass "repo-publish stable --expect-index promotes only the tested index, unchanged (dry run)"
+
+# --- repo-publish reads omamobile-revoked through the checked helper ---
+# When original is revoked and release is valid, repo-publish omits original
+# from index.html. When omamobile-revoked is missing, repo-publish runs quietly
+# with nothing on stderr and keeps both trusted keys. If omamobile-revoked fails
+# or turns malformed after signing_key_load (during gpg --import) or after
+# repo-publish's own revoked_file_check (on the 2nd wc call), repo-publish stops
+# before writing index.html or syncing.
+echo "$original" > "$kr/omamobile-revoked"
+rm -rf "$R/out/publish"
+run tools/repo-publish --no-build --dry-run development || { cat "$t/log"; fail "repo-publish runs with original revoked"; }
+grep -qF "$release" "$R/out/publish/index.html" || fail "index.html lists the release key"
+if grep -qF "$original" "$R/out/publish/index.html"; then fail "index.html omits the revoked original key"; fi
+
+rm -f "$kr/omamobile-revoked"
+rm -rf "$R/out/publish"
+(cd "$R" && PATH="$t/bin:$PATH" tools/repo-publish --no-build --dry-run development) > "$t/log" 2> "$t/err" \
+  || { cat "$t/log" "$t/err"; fail "repo-publish allows a missing omamobile-revoked"; }
+[[ ! -s $t/err ]] || { cat "$t/err"; fail "repo-publish writes nothing to stderr when omamobile-revoked is missing"; }
+grep -qF "$original" "$R/out/publish/index.html" && grep -qF "$release" "$R/out/publish/index.html" \
+  || fail "missing omamobile-revoked keeps both trusted keys in index.html"
+
+real_gpg=$(command -v gpg) && mkdir -p "$t/bin-gpg-fault"
+cat > "$t/bin-gpg-fault/gpg" <<EOF
+#!/bin/sh
+"$real_gpg" "\$@" || exit \$?
+for arg in "\$@"; do
+  if [ "\$arg" = "--import" ]; then
+    case "\${GPG_REVOKED_FAULT:-}" in
+      dir) rm -f -- "$kr/omamobile-revoked" && mkdir -- "$kr/omamobile-revoked" ;;
+      chmod) chmod 000 -- "$kr/omamobile-revoked" ;;
+      malformed) printf '%s:4:\n' "$original" > "$kr/omamobile-revoked" ;;
+    esac
+    break
+  fi
+done
+EOF
+chmod +x "$t/bin-gpg-fault/gpg"
+for fault in dir chmod malformed; do
+  if [[ $fault == chmod && -r $t/mode000-probe ]]; then
+    pass "# skip: chmod 000 does not stop this user reading"
+    continue
+  fi
+  echo "$original" > "$kr/omamobile-revoked"
+  rm -rf "$R/out/publish" && : > "$t/rsync.log"
+  if run env PATH="$t/bin-gpg-fault:$t/bin:$PATH" GPG_REVOKED_FAULT="$fault" tools/repo-publish --no-build --dry-run development; then
+    cat "$t/log"
+    fail "repo-publish stops when omamobile-revoked fails after signing_key_load ($fault)"
+  fi
+  case $fault in
+    dir)
+      [[ -d $kr/omamobile-revoked ]] || fail "the gpg wrapper replaced omamobile-revoked with a directory"
+      rmdir "$kr/omamobile-revoked"
+      want="repo-publish: packages/omamobile-keyring/omamobile-revoked cannot be read: it must be a file this user can read (docs/RELEASES.md §10)" ;;
+    chmod)
+      [[ ! -r $kr/omamobile-revoked ]] || fail "the gpg wrapper made omamobile-revoked unreadable"
+      chmod 644 "$kr/omamobile-revoked"
+      want="repo-publish: packages/omamobile-keyring/omamobile-revoked cannot be read: it must be a file this user can read (docs/RELEASES.md §10)" ;;
+    malformed)
+      [[ $(cat "$kr/omamobile-revoked") == "$original:4:" ]] || fail "the gpg wrapper rewrote omamobile-revoked as malformed"
+      want="repo-publish: packages/omamobile-keyring/omamobile-revoked is malformed at line 1: each line must be one 40-digit fingerprint in capitals, ending with a newline (docs/RELEASES.md §10)" ;;
+  esac
+  grep -qxF "$want" "$t/log" || { cat "$t/log"; fail "repo-publish says why omamobile-revoked failed after signing_key_load ($fault)"; }
+  [[ ! -e $R/out/publish/index.html && ! -s $t/rsync.log ]] || fail "repo-publish writes no index.html and syncs nothing ($fault)"
+done
+
+for fault in rm dir swap; do
+  echo "$original" > "$kr/omamobile-revoked"
+  rm -f "$t/wc.count" && rm -rf "$R/out/publish" && : > "$t/rsync.log"
+  if run env PATH="$t/bin-revoked:$t/bin:$PATH" REVOKED_WC_ON=2 REVOKED_FAULT="$fault" REVOKED_FPR="$original" \
+      tools/repo-publish --no-build --dry-run development; then
+    cat "$t/log"
+    fail "repo-publish stops when omamobile-revoked fails after its own check ($fault)"
+  fi
+  [[ $(cat "$t/wc.count" 2>/dev/null || true) == 2 ]] || fail "the wc wrapper fired on repo-publish's own check ($fault)"
+  case $fault in
+    rm) [[ ! -e $kr/omamobile-revoked ]] || fail "the wc wrapper removed omamobile-revoked" ;;
+    dir)
+      [[ -d $kr/omamobile-revoked ]] || fail "the wc wrapper replaced omamobile-revoked with a directory"
+      rmdir "$kr/omamobile-revoked" ;;
+    swap) [[ $(cat "$kr/omamobile-revoked") == "$original:4:" ]] || fail "the wc wrapper rewrote omamobile-revoked ($fault)" ;;
+  esac
+  case $fault in
+    rm|dir) want="repo-publish: cannot read packages/omamobile-keyring/omamobile-revoked" ;;
+    *) want="repo-publish: packages/omamobile-keyring/omamobile-revoked changed while reading" ;;
+  esac
+  grep -qxF "$want" "$t/log" || { cat "$t/log"; fail "repo-publish says why omamobile-revoked failed after its own check ($fault)"; }
+  [[ ! -e $R/out/publish/index.html && ! -s $t/rsync.log ]] || fail "repo-publish writes no index.html and syncs nothing after its own check ($fault)"
+done
+: > "$kr/omamobile-revoked"
+pass "repo-publish allows a missing omamobile-revoked quietly, and stops before writing index.html if it fails or changes after the check"
+
+# --- release-key-init writes private modes under a permissive umask ---
+cp tools/release-key-init "$R/tools/"
+mkdir "$t/init-home" "$t/bin-nochmod" "$t/bin-gpg-mode"
+gpgconf --homedir "$R/keys/gnupg.release" --kill gpg-agent 2>/dev/null || true
+run_init() {  # run_init DIR [EXTRA_PATH]
+  rm -rf "$R/keys/gnupg.release" "$R/keys/fingerprint.release"
+  (umask 022; cd "$R" && HOME=$t/init-home PATH="${2:+$2:}$PATH" \
+    tools/release-key-init "$1" <<<$'throwaway-passphrase-1\nthrowaway-passphrase-1') > "$t/log" 2> "$t/err"
+}
+check_offline_modes() {  # check_offline_modes LABEL DIR DIR_MODE
+  local got
+  got=$(stat -c %a "$2" "$2/omamobile-release.pub.asc" "$2/omamobile-release.secret.asc" \
+    "$2/omamobile-release.revoke.asc" "$2/README.txt")
+  [[ $got == "$3"$'\n600\n600\n600\n600' ]] || fail "$1: modes were ${got//$'\n'/ }, want $3 600 600 600 600"
+}
+
+# Record the secret export file and directory modes at write time.
+cat > "$t/bin-gpg-mode/gpg" <<EOF
+#!/bin/sh
+for arg in "\$@"; do
+  [ "\$arg" = "--export-secret-keys" ] || continue
+  p=\$(readlink -f "/proc/\$\$/fd/1")
+  stat -L -c %a "/proc/\$\$/fd/1" "\$(dirname -- "\$p")" >> "$t/gpg-mode.log"
+  break
+done
+exec "$real_gpg" "\$@"
+EOF
+chmod +x "$t/bin-gpg-mode/gpg"
+
+run_init "$t/offline-new" "$t/bin-gpg-mode" || { cat "$t/log" "$t/err"; fail "release-key-init creates a new OFFLINE_DIR"; }
+check_offline_modes "new OFFLINE_DIR" "$t/offline-new" 700
+write_modes=$(cat "$t/gpg-mode.log" 2>/dev/null || true)
+[[ $write_modes == $'600\n700' ]] || fail "secret export write-time modes were ${write_modes//$'\n'/ }, want 600 700"
+[[ $(stat -c %a "$R/keys/gnupg.release" "$R/keys/fingerprint.release") == $'700\n600' ]] \
+  || fail "keys/gnupg.release (700) and keys/fingerprint.release (600) modes"
+
+mkdir -m 755 "$t/offline-pre"
+run_init "$t/offline-pre" || { cat "$t/log" "$t/err"; fail "release-key-init accepts a pre-existing empty OFFLINE_DIR"; }
+check_offline_modes "pre-existing OFFLINE_DIR" "$t/offline-pre" 700
+
+for pair in "nonempty:keep" $'newline:\n'; do
+  dir=$t/offline-${pair%%:*}
+  mkdir -m 755 "$dir" && : > "$dir/${pair#*:}"
+  if run_init "$dir"; then fail "release-key-init refuses a non-empty OFFLINE_DIR (${pair%%:*}, mode $(stat -c %a "$dir"))"; fi
+  [[ $(grep -c 'is not empty' "$t/err") == 1 ]] || { cat "$t/err"; fail "refused ${pair%%:*} OFFLINE_DIR says it is not empty"; }
+  [[ $(stat -c %a "$dir") == 755 ]] || fail "refused ${pair%%:*} OFFLINE_DIR kept mode 755"
+done
+
+mkdir "$t/offline-unlistable" && : > "$t/offline-unlistable/keep" && chmod 300 "$t/offline-unlistable"
+if [[ -r $t/offline-unlistable ]]; then
+  chmod 700 "$t/offline-unlistable"
+  pass "# skip: chmod 300 does not stop this user listing"
+else
+  rc=0; run_init "$t/offline-unlistable" || rc=$?
+  mode=$(stat -c %a "$t/offline-unlistable")
+  chmod 700 "$t/offline-unlistable"
+  (( rc != 0 )) || fail "release-key-init refuses an unlistable non-empty OFFLINE_DIR (mode $mode)"
+  [[ $(grep -c "can't list" "$t/err") == 1 ]] || { cat "$t/err"; fail "refused unlistable OFFLINE_DIR says it can't list it"; }
+  [[ $mode == 300 ]] || fail "refused unlistable OFFLINE_DIR had mode $mode, want 300"
+fi
+
+mkdir -m 555 "$t/offline-nl"
+rc=0; run_init "$t/offline-nl"$'\n' || rc=$?
+mode=$(stat -c %a "$t/offline-nl")
+chmod 700 "$t/offline-nl"
+(( rc != 0 )) || fail "release-key-init refuses an OFFLINE_DIR containing a newline (sibling mode $mode)"
+[[ $(grep -c "can't contain a newline" "$t/err") == 1 ]] || { cat "$t/err"; fail "refused newline OFFLINE_DIR says it can't contain a newline"; }
+[[ $mode == 555 && -z $(ls -Aq -- "$t/offline-nl") ]] || fail "refused newline OFFLINE_DIR left sibling mode $mode / non-empty"
+[[ ! -e $t/offline-nl$'\n' ]] || fail "refused newline OFFLINE_DIR was not created"
+
+mkdir -p "$t/sym/real/sub" && mkdir -m 555 "$t/sym/decoy" && ln -s real/sub "$t/sym/link"
+rc=0; run_init "$t/sym/link/../decoy" || rc=$?
+mode=$(stat -c %a "$t/sym/decoy")
+chmod 700 "$t/sym/decoy"
+(( rc != 0 )) || fail "release-key-init refuses a symlink/.. OFFLINE_DIR resolving to another dir (decoy mode $mode)"
+[[ $(grep -c 'another directory; give its real path' "$t/err") == 1 ]] || { cat "$t/err"; fail "refused symlink/.. OFFLINE_DIR says it resolves to another directory"; }
+[[ $mode == 555 && -z $(ls -Aq -- "$t/sym/decoy") ]] || fail "refused symlink/.. OFFLINE_DIR left decoy mode $mode / non-empty"
+[[ -z $(find "$t/sym" -name 'omamobile-release.*') ]] || fail "refused symlink/.. OFFLINE_DIR wrote no exports under sym"
+
+printf '#!/bin/sh\nexit 1\n' > "$t/bin-nochmod/chmod" && chmod +x "$t/bin-nochmod/chmod"
+mkdir -m 755 "$t/offline-fat"
+run_init "$t/offline-fat" "$t/bin-nochmod" || { cat "$t/log" "$t/err"; fail "release-key-init continues when chmod on OFFLINE_DIR fails"; }
+[[ $(grep -cF "release-key-init: warning: could not set mode 700 on $(cd -- "$t/offline-fat" && pwd); its filesystem or owner decides who can read it" "$t/err") == 1 ]] \
+  || { cat "$t/err"; fail "release-key-init prints one warning to stderr when chmod fails"; }
+check_offline_modes "chmod-failed OFFLINE_DIR" "$t/offline-fat" 755
+[[ -d $R/keys/gnupg.release && -f $R/keys/fingerprint.release ]] || fail "release-key-init writes keys/ after chmod warning"
+pass "release-key-init keeps OFFLINE_DIR (0700) and its files (0600) private under umask 022, tightens pre-existing empty dirs, and warns if chmod fails"

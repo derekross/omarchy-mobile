@@ -1,11 +1,11 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 7 (panther) battery: the fuel gauge, then its model
 
-Status (2026-11-15): B0, B1, B1b, the charger (B3.1-B3.3, B3g G1-G2) and D1 passed on 2026-11-01. The gauge runs stock's Coslight 1 kOhm model and reports 4326 mAh, the battery's temperature and a real percentage; upower and the shell show it ([linux-omarchy-mobile#171](https://github.com/derekross/linux-omarchy-mobile/pull/171) and [#170](https://github.com/derekross/linux-omarchy-mobile/pull/170), merged). The charger: device-panther ships its options and blacklist from 0.1.17; the kernel side, the `pmic@66` node, is linux-omarchy-mobile#259, in review.
+Status (2026-11-15): B0, B1, B1b, the charger (B3.1-B3.3, B3g G1-G2) and D1 passed on 2026-11-01. The gauge runs stock's Coslight 1 kOhm model and reports 4326 mAh, the battery's temperature and a real percentage; upower and the shell show it ([linux-omamobile#171](https://github.com/derekross/linux-omamobile/pull/171) and [#170](https://github.com/derekross/linux-omamobile/pull/170), merged). The charger: device-panther ships its options and blacklist from 0.1.17; the kernel side, the `pmic@66` node, is linux-omamobile#259, in review.
 
 The battery level comes from the MAX77759's own fuel gauge ("M5", at 0x36
 on USI13). Its I2C bus is enabled since U1 (NOTES.md, 2026-10-29;
-[linux-omarchy-mobile#167](https://github.com/derekross/linux-omarchy-mobile/pull/167)).
+[linux-omamobile#167](https://github.com/derekross/linux-omamobile/pull/167)).
 Upstream's `max17042_battery` drives it (`maxim,max77759-fg`) and, given a
 model in the device tree, loads it. The Pixel 7 Pro already runs it that way
 (device/cheetah/WIFI-BATTERY-PLAN.md, B1 and B1b). This plan does the
@@ -41,7 +41,7 @@ TaskPeriod and FullCapNom only. No PMU registers, no writes.
 
 Kernel D = kernel C plus "gs201-panther: add the fuel gauge and the
 battery", the first commit of
-[linux-omarchy-mobile#171](https://github.com/derekross/linux-omarchy-mobile/pull/171):
+[linux-omamobile#171](https://github.com/derekross/linux-omamobile/pull/171):
 the `fuel-gauge@36` node with no model, its interrupt pin, and a
 `simple-battery`. One change from C. Modules first (`modules-push`), then a
 push or flash.
@@ -128,7 +128,7 @@ the Type-C side (B4), so a source can advertise more.
 | `tools/usbc-deadman` finds the bus by `10d60000.i2c`, which is panther's too. Before `b3-charger` it saves the charger's registers, and `undo b3-charger` writes them back | `tools/usbc-deadman-phone` [V] |
 
 **The changes:**
-- **Kernel** (linux-omarchy-mobile#259; test kernel B3,
+- **Kernel** (linux-omamobile#259; test kernel B3,
   `7.3.0-rc6-omamobile-push1-g801b1e5b4a16`, is D4 plus that commit):
   the `pmic@66` node with its GPIO child, the `if_pmic_int` pin group, and
   the battery's `constant-charge-voltage-max-microvolt` (4450000) and
@@ -305,7 +305,7 @@ level interrupt reran about once a millisecond until the gauge released
 ALRT at its next task period (351 ms with the model's TaskPeriod 0x2d00).
 
 **Fix.** "power: supply: max17042_battery: wait out the MAX77759's alert",
-[linux-omarchy-mobile#170](https://github.com/derekross/linux-omarchy-mobile/pull/170). On the MAX77759, the thread handler now
+[linux-omamobile#170](https://github.com/derekross/linux-omamobile/pull/170). On the MAX77759, the thread handler now
 sleeps one task period (`TaskPeriod` / 32768 s) after clearing Status.
 
 **Kernel F** (`7.3.0-rc6-omamobile-push1-g51074200c999`, E plus the fix),
@@ -428,7 +428,7 @@ file deleted, and the phone rebooted on kernel B3. After the reboot:
 Kernel `7.3.0-rc6-omamobile-push1-gd50ff8bdd671` is kernel B3 plus only
 "power: supply: max17042_battery: wait out the alert after a failed read
 too" (the sleep moved to a common exit, after derekross's review of
-linux-omarchy-mobile#170). It was flashed after its modules.
+linux-omamobile#170). It was flashed after its modules.
 
 - **The interrupt:** with the cable out for 15 minutes and the logger
   running, seven alerts (RepSOC reaching 99 % on the cable, then six

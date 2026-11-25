@@ -29,7 +29,7 @@ refusals before the freeze with data busy and the ping unbroken, a text and
 a call each waking the phone, audio both ways, the call holding off sleep;
 "The day test and the modem-up sleep, 2026-11-14" below). From
 omamobile-modem 0.1.26 and omamobile-device-cheetah 0.1.57 the 7 Pro sleeps
-with the modem up by default, on a kernel with linux-omarchy-mobile#232's
+with the modem up by default, on a kernel with linux-omamobile#232's
 early refusal (kernel-2026.11.15 and later; on an older kernel the modem
 keeps its sleep inhibitor), unless the owner opts out
 (`/etc/omamobile/modem-suspend-disable`); MODEM-PLAN 7.5. The DEVICES cell
@@ -37,7 +37,7 @@ stays "partial" until kernel-2026.11.15 and these packages are released
 and checked on the phone after Updates.
 
 Earlier status (2026-11-13): **P6 reported done, P8 passed, P7 passed on a kernel
-with linux-omarchy-mobile#233; the DEVICES cell is "testing".** One night
+with linux-omamobile#233; the DEVICES cell is "testing".** One night
 asleep with the modem off: about 228 mA, roughly 22 h of standby. Double tap
 wakes the phone from s2idle with kernel #248 and #730. Left before "works":
 a kernel release with #233 and #248, auto-sleep on by default (the human's
@@ -365,8 +365,8 @@ the lock screen) only delay sleep and don't count.
 | Stay awake | Omarchy's idle indicator (`omarchy-toggle-idle stay-awake`, the quick-settings tile) also keeps the phone out of sleep, screen off or not: the user's "Keep awake" for a download or a long task | `omamobile-sleepd` |
 | An SSH session | any established connection to port 22 (`ss`); if `ss` can't answer, it refuses. We work over USB SSH, and the link drops in sleep | `omamobile-sleepd` |
 | Media playing | a PipeWire sink in state `RUNNING` (`pactl list short sinks`; idle sinks read IDLE or SUSPENDED). Checked by the watcher itself rather than an inhibitor in `omamobile-audio` | `omamobile-sleepd` |
-| A call ringing or in progress | a block inhibitor ("Omarchy Mobile calls") while omatel's agent lists any call, held by the call card's watcher (not the bar's `--observe` copy) | `omamobile-call-watch` |
-| A GNSS session | the stack's unit runs under `systemd-inhibit --what=sleep --mode=block` ("Omarchy Mobile GNSS"); it ends with the stack, a minute after the last client | omamobile-gnss 0.2.2 |
+| A call ringing or in progress | a block inhibitor ("Omamobile calls") while omatel's agent lists any call, held by the call card's watcher (not the bar's `--observe` copy) | `omamobile-call-watch` |
+| A GNSS session | the stack's unit runs under `systemd-inhibit --what=sleep --mode=block` ("Omamobile GNSS"); it ends with the stack, a minute after the last client | omamobile-gnss 0.2.2 |
 | `omarchy update` | Omarchy's own update inhibitor (`omamobile-update` keeps it) | omamobile-omarchy |
 | Anything else | `systemd-inhibit --what=sleep --mode=block CMD` | the user |
 
@@ -421,6 +421,15 @@ the inhibitor above covers calls only once the AP is awake), and recording
     `systemctl suspend` (logind, so inhibitors and the hook apply). A
     refusal is logged once per reason (`omamobile-sleepd: not sleeping: an
     SSH session is open`), not at every poll.
+  - While a refusal holds and the screen stays dark, the full check (the
+    toggle, the lock, SSH, the inhibitors, the sinks) runs again every
+    `OMAMOBILE_SLEEP_RECHECK` seconds (default 30, never under 5), not at
+    every 2 s poll. The polls between read two files and start only their
+    own `sleep`: the panel's `bl_power`, so a lit screen is seen at once,
+    and `suspend_stats/success`, so a resume that logind didn't announce (a
+    raw freeze) is too. The power key's signal and logind's resume signal
+    also end the wait. A phone with no panel `omarchy-hw-display` can name
+    checks in full at every poll, as before.
   - Resume is seen in `suspend_stats/success`; it logs the wake IRQ by name
     (`pm_wakeup_irq` and `/proc/interrupts`, as the hook). Any wake that
     leaves the screen off and the lock secure is dark: it asks again after
@@ -1557,7 +1566,7 @@ and run each test; between tests, read the watcher's journal
 | c | Music playing, Power | "not sleeping: audio is playing (…)"; the music goes on; stop it, and it sleeps on the next poll |
 | d | An SSH session open (`tools/phone-ssh sleep 120`), Power | "not sleeping: an SSH session is open"; after the session ends it sleeps |
 | e | `alarm-wake-test arm` with `SECS=90`, no `SUSPEND`, then Power and `--stop` | P3's report on time, and "resumed, woken by IRQ …", then "sleeping (dark resume, 5 s grace)" |
-| f | Location on and a client running (the GNSS-PLAN check), Power | "not sleeping: a sleep inhibitor is held (Omarchy Mobile GNSS)" |
+| f | Location on and a client running (the GNSS-PLAN check), Power | "not sleeping: a sleep inhibitor is held (Omamobile GNSS)" |
 | g | The Stay awake tile on, Power | "not sleeping: Stay awake is on" |
 | h | Power, then press Power again within 1 s | the screen is lit and the phone awake; no "sleeping" line after the second press |
 | i | Fingerprint unlock after a sleep (the lock was mid-verify when it slept) | the fingerprint unlocks (libfprint 1.94.100-1.5's suspend hooks, NOTES 2026-10-18) |
@@ -1729,7 +1738,7 @@ kernel.** On release 2026.11.12's test install,
 turning the phone back on. The cause was already found and fixed by a
 contributor: the PMIC's warm-reset restart (WTSR) is left armed by
 `rtc-s5m`, and Google's driver clears it in its shutdown callback
-([linux-omarchy-mobile#233](https://github.com/derekross/linux-omarchy-mobile/pull/233),
+([linux-omamobile#233](https://github.com/derekross/linux-omamobile/pull/233),
 merged 2026-11-12 on `omamobile`, tested on a 7 Pro on 2026-11-09 and
 2026-11-10: off with the cable out, the bootloader's charger boot with it
 in). `kernel-2026.11.08` is from before it.
@@ -1739,7 +1748,7 @@ in). `kernel-2026.11.08` is from before it.
 - **Next:** P7 again on a kernel built from `omamobile` with #233, both
   cable cases. With the cable in, expect the bootloader's charger boot
   (`androidboot.mode = "charger"`), which starts the whole phone until
-  [#554](https://github.com/derekross/omarchy-mobile/pull/554) is in. Then
+  [#554](https://github.com/derekross/omamobile/pull/554) is in. Then
   a kernel release with #233, and only then the drop-in.
 - Until that release, the power menu's Shutdown restarts a release phone.
 
@@ -1896,7 +1905,7 @@ it, and an open SSH session holds auto-sleep off: so no SSH from step 3 to
 step 4, and a silent phone is not a hang. Before step 4, one short press of
 Power.
 
-| Step | Command (laptop, omarchy-mobile checkout) | Expect / Pass | Stop | Rollback | Risk |
+| Step | Command (laptop, omamobile checkout) | Expect / Pass | Stop | Rollback | Risk |
 | --- | --- | --- | --- | --- | --- |
 | 0 | `tools/phone-ssh 'cat /sys/class/power_supply/*/online; ping -c3 -W2 -I rmnet2 1.1.1.1; dmesg \| grep -c ufshcd_err_handler; cat /sys/devices/platform/cpif/pktproc/status /sys/devices/platform/cpif/pktproc_ul/status'` | on the charger; 3 received; the UFS count noted; both pktproc files read | not charging; data already down; a pktproc read that errors or hangs | none | low |
 | 1 | `tools/phone-ssh 'cat > /root/m6-data-capture.sh' < device/cheetah/bringup/m6-data-capture.sh` | copied | | `rm /root/m6-data-capture.sh` | none |
@@ -1981,7 +1990,7 @@ the development channel: omamobile-device-cheetah 0.1.55, omamobile-shell
   sleep, no UFS line, no failed unit. **Passed.**
 - **Sleep with the modem up (MODEM-PLAN M6), test kernel
   `7.3.0-rc6-omamobile-push1-g21d56455a7c5`** (kernel-2026.11.13 +
-  linux-omarchy-mobile#232's head + the two patches of the #232 analysis:
+  linux-omamobile#232's head + the two patches of the #232 analysis:
   refuse in a PM_SUSPEND_PREPARE notifier while the link is up, the root port
   out of system sleep, and the `ring_trace` switch), with #556's
   omamobile-modem 0.1.25 and omamobile-modem-sit 0.3.37, `follow_screen =

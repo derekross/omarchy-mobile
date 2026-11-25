@@ -72,7 +72,7 @@ g=/sys/kernel/config/usb_gadget/omamobile
 mkdir -p "$g/strings/0x409" "$g/configs/c.1/strings/0x409"
 echo 0x1d6b > "$g/idVendor"
 echo 0x0104 > "$g/idProduct"
-echo 'Omarchy Mobile' > "$g/strings/0x409/manufacturer"
+echo 'Omamobile' > "$g/strings/0x409/manufacturer"
 echo 'Pixel 4 (RAM-only first light)' > "$g/strings/0x409/product"
 echo omamobile-flame > "$g/strings/0x409/serialnumber"
 echo 'NCM + ACM' > "$g/configs/c.1/strings/0x409/configuration"

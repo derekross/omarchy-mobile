@@ -210,7 +210,7 @@ Compiler.prototype = {
       level = V.toInt32(n)
     }
     if (level > LEVEL)
-      this.fail("this widget needs owl " + level + "; this phone supports up to " + LEVEL + ", so update Omarchy Mobile", levelField.at)
+      this.fail("this widget needs owl " + level + "; this phone supports up to " + LEVEL + ", so update Omamobile", levelField.at)
     if (body.anims.length) this.fail("animate belongs inside a node", body.anims[0].at)
     body.handlers.forEach(function(h) {
       if (h.name !== "onTap") self.fail("a widget only takes onTap at the top level", h.at)

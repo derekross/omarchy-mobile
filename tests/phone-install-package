@@ -10,6 +10,12 @@
 #    into or out of a file on the phone.
 # 2. A check dependency that is installed but older than its version asks
 #    for: the tool stops before it installs, builds or removes anything.
+# 3. A failed makepkg exits non-zero with its last lines, skips pacman -U
+#    and pacman -Q, and still removes the temporary build dependency.
+# 4. A failed pacman -U exits non-zero with its error, skips pacman -Q, and
+#    still removes the temporary build dependency.
+# 5. A successful pacman -U whose output matches none of the filter patterns
+#    still prints pacman -Q's line, removes the build dependency, and exits 0.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -48,6 +54,12 @@ cat > "$t/bin/makepkg" <<EOF
 [[ \$1 == --printsrcinfo ]] && exec cat "$t/srcinfo"
 echo "|makepkg|\$*|" >> "$t/pacman.calls"
 [[ -e $t/installed/diffutils ]] || { echo '==> ERROR: Could not resolve all dependencies.'; exit 8; }
+if [[ -e $t/makepkg-fail ]]; then
+  echo '==> Starting build()...'
+  echo '==> ERROR: A failure occurred in build().' >&2
+  echo '    Aborting...' >&2
+  exit 4
+fi
 touch fakepkg-1-1-any.pkg.tar.zst
 echo '==> Finished making: fakepkg 1-1'
 EOF
@@ -67,7 +79,14 @@ case \$op in
   -Qq) ls "$t/installed" ;;
   -S) for d in "\$@"; do [[ \$d == -* ]] || touch "$t/installed/\${d%%[<>=]*}"; done ;;
   -Rns) for d in "\$@"; do [[ \$d == -* ]] || rm -f "$t/installed/\$d"; done ;;
-  -U) echo 'installing fakepkg...' ;;
+  -U) if [[ -e $t/pacman-u-fail ]]; then
+        echo 'error: failed to commit transaction (conflicting files)' >&2
+        exit 1
+      elif [[ -e $t/pacman-u-quiet ]]; then
+        echo 'loading packages...'
+      else
+        echo 'installing fakepkg...'
+      fi ;;
   -Q) echo "\$1 1-1" ;;
 esac
 EOF
@@ -80,7 +99,6 @@ run() { : > "$t/pacman.calls"
 touch "$t/installed/bash" "$t/installed/omarchy"
 : > "$t/too-old"
 printf 'pkgbase = fakepkg\n\tpkgver = 1\n\tpkgrel = 1\n\tcheckdepends = diffutils>=3.10\n\tdepends = omarchy>=4.0.6\n\tdepends = omarchy<5\n\tdepends = bash\n\npkgname = fakepkg\n' > "$t/srcinfo"
-# The tool's exit status alone doesn't show the build: makepkg's goes through tail
 run && grep -qx '==> Finished making: fakepkg 1-1' "$t/out" ||
   { cat "$t/out"; fail "a build against the stand-in phone succeeds"; }
 pass "a build against the stand-in phone succeeds"
@@ -118,3 +136,47 @@ pass "a dependency installed but too old stops the tool"
 ! grep -qE '^\|(-S|-Rns|-U|makepkg)\|' "$t/pacman.calls" && [[ -e $t/installed/diffutils ]] ||
   { cat "$t/pacman.calls"; fail "and nothing is installed, built or removed"; }
 pass "and nothing is installed, built or removed"
+
+# --- 3. a failed makepkg -----------------------------------------------------
+rm -f "$t/installed/diffutils"
+: > "$t/too-old"
+touch "$t/makepkg-fail"
+if run; then cat "$t/out"; fail "a failed makepkg exits non-zero with its last lines"; fi
+grep -qx '==> ERROR: A failure occurred in build().' "$t/out" &&
+  ! grep -qx '==> Starting build()...' "$t/out" ||
+  { cat "$t/out"; fail "a failed makepkg exits non-zero with its last lines"; }
+pass "a failed makepkg exits non-zero with its last lines"
+
+! grep -qE '^\|(-U|-Q)\|' "$t/pacman.calls" && ! grep -qx 'fakepkg 1-1' "$t/out" ||
+  { cat "$t/out" "$t/pacman.calls"; fail "a failed makepkg skips pacman -U and pacman -Q"; }
+pass "a failed makepkg skips pacman -U and pacman -Q"
+
+grep -qx '|-Rns|--noconfirm|diffutils|' "$t/pacman.calls" && [[ ! -e $t/installed/diffutils ]] &&
+  grep -q '^removed build dependencies: diffutils *$' "$t/out" ||
+  { cat "$t/out" "$t/pacman.calls"; fail "a failed makepkg still removes the build dependency"; }
+pass "a failed makepkg still removes the build dependency"
+
+# --- 4. a failed pacman -U ---------------------------------------------------
+rm -f "$t/makepkg-fail"
+touch "$t/pacman-u-fail"
+if run; then cat "$t/out"; fail "a failed pacman -U exits non-zero with its error"; fi
+grep -qx 'error: failed to commit transaction (conflicting files)' "$t/out" ||
+  { cat "$t/out"; fail "a failed pacman -U exits non-zero with its error"; }
+pass "a failed pacman -U exits non-zero with its error"
+
+! grep -q '^|-Q|' "$t/pacman.calls" && ! grep -qx 'fakepkg 1-1' "$t/out" ||
+  { cat "$t/out" "$t/pacman.calls"; fail "a failed pacman -U skips pacman -Q"; }
+pass "a failed pacman -U skips pacman -Q"
+
+grep -qx '|-Rns|--noconfirm|diffutils|' "$t/pacman.calls" && [[ ! -e $t/installed/diffutils ]] &&
+  grep -q '^removed build dependencies: diffutils *$' "$t/out" ||
+  { cat "$t/out" "$t/pacman.calls"; fail "a failed pacman -U still removes the build dependency"; }
+pass "a failed pacman -U still removes the build dependency"
+
+# --- 5. a quiet successful pacman -U -----------------------------------------
+rm -f "$t/pacman-u-fail"
+touch "$t/pacman-u-quiet"
+run && grep -qx 'fakepkg 1-1' "$t/out" && ! grep -qx 'loading packages...' "$t/out" &&
+  grep -qx '|-Rns|--noconfirm|diffutils|' "$t/pacman.calls" && [[ ! -e $t/installed/diffutils ]] ||
+  { cat "$t/out" "$t/pacman.calls"; fail "a quiet successful pacman -U prints pacman -Q and exits 0"; }
+pass "a quiet successful pacman -U prints pacman -Q and exits 0"

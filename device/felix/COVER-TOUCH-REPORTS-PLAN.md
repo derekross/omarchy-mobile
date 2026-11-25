@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel Fold cover touch: reports
 
-Status, 2026-10-27. The report path is linux-omarchy-mobile#48, merged, head `0e8be406f`. #32 and #41 have merged. omarchy-mobile#82 has merged. The notes keep its 2026-10-27 section above this plan's section. `salixp.c` blob `c1752a85` is the stable name for the step 8 boot. That boot was packed release `7.3.0-rc6-omamobile-push1-gaa42f8a8c1bf`, the same tree as published head `aa42f8a8c` before the rebase. The rebase keeps the blob. Head `0e8be406f` fails probe on config CRC events `0x20` and `0x21` and on a missing scan echo. Step 0 is against Google's felix driver at tag `android-14.0.0_r0.102`.
+Status, 2026-10-27. The report path is linux-omamobile#48, merged, head `0e8be406f`. #32 and #41 have merged. omamobile#82 has merged. The notes keep its 2026-10-27 section above this plan's section. `salixp.c` blob `c1752a85` is the stable name for the step 8 boot. That boot was packed release `7.3.0-rc6-omamobile-push1-gaa42f8a8c1bf`, the same tree as published head `aa42f8a8c` before the rebase. The rebase keeps the blob. Head `0e8be406f` fails probe on config CRC events `0x20` and `0x21` and on a missing scan echo. Step 0 is against Google's felix driver at tag `android-14.0.0_r0.102`.
 
-The power key is linux-omarchy-mobile#41, merged. Touch in `docs/DEVICES.md` is WIP (cover chip id). Buttons is works.
+The power key is linux-omamobile#41, merged. Touch in `docs/DEVICES.md` is WIP (cover chip id). Buttons is works.
 
 ## Goal
 
@@ -18,8 +18,8 @@ In order:
 
 ## Sources
 
-- `L/` is linux-omarchy-mobile on `omamobile`, plus the open #32 series.
-- `N/` is `device/felix/NOTES.md` and `device/felix/COVER-TOUCH-PLAN.md` (the chip-id gate, omarchy-mobile#34).
+- `L/` is linux-omamobile on `omamobile`, plus the open #32 series.
+- `N/` is `device/felix/NOTES.md` and `device/felix/COVER-TOUCH-PLAN.md` (the chip-id gate, omamobile#34).
 - `G/` is Google's felix touch driver, `kernel/devices/google/felix` path `touch/ftm5/`. Public history: <https://android.googlesource.com/kernel/devices/google/felix/+log/refs/tags/android-14.0.0_r0.102/touch/ftm5/fts.c>.
 - `F/` is factory image CP3A.261005.002.A1. Its `vendor.img` is an ext4 image whose root is the vendor directory. Factory-image terms: <https://developers.google.com/android/images>.
 
@@ -60,20 +60,20 @@ The report path never writes or erases the controller's flash, never requests a 
 
 ## What was built
 
-The report path is linux-omarchy-mobile#48. Step 8 booted it as a packed image. The chip-id reader and its overlay are the earlier pull requests.
+The report path is linux-omamobile#48. Step 8 booted it as a packed image. The chip-id reader and its overlay are the earlier pull requests.
 
 | Piece | Where | State |
 | --- | --- | --- |
-| Chip-id reader, node disabled | linux-omarchy-mobile#32 | merged |
-| Chip-id plan, notes, blacklist | omarchy-mobile#34 | merged |
-| Report path | linux-omarchy-mobile#48, head `0e8be406f` | merged |
+| Chip-id reader, node disabled | linux-omamobile#32 | merged |
+| Chip-id plan, notes, blacklist | omamobile#34 | merged |
+| Report path | linux-omamobile#48, head `0e8be406f` | merged |
 | Probe stop before a stock repair | `salixp.c` blob `c1752a85`, step 8 release `7.3.0-rc6-omamobile-push1-gaa42f8a8c1bf` | booted, slot B not marked successful |
 
 ## Risks
 
 Requesting attention while it sits low storms the interrupt line. A guessed flash program can leave the cover controller without firmware. Enabling the main PMIC to reach LDO25M and LDO26M is the same risk as the chip-id gate: other rails register, and an Android slot A boot would rewrite the calibration partitions.
 
-Slot A was rewritten on purpose to another Omarchy Mobile test build. The date, the tool, which of `boot_a`, `init_boot_a`, `vendor_boot_a`, `vendor_kernel_boot_a` and `dtbo_a` were written, and whether `vbmeta` was touched, are not recorded. `super`'s slot A has not been read. On 2026-10-22 slot A was GrapheneOS, and the later rewrite does not say it touched `super`. Neither slot holds Android, so there is no fallback. The way back is fastboot from the buttons and step 8a, agreed in this review on 2026-10-27. The 2026-10-27 copy is not a baseline. It is the current contents, and the cause of the change is unknown. The 2026-10-16 set stays beside it. The baseline for any later PMIC step is the backup taken after the return to slot B from stock's first boot on slot A.
+Slot A was rewritten on purpose to another Omamobile test build. The date, the tool, which of `boot_a`, `init_boot_a`, `vendor_boot_a`, `vendor_kernel_boot_a` and `dtbo_a` were written, and whether `vbmeta` was touched, are not recorded. `super`'s slot A has not been read. On 2026-10-22 slot A was GrapheneOS, and the later rewrite does not say it touched `super`. Neither slot holds Android, so there is no fallback. The way back is fastboot from the buttons and step 8a, agreed in this review on 2026-10-27. The 2026-10-27 copy is not a baseline. It is the current contents, and the cause of the change is unknown. The 2026-10-16 set stays beside it. The baseline for any later PMIC step is the backup taken after the return to slot B from stock's first boot on slot A.
 
 ## Runbook
 
@@ -175,7 +175,7 @@ Passed as a hand-load on the already-running `523924301` boot, 2026-10-24, and l
 
 Passed, 2026-10-26. See Results. This step is attended. It does not request `gpa6-7`. The boot is a packed build of published head `aa42f8a8c`, `salixp.c` blob `c1752a85`, which fails probe on config CRC events `0x20` and `0x21` and on a missing scan echo. It is not a boot of ancestor `b2a37752b`, not a hand-loaded module, and not a hand-edited DTB. If the review's fold lands before the boot, the identity is the blob, not a commit id that will change. `tools/phone-smoke` is the report. Slot B is not marked successful.
 
-Build that head with an explicit worktree and output directory. For this pack only, set `DTB_OVERLAYS=cover-touch` in `device/felix/device.conf`, run `bin/omamobile images`, then remove that line. Do not commit it. The overlay is the one in omarchy-mobile#34, `device/felix/overlays/cover-touch.dtso`. It enables the disabled node. It does not set `regulator-always-on`. It is not a hand edit of the DTB.
+Build that head with an explicit worktree and output directory. For this pack only, set `DTB_OVERLAYS=cover-touch` in `device/felix/device.conf`, run `bin/omamobile images`, then remove that line. Do not commit it. The overlay is the one in omamobile#34, `device/felix/overlays/cover-touch.dtso`. It enables the disabled node. It does not set `regulator-always-on`. It is not a hand edit of the DTB.
 
 Write the packed images with `bin/omamobile push`. That writes slot B and reboots. Do not mark slot B successful. `omamobile-device-felix` does not mark a slot successful. Before that reboot, read `androidboot.slot_suffix` from `/proc/bootconfig`. `reboot-to` boots the current slot and does not switch slots. If the current slot is not B, do not reboot. If the phone comes back on A, do not load drivers. Enter fastboot with the buttons and run `fastboot --set-active=b`. That restores slot B's retry count. It does not mark the slot successful, and it does not need a second image write unless the images themselves need rewriting.
 

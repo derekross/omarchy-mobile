@@ -4,7 +4,7 @@
 Status (2026-11-07): **P1 to P5 passed on the phone** (section 5): a finger
 enrolled and the lock screen unlocked with it, also after a reboot with the
 unit starting the stack by itself. The sensor is the 7 Pro's; the panel and
-the touchscreen are not. linux-omarchy-mobile#207 (merged 2026-11-07)
+the touchscreen are not. linux-omamobile#207 (merged 2026-11-07)
 describes the sensor, its supply and pins, all disabled; this repo adds the
 two bring-up overlays and the Pixel 7 to `omamobile-fingerprint` and
 `tools/extract-fingerprint-vendor`. The 7 Pro's plan and research
@@ -39,7 +39,7 @@ drivers, chroot, bridge and libfprint driver are the ones to use.
 | Piece | Pixel 7 | Consequence |
 |---|---|---|
 | Trusty | Started on the Pixel 7 on 2026-11-03 with the sound bring-up's overlay, which enables `/trusty` (kernel `g89edef70d4d5`, 23:43): "trusty version: Project: cloudripper", "selected api version: 5", trusty_ipc virtio0 vrings, "trusty-virtio ... initializing done". `/dev/trusty-ipc-dev0` and the cpu 7 hotplug were not checked | Gate P2 is mostly seen already; what is left of it is in P2 |
-| Sub-PMIC | Not described before linux-omarchy-mobile#207 (running regulators: `ldo*m` only) | #207 adds `pmic-2` with LDO15S only |
+| Sub-PMIC | Not described before linux-omamobile#207 (running regulators: `ldo*m` only) | #207 adds `pmic-2` with LDO15S only |
 | Panel | Samsung S6E3FC3 (`panel-samsung-s6e3fc3`, `samsung,s6e3fc3-p10`), 1080x2400, ABL's `exynos_drm.panel_name=sdc-s6e3fc3-p10` | Local HBM is in a local kernel commit (branch `panther-lhbm` on angelrenefm's fork, on the phone since 2026-11-04, not proposed yet): section 4 |
 | Touchscreen | FocalTech FT3658 (`focaltech_ft3658`, input "FocalTech FT3658") | The runner looked only for the Synaptics name: now per device |
 | `omamobile-fp-chroot` | Any board but the 9a ran as cheetah | Now detects `google,gs201-panther`: g7.app, C++ KeyMint, 1080x2400 at 60 Hz, `sdc-s6e3fc3-p10`, FT3658 (untested) |
@@ -55,7 +55,7 @@ run (cheetah F4) is irreversible. Before any reboot: Vol- + Power,
 `fastboot --set-active=b` (slot B's retry counter). The NV backup of
 2026-11-03 exists (`tools/nv-backup -d panther`, 7 partitions, `--check` SAME).
 
-Kernel: the bring-up ran on a local branch with linux-omarchy-mobile#207's
+Kernel: the bring-up ran on a local branch with linux-omamobile#207's
 commit on top (section 5 names the kernel). Overlays apply
 with `DTB_OVERLAYS="..."` in `device/panther/device.conf` (a local edit for
 the test, never committed) before `bin/omamobile images`.

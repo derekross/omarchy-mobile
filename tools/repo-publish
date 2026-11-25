@@ -52,7 +52,7 @@ PORT=${OMAMOBILE_PKGS_PORT:-1022}
 DEST=${OMAMOBILE_PKGS_PATH:-/var/www/html/pkgs.omamobile.org}
 URL=https://pkgs.omamobile.org
 REMIND_DAYS=${REMIND_DAYS:-3}
-REPO=derekross/omarchy-mobile
+REPO=derekross/omamobile
 ARCH=aarch64
 DB=omamobile.db.tar.gz
 
@@ -154,7 +154,8 @@ keyhome=$(mktemp -d /dev/shm/omamobile-verify.XXXXXX)
 trap 'GNUPGHOME=$keyhome gpgconf --kill gpg-agent 2>/dev/null; rm -rf -- "$keyhome"' EXIT
 chmod 700 "$keyhome"
 GNUPGHOME=$keyhome gpg -q --batch --import packages/omamobile-keyring/omamobile.gpg 2>/dev/null
-mapfile -t trusted < <(cut -d: -f1 packages/omamobile-keyring/omamobile-trusted | grep -vxFf <(cut -d: -f1 packages/omamobile-keyring/omamobile-revoked | grep . || echo none))
+revoked=$(revoked_list "$ROOT") || die "$revoked"
+mapfile -t trusted < <(cut -d: -f1 packages/omamobile-keyring/omamobile-trusted | grep -vxFf <(printf '%s\n' "$revoked"))
 ((${#trusted[@]})) || die "omamobile-keyring trusts no key"
 signed_ok() {
   local status signer
@@ -231,7 +232,7 @@ write_index() {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Omarchy Mobile packages</title>
+  <title>Omamobile packages</title>
   <style>
     :root { color-scheme: light dark; --bg: #fff; --fg: #1b1b1b; --muted: #5b5b5b; --code: #f2f2f2; }
     @media (prefers-color-scheme: dark) { :root { --bg: #151515; --fg: #e8e8e8; --muted: #a0a0a0; --code: #262626; } }
@@ -242,8 +243,8 @@ write_index() {
   </style>
 </head>
 <body>
-  <h1>Omarchy Mobile packages</h1>
-  <p>The signed <code>[omamobile]</code> repository for <a href="https://omamobile.org">Omarchy Mobile</a> phones. It's read by pacman; phones get it through <code>omarchy update</code>.</p>
+  <h1>Omamobile packages</h1>
+  <p>The signed <code>[omamobile]</code> repository for <a href="https://omamobile.org">Omamobile</a> phones. It's read by pacman; phones get it through <code>omarchy update</code>.</p>
   <h2>Channels</h2>
   <ul>
     <li><a href="stable/$ARCH/">stable</a>: what has run on the reference phone</li>

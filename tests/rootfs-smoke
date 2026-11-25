@@ -49,7 +49,7 @@ for f in /usr/share/pacman/keyrings/omamobile.gpg /usr/share/pacman/keyrings/oma
          /usr/share/pacman/keyrings/archlinuxarm.gpg; do
   exists "$f" || fail "keyring $f"
 done
-pass "keyrings: Arch Linux ARM, Omarchy, Omarchy Mobile"
+pass "keyrings: Arch Linux ARM, Omarchy, Omamobile"
 
 conf=$(cat_ /etc/pacman.conf)
 order=$(grep -o '^\[[a-z]*\]' <<<"$conf" | tr -d '[]' | tr '\n' ' ')

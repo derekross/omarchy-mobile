@@ -1,0 +1,124 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Test tools/repo-push against a stand-in phone (no SSH): failed archiving
+# leaves the phone's repository untouched, and a good push replaces it.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+fail() { printf 'not ok - %s\n' "$1" >&2; cat "$t/err" "$t/out" >&2 2>/dev/null || true; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+
+command -v tar >/dev/null || { pass "# skip: no tar"; exit 0; }
+REAL_TAR=$(command -v tar)
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+R=$t/repo P=$t/phone
+mkdir -p "$R/tools" "$R/out/repo/aarch64" "$t/bin"
+cp tools/repo-push "$R/tools/repo-push"
+printf '#!/bin/sh\necho forbidden-ssh-invoked >&2\nexit 99\n' > "$t/bin/ssh"
+
+# Pass through to real tar unless FAKE_TAR_MODE is set for archive creation,
+# where we emit a valid partial archive (omitting *zzz*) and exit non-zero.
+cat > "$t/bin/tar" <<'SH'
+#!/bin/bash
+set -euo pipefail
+if [[ -n ${FAKE_TAR_MODE-} && ${1-} == *c* ]]; then
+  args=()
+  for a in "$@"; do [[ $a == aarch64 ]] && args+=(--exclude='*zzz*'); args+=("$a"); done
+  "$REAL_TAR" "${args[@]}"
+  case $FAKE_TAR_MODE in
+    exit-2) echo "tar: aarch64/zzz-2-1-aarch64.pkg.tar.zst: Cannot open: Permission denied" >&2; exit 2 ;;
+    exit-1) echo "tar: aarch64/zzz-2-1-aarch64.pkg.tar.zst: file changed as we read it" >&2; exit 1 ;;
+    *) echo "tar-stub: unknown FAKE_TAR_MODE=$FAKE_TAR_MODE" >&2; exit 98 ;;
+  esac
+fi
+exec "$REAL_TAR" "$@"
+SH
+
+# Rewrite remote /var/lib/omamobile/ and /etc/pacman.d/ paths into $PHONE_ROOT
+# and refuse any unrewritten host path before executing locally.
+cat > "$R/tools/phone-ssh" <<'SH'
+#!/bin/bash
+set -euo pipefail
+echo invoked >> "$PHONE_SSH_CALLS"
+cmd=${*// \/var\/lib\/omamobile\// $PHONE_ROOT/var/lib/omamobile/}
+cmd=${cmd// \/etc\/pacman.d\// $PHONE_ROOT/etc/pacman.d/}
+check=${cmd//file:\/\/\/var\/lib\/omamobile\//}
+check=${check//"$PHONE_ROOT/var/lib/omamobile/"/}
+check=${check//"$PHONE_ROOT/etc/pacman.d/"/}
+[[ $check != */var/lib/omamobile* && $check != */etc/pacman.d* ]] ||
+  { echo "phone-ssh stub: unrewritten host path in command" >&2; exit 99; }
+exec bash -c "$cmd"
+SH
+chmod +x "$t/bin/ssh" "$t/bin/tar" "$R/tools/phone-ssh" "$R/tools/repo-push"
+
+reset_fixture() {
+  rm -rf "$R/out/repo" "$R/out"/.repo-push.* "$P" "$t/phone-ssh.calls" "$t/out" "$t/err"
+  mkdir -p "$R/out/repo/aarch64" "$P/var/lib/omamobile/repo/aarch64" \
+    "$P/var/lib/omamobile/repo.old" "$P/etc/pacman.d"
+  printf 'old-db\n' > "$P/var/lib/omamobile/repo/aarch64/omamobile.db"
+  printf 'old-pkg\n' > "$P/var/lib/omamobile/repo/aarch64/good-1-1-aarch64.pkg.tar.zst"
+  printf 'keep-old\n' > "$P/var/lib/omamobile/repo.old/marker"
+  printf 'Server = file:///var/lib/omamobile/repo/$arch\n' > "$P/etc/pacman.d/omamobile-mirrorlist"
+  printf 'new-db\n' > "$R/out/repo/aarch64/omamobile.db"
+  printf 'aaa-pkg\n' > "$R/out/repo/aarch64/aaa-2-1-aarch64.pkg.tar.zst"
+  printf 'zzz-pkg\n' > "$R/out/repo/aarch64/zzz-2-1-aarch64.pkg.tar.zst"
+}
+
+repo_snapshot() {
+  (cd "$P/var/lib/omamobile/repo" && find . -mindepth 1 | LC_ALL=C sort && find . -type f -exec sha256sum {} + | LC_ALL=C sort)
+}
+
+run_push() {
+  ( cd "$R" && env PATH="$t/bin:$PATH" REAL_TAR="$REAL_TAR" PHONE_ROOT="$P" \
+      PHONE_SSH_CALLS="$t/phone-ssh.calls" "$@" tools/repo-push ) > "$t/out" 2> "$t/err"
+}
+
+assert_phone_untouched() {
+  local label=$1 before=$2
+  [[ ! -s $t/phone-ssh.calls ]] || fail "$label: phone-ssh was invoked"
+  [[ $(repo_snapshot) == "$before" ]] || fail "$label: phone repo changed"
+  [[ -f $P/var/lib/omamobile/repo.old/marker && $(cat "$P/var/lib/omamobile/repo.old/marker") == keep-old ]] ||
+    fail "$label: pre-existing repo.old was altered"
+  [[ ! -e $P/var/lib/omamobile/repo.new ]] || fail "$label: repo.new was created"
+  [[ -z $(compgen -G "$R/out/.repo-push.*" || true) ]] || fail "$label: staging dir leftover in out/"
+}
+
+for spec in 'exit-2:2:Permission denied' 'exit-1:1:file changed as we read it'; do
+  IFS=: read -r mode want msg <<< "$spec"
+  reset_fixture; before=$(repo_snapshot); rc=0
+  run_push FAKE_TAR_MODE="$mode" || rc=$?
+  ((rc == want)) || fail "tar exit $want: expected exit $want, got $rc"
+  assert_phone_untouched "tar exit $want" "$before"
+  grep -qF "$msg" "$t/err" || fail "tar exit $want: missing tar error on stderr"
+  grep -qF 'left unchanged' "$t/err" || fail "tar exit $want: missing unchanged error on stderr"
+  pass "tar exit $want stops before touching phone, preserves repo and repo.old, cleans staging dir"
+done
+
+reset_fixture
+unreadable=$R/out/repo/aarch64/zzz-2-1-aarch64.pkg.tar.zst
+chmod 000 "$unreadable"
+if [[ -r $unreadable ]]; then
+  chmod 644 "$unreadable"
+  pass "# skip: this user reads a mode-000 file (root), so real tar cannot trigger EACCES"
+else
+  before=$(repo_snapshot); rc=0
+  run_push || rc=$?
+  chmod 644 "$unreadable"
+  ((rc != 0)) || fail "real tar chmod 000: expected non-zero exit"
+  assert_phone_untouched "real tar chmod 000" "$before"
+  grep -qF 'left unchanged' "$t/err" || fail "real tar chmod 000: missing unchanged error on stderr"
+  pass "real tar on unreadable file stops before touching phone, preserves repo and repo.old, cleans staging dir"
+fi
+
+reset_fixture
+run_push || fail "good push failed"
+[[ -s $t/phone-ssh.calls && $(wc -l < "$t/phone-ssh.calls") -eq 1 ]] || fail "good push: expected 1 phone-ssh call"
+[[ $(cat "$P/var/lib/omamobile/repo/aarch64/omamobile.db") == new-db ]] || fail "good push: omamobile.db not updated"
+[[ -f $P/var/lib/omamobile/repo/aarch64/aaa-2-1-aarch64.pkg.tar.zst && -f $P/var/lib/omamobile/repo/aarch64/zzz-2-1-aarch64.pkg.tar.zst ]] ||
+  fail "good push: pushed packages missing"
+[[ ! -e $P/var/lib/omamobile/repo/aarch64/good-1-1-aarch64.pkg.tar.zst ]] || fail "good push: old package remained"
+[[ ! -e $P/var/lib/omamobile/repo.old && ! -e $P/var/lib/omamobile/repo.new ]] || fail "good push: repo.old or repo.new remained"
+[[ $(cat "$t/out") == 2 ]] || fail "good push: expected package count 2"
+[[ ! -s $t/err ]] || fail "good push: unexpected stderr output"
+[[ -z $(compgen -G "$R/out/.repo-push.*" || true) ]] || fail "good push: staging dir leftover in out/"
+pass "good push replaces repo, cleans repo.old/repo.new, prints count 2, no warning, no staging leftover"

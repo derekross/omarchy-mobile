@@ -3,6 +3,7 @@
 # tools/pr-check against a throwaway repository: a clean change passes, and
 # each kind of problem fails on its own and is named.
 set -euo pipefail
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
@@ -20,11 +21,13 @@ git add -A && git commit -q -m "base"
 
 # One branch per case, each one commit on main; pr-check runs from the
 # branch's checkout against main.
-check() { # name expect(0|1) pattern
+check() { # name expect(0|1) [pattern [pattern2 [absent]]]
   local out status=0
   out=$(tools/pr-check main 2>&1) || status=$?
   [[ $status == "$2" ]] || { echo "$out"; fail "$1: exit $status, expected $2"; }
   [[ -z ${3:-} ]] || grep -c -- "$3" <<<"$out" >/dev/null || { echo "$out"; fail "$1: says '$3'"; }
+  [[ -z ${4:-} ]] || grep -c -- "$4" <<<"$out" >/dev/null || { echo "$out"; fail "$1: says '$4'"; }
+  [[ -z ${5:-} ]] || ! grep -c -- "$5" <<<"$out" >/dev/null || { echo "$out"; fail "$1: must not say '$5'"; }
 }
 case_branch() { git checkout -q main && git checkout -q -b "$1"; }
 
@@ -38,8 +41,8 @@ echo "ok - a clean change passes, with a made-up MAC and an AI Co-Authored-By"
 case_branch mac
 echo "wlan0 at 3c:28:6d:aa:bb:cc" > notes.md
 git add -A && git commit -q -m "notes"
-check "a real MAC" 1 "MAC or Bluetooth addresses"
-echo "ok - a real MAC fails"
+check "a real MAC" 1 "MAC or Bluetooth addresses" "rewrite the named commit and force-push"
+echo "ok - a real MAC fails and prints the rewrite hint"
 
 case_branch mac-doc
 echo "example 00:00:5E:00:53:01, none 00:00:00:00:00:00" > notes.md
@@ -100,6 +103,45 @@ for line in "wlan0 at $A" "$(ts 25 00 15 10 20 30)" "$(ts 25 13 15 10 20 30)" "$
   mac_case "$line" 1 "MAC or Bluetooth addresses"
 done
 echo "ok - past a range's edge, with a hex letter, with colons or in a MAC record, the same digits fail, and so does an address beside a timestamp, in its last field or after an exempt one there"
+
+# Locally administered unicast addresses (first octet x2, x6, xA, xE) and
+# all-ones pass in every spelling; x3, x7, xB and xF also set the group bit
+# and fail in every spelling, including ff:... other than all ones and beside
+# an exempt address. Built from octets so neither scanner finds a literal
+# address in this file.
+tail_c=$(tc 1a 2b 3c 4d 5e) tail_h=${tail_c//:/-} tail_b=${tail_c//:/}
+mac_forms() {
+  local o=$1 O=${1^^}
+  printf '%s\n' \
+    "$o:$tail_c" "$O:${tail_c^^}" \
+    "mac:$o:$tail_c" "tag:$O:${tail_c^^}" "id:$o:$tail_c" \
+    "$o-$tail_h" "$O-${tail_h^^}" "wlan0-$o-$tail_h" \
+    "mac=$o$tail_b" "mac=$O${tail_b^^}" "bd_addr: $o$tail_b" \
+    "ether $O${tail_b^^}" "\"mac_address\": \"$O${tail_b^^}\""
+}
+for o in 02 16 ca fe; do
+  while IFS= read -r line; do
+    mac_case "$line" 0
+  done < <(mac_forms "$o")
+done
+for line in "ff:ff:ff:ff:ff:ff" "FF:FF:FF:FF:FF:FF" "mac:ff:ff:ff:ff:ff:ff" \
+  "ff-ff-ff-ff-ff-ff" "FF-FF-FF-FF-FF-FF" "wlan0-ff-ff-ff-ff-ff-ff" \
+  "mac=ffffffffffff" "bd_addr: FFFFFFFFFFFF" "ether FFFFFFFFFFFF" \
+  "\"mac_address\": \"FFFFFFFFFFFF\""; do
+  mac_case "$line" 0
+done
+echo "ok - locally administered unicast MACs (x2, x6, xA, xE) and all-ones pass in every spelling"
+for o in 03 17 cb ef ff; do
+  while IFS= read -r line; do
+    mac_case "$line" 1 "MAC or Bluetooth addresses"
+  done < <(mac_forms "$o")
+  mac_case "$L $o:$tail_c" 1 "MAC or Bluetooth addresses"
+done
+near_all_ones=$(printf '%s:%s' ff:ff:ff ff:ff:fe)
+for line in "$near_all_ones" "${near_all_ones//:/-}" "mac=${near_all_ones//:/}"; do
+  mac_case "$line" 1 "MAC or Bluetooth addresses"
+done
+echo "ok - group-bit first octets (x3, x7, xB, xF, including ff:... not all-ones) fail in every spelling"
 
 case_branch getprop
 echo "[ro.boot.hardware.revision]: [MP1.0]" > notes.md
@@ -164,8 +206,8 @@ echo "ok - a name that only contains an AI's name passes; each AI form fails"
 case_branch script
 printf '#!/bin/bash\nif then\n' > tools/broken && chmod +x tools/broken
 git add -A && git commit -q -m "tools: broken"
-check "a broken script" 1 "tools/broken"
-echo "ok - a script that doesn't parse fails"
+check "a broken script" 1 "tools/broken" "" "rewrite the named commit"
+echo "ok - a script that doesn't parse fails without the rewrite hint"
 
 # A touched file shorter than 64 bytes, with a head on PATH that writes once
 # more after the data, as uutils' head (the build machine's) writes again at
@@ -191,6 +233,191 @@ case_branch nul-window
 git add -A && git commit -q -m "tools: an image"
 check "a shebang past byte 64" 0 "touched scripts parse"
 echo "ok - a shebang after 60 NUL bytes is past the 64-byte window"
+
+# Every commit in the range is scanned, not just the combined diff: an
+# identifier or blob added in one commit and removed in a later commit still
+# fails and names the commit that added it, not the one that removed it.
+add_remove_id() { # branch label line expect-msg
+  local add_sha rm_sha
+  case_branch "$1"
+  printf '%s\n' "$3" > notes.md
+  git add notes.md && git commit -q -m "notes: add $2"
+  add_sha=$(git rev-parse --short HEAD)
+  printf 'clean\n' > notes.md
+  git add notes.md && git commit -q -m "notes: remove $2"
+  rm_sha=$(git rev-parse --short HEAD)
+  check "added-then-removed $2" 1 "$4" "$add_sha notes.md:" "$rm_sha "
+}
+add_remove_id mac-removed "MAC" "wlan0 at $V" "MAC or Bluetooth addresses"
+add_remove_id mac-plusplus-removed "MAC on a ++ line" "++ $V" "MAC or Bluetooth addresses"
+add_remove_id getprop-removed "getprop" "[ro.boot.hardware.revision]: [MP1.0]" "getprop output"
+add_remove_id serial-removed "serial" "androidboot.serialno=27141FDH2001AB" "serial numbers"
+add_remove_id imei-removed "IMEI" "IMEI: 356938035643809" "IMEIs"
+echo "ok - added-then-removed MAC, getprop, serial and IMEI fail and name the adding commit"
+
+case_branch blob-removed
+head -c 4096 /dev/zero > modem.bin
+git add modem.bin && git commit -q -m "firmware: add modem.bin"
+add_sha=$(git rev-parse --short HEAD)
+git rm -q modem.bin && git commit -q -m "firmware: remove modem.bin"
+rm_sha=$(git rev-parse --short HEAD)
+check "added-then-removed binary blob" 1 "binaries or vendor files" "$add_sha modem.bin" "$rm_sha "
+
+case_branch named-blob-removed
+printf 'placeholder text\n' > stub.bin
+git add stub.bin && git commit -q -m "firmware: add stub.bin"
+add_sha=$(git rev-parse --short HEAD)
+git rm -q stub.bin && git commit -q -m "firmware: remove stub.bin"
+rm_sha=$(git rev-parse --short HEAD)
+check "added-then-removed text blob extension" 1 "binaries or vendor files" "$add_sha stub.bin" "$rm_sha "
+echo "ok - added-then-removed binary and named blobs fail and name the adding commit"
+
+case_branch multi-clean
+printf 'first clean commit with %s\n' "$L" > notes.md
+git add notes.md && git commit -q -m "notes: first clean commit"
+printf 'second clean commit\n' >> notes.md
+git add notes.md && git commit -q -m "notes: second clean commit"
+check "clean multi-commit branch" 0
+echo "ok - a clean multi-commit branch passes"
+
+# Merging main into a branch does not blame main's own identifiers or blobs
+# on the PR, while a new identifier or blob introduced by the merge commit
+# itself (e.g. during conflict resolution) still fails and names the merge.
+case_branch merge-clean
+printf 'shared from feature\n' > shared.md
+git add shared.md && git commit -q -m "feature: before merge"
+git checkout -q main
+printf 'upstream mac %s\n' "$V" > upstream.md
+head -c 4096 /dev/zero > upstream.bin
+printf 'upstream stub\n' > upstream.fw
+printf 'shared main mac %s\n' "$V" > shared.md
+git add upstream.md upstream.bin upstream.fw shared.md && git commit -q -m "main: upstream mac and blobs"
+main_sha=$(git rev-parse --short HEAD)
+git checkout -q merge-clean
+git merge -q --no-commit main >/dev/null 2>&1 || true
+printf 'shared from feature\nshared main mac %s\nshared resolved cleanly\n' "$V" > shared.md
+chmod +x upstream.bin
+git add shared.md upstream.bin && git commit -q -m "merge main cleanly"
+git rev-parse -q --verify HEAD^2 >/dev/null || fail "merge-clean: not a merge commit"
+printf 'after merge\n' > after.md
+git add after.md && git commit -q -m "feature: after merge"
+check "clean merge of main carrying MAC and blobs" 0
+echo "ok - merging main carrying a real MAC and blobs does not blame main on the PR"
+
+git checkout -q merge-clean~2
+git checkout -q -b merge-evil-mac
+git merge -q --no-commit main >/dev/null 2>&1 || true
+printf 'resolved with %s\n' "$V" > shared.md
+git add shared.md && git commit -q -m "merge main with new mac"
+git rev-parse -q --verify HEAD^2 >/dev/null || fail "merge-evil-mac: not a merge commit"
+merge_sha=$(git rev-parse --short HEAD)
+check "merge introducing new MAC" 1 "MAC or Bluetooth addresses" "$merge_sha shared.md:" "$main_sha "
+
+git checkout -q merge-clean~2
+git checkout -q -b merge-evil-binary
+git merge -q --no-commit main >/dev/null 2>&1 || true
+printf 'resolved cleanly\n' > shared.md
+head -c 4096 /dev/zero > evil.dat
+git add shared.md evil.dat && git commit -q -m "merge main with new binary"
+git rev-parse -q --verify HEAD^2 >/dev/null || fail "merge-evil-binary: not a merge commit"
+merge_sha=$(git rev-parse --short HEAD)
+check "merge introducing new binary" 1 "binaries or vendor files" "$merge_sha evil.dat" "$main_sha "
+
+git checkout -q merge-clean~2
+git checkout -q -b merge-evil-named-blob
+git merge -q --no-commit main >/dev/null 2>&1 || true
+printf 'resolved cleanly\n' > shared.md
+printf 'new stub\n' > evil.fw
+git add shared.md evil.fw && git commit -q -m "merge main with new .fw"
+git rev-parse -q --verify HEAD^2 >/dev/null || fail "merge-evil-named-blob: not a merge commit"
+merge_sha=$(git rev-parse --short HEAD)
+check "merge introducing new named blob" 1 "binaries or vendor files" "$merge_sha evil.fw" "$main_sha "
+echo "ok - a merge commit introducing a new MAC or blob fails and names the merge commit"
+
+# Renaming an already-tracked text file with a blob extension passes, while
+# adding one and renaming it in a later commit still fails and names the
+# adding commit (not the rename commit), and adding a non-blob file then
+# renaming it into a blob extension (pure rename or rename with edit) fails
+# and names the rename commit.
+case_branch rename-tracked-named-blob
+git mv upstream.fw renamed.fw
+git commit -q -m "firmware: rename tracked stub"
+check "renaming tracked text blob extension" 0
+
+case_branch add-then-rename-named-blob
+printf 'new stub\n' > new.fw
+git add new.fw && git commit -q -m "firmware: add new.fw"
+add_sha=$(git rev-parse --short HEAD)
+git mv new.fw moved.fw
+git commit -q -m "firmware: rename new.fw"
+mv_sha=$(git rev-parse --short HEAD)
+check "added-then-renamed text blob extension" 1 "binaries or vendor files" "$add_sha new.fw" "$mv_sha "
+
+case_branch add-txt-then-rename-to-blob
+printf 'plain text\n' > plain_fw
+git add plain_fw && git commit -q -m "notes: add plain_fw"
+add_sha=$(git rev-parse --short HEAD)
+git mv plain_fw plain.fw
+git commit -q -m "notes: rename plain_fw to plain.fw"
+mv_sha=$(git rev-parse --short HEAD)
+check "added non-blob then renamed to blob extension" 1 "binaries or vendor files" "$mv_sha plain.fw" "$add_sha "
+
+case_branch add-txt-then-rename-edit-to-blob
+printf 'line 1\nline 2\nline 3\nline 4\n' > plain.txt
+git add plain.txt && git commit -q -m "notes: add plain.txt"
+add_sha=$(git rev-parse --short HEAD)
+git mv plain.txt edited.fw
+printf 'line 1\nline 2\nline 3\nline 4 edited\n' > edited.fw
+git add edited.fw && git commit -q -m "notes: rename and edit plain.txt to edited.fw"
+mv_sha=$(git rev-parse --short HEAD)
+check "added text then renamed with edit to blob extension" 1 "binaries or vendor files" "$mv_sha edited.fw" "$add_sha "
+echo "ok - renaming a tracked blob-extension text file passes; adding then renaming one blames the add; renaming a non-blob file into a blob extension blames the rename"
+
+# An unrelated history merged into a branch brings a root commit into the
+# range; pr-check must scan it even when log.showRoot=false is set.
+git checkout -q --orphan orphan-root
+git rm -rfq .
+printf 'orphan mac %s\n' "$V" > orphan.md
+head -c 4096 /dev/zero > orphan.dat
+printf 'orphan stub\n' > orphan.fw
+git add orphan.md orphan.dat orphan.fw && git commit -q -m "orphan: root with mac and blobs"
+root_sha=$(git rev-parse --short HEAD)
+case_branch merge-orphan
+git merge -q --allow-unrelated-histories -m "merge orphan history" orphan-root
+git rev-parse -q --verify HEAD^2 >/dev/null || fail "merge-orphan: not a merge commit"
+GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=log.showRoot GIT_CONFIG_VALUE_0=false \
+  check "unrelated root commit MAC under log.showRoot=false" 1 "MAC or Bluetooth addresses" "$root_sha orphan.md:"
+GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=log.showRoot GIT_CONFIG_VALUE_0=false \
+  check "unrelated root commit binary under log.showRoot=false" 1 "binaries or vendor files" "$root_sha orphan.dat"
+GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=log.showRoot GIT_CONFIG_VALUE_0=false \
+  check "unrelated root commit named blob under log.showRoot=false" 1 "binaries or vendor files" "$root_sha orphan.fw"
+echo "ok - an unrelated root commit's MAC, binary and named blob fail even under log.showRoot=false"
+
+# History simplification would drop a side branch discarded by a merge
+# (e.g. git merge -s ours); --full-history keeps its commits in the scan.
+case_branch side-mac
+printf 'side mac %s\n' "$V" > side.md
+git add side.md && git commit -q -m "side: add real MAC"
+side_sha=$(git rev-parse --short HEAD)
+case_branch merge-ours-discard
+git merge -q --no-ff -s ours -m "discard side branch" side-mac
+git rev-parse -q --verify HEAD^2 >/dev/null || fail "merge-ours-discard: not a merge commit"
+check "side-branch MAC discarded by merge -s ours" 1 "MAC or Bluetooth addresses" "$side_sha side.md:"
+echo "ok - a side-branch MAC discarded by git merge -s ours still fails and names the side commit"
+
+# A range with only merge commits (no non-merge commits) must still be
+# scanned rather than treated as "no commits to check".
+case_branch merge-only-evil
+printf 'merge-only mac %s\n' "$V" > merge-only.md
+git add merge-only.md
+tree=$(git write-tree)
+merge_only=$(git commit-tree "$tree" -p main -p main~1 -m "merge-only evil mac")
+git reset -q --hard "$merge_only"
+[[ -z $(git rev-list --no-merges main..HEAD) ]] || fail "merge-only-evil: expected no non-merge commits"
+[[ -n $(git rev-list --merges main..HEAD) ]] || fail "merge-only-evil: expected a merge commit"
+merge_sha=$(git rev-parse --short HEAD)
+check "merge-only range introducing new MAC" 1 "MAC or Bluetooth addresses" "$merge_sha merge-only.md:" "no commits to check"
+echo "ok - a merge-only range introducing a real MAC fails and does not say 'no commits to check'"
 
 git checkout -q main
 check "nothing to check" 0 "no commits"

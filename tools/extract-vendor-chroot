@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # extract-vendor-chroot: build the read-only Android tree for one of
-# Omarchy Mobile's vendor-chroot profiles (packages/omamobile-gnss/lib/omamobile-vendor-chroot)
+# Omamobile's vendor-chroot profiles (packages/omamobile-gnss/lib/omamobile-vendor-chroot)
 # out of a Google factory image for the Pixel 7 Pro (cheetah) or, with
 # -d tegu, the Pixel 9a, on the user's own machine.
 #
@@ -24,7 +24,7 @@
 #          vendor or system binaries, no binder, no device nodes.
 #          device/cheetah/AOC-TUNING-RESEARCH.md.
 #
-# These binaries are Google's and not ours to redistribute, so Omarchy Mobile
+# These binaries are Google's and not ours to redistribute, so Omamobile
 # never ships them: this tool takes exactly what the profile needs from an
 # image the user already has and nothing else.
 #
@@ -225,7 +225,7 @@ fi
 trap 'rm -rf "$WORK"' EXIT
 
 magic_at() { od -An -tx4 -j "$2" -N4 "$1" | tr -d ' \n'; }
-zip_member() { unzip -Z1 "$1" | grep -E "(^|/)$2\$" | head -1 || true; }
+zip_member() { unzip -Z1 "$1" | grep -E "(^|/)$2\$" | sed -n 1p || true; }
 
 unsparse() {
   if [[ "$(magic_at "$1" 0)" == ed26ff3a ]]; then
@@ -301,10 +301,10 @@ mkdir -p "$WORK/v"
 reason=${err##*$'\n'}
 [[ $reason != "debugfs "[0-9]* ]] || reason=""   # only its banner: no reason
 [[ -s "$WORK/v/build.prop" ]] || die "build.prop can't be read from vendor.img${reason:+: $reason}"
-dev=$(sed -n 's/^ro.product.vendor.device=//p' "$WORK/v/build.prop" | head -1)
+dev=$(sed -n 's/^ro.product.vendor.device=//p' "$WORK/v/build.prop" | sed -n 1p)
 [[ "$dev" == "$DEVICE" || -n "$FORCE" ]] ||
   die "vendor partition is for '${dev:-unknown}', not $DEVICE; use -f to override"
-fp=$(sed -n 's/^ro.vendor.build.fingerprint=//p' "$WORK/v/build.prop" | head -1)
+fp=$(sed -n 's/^ro.vendor.build.fingerprint=//p' "$WORK/v/build.prop" | sed -n 1p)
 say "Vendor partition: $fp"
 
 # Stage whole lib directories and the entry points into $WORK/{v,s,r}, then

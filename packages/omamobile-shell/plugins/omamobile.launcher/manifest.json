@@ -3,7 +3,7 @@
   "id": "omamobile.launcher",
   "name": "Mobile launcher",
   "version": "0.1.0",
-  "author": "Omarchy Mobile",
+  "author": "Omamobile",
   "license": "MIT",
   "description": "The phone's home bar: one input at the bottom of the screen that searches apps, opens the app grid and sends a prompt to your coding agent.",
   "kinds": [
