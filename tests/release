@@ -131,6 +131,14 @@ printf 'serial-ABC123\nHome Net\n' > "$t/ids"
 export RELEASE_IDENTIFIERS=$t/ids
 printf 'made up: 02:11:22:33:44:55 00:00:00:00:00:00 ff:ff:ff:ff:ff:ff\nversion 1.2.3, example /home/user/x\n' > "$t/scan/clean.txt"
 run scan "$t/scan" || fail "made-up MACs and plain text pass the scan"
+# The documentation placeholder passes (2026.11.24: an example in Omarchy's
+# omarchy-bluetooth-device); the next address up is still found. Built in
+# pieces, as above, so this file holds neither.
+printf '# examples: connect %s:%s\n' 00:11:22 33:44:55 > "$t/scan/example.sh"
+run scan "$t/scan" || fail "the documentation placeholder address passes"
+printf '# examples: connect %s:%s\n' 00:11:22 33:44:56 > "$t/scan/example.sh"
+if run scan "$t/scan"; then fail "an address next to the placeholder is still found"; fi
+rm "$t/scan/example.sh"
 # A universally administered address, put together here so this file holds none
 mac=$(printf '%s:%s' 10:20:30 40:50:60)
 for bad in "wlan0 $mac" 'androidboot.serialno=x' "built in /home/$(id -un)/src" 'device serial-ABC123 here' 'ssid=Home Net'; do

@@ -747,7 +747,11 @@ def scan(path, data=None):
         pos = m.end(k) - 2
         whole = b":".join(re.findall(rb"[0-9a-f]{2}", m.group(k).lower()))
         first = int(whole[:2], 16)
-        if (first & 3) == 2 or whole in (b"00:00:00:00:00:00", b"ff:ff:ff:ff:ff:ff"):
+        # all zeros, all ones, and the counting placeholder that
+        # documentation uses (Omarchy's omarchy-bluetooth-device has it in
+        # its examples line); no card ships with any of the three. Spelled
+        # in two halves so this file holds no address itself.
+        if (first & 3) == 2 or whole in (b"00:00:00:00:00:00", b"ff:ff:ff:ff:ff:ff", b"00:11:22" + b":33:44:55"):
             continue
         if k == 2 and timestamp.fullmatch(whole):
             continue
