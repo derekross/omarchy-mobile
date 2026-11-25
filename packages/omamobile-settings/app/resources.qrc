@@ -6,9 +6,11 @@
     <file>DisplayPage.qml</file>
     <file>BatteryPage.qml</file>
     <file>FirewallPage.qml</file>
+    <file>NfcPage.qml</file>
     <file>icons/battery.svg</file>
     <file>icons/display.svg</file>
     <file>icons/pin.svg</file>
+    <file>icons/nfc.svg</file>
     <file>catalog.json</file>
     <file>icons/system.svg</file>
     <file>SettingsStyle.qml</file>

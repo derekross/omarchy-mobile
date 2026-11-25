@@ -18,6 +18,13 @@
         "requires": "charge"
       },
       {
+        "id": "connected",
+        "title": "Connected devices",
+        "detail": "NFC",
+        "icon": "nfc",
+        "page": "connected"
+      },
+      {
         "id": "security",
         "title": "Security & privacy",
         "detail": "Firewall on or off, who may connect over SSH",
@@ -47,6 +54,22 @@
   },
   "security": {
     "title": "Security & privacy",
+    "rows": []
+  },
+  "connected": {
+    "title": "Connected devices",
+    "rows": [
+      {
+        "id": "nfc",
+        "title": "NFC",
+        "detail": "On or off, and a sound when a tag is found",
+        "icon": "nfc",
+        "page": "nfc"
+      }
+    ]
+  },
+  "nfc": {
+    "title": "NFC",
     "rows": []
   }
 }

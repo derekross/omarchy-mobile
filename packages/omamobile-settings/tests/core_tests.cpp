@@ -37,22 +37,22 @@ private slots:
     void probeShowsTheBatteryRowOnlyWhenTheBackendSaysAvailable() {
         Backend on;
         on.setBackendDir(stubs("on"));
-        QCOMPARE(on.rows().size(), 3);
-        QTRY_COMPARE(on.rows().size(), 4);
+        QCOMPARE(on.rows().size(), 4);
+        QTRY_COMPARE(on.rows().size(), 5);
         Backend off;
         off.setBackendDir(stubs("off"));
         off.setToolAvailable("charge", true);
-        QTRY_COMPARE(off.rows().size(), 3); // the probe's answer clears it
+        QTRY_COMPARE(off.rows().size(), 4); // the probe's answer clears it
     }
     void navigationRejectsUnknownAndHiddenActions() {
         Backend backend;
         backend.setBackendDir(stubs("off"));
         QVERIFY(backend.catalogProblems().isEmpty());
-        QCOMPARE(backend.rows().size(), 3); // the Battery row waits for the charge backend, absent here
+        QCOMPARE(backend.rows().size(), 4); // the Battery row waits for the charge backend, absent here
         backend.setToolAvailable("charge", true);
-        QCOMPARE(backend.rows().size(), 4);
+        QCOMPARE(backend.rows().size(), 5);
         backend.setToolAvailable("charge", false);
-        QCOMPARE(backend.rows().size(), 3);
+        QCOMPARE(backend.rows().size(), 4);
         QVERIFY(!backend.navigate("recording"));
         backend.activate("arbitrary-command");
         QCOMPARE(backend.page(), QString("root"));
@@ -107,6 +107,34 @@ private slots:
             if (call.at(2).toInt() == ok) QCOMPARE(call.at(1).toMap().value("args").toString(), QString("set firewall on"));
             else { QCOMPARE(call.at(2).toInt(), bad); QCOMPARE(call.at(1).toMap().value("error").toString(), QString("bad argument")); }
         }
+    }
+    void nfcPageLoadsAndStagesASound() {
+        // the page compiles (QtQuick.Dialogs' FileDialog among its imports)
+        ActionRunner runner;
+        runner.setBackendDir(stubs("off"));
+        Backend backend;
+        backend.setBackendDir(stubs("off"));
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty("backend", &backend);
+        engine.rootContext()->setContextProperty("actions", &runner);
+        QQmlComponent component(&engine, QUrl("qrc:/NfcPage.qml"));
+        std::unique_ptr<QObject> page(component.create());
+        QVERIFY2(page, qPrintable(component.errorString()));
+        // stageSound: only a local, readable file of at most 2 MiB, copied to the config dir's sounds/.import
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QFile small(dir.filePath("a.wav"));
+        QVERIFY(small.open(QIODevice::WriteOnly)); small.write("RIFF1234"); small.close();
+        QVERIFY(!runner.stageSound(QUrl("https://example.org/a.wav")).isEmpty());
+        QVERIFY(!runner.stageSound(QUrl::fromLocalFile(dir.filePath("missing.wav"))).isEmpty());
+        QFile big(dir.filePath("big.wav"));
+        QVERIFY(big.open(QIODevice::WriteOnly)); big.write(QByteArray(2 * 1024 * 1024 + 1, 0)); big.close();
+        QVERIFY(!runner.stageSound(QUrl::fromLocalFile(big.fileName())).isEmpty());
+        QCOMPARE(runner.stageSound(QUrl::fromLocalFile(small.fileName())), QString());
+        QFile staged(qEnvironmentVariable("XDG_CONFIG_HOME") + "/omamobile/sounds/.import");
+        QVERIFY(staged.open(QIODevice::ReadOnly));
+        QCOMPARE(staged.readAll(), QByteArray("RIFF1234"));
+        staged.remove();
     }
     void firewallPageShowsTheBackendAnswer_data() {
         QTest::addColumn<QString>("stub");
