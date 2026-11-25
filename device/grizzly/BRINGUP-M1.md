@@ -45,6 +45,61 @@ The standalone Grizzly staging helper is already in
 `device/grizzly/bringup/`. The shared `flash` command follows its normal
 `load_device` and allowlist path.
 
+### Stock A boots and NV backup age
+
+The private NV copies record the slot B rescue state before Android
+returned on A. Android may write radio partitions on each stock
+boot. A host-side hash check verifies the saved copy and does not
+compare it with the phone's current contents. The table identifies
+the last **recorded** stock D1 A boot before each trial covered
+here. It uses the stock-return checks in the linked trial results
+and the attended order. For v61, the retained preflight also
+matched the stock properties saved after v60. This record cannot
+exclude unrecorded Android boots or establish per-partition
+changes. Exact A boot-completion times are unavailable. For
+future trials, record the preflight's slot, build, enforcing
+verity and boot-completed check, the UTC boot-request times for
+the predecessor and trial, and which backup was verified and
+whether it predated a stock boot.
+
+| Trial on B | Last recorded stock A boot before it | NV copy context |
+| --- | --- | --- |
+| [v39](#v39-slot-b-result) | After the [full NV backup reader](#attended-full-nv-backup) | The reader copy preceded that stock return. The trial used it with owner approval and without a new comparison against the phone. |
+| [Stock D1 power trace](#stock-d1-slot-b-trace-result) | After v39 | No replacement copy is recorded for this trace. |
+| [Stock D1 larger-buffer trace](#stock-d1-larger-buffer-trace-result) | After the first stock D1 power trace | No replacement copy is recorded for this trace. |
+| [Stock D1 provider event trace](#stock-d1-provider-event-trial-result) | After the larger-buffer trace | No replacement copy is recorded for this trace. |
+| [D1 CPM firmware trace](#d1-cpm-trace-hardware-result) | After the provider event trace | No replacement copy is recorded for this trace. UFS did not load. |
+| [D1 pre-core PSM1 trace](#d1-psm1-trace-hardware-result) | After the CPM firmware trace | The existing nine-partition copy predated the latest stock boot. The owner approved this single trial with that copy. |
+| [D1 prep PSM1 and genpd trace](#d1-prep-psm1-and-genpd-hardware-result) | After the pre-core PSM1 trace | The existing copy predated that stock boot. The owner separately approved this trial. |
+| [v40](#attended-v40-slot-b-trial) | After the [read-only RAM rescue](#stock-d1-read-only-ram-rescue) | The rescue made a second verified nine-partition copy before its stock return. It was already older than stock A for v40. |
+| [v41](#attended-v41-slot-b-trial) | After v40 | Same read-only RAM rescue copy. |
+| [v42](#attended-v42-slot-b-trial) | After v41 | Same copy. |
+| [v43](#attended-v43-slot-b-trial) | After v42 | Same copy. |
+| [v44](#attended-v44-slot-b-trial) | After v43 | Same copy. |
+| [v45](#attended-v45-slot-b-trial) | After v44 | Same copy. |
+| [v46](#attended-v46-slot-b-trial) | After v45 | Same copy. |
+| [v47](#attended-v47-slot-b-trial) | After v46 | Same copy. |
+| [v48](#attended-v48-slot-b-trial) | After v47 | Same copy. |
+| [v49](#attended-v49-slot-b-trial) | After v48 | Same copy. |
+| [v50](#attended-v50-slot-b-trial) | After v49 | Same copy. |
+| [v51](#attended-v51-slot-b-trial) | After v50 | Same copy. |
+| [v52](#attended-v52-slot-b-trial) | After v51 | Same copy. |
+| [v53](#attended-v53-slot-b-trial) | After v52 | Same copy. |
+| [v54](#attended-v54-slot-b-trial) | After v53 | Same copy. |
+| [v55](#attended-v55-slot-b-trial) | After v54 | Same copy. |
+| [v56](#attended-v56-slot-b-trial) | After v55 | Same copy. |
+| [v57](#attended-v57-slot-b-trial) | After v56 | Same copy. |
+| [v58](#attended-v58-slot-b-trial) | After v57 | Same copy. |
+| [v59](#attended-v59-slot-b-trial) | After v58 | Same copy. |
+| [v60](#attended-v60-slot-b-trial) | After v59. Stock D1 A was checked before the v60 boot request at 14:58:48 UTC on 2026-11-25. | Same copy, all nine hashes rechecked locally. The v59 stock-return request time is unavailable. |
+| [v61](#attended-v61-slot-b-trial) | After v60. The A restart was requested at 15:01:29 UTC and verified before the v61 boot request at 15:19:29 UTC on 2026-11-25. | Same copy, all nine hashes rechecked locally. Stock A restart after v61 was requested at 15:22:41 UTC and startup was verified. |
+
+The maintainer's [review on backup freshness](https://github.com/derekross/omamobile/pull/1002#pullrequestreview-6060450538)
+leaves open whether to take a fresh rescue backup before each
+further power or CPM trial or to use the existing copy as the
+reference for boots with no discovered disks. The one-trial
+approvals record the runs above. They do not settle that policy.
+
 ## v29 handoff-only result
 
 The recorded boot below is the handoff-only repack requested on
@@ -1978,6 +2033,26 @@ at 90.915341 s and Fastboot returned 134 s after the boot
 request. D1 stock A finished booting with enforcing
 verity and the original VBMeta digest.
 
+### Stock PSM1 module load record
+
+The attended record identifies two hardware boots that loaded the
+out-of-tree `grizzly_stock_psm1.ko`. Both were stock D1 kernel
+fixtures on **slot B** on 2026-11-24, with an instrumented RAM
+rescue and a verified factory `ufs.ko` loaded after the sampler.
+
+| Slot B fixture | Sampler mode | Additional live HC/PSM1 reads |
+| --- | --- | --- |
+| [D1 pre-core PSM1 trace](#d1-psm1-trace-hardware-result) | Single core PRE_ON sample | At 1.552260842 s, HC raw `0x12`, PSM1 `0x2`, about 15 µs before core `0x220` ON. |
+| [D1 prep PSM1 and genpd trace](#d1-prep-psm1-and-genpd-hardware-result) | `prep_trace=1` plus core PRE_ON | At 1.619009814 s before prep ON, raw `0x13`, PSM1 `0x3`. At 1.619490866 s after prep ON, raw `0x12`, PSM1 `0x2`. At 1.619496752 s before core ON, raw `0x12`, PSM1 `0x2`. |
+
+The PHY and TOP values in those results came from the factory
+driver's traced accesses. The table lists only the extra register
+reads added by the sampler. The prior power and provider traces
+used stock tracepoints, and the CPM firmware trace stopped before
+UFS loaded. Loader checks and synthetic QEMU samples were offline.
+The documented stock A return steps used factory Android for
+boot and log retrieval, with no sampler load recorded on A.
+
 ### Mainline v40 idle prep diagnostic
 
 The [v40 kernel source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/341a5e41a7836e346ba6bdabfed818ac1dd938de)
@@ -3442,6 +3517,37 @@ timeout path remains untested.
 Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
 after 133 seconds. Stock D1 booted on A with enforcing verity and
 the pretrial VBMeta digest.
+
+### Mainline v62 trace midlayer TEST UNIT READY dispatch
+
+[v62 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/590dd2fd96a4a566597daff1905dfdaca95fa016)
+adds checkpoints around v61's single midlayer TEST UNIT READY.
+A rejection records the pseudo-device match, buffer length,
+command length, CDB match, the opcode and byte 1, the SCSI core's
+`lun_in_cdb` flag and dispatch phase. An accepted command records
+mapping status, scatterlist count and DMA direction. The
+legacy doorbell checkpoint records the tag and immediate readback
+under the outstanding-request lock. A command can finish before
+the readback, so an already clear doorbell requires the IRQ and
+completion records for interpretation. The synchronous result
+records the final dispatch phase and raw SCSI result.
+
+The CDB, one-command limit, legacy IRQ path and timeout cleanup
+follow v61. The fixture attaches no real LUN and keeps
+`scsi_mod.scan=none`. It removes the host before the usual
+controller cleanup and timed return.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match v62 source and manifest. The DTB and private RAM rescue match v61. | Leave stock A selected on a mismatch. |
+| One attended slot B boot, power control, device initialization and one midlayer command | Use the verified nine-partition NV backup. Capture the admission decision, mapping and doorbell checkpoints if reached, the IRQ or timeout if observed, and the returned phase and result. Verify host removal, Hibern8 on success, zero disks and the timed return. | Preserve the first failure without retrying. Return to stock A and verify Android completes boot. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v62` passed strict
+checkpatch, targeted `W=1` compilation and six mocked dispatch
+cases covering admission and each rejection condition. All five
+image hashes, both AVB signatures, the unpacked payload, ABL
+handoff and saved D1 slot checks passed. Manifest SHA-256
+`6b3543f06db90d33d7aecd04c7b5dab91b023e433f9e6038153fdb125d94fd2c`. Archive SHA-256 `eec462ed0dea02b6bcc3af910d4c1efe9f2e61ff7bc76b2026dfde0a1f19f378`.
 
 ### Offline stock D1 device reference-clock diagnostic
 
