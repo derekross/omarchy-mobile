@@ -3827,6 +3827,46 @@ Fastboot returned after 133 seconds. Stock D1 A restarted at
 pretrial VBMeta digest. Ramoops and Android's `SYSTEM_LAST_KMSG`
 agree on all 36 filtered v66 lines.
 
+### Mainline v67 publish one read-only SCSI disk
+
+[v67 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/919c85ac0470a6cafaa79c21d701bc3243bf06db)
+keeps the direct geometry, GPT and REPORT LUNS checks and the one
+standard INQUIRY to the real LUN 0 child. After that command and
+IRQ cleanup, the fixture explicitly attaches the built-in `sd`
+driver to the qualified child. SCSI I/O stays closed at the UFS
+transport, including writes and further reads.
+
+The diagnostic `sd` path consumes the live 4 KiB geometry already
+qualified by READ CAPACITY. It sets the disk read-only and disables
+partition scanning before publication. It skips the normal `sd`
+revalidation commands. The kernel verifies a live read-only disk,
+4 KiB logical blocks, matching capacity and partition suppression.
+It keeps the disk visible for four seconds, then removes it and the
+host before Hibern8 and controller teardown. SG, BSG and RPMB stay
+disabled.
+
+The `--single-disk-only` RAM fixture samples sysfs without opening
+a block device. It requires one whole `sd` disk under
+`3c2d0000.ufs` at channel 0, target 0, LUN 0, with no partitions,
+holders or mounts. It requires read-only state, 4,096-byte logical
+blocks and 102,408,192 512-byte sectors for this Pixel, based on the
+previous live capacity. The timed return still checks for zero
+SCSI disks after removal. This trial tests publication and teardown.
+A filesystem mount, block data read and full NV inventory are later
+milestones.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match the five image hashes, both AVB signatures, packed RAM markers and saved slot B capacity checks. DTB, DTBO and `vendor_boot` match v66. | Leave stock A selected on a mismatch. |
+| One attended slot B trial | Capture the one LUN 0 INQUIRY, `LUN 0 disk read-only`, independent RAM sysfs verification, host removal, Hibern8 and zero disks before restart. | Hold Volume Down after the orange warning. Preserve the first geometry mismatch, unexpected command, partition, disk, timeout or reset. Return to stock A without retrying. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v67` passed targeted
+arm64 `W=1` for UFS core and `sd`, 12 sanitizer-backed kernel mock
+cases, 11 synthetic sysfs cases and ShellCheck. Both AVB signatures,
+ABL handoff, all five image hashes and saved D1 slot capacity checks
+passed. Manifest SHA-256 `283f7b28c18293c978d2cc6f5cacda850e7b57e4df5de5b209d38696392a67c1`.
+Archive SHA-256 `0f4d21e59376e163b58719041564bfa56ec3d453cafc52ddf163ec86fa2beca1`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

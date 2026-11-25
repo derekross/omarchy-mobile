@@ -23,7 +23,7 @@ def arm64_member(archive, member):
     return content
 
 
-def pack(rescue, output, device_query_only=False, single_lun_only=False):
+def pack(rescue, output, device_query_only=False, single_lun_only=False, single_disk_only=False):
     busybox = arm64_member(rescue, "bin/busybox")
     loader = arm64_member(rescue, LOADER)
     output.mkdir(mode=0o700)
@@ -40,10 +40,12 @@ def pack(rescue, output, device_query_only=False, single_lun_only=False):
             BUSYBOX: (busybox, 0o755),
             LOADER: (loader, 0o755),
         }
-        if device_query_only or single_lun_only:
+        if device_query_only or single_lun_only or single_disk_only:
             files["grizzly-inventory/device-query-only"] = (b"", 0o644)
-        if single_lun_only:
+        if single_lun_only or single_disk_only:
             files["grizzly-inventory/single-lun-only"] = (b"", 0o644)
+        if single_disk_only:
+            files["grizzly-inventory/single-disk-only"] = (b"", 0o644)
         libc = "lib/libc.musl-aarch64.so.1"
         for name in dirs:
             path = root / name
@@ -82,10 +84,13 @@ def main():
                       help="expect no SCSI disks and skip NV inventory")
     mode.add_argument("--single-lun-only", action="store_true",
                       help="allow a manual LUN probe and expect no SCSI disks")
+    mode.add_argument("--single-disk-only", action="store_true",
+                      help="verify one temporary read-only SCSI disk in sysfs")
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
     try:
-        pack(args.rescue_cpio, args.output, args.device_query_only, args.single_lun_only)
+        pack(args.rescue_cpio, args.output, args.device_query_only,
+             args.single_lun_only, args.single_disk_only)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"mainline inventory packaging failed: {error}\n")
 

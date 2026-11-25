@@ -11,6 +11,7 @@ bb=/grizzly-inventory/busybox
 mainline_marker=/grizzly-inventory/mainline-inventory
 device_query_marker=/grizzly-inventory/device-query-only
 single_lun_marker=/grizzly-inventory/single-lun-only
+single_disk_marker=/grizzly-inventory/single-disk-only
 inventory_prefix=grizzly-stock-inventory
 if [ -e "$mainline_marker" ] || [ -L "$mainline_marker" ]; then
     inventory_prefix=grizzly-mainline-inventory
@@ -104,6 +105,55 @@ check_mainline_previous_boot() {
     esac
 }
 
+# Return 2 only while the diagnostic disk has yet to appear.
+check_mainline_ro_disk() (
+    set +f
+    set -- "$1"/sd*
+    [ "$#" -eq 1 ] || exit 1
+    if [ ! -e "$1" ] && [ ! -L "$1" ]; then
+        exit 2
+    fi
+    disk=$1
+    [ -L "$disk" ] && [ ! -e "$disk/partition" ] || exit 1
+    disk_path=$("$bb" readlink -f "$disk") || exit 1
+    child_path=${disk_path%/block/*}
+    addr=${child_path##*/}
+    host=${addr%%:*}
+    case $host in ''|*[!0-9]*) exit 1 ;; esac
+    case $disk_path in
+        */3c2d0000.ufs/host"$host"/target"$host":0:0/"$host":0:0:0/block/"${disk##*/}") ;;
+        *) exit 1 ;;
+    esac
+    [ "$("$bb" readlink -f "$disk/device/driver")" = /sys/bus/scsi/drivers/sd ] || exit 1
+    IFS= read -r ro < "$disk/ro" && [ "$ro" = 1 ] || exit 1
+    IFS= read -r logical < "$disk/queue/logical_block_size" && [ "$logical" = 4096 ] || exit 1
+    IFS= read -r sectors < "$disk/size" && [ "$sectors" = 102408192 ] || exit 1
+    [ -d "$disk/holders" ] || exit 1
+    for holder in "$disk"/holders/*; do
+        [ ! -e "$holder" ] && [ ! -L "$holder" ] || exit 1
+    done
+    IFS= read -r devnum < "$disk/dev" && [ -n "$devnum" ] || exit 1
+    # shellcheck disable=SC2016
+    "$bb" awk -v dev="$devnum" 'NF < 10 || $3 == dev { bad = 1 }
+        END { exit bad || !NR }' /proc/self/mountinfo || exit 1
+    stock_inventory_log "single read-only SCSI disk verified lun=0 sectors=$sectors block_size=$logical ro=$ro"
+)
+
+observe_mainline_ro_disk() {
+    tries=0
+    while [ "$tries" -lt 20 ]; do
+        check_mainline_ro_disk /sys/class/block
+        case $? in
+            0) end_inventory 'single disk RAM stage complete' ;;
+            2) ;;
+            *) end_inventory 'single disk read-only inventory failed' ;;
+        esac
+        "$bb" sleep 1 || break
+        tries=$((tries + 1))
+    done
+    end_inventory 'single read-only SCSI disk did not appear'
+}
+
 run_mainline_inventory() {
     [ -f "$mainline_marker" ] && [ ! -L "$mainline_marker" ] ||
         end_inventory 'invalid mainline inventory marker'
@@ -133,6 +183,11 @@ run_mainline_inventory() {
         fi
     fi
     query_scan=none
+    if [ -e "$single_disk_marker" ] || [ -L "$single_disk_marker" ]; then
+        [ -f "$single_disk_marker" ] && [ ! -L "$single_disk_marker" ] &&
+            [ -f "$single_lun_marker" ] && [ ! -L "$single_lun_marker" ] ||
+            end_inventory 'invalid single disk marker'
+    fi
     if [ -e "$single_lun_marker" ] || [ -L "$single_lun_marker" ]; then
         [ -f "$single_lun_marker" ] && [ ! -L "$single_lun_marker" ] &&
             [ -f "$device_query_marker" ] && [ ! -L "$device_query_marker" ] ||
@@ -163,6 +218,9 @@ run_mainline_inventory() {
             [ "$timeout_arg" = scsi_mod.inq_timeout=1 ] ||
                 end_inventory 'single LUN probe requires scsi_mod.inq_timeout=1'
             stock_inventory_log 'single LUN probe policy verified'
+        fi
+        if [ -f "$single_disk_marker" ]; then
+            observe_mainline_ro_disk
         fi
         stock_inventory_no_scsi_disks /sys/class/block ||
             end_inventory 'device query disk present or state unreadable'
