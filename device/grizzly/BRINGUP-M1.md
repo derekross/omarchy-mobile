@@ -2940,6 +2940,37 @@ Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
 after 133 seconds. Stock D1 booted on A with enforcing verity
 and the expected factory VBMeta digest.
 
+### Mainline v53 LUN 0 capacity before discovery
+
+[v53 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/570f01322382a5d7fd474a8e82b9c5b48a5b79c8)
+adds one standard READ CAPACITY(10) on LUN 0 after the v52 link,
+`fDeviceInit` and INQUIRY checks pass. It uses the same dedicated
+transfer slot and requires a separate completion IRQ. The command
+returns eight bytes of geometry data through one device-to-host PRD.
+The driver checks OCS, response UPIU, SCSI status and residual before
+decoding the big-endian last LBA and logical block size. It accepts
+power-of-two block sizes from 512 to 4,096 bytes. A last LBA of
+`0xffffffff` fails the diagnostic without issuing READ CAPACITY(16).
+
+The prep OFF guard and subsequent Hibern8, HCI cleanup and timed
+return follow v52. The kernel registers no SCSI host and issues no
+logical-block reads. The private RAM rescue keeps disk scanning
+disabled.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match v53 source and manifest. The DTB and private RAM rescue match v52. | Leave stock A selected on a mismatch. |
+| One attended slot B boot, power control and device initialization | Use the verified nine-partition NV backup. Capture prep OFF qualification, the distinct INQUIRY and READ CAPACITY(10) IRQs, both GOOD completions with zero residual, the reported geometry and computed capacity. Verify Hibern8, HCI cleanup, zero disks and the timed return. | Capture the first error and return to stock A without retrying. Confirm stock Android completes boot. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v53` passed strict
+checkpatch and targeted `W=1` compilation. Mocked cases checked both
+command descriptors and response paths, the opcode allowlist, IRQ
+and build-option gates, transport failures, bad block geometry and
+the READ CAPACITY(10) sentinel. All five image hashes, both AVB
+signatures, the unpacked payload, ABL handoff and saved D1 slot sizes
+passed. Manifest SHA-256 `a74f941f328ba1788db6063463739970a21bf33a164260b5140986a5833f7aec`.
+Archive SHA-256 `57c53e5879cdc2dfcca3f1d1200f7aed831dbb141a093fea6b703b182ed2679a`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
