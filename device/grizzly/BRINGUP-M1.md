@@ -2236,6 +2236,31 @@ Fastboot returned 133 seconds after the B boot request. Stock D1
 completed boot on A with enforcing verity and the original factory
 VBMeta digest.
 
+### Mainline v44 link-only cleanup and Deep H8 timing
+
+[v44 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/78741a14311dee2451f8690883ac50e3fa3cbb10)
+skips debugfs teardown on the link-only path, matching its init path.
+Normal UFS host teardown still cancels its initialized debugfs work.
+The Malibu callback saves the initial HC and PHY samples and logs
+elapsed poll time and the existing final samples after Hibern8.
+The host samples both PSMs again once link-only HCI cleanup returns.
+The 10 ms gate still requires both PSMs at `0x11` before disabling
+Deep H8. A timeout still retains the remaining votes until warm return.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match the source, image hashes and v43 board DT and RAM rescue. | Keep stock A selected on any mismatch. |
+| One attended slot B boot, power-control risk | With separate approval and the NV backup gate satisfied, reproduce UIC startup and IRQ-backed Hibern8. Record the initial and final PSMs, elapsed poll time, post-HCI sample and whether Deep H8 was released. Expect no workqueue warning or disk discovery. | Preserve the first failing phase. Keep the release guard in place. Use the 90-second warm return, select stock A and verify Android. |
+
+Offline `7.3.0-rc6-omamobile-grizzly-uic-v44` passed strict checkpatch,
+`W=1` for the UFS core and host objects, and source checks for symmetric
+debugfs cleanup and the original clock-release guard. The packed DTB
+and RAM rescue are byte-identical to v43. All five hashes, both AVB
+signatures, unpacked payload, ABL handoff and saved slot sizes passed.
+Manifest SHA-256 `37eb128786648d73509bd5020435943e8c64ca6a4e957908fc92cacee74fe245`.
+Archive SHA-256 `8f77c893c50e237584cb07ce931fe0eb2af07d9372dc909919ebe699fc0a32e7`.
+v44 awaits its first hardware boot.
+
 ## Staging and return sequence used for D1
 
 These commands describe the attended workflow used by the trials.
