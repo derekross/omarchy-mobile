@@ -3110,6 +3110,43 @@ Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
 after 132 seconds. Stock D1 booted on A with enforcing verity and
 the expected factory VBMeta digest.
 
+### Mainline v56 one logical block read before discovery
+
+The stock D1 RAM rescue log maps SCSI LUN 0 to `sda`, reports
+12,801,024 logical blocks of 4,096 bytes, and shows partitions on
+that LUN. Its geometry matches the v55 mainline response. The
+Linux disk name is specific to that stock boot.
+
+[v56 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/08e24bf3d288995eefaeb9a8b833954a0b029469)
+keeps the v55 prep OFF, initialization, INQUIRY and capacity retry
+sequence. After valid capacity and a 4,096-byte block size, it
+issues one READ(10) for LBA 0 on LUN 0, using one device-to-host
+PRD and its own completion IRQ. It checks response status and
+residual, then records whether DMA changed the initial buffer
+pattern and whether the legacy MBR signature is present. An
+unchanged buffer is inconclusive and stops the diagnostic. The
+signature is a reported observation. It does not validate a
+partition table. The driver scrubs the buffer after inspection
+and does not log, export or save its contents.
+
+There is no SCSI host registration, disk scan, partition discovery
+or SCSI write command. A successful block read is followed by
+Hibern8 and HCI cleanup. The same RAM rescue requests the timed
+warm return.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match v56 source and manifest. The DTB and private RAM rescue match v55. | Leave stock A selected on a mismatch. |
+| One attended slot B boot, power control, device initialization and one read | Use the verified nine-partition NV backup. Capture capacity, exactly one READ(10) IRQ, GOOD status with zero residual, `dma_changed=1`, and the reported MBR signature result. Verify Hibern8, HCI cleanup, zero disks and the timed return. | Preserve the first terminal result without repeating the block read. Return to stock A and confirm Android completes boot. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v56` passed strict
+checkpatch, targeted `W=1` compilation and mocked tests for the
+one-block CDB, build and geometry gates, response errors, buffer
+scrubbing and prior capacity retry. All five image hashes, both
+AVB signatures, the unpacked payload, ABL handoff and saved D1
+slot sizes passed. Manifest SHA-256 `cd4d02fab1396dc22087470ca17743bd9652da35f3ccc5507753b55f48c61a10`.
+Archive SHA-256 `4ed896bd54e6548359418470815403a9986db9e3e9cf1987714c44149e6c25bc`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
