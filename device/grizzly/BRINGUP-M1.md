@@ -2822,6 +2822,39 @@ its DMA buffer. Normal SCSI registration, transfer completion IRQs,
 capacity queries and partition reads remain untested. The early
 `device_links_no_driver()` warning recurred before UFS probe.
 
+### Mainline v51 INQUIRY transfer completion IRQ
+
+[v51 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/0a48d0edc56f8ec20d6de72da6a485a0f7c79221)
+keeps v50's single standard 36-byte INQUIRY on LUN 0 and its response
+checks. NOP IN, the reference-clock read and `fDeviceInit` still use
+polling. Before INQUIRY the driver clears the prior transfer status,
+checks the doorbell is idle and arms a completion for slot 0. It sets
+the descriptor's interrupt bit and unmasks transfer completion.
+The HCI interrupt handler signals completion only after the doorbell
+clears and the controller replaces the descriptor's initial OCS.
+
+The driver masks transfer completion and drains the IRQ handler before
+disarming the waiter. A 100 ms timeout records the doorbell, interrupt
+status and OCS, then attempts to clear slot 0 if it is still busy.
+There is no polling fallback for INQUIRY. The same RAM rescue keeps
+SCSI scanning disabled. No SCSI host is registered and no capacity or
+partition reads are issued. A successful query is followed by the same
+Hibern8 check, HCI cleanup and timed warm return.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match v51 source and manifest. The DTB and private RAM rescue match v50. | Leave stock A selected on a mismatch. |
+| One attended slot B boot, power control and device initialization | Use the verified nine-partition NV backup. Require `ufs-uic-v51 INQUIRY IRQ observed`, a GOOD v50 INQUIRY response with zero residual, Hibern8, HCI cleanup, zero SCSI disks and the timed return. | Capture the first failure, including doorbell, interrupt status and OCS on timeout. Return to stock A and confirm Android completes boot. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v51` passed strict
+checkpatch, the targeted `W=1` compile and seven mocked interrupt cases.
+These covered a delivered IRQ, stale and invalid completions, a lost
+IRQ with completed DMA, timeout with a busy slot, and two preflight
+rejects. All five image hashes, both AVB signatures, the unpacked
+payload, ABL handoff and saved D1 slot sizes passed. Manifest SHA-256
+`53873e1de814ba2e2e6c15bf839cb7785d615b262faa32b04058f37f39177271`. Archive SHA-256
+`256cf75579b584944198927bb54e1e69b1377a24347a96836bad4a5d28c690bb`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
