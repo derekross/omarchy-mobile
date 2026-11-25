@@ -682,7 +682,7 @@ PY
 # or unsupported inputs, 3 on both.
 scan_identifiers() {
   python3 -I - "$(id -un)" "$@" <<'PY'
-import errno, os, re, stat, sys
+import errno, io, os, re, stat, subprocess, sys, tarfile
 builder, ids_file, paths = sys.argv[1], sys.argv[2], sys.argv[3:]
 errors = 0
 def error(path, what, msg):
@@ -730,6 +730,15 @@ def scan(path, data=None):
         except OSError as e:
             error(path, "unreadable file", e)
             return
+        # A package archive is scanned by its files, not its compressed
+        # bytes: zstd keeps short strings as literals between back
+        # references, so "Copyright (c) 2026 <name>" in a LICENSE can sit
+        # in the archive as "Copy (c) <name>", which the copyright form
+        # below no longer recognises (2026.11.24, device-husky's LICENSE),
+        # while a leak in a compressed file could be missed altogether.
+        if path.endswith(".pkg.tar.zst"):
+            scan_package(path, data)
+            return
     pos = 0
     while m := mac.search(data, pos):
         k = m.lastindex
@@ -759,6 +768,18 @@ def scan(path, data=None):
                 continue
             report(path, what, m.group(0))
             break
+def scan_package(path, data):
+    try:
+        tar = subprocess.run(["zstd", "-dcq"], input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout
+        members = tarfile.open(fileobj=io.BytesIO(tar), mode="r:")
+        for m in members:
+            name = "%s!%s" % (path, m.name)
+            if m.issym() or m.islnk():
+                scan(name + " (link target)", os.fsencode(m.linkname))
+            elif m.isfile():
+                scan(name, members.extractfile(m).read())
+    except (OSError, subprocess.CalledProcessError, tarfile.TarError) as e:
+        error(path, "unreadable package", getattr(e, "stderr", b"").decode("utf-8", "replace").strip() or str(e))
 def scan_link(path):
     try:
         target = os.fsencode(os.readlink(path))

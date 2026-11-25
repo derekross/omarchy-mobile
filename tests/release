@@ -224,6 +224,24 @@ for bad in 'Copyright (c) 2026 Home Net, built on Home Net' 'Copyright (c) 2026 
   if run scan "$t/scan"; then fail "the scan finds: $bad"; fi
 done
 rm "$t/scan/header.qml"
+# A package archive is scanned by its files (2026.11.24: zstd stored a
+# LICENSE's "Copyright (c) 2026 <name>" as "Copy (c) <name>"). A notice
+# inside one passes, whatever the compressed bytes hold; a leak inside one
+# is found and named by its member; a broken archive is an error.
+mkdir -p "$t/pkg/usr/share/licenses/x" "$t/pkg/etc"
+printf 'MIT License\n\nCopyright (c) 2026 Home Net\n\nPermission is hereby granted\n' > "$t/pkg/usr/share/licenses/x/LICENSE"
+tar -C "$t/pkg" --zstd -cf "$t/scan/x-1-1-aarch64.pkg.tar.zst" usr
+run scan "$t/scan" || fail "a copyright notice inside a package passes"
+printf 'Copy (c) Home Net\n' | zstd -q --no-check -o "$t/scan/y-1-1-aarch64.pkg.tar.zst" 2>/dev/null || true
+if run scan "$t/scan"; then fail "a package that isn't a tar archive is reported"; fi
+grep -Fq "y-1-1-aarch64.pkg.tar.zst: unreadable package" "$t/log" || fail "the broken package is named as unreadable"
+if grep -Fq "listed identifier" "$t/log"; then fail "a broken package is not scanned as raw bytes"; fi
+rm "$t/scan/y-1-1-aarch64.pkg.tar.zst"
+printf 'ssid=Home Net\n' > "$t/pkg/etc/net.conf"
+tar -C "$t/pkg" --zstd -cf "$t/scan/x-1-1-aarch64.pkg.tar.zst" usr etc
+if run scan "$t/scan"; then fail "a listed identifier inside a package is found"; fi
+grep -Fq "x-1-1-aarch64.pkg.tar.zst!etc/net.conf: listed identifier: Home Net" "$t/log" || fail "the finding names the package's member"
+rm "$t/scan/x-1-1-aarch64.pkg.tar.zst"
 # dnsmasq's shipped example configuration (2026.11.08): its group address and
 # a dhcp-option value pass in etc/dnsmasq.conf only; a unicast dhcp-host there,
 # and a group-looking address elsewhere (a Bluetooth LE random address can
