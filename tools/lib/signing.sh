@@ -26,8 +26,9 @@
 #     re-checks every line read, and prints the revoked fingerprints one per
 #     line (nothing if the file is missing or empty). On any check, read or
 #     concurrent-change failure, prints why on stdout and returns 1.
-#     signing_key_load, tools/release-upload, tools/repo-publish and
-#     tools/fetch-published all read omamobile-revoked through it.
+#     signing_key_load, tools/release-upload, tools/repo-publish,
+#     tools/fetch-published and tools/build-packages --local --import all read
+#     omamobile-revoked through it.
 #
 # Nothing here reads, prints or copies secret key material.
 

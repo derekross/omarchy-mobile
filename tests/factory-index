@@ -15,7 +15,9 @@
 # an Android update would land on a tested build (the newest one); match and
 # entry name the build's address on Google's server, which is Google's or
 # the index is refused; and sign makes a detached signature gpg verifies,
-# and writes nothing when the release key can't be loaded.
+# keeps the source intact in place and through symlinks or hard links,
+# refuses when .sig is the source, and writes nothing when the release key
+# can't be loaded or gpg fails.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -247,12 +249,76 @@ if command -v gpg >/dev/null; then
     gpg --homedir "$G" --batch --verify "$t/signed/factory-builds.json.sig" "$t/signed/factory-builds.json" 2>/dev/null ||
     fail "after a refused sign, a good one writes the new copy and a signature that verifies"
   fx untested -d testdev AB1C.230101.001 >/dev/null
+  # Signing into the index's own folder, or where dest is a symlink or hard
+  # link to the source (or --index is a symlink into --out), must leave the
+  # source untouched; a .sig aliasing the source is refused before signing;
+  # a gpg failure after the key loads must leave the source and any existing
+  # copy/signature pair untouched.
+  check_same() { # SOURCE INDEX OUT LABEL
+    local dest=$3/factory-builds.json st
+    touch -t 202001010000 "$1"
+    st=$(stat -c '%d:%i:%Y' "$1")
+    fx sign --index "$2" --codename testdev --out "$3" >/dev/null || fail "sign $4"
+    cmp -s "$1" "$idx" || fail "$4 keeps the source bytes"
+    [[ $(stat -L -c '%d:%i:%Y' "$dest") == "$st" ]] || fail "$4 leaves the source untouched"
+    gpg --homedir "$G" --batch --verify "$dest.sig" "$idx" 2>/dev/null || fail "signature verifies $4"
+  }
+  mkdir -p "$t/same" "$t/sym" "$t/hlink" "$t/idxsym" "$t/sigsym" "$t/sighlink" "$t/fakebin"
+  cp "$idx" "$t/same/factory-builds.json"
+  check_same "$t/same/factory-builds.json" "$t/same/factory-builds.json" "$t/same" "into the index's own folder"
+  cp "$idx" "$t/sym-src.json"
+  ln -s "$t/sym-src.json" "$t/sym/factory-builds.json"
+  check_same "$t/sym-src.json" "$t/sym-src.json" "$t/sym" "when dest is a symlink to the source"
+  cp "$idx" "$t/hlink-src.json"
+  ln "$t/hlink-src.json" "$t/hlink/factory-builds.json"
+  check_same "$t/hlink-src.json" "$t/hlink-src.json" "$t/hlink" "when dest is a hard link of the source"
+  cp "$idx" "$t/idxsym/factory-builds.json"
+  ln -s "$t/idxsym/factory-builds.json" "$t/idxsym-link.json"
+  check_same "$t/idxsym/factory-builds.json" "$t/idxsym-link.json" "$t/idxsym" "when --index is a symlink into --out"
+  for kind in sym hlink; do
+    src=$t/sig$kind-src.json; out=$t/sig$kind
+    cp "$idx" "$src"
+    if [[ $kind == sym ]]; then ln -s "$src" "$out/factory-builds.json.sig"; else ln "$src" "$out/factory-builds.json.sig"; fi
+    touch -t 202001010000 "$src"
+    st=$(stat -c '%d:%i:%Y' "$src")
+    if fx sign --index "$src" --codename testdev --out "$out" >/dev/null 2>"$t/err"; then fail "sign refuses when .sig is a $kind to the source"; fi
+    grep -c 'same file' "$t/err" >/dev/null || { cat "$t/err" >&2; fail "says .sig is the same file ($kind)"; }
+    cmp -s "$src" "$idx" || fail "refused .sig ($kind) keeps the source bytes"
+    [[ $(stat -c '%d:%i:%Y' "$src") == "$st" ]] || fail "refused .sig ($kind) leaves the source inode and mtime unchanged"
+    [[ ! -e $out/factory-builds.json ]] || fail "refused .sig ($kind) writes no copy"
+  done
+
+  # A gpg failure after signing_key_load succeeds: write to -o (as gpg can
+  # before failing) and exit 1, then check nothing in --out or the source moved
+  cat > "$t/fakebin/gpg" <<'SH'
+#!/bin/sh
+while [ $# -gt 1 ]; do
+  [ "$1" = "-o" ] && { printf 'partial' > "$2"; break; }
+  shift
+done
+echo "fake-gpg-failed" >&2
+exit 1
+SH
+  chmod +x "$t/fakebin/gpg"
+  kept=$(sums)
+  if PATH="$t/fakebin:$PATH" fx sign -d testdev --out "$t/signed" 2>"$t/err"; then fail "sign fails when gpg fails"; fi
+  grep -c 'fake-gpg-failed' "$t/err" >/dev/null || { cat "$t/err" >&2; fail "gpg failure ran after the key loaded"; }
+  [[ $(sums) == "$kept" ]] || fail "a gpg failure leaves an existing signed copy and its signature as they were"
+  if PATH="$t/fakebin:$PATH" fx sign -d testdev --out "$t/signed-gpgfail" 2>/dev/null; then fail "sign into a new folder fails when gpg fails"; fi
+  [[ ! -e $t/signed-gpgfail ]] || fail "a gpg failure makes no new folder"
+  same_kept=$(sha256sum "$t/same/factory-builds.json" "$t/same/factory-builds.json.sig")
+  if PATH="$t/fakebin:$PATH" fx sign --index "$t/same/factory-builds.json" --codename testdev --out "$t/same" 2>/dev/null; then fail "in-place sign fails when gpg fails"; fi
+  [[ $(sha256sum "$t/same/factory-builds.json" "$t/same/factory-builds.json.sig") == "$same_kept" ]] || fail "in-place gpg failure leaves the source and its signature untouched"
+  pass "sign: in-place, symlink, hard link, .sig alias and gpg failure leave the source and any existing pair untouched"
+
   kept=$(sums)
   rm -rf "$r/keys"
   if fx sign -d testdev --out "$t/signed" 2>/dev/null; then fail "sign needs the release key"; fi
   [[ $(sums) == "$kept" ]] || fail "a sign without the release key leaves the signed copy and its signature as they were"
   if fx sign -d testdev --out "$t/signed2" 2>/dev/null; then fail "sign into a new folder needs the release key"; fi
   [[ ! -e $t/signed2 ]] || fail "a sign without the release key makes no folder"
+  if fx sign --index "$t/same/factory-builds.json" --codename testdev --out "$t/same" 2>/dev/null; then fail "in-place sign needs the release key"; fi
+  [[ $(sha256sum "$t/same/factory-builds.json" "$t/same/factory-builds.json.sig") == "$same_kept" ]] || fail "in-place sign without the release key leaves the source and its signature untouched"
   pass "sign: a detached signature by the release key, and none without it; a refused sign writes nothing"
 else
   echo "ok - # skip: no gpg for sign"

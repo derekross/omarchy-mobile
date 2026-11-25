@@ -3,6 +3,43 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-44. A staged descriptor's refusal depends on the tooling PRs in
+  flight.** Tegu added `SOC_COMPATIBLE` while #27 was about to make either
+  key acceptable, so merging both would have made tegu installable without
+  the AVB footers its bootloader needs. *Check:* test a staged descriptor
+  against the heads of open PRs that touch `bin/omamobile` or
+  `tools/install-phone`. *From:* #24 with #27.
+- **L-71. Our requests say which repository each piece goes in.** "A kernel
+  PR … with an overlay that enables it" put a bring-up overlay in the kernel,
+  against CONTRIBUTING §6.1 (extends L-31). *From:* issue #3 and kernel #32.
+- **L-104. Run `git merge-tree` across every pair of open PRs that touch the
+  same files,** one contributor's parallel PRs included, and give the merge
+  order in each review. Look for duplicate mechanisms too (#34's
+  `ro_gate_clks` beside #40's private read-only gates). Extends L-39 and
+  L-73. *From:* kernel #34 with #40, #37 with #39.
+- **L-105. When a contributor writes a private driver after we asked for
+  the common helper, find what pushed them off it** (here a PMU check that
+  can't defer inside the `__init` probe) and answer that, not only the
+  request again. *From:* kernel #40.
+- **L-123. A fix-up commit on a rebase-merged PR is folded in.** Kernel
+  PRs land commit by commit, so #34's watchdog commit would have landed with
+  the CG_VAL-only read (a bisect could stop there with the watchdogs
+  unowned), and #38's driver commit claiming temperature. *Check:* `git
+  range-diff` for a new commit that only changes lines an earlier commit of
+  the same PR added; read the earlier messages against the new head.
+  *From:* kernel #34, #35, #38, round 10.
+- **L-124. Before asking again, check whether the contributor's report
+  crossed our post.** The 23:11Z husky report answered round 9 before round 9
+  was posted. *Check:* compare comment times with our post time. *From:*
+  kernel #33, round 10.
+- **L-125. Check a whitespace nit by column, not by counting tabs.**
+  `expand` the hunk with its neighbours: `google,zumapro.h` gives every name
+  of that length two tabs. *From:* kernel #34, round 10 (withdrawn nit).
+- **L-126. A binding PR's SoC condition can reject another open board's
+  DTB without a textual conflict.** #13's `soc_compatible: false` for
+  non-zuma boards fails lynx (gs201 IPOP). *Check:* merge each open board PR
+  with each open binding PR on the same schema and run `CHECK_DTBS=y`.
+  Extends L-104. *From:* kernel #43 with #13 and #37.
 - **L-127. Parallel reviewers suffix refs with their topic, and delete only
   refs they created.** In round 10 several used `review/prN-r10`, and one
   deleted (then restored) refs another was using. *Check:*
@@ -376,42 +413,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   --format=%ci`) or the log's own stamps, convert every step to UTC, and lay
   it next to the thread's times before saying what ran before or after what.
   Extends L-344 and L-557. *From:* #514, round 45, 2026-11-08.
-- **L-592. A follow-up report is counted against the full record when it
-  arrives.** The kernel #187 report described three power-on phases; the plan
-  written afterwards shows five power-ups, two with the charger in and music
-  playing. *Check:* when a contributor's plan follows a thread report,
-  tabulate the plan's write steps and compare the count with the report before
-  replying to either. Extends L-345 and L-488. *From:* #514 with kernel #187,
-  round 45, 2026-11-08.
-- **L-641. Parallel reviewers work under a per-review topic, in ref names and
-  in a per-review scratch subfolder, and never glob-delete shared names.** In
-  round 46 one reviewer deleted others' refs with a `review/*-r46-*` glob and
-  ran `rm -f merge-*` in the round's shared folder; another lost
-  `review/pr471-r46-om` mid-review ("om" is too generic) and went on from the
-  commit id; a third wrote `threads.txt` and `pr-check-main` at the round
-  folder's top level, where other reviews keep files of the same names.
-  *Check:* `ls` the round folder and `git branch --list "review/*-<topic>"`
-  first (both empty for a topic unique to the run), write only under
-  `round<N>/<topic>/`, delete only by the exact names recorded at creation,
-  and pass commit ids to every later command. Extends L-43, L-127 and L-364.
-  *From:* #471, #530 and the round's cleanup, round 46, 2026-11-09.
-- **L-642. After a maintainer fixup to a contributor branch, run the touched
-  package's whole `test/all`, not a subset.** The #371 fixup changed a
-  version and `depends` line, and that package's own test hard-coded the old
-  value, so CI failed. *Check:* for each package directory
-  the fixup touches, `packages/<p>/test/all` (and `tests/packages` for the
-  depends graph) on the fixed-up head before pushing it. Extends L-408.
-  *From:* #371, round 46, 2026-11-09.
-- **L-643. A maintainer fixup on a contributor's branch is a new commit on
-  top, not an amend.** An amended commit that is already on the branch can
-  only be pushed with a force push, which rewrites the contributor's history.
-  *Check:* `git merge-base --is-ancestor <branch's remote head> HEAD` before
-  every push to someone else's branch; if it fails, redo the change as a new
-  commit. *From:* #371, round 46, 2026-11-09.
-- **L-644. A stacked branch under a squash-merged base is rebased with
-  `--onto <base head>`, and the review says so.** #540 and #541 each carry
-  #493's four commits; after a squash merge none of them is patch-identical to
-  main's squash commit, so a plain `git rebase origin/main` replays them and
-  conflicts. *Check:* when a contributor says "I'll rebase once X merges",
-  give them `git rebase --onto origin/main <X's head> <branch>`. *From:* #493
-  with #540 and #541, round 46, 2026-11-09.

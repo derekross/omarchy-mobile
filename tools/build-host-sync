@@ -154,7 +154,7 @@ st_push() {
 }
 
 st_command() {
-  local env dh build=""
+  local env dh ph="" pexp="" build=""
   say "Building and publishing on $host"
   if ((dry)); then
     rsh "systemctl --user show omamobile-publish.service -p Environment --value"
@@ -172,12 +172,22 @@ st_command() {
     else
       note "DOCKER_HOST $dh, as its publish service runs"
     fi
+    # where it uploads: since 2026-11-17 only omapub may write the
+    # repository, and repo-publish's default is another account
+    ph=$(tr ' ' '\n' <<<"$env" | sed -n 's/^"\{0,1\}OMAMOBILE_PKGS_HOST=\([^"]*\)"\{0,1\}$/\1/p' | tail -1)
+    if [[ -n $ph ]]; then
+      [[ $ph =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$ ]] || die "its publish service's OMAMOBILE_PKGS_HOST ($ph) is not user@host"
+      pexp=" && export OMAMOBILE_PKGS_HOST=$ph"
+      note "OMAMOBILE_PKGS_HOST $ph, as its publish service runs"
+    fi
   fi
   # linux-omamobile is built only when named (tools/build-packages); the
   # rest, the device package with its boot files among them, is what
   # --from-main builds, from origin/main, before it publishes development
   [[ ! -f $PRE/kernel.release ]] || build="tools/build-packages packages/linux-omamobile && "
-  derek "ssh -t $host 'cd $repo && export DOCKER_HOST=$dh && ${build}tools/repo-publish --from-main development'"
+  # no -t: with a terminal on stdin, a package test that expects none can
+  # sit at a prompt (omamobile-boot-update's write, 2026-11-24)
+  derek "ssh $host 'cd $repo && export DOCKER_HOST=$dh$pexp && ${build}tools/repo-publish --from-main development'"
   note "then: tools/build-host-sync pull"
 }
 
