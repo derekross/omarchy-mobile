@@ -13,12 +13,13 @@ cat > "$tmp/bin/systemctl" <<STUB
 #!/bin/sh
 echo "systemctl \$*" >> "$tmp/log"
 [ -e "$tmp/deny" ] && { echo "Failed to start: Access denied" >&2; exit 4; }
+[ "\$1" = show ] && { echo 0123456789abcdef0123456789abcdef; exit 0; }
 [ -e "$tmp/unitfail" ] && { echo "Job failed" >&2; exit 1; }
 exit 0
 STUB
 cat > "$tmp/bin/journalctl" <<STUB
 #!/bin/sh
-cat "$tmp/journal" 2>/dev/null
+[ "\$*" = "-q -o cat _SYSTEMD_INVOCATION_ID=0123456789abcdef0123456789abcdef" ] && cat "$tmp/journal" 2>/dev/null; true
 STUB
 chmod 755 "$tmp/bin/systemctl" "$tmp/bin/journalctl"
 run() { PATH="$tmp/bin:$PATH" bash "$tmp/privacy.sh" "$@" || true; }
@@ -55,6 +56,12 @@ echo 'not changed: update omamobile-audio first (no microphone guard in /usr/sha
 eq "$(run set mic off)" '{"error":"not changed: update omamobile-audio first (its microphone guard is missing)","switchable":true,"mic":"on","camera":"off","cameras":0}'
 printf 'stopping rec (9)\nstill open by: rec"x (9)\n' > "$tmp/journal"
 eq "$(run set mic off)" '{"error":"the microphone is off, but an app still had it open and would not stop: recx (9)","switchable":true,"mic":"on","camera":"off","cameras":0}'
+printf 'udev could not re-apply its rules to video4linux media\nnot changed: the camera could not be unlocked, it stays off\n' > "$tmp/journal"
+eq "$(run set camera on)" '{"error":"not changed: the camera could not be switched on, so it stays off","switchable":true,"mic":"on","camera":"off","cameras":0}'
+printf 'udev could not re-apply its rules to video4linux media\nthe camera could not be unlocked and could not be locked again: it is left off, maybe partly open\n' > "$tmp/journal"
+eq "$(run set camera on)" '{"error":"the camera could not be switched and may be partly open: try again","switchable":true,"mic":"on","camera":"off","cameras":0}'
+echo 'could not restart the audio of lef' > "$tmp/journal"
+eq "$(run set mic on)" '{"error":"the microphone is on, but the sound could not restart: log out and back in","switchable":true,"mic":"on","camera":"off","cameras":0}'
 : > "$tmp/journal"
 eq "$(run set camera on)" '{"error":"could not turn the camera on","switchable":true,"mic":"on","camera":"off","cameras":0}'
 rm "$tmp/unitfail"
