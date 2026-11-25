@@ -3327,6 +3327,39 @@ Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
 after 133 seconds. Stock D1 booted on A with enforcing verity and
 the expected factory VBMeta digest.
 
+### Mainline v60 bounded REPORT LUNS before discovery
+
+[v60 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/f5598755ff3ae247892cf5edbf65b98bdb88f714)
+issues one IRQ-backed REPORT LUNS to well-known UPIU LUN `0x81`
+after the GPT reads and before v59's SCSI host check. The command
+requests ordinary LUNs, with space for a header and up to 16
+entries. A successful short transfer is accepted only for this
+opcode, with matching underflow and residual and a complete
+header. The diagnostic validates the list length, ordinary
+peripheral addressing, uniqueness and presence of LUN 0 before
+reporting the LUN numbers and scrubbing the response. Other
+diagnostic commands still require zero residual.
+
+The query uses the dedicated diagnostic slot. No discovered LUN
+is attached or scanned, and the subsequent SCSI host check keeps
+midlayer dispatch blocked. The midlayer timeout path can invoke
+UFS reset recovery, which is still unqualified. The RAM rescue
+keeps `scsi_mod.scan=none` and the timed warm return.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match v60 source and manifest. The DTB and private RAM rescue match v59. | Leave stock A selected on a mismatch. |
+| One attended slot B boot, power control, device initialization and bounded LUN inventory | Use the verified nine-partition NV backup. Capture the GPT results, one REPORT LUNS IRQ, validated list and `REPORT LUNS result=0`. Verify host creation/removal with zero devices, Hibern8, HCI cleanup, zero disks and timed return. | Preserve the first failure without retrying the report. Return to stock A and confirm Android completes boot. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v60` passed strict
+checkpatch and targeted `W=1` compilation. Mocked cases covered the
+CDB and WLUN, successful full and bounded short transfers, invalid
+residuals and list data, timeouts, build-option gating and the
+previous GPT path. All five image hashes, both AVB signatures, the
+unpacked payload, ABL handoff and saved D1 slot sizes passed.
+Manifest SHA-256 `b7c9c3c17b4b207f4a55641e88e1a0afc63a43b4fdd60b8316995dede6ef8321`.
+Archive SHA-256 `50d0335c91be3bc7eed040b607b728c9f712cda1a22d121fe66cdce3b5c51454`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
