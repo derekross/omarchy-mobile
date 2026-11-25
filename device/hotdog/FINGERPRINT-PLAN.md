@@ -15,7 +15,7 @@ packaged. Overlays in [`overlays/`](overlays/).
 
 The phone itself is not ready for this yet: [BRINGUP-M1](BRINGUP-M1.md) H2-H4
 (the Arch root on userdata, booted from `boot_a`) come first. Every step
-below assumes a phone that boots Omarchy Mobile with USB SSH.
+below assumes a phone that boots Omamobile with USB SSH.
 
 **Goal.** Omarchy's lock screen accepts a finger on the under-display sensor
 as an alternative to the PIN, exactly as on the Pixel 7 Pro
@@ -165,7 +165,7 @@ These are AGENTS.md section 1 applied to this stack.
 
 ## 5. Kernel build
 
-From the omarchy-mobile checkout:
+From the omamobile checkout:
 
 ```sh
 KERNEL_DIR=~/omamobile-kernel/wt-hotdog-fingerprint \
@@ -190,7 +190,7 @@ Expect/Pass, a **Stop** condition, a Rollback and a risk level. Results go in
 
 ### F0: preconditions (read-only; risk none)
 
-- BRINGUP-M1 H4 done: Omarchy Mobile boots from `boot_a`, USB SSH works.
+- BRINGUP-M1 H4 done: Omamobile boots from `boot_a`, USB SSH works.
 - The partition backups in `~/android/reference/hotdog/partitions/` check
   against `SHA256SUMS` (`sha256sum -c`), `persist` among them.
 - **Stop** if either fails.

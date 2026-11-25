@@ -259,7 +259,7 @@ Expect/Pass, a **Stop** condition, a Rollback and a risk level. Results go in
 
 ### C0: preconditions (read-only; risk none)
 
-- The phone boots Omarchy Mobile from `boot_a` with USB SSH.
+- The phone boots Omamobile from `boot_a` with USB SSH.
 - In fastboot: `fastboot getvar slot-successful:a`,
   `fastboot getvar slot-retry-count:a`. **Stop** if the retry count is 2
   or lower (mark slot A first, the owner's open decision).

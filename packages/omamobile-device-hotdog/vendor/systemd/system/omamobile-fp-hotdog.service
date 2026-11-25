@@ -15,7 +15,7 @@
 # reboot. So there is no Restart=, the runner refuses a second start until a
 # reboot, and a failed unit stays failed: the lock screen uses the PIN.
 [Unit]
-Description=Omarchy Mobile fingerprint, OnePlus 7T Pro (vendor HAL and bridge)
+Description=Omamobile fingerprint, OnePlus 7T Pro (vendor HAL and bridge)
 Documentation=file:///usr/share/doc/omamobile/hotdog-FINGERPRINT-PLAN.md
 After=systemd-modules-load.service systemd-udev-trigger.service
 ConditionPathExists=/usr/lib/omamobile-fp-hotdog/root

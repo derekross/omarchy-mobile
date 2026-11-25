@@ -167,7 +167,7 @@ Expect/Pass, a **Stop** condition, a Rollback and a risk level. Results go in
 
 ### M0: preconditions (read-only; risk none)
 
-- The phone boots Omarchy Mobile from `boot_a` with USB SSH, and the
+- The phone boots Omamobile from `boot_a` with USB SSH, and the
   speakers play (`speaker-test -D hw:0,0 -c 2 -t sine -l 1`, announce it).
 - In fastboot, read the slot flags:
   `fastboot getvar slot-successful:a` and `fastboot getvar slot-retry-count:a`.

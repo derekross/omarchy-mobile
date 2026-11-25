@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile storage guard, continued in Arch (OnePlus 7T Pro). The
+# Omamobile storage guard, continued in Arch (OnePlus 7T Pro). The
 # initramfs marks every UFS partition read-only except userdata and removes
 # the whole-disk node of the main LUN (sda). udev would recreate /dev/sda, so
 # make the whole-disk node inaccessible and keep desktop tools from touching

@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# OnePlus 7T Pro (hotdog): first boot of Omarchy Mobile
+# OnePlus 7T Pro (hotdog): first boot of Omamobile
 
 **Status (2026-11-03):** port started. Kernel branch `omamobile-hotdog`
 (worktree `~/omamobile-kernel/wt-hotdog`, output `~/omamobile-kernel/out-hotdog`),
@@ -7,11 +7,40 @@ device descriptor, device package and the userdata preparation are written
 and built on the laptop; nothing has run on the phone yet. The results of
 each step below are recorded under [Results](#results).
 
+**Status (2026-11-25), read this first:**
+
+- **The descriptor as it would merge does not boot the owner's phone as it
+  is.** That phone's root on `userdata` is LUKS2, opened in the initramfs
+  with a PIN typed on the touchscreen. That unlock is not in #931: it is
+  proposed on its own under [docs/SECURITY-PLAN.md](../../docs/SECURITY-PLAN.md),
+  and on this phone it also needs three descriptor lines this branch
+  doesn't have, which come once that proposal lands: `INITRAMFS_CRYPT=yes`
+  (its opt-in), `INITRAMFS_MODULES="s6sy761"` (the touchscreen for the PIN
+  pad) and `deferred_probe_timeout=-1` on `CMDLINE` (while the PIN waits,
+  the default 10 s timeout probed the camera CCIs without their
+  suppliers). Built from this branch alone, the image's init finds
+  `userdata`, can't mount it (no ext4 on it, so nothing is checked or
+  grown), and stays in the initramfs with USB and SSH up
+  (`INITRAMFS_USB_RECOVERY=no`). The 2026-11-21 RAM boots below ran the
+  owner's local init with the unlock, not this branch's.
+- **The kernel isn't published yet.** The board, the remote processors and
+  the RPMh fix are linux-omamobile#282, the qseecom driver #283, and the
+  QRTR and glink fixes #284 and #285, all in review; display, GPU,
+  fingerprint, keys, haptics, touch, Bluetooth, Wi-Fi, modem, sensors and
+  cameras follow as pull requests one at a time, and charging, audio, IPA
+  and the voice-call series after them. Until each lands, the device
+  package's parts that need it do nothing; its README lists which.
+- **The slot mark is on hold** (the maintainer, #931, 2026-11-24): no
+  `slot-a-mark write` or `restore`, and no `fastboot flash boot_a`, until
+  the CONTRIBUTING §3.1 entry is decided. Test kernels are RAM-booted with
+  `fastboot boot` only, and reboots are kept few. A broken `sde` GPT means
+  EDL.
+
 The kernel code for this phone comes from postmarketOS's SM8150 kernel tree
 (the SoC and the board), which the owner's own earlier port had carried onto
 a 7.0.0 kernel with hotdog patches (display, GPU, touch, battery, charging,
 Wi-Fi, Bluetooth, speakers). This port moves the same hardware support onto
-linux-omarchy-mobile (7.3) and Omarchy's userspace.
+linux-omamobile (7.3) and Omarchy's userspace.
 
 ## 1. How this phone differs from a Pixel
 
@@ -28,7 +57,7 @@ linux-omarchy-mobile (7.3) and Omarchy's userspace.
 boot LUN. On this phone a slot switch once moved the UFS boot LUN onto slot B's
 mismatched bootloader firmware and took a full EDL (MSM) restore. So:
 
-- Omarchy Mobile boots from `boot_a`. Slot A is current. `fastboot flash
+- Omamobile boots from `boot_a`. Slot A is current. `fastboot flash
   boot_a` clears its successful mark (H4), and nothing at boot marks it
   again; `device/hotdog/slot-a-mark` does, by hand, with the owner's yes
   (Results, 2026-11-15). That GPT write is outside CONTRIBUTING §3.1 as it
@@ -36,7 +65,7 @@ mismatched bootloader firmware and took a full EDL (MSM) restore. So:
   then, keep reboots few: each one spends a try while the mark is clear.
 - No `--set-active`, no `qbootctl`, no write to any GPT from a service or at
   boot (AGENTS.md §1). The earlier Linux ports on this phone marked slot A at
-  every boot with `qbootctl -m`; Omarchy Mobile does not.
+  every boot with `qbootctl -m`; Omamobile does not.
 - **`sde` holds slot A's whole boot chain after XBL**, not just `boot_a`:
   `abl_a` (`sde8`), `tz_a` (`sde2`), `aop_a` (`sde1`), `hyp_a` (`sde3`),
   `devcfg_a`, `dtbo_a` and `vbmeta_a`, with their `_b` twins; XBL itself
@@ -52,7 +81,7 @@ mismatched bootloader firmware and took a full EDL (MSM) restore. So:
   | XBL (`QC_IMAGE_VERSION_STRING`) | `BOOT.XF.3.0-00479-SM8150LZB-1` (`sdb1`) | `BOOT.XF.3.0-00543-SM8150LZB-1` (`sdc1`) |
   | TZ | `TZ.XF.5.2-223055` | `TZ.XF.5.2-398866` |
   | ABL | `abl_a`, sha256 `f7dcf0bc…` (1.2 MB used) | `abl_b`, `9bcac221…` (225 KB used): another build |
-  | boot | Omarchy Mobile's header-v2 image | an Android 10 boot image (downstream kernel 4.14.117, patch level 2021-03) from a community Android build |
+  | boot | Omamobile's header-v2 image | an Android 10 boot image (downstream kernel 4.14.117, patch level 2021-03) from a community Android build |
   | GPT flags | priority 3, active, tries 6, successful | priority 0, not active, tries 0, not successful |
 
   ABL reports no `version-bootloader` (empty in every `getvar all` since
@@ -342,7 +371,7 @@ not run (`usb-recovery` no).
 **2026-11-21, tested by the owner on the phone:** Bluetooth audio plays,
 the phone charges, and it boots with no cable in.
 
-**2026-11-21, RAM boot of the kernel as split for linux-omarchy-mobile, with
+**2026-11-21, RAM boot of the kernel as split for linux-omamobile, with
 the owner's yes.** The kernel: the top of the stacked pull-request branches
 (board, display, fingerprint, keys, haptics, touch, Bluetooth, Wi-Fi, modem,
 sensors, CAMSS, cameras, charging, audio, IPA, voice) merged with the two

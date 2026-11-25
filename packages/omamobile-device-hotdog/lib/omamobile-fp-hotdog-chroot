@@ -31,7 +31,7 @@
 # secure world, the human's call (FINGERPRINT-PLAN).
 #
 # The Android files are the owner's own, from their OxygenOS image
-# (README.md, never shipped by Omarchy Mobile), in $IMAGE; our shims in
+# (README.md, never shipped by Omamobile), in $IMAGE; our shims in
 # $SHIM and $ION_SHIM. The chroot is a private mount namespace on a tmpfs:
 # the image is bind-mounted read-only and only $STATE persists. It shares
 # the host's network namespace on purpose: goodix-fp's netlink socket exists

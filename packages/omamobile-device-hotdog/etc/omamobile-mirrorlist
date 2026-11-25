@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Where pacman gets Omarchy Mobile's packages ([omamobile] in /etc/pacman.conf).
+# Where pacman gets Omamobile's packages ([omamobile] in /etc/pacman.conf).
 #
 # The one active Server line is the channel this phone follows. The OnePlus
 # 7T Pro follows its own repository on the phone (local), filled from a

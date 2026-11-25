@@ -2,9 +2,9 @@
 pkgname=omamobile-device-hotdog
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile support for the OnePlus 7T Pro (hotdog): storage guard, USB networking, modem (rmtfs, tqftpserv, ModemManager), call audio, Bluetooth address, sound profile, alert slider, fingerprint, pop-up camera, GNSS through the modem, suspend, light and proximity (SLPI sensors)"
+pkgdesc="Omamobile support for the OnePlus 7T Pro (hotdog): storage guard, USB networking, modem (rmtfs, tqftpserv, ModemManager), call audio, Bluetooth address, sound profile, alert slider, fingerprint, pop-up camera, GNSS through the modem, suspend, light and proximity (SLPI sensors)"
 arch=(aarch64)
-url="https://github.com/derekross/omarchy-mobile"
+url="https://github.com/derekross/omamobile"
 # The package's own files are MIT; the Bluetooth address helper is
 # Apache-2.0; qrtr, rmtfs and tqftpserv (linux-msm) are BSD-3-Clause.
 license=(MIT Apache-2.0 BSD-3-Clause)
@@ -14,7 +14,7 @@ optdepends=('mmsd-tng: MMS through ModemManager (packaged with the MMS pull requ
             'feedbackd: the alert slider sets its profile (Silent, Vibrate, Ring)'
             'fprintd: fingerprint unlock through PAM'
             'omamobile-gnss: Location (GNSS) through the modem (QMI LOC)'
-            'libfprint: the Omarchy Mobile build, with the omamobile_udfps driver')
+            'libfprint: the Omamobile build, with the omamobile_udfps driver')
 makedepends=(gcc)
 # The fingerprint programs are bionic (NDK) binaries tested as built:
 # makepkg's strip (binutils) must not rewrite them
