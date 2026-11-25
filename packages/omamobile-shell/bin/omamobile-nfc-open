@@ -20,6 +20,14 @@ And it polls only while the screen is lit, as stock Android does: with every
 display connector off (DPMS) for SCREEN_OFF_SECONDS, the poll loop stops,
 and it starts again when the screen comes on. A poll loop is the radio
 searching for cards, which costs the Pixel 9a about 60 mA.
+
+And NFC can be off totally (the tile and Settings, through
+omamobile-privacy@nfc-off.service): /var/lib/omamobile/privacy/nfc then says
+"off". While it does, this never polls and never restarts neard; it stops
+neard once and blocks the rfkill switch again whenever something unblocks it
+(the session may write /dev/rfkill), also at boot. The file is read on the
+same 2 s tick as the switch. When the file goes (nfc-on removes it before it
+unblocks the switch), the next unblock restarts neard as before.
 """
 import glob
 import subprocess
@@ -36,6 +44,7 @@ RECORD = "org.neard.Record"
 ADAPTER = "org.neard.Adapter"
 REPEAT_SECONDS = 3.0
 SCREEN_OFF_SECONDS = 4
+PRIVACY_FILE = "/var/lib/omamobile/privacy/nfc"
 
 last = {"uri": None, "time": 0.0}
 
@@ -88,7 +97,7 @@ def start_polling(bus):
     """Power the first adapter and start a poll loop (neard's ConstantPoll
     keeps it going after each tag). True means "try again": neard isn't
     answering, has no adapter yet, or refused the power-on."""
-    if rfkill["blocked"]:
+    if rfkill["blocked"] or privacy["off"]:
         return False  # switched off meanwhile; the next unblock restarts neard
     try:
         objects = bus.call_sync(NEARD, "/", "org.freedesktop.DBus.ObjectManager",
@@ -158,6 +167,19 @@ def set_powered(bus, powered):
 
 
 rfkill = {"blocked": None}
+privacy = {"off": False}
+
+
+def nfc_off(path=PRIVACY_FILE):
+    """True while NFC is off totally. A file that exists but can't be read
+    counts as off."""
+    try:
+        with open(path) as f:
+            return f.read(16).strip() == "off"
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
 screen = {"lit": True, "dark_for": 0, "start": False}
 
 
@@ -208,18 +230,47 @@ def follow_screen(bus):
             screen["start"] = not rfkill["blocked"]
             if screen["start"]:
                 log("screen on: polling again")
-        if screen["start"]:
+        if screen["start"] and not privacy["off"]:
             screen["start"] = start_polling(bus)
         return True
     screen["dark_for"] += 2
     if screen["dark_for"] >= SCREEN_OFF_SECONDS:
         screen["lit"] = False
-        if not rfkill["blocked"]:
+        if not rfkill["blocked"] and not privacy["off"]:
             stop_polling(bus)
     return True
 
 
+def follow_privacy():
+    """NFC off totally: block the switch whenever it is unblocked, and stop
+    neard once on the way in. True while off (follow_rfkill then does
+    nothing else). On the way out, the switch counts as blocked, so the
+    unblock that nfc-on does next restarts neard."""
+    if nfc_off():
+        if nfc_blocked() is False:
+            log("NFC is off: blocking the switch again")
+            subprocess.run(["rfkill", "block", "nfc"], check=False)
+        if not privacy["off"]:
+            privacy["off"] = True
+            log("NFC off: neard stopped, no polling")
+            subprocess.run(["systemctl", "stop", "neard.service"], check=False)
+        rfkill["blocked"] = True
+        if nfc_off():
+            return True
+        # nfc-on ran while this tick blocked the switch: undo the block, and
+        # the way out below restarts neard on the unblock
+        subprocess.run(["rfkill", "unblock", "nfc"], check=False)
+    if privacy["off"]:
+        privacy["off"] = False
+        rfkill["blocked"] = True
+        screen["start"] = False
+        log("NFC allowed again")
+    return False
+
+
 def follow_rfkill(bus):
+    if follow_privacy():
+        return True
     blocked = nfc_blocked()
     if blocked is None or blocked == rfkill["blocked"]:
         return True
@@ -234,6 +285,8 @@ def follow_rfkill(bus):
 
 
 def restart_neard(bus):
+    if privacy["off"]:
+        return
     subprocess.run(["systemctl", "restart", "neard"], check=False)
     GLib.timeout_add_seconds(2, start_polling, bus)
 
@@ -243,7 +296,9 @@ def main():
     bus.signal_subscribe(NEARD, "org.freedesktop.DBus.ObjectManager", "InterfacesAdded",
                          None, None, Gio.DBusSignalFlags.NONE, on_interfaces_added, None)
     rfkill["blocked"] = nfc_blocked()
-    if not rfkill["blocked"]:
+    if follow_privacy():
+        pass  # off totally: neard stopped, the switch blocked, nothing polls
+    elif not rfkill["blocked"]:
         # neard's view may be stale (a block before this service ran, or an
         # earlier run of it): start from a fresh neard.
         restart_neard(bus)

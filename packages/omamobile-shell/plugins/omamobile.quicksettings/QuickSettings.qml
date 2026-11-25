@@ -1165,7 +1165,12 @@ Item {
   }
 
   // NFC through its rfkill switch, which the kernel's NFC core registers for
-  // each controller (type "nfc"); the session may write /dev/rfkill. "No NFC"
+  // each controller (type "nfc"), and the privacy file that turns it off
+  // totally (/var/lib/omamobile/privacy/nfc says "off": neard stopped, no
+  // polling; omamobile-nfc-open keeps the switch blocked). The tile switches
+  // through omamobile-privacy@nfc-off|on.service, as Settings > Connected
+  // devices > NFC does; polkit asks for the owner's PIN both ways, and a
+  // cancelled PIN changes nothing (the tile reads the state again). "No NFC"
   // until a controller has probed.
   QtObject {
     id: nfc
@@ -1181,21 +1186,22 @@ Item {
 
     function toggle() {
       if (!available || nfcWrite.running) return
-      nfcWrite.command = ["rfkill", enabled ? "block" : "unblock", "nfc"]
-      enabled = !enabled
+      nfcWrite.command = ["timeout", "122", "systemctl", "start", "omamobile-privacy@nfc-" + (enabled ? "off" : "on") + ".service"]
       nfcWrite.running = true
     }
   }
 
   Process {
     id: nfcRead
-    command: ["rfkill", "-rn", "-o", "TYPE,SOFT"]
+    command: ["sh", "-c", "rfkill -rn -o TYPE,SOFT; read -r s 2>/dev/null < /var/lib/omamobile/privacy/nfc && echo \"privacy $s\"; true"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        var lines = String(text || "").trim().split("\n").filter(function(line) { return /^nfc\s/.test(line) })
-        nfc.available = lines.length > 0
-        nfc.enabled = lines.length > 0 && lines.every(function(line) { return /\sunblocked$/.test(line) })
+        var all = String(text || "").trim().split("\n")
+        var lines = all.filter(function(line) { return /^nfc\s/.test(line) })
+        var off = all.some(function(line) { return /^privacy off$/.test(line) })
+        nfc.available = lines.length > 0 || off
+        nfc.enabled = !off && lines.length > 0 && lines.every(function(line) { return /\sunblocked$/.test(line) })
       }
     }
     onExited: function(exitCode) { if (exitCode !== 0) nfc.available = false }

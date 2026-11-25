@@ -1,0 +1,43 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# NFC off totally, as root: run only by omamobile-privacy@nfc-off.service and
+# omamobile-privacy@nfc-on.service (the NFC quick-settings tile and Settings >
+# Connected devices > NFC start those; 50-omamobile-privacy.rules asks for the
+# owner's PIN both ways). Any other argument is refused.
+#   nfc-off  write "off" to /var/lib/omamobile/privacy/nfc, block NFC's rfkill
+#            switch and stop neard. omamobile-nfc-open reads the same file: while
+#            it says off, it never polls, never restarts neard, and blocks the
+#            switch again if anything in the session unblocks it (the session
+#            may write /dev/rfkill). The file stays across a restart.
+#   nfc-on   remove the file first, then unblock the switch: omamobile-nfc-open
+#            sees the unblock and restarts neard, which polls again.
+# The NFC driver stays bound: unbinding it is a later, separate step.
+# OMAMOBILE_PRIVACY_ROOT is for the test only (a scratch root; rfkill and
+# systemctl are stubs on its PATH). The unit sets no environment.
+set -euo pipefail
+root=${OMAMOBILE_PRIVACY_ROOT:-}
+dir=$root/var/lib/omamobile/privacy
+state=$dir/nfc
+# one switch at a time: an off and an on started together never interleave
+install -d -m 755 "$root/run"
+exec 9> "$root/run/omamobile-privacy.lock"
+flock 9
+case ${1:-} in
+nfc-off)
+  install -d -m 755 "$dir"
+  printf 'off\n' > "$state.tmp"
+  chmod 644 "$state.tmp"
+  mv -f "$state.tmp" "$state"
+  # neard.service.d/omamobile-privacy.conf keeps neard from starting while the file is there
+  rfkill block nfc || true
+  systemctl stop neard.service || true
+  echo "NFC is off" ;;
+nfc-on)
+  rm -f "$state"
+  rfkill unblock nfc
+  # nfc-open restarts neard when it sees the unblock; a restart of nfc-open also does, so an off and an on that
+  # both fell between two of its 2 s checks still bring neard back
+  systemctl try-restart omamobile-nfc-open.service || true
+  echo "NFC is on" ;;
+*) echo "usage: privacy nfc-off|nfc-on" >&2; exit 2 ;;
+esac
