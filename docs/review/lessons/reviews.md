@@ -3,6 +3,36 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1183. A gate keyed on a field that another unmerged PR adds leaves the
+  second PR inert on merge, so its phone run belongs in the first PR's run.**
+  #996's tile takes its new path only when #995's `radio_choice` is in sitd's
+  state; merged first it changes nothing, and the 7 Pro gets the new tile the
+  day #995 lands, under #995's run, which tested only the CLI. *Check:* for a
+  PR whose new path keys on another open PR's output, `git grep -n '<field>'
+  origin/main` (empty) and the same in the other head; add the second PR's
+  user-facing step to the first PR's runbook and order the merges "first, run,
+  second". Extends L-1038 and L-911. *From:* #996 with #995, round 68,
+  2026-11-25.
+- **L-1182. A contributor's plan to land a blocker "in a follow-up once this
+  one is in" is read against the decision that made it a blocker.** On #1001
+  the decision was no hotspot whose clients can reach the home network before
+  the isolation follow-up, and the author's plan put that follow-up after this
+  PR and bundled it with a new VPN feature. *Check:* for each "follow-up after
+  this merges" in a reply, find the decision or blocking point it answers and
+  say whether its order fits; ask for a new feature in the same follow-up to
+  be split from the blocker. Extends L-519 and L-887. *From:* #1001, round 68,
+  2026-11-25.
+- **L-1181. A two-dot diff of a shared tool against main, on a branch with an
+  old base, shows main's own later changes as the PR's.** `git diff
+  origin/main <head> -- tools/build-packages tests/stage-boot-files` on #1025
+  looked like a revert of the rename and of #1033's staging checks; against
+  the merge base the PR's change was 14 lines. *Check:* for any `tools/` or
+  `tests/` file a stale branch touches, read `git diff $(git merge-base
+  origin/main <head>) <head> -- <file>` (or `origin/main...<head>`) before
+  reporting a removed check, and `git merge-tree origin/main <head>` for what
+  the merge would keep. Extends L-790 (whose two-dot diff is right only when
+  the merge base is main's tip) and L-1028. *From:* #1025, round 68 (a near
+  miss in drafting), 2026-11-25.
 - **L-1177. When main is merged into a contributor's branch after another bump
   of the same package, the version file is read again before the squash.**
   #905 was merged as `omamobile-shell` 0.2.143, but in the merge its version
@@ -376,40 +406,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   *Check:* for each "leave out X" in our last comment, grep the new head for
   X's nouns in code and tests, not only in the file we named. Extends L-183
   and L-688. *From:* #582, round 61, 2026-11-18.
-- **L-911. A versioned `depends` on a number that is not yet on main is a
-  claim on that number, re-checked every round and at the squash.** #697's
-  bridge asks for `omamobile-modem-sit>=0.3.37`, the branch's own number; main
-  reached 0.3.43 without the feature, so the published package satisfies it.
-  #866 requires `omamobile-omarchy>=0.1.49`, the version two other open PRs
-  carry; if the wrong one lands first, the line is met by a package without
-  the fix, with every `merge-tree` clean. *Check:* for each `'<pkg>>=<v>'` a
-  PR adds, compare `<v>` with `git show origin/main:packages/<pkg>/version`
-  and list every open PR that claims `<v>` (`gh pr list --search`); put "the
-  providing PR merges as `<v>` first" in the merge plan of all of them.
-  Extends L-639, L-477 and L-426. *From:* #697, round 61, and #866 with #879
-  and #610, round 62, 2026-11-18.
-- **L-910. When a draft's author hands it over in the thread, the review says
-  who was asked, whether they answered, and what the other draft must drop.**
-  #626's hand-over was offered by the maintainer and accepted by its author
-  four days later, with no word from the other contributor and #374 still
-  carrying the competing route. *Check:* read both threads for the last
-  comment of each party after the offer, and put the open acceptance in the
-  draft comment as a direct question. Extends L-720 and L-688. *From:* #626
-  with #374, round 61, 2026-11-18.
-- **L-906. A conflict in a defaults table is resolved key by key, because the
-  PR's side is a snapshot of the table from before main's additions.** #374's
-  `lib/paths.py` side lacked `follow_screen`, which main added for the 7 Pro's
-  sleep with the modem up; "take ours" would silently remove a default every
-  phone reads. *Check:* for a conflict inside a dict of defaults, diff each
-  side against the merge base and keep every key main added; hand over the
-  resolved lines. Extends L-184 and L-773. *From:* #374 and #376 against #791,
-  round 61, 2026-11-18.
-- **L-899. A branch a contributor prepares on their fork for after a
-  dependency merges is read and gated in the round that hears of it, against
-  the dependency's head.** Kernel #202's side branch for the rebase onto #181
-  was on the fork a day before it could be pushed; gating it twice caught a 90
-  Hz mode the DECON refuses (L-898) and a clock skip (L-1071) before either
-  reached the PR or a phone run that would have had to be repeated. *Check:*
-  `git ls-remote <fork>` for the branch a reply names, fetch it into a review
-  ref, and run `kernel-pr-check --build` with the dependency's head as BASE.
-  Extends L-429 and L-196. *From:* kernel #202, rounds 61 to 63, 2026-11-20.

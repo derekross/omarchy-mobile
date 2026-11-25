@@ -134,6 +134,7 @@ fi
 EOF
 chmod +x "$t/bin/"*
 export OMAMOBILE_PKGS_PATH=$S
+unset OMAMOBILE_PKGS_HOST   # the default is under test, not the caller's setting
 run() { (cd "$R" && PATH="$t/bin:$PATH" tools/release-upload "$@") > "$t/log" 2>&1; }
 pub=$S/releases/cheetah
 
@@ -143,7 +144,10 @@ run --dry-run "$B" || fail "a dry run of a good bundle passes"
 [[ -z $(ls -A "$S") && ! -e $t/rsync.log ]] || fail "a dry run uploads nothing"
 grep -c "rsync -rt --omit-dir-times --chmod=D2775,F664 --partial --delete -e 'ssh -p 1022' .*$B/ .*omamobile-rootfs-cheetah-$V-aarch64.img.zst" "$t/log" >/dev/null ||
   fail "a dry run prints the rsync command, with repo-publish's flags and port"
-grep -c 'ssh -p 1022 raven@nostr01.derekross.me' "$t/log" >/dev/null || fail "a dry run prints the ssh commands for the server repo-publish uses"
+grep -c 'ssh -p 1022 omapub@nostr01.derekross.me' "$t/log" >/dev/null || fail "a dry run prints the ssh commands for omapub, the one account that may write the server"
+if grep -c 'raven@' "$t/log" >/dev/null; then fail "the default account is not the one that lost write access on 2026-11-17"; fi
+(export OMAMOBILE_PKGS_HOST=other@pkgs.invalid; run --dry-run "$B") || fail "a dry run with another OMAMOBILE_PKGS_HOST"
+grep -c 'ssh -p 1022 other@pkgs.invalid' "$t/log" >/dev/null || fail "OMAMOBILE_PKGS_HOST still overrides the default"
 pass "--dry-run checks the bundle and prints the ssh and rsync commands, touching nothing"
 
 run "$B" || fail "a good bundle uploads"

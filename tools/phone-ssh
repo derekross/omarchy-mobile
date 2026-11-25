@@ -8,6 +8,17 @@
 # OMAMOBILE_SSH_HOST overrides root@172.16.42.1 (user@host).
 # OMAMOBILE_SSH_KEY selects an identity file (IdentitiesOnly=yes).
 # OMAMOBILE_SSH_KNOWN_HOSTS selects a file with strict host-key checking.
+# The value "tofu" opts in to trust-on-first-use against a per-user pin file,
+# omamobile/phone-ssh/known_hosts under $XDG_DATA_HOME (else ~/.local/share):
+# the first connect records the key, a later changed key is refused. To drop
+# the pin, delete that file: after a reinstall, or when a call was answered
+# by the initramfs's dropbear, whose key is new at every boot. When no pin
+# file can be made the call still goes out, without a host-key check, and
+# says so on stderr. Its shared connections are kept apart from unpinned ones.
+# The default keeps today's behavior (no host-key state): the USB address is
+# answered by several SSH servers by design (the initramfs's dropbear makes a
+# fresh key each boot; the installed system has its own), so a pin keyed on
+# the address locks our own tools out.
 # OMAMOBILE_SSH_CONFIG explicitly selects an SSH config file (-F); /dev/null
 # skips normal config files only when the caller requests it. Default unchanged.
 # OMAMOBILE_SSH_HOST_KEY_ALIAS selects the name checked in that file, so
@@ -23,7 +34,7 @@
 # does not interpret HostName, Port, ProxyJump or config-selected ProxyCommand.
 # Keep those transports intact unless the caller explicitly opts out of config;
 # identity/trust options remain available through the explicit variables above.
-# Explicit connection options require Python 3.
+# Explicit connection options, and OMAMOBILE_SSH_KNOWN_HOSTS=tofu, require Python 3.
 #
 # OMAMOBILE_SSH_SHARE=1 makes every call share one connection (OpenSSH
 # ControlMaster, kept 60 s after the last call), so a key that needs a touch
@@ -39,6 +50,39 @@ target=${OMAMOBILE_SSH_HOST:-root@172.16.42.1}
 }
 key=${OMAMOBILE_SSH_KEY:-}
 known=${OMAMOBILE_SSH_KNOWN_HOSTS:-}
+# "tofu" is a mode, not a file: extract it before the explicit-path
+# normalization below, which would try to read a file called tofu.
+tofu=0
+pin=""
+if [[ $known == tofu ]]; then
+  tofu=1
+  known=
+  # Where the first key seen is pinned: omamobile/phone-ssh/known_hosts under
+  # XDG_DATA_HOME when that is an absolute path, else under ~/.local/share
+  # (the XDG base-directory rule: a relative XDG_DATA_HOME is invalid and
+  # ignored). Without either (no HOME), or when the directory can't be made,
+  # there is no pin file: the call goes out without a host-key check and
+  # says so, below.
+  pin=""
+  data_home=${XDG_DATA_HOME:-}
+  [[ $data_home == /* ]] || data_home=${HOME:+$HOME/.local/share}
+  if [[ -n $data_home ]]; then
+    pin=$data_home/omamobile/phone-ssh
+    # UserKnownHostsFile is read again as ssh_config, so the path must be
+    # literal, as an explicit known-hosts file's must be.
+    case $pin in
+      *$'\n'*|*$'\r'*|*%*|*'${'*)
+        echo 'phone-ssh: OMAMOBILE_SSH_KNOWN_HOSTS=tofu: XDG_DATA_HOME (or HOME) has a line break, % or ${, which OpenSSH would expand in the pin file'"'"'s path' >&2
+        exit 1 ;;
+    esac
+    if mkdir -p -- "$pin" 2>/dev/null; then
+      chmod 700 -- "$pin" 2>/dev/null || :
+      pin=$pin/known_hosts
+    else
+      pin=""
+    fi
+  fi
+fi
 alias=${OMAMOBILE_SSH_HOST_KEY_ALIAS:-}
 config=${OMAMOBILE_SSH_CONFIG:-}
 interface=${OMAMOBILE_SSH_INTERFACE:-auto}
@@ -68,17 +112,21 @@ fi
 }
 custom=0
 path="${XDG_RUNTIME_DIR:-/tmp}/omamobile-ssh-%C"
-if [[ $target != root@172.16.42.1 || -n $key$known$alias$config$interface ]]; then
+if [[ $target != root@172.16.42.1 || -n $key$known$alias$config$interface || $tofu == 1 ]]; then
   custom=1
   # OpenSSH's %C omits identity/trust policy. Normalize explicit paths and
   # include contents so cwd changes and key rotations never reuse a master.
-  # Python 3 is required only for these explicit connection options.
-  normalized=$(python3 - "$target" "$key" "$known" "$alias" "$config" "$interface" "$proxy_helper" <<'PYCONTEXT'
-import hashlib, sys
+  # Trust-on-first-use is a context of its own, by mode and pin file: a
+  # master opened without the check, or pinned to another file, never
+  # carries a call made with it. Python 3 is required only here.
+  normalized=$(python3 - "$target" "$key" "$known" "$alias" "$config" "$interface" "$proxy_helper" "$tofu" "$pin" <<'PYCONTEXT'
+import hashlib, os, sys
 from pathlib import Path
 h = hashlib.sha256(); h.update(sys.argv[1].encode() + b'\0')
 if sys.argv[4]:
     h.update(sys.argv[4].encode() + b'\0')
+if sys.argv[8] == '1':
+    h.update(b'host-key\0tofu\0' + os.fsencode(sys.argv[9]) + b'\0')
 paths = []
 for label, value in zip(('identity', 'known-hosts'), sys.argv[2:4]):
     if any(token in value for token in ('\n', '\r', '%', '${')):
@@ -136,7 +184,24 @@ if [[ -n $known ]]; then
   quoted=${known//\\/\\\\}
   quoted=${quoted//\"/\\\"}
   opts+=(-o StrictHostKeyChecking=yes -o "UserKnownHostsFile=\"$quoted\"")
+elif ((tofu)) && [[ -n $pin ]]; then
+  # This -o value is parsed again as ssh_config: protect quotes and
+  # backslashes, as the explicit file's above.
+  kh_quoted=${pin//\\/\\\\}
+  kh_quoted=${kh_quoted//\"/\\\"}
+  opts+=(-o StrictHostKeyChecking=accept-new
+    -o "UserKnownHostsFile=\"$kh_quoted\"")
+elif ((tofu)); then
+  # Pinning was asked for and can't be had: no HOME, or the directory could
+  # not be made. The connection is kept, without a host-key check, and says
+  # so, since nothing else would show that the pin was skipped.
+  echo 'phone-ssh: OMAMOBILE_SSH_KNOWN_HOSTS=tofu: no pin file could be made, so this call goes out without a host-key check' >&2
+  opts+=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
 else
+  # The default keeps today's behavior (no host-key state): the USB address
+  # is answered by several SSH servers by design (the initramfs's dropbear
+  # makes a fresh key each boot; the installed system has its own), so a pin
+  # keyed on the address would lock our own tools out.
   opts+=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
 fi
 [[ -z $key ]] || opts+=(-o IdentitiesOnly=yes -i "$key")

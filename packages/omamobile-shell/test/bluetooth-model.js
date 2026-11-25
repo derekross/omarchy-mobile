@@ -221,6 +221,16 @@ test("pairing state machine: declining, BlueZ cancel, harmless errors, reset", (
   assert.strictEqual(s.address, "CC")
 })
 
+test("pairing is wanted only while the owner pairs, or while visible with the helper's agent", () => {
+  assert.strictEqual(M.pairableWanted(null), false)
+  assert.strictEqual(M.pairableWanted({ opened: true }), false, "an open panel alone")
+  assert.strictEqual(M.pairableWanted({ opened: true, visible: true, helper: true }), true)
+  assert.strictEqual(M.pairableWanted({ opened: true, visible: true, helper: false }), false, "no agent to answer")
+  assert.strictEqual(M.pairableWanted({ opened: true, pairing: true }), true, "the owner's own pairing, helper or not")
+  assert.strictEqual(M.pairableWanted({ opened: true, pairing: true, helper: true }), true)
+  assert.strictEqual(M.pairableWanted({ opened: false, visible: true, pairing: true, helper: true }), false, "never while closed")
+})
+
 let failed = 0
 for (const [name, fn] of tests) {
   try {
