@@ -2766,6 +2766,39 @@ Ramoops and `SYSTEM_LAST_KMSG` agree. Fastboot returned after 133
 seconds, and stock D1 completed boot on A with enforcing verity and
 the original factory VBMeta digest.
 
+### Mainline v50 one SCSI INQUIRY before discovery
+
+[v50 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/9809ee4f38b1bc2b1c22004c9f6a51d21a7d01fc)
+adds one standard 36-byte INQUIRY to LUN 0 after NOP IN,
+`bRefClkFreq=0x2` and the first successful read of a cleared
+`fDeviceInit` flag. It sends the command over the same polled legacy
+SDB slot, with one device-to-host PRD and a coherent receive buffer.
+The diagnostic requires a successful UFS completion and SCSI status,
+the expected LUN and tag, no residual, and a standard direct-access
+device response. It logs numeric fields only. The receive buffer stays
+allocated through controller teardown.
+
+The kernel issues no READ CAPACITY or partition reads. It registers no
+SCSI host, keeps `scsi_mod.scan=none`, and uses the same private RAM
+rescue as v49. The transfer list stops after the query sequence. On
+success the kernel checks IRQ-backed Hibern8 and retains Deep H8
+through HCI cleanup before the 90-second warm return.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match the v50 source, manifest, v49 DTB and v49 private ramdisk. | Leave stock A selected on a mismatch. |
+| One attended slot B boot, power control and device initialization | Use the verified nine-partition NV backup. Capture the fDeviceInit clear and exactly one INQUIRY with OCS `0x0`, UPIU `0x21`, response and status `0x0`, zero residual, qualifier/type zero and `result=0`. Verify Hibern8, HCI cleanup, zero SCSI disks and the timed return. | Preserve the first failure and return to stock A without retrying the command or boot. Confirm stock Android completes boot. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v50` passed strict
+checkpatch, the targeted `W=1` compile and eleven mocked command
+cases. The extracted helper tests verified the CDB and PRD, and
+covered timeout, allocation failure, completion errors, residual
+data and an invalid or missing payload. The DTB and private ramdisk
+match v49. All five image hashes, both AVB signatures, the unpacked
+payload, ABL handoff and saved D1 slot sizes passed. Manifest SHA-256
+`b499f332261833829be780859ad73ce4a9be8b67e4f5da2c75b85d045db223ba`. Archive SHA-256
+`1b06400da452aba41c753d150c7f3a68605bacf688b5a7df78e34641c3548476`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
