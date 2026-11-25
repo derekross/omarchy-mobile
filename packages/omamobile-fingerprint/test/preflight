@@ -207,7 +207,10 @@ pf || { cat "$t/out"; fail "the boot after it tries again (the pending marker we
 pass "a start that never got running: the next boot skips once, then it starts again"
 
 # The overrides only count in the test mode (read-only: the paths subcommand)
-ov() { env OMAMOBILE_FP_TEST="$1" OMAMOBILE_FP_DEVICE=tegu OMAMOBILE_FP_STATE=/x/state OMAMOBILE_FP_RUN=/x/run \
+# The override names a phone other than the one the test runs on, so the test
+# also passes on a real Pixel 9a, whose board says tegu
+other=tegu; [[ $(tr '\0' '\n' < /proc/device-tree/compatible 2>/dev/null) == *google,zumapro-tegu* ]] && other=cheetah
+ov() { env OMAMOBILE_FP_TEST="$1" OMAMOBILE_FP_DEVICE=$other OMAMOBILE_FP_STATE=/x/state OMAMOBILE_FP_RUN=/x/run \
   OMAMOBILE_FP_SYSBLOCK=/x/sys OMAMOBILE_FP_DEVDIR=/x/dev OMAMOBILE_FP_MOUNTS=/x/mounts OMAMOBILE_FP_BOOT_ID=/x/boot \
   OMAMOBILE_FP_UIDIR=/x/ui "$RUNNER" paths; }
 real=$(ov 0) fake=$(ov 1)
@@ -215,8 +218,8 @@ for l in state=/var/lib/omamobile-fp run=/run/omamobile-fp sysblock=/sys/class/b
          boot_id=/proc/sys/kernel/random/boot_id uidir=/run/omamobile-fp-ui; do
   grep -qx "$l" <<<"$real" || fail "without OMAMOBILE_FP_TEST=1: $l ($real)"
 done
-grep -qx 'device=tegu' <<<"$real" && fail "without OMAMOBILE_FP_TEST=1 the device comes from the board, not OMAMOBILE_FP_DEVICE"
-for l in device=tegu state=/x/state run=/x/run sysblock=/x/sys devdir=/x/dev mounts=/x/mounts boot_id=/x/boot uidir=/x/ui; do
+grep -qx "device=$other" <<<"$real" && fail "without OMAMOBILE_FP_TEST=1 the device comes from the board, not OMAMOBILE_FP_DEVICE"
+for l in device=$other state=/x/state run=/x/run sysblock=/x/sys devdir=/x/dev mounts=/x/mounts boot_id=/x/boot uidir=/x/ui; do
   grep -qx "$l" <<<"$fake" || fail "with OMAMOBILE_FP_TEST=1: $l"
 done
 pass "the device, state and path overrides need OMAMOBILE_FP_TEST=1"
