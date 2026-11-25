@@ -51,6 +51,41 @@ owner's go:
   26.3.1-3 (signatures checked), and the vendor firmware from
   `tools/extract-vendor-firmware -d sargo`.
 
+## 2026-11-25: the clock keeps time across reboots (omamobile-device-sargo 0.1.1)
+
+The PM660's RTC (`rtc-pm8xxx`, `rtc0`) runs through reboots and through
+time in fastboot, but Linux can't set it: `pm660.dtsi`'s RTC node has no
+`allow-set-time`, and the board has no nvmem cell or UEFI variable for an
+offset, so the driver refuses every write. Its count starts at the epoch
+(it read 1970-01-31 18:43, about 30 days of counting, on 2026-11-25), and
+the kernel starts the clock there.
+
+`omamobile-rtc-offset` keeps the difference between the clock and the RTC
+in `/var/lib/omamobile/rtc-offset`, as Android does in its own storage. Its
+unit sets the clock early in sysinit (before `time-set.target` and
+timesyncd), moves it forward only, and falls back to the time of the last
+save when the RTC reads earlier than it did then (an RTC reset). Saves come
+at shutdown, every 15 minutes and after each timesyncd sync, and are
+skipped while the clock is before 2026. Save and restore both wait for the
+RTC's next one-second tick: the first version, without that, came back
+2-3 s slow after a reboot, a second of rounding each way.
+
+On the phone (`7.3.0-rc6-omamobile-push1-g00860bdedea4`):
+
+- `reboot-to bootloader`, 60 s in fastboot, `fastboot reboot`: clock set at
+  11.1 s of uptime, the fastboot minute included (first version, 2-3 s
+  slow).
+- The clock set from the laptop, saved, put an hour back, `restore`: 30-60
+  ms from the laptop's clock.
+- `systemctl reboot`: clock set at 11.7 s of uptime (the tick wait costs up
+  to a second there), then within 0.1 s of the laptop's clock, measured over
+  SSH, with no network on the phone.
+
+`fastboot getvar all` read `slot-retry-count:b:3` and `slot-successful:b:no`
+on 2026-11-25, after slot B had booted several times since the last
+`--set-active=b` (2026-11-24): this bootloader may not count tries down the
+way the slot notes above assume. Not relied on until it is understood.
+
 ## 2026-11-24: Omarchy on slot B, display, GPU and touch
 
 Booted from slot B (`androidboot.slot_suffix=_b`), the shared initramfs
@@ -86,7 +121,8 @@ What it took, each a step that failed first:
 - **The clock.** The PMIC's RTC can't be set from Linux on this phone, and
   with no network the clock starts at 1970: pacman then refused Arch Linux
   ARM's signatures ("key created 16058 days in the future"). Set it by hand
-  (`date -s`) until the phone has network time or an RTC offset.
+  (`date -s`) until the phone has network time or an RTC offset (the
+  offset came on 2026-11-25, above).
 
 Not working yet: battery and charging (no power supply registers), Wi-Fi,
 Bluetooth, modem, audio, sensors, cameras, suspend. Plymouth's unit fails.
@@ -160,7 +196,7 @@ card probes).
    the shared config, or the phone keeps a development kernel.
 3. This phone's CONTRIBUTING.md §3.1 entry (slot B's GPT mark), then
    `flash`/`push` and the installer for `android-v2`.
-4. Battery and charging (PM660), the clock, then Wi-Fi: the modem
+4. Battery and charging (PM660), then Bluetooth and Wi-Fi: the modem
    processor first (remoteproc nodes for SDM670, `rmtfs` read-only from RAM,
    and a read-only backup of `modemst1`, `modemst2`, `fsg` and `persist`,
    which `tools/nv-backup` can't read from eMMC yet).

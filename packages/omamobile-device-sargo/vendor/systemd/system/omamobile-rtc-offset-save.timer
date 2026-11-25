@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Save the clock's offset from the RTC every quarter hour
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+
+[Install]
+WantedBy=timers.target

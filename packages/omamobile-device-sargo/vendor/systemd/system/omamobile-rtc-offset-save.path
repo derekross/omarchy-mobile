@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# systemd-timesyncd touches this file at every synchronisation: save then.
+[Unit]
+Description=Save the clock's offset from the RTC after a network time sync
+
+[Path]
+PathModified=/run/systemd/timesync/synchronized
+
+[Install]
+WantedBy=timers.target

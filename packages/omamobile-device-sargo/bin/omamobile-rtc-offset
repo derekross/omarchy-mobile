@@ -1,0 +1,125 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Keep the wall clock across reboots on a phone whose RTC Linux can't set.
+#
+# The PM660's RTC on the Pixel 3a keeps counting through reboots and power
+# off, but it belongs to the secure world: rtc-pm8xxx refuses a write
+# without `allow-set-time`, and this board has no nvmem or UEFI cell for an
+# offset. So the RTC reads its own count (1970 plus however long since it
+# was last reset), and the clock starts there. Android keeps the difference
+# between the RTC and the real time in its own storage; so does this.
+#
+#   omamobile-rtc-offset restore   at boot: clock = RTC + saved offset
+#   omamobile-rtc-offset save      store clock - RTC (when the clock is sane)
+#   omamobile-rtc-offset status    print RTC, clock and the saved state
+#
+# State: one line, "OFFSET LAST", in $STATE: the offset in seconds and the
+# clock when it was saved. LAST is a floor: if the RTC was reset (it reads
+# earlier than it should), the clock still never starts before LAST.
+# restore never moves the clock backwards.
+set -euo pipefail
+
+STATE=${OMAMOBILE_RTC_OFFSET_STATE:-/var/lib/omamobile/rtc-offset}
+RTC=${OMAMOBILE_RTC:-/sys/class/rtc/rtc0}
+# Saves below this (2026-01-01 UTC) are a clock that was never set.
+SANE=${OMAMOBILE_RTC_SANE:-1767225600}
+# save rewrites an unchanged offset at most this often (seconds).
+REFRESH=3600
+
+log() { echo "omamobile-rtc-offset: $*"; }
+now() { date -u +%s; }
+
+rtc_secs() {
+  local s
+  s=$(<"$RTC/since_epoch") || return 1
+  [[ $s =~ ^[0-9]+$ ]] || return 1
+  echo "$s"
+}
+
+read_state() {
+  offset='' last=''
+  [[ -r $STATE ]] || return 1
+  read -r offset last _ <"$STATE" || true
+  [[ $offset =~ ^-?[0-9]+$ && $last =~ ^[0-9]+$ ]]
+}
+
+# The RTC counts whole seconds. Wait (at most about a second) for its next
+# tick, so that RTC + offset is exact at that moment rather than up to a
+# second behind: save and restore each do, so the error stays well under a
+# second instead of adding up to two. Prints the new count.
+rtc_tick() {
+  local first s i
+  first=$(rtc_secs) || return 1
+  for ((i = 0; i < ${OMAMOBILE_RTC_TICK_POLLS:-150}; i++)); do
+    s=$(rtc_secs) || return 1
+    if [[ $s != "$first" ]]; then echo "$s"; return 0; fi
+    sleep 0.01
+  done
+  echo "$first"
+}
+
+# The clock in whole seconds, rounded.
+now_rounded() {
+  local ns
+  ns=$(date -u +%s%N)
+  echo $(((ns + 500000000) / 1000000000))
+}
+
+set_clock() {
+  if [[ -n ${OMAMOBILE_RTC_DRY_RUN:-} ]]; then
+    echo "set @$1"
+  else
+    date -u -s "@$1" >/dev/null
+  fi
+}
+
+restore() {
+  local rtc t current
+  if ! read_state; then log "no saved offset yet"; return 0; fi
+  rtc=$(rtc_tick) || { log "no RTC at $RTC"; return 0; }
+  t=$((rtc + offset))
+  if ((t < last)); then
+    log "the RTC reads earlier than at the last save (reset?): starting from the last save"
+    t=$last
+  fi
+  current=$(now)
+  if ((t > current)); then
+    set_clock "$t"
+    log "clock set to $(date -u -d "@$t" '+%F %T') UTC"
+  else
+    log "clock already at or past RTC + offset; left alone"
+  fi
+}
+
+save() {
+  local rtc t new old_offset old_last
+  rtc=$(rtc_tick) || { log "no RTC at $RTC"; return 0; }
+  t=$(now_rounded)
+  if ((t < SANE)); then log "clock not set ($t): nothing saved"; return 0; fi
+  new=$((t - rtc))
+  if read_state; then
+    old_offset=$offset old_last=$last
+    if ((t < old_last)); then
+      log "clock earlier than the last save: nothing saved"; return 0
+    fi
+    local d=$((new - old_offset))
+    if ((d >= -1 && d <= 1 && t - old_last < REFRESH)); then return 0; fi
+  fi
+  mkdir -p "${STATE%/*}"
+  printf '%s %s\n' "$new" "$t" >"$STATE.tmp"
+  sync -- "$STATE.tmp" 2>/dev/null || true
+  mv -f -- "$STATE.tmp" "$STATE"
+}
+
+status() {
+  echo "rtc:   $(rtc_secs || echo none)"
+  echo "clock: $(now)"
+  if read_state; then echo "saved: offset $offset, at $last"; else echo "saved: none"; fi
+}
+
+case ${1:-} in
+  restore) restore ;;
+  save) save ;;
+  status) status ;;
+  *) echo "Usage: omamobile-rtc-offset restore|save|status" >&2; exit 2 ;;
+esac

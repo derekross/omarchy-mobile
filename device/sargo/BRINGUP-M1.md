@@ -70,7 +70,8 @@ erases whatever is on `userdata`.
    `linux-firmware-qcom` and Arch Linux ARM's `mesa` and `vulkan-freedreno`,
    and copy the output of `tools/extract-vendor-firmware -d sargo` to `/`.
    Set the clock first (`date -s`): with the clock at 1970 pacman refuses
-   every signature. Then `systemctl restart sddm`.
+   every signature. From omamobile-device-sargo 0.1.1 the clock is kept
+   across reboots (NOTES.md, 2026-11-25), so this is needed once. Then `systemctl restart sddm`.
 
 Slot B is unmarked: each boot spends one of its three tries. Prefer
 restarting services over rebooting; `fastboot --set-active=b` restores the
