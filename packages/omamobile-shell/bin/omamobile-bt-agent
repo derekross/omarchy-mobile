@@ -14,10 +14,10 @@ The panel runs this while it is open; it speaks JSON lines:
               type: confirm (passkey), authorize, pin, passkey,
                     display-passkey (passkey, entered), display-pin (pin)
           {"event": "cancel"}
-          {"event": "result", "op": "pair"|"connect", "address", "ok",
+          {"event": "result", "op": "pair"|"connect"|"disconnect", "address", "ok",
            "stage", "error", "message"}
           {"event": "error", "message"}
-  stdin   {"cmd": "pair"|"connect"|"cancel-pair", "address"}
+  stdin   {"cmd": "pair"|"connect"|"disconnect"|"cancel-pair", "address"}
           {"cmd": "reply", "id", "accept", "value"}
           {"cmd": "discover", "on"}
           {"cmd": "pairable", "on"}
@@ -26,6 +26,14 @@ It registers as the default agent (KeyboardDisplay) and holds a discovery
 session; both end when the panel closes stdin or the process exits, and BlueZ
 drops the discovery session with our D-Bus connection anyway. PINs and
 passkeys travel over stdin and D-Bus only and are never printed.
+
+A disconnect from the panel holds: the device is Blocked before it is
+disconnected, so the connections it makes by itself (headphones reconnect as
+soon as they're dropped) are refused, and only a connect from the panel, which
+lifts the block and marks it Trusted, brings it back. Untrusting it wasn't
+enough: BlueZ then refused its audio, but AirPods still brought their link
+back, showed as connected and played nothing. A service is authorized for a
+Trusted device only, never for one that is merely paired.
 
 With --pairable-window SECONDS the helper also owns the adapter's Pairable
 (the panel passes it when Pairable was off as it opened). BlueZ turns
@@ -225,7 +233,8 @@ def main():
         def AuthorizeService(self, device, uuid):
             try:
                 props = dbus.Interface(bus.get_object(BLUEZ, device), PROPS_IFACE)
-                if bool(props.Get(DEVICE_IFACE, "Paired")) or bool(props.Get(DEVICE_IFACE, "Trusted")):
+                # Paired but not Trusted is a device the owner disconnected.
+                if bool(props.Get(DEVICE_IFACE, "Trusted")):
                     return
             except dbus.DBusException:
                 pass
@@ -348,7 +357,16 @@ def main():
             return None
         return path
 
+    def set_flag(path, name, on):
+        try:
+            dbus.Interface(bus.get_object(BLUEZ, path), PROPS_IFACE).Set(DEVICE_IFACE, name, dbus.Boolean(on))
+        except dbus.DBusException:
+            pass
+
     def connect(address, path, op):
+        # The owner wants it: a disconnect's block goes, and its own reconnects are welcome again
+        set_flag(path, "Blocked", False)
+        set_flag(path, "Trusted", True)
         device = dbus.Interface(bus.get_object(BLUEZ, path), DEVICE_IFACE)
         device.Connect(
             reply_handler=lambda: emit({"event": "result", "op": op, "address": address, "ok": True, "stage": "connect"}),
@@ -386,6 +404,15 @@ def main():
             path = device_call(address, "connect")
             if path:
                 connect(address, path, "connect")
+        elif cmd == "disconnect":
+            path = device_call(address, "disconnect")
+            if path:
+                set_flag(path, "Blocked", True)  # before the disconnect, so its reconnect is refused
+                dbus.Interface(bus.get_object(BLUEZ, path), DEVICE_IFACE).Disconnect(
+                    reply_handler=lambda: emit({"event": "result", "op": "disconnect", "address": address,
+                                                "ok": True, "stage": "disconnect"}),
+                    error_handler=lambda error: emit(error_event("disconnect", address, "disconnect", error)),
+                    timeout=20)
         elif cmd == "cancel-pair":
             path = device_path(address)
             if path:

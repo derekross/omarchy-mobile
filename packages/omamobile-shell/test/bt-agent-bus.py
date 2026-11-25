@@ -69,6 +69,7 @@ class Run:
         self.agent = self.start([sys.executable, "-I", AGENT] + args, env=env,
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         self.lines = []
+        self.pending = b""
         assert wait_for(lambda: self.read() and any(e.get("event") == "ready" for e in self.lines)), \
             "the helper is ready (%r)" % self.lines
 
@@ -79,11 +80,16 @@ class Run:
         return proc
 
     def read(self):
-        while select.select([self.agent.stdout], [], [], 0)[0]:
-            line = self.agent.stdout.readline()
-            if not line:
+        # Raw reads: a buffered readline can take several lines at once and
+        # leave select() with nothing to report for the rest.
+        fd = self.agent.stdout.fileno()
+        while select.select([fd], [], [], 0)[0]:
+            chunk = os.read(fd, 65536)
+            if not chunk:
                 break
-            self.lines.append(json.loads(line))
+            self.pending += chunk
+        *whole, self.pending = self.pending.split(b"\n")
+        self.lines += [json.loads(line) for line in whole if line.strip()]
         return True
 
     def send(self, command):
@@ -94,6 +100,11 @@ class Run:
         subprocess.run(["dbus-send", "--system", "--print-reply", "--dest=org.bluez", "/org/bluez/hci0",
                         "org.freedesktop.DBus.Properties.Set", "string:org.bluez.Adapter1", "string:Pairable",
                         "variant:boolean:" + ("true" if value else "false")],
+                       env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=10)
+
+    def test_call(self, method):
+        subprocess.run(["dbus-send", "--system", "--print-reply", "--dest=org.bluez",
+                        "/org/bluez/hci0/dev_00_11_22_33_44_55", "org.omamobile.Test." + method],
                        env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=10)
 
     def entries(self):
@@ -207,6 +218,28 @@ def leaves_alone(run):
     assert run.sets() == [] and run.sets("PairableTimeout") == [], run.entries()
 
 
+def disconnect_holds(run):
+    # The panel's disconnect: Blocked before the Disconnect, and the
+    # device's own reconnect is then refused.
+    run.send({"cmd": "disconnect", "address": "02:00:00:00:00:01"})
+    assert wait_for(lambda: run.read() and any(e.get("op") == "disconnect" for e in run.lines)), run.lines
+    assert [e for e in run.lines if e.get("op") == "disconnect"][-1]["ok"], run.lines
+    calls = [e for e in run.entries() if "device_set" in e or "device_call" in e]
+    assert calls[:2] == [{"device_set": "Blocked", "value": True}, {"device_call": "Disconnect", "trusted": True}], calls
+    run.test_call("Reconnect")
+    assert wait_for(lambda: any(e.get("reconnect") for e in run.entries())), run.entries()
+    assert [e for e in run.entries() if e.get("reconnect")][-1]["reconnect"] == "rejected", \
+        "a paired device the owner disconnected is not let back: %r" % run.entries()
+    # The panel's connect lifts the block and marks it Trusted, then connects; its own reconnects are welcome again.
+    run.send({"cmd": "connect", "address": "02:00:00:00:00:01"})
+    assert wait_for(lambda: run.read() and any(e.get("op") == "connect" for e in run.lines)), run.lines
+    calls = [e for e in run.entries() if "device_set" in e or "device_call" in e]
+    assert calls[2:5] == [{"device_set": "Blocked", "value": False}, {"device_set": "Trusted", "value": True},
+                          {"device_call": "Connect", "trusted": True}], calls
+    run.close()
+
+
+check("disconnect: Blocked first, the device's own reconnect refused; connect lifts it", [], disconnect_holds)
 check("--pairable-window: off after registering, on only when asked, off at exit", ["--pairable-window", "120"], window)
 check("--pairable-window: a Busy off is tried again when no change signal follows",
       ["--pairable-window", "120"], missed_signal, quiet=True)

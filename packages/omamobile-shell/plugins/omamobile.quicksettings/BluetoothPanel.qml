@@ -284,7 +284,7 @@ Item {
       return
     }
     if (event.ok || BluetoothModel.isHarmless(event.error)) finishAction()
-    else fail(event.address, BluetoothModel.errorMessage("connect", event.error, event.message))
+    else fail(event.address, BluetoothModel.errorMessage(event.op, event.error, event.message))
   }
 
   // If the helper failed, discovery is Quickshell's: keep it on while open and
@@ -473,6 +473,8 @@ Item {
     if (helperReady) return send({ cmd: "connect", address: address })
     var device = deviceFor(address)
     if (!device) return fail(address, "Device out of range")
+    if (device.blocked) device.blocked = false
+    if (!device.trusted) device.trusted = true
     device.connect()
   }
 
@@ -480,7 +482,13 @@ Item {
     var address = sheetAddress
     cancelSheet()
     var device = deviceFor(address)
-    if (device && runAction("disconnect", address)) device.disconnect()
+    if (!device || !runAction("disconnect", address)) return
+    // The device is blocked first (the helper does the same), so headphones
+    // that reconnect as soon as they're dropped stay disconnected until a
+    // connect from here lifts the block.
+    if (helperReady) return send({ cmd: "disconnect", address: address })
+    device.blocked = true
+    device.disconnect()
   }
 
   function connectSheet() {
