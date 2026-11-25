@@ -73,6 +73,11 @@ adds the prep-only latch opt-out at `0d5e4078f0a7d2f6be666948820ea04b96e7cd96`.
 See the [v42 runbook](../BRINGUP-M1.md#mainline-v42-guarded-prep-idle-release)
 for the guarded OFF and resume sequence.
 
+The [v43 diagnostic branch](https://github.com/adrienlacombe/linux-omarchy-mobile/tree/grizzly-ufs-bringup-v43)
+adds the guarded UIC link test at `ffdbb1117dfaacbeca2b9646edff4ef513833121`.
+See the [v43 runbook](../BRINGUP-M1.md#mainline-v43-guarded-ufs-link-diagnostic)
+for the host handoff and link-only boundaries.
+
 The earlier first-light sources are published on the
 [grizzly-first-light-archive branch](https://github.com/adrienlacombe/linux-omarchy-mobile/tree/grizzly-first-light-archive).
 The table distinguishes

@@ -2164,6 +2164,46 @@ Fastboot returned 133 seconds after the B boot request. Stock D1
 completed boot on A with enforcing verity and the original factory
 VBMeta digest.
 
+### Mainline v43 guarded UFS link diagnostic
+
+[v43 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/ffdbb1117dfaacbeca2b9646edff4ef513833121)
+combines v42's guarded provider prep OFF with the existing Malibu
+link-only host. `System.map` places the genpd unused-domain sweep
+before the late host initcall. The initcall schedules host registration
+after two seconds. The host waits up to 200 ms for the provider's
+`RELEASED` state before taking any prep reference or starting host
+setup. The provider's own temporary resume path is inactive in this
+build. Prep runtime resume must reach `PREP_ON` before TOP programming,
+even if genpd reports an acknowledged vote. The core callback keeps
+the pre-vote PSM1 and PHY checks.
+
+The packed DT changes only the four UFS supplier statuses. It enables
+the HSIO-S SGIA, GPIO and standby pinctrl nodes and the CPM regulator
+node. The ABL calibration target and stock rail values are retained.
+The host uses its existing PHY/TOP readiness checks and synchronous
+`ufshcd_probe_link_hibern8()` test. This path exits before transfer
+queues, SCSI host registration and LUN discovery. On a PHY timeout
+the guarded path exits before the external device power-on fallback.
+Following a successful link and Hibern8 test, the HCI must stop.
+The diagnostic retains prep and core references and the remaining
+resources through the timed return, since the v42 state machine only
+qualifies one prep OFF and does not implement a core OFF transition.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match the v43 source, image manifest and verified recovery path. | Keep stock A selected if any check fails. |
+| One attended slot B boot, power-control risk | With separate approval and the verified NV backup gate satisfied, capture guarded prep OFF and prep ON samples, core reply, PHY `0x10` and TOP bit 4. Capture the UIC startup result, HCI IRQ and Hibern8 qualification, then the held-votes marker. No disk should appear. | Preserve the first failing phase or gate. Stop on a missing supplier, failed calibration, readiness, IRQ or link check, or unexpected disk. Use the 90-second warm return and verify stock A. |
+
+The ARM64 `7.3.0-rc6-omamobile-grizzly-uic-v43` build passed strict
+checkpatch, `W=1` for the CPM and host objects, and all nine existing
+vote-state tests. The DT schema diagnostics match v42. The RAM rescue,
+both AVB signatures, all five image hashes, unpacked payload, ABL
+handoff bounds and saved D1 slot sizes passed offline checks. Manifest
+SHA-256 `883e0ac865be75ebde396cbb1160145c2550d2f566f7e2e2f6bc948f37406caf`.
+Archive SHA-256
+`6f5b4af750de5f77b45c970271a4c68a64c2a35da7d7158a27251c5d6d64c3ea`.
+v43 awaits its first hardware boot.
+
 ## Staging and return sequence used for D1
 
 These commands describe the attended workflow used by the trials.
