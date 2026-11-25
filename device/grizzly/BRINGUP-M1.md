@@ -2997,6 +2997,37 @@ Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
 after 133 seconds. Stock D1 booted on A with enforcing verity and
 the expected factory VBMeta digest.
 
+### Mainline v54 sense data for LUN 0 READ CAPACITY
+
+[v54 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/abba6fdc713c53beea4158fd9d9078281ba181ca)
+keeps v53's command sequence and failure handling. If INQUIRY or READ
+CAPACITY(10) returns CHECK CONDITION in a valid response UPIU for
+slot 0 and LUN 0, the driver checks the response data segment and
+sense lengths against the UFS sense field. It uses the SCSI core to
+decode fixed or descriptor sense. The log reports the sense format,
+key, ASC and ASCQ when all fields are available, or the two lengths
+when the payload cannot be decoded. It issues no REQUEST SENSE and
+does not retry either command.
+
+The v52 prep OFF guard, IRQ transfers, scanning prohibition and
+timed return remain in place. Geometry is accepted only on a GOOD
+READ CAPACITY response. If a command fails, the Hibern8 check is
+skipped and HCI cleanup still runs.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match v54 source and manifest. The DTB and private RAM rescue match v53. | Leave stock A selected on a mismatch. |
+| One attended slot B boot, power control and device initialization | Use the verified nine-partition NV backup. Capture both IRQs and either READ CAPACITY geometry or the CHECK CONDITION sense fields. Verify HCI cleanup, zero disks and the timed return. | If sense is unavailable, record the reported lengths. Preserve the first failure and return to stock A without retrying. Confirm stock Android completes boot. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v54` passed strict
+checkpatch and targeted `W=1` compilation. Eleven mocked cases used
+the diagnostic helper and the SCSI core decoder to verify fixed and
+descriptor sense and reject missing, truncated, oversized or
+unsupported responses. All five image hashes, both AVB signatures,
+the unpacked payload, ABL handoff and saved D1 slot sizes passed.
+Manifest SHA-256 `f30b91c0d09756d425044f9038010cfe9e21a19f1fb2f3016fb6c5ae91086348`.
+Archive SHA-256 `3a44fbc0e50f993398da0aa8bb770b798aa55c1230d83903b914ae9b5bef2157`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
