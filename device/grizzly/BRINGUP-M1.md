@@ -4038,6 +4038,47 @@ Fastboot returned after 133 seconds. Stock D1 A restarted at
 pretrial VBMeta digest. Ramoops and Android's `SYSTEM_LAST_KMSG`
 agree on all 59 filtered v69 lines.
 
+### Mainline v70 qualify the backup GPT before allowing the scan
+
+[v70 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/3130fccb4490bb633ab11ed5d9fd6a0991565bb3)
+uses live capacity and the validated primary GPT to qualify one
+direct read at the last LBA. It checks the backup header's CRC,
+self and reciprocal header LBAs, usable range, disk GUID, and
+entry count, length and declared array CRC against the primary.
+The entire declared array must lie above the last usable block
+and fit before the backup header. The header check itself reads
+only that final block. No array read is permitted until it passes.
+
+The scan gives the backup header its own gate slot and uses the
+validated backup array start and length. Any gap between them is
+outside the gate. The v69 request suggests the backup array starts
+at LBA 12,801,019 and spans two 4 KiB blocks. v70 derives both from
+the live headers. The EFI parser validates the actual array CRC
+during the gated scan. The RAM check refuses an EFI fallback to
+the primary even if all metadata transfers completed successfully.
+
+The scan still allows only one read per metadata block and blocks
+all writes and partition-data I/O. RAM verification now requires
+exactly 42 partitions from the completed kernel scan, and checks
+read-only state, parentage, bounds, holders and mounts across all
+42. It opens no partition devices and mounts no storage.
+The existing cleanup and timed warm return stay in place.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Verify both AVB signatures, all five image hashes, unchanged DTB, DTBO and `vendor_boot`, and updated GPT RAM marker logic. | Leave stock A selected on a mismatch. |
+| One attended slot B trial | Capture the direct backup header result and declared array range. Check exactly one successful IRQ transfer for each gated metadata block, no EFI fallback, kernel and RAM verification of all 42 read-only partitions, zero disks before restart and stock A return. | Hold Volume Down after the first orange warning. Preserve the first header mismatch, read refusal, partition or mount failure, timeout or reset. Return to stock A without retrying. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v70` passed strict
+checkpatch, targeted arm64 `W=1` compilation, 50 sanitizer-backed
+layout and admission cases, 22 synthetic sysfs cases and four RAM
+marker cases. The synthetic fixtures include v69's observed backup
+array start, rejection of the gap before the header and rejection
+of a writable forty-second partition. ShellCheck, both AVB
+signatures, ABL handoff, all five image hashes and saved D1 slot
+checks passed. Manifest SHA-256 `08d513363ee87fe98a91b50b1d59a0936907ab498537bfa5d829b20c499f0b09`.
+Archive SHA-256 `d767a5b618a834e2c042ef650863e7113f1d0f14bc16d0c9d64ccaf3eac40b23`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

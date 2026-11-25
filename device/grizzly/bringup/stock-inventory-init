@@ -179,16 +179,25 @@ observe_mainline_ro_disk() {
         expected=0
         if [ -f "$gpt_scan_marker" ]; then
             # Wait for the synchronous scan and its kernel-side result check.
-            expected=$("$bb" dmesg | "$bb" sed -n \
-                's/.*ufs-uic-v69 LUN 0 GPT scan verified partitions=\([0-9][0-9]*\) metadata_reads=[0-9][0-9]*$/\1/p')
+            # A completed transfer alone does not prove EFI accepted the backup CRC.
+            # shellcheck disable=SC2016
+            expected=$("$bb" dmesg | "$bb" awk '
+                /Alternate GPT is invalid, using primary GPT[.]/ { failed = 1 }
+                /ufs-uic-v[0-9]+ LUN 0 GPT scan verified partitions=[0-9]+ metadata_reads=[0-9]+$/ {
+                    if (failed) print "backup-failed"
+                    else {
+                        split($(NF - 1), count, "=")
+                        print count[2]
+                    }
+                }')
             case $expected in
                 '') "$bb" sleep 1 || break
                     tries=$((tries + 1))
                     continue ;;
-                *[!0-9]*) end_inventory 'invalid GPT scan completion marker' ;;
+                backup-failed) end_inventory 'EFI rejected the backup GPT' ;;
+                42) ;;
+                *) end_inventory 'GPT scan requires exactly 42 partitions' ;;
             esac
-            [ "$expected" -gt 0 ] && [ "$expected" -le 128 ] ||
-                end_inventory 'invalid GPT scan partition count'
         fi
         check_mainline_ro_disk /sys/class/block "$expected"
         case $? in
