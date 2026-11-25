@@ -3305,6 +3305,28 @@ the unpacked payload, ABL handoff and saved D1 slot sizes passed.
 Manifest SHA-256 `3b8d244c2d9306db391df33fc4de81a2389a9170c903b2ed44aa451bb571289d`.
 Archive SHA-256 `1455cb490b0f4ad0b863fae6dcb4518b297984bd16e9e5e49573dac30da869b8`.
 
+#### Attended v59 slot B trial
+
+On 2026-11-25 one v59 boot used the verified nine-partition NV backup.
+All five slot B writes passed, and readback matched all 8,192
+supplied `vendor_boot_b` bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 0.191781–0.191789 | Prep OFF | Qualification passed in 4 µs with `saw_hc_0x32=0`. |
+| 2.248854–2.249129 | GPT validation | Primary header and entry-array CRC checks both passed before host registration. |
+| 2.249412–2.249422 | SCSI host registration | `ret=0`. No discovered SCSI devices, excluding the core pseudo-device. |
+| 2.281325–2.281336 | Host removal | Terminal state 4 (`SHOST_DEL`) and `SCSI host lifecycle ret=0`. |
+| 2.281471–2.281707 | Controller cleanup | Hibern8 passed and the HCI IRQ was freed. |
+| 90.236786–91.239602 | Timed warm return | Zero SCSI disks at RAM startup and before restart. |
+
+The normal SCSI host and task-management queue could be created
+and removed during the guarded legacy-mode probe. Normal LUN
+discovery and I/O through the SCSI midlayer remain untested.
+Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
+after 133 seconds. Stock D1 booted on A with enforcing verity and
+the expected factory VBMeta digest.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
