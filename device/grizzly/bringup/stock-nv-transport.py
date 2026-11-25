@@ -3,7 +3,7 @@
 """Back up Grizzly NV partitions through the guarded macOS USB reader."""
 
 import argparse
-from contextlib import contextmanager, suppress
+from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import fcntl
@@ -27,6 +27,8 @@ LABELS = frozenset((
     "modemdp", "modem_a", "modem_b", "devinfo",
 ))
 MAX_CHUNK = 8 * 1024 * 1024
+# Full-size 8 MiB replies have stalled the Grizzly ACM stream during backups.
+COPY_CHUNK = 4 * 1024 * 1024
 MAX_PARTITION = 1 << 40
 MAX_PROBE = 4096
 MAX_LINE = 96
@@ -44,6 +46,10 @@ class TransportError(Exception):
 
 class DeviceRejected(TransportError):
     """A complete, recoverable refusal without a response body."""
+
+
+class SerialTimeout(TransportError):
+    """A transfer timed out and may have left part of its reply queued."""
 
 
 @dataclass(frozen=True)
@@ -314,6 +320,10 @@ def serve_requests(server, fd, inventory, deadline):
                 with suppress(OSError):
                     socket_send(client, b"NV1 ERR DEVICE\n", time.monotonic() + 1)
                 continue
+            except TimeoutError as error:
+                if request.operation == b"DONE":
+                    raise
+                raise SerialTimeout("serial transfer timed out") from error
             checked = check_body(body, request)
             if request.operation == b"PROBE" and checked != inventory:
                 raise TransportError("partition inventory changed during the session")
@@ -325,20 +335,49 @@ def serve_requests(server, fd, inventory, deadline):
                 return
 
 
+def drain_serial(fd):
+    deadline = time.monotonic() + 18
+    discarded = 0
+    while select.select([fd], [], [], min(2, remaining(deadline)))[0]:
+        try:
+            stale = os.read(fd, 65536)
+        except BlockingIOError:
+            continue
+        if not stale:
+            raise TransportError("serial endpoint closed during recovery")
+        discarded += len(stale)
+        if discarded > MAX_CHUNK + 4096:
+            raise TransportError("unexpected data while recovering serial framing")
+
+
 def serve(name, requested, wait):
     checker = runpy.run_path(str(Path(__file__).resolve().with_name("check-stock-usb2.py")))
     if requested and not checker["PORT_PATTERN"].fullmatch(requested):
         raise TransportError("--port must be a descriptor-verified usbmodem path")
-    with socket_directory(name) as endpoint:
+    with socket_directory(name) as endpoint, ExitStack() as serial:
         if os.path.lexists(endpoint):
             raise TransportError("local endpoint already exists")
-        port = checker["wait_for_port"](requested, wait)
-        with open_serial(port, checker["configure_tty"]) as fd:
+        def connect(timeout):
+            port = checker["wait_for_port"](requested, timeout)
+            fd = serial.enter_context(open_serial(port, checker["configure_tty"]))
+            drain_serial(fd)
             request = parse_request(b"NV1 PROBE\n")
-            inventory = check_probe(serial_reply(fd, request, time.monotonic() + TIMEOUTS[b"PROBE"]))
-            with listen(endpoint) as server:
-                print("Grizzly NV reader ready", file=sys.stderr, flush=True)
-                serve_requests(server, fd, inventory, time.monotonic() + 1200)
+            return fd, check_probe(serial_reply(fd, request, time.monotonic() + TIMEOUTS[b"PROBE"]))
+
+        fd, inventory = connect(wait)
+        deadline = time.monotonic() + 1200
+        with listen(endpoint) as server:
+            print("Grizzly NV reader ready", file=sys.stderr, flush=True)
+            while True:
+                try:
+                    serve_requests(server, fd, inventory, deadline)
+                    return
+                except SerialTimeout:
+                    serial.close()
+                    fd, checked = connect(min(12, remaining(deadline)))
+                    if checked != inventory:
+                        raise TransportError("partition inventory changed during serial recovery")
+                    print("Grizzly NV serial framing recovered", file=sys.stderr, flush=True)
 
 
 def request_local(path, request):
@@ -389,8 +428,8 @@ def copy_backup(path, destination):
             target = destination / f"{label}.img"
             with target.open("xb") as out:
                 written.append(target)
-                for offset in range(0, size, MAX_CHUNK):
-                    length = min(MAX_CHUNK, size - offset)
+                for offset in range(0, size, COPY_CHUNK):
+                    length = min(COPY_CHUNK, size - offset)
                     chunk = backup_request(path, "READ", label, offset, length)
                     if len(chunk) != length or out.write(chunk) != length:
                         raise TransportError(f"incomplete copy of {label}")

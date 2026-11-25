@@ -5251,7 +5251,11 @@ SHA-256 from a separate full read. The host bridge keeps one
 descriptor-verified serial session open with a mode-0600
 local socket in a mode-0700 directory. The backup tool
 requires each local image to match the separate phone-side
-read and rechecks the inventory after the copy.
+read and rechecks the inventory after the copy. It requests
+at most 4 MiB per chunk. If a serial transfer times out, the
+bridge reopens the verified ACM endpoint, discards the partial
+reply, and confirms the same guarded inventory before the host
+retries the chunk.
 
 The measured partitions total 3,392,151,552 bytes (3.16 GiB).
 The independent read in the phone adds UFS and hashing work
@@ -5382,3 +5386,34 @@ read-only before the warm return. Fastboot appeared 32 seconds after
 the host requested `finish`. Stock D1 completed boot on A with
 enforcing verity and the original VBMeta digest. The snapshot records
 the NV state before that stock boot.
+
+#### First hardware backup with the Grizzly host command
+
+On 2026-11-25, the Mac left stock D1 A at 21:02:34 UTC and
+requested one rescue boot on B at 21:03:21 UTC. The rebuilt
+rescue kept the checked D1 factory boot images and USB
+isolation DTBO, with a fresh `init_boot` from the same guarded
+RAM rescue sources. The five slot B writes passed. The
+`vendor_boot_b` readback matched all 67,108,864 image bytes.
+The Mac accepted the guarded inventory before the first
+partition payload request.
+
+The first copy stalled at 8 MiB per read. The 4 MiB retry
+also hit an ACM reply timeout. Both incomplete copies were
+removed. Within the same rescue boot, the final copy used
+4 MiB reads and recovered one further timeout by reopening
+the verified ACM port and rechecking the inventory. It then
+retried the interrupted chunk and continued the existing copy.
+
+The final copy took 297 seconds, including the independent
+phone-side digests and final guarded inventory check. On
+the Mac, the nine files totaled 3,392,151,552 bytes. Separate
+checks verified all nine hashes and sizes, the recorded
+read-only and unmounted state, and directory and file modes
+of 0700 and 0600. The backup stays private and off-repo.
+
+The reader acknowledged `finish` at 21:14:09 UTC. Bootloader
+Fastboot returned 33 seconds later, and the Mac selected
+and verified slot A. The phone stayed in Fastboot so this
+copy captures the NV state after the latest stock Android
+boot and before the next power or CPM trial.
