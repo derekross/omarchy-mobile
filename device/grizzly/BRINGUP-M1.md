@@ -3171,6 +3171,37 @@ Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
 after 133 seconds. Stock D1 booted on A with enforcing verity and
 the expected factory VBMeta digest.
 
+### Mainline v57 primary GPT header before discovery
+
+[v57 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/106ccf9ebe88bba02ddd9e32226605ab80aca732)
+keeps v56's prep OFF, initialization, INQUIRY, capacity and LBA 0
+checks. After LBA 0 passes, it issues one READ(10) at LUN 0, LBA 1
+on the same IRQ-backed slot. It requires 4,096-byte blocks and
+capacity extending through LBA 1. The READ(10) helper accepts only
+LBA 0 or, in this diagnostic, LBA 1.
+
+After a GOOD completion with zero residual, the diagnostic checks
+the primary GPT signature, revision, reserved field, header size
+and current LBA. It computes the header CRC with the CRC field
+zeroed, compares it with the stored value and scrubs the buffer.
+The log records the result without header bytes or identifiers.
+This checks the primary header only. The entry array and backup
+header remain untested. Disk scanning and SCSI host registration
+stay off, and no SCSI write is issued.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match v57 source and manifest. The DTB and private RAM rescue match v56. | Leave stock A selected on a mismatch. |
+| One attended slot B boot, power control, device initialization and two reads | Use the verified nine-partition NV backup. Capture one IRQ for each READ(10), GOOD status with zero residual, the LBA 0 result and `LUN 0 LBA 1 GPT header result=0`. Verify Hibern8, HCI cleanup, zero disks and the timed return. | Preserve the first error without repeating the read. Return to stock A and confirm Android completes boot. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v57` passed strict
+checkpatch, targeted `W=1` compilation and mocked checks for good
+and malformed headers, CRC mismatch, transfer errors, LBA bounds,
+build-option gating and buffer scrubbing. All five image hashes,
+both AVB signatures, the unpacked payload, ABL handoff and saved
+D1 slot sizes passed. Manifest SHA-256 `9962a2aa65f28398446aa6ebfaedaa055dc6e5ee289175cbfe7853613c310721`.
+Archive SHA-256 `2f0026bbe1524b3b6650710b49175be14c2a1daecc5f10daf8376e4726adeab8`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
