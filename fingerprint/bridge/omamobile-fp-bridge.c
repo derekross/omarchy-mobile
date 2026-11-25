@@ -224,10 +224,6 @@ enum {	/* IGatekeeper */
 static const char *socket_path = "/dev/socket/omamobile-fp/bridge.sock";
 static const char *state_dir = "/data/vendor/omamobile-fp";
 static const char *touch_path = "/dev/input/touchscreen";
-/* --touch-name, --touch-dir: where to find the touchscreen again by its
- * name once the device at touch_path is gone (its driver rebound) */
-static const char *touch_name;
-static const char *touch_dir = "/dev/input";
 static const char *lhbm_path = "/sys/class/backlight/panel0-backlight/local_hbm_mode";
 static const char *ui_state_path;	/* --ui-state: off unless given */
 static const char *inhibit_dir;		/* --inhibit: off unless given */
@@ -1074,39 +1070,13 @@ static int32_t scale(int32_t v, int32_t max, int32_t panel)
 	return max > 0 ? (int32_t)((int64_t)v * panel / (max + 1)) : v;
 }
 
-#define EVIOCGNAME_(len)	_IOC(_IOC_READ, 'E', 0x06, len)
-
-/* An evdev node that is the touchscreen: with --touch-name, by its name. */
-static int touch_open_checked(const char *path)
-{
-	char name[128] = "";
-	int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-
-	if (fd < 0 || !touch_name)
-		return fd;
-	if (ioctl(fd, EVIOCGNAME_(sizeof(name) - 1), name) >= 0 && !strcmp(name, touch_name))
-		return fd;
-	close(fd);
-	return -1;
-}
-
+/*
+ * The runner binds the touchscreen's node at touch_path, and binds its new
+ * node there when its driver rebinds, so reopening the same path finds it.
+ */
 static int open_touch(void)
 {
-	char path[300];
-	struct dirent *e;
-	DIR *d;
-	int fd = touch_open_checked(touch_path);
-
-	if (fd >= 0 || !touch_name || !(d = opendir(touch_dir)))
-		return fd;
-	while (fd < 0 && (e = readdir(d))) {
-		if (strncmp(e->d_name, "event", 5))
-			continue;
-		snprintf(path, sizeof(path), "%s/%s", touch_dir, e->d_name);
-		fd = touch_open_checked(path);
-	}
-	closedir(d);
-	return fd;
+	return open(touch_path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 }
 
 static int64_t touch_retry_at;
@@ -1565,7 +1535,6 @@ static int open_listener(void)
 static void usage(void)
 {
 	say("usage: omamobile-fp-bridge [--socket PATH] [--state DIR] [--touch EVDEV]\n"
-	    "                           [--touch-name NAME] [--touch-dir DIR]\n"
 	    "                           [--lhbm PATH] [--settle MS] [--ui-state PATH]\n"
 	    "                           [--inhibit DIR] [--panel WxH] [--lhbm-first 0|1]");
 	exit(2);
@@ -1585,10 +1554,6 @@ int main(int argc, char **argv, char **envp)
 			state_dir = v;
 		else if (!strcmp(argv[i], "--touch"))
 			touch_path = v;
-		else if (!strcmp(argv[i], "--touch-name"))
-			touch_name = v;
-		else if (!strcmp(argv[i], "--touch-dir"))
-			touch_dir = v;
 		else if (!strcmp(argv[i], "--lhbm"))
 			lhbm_path = v;
 		else if (!strcmp(argv[i], "--settle"))
