@@ -18,7 +18,7 @@
 #
 # Only FILE's name is used. A tool that cds to the repository first and
 # passes "$0" passes a path relative to the directory it left
-# (`cd ..; omarchy-mobile/tools/build-packages --help`, #559), while this
+# (`cd ..; omamobile/tools/build-packages --help`, #559), while this
 # file's own path is still good: the tool has just sourced it from where it
 # is now.
 

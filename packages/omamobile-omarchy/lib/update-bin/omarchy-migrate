@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile (on PATH only during omamobile-update): Omarchy's migrations,
+# Omamobile (on PATH only during omamobile-update): Omarchy's migrations,
 # minus the ones that touch what a phone doesn't have or must not change: the
 # bootloader and boot entries (Limine, mkinitcpio, UKIs, efibootmgr, sbctl),
 # Snapper, x86 kernels and drivers, fwupd, or that ask questions with gum.

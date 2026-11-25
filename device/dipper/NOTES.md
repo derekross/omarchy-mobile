@@ -18,9 +18,9 @@ the facts needed for review.
 | 2026-11-10 | `0ee4f11d1973085c434e741a2e9dd73af5a9cd157296c25801ed5a92a6b9e9d9` | #505 `994944d7ecbacd69444221e6951153cb329a374e`; kernel/DTS #220 `055a4019998f22cc0e2a8afef7650274a6ce0657` | Node absent, disk `ro=0`; all 85 partitions `ro=1`; `sdb`–`sdf` `ro=1` | Watchdog/feeder, framebuffer, USB/SSH, reserved TZ range and `reboot-to` passed; physical keys not captured. |
 | 2026-11-10 | `e2cdb765de21a5869a1db314c19f1fddb668219a51d3c9ce81a1a083536d711e` | Older rescue image; exact source commit unknown; its init differs from the shared init | Node present, disk `ro=0`; all 85 partition flags recorded `ro=1`, including `sda21` | Kernel `7.3.0-rc6-omamobile-push1`, initramfs root; no `logdump` or whole-disk removal in init, so not the October diagnostic init. SSH host key verified but key was not authorized. No UFS write. |
 | 2026-11-09 | `e2cdb765de21a5869a1db314c19f1fddb668219a51d3c9ce81a1a083536d711e` | Image was reported booted; exact build/init source unknown | `/dev/sda` reported present with `ro=0`; partition details for this session unknown | The retained 08:53 capture is a dirty-kernel writable-root observation; whether it came from this exact image is unknown. |
-| 2026-11-09 | `0f0ec9d62ebe57bef9ae8a4804bb23728f624daab824a0bf7dee18f63c2a3d59` | `linux-omarchy-mobile` panel test tree with EA8074 from #218; exact combined revision unknown | `/dev/sda` absent; all 85 partitions `ro=1`; `sdb`–`sdf` present, `ro=1` | Panel/DRM, backlight 0→511, DPMS off/on passed; `vdda` used a dummy regulator, GPU rendering and touch untested. |
+| 2026-11-09 | `0f0ec9d62ebe57bef9ae8a4804bb23728f624daab824a0bf7dee18f63c2a3d59` | `linux-omamobile` panel test tree with EA8074 from #218; exact combined revision unknown | `/dev/sda` absent; all 85 partitions `ro=1`; `sdb`–`sdf` present, `ro=1` | Panel/DRM, backlight 0→511, DPMS off/on passed; `vdda` used a dummy regulator, GPU rendering and touch untested. |
 | 2026-11-09 | Same boot as panel test, `0f0ec9d6…` | Same as panel test | Same as panel test | Full backup of 84 non-`userdata`, non-`super` GPT partitions was read from this guarded boot and every source hash/size verified; separate userdata archive was file-level and non-atomic. |
-| 2026-11-09 | Unknown; exact image hash not retained | Omarchy Mobile RAM kernel; exact build unknown | Disk and partition flags not recorded | Power-only 10-second restart passed from Android and RAM kernel; no UFS write was attempted. |
+| 2026-11-09 | Unknown; exact image hash not retained | Omamobile RAM kernel; exact build unknown | Disk and partition flags not recorded | Power-only 10-second restart passed from Android and RAM kernel; no UFS write was attempted. |
 | 2026-11-09 | `2244d74aea472b0c595b2056ad8618f614e6a9161b5b264c7f898939e626f318` | Initial NFS-root image reused the earlier #505 kernel and DTB | `/dev/sda` present and set `ro=1`; all six disks and 85 partitions logged `ro=1` | NFS root and SSH worked; systemd reported `RuntimeWatchdogUSec=20s`. Direct `uname`/sysfs reads were not captured. |
 | 2026-11-09 | `f2f5cb2e3da8fe992d366dba36e059c0d9106cf14a7d1c8872c61ee144a4474b` | Earlier #505 image after `qcom-pon` was built in; exact kernel/DTS heads unknown | `/dev/sda` absent, disk `ro=0`; all 85 partitions and other disks `ro=1` | PMIC keys registered and Volume Down produced `KEY_VOLUMEDOWN`; watchdog/feeder, framebuffer and USB/SSH worked. |
 | 2026-11-09 | `93484a91103c294f6c73799ae6cb7161019129b9f89ab331222ae04f10ecf3e1` | First #505 image before `qcom-pon` was built in; exact kernel/DTS heads unknown | `/dev/sda` absent, disk `ro=0`; all 85 partitions and other disks `ro=1` | Console, framebuffer, USB/SSH and watchdog/feeder worked; no physical key event was captured. |
@@ -134,7 +134,7 @@ string and whether it matches the recovery build remain unknown.
 
 Before entering fastboot, the handset answered over USB SSH; no restart was
 needed to restore SSH. Holding Power alone for 10 seconds restarted the phone
-back into Android both from the installed system and under the Omarchy Mobile
+back into Android both from the installed system and under the Omamobile
 RAM kernel. Volume Down + Power then entered fastboot. Read-only fastboot
 variables reported product `dipper` and an unlocked bootloader.
 
@@ -260,11 +260,11 @@ procedure and supported single-slot writer are still required before a flash.
 the image used kernel release
 `7.3.0-rc6-omamobile-push1-g2a318a96ae9d-dirty` with its matching DTB: UFS up
 (all six LUNs, ext4 mounts), USB NCM gadget, dropbear, gpio-keys, 8 CPUs and
-5.7 GB RAM. This records the historical first-light tree; kernel PRs [#218](https://github.com/derekross/linux-omarchy-mobile/pull/218),
-[#219](https://github.com/derekross/linux-omarchy-mobile/pull/219) and
-[#220](https://github.com/derekross/linux-omarchy-mobile/pull/220) are later
+5.7 GB RAM. This records the historical first-light tree; kernel PRs [#218](https://github.com/derekross/linux-omamobile/pull/218),
+[#219](https://github.com/derekross/linux-omamobile/pull/219) and
+[#220](https://github.com/derekross/linux-omamobile/pull/220) are later
 successor changes and are not the code tested in that boot; FTS5 PR #219 is now
-merged into linux-omarchy-mobile. The diagnostic image's guard allowed `userdata` and `logdump`
+merged into linux-omamobile. The diagnostic image's guard allowed `userdata` and `logdump`
 writes. A temporary init widened the allowlist to include `logdump` and used
 `dd` to copy the kernel log there every two seconds during the 2026-10-29
 diagnostic boot. The 2026-11-09 read-only check was on this dirty October
@@ -359,7 +359,7 @@ the unpublished kernel release above, registered `stmfts` and a physical tap
 produced `ABS_MT_POSITION_X`. That observation is not a test of the current
 kernel PRs. The current driver and Dipper node were tested on 2026-11-12; see
 the corrected FTS5 RAM image above. The public successor series and its binding are in
-[kernel PR #219](https://github.com/derekross/linux-omarchy-mobile/pull/219).
+[kernel PR #219](https://github.com/derekross/linux-omamobile/pull/219).
 The upstream v8 cover letter states it was tested on Xiaomi Mi 8:
 [FTS5 v8 cover letter](https://lists.openwall.net/linux-kernel/2026/09/25/2211),
 [FTS5 driver patch](https://lists.openwall.net/linux-kernel/2026/09/25/2213),

@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # extract-vendor-chroot: build the read-only Android tree for one of
-# Omarchy Mobile's vendor-chroot profiles (packages/omamobile-gnss/lib/omamobile-vendor-chroot)
+# Omamobile's vendor-chroot profiles (packages/omamobile-gnss/lib/omamobile-vendor-chroot)
 # out of a Google factory image for the Pixel 7 Pro (cheetah) or, with
 # -d tegu, the Pixel 9a, on the user's own machine.
 #
@@ -24,7 +24,7 @@
 #          vendor or system binaries, no binder, no device nodes.
 #          device/cheetah/AOC-TUNING-RESEARCH.md.
 #
-# These binaries are Google's and not ours to redistribute, so Omarchy Mobile
+# These binaries are Google's and not ours to redistribute, so Omamobile
 # never ships them: this tool takes exactly what the profile needs from an
 # image the user already has and nothing else.
 #

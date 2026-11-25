@@ -3,6 +3,18 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-156. A bindings-only PR gets no `dtbs_check`** from CI or
+  `kernel-pr-check` ("device trees: none touched"), so no board's DTB is
+  checked against the new schema. *Check:* validate the affected boards'
+  DTBs by hand; dtschema's schema checks run in the container with a stub
+  `libfdt`, only `dt-validate` needs the real one. Extends L-126. *From:*
+  kernel #51, round 13.
+- **L-178. A rejected property in a dt-validate known-failure feed can read
+  "False schema does not allow 0", without the property's name.** A `prop:
+  false` under `then:` reports the value, not the key, so grepping the output
+  for the property name says "not rejected" when it was. *Check:* grep the
+  feed's output by node name and compare base against head line by line.
+  Extends L-102. *From:* kernel #63, round 20.
 - **L-179. Neither CI nor `kernel-pr-check` builds a series commit by
   commit, and kernel PRs land commit by commit.** CONTRIBUTING §6.2 says each
   commit must build; the gate builds the head's touched files only. *Check:*
@@ -23,7 +35,7 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
 - **L-194. A review's clone goes on disk, and a gate's worktree is sparse:
   the scratch `/tmp` is a 16 GB tmpfs shared by every parallel review.** A
   `--depth 60` clone of the SM8150 tree for #52 and three full checkouts of
-  omarchy-mobile (about 1 GB each, `phone/screenshots` and all) each filled
+  omamobile (about 1 GB each, `phone/screenshots` and all) each filled
   it, and a command of another review lost its output. *Check:* `df -h` the
   scratch volume before any clone or build over a few hundred MB; trees go
   under `~/android/mainline/wt-review-<topic>`; a gate's checkout is `git

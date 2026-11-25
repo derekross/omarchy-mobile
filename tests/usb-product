@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # The USB gadget's product string (no phone): bin/omamobile packs the
 # descriptor's USB_PRODUCT, else its NAME, into /etc/omamobile-usb-product,
-# and initramfs/init's usb_product prints it, or "Omarchy Mobile" without one.
+# and initramfs/init's usb_product prints it, or "Omamobile" without one.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -44,7 +44,7 @@ run() { sh -c ". '$t/fn.sh'; usb_product"; }
 cp "$t/etc-cheetah/omamobile-usb-product" "$t/etc/"
 [[ $(run) == "Pixel 7 Pro (M1)" ]] || fail "prints the packed string (got $(run))"
 : > "$t/etc/omamobile-usb-product"
-[[ $(run) == "Omarchy Mobile" ]] || fail "an empty file falls back (got $(run))"
+[[ $(run) == "Omamobile" ]] || fail "an empty file falls back (got $(run))"
 rm "$t/etc/omamobile-usb-product"
-[[ $(run) == "Omarchy Mobile" ]] || fail "no file falls back (got $(run))"
-pass "the init prints the packed string, or Omarchy Mobile without one"
+[[ $(run) == "Omamobile" ]] || fail "no file falls back (got $(run))"
+pass "the init prints the packed string, or Omamobile without one"

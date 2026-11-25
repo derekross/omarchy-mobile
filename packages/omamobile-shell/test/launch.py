@@ -356,9 +356,33 @@ def commands_keep_their_argv_directory_and_path():
             # Run it the way Hyprland would: sh -c, from elsewhere, with a bare PATH.
             env = {"FAKE_ROOT": s.root, "PATH": "/usr/bin:/bin"}
             subprocess.run(["sh", "-c", args["cmd"]], env=env, cwd="/", check=True)
-            assert s.wait_spawned() == [["omarchy-agent-prompt", NASTY]], s.spawned()
+            # ...and through uwsm-app, so the command gets a scope of its own as an app does
+            assert s.wait_spawned() == [["uwsm-app", "--", "omarchy-agent-prompt", NASTY]], s.spawned()
             assert not os.path.exists(os.path.join(s.root, "pwned"))
             assert "cd -- " in args["cmd"] and "work dir" in args["cmd"], args
+
+
+@test
+def a_command_gets_a_scope_unless_it_brings_one_or_uwsm_is_missing():
+    # A bare command (a widget's host.launch, a terminal) used to run in the compositor's own cgroup.
+    def lua_command(s, *argv, env=None):
+        before = len(s.actions())
+        proc = subprocess.run([sys.executable, "-B", TOOL, "cmd", "--", *argv], env=env or s.env, capture_output=True, text=True)
+        assert proc.returncode == 0, proc.stderr
+        (verb, lua), = s.actions()[before:]
+        return lua
+    with Sandbox([]) as s:
+        assert "uwsm-app -- tessera --mobile" in lua_command(s, "tessera", "--mobile")
+        # already scoped: not wrapped a second time
+        for own in (["uwsm-app", "--", "gtk-launch", "tessera.desktop"], ["uwsm", "app", "--", "foot"],
+                    ["systemd-run", "--user", "--scope", "foot"], ["/usr/bin/uwsm-app", "--", "foot"]):
+            lua = lua_command(s, *own)
+            assert "uwsm-app -- " + own[0] not in lua and lua.count("uwsm-app") <= 1, lua
+        # no uwsm-app on PATH (not an Omarchy session): the command as it was
+        os.remove(os.path.join(s.bin, "uwsm-app"))
+        bare = dict(s.env, PATH=s.bin)
+        lua = lua_command(s, "tessera", env=bare)
+        assert "uwsm-app" not in lua and "tessera" in lua, lua
 
 
 @test

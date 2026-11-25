@@ -3,6 +3,89 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-824. A sibling device's plan that explains or contradicts an AGENTS
+  gotcha about the reference phone is listed for the maintainer, with the run
+  that would settle it.** #852 traces early RTC wakes to stale S2MPG12 reads
+  (kernel #201) while AGENTS still calls the 7 Pro's early wakes unexplained,
+  shows "Wi-Fi stays connected across s2idle" to be a disassociate and rejoin
+  there, and prices the keep flag at 52 mA. *Check:* `grep -n` AGENTS section
+  4 for each mechanism a device plan explains (the PMIC, the driver, the flag)
+  and name the 7 Pro run in the review's notes. Extends L-492 and L-657.
+  *From:* #852, round 60, 2026-11-17.
+- **L-823. A status line that quotes several measured numbers is checked for
+  the condition each was measured under.** #852's "284 mA at 2028 MHz, 184-200
+  mA at 1014 MHz, 52 mA more with Wi-Fi kept" set a Wi-Fi-kept figure beside
+  Wi-Fi-unloaded ones, doubling the apparent gain of the bus rate; the body
+  copied it. *Check:* for each number in a status line, find its results table
+  and write down every setting that differs between the runs being compared;
+  the line carries them. Extends L-529 and L-438. *From:* #852, round 60,
+  2026-11-17.
+- **L-821. A fix for "the setting only applies after a restart" is read one
+  layer down before the workaround or its patch header is accepted: the
+  component's bindings, the library's setter, and the first statement where
+  the working path and the failing path differ.** #866 and #879 blamed
+  Omarchy's idle service; it only binds `IdleMonitor.timeout`, and the
+  workaround (off, then on) differs from the failing path in one thing inside
+  Quickshell: the notification pointer passes through null, where a
+  replacement object at the same address is an equal value and never notifies.
+  *Check:* find the status IPC that prints the live value (`omarchy-shell idle
+  status`) and ask for it before and after the write; fetch the library at the
+  packaged commit, find the setter both paths share, and ask for its debug log
+  (`QT_LOGGING_RULES=<category>.debug=true`). Extends C-30, L-204 and L-652.
+  *From:* #866, round 60; #879, round 61, 2026-11-18.
+- **L-820. "logind refuses because the app is outside a session" is checked
+  against `session/auto`.** `brightnessctl` calls `SetBrightness` on
+  `/org/freedesktop/login1/session/auto`, which logind resolves to the user's
+  display session for a caller without one; a refusal points at a caller
+  inside another session (an SSH login), that is, at how the test was
+  launched. *Check:* `strings /usr/bin/brightnessctl | grep login1`, and
+  `systemd-run --user --pipe busctl get-property org.freedesktop.login1
+  /org/freedesktop/login1/session/auto org.freedesktop.login1.Session Id`
+  (read-only); ask how the app was started before accepting a session
+  workaround. Extends L-29 and L-46. *From:* #866, round 60, 2026-11-17.
+- **L-811. A stage recorded as "passed" is laid against every clause of its
+  Pass line, and a stop rule written as "any X error" against the lines the
+  run logged and kept going through.** #835's H1 passed on its kernel criteria
+  with three of its listed after-checks not done, and logged a UFS `dme-set`
+  failure line under stop conditions that begin "any UFS error"; the line is
+  benign (the 9a's plan has it on every healthy wake), but the plan didn't say
+  so. *Check:* split the Pass line at its semicolons and tick each clause
+  against the result; grep the result paragraph for `failed\|error` and match
+  each hit to a stop condition or to a sentence that excuses it by name, with
+  the sibling plan that records it (`git grep -n '<line>' origin/main --
+  device/`). Extends L-435 and L-756. *From:* #835, round 60, 2026-11-17.
+- **L-810. A phone test of a packaged drop-in starts with the merged view,
+  because a hand copy of the same name in `/etc` silently replaces the
+  package's file.** On #806 the contributor's 8 Pro had
+  `/etc/systemd/sleep.conf.d/10-omamobile.conf` from an earlier experiment;
+  with it in place the test would have "passed" on the old settings. *Check:*
+  when asking for a phone run of any `/usr/lib/systemd/*.d`, `modprobe.d`,
+  `udev/rules.d` or NetworkManager `conf.d` file, ask first for
+  `systemd-analyze cat-config`, `modprobe -c` or `NetworkManager
+  --print-config`, and for `pacman -Qo` on every file it lists under `/etc`;
+  pass the finding on to the device's other owners. Extends L-362 and L-46.
+  *From:* #806, round 60, 2026-11-17.
+- **L-802. A fix "tested on the phone" by swapping a file into the extracted
+  image by hand has not run its own code path.** #863's stub was copied over
+  the image's library, and the new function ran once inside a live namespace;
+  the profile's start, where the function sits under `set -e` before cbd,
+  never ran with it. *Check:* for a profile or runner change, ask which
+  invocation executed the new lines (the unit's start, or a hand call), and
+  whether the hand-modified image was restored before the run that counts.
+  Extends L-361 and L-436. *From:* #863, round 60, 2026-11-17.
+- **L-801. A sleep series is described by what ended each sleep and how long
+  it was, and it counts only for the path that was run.** #846's 86 of 86 were
+  all modem wakes within 29 s, while the failures being closed came on
+  RTC-woken sleeps of 120 s with the modem off; its later 300 of 300 held four
+  wakes on the touchscreen's interrupt with nobody at the phone; #912's 470
+  sleeps were `systemctl suspend -i` with 60 s alarms, for a default that
+  enables sleeps of hours with no alarm. *Check:* ask for `pm_wakeup_irq` (or
+  sleepd's "woken by" line) and the length per cycle next to any "N of N
+  woke"; name the command, wake source and length range of the path the change
+  turns on, and find rows with those on the same kernel and package; for a
+  source that isn't the test's own, `git log -S` when it became a wake source
+  and name the PR that would make it a default. Extends L-345, L-482 and
+  L-625. *From:* #846 with #758, rounds 60 and 61; #912, round 63, 2026-11-20.
 - **L-800. When a cell's "works once X" condition is met, the new word is
   still read against the legend, the diff against the caveats it drops, and
   any "that belongs to the other cell" against the other cell.** #846 moved
@@ -301,50 +384,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
 - **L-107. A plan's claim about the DEVICES.md matrix is checked against
   the open PRs that change that row.** Extends L-28 and L-44. *From:* #35
   with #34.
-- **L-128. Read the host's USB log before interpreting a phone's
-  "re-enumeration".** The laptop's `journalctl -k` timestamps the gadget
-  leaving and arriving, and survives a phone whose RAM log is lost: husky
-  test 23's "re-enumerated after 22 s" was the boot itself. *From:* kernel
-  #33, round 10.
-- **L-129. A CRC "clear" covers only what that register checks.** FTM5's
-  CRC register is the base check; config and CX errors come as events after a
-  reset. *Check:* which check covers the calibration area, and whether it
-  needs a reset, before a plan says a read answers "is it valid". *From:*
-  #35, round 10.
-- **L-130. Before putting a bootloader requirement down to the SoC,
-  compare the reference phone's stock images.** Cheetah's stock vbmeta chains
-  `boot` and `init_boot` with the same rollback index and ABL build as lynx,
-  yet boots footerless images: lynx's AVB footers are its ABL's
-  configuration. *Check:* `avbtool info_image` on the stock vbmeta in
-  `~/android/reference` (read-only). *From:* #37.
-  (Corrected 2026-10-28, C-14: the comparison used the factory vbmeta, not
-  the phone's non-stock `vbmeta_b`; a stock `vbmeta_b` needs footers on
-  cheetah too.)
-- **L-131. Evidence cites the tested file's blob id, not a commit id.**
-  `git rev-parse <commit>:<path>` survives the folds and rebases we ask for,
-  and ties an out-of-tree module to its source. Extends L-45. *From:* kernel
-  #38 with #39.
-- **L-132. A device can appear twice on DEVICES.md (matrix row and Wanted
-  list); an edit to one must agree with the other**, and the plain words that
-  say the evidence isn't public must survive. *Check:* `grep -n <codename>
-  docs/DEVICES.md`. Extends L-28, L-66 and L-107. *From:* #39.
-- **L-149. A descriptor's overlays and config symbols must exist in the
-  published kernel or an open kernel PR.** raven's targeted nodes and
-  options in neither, so its images can't be built from our trees. *Check:*
-  `git grep` each overlay target and `CONFIG_` symbol against
-  `github/omamobile` and the open PR heads; whatever is missing means the
-  matrix cells name the port branch. Extends L-28 and L-61. *From:* #41,
-  round 12.
-- **L-150. Read every plan in the PR before quoting one plan's status.**
-  raven's BLUETOOTH-PLAN said "broken" while a later POWER-PLAN result said it
-  "works again". *Check:* `git grep -n` the subsystem across the PR's plans
-  and go by the newest dated result. *From:* #41, round 12.
-- **L-186. A slot A fallback record without Android symptoms makes "what is
-  on slot A?" the first question.** #35's answer to "did the lock screen
-  appear, did it offer to reset `userdata`" was "slot A is another Omarchy
-  install", which the notes on main contradicted and which means the phone
-  has no Android fallback and that slot A's images were written. *Check:*
-  whenever a fallback is reported, ask for the OS on slot A, when and how it
-  got there, and whether its initramfs has the storage guard; a Linux slot A
-  is a §3.1 event (L-135) even when nothing else went wrong. *From:* #35,
-  round 20.

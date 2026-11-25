@@ -1,13 +1,13 @@
 Subject: [PATCH] linkd: an unfilled answers placeholder is no firstboot.conf
 
 Against derekross/omamobile-installer 53bd2f426455 (branch linkd-ffs, PR #15),
-for omarchy-mobile's package omamobile-install-link until the daemon has it
+for omamobile's package omamobile-install-link until the daemon has it
 itself (docs/INSTALL-LINK-PLAN.md §19, "for the daemon to change").
 
 A release root image carries /etc/omamobile/firstboot.conf and
 /etc/omamobile/boot-update.conf as placeholders: 4096 bytes of comment lines
 that the desktop installer and the web page fill in place as they stream
-the image (omarchy-mobile rootfs/placeholders, RELEASES §6.1). The plan's
+the image (omamobile rootfs/placeholders, RELEASES §6.1). The plan's
 decision of 2026-11-13 says "no firstboot.conf" in the start-up rules means
 no file or the image's unfilled placeholder. The daemon tested existence
 only, so on a link image whose placeholder nobody filled the first start
@@ -56,7 +56,7 @@ diff --git a/linkd/src/found.rs b/linkd/src/found.rs
 +/// Whether a file of the owner's answers (`firstboot.conf`,
 +/// `boot-update.conf`) holds any: a line that is neither blank nor a
 +/// comment. A release image carries both as placeholders of comments only
-+/// (omarchy-mobile's `rootfs/placeholders`, RELEASES §6.1), which an
++/// (omamobile's `rootfs/placeholders`, RELEASES §6.1), which an
 +/// installer that streams the image fills in place; one left as it is
 +/// counts as no file at all, as `omamobile-firstboot` and
 +/// `omamobile-boot-update` read it (INSTALL-LINK-PLAN, the 2026-11-13
@@ -96,12 +96,12 @@ diff --git a/linkd/tests/rows.rs b/linkd/tests/rows.rs
      }
  }
  
-+/// The release image's placeholders (omarchy-mobile `rootfs/placeholders`):
++/// The release image's placeholders (omamobile `rootfs/placeholders`):
 +/// comment lines and a last comment line of spaces, 4096 bytes. Left as
 +/// they are, they are no `firstboot.conf` and no `boot-update.conf`.
 +fn placeholder(path: &str) -> Vec<u8> {
 +    let mut b = format!(
-+        "# Omarchy Mobile: the place for {path}, kept by the release image.\n\
++        "# Omamobile: the place for {path}, kept by the release image.\n\
 +         # Left as it is, it holds no answers.\n"
 +    )
 +    .into_bytes();
