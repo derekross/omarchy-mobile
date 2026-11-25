@@ -3360,6 +3360,29 @@ unpacked payload, ABL handoff and saved D1 slot sizes passed.
 Manifest SHA-256 `b7c9c3c17b4b207f4a55641e88e1a0afc63a43b4fdd60b8316995dede6ef8321`.
 Archive SHA-256 `50d0335c91be3bc7eed040b607b728c9f712cda1a22d121fe66cdce3b5c51454`.
 
+#### Attended v60 slot B trial
+
+On 2026-11-25 one v60 boot used the reverified nine-partition private
+NV backup. All five slot B writes passed, and readback matched all
+8,192 supplied `vendor_boot_b` bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 0.152812–0.152819 | Prep OFF | Qualification passed in 4 µs with `saw_hc_0x32=0`. |
+| 2.184365–2.184640 | Primary GPT | Header and entry-array CRC checks both passed. |
+| 2.185109–2.185140 | REPORT LUNS on UPIU WLUN `0x81` | One completion IRQ, GOOD status, underflow `0x20` and residual 88. Of the 136 requested bytes, 48 were delivered. The 40-byte list contained ordinary LUNs 0 through 4 and passed validation. |
+| 2.185390–2.217110 | SCSI host lifecycle | Registration and removal passed with zero discovered devices. |
+| 2.217244–2.217510 | Controller cleanup | Hibern8 passed and the HCI IRQ was freed. |
+| 90.197100–91.199780 | Timed warm return | Zero SCSI disks at RAM startup and before restart. |
+
+The ordinary LUN inventory matches the five LUN numbers seen in
+the stock D1 RAM rescue. This trial qualifies REPORT LUNS through
+the dedicated diagnostic slot. SCSI midlayer command dispatch
+and disk discovery remain untested. Ramoops and Android's
+`SYSTEM_LAST_KMSG` agree. Fastboot returned after 132 seconds.
+Stock D1 booted on A with enforcing verity and the pretrial VBMeta
+digest.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
