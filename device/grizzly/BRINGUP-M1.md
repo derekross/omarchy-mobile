@@ -2741,7 +2741,30 @@ All five hashes, both AVB signatures, unpacked payload, ABL handoff
 and saved D1 slot sizes passed. Manifest SHA-256
 `a5318c22bdd3637f2baddcac37bb07ade6fd63b7a4303fbfaa47f87025f7febd`.
 Archive SHA-256 `7e7248ee9550780e2caeb5a1b3737b2b1a07a8c2997f2771fc52898f56adde38`.
-The device's response and flag-clear timing still need a hardware boot.
+
+#### Attended v49 slot B trial
+
+On 2026-11-25 one slot B boot used the verified nine-partition NV
+snapshot. All five writes passed and `vendor_boot_b` readback matched
+all 8,192 supplied bytes. The device returned NOP IN and read back
+`bRefClkFreq=0x2` before the initialization request.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 2.181941–2.181950 | One `fDeviceInit` SET | OCS `0x0`, QUERY_RSP `0x36`, response `0x0`, `ret=0` |
+| 2.183059 | First `READ_FLAG` | `raw=0x0 polls=1 elapsed_us=1100 ret=0` |
+| 2.183207–2.183472 | IRQ-backed Hibern8 and HCI cleanup | Both PSMs reached `0x11`. Deep H8 remained prepared and the HCI IRQ was freed. |
+| 90.197045–90.197111 | Timed return | `scsi_disks=0`, warm restart requested. |
+
+The first flag read completed 1.1 ms after SET acknowledgement, so
+that bounds when the flag had cleared. The exact transition time is
+unmeasured. Zero SCSI disks were confirmed at RAM startup and before
+restart. The early device-link warning recurred independently of UFS
+probe. Normal SCSI transport and discovery remain untested.
+
+Ramoops and `SYSTEM_LAST_KMSG` agree. Fastboot returned after 133
+seconds, and stock D1 completed boot on A with enforcing verity and
+the original factory VBMeta digest.
 
 ### Offline stock D1 device reference-clock diagnostic
 
