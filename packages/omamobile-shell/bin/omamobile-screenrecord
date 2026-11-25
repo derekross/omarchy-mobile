@@ -53,7 +53,14 @@ notify() {
   if command -v omarchy-notification-send >/dev/null 2>&1; then omarchy-notification-send -t 4000 "$@" >/dev/null 2>&1 || true
   elif command -v notify-send >/dev/null 2>&1; then notify-send -t 4000 "$@" || true; fi
 }
-alive() { [[ $1 =~ ^[0-9]+$ ]] && kill -0 "$1" 2>/dev/null; }
+alive() {
+  local s
+  [[ $1 =~ ^[0-9]+$ ]] && kill -0 "$1" 2>/dev/null || return 1
+  # a zombie answers kill -0; read its state (field 3, after the last ")")
+  s=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  s=${s##*) }
+  [[ ${s%% *} != Z ]]
+}
 running() { [[ -s $pidfile ]] && alive "$(cat "$pidfile")"; }
 conf() { # conf KEY DEFAULT: the env var, else the config file, else DEFAULT
   local env="OMAMOBILE_RECORD_$1" v="" f=${XDG_CONFIG_HOME:-$HOME/.config}/omamobile/screenrecord.conf
