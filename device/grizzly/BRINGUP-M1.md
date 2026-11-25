@@ -3223,6 +3223,36 @@ Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
 after 132 seconds. Stock D1 booted on A with enforcing verity and
 the expected factory VBMeta digest.
 
+### Mainline v58 primary GPT entry-array CRC before discovery
+
+[v58 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/cb8d562809d34d6ae53d2061e1067e52ff60b2d9)
+keeps v57's checks through the primary GPT header. After header
+CRC validation, it accepts an entry array starting at LBA 2
+with one to 128 entries of 128 bytes each. The array must fit
+before the header's first usable block, and that boundary must
+fit within the LUN capacity reported by READ CAPACITY(10).
+
+The fixture reads the array in one IRQ-backed READ(10) using one
+device-to-host PRD covering at most four 4 KiB blocks. It requires
+GOOD status and zero residual, then hashes the entry bytes with
+the GPT CRC algorithm, excluding any sector padding. It scrubs
+both buffers and logs the number of blocks and validation result.
+It does not parse entries, publish identifiers, validate the
+backup GPT, register a SCSI host or scan disks.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match v58 source and manifest. The DTB and private RAM rescue match v57. | Leave stock A selected on a mismatch. |
+| One attended slot B boot, power control, device initialization and bounded reads | Use the verified nine-partition NV backup. Capture the LBA 0 and header results, one array transfer IRQ, GOOD status, zero residual and `LBA 2 GPT entries result=0`. Verify Hibern8, HCI cleanup, zero disks and timed return. | Preserve the first failure without retrying the reads. Return to stock A and confirm Android completes boot. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v58` passed strict
+checkpatch, targeted `W=1` compilation and mocked checks for
+one- and four-block transfers, CRC mismatch, entry layout bounds,
+build-option gating and scrubbing. All five image hashes, both
+AVB signatures, the unpacked payload, ABL handoff and saved D1
+slot sizes passed. Manifest SHA-256 `8a287c4f3f3dcf1730cc69b03d84b696779bda62123856029b3a6aadb67fcd21`.
+Archive SHA-256 `96f6b0f0e6ddf403611b22fabe29dfd3056edbc28cd8819ebb32b56b521557fa`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
