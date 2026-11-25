@@ -2855,6 +2855,33 @@ payload, ABL handoff and saved D1 slot sizes passed. Manifest SHA-256
 `53873e1de814ba2e2e6c15bf839cb7785d615b262faa32b04058f37f39177271`. Archive SHA-256
 `256cf75579b584944198927bb54e1e69b1377a24347a96836bad4a5d28c690bb`.
 
+#### Attended v51 slot B trial
+
+On 2026-11-25 one v51 boot used the verified nine-partition NV backup.
+All five slot B writes passed, and the readback matched all 8,192
+supplied `vendor_boot_b` bytes. The prep OFF request succeeded and
+released the owned vote. The existing prep guard stopped before UFS
+link startup, leaving the INQUIRY transfer IRQ untested.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 0.140145–0.140372 | Prep OFF qualification | HC was initially `0x10`, then read `0x32` while PHY remained `0x11`. The poll exited at 59 µs with `qualification=-5` (`-EIO`). |
+| 2.120991 | CPM observation | HC had reached `0x13`, with PHY still `0x11`. The transition time is unmeasured. |
+| 2.353986–12.723047 | Host probe attempts | The gate stayed at stage 4 (`STOPPED`), leaving UFS deferred with `guarded prep release did not qualify`. |
+| 90.184360–91.187309 | Timed warm return | `scsi_disks=0` at RAM startup and before restart. |
+
+The v45 poll only treats masked HC `0x10` as pending. The v51
+sample `0x32 & 0x1f = 0x12` hit the error case. The later read
+confirms that the expected terminal state was reached after that
+sample. It gives no information about when HC left `0x32`.
+Before another IRQ trial, qualify this prep OFF intermediate within
+a bounded read-only poll while preserving the existing PHY and
+terminal-state guards.
+
+Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
+after 133 seconds and stock D1 booted on A with enforcing verity
+and the expected factory VBMeta digest.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
