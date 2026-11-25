@@ -1,0 +1,497 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Rotate Omamobile's release signing subkey from the offline primary
+# (docs/RELEASES.md §10, "Rotating the signing subkey"). Maintainer only,
+# run by hand in a terminal, one step at a time, in the runbook's order:
+#
+#   tools/release-subkey-rotate [--dry-run] add OFFLINE_DIR                  (laptop, step 1)
+#   tools/release-subkey-rotate [--dry-run] install-next                     (build host, step 3)
+#   tools/release-subkey-rotate [--dry-run] revoke-old OFFLINE_DIR [--retire FPR]...
+#                                                                            (laptop, step 4)
+#
+# OFFLINE_DIR is the release key's offline directory, as tools/release-key-init
+# wrote it (omamobile-release.secret.asc and the rest), on its stick.
+#
+# add certifies a new ed25519 signing subkey (two years) under the primary,
+# and writes: packages/omamobile-keyring/omamobile.gpg with both signing
+# subkeys, the package's version (today's date), the updated secret and
+# public key in OFFLINE_DIR, and keys/gnupg.release-next, the new subkey
+# alone without a passphrase, for the build host. The old subkey stays
+# valid, and keys/gnupg.release is not touched.
+#
+# install-next runs on the build host, in its checkout: it checks that
+# keys/gnupg.release-next holds only the newest signing subkey that this
+# checkout's omamobile-keyring ships, signs with it, then puts it in place of
+# keys/gnupg.release and shreds the old keyring. Nothing else is read or sent.
+#
+# revoke-old revokes the older of the two signing subkeys (reason:
+# compromised), and writes omamobile.gpg with the revocation, the package's
+# version, and OFFLINE_DIR. Each --retire FPR (a whole key that is not the
+# release key, such as the original package key) moves from omamobile-trusted
+# to omamobile-revoked. A subkey never goes into omamobile-revoked:
+# pacman-key disables the whole key a listed fingerprint belongs to, and
+# phones would then refuse everything the release key signs. The subkey's
+# revocation travels in omamobile.gpg instead.
+#
+# --dry-run does all of it in the tmpfs directory and checks the result, then
+# writes nothing. Each step refuses unless stdin and stdout are a terminal.
+# The passphrase is read from the terminal and passed to gpg through a pipe,
+# never written; the work happens in a tmpfs directory that is removed on
+# exit, and the primary's secret leaves it only as the passphrase-protected
+# export in OFFLINE_DIR.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+umask 077
+
+die() { echo "release-subkey-rotate: $*" >&2; exit 1; }
+say() { printf '%s\n' "$*"; }
+
+dry=0 cmd="" out_arg="" retire=()
+while (($#)); do
+  case $1 in
+    --dry-run) dry=1 ;;
+    --retire) [[ $# -ge 2 ]] || die "--retire needs a fingerprint"; retire+=("$2"); shift ;;
+    -h|--help) source tools/lib/usage.sh; usage_from_header "$0"; exit 0 ;;
+    -*) die "unknown option $1" ;;
+    *)
+      if [[ -z $cmd ]]; then cmd=$1
+      elif [[ -z $out_arg ]]; then out_arg=$1
+      else die "too many arguments"
+      fi ;;
+  esac
+  shift
+done
+case $cmd in
+  add|revoke-old) [[ -n $out_arg ]] || die "usage: tools/release-subkey-rotate [--dry-run] $cmd OFFLINE_DIR" ;;
+  install-next) [[ -z $out_arg ]] || die "install-next takes no directory: it works on this checkout's keys/" ;;
+  *) die "usage: tools/release-subkey-rotate [--dry-run] add OFFLINE_DIR | install-next | revoke-old OFFLINE_DIR [--retire FPR]..." ;;
+esac
+((${#retire[@]} == 0)) || [[ $cmd == revoke-old ]] || die "--retire goes with revoke-old"
+for f in "${retire[@]}"; do
+  [[ $f =~ ^[0-9A-F]{40}$ ]] || die "--retire $f: give a 40-digit fingerprint in capitals"
+done
+
+[[ -t 0 && -t 1 ]] || die "run it yourself, in a terminal: it asks for the passphrase and for your yes"
+for tool in gpg gpgv gpgconf; do command -v "$tool" >/dev/null || die "$tool is needed"; done
+
+kr=packages/omamobile-keyring
+[[ -f $kr/omamobile.gpg && -f $kr/omamobile-trusted && -f $kr/version ]] || die "run it from an Omamobile checkout (no $kr)"
+source tools/lib/signing.sh
+msg=$(revoked_file_check .) || die "$msg"
+
+[[ -d /dev/shm && $(stat -f -c %T /dev/shm) == tmpfs ]] || die "/dev/shm is not a tmpfs: the key work needs one"
+tmp=$(mktemp -d /dev/shm/omamobile-rotate.XXXXXX)
+cleanup() {
+  local home
+  for home in "$tmp"/*/; do
+    [[ -d $home ]] && gpgconf --homedir "$home" --kill gpg-agent 2>/dev/null || true
+  done
+  rm -rf -- "$tmp"
+}
+trap cleanup EXIT
+pp=""
+# gpg with the passphrase on fd 3, fed from a pipe
+gpp() { gpg --batch --pinentry-mode loopback --passphrase-fd 3 "$@" 3< <(printf '%s\n' "$pp"); }
+newhome() { mkdir -m 700 "$tmp/$1" && printf '%s\n' "$tmp/$1"; }
+
+# key_list FILE: the primary fingerprints in an exported key file, in order
+key_list() {
+  GNUPGHOME=$tmp/show gpg --batch --with-colons --show-keys -- "$1" 2>/dev/null |
+    awk -F: '$1 == "pub" { p = 1; next } $1 == "fpr" && p { print $10; p = 0 }'
+}
+# sub_list FILE: every subkey fingerprint in it
+sub_list() {
+  GNUPGHOME=$tmp/show gpg --batch --with-colons --show-keys -- "$1" 2>/dev/null |
+    awk -F: '$1 == "sub" { s = 1; next } $1 == "fpr" && s { print $10; s = 0 }'
+}
+# signing_subs HOME FPR: the key's usable signing subkeys (not revoked,
+# expired or invalid), oldest first, in keyblock order on a tie
+signing_subs() {
+  GNUPGHOME=$1 gpg --batch --with-colons --list-keys -- "$2" 2>/dev/null | awk -F: '
+    $1 == "pub" { s = 0 }
+    $1 == "sub" { s = 1; ok = ($2 !~ /[rei]/ && $12 ~ /s/); c = $6; next }
+    $1 == "fpr" && s { if (ok) print c, $10; s = 0 }' | sort -s -n -k1,1 | awk '{ print $2 }'
+}
+# sub_validity HOME FPR SUB: the validity letter of one subkey
+sub_validity() {
+  GNUPGHOME=$1 gpg --batch --with-colons --list-keys -- "$2" 2>/dev/null |
+    awk -F: -v want="$3" '$1 == "sub" { v = $2; s = 1; next } $1 == "fpr" && s { if ($10 == want) print v; s = 0 }'
+}
+# good_by FILE.sig FILE KEYFILE: prints "SIGNING-SUBKEY PRIMARY" when the
+# signature is good against KEYFILE alone (GOODSIG: not by a revoked or
+# expired key, which gpg still reports as VALIDSIG)
+good_by() {
+  local home status
+  home=$(mktemp -d "$tmp/verify.XXXXXX")
+  GNUPGHOME=$home gpg --batch --quiet --no-default-keyring --keyring "$home/k.kbx" --import "$3" 2>/dev/null
+  status=$(gpgv --keyring "$home/k.kbx" --status-fd 1 "$1" "$2" 2>/dev/null) || true
+  gpgconf --homedir "$home" --kill gpg-agent 2>/dev/null || true
+  grep -c '^\[GNUPG:\] GOODSIG ' <<<"$status" >/dev/null || return 1
+  awk '$2 == "VALIDSIG" { print $3, $NF }' <<<"$status"
+}
+mkdir -m 700 "$tmp/show"
+
+trusted_list() { cut -d: -f1 "$kr/omamobile-trusted" | grep -E '^[0-9A-F]{40}$' || true; }
+
+# check_shipped DIR: what a keyring package directory says is consistent:
+# every trusted and revoked fingerprint is a whole key in its omamobile.gpg,
+# no revoked one is a subkey or still trusted.
+check_shipped() {
+  local d=$1 f keys subs revoked
+  keys=$'\n'$(key_list "$d/omamobile.gpg")$'\n' subs=$'\n'$(sub_list "$d/omamobile.gpg")$'\n'
+  revoked=$(cat "$d/omamobile-revoked" 2>/dev/null || true)
+  for f in $revoked; do
+    [[ $subs != *$'\n'$f$'\n'* ]] || die "$f in omamobile-revoked is a subkey: pacman-key would disable the whole key it belongs to"
+    [[ $keys == *$'\n'$f$'\n'* ]] || die "$f in omamobile-revoked is not a key in omamobile.gpg"
+    ! cut -d: -f1 "$d/omamobile-trusted" | grep -cx "$f" >/dev/null || die "$f is both trusted and revoked"
+  done
+  for f in $(cut -d: -f1 "$d/omamobile-trusted"); do
+    [[ $keys == *$'\n'$f$'\n'* ]] || die "$f in omamobile-trusted is not a key in omamobile.gpg"
+  done
+}
+
+# next_version: today's date, after the current version
+next_version() {
+  local cur new
+  cur=$(tr -d '[:space:]' < "$kr/version") new=$(date -u +%Y%m%d)
+  if [[ $new == "${cur%%.*}" ]]; then
+    if [[ $cur == *.* ]]; then new=$new.$((${cur#*.} + 1)); else new=$new.1; fi
+  fi
+  if command -v vercmp >/dev/null; then
+    (($(vercmp "$new" "$cur") > 0)) || die "the next version $new isn't after $cur"
+  fi
+  printf '%s\n' "$new"
+}
+
+confirm() {  # confirm WORD PROMPT
+  local answer
+  read -rp "$2 Type $1 to go on: " answer
+  [[ $answer == "$1" ]] || die "stopped; nothing was written"
+}
+
+# check_build_keyring HOME PRIMARY SUB KEYFILE: HOME (a copy) holds the
+# secret of SUB alone, no other secret, signs as PRIMARY without a
+# passphrase with SUB, and that signature is good against KEYFILE.
+check_build_keyring() {
+  local home=$1 primary=$2 sub=$3 keyfile=$4 secrets signer
+  [[ $(GNUPGHOME=$home gpg --batch --with-colons --list-secret-keys 2>/dev/null | awk -F: '$1 == "sec"' | wc -l) == 1 ]] ||
+    die "the build keyring must hold one key, the release key"
+  [[ $(GNUPGHOME=$home gpg --batch --with-colons --list-secret-keys "$primary" 2>/dev/null | awk -F: '$1 == "sec" { print $15 }') == "#" ]] ||
+    die "the build keyring holds the primary's secret"
+  secrets=$(GNUPGHOME=$home gpg --batch --with-colons --list-secret-keys "$primary" 2>/dev/null |
+    awk -F: '$1 == "ssb" { s = ($15 != "#"); next } $1 == "fpr" && s { print $10; s = 0 }')
+  [[ $secrets == "$sub" ]] || die "the build keyring holds secrets other than the new subkey's alone (${secrets//$'\n'/ })"
+  gpgconf --homedir "$home" --kill gpg-agent 2>/dev/null || true
+  echo "omamobile signing check" > "$tmp/t"
+  rm -f "$tmp/t.sig"
+  GNUPGHOME=$home gpg --batch --pinentry-mode loopback --passphrase '' \
+    --local-user "$primary" --detach-sign -o "$tmp/t.sig" "$tmp/t" 2>/dev/null ||
+    die "the build keyring can't sign without a passphrase"
+  gpgconf --homedir "$home" --kill gpg-agent 2>/dev/null || true
+  signer=$(good_by "$tmp/t.sig" "$tmp/t" "$keyfile") || die "the build keyring's signature isn't good against $keyfile"
+  [[ $signer == "$sub $primary" ]] || die "the build keyring signed with ${signer%% *}, not $sub"
+}
+
+# --- the offline steps: add and revoke-old ---
+offline_open() {
+  local f
+  [[ $out_arg != *$'\n'* ]] || die "OFFLINE_DIR can't contain a newline"
+  [[ -d $out_arg ]] || die "$out_arg is not a directory"
+  out=$(cd -- "$out_arg" && pwd -P)
+  for f in omamobile-release.secret.asc omamobile-release.pub.asc omamobile-release.revoke.asc; do
+    [[ -f $out/$f ]] || die "$out has no $f: give the directory tools/release-key-init wrote"
+  done
+  case $out in
+    "$PWD"/*|"$HOME"/*)
+      say "warning: $out is not on removable media; the primary key belongs offline"
+      local answer
+      read -rp "continue anyway? [y/N] " answer
+      [[ $answer == y ]] || exit 1
+      ;;
+  esac
+  ((dry)) || [[ -w $out ]] || die "$out is not writable"
+  read -rsp "Passphrase for the offline primary key: " pp; echo
+  [[ -n $pp ]] || die "no passphrase"
+
+  export GNUPGHOME
+  GNUPGHOME=$(newhome work)
+  gpp --import "$out/omamobile-release.secret.asc" 2>/dev/null || die "can't import $out/omamobile-release.secret.asc"
+  [[ $(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "sec"' | wc -l) == 1 ]] ||
+    die "$out/omamobile-release.secret.asc must hold one key, the release key"
+  primary=$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "sec" { p = 1; next } $1 == "fpr" && p { print $10; exit }')
+  [[ $(gpg --batch --with-colons --list-secret-keys "$primary" | awk -F: '$1 == "sec" { print $15 }') != "#" ]] ||
+    die "$out holds no secret for the primary $primary"
+  [[ $(gpg --batch --with-colons --list-keys "$primary" | awk -F: '$1 == "pub" { print $12; exit }') == c* ]] ||
+    die "$primary is not a certify-only primary"
+  # The passphrase unlocks the primary: a throwaway certification in the
+  # tmpfs keyring needs it, and the keyring is removed on exit.
+  gpg --batch --quiet --passphrase '' --quick-generate-key "passphrase check <check@invalid>" ed25519 sign never 2>/dev/null
+  check=$(gpg --batch --with-colons --list-keys "check@invalid" | awk -F: '$1 == "fpr" { print $10; exit }')
+  gpp --yes --default-key "$primary" --quick-lsign-key "$check" >/dev/null 2>&1 ||
+    die "the passphrase doesn't unlock the primary $primary"
+  gpg --batch --yes --delete-secret-and-public-keys "$check" 2>/dev/null ||
+    gpg --batch --yes --delete-secret-keys "$check" 2>/dev/null || true
+  gpg --batch --yes --delete-keys "$check" 2>/dev/null || true
+
+  trusted_list | grep -cx "$primary" >/dev/null ||
+    die "omamobile-keyring doesn't trust $primary: this is not the release key the phones trust"
+  ! revoked_list . | grep -cx "$primary" >/dev/null || die "omamobile-keyring revokes $primary"
+  key_list "$kr/omamobile.gpg" | grep -cx "$primary" >/dev/null || die "$kr/omamobile.gpg doesn't carry $primary"
+  mkdir -m 700 "$tmp/shipped"
+  GNUPGHOME=$tmp/shipped gpg --batch --quiet --import "$kr/omamobile.gpg" 2>/dev/null
+  mapfile -t shipped_keys < <(key_list "$kr/omamobile.gpg")
+  mapfile -t subs < <(signing_subs "$GNUPGHOME" "$primary")
+  mapfile -t shipped_subs < <(signing_subs "$tmp/shipped" "$primary")
+}
+
+# export_public: $tmp/omamobile.gpg, the shipped file's keys in its order,
+# the release key from the work keyring (both subkeys, any revocation)
+export_public() {
+  local f
+  : > "$tmp/omamobile.gpg"
+  for f in "${shipped_keys[@]}"; do
+    if [[ $f == "$primary" ]]; then gpg --batch --export "$f"; else GNUPGHOME=$tmp/shipped gpg --batch --export "$f"; fi >> "$tmp/omamobile.gpg"
+  done
+  [[ $(key_list "$tmp/omamobile.gpg") == "$(printf '%s\n' "${shipped_keys[@]}")" ]] || die "the exported keyring lost a key"
+}
+
+# write_offline WHAT: the updated secret and public key into OFFLINE_DIR,
+# each written beside its old copy, read back, then renamed over it
+write_offline() {
+  local home
+  gpp --armor --export-secret-keys "$primary" > "$out/.omamobile-release.secret.asc.new"
+  gpg --batch --armor --export "$primary" > "$out/.omamobile-release.pub.asc.new"
+  home=$(newhome readback)
+  GNUPGHOME=$home gpg --batch --quiet --import "$out/.omamobile-release.secret.asc.new" 2>/dev/null ||
+    die "the new secret export in $out doesn't import; the old one is unchanged"
+  [[ $(signing_subs "$home" "$primary") == "$(signing_subs "$GNUPGHOME" "$primary")" ]] ||
+    die "the new secret export in $out doesn't read back as written; the old one is unchanged"
+  sync -f "$out/.omamobile-release.secret.asc.new" 2>/dev/null || sync
+  mv -f -- "$out/.omamobile-release.secret.asc.new" "$out/omamobile-release.secret.asc"
+  mv -f -- "$out/.omamobile-release.pub.asc.new" "$out/omamobile-release.pub.asc"
+  printf '%s %s\n' "$(date -u +%F)" "$1" >> "$out/subkey-rotation.txt"
+  sync
+}
+
+if [[ $cmd == add ]]; then
+  offline_open
+  ((${#subs[@]} == 1)) || die "the primary has ${#subs[@]} usable signing subkeys, not one: add has run already (next: step 2 or 3), or the key isn't as release-key-init made it"
+  old=${subs[0]}
+  [[ ${shipped_subs[*]} == "$old" ]] ||
+    die "$kr/omamobile.gpg ships the signing subkey(s) ${shipped_subs[*]:-none}, the stick holds $old: bring the checkout and the stick in line first"
+  [[ ! -e keys/gnupg.release-next ]] || die "keys/gnupg.release-next exists: shred it or finish step 3 first"
+  say "Primary (certify only): $primary"
+  say "Signing subkey now:     $old (stays valid until step 4)"
+  ((dry)) || confirm add "Certify a new signing subkey under $primary?"
+
+  gpp --quick-add-key "$primary" ed25519 sign 2y 2>/dev/null || die "gpg couldn't add the subkey"
+  mapfile -t subs < <(signing_subs "$GNUPGHOME" "$primary")
+  ((${#subs[@]} == 2)) && [[ ${subs[0]} == "$old" ]] || die "after the add the signing subkeys are ${subs[*]}"
+  new=${subs[1]}
+  export_public
+  [[ $(signing_subs "$tmp/shipped" "$primary") == "$old" ]] || die "the shipped keyring changed under us"
+  check=$(newhome check) && GNUPGHOME=$check gpg --batch --quiet --import "$tmp/omamobile.gpg" 2>/dev/null
+  [[ $(signing_subs "$check" "$primary") == "$old"$'\n'"$new" ]] || die "the exported public key doesn't carry both signing subkeys"
+
+  # The build host's keyring: the new subkey only, without a passphrase.
+  gpp --export-secret-subkeys "$new!" > "$tmp/sub.gpg" 2>/dev/null
+  next=$(newhome next)
+  GNUPGHOME=$next gpp --import "$tmp/sub.gpg" 2>/dev/null
+  # --passwd only takes an empty new passphrase interactively, so answer its
+  # prompts on the command fd: the old passphrase, then empty twice.
+  GNUPGHOME=$next gpg --pinentry-mode loopback --command-fd 0 --passwd "$new" \
+    < <(printf '%s\n\n\n' "$pp") >/dev/null 2>&1 || true
+  rm -f -- "$tmp/sub.gpg"
+  check_build_keyring "$next" "$primary" "$new" "$tmp/omamobile.gpg"
+  version=$(next_version)
+
+  if ((dry)); then
+    say
+    say "Dry run: in the tmpfs, the new subkey would be $new (this one is discarded)."
+    say "Checked: the public key carries $old and the new subkey; the build keyring"
+    say "holds the new subkey's secret alone and signs without a passphrase."
+    say "Would write: $kr/omamobile.gpg, $kr/version ($version), keys/gnupg.release-next,"
+    say "and in $out: omamobile-release.secret.asc, omamobile-release.pub.asc, subkey-rotation.txt."
+    exit 0
+  fi
+  write_offline "add $new (old $old, primary $primary)"
+  cp -- "$tmp/omamobile.gpg" "$kr/omamobile.gpg" && chmod 644 "$kr/omamobile.gpg"
+  printf '%s\n' "$version" > "$kr/version" && chmod 644 "$kr/version"
+  mkdir -p keys
+  cp -a -- "$next" keys/gnupg.release-next
+  rm -f keys/gnupg.release-next/S.* 2>/dev/null || true
+  chmod 700 keys/gnupg.release-next
+  unset pp
+
+  say
+  say "Primary:            $primary"
+  say "Old signing subkey: $old (still valid)"
+  say "New signing subkey: $new (expires in two years)"
+  say "Written: $kr/omamobile.gpg (both subkeys), $kr/version ($version),"
+  say "         keys/gnupg.release-next (the new subkey alone, no passphrase),"
+  say "         $out (secret and public key with the new subkey)."
+  say
+  say "Next (docs/RELEASES.md §10, step 1 and 2): copy $out to the second stick and"
+  say "unplug both; commit omamobile-keyring $version and publish it as usual (the build"
+  say "host still signs with the old subkey). keys/gnupg.release-next goes to the build"
+  say "host only in step 3, after the phones have the new keyring; once it is there,"
+  say "shred this copy (find keys/gnupg.release-next -type f -exec shred -u {} +)."
+  exit 0
+fi
+
+if [[ $cmd == revoke-old ]]; then
+  offline_open
+  ((${#subs[@]} == 2)) || die "the primary has ${#subs[@]} usable signing subkeys, not two: run add first, or revoke-old has run already"
+  old=${subs[0]} new=${subs[1]}
+  [[ ${shipped_subs[*]} == "$old $new" ]] ||
+    die "$kr/omamobile.gpg ships ${shipped_subs[*]:-no signing subkey}, not $old and $new: ship step 2's keyring first"
+  for f in "${retire[@]}"; do
+    [[ $f != "$primary" ]] || die "--retire $f is the release key itself"
+    key_list "$kr/omamobile.gpg" | grep -cx "$f" >/dev/null ||
+      die "--retire $f is not a whole key in $kr/omamobile.gpg$(sub_list "$kr/omamobile.gpg" | grep -cx "$f" >/dev/null && echo ' (it is a subkey)')"
+    trusted_list | grep -cx "$f" >/dev/null || die "--retire $f: omamobile-trusted doesn't trust it"
+  done
+  say "Primary (certify only): $primary"
+  say "Revoke (compromised):   $old"
+  say "Keep signing with:      $new"
+  ((${#retire[@]} == 0)) || say "Retire whole keys:      ${retire[*]}"
+  if ((!dry)); then
+    say
+    say "Revoking is for good. Before it: omamobile-keyring $(tr -d '[:space:]' < "$kr/version") with $new is"
+    say "on both channels and on the phones (step 2), and the build host signs with $new"
+    say "alone, every published file re-signed (step 3)."
+    confirm revoke "Revoke $old?"
+  fi
+
+  # A signature by the old subkey from before the revocation, to show it
+  # stops verifying (when the stick holds that subkey's secret)
+  echo "omamobile signing check" > "$tmp/t"
+  old_sig=0
+  gpp --local-user "$old!" --detach-sign -o "$tmp/t.old.sig" "$tmp/t" 2>/dev/null && old_sig=1
+
+  printf 'key %s\nrevkey\ny\n1\n%s\n\ny\nsave\n' "$old" \
+    "Kept on a build machine that was compromised; replaced by $new." |
+    gpp --command-fd 0 --status-fd 2 --edit-key "$primary" >/dev/null 2>&1 || die "gpg couldn't revoke $old"
+  [[ $(sub_validity "$GNUPGHOME" "$primary" "$old") == r ]] || die "$old doesn't read as revoked"
+  [[ $(signing_subs "$GNUPGHOME" "$primary") == "$new" ]] || die "after the revocation the usable signing subkeys are $(signing_subs "$GNUPGHOME" "$primary")"
+  export_public
+
+  # The keyring package as it will ship, checked whole in a copy
+  root=$tmp/root/$kr
+  mkdir -p "$root"
+  cp -- "$tmp/omamobile.gpg" "$root/omamobile.gpg"
+  trusted_new=$(grep -vE "^($(IFS='|'; echo "${retire[*]:-NONE}")):" "$kr/omamobile-trusted" || true)
+  printf '%s\n' "$trusted_new" | grep -v '^$' > "$root/omamobile-trusted" || true
+  revoked_old=$(revoked_list .) || die "$revoked_old"
+  { [[ -z $revoked_old ]] || printf '%s\n' "$revoked_old"
+    for f in "${retire[@]}"; do [[ $'\n'$revoked_old$'\n' == *$'\n'$f$'\n'* ]] || printf '%s\n' "$f"; done
+  } | awk '!seen[$0]++' > "$root/omamobile-revoked"
+  msg=$(revoked_file_check "$tmp/root") || die "the new omamobile-revoked: $msg"
+  check_shipped "$root"
+  cut -d: -f1 "$root/omamobile-trusted" | grep -cx "$primary" >/dev/null || die "the release key left omamobile-trusted"
+
+  check=$(newhome check) && GNUPGHOME=$check gpg --batch --quiet --import "$tmp/omamobile.gpg" 2>/dev/null
+  [[ $(sub_validity "$check" "$primary" "$old") == r && $(signing_subs "$check" "$primary") == "$new" ]] ||
+    die "the exported public key doesn't carry the revocation"
+  if ((old_sig)); then
+    ! good_by "$tmp/t.old.sig" "$tmp/t" "$tmp/omamobile.gpg" >/dev/null || die "a signature by $old still verifies after the revocation"
+  fi
+  gpp --local-user "$new!" --detach-sign -o "$tmp/t.new.sig" "$tmp/t" 2>/dev/null || die "the new subkey can't sign"
+  [[ $(good_by "$tmp/t.new.sig" "$tmp/t" "$tmp/omamobile.gpg") == "$new $primary" ]] || die "a signature by $new doesn't verify"
+  version=$(next_version)
+
+  if ((dry)); then
+    say
+    say "Dry run: revoked in the tmpfs only. Checked: the public key carries the"
+    say "revocation, $new still signs and verifies$( ((old_sig)) && echo ", $old's signature no longer does")."
+    say "Would write: $kr/omamobile.gpg, $kr/version ($version)$( ((${#retire[@]})) && echo ", $kr/omamobile-trusted, $kr/omamobile-revoked"),"
+    say "and in $out: omamobile-release.secret.asc, omamobile-release.pub.asc, subkey-rotation.txt."
+    exit 0
+  fi
+  write_offline "revoke $old (keep $new, primary $primary)${retire[*]:+, retire ${retire[*]}}"
+  for f in omamobile.gpg omamobile-trusted omamobile-revoked; do
+    cp -- "$root/$f" "$kr/$f" && chmod 644 "$kr/$f"
+  done
+  printf '%s\n' "$version" > "$kr/version" && chmod 644 "$kr/version"
+  unset pp
+
+  say
+  say "Primary:            $primary"
+  say "Revoked subkey:     $old"
+  say "Signing subkey:     $new"
+  ((${#retire[@]} == 0)) || say "Retired keys:       ${retire[*]} (omamobile-revoked)"
+  say "Written: $kr/omamobile.gpg (with the revocation), $kr/omamobile-trusted,"
+  say "         $kr/omamobile-revoked, $kr/version ($version), and $out."
+  say
+  say "Next (docs/RELEASES.md §10, step 4): copy $out to the second stick and unplug"
+  say "both; with this checkout, tools/fetch-published --channel development and"
+  say "--channel stable must both pass (they refuse a file the old subkey signed)"
+  say "before omamobile-keyring $version is committed and published."
+  exit 0
+fi
+
+# --- install-next, on the build host ---
+[[ -d keys/gnupg.release-next ]] || die "no keys/gnupg.release-next here: copy it from the laptop first (step 3)"
+[[ -d keys/gnupg.release && -f keys/fingerprint.release ]] || die "no keys/gnupg.release here: run install-next on the build host"
+primary=$(tr -d '[:space:]' < keys/fingerprint.release)
+[[ $primary =~ ^[0-9A-F]{40}$ ]] || die "keys/fingerprint.release does not hold a 40-digit fingerprint"
+(signing_key_load . >/dev/null) || exit 1
+mkdir -m 700 "$tmp/shipped"
+GNUPGHOME=$tmp/shipped gpg --batch --quiet --import "$kr/omamobile.gpg" 2>/dev/null
+mapfile -t shipped_subs < <(signing_subs "$tmp/shipped" "$primary")
+((${#shipped_subs[@]} >= 2)) || die "this checkout's omamobile-keyring ships ${#shipped_subs[@]} signing subkey(s): update it to step 2's keyring first"
+new=${shipped_subs[-1]}
+# Copies in the tmpfs, so no check leaves an agent or a lock in keys/
+cp -a -- keys/gnupg.release-next "$tmp/next" && rm -f "$tmp/next"/S.* 2>/dev/null || true
+cp -a -- keys/gnupg.release "$tmp/current" && rm -f "$tmp/current"/S.* 2>/dev/null || true
+cur=$(GNUPGHOME=$tmp/current gpg --batch --with-colons --list-secret-keys "$primary" 2>/dev/null |
+  awk -F: '$1 == "ssb" { s = ($15 != "#"); next } $1 == "fpr" && s { print $10; s = 0 }')
+[[ -n $cur ]] || die "keys/gnupg.release holds no secret subkey of $primary"
+[[ $cur != "$new" ]] || die "keys/gnupg.release already signs with $new"
+check_build_keyring "$tmp/next" "$primary" "$new" "$kr/omamobile.gpg"
+if command -v systemctl >/dev/null && systemctl --user is-active --quiet omamobile-publish.service 2>/dev/null; then
+  die "a publish is running (omamobile-publish.service): wait for it, and stop omamobile-publish.timer"
+fi
+
+retired=keys/.gnupg.release-retired.$$
+say "Release key:            $primary"
+say "Signs now:              ${cur//$'\n'/ } (keys/gnupg.release)"
+say "Will sign:              $new (keys/gnupg.release-next, checked: signs alone, no passphrase)"
+if ((dry)); then
+  say
+  say "Dry run. install-next would run:"
+  say "  mv keys/gnupg.release $retired"
+  say "  mv keys/gnupg.release-next keys/gnupg.release"
+  say "  (a signing check with keys/gnupg.release; on failure the two moves are undone)"
+  say "  find $retired -type f -exec shred -u -z {} + ; rm -rf $retired"
+  exit 0
+fi
+say
+say "Stop the daily publish first (systemctl --user stop omamobile-publish.timer)."
+say "After this the build host can't sign with ${cur//$'\n'/ } again: its keyring is shredded."
+confirm yes "Put $new in place and shred the old keyring?"
+
+for h in keys/gnupg.release keys/gnupg.release-next; do gpgconf --homedir "$h" --kill gpg-agent 2>/dev/null || true; done
+mv -T -- keys/gnupg.release "$retired"
+mv -T -- keys/gnupg.release-next keys/gnupg.release
+rm -f keys/gnupg.release/S.* 2>/dev/null || true
+if ! (check_build_keyring keys/gnupg.release "$primary" "$new" "$kr/omamobile.gpg"); then
+  gpgconf --homedir keys/gnupg.release --kill gpg-agent 2>/dev/null || true
+  mv -T -- keys/gnupg.release keys/gnupg.release-next
+  mv -T -- "$retired" keys/gnupg.release
+  die "the new keyring doesn't sign in place; both are back as they were"
+fi
+gpgconf --homedir keys/gnupg.release --kill gpg-agent 2>/dev/null || true
+find "$retired" -type f -exec shred -u -z -- {} +
+rm -rf -- "$retired"
+[[ ! -e $retired ]] || die "$retired is still there: remove it by hand"
+
+say
+say "keys/gnupg.release now signs with $new alone; the old keyring is shredded."
+say "shred overwrites the files in place; a copy-on-write filesystem, an SSD's"
+say "remapping, snapshots and backups can keep older copies, which step 4's"
+say "revocation makes worthless."
+say
+say "Next (docs/RELEASES.md §10, step 3): tools/build-packages --resign, then"
+say "tools/repo-publish --no-build development, the stable promotion, and the"
+say "daily publish's timer on again."

@@ -1,0 +1,310 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/release-subkey-rotate (docs/RELEASES.md §10, "Rotating the signing
+# subkey") with a throwaway release key made here, in the test's own
+# GNUPGHOME, never any real key, in a copy of the repository with no network,
+# server or phone. It checks that: the checked-in omamobile-keyring lists no
+# subkey in omamobile-revoked; the tool refuses without a terminal and with a
+# wrong passphrase, and --dry-run writes nothing; add writes a public key with
+# two signing subkeys and a build-host keyring holding the new subkey's
+# secret alone (no primary secret) that signs without a passphrase;
+# install-next puts it in place on a stand-in build host and shreds the old
+# keyring; revoke-old revokes the old subkey and moves only the retired
+# original key to omamobile-revoked, in §10's form; a signature by the new
+# subkey verifies against the exported key under pacman-key-style trust of the
+# primary while the old subkey's no longer does; tools/fetch-published refuses
+# a file the revoked subkey signed. Where user namespaces, pacman-key and
+# pacman are there, the real pacman-key --populate and pacman -Sy check the
+# same on a local repository, and show why a subkey must never be listed in
+# omamobile-revoked (pacman-key then disables the whole key).
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+for tool in gpg gpgv gpgconf script curl flock; do
+  command -v "$tool" >/dev/null || { pass "# skip: no $tool"; exit 0; }
+done
+[[ -d /dev/shm && $(stat -f -c %T /dev/shm) == tmpfs ]] || { pass "# skip: /dev/shm is not a tmpfs"; exit 0; }
+
+t=$(mktemp -d)
+export GNUPGHOME=$t/home && mkdir -m 700 "$GNUPGHOME"  # never the user's ~/.gnupg
+R=$t/repo
+cleanup() {
+  local h
+  for h in "$GNUPGHOME" "$t"/*/ "$R/keys"/*/ "$t/stick"/*/; do
+    [[ -d $h ]] && gpgconf --homedir "$h" --kill gpg-agent 2>/dev/null || true
+  done
+  rm -rf "$t"
+  [[ -z ${P:-} ]] || rm -rf -- "$P"
+}
+trap cleanup EXIT
+
+# --- the checked-in keyring: no subkey in omamobile-revoked ---
+kr_real=packages/omamobile-keyring
+show() { gpg --batch --with-colons --show-keys -- "$1" 2>/dev/null; }
+keys_real=$'\n'$(show "$kr_real/omamobile.gpg" | awk -F: '$1 == "pub" { p = 1; next } $1 == "fpr" && p { print $10; p = 0 }')$'\n'
+subs_real=$'\n'$(show "$kr_real/omamobile.gpg" | awk -F: '$1 == "sub" { s = 1; next } $1 == "fpr" && s { print $10; s = 0 }')$'\n'
+while read -r f; do
+  [[ -n $f ]] || continue
+  [[ $subs_real != *$'\n'$f$'\n'* ]] || fail "omamobile-revoked lists $f, a subkey: pacman-key would disable its whole key"
+  [[ $keys_real == *$'\n'$f$'\n'* ]] || fail "omamobile-revoked lists $f, which omamobile.gpg doesn't carry"
+done < "$kr_real/omamobile-revoked"
+for f in $(cut -d: -f1 "$kr_real/omamobile-trusted"); do
+  [[ $keys_real == *$'\n'$f$'\n'* ]] || fail "omamobile-trusted lists $f, which omamobile.gpg doesn't carry as a key"
+done
+pass "the checked-in omamobile-keyring revokes and trusts whole keys only, all in omamobile.gpg"
+
+# --- fixtures: a repository copy, a throwaway release key on a stand-in stick ---
+mkdir -p "$R/tools/lib" "$R/packages/omamobile-keyring" "$R/keys" "$t/bin" "$t/userhome"
+cp tools/release-subkey-rotate tools/fetch-published "$R/tools/"
+cp tools/lib/signing.sh tools/lib/usage.sh "$R/tools/lib/"
+kr=$R/packages/omamobile-keyring
+pp=throwaway-passphrase-1
+# As tools/release-key-init makes it: a certify-only primary with a passphrase,
+# a two-year signing subkey; the stick gets the secret, public and revocation.
+gpg --batch --quiet --pinentry-mode loopback --passphrase "$pp" --quick-generate-key "release <r@invalid>" ed25519 cert never 2>/dev/null
+primary=$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }')
+gpg --batch --quiet --pinentry-mode loopback --passphrase "$pp" --quick-add-key "$primary" ed25519 sign 2y 2>/dev/null
+old=$(gpg --batch --with-colons --list-keys "$primary" | awk -F: '$1 == "fpr" { n++ } $1 == "fpr" && n == 2 { print $10 }')
+stick=$t/stick/omamobile-release-key
+mkdir -p "$stick"
+gpg --batch --armor --export "$primary" > "$stick/omamobile-release.pub.asc"
+gpg --batch --pinentry-mode loopback --passphrase "$pp" --armor --export-secret-keys "$primary" > "$stick/omamobile-release.secret.asc"
+cp "$GNUPGHOME/openpgp-revocs.d/$primary.rev" "$stick/omamobile-release.revoke.asc"
+echo "throwaway" > "$stick/README.txt"
+# The original package key: one signing key, still trusted.
+orig_home=$t/orig && mkdir -m 700 "$orig_home"
+GNUPGHOME=$orig_home gpg --batch --quiet --passphrase '' --quick-generate-key "original <o@invalid>" ed25519 sign never 2>/dev/null
+orig=$(GNUPGHOME=$orig_home gpg --batch --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }')
+{ GNUPGHOME=$orig_home gpg --batch --export "$orig"; gpg --batch --export "$primary"; } > "$kr/omamobile.gpg"
+printf '%s:4:\n%s:4:\n' "$orig" "$primary" > "$kr/omamobile-trusted"
+: > "$kr/omamobile-revoked"
+echo 20261026 > "$kr/version"
+# The build host's keyring today: the old subkey alone, no passphrase.
+gpg --batch --pinentry-mode loopback --passphrase "$pp" --export-secret-subkeys "$old!" > "$t/old-sub.gpg"
+mkdir -m 700 "$R/keys/gnupg.release"
+GNUPGHOME=$R/keys/gnupg.release gpg --batch --quiet --pinentry-mode loopback --passphrase "$pp" --import "$t/old-sub.gpg" 2>/dev/null
+GNUPGHOME=$R/keys/gnupg.release gpg --pinentry-mode loopback --command-fd 0 --passwd "$old" \
+  < <(printf '%s\n\n\n' "$pp") >/dev/null 2>&1 || true
+gpgconf --homedir "$R/keys/gnupg.release" --kill gpg-agent 2>/dev/null || true
+echo "$primary" > "$R/keys/fingerprint.release"
+# No publish runs here, whatever the machine's own user units are.
+printf '#!/bin/sh\nexit 3\n' > "$t/bin/systemctl" && chmod +x "$t/bin/systemctl"
+
+# rot INPUT ARGS...: the tool in a terminal (script's pty), INPUT typed
+rot() {
+  local input=$1; shift
+  (cd "$R" && printf '%s' "$input" | HOME=$t/userhome SHELL=/bin/bash PATH="$t/bin:$PATH" \
+    script -q -e --echo never -c "$(printf '%q ' tools/release-subkey-rotate "$@")" /dev/null) > "$t/log" 2>&1
+}
+snap() { (cd "$t" && find repo stick -type f ! -name 'S.*' ! -name '*.lock' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum); }
+# signer FILE KEYFILE: "SUBKEY PRIMARY" of a good signature against KEYFILE only
+signer() {
+  local h
+  h=$(mktemp -d "$t/v.XXXXXX")
+  GNUPGHOME=$h gpg --batch --quiet --no-default-keyring --keyring "$h/k.kbx" --import "$2" 2>/dev/null
+  gpgv --keyring "$h/k.kbx" --status-fd 1 "$1.sig" "$1" 2>/dev/null |
+    awk '$2 == "GOODSIG" { g = 1 } $2 == "VALIDSIG" { v = $3 " " $NF } END { if (g) print v }'
+}
+subs_of() {  # subs_of KEYFILE: "VALIDITY FPR" of each signing subkey of the primary
+  show "$1" | awk -F: -v p="$primary" '$1 == "pub" { in_p = 0 } $1 == "fpr" && !s && !in_p { in_p = ($10 == p) }
+    $1 == "sub" { s = 1; v = $2; next } $1 == "fpr" && s { if (in_p) print v, $10; s = 0 }'
+}
+
+# --- refusals and the dry run ---
+before=$(snap)
+if (cd "$R" && HOME=$t/userhome tools/release-subkey-rotate add "$stick" </dev/null) > "$t/log" 2>&1; then fail "refuses without a terminal"; fi
+grep -c 'run it yourself, in a terminal' "$t/log" >/dev/null || { cat "$t/log"; fail "says it needs a terminal"; }
+if rot $'not-the-passphrase\n' add "$stick"; then fail "refuses a wrong passphrase"; fi
+grep -c "doesn't unlock the primary" "$t/log" >/dev/null || { cat "$t/log"; fail "says the passphrase is wrong"; }
+if rot "$pp"$'\n' revoke-old "$stick"; then fail "revoke-old refuses before add"; fi
+grep -c 'not two: run add first' "$t/log" >/dev/null || { cat "$t/log"; fail "revoke-old says to run add first"; }
+if rot $'yes\n' install-next; then fail "install-next refuses without keys/gnupg.release-next"; fi
+rot "$pp"$'\n' --dry-run add "$stick" || { cat "$t/log"; fail "add --dry-run"; }
+grep -c '^Dry run' "$t/log" >/dev/null || { cat "$t/log"; fail "add --dry-run says so"; }
+[[ $(snap) == "$before" ]] || fail "add --dry-run and the refusals write nothing"
+if rot "$pp"$'\nno\n' add "$stick"; then fail "add stops without the typed yes"; fi
+[[ $(snap) == "$before" ]] || fail "a declined add writes nothing"
+pass "refuses without a terminal, with a wrong passphrase, out of order and without the typed word; --dry-run writes nothing"
+
+# --- step 1: add ---
+rot "$pp"$'\nadd\n' add "$stick" || { cat "$t/log"; fail "add"; }
+mapfile -t after < <(subs_of "$kr/omamobile.gpg")
+((${#after[@]} == 2)) || fail "the public key carries two signing subkeys (got ${#after[@]})"
+[[ ${after[0]} == "u $old" || ${after[0]} == "- $old" ]] || fail "the old subkey is still there and valid (${after[0]})"
+new=${after[1]#* }
+[[ $new =~ ^[0-9A-F]{40}$ && $new != "$old" && ${after[1]%% *} != [rei] ]] || fail "a new valid signing subkey (${after[1]})"
+grep -c "New signing subkey: $new" "$t/log" >/dev/null || { cat "$t/log"; fail "prints the new subkey's fingerprint"; }
+[[ $(show "$kr/omamobile.gpg" | awk -F: '$1 == "pub" { p = 1; next } $1 == "fpr" && p { print $10; p = 0 }') == "$orig"$'\n'"$primary" ]] ||
+  fail "omamobile.gpg keeps the original key, in its place"
+[[ $(cat "$kr/version") == "$(date -u +%Y%m%d)" ]] || fail "the keyring's version is today's date"
+[[ -z $(cat "$kr/omamobile-revoked") && $(cat "$kr/omamobile-trusted") == "$orig:4:"$'\n'"$primary:4:" ]] ||
+  fail "add leaves omamobile-trusted and omamobile-revoked alone"
+[[ $(GNUPGHOME=$R/keys/gnupg.release gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" { n++ } n == 2 { print $10; exit }') == "$old" ]] ||
+  fail "add leaves keys/gnupg.release alone"
+# The build host's new keyring
+next=$R/keys/gnupg.release-next
+[[ -d $next && $(stat -c %a "$next") == 700 ]] || fail "keys/gnupg.release-next is there, mode 700"
+cp -a "$next" "$t/next-copy"
+[[ $(GNUPGHOME=$t/next-copy gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "sec" { print $15 }') == "#" ]] ||
+  fail "keys/gnupg.release-next holds no primary secret"
+secrets=$(GNUPGHOME=$t/next-copy gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "ssb" { s = ($15 != "#"); next } $1 == "fpr" && s { print $10; s = 0 }')
+[[ $secrets == "$new" ]] || fail "keys/gnupg.release-next holds the new subkey's secret alone (got ${secrets//$'\n'/ })"
+echo payload > "$t/p"
+GNUPGHOME=$t/next-copy gpg --batch --pinentry-mode loopback --passphrase '' --local-user "$primary" --detach-sign -o "$t/p.sig" "$t/p" 2>/dev/null ||
+  fail "keys/gnupg.release-next signs without a passphrase"
+[[ $(signer "$t/p" "$kr/omamobile.gpg") == "$new $primary" ]] || fail "it signs with the new subkey, good against the exported key"
+# The stick
+imp=$t/stick-import && mkdir -m 700 "$imp"
+GNUPGHOME=$imp gpg --batch --quiet --import "$stick/omamobile-release.secret.asc" 2>/dev/null
+[[ $(GNUPGHOME=$imp gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "ssb"' | wc -l) == 2 ]] || fail "the stick's secret export carries both subkeys"
+[[ $(stat -c %a "$stick/omamobile-release.secret.asc") == 600 ]] || fail "the stick's secret export is mode 600"
+grep -c "add $new" "$stick/subkey-rotation.txt" >/dev/null || fail "the stick records the rotation"
+[[ -z $(find /dev/shm -maxdepth 1 -name 'omamobile-rotate.*' -user "$(id -u)" -newer "$t/p" 2>/dev/null) ]] || fail "the tmpfs work directory is gone"
+pass "add: a public key with two signing subkeys, a build keyring with the new subkey's secret alone, the stick updated"
+
+# pacman-key-style trust, as --populate gives it: the primary locally signed
+# by the keyring's own key and its owner trust imported from omamobile-trusted
+pac=$t/pacman-gnupg && mkdir -m 700 "$pac"
+GNUPGHOME=$pac gpg --batch --quiet --passphrase '' --quick-generate-key "pacman keyring master <m@invalid>" ed25519 sign never 2>/dev/null
+populate() {  # populate KEYRING_DIR
+  GNUPGHOME=$pac gpg --batch --quiet --import "$1/omamobile.gpg" 2>/dev/null
+  for f in $(cut -d: -f1 "$1/omamobile-trusted"); do GNUPGHOME=$pac gpg --batch --yes --quiet --quick-lsign-key "$f" >/dev/null 2>&1; done
+  GNUPGHOME=$pac gpg --batch --quiet --import-ownertrust "$1/omamobile-trusted" 2>/dev/null
+}
+trust_of() {  # trust_of FILE: "SUBKEY TRUST" for a good signature in the pacman keyring
+  GNUPGHOME=$pac gpg --batch --status-fd 1 --verify "$1.sig" "$1" 2>/dev/null |
+    awk '$2 == "GOODSIG" { g = 1 } $2 == "VALIDSIG" { v = $3 } $2 ~ /^TRUST_/ { tr = $2 } END { if (g) print v, tr }'
+}
+populate "$kr"
+[[ $(trust_of "$t/p") == "$new TRUST_FULLY" ]] || fail "the new subkey's signature is good and fully trusted through the primary"
+echo old > "$t/q"
+GNUPGHOME=$R/keys/gnupg.release gpg --batch --pinentry-mode loopback --passphrase '' --local-user "$primary" --detach-sign -o "$t/q.sig" "$t/q" 2>/dev/null
+gpgconf --homedir "$R/keys/gnupg.release" --kill gpg-agent 2>/dev/null || true
+[[ $(trust_of "$t/q") == "$old TRUST_FULLY" ]] || fail "the old subkey's signature still verifies after step 2"
+cp -a "$kr" "$t/kr-step2"
+pass "after step 2, phones (pacman-key-style trust) accept both the old and the new subkey's signatures"
+
+if rot "$pp"$'\nadd\n' add "$stick"; then fail "a second add is refused"; fi
+grep -c 'add has run already' "$t/log" >/dev/null || { cat "$t/log"; fail "says add has run"; }
+pass "add runs once"
+
+# --- step 3: install-next on the stand-in build host ---
+before=$(snap)
+rot $'\n' --dry-run install-next || { cat "$t/log"; fail "install-next --dry-run"; }
+[[ $(snap) == "$before" ]] || fail "install-next --dry-run writes nothing"
+if rot $'no\n' install-next; then fail "install-next stops without the typed yes"; fi
+[[ $(snap) == "$before" ]] || fail "a declined install-next writes nothing"
+old_files=$(find "$R/keys/gnupg.release" -type f | wc -l)
+((old_files > 0)) || fail "fixture: the old keyring has files"
+rot $'yes\n' install-next || { cat "$t/log"; fail "install-next"; }
+[[ ! -e $next ]] || fail "keys/gnupg.release-next is moved into place"
+[[ -z $(find "$R/keys" -maxdepth 1 -name '.gnupg.release-retired.*') ]] || fail "the old keyring is shredded and removed"
+cp -a "$R/keys/gnupg.release" "$t/live-copy" && rm -f "$t/live-copy"/S.*
+secrets=$(GNUPGHOME=$t/live-copy gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "ssb" { s = ($15 != "#"); next } $1 == "fpr" && s { print $10; s = 0 }')
+[[ $secrets == "$new" ]] || fail "keys/gnupg.release holds the new subkey alone (got ${secrets//$'\n'/ })"
+echo index > "$t/i"
+GNUPGHOME=$R/keys/gnupg.release gpg --batch --pinentry-mode loopback --passphrase '' --local-user "$primary" --detach-sign -o "$t/i.sig" "$t/i" 2>/dev/null
+gpgconf --homedir "$R/keys/gnupg.release" --kill gpg-agent 2>/dev/null || true
+[[ $(signer "$t/i" "$kr/omamobile.gpg") == "$new $primary" ]] || fail "the build host now signs with the new subkey"
+if rot $'yes\n' install-next; then fail "a second install-next is refused"; fi
+pass "install-next: the build host signs with the new subkey alone, the old keyring is shredded"
+
+# --- step 4: revoke-old ---
+for bad in "$primary:the release key itself" "$new:(it is a subkey)" "$(printf 'A%.0s' {1..40}):not a whole key"; do
+  if rot "$pp"$'\nrevoke\n' revoke-old "$stick" --retire "${bad%%:*}"; then fail "--retire refuses ${bad#*:}"; fi
+  grep -cF -- "${bad#*:}" "$t/log" >/dev/null || { cat "$t/log"; fail "--retire says ${bad#*:}"; }
+done
+before=$(snap)
+rot "$pp"$'\n' --dry-run revoke-old "$stick" --retire "$orig" || { cat "$t/log"; fail "revoke-old --dry-run"; }
+[[ $(snap) == "$before" ]] || fail "revoke-old --dry-run writes nothing"
+rot "$pp"$'\nrevoke\n' revoke-old "$stick" --retire "$orig" || { cat "$t/log"; fail "revoke-old"; }
+mapfile -t after < <(subs_of "$kr/omamobile.gpg")
+[[ ${after[0]} == "r $old" && ${after[1]#* } == "$new" && ${after[1]%% *} != [rei] ]] ||
+  fail "the old subkey is revoked and the new one valid (${after[*]})"
+[[ $(cat "$kr/omamobile-revoked") == "$orig" && $(wc -l < "$kr/omamobile-revoked") == 1 ]] ||
+  fail "omamobile-revoked holds the original key alone, never the subkey or the release key"
+(cd "$R" && source tools/lib/signing.sh && revoked_file_check .) || fail "omamobile-revoked is in §10's form"
+[[ $(cat "$kr/omamobile-trusted") == "$primary:4:" ]] || fail "omamobile-trusted keeps the release key alone"
+[[ $(cat "$kr/version") == "$(date -u +%Y%m%d).1" ]] || fail "a second keyring version the same day is .1 (got $(cat "$kr/version"))"
+grep -c "revoke $old" "$stick/subkey-rotation.txt" >/dev/null || fail "the stick records the revocation"
+GNUPGHOME=$imp gpg --batch --quiet --import "$stick/omamobile-release.secret.asc" 2>/dev/null
+[[ $(GNUPGHOME=$imp gpg --batch --with-colons --list-keys "$primary" | awk -F: '$1 == "sub" { print $2; exit }') == r ]] ||
+  fail "the stick's key carries the revocation"
+[[ $(signer "$t/i" "$kr/omamobile.gpg") == "$new $primary" ]] || fail "the new subkey's signature verifies against the exported key"
+[[ -z $(signer "$t/q" "$kr/omamobile.gpg") ]] || fail "the old subkey's signature no longer verifies"
+populate "$kr"
+[[ $(trust_of "$t/i") == "$new TRUST_FULLY" ]] || fail "phones (pacman-key-style trust) take the new subkey's signature after the update"
+[[ -z $(trust_of "$t/q") ]] || fail "phones refuse the old subkey's signature after the update"
+pass "revoke-old: the old subkey revoked in omamobile.gpg, the original key alone in omamobile-revoked; new verifies, old doesn't"
+
+if rot "$pp"$'\nrevoke\n' revoke-old "$stick"; then fail "a second revoke-old is refused"; fi
+pass "revoke-old runs once"
+
+# --- tools/fetch-published refuses what the revoked subkey signed ---
+srv=$t/srv/development/aarch64 && mkdir -p "$srv" "$t/db/foo-1-1"
+echo foo > "$srv/foo-1-1-any.pkg.tar.zst"
+printf '%%FILENAME%%\nfoo-1-1-any.pkg.tar.zst\n\n%%SHA256SUM%%\n%s\n' "$(sha256sum < "$srv/foo-1-1-any.pkg.tar.zst" | cut -d' ' -f1)" > "$t/db/foo-1-1/desc"
+tar -czf "$srv/omamobile.db" -C "$t/db" foo-1-1
+newsign() { GNUPGHOME=$R/keys/gnupg.release gpg --batch --yes --pinentry-mode loopback --passphrase '' --local-user "$primary" --detach-sign -o "$1.sig" "$1" 2>/dev/null; }
+oldsign() { gpg --batch --yes --pinentry-mode loopback --passphrase "$pp" --local-user "$old!" --detach-sign -o "$1.sig" "$1" 2>/dev/null; }
+newsign "$srv/omamobile.db"; newsign "$srv/foo-1-1-any.pkg.tar.zst"
+fetch() { (cd "$R" && OMAMOBILE_PKGS_URL=file://$t/srv tools/fetch-published --channel development "$t/fetched") > "$t/log" 2>&1; }
+fetch || { cat "$t/log"; fail "fetch-published takes files the new subkey signed"; }
+oldsign "$srv/foo-1-1-any.pkg.tar.zst"; rm -rf "$t/fetched"
+if fetch; then fail "fetch-published refuses a package the revoked subkey signed"; fi
+grep -c 'not signed by a trusted Omamobile key' "$t/log" >/dev/null || { cat "$t/log"; fail "says the package isn't signed by a trusted key"; }
+newsign "$srv/foo-1-1-any.pkg.tar.zst"; oldsign "$srv/omamobile.db"; rm -rf "$t/fetched"
+if fetch; then fail "fetch-published refuses an index the revoked subkey signed"; fi
+gpgconf --homedir "$R/keys/gnupg.release" --kill gpg-agent 2>/dev/null || true
+pass "tools/fetch-published refuses an index or package the revoked subkey signed (gpgv's VALIDSIG alone is not enough)"
+
+# --- the real pacman-key and pacman, as root in a user namespace ---
+if ! command -v pacman-key >/dev/null || ! command -v pacman >/dev/null || ! command -v repo-add >/dev/null ||
+   ! command -v bsdtar >/dev/null || ! unshare -r true 2>/dev/null; then
+  pass "# skip: no user namespace, pacman-key, pacman, repo-add or bsdtar here"
+  exit 0
+fi
+# A short path: gpg-agent's socket must fit in a socket address
+P=$(mktemp -d /dev/shm/omt-pac.XXXXXX) && mkdir -p "$P/repo" "$P/pkg"
+printf 'pkgname = foo\npkgbase = foo\npkgver = 1-1\npkgdesc = test\narch = any\nsize = 1\n' > "$P/pkg/.PKGINFO"
+(cd "$P/pkg" && bsdtar --zstd -cf "$P/repo/foo-1-1-any.pkg.tar.zst" .PKGINFO)
+(cd "$P/repo" && repo-add -q omamobile.db.tar.gz foo-1-1-any.pkg.tar.zst) >/dev/null 2>&1
+dbsign() {  # dbsign old|new: the index signed by that subkey
+  rm -f "$P/repo/omamobile.db.tar.gz.sig" "$P/repo/omamobile.db.sig"
+  if [[ $1 == new ]]; then newsign "$P/repo/omamobile.db.tar.gz"; else oldsign "$P/repo/omamobile.db.tar.gz"; fi
+  ln -sf omamobile.db.tar.gz.sig "$P/repo/omamobile.db.sig"
+}
+# sync KEYRING_DIR: a fresh pacman keyring populated from KEYRING_DIR, then -Sy
+sync_with() {
+  rm -rf "$P/gnupg" "$P/db" && mkdir -p "$P/gnupg" "$P/db" "$P/cache"
+  cat > "$P/pacman.conf" <<EOF
+[options]
+DBPath = $P/db
+CacheDir = $P/cache
+GPGDir = $P/gnupg
+LogFile = $P/pacman.log
+SigLevel = Required DatabaseRequired
+Architecture = any
+[omamobile]
+Server = file://$P/repo
+EOF
+  unshare -r bash -c 'pacman-key --config "$1/pacman.conf" --init && pacman-key --config "$1/pacman.conf" --populate-from "$2" --populate omamobile &&
+    pacman --config "$1/pacman.conf" -Sy' _ "$P" "$1" > "$t/log" 2>&1
+  local rc=$?
+  gpgconf --homedir "$P/gnupg" --kill gpg-agent 2>/dev/null || true
+  return $rc
+}
+dbsign old; sync_with "$t/kr-step2" || { cat "$t/log"; fail "pacman with step 2's keyring takes an index the old subkey signed"; }
+dbsign new; sync_with "$t/kr-step2" || { cat "$t/log"; fail "pacman with step 2's keyring takes an index the new subkey signed"; }
+sync_with "$kr" || { cat "$t/log"; fail "pacman with step 4's keyring takes an index the new subkey signed"; }
+unshare -r gpg --homedir "$P/gnupg" --batch --with-colons --list-keys "$orig" 2>/dev/null | awk -F: '$1 == "pub" { print $12 }' | grep -c D >/dev/null ||
+  fail "pacman-key disables the retired original key"
+dbsign old
+if sync_with "$kr"; then fail "pacman with step 4's keyring refuses an index the revoked subkey signed"; fi
+# Why the subkey never goes into omamobile-revoked
+cp -a "$kr" "$t/kr-wrong" && echo "$old" >> "$t/kr-wrong/omamobile-revoked"
+dbsign new
+if sync_with "$t/kr-wrong"; then fail "listing a subkey in omamobile-revoked disables the whole key"; fi
+grep -c 'is disabled' "$t/log" >/dev/null || { cat "$t/log"; fail "pacman says the release key is disabled"; }
+pass "the real pacman-key and pacman: both subkeys after step 2, only the new one after step 4, and a subkey in omamobile-revoked disables the whole key"

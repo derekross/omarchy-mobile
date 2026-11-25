@@ -160,7 +160,9 @@ mapfile -t trusted < <(cut -d: -f1 packages/omamobile-keyring/omamobile-trusted 
 signed_ok() {
   local status signer
   status=$(GNUPGHOME=$keyhome gpg --batch --status-fd 1 --verify "$1.sig" "$1" 2>/dev/null) || return 1
-  signer=$(awk '$2 == "VALIDSIG" { print $NF }' <<<"$status")
+  # GOODSIG, not only VALIDSIG: gpg says VALIDSIG for a revoked or expired
+  # subkey's signature too, which phones refuse (docs/RELEASES.md §10)
+  signer=$(awk '$2 == "GOODSIG" { good = 1 } $2 == "VALIDSIG" { p = $NF } END { if (good) print p }' <<<"$status")
   [[ -n $signer && " ${trusted[*]} " == *" $signer "* && $signer == "$release_key" ]]
 }
 resign_hint="sign it again with the release key: tools/build-packages --resign, then tools/repo-publish --no-build development"

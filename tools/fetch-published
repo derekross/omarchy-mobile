@@ -66,11 +66,14 @@ revoked_lines=$(revoked_list .) || die "$revoked_lines"
 ((${#trusted[@]})) || die "no trusted keys in $keyring/omamobile-trusted"
 
 # verify SIG FILE: the primary key behind a good signature must be trusted
-# and not revoked (a subkey's VALIDSIG names its primary last)
+# and not revoked (a subkey's VALIDSIG names its primary last). gpgv says
+# VALIDSIG for a revoked or expired subkey's signature too, with REVKEYSIG
+# or EXPKEYSIG in place of GOODSIG, and pacman refuses those, so GOODSIG it
+# must be (a rotated subkey, docs/RELEASES.md §10).
 verify() {
   local primary
   primary=$(gpgv --keyring "$tmp/omamobile.kbx" --status-fd 1 "$1" "$2" 2>/dev/null \
-    | awk '$2 == "VALIDSIG" {print $NF}' | tail -1) || true
+    | awk '$2 == "GOODSIG" {good = 1} $2 == "VALIDSIG" {p = $NF} END {if (good) print p}') || true
   [[ -n $primary && " ${trusted[*]} " == *" $primary "* && " ${revoked[*]} " != *" $primary "* ]]
 }
 
