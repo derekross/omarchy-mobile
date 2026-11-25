@@ -96,6 +96,7 @@ whether it predated a stock boot.
 | [v62](#attended-v62-slot-b-trial) | After v61. Stock D1 A preflight matched the prior return. The v62 boot was requested at 15:38:16 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 | [v63](#attended-v63-slot-b-trial) | After v62. Stock D1 A preflight matched the prior return. The v63 boot was requested at 15:49:24 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 | [v64](#attended-v64-slot-b-trial) | After v63. Stock D1 A preflight matched the prior return. The v64 boot was requested at 16:09:22 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
+| [v65](#attended-v65-slot-b-trial) | After v64. Stock D1 A preflight matched the prior return. The v65 boot was requested at 16:39:58 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 
 The maintainer's [review on backup freshness](https://github.com/derekross/omamobile/pull/1002#pullrequestreview-6060450538)
 leaves open whether to take a fresh rescue backup before each
@@ -3728,6 +3729,32 @@ rejections, response validation and timeout handling. Both AVB
 signatures, ABL handoff, all five image hashes and saved D1 slot
 capacity checks passed. Manifest SHA-256 `9f6356a27630f5df2078b2d9fe11a22390f7b375f9698092c84fa32c9dfd4065`.
 Archive SHA-256 `c95ab36c798f973250a2291670e6614bb97404ebaf99705b7aaa09808a2c99ba`.
+
+#### Attended v65 slot B trial
+
+On 2026-11-25 at 16:39:58 UTC, one v65 boot used the nine-partition
+private NV backup with the owner's approval. All nine local hashes
+passed. The copy predates the last stock A boot. All five slot B
+writes passed, and the readback matched all 8,192 supplied
+`vendor_boot_b` bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 2.216231–2.217549 | Live geometry, direct GPT and REPORT LUNS | Block size 4,096, GPT header and entry-array CRC checks passed, and REPORT LUNS found LUNs 0–4. |
+| 2.217807–2.217934 | Host registration and midlayer dispatch | Zero discovered devices. The gate accepted tag 17 with `lun_in_cdb=0`. Mapping returned 0 with one DMA-from-device segment of 4,096 bytes. Doorbell readback was `0x20000`. |
+| 2.218131–2.218205 | IRQ and comparison | Matching tag 17 IRQ with OCS 0, response 0, status 0 and residual 0. Sent phase 2 returned raw 0 and residual 0. The entire 4,096-byte block matched the direct GPT read and the call returned 0. |
+| 2.249363–2.249724 | Cleanup | Host removal completed, link and Hibern8 returned 0, both PSMs reached `0x11`, and the HCI IRQ was freed. |
+| 90.225517–91.228338 | Timed warm return | Zero SCSI disks at RAM startup and before restart. |
+
+This verifies a one-block read from LUN 0, LBA 1 using the SCSI
+midlayer and normal UFS DMA mapping. The deferred-probe
+`device_links_no_driver` warning remained. The trial reached
+neither timeout nor emergency restart.
+
+Fastboot returned after 133 seconds. Stock D1 A restarted at
+16:42:30 UTC and completed boot with enforcing verity and the
+pretrial VBMeta digest. Ramoops and Android's `SYSTEM_LAST_KMSG`
+agree on all 38 filtered v65 lines.
 
 ### Offline stock D1 device reference-clock diagnostic
 
