@@ -3054,6 +3054,37 @@ Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
 after 133 seconds. Stock D1 booted on A with enforcing verity and
 the expected factory VBMeta digest.
 
+### Mainline v55 one READ CAPACITY retry after reset Unit Attention
+
+[v55 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/bde761da40e26c193ee1924f330864ed9e48ff10)
+keeps the v54 sequence through the first READ CAPACITY(10). After
+a valid response UPIU for slot 0 and LUN 0, it allows one identical
+retry only for response code `0x1`, SCSI CHECK CONDITION, and
+current fixed or descriptor sense `06/29/00`. Deferred sense,
+missing or invalid sense, other errors and a failed retry end the
+sequence. Both attempts require their own transfer completion IRQ.
+The log distinguishes the retry from a first-attempt success.
+
+The fixture issues no additional SCSI opcode or logical-block
+read. It retains the v52 prep OFF guard, v54 sense logging and
+v53 geometry checks. Successful geometry is followed by Hibern8
+and HCI cleanup. The RAM rescue keeps disk scanning disabled and
+requests the timed warm return.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match v55 source and manifest. The DTB and private RAM rescue match v54. | Leave stock A selected on a mismatch. |
+| One attended slot B boot, power control and device initialization | Use the verified nine-partition NV backup. Capture INQUIRY, every READ CAPACITY IRQ and sense response, and the reported LUN 0 geometry. If the initial command reports current `06/29/00`, require exactly one retry. Verify Hibern8 on success, HCI cleanup, zero disks and the timed return. | Preserve the first terminal result and return to stock A. Confirm stock Android completes boot. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v55` passed strict
+checkpatch and targeted `W=1` compilation. Twelve mocked cases
+checked first-attempt success, the retry from both current sense
+formats, the two-attempt limit, and rejection of unrelated or
+malformed responses, deferred sense, timeouts and INQUIRY retry.
+All five image hashes, both AVB signatures, the unpacked payload,
+ABL handoff and saved D1 slot sizes passed. Manifest SHA-256
+`b766360ac99afab2714b328bb632b471ff9ca5c6b7c05db9023720cab5c5262d`. Archive SHA-256 `ae38b9c6758060fd5556842d932bbe5cb8f0343ea89204d1b3f5053f9d7be1c9`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
