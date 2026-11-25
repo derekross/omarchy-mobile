@@ -3,7 +3,8 @@
 
 The test phone has November D1 on stock A. Earlier B trials reached
 authenticated USB SSH in RAM rescue. Two RAM-root trials also reached
-systemd with zero SCSI disks. The UFS diagnostic stops at PHY readiness.
+systemd with zero SCSI disks. The [v72 UFS diagnostic](#attended-v72-slot-b-trial)
+verified read-only GPT discovery and a 4 KiB read through `boot_b`.
 See the [D1 recovery and trial record](NOTES.md#november-d1-recovery-and-first-light-checks)
 and the [kernel provenance and fixtures](bringup/README.md). Coordinate with
 the October-build Grizzly in [#26](https://github.com/derekross/omamobile/issues/26).
@@ -4241,6 +4242,36 @@ Fastboot returned after 133 seconds. Stock D1 A restarted at
 21:27:28 UTC and completed boot with enforcing verity and the
 pretrial VBMeta digest. Ramoops and Android's `SYSTEM_LAST_KMSG`
 agree on all 76 filtered v72 lines.
+
+### Mainline v73 compare two blocks through boot_b
+
+[v73 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/9f76c0ccdc26acb1646b1fde2fe0b9a7ea2b898b)
+qualifies the Android boot header and captures two separate 4 KiB
+direct UFS reads from blocks 1 and 2 of the GPT-selected `boot_b`
+partition. The expected LUN 0 range is 598,711–598,712. After the
+same seven GPT metadata reads and validation of all 42 read-only
+partitions, a private bio reads the same 8 KiB starting at
+partition-relative sector 8.
+
+The gate requires the exact remapped two-block READ(10) and one
+DMA-from-device segment. The existing IRQ completion checks
+reject a nonzero residual. The comparator starts with every byte
+inverted and checks all 8,192 bytes after completion. The RAM
+guard still requires all 42 partitions to remain read-only and
+unmounted. Host removal, Hibern8 and the timed Fastboot return
+use the v72 sequence.
+
+Offline verification passed strict checkpatch, an Arm64 `W=1`
+compile, 27 sanitizer-backed bio and range checks, both AVB
+signatures, handoff bounds and the saved D1 slot fit. The DTB,
+DTBO, vendor images and RAM payload match v72. Manifest SHA-256
+`b04aebf6fb6d0bd90246ba645b7b57797fdb2260ff1615a268f439349faf24fd`.
+
+Before an attended trial, take a fresh guarded NV backup and
+leave the phone in Fastboot. Boot v73 once and capture both
+reference reads, the single 8 KiB partition read and IRQ result,
+the byte comparison and the read-only guard checks. Return to
+stock A and retrieve the retained trace.
 
 ### Offline stock D1 device reference-clock diagnostic
 
