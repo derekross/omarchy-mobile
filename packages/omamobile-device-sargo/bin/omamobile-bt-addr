@@ -1,0 +1,37 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Give the WCN3990 Bluetooth controller the phone's own address, as Android
+# does. The WCN3990 has none of its own: it comes up unconfigured, missing
+# its public address, and BlueZ doesn't see it until it has one. The
+# bootloader writes the phone's address into the device tree at every boot
+# (/chosen/cdt/cdb2/bt_addr, beside the phone's other identifiers).
+#   omamobile-bt-addr hciN   (started by udev through omamobile-bt-addr@.service)
+set -euo pipefail
+
+hci=${1:?Usage: omamobile-bt-addr hciN}
+index=${hci#hci}
+[[ $index =~ ^[0-9]+$ ]] || { echo "not a controller: $hci" >&2; exit 1; }
+source=${OMAMOBILE_BT_ADDR_SOURCE:-/proc/device-tree/chosen/cdt/cdb2/bt_addr}
+[[ -s $source ]] || { echo "no address from the bootloader: $hci stays unconfigured" >&2; exit 0; }
+addr=$(tr -d '\0' < "$source" | tr 'a-f' 'A-F')
+
+# A unicast, globally administered address only.
+[[ $addr =~ ^[0-9A-F]{2}(:[0-9A-F]{2}){5}$ ]] || { echo "malformed address from the bootloader" >&2; exit 0; }
+(( (16#${addr:0:2} & 3) == 0 )) || { echo "not a unicast public address" >&2; exit 0; }
+
+# udev starts us when the controller appears, before hci_qca has finished
+# loading its ROM patch and NV file (about 1.2 s); until then the controller
+# answers neither as configured nor as missing its address.
+for _ in {1..60}; do
+  config=$(btmgmt --index "$index" config 2> /dev/null || true)
+  [[ $config == *"missing options:"*public-address* ]] && break
+  # Already configured (an address set earlier in this boot): nothing to do.
+  if btmgmt --index "$index" info 2> /dev/null | grep -c 'current settings:' > /dev/null; then exit 0; fi
+  sleep 0.5
+done
+[[ $config == *"missing options:"*public-address* ]] || { echo "$hci never finished its setup" >&2; exit 1; }
+
+# Setting the address configures the controller: the kernel runs its setup
+# again (the firmware download) and BlueZ then sees it.
+btmgmt --index "$index" public-addr "$addr" > /dev/null
+exit 0

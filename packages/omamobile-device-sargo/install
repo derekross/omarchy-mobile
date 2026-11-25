@@ -10,7 +10,7 @@ build=${2:-build}
 for tool in reboot-to; do
   install -Dm755 "$build/$tool" "$destination/usr/bin/$tool"
 done
-for tool in omamobile-setup-system omamobile-rtc-offset; do
+for tool in omamobile-setup-system omamobile-rtc-offset omamobile-bt-addr; do
   install -Dm755 "bin/$tool" "$destination/usr/bin/$tool"
 done
 while IFS= read -r -d '' file; do

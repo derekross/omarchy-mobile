@@ -9,8 +9,8 @@ the repository; facts from them are quoted here. The Pixel 3a XL (`bonito`)
 shares the SoC and the bootloader's board name but not the panel.
 
 Every kernel here is linux-omamobile at `00860bdedea4`
-(`7.3.0-rc6-omamobile-push1-g00860bdedea4`; from the battery entry of
-2026-11-25, that plus the fuel gauge commits named there), arm64 defconfig plus
+(`7.3.0-rc6-omamobile-push1-g00860bdedea4`; from the battery and
+Bluetooth entries of 2026-11-25, that plus the commits named there), arm64 defconfig plus
 `kernel/configs/omamobile.config` plus [`kernel.config`](kernel.config),
 built with Debian's clang 19 instead of the pinned Android clang, and the
 upstream `qcom/sdm670-google-sargo.dtb`.
@@ -51,6 +51,61 @@ owner's go:
   ARM's `mesa`, `vulkan-mesa-implicit-layers` and `vulkan-freedreno`
   26.3.1-3 (signatures checked), and the vendor firmware from
   `tools/extract-vendor-firmware -d sargo`.
+
+## 2026-11-25: Bluetooth (omamobile-device-sargo 0.1.2), and a boot that stayed in RAM
+
+Kernel `7.3.0-rc6-omamobile-push1-g07598f0b0ecc`: the fuel gauge branch
+below plus a local branch `omamobile-sargo-bt` (not published), two
+commits:
+
+- "arm64: dts: qcom: sdm670: Add QUP UART6": upstream's `sdm670.dtsi`
+  describes the QUP serial engines only as I2C. Stock's tree puts the
+  Bluetooth UART on serial engine 6 (`hsuart0`, `qupv3_se6_4uart`,
+  0x898000) on gpio45-48 (CTS, RTS, TX, RX), function `qup6`; the node and
+  its pin states follow SDM845's `uart6`.
+- "arm64: dts: qcom: sdm670-google-common: Add Bluetooth": the WCN3990's
+  PMU (`qcom,wcn3990-pmu`, the power sequencer) on PM660 L9 (XO, 1.8 V),
+  L6 (RF, 1.3 V) and L19 (chain 0, 3.3 V), the rails stock's Bluetooth and
+  Wi-Fi nodes name; the controller (`qcom,wcn3990-bt`) on UART6; and the
+  first QUP wrapper (`qupv3_id_0`) enabled, which the board left disabled
+  (without it the UART never probed). Stock names no I/O supply; L13A comes
+  from `sda660-inforce-ifc6560.dts`, which wires the same PMIC to the same
+  chip. `dtbs_check` adds no warning for these nodes.
+
+The firmware is Google's, from the vendor partition's `/firmware`:
+`crbtfw21.tlv` (ROM patch) and `crnv21.bin` (this board's NV), named by the
+DT's `firmware-name` under `qca/sdm670/sargo/`;
+`tools/extract-vendor-firmware -d sargo` now copies both. The phone's
+`bluetooth_a` and `bluetooth_b` partitions are empty (all zeros).
+
+On the phone: `hci0` came up 11 s into the boot ("setting up wcn399x", SoC
+version 0x40010214, ROM 2.1), loaded both files and finished its setup in
+1.2 s. The WCN3990 has no address of its own: it comes up unconfigured,
+missing its public address, and BlueZ saw no controller. The bootloader
+writes the phone's address into the DT at every boot
+(`/chosen/cdt/cdb2/bt_addr`, a colon-separated unicast public address);
+`btmgmt public-addr` with it configured the controller (it reran its setup)
+and the controller reported that address in the DT's byte order. A
+15-second scan saw 28 devices, LE among them. Pairing is not tested yet.
+`omamobile-bt-addr` (udev, `hci_uart_qca`) does this at every boot; on a
+boot from `boot_b` the controller was configured and powered by 24 s of
+uptime.
+
+**A boot that stayed in RAM.** The first RAM boot of this kernel stayed in
+the initramfs: `init` looked for `userdata` at 1.33 s, the eMMC's
+partitions appeared at about 1.7 s, and "arch: no userdata partition"
+ended the handover. Earlier boots had won that race. `initramfs/init` now
+looks again for up to 10 s; with it, Arch started at 1.95 s (RAM boot) and
+2.46 s (from `boot_b`).
+
+**Slot B's tries do run out.** `slot-retry-count:b` read 3 on the morning
+of 2026-11-25 and 0 that afternoon, with `slot-unbootable:b:yes`, after
+seven boots of slot B since the last `--set-active=b` (2026-11-24), RAM
+boots included; with B unbootable, a `fastboot boot` went straight back to
+fastboot. `fastboot --set-active=b` gave B three tries again. The note in
+the clock entry below that this bootloader might not count down was wrong.
+`androidboot.slot_retry_count` on the kernel command line shows the tries
+left.
 
 ## 2026-11-25: battery and charging (charger, RRADC, fuel gauge)
 
@@ -131,9 +186,8 @@ On the phone (`7.3.0-rc6-omamobile-push1-g00860bdedea4`):
   SSH, with no network on the phone.
 
 `fastboot getvar all` read `slot-retry-count:b:3` and `slot-successful:b:no`
-on 2026-11-25, after slot B had booted several times since the last
-`--set-active=b` (2026-11-24): this bootloader may not count tries down the
-way the slot notes above assume. Not relied on until it is understood.
+on 2026-11-25. (This entry first said the bootloader might not count tries
+down; it does, see the Bluetooth entry above.)
 
 ## 2026-11-24: Omarchy on slot B, display, GPU and touch
 
@@ -174,8 +228,8 @@ What it took, each a step that failed first:
   offset came on 2026-11-25, above).
 
 Not working yet (on that kernel; battery and charging came on 2026-11-25,
-above): battery and charging (no power supply registers), Wi-Fi,
-Bluetooth, modem, audio, sensors, cameras, suspend. Plymouth's unit fails.
+above, Bluetooth too): battery and charging (no power supply registers),
+Wi-Fi, Bluetooth, modem, audio, sensors, cameras, suspend. Plymouth's unit fails.
 
 ## 2026-11-24: the eMMC guard on the phone (RAM boot)
 
@@ -246,7 +300,7 @@ card probes).
    the shared config, or the phone keeps a development kernel.
 3. This phone's CONTRIBUTING.md §3.1 entry (slot B's GPT mark), then
    `flash`/`push` and the installer for `android-v2`.
-4. The fuel gauge into linux-omamobile, then Bluetooth and Wi-Fi: the modem
+4. The fuel gauge and Bluetooth into linux-omamobile, then Wi-Fi: the modem
    processor first (remoteproc nodes for SDM670, `rmtfs` read-only from RAM,
    and a read-only backup of `modemst1`, `modemst2`, `fsg` and `persist`,
    which `tools/nv-backup` can't read from eMMC yet).

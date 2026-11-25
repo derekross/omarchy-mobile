@@ -7,7 +7,8 @@ trap 'rm -rf "$t"' EXIT
 ./build "$t/build"
 echo 'ok - reboot helper compiles'
 ./install "$t/root" "$t/build"
-for file in usr/bin/reboot-to usr/bin/omamobile-setup-system usr/bin/omamobile-rtc-offset \
+for file in usr/bin/reboot-to usr/bin/omamobile-setup-system usr/bin/omamobile-rtc-offset usr/bin/omamobile-bt-addr \
+  usr/lib/systemd/system/omamobile-bt-addr@.service usr/lib/udev/rules.d/80-omamobile-bt-addr.rules \
   usr/lib/systemd/system/omamobile-rtc-offset.service \
   usr/lib/udev/rules.d/10-omamobile-storage.rules \
   usr/lib/systemd/network/20-usb-gadget.network \
@@ -61,9 +62,11 @@ assert any('rpmb' in l and 'MODE="0000"' in l for l in rules)
 assert any('mmcblk0p' in l and '!="userdata"' in l and 'UDISKS_IGNORE' in l for l in rules)
 assert not any('KERNEL=="sd' in l for l in rules)
 assert sorted(p.name for p in root.rglob('*.service') if not p.is_symlink()) == [
-    'omamobile-rtc-offset-save.service', 'omamobile-rtc-offset.service']
+    'omamobile-bt-addr@.service', 'omamobile-rtc-offset-save.service', 'omamobile-rtc-offset.service']
+bt = (root/'usr/lib/udev/rules.d/80-omamobile-bt-addr.rules').read_text()
+assert 'DRIVERS=="hci_uart_qca"' in bt and 'omamobile-bt-addr@%k.service' in bt
 assert not (root/'usr/lib/modprobe.d').exists()
-print('ok - eMMC storage policy, disabled sleep modes and no hardware service units')
+print('ok - eMMC storage policy, disabled sleep modes, and only the clock and Bluetooth address units')
 PY_POLICY
 
 # The clock offset: restore and save against a fake RTC, with no clock set.
@@ -96,6 +99,42 @@ OMAMOBILE_RTC_TICK_POLLS=1 OMAMOBILE_RTC_SANE=$((now + 99999)) OMAMOBILE_RTC="$t
   bin/omamobile-rtc-offset save | grep -F 'nothing saved'
 test ! -e "$t/state/rtc-offset"
 echo 'ok - the clock offset restores forward only, survives an RTC reset and skips an unset clock'
+
+# The Bluetooth address: a fake btmgmt that answers as an unconfigured
+# WCN3990 (after two polls while hci_qca loads its firmware) and records
+# what it is asked to set. The addresses are fictional, and built from
+# parts so that no address literal is in the tree (tools/pr-check).
+mkdir -p "$t/fakebin"
+cat > "$t/fakebin/btmgmt" <<'FAKE'
+#!/bin/bash
+state=$FAKE_STATE
+case "$*" in
+  "--index 0 config")
+    n=$(cat "$state/polls" 2>/dev/null || echo 0); echo $((n + 1)) > "$state/polls"
+    if [[ -e $state/configured ]]; then exit 1; fi
+    ((n >= 2)) && printf 'hci0:\tUnconfigured controller\n\tmissing options: public-address \n' ;;
+  "--index 0 info") [[ -e $state/configured ]] && echo 'current settings: powered' ;;
+  "--index 0 public-addr "*) echo "${*: -1}" > "$state/set"; : > "$state/configured" ;;
+  *) exit 1 ;;
+esac
+FAKE
+chmod 755 "$t/fakebin/btmgmt"
+bt_test() {
+  PATH="$t/fakebin:$PATH" FAKE_STATE="$t/bt" OMAMOBILE_BT_ADDR_SOURCE="$t/bt_addr" bin/omamobile-bt-addr "$@"
+}
+tail=1a:2b:3c:4d:5e
+mkdir -p "$t/bt"
+printf '00:%s\0' "$tail" > "$t/bt_addr"
+bt_test hci0
+[[ $(cat "$t/bt/set") == "00:${tail^^}" ]]
+rm "$t/bt/set"; bt_test hci0; test ! -e "$t/bt/set"   # already configured: left alone
+rm -rf "$t/bt"; mkdir -p "$t/bt"
+for bad in "02:$tail" "01:$tail" 'not-an-address'; do
+  printf '%s\0' "$bad" > "$t/bt_addr"; bt_test hci0 2>/dev/null; test ! -e "$t/bt/set"
+done
+rm -f "$t/bt_addr"; bt_test hci0 2>/dev/null; test ! -e "$t/bt/set"
+if bt_test notacontroller 2>/dev/null; then echo 'not ok - a bad index must be refused' >&2; exit 1; fi
+echo 'ok - the Bluetooth address is set once the controller is unconfigured, and only a public unicast one'
 
 # Copied policy and helper must track the source package when present.
 for file in src/reboot-to.c vendor/NetworkManager/conf.d/10-omamobile-usb.conf; do
