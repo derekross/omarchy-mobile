@@ -143,7 +143,7 @@ pass "push checks here, needs the same clean commit there, copies, and checks th
 rm -f "$t/unit-env"
 run command || fail "command"
 # shellcheck disable=SC2016
-grep -qF "ssh -t builder@bh 'cd ~/Projects/omarchy-mobile && export DOCKER_HOST=unix:///run/user/\$(id -u)/docker.sock && tools/build-packages packages/linux-omamobile && tools/repo-publish --from-main development'" "$t/log" ||
+grep -qF "ssh builder@bh 'cd ~/Projects/omarchy-mobile && export DOCKER_HOST=unix:///run/user/\$(id -u)/docker.sock && tools/build-packages packages/linux-omamobile && tools/repo-publish --from-main development'" "$t/log" ||
   fail "with no DOCKER_HOST in the unit, the shell's rootless socket"
 echo 'DOCKER_HOST=unix:///run/user/1000/docker.sock' > "$t/unit-env"
 run command || fail "command with the unit's DOCKER_HOST"
@@ -154,6 +154,13 @@ grep -q 'not one a shell can use' "$t/log" || fail "says the DOCKER_HOST is unus
 mv "$R/packages/linux-omamobile/prebuilt" "$t/prebuilt.away"
 echo 'DOCKER_HOST=unix:///run/user/1000/docker.sock' > "$t/unit-env"
 run command && ! grep -q 'build-packages packages/linux-omamobile' "$t/log" || fail "no kernel staged: no linux-omamobile build"
+printf '%s\n' 'DOCKER_HOST=unix:///run/user/1000/docker.sock OMAMOBILE_PKGS_HOST=omapub@pkgs.example' > "$t/unit-env"
+run command || fail "command with the unit's OMAMOBILE_PKGS_HOST"
+grep -qF "export DOCKER_HOST=unix:///run/user/1000/docker.sock && export OMAMOBILE_PKGS_HOST=omapub@pkgs.example && " "$t/log" || fail "the unit's upload account goes into the command"
+grep -q "ssh -t" "$t/log" && fail "no terminal for the build: ssh without -t"
+printf '%s\n' 'DOCKER_HOST=unix:///run/user/1000/docker.sock OMAMOBILE_PKGS_HOST=omapub@x;rm' > "$t/unit-env"
+if run command; then fail "an OMAMOBILE_PKGS_HOST that isn't user@host is refused"; fi
+grep -q 'is not user@host' "$t/log" || fail "says the upload account is unusable"
 mv "$t/prebuilt.away" "$R/packages/linux-omamobile/prebuilt"
 pass "command prints the build and publish with a DOCKER_HOST a shell can use"
 

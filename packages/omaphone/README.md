@@ -1,6 +1,6 @@
 # omaphone
 
-Omarchy Mobile's Phone app
+Omamobile's Phone app
 ([TELEPHONY-APPS-PLAN](../../docs/TELEPHONY-APPS-PLAN.md) T6/T7, §10.1b), in
 its own repository, [omaphone](https://github.com/derekross/omaphone)
 (GPL-3.0-or-later). This package builds a pinned release from it.

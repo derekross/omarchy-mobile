@@ -64,7 +64,7 @@ pass "locate refuses what can't be swapped in place"
 
 # Swap the bytes, as an installer does in the stream
 cat > "$t/answers" <<'A'
-# Written by the Omarchy Mobile installer on the computer; omamobile-firstboot reads and deletes it.
+# Written by the Omamobile installer on the computer; omamobile-firstboot reads and deletes it.
 USERNAME=alex
 PASSWORD_HASH=$6$saltstring$svn8UoSVapNtMuq1ukKS4tPQd8iKwSMHWjl/O817G3uBnIFNjnQJuesI68u4OTLiBFdcbYEdFCoEOfaS35inz1
 HOSTNAME=alex-phone
@@ -77,7 +77,7 @@ A
 # each run: random characters in an Ed25519 key's form)
 key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI$(head -c 33 /dev/urandom | base64 -w0) installer-test"
 echo "SSH_KEY=$key" >> "$t/answers"
-printf '# Written by the Omarchy Mobile installer\nAUTO_WRITE=yes\n' > "$t/auto"
+printf '# Written by the Omamobile installer\nAUTO_WRITE=yes\n' > "$t/auto"
 bash "$P" fill $FB "$t/answers" > "$t/fb.block"
 bash "$P" fill $BU "$t/auto" > "$t/bu.block"
 [[ $(stat -c %s "$t/fb.block") == 4096 && $(stat -c %s "$t/bu.block") == 4096 ]] || fail "filled, each is still one block"

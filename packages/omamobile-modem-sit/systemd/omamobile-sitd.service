@@ -5,7 +5,7 @@
 # first runs. It needs the modem unit's CP ONLINE and never restarts on its
 # own: a second start-up on the same CP is not supported (reboot instead).
 [Unit]
-Description=Omarchy Mobile SIT RIL (S5300 calls, SMS, registration)
+Description=Omamobile SIT RIL (S5300 calls, SMS, registration)
 # The device modem-policy package supplies its modem dependency as a drop-in.
 # Tegu checks an already running modem; cheetah/raven retain their starter.
 After=omamobile-audio.service

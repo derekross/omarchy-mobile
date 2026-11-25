@@ -72,5 +72,9 @@ if grep -c 'OMAMOBILE_BOOT_FILES' "$dir/install" >/dev/null 2>&1 && [[ ! -d $dir
   echo "no $dir/boot-files: a development build without the boot files (omamobile-boot-update will refuse on it)"
   optout="OMAMOBILE_BOOT_FILES=none "
 fi
-"$ssh" "su - '$phone_user' -c 'cd $build/$name && ${optout}makepkg -f --noconfirm' 2>&1 | tail -2"
-"$ssh" "OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U --noconfirm $build/$name/$name-*.pkg.tar.* 2>&1 | grep -E '^error|installing|upgrading|reinstalling' ; pacman -Q $name"
+# Filter locally so this script's pipefail sees ssh's status rather than
+# relying on the phone's shell; awk exits 0 when no line matches.
+"$ssh" "su - '$phone_user' -c 'cd $build/$name && ${optout}makepkg -f --noconfirm' 2>&1" | tail -2
+"$ssh" "OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U --noconfirm $build/$name/$name-*.pkg.tar.* 2>&1" |
+  awk '/^error|installing|upgrading|reinstalling/'
+"$ssh" "pacman -Q $name"

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Maintainer: Derek Ross <derekross@gmail.com>
 #
-# omacam, Omarchy Mobile's camera app ("Camera"): photos and video; Rust, GTK 4 and
+# omacam, Omamobile's camera app ("Camera"): photos and video; Rust, GTK 4 and
 # libadwaita on libcamera directly (docs/CAMERA-APP-PLAN.md). Its own
 # repository carries the same PKGBUILD for building from a checkout
 # (pkgbuild/PKGBUILD); this one builds a pinned release.

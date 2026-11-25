@@ -104,7 +104,7 @@ is no `vendor_boot`, `init_boot`, or `vendor_kernel_boot`).
     matched 12-entry no-op `dtbo`, flashed `vbmeta_a` with `--disable-verity
     --disable-verification` early on 13 October, and formatted `userdata`
     (`sda15`) as unencrypted `ext4` (`LABEL=omarchy-root`).
-  - **Do not copy this handset state.** Under `omarchy-mobile` rules
+  - **Do not copy this handset state.** Under `omamobile` rules
     ([`CONTRIBUTING.md` §3.1](../../CONTRIBUTING.md#31-stock-android-stays-on-slot-a)),
     `vbmeta` and slot A must never be modified. Because `userdata` on this
     development handset was formatted `ext4` and our kernel occupies `boot_a`,
@@ -184,7 +184,7 @@ is no `vendor_boot`, `init_boot`, or `vendor_kernel_boot`).
     this unit LBA 1, LBA 2 and the last LBA), the attribute bit (`bit 54`), the
     header and entry-array CRCs it rewrites, the before/after slot flags, the
     GPT rollback procedure, and the recovery path. `coral` cannot inherit
-    `flame`'s pending entry ([#58](https://github.com/derekross/omarchy-mobile/pull/58)).
+    `flame`'s pending entry ([#58](https://github.com/derekross/omamobile/pull/58)).
     That entry also needs stock restored on slot A, or the owner's written
     acceptance of buttons-only recovery.
 

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Maintainer: Derek Ross <derekross@gmail.com>
 #
-# omatel-agent: the background service behind Omarchy Mobile's Phone
+# omatel-agent: the background service behind Omamobile's Phone
 # (packages/omaphone) and Messages (packages/omamessages) apps
 # (docs/TELEPHONY-APPS-PLAN.md T6/T7). It rings for calls, writes the call
 # log, stores incoming SMS and raises notifications, and serves
@@ -29,7 +29,7 @@ license=('GPL-3.0-or-later' 'MIT')
 depends=(gcc-libs glibc sqlite dbus systemd feedbackd sound-theme-freedesktop)
 optdepends=('omaphone: the Phone app'
             'omamessages: the Messages app'
-            'omamobile-mmd: the modem (ModemManager API) on Omarchy Mobile phones'
+            'omamobile-mmd: the modem (ModemManager API) on Omamobile phones'
             'callaudiod: call audio routing (speaker, mute), with call audio (T4)')
 makedepends=(cargo pkgconf sqlite)
 checkdepends=(dbus)

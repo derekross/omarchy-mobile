@@ -242,8 +242,8 @@ goes on):
 3. it is the phone the record was started on;
 4. it tells which slot it runs from (`current-slot` is `a` or `b`; a phone
    that leaves the line out is not taken for slot A). On slot B an
-   unlocked phone's owner is asked "Is this phone already running Omarchy
-   Mobile? (yes/no)" (as the desktop installer asks it): `yes` is a
+   unlocked phone's owner is asked "Is this phone already running Omamobile?
+   (yes/no)" (as the desktop installer asks it): `yes` is a
    reinstall, and `--reinstall` is handed to `install-phone`; `no` stops,
    because Android runs there and must not be written over; anything else
    asks again. `--reinstall` given on the command line skips the question.
@@ -284,8 +284,8 @@ first; that can't be done while the bootloader is locked; unlocking erases
 the phone, so everything on it is lost either way if the owner goes on,
 and what is to be kept is copied off first; then INSTALL.md step 1 (the
 unlock) and step 3. It prints no unlock command and offers no
-`--reinstall`: a phone with a locked bootloader can't be running Omarchy
-Mobile. Its footer is "Nothing has been written to the phone, and its
+`--reinstall`: a phone with a locked bootloader can't be running Omamobile.
+Its footer is "Nothing has been written to the phone, and its
 bootloader is locked."
 
 **What can't be judged before the unlock**, and why:
@@ -321,7 +321,7 @@ change, not the order. §8 step 2a is the read-only look.
 **What each stop says.** No stop ends with a fixed reassurance. Each ends
 with what is true of the phone at that moment, read from the record:
 nothing has been written; an earlier write began and didn't finish, so
-what was on the phone may already be erased; or Omarchy Mobile is written
+what was on the phone may already be erased; or Omamobile is written
 and what was done stays done. Then every stop ends with the one command to
 run next, on a line of its own: the command as it was run, without
 `--start-over` (in a bundle, `bash install --guided`), so nothing long has
@@ -425,7 +425,7 @@ the address.
 ### 3a. Which phone answers
 
 A serial pinned in Fastboot Mode says nothing about who answers at
-172.16.42.1 afterwards: on a desk with two phones that run Omarchy Mobile,
+172.16.42.1 afterwards: on a desk with two phones that run Omamobile,
 or with a record left by an install that was given up, the steps after
 the write could back up, provision and restart another phone, and file
 its radio backup as this one's.
@@ -463,8 +463,8 @@ without changing anything.
 | --- | --- | --- |
 | 2 | `Type yes to go on, or press Enter to stop:` | `yes` only |
 | 3 | `Press Enter when that is done, to check the phone again:` | Enter |
-| 3 | `Press Enter to restart the phone into Fastboot Mode:` | Enter; then `adb reboot bootloader` |
-| 3 | `Is this phone already running Omarchy Mobile? (yes/no)` | only for an unlocked phone on slot B: `yes` is a reinstall (`--reinstall`); `no` stops; anything else asks again |
+| 3 | `Press Enter to restart the phone into Fastboot Mode:` | Enter; then `adb reboot bootloader`; anything else stops, with nothing sent to the phone |
+| 3 | `Is this phone already running Omamobile? (yes/no)` | only for an unlocked phone on slot B: `yes` is a reinstall (`--reinstall`); `no` stops; anything else asks again |
 | 3 | `Measure slot B's bootloader now? (yes/no)` | only for an unlocked phone on slot A that reports one bootloader copy's version, where the descriptor says `BOOTLOADER_SLOT_PROBE=yes`, and not in a dry run: `yes` hands `--measure-other-slot` to `install-phone`, which measures before its first write; `no` stops; anything else asks again |
 | 4 | `Type yes to accept Google's terms and download the file, or press Enter to get it yourself from Google's page:` | `yes` only: the terms are accepted and recorded, and the download starts; anything else downloads nothing and goes on to the next question. Asked once per build; not asked when the owner's file is already there |
 | 4 | `Press Enter to open Google's page:` | Enter; only when the terms weren't accepted here or the download couldn't be made |
@@ -489,9 +489,9 @@ Read this once. It is the only warning; nothing will ask again.
 1. The phone is erased. Everything on it is lost: photos, messages, apps,
    accounts and two-factor codes. Copy off what you want to keep first.
    If its bootloader is still locked, unlocking it (the next step) is what
-   erases it, before anything of Omarchy Mobile is written.
+   erases it, before anything of Omamobile is written.
 
-2. Omarchy Mobile replaces Android as the phone's system. There are no
+2. Omamobile replaces Android as the phone's system. There are no
    Google apps and no Play Store, and Android apps don't run on it. This
    release is a <label>: some things a phone normally does
    are missing or unfinished. The list for this phone:
@@ -526,7 +526,7 @@ for these files, Google says:
 
 In our own words: Google's page says these files are for use only on your own
 Pixel and may not be redistributed. So the installer downloads this one straight
-from Google to this computer, for this phone. Omarchy Mobile does not host
+from Google to this computer, for this phone. Omamobile does not host
 Google's files and does not pass them on.
 
 Google's page for this build, with the terms in full:
@@ -613,7 +613,7 @@ checks that each question above is in this file.
   the newest is tested: the updater would take it past that one, for
   good.
   - **The pair isn't listed, and the newest build is tested:** "This
-    phone's Android version isn't one Omarchy Mobile knows yet", then
+    phone's Android version isn't one Omamobile knows yet", then
     the update advice below, and to open an issue if Android says it is
     up to date. A rerun goes on after the update.
   - **The pair isn't listed, and the newest build isn't tested:** the
@@ -942,16 +942,16 @@ against the current backup passes. Steps 0 and 1 change nothing.
 
 | # | Command | Expect | Stop if | Rollback | Risk |
 | --- | --- | --- | --- | --- | --- |
-| 0 (done, below) | With the phone running Omarchy Mobile on USB: `tools/phone-ssh 'grep -c androidboot.serialno /proc/bootconfig; tr " " "\n" < /proc/cmdline \| grep -c "^androidboot.serialno="; test -e /proc/device-tree/serial-number && echo dt'`. Then compare digests, printing neither serial: on the phone `sed -n 's/^androidboot\.serialno[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' /proc/bootconfig \| tr -d '\n' \| sha256sum`, and later, in Fastboot Mode, `fastboot devices \| awk '{printf "%s", $1}' \| sha256sum` | at least one of the three places has the serial; the two digests are equal | none of the three has it, or the digests differ: §3a's assumption is wrong, and the install would stop at step 7. Don't start it; fix the script first | none needed (read-only) | none |
+| 0 (done, below) | With the phone running Omamobile on USB: `tools/phone-ssh 'grep -c androidboot.serialno /proc/bootconfig; tr " " "\n" < /proc/cmdline \| grep -c "^androidboot.serialno="; test -e /proc/device-tree/serial-number && echo dt'`. Then compare digests, printing neither serial: on the phone `sed -n 's/^androidboot\.serialno[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' /proc/bootconfig \| tr -d '\n' \| sha256sum`, and later, in Fastboot Mode, `fastboot devices \| awk '{printf "%s", $1}' \| sha256sum` | at least one of the three places has the serial; the two digests are equal | none of the three has it, or the digests differ: §3a's assumption is wrong, and the install would stop at step 7. Don't start it; fix the script first | none needed (read-only) | none |
 | 1 | `tools/factory-index add -d cheetah --tested <release> <the phone's factory zip>`, then `tools/factory-index check -d cheetah` | one build, with the bootloader and baseband `fastboot getvar` reports; the printed SHA-256 equals Google's page | the tool refuses the zip | `git checkout device/cheetah/factory-builds.json` | none (laptop only) |
 | 2 | `tools/install-guided --dry-run` with the phone in Fastboot Mode | the warning first; steps 1 to 5 pass; the `would run` lines are slot B's five images and `userdata`, each with `-s` and the phone's serial; the connection it would add is §5a's; "nothing was written" | any other partition in the plan; the phone step misreads the phone's state; it stops at the bootloader slots (expected on the 7 Pro until `install-phone` measures them: then this runbook waits for that, or the maintainer reads the other slot and passes `--bootloader-slots-match`) | none needed (read-only) | low |
 | 2a | only if a locked phone of the model is at hand (never lock a phone for this): `fastboot getvar all 2>&1 \| sed -E 's/:.*//' \| sort -u` on it and on an unlocked one, comparing the names only | the locked phone's names include `current-slot`, `version-baseband`, `version-bootloader` and `partition-size` | one is missing on the locked phone: §2a's order then stops every locked phone there; the stop has to change before a locked phone is installed | none needed (read-only) | none |
-| 3 | `tools/install-guided` (from a bundle: `bash install --guided` in its folder; on slot B it asks whether the phone runs Omarchy Mobile) | the warning once; nothing answering at 172.16.42.1; the zip found in Downloads; the codename asked after the dry run; then the writes | `install-phone` stops: read its message, the phone stays in fastboot. "Something already answers at the phone's USB address": unplug the other phone | `fastboot --set-active=a`, as INSTALL.md | medium (erases `userdata`, as every install) |
+| 3 | `tools/install-guided` (from a bundle: `bash install --guided` in its folder; on slot B it asks whether the phone runs Omamobile) | the warning once; nothing answering at 172.16.42.1; the zip found in Downloads; the codename asked after the dry run; then the writes | `install-phone` stops: read its message, the phone stays in fastboot. "Something already answers at the phone's USB address": unplug the other phone | `fastboot --set-active=a`, as INSTALL.md | medium (erases `userdata`, as every install) |
 | 3a | at step 4 of that run, with no factory image in Downloads: read the terms step, type `yes`. This is the first real download from Google's server | the three quoted sentences are the ones on Google's page today; curl's progress bar; "downloaded, and kept in …"; the file is 600 under `~/.cache/omamobile-install/factory/`; `sha256sum` of it equals Google's page | "Google's server sent the download on to another address" (note the host it names: §5b's rule then needs deciding again); a size or SHA-256 stop; the sentences on Google's page differ from the quoted ones (the text has to change before anyone else sees it) | the file is only on the computer: delete it, or go on with the fallback (Google's page, or the file saved into Downloads) | low (nothing is sent to the phone) |
 | 4 | at the connection question, read the command and its description, press Enter. This is the first time this profile meets a real NetworkManager. On a computer that already has `omamobile-phone` saved the question doesn't come: to try the new profile there, `nmcli connection delete omamobile-phone` before step 3 | `nmcli connection show omamobile-phone` has `ipv4.method manual`, `ipv4.never-default yes`, priority -100; `nmcli device` shows it on the phone's link; the phone answers; `sysctl net.ipv4.ip_forward` and the firewall's rules are as before | another saved connection takes the phone's link (the phone then doesn't answer); this computer's network changes in any other way | `nmcli connection delete omamobile-phone` | low |
 | 5 | let it run: first start, backup, firmware | "the first start has finished" within minutes, with no internet on the phone but its Wi-Fi; `verified against the phone` per partition; each push `verified` | the first start doesn't finish and `/var/log/omamobile/firstboot.log` shows a step waiting for the network (§5a's reading is then wrong: say so, and the profile goes back to the maintainer); "is not the phone this install wrote" or "doesn't tell its serial number" (step 0 should have caught it); the backup names a writable or mounted partition; provisioning fails twice | rerun `tools/install-guided`; the backup only reads | low |
 | 6 | the restart and the check | the phone comes back; every required row `[ok]`; "Your phone is ready" | the phone doesn't come back in ten minutes (Power held 30 s); `journalctl -b -1 -u omamobile-modem` shows the modem was up and not stopped | rerun `tools/install-guided` (it only checks again) | low |
-| 7 | on a second run, unplug the cable once during step 5's wait, and rerun; and once, with a second phone that runs Omarchy Mobile on the cable instead, rerun | the first goes on from that step and `--status` agrees; the second stops with "is not the phone this install wrote" and `journalctl` on the second phone shows one SSH login and no change | it asks to write again; the second phone is backed up, provisioned or restarted | `--start-over` | low |
+| 7 | on a second run, unplug the cable once during step 5's wait, and rerun; and once, with a second phone that runs Omamobile on the cable instead, rerun | the first goes on from that step and `--status` agrees; the second stops with "is not the phone this install wrote" and `journalctl` on the second phone shows one SSH login and no change | it asks to write again; the second phone is backed up, provisioned or restarted | `--start-over` | low |
 | 8 | read-only, for §5a's follow-up: `nmcli -g GENERAL.HWADDR device show <the phone's link>` on the computer, before and after a restart of the phone | the same address after the restart (the gadget's saved pair), another one for the first seconds | it changes at every restart: pinning by address is then not possible | none needed | none |
 
 Record the results here with the date and `uname -r`, with no serial or
@@ -983,7 +983,7 @@ hardware address in them.
   program was named but not the package that has it (the stop gave one
   fixed `pacman` line for every program, and nothing for other systems).
 - **The second guided install, 2026-11-13**: release 2026.11.12, from its
-  signed bundle, on the same phone (Omarchy Mobile on slot B), with the
+  signed bundle, on the same phone (Omamobile on slot B), with the
   release kernel `7.3.0-rc6-omamobile-g1a9d1d4e9289`. The bundle had no
   guided installer, so the repository's was pointed at the bundle's
   images, and stopped: "…/images holds images for 'an unknown device', not
@@ -1001,7 +1001,7 @@ hardware address in them.
   `tools/camera-requirements.txt`, under the signed `SHA256SUMS`), and
   `bash install --guided` in the bundle's folder runs it with the bundle's
   own files, checked as bundle mode checks them, with no option (§10).
-  Slot B is a question ("Is this phone already running Omarchy Mobile?"),
+  Slot B is a question ("Is this phone already running Omamobile?"),
   a reinstall's bootloader is slot B's own (§2), a finished install run
   again asks "Install again from the start?" (§3), a factory image already
   saved under any name is found by its SHA-256 (§5b), a missing program is

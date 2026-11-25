@@ -3,9 +3,9 @@
 pkgname=omamobile-gnss
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile GNSS for the Pixel 7 Pro: Broadcom's lhd/gpsd in a vendor chroot, NMEA to GeoClue on demand"
+pkgdesc="Omamobile GNSS for the Pixel 7 Pro: Broadcom's lhd/gpsd in a vendor chroot, NMEA to GeoClue on demand"
 arch=(aarch64)
-url="https://github.com/derekross/omarchy-mobile"
+url="https://github.com/derekross/omamobile"
 license=(MIT)
 depends=(bash python curl iproute2 util-linux coreutils systemd geoclue libnotify)
 optdepends=('gpsd: NMEA for gpsd clients through /run/omamobile-gnss/nmea-tty')

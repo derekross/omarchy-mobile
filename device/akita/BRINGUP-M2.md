@@ -2,11 +2,11 @@
 # akita M2: storage (UFS behind the guard, then the Arch root)
 
 **Status (2026-11-10):** **M2 is complete.** M2.1-M2.6 are done and merged (#456), and **M2.7 passed gate (e)** on 2026-11-10: Omarchy's image runs from `userdata` with the session, the lock and the guard, `reboot-to bootloader` works from it, and a second boot comes up clean ([Results](#2026-11-10-omarchys-image-m27-gate-e)). M1 is complete and merged ([BRINGUP-M1](BRINGUP-M1.md)):
-- derekross/linux-omarchy-mobile#192 was rebase-merged on 2026-11-05, so its three commits are on `omamobile` under new ids, with the same patches: `cb2cd5e4b` (binding), `c7eb44543` (first light) and `0e2739a92` (framebuffer).
+- derekross/linux-omamobile#192 was rebase-merged on 2026-11-05, so its three commits are on `omamobile` under new ids, with the same patches: `cb2cd5e4b` (binding), `c7eb44543` (first light) and `0e2739a92` (framebuffer).
 - #414 was squash-merged as `905aa91`.
 
-M2.1 is done and **M2.3 passed gate (c)** on 2026-11-06: UFS runs at HS-G4 on two lanes behind the guard ([Results](#results)). M2.1's kernel change is derekross/linux-omarchy-mobile#206, rebase-merged on 2026-11-07 as `75b9c0b73`. Its `zuma-akita.dts` is blob `bfa8b6f54e0e`, the DTS that booted in M2.3. M2.4 is done: a fresh backup from our kernel, verified and copied offline. M2.5 is done: `omamobile-device-akita` 0.1.0 and `build-u3-root`. **M2.6 passed gate (d)** on 2026-11-06: Arch Linux ARM runs from `userdata`, behind the guard, and comes up the same on a second boot. M2.7 used `omamobile-device-akita` 0.1.1 from the signed `[omamobile]` repository's development channel. A second retail 8a passed M2.3, M2.4 and M2.6 as well ([#456](https://github.com/derekross/omarchy-mobile/pull/456)).
-- **Kernel:** linux-omarchy-mobile#206 (branch `omamobile-zuma-akita-ufs`), merged. Its builds used the worktree `~/omamobile-kernel/wt-zuma-akita-dts` (reused, so the build stays incremental) and `~/omamobile-kernel/out-zuma-akita-dts`.
+M2.1 is done and **M2.3 passed gate (c)** on 2026-11-06: UFS runs at HS-G4 on two lanes behind the guard ([Results](#results)). M2.1's kernel change is derekross/linux-omamobile#206, rebase-merged on 2026-11-07 as `75b9c0b73`. Its `zuma-akita.dts` is blob `bfa8b6f54e0e`, the DTS that booted in M2.3. M2.4 is done: a fresh backup from our kernel, verified and copied offline. M2.5 is done: `omamobile-device-akita` 0.1.0 and `build-u3-root`. **M2.6 passed gate (d)** on 2026-11-06: Arch Linux ARM runs from `userdata`, behind the guard, and comes up the same on a second boot. M2.7 used `omamobile-device-akita` 0.1.1 from the signed `[omamobile]` repository's development channel. A second retail 8a passed M2.3, M2.4 and M2.6 as well ([#456](https://github.com/derekross/omamobile/pull/456)).
+- **Kernel:** linux-omamobile#206 (branch `omamobile-zuma-akita-ufs`), merged. Its builds used the worktree `~/omamobile-kernel/wt-zuma-akita-dts` (reused, so the build stays incremental) and `~/omamobile-kernel/out-zuma-akita-dts`.
 - **This repository:** branch `device-akita-m2` (M2.1-M2.6), then `device-akita-m27` (M2.7's results).
 
 ## Goal
@@ -25,7 +25,7 @@ Slot A stays stock throughout. Only `*_b` boot images and `userdata` are written
 
 husky's UFS work is merged, and all of it belongs to zuma, not to husky's board ([UFS-PLAN](../husky/UFS-PLAN.md), Design):
 
-- The host and PHY bind Tensor G4's driver data through the fallback compatibles (`google,zuma-ufs` → `google,zumapro-ufs`; linux-omarchy-mobile#51).
+- The host and PHY bind Tensor G4's driver data through the fallback compatibles (`google,zuma-ufs` → `google,zumapro-ufs`; linux-omamobile#51).
 - The zuma pin controllers, with the HSI2UFS and PERIC0 banks (#50).
 - `zuma.dtsi`'s `ufs_0` and `ufs_0_phy`, disabled until a board enables them (#53). They come with:
   - the reset and reference-clock pin groups;
@@ -154,7 +154,7 @@ KERNEL_OUT=<M2.3's build> tools/install-phone --device akita \
   --bootloader-slots-match akita-17.0-15681527 --reinstall --dry-run
 ```
 
-`--reinstall` is needed because after M2.3 the phone runs from slot B. `install-phone` refuses that unless the owner states that slot B holds Omarchy Mobile (our boot images) rather than stock Android after a system update.
+`--reinstall` is needed because after M2.3 the phone runs from slot B. `install-phone` refuses that unless the owner states that slot B holds Omamobile (our boot images) rather than stock Android after a system update.
 
 Then run the same `install-phone` without `--dry-run`. It needs the human's go, because it erases `userdata`. That partition holds only stock's empty data since stage 0's wipe; no account was ever signed in.
 
@@ -178,7 +178,7 @@ Then run the same `install-phone` without `--dry-run`. It needs the human's go, 
 As husky's U4:
 1. Build a fresh kernel from `omamobile`, with M2.1 merged, and tag it before it's flashed.
 2. Fill `out/repo/aarch64` from the signed repository's development channel, checking each signature.
-3. Run `DEVICE=akita tools/build-rootfs`, then `tools/install-phone --device akita --bootloader-slots-match akita-17.0-15681527 --reinstall` (slot B runs Omarchy Mobile since M2.6), with `--dry-run` first.
+3. Run `DEVICE=akita tools/build-rootfs`, then `tools/install-phone --device akita --bootloader-slots-match akita-17.0-15681527 --reinstall` (slot B runs Omamobile since M2.6), with `--dry-run` first.
 
 The install needs the human's go, since it erases `userdata` again.
 
@@ -212,7 +212,7 @@ The install needs the human's go, since it erases `userdata` again.
 
 ### 2026-11-06: the port (M2.1, laptop only)
 
-- **The kernel change:** `zuma-akita.dts` gains `<dt-bindings/gpio/gpio.h>`, `ufs_0_fixed_vcc_reg` (`regulator-fixed` "ufs-vcc" on `gpp0` 1, `GPIO_ACTIVE_HIGH`), `&ufs_0` with `vcc-supply` and `status = "okay"`, and `&ufs_0_phy` switched on, with husky's two comments. It is 25 lines, and is now linux-omarchy-mobile#206, merged as `75b9c0b73` (DTS blob `bfa8b6f54e0e`).
+- **The kernel change:** `zuma-akita.dts` gains `<dt-bindings/gpio/gpio.h>`, `ufs_0_fixed_vcc_reg` (`regulator-fixed` "ufs-vcc" on `gpp0` 1, `GPIO_ACTIVE_HIGH`), `&ufs_0` with `vcc-supply` and `status = "okay"`, and `&ufs_0_phy` switched on, with husky's two comments. It is 25 lines, and is now linux-omamobile#206, merged as `75b9c0b73` (DTS blob `bfa8b6f54e0e`).
 - **Checks** [V]:
   - `W=1` adds no warning;
   - `dtbs_check` reports only the two eUSB2-PHY supply warnings, the same two husky's DTB has on this tree, so the UFS nodes validate against zuma's merged bindings;
@@ -244,7 +244,7 @@ Findings:
 
 ### 2026-11-06: a fresh read-only backup from our kernel (M2.4)
 
-This was in M2.3's boot, with the guard on and nothing mounted. M2.3's kernel change is linux-omarchy-mobile#206: its `zuma-akita.dts` is blob `bfa8b6f54e0e`, the DTS that booted.
+This was in M2.3's boot, with the guard on and nothing mounted. M2.3's kernel change is linux-omamobile#206: its `zuma-akita.dts` is blob `bfa8b6f54e0e`, the DTS that booted.
 
 | # | Test | Seen | Meaning |
 | --- | --- | --- | --- |
@@ -252,7 +252,7 @@ This was in M2.3's boot, with the guard on and nothing mounted. M2.3's kernel ch
 | 11 | All 63 stage-0 items hashed on the phone (18 s) and compared with the clean backup of 2026-11-02 | 47 are unchanged. 11 changed: `efs`, `efs_backup`, `persist`, `modem_userdata`, `metadata` and `trusty_persist` (stock Android, which ran for about 43 h after that backup); `devinfo`, `dram_train_b` and `klog` (the bootloader's slot flags, memory training and log); and the `sdd` and `sdc` LUNs, which hold `devinfo` and `dram_train_b`. The other 5 are slot B's boot images, ours since M1.3 | Nothing changed that stock or the bootloader doesn't write. Our kernels couldn't write: M1's had no UFS, and M2.3's runs behind the guard |
 | 12 | The full set, with a private helper on the laptop (`akita-backup-linux`): unchanged items come from the clean backup, the radio items from test 10, and the rest are read in 8 MiB chunks; every file is checked against the phone's hash, and the phone is hashed again afterwards | 58 items, 1.4 GB, all verified, and the phone's hashes the same before and after. Afterwards: no UFS error, and the guard's flags unchanged | **The fresh backup.** M2.6's writes and any later check compare against it. Both new backups have an offline copy |
 
-The UFS change went out as linux-omarchy-mobile#206, signed off by the owner, and merged as `75b9c0b73`. `tools/kernel-pr-check --build OUT --merge origin/omamobile` passed on it:
+The UFS change went out as linux-omamobile#206, signed off by the owner, and merged as `75b9c0b73`. `tools/kernel-pr-check --build OUT --merge origin/omamobile` passed on it:
 - a clean merge;
 - the sign-off;
 - `checkpatch --strict` with 0 errors and 0 warnings;
@@ -275,7 +275,7 @@ The UFS change went out as linux-omarchy-mobile#206, signed off by the owner, an
 
 ### 2026-11-06: Arch on `userdata`, test image (M2.6, gate d)
 
-- **Kernel:** `7.3.0-rc6-omamobile-push1-g31d8b229d0d0`: linux-omarchy-mobile#206's head before it merged (`31d8b229d`), built clean with no overlay. Its DTS is blob `bfa8b6f54e0e`, as merged in `75b9c0b73`.
+- **Kernel:** `7.3.0-rc6-omamobile-push1-g31d8b229d0d0`: linux-omamobile#206's head before it merged (`31d8b229d`), built clean with no overlay. Its DTS is blob `bfa8b6f54e0e`, as merged in `75b9c0b73`.
 - **The test root:** built by `device/akita/build-u3-root` from the Arch Linux ARM base (sha256 `42a4eeaa…`), `omamobile-device-akita` 0.1.0 and this kernel's modules. Its MANIFEST names repository commit `93de3d963c6d`.
 - **The install:** `tools/install-phone --device akita --rootfs … --bootloader-slots-match akita-17.0-15681527 --reinstall`, run by the owner after a dry run.
 
@@ -317,7 +317,7 @@ Findings:
 
 - **`systemd-firstboot.service` fails on the first boot only** (status 208/STDIN). With ABL's `console=null` it has no console. `omamobile-firstboot` already sets the host name, time zone and locale. lynx's NOTES and panther's BRINGUP-M1 record the same. It doesn't run again, so `systemctl --failed` is empty from the second boot on (test 26).
 - **One new journal line:** `Failed to preset all unit: Unit /etc/systemd/system/systemd-networkd-wait-online.service is masked`. It came once in first boot's preset, for a unit the image masks on purpose. It isn't recorded for other phones yet, and is harmless here.
-- **The two `exynos-clkout` lines stay "new" on purpose.** The driver had no `google,zuma-pmu` entry in this kernel. linux-omarchy-mobile#209 adds it (merged 2026-11-10, after this kernel was built), so akita's next kernel should stop printing them. `phone-smoke`'s known list is shared by every phone, and on the Pixel 7 Pro and the 9a the same lines mean NFC's clock is missing, so they aren't listed there (#584, closed).
+- **The two `exynos-clkout` lines stay "new" on purpose.** The driver had no `google,zuma-pmu` entry in this kernel. linux-omamobile#209 adds it (merged 2026-11-10, after this kernel was built), so akita's next kernel should stop printing them. `phone-smoke`'s known list is shared by every phone, and on the Pixel 7 Pro and the 9a the same lines mean NFC's clock is missing, so they aren't listed there (#584, closed).
 - **The other error lines are known:** `unable to open an initial console`, `systemd-gpt-auto-generator` exiting with 1, and `gkr-pam: couldn't unlock the login keyring` (auto-login).
 - **The lock screen blanks the display after 10 s without input,** whatever `omarchy-toggle-idle` says. That's the lock's own timer, by design. With no touch or key input yet, the screen can only be woken over SSH (`omarchy-shell lock wake`, run as the user). The power key isn't an input device yet: a short press does nothing, and a long press is the PMIC reset.
 - **The USB link didn't come back after the host lost power.** The laptop crashed and restarted while the phone ran the M2.6 root. After that, the phone never appeared on USB again, even on a replug, while the display stayed up. Volume Down + Power reached fastboot, which enumerated at once on the same cable and port. This is probably the same as on the Pixel 7 Pro and the 9a, not checked on akita: there the charger IC opens the USB2 data switch when VBUS drops, and with no Type-C driver yet nothing closes it again. A laptop losing power looks like an unplug to the phone. Until that's fixed, the way back is the button combination. **Since confirmed on akita** ([BRINGUP-M4](BRINGUP-M4.md), M4.4): after an unplug the switch read 0x00, and `omamobile-usb-rescue` brought the link back on the replug.

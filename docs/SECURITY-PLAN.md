@@ -34,7 +34,7 @@ checked on hardware).
 
 | Mode | Who | Disk | Bootloader | Boot images | How you get there |
 | --- | --- | --- | --- | --- | --- |
-| **Secure** (release default) | People who flash a release | LUKS2 on `userdata`, unlocked by a PIN or passphrase on the touchscreen at boot | Locked, with Omarchy Mobile's key in `avb_custom_key` (yellow state) | Signed on the build machine and delivered pre-signed by the Updater | The release installer |
+| **Secure** (release default) | People who flash a release | LUKS2 on `userdata`, unlocked by a PIN or passphrase on the touchscreen at boot | Locked, with Omamobile's key in `avb_custom_key` (yellow state) | Signed on the build machine and delivered pre-signed by the Updater | The release installer |
 | **Development** | Builders and testers | Plain ext4 as today, or LUKS2 if the owner wants it | Unlocked (orange state) | Built anywhere, footers signed with AOSP's public test key as today | `fastboot flashing unlock` (wipes `userdata`), then the development install |
 | **Bring your own key** | Builders who want a locked phone with their own builds | LUKS2 | Locked, with the builder's own key in `avb_custom_key` | Signed by the builder | The release installer with the builder's key and images |
 

@@ -1,6 +1,6 @@
 # omamobile-device-akita
 
-Omarchy Mobile's first userspace package for the Google Pixel 8a (codename akita, Tensor G3 / zuma). Like the Pixel 8 Pro's first package, it hides the Android partitions from desktop tools, holds the USB address, and gives pacman the same `[omamobile]` repository as the Pixel 7 Pro. It keeps the USB link across an unplug, as the Pixel 8 Pro's does. It does not drive the radio, the charger, or a camera, and it does not mark a boot slot successful.
+Omamobile's first userspace package for the Google Pixel 8a (codename akita, Tensor G3 / zuma). Like the Pixel 8 Pro's first package, it hides the Android partitions from desktop tools, holds the USB address, and gives pacman the same `[omamobile]` repository as the Pixel 7 Pro. It keeps the USB link across an unplug, as the Pixel 8 Pro's does. It does not drive the radio, the charger, or a camera, and it does not mark a boot slot successful.
 
 | Path | Installs to | What it does |
 | --- | --- | --- |
@@ -19,4 +19,4 @@ Omarchy Mobile's first userspace package for the Google Pixel 8a (codename akita
 
 `./build [DIR]` compiles `reboot-to` from this directory, `./install DESTDIR [DIR]` stages the files, and `test/all` checks the copies when it is run from the repository.
 
-Not in this package: the boot-success marker, Wi-Fi, the charger, cameras, the display start and the slot-B image hook. Each one stays out until it has its own runbook. **The fuel gauge has no battery model by default.** Neither of BRINGUP-M4's overlays (`pack-eeprom-test`, `gauge-model-atl`) is in `device.conf`, so on a kernel with linux-omarchy-mobile#246 the gauge runs on the driver's default model: the bar shows 22.0 C, not moving, and a level about 4 points high ([BRINGUP-M4](../../device/akita/BRINGUP-M4.md), tests 37 and 39). There is no lid drop-in: akita has no hinge. Whether Plymouth needs the Pixel 8 Pro's retain-splash drop-in on simpledrm is still open ([BRINGUP-M2](../../device/akita/BRINGUP-M2.md), open questions).
+Not in this package: the boot-success marker, Wi-Fi, the charger, cameras, the display start and the slot-B image hook. Each one stays out until it has its own runbook. **The fuel gauge has no battery model by default.** Neither of BRINGUP-M4's overlays (`pack-eeprom-test`, `gauge-model-atl`) is in `device.conf`, so on a kernel with linux-omamobile#246 the gauge runs on the driver's default model: the bar shows 22.0 C, not moving, and a level about 4 points high ([BRINGUP-M4](../../device/akita/BRINGUP-M4.md), tests 37 and 39). There is no lid drop-in: akita has no hinge. Whether Plymouth needs the Pixel 8 Pro's retain-splash drop-in on simpledrm is still open ([BRINGUP-M2](../../device/akita/BRINGUP-M2.md), open questions).

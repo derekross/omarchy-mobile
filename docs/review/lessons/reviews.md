@@ -1,8 +1,67 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Review lessons: Reviews and merging (part 1 of 3)
+# Review lessons: Reviews and merging (part 1 of 4)
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1177. When main is merged into a contributor's branch after another bump
+  of the same package, the version file is read again before the squash.**
+  #905 was merged as `omamobile-shell` 0.2.143, but in the merge its version
+  file had silently taken main's 0.2.142 (#1036 fixed it). *Check:* after the
+  merge and before `gh pr merge --squash`, compare `git show
+  HEAD:packages/<p>/version` with `git show origin/main:packages/<p>/version`
+  and with the number the PR names; the head's must be the higher. Extends
+  L-404 and L-12. *From:* #905 and #1036, the maintainer's assistant,
+  2026-11-24.
+- **L-1176. When a decision and the contributor's reply cross by minutes, the
+  next comment says so and turns the decision into the exact edit.** #1005's
+  author wrote "I'll wait for your call; say so and I'll split" four minutes
+  after the decision was posted, so a bare "see the decision" would cost a
+  round; the edit itself (two variables in two files, and why the AoC still
+  has Trusty) is what lets him act on it. *Check:* compare the decision
+  comment's `createdAt` with each later author comment; when the reply doesn't
+  refer to it, put the decision's consequence into concrete file changes in
+  the draft, tried once in scratch. Extends L-124 and L-520. *From:* #1005,
+  round 67, 2026-11-24.
+- **L-1175. When the maintainer says in one twin's thread which twin he
+  expects to take, the same sentence goes into the other twin's thread in the
+  same round, and a later rework of the other is read as a sign it didn't.**
+  On 11-18 #886's review said "I expect to take this one and credit #727's
+  find"; #727's thread heard nothing, and its author reworked it on 11-24 to
+  the round-56 points. *Check:* for each pair L-923 finds, `gh api
+  repos/<r>/issues/<n>/comments --jq
+  '.[]|select(.user.login=="<maintainer>")|.created_at'` on both, and compare
+  the last maintainer comment's date on each with the twin decision. Extends
+  L-923 and L-910. *From:* #727 with #886, round 67, 2026-11-24.
+- **L-1153. A device plan's "before X comes to a PR" item is grepped when X
+  arrives from another contributor.** The tegu SLEEP-PLAN's "What is left"
+  item 4 asked for zuma's missing `pmu_cpuhp` handshake to be compared with
+  gs101's before idle states reached a PR; kernel #280 brought them without
+  it, and the plan's own sentence made that a question for the maintainer, not
+  a note. *Check:* `git grep -n -i 'before .* comes\? to a PR\|before .*
+  lands' origin/main -- device/<codename>/` for the feature's words at the
+  start of any board PR on that device. Extends L-845 and L-723. *From:*
+  kernel #280, round 66, 2026-11-23.
+- **L-1152. A package comment that names a driver option's effect is re-read,
+  in every open PR that repeats it, when a kernel issue shows the option isn't
+  enforced.** Kernel #288 (the 8a's input limit not kept, `NO_AUTOIBUS` clear)
+  landed between #899's push and this round; the same author fixed the
+  sentence in `tools/husky-deadman` (#1008) that evening, while #899's
+  `omamobile-charger.conf` and README still call `default_ilim_ua` a 500 mA
+  input limit. *Check:* for a new kernel issue about a module parameter, `gh
+  pr list --search '<parameter>'` and `git grep -n '<parameter>'` over the
+  open heads' `packages/*/vendor/modprobe.d` and READMEs, and carry the issue
+  into each review of the round. Extends L-1046 and L-957. *From:* #899 with
+  #1008 and kernel #288, round 66, 2026-11-23.
+- **L-1151. Two open PRs that place a new item at the same QML anchor
+  expression collide on screen, whatever git says.** #994 moves the unread
+  count to `callChipPill.visible ? callChipPill.right : clockText.right`;
+  #1014 puts a recording chip at the identical expression with `z: 2`. Git
+  reported a conflict only because #994 also moved a block; a resolution that
+  kept both PRs' lines would compile and draw one item over the other.
+  *Check:* for a shell PR that adds or moves an item by `anchors.*:`, `git
+  grep -nF '<the anchor expression>'` over every open head that touches the
+  same QML file, and write the chained anchor into both reviews. Extends L-104
+  and L-722. *From:* #994 with #1014, round 66, 2026-11-23.
 - **L-1117. Agreeing on "one helper for both" moves three things besides the
   code: an optional dependency becomes a versioned one, the helper's
   exit-status protocol has to be mapped to the caller's result format, and the
@@ -73,7 +132,13 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   PR's own files carry the earlier phone runs over without a re-test. *Check:*
   run both commands for every merge commit a contributor adds after a "ready"
   review, before reading anything else. Extends L-45, L-287 and L-357. *From:*
-  #581, round 63, 2026-11-20.
+  #581, round 63, 2026-11-20. (Extended 2026-11-24: the same proof works for a
+  contributor's own rebase that follows our prepared resolution, even when the
+  base moved in between. On kernel #195, `git merge-tree --write-tree <new
+  base> <our rebuilt commit>` gave a tree identical to the author's head two
+  merges later, so our DTB comparison and gate carried over in one command;
+  `git diff --stat <that tree> <head>` empty means the rebase is ours. *From:*
+  kernel #195, round 67.)
 - **L-1073. A new commit on a PR is checked against the list of open points
   before it is read as progress, and a commit that answers the sibling PR's
   question says nothing about this one's.** #829 gained a commit a day after
@@ -348,71 +413,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   `git ls-remote <fork>` for the branch a reply names, fetch it into a review
   ref, and run `kernel-pr-check --build` with the dependency's head as BASE.
   Extends L-429 and L-196. *From:* kernel #202, rounds 61 to 63, 2026-11-20.
-- **L-887. A "lands together with X" in our own comment is re-derived when
-  the PR is cut down.** Round 52 tied #204 to #203 because it seeded a
-  descriptor value; the cut-down hook reads nothing from #203, yet the
-  coupling would have held an inert, tested change behind a PR waiting on
-  decisions and a kernel. *Check:* after a rework, `git grep` the sibling PR's
-  head for each path and key the reworked PR still reads; if none, say the
-  coupling is gone and let the maintainer choose. Extends L-519 and L-250.
-  *From:* #204 with #203, round 61, 2026-11-18.
-- **L-852. When a fix adds the right lookup, grep for the wrong one it
-  replaces.** Kernel #202 added `gs_decon_pick_lynx_soc()` in probe and left
-  the broken `of_graph_get_remote_node()` test from the round before in
-  `gs_decon_get_dsim()`, dead, on a path every board runs. *Check:* `git grep
-  -n '<the compatible or symbol the fix keys on>' <head> -- <file>` and expect
-  one hit. Extends L-183. *From:* kernel #202, round 60, 2026-11-17.
-- **L-846. A review written but not posted is re-run against the head and the
-  base, and its draft says how long the contributor has waited.** Kernel
-  #264's file was held for two days; the head was unchanged, the base had
-  moved under it, and the gate and the vendor's values were re-checked before
-  reuse. *Check:* `git rev-parse` the head against the file's first line, `git
-  diff --stat <old base> <new base> -- <the PR's directories>`, rerun the
-  gate, then reuse. Extends L-195 and L-480. *From:* kernel #264, round 60,
-  2026-11-17.
-- **L-844. When the bottom of a stack is rebased, the PR above it is rebuilt
-  on the new bottom with `git merge-tree --merge-base=<old bottom head>` and
-  gated there, and the `--onto` command we hand over names the old bottom
-  head.** Kernel #263 carried #181's previous head after #181's rebase; GitHub
-  showed CONFLICTING with no CI, while the one commit applied cleanly on the
-  new bottom with the same patch id. *Check:* `git merge-base --is-ancestor
-  <bottom's current head> <top head>`; if it fails, find the old bottom head
-  in the top's history, rebuild, compare `git patch-id --stable`, gate the
-  rebuilt commit against the new bottom, and say whose conflict it is. Extends
-  L-291, L-355 and L-644. *From:* kernel #263 with #181, round 60, 2026-11-17.
-- **L-840. A PR that waits on our own phone run is given a merge slot ahead of
-  sibling PRs on the same board file, and the wait is counted in rebases.**
-  Kernel #181 had been ready for four days and was rebased again only because
-  another PR landed in `gs201-panther.dts`; two more were queued behind the
-  same file. *Check:* each round, for a PR whose only blocker is the
-  maintainer's run, list the open PRs that touch its files and put it first in
-  the round's merge order, or run the test before merging any of them. Extends
-  L-253 and L-719. *From:* kernel #181, round 60, 2026-11-17.
-- **L-839. A request left open on a PR at the top of an unmerged stack is
-  re-listed when the stack's bottom is reviewed.** Kernel #120's message fix
-  and our own 7 Pro capture sat for 20 days because #63 and #103 were the
-  active threads. *Check:* when reviewing a stack's bottom PR, `gh pr list
-  --search` for PRs whose head contains it and carry their open points into
-  the same round. Extends L-196 and L-688. *From:* kernel #120 with #63 and
-  #103, round 60, 2026-11-17.
-- **L-838. "The contributor replied" is checked for who replied and whether
-  the head moved.** On kernel #120 the new comment was a third party's data
-  from another phone on an unpublished tree; the author's two open points, 20
-  days old, were untouched. *Check:* `gh pr view --json comments` for each new
-  comment's `author.login` against the PR's author, the force-push events
-  since our last comment, and `git log -1 --format=%cI <head>`; list our open
-  requests against the head before reading the new comment as an answer.
-  Extends L-34 and L-688. *From:* kernel #120, round 60, 2026-11-17.
-- **L-837. When main fixed the sentence a PR also fixes, the rebase drops the
-  PR's hunk.** #98's WIFI-PLAN line and main's said the same thing in
-  different words. *Check:* read both sides of a docs conflict for meaning
-  before asking for "both"; name the side to keep. Extends L-184 and L-556.
-  *From:* #98, round 60, 2026-11-17.
-- **L-836. A one-line-per-device table row conflicts whenever two PRs change
-  different cells of it, and the review hands over the answer cell by cell.**
-  #98's Bluetooth cell and #751's Wi-Fi cell are the same line of DEVICES.md,
-  and the Wanted row repeats both. *Check:* split the row on ` | ` at the
-  base, main and the head, list which cells each side changed, and write
-  "main's row with this PR's cell N" in the comment; do the same for the
-  Wanted row (L-132). Extends L-184 and L-354. *From:* #98 with #751, round
-  60, 2026-11-17.

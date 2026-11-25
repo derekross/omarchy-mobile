@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Where pacman gets Omarchy Mobile's packages ([omamobile] in /etc/pacman.conf).
+# Where pacman gets Omamobile's packages ([omamobile] in /etc/pacman.conf).
 #
 # The one active Server line is the channel this phone follows:
 #   stable       what has run on the Pixel 7 Pro; phones installed from a

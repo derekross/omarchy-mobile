@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile's user setup: what a platform's "setup-user" step does in
+# Omamobile's user setup: what a platform's "setup-user" step does in
 # Omarchy's lifecycle contract (docs/lifecycle-dispatch.md upstream). Runs as
 # the user. Each step runs once, tracked with Omarchy's own omarchy-done
 # markers, so the user's later changes are never overwritten.
@@ -202,7 +202,7 @@ fi
 if omarchy-done ensure omamobile-hide-cursor; then
   cat >>~/.config/hypr/looknfeel.lua <<'LUA'
 
--- Omarchy Mobile: a touch phone shows no pointer
+-- Omamobile: a touch phone shows no pointer
 hl.config({ cursor = { invisible = true, hide_on_touch = true } })
 LUA
 fi
@@ -214,7 +214,7 @@ if omarchy-done ensure omamobile-osk; then
   gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true
   cat >>~/.config/hypr/autostart.lua <<'LUA'
 
--- Omarchy Mobile: on-screen keyboard
+-- Omamobile: on-screen keyboard
 o.launch_on_start("squeekboard")
 LUA
 fi
@@ -304,7 +304,7 @@ if omarchy-done ensure omamobile-phone-rules; then
   if ! grep -qs 'hypr/phone\.lua' ~/.config/hypr/*.lua; then
     cat >>"$phone_rules_target" <<LUA
 
--- Omarchy Mobile: phone window rules
+-- Omamobile: phone window rules
 dofile("$share/hypr/phone.lua")
 LUA
   fi
@@ -341,12 +341,12 @@ omamobile-browser-setup || echo "omamobile-setup-user: browser setup failed; con
 if omarchy-done ensure omamobile-menu-hide-unlock; then
   extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
   if [[ -f $extension ]] && ! grep -q '"style.unlock"' "$extension"; then
-    sed -i '0,/^{/s//{\n  \/\/ Omarchy Mobile: no disk-unlock screen on the phone\n  "style.unlock": {"when": "false"},/' "$extension"
+    sed -i '0,/^{/s//{\n  \/\/ Omamobile: no disk-unlock screen on the phone\n  "style.unlock": {"when": "false"},/' "$extension"
   fi
 fi
 
 # Omarchy's Setup > Security > Fingerprint looks for a USB reader and installs
-# libfprint-git. On the phone it opens Omarchy Mobile's enrollment screen instead
+# libfprint-git. On the phone it opens Omamobile's enrollment screen instead
 # (omamobile.fingerprint, through fprintd), once, through the same menu
 # extension file (a reused id replaces the entry).
 if omarchy-done ensure omamobile-menu-fingerprint; then
@@ -354,7 +354,7 @@ if omarchy-done ensure omamobile-menu-fingerprint; then
   mkdir -p "$(dirname "$extension")"
   [[ -s $extension ]] || printf '{\n}\n' >"$extension"
   if ! grep -q '"setup.security.fingerprint"' "$extension"; then
-    sed -i '0,/^{/s//{\n  \/\/ Omarchy Mobile: fingerprint setup on the screen, through fprintd\n  "setup.security.fingerprint": {"icon": "\xf3\xb0\x88\xb7", "label": "Fingerprint", "when": "test -x \/usr\/lib\/omamobile-fp\/omamobile-fp-chroot", "action": "omarchy-shell shell summon omamobile.fingerprint '"'"'{\\"page\\":\\"enroll\\"}'"'"'"},/' "$extension"
+    sed -i '0,/^{/s//{\n  \/\/ Omamobile: fingerprint setup on the screen, through fprintd\n  "setup.security.fingerprint": {"icon": "\xf3\xb0\x88\xb7", "label": "Fingerprint", "when": "test -x \/usr\/lib\/omamobile-fp\/omamobile-fp-chroot", "action": "omarchy-shell shell summon omamobile.fingerprint '"'"'{\\"page\\":\\"enroll\\"}'"'"'"},/' "$extension"
   fi
 fi
 
@@ -417,7 +417,7 @@ if omarchy-done ensure omamobile-menu-agents; then
   mkdir -p "$(dirname "$extension")"
   [[ -s $extension ]] || printf '{\n}\n' >"$extension"
   if ! grep -q '"setup.default.agent.hermes"' "$extension"; then
-    sed -i '0,/^{/s//{\n  \/\/ Omarchy Mobile: no aarch64 build of Hermes\n  "setup.default.agent.hermes": {"when": "false"},\n  "install.ai.hermes": {"when": "false"},/' "$extension"
+    sed -i '0,/^{/s//{\n  \/\/ Omamobile: no aarch64 build of Hermes\n  "setup.default.agent.hermes": {"when": "false"},\n  "install.ai.hermes": {"when": "false"},/' "$extension"
   fi
 fi
 
@@ -573,7 +573,7 @@ if [[ -f $voxconf ]]; then
   if ! grep -c '^[[:space:]]*context_window_optimization[[:space:]]*=' "$voxconf" >/dev/null &&
     omarchy-done ensure omamobile-voxtype-context; then
     if grep -c '^\[whisper\]$' "$voxconf" >/dev/null; then
-      sed -i -e '/^\[whisper\]$/a # Omarchy Mobile: Whisper'"'"'s context cut to the clip, about twice as fast on a phone' \
+      sed -i -e '/^\[whisper\]$/a # Omamobile: Whisper'"'"'s context cut to the clip, about twice as fast on a phone' \
         -e '/^\[whisper\]$/a context_window_optimization = true' "$voxconf"
     else
       printf '\n[whisper]\ncontext_window_optimization = true\n' >>"$voxconf"
@@ -589,7 +589,7 @@ if omarchy-done ensure omamobile-menu-update; then
   mkdir -p "$(dirname "$extension")"
   [[ -s $extension ]] || printf '{\n}\n' >"$extension"
   if ! grep -q '"update.omarchy"' "$extension"; then
-    sed -i '0,/^{/s//{\n  \/\/ Omarchy Mobile: updates through the phone'"'"'s update sheet; no fwupd or Plymouth rebuilds\n  "update.omarchy": {"icon": "\xee\xa4\x80", "iconFont": "omarchy", "label": "Omarchy", "action": "omarchy-shell shell summon omamobile.update '"'"'{}'"'"'"},\n  "update.firmware": {"when": "false"},\n  "update.config.plymouth": {"when": "false"},/' "$extension"
+    sed -i '0,/^{/s//{\n  \/\/ Omamobile: updates through the phone'"'"'s update sheet; no fwupd or Plymouth rebuilds\n  "update.omarchy": {"icon": "\xee\xa4\x80", "iconFont": "omarchy", "label": "Omarchy", "action": "omarchy-shell shell summon omamobile.update '"'"'{}'"'"'"},\n  "update.firmware": {"when": "false"},\n  "update.config.plymouth": {"when": "false"},/' "$extension"
   fi
 fi
 
@@ -609,7 +609,7 @@ menu_hide() {
     grep -qF "\"$id\"" "$extension" || rows+="  \"$id\": {\"when\": \"false\"},"$'\n'
   done
   [[ -n $rows ]] || return 0
-  OMAMOBILE_ROWS="  // Omarchy Mobile: $comment"$'\n'"${rows%$'\n'}" \
+  OMAMOBILE_ROWS="  // Omamobile: $comment"$'\n'"${rows%$'\n'}" \
     awk '!done && /^[[:space:]]*\{/ {print; print ENVIRON["OMAMOBILE_ROWS"]; done = 1; next} {print}' \
     "$extension" >"$extension.new"
   mv -f "$extension.new" "$extension"

@@ -5,7 +5,7 @@ The evidence for the sleep that never woke ([SLEEP-PLAN](../../SLEEP-PLAN.md)
 S1, "What is left" item 1, and the notes of 2026-11-12 and 11-13): a register
 access to a USI in the first microseconds after its clock gates are opened
 never returns, and the noirq resume does exactly that. The fix is
-[linux-omarchy-mobile#247](https://github.com/derekross/linux-omarchy-mobile/pull/247),
+[linux-omamobile#247](https://github.com/derekross/linux-omamobile/pull/247),
 which keeps the six gates of USI2 and USI3 on. Built out of tree against the
 kernel under test:
 
