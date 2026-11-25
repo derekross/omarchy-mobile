@@ -3695,6 +3695,40 @@ Fastboot returned after 133 seconds. Stock D1 A restarted at
 pretrial VBMeta digest. Ramoops and Android's `SYSTEM_LAST_KMSG`
 agree on all 38 filtered v64 lines after BootReceiver finished.
 
+### Mainline v65 compare one midlayer GPT block read
+
+[v65 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/f3b61d764826cb0598fe2e199a65dbe7e4bb6cf2)
+requires 4 KiB logical blocks from live READ CAPACITY and saves the
+validated primary GPT block from the direct read during this boot.
+The header validator restores the original CRC field after checking
+it. The direct entry-array CRC and REPORT LUNS gates still apply.
+
+The SCSI pseudo-device admits one `READ(10)` with CDB
+`28 00 00 00 00 01 00 00 01 00`. The request targets LUN 0, LBA 1
+and one block. It requires `DMA_FROM_DEVICE`, one scatterlist entry
+and exactly 4,096 mapped bytes. The matching IRQ must report a good
+response and zero residual. After unmapping, the driver validates the
+returned GPT header and compares all 4,096 bytes with the reference.
+It logs only the result and clears both copies before freeing them.
+
+The host attaches no real devices. Automatic scanning stays
+disabled. Host removal, Hibern8 on success, the 90-second return
+and v64's stuck-DMA timeout handling remain in place. The emergency
+restart path remains untested on hardware.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match the source, five image hashes, both AVB signatures and saved capacity checks. DTB and RAM rescue match v64. | Leave stock A selected if any check fails. |
+| One attended slot B trial | Check live 4 KiB geometry, direct GPT and REPORT LUNS, then the midlayer gate, `sg=1 bytes=4096`, matching IRQ with zero residual and `comparison bytes=4096 ret=0`. Verify host removal, Hibern8, zero disks and stock A return. | Hold Volume Down after the first orange warning. Capture the first failure and return to stock A without retrying. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v65` passed the
+targeted arm64 `W=1` build and 39 sanitizer-backed cases. The cases
+cover CRC restoration, mismatch outside the GPT header, gate
+rejections, response validation and timeout handling. Both AVB
+signatures, ABL handoff, all five image hashes and saved D1 slot
+capacity checks passed. Manifest SHA-256 `9f6356a27630f5df2078b2d9fe11a22390f7b375f9698092c84fa32c9dfd4065`.
+Archive SHA-256 `c95ab36c798f973250a2291670e6614bb97404ebaf99705b7aaa09808a2c99ba`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
