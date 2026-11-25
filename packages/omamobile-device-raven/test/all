@@ -153,3 +153,11 @@ grep -A1 -F 'systemctl is-enabled -q omamobile-gnss-nmea.socket' bin/omamobile-s
   grep -cF -- '--global enable omamobile-geoclue-agent.service' >/dev/null ||
   fail "omamobile-setup-system enables GeoClue's agent with the Location socket"
 pass "the setup step turns GeoClue's agent on with the Location socket"
+
+# The address unit is for a controller (DEVTYPE host) only: a connection to a
+# device is hciN:HANDLE in the same subsystem (DEVTYPE link), and its unit
+# failed ("not a controller") at every connect.
+r=vendor/udev/rules.d/80-omamobile-bt-addr.rules
+grep -c '^ACTION=="add", SUBSYSTEM=="bluetooth", KERNEL=="hci\[0-9\]\*", ENV{DEVTYPE}=="host", .*omamobile-bt-addr@%k\.service"$' "$r" >/dev/null ||
+  fail "the Bluetooth address rule matches controllers only (DEVTYPE host), not their connections"
+pass "the Bluetooth address rule matches controllers only, not their connections"

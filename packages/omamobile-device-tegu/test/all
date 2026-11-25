@@ -251,3 +251,11 @@ for t in test/graphics-start test/aoc-start test/usb-rescue test/sleep-hooks tes
   "$t" || fail "$t"
 done
 pass "the scripts behave in a scratch root"
+
+# The address unit is for a controller (DEVTYPE host) only: a connection to a
+# device is hciN:HANDLE in the same subsystem (DEVTYPE link), and its unit
+# failed ("not a controller") at every connect.
+r=vendor/udev/rules.d/80-omamobile-bt-addr.rules
+grep -c '^ACTION=="add", SUBSYSTEM=="bluetooth", KERNEL=="hci\[0-9\]\*", ENV{DEVTYPE}=="host", .*omamobile-bt-addr@%k\.service"$' "$r" >/dev/null ||
+  fail "the Bluetooth address rule matches controllers only (DEVTYPE host), not their connections"
+pass "the Bluetooth address rule matches controllers only, not their connections"

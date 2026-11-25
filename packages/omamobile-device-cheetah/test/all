@@ -510,3 +510,11 @@ assert m.has_key('1c000000000000 0', 116) and m.has_key('1c000000000000 0', 114)
 assert not m.has_key('1c000000000000 0', 113) and not m.has_key('0', 116) and not m.has_key('', 116)
 PY
 pass "off-mode charging: the panel off, a short press ignored, Power held restarts, unplugged powers off, nothing outside a charger boot or with the phone up"
+
+# The address unit is for a controller (DEVTYPE host) only: a connection to a
+# device is hciN:HANDLE in the same subsystem (DEVTYPE link), and its unit
+# failed ("not a controller") at every connect.
+r=vendor/udev/rules.d/80-omamobile-bt-addr.rules
+grep -c '^ACTION=="add", SUBSYSTEM=="bluetooth", KERNEL=="hci\[0-9\]\*", ENV{DEVTYPE}=="host", .*omamobile-bt-addr@%k\.service"$' "$r" >/dev/null ||
+  fail "the Bluetooth address rule matches controllers only (DEVTYPE host), not their connections"
+pass "the Bluetooth address rule matches controllers only, not their connections"
