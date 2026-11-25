@@ -546,23 +546,15 @@ if [[ -f $units/omatel-agent.service ]]; then
   systemctl --user enable --now omatel-agent.service ||
     echo "omamobile-setup-user: could not enable omatel-agent.service; trying again at the next login" >&2
 fi
-# Omarchy's Bluetooth pairing agent (bt-agent.service), which Omarchy's first
-# run enables. A phone whose user was set up without that step has none, and
-# then BlueZ never makes the adapter bondable: a pairing made from the
-# Bluetooth card keeps no key, and headphones need their pairing mode again
-# after the next disconnect (the Pixel 9a's AirPods Max, 2026-11-24). Once,
-# where the unit is installed, so a user who turns it off keeps it off. A
-# user whose Omarchy first run has run had it enabled by that run, so a unit
-# that reads disabled or masked there is the owner's choice: kept, and the
-# step marked done.
-if [[ -f $units/bt-agent.service ]] && ! omarchy-done check omamobile-bt-agent-enabled; then
-  if omarchy-done check first-run-user &&
-     [[ $(systemctl --user is-enabled bt-agent.service 2>/dev/null) == @(disabled|masked) ]]; then
-    omarchy-done mark omamobile-bt-agent-enabled
-  elif systemctl --user enable --now bt-agent.service; then
-    omarchy-done mark omamobile-bt-agent-enabled
-  else
-    echo "omamobile-setup-user: could not enable bt-agent.service; trying again at the next login" >&2
+# Omarchy's Bluetooth pairing agent (bt-agent.service, bt-agent -c
+# NoInputNoOutput), which Omarchy's first run enables, accepts every pairing
+# without asking. On a phone the Bluetooth page's own agent (omamobile-bt-agent)
+# asks on the screen, and the adapter is pairable only while that page is open,
+# so this one is turned off, once: an owner who turns it back on keeps it.
+if [[ -f $units/bt-agent.service ]] && omarchy-done ensure omamobile-bt-agent-off; then
+  if [[ $(systemctl --user is-enabled bt-agent.service 2>/dev/null) == enabled ]]; then
+    systemctl --user disable --now bt-agent.service ||
+      echo "omamobile-setup-user: could not turn bt-agent.service off" >&2
   fi
 fi
 # Voxtype on the phone (docs/VOICE-PLAN.md, phase 3): Omarchy's base.en

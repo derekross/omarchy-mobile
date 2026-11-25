@@ -21,9 +21,10 @@ The panel runs this while it is open; it speaks JSON lines:
           {"cmd": "reply", "id", "accept", "value"}
           {"cmd": "discover", "on"}
 
-It registers as the default agent (KeyboardDisplay) and holds a discovery
-session; both end when the panel closes stdin or the process exits, and BlueZ
-drops the discovery session with our D-Bus connection anyway. PINs and
+It registers as the default agent (KeyboardDisplay), makes the adapter
+pairable (PAIRABLE_TIMEOUT as a backstop) and holds a discovery session; all
+three end when the panel closes stdin or the process exits, and BlueZ drops
+the discovery session with our D-Bus connection anyway. PINs and
 passkeys travel over stdin and D-Bus only and are never printed.
 """
 
@@ -34,6 +35,9 @@ import sys
 
 BLUEZ = "org.bluez"
 AGENT_PATH = "/org/omamobile/bluetooth/agent"
+# The adapter is pairable (in the kernel: bondable) only while this runs, so only while the panel is
+# open; the timeout ends it if this dies without its cleanup. Each pair re-arms it.
+PAIRABLE_TIMEOUT = 300
 AGENT_IFACE = "org.bluez.Agent1"
 DEVICE_IFACE = "org.bluez.Device1"
 ADAPTER_IFACE = "org.bluez.Adapter1"
@@ -201,6 +205,21 @@ def main():
     agent_manager.RequestDefaultAgent(AGENT_PATH)
 
     adapter = dbus.Interface(bus.get_object(BLUEZ, adapter_path), ADAPTER_IFACE)
+    adapter_props = dbus.Interface(bus.get_object(BLUEZ, adapter_path), PROPS_IFACE)
+
+    # Pairable is the kernel's bondable flag: off, a pairing keeps no key and the device has to be paired
+    # again after its next disconnect. BlueZ turns it off when no agent is registered. Here it is on only
+    # while the panel runs this helper, so the phone takes a pairing only with the page open, and each one
+    # goes through this agent's sheets on the screen.
+    def set_pairable(on):
+        try:
+            if on:
+                adapter_props.Set(ADAPTER_IFACE, "PairableTimeout", dbus.UInt32(PAIRABLE_TIMEOUT))
+            adapter_props.Set(ADAPTER_IFACE, "Pairable", dbus.Boolean(on))
+        except dbus.DBusException as error:
+            emit({"event": "error", "message": "Could not set pairing %s: %s" % ("on" if on else "off", error)})
+
+    set_pairable(True)
     discovery = {"wanted": True, "running": False}
 
     def start_discovery():
@@ -286,6 +305,7 @@ def main():
         path = device_call(address, "pair")
         if not path:
             return
+        set_pairable(True)  # re-arm the timeout for this pairing
         device = dbus.Interface(bus.get_object(BLUEZ, path), DEVICE_IFACE)
         props = dbus.Interface(bus.get_object(BLUEZ, path), PROPS_IFACE)
 
@@ -375,6 +395,7 @@ def main():
         loop.run()
     finally:
         stop_discovery()
+        set_pairable(False)
         try:
             agent_manager.UnregisterAgent(AGENT_PATH)
         except dbus.DBusException:

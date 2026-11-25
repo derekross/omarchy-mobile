@@ -467,38 +467,25 @@ rm "$hm/systemctl-fails"
 if grep -c 'omatel-agent' "$H/calls" >/dev/null 2>&1; then fail "nothing is enabled without the agent's unit"; fi
 pass "the Phone and Messages agent is enabled and started at each login where its unit is installed"
 
-# Omarchy's Bluetooth agent: enabled and started once where its unit is
-# installed; a failed enable is tried again at the next login; never again
-# after it worked (a user who turns it off keeps it off)
+# Omarchy's Bluetooth agent accepts every pairing: turned off once where it
+# is installed and enabled; an owner who turns it back on keeps it; nothing
+# happens where the unit isn't installed or isn't enabled.
 U2=$t/user-units-bt; mkdir -p "$U2"; touch "$U2/bt-agent.service"
 hb=$t/home-bt; mkdir -p "$hb/.config/hypr" "$hb/.config/omarchy/extensions"
 cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hb/.config/hypr/"
-touch "$hb/systemctl-fails"
+echo enabled >"$hb/is-enabled"
 RUN_HOME=$hb RUN_USER_UNITS=$U2 run
-grep -c 'could not enable bt-agent.service' "$t/out" >/dev/null || fail "a failed bt-agent enable is reported, not fatal"
-rm "$hb/systemctl-fails"
+grep -cx 'systemctl --user disable --now bt-agent.service' "$hb/calls" >/dev/null || fail "an enabled bt-agent is turned off"
+echo enabled >"$hb/is-enabled"   # the owner turns it back on
 RUN_HOME=$hb RUN_USER_UNITS=$U2 run
-RUN_HOME=$hb RUN_USER_UNITS=$U2 run
-[[ $(grep -cx 'systemctl --user enable --now bt-agent.service' "$hb/calls") == 2 ]] \
-  || fail "bt-agent.service is enabled once it works, then left alone ($(grep -cx 'systemctl --user enable --now bt-agent.service' "$hb/calls") calls)"
-if grep -c 'bt-agent' "$hm/calls" >/dev/null 2>&1; then fail "nothing is enabled without the agent's unit"; fi
-pass "Omarchy's Bluetooth agent is enabled and started once where its unit is installed"
-# Omarchy's first run enabled it, and the owner turned it off: kept off. A
-# user without that first run (set up by hand) reads disabled too, and gets it.
-for state in disabled masked; do
-  hd=$t/home-bt-$state; mkdir -p "$hd/.config/hypr" "$hd/.config/omarchy/extensions" "$hd/.local/state/omarchy/done"
-  cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hd/.config/hypr/"
-  touch "$hd/.local/state/omarchy/done/first-run-user"; echo "$state" >"$hd/is-enabled"
-  RUN_HOME=$hd RUN_USER_UNITS=$U2 run
-  if grep -c 'enable --now bt-agent' "$hd/calls" >/dev/null 2>&1; then fail "an agent the owner left $state after Omarchy's first run stays off"; fi
-  [[ -e $hd/.local/state/omarchy/done/omamobile-bt-agent-enabled ]] || fail "the owner's $state agent: the step is marked done"
-done
-hn=$t/home-bt-hand; mkdir -p "$hn/.config/hypr" "$hn/.config/omarchy/extensions"
-cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hn/.config/hypr/"
-echo disabled >"$hn/is-enabled"
-RUN_HOME=$hn RUN_USER_UNITS=$U2 run
-grep -cx 'systemctl --user enable --now bt-agent.service' "$hn/calls" >/dev/null || fail "a user without Omarchy's first run gets the agent"
-pass "an agent the owner turned off after Omarchy's first run stays off; a user set up without that run gets it"
+[[ $(grep -cx 'systemctl --user disable --now bt-agent.service' "$hb/calls") == 1 ]] || fail "an agent the owner turned back on stays on"
+hd=$t/home-bt-off; mkdir -p "$hd/.config/hypr" "$hd/.config/omarchy/extensions"
+cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hd/.config/hypr/"
+echo disabled >"$hd/is-enabled"
+RUN_HOME=$hd RUN_USER_UNITS=$U2 run
+if grep -c 'bt-agent' "$hd/calls" | grep -qvx 1; then fail "a disabled agent is only read, never enabled: $(grep bt-agent "$hd/calls")"; fi
+if grep -c 'bt-agent' "$hm/calls" >/dev/null 2>&1; then fail "nothing happens without the agent's unit"; fi
+pass "Omarchy's accept-everything Bluetooth agent is turned off once; an owner's choice after that stays"
 
 # --adopt: a user set up by hand, with no markers, keeps the files the
 # overwriting steps would change (shell.json, the scale, the cursor and

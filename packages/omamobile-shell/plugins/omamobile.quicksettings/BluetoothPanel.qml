@@ -25,8 +25,9 @@ import "Readable.js" as Readable
 // RSSI or device class, so while the panel is open it runs
 // omamobile-bt-agent: a small BlueZ agent that answers numeric comparison,
 // passkey and PIN requests through this panel's sheets, holds the discovery
-// session, reports RSSI/appearance/class, and pairs and connects so failures
-// come back with BlueZ's reason. Without the helper the panel still lists,
+// session, makes the adapter pairable only while it runs, reports
+// RSSI/appearance/class, and pairs and connects so failures come back with
+// BlueZ's reason. Without the helper the panel still lists,
 // pairs (Just Works only) and connects through Quickshell.
 //
 // The window sits on the top layer with normal exclusion, like the Wi-Fi
@@ -72,8 +73,10 @@ Item {
     // Ending the helper ends its agent and its discovery session.
     agent.running = false
     if (actionKind !== "") finishAction()
-    // Visibility belongs to the panel, as on Android.
+    // Visibility belongs to the panel, as on Android, and so does pairing: the
+    // helper turns pairable off as it exits; this covers a panel without it.
     if (madeVisible && adapter && adapter.discoverable) adapter.discoverable = false
+    if (adapter && adapter.pairable) adapter.pairable = false
     madeVisible = false
   }
 
@@ -285,6 +288,9 @@ Item {
     ignoreUnknownSignals: true
     function onDiscoveringChanged() { if (!root.adapter.discovering && !root.opened) root.owesDiscoveryStop = false }
     function onDiscoverableChanged() { if (!root.adapter.discoverable) root.visibleRemaining = 0 }
+    // Pairable only with the page open: anything that turns it on while the
+    // page is shut (another agent registering, a tool) is turned off again.
+    function onPairableChanged() { if (root.adapter.pairable && !root.opened) root.adapter.pairable = false }
   }
 
   // The refresh glyph: restart discovery so stale devices drop off.
