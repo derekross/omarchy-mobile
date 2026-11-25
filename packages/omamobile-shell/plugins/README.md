@@ -600,7 +600,8 @@ the format and repairs what it reads: unknown widgets and broken items are
 dropped, sizes are clamped, overlapping items move to the first free cell.
 An unreadable file is left alone and the default is shown; the next edit
 saves the old file as `home.json.bad` first. The first start puts a clock and
-the first four of a short list of installed apps on page 1, and the media and
+the first four of a short list of installed apps on page 1, Settings (when
+installed) in the first free cell above that row, and the media and
 battery widgets on page 2.
 
 Why a layer surface and not Hyprland workspaces. Each page could be an empty
