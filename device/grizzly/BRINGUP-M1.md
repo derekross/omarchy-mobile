@@ -2916,6 +2916,30 @@ sizes passed. Manifest SHA-256
 `5826e45805123a0bccebfb1de70e12d6be907f6291070373e1c4e51a39ee48f0`. Archive SHA-256
 `1ebb9222dd34d508fda8da3a1856faf1b3ea05b9cc279a814460d76a9c6e7246`.
 
+#### Attended v52 slot B trial
+
+On 2026-11-25 one v52 boot used the verified nine-partition NV backup.
+All five slot B writes passed, and the readback matched all 8,192
+supplied `vendor_boot_b` bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 0.152705–0.153014 | Prep OFF qualification | HC moved from `0x10` before the vote to `0x13` by the first post-vote sample. PHY was `0x11`. The poll reported `elapsed_us=4 qualification=0` and `saw_hc_0x32=0`. |
+| 2.177237–2.181584 | Link and initialization | Link startup passed, NOP IN returned, `bRefClkFreq=0x2` and `fDeviceInit` was clear on the first read. |
+| 2.182795–2.182815 | Transfer completion IRQ and INQUIRY | The armed slot received the IRQ. The command returned OCS `0x0`, response UPIU `0x21`, SCSI GOOD, zero residual and `result=0`. |
+| 2.182952–2.183146 | Hibern8 and HCI cleanup | Hibern8 passed. HC and PHY both reached `0x11`; Deep H8 stayed prepared through IRQ release. |
+| 90.197675–91.200447 | Timed warm return | Zero SCSI disks at RAM startup and before restart. |
+
+This qualifies transfer completion via the HCI IRQ for one data-bearing
+SCSI command on the dedicated slot. The v52 poll did not sample
+`0x32`; that branch is covered offline and still needs a hardware
+observation. Normal SCSI host registration and discovery remain
+untested. The early `device_links_no_driver()` warning recurred.
+
+Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
+after 133 seconds. Stock D1 booted on A with enforcing verity
+and the expected factory VBMeta digest.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
