@@ -2882,6 +2882,40 @@ Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
 after 133 seconds and stock D1 booted on A with enforcing verity
 and the expected factory VBMeta digest.
 
+### Mainline v52 prep OFF settling before the transfer IRQ test
+
+[v52 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/08247b88ab3dfd9105bf575025ed444de767835b)
+allows the existing prep OFF poll to wait through the exact raw HC
+sample `0x32` seen on v51. The poll still checks the validity of the
+child PSM reads and requires PHY `0x11` throughout. It accepts prep
+OFF only when masked HC returns `0x13`. Other HC samples retain their
+previous handling, including treating masked HC `0x10` as pending
+and rejecting an unqualified `0x12`. The poll retains its 10 ms
+timeout. The log records whether `0x32` was sampled, alongside the
+existing start and end snapshots, elapsed time and qualification
+result. The v51 log gives no timing bound inside this window for
+the transition to `0x13`.
+
+The guarded prep/core votes and v51 IRQ INQUIRY are carried forward.
+There is one INQUIRY to LUN 0 after `fDeviceInit` clears. The RAM
+rescue keeps disk scanning disabled and requests a timed warm
+return.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match v52 source and manifest. The DTB and private RAM rescue match v51. | Leave stock A selected on a mismatch. |
+| One attended slot B boot, power control and device initialization | Use the verified nine-partition NV backup. Capture `saw_hc_0x32`, elapsed time and qualification. Require terminal HC `0x13` and PHY `0x11`, then confirm `INQUIRY IRQ observed`, GOOD status with zero residual, Hibern8, HCI cleanup and zero SCSI disks. A boot that never samples `0x32` can qualify the IRQ but does not exercise the updated transition on hardware. | Capture the first failure and return to stock A without retrying. Confirm stock Android completes boot. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v52` passed strict
+checkpatch and targeted `W=1` compilation. Seven mocked prep OFF cases
+covered the recorded sample sequence, immediate success, a persistent
+`0x32`, invalid PHY, unexpected HC and a disconnected child PSM.
+The seven v51 IRQ mock cases still pass. All five image hashes, both
+AVB signatures, the unpacked payload, ABL handoff and saved D1 slot
+sizes passed. Manifest SHA-256
+`5826e45805123a0bccebfb1de70e12d6be907f6291070373e1c4e51a39ee48f0`. Archive SHA-256
+`1ebb9222dd34d508fda8da3a1856faf1b3ea05b9cc279a814460d76a9c6e7246`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
