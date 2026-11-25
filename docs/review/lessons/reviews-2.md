@@ -3,6 +3,43 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-911. A versioned `depends` on a number that is not yet on main is a
+  claim on that number, re-checked every round and at the squash.** #697's
+  bridge asks for `omamobile-modem-sit>=0.3.37`, the branch's own number; main
+  reached 0.3.43 without the feature, so the published package satisfies it.
+  #866 requires `omamobile-omarchy>=0.1.49`, the version two other open PRs
+  carry; if the wrong one lands first, the line is met by a package without
+  the fix, with every `merge-tree` clean. *Check:* for each `'<pkg>>=<v>'` a
+  PR adds, compare `<v>` with `git show origin/main:packages/<pkg>/version`
+  and list every open PR that claims `<v>` (`gh pr list --search`); put "the
+  providing PR merges as `<v>` first" in the merge plan of all of them.
+  Extends L-639, L-477 and L-426. *From:* #697, round 61, and #866 with #879
+  and #610, round 62, 2026-11-18.
+- **L-910. When a draft's author hands it over in the thread, the review says
+  who was asked, whether they answered, and what the other draft must drop.**
+  #626's hand-over was offered by the maintainer and accepted by its author
+  four days later, with no word from the other contributor and #374 still
+  carrying the competing route. *Check:* read both threads for the last
+  comment of each party after the offer, and put the open acceptance in the
+  draft comment as a direct question. Extends L-720 and L-688. *From:* #626
+  with #374, round 61, 2026-11-18.
+- **L-906. A conflict in a defaults table is resolved key by key, because the
+  PR's side is a snapshot of the table from before main's additions.** #374's
+  `lib/paths.py` side lacked `follow_screen`, which main added for the 7 Pro's
+  sleep with the modem up; "take ours" would silently remove a default every
+  phone reads. *Check:* for a conflict inside a dict of defaults, diff each
+  side against the merge base and keep every key main added; hand over the
+  resolved lines. Extends L-184 and L-773. *From:* #374 and #376 against #791,
+  round 61, 2026-11-18.
+- **L-899. A branch a contributor prepares on their fork for after a
+  dependency merges is read and gated in the round that hears of it, against
+  the dependency's head.** Kernel #202's side branch for the rebase onto #181
+  was on the fork a day before it could be pushed; gating it twice caught a 90
+  Hz mode the DECON refuses (L-898) and a clock skip (L-1071) before either
+  reached the PR or a phone run that would have had to be repeated. *Check:*
+  `git ls-remote <fork>` for the branch a reply names, fetch it into a review
+  ref, and run `kernel-pr-check --build` with the dependency's head as BASE.
+  Extends L-429 and L-196. *From:* kernel #202, rounds 61 to 63, 2026-11-20.
 - **L-887. A "lands together with X" in our own comment is re-derived when
   the PR is cut down.** Round 52 tied #204 to #203 because it seeded a
   descriptor value; the cut-down hook reads nothing from #203, yet the
@@ -376,40 +413,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   clone, and one deleted another's `review/pr12` mid-review. *Check:* name
   refs `review/prN-<round>` (now `review/prN-rR-<topic>`, L-127) and pass commit ids to the gates. *From:* kernel
   #12, round 3.
-- **L-44. A staged descriptor's refusal depends on the tooling PRs in
-  flight.** Tegu added `SOC_COMPATIBLE` while #27 was about to make either
-  key acceptable, so merging both would have made tegu installable without
-  the AVB footers its bootloader needs. *Check:* test a staged descriptor
-  against the heads of open PRs that touch `bin/omamobile` or
-  `tools/install-phone`. *From:* #24 with #27.
-- **L-71. Our requests say which repository each piece goes in.** "A kernel
-  PR … with an overlay that enables it" put a bring-up overlay in the kernel,
-  against CONTRIBUTING §6.1 (extends L-31). *From:* issue #3 and kernel #32.
-- **L-104. Run `git merge-tree` across every pair of open PRs that touch the
-  same files,** one contributor's parallel PRs included, and give the merge
-  order in each review. Look for duplicate mechanisms too (#34's
-  `ro_gate_clks` beside #40's private read-only gates). Extends L-39 and
-  L-73. *From:* kernel #34 with #40, #37 with #39.
-- **L-105. When a contributor writes a private driver after we asked for
-  the common helper, find what pushed them off it** (here a PMU check that
-  can't defer inside the `__init` probe) and answer that, not only the
-  request again. *From:* kernel #40.
-- **L-123. A fix-up commit on a rebase-merged PR is folded in.** Kernel
-  PRs land commit by commit, so #34's watchdog commit would have landed with
-  the CG_VAL-only read (a bisect could stop there with the watchdogs
-  unowned), and #38's driver commit claiming temperature. *Check:* `git
-  range-diff` for a new commit that only changes lines an earlier commit of
-  the same PR added; read the earlier messages against the new head.
-  *From:* kernel #34, #35, #38, round 10.
-- **L-124. Before asking again, check whether the contributor's report
-  crossed our post.** The 23:11Z husky report answered round 9 before round 9
-  was posted. *Check:* compare comment times with our post time. *From:*
-  kernel #33, round 10.
-- **L-125. Check a whitespace nit by column, not by counting tabs.**
-  `expand` the hunk with its neighbours: `google,zumapro.h` gives every name
-  of that length two tabs. *From:* kernel #34, round 10 (withdrawn nit).
-- **L-126. A binding PR's SoC condition can reject another open board's
-  DTB without a textual conflict.** #13's `soc_compatible: false` for
-  non-zuma boards fails lynx (gs201 IPOP). *Check:* merge each open board PR
-  with each open binding PR on the same schema and run `CHECK_DTBS=y`.
-  Extends L-104. *From:* kernel #43 with #13 and #37.

@@ -179,7 +179,12 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   2026.11.08 mask the unit; two releases shipped without it while the PR was
   open. *Check:* `git tag -l 'release-*'` and `ls docs/release-notes` against
   every release name a diff uses as a boundary. Extends L-774 and L-653.
-  *From:* #633, round 63, 2026-11-20.
+  *From:* #633, round 63, 2026-11-20. (Extended 2026-11-25: the mirror case,
+  kernel tags. #1028 wrote "not in any release tag yet" for its minimum kernel
+  on 11-24, and `kernel-2026.11.24`, tagged that evening, carries half of it
+  (#289). Run `git -C <kernel> tag --contains <commit> 'kernel-*'` for each PR
+  a minimum-kernel line names, at every round the PR stays open. Extends
+  L-774. *From:* #1028, round 68.)
 - **L-1046. A comment or upgrade message that names another package's version
   or behaviour goes stale while the PR waits.** #440's "once omamobile-omarchy
   0.1.34 is installed: it writes the same line" described a plan for the 4.5
@@ -406,12 +411,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   package's `depends=`; if neither brings the package, the notes name it as a
   step before the first boot. Extends L-387, L-402 and L-442. *From:* #861,
   round 60, 2026-11-17.
-- **L-824. A sibling device's plan that explains or contradicts an AGENTS
-  gotcha about the reference phone is listed for the maintainer, with the run
-  that would settle it.** #852 traces early RTC wakes to stale S2MPG12 reads
-  (kernel #201) while AGENTS still calls the 7 Pro's early wakes unexplained,
-  shows "Wi-Fi stays connected across s2idle" to be a disassociate and rejoin
-  there, and prices the keep flag at 52 mA. *Check:* `grep -n` AGENTS section
-  4 for each mechanism a device plan explains (the PMIC, the driver, the flag)
-  and name the 7 Pro run in the review's notes. Extends L-492 and L-657.
-  *From:* #852, round 60, 2026-11-17.
