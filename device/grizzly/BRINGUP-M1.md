@@ -4106,6 +4106,50 @@ Fastboot returned after 133 seconds. Stock D1 A restarted at
 pretrial VBMeta digest. Ramoops and Android's `SYSTEM_LAST_KMSG`
 agree on all 70 filtered v70 lines.
 
+### Mainline v71 compare the first block through boot_b
+
+[v71 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/a0110b8b189c41964b2f66d4b337793ec81b41c0)
+selects `boot_b` as a non-NV target. The saved Grizzly Fastboot
+inventory reports a 64 MiB partition. The [Kodiak stock map](../kodiak/BRINGUP-NOTES.md)
+places it on LUN 0 on the sibling board. Grizzly's live LUN
+and GPT index still need confirmation. The fixture never assumes
+a Linux partition number for either board.
+
+The validated primary LUN 0 GPT must contain exactly one in-use
+entry named `boot_b`, with a 64 MiB extent inside the usable range
+and no overlap with any other in-use entry. The alternate
+header still has to pass v70's checks. The direct path then
+permits one 4 KiB read at the selected extent's first LBA and
+requires Android boot header magic before retaining the reference.
+
+After the same seven metadata transfers and the kernel's 42
+read-only partition checks, v71 locates the published partition
+by GPT index. It independently matches its name, start, size and
+read-only flag to the validated GPT. A private kernel bio targets
+partition-relative sector 0. The one-shot gate requires that exact
+bio after remapping, the same absolute LBA and the exact one-block
+`READ(10)`. Other reads and all writes remain blocked outside
+the metadata window. The read starts with every byte inverted
+relative to the direct copy, then compares all 4,096 bytes
+after successful completion and IRQ drain. No payload is logged.
+
+The RAM fixture still checks all 42 read-only partitions with no
+mounts or holders. No block node is opened or filesystem mounted.
+Disk and host removal, Hibern8 on success and the timed return
+retain the v70 sequence.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Verify the source, five image hashes, both AVB signatures and saved slot fit. DTB, DTBO and both vendor images match v70. | Leave stock A selected on a mismatch. |
+| One attended slot B trial | Capture the qualified direct `boot_b` read, seven GPT-only transfers with no fallback, all 42 read-only partitions, exactly one partition bio with IRQ and zero residual, and `block comparison ... bytes=4096 ret=0`. Confirm zero disks before the timed return and verify stock A. | Hold Volume Down after the first orange warning. Preserve the first missing or overlapping GPT entry, mapping or comparison failure, extra I/O, mount or reset. Return to stock A without retrying. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v71` passed strict
+checkpatch, targeted arm64 `W=1` compilation and 35 sanitizer-backed
+selection, remap and comparison cases. Both AVB signatures, ABL
+handoff, all five image hashes and saved D1 slot checks passed.
+Manifest SHA-256 `f72c489d0410a07085b9be13c597e2dc82480e74506e77a5c1d478b4bf599b6d`.
+Archive SHA-256 `95ece9ccca05c1b3eff72bcc7dbfc1fe51366602deaf9e5c4621d0064a0bfdba`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
