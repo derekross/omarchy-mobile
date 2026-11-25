@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 /*
- * Bring-up only (AOC-PLAN.md, stage C7): the AoC sound card, as the stock
- * device tree describes it (sound-aoc and its PCM, voice, compress, path,
- * no-host, VoIP and in-call nodes), with the speaker amplifiers as the TDM 0
- * codecs (amp_top and amp_bottom from the cheetah device tree) and the
- * haptics codec links left without a codec. Generated from the stock tree;
- * apply with audio-amps-test (SPI7 and the amplifiers) and aoc-core-test.
+ * Bring-up only (AOC-PLAN.md, stage C7): the AoC sound card in the form of
+ * linux-omamobile's google,gs201-aoc-sound binding (#193): the AoC node is
+ * the DAI provider, each link names its AoC DAI by the link id of the stock
+ * tree, its stream name as link-name and a back end's wire format, with the
+ * speaker amplifiers as the TDM 0 codecs (amp_top and amp_bottom from the
+ * cheetah device tree) and the haptics codec links left without a codec. The
+ * card driver derives the rest from the cell. Apply with audio-amps-test (SPI7
+ * and the amplifiers) and aoc-core-test.
  *
  * TDM 0 slots (AUDIO-PLAN.md 1.1): the top amplifier plays slot 0, the
  * bottom one slot 1. Their VMON/IMON feedback (ASP TX1-TX4) goes out
@@ -30,990 +32,456 @@
 	google,tdm-tx-slots = <1 3 5 7>;
 };
 
+&aoc {
+	#sound-dai-cells = <1>;
+};
+
 &{/} {
-		aoc_pcm_ep: aoc_pcm_drv {
-			compatible = "google-aoc-snd-pcm";
-		};
-
-		aoc_voice_ep: aoc_voice_drv {
-			compatible = "google-aoc-snd-voice";
-		};
-
-		aoc_compr_ep: aoc_compr_drv {
-			compatible = "google-aoc-snd-compr";
-		};
-
-		aud_aoc_path: aoc_path {
-			#sound-dai-cells = <0x01>;
-			compatible = "google-aoc-path";
-		};
-
-		aoc_nohost_drv: aoc_nohost {
-			compatible = "google-aoc-snd-nohost";
-		};
-
-		aoc_voip_ep: aoc_voip_drv {
-			compatible = "google-aoc-snd-voip";
-		};
-
-		aoc_incall_ep: aoc_incall_drv {
-			compatible = "google-aoc-snd-incall";
-		};
-
 		aoc_snd_card: sound-aoc {
-			compatible = "google-aoc-snd-card";
-			aoc-card-name = "google,aoc-snd-card";
+			compatible = "google,gs201-aoc-sound";
+			model = "google,aoc-snd-card";
 
-			dai_link {
+			fe-ep1-rx-dai-link {
+				link-name = "EP1 playback";
 
-				dai_fe_ep1_rx: fe_ep1_rx {
-					dai-name = "audio_playback0";
-					stream-name = "EP1 playback";
-					id = <0x00>;
-					dynamic;
-					playback;
+				cpu {
+					sound-dai = <&aoc 0x00>;
+				};
+			};
 
-					cpu {
-						sound-dai = <&aud_aoc_path 0x00>;
-					};
+			fe-ep2-rx-dai-link {
+				link-name = "EP2 playback";
 
-					platform {
+				cpu {
+					sound-dai = <&aoc 0x01>;
+				};
+			};
 
-						rx1 {
-							of_drv = <&aoc_pcm_ep>;
-						};
-					};
+			fe-ep3-rx-dai-link {
+				link-name = "EP3 playback";
+
+				cpu {
+					sound-dai = <&aoc 0x02>;
+				};
+			};
+
+			fe-ep4-rx-dai-link {
+				link-name = "EP4 playback";
+
+				cpu {
+					sound-dai = <&aoc 0x03>;
+				};
+			};
+
+			fe-ep5-rx-dai-link {
+				link-name = "EP5 playback";
+
+				cpu {
+					sound-dai = <&aoc 0x04>;
+				};
+			};
+
+			fe-ep6-rx-dai-link {
+				link-name = "EP6 playback";
+
+				cpu {
+					sound-dai = <&aoc 0x05>;
+				};
+			};
+
+			fe-ep7-rx-dai-link {
+				link-name = "EP7 playback";
+
+				cpu {
+					sound-dai = <&aoc 0x06>;
+				};
+			};
+
+			fe-ep8-rx-dai-link {
+				link-name = "EP8 playback";
+
+				cpu {
+					sound-dai = <&aoc 0x07>;
+				};
+			};
+
+			fe-ep1-tx-dai-link {
+				link-name = "EP1 capture";
+
+				cpu {
+					sound-dai = <&aoc 0x40000000>;
+				};
+			};
+
+			fe-ep2-tx-dai-link {
+				link-name = "EP2 capture";
+
+				cpu {
+					sound-dai = <&aoc 0x40000001>;
+				};
+			};
+
+			fe-ep3-tx-dai-link {
+				link-name = "EP3 capture";
+
+				cpu {
+					sound-dai = <&aoc 0x40000002>;
+				};
+			};
+
+			fe-ep4-tx-dai-link {
+				link-name = "EP4 capture";
+
+				cpu {
+					sound-dai = <&aoc 0x40000003>;
+				};
+			};
+
+			fe-ep5-tx-dai-link {
+				link-name = "EP5 capture";
+
+				cpu {
+					sound-dai = <&aoc 0x40000004>;
+				};
+			};
+
+			fe-ep6-tx-dai-link {
+				link-name = "EP6 capture";
+
+				cpu {
+					sound-dai = <&aoc 0x40000005>;
+				};
+			};
+
+			fe-nohost1-rx-dai-link {
+				link-name = "nohost1 playback";
+
+				cpu {
+					sound-dai = <&aoc 0x20000008>;
+				};
+			};
+
+			fe-nohost1-tx-dai-link {
+				link-name = "nohost1 capture";
+
+				cpu {
+					sound-dai = <&aoc 0x60000008>;
+				};
+			};
+
+			fe-voip-rx-dai-link {
+				link-name = "audio_voip_rx";
+
+				cpu {
+					sound-dai = <&aoc 0x0a>;
+				};
+			};
+
+			fe-voip-tx-dai-link {
+				link-name = "audio_voip_tx";
+
+				cpu {
+					sound-dai = <&aoc 0x4000000a>;
+				};
+			};
+
+			fe-incall-pb0-rx-dai-link {
+				link-name = "audio_incall_pb_0";
+
+				cpu {
+					sound-dai = <&aoc 0x0b>;
+				};
+			};
+
+			fe-incall-pb1-rx-dai-link {
+				link-name = "audio_incall_pb_1";
+
+				cpu {
+					sound-dai = <&aoc 0x0c>;
+				};
+			};
+
+			fe-incall-cap0-tx-dai-link {
+				link-name = "audio_incall_cap_0";
+
+				cpu {
+					sound-dai = <&aoc 0x4000000d>;
+				};
+			};
+
+			fe-incall-cap1-tx-dai-link {
+				link-name = "audio_incall_cap_1";
+
+				cpu {
+					sound-dai = <&aoc 0x4000000e>;
+				};
+			};
+
+			fe-incall-cap2-tx-dai-link {
+				link-name = "audio_incall_cap_2";
+
+				cpu {
+					sound-dai = <&aoc 0x4000000f>;
+				};
+			};
+
+			fe-raw-rx-dai-link {
+				link-name = "audio_raw";
+
+				cpu {
+					sound-dai = <&aoc 0x09>;
+				};
+			};
+
+			fe-haptic-nohost-rx-dai-link {
+				link-name = "haptic nohost playback";
+
+				cpu {
+					sound-dai = <&aoc 0x20000011>;
+				};
+			};
+
+			fe-hifi-rx-dai-link {
+				link-name = "audio_hifiout";
+
+				cpu {
+					sound-dai = <&aoc 0x10>;
+				};
+			};
+
+			fe-hifi-tx-dai-link {
+				link-name = "audio_hifiin";
+
+				cpu {
+					sound-dai = <&aoc 0x40000010>;
+				};
+			};
+
+			fe-android-aec-tx-dai-link {
+				link-name = "audio_android_aec";
+
+				cpu {
+					sound-dai = <&aoc 0x40000012>;
+				};
+			};
+
+			fe-us-rx-dai-link {
+				link-name = "audio_ultrasonic";
+
+				cpu {
+					sound-dai = <&aoc 0x13>;
+				};
+			};
+
+			fe-incall-pb2-rx-dai-link {
+				link-name = "audio_incall_pb_2";
+
+				cpu {
+					sound-dai = <&aoc 0x14>;
+				};
+			};
+
+			fe-ims-rx-dai-link {
+				link-name = "audio_immersive";
+
+				cpu {
+					sound-dai = <&aoc 0x15>;
+				};
+			};
+
+			fe-capture-inject-rx-dai-link {
+				link-name = "audio_capture_inject";
+
+				cpu {
+					sound-dai = <&aoc 0x16>;
+				};
+			};
+
+			fe-hotword-tap-tx-dai-link {
+				link-name = "audio_hotword_tap";
+
+				cpu {
+					sound-dai = <&aoc 0x40000017>;
+				};
+			};
+
+			be-i2s0-rx-dai-link {
+				link-name = "I2S_0_RX Playback";
+				dai-format = "i2s";
+
+				cpu {
+					sound-dai = <&aoc 0x80000000>;
+				};
+			};
+
+			be-i2s0-tx-dai-link {
+				link-name = "I2S_0_TX Capture";
+				dai-format = "i2s";
+
+				cpu {
+					sound-dai = <&aoc 0xc0000001>;
+				};
+			};
+
+			be-i2s1-rx-dai-link {
+				link-name = "I2S_1_RX Playback";
+				dai-format = "i2s";
+
+				cpu {
+					sound-dai = <&aoc 0x80000002>;
+				};
+			};
+
+			be-i2s1-tx-dai-link {
+				link-name = "I2S_1_TX Capture";
+				dai-format = "i2s";
+
+				cpu {
+					sound-dai = <&aoc 0xc0000003>;
+				};
+			};
+
+			be-i2s2-rx-dai-link {
+				link-name = "I2S_2_RX Playback";
+				dai-format = "i2s";
+				bitclock-inversion;
+
+				cpu {
+					sound-dai = <&aoc 0x80000004>;
+				};
+			};
+
+			be-i2s2-tx-dai-link {
+				link-name = "I2S_2_TX Capture";
+				dai-format = "i2s";
+
+				cpu {
+					sound-dai = <&aoc 0xc0000005>;
+				};
+			};
+
+			be-tdm0-rx-dai-link {
+				link-name = "TDM_0_RX Playback";
+				dai-format = "dsp_a";
+
+				cpu {
+					sound-dai = <&aoc 0x80000006>;
 				};
 
-				dai_fe_ep2_rx: fe_ep2_rx {
-					dai-name = "audio_playback1";
-					stream-name = "EP2 playback";
-					id = <0x01>;
-					dynamic;
-					playback;
+				codec {
+					sound-dai = <&amp_top 0>, <&amp_bottom 0>;
+				};
+			};
 
-					cpu {
-						sound-dai = <&aud_aoc_path 0x01>;
-					};
+			be-tdm0-tx-dai-link {
+				link-name = "TDM_0_TX Capture";
+				dai-format = "dsp_a";
 
-					platform {
-
-						rx1 {
-							of_drv = <&aoc_pcm_ep>;
-						};
-					};
+				cpu {
+					sound-dai = <&aoc 0xc0000007>;
 				};
 
-				dai_fe_ep3_rx: fe_ep3_rx {
-					dai-name = "audio_playback2";
-					stream-name = "EP3 playback";
-					id = <0x02>;
-					dynamic;
-					playback;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x02>;
-					};
-
-					platform {
-
-						rx1 {
-							of_drv = <&aoc_pcm_ep>;
-						};
-					};
+				codec {
+					sound-dai = <&amp_top 0>, <&amp_bottom 0>;
 				};
+			};
 
-				dai_fe_ep4_rx: fe_ep4_rx {
-					dai-name = "audio_playback3";
-					stream-name = "EP4 playback";
-					id = <0x03>;
-					dynamic;
-					playback;
+			be-tdm1-rx-dai-link {
+				link-name = "TDM_1_RX Playback";
+				dai-format = "i2s";
 
-					cpu {
-						sound-dai = <&aud_aoc_path 0x03>;
-					};
-
-					platform {
-
-						rx1 {
-							of_drv = <&aoc_pcm_ep>;
-						};
-					};
+				cpu {
+					sound-dai = <&aoc 0x80000008>;
 				};
+			};
 
-				dai_fe_ep5_rx: fe_ep5_rx {
-					dai-name = "audio_playback4";
-					stream-name = "EP5 playback";
-					id = <0x04>;
-					dynamic;
-					playback;
+			be-tdm1-tx-dai-link {
+				link-name = "TDM_1_TX Capture";
+				dai-format = "i2s";
 
-					cpu {
-						sound-dai = <&aud_aoc_path 0x04>;
-					};
-
-					platform {
-
-						vorx {
-							of_drv = <&aoc_voice_ep>;
-						};
-					};
+				cpu {
+					sound-dai = <&aoc 0xc0000009>;
 				};
+			};
 
-				dai_fe_ep6_rx: fe_ep6_rx {
-					dai-name = "audio_playback5";
-					stream-name = "EP6 playback";
-					id = <0x05>;
-					dynamic;
-					playback;
+			be-internal-mic-tx-dai-link {
+				link-name = "INTERNAL_MIC_TX Capture";
 
-					cpu {
-						sound-dai = <&aud_aoc_path 0x05>;
-					};
-
-					platform {
-
-						rx1 {
-							of_drv = <&aoc_pcm_ep>;
-						};
-					};
+				cpu {
+					sound-dai = <&aoc 0xc000000a>;
 				};
+			};
 
-				dai_fe_ep7_rx: fe_ep7_rx {
-					dai-name = "audio_playback6";
-					stream-name = "EP7 playback";
-					id = <0x06>;
-					dynamic;
-					playback;
+			be-internal-mic-us-tx-dai-link {
+				link-name = "INTERNAL_MIC_US_TX Capture";
 
-					cpu {
-						sound-dai = <&aud_aoc_path 0x06>;
-					};
-
-					platform {
-
-						rx1 {
-							of_drv = <&aoc_compr_ep>;
-						};
-					};
+				cpu {
+					sound-dai = <&aoc 0xc0000013>;
 				};
+			};
 
-				dai_fe_ep8_rx: fe_ep8_rx {
-					dai-name = "audio_haptics";
-					stream-name = "EP8 playback";
-					id = <0x07>;
-					dynamic;
-					playback;
+			be-bt-rx-dai-link {
+				link-name = "BT_RX Playback";
 
-					cpu {
-						sound-dai = <&aud_aoc_path 0x07>;
-					};
-
-					platform {
-
-						rx1 {
-							of_drv = <&aoc_pcm_ep>;
-						};
-					};
+				cpu {
+					sound-dai = <&aoc 0x8000000b>;
 				};
+			};
 
-				dai_fe_ep1_tx: fe_ep1_tx {
-					dai-name = "audio_capture0";
-					stream-name = "EP1 capture";
-					id = <0x40000000>;
-					dynamic;
-					capture;
+			be-bt-tx-dai-link {
+				link-name = "BT_TX Capture";
 
-					cpu {
-						sound-dai = <&aud_aoc_path 0x40000000>;
-					};
-
-					platform {
-
-						tx1 {
-							of_drv = <&aoc_pcm_ep>;
-						};
-					};
+				cpu {
+					sound-dai = <&aoc 0xc000000c>;
 				};
+			};
 
-				dai_fe_ep2_tx: fe_ep2_tx {
-					dai-name = "audio_capture1";
-					stream-name = "EP2 capture";
-					id = <0x40000001>;
-					dynamic;
-					capture;
+			be-usb-rx-dai-link {
+				link-name = "USB_RX Playback";
 
-					cpu {
-						sound-dai = <&aud_aoc_path 0x40000001>;
-					};
-
-					platform {
-
-						tx1 {
-							of_drv = <&aoc_pcm_ep>;
-						};
-					};
+				cpu {
+					sound-dai = <&aoc 0x8000000d>;
 				};
+			};
 
-				dai_fe_ep3_tx: fe_ep3_tx {
-					dai-name = "audio_capture2";
-					stream-name = "EP3 capture";
-					id = <0x40000002>;
-					dynamic;
-					capture;
+			be-usb-tx-dai-link {
+				link-name = "USB_TX Capture";
 
-					cpu {
-						sound-dai = <&aud_aoc_path 0x40000002>;
-					};
-
-					platform {
-
-						tx1 {
-							of_drv = <&aoc_pcm_ep>;
-						};
-					};
+				cpu {
+					sound-dai = <&aoc 0xc000000e>;
 				};
+			};
 
-				dai_fe_ep4_tx: fe_ep4_tx {
-					dai-name = "audio_capture3";
-					stream-name = "EP4 capture";
-					id = <0x40000003>;
-					dynamic;
-					capture;
+			be-incall-rx-dai-link {
+				link-name = "INCALL_RX Playback";
 
-					cpu {
-						sound-dai = <&aud_aoc_path 0x40000003>;
-					};
-
-					platform {
-
-						votx {
-							of_drv = <&aoc_voice_ep>;
-						};
-					};
+				cpu {
+					sound-dai = <&aoc 0x8000000f>;
 				};
+			};
 
-				dai_fe_ep5_tx: fe_ep5_tx {
-					dai-name = "ultrasonic_capture";
-					stream-name = "EP5 capture";
-					id = <0x40000004>;
-					dynamic;
-					capture;
+			be-incall-tx-dai-link {
+				link-name = "INCALL_TX Capture";
 
-					cpu {
-						sound-dai = <&aud_aoc_path 0x40000004>;
-					};
-
-					platform {
-
-						tx1 {
-							of_drv = <&aoc_pcm_ep>;
-						};
-					};
+				cpu {
+					sound-dai = <&aoc 0xc0000010>;
 				};
+			};
 
-				dai_fe_ep6_tx: fe_ep6_tx {
-					dai-name = "audio_capture5";
-					stream-name = "EP6 capture";
-					id = <0x40000005>;
-					dynamic;
-					capture;
+			be-haptic-rx-dai-link {
+				link-name = "HAPTIC_RX Playback";
+				dai-format = "dsp_a";
 
-					cpu {
-						sound-dai = <&aud_aoc_path 0x40000005>;
-					};
-
-					platform {
-
-						tx1 {
-							of_drv = <&aoc_pcm_ep>;
-						};
-					};
+				cpu {
+					sound-dai = <&aoc 0x80000011>;
 				};
+			};
 
-				dai_fe_nohost1_rx: fe_nohost1_rx {
-					dai-name = "nohost1 playback";
-					stream-name = "nohost1 playback";
-					id = <0x20000008>;
-					dynamic;
-					playback;
+			be-eraser-tx-dai-link {
+				link-name = "ERASER_TX Capture";
 
-					cpu {
-						sound-dai = <&aud_aoc_path 0x20000008>;
-					};
-
-					platform {
-
-						rx1 {
-							of_drv = <&aoc_nohost_drv>;
-						};
-					};
-				};
-
-				dai_fe_nohost1_tx: fe_nohost1_tx {
-					dai-name = "nohost1 capture";
-					stream-name = "nohost1 capture";
-					id = <0x60000008>;
-					dynamic;
-					capture;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x60000008>;
-					};
-
-					platform {
-
-						tx1 {
-							of_drv = <&aoc_nohost_drv>;
-						};
-					};
-				};
-
-				dai_fe_voip_rx: fe_voip_rx {
-					dai-name = "audio_voip_rx";
-					stream-name = "audio_voip_rx";
-					id = <0x0a>;
-					dynamic;
-					playback;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x0a>;
-					};
-
-					platform {
-
-						rx1 {
-							of_drv = <&aoc_voip_ep>;
-						};
-					};
-				};
-
-				dai_fe_voip_tx: fe_voip_tx {
-					dai-name = "audio_voip_tx";
-					stream-name = "audio_voip_tx";
-					id = <0x4000000a>;
-					dynamic;
-					capture;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x4000000a>;
-					};
-
-					platform {
-
-						tx1 {
-							of_drv = <&aoc_voip_ep>;
-						};
-					};
-				};
-
-				dai_fe_incall_pb0_rx: fe_incall_pb0_rx {
-					dai-name = "audio_incall_pb_0";
-					stream-name = "audio_incall_pb_0";
-					id = <0x0b>;
-					playback;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x0b>;
-					};
-
-					platform {
-
-						rx1 {
-							of_drv = <&aoc_incall_ep>;
-						};
-					};
-				};
-
-				dai_fe_incall_pb1_rx: fe_incall_pb1_rx {
-					dai-name = "audio_incall_pb_1";
-					stream-name = "audio_incall_pb_1";
-					id = <0x0c>;
-					playback;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x0c>;
-					};
-
-					platform {
-
-						rx1 {
-							of_drv = <&aoc_incall_ep>;
-						};
-					};
-				};
-
-				dai_fe_incall_cap0_tx: fe_incall_cap0_tx {
-					dai-name = "audio_incall_cap_0";
-					stream-name = "audio_incall_cap_0";
-					id = <0x4000000d>;
-					capture;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x4000000d>;
-					};
-
-					platform {
-
-						tx1 {
-							of_drv = <&aoc_incall_ep>;
-						};
-					};
-				};
-
-				dai_fe_incall_cap1_tx: fe_incall_cap1_tx {
-					dai-name = "audio_incall_cap_1";
-					stream-name = "audio_incall_cap_1";
-					id = <0x4000000e>;
-					capture;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x4000000e>;
-					};
-
-					platform {
-
-						tx1 {
-							of_drv = <&aoc_incall_ep>;
-						};
-					};
-				};
-
-				dai_fe_incall_cap2_tx: fe_incall_cap2_tx {
-					dai-name = "audio_incall_cap_2";
-					stream-name = "audio_incall_cap_2";
-					id = <0x4000000f>;
-					capture;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x4000000f>;
-					};
-
-					platform {
-
-						tx1 {
-							of_drv = <&aoc_incall_ep>;
-						};
-					};
-				};
-
-				dai_fe_raw_rx: fe_raw_rx {
-					dai-name = "audio_raw";
-					stream-name = "audio_raw";
-					id = <0x09>;
-					dynamic;
-					playback;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x09>;
-					};
-
-					platform {
-
-						rx1 {
-							of_drv = <&aoc_pcm_ep>;
-						};
-					};
-				};
-
-				dai_fe_haptic_nohost_rx: fe_haptic_nohost_rx {
-					dai-name = "haptic nohost playback";
-					stream-name = "haptic nohost playback";
-					id = <0x20000011>;
-					dynamic;
-					playback;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x20000011>;
-					};
-
-					platform {
-
-						rx1 {
-							of_drv = <&aoc_nohost_drv>;
-						};
-					};
-				};
-
-				dai_fe_hifi_rx: fe_hifi_rx {
-					dai-name = "audio_hifiout";
-					stream-name = "audio_hifiout";
-					id = <0x10>;
-					playback;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x10>;
-					};
-
-					platform {
-
-						rx1 {
-							of_drv = <&aoc_incall_ep>;
-						};
-					};
-				};
-
-				dai_fe_hifi_tx: fe_hifi_tx {
-					dai-name = "audio_hifiin";
-					stream-name = "audio_hifiin";
-					id = <0x40000010>;
-					capture;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x40000010>;
-					};
-
-					platform {
-
-						tx1 {
-							of_drv = <&aoc_incall_ep>;
-						};
-					};
-				};
-
-				dai_fe_android_aec_tx: fe_android_aec_tx {
-					dai-name = "audio_android_aec";
-					stream-name = "audio_android_aec";
-					id = <0x40000012>;
-					capture;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x40000012>;
-					};
-
-					platform {
-
-						tx1 {
-							of_drv = <&aoc_incall_ep>;
-						};
-					};
-				};
-
-				dai_fe_us_rx: fe_us_rx {
-					dai-name = "audio_ultrasonic";
-					stream-name = "audio_ultrasonic";
-					id = <0x13>;
-					dynamic;
-					playback;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x13>;
-					};
-
-					platform {
-
-						rx1 {
-							of_drv = <&aoc_pcm_ep>;
-						};
-					};
-				};
-
-				dai_fe_incall_pb2_rx: fe_incall_pb2_rx {
-					dai-name = "audio_incall_pb_2";
-					stream-name = "audio_incall_pb_2";
-					id = <0x14>;
-					playback;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x14>;
-					};
-
-					platform {
-
-						rx1 {
-							of_drv = <&aoc_incall_ep>;
-						};
-					};
-				};
-
-				dai_fe_ims_rx: fe_ims_rx {
-					dai-name = "audio_immersive";
-					stream-name = "audio_immersive";
-					id = <0x15>;
-					dynamic;
-					playback;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x15>;
-					};
-
-					platform {
-
-						rx1 {
-							of_drv = <&aoc_pcm_ep>;
-						};
-					};
-				};
-
-				dai_fe_cap_inj_rx: fe_capture_inject_rx {
-					dai-name = "audio_capture_inject";
-					stream-name = "audio_capture_inject";
-					id = <0x16>;
-					playback;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x16>;
-					};
-
-					platform {
-
-						rx1 {
-							of_drv = <&aoc_incall_ep>;
-						};
-					};
-				};
-
-				dai_fe_hotword_tap_tx: fe_hotword_tap_tx {
-					dai-name = "audio_hotword_tap";
-					stream-name = "audio_hotword_tap";
-					id = <0x40000017>;
-					capture;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x40000017>;
-					};
-
-					platform {
-
-						tx1 {
-							of_drv = <&aoc_incall_ep>;
-						};
-					};
-				};
-
-				dai_be_i2s0_rx: be_i2s0_rx {
-					dai-name = "I2S_0_RX Playback";
-					stream-name = "I2S_0_RX Playback";
-					id = <0x80000000>;
-					playback;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x80000000>;
-					};
-
-					daifmt {
-						dai-format = "i2s";
-					};
-				};
-
-				dai_be_i2s0_tx: be_i2s0_tx {
-					dai-name = "I2S_0_TX Capture";
-					stream-name = "I2S_0_TX Capture";
-					id = <0xc0000001>;
-					capture;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0xc0000001>;
-					};
-
-					daifmt {
-						dai-format = "i2s";
-					};
-				};
-
-				dai_be_i2s1_rx: be_i2s1_rx {
-					dai-name = "I2S_1_RX Playback";
-					stream-name = "I2S_1_RX Playback";
-					id = <0x80000002>;
-					playback;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x80000002>;
-					};
-
-					daifmt {
-						dai-format = "i2s";
-					};
-				};
-
-				dai_be_i2s1_tx: be_i2s1_tx {
-					dai-name = "I2S_1_TX Capture";
-					stream-name = "I2S_1_TX Capture";
-					id = <0xc0000003>;
-					capture;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0xc0000003>;
-					};
-
-					daifmt {
-						dai-format = "i2s";
-					};
-				};
-
-				dai_be_i2s2_rx: be_i2s2_rx {
-					dai-name = "I2S_2_RX Playback";
-					stream-name = "I2S_2_RX Playback";
-					id = <0x80000004>;
-					playback;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x80000004>;
-					};
-
-					daifmt {
-						dai-format = "i2s";
-						bitclock-inversion;
-					};
-				};
-
-				dai_be_i2s2_tx: be_i2s2_tx {
-					dai-name = "I2S_2_TX Capture";
-					stream-name = "I2S_2_TX Capture";
-					id = <0xc0000005>;
-					capture;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0xc0000005>;
-					};
-
-					daifmt {
-						dai-format = "i2s";
-					};
-				};
-
-				dai_be_tdm0_rx: be_tdm0_rx {
-					dai-name = "TDM_0_RX Playback";
-					stream-name = "TDM_0_RX Playback";
-					id = <0x80000006>;
-					playback;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x80000006>;
-					};
-
-					daifmt {
-						dai-format = "dsp_a";
-					};
-
-					codec {
-						sound-dai = <&amp_top 0>, <&amp_bottom 0>;
-					};
-				};
-
-				dai_be_tdm0_tx: be_tdm0_tx {
-					dai-name = "TDM_0_TX Capture";
-					stream-name = "TDM_0_TX Capture";
-					id = <0xc0000007>;
-					capture;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0xc0000007>;
-					};
-
-					daifmt {
-						dai-format = "dsp_a";
-					};
-
-					codec {
-						sound-dai = <&amp_top 0>, <&amp_bottom 0>;
-					};
-				};
-
-				dai_be_tdm1_rx: be_tdm1_rx {
-					dai-name = "TDM_1_RX Playback";
-					stream-name = "TDM_1_RX Playback";
-					id = <0x80000008>;
-					playback;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x80000008>;
-					};
-
-					daifmt {
-						dai-format = "i2s";
-					};
-				};
-
-				dai_be_tdm1_tx: be_tdm1_tx {
-					dai-name = "TDM_1_TX Capture";
-					stream-name = "TDM_1_TX Capture";
-					id = <0xc0000009>;
-					capture;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0xc0000009>;
-					};
-
-					daifmt {
-						dai-format = "i2s";
-					};
-				};
-
-				dai_be_internal_mic_tx: be_internal_mic_tx {
-					dai-name = "INTERNAL_MIC_TX Capture";
-					stream-name = "INTERNAL_MIC_TX Capture";
-					id = <0xc000000a>;
-					capture;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0xc000000a>;
-					};
-				};
-
-				dai_be_internal_mic_us_tx: be_internal_mic_us_tx {
-					dai-name = "INTERNAL_MIC_US_TX Capture";
-					stream-name = "INTERNAL_MIC_US_TX Capture";
-					id = <0xc0000013>;
-					capture;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0xc0000013>;
-					};
-				};
-
-				dai_be_bt_rx: be_bt_rx {
-					dai-name = "BT_RX Playback";
-					stream-name = "BT_RX Playback";
-					id = <0x8000000b>;
-					playback;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x8000000b>;
-					};
-				};
-
-				dai_be_bt_tx: be_bt_tx {
-					dai-name = "BT_TX Capture";
-					stream-name = "BT_TX Capture";
-					id = <0xc000000c>;
-					capture;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0xc000000c>;
-					};
-				};
-
-				dai_be_usb_rx: be_usb_rx {
-					dai-name = "USB_RX Playback";
-					stream-name = "USB_RX Playback";
-					id = <0x8000000d>;
-					playback;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x8000000d>;
-					};
-				};
-
-				dai_be_usb_tx: be_usb_tx {
-					dai-name = "USB_TX Capture";
-					stream-name = "USB_TX Capture";
-					id = <0xc000000e>;
-					capture;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0xc000000e>;
-					};
-				};
-
-				dai_be_incall_rx: be_incall_rx {
-					dai-name = "INCALL_RX Playback";
-					stream-name = "INCALL_RX Playback";
-					id = <0x8000000f>;
-					playback;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x8000000f>;
-					};
-				};
-
-				dai_be_incall_tx: be_incall_tx {
-					dai-name = "INCALL_TX Capture";
-					stream-name = "INCALL_TX Capture";
-					id = <0xc0000010>;
-					capture;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0xc0000010>;
-					};
-				};
-
-				dai_be_haptic_rx: be_haptic_rx {
-					dai-name = "HAPTIC_RX Playback";
-					stream-name = "HAPTIC_RX Playback";
-					id = <0x80000011>;
-					playback;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0x80000011>;
-					};
-
-					daifmt {
-						dai-format = "dsp_a";
-					};
-
-				};
-
-				dai_be_eraser_tx: be_eraser_tx {
-					dai-name = "ERASER_TX Capture";
-					stream-name = "ERASER_TX Capture";
-					id = <0xc0000012>;
-					capture;
-					no-pcm;
-					useops;
-					usefixup;
-
-					cpu {
-						sound-dai = <&aud_aoc_path 0xc0000012>;
-					};
+				cpu {
+					sound-dai = <&aoc 0xc0000012>;
 				};
 			};
 
@@ -1043,3 +511,4 @@
 			};
 		};
 };
+
