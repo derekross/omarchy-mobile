@@ -3275,6 +3275,36 @@ SCSI discovery remain untested. Ramoops and Android's
 Stock D1 booted on A with enforcing verity and the expected factory
 VBMeta digest.
 
+### Mainline v59 SCSI host registration without discovery
+
+[v59 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/6b84a6cb12b41fc124b18e52b90637265e6f7091)
+adds a synchronous SCSI host registration and removal check after
+the v58 GPT reads. It uses the normal UFS host registration and
+task-management queue allocation in legacy doorbell mode. The HBA
+remains in its diagnostic reset state. The fixture blocks normal and
+reserved command dispatch, rejects real LUNs in the device-init
+callback, and skips UFS queries when that callback receives the
+SCSI core's internal pseudo-device.
+
+The diagnostic counts discovered devices, excluding the pseudo-device,
+then removes the host and frees the task-management queue before
+Hibern8 and HCI cleanup. There is no SCSI scan, normal device probe,
+filesystem mount or SCSI write. The RAM rescue retains
+`scsi_mod.scan=none` and the timed warm return.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match v59 source and manifest. The DTB and private RAM rescue match v58. | Leave stock A selected on a mismatch. |
+| One attended slot B boot, power control, device initialization and host registration | Use the verified nine-partition NV backup. Require successful GPT results, registration with zero discovered devices, host removal and `SCSI host lifecycle ret=0`. Verify Hibern8, HCI cleanup, zero disks and the timed return. | Preserve the first error. Return to stock A and confirm Android completes boot. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v59` passed strict
+checkpatch, targeted `W=1` compilation and eight mocked host lifecycle
+cases covering registration, removal, an unexpected child, allocation
+failure and entry guards. All five image hashes, both AVB signatures,
+the unpacked payload, ABL handoff and saved D1 slot sizes passed.
+Manifest SHA-256 `3b8d244c2d9306db391df33fc4de81a2389a9170c903b2ed44aa451bb571289d`.
+Archive SHA-256 `1455cb490b0f4ad0b863fae6dcb4518b297984bd16e9e5e49573dac30da869b8`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
