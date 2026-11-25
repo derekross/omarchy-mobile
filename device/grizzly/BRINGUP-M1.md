@@ -3417,6 +3417,32 @@ the unpacked kernel and ramdisk, ABL handoff and saved D1 slot
 checks passed. Manifest SHA-256 `6dfd09bd5c675cb9e128118aca22202bb903e4987e620cc5ccfcbffeb2140004`.
 Archive SHA-256 `978b5dcae14ea11b04357a62da5817113abe940d119b114accaddc55a7a0e2ce`.
 
+#### Attended v61 slot B trial
+
+On 2026-11-25 one v61 boot used the reverified nine-partition private
+NV backup. All five slot B writes passed, and readback matched all
+8,192 supplied `vendor_boot_b` bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 0.153361–0.153369 | Prep OFF | Qualification passed in 4 µs with `saw_hc_0x32=0`. |
+| 2.185239–2.185737 | GPT and REPORT LUNS | Primary entry-array CRC and REPORT LUNS passed. |
+| 2.186018–2.186027 | Host creation | Registration succeeded with zero discovered devices. |
+| 2.186132 | Midlayer TUR | `scsi_execute_cmd()` returned 983,040 (`0x000f0000`, `DID_TRANSPORT_FAILFAST`). No diagnostic completion IRQ or timeout was recorded. |
+| 2.217623–2.217703 | Cleanup | The host reached `SHOST_DEL`. Lifecycle returned `-EIO`, Hibern8 was skipped, and HCI cleanup freed the IRQ. |
+| 90.197890–91.200686 | Timed warm return | Zero SCSI disks at RAM startup and before restart. |
+
+There is no evidence of a TUR transfer reaching the controller.
+The command gate and the mapping-failure path can both return
+this fail-fast status without a completion log. The next fixture
+should record the gate inputs, mapping result and doorbell
+submission before changing the dispatch rules. The hardware
+timeout path remains untested.
+
+Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
+after 133 seconds. Stock D1 booted on A with enforcing verity and
+the pretrial VBMeta digest.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
