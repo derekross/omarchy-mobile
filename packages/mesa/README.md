@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# mesa (Omarchy Mobile build)
+# mesa (Omamobile build)
 
 Arch Linux's Mesa 26.2.4 package, rebuilt for the Pixel 7 Pro and the
 Pixel 6 and 6 Pro, with additional Pixel 9a Mali-G715 support. Mali-G710
@@ -32,7 +32,7 @@ driver bails out on an unknown model, and PanVK returns
   - The `device-select` and `anti-lag` layers.
 - Only three split packages: `mesa`, `vulkan-panfrost` and
   `vulkan-mesa-implicit-layers` (which `vulkan-panfrost` depends on).
-- `pkgrel=1.4`. makepkg only accepts `integer[.integer]`, so the Omarchy Mobile
+- `pkgrel=1.4`. makepkg only accepts `integer[.integer]`, so the Omamobile
   marker is in Mesa's version string instead: `26.2.4-arch1.1.4.omamobile4`.
   That string shows up in `GL_VERSION` and in the `libgallium-*.so` file name.
 
@@ -114,7 +114,7 @@ line to `/etc/pacman.conf`:
 IgnorePkg = mesa vulkan-panfrost vulkan-mesa-implicit-layers
 ```
 
-Alternatively, publish the build in Omarchy Mobile's own repo listed ahead of
+Alternatively, publish the build in Omamobile's own repo listed ahead of
 `[extra]`. Rebase on each new ALARM Mesa release:
 
 1. Take the new Arch tag.

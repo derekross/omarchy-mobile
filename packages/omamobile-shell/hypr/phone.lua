@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: MIT
--- Omarchy Mobile's Hyprland rules for a phone, loaded after Omarchy's defaults
+-- Omamobile's Hyprland rules for a phone, loaded after Omarchy's defaults
 -- (from the user's looknfeel.lua). Package updates reach them.
 
 -- Apps fill the screen between the bar and the dock, like Android. Omarchy's

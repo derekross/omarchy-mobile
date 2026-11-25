@@ -93,7 +93,7 @@ def logind_inhibit():
     """A block-mode sleep inhibitor from logind: its file descriptor."""
     import dbus
     login1 = dbus.SystemBus().get_object("org.freedesktop.login1", "/org/freedesktop/login1")
-    fd = login1.Inhibit("sleep", "Omarchy Mobile calls", "A call is ringing or in progress", "block",
+    fd = login1.Inhibit("sleep", "Omamobile calls", "A call is ringing or in progress", "block",
                         dbus_interface="org.freedesktop.login1.Manager", timeout=5)
     return fd.take()
 

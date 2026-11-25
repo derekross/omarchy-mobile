@@ -5,6 +5,12 @@
 #
 #   omamobile-set-pin           open a terminal to set or change it
 #   omamobile-set-pin --type    print this user's choice: pin or password
+#   omamobile-set-pin --change  change the PIN with no terminal UI: reads the
+#                               current, new and new-again PIN on stdin, one
+#                               per line, and hands them to passwd. For
+#                               callers that have their own page (Settings)
+#                               and for the tests. It doesn't record the
+#                               PIN-or-password choice or touch the toggles.
 # (A phone without one is pointed here by omamobile-onboarding at login.)
 #
 # The choice decides how the phone asks for it, like Android: a PIN gets the
@@ -15,7 +21,15 @@
 # and the polkit prompt read (patches/omarchy/0011).
 #
 # Once one exists, the phone locks right after it starts (lock-on-start).
+#
+# A PIN is digits only, at least 4 long. It is read here twice without echo,
+# then fed to passwd in a pseudo-terminal (echo off), the way Settings'
+# pin.py does; PAM is left as it is. Anything over 512 bytes is refused here
+# before passwd starts (PAM's conversation buffer, PAM_MAX_RESP_SIZE).
+# A password goes straight to passwd.
 set -u
+
+passwd=/usr/bin/passwd
 
 toggles=~/.local/state/omarchy/toggles
 record=~/.config/omamobile/credential
@@ -39,6 +53,103 @@ record_type() {
   fi
 }
 
+# Check NEW and AGAIN, then run passwd and answer its prompts. passwd's
+# other output (errors such as a refused PIN) is passed on to stderr. The
+# secrets go to python NUL-separated, never as arguments. If passwd sits
+# silent on something that is not a known prompt for $pin_wait seconds it is
+# killed and the change fails. Once both new PINs are sent it is never
+# killed: it gets $pin_done_wait seconds to finish, and if it doesn't the
+# owner is told the PIN may or may not have changed. That is exit status 75,
+# which passwd never uses, and --inner offers no retry for it. A detached cat
+# holds the terminal open until passwd is done.
+pin_wait=${OMAMOBILE_PIN_WAIT:-15}
+pin_done_wait=${OMAMOBILE_PIN_DONE_WAIT:-60}
+change_pin() {
+  if [[ ! $2 =~ ^[0-9]{4,}$ ]]; then
+    echo "The PIN must be at least 4 digits, digits only." >&2; return 1
+  fi
+  if [[ $2 != "$3" ]]; then
+    echo "The two PINs do not match." >&2; return 1
+  fi
+  if (( $(LC_ALL=C; echo ${#1}) > 512 || $(LC_ALL=C; echo ${#2}) > 512 )); then
+    echo "The PIN or password is too long: at most 512 bytes." >&2; return 1
+  fi
+  printf '%s\0%s\0' "$1" "$2" | PASSWD=$passwd WAIT=$pin_wait DONE=$pin_done_wait python3 -I -c '
+import os, pty, re, select, signal, sys, termios
+old, new = sys.stdin.buffer.read().split(b"\0")[:2]
+wait = float(os.environ["WAIT"]); done = float(os.environ["DONE"])
+def echo_off(fd):
+    a = termios.tcgetattr(fd)
+    a[3] &= ~(termios.ECHO | termios.ECHONL)
+    termios.tcsetattr(fd, termios.TCSANOW, a)
+pid, fd = pty.fork()
+if pid == 0:
+    try:
+        echo_off(0)
+    except termios.error:
+        pass
+    os.execve(os.environ["PASSWD"], ["passwd"], {"LC_ALL": "C", "PATH": "/usr/bin"})
+try:
+    echo_off(fd)
+except termios.error:
+    pass
+buf = b""
+retyped = False
+def show(b):
+    t = b.decode(errors="replace").strip()
+    if t:
+        print(t, file=sys.stderr)
+while True:
+    if not select.select([fd], [], [], done if retyped else wait)[0]:
+        show(buf)
+        if retyped:
+            print("passwd did not finish after the retype: the PIN may or may not have changed, try the new one first. The PIN-or-password choice was not recorded.", file=sys.stderr)
+            sys.stderr.flush()
+            old = new = None
+            if os.fork() == 0:
+                # a detached cat holds the pty open and drains it until
+                # passwd is done, so leaving does not hang passwd up; the
+                # python image that held the PINs is replaced
+                os.setsid()
+                os.dup2(fd, 0)
+                null = os.open("/dev/null", os.O_RDWR)
+                os.dup2(null, 1); os.dup2(null, 2)
+                os.closerange(3, 256)
+                os.execvp("cat", ["cat"])
+                os._exit(0)
+            sys.exit(75)
+        print("passwd asked something unexpected and was stopped.", file=sys.stderr)
+        os.kill(pid, signal.SIGKILL); os.waitpid(pid, 0); sys.exit(1)
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    buf += chunk
+    low = buf.lower()
+    m = re.search(rb"(current|old|new|retype)[^\n]{0,20}password\s*:\s*$", low)
+    if not m:
+        continue
+    pre = buf[:m.start()]
+    show(pre[:pre.rfind(b"\n") + 1])
+    if m.group(1) == b"retype":
+        retyped = True
+    os.write(fd, (old if m.group(1) in (b"current", b"old") else new) + b"\n"); buf = b""
+show(buf)
+sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))
+'
+}
+
+# Ask for the PIN in the terminal, then change it.
+ask_pin() {
+  local old new again
+  IFS= read -rsp "Current PIN or password (Enter if none): " old; echo
+  IFS= read -rsp "New PIN: " new; echo
+  IFS= read -rsp "New PIN again: " again; echo
+  change_pin "$old" "$new" "$again"
+}
+
 case "${1:-}" in
   --inner)
     echo "Choose how you unlock the phone. It is also used for sudo."
@@ -58,16 +169,34 @@ case "${1:-}" in
       echo "The lock screen opens on the keyboard; 123 switches to a number pad."
     fi
     echo
-    until passwd; do
-      echo
-      gum confirm "Try again?" || exit 1
-    done
+    if [[ $type == pin ]]; then
+      while true; do
+        ask_pin; rc=$?
+        (( rc == 0 )) && break
+        if (( rc == 75 )); then
+          # passwd may still be running: never start a second one
+          echo "Do not retry now. Wait a minute, then check with: passwd -S"
+          exit 1
+        fi
+        echo
+        gum confirm "Try again?" || exit 1
+      done
+    else
+      until "$passwd"; do
+        echo
+        gum confirm "Try again?" || exit 1
+      done
+    fi
     record_type "$type"
     mkdir -p "$toggles"
     touch "$toggles/lock-on-start"
     echo
     [[ $type == pin ]] && echo "PIN set." || echo "Password set."
     echo "Your phone now locks after it starts."
+    ;;
+  --change)
+    IFS= read -rs old; IFS= read -rs new; IFS= read -rs again
+    change_pin "$old" "$new" "$again"
     ;;
   --type)
     current_type
@@ -76,7 +205,7 @@ case "${1:-}" in
     exec omarchy-launch-floating-terminal-with-presentation "omamobile-set-pin --inner"
     ;;
   *)
-    echo "Usage: omamobile-set-pin [--type]" >&2
+    echo "Usage: omamobile-set-pin [--type | --change]" >&2
     exit 1
     ;;
 esac

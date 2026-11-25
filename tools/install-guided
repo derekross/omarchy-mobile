@@ -105,8 +105,8 @@
 #     --reinstall, --bootloader-slots-match VERSION, --unsigned, --work DIR
 #                      passed to tools/install-phone (see its --help). A
 #                      release needs none of them: a phone on slot B is
-#                      asked about ("Is this phone already running Omarchy
-#                      Mobile?"), and a reinstall needs no
+#                      asked about ("Is this phone already running Omamobile?"),
+#                      and a reinstall needs no
 #                      --bootloader-slots-match (step 3). A format 2 release
 #                      uses none of them
 #     --device CODENAME, --images DIR
@@ -165,7 +165,7 @@ phone_fact() {
         printf '    Nothing has been written to the phone.'
       fi ;;
     started) printf '    An earlier try began writing the phone and did not finish, so what was on\n    it may already be erased.' ;;
-    *) printf '    Omarchy Mobile is written to the phone, and what the install has done so\n    far stays done.' ;;
+    *) printf '    Omamobile is written to the phone, and what the install has done so\n    far stays done.' ;;
   esac
 }
 # Every stop ends with the one command to run next, on a line of its own:
@@ -469,7 +469,7 @@ declare -A TITLE=(
   [warning]="Read this first"
   [phone]="Finding the phone"
   [factory]="Google's factory image for this phone"
-  [write]="Writing Omarchy Mobile to the phone"
+  [write]="Writing Omamobile to the phone"
   [network]="The USB connection to the phone"
   [first_start]="The phone's first start"
   [backup]="Backing up the phone's radio partitions"
@@ -489,7 +489,7 @@ if ((start_over)); then
 fi
 state_load
 if ((status_only)); then
-  say "Omarchy Mobile on the $NAME: how far the install got"
+  say "Omamobile on the $NAME: how far the install got"
   if [[ ! -f $state_file ]]; then note "No install has been started on this computer."; exit 0; fi
   note "release ${S[release]:-unknown}, started ${S[started]:-unknown}"
   for s in warning factory write network first_start backup provision restart check; do
@@ -508,7 +508,7 @@ fi
 # goes through the checks as an install from the start would.
 if [[ -n ${S[finished]:-} ]]; then
   say "This phone was installed on ${S[finished]}"
-  note "Omarchy Mobile ${S[release]:-} is on it, and the radio backup is in ${S[backup_dir]:-its folder}."
+  note "Omamobile ${S[release]:-} is on it, and the radio backup is in ${S[backup_dir]:-its folder}."
   if ((dry)); then
     note "A dry run forgets nothing: it goes through the checks as an install from the start would."
     S=()
@@ -529,8 +529,8 @@ fi
 if [[ -f $state_file && -n ${S[format]:-} ]]; then
   [[ ${S[release]:-} == "$release" ]] ||
     stop_next "$rerun --start-over" \
-      "An install of Omarchy Mobile ${S[release]:-} was started on this computer and hasn't finished," \
-      "and this download is Omarchy Mobile $release." \
+      "An install of Omamobile ${S[release]:-} was started on this computer and hasn't finished," \
+      "and this download is Omamobile $release." \
       "To go on with that install, run the install in that release's own folder." \
       "To start again with this download instead (the record of that install is" \
       "forgotten; the radio backup and the factory image stay where they are)," \
@@ -588,7 +588,7 @@ missing_programs() {
   elif [[ $family == debian ]]; then
     ((${#deb_pkgs[@]} == 0)) || lines+=("Install them with:" "    sudo apt install ${deb_pkgs[*]}")
     ((${#none[@]} == 0)) || lines+=("We know of no Debian or Ubuntu package with ${none[*]}: ask in an issue," \
-      "https://github.com/derekross/omarchy-mobile/issues")
+      "https://github.com/derekross/omamobile/issues")
   else
     lines+=("Install the packages above with your system's package manager.")
   fi
@@ -642,10 +642,10 @@ step_preflight() {
   note "checking the download (a few seconds for the large file)"
   bash "$INSTALL_PHONE" --verify-only "${pass[@]}" >"$scratch/verify.log" 2>&1 || {
     grep -E 'error:' "$scratch/verify.log" >&2 || cat "$scratch/verify.log" >&2
-    stop "This download of Omarchy Mobile didn't pass its checks (the message above says which)." \
+    stop "This download of Omamobile didn't pass its checks (the message above says which)." \
       "Download it again from https://omamobile.org/download and unpack it into a new folder."
   }
-  note "the download is complete and signed by Omarchy Mobile: release $release ($label)"
+  note "the download is complete and signed by Omamobile: release $release ($label)"
 }
 
 # --- Step 3: the phone, and the unlock steps that are left -------------------
@@ -742,7 +742,7 @@ step_phone() {
           "If \"OEM unlocking\" is greyed out: connect the phone to the internet once (it" \
           "stays grey until then after a reset). If it is still grey, the phone is most" \
           "likely locked to its carrier and" \
-          "can't run Omarchy Mobile."
+          "can't run Omamobile."
       fi
     else
       adb_state="" adb_serial="" adb_dev="" adb_model="" adb_all=()
@@ -766,6 +766,9 @@ step_phone() {
               "$keys_fastboot. Then run the dry run again."
           fi
           ask "    Press Enter to restart the phone into Fastboot Mode: "
+          [[ -z $REPLY ]] ||
+            stop "Not restarted. Put the phone in Fastboot Mode yourself:" \
+              "$keys_fastboot."
           "$ADB" -s "$adb_serial" reboot bootloader ||
             stop "The phone didn't take the restart. Put it in Fastboot Mode by hand:" "$keys_fastboot."
           note "waiting for Fastboot Mode"
@@ -784,10 +787,10 @@ step_phone() {
             "   and \"USB debugging\". If \"OEM unlocking\" is greyed out, connect the" \
             "   phone to the internet once (it stays grey until then after a reset); if" \
             "   it is still grey, the phone is most likely locked to its carrier and" \
-            "   can't run Omarchy Mobile." \
+            "   can't run Omamobile." \
             "3. Tap Allow when the phone asks \"Allow USB debugging?\"." \
             "" \
-            "Or, whatever it is running (Omarchy Mobile too, for a reinstall), put it in" \
+            "Or, whatever it is running (Omamobile too, for a reinstall), put it in" \
             "Fastboot Mode yourself: $keys_fastboot." ;;
       esac
     fi
@@ -905,26 +908,26 @@ recorded_factory_fits() {
 phone_checks() {
   local slot
   slot=$(var current-slot)
-  # Format 2: Omarchy Mobile replaces Android on the slot the phone runs
+  # Format 2: Omamobile replaces Android on the slot the phone runs
   # from, so the only slot question is whether this release installs there.
   # The bootloader that starts it is the one answering now: no slot-B
   # question, no check of the other slot's bootloader.
   if ((fmt2)); then
     [[ $slot == a || $slot == b ]] ||
       stop_final "The phone doesn't tell which of its two system copies it is running from (slot A" \
-        "or slot B). Omarchy Mobile is written to the copy the phone runs from, so the" \
+        "or slot B). Omamobile is written to the copy the phone runs from, so the" \
         "installer goes on only when it knows which one that is." \
         "It stops here, and running it again will stop here again." \
-        "Please open an issue: https://github.com/derekross/omarchy-mobile/issues"
+        "Please open an issue: https://github.com/derekross/omamobile/issues"
     [[ " $ACTIVE_SLOTS " == *" $slot "* ]] ||
       stop_final "This phone is running from its system copy on slot ${slot^^}, and this release of" \
-        "Omarchy Mobile installs only on slot ${ACTIVE_SLOTS^^} for now: installing on slot ${slot^^} is" \
+        "Omamobile installs only on slot ${ACTIVE_SLOTS^^} for now: installing on slot ${slot^^} is" \
         "not supported yet (current-slot-not-accepted)." \
         "" \
         "Don't switch the phone to the other copy to get past this: that starts a" \
         "bootloader whose version nobody has read, and can leave the phone unable to" \
         "start. Wait for a release that installs on slot ${slot^^}, or ask in an issue:" \
-        "https://github.com/derekross/omarchy-mobile/issues"
+        "https://github.com/derekross/omamobile/issues"
     return 0
   fi
   # Slot B is refused below, so a phone that doesn't say which slot it runs
@@ -932,18 +935,18 @@ phone_checks() {
   # be shown the unlock steps and stopped for slot B once it was erased
   [[ $slot == a || $slot == b ]] ||
     stop_final "The phone doesn't tell which of its two system copies it is running from (slot A" \
-      "or slot B). Omarchy Mobile is written to slot B, and the installer goes on only" \
+      "or slot B). Omamobile is written to slot B, and the installer goes on only" \
       "when it knows that Android runs from slot A." \
       "It stops here, and running it again will stop here again." \
-      "Please open an issue: https://github.com/derekross/omarchy-mobile/issues"
+      "Please open an issue: https://github.com/derekross/omamobile/issues"
   if [[ $slot == b ]] && ! has_pass --reinstall && ((judging_locked)); then
     # The way back to slot A needs the unlock, and the unlock erases the
     # phone: "leave it locked" would be untrue here (decided 2026-11-12)
     locked_must_unlock=1
     stop_final "This phone is running from its second system copy (slot B), where an Android" \
-      "system update leaves it. Omarchy Mobile is written to slot B, and Android must" \
+      "system update leaves it. Omamobile is written to slot B, and Android must" \
       "stay on the first copy (slot A) as your way back, so Android has to be put back" \
-      "on slot A before Omarchy Mobile can be installed." \
+      "on slot A before Omamobile can be installed." \
       "" \
       "That can't be done while the bootloader is locked: putting Android on slot A" \
       "needs an unlocked bootloader, and unlocking erases the phone. So if you go on," \
@@ -960,19 +963,19 @@ phone_checks() {
   # instead of being told to type --reinstall. "yes" hands --reinstall to
   # tools/install-phone; "no" stops, as Android must not be written over.
   if [[ $slot == b ]] && ! has_pass --reinstall; then
-    guide "This phone is running from its second system copy (slot B). Omarchy Mobile is" \
+    guide "This phone is running from its second system copy (slot B). Omamobile is" \
       "written there, and Android stays on the first copy (slot A) as your way back." \
-      "If Omarchy Mobile is on this phone now, this install replaces it. If the phone" \
+      "If Omamobile is on this phone now, this install replaces it. If the phone" \
       "runs Android (it moves to slot B after an Android system update), that Android" \
       "must not be written over, and the install stops here."
     printf '\n'
     while true; do
-      ask "    Is this phone already running Omarchy Mobile? (yes/no) "
+      ask "    Is this phone already running Omamobile? (yes/no) "
       case $REPLY in
-        yes) pass+=(--reinstall); note "a reinstall: Omarchy Mobile on slot B is replaced"; break ;;
+        yes) pass+=(--reinstall); note "a reinstall: Omamobile on slot B is replaced"; break ;;
         no)
           stop_final "This phone runs Android from its second system copy (slot B), where an Android" \
-            "system update leaves it. Omarchy Mobile is written to slot B, and Android must" \
+            "system update leaves it. Omamobile is written to slot B, and Android must" \
             "stay on the first copy (slot A) as your way back, so Android has to be put on" \
             "slot A first: INSTALL.md, step 3, says how." ;;
         *) note "Type yes or no." ;;
@@ -1019,7 +1022,7 @@ slots_check() {
   if [[ -n $bl_a && -n $bl_b ]]; then
     [[ $bl_a != "$bl_b" ]] || return 0
     stop_final "The phone keeps two copies of its system (slot A and slot B), each with its own" \
-      "bootloader. Omarchy Mobile starts from slot B, so slot B's bootloader has to be" \
+      "bootloader. Omamobile starts from slot B, so slot B's bootloader has to be" \
       "the same version as slot A's, and on this phone they differ:" \
       "    slot A: $bl_a" \
       "    slot B: $bl_b" \
@@ -1028,7 +1031,7 @@ slots_check() {
       "two are the same. Don't write a bootloader by hand: a wrong one can leave the" \
       "phone unable to start. Ask in an issue, and we will find the safe way for this" \
       "phone together with you:" \
-      "https://github.com/derekross/omarchy-mobile/issues"
+      "https://github.com/derekross/omamobile/issues"
   fi
   if said=$(pass_value --bootloader-slots-match); then
     [[ $said != "$bl" ]] || return 0
@@ -1040,17 +1043,17 @@ slots_check() {
       "" \
       "If the version was mistyped, run this again with the version that was read." \
       "If $said is what was read from the other copy, the two copies" \
-      "differ, and Omarchy Mobile can't be installed on this phone as it is. Don't" \
+      "differ, and Omamobile can't be installed on this phone as it is. Don't" \
       "write a bootloader by hand: a wrong one can leave the phone unable to start." \
       "Ask in an issue, and we will find the safe way for this phone together with you:" \
-      "https://github.com/derekross/omarchy-mobile/issues"
+      "https://github.com/derekross/omamobile/issues"
   fi
   if slot_probe_allowed; then
     slot_probe_ask "$bl"
     return 0
   fi
   stop_final "The phone keeps two copies of its system (slot A and slot B), each with its own" \
-    "bootloader. Omarchy Mobile starts from slot B, so slot B's bootloader has to be" \
+    "bootloader. Omamobile starts from slot B, so slot B's bootloader has to be" \
     "the same version as slot A's, and this phone only tells the version of the copy" \
     "in use ($bl)." \
     "" \
@@ -1059,16 +1062,16 @@ slots_check() {
     "it by itself on a first install." \
     "" \
     "What you can do safely:" \
-    "- wait for the next release of Omarchy Mobile and install that; or" \
+    "- wait for the next release of Omamobile and install that; or" \
     "- ask in an issue, and we will read the other copy's version together with you:" \
-    "  https://github.com/derekross/omarchy-mobile/issues" \
+    "  https://github.com/derekross/omamobile/issues" \
     "Don't tell the installer a version that nobody has read from this phone: if the" \
     "two copies differ, the phone may not start from slot B."
 }
 # Whether tools/install-phone will measure the other slot (its own rule,
 # read from the same fastboot answers): the descriptor allows it, a first
 # install from slot A (no --reinstall), and a slot B that does not read as
-# a slot that has started and can still start (an installed Omarchy Mobile
+# a slot that has started and can still start (an installed Omamobile
 # sent back to slot A, or Android after a system update, look like that;
 # flags the phone doesn't report count as that look too).
 slot_probe_allowed() {
@@ -1098,7 +1101,7 @@ slot_probe_ask() {  # VERSION
     return 0
   fi
   guide "The phone keeps two copies of its system, slot A and slot B, each with its own" \
-    "bootloader. Android runs from slot A ($bl). Omarchy Mobile is written to slot B," \
+    "bootloader. Android runs from slot A ($bl). Omamobile is written to slot B," \
     "and the install ends by making slot B the one the phone starts from, so slot B's" \
     "bootloader has to be the same version. This phone tells the version of the copy" \
     "it runs only." \
@@ -1146,10 +1149,10 @@ images_fit() {
     [[ $p =~ ^[a-z_]+$ && -f $dir/$p.img ]] || continue
     psize=$(sed -nE "s/^partition-size:${p}_$slot:[ ]*(0x[0-9a-fA-F]{1,12})\$/\1/p" <<<"$vars" | sed -n 1p)
     [[ -n $psize ]] ||
-      stop_final "The phone doesn't tell the size of one of the areas Omarchy Mobile is written" \
+      stop_final "The phone doesn't tell the size of one of the areas Omamobile is written" \
         "to (${p}_$slot), so the installer can't check that this download fits this phone." \
         "It stops here, and running it again will stop here again." \
-        "Please open an issue: https://github.com/derekross/omarchy-mobile/issues"
+        "Please open an issue: https://github.com/derekross/omamobile/issues"
     psize=$((psize)) isize=$(stat -c %s "$dir/$p.img") avb=""
     for e in ${D[AVB_FOOTERS]:-}; do
       [[ $e =~ ^([a-z_]+):(0x[0-9a-f]{1,10}|[1-9][0-9]{0,11})$ && ${BASH_REMATCH[1]} == "$p" ]] || continue
@@ -1159,7 +1162,7 @@ images_fit() {
       stop_final "This download doesn't fit this phone. One of its files, $p.img, is $isize bytes" \
         "${avb:+(made for an area of exactly $avb bytes), }and the area it is written to on this phone (${p}_$slot) is $psize bytes." \
         "The installer stops here, and running it again will stop here again." \
-        "Please open an issue: https://github.com/derekross/omarchy-mobile/issues"
+        "Please open an issue: https://github.com/derekross/omamobile/issues"
     fi
   done
 }
@@ -1177,7 +1180,7 @@ step_warning() {
   if ((fmt2)); then
     # Format 2 writes over the Android the phone runs: no copy of it stays
     way_back=("3. You can go back, with a computer. Android does not stay on the phone:" \
-      "   Omarchy Mobile is written over it. Google's own tools (the Android Flash" \
+      "   Omamobile is written over it. Google's own tools (the Android Flash" \
       "   Tool, or the factory image) put the phone back as it was sold." \
       "   INSTALL.md, \"Going back to Android\", has the steps.")
   else
@@ -1190,9 +1193,9 @@ step_warning() {
     "1. The phone is erased. Everything on it is lost: photos, messages, apps," \
     "   accounts and two-factor codes. Copy off what you want to keep first." \
     "   If its bootloader is still locked, unlocking it (the next step) is what" \
-    "   erases it, before anything of Omarchy Mobile is written." \
+    "   erases it, before anything of Omamobile is written." \
     "" \
-    "2. Omarchy Mobile replaces Android as the phone's system. There are no" \
+    "2. Omamobile replaces Android as the phone's system. There are no" \
     "   Google apps and no Play Store, and Android apps don't run on it. This" \
     "   release is a $label: some things a phone normally does" \
     "   are missing or unfinished. The list for this phone:" \
@@ -1265,7 +1268,7 @@ find_build() {
       "two say which of Google's builds its Android is, so without them the installer" \
       "can't tell whether this release was tested with this phone's Android." \
       "It stops here, and running it again will stop here again." \
-      "Please open an issue: https://github.com/derekross/omarchy-mobile/issues"
+      "Please open an issue: https://github.com/derekross/omamobile/issues"
   out=$(index_tool match --index "$index" --codename "$CODENAME" --bootloader "$bl" --baseband "$bb") ||
     die "reading the build index failed"
   B=()
@@ -1300,9 +1303,9 @@ find_build() {
     update_yes=("Don't update Android to get past this: an Android update moves Android to its"
       "other system copy (slot B), and this release installs only on slot A for now,"
       "so the installer would stop for that instead, and an Android update cannot be"
-      "undone. Wait until a release of Omarchy Mobile has been tested with this"
+      "undone. Wait until a release of Omamobile has been tested with this"
       "phone's build, or ask for that in an issue:"
-      "https://github.com/derekross/omarchy-mobile/issues")
+      "https://github.com/derekross/omamobile/issues")
   fi
   if [[ -n ${B[newest]:-} ]]; then
     update_no=("Don't update Android to get past this. Android's own updater offers only Google's"
@@ -1323,7 +1326,7 @@ find_build() {
     # Said once per build, however often the phone is looked at
     [[ $said_match != "${B[build]}" ]] || return 0
     said_match=${B[build]}
-    note "this phone's bootloader and baseband match Google's build ${B[build]}, which Omarchy Mobile was tested with"
+    note "this phone's bootloader and baseband match Google's build ${B[build]}, which Omamobile was tested with"
     [[ -z ${B[same_pair]:-} ]] ||
       note "(${B[same_pair]//,/, } carry the same two versions and can't be told apart from here; ${B[build]} is the one used)"
   elif [[ ${B[match]:-} == exact && -n ${B[build]:-} ]]; then
@@ -1333,7 +1336,7 @@ find_build() {
       "Google's build ${B[build]}:"
       "    bootloader: $bl"
       "    baseband:   $bb"
-      "No release of Omarchy Mobile has been tested with that build, and the installer"
+      "No release of Omamobile has been tested with that build, and the installer"
       "only uses a build that was tested, so it stops here."
       "")
     if [[ ${B[newest_tested]:-} == true && -n ${B[newest]:-} ]]; then
@@ -1343,29 +1346,29 @@ find_build() {
         "Updating Android would not help: this is the newest build in the list, so there" \
         "is no tested build that an update could bring this phone to, and an Android" \
         "update cannot be undone." \
-        "Wait until a release of Omarchy Mobile has been tested with build ${B[build]}," \
-        "or ask for that in an issue: https://github.com/derekross/omarchy-mobile/issues" \
+        "Wait until a release of Omamobile has been tested with build ${B[build]}," \
+        "or ask for that in an issue: https://github.com/derekross/omamobile/issues" \
         "Running this again will stop here again until then."
     else
       stop_final "${not_tested[@]}" "${update_no[@]}" \
-        "Wait until a release of Omarchy Mobile has been tested with build ${B[build]}" \
+        "Wait until a release of Omamobile has been tested with build ${B[build]}" \
         "or with the newest one, or ask for that in an issue:" \
-        "https://github.com/derekross/omarchy-mobile/issues" \
+        "https://github.com/derekross/omamobile/issues" \
         "Running this again will stop here again until then."
     fi
   else
-    unknown=("This phone's Android version isn't one Omarchy Mobile knows yet: no build in the"
+    unknown=("This phone's Android version isn't one Omamobile knows yet: no build in the"
       "list has both its bootloader ($bl) and its baseband ($bb)."
       "")
     if [[ ${B[newest_tested]:-} == true && -n ${B[newest]:-} ]]; then
       stop "${unknown[@]}" "${update_yes[@]}" \
         "If Android says it is up to date, open an issue so that this phone's build can" \
-        "be added: https://github.com/derekross/omarchy-mobile/issues"
+        "be added: https://github.com/derekross/omamobile/issues"
     else
       stop_final "${unknown[@]}" "${update_no[@]}" \
-        "Wait until a release of Omarchy Mobile has been tested with the newest build, or" \
+        "Wait until a release of Omamobile has been tested with the newest build, or" \
         "open an issue so that this phone's build can be added:" \
-        "https://github.com/derekross/omarchy-mobile/issues" \
+        "https://github.com/derekross/omamobile/issues" \
         "Running this again will stop here again until then."
     fi
   fi
@@ -1414,7 +1417,7 @@ google_terms() {
     "" \
     "In our own words: Google's page says these files are for use only on your own" \
     "Pixel and may not be redistributed. So the installer downloads this one straight" \
-    "from Google to this computer, for this phone. Omarchy Mobile does not host" \
+    "from Google to this computer, for this phone. Omamobile does not host" \
     "Google's files and does not pass them on." \
     "" \
     "Google's page for this build, with the terms in full:" \
@@ -1526,7 +1529,7 @@ fetch_factory() {
       "${B[zip]}, so the installer stopped reading and removed" \
       "what it had. Nothing of it was used." \
       "Run this command again to try once more. If it happens again, the list or the" \
-      "download is wrong: open an issue, https://github.com/derekross/omarchy-mobile/issues" \
+      "download is wrong: open an issue, https://github.com/derekross/omamobile/issues" \
       "You can also save the file yourself from Google's page (${B[page]})" \
       "into your Downloads folder: the installer finds it there, checked the same way."
   fi
@@ -1546,7 +1549,7 @@ fetch_factory() {
       "    downloaded: $sum" \
       "It has been removed, and nothing of it was used." \
       "Run this command again to download it again. If it differs again, the list or" \
-      "the download is wrong: open an issue, https://github.com/derekross/omarchy-mobile/issues" \
+      "the download is wrong: open an issue, https://github.com/derekross/omamobile/issues" \
       "You can also save the file yourself from Google's page (${B[page]})" \
       "into your Downloads folder: the installer finds it there, checked the same way."
   fi
@@ -1678,7 +1681,7 @@ step_factory() {
     title factory
     guide "The phone's Wi-Fi, Bluetooth, sound, camera and modem need files that only" \
       "Google may hand out. They are in Google's \"factory image\" for the phone." \
-      "Omarchy Mobile never ships them and never hosts them: the image comes from" \
+      "Omamobile never ships them and never hosts them: the image comes from" \
       "Google's own server to this computer, and the installer copies what the phone" \
       "needs out of it, here."
     printf '\n'
@@ -1775,7 +1778,7 @@ nothing_at_usb_address() {
   ! phone_answers ||
     stop "Something already answers at the phone's USB address ($PHONE_ADDR), and it" \
       "can't be the $NAME being installed: that one is in Fastboot Mode. Most likely" \
-      "another phone running Omarchy Mobile is connected to this computer." \
+      "another phone running Omamobile is connected to this computer." \
       "Unplug it, so the rest of the install can't reach the wrong phone, and run" \
       "this again."
 }
@@ -1793,12 +1796,12 @@ step_write() {
   if ((dry)); then return 0; fi
   if ((fmt2)); then
     guide "That was the dry run: the phone is unchanged. The lines above that begin" \
-      "\"would run\" are everything the install writes: the Omarchy Mobile system on" \
+      "\"would run\" are everything the install writes: the Omamobile system on" \
       "slot $(var current-slot | tr a-z A-Z), the copy the phone runs from, in place of Android, and the" \
       "phone's user data area, which is erased. Android is gone after this."
   else
     guide "That was the dry run: the phone is unchanged. The lines above that begin" \
-      "\"would run\" are everything the install writes: the Omarchy Mobile system on" \
+      "\"would run\" are everything the install writes: the Omamobile system on" \
       "slot B and the phone's user data area, which is erased."
   fi
   printf '\n'
@@ -1836,12 +1839,12 @@ stop_erased() {
       "Writing the phone stopped partway (the message above says why)." \
       "" \
       "What was on the phone may already be erased, and so may Android: the install" \
-      "writes Omarchy Mobile over the system the phone runs from before the area that" \
+      "writes Omamobile over the system the phone runs from before the area that" \
       "holds your data. Until the install runs again whole, the phone may start no" \
       "system at all. Its bootloader is untouched, and Fastboot Mode still works." \
       "Don't restart the phone: run this again from Fastboot Mode." \
       "" \
-      "To go on with Omarchy Mobile: leave the phone in Fastboot Mode (to put it back" \
+      "To go on with Omamobile: leave the phone in Fastboot Mode (to put it back" \
       "there: $keys_fastboot), fix what the" \
       "message above names, and run this, which writes the same things again, whole:" \
       "    $rerun" \
@@ -1860,7 +1863,7 @@ stop_erased() {
     "it can't load and ask to erase the phone (\"factory data reset\"); after that it" \
     "starts as new, with nothing of yours on it." \
     "" \
-    "To go on with Omarchy Mobile: leave the phone in Fastboot Mode (to put it back" \
+    "To go on with Omamobile: leave the phone in Fastboot Mode (to put it back" \
     "there: $keys_fastboot), fix what the" \
     "message above names, and run this, which writes the same things again, whole:" \
     "    $rerun"
@@ -1900,12 +1903,12 @@ written_phone() {
     stop_final "The phone that answers over the USB cable doesn't tell its serial number, so" \
       "the installer can't be sure it is the phone it wrote, and it won't back up," \
       "change or restart a phone it can't be sure of. Nothing was read from it but" \
-      "that. Please open an issue: https://github.com/derekross/omarchy-mobile/issues"
+      "that. Please open an issue: https://github.com/derekross/omamobile/issues"
   [[ $id == "${S[phone]}" ]] ||
     stop "The phone that answers over the USB cable is not the phone this install" \
       "wrote. It was asked which phone it is, and nothing else: nothing was copied" \
       "from it, put on it or restarted." \
-      "Unplug every other phone that runs Omarchy Mobile, connect the $NAME this" \
+      "Unplug every other phone that runs Omamobile, connect the $NAME this" \
       "install is for, and run this again. (If this record is left from an install" \
       "of another phone, \"$rerun --start-over\" forgets it.)"
 }
@@ -1994,7 +1997,7 @@ step_first_start() {
   local began=$SECONDS seen=0 said=0 mins
   if is_done first_start; then skip first_start "finished earlier"; return 0; fi
   title first_start
-  guide "The phone is starting Omarchy Mobile for the first time. It makes the system" \
+  guide "The phone is starting Omamobile for the first time. It makes the system" \
     "fill the phone's storage, sets up your account and shows the lock screen." \
     "This takes a few minutes. Leave the phone connected and alone."
   printf '\n'
@@ -2009,7 +2012,7 @@ step_first_start() {
         "first): \"nmcli device\" shows which connection each link uses." \
         "If the phone's screen is dark or stuck: $keys_restart." \
         "If it still doesn't finish, ask in an issue:" \
-        "https://github.com/derekross/omarchy-mobile/issues"
+        "https://github.com/derekross/omamobile/issues"
     sleep "$poll"
     mins=$(((SECONDS - began) / 60))
     ((mins <= said)) || { said=$mins; note "still waiting ($mins min)"; }
@@ -2247,7 +2250,7 @@ PY
       "It is made to name no phone (no serial number, IMEI or Wi-Fi name), but its" \
       "\"new dmesg errors\" row quotes the phone's own system messages: read that row" \
       "before you post the file anywhere public. To ask for help, open an issue and" \
-      "attach it: https://github.com/derekross/omarchy-mobile/issues" \
+      "attach it: https://github.com/derekross/omamobile/issues" \
       "Never attach the radio backup, or this install's record ($state_file)." \
       "Running this command again checks the phone again, and changes nothing else."
   fi
@@ -2274,7 +2277,7 @@ PY
 # --- Run ------------------------------------------------------------------------
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
-say "Omarchy Mobile $release for the $NAME$( ((dry)) && echo ' (dry run: nothing is written or recorded)')"
+say "Omamobile $release for the $NAME$( ((dry)) && echo ' (dry run: nothing is written or recorded)')"
 ((!dry)) || note "A dry run reads the phone in Fastboot Mode and, unless --offline, looks for a newer list of Google's builds on omamobile.org. It sends nothing else anywhere."
 # The one warning, then the phone and its unlock steps (plan D9). These two
 # calls are the order; nothing else depends on it.

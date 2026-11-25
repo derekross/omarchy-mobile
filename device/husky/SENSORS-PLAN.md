@@ -5,11 +5,11 @@ Status (2026-11-18): stage 0 only. This plan names husky's sensors, the pieces e
 first runs. Nothing in it has run on a phone apart from one read-only sysfs read (section 1). It changes no
 device tree and no package. Sensors need the zuma AoC, which is on test trees only (Lef's, see
 [AOC-PLAN](AOC-PLAN.md)), so every stage after 1 waits for that series. Owner: Colin (@gitColinX), agreed with Lef on
-[#1](https://github.com/derekross/omarchy-mobile/issues/1); Lef will say there when his AoC branch is up as a PR, and
+[#1](https://github.com/derekross/omamobile/issues/1); Lef will say there when his AoC branch is up as a PR, and
 Colin's unit then takes the read-only USF stages as a second unit.
 
 [V] = read in source, in the owner's own stock image or on the phone. [I] = inferred, with the step that would
-settle it. [U] = unknown. `linux-omarchy-mobile#N` is the kernel repository; a bare `#N` is this one.
+settle it. [U] = unknown. `linux-omamobile#N` is the kernel repository; a bare `#N` is this one.
 
 The 7 Pro's [AOC-PLAN](../cheetah/AOC-PLAN.md) (stages C6a to C6d) and [USF-PROTOCOL](../cheetah/USF-PROTOCOL.md)
 are the protocol reference. The Pixel 9a (tegu) is the template for zuma-family rails, because its AoC already
@@ -61,7 +61,7 @@ dtbo entry "ZUMA HUSKY MP", board_id 0x40206, the same in all eight husky board 
 - The S2MPG15 regulator driver already has `ldo5s` and `ldo7s`, added for the 9a [V: kernel 8b8235ec3]. Its
   ranges are wider than stock's (ldo5s 1.8 to 3.375 V, ldo7s 0.7 to 2.275 V), so a husky node must carry stock's
   limits [V].
-- `zuma-husky.dts` has `pmic-2` (from `linux-omarchy-mobile#211`) disabled, and it describes only the three GNSS
+- `zuma-husky.dts` has `pmic-2` (from `linux-omamobile#211`) disabled, and it describes only the three GNSS
   rails, not ldo5s or ldo7s [V].
 - The AoC driver's ordered sensor-supply path (`aoc_sensor_power.c`: 1.8 V on before 3.3 V, off in reverse) is
   matched only for `google,zumapro-aoc` [V]. There is no zuma AoC node, binding or match in the published tree

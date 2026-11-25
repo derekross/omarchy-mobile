@@ -1119,7 +1119,7 @@ def probe():
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Omarchy Mobile SIT RIL: calls, SMS and data registration')
+    parser = argparse.ArgumentParser(description='Omamobile SIT RIL: calls, SMS and data registration')
     parser.add_argument('--bringup', action='store_true', help='register a freshly booted CP first')
     parser.add_argument('--probe', action='store_true', help='read-only status queries, then exit')
     args = parser.parse_args()

@@ -3,7 +3,7 @@
   "id": "omamobile.back",
   "name": "Back gesture",
   "version": "0.1.0",
-  "author": "Omarchy Mobile",
+  "author": "Omamobile",
   "license": "MIT",
   "description": "Swipe in from the left or right edge of the screen to go back: it sends Escape to whatever has the keyboard focus, as Android's back gesture does.",
   "kinds": ["panel"],

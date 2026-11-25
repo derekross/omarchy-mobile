@@ -1,6 +1,6 @@
 # omamobile-remote
 
-Use an Omarchy Mobile phone over ssh the way a person would: look at the screen, type, move a pointer, click, scroll, unlock, start apps. A script or an AI agent can then test a phone (sound, camera, Wi-Fi, keyboards, apps) with nobody holding it, which is the slow part of bringing up a new device.
+Use an Omamobile phone over ssh the way a person would: look at the screen, type, move a pointer, click, scroll, unlock, start apps. A script or an AI agent can then test a phone (sound, camera, Wi-Fi, keyboards, apps) with nobody holding it, which is the slow part of bringing up a new device.
 
 It is opt-in. No image installs it. The package enables nothing: no systemd unit, no udev rule, no group, and nothing listens. It does nothing until someone logs in to the phone over ssh and runs it.
 

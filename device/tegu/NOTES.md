@@ -13,6 +13,33 @@ hash/build ID; this dirty release is not a published kernel package.
 `[V]` marks verified observations; `[I]` marks an inference still to test.
 Raw captures, recordings, backups and vendor files remain off repository.
 
+## 2026-11-23: the battery model after a flat pack
+
+Kernel `7.3.0-rc6-omamobile-push1-daily102-gf054c72f8707` (the published tip of
+2026-11-20 with kernel #164, #124, #165 and #193), with linux-omamobile#294's
+`max77779_battery` built as a module.
+
+- [V] **What a flat pack costs.** The palmtop's pack ran flat on 2026-11-22. After it the
+  gauge reported Status 0x0002 (power-on reset), DesignCap and nFullCapNom at the defaults'
+  0x0d48, and the driver withheld the charges and the time estimates, as 97324d08f
+  intends: UPower showed 0 Wh and no time left, and the shell's battery panel "0Wh".
+- [V] **The load.** `overlays/gauge-model-lwn.dtso` added to the DTB, then the module of
+  #294: with `load_model=0` no register changed; the load took one attempt and left
+  Status, POR in FG_INT_STS and Cycles at 0, USR locked (0x0e), DesignCap, FullCapRep and
+  nFullCapNom 0x0800, Config2 0x0081. sysfs: `charge_full_design` and `charge_full`
+  5120000, `cycle_count` 0; UPower 22.1 Wh. The percentage went from 100 % to 88 % on the
+  charger.
+- [I] **Which pack.** Google's 9a battery data has two packs, ATL (ID 1, nDesignCap
+  0x07fc, 5110 mAh) and LWN (ID 4, 0x0800, 5120 mAh), told apart by byte 0x17 of the
+  pack's EEPROM, which our device tree doesn't describe. On 2026-10-24, with stock's
+  model still loaded, this gauge reported 5120 mAh, so this pack is taken to be LWN.
+  Another 9a may have the ATL pack: `overlays/gauge-model-atl.dtso` is for that one.
+- Both overlays are opt-in, never in the default DTB list, and come from
+  `tools/gen-gauge-overlay-tegu.py` with Google's
+  `dts/zuma-tegu-battery-data.dtsi` (kernel/devices/google/tegu, branch
+  android-gs-tegu-6.1-android16). Once loaded, the model stays in the gauge until its
+  next power-on reset; the overlay only matters at the first boot after a flat pack.
+
 ## 2026-11-20: Wi-Fi power save
 
 Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, the daily
@@ -90,7 +117,7 @@ modules-push`, without a new boot image. Omarchy 4.0.6 on the phone.
 
 Kernel `7.3.0-rc6-omamobile-push1-gd00d9fd2272f`, a local build: `omamobile`
 with kernel #178, #103 and #164's camera device tree merged, the lc898129
-driver ([kernel #213](https://github.com/derekross/linux-omarchy-mobile/pull/213)) and a lens node for it (below).
+driver ([kernel #213](https://github.com/derekross/linux-omamobile/pull/213)) and a lens node for it (below).
 
 - [V] **The controller:** the main module's focus and OIS controller is an
   onsemi LC898129 at `0x24` on the main camera's bus (`hsi2c_5`, i2c-3),
@@ -127,7 +154,7 @@ driver ([kernel #213](https://github.com/derekross/linux-omarchy-mobile/pull/213
   rose steadily towards 0 and fell towards 4095; the picture before the
   first write matched 4095. So 0 is the near end and 4095 the far end
   [I: the far end not yet checked on a distant scene].
-- [V] **The driver:** `lc898129` ([kernel #213](https://github.com/derekross/linux-omarchy-mobile/pull/213)) is a V4L2 lens subdev,
+- [V] **The driver:** `lc898129` ([kernel #213](https://github.com/derekross/linux-omamobile/pull/213)) is a V4L2 lens subdev,
   `V4L2_CID_FOCUS_ABSOLUTE` 0-4095 with higher values closer (it writes
   4095 minus the value). The `s5kgn1` driver powers it through
   `lens-focus` while streaming, as for the 7 Pro's SEM1215SA. The node:
@@ -213,7 +240,7 @@ with the modem started at boot by `omamobile-tegu-modem-boot` (#372).
 Boots as before: test kernels pushed, checked, and the daily kernel pushed
 back. Details are on each pull request.
 
-- [V] **The SIM (omarchy-mobile #356, the daily kernel):** LTE
+- [V] **The SIM (omamobile #356, the daily kernel):** LTE
   registration, mobile data over `rmnet0` and texts both ways, after five
   data setups refused with status 36 and a wait after the data permission
   in `omamobile-modem-sit` 0.3.8. The record is in
@@ -263,7 +290,7 @@ Boots as in the next section (published-style kernels, pushed, checked,
 the daily kernel pushed back), plus fixes on the daily kernel. Details
 are on each pull request.
 
-- [V] **Wi-Fi from the package (omarchy-mobile #238, kernel #178 on
+- [V] **Wi-Fi from the package (omamobile #238, kernel #178 on
   #156, `7.3.0-rc6-omamobile-push1-g5312a5be1ffe`):** with only
   `tools/extract-vendor-firmware`'s files, `omamobile-device-tegu`
   0.2.4's boot step loaded `phy_zuma_pcie`, `pcie_gs201` and brcmfmac,
@@ -274,12 +301,12 @@ are on each pull request.
   initialize"); with kernel #178's FLR commit
   (`7.3.0-rc6-omamobile-push1-gd60d217db5c6`) three rebinds with
   Bluetooth up all brought wlan0 back and left Bluetooth powered.
-- [V] **The power-key wake (omarchy-mobile #268 and #275, the daily
+- [V] **The power-key wake (omamobile #268 and #275, the daily
   kernel):** one press lights the lock screen. sleepd now reads the 9a's
   `Power` interrupt as a power-key wake, and `user.slice` thaws 0.14 to
   0.24 s after the resume, against 1.1 s while the Wi-Fi hook waited for
   brcmfmac.
-- [V] **A replug the gadget didn't see (omarchy-mobile #280, the daily
+- [V] **A replug the gadget didn't see (omamobile #280, the daily
   kernel):** with the switch opened as the chip does on an unplug and
   the gadget still `configured`, the rescue closed it 9 s later and USB
   came back.
@@ -314,15 +341,15 @@ each pull request.
   panthor render node, from the package's graphics start.
 - [V] **Bluetooth (kernel #122, `7.3.0-rc6-omamobile-push1-g6ec07aeee91d`):** hci0 up, host wake 6 interrupts idle and
   38 after a 12 s scan.
-- [V] **Charging (kernel #161, omarchy-mobile #230,
+- [V] **Charging (kernel #161, omamobile #230,
   `7.3.0-rc6-omamobile-push1-g7dbac6f4e65c`):** the charger binds at
   0x69, and the charge limit holds charging off at 80 % through
   `charge_behaviour`.
-- [V] **AoC, speakers, microphone, sensors (kernel #162, omarchy-mobile
+- [V] **AoC, speakers, microphone, sensors (kernel #162, omamobile
   #234, `7.3.0-rc6-omamobile-push1-g922812d75006`):** the AoC from the device tree at boot (93 services), the sound
   card, a tone heard from the speaker, the microphone at -32 dBFS, and the
   sensor proxy with five sensors.
-- [V] **NFC (kernel #104 rework, #105, omarchy-mobile #235,
+- [V] **NFC (kernel #104 rework, #105, omamobile #235,
   `7.3.0-rc6-omamobile-push1-gb45a0d400e49`):** the clock pad
   from clk-exynos-clkout, `nfc0` polling with no I2C errors, neard and the
   link opener from the package. The pad variant's optional parent needed
@@ -335,7 +362,7 @@ each pull request.
 - [V] **Fingerprint (kernel #165, `7.3.0-rc6-omamobile-push1-gb533af3f1cbc`):** goodix-fp binds from the device tree
   (`/dev/goodix_fp`, irq on gpa7-6); matching was not run, since the
   service writes Trusty's secure storage.
-- [V] **Wi-Fi (kernel #168, omarchy-mobile #238,
+- [V] **Wi-Fi (kernel #168, omamobile #238,
   `7.3.0-rc6-omamobile-push1-g07bdf006cdc2`):** the new zumapro PCIe
   channel-1 host plus #56's brcmfmac: the link, the BCM4383 at
   `14e4:4449`, `wlan0` connected at boot, a ping over it.
@@ -364,7 +391,7 @@ each pull request.
 
 ## 2026-10-31: a fastboot flash of slot B cleared its successful mark, and B was marked again
 
-[V] Linux-omarchy-mobile #96's test kernel came up without USB (the config
+[V] Linux-omamobile #96's test kernel came up without USB (the config
 gaps in #227), so the palmtop went to fastboot by the buttons and got the
 daily images back. Before the flashes, `fastboot getvar` read
 `current-slot: b`, `slot-successful:b: yes`, `slot-unbootable:b: no`,
@@ -405,14 +432,14 @@ The receiver gets a position fix on the owner's kernel: up to 13 satellites
 used, HDOP 0.8-1.2, GPS, Galileo, BeiDou and GLONASS tracked, CHPP clean
 for about a minute per boot. One fix did it: spi-s3c64xx
 turned the channels off after clearing the packet count, which lost a few
-bits per transfer on a streaming slave (linux-omarchy-mobile#150). A pin
-drive change (linux-omarchy-mobile#151) was credited too and withdrawn on 10-31: at the
-bootloader's drive 0 with linux-omarchy-mobile#150 alone, 50 of 53 fixed and every frame at bit
+bits per transfer on a streaming slave (linux-omamobile#150). A pin
+drive change (linux-omamobile#151) was credited too and withdrawn on 10-31: at the
+bootloader's drive 0 with linux-omamobile#150 alone, 50 of 53 fixed and every frame at bit
 offset 0 with a valid CRC. What ends the fix is
 the CP link under GNSS traffic: held up it crashes the CP 103-108 s after
 ONLINE (six boots of six), left to cycle it hung the SoC 170 s to about 26 minutes
 after ONLINE. That hang was the PERIC0 GPIO bus clock gate (found
-2026-11-01, linux-omarchy-mobile#172); with the gate kept on and the link
+2026-11-01, linux-omamobile#172); with the gate kept on and the link
 left to cycle, a 30-minute session through the Location switch ran clean. Details, the configuration and the sweep in
 [MODEM-PLAN](MODEM-PLAN.md) "G3, GNSS gets a fix" and G3-L1.
 
@@ -441,7 +468,7 @@ run had one thing in its way that the package boot no longer does by itself.
   allow_lhbm-and-brightness check). A DPMS off and on through Hyprland
   cleared it, and so did a later power-key press, which is the wake the
   shell handles fully. Cause and fix are in omamobile-shell
-  <https://github.com/derekross/omarchy-mobile/pull/183>: a touch wake from
+  <https://github.com/derekross/omamobile/pull/183>: a touch wake from
   s2idle got no `omamobile-keys wake`, so Hyprland never re-enabled the
   display; it now runs the same wake as the power key. The panel driver
   refusing LHBM in that state is the safe behaviour and stays.
@@ -527,10 +554,10 @@ run had one thing in its way that the package boot no longer does by itself.
 ## 2026-10-29: the device package boot, and what this row rests on
 
 The palmtop's bring-up runs from `omamobile-device-tegu` 0.2.0
-(<https://github.com/derekross/omarchy-mobile/pull/152>) since the 12:28
+(<https://github.com/derekross/omamobile/pull/152>) since the 12:28
 local boot on 2026-10-29, release
 `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` (the unpublished
-integration tree; the board device tree is in review as linux-omarchy-mobile
+integration tree; the board device tree is in review as linux-omamobile
 #80), with the hand copies the package replaces moved aside under
 `/var/lib/omamobile-tegu/before-pkg/`. `tools/phone-smoke` on that boot:
 19 of 19 (boot on slot B, the storage guard with only `userdata` and slot
@@ -576,10 +603,10 @@ list below:
 - **Speakers:** the -10 dB ceiling recorded below, by hand with the AoC.
 - **GNSS, 2026-10-30 evening:** a position fix on a bring-up kernel (the gn3
   tree with the spi-s3c64xx swap-mode change and the flush-order fix of
-  linux-omarchy-mobile#137, the GNSS SPI's pins at function 2, mode 0,
+  linux-omamobile#137, the GNSS SPI's pins at function 2, mode 0,
   32-bit words, feedback delay 0, automatic chip select, 64-byte reads; that boot also
   raised the pins' drive to 3, which the 10-31 check at drive 0 showed was
-  not needed, linux-omarchy-mobile#151 closed):
+  not needed, linux-omamobile#151 closed):
   in a 3-minute session by a window, 23 of 25 GGA sentences with fix quality
   1, up to 13 satellites used, HDOP 0.8, every CHPP read at bit 0 with a
   valid CRC; started by hand through the modem bring-up, not by a package.
@@ -641,7 +668,7 @@ with nothing but Bluetooth starting resets again at that time, start here.
 ## 2026-10-28: the second 9a (the phone behind #74)
 
 These results are from a second retail Pixel 9a, the one behind
-<https://github.com/derekross/omarchy-mobile/pull/74>. They don't replace
+<https://github.com/derekross/omamobile/pull/74>. They don't replace
 the palmtop's results in the entries around this one.
 
 **Slot A, as it stands:** stock `CP3A.261005.005` (Android 17, October
@@ -665,7 +692,7 @@ Volume Down, add Power, and keep both held about 20 s. Software
 Kernel `7.3.0-rc6-omamobile-push1-g9ea0e19f8dc2`, from an unpublished
 branch on public `omamobile` `33267e524` plus the clock and binding changes
 then in review and prototype board, USB, UFS and touch changes. It is not
-the tree in linux-omarchy-mobile #80 and #81.
+the tree in linux-omamobile #80 and #81.
 
 `DEVICE=tegu bin/omamobile flash` wrote only `boot_b`, `init_boot_b`,
 `vendor_boot_b`, `vendor_kernel_boot_b` and `dtbo_b`, selected B and
@@ -737,7 +764,7 @@ integration tree), DTB with the TCPC as a dual-role port.
   fragment (the TCPC as dual-role with `vbus-supply`, the graph to dwc3) and
   the RT9470 bring-up module that writes OTG_EN, JEITA_EN and the watchdog
   bits. They are on the kernel bring-up branch
-  derekross/linux-omarchy-mobile#127, with the plan and runbook in #136.
+  derekross/linux-omamobile#127, with the plan and runbook in #136.
   This supersedes #100's "the eUSB2 repeater doesn't take the host role
   yet".
 - **How the cable swaps were covered** [V]: attended, with W4HO at the
@@ -781,7 +808,7 @@ integration tree), DTB with the TCPC as a dual-role port.
   adapter off and on through neard (a fresh NCI init) brings it back, so
   the sleep hook has to power the adapter off before the sleep and on
   after it, not only stop polling (10-29: not needed with
-  https://github.com/derekross/linux-omarchy-mobile/pull/131, and a
+  https://github.com/derekross/linux-omamobile/pull/131, and a
   power-off hook failed to wake once; see #137).
 - **Fingerprint calibration** [V]: the HAL injects it itself
   (`injectMtCali`), reading a 112-byte header at offset 0 of
@@ -936,11 +963,11 @@ Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`.
 - **Fingerprint:** the trusted app's secure storage is up, with Trusty's
   stores at the paths stock uses (`0`, `persist/0`) but on loop devices of
   Linux-owned images under `/var/lib/omamobile-fp`, not on stock's
-  `trusty_userdata` and `trusty_persist` (omarchy-mobile #101;
+  `trusty_userdata` and `trusty_persist` (omamobile #101;
   FINGERPRINT-PLAN D1 and F4b). The factory
   calibration lives with Google: the bootloader names the file (its
   `get-cal-url` answer) and it comes from a manufacturing bucket. The panel's
-  id isn't the key (omarchy-mobile #101).
+  id isn't the key (omamobile #101).
 - **GNSS:** the S2MPG15's three GNSS rails are off at hand-off and stock
   turns them on; they're now described (kernel #101) and on.
 
@@ -1022,7 +1049,7 @@ bootloader's 2028 MHz until something asks for less.
 ## 2026-10-26: audio (speakers, microphones, A2DP) with omamobile-audio 0.5.0
 
 Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`: the private
-integration tree for now (the pieces go to linux-omarchy-mobile one by one;
+integration tree for now (the pieces go to linux-omamobile one by one;
 the S2MPG14 RTC is #54), with the AoC started by a staged script. The card
 is `google,tegu-aoc-snd-card`; the TAS2572 amplifiers (I2C 19, top 0x48 and
 bottom 0x49) take their gains from `tas2572RCA1.bin` at every playback
@@ -1139,7 +1166,7 @@ not evidence for #45. Unplugged cold boot and production packaging remain
 open; these results do not qualify those gates.
 
 The selected subsystem source and disabled board resources are being
-curated for separate kernel reviews in [tracking #28](https://github.com/derekross/omarchy-mobile/issues/28).
+curated for separate kernel reviews in [tracking #28](https://github.com/derekross/omamobile/issues/28).
 Public main still lacks the complete board integration and install recipe.
 Do not enable the staged descriptor or infer Wi-Fi, charging/thermal,
 Bluetooth, haptics, sensors, audio, cameras or fingerprint support from this
@@ -1466,7 +1493,7 @@ the fresh backup and before/after checks described above.
 ### Approved B-success operation after layout review, 2026-10-22
 
 The maintainer approved only `omamobile-bootctl mark-successful` for B in
-[review 5622088453](https://github.com/derekross/omarchy-mobile/pull/24#pullrequestreview-5622088453).
+[review 5622088453](https://github.com/derekross/omamobile/pull/24#pullrequestreview-5622088453).
 A further ordinary B boot used explicit Fastboot serial selection and no
 slot reselection, flash or retry refresh. On the guarded native root, a
 fresh full devinfo backup was saved privately and its checksum matched
@@ -1522,7 +1549,7 @@ The empty overlay passes strict checkpatch and dtc, its ID/revision read
 back correctly, and applying it leaves a synthetic base unchanged.
 These are low-risk checks with no phone rollback; stop if tooling proceeds.
 
-Next: kernel drivers/bindings/DTS in linux-omarchy-mobile, one subsystem per
+Next: kernel drivers/bindings/DTS in linux-omamobile, one subsystem per
 branch, with strict checkpatch, W=1 and binding/DT validation; generic DTB
 selection/packing and a qualified device package here. Each hardware gate
 needs protected backups, fresh logs, watchdog/dead-man recovery, a stop

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * THIS MODULE HANGS THE SOC BY DESIGN on a kernel whose HSI0 USI clock
- * gates are switched (without linux-omarchy-mobile#247): that is what it is
+ * gates are switched (without linux-omamobile#247): that is what it is
  * for. Run it only as README describes, attended, with the modem off.
  *
  * Bring-up only (SLEEP-PLAN item 1): do what exynos_usi_enable() does in the

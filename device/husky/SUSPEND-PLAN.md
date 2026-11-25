@@ -20,9 +20,9 @@ Kernels:
 
 - H0 (read-only, 2026-11-12): `7.3.0-rc6-omamobile-push1-g755b5d1c5532`, a
   local build of Brett's `husky-test-20261109-t1` tag plus the RTC commits
-  merged as linux-omarchy-mobile#243. Not published; used for H0 only.
+  merged as linux-omamobile#243. Not published; used for H0 only.
 - H0b to H4: the published `omamobile` branch of
-  derekross/linux-omarchy-mobile at `82f31d3a7` (`7.3.0-rc6-omamobile-push1-g82f31d3a7a35`), unchanged, which has
+  derekross/linux-omamobile at `82f31d3a7` (`7.3.0-rc6-omamobile-push1-g82f31d3a7a35`), unchanged, which has
   the GPU and CPU DVFS series (#157 with #158), the RTC interrupt (#243) and
   `mem_sleep_default=s2idle` (#244). H0b and H1 ran with
   `omamobile-device-husky` 0.1.13. H2 to H4 run with 0.1.14 or later

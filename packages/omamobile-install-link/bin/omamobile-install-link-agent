@@ -47,7 +47,7 @@ RETRY_S = float(os.environ.get("OMAMOBILE_LINK_RETRY_S", "3"))
 # A notice dismissed without a tap comes back after this long
 REPEAT_S = float(os.environ.get("OMAMOBILE_LINK_REPEAT_S", "60"))
 WINDOW_QML = "/usr/share/omamobile-install-link/code-window"
-APP = "Omarchy Mobile"
+APP = "Omamobile"
 # Reasons that leave nothing to finish: no notice
 QUIET = ("finished", "not-first-start")
 LOGINS = 3

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: 0BSD
 #
-# Omarchy Mobile build of neard, the Linux NFC daemon, and nfctool, for the Pixel 7
+# Omamobile build of neard, the Linux NFC daemon, and nfctool, for the Pixel 7
 # Pro's NFC controller (device/cheetah/RADIOS-CAMERA-PLAN.md, section 3).
 # Arch Linux and Arch Linux ARM don't package neard; this is a plain build of
 # the upstream release. Choices:

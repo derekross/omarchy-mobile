@@ -22,12 +22,12 @@
 # (/usr/lib/omamobile-modem/suspend-verified: device-cheetah, the Pixel 7
 # Pro, MODEM-PLAN M6), the owner hasn't opted out
 # (/etc/omamobile/modem-suspend-disable) and the running kernel's modem link
-# refuses a sleep early while the link is up (linux-omarchy-mobile#232).
+# refuses a sleep early while the link is up (linux-omamobile#232).
 # Everywhere else, the 9a and the 6 Pro among them, and on an older kernel,
 # it holds as before. The start script asks the same policy, so a policy
 # that can't run (a skip here) still loads no driver without this lock.
 [Unit]
-Description=Omarchy Mobile modem: block system sleep until the reboot
+Description=Omamobile modem: block system sleep until the reboot
 Before=omamobile-modem.service
 RefuseManualStop=yes
 ConditionPathExists=/usr/lib/omamobile-vendor/modem/root

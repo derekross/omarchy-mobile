@@ -2,7 +2,7 @@
 # Double tap to wake (bin/omamobile-doubletap): a double tap on the
 # touchscreen of a dark phone wakes it, for every user's graphical session.
 [Unit]
-Description=Omarchy Mobile double tap to wake
+Description=Omamobile double tap to wake
 PartOf=graphical-session.target
 After=graphical-session.target
 

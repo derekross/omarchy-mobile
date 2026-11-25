@@ -28,7 +28,7 @@ diff --git i/bin/omarchy-update w/bin/omarchy-update
  
  set -e
  
-+# Omarchy Mobile: a phone updates through omamobile-update, which runs this
++# Omamobile: a phone updates through omamobile-update, which runs this
 +# same flow with the phone's exclusions (no snapshot, AUR or reboot prompt;
 +# boot-related migrations held) and reports to the shell's update sheet. It
 +# calls back in with OMAMOBILE_UPDATE=1.
@@ -44,7 +44,7 @@ diff --git i/bin/omarchy-update w/bin/omarchy-update
  
    if (( boot_verified )); then
 -    "$OMARCHY_PATH/bin/omarchy-update-restart" --reboot-only
-+    # Omarchy Mobile: under omamobile-update the phone's stand-in on PATH
++    # Omamobile: under omamobile-update the phone's stand-in on PATH
 +    # decides about a restart (slot B, not a vmlinuz), and asks nothing.
 +    if [[ -n ${OMAMOBILE_UPDATE:-} ]]; then
 +      omarchy-update-restart --reboot-only

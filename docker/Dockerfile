@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile build environment: Ubuntu LTS with the LineageOS build packages.
+# Omamobile build environment: Ubuntu LTS with the LineageOS build packages.
 # Pinned by digest (docs/RELEASES.md §9): ubuntu:24.04's multi-arch index on
 # Docker Hub, resolved 2026-11-01. Bump it on purpose, never by a rebuild.
 # The apt packages below still come from the archive of the day the image is

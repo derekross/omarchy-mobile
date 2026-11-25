@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Omarchy Mobile's Bluetooth pairing agent, for the quick-settings Bluetooth panel.
+"""Omamobile's Bluetooth pairing agent, for the quick-settings Bluetooth panel.
 
 Quickshell.Bluetooth can pair, connect and forget but registers no BlueZ
 agent, so it can't answer a numeric comparison, a passkey or a PIN, and it
@@ -20,17 +20,28 @@ The panel runs this while it is open; it speaks JSON lines:
   stdin   {"cmd": "pair"|"connect"|"cancel-pair", "address"}
           {"cmd": "reply", "id", "accept", "value"}
           {"cmd": "discover", "on"}
+          {"cmd": "pairable", "on"}
 
 It registers as the default agent (KeyboardDisplay) and holds a discovery
 session; both end when the panel closes stdin or the process exits, and BlueZ
 drops the discovery session with our D-Bus connection anyway. PINs and
 passkeys travel over stdin and D-Bus only and are never printed.
+
+With --pairable-window SECONDS the helper also owns the adapter's Pairable
+(the panel passes it when Pairable was off as it opened). BlueZ turns
+Pairable on when a default agent registers (agent.c set_io_cap ->
+adapter_set_io_capability, unless main.conf's AlwaysPairable), so the helper
+turns it off again right after registering and whenever it comes back on
+unasked; on only for a "pairable" command with "on": true, after setting
+BlueZ's PairableTimeout to SECONDS so BlueZ ends it on its own; off again for
+"on": false and at exit. Without the option it leaves Pairable alone.
 """
 
 import json
 import os
 import signal
 import sys
+import time
 
 BLUEZ = "org.bluez"
 AGENT_PATH = "/org/omamobile/bluetooth/agent"
@@ -84,6 +95,37 @@ def error_event(op, address, stage, error):
             "stage": stage, "error": name or "", "message": message or ""}
 
 
+def parse_args(argv):
+    """The command line -> the pairing window in seconds, or None (leave
+    Pairable alone). Raises ValueError on anything else."""
+    if not argv:
+        return None
+    if len(argv) == 2 and argv[0] == "--pairable-window" and argv[1].isdigit() and 0 < int(argv[1]) <= 3600:
+        return int(argv[1])
+    raise ValueError("usage: omamobile-bt-agent [--pairable-window SECONDS]")
+
+
+def pairable_plan(window, event, wanted=False, current=False):
+    """What to set on the adapter, in order, as (property, value) pairs.
+
+    event: "start" (just registered as the default agent, which turned
+    Pairable on), "request" (the panel asked for on or off: wanted),
+    "changed" (BlueZ says Pairable is now current), "exit".
+    PairableTimeout goes first: set while Pairable is on it restarts BlueZ's
+    timer, and set while it is off it is the timer the next on starts."""
+    if window is None:
+        return []
+    if event == "start":
+        return [("PairableTimeout", window), ("Pairable", False)]
+    if event == "request":
+        return [("PairableTimeout", window), ("Pairable", True)] if wanted else [("Pairable", False)]
+    if event == "changed":
+        return [("Pairable", False)] if current and not wanted else []
+    if event == "exit":
+        return [("Pairable", False)]
+    return []
+
+
 def emit(event):
     sys.stdout.write(json.dumps(event) + "\n")
     sys.stdout.flush()
@@ -97,6 +139,7 @@ def main():
     import dbus.service
     from gi.repository import GLib
 
+    window = parse_args(sys.argv[1:])
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
     loop = GLib.MainLoop()
@@ -201,6 +244,34 @@ def main():
     agent_manager.RequestDefaultAgent(AGENT_PATH)
 
     adapter = dbus.Interface(bus.get_object(BLUEZ, adapter_path), ADAPTER_IFACE)
+    adapter_props = dbus.Interface(bus.get_object(BLUEZ, adapter_path), PROPS_IFACE)
+
+    # ------------------------------------------------------------ pairable
+    pairable = {"wanted": False}
+    target = {}
+
+    def dbus_value(name, value):
+        return dbus.Boolean(value) if name == "Pairable" else dbus.UInt32(value)
+
+    def set_adapter(name, value, tries=0):
+        # BlueZ answers Busy while an earlier change of the same setting is
+        # pending (the one our own registration started): try again shortly,
+        # unless a newer request has replaced this one.
+        target[name] = value
+
+        def failed(error):
+            if "Busy" in error.get_dbus_name() and tries < 25 and target.get(name) == value:
+                GLib.timeout_add(200, lambda: set_adapter(name, value, tries + 1) and False)
+
+        adapter_props.Set(ADAPTER_IFACE, name, dbus_value(name, value),
+                          reply_handler=lambda: None, error_handler=failed)
+        return True
+
+    def run_plan(event, current=False):
+        for name, value in pairable_plan(window, event, pairable["wanted"], current):
+            set_adapter(name, value)
+
+    run_plan("start")
     discovery = {"wanted": True, "running": False}
 
     def start_discovery():
@@ -229,6 +300,8 @@ def main():
         path = str(path)
         if interface == ADAPTER_IFACE and "Discovering" in changed and not bool(changed["Discovering"]):
             discovery["running"] = False
+        if interface == ADAPTER_IFACE and path == adapter_path and "Pairable" in changed:
+            run_plan("changed", bool(changed["Pairable"]))
         # RSSI moves constantly during discovery: update a cache from the
         # change itself rather than asking BlueZ again.
         if interface == DEVICE_IFACE and path in extras and any(key in changed for key in EXTRA_KEYS):
@@ -343,6 +416,9 @@ def main():
                 start_discovery()
             else:
                 stop_discovery()
+        elif cmd == "pairable":
+            pairable["wanted"] = bool(command.get("on"))
+            run_plan("request")
 
     buffer = [b""]
 
@@ -375,6 +451,16 @@ def main():
         loop.run()
     finally:
         stop_discovery()
+        pairable["wanted"] = False
+        for name, value in pairable_plan(window, "exit"):
+            for _ in range(10):
+                try:
+                    adapter_props.Set(ADAPTER_IFACE, name, dbus_value(name, value))
+                    break
+                except dbus.DBusException as error:
+                    if "Busy" not in error.get_dbus_name():
+                        break
+                    time.sleep(0.2)
         try:
             agent_manager.UnregisterAgent(AGENT_PATH)
         except dbus.DBusException:

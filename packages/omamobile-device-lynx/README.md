@@ -1,6 +1,6 @@
 # omamobile-device-lynx
 
-Omarchy Mobile's first userspace package for the Google Pixel 7a (codename lynx, Tensor G2 / gs201). It hides the Android partitions from desktop tools, holds the USB address, and gives pacman the same `[omamobile]` repository as the Pixel 7 Pro. It marks the booted slot successful after each boot, and gives the Bluetooth controller the phone's address when it appears. It does not drive the radio, the charger, or a camera.
+Omamobile's first userspace package for the Google Pixel 7a (codename lynx, Tensor G2 / gs201). It hides the Android partitions from desktop tools, holds the USB address, and gives pacman the same `[omamobile]` repository as the Pixel 7 Pro. It marks the booted slot successful after each boot, and gives the Bluetooth controller the phone's address when it appears. It does not drive the radio, the charger, or a camera.
 
 | Path | Installs to | What it does |
 | --- | --- | --- |
