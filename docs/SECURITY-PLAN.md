@@ -29,6 +29,7 @@ checked on hardware).
 8. [Runbook for the reference phone (later)](#8-runbook-for-the-reference-phone-later)
 9. [Risks](#9-risks)
 10. [Sources](#10-sources)
+11. [Proposal: LUKS2 and a touchscreen PIN in the initramfs (OnePlus 7T Pro, community)](#11-proposal-luks2-and-a-touchscreen-pin-in-the-initramfs-oneplus-7t-pro-community)
 
 ## 1. The model
 
@@ -727,3 +728,483 @@ L6, by R2's values); **H3** which partitions the locked bootloader requires
   `AVB_ROLLBACK_INDEX`); [BRINGUP-M1](../device/cheetah/BRINGUP-M1.md)
   (bootloader state, A/B partitions); [RELEASES](RELEASES.md) §5, §6, §10,
   §12; `bin/omamobile` (`avb_footers`); `out-int`'s kernel configuration.
+
+## 11. Proposal: LUKS2 and a touchscreen PIN in the initramfs (OnePlus 7T Pro, community)
+
+Status (2026-11-25): **a proposal from the OnePlus 7T Pro port (#931),
+for the maintainer to decide on (§11.11).** The code is in this pull
+request; it has run on one phone, the port owner's OnePlus 7T Pro
+(`hotdog`), whose root has been LUKS2 since 2026-11-19 (§11.9). Nothing
+has run on the Pixel 7 Pro or any other phone. Sections 1-10 above are the
+maintainer's plan and are unchanged; this section says which parts of them
+the proposal implements, which it does differently and which it leaves
+out. Ids here carry a P (PD1, PR1, PT1, PM1) so they don't collide with
+§7's decisions and §8's steps.
+
+### 11.1 What is proposed, and what exists
+
+An encrypted root for development phones, without any bootloader change:
+`userdata` holds a LUKS2 volume with the ext4 root inside, and the
+initramfs asks for the owner's PIN on a full-screen pad on the touchscreen
+at power-on, opens the volume and boots as today. The same PIN unlocks the
+lock screen and sudo. A phone opts in through its descriptor; every other
+phone builds and boots exactly as before (§11.3).
+
+What this pull request adds:
+
+| Piece | Where | Tests (no phone) |
+| --- | --- | --- |
+| The opt-in key | `INITRAMFS_CRYPT=yes` in `device/<codename>/device.conf` ([RELEASES](RELEASES.md) §3.1's table) | `tests/initramfs-root-policy.py` |
+| The init's unlock, charging-boot wait, safety-net stop, hold and continue | `initramfs/init` (`charger_boot`, `crypt_open`, `crypt_unlock`, their call in `boot_arch`, PID 1's last loop) | `tests/crypt-unlock.py` (19) |
+| The SSH unlock and PT2's self-test | `initramfs/omamobile-unlock` | through `tests/phone-encrypt` |
+| The PIN pad | `initramfs/pinpad/pinpad.c`, its glyphs from `initramfs/pinpad/mkfont` | `tests/pinpad.py` (33) |
+| The backup's tar digest | `initramfs/tarnorm/tarnorm.c` | `tests/phone-encrypt`, against the tool's Python twin |
+| Packing all of it | `bin/omamobile initramfs` | the existing initramfs tests |
+| Kernel options | `kernel/configs/omamobile.config` (§11.8) | - |
+| Encrypt, decrypt, back up, restore | `tools/phone-encrypt` (`--keep`, `--fresh`, `--decrypt`, `--restore-plain`, `--backup-only`) | `tests/phone-encrypt` (24, a stand-in phone with the real GNU tar) |
+| Unlock from the laptop | `tools/phone-unlock` | `tests/phone-encrypt` |
+| On the phone: one PIN, and the hold | `packages/omamobile-crypt` 0.1.0 (`omamobile-pin`, `omamobile-encrypt-hold`), built by `tools/build-packages`, not in the root image | its `test/all` (8, a real LUKS2 file) |
+
+Not in this pull request: the shell's skip of the lock right after an
+unlocked boot (PD3; the init writes `/run/omamobile/disk-unlocked` for it,
+and nothing reads it yet), and the OnePlus 7T Pro's descriptor lines
+(`INITRAMFS_CRYPT=yes`, the touchscreen module in `INITRAMFS_MODULES`,
+`deferred_probe_timeout=-1`), which go with that phone's own pull request.
+
+### 11.2 How it maps onto this plan
+
+- **§4 facts.** §4.1: keyslots are made on the phone, in the initramfs,
+  as §4.1 says, but at a fixed cost rather than a benchmarked one (PD5,
+  §11.6). §4.3: the PIN is the only key material, as there; the tool shows
+  the numbers below and asks again under 8 digits. §4.4: no dm-integrity.
+  §4.5: touch and keys in the initramfs, read again every 2 s so a late
+  touch driver counts (on hotdog the driver is a module, §11.9), and the USB
+  safety net stands down while the pad is up.
+- **§5.3, the release initramfs's unlock.** Item 1: the storage guard runs
+  first and is unchanged; `/dev/mapper/root` is not an `sd*` device, so
+  `userdata` stays the only writable partition. Item 3: the PIN pad, C
+  against fbdev and evdev with libc only, the volume keys and Power as the
+  fallback, the PIN only on `cryptsetup`'s stdin; digits only, no letter
+  keyboard yet (PD7), the theme's colours but no logo. Item 4: the safety
+  net stands down while the pad is up and is not armed again. Item 5:
+  `cryptsetup open`, then the existing label check, `e2fsck`, `grow_root`
+  (`resize2fs` on the mapping: the volume already spans the partition, so
+  no `cryptsetup resize`), mount and `switch_root`. Item 6: a growing delay
+  from the sixth wrong PIN, no wipe. **Not done:** item 2 (the shells and
+  SSH stay, so this is not a release initramfs for a locked phone) and item
+  7 (no setup mode: a plain ext4 `userdata` boots as today). The kernel
+  options of §5.3's last paragraph are in, plus `CRYPTO_USER_API_HASH`.
+- **§5.4, installing.** Not done as designed. Instead of setup mode with
+  the PIN chosen on the pad and a root stream checked against a digest in
+  the verified `init_boot`, `tools/phone-encrypt --fresh` formats
+  `userdata` from a held initramfs over development SSH, with the PIN typed
+  on the laptop, and writes an already prepared root image into the
+  volume, its SHA-256 checked on both ends. `--keep` does the same for a
+  phone that already runs Omamobile, keeping its data (§11.6). The PIN
+  crosses the cable here, which §5.4 step 7 avoids (PD12).
+- **§6 phases.** S2 (kernel options, cryptsetup in the initramfs, the pad
+  with tests against a framebuffer file and scripted evdev input) and the
+  development half of S3 (encryption on an unlocked phone; `grow_root` for
+  LUKS), in the shape above rather than through `install-phone --encrypt`.
+  Nothing of S4-S9.
+- **§7 decisions it assumes.** D1: encryption first. D4: digits, at least
+  6, the same PIN as the lock screen and sudo, no wipe. D5: changed, a fixed
+  cost (PD5). D6: no integrity. D10: development-mode encryption offered,
+  here by `tools/phone-encrypt`. §9's last risk: a recovery key is always
+  made (PD10).
+- **§8 runbook.** Parts of R4 (input in the initramfs), R5 (crypto speed)
+  and E2 (unlock at boot) ran on hotdog (§11.9). None of the L steps.
+
+What it does **not** do: verify the boot chain or lock the bootloader
+(§3, §5.1, §5.2, §5.5), so someone who has the phone, changes its boot
+image and gives it back can record the PIN; bind the key to hardware (S9);
+add dm-integrity; take a passphrase on the pad.
+
+### 11.3 What changes for phones that don't opt in
+
+- **At boot: nothing.** Without `INITRAMFS_CRYPT=yes`, `bin/omamobile
+  initramfs` packs what it packed before (the same Alpine packages, no
+  `cryptsetup`, no GNU `tar`, no pad, no `/etc/omamobile-crypt`); only
+  `/init`'s text differs. Every new path in the init is behind
+  `[ -e /etc/omamobile-crypt ]`: no features file, no `cryptsetup isLuks`
+  (a LUKS `userdata` is mounted as ext4 and fails there, as it always
+  did), no hold, the USB safety net's `sleep 20` as it was, and PID 1 keeps
+  the shell on `tty1` in its own loop, as before. `tests/crypt-unlock.py`
+  and `tests/initramfs-root-policy.py` check each of these, and that no
+  shipped descriptor sets the key.
+- **The kernel: five options in the shared fragment**, so every phone's
+  release kernel gets them (§11.8). They add code to the kernel image and
+  `/dev/mapper/control`, and set up nothing by themselves.
+- **The package repository** gains `omamobile-crypt`, installed by nobody
+  until an owner asks for it.
+
+The contributor's first version packed all of this into every initramfs
+and let the LUKS header alone decide; the descriptor key is new in this
+pull request, so a port opts in on purpose and the other phones' initramfs
+stay as they are.
+
+### 11.4 Booting (`initramfs/init`)
+
+The change sits in `boot_arch`, between finding `userdata` and the label
+check:
+
+1. Find `userdata`, as today.
+2. `/etc/omamobile-crypt` and `cryptsetup isLuks`? If not: the plain path,
+   unchanged.
+3. **Charging boot** (`androidboot.mode = "charger"` in `/proc/bootconfig`
+   or on the command line): no pad. The screen stays dark; Power held
+   restarts into a normal boot, the cable out powers off (PD8). The wait
+   stands the USB safety net down, since a wall charger is no USB host.
+4. **Unlock.** Two ways race, and the first to open the volume wins: the
+   pad (§11.5) and `omamobile-unlock` over SSH (development builds, which
+   carry the developer's key; `tools/phone-unlock` calls it). Both pipe the
+   PIN to `cryptsetup open … root --key-file=-`. A pad that stops is
+   started again, at most five times; one that finds no display (exit 5)
+   leaves the SSH unlock.
+5. **While waiting:** the pad writes `/run/omamobile-pinpad`, and the
+   safety net exits when it sees it. After 60 s with no input the pad
+   blanks the screen; ten minutes with no input power the phone off
+   (`reboot(2)`'s power-off, not busybox `poweroff`, AGENTS §4).
+6. **Opened:** `dev=/dev/mapper/root`, and the existing path runs on it.
+   `/run/omamobile/disk-unlocked` is written for the session (PD3).
+7. **Shutdown:** nothing new; the mapping stays open until power-off.
+
+Also behind the marker: `/run/omamobile/initramfs-features` says
+`crypt hold`, which `omamobile-encrypt-hold` requires (§11.6), and PID 1
+waits for `/run/omamobile-continue` to try the root again, even with
+`omamobile.initramfs` on the command line, so `tools/phone-encrypt` (or a
+human over SSH) can hand a held boot back.
+
+### 11.5 The PIN pad (`omamobile-pinpad`)
+
+- **Drawing:** laid out from fb0's own geometry (`FBIOGET_VSCREENINFO`,
+  `FBIOGET_FSCREENINFO`; 16, 24 or 32 bits per pixel), round keys in the
+  theme's colours, antialiased, a row of dots, a title and one message
+  line. Glyphs come from `mkfont`, rendered at build time with ImageMagick
+  at the panel's width (`PINPAD_FONT`, default the build machine's sans);
+  without them the pad draws built-in capitals. While it is up the console
+  is in `KD_GRAPHICS`, so kernel messages don't draw over it (PT2).
+- **Touch:** multi-touch protocol A and B and single-touch, from every
+  evdev device with positions, looked for again every 2 s; coordinates
+  scaled from the device's ranges; a key fires on release inside its cell.
+  `PINPAD_TOUCH_SWAP=x|y|xy` for a mirrored panel (none known yet).
+- **Keys:** Volume Up and Down move a highlight, Power presses it.
+- **The PIN in memory:** one `mlock`ed buffer, wiped after use, at most 64
+  digits, written only to `cryptsetup`'s stdin: no log, file or kmsg.
+- **Wrong PIN:** "Wrong PIN" and the dots shake; from the sixth, waits of
+  5, 10, 20, 40 s up to 5 minutes, counted in RAM.
+- **No stdio:** musl's `printf` needs 128-bit float helpers a plain clang
+  has no library for on aarch64, so the pad formats its own numbers (289 KB
+  static).
+- `tests/pinpad.py` runs it against a framebuffer file and scripted evdev
+  input with a stand-in `cryptsetup`: the exact bytes that reach it, that
+  the trace, stdout and the screen never hold the PIN, delete, the keys
+  alone, the back-off, blanking (the waking tap presses nothing), the idle
+  power-off, the safety-net marker, no display, both fonts, `KD_GRAPHICS`
+  and the charging wait's two exits.
+
+### 11.6 On the disk, and encrypting a phone (`tools/phone-encrypt`)
+
+```
+userdata  ── LUKS2 (label omamobile-crypt, 16 MiB header)
+             keyslot 0: the owner's PIN    (Argon2id, made on the phone)
+             keyslot 1: the recovery key   (Argon2id, made on the phone)
+             flags: allow-discards, no read/write workqueue (persistent)
+   └─ /dev/mapper/root ── ext4, label omamobile-root (as today)
+```
+
+- **Cost (PD5):** `--pbkdf argon2id --pbkdf-memory 1048576
+  --pbkdf-parallel 4 --pbkdf-force-iterations 4`, about 2 s on hotdog. Not
+  `--iter-time 2000`: cryptsetup benchmarks at format time and cuts the
+  memory when the phone runs slow then, and a console stalled by display
+  errors gave 64 MiB (PT2). Both keyslots are checked with `luksDump` after
+  the format; `omamobile-pin` uses the same cost.
+- **The recovery key:** 48 random digits in eight groups of six (159 bits),
+  made on the laptop, shown once, confirmed by its last group, typed on the
+  same pad; never written to a file by the tools (on the phone it passes
+  through `/run`, RAM, for `luksAddKey`, removed at once).
+- **What a PIN is worth offline** (§4.3), for an attacker who copied
+  `userdata` and tries about 50 guesses a second at 1 GiB each: 6 digits
+  about 6 hours, 8 digits about 3 weeks, 10 digits about 6 years, four
+  random words far beyond reach. The tool says so and asks again under 8.
+- **Holding a boot:** `omamobile-encrypt-hold` on the running phone writes
+  `/.omamobile-hold`; at the next boot the init mounts the root, sees the
+  marker, deletes it, unmounts and stays in the initramfs. The reboot is
+  the human's call. It refuses on a phone whose initramfs lacks
+  `crypt hold`, which would ignore the marker and leave it for a later one.
+- **`--keep BACKUP_DIR`:** checks (the initramfs has `/etc/omamobile-crypt`,
+  the board is `DEVICE`'s, the root is unmounted ext4 labelled
+  `omamobile-root` with a clean `e2fsck -f`, room for the backup); the
+  phone's clock set from the laptop (hotdog's RTC said 1970); a read-only
+  GNU tar backup (`--format=posix --sort=name --xattrs --acls
+  --numeric-owner --sparse --one-file-system`) streamed into
+  `BACKUP_DIR/root.tar.zst`; a second read on the phone whose SHA-256 must
+  equal the received stream and the written file, and the entry count the
+  phone's `find`. GNU tar names a sparse file's header after its own PID,
+  so `omamobile-tarnorm` (and its Python twin) replace that number before
+  hashing; the archive is kept as written. Then the owner types the
+  codename and `erase` (the one irreversible step), the PIN twice, the
+  format, the recovery key, `mkfs.ext4` inside, the restore, a read-back
+  whose digest must be the backup's, `luksHeaderBackup` into `BACKUP_DIR`,
+  and the boot handed back to the init, which shows the pad. The backup
+  holds the whole unencrypted system; the tool says so and asks for it to
+  be deleted once the phone has run well.
+- **`--fresh USERDATA.img`:** a root image already prepared for the phone
+  (`firstboot.conf` inside); the PIN must match its `PASSWORD_HASH`; the
+  image is streamed gzip-compressed into `/dev/mapper/root` with plain `dd`
+  (no `conv=sparse`: a skipped block reads back as noise under dm-crypt)
+  and its SHA-256 checked on both ends; the first boot grows it.
+- **`--decrypt BACKUP_DIR`** is the reverse of `--keep`, and
+  **`--restore-plain BACKUP_DIR`** zeroes the LUKS header, makes ext4 and
+  restores a backup: the way back.
+- **What never changes:** the tool writes `userdata` only, only from the
+  initramfs, through the storage guard. It flashes nothing.
+
+### 11.7 Living with it
+
+- `sudo omamobile-pin` asks for the old PIN and the new one twice, changes
+  keyslot 0 (`luksChangeKey`), checks that the new PIN opens it, and only
+  then the user's password (`chpasswd`). A plain `passwd` leaves the disk
+  PIN as it was (PD2). `--recovery-key` makes a new recovery key.
+- `tools/phone-unlock` waits for the initramfs's SSH and sends the PIN on
+  stdin, asked on the laptop's terminal or from `OMAMOBILE_DISK_PIN_CMD`
+  (a password manager's command). The tools never store it, and agents must
+  never ask for, read or type it (an AGENTS §1 line, PD11).
+- **What it costs:** before the PIN the phone does nothing, so after a
+  restart at night no alarm and no call until someone unlocks it; the
+  fingerprint can't unlock the disk; every reboot of an encrypted phone
+  waits for a human; a forgotten PIN and a lost recovery key mean the data
+  is gone.
+- **Selling or giving the phone away:** `cryptsetup erase` destroys every
+  keyslot; the backups and the header backup must go too.
+
+### 11.8 Kernel and initramfs
+
+`kernel/configs/omamobile.config`, the release kernel's fragment, so it
+changes every phone's kernel configuration:
+
+```
+CONFIG_BLK_DEV_DM=y
+CONFIG_DM_CRYPT=y
+CONFIG_CRYPTO_XTS=y
+CONFIG_CRYPTO_USER_API_HASH=y
+CONFIG_CRYPTO_USER_API_SKCIPHER=y
+```
+
+Built in because most phones' initramfs carry no modules. `BLK_DEV_DM` and
+`CRYPTO_XTS` were modules from the arm64 defconfig, the rest unset
+(`CRYPTO_AES_ARM64_CE_BLK=y` was already in). AF_ALG is what cryptsetup
+uses for the LUKS2 keyslot area and its checks. They are inert without an
+encrypted root: the kernel sets up no device-mapper target by itself, and
+at boot only the `cryptsetup` of an `INITRAMFS_CRYPT` initramfs opens one,
+on a LUKS2 `userdata`. A per-device `kernel.config` can't carry them,
+since the release kernel is one build for every device (RELEASES §3.1, §4).
+
+`bin/omamobile initramfs`, only with `INITRAMFS_CRYPT=yes`: Alpine's
+signed `cryptsetup` and GNU `tar` (the build stops if either is missing;
+GNU tar replaces busybox's, because the restore needs xattrs, ACLs and file
+capabilities), `omamobile-pinpad` and `omamobile-tarnorm` static against
+Alpine's musl like `reboot-to` (the musl sysroot gains Alpine's
+`linux-headers` for them), `omamobile-unlock`, `/etc/omamobile-crypt` and
+the glyphs. The glyphs come from the build machine's font, as the splash
+does from its theme, so two machines give the same initramfs only with the
+same `PINPAD_FONT`. Measured for hotdog: `initramfs.cpio.lz4` from 6.7 MB
+to 7.5 MB (2026-11-19, a scratch build). On cheetah the initramfs sits in
+the 64 MiB `vendor_kernel_boot`; mkbootimg and avbtool already stop on an
+image that doesn't fit.
+
+Per device: cheetah's touchscreen is built in; hotdog's (`s6sy761`) is a
+module, packed through `INITRAMFS_MODULES` (its I2C, pins and rail are
+built in, and it loads no firmware), so a hotdog initramfs needs `omamobile
+modules` from the same build first. Hotdog also needs
+`deferred_probe_timeout=-1` (§11.9, PM2).
+
+### 11.9 What has run, on which phone
+
+On the port owner's OnePlus 7T Pro, with the contributor's earlier tree,
+which packed the crypt pieces into every initramfs. This pull request adds
+the `INITRAMFS_CRYPT` gates around the same unlock functions, and the
+device-neutral `tests/phone-encrypt`.
+
+- **2026-11-19, PR1** (`7.3.0-rc6-omamobile-push1`): the root on
+  `userdata`, ext4, 30.8 GiB used; room on the laptop. Pass.
+- **2026-11-19, PR2, partial,** read from the running root: fb0 is
+  `msmdrmfb`, 1440x3120, 32 bpp, stride 5760; the power and volume keys and
+  `DRM_MSM` built in, `s6sy761` a module; `pm8150b-charger` the power
+  supply. From the PT1 boots: on a boot from flash fb0 exists in the
+  initramfs (simpledrm's, then `msm`'s); in a RAM boot from the fastboot
+  screen there was none about 9 s in, so the pad may find no display there
+  and the SSH unlock remains.
+- **2026-11-19, PT1** (`7.3.0-rc6-omamobile-crypt1-g7539ca3e06f6`: `boot_a`'s
+  tree and config with the options of §11.8): the first RAM boot fell back
+  to `boot_a` after about 15 s, no pstore record. A control RAM boot of
+  `boot_a`'s own image wedged after the handover the same way (`[dpu
+  error]enc34 frame done timeout`), so the wedges are hotdog's RAM-boot
+  display problem. The second try passed: `crypt hold`, the root by 13 s,
+  `/dev/mapper/control` and `xts(aes)` present, no `disk-unlocked`, the
+  touchscreen loaded in the initramfs and working in the session,
+  `tools/phone-smoke` as before.
+- **2026-11-19, PT2** (RAM boot, `omamobile.initramfs`): first image, the
+  pad drew and took touch, but the kernel's `[dpu error]enc35 frame done
+  timeout` lines drew over it and stalled the phone, and the self-test
+  volume's Argon2id came out at 64 MiB. Fixes: `KD_GRAPHICS` while the pad
+  is up, and the fixed cost (PD5). Second image: no display errors, the
+  volume at 1 GiB and 4 iterations, a wrong PIN refused, the test PIN
+  accepted in about 2 s. PR3 from the same boots: aes-xts 512-bit 1357 MiB/s
+  encrypt, 1419 MiB/s decrypt. The back-off, blanking and the 10-minute
+  power-off were not run on the phone (`tests/pinpad.py` covers them).
+- **2026-11-19, PM2, `--keep`** (the owner: a test phone). `boot_a` flashed
+  first with the PT2-fixed image, which cleared slot A's successful mark;
+  `omamobile-crypt` 0.1.0 installed. Found on the way: the RTC's 1970 clock
+  (the tool now sets the clock and passes `--warning=no-timestamp` to the
+  restore); with the cable in, hotdog switches itself on after a power-off
+  with `androidboot.mode=normal`, so `charger_boot` never fires there (PD8
+  open for it); warm restarts wedged the display, a cold start never did.
+  The copy, 13.7 GB compressed, took about 18 minutes; erase, format,
+  restore (about 8 MB/s) and the read-back check passed; the pad unlocked;
+  Omarchy came up. **One failure, the cameras:** both CCIs failed at 6871 s
+  with "deferred probe timeout, ignoring dependency" and -110, because the
+  boot had waited hours in the initramfs and the default 10 s timeout fired
+  before the root's modules supplied them; a failed probe isn't retried. A
+  reprobe brought all four cameras back. Fix on hotdog's command line:
+  `deferred_probe_timeout=-1`. No boot from a plain root had a device
+  pending at the timeout; cheetah's boots are to be checked before it gets
+  the same.
+- **2026-11-21, a RAM boot for #931's review** (kernel
+  `7.3.0-rc6-omamobile-crypt1-gf3a11a5f5062`, the Image and DTB those of
+  `boot_a`, the initramfs from #931's tree plus this unlock): the pad at
+  2.5 s, the root open at 23.5 s (the owner's PIN), the switch to Arch at
+  23.6 s; `tools/phone-smoke` with no failed units, its two required "not
+  ok" being slot A and a root on `/dev/mapper/root`, which the smoke test
+  doesn't know yet. The owner then checked on the phone that it boots with
+  no cable in ([hotdog BRINGUP-M1](../device/hotdog/BRINGUP-M1.md), in #931).
+- **Not run:** PT3 on its own (it ran inside PM2), PM3 and PM4 (recorded
+  as a whole), the recovery key at the pad, `omamobile-pin` on the phone,
+  a charging boot.
+
+### 11.10 Runbook and rollback
+
+Read-only steps first. Each: **Expect**, **Pass**, **Stop**, **Rollback**,
+risk. Every boot, flash and write is the human's call, asked each time
+(AGENTS §1); steps that light or blank the screen are announced; on
+cheetah, stop the modem before a `push` or `reboot-to` (AGENTS §2).
+
+- **PR1. Room for the backup** (running phone, none): `df` of `/` and of
+  the laptop's backup directory. Pass: used space plus 10 % free. Stop:
+  not enough room.
+- **PR2. What the initramfs sees** (one held boot, low): input devices,
+  fb0's geometry, a few touches. Stop: no fb0, so the pad needs a display
+  path first. Rollback: a normal reboot.
+- **PR3. Crypto speed** (low): `cryptsetup benchmark` in the initramfs.
+  Stop: Argon2id at 1 GiB far over 2 s, or failing for memory.
+- **PR4. Charging boot** (phone off, a charger, low): what starts, and
+  whether it charges without the root's charger driver (PD8).
+- **PT1. The new initramfs on the plain root** (medium: a new boot image;
+  `push` on cheetah, `fastboot boot` on hotdog). Expect: it boots as
+  before, `initramfs-features` reads `crypt hold`. Pass:
+  `tools/phone-smoke` as before, no `disk-unlocked`. Stop: any difference.
+  Rollback: the previous image.
+- **PT2. The pad against a scratch volume** (low, `userdata` not opened):
+  held, `omamobile-unlock --selftest` makes a 64 MiB LUKS2 file in `/run`
+  with the test PIN `135790`. Pass: wrong PINs refused, the back-off, the
+  test PIN opens it in about 2 s, keys alone, blanking, no safety-net crash
+  without a cable, the power-off at 10 minutes. Stop: a reset, a crash, or
+  touch in the wrong place. Rollback: a reboot.
+- **PT3. The backup's digest is stable** (read-only, low): held,
+  `tools/phone-encrypt --backup-only BACKUP_DIR`. Stop: the two
+  digests differ, so the backup can't be trusted and PM2 doesn't run.
+- **PM1. A fresh backup on the day**, as PT3.
+- **PM2. Encrypt** (**high**: `userdata` is overwritten; battery above
+  50 % or a charger). `tools/phone-encrypt --keep BACKUP_DIR`. Pass: the
+  PIN unlocks; `lsblk -f` shows `crypto_LUKS` on `userdata` and ext4 on
+  `/dev/mapper/root`; `luksDump` shows two Argon2id keyslots and the
+  persistent flags. Stop: any error, then leave the phone in the
+  initramfs and change nothing more. Rollback: `tools/phone-encrypt
+  --restore-plain BACKUP_DIR`, then a normal boot.
+- **PM3. A day of use** (low): calls, texts, Wi-Fi, the modem, cameras,
+  sensors, suspend, a `push` and `tools/phone-unlock` round trip. Pass:
+  `tools/phone-smoke` as before. Rollback: as PM2.
+- **PM4. The edges** (low): five reboots unlocked at the pad, one with the
+  recovery key, one with `tools/phone-unlock`, a charging boot,
+  `omamobile-pin` to a new PIN and back. Stop: a PIN or key that should
+  work doesn't; unlock with the other one and stop.
+
+### 11.11 Open decisions for the maintainer
+
+The code follows the contributor's recommendations so that it had
+something to follow; each is one place in the code.
+
+- **PD1. PIN rules.** Digits, at least 6, a warning and a second question
+  under 8 (as built); or at least 8; or a passphrase by default.
+- **PD2. One PIN for the disk, the lock screen and sudo,** changed together
+  by `omamobile-pin` (as built), or a separate disk PIN.
+- **PD3. No lock right after an unlocked boot** (one PIN per power-on), or
+  keep the lock (two). The init writes the marker either way; the shell's
+  side is a separate change.
+- **PD4. Wipe after N wrong PINs:** no (as built).
+- **PD5. Argon2id cost:** fixed at 1 GiB, 4 threads, 4 iterations (as
+  built), or §7 D5's benchmarked 2 s.
+- **PD6. Discards** on (as built), or off.
+- **PD7. Letters on the pad:** digits first (as built), letters later.
+- **PD8. Charging boots:** the dark wait (as built where the bootloader
+  says `androidboot.mode=charger`), or the pad. Open for hotdog, which never
+  says it.
+- **PD9. First phone:** decided 2026-11-19 by its owner, hotdog.
+- **PD10. Recovery key:** always (as built), or offered.
+- **PD11. Agents and the disk PIN:** an AGENTS §1 line that agents never
+  ask for, store or type it, and that a reboot of an encrypted phone waits
+  for the human.
+- **PD12. The PIN over the cable.** `tools/phone-encrypt` and
+  `tools/phone-unlock` take it on the laptop, which §5.4 avoids; keep that
+  for development phones only, or move the format into the pad.
+- **PD13. Where it is switched on:** per descriptor (`INITRAMFS_CRYPT`, as
+  in this pull request), or in every initramfs, as the contributor first
+  built it. And whether `--release` may set it while §5.3 item 2 is open.
+- **PD14. The kernel options** in the shared fragment (as here), for every
+  phone, with the reasons of §11.8.
+- **PD15. What follows:** `omamobile-crypt` in the root image,
+  `install-phone --encrypt` (or `--fresh` folded into it),
+  `tools/phone-smoke` knowing `/dev/mapper/root`, and `omamobile-setup-user`
+  showing *Style > Unlock* again on an encrypted phone.
+
+### 11.12 Risks
+
+- **Losing the data during `--keep`.** The format erases the only copy on
+  the phone. Mitigations: two backup reads that must agree before the
+  format, the typed confirmation, the read-back check, and
+  `--restore-plain` as a tested way back.
+- **A phone that can't be unlocked** (a pad bug, no touch, no display):
+  the volume keys and Power, the SSH unlock in development builds, PT2
+  before any real volume, the recovery key.
+- **The digest check depends on `omamobile-tarnorm`** matching GNU tar; it
+  changes only the name and prefix fields and their checksum, it is tested
+  against its twin, and PT3 runs it on the phone before anything is erased.
+- **A long wait at the pad changes later boot steps:** the cameras' deferred
+  probe timeout on hotdog (PM2). Any driver with a timeout counted from
+  boot can do the same; a phone gets its own check before it opts in.
+- **The disk PIN and the lock PIN drifting apart** after a plain `passwd`:
+  `omamobile-pin` and its README.
+- **The unencrypted backup on the laptop:** the tool says what it holds
+  and asks for it to be deleted.
+- **No protection against a changed boot image** until §5's verified boot
+  chain exists (§11.2).
+
+### 11.13 Sources
+
+- cryptsetup, *cryptsetup-luksFormat(8)* and *cryptsetup-open(8)* (header
+  size, PBKDF options, key-file handling, persistent flags).
+  <https://man7.org/linux/man-pages/man8/cryptsetup-luksFormat.8.html>,
+  <https://man7.org/linux/man-pages/man8/cryptsetup-open.8.html>
+- cryptsetup, the project's repository (the release in Alpine 3.24's
+  `cryptsetup` 2.8.6 package, which the initramfs carries).
+  <https://gitlab.com/cryptsetup/cryptsetup>
+- Linux, `Documentation/admin-guide/device-mapper/dm-crypt.rst` (open
+  flags, `no_read_workqueue`, `allow_discards`).
+- GNU tar, *GNU tar manual*, "Storing sparse files" and "Controlling
+  extended header keywords" (`--pax-option`, the `GNUSparseFile` name).
+  <https://www.gnu.org/software/tar/manual/>
+- Our own: `initramfs/init`, `bin/omamobile` (`initramfs`,
+  `INITRAMFS_MODULES`, the splash), `tools/install-phone` (the PIN
+  question), `rootfs/build-inside`, the hotdog notes in #931
+  (`device/hotdog/BRINGUP-M1.md`, `device.conf`), and the kernel
+  configuration of `out-hotdog-sensors` (2026-11-18).
