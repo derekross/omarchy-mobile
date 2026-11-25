@@ -3253,6 +3253,28 @@ AVB signatures, the unpacked payload, ABL handoff and saved D1
 slot sizes passed. Manifest SHA-256 `8a287c4f3f3dcf1730cc69b03d84b696779bda62123856029b3a6aadb67fcd21`.
 Archive SHA-256 `96f6b0f0e6ddf403611b22fabe29dfd3056edbc28cd8819ebb32b56b521557fa`.
 
+#### Attended v58 slot B trial
+
+On 2026-11-25 one v58 boot used the verified nine-partition NV backup.
+All five slot B writes passed, and readback matched all 8,192
+supplied `vendor_boot_b` bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 0.140699–0.140734 | Prep OFF | The first post-vote HC sample was `0x10`. The poll recorded `saw_hc_0x32=1` and qualified HC `0x13` with PHY `0x11` in 87 µs. This exercises the v52 transition guard on hardware. |
+| 2.183445–2.184057 | Initialization, INQUIRY and capacity | The first `fDeviceInit` poll returned clear. INQUIRY passed, and capacity confirmed last LBA 12,801,023 and 4,096-byte blocks. |
+| 2.184526–2.184782 | LBA 0 and primary GPT header | Both READ(10) commands received their own IRQ, GOOD status and zero residual. The MBR signature and primary header CRC passed. |
+| 2.184789–2.185061 | Primary GPT entry array | One READ(10) fetched two 4 KiB blocks starting at LBA 2. The IRQ arrived, status was GOOD, residual was zero and the CRC over 5,376 bytes passed (`result=0`). |
+| 2.185213–2.185438 | Cleanup | Hibern8 passed. HC and PHY reached `0x11`. Deep H8 stayed prepared through HCI IRQ release. |
+| 90.184884–91.187724 | Timed warm return | Zero SCSI disks at RAM startup and before restart. |
+
+This validates the primary entry-array CRC and a multi-block read
+on LUN 0. The backup GPT, individual entry semantics and normal
+SCSI discovery remain untested. Ramoops and Android's
+`SYSTEM_LAST_KMSG` agree. Fastboot returned after 134 seconds.
+Stock D1 booted on A with enforcing verity and the expected factory
+VBMeta digest.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
