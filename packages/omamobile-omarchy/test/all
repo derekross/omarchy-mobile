@@ -66,8 +66,8 @@ bash test/modules-cleanup.sh || fail "modules-cleanup"
 bash test/zram.sh || fail "zram drop-in"
 bash test/run-mode.sh || fail "the /run mode rule"
 [[ -x $t/stage/usr/lib/omamobile-omarchy/power-profile ]] || fail "power-profile staged executable"
-[[ $(readlink "$u/multi-user.target.wants/omamobile-power-profile.service") == ../omamobile-power-profile.service ]] \
-  || fail "the power-profile unit starts at boot"
+[[ $(readlink "$u/power-profiles-daemon.service.wants/omamobile-power-profile.service") == ../omamobile-power-profile.service ]] \
+  || fail "the power-profile unit starts with the daemon"
 grep -qxF 'ExecStart=/usr/lib/omamobile-omarchy/power-profile watch' "$u/omamobile-power-profile.service" || fail "the unit follows the profile"
 grep -qxF 'ExecStopPost=/usr/lib/omamobile-omarchy/power-profile restore' "$u/omamobile-power-profile.service" \
   || fail "the unit gives the top frequency back when it stops"

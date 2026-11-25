@@ -27,8 +27,8 @@ install -Dm644 systemd/linux-modules-cleanup.service.d/10-omamobile.conf \
 install -d "$u/timers.target.wants"
 ln -sfn ../omamobile-modules-cleanup.timer "$u/timers.target.wants/omamobile-modules-cleanup.timer"
 install -Dm644 systemd/omamobile-power-profile.service "$u/omamobile-power-profile.service"
-install -d "$u/multi-user.target.wants"
-ln -sfn ../omamobile-power-profile.service "$u/multi-user.target.wants/omamobile-power-profile.service"
+install -d "$u/power-profiles-daemon.service.wants"
+ln -sfn ../omamobile-power-profile.service "$u/power-profiles-daemon.service.wants/omamobile-power-profile.service"
 install -Dm644 systemd/power-profiles-daemon.service.d/10-omamobile.conf \
   "$u/power-profiles-daemon.service.d/10-omamobile.conf"
 for f in patches/*.patch; do
