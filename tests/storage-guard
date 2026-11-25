@@ -5,12 +5,11 @@
 # refuses any list that names more than slot B's boot images and userdata;
 # initramfs/init reads that file and fails closed. Its guard functions run
 # here against a fake sysfs and /dev: a missing, empty or malformed file, or
-# a forbidden name, leaves every partition read-only; cheetah's list leaves
-# exactly its six partitions writable, as the hard-coded list did; /dev/sda's
-# whole-disk node is removed either way. A LUN named in UFS_RW_LUNS (a
-# test descriptor's sde, enchilada's layout) is guarded as sda is; without
-# that list, or with a bad one or a closed allowlist, it stays read-only at
-# the disk level. The packed list is in slot form (ACTIVE-SLOT-PLAN §4):
+# a forbidden name, leaves every disk and partition read-only. The cheetah list
+# leaves exactly its six partitions writable. Outside NFS root, the main
+# whole-disk node is removed either way. A LUN named in a valid UFS_RW_LUNS
+# list (sde as on enchilada) is guarded as sda is. Other LUNs stay read-only
+# at the disk level. The packed list is in slot form (ACTIVE-SLOT-PLAN §4):
 # booted from slot B (androidboot.slot_suffix in /proc/bootconfig, else
 # /proc/cmdline) it holds as packed; from slot A each X_b becomes X_a and
 # slot B stays read-only; with no readable suffix (none, two that disagree,
@@ -107,6 +106,7 @@ cat > "$t/bin/blockdev" <<EOF
 #!/bin/sh
 [ "\$1" = --setro ] || exit 1
 n=\${2##*/}
+[ "\$n" != "\${GUARD_BLOCKDEV_FAIL:-}" ] || exit 1
 for f in $B/sys/block/\$n/ro $B/sys/block/*/\$n/ro; do [ -f "\$f" ] && echo 1 > "\$f"; done
 exit 0
 EOF
@@ -168,6 +168,12 @@ disk_checks() { # $1: case name; $2: sde when sde is a listed LUN
       || fail "$1: an unlisted LUN is read-only, boot_b on it too (writable: $(writable sde))"
   fi
 }
+read_only_checks() {
+  local ro
+  for ro in "$B"/sys/block/sd*/ro "$B"/sys/block/sd*/sd*/ro; do
+    [[ $(cat "$ro") == 1 ]] || fail "$1: ${ro#"$B/sys/block/"} is not read-only"
+  done
+}
 
 fake_disks
 cp "$t/etc-cheetah/omamobile-ufs-rw" "$t/etc-cheetah/omamobile-ufs-rw-slot" "$B/etc/"
@@ -193,6 +199,9 @@ slot_case "slot A (bootconfig): its five boot images and userdata, slot B read-o
 grep -q "running from slot a" "$B/dev/kmsg" || fail "slot A is logged"
 unguarded() { PATH="$t/bin:$PATH" $GSH -c ". '$t/guard-test.sh'; ufs_unguarded"; }
 [[ -z $(unguarded) ]] || fail "slot A: nothing outside its allowlist is writable (got: $(unguarded))"
+: > "$B/dev/sda"
+[[ $(unguarded) == sda ]] || fail "slot A: a recreated writable whole-disk node is reported"
+rm "$B/dev/sda"
 echo 0 > "$B/sys/block/sda/sda2/ro"
 [[ $(unguarded) == "sda2 (boot_b)" ]] || fail "slot A: a reopened boot_b is reported at the hand-over (got: $(unguarded))"
 pass "slot A: the hand-over check reports slot B's boot image made writable"
@@ -227,11 +236,11 @@ for bad in slot-b '' 'running x'; do
   fake_disks _a; printf '%s\n' "$bad" > "$B/etc/omamobile-ufs-rw-slot"
   cp "$t/etc-cheetah/omamobile-ufs-rw" "$B/etc/"
   guard
-  [[ -z $(writable) ]] || fail "slot marker '$bad': every partition read-only (writable: $(writable))"
   grep -q "malformed slot marker" "$B/dev/kmsg" || { cat "$B/dev/kmsg"; fail "slot marker '$bad': says so on kmsg"; }
-  disk_checks "slot marker '$bad'"
+  read_only_checks "slot marker '$bad'"
+  [[ ! -e $B/dev/sda ]] || fail "slot marker '$bad': the main whole-disk node is removed"
 done
-pass "a slot marker other than 'running' leaves every partition read-only"
+pass "a malformed slot marker leaves every disk and partition read-only and removes the main disk node"
 
 # The check boot_arch makes before handing over: nothing outside the list.
 unguarded() { PATH="$t/bin:$PATH" $GSH -c ". '$t/guard-test.sh'; ufs_unguarded"; }
@@ -250,10 +259,9 @@ fake_disks
 cp "$t/etc-cheetah/omamobile-ufs-rw" "$B/etc/omamobile-ufs-rw"
 printf '172.16.42.2:/srv/nfs/dipper\n' > "$B/etc/omamobile-nfsroot"
 guard
-[[ -z $(writable) ]] || fail "NFS root's first pass leaves all UFS partitions read-only"
+read_only_checks "NFS root's first pass"
+[[ -e $B/dev/sda && -e $B/dev/sde ]] || fail "NFS root retains read-only whole-disk nodes"
 ! grep -q 'ufs-ro: allowlist: ' "$B/dev/kmsg" || fail "NFS mode skips the packed allowlist"
-[[ $(cat "$B/sys/block/sda/ro") == 1 ]] || fail "NFS root marks the main UFS disk read-only"
-[[ $(cat "$B/sys/block/sdb/ro") == 1 && $(cat "$B/sys/block/sdb/sdb1/ro") == 1 ]] || fail "NFS root marks boot LUNs read-only"
 grep -q 'NFS root requested: every UFS partition read-only' "$B/dev/kmsg" || fail "NFS mode is selected before first guard pass"
 [[ -z $(unguarded) ]] || fail "NFS root handover has no writable UFS device"
 echo 0 > "$B/sys/block/sda/ro"
@@ -278,13 +286,35 @@ pass "oriole's packed list: boot_b, vendor_boot_b, dtbo_b and userdata writable"
 
 closed() { # what, expected kmsg text; the file is set up by the caller
   guard
-  [[ -z $(writable) ]] || fail "$1: every partition read-only (writable: $(writable))"
   grep -q -- "$2" "$B/dev/kmsg" || { cat "$B/dev/kmsg"; fail "$1: says so on kmsg ($2)"; }
-  disk_checks "$1"
-  pass "$1: every partition read-only"
+  read_only_checks "$1"
+  [[ ! -e $B/dev/sda ]] || fail "$1: the main whole-disk node is removed"
+  grep -q '/dev/sda: whole-disk node removed after setting it read-only' "$B/dev/kmsg" \
+    || fail "$1: the main disk is made read-only before its node is removed"
+  [[ -e $B/dev/sdb && -e $B/dev/sda1 ]] || fail "$1: read-only unlisted disk and partition nodes remain"
+  [[ -z $(unguarded) ]] || fail "$1: guard reports writable devices"
+  pass "$1: every disk and partition read-only and the main whole-disk node removed"
 }
 fake_disks
 closed "no allowlist file" "no allowlist in this image"
+echo 0 > "$B/sys/block/sda/ro"
+[[ $(unguarded) == sda ]] || fail "no allowlist: a reopened main disk is reported"
+pass "a closed allowlist reports a main disk made writable after the guard"
+
+fake_disks
+GUARD_BLOCKDEV_FAIL=sda guard
+[[ $(unguarded) == sda ]] || fail "an unsuccessful blockdev call leaves the main disk unguarded"
+[[ ! -e $B/run/ufs-ro/sda && ! -e $B/dev/sda ]] || fail "a failed guard removes the node without marking the disk protected"
+grep -q 'whole-disk node removed after read-only check failed' "$B/dev/kmsg" \
+  || fail "a failed ioctl and node removal are logged"
+guard
+[[ $(unguarded) == sda ]] || fail "no retry without a device node must not clear the failure"
+: > "$B/dev/sda"  # simulate devtmpfs attaching the node again
+guard
+read_only_checks "successful retry of the main disk"
+[[ ! -e $B/dev/sda ]] || fail "a successful retry removes the main whole-disk node again"
+pass "a failed main-disk ioctl removes the node, blocks handover and retries if the node reappears"
+
 fake_disks; : > "$B/etc/omamobile-ufs-rw"
 closed "an empty allowlist file" "no allowlist in this image"
 fake_disks; printf '   \n' > "$B/etc/omamobile-ufs-rw"
@@ -299,6 +329,10 @@ fake_disks; printf 'boot_b vendor_boot_b dtbo_b userdata persist\n' > "$B/etc/om
 closed "persist in the allowlist" "allowlist names persist"
 fake_disks; printf 'boot_a userdata\n' > "$B/etc/omamobile-ufs-rw"
 closed "a slot A name in the allowlist" "allowlist names boot_a"
+fake_disks none; printf 'boot_b dtbo_b\n' > "$B/etc/omamobile-ufs-rw"
+printf 'sde\n' > "$B/etc/omamobile-ufs-rw-luns"
+closed "a boot-only allowlist with an unknown slot" "no slot suffix and no writable partitions"
+[[ ! -e $B/dev/sde ]] || fail "the configured extra LUN node is also removed after making it read-only"
 
 # --- A second LUN: boot_b on sde (enchilada's layout) ---
 unguarded() { PATH="$t/bin:$PATH" $GSH -c ". '$t/guard-test.sh'; ufs_unguarded"; }
