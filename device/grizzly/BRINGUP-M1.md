@@ -2289,6 +2289,35 @@ Ramoops and `SYSTEM_LAST_KMSG` agree on these results. Fastboot
 returned after 133 seconds. Stock D1 completed boot on A with
 enforcing verity and the original factory VBMeta digest.
 
+### Mainline v45 guarded prep OFF settling
+
+[v45 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/c6cf13436ab3e557478ac3ee386d0db5dfd9f79d)
+checks the immediate sample after the single acknowledged prep OFF.
+If HC is still `0x10` with the HSIO-S wrapper on and PHY `0x11`, it
+polls for HC `0x13` (PSM1 `0x3`) with a 10 ms deadline. Every sample
+uses the wrapper guard. An unavailable wrapper, unexpected HC or PHY,
+or timeout blocks the host. It logs the initial and final samples,
+elapsed time and qualification result. CPM still reports an accepted
+OFF vote to genpd even if the physical state does not qualify. The
+one-shot state machine preserves that ownership decision and issues
+no second OFF vote. Prep ON and core ON gates remain as in v44.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match the source, manifest and v44 DTB and rescue ramdisk. | Leave stock A selected on any mismatch. |
+| One attended slot B boot, power-control risk | With approval and the verified NV backup, capture the post-reply PSM samples and `qualification=0`. Confirm host stage `RELEASED`, then capture prep/core votes, UIC/Hibern8, v44 Deep H8 timing and HCI cleanup. Expect zero disks. | Stop after the first failing qualification. Keep clock-release guards in place and use the 90-second warm return to verify stock A. |
+
+ARM64 release `7.3.0-rc6-omamobile-grizzly-uic-v45` passed strict
+checkpatch, `W=1` for the CPM object, six settle cases and nine guard
+cases. The packed DTB and rescue ramdisk match v44. Both AVB signatures,
+all five image hashes, unpacked payload, ABL handoff and saved D1 slot
+sizes passed. Manifest SHA-256
+`4f738b788a2593a8c58e8302517eff3d3a8ba9456ab3d1abb192922a2b1b1e62`.
+Archive SHA-256
+`d820562ef78e54911d4b033e47feb54efb30161a94b7606ab53f5641fc8e7763`.
+The 10 ms settling window and the v44 cleanup fix still need an
+attended hardware boot.
+
 ## Staging and return sequence used for D1
 
 These commands describe the attended workflow used by the trials.
