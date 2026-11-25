@@ -43,7 +43,7 @@
 #               reset by itself within ~15-20 s. Needs the user present.
 #   b3-charger  modprobe max77759_charger default_ilim_ua=UA temp_guard=1
 #               guard_psy=max170xx_battery. default_ilim_ua is not enforced
-#               until linux-omarchy-mobile#288 is fixed (NO_AUTOIBUS stays
+#               until linux-omamobile#288 is fixed (NO_AUTOIBUS stays
 #               clear), so --ilim is not a cap. Nothing here limits the draw
 #               from the port; the guard only trips on battery voltage,
 #               current and temperature.
@@ -56,7 +56,7 @@
 #               or AFTER b3-charger in the same boot (b3-done present and
 #               default_ilim_ua > 0): the charger then follows the tcpm psy
 #               (online + current_max -> 0xc2 CHGIN_ILIM, which nothing
-#               enforces until linux-omarchy-mobile#288; offline -> mode OFF)
+#               enforces until linux-omamobile#288; offline -> mode OFF)
 #               and the guard logs tcpm/charger/battery every 10 s.
 #               Undo: modprobe -r tcpci_maxim tcpci tcpm, USBSW_CTRL 0x93 =
 #               0x09 if VBUS is valid, start omamobile-usb-rescue; then, if the
@@ -640,7 +640,7 @@ preflight_tcpm() {
     { [[ $p =~ ^[0-9]+$ ]] && (( p > 0 )); } || { refuse "max77759_charger default_ilim_ua is '$p': with tcpm up and default Rp the charger would switch off"; return 1; }
     log "case: charger + tcpm. max77759_charger loaded by b3-charger with default_ilim_ua=$p: tcpm online + current_max 0 keeps that limit; Rp 1.5/3 A asks 0xc2 CHGIN_ILIM for that value, not enforced while NO_AUTOIBUS is clear (battery trip $I_TRIP uA stays; the b4 undo also undoes b3)"
   else
-    log "case: charger-less. tcpm only reports; 0xc2 CHGIN_ILIM (asked for, not enforced while NO_AUTOIBUS is clear, linux-omarchy-mobile#288) stays as the bootloader left it"
+    log "case: charger-less. tcpm only reports; 0xc2 CHGIN_ILIM (asked for, not enforced while NO_AUTOIBUS is clear, linux-omamobile#288) stays as the bootloader left it"
   fi
   [[ $(rd $TCPC 0x93) == 0x09 ]] || { refuse "USBSW_CTRL 0x93 is $(rd $TCPC 0x93), not 0x09 before the step (rescue not done, or no VBUS)"; return 1; }
   return 0

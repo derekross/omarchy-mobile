@@ -47,7 +47,7 @@
 #   Two cases: charger-less (max77759_charger not loaded), or AFTER b3-charger
 #   in the same boot (b3-charger soaked, then b4-tcpm): the charger then follows
 #   tcpm's current limit (Rp 3 A -> 0xc2 asks for 3 A, not enforced until
-#   linux-omarchy-mobile#288; battery still capped at 1.485 A by the DT) and
+#   linux-omamobile#288; battery still capped at 1.485 A by the DT) and
 #   the b4 undo also undoes b3 (charging ends off).
 #   The phone refuses b4 if the charger was loaded any other way, or with
 #   default_ilim_ua 0. b3-charger refuses while a Type-C driver is loaded.
@@ -60,7 +60,7 @@
 #   --ilim UA        b3-charger: default_ilim_ua (default 500000, max 900000).
 #                    Passed to the driver, but it does NOT cap the input yet:
 #                    the driver leaves CHG_CNFG_09's NO_AUTOIBUS clear, so the
-#                    chip does not keep to it (linux-omarchy-mobile#288).
+#                    chip does not keep to it (linux-omamobile#288).
 #                    Nothing here limits the draw from the port: the DT charge
 #                    current and float bound the battery side, and the guard
 #                    only trips on battery voltage, current and temperature.

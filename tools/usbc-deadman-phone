@@ -107,7 +107,7 @@ dump() {
   v=$(rd $CHG 0xbb) && echo "  CNFG_02 fast charge $(( (v & 0x3f) < 3 ? 133 : 200 + ((v & 0x3f) - 3) * 6667 / 100 )) mA (sel $((v & 0x3f)))"
   v=$(rd $CHG 0xbd) && { s=$((v & 0x3f)); case $s in 56) f=3800 ;; 57) f=3900 ;; *) f=$((4000 + 10 * s)) ;; esac
     echo "  CNFG_04 float voltage $f mV (sel $s; stock fv-max 4450 mV = sel 45)"; }
-  v=$(rd $CHG 0xc2) && echo "  CNFG_09 CHGIN_ILIM asked for (not enforced while NO_AUTOIBUS is clear, #288) $(( (v & 0x7f) < 3 ? 100 : 100 + ((v & 0x7f) - 3) * 25 )) mA (sel $((v & 0x7f)), NO_AUTOIBUS $(( v >> 7 )))"
+  v=$(rd $CHG 0xc2) && echo "  CNFG_09 CHGIN_ILIM asked for (not enforced while NO_AUTOIBUS is clear, linux-omamobile#288) $(( (v & 0x7f) < 3 ? 100 : 100 + ((v & 0x7f) - 3) * 25 )) mA (sel $((v & 0x7f)), NO_AUTOIBUS $(( v >> 7 )))"
   v=$(rd $CHG 0xbf) && echo "  CNFG_06 CHGPROT $(( (v >> 2) & 3 )) (0 = protected registers locked)"
   v=$(rd $CHG 0xc5) && echo "  CNFG_12 CHGINSEL $(( (v >> 5) & 1 )) WCINSEL $(( (v >> 6) & 1 ))"
   v=$(rd $CHG 0xcb) && echo "  CNFG_18 WDTEN $(( v & 1 ))"
