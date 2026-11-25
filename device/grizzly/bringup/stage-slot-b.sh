@@ -5,10 +5,11 @@ set -euo pipefail
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
 
-[[ $# == 3 && $2 == --bootloader-slots-match ]] ||
-  die "usage: FASTBOOT_SERIAL=SERIAL $0 IMAGES --bootloader-slots-match VERSION"
+[[ ( $# == 3 || ( $# == 5 && ${4:-} == --before-rescue ) ) && $2 == --bootloader-slots-match ]] ||
+  die "usage: FASTBOOT_SERIAL=SERIAL $0 IMAGES --bootloader-slots-match VERSION [--before-rescue CAPTURE]"
 images=$1
 version=$3
+shift 3
 serial=${FASTBOOT_SERIAL:-}
 [[ -n $serial ]] || die "FASTBOOT_SERIAL is required"
 [[ $version =~ ^[a-zA-Z0-9.-]+$ ]] || die "an independently verified slot B bootloader version is required"
@@ -23,7 +24,8 @@ vars=$(timeout 10 fastboot -s "$serial" getvar all 2>&1) ||
 
 # D1 reports the running bootloader. The operator supplies the verified B version.
 python3 "$here/check-slot-b.py" "$images" "$images/SHA256SUMS" \
-  --fastboot-vars /dev/stdin --require-healthy-a <<< "$vars"$'\n'"version-bootloader:b: $version" ||
+  --fastboot-vars /dev/stdin --require-healthy-a "$@" \
+  <<< "$vars"$'\n'"version-bootloader:b: $version" ||
   die "Grizzly preflight failed. No images were written."
 
 for image in boot init_boot vendor_boot vendor_kernel_boot dtbo; do

@@ -25,6 +25,7 @@ GETVAR_KEYS = (
     *PARTITION_VARS,
     *(f'{key}:{slot}' for key in SLOT_VARS for slot in 'ab'),
     *(f'version-bootloader{separator}{slot}' for separator in '-_:' for slot in 'ab'),
+    'serialno',
     *BASE_VARS,
 )
 GETVAR_LINE = re.compile(r'^(?:\(bootloader\)\s*)?(' + '|'.join(map(re.escape, GETVAR_KEYS))
@@ -59,7 +60,18 @@ def fastboot_vars(path):
     return values
 
 
-def check_phone(values, issues, require_healthy_a=False):
+def check_rescue_return(values, before):
+    """Recognize reselection of the verified stock slot after a B rescue."""
+    identity = ('serialno', *BASE_VARS, *PARTITION_VARS)
+    return (all(values.get(key) and values[key] == before.get(key) for key in identity)
+            and before.get('slot-successful:a') == 'yes'
+            and before.get('slot-unbootable:a') == 'no'
+            and values.get('slot-successful:a') == 'no'
+            and values.get('slot-unbootable:a') == 'no'
+            and values.get('slot-retry-count:a') == '3')
+
+
+def check_phone(values, issues, require_healthy_a=False, before_rescue=None):
     if not values:
         issues.append('Fastboot observations are missing')
         return {}
@@ -71,7 +83,10 @@ def check_phone(values, issues, require_healthy_a=False):
         if value != want and (key, value) != ('current-slot', '_a'):
             issues.append(f'{key} must report {want} ({value or "unmeasured"})')
     if require_healthy_a and values.get('slot-successful:a') != 'yes':
-        issues.append('slot A must be marked successful')
+        if before_rescue and check_rescue_return(values, before_rescue):
+            print('Slot A passed before rescue. The reselection reset its success flag.')
+        else:
+            issues.append('slot A must be marked successful or match its verified rescue return')
     if values.get('slot-unbootable:a') == 'yes':
         issues.append('slot A is marked unbootable')
     elif require_healthy_a and values.get('slot-unbootable:a') != 'no':
@@ -181,14 +196,19 @@ def main():
     parser.add_argument('--fastboot-vars', type=Path, help='saved read-only Fastboot observations')
     parser.add_argument('--require-healthy-a', action='store_true',
                         help='require slot A to report successful and bootable before staging')
+    parser.add_argument('--before-rescue', type=Path,
+                        help='private Fastboot capture of verified stock A immediately before the rescue')
     parser.add_argument('--vendor-boot-readback', type=Path, help='saved full vendor_boot_b readback')
     args = parser.parse_args()
+    if args.before_rescue and not args.require_healthy_a:
+        parser.error('--before-rescue requires --require-healthy-a')
 
     issues = []
     try:
         hashes = expected_hashes(args.checksums)
         variables = fastboot_vars(args.fastboot_vars) if args.fastboot_vars else {}
-        capacities = check_phone(variables, issues, args.require_healthy_a)
+        before = fastboot_vars(args.before_rescue) if args.before_rescue else None
+        capacities = check_phone(variables, issues, args.require_healthy_a, before)
         for image in IMAGES:
             check_image(args.images, image, hashes.get(f'{image}.img'), capacities.get(image), issues)
         if args.vendor_boot_readback:

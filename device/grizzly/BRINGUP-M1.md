@@ -2583,6 +2583,16 @@ python3 device/grizzly/bringup/check-slot-b.py \
     --vendor-boot-readback "$CAPTURE/vendor_boot_b.readback.img"
 ```
 
+After a fresh NV rescue, reselecting A can clear its Fastboot
+success flag and reset its retry count to 3. To stage the next
+trial without starting Android, append `--before-rescue CAPTURE`
+to both the stager and the readback checker. Use the private
+`getvar all` capture from healthy stock A immediately before
+that rescue. The checker requires the same device, bootloader
+and slot capacities, plus the expected bootable A return state.
+Verify the fresh backup separately and keep the phone in Fastboot
+between the rescue and the trial.
+
 Once staging passes and the live reader and return plan are ready, select
 B, confirm it, and issue one boot request.
 
@@ -4183,6 +4193,30 @@ Fastboot returned after 134 seconds. Stock D1 A restarted at
 20:48:41 UTC and completed boot with enforcing verity and the
 pretrial VBMeta digest. Ramoops and Android's `SYSTEM_LAST_KMSG`
 agree on all 76 filtered v71 lines.
+
+### Mainline v72 read at a nonzero boot_b offset
+
+[v72 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/d88baf0503373d304ed85906c7acc45c9ab6509d)
+keeps the GPT-selected read-only `boot_b` partition and
+qualifies its Android header with a direct UFS read. It takes
+a separate 4 KiB direct reference at partition-relative block 1.
+The private partition bio begins at sector 8. The request gate
+requires the remapped one-block READ(10) to use the GPT start
+plus one, expected LUN 0 LBA 598,711 from v71. The comparator
+checks all 4,096 bytes. GPT discovery and the read-only,
+unmounted checks for all 42 partitions still apply.
+
+The Arm64 `W=1` compile, strict checkpatch and 15
+sanitizer-backed request checks passed. The five image hashes,
+both AVB signatures and handoff bounds passed. The DTB, DTBO,
+vendor images and RAM payload match v71. The live slot fit
+matched the verified pre-rescue capture. Manifest SHA-256
+`a8733788231cbf3cfc2dfab547bc84bb57bfbb0f5e0248a3fd8819644d3ea3f0`.
+
+The attended test should confirm a single partition bio to the
+expected LBA after GPT discovery, completion by IRQ with zero
+residual, and a byte-for-byte match. Check that all 42 partitions
+remain read-only and unmounted, then return to stock A.
 
 ### Offline stock D1 device reference-clock diagnostic
 
