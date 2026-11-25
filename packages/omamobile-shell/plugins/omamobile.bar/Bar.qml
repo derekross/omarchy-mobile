@@ -155,6 +155,34 @@ Item {
   property double seenStamp: 0
   property int unread: 0
 
+  // Microphone and camera off totally (omamobile-privacy@mic-off, @camera-off:
+  // the quick-settings tiles and Settings): their files in
+  // /var/lib/omamobile/privacy, watched as a folder (no polling), each shown
+  // as an off glyph in the urgent colour while there.
+  property bool micBlocked: false
+  property bool cameraBlocked: false
+  function readPrivacy() {
+    var mic = false, camera = false
+    for (var i = 0; i < privacyFiles.count; i++) {
+      var name = privacyFiles.get(i, "fileName")
+      if (name === "mic") mic = true
+      else if (name === "camera") camera = true
+    }
+    micBlocked = mic
+    cameraBlocked = camera
+  }
+  FolderListModel {
+    id: privacyFiles
+    folder: "file:///var/lib/omamobile/privacy"
+    nameFilters: ["mic", "camera"]
+    showDirs: false
+    showDotAndDotDot: false
+    showHidden: false
+    sortField: FolderListModel.Unsorted
+    onCountChanged: Qt.callLater(root.readPrivacy)
+    onStatusChanged: Qt.callLater(root.readPrivacy)
+  }
+
   FolderListModel {
     id: historyFiles
     folder: "file://" + root.notificationsHistory
@@ -391,6 +419,20 @@ Item {
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
           spacing: Style.spacing.xl
+
+          StatusGlyph {
+            objectName: "micBlocked"
+            visible: root.micBlocked
+            text: "󰍭"
+            color: Commons.Color.urgent
+          }
+
+          StatusGlyph {
+            objectName: "cameraBlocked"
+            visible: root.cameraBlocked
+            text: "󰗟"
+            color: Commons.Color.urgent
+          }
 
           StatusGlyph {
             visible: root.showDnd && root.doNotDisturb

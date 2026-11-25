@@ -265,7 +265,7 @@ Item {
     "wifi": wifi, "bluetooth": bluetooth, "mobile-data": mobileData, "airplane": airplane,
     "hotspot": hotspot, "dnd": dnd, "torch": torch, "rotation-lock": rotationLock,
     "location": location, "nfc": nfc, "battery-saver": batterySaver, "dark-theme": darkTheme,
-    "night-light": nightLight, "stay-awake": stayAwake, "mic": mic, "screenshot": screenshot,
+    "night-light": nightLight, "stay-awake": stayAwake, "mic": mic, "camera": camera, "screenshot": screenshot,
     "screen-record": screenRecord, "fingerprint": fingerprint, "keyboard": keyboard,
     "clipboard": clipboard, "dictation": dictation
   })
@@ -528,18 +528,63 @@ Item {
     function toggle() { if (available) root.runTileAction("stay-awake", !enabled) }
   }
 
-  // The default microphone's mute, through PipeWire.
+  // Microphone access, as GrapheneOS's toggle: off totally, not a mute an app
+  // can undo. The tile starts omamobile-privacy@mic-off|on.service (polkit asks
+  // for the owner's PIN both ways; a cancelled PIN changes nothing, the probe
+  // reads the state again). While off, 72-omamobile-privacy.rules keeps every
+  // capture PCM root's (no app, PipeWire included, can open one) and the
+  // speakers keep working; Bluetooth headset mics are cut only through
+  // WirePlumber (A2DP only), best effort. Red while blocked. Without the
+  // privacy helper the tile is the default source's PipeWire mute, as before.
   QtObject {
     id: mic
     readonly property var source: Pipewire.defaultAudioSource
-    readonly property bool available: !!source && !!source.audio
-    readonly property bool enabled: available && !source.audio.muted
+    readonly property bool hasSource: !!source && !!source.audio
+    readonly property bool switchable: root.probedHas("mic_access")
+    readonly property bool available: switchable || hasSource
+    readonly property bool blocked: switchable && !root.probedOn("mic", "mic_access")
+    readonly property bool busy: privacyWrite.running
+    readonly property bool enabled: available && !blocked && (!hasSource || !source.audio.muted)
     readonly property string icon: enabled ? "󰍬" : "󰍭"
-    readonly property string status: !available ? "No microphone" : enabled ? "On" : "Muted"
-    function toggle() { if (available) source.audio.muted = !source.audio.muted }
+    readonly property string status: blocked ? "Blocked" : !hasSource ? (switchable ? "Allowed" : "No microphone")
+      : source.audio.muted ? "Muted" : "On"
+    function toggle() {
+      if (switchable) root.switchPrivacy("mic", blocked)
+      else if (hasSource) source.audio.muted = !source.audio.muted
+    }
   }
 
   PwObjectTracker { objects: mic.source ? [mic.source] : [] }
+
+  // Camera access, the same switch for video4linux and media nodes (the video
+  // codec stays open). No camera works on these phones yet: the switch is
+  // stored now and enforced when camera drivers land; the status says so.
+  QtObject {
+    id: camera
+    readonly property bool available: root.probedHas("camera_access")
+    readonly property bool blocked: available && !root.probedOn("camera", "camera_access")
+    readonly property bool busy: privacyWrite.running
+    readonly property bool enabled: available && !blocked
+    readonly property string icon: blocked ? "󰗟" : "󰄀"
+    readonly property string status: !available ? "No switch" : blocked ? "Blocked" : "Allowed (no camera yet)"
+    function toggle() { if (available) root.switchPrivacy("camera", blocked) }
+  }
+
+  // Microphone and camera access through omamobile-privacy@<kind>-on|off; one
+  // at a time (both tiles show busy while a PIN is pending), then the probe
+  // reads the state files again.
+  function switchPrivacy(kind, on) {
+    if (privacyWrite.running) return
+    privacyWrite.kind = kind
+    privacyWrite.command = ["timeout", "122", "systemctl", "start", "omamobile-privacy@" + kind + "-" + (on ? "on" : "off") + ".service"]
+    privacyWrite.running = true
+  }
+
+  Process {
+    id: privacyWrite
+    property string kind: ""
+    onExited: root.refreshProbe()
+  }
 
   // Screenshot: the sheet slides away first so it isn't in the picture.
   QtObject {
@@ -2118,6 +2163,7 @@ Item {
     label: TilesModel.label(tileId)
     status: backend ? backend.status : ""
     active: !!backend && backend.enabled
+    blocked: !!backend && backend.blocked === true
     available: !!backend && backend.available
     busy: !!backend && backend.busy === true
     details: !!backend && backend.details === true

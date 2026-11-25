@@ -25,6 +25,9 @@ BorderSurface {
   property string label: ""
   property string status: ""
   property bool active: false
+  // A privacy switch that is off totally (microphone, camera): the urgent
+  // colour in place of the accent, filled and bordered, so it reads at a glance.
+  property bool blocked: false
   property bool available: true
   property bool busy: false
   property bool details: false
@@ -33,7 +36,7 @@ BorderSurface {
   property bool longPress: false
 
   property color foreground: Commons.Color.popups.text
-  property color accent: Commons.Color.accent
+  property color accent: blocked ? Commons.Color.urgent : Commons.Color.accent
 
   signal clicked()
   signal detailsRequested()
@@ -47,9 +50,9 @@ BorderSurface {
   readonly property var _activeSpec: Border.flat(accent, Math.max(1, Style.selectedBorderWidth || Style.normalBorderWidth))
 
   color: _pressed ? Style.pressedFillFor(foreground, accent)
-    : active ? Util.alpha(accent, Style.selectedFillAlpha)
+    : active || blocked ? Util.alpha(accent, Style.selectedFillAlpha)
     : Style.normalFillFor(foreground, accent)
-  borderSpec: active ? _activeSpec : Border.controlSpec("normal", foreground, accent)
+  borderSpec: active || blocked ? _activeSpec : Border.controlSpec("normal", foreground, accent)
 
   Behavior on color { ColorAnimation { duration: 120 } }
 
@@ -62,7 +65,7 @@ BorderSurface {
     horizontalAlignment: Text.AlignHCenter
     textFormat: Text.PlainText
     text: root.icon
-    color: root.active ? root.accent : root.foreground
+    color: root.active || root.blocked ? root.accent : root.foreground
     opacity: root._dim
     font.family: Style.font.family
     font.pixelSize: Style.font.display

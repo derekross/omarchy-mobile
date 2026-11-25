@@ -23,7 +23,7 @@ run nfc-on >/dev/null
 [[ ! -e $state ]] || die "nfc-on removes the file"
 [[ $(cat "$tmp/log") == $'rfkill unblock nfc\nsystemctl try-restart omamobile-nfc-open.service' ]] || die "nfc-on: file gone, then unblock (got: $(cat "$tmp/log"))"
 run nfc-on >/dev/null || die "nfc-on twice is fine"
-for bad in '' nfc mic-off 'nfc-off;x' nfc-offx; do
+for bad in '' nfc mic 'nfc-off;x' nfc-offx; do
   : > "$tmp/log"
   if run "$bad" >/dev/null 2>&1; then die "accepted: '$bad'"; fi
   [[ ! -s $tmp/log && ! -e $state ]] || die "a refused argument changed something: '$bad'"

@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
-# NFC off totally, or on again: runs "/usr/lib/omamobile-shell/privacy %i" as
-# root (%i is nfc-off or nfc-on; the script refuses anything else). The polkit
-# rule 50-omamobile-privacy.rules lets the active local user start those two
+# NFC, the microphone or the camera off totally, or on again: runs
+# "/usr/lib/omamobile-shell/privacy %i" as root (%i is nfc-, mic- or camera-
+# with off or on; the script refuses anything else). The polkit rule
+# 50-omamobile-privacy.rules lets the active local user start those six
 # instances, after the owner's PIN, and nothing else. Not enabled.
 [Unit]
 Description=Privacy switch %i
@@ -10,4 +11,4 @@ StartLimitIntervalSec=0
 [Service]
 Type=oneshot
 ExecStart=/usr/lib/omamobile-shell/privacy %i
-TimeoutStartSec=30
+TimeoutStartSec=60

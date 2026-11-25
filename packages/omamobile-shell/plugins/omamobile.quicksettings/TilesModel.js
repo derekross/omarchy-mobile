@@ -28,6 +28,7 @@ var CATALOG = [
   { id: "night-light", label: "Night light" },
   { id: "stay-awake", label: "Stay awake" },
   { id: "mic", label: "Microphone" },
+  { id: "camera", label: "Camera" },
   { id: "screenshot", label: "Screenshot" },
   { id: "screen-record", label: "Screen record" },
   { id: "fingerprint", label: "Fingerprint" },

@@ -54,6 +54,16 @@ for line in airplane=off hotspot=off powerprofile=balanced theme_mode=dark theme
 done
 pass "tile-state.sh reads every probed tile"
 
+# Microphone and camera access: none without the privacy helper, off while its file is there
+grep -cx "mic_access=none" <<<"$out" >/dev/null && grep -cx "camera_access=none" <<<"$out" >/dev/null \
+  || fail "no privacy helper: no microphone or camera switch"
+mkdir -p "$tmp/privacy"; printf '#!/bin/sh\n' >"$tmp/privacy-helper"; chmod 755 "$tmp/privacy-helper"; echo off >"$tmp/privacy/mic"
+out=$(env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" PATH="$fake:$basic" OMAMOBILE_PRIVACY_DIR="$tmp/privacy" \
+  OMAMOBILE_PRIVACY_HELPER="$tmp/privacy-helper" sh "$dir/tile-state.sh")
+grep -cx "mic_access=off" <<<"$out" >/dev/null && grep -cx "camera_access=on" <<<"$out" >/dev/null \
+  || fail "the microphone's file reads as off, the camera's absence as on (got: $(tr '\n' ' ' <<<"$out"))"
+pass "tile-state.sh reads the microphone and camera switches"
+
 # Airplane on blocks the radios, remembers which were on, leaves NFC alone;
 # off unblocks only those.
 run "$dir/tile-action.sh" airplane on

@@ -28,6 +28,10 @@
 #                 Mobile network page) has the modem off for this boot: the
 #                 tile stays dimmed but keeps its chevron, so the page that
 #                 turns it back on can be reached; absent otherwise
+#   mic_access    off while the microphone is off totally (omamobile-privacy@mic-off:
+#                 /var/lib/omamobile/privacy/mic exists), on otherwise; none
+#                 without the privacy helper (omamobile-shell's libexec/privacy)
+#   camera_access the same for the camera (/var/lib/omamobile/privacy/camera)
 #   dictation     voxtype: on while recording, busy while transcribing, off
 #                 when idle; down when its user service isn't running, none
 #                 without voxtype (in the root image; Remove > Dictation
@@ -90,6 +94,16 @@ if have omamobile-screenrecord && have wf-recorder; then
 else
   echo "record=none"
 fi
+
+# mic_access, camera_access (OMAMOBILE_PRIVACY_DIR and _HELPER are for the test)
+pdir=${OMAMOBILE_PRIVACY_DIR:-/var/lib/omamobile/privacy}
+for kind in mic camera; do
+  if [ -x "${OMAMOBILE_PRIVACY_HELPER:-/usr/lib/omamobile-shell/privacy}" ]; then
+    if [ -e "$pdir/$kind" ]; then echo "${kind}_access=off"; else echo "${kind}_access=on"; fi
+  else
+    echo "${kind}_access=none"
+  fi
+done
 
 # dictation: the daemon writes idle, recording or transcribing to its state
 # file (state_file = "auto" in Omarchy's voxtype config). A stale file

@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# The microphone and the camera off totally (libexec/privacy, started by the
+# quick-settings tiles and Settings > Security & privacy). While
+# /var/lib/omamobile/privacy/mic or .../camera exists, the matching nodes are
+# root's alone: no uaccess tag (73-seat-late.rules then gives the logged-in
+# user no ACL), root:root 0600 (the user is in the audio and video groups).
+# Ordered after 70-uaccess.rules and 71-seat.rules, before 73-seat-late.rules.
+# It applies at every boot and every udev event while the file is there.
+
+# Every capture PCM of every card (built-in, USB, dock). Playback nodes
+# (pcmC*D*p) and the mixer (controlC*) stay open, so the speakers keep working.
+SUBSYSTEM=="sound", KERNEL=="pcmC[0-9]*D[0-9]*c", TEST=="/var/lib/omamobile/privacy/mic", \
+  TAG-="uaccess", OWNER:="root", GROUP:="root", MODE:="0600"
+
+# Cameras: video4linux, media and v4l-subdev nodes, except the video codec
+# (Samsung MFC, driver s5p-mfc), which decodes video and has no camera.
+# dma_heap is another subsystem and is never matched.
+SUBSYSTEM!="video4linux|media", GOTO="omamobile_privacy_camera_end"
+TEST!="/var/lib/omamobile/privacy/camera", GOTO="omamobile_privacy_camera_end"
+DRIVERS=="s5p-mfc*", GOTO="omamobile_privacy_camera_end"
+TAG-="uaccess", OWNER:="root", GROUP:="root", MODE:="0600"
+LABEL="omamobile_privacy_camera_end"
