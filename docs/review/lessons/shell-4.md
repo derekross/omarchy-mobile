@@ -3,6 +3,14 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-574. (Provisional, not yet checked on a phone.) A network-sharing
+  feature is checked against the firewall the image turns on.** #525 makes the
+  hotspot's dnsmasq start, but firstboot's ufw denies incoming and forwarded
+  traffic, so a client's DHCP and DNS may never reach it, and the PR's test
+  (the server side came up) can't show that. *Check:* `git grep -n 'ufw '
+  packages/omamobile-firstboot` for the defaults, and ask for one client test
+  (an address, then a ping out) before a "hotspot works" claim. Confirm or
+  drop once a client test has run. *From:* #525, round 45, 2026-11-08.
 - **L-575. A Mesa `pkgrel` bump moves `_omamobile` with it (1.3 with
   omamobile3, 1.4 with omamobile4).** The marker is what shows in `GL_VERSION`
   and the libgallium name, so a bump that leaves it reports the old build on

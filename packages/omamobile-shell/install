@@ -35,6 +35,9 @@ install -Dm644 systemd/omamobile-nfc-open.service "$destination/usr/lib/systemd/
 install -Dm644 systemd/user/omarchy-fcitx5-omamobile.conf "$destination/usr/lib/systemd/user/omarchy-fcitx5.service.d/omamobile.conf"
 # squeekboard's user unit runs the keyboard the owner chose (omamobile-osk)
 install -Dm644 systemd/user/mobi.phosh.OSK-omamobile.conf "$destination/usr/lib/systemd/user/mobi.phosh.OSK.service.d/omamobile.conf"
+# Omarchy's auto-accepting Bluetooth agent stays off on the phone (opt-in);
+# the Bluetooth panel's own agent asks the owner instead.
+install -Dm644 systemd/user/bt-agent-omamobile.conf "$destination/usr/lib/systemd/user/bt-agent.service.d/omamobile.conf"
 # The permission sheet: the portal's Access backend, its D-Bus activation and
 # the portals.conf that picks it under Hyprland (omamobile.access shows it).
 install -Dm644 portal/omamobile.portal "$destination/usr/share/xdg-desktop-portal/portals/omamobile.portal"

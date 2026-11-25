@@ -3,6 +3,41 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-893. An installer PR that removes a fallback is reviewed as a table of
+  what each kind of computer sends the phone before and after.** For #877
+  that table showed one variant removed (the raw `userdata` image from a
+  computer without `img2simg`) and none added, which made "no phone test
+  needed" a finding and not an assumption. *Check:* list the host conditions
+  the changed branch tests, and for each write the exact fastboot lines from
+  the suite's expected output on main and on the head. Extends L-223 and
+  L-668. *From:* #877, round 61, 2026-11-18.
+- **L-885. A backup "taken after the stock boots, before any Trusty start" is
+  placed in UTC next to the author's other threads.** #203's reference backup
+  was dated the night between two days on which the same author's #874 says
+  the phone's first storage proxy start ran. *Check:* convert the backup's
+  time with the zone of the author's commits, search the author's open PRs
+  for dated hardware starts in that window, and ask which came first.
+  Extends L-591, L-168 and L-559. *From:* #203 with #874, round 61,
+  2026-11-18.
+- **L-884. An answer to "what do the slot flags read?" is decoded against the
+  last recorded bytes, and a "successful: yes" where we last agreed "no
+  marking" is a write to find.** #203's reply gave slot B as successful; the
+  earlier record and the restore since meant a new mark had to exist: a hand
+  `devinfo` write three days after "don't write `devinfo` again", disclosed
+  only when asked. *Check:* lay each reported byte of 0x30-0x37 next to the
+  previous record with the layout's bits (0x01 unbootable, 0x02 successful,
+  0x04 active, 0x08 fastboot-ok), list every bit that moved, ask for each
+  what wrote it and when, and compare the dates with every hold in the
+  device issue. Extends L-36, L-359 and L-756. *From:* #203 with issue #143,
+  round 61, 2026-11-18.
+- **L-870. A stop-condition grep that must come back empty is not where an
+  "expected line" goes.** #835 made the UFS `dme-set` line expected, and the
+  contributor offered to add it to the `after` helper's grep, whose Pass is
+  "empty"; that would have failed every later stage. *Check:* when a plan
+  excuses a log line, read each helper that greps for errors and its Pass
+  wording; an excused line gets its own counted check beside the helper,
+  never an entry in the must-be-empty pattern. Extends L-756 and L-183.
+  *From:* #835, round 61, 2026-11-18.
 - **L-868. A raised limit carried in a device tree follows the kernel image
   wherever it boots; a limit raised by a running guard doesn't.** Kernel #267
   put husky's 4.45 V float in the battery node; the author's daily kernel,
@@ -347,30 +382,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   drivers involved and reset with `echo b > /proc/sysrq-trigger`; if the state
   under test can source VBUS, a meter check with a stop condition comes before
   any replug. Extends L-88 and L-81. *From:* #136 with kernel #124, round 28.
-- **L-295. `tools/usbc-deadman` is cheetah's MAX77759 tool,** with that
-  phone's I2C bus and registers built in. For another phone's USB-C step, the
-  dead-man we name is the generic `systemd-run --on-active=… systemctl reboot`
-  plus a `tools/phone-ssh --fresh` login. *Check:* any draft that names a
-  device tool for a step on another phone reads the tool for hard-coded buses,
-  addresses and compatibles. Extends L-276 and L-81. *From:* #131, round 27.
-- **L-294. A regulator that sources VBUS is checked for every path that
-  enables it outside the Type-C state machine.** Those are DT
-  `regulator-boot-on` or `regulator-always-on` (the core enables it at
-  registration), fast role swap (no vSafe0V wait), and state left over from a
-  warm reset (a boost whose watchdog is off). *Check:* the binding forbids the
-  two properties, the TCPC sets `vbus_vsafe0v`, and we ask for a warm-reboot
-  read of the boost before any driver loads. *From:* kernel #124, round 27.
-- **L-285. "The approved tool did the write" is checked for what made the
-  target writable.** `omamobile-bootctl` only opens `devinfo` for writing; the
-  guard bypass (`--setrw` on the partition and its parent for 30 s) was in the
-  owner's laptop script around it. An approval that names the tool leaves the
-  wrapper unreviewed. *Check:* for any write outside the allowlist, find who
-  lifts the read-only flag and whether that code was reviewed. Extends L-2 and
-  L-261. *From:* #125, round 26.
-- **L-284. A hold on a safety step is checked for what it forces next.**
-  Telling the 9a owner "don't mark B" without also saying "don't `flash`"
-  would have led straight to the next fallback, because `flash` unmarks B and
-  the marking is what keeps the root. *Check:* for any "don't do X until I
-  decide", walk the owner's next routine step with X missing, and give the
-  safe interim path (here, `push` only). Extends L-81 and L-158. *From:* #125,
-  round 26 (a near miss in drafting).

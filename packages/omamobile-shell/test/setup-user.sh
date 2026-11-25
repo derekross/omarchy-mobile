@@ -26,7 +26,12 @@ if [[ $1 == list-keys && $2 == org.gnome.nautilus.preferences ]]; then
   printf "default-folder-viewer\n"; [[ -n ${GSETTINGS_NO_CLICK_POLICY:-} ]] || printf "click-policy\n"
 fi'
 # systemctl: logs calls; fails while $HOME/systemctl-fails exists (no user manager)
-fake systemctl 'echo "systemctl $*" >>"$HOME/calls"; [[ ! -e $HOME/systemctl-fails ]]'
+# `show -p DropInPaths` prints $HOME/drop-ins; `is-active` is true while
+# $HOME/active-<unit> exists
+fake systemctl 'echo "systemctl $*" >>"$HOME/calls"; [[ ! -e $HOME/systemctl-fails ]] || exit 1
+if [[ $2 == show ]]; then [[ -e $HOME/drop-ins ]] && cat "$HOME/drop-ins"; exit 0; fi
+if [[ $2 == is-active ]]; then [[ -e $HOME/active-${4:-} ]]; exit; fi
+exit 0'
 ln -s "$pkg/bin/omamobile-browser-setup" "$F/omamobile-browser-setup"
 fake hyprctl 'exit 1'
 fake chromium 'echo "Chromium 153.0.0.0"'
@@ -110,10 +115,27 @@ for id in update.channel update.channel.stable update.channel.rc update.channel.
   [[ $(grep -c "\"$id\"" "$ext") == 1 ]] || fail "Menu row $id is named once after two logins"
 done
 grep -qx 'system.logout true' <<<"$menu" || fail "a row the user set is left as they set it"
+# Typing shows only while fcitx5 is on, and a reused id replaces Omarchy's
+# entry, so each row carries its own label, icon and action
+typing=$(python3 -I - "$ext" <<'PY2'
+import json, re, sys
+text = open(sys.argv[1]).read()
+text = re.sub(r'^\s*//.*$', '', text, flags=re.M)
+text = re.sub(r',(\s*[}\]])', r'\1', text)
+for key, value in json.loads(text).items():
+    if key.startswith("setup.typing"):
+        print(key, value["icon"] == "\uf11c", value["label"], value.get("action", "-"), value["when"], sep="|")
+PY2
+)
+[[ $typing == $'setup.typing|True|Typing|-|test -e ~/.config/omamobile/fcitx5\nsetup.typing.keyboard|True|Keyboard Layouts|omarchy-setup-keyboard|test -e ~/.config/omamobile/fcitx5\nsetup.typing.input|True|Input Methods|omarchy-setup-input|test -e ~/.config/omamobile/fcitx5' ]] ||
+  fail "Setup > Typing shows only with fcitx5 on, with its label, icon and action: $typing"
+for id in setup.typing setup.typing.keyboard setup.typing.input; do
+  [[ $(grep -c "\"$id\"" "$ext") == 1 ]] || fail "Menu row $id is named once after two logins"
+done
 for id in style.bar.position.top appearance.top-bar.position.top appearance.top-bar.indicators update.omarchy install.gaming.retroarch; do
   grep -q "^$id false" <<<"$menu" && fail "Menu row $id stays"
 done
-pass "menu rows that break the phone are hidden once, by content, and a user's own entry is kept"
+pass "menu rows that break the phone are hidden once, by content, Typing only without fcitx5, and a user's own entry is kept"
 
 U=$H/.local/share/applications
 for id in org.gnome.DiskUtility org.gnome.Evince cups; do
@@ -558,6 +580,34 @@ grep -c 'could not enable omatel-agent.service' "$t/out" >/dev/null || fail "a f
 rm "$hm/systemctl-fails"
 if grep -c 'omatel-agent' "$H/calls" >/dev/null 2>&1; then fail "nothing is enabled without the agent's unit"; fi
 pass "the Phone and Messages agent is enabled and started at each login where its unit is installed"
+
+# Omarchy's auto-accepting bt-agent.service: the package's drop-in holds it
+# off; a user manager that hasn't read the drop-in yet is reloaded, and a
+# running agent stopped, at each login. The owner's opt-in file leaves it
+# alone, and the unit's enabled state is never touched.
+Ub=$t/user-units-bt; mkdir -p "$Ub"; touch "$Ub/bt-agent.service"
+hb=$t/home-bt; mkdir -p "$hb/.config/hypr" "$hb/.config/omarchy/extensions"
+cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hb/.config/hypr/"
+touch "$hb/active-bt-agent.service"
+RUN_HOME=$hb RUN_USER_UNITS=$Ub run
+grep -cx 'systemctl --user daemon-reload' "$hb/calls" >/dev/null || fail "a user manager without the bt-agent drop-in is reloaded"
+grep -cx 'systemctl --user stop bt-agent.service' "$hb/calls" >/dev/null || fail "a running bt-agent is stopped"
+if grep -E 'systemctl --user (enable|disable|mask)[^|]*bt-agent' "$hb/calls" >/dev/null; then fail "bt-agent's enabled state is left alone"; fi
+# Drop-in read and the agent stopped: nothing more at the next login.
+rm "$hb/active-bt-agent.service" "$hb/calls"
+echo /usr/lib/systemd/user/bt-agent.service.d/omamobile.conf >"$hb/drop-ins"
+RUN_HOME=$hb RUN_USER_UNITS=$Ub run
+if grep -E 'daemon-reload|stop bt-agent' "$hb/calls" >/dev/null; then fail "nothing more once the drop-in is read and the agent is off"; fi
+# The owner's opt-in: no reload, no stop.
+rm "$hb/calls" "$hb/drop-ins"; touch "$hb/active-bt-agent.service"; mkdir -p "$hb/.config/omamobile"; touch "$hb/.config/omamobile/bt-agent"
+RUN_HOME=$hb RUN_USER_UNITS=$Ub run
+if grep -E 'daemon-reload|stop bt-agent' "$hb/calls" >/dev/null; then fail "the owner's ~/.config/omamobile/bt-agent keeps bt-agent running"; fi
+# No user manager (firstboot): not fatal.
+rm -f "$hb/.config/omamobile/bt-agent"; touch "$hb/systemctl-fails"
+RUN_HOME=$hb RUN_USER_UNITS=$Ub run || fail "setup-user survives a login without a user manager (bt-agent step)"
+rm "$hb/systemctl-fails"
+if grep -c 'bt-agent' "$H/calls" >/dev/null 2>&1; then fail "nothing about bt-agent without its unit"; fi
+pass "Omarchy's bt-agent: reloaded and stopped where the drop-in isn't in effect yet, kept for the owner's opt-in"
 
 # --adopt: a user set up by hand, with no markers, keeps the files the
 # overwriting steps would change (shell.json, the scale, the cursor and
