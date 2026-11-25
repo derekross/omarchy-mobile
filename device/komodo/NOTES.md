@@ -6,6 +6,21 @@ not a device-support claim or authorization to repeat any operation. Raw
 captures, boot images, calibration backups, identifiers, and account content
 remain private and out of this repository.
 
+## 2026-11-25: touch input after slot-B reboot
+
+After rebooting slot B, a read-only SSH check found the display and Hyprland
+session, but the only input device was `gpio-keys`. The live device-tree node
+`/soc/usi@111d00c0/spi@111d0000/touchscreen@0` had `status = "disabled"`; the
+SPI controller was enabled, but no touchscreen SPI device or input node was
+registered. The device descriptor selects `synaptics-touch-test`, an overlay
+that sets this node to `okay`, but the live tree did not contain that change.
+
+This boot did not test the Synaptics driver or touchscreen hardware. The
+missing touch input is consistent with the overlay not being present in the
+booted DTBO; the exact DTBO image provenance was not checked. The next useful
+test is to boot a DTBO built from this descriptor with the touch overlay
+enabled, then check for the Synaptics input device and actual touch events.
+
 ## 2026-11-25: package storage rule and post-reboot smoke
 
 Installed the candidate `omamobile-device-komodo` package with the storage
