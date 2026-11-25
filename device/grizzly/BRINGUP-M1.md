@@ -3383,6 +3383,40 @@ and disk discovery remain untested. Ramoops and Android's
 Stock D1 booted on A with enforcing verity and the pretrial VBMeta
 digest.
 
+### Mainline v61 one SCSI midlayer TEST UNIT READY
+
+[v61 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/0bfe2a96eae7085f47b15eeccb01b981ab43e5ae)
+keeps the v60 GPT, LUN inventory and host registration checks.
+It opens one dispatch through the SCSI core pseudo-device and
+uses the ordinary legacy SCSI queue to send a six-byte TEST UNIT
+READY to LUN 0. This tests the midlayer without a data buffer.
+Real LUN attachment, reserved dispatch and any additional command
+remain blocked.
+
+The test restarts the transfer list for the single command,
+requests a completion IRQ, and validates OCS, the response header,
+SCSI status and residual. A nonzero result is terminal. The
+one-second request timeout masks and drains the transfer IRQ
+before claiming a still-outstanding tag. It attempts to clear the
+slot and stops the HCI if the clear fails. There is no generic
+SCSI error recovery and no data buffer to unmap. The powered
+platform keeps the controller descriptor allocations until
+restart in the diagnostic path. The fixture removes the host,
+checks Hibern8 on success, then runs the usual HCI cleanup.
+The RAM rescue retains `scsi_mod.scan=none` and the timed return.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match v61 source and manifest. The DTB and private RAM rescue match v60. | Leave stock A selected on a mismatch. |
+| One attended slot B boot, power control, device initialization and one midlayer command | Use the verified nine-partition NV backup. Require the v60 checks, one `midlayer TUR IRQ` with GOOD status, `midlayer TUR ret=0`, successful host removal, Hibern8 and zero disks. | Retain the first failure, including timeout clear/enable state if applicable. Return to stock A and verify Android completes boot. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v61` passed strict
+checkpatch, targeted `W=1` compilation and eleven mocked lifecycle
+and timeout cases. All five image hashes, both AVB signatures,
+the unpacked kernel and ramdisk, ABL handoff and saved D1 slot
+checks passed. Manifest SHA-256 `6dfd09bd5c675cb9e128118aca22202bb903e4987e620cc5ccfcbffeb2140004`.
+Archive SHA-256 `978b5dcae14ea11b04357a62da5817113abe940d119b114accaddc55a7a0e2ce`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
