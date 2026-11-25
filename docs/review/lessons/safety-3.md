@@ -3,6 +3,33 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-295. `tools/usbc-deadman` is cheetah's MAX77759 tool,** with that
+  phone's I2C bus and registers built in. For another phone's USB-C step, the
+  dead-man we name is the generic `systemd-run --on-active=… systemctl reboot`
+  plus a `tools/phone-ssh --fresh` login. *Check:* any draft that names a
+  device tool for a step on another phone reads the tool for hard-coded buses,
+  addresses and compatibles. Extends L-276 and L-81. *From:* #131, round 27.
+- **L-294. A regulator that sources VBUS is checked for every path that
+  enables it outside the Type-C state machine.** Those are DT
+  `regulator-boot-on` or `regulator-always-on` (the core enables it at
+  registration), fast role swap (no vSafe0V wait), and state left over from a
+  warm reset (a boost whose watchdog is off). *Check:* the binding forbids the
+  two properties, the TCPC sets `vbus_vsafe0v`, and we ask for a warm-reboot
+  read of the boost before any driver loads. *From:* kernel #124, round 27.
+- **L-285. "The approved tool did the write" is checked for what made the
+  target writable.** `omamobile-bootctl` only opens `devinfo` for writing; the
+  guard bypass (`--setrw` on the partition and its parent for 30 s) was in the
+  owner's laptop script around it. An approval that names the tool leaves the
+  wrapper unreviewed. *Check:* for any write outside the allowlist, find who
+  lifts the read-only flag and whether that code was reviewed. Extends L-2 and
+  L-261. *From:* #125, round 26.
+- **L-284. A hold on a safety step is checked for what it forces next.**
+  Telling the 9a owner "don't mark B" without also saying "don't `flash`"
+  would have led straight to the next fallback, because `flash` unmarks B and
+  the marking is what keeps the root. *Check:* for any "don't do X until I
+  decide", walk the owner's next routine step with X missing, and give the
+  safe interim path (here, `push` only). Extends L-81 and L-158. *From:* #125,
+  round 26 (a near miss in drafting).
 - **L-267. A recovery report that says "marked again" is a `devinfo`
   question.** On the 9a, marking slot B successful is a `devinfo` write,
   agreed only through `omamobile-bootctl` with a fresh backup and a full
@@ -395,33 +422,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   every commit message and the thread for them (the L-324 pattern without the
   locally-administered exemption), and ask for placeholders and a rotation.
   Extends L-324 and L-145. *From:* #510, round 45, 2026-11-08.
-- **L-564. `reboot-to` (and `bin/omamobile push`) stops no unit, so with the
-  modem up it leaves `/var/lib/omamobile/modem-up` behind and the next boot
-  skips the modem once.** *Check:* a runbook or test plan that reboots a phone
-  with the modem up stops it first (`systemctl stop omamobile-modem`; it takes
-  about 40 s and ends as "failed" for now, issue #532), or uses `systemctl
-  reboot`. To keep the modem off for a boot it is `systemctl mask
-  omamobile-modem-boot.target`, not `/etc/omamobile/modem-hold`, which matters
-  only after an unclean end. *From:* the 2026-11-08 7 Pro session, issue #532.
-- **L-598. A code change that enables a protected-partition write waits until
-  its evidence is called verified, not provisional.** #436 marked its 3.11
-  table "provisional, not a same-state row" in the same push that kept the
-  build flag enabling 3.11 writes at every boot. *Check:* for a PR that widens
-  a `devinfo`, GPT or calibration write, grep its notes for "provisional", "not
-  yet confirmed" and "still needs"; if one applies to the layout, ask for the
-  enabling switch to come out (or a split) until it goes. Extends L-2, L-36 and
-  L-527. *From:* #436, round 46, 2026-11-09.
-- **L-599. (Provisional: from ABL's documented retry behaviour on 3.15, not
-  yet seen on 3.11.) A same-state row for slot metadata has no slot boot
-  between its two reads.** ABL spends a retry when it boots an unmarked slot,
-  so `getvar` before a boot and Linux's bytes after it disagree on a correct
-  layout. *Check:* when a row's retry byte is one below `getvar`, ask in which
-  order the reads were taken, and prescribe the Linux read, then fastboot by
-  the buttons, then `getvar`. Extends L-36 and L-527. *From:* #436, round 46,
-  2026-11-09.
-- **L-600. A "read-only check" a contributor reports is also read for what the
-  phone is running now.** #330's check showed a live session of an unpublished
-  image with `/sys/block/sda/ro` 0 on a single-slot phone. *Check:* for any
-  reported `ro` values, read the whole-disk lines first, then ask what booted,
-  how and since when, before reading the partition lines as a guard result.
-  Extends L-321 and L-562. *From:* #330, round 46, 2026-11-09.

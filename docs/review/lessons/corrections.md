@@ -3,6 +3,15 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **C-65 (2026-11-25). Round 67 told #998's maintainer that ten Python
+  wrappers would cost 80 to 100 MB, from 8 to 10 MB RSS each;** the author's
+  `RssAnon` and `VmSwap` figures gave about 5 MB each, because the
+  interpreter's shared pages are counted once. *Lesson:* a memory cost we
+  estimate for a contributor's design is counted as the private (anonymous)
+  memory each copy adds, not whole-process RSS: `python3 -c 'import time;
+  time.sleep(60)' & grep -E 'Rss(Anon|File)|Pss' /proc/$!/status
+  /proc/$!/smaps_rollup` before writing a figure, and quote `Pss` or
+  `RssAnon`. Extends C-4. *From:* #998, rounds 67 and 68.
 - **C-64 (2026-11-24). Round 66 told #1009's maintainer that there was no
   polkit agent on the phone, and offered options on that basis; Omarchy 4.5's
   shell has one.** `plugins/polkit/PolkitAgent.qml` ships in the signed

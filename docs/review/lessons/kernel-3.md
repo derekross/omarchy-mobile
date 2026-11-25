@@ -3,6 +3,26 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-19. Clock fixes belong in the clock driver's field description, not
+  in a DT override.** `assigned-clock-parents` on a mux the driver describes
+  at the wrong bit writes a reserved bit. *Check:* the mux's shift and width
+  in `clk-gs101.c`/`clk-gs201.c` against Google's CMUCAL `cmucal-sfr.c`
+  (`SFR_ACCESS(..._SELECT, shift, width, ...)`) for that SoC; CMU_APM is the
+  ACPM firmware's own clock block, so prefer read-only there. *From:*
+  kernel #6 (gs101 APM_FUNC: driver bit 4, Google bits [1:0]).
+- **L-20. Kconfig `depends on` must cover every bus the driver registers
+  on.** A driver that calls `spi_register_driver()` unconditionally with
+  `depends on I2C` fails to link with `CONFIG_SPI=n`; our config has SPI on,
+  so we'd never see it. *From:* kernel #8.
+- **L-21. No wildcard compatibles** (`samsung,s6sy79x`): name the real part.
+  *From:* kernel #8.
+- **L-22. Power domains: follow the upstream series, and leave live
+  co-processors alone.** A `google,gs101-pd` that differs from André
+  Draszik's pending upstream series (domains as PMU children,
+  `domain-supply`, the EL3 DTZPC call around every power change) will
+  conflict; without the DTZPC call a domain powered back on comes up with
+  its TrustZone settings reset. Powering off the AoC's domain while the AoC
+  runs, with no handshake, belongs to the AoC series. *From:* kernel #9.
 - **L-23. Thermal: the hardware trip is the last line of defence.** A driver
   that sends ACPM's TMU init must show the firmware's hardware thermal trip
   survives it; blocks with only a 110 °C critical trip need a reason.
@@ -411,27 +431,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   arch/arm64/boot/dts` for boards including a touched dtsi; `dt-validate` each
   on the merge. Extends L-195 and L-309. *From:* kernel #187, round 42,
   2026-11-07.
-- **L-542. "As Google's driver does" is traced to the end of the vendor
-  function, including what it does with the answer.** Kernel #194's fallback
-  follows `syna_tcm_v1_detect()` up to the `IDENTIFY`/`RESET` order, but
-  `syna_tcm_v1_parse_idinfo()` rejects a zero-length record, so on the unit
-  that needed the fix the stock driver would fail too: the empty-record path
-  is our own, and the real difference is probably earlier, in stock's
-  power-up. *Check:* follow the vendor function past the cited step to its
-  parse and error returns, and ask which branch the contributor's unit would
-  take under stock. Extends L-61 and L-77. *From:* kernel #194, round 44,
-  2026-11-08.
-- **L-543. A panel-ID guard relaxed for a new ID is checked against the byte
-  the vendor driver keys its commands on, and tested with the commands the
-  guard blocked.** Google's `tg4c_get_panel_rev()` reads only 0xDB, so kernel
-  #212's new ID3 gets the same command set; the guard existed for the rate
-  switch, which the PR hadn't run. *Check:* the vendor driver's
-  `get_panel_rev`/`read_id` for which ID bytes select commands, then ask for
-  the guarded paths (rate switch, DPMS) on the new panel. Extends L-117 and
-  L-211. *From:* kernel #212, round 44, 2026-11-08.
-- **L-544. A register map with no public source gets its provenance in the
-  commit message.** LWIS DTs give a part's address and widths but leave
-  register sequences to the HAL, so a driver whose registers can't be cited
-  says how they were found. *Check:* grep Google's GPL tree for each register;
-  if one is absent, ask. Extends L-61 and L-177. *From:* kernel #213, round
-  44, 2026-11-08.

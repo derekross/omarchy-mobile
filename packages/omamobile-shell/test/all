@@ -420,6 +420,24 @@ bash test/tile-scripts.sh || fail "quick-settings tile scripts"
 # The Bluetooth pairing helper parses, and its pure parts work without D-Bus.
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-bt-agent || fail "omamobile-bt-agent parses"
 python3 -B test/bt-agent.py || fail "omamobile-bt-agent helpers"
+# Its pairing window on a private bus, against a stand-in for BlueZ.
+rc=0; out=$(python3 -B test/bt-agent-bus.py 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "omamobile-bt-agent's pairing window on a bus # SKIP no dbus-daemon or python-dbus"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" >&2; fail "omamobile-bt-agent's pairing window (test/bt-agent-bus.py)"
+else
+  pass "omamobile-bt-agent's pairing window: off after registering, on only when asked, off at exit"
+fi
+# The panel's side of it, with real Qt bindings.
+rc=0; out=$(python3 -B test/bluetooth-pairable.py 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "the Bluetooth panel's pairing window # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -vE '^PASS' >&2; fail "the Bluetooth panel's pairing window (test/bluetooth-pairable.py)"
+else
+  pass "the Bluetooth panel: pairing on only while visible or pairing, off at the window's end, at close and when the helper exits"
+fi
 
 # The fingerprint enrollment helper likewise (fprintd over D-Bus).
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-fp-enroll || fail "omamobile-fp-enroll parses"
@@ -1323,6 +1341,21 @@ for layout in terminal/us.yaml terminal/us_wide.yaml terminal/gr.yaml terminal/g
 done
 [[ -x $tmp/root/usr/bin/omamobile-keyboard-theme && -x $tmp/root/usr/share/omamobile/shell/hooks/theme-set-keyboard ]] \
   || fail "install stages the keyboard theme and its hook"
+# Omarchy's auto-accepting Bluetooth agent is held off on the phone by a
+# condition (never a mask: Omarchy's first run enables it with --now), on the
+# same opt-in path setup-user checks.
+d=$tmp/root/usr/lib/systemd/user/bt-agent.service.d/omamobile.conf
+[[ -f $d ]] || fail "install stages bt-agent.service's drop-in"
+[[ $(grep -v '^#' "$d" | grep -v '^$') == $'[Unit]\nConditionPathExists=%h/.config/omamobile/bt-agent' ]] \
+  || fail "the bt-agent drop-in is a ConditionPathExists on the owner's opt-in alone"
+grep -c '~/.config/omamobile/bt-agent' bin/omamobile-setup-user >/dev/null || fail "setup-user checks the drop-in's opt-in path"
+grep -c 'bt-agent.service.d/omamobile.conf' bin/omamobile-setup-user >/dev/null || fail "setup-user looks for the drop-in it ships"
+if grep -nE 'systemctl[^#]*(mask|disable)[^#]*bt-agent' bin/* install >/dev/null; then fail "nothing masks or disables bt-agent.service"; fi
+# The panel turns Pairable on only through the helper's window or its own
+# pairing (test/bluetooth-pairable.py walks the paths).
+[[ $(grep -c 'adapter.pairable = true' plugins/omamobile.quicksettings/BluetoothPanel.qml) == 1 ]] \
+  || fail "the panel writes Pairable on in one place only (applyPairable's fallback)"
+pass "Omarchy's bt-agent is held off by an opt-in condition; the panel writes Pairable on in one place"
 # Updates reach users set up earlier: setup-user reruns at every login, and
 # only for a user whose first run left the marker the unit waits for.
 u=$tmp/root/usr/lib/systemd/user

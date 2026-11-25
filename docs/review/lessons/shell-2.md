@@ -16,6 +16,14 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   Where the expectation is "gone", ask for a state check (`/proc/<pid>/stat`
   field 3 not `Z`); reproduce with `docker run -d <image> sleep 600` and
   `docker exec`, against `docker run --init`. *From:* #998, round 66.)
+  (Extended 2026-11-25: shipped code too. #1014's `alive()` watched a
+  re-parented `wf-recorder` with `kill -0` and waited forever in the job
+  container, where it was a zombie; the laptop and the phone reap, so every
+  local run passed. For a shipped script, `git grep -n 'kill -0' <head> --
+  'packages/*/bin' 'packages/*/libexec'` and ask whether the watched process
+  is the script's own child (`wait` works) or was started by another run with
+  `setsid ... &`; run the package's test both ways as above. *From:* #1014,
+  round 68.)
 - **L-975. A service that exits 0 with "nothing to do" behind a socket a
   daemon reconnects to at once turns "not ready yet" into a start-limit
   failure for the boot.** On the 9a, `omamobile-gnss-start` returns while
@@ -357,9 +365,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   truncated input, and grep `if get_file` and `2>/dev/null` above each
   compare. Extends L-161 and L-635. *From:* #623 (after #596) and #625, round
   50.
-- **L-715. Folding independent once-only steps into one helper makes them all
-  wait for its precondition.** #581 moved `--no-first-run`, the user agent and
-  the input-method flags, which need no geometry, into a helper that returns
-  early when geometry is unknown. *Check:* list each step's own inputs and
-  confirm an early return for one input skips only the steps that need it.
-  Extends L-468. *From:* #581, round 50.
