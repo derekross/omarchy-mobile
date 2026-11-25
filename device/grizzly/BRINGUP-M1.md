@@ -97,6 +97,7 @@ whether it predated a stock boot.
 | [v63](#attended-v63-slot-b-trial) | After v62. Stock D1 A preflight matched the prior return. The v63 boot was requested at 15:49:24 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 | [v64](#attended-v64-slot-b-trial) | After v63. Stock D1 A preflight matched the prior return. The v64 boot was requested at 16:09:22 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 | [v65](#attended-v65-slot-b-trial) | After v64. Stock D1 A preflight matched the prior return. The v65 boot was requested at 16:39:58 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
+| [v66](#attended-v66-slot-b-trial) | After v65. Stock D1 A preflight matched the prior return. The v66 boot was requested at 16:54:28 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 
 The maintainer's [review on backup freshness](https://github.com/derekross/omamobile/pull/1002#pullrequestreview-6060450538)
 leaves open whether to take a fresh rescue backup before each
@@ -3798,6 +3799,33 @@ cases and nine RAM policy cases. Both AVB signatures, ABL handoff,
 all five image hashes, unpacked vendor payloads and saved D1 slot
 capacity checks passed. Manifest SHA-256 `9f77ddfe2ccebba61a7ac3a658b0d85b8bfc74ab1f1b923ee72dc5dbd98d9e4b`.
 Archive SHA-256 `7445e3f324d28c3c34e64a82af038b485121040ac60cf6372d61836bd92b2595`.
+
+#### Attended v66 slot B trial
+
+On 2026-11-25 at 16:54:28 UTC, one v66 boot used the nine-partition
+private NV backup with the owner's approval. All nine local hashes
+passed. The copy predates the last stock A boot. All five slot B
+writes passed, and the readback matched all 8,192 supplied
+`vendor_boot_b` bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 0.199902–0.200783 | RAM policy | Single-LUN policy verified and zero SCSI disks. |
+| 2.216746–2.217548 | Direct GPT and REPORT LUNS | Header and entry checks passed. REPORT LUNS found LUNs 0–4. |
+| 2.217808–2.218278 | Host registration and LUN 0 INQUIRY | The host started with zero discovered devices and admitted one command. Tag 13 mapped one 36-byte DMA-from-device segment and completed by IRQ with OCS 0, status 0 and residual 0. |
+| 2.218509 | SCSI child | LUN 0 was visible, running and unbound. It reported disk type 0, `inquiry_len=36`, `no_uld=1` and `ret=0`. |
+| 2.249340–2.249707 | Cleanup | Host lifecycle returned 0, link and Hibern8 returned 0, both PSMs reached `0x11` and the HCI IRQ was freed. |
+| 90.201125–91.203943 | Timed warm return | Zero SCSI disks before restart. |
+
+The trial confirms SCSI discovery of a real child at channel 0,
+target 0, LUN 0, without an attached disk driver. The retained
+console contains no SCSI disk registration. The prior deferred-probe
+`device_links_no_driver` warning remained.
+
+Fastboot returned after 133 seconds. Stock D1 A restarted at
+16:56:51 UTC and completed boot with enforcing verity and the
+pretrial VBMeta digest. Ramoops and Android's `SYSTEM_LAST_KMSG`
+agree on all 36 filtered v66 lines.
 
 ### Offline stock D1 device reference-clock diagnostic
 
