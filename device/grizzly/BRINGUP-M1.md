@@ -93,6 +93,7 @@ whether it predated a stock boot.
 | [v59](#attended-v59-slot-b-trial) | After v58 | Same copy. |
 | [v60](#attended-v60-slot-b-trial) | After v59. Stock D1 A was checked before the v60 boot request at 14:58:48 UTC on 2026-11-25. | Same copy, all nine hashes rechecked locally. The v59 stock-return request time is unavailable. |
 | [v61](#attended-v61-slot-b-trial) | After v60. The A restart was requested at 15:01:29 UTC and verified before the v61 boot request at 15:19:29 UTC on 2026-11-25. | Same copy, all nine hashes rechecked locally. Stock A restart after v61 was requested at 15:22:41 UTC and startup was verified. |
+| [v62](#attended-v62-slot-b-trial) | After v61. Stock D1 A preflight matched the prior return. The v62 boot was requested at 15:38:16 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 
 The maintainer's [review on backup freshness](https://github.com/derekross/omamobile/pull/1002#pullrequestreview-6060450538)
 leaves open whether to take a fresh rescue backup before each
@@ -3547,6 +3548,36 @@ cases covering admission and each rejection condition. All five
 image hashes, both AVB signatures, the unpacked payload, ABL
 handoff and saved D1 slot checks passed. Manifest SHA-256
 `6b3543f06db90d33d7aecd04c7b5dab91b023e433f9e6038153fdb125d94fd2c`. Archive SHA-256 `eec462ed0dea02b6bcc3af910d4c1efe9f2e61ff7bc76b2026dfde0a1f19f378`.
+
+#### Attended v62 slot B trial
+
+On 2026-11-25 at 15:38:16 UTC, one v62 boot used the nine-partition
+private NV backup with the owner's approval. All nine local hashes
+passed. The copy predates the last stock A boot. All five slot B
+writes passed, and the readback matched all 8,192 supplied
+`vendor_boot_b` bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 0.139382 | Prep OFF | Qualification passed in 4 µs. |
+| 2.184974–2.185216 | GPT and REPORT LUNS | Primary entry-array CRC and REPORT LUNS passed. |
+| 2.185474–2.185483 | Host creation | Registration succeeded with zero discovered devices. |
+| 2.185534–2.185617 | Midlayer TUR | The armed request matched the pseudo-device, zero bytes and six-byte CDB length. CDB bytes 0–1 were `00 e0`, `lun_in_cdb=1` and `cdb_match=0`. The gate rejected it and the phase stayed armed. The returned SCSI result was `0x000f0000` (`DID_TRANSPORT_FAILFAST`). |
+| 2.217163–2.217246 | Cleanup | Host removal reached `SHOST_DEL`. Hibern8 was skipped, and HCI cleanup freed the IRQ. |
+| 90.183291–91.185827 | Timed warm return | Zero SCSI disks at RAM startup and before restart. |
+
+The SCSI core sets `lun_in_cdb` in `scsi_sysfs_device_initialize()`
+using the target's default SCSI-2 level. `scsi_dispatch_cmd()` then
+copies the low three bits of the pseudo-device's `U64_MAX` LUN
+into byte 1 bits 7:5, producing `0xe0`. UFS uses the UPIU LUN field
+and this diagnostic targets LUN 0 explicitly. The next fixture
+can disable legacy CDB LUN encoding for only the diagnostic
+pseudo-device and keep the exact six-byte guard. Mapping and the
+doorbell write were never reached in this trial.
+
+Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
+after 133 seconds. Stock D1 A was restarted at 15:41:02 UTC and
+booted with enforcing verity and the pretrial VBMeta digest.
 
 ### Offline stock D1 device reference-clock diagnostic
 
