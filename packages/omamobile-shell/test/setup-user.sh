@@ -26,7 +26,8 @@ if [[ $1 == list-keys && $2 == org.gnome.nautilus.preferences ]]; then
   printf "default-folder-viewer\n"; [[ -n ${GSETTINGS_NO_CLICK_POLICY:-} ]] || printf "click-policy\n"
 fi'
 # systemctl: logs calls; fails while $HOME/systemctl-fails exists (no user manager)
-fake systemctl 'echo "systemctl $*" >>"$HOME/calls"; [[ ! -e $HOME/systemctl-fails ]]'
+fake systemctl 'echo "systemctl $*" >>"$HOME/calls"; [[ ! -e $HOME/systemctl-fails ]] || exit 1
+if [[ $1 == --user && $2 == is-enabled ]]; then [[ -e $HOME/is-enabled ]] && cat "$HOME/is-enabled"; exit 0; fi'
 ln -s "$pkg/bin/omamobile-browser-setup" "$F/omamobile-browser-setup"
 fake hyprctl 'exit 1'
 fake chromium 'echo "Chromium 153.0.0.0"'
@@ -482,6 +483,22 @@ RUN_HOME=$hb RUN_USER_UNITS=$U2 run
   || fail "bt-agent.service is enabled once it works, then left alone ($(grep -cx 'systemctl --user enable --now bt-agent.service' "$hb/calls") calls)"
 if grep -c 'bt-agent' "$hm/calls" >/dev/null 2>&1; then fail "nothing is enabled without the agent's unit"; fi
 pass "Omarchy's Bluetooth agent is enabled and started once where its unit is installed"
+# Omarchy's first run enabled it, and the owner turned it off: kept off. A
+# user without that first run (set up by hand) reads disabled too, and gets it.
+for state in disabled masked; do
+  hd=$t/home-bt-$state; mkdir -p "$hd/.config/hypr" "$hd/.config/omarchy/extensions" "$hd/.local/state/omarchy/done"
+  cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hd/.config/hypr/"
+  touch "$hd/.local/state/omarchy/done/first-run-user"; echo "$state" >"$hd/is-enabled"
+  RUN_HOME=$hd RUN_USER_UNITS=$U2 run
+  if grep -c 'enable --now bt-agent' "$hd/calls" >/dev/null 2>&1; then fail "an agent the owner left $state after Omarchy's first run stays off"; fi
+  [[ -e $hd/.local/state/omarchy/done/omamobile-bt-agent-enabled ]] || fail "the owner's $state agent: the step is marked done"
+done
+hn=$t/home-bt-hand; mkdir -p "$hn/.config/hypr" "$hn/.config/omarchy/extensions"
+cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hn/.config/hypr/"
+echo disabled >"$hn/is-enabled"
+RUN_HOME=$hn RUN_USER_UNITS=$U2 run
+grep -cx 'systemctl --user enable --now bt-agent.service' "$hn/calls" >/dev/null || fail "a user without Omarchy's first run gets the agent"
+pass "an agent the owner turned off after Omarchy's first run stays off; a user set up without that run gets it"
 
 # --adopt: a user set up by hand, with no markers, keeps the files the
 # overwriting steps would change (shell.json, the scale, the cursor and
