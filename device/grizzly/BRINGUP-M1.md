@@ -3629,6 +3629,44 @@ Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
 after 133 seconds. Stock D1 A was restarted at 15:51:55 UTC and
 booted with enforcing verity and the pretrial VBMeta digest.
 
+### Mainline v64 test one 36-byte midlayer INQUIRY
+
+[v64 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/4b5971a8c4744e72eb2e54b8e693475f7a15d817)
+sends standard INQUIRY with CDB `12 00 00 00 24 00` from the
+diagnostic SCSI pseudo-device to UPIU LUN 0. The gate requires the
+exact CDB, a 36-byte `DMA_FROM_DEVICE` request and one scatterlist
+entry. It consumes the dispatch token once and uses the normal UFS
+scatter-gather mapping, PRDT and legacy doorbell path. The IRQ checks
+the response type, LUN, tag and clean status with zero residual.
+The caller validates the returned header after DMA unmapping.
+The earlier direct INQUIRY reported qualifier 0, disk type 0,
+version 6, response format 2 and additional length 31.
+
+The host remains in the read-only diagnostic flow with automatic
+scanning disabled. Normal completion removes the temporary host and
+runs Hibern8 and HCI teardown. The 90-second return remains armed.
+
+A timed-out request can release its DMA mapping after IRQ drain and
+controller acknowledgement of the transfer clear or HCE disable.
+If the doorbell remains set with HCE enabled after both attempts, the
+request and mapping stay live and the driver requests an emergency
+restart. Ordinary device shutdown can wait on the blocked probe.
+The arm64 restart path reaches PSCI without that wait. DMA quiescence
+across an emergency warm restart on Malibu has no hardware evidence.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match the source, five image hashes, both AVB signatures and saved capacity checks. The packed DTB and RAM rescue match v63. | Leave stock A selected if a check fails. |
+| One attended slot B trial | Capture gate acceptance, mapping with `sg=1` and `bytes=36`, the matching IRQ with zero residual, the INQUIRY header and `ret=0`. Verify host removal, Hibern8, zero disks and stock A return. | Hold Volume Down after the first orange warning in case the restart comes early. Preserve the first error, timeout or emergency restart marker and return to stock A without retrying. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v64` passed
+targeted arm64 `W=1` compilation and 35 sanitizer-backed mocks
+covering dispatch, response validation, timeout and synchronous
+completion. Both AVB signatures, ABL handoff, all five image hashes
+and saved D1 slot checks passed. Manifest SHA-256
+`8fd6f7a9d3238943bc888f3bc5254a3f748747ac73a0be9995fe8877fe4299a9`. Archive SHA-256
+`88f67146468e78b1c944afd633eb59b28ab79b7a0163039370c3c29058e1c03a`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
