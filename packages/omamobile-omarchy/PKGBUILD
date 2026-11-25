@@ -9,8 +9,8 @@ url="https://github.com/derekross/omamobile"
 license=(MIT)
 depends=('omarchy>=4.0.6' bash python patch libarchive gzip util-linux sudo pacman-contrib fakeroot systemd zram-generator)
 optdepends=('omamobile-shell: the update sheet')
-# omamobile-shell 0.2.154 saves Balanced as the phone's starting profile (lib/power-profile)
-conflicts=('omamobile-shell<0.2.154')
+# omamobile-shell 0.2.162 saves Balanced as the phone's starting profile (lib/power-profile)
+conflicts=('omamobile-shell<0.2.162')
 checkdepends=(diffutils patch util-linux libarchive)
 install=omamobile-omarchy.install
 
