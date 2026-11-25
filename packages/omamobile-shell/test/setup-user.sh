@@ -427,7 +427,7 @@ pass "voice out of the box: Omarchy's config and the shipped base.en once, the d
 # The keyboard: every layout the package carries linked (the terminal's, and
 # each language's from squeekboard/generate), the theme written at every
 # login, its gtk.css import and theme-set hook added once (H ran three times).
-for layout in terminal/us.yaml terminal/us_wide.yaml terminal/gr.yaml terminal/gr_wide.yaml us.yaml us_wide.yaml de.yaml fr_wide.yaml url/us.yaml terminal/de.yaml; do
+for layout in terminal/us.yaml terminal/us_wide.yaml terminal/gr.yaml terminal/gr_wide.yaml terminal/ru.yaml terminal/ru_wide.yaml us.yaml us_wide.yaml de.yaml fr_wide.yaml url/us.yaml terminal/de.yaml; do
   [[ $(readlink "$H/.local/share/squeekboard/keyboards/$layout") == "/usr/share/omamobile/squeekboard/keyboards/$layout" ]] \
     || fail "the $layout layout is linked"
 done
