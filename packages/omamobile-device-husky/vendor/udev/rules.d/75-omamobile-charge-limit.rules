@@ -2,8 +2,7 @@
 # Apply the saved charge limit (/etc/omamobile/charge-limit) when the MAX77759 charger appears, at every boot,
 # through omamobile-charge-limit-apply.service rather than inside the udev worker. The helper acts only on the
 # supply this package declares in /usr/share/omamobile/charge-limit.conf; no saved file: nothing is touched.
-# The systemd tag goes on every event: with the whole rule on add only, the unit did not start at boot on husky
-# (2026-11-16), most likely as the device lost the tag on the next change event. The unit is wanted on add only: wanted on every
-# change, a bouncing charger input started it 6968 times in one boot (2026-11-25).
-SUBSYSTEM=="power_supply", KERNEL=="max77759-charger", TAG+="systemd"
-SUBSYSTEM=="power_supply", KERNEL=="max77759-charger", ACTION=="add", ENV{SYSTEMD_WANTS}+="omamobile-charge-limit-apply.service"
+# No ACTION filter: systemd rebuilds a device's Wants= from SYSTEMD_WANTS on every uevent, so a rule on add
+# only leaves Wants= empty after the charger's next change event. The unit keeps itself from storming on change
+# events (RemainAfterExit=, StopWhenUnneeded=; see the unit).
+SUBSYSTEM=="power_supply", KERNEL=="max77759-charger", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omamobile-charge-limit-apply.service"
