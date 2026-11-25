@@ -26,32 +26,35 @@ class Chain(unittest.TestCase):
     def start(self, *sim_args, bringup=True):
         self.dir, cleanup = tempdir('mmd-chain-')
         self.addCleanup(cleanup)
+        orig_cwd = os.getcwd()
+        os.chdir(self.dir)
+        self.addCleanup(os.chdir, orig_cwd)
         run = os.path.join(self.dir, 'run')
         os.mkdir(run, 0o700)
         with open(os.path.join(self.dir, 'sit.conf'), 'w') as f:
             f.write('[network]\napn = internet.example\nsim_timeout = 20\nregister_timeout = 30\n[audio]\ncard = none\n')
-        self.env = dict(os.environ, OMAMOBILE_SIT_RUN=run, OMAMOBILE_SIT_STATE=os.path.join(self.dir, 'state'),
-                        OMAMOBILE_SIT_CONFIG=os.path.join(self.dir, 'sit.conf'),
-                        OMAMOBILE_SIT_DEVICE='unix:' + os.path.join(self.dir, 'ipc0'),
-                        OMAMOBILE_SIT_ROUTER='unix:' + os.path.join(self.dir, 'router'),
+        self.env = dict(os.environ, OMAMOBILE_SIT_RUN='run', OMAMOBILE_SIT_STATE='state',
+                        OMAMOBILE_SIT_CONFIG='sit.conf',
+                        OMAMOBILE_SIT_DEVICE='unix:ipc0',
+                        OMAMOBILE_SIT_ROUTER='unix:router',
                         OMAMOBILE_SIT_BOOT='none', PYTHONDONTWRITEBYTECODE='1')
         self.transcript = os.path.join(self.dir, 'transcript.jsonl')
-        self.control_path = os.path.join(self.dir, 'control')
+        self.control_path = 'control'
         logs = [open(os.path.join(self.dir, n), 'w') for n in ('sim.log', 'sitd.log')]
         self.addCleanup(lambda: [f.close() for f in logs])
         self.procs = []
         self.procs.append(subprocess.Popen(
-            [sys.executable, SIM, '--ipc', os.path.join(self.dir, 'ipc0'), '--router', os.path.join(self.dir, 'router'),
-             '--transcript', self.transcript, '--control', self.control_path, *sim_args],
-            stdout=logs[0], stderr=logs[0]))
+            [sys.executable, SIM, '--ipc', 'ipc0', '--router', 'router',
+             '--transcript', 'transcript.jsonl', '--control', 'control', *sim_args],
+            cwd=self.dir, stdout=logs[0], stderr=logs[0]))
         wait_until(lambda: os.path.exists(os.path.join(self.dir, 'router')), 5, 'sit-sim')
         self.procs.append(subprocess.Popen([sys.executable, SITD] + (['--bringup'] if bringup else []),
-                                           env=self.env, stdout=logs[1], stderr=subprocess.STDOUT))
+                                           cwd=self.dir, env=self.env, stdout=logs[1], stderr=subprocess.STDOUT))
         self.addCleanup(self.stop_all)
         wait_until(lambda: os.path.exists(os.path.join(run, 'socket')), 40, 'sitd ready')
         self.bus = PrivateBus(self.dir)
         self.addCleanup(self.bus.close)
-        self.mmd = Mmd(self.bus, os.path.join(run, 'socket'), self.dir)
+        self.mmd = Mmd(self.bus, 'run/socket', self.dir)
         self.addCleanup(self.mmd.stop)
         self.client = Client(self.bus.connection)
         return wait_until(lambda: self.client.objects(), 10, 'the modem')
