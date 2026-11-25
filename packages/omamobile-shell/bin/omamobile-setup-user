@@ -600,13 +600,25 @@ fi
 # as they set it. Children are listed too, since the menu's search finds a
 # row under a hidden parent.
 menu_hide() {
+  local comment=$1 id rows=()
+  shift
+  for id; do rows+=("$id" '{"when": "false"}'); done
+  menu_rows "$comment" "${rows[@]}"
+}
+# The same for rows of its own: an id, then its whole entry. A reused id
+# replaces Omarchy's entry rather than adding to it (an entry with only
+# "when" shows a row with no label, icon or action), so a row that should
+# show at times carries all of its fields.
+menu_rows() {
   local comment=$1 id rows=""
   shift
   local extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
   mkdir -p "$(dirname "$extension")"
   [[ -s $extension ]] || printf '{\n}\n' >"$extension"
-  for id; do
-    grep -qF "\"$id\"" "$extension" || rows+="  \"$id\": {\"when\": \"false\"},"$'\n'
+  while (($# >= 2)); do
+    id=$1
+    grep -qF "\"$id\"" "$extension" || rows+="  \"$id\": $2,"$'\n'
+    shift 2
   done
   [[ -n $rows ]] || return 0
   OMAMOBILE_ROWS="  // Omamobile: $comment"$'\n'"${rows%$'\n'}" \
@@ -648,6 +660,17 @@ menu_hide "no dock and no other kernel on a phone (Omarchy 4.5)" \
   appearance.dock appearance.dock.always-on appearance.dock.autohide appearance.dock.position \
   appearance.dock.position.bottom appearance.dock.position.left appearance.dock.position.right appearance.dock.position.top \
   update.kernel
+# Setup > Typing (Keyboard Layouts, Input Methods) reads and sets fcitx5's
+# input group through fcitx5-remote (#972). The phone keeps fcitx5 off so
+# squeekboard holds the input-method slot (omarchy-fcitx5-omamobile.conf),
+# so the save fails before it writes anything, and the call D-Bus-activates
+# fcitx5 behind squeekboard. The rows come back for a user who turns fcitx5
+# on with the unit's own switch (~/.config/omamobile/fcitx5).
+typing=$'"icon": "\xef\x84\x9c", "when": "test -e ~/.config/omamobile/fcitx5"'
+menu_rows "Typing needs fcitx5, which the phone keeps off (touch ~/.config/omamobile/fcitx5)" \
+  setup.typing "{$typing, \"label\": \"Typing\"}" \
+  setup.typing.keyboard "{$typing, \"label\": \"Keyboard Layouts\", \"action\": \"omarchy-setup-keyboard\"}" \
+  setup.typing.input "{$typing, \"label\": \"Input Methods\", \"action\": \"omarchy-setup-input\"}"
 menu_hide "x86_64-only installers" \
   install.windows install.browser.chrome install.browser.edge \
   install.service.dropbox install.service.spotify install.service.nordvpn \
