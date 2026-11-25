@@ -2440,7 +2440,33 @@ D1 slot capacities passed offline. Manifest SHA-256
 `2f00a9299f568e85739a868bb44f285a9c63ae603a3e1f5c1eb338530fc810fe`.
 Archive SHA-256
 `a1c87c17ba9156f6351a199c8fe14e137aed644c58eea41b7481ec5ad29e327e`.
-Whether HCI cleanup completes with Deep H8 held remains a hardware test.
+
+#### Attended v47 slot B trial
+
+On 2026-11-25 one slot B boot used the verified nine-partition NV
+snapshot. All five writes passed and `vendor_boot_b` readback matched
+all 8,192 supplied bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 2.181940–2.181983 | Local Hibern8 gating and M-PHY update | Both `ret=0` |
+| 2.182001–2.182136 | UIC link and fresh Hibern8 IRQ | `link=0 hibern8=0` |
+| 2.182294–2.182320 | Deep H8 gate | HC/PHY `0x11`/`0x11` after 146 µs. Deep H8 left prepared. |
+| 2.182328–2.182389 | HCI cleanup | Interrupt mask write and readback, controller stop and IRQ release completed. |
+| 2.182450 | After HCI cleanup | HC `0x10`, PHY `0x11` |
+| 2.182461 | Host completion | Controller stop check passed and UFS votes were retained. |
+| 90.154188 | Warm return | Timer requested the restart. |
+
+HC and PHY still read `0x10` and `0x11` at the late sample. The v43
+debugfs workqueue warning did not recur. The earlier deferred-probe
+device-link warning remained. This boot confirms HCI cleanup can
+complete with Deep H8 held after both PSMs reach `0x11`. It leaves
+the exact v46 reset mechanism and safe clock-release order open.
+The link-only host did not attempt disk discovery.
+
+Ramoops and `SYSTEM_LAST_KMSG` agree. Fastboot returned 133 seconds
+after the B boot request. Stock D1 completed boot on A with enforcing
+verity and the original factory VBMeta digest.
 
 ## Staging and return sequence used for D1
 
