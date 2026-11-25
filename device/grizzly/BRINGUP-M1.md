@@ -2259,7 +2259,35 @@ and RAM rescue are byte-identical to v43. All five hashes, both AVB
 signatures, unpacked payload, ABL handoff and saved slot sizes passed.
 Manifest SHA-256 `37eb128786648d73509bd5020435943e8c64ca6a4e957908fc92cacee74fe245`.
 Archive SHA-256 `8f77c893c50e237584cb07ce931fe0eb2af07d9372dc909919ebe699fc0a32e7`.
-v44 awaits its first hardware boot.
+
+#### Attended v44 slot B trial
+
+On 2026-11-25 one slot B boot used the verified nine-partition NV
+snapshot. All five writes passed and the `vendor_boot_b` readback
+matched all 8,192 supplied bytes. Prep registered with its owned
+vote and `stay_on=0`. Its guarded OFF callback recorded a zero core
+client vote and issued prep OFF successfully.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 0.144365 | Before prep OFF | HC `0x10`, PSM1 `0x0`, PHY `0x11` |
+| 0.144523 | Immediate sample after prep OFF reply | HC `0x10`, PSM1 `0x0`, PHY `0x11` |
+| 0.144528 | Prep OFF result | `owned_before=1 owned_after=0 ret=0` |
+| 2.121156 | Delayed sample | HC `0x13`, PSM1 `0x3`, PHY `0x11` |
+| 2.354140 | Host gate | `stage=4 expected=1`, probe deferred |
+| 21.481148 | Late sample | HC `0x13`, PSM1 `0x3`, PHY `0x11` |
+
+The physical transition was visible only after the immediate
+post-reply sample. That sample left the one-shot state machine at
+`STOPPED`, and the later probe could not qualify `RELEASED`. This
+boot never exercised prep or core ON, UIC startup, Deep H8 timing,
+or the link-only cleanup fix. A separate earlier warning came from
+`device_links_no_driver()` in deferred probe work at 0.107135 s.
+The cause of that warning remains unverified.
+
+Ramoops and `SYSTEM_LAST_KMSG` agree on these results. Fastboot
+returned after 133 seconds. Stock D1 completed boot on A with
+enforcing verity and the original factory VBMeta digest.
 
 ## Staging and return sequence used for D1
 
