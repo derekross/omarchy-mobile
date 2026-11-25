@@ -283,10 +283,14 @@ for f in a615_zap ipa_fws; do printf '\177ELF %s metadata' "$f" > "$t/sargo/firm
 for f in a615_zap.b00 a615_zap.b01 ipa_fws.b00 ipa_fws.b01 ipa_fws.b02; do echo "$f segment" > "$t/sargo/firmware/$f"; done
 for f in adsp cdsp venus wlanmdsp; do printf '\177ELF %s' "$f" > "$t/sargo/firmware/$f.mbn"; done
 for f in adspr adspua cdspr modemuw; do echo "{\"$f\": 1}" > "$t/sargo/firmware/$f.jsn"; done
+echo "fictional NV" > "$t/sargo/firmware/crnv21.bin"
+echo "fictional ROM patch" > "$t/sargo/firmware/crbtfw21.tlv"
 echo "not mapped" > "$t/sargo/firmware/unrelated.b00"
-SARGO_FILES=$(printf 'qcom/sdm670/sargo/%s\n' a615_zap.b00 a615_zap.b01 a615_zap.mbn adsp.mbn adspr.jsn \
-  adspua.jsn cdsp.mbn cdspr.jsn ipa_fws.b00 ipa_fws.b01 ipa_fws.b02 ipa_fws.mbn modemuw.jsn venus.mbn wlanmdsp.mbn |
-  LC_ALL=C sort)
+SARGO_FILES=$({
+  printf 'qcom/sdm670/sargo/%s\n' a615_zap.b00 a615_zap.b01 a615_zap.mbn adsp.mbn adspr.jsn \
+    adspua.jsn cdsp.mbn cdspr.jsn ipa_fws.b00 ipa_fws.b01 ipa_fws.b02 ipa_fws.mbn modemuw.jsn venus.mbn wlanmdsp.mbn
+  printf 'qca/sdm670/sargo/%s\n' crbtfw21.tlv crnv21.bin
+} | LC_ALL=C sort)
 o=$t/sargo-out n=$failed
 if run "$t/sargo" "$t/ext4.img" -d sargo -o "$o"; then
   [[ $(listed "$o") == "$SARGO_FILES" ]] || { listed "$o"; fail "sargo: checksum list names the mapped files and every segment"; }

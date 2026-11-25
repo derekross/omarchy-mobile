@@ -71,6 +71,9 @@
 #   vendor/firmware/{a615_zap,ipa_fws}.bNN      -> beside the matching .mbn
 #   vendor/firmware/{adsp,cdsp,venus,wlanmdsp}.mbn -> qcom/sdm670/sargo/
 #   vendor/firmware/{adspr,adspua,cdspr,modemuw}.jsn -> qcom/sdm670/sargo/
+#   vendor/firmware/{crnv21.bin,crbtfw21.tlv}   -> qca/sdm670/sargo/   (Bluetooth: the
+#                                                  board's NV and ROM patch, named by
+#                                                  the DT's firmware-name)
 #
 # The modem's own mba.mbn and modem.mbn are not in the vendor partition (they
 # are on the phone's modem partition) and are not staged here.
@@ -342,6 +345,8 @@ case $DEVICE_OPT in
       "firmware/adspua.jsn|qcom/sdm670/sargo/adspua.jsn"
       "firmware/cdspr.jsn|qcom/sdm670/sargo/cdspr.jsn"
       "firmware/modemuw.jsn|qcom/sdm670/sargo/modemuw.jsn"
+      "firmware/crnv21.bin|qca/sdm670/sargo/crnv21.bin"
+      "firmware/crbtfw21.tlv|qca/sdm670/sargo/crbtfw21.tlv"
     ) ;;
   *) die "unknown device $DEVICE_OPT (cheetah, panther, raven, tegu, husky, sargo or dipper)" ;;
 esac
