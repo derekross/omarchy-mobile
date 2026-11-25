@@ -2,6 +2,56 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-11-25: the 2026.11.24 test install
+
+The release's signed bundle, `omamobile-cheetah-2026.11.24`, installed on the
+reference phone with `bash install --reinstall`. The phone was on slot B,
+running Omamobile, so no `--bootloader-slots-match` was needed (a plain
+`bash install` stopped at the bootloader-slots check, as a reinstall over
+Omamobile should without `--reinstall`). It booted
+`7.3.0-rc6-omamobile-g00860bdedea4` (`kernel-2026.11.24`) with
+`omamobile-device-cheetah` 0.1.61 and `omamobile-shell` 0.2.147, on the
+stable channel.
+
+- **Before:** `tools/nv-backup --check` against the 2026-11-03 backup read
+  SAME for `efs`, `efs_backup`, `modem_userdata`, `persist` and `modem_a/b`
+  (`devinfo` differs, as its slot flags do). The modem was stopped
+  (`systemctl stop omamobile-modem`: "failed" as in #532, marker removed)
+  before `reboot-to bootloader`.
+- **First start:** `omamobile-firstboot` finished ("firstboot done"). Before
+  the firmware step the AoC, Wi-Fi and Bluetooth-address units failed ("no
+  aoc.bin"), as expected.
+- **Firmware:** the first `tools/phone-provision --first-install --nv-backup
+  DIR` run, with factory image cp2a.260705.006, stopped while pushing
+  Google's files with "ssh: connect to host 172.16.42.1 port 22: Connection
+  timed out": the phone had locked and gone to sleep, and left USB. After a
+  press of Power and an unlock, sleep was held off for the run
+  (`systemd-run --unit=x-provision-awake … systemd-inhibit --what=sleep:idle
+  sleep 3600`) and the second run pushed and verified every group, then
+  `systemctl reboot`. The release notes list this under Known issues; the
+  guided install already holds sleep off.
+- **After the restart:** no failed unit; AoC, Wi-Fi, modem and fingerprint
+  active, `hci0` up. Read about a minute after boot, `omamobile-sit status`
+  showed "SIM: unknown; radio: off" while the service was still at its IMS
+  stage; a few minutes later it read SIM ready, home LTE-CA, IMS voice and
+  SMS, data bearer up (sitd: packet registration 12.8 s after radio on).
+- **Update:** the Updates app reported everything up to date from stable.
+- **Package-hook kernel update:** the release's signed `linux-omamobile`
+  (`7.3.0rc6.r906.g00860bdedea4-1`, sha256 checked against the laptop's
+  copy) reinstalled with `pacman -U` on the phone, `AUTO_WRITE=yes`. The
+  hook built the five boot images on the phone and found all five "already
+  there": the images it built are byte for byte the bundle's, so nothing
+  was written. `systemctl reboot` into it: `tools/phone-smoke` passed every
+  required check with no failed unit and no `ufshcd_err_handler` line; it
+  flagged `pcieport … of_irq_parse_pci: failed` (x2) and cpif
+  `shmem_enqueue_snapshot: PCIE: ERR! invalid intr` (x2) at modem start as
+  new. The modem reached CP ONLINE and registered as above. Not looked into
+  yet.
+
+`tools/release … test-install --passed 7.3.0-rc6-omamobile-g00860bdedea4`
+recorded the pass; the release was uploaded, promoted and tagged
+(`release-2026.11.24`) the same day.
+
 ## 2026-11-24: the release kernel for kernel-2026.11.24 boots
 
 The kernel that will be tagged `kernel-2026.11.24` is linux-omamobile's
