@@ -5,7 +5,7 @@
 # Install: cp tools/systemd/omamobile-publish* ~/.config/systemd/user/ &&
 #          systemctl --user enable --now omamobile-publish.timer
 [Unit]
-Description=Publish Omarchy Mobile's packages (development channel)
+Description=Publish Omamobile's packages (development channel)
 OnFailure=omamobile-publish-failed.service
 
 [Service]

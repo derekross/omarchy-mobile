@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Build Omarchy Mobile's packages for aarch64 on this laptop, without a phone:
+# Build Omamobile's packages for aarch64 on this laptop, without a phone:
 # makepkg in an Arch Linux ARM container (Docker + qemu-user, tools/lib/alarm.sh),
 # then sign them and the database with the release key (keys/gnupg.release,
 # tools/lib/signing.sh; docs/RELEASES.md §10), into the

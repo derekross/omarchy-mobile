@@ -2,9 +2,31 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-11-24: the release kernel for kernel-2026.11.24 boots
+
+The kernel that will be tagged `kernel-2026.11.24` is linux-omamobile's
+`omamobile` at `00860bdedea4`: `kernel-2026.11.15` plus 76 commits. For the
+Pixel 7 Pro the ones that touch shared code are the gs201 memory-interface
+devfreq driver (#279, its node disabled on cheetah), the gs201 CSIS memory
+floor (#293, a no-op without a MIF node), the S2MPG12/13 power meters (#278's
+MFD cells, disabled `power-meter` children on cheetah) and the PCI `dwc`
+gs201 changes; the rest are the zuma MFC (#289, node disabled), the Pixel 7's
+speaker amplifiers and Wi-Fi (#287, #195), the Pixel 9a's fingerprint (#165)
+and device trees for other phones. Its release build,
+`7.3.0-rc6-omamobile-g00860bdedea4` (`bin/omamobile kernel --release` from a
+clean checkout of `00860bdedea4`), was pushed to the reference phone with the
+modem stopped first (the phone was reinstalled from the 2026.11.15 bundle the
+same morning and runs the development channel, omamobile-shell 0.2.147) and
+booted: `tools/phone-smoke` passed every required check (storage guard, root,
+kernel health with no oops or BUG and 0 WARN, USB gadget, session, lock) and
+display, GPU on Panthor, touch, buttons, Wi-Fi, Bluetooth, battery, the AoC
+sound card and sensors; no unit failed on this boot, no UFS line, the modem
+came up registered (IMS voice and SMS, data bearer up, pings over `rmnet2`),
+and slot B was marked successful.
+
 ## 2026-11-14: the release kernel for kernel-2026.11.15 boots, with the modem's sleep series
 
-The kernel that will be tagged `kernel-2026.11.15` is linux-omarchy-mobile's
+The kernel that will be tagged `kernel-2026.11.15` is linux-omamobile's
 `omamobile` at `da171eae4cb7`: `kernel-2026.11.13` plus 20 commits, among
 them #232's five `PCI: dwc: gs201-cp` commits (system sleep refused before
 the freeze while the modem's link is up, the modem left out of system sleep,
@@ -23,7 +45,7 @@ busy, and data (3 of 3) and storage (no UFS line) were clean after each.
 
 ## 2026-11-13: the release kernel kernel-2026.11.13 boots, power off stays off, double tap wakes from sleep
 
-`kernel-2026.11.13` is linux-omarchy-mobile's `omamobile` at `36d61a33795b`:
+`kernel-2026.11.13` is linux-omamobile's `omamobile` at `36d61a33795b`:
 the previous published tip (`2db2bc35beec`, with #233, the S2MPG12's WTSR
 and SMPL restarts disarmed at power off) plus #248 (the touchscreen as a
 wakeup source, off until user space enables it). Its release build,
@@ -40,7 +62,7 @@ the phone from s2idle (IRQ 98, `spi0.0`) and lit the lock screen.
 
 The release's signed bundle, `omamobile-cheetah-2026.11.12`, installed on the
 reference phone with `bash install --reinstall --bootloader-slots-match
-cloudripper-17.0-15199429`. The phone was on slot B, running Omarchy Mobile,
+cloudripper-17.0-15199429`. The phone was on slot B, running Omamobile,
 so the bootloader it reported was the one it had been starting with. It
 booted `7.3.0-rc6-omamobile-g1a9d1d4e9289` (the kernel of 2026.11.08,
 `kernel-2026.11.08`) with `omamobile-device-cheetah` 0.1.53, Omarchy
@@ -189,7 +211,7 @@ build), Omarchy 4.0.6.
   every modem-up boot today.
 - **This tree, piece by piece** [V], each on its own test kernel, `-push1`
   builds of the PR merged onto `omamobile`, and posted on the PR:
-  linux-omarchy-mobile#194 (touch: both probe lines unchanged, no fallback,
+  linux-omamobile#194 (touch: both probe lines unchanged, no fallback,
   no desync after a minute of touch), #201 (S2MPG12 RTC: reads 0 s off, a
   wake alarm awake, 10 RTC-woken s2idle cycles with the modem off, none woken
   early), #191 with #187 (Wi-Fi scans, a 300 MB download at about 130 Mbit/s
@@ -229,7 +251,7 @@ the same Verizon-network SIM as the entry below. The runbook:
 
 - **Calls and texts through the apps** [V]: incoming and outgoing calls and
   texts worked through Phone and Messages (omatel-agent through
-  `omamobile-mmd`), among them the first text from one Omarchy Mobile phone to
+  `omamobile-mmd`), among them the first text from one Omamobile phone to
   another: this 7 Pro to a Pixel 9a.
 - **IMS registers with no carrier manifest** [V]: `carrier_manifest` empty,
   the modem's 0x4602 unanswered, and IMS registered all the same. The
@@ -841,14 +863,14 @@ Made on the development laptop to give the phone internet over USB. Revert when 
 
 ## Phone UX to-dos
 
-- **First-run notifications are desktop-oriented.** "Learn Keybindings (Super + K…)" makes no sense on a touch phone, and "Setup Wi-Fi" needs to open the phone's Wi-Fi settings. Find how Omarchy's first run triggers them (`install/user/first-run`) and how omarchy-mac adapts them for its platform, then do the same in the Omarchy Mobile package. No local hacks.
+- **First-run notifications are desktop-oriented.** "Learn Keybindings (Super + K…)" makes no sense on a touch phone, and "Setup Wi-Fi" needs to open the phone's Wi-Fi settings. Find how Omarchy's first run triggers them (`install/user/first-run`) and how omarchy-mac adapts them for its platform, then do the same in the Omamobile package. No local hacks.
 - **Make `omarchy update` the update path on the phone.** Omarchy installs a pacman hook that blocks direct `pacman -Syu` and points to `omarchy update` (snapshots, keyrings, migrations, restarts). On the phone this needs `sudo` for the user and decisions about snapshots (no snapper/btrfs here, since the root is ext4). The `[omarchy]` repo must come **before** `[core]` in pacman.conf on aarch64, so Omarchy's own builds (quickshell 0.3.2-4, hyprland 0.56.2-5) win over Arch Linux ARM's. With ALARM's quickshell 0.3.2-1 on Qt 6.12, the shell's theme colours didn't resolve.
 - **Agent choice in onboarding.** The launcher's "Ask Claude" is hardcoded. Use Omarchy's standard default-agent mechanism (`omarchy-default-agent` and its settings, which Omalauncher also follows) for the launcher's agent, and let the user pick their agent during first-run onboarding, as Omarchy does. Claude stays Derek's choice, not the default.
 - **Temporary patch on the phone's Omarchy shell (2026-10-11).** Qt 6.12 (already in Arch Linux ARM) adds `QtQuick/Color`, which shadows Omarchy's `Commons.Color`, so every palette colour was undefined. Upstream fixed this in omacom/omarchy b83d3df084 (#14553, after v4.0.4) by importing `qs.Commons as Commons` and qualifying `Commons.Color`. We applied the same transformation to the installed v4.0.4 shell (54 files; original backed up at `/root/omarchy-shell-4.0.4-orig.tar.gz` on the phone). The next Omarchy release replaces those files with upstream's fix. Our phone plugins now follow the same rule.
 - **Done (2026-10-11): first-run keybindings toast and agent choice.**
   - The launcher reads Omarchy's default agent (`~/.config/omarchy/defaults/agent`, set by `omarchy-default-agent`). It prompts through `omarchy-agent-prompt`, or opens Omarchy's picker (`omarchy menu summon setup.default.agent`) when none is chosen.
   - `omamobile-setup-user` marks `welcome-keybindings-not-applicable`, which the upstream change honours: submitted as omacom/omarchy#15075 (https://github.com/omacom/omarchy/pull/15075). The patch in `patches/omarchy/0001-*` is applied on the phone as a bridge until it ships.
-  - The setup script will become Omarchy Mobile's `setup-user` entrypoint in Omarchy's lifecycle-dispatch contract once a release includes it.
+  - The setup script will become Omamobile's `setup-user` entrypoint in Omarchy's lifecycle-dispatch contract once a release includes it.
 - **Done: UTF-8 locale and timezone** via `omamobile-setup-system` (en_US.UTF-8; timezone from the host; NTP synced).
 - **USB doesn't reconnect after unplugging (2026-10-11).** The USB PHY forces VBUS valid at boot (no Type-C / MAX77759 TCPC driver yet), so the gadget never sees detach or attach. After an unplug, the link stays down until the next boot. Fixed properly by the MAX77759 TCPC + dwc3 role-switch work (plan: USB-C row).
 - **Done (2026-10-11): apps open off-screen.** Omarchy floats its terminal, btop and dialogs at desktop sizes (875 x 600) through a `floating-window` tag, so on a 480 px wide screen they landed mostly off-screen (seen when installing an agent). `packages/omamobile-shell/hypr/phone.lua` drops the tag and maximizes every window, Android-style; it's loaded from the user's `looknfeel.lua`.
@@ -868,7 +890,7 @@ Made on the development laptop to give the phone internet over USB. Revert when 
   - To debug touch, `console.log` is hard to read back (binary `log.qslog`, needs `qs log`). Appending to a file through `Quickshell.execDetached` gave a clear trace.
 - **Packaged (2026-10-11).** `omamobile-shell` and `omamobile-device-cheetah` are built natively on the phone with makepkg and installed with pacman. Hand-copied files in `/etc`, `/usr/local/bin` and `/usr/share/omamobile/phone` are gone; the user's config points at `/usr/share/omamobile/shell`. The MAX77759 blacklist moved from the rootfs overlay into the device package (`/usr/lib/modprobe.d`). Still to do: a package repository so `omarchy update` (pacman -Syu) picks up new versions, instead of `pacman -U`.
 - **Omarchy per-user install audit (2026-10-11).** Against `install/user/all.sh`: theme, Chromium extensions and the keyring are in place; `mise-work.sh` (`~/Work`, node) and `xcompose.sh` were run by hand. Still open: git identity (`git.sh` needs the user's name and email) and `mise.sh` (Omarchy installs about 11 agent CLIs; only Claude is installed). The image build must run Omarchy's whole user install instead.
-- **Package repository (2026-10-11).** `[omamobile]` is in the phone's pacman.conf, before `[omarchy]`, through `/etc/pacman.d/omamobile-mirrorlist` (from `omamobile-device-cheetah`). Packages and the database are signed with the Omarchy Mobile key (`keys/`, never committed; public half in `omamobile-keyring`). While the project is private the repository lives on the phone at `/var/lib/omamobile/repo`: `tools/repo-build` builds (on the phone), signs and indexes it, `tools/repo-push` copies it over, and `pacman -Syu` / `omarchy update` installs new versions. Bootstrap on a new phone: `pacman-key --add` and `--lsign-key` the key once, then install `omamobile-keyring`. Our Mesa is tracked from `[omamobile]`, so Arch's can't replace it (we must keep it current with Arch's Mesa). `omarchy update` needs sudo, which asks for the PIN, so it runs in a terminal like on a computer.
+- **Package repository (2026-10-11).** `[omamobile]` is in the phone's pacman.conf, before `[omarchy]`, through `/etc/pacman.d/omamobile-mirrorlist` (from `omamobile-device-cheetah`). Packages and the database are signed with the Omamobile key (`keys/`, never committed; public half in `omamobile-keyring`). While the project is private the repository lives on the phone at `/var/lib/omamobile/repo`: `tools/repo-build` builds (on the phone), signs and indexes it, `tools/repo-push` copies it over, and `pacman -Syu` / `omarchy update` installs new versions. Bootstrap on a new phone: `pacman-key --add` and `--lsign-key` the key once, then install `omamobile-keyring`. Our Mesa is tracked from `[omamobile]`, so Arch's can't replace it (we must keep it current with Arch's Mesa). `omarchy update` needs sudo, which asks for the PIN, so it runs in a terminal like on a computer.
 - **Reserved memory audit (2026-10-11).** Firmware writing into memory the kernel thinks is free corrupts data, so every stock `reserved-memory` node was checked against `/proc/iomem`. Five were plain System RAM in our kernel: `seclog` (0xc3000000, written by the secure world at runtime), the modem's `cp_rmem`/`cp_rmem_1` (0xea400000, 0xe8000000), AoC's `xhci_dma` (0x97000000) and `ect_binary` (0x90000000). All are now `no-map` in gs201.dtsi (kernel e7cb10fe5). The regions they named, 0xd8100000 and 0xdc210000, were already inside our `dss` reservation.
 - **Battery model works (2026-10-12, gate B1b).** With the gauge in POR (Status 0x0002, DesignCap 0x0bb8, TaskPeriod 0x1680, Config 0x2354 with TEx set, so Temp stuck at 22.0 °C), the new loader wrote stock's 1 kΩ-ID ModelGauge m5 model at probe ("battery model loaded (DesignCap 0x9c5, TaskPeriod 0x2d00)"). Every register then matched the expected table in WIFI-BATTERY-PLAN.md B1b; charge_full 5000 mAh (design 5002), temp 35.0 °C from the thermistor, UPower 22.25 Wh. After a reboot POR stays clear and the model is kept without reloading. Merged into the main kernel (`omamobile`).
 

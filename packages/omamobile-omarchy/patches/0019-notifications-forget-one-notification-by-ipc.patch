@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Notifications: forget one notification by IPC. Omarchy Mobile's quick
+# Notifications: forget one notification by IPC. Omamobile's quick
 # settings list the toasts on screen and the history under the sheet, and a
 # sideways swipe on a row there takes away that one notification. The
 # service has calls for all toasts (dismissAll), all history (clear) and

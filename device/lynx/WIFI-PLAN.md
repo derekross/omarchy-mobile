@@ -35,7 +35,7 @@ stock-side read of the register the ROM consults is done (section 5). The
 published kernel has no PCIe node for lynx; the Wi-Fi branch stays local, and on the test phone
 `pcie_gs201` and `ath11k_pci` stay blacklisted (section 8). Bluetooth, on
 the same chip, scans on mainline through its own UART
-([linux-omarchy-mobile #98](https://github.com/derekross/linux-omarchy-mobile/pull/98),
+([linux-omamobile #98](https://github.com/derekross/linux-omamobile/pull/98),
 merged 2026-11-03); section 5 says what its device tree changes at the bench.
 Tracking issue: #36.
 
@@ -64,7 +64,7 @@ FlorencioJP pulled from theirs.
 | **The stock kernel stalls too when the BHI follows the probe cycle by 13 ms.** Google's minimal diagnostic on the stock kernel and stock `cnss2`, factory firmware started through `powerup`: buck up 5.49 s, link, `cannot receive L23_READY` 5.69 s, probe done, `powerup` 13 ms later, BHI 5.85 s, and the same stall as mainline at 13.0 s (`BHI_EXECENV` 0, `BHI_STATUS` 0, `BHI_ERRDBG3` `0x80000`); the same with a warm chip (reboot, buck already high). So probe-enumerate-power-off followed at once by a BHI is not enough, and the 7.7 s full Android leaves between the de-assert and the second assert is the variable ~~[V]~~ **inference failed:** step 6 waited 8 s and 30 s on mainline and stalled the same way (next row) | FlorencioJP, #36 2026-10-27 |
 | **Step 6 is negative.** The stock-shaped sequence on mainline, through a test harness: cold reset (buck dropped 0.5 s), buck, WLAN_EN, link, enumeration only, D3hot, PERST low, PHY and controller off, WLAN_EN low with the buck held for 8 s (and in a second run 30 s), then WLAN_EN, link, SysMMU, `ath11k`, MHI. Both runs: the same stall, `0xef0a0002`, and `WLAN_SECURE_BOOTN` `0x11111111`, `PBL_WLAN_BOOT_CFG` 0, `TLMM_PBL_BOOTSTRAP_STATUS` 0, `WLAON_MEM_SVS_CFG_REG` 0 [V] | FlorencioJP, #36 2026-10-27 18:10Z |
 | **Full Android's first load goes through Google's calibration handler, which sleeps 5 s first.** `cnss_cold_boot_cal_start_hdlr()` (`cnss2/main.c:1928-1932`, `CONFIG_WCN_GOOGLE`): "workaround: If COLD_BOOT_CAL starts too early, the MHI powers on failed. delay 5000 ms". `init.lynx.rc` writes `fs_ready`; `fs_ready_store()` posts `COLD_BOOT_CAL_START` because lynx's DT has `qcom,wlan-cbc-enabled`. This phone's two stock boots: `File system is ready` 5.722 s and 4.799 s, `Wait for 5 seconds to start calibration` 10.977 s and 9.955 s, then the buck, `Assert WLAN_EN` 11.086 s and 10.068 s, BHI 11.245 s and 10.137 s; FlorencioJP's two full-Android logs show the same (`File system is ready` 4.996 s and 8.089 s, the wait line 10.209 s and 13.282 s, BHI 10.404 s and 13.448 s). The diagnostic's `dev_boot powerup` posts `CNSS_DRIVER_EVENT_POWER_UP` directly (`debug.c:218-222`) and never takes that path [V] | `S/` (`android-gs-lynx-6.1-android16-dp`, the maintainer's reading on #36), stock `dmesg` 2026-10-23 and 2026-10-27; FlorencioJP, #36 2026-10-27 22:50Z |
-| **Earlier hypothesis, answered by section 7 item 1.** The diagnostic initially had Google's host stack and a 13 ms wait; step 6 had the wait and our host stack. The subsequent `fs_ready` diagnostic combined Google's host stack and full Android's wait and still stalled [V] | FlorencioJP, [#36 run 17](https://github.com/derekross/omarchy-mobile/issues/36#issuecomment-6456189000); section 7, item 1 |
+| **Earlier hypothesis, answered by section 7 item 1.** The diagnostic initially had Google's host stack and a 13 ms wait; step 6 had the wait and our host stack. The subsequent `fs_ready` diagnostic combined Google's host stack and full Android's wait and still stalled [V] | FlorencioJP, [#36 run 17](https://github.com/derekross/omamobile/issues/36#issuecomment-6456189000); section 7, item 1 |
 | **Bluetooth is not required.** FlorencioJP's full-Android reference 2 passed its first BHI at 13.45 s with Bluetooth first powered at 50.96 s (BT_EN low, the UART untouched); reference 1 and both of this phone's stock boots had BT up before the first BHI (here `BT-ON asserting BT_EN without WLAN` at 9.840 s and 7.989 s), and every diagnostic boot, which stalled, had it off [V] | FlorencioJP, #36 2026-10-27 19:54Z; stock `dmesg` here |
 | `TCSR_PBL_LOGGING` reads `0xef150600` before the first BHI on a chip that has never passed under Linux (three reads on 2026-10-25, one after a stalled diagnostic boot on 2026-10-26), so it is not a "good run finished" marker (section 5) [V] | FlorencioJP, #36 2026-10-27 19:54Z |
 | Stock runs with the HSI2 SysMMU translating (image buffers in `wifi_region`), a 36-bit DMA mask, PCIe I/A on, L1.2 on and three MSI vectors for MHI. The BHI load takes 57 ms [V] | `B/` |
@@ -215,7 +215,7 @@ What it says:
   register shows after power-up with WLAN_EN high and no BHI yet, not a
   "good run finished" marker. The warm/cold reading built on it is
   withdrawn. Two things stay open: on a kernel without the Bluetooth node
-  (linux-omarchy-mobile #98) `gph2-5` reads output low at every Linux boot,
+  (linux-omamobile #98) `gph2-5` reads output low at every Linux boot,
   and stock logs `BUCK GPIO: [0]` at 2.5 s, so if that GPIO really controls
   the rail the chip's core domain starts off on both sides; and no rail
   has been measured, so the 0.5 s "buck drop" in step 6 is a GPIO drop.

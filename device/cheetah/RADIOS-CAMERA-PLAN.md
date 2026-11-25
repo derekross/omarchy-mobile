@@ -1096,5 +1096,5 @@ Notes:
 8. **The camera EEPROM at `hsi2c_15` `0x50`.** Which camera module does it
    belong to?
 9. **C-PHY settings.** Accept generating them on the user's machine from
-   `liblyric_hwl.so`, or limit Omarchy Mobile to the two D-PHY cameras until
+   `liblyric_hwl.so`, or limit Omamobile to the two D-PHY cameras until
    another source appears?

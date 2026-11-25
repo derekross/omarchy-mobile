@@ -115,7 +115,7 @@ class Resolver:
 
     def update(self, cellular, servers):
         if cellular:
-            content = '# Omarchy Mobile cellular fallback (session only)\n' + ''.join('nameserver ' + s + '\n' for s in servers)
+            content = '# Omamobile cellular fallback (session only)\n' + ''.join('nameserver ' + s + '\n' for s in servers)
             current = self.path.read_text()
             if self.owned is None or current != self.owned:
                 self.original = current

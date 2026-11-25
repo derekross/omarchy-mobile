@@ -1022,12 +1022,12 @@ def notification_phrasing(t, patched, original):
 PROBE_NO_FINGERS = """found 1 devices
 Device at /net/reactivated/Fprint/Device/0
 Using device /net/reactivated/Fprint/Device/0
-User tester has no fingers enrolled for Pixel 7 Pro under-display fingerprint sensor (Omarchy Mobile).
+User tester has no fingers enrolled for Pixel 7 Pro under-display fingerprint sensor (Omamobile).
 """
 PROBE_ENROLLED = """found 1 devices
 Device at /net/reactivated/Fprint/Device/0
 Using device /net/reactivated/Fprint/Device/0
-Fingerprints for user tester on Pixel 7 Pro under-display fingerprint sensor (Omarchy Mobile) (press):
+Fingerprints for user tester on Pixel 7 Pro under-display fingerprint sensor (Omamobile) (press):
  - #0: right-thumb
 """
 PROBE_FAILED = """found 1 devices

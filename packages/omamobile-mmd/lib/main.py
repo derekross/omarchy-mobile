@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""omamobile-mmd: Omarchy Mobile's ModemManager-compatible bridge.
+"""omamobile-mmd: Omamobile's ModemManager-compatible bridge.
 
 Owns org.freedesktop.ModemManager1 on the system bus and serves MM 1.24's
 API (the subset in docs/TELEPHONY-APPS-PLAN.md section 1.4) from

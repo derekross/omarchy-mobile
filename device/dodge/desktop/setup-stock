@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# dodge-setup-stock: the rest of the stock Omarchy Mobile setup on the
+# dodge-setup-stock: the rest of the stock Omamobile setup on the
 # OnePlus 13 (dodge), after setup-ui: lock screen with PIN pad, power and
 # volume keys, on-screen keyboard (squeekboard), the phone window rules,
 # menu entries, Chromium flags, screensaver branding. Run as root:

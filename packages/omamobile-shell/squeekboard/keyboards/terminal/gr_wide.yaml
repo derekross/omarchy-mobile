@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Greek terminal layout for Omarchy Mobile: squeekboard 1.43.1's terminal/us_wide.yaml
+# Greek terminal layout for Omamobile: squeekboard 1.43.1's terminal/us_wide.yaml
 # (https://gitlab.gnome.org/World/Phosh/squeekboard, tag v1.43.1,
-# GPL-3.0-or-later) as changed for Omarchy Mobile (the action row, the terminal
+# GPL-3.0-or-later) as changed for Omamobile (the action row, the terminal
 # row of Esc, Tab, Ctrl, Alt, | ~ / and the arrows, the globe key sending
 # XF86MediaLanguageMenu), with the letter rows of squeekboard's gr.yaml. The
 # Greek layout was originally created by Antonis Tsolomitis (University of the

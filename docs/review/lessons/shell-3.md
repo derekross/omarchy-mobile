@@ -1,8 +1,135 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Review lessons: Shell and scripts (part 3 of 3)
+# Review lessons: Shell and scripts (part 3 of 4)
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-714. A "learn the user's choice" feature is probed with the sensor at
+  its floor and its ceiling.** The 7 Pro's light sensor is under the panel, so
+  a covered reading is common; one slider move while covered taught #636's
+  curve 206 nits for the dark. *Check:* run the learning path at both ends and
+  print what the learned curve then gives a decade either side. Extends L-536.
+  *From:* #636, round 50.
+- **L-713. A daemon that shares a sysfs value with an input handler is probed
+  for a write landing between its read and its write.** #636 reads the
+  backlight before each ramp step so the slider wins, but `omamobile-keys`'
+  write of 0 in that gap is overwritten and the lock shows lit. *Check:* drive
+  the controller on a fake device whose `write` hook changes the value first,
+  and walk every other writer on main (`git grep -n
+  'brightnessctl\|omarchy-brightness' packages`). Extends L-537 and L-615.
+  *From:* #636, round 50.
+- **L-712. A line a setup step writes into a user's config that loads a
+  package file is checked for the package going away.** #635 puts a bare
+  `dofile()` into `monitors.lua`; after a downgrade or a branch switch the
+  rest of the file doesn't run and Hyprland's default scale (2) takes over.
+  *Check:* evaluate the generated file with the target missing, and ask for a
+  guarded load with the old values as fallback. Extends L-442. *From:* #635,
+  round 50.
+- **L-711. A shell PR that adds a surface is re-read against the Back rules
+  main gained since its base; a clean merge hides them.** After #643, #539's
+  Hotspot page still closed everything on Escape (the one page where Back
+  skips a level), and #612's two always-mapped layers weren't in
+  `HomeModel.BACK_FURNITURE`, which takes Back away from the home screen.
+  *Check:* `git log <merge-base>..origin/main --
+  packages/omamobile-shell/plugins/omamobile.back`; each close path of the new
+  surface against the rule; `git grep -n 'namespace:' <head>` against
+  `BACK_FURNITURE` and `COVERING_LAYERS`. Extends L-615. *From:* #539, #612
+  and #582 with #643, round 50.
+- **L-710. `EPOCHREALTIME` carries the locale's decimal separator.** #640's
+  `${EPOCHREALTIME/./}` deadline became a comma expression under a comma
+  locale: a nonsense end time, and an octal error that ended the loop at
+  random. *Check:* `grep -n EPOCHREALTIME` in the diff; run the arithmetic
+  under a scratch comma locale (`localedef -i de_DE -f UTF-8
+  DIR/de_DE.UTF-8`, then `LOCPATH=DIR LC_ALL=de_DE.UTF-8`); prefer `date
+  +%s%3N` or strip `[.,]`. *From:* #640, round 50.
+- **L-709. A second writer of a credential is compared with the first one's
+  bookkeeping.** `omamobile-set-pin` records pin-or-password and sets the
+  lock's keypad toggle; #630's page calls the same `passwd` and knows nothing
+  of the record, so a password phone can't use it. *Check:* `git grep -n
+  passwd origin/main -- 'packages/*/bin'` and list every file the existing
+  path writes besides the password. Extends L-450. *From:* #630, round 50.
+- **L-708. A page that starts a credential change is checked for where the
+  result goes when the page is destroyed.** #630's Change PIN page drops its
+  result when Back, a relaunch (`navigate("root")`) or a D-Bus `Open` destroys
+  it while `passwd` runs, so the PIN can change with nothing on screen.
+  *Check:* list every way the page can go away mid-change, and ask that the
+  result outlive the page (kept in the runner, or a notification). Extends
+  L-616. *From:* #630, round 50.
+- **L-707. A settings page is run once from the state most phones are in: its
+  dependency missing.** #629's test covered "no theme: `get` says so" but not
+  the buttons still tappable there; `set level off` changed the phone-wide
+  profile and no button could change it back. *Check:* run every `set` verb of
+  the backend in the "unavailable" state, and read the QML for what stays
+  enabled after a failed first read. Extends L-617. *From:* #629, round 50.
+- **L-706. A timing fix for a test is verified by forcing the order of events,
+  not by loading the machine.** #638's "every loaded run failed" couldn't be
+  reproduced: main passed 4 of 4 pinned to one core under 12 busy loops. A
+  scratch wrapper that delayed the fake's `push()` 30 ms and stalled the
+  client before each property read made main fail with exactly the two
+  reported failures, and the head pass. *Check:* read the diagnosis for its
+  order of events, inject it by patching the test helpers from a file outside
+  the worktree, and compare the base's failures with the reported ones by
+  name and message. Extends L-346 and L-418. *From:* #638, round 50.
+- **L-677. Consent read from standard input is positional, and a caller that
+  pipes answers gives it by accident.** #639's typed yes is the first line
+  `tools/install-phone` reads; the `installer-m1a-tools` branch pipes its
+  answers and silences the prompts, so the user name would answer the slot
+  check. *Check:* for a new confirmation in a tool another tool drives, `git
+  grep` the open branches for callers that pipe its stdin, and ask for an
+  explicit option for callers, with `yes` read only from a terminal. Extends
+  L-44. *From:* #639, round 49, 2026-11-10.
+- **L-676. `debugfs mkdir` on an existing directory corrupts the image: it
+  allocates the inode before it fails to link it.** `tools/install-phone` ran
+  it unconditionally with output discarded and `|| true`; only its own
+  `e2fsck` caught it, as a refusal on any root that already had the directory.
+  *Check:* for every `debugfs -w` script (`git grep -n 'debugfs -w'`), run it
+  on a fixture that already holds each path it creates, then `e2fsck -fn`.
+  Extends L-635. *From:* #609 with issue #608, round 49, 2026-11-10.
+- **L-675. A timeout change in a request/response transport is judged by what
+  happens to an answer that did arrive, and per timer by whose clock it
+  follows.** #595 discarded a matching reply once the deadline had passed, so
+  the SMS path reported a sent message as "delivery uncertain"; and a request
+  deadline on `CLOCK_BOOTTIME` fails every request in flight across a sleep,
+  though its reply arrives on resume. *Check:* `git grep -n TimeoutError` the
+  callers and write down what the user is told for each non-idempotent request
+  (send, dial, hang up); mark every `monotonic()` deadline "our wait" or "the
+  network's time". *From:* #595 with #556, round 49, 2026-11-10.
+- **L-674. A stand-in server in a test applies its rules to the request, not
+  to its own storage path.** #593's fake `curl` matched nginx's dot-name deny
+  against `$S/<url path>`, so the test failed for anyone whose `$TMPDIR` had a
+  dot component and never on CI. *Check:* run a test whose stand-in filters by
+  name once with `TMPDIR` under a dot directory and once under one with a
+  space. Extends L-454. *From:* #593 with #586, round 49, 2026-11-10.
+- **L-673. A new shell surface is checked for how it draws icons and for new
+  theme keys, not only for colours and spacing.** #612 used Commons tokens
+  throughout but drew its marks as inline SVG data URIs, where the launcher's
+  pill a tap away uses the icon font. *Check:* `grep -n 'data:image\|\.svg'
+  <new qml>` against the neighbouring component's glyphs, and grep for
+  `styleAlpha(`, `styleNum(` or `styleString(` with a key no Omarchy theme
+  defines. *From:* #612, round 49, 2026-11-10.
+- **L-672. Moving a row's removal behind a reply is probed with two rows in
+  flight.** In #533 each acknowledgment replaced the JS-array model, the
+  Repeater rebuilt every delegate, and a second swiped row still waiting came
+  back at full height until its own reply; the PR's tests covered one row.
+  *Check:* in the PR's Qt fixture swipe two rows, answer `ok` for the first,
+  and read the second's `fold` and whether it is the same delegate; ask where
+  a new delegate gets per-delegate state from. Extends L-616. *From:* #533,
+  round 49, 2026-11-10.
+- **L-671. A fix that makes a long-failing restore succeed applies whatever
+  was saved before it started failing.** systemd-backlight saves in
+  `ExecStop`, which never runs for a unit that failed at boot, so #600's first
+  boot restores the level from the last shutdown at which the unit was active.
+  *Check:* find when the state was last saved and what saves it from now on
+  (here also a zero backlight behind the lock), and ask for one boot that
+  shows it. Extends L-623. *From:* #600, round 49, 2026-11-10.
+- **L-670. A blocking `systemctl start` inside a hang-marker phase inherits
+  the started unit's timeout.** #600 starts `systemd-backlight@` (90 s) from
+  the `display` phase of a start with `TimeoutStartSec=120`; a hung restore
+  would leave the marker and turn the next boot's graphics and Wi-Fi off.
+  *Check:* for every `systemctl start|restart` a boot script adds, read the
+  target's `TimeoutStartSec` against the caller's and the marker phase it runs
+  in; ask for `timeout N` or `--no-block`, and for cosmetic steps after the
+  last guarded one. Extends L-170, L-174 and L-613. *From:* #600, round 49,
+  2026-11-10.
 - **L-303. Powering an NFC adapter off through neard needs the poll loop
   stopped first.** neard 0.20's `Powered=false` is a bare `NFC_CMD_DEV_DOWN`,
   which `nfc_dev_down()` refuses with EBUSY while the device polls, so a hook
@@ -282,122 +409,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   packages/omamobile-firstboot` for the defaults, and ask for one client test
   (an address, then a ping out) before a "hotspot works" claim. Confirm or
   drop once a client test has run. *From:* #525, round 45, 2026-11-08.
-- **L-575. A Mesa `pkgrel` bump moves `_omamobile` with it (1.3 with
-  omamobile3, 1.4 with omamobile4).** The marker is what shows in `GL_VERSION`
-  and the libgallium name, so a bump that leaves it reports the old build on
-  the phone. *Check:* `git log -p -- packages/mesa/PKGBUILD | grep -E
-  '^[-+](pkgrel|_omamobile)='` on every Mesa PR. *From:* #500, round 45
-  (missed in round 44), 2026-11-08.
-- **L-576. A build host that is not Arch runs the tools' pacman steps in the
-  container, with that container's view of keys and users.** `repo-add` there
-  ran as `-u $(id -u)`, which under rootless Docker can't read the release
-  keyring (#544), and the Omarchy keyring isn't on the host at all (#547).
-  *Check:* a dry run of `tools/repo-publish` on a new build host before its
-  publish timer is enabled. *From:* #544, #547, 2026-11-08.
-- **L-613. An `EXIT` trap that clears a hang marker also runs when systemd
-  times the unit out.** Bash runs the EXIT trap on SIGTERM, also mid-write
-  when the block is interruptible, so #510's cleanup that removes the marker
-  turned a timed-out hang into "finished", and the next boot would repeat it.
-  *Check:* for a boot script with a marker and `TimeoutStartSec=`, find which
-  code paths remove the marker, then run the script with its slow step
-  replaced by a FIFO open and `kill -TERM` it: the marker should survive.
-  Extends L-170 and L-468. *From:* #510, round 46, 2026-11-09.
-- **L-614. A flag that blocks a repeated user action is checked for where it
-  is cleared.** #461's `releasing` stops a second hang-up while the first is
-  outstanding, but nothing clears it after a refusal or a timeout, so the
-  Phone app can then never end the call. *Check:* for every "in progress" flag
-  a PR adds to a user-facing method, `grep -n` every assignment and list the
-  states that clear it; a terminal error path with no clear is a question.
-  Extends L-302 and L-502. *From:* #461, round 46, 2026-11-09.
-- **L-615. When a PR serializes one caller of a shared state change, the
-  review re-lists the callers on today's main, not on the PR's base.** #508
-  locked the power key's short action; #420, merged a day later, added two
-  more display transitions in the same script that don't take the lock.
-  *Check:* `git diff <merge-base> origin/main -- <file>` for new entry points
-  that reach the same helpers (`wake_*`, `lock_dark`, `omarchy-system-lock`),
-  and ask whether each takes the lock. Extends L-462 and L-572. *From:* #508
-  with #420, round 46, 2026-11-09.
-- **L-616. Moving a UI removal behind an acknowledgment is checked against
-  what the row's own animation leaves on screen while it waits.** In #533,
-  `NotificationRow` folds to height 0 and only then calls
-  `forgetNotification`, so the row stays in the model, invisible, until the
-  reply; on a refusal it stays invisible until the next refresh, and a model
-  reset during the wait re-creates the delegate at full height. *Check:* read
-  the delegate's end-of-gesture code (the fold or fly-off) and the list's
-  refresh timers, list what the user sees on success, on failure and when a
-  refresh lands mid-wait, and ask the phone test to cover the last one.
-  Extends L-573. *From:* #533, round 46, 2026-11-09.
-- **L-617. A feature flag that a backend must report starts false in the
-  UI.** #539's `shareAvailable: true` drew the VPN boxes on every open until
-  the state line came, and kept them if parsing failed. *Check:* for each
-  `*Available` property a page reads from a helper, its default and the
-  `catch` path. Extends L-161 (fail towards not offering what isn't there).
-  *From:* #539, round 46, 2026-11-09.
-- **L-618. A Qt fixture that stands in for a production animation is checked
-  for how that animation is declared.** #518's test gates on a free-standing
-  `NumberAnimation` it starts by hand, while the real `revealAnimation` lives
-  in `Behavior on reveal`; whether a Behavior's animation reports `running`,
-  and when, decides whether the gate works on the phone (on Qt 6.12.0 it does,
-  synchronously on the property change). *Check:* when a fixture rebuilds an
-  animation, timer or handler outside its real context, write a ten-line
-  qmltestrunner case with the production declaration (a Behavior with an
-  `id`, plus a `Connections` on `runningChanged`) and log when the property
-  changes before accepting the fixture's result. Extends L-454. *From:* #518,
-  round 46, 2026-11-09.
-- **L-619. A gesture strip at `z: 100` over a scrolling list is probed for
-  which of the two takes an upward drag.** #553's 36 px DragHandler strip at
-  the bottom of the Wi-Fi page overlapped the list's last ~18 px, and the
-  probe showed the strip wins: the page closed and the list didn't scroll.
-  *Check:* compute the overlap from the phone's real values (`gaps_out = 0` in
-  `hypr/phone.lua`, the panel padding), then run a 30-line qmltestrunner probe
-  with the same handler over a ListView and swipe once inside and once
-  outside the overlap. Extends L-160. *From:* #553, round 46, 2026-11-09.
-- **L-620. A drag handler that measures `mouse.y - startY` inside an item its
-  own offset moves follows the finger at half speed.** Main's quick-settings
-  sheet and #553's card both do; a probe gave offsets `-10,-10,-20,-20,…` for
-  a finger moving 10 px a step, so a 60 px threshold needs 120 px. *Check:*
-  for any new drag that moves its own parent, run the probe, or read whether
-  the delta is taken in scene or window coordinates. *From:* #553, round 46,
-  2026-11-09.
-- **L-621. A surface condition that adds "or the keyboard is up" is checked
-  against every client that raises the keyboard, not only the one the PR is
-  about.** #557 meant the dock's and drawer's search, but `oskOpen` follows
-  squeekboard's visibility for any surface, so the strip (and its
-  drawer-opening swipe) also appears under quick settings' Wi-Fi password on
-  the home screen. *Check:* find where the flag comes from
-  (`omamobile-osk-watch`), list the surfaces with text fields that can be up
-  on the home screen (Wi-Fi, Bluetooth, Hotspot, the lock), and walk the new
-  branch for each. Extends L-160. *From:* #557, round 46, 2026-11-09.
-- **L-622. Relaxing one term of a visibility condition can expose an old race
-  that the term used to mask.** In #557, `appOnScreen` kept the strip off
-  under a lock taken from the home screen whatever `sessionLocked` said; with
-  `|| oskOpen`, the asynchronous lock query's stale answer now matters there
-  too. *Check:* for each term a PR loosens, list the other terms that are
-  asynchronous or cached and ask what they read in the window the old term
-  covered. *From:* #557, round 46, 2026-11-09.
-- **L-623. When a fix removes an error, check what that error was stopping.**
-  `omamobile-update` run as root over SSH had no `OMARCHY_PATH`, and Omarchy
-  4.0.6's `omarchy-update-dev` died on the unbound variable before anything
-  ran; #548's first change passed `OMARCHY_PATH` on, which would have let a
-  root run go on to Omarchy's migrations, and Omarchy keeps the per-user
-  record of which ran in `$HOME`, so a root run re-runs every one as root (59
-  on the 11-09 test install, through the NOTES gotcha's `OMARCHY_PATH=…`).
-  #548 now refuses root. *Check:* for a fix that makes a failing path
-  succeed, run the path with the fix and list what now executes after the old
-  failure point, as which user and with which `$HOME`, and ask which of those
-  steps keep per-user state. Extends L-29 and L-499. *From:* #548 with #560,
-  round 46, 2026-11-09.
-- **L-624. A fix that refuses a command is grepped against our own runbooks
-  for that command.** #548 refuses `omarchy update` as root, while
-  `tools/release`'s test-install steps print it under "over USB SSH", where
-  the login is root, and that runbook is what led to the 11-09 run.
-  *Check:* for any new refusal, `git grep` the command in `tools/release`,
-  `docs/`, `device/*/*-PLAN.md` and the NOTES gotchas, and check the user each
-  one runs as (`tools/phone-ssh` is root). *From:* #548 with #560, round 46,
-  2026-11-09.
-- **L-625. A sleep test run through a direct `/sys/power/state` freeze doesn't
-  cover hooks added in the same PR.** #556's cycles were `rtcwake` runs, which
-  skip `system-sleep` hooks (AGENTS §4, the 9a NFC gotcha). *Check:* compare
-  each hook's commit time with the runs, and ask for cycles through
-  `systemctl suspend` for any new or changed `system-sleep` hook. Extends
-  L-392. *From:* #556, round 46, 2026-11-09.

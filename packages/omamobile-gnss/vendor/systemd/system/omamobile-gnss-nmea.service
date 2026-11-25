@@ -4,7 +4,7 @@
 # (or by "omamobile-gnss force"); exits a minute after the last client goes,
 # which stops the GNSS stack with it.
 [Unit]
-Description=Omarchy Mobile GNSS NMEA bridge
+Description=Omamobile GNSS NMEA bridge
 BindsTo=omamobile-gnss.service
 After=omamobile-gnss.service
 Requires=omamobile-gnss-nmea.socket

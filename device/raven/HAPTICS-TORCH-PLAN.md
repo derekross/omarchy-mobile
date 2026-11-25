@@ -4,7 +4,7 @@
 Status (2026-10-15): **the torch works** (kernel `gd2521ee96675`, branch
 `omamobile-gs101-torch`); the owner tested the LED and the quick-settings
 tile. **Haptics work** (2026-10-28): the CS40L25A B1 (cheetah has a
-CS40L26A) through `cs40l25-vibra` (kernel derekross/linux-omarchy-mobile#114)
+CS40L26A) through `cs40l25-vibra` (kernel derekross/linux-omamobile#114)
 and feedbackd; key presses tick (section 2, H5).
 Cheetah's plan: [device/cheetah/HAPTICS-TORCH-PLAN.md](../cheetah/HAPTICS-TORCH-PLAN.md).
 
@@ -154,7 +154,7 @@ gets them from the owner's factory image when H3 needs them.
 
 **H5 (2026-10-27/28, `g97f09c8cfada` and `g3ba8c15c89b8`): passed.** The
 bring-up probes became one driver, `cs40l25-vibra` (kernel
-`omamobile-gs101-haptics`, upstream as derekross/linux-omarchy-mobile#114,
+`omamobile-gs101-haptics`, upstream as derekross/linux-omamobile#114,
 with its binding and raven's node), which probes at boot from the DT and
 exposes FF_RUMBLE through ff-memless:
 

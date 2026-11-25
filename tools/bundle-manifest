@@ -345,7 +345,7 @@ def main():
 
     manifest = {
         "format": fmt,
-        "name": "Omarchy Mobile",
+        "name": "Omamobile",
         "label": a.label,
         "version": a.version,
         "device": {"codename": codename, "name": d.get("NAME", "")},

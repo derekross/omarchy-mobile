@@ -3,7 +3,7 @@
 """Report the mobile network for the status bar (omamobile.bar).
 
 Reads ModemManager's D-Bus API on the system bus (org.freedesktop.
-ModemManager1: on Omarchy Mobile phones omamobile-mmd serves it; any phone
+ModemManager1: on Omamobile phones omamobile-mmd serves it; any phone
 with ModemManager works the same) and prints one JSON line per change:
 
     {"modem": true, "state": "registered", "strength": 75, "tech": "LTE",

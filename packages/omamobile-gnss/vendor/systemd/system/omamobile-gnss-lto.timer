@@ -3,7 +3,7 @@
 # downloads only when the file is old and the network is not cellular.
 # Enabled by "omamobile-gnss on", disabled by "off".
 [Unit]
-Description=Omarchy Mobile GNSS orbit predictions (LTO), periodic check
+Description=Omamobile GNSS orbit predictions (LTO), periodic check
 
 [Timer]
 OnBootSec=10min

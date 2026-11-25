@@ -11,8 +11,8 @@
 # systemd nothing when it is ready (no sd_notify): ordering the daemon's
 # own unit before the display manager would hold nothing.
 [Unit]
-Description=Omarchy Mobile install link: no login screen before the phone has an account
-Documentation=https://github.com/derekross/omarchy-mobile/blob/main/docs/INSTALL-LINK-PLAN.md
+Description=Omamobile install link: no login screen before the phone has an account
+Documentation=https://github.com/derekross/omamobile/blob/main/docs/INSTALL-LINK-PLAN.md
 ConditionPathExists=/etc/omamobile/install-link
 ConditionPathExists=!/var/lib/omamobile/firstboot/done
 After=omamobile-install-link.service
