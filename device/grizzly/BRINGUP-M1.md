@@ -2712,6 +2712,37 @@ Ramoops and `SYSTEM_LAST_KMSG` match. Fastboot returned after 133
 seconds, and stock D1 completed boot on A with enforcing verity and
 the original factory VBMeta digest.
 
+### Mainline v49 device initialization before discovery
+
+[v49 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/a1596ab67e57fc81c4465d066d70256ab519491f)
+uses the same polled SDB slot as v48. It requires a valid NOP IN and
+`bRefClkFreq=0x2`, then issues one standard `SET_FLAG` for `fDeviceInit`
+(IDN `0x01`). It polls that flag until the device clears bit 0, using
+the core's 1.5-second completion window and a bounded timeout for each
+transfer. The SET is an explicit device management write. A command
+error or timeout stops the sequence. The diagnostic issues no second
+SET, no other query write and no SCSI commands.
+
+The transfer list stops before Hibern8. The fixture preserves v48's
+read-only sysfs, `scsi_mod.scan=none`, zero-disk checks and warm return.
+It retains Deep H8 across HCI cleanup. It does not register a SCSI host
+or expose storage.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match the source, manifest and v48 private ramdisk. | Leave stock A selected on a mismatch. |
+| One attended slot B boot, power-control and device-init risk | With separate approval and the verified NV backup, capture the single accepted `fDeviceInit` SET, clear flag, status and elapsed time. Verify Hibern8, HCI cleanup, zero SCSI disks and the 90-second warm return. | Preserve the first transport or flag error. Do not repeat the SET or boot. Select stock A and confirm Android completes boot. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v49` passed strict
+checkpatch and seven mocked command-path cases. The core compiled at
+`W=1` with an existing kernel-doc warning for `link_only` in
+`ufshcd_hba_capabilities()`. The DTB and private rescue match v48.
+All five hashes, both AVB signatures, unpacked payload, ABL handoff
+and saved D1 slot sizes passed. Manifest SHA-256
+`a5318c22bdd3637f2baddcac37bb07ade6fd63b7a4303fbfaa47f87025f7febd`.
+Archive SHA-256 `7e7248ee9550780e2caeb5a1b3737b2b1a07a8c2997f2771fc52898f56adde38`.
+The device's response and flag-clear timing still need a hardware boot.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
