@@ -1,0 +1,94 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# omamobile-unlock: open the encrypted root from SSH, in the initramfs
+# (docs/SECURITY-PLAN.md §11.4). It races the PIN pad on the screen: the
+# first to open userdata as /dev/mapper/root wins, and the init goes on.
+#
+#   omamobile-unlock             the PIN on standard input (tools/phone-unlock
+#                                sends it; at a terminal it is asked, unechoed)
+#   omamobile-unlock --status    waiting, open, held, plain or unknown
+#   omamobile-unlock --selftest  PT2: the PIN pad against a 64 MiB scratch
+#                                volume in /run (test PIN 135790); userdata is
+#                                not opened. Ten idle minutes power the phone
+#                                off, as at a real boot.
+#
+# Exit status: cryptsetup's (0 opened, 2 wrong PIN), 1 for anything else.
+# The PIN goes to cryptsetup through a pipe with no newline (printf is a
+# shell builtin, so it is never on a command line), and nowhere else.
+export PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+device=$(cat /run/omamobile/crypt-device 2>/dev/null)
+
+status() {
+  if [ -b /dev/mapper/root ]; then echo open
+  elif [ -e /run/omamobile-held ]; then echo held
+  elif [ -n "$device" ]; then echo waiting
+  elif [ -d /run/omamobile ] || [ -e /run/ufs-ro ]; then echo plain
+  else echo unknown
+  fi
+}
+
+read_pin() {
+  local tty=""
+  if [ -t 0 ]; then
+    tty=1
+    printf 'PIN: ' >&2
+    stty -echo 2>/dev/null
+  fi
+  IFS= read -r pin || [ -n "$pin" ]
+  local rc=$?
+  [ -n "$tty" ] && { stty echo 2>/dev/null; echo >&2; }
+  return $rc
+}
+
+selftest() {
+  local img=/run/omamobile-selftest.img rc start
+  if [ "$(status)" = waiting ]; then
+    echo "omamobile-unlock: the boot is waiting for the root's PIN; the self-test runs only in a held initramfs" >&2
+    return 1
+  fi
+  echo "self-test: making a 64 MiB LUKS2 volume in /run (test PIN 135790), at the cost of a real one"
+  dd if=/dev/zero of="$img" bs=1M count=64 2>/dev/null || return 1
+  if ! printf '%s' 135790 | cryptsetup luksFormat --batch-mode --type luks2 --pbkdf argon2id \
+      --pbkdf-memory 1048576 --pbkdf-parallel 4 --pbkdf-force-iterations 4 --key-file=- "$img"; then
+    rm -f "$img"
+    echo "self-test: luksFormat failed" >&2
+    return 1
+  fi
+  cryptsetup luksDump "$img" | grep -E 'Version|PBKDF|Memory|Threads|Time cost|cipher' | sed 's/^/self-test: /'
+  echo "self-test: the PIN pad is on the screen; 135790 opens the test volume"
+  start=$(cut -d. -f1 /proc/uptime)
+  omamobile-pinpad --marker /run/omamobile-pinpad -- cryptsetup open --test-passphrase "$img" --key-file=-
+  rc=$?
+  rm -f "$img"
+  echo "self-test: the pad exited $rc after $(( $(cut -d. -f1 /proc/uptime) - start )) s"
+  case $rc in
+    0) echo "self-test: PIN accepted" ;;
+    3) echo "self-test: ten minutes with no input: powering off, as a real boot does"
+       omamobile-pinpad --power-off ;;
+    5) echo "self-test: no usable display (fb0)" ;;
+  esac
+  return $rc
+}
+
+case ${1:-} in
+  --status) status ;;
+  --selftest) selftest ;;
+  "")
+    case $(status) in
+      open) echo "omamobile-unlock: already open"; exit 0 ;;
+      waiting) ;;
+      *) echo "omamobile-unlock: no encrypted root waits for its PIN ($(status))" >&2; exit 1 ;;
+    esac
+    read_pin || { echo "omamobile-unlock: no PIN on standard input" >&2; exit 1; }
+    printf '%s' "$pin" | cryptsetup open "$device" root --key-file=-
+    rc=$?
+    pin=""
+    case $rc in
+      0) echo "omamobile-unlock: opened; the phone goes on booting" ;;
+      2) echo "omamobile-unlock: wrong PIN" >&2 ;;
+      5) [ -b /dev/mapper/root ] && { echo "omamobile-unlock: opened on the phone meanwhile"; rc=0; } ;;
+    esac
+    exit $rc ;;
+  *) awk 'NR > 2 && !/^#/ { exit } NR > 2' "$0" | sed 's/^# \{0,1\}//' >&2; exit 1 ;;
+esac

@@ -33,7 +33,9 @@
 # tools/alpine-fetch.py stopping when it fails, and its dependency
 # resolution against synthetic indexes, and the tools' --help from their
 # header comments (tools/lib/usage.sh), and the descriptor's INSTALL_SLOT
-# and INSTALL_ACTIVE_SLOTS read alike by every reader.
+# and INSTALL_ACTIVE_SLOTS read alike by every reader, and the encrypted
+# root (docs/SECURITY-PLAN.md §11): the init's unlock, off without
+# INITRAMFS_CRYPT, and the PIN pad.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 for f in tools/install-guided tools/install-phone tools/phone-provision tools/nv-backup tools/build-rootfs tools/build-packages tools/make-bundle \
@@ -45,6 +47,7 @@ for f in tools/install-guided tools/install-phone tools/phone-provision tools/nv
 done
 python3 -I -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" tools/bundle-manifest || { echo "not ok - tools/bundle-manifest parses" >&2; exit 1; }
 sh -n initramfs/init
+sh -n initramfs/omamobile-unlock
 sh -n device/flame/initramfs/init
 sh -n device/flame/initramfs/build
 bash -n tools/build-flame-probe
@@ -54,6 +57,8 @@ python3 tests/boot-arch-label.py
 python3 tests/persistent-root-boot.py
 python3 tests/initramfs-root-policy.py
 python3 tests/bt-uart-gpio.py
+python3 tests/crypt-unlock.py
+python3 tests/pinpad.py
 for t in tests/pr-check tests/kernel-pr-check tests/phone-smoke tests/alarm-wake-test tests/install-phone tests/build-rootfs tests/rootfs-placeholders tests/rootfs-resolve tests/phone-provision tests/nv-backup tests/initramfs-grow tests/images-layout tests/boot-update-parity tests/stage-boot-files tests/build-packages-host-tools tests/initramfs-reproducible tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/grep-q-pipes tests/boot-method tests/modules-push tests/make-bundle-keys tests/make-bundle tests/release-signing tests/pinned-packages tests/flame-probe tests/dipper-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all packages/omamobile-device-lynx/test/all packages/omamobile-device-panther/test/all tests/local-builds tests/phone-install-package tests/publish-kernel tests/fetch-toolchain tests/release-upload tests/extract-camera-data tests/release tests/build-host-sync tests/lineage-ref tests/repo-publish tests/repo-publish-stage tests/extract-vendor-firmware tests/alpine-fetch-callers tests/alpine-fetch tests/tools-help tests/install-phone-initramfs tests/install-slot-descriptor; do
   echo "# $t"
   "$t"

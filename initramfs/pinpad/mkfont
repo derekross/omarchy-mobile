@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Render the PIN pad's glyphs for the initramfs (docs/SECURITY-PLAN.md §11.5).
+
+Usage: mkfont FONT PANEL_WIDTH OUTDIR
+
+Writes OUTDIR/big.font (the keys' digits) and OUTDIR/small.font (the titles
+and messages), sized for a panel PANEL_WIDTH pixels wide, from FONT (a font
+file or a name ImageMagick knows). Each is the format omamobile-pinpad
+reads: "OMPF", u16 glyph count, u16 height, then per glyph a u8 character,
+a u16 width and width * height bytes of alpha, little-endian. Only the
+characters the pad prints are rendered; the pad falls back to its built-in
+capitals for anything else. Needs ImageMagick's magick.
+"""
+import struct
+import subprocess
+import sys
+from pathlib import Path
+
+# Every character the pad's strings use (pinpad.c: titles, messages, keys)
+CHARS = "".join(sorted(set("0123456789 .()-:" "Enter PIN" "Unlocking..." "Wrong PIN"
+                           "Try again in s" "Unlock failed" "OK")))
+
+
+def glyph(font, px, ch):
+    # label: renders one line at the font's line height, so every glyph of
+    # one size has the same height and its advance as its width
+    args = ["magick", "-background", "black", "-fill", "white", "-font", font,
+            "-density", "72", "-pointsize", str(px), f"label:{ch}"]
+    size = subprocess.run(args + ["-format", "%w %h", "info:"], check=True,
+                          capture_output=True, text=True).stdout.split()
+    w, h = int(size[0]), int(size[1])
+    data = subprocess.run(args + ["-colorspace", "gray", "-depth", "8", "gray:-"],
+                          check=True, capture_output=True).stdout
+    if len(data) != w * h:
+        sys.exit(f"mkfont: {ch!r}: {len(data)} bytes for {w}x{h}")
+    return w, h, data
+
+
+def space(font, px):
+    # label: refuses a lone space: its advance is "x x" less "xx"
+    wide, h, _ = glyph(font, px, "x x")
+    narrow = glyph(font, px, "xx")[0]
+    return wide - narrow, h, bytes((wide - narrow) * h)
+
+
+def font_file(font, px, chars, out):
+    glyphs = [(ch, *(space(font, px) if ch == " " else glyph(font, px, ch))) for ch in chars]
+    height = max(g[2] for g in glyphs)
+    blob = bytearray(b"OMPF" + struct.pack("<HH", len(glyphs), height))
+    for ch, w, h, data in glyphs:
+        if h != height:  # pad short glyphs at the bottom; label: rarely differs
+            data += bytes(w * (height - h))
+        blob += struct.pack("<BH", ord(ch), w) + data
+    out.write_bytes(blob)
+
+
+def main():
+    if len(sys.argv) != 4:
+        sys.exit(__doc__.strip().splitlines()[2])
+    font, width, outdir = sys.argv[1], int(sys.argv[2]), Path(sys.argv[3])
+    outdir.mkdir(parents=True, exist_ok=True)
+    # About the size of the pad's built-in fallback (pinpad.c pad_main):
+    # the keys' digits a third of a key high, the text a third of that
+    font_file(font, width * 10 // 100, "0123456789KO", outdir / "big.font")
+    font_file(font, width * 4 // 100, CHARS, outdir / "small.font")
+
+
+if __name__ == "__main__":
+    main()
