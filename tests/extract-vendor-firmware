@@ -285,11 +285,13 @@ for f in adsp cdsp venus wlanmdsp; do printf '\177ELF %s' "$f" > "$t/sargo/firmw
 for f in adspr adspua cdspr modemuw; do echo "{\"$f\": 1}" > "$t/sargo/firmware/$f.jsn"; done
 echo "fictional NV" > "$t/sargo/firmware/crnv21.bin"
 echo "fictional ROM patch" > "$t/sargo/firmware/crbtfw21.tlv"
+echo "fictional board data" > "$t/sargo/firmware/bdwlan-sargo.bin"
 echo "not mapped" > "$t/sargo/firmware/unrelated.b00"
 SARGO_FILES=$({
   printf 'qcom/sdm670/sargo/%s\n' a615_zap.b00 a615_zap.b01 a615_zap.mbn adsp.mbn adspr.jsn \
     adspua.jsn cdsp.mbn cdspr.jsn ipa_fws.b00 ipa_fws.b01 ipa_fws.b02 ipa_fws.mbn modemuw.jsn venus.mbn wlanmdsp.mbn
   printf 'qca/sdm670/sargo/%s\n' crbtfw21.tlv crnv21.bin
+  echo ath10k/WCN3990/hw1.0/board-2.bin
 } | LC_ALL=C sort)
 o=$t/sargo-out n=$failed
 if run "$t/sargo" "$t/ext4.img" -d sargo -o "$o"; then
@@ -299,7 +301,22 @@ if run "$t/sargo" "$t/ext4.img" -d sargo -o "$o"; then
     fail "sargo: the zap shader's metadata is renamed .mbn and its segments sit beside it"
   [[ ! -e $o/$REG ]] || fail "sargo: no sensor registry"
   (cd "$o/$FW" && sha256sum --quiet -c "$o/vendor-firmware.sha256") || fail "sargo: output checksums match"
-  pass_since "$n" "sargo: the vendor partition maps its firmware and the split segments"
+  # ath10k's board-2.bin: the magic, then one BOARD IE holding the board
+  # name and Google's board data (drivers/net/wireless/ath/ath10k/hw.h)
+  python3 -I - "$o/$FW/ath10k/WCN3990/hw1.0/board-2.bin" <<'PY_BOARD' || fail "sargo: the Wi-Fi board file holds one entry under the board's name"
+import struct, sys
+b = open(sys.argv[1], 'rb').read()
+assert b[:20] == b'QCA-ATH10K-BOARD\0\0\0\0'
+i, n = struct.unpack_from('<II', b, 20)
+assert i == 0 and 28 + n + (-n % 4) == len(b)
+ni, nn = struct.unpack_from('<II', b, 28)
+assert ni == 0 and b[36:36 + nn] == b'bus=snoc,qmi-board-id=ff,qmi-chip-id=30214,variant=google_sargo'
+o = 36 + nn + (-nn % 4)
+di, dn = struct.unpack_from('<II', b, o)
+assert di == 1 and b[o + 8:o + 8 + dn] == b'fictional board data\n'
+PY_BOARD
+  grep -qF "No radio image" "$t/log" || fail "sargo: a vendor image alone says the modem's files are not staged"
+  pass_since "$n" "sargo: the vendor partition maps its firmware, the split segments and the Wi-Fi board file"
 else
   cat "$t/log"; fail "sargo: extraction from a vendor image succeeds"
 fi
@@ -316,6 +333,66 @@ printf '\177ELF adsp' > "$t/sargo/firmware/adsp.mbn"
 sed -i 's/=sargo$/=bonito/' "$t/sargo/build.prop"
 run "$t/sargo" "$t/ext4.img" -d sargo -o "$t/sargo-bonito" && fail "sargo: the Pixel 3a XL's vendor partition is refused"
 says "sargo: the Pixel 3a XL's vendor partition" "error: vendor partition is for 'bonito', not sargo; use -f to override"
+sed -i 's/=bonito$/=sargo/' "$t/sargo/build.prop"
+
+# sargo's factory zip: the modem's files from its radio image, an FBPK
+# container around the modem partition's FAT16 (made up here: image/ with
+# the MBA, the split modem ELF, one segment two clusters long, and files
+# that are not staged)
+python3 -I - "$t/sargo-factory.zip" "$t/ext4.img" <<'PY_FACTORY'
+import io, struct, sys, zipfile
+files = {'MBA     MBN': b'\x7fELF mba', 'MODEM   MDT': b'\x7fELF modem metadata',
+         'MODEM   B00': b'modem segment 0', 'MODEM   B01': b'segment 1 ' * 70,
+         'QDSP6M  QDB': b'qdb', 'MODEMR  JSN': b'{"modemr": 1}', 'VERSION CFG': b'not staged'}
+bps, clusters, rootents = 512, 4200, 16
+fatsz = -(-(clusters + 2) * 2 // bps)
+root = 1 + fatsz
+data = root + rootents * 32 // bps
+img = bytearray((data + clusters) * bps)
+struct.pack_into('<3s8sHBHBHHBHHHII', img, 0, b'\xeb\x3c\x90', b'MSDOS5.0', bps, 1, 1, 1, rootents,
+                 data + clusters, 0xf8, fatsz, 63, 255, 0, 0)
+img[510:512] = b'\x55\xaa'
+fat = [0xfff8, 0xffff]
+def alloc(n):
+    first = len(fat)
+    for k in range(n):
+        fat.append(first + k + 1 if k < n - 1 else 0xffff)
+    return first
+def entry(name, attr, cluster, size):
+    return name.encode().ljust(11) + bytes([attr]) + bytes(14) + struct.pack('<HI', cluster, size)
+d = alloc(1)
+listing = entry('.', 0x10, d, 0) + entry('..', 0x10, 0, 0)
+for name, body in files.items():
+    c = alloc(-(-len(body) // bps))
+    at = (data + c - 2) * bps
+    img[at:at + len(body)] = body
+    listing += entry(name, 0x20, c, len(body))
+img[(data + d - 2) * bps:(data + d - 2) * bps + len(listing)] = listing
+img[root * bps:root * bps + 64] = entry('NO NAME', 0x08, 0, 0) + entry('IMAGE', 0x10, d, 0)
+for k, v in enumerate(fat):
+    struct.pack_into('<H', img, bps + 2 * k, v)
+radio = b'FBPK' + struct.pack('<I', 1) + b'fictional'.ljust(68, b'\0') + struct.pack('<II', 1, 0x8c + len(img))
+radio += struct.pack('<I', 1) + b'modem'.ljust(36, b'\0') + struct.pack('<QII', len(img), 0, 0) + bytes(img)
+inner = io.BytesIO()
+with zipfile.ZipFile(inner, 'w') as z:
+    z.writestr('android-info.txt', 'require board=sargo\n')
+    z.writestr('vendor.img', open(sys.argv[2], 'rb').read())
+with zipfile.ZipFile(sys.argv[1], 'w') as z:
+    z.writestr('sargo-fictional/radio-sargo-fictional.img', radio)
+    z.writestr('sargo-fictional/image-sargo-fictional.zip', inner.getvalue())
+PY_FACTORY
+o=$t/sargo-factory-out n=$failed
+if run "$t/sargo" "$t/sargo-factory.zip" -d sargo -o "$o"; then
+  want=$({ echo "$SARGO_FILES"; printf 'qcom/sdm670/sargo/%s\n' mba.mbn modem.mbn modem.b00 modem.b01 qdsp6m.qdb modemr.jsn; } | LC_ALL=C sort)
+  [[ $(listed "$o") == "$want" ]] || { listed "$o"; fail "sargo: the factory zip adds the modem's files and nothing else"; }
+  [[ $(cat "$o/$FW/qcom/sdm670/sargo/modem.mbn") == $'\177ELF modem metadata' &&
+     $(cat "$o/$FW/qcom/sdm670/sargo/modem.b01") == "$(printf 'segment 1 %.0s' {1..70})" ]] ||
+    fail "sargo: modem.mdt is staged as modem.mbn, and a segment over two clusters whole"
+  (cd "$o/$FW" && sha256sum --quiet -c "$o/vendor-firmware.sha256") || fail "sargo: factory zip output checksums match"
+  pass_since "$n" "sargo: the factory zip's radio image gives the modem's firmware"
+else
+  cat "$t/log"; fail "sargo: extraction from a factory zip succeeds"
+fi
 
 # --- A reused output directory -------------------------------------------------
 o=$t/reuse n=$failed

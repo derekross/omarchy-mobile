@@ -75,8 +75,25 @@
 #                                                  board's NV and ROM patch, named by
 #                                                  the DT's firmware-name)
 #
-# The modem's own mba.mbn and modem.mbn are not in the vendor partition (they
-# are on the phone's modem partition) and are not staged here.
+# The modem's own files are not in the vendor partition: they are on the
+# phone's modem partition, which the factory zip carries as its radio image
+# (radio-sargo-*.img, an FBPK container around the partition's FAT; read as
+# data by tools/lib/qcom-firmware.py, nothing mounted). Given the factory zip
+# itself, they are staged too; given the inner image zip or a vendor.img,
+# they are left out, with a note:
+#
+#   radio: modem/image/mba.mbn                  -> qcom/sdm670/sargo/mba.mbn
+#   radio: modem/image/modem.mdt                -> qcom/sdm670/sargo/modem.mbn
+#   radio: modem/image/modem.bNN                -> beside it
+#   radio: modem/image/{qdsp6m.qdb,modemr.jsn}  -> qcom/sdm670/sargo/
+#
+# Wi-Fi's board data is Google's own file, under the board name ath10k asks
+# for (linux-firmware's board-2.bin has no entry for this board), as an
+# ath10k board-2.bin of that one entry, which takes the place of
+# linux-firmware's for this phone:
+#
+#   vendor/firmware/bdwlan-sargo.bin -> ath10k/WCN3990/hw1.0/board-2.bin
+#        (bus=snoc,qmi-board-id=ff,qmi-chip-id=30214,variant=google_sargo)
 #   bluetooth/image/crbtfw21.tlv                -> qca/crbtfw21.tlv
 #
 # The Pixel 9a (-d tegu; <board> is "google,zumapro-tegu"):
@@ -149,8 +166,10 @@
 # resolves to it) is refused before anything is written.
 #
 # Needs: unzip, debugfs (e2fsprogs); simg2img if vendor.img is sparse;
-# lpunpack if the image only has super.img; fsck.erofs (erofs-utils) if vendor is EROFS.
+# lpunpack if the image only has super.img; fsck.erofs (erofs-utils) if vendor is EROFS;
+# python3 for sargo.
 set -euo pipefail
+TOOLS_LIB=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/lib" && pwd)
 # debugfs and friends live in /sbin on Debian-like hosts
 export PATH=$PATH:/usr/sbin:/sbin
 
@@ -432,6 +451,14 @@ fetch_vendor() {
   need unzip "install unzip"
   # The outer factory zip wraps image-<device>-*.zip; the inner one has the images.
   inner=$(zip_member "$src" "image-[^/]*\.zip")
+  # sargo's modem files: the radio image beside it in the factory zip
+  if [[ $DEVICE == sargo ]]; then
+    m=$(zip_member "$src" "radio-$DEVICE-[^/]*\.img")
+    if [[ -n "$m" ]]; then
+      say "Unpacking $(basename "$m") from the factory zip"
+      unzip -p "$src" "$m" > "$WORK/radio.img"
+    fi
+  fi
   if [[ -n "$inner" ]]; then
     say "Unpacking $inner from the factory zip"
     unzip -p "$src" "$inner" > "$WORK/image.zip"
@@ -573,6 +600,43 @@ for entry in "${MAP[@]}"; do
   fi
 done
 
+# sargo: the modem's files from the radio image, and Wi-Fi's board data
+# as a board-2.bin. Files made here rather than copied are listed in EXTRA,
+# for the checksum check below.
+EXTRA=()
+if [[ $DEVICE == sargo ]]; then
+  need python3 "install python3"
+  qf() { python3 -I "$TOOLS_LIB/qcom-firmware.py" "$@"; }
+  if [[ -s $WORK/radio.img ]]; then
+    names=$(qf radio-list "$WORK/radio.img") || die "the radio image's modem partition can't be read"
+    grep -qx mba.mbn <<<"$names" && grep -qx modem.mdt <<<"$names" ||
+      die "the radio image's modem partition has no mba.mbn and modem.mdt"
+    for name in $names; do
+      case $name in
+        mba.mbn | qdsp6m.qdb | modemr.jsn | modem.b[0-9][0-9]) to=$name ;;
+        modem.mdt) to=modem.mbn ;;
+        *) continue ;;
+      esac
+      qf radio-get "$WORK/radio.img" "$name" "$dest/qcom/sdm670/sargo/$to" ||
+        die "modem/image/$name could not be copied from the radio image"
+      chmod 0644 "$dest/qcom/sdm670/sargo/$to"
+      EXTRA+=("qcom/sdm670/sargo/$to")
+      printf '  /radio/modem/image/%-17s -> /%s/%s\n' "$name" "$DEST_REL" "qcom/sdm670/sargo/$to"
+    done
+  else
+    say "No radio image (only the factory zip itself has one): the modem's files are not staged"
+  fi
+  get_file firmware/bdwlan-sargo.bin "$WORK/bdwlan.bin" ||
+    die "/vendor/firmware/bdwlan-sargo.bin is missing from this image or could not be copied"
+  board2=ath10k/WCN3990/hw1.0/board-2.bin
+  mkdir -p "$dest/$(dirname "$board2")"
+  qf board2 "$WORK/bdwlan.bin" "bus=snoc,qmi-board-id=ff,qmi-chip-id=30214,variant=google_sargo" "$dest/$board2" ||
+    die "the Wi-Fi board file could not be made"
+  chmod 0644 "$dest/$board2"
+  EXTRA+=("$board2")
+  printf '  /vendor/%-28s -> /%s/%s\n' "firmware/bdwlan-sargo.bin" "$DEST_REL" "$board2"
+fi
+
 # The AoC's sensor registry (which sensors this board has, their buses and
 # settings), read by omamobile-sensor-proxy; without it only virtual sensors.
 # husky has no AoC driver yet, so it skips the registry.
@@ -650,6 +714,12 @@ if [[ $DEVICE == sargo ]]; then
     [[ "$(od -An -c -N4 "$dest/qcom/sdm670/sargo/$f.mbn" | tr -d ' ')" == '177ELF' ]] ||
       die "/vendor/firmware/$f is not an ELF file"
   done
+  if [[ -e $dest/qcom/sdm670/sargo/modem.mbn ]]; then
+    for f in mba modem; do
+      [[ "$(od -An -c -N4 "$dest/qcom/sdm670/sargo/$f.mbn" | tr -d ' ')" == '177ELF' ]] ||
+        die "the radio image's $f is not an ELF file"
+    done
+  fi
 fi
 
 # The MFC firmware: a vector table of eight ARM branches (cond AL, opcode
@@ -670,14 +740,16 @@ if [[ $DEVICE != dipper && $DEVICE != sargo ]]; then
 fi
 (cd "$dest" && find . -type f -printf '%P\n' | LC_ALL=C sort | xargs sha256sum -- > "$new/vendor-firmware.sha256")
 # The checksum list names exactly the mapped files
-for entry in "${MAP[@]}"; do printf '%s\n' "${entry#*|}"; done | LC_ALL=C sort > "$stage/expected"
+{ for entry in "${MAP[@]}"; do printf '%s\n' "${entry#*|}"; done
+  for f in "${EXTRA[@]}"; do printf '%s\n' "$f"; done; } | LC_ALL=C sort > "$stage/expected"
 cut -c67- "$new/vendor-firmware.sha256" | cmp -s - "$stage/expected" ||
   die "the staged firmware is not exactly the mapped files"
 
 if [[ $DEVICE == dipper ]]; then
   say "Mapped Dipper firmware and split Qualcomm modem segments"
 elif [[ $DEVICE == sargo ]]; then
-  say "Mapped Pixel 3a firmware and the split zap shader and IPA segments"
+  say "Mapped Pixel 3a firmware, the split zap shader and IPA segments and the Wi-Fi board file"
+  [[ -e $dest/qcom/sdm670/sargo/modem.mbn ]] && say "Modem firmware: mba.mbn, modem.mbn and its segments from the radio image"
 else
 say "Wi-Fi firmware: ${ver:-unknown version}"
 fi
