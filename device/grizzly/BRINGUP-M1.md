@@ -105,6 +105,7 @@ whether it predated a stock boot.
 | [v70](#attended-v70-slot-b-trial) | After v69. Stock D1 A preflight matched the prior return. The v70 boot was requested at 18:34:28 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 | [v71](#attended-v71-slot-b-trial) | After v70. Stock D1 A preflight matched the prior return. The v71 boot was requested at 20:45:44 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 | [v72](#attended-v72-slot-b-trial) | The Mac left verified stock D1 A at 21:02:34 UTC on 2026-11-25. A guarded B rescue returned to Fastboot with A selected before the v72 boot request at 21:24:55 UTC. | Fresh read-only rescue copy verified at 21:13:45 UTC. All nine hashes were rechecked before staging. The stock A return after v72 requires a new copy before the next power or CPM trial. |
+| [v73](#attended-v73-slot-b-trial) | The Mac left verified stock D1 A at 21:35:59 UTC on 2026-11-25. A guarded B rescue returned to Fastboot with A selected before the v73 boot request at 21:42:45 UTC. | Fresh read-only rescue copy verified at 21:41:18 UTC. All nine hashes passed. The stock A return after v73 requires a new copy before the next power or CPM trial. |
 
 [Maintainer decision on backup freshness](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035).
 Take a fresh read-only backup of all nine partitions after the latest
@@ -4272,6 +4273,31 @@ leave the phone in Fastboot. Boot v73 once and capture both
 reference reads, the single 8 KiB partition read and IRQ result,
 the byte comparison and the read-only guard checks. Return to
 stock A and retrieve the retained trace.
+
+#### Attended v73 slot B trial
+
+The guarded stock D1 rescue copied and independently verified
+all nine read-only, unmounted NV targets on 2026-11-25. The copy
+took 255 seconds and the Mac verified the saved 3,392,151,552
+bytes again. The bridge reported no timeouts. The rescue returned
+to Fastboot with A selected and Android stayed off while the
+Mac staged all five v73 images. The readback matched all 8,192
+supplied `vendor_boot_b` bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 2.182531–2.183960 | Direct qualification | Both GPT headers passed. Two direct 4 KiB reads supplied the reference for `boot_b`, partition 23, starting at LUN 0 LBA 598,711. |
+| 2.198941 | GPT scan | Seven GPT metadata reads completed, with no rejection or EFI fallback. The kernel verified 42 read-only partitions. |
+| 2.199002–2.199281 | Partition read | One READ(10) used one 8,192-byte DMA-from-device segment. Tag 31 completed by IRQ with OCS 0, status 0 and zero residual. All 8,192 bytes matched the direct reference. |
+| 2.384079–2.384506 | RAM verification | The guard verified all 42 partitions as read-only and unmounted. The RAM stage mounted no storage. |
+| 6.450208–6.450411 | Cleanup | Hibern8 passed, HC and PHY reached `0x11`, and the HCI IRQ was freed. |
+| 90.192793–91.195611 | Timed warm return | Zero SCSI disks before restart. |
+
+The deferred-probe `device_links_no_driver` warning remained.
+Fastboot returned after 133 seconds. Stock D1 A restarted at
+21:45:18 UTC and completed boot with enforcing verity and the
+pretrial VBMeta digest. Ramoops and Android's `SYSTEM_LAST_KMSG`
+agree on all 76 filtered v73 lines.
 
 ### Offline stock D1 device reference-clock diagnostic
 
