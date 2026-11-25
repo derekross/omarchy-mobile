@@ -11,8 +11,9 @@
  * the pool and the MFC on.
  *
  * Minimum kernel: linux-omamobile's omamobile branch with both PRs above.
- * Neither is in any kernel-* release tag yet; on kernel-2026.11.15 and
- * older, or on a kernel with #289 but not the pool, a node is missing and
+ * The MFC (#289) is in kernel-2026.11.24; the pool (#297) isn't in a tag
+ * yet. On kernel-2026.11.15 and older, or on a kernel with #289 but not
+ * the pool (kernel-2026.11.24 included), a node is missing and
  * the overlay won't apply. Enable the pool with the MFC, never the MFC
  * alone: the kernel then probes it with no pool and no error.
  *
