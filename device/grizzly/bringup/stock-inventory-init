@@ -10,6 +10,7 @@ set -f
 bb=/grizzly-inventory/busybox
 mainline_marker=/grizzly-inventory/mainline-inventory
 device_query_marker=/grizzly-inventory/device-query-only
+single_lun_marker=/grizzly-inventory/single-lun-only
 inventory_prefix=grizzly-stock-inventory
 if [ -e "$mainline_marker" ] || [ -L "$mainline_marker" ]; then
     inventory_prefix=grizzly-mainline-inventory
@@ -131,14 +132,38 @@ run_mainline_inventory() {
             end_inventory 'cannot disable kernel module autoload'
         fi
     fi
+    query_scan=none
+    if [ -e "$single_lun_marker" ] || [ -L "$single_lun_marker" ]; then
+        [ -f "$single_lun_marker" ] && [ ! -L "$single_lun_marker" ] &&
+            [ -f "$device_query_marker" ] && [ ! -L "$device_query_marker" ] ||
+            end_inventory 'invalid single LUN marker'
+        query_scan=manual
+    fi
     if [ -e "$device_query_marker" ] || [ -L "$device_query_marker" ]; then
         [ -f "$device_query_marker" ] && [ ! -L "$device_query_marker" ] ||
             end_inventory 'invalid device query marker'
         IFS= read -r query_cmdline < /proc/cmdline || end_inventory 'device query command line unavailable'
-        case " $query_cmdline " in
-            *" scsi_mod.scan=none "*) ;;
-            *) end_inventory 'device query requires scsi_mod.scan=none' ;;
-        esac
+        scan_arg=
+        timeout_arg=
+        # Split kernel arguments on whitespace. Globbing is disabled above.
+        # shellcheck disable=SC2086
+        for arg in $query_cmdline; do
+            case $arg in
+                scsi_mod.scan=*)
+                    [ -z "$scan_arg" ] || end_inventory 'duplicate SCSI scan arguments'
+                    scan_arg=$arg ;;
+                scsi_mod.inq_timeout=*)
+                    [ -z "$timeout_arg" ] || end_inventory 'duplicate SCSI inquiry timeouts'
+                    timeout_arg=$arg ;;
+            esac
+        done
+        [ "$scan_arg" = "scsi_mod.scan=$query_scan" ] ||
+            end_inventory "device query requires scsi_mod.scan=$query_scan"
+        if [ "$query_scan" = manual ]; then
+            [ "$timeout_arg" = scsi_mod.inq_timeout=1 ] ||
+                end_inventory 'single LUN probe requires scsi_mod.inq_timeout=1'
+            stock_inventory_log 'single LUN probe policy verified'
+        fi
         stock_inventory_no_scsi_disks /sys/class/block ||
             end_inventory 'device query disk present or state unreadable'
         end_inventory 'device query RAM stage ready scsi_disks=0'

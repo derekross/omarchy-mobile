@@ -3756,6 +3756,49 @@ Fastboot returned after 133 seconds. Stock D1 A restarted at
 pretrial VBMeta digest. Ramoops and Android's `SYSTEM_LAST_KMSG`
 agree on all 38 filtered v65 lines.
 
+### Mainline v66 register one real SCSI child
+
+[v66 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/3e92b7cefbc0c490b9bdad6e3bd1f5b9b55373f9)
+uses the SCSI core's explicit device-add path for channel 0,
+target 0, LUN 0. The direct LUN 0 GPT and REPORT LUNS qualification
+still comes first. The add path requires `scsi_mod.scan=manual`
+because `scan=none` rejects the explicit add as well. Manual mode
+suppresses automatic host scans. `scsi_mod.inq_timeout=1` lowers the
+SCSI core's discovery request timeout to about 1.5 seconds.
+
+The diagnostic host allows only the child with the driver's private
+token and exact address. It permits one six-byte standard INQUIRY
+while that child is in the created state. The gate requires 36 bytes
+of DMA from the device in one scatterlist entry. The driver skips
+normal UFS per-LUN setup, optional VPD and opcode checks, and omits
+UFS attributes that could send queries. It blocks upper-layer driver
+matching. The verified config leaves `sd`, SG, BSG and RPMB disabled.
+
+Success requires a visible, running, unbound disk-type SCSI child
+with a 36-byte INQUIRY response. The driver removes that child,
+then removes the host and runs Hibern8 and HCI cleanup. This tests
+SCSI device discovery before adding a Linux block disk. The inherited
+emergency restart path for a stuck DMA transfer remains untested on
+hardware.
+
+Build the RAM fixture with `pack-mainline-inventory.py --single-lun-only`.
+The new marker requires the manual scan and inquiry timeout arguments
+and preserves the zero-disk checks at startup and before the timed
+return. It retains the private RAM environment, read-only sysfs
+after setting warm restart, and no userspace handoff.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match source, five image hashes, both AVB signatures, saved slot B capacities, packed manual scan arguments and both RAM markers. DTB and DTBO match v65. | Leave stock A selected if any check fails. |
+| One attended slot B trial | Check the RAM policy marker, one accepted 36-byte INQUIRY, matching IRQ with zero residual, child visibility and `no_uld=1 ret=0`. Confirm host removal, Hibern8, zero disks and the timed return to stock A. | Hold Volume Down after the first orange warning. Preserve the first failure, unexpected command, binding, disk or reset. Return to stock A without retrying. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v66` passed
+targeted arm64 `W=1` compilation, 22 sanitizer-backed kernel mock
+cases and nine RAM policy cases. Both AVB signatures, ABL handoff,
+all five image hashes, unpacked vendor payloads and saved D1 slot
+capacity checks passed. Manifest SHA-256 `9f77ddfe2ccebba61a7ac3a658b0d85b8bfc74ab1f1b923ee72dc5dbd98d9e4b`.
+Archive SHA-256 `7445e3f324d28c3c34e64a82af038b485121040ac60cf6372d61836bd92b2595`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
