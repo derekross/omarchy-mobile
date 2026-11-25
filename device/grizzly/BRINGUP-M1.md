@@ -2648,31 +2648,47 @@ this ramdisk awaits a separate enumerating kernel. The v39
 trial used its original RAM rescue. See the
 [v39 slot B result](#v39-slot-b-result).
 
-### Mainline UFS management query before discovery
+### Mainline v48 device management before discovery
 
-The current Malibu link/Hibern8 path omits transfer DMA
-queues and the SCSI host's reserved command queue
-(`ufshcd_init_common`, `ufshcd_probe_link_hibern8`).
-The `ufshcd_query_attr()` path requires both. Keep the
-link-only entry point for the PHY and link qualification.
-After it passes, a separate synchronous diagnostic can
-reuse the Malibu idle and legacy doorbell checks, allocate
-the transfer queues, register the temporary internal SCSI
-queue, and require a successful NOP before one
-`READ_ATTR(0x0a)`. A NOP also tests descriptor DMA and
-the command completion interrupt. Current Malibu variant
-ops lack the two resource hooks needed for MCQ, so the
-first query candidate should use legacy SDB.
+The ordinary `ufshcd_query_attr()` path uses a reserved SCSI
+request. Its recovery can call `ufshcd_complete_dev_init()` and
+write `fDeviceInit`. The [v48 kernel](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/57b81e11421bbc71e71fbb4b467b7d38c5535ae2)
+instead uses one polled legacy doorbell slot for NOP OUT and one
+`READ_ATTR(0x0a)` after a valid NOP IN. It reuses the
+core DMA descriptor allocation and layout. It requires legacy SDB
+support, an idle doorbell and a ready transfer list. It masks the
+transfer interrupt and suppresses UFS recovery work. Slot retirement,
+OCS, response transaction, tag and query fields must match before
+the driver compares `bRefClkFreq` with `0x2` for 38.4 MHz. A timeout
+attempts slot clear, then stops the list and exits through HCI cleanup.
+The Malibu probe retains DMA resources and UFS votes until the timed
+return. The diagnostic tests DMA and UPIUs without measuring transfer
+completion IRQ delivery.
 
-Keep `scsi_mod.scan=none` and a private read-only sysfs
-with no rescue shells for that query. Record the raw
-reference-clock code or the request error, then retire
-the request and stop HCI DMA before freeing descriptors.
-Exit before `fDeviceInit`, generic device parameter setup,
-the reference-clock setter, and asynchronous LUN scan.
-If the device rejects the read before `fDeviceInit`, that
-flag write and its timeout recovery need separate review.
-The stock fixture below supplies the comparison code.
+The v47 UIC and Hibern8 IRQ path remains active. The device query
+ends before Hibern8, and Deep H8 is held through HCI teardown. The
+host never registers a SCSI host, sends a SCSI command, issues a
+query write or initiates `fDeviceInit`. The packed vendor boot
+command line adds `scsi_mod.scan=none`. Build the private rescue
+with `pack-mainline-inventory.py --device-query-only`. It keeps sysfs
+read-only after setting warm return, checks that no SCSI disks appear,
+and starts no shell or network service. Any result leaves storage
+enumeration for a separate fixture.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Verify the manifest, private ramdisk membership and the scan-disabled command line. | Leave stock A selected on a mismatch. |
+| One attended slot B boot, power-control risk | With separate approval and the verified NV backup, capture a valid NOP IN, `READ_ATTR(0x0a)`, raw code `0x2`, and held-clock HCI teardown. Expect zero SCSI disks and the 90-second warm return. | Preserve the first transport refusal, doorbell or response error, or mismatched code. Stop after any unexpected disk or early reset. Select stock A and verify Android. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v48` passed strict
+checkpatch, `W=1` on UFS core and host, seven mocked query and refusal
+cases, shell parsing and ShellCheck. The DTB matches v47. The five
+image hashes, both AVB signatures, unpacked payload, ABL handoff and
+saved slot capacities passed. Manifest SHA-256
+`4394206b525cb77de109bba51148deeeefea3f411ce07367bcc79f833ce0abfd`.
+Archive SHA-256 `9a65a5c8dde3bc21194aff5c41e361e6e7b6598ccda38edd9268f52227c12b4c`.
+Legacy SDB availability and the actual device response before
+`fDeviceInit` still need the Pixel.
 
 ### Offline stock D1 device reference-clock diagnostic
 

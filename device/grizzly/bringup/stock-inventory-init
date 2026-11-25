@@ -9,6 +9,7 @@ umask 077
 set -f
 bb=/grizzly-inventory/busybox
 mainline_marker=/grizzly-inventory/mainline-inventory
+device_query_marker=/grizzly-inventory/device-query-only
 inventory_prefix=grizzly-stock-inventory
 if [ -e "$mainline_marker" ] || [ -L "$mainline_marker" ]; then
     inventory_prefix=grizzly-mainline-inventory
@@ -50,6 +51,13 @@ start_return_timer() {
                 check_factory_preloads before-restart ||
                     stock_inventory_log "preloads-only checks failed before restart" ;;
             mainline-inventory)
+                if [ -f "$device_query_marker" ]; then
+                    if stock_inventory_no_scsi_disks /sys/class/block; then
+                        stock_inventory_log 'device query before restart scsi_disks=0'
+                    else
+                        stock_inventory_log 'device query before restart disk present or state unreadable'
+                    fi
+                fi
                 stock_inventory_log 'warm restart requested [mainline-inventory]'
                 "$bb" sleep 1 || exit 1 ;;
         esac
@@ -122,6 +130,18 @@ run_mainline_inventory() {
            ! IFS= read -r mainline_helper < /proc/sys/kernel/modprobe || [ -n "$mainline_helper" ]; then
             end_inventory 'cannot disable kernel module autoload'
         fi
+    fi
+    if [ -e "$device_query_marker" ] || [ -L "$device_query_marker" ]; then
+        [ -f "$device_query_marker" ] && [ ! -L "$device_query_marker" ] ||
+            end_inventory 'invalid device query marker'
+        IFS= read -r query_cmdline < /proc/cmdline || end_inventory 'device query command line unavailable'
+        case " $query_cmdline " in
+            *" scsi_mod.scan=none "*) ;;
+            *) end_inventory 'device query requires scsi_mod.scan=none' ;;
+        esac
+        stock_inventory_no_scsi_disks /sys/class/block ||
+            end_inventory 'device query disk present or state unreadable'
+        end_inventory 'device query RAM stage ready scsi_disks=0'
     fi
     [ -f /grizzly-inventory/nv-guard.sh ] && [ ! -L /grizzly-inventory/nv-guard.sh ] ||
         end_inventory 'mainline NV guard unavailable'
