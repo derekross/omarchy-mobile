@@ -2343,6 +2343,51 @@ Ramoops and `SYSTEM_LAST_KMSG` agree on these results. Fastboot
 returned after 133 seconds. Stock D1 completed boot on A with
 enforcing verity and the original factory VBMeta digest.
 
+### Mainline v46 M-PHY Hibern8 power gating
+
+The factory D1 B0 device tree enables both `google,enable-hc-swh8-pg`
+and `google,enable-hc-ah8-pg`. The factory `ufs.ko` maps them to bits 2
+and 1 of its feature word. In `ufs_google_pwr_change_notify()`
+(`.text` `0xa780`–`0xa7b8`), stock sets local DME attribute `0x8118`
+to `1` when either feature is enabled, then sends `0xd085=1` to apply
+the M-PHY configuration. With both flags set, stock does not update
+HCI `+0xc0` in its link-startup callback (`0xa460`–`0xa494`). v45
+applies M-PHY configuration before link startup but never sets `0x8118`.
+
+Stock runtime suspend checks HC and PHY separately for `0x11` before
+releasing the Deep H8 clock (`0xe97c`–`0xe9b8`, `0xeb1c`–`0xeb58`).
+Each stock poll has a 10 ms timeout. The mainline diagnostic keeps its
+single 10 ms window requiring both states simultaneously.
+
+[v46 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/3aa99fc043107df12eddbccd5f6f4e8a0d73e99d)
+adds a default-off option for those two local SETs after successful
+link startup and link parameter validation. It logs each command's
+result and stops on error. This isolates the stock setting in the
+existing PWM-G1 single-lane link test. Stock normally programs it after
+a power-mode change. The trial preserves the fresh Hibern8-enter IRQ
+requirement, v45 prep settle guard and v44 timing samples. The AH8
+timer policy, DT, rail settings and link-only boundary match v45.
+
+The earlier device-link warning arises in deferred-probe rollback,
+before the Malibu UFS host registers. Its trace indicates a managed
+runtime-PM link with an inactive supplier. The captured warning lacks
+the endpoint names. v45 reached link startup despite it.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match source, manifest and the recovery snapshot. | Leave stock A selected on any mismatch. |
+| One attended slot B boot, power-control risk | With approval and the verified NV backup, check both local SET results, the fresh Hibern8 IRQ, the HC/PHY pair and the Deep H8 release result. Expect no disk discovery. | Preserve the first failure. Keep the release guard in place and use the 90-second warm return to verify stock A. |
+
+Offline ARM64 `7.3.0-rc6-omamobile-grizzly-uic-v46` passed strict
+checkpatch, `W=1` for the Malibu link object and five command-path
+cases. The packed DTB and rescue ramdisk are byte-identical to v45.
+All five image hashes, both AVB signatures, unpacked payload, ABL
+handoff bounds and saved D1 slot capacities passed. Manifest SHA-256
+`eab265ecf6ee653452ec78e0771344251c920f446168ae82fd330cacd452a319`.
+Archive SHA-256 `3de8276eed7d2e783907ed58d376d5cd0b1c8c3562c96f5e2a4c0c7057f7dcc1`.
+Hardware must determine whether the local settings let PHY reach
+`0x11` during this diagnostic's Hibern8 entry.
+
 ## Staging and return sequence used for D1
 
 These commands describe the attended workflow used by the trials.
