@@ -1,0 +1,52 @@
+# Lock: recover a lock stranded by a shell crash, also beside Quickshell's
+# crash processes and Voxtype's overlay (#990). When the shell crashes under
+# a locked session, Hyprland stays locked and the restarted shell holds no
+# lock surface: nothing is drawn and no touch is taken. The lock service asks
+# omarchy-hyprland-session-lock-stranded at start and takes the lock again
+# when it answers "stranded". The helper answered "undetermined" while any
+# quickshell, qs or hyprlock but the caller ran, and after a crash there
+# always is one:
+#  - Quickshell re-execs the shell in place and leaves its crash processes
+#    as the shell's children, one that dumped core (a zombie until reaped)
+#    and one that stays;
+#  - Voxtype's recording overlay is a Quickshell of its own
+#    (qs -p /usr/share/voxtype/quickshell, started by voxtype's daemon).
+# So the recovery never ran. On a Pixel 9a (2026-11-25): locked, SIGSEGV to
+# the shell, and 24 s later Hyprland was still locked, the shell's lock
+# status "locked": false and the helper exiting 2 for the shell's two
+# children and Voxtype's overlay.
+#
+# The helper now skips the caller and its descendants, zombies, and
+# Voxtype's overlay; another live locker (a second shell, hyprlock) still
+# makes it answer "undetermined". Candidate for upstream Omarchy, which has
+# the same helper (754d2d04, "Only recover a session lock no other locker
+# may hold").
+#
+# Against Omarchy 4.5.0 (4.5.0-3).
+diff --git i/bin/omarchy-hyprland-session-lock-stranded w/bin/omarchy-hyprland-session-lock-stranded
+--- i/bin/omarchy-hyprland-session-lock-stranded
++++ w/bin/omarchy-hyprland-session-lock-stranded
+@@ -14,6 +14,21 @@
+ # as a crash re-execs the shell in place.
+ omarchy-hyprland-session-locked || exit
+ 
+-if pgrep -u "$UID" -x 'quickshell|qs|hyprlock' | grep -qvxF "$1"; then
++# The caller's own instance is not another locker. A crash re-execs the shell
++# in place and leaves its crash processes as the shell's children: the one
++# that dumped core, a zombie until reaped, and one that stays. Zombies hold no
++# lock either. Nor does Voxtype's recording overlay, a Quickshell of its own.
++own() {
++  local pid=$1
++  while [[ $pid =~ ^[0-9]+$ ]] && ((pid > 1)); do
++    [[ $pid == "$2" ]] && return 0
++    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
++  done
++  return 1
++}
++for pid in $(pgrep -u "$UID" -x 'quickshell|qs|hyprlock'); do
++  own "$pid" "$1" && continue
++  [[ $(ps -o stat= -p "$pid" 2>/dev/null) == Z* ]] && continue
++  [[ $(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null) == *" -p /usr/share/voxtype/quickshell "* ]] && continue
+   exit 2
+-fi
++done
