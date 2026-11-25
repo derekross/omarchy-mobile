@@ -309,7 +309,8 @@ pass "Wi-Fi power save is on by default"
 # The thermal guard: run against a fake sysfs (never the real one).
 bash -n bin/omamobile-husky-thermal || fail "the thermal guard parses"
 for f in usr/bin/omamobile-husky-thermal usr/share/omamobile/thermal.conf \
-         usr/lib/systemd/system/omamobile-husky-thermal.service; do
+         usr/lib/systemd/system/omamobile-husky-thermal.service \
+         usr/share/omamobile/power-profile-off; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
 [[ ! -e $tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-husky-thermal.service ]] \
