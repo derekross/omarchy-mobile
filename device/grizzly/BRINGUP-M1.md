@@ -3894,6 +3894,48 @@ Fastboot returned after 133 seconds. Stock D1 A restarted at
 pretrial VBMeta digest. Ramoops and Android's `SYSTEM_LAST_KMSG`
 agree on all 38 filtered v67 lines.
 
+### Mainline v68 read one GPT block through the read-only disk
+
+[v68 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/c835be6fcfc606a9fea57f2e2321ecfd3710b042)
+saves the validated primary GPT block from this boot's direct read.
+It runs the v67 LUN 0 discovery and confirms `sd` published a
+read-only disk with 4 KiB logical blocks and partition scanning
+disabled. It then submits one kernel bio directly to that disk.
+The bio uses a fresh page and targets sector 8 in 512-byte units,
+which is LBA 1 at the qualified geometry.
+
+The UFS gate admits only this bio, with no merging, one 4,096-byte
+DMA-from-device segment and the exact LUN 0 `READ(10)` CDB
+`28 00 00 00 00 01 00 00 01 00`. A separate dispatch token allows
+one submission after the original discovery INQUIRY. Writes,
+other reads, wrong LUNs and redispatch remain blocked.
+
+Success requires a matching IRQ with good status and zero residual,
+successful bio completion, and byte-for-byte equality across all
+4,096 bytes. Invalid SCSI responses become terminal failures with
+a full residual and cleared sense before reaching `sd`. The page
+and direct reference are cleared before freeing. The existing
+stuck-DMA emergency restart remains untested on hardware.
+
+The RAM fixture still observes the read-only disk via sysfs without
+opening it. Partition scanning, SG, BSG, RPMB and userspace
+handoff remain disabled. On success the disk stays visible for the
+RAM check, then disk and host removal precede Hibern8 and the
+90-second return.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match the source, five image hashes, both AVB signatures and saved slot capacities. DTB, DTBO, RAM rescue and vendor boot images match v67. | Leave stock A selected on a mismatch. |
+| One attended slot B trial | Capture direct GPT, LUN 0 discovery, read-only publication with no partitions, one accepted opcode `0x28`, `sg=1 bytes=4096`, matching IRQ with zero residual, and `block GPT comparison bytes=4096 ret=0`. Verify RAM sysfs, disk removal, Hibern8, zero disks before restart and stock A return. | Hold Volume Down after the first orange warning. Preserve the first refusal, comparison failure, timeout or reset and return to stock A without retrying. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v68` passed strict
+checkpatch, targeted arm64 `W=1` compilation and 32
+sanitizer-backed mock cases for command gating, completion,
+bio lifetime and comparison. Both AVB signatures, ABL handoff,
+all five image hashes and saved D1 slot checks passed.
+Manifest SHA-256 `83577576443f12ee285f5894c81335e22266e26c3d723d012a034a2b821fb036`.
+Archive SHA-256 `abc60f1f53a6f1561ee168351e42b62adba31580bf4bd92cc7e83a0451414f5d`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
