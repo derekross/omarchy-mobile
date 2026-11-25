@@ -2799,6 +2799,29 @@ payload, ABL handoff and saved D1 slot sizes passed. Manifest SHA-256
 `b499f332261833829be780859ad73ce4a9be8b67e4f5da2c75b85d045db223ba`. Archive SHA-256
 `1b06400da452aba41c753d150c7f3a68605bacf688b5a7df78e34641c3548476`.
 
+#### Attended v50 slot B trial
+
+On 2026-11-25 one v50 boot used the verified nine-partition NV backup.
+All five slot B writes passed, and the readback matched all 8,192
+supplied `vendor_boot_b` bytes. The UFS device returned NOP IN and
+reported `bRefClkFreq=0x2`.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 2.214022–2.215131 | Device initialization | One SET accepted. First flag read returned `raw=0x0 polls=1 elapsed_us=1100 ret=0`. |
+| 2.215565–2.215588 | One standard INQUIRY to LUN 0 | OCS `0x0`, response UPIU `0x21`, response and SCSI status `0x0`, zero flags and residual. Qualifier and type were zero, version `0x6`, format `0x2`, additional length 31, and `result=0`. |
+| 2.215734–2.215981 | Hibern8 and HCI cleanup | Link and Hibern8 returned zero. HC and PHY both reached `0x11`; Deep H8 stayed prepared through IRQ release. |
+| 90.205025–91.207861 | Timed warm return | `scsi_disks=0` before restart and at RAM startup. |
+
+Ramoops and Android's `SYSTEM_LAST_KMSG` reported the same results.
+Fastboot returned after 132 seconds. Stock D1 booted on A with enforcing
+verity and the expected factory VBMeta digest.
+
+This confirms a data-bearing SCSI command through the polled slot and
+its DMA buffer. Normal SCSI registration, transfer completion IRQs,
+capacity queries and partition reads remain untested. The early
+`device_links_no_driver()` warning recurred before UFS probe.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
