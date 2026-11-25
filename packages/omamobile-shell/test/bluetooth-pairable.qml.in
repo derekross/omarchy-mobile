@@ -103,7 +103,7 @@ TestCase {
     function test_helperOwnsPairableWhenItWasOff() {
         root.open()
         verify(root.pairableOwned)
-        compare(JSON.stringify(root.agentProcess.command), JSON.stringify(["omamobile-bt-agent", "--pairable-window", "120"]))
+        compare(JSON.stringify(root.agentProcess.command), JSON.stringify(["omamobile-shell-child", "omamobile-bt-agent", "--pairable-window", "120"]))
         // Registering the agent turns Pairable on in BlueZ: the panel asks for off.
         ready()
         compare(last(pairableCommands()), false)
@@ -189,7 +189,7 @@ TestCase {
         fake.pairable = true      // AlwaysPairable, or the owner's own agent
         root.open()
         verify(!root.pairableOwned)
-        compare(JSON.stringify(root.agentProcess.command), JSON.stringify(["omamobile-bt-agent"]))
+        compare(JSON.stringify(root.agentProcess.command), JSON.stringify(["omamobile-shell-child", "omamobile-bt-agent"]))
         ready()
         root.setVisible(true)
         root.setVisible(false)
