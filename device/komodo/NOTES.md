@@ -6,6 +6,27 @@ not a device-support claim or authorization to repeat any operation. Raw
 captures, boot images, calibration backups, identifiers, and account content
 remain private and out of this repository.
 
+## 2026-11-25: package storage rule and post-reboot smoke
+
+Installed the candidate `omamobile-device-komodo` package with the storage
+rule on the development phone, then rebooted once. The local test build used
+package release `0.0.4-2` to replace the earlier development install; it is
+not a published package version. The installed rule makes `/dev/sda`
+inaccessible and tells desktop disk tools to ignore it. After reboot, the rule
+was present and `/dev/sda` did not exist.
+
+`tools/phone-smoke` ran on kernel
+`7.3.0-rc6-omamobile-push1-g061ebcf504d5`, slot B. Its required boot, storage,
+root, kernel-health, USB-gadget, and session checks passed. It reported no
+Oops, BUG, or WARN. Five new dmesg errors remain: four Samsung pinctrl IRQ
+messages and one initramfs decode failure. No systemd units failed on this
+boot; `systemd-firstboot.service` is recorded as having failed on the first
+boot. The DSI display, Omarchy session, lock, and buttons were present, but no
+touch input device or GPU render node appeared. The guarded GPU service skipped
+its probe because the expected GPU device-tree path was absent. Wi-Fi,
+Bluetooth, battery, sound, sensors, and cameras were unavailable. No real
+messages or account content were accessed.
+
 ## 2026-11-20: synthetic notification check
 
 A local `notify-send` test with placeholder text appeared in the logged-in

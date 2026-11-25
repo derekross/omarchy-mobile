@@ -1,6 +1,12 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 set -euo pipefail
+for _ in {1..10}; do
+  if ip -4 -o address show dev usb0 | grep -F ' 172.16.42.1/24 ' >/dev/null; then
+    break
+  fi
+  sleep 1
+done
 ip -4 -o address show dev usb0 | grep -F ' 172.16.42.1/24 ' >/dev/null
 systemctl is-active --quiet sshd.service
 rm -f /var/lib/omamobile/root-boot-pending

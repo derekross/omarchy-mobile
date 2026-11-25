@@ -36,6 +36,8 @@ package() {
     "$pkgdir/usr/lib/systemd/network/20-usb-gadget.network"
   install -Dm644 "$startdir/vendor/NetworkManager/conf.d/10-omamobile-usb.conf" \
     "$pkgdir/usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf"
+  install -Dm644 "$startdir/vendor/udev/rules.d/10-omamobile-storage.rules" \
+    "$pkgdir/usr/lib/udev/rules.d/10-omamobile-storage.rules"
   install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
   ln -s ../omamobile-komodo-root-ready.service \
     "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/omamobile-komodo-root-ready.service"
