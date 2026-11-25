@@ -3028,6 +3028,32 @@ the unpacked payload, ABL handoff and saved D1 slot sizes passed.
 Manifest SHA-256 `f30b91c0d09756d425044f9038010cfe9e21a19f1fb2f3016fb6c5ae91086348`.
 Archive SHA-256 `3a44fbc0e50f993398da0aa8bb770b798aa55c1230d83903b914ae9b5bef2157`.
 
+#### Attended v54 slot B trial
+
+On 2026-11-25 one v54 boot used the verified nine-partition NV backup.
+All five slot B writes passed, and the readback matched all 8,192
+supplied `vendor_boot_b` bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 0.199267–0.199576 | Prep OFF | Qualification passed in 4 µs with HC `0x13`, PHY `0x11` and `saw_hc_0x32=0`. |
+| 2.242159–2.247396 | Link and initialization | Link startup and NOP passed, `bRefClkFreq=0x2`, and the first read of `fDeviceInit` returned clear. |
+| 2.247677–2.247709 | INQUIRY | Transfer IRQ observed, GOOD status, zero residual. |
+| 2.247872–2.247904 | READ CAPACITY(10) | Separate IRQ observed, OCS `0x0`, UPIU `0x21`, response `0x1`, status `0x2`. Fixed sense `format=0x70 key=0x6 asc=0x29 ascq=0x0 len=18`. |
+| 2.247923–2.247986 | Cleanup | The error skipped Hibern8. HCI stop completed and the IRQ was freed. |
+| 90.243352–91.246180 | Timed warm return | Zero SCSI disks before restart and at RAM startup. |
+
+Sense key `0x6` is UNIT ATTENTION. ASC/ASCQ `29h/00h` reports
+“power on, reset, or bus device reset occurred.” The code does not
+identify which event occurred. A future fixture can test one retry
+of the same READ CAPACITY command only after this exact current
+UNIT ATTENTION. Geometry remains unmeasured.
+[T10 ASC/ASCQ assignments](https://www.t10.org/lists/asc-num.htm)
+
+Ramoops and Android's `SYSTEM_LAST_KMSG` agree. Fastboot returned
+after 133 seconds. Stock D1 booted on A with enforcing verity and
+the expected factory VBMeta digest.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
