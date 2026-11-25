@@ -100,6 +100,7 @@ whether it predated a stock boot.
 | [v66](#attended-v66-slot-b-trial) | After v65. Stock D1 A preflight matched the prior return. The v66 boot was requested at 16:54:28 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 | [v67](#attended-v67-slot-b-trial) | After v66. Stock D1 A preflight matched the prior return. The v67 boot was requested at 17:12:03 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 | [v68](#attended-v68-slot-b-trial) | After v67. Stock D1 A preflight matched the prior return. The v68 boot was requested at 17:57:17 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
+| [v69](#attended-v69-slot-b-trial) | After v68. Stock D1 A preflight matched the prior return. The v69 boot was requested at 18:15:08 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 
 The maintainer's [review on backup freshness](https://github.com/derekross/omamobile/pull/1002#pullrequestreview-6060450538)
 leaves open whether to take a fresh rescue backup before each
@@ -4007,6 +4008,35 @@ metadata gate/layout cases, 20 synthetic sysfs cases and ShellCheck.
 Both AVB signatures, ABL handoff, all five image hashes and saved
 D1 slot checks passed. Manifest SHA-256 `8594d28095e868aa19dfd11ddf3a6307e1628aa2218af4002bd1500b724d4e73`.
 Archive SHA-256 `5443e16745c8d1cbe9a4c93b6d243ef188704eb8aba5d53dc930b0d205694f75`.
+
+#### Attended v69 slot B trial
+
+On 2026-11-25 at 18:15:08 UTC, one v69 boot used the nine-partition
+private NV backup with the owner's approval. All nine local hashes
+passed. The copy predates the last stock A boot. All five slot B
+writes passed, and the readback matched all 8,192 supplied
+`vendor_boot_b` bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 2.212351–2.213317 | Direct gates | 4,096-byte blocks, two primary entry-array blocks, 42 used entries and alternate header at LBA 12,801,023. |
+| 2.221744–2.223098 | Parser transfers | Only LBAs 0–3 and 12,801,023 reached the controller. Each used one 4,096-byte mapping and completed by IRQ with zero residual. |
+| 2.223139–2.223271 | Gate refusal and primary fallback | The parser requested sector 102,408,152 (LBA 12,801,019, CDB `28 00 00 c3 53 fb 00 00 01 00`). The gate refused it before mapping or ringing the doorbell. Linux used the primary GPT and announced 42 partitions, matching the direct count. |
+| 2.226242–2.313590 | Failure and cleanup | The whole disk was read-only. The metadata check returned `reads=0x4f expected=7 failed=1`. The host was removed and IRQ freed. Hibern8 qualification did not run. |
+| 20.449863–91.223993 | RAM and timed return | The RAM check timed out waiting for the kernel success marker. It did not complete per-partition read-only verification. There were zero SCSI disks before restart. |
+
+The trial verified a primary GPT count match and that only the
+five admitted metadata requests were issued. No storage mount was
+attempted. The alternate header led Linux to LBA 12,801,019,
+four blocks before that header and outside v69's inferred array
+range. Linux's alternate GPT warning followed the rejected I/O.
+The next fixture needs to qualify the alternate header and its
+entry-array pointer and length before arming the metadata gate.
+
+Fastboot returned after 133 seconds. Stock D1 A restarted at
+18:17:35 UTC and completed boot with enforcing verity and the
+pretrial VBMeta digest. Ramoops and Android's `SYSTEM_LAST_KMSG`
+agree on all 59 filtered v69 lines.
 
 ### Offline stock D1 device reference-clock diagnostic
 
