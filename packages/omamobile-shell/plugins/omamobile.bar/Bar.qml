@@ -14,7 +14,7 @@ import "StatusModel.js" as StatusModel
 // Phone status bar, a full `bar` option that replaces omarchy.bar.
 //
 // The phone has no window list, tray or workspaces to show, so this bar only
-// reports state: the clock on the left and unread notifications,
+// reports state: the clock and the unread notifications on the left,
 // connectivity, do-not-disturb and battery on the right. The middle stays empty for the camera cutout. The
 // whole strip is one touch target: a tap or a downward pull opens the quick
 // settings sheet.
@@ -415,34 +415,40 @@ Item {
           }
         }
 
+        // Notifications not yet seen in the quick-settings shade: a count in
+        // an accent pill, beside the clock (after the call chip). Not in the
+        // right-hand row: that row grows leftwards with every glyph, and on a
+        // phone with Bluetooth, a modem, Wi-Fi and the battery's percentage
+        // its first item ended under the camera cutout. The strip's tap
+        // opens the shade.
+        Rectangle {
+          objectName: "unreadNotifications"
+          visible: root.showUnread && root.unread > 0
+          anchors.left: callChipPill.visible ? callChipPill.right : clockText.right
+          anchors.leftMargin: Style.spacing.lg
+          anchors.verticalCenter: parent.verticalCenter
+          height: Math.max(18, Math.round(root.barSize * 0.45))
+          width: Math.max(height, unreadText.implicitWidth + Style.spacing.md * 2)
+          radius: height / 2
+          color: Commons.Color.accent
+
+          Text {
+            id: unreadText
+            anchors.centerIn: parent
+            textFormat: Text.PlainText
+            text: String(root.unread)
+            color: root.background
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            font.bold: true
+          }
+        }
+
         Row {
           id: status
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
           spacing: Style.spacing.xl
-
-          // Notifications not yet seen in the quick-settings shade: a
-          // count in an accent pill. The strip's tap opens the shade.
-          Rectangle {
-            objectName: "unreadNotifications"
-            visible: root.showUnread && root.unread > 0
-            anchors.verticalCenter: parent.verticalCenter
-            height: Math.max(18, Math.round(root.barSize * 0.45))
-            width: Math.max(height, unreadText.implicitWidth + Style.spacing.md * 2)
-            radius: height / 2
-            color: Commons.Color.accent
-
-            Text {
-              id: unreadText
-              anchors.centerIn: parent
-              textFormat: Text.PlainText
-              text: String(root.unread)
-              color: root.background
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-              font.bold: true
-            }
-          }
 
           StatusGlyph {
             visible: root.showDnd && root.doNotDisturb

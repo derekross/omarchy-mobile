@@ -50,10 +50,11 @@ The phone has no touch lock yet (below), so idle stays off for now.
 
 A full bar that replaces `omarchy.bar`. It is 44 px tall (or the theme's bar
 size if larger), anchored to the top, and reserves its height so windows tile
-below it. Left: the clock. Right: the unread notification count (when
-there is one), do-not-disturb (when on), Bluetooth (when on), cellular
+below it. Left: the clock, then the unread notification count (when there
+is one). Right: do-not-disturb (when on), Bluetooth (when on), cellular
 signal (when a modem exists), Wi-Fi or Ethernet, battery glyph and
-percentage. The centre is left empty for the camera cutout.
+percentage. The centre is left empty for the camera cutout; the count is on
+the left because the right-hand row grows towards it with every glyph.
 
 A downward pull past ~14 px anywhere on the strip opens quick settings, and a
 tap toggles it. With `cardsOnTap` set (off by default), a tap on an item opens

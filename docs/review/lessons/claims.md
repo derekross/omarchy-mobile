@@ -3,6 +3,35 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1180. When a reply lists trials that ran after a "before the next boot"
+  request, the trial rows are asked for times, and the source commits' dates
+  bound the window.** #1002's notes record v21 to v28 on the phone with no
+  dates; v21's source commit is from 17:46Z the day before and the provenance
+  commits from 05:05Z, so the boots fall on either side of our 01:11Z request
+  and the record can't say which. *Check:* for each trial a reply adds, `gh
+  api repos/<fork>/commits/<sha> --jq .commit.author.date` for its source
+  commit, lay those beside our comment's `submitted_at` in UTC, and ask for
+  the boot times when the window straddles it. Extends L-1024 and L-557.
+  *From:* #1002, round 67, 2026-11-24.
+- **L-1179. A table assembled from several threads is checked cell by cell
+  against the comment each row links, and a figure found only in another
+  thread gets that link.** #1029's 9a row carried a night-before mean that is
+  in kernel #280's description and not in the #867 comment its Source cell
+  names. *Check:* for each row, fetch the linked comment (`gh api
+  repos/<r>/issues/comments/<id>`) and grep it for every number in the row;
+  for each miss, search the author's other threads (`gh api
+  repos/<r>/pulls/<n> --jq .body`) and ask for the second link. Extends L-438
+  and L-1023. *From:* #1029, round 67, 2026-11-24.
+- **L-1178. A generated overlay that "carries what stock writes" rather than
+  the source file's values is checked against the stock driver's types, not
+  only its arithmetic.** #1023's nMiscCfg differs from Google's battery file
+  because Google's driver ORs `fus << 12` into a `u16`; reading
+  `max77779_fg.h` for the field's type is what showed that 0xf870 is the value
+  the gauge really gets. *Check:* for each value a generator rewrites "as the
+  driver does", fetch the driver function and the struct field it lands in on
+  the same branch (`?format=TEXT | base64 -d`), and compute the stored value
+  with the field's width. Extends L-985 and L-441. *From:* #1023, round 67,
+  2026-11-24.
 - **L-1159. A plan finding written the same day as the fix that answers it is
   checked against main's log for that afternoon.** #711's §11.1 says the
   extraction tools sort with the locale's collation; #712 had made all four
@@ -386,34 +415,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   4 for each mechanism a device plan explains (the PMIC, the driver, the flag)
   and name the 7 Pro run in the review's notes. Extends L-492 and L-657.
   *From:* #852, round 60, 2026-11-17.
-- **L-823. A status line that quotes several measured numbers is checked for
-  the condition each was measured under.** #852's "284 mA at 2028 MHz, 184-200
-  mA at 1014 MHz, 52 mA more with Wi-Fi kept" set a Wi-Fi-kept figure beside
-  Wi-Fi-unloaded ones, doubling the apparent gain of the bus rate; the body
-  copied it. *Check:* for each number in a status line, find its results table
-  and write down every setting that differs between the runs being compared;
-  the line carries them. Extends L-529 and L-438. *From:* #852, round 60,
-  2026-11-17.
-- **L-821. A fix for "the setting only applies after a restart" is read one
-  layer down before the workaround or its patch header is accepted: the
-  component's bindings, the library's setter, and the first statement where
-  the working path and the failing path differ.** #866 and #879 blamed
-  Omarchy's idle service; it only binds `IdleMonitor.timeout`, and the
-  workaround (off, then on) differs from the failing path in one thing inside
-  Quickshell: the notification pointer passes through null, where a
-  replacement object at the same address is an equal value and never notifies.
-  *Check:* find the status IPC that prints the live value (`omarchy-shell idle
-  status`) and ask for it before and after the write; fetch the library at the
-  packaged commit, find the setter both paths share, and ask for its debug log
-  (`QT_LOGGING_RULES=<category>.debug=true`). Extends C-30, L-204 and L-652.
-  *From:* #866, round 60; #879, round 61, 2026-11-18.
-- **L-820. "logind refuses because the app is outside a session" is checked
-  against `session/auto`.** `brightnessctl` calls `SetBrightness` on
-  `/org/freedesktop/login1/session/auto`, which logind resolves to the user's
-  display session for a caller without one; a refusal points at a caller
-  inside another session (an SSH login), that is, at how the test was
-  launched. *Check:* `strings /usr/bin/brightnessctl | grep login1`, and
-  `systemd-run --user --pipe busctl get-property org.freedesktop.login1
-  /org/freedesktop/login1/session/auto org.freedesktop.login1.Session Id`
-  (read-only); ask how the app was started before accepting a session
-  workaround. Extends L-29 and L-46. *From:* #866, round 60, 2026-11-17.

@@ -3,6 +3,14 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-23. Thermal: the hardware trip is the last line of defence.** A driver
+  that sends ACPM's TMU init must show the firmware's hardware thermal trip
+  survives it; blocks with only a 110 °C critical trip need a reason.
+  *From:* kernel #7.
+- **L-24. Alive pin banks have no power-down configuration.**
+  `samsung,pin-con-pdn`/`pin-pud-pdn` on an alive bank (gpa*) return -EINVAL,
+  which `samsung_pinconf_group_set()` ignores, so the DT describes a sleep
+  state that's never applied. *From:* kernel #12.
 - **L-25. A regmap without a read table exposes the whole block through
   debugfs.** On gs201 one PMU read crashed the phone; a PMU regmap should
   list the offsets it uses (`rd_table`/`wr_table`). *From:* kernel #15.
@@ -427,12 +435,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   says how they were found. *Check:* grep Google's GPL tree for each register;
   if one is absent, ask. Extends L-61 and L-177. *From:* kernel #213, round
   44, 2026-11-08.
-- **L-545. A sentence corrected on one board is grepped across every board
-  that copied it.** Kernel #214 fixes akita's "the guard runs before the disks
-  appear" (L-528). The same words are in `zuma-husky.dts` and
-  `zumapro-tegu.dts`, and UFS is built in for every phone, so they are wrong
-  there too; only husky's had been noticed. *Check:* when a review corrects
-  copied text, `git grep -n '<the sentence>' github/omamobile -- arch/
-  device/`, and judge each copy by the fact that made the first one wrong
-  (here `CONFIG_SCSI_UFS_EXYNOS=y` in the shared config). Extends L-528 and
-  L-257. *From:* kernel #214 with #206, round 44, 2026-11-08.

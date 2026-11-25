@@ -1,8 +1,45 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Review lessons: Reviews and merging (part 3 of 3)
+# Review lessons: Reviews and merging (part 3 of 4)
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-127. Parallel reviewers suffix refs with their topic, and delete only
+  refs they created.** In round 10 several used `review/prN-r10`, and one
+  deleted (then restored) refs another was using. *Check:*
+  `review/prN-r<round>-<topic>`; clean up from a list recorded at fetch time.
+  Extends L-43. *From:* round 10.
+- **L-147. Before re-checking an earlier round's request, re-derive it from
+  what has landed since.** Round 11 asked #22 to gate `aoc-stage s2mpu` on a
+  `tzpc` restore, from the tool's header alone; raven's plans (#41) show
+  that SMC hung the SoC and that the `pd` stage made the read safe, so the
+  gate could only be passed by a known hang (C-6). *Check:* for every safety
+  gate we asked for, find the plan row it rests on and confirm the step it
+  requires passed there. Extends L-31. *From:* #22, round 12.
+- **L-148. `git merge-tree` exiting 1 can mean a missing ref, not a
+  conflict.** Another reviewer deleted their refs mid-review. *Check:* read
+  the message, and use commit ids for other reviewers' PRs. Extends L-127.
+  *From:* round 12.
+- **L-165. "No checks reported" can mean the PR conflicts with its base,**
+  since GitHub runs no `pull_request` workflow then. *From:* kernel #53,
+  round 14.
+- **L-166. When a PR is force-pushed after its phone test, diff the old head
+  against the new.** GraphQL's `HeadRefForcePushedEvent.beforeCommit` gives
+  the old id; REST's timeline omits it. *From:* kernel #54, round 14.
+- **L-167. Posting scripts split drafts by heading, never by line number,
+  and each posted file is checked first.** Round 13's line ranges put #49's
+  last bullet at the top of #50's comment. *From:* round 13 (found in 14).
+- **L-182. "My merged PR isn't on the branch" after a rebase merge is
+  checked by patch-id and the branch's push events, not by ancestor.** A
+  rebase merge lands the commit under a new id, so the PR's head is never an
+  ancestor and GitHub shows no merge commit; two merged commits came back as
+  new PRs (kernel #67, #68), and merging a resubmission onto the base gives
+  the base's own tree, which the gate can't tell from a real change.
+  *Check:* `git show <merged id> | git patch-id` against the resubmission;
+  `gh api repos/<r>/branches/<b>` for the head and `events` (or
+  `activity?ref=`) for pushes since the merge, all fast-forwards; `git
+  merge-base --is-ancestor <merge> <tip>`; and `git merge-tree --write-tree
+  base head` compared with `base^{tree}`. Extends L-39. *From:* kernel #67,
+  #68, round 20.
 - **L-183. "I took the point" is checked against the code, not the reply,
   one request at a time.** #57's new head changed only its subject and
   message while the comment said the blocking request was taken; #40's
@@ -378,21 +415,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   conflicts. *Check:* when a contributor says "I'll rebase once X merges",
   give them `git rebase --onto origin/main <X's head> <branch>`. *From:* #493
   with #540 and #541, round 46, 2026-11-09.
-- **L-645. An expectation we write into one PR about another PR's head goes
-  stale when that PR is fixed, and the contributor may copy it into a
-  runbook.** Round 45 told #505 "the screen will most likely go dark" because
-  of kernel #220's supply move; #220 was fixed 40 minutes later, and #505's
-  runbook now expects the old fault. *Check:* each round, for every cross-PR
-  expectation in our last comments, re-derive it on the other PR's current
-  head before reading the runbook that quotes it, and own the correction.
-  Extends L-250 and L-403. *From:* #505 with kernel #220, rounds 45-46,
-  2026-11-09.
-- **L-646. "The tested tree carries over" is checked per file by blob against
-  a reconstructed tested tree, when the tested kernel was a local merge.**
-  For kernel #187 the 7 Pro ran `a3e96faa` plus #191; `git merge-tree
-  --write-tree <#191's merged commit> <tested head>` rebuilt it, and every
-  non-zuma file the PR touches had the same blob at the rebased head, which
-  answered "does the run stand?" without a rebuild or a reboot. *Check:*
-  rebuild the tested combination with `merge-tree`, then `git rev-parse
-  <tree>:<f>` against `<head>:<f>` for each touched file. Extends L-45, L-483
-  and L-547. *From:* kernel #187, round 46, 2026-11-09.

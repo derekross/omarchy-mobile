@@ -3,6 +3,14 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-878. A dwc3 glue built on `dwc3_core_probe()` is checked for the
+  runtime PM callbacks the core expects.** The core enables runtime PM itself;
+  a glue with only sleep callbacks leaves a device that userspace can mark
+  runtime-suspended with no resume path, and the gadget then disables its own
+  interrupt. *Check:* `grep -n 'RUNTIME_PM_OPS\|pm_runtime' <glue>` against
+  `dwc3-generic-plat.c`, and `grep -n 'pm_runtime_suspended'
+  drivers/usb/dwc3/gadget.c` for what a suspended status does. *From:* kernel
+  #271, round 61, 2026-11-18.
 - **L-877. A glue driver that orders a PHY before its core is checked against
   how the same-SoC sibling's board node solves it, and against the PHY
   driver's history for the hang it names.** Kernel #271 initialises the USB2
@@ -405,11 +413,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   conflict; without the DTZPC call a domain powered back on comes up with
   its TrustZone settings reset. Powering off the AoC's domain while the AoC
   runs, with no handshake, belongs to the AoC series. *From:* kernel #9.
-- **L-23. Thermal: the hardware trip is the last line of defence.** A driver
-  that sends ACPM's TMU init must show the firmware's hardware thermal trip
-  survives it; blocks with only a 110 °C critical trip need a reason.
-  *From:* kernel #7.
-- **L-24. Alive pin banks have no power-down configuration.**
-  `samsung,pin-con-pdn`/`pin-pud-pdn` on an alive bank (gpa*) return -EINVAL,
-  which `samsung_pinconf_group_set()` ignores, so the DT describes a sleep
-  state that's never applied. *From:* kernel #12.

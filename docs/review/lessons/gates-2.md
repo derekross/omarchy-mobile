@@ -3,6 +3,12 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-817. `tests/grep-q-pipes` doesn't scan package `libexec`, `bin` or
+  `backends` directories.** #860's root helper piped into `grep -qx` under
+  `pipefail` and the lint passed. *Check:* until the lint's pathspecs cover
+  them, `git grep -nE '\|[[:space:]]*grep -q' <head> -- 'packages/*/libexec'
+  'packages/*/bin' 'packages/*/backends'` on every package PR. Extends L-683
+  and L-15. *From:* #860, round 60, 2026-11-17.
 - **L-796. A package test that runs a start script calling the host's `sync`
   fails under a loaded review machine.** `omamobile-modem`'s `test/all` gives
   three `sync`s 20 s; with parallel reviews building, one case ended with rc
@@ -78,7 +84,12 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   one-word identifiers file, and feed both a known address first so that an
   empty result means something; the dump is read-only, so `chmod -R u+w`
   before deleting it. Extends L-538, L-634 and L-102. *From:* #842, round 60,
-  2026-11-17.
+  2026-11-17. (Extended 2026-11-24: a scanner that gains a new input kind is
+  run with that kind counted, so "nothing found" is a number. #1031 starts
+  reading symlink targets; the 2026.11.15 dump holds 1,036 links (`find <dump>
+  -type l | wc -l`), and main's and the head's scans agreed on zero findings
+  there next to a control link only the head reports; put the count and the
+  control in the review. *From:* #1031, round 67.)
 - **L-771. `tools/pr-check` doesn't read licence headers, so a file moved in
   from the kernel tree is checked for the SPDX line it brought along.**
   #666's `tools/ncm-transfer` arrived as `GPL-2.0` in an MIT repository.
@@ -394,15 +405,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   rejects, so `pr-check` failed every change there while CI's gawk passed.
   *Check:* after any edit to a gate, run its tests in `omamobile-build:24.04`
   too. Extends L-30. *From:* round 13.
-- **L-156. A bindings-only PR gets no `dtbs_check`** from CI or
-  `kernel-pr-check` ("device trees: none touched"), so no board's DTB is
-  checked against the new schema. *Check:* validate the affected boards'
-  DTBs by hand; dtschema's schema checks run in the container with a stub
-  `libfdt`, only `dt-validate` needs the real one. Extends L-126. *From:*
-  kernel #51, round 13.
-- **L-178. A rejected property in a dt-validate known-failure feed can read
-  "False schema does not allow 0", without the property's name.** A `prop:
-  false` under `then:` reports the value, not the key, so grepping the output
-  for the property name says "not rejected" when it was. *Check:* grep the
-  feed's output by node name and compare base against head line by line.
-  Extends L-102. *From:* kernel #63, round 20.

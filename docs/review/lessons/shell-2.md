@@ -3,6 +3,90 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-982. A test that waits for a background job with `kill -0` hangs in CI's
+  container.** A job reparented to the container's PID 1 is never reaped, and
+  `kill -0` succeeds on a zombie; #866's race test waited forever in CI and
+  passed on a desktop, where systemd reaps. *Check:* `grep -n 'kill -0'` in
+  new tests; ask for a done file or `wait` on a child of the test's own shell,
+  and a bound. Extends L-453 and L-674. *From:* #866 (found and fixed by its
+  author), round 63, 2026-11-20. (Extended 2026-11-23: the mirror case fails
+  instead of hanging. #998's `kill -0` asserting that a helper had ended after
+  its parent-death signal passed where systemd reaps and failed in GitHub's
+  job container, whose PID 1 (`tail`) left the helper as `Z` with parent 1.
+  Where the expectation is "gone", ask for a state check (`/proc/<pid>/stat`
+  field 3 not `Z`); reproduce with `docker run -d <image> sleep 600` and
+  `docker exec`, against `docker run --init`. *From:* #998, round 66.)
+- **L-975. A service that exits 0 with "nothing to do" behind a socket a
+  daemon reconnects to at once turns "not ready yet" into a start-limit
+  failure for the boot.** On the 9a, `omamobile-gnss-start` returns while
+  gnssd is still inside its start delay, GeoClue reconnects five times in a
+  second, and the NMEA socket stays failed until a toggle. *Check:* for each
+  early `exit 0` in a socket-activated unit's start script, ask what the
+  client does next and how fast, and whether the unready state ends by itself;
+  a bounded wait before the hang marker beats an instant exit. Extends L-449
+  and L-302. *From:* a second owner's run on #864, round 62, 2026-11-18.
+- **L-965. A fetch tool's "print the path" mode is checked for whether it
+  fetches.** #900's `--print` downloads 740 MB silently when the cache is
+  empty, inside the `$(...)` its own docs recommend. *Check:* run each
+  read-looking option of a download tool against an empty cache with a fake
+  `curl`, and count the calls. Extends L-539. *From:* #900, round 62,
+  2026-11-18.
+- **L-962. A fallback for "not installed" is asked about "installed and
+  exits".** #896's keyboard chooser returns to squeekboard when the chosen
+  keyboard is removed, but `exec`s one that may crash at start, and a session
+  without a keyboard can't type a lock password. *Check:* for every `exec
+  "$(chosen)"`-style launcher of something the session can't do without, run
+  the PR's fixture with the chosen program replaced by `exit 1` and see what
+  is left running. Extends L-161 and L-712. *From:* #896, round 62,
+  2026-11-18.
+- **L-961. When a review finds a host-reading test in one file of a PR, every
+  other test the same PR adds is grepped for the same `PATH`.** We asked #888
+  to take `/usr/bin` out of `test/osk.sh`; the re-push did, and its new block
+  in `test/setup-user.sh` ran the start line with
+  `PATH="<fakes>:/usr/bin:/bin"`, where an installed `omamobile-osk` answers
+  for "the script is gone" and can start the real keyboard inside `check()`.
+  *Check:* `git diff base...head -- 'packages/*/test' | grep -n
+  '^+.*PATH=.*/usr/bin'`; for each hit, name the command the case expects to
+  be missing and ask whether the package under test installs it. Extends L-454
+  and L-681. *From:* #896, round 62, 2026-11-18.
+- **L-960. A signal handler in a Python tool is read for every lock it can
+  take, `threading.Event.set()` first.** In #890, `Event.set()` takes the
+  event's non-reentrant lock, the same thread's `Event.wait()` holds it
+  between bytecodes, and a handler runs in the main thread, so a SIGTERM at
+  the wrong bytecode deadlocks the process, which then ignores SIGTERM too.
+  *Check:* `grep -n 'signal.signal' -A6 <tool>` and list each handler's calls
+  that lock (`Event.set`, `Queue.put`, `logging`, `print` to a full pipe); ask
+  for a plain assignment, and for a limit the kernel keeps (`signal.alarm`
+  with `SIG_DFL`) where a script promises "ends after N seconds whatever
+  happens". Reproduce under `timeout -s KILL`: a plain `timeout` can't end it.
+  Extends L-734 and L-468. *From:* #890, round 62, 2026-11-18.
+- **L-956. A sleep or wake lock that follows a sysfs value is probed with the
+  read failing while the file exists.** #899's blocker tests `"$(cat online)"
+  = 1`, and `online` is two I2C reads in the driver; with a directory in place
+  of the file the lock was dropped within a second, the unsafe side for a lock
+  that exists because a guard stops in sleep. *Check:* run the script against
+  a stand-in `systemd-inhibit` that logs take and release, swap the watched
+  file for a directory mid-hold, and ask that only an explicit off value
+  releases. Extends L-161 and L-716. *From:* #899, round 62, 2026-11-18.
+- **L-954. A follow-the-end list is probed with the PR's own handlers before
+  a phone run is asked for, and the probe names what it can't show.** For #894
+  a 50-line `qmltestrunner` case with the PR's `stick` handlers over a growing
+  Text answered "does it follow, stop on a scroll up, and follow again" in two
+  seconds at the phones' Qt version, which left the phone run the things only
+  a finger and a panel show (jumps when the line above changes height,
+  reopening mid-run). *Check:* copy the changed Flickable's handlers into a
+  scratch test outside the worktree, drive append, drag, hide and show, then
+  list for the phone run what the probe skipped. Extends L-618 and L-619.
+  *From:* #894, round 62, 2026-11-18.
+- **L-951. A "failed write is retried next login" fix in a once-only step is
+  checked on every write in the step, with the marker's state read after
+  each.** #895 took the marker back when the `cat` into `foot.ini` failed, but
+  a failing `sed -i` in the other branch, or a failing `mktemp`, ends the
+  script under `set -e` with the marker set and the later steps skipped.
+  *Check:* cut the step out, run it under `set -euo pipefail` with a scratch
+  `HOME` and the real `omarchy-done`, make each write fail in turn (read-only
+  file, read-only directory), and list the marker and whether the script went
+  on. Extends L-468 and L-613. *From:* #895, round 62, 2026-11-18.
 - **L-949. An allow-list that guards a credential path is run over the
   system's real catalogue, both ways.** #892's 35 "Latin" layouts refused
   `jp`, `al`, `vn`, `mt` and `kr` and accepted `us:rus` and `us:chr`; its
@@ -279,84 +363,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   early when geometry is unknown. *Check:* list each step's own inputs and
   confirm an early return for one input skips only the steps that need it.
   Extends L-468. *From:* #581, round 50.
-- **L-714. A "learn the user's choice" feature is probed with the sensor at
-  its floor and its ceiling.** The 7 Pro's light sensor is under the panel, so
-  a covered reading is common; one slider move while covered taught #636's
-  curve 206 nits for the dark. *Check:* run the learning path at both ends and
-  print what the learned curve then gives a decade either side. Extends L-536.
-  *From:* #636, round 50.
-- **L-713. A daemon that shares a sysfs value with an input handler is probed
-  for a write landing between its read and its write.** #636 reads the
-  backlight before each ramp step so the slider wins, but `omamobile-keys`'
-  write of 0 in that gap is overwritten and the lock shows lit. *Check:* drive
-  the controller on a fake device whose `write` hook changes the value first,
-  and walk every other writer on main (`git grep -n
-  'brightnessctl\|omarchy-brightness' packages`). Extends L-537 and L-615.
-  *From:* #636, round 50.
-- **L-712. A line a setup step writes into a user's config that loads a
-  package file is checked for the package going away.** #635 puts a bare
-  `dofile()` into `monitors.lua`; after a downgrade or a branch switch the
-  rest of the file doesn't run and Hyprland's default scale (2) takes over.
-  *Check:* evaluate the generated file with the target missing, and ask for a
-  guarded load with the old values as fallback. Extends L-442. *From:* #635,
-  round 50.
-- **L-711. A shell PR that adds a surface is re-read against the Back rules
-  main gained since its base; a clean merge hides them.** After #643, #539's
-  Hotspot page still closed everything on Escape (the one page where Back
-  skips a level), and #612's two always-mapped layers weren't in
-  `HomeModel.BACK_FURNITURE`, which takes Back away from the home screen.
-  *Check:* `git log <merge-base>..origin/main --
-  packages/omamobile-shell/plugins/omamobile.back`; each close path of the new
-  surface against the rule; `git grep -n 'namespace:' <head>` against
-  `BACK_FURNITURE` and `COVERING_LAYERS`. Extends L-615. *From:* #539, #612
-  and #582 with #643, round 50.
-- **L-710. `EPOCHREALTIME` carries the locale's decimal separator.** #640's
-  `${EPOCHREALTIME/./}` deadline became a comma expression under a comma
-  locale: a nonsense end time, and an octal error that ended the loop at
-  random. *Check:* `grep -n EPOCHREALTIME` in the diff; run the arithmetic
-  under a scratch comma locale (`localedef -i de_DE -f UTF-8
-  DIR/de_DE.UTF-8`, then `LOCPATH=DIR LC_ALL=de_DE.UTF-8`); prefer `date
-  +%s%3N` or strip `[.,]`. *From:* #640, round 50.
-- **L-709. A second writer of a credential is compared with the first one's
-  bookkeeping.** `omamobile-set-pin` records pin-or-password and sets the
-  lock's keypad toggle; #630's page calls the same `passwd` and knows nothing
-  of the record, so a password phone can't use it. *Check:* `git grep -n
-  passwd origin/main -- 'packages/*/bin'` and list every file the existing
-  path writes besides the password. Extends L-450. *From:* #630, round 50.
-- **L-708. A page that starts a credential change is checked for where the
-  result goes when the page is destroyed.** #630's Change PIN page drops its
-  result when Back, a relaunch (`navigate("root")`) or a D-Bus `Open` destroys
-  it while `passwd` runs, so the PIN can change with nothing on screen.
-  *Check:* list every way the page can go away mid-change, and ask that the
-  result outlive the page (kept in the runner, or a notification). Extends
-  L-616. *From:* #630, round 50.
-- **L-707. A settings page is run once from the state most phones are in: its
-  dependency missing.** #629's test covered "no theme: `get` says so" but not
-  the buttons still tappable there; `set level off` changed the phone-wide
-  profile and no button could change it back. *Check:* run every `set` verb of
-  the backend in the "unavailable" state, and read the QML for what stays
-  enabled after a failed first read. Extends L-617. *From:* #629, round 50.
-- **L-706. A timing fix for a test is verified by forcing the order of events,
-  not by loading the machine.** #638's "every loaded run failed" couldn't be
-  reproduced: main passed 4 of 4 pinned to one core under 12 busy loops. A
-  scratch wrapper that delayed the fake's `push()` 30 ms and stalled the
-  client before each property read made main fail with exactly the two
-  reported failures, and the head pass. *Check:* read the diagnosis for its
-  order of events, inject it by patching the test helpers from a file outside
-  the worktree, and compare the base's failures with the reported ones by
-  name and message. Extends L-346 and L-418. *From:* #638, round 50.
-- **L-677. Consent read from standard input is positional, and a caller that
-  pipes answers gives it by accident.** #639's typed yes is the first line
-  `tools/install-phone` reads; the `installer-m1a-tools` branch pipes its
-  answers and silences the prompts, so the user name would answer the slot
-  check. *Check:* for a new confirmation in a tool another tool drives, `git
-  grep` the open branches for callers that pipe its stdin, and ask for an
-  explicit option for callers, with `yes` read only from a terminal. Extends
-  L-44. *From:* #639, round 49, 2026-11-10.
-- **L-676. `debugfs mkdir` on an existing directory corrupts the image: it
-  allocates the inode before it fails to link it.** `tools/install-phone` ran
-  it unconditionally with output discarded and `|| true`; only its own
-  `e2fsck` caught it, as a refusal on any root that already had the directory.
-  *Check:* for every `debugfs -w` script (`git grep -n 'debugfs -w'`), run it
-  on a fixture that already holds each path it creates, then `e2fsck -fn`.
-  Extends L-635. *From:* #609 with issue #608, round 49, 2026-11-10.
