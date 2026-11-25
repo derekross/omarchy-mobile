@@ -20,11 +20,15 @@
 #                    A package whose test/host-tools names a command this
 #                    machine lacks runs its check() in the container anyway
 #     --import DIR   copy prebuilt *.pkg.tar.{zst,xz} from DIR into the repository
-#                    (for example Mesa from an earlier build), then sign it.
+#                    (for example Mesa from an earlier build); without --local,
+#                    any .sig is dropped and the package is signed with the
+#                    release key (with --local, each package must carry a .sig
+#                    from a trusted, unrevoked Omamobile key, which is kept).
 #                    It may be given more than once: every folder is checked
 #                    before any is copied, and a folder with two files of one
-#                    package, or a package whose arch is not aarch64 or any,
-#                    stops the run with nothing imported
+#                    package, a package whose arch is not aarch64 or any, or
+#                    under --local a missing or untrusted .sig stops the run
+#                    with nothing imported
 #     --list         print what would be built and what is up to date
 #     --resign       build nothing: sign every package in out/repo and the
 #                    database again with the release key, replacing older
@@ -33,10 +37,10 @@
 #     --local NAME   a contributor's build for device NAME (review lesson L-7):
 #                    the repository is out/NAME/repo/aarch64, the signing key
 #                    keys/NAME (tools/local-key-init), and the build image also
-#                    trusts that key. Imported packages keep their own .sig
-#                    (tools/fetch-published), so only what is built here
-#                    carries the local key. Never the maintainer's keys/ or
-#                    out/repo
+#                    trusts that key. Imported packages must carry a .sig from
+#                    a trusted, unrevoked Omamobile key (tools/fetch-published)
+#                    and keep it unchanged, so only what is built here carries
+#                    the local key. Never the maintainer's keys/ or out/repo
 #
 # Upstream packages pinned in rootfs/packages.pinned (the Omarchy version
 # our patches were checked against) are added by every maintainer's run: fetched
@@ -191,8 +195,8 @@ pkginfo() {
 }
 
 # Put package files in the repository, replacing older files of the same name.
-# A local build keeps an imported package's own signature (its .sig beside
-# it); everything else is signed by sign_and_index.
+# A local build keeps an imported package's own verified signature (its .sig
+# beside it); everything else is signed by sign_and_index.
 add_to_repo() {
   local file name base
   for file; do
@@ -221,8 +225,37 @@ pkg_files() { local f; files=(); for f in "$1"/*.pkg.tar.*; do [[ $f == *.sig ]]
 # Every folder is checked before the first is copied, so a refusal copies no
 # package and writes no index. Each file is checked as a copy in a private
 # folder beside the repository, and that copy is what goes in: what changes
-# in DIR after the check never reaches the repository
-((${#imports[@]} == 0)) || stage=$(mktemp -d "$(dirname "$repo")/import.XXXXXX")
+# in DIR after the check never reaches the repository. Under --local, each
+# staged package must also verify against its staged .sig with a trusted,
+# unrevoked Omamobile key (same rule as tools/fetch-published), since
+# add_to_repo keeps that .sig and sign_and_index would otherwise sign an
+# unsigned file with the local key.
+if ((${#imports[@]})); then
+  if [[ -n $local_name ]]; then
+    command -v gpgv >/dev/null || alarm_die "verifying --local --import signatures needs gpgv"
+    keyring=packages/omamobile-keyring
+    mapfile -t trusted < <(cut -d: -f1 "$keyring/omamobile-trusted" 2>/dev/null | LC_ALL=C grep -E '^[0-9A-F]{40}$')
+    ((${#trusted[@]})) || alarm_die "no trusted keys in $keyring/omamobile-trusted"
+    source tools/lib/signing.sh
+    revoked=()
+    revoked_lines=$(revoked_list "$ROOT") || alarm_die "$revoked_lines"
+    [[ -z $revoked_lines ]] || mapfile -t revoked <<<"$revoked_lines"
+  fi
+  stage=$(mktemp -d "$(dirname "$repo")/import.XXXXXX")
+  if [[ -n $local_name ]]; then
+    mkdir -m 700 "$stage/gnupg"
+    GNUPGHOME="$stage/gnupg" gpg --batch --quiet --no-default-keyring --keyring "$stage/omamobile.kbx" \
+      --import "$keyring/omamobile.gpg" 2>/dev/null || alarm_die "cannot read $keyring/omamobile.gpg"
+    # verify_import_sig SIG FILE: the primary key behind a good signature must
+    # be trusted and not revoked (a subkey's VALIDSIG names its primary last)
+    verify_import_sig() {
+      local status primary
+      status=$(GNUPGHOME="$stage/gnupg" gpgv --keyring "$stage/omamobile.kbx" --status-fd 1 -- "$1" "$2" 2>/dev/null) || return 1
+      primary=$(awk '$2 == "VALIDSIG" {p=$NF} END {print p}' <<<"$status")
+      [[ -n $primary && " ${trusted[*]} " == *" $primary "* && " ${revoked[*]} " != *" $primary "* ]]
+    }
+  fi
+fi
 for k in "${!imports[@]}"; do
   dir=${imports[k]}
   pkg_files "$dir"
@@ -232,8 +265,13 @@ for k in "${!imports[@]}"; do
   for f in "${files[@]}"; do
     copy=$stage/$k/${f##*/}
     cp "$f" "$copy"
-    # add_to_repo keeps an imported .sig only for --local
-    if [[ -n $local_name && -f $f.sig ]]; then cp "$f.sig" "$copy.sig"; fi
+    # add_to_repo keeps an imported .sig only for --local, so verify the
+    # staged .sig against the staged package before accepting it
+    if [[ -n $local_name ]]; then
+      [[ -f $f.sig ]] || alarm_die "$f has no .sig (under --local, imported packages must carry a trusted Omamobile signature)"
+      cp "$f.sig" "$copy.sig" || alarm_die "$f.sig cannot be read"
+      verify_import_sig "$copy.sig" "$copy" || alarm_die "$f is not signed by a trusted, unrevoked Omamobile key"
+    fi
     # A file cut short can print its .PKGINFO and still fail to read
     info=$(pkginfo "$copy") || alarm_die "$f is not a package archive that can be read"
     [[ $(sed -n 's/^arch = //p' <<<"$info") =~ ^(aarch64|any)$ ]] || alarm_die "$f is not an aarch64 package"
