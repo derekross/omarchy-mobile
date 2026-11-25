@@ -2687,8 +2687,30 @@ image hashes, both AVB signatures, unpacked payload, ABL handoff and
 saved slot capacities passed. Manifest SHA-256
 `4394206b525cb77de109bba51148deeeefea3f411ce07367bcc79f833ce0abfd`.
 Archive SHA-256 `9a65a5c8dde3bc21194aff5c41e361e6e7b6598ccda38edd9268f52227c12b4c`.
-Legacy SDB availability and the actual device response before
-`fDeviceInit` still need the Pixel.
+
+#### Attended v48 slot B trial
+
+On 2026-11-25 one slot B boot used the verified nine-partition
+NV snapshot. All five writes passed and `vendor_boot_b` readback
+matched all 8,192 supplied bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 0.191865 | Private RAM stage | `scsi_disks=0` |
+| 2.174496 | UIC link | `ret=0` |
+| 2.174929 | Polled NOP IN | OCS `0x0`, type `0x20`, code `0x0` |
+| 2.175528–2.175550 | `READ_ATTR(0x0a)` | OCS `0x0`, type `0x36`, code `0x0`. `bRefClkFreq=0x2` (38.4 MHz), query result `0`. |
+| 2.175684–2.176001 | Hibern8 and HCI cleanup | Fresh Hibern8 IRQ, HC/PHY `0x11`/`0x11` before cleanup, IRQ freed with Deep H8 held. |
+| 90.192769–90.192836 | Private RAM stage before return | `scsi_disks=0`, warm restart requested. |
+
+This verifies a legacy SDB management transfer and reference-clock
+query before `fDeviceInit`. Transfer completion was polled. Normal
+SCSI transport, discovery and disk reads remain untested. The early
+deferred-probe device-link warning recurred before UFS probe.
+
+Ramoops and `SYSTEM_LAST_KMSG` match. Fastboot returned after 133
+seconds, and stock D1 completed boot on A with enforcing verity and
+the original factory VBMeta digest.
 
 ### Offline stock D1 device reference-clock diagnostic
 
