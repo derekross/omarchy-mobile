@@ -161,7 +161,8 @@ existed finds them under "Add tiles" too.
 Tiles whose backend is missing render a dimmed glyph and name over a readable reason ("No modem",
 "No sensor", "No flash LED") and ignore taps. The tiles without a Quickshell
 service read their state in one pass of `tile-state.sh` each time the sheet
-opens and after each change, and switch through `tile-action.sh`; both sit
+opens and after each change, and switch through `tile-action.sh` (both read
+the airplane tile's sitd state through `sit-airplane.sh`); all three sit
 beside the QML and are tested against fake commands in
 `test/tile-scripts.sh`.
 

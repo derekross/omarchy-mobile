@@ -95,6 +95,12 @@ touch "$tmp/state/sit-refuses"
 if sit_run "$dir/tile-action.sh" airplane off; then fail "a failed radio on fails the tile's action"; fi
 grep -cx "wlan unblocked" "$tmp/state/rfkill" >/dev/null || fail "a failed radio on still brings Wi-Fi back"
 rm -f "$tmp/state/sit-refuses"
+# ... and keeps what was on before airplane mode for the next try: Bluetooth
+# was off then, and the second tap leaves it off
+printf '{"modem":{"radio":"off","radio_choice":"off","state":"searching"}}\n' >"$tmp/state/sit.json"
+sit_run "$dir/tile-action.sh" airplane off || fail "the second airplane off succeeds"
+grep -cx "bluetooth blocked" "$tmp/state/rfkill" >/dev/null || fail "after a failed radio on, the next try keeps Bluetooth off as it was"
+printf '{"modem":{"radio":"on","radio_choice":"on","state":"registered"}}\n' >"$tmp/state/sit.json"
 printf '{"modem":{"radio":"off","radio_choice":"off","state":"searching"}}\n' >"$tmp/state/sit.json"
 grep -cx "airplane=on" <<<"$(sit_run "$dir/tile-state.sh")" >/dev/null || fail "airplane is on while sitd's radio is off"
 printf 'not json' >"$tmp/state/sit.json"
@@ -116,6 +122,14 @@ grep -cx "airplane=on" <<<"$(sit_run "$dir/tile-state.sh")" >/dev/null || fail "
 sit_run "$dir/tile-action.sh" airplane off
 grep -cx "sit radio on" "$log" >/dev/null && fail "with a sitd that writes no radio_choice, airplane off leaves the cellular radio alone"
 grep -cx "wlan unblocked" "$tmp/state/rfkill" >/dev/null || fail "with a sitd that writes no radio_choice, airplane off unblocks Wi-Fi"
+# radio_choice anywhere but under "modem" is not sitd's: both scripts read it the same way
+printf '{"radio_choice":"on","modem":{"radio":"off"}}\n' >"$tmp/state/sit.json"
+printf 'wlan unblocked\nbluetooth unblocked\nnfc unblocked\n' >"$tmp/state/rfkill"
+: >"$log"
+sit_run "$dir/tile-action.sh" airplane on
+grep -cx "sit radio off" "$log" >/dev/null && fail "radio_choice outside \"modem\": the action leaves the cellular radio alone"
+grep -cx "airplane=on" <<<"$(sit_run "$dir/tile-state.sh")" >/dev/null || fail "radio_choice outside \"modem\": the tile reads the rfkill switches"
+sit_run "$dir/tile-action.sh" airplane off
 rm -f "$tmp/state/sit.json"
 pass "airplane mode with an older sitd keeps to the rfkill switches"
 

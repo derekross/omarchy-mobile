@@ -38,25 +38,15 @@
 
 t() { timeout 3 "$@" 2>/dev/null; }
 have() { command -v "$1" >/dev/null 2>&1; }
+here=${0%/*}; [ "$here" != "$0" ] || here=. # this script's folder
 
 # airplane: the cellular radio where sitd runs and its state says the
 # owner's radio choice (radio_choice: a sitd that keeps radio "off" after its
 # own AT+CFUN=0; the Pixel 9a has no WWAN rfkill switch, and airplane mode is
 # the cell radio). An older sitd's state goes on reading "on" after a radio
-# off, so with it the tile stays on the rfkill switches.
-sit_state=${OMAMOBILE_SIT_STATE:-/run/omamobile-sit/state.json}
-sit_airplane=
-if have omamobile-sit && [ -r "$sit_state" ] && have python3; then
-  sit_airplane=$(python3 -I -c '
-import json, sys
-try:
-    m = json.load(open(sys.argv[1])).get("modem") or {}
-except (OSError, ValueError):
-    m = {}
-if isinstance(m, dict) and "radio_choice" in m:
-    print("on" if m.get("radio") == "off" else "off")
-' "$sit_state")
-fi
+# off, so with it the tile stays on the rfkill switches. sit-airplane.sh
+# makes the check for both this and tile-action.sh.
+sit_airplane=$(t sh "$here/sit-airplane.sh")
 if [ -n "$sit_airplane" ]; then
   echo "airplane=$sit_airplane"
 elif have rfkill; then

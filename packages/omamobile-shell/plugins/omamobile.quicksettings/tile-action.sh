@@ -4,6 +4,7 @@
 # tile-state.sh reads. Run as the session user; nothing here needs root
 # except what polkit already guards (systemctl for mobile data).
 set -u
+here=${0%/*}; [ "$here" != "$0" ] || here=. # this script's folder
 
 state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/omamobile"
 tile=${1:-}
@@ -24,30 +25,31 @@ case $tile in
         | sort -u >"$restore"
       for type in wlan bluetooth wwan; do rfkill block "$type" 2>/dev/null; done
     }
-    radios_back() {
+    radios_back() { # keep: leave the restore file for the next try
       types=$(cat "$restore" 2>/dev/null)
       [ -n "$types" ] || types="wlan bluetooth"
       for type in $types; do rfkill unblock "$type" 2>/dev/null; done
-      rm -f "$restore"
+      [ "${1:-}" = keep ] || rm -f "$restore"
     }
     # The cellular radio goes through omamobile-sitd (omamobile-sit radio:
     # AT+CFUN, calls, SMS and data set up again by sitd when it comes back
-    # on) only when its state says the owner's radio choice (radio_choice).
-    # An older sitd's state doesn't follow its own radio off, so the tile
-    # could only ever turn the radio off: there it keeps to the switches. The
+    # on) only where sit-airplane.sh reads the owner's radio choice
+    # (radio_choice) in its state, the same check tile-state.sh makes. An
+    # older sitd's state doesn't follow its own radio off, so the tile could
+    # only ever turn the radio off: there it keeps to the switches. The
     # session user is in sitd's control group.
-    sit_state=${OMAMOBILE_SIT_STATE:-/run/omamobile-sit/state.json}
-    if command -v omamobile-sit >/dev/null 2>&1 && [ -r "$sit_state" ] \
-        && grep -c '"radio_choice"' "$sit_state" >/dev/null 2>&1; then
+    if [ -n "$(sh "$here/sit-airplane.sh")" ]; then
       if [ "$want" = on ]; then
         # The cellular radio first: sitd refuses during a call, and then
         # nothing else changes either.
         omamobile-sit radio off || exit 1
         radios_off
       else
-        omamobile-sit radio on; status=$?
-        radios_back
-        exit "$status"
+        # A failed radio on brings the switches back all the same but keeps
+        # what was on before airplane mode, for the next try.
+        if omamobile-sit radio on; then radios_back; exit 0; fi
+        radios_back keep
+        exit 1
       fi
       exit 0
     fi

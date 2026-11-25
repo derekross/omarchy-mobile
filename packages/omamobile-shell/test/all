@@ -414,6 +414,7 @@ fi
 # The quick-settings tile scripts, against fake commands.
 sh -n plugins/omamobile.quicksettings/tile-state.sh || fail "tile-state.sh parses"
 sh -n plugins/omamobile.quicksettings/tile-action.sh || fail "tile-action.sh parses"
+sh -n plugins/omamobile.quicksettings/sit-airplane.sh || fail "sit-airplane.sh parses"
 bash test/tile-scripts.sh || fail "quick-settings tile scripts"
 
 # The Bluetooth pairing helper parses, and its pure parts work without D-Bus.
