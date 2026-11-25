@@ -3963,6 +3963,51 @@ Fastboot returned after 133 seconds. Stock D1 A restarted at
 pretrial VBMeta digest. Ramoops and Android's `SYSTEM_LAST_KMSG`
 agree on all 43 filtered v68 lines.
 
+### Mainline v69 discover GPT partitions read-only on LUN 0
+
+[v69 source](https://github.com/adrienlacombe/linux-omarchy-mobile/commit/d68b15006714e4baef8d854e2c0fc3e45ea4c616)
+extends the temporary read-only disk with Linux's native EFI GPT
+parser. DOS and other partition parsers are disabled. The v68
+standalone block read is disabled for this fixture.
+
+Before registering `sd`, the driver validates the direct primary GPT
+header and entry-array CRCs. It requires the primary header to place
+the alternate header at the last LBA and to leave the canonical
+alternate entry-array range outside usable blocks. The direct array
+provides the expected number of used partition entries.
+
+Only while `sd` attaches, the transport permits one read per metadata
+block. The allowlist contains LBA 0, LBA 1, the primary array beginning
+at LBA 2, the final LBA and the canonical alternate array immediately
+before it. The previous D1 geometry implies seven requests at LBAs
+0–3 and 12,801,021–12,801,023. Each must be one 4 KiB,
+DMA-from-device `READ(10)` to the whole read-only LUN 0 disk.
+Writes, duplicates, other LUNs, partition-device requests, and reads
+outside these ranges fail closed. The driver rejects the trial if
+a command is refused or fails, or if the completed scan did not need
+every expected block. It suppresses later scans and checks the
+published read-only partition count against the direct GPT.
+
+The `--gpt-scan-only` RAM image waits for the kernel verification
+marker. It checks one whole LUN 0 disk and the same number of
+read-only children, each belonging to that disk with nonzero,
+aligned, in-capacity extents, no holders and no mounts. It does
+not open block nodes. Disk and host removal precede Hibern8 and
+the existing 90-second warm return. This fixture reads GPT metadata
+only and does not mount storage or hand off to an installed system.
+
+| Step | Pass | Stop and return |
+| --- | --- | --- |
+| Offline review | Match the source, five image hashes, both AVB signatures, saved slot capacities, EFI-only config and the GPT RAM marker. DTB, DTBO and `vendor_boot` match v68. | Leave stock A selected on a mismatch. |
+| One attended slot B trial | Capture the live metadata layout, one successful transfer per allowed block, kernel and RAM partition count and read-only checks, successful teardown, zero disks before restart and stock A return. | Hold Volume Down after the orange warning. Preserve the first unexpected request, layout, partition, mount, timeout or reset. Return to stock A without retrying. |
+
+Offline release `7.3.0-rc6-omamobile-grizzly-uic-v69` passed strict
+checkpatch, targeted arm64 `W=1` compilation, 33 sanitizer-backed
+metadata gate/layout cases, 20 synthetic sysfs cases and ShellCheck.
+Both AVB signatures, ABL handoff, all five image hashes and saved
+D1 slot checks passed. Manifest SHA-256 `8594d28095e868aa19dfd11ddf3a6307e1628aa2218af4002bd1500b724d4e73`.
+Archive SHA-256 `5443e16745c8d1cbe9a4c93b6d243ef188704eb8aba5d53dc930b0d205694f75`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

@@ -12,6 +12,7 @@ mainline_marker=/grizzly-inventory/mainline-inventory
 device_query_marker=/grizzly-inventory/device-query-only
 single_lun_marker=/grizzly-inventory/single-lun-only
 single_disk_marker=/grizzly-inventory/single-disk-only
+gpt_scan_marker=/grizzly-inventory/gpt-scan-only
 inventory_prefix=grizzly-stock-inventory
 if [ -e "$mainline_marker" ] || [ -L "$mainline_marker" ]; then
     inventory_prefix=grizzly-mainline-inventory
@@ -105,16 +106,36 @@ check_mainline_previous_boot() {
     esac
 }
 
+check_mainline_block_unmounted() (
+    set +f
+    device=$1
+    [ -d "$device/holders" ] || exit 1
+    for holder in "$device"/holders/*; do
+        [ ! -e "$holder" ] && [ ! -L "$holder" ] || exit 1
+    done
+    IFS= read -r devnum < "$device/dev" && [ -n "$devnum" ] || exit 1
+    # shellcheck disable=SC2016
+    "$bb" awk -v dev="$devnum" 'NF < 10 || $3 == dev { bad = 1 }
+        END { exit bad || !NR }' /proc/self/mountinfo
+)
+
 # Return 2 only while the diagnostic disk has yet to appear.
 check_mainline_ro_disk() (
     set +f
-    set -- "$1"/sd*
-    [ "$#" -eq 1 ] || exit 1
-    if [ ! -e "$1" ] && [ ! -L "$1" ]; then
-        exit 2
-    fi
-    disk=$1
-    [ -L "$disk" ] && [ ! -e "$disk/partition" ] || exit 1
+    block_dir=$1
+    expected=$2
+    disk=
+    entries=0
+    for candidate in "$block_dir"/sd*; do
+        [ -e "$candidate" ] || [ -L "$candidate" ] || continue
+        entries=$((entries + 1))
+        [ -f "$candidate/partition" ] && continue
+        [ -z "$disk" ] || exit 1
+        disk=$candidate
+    done
+    [ "$entries" -gt 0 ] || exit 2
+    [ -n "$disk" ] || exit 1
+    [ -L "$disk" ] || exit 1
     disk_path=$("$bb" readlink -f "$disk") || exit 1
     child_path=${disk_path%/block/*}
     addr=${child_path##*/}
@@ -128,21 +149,48 @@ check_mainline_ro_disk() (
     IFS= read -r ro < "$disk/ro" && [ "$ro" = 1 ] || exit 1
     IFS= read -r logical < "$disk/queue/logical_block_size" && [ "$logical" = 4096 ] || exit 1
     IFS= read -r sectors < "$disk/size" && [ "$sectors" = 102408192 ] || exit 1
-    [ -d "$disk/holders" ] || exit 1
-    for holder in "$disk"/holders/*; do
-        [ ! -e "$holder" ] && [ ! -L "$holder" ] || exit 1
+    check_mainline_block_unmounted "$disk" || exit 1
+
+    count=0
+    for child in "$block_dir"/sd*; do
+        [ "$child" = "$disk" ] && continue
+        [ -L "$child" ] || exit 1
+        child_path=$("$bb" readlink -f "$child") || exit 1
+        [ "$child_path" = "$disk_path/${child##*/}" ] || exit 1
+        IFS= read -r number < "$child/partition" || exit 1
+        IFS= read -r start < "$child/start" || exit 1
+        IFS= read -r size < "$child/size" || exit 1
+        IFS= read -r child_ro < "$child/ro" && [ "$child_ro" = 1 ] || exit 1
+        case $number:$start:$size in *[!0-9:]*|:*|*::*|*:) exit 1 ;; esac
+        [ "$number" -gt 0 ] && [ "$number" -le 128 ] &&
+            [ "$start" -gt 0 ] && [ "$size" -gt 0 ] &&
+            [ "$start" -le "$sectors" ] && [ "$size" -le "$((sectors - start))" ] &&
+            [ "$((start % 8))" -eq 0 ] && [ "$((size % 8))" -eq 0 ] || exit 1
+        check_mainline_block_unmounted "$child" || exit 1
+        count=$((count + 1))
     done
-    IFS= read -r devnum < "$disk/dev" && [ -n "$devnum" ] || exit 1
-    # shellcheck disable=SC2016
-    "$bb" awk -v dev="$devnum" 'NF < 10 || $3 == dev { bad = 1 }
-        END { exit bad || !NR }' /proc/self/mountinfo || exit 1
-    stock_inventory_log "single read-only SCSI disk verified lun=0 sectors=$sectors block_size=$logical ro=$ro"
+    [ "$count" -eq "$expected" ] || exit 1
+    stock_inventory_log "single read-only SCSI disk verified lun=0 sectors=$sectors block_size=$logical ro=$ro partitions=$count"
 )
 
 observe_mainline_ro_disk() {
     tries=0
     while [ "$tries" -lt 20 ]; do
-        check_mainline_ro_disk /sys/class/block
+        expected=0
+        if [ -f "$gpt_scan_marker" ]; then
+            # Wait for the synchronous scan and its kernel-side result check.
+            expected=$("$bb" dmesg | "$bb" sed -n \
+                's/.*ufs-uic-v69 LUN 0 GPT scan verified partitions=\([0-9][0-9]*\) metadata_reads=[0-9][0-9]*$/\1/p')
+            case $expected in
+                '') "$bb" sleep 1 || break
+                    tries=$((tries + 1))
+                    continue ;;
+                *[!0-9]*) end_inventory 'invalid GPT scan completion marker' ;;
+            esac
+            [ "$expected" -gt 0 ] && [ "$expected" -le 128 ] ||
+                end_inventory 'invalid GPT scan partition count'
+        fi
+        check_mainline_ro_disk /sys/class/block "$expected"
         case $? in
             0) end_inventory 'single disk RAM stage complete' ;;
             2) ;;
@@ -183,6 +231,11 @@ run_mainline_inventory() {
         fi
     fi
     query_scan=none
+    if [ -e "$gpt_scan_marker" ] || [ -L "$gpt_scan_marker" ]; then
+        [ -f "$gpt_scan_marker" ] && [ ! -L "$gpt_scan_marker" ] &&
+            [ -f "$single_disk_marker" ] && [ ! -L "$single_disk_marker" ] ||
+            end_inventory 'invalid GPT scan marker'
+    fi
     if [ -e "$single_disk_marker" ] || [ -L "$single_disk_marker" ]; then
         [ -f "$single_disk_marker" ] && [ ! -L "$single_disk_marker" ] &&
             [ -f "$single_lun_marker" ] && [ ! -L "$single_lun_marker" ] ||
