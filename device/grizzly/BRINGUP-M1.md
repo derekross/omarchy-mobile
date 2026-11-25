@@ -102,6 +102,7 @@ whether it predated a stock boot.
 | [v68](#attended-v68-slot-b-trial) | After v67. Stock D1 A preflight matched the prior return. The v68 boot was requested at 17:57:17 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 | [v69](#attended-v69-slot-b-trial) | After v68. Stock D1 A preflight matched the prior return. The v69 boot was requested at 18:15:08 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 | [v70](#attended-v70-slot-b-trial) | After v69. Stock D1 A preflight matched the prior return. The v70 boot was requested at 18:34:28 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
+| [v71](#attended-v71-slot-b-trial) | After v70. Stock D1 A preflight matched the prior return. The v71 boot was requested at 20:45:44 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 
 The maintainer's [review on backup freshness](https://github.com/derekross/omamobile/pull/1002#pullrequestreview-6060450538)
 leaves open whether to take a fresh rescue backup before each
@@ -4149,6 +4150,32 @@ selection, remap and comparison cases. Both AVB signatures, ABL
 handoff, all five image hashes and saved D1 slot checks passed.
 Manifest SHA-256 `f72c489d0410a07085b9be13c597e2dc82480e74506e77a5c1d478b4bf599b6d`.
 Archive SHA-256 `95ece9ccca05c1b3eff72bcc7dbfc1fe51366602deaf9e5c4621d0064a0bfdba`.
+
+#### Attended v71 slot B trial
+
+On 2026-11-25 at 20:45:44 UTC, one v71 boot used the nine-partition
+private NV backup with the owner's approval. All nine local hashes
+passed. The copy predates the last stock A boot. All five slot B
+writes passed, and the readback matched all 8,192 supplied
+`vendor_boot_b` bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 2.216515–2.217759 | Direct qualification | Both GPT headers passed. The primary table identifies `boot_b` as partition 23 on LUN 0, starting at LBA 598,710. Its first 4,096 bytes passed the direct UFS read and Android boot header check. |
+| 2.229405–2.234101 | GPT scan | Seven metadata reads completed by IRQ with zero residual, no gate refusal and no EFI fallback. The kernel verified 42 read-only partitions. |
+| 2.234153–2.234388 | Partition block read | One `READ(10)` through partition 23 used one 4,096-byte DMA-from-device segment. Tag 9 completed by IRQ with OCS 0, status 0 and zero residual. All 4,096 bytes matched the direct UFS read at LBA 598,710. |
+| 3.409276–3.409691 | RAM verification | All 42 partitions were read-only and unmounted, with correct parentage, aligned, bounded extents and no holders. No storage was mounted. |
+| 6.469168–6.469584 | Cleanup | Host removal and Hibern8 passed. Both PSMs reached `0x11`, and the HCI IRQ was freed. |
+| 90.206106–91.208898 | Timed warm return | Zero SCSI disks before restart. |
+
+The first-block result confirms partition-relative I/O through
+the published read-only `boot_b` device. The deferred-probe
+`device_links_no_driver` warning remained.
+
+Fastboot returned after 134 seconds. Stock D1 A restarted at
+20:48:41 UTC and completed boot with enforcing verity and the
+pretrial VBMeta digest. Ramoops and Android's `SYSTEM_LAST_KMSG`
+agree on all 76 filtered v71 lines.
 
 ### Offline stock D1 device reference-clock diagnostic
 
