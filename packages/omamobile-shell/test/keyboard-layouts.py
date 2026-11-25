@@ -51,7 +51,8 @@ def keysym_ok(sym):
 
 
 HAND_MADE = {"squeekboard/keyboards/terminal/us.yaml", "squeekboard/keyboards/terminal/us_wide.yaml",
-             "squeekboard/keyboards/terminal/gr.yaml", "squeekboard/keyboards/terminal/gr_wide.yaml"}
+             "squeekboard/keyboards/terminal/gr.yaml", "squeekboard/keyboards/terminal/gr_wide.yaml",
+             "squeekboard/keyboards/terminal/ru.yaml", "squeekboard/keyboards/terminal/ru_wide.yaml"}
 GENERATED = "# squeekboard/generate (change the generator, not this file)."
 paths = sorted(glob.glob("squeekboard/keyboards/**/*.yaml", recursive=True))
 names = {p[len("squeekboard/keyboards/"):] for p in paths}
@@ -207,6 +208,48 @@ for rel in ("terminal/gr.yaml", "terminal/gr_wide.yaml"):
     if buttons.get("show_greek", {}).get("action", {}).get("set_view") != "base":
         fail(path, "show_greek goes back to the Greek letters")
 print("ok - the Greek terminal layouts have the Greek letters, the terminal row and a Latin view")
+
+# Russian in a terminal (#695): terminal/ru and terminal/ru_wide, written by
+# hand like terminal/gr, with ru.yaml's letters, numbers and symbols
+for rel in ("terminal/ru.yaml", "terminal/ru_wide.yaml"):
+    path = "squeekboard/keyboards/" + rel
+    with open(path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    with open("squeekboard/keyboards/" + rel.split("/")[1], encoding="utf-8") as f:
+        plain = yaml.safe_load(f)["views"]
+    views, buttons = data["views"], data["buttons"]
+    if views["base"][2:5] != plain["base"][1:4] or views["upper"][2:5] != plain["upper"][1:4]:
+        fail(path, "the base and shift views have ru's letter rows")
+    letters = set("".join(views["base"][2:6] + views["upper"][2:6]).replace(" ", ""))
+    for c in "йцукенгшщзхъфывапролджэячсмитьбюёЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮЁ":
+        if c not in letters:
+            fail(path, "%s can be typed" % c)
+    for v in ("numbers", "symbols"):
+        if views[v][2:4] != plain[v][1:3]:
+            fail(path, "the %s view has ru's rows" % v)
+    for vname, rows in views.items():
+        if not rows[1].startswith("Esc-small Tab-small Ctrl Alt"):
+            fail(path, "view %s keeps the terminal row under the action row" % vname)
+    if views.get("latin", [])[2:5] != ["q w e r t y u i o p", ".-thin a s d f g h j k l --thin",
+                                       "show_russian z x c v b n m BackSpace"]:
+        fail(path, "the latin view has the Latin letters for Ctrl and Alt combos")
+    lock = buttons.get("show_latin", {}).get("action", {}).get("locking", {})
+    if (lock.get("lock_view"), lock.get("unlock_view")) != ("latin", "base"):
+        fail(path, "the abc key latches the latin view and unlocks to base")
+    for vname in ("base", "latin"):
+        if views.get(vname, ["", ""])[1].split()[5:6] != ["show_latin"]:
+            fail(path, "the abc key is in the same place in the %s view" % vname)
+    if buttons.get("show_russian", {}).get("action", {}).get("set_view") != "base":
+        fail(path, "show_russian goes back to the Russian letters")
+    used = {k for rows in views.values() for r in rows for k in r.split()}
+    for ch in "~-./|":
+        if not any(buttons.get(k, {}).get("text", k) == ch or k == ch for k in used):
+            fail(path, "%s can be typed in some view" % ch)
+    if not any("show_actions" in r for r in views["base"] + views["upper"]):
+        fail(path, "the F-keys can be reached from the Russian letters")
+    if any(b.get("label") == "ABC" for b in buttons.values()):
+        fail(path, "no key is labelled ABC")
+print("ok - the Russian terminal layouts have the Russian letters, the terminal row and a Latin view")
 
 for line in failures:
     print("not ok - " + line)
