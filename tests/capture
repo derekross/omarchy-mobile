@@ -38,6 +38,7 @@ run() { # phone
 run adbroot
 [[ $(cat "$t/ref/snap/live.dtb") == FDT ]] || fail "adb root: no live.dtb"
 grep -c '^shell su ' "$ADB_LOG" >/dev/null && fail "adb root: went through su"
+grep -c 'revoke Shell' "$t/log" >/dev/null && fail "adb root: asks to revoke a Magisk grant"
 echo 'ok - adb root: the root reads run in adb shell, no su'
 
 run magisk
@@ -45,7 +46,8 @@ run magisk
 grep -c "^shell su -c 'dmesg'" "$ADB_LOG" >/dev/null || fail "magisk: dmesg not read through su"
 grep -c '^shell dmesg' "$ADB_LOG" >/dev/null && fail "magisk: dmesg read without su"
 grep -c 'Root available' "$t/log" >/dev/null || fail "magisk: root not reported"
-echo 'ok - Magisk: root found through su, the root reads go through su -c'
+grep -c "revoke Shell in Magisk's Superuser tab" "$t/log" >/dev/null || fail "magisk: no reminder to revoke the grant"
+echo 'ok - Magisk: root found through su, the root reads go through su -c, then a reminder to revoke the grant'
 
 for phone in ungranted none; do
   run $phone
@@ -55,5 +57,5 @@ for phone in ungranted none; do
 done
 grep -c "grant Shell in Magisk" "$t/log" >/dev/null && fail "none: points at Magisk without su"
 run ungranted
-grep -c "grant Shell in Magisk" "$t/log" >/dev/null || fail "ungranted: no hint about Magisk's Superuser tab"
-echo 'ok - without root (no su, or su not granted) the root reads are skipped, with a hint where su refuses'
+grep -c "grant Shell in Magisk.*revoke it there" "$t/log" >/dev/null || fail "ungranted: no hint to grant and then revoke"
+echo 'ok - without root (no su, or su not granted) the root reads are skipped, with a hint to grant and then revoke where su refuses'
