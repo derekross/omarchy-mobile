@@ -16,24 +16,35 @@
 #            then takes every capture PCM (/dev/snd/pcmC*D*c, any card: built-in,
 #            USB, dock) away from the session: no uaccess ACL, root:root 0600,
 #            at every boot and udev event while the file is there. Here: udev
-#            re-applies it to the sound nodes, any ACL left from before is
-#            cleared, WirePlumber gets a drop-in (Bluetooth: A2DP only, so no
-#            headset mic; ALSA inputs hidden), each logged-in user's WirePlumber
-#            and PipeWire restart so nothing keeps a capture open, and any other
-#            process still holding one is stopped (TERM, then KILL). Playback nodes are
-#            never touched. Refused while an installed Google UCM profile has a
-#            microphone without the same file guard: locking its capture PCM
-#            would fail its whole profile in PipeWire, speakers included.
-#   mic-on   remove the file and the drop-in, re-apply udev (uaccess comes back
-#            and logind gives the active user the ACL again), restart the
-#            users' WirePlumber and PipeWire so the microphone shows again.
-#   camera-off / camera-on  the same for video4linux, media and v4l-subdev
-#            nodes (/var/lib/omamobile/privacy/camera); the rule skips the video
-#            codec (driver s5p-mfc), so video decode keeps working. The
-#            WirePlumber drop-in turns its V4L2 and libcamera monitors off. No
-#            camera works on these phones yet: this is enforced once one does.
+#            re-applies it to the sound nodes, each node is also set root:root
+#            0600 directly and any ACL left from before is cleared, WirePlumber
+#            gets a drop-in (Bluetooth: A2DP only, so no headset mic; ALSA inputs
+#            hidden), each logged-in user's WirePlumber and PipeWire restart so
+#            nothing keeps a capture open, and any other user process still
+#            holding one is stopped (TERM, then KILL; PipeWire and WirePlumber
+#            are only ever restarted through the user's manager). Playback
+#            nodes are never touched. If the lock itself fails (udev failed, a
+#            node or ACL stayed open), everything is undone and it exits 1 with
+#            "not changed": the file never says off while a node is open. A
+#            holder that will not stop leaves the lock in place (the nodes are
+#            already root's) and exits 1 naming it. Refused while an installed
+#            Google UCM profile has a microphone without the same file guard:
+#            locking its capture PCM would fail its whole profile in PipeWire,
+#            speakers included.
+#   mic-on   remove the file and re-apply udev (uaccess comes back and logind
+#            gives the active user the ACL again). Only once no capture PCM is
+#            still root's: remove the drop-in and restart the users' WirePlumber
+#            and PipeWire, so the UCM Mic never comes back over a locked PCM.
+#            Otherwise the file and the lock are put back, "not changed", exit 1.
+#   camera-off / camera-on  the same for the video4linux nodes (/dev/video*
+#            and /dev/v4l-subdev*: subdevs are in the video4linux class too)
+#            and media nodes (/var/lib/omamobile/privacy/camera); the rule and
+#            this helper skip the video codec (driver s5p-mfc, or a node named
+#            s5p-mfc*), so video decode keeps working. The WirePlumber drop-in
+#            turns its V4L2 and libcamera monitors off. No camera works on these
+#            phones yet: this is enforced once one does.
 # OMAMOBILE_PRIVACY_ROOT is for the test only (a scratch root for /var, /etc,
-# /usr/share, /dev, /proc and /run; rfkill, systemctl, udevadm, setfacl,
+# /usr/share, /dev, /proc, /sys and /run; rfkill, systemctl, udevadm, setfacl,
 # loginctl, kill, stat, chown, chmod and getfacl are stubs on its PATH). The unit sets no environment.
 set -euo pipefail
 root=${OMAMOBILE_PRIVACY_ROOT:-}
@@ -42,7 +53,8 @@ wpdir=$root/etc/wireplumber/wireplumber.conf.d
 # one switch at a time: an off and an on started together never interleave
 install -d -m 755 "$root/run"
 exec 9> "$root/run/omamobile-privacy.lock"
-flock 9
+# a switch waiting behind another must not use up its own 60 s unit limit in the queue
+flock -w 15 9 || { echo "not changed: another privacy switch is still running" >&2; exit 1; }
 
 write_state() {
   install -d -m 755 "$dir"
@@ -59,6 +71,7 @@ wp_dropin() {
   cat > "$f.tmp"; chmod 644 "$f.tmp"; mv -f "$f.tmp" "$f"
 }
 
+
 # udev applies 72-omamobile-privacy.rules again to these subsystems
 retrigger() {
   local s args=()
@@ -67,95 +80,190 @@ retrigger() {
   udevadm settle --timeout=10 || true
 }
 
-# capture PCMs, or camera nodes, that exist now
+# The video codec, as the rule sees it: a node named s5p-mfc*, or the s5p-mfc
+# driver on the node's device or any parent (udev's DRIVERS; the kernel links
+# the driver in sysfs before probe() registers the codec's nodes).
+is_codec() {
+  local b=${1##*/} s d drv
+  for s in "$root/sys/class/video4linux/$b" "$root/sys/bus/media/devices/$b"; do
+    [[ -e $s ]] || continue
+    [[ $(cat "$s/name" 2>/dev/null) == s5p-mfc* ]] && return 0
+    d=$(readlink -f "$s/device" 2>/dev/null) || continue
+    while [[ $d == "$root"/sys/devices/* ]]; do
+      drv=$(readlink "$d/driver" 2>/dev/null) || drv=''
+      [[ ${drv##*/} == s5p-mfc* ]] && return 0
+      d=${d%/*}
+    done
+  done
+  return 1
+}
+
+# the nodes in scope that exist now: capture PCMs, or camera nodes but the codec
 nodes() {
   local n
   if [[ $1 == mic ]]; then set -- "$root"/dev/snd/pcmC*D*c
-  else set -- "$root"/dev/video* "$root"/dev/media* "$root"/dev/v4l-subdev*; fi
+  else set -- "$root"/dev/video* "$root"/dev/media* "$root"/dev/v4l-subdev* "$root"/dev/vbi* "$root"/dev/radio* \
+    "$root"/dev/swradio* "$root"/dev/v4l-touch*; fi
   # (the test's scratch /dev has plain files)
-  for n; do [[ -c $n || ( -n $root && -f $n ) ]] && printf '%s\n' "$n"; done
+  for n; do
+    [[ -c $n || ( -n $root && -f $n ) ]] || continue
+    [[ $n == "$root"/dev/snd/* ]] || ! is_codec "$n" || continue
+    printf '%s\n' "$n"
+  done
   return 0
 }
 
+subsystems() { if [[ $1 == mic ]]; then echo sound; else echo video4linux media; fi; }
+
 locked() { [[ $(stat -c '%u:%g:%a' "$1") == 0:0:600 ]]; }
 
-# Clears the ACLs logind gave the session before the lock (removing the uaccess
-# tag does not take them back). The microphone's nodes are all in scope, so they
-# are also set root:root 0600 here, in case the rule has not run on one; the
-# camera's are only the ones the rule locked (the codec stays open).
+# The lock, checked: udev re-applied the rule (a failed trigger leaves the
+# uaccess tag in udev's database, and logind re-grants ACLs from it on a seat
+# switch), every node in scope is root:root 0600 and has no ACL left (removing
+# the tag does not take logind's ACLs back). Fails naming what is open.
+# "nodes-only" skips udev: for putting a lock back after a failed unlock, when
+# udev's database still has the locked state.
 lock_nodes() {
-  local n bad=0
+  local n acl bad=0
+  # shellcheck disable=SC2046
+  [[ ${2:-} == nodes-only ]] || retrigger $(subsystems "$1") || bad=1
   while IFS= read -r n; do
-    [[ -n $n ]] || continue
-    if [[ $1 == mic ]]; then chown root:root "$n" 2>/dev/null || true; chmod 600 "$n" 2>/dev/null || true; fi
-    locked "$n" || { [[ $1 == mic ]] && bad=1; continue; }
+    # a node unplugged meanwhile (a USB mic) is no node to lock
+    [[ -n $n && -e $n ]] || continue
+    chown root:root "$n" 2>/dev/null || true; chmod 600 "$n" 2>/dev/null || true
+    locked "$n" || { echo "${n#"$root"} is still open to the session" >&2; bad=1; continue; }
     setfacl -b "$n" 2>/dev/null || true
-    # a named user or group entry left means someone still has it
-    if getfacl -cp "$n" 2>/dev/null | grep -Ec '^(user|group):[^:]' >/dev/null; then
+    # a named user or group entry left means someone still has it; no answer is no proof
+    if ! acl=$(getfacl -cp "$n" 2>/dev/null); then
+      echo "could not read the ACL of ${n#"$root"}" >&2; bad=1
+    elif grep -Ec '^(user|group):[^:]' <<< "$acl" >/dev/null; then
       echo "an ACL is still on ${n#"$root"}" >&2; bad=1
     fi
   done < <(nodes "$1")
   return $bad
 }
 
+# The unlock, checked: udev re-applied the rules without the file and no node
+# in scope is still root:root 0600.
+unlock_nodes() {
+  local n acl bad=0
+  # shellcheck disable=SC2046
+  retrigger $(subsystems "$1") || return 1
+  while IFS= read -r n; do
+    [[ -n $n && -e $n ]] || continue
+    locked "$n" && { echo "${n#"$root"} is still locked" >&2; bad=1; }
+  done < <(nodes "$1")
+  return $bad
+}
+
+# the logged-in users from uid 1000 to 60000, as "uid name"
+users() {
+  local uid name rest
+  while read -r uid name rest; do
+    [[ $uid =~ ^[0-9]+$ && $uid -ge 1000 && $uid -le 60000 && $name =~ ^[^[:space:]/@]+$ ]] && printf '%s %s\n' "$uid" "$name"
+  done < <(loginctl list-users --no-legend 2>/dev/null || true)
+  return 0
+}
+
 # each logged-in user's WirePlumber and PipeWire: a restart re-reads the UCM
 # profile (no Mic while the file is there) and drops every open capture.
 # Fails when a restart failed (PipeWire may still hold the old profile).
 restart_audio() {
-  local uid name rest bad=0
-  while read -r uid name rest; do
-    [[ $uid =~ ^[0-9]+$ && $uid -ge 1000 && $uid -le 60000 && $name =~ ^[^[:space:]/@]+$ ]] || continue
-    timeout 15 systemctl --user -M "$name@" try-restart wireplumber.service pipewire.service \
+  local uid name bad=0
+  while read -r uid name; do
+    timeout 15 systemctl --user -M "$name@" try-restart wireplumber.service pipewire.service < /dev/null \
       || { echo "could not restart the audio of $name" >&2; bad=1; }
     # pipewire-pulse is optional
-    timeout 10 systemctl --user -M "$name@" try-restart pipewire-pulse.service 2>/dev/null || true
-  done < <(loginctl list-users --no-legend 2>/dev/null || true)
+    timeout 10 systemctl --user -M "$name@" try-restart pipewire-pulse.service < /dev/null 2>/dev/null || true
+  done < <(users)
   return $bad
 }
 
-# The pids holding one of the locked nodes: an open fd, or a mapping left after
-# the fd was closed. One find and one grep over /proc, not a fork per fd; the
-# pid comes from the path only (a process name is never parsed).
+# a pid's start time (field 22 of /proc/<pid>/stat, read after the name's last ")")
+starttime() {
+  local s
+  s=$(cat "$root/proc/$1/stat" 2>/dev/null) || return 1
+  s=${s##*) }
+  awk '{ print $20 }' <<< "$s"
+}
+
+# The holders of the locked nodes, as "pid starttime": an open fd (of the
+# process or of any of its threads) or a mapping (map_files) of the same file,
+# compared by inode, not by path. One find over /proc, not a fork per fd; the
+# pid comes from the path only. The scan is cut at 10 s (an fd on a hung FUSE
+# mount would block its stat): then a "?" line, which stop_holders reports.
+# Not seen by any /proc scan: io_uring registered files, fds in flight over a
+# socket.
 holder_pids() {
-  local n p links=() maps=() re=
+  local n p st same=()
   while IFS= read -r n; do
     [[ -n $n ]] && locked "$n" || continue
-    p=${n#"$root"}
-    ((${#links[@]})) && links+=(-o)
-    links+=(-lname "$p"); re+="${re:+|}${p//./\\.}"
+    ((${#same[@]})) && same+=(-o)
+    same+=(-samefile "$n")
   done < <(nodes "$1")
-  ((${#links[@]})) || return 0
-  {
-    find "$root"/proc/[0-9]*/fd -mindepth 1 -maxdepth 1 \( "${links[@]}" \) -printf '%h\n' 2>/dev/null || true
-    # the path as the last field of a mapping line, so /dev/video1 never matches /dev/video10
-    grep -lsE " ($re)( \(deleted\))?$" "$root"/proc/[0-9]*/maps 2>/dev/null || true
-  } | sed -n 's#^.*/proc/\([0-9][0-9]*\)/\(fd\|maps\)$#\1#p' | sort -un | while read -r p; do
+  ((${#same[@]})) || return 0
+  local found rc=0
+  found=$(timeout 10 find -L "$root"/proc/[0-9]*/fd "$root"/proc/[0-9]*/task/[0-9]*/fd "$root"/proc/[0-9]*/map_files \
+    -mindepth 1 -maxdepth 1 \( "${same[@]}" \) -printf '%h\n' 2>/dev/null) || rc=$?
+  ((rc != 124)) || { echo '?'; return 0; }
+  sed -n 's#^.*/proc/\([0-9][0-9]*\)/\(task/[0-9][0-9]*/fd\|fd\|map_files\)$#\1#p' <<< "$found" | sort -un | while read -r p; do
     # never init, never this helper
-    [[ $p != 1 && $p != "$$" ]] && printf '%s\n' "$p"
+    [[ $p != 1 && $p != "$$" ]] || continue
+    st=$(starttime "$p") && [[ -n $st ]] && printf '%s %s\n' "$p" "$st"
   done || true
 }
 
 # a pid's name for a message: letters, digits and ._- only, 16 at most
 pname() { tr -cd 'A-Za-z0-9._-' 2>/dev/null < "$root/proc/$1/comm" | head -c 16 || true; }
 
-# stop what still holds a locked node after the restart: TERM, then KILL
-# after 3 s, a user's processes only (uid 1000 and up); fails naming what is left
+# "uid unit" when the pid is in its own user's pipewire, wireplumber or
+# pipewire-pulse unit, exactly where systemd puts it (a process of the user's
+# in a look-alike cgroup deeper down is no audio unit, and gets signalled)
+audio_unit() {
+  local u
+  u=$(sed -nE 's#^0::/user\.slice/user-([0-9]+)\.slice/user@\1\.service/(session|app)\.slice/(pipewire|wireplumber|pipewire-pulse)\.service$#\1 \3.service#p' \
+    "$root/proc/$1/cgroup" 2>/dev/null | head -n 1)
+  [[ -n $u && ${u%% *} == "$2" ]] && printf '%s\n' "$u"
+  return 0
+}
+
+# Stops what still holds a locked node after the restart, a user's processes
+# only (uid 1000-60000): TERM, then KILL after 3 s. PipeWire, WirePlumber and
+# pipewire-pulse are never signalled: their unit is restarted once through the
+# user's manager. A pid is signalled only while its start time is the one seen
+# (a pid reused in between is left; a tiny window stays, bash has no pidfd).
+# Fails naming what is left.
 stop_holders() {
-  local left pid sig uid
+  local left pid st uid au name sig restarted=' ' failed=0
   for sig in TERM KILL; do
     left=$(holder_pids "$1")
-    [[ -n $left ]] || return 0
-    for pid in $left; do
-      # only a user's processes are stopped (uid 1000-60000, login.defs' range); a system one
-      # (root, nobody, a DynamicUser service) is named and left
+    [[ -n $left ]] || return $failed
+    [[ $left != *'?'* ]] || { echo "could not scan /proc for what still has the $1 open" >&2; return 1; }
+    while read -r pid st; do
       uid=$(awk '/^Uid:/ { print $2; exit }' "$root/proc/$pid/status" 2>/dev/null) || uid=''
+      # a system process (root, nobody, a DynamicUser service) is named and left
       [[ $uid =~ ^[0-9]+$ && $uid -ge 1000 && $uid -le 60000 ]] || continue
+      au=$(audio_unit "$pid" "$uid")
+      if [[ -n $au ]]; then
+        [[ $restarted == *" $au "* ]] && continue
+        restarted+="$au "
+        name=$(users | awk -v u="${au%% *}" '$1 == u { print $2; exit }')
+        [[ -n $name ]] || continue
+        echo "restarting ${au#* } of $name: it still had the $1 open"
+        timeout 15 systemctl --user -M "$name@" restart "${au#* }" < /dev/null \
+          || { echo "could not restart the audio of $name (${au#* })" >&2; failed=1; }
+        continue
+      fi
+      [[ $(starttime "$pid") == "$st" ]] || continue
       echo "stopping $(pname "$pid") ($pid) with $sig: it still had the $1 open"
       env kill -"$sig" "$pid" 2>/dev/null || true
+    done <<< "$left"
+    for _ in 1 2 3 4 5 6; do
+      sleep 0.5; left=$(holder_pids "$1"); [[ -n $left ]] || return $failed; [[ $left != *'?'* ]] || break
     done
-    for _ in 1 2 3 4 5 6; do sleep 0.5; left=$(holder_pids "$1"); [[ -n $left ]] || return 0; done
   done
-  echo "still open by:$(for pid in $left; do printf ' %s (%s)' "$(pname "$pid")" "$pid"; done)" >&2
+  [[ $left != *'?'* ]] || { echo "could not scan /proc for what still has the $1 open" >&2; return 1; }
+  echo "still open by:$(while read -r pid st; do printf ' %s (%s)' "$(pname "$pid")" "$pid"; done <<< "$left")" >&2
   return 1
 }
 
@@ -167,6 +275,121 @@ unguarded_ucm() {
     grep -q 'CapturePCM' "$f" || continue
     grep -qF 'Path "/var/lib/omamobile/privacy/mic"' "$f" || printf '%s\n' "${f#"$root"}"
   done
+}
+
+mic_dropin() {
+  wp_dropin mic <<'EOD'
+# SPDX-License-Identifier: MIT
+# Written by omamobile-privacy@mic-off.service, removed by @mic-on. The block
+# itself is 72-omamobile-privacy.rules (no app can open a capture PCM); this
+# only keeps the microphone out of sight: Bluetooth headsets get A2DP only
+# (no HFP/HSP or LE Audio, so no headset mic) and ALSA inputs are hidden.
+monitor.bluez.properties = {
+  bluez5.roles = [ a2dp_sink a2dp_source ]
+}
+monitor.alsa.rules = [
+  {
+    matches = [ { node.name = "~alsa_input.*" } ]
+    actions = { update-props = { node.disabled = true } }
+  }
+  # USB and dock cards: no UCM while the mic is off. A UCM profile whose input
+  # can't open is dropped whole by PipeWire, playback with it; the plain ALSA
+  # profiles include playback-only ones, so their speakers keep working.
+  {
+    matches = [ { device.name = "~alsa_card.*", device.bus = "usb" } ]
+    actions = { update-props = { api.alsa.use-ucm = false } }
+  }
+]
+EOD
+}
+
+camera_dropin() {
+  wp_dropin camera <<'EOD'
+# SPDX-License-Identifier: MIT
+# Written by omamobile-privacy@camera-off.service, removed by @camera-on. The
+# block itself is 72-omamobile-privacy.rules; this keeps cameras out of sight.
+wireplumber.profiles = {
+  main = {
+    monitor.v4l2 = disabled
+    monitor.libcamera = disabled
+  }
+}
+EOD
+}
+
+# Stopped mid-switch (the unit's time limit): fail closed. The file says off
+# and every node is set root's directly (no udev, no restart), so the state
+# never says off over an open node and the UCM Mic never comes back over a
+# locked PCM.
+fail_closed() {
+  local n
+  trap - TERM
+  write_state "$1" 2>/dev/null || true
+  while IFS= read -r n; do
+    chown root:root "$n" 2>/dev/null || true; chmod 600 "$n" 2>/dev/null || true; setfacl -b "$n" 2>/dev/null || true
+  done < <(nodes "$1")
+  # and udev again with the file there, so its database drops uaccess too
+  # shellcheck disable=SC2046
+  retrigger $(subsystems "$1") 2>/dev/null || true
+  echo "stopped in the middle: the $2 is left off" >&2
+  exit 1
+}
+
+# off: the drop-in, then the file (the rule needs it), then the checked lock. A
+# failed lock is undone (the file never says off over an open node); if even
+# the undo fails, it stays off, locked as far as it goes, and says so.
+turn_off() {
+  local ok=1
+  # a drop-in that can't be written stops it before anything changed
+  "$1"_dropin || { echo "not changed: could not write the WirePlumber drop-in" >&2; exit 1; }
+  # expanded now: in a nested function $1 and $2 are that function's
+  # shellcheck disable=SC2064
+  trap "fail_closed $1 $2" TERM
+  write_state "$1" || fail_closed "$1" "$2"
+  if ! lock_nodes "$1"; then
+    rm -f "$dir/$1"
+    if unlock_nodes "$1"; then
+      wp_dropin "$1" remove || true
+      echo "not changed: the $2 could not be locked, it stays on" >&2
+    else
+      write_state "$1" || true
+      if lock_nodes "$1" nodes-only 2>/dev/null; then
+        echo "the $2 could not be put back on (udev failed): it is left off, its nodes locked here" >&2
+      else
+        echo "the $2 could not be locked and could not be put back on: it is left off, maybe still open" >&2
+      fi
+    fi
+    exit 1
+  fi
+  trap - TERM
+  # the file is there and every node is root's: safe to restart
+  restart_audio || ok=0
+  stop_holders "$1" || ok=0
+  ((ok)) || exit 1
+  echo "The $2 is off"
+}
+
+# on: the file goes first (the rule tests it), then the checked unlock; only
+# then the drop-in and the restart, so the UCM Mic never comes back over a
+# locked PCM. A failed unlock puts the file and the lock back.
+turn_on() {
+  # expanded now: in a nested function $1 and $2 are that function's
+  # shellcheck disable=SC2064
+  trap "fail_closed $1 $2" TERM
+  rm -f "$dir/$1"
+  if ! unlock_nodes "$1"; then
+    write_state "$1" || true
+    if lock_nodes "$1" nodes-only 2>/dev/null; then
+      echo "not changed: the $2 could not be unlocked, it stays off" >&2
+    else
+      echo "the $2 could not be unlocked and could not be locked again: it is left off, maybe partly open" >&2
+    fi
+    exit 1
+  fi
+  trap - TERM
+  wp_dropin "$1" remove
+  restart_audio || exit 1
+  echo "The $2 is on"
 }
 
 case ${1:-} in
@@ -189,74 +412,9 @@ mic-off)
     echo "not changed: update omamobile-audio first (no microphone guard in $(paste -sd ' ' <<< "$bad"))" >&2
     exit 3
   fi
-  write_state mic
-  wp_dropin mic <<'EOF'
-# SPDX-License-Identifier: MIT
-# Written by omamobile-privacy@mic-off.service, removed by @mic-on. The block
-# itself is 72-omamobile-privacy.rules (no app can open a capture PCM); this
-# only keeps the microphone out of sight: Bluetooth headsets get A2DP only
-# (no HFP/HSP or LE Audio, so no headset mic) and ALSA inputs are hidden.
-monitor.bluez.properties = {
-  bluez5.roles = [ a2dp_sink a2dp_source ]
-}
-monitor.alsa.rules = [
-  {
-    matches = [ { node.name = "~alsa_input.*" } ]
-    actions = { update-props = { node.disabled = true } }
-  }
-  # USB and dock cards: no UCM while the mic is off. A UCM profile whose input
-  # can't open is dropped whole by PipeWire, playback with it; the plain ALSA
-  # profiles include playback-only ones, so their speakers keep working.
-  {
-    matches = [ { device.name = "~alsa_card.*", device.bus = "usb" } ]
-    actions = { update-props = { api.alsa.use-ucm = false } }
-  }
-]
-EOF
-  # a failed trigger is covered here: every capture PCM is locked directly too
-  retrigger sound 2>/dev/null || true
-  ok=1
-  lock_nodes mic || { ok=0; echo "a capture PCM is still open to the session" >&2; }
-  restart_audio || ok=0
-  stop_holders mic || ok=0
-  ((ok)) || exit 1
-  echo "The microphone is off" ;;
-mic-on)
-  rm -f "$dir/mic"
-  wp_dropin mic remove
-  # the audio restarts even when udev failed, so WirePlumber never keeps the off config
-  ok=1
-  retrigger sound || ok=0
-  restart_audio || ok=0
-  ((ok)) || exit 1
-  echo "The microphone is on" ;;
-camera-off)
-  write_state camera
-  wp_dropin camera <<'EOF'
-# SPDX-License-Identifier: MIT
-# Written by omamobile-privacy@camera-off.service, removed by @camera-on. The
-# block itself is 72-omamobile-privacy.rules; this keeps cameras out of sight.
-wireplumber.profiles = {
-  main = {
-    monitor.v4l2 = disabled
-    monitor.libcamera = disabled
-  }
-}
-EOF
-  ok=1
-  retrigger video4linux media || ok=0
-  lock_nodes camera || ok=0
-  restart_audio || ok=0
-  stop_holders camera || ok=0
-  ((ok)) || exit 1
-  echo "The camera is off" ;;
-camera-on)
-  rm -f "$dir/camera"
-  wp_dropin camera remove
-  ok=1
-  retrigger video4linux media || ok=0
-  restart_audio || ok=0
-  ((ok)) || exit 1
-  echo "The camera is on" ;;
+  turn_off mic microphone ;;
+mic-on) turn_on mic microphone ;;
+camera-off) turn_off camera camera ;;
+camera-on) turn_on camera camera ;;
 *) echo "usage: privacy nfc-off|nfc-on|mic-off|mic-on|camera-off|camera-on" >&2; exit 2 ;;
 esac
