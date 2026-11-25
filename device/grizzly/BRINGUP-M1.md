@@ -2385,8 +2385,35 @@ All five image hashes, both AVB signatures, unpacked payload, ABL
 handoff bounds and saved D1 slot capacities passed. Manifest SHA-256
 `eab265ecf6ee653452ec78e0771344251c920f446168ae82fd330cacd452a319`.
 Archive SHA-256 `3de8276eed7d2e783907ed58d376d5cd0b1c8c3562c96f5e2a4c0c7057f7dcc1`.
-Hardware must determine whether the local settings let PHY reach
-`0x11` during this diagnostic's Hibern8 entry.
+
+#### Attended v46 slot B trial
+
+On 2026-11-25 one slot B boot used the verified nine-partition NV
+snapshot. All five writes passed and the `vendor_boot_b` readback
+matched all 8,192 supplied bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 2.178273–2.178305 | Local `0x8118` and `0xd085` commands | Both `ret=0` |
+| 2.178315–2.178450 | Link and IRQ-backed Hibern8 | `link=0 hibern8=0` |
+| 2.178565–2.178583 | Deep H8 release gate | Initial HC/PHY `0x10`/`0x11`, final `0x11`/`0x11` after 103 µs, `ret=0` |
+| 2.178709 | Deep H8 unprepare | Returned |
+
+The stock DME pair let both PSMs reach `0x11` during the diagnostic
+Hibern8 entry. The trace ends before the post-HCI sample, 20-second
+observer or timed restart. It records no panic. Fastboot returned
+45 seconds after the B boot request. Ramoops and `SYSTEM_LAST_KMSG`
+agree through clock release. The early device-link warning also recurred.
+
+The callback releases Deep H8 before `ufshcd_abort_init()` masks HCI
+interrupts and stops the controller. That sequence can attempt HCI
+MMIO after the successful PHY transition and clock release. The
+retained log does not identify the exact stalled operation or reset
+source. A follow-up can hold Deep H8 after the qualified sample and
+trace the HCI cleanup boundary before changing shutdown order.
+
+Stock D1 completed boot on A with enforcing verity and the original
+factory VBMeta digest.
 
 ## Staging and return sequence used for D1
 
