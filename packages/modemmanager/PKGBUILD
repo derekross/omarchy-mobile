@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: 0BSD
 #
-# Omarchy Mobile build of ModemManager.
+# Omamobile build of ModemManager.
 #
 # Derived from Arch Linux's modemmanager PKGBUILD, 1.24.2-2
 # (https://gitlab.archlinux.org/archlinux/packaging/packages/modemmanager),
-# with its two cherry-picks unchanged. Omarchy Mobile changes:
+# with its two cherry-picks unchanged. Omamobile changes:
 #  - cherry-picks upstream 9317cbc4 ("netlink: fix use-after-free calling
 #    completion_fn on transaction completion", on main since 2026-10-04, not
 #    in 1.24.2 or the mm-1-24 branch). ModemManager creates the rmnet link of
@@ -21,10 +21,13 @@
 #    against that limit alone: ModemManager aborted (g_assert in
 #    mm_iface_modem_count_bearers) at every stop with mobile data on, at each
 #    shutdown of the OnePlus 7T Pro (device/hotdog/MODEM-PLAN.md R9).
-#  - pkgrel 2.2: Arch's and Arch Linux ARM's 1.24.2-2 plus .2, so it sorts
+#  - pkgrel 2.3: Arch's and Arch Linux ARM's 1.24.2-2 plus .3, so it sorts
 #    above both; [omamobile] comes first in pacman.conf.
-#  - the source pinned by commit (1.24.2's) instead of the signed tag, so
-#    the build needs no maintainer keys; no gtk-doc, no modemmanager-docs.
+#  - the source pinned by commit (1.24.2's) and by checksum instead of the
+#    signed tag, so the build needs no maintainer keys: the b2sum is the one
+#    makepkg takes of that commit's `git archive --format tar` (pacman 6.1
+#    and later), and the cherry-picks are named by their full commit ids in
+#    the same clone; no gtk-doc, no modemmanager-docs.
 #  - arch=(aarch64) only.
 #
 # Maintainer of the original: Jan Alexander Steffens (heftig); contributor
@@ -36,8 +39,8 @@ pkgname=(
   libmm-glib
 )
 pkgver=1.24.2
-pkgrel=2.2
-pkgdesc="Mobile broadband modem management service (Omarchy Mobile: netlink use-after-free and multiplexed cleanup fixes)"
+pkgrel=2.3
+pkgdesc="Mobile broadband modem management service (Omamobile: netlink use-after-free and multiplexed cleanup fixes)"
 url="https://www.freedesktop.org/wiki/Software/ModemManager/"
 arch=(aarch64)
 license=(
@@ -68,12 +71,13 @@ makedepends=(
   systemd
   vala
 )
-# 1.24.2's commit (the tag); the cherry-picks below come from the same clone
+# 1.24.2's commit (the tag), and the b2sum of its `git archive` tar; the
+# cherry-picks below come from the same clone
 _commit=f2b9ab1ad78d322f32134a444b5b54c6e8160e19
 source=(
   "git+https://gitlab.freedesktop.org/mobile-broadband/ModemManager.git#commit=$_commit"
 )
-b2sums=('SKIP')
+b2sums=('fbf202dc30af2201ba2a675183bdf8b12d0f8665e4a73454c7d7bca8cc7acf4ee93c42c291f9ddfa84c696b7c05a1b68e4211f7e75707aea0000f77bff6cc72b')
 
 prepare() {
   cd ModemManager
@@ -85,10 +89,10 @@ prepare() {
   # https://gitlab.archlinux.org/archlinux/packaging/packages/modemmanager/-/issues/1
   git cherry-pick -n 018e44084825ab294ad2b5d5b301d2b9e2577eb1
 
-  # Omarchy Mobile: the netlink use-after-free (header)
+  # Omamobile: the netlink use-after-free (header)
   git cherry-pick -n 9317cbc4702c7d6283e42a498cd9812e19eeccf3
 
-  # Omarchy Mobile: the bearer-count assertion at cleanup with multiplexed bearers
+  # Omamobile: the bearer-count assertion at cleanup with multiplexed bearers
   git cherry-pick -n 0edcb916ad2b7267caf73bbd9a31e46da0727a00
 }
 

@@ -5,14 +5,14 @@
 # repositories, so we build it. A device package runs hexagonrpcd with its
 # own root directory (the phone's own files, never shipped).
 #
-# Source: upstream's git, pinned by commit (v0.5.0 plus 20, the commit the
-# dodge bring-up ran), with two changes: the listener keeps serving after a
+# Source: upstream's git, pinned by commit and checksum (v0.5.0 plus 20,
+# the commit the dodge bring-up ran), with two changes: the listener keeps serving after a
 # call it does not implement instead of quitting, and /sys/project_info is
 # served from the root directory (OnePlus's SLPI firmware reads the project
 # name from there).
 pkgname=hexagonrpc
 pkgver=0.5.0.r20.gda7a374
-pkgrel=2
+pkgrel=3
 pkgdesc="FastRPC library and file server for Qualcomm Hexagon DSPs"
 arch=(aarch64)
 url="https://github.com/linux-msm/hexagonrpc"
@@ -24,8 +24,10 @@ conflicts=(hexagonrpcd)
 source=("hexagonrpc::git+https://github.com/linux-msm/hexagonrpc.git#commit=da7a3742ab8d5273a281b70ee11f16fb2cb6a690"
         0001-listener-keep-serving-after-an-unsupported-method.patch
         0002-rpcd-serve-sys-project_info.patch)
-# The git source is pinned by its commit above; the patches by sha256
-sha256sums=('SKIP'
+# The git source is pinned by its commit above and by the sha256 makepkg
+# takes of that commit's `git archive --format tar` (pacman 6.1 and later);
+# the patches by sha256
+sha256sums=('01a46df2b3417a7efb5fa972e16bcfa4bc67a8319cd221d5fcb355824c64199b'
             '1e4366e40833524e39612b1c82058affe6477dc70aa50d336572deb929228bf4'
             '2a8ca9df6f0b5ab1f0f4847520e01a2e52a1241bcce8885925b2cd85be55a3da')
 

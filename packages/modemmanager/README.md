@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# modemmanager (Omarchy Mobile build)
+# modemmanager (Omamobile build)
 
 Arch Linux's ModemManager 1.24.2-2 recipe (`modemmanager`, `libmm-glib`),
 built for aarch64 with two upstream fixes that 1.24.2 lacks: commit `9317cbc4`,
@@ -24,3 +24,9 @@ of the 7T Pro (device/hotdog/MODEM-PLAN.md, R9).
 Drop this package once Arch's ModemManager carries the fix (1.26 or a 1.24
 point release). Changes against Arch's recipe are listed in the PKGBUILD's
 header.
+
+The source is pinned by commit and by checksum (the b2sum makepkg takes of
+the commit's `git archive`), and `tools/build-packages` builds it only when
+named, not in the daily build, until the maintainer has reviewed it; the same
+goes for `hexagonrpc`, and for `omamobile-device-hotdog`, which depends on
+both.
