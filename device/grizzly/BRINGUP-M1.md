@@ -2202,7 +2202,39 @@ handoff bounds and saved D1 slot sizes passed offline checks. Manifest
 SHA-256 `883e0ac865be75ebde396cbb1160145c2550d2f566f7e2e2f6bc948f37406caf`.
 Archive SHA-256
 `6f5b4af750de5f77b45c970271a4c68a64c2a35da7d7158a27251c5d6d64c3ea`.
-v43 awaits its first hardware boot.
+
+#### Attended v43 slot B trial
+
+On 2026-11-25 one slot B boot used the verified nine-partition NV
+snapshot. All five writes passed and `vendor_boot_b` readback matched
+all 8,192 supplied bytes.
+
+| Monotonic time (s) | Event | Result |
+| ---: | --- | --- |
+| 0.176623–0.176904 | Guarded prep OFF | PSM1 `0x0` to `0x3`, PHY `0x11` |
+| 2.185367 | Host release gate | `stage=1 expected=1` |
+| 2.187032–2.187425 | Host prep ON | PSM1 `0x3` to `0x2`, qualified stage `2` |
+| 2.188111–2.188509 | Core ON and readiness | Vote `0`, PHY `0x10`, TOP bit 4 set |
+| 2.210030–2.210169 | UIC link and Hibern8 | `link=0 hibern8=0`, with a fresh Hibern8-enter IRQ required by the test |
+| 2.220185 | Deep H8 clock-release gate | HC `0x11`, PHY `0x10`, `-ETIMEDOUT` |
+| 2.220883 | Host exit | `deep-h8-qualification`, remaining UFS votes retained |
+
+The link-only path reached Hibern8 before the Deep H8 gate timed out.
+Only HC reached `0x11` within the gate's 10 ms window. Deep H8 was
+left prepared. The later HC and PHY sample was `0x10` for both.
+The retained console has no SCSI disk enumeration, consistent with
+the link-only path. UFS storage remains untested.
+
+Cleanup also emitted a workqueue warning. The stack reaches
+`ufs_debugfs_hba_exit()` through `ufshcd_hba_exit()`. The link-only
+init skips `ufs_debugfs_hba_init()`, which initializes
+`debugfs_ee_work`, while the shared exit calls `cancel_delayed_work_sync()`
+on it. Cleanup needs to match that initialization before another trial.
+
+The v43 markers match between ramoops and `SYSTEM_LAST_KMSG`.
+Fastboot returned 133 seconds after the B boot request. Stock D1
+completed boot on A with enforcing verity and the original factory
+VBMeta digest.
 
 ## Staging and return sequence used for D1
 
