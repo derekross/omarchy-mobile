@@ -106,7 +106,8 @@ b=plugins/omamobile.back/Back.qml
 python3 -c 'import json; assert {"id": "omamobile.back"} in json.load(open("profile/shell.json"))["plugins"]' \
   || fail "the phone profile enables the back gesture"
 grep -c 'add_plugin omamobile.back' bin/omamobile-setup-user >/dev/null || fail "existing users get the back gesture"
-grep -c "google,zumapro-tegu' >/dev/null && scale='8 \\\\/ 3'" bin/omamobile-setup-user >/dev/null || fail "the 9a's scale is 8/3"
+grep -c "google,zumapro-tegu' <<<\"\$compat\" >/dev/null && scale='8 \\\\/ 3'" bin/omamobile-setup-user >/dev/null || fail "the 9a's scale is 8/3"
+grep -c "google,gs201-tangorpro' <<<\"\$compat\" >/dev/null && scale=2$" bin/omamobile-setup-user >/dev/null || fail "the Pixel Tablet's scale is 2"
 # the seeded line stays valid Lua for both scales
 for sc in 3 '8 \/ 3'; do
   t=$(printf 'local omarchy_monitor_scale = 2\n' | sed "s/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = $sc/")
