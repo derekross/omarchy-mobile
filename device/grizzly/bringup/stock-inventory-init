@@ -471,10 +471,14 @@ run_stock_dsi0_trace() (
         return 1
     fi
     armed=no
-    trap 'if [ "$armed" = yes ]; then "$bb" rmdir "$instance"; fi
+    helper=/grizzly-inventory/stock-dsi0-trace.sh
+    trap 'if [ "$armed" = yes ]; then
+              "$bb" sh "$helper" "$tracefs" "$bb" --cleanup ||
+                  stock_inventory_log "DSI0 trace cleanup failed"
+          fi
           "$bb" umount "$tracefs" && "$bb" rmdir "$tracefs"' 0
 
-    "$bb" sh /grizzly-inventory/stock-dsi0-trace.sh "$tracefs" "$bb" --mbfs || return 1
+    "$bb" sh "$helper" "$tracefs" "$bb" --apb-reset || return 1
     armed=yes
     stock_inventory_log 'DSI0 trace armed before display module load' || return 1
     log_dsi0_genpd || stock_inventory_log 'DSI0 genpd pre-load snapshot unavailable'
@@ -486,14 +490,22 @@ run_stock_dsi0_trace() (
         "$bb" sleep 1 || return 1
     done
     [ "$active" = 0 ] || return 1
+    "$bb" awk '
+        $1 ~ /^dsi0_(clk|rst)_(call|result)$/ { found++; missed += $3 }
+        END { if (found != 4 || missed != 0) exit 1 }
+    ' "$tracefs/kprobe_profile" || {
+        stock_inventory_log 'DSI0 CPM probe profile incomplete or missed events'
+        return 1
+    }
     # Preserve the tracefs header and scoped rows for offline correlation.
     capture=$("$bb" awk '
         NR > 128 || length($0) > 512 { invalid=1; exit }
-        /entries-in-buffer\/entries-written:|: (regmap_reg_read|power_domain_target|rpm_resume|rpm_return_int|rpm_status|clk_enable|clk_disable|clk_set_rate|send_mail_mbfs|recv_result_mbfs): / {
+        /entries-in-buffer\/entries-written:|: (regmap_reg_read|power_domain_target|rpm_resume|rpm_return_int|rpm_status|clk_enable|clk_disable|clk_set_rate|send_mail_mbfs|recv_result_mbfs|dsi0_(clk|rst)_(call|result)|tracing_mark_write): / {
             print
         }
-        /: regmap_reg_read: / { reads++ }
-        END { if (invalid || reads != 1) exit 1 }
+        /: regmap_reg_read: .* reg=0*c val=/ { reads++ }
+        /: tracing_mark_write: DSI0 CPM provider probes armed$/ { armed++ }
+        END { if (invalid || reads != 1 || armed != 1) exit 1 }
     ' "$instance/trace") || return 1
     while IFS= read -r line; do
         stock_inventory_log "DSI0 trace $line" || return 1

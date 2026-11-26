@@ -3,6 +3,7 @@
 """Summarize the first passive Grizzly D1 DSI0 handoff read."""
 
 import argparse
+from collections import defaultdict
 from decimal import Decimal
 from pathlib import Path
 import re
@@ -14,10 +15,19 @@ ROW = re.compile(
     r"-(?P<pid>\d+)\s+(?:\([^)]*\)\s+)?\[\d+\]\s+\S+\s+"
     r"(?P<time>\d+\.\d+):\s+(?P<event>\w+):\s+(?P<body>.*)"
 )
-STATUS = re.compile(rf"{re.escape(HOST)}\S* reg=0?c val=([0-9a-fA-F]+)$")
+REGISTER = re.compile(rf"{re.escape(HOST)}\S* reg=([0-9a-f]+) val=([0-9a-fA-F]+)$")
 RESUME_RETURN = re.compile(rf"rpm_resume(?:\+\S+)?\s*:{re.escape(HOST)} ret=(-?\d+)$")
 MBFS = re.compile(r"(0x[0-9a-f]+):\S+\s+en:([01])(?:\s+\(res:(-?\d+)\))?$")
 MBFS_DOMAINS = {0x08: "wrapper", 0x200: "BE", 0x203: "DSI0"}
+CPM_EVENT = re.compile(r"dsi0_(clk|rst)_(call|result)$")
+CPM_CALL = re.compile(r" lpcm=(\d+) id=(\d+) op=(\d+)$")
+CPM_RESULT = re.compile(r" result=(-?\d+)$")
+DISPLAY_LPCM = 0x23
+DPU_CHANNEL_CLOCK = (0x2a, 0)
+
+
+def display_resource(kind, lpcm, resource):
+    return lpcm == DISPLAY_LPCM or (kind == "clk" and (lpcm, resource) == DPU_CHANNEL_CLOCK)
 
 
 def summarize(trace):
@@ -33,8 +43,9 @@ def summarize(trace):
             continue
         pid, timestamp, event, body = match.group("pid", "time", "event", "body")
         clock = Decimal(timestamp)
-        if event == "regmap_reg_read" and (status := STATUS.fullmatch(body)):
-            reads.append((clock, index, pid, int(status[1], 16)))
+        register = REGISTER.fullmatch(body) if event == "regmap_reg_read" else None
+        if register and int(register[1], 16) == 0x0c:
+            reads.append((clock, index, pid, int(register[2], 16)))
         else:
             timeline.append((clock, index, pid, event, body))
 
@@ -44,13 +55,48 @@ def summarize(trace):
     read_time, read_index, read_pid, value = reads[0]
     resumes = []
     returns = []
+    identity = {}
+    cpm_armed = False
+    cpm_pending = defaultdict(list)
+    cpm_calls = {"clk": 0, "rst": 0}
+    cpm_results = {"clk": 0, "rst": 0}
     domain_events = clock_events = 0
     mbfs_events = 0
     for timestamp, index, pid, event, body in sorted(timeline):
         if (timestamp, index) >= (read_time, read_index):
             break
         name = body.split(maxsplit=1)[0] if body else ""
-        if event == "power_domain_target" and name in DOMAINS:
+        if event == "tracing_mark_write" and body == "DSI0 CPM provider probes armed":
+            cpm_armed = True
+        elif probe := CPM_EVENT.fullmatch(event):
+            kind, phase = probe.groups()
+            pending = cpm_pending[pid, kind]
+            if phase == "call":
+                call = CPM_CALL.search(body)
+                if not call:
+                    raise ValueError("unexpected stock CPM provider call format")
+                lpcm, resource, op = map(int, call.groups())
+                pending.append((lpcm, resource, op))
+                if display_resource(kind, lpcm, resource):
+                    cpm_calls[kind] += 1
+                    print(f"{timestamp} display CPM {kind} call pid={pid} "
+                          f"lpcm={lpcm:#x} id={resource:#x} op={op}")
+            else:
+                result = CPM_RESULT.search(body)
+                if not result:
+                    raise ValueError("unexpected stock CPM provider result format")
+                if pending:
+                    lpcm, resource, op = pending.pop()
+                    if display_resource(kind, lpcm, resource):
+                        cpm_results[kind] += 1
+                        print(f"{timestamp} display CPM {kind} result pid={pid} "
+                              f"lpcm={lpcm:#x} id={resource:#x} op={op} result={result[1]}")
+        elif event == "regmap_reg_read" and pid == read_pid and (register := REGISTER.fullmatch(body)):
+            offset, reg_value = (int(field, 16) for field in register.groups())
+            if offset in (0, 4):
+                identity[offset] = reg_value
+                print(f"{timestamp} DSI0 reg={offset:#04x} value={reg_value:#010x}")
+        elif event == "power_domain_target" and name in DOMAINS:
             print(f"{timestamp} genpd {body}")
             domain_events += 1
         elif event in ("send_mail_mbfs", "recv_result_mbfs"):
@@ -83,6 +129,13 @@ def summarize(trace):
     print(f"runtime_resume_correlated={'yes' if correlated else 'no'} "
           f"genpd_events={domain_events} ccf_events={clock_events}")
     print(f"mbfs_events={mbfs_events}")
+    if cpm_armed:
+        print(f"display_cpm_clock_calls={cpm_calls['clk']} results={cpm_results['clk']} "
+              f"display_cpm_reset_calls={cpm_calls['rst']} results={cpm_results['rst']}")
+        expected = {0: 0x30313130, 4: 0x1a000110}
+        print(f"dsi0_stock_identity={'matched' if identity == expected else 'unconfirmed'}")
+    elif any(cpm_calls.values()):
+        raise ValueError("missing CPM provider arm marker")
     print("APB clock and external reset state require separate evidence.")
     return correlated
 

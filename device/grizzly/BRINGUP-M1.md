@@ -5865,6 +5865,66 @@ the B boot request. Stock D1 A completed boot with enforcing
 verity and the original VBMeta digest. Ramoops and
 `SYSTEM_LAST_KMSG` matched the filtered capture.
 
+##### Offline stock D1 DSI0 clock and reset trace
+
+The D1 B0 merge with DTBO entry 19 gives the DSI0 host a
+`DpuDsi0.v` power domain and the D-PHY. The host has no
+clock or reset consumer phandle. The stock host opens its
+MMIO regmap with a null clock name, reads the core ID and
+version, and reads `pwr_up` after runtime resume. The host
+probe and the first glue resume issue no separate clock or
+reset request. The G301 PHY's reset callback only logs and
+returns success. The DSI0 pixel clock is a separate LPCM
+`0x23` clock at selector `0x01`. The DPU channel clock
+uses LPCM `0x2a`, selector `0x00`. The stock CPM clock
+table has no identified DSI0 APB gate and the CPM reset
+provider has no display LPCM `0x23` child.
+
+The two stock providers already load in the UFS inventory.
+`clk-cpm.ko` sends its native mailbox commands through
+`goog_cpm_clk_send_mba_mail`, while `rst-cpm.ko` uses
+`goog_cpm_rst_send_mba_mail`. The D1-only `--apb-reset`
+trace checks that both symbols are loaded, then attaches
+entry and return probes before display modules load. It
+records the existing LPCM ID, selector, operation and
+provider return value from the audited ARM64 arguments and
+RAM-backed structures. The host checker pairs calls and
+returns by task and provider, reports display LPCM and DPU
+channel clock activity, and retains the earlier MBFS and
+runtime PM correlation. Existing host reads at offsets
+`0x00`, `0x04` and `0x0c` give ID, version and
+`pwr_up` on the same timeline.
+
+The existing `pack-stock-inventory.py --dsi0-trace` mode
+packages this follow-up. It arms after the NV guard and
+stops on the first `pwr_up` read. The capture requires the
+arm marker, no missed probes and one status read. The host
+checker rejects trace ring loss. Missing providers or an
+arming failure block display loading. The 90-second warm
+return remains independent. The instrumentation issues no
+hardware reads, clock operations or reset operations of
+its own.
+
+Matching ID `0x30313130` and version `0x1a000110` show
+the APB interface was responding by those reads. The
+provider probes can show whether an AP-issued clock or reset
+request completes first. CPM-internal gate and reset
+transitions during MBFS power-on remain unobservable with
+the stock D1 firmware trace policy described above. An empty
+provider trace applies only to the captured AP-side window.
+
+The exact D1 kernel and vendor modules accepted all four
+probes in QEMU, rejected missing providers and duplicate
+arming, and cleaned up before a successful rearm. The
+checker passed the retained hardware trace and synthetic
+clock/reset pairs, zero-event, malformed and loss cases.
+All five image hashes, the replacement `init_boot` AVB
+signature, ABL handoff bounds and saved slot fit passed.
+The other four images match the prior stock diagnostic.
+The bundle `SHA256SUMS` digest is
+`8fe724b47507e4622d547d6eb88aeb466f8b1f57611b0a174d2b529eb39ece8d`.
+Physical DSI0 capture remains pending.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
