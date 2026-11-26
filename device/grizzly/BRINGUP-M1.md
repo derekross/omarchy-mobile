@@ -118,6 +118,7 @@ whether it predated a stock boot.
 | [Corrected DPU wrapper trial](#attended-corrected-dpu-wrapper-trial) | The Mac left stock D1 A at 12:50:54 UTC on 2026-11-26. Android stayed off between the guarded rescue and the corrected wrapper boot request at 12:57:01 UTC. | All nine hashes passed at 12:55:52 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
 | [DPU BE power-vote trial](#attended-dpu-be-power-vote-trial) | The Mac left stock D1 A at 13:14:40 UTC on 2026-11-26. Android stayed off between the guarded rescue and the BE boot request at 13:21:30 UTC. | All nine hashes passed at 13:20:20 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
 | [Powered DPU BE clock trial](#attended-powered-dpu-be-clock-trial) | The Mac left stock D1 A at 13:43:43 UTC on 2026-11-26. Android stayed off through the rescue retry and until the diagnostic boot request at 14:04:12 UTC. | All nine hashes passed at 13:58:01 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
+| [DPU FE0 power-vote trial](#attended-dpu-fe0-power-vote-trial) | The Mac left stock D1 A at 14:21:19 UTC on 2026-11-26. Android stayed off between the rescue and the FE0 boot request at 14:28:09 UTC. | All nine hashes passed at 14:27:01 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
 
 [Maintainer decision on backup freshness](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035).
 Take a fresh read-only backup of all nine partitions after the latest
@@ -5360,9 +5361,42 @@ AVB signatures, the ABL handoff bounds and captured D1 slot
 fit passed. The `SHA256SUMS` digest is
 `3a840d5521bc42765cc41afa1a65807ae71dc5c450304f6bad974f769d7b20ac`.
 
-Hardware validation remains pending. For the attended slot B
-test, verify a fresh NV backup, capture all seven initial votes
-and each transition, then return to stock A.
+##### Attended DPU FE0 power-vote trial
+
+On 2026-11-26 the guarded rescue copied all nine NV partitions
+read-only and unmounted. The Mac independently verified all
+nine SHA-256 hashes, 3,392,151,552 bytes and private permissions.
+The full 64 MiB rescue `vendor_boot_b` readback matched.
+After the rescue returned to Fastboot, the Mac staged all
+five FE0 images and verified the 8,192-byte `vendor_boot_b`
+payload.
+
+The diagnostic verified the 42-partition read-only UFS
+inventory, passed the 8 KiB `boot_b` comparison, retired the
+temporary SCSI host and reached the authenticated USB receiver.
+The AP client votes for `dpu.v`, `DpuBe.v`, `DpuFe0.v`,
+`DpuFe1.v`, `DpuDsi0.v`, `DpuDsi1.v` and `DpuDp0.v`
+were all initially `0`. FE0 resolved to handle `0x15c0028`
+and used resource `0x201`.
+
+| Request in execution order | CPM acknowledgement | Vote readback | Driver result |
+| --- | --- | --- | --- |
+| Wrapper ON | `5` (deferred, completion received) | `1` | `0` |
+| BE ON | `5` (deferred, completion received) | `1` | `0` |
+| FE0 ON | `5` (deferred, completion received) | `1` | `0` |
+| FE0 OFF | `0` (immediate) | `0` | `0` |
+| BE OFF | `0` (immediate) | `0` | `0` |
+| Wrapper OFF | `0` (immediate) | `0` | `0` |
+
+The full cycle ran from 9.450635 to 9.454547 seconds of kernel
+uptime. The early unpowered FE0 GET_RATE again returned
+firmware `-3`. Powered FE0 clock readback remains open.
+
+The independent warm restart was requested at 600.009960
+seconds of kernel uptime. Fastboot returned 642 seconds
+after the B boot request. Stock D1 A completed boot with
+enforcing verity and the original VBMeta digest. Ramoops and
+`SYSTEM_LAST_KMSG` matched all 51 filtered lines.
 
 ### Offline stock D1 device reference-clock diagnostic
 
