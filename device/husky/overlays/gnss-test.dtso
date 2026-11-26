@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Bring-up only, never default (GNSS-PLAN.md, stage 4): turn on the BCM4775x
+ * node, gnss@0 on spi21. Applied on top of gnss-bus-test and gnss-pmic-test
+ * (its supplies are pmic-2's LDO9S-LDO11S). bcm4775x_gnss must be
+ * blacklisted before this DTB boots, and is loaded by hand. Its probe leaves
+ * the chip in standby and the rails off; only opening /dev/ttyBCM, writing
+ * nstandby or reading the debugfs probe file powers the chip. A path, as
+ * the node has no label.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/usi@111e00c0/spi@111e0000/gnss@0} {
+	status = "okay";
+};

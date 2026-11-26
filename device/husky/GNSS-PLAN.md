@@ -1,13 +1,15 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 8 Pro GNSS plan (husky, Broadcom BCM4775x on spi21)
 
-Status (2026-11-15): nothing of this has run on the phone, and I have no record that the chip has ever been powered.
+Status (2026-11-26): the stage overlays are in `overlays/` (compile and apply checked); nothing of this plan has run on the phone, and I have no record that the chip has ever been powered. `pmic-2` itself has probed on a test kernel (linux-omamobile#313, the AoC sensor rails); the GNSS bus and rails have not been switched.
 This is the runbook @derekross asked for on
 [linux-omamobile#239](https://github.com/derekross/linux-omamobile/pull/239) before the bring-up overlay:
 what the first boots do, in which order, and what stops them. It changes no device tree and runs nothing.
 Changed on 2026-11-15 after his review on #739: `sec_acpm` is built in, so the late-load stage and its blacklist are
 gone, and stages 2 to 4 run with the SoC watchdog armed, except stage 3's first read, which is before the 30 s cleanup
 and so before the watchdog can be armed (only the panics cover it).
+Changed on 2026-11-26: the stage overlays are in `device/husky/overlays/` (the list is under the stages), and the
+watchdog gate has the battery limits of `noop` that @derekross pointed out on #739.
 
 [V] = read in source, in a maintainer's comment or in a capture of mine. [I] = inferred, with the step that would
 settle it. [U] = unknown. References like `linux-omamobile#210` are the kernel repository; a bare `#578` is
@@ -72,7 +74,7 @@ session is one sitting: from a plain boot, through the stages that sitting reach
   <serial> set_active b` alone first (it needs no flash), and read it again. This holds after any recovery reboot
   too. The phone's own shutdown spends a retry (#578), so count it. If the count is not 3 after the refill, flash
   the known-good image set instead of booting. A boot that then leaves fewer than 2 tries ends the series.
-- Battery at least 20 %, the hottest thermal zone at most 50 C with the screen off before a boot (the flash limit
+- Battery at least 20 %, better 30 to 80 % (a battery near full float trips the watchdog's 4.3 V guard, below), the hottest thermal zone at most 50 C with the screen off before a boot (the flash limit
   is 62 C, and a hot phone is not the moment to start), PipeWire and WirePlumber stopped and the speaker route off
   (a reboot hung once in `aoc_alsa_remove` while they held the card), no Chromium, backups current, no
   `THERMAL-PAUSE` file.
@@ -104,6 +106,12 @@ session is one sitting: from a plain boot, through the stages that sitting reach
     bootloader. A `refused`, `tripped` or `failed` result means no watchdog: the stage does not start, or stops.
     [U] whether `noop`'s checks pass on the stage's image: they want the `10cb0000.i2c` bus, `i2c-tools`, the
     gauge's power supply and a configured gadget, and its guard reads the battery every 2 s.
+    [V `tools/husky-deadman-phone`, read 2026-11-26] `noop` does not run the start checks: `preflight` returns
+    before them for `noop` and `wd-drill` (the 30 to 80 %, 4.15 V and 10 to 40 C limits, and `--allow-soc`, are
+    `b3-charger`'s). What applies during a `noop` soak is the guard, read every 2 s: it trips above 4.3 V, below
+    3.0 V, outside 5 to 45 C battery temperature, or above the board's current limit. On the 8a it tripped at once
+    on the cable at the bootloader's 4.35 V float (akita's BRINGUP-M4, test 43). So, as derekross advised on #739,
+    a session starts between 30 and 80 % and not after a night on the cable.
   - Not covered: a freeze of every CPU. The lockup detectors need a CPU that still runs, and I count the watchdog
     out too (derekross's review; BRINGUP-M1 test 24 had every CPU stop on this phone, and neither the panic nor
     the fallback reset it). Only the buttons undo that: Power + Volume Up for 15 to 30 s. Also not covered by the
@@ -171,6 +179,23 @@ built in and the stage would have passed without testing anything; its stages 4 
    chip stays unopened. Covered: an oops, lockup or stall in the driver's probe (panic, reset in 10 s), and a hang
    that leaves the kernel alive but stops userspace (watchdog). Not covered: a probe that freezes every CPU, which
    only the buttons undo.
+
+### The overlays
+
+Each is applied with `fdtoverlay` on top of the ones before it, in this order, one more per stage. None powers the
+chip: they only set `status = "okay"`, and the driver powers the chip only when `/dev/ttyBCM` is opened, `nstandby`
+is written or the debugfs `probe` file is read.
+
+| File | Stage | What it turns on |
+|---|---|---|
+| `device/husky/overlays/gnss-bus-test.dtso` | 2 | `usi3_hsi0` and `spi21`, with `num-cs = <1>` |
+| `device/husky/overlays/gnss-pmic-test.dtso` | 3 | `pmic-2` (by path, it has no label) |
+| `device/husky/overlays/gnss-test.dtso` | 4 | `gnss@0` on `spi21` (by path) |
+
+[I] If `pmic-2` is enabled in the kernel's `zuma-husky.dts` before this runs (`linux-omamobile#313`, open), the rails
+register on every boot from stage 1 on and `gnss-pmic-test` changes nothing: then stage 1's reference boot already
+carries the rails, and the regulator count and the `vdd_gnss_*` reads move to it. That kernel has already booted on
+an 8 Pro with `pmic-2` probing (the AoC sensor rails LDO5S/LDO7S on); the GNSS rails stayed unused.
 
 ## Stop at once
 
