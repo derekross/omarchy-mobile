@@ -108,6 +108,7 @@ whether it predated a stock boot.
 | [v73](#attended-v73-slot-b-trial) | The Mac left verified stock D1 A at 21:35:59 UTC on 2026-11-25. A guarded B rescue returned to Fastboot with A selected before the v73 boot request at 21:42:45 UTC. | Fresh read-only rescue copy verified at 21:41:18 UTC. All nine hashes passed. The stock A return after v73 requires a new copy before the next power or CPM trial. |
 | [Read-only test root](#attended-read-only-test-root-slot-b-trial) | The Mac left verified stock D1 A at 06:13:51 UTC on 2026-11-26 and ran the guarded B rescue. Fastboot stayed active between the rescue and the test-root boot request at 06:20:35 UTC. | Fresh read-only rescue copy verified at 06:19:08 UTC. All nine hashes passed. The stock A return requires a new copy before the next power or CPM trial. |
 | [Omarchy systemd RAM root](#first-attended-omarchy-systemd-ram-root-trial) | The Mac left verified stock D1 A at 06:43:33 UTC on 2026-11-26 and ran the guarded B rescue. Android stayed off between the rescue and the Omarchy boot request at 06:51:20 UTC. | Fresh read-only rescue copy verified at 06:49:41 UTC. All nine hashes passed. The stock A return requires a new copy before the next power or CPM trial. |
+| [Corrected Omarchy systemd RAM root](#attended-corrected-omarchy-systemd-ram-root-trial) | The Mac left verified stock D1 A at 07:07:30 UTC on 2026-11-26. A guarded rescue retry completed with no intervening Android boot before Omarchy started at 07:20:51 UTC. | All nine hashes passed at 07:19:08 UTC. The stock A return requires a new copy before the next power or CPM trial. |
 
 [Maintainer decision on backup freshness](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035).
 Take a fresh read-only backup of all nine partitions after the latest
@@ -4476,8 +4477,38 @@ bind. The corrected bundle passed all five hashes, both
 unchanged AVB signatures, D1 handoff bounds and saved slot fit.
 Its manifest SHA-256 is
 `c7d9d1480d23863456c6d3fd14d3daeea5ae85de99bb2524a1e0623bd0141a0a`.
-A fresh backup and a separate attended trial are needed to
-verify the corrected USB and systemd handoff on Grizzly.
+The corrected bundle was verified on hardware in the trial below.
+
+#### Attended corrected Omarchy systemd RAM-root trial
+
+The first backup rescue lost USB before producing a backup.
+The Mac recovered Fastboot manually, then retried the staged
+rescue without starting stock Android. The bridge recovered
+three serial timeouts and copied all nine guarded partitions.
+The Mac independently verified the 3,392,151,552-byte copy
+and its private file modes. The phone returned to Fastboot
+with A selected. The five corrected images were then staged
+on B, with an 8,192-byte matching `vendor_boot_b` readback.
+
+| Monotonic time (s) | Result |
+| ---: | --- |
+| 1.200658 | The 600-second return helper armed. |
+| 2.206722–2.378411 | The seven GPT metadata reads and the 8 KiB `boot_b` comparison passed. The RAM guard verified all 42 UFS partitions read-only and unmounted. |
+| 6.434100–7.401149 | The temporary SCSI host was removed. The receiver confirmed zero SCSI disks. |
+| 7.436572–18.474538 | Configfs bound `a210000.usb` and the link-local NCM receiver became ready. |
+| 309.653595–312.387815 | The receiver verified the complete raw image hash and handed off to systemd. The isolated target reached `GRIZZLY_SYSTEMD_PASS pid1=systemd root=ext4 ro=1 ram=1 write_denied=1 scsi_disks=0 timer=1`. The root reported Omarchy 4.5.0-3. |
+| 600.010134–601.010597 | The independent timer requested the warm return. |
+
+The Mac authenticated the pinned USB SSH receiver at
+07:21:24 UTC and streamed 3,081,094,118 bytes. The phone
+acknowledged the verified image and handoff at 07:26:14 UTC.
+USB SSH closed at handoff as designed.
+
+Fastboot returned 643 seconds after the boot request.
+Stock D1 A restarted at 07:31:55 UTC with enforcing verity
+and the prior factory VBMeta digest. Ramoops and Android's
+`SYSTEM_LAST_KMSG` agree on all 41 filtered trial lines.
+The deferred-probe `device_links_no_driver` warning remained.
 
 ### Offline stock D1 device reference-clock diagnostic
 
