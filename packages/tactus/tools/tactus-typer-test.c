@@ -421,6 +421,43 @@ press (Field *f, const char *symbol)
   tactus_typer_key (f->typer, symbol, g_utf8_strlen (symbol, -1) == 1 ? &tap : NULL);
 }
 
+static gboolean
+key_pos (char c, double *x, double *y)
+{
+  static const char *rows[] = { "qwertyuiop", "asdfghjkl", "zxcvbnm" };
+  static const double first[] = { 0.5, 1.0, 2.0 };
+
+  for (int r = 0; r < 3; r++) {
+    const char *at = c ? strchr (rows[r], g_ascii_tolower (c)) : NULL;
+
+    if (at) {
+      *x = first[r] + (at - rows[r]);
+      *y = r;
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+/* Type @text with each letter's tap near the edge of its key toward @aim's
+ * letter at the same place (where they differ) */
+static void
+type_toward (Field *f, const char *text, const char *aim)
+{
+  for (size_t i = 0; text[i]; i++) {
+    char sym[2] = { text[i], 0 };
+    TactusTap tap = { .valid = TRUE };
+    double tx, ty, ax, ay;
+
+    if (key_pos (text[i], &tx, &ty) && key_pos (aim[i], &ax, &ay)) {
+      tap.dx = CLAMP (0.42 * (ax - tx), -0.48, 0.48);
+      tap.dy = CLAMP (0.42 * (ay - ty), -0.48, 0.48);
+    }
+    advance (f, 130);
+    tactus_typer_key (f->typer, sym, &tap);
+  }
+}
+
 /* Type text as on the keyboard: a small letter comes out as a capital while
  * Shift is on by itself; "\b" is Backspace and "\n" Return */
 static void
@@ -955,6 +992,86 @@ test_other (void)
   field_free (f);
 }
 
+/* A word kept as typed, changed when the word after it shows what it was */
+static void
+test_look_back (gboolean tells)
+{
+  Field *f;
+
+  printf ("== the word before, looking back (%s)\n", tells ? "tells" : "tells nothing");
+  if (!g_getenv ("TACTUS_WORD_PAIRS")) {
+    printf ("  ok # SKIP no TACTUS_WORD_PAIRS\n");
+    return;
+  }
+
+  f = field_new (tells);
+  type (f, "we ran out ");
+  type_toward (f, "if", "of");
+  type (f, " ");
+  expect (f, "kept while the word after it is not known", "We ran out if ");
+  type (f, "the ");
+  expect (f, "changed by the word after it", "We ran out of the ");
+  expect_copy (f, "the copy");
+  type (f, "\b");
+  expect (f, "Backspace puts it back", "We ran out if the ");
+  expect_copy (f, "the copy");
+  field_free (f);
+
+  f = field_new (tells);
+  type (f, "we ran out ");
+  type_toward (f, "if", "of");
+  type (f, " ");
+  press (f, "KEY_LEFT");
+  press (f, "KEY_RIGHT");
+  if (tells)
+    field_set (f, "We ran out if ", 14, 14);
+  type (f, "the ");
+  expect (f, "not after the cursor moved", "We ran out if the ");
+  field_free (f);
+
+  f = field_new (tells);
+  type (f, "we ran out ");
+  type (f, "if the ");
+  expect (f, "not where the taps were in the middle of the keys", "We ran out if the ");
+  field_free (f);
+}
+
+/* The keys lean toward the letters likely next, only where words are corrected */
+static void
+test_keys_lean (void)
+{
+  Field *f = field_new (TRUE);
+
+  printf ("== the keys lean toward the likely letter\n");
+  type (f, "th");
+  checked++;
+  if (!(tactus_ac_tap_prior ("e") > tactus_ac_tap_prior ("r") && tactus_ac_tap_prior ("e") <= 0.8 &&
+        tactus_ac_tap_cost ("e", 0.0, 0.0) < tactus_ac_tap_cost ("r", -1.0, 0.0))) {
+    failed++;
+    printf ("FAIL after \"th\", e %.2f r %.2f\n", tactus_ac_tap_prior ("e"), tactus_ac_tap_prior ("r"));
+  } else {
+    printf ("  ok after \"th\" e leans more than r, and a tap in the middle of e is e\n");
+  }
+  /* a tap in the middle of r is still r, however likely e is */
+  checked++;
+  if (tactus_ac_tap_cost ("r", 0.0, 0.0) < tactus_ac_tap_cost ("e", -1.0, 0.0)) {
+    printf ("  ok a tap in the middle of r is r\n");
+  } else {
+    failed++;
+    printf ("FAIL a tap in the middle of r goes to e\n");
+  }
+  tactus_typer_set_hints (f->typer, TACTUS_HINT_HIDDEN);
+  type (f, "x");
+  checked++;
+  if (tactus_ac_tap_prior ("e") == 0.0 && tactus_ac_tap_prior ("r") == 0.0) {
+    printf ("  ok in a secret, no key leans\n");
+  } else {
+    failed++;
+    printf ("FAIL in a secret, a key leans\n");
+  }
+  field_free (f);
+}
+
 /* Known to go wrong, and why: shown, not counted */
 static void
 test_limits (void)
@@ -1006,6 +1123,9 @@ main (int argc, char **argv)
   test_other ();
   test_put_back (TRUE);
   test_put_back (FALSE);
+  test_look_back (TRUE);
+  test_look_back (FALSE);
+  test_keys_lean ();
   test_limits ();
 
   printf ("%d of %d failed\n", failed, checked);

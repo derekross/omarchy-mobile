@@ -24,6 +24,24 @@ char    *tactus_ac_correct   (const char      *word,
                               const TactusTap *taps,
                               guint            n_taps,
                               gboolean         sentence_start);
+char    *tactus_ac_correct_in (const char      *word,
+                               const TactusTap *taps,
+                               guint            n_taps,
+                               gboolean         sentence_start,
+                               const char      *before);
+char    *tactus_ac_reconsider (const char      *word,
+                               const TactusTap *taps,
+                               guint            n_taps,
+                               gboolean         sentence_start,
+                               const char      *before,
+                               const char      *after);
+void     tactus_ac_set_typing (const char *before,
+                               const char *prefix,
+                               gboolean    sentence_start);
+double   tactus_ac_tap_cost   (const char *symbol,
+                               double      dx,
+                               double      dy);
+double   tactus_ac_tap_prior  (const char *symbol);
 void     tactus_ac_learn     (const char *word);
 void     tactus_ac_observe   (const char      *typed,
                               const char      *meant,

@@ -1,8 +1,8 @@
 Subject: build: the typing engine, the drawing and their tests
 
 Adds Tactus's own sources to the library (tactus-autocorrect,
-tactus-clipboard, tactus-draw, tactus-typer), links hunspell for the dictionary, tells the code where the
-package's data is (TACTUS_PKGDATADIR, for the word counts), and builds the
+tactus-clipboard, tactus-draw, tactus-trackpad, tactus-typer), links hunspell for the dictionary, tells the code where the
+package's data is (TACTUS_PKGDATADIR, for the word counts and pairs), and builds the
 checks that run with no window on screen (tools/tactus-*-test).
 ---
 --- a/meson.build
@@ -25,7 +25,7 @@ checks that run with no window on screen (tools/tactus-*-test).
    wayland_client_dep,
    xkbcommon_dep,
    cc.find_library('m', required: false),
-@@ -34,6 +35,14 @@
+@@ -34,6 +35,16 @@
  )
  
  libpos_sources = files(
@@ -35,6 +35,8 @@ checks that run with no window on screen (tools/tactus-*-test).
 +  'tactus-clipboard.h',
 +  'tactus-draw.c',
 +  'tactus-draw.h',
++  'tactus-trackpad.c',
++  'tactus-trackpad.h',
 +  'tactus-typer.c',
 +  'tactus-typer.h',
    'pos-app.c',
@@ -42,7 +44,7 @@ checks that run with no window on screen (tools/tactus-*-test).
    'pos-activation-filter.h',
 --- a/tools/meson.build
 +++ b/tools/meson.build
-@@ -1,3 +1,18 @@
+@@ -1,3 +1,24 @@
  
  
  executable('pos-speech-test', 'pos-speech-test.c', dependencies: libpos_dep)
@@ -59,5 +61,11 @@ checks that run with no window on screen (tools/tactus-*-test).
 +executable('tactus-typer-test', 'tactus-typer-test.c', dependencies: libpos_dep)
 +executable('tactus-paste-test', 'tactus-paste-test.c', dependencies: libpos_dep)
 +executable('tactus-pages-test', 'tactus-pages-test.c', dependencies: libpos_dep)
++executable(
++  'tactus-trackpad-test',
++  ['tactus-trackpad-test.c', '../src/tactus-trackpad.c'],
++  include_directories: include_directories('../src'),
++  dependencies: [glib_dep, cc.find_library('m', required: false)],
++)
 +
 +executable('tactus-emoji-test', 'tactus-emoji-test.c', dependencies: libpos_dep)

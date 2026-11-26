@@ -1,7 +1,8 @@
 /*
  * Tactus's autocorrection, tried on words: what each becomes.
  *
- * tactus-ac-test            the built-in list
+ * tactus-ac-test            the built-in list (the words in context only with
+ *                           TACTUS_WORD_PAIRS set: the package's check does)
  * tactus-ac-test WORD...    these words, with no taps to go by
  *
  * Copyright (C) 2026 W4HO
@@ -67,6 +68,9 @@ static const Case cases[] = {
   /* short forms people write */
   { "msgs", NULL }, { "msg", NULL }, { "pics", NULL }, { "pic", NULL }, { "vids", NULL },
   { "vid", NULL }, { "convo", NULL }, { "ppl", NULL }, { "tactus", NULL }, { "Tactus", NULL, TRUE },
+  { "btw", NULL, FALSE, TRUE, "bye" }, { "Btw", NULL, TRUE, TRUE, "Bye" }, { "idk", NULL, FALSE, TRUE, "ids" },
+  { "brb", NULL, FALSE, TRUE, "bob" }, { "thx", NULL, FALSE, TRUE, "the" }, { "ty", NULL, FALSE, TRUE, "to" },
+  { "rn", NULL, FALSE, TRUE, "tn" }, { "smh", NULL, FALSE, TRUE, "she" }, { "lol", NULL, FALSE, TRUE, "lot" },
   /* a slip into a word the word list doesn't count, but the dictionary knows */
   { "widgrt", "widget", FALSE, TRUE }, { "widgrt", NULL, FALSE, TRUE, "widgrt" },
   /* a rarer word where the taps point to it */
@@ -192,6 +196,42 @@ main (int argc, char **argv)
     printf ("== a third of a key off the centre\n");
     for (guint i = 0; i < G_N_ELEMENTS (inside); i++)
       failed += run_off (&inside[i], TRUE, 0.3);
+  }
+
+  /* Words in context: what the word before and, looking back, the word after
+   * say. Taps a close call toward @aim. */
+  if (g_getenv ("TACTUS_WORD_PAIRS")) {
+    static const struct {
+      const char *before, *typed, *aim, *after, *want;
+    } in_context[] = {
+      /* the word before */
+      { "the", "bot", "boy", NULL, "boy" }, { "is", "relayed", "related", NULL, "related" },
+      { "i", "lime", "like", NULL, "like" },
+      { "the", "yet", "get", NULL, NULL }, { "i", "hope", "hope", NULL, NULL },
+      /* looking back, with the word after */
+      { "out", "if", "of", "the", "of" }, { "is", "relayed", "related", "to", "related" },
+      { "i", "relayed", "related", "to", NULL }, { "out", "if", "if", "the", NULL },
+      { "the", "whole", "while", "he", NULL }, { "the", "btw", "bye", "is", NULL },
+    };
+
+    printf ("== in context\n");
+    for (guint i = 0; i < G_N_ELEMENTS (in_context); i++) {
+      const char *typed = in_context[i].typed;
+      g_autofree TactusTap *taps = near_miss (typed, in_context[i].aim, 0.42);
+      g_autofree char *got = in_context[i].after
+        ? tactus_ac_reconsider (typed, taps, strlen (typed), FALSE, in_context[i].before, in_context[i].after)
+        : tactus_ac_correct_in (typed, taps, strlen (typed), FALSE, in_context[i].before);
+      gboolean ok = g_strcmp0 (got, in_context[i].want) == 0;
+      g_autofree char *where = g_strdup_printf ("%s %s %s", in_context[i].before, typed, in_context[i].after ?: "");
+
+      printf ("%s %-22s -> %-14s", ok ? "  ok" : "FAIL", where, got ?: "(stays)");
+      if (!ok)
+        printf (" wanted %s", in_context[i].want ?: "(stays)");
+      printf ("\n");
+      failed += !ok;
+    }
+  } else {
+    printf ("== in context # SKIP no TACTUS_WORD_PAIRS\n");
   }
 
   t0 = g_get_monotonic_time ();

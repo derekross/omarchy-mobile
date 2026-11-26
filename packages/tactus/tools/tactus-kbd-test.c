@@ -689,16 +689,71 @@ main (int argc, char **argv)
   check_int ("holding space: touch pad", pos_osk_widget_get_mode (w), POS_OSK_WIDGET_MODE_CURSOR);
   snap (window, w, "11-touchpad.png");
   key_xy (w, "space", &x, &y);
-  send_touch (w, GDK_TOUCH_UPDATE, 1, x + 3 * CURSOR_STEP_X + 1, y);
-  send_touch (w, GDK_TOUCH_UPDATE, 1, x, y);
-  send_touch (w, GDK_TOUCH_END, 1, x, y);
+  /* slowly, a point every 16 ms: a letter for every 9 points */
+  for (int i = 1; i <= 31; i++) {
+    send_touch (w, GDK_TOUCH_UPDATE, 1, x + i * w->s, y);
+    wait_ms (16);
+  }
+  for (int i = 30; i >= -4; i--) {
+    send_touch (w, GDK_TOUCH_UPDATE, 1, x + i * w->s, y);
+    wait_ms (16);
+  }
+  send_touch (w, GDK_TOUCH_END, 1, x - 4 * w->s, y);
   check_str ("three right, three left, no space", typed->str, "<RIGHT><RIGHT><RIGHT><LEFT><LEFT><LEFT>");
   check_int ("letters again", pos_osk_widget_get_mode (w), POS_OSK_WIDGET_MODE_KEYBOARD);
+  reset (w);
+
+  /* a finger resting at the right side keeps the cursor going, and lifted it stops */
+  down (w, 1, "space");
+  wait_ms (LONG_PRESS_MS + 80);
+  {
+    double wide = gtk_widget_get_allocated_width (GTK_WIDGET (w));
+    guint rights;
+
+    for (int i = 1; i <= 10; i++) {
+      send_touch (w, GDK_TOUCH_UPDATE, 1, x + i * (wide - 5 * w->s - x) / 10, y);
+      wait_ms (16);
+    }
+    g_string_truncate (typed, 0);
+    wait_ms (600);
+    send_touch (w, GDK_TOUCH_END, 1, wide - 5 * w->s, y);
+    rights = 0;
+    for (const char *p = typed->str; (p = strstr (p, "<RIGHT>")); p++)
+      rights++;
+    check_int ("resting at the right side: it keeps going (5 or more in 600 ms)", rights >= 5, TRUE);
+    check_int ("only to the right", strstr (typed->str, "<LEFT>") == NULL, TRUE);
+    reset (w);
+    wait_ms (200);
+    check_str ("lifted: it stops", typed->str, "");
+  }
   reset (w);
 
   tap (w, "space");
   check_str ("a tap on space", typed->str, " ");
   reset (w);
+
+  /* Keys that lean: after "th" a tap in r's left part, toward e, is e; in
+   * r's middle it is r; with no word being typed it is r */
+  {
+    TactusGeom *r = find_key (w, "r");
+    double kw = pos_osk_widget_get_current_layer (w)->key_width;
+    double rx = r->vx + r->vw / 2, ry = r->vy + r->vh / 2;
+
+    tactus_ac_set_typing (NULL, "th", FALSE);
+    send_touch (w, GDK_TOUCH_BEGIN, 0, rx - 0.38 * kw, ry);
+    send_touch (w, GDK_TOUCH_END, 0, rx - 0.38 * kw, ry);
+    check_str ("after th, a tap in r's side toward e is e", typed->str, "e");
+    reset (w);
+    send_touch (w, GDK_TOUCH_BEGIN, 0, rx, ry);
+    send_touch (w, GDK_TOUCH_END, 0, rx, ry);
+    check_str ("a tap in r's middle is r", typed->str, "r");
+    reset (w);
+    tactus_ac_set_typing (NULL, NULL, FALSE);
+    send_touch (w, GDK_TOUCH_BEGIN, 0, rx - 0.38 * kw, ry);
+    send_touch (w, GDK_TOUCH_END, 0, rx - 0.38 * kw, ry);
+    check_str ("with no word being typed, it is r", typed->str, "r");
+    reset (w);
+  }
 
   /* under the keys */
   tap (w, "emoji");

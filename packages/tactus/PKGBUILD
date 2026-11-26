@@ -13,7 +13,10 @@
 #    that run with no window.
 # The word counts the autocorrection weighs are hermitdave's FrequencyWords
 # (content/2018/en/en_50k.txt, made from OpenSubtitles 2018, CC-BY-SA-4.0),
-# fetched at a pinned commit and installed unchanged.
+# fetched at a pinned commit and installed unchanged. Which word follows which
+# (word-pairs.txt, WORD-PAIRS) is counted by tools/tactus-word-pairs.py in
+# Tatoeba's English sentences (CC BY 2.0 FR) and kept here: Tatoeba's exports
+# carry no version to pin.
 #
 # Everything is under /usr/lib/tactus with its own name and its own settings
 # schemas, so it sits beside squeekboard: Arch's stevia package conflicts with
@@ -33,7 +36,7 @@ _counts=34bb6447a96d4434dc2d4b24e0cf946c523090b3
 pkgdesc='An on-screen keyboard that corrects words as they are typed (opt-in; Omamobile)'
 arch=(aarch64)
 url='https://github.com/derekross/omamobile'
-license=(GPL-3.0-or-later CC-BY-SA-4.0)  # CC-BY-SA: the word counts
+license=(GPL-3.0-or-later CC-BY-SA-4.0 LicenseRef-CC-BY-2.0-FR)  # the word counts; the word pairs
 depends=(cairo dconf feedbackd glib2 glibc gnome-desktop gsettings-desktop-schemas
          gst-plugins-base-libs gstreamer gtk3 hunspell json-glib libgmobile libhandy
          libsoup3 libxkbcommon pango systemd-libs wayland
@@ -65,7 +68,8 @@ build() {
 }
 
 check() {
-  TACTUS_WORD_COUNTS="$srcdir/en_50k-$_counts.txt" "$startdir/test/all" --built "$srcdir/build" "$srcdir/stevia-v$_stevia"
+  TACTUS_WORD_COUNTS="$srcdir/en_50k-$_counts.txt" TACTUS_WORD_PAIRS="$startdir/word-pairs.txt" \
+    "$startdir/test/all" --built "$srcdir/build" "$srcdir/stevia-v$_stevia"
 }
 
 package() {
@@ -79,7 +83,9 @@ package() {
   install -Dm644 "$startdir/tactus.gschema.override" "$p/share/glib-2.0/schemas/10_tactus.gschema.override"
   glib-compile-schemas --strict "$p/share/glib-2.0/schemas"
   install -Dm644 "en_50k-$_counts.txt" "$p/share/phosh-osk-stevia/en_50k.txt"
+  install -Dm644 "$startdir/word-pairs.txt" "$p/share/phosh-osk-stevia/word-pairs.txt"
   install -Dm755 "$startdir/tactus" "$pkgdir/usr/bin/tactus"
   install -Dm644 "stevia-v$_stevia/COPYING" "$pkgdir/usr/share/licenses/$pkgname/COPYING"
   install -Dm644 "$startdir/WORD-COUNTS" "$pkgdir/usr/share/licenses/$pkgname/WORD-COUNTS"
+  install -Dm644 "$startdir/WORD-PAIRS" "$pkgdir/usr/share/licenses/$pkgname/WORD-PAIRS"
 }

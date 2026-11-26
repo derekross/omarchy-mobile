@@ -136,6 +136,16 @@ struct _TactusTyper {
   char          *undo_made;
   /* The word last put back: typed again, it is meant */
   char          *rejected;
+  /* Taken up by every key that does more than type: Backspace, a key that
+   * moves the cursor, Return, a text the copy didn't foresee */
+  guint          epoch;
+  /* The last word kept as typed and followed by a space, which the word
+   * after it may still change: where it starts, what it is, and the epoch
+   * then */
+  gboolean       lb_valid;
+  guint          lb_start;
+  char          *lb_word;
+  guint          lb_epoch;
 
   /* Say in the log what is done and why (never what is typed) */
   gboolean       trace;
@@ -290,6 +300,7 @@ model_adopt (TactusTyper *self, const char *text, gboolean anchored)
 static void
 model_reset (TactusTyper *self, gboolean anchored)
 {
+  self->epoch++;
   g_array_set_size (self->chars, 0);
   self->anchored = anchored;
   self->after_word = FALSE;
@@ -401,11 +412,14 @@ tactus_typer_wants_capital (TactusTyper *self)
 }
 
 
+static void update_typing (TactusTyper *self);
+
 static void
 update_shift (TactusTyper *self, gboolean context_changed)
 {
   if (self->ops.shift)
     self->ops.shift (tactus_typer_wants_capital (self), context_changed, self->data);
+  update_typing (self);
 }
 
 
@@ -549,6 +563,58 @@ word_start (TactusTyper *self)
   return s;
 }
 
+/* The word that ends with a space alone before @s, or NULL */
+static char *
+word_before (TactusTyper *self, guint s)
+{
+  guint e, b;
+
+  if (s < 2 || char_at (self, s - 1)->c != ' ' || !is_word_char (char_at (self, s - 2)->c))
+    return NULL;
+  e = s - 1;
+  b = e;
+  while (b > 0 && is_word_char (char_at (self, b - 1)->c))
+    b--;
+  if (e - b > WORD_MAX)
+    return NULL;
+  if (b > 0 && !is_space (char_at (self, b - 1)->c) && char_at (self, b - 1)->c != '\n' &&
+      !is_opener (char_at (self, b - 1)->c))
+    return NULL;
+  return model_dup (self, b, e);
+}
+
+/* Tell the autocorrection which word is being typed, for the keys to lean
+ * toward the letters likely next; nothing where nothing is corrected */
+static void
+update_typing (TactusTyper *self)
+{
+  guint len = self->chars->len, s;
+  g_autofree char *prefix = NULL;
+  g_autofree char *before = NULL;
+
+  if (!self->active || self->after_word || self->selection || !corrects (self)) {
+    tactus_ac_set_typing (NULL, NULL, FALSE);
+    return;
+  }
+  s = word_start (self);
+  if (len - s > WORD_MAX || (s == 0 && !self->anchored) ||
+      (s > 0 && !is_space (char_at (self, s - 1)->c) && char_at (self, s - 1)->c != '\n' &&
+       !is_opener (char_at (self, s - 1)->c))) {
+    tactus_ac_set_typing (NULL, NULL, FALSE);
+    return;
+  }
+  prefix = model_dup (self, s, len);
+  for (char *p = prefix; *p; p++) {
+    if (!g_ascii_isalpha (*p)) {
+      tactus_ac_set_typing (NULL, NULL, FALSE);
+      return;
+    }
+    *p = g_ascii_tolower (*p);
+  }
+  before = word_before (self, s);
+  tactus_ac_set_typing (before, prefix, sentence_start_at (self, s));
+}
+
 /* Whether text can be taken away now. A text field that tells must have shown
  * all that was sent to it: the browser takes text away counting from the
  * cursor it last told of, not from where the cursor is, so a request that
@@ -620,6 +686,7 @@ meant (TactusTyper *self, guint s)
   guint len = self->chars->len, n = len - s;
   g_autofree char *word = model_dup (self, s, len);
   g_autofree TactusTap *taps = g_new0 (TactusTap, n);
+  g_autofree char *before = NULL;
   gboolean have_taps = TRUE;
   char *fixed;
 
@@ -646,7 +713,8 @@ meant (TactusTyper *self, guint s)
     have_taps = have_taps && taps[i].valid;
   }
 
-  fixed = tactus_ac_correct (word, have_taps ? taps : NULL, n, sentence_start_at (self, s));
+  before = word_before (self, s);
+  fixed = tactus_ac_correct_in (word, have_taps ? taps : NULL, n, sentence_start_at (self, s), before);
   if (fixed && g_str_equal (fixed, word))
     g_clear_pointer (&fixed, g_free);
   if (have_taps && learns (self))
@@ -655,6 +723,63 @@ meant (TactusTyper *self, guint s)
         have_taps ? "taps" : "letters only");
 
   return fixed;
+}
+
+/* The word before the one from @s to the cursor, kept as typed when it was
+ * done, weighed again now that the one after it is known: "the bot is" is
+ * "the boy is". Only where nothing was changed since it was typed; Backspace
+ * right after puts it back. Returns: whether it changed it, and put the word
+ * at the cursor and @tail after it. */
+static gboolean
+look_back (TactusTyper *self, guint s, const char *tail)
+{
+  guint len = self->chars->len, start = self->lb_start, n1;
+  g_autofree char *w1 = NULL;
+  g_autofree char *w2 = NULL;
+  g_autofree char *before = NULL;
+  g_autofree char *fixed = NULL;
+  g_autofree char *rest = NULL;
+  g_autofree TactusTap *taps = NULL;
+
+  if (!self->lb_valid || self->lb_epoch != self->epoch || *tail == '\0' || !corrects (self))
+    return FALSE;
+  n1 = g_utf8_strlen (self->lb_word, -1);
+  if (start + n1 + 1 != s || char_at (self, s - 1)->c != ' ')
+    return FALSE;
+  w1 = model_dup (self, start, start + n1);
+  if (!g_str_equal (w1, self->lb_word))
+    return FALSE;
+  taps = g_new0 (TactusTap, n1);
+  for (guint i = start; i < len; i++) {
+    if (char_at (self, i)->time == 0)
+      return FALSE;
+    if (i < start + n1) {
+      taps[i - start] = char_at (self, i)->tap;
+      if (!taps[i - start].valid)
+        return FALSE;
+    }
+  }
+
+  w2 = model_dup (self, s, len);
+  before = word_before (self, start);
+  fixed = tactus_ac_reconsider (w1, taps, n1, sentence_start_at (self, start), before, w2);
+  if (fixed == NULL || g_str_equal (fixed, w1))
+    return FALSE;
+
+  rest = model_dup (self, start + n1, len);
+  note (self, "a word of %u letters corrected by the words either side of it", n1);
+  {
+    g_autofree char *made = g_strconcat (fixed, rest, tail, NULL);
+
+    replace (self, len - start, made);
+    disarm_undo (self);
+    self->undo_armed = TRUE;
+    self->undo_typed = g_strconcat (w1, rest, tail, NULL);
+    self->undo_made = g_steal_pointer (&made);
+  }
+  /* the word at the cursor starts further on or back now */
+  self->lb_start = start + g_utf8_strlen (fixed, -1) + 1;
+  return TRUE;
 }
 
 /* The word at the cursor is done and @tail follows it. Returns: whether
@@ -666,18 +791,31 @@ finish_word (TactusTyper *self, const char *tail)
   g_autofree char *fixed = NULL;
   g_autofree char *typed = NULL;
   g_autofree char *made = NULL;
+  gboolean done;
 
   const char *why = word_stays_because (self, s);
 
   if (why) {
     if (s < self->chars->len)
       note (self, "a word of %u letters kept: %s", self->chars->len - s, why);
+    self->lb_valid = FALSE;
     return FALSE;
   }
 
   fixed = meant (self, s);
-  if (fixed == NULL)
-    return FALSE;
+  if (fixed == NULL) {
+    guint n = self->chars->len - s;
+
+    done = look_back (self, s, tail);
+    /* this word may be changed by the next, if a space alone follows it */
+    g_free (self->lb_word);
+    self->lb_word = model_dup (self, done ? self->lb_start : s, (done ? self->lb_start : s) + n);
+    self->lb_start = done ? self->lb_start : s;
+    self->lb_epoch = self->epoch;
+    self->lb_valid = g_str_equal (tail, " ");
+    return done;
+  }
+  self->lb_valid = FALSE;
 
   typed = model_dup (self, s, self->chars->len);
   made = g_strconcat (fixed, tail, NULL);
@@ -753,6 +891,7 @@ type_enter (TactusTyper *self, gboolean newline)
   guint s = word_start (self), line = s;
   gboolean prose = newline;
 
+  self->epoch++;
   /* Only in running text: a lone word sent off with Return (a search, a name) stays as typed */
   while (line > 0 && char_at (self, line - 1)->c != '\n') {
     if (is_word_char (char_at (self, line - 1)->c))
@@ -778,6 +917,7 @@ type_enter (TactusTyper *self, gboolean newline)
 static void
 type_key (TactusTyper *self, const char *symbol)
 {
+  self->epoch++;
   disarm_undo (self);
   /* Where the cursor is now, only the text field knows: one that tells will
    * tell, and until then nothing is corrected */
@@ -793,6 +933,7 @@ act_backspace (TactusTyper *self, TactusBackspace how)
 {
   guint len;
 
+  self->epoch++;
   /* Right after a correction: the word as it was typed comes back */
   if (how == TACTUS_BACKSPACE_TAP && self->undo_armed) {
     g_autofree char *typed = g_steal_pointer (&self->undo_typed);
@@ -1515,6 +1656,7 @@ tactus_typer_free (TactusTyper *self)
   g_free (self->acked);
   g_free (self->if_ignored);
   g_free (self->rejected);
+  g_free (self->lb_word);
   g_array_unref (self->pending);
   g_array_unref (self->held);
   g_array_unref (self->chars);

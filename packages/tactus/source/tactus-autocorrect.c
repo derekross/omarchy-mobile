@@ -35,6 +35,9 @@
  * commonest first (hermitdave's FrequencyWords, en_50k.txt). TACTUS_WORD_COUNTS
  * in the environment names another file, for the tests. */
 #define FREQ_DEFAULT TACTUS_PKGDATADIR "/en_50k.txt"
+/* Which word follows which: tools/tactus-word-pairs.py's counts in Tatoeba's
+ * English sentences. TACTUS_WORD_PAIRS names another file, for the tests. */
+#define PAIRS_DEFAULT TACTUS_PKGDATADIR "/word-pairs.txt"
 #define MAX_LEN      24
 /* How often a word is seen in the list before it counts as everyday writing */
 #define COMMON       300
@@ -99,6 +102,35 @@
 /* … and the typed word long enough */
 #define GUESS_LONG   7
 
+/* Context. What a word's neighbours say for it: how much more often than
+ * by chance the pair was seen, as a log, no more than this either way */
+#define CTX_CLIP     3.0
+/* … weighed this much against the taps and the word's own count */
+#define CTX_WEIGHT   0.7
+/* A pair seen fewer times than the word pairs keep counts as seen this often */
+#define CTX_ABSENT   3.0
+/* A word the dictionary knows gives way to the one beside it, its changed
+ * letters close calls, only where its neighbours say this much more for
+ * that one … */
+#define CTX_STRONG   3.5
+/* … and the whole weighing too, by this much */
+#define CTX_MARGIN   2.5
+
+/* Keys that grow: a letter likelier next takes a little of its neighbours'
+ * room. What it may take is at most this, in the taps' currency, less than
+ * the distance between two keys' middles, so a tap in a key's middle is that
+ * key's. */
+#define PRIOR_MAX    0.8
+#define PRIOR_SCALE  0.3
+#define PRIOR_FLOOR  0.002
+/* How many pairs after the word before it takes to trust them fully */
+#define PRIOR_PAIRS  40.0
+
+typedef struct {
+  guint64 key;   /* the first word's number above the second's */
+  guint   count;
+} Pair;
+
 typedef struct {
   const char *letters; /* a to z only: what is typed */
   const char *display; /* with its apostrophe, and "I" */
@@ -112,6 +144,18 @@ static GHashTable   *learned;
 static GStringChunk *chunk;
 static GArray       *by_len[MAX_LEN + 1];
 static double        bias_x, bias_y;
+static GPtrArray    *by_letters;      /* Entry *, by letters: the words a beginning may become */
+/* The word pairs */
+static GHashTable   *pair_id;         /* word -> its number + 1 */
+static GPtrArray    *pair_word;       /* number -> word */
+static GArray       *pair_seen;       /* number -> guint: how often the word was seen */
+static GArray       *pairs;           /* Pair, by key */
+static double        pair_total;
+/* The words either side of the word being corrected, if known */
+static int           ctx_before = -1, ctx_after = -1;
+/* The keys' share of the next letter while a word is typed */
+static double        prior[26];
+static gboolean      prior_on;
 static guint         bias_unsaved;
 static gboolean      bias_loaded;
 
@@ -302,6 +346,13 @@ tactus_ac_save (void)
 }
 
 
+static int
+cmp_letters (gconstpointer a, gconstpointer b)
+{
+  return strcmp ((*(Entry *const *) a)->letters, (*(Entry *const *) b)->letters);
+}
+
+
 static void
 add_entry (const char *letters, const char *display, guint count)
 {
@@ -365,6 +416,183 @@ build_index (void)
 
   for (guint i = 0; i < G_N_ELEMENTS (contractions); i++)
     add_entry (contractions[i].letters, contractions[i].display, contractions[i].count);
+
+  by_letters = g_ptr_array_new ();
+  for (int i = 1; i <= MAX_LEN; i++) {
+    for (guint j = 0; j < by_len[i]->len; j++)
+      g_ptr_array_add (by_letters, &g_array_index (by_len[i], Entry, j));
+  }
+  g_ptr_array_sort (by_letters, cmp_letters);
+}
+
+
+static int
+cmp_pair (gconstpointer a, gconstpointer b)
+{
+  guint64 x = ((const Pair *) a)->key, y = ((const Pair *) b)->key;
+
+  return x < y ? -1 : x > y;
+}
+
+/* tools/tactus-word-pairs.py's file: "total N", "sentences N", "words", then
+ * "word count" lines, "pairs", then lines of a word and the words seen after
+ * it, "word:count" */
+static void
+load_pairs (const char *path)
+{
+  g_autofree char *contents = NULL;
+  char *save = NULL;
+  enum { HEAD, WORDS, PAIRS } part = HEAD;
+  guint sentences = 0;
+
+  if (!g_file_get_contents (path, &contents, NULL, NULL)) {
+    g_warning ("No word pairs at %s: the keyboard corrects words without their context", path);
+    return;
+  }
+  pair_id = g_hash_table_new (g_str_hash, g_str_equal);
+  pair_word = g_ptr_array_new ();
+  pair_seen = g_array_new (FALSE, FALSE, sizeof (guint));
+  pairs = g_array_new (FALSE, FALSE, sizeof (Pair));
+
+  for (char *line = strtok_r (contents, "\n", &save); line; line = strtok_r (NULL, "\n", &save)) {
+    if (line[0] == '#')
+      continue;
+    if (part == HEAD) {
+      if (g_str_has_prefix (line, "total "))
+        pair_total = g_ascii_strtod (line + 6, NULL);
+      else if (g_str_has_prefix (line, "sentences "))
+        sentences = (guint) g_ascii_strtoull (line + 10, NULL, 10);
+      else if (strcmp (line, "words") == 0) {
+        /* the start of a sentence is a word of its own */
+        char *start = g_string_chunk_insert (chunk, "^");
+
+        g_hash_table_insert (pair_id, start, GUINT_TO_POINTER (1));
+        g_ptr_array_add (pair_word, start);
+        g_array_append_val (pair_seen, sentences);
+        part = WORDS;
+      }
+    } else if (part == WORDS) {
+      char *space = strchr (line, ' ');
+      guint count;
+
+      if (strcmp (line, "pairs") == 0) {
+        part = PAIRS;
+        continue;
+      }
+      if (space == NULL)
+        continue;
+      *space = '\0';
+      count = (guint) g_ascii_strtoull (space + 1, NULL, 10);
+      line = g_string_chunk_insert (chunk, line);
+      g_hash_table_insert (pair_id, line, GUINT_TO_POINTER (pair_word->len + 1));
+      g_ptr_array_add (pair_word, line);
+      g_array_append_val (pair_seen, count);
+    } else {
+      char *rest = strchr (line, ' '), *item, *save2 = NULL;
+      guint a;
+
+      if (rest == NULL)
+        continue;
+      *rest++ = '\0';
+      a = GPOINTER_TO_UINT (g_hash_table_lookup (pair_id, line));
+      if (a == 0)
+        continue;
+      for (item = strtok_r (rest, " ", &save2); item; item = strtok_r (NULL, " ", &save2)) {
+        char *colon = strchr (item, ':');
+        Pair pair;
+        guint b;
+
+        if (colon == NULL)
+          continue;
+        *colon = '\0';
+        b = GPOINTER_TO_UINT (g_hash_table_lookup (pair_id, item));
+        if (b == 0)
+          continue;
+        pair.key = ((guint64) (a - 1) << 32) | (b - 1);
+        pair.count = (guint) g_ascii_strtoull (colon + 1, NULL, 10);
+        g_array_append_val (pairs, pair);
+      }
+    }
+  }
+  g_array_sort (pairs, cmp_pair);
+  if (pair_total < 1.0 || pairs->len == 0) {
+    g_warning ("The word pairs at %s are empty: the keyboard corrects words without their context", path);
+    g_clear_pointer (&pairs, g_array_unref);
+  }
+}
+
+/* A word's number among the word pairs; -1 if it has none. Its letters
+ * only, small: "Don't" is "dont". */
+static int
+pair_of (const char *word)
+{
+  char letters[MAX_LEN + 1];
+  size_t n = 0;
+
+  if (pairs == NULL || word == NULL)
+    return -1;
+  for (const char *p = word; *p; p++) {
+    if (*p == '\'')
+      continue;
+    if (!g_ascii_isalpha (*p) || n >= MAX_LEN)
+      return -1;
+    letters[n++] = g_ascii_tolower (*p);
+  }
+  letters[n] = '\0';
+  return (int) GPOINTER_TO_UINT (g_hash_table_lookup (pair_id, letters)) - 1;
+}
+
+static guint
+pair_count (int a, int b)
+{
+  Pair want = { .key = ((guint64) a << 32) | (guint) b };
+  guint lo = 0, hi = pairs->len;
+
+  while (lo < hi) {
+    guint mid = (lo + hi) / 2;
+    int c = cmp_pair (&g_array_index (pairs, Pair, mid), &want);
+
+    if (c == 0)
+      return g_array_index (pairs, Pair, mid).count;
+    if (c < 0)
+      lo = mid + 1;
+    else
+      hi = mid;
+  }
+  return 0;
+}
+
+/* How much more often than by chance @b was seen after @a, as a log */
+static double
+pair_say (int a, int b)
+{
+  double expected, seen;
+
+  if (a < 0 || b < 0)
+    return 0.0;
+  expected = (double) g_array_index (pair_seen, guint, a) * g_array_index (pair_seen, guint, b) / pair_total;
+  seen = pair_count (a, b);
+  return CLAMP (log ((seen + CTX_ABSENT) / (expected + CTX_ABSENT)), -CTX_CLIP, CTX_CLIP);
+}
+
+/* What the words either side say for @text, a word or two ("a lot") */
+static double
+context_for (const char *text)
+{
+  const char *space;
+  double say = 0.0;
+
+  if (ctx_before < 0 && ctx_after < 0)
+    return 0.0;
+  space = strchr (text, ' ');
+  if (ctx_before >= 0) {
+    g_autofree char *first = space ? g_strndup (text, space - text) : g_strdup (text);
+
+    say += pair_say (ctx_before, pair_of (first));
+  }
+  if (ctx_after >= 0)
+    say += pair_say (pair_of (space ? strrchr (text, ' ') + 1 : text), ctx_after);
+  return say;
 }
 
 
@@ -372,6 +600,7 @@ static void
 ensure_init (void)
 {
   const char *freq_path = g_getenv ("TACTUS_WORD_COUNTS") ?: FREQ_DEFAULT;
+  const char *pairs_path = g_getenv ("TACTUS_WORD_PAIRS") ?: PAIRS_DEFAULT;
   g_auto (GStrv) dirs = g_strsplit (DICT_DIRS, ":", -1);
   g_autofree char *contents = NULL;
   g_autofree char *words = words_path ();
@@ -428,6 +657,7 @@ ensure_init (void)
 
   if (hun)
     build_index ();
+  load_pairs (pairs_path);
   load_bias ();
 }
 
@@ -491,6 +721,7 @@ typedef struct {
   char    text[2 * MAX_LEN + 4];
   double  score;
   double  reach;     /* how much further from the taps than the word as typed */
+  double  say;       /* what the words either side say for it */
   gboolean by_taps;  /* a word of the same letters count, weighed tap by tap */
   gboolean found;
 } Best;
@@ -499,16 +730,18 @@ typedef struct {
 static void
 consider (Best *best, const char *text, double cost, guint count, double typed_cost, gboolean by_taps)
 {
-  double score;
+  double score, say;
 
   if (count < OFFERED)
     return;
-  score = cost - log ((double) count);
+  say = context_for (text);
+  score = cost - log ((double) count) - CTX_WEIGHT * say;
   if (best->found && score >= best->score)
     return;
 
   g_strlcpy (best->text, text, sizeof (best->text));
   best->score = score;
+  best->say = say;
   best->reach = cost - typed_cost;
   best->by_taps = by_taps;
   best->found = TRUE;
@@ -651,22 +884,16 @@ edits (const char *a, const char *b)
 #undef D
 }
 
-/**
- * tactus_ac_correct:
- * @word: The word as typed
- * @taps:(nullable): Where the finger landed for each of its letters
- * @n_taps: How many of those there are
- * @sentence_start: Whether the word starts a sentence, so that its capital says nothing
- *
- * Returns:(transfer full)(nullable): The word that was meant, or %NULL to keep it as typed
- */
-char *
-tactus_ac_correct (const char *word, const TactusTap *taps, guint n_taps, gboolean sentence_start)
+/* The word that was meant by @word, or NULL to keep it. @again: it was
+ * kept once, and now the word after it is known too: only what the words
+ * either side say may change it. */
+static char *
+correct (const char *word, const TactusTap *taps, guint n_taps, gboolean sentence_start, gboolean again)
 {
   static const char *const i_tails[] = { "m", "ll", "ve", "d", NULL };
   g_autofree char *lower = NULL;
   size_t n;
-  gboolean have_taps, solid, seen, name;
+  gboolean have_taps, solid, seen, name, short_form;
   Typed t = { .n = 0 };
   double *tx = t.tx, *ty = t.ty;
   double typed_cost = 0.0, typed_score, reach_max;
@@ -726,9 +953,12 @@ tactus_ac_correct (const char *word, const TactusTap *taps, guint n_taps, gboole
     if (hun_ok (capital))
       return strcmp (capital, word) == 0 ? NULL : g_steal_pointer (&capital);
   }
-  /* A short form people write ("pics", "msgs") is as likely meant as a word they write */
-  if (g_strv_contains (informal, lower))
-    typed_count = MAX (typed_count, COMMON);
+  /* A short form people write ("btw", "pics", "msgs") is meant as much as a
+   * word the owner taught: a tap near the edge of a key doesn't make it the
+   * far commoner word next to it ("btw" is not "bye") */
+  short_form = g_strv_contains (informal, lower);
+  if (short_form)
+    typed_count = MAX (typed_count, LEARNED);
 
   /* How the word stands: solid (the dictionary's, the owner's, everyday
    * writing), seen (not a word, but people do write it: "alot", "goin"), or
@@ -773,7 +1003,7 @@ tactus_ac_correct (const char *word, const TactusTap *taps, guint n_taps, gboole
    * changed only where the taps were close calls toward one it does know:
    * "Vigip" for "Vigil". With no taps to go by, it stays. */
   if (name) {
-    if (!have_taps || solid || typed_count >= COMMON)
+    if (again || !have_taps || solid || typed_count >= COMMON)
       return NULL;
     weigh_taps (&best, &t, OFFERED, TRUE, CLOSE_CALL, reach_max, 0.0, typed_cost, TRUE);
     typed_score = typed_cost - log ((double) MAX (typed_count, 1)) + UNKNOWN;
@@ -784,6 +1014,12 @@ tactus_ac_correct (const char *word, const TactusTap *taps, guint n_taps, gboole
       return with_case (word, best.text);
     return NULL;
   }
+
+  typed_score = typed_cost - log ((double) MAX (typed_count, 1)) - CTX_WEIGHT * context_for (lower);
+  if (!solid)
+    typed_score += seen ? SEEN : UNKNOWN;
+  if (again)
+    goto in_context;
 
   /* Words of as many letters, tap by tap (among them the same letters with an
    * apostrophe); a rarer one only where the taps point to it */
@@ -922,10 +1158,6 @@ tactus_ac_correct (const char *word, const TactusTap *taps, guint n_taps, gboole
     }
   }
 
-  typed_score = typed_cost - log ((double) MAX (typed_count, 1));
-  if (!solid)
-    typed_score += seen ? SEEN : UNKNOWN;
-
   if (best.found) {
     gboolean take;
 
@@ -943,7 +1175,97 @@ tactus_ac_correct (const char *word, const TactusTap *taps, guint n_taps, gboole
       return with_case (word, best.text);
   }
 
+in_context:
+  /* A word the dictionary knows, where the words either side speak for the
+   * one beside it far more than for it ("the bot" is "the boy"): only with
+   * each changed letter a close call, and never a short form people write */
+  if (solid && have_taps && !short_form && (ctx_before >= 0 || ctx_after >= 0)) {
+    Best near = { .found = FALSE };
+    double typed_say = context_for (lower);
+
+    weigh_taps (&near, &t, COMMON, TRUE, CLOSE_CALL, reach_max, 0.0, typed_cost, TRUE);
+    if (near.found) {
+      gboolean take = near.say - typed_say >= CTX_STRONG && near.score < typed_score - CTX_MARGIN;
+
+      g_debug ("a word of %u letters (%.1f, context %.1f) against one of %u (%.1f, context %.1f): replaced %d",
+               (guint) n, typed_score, typed_say, (guint) strlen (near.text), near.score, near.say, take);
+      if (take)
+        return with_case (word, near.text);
+    }
+  }
+
   return NULL;
+}
+
+/* Where @word starts a sentence and nothing is known before it, the start
+ * of a sentence is what comes before it */
+static void
+set_context (const char *before, const char *after, gboolean sentence_start)
+{
+  ctx_before = before ? pair_of (before) : sentence_start ? pair_of ("^") : -1;
+  ctx_after = after ? pair_of (after) : -1;
+}
+
+/**
+ * tactus_ac_correct:
+ * @word: The word as typed
+ * @taps:(nullable): Where the finger landed for each of its letters
+ * @n_taps: How many of those there are
+ * @sentence_start: Whether the word starts a sentence, so that its capital says nothing
+ *
+ * Returns:(transfer full)(nullable): The word that was meant, or %NULL to keep it as typed
+ */
+char *
+tactus_ac_correct (const char *word, const TactusTap *taps, guint n_taps, gboolean sentence_start)
+{
+  return tactus_ac_correct_in (word, taps, n_taps, sentence_start, NULL);
+}
+
+/**
+ * tactus_ac_correct_in:
+ * @before:(nullable): The word before it, with a space alone between them
+ *
+ * As tactus_ac_correct(), with what the word before says for each word it
+ * could be.
+ */
+char *
+tactus_ac_correct_in (const char *word, const TactusTap *taps, guint n_taps, gboolean sentence_start,
+                      const char *before)
+{
+  char *fixed;
+
+  ensure_init ();
+  set_context (before, NULL, sentence_start);
+  fixed = correct (word, taps, n_taps, sentence_start, FALSE);
+  ctx_before = ctx_after = -1;
+  return fixed;
+}
+
+/**
+ * tactus_ac_reconsider:
+ * @word: A word kept as typed
+ * @before:(nullable): The word before it
+ * @after: The word typed after it, with a space alone between them
+ *
+ * A word kept as it was typed, weighed again now that the word after it is
+ * known: it changes only where the words either side speak far more for a
+ * word beside it, its changed letters close calls.
+ *
+ * Returns:(transfer full)(nullable): The word that was meant, or %NULL to keep it
+ */
+char *
+tactus_ac_reconsider (const char *word, const TactusTap *taps, guint n_taps, gboolean sentence_start,
+                      const char *before, const char *after)
+{
+  char *fixed;
+
+  ensure_init ();
+  if (after == NULL)
+    return NULL;
+  set_context (before, after, sentence_start);
+  fixed = correct (word, taps, n_taps, sentence_start, TRUE);
+  ctx_before = ctx_after = -1;
+  return fixed;
 }
 
 /**
@@ -1018,4 +1340,140 @@ tactus_ac_get_bias (double *dx, double *dy)
   *dx = bias_x;
   *dy = bias_y;
   return TRUE;
+}
+
+/*
+ * Keys that grow
+ */
+
+/* The first entry in by_letters whose letters are not before @prefix */
+static guint
+first_with (const char *prefix)
+{
+  guint lo = 0, hi = by_letters->len;
+
+  while (lo < hi) {
+    guint mid = (lo + hi) / 2;
+
+    if (strcmp (((Entry *) g_ptr_array_index (by_letters, mid))->letters, prefix) < 0)
+      lo = mid + 1;
+    else
+      hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * tactus_ac_set_typing:
+ * @before:(nullable): The word before the one being typed, with a space alone between them
+ * @prefix:(nullable): The letters typed of the word so far ("" at its start);
+ *   %NULL where no word is being typed that may be corrected
+ * @sentence_start: Whether the word starts a sentence
+ *
+ * Which letter is likely next, for the keys to lean toward it: by how often
+ * the words that start so are written and, where they were seen after the
+ * word before, how often they were seen there.
+ */
+void
+tactus_ac_set_typing (const char *before, const char *prefix, gboolean sentence_start)
+{
+  double uni[26] = { 0 }, bi[26] = { 0 }, uni_all = 0.0, bi_all = 0.0, share = 0.0, top = 0.0;
+  size_t n;
+  int a;
+
+  prior_on = FALSE;
+  ensure_init ();
+  if (prefix == NULL || by_letters == NULL)
+    return;
+  n = strlen (prefix);
+  if (n >= MAX_LEN)
+    return;
+  for (size_t i = 0; i < n; i++) {
+    if (prefix[i] < 'a' || prefix[i] > 'z')
+      return;
+  }
+
+  for (guint i = first_with (prefix); i < by_letters->len; i++) {
+    Entry *e = g_ptr_array_index (by_letters, i);
+
+    if (strncmp (e->letters, prefix, n) != 0)
+      break;
+    if (e->letters[n] == '\0')
+      continue;
+    uni[e->letters[n] - 'a'] += e->count;
+    uni_all += e->count;
+  }
+  if (uni_all <= 0.0)
+    return;
+
+  /* The words seen after the word before */
+  a = before ? pair_of (before) : sentence_start ? pair_of ("^") : -1;
+  if (a >= 0) {
+    Pair want = { .key = (guint64) a << 32 };
+    guint lo = 0, hi = pairs->len;
+
+    while (lo < hi) {
+      guint mid = (lo + hi) / 2;
+
+      if (cmp_pair (&g_array_index (pairs, Pair, mid), &want) < 0)
+        lo = mid + 1;
+      else
+        hi = mid;
+    }
+    for (guint i = lo; i < pairs->len && g_array_index (pairs, Pair, i).key >> 32 == (guint64) a; i++) {
+      Pair *p = &g_array_index (pairs, Pair, i);
+      const char *b = g_ptr_array_index (pair_word, (guint) (p->key & 0xffffffff));
+
+      if (strncmp (b, prefix, n) != 0 || b[n] < 'a' || b[n] > 'z')
+        continue;
+      bi[b[n] - 'a'] += p->count;
+      bi_all += p->count;
+    }
+    share = bi_all / (bi_all + PRIOR_PAIRS);
+  }
+
+  for (int l = 0; l < 26; l++) {
+    prior[l] = (1.0 - share) * uni[l] / uni_all + (bi_all > 0.0 ? share * bi[l] / bi_all : 0.0);
+    top = MAX (top, prior[l]);
+  }
+  for (int l = 0; l < 26; l++)
+    prior[l] = MAX (0.0, PRIOR_MAX + PRIOR_SCALE * log ((prior[l] + PRIOR_FLOOR) / (top + PRIOR_FLOOR)));
+  prior_on = TRUE;
+}
+
+/**
+ * tactus_ac_tap_prior:
+ * @symbol: A key's symbol
+ *
+ * Returns: How much room the key may take from its neighbours now, in the
+ *   taps' currency: 0 when no word is being typed, never more than a key's
+ *   middle is from its neighbour's
+ */
+double
+tactus_ac_tap_prior (const char *symbol)
+{
+  char c;
+
+  if (!prior_on || symbol == NULL || symbol[0] == '\0' || symbol[1] != '\0')
+    return 0.0;
+  c = g_ascii_tolower (symbol[0]);
+  if (c < 'a' || c > 'z')
+    return 0.0;
+  return prior[c - 'a'];
+}
+
+/**
+ * tactus_ac_tap_cost:
+ * @symbol: A key's symbol
+ * @dx: How far right of the key's middle a tap landed (with the owner's
+ *   learned offset taken off), in key widths
+ * @dy: How far below it, in row heights
+ *
+ * Returns: How far the tap is from the key, less what the key may take for
+ *   being likely next: of two keys, the tap is the lower one's
+ */
+double
+tactus_ac_tap_cost (const char *symbol, double dx, double dy)
+{
+  return KX * dx * dx + KY * dy * dy - tactus_ac_tap_prior (symbol);
 }
