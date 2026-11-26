@@ -25,10 +25,39 @@ CPM_CALL = re.compile(r" lpcm=(\d+) id=(\d+) op=(\d+)$")
 CPM_RESULT = re.compile(r" result=(-?\d+)$")
 DISPLAY_LPCM = 0x23
 DPU_CHANNEL_CLOCK = (0x2a, 0)
+PLL_ARM = "DSI0 PLL lock probes armed"
+PLL_PHASES = {"dsi0_pll_first": "first", "dsi0_pll_last": "last"}
+PLL_SAMPLE = re.compile(r" bank=(0x[0-9a-fA-F]+) value=(0x[0-9a-fA-F]+)$")
+DSI0_PLL_BANK = 0x0f7d8800
 
 
 def display_resource(kind, lpcm, resource):
     return lpcm == DISPLAY_LPCM or (kind == "clk" and (lpcm, resource) == DPU_CHANNEL_CLOCK)
+
+
+def summarize_pll(timeline, arm, host_id_time):
+    last_on = None
+    samples = 0
+    for timestamp, index, pid, event, body in timeline:
+        if event == "recv_result_mbfs" and (vote := MBFS.fullmatch(body)):
+            if int(vote[1], 16) == 0x203 and vote[3] == "0":
+                last_on = timestamp if vote[2] == "1" else None
+        elif event in PLL_PHASES:
+            if (timestamp, index) <= arm:
+                raise ValueError("DSI0 PLL sample precedes arm marker")
+            match = PLL_SAMPLE.search(body)
+            if not match:
+                raise ValueError("unexpected stock PLL sample format")
+            bank, value = (int(field, 16) for field in match.groups())
+            if bank != DSI0_PLL_BANK:
+                raise ValueError("unexpected stock PLL register bank")
+            samples += 1
+            on_delta = "unknown" if last_on is None else f"{(timestamp - last_on) * 1000:.3f}"
+            host_delta = "unknown" if host_id_time is None else f"{(timestamp - host_id_time) * 1000:.3f}"
+            print(f"{timestamp} DSI0 PHY PLL {PLL_PHASES[event]} pid={pid} "
+                  f"reg=0x24 value={value:#010x} lock={(value >> 1) & 1} "
+                  f"since_dsi0_on_ms={on_delta} from_host_id_ms={host_delta}")
+    print(f"dsi0_pll_samples={samples}")
 
 
 def summarize(trace):
@@ -50,13 +79,23 @@ def summarize(trace):
         else:
             timeline.append((clock, index, pid, event, body))
 
-    if len(reads) != 1:
-        raise ValueError(f"expected one DSI0 status read, found {len(reads)}")
+    timeline.sort()
+    pll_markers = [(timestamp, index) for timestamp, index, _, event, body in timeline
+                   if event == "tracing_mark_write" and body == PLL_ARM]
+    if len(pll_markers) > 1:
+        raise ValueError("duplicate DSI0 PLL arm marker")
+    if not pll_markers and any(event in PLL_PHASES for _, _, _, event, _ in timeline):
+        raise ValueError("missing DSI0 PLL arm marker")
+    if not reads or (not pll_markers and len(reads) != 1):
+        raise ValueError(f"expected DSI0 status read, found {len(reads)}")
 
-    read_time, read_index, read_pid, value = reads[0]
+    read_time, read_index, read_pid, value = min(reads)
+    if pll_markers and pll_markers[0] >= (read_time, read_index):
+        raise ValueError("DSI0 PLL probe armed after the first host status read")
     resumes = []
     returns = []
     identity = {}
+    host_id_time = None
     cpm_armed = False
     phy_armed = False
     phy_reads = 0
@@ -65,7 +104,7 @@ def summarize(trace):
     cpm_results = {"clk": 0, "rst": 0}
     domain_events = clock_events = 0
     mbfs_events = 0
-    for timestamp, index, pid, event, body in sorted(timeline):
+    for timestamp, index, pid, event, body in timeline:
         if (timestamp, index) >= (read_time, read_index):
             break
         name = body.split(maxsplit=1)[0] if body else ""
@@ -105,6 +144,8 @@ def summarize(trace):
             offset, reg_value = (int(field, 16) for field in register.groups())
             if offset in (0, 4):
                 identity[offset] = reg_value
+                if offset == 0 and reg_value == 0x30313130 and host_id_time is None:
+                    host_id_time = timestamp
                 print(f"{timestamp} DSI0 reg={offset:#04x} value={reg_value:#010x}")
         elif event == "power_domain_target" and name in DOMAINS:
             print(f"{timestamp} genpd {body}")
@@ -148,6 +189,8 @@ def summarize(trace):
         print(f"dsi0_stock_identity={'matched' if identity == expected else 'unconfirmed'}")
     elif any(cpm_calls.values()):
         raise ValueError("missing CPM provider arm marker")
+    if pll_markers:
+        summarize_pll(timeline, pll_markers[0], host_id_time)
     print("APB clock and external reset state require separate evidence.")
     return correlated
 

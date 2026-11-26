@@ -45,6 +45,7 @@ NV_RESCUE_INIT_SHA256 = "00784a6ea41f53acdac36ed5c7b81cf6fb90f35067b138bb7c79c07
 # Byte boundary between the factory generic ramdisk and the overlay in this exact rescue.
 NV_RESCUE_FACTORY_RAMDISK_SIZE = 2969964
 DSI0_TRACE_BOARD_SHA256 = "df00e0d6736a3efefcb5bec99c1d7697bbf44830e0427fd3f889abd0f5bb37bb"
+DSI0_CDPHY_SHA256 = "e758f127694b54b47a0dc4b51acf2fd65325ed8f253cabf5c4f9b2738e439df5"
 DSI0_MODULES = (
     "tzprot.ko", "gs-drm-connector.ko", "mipi-cdphy.ko", "mipi-dsi2h.ko",
     "google_icc.ko", "drm_display_helper.ko", "vs_drm.ko",
@@ -224,6 +225,11 @@ def pack(args):
                                   display_manifest.encode(), 0o644)
                     write_payload(root / "grizzly-inventory/stock-dsi0-trace.sh",
                                   (HERE / "stock-dsi0-trace.sh").read_bytes(), 0o755)
+                    if args.dsi0_pll_trace:
+                        cdphy = capture("bsdtar", "-xOf", vendor_kernel_cpio, "lib/modules/mipi-cdphy.ko")
+                        if hashlib.sha256(cdphy).hexdigest() != DSI0_CDPHY_SHA256:
+                            raise ValueError("factory mipi-cdphy.ko differs from the audited D1 module")
+                        write_payload(root / "grizzly-inventory/dsi0-pll-trace", b"", 0o644)
                 if args.ufs_refclk_only:
                     write_payload(root / "grizzly-inventory/ufs-refclk-only", b"", 0o644)
                     write_payload(root / "grizzly-inventory/ufs-refclk.sh",
@@ -425,6 +431,8 @@ def main():
                       help="verify read-only NV devices before enabling a backup transport")
     mode.add_argument("--dsi0-trace", action="store_true",
                       help="stage the stock DSI0 trace from the audited NV rescue images")
+    mode.add_argument("--dsi0-pll-trace", action="store_true",
+                      help="also capture stock DSI0 PHY PLL lock if the driver polls it")
     mode.add_argument("--ufs-refclk-only", action="store_true",
                       help="read the stock UFS device's reference-clock attribute after the NV guard")
     mode.add_argument("--ufs-power-trace", action="store_true",
@@ -447,6 +455,7 @@ def main():
                                help="use the static NV reader in --usb2-test with the verified isolation DTBO")
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
+    args.dsi0_trace |= args.dsi0_pll_trace
     if (args.usb2_ep0_trace or args.usb2_nv_reader) and not args.usb2_test:
         parser.error("USB2 isolation options require --usb2-test")
     try:

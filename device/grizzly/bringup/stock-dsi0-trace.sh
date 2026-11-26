@@ -5,7 +5,7 @@ set -eu
 
 if [ "$#" -lt 2 ] || [ "$#" -gt 3 ] || [ ! -f "$1/available_events" ] ||
    [ ! -d "$1/instances" ] || [ ! -x "$2" ]; then
-    echo 'usage: stock-dsi0-trace.sh TRACEFS_MOUNT BUSYBOX [--mbfs|--apb-reset|--cleanup]' >&2
+    echo 'usage: stock-dsi0-trace.sh TRACEFS BUSYBOX [--mbfs|--apb-reset|--pll-lock|--pll-probes|--cleanup]' >&2
     exit 2
 fi
 bb=$2
@@ -14,6 +14,7 @@ instance=$1/instances/grizzly_dsi0
 probes=$1/kprobe_events
 group=grizzly_dsi0_cpm
 events='dsi0_clk_call dsi0_clk_result dsi0_rst_call dsi0_rst_result'
+pll_events='dsi0_pll_first dsi0_pll_last'
 
 remove_probes() {
     result=0
@@ -27,13 +28,45 @@ if [ "$("$bb" uname -r)" != 6.12.81-android16-6-gf5369e7496cb-ab16467452-4k ]; t
     echo 'stock-dsi0-trace: expected the audited D1 kernel release' >&2
     exit 1
 fi
+add_probe() {
+    printf '%s\n' "$1:$group/$2 $3" >> "$probes"
+    created="$created $2"
+    probe_dir=$instance/events/$group/$2
+    if [ "$#" -eq 4 ]; then
+        "$bb" echo "$4" > "$probe_dir/filter"
+    fi
+    "$bb" echo 1 > "$probe_dir/enable"
+}
+
 case $mode in
     --cleanup)
+        for name in $pll_events; do
+            if [ -d "$1/events/$group/$name" ]; then
+                events="$events $name"
+            fi
+        done
         "$bb" rmdir "$instance" && remove_probes "$events"
         exit $? ;;
-    ''|--mbfs|--apb-reset) ;;
+    --pll-probes)
+        [ -d "$instance" ] || exit 1
+        "$bb" awk '
+            $3 == "dw_dphy_set_mode_g301" && $4 == "[mipi_cdphy]" { found++ }
+            END { if (found != 1) exit 1 }
+        ' /proc/kallsyms || exit 1
+        created=
+        # x0 is the already-read word. x22+0x40 holds the resource start in RAM.
+        samples='bank=+64(%x22):x64 value=%x0:x32'
+        bank='bank == 0x0f7d8800'
+        add_probe p dsi0_pll_first "mipi_cdphy:dw_dphy_set_mode_g301+0x9c8 $samples" "$bank"
+        add_probe p dsi0_pll_last "mipi_cdphy:dw_dphy_set_mode_g301+0xa18 $samples" "$bank"
+        "$bb" echo 'DSI0 PLL lock probes armed' > "$instance/trace_marker"
+        exit 0 ;;
+    ''|--mbfs|--apb-reset|--pll-lock) ;;
     *) exit 2 ;;
 esac
+
+provider_probes=no
+case $mode in --apb-reset|--pll-lock) provider_probes=yes ;; esac
 
 if [ ! -r /proc/modules ]; then
     echo 'stock-dsi0-trace: mount proc before arming the trace' >&2
@@ -46,7 +79,7 @@ while IFS=' ' read -r module rest; do
             exit 1;;
     esac
 done < /proc/modules
-if [ "$mode" = --apb-reset ]; then
+if [ "$provider_probes" = yes ]; then
     # Tracefs can accept module-qualified probes before the module exists.
     "$bb" awk '
         $3 == "goog_cpm_clk_send_mba_mail" && $4 == "[clk_cpm]" { clk++ }
@@ -70,12 +103,6 @@ enable_event() {
     "$bb" echo 1 > "$event_dir/enable"
 }
 
-add_probe() {
-    printf '%s\n' "$1:$group/$2 $3" >> "$probes"
-    created="$created $2"
-    "$bb" echo 1 > "$instance/events/$group/$2/enable"
-}
-
 "$bb" echo 0 > "$instance/tracing_on"
 "$bb" echo mono > "$instance/trace_clock"
 "$bb" echo 64 > "$instance/buffer_size_kb"
@@ -86,7 +113,7 @@ domains='name == "sswrp_dpu_pd" || name == "dpu_be_pd" || name == "dpu_dsi0_pd" 
 clocks='name ~ "*dsi*" || name ~ "*dpu*"'
 
 reads=$status
-if [ "$mode" = --apb-reset ]; then
+if [ "$provider_probes" = yes ]; then
     host_reads='name ~ "f7d8000.dsi2host*" && (reg == 0 || reg == 4 || reg == 12)'
     # 28964 is the PHY init callback's existing register offset, 0x7124.
     phy_read='name == "f7c0000.dw_mipi_cdphy" && reg == 28964'
@@ -108,7 +135,7 @@ if [ -n "$mode" ]; then
     done
 fi
 
-if [ "$mode" = --apb-reset ]; then
+if [ "$provider_probes" = yes ]; then
     # These files and offsets are qualified against the pinned D1 images.
     # The fetches inspect RAM-backed provider arguments, with no extra MMIO.
     [ -f "$probes" ] && [ ! -d "$1/events/$group" ] || exit 1
@@ -118,10 +145,12 @@ if [ "$mode" = --apb-reset ]; then
     add_probe r64 dsi0_rst_result 'rst_cpm:goog_cpm_rst_send_mba_mail result=$retval:s32'
 fi
 
-# Stop this instance after the existing driver records its first status read.
-"$bb" echo "traceoff:1 if $status" > "$instance/events/regmap/regmap_reg_read/trigger"
+# The PLL path may run after host probe. PID 1 stops that capture.
+if [ "$mode" != --pll-lock ]; then
+    "$bb" echo "traceoff:1 if $status" > "$instance/events/regmap/regmap_reg_read/trigger"
+fi
 "$bb" echo 1 > "$instance/tracing_on"
-if [ "$mode" = --apb-reset ]; then
+if [ "$provider_probes" = yes ]; then
     "$bb" echo 'DSI0 CPM provider probes armed' > "$instance/trace_marker"
     "$bb" echo 'DSI0 PHY init read trace armed' > "$instance/trace_marker"
 fi

@@ -426,6 +426,9 @@ stock_inventory_modules() (
             fi
             stock_inventory_log "loading module=$module"
             "$bb" insmod "$file" "$@" >/dev/kmsg 2>&1 || return 1
+            if [ "$module" = mipi-cdphy.ko ] && [ "${dsi0_pll_arming:-no}" = yes ]; then
+                "$bb" sh "$helper" "$tracefs" "$bb" --pll-probes || return 1
+            fi
         fi
     done < "$manifest"
 
@@ -478,34 +481,50 @@ run_stock_dsi0_trace() (
           fi
           "$bb" umount "$tracefs" && "$bb" rmdir "$tracefs"' 0
 
-    "$bb" sh "$helper" "$tracefs" "$bb" --apb-reset || return 1
+    mode=--apb-reset
+    if [ "$dsi0_pll_requested" = yes ]; then
+        mode=--pll-lock
+        dsi0_pll_arming=yes
+    fi
+    "$bb" sh "$helper" "$tracefs" "$bb" "$mode" || return 1
     armed=yes
     stock_inventory_log 'DSI0 trace armed before display module load' || return 1
     log_dsi0_genpd || stock_inventory_log 'DSI0 genpd pre-load snapshot unavailable'
     stock_inventory_modules load "$dsi0_manifest" || return 1
 
-    for wait in 1 2 3 4 5 6 7 8; do
-        IFS= read -r active < "$instance/tracing_on" || return 1
-        [ "$active" = 0 ] && break
-        "$bb" sleep 1 || return 1
-    done
-    [ "$active" = 0 ] || return 1
-    "$bb" awk '
+    if [ "$dsi0_pll_requested" = yes ]; then
+        # Capture existing work queued by probe without initiating a modeset.
+        "$bb" sleep 3 || return 1
+        "$bb" echo 0 > "$instance/tracing_on" || return 1
+    else
+        for wait in 1 2 3 4 5 6 7 8; do
+            IFS= read -r active < "$instance/tracing_on" || return 1
+            [ "$active" = 0 ] && break
+            "$bb" sleep 1 || return 1
+        done
+        [ "$active" = 0 ] || return 1
+    fi
+    "$bb" awk -v pll="$dsi0_pll_requested" '
         $1 ~ /^dsi0_(clk|rst)_(call|result)$/ { found++; missed += $3 }
-        END { if (found != 4 || missed != 0) exit 1 }
+        $1 ~ /^dsi0_pll_(first|last)$/ { pll_probes++; missed += $3 }
+        END { if (found != 4 || missed != 0 || (pll == "yes" && pll_probes != 2)) exit 1 }
     ' "$tracefs/kprobe_profile" || {
         stock_inventory_log 'DSI0 CPM probe profile incomplete or missed events'
         return 1
     }
     # Preserve the tracefs header and scoped rows for offline correlation.
-    capture=$("$bb" awk '
+    capture=$("$bb" awk -v pll="$dsi0_pll_requested" '
         NR > 128 || length($0) > 512 { invalid=1; exit }
-        /entries-in-buffer\/entries-written:|: (regmap_reg_read|power_domain_target|rpm_resume|rpm_return_int|rpm_status|clk_enable|clk_disable|clk_set_rate|send_mail_mbfs|recv_result_mbfs|dsi0_(clk|rst)_(call|result)|tracing_mark_write): / {
+        /entries-in-buffer\/entries-written:|: (regmap_reg_read|power_domain_target|rpm_resume|rpm_return_int|rpm_status|clk_enable|clk_disable|clk_set_rate|send_mail_mbfs|recv_result_mbfs|dsi0_(clk|rst)_(call|result)|dsi0_pll_(first|last)|tracing_mark_write): / {
             print
         }
-        /: regmap_reg_read: .* reg=0*c val=/ { reads++ }
+        /: regmap_reg_read: f7d8000\.dsi2host[^ ]* reg=0*c val=/ { reads++ }
         /: tracing_mark_write: DSI0 CPM provider probes armed$/ { armed++ }
-        END { if (invalid || reads != 1 || armed != 1) exit 1 }
+        /: tracing_mark_write: DSI0 PLL lock probes armed$/ { pll_armed++ }
+        END {
+            if (invalid || reads < 1 || armed != 1) exit 1
+            if (pll == "yes" ? pll_armed != 1 : reads != 1) exit 1
+        }
     ' "$instance/trace") || return 1
     while IFS= read -r line; do
         stock_inventory_log "DSI0 trace $line" || return 1
@@ -688,6 +707,14 @@ fi
 check_factory_preloads startup || end_inventory "inventory startup checks failed"
 stock_inventory_modules check || end_inventory "module manifest rejected"
 dsi0_manifest=/grizzly-inventory/dsi0.modules
+dsi0_pll_requested=no
+dsi0_pll_marker=/grizzly-inventory/dsi0-pll-trace
+if [ -e "$dsi0_pll_marker" ] || [ -L "$dsi0_pll_marker" ]; then
+    if [ ! -f "$dsi0_pll_marker" ] || [ -L "$dsi0_pll_marker" ] || [ ! -f "$dsi0_manifest" ]; then
+        end_inventory "DSI0 PLL trace fixture is incomplete"
+    fi
+    dsi0_pll_requested=yes
+fi
 if [ -e "$dsi0_manifest" ] || [ -L "$dsi0_manifest" ]; then
     if [ "$fixture" != inventory ] || [ "$nv_guard_requested" != yes ] ||
        [ "$usb2_requested" = yes ] || [ "$refclk_requested" = yes ] || [ "$ufs_trace_requested" = yes ] ||

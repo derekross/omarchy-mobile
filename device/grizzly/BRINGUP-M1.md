@@ -6331,6 +6331,47 @@ Both PHY fields are distinct from the host APB clock
 acknowledgment and external reset. Mainline PHY and
 host reads remain disabled pending qualified access.
 
+##### Offline passive stock D1 DSI0 PLL-lock trace
+
+`pack-stock-inventory.py --dsi0-pll-trace` extends the
+guarded stock DSI0 trace. Packaging pins the exact D1
+`mipi-cdphy.ko` hash. PID 1 loads the stock module closure
+after the NV guard and arms the PLL probes after
+`mipi-cdphy.ko` loads, before the DSI host loads.
+
+The two probes attach at `dw_dphy_set_mode_g301+0x9c8`
+and `+0xa18` (module text `0xf0c` and `0xf5c`).
+They record the first and final values consumed by the
+driver's existing PLL-lock poll. They fetch the word from
+the saved register and filter on the physical resource
+start from the driver's RAM structure
+(`u0-apb-regbank`, `0x0f7d8800`). The diagnostic adds
+no MMIO access or modeset. It retains the regular host,
+PHY init and MBFS events and stops three seconds after the
+display module load completes. The independent 90-second
+return stays armed.
+
+The checker reports the raw sample, bit 1, and its signed
+timing relative to the expected host ID, together with the
+elapsed time since the latest successful DSI0 ON reply that
+has no succeeding successful OFF. If stock never polls
+within the capture window, it reports zero samples and
+leaves PLL lock unobserved. The result does not qualify
+mainline host APB access or external reset.
+
+The exact D1 kernel accepted both filtered probes in
+QEMU, refused to arm them without the PHY module and
+removed them cleanly afterward. Replay preserved the
+previous hardware trace output. Synthetic cases covered
+samples before and after host ID, cleared vote correlation
+after OFF, zero samples and malformed scope. The packed
+`init_boot` SHA-256 is
+`6730c72495b814b58ceb51898c21421b101eb17af3f6f8bd866d4aea61b18c84`.
+The other four images match the attended PHY init fixture.
+Checks passed for all five hashes, initramfs readback,
+handoff bounds and saved slot fit. The hardware capture
+remains pending.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
