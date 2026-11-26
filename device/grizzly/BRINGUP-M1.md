@@ -4711,6 +4711,48 @@ as firmware metadata. Domain vote acknowledgement, clock
 readback under power, DSI host access and a frame completion
 are separate checks.
 
+##### Offline display CPM query fixture
+
+The diagnostic kernel `7.3.0-rc6-omamobile-grizzly-display-cpm`
+at `52b7d6537d16f771d52d07b6f14c8c7ccdc964a2` adds an opt-in
+`clk_google_malibu_cpm.display_query=1` boot parameter. On Grizzly,
+after the existing CPM power-domain provider registers, the
+diagnostic performs four lookups under the existing MBFS client
+root and logs each handle or error. It then sends these rate-only
+LPCM commands with argument zero.
+
+| Clock | Rate query |
+| --- | --- |
+| DSI0 pixel | `0x03012302` |
+| BE | `0x03042302` |
+| FE0 | `0x03052302` |
+
+The code records the signed firmware reply or transport error
+for each clock and continues after individual failures. It sends
+no display vote, rate change, reset or MMIO access. The kernel
+retains the existing v73 UFS initialization and read-only guard.
+
+The ARM64 build and kernel style check passed. A mock of the exact
+helper verified the four names, all three command words and zero
+arguments. It also exercised lookup failure, a transport timeout
+and a negative firmware reply. The five image hashes, both AVB
+signatures, the handoff bounds and the fit against saved D1
+Fastboot variables passed. The manifest SHA-256 is
+`896e572d2b28d06a0e109385116cb366e42b9babfb809c8b2ce4850da5a3c0d6`.
+The fixture reuses the live-SSH vendor images and DTBO byte for
+byte. The `init_boot` payload was signed with the same new offline
+key as `boot`.
+
+For an attended test, take a fresh verified nine-partition backup
+and use the normal slot B staging and stock A return. Capture
+`display-cpm: read-only queries start`, all seven result lines,
+and `display-cpm: read-only queries complete` in the retained
+console. If the markers are absent, check whether ABL forwarded
+the boot parameter. A zero or negative clock reply is evidence
+about the unpowered query and does not qualify a usable rate.
+The display stays disabled. The bundle has not booted on the
+Pixel.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
