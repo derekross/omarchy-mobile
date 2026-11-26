@@ -1288,6 +1288,20 @@ pass "screenshot toast: Loupe, or Tensaku without the on-screen keyboard"
 
 bash -n bin/omamobile-setup-user || fail "omamobile-setup-user parses"
 python3 -B test/browser-setup.py || fail "browser defaults and geometry"
+# One text size (Setup > Text size): the command against fake config files
+# (each target, a second run, Default, a re-fit keeping the step), the
+# page's model, the page's tap and the command's place in the package.
+python3 -B test/text-size.py 2>/dev/null || { python3 -B test/text-size.py; fail "omamobile-text-size"; }
+if command -v node >/dev/null; then
+  node test/textsize-model.js >/dev/null || { node test/textsize-model.js; fail "text size page model"; }
+fi
+grep -c 'gesturePolicy: TapHandler.DragThreshold' plugins/omamobile.textsize/TextSizeSheet.qml >/dev/null || fail "text size rows tap with a DragThreshold TapHandler"
+grep -c 'onTapped: sheet.chosen(stepRow.modelData.name)' plugins/omamobile.textsize/TextSizeSheet.qml >/dev/null || fail "a text size row runs its step"
+grep -c 'omarchy-done ensure omamobile-menu-text-size' bin/omamobile-setup-user >/dev/null || fail "Setup > Text size in Omarchy's menu"
+pass "text size: one step for the shell, GTK, the terminal, Chromium and Grok Bot"
+if [[ -n ${OMAMOBILE_TEXTSIZE_RENDER:-} ]]; then
+  bash test/textsize-render "$OMAMOBILE_TEXTSIZE_RENDER" >/dev/null || fail "text size page render"
+fi
 bash test/setup-user.sh || fail "omamobile-setup-user against a scratch home"
 bash -n bin/omamobile-osk-guard || fail "omamobile-osk-guard parses"
 # The widget crash guard counts a shell death inside the same boot as a

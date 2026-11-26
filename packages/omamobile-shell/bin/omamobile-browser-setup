@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 """Seed mobile browser flags from the phone's geometry, preserving user choices."""
+from decimal import Decimal, ROUND_HALF_UP
 import json
 import math
 import os
@@ -70,6 +71,64 @@ def factor_for(width):
     return f"{math.floor(min(0.83, width / 578) * 100) / 100:.2f}"
 
 
+# The text size the owner chose (Setup > Text size, omamobile-text-size):
+# its scale multiplies the fitted factor, so web pages follow the rest of the
+# phone. While a size is chosen, the scale flag is the text size's: it is
+# fitted again at each login and shell start, always times that scale, and
+# the once-only fit and the 0.83 migration below leave it alone.
+TEXT_SIZE = ".config/omamobile/text-size"
+
+
+def text_scale(home):
+    try:
+        match = re.search(r"^scale=([0-9]+(?:\.[0-9]+)?)[ \t]*$", (home / TEXT_SIZE).read_text(), re.M)
+    except (OSError, UnicodeDecodeError):
+        return None
+    value = float(match[1]) if match else 0
+    return match[1] if 0.5 <= value <= 2.5 else None
+
+
+def scaled(factor, scale):
+    value = (Decimal(factor) * Decimal(scale)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return f"{min(max(value, Decimal('0.25')), Decimal('3')):.2f}"
+
+
+def set_scale_flag(path, value):
+    # Every active scale flag (quoted or not) takes the value; with none,
+    # one is added. Comments and every other flag stay as they are.
+    before = path.read_text() if path.exists() else ""
+    flag = "--force-device-scale-factor=" + value
+    lines = []
+    found = False
+    for line in before.splitlines(keepends=True):
+        if not line.lstrip().startswith("#"):
+            line, count = re.subn(r"--force-device-scale-factor=[0-9.]*", flag, line)
+            found = found or count > 0
+        lines.append(line)
+    after = "".join(lines)
+    if not found or flag not in parse_flags(after):
+        after += ("\n" if after and not after.endswith("\n") else "") + flag + "\n"
+    if after != before:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(after)
+        return True
+    return False
+
+
+def apply_text_scale(home, scale, files=("chromium-flags.conf", "grok-bot-flags.conf")):
+    # The fitted factor times the text size's scale, into both flag files.
+    # Returns the factor written, or None while the geometry isn't known
+    # (the files then stay as they are, and the next fit applies it).
+    config = home / ".config"
+    width = geometry(config)
+    if not width or width < 128:
+        return None
+    value = scaled(factor_for(width), scale)
+    for filename in files:
+        set_scale_flag(config / filename, value)
+    return value
+
+
 def browser_major(program):
     try:
         version = subprocess.run([program, "--version"], capture_output=True, text=True, check=True, timeout=2).stdout
@@ -115,7 +174,8 @@ def parse_flags(source):
 
 
 
-def configure(path, factor, done, program):
+def configure(path, factor, done, program, owned=False):
+    # owned: a text size is chosen, and main() writes the scale flag.
     chromium = program == "chromium"
     marker = done / ("omamobile-browser-fit-" + program)
     if marker.exists():
@@ -130,12 +190,12 @@ def configure(path, factor, done, program):
     scale_marked = (prior("chromium-scale-2") or prior("chromium-scale-3")) if chromium else prior("grok-bot-fit")
     scale_flags = [f for f in flags if f.startswith("--force-device-scale-factor=")]
     after = before
-    if factor is not None and scale_marked and scale_flags == ["--force-device-scale-factor=0.83"]:
+    if factor is not None and not owned and scale_marked and scale_flags == ["--force-device-scale-factor=0.83"]:
         # Only the exact unquoted line written by historical setup. Custom
         # values, quoted overrides and a deliberately deleted scale stay put.
         after = re.sub(r"^--force-device-scale-factor=0\.83$", f"--force-device-scale-factor={factor}", after, flags=re.M)
     additions = []
-    if factor is not None and not scale_marked and not has("--force-device-scale-factor"):
+    if factor is not None and not owned and not scale_marked and not has("--force-device-scale-factor"):
         additions.append(f"--force-device-scale-factor={factor}")
     if chromium and not defaults_marker.exists():
         for name, defaults in (
@@ -161,10 +221,12 @@ def configure(path, factor, done, program):
 
 
 def main():
-    config = Path.home() / ".config"
-    done = Path.home() / ".local/state/omarchy/done"
+    home = Path.home()
+    config = home / ".config"
+    done = home / ".local/state/omarchy/done"
     programs = (("chromium", "chromium-flags.conf"), ("grok-bot", "grok-bot-flags.conf"))
-    if all((done / ("omamobile-browser-fit-" + program)).exists() for program, _ in programs):
+    scale = text_scale(home)
+    if scale is None and all((done / ("omamobile-browser-fit-" + program)).exists() for program, _ in programs):
         return  # No geometry or browser process at subsequent logins.
     width = geometry(config)
     # UA, input method and first-run defaults do not need geometry. The bar
@@ -173,7 +235,9 @@ def main():
     factor = factor_for(width) if width and width >= 128 else None
     for program, filename in programs:
         try:
-            configure(config / filename, factor, done, program)
+            configure(config / filename, factor, done, program, owned=scale is not None)
+            if scale is not None and factor is not None:
+                set_scale_flag(config / filename, scaled(factor, scale))
         except (OSError, ValueError) as error:
             print(f"omamobile-browser-setup: {filename}: {error}", file=__import__("sys").stderr)
 

@@ -24,6 +24,7 @@ logical at scale 3).
 | `omamobile.access` | `panel` (keepLoaded) | The permission sheet: xdg-desktop-portal's "Allow Camera to use the camera?", in place of GTK's desktop dialog |
 | `omamobile.back` | `panel` (keepLoaded) | The back gesture: swipe in from the left or right edge for Escape; an app at its top level then asks for home (`omamobile-home`) |
 | `omamobile.mobilenetwork` | `panel` (keepLoaded) | The Mobile network page: carrier, signal, mobile data, data roaming, the APN and (under Advanced) the attach APN, the SIM PIN lock; Setup > Mobile network or the Mobile data tile's chevron. "No modem" without the modem stack (docs/TELEPHONY-APPS-PLAN.md 7.6) |
+| `omamobile.textsize` | `panel` (keepLoaded) | The Text size page: Smaller to Largest, each drawn at its own size, a preview line and what changes when; Setup > Text size. Runs `omamobile-text-size` ([README](../README.md#text-size)) |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
 
 ## Enabling

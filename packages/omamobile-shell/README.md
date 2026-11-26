@@ -25,6 +25,7 @@ Omamobile's phone profile for Omarchy's own shell. It isn't a fork: these are or
 | `bin/omamobile-home` | The home screen, as the home pill's swipe shows it (an empty workspace and the home page). An app runs it when Back (Escape, from the edge swipe) reaches its top level, so Back is phone-wide and no app needs a Hyprland call: [plugins/README.md](plugins/README.md#omamobileback) |
 | `bin/omamobile-osk-watch` | Reports the on-screen keyboard's visibility (sm.puri.OSK0, squeekboard's or Tactus's) to the fingerprint, keyboard and launcher plugins |
 | `bin/omamobile-osk` | The on-screen keyboard the owner chose. With no argument it runs it (the session's autostart line, which runs squeekboard itself where `omamobile-osk` is gone, and squeekboard's user unit through the drop-in `systemd/user/mobi.phosh.OSK-omamobile.conf`); `which` and `list` say what is chosen and installed; `use NAME` changes now. It is squeekboard unless the owner picked Tactus (`packages/tactus`, opt-in) in Setup > Keyboard, an entry shown only where Tactus is installed; a choice that can't be met means squeekboard. `hypr/phone.lua` keeps Tactus's virtual keyboard out of the hardware-key binds and Omarchy's own, as it does squeekboard's |
+| `bin/omamobile-text-size` | One text size for the whole phone, chosen in Setup > Text size (`plugins/omamobile.textsize`): `get` (`--json` for the page), `set STEP` (smaller, default, large, larger or largest). See [Text size](#text-size) |
 | `bin/omamobile-screenshot-open` | What a screenshot toast's tap ("Tap to view", patch 0020) opens on a phone (`OMARCHY_SCREENSHOT_EDITOR`, set in `environment.d/30-omamobile-screenshot.conf`; Omarchy passes the saved file's path): the screenshot in Loupe (omamobile-apps), fitted, with touch zoom, pan and swipe, and Loupe's copy, share and delete. Tensaku, Omarchy's default, can't be panned or zoomed by touch; without Loupe it is the fallback, through `omamobile-screenshot-edit` |
 | `bin/omamobile-screenshot-edit` | Tensaku as Omarchy opens a screenshot in it (`tensaku-edit`), with GTK's simple input-method context so the on-screen keyboard doesn't come up over the image (show it by hand for the text tool). `omamobile-setup-user` gives Tensaku's own entry (drawer, Loupe's Open With) the same context once, and `hypr/phone.lua` maximizes its window, which Omarchy floats by class |
 | `bin/omamobile-osk-guard` | Turns the on-screen keyboard (`screen-keyboard-enabled`) back on when it was left off with no screensaver running (a user unit for every graphical session) |
@@ -130,6 +131,52 @@ unquoted 0.83 scale line migrates once; custom values and quoted overrides
 stay. Chromium's version is read only immediately before writing a missing UA.
 No browser profile or site zoom changes. Chrome defaults are deferred until
 its quote-aware launcher is released separately in omarchy-pkgs.
+
+While a text size is chosen (next section), the scale flag in both files is
+the text size's: the fit runs again at each login and shell start and writes
+the fitted factor times the step, and the once-only fit and the 0.83
+migration leave the flag alone, so a new fit never undoes the owner's choice.
+
+## Text size
+
+Setup > Text size in Omarchy's menu opens a page with five steps, Smaller,
+Default, Large, Larger and Largest, each label drawn at its own size, a
+preview line at the chosen size and a note on what changes when. A tap runs
+`omamobile-text-size set STEP`, which applies one size everywhere that can
+follow a setting, with Omarchy's own anchors (`omarchy-display-text-size`:
+12 px = GTK 1.0 = a 9 pt terminal):
+
+| Step | Shell base size | GTK text scaling (11 pt font) | Terminal | Browser scale |
+| --- | --- | --- | --- | --- |
+| Smaller | 11 px | 0.9091 | 8 pt | fit x 0.92 |
+| Default | the theme's (12 px) | GTK's own (1.0) | 9 pt | the fit |
+| Large | 14 px | 1.1818 | 11 pt | fit x 1.17 |
+| Larger | 16 px | 1.3636 | 12 pt | fit x 1.33 |
+| Largest | 18 px | 1.5455 | 14 pt | fit x 1.5 |
+
+- The shell: `[font] base-size` in `~/.config/omarchy/shell.toml`, the user
+  override Omarchy layers over every theme, so a theme change keeps it. The
+  shell watches the file: the bar, menus, sheets and this page change at
+  once. The Settings app reads the same value when it opens.
+- GTK apps: `org.gnome.desktop.interface text-scaling-factor`, rounded so the
+  interface font lands on a whole point size, as Omarchy does. Most follow at
+  once; some when reopened.
+- The terminal: the size in foot's font lines (and in alacritty, ghostty or
+  kitty's config, where it has one already). Open terminals keep their size
+  until reopened; ghostty and kitty are told to reload.
+- Chromium, the web apps it runs and Grok Bot: the fitted
+  `--force-device-scale-factor` times the step (360 px wide: 0.62, 0.83 at
+  Larger), when reopened.
+- Qt Widgets apps don't follow. Under `QT_QPA_PLATFORMTHEME=gtk3` they take
+  GTK's font name but not its text scaling, and Qt's own knobs
+  (`QT_FONT_DPI`, `QT_SCALE_FACTOR`) scale the whole interface and would
+  reach the shell, which is a Qt app, on top of its base size.
+
+The step is kept in `~/.config/omamobile/text-size`; with that file gone, the browsers' scale flag is the owner's own again. Every value is written
+only when it differs, so a second run changes nothing; Default puts each
+back as shipped. A size changed elsewhere (Omarchy's own
+`omarchy-display-text-size`, a terminal's config) stays until a step is
+chosen again.
 
 ## Device settings
 

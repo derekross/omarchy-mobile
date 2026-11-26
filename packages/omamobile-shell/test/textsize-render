@@ -1,0 +1,90 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Offscreen review shots of the Text size page (omamobile.textsize), each
+# step with the shell's base size it sets, upright and on its side, in a
+# dark and a light Omarchy theme, with checks on the rows' size and place.
+# Runs inside the OWL conformance container (tests/owl/Dockerfile: Qt,
+# Quickshell, the fonts), as test/keyboard-render does:
+#
+#   docker run --rm --network none -u "$(id -u):$(id -g)" -v "$PWD:/src" \
+#     -v /usr/share/omarchy/themes:/themes:ro -v /usr/share/omarchy/shell:/omarchy-shell:ro \
+#     omamobile-owl-conformance:p1 bash /src/packages/omamobile-shell/test/textsize-render /src/logs/textsize-render
+#
+# OMARCHY_SHELL_DIR and OMARCHY_THEMES_DIR point it at another copy.
+# test/all runs it when OMAMOBILE_TEXTSIZE_RENDER names an output directory.
+set -euo pipefail
+out=${1:?Usage: textsize-render OUTDIR}
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+plugin=$here/../plugins/omamobile.textsize
+shell_dir=${OMARCHY_SHELL_DIR:-/omarchy-shell}
+themes=${OMARCHY_THEMES_DIR:-/themes}
+[[ -d $shell_dir && -d $themes ]] || { echo "textsize-render: needs $shell_dir and $themes (the container's mounts)" >&2; exit 2; }
+command -v quickshell >/dev/null || { echo "textsize-render: no quickshell" >&2; exit 2; }
+mkdir -p "$out"
+out=$(cd -- "$out" && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf -- "$tmp"' EXIT
+export XDG_RUNTIME_DIR=$tmp/xdg QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
+mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+
+h=$tmp/harness
+mkdir -p "$h"
+# Omarchy's Commons and Ui, with its palette qualified as on the phone
+# (Qt 6.12's QtQuick Color shadows a bare `Color.`; AGENTS.md, Userspace).
+for m in Commons Ui services; do cp -r "$shell_dir/$m" "$h/$m"; done
+find "$h/Commons" "$h/Ui" "$h/services" -name '*.qml' -exec sed -i -E \
+  -e 's/(^|[^.[:alnum:]_])Color\./\1Commons.Color./g' \
+  -e '0,/^import qs\.Commons$/s//import qs.Commons\nimport qs.Commons as Commons/' {} +
+for f in "$h"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
+cp -r "$plugin" "$h/textsize"
+cp "$here/textsize-render.qml" "$h/"
+
+status=0
+for theme in tokyo-night catppuccin-latte; do
+  for step in smaller:11 default:12 large:14 larger:16 largest:18; do
+    name=${step%%:*} px=${step#*:}
+    home=$tmp/home-$theme-$name
+    mkdir -p "$home/.local/state/omarchy/current" "$home/.config/omarchy"
+    ln -sfn "$themes/$theme" "$home/.local/state/omarchy/current/theme"
+    # The shell's base size the step sets (omamobile-text-size; Default
+    # takes the line out, the theme's 12)
+    [[ $name == default ]] || printf '[font]\nbase-size = %s\n' "$px" >"$home/.config/omarchy/shell.toml"
+    python3 - "$out" "$theme" "$name" >"$h/job-$theme-$name.json" <<'PY'
+import json, sys
+out, theme, step = sys.argv[1:]
+def shot(orient, w, h):
+    return {"name": "%s-%s" % (step, orient), "png": "%s/textsize-%s-%s-%s.png" % (out, step, orient, theme),
+            "step": step, "w": w, "h": h}
+print(json.dumps({"shots": [shot("portrait", 480, 1040), shot("landscape", 1040, 480)]}))
+PY
+    HOME=$home QT_SCALE_FACTOR=3 TEXTSIZE_JOB="$h/job-$theme-$name.json" timeout 120 quickshell -p "$h/textsize-render.qml" >"$h/log-$theme-$name" 2>&1 || true
+    grep -E "shot |geometry |Error|TypeError|ReferenceError" "$h/log-$theme-$name" | sed -E 's/^.*(shot |geometry |Error|TypeError|ReferenceError)/\1/' >>"$out/textsize-render.txt"
+    python3 - "$h/log-$theme-$name" "$theme" "$name" <<'PY' || status=1
+import json, re, sys
+log, theme, step = sys.argv[1:]
+text = open(log).read()
+bad = [l for l in text.splitlines() if re.search(r"(TypeError|ReferenceError|is not a type|Error:|Binding loop)", l)]
+shots = re.findall(r"geometry (\S+) (\d+)x(\d+) (\[.*\])", text)
+ok = len(shots) == 2 and not bad
+if len(shots) != 2: print("not ok - %s %s: %d of 2 shots taken" % (theme, step, len(shots)))
+for name, w, h, geo in shots:
+    w, h = int(w), int(h)
+    items = json.loads(geo)
+    rows = [r for r in items if r["name"].startswith("textSizeStep-")]
+    ticked = [r["name"] for r in rows if r["current"]]
+    fits = len(rows) == 5 and all(r["h"] >= 44 and r["x"] >= 0 and r["x"] + r["w"] <= w for r in rows)
+    one = ticked == ["textSizeStep-" + step]
+    # Upright, the preview, the five rows and the note fit without scrolling
+    note = [r for r in items if r["name"] == "textSizeNote"]
+    seen = name.endswith("landscape") or (note and note[0]["y"] + note[0]["h"] <= h)
+    good = fits and one and bool(seen)
+    print("%s - %s %s: five rows at least 44 px on screen, %s ticked%s" % (
+        "ok" if good else "not ok", theme, name, step, "" if name.endswith("landscape") else ", the note in view"))
+    ok = ok and good
+for l in bad:
+    print("  " + l)
+sys.exit(0 if ok else 1)
+PY
+  done
+done
+exit $status
