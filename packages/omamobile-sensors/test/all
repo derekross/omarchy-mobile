@@ -101,25 +101,33 @@ assert len(sent(usf.REQ_STOP_SAMPLING)) == 1
 PY
 pass "gyroscope rates, records, AoC clock and USF backend"
 
-# the refresh rate chosen in Settings survives a rotation; an unlisted or missing one means preferred
-mkdir -p "$tmp/bin" "$tmp/cfg/omamobile"
+# the refresh rate chosen in Settings survives a rotation; an unlisted or missing one means preferred. The fake
+# hyprctl reports a turned monitor (transform 1, width and height swapped, modes in the panel's orientation) and
+# rejects any mode it does not list, as Hyprland would.
+mkdir -p "$tmp/bin" "$tmp/home/.config/omamobile"
 cat > "$tmp/bin/hyprctl" <<'EOT'
 #!/bin/bash
 if [[ $1 == -j ]]; then
-  echo '[{"name":"DSI-1","width":1344,"height":2992,"scale":3.2,"availableModes":["1344x2992@120.00Hz","1344x2992@60.00Hz"]}]'
+  echo '[{"name":"DSI-1","width":2992,"height":1344,"scale":3.2,"transform":1,"availableModes":["1344x2992@120.00Hz","1344x2992@60.00Hz"]}]'
+elif [[ $1 == eval ]]; then
+  mode=$(sed -n 's/.*mode = "\([^"]*\)".*/\1/p' <<<"$2")
+  if [[ $mode == preferred || $mode == 1344x2992@120.00 || $mode == 1344x2992@60.00 ]]; then echo "$*" >> "$HYPR_LOG"; echo ok
+  else echo "error: bad mode $mode"; fi
 else echo "$*" >> "$HYPR_LOG"; echo ok; fi
 EOT
 chmod +x "$tmp/bin/hyprctl"
 rot() { : > "$tmp/hypr.log"
-  PATH="$tmp/bin:$PATH" HYPR_LOG="$tmp/hypr.log" XDG_CONFIG_HOME="$tmp/cfg" PYTHONPATH=lib python3 -c 'import autorotate; autorotate.apply(1)' 2>/dev/null
+  PATH="$tmp/bin:$PATH" HYPR_LOG="$tmp/hypr.log" HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/elsewhere" PYTHONPATH=lib python3 -c 'import autorotate; autorotate.apply(1)' 2>/dev/null
   cat "$tmp/hypr.log"; }
-rm -f "$tmp/cfg/omamobile/refresh-rate"
+rf=$tmp/home/.config/omamobile/refresh-rate
+rm -f "$rf"
 rot | grep -q 'mode = "preferred".*transform = 1' || fail "autorotate without a saved rate uses preferred"
-echo 60 > "$tmp/cfg/omamobile/refresh-rate"
-rot | grep -q 'mode = "1344x2992@60".*transform = 1' || fail "autorotate keeps the saved rate and sets the transform"
-echo 90 > "$tmp/cfg/omamobile/refresh-rate"
+echo 60 > "$rf"
+rot | grep -q 'mode = "1344x2992@60.00".*transform = 1' || fail "autorotate keeps the saved rate (exact token, turned monitor) and sets the transform"
+rot | grep -q '^keyword' && fail "autorotate fell back to the keyword path"
+echo 90 > "$rf"
 rot | grep -q 'mode = "preferred"' || fail "autorotate falls back to preferred for an unlisted rate"
-echo junk > "$tmp/cfg/omamobile/refresh-rate"
+echo junk > "$rf"
 rot | grep -q 'mode = "preferred"' || fail "autorotate ignores a junk rate file"
 pass "autorotate keeps the saved refresh rate"
 

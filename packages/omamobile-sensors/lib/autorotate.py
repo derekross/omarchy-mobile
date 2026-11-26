@@ -25,6 +25,7 @@ portrait or an orientation is waiting.
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -64,23 +65,26 @@ def shell_locked(dry_run=False):
 
 
 def rate_path():
-    cfg = os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config')
-    return os.path.join(cfg, 'omamobile', 'refresh-rate')
+    # a fixed path, the same one Settings writes: a user service may not see a session-only XDG_CONFIG_HOME
+    return os.path.join(os.path.expanduser('~'), '.config', 'omamobile', 'refresh-rate')
 
 
 def saved_mode(m):
-    """The mode string for the rate the user chose in Settings, or "preferred".
+    """The exact mode token (without "Hz") for the rate the user chose in Settings, or "preferred".
 
-    Only a rate the monitor lists at its current size is used; a missing, odd or
-    unlisted choice means "preferred", so the screen never ends on a mode it lacks."""
+    Only a rate the monitor lists is used, in the panel's own orientation or the turned one (hyprctl may
+    report the size either way); a missing, odd or unlisted choice means "preferred", so the screen never
+    ends on a mode it lacks."""
     try:
         with open(rate_path()) as f:
             want = int(f.read().strip())
-        size = f"{int(m['width'])}x{int(m['height'])}"
+        w, h = int(m['width']), int(m['height'])
         for mode in m.get('availableModes', []):
-            sz, _, hz = mode.partition('@')
-            if sz == size and round(float(hz.rstrip('Hz'))) == want:
-                return f'{size}@{want}'
+            size, _, hz = mode.partition('@')
+            hz = hz.removesuffix('Hz')
+            if size in (f'{w}x{h}', f'{h}x{w}') and round(float(hz)) == want \
+                    and re.fullmatch(r'\d{1,5}x\d{1,5}@\d{1,4}(\.\d{1,6})?', size + '@' + hz):
+                return size + '@' + hz
     except (OSError, ValueError, KeyError, TypeError):
         pass
     return 'preferred'
