@@ -9,44 +9,6 @@ import subprocess
 import sys
 
 
-def bluetooth_card(root, ok, read, shell, package):
-    """Patch 0036: the bar's Bluetooth card runs the phone's pairing helper
-    when it is installed and nothing new without it. Static checks on the
-    patched card, then test/bluetooth-card.py (qmltestrunner, offscreen)."""
-    card = read(root, 'usr/share/omarchy/shell/plugins/panels/bluetooth/Panel.qml')
-    connect = card.split('  function connectDevice(device) {', 1)[1].split('\n  }\n', 1)[0]
-    disconnect = card.split('  function disconnectDevice(device) {', 1)[1].split('\n  }\n', 1)[0]
-    ok(connect.index('if (helperConnect(device)) return') < connect.index('runDeviceAction(')
-       and disconnect.index('if (helperDisconnect(device)) return') < disconnect.index('Quickshell.execDetached(')
-       and 'Quickshell.execDetached(deviceCommand("disconnect", device.address))' in disconnect,
-       'real4.5: the card pairs, connects and disconnects through the helper, '
-       'omarchy-bluetooth-device without it (0036)')
-    start = card.split('  function startHelper() {', 1)[1].split('\n  }\n', 1)[0]
-    ok('if (!helperInstalled) return' in start.splitlines()[1]
-       and 'path: root.helperPath' in card and 'printErrors: false' in card
-       and 'readonly property string helperPath: "/usr/bin/omamobile-bt-agent"' in card,
-       'real4.5: the card starts the helper only where it is installed, and the probe is quiet (0036)')
-    ok('startHelper()\n    } else {\n      stopHelper()' in card and 'hideVisible()\n    if (!owesDiscoveryStop) return' in card,
-       'real4.5: the helper runs while the card is open; the card hides the phone as it closes or goes (0036)')
-    ok('if (phoneVisible) return "Visible as " + adapter.name' in card
-       and 'rotatingPhrases: adapter && adapter.enabled && !phoneVisible' in card,
-       "real4.5: the card's hero shows the name others see while the phone is visible (0036)")
-    ok('blocked: codeField.activeFocus' in card and 'id: promptBox' in card
-       and card.count('Button {') >= 2 and 'Commons.I18n.t("common.cancel")' in card,
-       "real4.5: a pairing's question shows in the card with Omarchy's own buttons (0036)")
-    p = subprocess.run([sys.executable, '-B', os.path.join(package, 'test', 'bluetooth-card.py'), shell],
-                       capture_output=True, text=True)
-    if p.returncode == 77:
-        print('ok - real4.5: the card with the pairing helper under qmltestrunner # SKIP no qmltestrunner')
-        return
-    out = p.stdout + p.stderr
-    totals = [l for l in out.splitlines() if l.startswith('Totals:')]
-    ok(p.returncode == 0, 'real4.5: the card with the pairing helper under qmltestrunner (0036: %s)'
-       % (totals[-1] if totals else 'no result'))
-    if p.returncode:
-        print('\n'.join(l for l in out.splitlines() if l.startswith(('FAIL', '   ', 'QWARN')))[:4000])
-
-
 def actual(t, ex, version, make_root, run, ok, read, series, package, parse_qml):
     root, _ = make_root('real45', os.path.join(ex, '.MTREE'))
     for folder in ('patches', 'legacy-4.0.6'):
@@ -118,7 +80,6 @@ def actual(t, ex, version, make_root, run, ok, read, series, package, parse_qml)
     node_tests = [
         ('upstream45/notifications/logic.cjs', [], 'actual notification functions'),
         ('notification-store45.cjs', [env['OMARCHY_SHELL_DIR']], 'keyed store and lock-glance compatibility'),
-        ('bluetooth-card45.cjs', [env['OMARCHY_SHELL_DIR']], "the Bluetooth card's pairing model (0036)"),
     ]
     for script, arguments, label in node_tests:
         if not node:
@@ -131,13 +92,6 @@ def actual(t, ex, version, make_root, run, ok, read, series, package, parse_qml)
         ok(result.returncode == 0, f'real4.5: {label}')
         if result.returncode:
             print(result.stdout + result.stderr)
-    bluetooth_card(root, ok, read, env['OMARCHY_SHELL_DIR'], package)
-    switch = read(root, 'usr/share/omarchy/shell/Ui/ToggleSwitch.qml')
-    ok('color: root.checked\n      ? root.accent\n      : Style.normalFillFor(root.foreground, root.accent)' in switch
-       and 'color: root.checked ? root.knobOnColor : Qt.darker(root.foreground, 1.25)' in switch
-       and 'property color knobOnColor: Commons.Color.background' in switch
-       and 'Behavior on x' in switch and 'visible: root.cursorRing && root.hot' in switch,
-       'real4.5: a switch that is on is a solid accent track with a background knob; size, motion and ring kept (0037)')
 
     view = read(root, lock + 'LockView.qml')
     ok('function darkTapWakes()' in view

@@ -312,9 +312,7 @@ long-press opens the panel, the back glyph returns to quick settings.
 * **Pairing prompts**: Just Works needs nothing; numeric comparison shows the
   six digits with Pair/Cancel; a keyboard shows the passkey to type, lighting
   up digits as they're typed; a PIN or passkey request gets a field above the
-  on-screen keyboard. A device pairing *to* the phone gets the same sheets,
-  and once the owner has said yes and it has paired it is trusted, so a car's
-  calls and audio are let in.
+  on-screen keyboard. A device pairing *to* the phone gets the same sheets.
 * **When the phone accepts pairing** (BlueZ's `Pairable`): only while the
   owner pairs a device from the panel, and while the phone is visible with
   the helper running; it goes off when visibility ends (the countdown, the
@@ -328,13 +326,6 @@ long-press opens the panel, the back glyph returns to quick settings.
   `AlwaysPairable = true`) is left as it was. Omarchy's own auto-accepting
   agent, `bt-agent.service`, doesn't run on the phone (the package's
   drop-in; `touch ~/.config/omamobile/bt-agent` runs it anyway).
-* **The bar's Bluetooth card** (Omarchy patch 0036 in `omamobile-omarchy`)
-  runs the same helper while it is open, with the phone visible and pairable
-  for that time. One helper owns the pairing window at a time: the first
-  started with `--pairable-window` takes a lock in `$XDG_RUNTIME_DIR`, and
-  one started while it is held runs without it and says so in its `ready`
-  line, so with both open the panel that opened second leaves `Pairable`
-  and visibility to the other.
 
 Quickshell.Bluetooth provides the devices, power, visibility, disconnect,
 forget and rename, but no pairing agent, RSSI, device class or failure

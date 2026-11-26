@@ -13,7 +13,7 @@ for f in install omamobile-omarchy.install lib/update-bin/* lib/lock-pam lib/mod
          test/lock-pam.sh test/lock-glance test/sleep-lock.sh test/modules-cleanup.sh test/zram.sh test/run-mode.sh; do
   bash -n "$f" || fail "$f parses"
 done
-for f in bin/omamobile-omarchy-patches bin/omamobile-update test/patches.py test/bluetooth-card.py; do
+for f in bin/omamobile-omarchy-patches bin/omamobile-update test/patches.py; do
   python3 -I -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$f" || fail "$f parses"
 done
 pass "scripts parse"

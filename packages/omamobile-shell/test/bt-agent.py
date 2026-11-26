@@ -6,7 +6,6 @@ import io
 import json
 import os
 import sys
-import tempfile
 
 here = os.path.dirname(os.path.abspath(__file__))
 loader = importlib.machinery.SourceFileLoader("bt_agent", os.path.join(here, "..", "bin", "omamobile-bt-agent"))
@@ -104,25 +103,7 @@ def pairable_window():
     assert plan(120, "exit") == [("Pairable", False)]
 
 
-def window_lock():
-    assert agent.window_lock_path({"XDG_RUNTIME_DIR": "/run/user/1000"}, 1000) == "/run/user/1000/omamobile-bt-agent.window"
-    assert agent.window_lock_path({}, 1001) == "/run/user/1001/omamobile-bt-agent.window"
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "omamobile-bt-agent.window")
-        first = agent.take_window(path)
-        assert isinstance(first, int) and first is not True, first
-        # Held: a second taker (another open of the file, as another helper) doesn't get it.
-        assert agent.take_window(path) is None
-        os.close(first)
-        second = agent.take_window(path)
-        assert isinstance(second, int) and second is not True, second
-        os.close(second)
-        # Nowhere to keep a lock: the window is ours, as before there was one.
-        assert agent.take_window(os.path.join(d, "missing", "lock")) is True
-
-
 check("stdin commands parse, junk doesn't", commands)
-check("one helper holds the pairing window's lock at a time", window_lock)
 check("the command line takes only --pairable-window 1-3600", arguments)
 check("Pairable: off at start and exit, on only on request with BlueZ's timeout", pairable_window)
 check("PINs are 1-16 characters, passkeys 0-999999", replies)

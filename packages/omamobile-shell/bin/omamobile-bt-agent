@@ -5,10 +5,9 @@
 Quickshell.Bluetooth can pair, connect and forget but registers no BlueZ
 agent, so it can't answer a numeric comparison, a passkey or a PIN, and it
 doesn't expose RSSI, appearance, class or the error behind a failed pair.
-The panel (and the bar's Bluetooth card, Omarchy patch 0036) runs this while
-it is open; it speaks JSON lines:
+The panel runs this while it is open; it speaks JSON lines:
 
-  stdout  {"event": "ready", "adapter": "/org/bluez/hci0", "window": true|false}
+  stdout  {"event": "ready", "adapter": "/org/bluez/hci0"}
           {"event": "device", "address", "rssi", "appearance", "class"}
           {"event": "removed", "address"}
           {"event": "request", "id", "type", "address", ...}
@@ -34,10 +33,7 @@ soon as they're dropped) are refused, and only a connect from the panel, which
 lifts the block and marks it Trusted, brings it back. Untrusting it wasn't
 enough: BlueZ then refused its audio, but AirPods still brought their link
 back, showed as connected and played nothing. A service is authorized for a
-Trusted device only, never for one that is merely paired. A device that pairs
-to the phone (a car's "add phone") is marked Trusted once it has paired, if
-the owner said yes to its request here; otherwise the car's calls and audio
-would be refused right after the owner accepted it.
+Trusted device only, never for one that is merely paired.
 
 With --pairable-window SECONDS the helper also owns the adapter's Pairable
 (the panel passes it when Pairable was off as it opened). BlueZ turns
@@ -47,15 +43,8 @@ turns it off again right after registering and whenever it comes back on
 unasked; on only for a "pairable" command with "on": true, after setting
 BlueZ's PairableTimeout to SECONDS so BlueZ ends it on its own; off again for
 "on": false and at exit. Without the option it leaves Pairable alone.
-
-One helper owns the window at a time: the first started with the option
-takes a lock in $XDG_RUNTIME_DIR, and one started while it is held (Quick
-Settings' panel and the bar's card both open) runs as if started without it.
-"ready" says which ("window"), so that panel leaves Pairable and visibility
-to the other.
 """
 
-import fcntl
 import json
 import os
 import signal
@@ -145,30 +134,6 @@ def pairable_plan(window, event, wanted=False, current=False):
     return []
 
 
-def window_lock_path(environ, uid):
-    """Where the pairing window's lock lives: the user's runtime directory."""
-    return os.path.join(environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % uid, "omamobile-bt-agent.window")
-
-
-def take_window(path):
-    """Take the pairing window's lock: an open descriptor holding it, None
-    when another helper holds it, or True when there is nowhere to keep a
-    lock (the window is ours, as before there was one)."""
-    try:
-        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
-    except OSError:
-        return True
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        os.close(fd)
-        return None
-    except OSError:
-        os.close(fd)
-        return True
-    return fd
-
-
 def emit(event):
     sys.stdout.write(json.dumps(event) + "\n")
     sys.stdout.flush()
@@ -183,9 +148,6 @@ def main():
     from gi.repository import GLib
 
     window = parse_args(sys.argv[1:])
-    # Held until exit; a second helper asking for the window runs without it.
-    if window is not None and take_window(window_lock_path(os.environ, os.getuid())) is None:
-        window = None
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
     loop = GLib.MainLoop()
@@ -227,13 +189,11 @@ def main():
 
     pending = {}
     next_id = [1]
-    # Devices whose pairing request the owner said yes to: Trusted once paired.
-    accepted = set()
 
     def ask(kind, device, ok, err, **fields):
         request_id = next_id[0]
         next_id[0] += 1
-        pending[request_id] = (kind, ok, err, str(device))
+        pending[request_id] = (kind, ok, err)
         event = {"event": "request", "id": request_id, "type": kind, "address": address_of(device)}
         event.update(fields)
         emit(event)
@@ -276,10 +236,6 @@ def main():
                 # Paired but not Trusted is a device the owner disconnected.
                 if bool(props.Get(DEVICE_IFACE, "Trusted")):
                     return
-                # One the owner just accepted, asking before its Paired change reached us.
-                if str(device) in accepted and bool(props.Get(DEVICE_IFACE, "Paired")):
-                    trust_accepted(str(device))
-                    return
             except dbus.DBusException:
                 pass
             raise Rejected("Not paired")
@@ -287,7 +243,7 @@ def main():
         @dbus.service.method(AGENT_IFACE, in_signature="", out_signature="")
         def Cancel(self):
             for request_id in list(pending):
-                _, _, err, _ = pending.pop(request_id)
+                _, _, err = pending.pop(request_id)
                 err(Canceled("Canceled"))
             emit({"event": "cancel"})
 
@@ -355,8 +311,6 @@ def main():
             discovery["running"] = False
         if interface == ADAPTER_IFACE and path == adapter_path and "Pairable" in changed:
             run_plan("changed", bool(changed["Pairable"]))
-        if interface == DEVICE_IFACE and path in accepted and (changed.get("Paired") or changed.get("Bonded")):
-            trust_accepted(path)
         # RSSI moves constantly during discovery: update a cache from the
         # change itself rather than asking BlueZ again.
         if interface == DEVICE_IFACE and path in extras and any(key in changed for key in EXTRA_KEYS):
@@ -377,7 +331,6 @@ def main():
 
     def removed(path, interfaces):
         extras.pop(str(path), None)
-        accepted.discard(str(path))
         if DEVICE_IFACE in interfaces:
             # The address is gone with the object; it's the path's tail.
             tail = str(path).rsplit("/", 1)[-1]
@@ -409,12 +362,6 @@ def main():
             dbus.Interface(bus.get_object(BLUEZ, path), PROPS_IFACE).Set(DEVICE_IFACE, name, dbus.Boolean(on))
         except dbus.DBusException:
             pass
-
-    def trust_accepted(path):
-        # The owner said yes to its pairing here, so its calls and audio are
-        # welcome, now and when it reconnects with no panel open.
-        accepted.discard(path)
-        set_flag(path, "Trusted", True)
 
     def connect(address, path, op):
         # The owner wants it: a disconnect's block goes, and its own reconnects are welcome again
@@ -477,16 +424,14 @@ def main():
             entry = pending.pop(command.get("id"), None)
             if not entry:
                 return
-            kind, ok, err, device = entry
+            kind, ok, err = entry
             if not command.get("accept"):
                 err(Rejected("Rejected"))
                 return
             value = reply_value(kind, command.get("value"))
             if value is None:
                 err(Rejected("Bad input"))
-                return
-            accepted.add(device)
-            if kind == "pin":
+            elif kind == "pin":
                 ok(dbus.String(value))
             elif kind == "passkey":
                 ok(dbus.UInt32(value))
@@ -528,7 +473,7 @@ def main():
     GLib.timeout_add_seconds(2, start_discovery)
     start_discovery()
 
-    emit({"event": "ready", "adapter": adapter_path, "window": window is not None})
+    emit({"event": "ready", "adapter": adapter_path})
     try:
         loop.run()
     finally:

@@ -63,7 +63,7 @@ class Run:
         self.bus = self.start(["dbus-daemon", "--nofork", "--config-file=" + config])
         assert wait_for(lambda: os.path.exists(path)), "the private bus started"
         self.env = env = dict(os.environ, DBUS_SYSTEM_BUS_ADDRESS="unix:path=" + path, PYTHONDONTWRITEBYTECODE="1",
-                   FAKE_BLUEZ_QUIET="1" if quiet else "", XDG_RUNTIME_DIR=self.dir)
+                   FAKE_BLUEZ_QUIET="1" if quiet else "")
         self.start([sys.executable, "-I", FAKE, self.log], env=env)
         assert wait_for(lambda: any(e.get("call") == "ready" for e in self.entries())), "the fake BlueZ started"
         self.agent = self.start([sys.executable, "-I", AGENT] + args, env=env,
@@ -101,21 +101,6 @@ class Run:
                         "org.freedesktop.DBus.Properties.Set", "string:org.bluez.Adapter1", "string:Pairable",
                         "variant:boolean:" + ("true" if value else "false")],
                        env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=10)
-
-    def second(self, args):
-        """Another helper on the same bus and runtime directory (the other
-        panel's), its output lines once it is ready."""
-        proc = self.start([sys.executable, "-I", AGENT] + args, env=self.env,
-                          stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        out = b""
-        deadline = time.monotonic() + 6
-        while b'"ready"' not in out and time.monotonic() < deadline:
-            if select.select([proc.stdout.fileno()], [], [], 0.1)[0]:
-                chunk = os.read(proc.stdout.fileno(), 65536)
-                if not chunk:
-                    break
-                out += chunk
-        return proc, [json.loads(line) for line in out.splitlines() if line.strip()]
 
     def test_call(self, method):
         subprocess.run(["dbus-send", "--system", "--print-reply", "--dest=org.bluez",
@@ -254,65 +239,7 @@ def disconnect_holds(run):
     run.close()
 
 
-def one_window(run):
-    # The first helper with the window holds it; a second one asking for it
-    # (the other panel open too) runs without it, says so, and never sets
-    # Pairable or its timeout.
-    assert [e.get("window") for e in run.lines if e.get("event") == "ready"] == [True], run.lines
-    assert wait_for(lambda: run.sets() == [False]), run.sets()
-    proc, lines = run.second(["--pairable-window", "120"])
-    assert [e.get("window") for e in lines if e.get("event") == "ready"] == [False], lines
-    sets_before = len([e for e in run.entries() if "set" in e])
-    proc.stdin.write(b'{"cmd": "pairable", "on": true}\n')
-    proc.stdin.flush()
-    time.sleep(1)
-    proc.stdin.close()
-    proc.wait(10)
-    # Only the owner set anything after the second started: its off for the
-    # second's registration, which turned Pairable on.
-    later = [e for e in run.entries() if "set" in e][sets_before:]
-    assert all(e == {"set": "Pairable", "value": False} for e in later), later
-    # Once the first has gone, the window is free for the next one.
-    run.close()
-    proc, lines = run.second(["--pairable-window", "120"])
-    assert [e.get("window") for e in lines if e.get("event") == "ready"] == [True], lines
-    proc.stdin.close()
-    proc.wait(10)
-
-
-def accepted_pairing_trusted(run):
-    # A car pairs to the phone: the owner says yes to its code, and once it
-    # has paired it is Trusted, so its calls and audio are let in.
-    run.test_call("IncomingPair")
-    assert wait_for(lambda: run.read() and any(e.get("event") == "request" for e in run.lines)), run.lines
-    request = [e for e in run.lines if e.get("event") == "request"][-1]
-    assert request["type"] == "confirm" and request["passkey"] == 123456, request
-    assert request["address"] == "02:00:00:00:00:01", request
-    run.send({"cmd": "reply", "id": request["id"], "accept": True})
-    assert wait_for(lambda: any(e.get("incoming") == "paired" for e in run.entries())), run.entries()
-    assert wait_for(lambda: {"device_set": "Trusted", "value": True} in run.entries()), run.entries()
-    run.test_call("Reconnect")
-    assert wait_for(lambda: any(e.get("reconnect") for e in run.entries())), run.entries()
-    assert [e for e in run.entries() if e.get("reconnect")][-1]["reconnect"] == "trusted", run.entries()
-    run.close()
-
-
-def refused_pairing_untrusted(run):
-    # The owner says no: the pairing is refused and nothing is trusted.
-    run.test_call("IncomingPair")
-    assert wait_for(lambda: run.read() and any(e.get("event") == "request" for e in run.lines)), run.lines
-    request = [e for e in run.lines if e.get("event") == "request"][-1]
-    run.send({"cmd": "reply", "id": request["id"], "accept": False})
-    assert wait_for(lambda: any(e.get("incoming") == "rejected" for e in run.entries())), run.entries()
-    time.sleep(0.5)
-    assert not any(e.get("device_set") == "Trusted" for e in run.entries()), run.entries()
-    run.close()
-
-
 check("disconnect: Blocked first, the device's own reconnect refused; connect lifts it", [], disconnect_holds)
-check("one pairing window: a second helper asking for it runs without it", ["--pairable-window", "120"], one_window)
-check("a pairing the owner accepted is Trusted once paired", [], accepted_pairing_trusted)
-check("a pairing the owner refused stays untrusted", [], refused_pairing_untrusted)
 check("--pairable-window: off after registering, on only when asked, off at exit", ["--pairable-window", "120"], window)
 check("--pairable-window: a Busy off is tried again when no change signal follows",
       ["--pairable-window", "120"], missed_signal, quiet=True)
