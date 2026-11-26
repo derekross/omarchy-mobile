@@ -5326,6 +5326,44 @@ the B boot request. Stock D1 A completed boot with enforcing
 verity and the original VBMeta digest. Ramoops and
 `SYSTEM_LAST_KMSG` matched all 45 filtered lines.
 
+##### Offline DPU FE0 power-vote fixture
+
+Both retained D1 base trees place `DpuFe0.v` (resource
+`0x201`) under `DpuBe.v` and place FE1 under FE0. Earlier
+live queries resolved `DpuFe0.v` to handle `0x15c0028`.
+The FE0 clock uses LPCM `0x23`, clock `0x05`, and the
+earlier unpowered GET_RATE `0x03052302` returned `-3`.
+
+Kernel `7.3.0-rc6-omamobile-grizzly-display-fe0` at
+`74843513bb91f16298fb93ede4d831bf460096bc` enables
+`clk_google_malibu_cpm.display_fe0=1` with the tested
+Grizzly wrapper and BE flags. The trigger checks the seven
+initial votes and runs wrapper ON, BE ON, FE0 ON, FE0 OFF,
+BE OFF, then wrapper OFF. It checks acknowledgement and vote
+readback at each step. The cycle stops on a failed transition.
+If FE0 release is unconfirmed, it leaves BE and the wrapper
+voted on for the timed return. FE1 stays gated by the initial
+vote check and receives no write.
+
+This fixture keeps the early unpowered clock queries and
+leaves both powered clock reads out of the vote window to
+isolate FE0. Clock gates and display consumers remain disabled.
+The vendor boot images and DTBO match the tested BE rate fixture
+byte for byte, preserving the storage guard, USB SSH and timed
+return.
+
+The arm64 build and style check passed. A mock verified all
+six transitions, every inherited vote and initial read failure,
+failure at each transition, one-shot enforcement, and the
+wrapper-only and powered BE paths. All five image hashes, both
+AVB signatures, the ABL handoff bounds and captured D1 slot
+fit passed. The `SHA256SUMS` digest is
+`3a840d5521bc42765cc41afa1a65807ae71dc5c450304f6bad974f769d7b20ac`.
+
+Hardware validation remains pending. For the attended slot B
+test, verify a fresh NV backup, capture all seven initial votes
+and each transition, then return to stock A.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
