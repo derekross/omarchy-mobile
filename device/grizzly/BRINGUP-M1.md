@@ -6436,6 +6436,58 @@ stock host access precedes the later observed PLL lock.
 The APB clock and external reset still need independent
 qualification for a mainline host read.
 
+##### Offline D1 APB clock and reset readback audit
+
+The exact D1 ABL descriptor for `dpu_dsi0_apb_clk`
+(clock ID `0x40007`) selects direct gate group 4 and
+offset `0x6e0`. The
+direct gate lookup at `0x48834` resolves the descriptor
+to AP `0x0f4196e0`. The clock helper at `0x7ac78`
+tests bit 8 of gate offset `0x1c`, with 1 denoting
+the enabled acknowledgment. The direct reset lookup
+at `0x487cc` resolves the same gate descriptor and
+uses `0x7b5b4`. That helper tests bit 12 of offset
+`0x1c` (`0x7b638`–`0x7b648`), with 1 denoting
+the deasserted acknowledgment.
+
+This derives two independently decoded bits in the same
+candidate word, AP `0x0f4196fc`. The reset bit describes
+the per-gate reset acknowledgment. The generic direct
+helper establishes its polarity. The retained stock Linux
+traces contain no access to that word, and the audit
+does not establish a DSI0-specific stock reset call or
+the state of any additional downstream reset. The ABL
+clock and reset helpers themselves write control words.
+
+D1 BL31 dispatches the PMU register service at
+`0x1a434` to `0x24250` (file offsets). The read
+branch at `0x242c8` follows the address check at
+`0x2438c`. Neither of its explicit address tables
+(`0xa028`, 27 ranges, and `0xa1d8`, 16 ranges)
+contains the DSI0 acknowledgment word. The supported
+PMU service cannot provide either bit.
+
+The exact CPM clock-status lookup at `0x37da0` uses
+188 descriptors from the table at RAM `0x2001524c`.
+Its operation 2 clock getter reads bit 8 at the selected
+gate's offset `0x1c` (`0x18e20`). None of the
+descriptors refers to gate `0x6f4196e0`, the CPM alias
+of the APB clock.
+The seven LPCM `0x23` clock selectors in the stock
+board tree match the firmware table. Selector 1
+refers to the pixel gate at `0x6f419760`.
+The stock clock provider exposes rate and control
+operations and has no hardware enabled-status callback.
+The CPM reset status lookup also excludes display
+LPCM `0x23`.
+
+The target AP page has the D1 GC rule `0x30300`.
+The stock host ID and PHY reads occurred in different
+apertures and leave EL1 access to this CMU word
+unqualified. Keep the APB acknowledgment and host
+reads disabled. No guarded fixture is qualified by
+this audit.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
