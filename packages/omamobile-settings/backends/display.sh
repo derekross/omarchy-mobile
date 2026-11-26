@@ -4,7 +4,7 @@
 # omarchy-hw-display names like the shell does) and the refresh rate (applied live through
 # `hyprctl eval hl.monitor{...}` with the monitor's own name, size, position, scale and transform).
 # Prints one line of JSON.
-#   display.sh get                 {"brightness":50,"refresh":120,"rates":[60,120]}
+#   display.sh get                 {"brightness":50,"refresh":120,"rates":[60,120],"saved":0}  (saved: the kept choice, 0 for none)
 #   display.sh set brightness N    N is 10, 25, 50, 75 or 100 (never below 10, so the screen cannot go black)
 #   display.sh set refresh N       N must be one of the rates the monitor lists at its current size
 #   display.sh set refresh preferred   forget the choice and go back to the panel's preferred mode
@@ -88,10 +88,16 @@ apply_mode() {
 }
 saved_rate() { local r=''; [[ -r $rate_file ]] && read -r r < "$rate_file" || true; [[ $r =~ ^[0-9]{1,3}$ ]] && echo "$r" || true; }
 out() { printf '{"brightness":%s,"refresh":%s,"rates":[%s]}\n' "$bright" "$refresh" "$rates"; }
+# the same, plus "saved": the choice kept in the file (0 for none, or one the panel does not list)
+out_saved() {
+  local s; s=$(saved_rate)
+  [[ -n $s && ,$rates, == *",$s,"* ]] || s=0
+  printf '{"brightness":%s,"refresh":%s,"rates":[%s],"saved":%s}\n' "$bright" "$refresh" "$rates" "$s"
+}
 
 case $verb in
 get)
-  read_all; out ;;
+  read_all; out_saved ;;
 set)
   read_all
   case $key in
@@ -125,7 +131,9 @@ set)
   esac
   out ;;
 apply)
-  read_all
+  # a phone with no readable backlight still gets its refresh rate back
+  bright=$(get_brightness) || bright=-1
+  if ! read -r name w h x y scale transform refresh rates < <(mon_info); then name=""; refresh=-1; rates=""; fi
   [[ -n $name ]] || fail "cannot read the monitor"
   want=$(saved_rate)
   # only a rate the panel lists right now is applied; anything else means preferred
