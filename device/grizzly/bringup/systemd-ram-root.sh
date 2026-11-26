@@ -108,6 +108,18 @@ boot() {
     ssh_pid=$!
     : > "$control/ready"
     log 'waiting for authenticated Omarchy RAM root'
+    dvfs=/sys/devices/platform/system-controller/display_dvfs
+    if [ -r "$dvfs" ]; then
+        (
+            log 'display-dvfs: query start'
+            if result=$("$bb" cat "$dvfs"); then
+                printf '%s\n' "$result" | while IFS= read -r row; do log "display-dvfs: $row"; done
+                log 'display-dvfs: query complete'
+            else
+                log 'display-dvfs: query failed'
+            fi
+        ) &
+    fi
     while [ ! -f "$control/handoff" ]; do "$bb" sleep 1; done
     "$bb" sleep 1
     ready && [ -f "$image" ] || hold 'handoff refused'

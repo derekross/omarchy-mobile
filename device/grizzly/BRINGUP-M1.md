@@ -4964,6 +4964,45 @@ to MHz. Start enumeration after the storage guard and USB
 receiver are ready. A timeout stalls the shared CPM transport,
 so stop on that failure without retrying.
 
+##### Offline display DVFS row fixture
+
+Kernel `7.3.0-rc6-omamobile-grizzly-display-dvfs` at
+`84024df794f1fbdc5166660edce935174ee5e43b` keeps the
+earlier CPM and MBFS measurements. The additional
+`clk_google_malibu_cpm.display_dvfs=1` parameter exposes
+a root-only, one-shot sysfs read on Grizzly. The RAM
+initramfs reads it after the UFS guard and SCSI retirement,
+with USB NCM ready and the SSH receiver started. The original
+return helper stays armed.
+
+The read enumerates at most 48 DVFS descriptors and matches
+`dpu` and `fabdisp` by exact name. It validates that each
+matched domain offers level 3, fetches the pair starting at
+level 2, and selects the odd row. Each result reports the
+domain ID, level, raw word, and the table's MHz value if the
+row is valid. The command phase has a three-second budget
+and stops at the first transport error, with no retries.
+It issues no display power votes, rate changes or display
+MMIO accesses. A decoded value is a nominal table entry.
+Compare it with the separately logged `CurOpp` index before
+using it to describe this boot.
+
+The ARM64 build and kernel style check passed. Mocks verified
+the request words, exact names, level-3 selection, descriptor
+bounds, invalid rows, failure handling and the one-shot gate.
+An ARM64 guest verified that the appended archive supplies
+the updated initramfs script and that the Grizzly-only
+attribute is absent on the VM. No CPM requests ran in the
+guest. All five image hashes, both AVB signatures, the
+handoff bounds and the fit against saved D1 variables passed.
+The manifest SHA-256 is
+`35fb3aa1744486723b4f20d9e19c204f52f8283154ae5d2f8a50573c73401c48`.
+
+For the first attended trial, use a fresh verified NV
+backup, capture both `display-dvfs` rows, compare them with
+the live `CurOpp` samples and return to stock A. The display
+stays disabled.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
