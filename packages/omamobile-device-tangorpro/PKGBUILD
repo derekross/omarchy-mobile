@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+pkgname=omamobile-device-tangorpro
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omamobile support for the Google Pixel Tablet (tangorpro): storage guard, USB networking, Wi-Fi (started by hand during bring-up)"
+arch=(aarch64)
+url="https://github.com/derekross/omamobile"
+license=(MIT)
+depends=(bash systemd omamobile-keyring)
+provides=(omamobile-device)
+conflicts=(omamobile-device)
+backup=(etc/pacman.d/omamobile-mirrorlist)
+install=omamobile-device-tangorpro.install
+makedepends=(gcc)
+
+build() {
+  "$startdir/build" "$srcdir/build"
+}
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir" "$srcdir/build"
+}
