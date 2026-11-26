@@ -5963,6 +5963,45 @@ after the B boot request. Stock D1 A completed boot with
 enforcing verity and the original VBMeta digest. Ramoops and
 `SYSTEM_LAST_KMSG` matched, including the full scoped trace.
 
+##### Offline stock D1 and mainline DSI0 power comparison
+
+Stock D1 and the mainline diagnostic use the same CPM
+mailbox pair at `0x0ea60000` and `0x0ea61000`, MBFS
+service `0x14`, and `syspm/clients/vm1` vote tree. The
+stock `power_controller.ko` calls `mbfs_write_file` with
+the handle and vote. Its payload matches mainline's
+`{ 0x80000000 | handle, on, 0 }` with a 28-bit handle.
+Both wait for client `7` notifications keyed to the full
+resource ID when CPM returns deferred status `5`. The
+stock trace reports the driver's final result after any
+wait. Only mainline's retained log shows the raw status.
+Stock's final ON sequence also follows earlier probe-time
+ON/OFF cycles that the mainline one-shot test does not run.
+
+| Step | Stock D1 | Mainline powered DSI0 fixture |
+| --- | --- | --- |
+| Pre-vote state | Wrapper, BE and DSI0 genpd report `off-0` before module load | All seven display client votes read `0` before the cycle |
+| Final ON sequence | Wrapper `0x08` → BE `0x200` → DSI0 `0x203`; all three return `0` | Same order and IDs; all three complete deferred status `5` and read back `1` |
+| Consumer path | Stock attaches both the host and PHY to DSI0 genpd. PHY init reads offset `0x7124` bit 8 and stores it in software. The host then reads ID and version, resumes, and reads `pwr_up`. | No DSI0 host or PHY node in the fixture DT. The vote cycle queries the DSI0 pixel rate, then releases DSI0 → BE → wrapper. |
+| Access evidence | Expected host ID appears 8.888 ms after the final DSI0 ON result. No AP clock or reset provider event precedes it. | The pixel GET_RATE replies 150 MHz. DSI0 OFF is acknowledged 145 µs after the ON result. |
+
+The matching votes qualify the CPM request path. A client
+vote readback and the pixel rate do not read the host APB
+gate or external reset. Stock's PHY access supplies evidence
+from its own consumer path. The gap from its ON reply to its
+first host read includes probe work, so it does not establish
+a minimum wait or a readiness deadline for mainline. Before
+adding a mainline host read, establish a firmware ordering
+guarantee or an independently qualified clock and reset
+status check outside the target DSI0 aperture.
+
+The offline comparison leaves the prerequisite-only fixture
+at `16a63b142e0b` in place. Its five image hashes match and
+its vendor boot images and DTBO match the tested powered-rate
+fixture. The UFS read-only guard, post-guard trigger and
+independent 600-second warm return remain in that bundle.
+The host ID, version and `pwr_up` MMIO reads stay disabled.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
