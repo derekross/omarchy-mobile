@@ -609,22 +609,27 @@ out=$(printf '0000\n4321\n4321\n' | OMAMOBILE_PIN_WAIT=1 OMAMOBILE_PIN_DONE_WAIT
 # ...and passwd is still allowed to finish after the helper has left
 cat >"$fake/passwd" <<'STUB'
 #!/bin/bash
-read -rsp "Current password: " a; read -rsp "New password: " b; read -rsp "Retype new password: " c; sleep 3; touch "${0%/*}/finished"
+read -rsp "Current password: " a; read -rsp "New password: " b; read -rsp "Retype new password: " c
+# it stays until the test lets it go (at most 15 s), not for a fixed time: on a
+# busy machine a 3 s passwd had ended, and taken the keeper with it, before the
+# scan below ran
+for _ in $(seq 150); do [[ -e ${0%/*}/release ]] && break; sleep 0.1; done
+touch "${0%/*}/finished"
 STUB
-rm -f "$fake/finished"; rc=0; mkdir -p "$fake/run"
+rm -f "$fake/finished" "$fake/release"; rc=0; mkdir -p "$fake/run"
 out=$(cd "$fake/run" && printf '0000\n4321\n4321\n' | OMAMOBILE_PIN_WAIT=1 OMAMOBILE_PIN_DONE_WAIT=1 timeout 10 bash "$fake/set-pin" --change 2>&1) || rc=$?
 (( rc != 0 && rc != 124 )) && [[ $out == *"may or may not have changed"* ]] || fail "the slow passwd is reported as maybe changed (rc $rc): $out"
 (( rc == 75 )) || fail "a maybe-changed PIN exits with status 75 (rc $rc)"
 keeper=0
-# only this user's cats: a fork per /proc entry took 5 s on a busy build host,
-# longer than the fake passwd lives, and the keeper had left before the scan
-# reached it
+# only this user's cats: a fork per /proc entry took 5 s on a busy build host
+# (the fake passwd now also waits for the test, so the scan can't outlast it)
 for p in $(pgrep -u "$(id -u)" -x cat); do
   d=/proc/$p
   if [[ $(readlink "$d/cwd" 2>/dev/null) == "$fake/run" && $(readlink "$d/fd/0" 2>/dev/null) == */ptmx && $(tr '\0' ' ' <"$d/cmdline" 2>/dev/null) == "cat " ]]; then keeper=1; fi
 done
 (( keeper )) || fail "the keeper is a plain cat on the pty, not the python that held the PINs"
-sleep 4
+touch "$fake/release"
+for _ in $(seq 50); do [[ -e $fake/finished ]] && break; sleep 0.1; done
 [[ -e $fake/finished ]] || fail "passwd is not hung up when the helper leaves: it finishes"
 # in the terminal flow: no "Try again?" after a maybe-changed PIN, but one after a plain refusal
 mkdir -p "$fake/bin"
