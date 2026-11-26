@@ -7,9 +7,12 @@
 #   display.sh get                 {"brightness":50,"refresh":120,"rates":[60,120]}
 #   display.sh set brightness N    N is 10, 25, 50, 75 or 100 (never below 10, so the screen cannot go black)
 #   display.sh set refresh N       N must be one of the rates the monitor lists at its current size
-# The rates are the monitor's own availableModes at its current width and height. The change is live only: turning the phone
-# (omamobile-sensors' auto-rotate applies the monitor's preferred mode again each time), a restart of the
-# session or a reload of Hyprland's config sets the configured mode again. The monitor is the
+#   display.sh set refresh preferred   forget the choice and go back to the panel's preferred mode
+#   display.sh apply               apply the saved choice (for a session start or after a config reload)
+# The rates are the monitor's own availableModes at its current width and height. The choice is saved as a bare number
+# in ${XDG_CONFIG_HOME:-~/.config}/omamobile/refresh-rate, which `apply` and omamobile-sensors' auto-rotate read (the
+# shell's Hyprland config carries no monitor rule, so this is the only place a rate is set). A saved rate the panel no
+# longer lists is ignored: the preferred mode is used, so the screen cannot go black. The monitor is the
 # built-in panel (DSI-* or eDP-*), else the only one, else the focused one. Without a monitor the brightness
 # still works and "refresh" reads -1 with no rates.
 # The test runs a copy of this script with `fake` set to a file holding the brightness (a number) and the monitor
@@ -74,6 +77,16 @@ read_all() {
     name=""; refresh=-1; rates=""
   fi
 }
+rate_file=${XDG_CONFIG_HOME:-$HOME/.config}/omamobile/refresh-rate
+# apply_mode WHEN: WHEN is a listed rate or "preferred"; sets this monitor's mode and keeps its other fields
+apply_mode() {
+  local mode=preferred res
+  [[ $1 == preferred ]] || mode="${w}x${h}@$1"
+  res=$(hyprctl eval "hl.monitor({ output = \"$name\", mode = \"$mode\", position = \"${x}x${y}\", scale = $scale, transform = $transform })" 2>&1) \
+    || return 1
+  [[ ${res,,} != *error* ]]
+}
+saved_rate() { local r=''; [[ -r $rate_file ]] && read -r r < "$rate_file" || true; [[ $r =~ ^[0-9]{1,3}$ ]] && echo "$r" || true; }
 out() { printf '{"brightness":%s,"refresh":%s,"rates":[%s]}\n' "$bright" "$refresh" "$rates"; }
 
 case $verb in
@@ -87,21 +100,40 @@ set)
       if [[ -z $fake ]]; then set_brightness "$value" || fail "could not set the brightness"; fi
       bright=$value ;;
     refresh)
+      if [[ $value == preferred ]]; then
+        [[ -n $name ]] || fail "cannot read the monitor"
+        if [[ -z $fake ]]; then
+          apply_mode preferred || fail "the screen did not accept the change"
+          sleep 1
+          read -r name w h x y scale transform refresh rates < <(mon_info) || fail "cannot read the monitor"
+        fi
+        rm -f -- "$rate_file"
+        out; exit 0
+      fi
       [[ $value =~ ^[0-9]{1,3}$ ]] || fail "bad value"
       [[ -n $name ]] || fail "cannot read the monitor"
       [[ ,$rates, == *",$value,"* ]] || fail "this display does not list that rate"
       if [[ -z $fake ]]; then
-        res=$(hyprctl eval "hl.monitor({ output = \"$name\", mode = \"${w}x${h}@${value}\", position = \"${x}x${y}\", scale = $scale, transform = $transform })" 2>&1) \
-          || fail "the screen did not accept the change"
-        [[ ${res,,} != *error* ]] || fail "the screen did not accept the change"
+        apply_mode "$value" || fail "the screen did not accept the change"
         sleep 1
         read -r name w h x y scale transform refresh rates < <(mon_info) || fail "cannot read the monitor"
       else
         refresh=$value
-      fi ;;
+      fi
+      mkdir -p -- "${rate_file%/*}" && printf '%s\n' "$value" > "$rate_file" || fail "could not save the choice" ;;
     *) fail "unknown key" ;;
   esac
   out ;;
+apply)
+  read_all
+  [[ -n $name ]] || fail "cannot read the monitor"
+  want=$(saved_rate)
+  # only a rate the panel lists right now is applied; anything else means preferred
+  [[ -n $want && ,$rates, == *",$want,"* ]] || want=preferred
+  if [[ -z $fake ]]; then
+    apply_mode "$want" || fail "the screen did not accept the change"
+  elif [[ $want != preferred ]]; then refresh=$want; fi
+  out ;;
 *)
-  fail "usage: get|set" ;;
+  fail "usage: get|set|apply" ;;
 esac

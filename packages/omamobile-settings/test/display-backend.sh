@@ -22,7 +22,7 @@ eq "$(run set refresh 60)" '{"brightness":50,"refresh":60,"rates":[60,120]}'
 eq "$(run set refresh 90)" '{"error":"this display does not list that rate"}'
 eq "$(run set refresh abc)" '{"error":"bad value"}'
 eq "$(run set night on)" '{"error":"unknown key"}'
-eq "$(run nonsense)" '{"error":"usage: get|set"}'
+eq "$(run nonsense)" '{"error":"usage: get|set|apply"}'
 
 # one rate only: the page hides the refresh rate buttons
 sed -i '2s/.*/[{"name":"HDMI-A-1","width":1920,"height":1080,"x":0,"y":0,"scale":1,"refreshRate":60.0,"availableModes":["1920x1080@60.00Hz"]}]/' "$fake"
@@ -44,4 +44,20 @@ eq "$(run get)" '{"brightness":50,"refresh":120,"rates":[60,120]}'
 # the monitor query failing leaves the brightness working
 sed -i '2s/.*/not json/' "$fake"
 eq "$(run get)" '{"brightness":50,"refresh":-1,"rates":[]}'
+# the choice is saved, survives a fake reload (apply), an unlisted saved rate falls back, preferred clears it
+export HOME=$tmp/home XDG_CONFIG_HOME=$tmp/home/.config
+rf=$XDG_CONFIG_HOME/omamobile/refresh-rate
+sed -i '2s/.*/[{"name":"DSI-1","width":1344,"height":2992,"x":0,"y":0,"scale":3.2,"refreshRate":120.0,"availableModes":["1344x2992@120.00Hz","1344x2992@60.00Hz"]}]/' "$fake"
+eq "$(run set refresh 90)" '{"error":"this display does not list that rate"}'
+[[ ! -e $rf ]] || { echo "FAIL: a refused rate was saved" >&2; exit 1; }
+run set refresh 60 >/dev/null
+eq "$(cat "$rf")" 60
+eq "$(run apply)" '{"brightness":50,"refresh":60,"rates":[60,120]}'
+echo 90 > "$rf"
+eq "$(run apply)" '{"brightness":50,"refresh":120,"rates":[60,120]}'
+echo junk > "$rf"
+eq "$(run apply)" '{"brightness":50,"refresh":120,"rates":[60,120]}'
+echo 60 > "$rf"
+eq "$(run set refresh preferred)" '{"brightness":50,"refresh":120,"rates":[60,120]}'
+[[ ! -e $rf ]] || { echo "FAIL: preferred did not clear the choice" >&2; exit 1; }
 echo "display backend: ok"
