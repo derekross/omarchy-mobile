@@ -1,0 +1,10 @@
+[Unit]
+Description=Verify the read-only Omarchy root
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/bash /run/grizzly-systemd/check.sh
+StandardOutput=null
+StandardError=kmsg

@@ -4377,6 +4377,70 @@ Fastboot returned after 133 seconds. Stock D1 A restarted at
 original VBMeta digest. Ramoops and the current Android
 `SYSTEM_LAST_KMSG` entry agree on all 81 filtered trial lines.
 
+### Read-only Omarchy systemd RAM root
+
+The systemd fixture uses the v73 kernel and device tree. Only
+`vendor_kernel_boot` changes in the five-image package. It
+starts with the same fixed 8 KiB `boot_b` comparison and live
+checks on all 42 read-only, unmounted UFS partitions. The
+kernel then retires the temporary SCSI host as in v73. The
+receiver and the systemd smoke service each require zero
+SCSI disks. The fixture exposes no UFS device nodes or mounts.
+
+The userspace asset is the signed Omarchy Mobile 2026.11.15
+ARM64 ext4 release previously tested in v20, which contains
+Omarchy 4.5.0-3. Its compressed size is 3,081,094,118 bytes.
+The Mac verified the release signature, manifest and compressed
+digest. The receiver expands it sparsely into a size-capped
+tmpfs and checks the exact 11,542,724,608-byte length and raw
+SHA-256 before allowing a read-only loop mount. Ext4 mounts
+with `ro,noload,nosuid,nodev`. There is no internal install.
+
+Build `systemd-ram-return.c` as a static ARM64 executable.
+Run the existing inventory packer with `--gpt-scan-only`
+and use `pack-systemd-ram-root.py` to add the receiver, isolated
+units and selected ARM64 tools from the archived v20 ramdisk.
+Supply a fresh Dropbear host key and a fresh client public key.
+Replace the v73 vendor ramdisk fragment with the resulting
+`inventory.cpio.lz4` and retain the existing DTB, bootconfig
+and other four images. Keep the boot bundle and matching SSH
+credentials private.
+
+For a later attended hardware trial, use the same fresh NV
+backup and Fastboot staging gates as the read-only test root.
+The fixture requires at least 12,000,000 KiB of available RAM
+before it starts the USB receiver. Run the tracked host script
+with the Mac's USB NCM interface, verified compressed image
+and private SSH directory. It pins the host key, sends only
+the root image, and requests handoff after the exact digest
+matches. The forced SSH command allows status, receive and
+handoff. It closes the receiver before systemd starts.
+
+```sh
+bash device/grizzly/bringup/stream-systemd-ram-root.sh USB_INTERFACE ROOT.img.zst PRIVATE_SSH_DIR
+```
+
+Only the Grizzly smoke target is visible to systemd. The
+service checks the PID 1 executable, tmpfs backing, read-only
+loop and mount, write denial, lack of SCSI disks, and required
+Omarchy packages. It also checks that the independent return
+helper survived `switch_root`. The helper requests a warm
+restart after 600 seconds of uptime, including when root
+receipt fails. Catch Fastboot with Volume Down and return
+to stock A using the verified procedure above.
+
+The full ARM64 guest test rejected a truncated stream, verified
+the full release image and reached the isolated systemd target.
+It logged
+`GRIZZLY_SYSTEMD_PASS pid1=systemd root=ext4 ro=1 ram=1 write_denied=1 scsi_disks=0 timer=1`.
+Separate local tests verified the scoped IPv6 listener, pinned
+SSH authentication, refusal of arbitrary commands and refusal
+of a handoff before image verification. The five image hashes,
+two unchanged AVB signatures, handoff bounds and saved D1 slot
+fit passed. The combined USB and UFS flow still needs its first
+Grizzly boot. Manifest SHA-256
+`45a32cc861d7dd42affc4f084cf9cb4de432bf928c281273798d4f011b4ae830`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

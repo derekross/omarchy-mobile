@@ -13,6 +13,7 @@ device_query_marker=/grizzly-inventory/device-query-only
 single_lun_marker=/grizzly-inventory/single-lun-only
 single_disk_marker=/grizzly-inventory/single-disk-only
 gpt_scan_marker=/grizzly-inventory/gpt-scan-only
+systemd_root_marker=/grizzly-systemd/root.sh
 inventory_prefix=grizzly-stock-inventory
 if [ -e "$mainline_marker" ] || [ -L "$mainline_marker" ]; then
     inventory_prefix=grizzly-mainline-inventory
@@ -32,6 +33,19 @@ end_inventory() {
 }
 
 start_return_timer() {
+    if [ -f "$systemd_root_marker" ]; then
+        /grizzly-systemd/return &
+        timer=$!
+        for wait in 1 2 3 4 5; do
+            if [ -f /run/grizzly-systemd-armed ] && "$bb" kill -0 "$timer"; then
+                printf '%s\n' "$timer" > /run/grizzly-systemd-timer || return 1
+                stock_inventory_log 'systemd RAM root return armed deadline_s=600'
+                return 0
+            fi
+            "$bb" sleep 1
+        done
+        return 1
+    fi
     (
         case $fixture in
             inventory|mainline-inventory) delay=90 ;;
@@ -94,7 +108,8 @@ check_mainline_previous_boot() {
             mainline_prior=2
         else
             mainline_prior=0
-            "$bb" grep -Fq 'warm restart requested [mainline-inventory]' "$mainline_console" ||
+            "$bb" grep -Fq -e 'warm restart requested [mainline-inventory]' \
+                -e 'warm restart requested [systemd-ram-root]' "$mainline_console" ||
                 mainline_prior=$?
         fi
     fi
@@ -219,6 +234,16 @@ observe_mainline_ro_disk() {
                     check_mainline_ro_disk /sys/class/block "$expected"
                     case $? in 0|2) ;; *) end_inventory 'UFS guard failed after test root' ;; esac
                 fi
+                if [ -f "$systemd_root_marker" ]; then
+                    [ "$expected" -eq 42 ] && [ ! -L "$systemd_root_marker" ] ||
+                        end_inventory 'invalid systemd RAM root fixture'
+                    if ! "$bb" dmesg | "$bb" grep -Eq 'ufs-uic-v73 LUN 0 block comparison part=23 lba=598711 bytes=8192 ret=0$'; then
+                        "$bb" sleep 1 || break
+                        tries=$((tries + 1))
+                        continue
+                    fi
+                    exec "$bb" sh "$systemd_root_marker" boot
+                fi
                 end_inventory 'single disk RAM stage complete' ;;
             2) ;;
             *) end_inventory 'single disk read-only inventory failed' ;;
@@ -249,7 +274,7 @@ run_mainline_inventory() {
         end_inventory 'cannot mount private inventory workspace'
     fi
     check_mainline_previous_boot
-    start_return_timer
+    start_return_timer || end_inventory 'cannot arm RAM return'
 
     if [ -e /proc/sys/kernel/modprobe ]; then
         if ! printf '\n' > /proc/sys/kernel/modprobe ||
