@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: MIT
+# Lens table for the OnePlus 7T (hotdogb) running Omarchy Mobile.
+# Ids are the sensors' libcamera ids (`cam -l`). zoom and focal lengths come from
+# OnePlus's published 35 mm equivalents (main 26, ultrawide 17, telephoto 51); not yet
+# calibrated on our own frames. The drivers have one full-view mode each.
+device = "hotdogb"
+max_zoom = 10.0
+
+[[lens]]
+role = "main"
+name = "Main"
+id = "/base/soc@0/cci@ac4a000/i2c-bus@1/camera@1a" # Sony IMX586
+zoom = 1.0
+f_number = 1.6
+focal_length_35mm = 26
+focal_length_mm = 4.81
+base_iso = 50
+preview = [4000, 3000]
+still = [4000, 3000]
+autofocus = true
+
+[[lens]]
+role = "ultrawide"
+name = "Ultrawide"
+id = "/base/soc@0/cci@ac4b000/i2c-bus@1/camera@1a" # Sony IMX481
+zoom = 0.65
+f_number = 2.2
+focal_length_35mm = 17
+focal_length_mm = 2.29
+base_iso = 50
+preview = [4648, 3496]
+still = [4648, 3496]
+autofocus = true
+
+[[lens]]
+role = "tele"
+name = "Telephoto"
+id = "/base/soc@0/cci@ac4a000/i2c-bus@0/camera@10" # Samsung S5K3M5
+zoom = 1.96
+f_number = 2.2
+focal_length_35mm = 51
+focal_length_mm = 5.89
+base_iso = 50
+preview = [4200, 3120]
+still = [4200, 3120]
+autofocus = true
+
+[[lens]]
+role = "front"
+name = "Front"
+id = "/base/soc@0/cci@ac4b000/i2c-bus@0/camera@10" # Sony IMX471
+zoom = 1.0
+f_number = 2.0
+focal_length_35mm = 25
+focal_length_mm = 3.36
+base_iso = 50
+preview = [1740, 1748]
+still = [1740, 1748]
+autofocus = false
+mirror = true

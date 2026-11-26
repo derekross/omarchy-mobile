@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=OnePlus 7T ambient light compensation
+ConditionPathExists=/sys/class/backlight/ae94000.dsi.0/brightness
+Wants=iio-sensor-proxy.service
+After=iio-sensor-proxy.service
+
+[Service]
+ExecStart=/usr/lib/omamobile/hotdogb/omamobile-hotdogb-autobrightness
+StateDirectory=omamobile-hotdogb-autobrightness
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

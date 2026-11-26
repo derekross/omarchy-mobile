@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+pkgname=omamobile-device-hotdogb
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Opt-in Omamobile profiles for the OnePlus 7T (hotdogb)"
+arch=(aarch64)
+url="https://github.com/derekross/omamobile"
+license=(MIT)
+depends=(systemd)
+optdepends=('iio-sensor-proxy: auto-brightness on a provisioned phone'
+            'python-gobject: auto-brightness'
+            'alsa-ucm-conf: HiFi audio profile'
+            'omacam: camera lens table')
+checkdepends=(python)
+provides=(omamobile-device)
+conflicts=(omamobile-device)
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}

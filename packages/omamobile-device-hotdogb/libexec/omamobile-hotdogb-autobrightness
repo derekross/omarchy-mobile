@@ -1,0 +1,149 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: MIT
+# Auto-brightness for the 7T: ambient light (TCS3701 through iio-sensor-proxy) to backlight.
+# Moving the slider sets a personal factor (kept in STATE) instead of fighting the user.
+# The light sensor sits behind the panel and sees it too: OWN lux per backlight step
+# (measured 2026-11-24: +95 at 1023, +40 at 400, bright wallpaper) are subtracted, or a
+# bright screen in the dark would keep itself bright. CURVE is (lux, % of maximum).
+import json, math, os, sys, time
+
+BL = "/sys/class/backlight/ae94000.dsi.0"
+STATE = "/var/lib/omamobile-hotdogb-autobrightness/brightness.json"
+CURVE = [(0, 3), (5, 8), (20, 14), (60, 22), (150, 32), (400, 50), (1000, 72), (2500, 90), (6000, 100)]
+OWN = 0.1
+LOWEST = 2.0        # %
+TICK = 100          # ms
+SETTLE = 5.0        # s an outside change must last before it counts as the user's
+
+def read(name):
+    with open(f"{BL}/{name}") as f:
+        return int(f.read())
+
+def curve(lux):
+    x = math.log1p(max(lux, 0.0))
+    pts = [(math.log1p(l), p) for l, p in CURVE]
+    for (x0, p0), (x1, p1) in zip(pts, pts[1:]):
+        if x <= x1:
+            return p0 + (p1 - p0) * (x - x0) / (x1 - x0)
+    return float(pts[-1][1])
+
+class Auto:
+    def __init__(self):
+        self.max = read("max_brightness")
+        self.bias = 1.0
+        try:
+            with open(STATE) as f:
+                self.bias = min(4.0, max(0.25, float(json.load(f)["bias"])))
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        self.lux = None      # smoothed
+        self.mine = None     # last value written here
+        self.goal = None
+        self.other = None    # (value, since) changed by someone else
+        self.proxy = None
+
+    def target(self):
+        p = min(100.0, max(LOWEST, curve(self.lux) * self.bias))
+        return max(1, round(self.max * p / 100))
+
+    def light(self, lux):
+        self.lux = lux if self.lux is None else self.lux + 0.3 * (lux - self.lux)
+
+    def tick(self):
+        try:
+            cur, power = read("brightness"), read("bl_power")
+        except OSError:
+            return True
+        now = time.monotonic()
+        if power or cur == 0 or self.lux is None:     # screen off or no reading yet
+            self.mine, self.other = None, None
+            return True
+        if self.mine is None:
+            self.mine = cur                           # take over from wherever it is
+        if cur != self.mine:
+            if self.other is None or self.other[0] != cur:
+                self.other = (cur, now)
+            elif now - self.other[1] >= SETTLE:
+                self.bias = min(4.0, max(0.25, (100 * cur / self.max) / curve(self.lux)))
+                self.mine, self.other, self.goal = cur, None, cur
+                try:
+                    with open(STATE + ".new", "w") as f:
+                        json.dump({"bias": round(self.bias, 3)}, f)
+                    os.replace(STATE + ".new", STATE)
+                except OSError:
+                    pass
+                print(f"user set {cur}/{self.max} at {self.lux:.1f} lux: factor {self.bias:.2f}", flush=True)
+            return True
+        self.other = None
+        t = self.target()
+        # Hysteresis: start moving only for a visible difference, then go all the way.
+        if self.goal is None or abs(t - self.goal) > max(6, 0.12 * self.goal):
+            self.goal = t
+        if cur != self.goal:
+            delta = self.goal - cur
+            step = min(abs(delta), max(1, round(abs(delta) * 0.08)))
+            new = cur + (step if delta > 0 else -step)
+            try:
+                with open(f"{BL}/brightness", "w") as f:
+                    f.write(str(new))
+            except OSError:
+                return True
+            self.mine = new
+        return True
+
+    def poll(self):
+        v = self.proxy.get_cached_property("LightLevel")
+        unit = self.proxy.get_cached_property("LightLevelUnit")
+        if v is not None and unit is not None and unit.get_string() == "lux":
+            try:
+                own = OWN * read("brightness")
+            except OSError:
+                own = 0.0
+            self.light(max(0.0, v.get_double() - own))
+        return True
+
+    def appeared(self, bus, name, owner):
+        self.proxy = Gio.DBusProxy.new_sync(bus, 0, None, "net.hadess.SensorProxy",
+                                            "/net/hadess/SensorProxy", "net.hadess.SensorProxy", None)
+        try:
+            self.proxy.call_sync("ClaimLight", None, 0, 5000, None)
+        except GLib.Error as error:
+            print(f"Cannot claim ambient light sensor: {error}", file=sys.stderr)
+            self.failed = True
+            self.loop.quit()
+            return
+        if not self.timers:
+            self.timers = [GLib.timeout_add(500, self.poll), GLib.timeout_add(TICK, self.tick)]
+
+    def vanished(self, bus, name):
+        for t in self.timers:
+            GLib.source_remove(t)
+        self.timers, self.lux = [], None
+
+    def run(self):
+        self.timers = []
+        self.failed = False
+        self.loop = GLib.MainLoop()
+        watch = Gio.bus_watch_name(Gio.BusType.SYSTEM, "net.hadess.SensorProxy", 0,
+                                   self.appeared, self.vanished)
+        self.loop.run()
+        Gio.bus_unwatch_name(watch)
+        return int(self.failed)
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["--selftest"]:
+        v = [curve(x) for x in (0, 3, 15, 40, 200, 700, 3000, 100000)]
+        assert v == sorted(v) and v[0] == 3 and v[-1] == 100, v
+        # A full-brightness screen in a dark room must come down, with bright or dark content.
+        for gain in (0.095, 0.03, 0.0):
+            b = 1023
+            for _ in range(50):
+                b = 1023 * max(LOWEST, curve(max(0.0, gain * b - OWN * b))) / 100
+            assert b < 60, (gain, b)
+        print("ok", [round(x, 1) for x in v])
+    else:
+        import gi
+        gi.require_version("Gio", "2.0")
+        from gi.repository import Gio, GLib
+
+        sys.exit(Auto().run())
