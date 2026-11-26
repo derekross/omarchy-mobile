@@ -114,6 +114,7 @@ whether it predated a stock boot.
 | [Display MBFS operating-point query](#attended-display-mbfs-operating-point-trial) | The Mac left stock D1 A at 09:38:09 UTC on 2026-11-26. Android stayed off between the guarded rescue and the operating-point boot request at 09:44:34 UTC. | All nine hashes passed at 09:43:06 UTC. Another power or CPM trial needs a fresh copy after the stock A return. |
 | [Corrected display MBFS operating-point query](#attended-corrected-display-mbfs-trial) | The Mac left stock D1 A at 10:00:35 UTC on 2026-11-26. Android stayed off between the guarded rescue and the corrected boot request at 10:08:05 UTC. | All nine hashes passed at 10:05:32 UTC. Another power or CPM trial needs a fresh copy after the stock A return. |
 | [Display DVFS row query](#attended-display-dvfs-row-trial) | The Mac left stock D1 A at 10:27:54 UTC on 2026-11-26. Android stayed off between the guarded rescue and the DVFS boot request at 10:34:59 UTC. | All nine hashes passed at 10:33:35 UTC. Another power or CPM trial needs a fresh copy after the stock A return. |
+| [DPU wrapper trigger trial](#attended-dpu-wrapper-trigger-trial) | The Mac left stock D1 A at 12:24:53 UTC on 2026-11-26. Android stayed off between the guarded rescue and the wrapper boot request at 12:31:12 UTC. | All nine hashes passed at 12:29:51 UTC. Another power or CPM trial needs a fresh copy after the stock A return. |
 
 [Maintainer decision on backup freshness](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035).
 Take a fresh read-only backup of all nine partitions after the latest
@@ -5085,6 +5086,35 @@ votes and the wrapper acknowledgement, completion and readback
 for any ON/OFF requests. An inherited vote or an ambiguous
 transition is a reason to end the trial without exercising
 child domains.
+
+##### Attended DPU wrapper trigger trial
+
+On 2026-11-26 the guarded rescue verified all nine NV partitions
+read-only and unmounted. The Mac verified 3,392,151,552 bytes,
+all nine independent hashes and private modes. The full 64 MiB
+rescue `vendor_boot_b` readback matched. The Mac staged the
+diagnostic on B with a matching 8,192-byte `vendor_boot_b` payload.
+
+The kernel accepted the wrapper boot flag, and the early CPM
+rate and MBFS operating-point samples matched prior trials.
+The UFS guard checked all 42 UFS partitions read-only and
+unmounted and retired the temporary SCSI host. The USB
+receiver authenticated. The RAM script logged
+`display-wrapper: vote cycle start` at 10.452192 seconds and
+`display-wrapper: vote cycle failed` at 10.452297 seconds.
+The trace contains no initial vote, acknowledgement or
+readback from the kernel's wrapper callback.
+
+The RAM inventory mounts sysfs read-only, remounts it briefly
+to set the warm-return policy, and reseals it before the root
+script runs. The first fixture tried to write a sysfs attribute
+on that mount. The failure happened before the vote samples
+and did not qualify an ON/OFF cycle.
+
+Fastboot returned 644 seconds after the B boot request.
+Stock D1 A completed boot with enforcing verity and the
+original VBMeta digest. Ramoops and `SYSTEM_LAST_KMSG`
+matched all 24 filtered trial lines.
 
 ### Offline stock D1 device reference-clock diagnostic
 
