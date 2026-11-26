@@ -12,6 +12,13 @@
 # to the journal (to explain the next loss). It wakes on udev events for
 # power_supply, udc and i2c (a plug, a gadget state change, a driver binding),
 # not on a timer; a look every RECHECK s covers a change that sends none.
+# A second loss: the switch is closed and VBUS valid, but the gadget stays
+# in "default" (the host reset it, then could not enumerate it; seen
+# 2026-11-26, host: "unable to enumerate USB device", until a reboot). If the
+# UDC sits in default or addressed for STUCK s, reconnect it through its
+# soft_connect file (pull-up off, then on), at most TRIES times per plug.
+# A UDC state change sends no udev event (only sysfs_notify), so while VBUS
+# is valid and the state is not "configured" it looks every 2 s instead.
 set -uo pipefail
 
 chg=0x69 tcpc=0x25
@@ -29,6 +36,15 @@ rd() { i2cget -f -y "$bus" "$1" "$2" 2>/dev/null; }
 vbus_valid() { local v; v=$(rd $chg 0xb5) || return 1; (( ((v >> 5) & 3) == 3 )); }
 tcpm_owns() { [[ -e $SYS/bus/i2c/devices/$bus-0025/driver ]]; }
 udc_state() { cat "$SYS"/class/udc/*/state 2>/dev/null | head -1; }
+udc_dir() { local d; for d in "$SYS"/class/udc/*; do [[ -e $d/soft_connect ]] && { echo "$d"; return; }; done; }
+STUCK=${OMAMOBILE_USB_RESCUE_STUCK:-10}
+TRIES=${OMAMOBILE_USB_RESCUE_TRIES:-3}
+stuck_since= tries=0 off=
+# Monotonic seconds: bash's SECONDS follows the wall clock (NTP, resume).
+mono() { local u; read -r u _ < /proc/uptime; echo "${u%%.*}"; }
+# Never leave the gadget's pull-up off, whatever stops the script.
+trap '[[ -n $off ]] && echo connect > "$off/soft_connect" 2>/dev/null' EXIT
+trap 'exit 0' TERM INT
 
 RECHECK=${OMAMOBILE_USB_RESCUE_RECHECK:-30}
 # Each udev event ends a wait; the switch and VBUS are read again after it.
@@ -46,16 +62,54 @@ while :; do
     exit 0
   fi
   sw=$(rd $tcpc 0x93)
-  if vbus_valid; then vb=1; else vb=0; fi
+  # vb: 1 valid, 0 not valid, 2 the charger could not be read.
+  if vbus_valid; then vb=1; elif [[ -n $(rd $chg 0xb5) ]]; then vb=0; else vb=2; fi
+  # A connect that failed earlier: keep trying it before anything else.
+  if [[ -n $off ]]; then
+    if echo connect > "$off/soft_connect" 2>/dev/null; then
+      log "soft_connect connect done on retry"; off=
+    fi
+  fi
   now="usbsw=${sw:-?} vbus=$vb udc=$(udc_state)"
   [[ $now != "$last" ]] && { log "$now"; last=$now; }
-  if (( vb )) && [[ -n $sw && $sw != 0x09 ]]; then
+  if (( vb == 1 )) && [[ -n $sw && $sw != 0x09 ]]; then
     log "VBUS valid, USBSW_CTRL $sw: closing the data switch"
     i2cset -f -y "$bus" $tcpc 0x93 0x09
   fi
+  wait_s=$RECHECK
+  st=$(udc_state)
+  if (( vb == 1 )) && [[ $sw == 0x09 && ( $st == default || $st == addressed ) ]]; then
+    t=$(mono)
+    [[ -n $stuck_since ]] || stuck_since=$t
+    if (( t - stuck_since >= STUCK && tries < TRIES )); then
+      tries=$((tries + 1))
+      u=$(udc_dir)
+      if [[ -z $u ]]; then
+        log "UDC $st with VBUS valid, but no soft_connect file to reconnect it"
+      else
+        log "UDC $st for $((t - stuck_since)) s with VBUS valid: reconnecting the gadget ($tries/$TRIES)"
+        off=$u
+        echo disconnect > "$u/soft_connect" 2>/dev/null || log "soft_connect disconnect failed"
+        sleep 1
+        if echo connect > "$u/soft_connect" 2>/dev/null; then
+          off=
+        else
+          sleep 1
+          if echo connect > "$u/soft_connect" 2>/dev/null; then off=; else log "soft_connect connect failed"; fi
+        fi
+      fi
+      stuck_since=$(mono)
+    fi
+    (( tries < TRIES )) && wait_s=2
+  else
+    stuck_since=
+    (( vb == 0 )) && tries=0
+    [[ $st == configured ]] && tries=0
+  fi
+  [[ -n $off ]] && wait_s=2
   if [[ -n $uev ]]; then
     # Block until an event (then drain the burst a plug sends) or RECHECK.
-    if read -r -t "$RECHECK" -u "$uev" _; then
+    if read -r -t "$wait_s" -u "$uev" _; then
       while read -r -t 0.2 -u "$uev" _; do :; done
     elif (( $? <= 128 )); then
       log "udevadm monitor ended; looking every 2 s"

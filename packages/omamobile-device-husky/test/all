@@ -168,6 +168,25 @@ grep -q '^ExecStart=/usr/bin/omamobile-usb-rescue$' vendor/systemd/system/omamob
   || fail "the USB rescue is enabled by a vendor wants link"
 grep -q 'i2c-tools' PKGBUILD || fail "the USB rescue needs i2cget and i2cset"
 pass "the USB replug rescue is installed, enabled by a wants link, and writes one register"
+# A gadget stuck in "default" with VBUS valid and the switch closed (seen
+# 2026-11-26: the host could not enumerate it until a reboot) gets its
+# pull-up cycled through soft_connect, at most TRIES times, and is left on.
+us=$tmp/usbstuck; mkdir -p "$us/bin" "$us/sys/bus/i2c/devices" "$us/dev/10cb0000.i2c/i2c-7" "$us/sys/class/udc/11210000.usb"
+ln -s "$us/dev/10cb0000.i2c/i2c-7" "$us/sys/bus/i2c/devices/i2c-7"
+echo default >"$us/sys/class/udc/11210000.usb/state"
+: >"$us/sys/class/udc/11210000.usb/soft_connect"
+printf '#!/bin/sh\nexit 0\n' >"$us/bin/udevadm"
+printf '#!/bin/sh\n[ "$5" = 0xb5 ] && echo 0x60 || echo 0x09\n' >"$us/bin/i2cget"
+printf '#!/bin/sh\necho "$@" >>%s/writes\n' "$us" >"$us/bin/i2cset"
+chmod +x "$us/bin/"*
+PATH="$us/bin:$PATH" OMAMOBILE_USB_RESCUE_SYS="$us/sys" OMAMOBILE_USB_RESCUE_POLL=0.1 OMAMOBILE_USB_RESCUE_STUCK=1 \
+  timeout 12 bash bin/omamobile-usb-rescue >"$us/log" 2>&1 && rc=0 || rc=$?
+[[ $rc -eq 124 ]] || fail "the USB rescue keeps running with a stuck gadget: $(cat "$us/log")"
+n=$(grep -c 'reconnecting the gadget' "$us/log")
+[[ $n -eq 3 ]] || fail "the USB rescue reconnects a stuck gadget 3 times, not $n: $(cat "$us/log")"
+[[ $(cat "$us/sys/class/udc/11210000.usb/soft_connect") == connect ]] || fail "the USB rescue leaves the gadget's pull-up on"
+[[ ! -e $us/writes ]] || fail "the USB rescue leaves a closed switch alone while reconnecting"
+pass "the USB rescue reconnects a gadget stuck in default, 3 times at most, and leaves it connected"
 # The omarchy-trace Plymouth theme (#266): 30 frames rendered from Omarchy's
 # logo by tools/gen-plymouth-trace.py, and the script and .plymouth file that
 # name them.
