@@ -5593,6 +5593,60 @@ request. Stock D1 A completed boot with enforcing verity and
 the original VBMeta digest. Ramoops and `SYSTEM_LAST_KMSG`
 matched all 52 filtered lines.
 
+##### Offline DSI0 host access prerequisites
+
+Both stock D1 Grizzly B0 merges translate
+`dsi2host@3d8000` to physical `0x0f7d8000`, size `0x800`,
+and attach `DpuDsi0.v` with BE and wrapper parents. The host
+has a PHY link and no clock or reset phandles. The PHY's
+38.4 MHz `pllref` and LPCM DSI0 pixel clock are separate
+from the host's APB clock.
+
+In the D1 `mipi-dsi2h.ko`, `dw_mipi_dsi2h_probe` sets up
+MMIO regmap with a null clock name (text `0x2310`). It
+calls `phy_init` (`0x24e0`), then enables runtime PM. The
+D1 G301 D-PHY init reads PHY offset `0x7124` bit 8 before
+saving the result in software. The host probe reads core ID
+and version at host offsets `0x00` and `0x04`. The handoff
+status query follows a successful `pm_runtime_resume_and_get`
+(`0x267c`) and reads bit 0 at host offset `0x0c`
+(`0x2694`). The stock glue's initial runtime resume exits
+without host programming because the core pointer is assigned
+only after the core probe returns. The retained stock bugreport
+logs ID `0x30313130`, version `0x1a000110` and handoff
+`dt=0 reg=0`.
+
+The host and glue expose no separate APB clock or reset
+operation before that status query. The D1 legacy
+`lpm_pm_domains.ko` contains DSI state polling, but neither
+stock Grizzly merge binds its DPU compatible or assigns the
+expected LPCM resource. The tested MBFS client votes and
+150 MHz LPCM reply establish the voted power chain and the
+firmware-reported pixel rate. The APB clock and reset state
+for a mainline MMIO read remain unverified. A future stock
+trace can capture the existing `regmap_reg_read` at offset
+`0x0c` alongside genpd and runtime PM events without adding a
+host read. A mainline read still needs independently qualified
+access prerequisites.
+
+Kernel `7.3.0-rc6-omamobile-grizzly-display-dsi0-host` at
+`16a63b142e0bf13855b78a7c24dd381444320956` builds a
+prerequisite-only fixture. The opt-in
+`clk_google_malibu_cpm.display_dsi0_host=1` uses the guarded
+wrapper, BE and DSI0 vote sequence and the known pixel GET_RATE.
+It logs that host status was skipped because the APB clock and
+reset remain unverified. It performs no host MMIO, clock-gate
+writes or reset requests. DSI0, BE and wrapper release in
+reverse order after a firmware reply. The independent timer
+covers the existing fail-stop path.
+
+The arm64 build, style check, vote and release mocks, five
+image hashes, AVB signatures, ABL handoff bounds and saved D1
+slot fit passed. The vendor boot images and DTBO are byte
+identical to the tested DSI0 rate fixture, preserving the UFS
+guard, USB SSH and timed return. The `SHA256SUMS` digest is
+`f68686c9fc117351e65d00e7584a14329293ae55ee201c031affcf7275c24da7`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
