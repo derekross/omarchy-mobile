@@ -308,19 +308,20 @@ pass "touch navigation: back, home pill, drawer pull, undo, fields in view"
 # item is a click target so an open card hands a tap on another item to it,
 # and only a pull opens quick settings.
 b=plugins/omamobile.bar/Bar.qml
+bs=plugins/omamobile.bar/BarStrip.qml
 for panel in power network; do
-  grep -cF "\"/shell/plugins/panels/$panel/Panel.qml\"" "$b" >/dev/null || fail "the bar loads Omarchy's own $panel panel"
+  grep -cF "\"/shell/plugins/panels/$panel/Panel.qml\"" "$bs" >/dev/null || fail "the bar loads Omarchy's own $panel panel"
 done
-[[ $(grep -c 'Component.onCompleted: root.clickTargets = root.clickTargets.concat(\[this\])' "$b") == 5 ]] || fail "all five items are click targets of an open card"
-[[ $(grep -c 'function triggerPress(button)' "$b") == 5 ]] || fail "a tap an open card hands on opens that item's card"
+[[ $(grep -c 'Component.onCompleted: bar.clickTargets = bar.clickTargets.concat(\[this\])' "$bs") == 5 ]] || fail "all five items are click targets of an open card"
+[[ $(grep -c 'function triggerPress(button)' "$bs") == 5 ]] || fail "a tap an open card hands on opens that item's card"
 awk '/id: touch$/,/^      }$/' "$b" | grep -cF 'onClicked: if (!pulled && !root.cardsOnTap) root.toggleQuickSettings()' >/dev/null || fail "a tap on the strip toggles quick settings only with bar.cardsOnTap off"
 grep -cF 'readonly property bool cardsOnTap: setting("cardsOnTap", false) === true' "$b" >/dev/null || fail "the cards are behind bar.cardsOnTap, off by default"
-[[ $(grep -c 'enabled: root.cardsOnTap' "$b") == 5 && $(grep -c 'active: root.cardsOnTap' "$b") == 4 ]] || fail "with bar.cardsOnTap off no item takes a tap and no card is loaded"
-grep -cF "panels/bluetooth/Panel.qml" "$b" >/dev/null && fail "the Bluetooth item opens quick settings' panel, not Omarchy's card"
+[[ $(grep -c 'enabled: bar.cardsOnTap' "$bs") == 5 && $(grep -c 'active: bar.cardsOnTap' "$bs") == 4 ]] || fail "with bar.cardsOnTap off no item takes a tap and no card is loaded"
+grep -cF "panels/bluetooth/Panel.qml" "$b" "$bs" >/dev/null && fail "the Bluetooth item opens quick settings' panel, not Omarchy's card"
 grep -cF 'shell.summon(quickSettingsId, JSON.stringify({ source: "bar", page: "bluetooth" }))' "$b" >/dev/null || fail "the Bluetooth item opens quick settings' Bluetooth panel"
 awk '/id: touch$/,/^      }$/' "$b" | grep -c 'root.openQuickSettings()' >/dev/null || fail "a pull on the bar opens quick settings"
-grep -cF 'sourceComponent: CellularPanel {' "$b" >/dev/null || fail "the signal opens the mobile network card"
-grep -cF 'sourceComponent: TimePanel {' "$b" >/dev/null || fail "the clock opens the time card"
+grep -cF 'source: "CellularPanel.qml"' "$bs" >/dev/null || fail "the signal opens the mobile network card"
+grep -cF 'source: "TimePanel.qml"' "$bs" >/dev/null || fail "the clock opens the time card"
 for f in CellularPanel TimePanel; do
   grep -c '^Panel {' "plugins/omamobile.bar/$f.qml" >/dev/null && grep -c 'KeyboardPanel {' "plugins/omamobile.bar/$f.qml" >/dev/null || fail "$f is built on Omarchy's Panel and KeyboardPanel"
 done
@@ -348,9 +349,9 @@ grep -cF '"/.local/state/omarchy/notifications"' "$qs" >/dev/null || fail "the s
 grep -cF '"/.local/state/omarchy/notifications/history"' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar counts Omarchy's notification history"
 # The count sits beside the clock, not in the right-hand row: that row grows
 # leftwards with every glyph and its first item ended under the camera cutout.
-[ "$(awk '/^        Row \{$/,/^        \}$/' plugins/omamobile.bar/Bar.qml | grep -c 'id: status')" = 1 ] || fail "the bar's right-hand row isn't where this test looks"
-[ "$(awk '/^        Row \{$/,/^        \}$/' plugins/omamobile.bar/Bar.qml | grep -c 'unreadNotifications')" = 0 ] || fail "the unread count is in the bar's right-hand row again (it ends under the camera cutout)"
-awk '/objectName: "unreadNotifications"/,/radius:/' plugins/omamobile.bar/Bar.qml | grep -cF 'anchors.left: callChipPill.visible ? callChipPill.right : clockText.right' >/dev/null || fail "the unread count follows the clock (or the call chip)"
+[ "$(awk '/^    Row \{$/,/^    \}$/' plugins/omamobile.bar/BarStrip.qml | grep -c 'id: status')" = 1 ] || fail "the bar's right-hand row isn't where this test looks"
+[ "$(awk '/^    Row \{$/,/^    \}$/' plugins/omamobile.bar/BarStrip.qml | grep -c 'unreadNotifications')" = 0 ] || fail "the unread count is in the bar's right-hand row again (it ends under the camera cutout)"
+awk '/objectName: "unreadNotifications"/,/radius:/' plugins/omamobile.bar/BarStrip.qml | grep -cF 'anchors.left: callChipPill.visible ? callChipPill.right : clockText.right' >/dev/null || fail "the unread count follows the clock (or the call chip)"
 grep -cF '"/.local/state/omarchy/notifications/history.json"' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar counts Omarchy 4.5's history.json"
 # Omarchy 4.0's files and 4.5's live.json and history.json, chosen by what
 # exists: test/notifications-store.sh runs the shade's own commands on both.
@@ -1183,15 +1184,31 @@ fi
 # picked style, each icon has its switch, and the cell watcher follows its
 # switch (started and stopped by hand, not bound: the restart timer sets it).
 bar=plugins/omamobile.bar/Bar.qml
-grep -cF 'style: root.batteryStyle' "$bar" >/dev/null && grep -c '^ *BatteryIndicator {' "$bar" >/dev/null || fail "the bar draws BatteryIndicator in the picked style"
+strip=plugins/omamobile.bar/BarStrip.qml
+grep -cF 'style: bar.batteryStyle' "$strip" >/dev/null && grep -c '^ *BatteryIndicator {' "$strip" >/dev/null || fail "the bar draws BatteryIndicator in the picked style"
 for flag in showBluetooth showWifi showCell showDnd showUnread; do
-  grep -cE "visible: root\.$flag &&" "$bar" >/dev/null || fail "the bar hides an icon by $flag"
+  grep -cE "visible: bar\.$flag &&" "$strip" >/dev/null || fail "the bar hides an icon by $flag"
 done
 grep -cF 'onShowCellChanged: { if (!showCell) cellRestart.stop(); cellWatch.running = showCell }' "$bar" >/dev/null || fail "the cell watcher follows its switch"
 grep -cF 'Component.onCompleted: cellWatch.running = showCell' "$bar" >/dev/null || fail "the cell watcher starts with its switch"
 grep -cE '^ *running: (root\.)?showCell' "$bar" >/dev/null && fail "the cell watcher's running is not bound"
 if [[ -n ${OMAMOBILE_BAR_RENDER:-} ]]; then
   bash test/bar-render "$OMAMOBILE_BAR_RENDER" >/dev/null || fail "status bar render"
+fi
+# Nothing under the camera cutout: every item the strip may shed shows only
+# where StatusModel.fitBar keeps it (test/status-model.js has the order),
+# the bar hands the strip the cutout and the screen's size, and the strip
+# loads its cards by file, so test/bar-cutout-render can draw it offscreen.
+for id in call unread dnd bluetooth cell cellText wifi; do
+  grep -cE "visible: .*&& strip\.fit\.show\.$id\$" "$strip" >/dev/null || fail "the bar's $id shows only where it fits beside the cutout"
+done
+grep -cF 'showText: strip.fit.show.batteryText === true' "$strip" >/dev/null || fail "the battery's number goes where it doesn't fit"
+grep -cF 'readonly property var cutout: StatusModel.cutout(barConfig, deviceCutoutText)' "$bar" >/dev/null || fail "the bar reads bar.cutout and the device's file"
+grep -cF 'path: "/usr/share/omamobile/bar-cutout.json"' "$bar" >/dev/null || fail "a device package can describe its cutout"
+grep -cF 'screenHeight: barWindow.modelData ? barWindow.modelData.height : 0' "$bar" >/dev/null || fail "the strip knows the screen's way up"
+grep -cE '^ *(sourceComponent: )?(TimePanel|CellularPanel) \{' "$strip" >/dev/null && fail "the strip loads its cards by file"
+if [[ -n ${OMAMOBILE_BAR_CUTOUT_RENDER:-} ]]; then
+  bash test/bar-cutout-render "$OMAMOBILE_BAR_CUTOUT_RENDER" >/dev/null || fail "status bar beside the cutout, every text size"
 fi
 if command -v node >/dev/null; then
   node test/status-model.js >/dev/null || { node test/status-model.js; fail "status bar model"; }
