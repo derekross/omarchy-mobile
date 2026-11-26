@@ -13,7 +13,7 @@ polkit before it lets a user enroll.
 JSON lines:
 
   stdout  {"event": "fingers", "fingers": [...], "stages": N, "device": name}
-          {"event": "claimed"}      (polkit, if it asked, has been answered)
+          {"event": "claimed"}      (device claimed; enroll/delete still ask polkit)
           {"event": "started", "finger": "right-index-finger"}
           {"event": "status", "result": "enroll-stage-passed", "done": false}
           {"event": "done", "ok": true|false, "result": "enroll-completed"}
@@ -178,10 +178,11 @@ def main(argv):
             except dbus.DBusException:
                 pass
 
-    # Claim asks polkit (fprintd's enroll and delete actions) and can wait
-    # minutes for the user to answer the prompt, so everything from here runs
-    # asynchronously in the main loop: a cancel (stdin, SIGTERM, SIGINT) is
-    # heard at any point, also while polkit is still asking.
+    # EnrollStart and DeleteEnrolledFingers2 ask polkit (fprintd's enroll and
+    # delete actions) and can wait minutes for the user to answer the prompt,
+    # so everything from here runs asynchronously in the main loop: a cancel
+    # (stdin, SIGTERM, SIGINT) is heard at any point, also while polkit is
+    # still asking.
     def finish(code):
         state["code"] = code
         loop.quit()

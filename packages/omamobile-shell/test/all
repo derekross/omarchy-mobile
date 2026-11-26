@@ -459,6 +459,13 @@ python3 -c 'import json; assert {"id": "omamobile.fingerprint"} in json.load(ope
   || fail "the phone profile enables the fingerprint target"
 grep -c 'omamobile.fingerprint' plugins/omamobile.quicksettings/QuickSettings.qml >/dev/null \
   || fail "quick settings opens fingerprint setup"
+# Claim() does not prompt polkit; EnrollStart() and DeleteEnrolledFingers2()
+# right after do. Clearing authPending on "claimed" maps the overlay early
+# and covers squeekboard during the polkit PIN prompt.
+if sed -n '/if (ev\.event === "claimed")/,/} else if/p' plugins/omamobile.fingerprint/Fingerprint.qml \
+    | grep -c 'authPending = false' >/dev/null; then
+  fail "fingerprint overlay must stay hidden across claimed until polkit finishes"
+fi
 pass "fingerprint target wiring"
 
 # The on-screen keyboard watcher (squeekboard's sm.puri.OSK0 Visible).
