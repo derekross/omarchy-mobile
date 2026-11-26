@@ -5039,6 +5039,53 @@ Stock D1 A completed boot with enforcing verity and the
 original VBMeta digest. Ramoops and `SYSTEM_LAST_KMSG`
 matched all 26 filtered trial lines.
 
+##### Offline DPU wrapper power-vote fixture
+
+The exact D1 Grizzly tree assigns `dpu.v` resource `0x08`.
+The wrapper has no parent. The stock `power_controller.ko`
+uses its shared MBFS power callback for this resource.
+The callback sends a boolean write and, for firmware status 5,
+waits for completion matched by resource ID. The stock DPU
+wrapper has no separate register callback. The BE, FE0, FE1,
+DSI0, DSI1 and DP0 domains are descendants of the wrapper.
+
+Kernel `7.3.0-rc6-omamobile-grizzly-display-wrapper` at
+`bd43fcf44bd23f6262711e23f96c212bf9690dc7` keeps the early
+display CPM and MBFS reads. The boot parameter
+`clk_google_malibu_cpm.display_wrapper=1` enables the one-shot
+root-only trigger. The RAM initramfs invokes it after the UFS
+guard and SCSI retirement with the USB receiver started.
+The DVFS table query is disabled for this fixture so it
+cannot run between the ON and OFF requests.
+
+The trigger looks up and samples the AP client votes for
+the wrapper and all six descendants. It sends no write if
+any vote is already on or a required sample fails. With all
+seven off, the existing serialized MBFS helper sends a
+wrapper ON request, handles deferred completion and verifies
+readback. Only a confirmed ON is followed by OFF. A rejected
+or ambiguous request stops the diagnostic without retry.
+It logs both raw acknowledgement statuses and each available
+readback. These are client votes, not a measurement of the
+physical clocks, SMMU, or scanout. The diagnostic changes only
+the wrapper vote and does not exercise the panel or DSI PHY.
+
+The ARM64 build and style check passed. Mocks covered immediate
+and deferred completion, inherited votes, a failed sample,
+rejection, mismatched readback, timeouts and repeated triggers.
+An ARM64 VM verified the packaged initramfs script and Grizzly
+board gate without exercising hardware. Five image hashes,
+both AVB signatures, handoff bounds and saved slot-fit checks
+passed. The manifest SHA-256 is
+`ffe6b8cf364a8f251797a31765aa96e402b143ac2a6786464089343afd56c2f4`.
+
+For an attended test, use a fresh verified NV backup and
+the existing timed stock A return. Capture all seven initial
+votes and the wrapper acknowledgement, completion and readback
+for any ON/OFF requests. An inherited vote or an ambiguous
+transition is a reason to end the trial without exercising
+child domains.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

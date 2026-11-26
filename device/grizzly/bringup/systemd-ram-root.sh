@@ -120,6 +120,17 @@ boot() {
             fi
         ) &
     fi
+    wrapper=/sys/devices/platform/system-controller/display_wrapper
+    if [ -w "$wrapper" ]; then
+        (
+            log 'display-wrapper: vote cycle start'
+            if printf 'run\n' > "$wrapper"; then
+                log 'display-wrapper: vote cycle returned'
+            else
+                log 'display-wrapper: vote cycle failed'
+            fi
+        ) &
+    fi
     while [ ! -f "$control/handoff" ]; do "$bb" sleep 1; done
     "$bb" sleep 1
     ready && [ -f "$image" ] || hold 'handoff refused'
