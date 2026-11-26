@@ -5781,6 +5781,48 @@ B boot request. Stock D1 A completed boot with enforcing
 verity and the original VBMeta digest. Ramoops and
 `SYSTEM_LAST_KMSG` matched the filtered capture.
 
+##### Offline DSI0 genpd and MBFS trace follow-up
+
+The passive trial captured the existing host read and its
+successful runtime resume. Its nine-entry ring contained
+zero matching `power_domain_target` or CCF clock events.
+The follow-up keeps those filters and adds the stock
+`power_controller` events `send_mail_mbfs` and
+`recv_result_mbfs`. Both trace event field tables in the
+audited D1 module expose `pm_resource_id` as a 32-bit field.
+The filters select wrapper `0x08`, BE `0x200` and DSI0
+`0x203`. The host checker reports match timestamps, requests
+and stock driver return values before the `pwr_up` read.
+
+After the NV guard and trace arm, PID 1 also samples the
+three named genpd `current_state` files from read-only
+debugfs before display modules load. The log records each
+validated state or `unavailable`. This can distinguish a
+domain already on from one with an observed probe-time
+vote. A missing snapshot leaves the trace running. Missing
+MBFS trace support fails arming before display load. The
+one-shot stop, NV guard and independent 90-second return
+remain in place. The instrumentation adds no power or
+clock requests and no host register access.
+
+In QEMU, the exact D1 kernel accepted the resource filter
+against a synthetic event with the same field type. The
+stock helper kept a pre-existing instance and removed a
+partial instance when the vendor events were absent.
+Offline parser checks replayed the retained physical trace,
+correlated synthetic MBFS events with it and rejected a
+malformed reply. The protected power-controller events and
+genpd snapshots still need hardware validation. This
+fixture cannot independently read the APB gate or external
+reset state.
+
+The packaged sequel uses `pack-stock-inventory.py --dsi0-trace`.
+The five hashes, replacement `init_boot` AVB signature, ABL
+handoff bounds and saved D1 slot fit passed. The remaining
+four images match the attended passive fixture byte for
+byte. The `SHA256SUMS` digest is
+`e085554efae30ea3980af98ae9e2c27241fff8ad63872ad9ef0afdd15256dfcd`.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

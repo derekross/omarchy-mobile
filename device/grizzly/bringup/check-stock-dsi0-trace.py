@@ -16,6 +16,8 @@ ROW = re.compile(
 )
 STATUS = re.compile(rf"{re.escape(HOST)}\S* reg=0?c val=([0-9a-fA-F]+)$")
 RESUME_RETURN = re.compile(rf"rpm_resume(?:\+\S+)?\s*:{re.escape(HOST)} ret=(-?\d+)$")
+MBFS = re.compile(r"(0x[0-9a-f]+):\S+\s+en:([01])(?:\s+\(res:(-?\d+)\))?$")
+MBFS_DOMAINS = {0x08: "wrapper", 0x200: "BE", 0x203: "DSI0"}
 
 
 def summarize(trace):
@@ -43,6 +45,7 @@ def summarize(trace):
     resumes = []
     returns = []
     domain_events = clock_events = 0
+    mbfs_events = 0
     for timestamp, index, pid, event, body in sorted(timeline):
         if (timestamp, index) >= (read_time, read_index):
             break
@@ -50,6 +53,17 @@ def summarize(trace):
         if event == "power_domain_target" and name in DOMAINS:
             print(f"{timestamp} genpd {body}")
             domain_events += 1
+        elif event in ("send_mail_mbfs", "recv_result_mbfs"):
+            vote = MBFS.fullmatch(body)
+            if not vote or (event == "recv_result_mbfs") != (vote[3] is not None):
+                raise ValueError("unexpected stock MBFS event format")
+            resource = int(vote[1], 16)
+            if resource not in MBFS_DOMAINS:
+                continue
+            result = "" if vote[3] is None else f" result={vote[3]}"
+            print(f"{timestamp} MBFS {event} {MBFS_DOMAINS[resource]} "
+                  f"resource={resource:#x} on={vote[2]}{result}")
+            mbfs_events += 1
         elif event in ("clk_enable", "clk_disable", "clk_set_rate") and ("dsi" in name or "dpu" in name):
             print(f"{timestamp} CCF {event} {body}")
             clock_events += 1
@@ -68,6 +82,7 @@ def summarize(trace):
                       and returns[-1][1] >= 0)
     print(f"runtime_resume_correlated={'yes' if correlated else 'no'} "
           f"genpd_events={domain_events} ccf_events={clock_events}")
+    print(f"mbfs_events={mbfs_events}")
     print("APB clock and external reset state require separate evidence.")
     return correlated
 

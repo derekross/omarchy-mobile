@@ -443,6 +443,25 @@ stock_inventory_modules() (
     esac
 )
 
+log_dsi0_genpd() (
+    debugfs=/grizzly-inventory/dsi0-debugfs
+    "$bb" mkdir -m 0700 "$debugfs" || return 1
+    if ! "$bb" mount -t debugfs -o ro,nosuid,nodev,noexec,mode=0700 debugfs "$debugfs"; then
+        "$bb" rmdir "$debugfs"
+        return 1
+    fi
+    trap '"$bb" umount "$debugfs" && "$bb" rmdir "$debugfs"' 0
+    for domain in sswrp_dpu_pd dpu_be_pd dpu_dsi0_pd; do
+        state=unavailable
+        path=$debugfs/pm_genpd/$domain/current_state
+        if [ -r "$path" ] && IFS= read -r sampled < "$path" &&
+           "$bb" echo "$sampled" | "$bb" grep -Eq '^(on|off-[0-9]+)$'; then
+            state=$sampled
+        fi
+        stock_inventory_log "DSI0 genpd pre-load domain=$domain state=$state" || return 1
+    done
+)
+
 run_stock_dsi0_trace() (
     tracefs=/grizzly-inventory/dsi0-tracefs
     instance=$tracefs/instances/grizzly_dsi0
@@ -455,9 +474,10 @@ run_stock_dsi0_trace() (
     trap 'if [ "$armed" = yes ]; then "$bb" rmdir "$instance"; fi
           "$bb" umount "$tracefs" && "$bb" rmdir "$tracefs"' 0
 
-    "$bb" sh /grizzly-inventory/stock-dsi0-trace.sh "$tracefs" "$bb" || return 1
+    "$bb" sh /grizzly-inventory/stock-dsi0-trace.sh "$tracefs" "$bb" --mbfs || return 1
     armed=yes
     stock_inventory_log 'DSI0 trace armed before display module load' || return 1
+    log_dsi0_genpd || stock_inventory_log 'DSI0 genpd pre-load snapshot unavailable'
     stock_inventory_modules load "$dsi0_manifest" || return 1
 
     for wait in 1 2 3 4 5 6 7 8; do
@@ -469,7 +489,7 @@ run_stock_dsi0_trace() (
     # Preserve the tracefs header and scoped rows for offline correlation.
     capture=$("$bb" awk '
         NR > 128 || length($0) > 512 { invalid=1; exit }
-        /entries-in-buffer\/entries-written:|: (regmap_reg_read|power_domain_target|rpm_resume|rpm_return_int|rpm_status|clk_enable|clk_disable|clk_set_rate): / {
+        /entries-in-buffer\/entries-written:|: (regmap_reg_read|power_domain_target|rpm_resume|rpm_return_int|rpm_status|clk_enable|clk_disable|clk_set_rate|send_mail_mbfs|recv_result_mbfs): / {
             print
         }
         /: regmap_reg_read: / { reads++ }

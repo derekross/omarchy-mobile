@@ -3,8 +3,9 @@
 # Run on stock D1 with tracefs already mounted, before loading the display driver.
 set -eu
 
-if [ "$#" -ne 2 ] || [ ! -f "$1/available_events" ] || [ ! -d "$1/instances" ] || [ ! -x "$2" ]; then
-    echo 'usage: stock-dsi0-trace.sh TRACEFS_MOUNT BUSYBOX' >&2
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ] || [ ! -f "$1/available_events" ] ||
+   [ ! -d "$1/instances" ] || [ ! -x "$2" ] || [ "${3:---mbfs}" != --mbfs ]; then
+    echo 'usage: stock-dsi0-trace.sh TRACEFS_MOUNT BUSYBOX [--mbfs]' >&2
     exit 2
 fi
 bb=$2
@@ -53,6 +54,13 @@ enable_event power/power_domain_target "$domains"
 for event in clk_enable clk_disable clk_set_rate; do
     enable_event "clk/$event" "$clocks"
 done
+if [ "${3:-}" = --mbfs ]; then
+    # Stock D1 power_controller.ko exposes the resource as a u32 in both events.
+    resources='pm_resource_id == 8 || pm_resource_id == 512 || pm_resource_id == 515'
+    for event in send_mail_mbfs recv_result_mbfs; do
+        enable_event "power_controller/$event" "$resources"
+    done
+fi
 
 # Stop this instance after the existing driver records its first status read.
 "$bb" echo "traceoff:1 if $status" > "$instance/events/regmap/regmap_reg_read/trigger"
