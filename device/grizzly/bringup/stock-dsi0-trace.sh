@@ -87,7 +87,10 @@ clocks='name ~ "*dsi*" || name ~ "*dpu*"'
 
 reads=$status
 if [ "$mode" = --apb-reset ]; then
-    reads='name ~ "f7d8000.dsi2host*" && (reg == 0 || reg == 4 || reg == 12)'
+    host_reads='name ~ "f7d8000.dsi2host*" && (reg == 0 || reg == 4 || reg == 12)'
+    # 28964 is the PHY init callback's existing register offset, 0x7124.
+    phy_read='name == "f7c0000.dw_mipi_cdphy" && reg == 28964'
+    reads="($host_reads) || ($phy_read)"
 fi
 enable_event regmap/regmap_reg_read "$reads"
 for event in rpm_resume rpm_return_int rpm_status; do
@@ -120,5 +123,6 @@ fi
 "$bb" echo 1 > "$instance/tracing_on"
 if [ "$mode" = --apb-reset ]; then
     "$bb" echo 'DSI0 CPM provider probes armed' > "$instance/trace_marker"
+    "$bb" echo 'DSI0 PHY init read trace armed' > "$instance/trace_marker"
 fi
 trap - 0

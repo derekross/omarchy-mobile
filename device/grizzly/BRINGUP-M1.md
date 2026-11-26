@@ -6231,6 +6231,37 @@ measures stock's observed ordering and supplies no minimum
 settle time for mainline. Keep the host reads disabled
 pending an independent readiness check.
 
+##### Offline stock D1 DSI0 PHY init trace
+
+The D1 B0 merge maps the first CD-PHY resource
+(`cdphy-tx`) at AP `0x0f7c0000` and gives it the same
+`DpuDsi0.v` power domain as the host. In exact D1
+`mipi-cdphy.ko`, `dw_dphy_init_g301` calls
+`regmap_read` at `0x2f0` using the first resource's
+regmap and offset `0x7124`. It saves bit 8 in the
+PHY instance. The host probe calls this callback via
+`phy_init` before its host ID and version reads.
+
+The `--dsi0-trace` bundle now includes that existing
+PHY read in the tracefs filter. The checker correlates
+it on the task that reads `pwr_up` and reports the raw
+word and bit 8. The filter excludes DSI1. The NV guard
+still precedes display module load and the independent
+90-second return is preserved. The trace adds no
+register accesses and cannot qualify a mainline read of
+the host, APB gate or external reset.
+
+Offline validation replayed the previous hardware capture
+with identical output. A synthetic capture correlated a
+DSI0 PHY read and rejected DSI1 and an unrelated task.
+The four unchanged boot images match the previous stock
+clock/reset trial byte for byte. The replacement
+`init_boot` SHA-256 is
+`86f034c3e44dd775743b8c9704f99ff58d746d8f2019a857a1559eb7993a5ab0`.
+All five image hashes and the saved D1 slot-fit and
+handoff checks passed. The new event still needs an
+attended stock trace to confirm capture on hardware.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

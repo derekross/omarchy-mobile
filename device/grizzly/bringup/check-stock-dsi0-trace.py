@@ -16,6 +16,7 @@ ROW = re.compile(
     r"(?P<time>\d+\.\d+):\s+(?P<event>\w+):\s+(?P<body>.*)"
 )
 REGISTER = re.compile(rf"{re.escape(HOST)}\S* reg=([0-9a-f]+) val=([0-9a-fA-F]+)$")
+PHY_INIT = re.compile(r"f7c0000\.dw_mipi_cdphy reg=0*7124 val=([0-9a-fA-F]+)$")
 RESUME_RETURN = re.compile(rf"rpm_resume(?:\+\S+)?\s*:{re.escape(HOST)} ret=(-?\d+)$")
 MBFS = re.compile(r"(0x[0-9a-f]+):\S+\s+en:([01])(?:\s+\(res:(-?\d+)\))?$")
 MBFS_DOMAINS = {0x08: "wrapper", 0x200: "BE", 0x203: "DSI0"}
@@ -57,6 +58,8 @@ def summarize(trace):
     returns = []
     identity = {}
     cpm_armed = False
+    phy_armed = False
+    phy_reads = 0
     cpm_pending = defaultdict(list)
     cpm_calls = {"clk": 0, "rst": 0}
     cpm_results = {"clk": 0, "rst": 0}
@@ -68,6 +71,8 @@ def summarize(trace):
         name = body.split(maxsplit=1)[0] if body else ""
         if event == "tracing_mark_write" and body == "DSI0 CPM provider probes armed":
             cpm_armed = True
+        elif event == "tracing_mark_write" and body == "DSI0 PHY init read trace armed":
+            phy_armed = True
         elif probe := CPM_EVENT.fullmatch(event):
             kind, phase = probe.groups()
             pending = cpm_pending[pid, kind]
@@ -91,6 +96,10 @@ def summarize(trace):
                         cpm_results[kind] += 1
                         print(f"{timestamp} display CPM {kind} result pid={pid} "
                               f"lpcm={lpcm:#x} id={resource:#x} op={op} result={result[1]}")
+        elif event == "regmap_reg_read" and pid == read_pid and (sample := PHY_INIT.fullmatch(body)):
+            phy_value = int(sample[1], 16)
+            phy_reads += 1
+            print(f"{timestamp} DSI0 PHY reg=0x7124 value={phy_value:#010x} bit8={(phy_value >> 8) & 1}")
         elif event == "regmap_reg_read" and pid == read_pid and (register := REGISTER.fullmatch(body)):
             offset, reg_value = (int(field, 16) for field in register.groups())
             if offset in (0, 4):
@@ -129,6 +138,8 @@ def summarize(trace):
     print(f"runtime_resume_correlated={'yes' if correlated else 'no'} "
           f"genpd_events={domain_events} ccf_events={clock_events}")
     print(f"mbfs_events={mbfs_events}")
+    if phy_armed:
+        print(f"dsi0_phy_reads_on_host_task={phy_reads}")
     if cpm_armed:
         print(f"display_cpm_clock_calls={cpm_calls['clk']} results={cpm_results['clk']} "
               f"display_cpm_reset_calls={cpm_calls['rst']} results={cpm_results['rst']}")
