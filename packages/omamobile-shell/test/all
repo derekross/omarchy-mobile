@@ -302,22 +302,19 @@ grep -c 'anchors.bottom: createFooter.top' $h/HomeSheets.qml >/dev/null || fail 
 pass "touch navigation: back, home pill, drawer pull, undo, fields in view"
 
 # The bar's cards: a tap on an item opens its card as a click does in Omarchy's
-# bar (Omarchy's own power and network panels, loaded unchanged; quick
-# settings' Bluetooth panel; the time and mobile network cards built from
-# Omarchy's panel parts), every
+# bar (Omarchy's own power, network and Bluetooth panels, loaded unchanged;
+# the time and mobile network cards built from Omarchy's panel parts), every
 # item is a click target so an open card hands a tap on another item to it,
 # and only a pull opens quick settings.
 b=plugins/omamobile.bar/Bar.qml
-for panel in power network; do
+for panel in power network bluetooth; do
   grep -cF "\"/shell/plugins/panels/$panel/Panel.qml\"" "$b" >/dev/null || fail "the bar loads Omarchy's own $panel panel"
 done
 [[ $(grep -c 'Component.onCompleted: root.clickTargets = root.clickTargets.concat(\[this\])' "$b") == 5 ]] || fail "all five items are click targets of an open card"
 [[ $(grep -c 'function triggerPress(button)' "$b") == 5 ]] || fail "a tap an open card hands on opens that item's card"
 awk '/id: touch$/,/^      }$/' "$b" | grep -cF 'onClicked: if (!pulled && !root.cardsOnTap) root.toggleQuickSettings()' >/dev/null || fail "a tap on the strip toggles quick settings only with bar.cardsOnTap off"
 grep -cF 'readonly property bool cardsOnTap: setting("cardsOnTap", false) === true' "$b" >/dev/null || fail "the cards are behind bar.cardsOnTap, off by default"
-[[ $(grep -c 'enabled: root.cardsOnTap' "$b") == 5 && $(grep -c 'active: root.cardsOnTap' "$b") == 4 ]] || fail "with bar.cardsOnTap off no item takes a tap and no card is loaded"
-grep -cF "panels/bluetooth/Panel.qml" "$b" >/dev/null && fail "the Bluetooth item opens quick settings' panel, not Omarchy's card"
-grep -cF 'shell.summon(quickSettingsId, JSON.stringify({ source: "bar", page: "bluetooth" }))' "$b" >/dev/null || fail "the Bluetooth item opens quick settings' Bluetooth panel"
+[[ $(grep -c 'enabled: root.cardsOnTap' "$b") == 5 && $(grep -c 'active: root.cardsOnTap' "$b") == 5 ]] || fail "with bar.cardsOnTap off no item takes a tap and no card is loaded"
 awk '/id: touch$/,/^      }$/' "$b" | grep -c 'root.openQuickSettings()' >/dev/null || fail "a pull on the bar opens quick settings"
 grep -cF 'sourceComponent: CellularPanel {' "$b" >/dev/null || fail "the signal opens the mobile network card"
 grep -cF 'sourceComponent: TimePanel {' "$b" >/dev/null || fail "the clock opens the time card"
