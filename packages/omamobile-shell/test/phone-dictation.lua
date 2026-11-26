@@ -13,7 +13,7 @@ local noop = function() end
 local binds = {}
 local function dsp(name) return function(arg) return { dsp = name, arg = arg } end end
 hl = {
-  config = noop, window_rule = noop, layer_rule = noop, device = noop,
+  config = noop, window_rule = noop, layer_rule = noop, animation = noop, curve = noop, device = noop,
   unbind = function(keys)
     local kept = {}
     for _, b in ipairs(binds) do if b.keys ~= keys then kept[#kept + 1] = b end end
