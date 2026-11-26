@@ -5650,6 +5650,61 @@ identical to the tested DSI0 rate fixture, preserving the UFS
 guard, USB SSH and timed return. The `SHA256SUMS` digest is
 `f68686c9fc117351e65d00e7584a14329293ae55ee201c031affcf7275c24da7`.
 
+##### Offline passive stock D1 DSI0 trace
+
+The retained stock boot log reports `vs_mipi_dsi2h_resume:
+bridge not ready` before the `dt=0 reg=0` handoff message.
+That runtime resume returns before link programming. The
+existing status read is still the stock driver's read of
+`pwr_up` at host offset `0x0c`.
+
+The exact D1 GKI has `CONFIG_BOOT_CONFIG=y` and
+`CONFIG_BOOTTIME_TRACING` disabled. The kernel accepted an
+offline bootconfig payload but created no ftrace instance.
+Use [stock-dsi0-trace.sh](bringup/stock-dsi0-trace.sh) from
+a privileged early caller after mounting proc and tracefs and
+before releasing the stock display module loader. Pass the
+tracefs mount and the retained rescue BusyBox executable.
+The helper checks the D1 kernel release and refuses a loaded
+`vs_drm` or `mipi_dsi2h` module or an existing trace instance.
+The caller must serialize arming with the loader.
+
+The helper arms a private `grizzly_dsi0` trace instance on
+`mono` with 64 KiB per CPU. It filters `regmap_reg_read` to the
+DSI0 host at offset `0x0c` and installs a one-shot stop trigger
+for that same read. It captures `power_domain_target` for the
+wrapper, BE and DSI0 domains, DSI0 runtime resume, return and
+status events, and Common Clock Framework enable, disable and
+rate events with DSI or DPU names. It loads no modules and sends
+no register reads, power votes, clock or reset requests.
+
+After the stock probe, confirm that the instance's
+`tracing_on` file reports `0`, then copy its `trace` file to
+the private host workspace. Run
+`python3 device/grizzly/bringup/check-stock-dsi0-trace.py TRACE`
+from the repository root. The checker rejects an overrun or
+missing status read. It orders the retained target and clock
+events and correlates the host read with a successful runtime
+resume in the same task. Keep the raw trace private. Remove
+the instance after capture.
+
+The D1 kernel exposes Common Clock Framework events and no
+host reset-control trace event. The DSI0 pixel clock and PHY
+PLL reference do not identify a host APB gate. A reported
+genpd target, runtime resume or `pwr_up` value supplies no
+independent APB clock or external reset evidence. A missing
+trace event also cannot rule out clock or reset actions inside
+firmware.
+
+An offline QEMU run used the unmodified D1 stock kernel and
+verified all eight event filters, the one-shot trigger and
+duplicate-instance rejection. Synthetic traces checked
+successful correlation, same-timestamp ordering, overrun,
+failed resume and missing status. QEMU has no Grizzly display
+host. The helper and checker are ready for integration with
+an early stock boot path. Physical capture and APB clock and
+reset evidence remain pending.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
