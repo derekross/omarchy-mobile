@@ -153,7 +153,7 @@ rm -f "$rf"; MONJSON=$cur rot | grep -c 'mode = "1344x2992@60.00"' >/dev/null ||
 echo junk > "$rf"; MONJSON=$cur rot | grep -c 'mode = "1344x2992@60.00"' >/dev/null || fail "autorotate keeps the current rate when the saved file is junk"
 echo 90 > "$rf"; MONJSON=$cur rot | grep -c 'mode = "1344x2992@60.00"' >/dev/null || fail "autorotate keeps the current rate when the saved rate is unlisted"
 # the rate file is one bare number of 1 to 3 digits and at most one trailing newline
-for bad in '60 ' ' 60' '060x' '0060' '060' '0' '6e1' '60\n\n' '60\nfoo' ''; do
+for bad in '60 ' ' 60' '060x' '0060' '060' '0' '60\r\n' '60\r' '\xff60' '60\xe9\n' '6e1' '60\n\n' '60\nfoo' ''; do
   printf "$bad" > "$rf"
   HOME="$tmp/home" OMAMOBILE_RATE_DEFAULT_FILE="$tmp/no-default" PYTHONPATH=lib python3 -c '
 import autorotate as a

@@ -101,14 +101,15 @@ def current_mode(m):
 def _read_rate(path):
     """A bare number of 1 to 3 digits, no leading zero, with at most one trailing newline, else None; the same
     rule as read_rate in omamobile-settings' display.sh."""
+    # bytes, not text: text mode would turn "120\r\n" into "120\n" and fail on bytes that are not UTF-8
     try:
-        with open(path) as f:
-            text = f.read()
+        with open(path, 'rb') as f:
+            data = f.read()
     except OSError:
         return None
-    if text.endswith('\n'):
-        text = text[:-1]
-    return int(text) if re.fullmatch(r'[1-9][0-9]{0,2}', text) else None
+    if data.endswith(b'\n'):
+        data = data[:-1]
+    return int(data) if re.fullmatch(rb'[1-9][0-9]{0,2}', data) else None
 
 
 def _token(m, want):
