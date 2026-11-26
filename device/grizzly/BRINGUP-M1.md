@@ -4573,6 +4573,72 @@ Stock D1 A restarted at 07:57:33 UTC and completed boot with
 enforcing verity and the original VBMeta digest. Ramoops and
 `SYSTEM_LAST_KMSG` agree on all 45 filtered trial lines.
 
+### Offline D1 display handoff and first frame
+
+The retained D1 stock `vendor_kernel_boot` holds two base FDTs.
+The B0 tree starts at DTB container offset `0x82d70`. Applying
+entry 19 (`0x80506`, revision `0x10000`) from the retained
+USB-isolation DTBO produces `GRIZZLY MP based on MALIBU`.
+Entry 28 is the same board ID at revision `0x10001` and
+describes the same DSI0 and panel choices. These are offline
+merges. The exact selection and firmware fixups on a live D1
+boot remain to be captured.
+
+Both base FDTs, the merged B0 tree and the v73 fixture have no
+`simple-framebuffer` node, no child under `/chosen` and no named
+boot framebuffer reservation. The v73 kernel builds simpledrm
+in, but the retained console from the live SSH trial has no
+framebuffer registration. An earlier D1 ABL trace reaches
+display PHY power-off in the final callback. The G logo does
+not establish that Linux inherits a writable scanout buffer.
+Leave the framebuffer address, stride and format unspecified.
+
+D1's supplier display stack has a separate power handoff.
+In the stock 4 KiB-page GKI module set,
+`mipi-dsi2h.ko`'s `_dsi_has_power_during_handoff_dt` follows the first
+`power-domains` phandle and checks `google,boot-stay-on`.
+After a runtime PM get, `dw_mipi_dsi2h_probe` reads DSI
+register `0x0c` bit 0 and logs
+`DSI power handoff from bootloader: dt=%d reg=%d`. It keeps
+the handoff vote when both are set. `vs_drm.ko` also checks
+`google,boot-stay-on` on its power domains. The flag is absent
+from both base FDTs and all 55 entries in the retained DTBO.
+The local D1 ABL binary is unavailable, so these files cannot
+establish whether firmware adds the flag at runtime. The
+flag would establish power state, not a framebuffer layout.
+
+| Stage | D1 evidence |
+| --- | --- |
+| Scanout | `verisilicon,dc9x00` at `0x0f600000`, GPCSR at `0x0f790000`. FE0 and BE sit behind the DPU wrapper. Display SMMU at `0x0f190000` serves the DPU's stream IDs `0x8000` through `0x801f` with nested translation in the stock tree. |
+| Power and clocks | CPM MBFS `dpu.v` (`0x08`) is the parent of `DpuBe.v` (`0x200`). `DpuFe0.v` (`0x201`) and `DpuDsi0.v` (`0x203`) hang off BE. Stock BE, FE0 and DSI0 pixel clock definitions use LPCM `0x23`. |
+| DSI0 and PHY | `verisilicon,dc9x00-mipi-dsi2h` at `0x0f7d8000` uses the Synopsys G301 C/D-PHY in D-PHY mode at `0x0f7c0000`. Four lanes, 38.4 MHz PLL reference, DT data rate `0x56e`. DSI0 IRQ uses input `0x14` on the display multicast aggregator at `0x0f46e060`. DSI1 is disabled. |
+| Panel | The DSI0 connector prefers `google,gs-cgyda` (`panel-gs-pkcgda.ko`, stock modes include 1280×2856). The alternate is `google,gs-bzea` (`panel-gs-bmea.ko`). The board routes VDDI to BUCK12S, VCI to LDO18S, VDDD to S2DOS07x02, and reset to DA9188 GPIO 11. The overlay preference alone cannot identify the fitted panel. |
+
+The stock ramdisk carries `vs_drm`, `mipi-dsi2h`,
+`mipi-cdphy`, and the Google connector and panel modules.
+They target the D1 GKI ABI. The v73 fixture lacks a native
+Malibu display binding and its GS201 DECON/DSIM drivers do
+not match this pipeline. The CGYDA driver registers
+`gs_panel_prepare_with_reset`, which calls the common panel
+prepare helper before the pre-enable reset. Its enable path
+handles panel-specific DCS initialization, DSC configuration,
+TE setup and mode programming. The DT alone does not supply
+that sequence or the mode parameters.
+
+First qualify the powered DSI0 path and panel identity with
+stock DT and driver evidence. Capture the firmware's live
+power handoff flags if available. Any later DSI status read
+needs a bound driver and confirmed runtime power, as in the
+stock probe. For the first native frame, qualify FE0/BE
+power and clock votes and the DSI0 link. Stock `vs_drm.ko`
+has `vs_dc_enable_display_pattern` calling
+`dc_hw_set_display_pattern`. Trace the pattern's placement in
+the pipeline before relying on it to avoid scanout DMA. For a
+RAM-backed test frame, qualify the display SMMU mapping first.
+Require a visible frame and frame-done evidence before adding
+touch or Hyprland. Carry forward USB SSH and the timed stock A
+return. Keep UFS read-only and unmounted.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
