@@ -1,0 +1,200 @@
+// SPDX-License-Identifier: MIT
+// The Bluetooth panel's state and actions (BluetoothPanel.qml from its
+// lifecycle section to its surface, spliced in at @PANEL@ by
+// test/bluetooth-pairable.py) against a stand-in adapter and helper: when
+// the panel turns pairing (BlueZ's Pairable) on and off.
+import QtQuick
+import QtTest
+import "quicksettings/BluetoothModel.js" as BluetoothModel
+
+TestCase {
+    id: test
+    name: "BluetoothPairable"
+    when: windowShown
+    visible: true
+    width: 100
+    height: 100
+
+  // The panel's root, as in BluetoothPanel.qml (its code says root.x).
+  Item {
+    id: root
+    property bool opened: false
+    property var adapter: fake
+    property bool powerPending: false
+    signal backRequested()
+    signal powerToggleRequested()
+    readonly property int visibleSeconds: 120
+    property alias agentProcess: agent
+
+    // Quickshell.Io's Process and SplitParser, as far as the panel uses them.
+    component Process: QtObject {
+        property var command: []
+        property bool running: false
+        property bool stdinEnabled: false
+        property var stdout: null
+        property var written: []
+        signal exited(int exitCode)
+        function write(text) { written = written.concat([JSON.parse(text)]) }
+    }
+    component SplitParser: QtObject {
+        signal read(string data)
+    }
+
+    // Quickshell's BluetoothAdapter: plain properties, every write logged.
+    QtObject {
+        id: fake
+        property bool enabled: true
+        property bool pairable: false
+        property int pairableTimeout: 0
+        property bool discoverable: false
+        property int discoverableTimeout: 180
+        property bool discovering: false
+        property var devices: null
+        property string name: "Phone"
+        property var writes: []
+        onPairableChanged: writes = writes.concat([["pairable", pairable]])
+        onPairableTimeoutChanged: writes = writes.concat([["pairableTimeout", pairableTimeout]])
+    }
+
+    // One device in range, as Quickshell's BluetoothDevice.
+    QtObject {
+        id: device
+        property string address: "AA"
+        property string name: "Headphones"
+        property string deviceName: ""
+        property string icon: ""
+        property bool connected: false
+        property bool paired: false
+        property bool bonded: false
+        property bool trusted: false
+        property bool pairing: false
+        property bool batteryAvailable: false
+        property real battery: 0
+        property int pairCalls: 0
+        function pair() { pairCalls++ }
+        function connect() {}
+    }
+
+    Item { id: panel }
+    TextInput { id: codeField }
+    TextInput { id: renameField }
+
+    @PANEL@
+  }
+
+    function pairableCommands() {
+        return root.agentProcess.written.filter(function(c) { return c.cmd === "pairable" }).map(function(c) { return c.on })
+    }
+    function last(list) { return list.length ? list[list.length - 1] : undefined }
+    function ready() { root.agentProcess.stdout.read(JSON.stringify({ event: "ready", adapter: "/org/bluez/hci0" })) }
+
+    function init() {
+        if (root.opened) root.close()
+        fake.pairable = false
+        fake.pairableTimeout = 0
+        fake.discoverable = false
+        fake.writes = []
+        fake.devices = null
+        root.agentProcess.written = []
+        root.actionKind = ""
+        root.visibleRemaining = 0
+    }
+
+    function test_helperOwnsPairableWhenItWasOff() {
+        root.open()
+        verify(root.pairableOwned)
+        compare(JSON.stringify(root.agentProcess.command), JSON.stringify(["omamobile-bt-agent", "--pairable-window", "120"]))
+        // Registering the agent turns Pairable on in BlueZ: the panel asks for off.
+        ready()
+        compare(last(pairableCommands()), false)
+        root.close()
+    }
+
+    function test_onOnlyWhileVisible() {
+        root.open(); ready(); root.agentProcess.written = []
+        root.setVisible(true)
+        compare(last(pairableCommands()), true, "on with visibility")
+        // The panel itself never writes Pairable on while the helper is there.
+        verify(!fake.writes.some(function(w) { return w[0] === "pairable" && w[1] === true }))
+        root.setVisible(false)
+        compare(last(pairableCommands()), false, "off when the owner ends it")
+        root.setVisible(true)
+        compare(last(pairableCommands()), true)
+        // The countdown reaching 0 ends it too.
+        root.visibleRemaining = 1
+        root.visibleRemaining = 0
+        compare(last(pairableCommands()), false, "off when the window ends")
+        root.setVisible(true)
+        // BlueZ ending visibility (its DiscoverableTimeout) ends it.
+        fake.discoverable = false
+        compare(root.visibleRemaining, 0)
+        compare(last(pairableCommands()), false, "off when BlueZ ends visibility")
+        root.close()
+    }
+
+    function test_offWhenPanelCloses() {
+        root.open(); ready()
+        root.setVisible(true)
+        fake.pairable = true      // BlueZ, after the helper's on
+        root.agentProcess.written = []
+        root.close()
+        compare(last(pairableCommands()), false, "the helper is told before it stops")
+        verify(!root.agentProcess.running)
+        compare(fake.pairable, false, "and the panel writes it off itself")
+        verify(!root.pairableOwned)
+    }
+
+    function test_offWhenHelperExits() {
+        root.open(); ready()
+        root.setVisible(true)
+        fake.pairable = true
+        root.agentProcess.running = false
+        root.agentProcess.exited(1)
+        compare(fake.pairable, false, "off when the helper exits")
+        // Visibility alone doesn't turn it back on without an agent.
+        root.setVisible(true)
+        compare(fake.pairable, false)
+        root.close()
+    }
+
+    function test_pairingFromThePanel() {
+        root.open(); ready(); root.agentProcess.written = []
+        root.pairDevice("AA")
+        var cmds = root.agentProcess.written.map(function(c) { return c.cmd })
+        verify(cmds.indexOf("pairable") >= 0 && cmds.indexOf("pairable") < cmds.indexOf("pair"), "pairable before pair: " + cmds)
+        compare(last(pairableCommands()), true)
+        root.finishAction()
+        compare(last(pairableCommands()), false, "off after the pairing")
+        root.pairDevice("AA")
+        root.fail("AA", "Pairing failed")
+        compare(last(pairableCommands()), false, "off after a failed pairing")
+        root.close()
+    }
+
+    function test_withoutHelper() {
+        fake.devices = { values: [device] }
+        root.open()          // no ready: the helper isn't there
+        root.setVisible(true)
+        compare(fake.pairable, false, "visibility alone doesn't turn it on with nothing to answer")
+        root.pairDevice("AA")
+        compare(fake.pairableTimeout, 120, "BlueZ's timeout first")
+        compare(fake.pairable, true, "the owner's own pairing keeps its key")
+        compare(device.pairCalls, 1)
+        root.fail("AA", "Device out of range")
+        compare(fake.pairable, false)
+        root.close()
+    }
+
+    function test_ownersPairableLeftAlone() {
+        fake.pairable = true      // AlwaysPairable, or the owner's own agent
+        root.open()
+        verify(!root.pairableOwned)
+        compare(JSON.stringify(root.agentProcess.command), JSON.stringify(["omamobile-bt-agent"]))
+        ready()
+        root.setVisible(true)
+        root.setVisible(false)
+        compare(pairableCommands().length, 0)
+        root.close()
+        compare(fake.pairable, true)
+    }
+}

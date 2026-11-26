@@ -221,6 +221,20 @@ function visibilityText(seconds) {
   return "Visible for " + minutes + ":" + (rest < 10 ? "0" : "") + rest
 }
 
+// ---------------------------------------------------------------- pairing window
+
+// Whether the adapter should accept pairing (BlueZ's Pairable) right now, for
+// a panel that owns that setting (it was off when the panel opened): only
+// while the owner pairs a device from the panel, or while the phone is
+// visible and the helper's agent is there to show the confirmation sheets.
+// Never while the panel is closed. Without the helper, visibility alone
+// doesn't turn pairing on: nothing could answer a device pairing to us.
+function pairableWanted(state) {
+  if (!state || !state.opened) return false
+  if (state.pairing) return true
+  return !!(state.visible && state.helper)
+}
+
 // ---------------------------------------------------------------- errors
 
 // BlueZ error name and message (from the agent helper) -> what to show.
@@ -357,6 +371,7 @@ if (typeof module !== "undefined") {
     longPressActions: longPressActions,
     rowStatus: rowStatus,
     visibilityText: visibilityText,
+    pairableWanted: pairableWanted,
     errorMessage: errorMessage,
     isHarmless: isHarmless,
     parseHelperLine: parseHelperLine,

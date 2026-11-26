@@ -9,8 +9,9 @@
 # record, the build stage refusing an output directory that holds a
 # development kernel, the identifier scan (real MACs, serial records, the
 # builder's home and listed identifiers found in files and symlink targets;
-# made-up MACs and example paths not), the packages stage refusing an index
-# the release key didn't sign,
+# missing, unreadable and unsupported inputs fail closed; made-up MACs and
+# example paths pass), the packages stage refusing an index the release key
+# didn't sign,
 # test-install asking whether stable has an index before the attended steps
 # (none: the one-time promotion; no answer: stop),
 # the test-install record, the tag stage refusing notes with placeholders,
@@ -30,10 +31,12 @@ for tool in git gpg gpgv python3 bsdtar repo-add; do
 done
 t=$(mktemp -d)
 export GNUPGHOME=$t/gnupg && mkdir -m 700 "$GNUPGHOME"
-cleanup() { gpgconf --homedir "$GNUPGHOME" --kill gpg-agent 2>/dev/null || true; rm -rf "$t"; }
+cleanup() { gpgconf --homedir "$GNUPGHOME" --kill gpg-agent 2>/dev/null || true; chmod -R u+rwX "$t" 2>/dev/null || true; rm -rf "$t"; }
 trap cleanup EXIT
 export GIT_AUTHOR_NAME=Test GIT_AUTHOR_EMAIL=t@invalid GIT_COMMITTER_NAME=Test GIT_COMMITTER_EMAIL=t@invalid
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+# The maintainer's own build host and upload account must not leak in
+unset BUILD_HOST BUILD_HOST_REPO OMAMOBILE_PKGS_HOST
 
 R=$t/repo
 mkdir -p "$R/tools/lib" "$R/device/testdev" "$R/packages/omamobile-keyring" "$R/rootfs" "$R/tests" "$R/out/repo/aarch64"
@@ -130,6 +133,14 @@ printf 'serial-ABC123\nHome Net\n' > "$t/ids"
 export RELEASE_IDENTIFIERS=$t/ids
 printf 'made up: 02:11:22:33:44:55 00:00:00:00:00:00 ff:ff:ff:ff:ff:ff\nversion 1.2.3, example /home/user/x\n' > "$t/scan/clean.txt"
 run scan "$t/scan" || fail "made-up MACs and plain text pass the scan"
+# The documentation placeholder passes (2026.11.24: an example in Omarchy's
+# omarchy-bluetooth-device); the next address up is still found. Built in
+# pieces, as above, so this file holds neither.
+printf '# examples: connect %s:%s\n' 00:11:22 33:44:55 > "$t/scan/example.sh"
+run scan "$t/scan" || fail "the documentation placeholder address passes"
+printf '# examples: connect %s:%s\n' 00:11:22 33:44:56 > "$t/scan/example.sh"
+if run scan "$t/scan"; then fail "an address next to the placeholder is still found"; fi
+rm "$t/scan/example.sh"
 # A universally administered address, put together here so this file holds none
 mac=$(printf '%s:%s' 10:20:30 40:50:60)
 for bad in "wlan0 $mac" 'androidboot.serialno=x' "built in /home/$(id -un)/src" 'device serial-ABC123 here' 'ssid=Home Net'; do
@@ -223,6 +234,24 @@ for bad in 'Copyright (c) 2026 Home Net, built on Home Net' 'Copyright (c) 2026 
   if run scan "$t/scan"; then fail "the scan finds: $bad"; fi
 done
 rm "$t/scan/header.qml"
+# A package archive is scanned by its files (2026.11.24: zstd stored a
+# LICENSE's "Copyright (c) 2026 <name>" as "Copy (c) <name>"). A notice
+# inside one passes, whatever the compressed bytes hold; a leak inside one
+# is found and named by its member; a broken archive is an error.
+mkdir -p "$t/pkg/usr/share/licenses/x" "$t/pkg/etc"
+printf 'MIT License\n\nCopyright (c) 2026 Home Net\n\nPermission is hereby granted\n' > "$t/pkg/usr/share/licenses/x/LICENSE"
+tar -C "$t/pkg" --zstd -cf "$t/scan/x-1-1-aarch64.pkg.tar.zst" usr
+run scan "$t/scan" || fail "a copyright notice inside a package passes"
+printf 'Copy (c) Home Net\n' | zstd -q --no-check -o "$t/scan/y-1-1-aarch64.pkg.tar.zst" 2>/dev/null || true
+if run scan "$t/scan"; then fail "a package that isn't a tar archive is reported"; fi
+grep -Fq "y-1-1-aarch64.pkg.tar.zst: unreadable package" "$t/log" || fail "the broken package is named as unreadable"
+if grep -Fq "listed identifier" "$t/log"; then fail "a broken package is not scanned as raw bytes"; fi
+rm "$t/scan/y-1-1-aarch64.pkg.tar.zst"
+printf 'ssid=Home Net\n' > "$t/pkg/etc/net.conf"
+tar -C "$t/pkg" --zstd -cf "$t/scan/x-1-1-aarch64.pkg.tar.zst" usr etc
+if run scan "$t/scan"; then fail "a listed identifier inside a package is found"; fi
+grep -Fq "x-1-1-aarch64.pkg.tar.zst!etc/net.conf: listed identifier: Home Net" "$t/log" || fail "the finding names the package's member"
+rm "$t/scan/x-1-1-aarch64.pkg.tar.zst"
 # dnsmasq's shipped example configuration (2026.11.08): its group address and
 # a dhcp-option value pass in etc/dnsmasq.conf only; a unicast dhcp-host there,
 # and a group-looking address elsewhere (a Bluetooth LE random address can
@@ -378,8 +407,139 @@ EOF
 chmod +x "$t/py-stub/python3"
 if (cd "$R" && PATH="$t/py-stub:$PATH" tools/release scan "$t/scan") > "$t/log" 2>&1; then fail "an unreadable symlink fails the scan"; fi
 grep -Fq "    $t/scan/unreadable-link (symlink target): unreadable link: readlink denied" "$t/log" || fail "the scan reports an unreadable symlink with its OS error"
+grep -Fq "    1 unreadable input(s)" "$t/log" || fail "counts the unreadable symlink"
+grep -Fq "scan could not read every input" "$t/log" || fail "caller reports an unreadable symlink as a read failure"
+if grep -Fq "identifiers found" "$t/log"; then fail "an unreadable symlink is not reported as found identifiers"; fi
+if grep -Fq "no MAC address, serial, IMEI" "$t/log"; then fail "an unreadable symlink does not print the clean note"; fi
 rm -r "$t/scan/unreadable-link" "$t/py-stub"
 pass "the scan checks walked file, directory, dangling and explicit symlink targets without double-reporting referents"
+
+# Missing, unreadable and unsupported inputs fail closed instead of printing
+# the clean note: explicit missing files/directories, trailing-slash non-dirs,
+# FIFOs (explicit and walked, never opened), unreadable files/directories/lstat
+# entries, and partial scans where a finding and an unreadable input occur
+# together.
+run scan "$t/scan/clean.txt" || fail "a clean readable file passes the scan"
+grep -Fq "no MAC address, serial, IMEI" "$t/log" || fail "a clean scan prints the clean note"
+if run scan "$t/scan/no-such-file.txt"; then fail "a missing explicit file fails the scan"; fi
+grep -Fq "    $t/scan/no-such-file.txt: unreadable input:" "$t/log" || fail "reports the missing explicit file"
+grep -Fq "    1 unreadable input(s)" "$t/log" || fail "counts the missing explicit file"
+grep -Fq "scan could not read every input" "$t/log" || fail "caller reports an incomplete scan for a missing file"
+if grep -Fq "identifiers found" "$t/log"; then fail "a missing file is not reported as found identifiers"; fi
+if grep -Fq "no MAC address, serial, IMEI" "$t/log"; then fail "a missing file does not print the clean note"; fi
+if run scan "$t/scan/no-such-dir/"; then fail "a missing explicit directory fails the scan"; fi
+grep -Fq "    $t/scan/no-such-dir/: unreadable input:" "$t/log" || fail "reports the missing explicit directory"
+if grep -Fq "no MAC address, serial, IMEI" "$t/log"; then fail "a missing directory does not print the clean note"; fi
+if run scan "$t/scan/clean.txt/"; then fail "a regular file with a trailing slash fails the scan"; fi
+grep -Fq "    $t/scan/clean.txt/: unreadable file:" "$t/log" || fail "reports the trailing-slash regular file"
+grep -Fq "    1 unreadable input(s)" "$t/log" || fail "counts the trailing-slash regular file"
+if grep -Fq "no MAC address, serial, IMEI" "$t/log"; then fail "a trailing-slash regular file does not print the clean note"; fi
+ln -s /nonexistent/clean "$t/scan/clean-dangling"
+run scan "$t/scan/clean-dangling" || fail "an explicit clean dangling symlink without trailing slash passes the scan"
+if run scan "$t/scan/clean-dangling/"; then fail "an explicit dangling symlink with a trailing slash fails the scan"; fi
+grep -Fq "    $t/scan/clean-dangling/: unreadable input:" "$t/log" || fail "reports the trailing-slash dangling symlink"
+grep -Fq "    1 unreadable input(s)" "$t/log" || fail "counts the trailing-slash dangling symlink"
+if grep -Fq "no MAC address, serial, IMEI" "$t/log"; then fail "a trailing-slash dangling symlink does not print the clean note"; fi
+rm "$t/scan/clean-dangling"
+ln -s loop-b "$t/scan/loop-a"
+ln -s loop-a "$t/scan/loop-b"
+if run scan "$t/scan/loop-a"; then fail "an explicit symlink loop fails the scan"; fi
+grep -Fq "    $t/scan/loop-a: unreadable input: Too many levels of symbolic links" "$t/log" || fail "reports the explicit symlink loop"
+grep -Fq "    1 unreadable input(s)" "$t/log" || fail "counts the explicit symlink loop"
+grep -Fq "scan could not read every input" "$t/log" || fail "caller reports an incomplete scan for a symlink loop"
+if grep -Fq "no MAC address, serial, IMEI" "$t/log"; then fail "an explicit symlink loop does not print the clean note"; fi
+rm "$t/scan/loop-a" "$t/scan/loop-b"
+mkfifo "$t/scan/pipe"
+rc=0
+timeout 5 "$R/tools/release" scan "$t/scan/pipe" > "$t/log" 2>&1 || rc=$?
+((rc != 0 && rc != 124)) || fail "an explicit FIFO fails the scan without hanging (exit $rc)"
+grep -Fq "    $t/scan/pipe: unsupported input: FIFO" "$t/log" || fail "reports the explicit FIFO as unsupported"
+grep -Fq "    1 unreadable input(s)" "$t/log" || fail "counts the explicit FIFO"
+if grep -Fq "no MAC address, serial, IMEI" "$t/log"; then fail "an explicit FIFO does not print the clean note"; fi
+rc=0
+timeout 5 "$R/tools/release" scan "$t/scan" > "$t/log" 2>&1 || rc=$?
+((rc != 0 && rc != 124)) || fail "a walked FIFO fails the scan without hanging (exit $rc)"
+grep -Fq "    $t/scan/pipe: unsupported input: FIFO" "$t/log" || fail "reports the walked FIFO as unsupported"
+if grep -Fq "no MAC address, serial, IMEI" "$t/log"; then fail "a walked FIFO does not print the clean note"; fi
+rm "$t/scan/pipe"
+pass "missing, trailing-slash non-dir and unsupported (FIFO) inputs fail closed without hanging or printing the clean note"
+
+# Injected PermissionErrors via a python3 stub run for every user (including
+# root or permissive filesystems) so open, scandir, lstat and partial-scan
+# fail-closed paths never skip.
+mkdir -p "$t/scan/inj/f" "$t/scan/inj/d/nodir" "$t/scan/inj/l" "$t/py-stub"
+printf 'device serial-ABC123 here\n' > "$t/scan/inj/f/noopen.txt"
+printf 'device serial-ABC123 here\n' > "$t/scan/inj/d/nodir/inside.txt"
+printf 'clean\n' > "$t/scan/inj/l/nolstat.txt"
+printf 'serial-ABC123\n' > "$t/scan/inj/noids"
+cat > "$t/py-stub/python3" <<EOF
+#!/bin/sh
+while [ "\$#" -gt 0 ] && [ "\$1" != - ]; do shift; done; [ "\$#" -gt 0 ] && shift
+exec "$(command -v python3)" -I -c 'import builtins, errno, os, sys
+def _deny(fn, *names):
+    def w(p=".", *a, **k):
+        if os.path.basename(os.fsdecode(p).rstrip("/")) in names:
+            raise PermissionError(errno.EACCES, "Permission denied", p)
+        return fn(p, *a, **k)
+    return w
+builtins.open, os.scandir, os.lstat = _deny(builtins.open, "noopen.txt", "noids"), _deny(os.scandir, "nodir"), _deny(os.lstat, "nolstat.txt")
+exec(compile(sys.stdin.read(), "<stdin>", "exec"), {"__name__": "__main__"})' "\$@"
+EOF
+chmod +x "$t/py-stub/python3"
+srun() { (cd "$R" && PATH="$t/py-stub:$PATH" tools/release "$@") > "$t/log" 2>&1; }
+if srun scan "$t/scan/inj/f"; then fail "an unreadable file (injected open error) fails the scan"; fi
+grep -Fq "    $t/scan/inj/f/noopen.txt: unreadable file: Permission denied" "$t/log" || fail "reports the injected open error"
+grep -Fq "    1 unreadable input(s)" "$t/log" || fail "counts the injected open error"
+grep -Fq "scan could not read every input" "$t/log" || fail "caller reports an incomplete scan for the injected open error"
+if grep -Fq "identifiers found" "$t/log"; then fail "an unreadable file alone is not reported as found identifiers"; fi
+if grep -Fq "no MAC address, serial, IMEI" "$t/log"; then fail "an unreadable file does not print the clean note"; fi
+# Partial scan: a finding and an unreadable file together report both
+printf 'device serial-ABC123 here\n' > "$t/scan/inj/f/finding.txt"
+if srun scan "$t/scan/inj/f"; then fail "a directory with both a finding and an unreadable file fails"; fi
+grep -Fq "    $t/scan/inj/f/finding.txt: listed identifier: serial-ABC123" "$t/log" || fail "partial scan still reports the finding"
+grep -Fq "    $t/scan/inj/f/noopen.txt: unreadable file: Permission denied" "$t/log" || fail "partial scan still reports the unreadable file"
+grep -qx '    1 finding(s)' "$t/log" || fail "partial scan counts findings"
+grep -qx '    1 unreadable input(s)' "$t/log" || fail "partial scan counts unreadable inputs"
+grep -Fq "identifiers found and some inputs could not be read" "$t/log" || fail "caller reports both findings and read errors"
+if grep -Fq "no MAC address, serial, IMEI" "$t/log"; then fail "partial scan does not print the clean note"; fi
+if srun scan "$t/scan/inj/d"; then fail "an unreadable subdirectory (injected scandir error) fails the scan"; fi
+grep -Fq "    $t/scan/inj/d/nodir: unreadable directory: Permission denied" "$t/log" || fail "reports the injected scandir error on a subdirectory"
+grep -Fq "    1 unreadable input(s)" "$t/log" || fail "counts the injected scandir error"
+if grep -Fq "no MAC address, serial, IMEI" "$t/log"; then fail "an unreadable subdirectory does not print the clean note"; fi
+if srun scan "$t/scan/inj/d/nodir"; then fail "an explicit unreadable directory (injected scandir error) fails the scan"; fi
+grep -Fq "    $t/scan/inj/d/nodir: unreadable directory: Permission denied" "$t/log" || fail "reports the explicit injected scandir error"
+if grep -Fq "no MAC address, serial, IMEI" "$t/log"; then fail "an explicit unreadable directory does not print the clean note"; fi
+if srun scan "$t/scan/inj/l"; then fail "a walked entry that cannot be lstat'ed fails the scan"; fi
+grep -Fq "    $t/scan/inj/l/nolstat.txt: unreadable input: Permission denied" "$t/log" || fail "reports the walked entry lstat failure"
+grep -Fq "    1 unreadable input(s)" "$t/log" || fail "counts the walked entry lstat failure"
+grep -Fq "scan could not read every input" "$t/log" || fail "caller reports an incomplete scan for a walked entry lstat failure"
+if grep -Fq "no MAC address, serial, IMEI" "$t/log"; then fail "a walked entry lstat failure does not print the clean note"; fi
+if (RELEASE_IDENTIFIERS=$t/scan/inj/noids srun scan "$t/scan/inj/f/finding.txt"); then fail "an unreadable identifiers file fails the scan"; fi
+grep -Fq "    $t/scan/inj/noids: unreadable identifiers file: Permission denied" "$t/log" || fail "reports the unreadable identifiers file"
+grep -Fq "    1 unreadable input(s)" "$t/log" || fail "counts the unreadable identifiers file"
+grep -Fq "scan could not read every input" "$t/log" || fail "caller reports an incomplete scan for an unreadable identifiers file"
+if grep -Fq "no MAC address, serial, IMEI" "$t/log"; then fail "an unreadable identifiers file does not print the clean note"; fi
+rm -r "$t/scan/inj" "$t/py-stub"
+
+# Real chmod coverage where the user and filesystem enforce modes (e.g. CI).
+mkdir -p "$t/scan/perm/sub000" "$t/scan/perm/dir0400"
+printf 'device serial-ABC123 here\n' > "$t/scan/perm/file000.txt"
+printf 'device serial-ABC123 here\n' > "$t/scan/perm/sub000/inside.txt"
+printf 'clean\n' > "$t/scan/perm/dir0400/entry.txt"
+chmod 000 "$t/scan/perm/file000.txt" "$t/scan/perm/sub000"
+chmod 0400 "$t/scan/perm/dir0400"
+if ((EUID != 0)) && [[ ! -r $t/scan/perm/file000.txt ]]; then
+  if run scan "$t/scan/perm/file000.txt"; then fail "a mode-000 file fails the scan"; fi
+  grep -Fq "    $t/scan/perm/file000.txt: unreadable file:" "$t/log" || fail "reports the mode-000 file with its OS error"
+  if run scan "$t/scan/perm/sub000"; then fail "a mode-000 directory fails the scan"; fi
+  grep -Fq "    $t/scan/perm/sub000: unreadable directory:" "$t/log" || fail "reports the mode-000 directory with its OS error"
+  if run scan "$t/scan/perm/dir0400"; then fail "a mode-0400 directory entry fails lstat"; fi
+  grep -Fq "    $t/scan/perm/dir0400/entry.txt: unreadable input:" "$t/log" || fail "reports the mode-0400 directory entry lstat failure"
+  if grep -Fq "no MAC address, serial, IMEI" "$t/log"; then fail "a mode-0400 directory does not print the clean note"; fi
+fi
+chmod u+rwX "$t/scan/perm/file000.txt" "$t/scan/perm/sub000" "$t/scan/perm/dir0400"
+rm -r "$t/scan/perm"
+pass "unreadable files, directories, walked lstat failures and partial scans fail closed with accurate diagnostics"
 
 # --- packages: only the release key's index ---
 gpg --batch --quiet --passphrase '' --quick-gen-key "other <x@invalid>" ed25519 sign never >/dev/null 2>&1
@@ -545,7 +705,7 @@ fi
 mkdir -p "$t/stub"
 for c in ssh rsync curl; do printf '#!/bin/sh\necho "%s $*" >> %s/stub.log\nexit 1\n' "$c" "$t" > "$t/stub/$c"; done
 chmod +x "$t/stub/"*
-printf 'verify_done=verified\nbundle=%s\n' "$B" >> "$st"
+printf 'verify_done=verified\nbundle=%s\nrootfs=out/%s\n' "$B" "$rootname" >> "$st"
 # The identifiers stage's bundle check on that layout
 run check-bundle "$R/$B" || fail "a bundle laid out as make-bundle builds it passes the bundle check"
 echo x > "$R/$B/tools/extra-tool"
@@ -569,6 +729,54 @@ grep -q 'dry run, nothing uploaded' "$t/log" || fail "release-upload finished it
 grep -q "tools/release-upload --full --latest $B" "$t/log" || fail "prints the real upload for the maintainer"
 grep -q 'upload --done' "$t/log" || fail "says how to record the upload"
 [[ ! -s $t/stub.log ]] || fail "the dry run called a network tool: $(cat "$t/stub.log")"
+grep -cx "    tools/release-upload --full --latest $B" "$t/log" >/dev/null || fail "without a build host, the upload is printed to run here"
+if grep -c 'ssh -t\|build host' "$t/log" >/dev/null; then fail "without a build host, no build-host route is printed"; fi
+pass "without a build host, the upload stage prints the upload to run here"
+
+# --- upload and promote through the build host (BUILD_HOST), whose omapub
+# alone may write the server: printed, never run ---
+H=omapub@build.invalid
+echo "BUILD_HOST=$H" > "$R/omamobile.local.conf"
+if urun --version "$V" upload; then fail "the upload stage stops for the maintainer with a build host"; fi
+rr=Projects/omarchy-mobile
+r=out/bundle/$rootname
+grep -cxF "    rsync -a --partial -- $B $B.tar $B.tar.sha256 $B.tar.sha256.sig $r $r.sha256 ${r%.img.zst}.MANIFEST $H:$rr/out/bundle/" "$t/log" >/dev/null ||
+  fail "prints the rsync of the bundle, its .tar's three files and the root image's three to the build host's out/bundle/"
+grep -cxF "    ssh $H 'git -C ~/$rr pull --ff-only origin main'" "$t/log" >/dev/null || fail "prints the build host's checkout update"
+grep -cxF "    ssh -t $H 'cd ~/$rr && OMAMOBILE_PKGS_HOST=omapub@nostr01.derekross.me tools/release-upload --dry-run $B'" "$t/log" >/dev/null ||
+  fail "prints release-upload's dry run on the build host, as omapub"
+grep -cxF "    ssh -t $H 'cd ~/$rr && OMAMOBILE_PKGS_HOST=omapub@nostr01.derekross.me tools/release-upload --full --latest $B'" "$t/log" >/dev/null ||
+  fail "prints the real upload on the build host, as omapub"
+grep -cF "upload --done" "$t/log" >/dev/null || fail "then the --done check here"
+if grep -cx "    tools/release-upload --full --latest $B" "$t/log" >/dev/null; then fail "with a build host, the upload is not printed to run here"; fi
+[[ ! -s $t/stub.log ]] || fail "the build-host route called a network tool: $(cat "$t/stub.log")"
+printf 'upload_done=x\n' >> "$st"
+pidx=$(sed -n 's/^repo_index=//p' "$st" | tail -n 1)
+if urun --version "$V" promote; then fail "the promote stage stops for the maintainer"; fi
+grep -cxF "    ssh -t $H 'cd ~/$rr && OMAMOBILE_PKGS_HOST=omapub@nostr01.derekross.me tools/repo-publish --dry-run stable --expect-index $pidx'" "$t/log" >/dev/null ||
+  fail "prints the promotion's dry run on the build host"
+grep -cxF "    ssh -t $H 'cd ~/$rr && OMAMOBILE_PKGS_HOST=omapub@nostr01.derekross.me tools/repo-publish stable --expect-index $pidx'" "$t/log" >/dev/null ||
+  fail "prints the promotion on the build host with a terminal for its question"
+if grep -c -- '--yes' "$t/log" >/dev/null; then fail "a printed promotion never answers its question with --yes"; fi
+grep -cF "promote --done" "$t/log" >/dev/null || fail "then the --done check here"
+printf 'BUILD_HOST=%s\nBUILD_HOST_REPO=/srv/omamobile\n' "$H" > "$R/omamobile.local.conf"
+if urun --version "$V" promote; then fail "the promote stage stops with a BUILD_HOST_REPO"; fi
+grep -cF "ssh -t $H 'cd /srv/omamobile && " "$t/log" >/dev/null || fail "uses BUILD_HOST_REPO for the checkout"
+for bad in "build.invalid" "omapub@ms01;id" "omapub@ms01 x" "-oProxyCommand=x@y" "-oX@y" "omapub@-y"; do
+  printf 'BUILD_HOST=%q\n' "$bad" > "$R/omamobile.local.conf"
+  if urun --version "$V" promote; then fail "a BUILD_HOST of '$bad' is refused"; fi
+  grep -c 'is not USER@HOST' "$t/log" >/dev/null || fail "says why '$bad' is refused"
+  if grep -c 'repo-publish' "$t/log" >/dev/null; then fail "nothing is printed for '$bad'"; fi
+done
+printf 'BUILD_HOST=%s\nBUILD_HOST_REPO=%q\n' "$H" '~/x;id' > "$R/omamobile.local.conf"
+if urun --version "$V" upload; then fail "a BUILD_HOST_REPO that is not a plain path is refused"; fi
+grep -c 'is not a plain path' "$t/log" >/dev/null || fail "says why the BUILD_HOST_REPO is refused"
+rm "$R/omamobile.local.conf"
+if urun --version "$V" promote; then fail "the promote stage stops without a build host"; fi
+grep -cx "    tools/repo-publish stable --expect-index $pidx" "$t/log" >/dev/null || fail "without a build host, the promotion is printed to run here"
+if grep -c 'ssh' "$t/log" >/dev/null; then fail "without a build host, no ssh is printed for the promotion"; fi
+sed -i '/^upload_done=/d' "$st"
+pass "with a BUILD_HOST, upload and promote print the build-host route (the seven files, ssh -t, never --yes); a bad host is refused"
 echo tampered >> "$R/$B/install"
 if urun --version "$V" upload; then fail "a bundle changed after signing is refused"; fi
 grep -q "release-upload --dry-run refuses" "$t/log" || fail "says release-upload refused the bundle"
