@@ -13,7 +13,7 @@ logical at scale 3).
 
 | Plugin | Kind | What it is |
 | --- | --- | --- |
-| `omamobile.bar` | `bar` | Status bar: clock, connectivity, battery; tap or pull down for quick settings |
+| `omamobile.bar` | `bar` | Status bar: clock, connectivity, battery; tap or pull down for quick settings, or with `cardsOnTap` a tap on an item for its card |
 | `omamobile.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: up to 21 tiles the user arranges, brightness and volume, a Settings gear, media controls and the notification history; Wi-Fi picker and Bluetooth panel |
 | `omamobile.launcher` | `panel` (keepLoaded) | Home bar: app search, app grid and coding-agent prompt in one input |
 | `omamobile.home` | `panel` (keepLoaded) | Home screens: pages of apps and widgets on the wallpaper, with an edit mode |
@@ -56,8 +56,29 @@ signal (when a modem exists), Wi-Fi or Ethernet, battery glyph and
 percentage. The centre is left empty for the camera cutout; the count is on
 the left because the right-hand row grows towards it with every glyph.
 
-The whole strip is one touch target: a tap toggles quick settings, a downward
-pull past ~14 px opens it.
+A downward pull past ~14 px anywhere on the strip opens quick settings, and a
+tap toggles it. With `cardsOnTap` set (off by default), a tap on an item opens
+its card instead, as a click on the same item does in Omarchy's bar, and a tap
+on an empty part does nothing:
+
+| Item | Card |
+| --- | --- |
+| Battery | Omarchy's own power panel (`plugins/panels/power/Panel.qml` from `OMARCHY_PATH`) |
+| Wi-Fi or Ethernet | Omarchy's network panel (`plugins/panels/network`) |
+| Bluetooth | Quick settings' Bluetooth panel, as its tile's chevron opens it: it makes the phone visible while open and shows a pairing's code, which Omarchy's card doesn't |
+| Cellular signal | `CellularPanel.qml`: the carrier, its state, a mobile data switch (`omamobile-sit data on/off`), the signal and whether calls, texts and mobile data work |
+| Clock | `TimePanel.qml`: the day, the date, the time and the time zone |
+
+Omarchy's two panels are loaded unchanged and unseen; only their popups
+show. Omarchy has no card for the clock that fits a phone's width and none for
+a modem, so the two others are built from the same parts (`Panel`,
+`KeyboardPanel`, `ToggleSwitch` and the label/value rows of the power card).
+The bar answers the calls those panels make of Omarchy's bar
+(`requestPopout`/`releasePopout`, `clickTargets`, `run`, the tooltip calls),
+and every item is a click target, so with a card open a tap on another item
+opens that item's card, as in Omarchy. The carrier's name is sitd's operator
+name, or, when the network sends none, `carrier-name.py`'s lookup of the
+network code in mobile-broadband-provider-info.
 
 Sources: `Quickshell.Networking` (NetworkManager) for Wi-Fi/Ethernet,
 `Quickshell.Bluetooth`, `UPower.displayDevice`, and the do-not-disturb flag
@@ -73,6 +94,7 @@ Settings live on the `bar` object in `shell.json`:
 | `batteryStyle` | `"icon-percent"` | `icon`, `percent`, `icon-percent`, `horizontal`, `horizontal-percent` |
 | `statusIcons` | all shown | `{"bluetooth","wifi","cell","dnd","unread"}`: `false` hides one (Wi-Fi covers Ethernet too) |
 | `quickSettings` | `"omamobile.quicksettings"` | Plugin id the bar opens |
+| `cardsOnTap` | `false` | A tap on an item opens its card (below); a pull opens quick settings |
 
 The charging bolt has no setting: while charging it shows in every battery
 style. Low battery (10 % and under, not charging) takes the urgent colour.

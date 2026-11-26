@@ -108,8 +108,11 @@ o.launch_on_start(
 -- layout one of them lands on 124, which Hyprland's keymap reads as
 -- XF86PowerOff. Its keys share Hyprland's held-key state with the buttons,
 -- so an OSK key could act as the power key or leave it looking held (SUSPEND-
--- PLAN P5 h: the power key's bind stopped firing until a reload).
-local hw_keys = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } }
+-- PLAN P5 h: the power key's bind stopped firing until a reload). Tactus, the
+-- keyboard an owner may pick instead (omamobile-osk), is a virtual keyboard
+-- too, named after its binary as squeekboard's is.
+local osk_devices = { "hl-virtual-keyboard-squeekboard", "hl-virtual-keyboard-tactus" }
+local hw_keys = { inclusive = false, list = osk_devices }
 hl.unbind("XF86PowerOff")
 o.bind("XF86PowerOff", "Power key", "omamobile-keys power-down", { locked = true, device = hw_keys })
 o.bind("XF86PowerOff", "System menu", "omamobile-keys power-up", { locked = true, release = true, device = hw_keys })
@@ -180,7 +183,10 @@ hl.layer_rule({ match = { namespace = "^omamobile-call(-top)?$" }, above_lock = 
 -- still pastes.
 local osk_device = "hl-virtual-keyboard-squeekboard"
 local osk_only = { inclusive = true, list = { osk_device } }
-local not_osk = { inclusive = false, list = { osk_device } }
+-- No on-screen keyboard, Tactus included: its terminal keys have Ctrl, Alt
+-- and Tab as squeekboard's do. (Tactus needs none of the binds above: its
+-- own keys do what squeekboard's action row does.)
+local not_osk = { inclusive = false, list = osk_devices }
 hl.device({ name = osk_device, resolve_binds_by_sym = true })
 local function voice(method)
   return "omarchy-shell shell call omamobile.voice " .. method .. " ''"
