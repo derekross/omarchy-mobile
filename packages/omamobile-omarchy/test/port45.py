@@ -132,6 +132,12 @@ def actual(t, ex, version, make_root, run, ok, read, series, package, parse_qml)
         if result.returncode:
             print(result.stdout + result.stderr)
     bluetooth_card(root, ok, read, env['OMARCHY_SHELL_DIR'], package)
+    switch = read(root, 'usr/share/omarchy/shell/Ui/ToggleSwitch.qml')
+    ok('color: root.checked\n      ? root.accent\n      : Style.normalFillFor(root.foreground, root.accent)' in switch
+       and 'color: root.checked ? root.knobOnColor : Qt.darker(root.foreground, 1.25)' in switch
+       and 'property color knobOnColor: Commons.Color.background' in switch
+       and 'Behavior on x' in switch and 'visible: root.cursorRing && root.hot' in switch,
+       'real4.5: a switch that is on is a solid accent track with a background knob; size, motion and ring kept (0037)')
 
     view = read(root, lock + 'LockView.qml')
     ok('function darkTapWakes()' in view
