@@ -3,6 +3,12 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-715. Folding independent once-only steps into one helper makes them all
+  wait for its precondition.** #581 moved `--no-first-run`, the user agent and
+  the input-method flags, which need no geometry, into a helper that returns
+  early when geometry is unknown. *Check:* list each step's own inputs and
+  confirm an early return for one input skips only the steps that need it.
+  Extends L-468. *From:* #581, round 50.
 - **L-714. A "learn the user's choice" feature is probed with the sensor at
   its floor and its ceiling.** The 7 Pro's light sensor is under the panel, so
   a covered reading is common; one slider move while covered taught #636's
@@ -401,11 +407,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   compute when the first fresh value appears after opening; ask that what the
   first screen shows goes first. Extends L-235. *From:* #518, round 45,
   2026-11-08.
-- **L-574. (Provisional, not yet checked on a phone.) A network-sharing
-  feature is checked against the firewall the image turns on.** #525 makes the
-  hotspot's dnsmasq start, but firstboot's ufw denies incoming and forwarded
-  traffic, so a client's DHCP and DNS may never reach it, and the PR's test
-  (the server side came up) can't show that. *Check:* `git grep -n 'ufw '
-  packages/omamobile-firstboot` for the defaults, and ask for one client test
-  (an address, then a ping out) before a "hotspot works" claim. Confirm or
-  drop once a client test has run. *From:* #525, round 45, 2026-11-08.

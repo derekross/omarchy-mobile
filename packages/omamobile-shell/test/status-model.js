@@ -22,6 +22,11 @@ assert.strictEqual(M.cellText(c({})), "LTE")
 assert.strictEqual(M.cellText(c({ roaming: true })), "LTE R")
 assert.strictEqual(M.cellText(c({ tech: "", roaming: true })), "R")
 assert.strictEqual(M.parseCell("nope"), null)
+assert.strictEqual(M.cellGlyph(c({ state: "connected", strength: 90, data: false })), cp(0xF0783), "mobile data off: crossed out, as the tile")
+assert.strictEqual(M.cellGlyph(c({ state: "connected", strength: 90, data: true })), cp(0xF08BE))
+assert.strictEqual(M.cellGlyph(M.parseCell('{"modem":true,"state":"connected","strength":90,"tech":"LTE"}')), cp(0xF08BE), "a watcher without data: the bars")
+assert.strictEqual(M.parseCell('{"modem":true,"state":"connected","data":false}').data, false)
+assert.strictEqual(M.cellText(c({ state: "connected", data: false })), "LTE", "the network type stays beside it")
 console.log("ok - status model: the mobile network's icon and words")
 
 const now = 1760000000000

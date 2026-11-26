@@ -3,6 +3,24 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-880. "Nothing changes for existing boards" for a media driver is
+  checked against the reference phone's overlays and its camera start, not the
+  board DTS's `status`.** Kernel #272 read as a Fold-only PR, but cheetah's
+  `DTB_OVERLAYS` enable the IMX386 and both ak7375 nodes and
+  `omamobile-camera-start` loads the modules at every boot, so an ungated 1 ms
+  wait in `ak7375_vcm_resume()` and a changed endpoint parse were 7 Pro
+  changes. *Check:* `git grep -n '<compatible>' <base> --
+  arch/arm64/boot/dts/exynos/google/`, then `grep DTB_OVERLAYS
+  device/cheetah/device.conf` and the blacklist's comment for who loads the
+  module. Extends L-49, L-206 and L-348. *From:* kernel #272, round 61,
+  2026-11-18.
+- **L-879. A binding's `then:` is fed the SoC dtsi's own node.** Kernel
+  #271's schema demanded a clock name the SoC description doesn't use, so the
+  "one-line board follow-up" would have failed `dtbs_check`; a hand-made node
+  with the dtsi's names showed it in a minute. *Check:* copy the dtsi node,
+  change only the compatible, compile it and `dt-validate` it against the PR's
+  processed schema. Extends L-102 and L-236. *From:* kernel #271, round 61,
+  2026-11-18.
 - **L-878. A dwc3 glue built on `dwc3_core_probe()` is checked for the
   runtime PM callbacks the core expects.** The core enables runtime PM itself;
   a glue with only sleep callbacks leaves a device that userspace can mark
@@ -393,23 +411,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   once came without one, while their bodies said "checkpatch clean": it was
   run on a diff, where the sign-off check can't fire. `tools/kernel-pr-check`
   checks it now. *From:* kernel #10, #11, #12.
-- **L-19. Clock fixes belong in the clock driver's field description, not
-  in a DT override.** `assigned-clock-parents` on a mux the driver describes
-  at the wrong bit writes a reserved bit. *Check:* the mux's shift and width
-  in `clk-gs101.c`/`clk-gs201.c` against Google's CMUCAL `cmucal-sfr.c`
-  (`SFR_ACCESS(..._SELECT, shift, width, ...)`) for that SoC; CMU_APM is the
-  ACPM firmware's own clock block, so prefer read-only there. *From:*
-  kernel #6 (gs101 APM_FUNC: driver bit 4, Google bits [1:0]).
-- **L-20. Kconfig `depends on` must cover every bus the driver registers
-  on.** A driver that calls `spi_register_driver()` unconditionally with
-  `depends on I2C` fails to link with `CONFIG_SPI=n`; our config has SPI on,
-  so we'd never see it. *From:* kernel #8.
-- **L-21. No wildcard compatibles** (`samsung,s6sy79x`): name the real part.
-  *From:* kernel #8.
-- **L-22. Power domains: follow the upstream series, and leave live
-  co-processors alone.** A `google,gs101-pd` that differs from André
-  Draszik's pending upstream series (domains as PMU children,
-  `domain-supply`, the EL3 DTZPC call around every power change) will
-  conflict; without the DTZPC call a domain powered back on comes up with
-  its TrustZone settings reset. Powering off the AoC's domain while the AoC
-  runs, with no handshake, belongs to the AoC series. *From:* kernel #9.

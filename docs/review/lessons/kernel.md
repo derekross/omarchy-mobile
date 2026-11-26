@@ -3,6 +3,16 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1189. A firmware-written address read through a sliding BAR window is
+  range-checked before it is read.** Kernel #295 read a trap record at the
+  address the BCM4389 left in its shared area; `brcmf_pcie_tcm_addr()` moves
+  the BAR1 window to any address it is given, so an unwritten or corrupt
+  pointer reaches an arbitrary backplane address, where a powered-down domain
+  faults, on the reference phone's Wi-Fi. *Check:* for each new
+  `read_tcm*`/`copy_dev_tomem` whose address came from the device, look for
+  `brcmf_pcie_valid_ram_range()` (or the bus's equivalent) before it, and read
+  `tcm_addr()` for whether the window follows the address. Extends L-542 and
+  L-875. *From:* kernel #295, round 68, 2026-11-25.
 - **L-1173. A retry loop whose first step is "nothing to do if the state is
   already good" can skip the cleanup a failed previous attempt left undone.**
   In kernel #294, an attempt that loaded the model but failed to lock is
@@ -399,21 +409,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   with a 7 Pro reason, while the review laptop's logs had no such line; read
   `git log --format=%B -3 -- <file>` or `git log -L` for the touched function
   before writing "another phone's fix". *From:* kernel #290, round 66.)
-- **L-880. "Nothing changes for existing boards" for a media driver is
-  checked against the reference phone's overlays and its camera start, not the
-  board DTS's `status`.** Kernel #272 read as a Fold-only PR, but cheetah's
-  `DTB_OVERLAYS` enable the IMX386 and both ak7375 nodes and
-  `omamobile-camera-start` loads the modules at every boot, so an ungated 1 ms
-  wait in `ak7375_vcm_resume()` and a changed endpoint parse were 7 Pro
-  changes. *Check:* `git grep -n '<compatible>' <base> --
-  arch/arm64/boot/dts/exynos/google/`, then `grep DTB_OVERLAYS
-  device/cheetah/device.conf` and the blacklist's comment for who loads the
-  module. Extends L-49, L-206 and L-348. *From:* kernel #272, round 61,
-  2026-11-18.
-- **L-879. A binding's `then:` is fed the SoC dtsi's own node.** Kernel
-  #271's schema demanded a clock name the SoC description doesn't use, so the
-  "one-line board follow-up" would have failed `dtbs_check`; a hand-made node
-  with the dtsi's names showed it in a minute. *Check:* copy the dtsi node,
-  change only the compatible, compile it and `dt-validate` it against the PR's
-  processed schema. Extends L-102 and L-236. *From:* kernel #271, round 61,
-  2026-11-18.

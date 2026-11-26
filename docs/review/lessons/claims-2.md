@@ -3,6 +3,15 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-824. A sibling device's plan that explains or contradicts an AGENTS
+  gotcha about the reference phone is listed for the maintainer, with the run
+  that would settle it.** #852 traces early RTC wakes to stale S2MPG12 reads
+  (kernel #201) while AGENTS still calls the 7 Pro's early wakes unexplained,
+  shows "Wi-Fi stays connected across s2idle" to be a disassociate and rejoin
+  there, and prices the keep flag at 52 mA. *Check:* `grep -n` AGENTS section
+  4 for each mechanism a device plan explains (the PMIC, the driver, the flag)
+  and name the 7 Pro run in the review's notes. Extends L-492 and L-657.
+  *From:* #852, round 60, 2026-11-17.
 - **L-823. A status line that quotes several measured numbers is checked for
   the condition each was measured under.** #852's "284 mA at 2028 MHz, 184-200
   mA at 1014 MHz, 52 mA more with Wi-Fi kept" set a Wi-Fi-kept figure beside
@@ -375,13 +384,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
 - **L-107. A plan's claim about the DEVICES.md matrix is checked against
   the open PRs that change that row.** Extends L-28 and L-44. *From:* #35
   with #34.
-- **L-128. Read the host's USB log before interpreting a phone's
-  "re-enumeration".** The laptop's `journalctl -k` timestamps the gadget
-  leaving and arriving, and survives a phone whose RAM log is lost: husky
-  test 23's "re-enumerated after 22 s" was the boot itself. *From:* kernel
-  #33, round 10.
-- **L-129. A CRC "clear" covers only what that register checks.** FTM5's
-  CRC register is the base check; config and CX errors come as events after a
-  reset. *Check:* which check covers the calibration area, and whether it
-  needs a reset, before a plan says a read answers "is it valid". *From:*
-  #35, round 10.

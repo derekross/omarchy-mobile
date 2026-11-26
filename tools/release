@@ -58,9 +58,15 @@
 #                 (needs no key: the bundle stage signed it; the root image
 #                 is authorised by that MANIFEST and manifest.json alone)
 #   upload        [8] tools/release-upload --dry-run of the bundle; the real
-#                 upload is Derek's (server), then `upload --done`
+#                 upload is Derek's (server), then `upload --done`. With a
+#                 BUILD_HOST (omamobile.local.conf) it prints the build-host
+#                 route: the bundle's and root image's seven files rsynced
+#                 to its out/bundle/, its checkout updated, release-upload
+#                 run there (ssh -t), since only its omapub may write the
+#                 server
 #   promote       [8] the pinned development index to stable, unchanged
-#                 (Derek: tools/repo-publish stable --expect-index)
+#                 (Derek: tools/repo-publish stable --expect-index, on the
+#                 build host over ssh -t when there is one)
 #   tag           [9] the release notes are final; release-V tagged here
 #                 (Derek pushes it and opens the GitHub release)
 #   scan PATH...  the identifiers stage's scan alone, on any files or
@@ -114,6 +120,48 @@ derek() {
 }
 run() {
   if ((dry)); then printf '    would run: %s\n' "$*"; else printf '    $ %s\n' "$*"; "$@"; fi
+}
+
+# The account that writes pkgs.omamobile.org: since 2026-11-17 only omapub,
+# and only with the build host's key, so the upload and the promotion run on
+# the build host (tools/release-upload and tools/repo-publish default to it)
+PKGS_HOST=${OMAMOBILE_PKGS_HOST:-omapub@nostr01.derekross.me}
+# The build host, as tools/build-host-sync reads it: BUILD_HOST and
+# BUILD_HOST_REPO from omamobile.conf and omamobile.local.conf, read in a
+# subshell so that nothing else there changes this tool. Sets bh, bh_repo
+# and bh_rrepo (rsync's path, relative to its home); fails when none is set
+build_host() {
+  local conf_out
+  conf_out=$(
+    # shellcheck disable=SC1091
+    [[ ! -f omamobile.conf ]] || source ./omamobile.conf
+    # shellcheck disable=SC1091
+    [[ ! -f omamobile.local.conf ]] || source ./omamobile.local.conf
+    printf '%s\n%s\n' "${BUILD_HOST:-}" "${BUILD_HOST_REPO:-}"
+  ) || die "can't read omamobile.conf or omamobile.local.conf"
+  { read -r bh; read -r bh_repo; } <<<"$conf_out"
+  [[ -n $bh ]] || return 1
+  # Put into printed shell commands unquoted: plain characters only
+  [[ $bh =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || die "BUILD_HOST '$bh' is not USER@HOST"
+  # shellcheck disable=SC2088 # expanded by the build host's shell
+  bh_repo=${bh_repo:-'~/Projects/omarchy-mobile'}
+  [[ $bh_repo =~ ^(~/|/)?[A-Za-z0-9._][A-Za-z0-9._/-]*$ && $bh_repo != *..* ]] || die "BUILD_HOST_REPO '$bh_repo' is not a plain path"
+  [[ $PKGS_HOST =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || die "OMAMOBILE_PKGS_HOST '$PKGS_HOST' is not USER@HOST"
+  bh_rrepo=${bh_repo#\~/}
+}
+# The promotion of INDEX to stable, for the maintainer: on the build host
+# when there is one (with a terminal, for repo-publish's question; never
+# --yes), else here
+derek_promote() {
+  local index=$1 bh bh_repo bh_rrepo
+  if build_host; then
+    derek "# on the build host, which alone may write pkgs.omamobile.org (as $PKGS_HOST):" \
+          "ssh -t $bh 'cd $bh_repo && OMAMOBILE_PKGS_HOST=$PKGS_HOST tools/repo-publish --dry-run stable --expect-index $index'" \
+          "ssh -t $bh 'cd $bh_repo && OMAMOBILE_PKGS_HOST=$PKGS_HOST tools/repo-publish stable --expect-index $index'"
+  else
+    derek "tools/repo-publish --dry-run stable --expect-index $index" \
+          "tools/repo-publish stable --expect-index $index"
+  fi
 }
 
 dry=0 version=$(date +%Y.%m.%d) kernel_tag=""
@@ -613,8 +661,7 @@ st_test_install() {
       no)
         index=$(need repo_index packages)
         say "stable has no index yet: the first release to this server"
-        derek "tools/repo-publish --dry-run stable --expect-index $index" \
-              "tools/repo-publish stable --expect-index $index"
+        derek_promote "$index"
         die "promote index ${index:0:12} to stable once (above), then run test-install again: the installed phone follows stable, and its first update needs an index there. Stage promote still runs after the test, on the same index" ;;
       *) die "can't tell whether stable has an index ($STABLE_INDEX_URL: HTTP $have): the attended install needs the server, so check the connection and run test-install again" ;;
     esac
@@ -677,12 +724,32 @@ PY
 # in Neovim plugins and Alpine's libc), and each literal of the identifiers
 # file as a whole word (not where it is the holder of a copyright notice,
 # "Copyright (c) YEAR <name>": Omarchy's licence header in a patch names the
-# project's, as LICENSE does). Prints each finding; fails when there is one.
+# project's, as LICENSE does). Prints each finding and any input that can't
+# be read or is of an unsupported type; exits 1 on findings, 2 on unreadable
+# or unsupported inputs, 3 on both.
 scan_identifiers() {
   python3 -I - "$(id -un)" "$@" <<'PY'
-import os, re, sys
+import errno, io, os, re, stat, subprocess, sys, tarfile
 builder, ids_file, paths = sys.argv[1], sys.argv[2], sys.argv[3:]
-lits = [l.strip() for l in open(ids_file, encoding="utf-8") if l.strip() and not l.lstrip().startswith("#")]
+errors = 0
+def error(path, what, msg):
+    global errors
+    errors += 1
+    if errors <= 40:
+        if isinstance(msg, OSError):
+            msg = msg.strerror or str(msg)
+        print("    %s: %s: %s" % (path, what, str(msg)[:120]))
+MODES = {stat.S_IFIFO: "FIFO", stat.S_IFSOCK: "socket", stat.S_IFBLK: "block device", stat.S_IFCHR: "character device"}
+def mode_name(mode):
+    fmt = stat.S_IFMT(mode)
+    return MODES.get(fmt, "mode %#o" % fmt)
+try:
+    with open(ids_file, encoding="utf-8") as fh:
+        lits = [l.strip() for l in fh if l.strip() and not l.lstrip().startswith("#")]
+except OSError as e:
+    error(ids_file, "unreadable identifiers file", e)
+    print("    %d unreadable input(s)" % errors)
+    sys.exit(2)
 # A MAC as tools/pr-check reads one (see its comment), each judged in the
 # colon form; the lookahead only skips offsets where no match can start
 mac = re.compile(rb"(?i)(?=[0-9a-f:\-hm])(?:"
@@ -705,8 +772,19 @@ def report(path, what, text):
 def scan(path, data=None):
     if data is None:
         try:
-            data = open(path, "rb").read()
-        except OSError:
+            with open(path, "rb") as fh:
+                data = fh.read()
+        except OSError as e:
+            error(path, "unreadable file", e)
+            return
+        # A package archive is scanned by its files, not its compressed
+        # bytes: zstd keeps short strings as literals between back
+        # references, so "Copyright (c) 2026 <name>" in a LICENSE can sit
+        # in the archive as "Copy (c) <name>", which the copyright form
+        # below no longer recognises (2026.11.24, device-husky's LICENSE),
+        # while a leak in a compressed file could be missed altogether.
+        if path.endswith(".pkg.tar.zst"):
+            scan_package(path, data)
             return
     pos = 0
     while m := mac.search(data, pos):
@@ -716,7 +794,11 @@ def scan(path, data=None):
         pos = m.end(k) - 2
         whole = b":".join(re.findall(rb"[0-9a-f]{2}", m.group(k).lower()))
         first = int(whole[:2], 16)
-        if (first & 3) == 2 or whole in (b"00:00:00:00:00:00", b"ff:ff:ff:ff:ff:ff"):
+        # all zeros, all ones, and the counting placeholder that
+        # documentation uses (Omarchy's omarchy-bluetooth-device has it in
+        # its examples line); no card ships with any of the three. Spelled
+        # in two halves so this file holds no address itself.
+        if (first & 3) == 2 or whole in (b"00:00:00:00:00:00", b"ff:ff:ff:ff:ff:ff", b"00:11:22" + b":33:44:55"):
             continue
         if k == 2 and timestamp.fullmatch(whole):
             continue
@@ -737,20 +819,46 @@ def scan(path, data=None):
                 continue
             report(path, what, m.group(0))
             break
+def scan_package(path, data):
+    try:
+        tar = subprocess.run(["zstd", "-dcq"], input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout
+        members = tarfile.open(fileobj=io.BytesIO(tar), mode="r:")
+        for m in members:
+            name = "%s!%s" % (path, m.name)
+            if m.issym() or m.islnk():
+                scan(name + " (link target)", os.fsencode(m.linkname))
+            elif m.isfile():
+                scan(name, members.extractfile(m).read())
+    except (OSError, subprocess.CalledProcessError, tarfile.TarError) as e:
+        error(path, "unreadable package", getattr(e, "stderr", b"").decode("utf-8", "replace").strip() or str(e))
 def scan_link(path):
     try:
         target = os.fsencode(os.readlink(path))
     except OSError as e:
-        report(path + " (symlink target)", "unreadable link", str(e).encode("utf-8", "replace"))
+        error(path + " (symlink target)", "unreadable link", e)
         return
     scan(path + " (symlink target)", target)
 for p in paths:
-    # Strip trailing slashes so islink sees an explicit directory symlink itself.
+    # Strip trailing slashes so lstat sees an explicit directory symlink itself.
     q = p.rstrip("/") or p[:1]
-    if os.path.islink(q):
+    try:
+        lst = os.lstat(q)
+    except OSError as e:
+        error(p, "unreadable input", e)
+        continue
+    if stat.S_ISLNK(lst.st_mode):
         scan_link(q)
-    if os.path.isdir(p):
-        for top, dirs, names in os.walk(p):
+        try:
+            st = os.stat(p)
+        except OSError as e:
+            # An explicit dangling symlink (no trailing slash) has only its link text to scan.
+            if e.errno not in (errno.ENOENT, errno.ENOTDIR) or p != q:
+                error(p, "unreadable input", e)
+            continue
+    else:
+        st = lst
+    if stat.S_ISDIR(st.st_mode):
+        for top, dirs, names in os.walk(p, onerror=lambda e, r=p: error(e.filename or r, "unreadable directory", e)):
             # os.walk puts directory symlinks in dirs without descending into them.
             for n in dirs:
                 f = os.path.join(top, n)
@@ -758,16 +866,38 @@ for p in paths:
                     scan_link(f)
             for n in names:
                 f = os.path.join(top, n)
-                if os.path.islink(f):
+                try:
+                    nst = os.lstat(f)
+                except OSError as e:
+                    error(f, "unreadable input", e)
+                    continue
+                if stat.S_ISLNK(nst.st_mode):
                     scan_link(f)
-                elif os.path.isfile(f):
+                elif stat.S_ISREG(nst.st_mode):
                     scan(f)
-    elif os.path.isfile(p):
+                else:
+                    error(f, "unsupported input", mode_name(nst.st_mode))
+    elif stat.S_ISREG(st.st_mode):
         scan(p)
+    else:
+        error(p, "unsupported input", mode_name(st.st_mode))
 if found:
     print("    %d finding(s)" % found)
-    sys.exit(1)
+if errors:
+    print("    %d unreadable input(s)" % errors)
+if found or errors:
+    sys.exit((1 if found else 0) | (2 if errors else 0))
 PY
+}
+
+scan_fail() {
+  local rc=$1 release=${2:-}
+  case $rc in
+    1) die "identifiers found (above)${release:+; nothing ships until they are gone}" ;;
+    2) die "scan could not read every input (above)${release:+; nothing ships without a complete scan}" ;;
+    3) die "identifiers found and some inputs could not be read (above)${release:+; nothing ships until both are fixed}" ;;
+    *) die "identifier scan failed (exit $rc)${release:+; nothing ships without a complete scan}" ;;
+  esac
 }
 
 # Files in bundle DIR that tools/make-bundle doesn't put there, one per line.
@@ -821,10 +951,13 @@ st_identifiers() {
   # The release initramfs the boot images carry
   mkdir -p "$t/initramfs"
   lz4 -dc "$RELEASE_KERNEL_OUT/initramfs.cpio.lz4" | (cd "$t/initramfs" && cpio -id --quiet --no-absolute-filenames 2>/dev/null) || true
+  # debugfs rdump and cpio -id keep the image's modes, so a mode-0000 file or
+  # directory in the image would otherwise be unreadable to the builder
+  chmod -R u+rX -- "$t/rootfs" "$t/initramfs"
   list=("$dir" "$rel/rootfs-files.txt" "$t/rootfs" "$t/initramfs" "$manifest")
   if [[ -f $notes ]]; then list+=("$notes"); else note "no $notes yet: run this stage again once it is written (the tag stage needs it)"; fi
   say "Scanning the bundle, the root image's file list and configuration, the initramfs, the MANIFESTs$([[ -f $notes ]] && echo ', the notes')"
-  scan_identifiers "$ids" "${list[@]}" || die "identifiers found (above); nothing ships until they are gone"
+  scan_identifiers "$ids" "${list[@]}" || scan_fail "$?" release
   note "no MAC address, serial, IMEI, builder's home path or listed identifier"
   # No file from a factory image: tools/extract-vendor-firmware's targets,
   # the vendor chroots, Trusty state
@@ -856,16 +989,31 @@ st_verify() {
 }
 
 st_upload() {
-  local dir
+  local dir img root bh bh_repo bh_rrepo
   need verify_done verify >/dev/null
   dir=$(need bundle bundle)
+  img=$(need rootfs rootfs)
   say "§11.8: upload to pkgs.omamobile.org/releases/$DEVICE/$version/ (files before the index)"
   [[ $(basename "$dir") == "omamobile-$DEVICE-$version" ]] || die "$dir is not this release's bundle"
   if [[ ${1:-} != --done ]]; then
     # Checks the bundle's signature, files and root image, and prints the
     # ssh and rsync commands; uploads nothing
     run tools/release-upload --dry-run "$dir" || die "tools/release-upload --dry-run refuses $dir (above)"
-    derek "tools/release-upload --full --latest $dir"
+    if build_host; then
+      # The bundle, its one-file .tar with its two files, and the root
+      # image's three files beside it, as release-upload reads them there
+      [[ $dir == "out/bundle/omamobile-$DEVICE-$version" ]] || die "$dir is not out/bundle/, where the build host's checkout takes it"
+      root=out/bundle/$(basename "$img")
+      [[ $root =~ ^[A-Za-z0-9._/-]+\.img\.zst$ ]] || die "the root image $root has no plain name"
+      derek "# to the build host, which alone may write pkgs.omamobile.org (as $PKGS_HOST):" \
+            "rsync -a --partial -- $dir $dir.tar $dir.tar.sha256 $dir.tar.sha256.sig $root $root.sha256 ${root%.img.zst}.MANIFEST $bh:$bh_rrepo/out/bundle/" \
+            "ssh $bh 'git -C $bh_repo pull --ff-only origin main'" \
+            "ssh -t $bh 'cd $bh_repo && OMAMOBILE_PKGS_HOST=$PKGS_HOST tools/release-upload --dry-run $dir'" \
+            "ssh -t $bh 'cd $bh_repo && OMAMOBILE_PKGS_HOST=$PKGS_HOST tools/release-upload --full --latest $dir'" \
+            "# then here: tools/release --version $version upload --done"
+    else
+      derek "tools/release-upload --full --latest $dir"
+    fi
   fi
   ((dry)) && return 0
   if [[ ${1:-} == --done ]]; then
@@ -886,8 +1034,7 @@ st_promote() {
      [[ $(sha256sum < out/publish/development/aarch64/omamobile.db.tar.gz | cut -d' ' -f1) != "$index" ]]; then
     die "development moved past the tested index ${index:0:12}: promote nothing; cut a respin (.1) from the new index, or republish the tested one"
   fi
-  derek "tools/repo-publish --dry-run stable --expect-index $index" \
-        "tools/repo-publish stable --expect-index $index"
+  derek_promote "$index"
   ((dry)) && return 0
   if [[ ${1:-} == --done ]]; then
     local url=https://pkgs.omamobile.org/stable/aarch64/omamobile.db got
@@ -953,7 +1100,7 @@ case $stage in
     (($#)) || die "scan needs files or directories"
     ids=${RELEASE_IDENTIFIERS:-$HOME/.config/omamobile/release-identifiers}
     [[ -f $ids ]] || die "no $ids (or set RELEASE_IDENTIFIERS)"
-    scan_identifiers "$ids" "$@" || die "identifiers found (above)"
+    scan_identifiers "$ids" "$@" || scan_fail "$?"
     note "no MAC address, serial, IMEI, builder's home path or listed identifier in $*"
     ;;
   *) die "unknown stage $stage (see --help)" ;;
