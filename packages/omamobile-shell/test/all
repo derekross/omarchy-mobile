@@ -301,6 +301,41 @@ grep -c 'anchors.bottom: settingsFooter.top' $h/HomeSheets.qml >/dev/null || fai
 grep -c 'anchors.bottom: createFooter.top' $h/HomeSheets.qml >/dev/null || fail "Create is pinned under its field"
 pass "touch navigation: back, home pill, drawer pull, undo, fields in view"
 
+# The bar's cards: a tap on an item opens its card as a click does in Omarchy's
+# bar (Omarchy's own power and network panels, loaded unchanged; quick
+# settings' Bluetooth panel; the time and mobile network cards built from
+# Omarchy's panel parts), every
+# item is a click target so an open card hands a tap on another item to it,
+# and only a pull opens quick settings.
+b=plugins/omamobile.bar/Bar.qml
+for panel in power network; do
+  grep -cF "\"/shell/plugins/panels/$panel/Panel.qml\"" "$b" >/dev/null || fail "the bar loads Omarchy's own $panel panel"
+done
+[[ $(grep -c 'Component.onCompleted: root.clickTargets = root.clickTargets.concat(\[this\])' "$b") == 5 ]] || fail "all five items are click targets of an open card"
+[[ $(grep -c 'function triggerPress(button)' "$b") == 5 ]] || fail "a tap an open card hands on opens that item's card"
+awk '/id: touch$/,/^      }$/' "$b" | grep -cF 'onClicked: if (!pulled && !root.cardsOnTap) root.toggleQuickSettings()' >/dev/null || fail "a tap on the strip toggles quick settings only with bar.cardsOnTap off"
+grep -cF 'readonly property bool cardsOnTap: setting("cardsOnTap", false) === true' "$b" >/dev/null || fail "the cards are behind bar.cardsOnTap, off by default"
+[[ $(grep -c 'enabled: root.cardsOnTap' "$b") == 5 && $(grep -c 'active: root.cardsOnTap' "$b") == 4 ]] || fail "with bar.cardsOnTap off no item takes a tap and no card is loaded"
+grep -cF "panels/bluetooth/Panel.qml" "$b" >/dev/null && fail "the Bluetooth item opens quick settings' panel, not Omarchy's card"
+grep -cF 'shell.summon(quickSettingsId, JSON.stringify({ source: "bar", page: "bluetooth" }))' "$b" >/dev/null || fail "the Bluetooth item opens quick settings' Bluetooth panel"
+awk '/id: touch$/,/^      }$/' "$b" | grep -c 'root.openQuickSettings()' >/dev/null || fail "a pull on the bar opens quick settings"
+grep -cF 'sourceComponent: CellularPanel {' "$b" >/dev/null || fail "the signal opens the mobile network card"
+grep -cF 'sourceComponent: TimePanel {' "$b" >/dev/null || fail "the clock opens the time card"
+for f in CellularPanel TimePanel; do
+  grep -c '^Panel {' "plugins/omamobile.bar/$f.qml" >/dev/null && grep -c 'KeyboardPanel {' "plugins/omamobile.bar/$f.qml" >/dev/null || fail "$f is built on Omarchy's Panel and KeyboardPanel"
+done
+grep -cF '["omamobile-sit", "data", on ? "on" : "off"]' plugins/omamobile.bar/CellularPanel.qml >/dev/null || fail "the card's switch turns mobile data on and off through omamobile-sit"
+grep -cF '"timedatectl show -p Timezone --value; date +%Z"' plugins/omamobile.bar/TimePanel.qml >/dev/null || fail "the time card shows the system's time zone and its abbreviation"
+sp=$(mktemp)
+printf '%s' '<serviceproviders><country code="us"><provider><name>Reseller</name><gsm><network-id mcc="001" mnc="010"/></gsm></provider><provider primary="true"><name>Example Mobile</name><gsm><network-id mcc="001" mnc="010"/></gsm></provider><provider><name>Two Digit</name><gsm><network-id mcc="002" mnc="01"/></gsm></provider></country></serviceproviders>' > "$sp"
+cn() { python3 -I plugins/omamobile.bar/carrier-name.py "$@"; }
+[[ $(cn 001010 "$sp") == $'001010\tExample Mobile' ]] || fail "the carrier's name: the primary provider first"
+[[ $(cn 00201 "$sp") == $'00201\tTwo Digit' ]] || fail "the carrier's name: a two-digit MNC"
+[[ $(cn 99999 "$sp") == $'99999\t' ]] || fail "the carrier's name: an unknown code gives none"
+[[ $(cn 001010 /nonexistent) == $'001010\t' ]] || fail "the carrier's name: no provider file gives none"
+rm -f "$sp"
+pass "the bar's items open their cards, Omarchy's own where Omarchy has one"
+
 # The notification shade, the Settings gear and the bar's unread count
 # (TOUCH-PLAN 1.1, 1.3): Clear all goes through the notification service's
 # IPC on this shell (dismissAll, then clear), the gear opens Omarchy's menu
@@ -513,7 +548,8 @@ bash -n hooks/theme-set-keyboard || fail "the theme-set hook parses"
 # key codes reach 124 (XF86PowerOff in Hyprland's keymap) and share the held
 # state with the real buttons.
 [[ $(grep -c 'device = hw_keys' hypr/phone.lua) == 5 ]] || fail "the five hardware-key binds are limited to real keyboards"
-grep -c 'inclusive = false, list = { "hl-virtual-keyboard-squeekboard" }' hypr/phone.lua >/dev/null || fail "squeekboard is excluded from the hardware-key binds"
+grep -c 'local osk_devices = { "hl-virtual-keyboard-squeekboard", "hl-virtual-keyboard-tactus" }' hypr/phone.lua >/dev/null &&
+  grep -c 'local hw_keys = { inclusive = false, list = osk_devices }' hypr/phone.lua >/dev/null || fail "squeekboard and Tactus are excluded from the hardware-key binds"
 grep -cx 'exec omamobile-keyboard-theme --restart' hooks/theme-set-keyboard >/dev/null || fail "the theme-set hook rewrites and restarts"
 rc=0; out=$(python3 -B test/keyboard-layouts.py 2>&1) || rc=$?
 if [[ $rc == 77 ]]; then
@@ -609,22 +645,27 @@ out=$(printf '0000\n4321\n4321\n' | OMAMOBILE_PIN_WAIT=1 OMAMOBILE_PIN_DONE_WAIT
 # ...and passwd is still allowed to finish after the helper has left
 cat >"$fake/passwd" <<'STUB'
 #!/bin/bash
-read -rsp "Current password: " a; read -rsp "New password: " b; read -rsp "Retype new password: " c; sleep 3; touch "${0%/*}/finished"
+read -rsp "Current password: " a; read -rsp "New password: " b; read -rsp "Retype new password: " c
+# it stays until the test lets it go (at most 15 s), not for a fixed time: on a
+# busy machine a 3 s passwd had ended, and taken the keeper with it, before the
+# scan below ran
+for _ in $(seq 150); do [[ -e ${0%/*}/release ]] && break; sleep 0.1; done
+touch "${0%/*}/finished"
 STUB
-rm -f "$fake/finished"; rc=0; mkdir -p "$fake/run"
+rm -f "$fake/finished" "$fake/release"; rc=0; mkdir -p "$fake/run"
 out=$(cd "$fake/run" && printf '0000\n4321\n4321\n' | OMAMOBILE_PIN_WAIT=1 OMAMOBILE_PIN_DONE_WAIT=1 timeout 10 bash "$fake/set-pin" --change 2>&1) || rc=$?
 (( rc != 0 && rc != 124 )) && [[ $out == *"may or may not have changed"* ]] || fail "the slow passwd is reported as maybe changed (rc $rc): $out"
 (( rc == 75 )) || fail "a maybe-changed PIN exits with status 75 (rc $rc)"
 keeper=0
-# only this user's cats: a fork per /proc entry took 5 s on a busy build host,
-# longer than the fake passwd lives, and the keeper had left before the scan
-# reached it
+# only this user's cats: a fork per /proc entry took 5 s on a busy build host
+# (the fake passwd now also waits for the test, so the scan can't outlast it)
 for p in $(pgrep -u "$(id -u)" -x cat); do
   d=/proc/$p
   if [[ $(readlink "$d/cwd" 2>/dev/null) == "$fake/run" && $(readlink "$d/fd/0" 2>/dev/null) == */ptmx && $(tr '\0' ' ' <"$d/cmdline" 2>/dev/null) == "cat " ]]; then keeper=1; fi
 done
 (( keeper )) || fail "the keeper is a plain cat on the pty, not the python that held the PINs"
-sleep 4
+touch "$fake/release"
+for _ in $(seq 50); do [[ -e $fake/finished ]] && break; sleep 0.1; done
 [[ -e $fake/finished ]] || fail "passwd is not hung up when the helper leaves: it finishes"
 # in the terminal flow: no "Try again?" after a maybe-changed PIN, but one after a plain refusal
 mkdir -p "$fake/bin"
@@ -1197,6 +1238,9 @@ if [[ -n $lua ]]; then
     out=$(DEVICE_HOOK_CASE=$hook "$lua" test/phone-rules.lua) || { grep -v '^ok' <<<"$out"; fail "phone.lua with a $hook device.lua"; }
   done
   pass "phone.lua: device.lua runs after the shared rules, and an error in it leaves them standing"
+  # The workspace fade's two calls are under pcall: a Hyprland that refuses them loads the rest.
+  out=$(FADE_CASE=refused "$lua" test/phone-rules.lua) || { grep -v '^ok' <<<"$out"; fail "phone.lua with the fade's calls refused"; }
+  pass "phone.lua: a Hyprland that refuses the fade's calls keeps the cut and loads the rest"
   # Dictation keys under Omarchy 4.5's helpers: four homes, four bindings.lua
   dk=$(mktemp -d)
   mkdir -p "$dk/plain/.config/hypr" "$dk/migrated/.config/hypr" "$dk/own/.config/hypr"
@@ -1267,6 +1311,12 @@ else
   pass "widget crash guard: same-boot death held back, one retry after a system going down, clean run and quit clear"
 fi
 bash test/osk-guard.sh || fail "omamobile-osk-guard"
+bash -n bin/omamobile-osk || fail "omamobile-osk parses"
+bash test/osk.sh || fail "omamobile-osk"
+grep -cx 'ExecStart=/usr/bin/omamobile-osk' systemd/user/mobi.phosh.OSK-omamobile.conf >/dev/null &&
+  grep -c 'systemd/user/mobi.phosh.OSK-omamobile.conf "$destination/usr/lib/systemd/user/mobi.phosh.OSK.service.d/omamobile.conf"' install >/dev/null ||
+  fail "squeekboard's user unit runs the chosen keyboard"
+grep -c 'omarchy-done ensure omamobile-menu-keyboard' bin/omamobile-setup-user >/dev/null || fail "Setup > Keyboard in Omarchy's menu"
 bash -n bin/omamobile-onboarding || fail "omamobile-onboarding parses"
 bash test/onboarding-fingerprint.sh || fail "omamobile-onboarding's fingerprint offer"
 bash test/onboarding-mobile.sh || fail "omamobile-onboarding's SIM line"
