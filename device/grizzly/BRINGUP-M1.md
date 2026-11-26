@@ -4675,6 +4675,42 @@ tests the panel path before framebuffer DMA is qualified. A
 later RAM-backed test frame still needs a verified display
 SMMU mapping. Keep touch and Hyprland for after first light.
 
+#### D1 display power and clock provider
+
+In both Grizzly B0 merges, DPU clients refer to child domains
+of `google,mbu-power-controller`. Use the MBFS names and
+parent relationships above. The factory ramdisk also carries
+`lpm_pm_domains.ko` with direct DPU register and PSM callbacks
+for `google,mbu-dpu-lpm-pm-domains`, but that compatible is
+absent from both Grizzly trees. The presence of a callback in
+the module is insufficient to use those MMIO offsets on Grizzly.
+
+The three CPM clock tuples are identical in both merges.
+The rates are clock-provider entries, independent of the
+DRM mode's pixel-clock field.
+
+| Clock | LPCM ID | Clock ID | Stock rates (MHz) |
+| --- | --- | --- | --- |
+| DSI0 pixel | `0x23` | `0x01` | 50, 100, 150 |
+| BE | `0x23` | `0x04` | 200, 356, 480, 672 |
+| FE0 | `0x23` | `0x05` | 200, 356, 480, 672 |
+
+The stock 4 KiB-page `clk-cpm.ko` mailbox helper packs
+`op << 24 | clock_id << 16 | lpcm_id << 8 | 0x02` and an
+argument word into an eight-byte request. The command format
+matches v73's existing LPCM transport. In the stock mailbox
+path, prepare uses op 0 with argument 1, rate readback uses
+op 3, and set-rate uses op 5 with the rate argument.
+The v73 USB/UFS clock gates do not implement this display
+rate interface.
+
+For the next provider diagnostic, qualify the four MBFS
+domain lookups and the LPCM rate replies before adding display
+consumers. Treat a resolved MBFS handle or nonzero clock rate
+as firmware metadata. Domain vote acknowledgement, clock
+readback under power, DSI host access and a frame completion
+are separate checks.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
