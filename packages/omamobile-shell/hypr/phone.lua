@@ -133,6 +133,12 @@ o.bind("XF86AudioRaiseVolume", "Volume up released", "omamobile-keys volume-up-r
 -- onboarding that Omarchy's installer does on a computer.
 o.launch_on_start("omamobile-onboarding --nudge")
 
+-- The refresh rate chosen in Settings, applied again at every session start
+-- (omamobile-settings' display.sh apply; it does nothing when no rate is
+-- saved, falls back to the preferred mode for one the panel no longer lists,
+-- and the script may be absent when the Settings app is not installed).
+o.launch_on_start("bash -c 'f=/usr/lib/omamobile-settings/backends/display.sh; [ -r \"$f\" ] && bash \"$f\" apply >/dev/null 2>&1; exit 0'")
+
 -- The screensaver turns the on-screen keyboard off while it runs and back on
 -- when it exits (patches/omarchy/0006). A session restart, a reboot or the
 -- lock can end it before it does, which left the keyboard off for good. No
