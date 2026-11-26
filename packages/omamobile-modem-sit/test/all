@@ -32,12 +32,19 @@ for f in usr/bin/omamobile-sitd usr/bin/omamobile-sit usr/bin/omamobile-sit-data
          usr/lib/NetworkManager/conf.d/90-omamobile-rmnet.conf etc/omamobile/modem-sit.conf \
          usr/lib/omamobile-sit/omamobile-sit-config usr/lib/omamobile-sit/carrier_apn.py \
          usr/share/polkit-1/actions/org.omamobile.modem-sit.policy \
+         usr/share/polkit-1/rules.d/50-omamobile-sit-data.rules \
          usr/share/omamobile/modem-sit/apn-overrides.conf \
          usr/share/licenses/omamobile-modem-sit/LICENSE \
          usr/lib/systemd/system-sleep/omamobile-modem-sit; do
   [[ -e $stage/$f ]] || fail "staged $f"
 done
 [[ -x $stage/usr/lib/systemd/system-sleep/omamobile-modem-sit ]] || fail "the sleep hook is executable"
+r=$stage/usr/share/polkit-1/rules.d/50-omamobile-sit-data.rules
+grep -cF 'action.lookup("unit") == "omamobile-sit-data.service"' "$r" >/dev/null &&
+  grep -cF 'subject.local && subject.active && subject.isInGroup("wheel")' "$r" >/dev/null &&
+  grep -cF '(action.lookup("verb") == "start" || action.lookup("verb") == "stop")' "$r" >/dev/null &&
+  ! grep -c 'restart\|enable\|mask' "$r" >/dev/null ||
+  fail "polkit: only start and stop of the data unit, for the active local wheel user"
 # The sleep hook asks sitd for "screen off" with a hold, only before a sleep,
 # and never stops the sleep (no sitd, or a refusal).
 hook=$stage/usr/lib/systemd/system-sleep/omamobile-modem-sit

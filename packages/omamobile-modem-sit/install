@@ -12,6 +12,8 @@ for f in lib/*.py; do install -Dm644 "$f" "$d/usr/lib/omamobile-sit/${f#lib/}"; 
 # carrier overrides the automatic APN reads before the carrier database.
 install -Dm755 lib/omamobile-sit-config "$d/usr/lib/omamobile-sit/omamobile-sit-config"
 install -Dm644 polkit/org.omamobile.modem-sit.policy "$d/usr/share/polkit-1/actions/org.omamobile.modem-sit.policy"
+# Mobile data on and off with no password (omamobile-sit data, the quick-settings tile)
+install -Dm644 polkit/50-omamobile-sit-data.rules "$d/usr/share/polkit-1/rules.d/50-omamobile-sit-data.rules"
 install -Dm644 share/apn-overrides.conf "$d/usr/share/omamobile/modem-sit/apn-overrides.conf"
 for f in systemd/*.service; do install -Dm644 "$f" "$d/usr/lib/systemd/system/${f#systemd/}"; done
 install -Dm755 systemd/system-sleep/omamobile-modem-sit "$d/usr/lib/systemd/system-sleep/omamobile-modem-sit"
