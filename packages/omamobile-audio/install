@@ -36,5 +36,6 @@ install -Dm644 ucm2/Google/husky/HiFi.conf "$d/usr/share/alsa/ucm2/Google/husky/
 install -Dm644 wireplumber/55-omamobile-husky-aoc.conf "$d/usr/share/wireplumber/wireplumber.conf.d/55-omamobile-husky-aoc.conf"
 install -Dm644 wireplumber/54-omamobile-no-voice-call-restore.conf "$d/usr/share/wireplumber/wireplumber.conf.d/54-omamobile-no-voice-call-restore.conf"
 install -Dm644 wireplumber/scripts/omamobile-no-voice-call-restore.lua "$d/usr/share/wireplumber/scripts/omamobile-no-voice-call-restore.lua"
+install -Dm644 wireplumber/56-omamobile-bluetooth-no-headset-autoswitch.conf "$d/usr/share/wireplumber/wireplumber.conf.d/56-omamobile-bluetooth-no-headset-autoswitch.conf"
 install -Dm644 pipewire/60-omamobile-speaker-loudness.conf "$d/usr/share/pipewire/pipewire.conf.d/60-omamobile-speaker-loudness.conf"
 install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-audio/LICENSE"
