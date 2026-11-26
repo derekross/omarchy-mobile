@@ -13,7 +13,7 @@ local noop = function() end
 local binds = {}
 local function dsp(name) return function(arg) return { dsp = name, arg = arg } end end
 hl = {
-  config = noop, window_rule = noop, layer_rule = noop, device = noop,
+  config = noop, window_rule = noop, layer_rule = noop, animation = noop, curve = noop, device = noop,
   unbind = function(keys)
     local kept = {}
     for _, b in ipairs(binds) do if b.keys ~= keys then kept[#kept + 1] = b end end
@@ -52,7 +52,8 @@ local function find(keys)
 end
 local function not_osk(b)
   local d = b.opts.device
-  return d ~= nil and d.inclusive == false and #d.list == 1 and d.list[1] == "hl-virtual-keyboard-squeekboard"
+  return d ~= nil and d.inclusive == false and #d.list == 2 and d.list[1] == "hl-virtual-keyboard-squeekboard"
+    and d.list[2] == "hl-virtual-keyboard-tactus"
 end
 local space, f9 = find("ALT + SPACE"), find("F9")
 for _, b in ipairs(f9) do
