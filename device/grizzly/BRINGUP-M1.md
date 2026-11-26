@@ -5459,6 +5459,43 @@ request. Stock D1 A completed boot with enforcing verity and
 the original VBMeta digest. Ramoops and `SYSTEM_LAST_KMSG`
 matched all 52 filtered lines.
 
+##### Offline DSI0 power-vote fixture
+
+Both retained stock D1 base trees identify `DpuDsi0.v` as
+resource `0x203` under `DpuBe.v`. Earlier live queries
+resolved the DSI0 handle to `0x15c002a`.
+
+Kernel `7.3.0-rc6-omamobile-grizzly-display-dsi0` at
+`c8dd5c7184e0e0f09c9511c3102cb384182078fa` adds the opt-in
+`clk_google_malibu_cpm.display_dsi0=1` flag. The fixture
+enables it with the Grizzly wrapper and BE flags. The one-shot
+trigger checks all seven initial AP votes. With all seven
+clear, it requests wrapper ON, BE ON, DSI0 ON, DSI0 OFF,
+BE OFF, then wrapper OFF. Each step checks the CPM reply and
+vote readback, including deferred completion where applicable.
+If a transition fails, the fixture stops without retry. An
+unconfirmed DSI0 transition leaves the parent votes in place
+for the independent timed return.
+
+The fixture keeps the early read-only clock queries. It
+isolates DSI0 by leaving the FE0 cycle, powered rate queries,
+display clock gates, DSI host, PHY and panel disabled. The
+vendor boot images and DTBO are byte identical to the
+live-tested powered FE0 fixture and preserve the UFS guard,
+USB SSH and timed return.
+
+The arm64 build and style check passed. A mock verified all
+six transitions, inherited votes, failure of each initial
+sample and transition, repeat-trigger rejection and the
+prior wrapper, BE and FE0 paths. All five image hashes, both
+AVB signatures, ABL handoff bounds and saved D1 slot fit
+passed. The `SHA256SUMS` digest is
+`6ea2ff8095ede05e1fc1473ec9e44f7d3343c8b5a3f13331f6b58bf656fc613a`.
+
+Hardware validation remains pending. An attended slot B boot
+needs a fresh verified NV backup, a retained trace of the
+initial votes and all six transitions, and a return to stock A.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
