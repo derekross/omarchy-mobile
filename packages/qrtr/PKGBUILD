@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: 0BSD
+# Omarchy Mobile build of qrtr 1.2, derived from https://aur.archlinux.org/cgit/aur.git/tree/PKGBUILD?h=qrtr&id=b81053e1efa0797acc648f6f6286a48529ab95c3.
+# Upstream source: https://github.com/linux-msm/qrtr/tree/v1.2 (b51ffaf22707b6000ecfb894c5b750f3bb7843b2).
+# Maintainer: Super Tecno Gym <banana@grrlz.net>
+# Contributor: Sam Day <me@samcday.com>
+
+pkgname="qrtr"
+pkgdesc="Qualcomm QRTR userspace library and tools"
+pkgver=1.2
+pkgrel=1
+arch=(aarch64 x86_64)
+url="https://github.com/linux-msm/qrtr"
+license=("BSD-3-Clause")
+_srcname="${pkgname}-${pkgver}"
+source=("${_srcname}.tar.gz::https://github.com/linux-msm/qrtr/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('7a82bf80246fe71287b13c66c0466208822e8337fcd4aaf302eee6c5fcb48a52')
+makedepends=(meson)
+
+build() {
+        cd "$_srcname"
+
+        mkdir -p build
+        meson setup build --prefix=/usr -Dqrtr-ns=disabled
+        meson compile -C build
+}
+
+package() {
+        cd "$_srcname"
+
+        meson install -C build --destdir "$pkgdir"
+        install -Dm644 LICENSE "$pkgdir"/usr/share/licenses/$pkgname/COPYING
+}
