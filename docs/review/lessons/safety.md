@@ -3,6 +3,43 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1188. A plan that ends every trial with a stock boot makes its backup
+  older than the next trial by construction.** #1002's backup was taken in a
+  rescue; v40 and v41 each followed a return to stock on slot A, and a stock
+  boot rewrites `efs`, `persist` and `modem_userdata`. *Check:* for a bring-up
+  plan whose return step boots stock, list each trial with the stock boot
+  before it, and ask which backup or `tools/nv-backup --check` covers the
+  PMIC, CPM or radio work in it. Extends L-168 and L-1061. *From:* #1002,
+  round 68, 2026-11-25.
+- **L-1187. A device draft's commits are checked for shared paths every round,
+  because a bring-up branch can pick up a guard change on the way.** #1002's
+  round-68 head gained `initramfs/init` and `tools/nv-backup` commits under
+  device-sounding subjects, while the phone ran neither (its rescue used a
+  stock kernel and a device ramdisk). *Check:* `git diff --stat
+  origin/main...<head> -- bin tools initramfs rootfs tests packages AGENTS.md
+  CONTRIBUTING.md` at the start of each round, and for each hit ask whether
+  the record's boots ran that file. Extends L-1121 and L-1156. *From:* #1002,
+  round 68, 2026-11-25.
+- **L-1186. A bind mount added to a vendor chroot is judged by what every
+  process in the chroot can then open, not only by what our helper needs.**
+  #1055 bound the host's whole `/dev/input` read-only so the bridge could find
+  a rebound touchscreen; read-only still lets Google's HAL and storage proxy
+  read every key and keyboard. *Check:* `git diff origin/main...<head> --
+  'packages/*/lib/*chroot*' | grep '^+.*bind '`, list for each new bind the
+  device nodes it exposes and the processes the runner starts in that root,
+  and offer the narrowest node the helper needs, bound by the host-side
+  runner. Extends L-571 and L-1126. *From:* #1055, round 68, 2026-11-25.
+- **L-1185. A package step that turns on an upstream unit "as upstream's first
+  run does" is read for the safety condition in that unit's own comment, and
+  the condition is checked on a phone.** #1054 enables Omarchy's
+  `bt-agent.service`, whose comment calls auto-accepting pairings safe because
+  the adapter is pairable only while Omarchy's panel scans; the PR's own
+  reading on a 9a was `Pairable: yes`. *Check:* `bsdtar -xOf` the signed
+  package's unit, list each "safe because" clause, and ask for the read-only
+  state that tests it (here `bluetoothctl show | grep -E
+  'Pairable|Discoverable'`, never the full output, which holds the address) on
+  the reference phone. Extends L-1166 and L-1126. *From:* #1054, round 68,
+  2026-11-25.
 - **L-1162. A driver that starts writing a PMIC function's shadow registers is
   checked against the vendor's load for any command that commits them to
   non-volatile memory, and the write table is compared with the vendor's list
@@ -380,38 +417,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   'restricted\|memory-region\|iommus'` in the record and the board node, and
   ask for the sentence and the gate. Extends L-777 and L-486. *From:* #822
   with kernel #255, round 61, 2026-11-18.
-- **L-893. An installer PR that removes a fallback is reviewed as a table of
-  what each kind of computer sends the phone before and after.** For #877
-  that table showed one variant removed (the raw `userdata` image from a
-  computer without `img2simg`) and none added, which made "no phone test
-  needed" a finding and not an assumption. *Check:* list the host conditions
-  the changed branch tests, and for each write the exact fastboot lines from
-  the suite's expected output on main and on the head. Extends L-223 and
-  L-668. *From:* #877, round 61, 2026-11-18.
-- **L-885. A backup "taken after the stock boots, before any Trusty start" is
-  placed in UTC next to the author's other threads.** #203's reference backup
-  was dated the night between two days on which the same author's #874 says
-  the phone's first storage proxy start ran. *Check:* convert the backup's
-  time with the zone of the author's commits, search the author's open PRs
-  for dated hardware starts in that window, and ask which came first.
-  Extends L-591, L-168 and L-559. *From:* #203 with #874, round 61,
-  2026-11-18.
-- **L-884. An answer to "what do the slot flags read?" is decoded against the
-  last recorded bytes, and a "successful: yes" where we last agreed "no
-  marking" is a write to find.** #203's reply gave slot B as successful; the
-  earlier record and the restore since meant a new mark had to exist: a hand
-  `devinfo` write three days after "don't write `devinfo` again", disclosed
-  only when asked. *Check:* lay each reported byte of 0x30-0x37 next to the
-  previous record with the layout's bits (0x01 unbootable, 0x02 successful,
-  0x04 active, 0x08 fastboot-ok), list every bit that moved, ask for each
-  what wrote it and when, and compare the dates with every hold in the
-  device issue. Extends L-36, L-359 and L-756. *From:* #203 with issue #143,
-  round 61, 2026-11-18.
-- **L-870. A stop-condition grep that must come back empty is not where an
-  "expected line" goes.** #835 made the UFS `dme-set` line expected, and the
-  contributor offered to add it to the `after` helper's grep, whose Pass is
-  "empty"; that would have failed every later stage. *Check:* when a plan
-  excuses a log line, read each helper that greps for errors and its Pass
-  wording; an excused line gets its own counted check beside the helper,
-  never an entry in the must-be-empty pattern. Extends L-756 and L-183.
-  *From:* #835, round 61, 2026-11-18.

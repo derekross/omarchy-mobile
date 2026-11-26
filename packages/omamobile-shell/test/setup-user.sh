@@ -26,7 +26,12 @@ if [[ $1 == list-keys && $2 == org.gnome.nautilus.preferences ]]; then
   printf "default-folder-viewer\n"; [[ -n ${GSETTINGS_NO_CLICK_POLICY:-} ]] || printf "click-policy\n"
 fi'
 # systemctl: logs calls; fails while $HOME/systemctl-fails exists (no user manager)
-fake systemctl 'echo "systemctl $*" >>"$HOME/calls"; [[ ! -e $HOME/systemctl-fails ]]'
+# `show -p DropInPaths` prints $HOME/drop-ins; `is-active` is true while
+# $HOME/active-<unit> exists
+fake systemctl 'echo "systemctl $*" >>"$HOME/calls"; [[ ! -e $HOME/systemctl-fails ]] || exit 1
+if [[ $2 == show ]]; then [[ -e $HOME/drop-ins ]] && cat "$HOME/drop-ins"; exit 0; fi
+if [[ $2 == is-active ]]; then [[ -e $HOME/active-${4:-} ]]; exit; fi
+exit 0'
 ln -s "$pkg/bin/omamobile-browser-setup" "$F/omamobile-browser-setup"
 fake hyprctl 'exit 1'
 fake chromium 'echo "Chromium 153.0.0.0"'
@@ -110,10 +115,27 @@ for id in update.channel update.channel.stable update.channel.rc update.channel.
   [[ $(grep -c "\"$id\"" "$ext") == 1 ]] || fail "Menu row $id is named once after two logins"
 done
 grep -qx 'system.logout true' <<<"$menu" || fail "a row the user set is left as they set it"
+# Typing shows only while fcitx5 is on, and a reused id replaces Omarchy's
+# entry, so each row carries its own label, icon and action
+typing=$(python3 -I - "$ext" <<'PY2'
+import json, re, sys
+text = open(sys.argv[1]).read()
+text = re.sub(r'^\s*//.*$', '', text, flags=re.M)
+text = re.sub(r',(\s*[}\]])', r'\1', text)
+for key, value in json.loads(text).items():
+    if key.startswith("setup.typing"):
+        print(key, value["icon"] == "\uf11c", value["label"], value.get("action", "-"), value["when"], sep="|")
+PY2
+)
+[[ $typing == $'setup.typing|True|Typing|-|test -e ~/.config/omamobile/fcitx5\nsetup.typing.keyboard|True|Keyboard Layouts|omarchy-setup-keyboard|test -e ~/.config/omamobile/fcitx5\nsetup.typing.input|True|Input Methods|omarchy-setup-input|test -e ~/.config/omamobile/fcitx5' ]] ||
+  fail "Setup > Typing shows only with fcitx5 on, with its label, icon and action: $typing"
+for id in setup.typing setup.typing.keyboard setup.typing.input; do
+  [[ $(grep -c "\"$id\"" "$ext") == 1 ]] || fail "Menu row $id is named once after two logins"
+done
 for id in style.bar.position.top appearance.top-bar.position.top appearance.top-bar.indicators update.omarchy install.gaming.retroarch; do
   grep -q "^$id false" <<<"$menu" && fail "Menu row $id stays"
 done
-pass "menu rows that break the phone are hidden once, by content, and a user's own entry is kept"
+pass "menu rows that break the phone are hidden once, by content, Typing only without fcitx5, and a user's own entry is kept"
 
 U=$H/.local/share/applications
 for id in org.gnome.DiskUtility org.gnome.Evince cups; do
@@ -439,6 +461,99 @@ done
   || fail "the keyboard's theme-set hook is linked"
 pass "the keyboard: every layout, the theme at each login, its import and hook once"
 
+# Which keyboard: the start line runs omamobile-osk (the owner's choice), once, and squeekboard where
+# omamobile-osk is gone (an older omamobile-shell installed over this one)
+osk_line="o.launch_on_start(\"sh -c 'command -v omamobile-osk >/dev/null && exec omamobile-osk; exec squeekboard'\")"
+[[ $(grep -cxF "$osk_line" "$H/.config/hypr/autostart.lua") == 1 ]] || fail "a new user's session starts the chosen keyboard, once"
+if grep -c 'launch_on_start("squeekboard")' "$H/.config/hypr/autostart.lua" >/dev/null; then fail "a new user's start line names no keyboard"; fi
+# What the line runs, with omamobile-osk there and gone (sh as Hyprland's exec gives it). Only
+# the fakes and sh are on PATH: a machine with this package installed has /usr/bin/omamobile-osk,
+# and with Tactus chosen there it would start the real keyboard and never return.
+lt=$t/osk-line; mkdir -p "$lt/with" "$lt/without"
+for d in with without; do
+  printf '#!/bin/sh\necho squeekboard\n' >"$lt/$d/squeekboard"; chmod +x "$lt/$d/squeekboard"
+  ln -s "$(command -v sh)" "$lt/$d/sh"
+done
+printf '#!/bin/sh\necho omamobile-osk\n' >"$lt/with/omamobile-osk"; chmod +x "$lt/with/omamobile-osk"
+cmd=$(sed -E 's/^o\.launch_on_start\("(.*)"\)$/\1/' <<<"$osk_line")
+[[ $(PATH="$lt/with" "$lt/with/sh" -c "$cmd") == omamobile-osk && $(PATH="$lt/without" "$lt/without/sh" -c "$cmd") == squeekboard ]] \
+  || fail "the start line runs omamobile-osk, and squeekboard without it"
+python3 -I - "$H/.config/omarchy/extensions/omarchy-menu.jsonc" <<'PY' || fail "Setup > Keyboard offers the keyboards"
+import json, re, sys
+text = open(sys.argv[1]).read()
+text = re.sub(r"(?m)^\s*//.*$", "", text)
+text = re.sub(r",(\s*[}\]])", r"\1", text)
+menu = json.loads(text)
+top = menu["setup.keyboard"]
+assert top["label"] == "Keyboard" and top["icon"] == "\U000f030c" and top["when"] == "command -v tactus", top
+assert "action" not in top, top
+for name, label in (("squeekboard", "Standard"), ("tactus", "Tactus")):
+    row = menu["setup.keyboard." + name]
+    assert row["label"] == label and row["action"] == "omamobile-osk use " + name, row
+    assert row["checked"] == "[[ $(omamobile-osk which) == %s ]]" % name, row
+PY
+[[ $(grep -c '"setup.keyboard"' "$H/.config/omarchy/extensions/omarchy-menu.jsonc") == 1 ]] || fail "Setup > Keyboard is added once"
+# A user from before 0.2.134: the line this script wrote is changed once, a line of their own is not
+ho2=$t/keyboard-old; mkdir -p "$ho2/.config/hypr" "$ho2/.config/omarchy/extensions" "$ho2/.local/state/omarchy/done"
+cp "$H"/.config/hypr/{looknfeel,monitors}.lua "$ho2/.config/hypr/"
+printf -- '-- autostart\n\n-- Omarchy Mobile: on-screen keyboard\no.launch_on_start("squeekboard")\no.launch_on_start("squeekboard --mine")\n' >"$ho2/.config/hypr/autostart.lua"
+touch "$ho2/.local/state/omarchy/done/omamobile-osk"
+RUN_HOME=$ho2 run
+[[ $(grep -cxF "$osk_line" "$ho2/.config/hypr/autostart.lua") == 1 ]] || fail "the old start line now runs the chosen keyboard"
+grep -cx 'o.launch_on_start("squeekboard --mine")' "$ho2/.config/hypr/autostart.lua" >/dev/null || fail "a start line of the user's own is kept"
+printf 'o.launch_on_start("squeekboard")\n' >>"$ho2/.config/hypr/autostart.lua"
+RUN_HOME=$ho2 run
+grep -cx 'o.launch_on_start("squeekboard")' "$ho2/.config/hypr/autostart.lua" >/dev/null || fail "the start line is changed once: put back by the user, it stays"
+# An autostart file that is a link (a dotfile setup): left a link, unchanged, with a line saying what to change
+ho3=$t/keyboard-linked; mkdir -p "$ho3/.config/hypr" "$ho3/.config/omarchy/extensions" "$ho3/.local/state/omarchy/done" "$ho3/dotfiles"
+cp "$H"/.config/hypr/{looknfeel,monitors}.lua "$ho3/.config/hypr/"
+printf -- '-- autostart\n\n-- Omarchy Mobile: on-screen keyboard\no.launch_on_start("squeekboard")\n' >"$ho3/dotfiles/autostart.lua"
+ln -s "$ho3/dotfiles/autostart.lua" "$ho3/.config/hypr/autostart.lua"
+touch "$ho3/.local/state/omarchy/done/omamobile-osk"
+before=$(sha256sum <"$ho3/dotfiles/autostart.lua")
+RUN_HOME=$ho3 run
+[[ -L $ho3/.config/hypr/autostart.lua && $(sha256sum <"$ho3/dotfiles/autostart.lua") == "$before" ]] || fail "a linked autostart file is left as it is"
+grep -c 'autostart.lua is a link, left as it is' "$t/out" >/dev/null || fail "the setup says what a linked autostart file needs"
+# One whose new copy can't be written (a folder in the way, so as root too): said, the setup goes
+# on to its end, and the next login tries again
+ho4=$t/keyboard-ro; mkdir -p "$ho4/.config/hypr/autostart.lua.new" "$ho4/.config/omarchy/extensions" "$ho4/.local/state/omarchy/done"
+cp "$H"/.config/hypr/{looknfeel,monitors}.lua "$ho4/.config/hypr/"
+printf -- '-- autostart\n\n-- Omarchy Mobile: on-screen keyboard\no.launch_on_start("squeekboard")\n' >"$ho4/.config/hypr/autostart.lua"
+touch "$ho4/.local/state/omarchy/done/omamobile-osk"
+RUN_HOME=$ho4 run
+grep -c "could not change the keyboard's start line" "$t/out" >/dev/null || fail "an autostart file that can't be written is reported"
+grep -cx 'o.launch_on_start("squeekboard")' "$ho4/.config/hypr/autostart.lua" >/dev/null || fail "nothing is half-written there"
+[[ -f $ho4/.local/state/omarchy/done/omamobile-menu-keyboard ]] || fail "the setup goes on past it"
+rmdir "$ho4/.config/hypr/autostart.lua.new"
+RUN_HOME=$ho4 run
+[[ $(grep -cxF "$osk_line" "$ho4/.config/hypr/autostart.lua") == 1 ]] || fail "the next login changes the line"
+# A start line the owner changed (here: one that logs squeekboard's output): left alone, and the setup
+# says once that the choice in Setup > Keyboard won't start at login with it. A file that starts no
+# keyboard at all gets no such line.
+ho5=$t/keyboard-own-line; mkdir -p "$ho5/.config/hypr" "$ho5/.config/omarchy/extensions" "$ho5/.local/state/omarchy/done"
+cp "$H"/.config/hypr/{looknfeel,monitors}.lua "$ho5/.config/hypr/"
+printf -- '-- autostart\no.launch_on_start([[sh -c '"'"'exec squeekboard >"$HOME/.cache/squeekboard.log" 2>&1'"'"']])\n' >"$ho5/.config/hypr/autostart.lua"
+touch "$ho5/.local/state/omarchy/done/omamobile-osk"
+before=$(sha256sum <"$ho5/.config/hypr/autostart.lua")
+RUN_HOME=$ho5 run
+[[ $(sha256sum <"$ho5/.config/hypr/autostart.lua") == "$before" ]] || fail "a start line the owner changed is left as it is"
+grep -c 'starts squeekboard with a line of its own, left as it is' "$t/out" >/dev/null || fail "the setup says that the owner's own start line keeps squeekboard"
+RUN_HOME=$ho5 run
+if grep -c 'starts squeekboard with a line of its own' "$t/out" >/dev/null; then fail "that is said once, not at every login"; fi
+ho6=$t/keyboard-none; mkdir -p "$ho6/.config/hypr" "$ho6/.config/omarchy/extensions" "$ho6/.local/state/omarchy/done"
+cp "$H"/.config/hypr/{looknfeel,monitors}.lua "$ho6/.config/hypr/"
+printf -- '-- autostart\n' >"$ho6/.config/hypr/autostart.lua"
+touch "$ho6/.local/state/omarchy/done/omamobile-osk"
+RUN_HOME=$ho6 run
+if grep -c 'starts squeekboard with a line of its own' "$t/out" >/dev/null; then fail "a file that starts no keyboard gets no line about one"; fi
+ho7=$t/keyboard-commented; mkdir -p "$ho7/.config/hypr" "$ho7/.config/omarchy/extensions" "$ho7/.local/state/omarchy/done"
+cp "$H"/.config/hypr/{looknfeel,monitors}.lua "$ho7/.config/hypr/"
+printf -- '-- autostart\n-- o.launch_on_start([[sh -c '"'"'exec squeekboard >/dev/null'"'"']])\n' >"$ho7/.config/hypr/autostart.lua"
+touch "$ho7/.local/state/omarchy/done/omamobile-osk"
+RUN_HOME=$ho7 run
+if grep -c 'starts squeekboard with a line of its own' "$t/out" >/dev/null; then fail "a commented-out squeekboard line gets no line about it"; fi
+pass "which keyboard: the session starts the owner's choice, an older start line is changed once (a linked file left as it is, an unwritable one tried again, the owner's own line left and named), Setup > Keyboard"
+
 # A layout of the user's own stays theirs
 hk=$t/keyboard-own; mkdir -p "$hk/.config/hypr" "$hk/.config/omarchy/extensions" "$hk/.local/share/squeekboard/keyboards"
 cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hk/.config/hypr/"
@@ -465,6 +580,34 @@ grep -c 'could not enable omatel-agent.service' "$t/out" >/dev/null || fail "a f
 rm "$hm/systemctl-fails"
 if grep -c 'omatel-agent' "$H/calls" >/dev/null 2>&1; then fail "nothing is enabled without the agent's unit"; fi
 pass "the Phone and Messages agent is enabled and started at each login where its unit is installed"
+
+# Omarchy's auto-accepting bt-agent.service: the package's drop-in holds it
+# off; a user manager that hasn't read the drop-in yet is reloaded, and a
+# running agent stopped, at each login. The owner's opt-in file leaves it
+# alone, and the unit's enabled state is never touched.
+Ub=$t/user-units-bt; mkdir -p "$Ub"; touch "$Ub/bt-agent.service"
+hb=$t/home-bt; mkdir -p "$hb/.config/hypr" "$hb/.config/omarchy/extensions"
+cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hb/.config/hypr/"
+touch "$hb/active-bt-agent.service"
+RUN_HOME=$hb RUN_USER_UNITS=$Ub run
+grep -cx 'systemctl --user daemon-reload' "$hb/calls" >/dev/null || fail "a user manager without the bt-agent drop-in is reloaded"
+grep -cx 'systemctl --user stop bt-agent.service' "$hb/calls" >/dev/null || fail "a running bt-agent is stopped"
+if grep -E 'systemctl --user (enable|disable|mask)[^|]*bt-agent' "$hb/calls" >/dev/null; then fail "bt-agent's enabled state is left alone"; fi
+# Drop-in read and the agent stopped: nothing more at the next login.
+rm "$hb/active-bt-agent.service" "$hb/calls"
+echo /usr/lib/systemd/user/bt-agent.service.d/omamobile.conf >"$hb/drop-ins"
+RUN_HOME=$hb RUN_USER_UNITS=$Ub run
+if grep -E 'daemon-reload|stop bt-agent' "$hb/calls" >/dev/null; then fail "nothing more once the drop-in is read and the agent is off"; fi
+# The owner's opt-in: no reload, no stop.
+rm "$hb/calls" "$hb/drop-ins"; touch "$hb/active-bt-agent.service"; mkdir -p "$hb/.config/omamobile"; touch "$hb/.config/omamobile/bt-agent"
+RUN_HOME=$hb RUN_USER_UNITS=$Ub run
+if grep -E 'daemon-reload|stop bt-agent' "$hb/calls" >/dev/null; then fail "the owner's ~/.config/omamobile/bt-agent keeps bt-agent running"; fi
+# No user manager (firstboot): not fatal.
+rm -f "$hb/.config/omamobile/bt-agent"; touch "$hb/systemctl-fails"
+RUN_HOME=$hb RUN_USER_UNITS=$Ub run || fail "setup-user survives a login without a user manager (bt-agent step)"
+rm "$hb/systemctl-fails"
+if grep -c 'bt-agent' "$H/calls" >/dev/null 2>&1; then fail "nothing about bt-agent without its unit"; fi
+pass "Omarchy's bt-agent: reloaded and stopped where the drop-in isn't in effect yet, kept for the owner's opt-in"
 
 # --adopt: a user set up by hand, with no markers, keeps the files the
 # overwriting steps would change (shell.json, the scale, the cursor and

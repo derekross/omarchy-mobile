@@ -71,7 +71,41 @@ def emits_json_lines():
     assert out.getvalue().endswith("\n")
 
 
+def arguments():
+    assert agent.parse_args([]) is None
+    assert agent.parse_args(["--pairable-window", "120"]) == 120
+    for bad in (["--pairable-window"], ["--pairable-window", "0"], ["--pairable-window", "-5"],
+                ["--pairable-window", "x"], ["--pairable-window", "3601"], ["--other", "120"]):
+        try:
+            agent.parse_args(bad)
+        except ValueError:
+            continue
+        raise AssertionError("accepted %r" % bad)
+
+
+def pairable_window():
+    plan = agent.pairable_plan
+    # Without the window the helper never touches Pairable.
+    for event in ("start", "request", "changed", "exit"):
+        assert plan(None, event, True, True) == [] and plan(None, event, False, True) == [], event
+    # Registering turned it on: off again, with BlueZ's own limit in place.
+    assert plan(120, "start") == [("PairableTimeout", 120), ("Pairable", False)], plan(120, "start")
+    # On only when asked, timeout first (it restarts BlueZ's timer), off when asked.
+    assert plan(120, "request", True) == [("PairableTimeout", 120), ("Pairable", True)]
+    assert plan(120, "request", False) == [("Pairable", False)]
+    # Back on unasked (an agent registering): off; on while wanted, or off: left.
+    assert plan(120, "changed", False, True) == [("Pairable", False)]
+    assert plan(120, "changed", True, True) == []
+    assert plan(120, "changed", False, False) == []
+    # BlueZ's timeout ended it while still wanted: it stays off.
+    assert plan(120, "changed", True, False) == []
+    assert plan(120, "exit", True, True) == [("Pairable", False)]
+    assert plan(120, "exit") == [("Pairable", False)]
+
+
 check("stdin commands parse, junk doesn't", commands)
+check("the command line takes only --pairable-window 1-3600", arguments)
+check("Pairable: off at start and exit, on only on request with BlueZ's timeout", pairable_window)
 check("PINs are 1-16 characters, passkeys 0-999999", replies)
 check("device extras carry RSSI, appearance and class", extras)
 check("D-Bus errors become result events", errors)
