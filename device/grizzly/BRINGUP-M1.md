@@ -5116,6 +5116,33 @@ Stock D1 A completed boot with enforcing verity and the
 original VBMeta digest. Ramoops and `SYSTEM_LAST_KMSG`
 matched all 24 filtered trial lines.
 
+##### Corrected DPU wrapper trigger fixture
+
+Kernel branch `grizzly-display-wrapper-node` at
+`633b3a933fe75cf3fbc7bba08f1a46f15e18daf8` exposes a write-only
+misc device when the Grizzly board and wrapper boot flag match.
+After the storage checks, temporary SCSI host removal and USB
+receiver startup, the RAM script reads the device numbers from
+read-only sysfs, creates a mode-0200 node in RAM-backed `/dev`,
+sends `run\n` once and removes the node. The UFS checks and
+independent timed return remain in place. The kernel samples
+all seven client votes first and leaves any inherited votes
+in place. When all are clear, it sends OFF only after ON succeeds.
+
+The arm64 build and five image checks passed, including both
+AVB signatures, the vendor handoff and fit against captured D1
+slot B capacities. The `SHA256SUMS` file hashes to
+`c9df99ba557ace0b261b2fd9ef738196a2d62cbfa8cdc4dc1bacbb6cfaf57bb0`.
+A mock exercised malformed commands, copy failure, inherited
+votes, ON timeout, a successful ON/OFF pair and repeat-trigger
+rejection. Apple Virtualization verified writing through a
+temporary device node with sysfs read-only. The Grizzly misc
+device was absent on the virtual board.
+
+Hardware validation is pending. The next attended slot B trial
+should start with a fresh verified NV backup, capture the seven
+initial vote samples and any ON/OFF replies, and return to stock A.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

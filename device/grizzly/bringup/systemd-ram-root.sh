@@ -120,15 +120,22 @@ boot() {
             fi
         ) &
     fi
-    wrapper=/sys/devices/platform/system-controller/display_wrapper
-    if [ -w "$wrapper" ]; then
+    wrapper=/sys/class/misc/grizzly-display-wrapper/dev
+    if [ -r "$wrapper" ]; then
         (
+            trigger=/dev/grizzly-display-wrapper
+            if ! IFS=: read -r major minor < "$wrapper" ||
+               ! "$bb" mknod -m 0200 "$trigger" c "$major" "$minor"; then
+                log 'display-wrapper: could not create trigger'
+                exit 1
+            fi
             log 'display-wrapper: vote cycle start'
-            if printf 'run\n' > "$wrapper"; then
+            if printf 'run\n' > "$trigger"; then
                 log 'display-wrapper: vote cycle returned'
             else
                 log 'display-wrapper: vote cycle failed'
             fi
+            "$bb" rm "$trigger"
         ) &
     fi
     while [ ! -f "$control/handoff" ]; do "$bb" sleep 1; done
