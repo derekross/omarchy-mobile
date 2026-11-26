@@ -6393,6 +6393,49 @@ Checks passed for all five hashes, initramfs readback,
 handoff bounds and saved slot fit. The hardware capture
 remains pending.
 
+##### Full stock D1 boot timing for DSI0 PHY lock
+
+The retained stock Android display bugreport places the
+first logged DSI0 configuration 6.284649 seconds after
+the initial host ID read. Times below are stock kernel
+uptime from the same boot.
+
+| Time (s) | Stock event |
+| ---: | --- |
+| 1.159314 | G301 PHY init |
+| 1.159337 | Host ID `0x30313130` |
+| 1.160279 | Host power handoff `dt=0 reg=0` |
+| 1.212963 | CGYDA panel boot-enable message |
+| 7.443980 | DSI0 PHY speed set to 1390 |
+| 7.443986 | G301 PHY configuration starts |
+| 7.444803 | PHY state `16` |
+| 7.444816 | G301 PHY power-on |
+
+The PHY-state log at `dw_dphy_configure_g301` text
+`0x328c` formats bits 4:0 from CD-PHY TX offset
+`0x7030`. Its control-flow path passes the separate
+`u0-apb-regbank + 0x24` bit 1 poll at
+`0x31b8`–`0x3238`. The bit-clear timeout exits
+before the message. The saved log therefore gives
+indirect evidence that the configuration poll observed
+lock by 7.444803 s. It supplies neither the raw poll
+word nor the time of the lock edge.
+
+The earlier panel boot-enable message comes from
+`gs_dsi_panel_common_init` at `0x6410`, after the
+panel GPIO and regulator checks. The message describes
+the driver's panel handoff decision. Host probe still
+reported `dt=0 reg=0`, and the logged PHY configuration
+followed later.
+
+The probe-only bundle omits the panel module and Android
+display stack. Extending its trace window alone would
+leave the stock configuration trigger absent. The saved
+Android boot already establishes the useful ordering:
+stock host access precedes the later observed PLL lock.
+The APB clock and external reset still need independent
+qualification for a mainline host read.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
