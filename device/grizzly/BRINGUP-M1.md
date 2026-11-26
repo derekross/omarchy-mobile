@@ -4830,6 +4830,34 @@ driver's cached value. Read the raw OPP level before treating it
 as Hz, and distinguish both devfreq domains from the DSI pixel
 clock and the panel refresh rate.
 
+##### Offline display MBFS operating-point fixture
+
+The follow-up kernel `7.3.0-rc6-omamobile-grizzly-display-opp`
+at `192c6b85d2f25bccaeebe065d517614cd2d11d64` keeps the opt-in
+display CPM queries. From the same MBFS namespace root, it
+resolves `cpm/perf/domains`, then reads only `CurOpp` under
+`dpu` and `fabdisp`. It records the handle and complete raw
+64-bit value, or the lookup or read error. The helper uses the
+existing MBFS read opcode, which matches the factory
+`mbfs_read_file` request. The existing boolean vote reader
+still rejects values outside 0 and 1.
+
+The ARM64 build and kernel style check passed. A mock confirmed
+the path and dispatch, both payload words, failure on a missing
+path segment, and continued sampling after a timeout. The five
+image hashes, both AVB signatures, handoff layout and saved D1
+slot fit passed. The manifest SHA-256 is
+`30b1674c38471bd174b06cbac97a715b22ebb6d1effb7f62e6db7bb3df2844d7`.
+
+The fixture keeps the verified UFS guard, USB receiver and
+timed return. It sends no display vote, rate setting or MMIO
+access. On a later approved slot B trial after a fresh NV
+backup, capture both `display-perf` results and the original
+`display-cpm` lines. This establishes whether the same MBFS
+resources are available to mainline before display enable.
+The raw level needs the D1 DVFS table for a frequency, and
+this fixture cannot measure a powered display.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
