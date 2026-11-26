@@ -548,7 +548,8 @@ bash -n hooks/theme-set-keyboard || fail "the theme-set hook parses"
 # key codes reach 124 (XF86PowerOff in Hyprland's keymap) and share the held
 # state with the real buttons.
 [[ $(grep -c 'device = hw_keys' hypr/phone.lua) == 5 ]] || fail "the five hardware-key binds are limited to real keyboards"
-grep -c 'inclusive = false, list = { "hl-virtual-keyboard-squeekboard" }' hypr/phone.lua >/dev/null || fail "squeekboard is excluded from the hardware-key binds"
+grep -c 'local osk_devices = { "hl-virtual-keyboard-squeekboard", "hl-virtual-keyboard-tactus" }' hypr/phone.lua >/dev/null &&
+  grep -c 'local hw_keys = { inclusive = false, list = osk_devices }' hypr/phone.lua >/dev/null || fail "squeekboard and Tactus are excluded from the hardware-key binds"
 grep -cx 'exec omamobile-keyboard-theme --restart' hooks/theme-set-keyboard >/dev/null || fail "the theme-set hook rewrites and restarts"
 rc=0; out=$(python3 -B test/keyboard-layouts.py 2>&1) || rc=$?
 if [[ $rc == 77 ]]; then
@@ -1305,6 +1306,12 @@ else
   pass "widget crash guard: same-boot death held back, one retry after a system going down, clean run and quit clear"
 fi
 bash test/osk-guard.sh || fail "omamobile-osk-guard"
+bash -n bin/omamobile-osk || fail "omamobile-osk parses"
+bash test/osk.sh || fail "omamobile-osk"
+grep -cx 'ExecStart=/usr/bin/omamobile-osk' systemd/user/mobi.phosh.OSK-omamobile.conf >/dev/null &&
+  grep -c 'systemd/user/mobi.phosh.OSK-omamobile.conf "$destination/usr/lib/systemd/user/mobi.phosh.OSK.service.d/omamobile.conf"' install >/dev/null ||
+  fail "squeekboard's user unit runs the chosen keyboard"
+grep -c 'omarchy-done ensure omamobile-menu-keyboard' bin/omamobile-setup-user >/dev/null || fail "Setup > Keyboard in Omarchy's menu"
 bash -n bin/omamobile-onboarding || fail "omamobile-onboarding parses"
 bash test/onboarding-fingerprint.sh || fail "omamobile-onboarding's fingerprint offer"
 bash test/onboarding-mobile.sh || fail "omamobile-onboarding's SIM line"
