@@ -101,6 +101,28 @@ assert len(sent(usf.REQ_STOP_SAMPLING)) == 1
 PY
 pass "gyroscope rates, records, AoC clock and USF backend"
 
+# the refresh rate chosen in Settings survives a rotation; an unlisted or missing one means preferred
+mkdir -p "$tmp/bin" "$tmp/cfg/omamobile"
+cat > "$tmp/bin/hyprctl" <<'EOT'
+#!/bin/bash
+if [[ $1 == -j ]]; then
+  echo '[{"name":"DSI-1","width":1344,"height":2992,"scale":3.2,"availableModes":["1344x2992@120.00Hz","1344x2992@60.00Hz"]}]'
+else echo "$*" >> "$HYPR_LOG"; echo ok; fi
+EOT
+chmod +x "$tmp/bin/hyprctl"
+rot() { : > "$tmp/hypr.log"
+  PATH="$tmp/bin:$PATH" HYPR_LOG="$tmp/hypr.log" XDG_CONFIG_HOME="$tmp/cfg" PYTHONPATH=lib python3 -c 'import autorotate; autorotate.apply(1)' 2>/dev/null
+  cat "$tmp/hypr.log"; }
+rm -f "$tmp/cfg/omamobile/refresh-rate"
+rot | grep -q 'mode = "preferred".*transform = 1' || fail "autorotate without a saved rate uses preferred"
+echo 60 > "$tmp/cfg/omamobile/refresh-rate"
+rot | grep -q 'mode = "1344x2992@60".*transform = 1' || fail "autorotate keeps the saved rate and sets the transform"
+echo 90 > "$tmp/cfg/omamobile/refresh-rate"
+rot | grep -q 'mode = "preferred"' || fail "autorotate falls back to preferred for an unlisted rate"
+echo junk > "$tmp/cfg/omamobile/refresh-rate"
+rot | grep -q 'mode = "preferred"' || fail "autorotate ignores a junk rate file"
+pass "autorotate keeps the saved refresh rate"
+
 # D-Bus round trip on a private session bus: test backend -> autorotate (dry run)
 if command -v dbus-run-session >/dev/null; then
   # A private state directory: the user's own rotation lock must not apply

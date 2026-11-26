@@ -63,24 +63,47 @@ def shell_locked(dry_run=False):
     return r.stdout.strip() == 'true'
 
 
+def rate_path():
+    cfg = os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config')
+    return os.path.join(cfg, 'omamobile', 'refresh-rate')
+
+
+def saved_mode(m):
+    """The mode string for the rate the user chose in Settings, or "preferred".
+
+    Only a rate the monitor lists at its current size is used; a missing, odd or
+    unlisted choice means "preferred", so the screen never ends on a mode it lacks."""
+    try:
+        with open(rate_path()) as f:
+            want = int(f.read().strip())
+        size = f"{int(m['width'])}x{int(m['height'])}"
+        for mode in m.get('availableModes', []):
+            sz, _, hz = mode.partition('@')
+            if sz == size and round(float(hz.rstrip('Hz'))) == want:
+                return f'{size}@{want}'
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return 'preferred'
+
+
 def monitor(name=None):
-    """(name, scale) of the given monitor, or of the first one."""
+    """(name, scale, mode) of the given monitor, or of the first one."""
     try:
         mons = json.loads(hyprctl('-j', 'monitors').stdout or '[]')
     except json.JSONDecodeError:
         mons = []
     for m in mons:
         if name is None or m.get('name') == name:
-            return m.get('name'), m.get('scale', 1.0)
-    return None, None
+            return m.get('name'), m.get('scale', 1.0), saved_mode(m)
+    return None, None, 'preferred'
 
 
 def apply(transform, name=None, dry_run=False):
-    mon, scale = (name or 'DSI-1', 1.0) if dry_run else monitor(name)
+    mon, scale, mode = (name or 'DSI-1', 1.0, saved_mode({})) if dry_run else monitor(name)
     if mon is None:
         log('no monitor')
         return
-    lua = (f'hl.monitor({{ output = "{mon}", mode = "preferred", position = "auto", '
+    lua = (f'hl.monitor({{ output = "{mon}", mode = "{mode}", position = "auto", '
            f'scale = {scale:g}, transform = {transform} }}); '
            f'hl.config({{ input = {{ touchdevice = {{ transform = {transform}, output = "{mon}" }} }} }})')
     if dry_run:
@@ -89,7 +112,7 @@ def apply(transform, name=None, dry_run=False):
     r = hyprctl('eval', lua)
     if r.returncode != 0 or 'error' in (r.stdout + r.stderr).lower():
         # Older Hyprland: the keyword interface
-        hyprctl('keyword', 'monitor', f'{mon},preferred,auto,{scale:g},transform,{transform}')
+        hyprctl('keyword', 'monitor', f'{mon},{mode},auto,{scale:g},transform,{transform}')
         hyprctl('keyword', 'input:touchdevice:transform', str(transform))
         hyprctl('keyword', 'input:touchdevice:output', mon)
     log(f'{mon}: transform {transform}')
