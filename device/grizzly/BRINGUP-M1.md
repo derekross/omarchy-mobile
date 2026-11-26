@@ -112,6 +112,7 @@ whether it predated a stock boot.
 | [Omarchy USB SSH after systemd handoff](#attended-usb-ssh-handoff-trial) | The Mac left verified stock D1 A at 07:40:15 UTC on 2026-11-26. Android stayed off between the guarded rescue and the Omarchy boot request at 07:46:39 UTC. | All nine hashes passed at 07:45:27 UTC. The stock A return requires a new copy before the next power or CPM trial. |
 | [Display CPM queries](#attended-display-cpm-query-trial) | The Mac left stock D1 A at 09:06:49 UTC on 2026-11-26. Android stayed off between the guarded backup rescue and the display CPM boot request at 09:14:51 UTC. | All nine hashes passed at 09:13:31 UTC. Another power or CPM trial needs a fresh copy after the stock A return. |
 | [Display MBFS operating-point query](#attended-display-mbfs-operating-point-trial) | The Mac left stock D1 A at 09:38:09 UTC on 2026-11-26. Android stayed off between the guarded rescue and the operating-point boot request at 09:44:34 UTC. | All nine hashes passed at 09:43:06 UTC. Another power or CPM trial needs a fresh copy after the stock A return. |
+| [Corrected display MBFS operating-point query](#attended-corrected-display-mbfs-trial) | The Mac left stock D1 A at 10:00:35 UTC on 2026-11-26. Android stayed off between the guarded rescue and the corrected boot request at 10:08:05 UTC. | All nine hashes passed at 10:05:32 UTC. Another power or CPM trial needs a fresh copy after the stock A return. |
 
 [Maintainer decision on backup freshness](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035).
 Take a fresh read-only backup of all nine partitions after the latest
@@ -4917,8 +4918,51 @@ The ARM64 build and style check passed. A mock confirmed both
 AVB signatures, handoff bounds, and saved slot-fit checks passed.
 The manifest SHA-256 is
 `48e16ff392feb409cfc36bb2be0e9424898cc08efc9df6b1e71e90223bb24145`.
-The corrected bundle awaits its own attended trial after a
-fresh verified NV backup.
+The hardware trial below used a fresh verified NV backup.
+
+##### Attended corrected display MBFS trial
+
+On 2026-11-26 the stock rescue verified all nine NV targets
+read-only and unmounted. The Mac verified 3,392,151,552 bytes,
+all nine independent hashes, and private file and directory
+modes. The full 64 MiB rescue `vendor_boot_b` readback matched.
+The rescue returned to Fastboot with A selected. The five
+diagnostic images staged on B, and the 8,192-byte
+`vendor_boot_b` payload matched its readback.
+
+The four display MBFS power-domain handles and three LPCM
+`-3` firmware replies matched the two preceding trials.
+The corrected `perf/domains` path resolved and both raw
+`CurOpp` reads succeeded.
+
+| Kernel time (s) | Domain | Handle | Raw level |
+| ---: | --- | --- | ---: |
+| 0.107086 | `dpu` | `0x10d000a` | 3 |
+| 0.107239 | `fabdisp` | `0x10f000a` | 3 |
+
+The two values are indices into separate firmware DVFS
+tables. Matching indices do not establish equal frequencies.
+The capture precedes display enable and establishes access
+to the stock performance backing files.
+
+The kernel verified seven GPT metadata reads, the 8 KiB
+`boot_b` comparison and all 42 UFS partitions read-only and
+unmounted. It retired the temporary SCSI host before the
+authenticated USB receiver became ready. The independent
+helper requested the warm restart at 600.009948 seconds.
+Fastboot returned 644 seconds after the B boot request.
+Stock D1 A completed boot with enforcing verity and the
+original VBMeta digest. Ramoops and `SYSTEM_LAST_KMSG`
+matched all 22 filtered trial lines.
+
+For a later read-only DVFS table capture, resolve exact
+`dpu` and `fabdisp` descriptors and request only the pair of
+rows covering the observed level for each domain. Bound domain
+enumeration to the stock limit of 48 and OPP entries to 32.
+Require an in-range index and a valid row before converting
+to MHz. Start enumeration after the storage guard and USB
+receiver are ready. A timeout stalls the shared CPM transport,
+so stop on that failure without retrying.
 
 ### Offline stock D1 device reference-clock diagnostic
 
