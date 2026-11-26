@@ -100,6 +100,29 @@ if "$t/repo/tools/install-phone" --device flame > "$t/log" 2>&1; then fail "flam
 grep -q 'unsupported BOOT_METHOD=ram-only;' "$t/log" || fail "flame fails for the wrong reason"
 echo 'ok - the shipped flame descriptor has no persistent installer path'
 
+# The OnePlus 7T descriptor must stay gated until its v2 RAM image and
+# persistent recovery path are reviewed. Use the shipped descriptor here.
+cp "$t/bin/adb" "$t/bin/fastboot"
+mkdir -p "$t/repo/device/hotdogb"
+cp device/hotdogb/device.conf "$t/repo/device/hotdogb/"
+cp device/hotdogb/device.conf "$t/bundle/device.conf"
+for cmd in images flash push; do
+  if DEVICE=hotdogb "$t/repo/bin/omamobile" "$cmd" > "$t/log" 2>&1; then
+    fail "hotdogb $cmd succeeded"
+  fi
+  grep -q "$cmd refuses BOOT_METHOD=ram-only" "$t/log" || fail "hotdogb $cmd failed for the wrong reason"
+done
+for installer in "$t/repo/tools/install-phone" "$t/bundle/install"; do
+  for dry in '' --dry-run; do
+    if "$installer" --device hotdogb $dry --work "$t/work" > "$t/log" 2>&1; then
+      fail "hotdogb installer accepted the descriptor"
+    fi
+    grep -q 'unsupported BOOT_METHOD=ram-only;' "$t/log" || fail "hotdogb installer failed for the wrong reason"
+  done
+done
+[[ ! -e $t/calls && ! -e $t/work ]] || fail "hotdogb tried to access the phone or prepare an image"
+echo 'ok - hotdogb image, write and install paths are gated'
+
 # The shipped enchilada descriptor: android-v0 images get past the
 # descriptor checks (no kernel build here, so they stop at "build the
 # kernel first"); fastboot, flash and push refuse it as RAM-only, and the
