@@ -324,7 +324,10 @@ grep -cF 'sourceComponent: TimePanel {' "$b" >/dev/null || fail "the clock opens
 for f in CellularPanel TimePanel; do
   grep -c '^Panel {' "plugins/omamobile.bar/$f.qml" >/dev/null && grep -c 'KeyboardPanel {' "plugins/omamobile.bar/$f.qml" >/dev/null || fail "$f is built on Omarchy's Panel and KeyboardPanel"
 done
-grep -cF '["omamobile-sit", "data", on ? "on" : "off"]' plugins/omamobile.bar/CellularPanel.qml >/dev/null || fail "the card's switch turns mobile data on and off through omamobile-sit"
+grep -cF '["omamobile-sit", "radio", on ? "on" : "off"]' plugins/omamobile.bar/CellularPanel.qml >/dev/null &&
+  grep -cF 'onToggled: root.setRadio(root.radioOff)' plugins/omamobile.bar/CellularPanel.qml >/dev/null &&
+  grep -cF 'checked: root.radioBusy ? root.radioWant : !root.radioOff' plugins/omamobile.bar/CellularPanel.qml >/dev/null ||
+  fail "the card's switch turns the cellular radio on and off through omamobile-sit, and shows what was asked until sitd agrees"
 grep -cF '"timedatectl show -p Timezone --value; date +%Z"' plugins/omamobile.bar/TimePanel.qml >/dev/null || fail "the time card shows the system's time zone and its abbreviation"
 sp=$(mktemp)
 printf '%s' '<serviceproviders><country code="us"><provider><name>Reseller</name><gsm><network-id mcc="001" mnc="010"/></gsm></provider><provider primary="true"><name>Example Mobile</name><gsm><network-id mcc="001" mnc="010"/></gsm></provider><provider><name>Two Digit</name><gsm><network-id mcc="002" mnc="01"/></gsm></provider></country></serviceproviders>' > "$sp"

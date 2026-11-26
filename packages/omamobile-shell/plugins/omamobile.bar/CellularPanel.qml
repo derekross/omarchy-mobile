@@ -10,8 +10,9 @@ import "Readable.js" as Readable
 // The mobile network card a tap on the bar's signal opens, built from
 // Omarchy's own panel parts (Panel, KeyboardPanel, ToggleSwitch and the
 // label/value rows of its power and network cards), since Omarchy has no
-// cellular card of its own. It reads omamobile-sitd's public state and
-// switches mobile data with omamobile-sit.
+// cellular card of its own. It reads omamobile-sitd's public state, and its
+// switch turns the cellular radio on and off with omamobile-sit, as the Wi-Fi
+// card's switch does Wi-Fi (mobile data stays on its quick-settings tile).
 Panel {
   id: root
   moduleName: "omamobile.cellular"
@@ -20,7 +21,11 @@ Panel {
   property string glyph: ""
   property var modem: ({})
   property bool dataOn: false
-  property bool dataBusy: false
+  // The radio switch: the state sitd publishes lags the command by a few
+  // seconds, so the switch shows what was asked until the state agrees.
+  property bool radioBusy: false
+  property bool radioWant: true
+  property int radioWaits: 0
 
   readonly property bool present: !!modem && modem.present === true
   readonly property bool radioOff: present && modem.radio === "off"
@@ -64,7 +69,7 @@ Panel {
     var sim = modem.sim || {}
     if (sim.state === "absent") return "No SIM"
     if (sim.state === "locked" || sim.state === "pin") return "SIM locked"
-    if (radioOff) return "Airplane mode"
+    if (radioOff) return "Cellular off"
     if (!registered) return "Searching"
     // As Omarchy's Wi-Fi card says "Not connected" with its switch off.
     if (!dataOn) return modem.registration === "roaming" ? "Roaming · mobile data off" : "Mobile data off"
@@ -78,11 +83,13 @@ Panel {
     if (!dataProc.running) dataProc.running = true
   }
 
-  function setData(on) {
-    if (dataBusy) return
-    dataBusy = true
-    dataSet.command = ["omamobile-sit", "data", on ? "on" : "off"]
-    dataSet.running = true
+  function setRadio(on) {
+    if (radioBusy) return
+    radioBusy = true
+    radioWant = on
+    radioWaits = 0
+    radioSet.command = ["omamobile-sit", "radio", on ? "on" : "off"]
+    radioSet.running = true
   }
 
   onOpenedChanged: if (opened) refresh()
@@ -104,8 +111,23 @@ Panel {
   }
 
   Process {
-    id: dataSet
-    onExited: { root.dataBusy = false; root.refresh() }
+    id: radioSet
+    onExited: function(code) {
+      if (code !== 0) { root.radioBusy = false; root.refresh(); return }
+      radioWait.start()
+    }
+  }
+
+  // Until sitd's state shows the radio as asked, or 15 s
+  Timer {
+    id: radioWait
+    interval: 1000
+    repeat: true
+    onTriggered: {
+      root.refresh()
+      root.radioWaits += 1
+      if (root.radioOff === !root.radioWant || root.radioWaits >= 15) { stop(); root.radioBusy = false }
+    }
   }
 
   Timer { interval: 3000; running: root.opened; repeat: true; onTriggered: root.refresh() }
@@ -144,7 +166,7 @@ Panel {
         // ---------- Hero: signal glyph · carrier and state · data switch ----------
         Item {
           width: parent.width
-          implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight, dataSwitch.implicitHeight)
+          implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight, cellSwitch.implicitHeight)
 
           Text {
             id: heroIcon
@@ -162,7 +184,7 @@ Panel {
             id: heroLabels
             anchors.left: heroIcon.right
             anchors.leftMargin: Style.space(14)
-            anchors.right: dataSwitch.left
+            anchors.right: cellSwitch.left
             anchors.rightMargin: Style.space(12)
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(2)
@@ -192,14 +214,14 @@ Panel {
           }
 
           ToggleSwitch {
-            id: dataSwitch
-            visible: root.present && !root.radioOff
-            checked: root.dataOn
-            busy: root.dataBusy
+            id: cellSwitch
+            visible: root.present
+            checked: root.radioBusy ? root.radioWant : !root.radioOff
+            busy: root.radioBusy
             foreground: root.bar.foreground
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            onToggled: root.setData(!root.dataOn)
+            onToggled: root.setRadio(root.radioOff)
           }
         }
 
