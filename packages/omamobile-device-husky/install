@@ -54,6 +54,11 @@ done
 install -Dm755 bin/omamobile-husky-aoc-start "$destination/usr/bin/omamobile-husky-aoc-start"
 install -Dm644 vendor/systemd/system/omamobile-husky-aoc.service \
   "$destination/usr/lib/systemd/system/omamobile-husky-aoc.service"
+# The common name the AoC's users order after (omamobile-sensors' proxy,
+# omamobile-audio): an alias of this phone's hang-safe start.
+ln -sfn omamobile-husky-aoc.service "$destination/usr/lib/systemd/system/omamobile-aoc.service"
+install -Dm644 vendor/systemd/system/omamobile-sensor-proxy.service.d/10-omamobile-husky.conf \
+  "$destination/usr/lib/systemd/system/omamobile-sensor-proxy.service.d/10-omamobile-husky.conf"
 ln -sfn ../omamobile-husky-aoc.service \
   "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-husky-aoc.service"
 install -Dm644 vendor/modprobe.d/omamobile-husky-aoc.conf \

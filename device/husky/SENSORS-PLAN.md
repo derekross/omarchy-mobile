@@ -183,3 +183,26 @@ the cause is read.
 ## Results
 
 - 2026-11-18, Colin's phone (published `82f31d3a7`, device-husky 0.1.16): S0 and S1 as above.
+
+## 5. Result on a Pixel 8 Pro, 2026-11-26
+
+Test kernel: our MCT tree with an overlay giving the AoC `ldo7s`/`ldo5s` (stock's `sensor_power_list` path); the
+zuma AoC as modules. [V] unless marked.
+
+- Rails: the S2MPG15 regulators registered (`vdd_sensor_1v8`, `vdd_sensor_3v3`, the three GNSS rails off and in
+  range); the AoC turned both sensor rails on at probe ("sensor power is enabled"), one user each.
+- S3/S4 by hand: `usf.py --load-registry` with stock's five `husky_*.reg` (touch entries kept; Lef used the phone
+  by touch afterwards, no problem seen, not tested long): manager handle, echo, `loaded=1` (CDT 0x26100), then 47
+  sensors at 0.5 s, among them the ICM45631 accelerometer and gyroscope (I3C), TMD3719 light and proximity, two
+  MMC5633 magnetometers, ICP20100, VD6282, MLX90632. No AoC reset. 73 accelerometer samples in 3 s at rest,
+  z 9.65 m/s².
+- The proxy at boot (this branch: the alias, the USF wait): it waited for the AoC to settle, loaded the registry
+  once and found accel, light, proximity, compass and gyro.
+- By hand (Lef): auto-rotate turned the screen to all four orientations (transforms 0 to 3) and the compass
+  followed. Light read -1 and proximity never went near while the panel ran at 120 Hz and the proxy said 60; with
+  `OMAMOBILE_PANEL_HZ=drm` (omamobile-sensors 0.2.3) light read 4 to 12 lux in the room and up to 3862 lux under a
+  flashlight, and proximity went near three times when covered.
+- Not done: factory calibration from `persist` (none was loaded; the proxy logged nothing for it), the rail
+  power-cycle question (the rails were off at boot each time), long use with the touch entries in the registry.
+- Kernel side for upstream: the zuma AoC series with ordered sensor supplies for zuma and the husky DT rails
+  (Lef's AoC branch, not yet a PR).

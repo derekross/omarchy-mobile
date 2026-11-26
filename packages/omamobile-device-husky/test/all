@@ -244,6 +244,9 @@ pass "the charge limit declaration, its udev rule and the apply unit are staged;
 
 # --- the AoC start: hang marker, nothing without the node ------------------
 bash -n bin/omamobile-husky-aoc-start || fail "the AoC start parses"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/omamobile-aoc.service") == omamobile-husky-aoc.service ]] \
+  || fail "omamobile-aoc.service is an alias of the husky AoC start (the sensor proxy requires it)"
+grep -q "'omamobile-sensors>=0.2.3'" PKGBUILD || fail "the package pulls in the sensor proxy that knows the 120 Hz panel"
 grep -q '^ExecStart=/usr/bin/omamobile-husky-aoc-start$' vendor/systemd/system/omamobile-husky-aoc.service \
   || fail "the AoC unit runs the script"
 grep -q '^ConditionPathExists=/sys/bus/platform/devices/154b0000.aoc$' vendor/systemd/system/omamobile-husky-aoc.service \
