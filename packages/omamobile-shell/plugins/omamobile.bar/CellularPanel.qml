@@ -66,6 +66,8 @@ Panel {
     if (sim.state === "locked" || sim.state === "pin") return "SIM locked"
     if (radioOff) return "Airplane mode"
     if (!registered) return "Searching"
+    // As Omarchy's Wi-Fi card says "Not connected" with its switch off.
+    if (!dataOn) return modem.registration === "roaming" ? "Roaming · mobile data off" : "Mobile data off"
     return modem.registration === "roaming" ? "Roaming" : "Connected"
   }
 
@@ -149,7 +151,7 @@ Panel {
             textFormat: Text.PlainText
             text: root.glyph
             color: root.bar.foreground
-            opacity: root.registered ? 1.0 : 0.5
+            opacity: root.registered && root.dataOn ? 1.0 : 0.5
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.display
             anchors.left: parent.left
