@@ -107,6 +107,7 @@ whether it predated a stock boot.
 | [v72](#attended-v72-slot-b-trial) | The Mac left verified stock D1 A at 21:02:34 UTC on 2026-11-25. A guarded B rescue returned to Fastboot with A selected before the v72 boot request at 21:24:55 UTC. | Fresh read-only rescue copy verified at 21:13:45 UTC. All nine hashes were rechecked before staging. The stock A return after v72 requires a new copy before the next power or CPM trial. |
 | [v73](#attended-v73-slot-b-trial) | The Mac left verified stock D1 A at 21:35:59 UTC on 2026-11-25. A guarded B rescue returned to Fastboot with A selected before the v73 boot request at 21:42:45 UTC. | Fresh read-only rescue copy verified at 21:41:18 UTC. All nine hashes passed. The stock A return after v73 requires a new copy before the next power or CPM trial. |
 | [Read-only test root](#attended-read-only-test-root-slot-b-trial) | The Mac left verified stock D1 A at 06:13:51 UTC on 2026-11-26 and ran the guarded B rescue. Fastboot stayed active between the rescue and the test-root boot request at 06:20:35 UTC. | Fresh read-only rescue copy verified at 06:19:08 UTC. All nine hashes passed. The stock A return requires a new copy before the next power or CPM trial. |
+| [Omarchy systemd RAM root](#first-attended-omarchy-systemd-ram-root-trial) | The Mac left verified stock D1 A at 06:43:33 UTC on 2026-11-26 and ran the guarded B rescue. Android stayed off between the rescue and the Omarchy boot request at 06:51:20 UTC. | Fresh read-only rescue copy verified at 06:49:41 UTC. All nine hashes passed. The stock A return requires a new copy before the next power or CPM trial. |
 
 [Maintainer decision on backup freshness](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035).
 Take a fresh read-only backup of all nine partitions after the latest
@@ -4437,9 +4438,46 @@ Separate local tests verified the scoped IPv6 listener, pinned
 SSH authentication, refusal of arbitrary commands and refusal
 of a handoff before image verification. The five image hashes,
 two unchanged AVB signatures, handoff bounds and saved D1 slot
-fit passed. The combined USB and UFS flow still needs its first
-Grizzly boot. Manifest SHA-256
+fit passed for the first trial package. Its manifest SHA-256 was
 `45a32cc861d7dd42affc4f084cf9cb4de432bf928c281273798d4f011b4ae830`.
+
+#### First attended Omarchy systemd RAM-root trial
+
+The guarded rescue copied all nine read-only, unmounted NV
+partitions and verified the 3,392,151,552 bytes privately on
+the Mac. The phone remained in Fastboot between rescue and
+staging. All five Omarchy B writes passed, with an 8,192-byte
+matching `vendor_boot_b` readback.
+
+| Monotonic time (s) | Result |
+| ---: | --- |
+| 1.197237 | The 600-second return helper armed. |
+| 2.198541–2.377312 | The v73 8 KiB comparison passed. The RAM guard verified all 42 UFS partitions read-only and unmounted. |
+| 6.437643–7.400412 | The temporary SCSI host was removed. The Omarchy receiver confirmed zero SCSI disks before USB setup. |
+| 17.421593 | USB NCM setup failed. The Mac saw no verified NCM interface after reconnecting USB-C once. The root never streamed and the trial did not reach the systemd or write-denial checks. |
+| 600.009639–601.010082 | The independent helper requested the warm return. |
+
+Fastboot returned after 644 seconds. Stock D1 A restarted at
+07:02:24 UTC and completed boot with enforcing verity and the
+prior factory VBMeta digest. Ramoops and Android's
+`SYSTEM_LAST_KMSG` agree on all 31 filtered trial lines.
+
+The receiver waited for stock's `a210000.dwc3` UDC name.
+The trial trace reports mainline's `a210000.usb` platform
+device and successful USB2 PHY and Type-C attach. The v73
+DWC3 and UDC core sources derive the UDC name from that
+platform device. The ten-second gap before the setup failure
+matches the receiver's controller wait. The corrected fixture
+waits for `a210000.usb`, binds it and verifies configfs readback.
+Separate log markers identify configfs, binding and link-local
+address failures in the next run. A mocked configfs test bound
+the mainline name and rejected the stock-only name before any
+bind. The corrected bundle passed all five hashes, both
+unchanged AVB signatures, D1 handoff bounds and saved slot fit.
+Its manifest SHA-256 is
+`c7d9d1480d23863456c6d3fd14d3daeea5ae85de99bb2524a1e0623bd0141a0a`.
+A fresh backup and a separate attended trial are needed to
+verify the corrected USB and systemd handoff on Grizzly.
 
 ### Offline stock D1 device reference-clock diagnostic
 

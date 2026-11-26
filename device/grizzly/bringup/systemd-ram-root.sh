@@ -50,6 +50,7 @@ receive() (
 usb_start() {
     config=/sys/kernel/config
     gadget=$config/usb_gadget/grizzly-root
+    udc=a210000.usb
     "$bb" mount -t configfs configfs "$config" &&
         "$bb" mkdir -p "$gadget" "$gadget/configs/c.1/strings/0x409" "$gadget/strings/0x409" &&
         printf '%s\n' 0x1d6b > "$gadget/idVendor" &&
@@ -58,25 +59,33 @@ usb_start() {
         printf '%s\n' 'Omarchy root transfer' > "$gadget/configs/c.1/strings/0x409/configuration" &&
         "$bb" mkdir "$gadget/functions/ncm.usb0" &&
         "$bb" ln -s "$gadget/functions/ncm.usb0" "$gadget/configs/c.1/ncm.usb0" ||
-        return 1
+        { log 'USB NCM configfs setup failed'; return 1; }
     for wait in 1 2 3 4 5 6 7 8 9 10; do
-        [ -e /sys/class/udc/a210000.dwc3 ] && break
+        [ -e "/sys/class/udc/$udc" ] && break
         "$bb" sleep 1
     done
-    printf '%s\n' a210000.dwc3 > "$gadget/UDC" &&
-        "$bb" ip link set lo up &&
+    [ -e "/sys/class/udc/$udc" ] ||
+        { log "USB controller missing: $udc"; return 1; }
+    printf '%s\n' "$udc" > "$gadget/UDC" &&
+        IFS= read -r bound < "$gadget/UDC" && [ "$bound" = "$udc" ] ||
+        { log "USB NCM bind failed: $udc"; return 1; }
+    log "USB NCM bound: $udc"
+    "$bb" ip link set lo up &&
         "$bb" ip link set usb0 up &&
-        "$bb" ip -6 addr add fe80::b8e7/64 dev usb0 || return 1
+        "$bb" ip -6 addr add fe80::b8e7/64 dev usb0 ||
+        { log 'USB NCM link-local setup failed'; return 1; }
     tries=0
     while [ "$tries" -lt 30 ]; do
         if "$bb" ip -6 addr show dev usb0 |
             "$bb" awk '$1 == "inet6" && $2 == "fe80::b8e7/64" &&
                       !/tentative|dadfailed/ { found = 1 } END { exit !found }'; then
+            log 'USB NCM link-local address ready'
             return 0
         fi
         "$bb" sleep 1
         tries=$((tries + 1))
     done
+    log 'USB NCM link-local address did not become ready'
     return 1
 }
 
