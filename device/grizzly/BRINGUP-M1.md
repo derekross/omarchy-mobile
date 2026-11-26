@@ -6006,8 +6006,8 @@ The host ID, version and `pwr_up` MMIO reads stay disabled.
 
 The prior D1 firmware audit used factory build
 `CP4A.261105.040.D1` and bootloader `spacecraft-17.4-16729013`.
-Its CPM image and extracted text are absent from the retained
-local artifacts. The saved D1 firmware analysis identifies the
+Its CPM image and extracted text were missing at this stage.
+The saved D1 firmware analysis identifies the
 generic MBFS vote handler and shows that an already-active
 resource can accept another caller's vote without scheduling a
 new physical transition. The saved disassembly does not cover
@@ -6034,6 +6034,73 @@ offline comparison to follow resource `0x203` into its
 sequencer and locate any gate/reset status providers before
 the completion notification. The existing host-read hold
 remains in effect.
+
+##### Exact D1 DSI0 completion and status paths
+
+The downloaded Grizzly `CP4A.261105.040.D1` factory archive
+matched Google's SHA-256. The bootloader member matched the
+separate range extraction byte for byte. Its FBPK entry
+contains CPM at offset `0x10aa000`, length `0x9c000`. The
+extracted CPM SHA-256 is
+`77347069aae56f1acc30bdf1a371315d195ef09b59e4c6d3832e19b37052cc84`.
+The CPM disassembly addresses below are relative to text at
+image offset `0x50d0`.
+
+1. The MBFS resource table at `0x64040` maps `0x203` to
+   ordinal 42. The power group at `0x200132f0` starts at
+   ordinal 39, giving local index 3. Its ON dispatcher at
+   `0x467bc` uses a cached state check and queues the worker
+   at `0x46644`.
+2. The worker calls `0x1d06c` for member 3. The member's ON
+   callback `0x45364` dispatches through `0x45178` and
+   `0x39b0c` to the LPCM `0x23` PSM3 ON handler at
+   `0x3a3f0`. PSM3 states 0 and 1 already satisfy this
+   handler. It requests 2 → 0 or 3 → 1 through `0x8248`.
+   Both transitions set mask `0x0c` at CPM `0x6f40a000`,
+   then the common transition code polls the descriptor-derived
+   PSM3 status. The mask requests the hardware transition.
+   Its individual clock and reset effects are unresolved.
+3. The PSM poll records `-1` for faults at `0x80b8`–`0x80be`.
+   The ON handler discards a returned transition error at
+   `0x3a416`, and the member callback returns zero.
+   `0x1d06c` then caches ON and the worker passes completion
+   onward through `0x45eb0` and `0x27830`.
+   The deferred completion path advances the pending vote
+   and queues the client 7 notification. The per-client
+   branch `0x28978` → `0x26488` performs no new hardware
+   status read.
+   A hard poll timeout follows a separate fatal path from
+   `0x855c` to `0x22258` and does not reach completion.
+
+Completion therefore cannot certify that the APB gate opened
+and external reset released. The APB clock has a separate
+descriptor from the pixel clock. D1 ABL names it
+`dpu_dsi0_apb_clk` at file offset `0x1f51b0`, with group 4,
+gate offset `0x6e0`, and no mailbox selector. ABL's group
+base is AP `0x0f419000`. Its direct clock helper polls
+gate + `0x1c` bit 8, giving APB acknowledgment at
+`0x0f4196fc`. The D1 GC rule for that AP page is
+`0x30300`, unlike the `0x30301` PSM pages previously
+sampled from Linux. This gate word is unqualified for an
+EL1 read. The CPM clock status service covers DSI0 pixel
+selector 1, whose gate is separate. The CPM read-only reset
+helper's descriptor lookup excludes display LPCM `0x23`.
+The LPCM power service's operation 3 reads a software
+request cache. No read-only status for the host's external
+reset was mapped.
+
+PSM3 is a separate read-only observation candidate. CPM
+`0x87c0` → `0x7f90` → `0x1942c` and ABL's AP-side
+decoder resolve the status word from the LPCM controller
+header and the PSM3 descriptor at base + `0x28`. ABL maps
+the DPU LPCM base to AP `0x0f409000`; GC assigns that
+header page `0x30301`. The descriptor-derived word can
+land under several GC rules. Any future diagnostic needs a
+powered wrapper, an audited descriptor and confirmation of
+effective EL1 access to the exact word. Before and after
+PSM samples can show a sequencer state change alongside the
+vote. They still leave the separate APB gate and external reset
+conditions unqualified. The mainline host reads stay disabled.
 
 ### Offline stock D1 device reference-clock diagnostic
 
