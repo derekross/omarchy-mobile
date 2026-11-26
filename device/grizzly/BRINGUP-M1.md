@@ -4510,6 +4510,37 @@ and the prior factory VBMeta digest. Ramoops and Android's
 `SYSTEM_LAST_KMSG` agree on all 41 filtered trial lines.
 The deferred-probe `device_links_no_driver` warning remained.
 
+#### USB SSH status after systemd handoff
+
+The optional live-status fixture keeps the existing USB NCM gadget
+bound while it stops Dropbear and switches to the read-only RAM
+root. After the root smoke check passes, the isolated systemd
+target starts Omarchy's OpenSSH on the same scoped USB link-local
+address and port. Both servers use the same pinned Ed25519 host
+identity. The Mac helper's `--verify-live-ssh` option reconnects
+and requires the `GRIZZLY_LIVE_SSH_PASS` reply. The listener
+accepts only the authenticated `status` request. It has no shell,
+PTY or forwarding, and the status check performs no write probe.
+The initial systemd smoke check still verifies write denial.
+
+An ARM64 VM booted the same Omarchy root, refused a truncated
+stream and verified the complete image before handoff. The smoke
+check passed with systemd as PID 1, a read-only ext4 RAM loop, zero
+SCSI disks and the return timer still alive. A pinned SSH request
+returned the expected status, and an attempted `id` command
+returned exit status 2. The VM used IPv6 loopback to exercise
+OpenSSH. USB NCM continuity across handoff still needs a Pixel
+trial.
+
+The five image hashes, both AVB signatures and the D1 handoff
+layout passed offline checks. Four images are byte-identical to
+the last hardware trial. Only the inventory fragment in
+`vendor_kernel_boot` changed. The 42-partition guard, SCSI host
+removal and 600-second return are carried forward. The next
+attended trial needs a fresh nine-partition backup after stock A,
+then one B boot and a return to stock A. Keep the key material
+and images private.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

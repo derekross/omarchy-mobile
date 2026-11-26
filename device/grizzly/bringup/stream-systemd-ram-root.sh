@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 set -euo pipefail
 
-[[ $# == 3 ]] || {
-    printf '%s\n' 'usage: stream-systemd-ram-root.sh USB_INTERFACE ROOT.img.zst PRIVATE_SSH_DIR' >&2
+[[ $# == 3 || ( $# == 4 && $4 == --verify-live-ssh ) ]] || {
+    printf '%s\n' 'usage: stream-systemd-ram-root.sh USB_INTERFACE ROOT.img.zst PRIVATE_SSH_DIR [--verify-live-ssh]' >&2
     exit 2
 }
 interface=$1
@@ -23,7 +23,17 @@ for (( attempt = 0; attempt < 30; attempt++ )); do
         [[ "$("${ssh_cmd[@]}" receive < "$image")" == GRIZZLY_ROOT_VERIFIED ]]
         [[ "$("${ssh_cmd[@]}" handoff)" == GRIZZLY_ROOT_HANDOFF_REQUESTED ]]
         printf '%s\n' 'Omarchy RAM image verified on the phone and systemd handoff requested.'
-        exit 0
+        if [[ $# == 3 ]]; then exit 0; fi
+        expected_status='GRIZZLY_LIVE_SSH_PASS pid1=systemd root=ext4 ro=1 ram=1 scsi_disks=0 timer=1'
+        for (( live_attempt = 0; live_attempt < 30; live_attempt++ )); do
+            if [[ "$("${ssh_cmd[@]}" status 2>/dev/null)" == "$expected_status" ]]; then
+                printf '%s\n' "$expected_status"
+                exit 0
+            fi
+            sleep 2
+        done
+        printf '%s\n' 'Grizzly systemd SSH status did not become available after handoff.' >&2
+        exit 1
     fi
     sleep 2
 done

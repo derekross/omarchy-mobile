@@ -6,6 +6,10 @@ fail() {
     exit 1
 }
 
+if [ "$#" -ne 0 ]; then
+    [ "$#" -eq 1 ] && [ "$1" = status ] && [ "${SSH_ORIGINAL_COMMAND:-}" = status ] || exit 2
+fi
+
 [ "$(cat /proc/1/comm)" = systemd ] &&
     [ "$(readlink /proc/1/exe)" = /usr/lib/systemd/systemd ] || fail 'PID 1 is not systemd'
 [ "$(findmnt -n -o SOURCE,FSTYPE /)" = '/dev/loop0 ext4' ] &&
@@ -16,10 +20,14 @@ fail() {
 for disk in /sys/class/block/sd*; do
     [ ! -e "$disk" ] && [ ! -L "$disk" ] || fail 'unexpected SCSI disk'
 done
-if ( : > /.grizzly-write-probe ); then fail 'root accepted a write'; fi
 IFS= read -r timer < /run/grizzly-systemd-timer
 kill -0 "$timer" && [ "$(readlink "/proc/$timer/exe")" = '/grizzly-systemd/return (deleted)' ] ||
     fail 'return helper missing after switch_root'
+if [ "$#" -eq 1 ]; then
+    printf '%s\n' 'GRIZZLY_LIVE_SSH_PASS pid1=systemd root=ext4 ro=1 ram=1 scsi_disks=0 timer=1'
+    exit 0
+fi
+if ( : > /.grizzly-write-probe ); then fail 'root accepted a write'; fi
 for unit in omamobile-firstboot.service omamobile-boot-success.service omamobile-usb-rescue.service; do
     [ "$(systemctl show --value -p LoadState "$unit")" = not-found ] || fail "unexpected unit $unit"
 done

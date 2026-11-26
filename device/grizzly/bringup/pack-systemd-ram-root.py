@@ -84,6 +84,16 @@ def pack(args):
         put("grizzly-systemd/systemd/check.sh", (HERE / "systemd-root-check.sh").read_bytes())
         for name in ("grizzly-userspace.service", "grizzly-userspace.target"):
             put(f"grizzly-systemd/systemd/units/{name}", (HERE / name).read_bytes())
+        if args.openssh_host_key:
+            live = "grizzly-systemd/systemd"
+            put(f"{live}/openssh-host-key", args.openssh_host_key.read_bytes(), 0o600)
+            put(f"{live}/authorized_keys", (" ".join(client[:2]) + "\n").encode(), 0o600)
+            put(f"{live}/sshd-live.conf", (HERE / "sshd-live.conf").read_bytes())
+            name = "grizzly-live-ssh.service"
+            put(f"{live}/units/{name}", (HERE / name).read_bytes())
+            target = root / live / "units/grizzly-userspace.target"
+            with target.open("a") as config:
+                config.write(f"Wants={name}\nAfter={name}\n")
         (root / "grizzly-systemd/systemd/empty").mkdir()
         put("etc/passwd", b"root:x:0:0:root:/root:/bin/sh\n")
         put("etc/group", b"root:x:0:\n")
@@ -108,6 +118,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for option in ("inventory-cpio", "runtime-cpio", "return-executable", "host-key", "client-public-key"):
         parser.add_argument(f"--{option}", type=Path, required=True)
+    parser.add_argument("--openssh-host-key", type=Path)
     parser.add_argument("output", type=Path)
     try:
         pack(parser.parse_args())

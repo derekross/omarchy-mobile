@@ -113,7 +113,9 @@ boot() {
     ready && [ -f "$image" ] || hold 'handoff refused'
     "$bb" kill "$ssh_pid" || hold 'cannot stop USB receiver'
     wait "$ssh_pid" || :
-    { printf '\n' > "$gadget/UDC"; } || hold 'cannot unbind USB receiver'
+    if [ ! -f "$control/sshd-live.conf" ]; then
+        { printf '\n' > "$gadget/UDC"; } || hold 'cannot unbind USB receiver'
+    fi
     finish_root
 }
 
