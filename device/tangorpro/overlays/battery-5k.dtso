@@ -1,0 +1,52 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Bring-up only (BATTERY-PLAN.md B0, B1): for a tablet whose pack has the
+ * 5 kOhm ID resistor, apply after battery.dtso. It swaps the board file's
+ * 1 kOhm model for Google's hpt-a1-5k from gs201-tangorpro-battery-data.dtsi
+ * (GPL, model version 2), word for word. Use it only when B0 read this
+ * pack's DesignCap 0x0de2 (TempCo 0x0a02) from the gauge. DesignCap 0x0de2
+ * is 7108 mAh at 2 mAh per LSB (TaskPeriod 0x2d00).
+ * Applied with fdtoverlay; the tangorpro DTB is built with -@.
+ */
+/dts-v1/;
+/plugin/;
+
+&fuel_gauge {
+	maxim,fg-model = /bits/ 16 <
+		0xa000 0xb530 0xb730 0xb930 0xbaf0 0xbcb0 0xbd50 0xbea0
+		0xc0c0 0xc240 0xc550 0xc830 0xce00 0xd130 0xd490 0xdad0
+		0x0050 0x09b0 0x0b20 0x0fe0 0x1000 0x1ae0 0x15f0 0x11d0
+		0x0fe0 0x07d0 0x0880 0x07f0 0x07a0 0x06a0 0x0780 0x0780
+		0x0200 0x0200 0x0200 0x0200 0x0200 0x0200 0x0200 0x0200
+		0x0200 0x0200 0x0200 0x0200 0x0200 0x0200 0x0200 0x0200
+	>;
+	maxim,fg-params = /bits/ 16 <
+		0xf060	/* IAvgEmpty */
+		0x2038	/* RelaxCfg */
+		0x260e	/* LearnCfg */
+		0x4217	/* Config */
+		0x0090	/* Config2 */
+		0x5f00	/* FullSOCThr */
+		0x0de2	/* FullCapRep */
+		0x0de2	/* DesignCap */
+		0x3200	/* dPAcc */
+		0x0378	/* dQAcc */
+		0x0de2	/* FullCapNom */
+		0xa05f	/* VEmpty */
+		0x1780	/* QRTable00 */
+		0x0a80	/* QRTable10 */
+		0x0400	/* QRTable20 */
+		0x0400	/* QRTable30 */
+		0x0760	/* RComp0 */
+		0x0a02	/* TempCo */
+		0x0463	/* IChgTerm */
+		0xee0c	/* TGain */
+		0x1df9	/* TOff */
+		0x0012	/* Curve */
+		0x3870	/* MiscCfg */
+		0x1900	/* AtRate */
+		0x2441	/* ConvgCfg */
+		0xc623	/* FilterCfg */
+		0x2d00	/* TaskPeriod */
+	>;
+};
