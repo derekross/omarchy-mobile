@@ -113,6 +113,7 @@ whether it predated a stock boot.
 | [Display CPM queries](#attended-display-cpm-query-trial) | The Mac left stock D1 A at 09:06:49 UTC on 2026-11-26. Android stayed off between the guarded backup rescue and the display CPM boot request at 09:14:51 UTC. | All nine hashes passed at 09:13:31 UTC. Another power or CPM trial needs a fresh copy after the stock A return. |
 | [Display MBFS operating-point query](#attended-display-mbfs-operating-point-trial) | The Mac left stock D1 A at 09:38:09 UTC on 2026-11-26. Android stayed off between the guarded rescue and the operating-point boot request at 09:44:34 UTC. | All nine hashes passed at 09:43:06 UTC. Another power or CPM trial needs a fresh copy after the stock A return. |
 | [Corrected display MBFS operating-point query](#attended-corrected-display-mbfs-trial) | The Mac left stock D1 A at 10:00:35 UTC on 2026-11-26. Android stayed off between the guarded rescue and the corrected boot request at 10:08:05 UTC. | All nine hashes passed at 10:05:32 UTC. Another power or CPM trial needs a fresh copy after the stock A return. |
+| [Display DVFS row query](#attended-display-dvfs-row-trial) | The Mac left stock D1 A at 10:27:54 UTC on 2026-11-26. Android stayed off between the guarded rescue and the DVFS boot request at 10:34:59 UTC. | All nine hashes passed at 10:33:35 UTC. Another power or CPM trial needs a fresh copy after the stock A return. |
 
 [Maintainer decision on backup freshness](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035).
 Take a fresh read-only backup of all nine partitions after the latest
@@ -5002,6 +5003,41 @@ For the first attended trial, use a fresh verified NV
 backup, capture both `display-dvfs` rows, compare them with
 the live `CurOpp` samples and return to stock A. The display
 stays disabled.
+
+##### Attended display DVFS row trial
+
+On 2026-11-26 the rescue copied nine read-only, unmounted NV
+partitions. The USB bridge recovered one serial framing
+interruption. The Mac verified 3,392,151,552 bytes, all nine
+independent hashes, and private modes. The full 64 MiB rescue
+`vendor_boot_b` readback matched. After the rescue returned to
+Fastboot, the Mac staged all five diagnostic images on B and
+verified the 8,192-byte `vendor_boot_b` payload.
+
+The four display power-domain handles matched earlier trials.
+All three LPCM rates again returned firmware `-3`. Both early
+MBFS `CurOpp` reads returned level 3. After the UFS guard,
+temporary SCSI host removal and USB NCM setup, the DVFS query
+ran from 10.451803 to 10.456252 seconds of kernel uptime.
+
+| Domain | Firmware ID | Level | Raw DVFS row | Nominal rate |
+| --- | ---: | ---: | --- | ---: |
+| `dpu` | 7 | 3 | `0x7fff4164` | 356 MHz |
+| `fabdisp` | 8 | 3 | `0x7fff40f0` | 240 MHz |
+
+Both rows had bit 14 set. These are nominal entries in separate
+firmware tables, matched to the early `CurOpp` indices. The
+fixture left the display disabled, so the entries do not
+establish a measured pixel clock or an active scanout rate.
+
+The guard verified all 42 UFS partitions read-only and
+unmounted, and the 8 KiB `boot_b` comparison passed.
+The authenticated USB receiver became ready. The independent
+helper requested the warm restart at 600.009660 seconds.
+Fastboot returned 642 seconds after the B boot request.
+Stock D1 A completed boot with enforcing verity and the
+original VBMeta digest. Ramoops and `SYSTEM_LAST_KMSG`
+matched all 26 filtered trial lines.
 
 ### Offline stock D1 device reference-clock diagnostic
 
