@@ -124,6 +124,7 @@ whether it predated a stock boot.
 | [Powered DSI0 pixel clock trial](#attended-powered-dsi0-pixel-clock-trial) | The Mac left stock D1 A at 15:42:07 UTC on 2026-11-26. Android stayed off between the rescue and the diagnostic boot at 15:48:20 UTC. | All nine hashes passed at 15:47:04 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
 | [Passive stock D1 DSI0 trace](#attended-passive-stock-d1-dsi0-trace) | The Mac left stock D1 A at 16:29:20 UTC on 2026-11-26. Android stayed off between the rescue and the trace boot request at 16:37:33 UTC. | All nine hashes passed at 16:35:44 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
 | [Stock D1 DSI0 genpd and MBFS trace](#attended-stock-d1-dsi0-genpd-and-mbfs-trace) | The Mac left stock D1 A at 16:46:20 UTC on 2026-11-26. Android stayed off between the rescue and the trace boot at 16:53:23 UTC. | All nine hashes passed at 16:52:00 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
+| [Stock D1 DSI0 clock and reset trace](#attended-stock-d1-dsi0-clock-and-reset-trace) | The Mac left stock D1 A at 17:08:28 UTC on 2026-11-26. Android stayed off between the rescue and the trace boot at 17:15:58 UTC. | All nine hashes passed at 17:14:41 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
 
 [Maintainer decision on backup freshness](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035).
 Take a fresh read-only backup of all nine partitions after the latest
@@ -5923,7 +5924,44 @@ signature, ABL handoff bounds and saved slot fit passed.
 The other four images match the prior stock diagnostic.
 The bundle `SHA256SUMS` digest is
 `8fe724b47507e4622d547d6eb88aeb466f8b1f57611b0a174d2b529eb39ece8d`.
-Physical DSI0 capture remains pending.
+
+##### Attended stock D1 DSI0 clock and reset trace
+
+On 2026-11-26 the read-only rescue copied all nine NV
+partitions. Independent checks verified the hashes,
+3,392,151,552 bytes and private permissions. The full 64 MiB
+`vendor_boot_b` readback matched for the rescue and the
+single diagnostic boot.
+
+The trace armed before the display modules loaded. All
+three display domains were `off-0` in the pre-load
+snapshot. PID 1 checked the probe profile and completed
+the trace and NV guard. The ring retained all 42 records,
+including 15 MBFS request/result pairs with every result
+`0`. The final power sequence and host reads used the
+same task. Times below use the trace's monotonic clock.
+
+| Time (s) | Event | Result |
+| ---: | --- | --- |
+| 6.402408 | Wrapper ON result | `0` |
+| 6.402716 | BE ON result | `0` |
+| 6.402993 | DSI0 ON result | `0` |
+| 6.411881 | Host ID at `0x00` | `0x30313130` |
+| 6.411885 | Host version at `0x04` | `0x1a000110` |
+| 6.413203 | Runtime resume result | `0` |
+| 6.413207 | Status at `0x0c` | `0x00000000`, `pwr_up=0` |
+
+There were zero clock or reset provider calls or replies
+between the arm marker and `pwr_up`. The host ID and
+version show effective APB access 8.888 ms after the DSI0 ON
+reply and before runtime resume. The individual CPM-internal
+APB gate and external reset transitions remain unobserved.
+
+The 90-second warm return requested restart at 90.901349
+seconds of kernel uptime. Fastboot returned 134 seconds
+after the B boot request. Stock D1 A completed boot with
+enforcing verity and the original VBMeta digest. Ramoops and
+`SYSTEM_LAST_KMSG` matched, including the full scoped trace.
 
 ### Offline stock D1 device reference-clock diagnostic
 
