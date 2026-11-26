@@ -14,7 +14,7 @@ instance=$1/instances/grizzly_dsi0
 probes=$1/kprobe_events
 group=grizzly_dsi0_cpm
 events='dsi0_clk_call dsi0_clk_result dsi0_rst_call dsi0_rst_result'
-pll_events='dsi0_pll_first dsi0_pll_last'
+pll_events='dsi0_pll_first dsi0_pll_last dsi0_pll_relock_first dsi0_pll_relock_last dsi0_pll_cfg_first dsi0_pll_cfg_last dsi0_pll_cfg_timeout'
 
 remove_probes() {
     result=0
@@ -51,7 +51,8 @@ case $mode in
         [ -d "$instance" ] || exit 1
         "$bb" awk '
             $3 == "dw_dphy_set_mode_g301" && $4 == "[mipi_cdphy]" { found++ }
-            END { if (found != 1) exit 1 }
+            $3 == "dw_dphy_configure_g301" && $4 == "[mipi_cdphy]" { config++ }
+            END { if (found != 1 || config != 1) exit 1 }
         ' /proc/kallsyms || exit 1
         created=
         # x0 is the already-read word. x22+0x40 holds the resource start in RAM.
@@ -59,6 +60,13 @@ case $mode in
         bank='bank == 0x0f7d8800'
         add_probe p dsi0_pll_first "mipi_cdphy:dw_dphy_set_mode_g301+0x9c8 $samples" "$bank"
         add_probe p dsi0_pll_last "mipi_cdphy:dw_dphy_set_mode_g301+0xa18 $samples" "$bank"
+        add_probe p dsi0_pll_relock_first "mipi_cdphy:dw_dphy_set_mode_g301+0x538 $samples" "$bank"
+        add_probe p dsi0_pll_relock_last "mipi_cdphy:dw_dphy_set_mode_g301+0x6b4 $samples" "$bank"
+        # The configure callback keeps the same RAM structure in x19.
+        samples='bank=+64(%x19):x64 value=%x0:x32'
+        add_probe p dsi0_pll_cfg_first "mipi_cdphy:dw_dphy_configure_g301+0x207c $samples" "$bank"
+        add_probe p dsi0_pll_cfg_last "mipi_cdphy:dw_dphy_configure_g301+0x20b4 $samples" "$bank"
+        add_probe p dsi0_pll_cfg_timeout "mipi_cdphy:dw_dphy_configure_g301+0x20fc $samples" "$bank"
         "$bb" echo 'DSI0 PLL lock probes armed' > "$instance/trace_marker"
         exit 0 ;;
     ''|--mbfs|--apb-reset|--pll-lock) ;;

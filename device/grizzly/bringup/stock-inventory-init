@@ -506,8 +506,8 @@ run_stock_dsi0_trace() (
     fi
     "$bb" awk -v pll="$dsi0_pll_requested" '
         $1 ~ /^dsi0_(clk|rst)_(call|result)$/ { found++; missed += $3 }
-        $1 ~ /^dsi0_pll_(first|last)$/ { pll_probes++; missed += $3 }
-        END { if (found != 4 || missed != 0 || (pll == "yes" && pll_probes != 2)) exit 1 }
+        $1 ~ /^dsi0_pll_/ { pll_probes++; missed += $3 }
+        END { if (found != 4 || missed != 0 || (pll == "yes" && pll_probes != 7)) exit 1 }
     ' "$tracefs/kprobe_profile" || {
         stock_inventory_log 'DSI0 CPM probe profile incomplete or missed events'
         return 1
@@ -515,7 +515,7 @@ run_stock_dsi0_trace() (
     # Preserve the tracefs header and scoped rows for offline correlation.
     capture=$("$bb" awk -v pll="$dsi0_pll_requested" '
         NR > 128 || length($0) > 512 { invalid=1; exit }
-        /entries-in-buffer\/entries-written:|: (regmap_reg_read|power_domain_target|rpm_resume|rpm_return_int|rpm_status|clk_enable|clk_disable|clk_set_rate|send_mail_mbfs|recv_result_mbfs|dsi0_(clk|rst)_(call|result)|dsi0_pll_(first|last)|tracing_mark_write): / {
+        /entries-in-buffer\/entries-written:|: (regmap_reg_read|power_domain_target|rpm_resume|rpm_return_int|rpm_status|clk_enable|clk_disable|clk_set_rate|send_mail_mbfs|recv_result_mbfs|dsi0_(clk|rst)_(call|result)|dsi0_pll_[a-z_]+|tracing_mark_write): / {
             print
         }
         /: regmap_reg_read: f7d8000\.dsi2host[^ ]* reg=0*c val=/ { reads++ }

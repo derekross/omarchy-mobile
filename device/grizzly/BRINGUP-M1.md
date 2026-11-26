@@ -6339,10 +6339,17 @@ guarded stock DSI0 trace. Packaging pins the exact D1
 after the NV guard and arms the PLL probes after
 `mipi-cdphy.ko` loads, before the DSI host loads.
 
-The two probes attach at `dw_dphy_set_mode_g301+0x9c8`
-and `+0xa18` (module text `0xf0c` and `0xf5c`).
-They record the first and final values consumed by the
-driver's existing PLL-lock poll. They fetch the word from
+The probes record the first and final values consumed by
+the three identified bit 1 polls in the stock driver.
+These are D1 module text offsets.
+
+| Callback | First sample | Final sample |
+| --- | --- | --- |
+| `dw_dphy_set_mode_g301`, lock path | `0xf0c` | `0xf5c` |
+| `dw_dphy_set_mode_g301`, relock path | `0xa7c` | `0xbf8` |
+| `dw_dphy_configure_g301` | `0x31b8` | `0x31f0` on lock or `0x3238` after the deadline |
+
+They fetch the word from
 the saved register and filter on the physical resource
 start from the driver's RAM structure
 (`u0-apb-regbank`, `0x0f7d8800`). The diagnostic adds
@@ -6359,14 +6366,28 @@ within the capture window, it reports zero samples and
 leaves PLL lock unobserved. The result does not qualify
 mainline host APB access or external reset.
 
-The exact D1 kernel accepted both filtered probes in
+The normal host probe calls `phy_init` and reads host ID
+without calling `phy_configure`. Its first runtime resume
+can return while the bridge pointer is still absent,
+as observed in the attended PHY trace. The separate host
+enable path invokes `phy_configure` at `0x155c`.
+The host's ULPS-exit path can invoke `phy_set_mode_ext`
+with mode `0x10`, submode `0`, at `0x1afc`.
+It first checks the host command interface. These
+paths follow host access. The fixture loads the same
+seven display modules as the previous trace and does not
+load a panel module or request a DRM modeset. Zero samples
+are expected if the stock driver only probes the host.
+
+The exact D1 kernel accepted all seven filtered probes in
 QEMU, refused to arm them without the PHY module and
 removed them cleanly afterward. Replay preserved the
 previous hardware trace output. Synthetic cases covered
 samples before and after host ID, cleared vote correlation
-after OFF, zero samples and malformed scope. The packed
+after OFF, both configuration outcomes, zero samples and
+malformed scope. The packed
 `init_boot` SHA-256 is
-`6730c72495b814b58ceb51898c21421b101eb17af3f6f8bd866d4aea61b18c84`.
+`64b8c3c99d16436f8657bfbc4ee62388258c6d82422e7fdc751eaa339f604f61`.
 The other four images match the attended PHY init fixture.
 Checks passed for all five hashes, initramfs readback,
 handoff bounds and saved slot fit. The hardware capture

@@ -26,7 +26,15 @@ CPM_RESULT = re.compile(r" result=(-?\d+)$")
 DISPLAY_LPCM = 0x23
 DPU_CHANNEL_CLOCK = (0x2a, 0)
 PLL_ARM = "DSI0 PLL lock probes armed"
-PLL_PHASES = {"dsi0_pll_first": "first", "dsi0_pll_last": "last"}
+PLL_PHASES = {
+    "dsi0_pll_first": "first",
+    "dsi0_pll_last": "last",
+    "dsi0_pll_relock_first": "relock first",
+    "dsi0_pll_relock_last": "relock last",
+    "dsi0_pll_cfg_first": "configure first",
+    "dsi0_pll_cfg_last": "configure last",
+    "dsi0_pll_cfg_timeout": "configure final deadline read",
+}
 PLL_SAMPLE = re.compile(r" bank=(0x[0-9a-fA-F]+) value=(0x[0-9a-fA-F]+)$")
 DSI0_PLL_BANK = 0x0f7d8800
 
