@@ -765,13 +765,14 @@ surfaces, all driven by `omamobile-fp-bridge` (omamobile-fingerprint):
 Data. The bridge serves one client, fprintd, which keeps each user's prints
 (an enrollment made straight through the bridge is invisible to fprintd and
 the lock). So enrollment goes through fprintd's D-Bus API:
-`bin/omamobile-fp-enroll` claims the default device (polkit asks first),
-reports `claimed` once polkit is answered (until then the enrollment
-screen is unmapped, so Omarchy's password prompt and the on-screen keyboard,
-which draws under overlay layers, stay usable; the same for Delete all),
-picks the next free finger (index fingers, then thumbs, ...), runs
-`EnrollStart` and reports `EnrollStatus` as JSON lines; `list` and
-`delete-all` do the rest. What fprintd doesn't carry comes from the bridge's
+`bin/omamobile-fp-enroll` claims the default device, picks the next free
+finger (index fingers, then thumbs, ...) and runs `EnrollStart` (or
+`DeleteEnrolledFingers2` for Delete all), which is where polkit prompts;
+until `started`, `deleted`, `done` or `error` arrives, the enrollment
+screen stays unmapped so Omarchy's password prompt and the on-screen
+keyboard (which draws under overlay layers) stay usable. `EnrollStatus`
+is reported as JSON lines; `list` and `delete-all` do the rest. What
+fprintd doesn't carry comes from the bridge's
 state file, `/run/omamobile-fp-ui/state.json` (world-readable, replaced with
 `rename(2)`, removed when the stack stops):
 
