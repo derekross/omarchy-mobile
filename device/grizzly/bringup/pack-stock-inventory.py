@@ -41,6 +41,14 @@ USB2_FIRMWARE = "lib/firmware/usb_phy_fw_2.27.0.bin"
 USB2_FIRMWARE_SHA256 = "723ff8e0e2aeda20c9b3b18277c93a6a69ddb4f45ff22a30838d7392ebb2b345"
 USB2_ISOLATION_DTBO_SHA256 = "075c0d37e382253b58f50e5cac6cfdcfe5e0bad0f57964eb68c7146a921f33e9"
 USB2_ISOLATION_BOARD_SHA256 = "e4507c31e1386a3d2a8459942d894743a439980cc32a10e5a5a10da98e250d3e"
+NV_RESCUE_INIT_SHA256 = "00784a6ea41f53acdac36ed5c7b81cf6fb90f35067b138bb7c79c0757a6baa75"
+# Byte boundary between the factory generic ramdisk and the overlay in this exact rescue.
+NV_RESCUE_FACTORY_RAMDISK_SIZE = 2969964
+DSI0_TRACE_BOARD_SHA256 = "df00e0d6736a3efefcb5bec99c1d7697bbf44830e0427fd3f889abd0f5bb37bb"
+DSI0_MODULES = (
+    "tzprot.ko", "gs-drm-connector.ko", "mipi-cdphy.ko", "mipi-dsi2h.ko",
+    "google_icc.ko", "drm_display_helper.ko", "vs_drm.ko",
+)
 
 
 def digest(path):
@@ -136,8 +144,13 @@ def pack(args):
     sampler_path = args.ufs_psm1_prep_trace or args.ufs_psm1_trace
     power_trace = args.ufs_power_trace or args.ufs_pre_on_trace or sampler_path or args.ufs_cpm_trace
     stock = {name: args.factory / f"{name}.img" for name in FACTORY}
+    expected_images = FACTORY
+    if args.dsi0_trace:
+        expected_images = dict(FACTORY, init_boot=NV_RESCUE_INIT_SHA256, dtbo=USB2_ISOLATION_DTBO_SHA256)
+        if digest(args.board_dtb) != DSI0_TRACE_BOARD_SHA256:
+            raise ValueError("DSI0 trace requires the audited B0 merge of NV rescue DTBO entry 19")
     for name, path in stock.items():
-        if digest(path) != FACTORY[name]:
+        if digest(path) != expected_images[name]:
             raise ValueError(f"{path} differs from the audited D1 factory image")
     sampler = None
     if sampler_path:
@@ -196,11 +209,21 @@ def pack(args):
             else:
                 write_payload(root / "stock-inventory.modules", manifest.encode(), 0o644)
                 archive_members.append("stock-inventory.modules")
-                if args.nv_guard_only or args.ufs_refclk_only or power_trace or args.usb2_test:
+                if args.nv_guard_only or args.ufs_refclk_only or power_trace or args.usb2_test or args.dsi0_trace:
                     write_payload(root / "grizzly-inventory/nv-guard.sh",
                                   (HERE / "stock-nv-guard.sh").read_bytes(), 0o644)
-                if args.nv_guard_only:
+                if args.nv_guard_only or args.dsi0_trace:
                     write_payload(root / "grizzly-inventory/nv-guard-only", b"", 0o644)
+                if args.dsi0_trace:
+                    display_manifest = "\n".join(DSI0_MODULES) + "\n"
+                    full_count, full_preloads = check_modules(
+                        vendor_kernel_cpio, manifest.rstrip() + "\n" + display_manifest)
+                    if full_count != count + len(DSI0_MODULES) or full_preloads != preloads:
+                        raise ValueError("DSI0 closure must load separately after the NV guard")
+                    write_payload(root / "grizzly-inventory/dsi0.modules",
+                                  display_manifest.encode(), 0o644)
+                    write_payload(root / "grizzly-inventory/stock-dsi0-trace.sh",
+                                  (HERE / "stock-dsi0-trace.sh").read_bytes(), 0o755)
                 if args.ufs_refclk_only:
                     write_payload(root / "grizzly-inventory/ufs-refclk-only", b"", 0o644)
                     write_payload(root / "grizzly-inventory/ufs-refclk.sh",
@@ -232,6 +255,10 @@ def pack(args):
             capture(sys.executable, args.unpack, "--boot_img", stock["init_boot"],
                     "--out", temp / "factory-init_boot")
             factory_init_ramdisk = temp / "factory-init_boot/ramdisk"
+            if args.dsi0_trace:
+                # Drop the known NV export overlay and retain the stock early-loader files.
+                factory_init_ramdisk.write_bytes(
+                    factory_init_ramdisk.read_bytes()[:NV_RESCUE_FACTORY_RAMDISK_SIZE])
         busybox = capture("bsdtar", "-xOf", args.rescue_cpio, "bin/busybox")
         if busybox[:6] != b"\x7fELF\x02\x01" or struct.unpack_from("<H", busybox, 18)[0] != 183:
             raise ValueError("expected the ARM64 BusyBox from Grizzly RAM rescue")
@@ -351,6 +378,8 @@ def pack(args):
               f"{count - len(preloads)} subsequent module requests.")
         if args.nv_guard_only:
             print("NV guard prototype verifies read-only state without exporting block data.")
+        if args.dsi0_trace:
+            print("Stock DSI0 trace arms before the separate guarded display module load.")
         if args.ufs_refclk_only:
             print("UFS reference-clock prototype reads the stock attribute after the NV guard.")
         if args.ufs_power_trace:
@@ -394,6 +423,8 @@ def main():
                       help="check the early factory modprobe runtime with its help command")
     mode.add_argument("--nv-guard-only", action="store_true",
                       help="verify read-only NV devices before enabling a backup transport")
+    mode.add_argument("--dsi0-trace", action="store_true",
+                      help="stage the stock DSI0 trace from the audited NV rescue images")
     mode.add_argument("--ufs-refclk-only", action="store_true",
                       help="read the stock UFS device's reference-clock attribute after the NV guard")
     mode.add_argument("--ufs-power-trace", action="store_true",

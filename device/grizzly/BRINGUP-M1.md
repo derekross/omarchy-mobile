@@ -5701,9 +5701,50 @@ verified all eight event filters, the one-shot trigger and
 duplicate-instance rejection. Synthetic traces checked
 successful correlation, same-timestamp ordering, overrun,
 failed resume and missing status. QEMU has no Grizzly display
-host. The helper and checker are ready for integration with
-an early stock boot path. Physical capture and APB clock and
-reset evidence remain pending.
+host.
+
+##### Packaged early stock D1 DSI0 trace
+
+`pack-stock-inventory.py --dsi0-trace` takes the audited D1 NV
+rescue images as its `--factory` input. It uses the B0 base
+DT merged with rescue DTBO entry 19 for its offline handoff
+check. The packer retains the factory generic ramdisk prefix
+and replaces the NV export overlay with the trace inventory.
+It keeps the stock kernel, vendor boot images and rescue DTBO
+byte for byte.
+
+PID 1 verifies Grizzly slot B, sets the warm reset policy,
+starts the existing 90-second return timer and disables
+automatic module loading. The stock inventory manifest loads
+UFS and the NV guard checks the nine partitions. Only then
+does PID 1 arm the private trace. A successful arm is required
+before it loads the seven audited display module dependencies
+ending with stock `vs_drm.ko`. The manifest has no panel
+module, and the instrumentation adds no hardware access of
+its own. The stock display module still runs its own probes.
+
+The first scoped register event stops tracing. PID 1 waits
+up to eight seconds for that stop and copies the trace header
+and scoped rows into the retained console with a `DSI0 trace`
+prefix. Strip that prefix before running the host checker.
+A failed arm blocks the display module load. A missing
+capture or failed probe leaves the return timer running.
+
+QEMU exercised the packaged trace helper and PID 1 functions
+on the exact D1 kernel. The guest verified that the trace
+and one-shot trigger were active before its simulated display
+loader ran, that a pre-existing instance blocked loading and
+survived that failure, and that the existing 90-second timer
+invoked the warm restart command. The loader, captured status
+and final restart were simulated in the guest. The retained
+sample passed the host checker.
+
+All five image hashes, the replacement `init_boot` AVB
+signature, ABL handoff bounds and saved D1 slot fit passed.
+The `SHA256SUMS` digest is
+`38f1be9e60340b4c503ff5f97aaaa03acafa9296cc30aaa65c1996d73008b9f7`.
+Physical probe timing, capture and independent APB clock and
+external reset evidence remain pending.
 
 ### Offline stock D1 device reference-clock diagnostic
 

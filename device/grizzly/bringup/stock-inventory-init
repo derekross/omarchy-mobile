@@ -372,6 +372,7 @@ check_factory_preloads() {
 
 stock_inventory_modules() (
     mode=$1
+    manifest=${2:-/stock-inventory.modules}
     seen=
     while IFS= read -r line || [ -n "$line" ]; do
         # Manifest fields are whitespace-delimited and globbing is disabled.
@@ -426,7 +427,9 @@ stock_inventory_modules() (
             stock_inventory_log "loading module=$module"
             "$bb" insmod "$file" "$@" >/dev/kmsg 2>&1 || return 1
         fi
-    done < /stock-inventory.modules
+    done < "$manifest"
+
+    [ "$manifest" = /stock-inventory.modules ] || return 0
 
     for module_name in $verified_preloads; do
         case " $seen " in
@@ -438,6 +441,45 @@ stock_inventory_modules() (
         *" ufs "*) return 0 ;;
         *) stock_inventory_log "manifest missing ufs.ko"; return 1 ;;
     esac
+)
+
+run_stock_dsi0_trace() (
+    tracefs=/grizzly-inventory/dsi0-tracefs
+    instance=$tracefs/instances/grizzly_dsi0
+    "$bb" mkdir -m 0700 "$tracefs" || return 1
+    if ! "$bb" mount -t tracefs -o nosuid,nodev,noexec,mode=0700 tracefs "$tracefs"; then
+        "$bb" rmdir "$tracefs"
+        return 1
+    fi
+    armed=no
+    trap 'if [ "$armed" = yes ]; then "$bb" rmdir "$instance"; fi
+          "$bb" umount "$tracefs" && "$bb" rmdir "$tracefs"' 0
+
+    "$bb" sh /grizzly-inventory/stock-dsi0-trace.sh "$tracefs" "$bb" || return 1
+    armed=yes
+    stock_inventory_log 'DSI0 trace armed before display module load' || return 1
+    stock_inventory_modules load "$dsi0_manifest" || return 1
+
+    for wait in 1 2 3 4 5 6 7 8; do
+        IFS= read -r active < "$instance/tracing_on" || return 1
+        [ "$active" = 0 ] && break
+        "$bb" sleep 1 || return 1
+    done
+    [ "$active" = 0 ] || return 1
+    # Preserve the tracefs header and scoped rows for offline correlation.
+    capture=$("$bb" awk '
+        NR > 128 || length($0) > 512 { invalid=1; exit }
+        /entries-in-buffer\/entries-written:|: (regmap_reg_read|power_domain_target|rpm_resume|rpm_return_int|rpm_status|clk_enable|clk_disable|clk_set_rate): / {
+            print
+        }
+        /: regmap_reg_read: / { reads++ }
+        END { if (invalid || reads != 1) exit 1 }
+    ' "$instance/trace") || return 1
+    while IFS= read -r line; do
+        stock_inventory_log "DSI0 trace $line" || return 1
+    done <<EOF
+$capture
+EOF
 )
 
 if ! mount_inventory_filesystems; then
@@ -613,6 +655,16 @@ if [ -e "$nv_guard_marker" ] || [ -L "$nv_guard_marker" ]; then
 fi
 check_factory_preloads startup || end_inventory "inventory startup checks failed"
 stock_inventory_modules check || end_inventory "module manifest rejected"
+dsi0_manifest=/grizzly-inventory/dsi0.modules
+if [ -e "$dsi0_manifest" ] || [ -L "$dsi0_manifest" ]; then
+    if [ "$fixture" != inventory ] || [ "$nv_guard_requested" != yes ] ||
+       [ "$usb2_requested" = yes ] || [ "$refclk_requested" = yes ] || [ "$ufs_trace_requested" = yes ] ||
+       [ ! -f "$dsi0_manifest" ] || [ -L "$dsi0_manifest" ] ||
+       [ ! -f /grizzly-inventory/stock-dsi0-trace.sh ] || [ -L /grizzly-inventory/stock-dsi0-trace.sh ]; then
+        end_inventory "DSI0 trace fixture is ambiguous or incomplete"
+    fi
+    stock_inventory_modules check "$dsi0_manifest" || end_inventory "DSI0 module manifest rejected"
+fi
 if [ "$ufs_trace_requested" = yes ]; then
     # shellcheck source=stock-ufs-power-trace.sh
     . /grizzly-inventory/ufs-power-trace.sh
@@ -679,6 +731,10 @@ if stock_inventory_scan /sys/class/block yes; then
     if [ "$nv_guard_requested" = yes ]; then
         stock_nv_guard "$bb" /sys/class/block /proc/self/mountinfo /grizzly-inventory/nv-ro "$nv_snapshot_output" ||
             end_inventory "NV guard failed"
+        if [ -f "$dsi0_manifest" ]; then
+            run_stock_dsi0_trace || end_inventory "DSI0 trace unavailable after NV guard"
+            end_inventory "DSI0 trace and NV guard complete"
+        fi
         if [ "$ufs_cpm_requested" = yes ]; then
             end_inventory "UFS CPM trace and NV guard finished capture_ok=$cpm_trace_ok"
         fi
