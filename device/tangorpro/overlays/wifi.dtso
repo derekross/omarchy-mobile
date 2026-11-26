@@ -1,0 +1,40 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (WIFI-PLAN.md): turn on the Pixel Tablet's Wi-Fi for one
+ * gated boot. The board file describes the BCM43752 on PCIe GEN4A_1 at
+ * Gen1 and leaves everything new disabled; this enables the WL_REG_ON
+ * regulator, the restricted DMA pool the chip's buffers come from, the
+ * HSI2 pin controller (WL_REG_ON, WL_DEV_WAKE, PERST# and CLKREQ#), the
+ * PCIe controller and its PHY. The PCIe System MMU stays off (it can't
+ * tell PCIe from UFS). The host-wake pin's controller (FAR_ALIVE) is
+ * already on, and the chip's PCIe rails are always on.
+ *
+ * Nothing powers the chip until pcie_gs201 loads, and omamobile-device-
+ * tangorpro blacklists it (and brcmfmac) from autoload: only
+ * omamobile-wifi-start loads them, behind a hang marker. Install that
+ * package before a DTB with this overlay. The firmware it needs comes
+ * from tools/extract-vendor-firmware -d tangorpro.
+ * Applied with fdtoverlay; the tangorpro DTB is built with -@.
+ */
+/dts-v1/;
+/plugin/;
+
+&wlan_pwr {
+	status = "okay";
+};
+
+&wifi_dma_pool {
+	status = "okay";
+};
+
+&pinctrl_hsi2 {
+	status = "okay";
+};
+
+&pcie_1_phy {
+	status = "okay";
+};
+
+&pcie_1 {
+	status = "okay";
+};

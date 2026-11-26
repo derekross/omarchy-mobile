@@ -25,7 +25,7 @@
 #   --disarm         only stop a leftover feeder and the watchdog, then exit
 #   --brcmfmac       stage 5 only (gate W2): once the link is up, also load
 #                    brcmfmac, under the same watchdog and log capture, and wait
-#                    for "Firmware: BCM4389" or a failure line
+#                    for "Firmware: BCM<chip>" (BCM4389, the tablet's BCM43752) or a failure line
 #   --brcm-debug HEX brcmfmac debug mask for --brcmfmac (default 0x80004 =
 #                    PCIE + INFO; needs CONFIG_BRCMDBG, else it is ignored)
 #   --hsi2-probe N   stage 5 only: after the link (and --brcmfmac), read the
@@ -240,7 +240,7 @@ if ((brcm)) && since_start | grep -c 'link up on try' >/dev/null; then
   while (( $(date +%s) - start < wait_s )); do
     sleep 1
     if since_start | sed -n '/wifi-w1-capture: start brcmfmac/,$p' |
-       grep -c 'Firmware: BCM4389\|Dongle setup failed\|FW failed to initialize\|Invalid shared RAM\|brcmf_pcie_probe.*failed\|Unsupported PCIE version' >/dev/null; then
+       grep -c 'Firmware: BCM[0-9]\|Dongle setup failed\|FW failed to initialize\|Invalid shared RAM\|brcmf_pcie_probe.*failed\|Unsupported PCIE version' >/dev/null; then
       break
     fi
   done

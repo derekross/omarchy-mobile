@@ -9,7 +9,9 @@
 # an earlier run (another device's, or one the new image doesn't have),
 # and leaves the rest of the directory alone; a husky run drops an earlier
 # registry; a panther run adds the video codec's firmware and reports its
-# version, and refuses one that doesn't start with an ARM vector table; a successful run's checksum list names exactly the mapped
+# version, and refuses one that doesn't start with an ARM vector table; a
+# tangorpro run stages only the BCM43752's three Wi-Fi files and refuses
+# another chip's firmware; a successful run's checksum list names exactly the mapped
 # files; a failed run (a missing file or registry, debugfs reporting a
 # short write, also under a file size limit, a failed sanity check, a
 # missing camera APEX) leaves the previous outputs and the -c file byte
@@ -107,6 +109,12 @@ make_vendor() {
     for f in cs40l26.bin cs40l26-svc.bin cs40l26-dvl.bin; do echo "WMDR $f $g" > "$v/firmware/$f"; done
     return
   fi
+  if [[ $dev == tangorpro ]]; then   # Wi-Fi only, a BCM43752
+    printf 'fictional 4362b0-roml Version=1.0.5 (%s)\n' "$g" > "$v/firmware/fw_bcmdhd.bin"
+    printf 'NVRAMRev=%s\n' "$g" > "$v/firmware/bcmdhd.cal"
+    echo "clm $g" > "$v/firmware/bcmdhd_clm.blob"
+    return
+  fi
   printf 'fictional 4389c1-roml Version=1.0.1 (%s)\n' "$g" > "$v/firmware/fw_bcmdhd.bin"
   printf 'NVRAMRev=%s\n' "$g" > "$v/firmware/bcmdhd.cal"
   echo "clm $g" > "$v/firmware/bcmdhd_clm.blob"
@@ -136,6 +144,7 @@ make_vendor "$t/v1" cheetah gen1
 make_vendor "$t/v2" cheetah gen2
 make_vendor "$t/husky" husky gen3
 make_vendor "$t/panther" panther gen4
+make_vendor "$t/tangorpro" tangorpro gen5
 
 # Dipper reads local backup copies and keeps the split modem firmware beside
 # each renamed MDT header.
@@ -317,6 +326,22 @@ else
   cat "$t/log"; fail "panther: a run succeeds"
 fi
 
+o=$t/tangorpro-out n=$failed
+seed "$o"
+if run "$t/tangorpro" "$t/ext4.img" -d tangorpro -o "$o"; then
+  [[ $(listed "$o" | tr '\n' ' ') == "brcm/brcmfmac43752-pcie.google,gs201-tangorpro.bin brcm/brcmfmac43752-pcie.google,gs201-tangorpro.clm_blob brcm/brcmfmac43752-pcie.google,gs201-tangorpro.txt " ]] ||
+    fail "tangorpro: the checksum list names the three BCM43752 files only"
+  [[ $(find "$o/$FW" -type f | wc -l) == 3 ]] || fail "tangorpro: no cheetah firmware stays"
+  [[ ! -e $o/usr/share/omamobile/sensors ]] || fail "tangorpro: no sensor registry is staged"
+  cmp -s "$t/tangorpro/firmware/bcmdhd.cal" "$o/$FW/brcm/brcmfmac43752-pcie.google,gs201-tangorpro.txt" ||
+    fail "tangorpro: the NVRAM is bcmdhd.cal"
+  grep -qF 'Wi-Fi firmware: Version=1.0.5 (gen5)' "$t/log" || fail "tangorpro: the Wi-Fi firmware's version is reported"
+  ! grep -q 'Bluetooth patch' "$t/log" || fail "tangorpro: no Bluetooth patch is reported"
+  pass_since "$n" "tangorpro: a run over a cheetah generation stages the BCM43752's Wi-Fi files only"
+else
+  cat "$t/log"; fail "tangorpro: a run succeeds"
+fi
+
 # --- Failed runs leave the previous generation ----------------------------------
 rm -rf "$t/panther-badmfc"; cp -r "$t/panther" "$t/panther-badmfc"
 printf 'not a firmware %4096s' x > "$t/panther-badmfc/firmware/mfc_fw.bin"
@@ -324,6 +349,11 @@ refuses "panther: an MFC firmware without an ARM vector table" "mfc_fw.bin does 
   "$t/panther-badmfc" "$t/ext4.img" -d panther
 rm -rf "$t/panther-nomfc"; cp -r "$t/panther" "$t/panther-nomfc"; rm "$t/panther-nomfc/firmware/mfc_fw.bin"
 refuses "panther: a missing MFC firmware" "/vendor/firmware/mfc_fw.bin is missing" "$t/panther-nomfc" "$t/ext4.img" -d panther
+# tangorpro's firmware must be the BCM43752's: the 7 Pro's is refused
+rm -rf "$t/tangorpro-4389"; cp -r "$t/tangorpro" "$t/tangorpro-4389"
+echo "fictional 4389c1-roml Version=1.0.1 (x)" > "$t/tangorpro-4389/firmware/fw_bcmdhd.bin"
+refuses "tangorpro: another chip's Wi-Fi firmware" "fw_bcmdhd.bin is not a 4362b0 PCIe firmware" \
+  "$t/tangorpro-4389" "$t/ext4.img" -d tangorpro
 # husky's BCM.hcd names the module and board, not the chip: another phone's
 # patch (here the 7 Pro's) is refused
 rm -rf "$t/husky-otherbt"; cp -r "$t/husky" "$t/husky-otherbt"; echo "BCM4389C1 fictional" > "$t/husky-otherbt/firmware/brcm/BCM.hcd"
