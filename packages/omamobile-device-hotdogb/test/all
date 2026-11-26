@@ -1,0 +1,36 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+dest=$(mktemp -d)
+trap 'rm -rf "$dest"' EXIT
+
+./install "$dest"
+if find "$dest" -name '*.wants' | grep . >/dev/null; then
+  echo 'a service was enabled by the package' >&2
+  exit 1
+fi
+service="$dest/usr/lib/systemd/system/omamobile-hotdogb-autobrightness.service"
+exec_path=$(sed -n 's/^ExecStart=//p' "$service")
+python3 "$dest$exec_path" --selftest
+
+python3 - "$dest" <<'PY'
+from pathlib import Path
+import re
+import sys
+import tomllib
+
+share = Path(sys.argv[1]) / 'usr/share'
+table = tomllib.loads((share / 'omacam/hotdogb.toml').read_text())
+assert table['device'] == 'hotdogb'
+assert {lens['role'] for lens in table['lens']} == {'main', 'tele', 'ultrawide', 'front'}
+assert len({lens['id'] for lens in table['lens']}) == len(table['lens']) == 4
+ucm = share / 'omamobile/hotdogb/ucm2'
+profile = (ucm / 'conf.d/sm8150/OnePlus 7T.conf').read_text()
+for path in re.findall(r'File "/([^"]+)"', profile):
+    assert (ucm / path).is_file(), path
+cap = (ucm / 'OnePlus/hotdogb/cap.conf').read_text()
+assert re.findall(r'ttable\.\d\.\d (\S+)', cap) == ['0.063', '0.063']
+assert not (share / 'alsa').exists(), 'ALSA profile must stay opt-in'
+PY
+echo 'ok - staged package, opt-in service and audio profile, four camera entries'

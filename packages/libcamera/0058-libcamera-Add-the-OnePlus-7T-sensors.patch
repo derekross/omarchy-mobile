@@ -1,0 +1,250 @@
+From d6c1b370e0eb4b22429e3438bd8b5a32a108571b Mon Sep 17 00:00:00 2001
+Date: Mon, 23 Nov 2026 17:18:36 +0000
+Subject: [PATCH] libcamera: Add the OnePlus 7T sensors (IMX586, S5K3M5,
+ IMX481, IMX471)
+
+SPDX-License-Identifier: LGPL-2.1-or-later AND CC0-1.0
+
+Sensor helpers, properties and tuning stubs for the OnePlus 7T and 7T Pro
+cameras, from Robin Snyders' hotdog-linux-bringup (aports/temp/libcamera
+0003, 0004, 0006, 0007 and their tuning files, commit 47087509), rebased onto the Omarchy Mobile series (adjacent table entries).
+
+Source: https://github.com/Sr-0w/hotdog-linux-bringup/tree/47087509/aports/temp/libcamera
+---
+ src/ipa/libipa/camera_sensor_helper.cpp       | 52 +++++++++++++++++++
+ src/ipa/simple/data/imx471.yaml               | 11 ++++
+ src/ipa/simple/data/imx481.yaml               | 11 ++++
+ src/ipa/simple/data/imx586.yaml               | 12 +++++
+ src/ipa/simple/data/meson.build               |  4 ++
+ src/ipa/simple/data/s5k3m5.yaml               | 12 +++++
+ .../sensor/camera_sensor_properties.cpp       | 46 ++++++++++++++++
+ 7 files changed, 148 insertions(+)
+ create mode 100644 src/ipa/simple/data/imx471.yaml
+ create mode 100644 src/ipa/simple/data/imx481.yaml
+ create mode 100644 src/ipa/simple/data/imx586.yaml
+ create mode 100644 src/ipa/simple/data/s5k3m5.yaml
+
+diff --git a/src/ipa/libipa/camera_sensor_helper.cpp b/src/ipa/libipa/camera_sensor_helper.cpp
+index aab98a1..307b44f 100644
+--- a/src/ipa/libipa/camera_sensor_helper.cpp
++++ b/src/ipa/libipa/camera_sensor_helper.cpp
+@@ -659,6 +659,45 @@ public:
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("imx477", CameraSensorHelperImx477)
+ 
++class CameraSensorHelperImx481 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperImx481()
++	{
++		/* The sensor reports a 64-code pedestal in its 10-bit samples. */
++		blackLevel_ = 4096;
++		/* Sony: gain = 1024 / (1024 - register code). */
++		gain_ = AnalogueGainLinear{ 0, 1024, -1, 1024 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("imx481", CameraSensorHelperImx481)
++
++class CameraSensorHelperImx471 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperImx471()
++	{
++		/* The sensor reports a 64-code pedestal in its 10-bit samples. */
++		blackLevel_ = 4096;
++		/* Sony: gain = 1024 / (1024 - register code). */
++		gain_ = AnalogueGainLinear{ 0, 1024, -1, 1024 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("imx471", CameraSensorHelperImx471)
++
++class CameraSensorHelperImx586 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperImx586()
++	{
++		/* The sensor reports a 64-code pedestal in its 10-bit samples. */
++		blackLevel_ = 4096;
++		/* Sony: gain = 1024 / (1024 - register code). */
++		gain_ = AnalogueGainLinear{ 0, 1024, -1, 1024 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("imx586", CameraSensorHelperImx586)
++
+ class CameraSensorHelperImx678 : public CameraSensorHelper
+ {
+ public:
+@@ -896,6 +935,19 @@ public:
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("s5kgn8", CameraSensorHelperS5kgn8)
+ 
++class CameraSensorHelperS5k3m5 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperS5k3m5()
++	{
++		/* The sensor reports a 64-code pedestal in its 10-bit samples. */
++		blackLevel_ = 4096;
++		/* The V4L2 control reports the gain multiplier directly. */
++		gain_ = AnalogueGainLinear{ 1, 0, 0, 32 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("s5k3m5", CameraSensorHelperS5k3m5)
++
+ class CameraSensorHelperVd55g1 : public CameraSensorHelper
+ {
+ public:
+diff --git a/src/ipa/simple/data/imx471.yaml b/src/ipa/simple/data/imx471.yaml
+new file mode 100644
+index 0000000..e903d96
+--- /dev/null
++++ b/src/ipa/simple/data/imx471.yaml
+@@ -0,0 +1,11 @@
++# SPDX-License-Identifier: CC0-1.0
++%YAML 1.1
++---
++version: 1
++algorithms:
++  - BlackLevel:
++      blackLevel: 4096
++  - Awb:
++  - Adjust:
++  - Agc:
++...
+diff --git a/src/ipa/simple/data/imx481.yaml b/src/ipa/simple/data/imx481.yaml
+new file mode 100644
+index 0000000..e903d96
+--- /dev/null
++++ b/src/ipa/simple/data/imx481.yaml
+@@ -0,0 +1,12 @@
++# SPDX-License-Identifier: CC0-1.0
++%YAML 1.1
++---
++version: 1
++algorithms:
++  - BlackLevel:
++      blackLevel: 4096
++  - Awb:
++  - Adjust:
++  - Agc:
++  - Af:
++...
+diff --git a/src/ipa/simple/data/imx586.yaml b/src/ipa/simple/data/imx586.yaml
+new file mode 100644
+index 0000000..be45ddf
+--- /dev/null
++++ b/src/ipa/simple/data/imx586.yaml
+@@ -0,0 +1,12 @@
++# SPDX-License-Identifier: CC0-1.0
++%YAML 1.1
++---
++version: 1
++algorithms:
++  - BlackLevel:
++      blackLevel: 4096
++  - Awb:
++  - Adjust:
++  - Agc:
++  - Af:
++...
+diff --git a/src/ipa/simple/data/meson.build b/src/ipa/simple/data/meson.build
+index eaef79f..7717d23 100644
+--- a/src/ipa/simple/data/meson.build
++++ b/src/ipa/simple/data/meson.build
+@@ -2,7 +2,11 @@
+ 
+ conf_files = files([
+     'imx386.yaml',
++    'imx471.yaml',
++    'imx481.yaml',
++    'imx586.yaml',
+     's5k3j1.yaml',
++    's5k3m5.yaml',
+     's5kgm5.yaml',
+     's5kgn1.yaml',
+     's5kgn8.yaml',
+diff --git a/src/ipa/simple/data/s5k3m5.yaml b/src/ipa/simple/data/s5k3m5.yaml
+new file mode 100644
+index 0000000..be45ddf
+--- /dev/null
++++ b/src/ipa/simple/data/s5k3m5.yaml
+@@ -0,0 +1,12 @@
++# SPDX-License-Identifier: CC0-1.0
++%YAML 1.1
++---
++version: 1
++algorithms:
++  - BlackLevel:
++      blackLevel: 4096
++  - Awb:
++  - Adjust:
++  - Agc:
++  - Af:
++...
+diff --git a/src/libcamera/sensor/camera_sensor_properties.cpp b/src/libcamera/sensor/camera_sensor_properties.cpp
+index a2502a2..8018eb5 100644
+--- a/src/libcamera/sensor/camera_sensor_properties.cpp
++++ b/src/libcamera/sensor/camera_sensor_properties.cpp
+@@ -307,6 +307,36 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sen
+ 				.hblankDelay = 3
+ 			},
+ 		} },
++		{ "imx481", {
++			.unitCellSize = { 1000, 1000 },
++			.testPatternModes = {},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
++		{ "imx471", {
++			.unitCellSize = { 1000, 1000 },
++			.testPatternModes = {},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
++		{ "imx586", {
++			.unitCellSize = { 800, 800 },
++			.testPatternModes = {},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
+ 		{ "imx519", {
+ 			.unitCellSize = { 1220, 1220 },
+ 			.testPatternModes = {
+@@ -559,6 +589,22 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sen
+ 				.hblankDelay = 2
+ 			},
+ 		} },
++		{ "s5k3m5", {
++			.unitCellSize = { 1000, 1000 },
++			.testPatternModes = {
++				{ controls::draft::TestPatternModeOff, 0 },
++				{ controls::draft::TestPatternModeSolidColor, 1 },
++				{ controls::draft::TestPatternModeColorBars, 2 },
++				{ controls::draft::TestPatternModeColorBarsFadeToGray, 3 },
++				{ controls::draft::TestPatternModePn9, 4 },
++			},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 1,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
+ 		{ "vd55g1", {
+ 			.unitCellSize = { 2160, 2160 },
+ 			.testPatternModes = {
+-- 
+2.56.1
+

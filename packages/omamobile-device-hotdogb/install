@@ -1,0 +1,21 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+
+destination=${1:?Usage: ./install DESTDIR}
+[[ $destination == /* && $destination != / ]] || {
+  echo 'Use an absolute staging directory' >&2
+  exit 1
+}
+
+install -Dm644 hotdogb.toml "$destination/usr/share/omacam/hotdogb.toml"
+install -Dm755 libexec/omamobile-hotdogb-autobrightness \
+  "$destination/usr/lib/omamobile/hotdogb/omamobile-hotdogb-autobrightness"
+install -Dm644 systemd/omamobile-hotdogb-autobrightness.service \
+  "$destination/usr/lib/systemd/system/omamobile-hotdogb-autobrightness.service"
+
+for file in "ucm2/conf.d/sm8150/OnePlus 7T.conf" ucm2/OnePlus/hotdogb/*.conf; do
+  install -Dm644 "$file" "$destination/usr/share/omamobile/hotdogb/$file"
+done
+install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-hotdogb/LICENSE"
