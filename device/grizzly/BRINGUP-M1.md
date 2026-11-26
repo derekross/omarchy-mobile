@@ -115,6 +115,7 @@ whether it predated a stock boot.
 | [Corrected display MBFS operating-point query](#attended-corrected-display-mbfs-trial) | The Mac left stock D1 A at 10:00:35 UTC on 2026-11-26. Android stayed off between the guarded rescue and the corrected boot request at 10:08:05 UTC. | All nine hashes passed at 10:05:32 UTC. Another power or CPM trial needs a fresh copy after the stock A return. |
 | [Display DVFS row query](#attended-display-dvfs-row-trial) | The Mac left stock D1 A at 10:27:54 UTC on 2026-11-26. Android stayed off between the guarded rescue and the DVFS boot request at 10:34:59 UTC. | All nine hashes passed at 10:33:35 UTC. Another power or CPM trial needs a fresh copy after the stock A return. |
 | [DPU wrapper trigger trial](#attended-dpu-wrapper-trigger-trial) | The Mac left stock D1 A at 12:24:53 UTC on 2026-11-26. Android stayed off between the guarded rescue and the wrapper boot request at 12:31:12 UTC. | All nine hashes passed at 12:29:51 UTC. Another power or CPM trial needs a fresh copy after the stock A return. |
+| [Corrected DPU wrapper trial](#attended-corrected-dpu-wrapper-trial) | The Mac left stock D1 A at 12:50:54 UTC on 2026-11-26. Android stayed off between the guarded rescue and the corrected wrapper boot request at 12:57:01 UTC. | All nine hashes passed at 12:55:52 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
 
 [Maintainer decision on backup freshness](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035).
 Take a fresh read-only backup of all nine partitions after the latest
@@ -5139,9 +5140,38 @@ rejection. Apple Virtualization verified writing through a
 temporary device node with sysfs read-only. The Grizzly misc
 device was absent on the virtual board.
 
-Hardware validation is pending. The next attended slot B trial
-should start with a fresh verified NV backup, capture the seven
-initial vote samples and any ON/OFF replies, and return to stock A.
+##### Attended corrected DPU wrapper trial
+
+On 2026-11-26 the guarded rescue verified all nine NV partitions
+read-only and unmounted. The Mac independently checked all nine
+SHA-256 hashes, 3,392,151,552 bytes and private permissions.
+The full 64 MiB rescue `vendor_boot_b` readback matched.
+After the rescue returned to Fastboot, the Mac staged the five
+corrected images on B and verified the 8,192-byte
+`vendor_boot_b` payload.
+
+The diagnostic verified the 42-partition read-only UFS inventory,
+passed the 8 KiB `boot_b` comparison, retired the temporary
+SCSI host and reached the authenticated USB receiver. The RAM
+device node triggered one wrapper cycle. The initial AP client
+votes for `dpu.v` (handle `0x15c0008`), `DpuBe.v`, `DpuFe0.v`,
+`DpuFe1.v`, `DpuDsi0.v`, `DpuDsi1.v` and `DpuDp0.v` were all
+`0`. The trigger issued these requests to `dpu.v`.
+
+| Request | CPM acknowledgement | Vote readback | Driver result |
+| --- | --- | --- | --- |
+| ON | `5` (deferred, completion received) | `1` | `0` |
+| OFF | `0` (immediate) | `0` | `0` |
+
+The cycle completed in about 2.6 ms from the trigger marker
+to its return. It verified the wrapper vote and release through
+CPM. Physical clock rates and scanout were outside this trial.
+
+The independent helper requested the warm restart at
+600.009654 seconds of kernel uptime. Fastboot returned 642
+seconds after the B boot request. Stock D1 A completed boot
+with enforcing verity and the original VBMeta digest.
+Ramoops and `SYSTEM_LAST_KMSG` matched all 37 filtered lines.
 
 ### Offline stock D1 device reference-clock diagnostic
 
