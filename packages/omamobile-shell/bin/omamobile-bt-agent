@@ -48,6 +48,7 @@ BlueZ's PairableTimeout to SECONDS so BlueZ ends it on its own; off again for
 import json
 import os
 import signal
+import subprocess
 import sys
 import time
 
@@ -408,6 +409,11 @@ def main():
             path = device_call(address, "disconnect")
             if path:
                 set_flag(path, "Blocked", True)  # before the disconnect, so its reconnect is refused
+                # ...but only for two minutes, so a device that starts up later (a car) connects again.
+                # A timer of the user's manager, since this helper ends when the panel closes.
+                subprocess.run([os.environ.get("OMAMOBILE_BT_SYSTEMD_RUN", "systemd-run"), "--user", "--quiet", "--collect", "--on-active=120",
+                                "bluetoothctl", "unblock", address],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
                 dbus.Interface(bus.get_object(BLUEZ, path), DEVICE_IFACE).Disconnect(
                     reply_handler=lambda: emit({"event": "result", "op": "disconnect", "address": address,
                                                 "ok": True, "stage": "disconnect"}),

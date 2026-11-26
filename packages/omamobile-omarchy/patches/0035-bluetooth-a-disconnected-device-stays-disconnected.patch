@@ -6,13 +6,15 @@
 # their audio, but they bring their link back anyway, the panel shows them
 # connected, and the next tap disconnects them again instead of connecting.
 # So disconnect blocks the device, and connect and pair unblock it before
-# they trust and connect as before. Forget removes the device, block and all.
+# they trust and connect as before; two minutes after a disconnect the block
+# lifts by itself, so a device that later starts up (a car) connects again.
+# Forget removes the device, block and all.
 #
 # Against Omarchy 4.5.0 (4.5.0-3).
 diff --git i/bin/omarchy-bluetooth-device w/bin/omarchy-bluetooth-device
 --- i/bin/omarchy-bluetooth-device
 +++ w/bin/omarchy-bluetooth-device
-@@ -29,19 +29,30 @@
+@@ -29,20 +29,35 @@
    bluetoothctl trust "$address" >/dev/null 2>&1 || true
  }
  
@@ -41,5 +43,10 @@ diff --git i/bin/omarchy-bluetooth-device w/bin/omarchy-bluetooth-device
 +    # their link back with no audio, and the panel showed them connected.
 +    bluetoothctl block "$address" >/dev/null 2>&1 || true
      timeout 10s bluetoothctl disconnect "$address" >/dev/null 2>&1 || true
++    # Only long enough to stop that reconnect: two minutes on, the block
++    # goes, so the device (a car starting up later) can connect again.
++    systemd-run --user --quiet --collect --on-active=120 \
++      bluetoothctl unblock "$address" >/dev/null 2>&1 || true
      ;;
    forget)
+     power_on

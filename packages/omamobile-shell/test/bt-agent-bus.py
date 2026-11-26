@@ -62,8 +62,14 @@ class Run:
         self.procs = []
         self.bus = self.start(["dbus-daemon", "--nofork", "--config-file=" + config])
         assert wait_for(lambda: os.path.exists(path)), "the private bus started"
+        # The helper's timed unblock goes to a recorder, never the laptop's own systemd
+        self.timers = os.path.join(self.dir, "timers.log")
+        recorder = os.path.join(self.dir, "systemd-run")
+        with open(recorder, "w") as f:
+            f.write('#!/bin/sh\nprintf "%%s\\n" "$*" >> %s\n' % self.timers)
+        os.chmod(recorder, 0o755)
         self.env = env = dict(os.environ, DBUS_SYSTEM_BUS_ADDRESS="unix:path=" + path, PYTHONDONTWRITEBYTECODE="1",
-                   FAKE_BLUEZ_QUIET="1" if quiet else "")
+                   FAKE_BLUEZ_QUIET="1" if quiet else "", OMAMOBILE_BT_SYSTEMD_RUN=recorder)
         self.start([sys.executable, "-I", FAKE, self.log], env=env)
         assert wait_for(lambda: any(e.get("call") == "ready" for e in self.entries())), "the fake BlueZ started"
         self.agent = self.start([sys.executable, "-I", AGENT] + args, env=env,
@@ -226,6 +232,9 @@ def disconnect_holds(run):
     assert [e for e in run.lines if e.get("op") == "disconnect"][-1]["ok"], run.lines
     calls = [e for e in run.entries() if "device_set" in e or "device_call" in e]
     assert calls[:2] == [{"device_set": "Blocked", "value": True}, {"device_call": "Disconnect", "trusted": True}], calls
+    # The block is only for a while: two minutes on, the user's manager lifts it
+    timers = open(run.timers).read() if os.path.exists(run.timers) else ""
+    assert timers.strip() == "--user --quiet --collect --on-active=120 bluetoothctl unblock 02:00:00:00:00:01", timers
     run.test_call("Reconnect")
     assert wait_for(lambda: any(e.get("reconnect") for e in run.entries())), run.entries()
     assert [e for e in run.entries() if e.get("reconnect")][-1]["reconnect"] == "rejected", \
@@ -239,7 +248,7 @@ def disconnect_holds(run):
     run.close()
 
 
-check("disconnect: Blocked first, the device's own reconnect refused; connect lifts it", [], disconnect_holds)
+check("disconnect: Blocked first (for two minutes), the device's own reconnect refused; connect lifts it", [], disconnect_holds)
 check("--pairable-window: off after registering, on only when asked, off at exit", ["--pairable-window", "120"], window)
 check("--pairable-window: a Busy off is tried again when no change signal follows",
       ["--pairable-window", "120"], missed_signal, quiet=True)
