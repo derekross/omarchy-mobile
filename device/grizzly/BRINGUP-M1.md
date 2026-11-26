@@ -4794,6 +4794,42 @@ A completed boot with enforcing verity and the original VBMeta
 digest. Ramoops and `SYSTEM_LAST_KMSG` match on all 20 filtered
 trial lines.
 
+##### Stock D1 display and performance-domain checks
+
+On 2026-11-26 stock D1 A reported its internal display ON.
+SurfaceFlinger listed 1080×2410 at 120 Hz as the active mode.
+The stock bugreport identifies the fitted panel as CGYDA and
+records revision MP from `panel-gs-pkcgda`. Its stock boot log
+reports `DSI power handoff from bootloader: dt=0 reg=0` and later
+reports the panel enabled at boot. The handoff message is a
+snapshot at DSI probe. The bugreport had no clock-rate rows for
+the three LPCM clocks, and the device had gone back to display
+OFF by the time collection finished.
+
+The Android ADB shell could list the DSI device and the display
+devfreq entries. DRM connector attributes, runtime power states,
+`dpu_clamp/fw_freq`, `fabdisp_clamp/fw_freq` and the
+`goog_cpm_mailbox` trace were inaccessible. Neither standard
+debugfs path exposed `clk_summary`. The D1 clock driver registers
+the three clock nodes uncached, so an authorized per-clock
+`clk_rate` read would use the same LPCM op 3. The active-display
+comparison remains unmeasured.
+
+The two Grizzly B0 merges have no static clock consumers for
+the three LPCM nodes. Stock `vs_drm.ko` has no clock API imports.
+Its `dc_probe` calls `gs_perf_domain_find_devfreq` with `dpu`
+and the DT fabric name `fabdisp`, and its display QoS path uses
+devfreq votes. The DSI host also has no clock API imports. The
+C/D-PHY driver's clock input is the fixed 38.4 MHz PLL reference.
+
+Factory `perf_domain.ko` reads `mbfs-perf-domains-path`
+(`cpm/perf/domains`) and enumerates children. For `fw_freq`, it
+resolves the child `CurOpp`, reads the MBFS scalar and converts the
+OPP level through the firmware DVFS table. `cur_freq` returns the
+driver's cached value. Read the raw OPP level before treating it
+as Hz, and distinguish both devfreq domains from the DSI pixel
+clock and the panel refresh rate.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
