@@ -65,11 +65,11 @@ on an empty part does nothing:
 | --- | --- |
 | Battery | Omarchy's own power panel (`plugins/panels/power/Panel.qml` from `OMARCHY_PATH`) |
 | Wi-Fi or Ethernet | Omarchy's network panel (`plugins/panels/network`) |
-| Bluetooth | Omarchy's Bluetooth panel (`plugins/panels/bluetooth`) |
+| Bluetooth | Quick settings' Bluetooth panel, as its tile's chevron opens it: it makes the phone visible while open and shows a pairing's code, which Omarchy's card doesn't |
 | Cellular signal | `CellularPanel.qml`: the carrier, its state, a mobile data switch (`omamobile-sit data on/off`), the signal and whether calls, texts and mobile data work |
 | Clock | `TimePanel.qml`: the day, the date, the time and the time zone |
 
-Omarchy's three panels are loaded unchanged and unseen; only their popups
+Omarchy's two panels are loaded unchanged and unseen; only their popups
 show. Omarchy has no card for the clock that fits a phone's width and none for
 a modem, so the two others are built from the same parts (`Panel`,
 `KeyboardPanel`, `ToggleSwitch` and the label/value rows of the power card).
