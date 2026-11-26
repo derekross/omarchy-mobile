@@ -6562,6 +6562,43 @@ transaction with a preceding write. The audit found
 no GPCSR field that qualifies as a passive DSI0 APB
 gate or host reset readback.
 
+##### Exact D1 DSI0 PSM3 transition callbacks
+
+The matrix-backed path in CPM `0x83a4`–`0x83f8` selects
+the callback by LPCM, PSM number, sampled source state and
+requested target state. The LPCM `0x23` entry in the table
+at `0x20009b24` resolves to `0x6303c`. Its PSM3 record
+points to the four-state matrix at `0x2000a820`.
+
+| Vote | PSM3 transition | CPM callback | Operation at CPM `0x6f40a000` |
+| --- | --- | --- | --- |
+| ON | 2 → 0 | `0x3a8a0` calls `0x3a8b4` | Set mask `0x0c` |
+| ON | 3 → 1 | `0x3a8b4` | Set mask `0x0c` |
+| OFF | 0 → 2 | `0x3a830` | Clear mask `0x08` |
+| OFF | 1 → 3 | `0x3a88c` calls `0x3a830` | Clear mask `0x08` |
+
+Both writes use `0x3b7c0`, which stores the updated word
+and returns zero. The OFF path leaves bit 2 unchanged,
+so the ON and OFF masks give no independent decoding
+of the gate and reset signals.
+
+The matrix entries used here return no post-poll callback.
+The success test at `0x7ffc` reads the descriptor-derived
+PSM3 status through LPCM `0x23`'s `0x1942c` reader.
+It checks the status flags, then passes the low nibble
+and the requested state to the exact-match comparator
+at `0x3b836`. The optional residency accounting at
+`0x7538` returns immediately for this controller because
+its accounting pointer is null. When PSM3 already reports
+0 or 1, the ON handler skips this transition and poll.
+
+The traced path establishes PSM3 sequencing only. Firmware
+does not sample the APB gate word or a separate host
+reset status in these callbacks or their completion poll.
+The DSI0 host read remains gated on independent evidence
+that the APB clock is running, external reset has been
+released and the target is accessible from EL1.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
