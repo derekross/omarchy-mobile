@@ -161,3 +161,43 @@ None yet.
 - Whether the tablet's ABL writes `/chosen/config/wlan_mac1` (W0).
 - Bluetooth: which UART and pins, and where the tablet keeps its patch (no `vendor/firmware/brcm/BCM.hcd`).
 - Suspend: does this firmware honour brcmfmac's D3 messages (the BCM4389 needed the control-ring D3 inform)?
+
+## Results
+
+### 2026-11-26: W0 to W1d, by kexec (no reboot)
+
+From Arch on slot B, `kexec -c` into the running kernel with the live
+device tree plus this branch's Wi-Fi nodes (an overlay on
+`/sys/firmware/fdt`, every new node enabled), `pcie_gs201`,
+`phy_gs201_pcie` and `brcmfmac` blacklisted; firmware staged in
+`/usr/lib/firmware/updates/brcm/` (three `OK`).
+
+- **W0/W1c passed:** `created restricted DMA pool at 0xff000000, size 16
+  MiB`; `14520000.pcie` present; the `wlan-reg-on` regulator registered;
+  no module loaded; **`wlan_mac1` is present** in `/chosen/config` (the
+  bootloader writes it; value not recorded).
+- **W1d passed** (`tools/wifi-w1-capture --watchdog 5`): `link up on try
+  1`, `PCIe Gen.1 x1 link up`, the root port `144d:eced` and the endpoint
+  at 2.5 GT/s x1, no hang, no watchdog reset. **The endpoint reads
+  `14e4:4362`: the blank-OTP id**, so W2 takes the `new_id` fallback.
+
+### 2026-11-26: W2 and the W3 scan
+
+- **First W2:** with the blank-OTP `new_id`, brcmfmac read the chip as
+  **BCM43756 rev 4** (chip id 0xaaec), not a 43752, and stopped cleanly:
+  `brcmf_chip_tcm_rambase: unknown chip: BCM43756/4`, probe -22, no hang.
+- **The fix** (linux-omamobile#309): the 43756 as the 43752 (RAM base
+  0x170000, as Google's dhd's `CR4_43756_RAM_BASE`; the same save/restore
+  check and firmware names), and PCI id 0x4362 bound for a 4362-family
+  chip with a blank OTP, as Google's dhd does.
+- **W2 passed:** `using brcm/brcmfmac43752-pcie for chip BCM43756/4`,
+  board `google,gs201-tangorpro`, firmware and NVRAM downloaded, PCIe
+  protocol 7, `Firmware: BCM43756/4 wl0: May 15 2025 06:58:28 version
+  18.36.3501.39`, CLM loaded (C6T6 PRO), features include dual band, two
+  chains, SAE and MFP; `wlan0` renamed `wlp1s0`; no ioctl timeouts, no
+  trap. With the 0x4362 id in the table, a plain `modprobe brcmfmac`
+  binds (no `new_id`).
+- **W3, scan only:** networks on 2.4 GHz and 5 GHz (counts only; no names
+  recorded). The interface's MAC is random per load: the package's
+  `omamobile-wlan-mac` (panther's) sets the bootloader's `wlan_mac1`.
+  Association and the DMA-path proof wait for the owner's network.

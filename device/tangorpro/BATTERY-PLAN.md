@@ -129,3 +129,27 @@ Once B1 passes on the tablet: a kernel commit drops `status = "disabled"` from `
 ## Results
 
 None yet.
+
+### 2026-11-26: B0 and B1, by kexec (no reboot)
+
+From Arch on slot B, `kexec -c` into the running kernel with the live
+device tree plus the bus and the gauge (the branch's nodes as an overlay
+on `/sys/firmware/fdt`), `max17042_battery` blacklisted. On the Mac's
+USB port.
+
+- **B0 passed.** `10d60000.i2c` probed as bus 0; every read answered:
+  Status 0x2080 (**POR clear**), RepSOC 0x6298 (98.6 %), Temp 0x1696
+  (22.6 °C), VCell 0xcad0 (4.056 V), Current 0xfffe, FullCapRep 0x098e,
+  **DesignCap 0x0de2**, Config 0x4217, DevName 0x6200, FullCapNom 0x0d92,
+  MiscCfg 0x0870, RComp0 0x0651, TempCo 0x0e02, TaskPeriod 0x2d00. By the
+  table: **the 5 kOhm pack** (`battery battery-5k`). The model choice
+  doesn't matter while POR is clear: the driver keeps stock's model.
+- **B1 passed** (`modprobe max17042_battery` by hand): bound, no I2C
+  errors; `capacity` 98, `voltage_now` 4055156, `temp` 226, `health`
+  Good, `charge_full_design` 7108000 (stock's model), `charge_full`
+  4830000, `charge_now` 4872000; the gauge interrupt (gpa9-3) at 1 after
+  15 s, no storm. No model-load line, as expected with POR clear.
+- **`status` reads Discharging at about -3.7 mA on the Mac's port:** with
+  no charger driver (on purpose, see Risks) the charger takes what the
+  bootloader set and the port's 500 mA barely covers the tablet's draw.
+  Charging on a real charger, and the dock, are still to be measured.
