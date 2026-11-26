@@ -1,0 +1,3 @@
+# quickshell
+
+Omarchy's Quickshell package (the toolkit its shell runs on) with two open upstream fixes for a crash when a Bluetooth audio device fails: [quickshell-mirror/quickshell#1478](https://github.com/quickshell-mirror/quickshell/pull/1478) (an error on one PipeWire object no longer tears the registry down) and [#1460](https://github.com/quickshell-mirror/quickshell/pull/1460) (a teardown can't bind through the null registry), for [#1468](https://github.com/quickshell-mirror/quickshell/issues/1468). The PKGBUILD's header says what changed and when to drop it. Built on the phone's own Qt (`tools/build-packages` or `tools/repo-build`): Quickshell uses Qt's private API, so it must match the Qt it runs on.

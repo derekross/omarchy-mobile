@@ -1,0 +1,43 @@
+diff --git a/src/services/pipewire/registry.cpp b/src/services/pipewire/registry.cpp
+index 4b670b105..a5e7ec589 100644
+--- a/src/services/pipewire/registry.cpp
++++ b/src/services/pipewire/registry.cpp
+@@ -64,10 +64,15 @@ void PwBindableObject::unref() {
+ 	if (this->refcount == 0) this->unbind();
+ }
+ 
+-void PwBindableObject::registryBind(const char* interface, quint32 version) {
++bool PwBindableObject::registryBind(const char* interface, quint32 version) {
++	// During PwRegistry::reset() the registry proxy is already gone, but object
++	// destruction can re-enter QML and ref objects that have not been destroyed yet.
++	if (this->registry->object == nullptr) return false;
++
+ 	// NOLINTNEXTLINE
+ 	auto* object = pw_registry_bind(this->registry->object, this->id, interface, version, 0);
+ 	this->object = static_cast<pw_proxy*>(object);
++	return this->object != nullptr;
+ }
+ 
+ void PwBindableObject::bind() {
+diff --git a/src/services/pipewire/registry.hpp b/src/services/pipewire/registry.hpp
+index ec0a9eac7..c4c4ec44b 100644
+--- a/src/services/pipewire/registry.hpp
++++ b/src/services/pipewire/registry.hpp
+@@ -52,7 +52,7 @@ class PwBindableObject: public QObject {
+ 	void destroying(qs::service::pipewire::PwBindableObject* self);
+ 
+ protected:
+-	void registryBind(const char* interface, quint32 version);
++	bool registryBind(const char* interface, quint32 version);
+ 	virtual void bind();
+ 	void unbind();
+ 	virtual void bindHooks() {}
+@@ -73,7 +73,7 @@ class PwBindable: public PwBindableObject {
+ protected:
+ 	void bind() override {
+ 		if (this->object != nullptr) return;
+-		this->registryBind(INTERFACE, VERSION);
++		if (!this->registryBind(INTERFACE, VERSION)) return;
+ 		this->PwBindableObject::bind();
+ 	}
+ 
