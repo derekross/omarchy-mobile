@@ -6599,6 +6599,40 @@ The DSI0 host read remains gated on independent evidence
 that the APB clock is running, external reset has been
 released and the target is accessible from EL1.
 
+##### Stock D1 DSI0 votes before host module load
+
+The retained MBFS, clock/reset and PHY-init trials each
+record a successful DSI0 ON/OFF pair after the loader starts
+`mipi-cdphy.ko` and before it starts `mipi-dsi2h.ko`.
+Ramoops and `SYSTEM_LAST_KMSG` agree on the events. The
+first ON runs on the module-loading task, the OFF runs on
+a worker, and a later task issues the final ON and reads
+the host. Times below use the trace clock.
+
+| Stock trace | Early ON result (s) | Early OFF result (s) | Final ON result (s) | Early OFF to final ON (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| MBFS | 5.830878 | 5.833863 | 5.936410 | 102.547 |
+| Clock/reset | 6.319319 | 6.321630 | 6.402993 | 81.363 |
+| PHY init | 4.808976 | 4.811529 | 4.882675 | 71.146 |
+
+The module-load boundary locates the earlier pair during
+PHY registration. The trace does not capture the originating
+genpd call stack. In the exact factory `mipi-cdphy.ko`,
+`dw_mipi_cdphy_probe` resolves the PHY's `pllref` clock
+at `0xf8`. `cdphy_init_g301` initializes both PHY regmaps
+at `0x33fc` and `0x3470` with a null bus-clock name.
+The stock host likewise passes a null name at `0x2310`
+and calls `phy_init` at `0x24e0` before reading host ID
+and version. The saved traces establish the earlier vote
+cycle and the later PHY init read. They supply no APB gate
+or external reset status.
+
+The mainline one-shot rate trial does not include the earlier
+cycle. Its effect on later host access remains untested.
+The observed intervals measure the stock module sequence
+and do not define a settle time or justify adding another
+power cycle to a mainline fixture.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
