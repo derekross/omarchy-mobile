@@ -99,7 +99,8 @@ def current_mode(m):
 
 
 def _read_rate(path):
-    """A bare number of 1 to 3 digits with at most one trailing newline, else None."""
+    """A bare number of 1 to 3 digits, no leading zero, with at most one trailing newline, else None; the same
+    rule as read_rate in omamobile-settings' display.sh."""
     try:
         with open(path) as f:
             text = f.read()
@@ -107,7 +108,7 @@ def _read_rate(path):
         return None
     if text.endswith('\n'):
         text = text[:-1]
-    return int(text) if re.fullmatch(r'[0-9]{1,3}', text) else None
+    return int(text) if re.fullmatch(r'[1-9][0-9]{0,2}', text) else None
 
 
 def _token(m, want):

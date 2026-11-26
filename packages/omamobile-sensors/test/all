@@ -123,14 +123,14 @@ rot() { : > "$tmp/hypr.log"
   cat "$tmp/hypr.log"; }
 rf=$tmp/home/.config/omamobile/refresh-rate
 rm -f "$rf"
-rot | grep -q 'mode = "preferred".*transform = 1' || fail "autorotate without a saved rate uses preferred"
+rot | grep -c 'mode = "preferred".*transform = 1' >/dev/null || fail "autorotate without a saved rate uses preferred"
 echo 60 > "$rf"
-rot | grep -q 'mode = "1344x2992@60.00".*transform = 1' || fail "autorotate keeps the saved rate (exact token, turned monitor) and sets the transform"
-rot | grep -q '^keyword' && fail "autorotate fell back to the keyword path"
+rot | grep -c 'mode = "1344x2992@60.00".*transform = 1' >/dev/null || fail "autorotate keeps the saved rate (exact token, turned monitor) and sets the transform"
+rot | grep -c '^keyword' >/dev/null && fail "autorotate fell back to the keyword path"
 echo 90 > "$rf"
-rot | grep -q 'mode = "preferred"' || fail "autorotate falls back to preferred for an unlisted rate"
+rot | grep -c 'mode = "preferred"' >/dev/null || fail "autorotate falls back to preferred for an unlisted rate"
 echo junk > "$rf"
-rot | grep -q 'mode = "preferred"' || fail "autorotate ignores a junk rate file"
+rot | grep -c 'mode = "preferred"' >/dev/null || fail "autorotate ignores a junk rate file"
 # an unparsable mode is skipped, and the size as reported wins over the swapped one
 echo 60 > "$rf"
 HOME="$tmp/home" OMAMOBILE_RATE_DEFAULT_FILE="$tmp/no-default" PYTHONPATH=lib python3 -c '
@@ -139,21 +139,21 @@ m = {"width": 1344, "height": 2992, "availableModes": ["1344x2992@odd", "2992x13
 assert a.saved_mode(m) == "1344x2992@60.50", a.saved_mode(m)' || fail "autorotate skips an odd mode and prefers the reported size"
 # a device default (husky ships 60) is used with no saved choice, only when listed; a saved choice wins
 rm -f "$rf"; echo 60 > "$tmp/rate-default"
-rot | grep -q 'mode = "1344x2992@60.00".*transform = 1' || fail "autorotate without a saved rate keeps the device default"
+rot | grep -c 'mode = "1344x2992@60.00".*transform = 1' >/dev/null || fail "autorotate without a saved rate keeps the device default"
 echo 120 > "$rf"
-rot | grep -q 'mode = "1344x2992@120.00"' || fail "a saved rate wins over the device default"
+rot | grep -c 'mode = "1344x2992@120.00"' >/dev/null || fail "a saved rate wins over the device default"
 echo 90 > "$rf"
-rot | grep -q 'mode = "1344x2992@60.00"' || fail "an unlisted saved rate falls back to the device default"
+rot | grep -c 'mode = "1344x2992@60.00"' >/dev/null || fail "an unlisted saved rate falls back to the device default"
 rm -f "$rf"; echo 90 > "$tmp/rate-default"
-rot | grep -q 'mode = "preferred"' || fail "an unlisted device default means preferred"
+rot | grep -c 'mode = "preferred"' >/dev/null || fail "an unlisted device default means preferred"
 rm -f "$tmp/rate-default"
 # neither a saved rate nor a usable default: a turn keeps the refresh rate the panel has now (never preferred, 120)
 cur='[{"name":"DSI-1","width":2992,"height":1344,"scale":3.2,"transform":1,"refreshRate":60.0,"availableModes":["1344x2992@120.00Hz","1344x2992@60.00Hz"]}]'
-rm -f "$rf"; MONJSON=$cur rot | grep -q 'mode = "1344x2992@60.00"' || fail "autorotate keeps the current rate when none is saved"
-echo junk > "$rf"; MONJSON=$cur rot | grep -q 'mode = "1344x2992@60.00"' || fail "autorotate keeps the current rate when the saved file is junk"
-echo 90 > "$rf"; MONJSON=$cur rot | grep -q 'mode = "1344x2992@60.00"' || fail "autorotate keeps the current rate when the saved rate is unlisted"
+rm -f "$rf"; MONJSON=$cur rot | grep -c 'mode = "1344x2992@60.00"' >/dev/null || fail "autorotate keeps the current rate when none is saved"
+echo junk > "$rf"; MONJSON=$cur rot | grep -c 'mode = "1344x2992@60.00"' >/dev/null || fail "autorotate keeps the current rate when the saved file is junk"
+echo 90 > "$rf"; MONJSON=$cur rot | grep -c 'mode = "1344x2992@60.00"' >/dev/null || fail "autorotate keeps the current rate when the saved rate is unlisted"
 # the rate file is one bare number of 1 to 3 digits and at most one trailing newline
-for bad in '60 ' ' 60' '060x' '0060' '6e1' '60\n\n' '60\nfoo' ''; do
+for bad in '60 ' ' 60' '060x' '0060' '060' '0' '6e1' '60\n\n' '60\nfoo' ''; do
   printf "$bad" > "$rf"
   HOME="$tmp/home" OMAMOBILE_RATE_DEFAULT_FILE="$tmp/no-default" PYTHONPATH=lib python3 -c '
 import autorotate as a
