@@ -6528,6 +6528,40 @@ absence is a limit of the available evidence. Direct
 Linux access to the APB acknowledgment word and coverage
 of the full host reset path remain unqualified.
 
+##### Offline D1 DPU GPCSR status audit
+
+The B0 board tree maps `dpu-gpcsr` at AP `0x0f790000`
+with size `0xe004`, as the second register resource of
+`dc9x00@200000`. In exact D1 `vs_drm.ko`, `dc_probe`
+maps it by name at `0x29284` and stores the pointer at
+driver object offset `0x50`. This map is optional at probe.
+
+The identified consumer is the DPU backend idle check.
+`vs_dc_pm_runtime_suspend` passes the hardware subobject
+at driver offset `0x28` to `dc_hw_is_be_idle`
+(`0x2a7dc`). This makes GPCSR the pointer at hardware
+subobject offset `0x28`. The idle check issues a write
+of `0x01000002` at GPCSR offset `0x107c` and polls
+offset `0x1084` bit 14 for zero
+(`0x37740`–`0x377b0`). Its timeout reports backend
+idle status. The passive stock DSI0 captures and full
+stock display bugreport contain no direct witness for
+either GPCSR word.
+
+The stock backend clock-domain isolation helper
+(`0x31260`) writes FE/BE offset `0x80248` through
+`dc_write`, whose base pointer comes from the first
+resource. That operation is distinct from the DSI0
+APB gate status. The board's `0x0f46e060` DSI0
+interrupt parent is a wrapper-powered interrupt
+aggregator. Its description exposes interrupt delivery
+and supplies no clock or reset acknowledgment field.
+
+The identified GPCSR read is part of a backend idle
+transaction with a preceding write. The audit found
+no GPCSR field that qualifies as a passive DSI0 APB
+gate or host reset readback.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
