@@ -6303,6 +6303,34 @@ boot with enforcing verity and the original VBMeta digest.
 Ramoops and the later `SYSTEM_LAST_KMSG` entry match on all
 83 filtered lines and the full scoped trace.
 
+##### Offline interpretation of the stock DSI0 PHY sample
+
+In exact D1 `mipi-cdphy.ko`, the PHY field allocator
+(`0x7ba8`–`0x7bd0`) binds bit 8 at CD-PHY TX offset
+`0x7124` to its register field named
+`phy_common9_reg_lp_dco_clk_dyn_gating` (allocation
+failure label referenced at `0x91c8`). The PLL mode
+path clears and sets the same field at `0x950` and
+`0xa2c`. At init, the driver uses it to seed a
+software PLL-enabled flag, which `dw_cdphy_set_ulps`
+tests before changing ULPS. The initial `0x000001cc`
+sample therefore records that the dynamic-gating
+control was set. The trace checker now labels bit 8
+with that field name. The init callback returns zero
+without testing the `regmap_read` return code. Its
+success return alone gives no read or readiness evidence.
+
+The hardware PLL lock check uses bit 1 at offset
+`0x24` of the second PHY resource, `u0-apb-regbank`
+(AP `0x0f7d8800`). The stock field table labels it
+`phy_sts_r_pll_lock`, and the PLL mode path polls
+it at `0xf3c`–`0xf5c`. The attended init trace
+contains the first PHY resource read only. Lock at
+the time of the host ID read remains unobserved.
+Both PHY fields are distinct from the host APB clock
+acknowledgment and external reset. Mainline PHY and
+host reads remain disabled pending qualified access.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

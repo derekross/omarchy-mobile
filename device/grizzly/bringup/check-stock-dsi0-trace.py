@@ -99,7 +99,8 @@ def summarize(trace):
         elif event == "regmap_reg_read" and pid == read_pid and (sample := PHY_INIT.fullmatch(body)):
             phy_value = int(sample[1], 16)
             phy_reads += 1
-            print(f"{timestamp} DSI0 PHY reg=0x7124 value={phy_value:#010x} bit8={(phy_value >> 8) & 1}")
+            print(f"{timestamp} DSI0 PHY reg=0x7124 value={phy_value:#010x} "
+                  f"lp_dco_clk_dyn_gating={(phy_value >> 8) & 1}")
         elif event == "regmap_reg_read" and pid == read_pid and (register := REGISTER.fullmatch(body)):
             offset, reg_value = (int(field, 16) for field in register.groups())
             if offset in (0, 4):
