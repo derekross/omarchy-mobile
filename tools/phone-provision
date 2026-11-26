@@ -13,7 +13,7 @@
 #
 # Cheetah's run is one of two, and you say which; nothing is guessed from
 # what happens to be on this computer, and no backup directory is assumed:
-#   --first-install   no earlier Omarchy Mobile system's data to put back: the
+#   --first-install   no earlier Omamobile system's data to put back: the
 #                     modem's board id from the phone itself, its NV checksums
 #                     from --nv-backup DIR (required). What docs/INSTALL.md
 #                     runs, and a later reinstall too unless you kept a

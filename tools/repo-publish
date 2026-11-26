@@ -40,19 +40,20 @@
 #   tools/repo-publish --no-build development
 #   tools/repo-publish stable          (when stable should carry it too)
 #
-# Server: OMAMOBILE_PKGS_HOST (raven@nostr01.derekross.me), port
+# Server: OMAMOBILE_PKGS_HOST (omapub@nostr01.derekross.me), port
 # OMAMOBILE_PKGS_PORT (1022), path OMAMOBILE_PKGS_PATH
-# (/var/www/html/pkgs.omamobile.org). The account must be in `deployers`.
+# (/var/www/html/pkgs.omamobile.org). The account must be in `deployers`;
+# since 2026-11-17 only omapub, with the build host's key, may write there.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
 
-HOST=${OMAMOBILE_PKGS_HOST:-raven@nostr01.derekross.me}
+HOST=${OMAMOBILE_PKGS_HOST:-omapub@nostr01.derekross.me}
 PORT=${OMAMOBILE_PKGS_PORT:-1022}
 DEST=${OMAMOBILE_PKGS_PATH:-/var/www/html/pkgs.omamobile.org}
 URL=https://pkgs.omamobile.org
 REMIND_DAYS=${REMIND_DAYS:-3}
-REPO=derekross/omarchy-mobile
+REPO=derekross/omamobile
 ARCH=aarch64
 DB=omamobile.db.tar.gz
 
@@ -232,7 +233,7 @@ write_index() {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Omarchy Mobile packages</title>
+  <title>Omamobile packages</title>
   <style>
     :root { color-scheme: light dark; --bg: #fff; --fg: #1b1b1b; --muted: #5b5b5b; --code: #f2f2f2; }
     @media (prefers-color-scheme: dark) { :root { --bg: #151515; --fg: #e8e8e8; --muted: #a0a0a0; --code: #262626; } }
@@ -243,8 +244,8 @@ write_index() {
   </style>
 </head>
 <body>
-  <h1>Omarchy Mobile packages</h1>
-  <p>The signed <code>[omamobile]</code> repository for <a href="https://omamobile.org">Omarchy Mobile</a> phones. It's read by pacman; phones get it through <code>omarchy update</code>.</p>
+  <h1>Omamobile packages</h1>
+  <p>The signed <code>[omamobile]</code> repository for <a href="https://omamobile.org">Omamobile</a> phones. It's read by pacman; phones get it through <code>omarchy update</code>.</p>
   <h2>Channels</h2>
   <ul>
     <li><a href="stable/$ARCH/">stable</a>: what has run on the reference phone</li>

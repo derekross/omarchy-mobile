@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Keep Omarchy Mobile's Omarchy patch series applied, across Omarchy upgrades.
+"""Keep Omamobile's Omarchy patch series applied, across Omarchy upgrades.
 
   omamobile-omarchy-patches apply  [--root DIR] [--series DIR] [--hook]
   omamobile-omarchy-patches status [--root DIR] [--json]
@@ -430,7 +430,7 @@ def notify(root, title, body, log):
             send = ["omarchy-notification-send", "-u", "critical", "-g", "\U000f0026", title, body,
                     "--exec", "omarchy-shell", "shell", "summon", "omamobile.update", '{"page":"patches"}']
         elif shutil.which("notify-send"):
-            send = ["notify-send", "-u", "critical", "-a", "Omarchy Mobile", title, body]
+            send = ["notify-send", "-u", "critical", "-a", "Omamobile", title, body]
         else:
             return
         try:

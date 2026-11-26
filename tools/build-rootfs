@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Build Omarchy Mobile's root file system image (docs/RELEASES.md §6):
+# Build Omamobile's root file system image (docs/RELEASES.md §6):
 #   out/omamobile-rootfs-<device>-<version>-aarch64.img.zst   ext4, label omamobile-root
 #   out/omamobile-rootfs-<device>-<version>-aarch64.img.zst.sha256
 #   out/omamobile-rootfs-<device>-<version>-aarch64.MANIFEST  contents and versions

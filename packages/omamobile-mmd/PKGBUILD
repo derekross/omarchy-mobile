@@ -3,9 +3,9 @@
 pkgname=omamobile-mmd
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile ModemManager-compatible bridge: org.freedesktop.ModemManager1 served from omamobile-sitd"
+pkgdesc="Omamobile ModemManager-compatible bridge: org.freedesktop.ModemManager1 served from omamobile-sitd"
 arch=(aarch64)
-url="https://github.com/derekross/omarchy-mobile"
+url="https://github.com/derekross/omamobile"
 license=(MIT)
 depends=(python python-gobject glib2 dbus polkit 'omamobile-modem-sit>=0.3.0')
 checkdepends=(dbus)

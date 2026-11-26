@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel Fold cover touch: chip-id gate
 
-The cover controller is an ST SALIXP (chip id `36 40`) on USI6 SPI. linux-omarchy-mobile#32 describes the node and leaves it disabled, and adds `drivers/input/touchscreen/salixp.c`. This plan is the one gated boot of that module. It does not load firmware or report touches. The inner panel, S2MPG13, and the inner reset stay off.
+The cover controller is an ST SALIXP (chip id `36 40`) on USI6 SPI. linux-omamobile#32 describes the node and leaves it disabled, and adds `drivers/input/touchscreen/salixp.c`. This plan is the one gated boot of that module. It does not load firmware or report touches. The inner panel, S2MPG13, and the inner reset stay off.
 
 `kernel/configs/omamobile.config` builds `CONFIG_TOUCHSCREEN_SALIXP=m`. `device/felix/overlays/cover-touch.dtso` enables USI6, SPI6, PERIC0, the controller, and the main PMIC. It does not set `regulator-always-on`. `omamobile-device-felix` blacklists `salixp`, so the module does not autoload when the overlay is on. The descriptor leaves `DTB_OVERLAYS` empty. A normal image does not enable the node.
 

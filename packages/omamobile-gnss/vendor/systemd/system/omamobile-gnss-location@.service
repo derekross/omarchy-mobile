@@ -4,7 +4,7 @@
 # "omamobile-gnss on|off" as root. Allowed for the active local user by
 # /usr/share/polkit-1/rules.d/50-omamobile-gnss.rules.
 [Unit]
-Description=Omarchy Mobile Location %i
+Description=Omamobile Location %i
 
 [Service]
 Type=oneshot

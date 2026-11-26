@@ -21,5 +21,5 @@ systemctl enable omamobile-sensors.service
 U=$(systemctl show -p User --value omamobile-hyprland.service 2>/dev/null); U=${U:-ml}
 A=$(getent passwd "$U" | cut -d: -f6)/.config/hypr/autostart.lua
 if [ -f "$A" ] && ! grep -q omamobile-autorotate "$A"; then
-  printf '\n-- Omarchy Mobile dodge: rotate with the accelerometer (needs /etc/omamobile/sensors.enable)\nhl.exec_cmd("omamobile-autorotate")\n' >> "$A"
+  printf '\n-- Omamobile dodge: rotate with the accelerometer (needs /etc/omamobile/sensors.enable)\nhl.exec_cmd("omamobile-autorotate")\n' >> "$A"
 fi

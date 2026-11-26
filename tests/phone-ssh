@@ -29,6 +29,100 @@ tools/phone-ssh 'printf "%s" "$HOME"' >"$scratch/default"
 grep -Fx root@172.16.42.1 "$scratch/default" >/dev/null
 grep -Fx 'printf "%s" "$HOME"' "$scratch/default" >/dev/null
 grep -Fx ConnectTimeout=6 "$scratch/default" >/dev/null
+# Default stays as today: no host-key state (the USB address is answered by
+# several SSH servers by design: the initramfs's dropbear, the installed system).
+grep -Fx StrictHostKeyChecking=no "$scratch/default" >/dev/null
+grep -Fx UserKnownHostsFile=/dev/null "$scratch/default" >/dev/null
+echo 'ok - the default has no host-key state (unchanged behavior)'
+
+# OMAMOBILE_SSH_KNOWN_HOSTS=tofu opts in to pinning. Every call here points
+# XDG_DATA_HOME or HOME at the scratch directory, and nothing may touch the
+# pin file of whoever runs the test.
+caller_pin="${XDG_DATA_HOME:-${HOME:-}/.local/share}/omamobile/phone-ssh"
+existed=0
+if [[ -e $caller_pin ]]; then existed=1; fi
+XDG_DATA_HOME="$scratch/xdg-data" OMAMOBILE_SSH_KNOWN_HOSTS=tofu tools/phone-ssh true >"$scratch/tofu" 2>"$scratch/tofu.err"
+grep -Fx StrictHostKeyChecking=accept-new "$scratch/tofu" >/dev/null
+grep -Fx -- 'UserKnownHostsFile="'"$scratch"'/xdg-data/omamobile/phone-ssh/known_hosts"' "$scratch/tofu" >/dev/null
+[[ $(stat -c %a "$scratch/xdg-data/omamobile/phone-ssh") == 700 ]]
+# The tool makes the directory only: ssh writes the key at its first connect.
+[[ ! -e $scratch/xdg-data/omamobile/phone-ssh/known_hosts ]]
+[[ ! -s $scratch/tofu.err ]]
+echo 'ok - OMAMOBILE_SSH_KNOWN_HOSTS=tofu pins on first use (accept-new), in a directory of its own, 0700'
+# With only HOME set, the pin file is under ~/.local/share: not straight under
+# the home directory (review on #855).
+env -u XDG_DATA_HOME HOME="$scratch/home-only" OMAMOBILE_SSH_KNOWN_HOSTS=tofu tools/phone-ssh true >"$scratch/tofu-home" 2>"$scratch/tofu-home.err"
+grep -Fx -- 'UserKnownHostsFile="'"$scratch"'/home-only/.local/share/omamobile/phone-ssh/known_hosts"' "$scratch/tofu-home" >/dev/null
+[[ ! -e $scratch/home-only/omamobile ]]
+[[ ! -s $scratch/tofu-home.err ]]
+echo 'ok - with only HOME set, the pin file is under ~/.local/share'
+# A relative XDG_DATA_HOME is invalid (the XDG base directory specification)
+# and is ignored: the pin file is under ~/.local/share, never in a directory
+# that depends on where the tool was run from.
+XDG_DATA_HOME=relative-data HOME="$scratch/home-relative" OMAMOBILE_SSH_KNOWN_HOSTS=tofu tools/phone-ssh true >"$scratch/tofu-relative" 2>"$scratch/tofu-relative.err"
+grep -Fx -- 'UserKnownHostsFile="'"$scratch"'/home-relative/.local/share/omamobile/phone-ssh/known_hosts"' "$scratch/tofu-relative" >/dev/null
+[[ ! -e $PWD/relative-data ]]
+[[ ! -s $scratch/tofu-relative.err ]]
+echo 'ok - a relative XDG_DATA_HOME is ignored'
+# Pinning asked for and not to be had (no HOME, or a directory that can't be
+# made): the call still goes out, without a host-key check, and says so.
+unpinned='phone-ssh: OMAMOBILE_SSH_KNOWN_HOSTS=tofu: no pin file could be made, so this call goes out without a host-key check'
+env -u HOME -u XDG_DATA_HOME OMAMOBILE_SSH_KNOWN_HOSTS=tofu tools/phone-ssh true >"$scratch/tofu-nohome" 2>"$scratch/tofu-nohome.err"
+grep -Fx StrictHostKeyChecking=no "$scratch/tofu-nohome" >/dev/null
+grep -Fx UserKnownHostsFile=/dev/null "$scratch/tofu-nohome" >/dev/null
+grep -Fx "$unpinned" "$scratch/tofu-nohome.err" >/dev/null
+: >"$scratch/not-a-directory"
+XDG_DATA_HOME="$scratch/not-a-directory" OMAMOBILE_SSH_KNOWN_HOSTS=tofu tools/phone-ssh true >"$scratch/tofu-nodir" 2>"$scratch/tofu-nodir.err"
+grep -Fx StrictHostKeyChecking=no "$scratch/tofu-nodir" >/dev/null
+grep -Fx "$unpinned" "$scratch/tofu-nodir.err" >/dev/null
+echo 'ok - tofu with no HOME, or no directory possible, goes out unpinned and says so on stderr'
+# As for an explicit known-hosts file, the path must be literal: XDG_DATA_HOME
+# with % or ${ is refused before anything is made, and ssh is not run.
+for bad_home in "$scratch/data%h" "$scratch"'/data${HOME}'; do
+  if XDG_DATA_HOME="$bad_home" OMAMOBILE_SSH_KNOWN_HOSTS=tofu tools/phone-ssh true >"$scratch/tofu-token" 2>"$scratch/tofu-token.err"; then
+    echo 'not ok - a pin path with an OpenSSH expansion token was accepted' >&2; exit 1
+  fi
+  [[ ! -s $scratch/tofu-token ]]
+  [[ ! -e $bad_home ]]
+  grep -Fx 'phone-ssh: OMAMOBILE_SSH_KNOWN_HOSTS=tofu: XDG_DATA_HOME (or HOME) has a line break, % or ${, which OpenSSH would expand in the pin file'"'"'s path' "$scratch/tofu-token.err" >/dev/null
+done
+echo 'ok - a pin path with % or ${ is refused, and nothing is made for it'
+# A pinned call is a connection context of its own. Sharing one with an
+# unpinned call would let a master opened without the check carry it; one
+# pinned elsewhere would carry it past a changed key. Calls pinned to the
+# same file share among themselves, and --stop closes that master.
+OMAMOBILE_SSH_SHARE=1 tools/phone-ssh true >"$scratch/shared-default" 2>/dev/null
+OMAMOBILE_SSH_SHARE=1 XDG_DATA_HOME="$scratch/xdg-data" OMAMOBILE_SSH_KNOWN_HOSTS=tofu tools/phone-ssh true >"$scratch/shared-tofu" 2>/dev/null
+OMAMOBILE_SSH_SHARE=1 XDG_DATA_HOME="$scratch/xdg-data" OMAMOBILE_SSH_KNOWN_HOSTS=tofu tools/phone-ssh true >"$scratch/shared-tofu-again" 2>/dev/null
+OMAMOBILE_SSH_SHARE=1 XDG_DATA_HOME="$scratch/xdg-other" OMAMOBILE_SSH_KNOWN_HOSTS=tofu tools/phone-ssh true >"$scratch/shared-tofu-other" 2>/dev/null
+OMAMOBILE_SSH_SHARE=1 env -u HOME -u XDG_DATA_HOME OMAMOBILE_SSH_KNOWN_HOSTS=tofu tools/phone-ssh true >"$scratch/shared-tofu-unpinned" 2>/dev/null
+grep -Fx 'ControlPath='"${XDG_RUNTIME_DIR:-/tmp}"'/omamobile-ssh-%C' "$scratch/shared-default" >/dev/null
+shared_default=$(sed -n '/^ControlPath=/p' "$scratch/shared-default")
+shared_tofu=$(sed -n '/^ControlPath=/p' "$scratch/shared-tofu")
+[[ $shared_tofu =~ /omamobile-ssh-[0-9a-f]{12}-%C$ ]]
+[[ $shared_tofu != "$shared_default" ]]
+[[ $(sed -n '/^ControlPath=/p' "$scratch/shared-tofu-again") == "$shared_tofu" ]]
+[[ $(sed -n '/^ControlPath=/p' "$scratch/shared-tofu-other") != "$shared_tofu" ]]
+[[ $(sed -n '/^ControlPath=/p' "$scratch/shared-tofu-unpinned") != "$shared_default" ]]
+[[ $(sed -n '/^ControlPath=/p' "$scratch/shared-tofu-unpinned") != "$shared_tofu" ]]
+# Not asked to share, a pinned call opens a connection of its own, as a call
+# with an explicit known-hosts file does.
+grep -Fx ControlMaster=no "$scratch/tofu" >/dev/null
+grep -Fx ControlPath=none "$scratch/tofu" >/dev/null
+XDG_DATA_HOME="$scratch/xdg-data" OMAMOBILE_SSH_KNOWN_HOSTS=tofu tools/phone-ssh --stop >"$scratch/tofu-stop" 2>"$scratch/tofu-stop.err"
+grep -Fx -- "$shared_tofu" "$scratch/tofu-stop" >/dev/null
+[[ ! -s $scratch/tofu-stop.err ]]
+echo 'ok - a pinned call shares connections only with calls pinned to the same file'
+if [[ -e $caller_pin && $existed == 0 ]]; then
+  echo 'not ok - the test created a pin file in the home of whoever runs it' >&2; exit 1
+fi
+# What a refused key rests on is OpenSSH's, not this tool's: an explicit
+# known-hosts file is checked strictly. The stand-in ssh only prints its
+# options, so no second connection with a changed key is made here.
+: >"$scratch/explicit-hosts"
+OMAMOBILE_SSH_KNOWN_HOSTS="$scratch/explicit-hosts" tools/phone-ssh true >"$scratch/strict"
+grep -Fx StrictHostKeyChecking=yes "$scratch/strict" >/dev/null
+echo 'ok - an explicit known_hosts file is checked strictly'
 OMAMOBILE_SSH_CONNECT_TIMEOUT=19 tools/phone-ssh true >"$scratch/timeout-override"
 grep -Fx ConnectTimeout=19 "$scratch/timeout-override" >/dev/null
 for bad_timeout in 0 -1 1.5 invalid 999x; do

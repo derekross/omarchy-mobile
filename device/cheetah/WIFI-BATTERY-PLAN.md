@@ -320,7 +320,7 @@ tar -C out/vendor-firmware -cf - usr | tools/phone-ssh 'tar -C / -xf -'
   are offered for restoring Pixel devices, under Google's terms. They carry no
   redistribution licence like linux-firmware's `LICENCE.broadcom_bcm43xx`, and
   the NVRAM header even says `<<Broadcom-WL-IPTag/Proprietary:Vendor1007>>`.
-- **So Omarchy Mobile never ships them:** not in git, not in a package, not in an
+- **So Omamobile never ships them:** not in git, not in a package, not in an
   image we publish. `*.img` and `*.zip` are already gitignored, and the script
   writes under `out/`, which is ignored too. The user extracts them on their own
   machine from the factory image of their own phone, as LineageOS's

@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile (on PATH only during omamobile-update): Omarchy's restart
+# Omamobile (on PATH only during omamobile-update): Omarchy's restart
 # step without its questions. Omarchy decides "kernel updated" when no
 # pacman-owned vmlinuz matches the running kernel; on the phone that test
 # would always fire (a pushed kernel isn't a package, and a packaged one only

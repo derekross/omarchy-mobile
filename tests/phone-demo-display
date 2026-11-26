@@ -1,0 +1,52 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/phone-demo's display check (display_on) against a made-up /sys, with
+# no phone: the panel's own reports decide (the backlight's bl_power, an
+# internal connector's dpms), an external connector is ignored, and
+# Hyprland's answer is used only where the panel reports nothing, with a
+# failed or unreadable hyprctl counting as on even under pipefail, as the
+# script runs.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+sed -n '/^sysfs=\${DEMO_SYSFS/,/^}$/p' tools/phone-demo > "$t/display.sh"
+grep -c '^display_on()' "$t/display.sh" >/dev/null || { echo "not ok - found display_on in tools/phone-demo" >&2; exit 1; }
+
+n=0
+check() {   # check WANT WHAT: WANT is on or off
+  local got=off
+  if (set -uo pipefail; DEMO_SYSFS=$t/sys; source "$t/display.sh"; display_on); then got=on; fi
+  n=$((n + 1))
+  if [[ $got == "$1" ]]; then echo "ok $n - $2"; else echo "not ok $n - $2 (got $got)"; exit 1; fi
+}
+# as_user stands in for the session user's hyprctl: HYPR is its answer, and
+# HYPR_RC its exit status.
+as_user() { [[ ${HYPR_RC:-0} == 0 ]] || return "$HYPR_RC"; printf '%s' "${HYPR:-}"; }
+export -f as_user
+
+sys() { rm -rf "$t/sys"; mkdir -p "$t/sys/class/backlight" "$t/sys/class/drm"; }
+backlight() { mkdir -p "$t/sys/class/backlight/panel0"; echo "$1" > "$t/sys/class/backlight/panel0/bl_power"; }
+connector() {   # connector NAME STATUS DPMS
+  mkdir -p "$t/sys/class/drm/$1"; echo "$2" > "$t/sys/class/drm/$1/status"; echo "$3" > "$t/sys/class/drm/$1/dpms"
+}
+on='[{"name":"DSI-1","focused":true,"dpmsStatus":true}]'
+off='[{"name":"DSI-1","focused":true,"dpmsStatus":false}]'
+
+sys; backlight 0; connector card2-DSI-1 connected On
+HYPR=$off check on "a lit panel is on, whatever Hyprland says"
+sys; backlight 4; connector card2-DSI-1 connected Off
+HYPR=$on check off "bl_power 4 is off"
+sys; backlight 0; connector card2-DSI-1 connected Off
+check off "a DSI connector at dpms Off is off with the backlight on"
+sys; connector card2-DSI-1 connected On; connector card2-HDMI-A-1 connected Off
+check on "an external connector doesn't count"
+sys; connector card2-DSI-1 disconnected Off
+HYPR=$on check on "a disconnected panel leaves it to Hyprland"
+sys
+HYPR=$off check off "with no panel reports, Hyprland's dpmsStatus false is off"
+sys
+HYPR=$on check on "with no panel reports, Hyprland's dpmsStatus true is on"
+sys
+HYPR="HYPRLAND_INSTANCE_SIGNATURE not set!" HYPR_RC=1 check on "a failed hyprctl counts as on under pipefail"
+sys
+HYPR="not json" check on "an answer that isn't JSON counts as on"
