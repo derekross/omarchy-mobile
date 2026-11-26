@@ -110,6 +110,7 @@ whether it predated a stock boot.
 | [Omarchy systemd RAM root](#first-attended-omarchy-systemd-ram-root-trial) | The Mac left verified stock D1 A at 06:43:33 UTC on 2026-11-26 and ran the guarded B rescue. Android stayed off between the rescue and the Omarchy boot request at 06:51:20 UTC. | Fresh read-only rescue copy verified at 06:49:41 UTC. All nine hashes passed. The stock A return requires a new copy before the next power or CPM trial. |
 | [Corrected Omarchy systemd RAM root](#attended-corrected-omarchy-systemd-ram-root-trial) | The Mac left verified stock D1 A at 07:07:30 UTC on 2026-11-26. A guarded rescue retry completed with no intervening Android boot before Omarchy started at 07:20:51 UTC. | All nine hashes passed at 07:19:08 UTC. The stock A return requires a new copy before the next power or CPM trial. |
 | [Omarchy USB SSH after systemd handoff](#attended-usb-ssh-handoff-trial) | The Mac left verified stock D1 A at 07:40:15 UTC on 2026-11-26. Android stayed off between the guarded rescue and the Omarchy boot request at 07:46:39 UTC. | All nine hashes passed at 07:45:27 UTC. The stock A return requires a new copy before the next power or CPM trial. |
+| [Display CPM queries](#attended-display-cpm-query-trial) | The Mac left stock D1 A at 09:06:49 UTC on 2026-11-26. Android stayed off between the guarded backup rescue and the display CPM boot request at 09:14:51 UTC. | All nine hashes passed at 09:13:31 UTC. Another power or CPM trial needs a fresh copy after the stock A return. |
 
 [Maintainer decision on backup freshness](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035).
 Take a fresh read-only backup of all nine partitions after the latest
@@ -4750,8 +4751,48 @@ and `display-cpm: read-only queries complete` in the retained
 console. If the markers are absent, check whether ABL forwarded
 the boot parameter. A zero or negative clock reply is evidence
 about the unpowered query and does not qualify a usable rate.
-The display stays disabled. The bundle has not booted on the
-Pixel.
+The display stays disabled. The hardware trial is recorded
+below.
+
+##### Attended display CPM query trial
+
+On 2026-11-26 the guarded rescue backed up nine read-only,
+unmounted NV partitions. The bridge recovered two serial framing
+interruptions. The Mac verified all nine independent hashes,
+3,392,151,552 bytes, and private file modes. The 64 MiB rescue
+`vendor_boot_b` readback matched. The rescue returned to Fastboot
+with A selected and stock Android stayed off before the diagnostic.
+All five diagnostic images staged on B, and the 8,192-byte
+`vendor_boot_b` payload matched its readback.
+
+ABL forwarded the opt-in boot parameter. All seven requests
+completed between 0.192796 and 0.193350 seconds of kernel uptime.
+
+| Query | Live result |
+| --- | --- |
+| MBFS `dpu.v` | Handle `0x15c0008` |
+| MBFS `DpuBe.v` | Handle `0x15c0027` |
+| MBFS `DpuFe0.v` | Handle `0x15c0028` |
+| MBFS `DpuDsi0.v` | Handle `0x15c002a` |
+| DSI0 pixel rate | Firmware `-3` |
+| BE rate | Firmware `-3` |
+| FE0 rate | Firmware `-3` |
+
+The MBFS results identify four distinct resources. All three
+LPCM responses were firmware replies, with no transport
+timeouts. The provider's generic clock error mapping maps
+`-3` to `ENODATA`. These samples were taken before any display
+power vote from the diagnostic. They leave open whether the
+same calls return a rate once stock has brought the display up.
+
+The UFS guard verified 42 read-only, unmounted partitions and
+the 8 KiB `boot_b` comparison. The temporary SCSI host retired
+before the authenticated USB receiver became ready. The return
+helper requested the warm restart at 600.010909 seconds.
+Fastboot returned 644 seconds after the boot request. Stock D1
+A completed boot with enforcing verity and the original VBMeta
+digest. Ramoops and `SYSTEM_LAST_KMSG` match on all 20 filtered
+trial lines.
 
 ### Offline stock D1 device reference-clock diagnostic
 
