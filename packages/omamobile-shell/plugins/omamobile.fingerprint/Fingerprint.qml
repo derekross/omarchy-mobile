@@ -508,7 +508,10 @@ Item {
     try { ev = JSON.parse(line) } catch (e) { return }
     if (!ev || typeof ev.event !== "string") return
     if (ev.event === "claimed") {
-      authPending = false
+      // Keep authPending true until "started" (or done/error/deleted):
+      // fprintd's Claim() does not prompt polkit, EnrollStart() and
+      // DeleteEnrolledFingers2() right after do, and showing the
+      // overlay early covers squeekboard.
     } else if (ev.event === "fingers") {
       enrolledFingers = Array.isArray(ev.fingers) ? ev.fingers : []
       fingersKnown = true
