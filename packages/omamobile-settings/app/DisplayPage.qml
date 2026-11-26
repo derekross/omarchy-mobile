@@ -18,14 +18,14 @@ ColumnLayout {
         if (r.error) { status = r.error; return }
         if (r.brightness === undefined || r.refresh === undefined) { status = qsTr("The display backend gave no values."); return }
         brightness = r.brightness; refresh = r.refresh; rates = r.rates || []
-        // a set answer carries no "saved": a rate set gives that rate, "Default" gives none
-        saved = r.saved !== undefined ? r.saved : pending
+        saved = r.saved !== undefined ? r.saved : 0
         status = rates.length > 1 ? qsTr("Tap a value; it applies at once. The refresh rate is kept across restarts. Default goes back to the panel's own choice.")
                                   : qsTr("Tap a value; it applies at once.")
+        if (rates.length > 1 && saved !== 0 && saved !== refresh)
+            status += " " + qsTr("Saved %1 Hz, now %2 Hz.").arg(saved).arg(refresh)
     }
     Connections { target: actions; function onFinished(tool, r, id) { if (tool === "display" && id === page.reqId) page.apply(r) } }
     Component.onCompleted: reqId = actions.run("display", ["get"])
-    property int pending: 0   // the rate a tap asked for (0 for Default), kept once the backend answers
     SettingsLabel { text: qsTr("Brightness"); font.weight: Font.DemiBold; color: backend.foreground; Layout.fillWidth: true }
     Flow {
         Layout.fillWidth: true; spacing: 8
@@ -47,14 +47,14 @@ ColumnLayout {
         Layout.fillWidth: true; spacing: 8
         SettingsButton {
             text: qsTr("Default"); highlighted: page.saved === 0; enabled: !page.busy
-            onClicked: { page.busy = true; page.pending = 0; page.reqId = actions.run("display", ["set", "refresh", "preferred"]) }
+            onClicked: { page.busy = true; page.reqId = actions.run("display", ["set", "refresh", "preferred"]) }
         }
         Repeater {
             model: page.rates
             delegate: SettingsButton {
                 required property int modelData
                 text: modelData + " Hz"; highlighted: page.saved === modelData; enabled: !page.busy
-                onClicked: { page.busy = true; page.pending = modelData; page.reqId = actions.run("display", ["set", "refresh", String(modelData)]) }
+                onClicked: { page.busy = true; page.reqId = actions.run("display", ["set", "refresh", String(modelData)]) }
             }
         }
     }
