@@ -5173,6 +5173,51 @@ seconds after the B boot request. Stock D1 A completed boot
 with enforcing verity and the original VBMeta digest.
 Ramoops and `SYSTEM_LAST_KMSG` matched all 37 filtered lines.
 
+##### Offline DPU BE power-vote fixture
+
+Both retained stock D1 base trees describe `dpu_be_pd` as
+`DpuBe.v` with MBFS resource ID `0x200` and wrapper parent
+`dpu.v` (`0x08`). FE0 and DSI0 are children of BE. Neither
+Grizzly B0 overlay changes those relationships. The stock
+power driver matches deferred MBFS completion against the
+full 32-bit resource ID in notification word 1. The mainline
+helper already uses that field. The last live wrapper trial
+resolved the BE handle to `0x15c0027`.
+
+Kernel `7.3.0-rc6-omamobile-grizzly-display-be` at
+`9eb185def0ca317c101045731d9a8012d0ceafec` adds
+`clk_google_malibu_cpm.display_be=1` to the Grizzly-only
+one-shot wrapper fixture. The trigger samples the same seven
+initial AP votes. If all samples succeed and all votes are
+clear, it runs wrapper ON, BE ON, BE OFF, then wrapper OFF.
+Each step logs its CPM acknowledgement, available readback
+and driver result. If a BE transition fails, the diagnostic
+stops and keeps the wrapper vote for the timed return.
+There are no retries or votes for BE descendants.
+
+The BE clock uses LPCM GET_RATE word `0x03042302` with
+argument zero. The earlier unpowered query returned firmware
+`-3`. The new diagnostic keeps that early query. It defers
+any powered LPCM query until the BE cycle is qualified because
+a transport timeout would also block MBFS release requests.
+The fixture leaves the display consumers disabled.
+
+The arm64 build and style check passed. A mock of the trigger
+verified the four-step order, skipping writes for an inherited
+vote or any failed initial sample, stopping at each failed
+transition, one-shot enforcement and the wrapper-only path
+with the BE flag absent. Five image hashes, both AVB
+signatures, the ABL handoff bounds and captured D1 slot fit
+passed. The tested vendor ramdisks, DTB and DTBO are byte
+identical to the corrected wrapper fixture and retain the
+UFS guard, USB SSH and independent timed return. The SHA-256
+of the new `SHA256SUMS` file is
+`4b883b9d6a51cab1aef7715bfbbf4a0cbde9b9b2fa7262a18e346f827bb5ca8d`.
+
+The BE cycle still needs an attended slot B boot. Use a fresh
+verified NV backup, capture both sets of ON/OFF results in
+the retained console, and return to stock A.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
