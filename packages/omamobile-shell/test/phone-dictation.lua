@@ -13,6 +13,7 @@ local noop = function() end
 local binds = {}
 local function dsp(name) return function(arg) return { dsp = name, arg = arg } end end
 hl = {
+  on = noop, exec_cmd = noop,
   config = noop, window_rule = noop, layer_rule = noop, animation = noop, curve = noop, device = noop,
   unbind = function(keys)
     local kept = {}
@@ -28,6 +29,7 @@ o = {
   bind_hold = function(keys, _, press, _, release, opts)
     binds[#binds + 1] = { keys = keys, dispatcher = press, release = release, opts = opts or {}, hold = true }
   end,
+  launch = function(c) return c end,
   launch_on_start = noop,
   cmd_present = function(cmd) return cmd == "voxtype" end,
   dictation_installed = function() return scenario ~= "none" end,

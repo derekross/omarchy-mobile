@@ -87,6 +87,7 @@ for f in usr/bin/reboot-to \
          usr/lib/udev/rules.d/80-omamobile-bt-addr.rules \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/charge-limit.conf \
+         usr/share/omamobile/refresh-rate-default \
          usr/lib/udev/rules.d/75-omamobile-charge-limit.rules \
          usr/lib/systemd/system/omamobile-charge-limit-apply.service \
          usr/share/omamobile/device-husky/version \
@@ -202,6 +203,8 @@ pass "install stages the udev rule, the USB link, the mirrorlist and the display
 [[ ! -e $tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf ]] \
   || fail "husky has no lid: no lid drop-in"
 pass "no lid drop-in"
+grep -qx 60 "$tmp/root/usr/share/omamobile/refresh-rate-default" \
+  || fail "husky defaults to 60 Hz while the user has chosen no rate"
 grep -qx 'supply=max77759-charger' "$tmp/root/usr/share/omamobile/charge-limit.conf" \
   || fail "husky declares its charge limit on max77759-charger"
 [[ ! -e $tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-charge-limit-apply.service ]] \

@@ -8,7 +8,7 @@ ColumnLayout {
     property int brightness: -1
     property int refresh: -1
     property var rates: []
-    property int saved: 0   // the rate kept across restarts, 0 for none (the panel's preferred mode)
+    property int saved: 0   // the rate kept across restarts, 0 for none (the device default, 60 on husky, else the panel's own choice)
     property string status: qsTr("Reading the display...")
     property bool busy: true
     property int reqId: -1
@@ -19,7 +19,7 @@ ColumnLayout {
         if (r.brightness === undefined || r.refresh === undefined) { status = qsTr("The display backend gave no values."); return }
         brightness = r.brightness; refresh = r.refresh; rates = r.rates || []
         saved = r.saved !== undefined ? r.saved : 0
-        status = rates.length > 1 ? qsTr("Tap a value; it applies at once. The refresh rate is kept across restarts. Default goes back to the panel's own choice.")
+        status = rates.length > 1 ? qsTr("Tap a value; it applies at once. The refresh rate is kept across restarts. Default goes back to the device's own choice (60 Hz on this phone).")
                                   : qsTr("Tap a value; it applies at once.")
         if (rates.length > 1 && saved !== 0 && saved !== refresh)
             status += " " + qsTr("Saved %1 Hz, now %2 Hz.").arg(saved).arg(refresh)

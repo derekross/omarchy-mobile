@@ -10,8 +10,10 @@ cat > "$fake" <<'EOT'
 50
 [{"name":"DSI-1","width":1344,"height":2992,"x":0,"y":0,"scale":3.2,"refreshRate":120.000,"availableModes":["1344x2992@120.00Hz","1344x2992@60.00Hz","1008x2244@120.00Hz"]}]
 EOT
-sed "s|^fake=.*|fake=$fake|" "$src/backends/display.sh" > "$tmp/display.sh"
+def=$tmp/rate-default  # the device default file, absent unless a test writes it
+sed -e "s|^fake=.*|fake=$fake|" -e "s|^default_file=.*|default_file=$def|" "$src/backends/display.sh" > "$tmp/display.sh"
 grep -q "^fake=$fake" "$tmp/display.sh"
+grep -q "^default_file=$def" "$tmp/display.sh"
 run() { bash "$tmp/display.sh" "$@" || true; }
 eq() { [[ $1 == "$2" ]] || { echo "FAIL: got $1, want $2" >&2; exit 1; }; }
 
@@ -76,7 +78,8 @@ grep -q 'highlighted: page.saved === modelData' "$src/app/DisplayPage.qml" || { 
 # choice before its pause; every set answer, brightness included, carries "saved"
 mkdir -p "$tmp/bin"
 real=$tmp/display-real.sh
-cp "$src/backends/display.sh" "$real"
+sed "s|^default_file=.*|default_file=$def|" "$src/backends/display.sh" > "$real"
+grep -q "^default_file=$def" "$real"
 cat > "$tmp/bin/hyprctl" <<'EOT'
 #!/bin/bash
 if [[ $1 == monitors ]]; then
@@ -124,4 +127,36 @@ eq "$(cat "$TLOG/sleep")" missing
 echo 60 > "$rf"; : > "$TLOG/evals"
 rreal apply >/dev/null
 [[ $(grep -c eval "$TLOG/evals") == 1 ]] && grep -q 'mode = "1344x2992@60.00"' "$TLOG/evals" || { echo "FAIL: apply of a listed saved rate" >&2; exit 1; }
+# a device default (husky ships 60): with no saved choice apply sends it, only when listed; a saved choice wins;
+# preferred goes back to it; "saved" stays 0 for it
+rm -f "$rf"; echo 60 > "$def"; : > "$TLOG/evals"
+eq "$(rreal apply)" '{"brightness":50,"refresh":60,"rates":[60,120],"saved":0}'
+grep -q 'mode = "1344x2992@60.00"' "$TLOG/evals" || { echo "FAIL: apply did not send the device default" >&2; exit 1; }
+echo 120 > "$rf"; : > "$TLOG/evals"
+rreal apply >/dev/null
+grep -q 'mode = "1344x2992@120.00"' "$TLOG/evals" || { echo "FAIL: a saved rate lost to the device default" >&2; exit 1; }
+: > "$TLOG/evals"
+rreal set refresh preferred >/dev/null
+grep -q 'mode = "1344x2992@60.00"' "$TLOG/evals" || { echo "FAIL: preferred did not go back to the device default" >&2; exit 1; }
+[[ ! -e $rf ]] || { echo "FAIL: preferred left the file" >&2; exit 1; }
+echo 90 > "$def"; : > "$TLOG/evals"
+rreal apply >/dev/null
+[[ ! -s $TLOG/evals ]] || { echo "FAIL: an unlisted device default sent an eval" >&2; exit 1; }
+# a rate file is one bare 1 to 3 digit number and at most one trailing newline: anything else counts as no choice
+# (the default 60 is sent, never the 120 in the odd file); a clean one, with or without its newline, wins
+echo 60 > "$def"
+for bad in '120 ' ' 120' '0120' '1e2' '120\n\n' '120\nfoo' '120\r\n'; do
+  printf "$bad" > "$rf"; : > "$TLOG/evals"
+  rreal apply >/dev/null
+  grep -q 'mode = "1344x2992@60.00"' "$TLOG/evals" || { echo "FAIL: odd rate file '$bad' was not ignored" >&2; exit 1; }
+done
+for good in '120' '120\n'; do
+  printf "$good" > "$rf"; : > "$TLOG/evals"
+  rreal apply >/dev/null
+  grep -q 'mode = "1344x2992@120.00"' "$TLOG/evals" || { echo "FAIL: clean rate file '$good' was ignored" >&2; exit 1; }
+done
+rm -f "$rf"
+eq "$(run apply)" '{"brightness":50,"refresh":60,"rates":[60,120],"saved":0}'
+eq "$(run set refresh preferred)" '{"brightness":50,"refresh":60,"rates":[60,120],"saved":0}'
+rm -f "$def"
 echo "display backend: ok"

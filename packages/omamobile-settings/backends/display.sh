@@ -7,14 +7,19 @@
 #   display.sh get                 {"brightness":50,"refresh":120,"rates":[60,120],"saved":0}  (saved: the kept choice, 0 for none)
 #   display.sh set brightness N    N is 10, 25, 50, 75 or 100 (never below 10, so the screen cannot go black)
 #   display.sh set refresh N       N must be one of the rates the monitor lists at its current size
-#   display.sh set refresh preferred   forget the choice and go back to the panel's preferred mode
-#   display.sh apply               apply the saved choice at a session start; with no valid, listed saved rate it
-#                                  does nothing at all (no eval), so a user who never chose keeps Hyprland's own rule
+#   display.sh set refresh preferred   forget the choice and go back to the device default (below), else the
+#                                  panel's preferred mode
+#   display.sh apply               apply the saved choice at a session start, else the device default; with neither
+#                                  valid and listed it does nothing at all (no eval), so Hyprland's own rule stays
+# The device default is a bare number in /usr/share/omamobile/refresh-rate-default, shipped by a device package that
+# wants a rate other than Hyprland's pick (husky: 60, as its panel scans out every frame at 120 even when idle).
+# It is used only while the user has no saved choice and only when the panel lists it; "saved" stays 0 then.
 # Every answer to get and set carries "saved" (0 for none). The rates are the monitor's own availableModes at its current width and height. The choice is saved as a bare number
 # in ~/.config/omamobile/refresh-rate (a fixed path: the
 # auto-rotate user service may not see a session-only XDG_CONFIG_HOME), which `apply` and omamobile-sensors' auto-rotate read (the
-# shell's Hyprland config carries no monitor rule, so this is the only place a rate is set). A saved rate the panel no
-# longer lists is ignored: the preferred mode is used, so the screen cannot go black. The monitor is the
+# shell's Hyprland config carries no monitor rule, so this is the only place a rate is set; phone.lua runs `apply` at
+# session start and after every config reload). A saved rate the panel no longer lists is ignored: the device default
+# if listed, else the monitor is left as Hyprland set it, so the screen cannot go black. The monitor is the
 # built-in panel (DSI-* or eDP-*), else the only one, else the focused one. Without a monitor the brightness
 # still works and "refresh" reads -1 with no rates.
 # The test runs a copy of this script with `fake` set to a file holding the brightness (a number) and the monitor
@@ -91,6 +96,7 @@ read_all() {
   fi
 }
 rate_file=$HOME/.config/omamobile/refresh-rate
+default_file=/usr/share/omamobile/refresh-rate-default
 # apply_mode WHEN: WHEN is a listed rate or "preferred"; sets this monitor's mode and keeps its other fields
 apply_mode() {
   local mode=preferred res t
@@ -103,7 +109,17 @@ apply_mode() {
     || return 1
   [[ ${res,,} != *error* ]]
 }
-saved_rate() { local r=''; [[ -r $rate_file ]] && read -r r < "$rate_file" || true; [[ $r =~ ^[0-9]{1,3}$ ]] && echo "$r" || true; }
+# a rate file holds exactly one bare number (1 to 3 digits) and at most one trailing newline, nothing else
+read_rate() {
+  local r
+  [[ -r $1 ]] || return 0
+  r=$(cat -- "$1" 2>/dev/null; printf x) || return 0
+  r=${r%x}; r=${r%$'\n'}
+  [[ $r =~ ^[0-9]{1,3}$ ]] && echo "$r" || true
+}
+saved_rate() { read_rate "$rate_file"; }
+# the device default, only when the panel lists it at its current size
+default_rate() { local d; d=$(read_rate "$default_file"); [[ -n $d && ,$rates, == *",$d,"* ]] && echo "$d" || true; }
 out() { printf '{"brightness":%s,"refresh":%s,"rates":[%s]}\n' "$bright" "$refresh" "$rates"; }
 # the same, plus "saved": the choice kept in the file (0 for none, or one the panel does not list)
 out_saved() {
@@ -125,11 +141,13 @@ set)
     refresh)
       if [[ $value == preferred ]]; then
         [[ -n $name ]] || fail "cannot read the monitor"
+        def=$(default_rate)
         if [[ -z $fake ]]; then
-          apply_mode preferred || fail "the screen did not accept the change"
+          apply_mode "${def:-preferred}" || fail "the screen did not accept the change"
           rm -f -- "$rate_file"
           sleep 1
           readmon || fail "cannot read the monitor"
+        elif [[ -n $def ]]; then refresh=$def
         fi
         rm -f -- "$rate_file"
         out_saved; exit 0
@@ -157,9 +175,11 @@ apply)
   if ! readmon; then name=""; refresh=-1; rates=""; tokens=""; fi
   [[ -n $name ]] || fail "cannot read the monitor"
   want=$(saved_rate)
-  # nothing is applied unless the panel lists the saved rate right now: no choice (or a stale one) leaves the
-  # monitor exactly as Hyprland's own rule set it, and a stale file is never turned into a rule
-  [[ -n $want && ,$rates, == *",$want,"* ]] || { out_saved; exit 0; }
+  # nothing is applied unless the panel lists the rate right now: the saved choice, else the device default; with
+  # neither (or a stale one) the monitor stays exactly as Hyprland's own rule set it, and a stale file is never
+  # turned into a rule
+  [[ -n $want && ,$rates, == *",$want,"* ]] || want=$(default_rate)
+  [[ -n $want ]] || { out_saved; exit 0; }
   if [[ -z $fake ]]; then
     # transform read as late as possible: auto-rotate (when enabled) may turn the screen between this read and the
     # eval, and the eval would turn it back; the window is a few milliseconds

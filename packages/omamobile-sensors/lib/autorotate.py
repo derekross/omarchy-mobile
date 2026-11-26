@@ -69,15 +69,50 @@ def rate_path():
     return os.path.join(os.path.expanduser('~'), '.config', 'omamobile', 'refresh-rate')
 
 
+# A device package's default rate (husky ships 60), used while the user has chosen none; the same file
+# Settings' display.sh reads
+# (OMAMOBILE_RATE_DEFAULT_FILE redirects it, for the tests only)
+DEFAULT_RATE_PATH = os.environ.get('OMAMOBILE_RATE_DEFAULT_FILE', '/usr/share/omamobile/refresh-rate-default')
+
+
 def saved_mode(m):
-    """The exact mode token (without "Hz") for the rate the user chose in Settings, or "preferred".
+    """The exact mode token (without "Hz") for the rate the user chose in Settings, else the device
+    default rate, else None.
 
     Only a rate the monitor lists is used, in the panel's own orientation or the turned one (hyprctl may
-    report the size either way); a missing, odd or unlisted choice means "preferred", so the screen never
-    ends on a mode it lacks."""
+    report the size either way); a missing, odd or unlisted rate falls through to the next one, so the
+    screen never ends on a mode it lacks."""
+    for path in (rate_path(), DEFAULT_RATE_PATH):
+        mode = _listed_mode(m, path)
+        if mode:
+            return mode
+    return None
+
+
+def current_mode(m):
+    """The monitor's current mode as the exact listed token, so a turn keeps the rate it has; "preferred" only
+    if hyprctl gave no usable current rate (then the mode is left to Hyprland as before)."""
     try:
-        with open(rate_path()) as f:
-            want = int(f.read().strip())
+        return _token(m, int(round(float(m['refreshRate'])))) or 'preferred'
+    except (KeyError, ValueError, TypeError):
+        return 'preferred'
+
+
+def _read_rate(path):
+    """A bare number of 1 to 3 digits with at most one trailing newline, else None."""
+    try:
+        with open(path) as f:
+            text = f.read()
+    except OSError:
+        return None
+    if text.endswith('\n'):
+        text = text[:-1]
+    return int(text) if re.fullmatch(r'[0-9]{1,3}', text) else None
+
+
+def _token(m, want):
+    """The exact mode token for the rate WANT at the monitor's size (as reported, then turned), else None."""
+    try:
         w, h = int(m['width']), int(m['height'])
         for wanted in (f'{w}x{h}', f'{h}x{w}'):  # the size as reported first, then the swapped one
             for mode in m.get('availableModes', []):
@@ -89,9 +124,14 @@ def saved_mode(m):
                     continue  # a mode this parser does not know is skipped
                 if ok and re.fullmatch(r'\d{1,5}x\d{1,5}@\d{1,4}(\.\d{1,6})?', size + '@' + hz):
                     return size + '@' + hz
-    except (OSError, ValueError, KeyError, TypeError):
+    except (KeyError, ValueError, TypeError):
         pass
-    return 'preferred'
+    return None
+
+
+def _listed_mode(m, path):
+    want = _read_rate(path)
+    return None if want is None else _token(m, want)
 
 
 def monitor(name=None):
@@ -102,12 +142,12 @@ def monitor(name=None):
         mons = []
     for m in mons:
         if name is None or m.get('name') == name:
-            return m.get('name'), m.get('scale', 1.0), saved_mode(m)
+            return m.get('name'), m.get('scale', 1.0), saved_mode(m) or current_mode(m)
     return None, None, 'preferred'
 
 
 def apply(transform, name=None, dry_run=False):
-    mon, scale, mode = (name or 'DSI-1', 1.0, saved_mode({})) if dry_run else monitor(name)
+    mon, scale, mode = (name or 'DSI-1', 1.0, saved_mode({}) or 'preferred') if dry_run else monitor(name)
     if mon is None:
         log('no monitor')
         return
