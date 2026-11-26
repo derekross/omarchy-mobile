@@ -1,0 +1,24 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Empty board overlay for the Pixel Tablet bootloader (ABL).
+ *
+ * ABL picks a dtbo entry by board_id/board_rev and applies it on top of
+ * the base DTB. The stock overlay references Google labels that do not
+ * exist in the mainline DTB, so this one changes nothing.
+ *
+ * board_id 0x30706 and board_rev 0x10000 are the retail (MP) entry of the
+ * stock dtbo.img (CP1A.260505.005), matching fastboot's hw-revision MP1.0.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	board_id = <0x30706>;
+	board_rev = <0x10000>;
+
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+		};
+	};
+};
