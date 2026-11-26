@@ -123,6 +123,7 @@ whether it predated a stock boot.
 | [DSI0 power-vote trial](#attended-dsi0-power-vote-trial) | The Mac left stock D1 A at 15:09:28 UTC on 2026-11-26. Android stayed off between the rescue and the diagnostic boot at 15:15:49 UTC. | All nine hashes passed at 15:14:25 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
 | [Powered DSI0 pixel clock trial](#attended-powered-dsi0-pixel-clock-trial) | The Mac left stock D1 A at 15:42:07 UTC on 2026-11-26. Android stayed off between the rescue and the diagnostic boot at 15:48:20 UTC. | All nine hashes passed at 15:47:04 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
 | [Passive stock D1 DSI0 trace](#attended-passive-stock-d1-dsi0-trace) | The Mac left stock D1 A at 16:29:20 UTC on 2026-11-26. Android stayed off between the rescue and the trace boot request at 16:37:33 UTC. | All nine hashes passed at 16:35:44 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
+| [Stock D1 DSI0 genpd and MBFS trace](#attended-stock-d1-dsi0-genpd-and-mbfs-trace) | The Mac left stock D1 A at 16:46:20 UTC on 2026-11-26. Android stayed off between the rescue and the trace boot at 16:53:23 UTC. | All nine hashes passed at 16:52:00 UTC. The stock A return requires a fresh copy before the next power or CPM trial. |
 
 [Maintainer decision on backup freshness](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035).
 Take a fresh read-only backup of all nine partitions after the latest
@@ -5811,10 +5812,9 @@ stock helper kept a pre-existing instance and removed a
 partial instance when the vendor events were absent.
 Offline parser checks replayed the retained physical trace,
 correlated synthetic MBFS events with it and rejected a
-malformed reply. The protected power-controller events and
-genpd snapshots still need hardware validation. This
-fixture cannot independently read the APB gate or external
-reset state.
+malformed reply. The trace exposes software votes and
+genpd state. The APB gate and external reset state require
+separate evidence.
 
 The packaged sequel uses `pack-stock-inventory.py --dsi0-trace`.
 The five hashes, replacement `init_boot` AVB signature, ABL
@@ -5822,6 +5822,48 @@ handoff bounds and saved D1 slot fit passed. The remaining
 four images match the attended passive fixture byte for
 byte. The `SHA256SUMS` digest is
 `e085554efae30ea3980af98ae9e2c27241fff8ad63872ad9ef0afdd15256dfcd`.
+
+##### Attended stock D1 DSI0 genpd and MBFS trace
+
+On 2026-11-26 the read-only rescue copied all nine NV
+partitions. Independent SHA-256 checks, the byte count of
+3,392,151,552 and private permissions passed. The full
+64 MiB `vendor_boot_b` readback matched for both the rescue
+and the one slot B diagnostic boot.
+
+The 90-second timer armed at 0.926461 seconds of kernel uptime.
+After the NV guard passed, tracing armed at 5.779560 seconds.
+Before the first display module loaded, read-only debugfs
+reported `off-0` for `sswrp_dpu_pd`, `dpu_be_pd` and
+`dpu_dsi0_pd`. `vs_drm.ko` began loading at 5.891762 seconds.
+
+The stopped trace retained all 39 records, including 15
+stock MBFS request/result pairs. Every result was `0`.
+Earlier activity included a complete wrapper, BE and DSI0
+ON/OFF cycle, then shorter parent sequences. The final ON
+requests and results came from the same task as the host
+probe. All times in the table are trace `mono` seconds.
+
+| Event | Request | Result |
+| --- | ---: | ---: |
+| Wrapper ON (`0x08`) | 5.934103 | 5.935494 |
+| BE ON (`0x200`) | 5.935526 | 5.935896 |
+| DSI0 ON (`0x203`) | 5.935900 | 5.936410 |
+| DSI0 runtime resume | 5.947687 | 5.947707 |
+| Host offset `0x0c` read | 5.947711 | `0x00000000` (`pwr_up=0`) |
+
+Runtime resume returned `0` four microseconds before the
+status read. The final DSI0 ON result preceded the read by
+11.301 ms. There were no matching generic genpd target or CCF
+events in that ring. The snapshot and MBFS records show
+the stock software power sequence. APB clock and external
+reset state remain unverified.
+
+The warm restart was requested at 90.929965 seconds of
+kernel uptime. Fastboot returned 133 seconds after
+the B boot request. Stock D1 A completed boot with enforcing
+verity and the original VBMeta digest. Ramoops and
+`SYSTEM_LAST_KMSG` matched the filtered capture.
 
 ### Offline stock D1 device reference-clock diagnostic
 
