@@ -185,6 +185,22 @@ TestCase {
         root.close()
     }
 
+    function test_anotherHelperHoldsTheWindow() {
+        root.open()
+        verify(root.pairableOwned)
+        // The bar's Bluetooth card opened first: its helper holds the window.
+        root.agentProcess.stdout.read(JSON.stringify({ event: "ready", adapter: "/org/bluez/hci0", window: false }))
+        verify(!root.pairableOwned)
+        root.agentProcess.written = []
+        root.setVisible(true)
+        root.pairDevice("AA")
+        compare(pairableCommands().length, 0, "nothing asks for the other helper's window")
+        root.finishAction()
+        fake.pairable = true      // the card's
+        root.close()
+        compare(fake.pairable, true, "the card's pairing is left on")
+    }
+
     function test_ownersPairableLeftAlone() {
         fake.pairable = true      // AlwaysPairable, or the owner's own agent
         root.open()

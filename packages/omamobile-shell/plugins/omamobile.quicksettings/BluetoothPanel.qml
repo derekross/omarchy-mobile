@@ -244,6 +244,9 @@ Item {
     case "ready":
       helperReady = true
       helperError = ""
+      // Another helper holds the pairing window (the bar's Bluetooth card is
+      // open too): Pairable is its to turn on and off, not this panel's.
+      if (event.window === false) pairableOwned = false
       applyPairable()
       break
     case "error":

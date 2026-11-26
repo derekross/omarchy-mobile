@@ -1,0 +1,605 @@
+# Bluetooth: the bar's Bluetooth card pairs the way the phone's Quick
+# Settings panel does. The card pairs through omarchy-bluetooth-device, and
+# on the phone there is no agent (Omarchy's bt-agent.service is held off
+# there, since it accepts every pairing), so a device that needs a code to
+# be confirmed or a PIN typed couldn't pair, and the phone was neither
+# visible nor pairable, so a rental car couldn't find it. Where Omarchy
+# Mobile's omamobile-bt-agent is installed, the card now runs it while open:
+# the phone is visible (the hero shows the name others see) and pairable
+# for that time, a pairing's code or PIN shows in the card with Cancel and
+# Pair, and pair, connect and disconnect go through it (it blocks on
+# disconnect and unblocks on connect and pair, as 0035 does). If Quick
+# Settings' panel is open too, the helper that started first keeps the
+# pairing window and the other leaves it alone. Where the helper isn't
+# installed (a computer), nothing new runs and the card works as before.
+#
+# Against Omarchy 4.5.0 (4.5.0-3).
+diff --git i/shell/plugins/panels/bluetooth/Model.js w/shell/plugins/panels/bluetooth/Model.js
+--- i/shell/plugins/panels/bluetooth/Model.js
++++ w/shell/plugins/panels/bluetooth/Model.js
+@@ -154,6 +154,139 @@ function sectionDevices(lists, section) {
+   return []
+ }
+ 
++// ---------------------------------------------------------------- the phone's pairing helper
++//
++// Omarchy Mobile's omamobile-bt-agent: a BlueZ agent the card runs while it
++// is open on a phone, so a pairing's code or PIN shows in the card. It talks
++// JSON lines; these are its pure parts. A computer without it never gets here.
++
++// The helper's command line. It owns the pairing window (Pairable, with
++// BlueZ's own timeout) only when Pairable was off as the card opened; one
++// that was on already belongs to the owner's own agent or main.conf.
++function helperCommand(pairableAtOpen, seconds) {
++  if (pairableAtOpen) return ["omamobile-bt-agent"]
++  return ["omamobile-bt-agent", "--pairable-window", String(seconds)]
++}
++
++// One JSON line from the helper, or null.
++function parseHelperLine(line) {
++  var text = String(line || "").trim()
++  if (!text || text[0] !== "{") return null
++  try {
++    var value = JSON.parse(text)
++    return value && typeof value.event === "string" ? value : null
++  } catch (error) {
++    return null
++  }
++}
++
++// The helper's "ready": whether the pairing window is this card's. It is
++// when the card asked for it and no other panel's helper holds it (an older
++// helper doesn't say, and owned it whenever asked).
++function ownsWindow(command, ready) {
++  return !!command && command.length > 1 && !!ready && ready.window !== false
++}
++
++function padPasskey(value) {
++  var text = String(Math.max(0, Math.floor(Number(value) || 0)))
++  while (text.length < 6) text = "0" + text
++  return text
++}
++
++// A code the phone shows, which the other device types or compares; there
++// is nothing to answer, only to cancel.
++function isDisplayRequest(request) {
++  return !!request && /^display-/.test(String(request.type || ""))
++}
++
++// A request from the helper -> what the card asks: title, body, the code to
++// show, the input wanted ("" | "pin" | "passkey") and whether Pair answers it.
++function pairingPrompt(request) {
++  var r = request || {}
++  var name = r.label || r.address || "device"
++  switch (r.type) {
++  case "confirm":
++    return { title: "Pair with " + name + "?", body: "Check that this code shows on both devices.",
++             code: padPasskey(r.passkey), entered: 0, input: "", answer: true }
++  case "authorize":
++    return { title: "Pair with " + name + "?", body: "It is asking to pair.",
++             code: "", entered: 0, input: "", answer: true }
++  case "pin":
++    return { title: "Pair with " + name, body: "Enter its PIN (often 0000 or 1234).",
++             code: "", entered: 0, input: "pin", answer: true }
++  case "passkey":
++    return { title: "Pair with " + name, body: "Enter the 6-digit passkey it shows.",
++             code: "", entered: 0, input: "passkey", answer: true }
++  case "display-passkey":
++    return { title: "Pairing with " + name, body: "Type this code on it, then press Enter.",
++             code: padPasskey(r.passkey), entered: Number(r.entered) || 0, input: "", answer: false }
++  case "display-pin":
++    return { title: "Pairing with " + name, body: "Enter this PIN on it.",
++             code: String(r.pin || ""), entered: 0, input: "", answer: false }
++  }
++  return null
++}
++
++// Whether a typed value can answer: a PIN is 1-16 characters, a passkey up
++// to six digits.
++function validCode(input, value) {
++  var text = String(value || "")
++  if (input === "pin") return text.length >= 1 && text.length <= 16
++  if (input === "passkey") return /^[0-9]{1,6}$/.test(text)
++  return true
++}
++
++// The helper command that answers a request. The code goes only here, over
++// the helper's stdin.
++function replyCommand(request, accept, value) {
++  var reply = { cmd: "reply", id: request ? request.id : -1, accept: !!accept }
++  if (accept && request && (request.type === "pin" || request.type === "passkey")) reply.value = String(value || "")
++  return reply
++}
++
++// The card's pairing as a small state machine: { address, request }, where
++// address is the device being paired (the card's own Pair, or a device
++// pairing to the phone) and request the question showing, if any.
++function pairingIdle() {
++  return { address: "", request: null }
++}
++
++function pairingStep(state, event) {
++  var s = state || pairingIdle()
++  var e = event || {}
++  if (e.event === "start") return { address: e.address || "", request: null }
++  if (e.event === "request") return { address: s.address || e.address || "", request: e }
++  // A shown code stays up until the pairing ends; an answered question goes.
++  if (e.event === "answered") {
++    if (!e.accept) return pairingIdle()
++    return { address: s.address, request: isDisplayRequest(s.request) ? s.request : null }
++  }
++  if (e.event === "cancel") return pairingIdle()
++  if (e.event === "result" && e.op === "pair" && e.address === s.address) return pairingIdle()
++  if (e.event === "reset") return pairingIdle()
++  return s
++}
++
++// Errors that mean the operation is already done.
++function isHarmless(name) {
++  return /AlreadyExists|AlreadyConnected|NotConnected/.test(String(name || ""))
++}
++
++// A failed result -> a short line for the device's row.
++function helperError(op, name, message) {
++  var error = String(name || "")
++  var text = String(message || "")
++  if (/AuthenticationCanceled|Canceled$/.test(error)) return "Pairing canceled"
++  if (/AuthenticationRejected|Rejected$/.test(error)) return "Pairing rejected"
++  if (/AuthenticationFailed/.test(error)) return "Pairing failed. Check the code"
++  if (/AuthenticationTimeout/.test(error)) return "Pairing timed out"
++  if (/page-timeout|Page Timeout|Host is down|DoesNotExist|UnknownObject/i.test(error + " " + text)) return "Out of range"
++  if (/NotReady|not powered/i.test(error + " " + text)) return "Bluetooth is off"
++  if (/NoReply|Timeout/i.test(error)) return op === "pair" ? "Pairing timed out" : "Timed out"
++  if (op === "disconnect") return "Couldn't disconnect"
++  return op === "pair" ? "Pairing failed" : "Couldn't connect"
++}
++
+ if (typeof module !== "undefined") {
+   module.exports = {
+     deviceLabel: deviceLabel,
+@@ -172,6 +305,18 @@ if (typeof module !== "undefined") {
+     pendingAction: pendingAction,
+     withPendingAction: withPendingAction,
+     visibleSections: visibleSections,
+-    sectionDevices: sectionDevices
++    sectionDevices: sectionDevices,
++    helperCommand: helperCommand,
++    parseHelperLine: parseHelperLine,
++    ownsWindow: ownsWindow,
++    padPasskey: padPasskey,
++    isDisplayRequest: isDisplayRequest,
++    pairingPrompt: pairingPrompt,
++    validCode: validCode,
++    replyCommand: replyCommand,
++    pairingIdle: pairingIdle,
++    pairingStep: pairingStep,
++    isHarmless: isHarmless,
++    helperError: helperError
+   }
+ }
+diff --git i/shell/plugins/panels/bluetooth/Panel.qml w/shell/plugins/panels/bluetooth/Panel.qml
+--- i/shell/plugins/panels/bluetooth/Panel.qml
++++ w/shell/plugins/panels/bluetooth/Panel.qml
+@@ -74,10 +74,12 @@ Panel {
+     Commons.I18n.t("bluetooth.phrase7"),
+     Commons.I18n.t("bluetooth.phrase8")
+   ]
+-  readonly property bool rotatingPhrases: adapter && adapter.enabled
++  readonly property bool rotatingPhrases: adapter && adapter.enabled && !phoneVisible
+   readonly property string heroStatusText: {
+     if (!adapter) return Commons.I18n.t("bluetooth.noAdapter")
+     if (!adapter.enabled) return Commons.I18n.t("bluetooth.turnedOff")
++    // The name other devices see, to pick from a car's list.
++    if (phoneVisible) return "Visible as " + adapter.name
+     return activePhrases[phraseIndex % activePhrases.length]
+   }
+ 
+@@ -276,6 +278,7 @@ Panel {
+ 
+   function connectDevice(device) {
+     if (!device || device.connected) return
++    if (helperConnect(device)) return
+     if (device.paired || device.bonded || device.trusted) runDeviceAction(device, "connect", "connecting")
+     else runDeviceAction(device, "pair", "connecting")
+   }
+@@ -284,6 +287,7 @@ Panel {
+     if (!device || !device.address) return
+     if (!device.connected) return
+     setPendingAction(device.address, "disconnecting")
++    if (helperDisconnect(device)) return
+     if (device.disconnect) device.disconnect()
+     Quickshell.execDetached(deviceCommand("disconnect", device.address))
+   }
+@@ -418,6 +422,9 @@ Panel {
+       else { focusSection = "header" }
+       actionFocused = false
+       cursorActive = false
++      startHelper()
++    } else {
++      stopHelper()
+     }
+   }
+ 
+@@ -570,6 +577,7 @@ Panel {
+   // confirmed after this object is gone — and only writes the stop directly
+   // when it is the last one standing.
+   Component.onDestruction: {
++    hideVisible()
+     if (!owesDiscoveryStop) return
+     var items = bar && typeof bar.moduleWidgets === "function" ? bar.moduleWidgets(moduleName) : []
+     for (var i = 0; i < items.length; i++) {
+@@ -638,6 +646,207 @@ Panel {
+     Quickshell.execDetached(["omarchy-bluetooth-power", adapter.enabled ? "off" : "on"])
+   }
+ 
++  // ---------------------------------------------------------------- the phone's pairing helper
++  //
++  // Omarchy Mobile ships omamobile-bt-agent, a BlueZ agent that asks the
++  // owner about a pairing (a code to compare, a PIN to type) and pairs,
++  // connects and disconnects with BlueZ's reasons when they fail. Where it is
++  // installed the card runs it while open: the phone is visible and pairable
++  // for that time, so a car or headset can find it and pair, and the
++  // question shows in the card. Pair, connect and disconnect go through it.
++  // Where it isn't (a computer), none of this runs and the card works through
++  // omarchy-bluetooth-device as before.
++  //
++  // One helper owns the pairing window at a time: if Quick Settings'
++  // Bluetooth panel is open too, the helper that started first keeps
++  // Pairable, and the other leaves it and the phone's visibility alone.
++  readonly property string helperPath: "/usr/bin/omamobile-bt-agent"
++  // BlueZ's own limit on the window (PairableTimeout, DiscoverableTimeout);
++  // the card renews it while open, so it only matters if the shell dies.
++  readonly property int windowSeconds: 120
++  property bool helperInstalled: false
++  property bool helperReady: false
++  property bool helperRestart: false
++  property var helperArgs: []
++  property bool windowOwned: false
++  property bool madeVisible: false
++  readonly property bool phoneVisible: madeVisible && !!adapter && adapter.enabled && adapter.discoverable
++  property var pairing: Model.pairingIdle()
++  readonly property var prompt: pairing.request ? Model.pairingPrompt(pairing.request) : null
++  property string codeText: ""
++  property string codeError: ""
++  property string canceledAddress: ""
++  property string failureAddress: ""
++  property string failureText: ""
++
++  FileView {
++    path: root.helperPath
++    printErrors: false
++    onLoaded: root.helperInstalled = true
++    onLoadFailed: root.helperInstalled = false
++  }
++
++  Process {
++    id: helper
++    command: root.helperArgs
++    stdinEnabled: true
++    stdout: SplitParser {
++      onRead: function(line) { root.helperEvent(Model.parseHelperLine(line)) }
++    }
++    onExited: function(exitCode) {
++      root.helperGone()
++      // Reopened while the last one was still ending: start it now.
++      if (root.helperRestart && root.opened) {
++        root.helperRestart = false
++        root.startHelper()
++      }
++    }
++  }
++
++  function startHelper() {
++    if (!helperInstalled) return
++    if (helper.running) { helperRestart = true; return }
++    pairing = Model.pairingIdle()
++    codeText = ""
++    codeError = ""
++    clearFailure()
++    helperArgs = Model.helperCommand(!!adapter && adapter.pairable, windowSeconds)
++    helper.running = true
++  }
++
++  // Ending the helper ends its agent, its discovery session and the pairing
++  // window (it turns Pairable off as it exits).
++  function stopHelper() {
++    helperRestart = false
++    if (helper.running) helper.running = false
++    if (windowOwned && adapter && adapter.pairable) adapter.pairable = false
++    helperGone()
++  }
++
++  function helperGone() {
++    helperReady = false
++    windowOwned = false
++    pairing = Model.pairingIdle()
++    codeText = ""
++    hideVisible()
++  }
++
++  function hideVisible() {
++    if (madeVisible && adapter && adapter.discoverable) adapter.discoverable = false
++    madeVisible = false
++  }
++
++  function send(command) {
++    if (helper.running) helper.write(JSON.stringify(command) + "\n")
++  }
++
++  function labelFor(address) {
++    var devs = devices || []
++    for (var i = 0; i < devs.length; i++)
++      if (devs[i] && String(devs[i].address || "").toUpperCase() === String(address || "").toUpperCase())
++        return Model.deviceLabel(devs[i]) || address
++    return address
++  }
++
++  function helperEvent(event) {
++    if (!event) return
++    if (event.event === "ready") {
++      helperReady = true
++      windowOwned = Model.ownsWindow(helperArgs, event)
++    } else if (event.event === "error") {
++      // No adapter, or python-dbus missing: the card goes on without it.
++      helperReady = false
++    } else if (event.event === "request") {
++      event.label = labelFor(event.address)
++      pairing = Model.pairingStep(pairing, event)
++      codeText = ""
++      codeError = ""
++    } else if (event.event === "cancel") {
++      pairing = Model.pairingStep(pairing, event)
++    } else if (event.event === "result") {
++      pairing = Model.pairingStep(pairing, event)
++      if (event.ok || Model.isHarmless(event.error)) return
++      setPendingAction(event.address, "")
++      // The owner's own Cancel needs no line under the device.
++      if (event.address === canceledAddress) { canceledAddress = ""; return }
++      failureAddress = event.address
++      failureText = Model.helperError(event.op, event.error, event.message)
++    }
++  }
++
++  function clearFailure() {
++    failureAddress = ""
++    failureText = ""
++    canceledAddress = ""
++  }
++
++  // Pair or connect through the helper; false when it isn't running.
++  function helperConnect(device) {
++    if (!helperReady || !device || !device.address) return false
++    clearFailure()
++    setPendingAction(device.address, "connecting")
++    if (device.paired || device.bonded || device.trusted) {
++      send({ cmd: "connect", address: device.address })
++    } else {
++      pairing = Model.pairingStep(pairing, { event: "start", address: device.address })
++      send({ cmd: "pair", address: device.address })
++    }
++    return true
++  }
++
++  // Blocked, then disconnected (as omarchy-bluetooth-device does), so it
++  // doesn't connect straight back.
++  function helperDisconnect(device) {
++    if (!helperReady || !device || !device.address) return false
++    clearFailure()
++    send({ cmd: "disconnect", address: device.address })
++    return true
++  }
++
++  // Pair (accept) or Cancel on the question in the card.
++  function answerPrompt(accept) {
++    var request = pairing.request
++    if (!request || !prompt) return
++    if (!prompt.answer) {
++      // A code shown for the other device to type: only Cancel stops it.
++      if (accept) return
++      canceledAddress = request.address
++      send({ cmd: "cancel-pair", address: request.address })
++    } else {
++      if (accept && prompt.input !== "" && !Model.validCode(prompt.input, codeText)) {
++        codeError = prompt.input === "passkey" ? "Enter up to 6 digits" : "Enter 1 to 16 characters"
++        return
++      }
++      if (!accept) canceledAddress = request.address
++      send(Model.replyCommand(request, accept, codeText))
++    }
++    codeText = ""
++    codeError = ""
++    pairing = Model.pairingStep(pairing, { event: "answered", accept: accept })
++    if (!accept) setPendingAction(request.address, "")
++  }
++
++  // Visible and pairable while the card is open, when the window is the
++  // card's: on as the helper is ready, and on again whenever BlueZ's timeout
++  // or anything else turns either off. Never while Bluetooth is off.
++  Timer {
++    interval: 1000
++    repeat: true
++    triggeredOnStart: true
++    running: root.opened && root.helperReady && root.windowOwned && !!root.adapter && root.adapter.enabled
++      && (!root.adapter.pairable || !root.adapter.discoverable)
++    onTriggered: {
++      if (!root.adapter.pairable) root.send({ cmd: "pairable", on: true })
++      if (!root.adapter.discoverable) {
++        root.adapter.discoverableTimeout = root.windowSeconds
++        root.adapter.discoverable = true
++        root.madeVisible = true
++      }
++    }
++  }
++
++  // ---------------------------------------------------------------- end of the pairing helper
++
+   ShellIpc {
+     target: "omarchy.bluetooth"
+ 
+@@ -675,13 +884,21 @@ Panel {
+       property alias heroStatus: heroStatus
+       implicitHeight: column.implicitHeight
+       anchors.fill: parent
++      // The pairing code field owns the keys while it has focus.
++      blocked: codeField.activeFocus
+       onMoveRequested: function(dx, dy) {
+         if (!root.cursorActive) { root.cursorActive = true; return }
+         if (dy !== 0) root.moveCursor(dy)
+         else if (dx !== 0) root.moveCursorH(dx)
+       }
+-      onActivateRequested: if (root.cursorActive) root.activateCursor()
+-      onCloseRequested: root.close()
++      onActivateRequested: {
++        if (root.prompt) root.answerPrompt(true)
++        else if (root.cursorActive) root.activateCursor()
++      }
++      onCloseRequested: {
++        if (root.prompt) root.answerPrompt(false)
++        else root.close()
++      }
+       onTabRequested: function(direction) { root.switchPanel(direction) }
+       onDeleteRequested: if (root.cursorActive) root.deleteSelected()
+       onTextKey: function(t) {
+@@ -772,6 +989,123 @@ Panel {
+           foreground: root.bar.foreground
+         }
+ 
++        // A pairing's question (the phone's pairing helper): the code to
++        // compare or the PIN to type, then Cancel and Pair.
++        Column {
++          id: promptBox
++          visible: !!root.prompt
++          width: parent.width
++          spacing: Style.space(10)
++
++          Text {
++            width: parent.width
++            textFormat: Text.PlainText
++            text: root.prompt ? root.prompt.title : ""
++            color: root.bar.foreground
++            font.family: root.bar.fontFamily
++            font.pixelSize: Style.font.body
++            font.bold: true
++            wrapMode: Text.Wrap
++          }
++
++          Text {
++            width: parent.width
++            textFormat: Text.PlainText
++            text: root.prompt ? root.prompt.body : ""
++            color: Qt.darker(root.bar.foreground, 1.4)
++            font.family: root.bar.fontFamily
++            font.pixelSize: Style.font.caption
++            wrapMode: Text.Wrap
++          }
++
++          // Digits the other device has already typed light up.
++          Row {
++            visible: !!root.prompt && root.prompt.code !== ""
++            anchors.horizontalCenter: parent.horizontalCenter
++            spacing: Style.space(6)
++
++            Repeater {
++              model: root.prompt && root.prompt.code ? root.prompt.code.split("") : []
++
++              Text {
++                required property var modelData
++                required property int index
++                textFormat: Text.PlainText
++                text: modelData
++                color: root.prompt && index < root.prompt.entered ? Commons.Color.accent : root.bar.foreground
++                font.family: root.bar.fontFamily
++                font.pixelSize: Style.font.display
++                font.bold: true
++              }
++            }
++          }
++
++          TextField {
++            id: codeField
++            visible: !!root.prompt && root.prompt.input !== ""
++            width: parent.width
++            height: visible ? implicitHeight : 0
++            foreground: root.bar.foreground
++            font.family: Style.font.family
++            font.pixelSize: Style.font.body
++            placeholderText: root.prompt && root.prompt.input === "passkey" ? "Passkey" : "PIN"
++            maximumLength: root.prompt && root.prompt.input === "passkey" ? 6 : 16
++            inputMethodHints: root.prompt && root.prompt.input === "passkey"
++              ? Qt.ImhDigitsOnly | Qt.ImhNoPredictiveText
++              : Qt.ImhSensitiveData | Qt.ImhNoPredictiveText | Qt.ImhNoAutoUppercase
++            text: visible ? root.codeText : ""
++            onTextChanged: if (visible && text !== root.codeText) { root.codeText = text; root.codeError = "" }
++            onAccepted: root.answerPrompt(true)
++            Keys.onEscapePressed: root.answerPrompt(false)
++            onVisibleChanged: if (visible) Qt.callLater(forceActiveFocus)
++          }
++
++          Text {
++            width: parent.width
++            visible: root.codeError !== ""
++            textFormat: Text.PlainText
++            text: root.codeError
++            color: root.bar.urgent
++            font.family: root.bar.fontFamily
++            font.pixelSize: Style.font.caption
++            wrapMode: Text.Wrap
++          }
++
++          Row {
++            width: parent.width
++            spacing: Style.space(10)
++            layoutDirection: Qt.RightToLeft
++
++            Button {
++              id: pairButton
++              visible: !!root.prompt && root.prompt.answer
++              width: (parent.width - parent.spacing) / 2
++              height: Math.max(implicitHeight, Style.space(34))
++              text: Commons.I18n.t("bluetooth.pair")
++              bordered: true
++              selected: true
++              foreground: root.bar.foreground
++              fontFamily: root.bar.fontFamily
++              onClicked: root.answerPrompt(true)
++            }
++
++            Button {
++              width: pairButton.visible ? (parent.width - parent.spacing) / 2 : parent.width
++              height: Math.max(implicitHeight, Style.space(34))
++              text: Commons.I18n.t("common.cancel")
++              bordered: true
++              foreground: root.bar.foreground
++              fontFamily: root.bar.fontFamily
++              onClicked: root.answerPrompt(false)
++            }
++          }
++        }
++
++        PanelSeparator {
++          visible: !!root.prompt
++          foreground: root.bar.foreground
++        }
++
+         Column {
+           id: connectedList
+           visible: root.connectedDevices.length > 0
+@@ -913,8 +1247,10 @@ Panel {
+     fill: root.hoverFill
+     currentFill: root.selectedFill
+ 
++    readonly property bool failed: !!dev && action === "" && root.failureAddress !== "" && root.failureAddress === dev.address
+     readonly property string statusText: {
+       if (!dev) return ""
++      if (failed) return root.failureText
+       if (action === "forgetting") return Commons.I18n.t("bluetooth.forgetting")
+       if (action === "disconnecting" || devState === 2) return Commons.I18n.t("bluetooth.disconnecting")
+       if (isConnected) {
+@@ -927,6 +1263,7 @@ Panel {
+     }
+ 
+     readonly property color statusColor: {
++      if (failed) return root.bar.urgent
+       if (isConnected) return root.bar.foreground
+       if (action !== "" || devState === 3 || dev.pairing === true) return root.bar.foreground
+       return Qt.darker(root.bar.foreground, 1.5)

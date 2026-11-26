@@ -1,0 +1,311 @@
+// SPDX-License-Identifier: MIT
+// Patch 0036: the bar's Bluetooth card with the phone's pairing helper. The
+// card's helper section (from "the phone's pairing helper" to its end,
+// spliced in at @SECTION@ by test/bluetooth-card.py from the patched
+// Panel.qml) against a stand-in adapter and helper process.
+import QtQuick
+import QtTest
+import "bluetooth/Model.js" as Model
+
+TestCase {
+  id: test
+  name: "BluetoothCard"
+  when: windowShown
+  visible: true
+  width: 100
+  height: 100
+
+  // The card's root, as far as the section uses it (its code says root.x).
+  Item {
+    id: root
+    property bool opened: false
+    property var adapter: fake
+    property var devices: [car, headphones]
+    property var pendingActions: ({})
+    property alias helperProcess: helper
+    function setPendingAction(address, action) {
+      pendingActions = Model.withPendingAction(pendingActions, address, action)
+    }
+
+    // Quickshell.Io's FileView, Process and SplitParser, as far as the card uses them.
+    component FileView: QtObject {
+      property string path: ""
+      property bool printErrors: true
+      signal loaded()
+      signal loadFailed(int error)
+    }
+    component Process: QtObject {
+      property var command: []
+      property bool running: false
+      property bool stdinEnabled: false
+      property var stdout: null
+      property var written: []
+      signal exited(int exitCode, int exitStatus)
+      function write(text) { written = written.concat([JSON.parse(text)]) }
+    }
+    component SplitParser: QtObject {
+      signal read(string data)
+    }
+
+    // Quickshell's BluetoothAdapter: plain properties.
+    QtObject {
+      id: fake
+      property bool enabled: true
+      property bool pairable: false
+      property int pairableTimeout: 0
+      property bool discoverable: false
+      property int discoverableTimeout: 180
+      property string name: "Palmtop"
+    }
+
+    // A rental car in range, not paired, and paired headphones (placeholder addresses).
+    QtObject {
+      id: car
+      property string address: "02:00:00:00:00:01"
+      property string name: "Rental Car"
+      property string deviceName: ""
+      property bool connected: false
+      property bool paired: false
+      property bool bonded: false
+      property bool trusted: false
+    }
+    QtObject {
+      id: headphones
+      property string address: "02:00:00:00:00:02"
+      property string name: "Headphones"
+      property string deviceName: ""
+      property bool connected: true
+      property bool paired: true
+      property bool bonded: true
+      property bool trusted: true
+    }
+
+    @SECTION@
+  }
+
+  function sent(cmd) {
+    return root.helperProcess.written.filter(function(c) { return !cmd || c.cmd === cmd })
+  }
+  function last(list) { return list.length ? list[list.length - 1] : undefined }
+  function emit(event) { root.helperProcess.stdout.read(JSON.stringify(event)) }
+  function openCard() {
+    root.opened = true
+    root.startHelper()
+  }
+  function closeCard() {
+    root.opened = false
+    root.stopHelper()
+    if (root.helperProcess.running) root.helperProcess.running = false
+    root.helperProcess.exited(0, 0)
+  }
+  function ready(window) {
+    var event = { event: "ready", adapter: "/org/bluez/hci0" }
+    if (window !== undefined) event.window = window
+    emit(event)
+  }
+
+  function init() {
+    root.opened = false
+    root.helperProcess.running = false
+    root.helperRestart = false
+    root.helperGone()
+    root.helperInstalled = true
+    root.helperArgs = []
+    root.helperProcess.written = []
+    root.pendingActions = ({})
+    root.clearFailure()
+    fake.enabled = true
+    fake.pairable = false
+    fake.pairableTimeout = 0
+    fake.discoverable = false
+    fake.discoverableTimeout = 180
+  }
+
+  function test_aComputerWithoutTheHelper() {
+    root.helperInstalled = false
+    openCard()
+    verify(!root.helperProcess.running, "nothing starts")
+    compare(root.helperArgs.length, 0)
+    verify(!root.helperConnect(car), "pair goes through omarchy-bluetooth-device")
+    verify(!root.helperDisconnect(headphones), "and disconnect")
+    wait(1200)
+    verify(!fake.discoverable && !fake.pairable, "the computer isn't made visible or pairable")
+    compare(root.prompt, null)
+    closeCard()
+    compare(sent().length, 0)
+  }
+
+  function test_visibleAndPairableWhileOpen() {
+    openCard()
+    verify(root.helperProcess.running)
+    compare(JSON.stringify(root.helperArgs), JSON.stringify(["omamobile-bt-agent", "--pairable-window", "120"]))
+    verify(!fake.discoverable, "not before the helper is ready")
+    ready(true)
+    verify(root.windowOwned)
+    tryCompare(fake, "discoverable", true)
+    compare(fake.discoverableTimeout, 120, "BlueZ's own limit set first")
+    compare(last(sent("pairable")).on, true)
+    fake.pairable = true      // BlueZ, after the helper's on
+    verify(root.phoneVisible)
+    // BlueZ's timeouts end either: on again while the card is open.
+    root.helperProcess.written = []
+    fake.discoverable = false
+    tryCompare(fake, "discoverable", true)
+    fake.pairable = false
+    tryVerify(function() { return sent("pairable").length > 0 && last(sent("pairable")).on === true })
+    fake.pairable = true
+    closeCard()
+    verify(!fake.discoverable, "hidden when the card closes")
+    verify(!fake.pairable, "and not pairable")
+    verify(!root.phoneVisible)
+  }
+
+  function test_notWhileBluetoothIsOff() {
+    fake.enabled = false
+    openCard()
+    ready(true)
+    wait(1200)
+    verify(!fake.discoverable)
+    compare(sent("pairable").length, 0)
+    fake.enabled = true
+    tryCompare(fake, "discoverable", true)
+    closeCard()
+  }
+
+  function test_anotherPanelHoldsTheWindow() {
+    openCard()
+    ready(false)             // Quick Settings' helper started first
+    verify(!root.windowOwned)
+    wait(1200)
+    verify(!fake.discoverable, "visibility left to the other panel")
+    compare(sent("pairable").length, 0, "and Pairable")
+    fake.pairable = true      // the other panel's
+    closeCard()
+    verify(fake.pairable, "left on for the other panel")
+  }
+
+  function test_pairableAlreadyOn() {
+    fake.pairable = true      // the owner's own agent, or AlwaysPairable
+    openCard()
+    compare(JSON.stringify(root.helperArgs), JSON.stringify(["omamobile-bt-agent"]))
+    ready()
+    verify(!root.windowOwned)
+    closeCard()
+    verify(fake.pairable)
+  }
+
+  function test_pairingACarFromTheCard() {
+    openCard(); ready(true)
+    root.helperProcess.written = []
+    verify(root.helperConnect(car))
+    compare(JSON.stringify(last(sent())), JSON.stringify({ cmd: "pair", address: car.address }))
+    compare(root.pendingActions[car.address], "connecting")
+    emit({ event: "request", id: 7, type: "confirm", address: car.address, passkey: 123456 })
+    compare(root.prompt.title, "Pair with Rental Car?")
+    compare(root.prompt.code, "123456")
+    verify(root.prompt.answer)
+    root.answerPrompt(true)
+    compare(JSON.stringify(last(sent())), JSON.stringify({ cmd: "reply", id: 7, accept: true }))
+    compare(root.prompt, null, "the question goes once answered")
+    emit({ event: "result", op: "pair", address: car.address, ok: true, stage: "connect" })
+    compare(root.pairing.address, "")
+    compare(root.failureText, "")
+    closeCard()
+  }
+
+  function test_aCarPairingToThePhone() {
+    openCard(); ready(true)
+    // Not in the list yet: its address stands in for the name.
+    emit({ event: "request", id: 3, type: "confirm", address: "02:00:00:00:00:09", passkey: 42 })
+    compare(root.prompt.title, "Pair with 02:00:00:00:00:09?")
+    compare(root.prompt.code, "000042")
+    root.answerPrompt(true)
+    compare(JSON.stringify(last(sent())), JSON.stringify({ cmd: "reply", id: 3, accept: true }))
+    closeCard()
+  }
+
+  function test_pinTypedInTheCard() {
+    openCard(); ready(true)
+    root.helperConnect(car)
+    emit({ event: "request", id: 4, type: "pin", address: car.address })
+    compare(root.prompt.input, "pin")
+    root.helperProcess.written = []
+    root.answerPrompt(true)
+    compare(sent().length, 0, "nothing sent without a PIN")
+    compare(root.codeError, "Enter 1 to 16 characters")
+    root.codeText = "0000"
+    root.answerPrompt(true)
+    compare(JSON.stringify(last(sent())), JSON.stringify({ cmd: "reply", id: 4, accept: true, value: "0000" }))
+    compare(root.codeText, "", "the PIN isn't kept")
+    closeCard()
+  }
+
+  function test_cancelIsQuiet() {
+    openCard(); ready(true)
+    root.helperConnect(car)
+    emit({ event: "request", id: 5, type: "confirm", address: car.address, passkey: 1 })
+    root.answerPrompt(false)
+    compare(JSON.stringify(last(sent())), JSON.stringify({ cmd: "reply", id: 5, accept: false }))
+    compare(root.pendingActions[car.address], undefined)
+    emit({ event: "result", op: "pair", address: car.address, ok: false, stage: "pair",
+           error: "org.bluez.Error.AuthenticationRejected", message: "" })
+    compare(root.failureText, "", "the owner's own Cancel needs no line")
+    closeCard()
+  }
+
+  function test_aCodeShownForTheCarToType() {
+    openCard(); ready(true)
+    root.helperConnect(car)
+    emit({ event: "request", id: 0, type: "display-passkey", address: car.address, passkey: 987654, entered: 2 })
+    verify(!root.prompt.answer, "only Cancel")
+    compare(root.prompt.entered, 2)
+    root.helperProcess.written = []
+    root.answerPrompt(true)
+    compare(sent().length, 0)
+    verify(root.prompt !== null, "Enter doesn't dismiss it")
+    root.answerPrompt(false)
+    compare(JSON.stringify(last(sent())), JSON.stringify({ cmd: "cancel-pair", address: car.address }))
+    compare(root.prompt, null)
+    closeCard()
+  }
+
+  function test_failureShowsUnderTheDevice() {
+    openCard(); ready(true)
+    root.helperConnect(headphones)
+    compare(JSON.stringify(last(sent())), JSON.stringify({ cmd: "connect", address: headphones.address }))
+    emit({ event: "result", op: "connect", address: headphones.address, ok: false, stage: "connect",
+           error: "org.bluez.Error.Failed", message: "Page Timeout" })
+    compare(root.failureAddress, headphones.address)
+    compare(root.failureText, "Out of range")
+    compare(root.pendingActions[headphones.address], undefined)
+    root.helperDisconnect(headphones)
+    compare(root.failureText, "", "cleared by the next try")
+    compare(JSON.stringify(last(sent())), JSON.stringify({ cmd: "disconnect", address: headphones.address }))
+    closeCard()
+  }
+
+  function test_helperFailsToStart() {
+    openCard()
+    emit({ event: "error", message: "No Bluetooth adapter" })
+    root.helperProcess.running = false
+    root.helperProcess.exited(1, 0)
+    verify(!root.helperConnect(car), "the card falls back")
+    verify(!fake.discoverable)
+    closeCard()
+  }
+
+  function test_reopenedWhileTheLastOneEnds() {
+    openCard(); ready(true)
+    tryCompare(fake, "discoverable", true)
+    root.opened = false
+    root.stopHelper()        // the process is still ending
+    root.helperProcess.running = true
+    openCard()
+    verify(root.helperRestart)
+    root.helperProcess.running = false
+    root.helperProcess.exited(0, 0)
+    verify(root.helperProcess.running, "started again once the last one ended")
+    verify(!root.helperRestart)
+    closeCard()
+  }
+}
