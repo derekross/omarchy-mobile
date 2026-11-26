@@ -5610,8 +5610,11 @@ saving the result in software. The host probe reads core ID
 and version at host offsets `0x00` and `0x04`. The handoff
 status query follows a successful `pm_runtime_resume_and_get`
 (`0x267c`) and reads bit 0 at host offset `0x0c`
-(`0x2694`). The stock glue's initial runtime resume exits
-without host programming because the core pointer is assigned
+(`0x2694`). The module's regmap field and debugfs label identify
+that bit as `pwr_up`. It describes the host's internal enable
+state and gives no independent APB or external reset evidence.
+The stock glue's initial runtime resume exits without host
+programming because the core pointer is assigned
 only after the core probe returns. The retained stock bugreport
 logs ID `0x30313130`, version `0x1a000110` and handoff
 `dt=0 reg=0`.
