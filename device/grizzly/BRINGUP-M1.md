@@ -4299,6 +4299,61 @@ Fastboot returned after 133 seconds. Stock D1 A restarted at
 pretrial VBMeta digest. Ramoops and Android's `SYSTEM_LAST_KMSG`
 agree on all 76 filtered v73 lines.
 
+### Dedicated read-only Grizzly test root
+
+The first dedicated root lives in RAM. Its 4 MiB ext4 image is
+embedded in the Grizzly inventory initramfs inside
+`vendor_kernel_boot_b`. It uses the known ARM64 BusyBox and
+musl loader, a Grizzly release marker, and a small smoke probe.
+This isolates filesystem and userspace execution from the choice
+of a persistent install target. The fixture leaves Android's
+`super`, `userdata`, and radio partitions alone. The prior v20
+RAM-root trial reached Omarchy systemd and USB SSH with UFS absent.
+Here the v73 UFS test and the minimal root run during the same boot.
+
+Build the inventory ramdisk with
+`pack-mainline-inventory.py --rescue-cpio RESCUE --read-only-test-root OUTPUT`
+using an ARM64 rescue archive with the v73 BusyBox and loader.
+The packer requires `mke2fs`. Replace the single vendor ramdisk
+fragment in the v73 `vendor_kernel_boot` template with
+`OUTPUT/inventory.cpio.lz4`, retain the DTB and bootconfig, and
+regenerate the five-image checksums. The other four images from
+v73 remain byte-identical.
+
+PID 1 arms the existing 90-second warm return, then waits for
+v73's 8 KiB comparison and live checks on all 42 read-only,
+unmounted UFS partitions. It attaches only the embedded image to
+`loop0` with the read-only flag and verifies its backing file
+and sysfs read-only state. It mounts ext4 with `ro,noload,nodev,nosuid`,
+checks mountinfo, then runs the release and write-denial probes
+inside the test root. It unmounts and detaches the loop before
+completing the RAM stage. The expected marker is
+`Grizzly test root passed ram=1 loop_ro=1 write_denied=1 detached=1`.
+The test root runs as a chroot under the inventory PID 1.
+
+Offline checks passed both existing AVB signatures, all five
+image hashes, same DTB and bootconfig, the D1 handoff bounds and
+saved slot fit. The exact v73 kernel ran the root helper in an
+Arm64 QEMU guest with no physical storage. The write probe hit
+`EROFS`. A separate writable RAM control was refused. The
+loop was detached, the mount disappeared, and a second run
+refused the existing loop node. The combined UFS and test-root
+flow awaits an attended Pixel boot. Manifest SHA-256
+`78d107fdb3cdd0a75ea6fc319faf1c18eee938d56db59395acee779bfb7168e0`.
+
+For a later trial, take a fresh guarded NV backup and keep the
+phone in Fastboot while staging. A mock of this package's stager
+wrote only the five slot B destinations and left A active. The
+saved v73 captures verify the physical recovery sequence from B
+through bootloader Fastboot to stock A, with enforcing verity and
+the original VBMeta digest. On return, hold Volume Down to catch
+Fastboot, select A, confirm the active slot, release Volume Down
+and start stock Android. The earlier D1 recovery record also
+verifies A's Recovery ADB sideload path with the same-build
+signed OTA. That fallback follows the recorded Recovery procedure
+and needs separate approval. Neither hardware recovery path was
+rerun for this offline fixture.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

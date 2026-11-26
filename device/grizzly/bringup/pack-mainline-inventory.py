@@ -23,13 +23,37 @@ def arm64_member(archive, member):
     return content
 
 
+def build_read_only_root(output, busybox, loader):
+    with TemporaryDirectory(dir=output) as scratch:
+        root = Path(scratch)
+        for directory in ("bin", "lib", "etc"):
+            (root / directory).mkdir(mode=0o755)
+        for name, data, mode in (
+            ("bin/busybox", busybox, 0o755),
+            (LOADER, loader, 0o755),
+            ("etc/grizzly-release", b"grizzly-read-only-test-v1\n", 0o644),
+            ("root-smoke", (HERE / "read-only-root-smoke").read_bytes(), 0o644),
+        ):
+            path = root / name
+            path.write_bytes(data)
+            path.chmod(mode)
+        (root / "lib/libc.musl-aarch64.so.1").symlink_to(Path(LOADER).name)
+        image = output / "test-root.ext4"
+        subprocess.run(["mke2fs", "-q", "-t", "ext4", "-b", "4096", "-m", "0",
+                        "-O", "^has_journal", "-E", "root_owner=0:0",
+                        "-d", root, image, "1024"], check=True)
+    return image
+
+
 def pack(rescue, output, device_query_only=False, single_lun_only=False,
-         single_disk_only=False, gpt_scan_only=False):
+         single_disk_only=False, gpt_scan_only=False, read_only_test_root=False):
     busybox = arm64_member(rescue, "bin/busybox")
     loader = arm64_member(rescue, LOADER)
     output.mkdir(mode=0o700)
     archive = output / "inventory.cpio"
     compressed = output / "inventory.cpio.lz4"
+    root_image = build_read_only_root(output, busybox, loader) if read_only_test_root else None
+    gpt_scan_only = gpt_scan_only or read_only_test_root
     with TemporaryDirectory(dir=output) as scratch:
         root = Path(scratch)
         dirs = ("grizzly-inventory", "lib")
@@ -49,6 +73,10 @@ def pack(rescue, output, device_query_only=False, single_lun_only=False,
             files["grizzly-inventory/single-disk-only"] = (b"", 0o644)
         if gpt_scan_only:
             files["grizzly-inventory/gpt-scan-only"] = (b"", 0o644)
+        if root_image:
+            files["grizzly-inventory/test-root.ext4"] = (root_image.read_bytes(), 0o400)
+            files["grizzly-inventory/read-only-test-root.sh"] = (
+                (HERE / "read-only-test-root.sh").read_bytes(), 0o644)
         libc = "lib/libc.musl-aarch64.so.1"
         for name in dirs:
             path = root / name
@@ -72,7 +100,7 @@ def pack(rescue, output, device_query_only=False, single_lun_only=False,
     if subprocess.check_output(["lz4", "-dc", compressed]) != archive.read_bytes():
         raise ValueError("inventory ramdisk failed LZ4 round-trip")
     with (output / "SHA256SUMS").open("w", encoding="ascii") as manifest:
-        for path in (archive, compressed):
+        for path in (archive, compressed, *((root_image,) if root_image else ())):
             with path.open("rb") as data:
                 digest = hashlib.file_digest(data, "sha256").hexdigest()
             print(f"{digest}  {path.name}", file=manifest)
@@ -91,11 +119,14 @@ def main():
                       help="verify one temporary read-only SCSI disk in sysfs")
     mode.add_argument("--gpt-scan-only", action="store_true",
                       help="verify a temporary read-only LUN 0 disk and its GPT partitions")
+    mode.add_argument("--read-only-test-root", action="store_true",
+                      help="add a RAM-backed read-only ext4 smoke test after the v73 read")
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
     try:
         pack(args.rescue_cpio, args.output, args.device_query_only,
-             args.single_lun_only, args.single_disk_only, args.gpt_scan_only)
+             args.single_lun_only, args.single_disk_only, args.gpt_scan_only,
+             args.read_only_test_root)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"mainline inventory packaging failed: {error}\n")
 
