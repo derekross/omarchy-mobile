@@ -58,7 +58,7 @@ set_brightness() {
   else brightnessctl --class=backlight --quiet set "${1}%" >/dev/null 2>&1; fi
 }
 monitors_json() {
-  if [[ -n $fake ]]; then sed -n 2p "$fake"; else hyprctl monitors -j 2>/dev/null; fi
+  if [[ -n $fake ]]; then sed -n 2p "$fake"; else timeout 3 hyprctl monitors -j 2>/dev/null; fi
 }
 # prints: name width height x y scale transform refresh rates(comma separated); fails on anything odd, so
 # nothing unchecked reaches the eval below
@@ -115,7 +115,7 @@ apply_mode() {
     for t in ${tokens//,/ }; do [[ ${t%%=*} == "$1" ]] && mode=${t#*=}; done
     [[ $mode != preferred ]] || return 1
   fi
-  res=$(hyprctl eval "hl.monitor({ output = \"$name\", mode = \"$mode\", position = \"${x}x${y}\", scale = $scale, transform = $transform })" 2>&1) \
+  res=$(timeout 3 hyprctl eval "hl.monitor({ output = \"$name\", mode = \"$mode\", position = \"${x}x${y}\", scale = $scale, transform = $transform })" 2>&1) \
     || return 1
   [[ ${res,,} != *error* ]]
 }
@@ -143,14 +143,29 @@ lock() {
   local f=${XDG_RUNTIME_DIR:-$HOME/.cache}/omamobile-display.lock
   mkdir -p -- "${f%/*}" && exec 9>"$f" && flock -w 15 9 || fail "another refresh change is running"
 }
-# after an eval: true once the panel reports rate $1 (checked for up to 2 s)
+# after an eval: 0 once the panel reports rate $1 (checked for up to 2 s), 2 if the screen turned off meanwhile
+# (Hyprland then ignores the rule), else 1
 took() {
   local i
   for i in 1 2 3 4; do
     sleep 0.5
-    readmon && [[ $refresh == "$1" ]] && return 0
+    if readmon; then
+      [[ $refresh != "$1" ]] || return 0
+      [[ $dpms == 1 ]] || return 2
+    fi
   done
   return 1
+}
+# took's failure as a message, with the state as now read, so the page stays in sync
+fail_took() {
+  case $1 in 2) fail_state "the screen turned off before the rate took" ;; *) fail_state "the screen did not take the rate" ;; esac
+}
+# an error that still carries brightness, refresh, rates, saved and default
+fail_state() {
+  local s d; s=$(saved_rate); d=$(default_rate)
+  [[ -n $s && ,$rates, == *",$s,"* ]] || s=0
+  printf '{"error":"%s","brightness":%s,"refresh":%s,"rates":[%s],"saved":%s,"default":%s}\n' "$1" "$bright" "$refresh" "$rates" "$s" "${d:-0}"
+  exit 2
 }
 
 case $verb in
@@ -174,12 +189,14 @@ set)
           readmon || fail "cannot read the monitor"
           def=$(default_rate)
           apply_mode "${def:-preferred}" || fail "the screen did not accept the change"
-          if [[ -n $def ]]; then took "$def" || fail "the screen did not take the rate"
+          # with a device default the rate is confirmed; without one Hyprland picks its preferred mode, which this
+          # script cannot name, so the answer only reports the rate read after a pause, confirming nothing
+          if [[ -n $def ]]; then took "$def" || fail_took $?
           else sleep 1; readmon || fail "cannot read the monitor"; fi
         else
           def=$(default_rate); [[ -z $def ]] || refresh=$def
         fi
-        rm -f -- "$rate_file" || fail "could not forget the choice"
+        rm -f -- "$rate_file" || fail_state "could not forget the choice"
         out_saved; exit 0
       fi
       [[ $value =~ ^[1-9][0-9]{0,2}$ ]] || fail "bad value"
@@ -189,11 +206,11 @@ set)
         lock
         readmon || fail "cannot read the monitor"
         apply_mode "$value" || fail "the screen did not accept the change"
-        took "$value" || fail "the screen did not take the rate"
+        took "$value" || fail_took $?
       else
         refresh=$value
       fi
-      mkdir -p -- "${rate_file%/*}" && printf '%s\n' "$value" > "$rate_file" || fail "could not save the choice" ;;
+      mkdir -p -- "${rate_file%/*}" && printf '%s\n' "$value" > "$rate_file" || fail_state "could not save the choice" ;;
     *) fail "unknown key" ;;
   esac
   out_saved ;;
@@ -224,7 +241,7 @@ apply)
     # the eval would turn it back; the gap left is this one read (a hyprctl call and a python start) and the eval
     readmon || fail "cannot read the monitor"
     apply_mode "$want" || fail "the screen did not accept the change"
-    took "$want" || fail "the screen did not take the rate"
+    took "$want" || fail_took $?
   else refresh=$want; fi
   out_saved ;;
 *)

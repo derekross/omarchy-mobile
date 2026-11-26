@@ -16,7 +16,11 @@ ColumnLayout {
     readonly property var levels: [10, 25, 50, 75, 100]
     function apply(r) {
         busy = false
-        if (r.error) { status = r.error; return }
+        // an error after a change may still carry the state as read, so the buttons match the screen and the file
+        if (r.error) {
+            if (r.refresh !== undefined) { refresh = r.refresh; rates = r.rates || []; saved = r.saved || 0; deviceDefault = r["default"] || 0 }
+            status = r.error; return
+        }
         if (r.brightness === undefined || r.refresh === undefined) { status = qsTr("The display backend gave no values."); return }
         brightness = r.brightness; refresh = r.refresh; rates = r.rates || []
         saved = r.saved !== undefined ? r.saved : 0

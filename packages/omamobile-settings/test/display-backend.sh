@@ -77,7 +77,7 @@ grep -q 'highlighted: page.saved === modelData' "$src/app/DisplayPage.qml" || { 
 grep -q 'r\["default"\]' "$src/app/DisplayPage.qml" && ! grep -q '60 Hz on this phone' "$src/app/DisplayPage.qml" \
   || { echo "FAIL: the page names a device default the backend did not report" >&2; exit 1; }
 # the real path (no fake) with stand-in tools: apply with no valid saved rate sends no eval at all; a set saves the
-# choice before its pause; every set answer, brightness included, carries "saved"
+# choice only after the panel reports the new rate; every set answer, brightness included, carries "saved"
 mkdir -p "$tmp/bin"
 real=$tmp/display-real.sh
 sed "s|^default_file=.*|default_file=$def|" "$src/backends/display.sh" > "$real"
@@ -96,6 +96,7 @@ else
   mode=$(sed -n 's/.*mode = "\([^"]*\)".*/\1/p' <<<"$2")
   if [[ $mode == preferred || $mode == 1344x2992@120.00 || $mode == 1344x2992@60.00 ]]; then
     echo "$*" >> "$TLOG/evals"; echo eval >> "$TLOG/order"; echo ok
+    [[ $(cat "$TLOG/stuck" 2>/dev/null) != off-after-eval ]] || echo false > "$TLOG/dpms"
     [[ -e $TLOG/stuck ]] || { [[ $mode == *@60.00 ]] && echo 60 > "$TLOG/rate" || echo 120 > "$TLOG/rate"; }
   else echo "error: bad mode $mode"; fi
 fi
@@ -171,11 +172,24 @@ eq "$(rreal apply)" '{"brightness":50,"refresh":60,"rates":[60,120],"saved":60,"
 [[ ! -s $TLOG/evals ]] || { echo "FAIL: apply sent an eval for the rate the panel already runs" >&2; exit 1; }
 # read-back: an eval that exits 0 but does not take is a failure, never a claimed 60
 echo 120 > "$TLOG/rate"; touch "$TLOG/stuck"
-eq "$(rreal apply)" '{"error":"the screen did not take the rate"}'
-rm -f "$rf"; eq "$(rreal set refresh 60)" '{"error":"the screen did not take the rate"}'
+eq "$(rreal apply)" '{"error":"the screen did not take the rate","brightness":50,"refresh":120,"rates":[60,120],"saved":60,"default":60}'
+rm -f "$rf"; eq "$(rreal set refresh 60)" '{"error":"the screen did not take the rate","brightness":50,"refresh":120,"rates":[60,120],"saved":0,"default":60}'
 [[ ! -e $rf ]] || { echo "FAIL: a rate that did not take was saved" >&2; exit 1; }
-echo 120 > "$rf"; eq "$(rreal set refresh preferred)" '{"error":"the screen did not take the rate"}'
+echo 120 > "$rf"; eq "$(rreal set refresh preferred)" '{"error":"the screen did not take the rate","brightness":50,"refresh":120,"rates":[60,120],"saved":120,"default":60}'
 eq "$(cat "$rf")" 120
+# the screen turning off between the eval and the read-back is named as such
+echo off-after-eval > "$TLOG/stuck"; echo 60 > "$TLOG/rate"
+eq "$(rreal apply)" '{"error":"the screen turned off before the rate took","brightness":50,"refresh":60,"rates":[60,120],"saved":120,"default":60}'
+rm -f "$TLOG/dpms"
+# a save that fails after the rate took is an error that still reports the new rate
+rm -f "$TLOG/stuck"; echo 120 > "$TLOG/rate"; rm -f "$rf"; mkdir -p "$rf"
+eq "$(rreal set refresh 60)" '{"error":"could not save the choice","brightness":50,"refresh":60,"rates":[60,120],"saved":0,"default":60}'
+rmdir "$rf"; echo 120 > "$TLOG/rate"
+# preferred with no device default reports the rate read afterwards and forgets the choice
+mv "$def" "$def.off"; echo 60 > "$rf"; echo 60 > "$TLOG/rate"
+eq "$(rreal set refresh preferred)" '{"brightness":50,"refresh":120,"rates":[60,120],"saved":0,"default":0}'
+[[ ! -e $rf ]] || { echo "FAIL: preferred left the file" >&2; exit 1; }
+mv "$def.off" "$def"
 rm -f "$TLOG/stuck" "$rf"
 # the screen off (DPMS): nothing is sent and apply fails, saying when it is tried again
 echo false > "$TLOG/dpms"; : > "$TLOG/evals"
