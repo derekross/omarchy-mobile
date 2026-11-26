@@ -109,6 +109,7 @@ whether it predated a stock boot.
 | [Read-only test root](#attended-read-only-test-root-slot-b-trial) | The Mac left verified stock D1 A at 06:13:51 UTC on 2026-11-26 and ran the guarded B rescue. Fastboot stayed active between the rescue and the test-root boot request at 06:20:35 UTC. | Fresh read-only rescue copy verified at 06:19:08 UTC. All nine hashes passed. The stock A return requires a new copy before the next power or CPM trial. |
 | [Omarchy systemd RAM root](#first-attended-omarchy-systemd-ram-root-trial) | The Mac left verified stock D1 A at 06:43:33 UTC on 2026-11-26 and ran the guarded B rescue. Android stayed off between the rescue and the Omarchy boot request at 06:51:20 UTC. | Fresh read-only rescue copy verified at 06:49:41 UTC. All nine hashes passed. The stock A return requires a new copy before the next power or CPM trial. |
 | [Corrected Omarchy systemd RAM root](#attended-corrected-omarchy-systemd-ram-root-trial) | The Mac left verified stock D1 A at 07:07:30 UTC on 2026-11-26. A guarded rescue retry completed with no intervening Android boot before Omarchy started at 07:20:51 UTC. | All nine hashes passed at 07:19:08 UTC. The stock A return requires a new copy before the next power or CPM trial. |
+| [Omarchy USB SSH after systemd handoff](#attended-usb-ssh-handoff-trial) | The Mac left verified stock D1 A at 07:40:15 UTC on 2026-11-26. Android stayed off between the guarded rescue and the Omarchy boot request at 07:46:39 UTC. | All nine hashes passed at 07:45:27 UTC. The stock A return requires a new copy before the next power or CPM trial. |
 
 [Maintainer decision on backup freshness](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035).
 Take a fresh read-only backup of all nine partitions after the latest
@@ -4529,17 +4530,48 @@ check passed with systemd as PID 1, a read-only ext4 RAM loop, zero
 SCSI disks and the return timer still alive. A pinned SSH request
 returned the expected status, and an attempted `id` command
 returned exit status 2. The VM used IPv6 loopback to exercise
-OpenSSH. USB NCM continuity across handoff still needs a Pixel
-trial.
+OpenSSH. The hardware trial below verified reconnection over
+USB NCM.
 
 The five image hashes, both AVB signatures and the D1 handoff
 layout passed offline checks. Four images are byte-identical to
 the last hardware trial. Only the inventory fragment in
 `vendor_kernel_boot` changed. The 42-partition guard, SCSI host
-removal and 600-second return are carried forward. The next
-attended trial needs a fresh nine-partition backup after stock A,
-then one B boot and a return to stock A. Keep the key material
-and images private.
+removal and 600-second return are carried forward. Take a fresh nine-partition
+backup after any stock A boot before another power or CPM trial.
+Keep the key material and images private.
+
+##### Attended USB SSH handoff trial
+
+On 2026-11-26 the stock rescue verified the nine targets
+read-only and unmounted before the first partition payload
+read. The Mac verified all nine independent phone-side
+hashes, 3,392,151,552 copied bytes, and private file modes.
+The full 64 MiB rescue `vendor_boot_b` readback matched.
+The rescue finished and returned to Fastboot with A selected.
+The Mac staged the five Omarchy images on B and verified the
+8,192-byte `vendor_boot_b` payload against its readback.
+
+| Monotonic time (s) | Result |
+| ---: | --- |
+| 1.193935 | The 600-second return helper armed. |
+| 2.199104–2.374250 | The seven GPT metadata reads and the 8 KiB `boot_b` comparison passed. The guard verified all 42 UFS partitions read-only and unmounted. |
+| 6.486204–9.448721 | The kernel retired the temporary SCSI host. The receiver confirmed zero SCSI disks, bound USB NCM and brought up the link-local address. |
+| 298.151231–300.338813 | The phone verified the raw image hash. Systemd reported PID 1, a read-only ext4 RAM loop, write denial, zero SCSI disks and an armed timer, then started OpenSSH. |
+| 600.010210–601.010680 | The independent helper requested the warm restart. |
+
+The Mac sent the 3,081,094,118-byte signed release asset over
+USB SSH. At 07:51:52 UTC it reconnected on the same USB NCM
+interface using the same pinned host key and received
+`GRIZZLY_LIVE_SSH_PASS pid1=systemd root=ext4 ro=1 ram=1 scsi_disks=0 timer=1`.
+The live listener rejected `id` with exit status 2 and empty
+standard output. Pinned status checks continued to succeed
+through 07:55:44 UTC.
+
+Fastboot returned 643 seconds after the Omarchy boot request.
+Stock D1 A restarted at 07:57:33 UTC and completed boot with
+enforcing verity and the original VBMeta digest. Ramoops and
+`SYSTEM_LAST_KMSG` agree on all 45 filtered trial lines.
 
 ### Offline stock D1 device reference-clock diagnostic
 
