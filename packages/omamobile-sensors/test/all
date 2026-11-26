@@ -103,7 +103,8 @@ pass "gyroscope rates, records, AoC clock and USF backend"
 
 # the refresh rate chosen in Settings survives a rotation; an unlisted or missing one means preferred. The fake
 # hyprctl reports a turned monitor (transform 1, width and height swapped, modes in the panel's orientation) and
-# rejects any mode it does not list, as Hyprland would.
+# rejects any mode it does not list. Real Hyprland does not (it tries an unlisted mode as a custom one and
+# falls back); this strict stub is ours, to check that the exact listed token is sent.
 mkdir -p "$tmp/bin" "$tmp/home/.config/omamobile"
 cat > "$tmp/bin/hyprctl" <<'EOT'
 #!/bin/bash
@@ -129,6 +130,12 @@ echo 90 > "$rf"
 rot | grep -q 'mode = "preferred"' || fail "autorotate falls back to preferred for an unlisted rate"
 echo junk > "$rf"
 rot | grep -q 'mode = "preferred"' || fail "autorotate ignores a junk rate file"
+# an unparsable mode is skipped, and the size as reported wins over the swapped one
+echo 60 > "$rf"
+HOME="$tmp/home" PYTHONPATH=lib python3 -c '
+import autorotate as a
+m = {"width": 1344, "height": 2992, "availableModes": ["1344x2992@odd", "2992x1344@60.00Hz", "1344x2992@60.50Hz"]}
+assert a.saved_mode(m) == "1344x2992@60.50", a.saved_mode(m)' || fail "autorotate skips an odd mode and prefers the reported size"
 pass "autorotate keeps the saved refresh rate"
 
 # D-Bus round trip on a private session bus: test backend -> autorotate (dry run)

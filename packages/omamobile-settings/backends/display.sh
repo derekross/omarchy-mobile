@@ -64,14 +64,15 @@ if not re.fullmatch(r"[A-Za-z0-9_.-]{1,32}", name) or not 0 <= transform <= 7: r
 # hyprctl may report the size turned by the transform while availableModes keep the panel own orientation, so a
 # mode matches in either orientation; the exact token (without "Hz") is what Hyprland is sent back later
 tokens = {}
-for mode in m.get("availableModes", []):
-    size, _, hz = mode.partition("@")
-    if size in ("%dx%d" % (w, h), "%dx%d" % (h, w)):
-        hz = hz.removesuffix("Hz")
-        try:
-            tokens.setdefault(int(round(float(hz))), size + "@" + hz)
-        except ValueError:
-            pass  # a mode this parser does not know is left out
+for want in ("%dx%d" % (w, h), "%dx%d" % (h, w)):  # the size as reported first, the swapped one only for rates missing there
+    for mode in m.get("availableModes", []):
+        size, _, hz = mode.partition("@")
+        if size == want:
+            hz = hz.removesuffix("Hz")
+            try:
+                tokens.setdefault(int(round(float(hz))), size + "@" + hz)
+            except ValueError:
+                pass  # a mode this parser does not know is left out
 tokens = {r: t for r, t in tokens.items() if re.fullmatch(r"[0-9]{1,5}x[0-9]{1,5}@[0-9]{1,4}(\.[0-9]{1,6})?", t)}
 cur = int(round(float(m["refreshRate"])))
 print(name, w, h, x, y, "%g" % scale, transform, cur, ",".join(str(r) for r in sorted(tokens)) or "-",

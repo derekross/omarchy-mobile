@@ -79,12 +79,16 @@ def saved_mode(m):
         with open(rate_path()) as f:
             want = int(f.read().strip())
         w, h = int(m['width']), int(m['height'])
-        for mode in m.get('availableModes', []):
-            size, _, hz = mode.partition('@')
-            hz = hz.removesuffix('Hz')
-            if size in (f'{w}x{h}', f'{h}x{w}') and round(float(hz)) == want \
-                    and re.fullmatch(r'\d{1,5}x\d{1,5}@\d{1,4}(\.\d{1,6})?', size + '@' + hz):
-                return size + '@' + hz
+        for wanted in (f'{w}x{h}', f'{h}x{w}'):  # the size as reported first, then the swapped one
+            for mode in m.get('availableModes', []):
+                size, _, hz = mode.partition('@')
+                hz = hz.removesuffix('Hz')
+                try:
+                    ok = size == wanted and round(float(hz)) == want
+                except ValueError:
+                    continue  # a mode this parser does not know is skipped
+                if ok and re.fullmatch(r'\d{1,5}x\d{1,5}@\d{1,4}(\.\d{1,6})?', size + '@' + hz):
+                    return size + '@' + hz
     except (OSError, ValueError, KeyError, TypeError):
         pass
     return 'preferred'

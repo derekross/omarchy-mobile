@@ -83,7 +83,7 @@ if [[ $1 == monitors ]]; then
   # a turned monitor: hyprctl reports the size swapped, the modes stay in the panel's orientation
   echo '[{"name":"DSI-1","width":2992,"height":1344,"x":0,"y":0,"scale":3.2,"transform":1,"refreshRate":120.0,"availableModes":["1344x2992@120.00Hz","1344x2992@60.00Hz"]}]'
 else
-  # like Hyprland: a mode the monitor does not list is an error
+  # a strict stub of ours (real Hyprland tries an unlisted mode as a custom one and falls back): it checks the token
   mode=$(sed -n 's/.*mode = "\([^"]*\)".*/\1/p' <<<"$2")
   if [[ $mode == preferred || $mode == 1344x2992@120.00 || $mode == 1344x2992@60.00 ]]; then echo "$*" >> "$TLOG/evals"; echo ok
   else echo "error: bad mode $mode"; fi
