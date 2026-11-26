@@ -5251,6 +5251,44 @@ seconds after the B boot request. Stock D1 A completed boot
 with enforcing verity and the original VBMeta digest.
 Ramoops and `SYSTEM_LAST_KMSG` matched all 44 filtered lines.
 
+##### Offline powered DPU BE clock diagnostic
+
+Kernel `7.3.0-rc6-omamobile-grizzly-display-be-rate` at
+`ccad299eb5ab278b427587dce03c3ef17e4189c4` adds the opt-in
+`clk_google_malibu_cpm.display_be_rate=1` flag to the tested
+Grizzly wrapper and BE one-shot fixture. It keeps the early
+unpowered BE reply for comparison. After all seven initial
+votes are checked and the wrapper and BE ON requests have
+completed with readbacks of `1`, it sends one LPCM GET_RATE
+request with word `0x03042302` and argument `0`. The request
+uses the existing one-second clock timeout and logs the raw
+signed firmware reply or the transport error. Any positive
+reply reports the CPM rate and leaves the physical clock
+measurement open.
+
+When the transport returns a reply, including a negative
+firmware reply, the diagnostic releases BE before the
+wrapper and verifies both vote readbacks. A transport error
+stops further requests and leaves the votes for the independent
+timed return. The shared mailbox can stall on a timeout.
+The fixture keeps the initial-vote and one-shot guards and
+leaves the clock gates, display consumers and panel alone.
+
+The arm64 build and style check passed. A mock verified the
+exact request, ordering, positive, zero and negative replies,
+transport failures, failed vote transitions, inherited vote
+and sample guards, and the behavior with the new flag absent.
+The five image hashes, both AVB signatures, handoff bounds
+and captured D1 slot fit passed. The vendor boot images and
+DTBO match the tested BE fixture byte for byte, preserving
+the UFS guard, USB SSH and independent timed return.
+The `SHA256SUMS` file hashes to
+`216ab1dd14642dbd0d323e720035429d07bade39159ba5a83320247caccb4478`.
+
+An attended slot B trial remains pending. Start with a fresh
+verified NV backup. Capture the powered and unpowered rate
+replies and the vote sequence, then return to stock A.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
