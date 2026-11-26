@@ -6262,6 +6262,47 @@ All five image hashes and the saved D1 slot-fit and
 handoff checks passed. The new event still needs an
 attended stock trace to confirm capture on hardware.
 
+##### Attended stock D1 DSI0 PHY init trace
+
+On 2026-11-26 the rescue copied all nine NV partitions.
+The Mac independently verified 3,392,151,552 bytes, all nine
+hashes and private permissions. Both the rescue and trace
+passed the full 64 MiB `vendor_boot_b` readback. One slot B
+diagnostic boot was requested after the rescue, with stock
+Android off between the two.
+
+The trace armed before display module load. Wrapper, BE and
+DSI0 genpd all reported `off-0` in the pre-load snapshot.
+The ring retained all 44 events. The final votes and reads
+below were recorded on the same task after the NV guard.
+
+| Time (s) | Event | Result |
+| ---: | --- | --- |
+| 4.881742 | Wrapper ON result | `0` |
+| 4.882140 | BE ON result | `0` |
+| 4.882675 | DSI0 ON result | `0` |
+| 4.892460 | First CD-PHY resource, offset `0x7124` | `0x000001cc`, bit 8 set |
+| 4.892467 | DSI0 host ID | `0x30313130` |
+| 4.892469 | DSI0 host version | `0x1a000110` |
+| 4.893712 | DSI0 runtime resume result | `0` |
+| 4.893716 | DSI0 host status at `0x0c` | `0x00000000`, `pwr_up=0` |
+
+The PHY read came 9.785 ms after the final DSI0 ON result
+and 7 µs before the host ID. There were zero clock or reset
+provider calls or replies in the scoped trace. This
+establishes stock's first observed PHY access and its
+ordering relative to the host. The sampled bit supplies
+no independent host APB gate or external reset status.
+
+PID 1 reported the trace and NV guard complete. The
+90-second timer requested restart at 90.908479 s and
+the kernel logged restart at 91.445895 s. The Mac only
+detected Fastboot after the owner used Power and Volume Down,
+264 seconds after the B boot request. Stock D1 A completed
+boot with enforcing verity and the original VBMeta digest.
+Ramoops and the later `SYSTEM_LAST_KMSG` entry match on all
+83 filtered lines and the full scoped trace.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
