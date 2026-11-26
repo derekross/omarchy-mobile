@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel Tablet Wi-Fi: BCM43752 on PCIe
 
-**Status (2026-11-26):** built, not run on the tablet. Kernel branch `omamobile-tangorpro-wifi` (worktree `wt-tangorpro-wifi`, output `out-tangorpro-wifi`), two commits on `omamobile-tangorpro` `caf6d3989`: `5a026dac0` (brcmfmac re-polls after INTx on any chip with DMA'd ring indices) and `48aef9a3e` (the board's Wi-Fi nodes, all disabled). `overlays/wifi.dtso` turns them on for a gated boot. Firmware mapping in `tools/extract-vendor-firmware -d tangorpro`. Device package 0.1.1 carries the Pixel 7's start script, unit (not enabled at boot), blacklist and MAC rule.
+**Status (2026-11-26):** built, not run on the tablet. Kernel branch `omamobile-tangorpro-wifi` (worktree `wt-tangorpro-wifi`, output `out-tangorpro-wifi`), two commits on `omamobile-tangorpro` `2f4a9e65f`: `1e29745eb` (brcmfmac re-polls after INTx on any chip with DMA'd ring indices) and `2dc38771d` (the board's Wi-Fi nodes, all disabled). `overlays/wifi.dtso` turns them on for a gated boot. Firmware mapping in `tools/extract-vendor-firmware -d tangorpro`. Device package 0.1.1 carries the Pixel 7's start script, unit (not enabled at boot), blacklist and MAC rule.
 
 ## Goal
 
@@ -31,7 +31,7 @@
 - [V] WL_REG_ON timing: `GW/dhd_custom_google.c:536-537` waits `WIFI_TURNON_DELAY` (200 ms, `GW/dhd_custom_exynos.c:85`) after raising it; the regulator's `startup-delay-us = <200000>` matches.
 - [V] Reserved memory: no tablet file adds a carve-out below 4 GiB besides the 20 MiB display handover at 0xfac00000 (`GT/gs201-tangorpro-display.dtsi:14-16`), already reserved in our board file; the rest are `G2`'s, reserved in `gs201.dtsi`. The 16 MiB restricted DMA pool is placed by the kernel inside 0x80000000-0xffffffff, as on the Pixel 7.
 - [V] Firmware names: the vendor partition has the 7 Pro's file names, `firmware/fw_bcmdhd.bin` (936402 bytes), `firmware/bcmdhd.cal` (9659 bytes, `boardtype=0x08ed`, `boardrev=0x1213`, no `macaddr`), `firmware/bcmdhd_clm.blob` (31685 bytes, CLM 1.53.0); `GW/Kbuild:55,885` names the same files. No `firmware/brcm/` directory: Bluetooth's patch lives elsewhere (not mapped).
-- [V] INTx: Broadcom's driver re-runs its interrupt work after every INTx when the firmware DMAs its ring indices, for any chip (`GW/dhd_pcie.c:13289-13300,13369`, `dhd_bus_handle_intx_ahead_dma_indices()`). brcmfmac did that only for the BCM4389 family; commit `5a026dac0` keys it to INTx with DMA'd indices as well. gs201's `pcie_1` has no MSI.
+- [V] INTx: Broadcom's driver re-runs its interrupt work after every INTx when the firmware DMAs its ring indices, for any chip (`GW/dhd_pcie.c:13289-13300,13369`, `dhd_bus_handle_intx_ahead_dma_indices()`). brcmfmac did that only for the BCM4389 family; commit `1e29745eb` keys it to INTx with DMA'd indices as well. gs201's `pcie_1` has no MSI.
 - [I] The MAC: the 7 Pro's bootloader writes `/chosen/config/wlan_mac1`; the tablet's is the same ABL family, unverified. Without it the chip keeps its random address (the NVRAM has none).
 - [I] The tablet has no sleep hook yet (no `omamobile-sleep` in its package), and D3 on this chip is untested: don't suspend with brcmfmac loaded.
 
@@ -39,8 +39,8 @@
 
 | Where | What |
 |---|---|
-| `L/` `5a026dac0` | `wifi: brcmfmac: pcie: re-poll after INTx with DMA'd indices on any chip`: one condition in `brcmf_pcie_setup()`. Chips on MSI or without DMA'd indices are unchanged. |
-| `L/` `48aef9a3e` | `gs201-tangorpro: describe Wi-Fi`: `regulator-wlan` (WL_REG_ON, the root port's `vpcie3v3-supply`), `wifi-dma-pool` (16 MiB restricted DMA pool), `&pcie_1` at `max-link-speed = <1>` with root port `pcie@0,0` and `wifi@0,0` (`compatible = "pci14e4,449d"`, `brcm,board-type = "google,gs201-tangorpro"`, `memory-region`), the System MMU's DMA window, and the pins. The regulator and the pool are `disabled`; `pinctrl_hsi2`, `pcie_1`, `pcie_1_phy` and `pcie_1_sysmmu` stay disabled from `gs201.dtsi`. |
+| `L/` `1e29745eb` | `wifi: brcmfmac: pcie: re-poll after INTx with DMA'd indices on any chip`: one condition in `brcmf_pcie_setup()`. Chips on MSI or without DMA'd indices are unchanged. |
+| `L/` `2dc38771d` | `gs201-tangorpro: describe Wi-Fi`: `regulator-wlan` (WL_REG_ON, the root port's `vpcie3v3-supply`), `wifi-dma-pool` (16 MiB restricted DMA pool), `&pcie_1` at `max-link-speed = <1>` with root port `pcie@0,0` and `wifi@0,0` (`compatible = "pci14e4,449d"`, `brcm,board-type = "google,gs201-tangorpro"`, `memory-region`), the System MMU's DMA window, and the pins. The regulator and the pool are `disabled`; `pinctrl_hsi2`, `pcie_1`, `pcie_1_phy` and `pcie_1_sysmmu` stay disabled from `gs201.dtsi`. |
 | `overlays/wifi.dtso` | Enables the regulator, the pool, `pinctrl_hsi2`, `pcie_1_phy` and `pcie_1`. Not the System MMU. |
 | `tools/extract-vendor-firmware -d tangorpro` | Stages the three files as `brcm/brcmfmac43752-pcie.google,gs201-tangorpro.{bin,txt,clm_blob}` under `/usr/lib/firmware/updates`, checking for `4362b0-roml`. Test in `tests/extract-vendor-firmware`. |
 | `packages/omamobile-device-tangorpro` 0.1.1 | `omamobile-wifi-start`, `omamobile-wifi.service` (no wants link), `modprobe.d/omamobile-wifi.conf` (blacklists `pcie_gs201`, `brcmfmac`), `omamobile-wlan-mac` + its udev rule: the Pixel 7's files byte for byte (the test checks for drift). |
@@ -66,7 +66,7 @@ Firmware staged on the laptop (from the owner's factory image; never committed),
 - **DMA reach.** The restricted pool keeps the driver's buffers in one place; nothing stops the chip's firmware writing elsewhere (no S2MPU or SysMMU confinement, as on the Pixel 7). The same trade the Pixel 7 runs with.
 - **Bus hang.** A PCIe step that touches an unpowered block hangs the SoC. The Pixel 7's runs say the gs201 sequence is safe, and the same host driver runs here, so this is low, but W1 runs under the watchdog with the log streamed off the tablet.
 - **Suspend** with brcmfmac loaded is untested on this chip: hold sleep off during the runbook.
-- **INTx re-poll** (`5a026dac0`): if it misbehaves, revert that commit alone; the DT works without it.
+- **INTx re-poll** (`1e29745eb`): if it misbehaves, revert that commit alone; the DT works without it.
 
 ## Runbook
 
