@@ -111,6 +111,7 @@ whether it predated a stock boot.
 | [Corrected Omarchy systemd RAM root](#attended-corrected-omarchy-systemd-ram-root-trial) | The Mac left verified stock D1 A at 07:07:30 UTC on 2026-11-26. A guarded rescue retry completed with no intervening Android boot before Omarchy started at 07:20:51 UTC. | All nine hashes passed at 07:19:08 UTC. The stock A return requires a new copy before the next power or CPM trial. |
 | [Omarchy USB SSH after systemd handoff](#attended-usb-ssh-handoff-trial) | The Mac left verified stock D1 A at 07:40:15 UTC on 2026-11-26. Android stayed off between the guarded rescue and the Omarchy boot request at 07:46:39 UTC. | All nine hashes passed at 07:45:27 UTC. The stock A return requires a new copy before the next power or CPM trial. |
 | [Display CPM queries](#attended-display-cpm-query-trial) | The Mac left stock D1 A at 09:06:49 UTC on 2026-11-26. Android stayed off between the guarded backup rescue and the display CPM boot request at 09:14:51 UTC. | All nine hashes passed at 09:13:31 UTC. Another power or CPM trial needs a fresh copy after the stock A return. |
+| [Display MBFS operating-point query](#attended-display-mbfs-operating-point-trial) | The Mac left stock D1 A at 09:38:09 UTC on 2026-11-26. Android stayed off between the guarded rescue and the operating-point boot request at 09:44:34 UTC. | All nine hashes passed at 09:43:06 UTC. Another power or CPM trial needs a fresh copy after the stock A return. |
 
 [Maintainer decision on backup freshness](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035).
 Take a fresh read-only backup of all nine partitions after the latest
@@ -4857,6 +4858,49 @@ backup, capture both `display-perf` results and the original
 resources are available to mainline before display enable.
 The raw level needs the D1 DVFS table for a frequency, and
 this fixture cannot measure a powered display.
+
+##### Attended display MBFS operating-point trial
+
+On 2026-11-26 the stock rescue backed up nine read-only,
+unmounted NV partitions. The Mac verified the private modes,
+all nine independent hashes and 3,392,151,552 copied bytes.
+The 64 MiB rescue `vendor_boot_b` readback matched. The rescue
+returned to Fastboot with A selected. Stock Android stayed off
+before the diagnostic, and the five diagnostic images staged
+successfully with a matching 8,192-byte `vendor_boot_b` payload.
+
+The four distinct MBFS handles and three LPCM `-3` replies
+matched the preceding trial. At 0.102355 seconds, the new
+query logged `display-perf: path segment cpm error=-2`.
+It did not reach either `CurOpp` file.
+
+In the exact stock `mbfs.ko`, `mbfs_get_handle` extracts the
+first path component, compares it with registered backend
+names, and takes the matching backend's root handle before
+walking the remaining components. `mbfs_cpm_backend.ko`
+registers the name `cpm`. The raw protocol already addresses
+that backend and returns its namespace root. The path below
+that root begins at `perf/domains`. The trial treated the backend
+name as a directory, which accounts for the `-ENOENT` result.
+
+The kernel verified the 8 KiB `boot_b` read and all 42 UFS
+partitions read-only and unmounted. The temporary SCSI host
+retired before USB SSH was ready. The helper requested warm
+restart at 600.009709 seconds. Fastboot returned 644 seconds
+after the boot request. Stock D1 A completed boot with enforcing
+verity and the original VBMeta digest. Ramoops and
+`SYSTEM_LAST_KMSG` matched all 21 filtered trial lines.
+
+The retained factory `dvfs_helper.ko` obtains the frequency
+table from CPM destination `0x0e`. It first queries domain
+count (`0x00000003`), then descriptors
+(`0x00000103 | index << 16`) and pairs of OPP rows
+(`0x00000203 | domain_id << 16 | even_level << 24`).
+Its exact conversion checks that the zero-based OPP index
+is within the domain count of levels and that row bit 14
+is set. Bits 13:0 hold MHz. The saved stock bugreport's CPM
+mailbox trace is empty, so it does not supply the live
+`dpu` or `fabdisp` table.
 
 ### Offline stock D1 device reference-clock diagnostic
 
