@@ -6440,8 +6440,7 @@ qualification for a mainline host read.
 
 The exact D1 ABL descriptor for `dpu_dsi0_apb_clk`
 (clock ID `0x40007`) selects direct gate group 4 and
-offset `0x6e0`. The
-direct gate lookup at `0x48834` resolves the descriptor
+offset `0x6e0`. The direct gate lookup at `0x48834` resolves the descriptor
 to AP `0x0f4196e0`. The clock helper at `0x7ac78`
 tests bit 8 of gate offset `0x1c`, with 1 denoting
 the enabled acknowledgment. The direct reset lookup
@@ -6487,6 +6486,47 @@ apertures and leave EL1 access to this CMU word
 unqualified. Keep the APB acknowledgment and host
 reads disabled. No guarded fixture is qualified by
 this audit.
+
+##### Stock D1 ABL callers and Linux access evidence
+
+The DSI0 branch in the exact D1 ABL display bring-up
+(`0x7c0ec`) and shutdown (`0x7cac8`) calls the
+display power dispatcher `0xf4508` with domain index 4.
+It dispatches at `0xf4610`–`0xf4618` to the generic
+power vote handler with table index 10. The corresponding
+row at `0x32df90` names `DPU_DSI0` and has group 4,
+subdomain 3. The handler `0x49410` packs the vote and
+calls the CPM mailbox routine at `0x49484`. This path
+has no direct APB acknowledgment read. The separate
+PHY power-off callback at `0xf2a50` updates local
+PHY controls through `0xf1fd8`.
+
+The direct helpers establish how ABL would read the
+gate acknowledgment if called with the clock descriptor.
+The inspected display paths do not resolve clock ID
+`0x40007` through those helpers. The generic clock/reset
+callback rows at `0x32cb68`, `0x32cb98` and
+`0x32cbc8` refer to other clock IDs. No DSI0
+runtime use of the direct acknowledgment word was
+identified in ABL.
+
+CPM's generic `lcm_get_reset` at `0x19190`
+also extracts bit 12 of gate offset `0x1c`.
+Its table-backed reset handler at `0x3859c` excludes
+DPU LPCM `0x23`. This corroborates the clock-cell reset
+field and leaves its connection to the full DSI0 host
+external reset tree unresolved. The Linux host's
+`pwr_up` is a separate internal enable field.
+
+The retained early, MBFS, clock/reset and PHY-init stock
+DSI0 captures and the full stock display bugreport have
+no read witness for AP `0x0f4196fc` or its CPM alias
+`0x6f4196fc`. The observed Linux reads cover the host
+ID, version, `pwr_up` and CD-PHY init word in their own
+apertures. The capture scopes were selective, so the
+absence is a limit of the available evidence. Direct
+Linux access to the APB acknowledgment word and coverage
+of the full host reset path remain unqualified.
 
 ### Offline stock D1 device reference-clock diagnostic
 
