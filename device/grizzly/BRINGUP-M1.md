@@ -106,6 +106,7 @@ whether it predated a stock boot.
 | [v71](#attended-v71-slot-b-trial) | After v70. Stock D1 A preflight matched the prior return. The v71 boot was requested at 20:45:44 UTC on 2026-11-25. | Same copy, nine hashes rechecked. The owner approved this trial using the copy that predates the stock boot. |
 | [v72](#attended-v72-slot-b-trial) | The Mac left verified stock D1 A at 21:02:34 UTC on 2026-11-25. A guarded B rescue returned to Fastboot with A selected before the v72 boot request at 21:24:55 UTC. | Fresh read-only rescue copy verified at 21:13:45 UTC. All nine hashes were rechecked before staging. The stock A return after v72 requires a new copy before the next power or CPM trial. |
 | [v73](#attended-v73-slot-b-trial) | The Mac left verified stock D1 A at 21:35:59 UTC on 2026-11-25. A guarded B rescue returned to Fastboot with A selected before the v73 boot request at 21:42:45 UTC. | Fresh read-only rescue copy verified at 21:41:18 UTC. All nine hashes passed. The stock A return after v73 requires a new copy before the next power or CPM trial. |
+| [Read-only test root](#attended-read-only-test-root-slot-b-trial) | The Mac left verified stock D1 A at 06:13:51 UTC on 2026-11-26 and ran the guarded B rescue. Fastboot stayed active between the rescue and the test-root boot request at 06:20:35 UTC. | Fresh read-only rescue copy verified at 06:19:08 UTC. All nine hashes passed. The stock A return requires a new copy before the next power or CPM trial. |
 
 [Maintainer decision on backup freshness](https://github.com/derekross/omamobile/pull/1002#issuecomment-7171826035).
 Take a fresh read-only backup of all nine partitions after the latest
@@ -4337,8 +4338,7 @@ saved slot fit. The exact v73 kernel ran the root helper in an
 Arm64 QEMU guest with no physical storage. The write probe hit
 `EROFS`. A separate writable RAM control was refused. The
 loop was detached, the mount disappeared, and a second run
-refused the existing loop node. The combined UFS and test-root
-flow awaits an attended Pixel boot. Manifest SHA-256
+refused the existing loop node. Manifest SHA-256
 `78d107fdb3cdd0a75ea6fc319faf1c18eee938d56db59395acee779bfb7168e0`.
 
 For a later trial, take a fresh guarded NV backup and keep the
@@ -4352,7 +4352,30 @@ and start stock Android. The earlier D1 recovery record also
 verifies A's Recovery ADB sideload path with the same-build
 signed OTA. That fallback follows the recorded Recovery procedure
 and needs separate approval. Neither hardware recovery path was
-rerun for this offline fixture.
+rerun during offline preparation.
+
+#### Attended read-only test root slot B trial
+
+On 2026-11-26 the guarded stock rescue copied all nine NV
+partitions in 255 seconds with no bridge timeouts. The Mac
+verified the independent phone-side and saved-file hashes
+for 3,392,151,552 bytes. The rescue returned through Fastboot
+and stock Android stayed off while the five test-root images
+were staged on B. The `vendor_boot_b` readback matched all
+8,192 supplied bytes.
+
+| Monotonic time (s) | Result |
+| ---: | --- |
+| 2.199034 | The v73 comparison matched all 8,192 bytes from `boot_b` to the direct UFS reference. |
+| 2.381804 | The RAM guard verified all 42 UFS partitions read-only and unmounted before the root test. |
+| 2.396239–2.408602 | The 4 MiB RAM image mounted on read-only loop0 as ext4 without a journal. The chroot probe verified the release marker and write denial. The kernel unmounted the filesystem and the helper confirmed the loop detached. |
+| 2.567914–2.568336 | The guard again verified all 42 UFS partitions read-only and unmounted. The RAM stage completed. |
+| 90.192618 | PID 1 requested the timed warm return. |
+
+Fastboot returned after 133 seconds. Stock D1 A restarted at
+06:23:08 UTC and completed boot with enforcing verity and the
+original VBMeta digest. Ramoops and the current Android
+`SYSTEM_LAST_KMSG` entry agree on all 81 filtered trial lines.
 
 ### Offline stock D1 device reference-clock diagnostic
 
