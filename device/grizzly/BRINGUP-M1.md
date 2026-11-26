@@ -4902,6 +4902,24 @@ is set. Bits 13:0 hold MHz. The saved stock bugreport's CPM
 mailbox trace is empty, so it does not supply the live
 `dpu` or `fabdisp` table.
 
+##### Corrected display MBFS operating-point fixture
+
+Kernel `7.3.0-rc6-omamobile-grizzly-display-opp-root` at
+`26b2e93cb0791ad8fdb2b2fd0bdddf869f2a9c76` starts the lookup
+at `perf/domains` below the CPM backend root. The opt-in
+parameter, four original MBFS lookups, three LPCM reads
+and two raw `CurOpp` reads are retained. The change adds
+no display power votes, clock writes or MMIO access.
+
+The ARM64 build and style check passed. A mock confirmed both
+`CurOpp` reads from the corrected path and that a missing
+`perf` component stops the lookup. All five image hashes, both
+AVB signatures, handoff bounds, and saved slot-fit checks passed.
+The manifest SHA-256 is
+`48e16ff392feb409cfc36bb2be0e9424898cc08efc9df6b1e71e90223bb24145`.
+The corrected bundle awaits its own attended trial after a
+fresh verified NV backup.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
