@@ -140,7 +140,12 @@ o.launch_on_start("omamobile-onboarding --nudge")
 -- With no saved rate, or one the panel no longer lists, it uses the device
 -- default (/usr/share/omamobile/refresh-rate-default, husky: 60) if the panel
 -- lists it, else does nothing at all; the script may also be absent without the
--- Settings app. apply only evals a monitor rule, so it cannot loop on reload.
+-- Settings app (omamobile-apps, a dependency of this package, pulls it in).
+-- apply only evals a monitor rule, so it cannot loop on reload; it sends
+-- nothing when the panel already runs the rate, takes a lock (session start
+-- and the first reload may both run it), waits up to 5 s for the monitor and
+-- reads the rate back. With the screen off Hyprland ignores the rule, so apply
+-- fails then (logged) and the rate comes back at the next reload or rotation.
 local apply_rate = o.launch("bash -c 'f=/usr/lib/omamobile-settings/backends/display.sh; [ -r \"$f\" ] || exit 0; "
   .. "out=$(bash \"$f\" apply 2>&1) || logger -t omamobile-display \"apply failed: $out\"; exit 0'")
 hl.on("hyprland.start", function() hl.exec_cmd(apply_rate) end)
