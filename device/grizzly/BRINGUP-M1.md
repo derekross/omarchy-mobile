@@ -5398,6 +5398,38 @@ after the B boot request. Stock D1 A completed boot with
 enforcing verity and the original VBMeta digest. Ramoops and
 `SYSTEM_LAST_KMSG` matched all 51 filtered lines.
 
+##### Offline powered DPU FE0 clock diagnostic
+
+Kernel `7.3.0-rc6-omamobile-grizzly-display-fe0-rate` at
+`583e5c71ad1ae86b3a3ecdcfef605a3e93d69f49` adds the opt-in
+`clk_google_malibu_cpm.display_fe0_rate=1` flag. It keeps the
+early unpowered readings and the seven initial vote checks.
+After the wrapper, BE and FE0 ON requests complete with
+readbacks of `1`, the fixture sends one LPCM GET_RATE request
+(`0x03052302`, argument `0`) with the one-second timeout.
+The separate powered BE query stays disabled for this fixture.
+
+A firmware reply, including a negative one, allows FE0, BE
+and the wrapper to release in that order with vote readback.
+A transport error stops further requests and leaves recovery
+to the independent timed return. The fixture leaves the clock
+gates and display consumers disabled.
+
+The arm64 build and style check passed. A mock verified the
+request order, positive, zero and negative firmware replies,
+transport timeout, vote failures, inherited-vote and sampling
+guards, repeat-trigger rejection, and the prior BE and FE0
+paths. The five image hashes, both AVB signatures, handoff
+bounds and saved D1 slot fit passed. The vendor boot images
+and DTBO match the live-tested FE0 bundle byte for byte,
+preserving the UFS guard, USB SSH and timed return. The
+`SHA256SUMS` digest is
+`45c7945c8599cc038e0b61d3deec74cef820742086d1fddc4ac7b5c8682d587c`.
+
+An attended slot B trial remains pending. Use a fresh verified
+NV backup and capture the two GET_RATE replies and the
+release order before completing the stock A return.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
