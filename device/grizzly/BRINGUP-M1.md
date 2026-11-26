@@ -5528,6 +5528,42 @@ request. Stock D1 A completed boot with enforcing verity and
 the original VBMeta digest. Ramoops and `SYSTEM_LAST_KMSG`
 matched all 51 filtered lines.
 
+##### Offline powered DSI0 pixel clock diagnostic
+
+Both retained D1 base trees place `dpu_dsi0_pix_clk` at LPCM
+`0x23`, clock `0x01`. The previous unpowered GET_RATE returned
+`-3`. Kernel `7.3.0-rc6-omamobile-grizzly-display-dsi0-rate` at
+`17160cba1f659f350447ce9c70a74ae1555e600d` adds the opt-in
+`clk_google_malibu_cpm.display_dsi0_rate=1` flag to the tested
+DSI0 vote sequence. It preserves the early clock queries and
+the seven initial vote checks. After wrapper, BE and DSI0 all
+read back `1`, the fixture sends one LPCM GET_RATE with word
+`0x03012302`, argument `0` and the one-second timeout.
+
+The fixture logs the signed firmware reply or transport error.
+A firmware reply, including a negative one, allows DSI0, BE
+and wrapper to release in that order with vote readback. A
+transport error stops further requests and leaves recovery to
+the independent timed return. The fixture leaves clock gates,
+the DSI host, the PHY and the panel disabled. A positive reply
+would report the firmware rate. Physical clock and scanout
+measurements remain open.
+
+The arm64 build and style check passed. Mocks verified the
+exact request and order, positive, zero and negative firmware
+replies, transport errors, failed transitions, inherited vote
+and sample guards, repeat-trigger rejection and the previous
+BE and FE0 queries. The five image hashes, both AVB signatures,
+handoff bounds and saved D1 slot fit passed. Both vendor boot
+images and DTBO match the live-tested DSI0 fixture byte for
+byte, preserving the UFS guard, USB SSH and timed return. The
+`SHA256SUMS` digest is
+`9f762f96e64da6e915b75770563fe8214974d48895987a92ac921d126f21b62d`.
+
+Hardware validation remains pending. An attended slot B trial
+needs a fresh verified NV backup, both clock replies and the
+release trace, followed by the return to stock A.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
