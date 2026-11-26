@@ -6021,6 +6021,7 @@ and external reset unresolved.
 | --- | --- | --- |
 | Stock `powerdashboard/pwrblk_dpu` | `google_powerdashboard.ko` `pwrblk_dpu_show` (`0x82c`) reads firmware shared-memory section 1 and formats DPU block 7 with six rows. | The wrapper row tracks the aggregate vote. The five child labels have no verified mapping to DSI0 PSM3, the APB gate or external reset. |
 | Stock `powerdashboard/lpcm_dpu` and CPM clock provider | `lpcm_dpu_show` (`0x161c`) reads section 2, index 16, for the DPU operating point. The clock provider has no identified DSI0 APB gate getter. | Operating-point or configured-rate telemetry. |
+| Stock `latency_stats/dpu_dsi0_pd/ack_on` | `power_controller.ko` stops the acknowledgment timer immediately after the MBFS write returns, before the deferred completion wait. | Timing and count of synchronous replies. |
 | Stock CPM reset provider | `rst-cpm.ko` supplies assert and deassert operations; the merged tree has no reset child for display LPCM `0x23`. | No read-only display reset status operation was identified. |
 | Legacy DPU power-state poll | `lpm_pm_domains.ko` `poll_for_dpu_dsi_state` (`0x216c`) reads provider base plus `0x1018` and tests the low nibble. The D1 merge has no `google,mbu-dpu-lpm-pm-domains` binding. | A lead for the legacy controller. Its D1 AP mapping, safe access and separate gate/reset meanings are unverified. |
 
@@ -6191,6 +6192,44 @@ Use the dashboard as wrapper-vote evidence. Leave the
 PSM3 sampler and DSI0 host reads disabled. A sample would
 require an identified PSM3 publisher with a timing guarantee
 or a stock EL1 access witness for the exact status word.
+
+##### Offline DSI0 acknowledgment and clock-status audit
+
+The saved stock display bugreport includes a request to read
+`/sys/devices/platform/power_controller/latency_stats/dpu_dsi0_pd/ack_on/count`.
+In the exact D1 `power_controller.ko`, `set_power_state`
+starts profiling at `0x47b4`, calls `mbfs_write_file` at
+`0x487c` and stops the acknowledgment timer at `0x4894`.
+The status-5 wait for deferred completion follows at
+`0x48f0`. The `count` handler (`0x2378` → `0x263c`)
+reads the accumulated sample count from RAM.
+
+The deferred completion callback separately loads the
+mailbox timing field at message offset `0xc` (`0x4638`),
+passes it to the firmware timing bucket at `0x46cc`,
+and wakes the waiter at `0x46ec`. Neither profiling path
+accesses the APB gate or external reset status. The existing
+`recv_result_mbfs` trace remains the observation of the final
+vote result.
+
+D1 ABL's clock table also distinguishes the DSI0 system
+clock from both the APB and pixel clocks. All three records
+use clock group 4 with distinct gate offsets.
+
+| ABL clock record | File offset | Gate offset |
+| --- | --- | --- |
+| `dpu_dsi0_apb_clk` | `0x1f51b0` | `0x6e0` |
+| `dpu_dsi0_sys_clk` | `0x1f5220` | `0x720` |
+| `dpu_dsi0_pix_clk` | `0x1f5290` | `0x760` |
+
+The three stock DSI0 trace captures and stock display
+bugreport contain no access witness for APB acknowledgment
+at `0x0f4196fc` or an external reset-status read. In the
+clock/reset trace, stock reads the host ID and version
+8.888 ms after the final DSI0 ON result. The interval
+measures stock's observed ordering and supplies no minimum
+settle time for mainline. Keep the host reads disabled
+pending an independent readiness check.
 
 ### Offline stock D1 device reference-clock diagnostic
 
