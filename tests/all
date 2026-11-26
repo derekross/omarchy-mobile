@@ -93,6 +93,8 @@ echo "# tests/factory-index"   # the build index of Google's factory images, aga
 tests/factory-index
 echo "# tests/phone-demo-notes"
 tests/phone-demo-notes
+echo "# tests/phone-demo-display"   # the screen-capture display check, against a made-up /sys
+tests/phone-demo-display
 echo "# tests/install-guided"   # the guided install, against stand-ins for the phone and this computer's network
 tests/install-guided
 echo "# tests/chroot-extractors"
