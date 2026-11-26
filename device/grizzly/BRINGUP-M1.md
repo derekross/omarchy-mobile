@@ -6002,6 +6002,39 @@ fixture. The UFS read-only guard, post-guard trigger and
 independent 600-second warm return remain in that bundle.
 The host ID, version and `pwr_up` MMIO reads stay disabled.
 
+##### Offline D1 CPM completion and external status audit
+
+The prior D1 firmware audit used factory build
+`CP4A.261105.040.D1` and bootloader `spacecraft-17.4-16729013`.
+Its CPM image and extracted text are absent from the retained
+local artifacts. The saved D1 firmware analysis identifies the
+generic MBFS vote handler and shows that an already-active
+resource can accept another caller's vote without scheduling a
+new physical transition. The saved disassembly does not cover
+the DSI0-specific `0x203` callback through deferred completion.
+The stock trace shows valid DSI0 host reads after the final ON
+result, with no intervening AP clock or reset provider request.
+That leaves the ordering of the firmware's completion, APB gate
+and external reset unresolved.
+
+| Candidate outside the DSI0 host | D1 evidence | What it can establish |
+| --- | --- | --- |
+| Stock `powerdashboard/pwrblk_dpu` | `google_powerdashboard.ko` `pwrblk_dpu_show` (`0x82c`) reads firmware shared-memory section 1 and formats DPU block 7 with six rows. | Wrapper and PSM state and residency telemetry. No row is mapped to the DSI0 APB gate or external reset. |
+| Stock `powerdashboard/lpcm_dpu` and CPM clock provider | `lpcm_dpu_show` (`0x161c`) reads section 2, index 16, for the DPU operating point. The clock provider has no identified DSI0 APB gate getter. | Operating-point or configured-rate telemetry. |
+| Stock CPM reset provider | `rst-cpm.ko` supplies assert and deassert operations; the merged tree has no reset child for display LPCM `0x23`. | No read-only display reset status operation was identified. |
+| Legacy DPU power-state poll | `lpm_pm_domains.ko` `poll_for_dpu_dsi_state` (`0x216c`) reads provider base plus `0x1018` and tests the low nibble. The D1 merge has no `google,mbu-dpu-lpm-pm-domains` binding. | A lead for the legacy controller. Its D1 AP mapping, safe access and separate gate/reset meanings are unverified. |
+
+The dashboard read path uses the stock driver's CPM-published
+shared-memory section, outside the target host aperture. It
+can help correlate a DPU transition, but cannot gate a host
+read until the relevant row and both readiness conditions are
+mapped. The legacy status offset is unqualified for a D1 AP
+load. Recovering the exact firmware would allow the next
+offline comparison to follow resource `0x203` into its
+sequencer and locate any gate/reset status providers before
+the completion notification. The existing host-read hold
+remains in effect.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
