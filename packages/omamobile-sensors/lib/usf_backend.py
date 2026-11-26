@@ -61,9 +61,15 @@ AOC_CLOCK_RESYNC_S = 1.0
 # the display state Android's HAL sends (usf.display_info) it never converts,
 # for light or proximity. Read from the panel's DRM connector and backlight
 # when they exist; until the panel driver does, the panel counts as on at
-# 60 Hz.
+# 60 Hz. On the Pixel 8 Pro the rate must be the panel's real one: its
+# panel switches between 60 and 120 Hz, and told 60 while it runs at 120
+# the TMD3719 reports no light (-1) and no proximity. With
+# OMAMOBILE_PANEL_HZ=drm (set by that phone's device package) the rate comes
+# from the mode of the CRTC that drives the DSI panel, in DRM's debugfs
+# state (needs root, as the proxy runs); a number sets it; unset keeps 60.
 PANEL_DPMS_GLOB = '/sys/class/drm'
 PANEL_DBV_DIR = '/sys/class/backlight'
+DRM_STATE_GLOB = '/sys/kernel/debug/dri/*/state'
 DISPLAY_SYNCED = ('light', 'proximity')
 
 
@@ -87,6 +93,54 @@ def panel_paths():
     return dpms, dbv
 
 
+_drm_fallback_logged = False
+
+
+def drm_panel_hz(text):
+    """The refresh rate of the CRTC driving a DSI connector in one DRM state
+    dump (drm_atomic_print_new_state), or None."""
+    crtcs, panel_crtc = {}, None
+    block = name = None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith(('crtc[', 'connector[', 'plane[')):
+            block = line.split('[', 1)[0]
+            name = line.split(': ', 1)[1] if ': ' in line else None
+            if block == 'crtc':
+                crtcs[name] = {'active': False, 'hz': 0}
+        elif block == 'crtc' and line == 'active=1':
+            crtcs[name]['active'] = True
+        elif block == 'crtc' and line.startswith('mode:'):
+            # mode: "name": vrefresh clock hdisplay ... (DRM_MODE_FMT)
+            try:
+                crtcs[name]['hz'] = int(line.rsplit('":', 1)[1].split()[0])
+            except (IndexError, ValueError):
+                pass
+        elif block == 'connector' and name and '-DSI-' in f'-{name}' and line.startswith('crtc='):
+            panel_crtc = line.split('=', 1)[1]
+    c = crtcs.get(panel_crtc)
+    return c['hz'] if c and c['active'] and c['hz'] > 0 else None
+
+
+def panel_refresh_hz():
+    """The refresh rate to tell the AoC: OMAMOBILE_PANEL_HZ (a number, or
+    'drm' for the panel's mode), else 60."""
+    global _drm_fallback_logged
+    want = os.environ.get('OMAMOBILE_PANEL_HZ', '')
+    if want.isdigit() and int(want) > 0:
+        return int(want)
+    if want != 'drm':
+        return 60
+    for path in sorted(glob.glob(DRM_STATE_GLOB)):
+        hz = drm_panel_hz(read_text(path))
+        if hz:
+            return hz
+    if not _drm_fallback_logged:
+        log('no active DSI panel mode in DRM debugfs state: telling the AoC 60 Hz')
+        _drm_fallback_logged = True
+    return 60
+
+
 def display_state():
     """(status, refresh rate, DBV) as the stock HAL reports them: off is 0 Hz."""
     dpms, dbv_path = panel_paths()
@@ -96,7 +150,7 @@ def display_state():
         dbv = int(read_text(dbv_path, '0')) if dbv_path else 0
     except ValueError:
         dbv = 0
-    return usf.DISP_ON, 60, dbv
+    return usf.DISP_ON, panel_refresh_hz(), dbv
 
 
 def aoc_settle(marker=AOC_LOADED_MARKER, settle=AOC_SETTLE_S, now=time.time, sleep=time.sleep):
