@@ -265,6 +265,25 @@ def data_call_change(payload, response=None):
     return f'Data-call list changed: {listed}; {meaning}'
 
 
+def network_time(payload):
+    """IND_NITZ_TIME_RECEIVED (0x0905), the network's time and time zone
+    (NITZ). Payload as read on a Pixel 9a: a flag byte, then year (from
+    2000), month, day, hour, minute and second in UTC, the zone as a signed
+    count of quarter hours, the DST adjustment in hours, two bytes not
+    decoded, and the network's PLMN as ASCII digits. None when short."""
+    if len(payload) < 9:
+        return None
+    year, month, day, hour, minute, second = payload[1:7]
+    zone = struct.unpack_from('<b', payload, 7)[0]
+    plmn = ''
+    for byte in payload[9:]:
+        if 0x30 <= byte <= 0x39:
+            plmn += chr(byte)
+        elif plmn:
+            break
+    return dict(utc=f'{2000 + year:04d}-{month:02d}-{day:02d}T{hour:02d}:{minute:02d}:{second:02d}Z',
+                offset_minutes=zone * 15, dst=payload[8], plmn=plmn if len(plmn) in (5, 6) else '')
+
 def reset_indication(packet):
     """The log line for IND_PHONE_RESET (0x0804): the payload length and the
     first four payload bytes (packet offsets 0x08-0x0b) in hex. Stock's
@@ -307,6 +326,7 @@ class Service:
         self.manifest_setting = self.settings['network'].get('carrier_manifest', '').strip()
         self.manifest_sent = False
         self.carrier_status = None
+        self.network_time = None
         # The payload of the latest IND_DATA_CALL_LIST_CHANGED (the modem's
         # own attach bearer shows up there); read by start-up, never logged raw.
         self.data_call_list = None
@@ -467,6 +487,15 @@ class Service:
         elif ident == 0x0210:
             # IND_SIM_STATUS_CHANGED carries nothing we read: poll again.
             self.next_poll = 0
+        elif ident == 0x0905:
+            # IND_NITZ_TIME_RECEIVED: the network's time zone, for whoever
+            # sets the phone's zone from it. Kept as sent, with when it came.
+            nitz = network_time(packet[8:])
+            if nitz:
+                self.network_time = dict(nitz, received=int(time.time()))
+                print('Network time zone (NITZ): UTC%+d min, DST %d, network %s'
+                      % (nitz['offset_minutes'], nitz['dst'], nitz['plmn'] or 'unknown'), flush=True)
+                self.publish()
         elif ident == 0x0906:
             # IND_SIGNAL_STRENGTH, every second or two: publish on a change only.
             signal = signal_percent(lte_rsrp(packet[8:]))
@@ -756,7 +785,8 @@ class Service:
                      radio=self.radio, sim=dict(self.sim),
                      ims='registered' if voice or sms else self.ims_state,
                      apn=dict(self.apn), data_available=self.apn.get('source') != 'none',
-                     emergency_numbers=list(EMERGENCY + (EMERGENCY_NO_SIM if self.sim['state'] == 'absent' else ())))
+                     emergency_numbers=list(EMERGENCY + (EMERGENCY_NO_SIM if self.sim['state'] == 'absent' else ())),
+                     network_time=self.network_time)
         calls = [{k: v for k, v in c.items() if k != 'modem_id'} for c in self.calls.values()]
         if public:
             # No numbers in the world-readable copy.
