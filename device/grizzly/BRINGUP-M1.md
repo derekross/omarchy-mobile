@@ -6019,7 +6019,7 @@ and external reset unresolved.
 
 | Candidate outside the DSI0 host | D1 evidence | What it can establish |
 | --- | --- | --- |
-| Stock `powerdashboard/pwrblk_dpu` | `google_powerdashboard.ko` `pwrblk_dpu_show` (`0x82c`) reads firmware shared-memory section 1 and formats DPU block 7 with six rows. | Wrapper and PSM state and residency telemetry. No row is mapped to the DSI0 APB gate or external reset. |
+| Stock `powerdashboard/pwrblk_dpu` | `google_powerdashboard.ko` `pwrblk_dpu_show` (`0x82c`) reads firmware shared-memory section 1 and formats DPU block 7 with six rows. | The wrapper row tracks the aggregate vote. The five child labels have no verified mapping to DSI0 PSM3, the APB gate or external reset. |
 | Stock `powerdashboard/lpcm_dpu` and CPM clock provider | `lpcm_dpu_show` (`0x161c`) reads section 2, index 16, for the DPU operating point. The clock provider has no identified DSI0 APB gate getter. | Operating-point or configured-rate telemetry. |
 | Stock CPM reset provider | `rst-cpm.ko` supplies assert and deassert operations; the merged tree has no reset child for display LPCM `0x23`. | No read-only display reset status operation was identified. |
 | Legacy DPU power-state poll | `lpm_pm_domains.ko` `poll_for_dpu_dsi_state` (`0x216c`) reads provider base plus `0x1018` and tests the low nibble. The D1 merge has no `google,mbu-dpu-lpm-pm-domains` binding. | A lead for the legacy controller. Its D1 AP mapping, safe access and separate gate/reset meanings are unverified. |
@@ -6145,6 +6145,52 @@ while the wrapper is held remain unqualified. Leave both the
 descriptor and status reads out of the boot fixture. The
 verified prerequisite-only fixture retains the NV guard and
 independent 600-second return.
+
+##### Offline DPU PSM3 power-dashboard audit
+
+The exact D1 stock dashboard module asks CPM client `0x68`
+for section 1 and maps the AP address returned by firmware.
+CPM's section table at `0x607c4` and initializer `0x1e348`
+place the section at CPM `0x400210d0`. Its ABI length is
+`0xd68` bytes. The stock module compares repeated copies
+of the section to detect concurrent updates. It formats DPU
+block 7 as a wrapper row and five rows labeled `psm[0]`
+through `psm[4]`.
+
+CPM `0x20358` maps DPU wrapper LPB `0x08` to block 7.
+The vote update at `0x1f7b2`–`0x1f7be` calls the
+dashboard writer `0x1e8f0`. Its category-0 resolver
+`0x1e518` → `0x1ffa4` selects the first DPU record
+at section offset `0x19b`. That record stores the aggregate
+wrapper vote. The caller at `0x274d8` records the vote
+before invoking the transition handler at `0x274e8`.
+This writer does not select a DPU child row.
+
+The successful hardware transition path calls `0x7538`
+from `0x84de` with the LPCM ID, PSM index and target state.
+That helper updates a separate CPM-local statistics array
+when present. For DPU LPCM `0x23`, the pointer at
+`0x2000b438 + 0x44` is zero in the exact image's initialized
+data. The helper exits immediately with a null pointer.
+No producer was identified for a dashboard row tied to
+the actual state of LPCM `0x23` PSM3. The DPU getter at
+`0x3b8a8` has callers in the firmware display state handlers
+and no identified AP-facing export. The retained stock
+display bugreport reports the wrapper but contains no
+`pwrblk_dpu` child observations.
+
+Both stock D1 base DTBs configure a 100 ms dashboard
+sampling interval. The mainline pixel-clock trial received
+DSI0 OFF only 145 µs after the ON result. A periodic
+publisher could miss that powered interval even if the
+row mapping were established. The stock probe also sends
+commands to configure and start sampling. A read from an
+already bound dashboard only copies the published data.
+
+Use the dashboard as wrapper-vote evidence. Leave the
+PSM3 sampler and DSI0 host reads disabled. A sample would
+require an identified PSM3 publisher with a timing guarantee
+or a stock EL1 access witness for the exact status word.
 
 ### Offline stock D1 device reference-clock diagnostic
 
