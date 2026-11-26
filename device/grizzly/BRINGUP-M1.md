@@ -6102,6 +6102,50 @@ PSM samples can show a sequencer state change alongside the
 vote. They still leave the separate APB gate and external reset
 conditions unqualified. The mainline host reads stay disabled.
 
+##### Offline DPU PSM3 address and EL1 access audit
+
+The exact D1 CPM and ABL decoders agree on the layout. ABL
+maps the controller to AP `0x0f409000`. The controller word's
+bits 13:8 must report at least four PSMs. The PSM3 descriptor
+is the 32-bit word at `0x0f409028`. For descriptor `d`, CPM
+`0x1942c` and `0x40c80`–`0x40cf2` compute the status address
+as follows.
+
+```text
+0x0f409000 + ((d & 0xf) << 12) + ((d >> 12) & 0x1f0)
+           + 0x64 * ((d >> 4) & 0xf) + 0x20
+```
+
+The exact DPU initializer selected by CPM `0x11e0` starts at
+text `0x5c814`. Its 17 records leave the controller header
+and PSM3 descriptor untouched. The audit also checked the
+other packed LPCM initializers for overlapping writes. No
+retained D1 stock bugreport or DSI0 trial log contains the
+descriptor or a Linux access to the resulting word. ABL's
+generic PSM getter establishes the AP decoder. Its identified
+stock caller reads the HSIO-S UFS state, leaving the DPU word
+without a stock read witness.
+
+An exhaustive check of the 8,192 address-field combinations
+gave aligned status words from `0x0f409020` to `0x0f4187ec`.
+They span the following trusted-firmware GC page rules.
+
+| Candidate pages | D1 GC rule |
+| --- | --- |
+| `0x0f409000`, `0x0f40b000`–`0x0f410000`, `0x0f412000`–`0x0f413000` | `0x30301` |
+| `0x0f40a000`, `0x0f411000` | `0x30303` |
+| `0x0f414000`–`0x0f418000` | `0x300` |
+
+The header and descriptor share the `0x30301` page at
+`0x0f409000`. That rule describes static policy. In v37,
+a different AP word with the same rule raised an EL1 SError
+after the wrapper and controller checks passed. Here the
+actual DPU descriptor, the exact status word and its access
+while the wrapper is held remain unqualified. Leave both the
+descriptor and status reads out of the boot fixture. The
+verified prerequisite-only fixture retains the NV guard and
+independent 600-second return.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
