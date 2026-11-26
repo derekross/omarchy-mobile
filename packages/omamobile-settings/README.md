@@ -12,7 +12,10 @@ refresh rate is saved in `~/.config/omamobile/refresh-rate`; auto-rotate keeps
 the saved rate when the phone turns, and `display.sh apply` sets it again at a
 session start and after every reload of Hyprland's config. With no saved rate
 the device default is used: `/usr/share/omamobile/refresh-rate-default`, 60 on
-husky, only if the panel lists it. The Default button goes back to that). The page runs
+husky, only if the panel lists it. The Default button goes back to that, and the page names it
+only when `display.sh get` reports one in "default". With the screen off Hyprland
+ignores the rate, so `apply` then sends nothing and fails; it is applied again at the
+next config reload, rotation or Settings tap). The page runs
 `backends/display.sh` through a fixed-argument runner, with no shell string.
 A second page, Battery, sets the charge limit (80, 85, 90, 95 or 100 %), only
 on a phone whose device package declares one in

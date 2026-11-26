@@ -4,17 +4,26 @@
 # omarchy-hw-display names like the shell does) and the refresh rate (applied live through
 # `hyprctl eval hl.monitor{...}` with the monitor's own name, size, position, scale and transform).
 # Prints one line of JSON.
-#   display.sh get                 {"brightness":50,"refresh":120,"rates":[60,120],"saved":0}  (saved: the kept choice, 0 for none)
+#   display.sh get                 {"brightness":50,"refresh":120,"rates":[60,120],"saved":0,"default":60}
+#                                  (saved: the kept choice, 0 for none; default: the device default below when the
+#                                  panel lists it, 0 for none)
 #   display.sh set brightness N    N is 10, 25, 50, 75 or 100 (never below 10, so the screen cannot go black)
 #   display.sh set refresh N       N must be one of the rates the monitor lists at its current size
 #   display.sh set refresh preferred   forget the choice and go back to the device default (below), else the
 #                                  panel's preferred mode
 #   display.sh apply               apply the saved choice at a session start, else the device default; with neither
-#                                  valid and listed it does nothing at all (no eval), so Hyprland's own rule stays
+#                                  valid and listed it does nothing at all (no eval), so Hyprland's own rule stays.
+#                                  It waits up to 5 s for the monitor at a session start, sends nothing when the
+#                                  panel already runs the wanted rate, and reads the rate back: with the screen off
+#                                  (DPMS) Hyprland ignores a monitor rule and still exits 0, so apply then sends
+#                                  nothing and fails; the rate comes back at the next config reload, rotation (when
+#                                  auto-rotate is on) or Settings tap, not when the screen comes on.
+#                                  apply and set refresh take a lock, so two applies (session start and the first
+#                                  config reload) never interleave.
 # The device default is a bare number in /usr/share/omamobile/refresh-rate-default, shipped by a device package that
 # wants a rate other than Hyprland's pick (husky: 60, as its panel scans out every frame at 120 even when idle).
 # It is used only while the user has no saved choice and only when the panel lists it; "saved" stays 0 then.
-# Every answer to get and set carries "saved" (0 for none). The rates are the monitor's own availableModes at its current width and height. The choice is saved as a bare number
+# Every answer to get and set carries "saved" and "default" (0 for none). The rates are the monitor's own availableModes at its current width and height. The choice is saved as a bare number
 # in ~/.config/omamobile/refresh-rate (a fixed path: the
 # auto-rotate user service may not see a session-only XDG_CONFIG_HOME), which `apply` and omamobile-sensors' auto-rotate read (the
 # shell's Hyprland config carries no monitor rule, so this is the only place a rate is set; phone.lua runs `apply` at
@@ -80,12 +89,13 @@ for want in ("%dx%d" % (w, h), "%dx%d" % (h, w)):  # the size as reported first,
                 pass  # a mode this parser does not know is left out
 tokens = {r: t for r, t in tokens.items() if re.fullmatch(r"[0-9]{1,5}x[0-9]{1,5}@[0-9]{1,4}(\.[0-9]{1,6})?", t)}
 cur = int(round(float(m["refreshRate"])))
-print(name, w, h, x, y, "%g" % scale, transform, cur, ",".join(str(r) for r in sorted(tokens)) or "-",
+dpms = 0 if m.get("dpmsStatus", True) is False else 1
+print(name, w, h, x, y, "%g" % scale, transform, cur, dpms, ",".join(str(r) for r in sorted(tokens)) or "-",
       ",".join("%d=%s" % (r, tokens[r]) for r in sorted(tokens)) or "-")' 2>/dev/null
 }
 # sets the monitor variables from mon_info ("-" stands for an empty list there)
 readmon() {
-  read -r name w h x y scale transform refresh rates tokens < <(mon_info) || return 1
+  read -r name w h x y scale transform refresh dpms rates tokens < <(mon_info) || return 1
   [[ $rates != - ]] || rates=""
   [[ $tokens != - ]] || tokens=""
 }
@@ -109,23 +119,38 @@ apply_mode() {
     || return 1
   [[ ${res,,} != *error* ]]
 }
-# a rate file holds exactly one bare number (1 to 3 digits) and at most one trailing newline, nothing else
+# a rate file holds exactly one bare number (1 to 3 digits, no leading zero) and at most one trailing newline, nothing
+# else; omamobile-sensors' autorotate.py (_read_rate) accepts exactly the same
 read_rate() {
   local r
   [[ -r $1 ]] || return 0
   r=$(cat -- "$1" 2>/dev/null; printf x) || return 0
   r=${r%x}; r=${r%$'\n'}
-  [[ $r =~ ^[0-9]{1,3}$ ]] && echo "$r" || true
+  [[ $r =~ ^[1-9][0-9]{0,2}$ ]] && echo "$r" || true
 }
 saved_rate() { read_rate "$rate_file"; }
 # the device default, only when the panel lists it at its current size
 default_rate() { local d; d=$(read_rate "$default_file"); [[ -n $d && ,$rates, == *",$d,"* ]] && echo "$d" || true; }
-out() { printf '{"brightness":%s,"refresh":%s,"rates":[%s]}\n' "$bright" "$refresh" "$rates"; }
-# the same, plus "saved": the choice kept in the file (0 for none, or one the panel does not list)
+# the answer: "saved" is the choice kept in the file (0 for none, or one the panel does not list), "default" the
+# device default when listed (0 for none)
 out_saved() {
-  local s; s=$(saved_rate)
+  local s d; s=$(saved_rate); d=$(default_rate)
   [[ -n $s && ,$rates, == *",$s,"* ]] || s=0
-  printf '{"brightness":%s,"refresh":%s,"rates":[%s],"saved":%s}\n' "$bright" "$refresh" "$rates" "$s"
+  printf '{"brightness":%s,"refresh":%s,"rates":[%s],"saved":%s,"default":%s}\n' "$bright" "$refresh" "$rates" "$s" "${d:-0}"
+}
+# one refresh change at a time: session start and the first config reload can both run apply
+lock() {
+  local f=${XDG_RUNTIME_DIR:-$HOME/.cache}/omamobile-display.lock
+  mkdir -p -- "${f%/*}" && exec 9>"$f" && flock -w 15 9 || fail "another refresh change is running"
+}
+# after an eval: true once the panel reports rate $1 (checked for up to 2 s)
+took() {
+  local i
+  for i in 1 2 3 4; do
+    sleep 0.5
+    readmon && [[ $refresh == "$1" ]] && return 0
+  done
+  return 1
 }
 
 case $verb in
@@ -139,40 +164,50 @@ set)
       if [[ -z $fake ]]; then set_brightness "$value" || fail "could not set the brightness"; fi
       bright=$value ;;
     refresh)
+      # the file changes only after the panel reports the new rate, so the page and the file never disagree; the
+      # monitor is read again right before the eval, so a turn by auto-rotate since read_all is not undone (one
+      # landing between that read and the eval still is)
       if [[ $value == preferred ]]; then
         [[ -n $name ]] || fail "cannot read the monitor"
-        def=$(default_rate)
         if [[ -z $fake ]]; then
-          apply_mode "${def:-preferred}" || fail "the screen did not accept the change"
-          rm -f -- "$rate_file"
-          sleep 1
+          lock
           readmon || fail "cannot read the monitor"
-        elif [[ -n $def ]]; then refresh=$def
+          def=$(default_rate)
+          apply_mode "${def:-preferred}" || fail "the screen did not accept the change"
+          if [[ -n $def ]]; then took "$def" || fail "the screen did not take the rate"
+          else sleep 1; readmon || fail "cannot read the monitor"; fi
+        else
+          def=$(default_rate); [[ -z $def ]] || refresh=$def
         fi
-        rm -f -- "$rate_file"
+        rm -f -- "$rate_file" || fail "could not forget the choice"
         out_saved; exit 0
       fi
-      [[ $value =~ ^[0-9]{1,3}$ ]] || fail "bad value"
+      [[ $value =~ ^[1-9][0-9]{0,2}$ ]] || fail "bad value"
       [[ -n $name ]] || fail "cannot read the monitor"
       [[ ,$rates, == *",$value,"* ]] || fail "this display does not list that rate"
       if [[ -z $fake ]]; then
-        apply_mode "$value" || fail "the screen did not accept the change"
-      fi
-      # saved right after the mode took, before the pause and the re-read
-      mkdir -p -- "${rate_file%/*}" && printf '%s\n' "$value" > "$rate_file" || fail "could not save the choice"
-      if [[ -z $fake ]]; then
-        sleep 1
+        lock
         readmon || fail "cannot read the monitor"
+        apply_mode "$value" || fail "the screen did not accept the change"
+        took "$value" || fail "the screen did not take the rate"
       else
         refresh=$value
-      fi ;;
+      fi
+      mkdir -p -- "${rate_file%/*}" && printf '%s\n' "$value" > "$rate_file" || fail "could not save the choice" ;;
     *) fail "unknown key" ;;
   esac
   out_saved ;;
 apply)
   # a phone with no readable backlight still gets its refresh rate back
   bright=$(get_brightness) || bright=-1
-  if ! readmon; then name=""; refresh=-1; rates=""; tokens=""; fi
+  [[ -n $fake ]] || lock
+  # at a session start the monitor may not be readable yet: up to 10 tries, 0.5 s apart
+  for try in 1 2 3 4 5 6 7 8 9 10; do
+    readmon && break
+    name=""; refresh=-1; rates=""; tokens=""
+    [[ -z $fake && $try != 10 ]] || break
+    sleep 0.5
+  done
   [[ -n $name ]] || fail "cannot read the monitor"
   want=$(saved_rate)
   # nothing is applied unless the panel lists the rate right now: the saved choice, else the device default; with
@@ -180,12 +215,16 @@ apply)
   # turned into a rule
   [[ -n $want && ,$rates, == *",$want,"* ]] || want=$(default_rate)
   [[ -n $want ]] || { out_saved; exit 0; }
+  # already there (a second apply, or a reload that kept it): nothing is sent
+  [[ $refresh != "$want" ]] || { out_saved; exit 0; }
   if [[ -z $fake ]]; then
-    # transform read as late as possible: auto-rotate (when enabled) may turn the screen between this read and the
-    # eval, and the eval would turn it back; the window is a few milliseconds
+    # Hyprland ignores the rule while the screen is off (and still exits 0): nothing is sent, and the failure says so
+    [[ $dpms == 1 ]] || fail "the screen is off; the rate is applied at the next config reload, rotation or Settings tap"
+    # the transform is read again right before the eval: auto-rotate may turn the screen after the first read, and
+    # the eval would turn it back; the gap left is this one read (a hyprctl call and a python start) and the eval
     readmon || fail "cannot read the monitor"
     apply_mode "$want" || fail "the screen did not accept the change"
-    refresh=$want
+    took "$want" || fail "the screen did not take the rate"
   else refresh=$want; fi
   out_saved ;;
 *)

@@ -8,7 +8,8 @@ ColumnLayout {
     property int brightness: -1
     property int refresh: -1
     property var rates: []
-    property int saved: 0   // the rate kept across restarts, 0 for none (the device default, 60 on husky, else the panel's own choice)
+    property int saved: 0   // the rate kept across restarts, 0 for none (then the device default, else the panel's own choice)
+    property int deviceDefault: 0   // the device package's default rate when the panel lists it (husky: 60), 0 for none
     property string status: qsTr("Reading the display...")
     property bool busy: true
     property int reqId: -1
@@ -19,10 +20,15 @@ ColumnLayout {
         if (r.brightness === undefined || r.refresh === undefined) { status = qsTr("The display backend gave no values."); return }
         brightness = r.brightness; refresh = r.refresh; rates = r.rates || []
         saved = r.saved !== undefined ? r.saved : 0
-        status = rates.length > 1 ? qsTr("Tap a value; it applies at once. The refresh rate is kept across restarts. Default goes back to the device's own choice (60 Hz on this phone).")
-                                  : qsTr("Tap a value; it applies at once.")
-        if (rates.length > 1 && saved !== 0 && saved !== refresh)
+        deviceDefault = r["default"] !== undefined ? r["default"] : 0
+        if (rates.length <= 1) { status = qsTr("Tap a value; it applies at once."); return }
+        status = qsTr("Tap a value; it applies at once. The refresh rate is kept across restarts.") + " "
+               + (deviceDefault !== 0 ? qsTr("Default goes back to this phone's own choice (%1 Hz).").arg(deviceDefault)
+                                      : qsTr("Default goes back to the screen's own choice."))
+        if (saved !== 0 && saved !== refresh)
             status += " " + qsTr("Saved %1 Hz, now %2 Hz.").arg(saved).arg(refresh)
+        else if (saved === 0 && deviceDefault !== 0 && deviceDefault !== refresh)
+            status += " " + qsTr("Default %1 Hz, now %2 Hz.").arg(deviceDefault).arg(refresh)
     }
     Connections { target: actions; function onFinished(tool, r, id) { if (tool === "display" && id === page.reqId) page.apply(r) } }
     Component.onCompleted: reqId = actions.run("display", ["get"])
