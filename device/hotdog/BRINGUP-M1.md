@@ -55,7 +55,22 @@ linux-omamobile (7.3) and Omarchy's userspace.
 
 **Slots.** The slot flags of a Qualcomm A/B phone live in GPT attributes on the
 boot LUN. On this phone a slot switch once moved the UFS boot LUN onto slot B's
-mismatched bootloader firmware and took a full EDL (MSM) restore. So:
+mismatched bootloader firmware and took a full EDL (MSM) restore.
+
+**The restores and `dtbo_a`, on record** (from the earlier port's own
+notes and the owner's copies). Two MSM restores of OxygenOS 10.0.14: the
+first on 2026-10-31, before the owner's partition copies of 10-31 23:30;
+the second on 2026-11-01 at about 12:30, after a `qbootctl -s b` slot
+switch left ABL_b (2023) running on the 2021 XBL. The restore package
+programs `dtbo_a` with stock's `dtbo.img`, so each restore put it back,
+and each time the earlier port's install erased it again with `fastboot
+erase dtbo_a`: once after the first restore (so the 10-31 copies hold
+`dtbo_b` and no `dtbo_a`), and once at 13:53 on 11-01, after the second.
+Omamobile never writes it (`qcom-abl-v2` takes `BOOT_IMAGES=boot` alone).
+What the restores did to `persist` and the modem partitions is in
+[MODEM-PLAN](MODEM-PLAN.md) §1.
+
+So:
 
 - Omamobile boots from `boot_a`. Slot A is current. `fastboot flash
   boot_a` clears its successful mark (H4), and nothing at boot marks it

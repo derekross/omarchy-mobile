@@ -119,13 +119,35 @@ kernel (from 0.1.7 also matched by the kernel's `PARTNAME`, so the rule covers
 modem opens it, and the modem's EFS writes change only that copy. They are
 lost at the modem's stop, as on the Pixels before the NV overlay.
 
-Backups (off-repo, they hold the IMEI): `~/android/reference/hotdog/partitions`
-(2026-10-31, before the owner's earlier port) and `~/android/reference/hotdog/nv-2026-11-14`
-(today, `modemst1`, `modemst2`, `fsg`, `fsc`, `oem_stanvbk`, `oem_dycnvbk`,
-`persist`, each checked against a second read on the phone). `modemst1`,
-`modemst2` and `persist` differ between the two: the earlier port's modem stack (11-02 to
-11-04) wrote them; our boots since have kept them `ro`. Check against the
-11-14 set before radio work:
+Backups (off-repo, they hold the IMEI):
+
+- **The reference: `~/android/reference/hotdog/nv-2026-11-14`** (`modemst1`,
+  `modemst2`, `fsg`, `fsc`, `oem_stanvbk`, `oem_dycnvbk`, `persist`, each
+  checked against a second read on the phone). Every check before radio work
+  is against this set. Our boots since have kept these partitions `ro`.
+- Before it: `~/android/reference/hotdog/partitions` (2026-10-31 23:30). It
+  was taken after the first MSM restore (2026-10-31, OxygenOS 10.0.14) and
+  before the second (2026-11-01, about 12:30; BRINGUP-M1 "Slots"), and
+  before any modem stack ran on the phone.
+
+`modemst1`, `modemst2` and `persist` differ between the two sets. What wrote
+them in between, as far as the records go:
+
+- **`modemst1` and `modemst2`: the owner's earlier port.** Its modem stack
+  (2026-11-02 to 11-04) ran rmtfs writable. Neither MSM restore wrote them:
+  the restore package's `settings.xml` lists both, and `fsg` and `fsc`, with
+  no image, so the tool leaves them as they are.
+- **`persist`: not certain.** The restore package does carry a `persist`
+  image, and its `settings.xml` programs it. But the phone's `persist` has
+  never matched that image: not in the 10-31 set, taken after the first
+  restore, and not in the 11-14 set. So either the tool skipped `persist`, or
+  something wrote it after each restore. Stock OxygenOS booted after each
+  one (the phone answered on adb before Linux was installed again), and
+  stock writes `persist`; the earlier port's modem stack came later. With no
+  copy taken between the second restore and 11-02, which of them changed
+  it in that interval can't be told.
+
+Check against the 11-14 set before radio work:
 
 ```sh
 for p in modemst1 modemst2 fsg fsc oem_stanvbk oem_dycnvbk persist; do
