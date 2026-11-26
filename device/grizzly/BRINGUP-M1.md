@@ -4630,14 +4630,50 @@ stock DT and driver evidence. Capture the firmware's live
 power handoff flags if available. Any later DSI status read
 needs a bound driver and confirmed runtime power, as in the
 stock probe. For the first native frame, qualify FE0/BE
-power and clock votes and the DSI0 link. Stock `vs_drm.ko`
-has `vs_dc_enable_display_pattern` calling
-`dc_hw_set_display_pattern`. Trace the pattern's placement in
-the pipeline before relying on it to avoid scanout DMA. For a
-RAM-backed test frame, qualify the display SMMU mapping first.
-Require a visible frame and frame-done evidence before adding
-touch or Hyprland. Carry forward USB SSH and the timed stock A
-return. Keep UFS read-only and unmounted.
+power and clock votes and the DSI0 link. The v73 CPM provider
+has neither the display genpd IDs nor the LPCM `0x23` clocks.
+Those suppliers need to be qualified before a mainline DSI0
+probe. Carry forward USB SSH and the timed stock A return.
+Keep UFS read-only and unmounted.
+
+#### Stock display test pattern
+
+The 4 KiB-page D1 `vs_drm.ko` registers a per-CRTC debugfs
+`pattern` file in `vs_crtc_late_register`. The display pattern
+help lists three insertion points, `BLD` (blender), `POST_PROC`
+(post-processing), and `OFIFO` (output FIFO). It also lists a
+solid-color mode and horizontal and vertical color bars. This
+is a different path from the driver’s per-plane pattern.
+
+`vs_dc_enable_display_pattern` checks the selected CRTC's
+pattern capability and validates the position and mode.
+`dc_hw_set_display_pattern` writes pattern enable, mode and
+parameters via `dc_write`. It takes no framebuffer address and
+does not call a buffer pin, DMA mapping, or plane setup function.
+That rules out a framebuffer requirement for programming the
+generator itself. An active stock modeset may still carry plane
+mappings and the offline trace does not establish whether all
+plane fetches can be disabled or whether OFIFO insertion works
+with the panel’s DSC mode.
+
+The immediate CRTC pattern path has no runtime-PM acquisition
+of its own. The stock delayed branch calls the same generator
+in `vs_dc_enable` immediately before `dc_hw_display_commit`.
+Use that ordering as the reference when implementing the first
+native pattern. A pattern request needs a powered and clocked
+output and a valid DSI0/panel mode. A write count from the stock
+debugfs handler only confirms that it accepted input.
+
+For first light, qualify a known panel mode, then generate one
+pattern at the blender while retaining the established panel
+mode and compression path. Record the pattern setting, a
+visible screen change, and frame completion. Stock exposes
+`frame_done_count` and `te_count` per CRTC and has a
+`disp_frame_done` trace event. Check for underruns and display
+SMMU faults, and confirm the pattern clears. A visible pattern
+tests the panel path before framebuffer DMA is qualified. A
+later RAM-backed test frame still needs a verified display
+SMMU mapping. Keep touch and Hyprland for after first light.
 
 ### Offline stock D1 device reference-clock diagnostic
 
