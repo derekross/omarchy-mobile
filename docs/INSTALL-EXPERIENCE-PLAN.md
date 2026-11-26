@@ -45,7 +45,7 @@ checked).
 What the person does:
 
 1. Opens the installer: a page on omamobile.org in a browser with WebUSB
-   (Chromium-based browsers), or the Omarchy Mobile Installer app on an
+   (Chromium-based browsers), or the Omamobile Installer app on an
    Omarchy computer. Both are the same installer with the same steps and the
    same checks (§11, M3).
 2. Picks their phone from the list, or plugs it in and lets the installer
@@ -55,7 +55,7 @@ What the person does:
    written, and acknowledges it (Google's terms for the firmware are
    accepted on Google's own page, in step 6 and §6.3). The warning says:
    - the phone is wiped, and everything on it is lost;
-   - Omarchy Mobile replaces Android as the phone's operating system, and
+   - Omamobile replaces Android as the phone's operating system, and
      what that means day to day: no Google apps or Play Store, Android apps
      only through the container later, and the features this release lacks
      (from the release notes, for example calls and SMS while the modem is
@@ -252,7 +252,7 @@ flash userdata` with the root image, `--set-active=b`, `reboot` **[V]**.
 
 The same writes, in the same order, from `manifest.json`. The confirmation
 step (today: typing the codename) becomes a screen that lists the six
-partitions in plain words ("the Omarchy Mobile system: boot images on slot
+partitions in plain words ("the Omamobile system: boot images on slot
 B, and the user data area, which is erased") with a button that needs a
 deliberate press (hold to confirm, or type the phone's name). The
 `userdata` image is streamed: zstd decompressed and cut into sparse chunks
@@ -290,7 +290,8 @@ install on the computer against doing it on the phone.
 
 Today: `omamobile-firstboot` reads `firstboot.conf`, creates the user, SSH,
 ufw, runs Omarchy's setup and our user setup, and deletes the file **[V]**.
-`systemd-firstboot` fails once on that boot (gap G3).
+`systemd-firstboot` failed once on that boot (gap G3) in images built before
+this change (2026.11.15 and earlier); images built with it mask the unit.
 
 Unchanged in substance. The installer shows the phone's progress (growing
 the root, creating the user, setting up Omarchy) from the install link
@@ -513,10 +514,10 @@ In the same installer, as first-class screens:
 - **Go back to Android:** `fastboot --set-active=a` and `reboot` (INSTALL.md,
   "Going back to Android"), with the explanation that Android will show its
   recovery screen and needs "Factory data reset" because `userdata` now
-  holds Omarchy Mobile. A reminder that a stock boot rewrites `efs`,
+  holds Omamobile. A reminder that a stock boot rewrites `efs`,
   `persist` and `modem_userdata`, so a later reinstall takes a new radio
   backup (AGENTS §1).
-- **Remove Omarchy Mobile completely:** a link to Google's own flashing
+- **Remove Omamobile completely:** a link to Google's own flashing
   tools for the phone's factory image. The installer doesn't flash stock
   itself: that writes the bootloader and radio, which no tool of ours does.
   A clear warning not to lock the bootloader unless both slots hold Google's
@@ -564,7 +565,7 @@ installer is that release installer:
   pad in setup mode. The installer's form asks for it only on a development
   install (today's `firstboot.conf` password).
 - **Development mode** is an advanced choice in the installer ("I build or
-  test Omarchy Mobile"): unlocked, plain ext4 or LUKS2, today's flow.
+  test Omamobile"): unlocked, plain ext4 or LUKS2, today's flow.
   Switching a secure phone to development mode means unlocking, which
   wipes; the installer says so.
 - **Going back to stock from a locked phone** needs a different screen:
@@ -666,6 +667,14 @@ else.
   id policy) and masks `systemd-firstboot.service`, as
   `omamobile-device-dodge` already does **[V]**; `phone-smoke` gets a "no
   failed units after first boot" row so it can't come back unnoticed.
+  **Done, not yet seen on a phone:** `rootfs/first-boot.sh` (from
+  `build-inside`) masks the unit and puts `LANG=C.UTF-8` and a UTC
+  `localtime` in the image; the machine id stays `uninitialized` and root
+  locked, as before; no keymap, since nothing asks for one on a phone.
+  `phone-smoke` already had a `systemd units` row for the current boot; it
+  gains `first boot units`, read from the journal of the boot
+  `omamobile-firstboot` ran in, so the failure shows after the restart that
+  follows provisioning. The next test install is the check.
 - **G4. The bootloader slot check can only read the current slot's
   version.** On cheetah fastboot reports `version-bootloader` for the
   current slot only, so `install-phone` stops and asks the user to confirm
@@ -703,7 +712,7 @@ else.
   `slot-retry-count` and `slot-fastboot-ok` are printed before and after.
   Nothing is flashed or erased, but the bootloader writes the flags to its
   own storage (`devinfo`). It is refused with `--reinstall`, and when slot
-  B reads as started and still startable (an installed Omarchy Mobile sent
+  B reads as started and still startable (an installed Omamobile sent
   back to slot A looks like that from fastboot, and so does stock after a
   system update): the round trip clears slot B's successful mark, which on
   some phones (the Pixel 9a) costs boot tries and can end in a fallback
@@ -796,7 +805,7 @@ real users.
 
 - **What:** one installer core (state machine, `manifest.json` rules,
   signature and checksum checks, fastboot, the sparse streamer, the install
-  link, the build index) used by both front ends. The Omarchy Mobile
+  link, the build index) used by both front ends. The Omamobile
   Installer app for Omarchy first (an Omarchy package with its udev rule),
   then other Linux distributions; macOS and Windows later.
 - **Needs:** the core in Rust, built natively and to WebAssembly, and one

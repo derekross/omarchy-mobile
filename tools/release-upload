@@ -56,15 +56,17 @@
 #     index).
 #
 # Server settings are tools/repo-publish's: OMAMOBILE_PKGS_HOST
-# (raven@nostr01.derekross.me), OMAMOBILE_PKGS_PORT (1022),
+# (omapub@nostr01.derekross.me), OMAMOBILE_PKGS_PORT (1022),
 # OMAMOBILE_PKGS_PATH (/var/www/html/pkgs.omamobile.org); the account must be
-# in `deployers`. OMAMOBILE_PKGS_URL (https://pkgs.omamobile.org) is where
+# in `deployers`. Since 2026-11-17 only omapub may write there, and only with
+# the build host's key: run this on the build host (tools/release upload
+# prints how). OMAMOBILE_PKGS_URL (https://pkgs.omamobile.org) is where
 # it is read back.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
 
-HOST=${OMAMOBILE_PKGS_HOST:-raven@nostr01.derekross.me}
+HOST=${OMAMOBILE_PKGS_HOST:-omapub@nostr01.derekross.me}
 PORT=${OMAMOBILE_PKGS_PORT:-1022}
 DEST=${OMAMOBILE_PKGS_PATH:-/var/www/html/pkgs.omamobile.org}
 URL=${OMAMOBILE_PKGS_URL:-https://pkgs.omamobile.org}
@@ -115,8 +117,8 @@ fpr=$(tr -d '[:space:]' < "$fpr_file")
 [[ $fpr =~ ^[0-9A-F]{40}$ ]] || die "keys/fingerprint.release does not hold a 40-digit fingerprint"
 cut -d: -f1 "$keyring/omamobile-trusted" | grep -cxF "$fpr" >/dev/null || die "omamobile-keyring does not trust the release key $fpr"
 source tools/lib/signing.sh
-why=$(revoked_file_check "$ROOT") || die "$why"
-if cut -d: -f1 "$keyring/omamobile-revoked" 2>/dev/null | grep -cxF "$fpr" >/dev/null; then
+revoked=$(revoked_list "$ROOT") || die "$revoked"
+if [[ $'\n'$revoked$'\n' == *$'\n'"$fpr"$'\n'* ]]; then
   die "the release key $fpr is revoked in omamobile-keyring"
 fi
 tmp=$(mktemp -d)

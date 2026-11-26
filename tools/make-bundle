@@ -233,7 +233,7 @@ for f in "$rootfs" "$rootfs.sha256" "${rootfs%.img.zst}.MANIFEST"; do
 done
 kernel_commit=$(git -C "${KERNEL_DIR:-$KERNEL_BASE/wt-int}" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 {
-  echo "# Omarchy Mobile $version ($label) for $(sed -n 's/^NAME="\(.*\)"$/\1/p' "$conf") ($DEVICE)"
+  echo "# Omamobile $version ($label) for $(sed -n 's/^NAME="\(.*\)"$/\1/p' "$conf") ($DEVICE)"
   echo "version: $version"
   echo "label: $label"
   echo "device: $DEVICE"
@@ -274,7 +274,7 @@ the bootloader, radio, persist, efs, modem, devinfo or vbmeta."
 was erased). Or flash Google's factory image for $DEVICE."
 fi
 cat > "$dir/README.txt" <<EOF
-Omarchy Mobile $version for the $(sed -n 's/^NAME="\(.*\)"$/\1/p' "$conf") ($DEVICE)
+Omamobile $version for the $(sed -n 's/^NAME="\(.*\)"$/\1/p' "$conf") ($DEVICE)
 $(printf '%s' "$label" | tr '[:lower:]' '[:upper:]')
 
 This is a $label: it installs and runs, but some hardware is still being
@@ -283,7 +283,7 @@ phone), it needs fastboot and your own factory image, and installing erases
 the phone's data. Keep stock Android's way back (below) in mind.
 
 Native Omarchy (Arch Linux ARM, Hyprland, Omarchy's packages) on the phone,
-with a mainline kernel and no Android. https://github.com/derekross/omarchy-mobile
+with a mainline kernel and no Android. https://github.com/derekross/omamobile
 INSTALL.md in this directory is the step-by-step guide; read it first.
 
 $rootname must be next to this directory: unpacking $name.tar
@@ -303,7 +303,7 @@ needs you. Run it again after any stop: it goes on from there.
 Install by hand: put the phone in fastboot mode (bootloader unlocked),
 connect it, and run "bash install" from this directory ("bash install"
 works even when a download lost the file's execute bit). It needs fastboot
-(android-tools), e2fsprogs, zstd, lz4, cpio, openssl, gpg and python3 on
+and img2simg (android-tools), e2fsprogs, zstd, lz4, cpio, openssl, gpg and python3 on
 this computer. The installer checks the phone first, asks for your user
 name, password, Wi-Fi and SSH key, shows exactly what it will write, and
 waits for you to type "$DEVICE".

@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Build Omarchy Mobile's root file system image (docs/RELEASES.md §6):
+# Build Omamobile's root file system image (docs/RELEASES.md §6):
 #   out/omamobile-rootfs-<device>-<version>-aarch64.img.zst   ext4, label omamobile-root
 #   out/omamobile-rootfs-<device>-<version>-aarch64.img.zst.sha256
 #   out/omamobile-rootfs-<device>-<version>-aarch64.MANIFEST  contents and versions
@@ -192,7 +192,12 @@ zstd -q -T0 -12 "$work/rootfs.img" -o "$work/$name.img.zst"
 mv "$work/MANIFEST" "$work/$name.MANIFEST"
 
 alarm_say "Checking the image"
-tests/rootfs-smoke "$work/$name.img.zst"
+(cd "$work" && sha256sum -c --quiet "$name.img.zst.sha256")
+# The smoke test reads rootfs.img, so the archive that is published is shown
+# to hold those bytes: a stream compare, with no second copy on disk
+zstd -q -dc "$work/$name.img.zst" | cmp -s - "$work/rootfs.img" ||
+  alarm_die "$name.img.zst doesn't unpack to the image that was built"
+tests/rootfs-smoke "$work/rootfs.img" "$work/$name.MANIFEST"
 # Publish only a complete, checked build. A failed rebuild leaves the old one.
 mv "$work/$name.img.zst" "$work/$name.MANIFEST" "$out/"
 mv "$work/$name.img.zst.sha256" "$out/"

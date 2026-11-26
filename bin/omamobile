@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# omamobile: Omarchy Mobile development tool (native Omarchy on Pixel).
+# omamobile: Omamobile development tool (native Omarchy on Pixel).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
@@ -87,8 +87,8 @@ Usage: [DEVICE=<codename>] omamobile <command>
                    and jump into them (no reboot or fastboot). Device tree changes
                    still need: omamobile images, then flash the image holding the
                    DTB (vendor_kernel_boot, or vendor_boot without it)
-  fastboot         Get the phone into fastboot without buttons (adb, reboot-to,
-                   or crash until ABL falls back to stock Android on slot A)
+  fastboot         Get the phone into fastboot without buttons (adb or reboot-to;
+                   fallback behavior follows the device's boot method)
   flash            Flash the experiment images to slot B and boot them
                    (--from-slot-a: a development phone that fell back to stock on slot A)
   push             Write the images into slot B from the running phone over SSH,
@@ -126,10 +126,15 @@ load_device() {
     fi
   done < "$file"
   case $DEV_BOOT_METHOD in
-    android-v4|android-v0|qcom-abl) ;;
-    *) die "$file: unsupported BOOT_METHOD=$DEV_BOOT_METHOD; this command supports android-v4, android-v0 and qcom-abl" ;;
+    android-v4|android-v0|qcom-abl|ram-only) ;;
+    *) die "$file: unsupported BOOT_METHOD=$DEV_BOOT_METHOD; this command supports android-v4, android-v0, qcom-abl and ram-only" ;;
   esac
   [[ $DEV_CODENAME == "$DEVICE" ]] || die "$file: CODENAME=$DEV_CODENAME, expected $DEVICE"
+  if [[ $DEV_BOOT_METHOD == ram-only ]]; then
+    [[ ${DEV_BOOT_IMAGES+x} && -z $DEV_BOOT_IMAGES && ${DEV_UFS_RW+x} && -z $DEV_UFS_RW ]] \
+      || die "$file: ram-only requires empty BOOT_IMAGES and UFS_RW"
+    return 0
+  fi
   # Safety: the guard's allowlist may name slot B's boot images and userdata
   # only, must hold userdata, and every boot image we write must be on it.
   # initramfs packs this list into the image, and the init checks it again.
@@ -262,6 +267,20 @@ images_for_device() {
   [[ $got == "$DEVICE" ]] || die "$1 holds images for '${got:-an unknown device}', not $DEVICE (run: DEVICE=$DEVICE omamobile images)"
 }
 
+# An AVB_FOOTERS image is padded to its declared partition size (bin/omamobile
+# images), because ABL reads the footer from the end of the partition: refuse a
+# short or oversized image before contacting the phone.
+check_avb_image_sizes() {
+  local img=$1 e p avb isize
+  for e in ${DEV_AVB_FOOTERS:-}; do
+    p=${e%%:*} avb=$((${e#*:}))
+    [[ -f "$img/$p.img" ]] || die "missing $img/$p.img (run: omamobile images)"
+    isize=$(stat -c %s "$img/$p.img")
+    ((isize == avb)) ||
+      die "$p.img is $isize bytes, not the $avb bytes device/$DEVICE/device.conf's AVB_FOOTERS pads it to (bin/omamobile images)"
+  done
+}
+
 # Is <image>_b on the device's storage-guard allowlist?
 slot_b_allowed() { [[ " $DEV_UFS_RW " == *" ${1}_b "* ]]; }
 
@@ -385,7 +404,7 @@ cmd_kernel() {
   # MANIFEST: clang's own version line (the Android build and llvm-project
   # commit) and the directory's name, never a path (MANIFEST is published)
   {
-    echo "clang: $("$CLANG_DIR/bin/clang" --version | head -1)"
+    echo "clang: $("$CLANG_DIR/bin/clang" --version | sed -n 1p)"
     echo "clang source: $CLANG_SOURCE, $(basename "$CLANG_DIR")"
   } > "$KERNEL_OUT/toolchain.txt"
   say "$(head -1 "$KERNEL_OUT/toolchain.txt")"
@@ -555,7 +574,7 @@ initramfs_config() {
   # pack it as one line with single spaces, the form the init accepts
   read -ra rw <<<"$DEV_UFS_RW"
   # The USB gadget's product string: USB_PRODUCT, else NAME. Neither: no
-  # file, and the init says "Omarchy Mobile". A USB string descriptor holds
+  # file, and the init says "Omamobile". A USB string descriptor holds
   # at most 126 characters; printable ASCII keeps it one plain line.
   local product=${DEV_USB_PRODUCT:-${DEV_NAME:-}}
   if [[ -n $product ]]; then
@@ -618,6 +637,7 @@ initramfs_config() {
 cmd_initramfs_config() {
   [[ -n ${1:-} ]] || die "usage: omamobile initramfs-config <dir>"
   load_device
+  [[ $DEV_BOOT_METHOD != ram-only ]] || die "initramfs-config refuses BOOT_METHOD=ram-only"
   initramfs_config "$1"
   ls -l "$1"
 }
@@ -633,7 +653,7 @@ pack_initramfs_modules() {
   mkdir -p "$dest"
   for m in "$@"; do
     [[ $m =~ ^[a-z0-9_-]+$ ]] || die "INITRAMFS_MODULES: bad module name '$m'"
-    ko=$(find "$mdir" -name "$m.ko" | head -1)
+    ko=$(find "$mdir" -name "$m.ko" | sed -n 1p)
     if [[ -z $ko ]] && grep -q "/$m\.ko\$" "$mdir/modules.builtin" 2>/dev/null; then
       say "INITRAMFS_MODULES: $m is built in"
       continue
@@ -668,6 +688,7 @@ cmd_initramfs() {
   old_umask=$(umask)
   umask 022
   load_device
+  [[ $DEV_BOOT_METHOD != ram-only ]] || die "initramfs refuses BOOT_METHOD=ram-only"
   # A leading slash is repo-root relative, so devices share initramfs/init.
   # Anything else is relative to device/<codename>/.
   local init
@@ -816,7 +837,7 @@ cmd_initramfs() {
   if [[ -f $ROOT/packages/$DEV_PACKAGE/src/omamobile-bootctl.c ]]; then
     [[ -n ${CLANG_DIR:-} && -d $CLANG_DIR ]] || die "no clang found: run tools/fetch-toolchain (or 'lineage-ref sync', or set CLANG_DIR)"
     sysroot=$(alpine_sysroot)
-    builtins=$(find "$CLANG_DIR/lib/clang" -name 'libclang_rt.builtins-aarch64-android.a' | head -1)
+    builtins=$(find "$CLANG_DIR/lib/clang" -name 'libclang_rt.builtins-aarch64-android.a' | sed -n 1p)
     "$CLANG_DIR/bin/clang" --target=aarch64-linux-musl --sysroot="$sysroot" -fuse-ld=lld -static -nostdlib -O2 \
       -o "$stage/usr/local/bin/devmem" "$sysroot/usr/lib/crt1.o" "$sysroot/usr/lib/crti.o" \
       "$ROOT/tools/devmem.c" -L"$sysroot/usr/lib" -lc "$builtins" "$sysroot/usr/lib/crtn.o"
@@ -880,10 +901,11 @@ cmd_initramfs() {
 
 cmd_images() {
   load_device
-  local img="$KERNEL_OUT/images"
+  local img="$KERNEL_OUT/images" rp
   # Pixels: the pinned mkbootimg or the checkout's (MKBOOTIMG_DIR).
   # Tree-local mkbootimg is for qcom-abl.
   local tools="$MKBOOTIMG_DIR"
+  [[ $DEV_BOOT_METHOD != ram-only ]] || die "images refuses BOOT_METHOD=ram-only"
   if [[ $DEV_BOOT_METHOD == qcom-abl ]]; then
     tools="$ROOT/system/tools/mkbootimg"
     [[ -f $tools/mkbootimg.py ]] || tools="$SRC_DIR/system/tools/mkbootimg"
@@ -912,7 +934,15 @@ cmd_images() {
     [[ -f $MKDTBOIMG ]] ||
       die "no mkdtboimg.py at $MKDTBOIMG: run tools/fetch-toolchain, or set SRC_DIR to an Android checkout (or MKDTBOIMG)"
   fi
-  mkdir -p "$img" && rm -rf "$img"/*
+  # Refuse a symbolic link: the one way this wipe can leave the build
+  # directory (audit S-6 — e.g. an images dir linked to /).
+  mkdir -p -- "$img"
+  [[ ! -L $img ]] ||
+    die "images: refusing to wipe a symbolic link '$img' (KERNEL_OUT='$KERNEL_OUT')"
+  rp=$(realpath -- "$img" 2>/dev/null) || rp=
+  [[ -n $rp && $rp != / ]] ||
+    die "images: refusing to wipe suspicious dir '$img' (KERNEL_OUT='$KERNEL_OUT')"
+  rm -rf "$img"/*
 
   # The descriptor's bring-up overlays, compiled from device/<codename>/overlays
   # and applied onto the kernel's DTB, in order. The kernel's own DTB is left
@@ -1223,6 +1253,8 @@ cmd_fastboot() {
       "$ssh" '(sleep 1; PATH=/usr/local/bin:$PATH reboot-to bootloader) >/dev/null 2>&1 &' || true
       sleep 25
       if ! in_fastboot && "$ssh" true 2>/dev/null; then
+        [[ $DEV_BOOT_METHOD != ram-only ]] \
+          || die "reboot-to bootloader did not reach fastboot; use the buttons (see device/$DEVICE/BRINGUP-M1.md)"
         say "Bootloader ignored the reason; crashing so it falls back to slot A"
         "$ssh" '(sleep 1; echo c > /proc/sysrq-trigger) >/dev/null 2>&1 &' || true
       fi
@@ -1247,6 +1279,7 @@ cmd_flash() {
   esac
   (($# <= 1)) || die "usage: omamobile flash [--from-slot-a]"
   load_device
+  [[ $DEV_BOOT_METHOD != ram-only ]] || die "flash refuses BOOT_METHOD=ram-only (no persistent install path)"
   # Qualcomm ABL keeps slot flags in the GPT. A fastboot set_active can clear
   # successful and refill retries; the bit-54 mark has no §3.1 entry yet.
   # Refuse here; day-2 updates use push once that path is viable, and the
@@ -1257,6 +1290,7 @@ cmd_flash() {
   [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
     die "flash refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
+  check_avb_image_sizes "$img"
   in_fastboot || die "phone not in fastboot (try: omamobile fastboot)"
   local serial cur
   serial=$(fastboot_serial) || exit 1
@@ -1266,7 +1300,7 @@ cmd_flash() {
   # from stock Android on A, which a development phone falls back to (and
   # `omamobile fastboot` crashes it into), so that case is named by hand
   # with --from-slot-a.
-  cur=$(timeout 10 fastboot -s "$serial" getvar current-slot 2>&1 | sed -n 's/^current-slot: *_\{0,1\}\([ab]\)$/\1/p' | head -1)
+  cur=$(timeout 10 fastboot -s "$serial" getvar current-slot 2>&1 | sed -n 's/^current-slot: *_\{0,1\}\([ab]\)$/\1/p' | sed -n 1p)
   if [[ $cur == a ]]; then
     ((from_a)) || die "this phone runs from slot A (a release from slot A, or stock Android); flash writes slot B and makes it active, development only. A development phone that fell back to stock on slot A: omamobile flash --from-slot-a"
     printf '\e[1;31m' >&2
@@ -1311,6 +1345,7 @@ WARN
 cmd_push() {
   local img="$KERNEL_OUT/images" ssh="$ROOT/tools/phone-ssh" p dev want got rel
   load_device
+  [[ $DEV_BOOT_METHOD != ram-only ]] || die "push refuses BOOT_METHOD=ram-only (no persistent install path)"
   # Same class of refusal as flash: boot_b is on sde here, and there is no
   # in-tree day-2 rewrite path for qcom-abl yet. Refuse before any phone I/O
   # (modules-push would otherwise rewrite the running root's modules).
@@ -1319,6 +1354,7 @@ cmd_push() {
   [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
     die "push refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
+  check_avb_image_sizes "$img"
   "$ssh" true || die "phone not reachable at 172.16.42.1"
   # Read-only, before anything else (modules-push included): push writes
   # slot B, so the phone must say it runs from B. A release installed on the
@@ -1363,16 +1399,22 @@ cmd_push() {
   # AVB_FOOTERS image is padded to the descriptor's partition size, with its
   # footer at the end, so that size must be the partition's exactly.
   local -A devs=()
-  local sectors bytes avb e
+  local sectors bytes avb e sys globs="" l
+  # The LUNs the init guards: sda, plus the descriptor's UFS_RW_LUNS
+  # (load_device checked those are sdb..sdz)
+  for l in sda ${DEV_UFS_RW_LUNS:-}; do globs+=" /sys/block/$l/$l*"; done
   for p in $DEV_BOOT_IMAGES; do
     slot_b_allowed "$p" || die "${p}_b is not on device/$DEVICE's storage-guard allowlist; refusing"
     [[ -f "$img/$p.img" ]] || die "missing $img/$p.img (run: omamobile images)"
     # Find the partition by GPT name; the init guard leaves only these writable
-    dev=$("$ssh" "for s in /sys/block/sda/sda*; do grep -qx 'PARTNAME=${p}_b' \$s/uevent && echo /dev/\${s##*/}; done; true")
-    [[ -n "$dev" ]] || die "${p}_b not found on the phone"
-    [[ "$("$ssh" "cat /sys/block/sda/${dev#/dev/}/ro")" == 0 ]] || die "$dev (${p}_b) is read-only; refusing"
+    sys=$("$ssh" "for s in$globs; do grep -qx 'PARTNAME=${p}_b' \$s/uevent && echo \$s; done; true")
+    [[ -n "$sys" ]] || die "${p}_b not found on the phone (looked on:$globs)"
+    [[ $sys != *$'\n'* ]] || die "${p}_b is on more than one partition (${sys//$'\n'/, }); refusing"
+    [[ $sys =~ ^/sys/block/(sd[a-z])/(sd[a-z])[0-9]+$ && ${BASH_REMATCH[1]} == "${BASH_REMATCH[2]}" ]] || die "unexpected partition path for ${p}_b: $sys"
+    dev=/dev/${sys##*/}
+    [[ "$("$ssh" "cat $sys/ro")" == 0 ]] || die "$dev (${p}_b) is read-only; refusing"
     # sysfs counts 512-byte sectors, whatever the device's block size
-    sectors=$("$ssh" "cat /sys/block/sda/${dev#/dev/}/size")
+    sectors=$("$ssh" "cat $sys/size")
     [[ $sectors =~ ^[0-9]{1,15}$ ]] || die "cannot read the size of $dev (${p}_b)"
     bytes=$((sectors * 512))
     (($(stat -c %s "$img/$p.img") <= bytes)) || die "$p.img is larger than ${p}_b ($dev, $bytes bytes); refusing"

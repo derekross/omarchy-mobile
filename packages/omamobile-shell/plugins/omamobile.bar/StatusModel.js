@@ -51,6 +51,9 @@ function cellGlyph(cell) {
   case "no-sim": case "locked": case "failed": return String.fromCodePoint(0xF0783)
   case "searching": return String.fromCodePoint(0xF08BF)
   }
+  // Mobile data off: the crossed-out bars, as quick settings' Mobile data
+  // tile shows it (calls and texts still work; the card says so).
+  if (cell.data === false) return String.fromCodePoint(0xF0783)
   if (cell.strength < 0) return String.fromCodePoint(0xF08BF)
   return cellularIcon(cell.strength)
 }
@@ -71,7 +74,8 @@ function parseCell(line) {
   try { v = JSON.parse(String(line || "")) } catch (e) { return null }
   if (!v || typeof v !== "object") return null
   return { modem: v.modem === true, state: String(v.state || "none"), strength: Number(v.strength),
-           tech: String(v.tech || ""), roaming: v.roaming === true }
+           tech: String(v.tech || ""), roaming: v.roaming === true,
+           data: v.data === true ? true : (v.data === false ? false : null) }
 }
 
 // The call chip: the elapsed time of the call in progress, "" for none.
@@ -145,11 +149,42 @@ function batteryIcon(percent, charging, full) {
   return charging ? chargingIcons[index] : defaultIcons[index]
 }
 
+// The bar's own keys in shell.json's bar object (batteryStyle, statusIcons).
+var BATTERY_STYLES = ["icon", "percent", "icon-percent", "horizontal", "horizontal-percent"]
+var STATUS_ICONS = ["bluetooth", "wifi", "cell", "dnd", "unread"]
+
+// bar.batteryStyle, one of BATTERY_STYLES. Without one (or an unknown one)
+// the older bar.showBatteryPercent decides, as it did before: false is the
+// icon alone, anything else the icon and the number.
+function batteryStyle(config) {
+  var c = config && typeof config === "object" ? config : {}
+  var s = c.batteryStyle
+  if (typeof s === "string" && BATTERY_STYLES.indexOf(s) >= 0) return s
+  return c.showBatteryPercent === false ? "icon" : "icon-percent"
+}
+
+// bar.statusIcons.<name>: only an explicit false hides an icon.
+function iconShown(config, name) {
+  var c = config && typeof config === "object" ? config : {}
+  var icons = c.statusIcons && typeof c.statusIcons === "object" ? c.statusIcons : {}
+  return icons[name] !== false
+}
+
+// The bolt shown beside the styles whose glyph has none (BatteryIndicator:
+// the icon styles use the charging glyphs, which carry one).
+function boltGlyph() { return String.fromCodePoint(0xF140B) }
+
+function batteryLow(percent, charging) {
+  return percent >= 0 && percent <= 10 && charging !== true
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     findDevice: findDevice, connectedNetwork: connectedNetwork, wifiIcon: wifiIcon, networkIcon: networkIcon,
     cellularIcon: cellularIcon, cellGlyph: cellGlyph, cellText: cellText, parseCell: parseCell,
     callChip: callChip, elapsed: elapsed, batteryIcon: batteryIcon,
+    batteryStyle: batteryStyle, iconShown: iconShown, boltGlyph: boltGlyph, batteryLow: batteryLow,
+    BATTERY_STYLES: BATTERY_STYLES, STATUS_ICONS: STATUS_ICONS,
     stampOf: stampOf, parseStamp: parseStamp, unreadCount: unreadCount, unreadStored: unreadStored
   }
 }

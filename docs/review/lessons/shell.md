@@ -1,277 +1,416 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Review lessons: Shell and scripts (part 1 of 2)
+# Review lessons: Shell and scripts (part 1 of 4)
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
-- **L-765. `date +%s%3N` is not a millisecond clock everywhere: take milliseconds from `%s%N`.**
-  uutils' `date` (0.10.0, on the build machine) drops the nanoseconds' leading
-  zeros before it takes three digits, so 3 ms into a second reads as 365 and one
-  reading in ten is wrong by up to 900 ms. `omamobile-keys`' one-second wait
-  ended at 605 and 791 ms there and failed `test/keys.sh` about one run in six,
-  which stopped a publish; GNU `date` on the laptop and in CI never showed it.
-  *Check:* `git grep -n '%[0-9]N'`; a timing test that fails on one machine
-  only is run there in a loop with the clock printed, before the code is blamed.
-  See L-710. *From:* #640's test on ms01, round 52, 2026-11-11.
-- **L-764. A new tool that reaches the phone goes through `tools/phone-ssh`
-  and passes on why a transfer failed.** #666's `tools/ncm-transfer` called
-  `ssh` itself in batch mode, so the key, host-key and interface settings
-  from `OMAMOBILE_SSH_*` didn't apply and the contributor's own run needed an
-  uncommitted wrapper; against a fake `ssh` that printed "Host key
-  verification failed." it showed only "FAIL: SSH, size or digest check".
-  *Check:* `grep -n "'ssh'\|\bssh " <new tool>`, read the body for "wrapper"
-  and "locally", and run the tool against a stand-in that fails with a
-  message. Extends L-41, L-89 and L-276. *From:* #666, round 52, 2026-11-11.
-- **L-763. When we ask for "refuse first", every line above the first refusal
-  is read for a write, the log's truncation included.** #659 put its refusals
-  before the trap as asked, but below `: > $L`, and the log is one fixed file,
-  so a start refused because the modem is up wipes the previous series'
-  record (that day the 313-sleep one). *Check:* `sed -n '1,/<first
-  refusal>/p' <script> | grep -n '>\|rm \|mv \|echo .* >'`, and ask for the
-  truncation below the refusals or the old log kept aside. Extends L-468.
-  *From:* #659, round 52, 2026-11-11.
-- **L-762. A check moved ahead of a tool's "nothing written yet" point brings
-  its scratch files and cleanup trap with it.** #648 moved `install-phone`'s
-  ramdisk read before the phone, and with it the work directory's setup and
-  `trap cleanup EXIT`, so a files-only `--verify-only` and every early refusal
-  emptied a directory another install was using. *Check:* list the paths the
-  moved step writes and the traps set before it, plant files at each shared
-  path, run every exit that now passes the step and list the directory
-  afterwards; ask for a private `mktemp -d` directory. Extends L-468 and
-  L-539. *From:* #648, rounds 51 and 52, 2026-11-11.
-- **L-761. An optional key in an associative array is expanded with `:-` under
-  `set -u`, and a step runner that tolerates failures gets a test that reads
-  the step's result, not the run's exit.** #662's
-  `${C[FULL_NAME]//[[:space:]]/}` died with "unbound variable" in firstboot's
-  optional user-setup step whenever the installer wrote no name; the test's
-  no-name run passed because the step is optional. *Check:* `grep -n
-  '\${C\[[A-Z_]*\][^:}]' <script>` for keys the writer omits
-  (`tools/install-phone` writes `FULL_NAME`, `EMAIL` and `WIFI_*` only when
-  given), and have the test grep the output for `FAILED` and `with warnings`.
-  Extends L-14, L-454 and L-468. *From:* #662 (commit review), round 52,
-  2026-11-11.
-- **L-740. A string-replacement patch on a shared script is read as the resulting text, also when it implements our own optional suggestion.** #505's anchor covered half of a `cmd && say …` line, so the new block inherited the old line's tail (`fi 2>/dev/null && say "ssh: …"`) and the claimed fix didn't happen; it came from a "suggestion, not a condition" in our round-50 comment. *Check:* apply the patch step to today's shared file in scratch and read the lines around each anchor. Extends L-244 and L-183. *From:* #505, round 51, 2026-11-11.
-- **L-739. A change that narrows a container's mounts is checked against every path the container command and its script open.** #505 replaced the repository mount with four file mounts and kept `sh /src/tools/…/initramfs-inside.sh` as the command; `bash -n` and CI stayed green. *Check:* list the `-v` targets, then grep the command line and the inside script for `/src/` and `/input/` paths and match them one by one. Extends L-497 and L-454. *From:* #505, round 51, 2026-11-11.
-- **L-738. A feature that refuses on a cached, asynchronous flag is walked through the feature's own path that sets the flag.** #612 refuses to open Search while `sessionLocked` is true; the flag is re-read only on keyboard changes, the lock path ends with the keyboard down, and Search is what raises the keyboard, so after an unlock the dock tap is dead. *Check:* for every `if (<cached flag>) return` a PR adds, list what refreshes the flag, then walk from the state the feature leaves behind to its next use; a test that sets the flag by hand proves nothing about that. Extends L-622. *From:* #612, round 51, 2026-11-11.
-- **L-737. A test stub of a third-party QML type is checked for signals the real type declares but never emits.** #658's first restart waited for `ScreencopyView.stopped`; Quickshell 0.3.2 declares it in `view.hpp` and nothing emits it, while the stub did, so the test passed and the feature never ran on a phone. *Check:* for every signal or property of a stubbed type the code reacts to, grep the upstream source at the phone's version for `emit this-><name>` or the setter, and make the stub fail the way the real type does. Extends L-454 and L-618. *From:* #658, round 51, 2026-11-11.
-- **L-736. A window rule that floats a fixed-size dialog is tested with the window's `at` and `size` and a screenshot, on the narrowest phone.** #602's rule passed its Lua test ("floating, centred, not maximized"), but on the 405 px wide 9a the 634 and 729 px dialogs sat at x = -229 and -324 with controls off screen, and a floating window can't be dragged back. *Check:* for any rule that takes a window out of maximize, ask for `hyprctl -j clients` and a screenshot of the widest dialog; a negative `at.x`, or `at.x + size.w` past the screen, hides controls. *From:* #602, round 51, 2026-11-11.
-- **L-735. A secret taken from the environment is removed from the environment the tool hands to its children.** #652 passed its sudo password variable on to a terminal it keeps open for an hour. *Check:* for any `*_PW` or `*_TOKEN` variable, find every `env=` and `Popen`; for `sudo -S`, ask what reads the piped password when sudo already has a ticket and asks nothing. *From:* #652, round 51, 2026-11-11.
-- **L-734. A tool whose cleanup lives in `try/finally` is checked for the signals that skip it, SIGHUP first.** #652 handled Ctrl-C and SIGTERM, but a dropped SSH session, the likely failure on a phone whose only link is USB, sends SIGHUP, and Python then exits without `finally`: do-not-disturb would stay on with nothing to notice it. *Check:* `grep -n 'signal\.\|trap ' <tool>`, list each state the tool changes, and ask for a leftover check at start. Extends L-468 and L-613. *From:* #652, round 51, 2026-11-11.
-- **L-733. A script that changes a safety setting sets its restore trap first, and every early `exit` is read against what has already been changed.** #659 turned the runtime watchdog off and `panic_on_rcu_stall` on 20 lines above a refusal and 35 lines above `trap restore EXIT`, and its restore put back one of the five switches. *Check:* list each write to `/proc/sys`, `/sys/power`, tracefs or systemd's manager properties with its line, then the line of the trap and of every `exit` between them, and tick each write off in the restore function. Extends L-613 and L-468. *From:* #659, round 51, 2026-11-11.
-- **L-716. A check whose input can fail to be read is walked for what the
-  failed read decides.** #596's `cpio -it 2>/dev/null | grep -c … || true`
-  read a broken archive as "no keys" (key appended, then flashed) and a late
-  failure as "keys present"; `extract-vendor-firmware` compares
-  `ro.product.vendor.device` only `if` `build.prop` could be read, so a failed
-  read stages another phone's firmware. *Check:* take the producer's status
-  alone (`out=$(cmd) || die`), test the text from a here-string, try a
-  truncated input, and grep `if get_file` and `2>/dev/null` above each
-  compare. Extends L-161 and L-635. *From:* #623 (after #596) and #625, round
-  50.
-- **L-715. Folding independent once-only steps into one helper makes them all
-  wait for its precondition.** #581 moved `--no-first-run`, the user agent and
-  the input-method flags, which need no geometry, into a helper that returns
-  early when geometry is unknown. *Check:* list each step's own inputs and
-  confirm an early return for one input skips only the steps that need it.
-  Extends L-468. *From:* #581, round 50.
-- **L-714. A "learn the user's choice" feature is probed with the sensor at
-  its floor and its ceiling.** The 7 Pro's light sensor is under the panel, so
-  a covered reading is common; one slider move while covered taught #636's
-  curve 206 nits for the dark. *Check:* run the learning path at both ends and
-  print what the learned curve then gives a decade either side. Extends L-536.
-  *From:* #636, round 50.
-- **L-713. A daemon that shares a sysfs value with an input handler is probed
-  for a write landing between its read and its write.** #636 reads the
-  backlight before each ramp step so the slider wins, but `omamobile-keys`'
-  write of 0 in that gap is overwritten and the lock shows lit. *Check:* drive
-  the controller on a fake device whose `write` hook changes the value first,
-  and walk every other writer on main (`git grep -n
-  'brightnessctl\|omarchy-brightness' packages`). Extends L-537 and L-615.
-  *From:* #636, round 50.
-- **L-712. A line a setup step writes into a user's config that loads a
-  package file is checked for the package going away.** #635 puts a bare
-  `dofile()` into `monitors.lua`; after a downgrade or a branch switch the
-  rest of the file doesn't run and Hyprland's default scale (2) takes over.
-  *Check:* evaluate the generated file with the target missing, and ask for a
-  guarded load with the old values as fallback. Extends L-442. *From:* #635,
-  round 50.
-- **L-711. A shell PR that adds a surface is re-read against the Back rules
-  main gained since its base; a clean merge hides them.** After #643, #539's
-  Hotspot page still closed everything on Escape (the one page where Back
-  skips a level), and #612's two always-mapped layers weren't in
-  `HomeModel.BACK_FURNITURE`, which takes Back away from the home screen.
-  *Check:* `git log <merge-base>..origin/main --
-  packages/omamobile-shell/plugins/omamobile.back`; each close path of the new
-  surface against the rule; `git grep -n 'namespace:' <head>` against
-  `BACK_FURNITURE` and `COVERING_LAYERS`. Extends L-615. *From:* #539, #612
-  and #582 with #643, round 50.
-- **L-710. `EPOCHREALTIME` carries the locale's decimal separator.** #640's
-  `${EPOCHREALTIME/./}` deadline became a comma expression under a comma
-  locale: a nonsense end time, and an octal error that ended the loop at
-  random. *Check:* `grep -n EPOCHREALTIME` in the diff; run the arithmetic
-  under a scratch comma locale (`localedef -i de_DE -f UTF-8
-  DIR/de_DE.UTF-8`, then `LOCPATH=DIR LC_ALL=de_DE.UTF-8`); prefer `date
-  +%s%3N` or strip `[.,]`. *From:* #640, round 50.
-- **L-709. A second writer of a credential is compared with the first one's
-  bookkeeping.** `omamobile-set-pin` records pin-or-password and sets the
-  lock's keypad toggle; #630's page calls the same `passwd` and knows nothing
-  of the record, so a password phone can't use it. *Check:* `git grep -n
-  passwd origin/main -- 'packages/*/bin'` and list every file the existing
-  path writes besides the password. Extends L-450. *From:* #630, round 50.
-- **L-708. A page that starts a credential change is checked for where the
-  result goes when the page is destroyed.** #630's Change PIN page drops its
-  result when Back, a relaunch (`navigate("root")`) or a D-Bus `Open` destroys
-  it while `passwd` runs, so the PIN can change with nothing on screen.
-  *Check:* list every way the page can go away mid-change, and ask that the
-  result outlive the page (kept in the runner, or a notification). Extends
-  L-616. *From:* #630, round 50.
-- **L-707. A settings page is run once from the state most phones are in: its
-  dependency missing.** #629's test covered "no theme: `get` says so" but not
-  the buttons still tappable there; `set level off` changed the phone-wide
-  profile and no button could change it back. *Check:* run every `set` verb of
-  the backend in the "unavailable" state, and read the QML for what stays
-  enabled after a failed first read. Extends L-617. *From:* #629, round 50.
-- **L-706. A timing fix for a test is verified by forcing the order of events,
-  not by loading the machine.** #638's "every loaded run failed" couldn't be
-  reproduced: main passed 4 of 4 pinned to one core under 12 busy loops. A
-  scratch wrapper that delayed the fake's `push()` 30 ms and stalled the
-  client before each property read made main fail with exactly the two
-  reported failures, and the head pass. *Check:* read the diagnosis for its
-  order of events, inject it by patching the test helpers from a file outside
-  the worktree, and compare the base's failures with the reported ones by
-  name and message. Extends L-346 and L-418. *From:* #638, round 50.
-- **L-677. Consent read from standard input is positional, and a caller that
-  pipes answers gives it by accident.** #639's typed yes is the first line
-  `tools/install-phone` reads; the `installer-m1a-tools` branch pipes its
-  answers and silences the prompts, so the user name would answer the slot
-  check. *Check:* for a new confirmation in a tool another tool drives, `git
-  grep` the open branches for callers that pipe its stdin, and ask for an
-  explicit option for callers, with `yes` read only from a terminal. Extends
-  L-44. *From:* #639, round 49, 2026-11-10.
-- **L-676. `debugfs mkdir` on an existing directory corrupts the image: it
-  allocates the inode before it fails to link it.** `tools/install-phone` ran
-  it unconditionally with output discarded and `|| true`; only its own
-  `e2fsck` caught it, as a refusal on any root that already had the directory.
-  *Check:* for every `debugfs -w` script (`git grep -n 'debugfs -w'`), run it
-  on a fixture that already holds each path it creates, then `e2fsck -fn`.
-  Extends L-635. *From:* #609 with issue #608, round 49, 2026-11-10.
-- **L-675. A timeout change in a request/response transport is judged by what
-  happens to an answer that did arrive, and per timer by whose clock it
-  follows.** #595 discarded a matching reply once the deadline had passed, so
-  the SMS path reported a sent message as "delivery uncertain"; and a request
-  deadline on `CLOCK_BOOTTIME` fails every request in flight across a sleep,
-  though its reply arrives on resume. *Check:* `git grep -n TimeoutError` the
-  callers and write down what the user is told for each non-idempotent request
-  (send, dial, hang up); mark every `monotonic()` deadline "our wait" or "the
-  network's time". *From:* #595 with #556, round 49, 2026-11-10.
-- **L-674. A stand-in server in a test applies its rules to the request, not
-  to its own storage path.** #593's fake `curl` matched nginx's dot-name deny
-  against `$S/<url path>`, so the test failed for anyone whose `$TMPDIR` had a
-  dot component and never on CI. *Check:* run a test whose stand-in filters by
-  name once with `TMPDIR` under a dot directory and once under one with a
-  space. Extends L-454. *From:* #593 with #586, round 49, 2026-11-10.
-- **L-673. A new shell surface is checked for how it draws icons and for new
-  theme keys, not only for colours and spacing.** #612 used Commons tokens
-  throughout but drew its marks as inline SVG data URIs, where the launcher's
-  pill a tap away uses the icon font. *Check:* `grep -n 'data:image\|\.svg'
-  <new qml>` against the neighbouring component's glyphs, and grep for
-  `styleAlpha(`, `styleNum(` or `styleString(` with a key no Omarchy theme
-  defines. *From:* #612, round 49, 2026-11-10.
-- **L-672. Moving a row's removal behind a reply is probed with two rows in
-  flight.** In #533 each acknowledgment replaced the JS-array model, the
-  Repeater rebuilt every delegate, and a second swiped row still waiting came
-  back at full height until its own reply; the PR's tests covered one row.
-  *Check:* in the PR's Qt fixture swipe two rows, answer `ok` for the first,
-  and read the second's `fold` and whether it is the same delegate; ask where
-  a new delegate gets per-delegate state from. Extends L-616. *From:* #533,
-  round 49, 2026-11-10.
-- **L-671. A fix that makes a long-failing restore succeed applies whatever
-  was saved before it started failing.** systemd-backlight saves in
-  `ExecStop`, which never runs for a unit that failed at boot, so #600's first
-  boot restores the level from the last shutdown at which the unit was active.
-  *Check:* find when the state was last saved and what saves it from now on
-  (here also a zero backlight behind the lock), and ask for one boot that
-  shows it. Extends L-623. *From:* #600, round 49, 2026-11-10.
-- **L-670. A blocking `systemctl start` inside a hang-marker phase inherits
-  the started unit's timeout.** #600 starts `systemd-backlight@` (90 s) from
-  the `display` phase of a start with `TimeoutStartSec=120`; a hung restore
-  would leave the marker and turn the next boot's graphics and Wi-Fi off.
-  *Check:* for every `systemctl start|restart` a boot script adds, read the
-  target's `TimeoutStartSec` against the caller's and the marker phase it runs
-  in; ask for `timeout N` or `--no-block`, and for cosmetic steps after the
-  last guarded one. Extends L-170, L-174 and L-613. *From:* #600, round 49,
-  2026-11-10.
-- **L-303. Powering an NFC adapter off through neard needs the poll loop
-  stopped first.** neard 0.20's `Powered=false` is a bare `NFC_CMD_DEV_DOWN`,
-  which `nfc_dev_down()` refuses with EBUSY while the device polls, so a hook
-  that only powers off leaves the radio polling through the sleep. *Check:*
-  any "power the adapter off" in a gotcha, hook or script has a StopPollLoop
-  (or rfkill) step before it and a read-back of `Powered` after. Extends L-235
-  and L-290. *From:* #137 with issue #132, round 28.
-- **L-302. A retry-until-success we suggest is checked against a failure that
-  never clears.** Round 26 bounded #99's `StartPollLoop` retry because the
-  9a's EBUSY persisted, but the power-on retry it suggested had no bound: a
-  permanent refusal logs every 2 s while the screen is lit. *Check:* run the
-  stub bus with a failure that never clears and count the log lines per
-  minute, then bound the retry or accept it explicitly in the draft. Extends
-  L-289 and L-229. *From:* #99, round 27.
-- **L-289. A "retried" claim in a GLib timeout path is checked once per
-  caller.** A helper's `True` return only reschedules when the helper is
-  itself the registered callback: #99's `start_polling` returns True to retry,
-  but `follow_screen` calls it once at screen-on and discards the result, so a
-  failed power-on there stays off until the next dark/lit cycle. *Check:* list
-  every caller of a function that returns "try again", confirm the value
-  reaches GLib or the next tick calls it again, and run a stub bus whose call
-  fails once. Extends L-14 and L-235. *From:* #99, round 26.
-- **L-264. A udev `SYSTEMD_WANTS` hook fires only when the device first
-  becomes active.** We nearly flagged #113's rule as restarting feedbackd on
-  every `udevadm trigger` change event; systemd.device(5) says change events
-  don't act on `Wants=`. *Check:* read systemd.device(5) before flagging
-  repeat starts; a replay with `--action=add` is the test. *From:* #113, round
-  25 (a near miss).
-- **L-235. An edge-triggered "stop when X" is undone by every other actor
-  that restarts the thing.** #99 stops neard polling once on the lit-to-dark
-  transition; the sleep hook, its own unblock path and a neard restart all
-  start polling again while dark. *Check:* list every writer of the state
-  (AGENTS gotchas, device packages) and prefer a level check. *From:* #99,
-  round 24.
-- **L-14. `$(ls … | tail)` at the top level under `set -euo pipefail`
-  exits the script** silently (status 2) when nothing matches, before any
-  argument is parsed. *Check:* glob-and-pick at the top level of any script
-  run by others; compute it inside the branch that needs it, tolerating no
-  match. *From:* #22 (it broke `phone-provision` for every cheetah user).
-- **L-15. `grep -q` under `pipefail` SIGPIPEs the writer** (AGENTS.md
-  Userspace); use `grep -c … >/dev/null`. *From:* #22.
-- **L-16. `read` with `IFS=$'\t'` collapses empty fields** (tab is IFS
-  whitespace), shifting the next field into the empty one. Use a
-  non-whitespace separator (`$'\x1f'`). *From:* our own `tools/phone-smoke`.
-- **L-17. Unchecked files written to the boot path.** A splash or blob copied
-  into the initramfs and written to `/dev/fb0` needs a build-time check
-  (`gzip -t`, exact size W×H×4) and a logged sha256, so the image can be
-  reproduced. *From:* #21.
-- **L-33. A test that greps a systemd config's keys also greps its section
-  header.** Keys under a misspelt section (`[Logind]`) are ignored with only a
-  log warning, and a keys-only test still passes. *Check:* rename the
-  section and run the package's `test/all`. *From:* #29.
-- **L-63. logind ranks drop-ins by file name, not by directory.** Every
-  `logind.conf.d/*.conf` in `/usr/lib`, `/run` and `/etc` is sorted by name
-  and the last one wins; `/etc` only replaces a file of the same name. So a
-  local `/etc` file "outranks" a package's only if its name sorts later.
-  *Check:* `systemd-analyze cat-config systemd/logind.conf`, or compare the
-  names. *From:* #33.
-- **L-174. A service that restarts a unit it `Requires=` restarts itself.**
-  systemd propagates a stop or restart of a required unit to its dependents
-  (systemd.unit(5), `Requires=`), so `systemctl restart neard` from
-  `omamobile-nfc-open`, which requires neard, re-ran the caller, which
-  restarted neard again, until neard hit its start limit. *Check:* for any
-  `systemctl restart|stop X` in a script a unit runs, read that unit's
-  `Requires=`, `BindsTo=` and `PartOf=`; two user units under `systemd-run
-  --user -p Requires=…` reproduce it in a minute. *From:* #78, round 20.
-- **L-175. A "keep the job alive after the daemon exits" wrapper in a
-  `set -e` script is tested with a non-zero exit.** #70's `spawn_optional`
-  runs `daemon | sed` inside `{ …; exec sleep infinity; } &`; the group
-  inherits errexit, so any exit but 0 kills the job before the sleep, and
-  the supervisor powers the modem off, the very event the commit prevents.
-  *Check:* run the block with `sh -c 'exit 3'` and `kill -TERM $$` in place
-  of the daemon; only `|| true` or `set +e` in the group survives. Extends
-  L-14. *From:* #70, round 20.
-- **L-417. A tests-only switch added to shipped safety code is proved inert by comparing syntax trees, not by reading the diff.** On #327, main and head were parsed with `ast`, the hook removed and `if hook: ... else: X` replaced by `X`, and `ast.dump` compared (identical). *Check:* do that for any `os.environ.get(...)` switch in a watchdog or limit path; list every unit, `EnvironmentFile=` and drop-in that could set it, and what happens when the switch's command fails. *From:* #327, round 38, 2026-11-02.
+- **L-1184. A change that makes a daemon offer a mode it didn't offer before
+  is read against what upstream's own scripts pick when that mode appears.**
+  #1045's stand-in driver adds `performance`, and Omarchy's
+  `omarchy-powerprofiles-set` picks it on AC by default at every session
+  start; the PR's description and test covered only the owner's explicit
+  choice. *Check:* `bsdtar -xOf` the pinned package's callers of the daemon
+  (`grep -a -l '<daemon CLI>'` over its files), find each default and fallback
+  branch that names the new value, and walk a fresh session on each power
+  source with no saved state. Extends L-1166 and L-818. *From:* #1045, round
+  68, 2026-11-25.
+- **L-1171. A test that reads the real machine (a fixed system path, the real
+  `systemctl`) passes on a laptop and fails on a provisioned phone, where
+  `tools/phone-install-package` runs `check()`, and a test that leans on the
+  host's speed fails on the slower build host.** #933's "not installed" case
+  read `/usr/lib/omamobile-vendor/gnss/root`, which a provisioned phone has;
+  the set-pin keeper test forked once per `/proc` entry and raced on the build
+  host (#1017). *Check:* `grep -n '"/usr/\|"/etc/\|"/var/\|/proc\|systemctl'
+  <test>` for every path or command the test doesn't point at a stand-in, and
+  say what a provisioned phone holds there; for a test that waits on a scan or
+  a loop of forks, ask for a bound that doesn't depend on the host's speed.
+  Extends L-933, L-1132 and L-454. *From:* #933 and #1017, the maintainer's
+  assistant, 2026-11-24.
+- **L-1170. A test that binds a Unix socket under its temporary folder fails
+  where that path passes about 108 bytes (`AF_UNIX path too long`), and a
+  phone's build folder does.** `tools/phone-install-package
+  packages/omamobile-shell` could not install any shell on the Pixel 7 Pro
+  until #1037 bound the install-hook test's socket by its short name from
+  inside the folder; the tests of install-link, mmd, modem-sit and libfprint
+  still bind full paths. *Check:* for a test that makes a socket (`AF_UNIX`,
+  `UNIX-LISTEN`, `nc -lU`, `QLocalServer`), ask for a short name bound from
+  inside the folder, or run it once with `TMPDIR` set to a folder whose path
+  is 100 bytes long. Extends L-589 and L-334. *From:* #1037, the maintainer's
+  assistant, 2026-11-24.
+- **L-1169. A fix that relies on the parent-death signal is checked against
+  how the parent's supervisor restarts it: an in-place restart under the same
+  PID sends no signal.** #998's `setpriv --pdeathsig` covered the shell's end
+  and an ordinary restart, and the author's palmtop run found that
+  Quickshell's crash handler restarts the shell under its own PID, so the old
+  helpers stayed and a second set started. *Check:* for a `pdeathsig`,
+  `PR_SET_PDEATHSIG` or `prctl` change, find out whether the parent can
+  restart without exiting (an `exec` of itself, a crash handler), and ask for
+  a run of that path with the children counted. Extends L-734 and L-468.
+  *From:* #998, round 67, 2026-11-24.
+- **L-1168. An idempotency guard added on a review's suggestion is walked
+  through the failure of the step between the saved state and the new one.**
+  #995's `was_off = self.cfun == 0` made a repeated `radio on` harmless, and
+  also made a `radio on` after a failed `AT+CFUN=0` (IMS already withdrawn,
+  level unchanged) skip the restore that the earlier head would have run.
+  *Check:* for a guard keyed on a state variable, list each step between
+  reading the variable and updating it, make each raise in turn in the
+  simulator, and ask what the next call does; a side effect done before the
+  failing step needs its own flag. Extends L-1133 and L-757. *From:* #995,
+  round 67, 2026-11-24.
+- **L-1167. An Omarchy patch that changes layout by width is computed with the
+  rounding of both sides and the phone's margin before a reference-phone run
+  is asked for.** #1026's condition compares two rounded values
+  (`fittedContentWidth` and `Style.space`), so it is false at full width by
+  construction; with `availableCardWidth = screenW - 2 * Style.gapsOut`, the 7
+  Pro's 480 px keeps the old branch. *Check:* read the helper that produces
+  each side of the comparison in the pinned package (`bsdtar -xOf` the signed
+  package), write the reference phone's value of each, and say which branch it
+  takes; ask for a run only if it takes the new one. Extends L-703 and L-491.
+  *From:* #1026, round 67, 2026-11-24.
+- **L-1166. A shell PR that loads an upstream component unchanged is reviewed
+  for everything that component offers, not only what the PR's description
+  shows.** #1024 loads Omarchy's power, network and Bluetooth panels for their
+  cards; with them come power profiles, a DNS changer, Wi-Fi sharing and a
+  speed test, none named in the description. *Check:* `bsdtar -xOf` the signed
+  package's file, list its buttons and the commands behind them (`grep -n
+  'onClicked\|command:\|execDetached\|bar.run'`), and put each that changes
+  system state or reaches a network on the maintainer's list. Extends L-818
+  and L-1125. *From:* #1024, round 67, 2026-11-24.
+- **L-1165. A daemon's test that sets `HOME` for a scratch config also sets
+  every `XDG_*` variable the code prefers over `HOME`, or it reads the
+  tester's own files.** #1025's `test/dozed.sh` set `HOME`, the daemon reads
+  `${XDG_CONFIG_HOME:-$HOME/.config}`, and on a desktop session 7 of 52 checks
+  read the reviewer's real `~/.config/omamobile/`. *Check:* `grep -n
+  'XDG_[A-Z_]*HOME' <the code>` against the variables the test exports; run
+  the suite once with `XDG_CONFIG_HOME` set to an empty folder outside the
+  scratch tree, once unset, and compare. Extends L-1034 and L-454. *From:*
+  #1025, round 67, 2026-11-24.
+- **L-1164. A value a backend adds to its answer is grepped for in the page
+  before the code that computes it is reviewed.** #1022's `get` returns
+  `active`, computed by a new name list of "real keyboards" and a `hyprctl -j
+  devices` call at every read; `KeyboardPage.qml` never reads it, so the only
+  effect of the code was a third keyboard rule against the maintainer's
+  one-writer decision. *Check:* for each key in a backend's JSON
+  (`out({...})`, `state()`), `grep -n '<key>' app/*.qml` on the head; a key no
+  page reads is asked out with its helper. Extends L-983 and L-1094. *From:*
+  #1022, round 67, 2026-11-24.
+- **L-1135. A Dockerfile branch on a BuildKit automatic argument is read for
+  what the legacy builder leaves in it.** #1016's `TARGETARCH` test picks the
+  non-amd64 branch when the argument is empty, which `DOCKER_BUILDKIT=0` and
+  older builders give, so an x86 machine would build the arm64 image. *Check:*
+  `grep -n 'TARGET\|BUILDPLATFORM' docker/Dockerfile`, and for each test name
+  the value when the argument is unset; prefer `dpkg --print-architecture` (or
+  `uname -m`) inside the `RUN`, with a refusal for anything unplanned. Extends
+  L-282 and L-783. *From:* #1016, round 66, 2026-11-23.
+- **L-1134. A tile that toggles from another package's published state is
+  walked with that package at main's version: does the second tap undo the
+  first?** #996's tile sends `radio off` and then reads `modem.radio`, which
+  main's sitd takes from the modem's indications and which didn't follow
+  `AT+CFUN=0` on the 9a; with sitd 0.3.44 every tap would read "off" and send
+  `radio off` again, so the radio could be turned off from the tile and never
+  back on. Its test set the state file by hand. *Check:* for each
+  `*-state.sh`/`*-action.sh` pair, find the writer of the field the state
+  reads (`git grep -n '<field>' origin/main -- packages/<writer>`), run the
+  action and then the state against what main's writer would publish after it,
+  and ask for a guard keyed on a field only the new writer has, or a versioned
+  `depends`. Extends L-911, L-616 and L-161. *From:* #996 with #995, round 66,
+  2026-11-23.
+- **L-1133. A new state-restoring action is checked for being idempotent: run
+  it twice in the state it restores to.** #995's `radio on` calls
+  `radio_back()` whatever the previous level was, so a repeat while IMS is
+  registered withdraws and re-sends the registration. *Check:* for each new
+  "after X comes back, set Y up again" hook, read the guard that decides
+  whether X actually went away, and write the repeat case into the test.
+  Extends L-757 and L-913. *From:* #995, round 66, 2026-11-23.
+- **L-1132. A simulator change that makes the fake modem end bearers (or raise
+  any new event) is run with a logging stand-in for `systemctl` first on
+  `PATH`, because the real daemon's recovery paths call the host's systemd.**
+  #995's `sit-sim` now ends every bearer at `AT+CFUN=0`, so `test_sim` reached
+  `reconnect()`, which stops and starts `omamobile-sit-data.service` on the
+  machine running the test; main's suite never got there, and
+  `tools/phone-install-package` runs `check()` on a phone. *Check:* `grep -n
+  'subprocess.run(\[.systemctl' <daemon>` for every recovery path a new
+  simulated event can reach, then run base and head with `PATH=<logging
+  stand-in>:$PATH` and compare the logs. Extends L-410, L-454 and L-681.
+  *From:* #995, round 66, 2026-11-23.
+- **L-1131. A test case that hides a stand-in to test "the program is missing"
+  reaches the host's copy when the stand-ins sit in front of the host's
+  `PATH`, and a package that depends on the program has it on every phone that
+  runs `check()`.** #1014's "no wf-recorder" case hid its fake recorder; with
+  any `wf-recorder` later on `PATH`, the script started it on the screen's
+  output and the cleanup killed only the fake's path. *Check:* for every
+  `hide`, `mv`, `rm` or `chmod -x` of a stand-in in a test, grep the package's
+  `depends` for the program; if it is listed, put a stand-in "host" copy later
+  on `PATH` and run the case, which must not start it. Ask for the program's
+  path in a variable the test sets. Extends L-961 and L-454. *From:* #1014,
+  round 66, 2026-11-23.
+- **L-1130. An exception raised from a signal handler is caught by every
+  `except Exception` in the code it interrupts, so a "handle SIGTERM like the
+  normal exit" fix is read for those blocks.** #932's `Stop(Exception)` is
+  swallowed inside the iio-sensor-proxy calls ("keep the last state"), and the
+  tool runs on until SIGKILL. *Check:* `grep -n 'signal.signal' -A3` for a
+  handler that raises, then `grep -n 'except Exception\|except:'` in the same
+  module and ask whether each wraps a blocking call; prefer a `BaseException`
+  subclass or a flag the loop reads. Extends L-734 and L-960. *From:* #932,
+  round 66, 2026-11-23.
+- **L-1111. A helper that replaces several "check, then read again" call sites
+  is reviewed as a per-caller table of what a failed read decided before and
+  after, and each caller gets two mutations: "ignores the result" and "goes on
+  after the helper fails".** #969's four callers each had a different old
+  shape (one with no check at all), and only the table showed that none got
+  weaker; the two mutations per caller showed that each is held by its own
+  test, not only the helper. *Check:* `git grep -n '<file>' <base> -- tools
+  bin` for the old readers, one table row each, then `sed` the caller's `||
+  die` into `|| var=` and its match into `if false`, and read the `not ok`
+  line for that caller's name. Extends L-1097 and L-742. *From:* #969, round
+  65, 2026-11-21.
+- **L-1110. A pipe from a producer into a remote "unpack, then swap" is asked
+  what the producer writes when it fails.** GNU tar exits 1 or 2 on a source
+  file it can't read and still closes a valid, shorter archive, so the
+  consumer's own exit status says nothing, and `pipefail` reports the failure
+  only after the remote swap has happened: `tools/repo-push` would have
+  replaced the phone's repository with a partial one and deleted the old copy.
+  *Check:* `git grep -n 'tar c.* | .*ssh\|tar c.* | tools/phone-ssh' -- tools
+  bin` for other pushes of this shape, and for each ask whether the receiving
+  side replaces something on success; the fix is to finish and check the
+  archive before the link is opened. Extends L-15. *From:* #965, round 65,
+  2026-11-21.
+- **L-1109. A measuring tool that takes its sleep inhibitor after its first
+  readings measures whatever auto-sleep leaves.** #953's first run was
+  suspended for four seconds during its first part and lost its Wi-Fi line to
+  the sleep hook; the author found it in the journal only because we asked why
+  one line was empty. *Check:* in any on-phone measuring script, find the line
+  that takes the inhibitor and list every reading above it; ask for a suspend
+  count over the whole run in the output (`/sys/power/suspend_stats/success`
+  at start and end). Extends L-1013 and L-725. *From:* #953, rounds 63 and 65,
+  2026-11-21.
+- **L-1097. A hardening of one reader of a checked file is followed by a grep
+  for the other readers of the same file after the same check.** #960 closed
+  `fetch-published`'s read-after-check gap on `omamobile-revoked`;
+  `signing_key_load`, `release-upload` and `repo-publish` keep the same
+  `2>/dev/null` read that fails towards "not revoked". *Check:* `git grep -n
+  '<file>' -- tools bin` and, for each reader, what a failed read decides;
+  name the follow-up or a shared helper. Extends L-788, L-803 and L-716.
+  *From:* #960, round 64, 2026-11-21.
+- **L-1096. A test runner that ends in `exec` never runs its own `trap ...
+  EXIT`, and a PR that calls it from a second path doubles the leftovers.**
+  `test/lock-glance` makes a work folder, sets the trap, then `exec`s
+  qmltestrunner, so each run leaves the folder; #957 added a second caller.
+  *Check:* `grep -n '^exec \|trap .* EXIT' <runner>` for both in one script,
+  and list `TMPDIR` after a run made with a scratch `TMPDIR`. Extends L-468
+  and L-734. *From:* #957, round 64, 2026-11-21.
+- **L-1095. A fix that stops a session service "so the other one gets there
+  first" is run with the other one failing to start.** #763's `on` began
+  stopping squeekboard before restarting fcitx5; under `set -e` a failed
+  fcitx5 restart then ended the script with no keyboard and no message, where
+  the previous head left the keyboard running. *Check:* for each new `stop X;
+  start Y; start X` in a `set -e` script, run it with Y's start exiting 1 (the
+  test's stand-ins usually allow it) and read the order log for X's start; ask
+  for an EXIT trap set right after the stop. Extends L-1087, L-962 and L-733.
+  *From:* #763, round 64, 2026-11-21.
+- **L-1088. A fix that restores state wiring is reviewed for every consumer of
+  the restored state, not only the symptom in the title.** #920 restores three
+  properties to the 4.5 lock view to fix a stale battery level; the same
+  properties gate the dark-touch rule (0029), the wake guard, the glance's
+  return and the media ticker, so the merge changes what a touch on a dark
+  locked phone does on every phone. *Check:* `grep -n '<each restored
+  property>'` over the patched files of the real package, list each consumer
+  and what it did while the value was stuck at its default, and ask for the
+  one that changes user input on a phone. Extends L-535 and L-491. *From:*
+  #920, round 63, 2026-11-20.
+- **L-1087. A cleanup step added to an `off` path under `set -e` is placed, or
+  guarded, so that its failure can't stop the rest of `off`.** #763's
+  `remove_language` runs between "switch removed" and "daemons stopped"; with
+  a `gsettings` that exits 1 the script ends there, and `status` says off
+  while fcitx5 still holds the input method. *Check:* for each new command in
+  a teardown path, run the path with that command's stand-in exiting 1 and
+  list which later steps didn't happen; ask for the new step last or behind
+  `|| warn`. Extends L-468 and L-733. *From:* #763, round 63, 2026-11-20.
+- **L-1081. A change that swaps the key Back sends to one class of window is
+  checked against the states of that window where the old key did something.**
+  #582 sends Alt+Left to a browser instead of Escape; Escape also leaves
+  fullscreen and closes in-page overlays, which the test plan (edges, dialog,
+  keyboard) did not name. *Check:* list what the replaced key does in the
+  target app besides the case the PR is about, and put each on the phone run.
+  Extends L-160 and L-722. *From:* #582, round 63, 2026-11-20.
+- **L-1069. A `Condition*=` turned into a waiting `ExecCondition=` makes the
+  unit's start job last as long as the wait on every phone where the awaited
+  thing never appears.** #903's 10 s wait is free on a normal boot, but on a 7
+  Pro whose AoC start was skipped it holds `multi-user.target`, and the units
+  ordered after it (`omamobile-boot-success`, the camera start), for 10 s.
+  *Check:* list the unit's `WantedBy=` targets and `git grep -n
+  'After=.*<target>'` over the device packages; name the phones and boots
+  where the wait runs to its end; reproduce the line with `systemd-run --user
+  -p ExecCondition=...` (it also shows whether systemd leaves the shell's
+  `$(...)` alone). Extends L-467 and L-670. *From:* #903, round 63,
+  2026-11-20.
+- **L-1054. A redraw flag set on every loop pass is traced through the output
+  that has its own wake-up source.** #771's countdown sets `dirty` each pass,
+  meant for a 500 ms poll timeout; on DRM the page-flip event wakes the poll,
+  so the loop runs at the flip rate, and the tests' memory output has no such
+  event. *Check:* for each `dirty = 1` outside an event handler, list the fds
+  in the `poll` set and ask which of them the draw itself makes readable.
+  Extends L-454 and L-618. *From:* #771, round 63, 2026-11-20.
+- **L-1050. A journal query for "the boot in which unit X ran" must not match
+  `UNIT=X`: a unit whose `Condition*=` fails logs a skip entry with that field
+  on every boot.** #633's first-boot row matched `_SYSTEMD_UNIT=... +
+  UNIT=...` for a `ConditionPathExists=` unit wanted by `multi-user.target`,
+  so "the first boot" was the oldest boot in the journal, and its stand-in
+  `journalctl` returned nothing for a rotated journal. *Check:* read the
+  unit's `Condition*=` and `WantedBy=`; on any systemd host, `journalctl -b -o
+  json --output-fields=UNIT,MESSAGE -g 'unmet condition' -n 1` shows the
+  field; match `_SYSTEMD_UNIT=` (the process's own output) or the start
+  message's ID instead, and write the opposite stand-in. Extends L-685 and
+  L-454. *From:* #633, round 63, 2026-11-20.
+- **L-1042. A report that names columns by position from one listing and reads
+  values from another is fed a listing with a hole.** #953 named Part B's zone
+  temperatures from Part A's order, and a failed zone read shifts every later
+  name; a status of two words shifts the awk fields the same way. *Check:* one
+  fixture with a missing middle element and one with a space inside a field,
+  and read the summary line against the raw block. Extends L-16. *From:* #953,
+  round 63, 2026-11-20.
+- **L-1041. A redaction test whose two secrets contain each other tests one of
+  them.** #953's fixture used a user name that is a prefix of its host name;
+  with the host replacement removed the test still passed. *Check:* delete
+  each replacement in turn and rerun; fixtures use names that share no
+  substring. Extends L-419. *From:* #953, round 63, 2026-11-20.
+- **L-1040. A tool that hides names by pasting them into a `sed` program is
+  run once with a name that is a sed command.** #953's `sed
+  "s/\b$user\b/<user>/g"`, with the name read from a file in the run folder,
+  executed `touch` through GNU sed's `e`; the same quoting gap leaves a name
+  with `/` or a regex character in the published report. *Check:* `grep -n
+  'sed "s/.*\$' <tool>` for variables inside a sed script, find where each
+  value comes from (a file the tool re-reads counts as outside input), and run
+  the tool on a fixture whose value is `a/b/;e touch <scratch>/made-by-sed;#`.
+  Extends L-716 and L-454. *From:* #953, round 63, 2026-11-20.
+- **L-1037. A package test that opens a Unix socket under `$TMPDIR` fails with
+  "path must be shorter than SUN_LEN" when the scratch folder is deep.**
+  omamobile-install-link's `test/all` did under a review folder several levels
+  down, on a PR that doesn't touch it. *Check:* read the failure message
+  before blaming the PR; such a suite is run with a short scratch path, or
+  left to CI. Extends L-674. *From:* #907, round 63, 2026-11-20.
+- **L-1034. An XDG fallback is run with only `HOME` set.**
+  `${XDG_DATA_HOME:-$HOME}` is the home directory, not `~/.local/share`, and a
+  test that sets the XDG variable can't see it. *Check:* `env -i
+  HOME=<scratch> <tool>` and list the scratch home afterwards. Extends L-681.
+  *From:* #855, round 63, 2026-11-20.
+- **L-1033. A new value of an existing option that is "extracted as a mode"
+  before the option is used is followed through every later test of that
+  option.** #855 emptied `known` for `tofu`, and the line that decides whether
+  a call is a custom context (`-n $key$known$alias...`) then treated a pinned
+  call as the default policy: the same control path, so a shared master opened
+  unchecked carried it. *Check:* `grep -n '\$<var>'` below the extraction for
+  every use of the cleared variable, and run the tool with a stand-in `ssh`
+  under each mode with `OMAMOBILE_SSH_SHARE=1`, comparing `ControlPath`.
+  Extends L-450 and L-454. *From:* #855, round 63, 2026-11-20.
+- **L-1026. A call added to an essential step of a failure-tolerant runner is
+  read against the fallbacks of its neighbours.** #839's `systemctl
+  daemon-reload` sits in a function where every other `systemctl` ends in `||
+  echo` or `|| true`; alone without one, it turns a slow reload into a skipped
+  firewall setup, and the test's fake `systemctl` never fails. *Check:* for
+  each new command in a `step ... essential` function, `grep -n '||'` its
+  siblings; if they tolerate failure and the new one doesn't, list what
+  follows it in the function and ask for the fallback and a failing-fake case.
+  Extends L-468 and L-761. *From:* #839, round 63, 2026-11-20.
+- **L-1020. A check script whose tests all run in a "config only" mode has no
+  test of its hardware block, and a PR that extends that block inherits the
+  gap.** #935 added an msm branch to `omamobile-waydroid-check` beside a
+  Panthor branch no test reaches. *Check:* for each environment switch the
+  tests set (`CONFIG_FILE`), list the blocks it skips, and ask the PR that
+  edits one for a sysfs override and a case per branch, the old one included.
+  Extends L-234 and L-454. *From:* #935, round 63, 2026-11-20.
+- **L-1017. A marker file that makes the lock path stand aside is checked for
+  every way its writer can die.** #932's "dark for the ear" marker is removed
+  in a Python `finally`, which SIGTERM skips, and `omamobile-keys
+  dark-unlocked` trusts the bare file. *Check:* for each `[[ -e <marker> ]] &&
+  exit 0` added before `omarchy-system-lock`, find the writer's signal
+  handlers and its start-up cleanup, and ask for a liveness check on the
+  reader's side. Extends L-161 and L-734. *From:* #932, round 63, 2026-11-20.
+- **L-1005. A "skip the expensive poll" fast path is walked against every duty
+  of the full poll, not only the one it is meant to save.** #915's quiet poll
+  saved the refusal checks and, with them, skipped the `suspend_stats` read
+  that is the daemon's documented fallback for an unannounced resume. *Check:*
+  list what the full iteration reads and does before the point the fast path
+  jumps past, mark each "still covered by" or "skipped", and for each skipped
+  one inject its event into the PR's own harness with the fast path active and
+  compare the reaction time on main and on the head. Extends L-715, L-573 and
+  L-468. *From:* #915, round 63, 2026-11-20.
+- **L-995. A delayed child start is injected with a `sitecustomize.py` on
+  `PYTHONPATH` that keys on `sys.argv[0]`.** #948's test starts Python tools
+  with its own environment, so a three-line `sitecustomize` outside the
+  worktree that sleeps only when `argv[0]` ends in the tool's name delayed
+  just the tool: main's test then failed with the reported return code and the
+  head passed, with neither file touched. *Check:* for a "the child wasn't
+  ready yet" fix, run base and head with the child's start delayed past the
+  old sleep, and compare the base's failure with the reported one by its
+  values. Extends L-706. *From:* #948, round 63, 2026-11-20.
+- **L-994. A script that restarts a unit is checked against that unit's own
+  start limits.** sddm ships `StartLimitBurst=2` in 30 s; the `systemctl
+  restart` of #947's default-on guard counts against it, so a restart right
+  after sddm's own two leaves the display manager stopped. *Check:* `systemctl
+  cat <target>` (or the package's unit file) for `StartLimit*`, `Restart=` and
+  `PartOf=` before accepting a script that restarts it. Extends L-174 and
+  L-670. *From:* #947, round 63, 2026-11-20.
+- **L-993. `n=$(grep -c PATTERN FILE)` in a `set -e` test ends the test
+  silently when the count is 0.** In #947 the assertion `(( n == 1 )) || fail
+  "..."` on the next line never ran: with the feature removed the suite exited
+  1 with no `not ok` line. *Check:* `grep -n '=\$(grep -c' <test>` in new test
+  code, and run the mutation that makes the count 0; ask for `|| true` inside
+  the substitution. Extends L-14 and L-41. *From:* #947, round 63, 2026-11-20.
+- **L-992. A watchdog that restarts a service "once per cooldown" is run
+  against a failure the restart doesn't cure, for an hour of its clock, and
+  the restarts are counted.** #947's guard bounds the rate (one per 600 s) and
+  its test asserts three restarts in 30 minutes as correct; the 300 s grace
+  applies only to the first, since the loop is seen again within seconds.
+  *Check:* feed the PR's own fake journal a loop of an hour, count the restart
+  calls and read each one's reason; ask for a per-boot cap and for what the
+  device is left with at the cap. Extends L-302 and L-377. *From:* #947, round
+  63, 2026-11-20.
+- **L-991. A guard written as a header is compiled alone and run against
+  made-up environments, and its "as written" branches get the inputs
+  canonicalisation would have changed.** #930's `home_guard.h` has no Qt in
+  it, so a five-line `main` and `env -i` cases showed that it refuses the real
+  home in every spelling, and where it disagrees with its own runner: a
+  `TMPDIR` through a symlink makes `test/all` refuse itself, and a
+  non-existent path with `..` in it passes. *Check:* for a path guard, list
+  which inputs are resolved and which are compared as text, then feed it a
+  symlinked parent and a `..` path for each text-compared one; a refusal test
+  in the committed suite uses a fixture outside a scratch `TMPDIR`, never the
+  real home. Extends L-454 and L-664. *From:* #930, round 63, 2026-11-20.
+- **L-990. A QML `Text` given a fixed height for N lines is sized `N *
+  Math.ceil(lineSpacing)`, and a probe counts `lineCount` at several font
+  sizes.** #894 reserved `Math.ceil(lineSpacing * 3)`; Qt lays each line out
+  at a whole pixel height, so at seven of ten sizes the third line no longer
+  fit and `maximumLineCount: 3` with `elide` silently showed two. The render
+  test checks button geometry only, and the request ("reserve three lines")
+  was ours. *Check:* copy the `Text` into a `qmltestrunner` case, set a string
+  long enough for N+1 lines, and read `lineCount` and `contentHeight` against
+  `height` at sizes 10 to 20 with the shell's font; ask the phone run for a
+  string that needs all N lines. Extends L-618 and L-229. *From:* #894, round
+  63, 2026-11-20.
+- **L-986. A test that identifies a process by a `/proc/<pid>/fd` link
+  compares paths the container spells differently.** #954's keeper check
+  wanted `fd/0` to read `/dev/ptmx`; in CI's container `/dev/ptmx` is a
+  symlink to `pts/ptmx`, the same pty reads `/dev/pts/ptmx`, and the test
+  failed every time there while passing on every desktop. *Check:* for a test
+  that reads `/proc/*/fd`, `/proc/*/exe` or `/dev` paths, run its scenario
+  once in the project container (no network, the scratch folder mounted
+  read-only) and print what it sees before blaming the code or the runner;
+  `bash -c 'exec 9<>/dev/ptmx; readlink /proc/$$/fd/9'` shows the two
+  spellings. Extends L-674 and L-454. *From:* #954, round 63, 2026-11-20.
+- **L-984. An indicator driven by an event stream with no "removed" event is
+  walked through the disconnect.** #949 reads devices on a new keyboard's
+  first event, and Hyprland's socket never says a keyboard left, so the label
+  outlives the keyboard. *Check:* for each state a PR sets from an event, name
+  the event that clears it; if none exists, ask for a bounded re-read while
+  the state shows. Extends L-235 and L-614. *From:* #949, round 63,
+  2026-11-20.
+- **L-983. A "hardware keyboard" test by device name is checked against the
+  names the phones' own keys have, and against a sibling PR that answers the
+  same question another way.** #949 filters Hyprland's keyboards with a name
+  list (`gpio-keys`, `power-button`, ...) taken from a desktop widget, while
+  #866 from the same author counts real keyboards by bus and key capabilities;
+  a phone key under another name would make the bar label permanent. *Check:*
+  ask for `hyprctl -j devices` keyboard names from each supported phone with
+  nothing attached, and `git grep -n 'ID_INPUT_KEYBOARD\|bustype\|untyped'`
+  over the author's open heads for a second definition. Extends L-469 and
+  L-720. *From:* #949 with #866, round 63, 2026-11-20.

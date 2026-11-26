@@ -38,6 +38,8 @@ sed -i "0,/^\[omarchy\]/s//[omamobile]\nServer = file:\/\/\/repo\/\$arch\n\n[oma
 pacman -Sy >/dev/null
 # shellcheck source=resolve.sh
 source /src/rootfs/resolve.sh
+# shellcheck source=first-boot.sh
+source /src/rootfs/first-boot.sh
 
 mapfile -t base < <(list /src/rootfs/packages.base)
 mapfile -t ours < <(list /src/rootfs/packages.omamobile)
@@ -118,8 +120,8 @@ want=("${ok_pkgs[@]}") unavailable=("${absent_pkgs[@]}")
 say "Omarchy's package list: ${#want[@]} packages (${#unavailable[@]} not built for aarch64, ${#skip[@]} skipped)"
 pacstrap -C /etc/pacman.conf -c -M "$T" --needed "${want[@]}" >/var/log/pacstrap-omarchy.log 2>&1 || { tail -40 /var/log/pacstrap-omarchy.log; die "pacstrap (Omarchy's list) failed"; }
 
-say "Omarchy Mobile packages: ${ours_present[*]}"
-pacstrap -C /etc/pacman.conf -c -M "$T" --needed "${ours_present[@]}" >/var/log/pacstrap-omamobile.log 2>&1 || { tail -40 /var/log/pacstrap-omamobile.log; die "pacstrap (Omarchy Mobile) failed"; }
+say "Omamobile packages: ${ours_present[*]}"
+pacstrap -C /etc/pacman.conf -c -M "$T" --needed "${ours_present[@]}" >/var/log/pacstrap-omamobile.log 2>&1 || { tail -40 /var/log/pacstrap-omamobile.log; die "pacstrap (Omamobile) failed"; }
 
 say "pacman.conf and the [omamobile] repository"
 sed "s/@OMARCHY_CHANNEL@/$OMARCHY_CHANNEL/" /src/rootfs/pacman.conf > "$T/etc/pacman.conf"
@@ -221,6 +223,9 @@ systemctl --root="$T" enable NetworkManager.service systemd-networkd.service sys
 systemctl --root="$T" mask systemd-networkd-wait-online.service NetworkManager-wait-online.service >/dev/null 2>&1
 ln -sfn /run/systemd/resolve/stub-resolv.conf "$T/etc/resolv.conf"
 echo omamobile > "$T/etc/hostname"
+# The first boot asks for nothing: systemd-firstboot.service is masked and
+# the image holds a locale and a time zone (rootfs/first-boot.sh)
+first_boot_defaults "$T" || die "the first-boot defaults"
 
 say "Removing per-machine state"
 # No account but root, and root locked: the user comes from firstboot.conf
@@ -264,7 +269,7 @@ fi
 
 say "MANIFEST"
 {
-  echo "# Omarchy Mobile root image"
+  echo "# Omamobile root image"
   echo "version: $VERSION"
   echo "device: $DEVICE ($DEVICE_PACKAGE${ROOTFS_PACKAGES:+ $ROOTFS_PACKAGES})"
   echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -280,6 +285,7 @@ say "MANIFEST"
   echo "omamobile packages missing (allowed): ${skipped_ours[*]:-none}"
   echo "omamobile packages not in the repository yet: ${not_yet[*]:-none}"
   echo "install link: $link_line"
+  first_boot_manifest "$T"
   echo
   echo "# packages (name version repository)"
   pacman -Sl > /tmp/sync-list

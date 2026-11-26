@@ -77,7 +77,7 @@ print(json.dumps({"apps": apps, "shots": [
 ]}))
 PY
   HOME=$home QT_SCALE_FACTOR=3 LAUNCHER_JOB="$h/job-$theme.json" timeout 300 quickshell -p "$h/launcher-render.qml" > "$h/log-$theme" 2>&1 || true
-  grep -E "shot |geometry |Error|TypeError|ReferenceError" "$h/log-$theme" | grep -vE "hyprctl|delayed function evaluation" | sed -E 's/^.*(shot |geometry |Error|TypeError|ReferenceError)/\1/' | tee -a "$out/launcher-render.txt" || true
+  grep -E "burst |shot |geometry |Error|TypeError|ReferenceError" "$h/log-$theme" | grep -vE "hyprctl|delayed function evaluation" | sed -E 's/^.*(burst |shot |geometry |Error|TypeError|ReferenceError)/\1/' | tee -a "$out/launcher-render.txt" || true
   python3 - "$h/log-$theme" "$theme" <<'PY' || status=1
 import json, re, sys
 log, theme = sys.argv[1:]
@@ -89,6 +89,10 @@ for n, w, h, g in re.findall(r"geometry (\S+) (\d+)x(\d+) (\{.*\})", text):
 def inside(a, b, tol=0): return a["x"] >= b["x"] - tol and a["y"] >= b["y"] - tol and a["x"] + a["w"] <= b["x"] + b["w"] + tol and a["y"] + a["h"] <= b["y"] + b["h"] + tol
 def apart(a, b, tol=0): return a["x"] + a["w"] <= b["x"] + tol or b["x"] + b["w"] <= a["x"] + tol or a["y"] + a["h"] <= b["y"] + tol or b["y"] + b["h"] <= a["y"] + tol
 ok = not bad and len(geo) == 3
+burst = re.findall(r"burst 10 signals (\d+) rebuilds", text)
+good = burst == ["1"]
+print("%s - %s: ten app changes in one turn of the event loop rebuild the drawer once%s" % ("ok" if good else "not ok", theme, "" if good else ": " + (burst[0] + " rebuilds" if burst else "no burst line")))
+ok = ok and good
 if len(geo) != 3: print("not ok - %s: %d of 3 shots taken" % (theme, len(geo)))
 for l in bad: print("  " + l[:200])
 def check(name, good, why=""):

@@ -7,7 +7,8 @@
 # against a stand-in phone tree,
 # tools/phone-install-package against a stand-in phone, the initramfs's
 # first-boot growth, the bring-up overlays, the simplefb trigger, the init's per-board steps, the storage guard's packed
-# allowlist and the USB product string, no pipefail script piping into grep -q,
+# allowlist and the USB product string, no pipefail script piping into grep -q
+# or head,
 # bin/omamobile's boot-image layouts
 # (and omamobile-boot-update building the same bytes on the phone)
 # and flash against a fake fastboot, omamobile-firstboot's own tests, the
@@ -37,7 +38,7 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 for f in tools/install-guided tools/install-phone tools/phone-provision tools/nv-backup tools/build-rootfs tools/build-packages tools/make-bundle \
          tools/local-key-init tools/fetch-published tools/fetch-toolchain tools/repo-publish tools/repo-build tools/release tools/build-host-sync tools/release-upload tools/server/releases-nginx.sh \
-         tools/lib/alarm.sh tools/lib/alarm-deps.sh tools/lib/alarm-setup tools/lib/signing.sh tools/lib/bundle-tar.sh tools/lib/usage.sh rootfs/build-inside rootfs/resolve.sh tests/*; do
+         tools/lib/alarm.sh tools/lib/alarm-deps.sh tools/lib/alarm-setup tools/lib/signing.sh tools/lib/bundle-tar.sh tools/lib/usage.sh rootfs/build-inside rootfs/resolve.sh rootfs/first-boot.sh tests/*; do
   [[ -f $f ]] || continue   # tests/owl is the OWL conformance suite's folder
   [[ $f == *.py ]] && continue
   bash -n "$f" || { echo "not ok - $f parses" >&2; exit 1; }
@@ -86,15 +87,29 @@ echo "# tests/power-ab/samples.py"
 python3 tests/power-ab/samples.py
 echo "# tests/review-lessons"
 tests/review-lessons
+echo "# tests/head-pipes"   # no pipefail script pipes into head
+tests/head-pipes
 echo "# tests/factory-index"   # the build index of Google's factory images, against a made-up zip
 tests/factory-index
 echo "# tests/phone-demo-notes"
 tests/phone-demo-notes
+echo "# tests/phone-demo-display"   # the screen-capture display check, against a made-up /sys
+tests/phone-demo-display
 echo "# tests/install-guided"   # the guided install, against stand-ins for the phone and this computer's network
 tests/install-guided
 echo "# tests/chroot-extractors"
 tests/chroot-extractors
+echo "# tests/repo-push"
+tests/repo-push
 echo "# tests/rootfs-smoke-link"   # the smoke test's install-link checks, on small made-up images
 tests/rootfs-smoke-link
 echo "# tests/build-packages-deps"   # a package's dependencies into the build container, behind a library change too
 tests/build-packages-deps
+echo "# tests/build-packages-cache"   # a forced same-version rebuild drops the stale cached package
+tests/build-packages-cache
+echo "# tests/mark-slot-b"
+tests/mark-slot-b
+echo "# tests/fetch-ndk"   # the pinned Android NDK's fetch, against a local archive and stand-ins
+tests/fetch-ndk
+echo "# tests/rootfs-first-boot"
+tests/rootfs-first-boot

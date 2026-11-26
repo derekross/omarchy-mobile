@@ -23,13 +23,20 @@
 # there). The required checks (boot, storage guard, root, kernel health, USB,
 # session) make the exit status non-zero when they fail; the rest are
 # evidence for the pull request.
+#
+# Two rows are about systemd units: "systemd units" is this boot's failed
+# units, and "first boot units" is what failed on the install's first boot,
+# read from the journal (the boot in which omamobile-firstboot ran), so a
+# unit that fails once on a first boot is still seen after the restart that
+# follows provisioning. It is skipped when the journal no longer holds that
+# boot.
 set -uo pipefail
 
 # A suspend failure that is only the modem link's guard (the units check below)
 refused_only() {	# FAILS REFUSALS LAST_ERRNO: yes when every failure is a refusal
   [[ $1 =~ ^[0-9]+$ && $2 =~ ^[0-9]+$ ]] && (($2 > 0 && $1 <= $2)) && [[ $3 == -16 ]]
 }
-here=0 json=0 errors_from="" slot_from=""
+here=0 json=0 errors_from="" slot_from="" unit_rows_only=0
 while (($#)); do
   a=$1; shift
   case $a in
@@ -42,6 +49,9 @@ while (($#)); do
     --slot-from) slot_from=${1:?--slot-from DIR}; shift; here=1 ;;
     # tests only: the refused-suspend rule for FAILS REFUSALS LAST_ERRNO, then exit
     --refused-only) refused_only "${1:-}" "${2:-}" "${3:-}"; exit $? ;;
+    # tests only: the two systemd unit rows, from whatever systemctl,
+    # journalctl and loginctl PATH finds, then exit
+    --unit-rows) unit_rows_only=1; here=1 ;;
     -h|--help) source "$(dirname -- "${BASH_SOURCE[0]}")/lib/usage.sh"; usage_from_header --raw "$0"; exit 0 ;;
     *) echo "phone-smoke: unknown option $a" >&2; exit 2 ;;
   esac
@@ -53,7 +63,7 @@ if ((!here)); then
   phone() { if [[ -n ${PHONE_SSH:-} ]]; then "$PHONE_SSH" "$@"; else bash "$repo/tools/phone-ssh" "$@"; fi; }
   # The device: the phone's first compatible against the descriptors (the
   # repository's, or a bundle's one device.conf).
-  compat=$(phone "tr '\\0' '\\n' < /proc/device-tree/compatible | head -1") \
+  compat=$(phone "tr '\\0' '\\n' < /proc/device-tree/compatible | sed -n 1p") \
     || { echo "phone-smoke: the phone doesn't answer over tools/phone-ssh" >&2; exit 2; }
   device=unknown
   shopt -s nullglob
@@ -81,12 +91,75 @@ uid=$(id -u "$user" 2>/dev/null || true)
 # stdin would swallow the rest of it: nothing here may read it.
 as_user() { runuser -u "$user" -- env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" "$@" </dev/null; }
 
+# ---------------------------------------------------------------- units
+# systemd's "Unit failed with result" message (SD_MESSAGE_UNIT_FAILURE_RESULT):
+# one journal entry per failed unit, with UNIT= (or USER_UNIT= from a user
+# manager).
+unit_failed_id=d9b373ed55a64feb8242e02dbe79a49c
+unit_rows() {
+  local failed ufailed="" boot first n suspend_refused=""
+  failed=$(systemctl --failed --no-legend --plain 2>/dev/null </dev/null | awk '{print $1}' | xargs)
+  [[ -n $uid && -S /run/user/$uid/bus ]] && ufailed=$(as_user systemctl --user --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | xargs)
+  # A sleep the modem's link driver refused before the freeze, while its link was
+  # up (linux-omamobile#232; on every 7 Pro that sleeps with the modem up),
+  # leaves systemd-suspend.service failed with EBUSY until the next sleep; the
+  # shell's auto-sleep tries again 30 s later. It is the guard working, not a
+  # fault, but only when every failed suspend this boot is one of the guard's:
+  # EBUSY is also a freezer that couldn't freeze or a device that refused, so
+  # one early refusal must not cover a later fault. Each refusal fails one
+  # attempt and logs one line, so failures above the refusals are something
+  # else (and a wrapped dmesg errs towards counting the unit).
+  if [[ " $failed " == *" systemd-suspend.service "* ]] \
+      && refused_only "$(cat /sys/power/suspend_stats/fail 2>/dev/null)" \
+           "$(dmesg 2>/dev/null | grep -c 'gs201-pcie-cp .*sleep refused before the freeze' || true)" \
+           "$(cat /sys/power/suspend_stats/last_failed_errno 2>/dev/null)"; then
+    failed=$(xargs -n1 <<<"$failed" | grep -vx systemd-suspend.service | xargs || true)
+    suspend_refused=" (sleeps refused while the modem's link was busy: $(cat /sys/power/suspend_stats/fail) this boot)"
+  fi
+  if [[ -z $failed && -z $ufailed ]]; then
+    check ok 0 "systemd units" "none failed${suspend_refused:-}"
+  else
+    check "not ok" 0 "systemd units" "failed: ${failed:-none}${ufailed:+; user: $ufailed}"
+  fi
+  # The first boot: the earliest boot in the journal in which
+  # omamobile-firstboot ran (it runs only while the installer's firstboot.conf
+  # exists). A unit that failed then is not in `systemctl --failed` after a
+  # restart, and the smoke test usually runs after one (INSTALL-EXPERIENCE-PLAN
+  # G3: systemd-firstboot failed once on every first boot, unnoticed). Only
+  # the unit's own output is matched (_SYSTEMD_UNIT=), never UNIT=: on every
+  # later boot systemd logs the unit's skipped start (its ConditionPathExists=
+  # no longer holds) with a UNIT= field, so that match would take the oldest
+  # boot the journal still holds for the first one. A
+  # journal that has dropped that boot's early entries can't show them: the
+  # row then says less than it should, so it is evidence, not a gate.
+  boot=$(journalctl -q --no-pager -o cat --output-fields=_BOOT_ID \
+           _SYSTEMD_UNIT=omamobile-firstboot.service 2>/dev/null </dev/null | awk 'NR == 1')
+  if [[ ! $boot =~ ^[0-9a-f]{32}$ ]]; then
+    check skip 0 "first boot units" "the first boot isn't in the journal (no omamobile-firstboot run found)"
+    return
+  fi
+  first=$(journalctl -q --no-pager -o json --output-fields=UNIT,USER_UNIT \
+            "_BOOT_ID=$boot" "MESSAGE_ID=$unit_failed_id" 2>/dev/null </dev/null |
+          grep -oE '"(USER_)?UNIT":"[^"]*"' | sed -E 's/^"USER_UNIT":"(.*)"$/\1 (user)/; s/^"UNIT":"(.*)"$/\1/' | LC_ALL=C sort -u)
+  n=$(grep -c . <<<"$first" || true)
+  if ((n == 0)); then
+    check ok 0 "first boot units" "none failed on the first boot"
+  else
+    check "not ok" 0 "first boot units" "failed on the first boot: $(head -n 6 <<<"$first" | paste -sd, | sed 's/,/, /g')$( ((n > 6)) && echo ", and $((n - 6)) more")"
+  fi
+}
+if ((unit_rows_only)); then
+  unit_rows
+  printf '%s\n' "${results[@]}"
+  exit 0
+fi
+
 # ---------------------------------------------------------------- boot
 sr=$slot_from   # a test's fake root, else nothing
 release=$(uname -r)
 # The Pixel bootloaders pass androidboot.* in bootconfig, not on the command line.
-slot=$(sed -n 's/^androidboot\.slot_suffix = "\(_[ab]\)"$/\1/p' "$sr/proc/bootconfig" 2>/dev/null | head -1)
-[[ -n $slot ]] || slot=$(grep -oE 'androidboot\.slot_suffix=_[ab]' "$sr/proc/cmdline" 2>/dev/null | head -1 | cut -d= -f2)
+slot=$(sed -n 's/^androidboot\.slot_suffix = "\(_[ab]\)"$/\1/p' "$sr/proc/bootconfig" 2>/dev/null | sed -n 1p)
+[[ -n $slot ]] || slot=$(grep -oE 'androidboot\.slot_suffix=_[ab]' "$sr/proc/cmdline" 2>/dev/null | sed -n 1p | cut -d= -f2)
 up=$(cut -d. -f1 "$sr/proc/uptime" 2>/dev/null)
 # The slot this phone's system boots from: SLOT= in boot-update.conf (a
 # release installed on the slot it ran from, docs/ACTIVE-SLOT-PLAN.md §2),
@@ -104,26 +177,49 @@ else case $slot in
 esac; fi
 
 # ---------------------------------------------------------------- storage
-# Every UFS partition is read-only except userdata and the running slot's
-# boot images (the guard maps its list to the slot the phone runs from; with
-# no slot named, only userdata).
+# Keep the existing Pixel policy: allow userdata and the running slot's boot images.
 allowed=" userdata "
 [[ -z $slot ]] || allowed+="boot$slot init_boot$slot vendor_boot$slot vendor_kernel_boot$slot dtbo$slot "
-rw=() total=0
+descriptor="$sr/usr/share/omamobile/device.conf"
+ram_only=0
+if [[ -r $descriptor ]] && grep -Fxq 'UFS_RW=""' "$descriptor"; then
+  ram_only=1
+fi
+rw=() disks=0 total=0
+if ((ram_only)); then
+  disk_rw=()
+  for s in "$sr"/sys/block/sd[a-f]; do
+    [[ -r $s/ro ]] || continue
+    disks=$((disks + 1))
+    [[ $(<"$s/ro") == 1 ]] || disk_rw+=("${s##*/}")
+  done
+fi
 for s in "$sr"/sys/class/block/sd*; do
   [[ -r $s/partition && -r $s/uevent ]] || continue
   name=$(sed -n 's/^PARTNAME=//p' "$s/uevent")
   [[ -n $name ]] || continue
   total=$((total + 1))
-  [[ $(<"$s/ro") == 0 && $allowed != *" $name "* ]] && rw+=("$name")
+  if ((ram_only)); then
+    [[ $(<"$s/ro") == 0 ]] && rw+=("$name")
+  else
+    [[ $(<"$s/ro") == 0 && $allowed != *" $name "* ]] && rw+=("$name")
+  fi
 done
 if ((total == 0)); then
   check skip 1 "storage guard" "no named UFS partitions"
-elif ((${#rw[@]})); then
+elif ((ram_only)) && ((disks == 0)); then
+  check "not ok" 1 "storage guard" "no named UFS whole-disk nodes"
+elif ((ram_only)) && ((${#disk_rw[@]} || ${#rw[@]})); then
+  check "not ok" 1 "storage guard" "writable UFS nodes: disks ${disk_rw[*]:-none}; partitions ${rw[*]:-none}"
+elif ((!ram_only)) && ((${#rw[@]})); then
   check "not ok" 1 "storage guard" "writable outside the allowlist: ${rw[*]}"
 else
-  imgs=""; [[ -z $slot ]] || imgs=" and slot ${slot#_}'s boot images"
-  check ok 1 "storage guard" "$total partitions; only userdata$imgs writable"
+  if ((ram_only)); then
+    check ok 1 "storage guard" "$disks whole disks read-only; $total partitions; no UFS writes allowed"
+  else
+    imgs=""; [[ -z $slot ]] || imgs=" and slot ${slot#_}'s boot images"
+    check ok 1 "storage guard" "$total partitions; only userdata$imgs writable"
+  fi
 fi
 if [[ -n $slot_from ]]; then
   printf '%s\n' "${results[@]}"
@@ -132,8 +228,11 @@ fi
 
 rootdev=$(findmnt -no SOURCE / 2>/dev/null)
 rootpart=$(sed -n 's/^PARTNAME=//p' "/sys/class/block/${rootdev#/dev/}/uevent" 2>/dev/null)
+rootfs=$(findmnt -no FSTYPE / 2>/dev/null)
 if [[ $rootpart == userdata ]]; then
   check ok 1 "root" "$(findmnt -no FSTYPE /) on userdata, $(df -h --output=avail / | tail -1 | tr -d ' ') free"
+elif [[ $rootfs == nfs || $rootfs == nfs4 ]]; then
+  check skip 0 "root" "$rootfs test root; not persistent"
 else
   check "not ok" 1 "root" "root is on ${rootpart:-$rootdev}, not userdata"
 fi
@@ -170,7 +269,7 @@ known_errors=(
   'failed to register acpm aoc reset callback'
   # the camera lens motors fail one command on wake (NOTES); fix: camera work
   'ak73[0-9]+_vcm_resume (I2C|INC) failure'
-  # CPU energy model against the OPP tables; fix: linux-omarchy-mobile#182 (kernel #184)
+  # CPU energy model against the OPP tables; fix: linux-omamobile#182 (kernel #184)
   'cpu cpu[0-9]+: EM: invalid perf\. state'
   # the GPU's supply belongs to the ACPM firmware, not a Linux regulator
   'panthor .*no regulator \(mali\) found'
@@ -267,7 +366,7 @@ if ((newerrs)); then
   # MAC-shaped octets, quoted strings and every word with a digit in it are
   # masked, which keeps addresses, serials and network names out of the row;
   # still read it before pasting the report anywhere public.
-  top=$(mask_ids <<<"$newlog" | sort | uniq -c | sort -rn | head -3 \
+  top=$(mask_ids <<<"$newlog" | sort | uniq -c | sort -rn | sed -n '1,3p' \
     | awk '{n=$1; $1=""; sub(/^ /, ""); printf "%s%s x%d", (NR > 1 ? "; " : ""), $0, n}')
   check "not ok" 0 "new dmesg errors" "$top"
 fi
@@ -276,30 +375,7 @@ if [[ -n $errors_from ]]; then
   exit 0
 fi
 
-failed=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | xargs)
-ufailed=""
-[[ -n $uid && -S /run/user/$uid/bus ]] && ufailed=$(as_user systemctl --user --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | xargs)
-# A sleep the modem's link driver refused before the freeze, while its link was
-# up (linux-omarchy-mobile#232; on every 7 Pro that sleeps with the modem up),
-# leaves systemd-suspend.service failed with EBUSY until the next sleep; the
-# shell's auto-sleep tries again 30 s later. It is the guard working, not a
-# fault, but only when every failed suspend this boot is one of the guard's:
-# EBUSY is also a freezer that couldn't freeze or a device that refused, so
-# one early refusal must not cover a later fault. Each refusal fails one
-# attempt and logs one line, so failures above the refusals are something
-# else (and a wrapped dmesg errs towards counting the unit).
-if [[ " $failed " == *" systemd-suspend.service "* ]] \
-    && refused_only "$(cat /sys/power/suspend_stats/fail 2>/dev/null)" \
-         "$(dmesg 2>/dev/null | grep -c 'gs201-pcie-cp .*sleep refused before the freeze' || true)" \
-         "$(cat /sys/power/suspend_stats/last_failed_errno 2>/dev/null)"; then
-  failed=$(xargs -n1 <<<"$failed" | grep -vx systemd-suspend.service | xargs || true)
-  suspend_refused=" (sleeps refused while the modem's link was busy: $(cat /sys/power/suspend_stats/fail) this boot)"
-fi
-if [[ -z $failed && -z $ufailed ]]; then
-  check ok 0 "systemd units" "none failed${suspend_refused:-}"
-else
-  check "not ok" 0 "systemd units" "failed: ${failed:-none}${ufailed:+; user: $ufailed}"
-fi
+unit_rows
 
 # ---------------------------------------------------------------- USB
 udc=""

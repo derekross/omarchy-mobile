@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+# The Android NDK tools/fetch-ndk fetches, for the bionic programs built on
+# the computer (packages/omamobile-gnss/bionic: the Pixel 9a's GNSS HAL
+# client). RELEASE REVISION SHA256 SIZE URL, one line. The SHA-256 and the
+# size are of the archive as dl.google.com served it on 2026-11-18; the
+# revision is the one in its source.properties (Pkg.Revision).
+r30 30.0.16248370 753611f410d002cfcd3f3dc2ef49aad532089d3180b436c060a90bf0fcb64df2 738633529 https://dl.google.com/android/repository/android-ndk-r30-linux.zip

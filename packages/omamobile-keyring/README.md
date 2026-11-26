@@ -1,6 +1,6 @@
 # omamobile-keyring
 
-The public key that signs Omarchy Mobile's packages and the `[omamobile]` repository
+The public key that signs Omamobile's packages and the `[omamobile]` repository
 database, in pacman's keyring format. Installing it runs
 `pacman-key --populate omamobile`, which imports the key and marks it trusted
 (`omamobile-trusted`), the same way `archlinux-keyring` works.

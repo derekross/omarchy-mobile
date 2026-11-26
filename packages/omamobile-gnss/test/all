@@ -15,7 +15,7 @@ bash test/install-hook.sh || fail "the upgrade hook and the Location switch"
 grep -c 'gnss-slsi start' lib/omamobile-gnss-start >/dev/null || fail "the 9a starts gnss-slsi"
 # The 9a writes the hang marker before its session and clears it after a clean stop.
 s=lib/omamobile-gnss-start
-[[ $(grep -n 'date -Is > "\$MARK"' $s | head -1 | cut -d: -f1) -lt $(grep -n 'gnss-slsi start' $s | head -1 | cut -d: -f1) ]] || fail "the 9a's marker goes down before gnss-slsi start"
+[[ $(grep -n 'date -Is > "\$MARK"' $s | sed -n 1p | cut -d: -f1) -lt $(grep -n 'gnss-slsi start' $s | sed -n 1p | cut -d: -f1) ]] || fail "the 9a's marker goes down before gnss-slsi start"
 grep -c 'OMAMOBILE_DT:-/proc/device-tree' $s >/dev/null || fail "the compatible is read through an overridable path"
 # both branches, with a fake device tree and a stub chroot: the 9a path writes
 # the marker and runs gnss-slsi, the 7 Pro path neither (no SPI5 node here)
@@ -101,9 +101,9 @@ grep -c '^ExecStop=/usr/lib/omamobile-vendor/omamobile-gnss-start --stop$' vendo
 grep -qx '^ExecStopPost=/usr/lib/omamobile-vendor/omamobile-gnss-start --stopped$' vendor/systemd/system/omamobile-gnss.service || fail "post-stop checks the marker"
 grep -c 'gnss-slsi/data/vendor/gps' vendor/systemd/system/omamobile-gnss-nmea.service >/dev/null || fail "the bridge may open the 9a's FIFO"
 # --stop comes before the hang marker, so a leftover marker never skips a stop
-[[ $(grep -n -- '--stop' lib/omamobile-gnss-start | head -1 | cut -d: -f1) -lt $(grep -n 'elif \[\[ -e \$MARK' lib/omamobile-gnss-start | cut -d: -f1) ]] || fail "--stop before the marker"
+[[ $(grep -n -- '--stop' lib/omamobile-gnss-start | sed -n 1p | cut -d: -f1) -lt $(grep -n 'elif \[\[ -e \$MARK' lib/omamobile-gnss-start | cut -d: -f1) ]] || fail "--stop before the marker"
 # A running stack keeps the phone awake (SUSPEND-PLAN 6.1).
-grep -qx 'ExecStart=/usr/bin/systemd-inhibit --what=sleep --mode=block "--who=Omarchy Mobile GNSS" "--why=A location session is running" /usr/lib/omamobile-vendor/omamobile-gnss-start' \
+grep -qx 'ExecStart=/usr/bin/systemd-inhibit --what=sleep --mode=block "--who=Omamobile GNSS" "--why=A location session is running" /usr/lib/omamobile-vendor/omamobile-gnss-start' \
   vendor/systemd/system/omamobile-gnss.service || fail "the stack holds a sleep inhibitor while it runs"
 # One GeoClue agent, ours (2026-11-02): geoclue's XDG autostart of its demo
 # agent ran at login, our unit exited as a second instance and stayed

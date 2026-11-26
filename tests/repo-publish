@@ -97,3 +97,10 @@ pass "a failing inventory stops before publishing, also after some names"
 
 stopped "a failing rsync" FAIL_RSYNC=1
 pass "a failing copy stops before publishing"
+
+# --- the server account: omapub, the one that may write pkgs.omamobile.org
+# since 2026-11-17, unless OMAMOBILE_PKGS_HOST says otherwise ---
+hostline=$(grep -x 'HOST=${OMAMOBILE_PKGS_HOST:-[^}]*}' tools/repo-publish) || fail "repo-publish sets HOST from OMAMOBILE_PKGS_HOST"
+[[ $(env -u OMAMOBILE_PKGS_HOST bash -c "$hostline; echo \$HOST") == omapub@nostr01.derekross.me ]] || fail "the default account is omapub"
+[[ $(OMAMOBILE_PKGS_HOST=other@pkgs.invalid bash -c "$hostline; echo \$HOST") == other@pkgs.invalid ]] || fail "OMAMOBILE_PKGS_HOST overrides it"
+pass "the server account defaults to omapub@nostr01.derekross.me, and OMAMOBILE_PKGS_HOST overrides it"

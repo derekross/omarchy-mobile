@@ -137,6 +137,23 @@ make_vendor "$t/v2" cheetah gen2
 make_vendor "$t/husky" husky gen3
 make_vendor "$t/panther" panther gen4
 
+# Dipper reads local backup copies and keeps the split modem firmware beside
+# each renamed MDT header.
+mkdir -p "$t/dipper-source/vendor/firmware" "$t/dipper-source/vendor" \
+  "$t/dipper-source/modem/image" "$t/dipper-source/bluetooth/image"
+echo 'ro.product.vendor.device=dipper' > "$t/dipper-source/vendor/build.prop"
+for f in a630_zap ipa_fws; do
+  echo "$f metadata" > "$t/dipper-source/vendor/firmware/$f.mdt"
+  echo "$f segment" > "$t/dipper-source/vendor/firmware/$f.b00"
+done
+for f in adsp cdsp modem venus; do
+  echo "$f metadata" > "$t/dipper-source/modem/image/$f.mdt"
+  echo "$f segment" > "$t/dipper-source/modem/image/$f.b00"
+done
+echo mba > "$t/dipper-source/modem/image/mba.mbn"
+echo crnv > "$t/dipper-source/bluetooth/image/crnv21.bin"
+echo crbtfw > "$t/dipper-source/bluetooth/image/crbtfw21.tlv"
+
 FW=usr/lib/firmware/updates
 REG=usr/share/omamobile/sensors/registry
 CHEETAH_FILES="aoc.bin
@@ -154,6 +171,21 @@ cs40l26-dvl.bin
 cs40l26-svc.bin
 cs40l26.bin
 cs40l26.wmfw"
+DIPPER_FILES="cdsp.b00
+cdsp.mdt
+qca/Xiaomi/dipper/crnv21.bin
+qca/crbtfw21.tlv
+qcom/sdm845/Xiaomi/dipper/a630_zap.b00
+qcom/sdm845/Xiaomi/dipper/a630_zap.mbn
+qcom/sdm845/Xiaomi/dipper/adsp.b00
+qcom/sdm845/Xiaomi/dipper/adsp.mbn
+qcom/sdm845/Xiaomi/dipper/ipa_fws.b00
+qcom/sdm845/Xiaomi/dipper/ipa_fws.mbn
+qcom/sdm845/Xiaomi/dipper/mba.mbn
+qcom/sdm845/Xiaomi/dipper/modem.b00
+qcom/sdm845/Xiaomi/dipper/modem.mbn
+qcom/venus-5.2/venus.b00
+qcom/venus-5.2/venus.mbn"
 
 # run VENDOR IMG ARGS...: the tool with the stand-ins first on PATH
 run() {
@@ -205,6 +237,42 @@ if run "$t/v1" "$t/ext4.img" -o "$o"; then
 else
   cat "$t/log"; fail "fresh: a first run succeeds"
 fi
+
+o=$t/dipper
+if run "$t/dipper-source" "$t/dipper-source" -d dipper -o "$o"; then
+  [[ $(listed "$o") == "$DIPPER_FILES" ]] || fail "dipper: checksum list names DTS firmware and modem segments"
+  [[ $(cat "$o/$FW/qcom/sdm845/Xiaomi/dipper/a630_zap.mbn") == "a630_zap metadata" &&
+     $(cat "$o/$FW/qcom/sdm845/Xiaomi/dipper/a630_zap.b00") == "a630_zap segment" &&
+     $(cat "$o/$FW/qcom/sdm845/Xiaomi/dipper/adsp.mbn") == "adsp metadata" &&
+     $(cat "$o/$FW/qcom/sdm845/Xiaomi/dipper/adsp.b00") == "adsp segment" &&
+     $(cat "$o/$FW/cdsp.mdt") == "cdsp metadata" &&
+     $(cat "$o/$FW/cdsp.b00") == "cdsp segment" &&
+     $(cat "$o/$FW/qcom/venus-5.2/venus.mbn") == "venus metadata" &&
+     $(cat "$o/$FW/qcom/venus-5.2/venus.b00") == "venus segment" &&
+     $(cat "$o/$FW/qca/Xiaomi/dipper/crnv21.bin") == "crnv" &&
+     $(cat "$o/$FW/qca/crbtfw21.tlv") == "crbtfw" ]] ||
+    fail "dipper: vendor and modem MDT metadata keep their split segments"
+  (cd "$o/$FW" && sha256sum --quiet -c "$o/vendor-firmware.sha256") || fail "dipper: output checksums match"
+  pass_since "$n" "dipper: partition roots map firmware and split modem segments"
+else
+  cat "$t/log"; fail "dipper: partition-root extraction succeeds"
+fi
+
+cp "$t/dipper-source/vendor/firmware/a630_zap.b00" "$t/a630_zap.b00"
+rm "$t/dipper-source/vendor/firmware/a630_zap.b00"
+if run "$t/dipper-source" "$t/dipper-source" -d dipper -o "$t/dipper-missing-segment"; then
+  fail "dipper: missing split firmware segment is refused"
+fi
+grep -qF 'vendor/firmware/a630_zap has no .bNN segment' "$t/log" || fail "dipper: missing split segment is named"
+mv "$t/a630_zap.b00" "$t/dipper-source/vendor/firmware/a630_zap.b00"
+cp "$t/dipper-source/vendor/build.prop" "$t/build.prop"
+echo 'ro.product.vendor.device=other' > "$t/dipper-source/vendor/build.prop"
+if run "$t/dipper-source" "$t/dipper-source" -d dipper -f -o "$t/dipper-wrong-device"; then
+  fail "dipper: a backup for another device is refused"
+fi
+grep -qF "vendor/build.prop identifies 'other', not dipper" "$t/log" || fail "dipper: source device mismatch is named"
+mv "$t/build.prop" "$t/dipper-source/vendor/build.prop"
+pass "dipper: wrong-device and missing split firmware backups are refused"
 
 # --- A reused output directory -------------------------------------------------
 o=$t/reuse n=$failed

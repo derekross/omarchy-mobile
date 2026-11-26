@@ -21,8 +21,14 @@
 #     in capitals on every line, each ending with a newline. If not, prints
 #     why, naming the first wrong line, and returns 1; the same if it can't
 #     be read as a file (a missing one revokes nothing).
-#     signing_key_load and tools/release-upload run it before they read a
-#     line of the file.
+#   revoked_list ROOT || ...
+#     runs revoked_file_check ROOT, reads omamobile-revoked as a regular file,
+#     re-checks every line read, and prints the revoked fingerprints one per
+#     line (nothing if the file is missing or empty). On any check, read or
+#     concurrent-change failure, prints why on stdout and returns 1.
+#     signing_key_load, tools/release-upload, tools/repo-publish,
+#     tools/fetch-published and tools/build-packages --local --import all read
+#     omamobile-revoked through it.
 #
 # Nothing here reads, prints or copies secret key material.
 
@@ -51,10 +57,29 @@ revoked_file_check() {
   return 1
 }
 
+revoked_list() {
+  local root=${1:?revoked_list needs the repository root}
+  local file=$root/packages/omamobile-keyring/omamobile-revoked out
+  local re=$'^([0123456789ABCDEF]{40}\n)*$'
+  # Missing: nothing revoked, quietly. A link to nowhere is not missing.
+  [[ -e $file || -L $file ]] || return 0
+  out=$(revoked_file_check "$root") || { printf '%s\n' "$out"; return 1; }
+  if ! [[ -f $file ]] || ! out=$(tr '\0' '?' 2>/dev/null < "$file" && printf x); then
+    echo "cannot read packages/omamobile-keyring/omamobile-revoked"
+    return 1
+  fi
+  out=${out%x}
+  if ! (shopt -u nocasematch; [[ $out =~ $re ]]); then
+    echo "packages/omamobile-keyring/omamobile-revoked changed while reading"
+    return 1
+  fi
+  printf '%s' "$out"
+}
+
 signing_key_load() {
   local root=${1:?signing_key_load needs the repository root}
   local home=$root/keys/gnupg.release file=$root/keys/fingerprint.release
-  local keyring=$root/packages/omamobile-keyring fpr why
+  local keyring=$root/packages/omamobile-keyring fpr revoked
   if [[ ! -d $home || ! -f $file ]]; then
     {
       echo "error: no release signing key: keys/gnupg.release and keys/fingerprint.release are missing."
@@ -73,11 +98,11 @@ signing_key_load() {
     echo "error: omamobile-keyring does not trust $fpr (keys/fingerprint.release): phones would refuse what it signs" >&2
     return 1
   fi
-  if ! why=$(revoked_file_check "$root"); then
-    echo "error: $why" >&2
+  if ! revoked=$(revoked_list "$root"); then
+    echo "error: $revoked" >&2
     return 1
   fi
-  if cut -d: -f1 "$keyring/omamobile-revoked" 2>/dev/null | grep -cx "$fpr" >/dev/null; then
+  if [[ $'\n'$revoked$'\n' == *$'\n'"$fpr"$'\n'* ]]; then
     echo "error: $fpr (keys/fingerprint.release) is revoked in omamobile-keyring" >&2
     return 1
   fi

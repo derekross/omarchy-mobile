@@ -3,7 +3,7 @@
 
 **Status (2026-11-13):** **M4 is complete on the phone.** The fuel gauge reads the 8a's ATL pack with its own model, the bootloader's charger state is recorded, the USB link survives an unplug, Linux charged the battery under the dead-man tool on a laptop port and a wall charger (gate h), and the PMIC's interrupt gives the RTC an alarm ([Results](#results)).
 
-The kernel side is linux-omarchy-mobile#246 (the gauge and PMIC, the pack's EEPROM and the PMIC's interrupt), open as of 2026-11-13. Until it merges, the published kernel has no `hsi2c_11` on akita, so the gauge, the USB rescue and the dead-man tool have nothing to talk to.
+The kernel side is linux-omamobile#246 (the gauge and PMIC, the pack's EEPROM and the PMIC's interrupt), open as of 2026-11-13. Until it merges, the published kernel has no `hsi2c_11` on akita, so the gauge, the USB rescue and the dead-man tool have nothing to talk to.
 
 M3 is complete ([BRINGUP-M3](BRINGUP-M3.md)).
 
@@ -38,7 +38,7 @@ The 8a's battery hardware is the 8 Pro's: the same chips, at the same addresses,
   - the dead-man tool (§6, `tools/husky-deadman` and `-phone`);
   - the charger baseline (§10a).
 - **The USB link after an unplug:** husky's `omamobile-usb-rescue` closes the Type-C chip's USB data switch (0x25:0x93) that the charger opens when VBUS drops. That's probably the cause of M2.7's lost link (BRINGUP-M2, not checked on akita), so it belongs here too.
-- **The PMIC interrupt:** linux-omarchy-mobile#243 gave husky's S2MPG14 its interrupt (GIC SPI 74, the VGPIO2AP sysreg, `wakeup-source`), so its RTC has an alarm. The 8a's stock tree has the same interrupt (`<0 0x4a 4 0>`, `s2mpg14,wakeup = "enabled"`), and stock's `/proc/interrupts` shows `rtc-alarm0` on it. #243's author suggested akita take the same three lines.
+- **The PMIC interrupt:** linux-omamobile#243 gave husky's S2MPG14 its interrupt (GIC SPI 74, the VGPIO2AP sysreg, `wakeup-source`), so its RTC has an alarm. The 8a's stock tree has the same interrupt (`<0 0x4a 4 0>`, `s2mpg14,wakeup = "enabled"`), and stock's `/proc/interrupts` shows `rtc-alarm0` on it. #243's author suggested akita take the same three lines.
 
 ## Facts
 

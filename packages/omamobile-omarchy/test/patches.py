@@ -345,6 +345,8 @@ def real_package(t):
         ok(rc == 0, "real4.5: the series applies to a second root (%s)" % out.strip().splitlines()[-1])
         show_logo(t, root45, centred=True)
         about_layout(t, root45, tools=os.path.join(root45, "usr/bin"))
+        # The glance under qmltestrunner, on the family phones run
+        lock_glance_run(root45, ex, "real4.5")
         return
 
     root, _ = make_root("real", os.path.join(ex, ".MTREE"))
@@ -396,7 +398,7 @@ def real_package(t):
        "real omarchy: Backspace and Left still go back (0018)")
     ok("property bool cardSettled: false" in menu, "real omarchy: the menu-first-frame bridge applies after 0018")
     qml_parse(root, selected_series)
-    lock_glance(root)
+    lock_glance(root, ex)
     lock_battery(t, root)
     lock_media(root)
     app_icons_largest(root)
@@ -506,7 +508,7 @@ def app_icons_largest(root):
        "real omarchy: the icon index keeps the largest size, an SVG over any PNG (0024: %s)" % (got or p.stderr.strip()[:120]))
 
 
-def lock_glance(root):
+def lock_glance(root, ex):
     """Patch 0023: the lock's glance view. Static checks on the patched
     files, then test/lock-glance (qmltestrunner, offscreen) against them."""
     lock = "usr/share/omarchy/shell/plugins/lock/"
@@ -540,14 +542,30 @@ def lock_glance(root):
     ok("function darkTapWakes()" in view and "if (root.displayDark && !root.darkTapWakes()) return" in view
        and "if (lock.darkTapWakes()) {" in read(root, lock + "LockGlance.qml"),
        "real omarchy: a dark touch-only lock leaves the double tap to omamobile-doubletap (0029)")
+    lock_glance_run(root, ex, "real omarchy")
+
+
+def lock_glance_run(root, ex, label):
+    """test/lock-glance (qmltestrunner, offscreen) against a patched root of
+    either family. ex is the package as extracted, unpatched: the computer
+    lock's password prompt is Omarchy's own expression, a literal on 4.0.6
+    and a translation on 4.5. Our patches put the PIN prompt in front of it
+    (0003, 0011) and must leave it as the other branch; the suite then checks
+    that a computer's lock shows what the view declares."""
+    view = "usr/share/omarchy/shell/plugins/lock/LockView.qml"
+    decl = "  readonly property string placeholderText: "
+    theirs, ours = ([l[len(decl):] for l in (read(d, view) or "").splitlines() if l.startswith(decl)] for d in (ex, root))
+    ok(len(theirs) == 1 and len(ours) == 1 and theirs[0].strip()
+       and ours[0] in (theirs[0], 'padShown ? "Enter PIN" : ' + theirs[0]),
+       "%s: the computer lock's password prompt is Omarchy's own (0003, 0011)" % label)
     p = subprocess.run(["bash", os.path.join(HERE, "lock-glance"), os.path.join(root, "usr/share/omarchy/shell")],
                        capture_output=True, text=True)
     if p.returncode == 77:
-        print("ok - real omarchy: the glance under qmltestrunner # SKIP no qmltestrunner")
+        print("ok - %s: the glance under qmltestrunner # SKIP no qmltestrunner" % label)
         return
     out = p.stdout + p.stderr
     totals = [l for l in out.splitlines() if l.startswith("Totals:")]
-    ok(p.returncode == 0, "real omarchy: the glance under qmltestrunner (0023: %s)" % (totals[-1] if totals else "no result"))
+    ok(p.returncode == 0, "%s: the glance under qmltestrunner (0023: %s)" % (label, totals[-1] if totals else "no result"))
     if p.returncode != 0:
         print("\n".join(l for l in out.splitlines() if l.startswith(("FAIL", "   ", "QWARN")))[:4000])
 
@@ -1004,12 +1022,12 @@ def notification_phrasing(t, patched, original):
 PROBE_NO_FINGERS = """found 1 devices
 Device at /net/reactivated/Fprint/Device/0
 Using device /net/reactivated/Fprint/Device/0
-User tester has no fingers enrolled for Pixel 7 Pro under-display fingerprint sensor (Omarchy Mobile).
+User tester has no fingers enrolled for Pixel 7 Pro under-display fingerprint sensor (Omamobile).
 """
 PROBE_ENROLLED = """found 1 devices
 Device at /net/reactivated/Fprint/Device/0
 Using device /net/reactivated/Fprint/Device/0
-Fingerprints for user tester on Pixel 7 Pro under-display fingerprint sensor (Omarchy Mobile) (press):
+Fingerprints for user tester on Pixel 7 Pro under-display fingerprint sensor (Omamobile) (press):
  - #0: right-thumb
 """
 PROBE_FAILED = """found 1 devices

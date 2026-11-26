@@ -1,6 +1,6 @@
 # omamobile-shell
 
-Omarchy Mobile's phone profile for Omarchy's own shell. It isn't a fork: these are ordinary Omarchy shell plugins plus a phone `shell.json`, linked into the user's config by `omamobile-setup-user`.
+Omamobile's phone profile for Omarchy's own shell. It isn't a fork: these are ordinary Omarchy shell plugins plus a phone `shell.json`, linked into the user's config by `omamobile-setup-user`.
 
 | Path | What it is |
 | --- | --- |
@@ -20,10 +20,11 @@ Omarchy Mobile's phone profile for Omarchy's own shell. It isn't a fork: these a
 | `plugins/omamobile.access` | The permission sheet: "Allow Camera to use the camera?" with the app's icon and two large buttons, in place of xdg-desktop-portal-gtk's desktop dialog |
 | `plugins/omamobile.fingerprint` | The under-display fingerprint sensor: target during verification, enrollment screen |
 | `profile/shell.json` | The phone layout the setup seeds once |
-| `bin/omamobile-setup-user` | Omarchy Mobile's per-user setup (Omarchy lifecycle `setup-user`); at every login it also enables and starts the Phone and Messages agent's user unit (`omatel-agent.service`, when installed), so calls and texts notify with no app open; `--adopt`, for a user set up by hand rather than by firstboot, marks the once-only steps that would overwrite or repeat what that user has (the shell profile, the monitor scale, the cursor and keyboard lines, the screensaver, Files' click policy) done without running them; the other steps run as for a new user (missing phone plugins and an idle block go into `shell.json`, Chromium's flags are written), and the setup service then runs at each login |
+| `bin/omamobile-setup-user` | Omamobile's per-user setup (Omarchy lifecycle `setup-user`); at every login it also enables and starts the Phone and Messages agent's user unit (`omatel-agent.service`, when installed), so calls and texts notify with no app open; `--adopt`, for a user set up by hand rather than by firstboot, marks the once-only steps that would overwrite or repeat what that user has (the shell profile, the monitor scale, the cursor and keyboard lines, the screensaver, Files' click policy) done without running them; the other steps run as for a new user (missing phone plugins and an idle block go into `shell.json`, Chromium's flags are written), and the setup service then runs at each login |
 | `bin/omamobile-launch` | One app per screen: every launch from the shell (drawer, home screen, widgets, links, the agent) gets a new empty workspace through a per-launch Hyprland exec rule, or focuses the app's open window; and the switcher's "Show with…" and "Move to its own screen" |
 | `bin/omamobile-home` | The home screen, as the home pill's swipe shows it (an empty workspace and the home page). An app runs it when Back (Escape, from the edge swipe) reaches its top level, so Back is phone-wide and no app needs a Hyprland call: [plugins/README.md](plugins/README.md#omamobileback) |
-| `bin/omamobile-osk-watch` | Reports squeekboard's visibility (sm.puri.OSK0) to the fingerprint, keyboard and launcher plugins |
+| `bin/omamobile-osk-watch` | Reports the on-screen keyboard's visibility (sm.puri.OSK0, squeekboard's or Tactus's) to the fingerprint, keyboard and launcher plugins |
+| `bin/omamobile-osk` | The on-screen keyboard the owner chose. With no argument it runs it (the session's autostart line, which runs squeekboard itself where `omamobile-osk` is gone, and squeekboard's user unit through the drop-in `systemd/user/mobi.phosh.OSK-omamobile.conf`); `which` and `list` say what is chosen and installed; `use NAME` changes now. It is squeekboard unless the owner picked Tactus (`packages/tactus`, opt-in) in Setup > Keyboard, an entry shown only where Tactus is installed; a choice that can't be met means squeekboard. `hypr/phone.lua` keeps Tactus's virtual keyboard out of the hardware-key binds and Omarchy's own, as it does squeekboard's |
 | `bin/omamobile-screenshot-open` | What a screenshot toast's tap ("Tap to view", patch 0020) opens on a phone (`OMARCHY_SCREENSHOT_EDITOR`, set in `environment.d/30-omamobile-screenshot.conf`; Omarchy passes the saved file's path): the screenshot in Loupe (omamobile-apps), fitted, with touch zoom, pan and swipe, and Loupe's copy, share and delete. Tensaku, Omarchy's default, can't be panned or zoomed by touch; without Loupe it is the fallback, through `omamobile-screenshot-edit` |
 | `bin/omamobile-screenshot-edit` | Tensaku as Omarchy opens a screenshot in it (`tensaku-edit`), with GTK's simple input-method context so the on-screen keyboard doesn't come up over the image (show it by hand for the text tool). `omamobile-setup-user` gives Tensaku's own entry (drawer, Loupe's Open With) the same context once, and `hypr/phone.lua` maximizes its window, which Omarchy floats by class |
 | `bin/omamobile-osk-guard` | Turns the on-screen keyboard (`screen-keyboard-enabled`) back on when it was left off with no screensaver running (a user unit for every graphical session) |
@@ -31,7 +32,8 @@ Omarchy Mobile's phone profile for Omarchy's own shell. It isn't a fork: these a
 | `bin/omamobile-sleepd` | Sleep (s2idle) once the screen has been off behind a secure lock for `OMAMOBILE_SLEEP_AFTER_OFF` s (30), and again 5 s after a dark resume; `now` for the power key (`omamobile-keys`), `check` to see what holds it awake. Refuses with the screen on, Stay awake on, an SSH session open, a logind sleep block inhibitor (calls, GNSS) or a RUNNING PipeWire sink. A user unit for every graphical session, **off until `omarchy-toggle omamobile-sleep on`** (device/cheetah/SUSPEND-PLAN.md 6.2) |
 | `bin/omamobile-weather` | The current weather for the lock screen's glance (`~/.local/state/omamobile/weather.json`, with the `source` it used) from Open-Meteo, at login and every 30 minutes (`omamobile-weather.timer`, a user unit for every graphical session). Where, in order: the phone's position from GeoClue at city accuracy, at most every 3 h and only while the Location switch is on and GeoClue has an agent for the user (omamobile-gnss's unit, or any other instance of GeoClue's demo agent the user runs; never a prompt); the setting `~/.config/omamobile/weather.json` (`omamobile-weather set "State College, PA" F`, or `{"latitude", "longitude"}`; `"location": "fixed"` puts it before the position); the home screen's today widget's city, or the weather widget's named place. Unit: the setting's, else the locale's. A failure keeps the old reading; a run that starts before the network is back (login, or the catch-up run on resume) tries again with backoff for up to 75 s and then gives up without failing the unit. `omamobile-weather show` says where it would look |
 | `bin/omamobile-fp-enroll` | fprintd enrollment helper the fingerprint screen runs (JSON lines) |
-| `bin/omamobile-bt-agent` | BlueZ pairing agent and discovery helper the quick-settings Bluetooth panel runs while open |
+| `bin/omamobile-bt-agent` | BlueZ pairing agent and discovery helper the quick-settings Bluetooth panel runs while open. With `--pairable-window SECONDS` (the panel passes it when the adapter wasn't pairable as it opened) it also keeps BlueZ's Pairable off except while the panel asks for it, with BlueZ's `PairableTimeout` set to the window: [plugins/README.md](plugins/README.md#omamobilequicksettings) |
+| `systemd/user/bt-agent-omamobile.conf` | Omarchy's `bt-agent.service` (`bt-agent -c NoInputNoOutput`, which accepts every pairing) is held off on the phone by a `ConditionPathExists=` on `~/.config/omamobile/bt-agent` (touch it to run the agent anyway); a condition, not a mask, as for `omarchy-fcitx5.service`. `omamobile-setup-user` reloads a user manager that hasn't read the drop-in yet and stops an agent still running from before it |
 | `bin/omamobile-portal-access` | The xdg-desktop-portal Access backend (`org.freedesktop.impl.portal.desktop.omamobile`, a D-Bus-activated user unit) that shows the permission sheet and answers the portal |
 | `portal/` | `omamobile.portal`, its D-Bus activation file, and `/etc/xdg/xdg-desktop-portal/hyprland-portals.conf`, which picks it for Access and xdg-desktop-portal-gnome for FileChooser only (everything else stays `hyprland;gtk`) |
 | `systemd/user/xdg-desktop-portal-gnome-omamobile.conf` | The file chooser's drop-in: xdg-desktop-portal-gnome on plain Wayland (`GDK_BACKEND=wayland`), since with Omarchy's `wayland,x11,*` it serves Settings only |
@@ -98,8 +100,37 @@ Open, save and choose-a-folder requests through the portal (Qt, GTK, Electron an
 
 ## Windows on a phone screen
 
-`hypr/phone.lua` maximizes every app between the bar and the dock, with no gaps, no border and full opacity (Omarchy's 0.96-0.985 let the home widgets show through). When the maximized window closes, the next one takes the screen (`misc:exit_window_retains_fullscreen`). Modal dialogs float centred at their own size, never bigger than the screen; picture-in-picture is 300x169 in the top-right corner. `omamobile-setup-user` sets the monitor scale to 3 with `GDK_SCALE` to match, gives foot 6 px padding, a scrollback multiplier of 3 and a 300 ms long press, and adds Chromium's Wayland input-method flags, each once and only over Omarchy's own values.
+`hypr/phone.lua` maximizes every app between the bar and the dock, with no gaps, no border and full opacity (Omarchy's 0.96-0.985 let the home widgets show through). When the maximized window closes, the next one takes the screen (`misc:exit_window_retains_fullscreen`). Going home and switching apps are workspace switches (one app per screen), and Omarchy turns the workspace animation off, as a desktop wants; on the phone they fade over 200 ms instead of cutting (`hl.animation({ leaf = "workspaces", enabled = false })` after the line that loads `phone.lua` gets the cut back). Modal dialogs float centred at their own size, never bigger than the screen; picture-in-picture is 300x169 in the top-right corner. `omamobile-setup-user` sets the monitor scale to 3 with `GDK_SCALE` to match, gives foot 6 px padding, a scrollback multiplier of 3 and a 300 ms long press, and adds Chromium's Wayland input-method flags, each once and only over Omarchy's own values.
 
 The package contract follows omarchy-mac's: `./install DESTDIR` stages files and enables nothing, `test/all` runs the package's own tests, and `version` holds the version.
 
 Develop on a desktop with `phone/dev/run-desktop` from the repo root.
+
+### Chromium and Grok Bot sizing
+
+`omamobile-browser-setup`, called by user setup and again by the phone bar at
+shell start, fits both apps to the same
+578 px layout from the internal output's short logical side. It keeps the
+reference phone's 0.83 cap: 480 px gives 0.83, 405 px gives 0.70 and 360 px
+gives 0.62. Geometry comes from Hyprland when available, or an internal DRM
+mode plus the numeric scale in `hypr/monitors.lua` before the compositor runs.
+DSI, eDP and simpledrm's Unknown outputs are supported; external outputs are
+ignored. Missing geometry defers only the scale factor. Chromium's user agent,
+input-method and no-first-run defaults are written independently. The shell
+retry obtains live geometry for an auto or computed Lua scale; helper failure
+does not stop the remaining user setup.
+
+Defaults run once, tracked by `omamobile-browser-fit-chromium` and
+`omamobile-browser-fit-grok-bot` in Omarchy's done directory, with
+`omamobile-browser-defaults-chromium` preserving removals while scale is
+deferred. Old Chromium
+per-feature markers also count: deleting a mobile UA, input-method flag or
+scale after its original setup remains a user choice. Only the exact generated,
+unquoted 0.83 scale line migrates once; custom values and quoted overrides
+stay. Chromium's version is read only immediately before writing a missing UA.
+No browser profile or site zoom changes. Chrome defaults are deferred until
+its quote-aware launcher is released separately in omarchy-pkgs.
+
+## Device settings
+
+After the shared rules, `hypr/phone.lua` loads `/usr/share/omamobile/hypr/device.lua` if a device package installs one, for settings only that phone needs (an inner and an outer panel, its own input devices). Every session that loads `phone.lua` (setup-user adds it to `looknfeel.lua`) gets it, new and existing users alike. It runs under `pcall`: a syntax or runtime error in the device file is logged and the shared rules stay in force. With no device file nothing changes, so every phone today is unaffected.

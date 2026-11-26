@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile's user setup: what a platform's "setup-user" step does in
+# Omamobile's user setup: what a platform's "setup-user" step does in
 # Omarchy's lifecycle contract (docs/lifecycle-dispatch.md upstream). Runs as
 # the user. Each step runs once, tracked with Omarchy's own omarchy-done
 # markers, so the user's later changes are never overwritten.
@@ -15,12 +15,12 @@ set -euo pipefail
 # runs as on a new user: most check the user's files first (the menu
 # entries, foot's touch lines, phone.lua, the idle block), and a few
 # change what is there (they add the missing phone plugins to shell.json,
-# replace Chromium's user agent and scale factor, and set the suspend and
+# migrate Chromium's generated scale factor once, and set the suspend and
 # lock toggles). A marked
 # step the user does want can be had by removing its marker from
 # ~/.local/state/omarchy/done/ before the next login.
 if [[ ${1:-} == --adopt ]]; then
-  adopt=" omamobile-shell-profile omamobile-monitor-scale omamobile-hide-cursor omamobile-osk omamobile-screensaver omamobile-files-single-tap "
+  adopt=" omamobile-shell-profile omamobile-monitor-scale omamobile-hide-cursor omamobile-osk omamobile-screensaver omamobile-files-single-tap omamobile-foot-selection "
   omarchy-done() {
     if [[ $1 == ensure && $adopt == *" $2 "* ]]; then
       command omarchy-done check "$2" 2>/dev/null || { command omarchy-done mark "$2"; echo "omamobile-setup-user: adopted $2 (marked done, not run)"; }
@@ -202,21 +202,56 @@ fi
 if omarchy-done ensure omamobile-hide-cursor; then
   cat >>~/.config/hypr/looknfeel.lua <<'LUA'
 
--- Omarchy Mobile: a touch phone shows no pointer
+-- Omamobile: a touch phone shows no pointer
 hl.config({ cursor = { invisible = true, hide_on_touch = true } })
 LUA
 fi
 
 # On-screen keyboard: squeekboard shows itself when a text field takes focus
 # (Hyprland relays text-input-v3 to its input-method-v2). Started from
-# Omarchy's user autostart file, once.
+# Omarchy's user autostart file, once: omamobile-osk runs the keyboard the
+# owner chose, which is squeekboard unless they picked Tactus (Setup >
+# Keyboard, below). The line falls back to squeekboard itself when
+# omamobile-osk is gone (an older omamobile-shell installed over this one),
+# so the session never starts without a keyboard: on a lock that takes a
+# password, that would leave no way to unlock it.
+osk_line="o.launch_on_start(\"sh -c 'command -v omamobile-osk >/dev/null && exec omamobile-osk; exec squeekboard'\")"
 if omarchy-done ensure omamobile-osk; then
   gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true
-  cat >>~/.config/hypr/autostart.lua <<'LUA'
-
--- Omarchy Mobile: on-screen keyboard
-o.launch_on_start("squeekboard")
-LUA
+  printf '\n-- Omamobile: on-screen keyboard\n%s\n' "$osk_line" >>~/.config/hypr/autostart.lua
+fi
+# Up to 0.2.133 that line started squeekboard itself. The line as this script
+# wrote it is changed, once; one the owner wrote or changed is left alone
+# (and then the keyboard they start is the one they get; a line here says so,
+# once, since a choice in Setup > Keyboard then never takes effect at login). A file that is a
+# link (a dotfile setup) is left as it is, with a line saying what to
+# change: the rewrite would replace the link with a copy. A file that can't
+# be written is reported, the rest of the setup goes on, and the next login
+# tries again.
+if omarchy-done ensure omamobile-osk-chosen; then
+  autostart=~/.config/hypr/autostart.lua
+  if [[ -L $autostart ]]; then
+    if grep -qx 'o.launch_on_start("squeekboard")' "$autostart" 2>/dev/null; then
+      echo "omamobile-setup-user: $autostart is a link, left as it is; for the keyboard chosen in Setup > Keyboard," \
+        "its line o.launch_on_start(\"squeekboard\") becomes $osk_line" >&2
+    fi
+  elif [[ -f $autostart ]] && grep -qx 'o.launch_on_start("squeekboard")' "$autostart"; then
+    if ! {
+      while IFS= read -r l || [[ -n $l ]]; do
+        if [[ $l == 'o.launch_on_start("squeekboard")' ]]; then printf '%s\n' "$osk_line"; else printf '%s\n' "$l"; fi
+      done <"$autostart" >"$autostart.new" && mv -f "$autostart.new" "$autostart"
+    } 2>/dev/null; then
+      rm -f "$autostart.new" 2>/dev/null || true
+      rm -f ~/.local/state/omarchy/done/omamobile-osk-chosen
+      echo "omamobile-setup-user: could not change the keyboard's start line in $autostart; the next login tries again" >&2
+    fi
+  elif [[ -f $autostart ]] && ! grep -cxF "$osk_line" "$autostart" >/dev/null 2>&1 &&
+    grep -c '^[[:space:]]*o\.launch_on_start.*squeekboard' "$autostart" >/dev/null 2>&1; then
+    # A line the owner wrote or changed (one that logs squeekboard's output, say) starts
+    # squeekboard whatever is chosen: left alone, and said once, as for the link
+    echo "omamobile-setup-user: $autostart starts squeekboard with a line of its own, left as it is; the keyboard" \
+      "chosen in Setup > Keyboard starts at login only once that line is $osk_line" >&2
+  fi
 fi
 
 # Files (Nautilus) opens folders with one tap: a double tap is a mouse habit
@@ -304,28 +339,10 @@ if omarchy-done ensure omamobile-phone-rules; then
   if ! grep -qs 'hypr/phone\.lua' ~/.config/hypr/*.lua; then
     cat >>"$phone_rules_target" <<LUA
 
--- Omarchy Mobile: phone window rules
+-- Omamobile: phone window rules
 dofile("$share/hypr/phone.lua")
 LUA
   fi
-fi
-
-# Chromium's first-run dialogs are desktop-sized: their buttons land off a
-# phone screen (the "Additional Terms" page blocked a login). Skip them, once.
-if omarchy-done ensure omamobile-chromium-no-first-run; then
-  grep -qx -- --no-first-run ~/.config/chromium-flags.conf 2>/dev/null ||
-    echo --no-first-run >>~/.config/chromium-flags.conf
-fi
-
-# Websites and web apps should get their phone versions. Sites choose by the
-# user agent (desktop Chromium on Linux ignores --use-mobile-user-agent, and
-# an explicit one also drops the desktop client hints). Once.
-if omarchy-done ensure omamobile-chromium-mobile; then
-  flags=~/.config/chromium-flags.conf
-  major=$(chromium --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
-  [[ -f $flags ]] && sed -i -e '/^"\?--user-agent=/d' "$flags"
-  # Quoted: the launcher splits each line on spaces otherwise.
-  echo "\"--user-agent=Mozilla/5.0 (Linux; Android 14; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major:-153}.0.0.0 Mobile Safari/537.36\"" >>"$flags"
 fi
 
 # Auto-sleep (omamobile-sleepd: s2idle 30 s after the screen goes off behind
@@ -347,60 +364,11 @@ if omarchy-done ensure omamobile-lock-keypad; then
   touch ~/.local/state/omarchy/toggles/lock-keypad
 fi
 
-# Chromium won't lay out narrower than about 500 px, wider than the phone's
-# 480 px (at scale 3), so its window ran off the right edge. On Wayland its
-# --force-device-scale-factor multiplies the output scale, so 0.83 gives about
-# 550 px of layout width (2.5, the first try, made everything 2.5x bigger).
-if omarchy-done ensure omamobile-chromium-scale-2; then
-  if grep -q -- '^--force-device-scale-factor=' ~/.config/chromium-flags.conf 2>/dev/null; then
-    sed -i 's/^--force-device-scale-factor=.*/--force-device-scale-factor=0.83/' ~/.config/chromium-flags.conf
-  else
-    echo --force-device-scale-factor=0.83 >>~/.config/chromium-flags.conf
-  fi
-fi
-
-# The first version of the mobile step above also deleted the scale factor,
-# so Chromium's window ran off the right edge again. Put it back, once.
-if omarchy-done ensure omamobile-chromium-scale-3; then
-  grep -q -- '^--force-device-scale-factor=' ~/.config/chromium-flags.conf 2>/dev/null ||
-    echo --force-device-scale-factor=0.83 >>~/.config/chromium-flags.conf
-fi
-
-# Web text fields should raise the on-screen keyboard (TOUCH-PLAN 3.1): on
-# Wayland, Chromium talks to an input method only with --enable-wayland-ime,
-# and squeekboard gets text-input-v3 from Hyprland. Each flag once, unless the
-# user's file already has it.
-if omarchy-done ensure omamobile-chromium-wayland-ime; then
-  for flag in --enable-wayland-ime --wayland-text-input-version=3; do
-    grep -cx -- "$flag" ~/.config/chromium-flags.conf >/dev/null 2>&1 ||
-      echo "$flag" >>~/.config/chromium-flags.conf
-  done
-fi
-
-# Grok Bot, Omarchy's x.ai agent (Electron), won't lay out narrower than 512
-# px (SAND_MIN_WINDOW_SIZE in its main process), wider than a phone's logical
-# width, so its window ran off the right edge as Chromium's did. Its launcher
-# reads ~/.config/grok-bot-flags.conf. The scale factor there gives the 578 px
-# of layout width Chromium gets on the 7 Pro (480 / 0.83): 0.83 there, 0.70
-# on the 9a (405 px), 0.62 at 360 px (a 1080 px panel at scale 3), and 0.83
-# when no panel mode can be read. Once; a factor the user's file already has
-# stays theirs.
-if omarchy-done ensure omamobile-grok-bot-fit; then
-  flags=~/.config/grok-bot-flags.conf
-  factor=0.83 mode= width=0
-  for m in "${OMAMOBILE_DRM:-/sys/class/drm}"/card*-DSI-*/modes; do
-    if [[ -r $m ]]; then mode=$(sed -n 1p "$m"); break; fi
-  done
-  if [[ $mode =~ ^([0-9]+)x ]]; then
-    width=$((BASH_REMATCH[1] / 3))   # $scale, from the monitor step above
-    [[ $scale == '8 \/ 3' ]] && width=$((BASH_REMATCH[1] * 3 / 8))
-  fi
-  if ((width > 0)); then
-    factor=$(awk -v w="$width" 'BEGIN { f = int(100 * w / 578) / 100; printf "%.2f", (f < 0.83 ? f : 0.83) }')
-  fi
-  grep -c -- '^--force-device-scale-factor=' "$flags" >/dev/null 2>&1 ||
-    echo "--force-device-scale-factor=$factor" >>"$flags"
-fi
+# Chromium and Grok Bot share the panel's geometry and 578 px fitting rule.
+# Defaults and the legacy generated-scale migration run once. Later removal
+# of a UA, IME or scale flag remains the user's choice. Chrome follows only
+# after its quote-aware launcher is released.
+omamobile-browser-setup || echo "omamobile-setup-user: browser setup failed; continuing" >&2
 
 # Style > Unlock picks the look of the disk-encryption unlock screen. The phone
 # has no encrypted disk, and the early boot logo follows the default theme, so
@@ -408,12 +376,12 @@ fi
 if omarchy-done ensure omamobile-menu-hide-unlock; then
   extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
   if [[ -f $extension ]] && ! grep -q '"style.unlock"' "$extension"; then
-    sed -i '0,/^{/s//{\n  \/\/ Omarchy Mobile: no disk-unlock screen on the phone\n  "style.unlock": {"when": "false"},/' "$extension"
+    sed -i '0,/^{/s//{\n  \/\/ Omamobile: no disk-unlock screen on the phone\n  "style.unlock": {"when": "false"},/' "$extension"
   fi
 fi
 
 # Omarchy's Setup > Security > Fingerprint looks for a USB reader and installs
-# libfprint-git. On the phone it opens Omarchy Mobile's enrollment screen instead
+# libfprint-git. On the phone it opens Omamobile's enrollment screen instead
 # (omamobile.fingerprint, through fprintd), once, through the same menu
 # extension file (a reused id replaces the entry).
 if omarchy-done ensure omamobile-menu-fingerprint; then
@@ -421,7 +389,7 @@ if omarchy-done ensure omamobile-menu-fingerprint; then
   mkdir -p "$(dirname "$extension")"
   [[ -s $extension ]] || printf '{\n}\n' >"$extension"
   if ! grep -q '"setup.security.fingerprint"' "$extension"; then
-    sed -i '0,/^{/s//{\n  \/\/ Omarchy Mobile: fingerprint setup on the screen, through fprintd\n  "setup.security.fingerprint": {"icon": "\xf3\xb0\x88\xb7", "label": "Fingerprint", "when": "test -x \/usr\/lib\/omamobile-fp\/omamobile-fp-chroot", "action": "omarchy-shell shell summon omamobile.fingerprint '"'"'{\\"page\\":\\"enroll\\"}'"'"'"},/' "$extension"
+    sed -i '0,/^{/s//{\n  \/\/ Omamobile: fingerprint setup on the screen, through fprintd\n  "setup.security.fingerprint": {"icon": "\xf3\xb0\x88\xb7", "label": "Fingerprint", "when": "test -x \/usr\/lib\/omamobile-fp\/omamobile-fp-chroot", "action": "omarchy-shell shell summon omamobile.fingerprint '"'"'{\\"page\\":\\"enroll\\"}'"'"'"},/' "$extension"
   fi
 fi
 
@@ -447,6 +415,35 @@ if [[ -f $foot ]] && omarchy-done ensure omamobile-foot-touch; then
   fi
 fi
 
+# A selection in foot goes to the clipboard too, not only the primary
+# selection: on a phone there's no middle click to paste the primary, so a
+# touch selection (hold, then drag) or a search + Enter (Ctrl+Shift+R) had
+# nothing to paste with Ctrl+Shift+V or another app's paste. Once, and only
+# when foot.ini doesn't set selection-target itself.
+if [[ -f $foot ]] && omarchy-done ensure omamobile-foot-selection; then
+  if ! grep -Ec '^[[:space:]]*selection-target[[:space:]]*=' "$foot" >/dev/null; then
+    main='^\[main\][[:space:]]*(#.*)?$'
+    if grep -Ec "$main" "$foot" >/dev/null; then
+      # sed -i writes a temp file next to foot.ini; if it can't, the step runs again next login
+      if ! sed -i --follow-symlinks -E "0,/$main/s//&\nselection-target=both/" "$foot"; then
+        rm -f "$HOME/.local/state/omarchy/done/omamobile-foot-selection"
+      fi
+    else
+      # Keys above the first section are foot's [main], so a [main] on top changes nothing else
+      # Through a temp file, written back in place so a symlinked foot.ini stays a link; a failed
+      # write leaves the step for the next login instead of a cut file
+      tmp=
+      if tmp=$(mktemp "${foot%/*}/.foot.ini.XXXXXX") \
+        && { printf '[main]\nselection-target=both\n\n'; cat "$foot"; } >"$tmp" && cat "$tmp" >"$foot"; then
+        rm -f "$tmp"
+      else
+        [[ -z $tmp ]] || rm -f "$tmp"
+        rm -f "$HOME/.local/state/omarchy/done/omamobile-foot-selection"
+      fi
+    fi
+  fi
+fi
+
 # Hermes is the one agent in Omarchy's Setup > Default Agent with no aarch64
 # build (hermes-desktop isn't in the aarch64 repository): hide it there and
 # under Install > AI, through the menu extension file. Once.
@@ -455,7 +452,7 @@ if omarchy-done ensure omamobile-menu-agents; then
   mkdir -p "$(dirname "$extension")"
   [[ -s $extension ]] || printf '{\n}\n' >"$extension"
   if ! grep -q '"setup.default.agent.hermes"' "$extension"; then
-    sed -i '0,/^{/s//{\n  \/\/ Omarchy Mobile: no aarch64 build of Hermes\n  "setup.default.agent.hermes": {"when": "false"},\n  "install.ai.hermes": {"when": "false"},/' "$extension"
+    sed -i '0,/^{/s//{\n  \/\/ Omamobile: no aarch64 build of Hermes\n  "setup.default.agent.hermes": {"when": "false"},\n  "install.ai.hermes": {"when": "false"},/' "$extension"
   fi
 fi
 
@@ -508,6 +505,15 @@ if omarchy-done ensure omamobile-menu-mobilenetwork; then
   extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
   if [[ -f $extension ]] && ! grep -q '"setup.mobile-network"' "$extension"; then
     sed -i '0,/^{/s//{\n  "setup.mobile-network": {"icon":"\xf3\xb0\x9e\x83","label":"Mobile network","description":"Carrier, mobile data, roaming and the APN","when":"test -x \/usr\/lib\/omamobile-sit\/omamobile-sit-config","action":"omarchy-shell shell summon omamobile.mobilenetwork '"'"'{}'"'"'"},/' "$extension"
+  fi
+fi
+# Setup > Keyboard in Omarchy's menu: which on-screen keyboard, the standard
+# one (squeekboard) or Tactus, with a tick on the one in use. Shown only where
+# there is a choice, that is, where Tactus is installed. Added once.
+if omarchy-done ensure omamobile-menu-keyboard; then
+  extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
+  if [[ -f $extension ]] && ! grep -q '"setup.keyboard"' "$extension"; then
+    sed -i '0,/^{/s//{\n  "setup.keyboard": {"icon":"\xf3\xb0\x8c\x8c","label":"Keyboard","title":"On-screen keyboard","description":"Which keyboard to type on","when":"command -v tactus"},\n  "setup.keyboard.squeekboard": {"icon":"\xf3\xb0\x8c\x8c","label":"Standard","description":"Types what you tap, in every language","checked":"[[ $(omamobile-osk which) == squeekboard ]]","action":"omamobile-osk use squeekboard"},\n  "setup.keyboard.tactus": {"icon":"\xf3\xb0\x8c\x8c","label":"Tactus","description":"Corrects words as you type (English)","checked":"[[ $(omamobile-osk which) == tactus ]]","action":"omamobile-osk use tactus"},/' "$extension"
   fi
 fi
 # Setup > Voice in Omarchy's menu opens the voice settings (omamobile.voice),
@@ -584,6 +590,23 @@ if [[ -f $units/omatel-agent.service ]]; then
   systemctl --user enable --now omatel-agent.service ||
     echo "omamobile-setup-user: could not enable omatel-agent.service; trying again at the next login" >&2
 fi
+# Omarchy's bt-agent.service (`bt-agent -c NoInputNoOutput`, accepting every
+# pairing) is held off on the phone by the package's drop-in
+# (bt-agent.service.d/omamobile.conf, a ConditionPathExists on
+# ~/.config/omamobile/bt-agent); the Bluetooth panel's own agent asks the
+# owner. A user manager that was already running when the package came in
+# hasn't read the drop-in, and may still run the agent: reload it, and stop
+# the agent. Every login, and nothing changes the unit's enabled state, so
+# the owner's opt-in file brings it back as before.
+if [[ -f $units/bt-agent.service && ! -e ~/.config/omamobile/bt-agent ]]; then
+  if [[ $(systemctl --user show -p DropInPaths --value bt-agent.service 2>/dev/null) != *bt-agent.service.d/omamobile.conf* ]]; then
+    systemctl --user daemon-reload || true
+  fi
+  if systemctl --user is-active --quiet bt-agent.service; then
+    systemctl --user stop bt-agent.service ||
+      echo "omamobile-setup-user: could not stop bt-agent.service; trying again at the next login" >&2
+  fi
+fi
 # Voxtype on the phone (docs/VOICE-PLAN.md, phase 3): Omarchy's base.en
 # stays the model, with Whisper's audio context cut to the clip's length
 # (context_window_optimization, for clips under 22.5 s). On the Pixel 7 Pro
@@ -611,7 +634,7 @@ if [[ -f $voxconf ]]; then
   if ! grep -c '^[[:space:]]*context_window_optimization[[:space:]]*=' "$voxconf" >/dev/null &&
     omarchy-done ensure omamobile-voxtype-context; then
     if grep -c '^\[whisper\]$' "$voxconf" >/dev/null; then
-      sed -i -e '/^\[whisper\]$/a # Omarchy Mobile: Whisper'"'"'s context cut to the clip, about twice as fast on a phone' \
+      sed -i -e '/^\[whisper\]$/a # Omamobile: Whisper'"'"'s context cut to the clip, about twice as fast on a phone' \
         -e '/^\[whisper\]$/a context_window_optimization = true' "$voxconf"
     else
       printf '\n[whisper]\ncontext_window_optimization = true\n' >>"$voxconf"
@@ -627,7 +650,7 @@ if omarchy-done ensure omamobile-menu-update; then
   mkdir -p "$(dirname "$extension")"
   [[ -s $extension ]] || printf '{\n}\n' >"$extension"
   if ! grep -q '"update.omarchy"' "$extension"; then
-    sed -i '0,/^{/s//{\n  \/\/ Omarchy Mobile: updates through the phone'"'"'s update sheet; no fwupd or Plymouth rebuilds\n  "update.omarchy": {"icon": "\xee\xa4\x80", "iconFont": "omarchy", "label": "Omarchy", "action": "omarchy-shell shell summon omamobile.update '"'"'{}'"'"'"},\n  "update.firmware": {"when": "false"},\n  "update.config.plymouth": {"when": "false"},/' "$extension"
+    sed -i '0,/^{/s//{\n  \/\/ Omamobile: updates through the phone'"'"'s update sheet; no fwupd or Plymouth rebuilds\n  "update.omarchy": {"icon": "\xee\xa4\x80", "iconFont": "omarchy", "label": "Omarchy", "action": "omarchy-shell shell summon omamobile.update '"'"'{}'"'"'"},\n  "update.firmware": {"when": "false"},\n  "update.config.plymouth": {"when": "false"},/' "$extension"
   fi
 fi
 
@@ -638,16 +661,28 @@ fi
 # as they set it. Children are listed too, since the menu's search finds a
 # row under a hidden parent.
 menu_hide() {
+  local comment=$1 id rows=()
+  shift
+  for id; do rows+=("$id" '{"when": "false"}'); done
+  menu_rows "$comment" "${rows[@]}"
+}
+# The same for rows of its own: an id, then its whole entry. A reused id
+# replaces Omarchy's entry rather than adding to it (an entry with only
+# "when" shows a row with no label, icon or action), so a row that should
+# show at times carries all of its fields.
+menu_rows() {
   local comment=$1 id rows=""
   shift
   local extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
   mkdir -p "$(dirname "$extension")"
   [[ -s $extension ]] || printf '{\n}\n' >"$extension"
-  for id; do
-    grep -qF "\"$id\"" "$extension" || rows+="  \"$id\": {\"when\": \"false\"},"$'\n'
+  while (($# >= 2)); do
+    id=$1
+    grep -qF "\"$id\"" "$extension" || rows+="  \"$id\": $2,"$'\n'
+    shift 2
   done
   [[ -n $rows ]] || return 0
-  OMAMOBILE_ROWS="  // Omarchy Mobile: $comment"$'\n'"${rows%$'\n'}" \
+  OMAMOBILE_ROWS="  // Omamobile: $comment"$'\n'"${rows%$'\n'}" \
     awk '!done && /^[[:space:]]*\{/ {print; print ENVIRON["OMAMOBILE_ROWS"]; done = 1; next} {print}' \
     "$extension" >"$extension.new"
   mv -f "$extension.new" "$extension"
@@ -686,6 +721,17 @@ menu_hide "no dock and no other kernel on a phone (Omarchy 4.5)" \
   appearance.dock appearance.dock.always-on appearance.dock.autohide appearance.dock.position \
   appearance.dock.position.bottom appearance.dock.position.left appearance.dock.position.right appearance.dock.position.top \
   update.kernel
+# Setup > Typing (Keyboard Layouts, Input Methods) reads and sets fcitx5's
+# input group through fcitx5-remote (#972). The phone keeps fcitx5 off so
+# squeekboard holds the input-method slot (omarchy-fcitx5-omamobile.conf),
+# so the save fails before it writes anything, and the call D-Bus-activates
+# fcitx5 behind squeekboard. The rows come back for a user who turns fcitx5
+# on with the unit's own switch (~/.config/omamobile/fcitx5).
+typing=$'"icon": "\xef\x84\x9c", "when": "test -e ~/.config/omamobile/fcitx5"'
+menu_rows "Typing needs fcitx5, which the phone keeps off (touch ~/.config/omamobile/fcitx5)" \
+  setup.typing "{$typing, \"label\": \"Typing\"}" \
+  setup.typing.keyboard "{$typing, \"label\": \"Keyboard Layouts\", \"action\": \"omarchy-setup-keyboard\"}" \
+  setup.typing.input "{$typing, \"label\": \"Input Methods\", \"action\": \"omarchy-setup-input\"}"
 menu_hide "x86_64-only installers" \
   install.windows install.browser.chrome install.browser.edge \
   install.service.dropbox install.service.spotify install.service.nordvpn \

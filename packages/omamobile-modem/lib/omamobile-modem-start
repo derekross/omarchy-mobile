@@ -86,7 +86,7 @@ SYSTEMCTL=${OMAMOBILE_MODEM_SYSTEMCTL:-systemctl}
 # omamobile-modem-inhibit.service (its ExecCondition=): the device's
 # declaration that it was verified (device-cheetah, the Pixel 7 Pro), no
 # owner's opt-out, and a kernel with the link's early sleep refusal
-# (linux-omarchy-mobile#232). Any other answer, or a policy that can't run,
+# (linux-omamobile#232). Any other answer, or a policy that can't run,
 # keeps the wait for the lock below, and without the lock no driver loads.
 SLEEP_POLICY=${OMAMOBILE_MODEM_SLEEP_POLICY:-$LIB/omamobile-modem-sleep-policy}
 say() { printf 'omamobile-modem: %s\n' "$*" >&2; }

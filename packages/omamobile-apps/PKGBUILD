@@ -2,7 +2,7 @@
 # Maintainer: Derek Ross <derekross@gmail.com>
 #
 # The apps a phone needs that a desktop Omarchy doesn't ship. An app joins
-# `depends` once the hardware behind it works on Omarchy Mobile, or once it
+# `depends` once the hardware behind it works on Omamobile, or once it
 # is useful without it and says so (Phone and Messages keep contacts, the
 # call log and drafts with no modem, and show no modem); until then it waits
 # in `optdepends` with the reason. Device-specific stacks (the modem's RIL
@@ -10,9 +10,9 @@
 pkgname=omamobile-apps
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile's default mobile apps (camera, phone, messages, contacts, images, maps and location, NFC tags)"
+pkgdesc="Omamobile's default mobile apps (camera, phone, messages, contacts, images, maps and location, NFC tags)"
 arch=(any)
-url="https://github.com/derekross/omarchy-mobile"
+url="https://github.com/derekross/omamobile"
 license=(MIT)
 depends=(
   gnome-maps   # location through GeoClue (omamobile-gnss feeds it the GPS)

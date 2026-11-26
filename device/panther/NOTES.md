@@ -3,12 +3,56 @@
 
 Findings from real hardware, newest first. [BRINGUP-M1.md](BRINGUP-M1.md) is the first-light record.
 
-The board file (`gs201-panther.dts`) was merged as [linux-omarchy-mobile#108](https://github.com/derekross/linux-omarchy-mobile/pull/108), and the FT3658 driver as [#109](https://github.com/derekross/linux-omarchy-mobile/pull/109); the test kernels below add one local commit each on top.
+The board file (`gs201-panther.dts`) was merged as [linux-omamobile#108](https://github.com/derekross/linux-omamobile/pull/108), and the FT3658 driver as [#109](https://github.com/derekross/linux-omamobile/pull/109); the test kernels below add one local commit each on top.
+
+## 2026-11-17: GNSS, bring-up overlay (overlays/gnss.dtso)
+
+The Pixel 7's stock dtbo (board 0x30406) describes the BCM4775x receiver
+exactly as the Pixel 7 Pro's: Google's source has one file for both
+(`gs201-common-gps.dtsi`), and the rails LDO9S-LDO11S come from the shared
+`gs201-pmic.dtsi`. So panther gets cheetah's node (linux-omamobile
+PR: the GNSS node, the rails and the pins, all disabled), and
+`overlays/gnss.dtso` turns on the sub-PMIC, the three rails, USI5 and its
+SPI, as cheetah's `gnss-pmic-test.dtso` and `gnss-test.dtso` do together,
+and gph2's pin controller (`pinctrl@14440000`, disabled in `gs201.dtsi`),
+which `mcu_resp` and `nstandby` need. It isn't in `DTB_OVERLAYS`, and it
+needs a kernel with [linux-omamobile#268](https://github.com/derekross/linux-omamobile/pull/268):
+on a kernel without it, `fdtoverlay` refuses the overlay, as the three
+rails aren't in the base DTB.
+
+To try it:
+
+1. Install `omamobile-gnss` first. Its blacklist keeps `bcm4775x-gnss`
+   from loading by itself (`omamobile-gnss-start` loads it); the Pixel 7's
+   image and device package don't install it, so without it the driver
+   would load at the first boot with the overlay.
+2. The first boot with the overlay should show `bcm4775x-gnss` not loaded,
+   the three `vdd_gnss_*` rails registered and off, and USB and the
+   fingerprint sensor as before.
+3. The way back is the DTB without the overlay.
+
+Tested on a Pixel 7 (angelrenefm) on 2026-11-04, with a local kernel whose
+node is the same as the PR's (the built DTB against the phone's live tree:
+the same properties, other than phandles and `status`) and the stock
+GNSS daemons in `omamobile-gnss`'s vendor chroot: 8 minutes of NMEA
+outdoors from a cold start, the first fix 178 s in, then 303 fixes, up to
+16 satellites. Indoors, 60 s, no fix. That boot ran
+`7.3.0-rc6-omamobile-push1-g44048a9aa795` with `omamobile-gnss` 0.2.7
+(built on the phone). On 2026-11-17, the same kernel with
+`omamobile-gnss` 0.2.9, indoors: `omamobile-gnss force` bound
+`bcm4775x-gnss` on `spi0.0` and gave 1089 NMEA sentences in 20 s (GPS,
+GLONASS, Galileo, BeiDou, QZSS), no fix. Applied with `fdtoverlay` to the
+PR's `gs201-panther.dtb`, the overlay changes those six `status` lines and
+nothing else, and it applies together with `fingerprint-sensor.dtso`
+(seven with gph2's pin controller, checked again on 2026-11-18 against
+#268's DTB at `070e5489d`). Not
+tested: the overlay through `omamobile-boot-update`, and a warm start with
+fresh orbit predictions (`omamobile-gnss-lto`).
 
 ## 2026-11-15: hardware video, off by default (overlays/mfc.dtso)
 
 The MFC v15 (hardware H.264, HEVC, VP8 and VP9 decode and H.264, HEVC
-and VP8 encode, linux-omarchy-mobile#250 and #256) is described in the
+and VP8 encode, linux-omamobile#250 and #256) is described in the
 kernel with its 256 MiB pool but left disabled. Its two System MMUs and
 the S2MPUs in front of it are not described yet, so they stay in bypass,
 and Google's closed firmware, parsing whatever video an app hands it, can
@@ -21,7 +65,7 @@ as its own series, is what would turn it on by default.
 
 ## 2026-11-03: a second unit (angelrenefm)
 
-A stock factory Pixel 7 (CP3A.261005.002.A1 on both slots), offered on [#342](https://github.com/derekross/omarchy-mobile/issues/342). It booted Arch on slot B once the boot images carried AVB footers ([#396](https://github.com/derekross/omarchy-mobile/pull/396)); `tools/phone-smoke` passed everything required. What differs from the first unit, all read-only:
+A stock factory Pixel 7 (CP3A.261005.002.A1 on both slots), offered on [#342](https://github.com/derekross/omamobile/issues/342). It booted Arch on slot B once the boot images carried AVB footers ([#396](https://github.com/derekross/omamobile/pull/396)); `tools/phone-smoke` passed everything required. What differs from the first unit, all read-only:
 
 - **devinfo is version 3.15** (the first unit's is 3.19). In the same state, Linux read slot bytes `01 08 00 00 01 04 00 00` and `fastboot getvar` said A retry 1, B retry 1, none successful, current B; they agreed again after ABL's own change (B 2 to 1). After `fastboot --set-active=b` and one boot: `01 08 00 00 02 0c 00 00` (B gained bit 3, fastboot_ok).
 - **The pack is Lishen 3 kOhm, not Coslight 1 kOhm.** The gauge reads DesignCap 0x0891 (4386 mAh), stock's `lsn-a1-3k` value (Coslight's is 0x0873); TempCo reads 0x1402 (Lishen's stock value is 0x1802, so not an exact match). POR was clear (Status 0x2000) and DesignCap isn't the Coslight model's, so it looks like the kernel never loaded its Coslight model here and the gauge keeps what stock wrote (inferred from those two reads). After a POR (a flat or disconnected battery) it would load the Coslight model onto this Lishen pack: keep this unit from running flat until the model is picked by the pack's ID.
@@ -41,15 +85,15 @@ A second Pixel 7 (issue #342), with stock CP3A.261005.002.A1 sideloaded as a ful
 
 ## 2026-10-31: the battery
 
-The MAX77759's fuel gauge reports the battery with stock's Coslight 1 kOhm model: 4326 mAh, the pack's temperature and a real percentage, in upower and the shell's bar. Every 1 % step used to fire the gauge's interrupt about 430 times; a driver change fixes it. Gates, values and results: [BATTERY-PLAN.md](BATTERY-PLAN.md). Kernel: [linux-omarchy-mobile#171](https://github.com/derekross/linux-omarchy-mobile/pull/171) and [#170](https://github.com/derekross/linux-omarchy-mobile/pull/170), in review.
+The MAX77759's fuel gauge reports the battery with stock's Coslight 1 kOhm model: 4326 mAh, the pack's temperature and a real percentage, in upower and the shell's bar. Every 1 % step used to fire the gauge's interrupt about 430 times; a driver change fixes it. Gates, values and results: [BATTERY-PLAN.md](BATTERY-PLAN.md). Kernel: [linux-omamobile#171](https://github.com/derekross/linux-omamobile/pull/171) and [#170](https://github.com/derekross/linux-omamobile/pull/170), in review.
 
 ## 2026-10-31: the new omamobile base, #133's alignment, and stock's touch details
 
 Three boots, one change each, on `omamobile` at b0d62d9e7 (new spi-s3c64xx PIO fixes, ACPM and RTC changes), each with the USB bus commit:
 
 - **A**, `7.3.0-rc6-omamobile-push1-g8c9496448397`: the base, with #133's earlier head. Flashed, so slot B was back at 3 retries before it.
-- **B**, `…-gfe29f1dadbb5`: plus only [linux-omarchy-mobile#133](https://github.com/derekross/linux-omarchy-mobile/pull/133)'s `__aligned(ARCH_DMA_MINALIGN)` buffers. Pushed.
-- **C**, `…-ge57e346e9b71`: plus [linux-omarchy-mobile#166](https://github.com/derekross/linux-omarchy-mobile/pull/166), the interrupt pull-up and the 1 µs chip-select setup delay. Flashed, since a push would have left no retries. The live tree has `samsung,pin-pud = 3` in `ts-irq-pins` and `spi-cs-setup-delay-ns = 1000` in the touch node.
+- **B**, `…-gfe29f1dadbb5`: plus only [linux-omamobile#133](https://github.com/derekross/linux-omamobile/pull/133)'s `__aligned(ARCH_DMA_MINALIGN)` buffers. Pushed.
+- **C**, `…-ge57e346e9b71`: plus [linux-omamobile#166](https://github.com/derekross/linux-omamobile/pull/166), the interrupt pull-up and the 1 µs chip-select setup delay. Flashed, since a push would have left no retries. The live tree has `samsung,pin-pud = 3` in `ts-irq-pins` and `spi-cs-setup-delay-ns = 1000` in the touch node.
 
 All three boots behaved the same:
 - the FT3658 read chip id 0x56, firmware 0x16, and touches and the PIN unlock worked, with no SPI or CRC errors;
@@ -61,11 +105,11 @@ A and B had the same kernel warnings. `tools/phone-smoke` passed on C.
 
 ## 2026-10-29: USB comes back after a replug (U1)
 
-One boot of a local commit on top of the touch branch that enables USI13 as I2C at 400 kHz, as on the Pixel 7 Pro, with no devices described on it. Stock's live tree has the same MAX77759 there (TCPC 0x25, PMIC 0x66, fuel gauge 0x36, charger 0x69) on gpp25-0/1. The bus probes as `i2c-1`; the TCPC's `USBSW_CTRL` (0x93) reads 0x09 and the charger's `CHG_DETAILS_00` (0xb5) 0x60, VBUS valid. With the package's `omamobile-usb-rescue` running (a transient unit, same bytes as the Pixel 7 Pro's), the cable was pulled for about 5 s: the switch read 0x00, the script logged `VBUS valid, USBSW_CTRL 0x00: closing the data switch`, and SSH answered again within about 9 s. No I2C errors; the touch, the GPU and the haptics stayed up. The commit is merged as [linux-omarchy-mobile#167](https://github.com/derekross/linux-omarchy-mobile/pull/167); device-panther 0.1.3 ships the script and enables it. Installed on 2026-10-31 on kernel C below, its service closed the switch again after a replug, and SSH answered within seconds. It then started at boot on the next three kernels (BATTERY-PLAN.md D, E and F) and brought USB back after each of their four unplugs.
+One boot of a local commit on top of the touch branch that enables USI13 as I2C at 400 kHz, as on the Pixel 7 Pro, with no devices described on it. Stock's live tree has the same MAX77759 there (TCPC 0x25, PMIC 0x66, fuel gauge 0x36, charger 0x69) on gpp25-0/1. The bus probes as `i2c-1`; the TCPC's `USBSW_CTRL` (0x93) reads 0x09 and the charger's `CHG_DETAILS_00` (0xb5) 0x60, VBUS valid. With the package's `omamobile-usb-rescue` running (a transient unit, same bytes as the Pixel 7 Pro's), the cable was pulled for about 5 s: the switch read 0x00, the script logged `VBUS valid, USBSW_CTRL 0x00: closing the data switch`, and SSH answered again within about 9 s. No I2C errors; the touch, the GPU and the haptics stayed up. The commit is merged as [linux-omamobile#167](https://github.com/derekross/linux-omamobile/pull/167); device-panther 0.1.3 ships the script and enables it. Installed on 2026-10-31 on kernel C below, its service closed the switch again after a replug, and SSH answered within seconds. It then started at boot on the next three kernels (BATTERY-PLAN.md D, E and F) and brought USB back after each of their four unplugs.
 
 ## 2026-10-29: the touch node, suspend-to-idle and LDO25M (T6)
 
-One boot of kernel `7.3.0-rc6-omamobile-push1-g8d46192a301e`: the board branch of [linux-omarchy-mobile#134](https://github.com/derekross/linux-omarchy-mobile/pull/134) (the GPU, the haptics, `mem_sleep_default=s2idle`, LDO25M fixed at 1.8 V and the final touch node, since merged) merged with the driver's review fixes, [#133](https://github.com/derekross/linux-omarchy-mobile/pull/133) (DMA-safe SPI buffers, `fsleep()`), with `CONFIG_TOUCHSCREEN_FOCALTECH_FT3658=m` from `kernel/configs/omamobile.config`. The build's local merge, `8d46192a3`, predates the commit messages' test paragraphs and sign-offs; its tree is the same as the merge of the PR heads, #134 at `ace1ba57fbe7` and #133 at `fdc4f4403103` (both `0eb5d6eb`). The modules were pushed before the boot.
+One boot of kernel `7.3.0-rc6-omamobile-push1-g8d46192a301e`: the board branch of [linux-omamobile#134](https://github.com/derekross/linux-omamobile/pull/134) (the GPU, the haptics, `mem_sleep_default=s2idle`, LDO25M fixed at 1.8 V and the final touch node, since merged) merged with the driver's review fixes, [#133](https://github.com/derekross/linux-omamobile/pull/133) (DMA-safe SPI buffers, `fsleep()`), with `CONFIG_TOUCHSCREEN_FOCALTECH_FT3658=m` from `kernel/configs/omamobile.config`. The build's local merge, `8d46192a3`, predates the commit messages' test paragraphs and sign-offs; its tree is the same as the merge of the PR heads, #134 at `ace1ba57fbe7` and #133 at `fdc4f4403103` (both `0eb5d6eb`). The modules were pushed before the boot.
 
 - `/sys/power/mem_sleep` reads `[s2idle] deep`.
 - `vdd-ts` reads 1.8 V and `avdd-ts` 3.0 V, each with the touch controller as its only consumer.
@@ -76,8 +120,8 @@ One boot of kernel `7.3.0-rc6-omamobile-push1-g8d46192a301e`: the board branch o
 
 Test kernels from local branches on slot B, each one change on top of the touch test kernel; one boot each.
 
-- **GPU (G1).** Kernel `7.3.0-rc6-omamobile-push1-ga92e2bd8546c`: the touch test kernel plus local commit `a92e2bd85`, the same change as [linux-omarchy-mobile#129](https://github.com/derekross/linux-omarchy-mobile/pull/129). With `&gpu` enabled as on the Pixel 7 Pro and the package's always-on rule installed before the boot, panthor probes the Mali-G710 (id 0xa862, `shader_present` 0x1110055), boots the CSF firmware (interface v1.5.0) and registers `renderD128`. Hyprland renders on it through the project's Mesa ("Mali-G710 MC7 (Panfrost)"), with no MMU faults or GPU resets. Probe prints `_opp_set_regulators: no regulator (mali)`, as on the Pixel 7 Pro (harmless, [GPU-PLAN](../cheetah/GPU-PLAN.md)).
-- **Haptics (H1).** Kernel `7.3.0-rc6-omamobile-push1-g575bb567ca5f`: the G1 kernel plus local commit `575bb567c`, the same change as [linux-omarchy-mobile#130](https://github.com/derekross/linux-omarchy-mobile/pull/130). The CS40L26A is on USI8 I2C at 0x43 with the same pins and stock values as the Pixel 7 Pro (read from the live device tree). With `cs40l26.wmfw` and `cs40l26.bin` from this phone's own factory image (`tools/extract-vendor-firmware -d panther`) in `/usr/lib/firmware/updates`, `cs40l26-vibra` finds revision A1, runs firmware 7.2.91 with the wavetable, and registers `cs40l26_vibra`; `tools/ff-rumble` effects of 100-500 ms at 25-80 % were felt.
+- **GPU (G1).** Kernel `7.3.0-rc6-omamobile-push1-ga92e2bd8546c`: the touch test kernel plus local commit `a92e2bd85`, the same change as [linux-omamobile#129](https://github.com/derekross/linux-omamobile/pull/129). With `&gpu` enabled as on the Pixel 7 Pro and the package's always-on rule installed before the boot, panthor probes the Mali-G710 (id 0xa862, `shader_present` 0x1110055), boots the CSF firmware (interface v1.5.0) and registers `renderD128`. Hyprland renders on it through the project's Mesa ("Mali-G710 MC7 (Panfrost)"), with no MMU faults or GPU resets. Probe prints `_opp_set_regulators: no regulator (mali)`, as on the Pixel 7 Pro (harmless, [GPU-PLAN](../cheetah/GPU-PLAN.md)).
+- **Haptics (H1).** Kernel `7.3.0-rc6-omamobile-push1-g575bb567ca5f`: the G1 kernel plus local commit `575bb567c`, the same change as [linux-omamobile#130](https://github.com/derekross/linux-omamobile/pull/130). The CS40L26A is on USI8 I2C at 0x43 with the same pins and stock values as the Pixel 7 Pro (read from the live device tree). With `cs40l26.wmfw` and `cs40l26.bin` from this phone's own factory image (`tools/extract-vendor-firmware -d panther`) in `/usr/lib/firmware/updates`, `cs40l26-vibra` finds revision A1, runs firmware 7.2.91 with the wavetable, and registers `cs40l26_vibra`; `tools/ff-rumble` effects of 100-500 ms at 25-80 % were felt.
 - **Suspend must be s2idle.** `/sys/power/mem_sleep` reads `s2idle [deep]` on these kernels, and gs201 never wakes from `deep`, so the package now carries the Pixel 7 Pro's `sleep.conf.d` drop-in. Suspend itself is untested here.
 - **Power off reboots the phone.** Omarchy's "Power off" (or `systemctl poweroff`) restarts the phone within a second, which spends a slot B retry. With the reboot watchdog off, systemd-shutdown runs to the end. A shutdown hook that saved the kernel log to `userdata` ten times a second, then powered off itself (sysrq `o`, the same `kernel_power_off()`), saved nothing after the trigger: no `sysrq: Power Off`, no device `shutdown` lines, no `reboot: Power down`. So the reset comes in the first tenth of a second of the kernel's power off, or before UFS can write another frame. With `syscon-poweroff` disabled in the test DT that leaves PSCI SYSTEM_OFF, which the firmware seems to turn into a restart (the boot reason reads `watchdog/apc`). The Pixel 7 Pro has never powered off from Linux either ([SUSPEND-PLAN](../cheetah/SUSPEND-PLAN.md) P7). To get to fastboot, hold Power and Volume Down from a running phone instead; that costs no retry.
 - **USB doesn't come back after a replug.** A replug while Linux runs leaves the phone off the bus, as on the other Tensor phones (`AGENTS.md`): the MAX77759 opens its USB2 data switch, and nothing closes it. The Pixel 7 Pro's `omamobile-usb-rescue` needs the MAX77759's I2C bus (USI13, `10d60000`), which this board file doesn't enable yet, so for now a replug means Power and Volume Down, then a flash. (2026-10-29: fixed by enabling USI13 and the package's `omamobile-usb-rescue`; see U1 above.)

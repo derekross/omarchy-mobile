@@ -140,14 +140,32 @@ rt=/run/user/$uid
 
 # Hyprland's environment, for grim, wf-recorder, hyprctl and omarchy-shell.
 session_env=()
-hpid=$(pgrep -u "$uid" -x Hyprland </dev/null | head -1)
-[[ -n $hpid ]] || hpid=$(pgrep -u "$uid" -x hyprland </dev/null | head -1)
+hpid=$(pgrep -u "$uid" -x Hyprland </dev/null | sed -n 1p)
+[[ -n $hpid ]] || hpid=$(pgrep -u "$uid" -x hyprland </dev/null | sed -n 1p)
 if [[ -n $hpid && -r /proc/$hpid/environ ]]; then
   while IFS= read -r -d '' kv; do
     case $kv in
       WAYLAND_DISPLAY=*|HYPRLAND_INSTANCE_SIGNATURE=*) session_env+=("$kv") ;;
     esac
   done < "/proc/$hpid/environ"
+fi
+# Hyprland sets HYPRLAND_INSTANCE_SIGNATURE and WAYLAND_DISPLAY only for the
+# programs it starts, so its own environ (above) has neither, and hyprctl got
+# no answer. Its lock file names its pid and its display (Omarchy 4.5,
+# Hyprland 0.56): the folder holding it is the signature.
+if [[ -n $hpid && " ${session_env[*]} " != *" HYPRLAND_INSTANCE_SIGNATURE="* ]]; then
+  for lock in "$rt"/hypr/*/hyprland.lock; do
+    [[ -r $lock ]] || continue
+    lpid="" ldisp=""
+    { IFS= read -r lpid; IFS= read -r ldisp; } < "$lock"
+    [[ $lpid == "$hpid" ]] || continue
+    lock=${lock%/hyprland.lock}
+    session_env+=("HYPRLAND_INSTANCE_SIGNATURE=${lock##*/}")
+    if [[ -n $ldisp && " ${session_env[*]} " != *" WAYLAND_DISPLAY="* ]]; then
+      session_env+=("WAYLAND_DISPLAY=$ldisp")
+    fi
+    break
+  done
 fi
 if [[ " ${session_env[*]} " != *" WAYLAND_DISPLAY="* ]]; then
   for s in "$rt"/wayland-*; do
@@ -167,8 +185,28 @@ notes_dir=$home/.local/state/omarchy/notifications
 
 # ---------------------------------------------------- screen capture ------
 
-display_on() {   # unknown (no hyprctl answer) counts as on
-  as_user hyprctl -j monitors 2>/dev/null | python3 -c 'import json,sys
+# Is the panel lit? As omamobile-keys decides it: what the panel itself
+# reports (the backlight's bl_power, 0 when on; an internal connector's dpms),
+# and Hyprland's dpmsStatus only on a machine with neither. No answer counts
+# as on, so grim is tried. (Hyprland's answer alone misled twice: with no
+# signature hyprctl failed, and under pipefail its failure read as off.)
+sysfs=${DEMO_SYSFS:-/sys}
+display_on() {
+  local f seen=0 mon
+  for f in "$sysfs"/class/backlight/*/bl_power; do
+    [[ -r $f ]] || continue
+    seen=1
+    [[ $(<"$f") == 0 ]] || return 1
+  done
+  for f in "$sysfs"/class/drm/card*-*; do
+    case ${f##*/} in *-DSI-*|*-eDP-*|*-LVDS-*) ;; *) continue ;; esac
+    [[ -r $f/status && -r $f/dpms && $(<"$f/status") == connected ]] || continue
+    seen=1
+    [[ $(<"$f/dpms") == On ]] || return 1
+  done
+  ((seen)) && return 0
+  mon=$(as_user hyprctl -j monitors 2>/dev/null) || return 0
+  printf '%s' "$mon" | python3 -c 'import json,sys
 try: m=json.load(sys.stdin)
 except ValueError: sys.exit(0)
 f=[x for x in m if x.get("focused")] or m

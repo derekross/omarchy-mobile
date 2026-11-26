@@ -5,7 +5,7 @@
 # until sitd is up. Enabled, it starts with omamobile-sitd (WantedBy below).
 # There is no D-Bus activation file, so no client can start it either.
 [Unit]
-Description=Omarchy Mobile ModemManager-compatible bridge (omamobile-sitd on D-Bus)
+Description=Omamobile ModemManager-compatible bridge (omamobile-sitd on D-Bus)
 After=dbus.service omamobile-sitd.service
 # Bus-name ownership and package conflicts provide exclusion. Do not stop
 # another modem daemon as a side effect of starting this bridge.

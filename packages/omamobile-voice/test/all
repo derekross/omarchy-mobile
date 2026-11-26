@@ -49,7 +49,7 @@ done
 ok "the root image installs Voxtype and the model; wtype (Omarchy's list) isn't skipped"
 
 if [[ ${OMAMOBILE_VOICE_FETCH:-0} == 1 ]]; then
-  etag=$(curl -sfIL "${url0#*::}" | tr -d '\r' | sed -n 's/^x-linked-etag: "\(.*\)"$/\1/Ip' | head -1)
+  etag=$(curl -sfIL "${url0#*::}" | tr -d '\r' | sed -n 's/^x-linked-etag: "\(.*\)"$/\1/Ip' | sed -n 1p)
   [[ $etag == "$sum0" ]] || fail "the server's file is the pinned sha256 (got: ${etag:-nothing})"
   ok "the server's file matches the pinned sha256"
 fi

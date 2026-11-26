@@ -1,13 +1,28 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6 (oriole) bring-up notes
 
-Findings for the Pixel 6 port, newest first. The port is a community effort tracked in [issue #2](https://github.com/derekross/omarchy-mobile/issues/2); the 6 Pro (raven) and 6a (bluejay) share it. Facts are marked [V] (checked, with the source) or [I] (an inference or a recovered report still to check). The October 14–16 phone facts below came from read-only queries of a stock phone; later tests booted Linux on a Pixel 6.
+Findings for the Pixel 6 port, newest first. The port is a community effort tracked in [issue #2](https://github.com/derekross/omamobile/issues/2); the 6 Pro (raven) and 6a (bluejay) share it. Facts are marked [V] (checked, with the source) or [I] (an inference or a recovered report still to check). The October 14–16 phone facts below came from read-only queries of a stock phone; later tests booted Linux on a Pixel 6.
 
 Sources:
 
 - `F/`: Google's public factory image `oriole-cp3a.261005.002.a1` ([developers.google.com/android/images](https://developers.google.com/android/images#oriole)), read with HTTP range requests; facts only, no files kept in the repository.
 - `U/`: upstream Linux v7.0, `arch/arm64/boot/dts/exynos/google/gs101*.dts(i)`.
 - `P/`: postmarketOS pmaports [`device/testing/device-google-oriole`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/device-google-oriole), [`soc-google-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/soc-google-gs101) and [`linux-postmarketos-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/linux-postmarketos-gs101) (7.0.6), which builds [gs101-mainline/linux @ d28cfa42](https://github.com/gs101-mainline/linux/tree/d28cfa4275b95e93f4b7a1e743de31b723bd21b8).
+
+## 2026-11-10: rear torch on the integration kernel
+
+[V, Pixel 6] On `7.3.0-rc6-oriole-hsi1-late-dev0-g4bd35d34abb9-dirty`,
+a private staging helper supplied the LED node to the LM3644 driver.
+The rear light visibly turned on and off. The shell's existing
+`toggleTile` action, invoked through IPC, took `white:torch` from
+brightness 0 to 2 and back to 0. The shell reported Off and the hardware
+enable line was low before the fallback timer fired.
+
+The released kernel has no Pixel 6 torch node. The proposed node in
+[kernel #242](https://github.com/derekross/linux-omamobile/pull/242)
+is disabled. Testing the public configuration requires an Oriole enable
+overlay, which still needs to be written, and an attended pulse after
+kernel #242 merges.
 
 ## 2026-11-08: offline audit of omitted startup safeguards
 
@@ -91,14 +106,14 @@ qualification. The records and recovered artifacts were audited offline;
 this audit did not reflash or inspect the phone's current partitions.
 
 - **Kernel** [V, recovered source metadata]: the base is
-  [`omamobile` commit `4bd35d34abb9`](https://github.com/derekross/linux-omarchy-mobile/commit/4bd35d34abb92a745479a2de62816b28304b4449).
+  [`omamobile` commit `4bd35d34abb9`](https://github.com/derekross/linux-omamobile/commit/4bd35d34abb92a745479a2de62816b28304b4449).
   The native build used a detached worktree at that commit with unpublished
   local changes, producing
   `7.3.0-rc6-oriole-hsi1-late-dev0-g4bd35d34abb9-dirty`.
   There is no published branch containing that complete integration tree.
 - **Packages** [V, recovered sources and build receipts]: the mobile source
   was local branch `pixel6-bringup`, based on
-  [`1155a7c352ed`](https://github.com/derekross/omarchy-mobile/commit/1155a7c352edf6313fb4e2ff02f054c9cb1902b6),
+  [`1155a7c352ed`](https://github.com/derekross/omamobile/commit/1155a7c352edf6313fb4e2ff02f054c9cb1902b6),
   with unpublished changes and separate package-source snapshots. The
   `omamobile-device-oriole 0.1.9-2` source matches all 24 files in its build
   receipt; its archived package and the GPU, Wi-Fi, Bluetooth, torch,
@@ -110,7 +125,7 @@ this audit did not reflash or inspect the phone's current partitions.
   rebuilt from the installed local 0.2.10 source on
   `omamobile-oriole-canvas-budget`, preserving its phone-specific files and
   backporting the Canvas budget fix from
-  [`be98c2c22e2b`](https://github.com/derekross/omarchy-mobile/commit/be98c2c22e2b260300c59787861fee200ef2ad58).
+  [`be98c2c22e2b`](https://github.com/derekross/omamobile/commit/be98c2c22e2b260300c59787861fee200ef2ad58).
   The recovered package's `runtime.js` matches that commit byte for byte.
   This is not a claim that upstream shell 0.2.12 was installed unchanged.
 - **Keyring correction** [V, recovered root image]: the local rebuild
@@ -148,7 +163,7 @@ this audit did not reflash or inspect the phone's current partitions.
   path adds a `PUSH_MODULES_POLICY=require-match` option, follows image
   symlinks for readback length, and uses systemd's reboot on a native root.
   The complete two-file comparison against that base is in
-  [PR #200](https://github.com/derekross/omarchy-mobile/pull/200).
+  [PR #200](https://github.com/derekross/omamobile/pull/200).
   This is a dated source-snapshot comparison, not proof of the exact
   script bytes used for every earlier deployment, and not a comparison
   against today's main. The recovered Oriole descriptor still allows
@@ -197,7 +212,7 @@ helper's logic or from a later backup. No new metadata write was attempted.
 ## 2026-10-30: native boot and RTC alarm status
 
 - [V] A Pixel 6 booted native Linux from slot B with its root on `userdata`, using the unpublished `7.3.0-rc6-oriole-hsi1-late-dev0-g4bd35d34abb9-dirty` kernel and a separate integration package set. A read-only `phone-smoke --here --json` run passed all required checks: storage guard, root, USB and desktop session. It reported no failed units, oops, BUG or WARN, and 48 existing dmesg error lines; sound, sensors and cameras were skipped. This is a test-phone result, not an installation claim for the public images.
-- [V, source] On the published kernel's `omamobile` branch, the S2MPG10 alarm callback reads `S2MPS14_REG_ST2` at offset `0x08`. On S2MPG10 that is `INT3M`; [Google's register definitions](https://android.googlesource.com/kernel/google-modules/soc/gs/+/204078758737776959ecc85c527a00fd2cabb62f/include/linux/mfd/samsung/s2mpg10-register.h) place `STATUS2` at `0x0d`, and its [RTC driver](https://android.googlesource.com/kernel/google-modules/soc/gs/+/204078758737776959ecc85c527a00fd2cabb62f/drivers/rtc/rtc-s2mpg10.c) reads the alarm-0 status bit there. The proposed kernel fix, [linux-omarchy-mobile#149](https://github.com/derekross/linux-omarchy-mobile/pull/149), is S2MPG10-specific; the S2MPG12 path remains unchanged. The test phone's unpublished kernel already contains the correction.
+- [V, source] On the published kernel's `omamobile` branch, the S2MPG10 alarm callback reads `S2MPS14_REG_ST2` at offset `0x08`. On S2MPG10 that is `INT3M`; [Google's register definitions](https://android.googlesource.com/kernel/google-modules/soc/gs/+/204078758737776959ecc85c527a00fd2cabb62f/include/linux/mfd/samsung/s2mpg10-register.h) place `STATUS2` at `0x0d`, and its [RTC driver](https://android.googlesource.com/kernel/google-modules/soc/gs/+/204078758737776959ecc85c527a00fd2cabb62f/drivers/rtc/rtc-s2mpg10.c) reads the alarm-0 status bit there. The proposed kernel fix, [linux-omamobile#149](https://github.com/derekross/linux-omamobile/pull/149), is S2MPG10-specific; the S2MPG12 path remains unchanged. The test phone's unpublished kernel already contains the correction.
 - [I] The smoke test does not exercise a live pending alarm, alarm delivery, suspend or wake. Those paths remain to be independently verified.
 
 ## 2026-10-17: coldplug audit on the first-light kernel
