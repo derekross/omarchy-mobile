@@ -8679,6 +8679,7 @@ The log checker accepted the required sequence and rejected active
 votes, read errors, missing or misordered samples, and failed release.
 The verified five-image archive has SHA-256
 `2fc9d727eabfa6de261e6f0d659fd620cb0b9b30fa2607a8ee44d791c6e0aaa0`.
+
 ###### Attended DSI0 sibling MBFS vote trial
 
 On 2026-11-27, the guarded rescue backed up all nine NV partitions
@@ -8706,6 +8707,67 @@ Stock D1 booted on A with enforcing verity and its original VBMeta
 digest. The trial verifies the three MBFS votes at the four sampled
 checkpoints. Physical power and PHY TX readiness remain unverified.
 PHY TX and DSI0 host reads stayed disabled.
+
+###### D1 PHY TX clock and reset prerequisites after the MBFS trial
+
+Re-extraction of the pinned D1 `mipi-cdphy.ko` and both stock
+Grizzly B0 DT merges agrees on the driver-visible inputs.
+The DSI0 PHY is on genpd `0x203` and gets only the fixed
+38.4 MHz `pllref`. It has no reset phandle. The driver passes a
+null clock ID to the MMIO regmap setup for both resources
+(`0x33fc` and `0x3470`). The first observed TX load is the
+read of `0x0f7c7124` at `0x2f0`. The stock host calls PHY
+init at `mipi-dsi2h.ko` `0x24e0`, before reading its own
+registers. The PHY callback issues no clock-gate enable or
+external reset call. Bit 8 of the first word is LP-DCO
+dynamic-gating control. PLL lock uses a separate bit in
+the second aperture and is polled during later configuration.
+
+The PHY-local `phy_rst_n` and `shutdown_n` fields are bits 0
+and 1 in the second aperture at `0x0f7d8828`. Stock Linux's
+initial configuration path requests both bits clear at
+`0x11bc` and `0x11d8`, then updates TX offset `0x38d0`
+at `0x11f4` before the later release calls. The field is
+allocated from the TX regmap at `0x6dc8`. Exact D1 ABL
+likewise clears both local bits at `0xf2c14`–`0xf2c44`
+and issues a TX `+0x38d0` read-modify-write at `0xf2c68`
+before releasing them. Both sequences expect TX register
+access during PHY-local reset. The Linux writes do not
+independently confirm the latch state. ABL votes FE0 and
+FE1 ON at `0x7c11c` and `0x7c128` before configuring the
+PHY, including its single-DSI path. Neither sequence
+qualifies the external TX register-bus reset with all three
+siblings off.
+
+The exact CPM LPCM `0x23` clock record at `0x658c6` gives
+selector 3 the gate `0x6f4197a0`. ABL calls this cell
+`dpu_dsi_phy_clk` at `0x1f5300`. The merged stock trees
+label it `dpu_dsi1_phy_clk` and have no clock consumer for it.
+Both PHYs consume the fixed reference. The firmware clock
+query for selector 3 could report that gate's bit 8, but its
+routing to the DSI0 TX register interface is unresolved.
+The direct clock-cell reset acknowledgment at
+`0x0f4197bc` bit 12 has neither a supported CPM reset-status
+path nor an EL1 read witness.
+
+The attended diagnostic confirms zero sibling votes at all
+four checkpoints. DSI0's deferred acknowledgment and
+Boolean readback only establish the MBFS vote. Exact CPM
+can skip the PSM3 transition when the state already matches
+and can discard a transition fault before caching ON. Even
+a successful PSM3 poll does not sample the TX bus gate or
+external reset. All retained stock EL1 reads of
+`0x0f7c7124` with sibling coverage had DSI1, FE0 and FE1
+ON. The GC bridge rule covers the address, but does not
+establish the bus response under the isolated setup.
+
+**Access decision.** The external TX clock and reset path
+remains unqualified for `0x0f7c7124` with all three siblings
+off. Qualification needs a trusted readback tied to the
+TX register interface or a matching existing EL1 read with
+the three votes known off. Keep PHY TX and DSI0 host reads
+disabled. This audit used only saved artifacts and built
+no diagnostic image.
 
 ### Offline stock D1 device reference-clock diagnostic
 
