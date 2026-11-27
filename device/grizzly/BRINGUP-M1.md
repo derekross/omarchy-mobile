@@ -8267,6 +8267,43 @@ still lacks qualified EL1 access and its reset bit
 covers only the selected clock cell. No host reads
 or display bindings were enabled.
 
+###### Offline minimal mainline DSI0 genpd and PHY scaffold
+
+The [kernel branch](https://github.com/adrienlacombe/linux-omarchy-mobile/tree/grizzly-dsi0-scaffold)
+at `11c4782eb636dee4776827fbdb580e69cbcfbedb`
+adds Grizzly CPM indices 8, 9 and 10 for wrapper
+(MBFS `0x08`), BE (`0x200`) and DSI0 (`0x203`).
+The provider links wrapper → BE → DSI0. It performs
+the first lookup when a consumer powers on and
+releases only a vote acquired by the driver.
+The existing manual wrapper diagnostic option
+keeps the old provider layout and avoids competing
+for the same firmware votes.
+
+The Grizzly tree describes one disabled C/D-PHY
+with TX registers at `0x0f7c0000` (size
+`0x18000`), the PHY APB bank at `0x0f7d8800`
+(size `0x800`), DSI0 genpd, and a fixed
+38.4 MHz reference. With
+`CONFIG_PHY_GOOGLE_MALIBU_CDPHY`, its scaffold
+registers a generic PHY provider without mapping
+the registers or enabling a clock. Its init and
+power-on callbacks return `-EOPNOTSUPP`.
+The mainline DTB has no display SMMU, DSI1 or
+DSI0 host node. Host ID, version and `pwr_up`
+remain gated on independent APB and external reset
+qualification.
+
+The changed objects and Grizzly DTB compiled with
+`W=1`. Checkpatch passed with its new-file reminder
+suppressed after the paths were added to the
+Google Tensor entry in `MAINTAINERS`. DTB inspection
+verified the two ranges, the 38.4 MHz clock phandle,
+domain index 10 and disabled status. Both YAML
+files parse. Full DT schema validation requires
+`dtschema`, which was unavailable in the offline
+toolchain. The build was not booted.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
