@@ -34,8 +34,10 @@ was present and `/dev/sda` did not exist.
 `7.3.0-rc6-omamobile-push1-g061ebcf504d5`, slot B. Its required boot, storage,
 root, kernel-health, USB-gadget, and session checks passed. It reported no
 Oops, BUG, or WARN. Five new dmesg errors remain: four Samsung pinctrl IRQ
-messages and one initramfs decode failure. No systemd units failed on this
-boot; `systemd-firstboot.service` is recorded as having failed on the first
+messages and one initramfs decode failure. The raw dmesg line was not present
+in the saved log artifacts available in this checkout, so the exact message and
+cause remain unresolved. No systemd units failed on this boot;
+`systemd-firstboot.service` is recorded as having failed on the first
 boot. The DSI display, Omarchy session, lock, and buttons were present, but no
 touch input device or GPU render node appeared. The guarded GPU service skipped
 its probe because the expected GPU device-tree path was absent. Wi-Fi,

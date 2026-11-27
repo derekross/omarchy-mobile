@@ -5,17 +5,20 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 
-[[ -f ../../device/komodo/device.conf ]] || fail "device descriptor exists"
-cmp -s device.conf ../../device/komodo/device.conf || fail "package descriptor matches device descriptor"
-pass "package descriptor matches device descriptor"
+if [[ -f ../../device/komodo/device.conf ]]; then
+  cmp -s device.conf ../../device/komodo/device.conf || fail "package descriptor matches device descriptor"
+  pass "package descriptor matches device descriptor"
 
-dtbo_source=$(sed -n 's/^DTBO_SOURCE=//p' device.conf)
-[[ -f "../../device/komodo/$dtbo_source" ]] || fail "descriptor's ABL selector source exists"
-overlay_list=$(sed -n 's/^DTB_OVERLAYS="\(.*\)"$/\1/p' device.conf)
-for overlay in $overlay_list; do
-  [[ -f "../../device/komodo/overlays/$overlay.dtso" ]] || fail "selected overlay $overlay exists"
-done
-pass "ABL selector and selected overlays exist"
+  dtbo_source=$(sed -n 's/^DTBO_SOURCE=//p' device.conf)
+  [[ -f "../../device/komodo/$dtbo_source" ]] || fail "descriptor's ABL selector source exists"
+  overlay_list=$(sed -n 's/^DTB_OVERLAYS="\(.*\)"$/\1/p' device.conf)
+  for overlay in $overlay_list; do
+    [[ -f "../../device/komodo/overlays/$overlay.dtso" ]] || fail "selected overlay $overlay exists"
+  done
+  pass "ABL selector and selected overlays exist"
+else
+  printf 'skip - full-repository descriptor, overlay, and DTBO-source checks (standalone package build)\n'
+fi
 
 bash -n PKGBUILD bin/omamobile-komodo-root-ready bin/omamobile-komodo-gpu-start || fail "package scripts parse"
 grep -q '^check()' PKGBUILD || fail "PKGBUILD runs this test"

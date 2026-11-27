@@ -2,7 +2,7 @@
 # Pixel 9 Pro XL (komodo): first-light plan
 
 **Status — 2026-11-20:** this is an experimental **native Omarchy Mobile** port
-(Arch Linux ARM, Hyprland, mainline Linux), not Omarchy-in-Termux/PRoot. The
+(Arch Linux ARM, Hyprland, mainline Linux). The
 Pixel 9 Pro XL (`komodo`) is not a supported installer target. Omarchy boots
 from slot B into a usable 1344x2992 GUI; USB SSH/internet, touch input, flip-only
 KMS and the Mali-G715 Panthor render node have all been observed working on a
