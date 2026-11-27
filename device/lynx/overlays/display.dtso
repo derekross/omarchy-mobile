@@ -1,0 +1,49 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Pixel 7a (lynx): display bring-up overlay.
+ *
+ * Needs a kernel with linux-omarchy-mobile#202 (the S6E3FC5 panel and the
+ * gs-decon/DSIM path). It is not in DTB_OVERLAYS and is applied by hand,
+ * and it goes with the package's display start from omarchy-mobile#438.
+ *
+ * The board DTS ships these nodes disabled so a board without the panel
+ * overlay keeps the bootloader framebuffer.
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target = <&dsi0>;
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+	fragment@1 {
+		target = <&decon0>;
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+	fragment@2 {
+		target = <&cmu_dpu>;
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+	fragment@3 {
+		target = <&cmu_disp>;
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+};
