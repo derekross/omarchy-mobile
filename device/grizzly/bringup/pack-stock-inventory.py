@@ -65,6 +65,68 @@ def capture(*command):
     return subprocess.check_output(command)
 
 
+def pack_panel_dp_off(stock_dtbo, vendor_dtbs, baseline, temp, image, avbtool):
+    # Pinned rescue DTBO and factory vendor-kernel DTB container.
+    source = stock_dtbo.read_bytes()
+    magic, total, header, stride, count, table, _, version = struct.unpack_from(">8I", source)
+    if (magic, header, stride, count, table, version) != (0xd7b7ab1e, 32, 32, 55, 32, 0):
+        raise ValueError("unexpected D1 rescue DTBO table")
+    entries = [struct.unpack_from(">8I", source, table + i * stride) for i in range(count)]
+    end = table + count * stride
+    for size, offset, *_ in entries:
+        if offset != end or size < 40:
+            raise ValueError("D1 rescue DTBO entries must be contiguous")
+        end += size
+    if end != total or total > len(source):
+        raise ValueError("invalid D1 rescue DTBO length")
+
+    index = 19
+    size, offset, board_id, rev, *_ = entries[index]
+    if (board_id, rev) != (0x80506, 0x10000):
+        raise ValueError("D1 DTBO entry 19 is not Grizzly B0")
+    overlay = temp / "b0.dtbo"
+    overlay.write_bytes(source[offset:offset + size])
+    base = temp / "b0-base.dtb"
+    container = vendor_dtbs.read_bytes()
+    start = struct.unpack_from(">I", container, 4)[0]
+    dtb_magic, dtb_size = struct.unpack_from(">2I", container, start)
+    if dtb_magic != 0xd00dfeed or start + dtb_size != len(container):
+        raise ValueError("invalid second D1 base DTB")
+    base.write_bytes(container[start:])
+    original = temp / "b0-original.dtb"
+    capture("fdtoverlay", "-i", base, "-o", original, overlay)
+    if original.read_bytes() != baseline.read_bytes():
+        raise ValueError("unmodified B0 merge differs from the audited board")
+
+    fragment = temp / "dp-off.dtbo"
+    capture("dtc", "-q", "-I", "dts", "-O", "dtb", "-o", fragment, HERE / "stock-dsi0-dp-off.dtso")
+    replacement = temp / "b0-dp-off.dtbo"
+    capture("fdtoverlay", "-i", overlay, "-o", replacement, fragment)
+    merged = temp / "b0-dp-off.dtb"
+    capture("fdtoverlay", "-i", base, "-o", merged, replacement)
+    old_dts = capture("dtc", "-q", "-s", "-I", "dtb", "-O", "dts", original)
+    new_dts = capture("dtc", "-q", "-s", "-I", "dtb", "-O", "dts", merged)
+    dp = b'\t\t\tcompatible = "verisilicon,dp-encoder";\n\t\t\tphandle = <0x520>;\n'
+    if old_dts.count(dp) != 1 or new_dts != old_dts.replace(dp, dp + b'\t\t\tstatus = "disabled";\n', 1):
+        raise ValueError("B0 merged tree changed outside the DP encoder status")
+
+    changed = replacement.read_bytes()
+    delta = len(changed) - size
+    output = bytearray(source[:offset] + changed + source[offset + size:total])
+    struct.pack_into(">I", output, 4, len(output))
+    struct.pack_into(">I", output, table + index * stride, len(changed))
+    for i in range(index + 1, count):
+        struct.pack_into(">I", output, table + i * stride + 4, entries[i][1] + delta)
+    image.write_bytes(output)
+    avb = (sys.executable, "-I", avbtool)
+    capture(*avb, "add_hash_footer", "--image", image, "--partition_name", "dtbo",
+            "--partition_size", str(len(source)), "--algorithm", "NONE", "--salt", digest(image),
+            "--prop", "com.android.build.dtbo.fingerprint:"
+            "google/grizzly/grizzly:17/CP4A.261105.040.D1/16731845:user/release-keys")
+    capture(*avb, "verify_image", "--image", image)
+    return merged
+
+
 def write_payload(path, content, mode):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
@@ -238,6 +300,8 @@ def pack(args):
                     if args.dsi0_panel_discovery:
                         helper = "stock-dsi0-panel.sh"
                         write_payload(root / "grizzly-inventory/dsi0-panel-discovery", b"", 0o644)
+                        if args.dsi0_panel_dp_off:
+                            write_payload(root / "grizzly-inventory/dsi0-panel-dp-off", b"", 0o644)
                     write_payload(root / "grizzly-inventory" / helper, (HERE / helper).read_bytes(), 0o755)
                     if (args.dsi0_pll_trace or args.dsi0_genpd_trace
                             or args.dsi0_phy_reset_trace or args.dsi0_rmw_trace):
@@ -380,7 +444,11 @@ def pack(args):
         vendor_ramdisks = temp / "combined-vendor-boot.lz4"
         vendor_ramdisks.write_bytes(b"".join(fragment.read_bytes()
                                              for fragment in vendor_fragments))
-        bounds = capture(sys.executable, HERE / "check-handoff.py", kernel, args.board_dtb,
+        board_dtb = args.board_dtb
+        if args.dsi0_panel_dp_off:
+            board_dtb = pack_panel_dp_off(stock["dtbo"], temp / "vendor_kernel_boot/dtb",
+                                          board_dtb, temp, images / "dtbo.img", args.avbtool)
+        bounds = capture(sys.executable, HERE / "check-handoff.py", kernel, board_dtb,
                          vendor_kernel_ramdisk, vendor_ramdisks, ramdisk,
                          "--packed-kernel", stock_kernel,
                          "--dtb-container", temp / "vendor_kernel_boot/dtb")
@@ -388,6 +456,8 @@ def pack(args):
 
     for name, path in stock.items():
         if name != "init_boot":
+            if name == "dtbo" and args.dsi0_panel_dp_off:
+                continue
             if name == "dtbo" and isolation_dtbo:
                 path = isolation_dtbo
             shutil.copyfile(path, images / f"{name}.img")
@@ -498,7 +568,11 @@ def main():
                                metavar=("READER_ELF", "ISOLATION_DTBO"),
                                help="use the static NV reader in --usb2-test with the verified isolation DTBO")
     parser.add_argument("output", type=Path)
+    parser.add_argument("--dsi0-panel-dp-off", action="store_true",
+                        help="exclude the DP encoder in the B0 DTBO for --dsi0-panel-discovery")
     args = parser.parse_args()
+    if args.dsi0_panel_dp_off and not args.dsi0_panel_discovery:
+        parser.error("--dsi0-panel-dp-off requires --dsi0-panel-discovery")
     if args.dsi0_phy_reset_uic_trace:
         args.dsi0_phy_reset_trace = True
         args.ufs_uic_trace = True

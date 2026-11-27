@@ -8,6 +8,14 @@ panel_excluded=grizzly-panel-excluded
 panel_drm_master=sswrp_dpu@f400000:display-subsystem
 panel_dp_encoder=sswrp_dpu@f400000:dp-encoder
 
+stock_panel_check_dp_off() (
+    status="$1/sswrp_dpu@f400000/dp-encoder/status"
+    [ -r "$status" ] || return 1
+    value=$("$bb" tr '\000' '\n' < "$status") || return 1
+    [ "$value" = disabled ] || return 1
+    stock_inventory_log "DSI0 panel live DT confirms DP encoder disabled"
+)
+
 stock_panel_scope_i2c() (
     sys=$1
     platform=$sys/bus/platform

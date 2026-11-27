@@ -966,6 +966,11 @@ if stock_inventory_scan /sys/class/block yes; then
         if [ "$dsi0_panel_requested" = yes ]; then
             # shellcheck source=stock-dsi0-panel.sh
             . "$dsi0_helper"
+            if [ -e /grizzly-inventory/dsi0-panel-dp-off ] || [ -L /grizzly-inventory/dsi0-panel-dp-off ]; then
+                [ -f /grizzly-inventory/dsi0-panel-dp-off ] && [ ! -L /grizzly-inventory/dsi0-panel-dp-off ] &&
+                    stock_panel_check_dp_off /sys/firmware/devicetree/base ||
+                    end_inventory "DSI0 panel DP exclusion could not be verified"
+            fi
             stock_panel_scope_i2c /sys || end_inventory "DSI0 panel I2C scope could not be verified"
             stock_panel_run "$dsi0_manifest" || end_inventory "DSI0 panel discovery incomplete"
             end_inventory "DSI0 panel discovery, VDDD trace and NV guard complete"

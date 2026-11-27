@@ -7679,6 +7679,58 @@ selected lines. Fastboot returned 133 seconds after
 the B boot request. Stock A completed boot with
 enforcing verity and matching VBMeta.
 
+###### Offline DSI0 discovery with DP encoder excluded
+
+Use `pack-stock-inventory.py --dsi0-panel-discovery
+--dsi0-panel-dp-off` with the same pinned D1 rescue
+images, audited B0 merged DTB and rescue cpio as the
+aggregate diagnostic. This option also requires
+`dtc` and `fdtoverlay`. It adds a fragment to entry
+19 (board ID `0x80506`, revision `0x10000`) of the
+rescue DTBO. The packer reconstructs the baseline
+from the factory vendor-kernel-boot DTB and requires
+it to match the audited B0 merge byte for byte.
+
+The sorted merged tree differs by exactly one
+property. `/sswrp_dpu@f400000/dp-encoder` gains
+`status = "disabled"`. Both DSI0 inputs and its
+output to `gs-dsi0-connector` keep their reciprocal
+endpoint references. The DP endpoints and phandles
+also remain intact. Stock D1's match list skips
+unavailable nodes, so the expected aggregate now
+has the six components registered in the last
+trial. The exclusion allows stock bind callbacks to
+run if all six are ready. Those callbacks can
+initialize display hardware without any display
+commit from the fixture.
+
+Offline checks preserved all 55 entry identities and
+54 other entry payloads, verified the rebuilt AVB
+hash descriptor, and checked handoff bounds and
+saved slot fit. All module manifests and the other
+three boot images match the prior fixture. PID 1
+requires the disabled status in the live tree after
+the NV guard and before loading display modules.
+The check refused a missing status, an enabled
+encoder and a malformed status list in mock runs.
+The I²C scope, VDDD and DRM snapshots, and 90-second
+return remain in place.
+
+| Image | SHA-256 |
+| --- | --- |
+| `init_boot.img` | `e1f1e8b3f681bb2530153d60500989adeed6b4e3e77aafac381b445f192314e5` |
+| `dtbo.img` | `5de69d7cb7ba8ff2844182c5f3bb1797c7c21a0aca209b524c650560ab8b1cd1` |
+
+For one attended slot B trial, verify a fresh private
+nine-partition backup and all five staged images.
+Require the live-DT marker and scoped I²C binding.
+Compare the six aggregate component states with the
+DRM card and DSI connector samples. If the master
+still fails to bind, record the first bind error and
+let the timed return run. Issue no display commit.
+Select stock A in Fastboot and verify Android comes
+up with enforcing verity and the original VBMeta.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
