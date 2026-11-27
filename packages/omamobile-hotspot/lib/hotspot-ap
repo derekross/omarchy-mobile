@@ -1,0 +1,529 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The hotspot's root side for phones whose Wi-Fi can't start an access point on its client interface (brcmfmac on the
+# Pixel 8 Pro and the Pixel 9a: the firmware answers the beacon-period set on wlp1s0 with BCME_NOTAP, -52, #523). Run only
+# by omamobile-hotspot.service, which a device turns on by shipping /usr/share/omamobile/hotspot.conf; the shell's Hotspot
+# tile and page start and stop it through hotspot-backend (/etc/omamobile/hotspot-backend, linked by the device package)
+# and the polkit rule 50-omamobile-hotspot.rules; nothing else.
+#   hotspot-ap run    adds a second firmware interface for the access point (ap0, `iw phy PHY interface add ap0 type
+#                     __ap`) beside the client Wi-Fi; binds the "Hotspot" NetworkManager profile to it with PMF required
+#                     (pmf 3) on 2.4 GHz in shared mode (NetworkManager's dnsmasq serves DHCP/DNS and masquerades); opens
+#                     UFW for DHCP, DNS and forwarding on ap0 only; turns IPv4 forwarding on for ap0 and the uplink links
+#                     that had it off (per link, never conf/all; set back by down); brings the profile up; tells systemd
+#                     it is ready; then watches: it ends when the profile is no longer active on ap0, or, only if
+#                     stop_temp_mc= is set, when the SoC reads that hot twice in a row (off by default).
+#                     Why pmf 3: the AP's RSN IE from the firmware offers AKM 6 (PSK-SHA256) only, while NetworkManager
+#                     with pmf 1 or 2 gives wpa_supplicant WPA-PSK and WPA-PSK-SHA256; clients then don't get in (reason
+#                     17 in a test on the 8 Pro, no association at all on the 9a). Devices without 802.11w can't join.
+#                     Why the forwarding: the kernel forwards by the flag of the link a packet arrives on.
+#                     NetworkManager's ipv4.forwarding "auto" turns it on, while a shared connection is up, on links it
+#                     manages; mobile data on the 9a (rmnet0) isn't one of them, and there its flag was 0: replies only
+#                     reached the clients with it on (den-kloot's run on #1001).
+#                     The bind also sets proto rsn, pairwise and group ccmp (pmf 3 needs them; without proto
+#                     wpa_supplicant tries a WPA v1 element too and the access point fails to start), written into the
+#                     profile like band and pmf.
+#   hotspot-ap down   (ExecStopPost, so it runs after every end, also a failed start) takes all of that away again:
+#                     profile down, the UFW rules out, forwarding set back, ap0 deleted; if the client Wi-Fi lost its
+#                     route, its reconnect is started as a transient unit (hotspot-ap reconnect) so the stop does not wait.
+# Settings: /etc/omamobile/hotspot.conf (the owner's) over /usr/share/omamobile/hotspot.conf (the device's):
+#   interface=NAME   the access point's interface (default ap0)
+#   stop_temp_mc=N   SoC millidegrees that end it (unset: off)
+# What the client Wi-Fi does meanwhile depends on the phone and the home network (it can drop for a few seconds and move
+# to the hotspot's 2.4 GHz channel); the helper only brings it back if it has no route after the stop.
+# Seen on brcmfmac (9a): with no channel in the profile the access point comes up on channel 6, and each start spends
+# about 2.7 s on wpa_supplicant's P2P device for ap0, which the firmware refuses (p2p-dev-ap0, err=-5); harmless.
+# Share VPN (omamobile-hotspot-vpn.service active, which hotspot-backend starts for the page's switch; polkit lets the
+# user start and stop it, it does nothing itself): the clients' traffic leaves only through a VPN link (WireGuard or tun,
+# NetworkManager's or not) and never around it. Own nftables table inet omamobile_hotspot_vpn: forward from ap0 to any
+# other link is dropped (a drop in any base chain is final, so UFW's and NetworkManager's accepts can't undo it), and
+# matched by name, so it holds the moment the VPN link goes, without waiting for the poll. With no VPN link up, all of
+# the clients' forwarding and their DNS to the phone are dropped (dnsmasq's upstream queries are the phone's own and
+# would leave around the tunnel). Policy rule "iif ap0 lookup 7342" with the VPN link as default and an unreachable
+# default under it steers the clients into the tunnel even when the phone's own default route is not the VPN. Applied
+# before the profile goes up, refreshed each poll (a VPN that comes, goes or changes link), taken away by down after
+# ap0 is gone; a share that can't be applied stops the hotspot rather than run without it. Needs nft (nftables).
+# Client DNS: sent (DNAT) to the VPN link's DNS server when NetworkManager knows one, so it is forwarded and under the
+# kill switch. Limit: a VPN without a known DNS server leaves DNS with dnsmasq (the phone's resolver); when such a VPN
+# drops, the DNS drop comes with the next poll (<= 5 s). A systemctl that doesn't answer never reads as "off".
+# Client isolation (always, not a switch): the clients reach the internet through the uplink and the phone only for
+# DHCP and DNS, never the phone's other networks (the home LAN), the phone itself, or each other. Own nftables table
+# inet omamobile_hotspot_iso, in place before the profile goes up, refreshed each poll, taken away by down after ap0 is
+# gone; a hotspot whose isolation can't be applied (no nft, nft refuses) does not start, or stops.
+#   input from ap0: replies, DHCP (67/udp) and DNS (53) to an address of ap0 itself; everything else dropped (ssh, the
+#     phone's address on another link)
+#   forward from ap0: dropped to private, shared (CGNAT), loopback, link-local, multicast and reserved IPv4 ranges, so a
+#     home LAN is out of reach whether it is the uplink's own subnet or behind its router; with Share VPN on, the VPN
+#     link is exempt (it is the owner's choice what lies behind it); ap0 to ap0 dropped
+#   forward to ap0: only replies (nothing on the uplink side can open a connection to a client); from the VPN link (with
+#     Share VPN, which turns its forwarding on) only to ap0
+#   the phone's own on-link subnets (other than ap0's and the VPN's) are in the drop set as well, so a home LAN on public
+#     addresses directly on the uplink is covered too
+#   IPv6 from and to ap0: dropped (the profile is IPv4 only, ipv6.method ignore)
+# The profile also asks for AP isolation (802-11-wireless.ap-isolation), so clients don't talk to each other inside
+# the radio, where nftables never sees it; whether the firmware honours it is the driver's.
+# Limit: a public-address network behind the uplink's router (not on-link) can't be told from the internet.
+# Why it stopped is left in /run/omamobile-hotspot/last-stop (too-hot, ended, failed: ...), for a look after the fact.
+set -uo pipefail
+export LC_ALL=C
+RUN=${OMAMOBILE_HOTSPOT_RUN:-/run/omamobile-hotspot}
+TEMP=${OMAMOBILE_HOTSPOT_TEMP:-/sys/class/thermal/thermal_zone0/temp}
+LEASES_SET=${OMAMOBILE_HOTSPOT_LEASES:-}
+CONF=${OMAMOBILE_HOTSPOT_CONF:-/etc/omamobile/hotspot.conf}
+DEVCONF=${OMAMOBILE_HOTSPOT_DEVCONF:-/usr/share/omamobile/hotspot.conf}
+# a value from the owner's file, else the device's
+conf() { local v=''; [[ -r $CONF ]] && v=$(sed -n "s/^$1=//p" "$CONF" 2>/dev/null | head -n 1); [[ -z $v && -r $DEVCONF ]] && v=$(sed -n "s/^$1=//p" "$DEVCONF" 2>/dev/null | head -n 1); printf '%s' "$v"; }
+SYSCTL=${OMAMOBILE_HOTSPOT_SYSCTL:-/proc/sys/net/ipv4/conf}
+# SoC millidegrees from stop_temp_mc=: no start at or above it, and two reads in a row end it; 0 or unset = off
+HOT=${OMAMOBILE_HOTSPOT_HOT_MC:-$(conf stop_temp_mc)}
+[[ $HOT =~ ^[0-9]{1,6}$ ]] || HOT=0
+POLL=${OMAMOBILE_HOTSPOT_POLL:-5}       # seconds; the client list is refreshed at this pace
+# The access point's interface, from one value: interface= (default ap0).
+#   a name that is not the phone's Wi-Fi device (ap0): a second firmware interface made for the hotspot and deleted after,
+#     beside the client Wi-Fi (the brcmfmac path, no kernel change)
+#   the Wi-Fi device itself (wlp1s0): the access point takes over the radio, the client Wi-Fi drops while it is on and is
+#     brought back after (for a kernel whose driver can start an AP on that interface)
+# `down` uses the interface `run` used (kept in $RUN/iface), so a changed value never strands the old one.
+conf_iface() { local v; v=$(conf interface); [[ $v =~ ^[A-Za-z0-9_.-]{1,15}$ ]] || v=ap0; printf '%s' "$v"; }
+AP=$(conf_iface)
+if [[ ${1:-} == down ]]; then v=$(cat "$RUN/iface" 2>/dev/null) || v=''; [[ $v =~ ^[A-Za-z0-9_.-]{1,15}$ ]] && AP=$v; fi
+LEASES=${LEASES_SET:-/var/lib/NetworkManager/dnsmasq-$AP.leases}
+log() { echo "omamobile-hotspot: $*"; }
+nm() { timeout 10 nmcli -w 8 "$@"; }
+stopped() { mkdir -p "$RUN" && printf '%s\n' "$1" > "$RUN/last-stop"; }
+temp() { local t; t=$(cat "$TEMP" 2>/dev/null) || t=''; [[ $t =~ ^[0-9]+$ ]] && printf '%s' "$t" || printf '%s' 99999; }
+# the phone's Wi-Fi device other than the access point's interface (none when the AP uses the Wi-Fi device itself)
+SYSNET=${OMAMOBILE_HOTSPOT_SYSNET:-/sys/class/net}
+stadev() { local d n; for d in "$SYSNET"/*/phy80211; do n=${d%/phy80211}; n=${n##*/}; [[ -e $d && $n != "$AP" && $n != p2p-* ]] && { printf '%s' "$n"; return 0; }; done; return 1; }
+# the AP profile, same rule as backends/hotspot.sh: the first connection named "Hotspot" with 802-11-wireless.mode ap
+hsuuid() {
+  local line u
+  while IFS= read -r line; do
+    u=${line%%:*}; [[ ${line#*:} == Hotspot ]] || continue
+    [[ $u =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || continue
+    [[ $(nm -g 802-11-wireless.mode connection show uuid "$u" 2>/dev/null | head -n 1) == ap ]] && { printf '%s' "$u"; return 0; }
+  done < <(nm -t -f UUID,NAME connection show 2>/dev/null)
+  return 1
+}
+# the device of the default IPv4 route that is not ap0 (Wi-Fi, USB or mobile data), for the log only
+uplink() { ip -4 route show default 2>/dev/null | awk -v ap="$AP" '/ linkdown/ { next } { for (i = 1; i < NF; i++) if ($i == "dev" && $(i+1) != ap) { print $(i+1); exit } }'; }
+ufw_on() { command -v ufw >/dev/null 2>&1 && (( $(timeout 8 ufw status 2>/dev/null | grep -c '^Status: active' || true) > 0 )); }
+# DHCP and DNS from the clients to NetworkManager's dnsmasq, and forwarding from ap0 to any uplink (it can change while
+# the hotspot is on). The same fixed set is added by run and deleted by down, so a crash leaves nothing down cannot remove.
+RULES=("allow in on $AP to any port 67 proto udp" "allow in on $AP to any port 53 proto udp" "allow in on $AP to any port 53 proto tcp" "route allow in on $AP")
+# How each rule shows in `ufw status` (its usual form, e.g. "67/udp on ap0 ALLOW IN Anywhere"), to find an owner's own
+# equal rule: ufw can't hold ours beside it and would put our comment on theirs, so the stop would delete it.
+STATUS_OF=("67/udp on $AP ALLOW IN" "53/udp on $AP ALLOW IN" "53/tcp on $AP ALLOW IN" "on $AP ALLOW FWD")
+ufw_add() {
+  local i st
+  st=$(timeout 8 ufw status 2>/dev/null | grep -v '# omamobile-hotspot' | tr -s ' ') || st=''
+  for i in "${!RULES[@]}"; do
+    # the owner already allows this on the interface (untagged): leave it as theirs and don't add ours
+    if [[ $st == *"${STATUS_OF[$i]}"* ]]; then log "keeping the owner's own rule: ${STATUS_OF[$i]}"; continue; fi
+    # word splitting is wanted: the rule's words are ufw's arguments
+    # shellcheck disable=SC2086
+    timeout 8 ufw ${RULES[$i]} comment omamobile-hotspot >/dev/null 2>&1 || log "ufw refused: ${RULES[$i]}"
+  done
+}
+ufw_del() {
+  local r n i
+  command -v ufw >/dev/null 2>&1 || return 0
+  # only the rules tagged by this script on ap0 (IPv4 and IPv6 copies), by number, highest first: a delete by spec would
+  # also take the owner's own equal rule, which ufw can't hold beside ours
+  for ((i = 0; i < 20; i++)); do
+    n=$(timeout 8 ufw status numbered 2>/dev/null | awk -v ap=" on $AP" 'index($0, ap) && /# omamobile-hotspot/ && match($0, /\[ *[0-9]+\]/) { v = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", v); n = v } END { print n }')
+    [[ $n =~ ^[0-9]+$ ]] || break
+    timeout 8 ufw --force delete "$n" >/dev/null 2>&1 || break
+  done
+  (( $(timeout 8 ufw status numbered 2>/dev/null | grep " on $AP" | grep -c "# omamobile-hotspot" || true) > 0 )) && log "tagged UFW rules on $AP are left; check ufw status"
+  return 0
+}
+# connected clients for the page and the tile (the station list needs no root on every kernel, so root writes it):
+# one line per associated station, "MAC<TAB>IP<TAB>NAME", IP and name from dnsmasq's lease file when it has them
+clients() {
+  local mac line ip name out=''
+  while IFS= read -r mac; do
+    [[ $mac =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]] || continue
+    ip='' name=''
+    line=$(awk -v m="$mac" 'tolower($2) == m { print $3 " " $4; exit }' "$LEASES" 2>/dev/null) || line=''
+    if [[ -n $line ]]; then ip=${line%% *}; name=${line#* }; [[ $name == '*' ]] && name=''; fi
+    [[ $ip =~ ^[0-9.]{7,15}$ ]] || ip=''
+    name=$(printf '%s' "$name" | tr -cd 'A-Za-z0-9._ -' | head -c 63)
+    out+="$mac"$'\t'"$ip"$'\t'"$name"$'\n'
+  done < <(timeout 5 iw dev "$AP" station dump 2>/dev/null | awk '$1 == "Station" { print tolower($2) }')
+  printf '%s' "$out" > "$RUN/clients.new" && mv -f "$RUN/clients.new" "$RUN/clients"
+}
+# grep -c, not -q: an early grep exit could fail nmcli's side of the pipe under pipefail and read as "not active"
+active_on_ap() { [[ -n ${1:-} ]] && (( $(nm -t -f UUID,DEVICE connection show --active 2>/dev/null | grep -cx "$1:$AP" || true) > 0 )); }
+# a working client uplink: a default route that is not "linkdown" and whose gateway answers. After ap0 goes the route
+# stays with "linkdown" while iw still says Connected and nothing passes (seen on the phone 2026-11-22 01:38).
+hasroute() {
+  local r gw
+  r=$(ip -4 route show default dev "$1" 2>/dev/null | head -n 1)
+  [[ -n $r && $r != *linkdown* ]] || return 1
+  gw=$(awk '{ for (i = 1; i < NF; i++) if ($i == "via") { print $(i+1); exit } }' <<< "$r")
+  [[ -z $gw ]] && return 0
+  command -v ping >/dev/null 2>&1 || return 0
+  ping -c 1 -W 1 -I "$1" "$gw" >/dev/null 2>&1 && return 0
+  # a gateway that drops ICMP still counts when the kernel reaches it
+  case $(ip -4 neigh show "$gw" dev "$1" 2>/dev/null) in *REACHABLE*|*STALE*|*DELAY*|*PROBE*) return 0 ;; esac
+  return 1
+}
+RUNIT=omamobile-hotspot-reconnect
+UUIDRE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+# the client connection to bring back after; an empty read (the client Wi-Fi still down from a quick off and on) keeps
+# the one saved before
+save_uplink() { local u; u=$(nm -g GENERAL.CON-UUID device show "$1" 2>/dev/null | head -n 1) || u=''; [[ $u =~ $UUIDRE ]] && printf '%s\n' "$u" > "$RUN/uplink-uuid"; return 0; }
+hs_running() { case $(timeout 4 systemctl show -p ActiveState --value omamobile-hotspot.service 2>/dev/null) in active|activating|reloading) return 0 ;; esac; return 1; }
+notify() { command -v systemd-notify >/dev/null 2>&1 && systemd-notify "$@" 2>/dev/null; return 0; }
+
+# IPv4 forwarding per link: on for ap0 and the uplinks while the hotspot runs. Each link's value before is kept once in
+# $RUN/fwd/NAME (a run after a crash finds the file and keeps the first value, not its own 1), and down writes it back.
+# Links that were already on are left alone and not recorded. Limit: down writes the old value back even if something
+# else turned that link on meanwhile. Only the main routing table's default routes count as uplinks.
+fwd_name() { [[ $1 =~ ^[A-Za-z0-9_.-]{1,15}$ && $1 != all && $1 != default && $1 != . && $1 != .. ]]; }
+fwd_on() {
+  local l f v
+  mkdir -p "$RUN/fwd"
+  for l in "$@"; do
+    fwd_name "$l" || continue
+    f=$SYSCTL/$l/forwarding; [[ -w $f ]] || continue
+    v=$(cat "$f" 2>/dev/null) || continue
+    [[ $v == 1 ]] && continue
+    # no record, no change: a link turned on here must be one down can turn off again
+    [[ -e $RUN/fwd/$l ]] || printf '%s\n' "$v" > "$RUN/fwd/$l" || continue
+    printf '1\n' > "$f" 2>/dev/null || log "could not turn forwarding on for $l"
+  done
+}
+fwd_restore() {
+  local p l v
+  for p in "$RUN"/fwd/*; do
+    [[ -e $p ]] || continue
+    l=${p##*/}; fwd_name "$l" || { rm -f "$p"; continue; }
+    v=$(cat "$p" 2>/dev/null) || v=0
+    [[ $v =~ ^[01]$ ]] || v=0
+    # the record goes once the value is back, or once the link is gone (its sysctl goes with it); a write that fails
+    # keeps it for the next down
+    if [[ ! -d $SYSCTL/$l ]]; then rm -f "$p"
+    elif printf '%s\n' "$v" > "$SYSCTL/$l/forwarding" 2>/dev/null; then rm -f "$p"
+    else log "could not set forwarding back for $l"; fi
+  done
+  return 0
+}
+# every device with a default route except the access point (Wi-Fi, mobile data, USB)
+# (a route marked linkdown, like usb0 with no cable, carries nothing and is skipped)
+uplinks() { ip -4 route show default 2>/dev/null | awk -v ap="$AP" '/ linkdown/ { next } { for (i = 1; i < NF; i++) if ($i == "dev" && $(i+1) != ap) print $(i+1) }' | sort -u; }
+
+# ---- Share VPN (see the header)
+VPNUNIT=omamobile-hotspot-vpn.service
+VTABLE=omamobile_hotspot_vpn
+RT=7342 RPRIO=5342
+# 0 = on, 1 = off (an explicit answer), 2 = unknown (systemctl failed or timed out: never read as off)
+share_wanted() {
+  local a
+  a=$(timeout 4 systemctl show -p ActiveState --value "$VPNUNIT" 2>/dev/null) || return 2
+  case $a in active) return 0 ;; inactive|failed|deactivating) return 1 ;; *) return 2 ;; esac
+}
+# VPN links: WireGuard first, then tun (OpenVPN, NetworkManager's VPN plugins; tap links are not VPNs here); the first
+# one that is up
+vpnif() {
+  local t n
+  for t in wireguard tun; do
+    while read -r n; do
+      n=${n%%@*}
+      [[ $n =~ ^[A-Za-z0-9_.-]{1,15}$ && $n != "$AP" ]] && { printf '%s' "$n"; return 0; }
+    done < <(ip -d -o link show up type "$t" 2>/dev/null | awk -F': ' '!/ tun type tap / { print $2 }')
+  done
+  return 1
+}
+# the hotspot's subnet (NetworkManager's shared range, 10.42.0.0/24 by default), from ap0's kernel route
+apnet() { ip -4 -o route show dev "$AP" scope link 2>/dev/null | awk '$1 ~ /^[0-9.]+\/[0-9]+$/ { print $1; exit }'; }
+# the VPN link's DNS server from NetworkManager (IPv4), if it has one: client DNS is sent there (DNAT), so it is
+# forwarded traffic under the kill switch instead of dnsmasq's queries on the phone's own route
+vpndns() { timeout 5 nmcli -g IP4.DNS device show "$1" 2>/dev/null | tr '|' '\n' | sed 's/ //g' | grep -m1 -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; }
+# the whole table in one nft transaction (add+delete+define), so there is never a moment without it
+vpn_rules() {
+  local v=$1 net=$2 dns=${3:-}
+  printf 'add table inet %s\ndelete table inet %s\ntable inet %s {\n' "$VTABLE" "$VTABLE" "$VTABLE"
+  printf '  chain forward_ap {\n    type filter hook forward priority -10; policy accept;\n'
+  if [[ -n $v ]]; then
+    printf '    iifname "%s" oifname != "%s" drop\n    oifname "%s" iifname != "%s" drop\n  }\n' "$AP" "$v" "$AP" "$v"
+  else
+    printf '    iifname "%s" drop\n    oifname "%s" drop\n  }\n' "$AP" "$AP"
+  fi
+  # DNS to the phone itself is dropped with or without a tunnel: with one whose DNS server is known the DNAT below has
+  # already sent it on (prerouting), and when the tunnel goes, the phone's dnsmasq is closed at once, not at the poll
+  if [[ -z $v || -n $dns ]]; then
+    printf '  chain input_ap {\n    type filter hook input priority -10; policy accept;\n'
+    printf '    iifname "%s" meta l4proto { tcp, udp } th dport 53 drop\n  }\n' "$AP"
+  fi
+  if [[ -n $v && -n $dns ]]; then
+    printf '  chain prerouting_ap {\n    type nat hook prerouting priority -110; policy accept;\n'
+    printf '    iifname "%s" meta l4proto { tcp, udp } th dport 53 dnat ip to %s\n  }\n' "$AP" "$dns"
+  fi
+  if [[ -n $v && -n $net ]]; then
+    printf '  chain postrouting_ap {\n    type nat hook postrouting priority 110; policy accept;\n'
+    printf '    oifname "%s" ip saddr %s masquerade\n  }\n' "$v" "$net"
+  fi
+  printf '}\n'
+}
+vpn_route() {
+  local v=$1
+  local i
+  # exactly our rule at our priority; anything else there (a crash with another interface= value) goes first
+  if (( $(ip rule show priority "$RPRIO" 2>/dev/null | grep -c "iif $AP lookup $RT" || true) == 0 )); then
+    for ((i = 0; i < 5; i++)); do ip rule del priority "$RPRIO" >/dev/null 2>&1 || break; done
+    ip rule add iif "$AP" lookup "$RT" priority "$RPRIO" || return 1
+  fi
+  ip route replace unreachable default metric 4294967295 table "$RT" || return 1
+  if [[ -n $v ]]; then ip route replace default dev "$v" metric 0 table "$RT" || return 1
+  else ip route del default dev "$(cat "$RUN/vpn-if" 2>/dev/null || echo none)" metric 0 table "$RT" >/dev/null 2>&1 || :; fi
+  return 0
+}
+vpn_clear() {
+  local i ok=1
+  [[ -e $RUN/vpn-state ]] || ! nft list table inet "$VTABLE" >/dev/null 2>&1 || touch "$RUN/vpn-state"
+  [[ -e $RUN/vpn-state ]] || (( $(ip rule show priority "$RPRIO" 2>/dev/null | grep -c . || true) > 0 )) || return 0
+  if command -v nft >/dev/null 2>&1 && nft list table inet "$VTABLE" >/dev/null 2>&1; then
+    nft delete table inet "$VTABLE" >/dev/null 2>&1 || ok=0
+  fi
+  for ((i = 0; i < 5; i++)); do ip rule del priority "$RPRIO" >/dev/null 2>&1 || break; done
+  (( $(ip rule show priority "$RPRIO" 2>/dev/null | grep -c . || true) == 0 )) || ok=0
+  ip route flush table "$RT" >/dev/null 2>&1 || :
+  # the state goes only once the table and the rule are gone, so a failed clear is retried by the next sync or down
+  (( ok )) || { log "share VPN: could not remove all of it; will retry"; return 0; }
+  rm -f "$RUN/vpn-state" "$RUN/vpn-if"
+  log "share VPN: off"
+}
+# brings the rules in line with the switch and the VPN link, every poll (all steps are idempotent, so a VPN link
+# recreated under the same name, or a table someone flushed, is put back); 1 = wanted but not applied (the caller
+# stops the hotspot)
+vpn_sync() {
+  local v='' net sig w=0 dns
+  share_wanted || w=$?
+  if (( w == 1 )); then
+    # the isolation's VPN-link exemption goes before the kill switch does
+    if [[ -e $RUN/vpn-state ]]; then rm -f "$RUN/vpn-if"; iso_sync || return 1; fi
+    vpn_clear; return 0
+  fi
+  if (( w == 2 )); then
+    # systemctl didn't answer: keep what is there; at the start (nothing there yet) don't start without knowing
+    # (in the poll, with Share VPN never applied, an unknown keeps it off rather than stop a hotspot that never used it)
+    [[ -e $RUN/vpn-state && $(cat "$RUN/vpn-state" 2>/dev/null) != stale ]] && return 0
+    [[ ${1:-} == poll && ! -e $RUN/vpn-state ]] && return 0
+    log "share VPN: the switch's state is unknown"; return 1
+  fi
+  command -v nft >/dev/null 2>&1 || { log "share VPN: nft is missing"; return 1; }
+  v=$(vpnif) || v=''
+  net=$(apnet)
+  [[ -z $net || $net =~ ^[0-9.]{7,15}/[0-9]{1,2}$ ]] || net=''
+  [[ -e $RUN/vpn-state ]] || touch "$RUN/vpn-state"     # marked first, so down clears even a half-applied set
+  dns=''; [[ -n $v ]] && dns=$(vpndns "$v")
+  vpn_rules "$v" "$net" "$dns" | nft -f - || { log "share VPN: nft refused the rules"; return 1; }
+  if ! vpn_route "$v"; then
+    # the VPN link went between the look and the route: the no-VPN set, not a stopped hotspot
+    [[ -n $v ]] && ! vpnif >/dev/null || { log "share VPN: the routing rule failed"; return 1; }
+    v=''; vpn_rules "" "$net" | nft -f - && vpn_route "" || { log "share VPN: the routing rule failed"; return 1; }
+  fi
+  [[ -n $v ]] && fwd_on "$v"
+  sig="$v $net $dns"
+  if [[ $(cat "$RUN/vpn-state" 2>/dev/null) != "$sig" ]]; then
+    if [[ -n $v ]]; then log "share VPN: clients go through $v only"; else log "share VPN: no VPN up, clients have no internet"; fi
+  fi
+  printf '%s\n' "$sig" > "$RUN/vpn-state"; printf '%s\n' "$v" > "$RUN/vpn-if"
+  return 0
+}
+
+# ---- client isolation (see the header)
+ITABLE=omamobile_hotspot_iso
+# private, shared (100.64/10), loopback, link-local, "this network", multicast, reserved and broadcast (224/3)
+PRIV4='0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/3'
+# the whole table in one nft transaction, like the VPN one; $1 = the VPN link Share VPN uses ('' = none)
+iso_rules() {
+  local v=$1 lan=${2:-}
+  printf 'add table inet %s\ndelete table inet %s\ntable inet %s {\n' "$ITABLE" "$ITABLE" "$ITABLE"
+  printf '  chain input_iso {\n    type filter hook input priority -5; policy accept;\n'
+  printf '    iifname "%s" meta nfproto ipv6 drop\n' "$AP"
+  printf '    iifname "%s" ct state established,related accept\n' "$AP"
+  printf '    iifname "%s" udp dport 67 accept\n' "$AP"
+  printf '    iifname "%s" meta l4proto { tcp, udp } th dport 53 fib daddr . iif type local accept\n' "$AP"
+  printf '    iifname "%s" drop\n  }\n' "$AP"
+  printf '  chain forward_iso {\n    type filter hook forward priority -5; policy accept;\n'
+  printf '    iifname "%s" meta nfproto ipv6 drop\n    oifname "%s" meta nfproto ipv6 drop\n' "$AP" "$AP"
+  printf '    iifname "%s" oifname "%s" drop\n' "$AP" "$AP"
+  printf '    oifname "%s" ct state != { established, related } drop\n' "$AP"
+  if [[ -n $v ]]; then printf '    iifname "%s" oifname != "%s" ip daddr { %s%s } drop\n' "$AP" "$v" "$PRIV4" "${lan:+, $lan}"
+  else printf '    iifname "%s" ip daddr { %s%s } drop\n' "$AP" "$PRIV4" "${lan:+, $lan}"; fi
+  # the VPN link gets forwarding on for the clients' sake: nothing from it may go anywhere but to a client
+  [[ -n $v ]] && printf '    iifname "%s" oifname != "%s" drop\n' "$v" "$AP"
+  printf '  }\n}\n'
+}
+# the phone's own on-link IPv4 subnets and host routes (printed without a prefix) on every link but ap0 and the VPN
+# link (a home LAN on public addresses is the uplink's subnet too), comma-separated for the drop set
+onlink() {
+  ip -4 -o route show scope link 2>/dev/null | awk -v ap="$AP" -v vpn="${1:-}" '
+    $1 ~ /^[0-9]{1,3}(\.[0-9]{1,3}){3}(\/[0-9]{1,2})?$/ { for (i = 2; i < NF; i++) if ($i == "dev" && $(i+1) != ap && $(i+1) != vpn) { print $1; break } }' \
+    | sort -u | paste -sd, - | sed 's/,/, /g'
+}
+# 1 = not applied (the caller stops the hotspot: never a hotspot without it)
+iso_sync() {
+  local v=''
+  command -v nft >/dev/null 2>&1 || { log "client isolation: nft is missing"; return 1; }
+  [[ -e $RUN/vpn-state ]] && v=$(cat "$RUN/vpn-if" 2>/dev/null) || v=''
+  fwd_name "$v" || v=''
+  [[ -e $RUN/iso-state ]] || touch "$RUN/iso-state"     # marked first, so down clears even a half-applied set
+  iso_rules "$v" "$(onlink "$v")" | nft -f - || { log "client isolation: nft refused the rules"; return 1; }
+  [[ $(cat "$RUN/iso-state" 2>/dev/null) == "on $v" ]] || log "client isolation: on${v:+ (VPN link $v exempt)}"
+  printf 'on %s\n' "$v" > "$RUN/iso-state"
+}
+iso_clear() {
+  # by the table itself, not only the state file: a table left by a crash is removed too
+  if command -v nft >/dev/null 2>&1 && nft list table inet "$ITABLE" >/dev/null 2>&1; then
+    nft delete table inet "$ITABLE" >/dev/null 2>&1 || { log "client isolation: could not remove it; will retry"; return 0; }
+  fi
+  rm -f "$RUN/iso-state"
+}
+
+run() {
+  mkdir -p "$RUN"; rm -f "$RUN/last-stop" "$RUN/clients"
+  local t sta phy hs i hot=0
+  t=$(temp); (( HOT == 0 || t < HOT )) || { stopped "too-hot"; log "phone at $((t / 1000)) C: not starting"; exit 1; }
+  # a reconnect left from the last stop must not bring the client connection up over this start (stopped only now,
+  # after the checks, so a refused start leaves it running; its saved connection is kept below if the read is empty)
+  timeout 8 systemctl stop "$RUNIT.service" >/dev/null 2>&1 || :; rm -f "$RUN/reconnecting"
+  printf '%s\n' "$AP" > "$RUN/iface"
+  hs=$(hsuuid) || { stopped "failed: no Hotspot settings"; log "no Hotspot profile"; exit 1; }
+  # never an open network: a profile without a WPA key (a half-made one) is refused
+  case $(nm -g 802-11-wireless-security.key-mgmt connection show uuid "$hs" 2>/dev/null | head -n 1) in
+    wpa-psk|sae) ;;
+    *) stopped "failed: the Hotspot settings have no password"; log "Hotspot profile without WPA key: refused"; exit 1 ;;
+  esac
+  local pl; pl=$(nm -s -g 802-11-wireless-security.psk connection show uuid "$hs" 2>/dev/null | head -n 1) || pl=''
+  (( ${#pl} >= 8 )) || { stopped "failed: the Hotspot settings have no password"; log "Hotspot profile with a short or empty password: refused"; exit 1; }
+  # takeover when the named interface is a Wi-Fi device this script did not make (wlp1s0); a second interface otherwise.
+  # $RUN/created marks only an interface this script made and is kept while it could not be deleted, so the real Wi-Fi
+  # device is never taken for one.
+  if ! [[ -e $SYSNET/$AP/phy80211 && $(cat "$RUN/created" 2>/dev/null) != "$AP" ]] && sta=$(stadev); then
+    # a second interface beside the client Wi-Fi
+    phy=$(cat "$SYSNET/$sta/phy80211/name" 2>/dev/null) || phy=''
+    [[ $phy =~ ^phy[0-9]+$ ]] || { stopped "failed: no Wi-Fi radio"; exit 1; }
+    printf '%s\n' "$sta" > "$RUN/sta"
+    # saved only now, just before the interface is made: the client connection to bring back if it costs its routes
+    save_uplink "$sta"
+    if ! iw dev "$AP" info >/dev/null 2>&1; then
+      # marked before it is made, so a crash in between still leaves down a name to delete
+      printf '%s\n' "$AP" > "$RUN/created"
+      iw phy "$phy" interface add "$AP" type __ap || { rm -f "$RUN/created"; stopped "failed: the radio refused a second interface"; exit 1; }
+    fi
+    # NetworkManager must list the new interface before the profile can go up on it (a race seen 2026-11-21)
+    for ((i = 0; i < 20; i++)); do (( $(nm -t -f DEVICE,STATE device 2>/dev/null | grep -c "^$AP:disconnected" || true) > 0 )) && break; sleep 0.5; done
+  else
+    # the Wi-Fi device itself: its client connection is replaced while the hotspot is on, and brought back after
+    [[ -e $SYSNET/$AP/phy80211 ]] || { stopped "failed: no Wi-Fi device $AP"; exit 1; }
+    sta=$AP; printf '%s\n' "$sta" > "$RUN/sta"; rm -f "$RUN/created"
+    save_uplink "$sta"
+  fi
+  nm connection modify uuid "$hs" connection.interface-name "$AP" connection.autoconnect no 802-11-wireless.mode ap \
+    802-11-wireless.band bg 802-11-wireless-security.pmf 3 \
+    802-11-wireless-security.proto rsn 802-11-wireless-security.pairwise ccmp 802-11-wireless-security.group ccmp ipv4.method shared ipv6.method ignore 802-11-wireless.ap-isolation yes >/dev/null 2>&1 \
+    || { stopped "failed: could not bind the Hotspot settings"; exit 1; }
+  # rules persist across a power loss while on: clear any left, then add the set once
+  if ufw_on; then ufw_del; ufw_add; fi
+  [[ -e $RUN/vpn-state ]] && echo stale > "$RUN/vpn-state"   # a set left by a crash is redone or cleared
+  vpn_sync || { stopped "failed: share VPN could not be applied"; exit 1; }
+  iso_sync || { stopped "failed: client isolation could not be applied"; exit 1; }
+  timeout 45 nmcli -w 40 connection up uuid "$hs" ifname "$AP" >/dev/null 2>&1 || :
+  active_on_ap "$hs" || { stopped "failed: the access point did not start"; log "profile did not come up on $AP"; exit 1; }
+  # shellcheck disable=SC2046
+  fwd_on "$AP" $(uplinks)
+  log "on: $AP up, uplink $(uplink)"
+  notify --ready --status="on"
+  clients
+  while :; do
+    sleep "$POLL"
+    active_on_ap "$hs" || { stopped "ended"; log "the profile went down"; exit 0; }
+    # an uplink that came up meanwhile (mobile data after Wi-Fi) gets forwarding too
+    # shellcheck disable=SC2046
+    fwd_on "$AP" $(uplinks)
+    vpn_sync poll || { stopped "failed: share VPN could not be applied"; log "share VPN failed: turning the hotspot off"; exit 0; }
+    iso_sync || { stopped "failed: client isolation could not be applied"; log "client isolation failed: turning the hotspot off"; exit 0; }
+    clients
+    (( HOT > 0 )) || continue
+    t=$(temp)
+    if (( t >= HOT )); then hot=$((hot + 1)); else hot=0; fi
+    (( hot >= 2 )) && { stopped "too-hot"; log "phone at $((t / 1000)) C: turning the hotspot off"; exit 0; }
+  done
+}
+
+down() {
+  mkdir -p "$RUN"; rm -f "$RUN/clients"     # first: the backend counts clients from this file
+  local hs sta uu i
+  hs=$(hsuuid) || hs=''
+  [[ -n $hs ]] && { nm connection down uuid "$hs" >/dev/null 2>&1 || :; }
+  ufw_del
+  fwd_restore
+  # only an interface this script made is deleted (never the Wi-Fi device itself)
+  if [[ $(cat "$RUN/created" 2>/dev/null) == "$AP" ]]; then
+    for ((i = 0; i < 3; i++)); do iw dev "$AP" info >/dev/null 2>&1 || break; iw dev "$AP" del 2>/dev/null || sleep 2; done
+    if iw dev "$AP" info >/dev/null 2>&1; then log "could not delete $AP"; else rm -f "$RUN/created"; fi
+  fi
+  # the VPN rules go last, and only once nothing can forward from the access point any more (profile down, and a made
+  # interface deleted); otherwise they stay and the next down or a reboot takes them
+  # cleared only on a clear answer that the profile is down: a NetworkManager that doesn't answer (or no profile found)
+  # while ap0 still exists as an access point keeps both tables
+  if active_on_ap "$hs" || [[ $(cat "$RUN/created" 2>/dev/null) == "$AP" ]] \
+     || { ! timeout 10 nmcli -t -f DEVICE connection show --active >/dev/null 2>&1 && iw dev "$AP" info 2>/dev/null | grep -q 'type AP'; }; then
+    [[ -e $RUN/vpn-state ]] && log "share VPN: $AP may still be up; kill switch left in place"
+    [[ -e $RUN/iso-state ]] && log "client isolation: $AP may still be up; left in place"
+  else
+    vpn_clear
+    iso_clear
+  fi
+  [[ -s $RUN/last-stop ]] || stopped "ended"
+  sta=$(cat "$RUN/sta" 2>/dev/null) || sta=''
+  [[ $sta =~ ^[A-Za-z0-9_.-]{1,15}$ ]] || sta=$(stadev)
+  [[ -n $sta ]] || return 0
+  rm -f "$RUN/clients"
+  uu=$(cat "$RUN/uplink-uuid" 2>/dev/null) || uu=''
+  # the client Wi-Fi was not connected when the hotspot started (or the start failed before ap0): nothing to bring back
+  [[ $uu =~ $UUIDRE ]] || { rm -f "$RUN/uplink-uuid"; return 0; }
+  # still has its route (the client Wi-Fi often stays up beside ap0): nothing to do
+  hasroute "$sta" && { log "client Wi-Fi up on $sta"; rm -f "$RUN/uplink-uuid"; return 0; }
+  # otherwise the reconnect runs on its own, so the hotspot is off now and not after NetworkManager's ~10-20 s
+  # reconnect (2026-11-22: off took 25 s while down waited for it).
+  printf '%s\n' "$sta" > "$RUN/reconnecting"
+  timeout 8 systemctl stop "$RUNIT.service" >/dev/null 2>&1 || :
+  if command -v systemd-run >/dev/null 2>&1 && systemd-run --no-block --collect --quiet --unit="$RUNIT" \
+       "$(readlink -f "$0")" reconnect "$sta" "$uu" >/dev/null 2>&1; then
+    log "client Wi-Fi on $sta has no route: reconnecting in the background"
+  else
+    reconnect "$sta" "$uu"
+  fi
+  return 0
+}
+
+# hotspot-ap reconnect STA UUID (a transient unit started by down): NetworkManager often brings the client Wi-Fi back by
+# itself after ap0 goes (the driver drops it and NetworkManager ignores that access point for 10 s), so wait up to 15 s
+# for a working route; only without one bring the saved client connection up again. A hotspot started meanwhile wins:
+# in the wlp1s0 mode the client connection would replace it.
+reconnect() {
+  local sta=$1 uu=$2 t0=$SECONDS
+  trap 'rm -f "$RUN/reconnecting"' EXIT
+  [[ $sta =~ ^[A-Za-z0-9_.-]{1,15}$ && $uu =~ $UUIDRE ]] || { rm -f "$RUN/reconnecting"; return 2; }
+  while (( SECONDS - t0 < 15 )); do hasroute "$sta" && break; hs_running && break; sleep 1; done
+  if ! hs_running && ! hasroute "$sta"; then
+    timeout 45 nmcli -w 40 connection up uuid "$uu" ifname "$sta" >/dev/null 2>&1 \
+      || { hs_running || timeout 45 nmcli -w 40 device connect "$sta" >/dev/null 2>&1; } || :
+  fi
+  if hasroute "$sta"; then log "client Wi-Fi up on $sta"; else log "client Wi-Fi on $sta has no route"; fi
+  # the saved connection is dropped only here (a start that stopped this reconnect keeps it for its own stop)
+  hs_running || rm -f "$RUN/uplink-uuid"
+  rm -f "$RUN/reconnecting"
+  return 0
+}
+
+case ${1:-} in
+  run) run ;;
+  down) down ;;
+  reconnect) reconnect "${2:-}" "${3:-}" ;;
+  *) echo "usage: hotspot-ap run|down|reconnect STA UUID" >&2; exit 2 ;;
+esac

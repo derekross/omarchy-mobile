@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# The hotspot's Share VPN switch, as a unit state: active = the clients' traffic may leave only through the phone's VPN.
+# Does nothing itself; omamobile-hotspot.service's helper (hotspot-ap) reads it at start and every poll and keeps the
+# nftables kill switch and the routing rule in line with it. Started and stopped by hotspot-backend (polkit rule
+# 50-omamobile-hotspot.rules). Never enabled: off after a reboot until the hotspot is turned on with the switch saved.
+[Unit]
+Description=Wi-Fi hotspot: share the VPN only (kill switch)
+ConditionPathExists=/usr/share/omamobile/hotspot.conf
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
