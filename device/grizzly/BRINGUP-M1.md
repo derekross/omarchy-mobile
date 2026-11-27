@@ -6897,24 +6897,15 @@ and the DSI0 system cell has no entry in that clock table.
 Neither that query nor the earlier `GET_RATE` replies
 provide a stock readback of these resets.
 
-The stock CD-PHY driver does expose two read-only debugfs
-fields for its own local reset controls. Under the debugfs
-mount, `f7c0000.dw_mipi_cdphy/phy_ctrl0_rw_phy_rst_n`
-and its sibling `phy_ctrl0_rw_shutdown_n`
-read bits 0 and 1 of the second PHY resource
-(`0x0f7d8800 + 0x28`). The getter calls
-`pm_runtime_get_if_in_use()` and reads only when it acquires
-a reference to an already-active PHY. Stock D1 enables
-debugfs in its kernel config. The saved traces confirm
-the device name but contain no reads of either field.
-Access also depends on the debugfs mount and permissions.
-The driver asserts
-both active-low controls during shutdown and early setup
-and deasserts them during late setup. The getter discards the
-regmap read error, so a reported zero cannot by itself prove
-assertion. These fields report PHY-local control latches.
-External CMU resets and DSI0 host reset coverage remain
-unverified. No direct AP or host read was enabled.
+The stock CD-PHY driver allocates PHY-local reset and
+shutdown controls at bits 0 and 1 of its second resource
+(`0x0f7d8800 + 0x28`). The driver asserts both
+active-low controls during shutdown and early setup and
+deasserts them during late setup. Stock D1 enables
+debugfs, but its driver does not create files for these
+two controls. The paths tested below came from the
+driver's removal table. External CMU resets and DSI0
+host reset coverage remain unverified.
 
 ##### Passive stock D1 PHY reset trace
 
@@ -6925,7 +6916,7 @@ as the genpd fixture. Packaging verifies the stock
 display module load and leaves the independent 90-second
 warm return armed.
 
-The fixture attempts both PHY-local debugfs reads just
+The fixture tested the candidate PHY-local debugfs paths just
 after `mipi-cdphy.ko` loads and again just after the stock
 display module load finishes. It mounts debugfs read-only.
 The stock getter calls `pm_runtime_get_if_in_use()` and
@@ -7233,7 +7224,43 @@ in-use check, NV guard and timed return.
 The updated `init_boot` SHA-256 is
 `c77ca5e5304a0cebf9051a3a8966f2b68e62161e74eab2523b397fc2bd94796c`.
 Legacy hardware trace replay and synthetic runtime PM
-cases passed offline. The updated fixture has not booted.
+cases passed offline.
+
+###### Attended PHY runtime PM result
+
+On 2026-11-27 the read-only rescue copied and verified
+all nine NV partitions privately on the Mac. It returned
+directly to Fastboot. The five trace images were staged
+to slot B, the full `vendor_boot_b` readback matched,
+and the updated fixture booted once.
+
+The local `0x1587` read again returned HS gear 5 with
+wait result 0. The NV guard passed before the display
+modules loaded. The host-probe DSI0 ON reply succeeded
+at 6.897893 s and the stock host read `pwr_up=0`
+at 6.910303 s. The two candidate files were missing
+at both sample points. Neither the getter's runtime
+PM probe nor its regmap-result probe recorded an event.
+The trace retained 63 of 63 DSI0 rows and 15 of 15 UIC
+rows. Ramoops and `SYSTEM_LAST_KMSG` matched on all
+126 selected lines.
+
+A recheck of the exact D1 module resolved the missing
+paths. The file-name relocations at module `0xa58c`
+and `0xa5a0` belong to `cdphy_remove_g301`
+(`0xa31c`–`0xa85c`). Neither
+`dw_create_debugfs_hwv_files_1` nor
+`dw_create_debugfs_hwv_files_2` creates these names
+or uses the two corresponding field pointers. The
+original offline audit misread an ADRP page label as
+the containing function. These paths cannot provide
+the PHY reset readbacks in stock D1. The internal
+field mappings and runtime guard for exported files
+remain valid.
+
+The 90-second warm return worked. Fastboot returned
+134 seconds after the B boot request. Stock A completed
+boot with enforcing verity and matching VBMeta.
 
 ### Offline stock D1 device reference-clock diagnostic
 
