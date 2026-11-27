@@ -306,6 +306,15 @@ ps="$tmp/root/etc/NetworkManager/conf.d/zz-omamobile-wifi-powersave.conf"
 grep -qx '\[connection\]' "$ps" || fail "the Wi-Fi power save file needs a [connection] header"
 grep -qx 'wifi.powersave=3' "$ps" || fail "Wi-Fi power save is on by default (3 = enable)"
 pass "Wi-Fi power save is on by default"
+
+# The address unit is for a controller (DEVTYPE host) only: a connection to a
+# device is hciN:HANDLE in the same subsystem (DEVTYPE link), and its unit
+# failed ("not a controller") at every connect.
+r=vendor/udev/rules.d/80-omamobile-bt-addr.rules
+grep -c '^ACTION=="add", SUBSYSTEM=="bluetooth", KERNEL=="hci\[0-9\]\*", ENV{DEVTYPE}=="host", .*omamobile-bt-addr@%k\.service"$' "$r" >/dev/null ||
+  fail "the Bluetooth address rule matches controllers only (DEVTYPE host), not their connections"
+pass "the Bluetooth address rule matches controllers only, not their connections"
+
 # The thermal guard: run against a fake sysfs (never the real one).
 bash -n bin/omamobile-husky-thermal || fail "the thermal guard parses"
 for f in usr/bin/omamobile-husky-thermal usr/share/omamobile/thermal.conf \
