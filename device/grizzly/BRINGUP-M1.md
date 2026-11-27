@@ -7047,12 +7047,68 @@ after the timeout (`0xdcb00`–`0xdcb08`). Power-mode completion
 (`0x10`) was enabled and absent from that status word.
 The following interrupt logged `0x400` as unhandled
 and the next dump showed `IS=0` and `IE=0x00171ef5`.
+The timeout dump also retained opcode `0x2`, argument 1
+`0x15710000` and argument 2 result `0x02`
+(`INVALID_ATTR_VALUE`). That register state is
+consistent with the controller rejecting the `0x21`
+mode request.
 The successful genpd boot logged a similar unhandled
 `0x400` only during timed shutdown, after partition and
 display checks passed. The snapshots identify which
 completion was missing during the failed transition.
 They leave the cause of the earlier capability read
 timeout and the hardware state at handoff unresolved.
+
+###### Passive stock D1 UIC command and interrupt trace
+
+`pack-stock-inventory.py --ufs-uic-trace` pins the D1
+factory `ufs.ko` hash and uses the same four
+non-`init_boot` images and B0 DTBO entry 19 merge as
+the attended display fixtures. It arms a private
+monotonic trace before `ufs.ko` loads and exports it
+to ramoops after the bounded inventory scan, including
+when UFS initialization prevents partition discovery.
+PID 1 runs the existing NV guard when the inventory is
+present. The independent 90-second warm return remains
+armed for either outcome.
+
+The exact D1 kernel implements the native UIC
+completion trace by issuing four additional HCI
+register reads. This fixture instead records only
+existing driver values in ARM64 registers and RAM.
+The following offsets are relative to symbols in the
+pinned stock Image.
+
+| Probe | Evidence |
+| --- | --- |
+| `__ufshcd_send_uic_cmd+0x88` and `+0x10c` | Opcode and all three arguments before and after dispatch. |
+| `ufshcd_intr+0xe0` | Existing interrupt status and enable reads before software masks or acknowledges them, plus the active opcode and MIB when present. |
+| `ufshcd_intr+0x184` | Existing command-completion result and payload. |
+| `ufshcd_intr+0x1ac` | The pending asynchronous bits just before the stock handler completes the power-control waiter. |
+| `ufshcd_wait_for_uic_cmd+0x68` | Signed status, ARG2 result and ARG3 payload from the ordinary UIC wait. |
+| `ufshcd_uic_change_pwr_mode+0x90` | Signed return from the asynchronous power-control path. |
+
+The command filters keep local `DME_GET` for
+`0x1587` and its `0x1586` fallback, plus
+`DME_SET PA_PWRMODE` (`0x1571`). Inspect the
+`UFS UIC trace` rows by monotonic timestamp. Match
+the command dispatch and wait result with the IRQ
+rows scoped to that command. For a late generic IRQ,
+`cmd=0` can mean that the active command was cleared.
+An observed `0x400` in IS with the bit clear in IE
+shows a masked command completion. The power-control
+wait needs the separate `0x10` event. A timeout with
+no matching IRQ sample leaves the hardware interrupt
+state unobserved. Check the buffer, export and missed
+probe counters before interpreting an absent row.
+
+The packed `init_boot` SHA-256 is
+`48a8782644b64c6083f974483ce9d1f16239fae3036ed23858e52eb83872466e`.
+Image hashes, AVB, initramfs readback, handoff bounds
+and saved slot fit passed. Shell mocks exercised probe
+registration, parsing, loss checks and cleanup. Probe
+registration on stock D1 and the hardware capture
+remain pending.
 
 ### Offline stock D1 device reference-clock diagnostic
 

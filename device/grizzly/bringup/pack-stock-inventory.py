@@ -143,13 +143,15 @@ def read_nv_reader(path):
 
 def pack(args):
     sampler_path = args.ufs_psm1_prep_trace or args.ufs_psm1_trace
-    power_trace = args.ufs_power_trace or args.ufs_pre_on_trace or sampler_path or args.ufs_cpm_trace
+    power_trace = (args.ufs_power_trace or args.ufs_pre_on_trace or sampler_path
+                   or args.ufs_cpm_trace or args.ufs_uic_trace)
+    rescue_base = args.dsi0_trace or args.ufs_uic_trace
     stock = {name: args.factory / f"{name}.img" for name in FACTORY}
     expected_images = FACTORY
-    if args.dsi0_trace:
+    if rescue_base:
         expected_images = dict(FACTORY, init_boot=NV_RESCUE_INIT_SHA256, dtbo=USB2_ISOLATION_DTBO_SHA256)
         if digest(args.board_dtb) != DSI0_TRACE_BOARD_SHA256:
-            raise ValueError("DSI0 trace requires the audited B0 merge of NV rescue DTBO entry 19")
+            raise ValueError("stock trace requires the audited B0 merge of NV rescue DTBO entry 19")
     for name, path in stock.items():
         if digest(path) != expected_images[name]:
             raise ValueError(f"{path} differs from the audited D1 factory image")
@@ -180,7 +182,7 @@ def pack(args):
         vendor_kernel_ramdisk = temp / "vendor_kernel_boot/vendor_ramdisk00"
         vendor_kernel_cpio = temp / "vendor-kernel.cpio"
         vendor_kernel_cpio.write_bytes(capture("lz4", "-dc", vendor_kernel_ramdisk))
-        if sampler is not None:
+        if sampler is not None or args.ufs_uic_trace:
             ufs = capture("bsdtar", "-xOf", vendor_kernel_cpio, "lib/modules/ufs.ko")
             if hashlib.sha256(ufs).hexdigest() != STOCK_UFS_SHA256:
                 raise ValueError("factory ufs.ko differs from the audited D1 module")
@@ -245,6 +247,10 @@ def pack(args):
                                   (HERE / "stock-ufs-power-trace.sh").read_bytes(), 0o644)
                 if args.ufs_pre_on_trace:
                     write_payload(root / "grizzly-inventory/ufs-pre-on-trace", b"", 0o644)
+                if args.ufs_uic_trace:
+                    write_payload(root / "grizzly-inventory/ufs-uic-trace", b"", 0o644)
+                    write_payload(root / "grizzly-inventory/stock-ufs-uic-trace.sh",
+                                  (HERE / "stock-ufs-uic-trace.sh").read_bytes(), 0o644)
                 if sampler is not None:
                     write_payload(root / "grizzly-inventory/ufs-psm1-trace",
                                   f"{STOCK_UFS_SHA256}  /lib/modules/ufs.ko\n".encode(), 0o400)
@@ -266,7 +272,7 @@ def pack(args):
             capture(sys.executable, args.unpack, "--boot_img", stock["init_boot"],
                     "--out", temp / "factory-init_boot")
             factory_init_ramdisk = temp / "factory-init_boot/ramdisk"
-            if args.dsi0_trace:
+            if rescue_base:
                 # Drop the known NV export overlay and retain the stock early-loader files.
                 factory_init_ramdisk.write_bytes(
                     factory_init_ramdisk.read_bytes()[:NV_RESCUE_FACTORY_RAMDISK_SIZE])
@@ -395,6 +401,8 @@ def pack(args):
             print("UFS reference-clock prototype reads the stock attribute after the NV guard.")
         if args.ufs_power_trace:
             print("UFS power trace prototype records stock UFS MMIO reads and power votes.")
+        if args.ufs_uic_trace:
+            print("Stock UIC trace records capability requests, wait results and interrupt status.")
         if args.ufs_pre_on_trace:
             print("UFS PRE_ON trace prototype adds a register-only probe to the stock power trace.")
         if sampler is not None:
@@ -446,6 +454,8 @@ def main():
                       help="read the stock UFS device's reference-clock attribute after the NV guard")
     mode.add_argument("--ufs-power-trace", action="store_true",
                       help="trace the stock UFS module probe and verify the NV guard")
+    mode.add_argument("--ufs-uic-trace", action="store_true",
+                      help="capture stock D1 UIC requests and interrupts before the guarded scan")
     mode.add_argument("--ufs-pre-on-trace", action="store_true",
                       help="qualify the stock UFS PRE_ON sampling point without reading PSM1")
     mode.add_argument("--ufs-psm1-trace", type=Path, metavar="SAMPLER_KO",

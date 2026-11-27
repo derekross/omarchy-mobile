@@ -671,6 +671,7 @@ nv_guard_marker=/grizzly-inventory/nv-guard-only
 usb2_requested=no
 refclk_requested=no
 ufs_trace_requested=no
+ufs_uic_requested=no
 ufs_cpm_requested=no
 ufs_pre_on_requested=no
 ufs_psm1_requested=no
@@ -761,6 +762,19 @@ if [ -e "$nv_guard_marker" ] || [ -L "$nv_guard_marker" ]; then
 fi
 check_factory_preloads startup || end_inventory "inventory startup checks failed"
 stock_inventory_modules check || end_inventory "module manifest rejected"
+ufs_uic_marker=/grizzly-inventory/ufs-uic-trace
+if [ -e "$ufs_uic_marker" ] || [ -L "$ufs_uic_marker" ]; then
+    ufs_uic_helper=/grizzly-inventory/stock-ufs-uic-trace.sh
+    if [ "$ufs_trace_requested" != yes ] || [ "$ufs_cpm_requested" = yes ] ||
+       [ "$ufs_psm1_requested" = yes ] || [ "$ufs_pre_on_requested" = yes ] ||
+       [ ! -f "$ufs_uic_marker" ] || [ -L "$ufs_uic_marker" ] ||
+       [ ! -f "$ufs_uic_helper" ] || [ -L "$ufs_uic_helper" ]; then
+        end_inventory "UFS UIC trace fixture is ambiguous or incomplete"
+    fi
+    # shellcheck source=stock-ufs-uic-trace.sh
+    . "$ufs_uic_helper"
+    ufs_uic_requested=yes
+fi
 dsi0_manifest=/grizzly-inventory/dsi0.modules
 dsi0_pll_requested=no
 dsi0_genpd_requested=no
@@ -853,7 +867,7 @@ if [ "$ufs_psm1_requested" = yes ]; then
 fi
 ap_trace_ok=yes
 if [ "$ufs_trace_requested" = yes ] && ! stock_ufs_power_trace_close; then
-    if [ "$ufs_psm1_requested" != yes ]; then
+    if [ "$ufs_psm1_requested" != yes ] && [ "$ufs_uic_requested" != yes ]; then
         end_inventory "UFS power trace capture or cleanup failed"
     fi
     ap_trace_ok=no
@@ -874,6 +888,9 @@ if stock_inventory_scan /sys/class/block yes; then
             end_inventory "UFS PSM1 trace and NV guard finished sample_ok=$psm1_capture_ok ap_trace_ok=$ap_trace_ok"
         fi
         if [ "$ufs_trace_requested" = yes ]; then
+            if [ "$ufs_uic_requested" = yes ]; then
+                end_inventory "UFS UIC trace and NV guard finished capture_ok=$ap_trace_ok"
+            fi
             end_inventory "UFS power trace and NV guard complete"
         fi
         if [ "$refclk_requested" = yes ]; then

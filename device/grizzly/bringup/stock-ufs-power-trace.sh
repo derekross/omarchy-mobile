@@ -116,6 +116,7 @@ stock_ufs_power_trace_start() {
     ufs_trace_clock=${2:-mono}
     ufs_trace_pre_on=${3:-no}
     ufs_trace_pre_on_created=no
+    ufs_uic_probes=
     ufs_trace_mount=/grizzly-inventory/ufs-tracefs
     ufs_trace_instance=$ufs_trace_mount/instances/grizzly-ufs-power
     ufs_trace_state=none
@@ -136,6 +137,13 @@ stock_ufs_power_trace_start() {
            printf '%s\n' "$ufs_trace_clock" > "$ufs_trace_instance/trace_clock" &&
            printf '%s\n' "$ufs_trace_buffer_kib" > "$ufs_trace_instance/buffer_size_kb"; }; then
         return 1
+    fi
+    if [ "${ufs_uic_requested:-no}" = yes ]; then
+        stock_ufs_uic_trace_enable || return 1
+        printf '1\n' > "$ufs_trace_instance/tracing_on" || return 1
+        ufs_trace_state=running
+        stock_inventory_log 'UFS UIC trace armed before factory ufs.ko load'
+        return $?
     fi
     # Count every provider record before selecting UFS resource IDs in awk.
     for ufs_trace_event in send_mail_mbfs recv_result_mbfs send_mail_lpcm recv_result_lpcm send_mail_lpb recv_result_lpb; do
@@ -268,8 +276,16 @@ EOF
 stock_ufs_power_trace_close() {
     ufs_trace_status=0
     case $ufs_trace_state in
-        running) stock_ufs_power_trace_dump || ufs_trace_status=1 ;;
+        running)
+            if [ "${ufs_uic_requested:-no}" = yes ]; then
+                stock_ufs_uic_trace_dump || ufs_trace_status=1
+            else
+                stock_ufs_power_trace_dump || ufs_trace_status=1
+            fi ;;
     esac
+    if [ -n "$ufs_uic_probes" ]; then
+        stock_ufs_uic_trace_remove || ufs_trace_status=1
+    fi
     if [ "$ufs_trace_pre_on_created" = yes ]; then
         printf '0\n' > "$ufs_trace_pre_on_event/enable" || ufs_trace_status=1
         printf '%s\n' '-:grizzly_ufs/pre_on' >> "$ufs_trace_mount/kprobe_events" ||
