@@ -41,6 +41,16 @@ class SimulatorTests(unittest.TestCase):
             '[audio]\ncard = none\n')
         self.transcript = self.dir / 'transcript.jsonl'
         self.procs = []
+        # A stand-in systemctl first on PATH: sitd's reconnect stops and starts
+        # the route service, and a test must not reach the machine's own
+        # systemd (tools/phone-install-package runs check() on a phone). It
+        # answers 0 to everything and logs its arguments, one call a line.
+        stub = self.dir / 'bin'
+        stub.mkdir()
+        (stub / 'systemctl').write_text('#!/bin/sh\necho "$*" >> "$(dirname "$0")/systemctl.log"\nexit 0\n')
+        (stub / 'systemctl').chmod(0o755)
+        self.systemctl_log = stub / 'systemctl.log'
+        self.env['PATH'] = str(stub) + os.pathsep + self.env.get('PATH', '')
 
     def tearDown(self):
         try:
@@ -181,6 +191,102 @@ class SimulatorTests(unittest.TestCase):
         self.daemon.send_signal(signal.SIGTERM)
         self.assertEqual(self.daemon.wait(15), 0)
         self.assertFalse((self.dir / 'run' / 'socket').exists())
+
+    def wait_status(self, predicate, seconds=40):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            modem = json.loads(self.cli('status', '--json'))['modem']
+            if predicate(modem):
+                return modem
+            time.sleep(.2)
+        self.fail('status never came: ' + json.dumps(modem) + (self.dir / 'daemon.log').read_text()[-3000:])
+
+    def test_radio_off_and_on_brings_ims_and_data_back(self):
+        # Airplane mode: the owner's radio off and on, as the quick-settings
+        # tile sends them. The radio off ends both bearers (the simulator,
+        # like the Pixel 9a's modem, lists none after AT+CFUN=0).
+        self.start()
+        self.wait_ready()
+        self.wait_status(lambda m: m['voice'] and m['data'])
+        self.assertEqual(self.cli('radio', 'off').strip(), 'off')
+        modem = json.loads(self.cli('status', '--json'))['modem']
+        # The status says what the owner did, at once: not the last
+        # registration (a Pixel 9a's GET_RADIO_POWER went on reading "on").
+        self.assertEqual((modem['radio'], modem['radio_choice'], modem['voice'], modem['sms'], modem['data'],
+                          modem['ims']), ('off', 'off', False, False, False, 'off'))
+        state = json.loads((self.dir / 'run' / 'state.json').read_text())['modem']
+        self.assertEqual((state['radio'], state['radio_choice']), ('off', 'off'))
+        self.assertIn('radio: off', self.cli('status'))
+        time.sleep(2)            # the internet bearer's drop seen; nothing set up while off
+        entries = self.transcript_entries()
+        ids = [e['id'] for e in entries if e.get('type') == 'req']
+        at = [i for i, e in enumerate(entries) if e.get('cmd') == 'AT+CFUN=0']
+        withdraw = [i for i, e in enumerate(entries) if e.get('type') == 'req' and e['id'] == 0x0d38]
+        self.assertEqual(len(withdraw), 1)
+        self.assertLess(withdraw[0], at[-1])             # the IMS PDN withdrawn before the radio goes off
+        setups_before = len([e for e in entries if e.get('event') == 'setup_data_call'])
+        self.assertEqual(self.cli('radio', 'on').strip(), 'on')
+        modem = self.wait_status(lambda m: m['voice'] and m['sms'] and m['data'])
+        self.assertEqual((modem['radio'], modem['radio_choice'], modem['ims']), ('on', 'on', 'registered'))
+        entries = self.transcript_entries()
+        self.assertFalse([e for e in entries if 'violation' in e])
+        setups = [(e['cid'], e['apn'], e['ip']) for e in entries if e.get('event') == 'setup_data_call']
+        # Both bearers set up again, the internet first, IMS as start-up made it.
+        self.assertEqual(setups[setups_before:], [(1, 'internet.example', 3), (2, 'ims', 2)])
+        ids = [e['id'] for e in entries if e.get('type') == 'req']
+        self.assertEqual(ids.count(0x0d08), 2)           # ADD_PDN_INFO once at start-up, once after radio on
+        self.assertEqual(ids.count(0x0d39), 1)           # the IMS stack started once
+        log = (self.dir / 'daemon.log').read_text()
+        self.assertIn('IMS PDN information sent again after radio on', log)
+        self.assertIn('Internet bearer set up again', log)
+        # The route service went down for the reconnect and came back after it
+        # (the stand-in says it was running).
+        calls = self.systemctl_log.read_text().splitlines()
+        self.assertIn('stop omamobile-sit-data.service', calls)
+        self.assertLess(calls.index('stop omamobile-sit-data.service'),
+                        calls.index('start omamobile-sit-data.service'))
+        # A second "radio on" with the radio already on changes nothing:
+        # no withdrawal, no new IMS PDN information, no new bearer.
+        before = self.transcript_entries()
+        self.assertEqual(self.cli('radio', 'on').strip(), 'on')
+        time.sleep(5)
+        after = self.transcript_entries()
+        new = after[len(before):]
+        self.assertFalse([e for e in new if e.get('type') == 'req' and e['id'] in (0x0d08, 0x0d38)])
+        self.assertFalse([e for e in new if e.get('event') == 'setup_data_call'])
+        self.assertEqual(json.loads(self.cli('status', '--json'))['modem']['ims'], 'registered')
+
+    def test_refused_radio_off_then_on_brings_ims_back(self):
+        # The modem refuses the owner's radio off after IMS was withdrawn:
+        # the radio stays on without IMS, and the next "radio on" sets IMS up
+        # again rather than skipping it as a repeat.
+        self.start()
+        self.wait_ready()
+        self.wait_status(lambda m: m['voice'] and m['sms'] and m['data'])
+        self.control('refuse-radio-off')
+        time.sleep(.2)
+        result = subprocess.run([sys.executable, str(BIN / 'omamobile-sit'), 'radio', 'off'], env=self.env,
+                                capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(result.returncode, 0)
+        entries = self.transcript_entries()
+        self.assertTrue([e for e in entries if e.get('event') == 'radio off refused'])
+        ids = [e['id'] for e in entries if e.get('type') == 'req']
+        self.assertEqual(ids.count(0x0d38), 1)           # IMS withdrawn before the refused radio off
+        self.assertEqual(ids.count(0x0d08), 1)
+        self.assertEqual(json.loads(self.cli('status', '--json'))['modem']['radio_choice'], 'on')
+        self.assertEqual(self.cli('radio', 'on').strip(), 'on')
+        modem = self.wait_status(lambda m: m['voice'] and m['sms'] and m['ims'] == 'registered')
+        self.assertEqual((modem['radio'], modem['radio_choice']), ('on', 'on'))
+        entries = self.transcript_entries()
+        self.assertFalse([e for e in entries if 'violation' in e])
+        ids = [e['id'] for e in entries if e.get('type') == 'req']
+        self.assertEqual(ids.count(0x0d08), 2)           # ADD_PDN_INFO again after the radio on
+        self.assertIn('IMS PDN information sent again after radio on', (self.dir / 'daemon.log').read_text())
+        # Once IMS is back, a further "radio on" is a repeat again.
+        self.assertEqual(self.cli('radio', 'on').strip(), 'on')
+        time.sleep(5)
+        ids = [e['id'] for e in self.transcript_entries() if e.get('type') == 'req']
+        self.assertEqual((ids.count(0x0d08), ids.count(0x0d38)), (2, 1))
 
     def control(self, command):
         with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:

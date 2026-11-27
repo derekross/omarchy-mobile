@@ -557,6 +557,11 @@ def start(service, settings, stopped=lambda: False):
         if attach is None:
             ims_ip = ims_ip_type(profiles, ims_apn)
             print('IMS bearer PDP type', ims_ip, '(from the IMS profile)' if ims_ip != 'ipv6' else '', flush=True)
+            # Kept for setting IMS up again after the owner's radio on
+            # (restore_ims); not with the modem's own attach bearer.
+            service.ims_setup = dict(apn=ims_apn, ip_type=ims_ip, apn_types=ims_apn_types(profiles, ims_apn),
+                                     pcscf_required=net.getboolean('ims_pcscf_required', True),
+                                     isim=net.getboolean('ims_pcscf_from_isim', True))
             activate(client, ims_apn, ims=True, ip_type=ims_ip,
                      apn_types=ims_apn_types(profiles, ims_apn), on_event=service.event)
         if attach is None and net.getboolean('ims_pcscf_from_isim', True):
@@ -589,3 +594,40 @@ def start(service, settings, stopped=lambda: False):
         return
     service.ims_state = 'registered'
     print('Startup: LTE, IMS voice and SMS registered', flush=True)
+
+
+def restore_ims(service):
+    """IMS set up again after the owner's radio on (service.restore_ims), as
+    start-up set it up with sitd's own IMS bearer: the PS registration
+    first, then a record left by the old bearer cleared when the modem no
+    longer lists it (the radio off ended it), the IMS bearer set up with
+    start-up's settings and ADD_PDN_INFO again (the hidden and OMA-DM menus
+    with it, as ims.register sends them). The IMS stack started at start-up
+    is not started again. A registration record left over is withdrawn first
+    (DEL_PDN_INFO), so ADD_PDN_INFO is never sent over one."""
+    client = service.client
+    setup = service.ims_setup
+    state = client.request(0x0701, timeout=5)
+    if not packet_registered(state):
+        raise RuntimeError('PS network is not registered yet')
+    from ims import REGISTRATION, unregister
+    if REGISTRATION.exists():
+        unregister(client)
+    listed = {i[2] for i in entries(client.request(0x0602, timeout=10))}
+    state_path, response_path = bearer_paths(data_call.IMS_CID)
+    if data_call.IMS_CID not in listed:
+        if state_path.exists():
+            print('IMS bearer record cleared: the modem no longer lists CID', data_call.IMS_CID, flush=True)
+        state_path.unlink(missing_ok=True)
+        response_path.unlink(missing_ok=True)
+        print('IMS bearer set up again after radio on', flush=True)
+        activate(client, setup['apn'], ims=True, ip_type=setup['ip_type'],
+                 apn_types=setup['apn_types'], on_event=service.event)
+    elif not state_path.exists():
+        raise RuntimeError('the modem lists the IMS CID without sitd\'s record')
+    fallback = None
+    if setup['isim']:
+        def fallback(bearer):
+            return ipv6_pcscf(client, client.request(0x0200), bearer, resolve_host=resolve_default_network)
+    register(client, pcscf_required=setup['pcscf_required'], pcscf_fallback=fallback)
+    print('IMS PDN information sent again after radio on; awaiting registration', flush=True)
