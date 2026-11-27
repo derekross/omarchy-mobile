@@ -154,6 +154,9 @@ grep -c 'string.find (stored.name, "^Voice Call")' $h >/dev/null &&
   grep -c 'name = omamobile-no-voice-call-restore.lua, type = script/lua' wireplumber/54-omamobile-no-voice-call-restore.conf >/dev/null &&
   grep -c 'before = \[ monitor.alsa \]' wireplumber/54-omamobile-no-voice-call-restore.conf >/dev/null ||
   fail "WirePlumber: a stored Voice Call profile is never restored at startup"
+grep -cx '  bluetooth.autoswitch-to-headset-profile = false' wireplumber/56-omamobile-bluetooth-no-headset-autoswitch.conf >/dev/null &&
+  grep -c 'wireplumber/56-omamobile-bluetooth-no-headset-autoswitch.conf "$d/usr/share/wireplumber/wireplumber.conf.d/' install >/dev/null ||
+  fail "WirePlumber: a recording leaves a Bluetooth headset on A2DP (no headset-profile autoswitch), installed"
 command -v luac >/dev/null && { luac -p wireplumber/scripts/omamobile-no-voice-call-restore.lua || fail "the WirePlumber hook parses"; }
 sed -n '/SectionDevice."Speaker"/,/^}/p' ucm2/Google/cheetah/HiFi.conf | sed -n '/EnableSequence/,/\]/p' | grep -c 'exec "/usr/bin/systemctl start --no-block --no-ask-password omamobile-earpiece@off.service"' >/dev/null ||
   fail "UCM: HiFi's Speaker device returns the amplifiers to speaker mode"
