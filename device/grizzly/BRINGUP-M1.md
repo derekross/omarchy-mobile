@@ -8458,6 +8458,35 @@ documented scope covers the external host reset inputs, and
 qualify the exact access path. DSI0 host and direct LPCM
 status reads stay disabled.
 
+###### Stock D1 dump and bootloader reset-routing audit
+
+The factory FBPK scan found four embedded FDTs in GC. The
+registry, memory configuration and placeholder contained no DPU
+reset route. The access-control FDT lists DPU
+`sre_sswrp_info` and gives `sre_component_info` to the LPCM,
+GIA and bridge register firewalls. The surrounding firmware
+identifies SRE save/restore of access-control state. The DPU
+entries provide address ranges and permission metadata, with
+no DSI0 reset signal, sink or status selector.
+
+The factory `vendor_kernel_boot` ramdisk includes three
+display register-dump paths. Their scope is visible in the
+D1 module code.
+
+| Stock path | Readback and side effects |
+| --- | --- |
+| DSI2H `reg_dump_show` at `0x86ac` | Passes the mapping from platform resource 0 to `gs_reg_dump_with_skips`. For DSI0 that is the host aperture at AP `0x0f7d8000`. The runtime-PM check precedes the dump and supplies no independent reset evidence. |
+| CD-PHY `reg_dump_show` at `0xb910` | Dumps the two PHY banks from the PHY instance. Those cover CD-PHY TX and its local APB bank. Both are outside the host reset path under investigation. |
+| Display controller `dc_hw_reg_dump` at `0x36c1c` | The regular dump uses the FE/BE resource. It writes the three FE/BE controls at offsets `0x140`, `0x40140` and `0x80000` before collection and restores them afterward. It cannot serve as a passive DSI0 reset read. |
+
+The saved stock display bugreport includes no attached display
+register dump or reset-routing data. The audit identified no
+supported readback of the external DSI0 host reset inputs and
+no hardware routing description that links all those inputs
+to the APB clock cell. Both the DSI0 host aperture and the
+unqualified clock-cell status word remain excluded from the
+mainline diagnostic.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
