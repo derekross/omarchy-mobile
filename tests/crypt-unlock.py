@@ -154,7 +154,7 @@ ok("switch /dev/mapper/root" in log, "an encrypted userdata boots from /dev/mapp
 ok(any("mount -t ext4" in line and "/dev/mapper/root" in line for line in log), "it mounts the volume inside")
 padline = next(line for line in log if line.startswith("pad --marker"))
 ok("-- cryptsetup open /dev/sda48 root --key-file=-" in padline, "the pad runs cryptsetup open on userdata with the key on stdin")
-ok(files["omamobile/disk-unlocked"], "the session's marker is written (PD3)")
+ok(not files["omamobile/disk-unlocked"], "no marker for the session is written until PD3 is decided")
 
 # The pad stops twice, then opens it; "no display" is not retried
 log, files, _ = run("retry", pad='n=$(grep -c "^pad --marker" "$LOG"); [ "$n" -ge 3 ] && touch "$T/mapper-root"; exit 1')

@@ -88,12 +88,13 @@ if [[ ${1:-} == --recovery-key ]]; then
     echo "That isn't its last group."
   done
   # The old key goes, the new one takes its slot; the PIN opens the disk
-  # throughout
+  # throughout. From here on the old key is gone, so a failure leaves the
+  # disk with the PIN alone until the next run
   cryptsetup luksKillSlot --batch-mode --key-file <(printf '%s' "$old") "$dev" 1 2>/dev/null || true
   cryptsetup luksAddKey --batch-mode "${PBKDF[@]}" --key-slot 1 --key-file <(printf '%s' "$old") "$dev" <(printf '%s' "$key") ||
-    die "adding the new recovery key failed; the PIN still opens the disk"
+    die "adding the new recovery key failed, and the old one is already gone: only the PIN opens the disk now. Run sudo omamobile-pin --recovery-key again"
   cryptsetup open --test-passphrase --key-slot 1 --key-file <(printf '%s' "$key") "$dev" ||
-    die "the new recovery key doesn't open the disk; the PIN still does: try again"
+    die "the new recovery key doesn't open the disk, and the old one is already gone: only the PIN opens it now. Run sudo omamobile-pin --recovery-key again"
   key=""
   clear 2>/dev/null || true
   echo "The new recovery key is set; the old one no longer opens the disk."

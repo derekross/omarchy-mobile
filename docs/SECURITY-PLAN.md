@@ -766,8 +766,8 @@ What this pull request adds:
 | On the phone: one PIN, and the hold | `packages/omamobile-crypt` 0.1.0 (`omamobile-pin`, `omamobile-encrypt-hold`), built by `tools/build-packages`, not in the root image | its `test/all` (8, a real LUKS2 file) |
 
 Not in this pull request: the shell's skip of the lock right after an
-unlocked boot (PD3; the init writes `/run/omamobile/disk-unlocked` for it,
-and nothing reads it yet), and the OnePlus 7T Pro's descriptor lines
+unlocked boot (PD3; the init writes no marker for it, which comes with the
+code that reads it once PD3 is decided), and the OnePlus 7T Pro's descriptor lines
 (`INITRAMFS_CRYPT=yes`, the touchscreen module in `INITRAMFS_MODULES`,
 `deferred_probe_timeout=-1`), which go with that phone's own pull request.
 
@@ -866,7 +866,7 @@ check:
    blanks the screen; ten minutes with no input power the phone off
    (`reboot(2)`'s power-off, not busybox `poweroff`, AGENTS §4).
 6. **Opened:** `dev=/dev/mapper/root`, and the existing path runs on it.
-   `/run/omamobile/disk-unlocked` is written for the session (PD3).
+   Nothing is written for the session yet (PD3).
 7. **Shutdown:** nothing new; the mapping stays open until power-off.
 
 Also behind the marker: `/run/omamobile/initramfs-features` says
@@ -1139,12 +1139,19 @@ something to follow; each is one place in the code.
 - **PD2. One PIN for the disk, the lock screen and sudo,** changed together
   by `omamobile-pin` (as built), or a separate disk PIN.
 - **PD3. No lock right after an unlocked boot** (one PIN per power-on), or
-  keep the lock (two). The init writes the marker either way; the shell's
-  side is a separate change.
+  keep the lock (two). Either way the init writes no marker for now: the
+  marker that lets the session skip a lock comes together with the shell's
+  code that reads it, as one change.
 - **PD4. Wipe after N wrong PINs:** no (as built).
 - **PD5. Argon2id cost:** fixed at 1 GiB, 4 threads, 4 iterations (as
   built), or §7 D5's benchmarked 2 s.
-- **PD6. Discards** on (as built), or off.
+- **PD6. Discards** on (as built), or off. With them on, someone who
+  reads the UFS chip can tell the blocks ext4 has freed from the ones in use
+  (freed blocks don't hold ciphertext; on most flash they read back as
+  zeros): how much is stored and where, and from the pattern perhaps the
+  file system's type; not the contents (`allow_discards` in dm-crypt.rst,
+  `--allow-discards` in cryptsetup-open(8)). Off, every block looks alike,
+  at the cost of write speed and flash wear as the disk fills.
 - **PD7. Letters on the pad:** digits first (as built), letters later.
 - **PD8. Charging boots:** the dark wait (as built where the bootloader
   says `androidboot.mode=charger`), or the pad. Open for hotdog, which never
@@ -1169,6 +1176,10 @@ something to follow; each is one place in the code.
 
 ### 11.12 Risks
 
+- **A short PIN against an offline attack.** Nothing here limits guesses
+  in hardware (§1, §4.3): an attacker with a copy of `userdata` guesses as
+  fast as their machines allow, and §11.6 gives what each PIN length is
+  worth. The tool warns under 8 digits (PD1).
 - **Losing the data during `--keep`.** The format erases the only copy on
   the phone. Mitigations: two backup reads that must agree before the
   format, the typed confirmation, the read-back check, and

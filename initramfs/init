@@ -648,9 +648,6 @@ crypt_unlock() {
     kill "$pad" 2>/dev/null
     wait "$pad" 2>/dev/null
   fi
-  # For the session: the owner just typed the PIN, so the lock that follows
-  # the autologin is skipped once (/run moves into the root, PD3)
-  : > /run/omamobile/disk-unlocked
   say "arch: the encrypted root is open"
   [ -f /splash.bgra.gz ] && zcat /splash.bgra.gz > /dev/fb0 2>/dev/null
   return 0
