@@ -528,7 +528,7 @@ Item {
     function toggle() { if (available) root.runTileAction("stay-awake", !enabled) }
   }
 
-  // Microphone access, as GrapheneOS's toggle: off totally, not a mute an app
+  // Microphone access: off totally, not a mute an app
   // can undo. The tile starts omamobile-privacy@mic-off|on.service (polkit asks
   // for the owner's PIN both ways; a cancelled PIN changes nothing, the probe
   // reads the state again). While off, 72-omamobile-privacy.rules keeps every
