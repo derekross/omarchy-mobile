@@ -8931,6 +8931,82 @@ restart at 90.199 s. PHY TX and host reads stayed
 disabled. Stock D1 resumed on slot A with enforcing
 verity and the original VBMeta digest.
 
+###### D1 DSI0 system clock and PSM3 control trace
+
+Exact D1 ABL descriptor `0x1f5220` names clock ID
+`0x40009` as `dpu_dsi0_sys_clk`. Group 4 resolves to
+AP `0x0f419000`, and offset `0x720` selects the cell
+at `0x0f419720`. Both mailbox selectors are `-1`.
+The generic ABL paths at `0x48f54` and `0x48e88`
+use the direct clock and reset controls. They poll
+the cell word at `0x0f41973c`, with bit 8 for gate
+acknowledgment and bit 12 for reset deassertion.
+The inspected ABL display path requests the DSI0 power
+domain. No clock ID `0x40009` operation was identified
+in that path. The descriptor describes this clock cell
+and leaves the downstream TX bus clock and external
+reset routing unresolved.
+
+In exact D1 `vs_drm.ko`, `0x50ab4` reads the stock
+host's `sys_clk` DT scalar of 300,000 kHz. The earlier public
+binding describes that scalar as the host APB clock in
+kHz. ABL has distinct system and APB cells. The host
+probe copies the scalar to its private state at
+`mipi-dsi2h.ko` `0x2374`.
+Loads from that field at `0xf88`, `0x1004` and
+`0x12bc` supply the low-power TX divisor, host
+PHY-HS/system-clock ratio and ULPS wakeup calculation.
+The host code provides no CCF gate operation or reset
+operation for that cell. The PHY still receives its
+separate fixed 38.4 MHz reference.
+
+The CPM clock lookup at `0x37da0` has 188 entries.
+None resolves to the system cell's CPM alias
+`0x6f419720`. The 17 records of the DPU initializer
+at `0x5c814`, applied by `0x19598` relative to
+`0x6f409000`, also leave the system cell untouched.
+The CPM reset service excludes LPCM `0x23` and the
+BL31 PMU register service excludes the status word.
+The direct AP word is in the GC `0x30300` clock page.
+A search of 61 retained pstore and trace files and the
+stock display bugreport found no system-cell read
+witness. Direct EL1 access remains unqualified.
+
+The PSM3 matrix uses a different interface. For DSI0 ON
+from state 2 or 3 it sets `0x0c` at CPM `0x6f40a000`
+(`0x3a8b4`). OFF from state 0 or 1 clears only bit 3
+(`0x3a830`). DSI1 transitions use bit 4, and DSI1 ON and
+BE ON also set bit 2. These shared request masks give
+no signal-level definition for the TX clock or reset.
+The legacy `lpm_pm_domains.ko` independently uses
+LPCM base + `0x1000`. Its BE routine sets mask
+`0x04` at `0x1b34`, and the DSI routine sets
+`0x08` or `0x10` at `0x1e90` for its separate
+DSI selectors. That provider is unbound on Grizzly.
+The four DSI0 transition entries return zero from the
+callback and supply no post-poll callback to change or
+verify the system clock cell.
+
+The completion poll at `0x7ffc` examines the LPCM
+status flags and compares the current-state nibble to
+the target. The diagnostic strings identify
+`state_valid`, `psm_sts`, `sw_seq_done`, `psm_err`
+and `seq_err` as fields in that same status word.
+The 8,192 descriptor address combinations resolve
+within CPM `0x6f409020`–`0x6f4187ec`, outside the
+system clock cell and both PHY apertures. The poll
+supplies sequencer status only. The isolated selector
+3 trial measured the MBFS votes and that separate
+cell's gate acknowledgment. It supplied no live PSM3
+state or DSI0 system clock observation.
+
+The traced software shows a DSI0 transition request
+and a separate system clock cell. A hardware route
+from either to the PHY TX register clock or external
+reset remains unverified. Keep PHY TX and DSI0 host
+reads disabled. This audit used saved artifacts and
+did not build or boot a fixture.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
