@@ -8527,6 +8527,40 @@ clock-cell handshake remains the only identified APB reset
 acknowledgement. Host reads and direct LPCM status reads
 stay disabled.
 
+###### D1 vendor source provenance and comparison
+
+The public kernel manifest does not list a Malibu or Spacecraft
+vendor branch for `CP4A.261105.040.D1`. The relevant public
+[Spacecraft branch](https://github.com/GrapheneOS/kernel_pixel/commit/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122)
+and its checked mirrors point to `CP41.260831.019`. The
+[Android common revision](https://android.googlesource.com/kernel/common/+/f5369e7496cb231d2b41cbca078b8b69160ac22d)
+matches the D1 GKI release hash. The D1 vendor DTS and module
+source revisions remain unidentified, so the comparison below
+uses the exact saved D1 factory binaries against the earlier
+public vendor source.
+
+- Both D1 base DTBs merged with B0 entry 19 match the public
+  source for the DSI0 host and PHY register ranges, the PHY link,
+  DSI0 power resource `0x203`, and GIA interrupt 20. Both host
+  and PHY still lack reset mappings. All seven CPM reset group
+  IDs and reset counts match. DPU LPCM `0x23` remains absent.
+- The DSI0 system, PHY, IPI and low-power transmit clock values,
+  the Grizzly overlay's data rate, and the DSI0 pixel-clock
+  LPCM/selector pair agree. They add no APB or external reset
+  status channel.
+- D1 `rst-cpm.ko` registers only assert and deassert. The
+  `reset` and `status` slots are zero in the operations table
+  and have no relocations. This matches the public driver's
+  initializer. The D1 DSI2H probe likewise initializes the PHY
+  before reading its host registers, with no reset-control API
+  call in the probe.
+
+There is no observed D1 change in the compared reset routing
+or status interfaces. A source-level comparison still requires
+the exact D1 vendor drop. The checked interfaces supply no
+independent host reset evidence, so direct host and LPCM
+status reads stay disabled.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
