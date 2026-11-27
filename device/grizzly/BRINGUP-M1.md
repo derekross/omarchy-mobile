@@ -9662,6 +9662,40 @@ word remain unresolved. EL1 access cannot be qualified
 from the page policy alone. Keep the PSM1, PHY TX and
 host reads disabled.
 
+###### Offline D1 CPM register dump path
+
+Exact D1 ABL asks for CPM register dump selector `2`
+with length `0x74` at `0x54d8c`–`0x54db0`.
+Its helper at `0xc4f44` sends GDMC command
+`0x07000002` with the fixed destination `0x8b420000`
+and length. On success ABL repacks the CPU context
+as `regdump_cpm` at `0x54de0`–`0x54e28`.
+The separate CPM INFO and ERROR trace parser reads
+sections of an existing crash archive.
+
+In GDMC, the handler at text offset `0x1b8d4`
+validates the destination and dispatches to the
+fixed source table at `0x1b820`. Selector `2`
+at `0x1b85c` requires byte `0x5004af74` to equal
+`1`. A valid context supplies `0x74` bytes from
+`0x5004af00`. Otherwise the helper leaves the source
+pointer null and the handler returns `-2` at
+`0x1b948`. The message has no source-address field.
+Neither the source buffer nor any other selector
+covers the DPU LPCM descriptor at AP `0x0f409018`.
+
+ABL can also return `-2` locally at `0xc5018` if
+its GDMC mailbox device lookup returns null. The
+saved stock crash log gives the resulting code in
+both the crash-dump summary and the console formatter.
+It contains neither the GDMC reply nor the validity
+byte for those calls, so it cannot identify which
+branch produced the observed code. It contains no
+CPM register-dump payload. Recovering that payload
+would supply CPU context and would still leave the
+PSM1 descriptor and its EL1 access unresolved.
+The audit used only saved artifacts.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
