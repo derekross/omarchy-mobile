@@ -6620,23 +6620,46 @@ the host. Times below use the trace clock.
 | Clock/reset | 6.319319 | 6.321630 | 6.402993 | 81.363 |
 | PHY init | 4.808976 | 4.811529 | 4.882675 | 71.146 |
 
-The module-load boundary locates the earlier pair during
-PHY registration. The trace does not capture the originating
-genpd call stack. In the exact factory `mipi-cdphy.ko`,
-`dw_mipi_cdphy_probe` resolves the PHY's `pllref` clock
-at `0xf8`. `cdphy_init_g301` initializes both PHY regmaps
-at `0x33fc` and `0x3470` with a null bus-clock name.
-The stock host likewise passes a null name at `0x2310`
-and calls `phy_init` at `0x24e0` before reading host ID
-and version. The saved traces establish the earlier vote
-cycle and the later PHY init read. They supply no APB gate
-or external reset status.
+The exact D1 kernel explains the ON/OFF pair. In the B0
+merge, `f7c0000.dw_mipi_cdphy` and the host each reference
+the same single domain, `DpuDsi0.v` (`0x203`). The other
+PHY at `f7e0000` references `0x204`.
 
-The mainline one-shot rate trial does not include the earlier
-cycle. Its effect on later host access remains untested.
-The observed intervals measure the stock module sequence
-and do not define a settle time or justify adding another
-power cycle to a mainline fixture.
+1. Before entering the PHY driver's probe, `platform_probe`
+   calls `dev_pm_domain_attach(dev, true)` at Image
+   `0xbfca9c`. The single-domain path enters
+   `__genpd_dev_pm_attach` and calls `genpd_power_on` at
+   `0xb27018`. It powers the parent domains first.
+   The early wrapper, BE and DSI0 ON replies in the module
+   loader's task match this path.
+2. The PHY probe resolves the 38.4 MHz `pllref` at module
+   `0xf8`. `cdphy_init_g301` initializes both PHY regmaps
+   at `0x33fc` and `0x3470` with a null bus-clock name.
+   The probe registers the PHY provider and enables runtime
+   PM at `0x208`.
+3. Domain attachment installs `genpd_dev_pm_sync` at
+   `0xb26f6c`. On successful probe, `really_probe` invokes
+   that exact callback slot at `0xbf9268`, before calling
+   `driver_bound`. The callback queues the domain's
+   power-off work at `0xb2869c`. Its worker calls
+   `genpd_power_off` at `0xb25524`. The early OFF replies
+   come from a worker in child-to-parent order, which fits
+   the post-probe idle-domain release. The retained trace
+   did not record the work item or call stack, so it cannot
+   attribute the individual OFF reply to that worker
+   function directly.
+
+The host later attaches to the same domain, calls
+`phy_init` at module `0x24e0` and reads host ID and version.
+The early OFF reply occurs before host module load. Its
+firmware handler can request a PSM3 OFF transition, and
+the later ON can request a transition back. Neither reply
+captures the physical PSM3 state, the APB gate bit or the
+external reset state. The stock clock/reset trace has no
+AP-side provider operations for either cycle. The observed
+intervals are module sequencing, and the effect of omitting
+the early cycle on mainline host readiness remains untested.
+Keep direct mainline host reads disabled.
 
 ### Offline stock D1 device reference-clock diagnostic
 
