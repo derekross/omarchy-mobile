@@ -885,6 +885,13 @@ grep -c 'polling waits for the screen' bin/omamobile-nfc-open >/dev/null || fail
 grep -c 'timeout_add_seconds(4' bin/omamobile-nfc-open >/dev/null && fail "the one-shot stop is gone: the screen check stops polling every time"
 grep -c '"systemctl", "restart", "neard"' bin/omamobile-nfc-open >/dev/null || fail "an NFC unblock restarts neard"
 grep -c '^Requires=neard' systemd/omamobile-nfc-open.service >/dev/null && fail "omamobile-nfc-open restarts neard, so it must not Require= it (the restart would loop)"
+python3 -B test/nfc-privacy.py >/dev/null || { python3 -B test/nfc-privacy.py | grep -v '^ok'; fail "NFC off totally: nfc-open keeps it off and comes back on"; }
+bash test/privacy-helper.sh >/dev/null || fail "the privacy helper: nfc-off and nfc-on only, in order"
+grep -cx '      /^omamobile-privacy@nfc-(on|off)\\.service$/.test(action.lookup("unit")) &&' polkit/50-omamobile-privacy.rules >/dev/null || fail "the privacy rule names the two NFC units only"
+grep -c 'YES' polkit/50-omamobile-privacy.rules >/dev/null && fail "the privacy rule never lets a root action through without the PIN"
+grep -c 'polkit.Result.AUTH_ADMIN_KEEP' polkit/50-omamobile-privacy.rules >/dev/null || fail "the privacy rule asks for the PIN"
+grep -c '"timeout", "122", "systemctl", "start", "omamobile-privacy@nfc-" + (enabled ? "off" : "on") + ".service"' plugins/omamobile.quicksettings/QuickSettings.qml >/dev/null || fail "the NFC tile switches through the privacy units"
+pass "NFC off totally: the helper, the rule, the tile and nfc-open"
 grep -c '"omamobile-launch", "empty"' bin/omamobile-widget >/dev/null || fail "the widget agent's terminal gets an empty workspace"
 grep -c '"omamobile-launch", "show-with"' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "the switcher shows apps together"
 grep -c '"omamobile-launch", "own-screen"' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "the switcher moves apps to their own screen"
@@ -1368,6 +1375,8 @@ python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobil
 python3 -B test/weather.py 2>/dev/null || fail "omamobile-weather"
 tmp=$(mktemp -d); trap 'rm -rf -- "$tmp" "$fixture"' EXIT
 ./install "$tmp/root"
+[[ -x $tmp/root/usr/lib/omamobile-shell/privacy && -f $tmp/root/usr/lib/systemd/system/omamobile-privacy@.service &&
+   -f $tmp/root/usr/share/polkit-1/rules.d/50-omamobile-privacy.rules && -f $tmp/root/usr/lib/systemd/system/neard.service.d/omamobile-privacy.conf ]] || fail "install stages the NFC privacy helper, unit and rule"
 [[ -x $tmp/root/usr/bin/omamobile-setup-user && -f $tmp/root/usr/share/omamobile/shell/profile/shell.json ]] \
   || fail "install stages the setup script and the profile"
 [[ -f $tmp/root/usr/share/applications/omamobile-agent.desktop ]] || fail "install stages the AI Agent shortcut"

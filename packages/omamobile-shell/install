@@ -32,6 +32,12 @@ done < <(find squeekboard/keyboards -type f -name '*.yaml' -print0)
 # ~/.config/omarchy/hooks/ (the keyboard's theme-set hook)
 install -Dm755 hooks/theme-set-keyboard "$destination/usr/share/omamobile/shell/hooks/theme-set-keyboard"
 install -Dm644 systemd/omamobile-nfc-open.service "$destination/usr/lib/systemd/system/omamobile-nfc-open.service"
+# NFC off totally (the tile and Settings): the root helper, the unit they start
+# and its polkit rule (the owner's PIN both ways).
+install -Dm755 libexec/privacy "$destination/usr/lib/omamobile-shell/privacy"
+install -Dm644 systemd/omamobile-privacy@.service "$destination/usr/lib/systemd/system/omamobile-privacy@.service"
+install -Dm644 systemd/neard-omamobile-privacy.conf "$destination/usr/lib/systemd/system/neard.service.d/omamobile-privacy.conf"
+install -Dm644 polkit/50-omamobile-privacy.rules "$destination/usr/share/polkit-1/rules.d/50-omamobile-privacy.rules"
 install -Dm644 systemd/user/omarchy-fcitx5-omamobile.conf "$destination/usr/lib/systemd/user/omarchy-fcitx5.service.d/omamobile.conf"
 # squeekboard's user unit runs the keyboard the owner chose (omamobile-osk)
 install -Dm644 systemd/user/mobi.phosh.OSK-omamobile.conf "$destination/usr/lib/systemd/user/mobi.phosh.OSK.service.d/omamobile.conf"
