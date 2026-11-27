@@ -19,8 +19,10 @@ root=${OMAMOBILE_PRIVACY_ROOT:-}
 dir=$root/var/lib/omamobile/privacy
 state=$dir/nfc
 # one switch at a time: an off and an on started together never interleave
-install -d -m 755 "$root/run"
-exec 9> "$root/run/omamobile-privacy.lock"
+# (the lock lives in /run/omamobile, made like the project's other services
+# make it, so /run itself is never touched)
+mkdir -p "$root/run/omamobile"
+exec 9> "$root/run/omamobile/privacy.lock"
 flock 9
 case ${1:-} in
 nfc-off)

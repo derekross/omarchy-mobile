@@ -12,7 +12,12 @@ done
 run() { PATH="$tmp/bin:$PATH" OMAMOBILE_PRIVACY_ROOT=$tmp/root bash libexec/privacy "$@"; }
 die() { echo "FAIL: $1" >&2; exit 1; }
 state=$tmp/root/var/lib/omamobile/privacy/nfc
+# /run is left alone (an odd mode stays odd); the lock lives in /run/omamobile
+install -d -m 711 "$tmp/root/run"
 run nfc-off >/dev/null
+[[ $(stat -c %a "$tmp/root/run") == 711 ]] || die "the helper changed the mode of /run"
+[[ -f $tmp/root/run/omamobile/privacy.lock ]] || die "the lock is /run/omamobile/privacy.lock"
+[[ ! -e $tmp/root/run/omamobile-privacy.lock ]] || die "no lock directly in /run"
 [[ $(cat "$state") == off ]] || die "nfc-off writes off"
 [[ $(stat -c %a "$state") == 644 ]] || die "the state file is readable by the session (644)"
 [[ $(cat "$tmp/log") == $'rfkill block nfc\nsystemctl stop neard.service' ]] || die "nfc-off: write, block, stop neard"
