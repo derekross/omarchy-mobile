@@ -8350,7 +8350,29 @@ slot capacities and ABL handoff limits, checked the AVB signatures
 on `boot` and `init_boot`, and compared the embedded DT and initramfs
 against their inputs. The DT diff showed only the one status change.
 Mocked traces passed the vote-order and storage-guard checks.
-Device boot and live CPM replies are pending.
+
+The single attended slot B boot on 2026-11-27 followed a fresh
+private backup of all nine partitions. The guard reported each
+target read-only and unmounted. The local hashes matched the
+independent on-phone hashes and the completed manifest.
+Android stayed off between the rescue and the fixture.
+
+Ramoops and `SYSTEM_LAST_KMSG` agree on the live sequence.
+LUN 0 verified all 42 partitions read-only and unmounted, using
+seven GPT metadata reads and the successful v73 byte comparison.
+After the disk retired, the PHY module bound and released all
+three votes it had acquired.
+
+| Phase | Vote order | CPM acknowledgement | Vote readback |
+| --- | --- | --- | --- |
+| ON, 6.468–6.470 s | wrapper → BE → DSI0 | `5` for each | `1` for each |
+| OFF, 6.473–6.474 s | DSI0 → BE → wrapper | `0` for each | `0` for each |
+
+The fixture reported completion at 6.510 s and requested the
+warm restart at 91.243 s. Stock D1 returned on slot A with
+enforcing verity and the original VBMeta digest. The DSI0 host
+stayed disabled, so the vote cycle did not qualify the host APB
+gate or external reset.
 
 ### Offline stock D1 device reference-clock diagnostic
 
