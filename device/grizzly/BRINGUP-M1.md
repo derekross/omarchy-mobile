@@ -6816,6 +6816,49 @@ edges from the adjacent BE and wrapper transitions. Direct
 mainline host reads and the candidate status reads remain
 disabled.
 
+##### Offline EL1 and reset-scope qualification for the APB word
+
+The exact D1 FBPK GC image contains the trusted-firmware
+policy FDT at GC offset `0x52b8`. Its
+`dpu_rfw_lpcm` node assigns `0x30300` to AP
+`0x0f419000`–`0x0f419fff`. DBL parses the three-cell
+range record at `0x351dc`–`0x35224` and passes the
+permission value to the firewall initializer. In the
+packed-byte path (`0x33c38` → `0x359c0`), the exact
+encoder maps `0x30300`, `0x30301` and `0x30303` to
+`0x1f`, `0x5f` and `0x7f` respectively. Source bits
+0 and 1 feed separate permission fields. This is a
+static programming path. The effective rule and bus
+response for a non-secure EL1 read of the exact word
+remain unobserved.
+
+The successful stock PHY init load at `0x0f7c7124`
+and host ID load at `0x0f7d8000` both fall under
+`0x30303` in the separate DPU bridge firewall. No saved
+stock D1 display trace or bugreport records a load from
+the AP acknowledgment word or its CPM alias. The
+HSIO-S trial v37 is additional evidence that static
+policy and a powered parent do not qualify a new AP
+load. Its `0x30301` config-clock read raised an SError
+under the tested handoff conditions.
+
+ABL names the reset helper `lcm_set_reset`. Its
+`0x487cc` dispatch resolves one descriptor to one
+clock cell. The helper at `0x7b5b4` changes the
+selected cell's control and request words, polls
+bit 12 at that cell's offset `0x1c`, and restores
+the saved control word. The D1 table has separate cells
+for DSI0 APB, system and pixel clocks, plus the shared
+DSI PHY clock. The APB call polls only `0x0f4196fc`.
+The merged tree supplies no host or PHY reset mapping,
+and its panel reset GPIO belongs to the panel. The
+bit-12 acknowledgment is verified for the selected
+clock cell. Its coverage of resets downstream of that
+cell remains unverified.
+
+Neither qualification passed offline. No read-only
+diagnostic was built for this word.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
