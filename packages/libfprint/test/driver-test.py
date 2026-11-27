@@ -13,6 +13,7 @@ delete and a bridge that goes away. No phone, no HAL: this checks the
 driver's side of the protocol only.
 """
 import os
+import shutil
 import socket
 import sys
 import tempfile
@@ -118,7 +119,17 @@ def check(what, ok):
 
 def main():
     tmp = tempfile.mkdtemp(prefix="omamobile-udfps-")
-    path = os.path.join(tmp, "bridge.sock")
+    orig_cwd = os.getcwd()
+    os.chdir(tmp)
+    try:
+        return _run_driver_tests()
+    finally:
+        os.chdir(orig_cwd)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _run_driver_tests():
+    path = "bridge.sock"
     bridge = FakeBridge(path)
     bridge.start()
     os.environ["FP_OMAMOBILE_UDFPS"] = path

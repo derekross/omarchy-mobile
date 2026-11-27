@@ -340,18 +340,31 @@ cmd_capture() {
     fastboot -s "$(fastboot_serial)" getvar all > "$dir/fastboot-getvar-all.txt" 2>&1
   elif adb get-state >/dev/null 2>&1; then
     say "Capturing Android state into $dir"
-    local root=""
-    [[ "$(adb shell id -u)" == 0 ]] && root=1
+    # Root is adb's own (a userdebug build, adb root), or Magisk's su, which
+    # answers only once the owner has granted Shell in its Superuser tab.
+    # An ungranted su waits for an answer on the phone, hence the timeout.
+    local root="" su=""
+    if [[ "$(adb shell id -u | tr -d '\r')" == 0 ]]; then
+      root=1
+    elif [[ "$(timeout 30 adb shell "su -c 'id -u'" 2>/dev/null | tr -d '\r')" == 0 ]]; then
+      root=1 su=1
+    elif adb shell 'command -v su' >/dev/null 2>&1; then
+      echo "  (su is there but did not answer as root: grant Shell in Magisk's Superuser tab for the capture, and revoke it there when it is done)"
+    fi
+    # Run one command as root: adb's own shell, or through su
+    capture_as_root() { if [[ -n $su ]]; then adb shell "su -c '$1'"; else adb shell "$1"; fi; }
     adb shell getprop > "$dir/getprop.txt"
     adb shell 'ls -l /dev/block/by-name/' > "$dir/partitions-by-name.txt"
     adb shell cat /proc/cpuinfo /proc/meminfo /proc/cmdline > "$dir/proc.txt" 2>&1
     adb shell 'ls -lR /vendor/lib/modules /vendor_dlkm/lib/modules' > "$dir/vendor-modules.txt" 2>&1
     if [[ -n "$root" ]]; then
       say "Root available: device tree, kernel log, modules, interrupts, memory map"
-      adb shell cat /sys/firmware/fdt > "$dir/live.dtb"
-      adb shell dmesg > "$dir/dmesg.txt"
-      adb shell cat /proc/modules /proc/interrupts /proc/iomem > "$dir/proc-root.txt" 2>&1
-      adb shell 'ls /vendor/firmware' > "$dir/vendor-firmware.txt" 2>&1
+      capture_as_root 'cat /sys/firmware/fdt' > "$dir/live.dtb"
+      capture_as_root dmesg > "$dir/dmesg.txt"
+      capture_as_root 'cat /proc/modules /proc/interrupts /proc/iomem' > "$dir/proc-root.txt" 2>&1
+      capture_as_root 'ls /vendor/firmware' > "$dir/vendor-firmware.txt" 2>&1
+      # The grant outlasts the capture: root over adb on an everyday phone
+      [[ -z $su ]] || echo "  (done with root: revoke Shell in Magisk's Superuser tab if you granted it for this capture)"
     else
       echo "  (no root: skipping device tree, dmesg and memory map)"
     fi

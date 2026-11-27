@@ -32,14 +32,17 @@ n=0
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { n=$((n + 1)); printf 'ok - %s\n' "$1"; }
 skip() { printf 'ok - # skip: %s\n' "$1"; }
-# Short: a local socket's path holds 107 bytes, and the daemon's are under it
+# Bind and connect sockets by short relative paths from inside their root,
+# so long TMPDIR / phone build paths never exceed the 107-byte AF_UNIX limit.
 t=$(mktemp -d "${TMPDIR:-/tmp}/oil.XXXXXX")
+p_short=""
 pids=()
 cleanup() {
   local p
   for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
   wait 2>/dev/null || true
   rm -rf "${t:?}"
+  [[ -n $p_short ]] && rm -rf "${p_short:?}" || true
 }
 trap cleanup EXIT
 
@@ -286,12 +289,12 @@ with open(out, "w") as log:
         elif kind == "sleep":
             time.sleep(float(text))
 EOF
-agent_run() { AGT=$t OMAMOBILE_LINK_ROOT=$A OMAMOBILE_LINK_NOTIFY=$t/notify OMAMOBILE_LINK_CLOSE=$t/close \
+agent_run() { (cd "$A" && AGT=$t OMAMOBILE_LINK_ROOT=. OMAMOBILE_LINK_NOTIFY=$t/notify OMAMOBILE_LINK_CLOSE=$t/close \
   OMAMOBILE_LINK_WINDOW="$t/window --a-flag" OMAMOBILE_LINK_RETRY_S=0.1 OMAMOBILE_LINK_REPEAT_S=0.5 XDG_STATE_HOME=$A/state \
-  timeout 20 python3 -I "$AG" > "$t/agent.out" 2>&1; }
+  timeout 20 python3 -I "$AG") > "$t/agent.out" 2>&1; }
 : > "$A/etc/omamobile/install-link"
 script="say open 3 600;do tap;want show;say code 123456 600;sleep 0.5;do winclose;want hide;say locked;sleep 0.3;say paired;sleep 0.3;say closed 2"
-AGT=$t python3 -I "$t/standin.py" "$A/run/omamobile-install-link/agent" "$script" "$t/standin.log" & sp=$!; pids+=("$sp")
+(cd "$A" && AGT=$t python3 -I "$t/standin.py" "run/omamobile-install-link/agent" "$script" "$t/standin.log") & sp=$!; pids+=("$sp")
 for _ in $(seq 100); do [[ -S $A/run/omamobile-install-link/agent ]] && break; sleep 0.05; done
 agent_run || { cat "$t/agent.out"; fail "the agent ends when the link closes for the boot"; }
 wait "$sp" || fail "the stand-in daemon's script ran to its end"
@@ -353,8 +356,15 @@ if [[ -n $BIN && -x $BIN/omamobile-linkd ]]; then
   # A freshly installed phone, as the daemon's own tests make one: the
   # marker, the descriptor, a serial in bootconfig, stand-ins for systemctl
   # and the gadget script
+  mkdir -p "$t/p"
+  p_root=$t/p
+  if (( ${#t} > 45 )); then
+    p_short=$(mktemp -d /tmp/oilp.XXXXXX)
+    ln -s "$t/p" "$p_short/p"
+    p_root=$p_short/p
+  fi
   phone() {
-    local r=$t/p/$1
+    local r=$p_root/$1
     rm -rf "${r:?}"; mkdir -p "$r/etc/omamobile" "$r/usr/share/omamobile/rootfs" "$r/proc/sys/kernel/random" \
       "$r/usr/bin" "$r/usr/lib/omamobile-install-link" "$r/fake-systemd"
     : > "$r/etc/omamobile/install-link"
@@ -469,8 +479,8 @@ EOF
   pids+=("$dp")
   for _ in $(seq 100); do [[ -S $r/run/omamobile-install-link/agent ]] && break; sleep 0.05; done
   : > "$t/tap"
-  ( AGT=$t OMAMOBILE_LINK_ROOT=$r OMAMOBILE_LINK_NOTIFY=$t/notify OMAMOBILE_LINK_CLOSE=$t/close OMAMOBILE_LINK_WINDOW=$t/window \
-      OMAMOBILE_LINK_RETRY_S=0.1 XDG_STATE_HOME=$t/pstate timeout 6 python3 -I "$AG" > "$t/agent2.out" 2>&1 || true )
+  ( (cd "$r" && AGT=$t OMAMOBILE_LINK_ROOT=. OMAMOBILE_LINK_NOTIFY=$t/notify OMAMOBILE_LINK_CLOSE=$t/close OMAMOBILE_LINK_WINDOW=$t/window \
+      OMAMOBILE_LINK_RETRY_S=0.1 XDG_STATE_HOME=$t/pstate timeout 6 python3 -I "$AG") > "$t/agent2.out" 2>&1 || true )
   kill "$dp" 2>/dev/null || true; wait "$dp" 2>/dev/null || true
   [[ $(state_of "$r") == firstboot-done ]] || { cat "$r/daemon.log"; fail "the daemon's state is firstboot-done"; }
   grep -c 'Setup is not finished' "$t/notify.log" >/dev/null || { cat "$t/agent2.out" "$r/daemon.log"; fail "the real daemon opens the agent's notice"; }

@@ -58,9 +58,15 @@
 #                 (needs no key: the bundle stage signed it; the root image
 #                 is authorised by that MANIFEST and manifest.json alone)
 #   upload        [8] tools/release-upload --dry-run of the bundle; the real
-#                 upload is Derek's (server), then `upload --done`
+#                 upload is Derek's (server), then `upload --done`. With a
+#                 BUILD_HOST (omamobile.local.conf) it prints the build-host
+#                 route: the bundle's and root image's seven files rsynced
+#                 to its out/bundle/, its checkout updated, release-upload
+#                 run there (ssh -t), since only its omapub may write the
+#                 server
 #   promote       [8] the pinned development index to stable, unchanged
-#                 (Derek: tools/repo-publish stable --expect-index)
+#                 (Derek: tools/repo-publish stable --expect-index, on the
+#                 build host over ssh -t when there is one)
 #   tag           [9] the release notes are final; release-V tagged here
 #                 (Derek pushes it and opens the GitHub release)
 #   scan PATH...  the identifiers stage's scan alone, on any files or
@@ -116,6 +122,48 @@ run() {
   if ((dry)); then printf '    would run: %s\n' "$*"; else printf '    $ %s\n' "$*"; "$@"; fi
 }
 
+# The account that writes pkgs.omamobile.org: since 2026-11-17 only omapub,
+# and only with the build host's key, so the upload and the promotion run on
+# the build host (tools/release-upload and tools/repo-publish default to it)
+PKGS_HOST=${OMAMOBILE_PKGS_HOST:-omapub@nostr01.derekross.me}
+# The build host, as tools/build-host-sync reads it: BUILD_HOST and
+# BUILD_HOST_REPO from omamobile.conf and omamobile.local.conf, read in a
+# subshell so that nothing else there changes this tool. Sets bh, bh_repo
+# and bh_rrepo (rsync's path, relative to its home); fails when none is set
+build_host() {
+  local conf_out
+  conf_out=$(
+    # shellcheck disable=SC1091
+    [[ ! -f omamobile.conf ]] || source ./omamobile.conf
+    # shellcheck disable=SC1091
+    [[ ! -f omamobile.local.conf ]] || source ./omamobile.local.conf
+    printf '%s\n%s\n' "${BUILD_HOST:-}" "${BUILD_HOST_REPO:-}"
+  ) || die "can't read omamobile.conf or omamobile.local.conf"
+  { read -r bh; read -r bh_repo; } <<<"$conf_out"
+  [[ -n $bh ]] || return 1
+  # Put into printed shell commands unquoted: plain characters only
+  [[ $bh =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || die "BUILD_HOST '$bh' is not USER@HOST"
+  # shellcheck disable=SC2088 # expanded by the build host's shell
+  bh_repo=${bh_repo:-'~/Projects/omarchy-mobile'}
+  [[ $bh_repo =~ ^(~/|/)?[A-Za-z0-9._][A-Za-z0-9._/-]*$ && $bh_repo != *..* ]] || die "BUILD_HOST_REPO '$bh_repo' is not a plain path"
+  [[ $PKGS_HOST =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || die "OMAMOBILE_PKGS_HOST '$PKGS_HOST' is not USER@HOST"
+  bh_rrepo=${bh_repo#\~/}
+}
+# The promotion of INDEX to stable, for the maintainer: on the build host
+# when there is one (with a terminal, for repo-publish's question; never
+# --yes), else here
+derek_promote() {
+  local index=$1 bh bh_repo bh_rrepo
+  if build_host; then
+    derek "# on the build host, which alone may write pkgs.omamobile.org (as $PKGS_HOST):" \
+          "ssh -t $bh 'cd $bh_repo && OMAMOBILE_PKGS_HOST=$PKGS_HOST tools/repo-publish --dry-run stable --expect-index $index'" \
+          "ssh -t $bh 'cd $bh_repo && OMAMOBILE_PKGS_HOST=$PKGS_HOST tools/repo-publish stable --expect-index $index'"
+  else
+    derek "tools/repo-publish --dry-run stable --expect-index $index" \
+          "tools/repo-publish stable --expect-index $index"
+  fi
+}
+
 dry=0 version=$(date +%Y.%m.%d) kernel_tag=""
 while (($#)); do
   case $1 in
@@ -146,6 +194,13 @@ put() {
   local tmp
   tmp=$(mktemp "$rel/.state.XXXXXX")
   { [[ -f $state ]] && grep -v "^$1=" "$state" || true; printf '%s=%s\n' "$1" "$2"; } > "$tmp"
+  mv "$tmp" "$state"
+}
+unput() {
+  [[ -f $state ]] || return 0
+  local tmp
+  tmp=$(mktemp "$rel/.state.XXXXXX")
+  { grep -v "^$1=" "$state" || true; } > "$tmp"
   mv "$tmp" "$state"
 }
 # One release, one kernel: a recorded tag is never swapped under it
@@ -613,8 +668,7 @@ st_test_install() {
       no)
         index=$(need repo_index packages)
         say "stable has no index yet: the first release to this server"
-        derek "tools/repo-publish --dry-run stable --expect-index $index" \
-              "tools/repo-publish stable --expect-index $index"
+        derek_promote "$index"
         die "promote index ${index:0:12} to stable once (above), then run test-install again: the installed phone follows stable, and its first update needs an index there. Stage promote still runs after the test, on the same index" ;;
       *) die "can't tell whether stable has an index ($STABLE_INDEX_URL: HTTP $have): the attended install needs the server, so check the connection and run test-install again" ;;
     esac
@@ -870,7 +924,8 @@ bundle_extra_files() {
 }
 
 st_identifiers() {
-  local dir img manifest notes t f list=()
+  local dir img manifest notes t f initramfs cpio_err cpio_bytes cpio_size list=()
+  ((dry)) || unput identifiers_done
   dir=$(need bundle bundle)
   img=$(need rootfs rootfs)
   manifest=${img%.img.zst}.MANIFEST
@@ -902,8 +957,30 @@ st_identifiers() {
   done
   rm -f "$t/root.img"
   # The release initramfs the boot images carry
+  initramfs=$RELEASE_KERNEL_OUT/initramfs.cpio.lz4
+  [[ -e $initramfs ]] || die "missing release initramfs: $initramfs"
+  [[ -f $initramfs && -r $initramfs ]] || die "unreadable release initramfs: $initramfs"
   mkdir -p "$t/initramfs"
-  lz4 -dc "$RELEASE_KERNEL_OUT/initramfs.cpio.lz4" | (cd "$t/initramfs" && cpio -id --quiet --no-absolute-filenames 2>/dev/null) || true
+  lz4 -dc "$initramfs" > "$t/initramfs.cpio" ||
+    die "could not decompress release initramfs: $initramfs"
+  if ! (cd "$t/initramfs" && cpio -id --no-absolute-filenames) < "$t/initramfs.cpio" 2> "$t/cpio.err"; then
+    cat "$t/cpio.err" >&2
+    die "could not extract release initramfs: $initramfs"
+  fi
+  cpio_err=$(< "$t/cpio.err")
+  if [[ ! $cpio_err =~ ^([1-9][0-9]*)\ blocks?$ ]]; then
+    cat "$t/cpio.err" >&2
+    die "release initramfs $initramfs extracted with cpio warning or unexpected output"
+  fi
+  cpio_bytes=$((BASH_REMATCH[1] * 512))
+  cpio_size=$(wc -c < "$t/initramfs.cpio")
+  if ((cpio_bytes != cpio_size)); then
+    cat "$t/cpio.err" >&2
+    die "release initramfs $initramfs: cpio read $cpio_bytes of its $cpio_size bytes (bytes after the archive's end, or an unpadded stream)"
+  fi
+  rm -f "$t/initramfs.cpio" "$t/cpio.err"
+  [[ ! -L $t/initramfs/init && -f $t/initramfs/init ]] ||
+    die "release initramfs $initramfs unpacked without /init (empty or incomplete archive)"
   # debugfs rdump and cpio -id keep the image's modes, so a mode-0000 file or
   # directory in the image would otherwise be unreadable to the builder
   chmod -R u+rX -- "$t/rootfs" "$t/initramfs"
@@ -942,16 +1019,31 @@ st_verify() {
 }
 
 st_upload() {
-  local dir
+  local dir img root bh bh_repo bh_rrepo
   need verify_done verify >/dev/null
   dir=$(need bundle bundle)
+  img=$(need rootfs rootfs)
   say "§11.8: upload to pkgs.omamobile.org/releases/$DEVICE/$version/ (files before the index)"
   [[ $(basename "$dir") == "omamobile-$DEVICE-$version" ]] || die "$dir is not this release's bundle"
   if [[ ${1:-} != --done ]]; then
     # Checks the bundle's signature, files and root image, and prints the
     # ssh and rsync commands; uploads nothing
     run tools/release-upload --dry-run "$dir" || die "tools/release-upload --dry-run refuses $dir (above)"
-    derek "tools/release-upload --full --latest $dir"
+    if build_host; then
+      # The bundle, its one-file .tar with its two files, and the root
+      # image's three files beside it, as release-upload reads them there
+      [[ $dir == "out/bundle/omamobile-$DEVICE-$version" ]] || die "$dir is not out/bundle/, where the build host's checkout takes it"
+      root=out/bundle/$(basename "$img")
+      [[ $root =~ ^[A-Za-z0-9._/-]+\.img\.zst$ ]] || die "the root image $root has no plain name"
+      derek "# to the build host, which alone may write pkgs.omamobile.org (as $PKGS_HOST):" \
+            "rsync -a --partial -- $dir $dir.tar $dir.tar.sha256 $dir.tar.sha256.sig $root $root.sha256 ${root%.img.zst}.MANIFEST $bh:$bh_rrepo/out/bundle/" \
+            "ssh $bh 'git -C $bh_repo pull --ff-only origin main'" \
+            "ssh -t $bh 'cd $bh_repo && OMAMOBILE_PKGS_HOST=$PKGS_HOST tools/release-upload --dry-run $dir'" \
+            "ssh -t $bh 'cd $bh_repo && OMAMOBILE_PKGS_HOST=$PKGS_HOST tools/release-upload --full --latest $dir'" \
+            "# then here: tools/release --version $version upload --done"
+    else
+      derek "tools/release-upload --full --latest $dir"
+    fi
   fi
   ((dry)) && return 0
   if [[ ${1:-} == --done ]]; then
@@ -972,8 +1064,7 @@ st_promote() {
      [[ $(sha256sum < out/publish/development/aarch64/omamobile.db.tar.gz | cut -d' ' -f1) != "$index" ]]; then
     die "development moved past the tested index ${index:0:12}: promote nothing; cut a respin (.1) from the new index, or republish the tested one"
   fi
-  derek "tools/repo-publish --dry-run stable --expect-index $index" \
-        "tools/repo-publish stable --expect-index $index"
+  derek_promote "$index"
   ((dry)) && return 0
   if [[ ${1:-} == --done ]]; then
     local url=https://pkgs.omamobile.org/stable/aarch64/omamobile.db got
@@ -986,7 +1077,7 @@ st_promote() {
 }
 
 st_tag() {
-  local notes krel ktag tag=release-$version head
+  local notes krel ktag idd tag=release-$version head
   need promote_done promote >/dev/null
   krel=$(need kernel_release build)
   ktag=$(need kernel_tag kernel)
@@ -995,7 +1086,8 @@ st_tag() {
   [[ -f $notes ]] || die "no $notes (start from docs/release-notes/*-DRAFT.md)"
   ! grep -nE 'DRAFT|MM\.DD|TODO|XXX|<[a-z][a-z ._-]*>' "$notes" >&2 || die "$notes still has placeholders (above)"
   grep -qF "$ktag" "$notes" && grep -qF "$krel" "$notes" || die "$notes must name $ktag and uname -r $krel"
-  [[ $(get identifiers_done) != *"notes not yet scanned"* ]] || die "the identifiers stage ran before $notes existed: run it again"
+  idd=$(need identifiers_done identifiers)
+  [[ $idd != *"notes not yet scanned"* ]] || die "the identifiers stage ran before $notes existed: run it again"
   git fetch -q origin main
   head=$(git rev-parse HEAD)
   [[ $head == "$(git rev-parse origin/main)" ]] || die "tag from origin/main: this checkout is ${head:0:12}, origin/main is $(git rev-parse --short=12 origin/main)"

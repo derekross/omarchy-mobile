@@ -3,6 +3,90 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1237. A descriptor set to `ram-only` turns "later writes go through the
+  project's tools" into "no tool will write it", and the review says so.** On
+  #993 the decision asked for project tools for every later `boot`/`userdata`
+  write, while `bin/omamobile` refuses `initramfs-config`, `images`, `flash`
+  and `push` for `BOOT_METHOD=ram-only` (lines 640, 691, 908, 1282, 1348).
+  *Check:* for a device whose notes promise tool-only writes, `DEVICE=<x>
+  bin/omamobile initramfs-config <scratch>` and grep `bin/omamobile` for the
+  method's refusals; name the descriptor change that turns the tools on and
+  what the owner uses until then. Extends L-1029 and L-82. *From:* #993, round
+  69.
+- **L-1228. A soname-rebuild PR is checked against the issue tracker and every
+  channel the old build is on, not only the channel the description names.**
+  #1124 missed #1098, which showed stable phones blocked; merging feeds
+  development only. *Check:* `gh issue list --search '<library>'`, then
+  `bsdtar -tf` each channel's `omamobile.db` for the old version. *From:*
+  #1124, 2026-11-27.
+- **L-1227. A fix that seeds an upstream tool's state file is checked by
+  running the upstream tool on every content the seed leaves alone, not only
+  on the content it writes.** #1045 seeds Omarchy's per-source profile file
+  only when it is empty, and Omarchy's `omarchy-powerprofiles-set` falls back
+  to Performance on AC for any value that isn't a profile name, so a non-empty
+  but unusable file keeps the behaviour the seed exists to prevent. *Check:*
+  extract the upstream script from the signed package, run it under `env -i`
+  with stand-ins for each file state (missing, empty, the seeded value, a
+  stale or malformed value, the owner's choice) and tabulate what it picks;
+  ask the seed to test for the values the reader accepts. Extends L-1184 and
+  L-716. *From:* #1045, round 69.
+- **L-1226. A check that a kernel "has fix X" by finding X's function or log
+  text in a module is checked against the match data that decides whether the
+  code runs on the target SoC.** #912's 9a relied on
+  `omamobile-modem-sleep-policy`, which greps `pcie_gs201_cp.ko` for #232's
+  notifier; the text is compiled in for every SoC, but zumapro's `sleep_guard`
+  came a day later with kernel #258, so `kernel-2026.11.15` passes the test on
+  a 9a with no early refusal registered. *Check:* for a userspace "does the
+  kernel have it" test, find the code's gate (`git grep -n '<function>'
+  <driver>` and the `if` around its registration), list each SoC's match data
+  at each release tag (`git show <tag>:<file> | grep -n '<flag> ='`), and ask
+  what the test says on the tag between the two commits. Extends L-1006 and
+  L-1129. *From:* #912, round 69, 2026-11-26.
+- **L-1225. A "the package checks the running kernel" answer is read for which
+  commit the check really proves, when the fix is several commits.** #997's
+  regmap `access` probe proves the write-table commit of kernel #262 and not
+  the power-off commit that is the actual fix; it holds only because both
+  always land together. *Check:* for each proposed probe, name the one commit
+  whose presence it shows (`git log -S'<the probed text>'`), list the fix's
+  commits, and write in the review when a kernel could have one without the
+  other (a cherry-pick, a revert). Extends L-1129 and L-1006. *From:* #997,
+  round 69, 2026-11-26.
+- **L-1224. A smoke report attached to one PR is read for failures that belong
+  to main, and they are named apart from the PR's verdict.** #887's report
+  from the 9a showed `omamobile-bt-addr@hci0:11.service` failed, the
+  per-connection device that L-469 (round 40) described, and every device
+  package on main still carries the same `KERNEL=="hci[0-9]*"` rule. *Check:*
+  for each failed unit in a report's "systemd units" row, `git grep -n '<unit
+  name>' origin/main -- packages` and ask whether the PR could cause it; if
+  not, put it on the maintainer's list with the lesson that already explains
+  it. Extends L-469 and L-433. *From:* #887, round 69.
+- **L-1223. A smoke report from a boot that skipped the descriptor's overlays
+  is evidence for the package, not for the overlays, and the review checks the
+  running tree for them.** #914's 11-25 boot passed its required checks while
+  the touchscreen node read `disabled` in `/proc/device-tree`, though the
+  descriptor names `synaptics-touch-test`; its author noticed only afterwards.
+  *Check:* for a report from a device whose descriptor has `DTB_OVERLAYS`, ask
+  for one `status` read per overlay node from `/proc/device-tree` (read-only),
+  and list the results that depend on each. Extends L-1062 and L-315. *From:*
+  #914, round 69.
+- **L-1222. A decision posted mid-session is laid against the record's boot
+  times for the trials just after it, and a reply written minutes after a
+  trial is read for whether it mentions that trial.** #1002's v71 booted 1 h
+  40 min after the backup-freshness decision on the old copy, and the author's
+  reply twelve minutes later spoke only of "the next session". *Check:* take
+  the decision's `created_at`, list every trial row whose boot request is
+  later (`grep -n 'requested at\|boot request' <plan>`), and check each row's
+  backup column against the rule; read the next reply for each such trial.
+  Extends L-1024 and L-1180. *From:* #1002, round 69.
+- **L-1221. A contributor's thanks for evidence nobody posted is asked about
+  before the change it motivated is reviewed.** #202's author fixed the DSC
+  PPS "after that PPS comparison" and asked for "your userspace test"; no
+  comment in either repository since the last review held such a comparison,
+  so the "60 of 128 bytes" had no source. *Check:* `gh api
+  "repos/<r>/issues/comments?since=<last review>"` in both repositories,
+  grepped for the noun the thanks names; if absent, ask in the draft where it
+  came from and put the answer in the commit message. Extends L-838 and L-61.
+  *From:* kernel #202, round 69.
 - **L-1180. When a reply lists trials that ran after a "before the next boot"
   request, the trial rows are asked for times, and the source commits' dates
   bound the window.** #1002's notes record v21 to v28 on the phone with no
@@ -331,83 +415,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   *Check:* `grep -n '^-.*\(Copyright\|Author\|SPDX\|based on\)'
   patches/*.patch`; any hit is a request to keep the notice and add to it.
   Extends L-62 and L-221. *From:* #888, round 61, 2026-11-18.
-- **L-918. A contributor's incident log is read for what it says about a
-  claim we published.** #881's log shows the network ending the IMS bearer
-  with the internet one; the 2026.11.15 release notes say calls and texts "use
-  a separate connection, which didn't drop". *Check:* `git grep -n -i
-  '<subsystem>' docs/release-notes/<latest>.md docs/DEVICES.md` for sentences
-  the new evidence contradicts, and put them in the maintainer's list. Extends
-  L-654 and L-433. *From:* #881, round 61, 2026-11-18.
-- **L-915. A timed client run that returns nothing is not yet a failure or a
-  pass: the timeout is compared with the receiver's recorded cold start.** On
-  #864 two of five 40 s `where-am-i` runs were empty, where the sibling PR
-  records a cold first fix of about 55 s on the other phone of that model.
-  *Check:* find the device's time to first fix in its plan or the sibling
-  thread; ask for the empty cases again with a wait above it and the daemon's
-  log for that window, before the title's claim is called shown or broken.
-  Extends L-440 and L-482. *From:* #864 with #863, round 61, 2026-11-18.
-- **L-914. A notes entry that names a package by a version an open PR claims
-  is checked against the merge order.** #846's MODEM-PLAN says
-  "omamobile-modem-sit 0.3.44, #837's branch" while #881 was about to take
-  0.3.44. *Check:* for each unmerged version a record cites, list the open PRs
-  claiming it and ask for the commit id beside it. Extends L-774 and L-426.
-  *From:* #846 with #837 and #881, round 61, 2026-11-18.
-- **L-869. A percent-per-time figure that disagrees with the measured current
-  is settled by integrating the current column, and the result is read against
-  every rule that uses the percentage.** On kernel #267, 7 % in 18 minutes was
-  103.6 mAh, 2 % of the pack: the gauge's percent runs ahead near full, which
-  is the input of the PR's own "recharge at 95 %" rule. *Check:* `awk` the
-  posted log (trapezoid over `current_now`), compare with the `capacity`
-  deltas, and grep the diff for uses of `POWER_SUPPLY_PROP_CAPACITY`. Extends
-  L-397. *From:* kernel #267, round 61, 2026-11-18.
-- **L-855. "The guard in this tree already covers it" is checked on main and
-  in the open PRs before the question it comes with is answered.** Kernel
-  #260's reply asked to enable the eMMC because the guard "already walks
-  mmcblk"; main's `initramfs/init` has no `mmcblk`, and no PR carries one.
-  *Check:* `git grep -n '<mechanism>' origin/main -- initramfs` and `gh pr
-  list --search '<device>'`; if it is only in the contributor's tree, the
-  answer is "send it first". Extends L-201, L-601 and L-321. *From:* kernel
-  #260, round 60, 2026-11-17.
-- **L-851. A test note stamped on every commit of a series is checked against
-  which commits existed when the kernel was built.** Kernel #202's
-  `Tested-on:` line named a release built from `61e15599a196` and was also on
-  the two commits made after it, one of which changes a command sequence.
-  *Check:* `git merge-base --is-ancestor <commit> <tested id>` (or `git diff
-  <tested id> <head>` per file) for each commit that carries the note. Extends
-  L-341 and L-379. *From:* kernel #202, round 60, 2026-11-17.
-- **L-841. A count of sightings ("the one case seen", "every") in a commit
-  message or a plan is compared with the linked issue at review time, not at
-  writing time, and again at each later push.** Kernel #261 was written on
-  11-15; issue #169 gained a second phone on 11-16, which also showed the
-  condition is not "every flat boot". Round 60 caught it in the commit message
-  and not in #815's plan beside it, whose third commit still said "the one
-  instance" and whose last runbook step rests on it. *Check:* for every
-  `Link:` or cited issue, `gh issue view N --json comments` filtered to
-  comments newer than the text's date; for each count word find the comment
-  that confirms or breaks it, and re-read every step whose Pass rests on it.
-  Extends L-266, L-723 and L-774. *From:* kernel #261, round 60; #815 with
-  issue #169, round 62, 2026-11-18.
-- **L-835. A cell that says "public node disabled" is checked for the node on
-  the published branch, not in the pull request that proposes it.** #871
-  called kernel #242's node "public" while #242 was open, and named an enable
-  overlay that is in no pull request. *Check:* `git grep` the node's
-  compatible in the board file on `github/omamobile`, `gh pr view` the kernel
-  PR's state, and `git ls-tree` the device's `overlays/` on main and the
-  author's open heads for each overlay a note names. Extends L-561 and L-774.
-  *From:* #871, round 60, 2026-11-17.
-- **L-832. A fix branch's "one commit on the published branch" is counted from
-  the release the phone runs.** #815's test kernel was called the fix alone;
-  its base is seven commits past `kernel-2026.11.15`, one of them in a driver
-  the 7 Pro binds. *Check:* `git log --oneline <release tag>..<fix>^`, and
-  list what touches a reference-phone driver in the runbook's push step.
-  Extends L-273 and L-646. *From:* #815 with kernel #261, round 60,
-  2026-11-17.
-- **L-826. A bring-up overlay's "the driver is blacklisted" is checked against
-  which package carries the blacklist and whether that phone installs it.**
-  #861's `gnss.dtso` leans on omamobile-gnss's `blacklist bcm4775x_gnss`;
-  panther's image and device package install no omamobile-gnss, so the promise
-  held only on the tester's phone. *Check:* `git grep -n "blacklist <module>"
-  origin/main -- packages`, then the device's `ROOTFS_PACKAGES` and its device
-  package's `depends=`; if neither brings the package, the notes name it as a
-  step before the first boot. Extends L-387, L-402 and L-442. *From:* #861,
-  round 60, 2026-11-17.

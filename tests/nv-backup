@@ -277,22 +277,31 @@ pass "a verified backup survives a closed stdout during the banner"
 
 # --- A partition that changes during the copy --------------------------------------
 # After the seventh (last) verifying read, one partition turns writable,
-# gets mounted, or changes size: the re-probe after the copy must refuse
-# the backup and leave no SHA256SUMS.
+# gets mounted, vanishes or changes size: the re-probe after the copy must
+# refuse the backup and keep nothing.
 changed() {  # changed WHAT PATTERN CHANGE
+  local dir=$t/changed-$1 existed=0
+  [[ -d $dir ]] && existed=1
   rm -f "$PHONE_LOG.sums"
-  if out=$(CHANGE_AFTER=7 CHANGE=$3 "$r/tools/nv-backup" -d testdev "$t/changed-$1" 2>&1); then
+  if out=$(CHANGE_AFTER=7 CHANGE=$3 "$r/tools/nv-backup" -d testdev "$dir" 2>&1); then
     fail "refuses a backup when a partition $1 during the copy"
   fi
   grep -c -- "$2" <<<"$out" >/dev/null || fail "says why when a partition $1 during the copy ($2): $out"
-  [[ ! -e $t/changed-$1/SHA256SUMS ]] || fail "no SHA256SUMS when a partition $1 during the copy"
+  if ((existed)); then
+    [[ -d $dir && -z $(ls -A "$dir") ]] || fail "existing directory is left empty when a partition $1 during the copy"
+  else
+    [[ ! -e $dir ]] || fail "nothing is kept when a partition $1 during the copy"
+  fi
   make_phone
 }
 changed "turns writable" "efs: /dev/$efs is writable" "echo 0 > '$P/sys/class/block/$efs/ro'"
 changed "gets mounted" "persist: /dev/$(dev_of persist) is mounted" "echo '/dev/$(dev_of persist) /mnt ext4 ro 0 0' >> '$P/proc/mounts'"
 changed "moves" "efs: not found by PARTNAME" "sed -i 's/^PARTNAME=efs\$/PARTNAME=gone/' '$P/sys/class/block/$efs/uevent'"
+changed "grows" "efs changed size from 1536 to 2048 bytes" "echo 4 > '$P/sys/class/block/$efs/size'"
+mkdir "$t/changed-shrinks"
+changed "shrinks" "efs changed size from 1536 to 1024 bytes" "echo 2 > '$P/sys/class/block/$efs/size'"
 before=$(tree_state)
-pass "the re-probe after the copy refuses a partition that turned writable, got mounted or vanished"
+pass "the re-probe after the copy refuses a partition that turned writable, got mounted, vanished or changed size"
 
 # --- --check ---------------------------------------------------------------------------
 : > "$PHONE_LOG"
