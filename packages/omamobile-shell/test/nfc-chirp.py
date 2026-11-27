@@ -22,6 +22,7 @@ loader = importlib.machinery.SourceFileLoader("nfc_chirp", os.path.join(HERE, ".
 chirp = importlib.util.module_from_spec(importlib.util.spec_from_loader("nfc_chirp", loader))
 loader.exec_module(chirp)
 
+CHIRP_SHA256 = "9de02030302fca57b974468c4d06f062e4afb71699b62b0c43baa545fdc96a21"
 failures = 0
 
 
@@ -101,5 +102,10 @@ with tempfile.TemporaryDirectory() as d:
     check("peak about -6 dBFS", 15000 < peak <= 16500, peak)
     check("same bytes every run",
           hashlib.sha256(open(a, "rb").read()).digest() == hashlib.sha256(open(b, "rb").read()).digest())
+    # pinned so two builds of one version can't drift apart; a change to the
+    # generator updates this on purpose (math.sin is libm, so another
+    # architecture that rounds differently would show up here first)
+    digest = hashlib.sha256(open(a, "rb").read()).hexdigest()
+    check("the pinned sha256", digest == CHIRP_SHA256, digest)
 
 sys.exit(1 if failures else 0)

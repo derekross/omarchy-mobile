@@ -132,3 +132,7 @@ its quote-aware launcher is released separately in omarchy-pkgs.
 ## Device settings
 
 After the shared rules, `hypr/phone.lua` loads `/usr/share/omamobile/hypr/device.lua` if a device package installs one, for settings only that phone needs (an inner and an outer panel, its own input devices). Every session that loads `phone.lua` (setup-user adds it to `looknfeel.lua`) gets it, new and existing users alike. It runs under `pcall`: a syntax or runtime error in the device file is logged and the shared rules stay in force. With no device file nothing changes, so every phone today is unaffected.
+
+## NFC tag sound
+
+`omamobile-nfc-chirp` (a user service) plays a short chirp when neard finds a tag or a phone; `~/.config/omamobile/nfc.json` turns it off (`{"sound": false}`) or picks another file. It doesn't follow Do not disturb: a tap while DND is on still chirps.

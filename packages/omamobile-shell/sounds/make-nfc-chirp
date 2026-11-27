@@ -6,7 +6,7 @@ licence and no audio file is kept in the repository.
 
 Three quick rising whistles, the last one longer, 0.33 s in all:
 mono, 48 kHz, 16-bit WAV, peak about -6 dBFS. The output is the same bytes
-on every run on one machine.
+on every run; test/nfc-chirp.py pins its sha256 (checked on x86_64).
 
 Usage: make-nfc-chirp OUTPUT.wav
 """
