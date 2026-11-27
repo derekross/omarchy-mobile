@@ -7772,6 +7772,67 @@ can enumerate modes without a display commit once
 the connector probe path and its power dependencies
 are understood.
 
+###### Offline CGYDA mode enumeration and DRM file lifetime
+
+The DP-off boot registered `card0-DSI-1` with an
+empty cached mode list. Reading the sysfs `modes`
+file only displays that list. In exact D1
+`drm_mode_getconnector` (`Image+0xba15a8`), the
+branch at `0xba17bc`–`0xba17f4` calls
+`fill_modes` only for a current DRM master whose
+request has `count_modes=0`. A subsequent request
+with a nonzero buffer count returns the cached
+modes without invoking that branch again.
+
+The stock Google connector's `fill_modes` points
+to `drm_helper_probe_single_connector_modes`
+(`Image+0xbddb24`). Its detect and force callbacks
+are absent, as is the panel connector helper's
+`detect_ctx`. The generic detect path defaults to
+connected. The connector's `get_modes`
+(`gs-panel.ko+0xb5b4`) calls `drm_panel_get_modes`,
+which dispatches to `gs_panel_get_modes`
+(`gs-panel.ko+0x24cc`). That function walks the
+in-memory descriptor and duplicates accepted entries
+into the probed mode list. The CGYDA filter at
+`panel-gs-pkcgda.ko+0x4884` rejects rows with flag
+`0x2000`. The stock connector, DSI encoder, DSI2H
+and panel bridges, and DPU CRTC have no pipeline
+`mode_valid` callback on this path. The inspected
+enumeration callbacks require no panel power vote or
+DSI transfer.
+
+The normal CGYDA table contains six entries. The two
+60 Hz entries set `0x2000` and are filtered. Four
+120 Hz candidates remain across 1280×2856 and
+1080×2410. Two of those use `vscan=2` and twice the
+pixel clock of their same-resolution counterpart.
+The 30 Hz entries are in a separate low-power table.
+Descriptor selection and DRM filtering still apply,
+so the exact userspace count is unverified.
+
+A standalone DRM query would introduce a hardware
+operation on close. Exact D1 `drm_release`
+(`Image+0xbb13fc`) calls `drm_file_free` at
+`0xbb14c8` before decrementing `open_count` at
+`drm_device+0xe0`. `drm_file_free` invokes the
+driver's `postclose` at `Image+0xbb1110`.
+`vs_drm_postclose` (`vs_drm.ko+0x9d68`) sees a
+count of one for the last file and calls
+`drm_atomic_helper_shutdown` and `vs_dc_sw_reset`.
+The reset path acquires FE and BE power and resets
+and reinitializes the display controller. It can run
+even when the client only queried modes.
+
+No DRM client was added to the fixture. Before
+introducing one, qualify its lifetime and teardown,
+or capture enumeration passively from an existing
+stock DRM client without opening another file. In
+either case use `gs_panel_get_modes`, the DSI2H
+host transfer callback and `vs_drm_postclose` as
+separate trace points to distinguish enumeration,
+panel traffic and teardown.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
