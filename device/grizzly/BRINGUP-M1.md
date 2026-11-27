@@ -9632,6 +9632,36 @@ requires a qualified PSM1 observation at that point.
 The audit leaves both the candidate PSM1 read and the
 mainline PHY TX and host reads disabled.
 
+###### Offline search for the D1 PSM1 descriptor
+
+The retained stock D1 display bugreport's
+`dumpstate_board.bin` contains a 311,280-byte
+`bootlogs/bl_data.bin` made entirely of text. The
+crash-dump entries report that APC and CPM register
+dumps were unavailable (`-2`). The archive contains
+no raw DPU register snapshot or DPU PSM1 row. A scan
+of 213 retained trial-capture files also found no
+PSM1 descriptor address, legacy status address, or
+DPU PSM1 label. The available parser fixtures are
+synthetic and supply no device observations.
+
+In the exact D1 FBPK, the ABL and CPM records contain
+the respective LPCM bases. The GC entries describe
+page policy. Neither descriptor alias appears as an
+address literal in either byte order. The DPU
+initializer pointer for LPCM `0x23` selects
+`0x5c814`. Decoding all 17 records shows that its
+first write is at CPM `0x6f409008` and no write covers
+the descriptor at `0x6f409018`. ABL's direct caller
+of the generic AP PSM decoder uses HSIO-S. The named
+DP0 capture records identify stream targets, without
+a register range or descriptor value.
+
+The descriptor value and therefore the exact status
+word remain unresolved. EL1 access cannot be qualified
+from the page policy alone. Keep the PSM1, PHY TX and
+host reads disabled.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
