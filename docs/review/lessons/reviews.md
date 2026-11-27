@@ -3,6 +3,84 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1236. A notes entry added by a fix-up push is read in the rendered file,
+  not only in the diff.** #829's new section sat between two rows of an
+  existing table, so the diff read as a clean addition and the render cut the
+  table in two. *Check:* for each new `## ` heading a docs push adds, `grep -n
+  -B1 -A1 '^## <title>'` the head's file and look for a `|` line on both
+  sides. Extends L-770. *From:* #829, round 69.
+- **L-1235. A second fix for a symptom whose first fix waits on our own run is
+  answered with the run, not a second wait.** #1079 re-did #423's one-line
+  udev fix three weeks later because #423 had sat since 11-05 behind a 7 Pro
+  check the maintainer took on; L-469 (from #423's review) already named the
+  bug. *Check:* at each round, `grep -rn '#<N>' docs/review/lessons` for open
+  PRs a lesson cites, and for each PR whose only open step is our run, list it
+  at the top of the round's maintainer list with the run written out. Extends
+  L-923, L-840 and L-686. *From:* #1079 with #423, round 69, 2026-11-26.
+- **L-1234. A shell setting that Omarchy's own display or settings panels
+  already offer is checked for Omarchy's writer before the PR's, and every
+  open PR that writes the same file is listed.** #1104 reimplemented
+  `omarchy-display-text-size` (shipped in 4.5, behind Omarchy's display panel)
+  with a store of its own, while #1003 drives the same command from Settings;
+  three writers and two stores, found by grepping the pinned package's
+  `shell/plugins/panels` for the file the PR writes. *Check:* `grep -rn '<the
+  config file or key>' <extracted omarchy
+  package>/usr/share/omarchy/shell/plugins/panels <...>/usr/bin` and `gh pr
+  list --search '<the setting>'` before reading the PR's code; put "one
+  writer" to the maintainer when there are two. Extends L-948 and L-987.
+  *From:* #1104 with #1003, round 69.
+- **L-1233. A config line that a board change needs at boot merges before the
+  board change, even though the line is inert alone, and the two PRs become
+  one merge step.** L-1038's order ("after the kernel PR") is for a line that
+  turns new behaviour on. Kernel #118 adds `phys` to the PHY of the 9a's only
+  USB link, so the PHY waits for the repeater, and #1058's `=y` is what keeps
+  the initramfs USB alive then. merge_config drops an unknown symbol with a
+  warning, so the config PR can land first, while a release kernel built from
+  the tip between the board commit and the config line would have no gadget
+  and burn slot B's ABL tries. *Check:* for a fragment PR tied to a kernel PR,
+  ask which of the two, merged alone into a release kernel, breaks a phone;
+  that one goes second. For a new `phys`, `*-supply` or `power-domains` on a
+  link node, find the provider's Kconfig symbol in
+  `kernel/configs/omamobile.config` on main; if it is in an open omamobile PR,
+  put both in one merge step, written as "before any build from the tip".
+  Extends L-1038, L-678 and L-37. *From:* #1058 with kernel #107 and #118,
+  round 69.
+- **L-1232. A device PR that grows by commits after it is opened is read for
+  each shared file the late commits touch, against the decisions already made
+  about that file.** #1070's later commits added a 10 s `userdata` wait to
+  `initramfs/init` and three linux-msm packages to the nightly `ORDER`, both
+  after the maintainer's decisions on #993 (the guard in its own PR) and #931
+  (linux-msm userspace built only when named). *Check:* `git log --format='%h
+  %cI %s' <first reviewed head or base>..<head> -- initramfs bin tools rootfs
+  'packages/*/PKGBUILD'`, then grep r66/decide and the recent decision
+  comments for each file's name. Extends L-1187 and L-368. *From:* #1070,
+  round 69, 2026-11-26.
+- **L-1231. A fix to another contributor's open PR carried in a stacked PR is
+  asked into the PR it fixes.** #276 carries `cb113eb7`, a change to #273's
+  Fold file, so a rebase merge would land the Fold's fix under the 9 Pro XL's
+  PR and leave #273's own head broken. *Check:* `git log --format='%h %s'
+  <bottom head>..<top head> -- <files only the bottom adds>`; each hit goes to
+  the bottom PR or to the maintainer's landing of it. Extends L-610 and L-844.
+  *From:* kernel #276 with #273, round 69.
+- **L-1230. A board PR that answers a review by dropping a driver hunk is read
+  for what the dropped hunk was carrying on that board.** #276's DECON
+  compatible came out as asked, and with it komodo's mode table, so the head's
+  gs-decon refuses komodo's 1344x2992 handoff at probe, while the description
+  and the matrix still quote the predecessor tree's DSI-1 at 1344x2992.
+  *Check:* for each hunk a rework removes, `git grep` the base for the data
+  the board now falls back to (`*_decon_data.modes`), walk the probe's check
+  with the board's values, and ask the commit message to name the interim
+  state. Extends L-45 and L-490. *From:* kernel #276, round 69.
+- **L-1229. When a contributor drops a patch from a branch, the review diffs
+  the shared files against the last head that had it, because a fix that rode
+  on it can go with it while the change it compensated for stays.** #1092's
+  `b63401ca` trusted devices after an accepted incoming pairing, needed only
+  because the first commit made `AuthorizeService` Trusted-only; dropping 0036
+  reverted the trust step and kept the restriction, so a car's services were
+  refused right after pairing. *Check:* for each "drops 0036/0037"-style
+  commit, `git diff <last head with the patch> <head> -- <every file outside
+  the dropped patch>` and read each removed hunk against the commits that
+  stayed. Extends L-919 and L-183. *From:* #1092, round 69.
 - **L-1183. A gate keyed on a field that another unmerged PR adds leaves the
   second PR inert on merge, so its phone run belongs in the first PR's run.**
   #996's tile takes its new path only when #995's `radio_choice` is in sitd's
@@ -333,76 +411,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   head, list the hosts its `source=` adds, and put "named only until the first
   watched build" into the merge plan as an explicit step when the maintainer
   asked for it. Extends L-554 and L-420. *From:* #888, round 62, 2026-11-18.
-- **L-940. Open PRs that each add "the next patch number" merge with no
-  conflict and leave several files with one number.** #879, #610 and #924 each
-  add `patches/0032-...` under different names: git sees new files, all apply,
-  the `version` file is equal in two of them, and the series' order is no
-  longer unique. *Check:* each round, list `patches/NNNN-*` added by every
-  open PR for the package (`gh pr list --json files`, or `gh api
-  .../pulls/N/files`), flag equal numbers, grep each PR's tests and docs for
-  the number, and give the order and the rename, with the version, in every
-  one of the reviews. Extends L-426 and L-550. *From:* #879 with #610 and
-  #585, round 61, and #924, round 63, 2026-11-20.
-- **L-936. A rework that answers a review is checked for which runs in the
-  description still describe it.** #866's description still reported a value
-  "about 2 s later" and a lock "30 s later without a shell restart" from the
-  first version; neither behaviour existed at the new head, and the squash
-  would have published three superseded commit bodies. *Check:* after a
-  rework, strike each sentence of the description's test section that names a
-  value or step the diff removed (`git diff <old head> <new head> | grep '^-'`
-  for the numbers), and list what is left as evidence. Extends L-340, L-436
-  and L-312. *From:* #866, round 61, 2026-11-18.
-- **L-934. A merge order or future number we promise between two PRs is
-  re-derived each round, and said on the thread of every PR it renumbers.**
-  Round 60 told #860 and #866 "I expect #866 first"; a day later #866 waited
-  on a new patch PR and two phone runs while #860 had become inert. A comment
-  on #879 said "#610 then takes 0.1.50 and 0033" while #610's own thread said
-  only "0.1.49 is right today", so its author re-confirmed the old numbers,
-  and two newer PRs had made the promised ones wrong too. *Check:* for each "X
-  first" in our last comments, list what each PR still waits for today and say
-  when the order flips; when a draft names another PR's future number, add the
-  same sentence to that PR's draft, or say "the next free number, set at
-  merge" in both. Extends L-519, L-551 and L-426. *From:* #860 with #866 and
-  #879, round 61, and #610 with #879, #920 and #924, round 63, 2026-11-20.
-- **L-927. A package PR's line count is split into vendored, generated,
-  fetched-at-build and new code before anything is read, and the review says
-  what it read of each.** #888's 13,384 lines held no vendored source: 11,700
-  were new C, 7,100 of them inside patches against an upstream fetched at
-  build time, where "new" hides behind diff context. *Check:* per file, `wc
-  -l`, and for a patch `grep -c '^+'`, `'^-'` and `'^ '`; grep every added
-  line for
-  `g_spawn|system|popen|exec|fopen|g_file_|soup_|socket|getenv|dlopen`; read
-  in full whatever handles input, text or files; list the rest as unread.
-  *From:* #888, round 61, 2026-11-18.
-- **L-923. A fix PR is searched against the open PRs for the same symptom
-  before its code is read, our own open promises included.** #886 arrived five
-  days after #727 for the same portal bug with the same fix; #727 was waiting
-  on a Pixel 7 Pro run we had promised, so the second contributor spent a day
-  on a bug whose fix sat unmerged because of us. *Check:* `gh pr list --state
-  open --search "<the user-facing words>"` and the open heads' file lists for
-  the file the fix edits; when there is a twin, say so in both threads, name
-  which lands and why, and credit the first report in the squash body. Extends
-  L-720 and L-480. *From:* #886 with #727, round 61, 2026-11-18.
-- **L-922. A draft whose author named their own missing check is asked for
-  that check first.** #745's body ended "nobody has watched the screen ...
-  I'll look at it in the morning"; five days later nothing was posted and the
-  timings were still the only evidence. *Check:* read a draft's body for "not
-  tested", "I'll look" and "tomorrow", and put each at the top of the reply
-  with the date it was promised. Extends L-360 and L-480. *From:* #745, round
-  61, 2026-11-18.
-- **L-921. An open PR that edits a function main has since copied behind a
-  switch is reviewed as "which copy, under which switch value", before any
-  rebase.** #577 left `omamobile-keys` with two `wake_locked` definitions (the
-  new order, and the old one behind the switch); #745's hunk predates both,
-  and part of what it proposes for every phone is what main deliberately keeps
-  off on the reference phone. *Check:* `grep -n '^<fn>() ' <file>` on today's
-  main for every function the PR's diff touches; when there are two, name the
-  switch, say what the PR does under each value, and ask for the test under
-  both. Extends L-773 and L-615. *From:* #745 with #577, round 61, 2026-11-18.
-- **L-919. A request to "leave out" a sentence is checked for the code that
-  sentence described.** We asked #582 to drop a README line about personal
-  clones; the rebuild kept the idea and moved it into `Back.qml` as a Loader
-  with a readiness gate in front of the registry, plus a test file for it.
-  *Check:* for each "leave out X" in our last comment, grep the new head for
-  X's nouns in code and tests, not only in the file we named. Extends L-183
-  and L-688. *From:* #582, round 61, 2026-11-18.

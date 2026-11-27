@@ -214,6 +214,37 @@ SH
 # the phone answers, before any push.
 first_install=0
 nv_images=(modem_a modem_b efs efs_backup modem_userdata persist)
+nv_lines=""
+# check_nv_sums FILE: read FILE once in text mode, require exactly one
+# sha256sum-format line per NV image (the modem profile compares its copies
+# with these), and keep those lines for stage_nv_sums; the sums themselves
+# aren't shown, not even under bash -x.
+check_nv_sums() {
+  { local xt=$-; set +x; } 2>/dev/null
+  local f=$1 rc=0 p re line bad=()
+  local -A seen=()
+  printf -v re '%s|' "${nv_images[@]}"
+  nv_lines=$(LC_ALL=C grep -aE -e "^[0-9a-f]{64}  (${re%|})\\.img\$" -- "$f") || rc=$?
+  ((rc <= 1)) || die "cannot read $f"
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
+    p=${line#*  }
+    seen[$p]=$(( ${seen[$p]:-0} + 1 ))
+  done <<<"$nv_lines"
+  for p in "${nv_images[@]}"; do
+    [[ ${seen[$p.img]:-0} == 1 ]] || bad+=("$p.img")
+  done
+  ((${#bad[@]} == 0)) ||
+    die "$f needs one '<sha256>  NAME.img' line for each of the six NV images; none or more than one for ${bad[*]}"
+  note "SHA256SUMS: one line for each of ${nv_images[*]}"
+  [[ $xt != *x* ]] || set -x
+}
+stage_nv_sums() {
+  { local xt=$-; set +x; } 2>/dev/null
+  printf '%s\n' "$nv_lines" > "$1"
+  chmod 644 "$1"
+  [[ $xt != *x* ]] || set -x
+}
 if [[ $device == cheetah ]]; then
   # --nv-backup DIR alone is a first install too: only a first install takes
   # an NV backup, so it names the run by itself, and it is the command the
@@ -241,15 +272,7 @@ if [[ $device == cheetah ]] && ((first_given)); then
   say "Checking the NV backup in $nv_backup"
   nv_sums=$nv_backup/SHA256SUMS
   [[ -f $nv_sums ]] || die "no $nv_sums (--nv-backup DIR: the read-only backup of the modem's partitions)"
-  # exactly one line per image, in sha256sum's own format (the modem
-  # profile compares its copies with these); the sums themselves aren't shown
-  bad=()
-  for p in "${nv_images[@]}"; do
-    [[ $(grep -cE "^[0-9a-f]{64}  $p\\.img\$" "$nv_sums" || true) == 1 ]] || bad+=("$p.img")
-  done
-  ((${#bad[@]} == 0)) ||
-    die "$nv_sums needs one '<sha256>  NAME.img' line for each of the six NV images; none or more than one for ${bad[*]}"
-  note "SHA256SUMS: one line for each of ${nv_images[*]}"
+  check_nv_sums "$nv_sums"
 fi
 
 if [[ $device == cheetah ]] && ((first_install == 0)); then
@@ -344,6 +367,14 @@ push_tree() {
 
 # --- Raven: the firmware, the sensor registry and the services, nothing else --
 if [[ $device == raven ]]; then
+  [[ -f $getprop ]] || die "no stock getprop capture $getprop (--getprop)"
+  if [[ -z $nv_backup ]]; then
+    # the newest backup; none is fine until here (cheetah never needs one)
+    backups=("$HOME"/android/reference/raven-backup-2*)
+    [[ -e ${backups[0]} ]] && nv_backup=$(printf '%s\n' "${backups[@]}" | sort | tail -1)
+  fi
+  [[ -f $nv_backup/SHA256SUMS ]] || die "no NV backup with SHA256SUMS in '${nv_backup}' (--nv-backup)"
+  check_nv_sums "$nv_backup/SHA256SUMS"
   say "Extracting from $(basename "$factory") (on this laptop)"
   if ((dry)); then
     note "would run: tools/extract-vendor-firmware -d raven -o $W/fw -w $W $factory"
@@ -357,13 +388,6 @@ if [[ $device == raven ]]; then
   fi
   # The modem's per-phone files, staged (never printed: the board id and
   # NV checksums identify this phone).
-  [[ -f $getprop ]] || die "no stock getprop capture $getprop (--getprop)"
-  if [[ -z $nv_backup ]]; then
-    # the newest backup; none is fine until here (cheetah never needs one)
-    backups=("$HOME"/android/reference/raven-backup-2*)
-    [[ -e ${backups[0]} ]] && nv_backup=$(printf '%s\n' "${backups[@]}" | sort | tail -1)
-  fi
-  [[ -f $nv_backup/SHA256SUMS ]] || die "no NV backup with SHA256SUMS in '${nv_backup}' (--nv-backup)"
   mkdir -p "$W/modem-stage/var/lib/omamobile-vendor/modem" "$W/modem-stage/etc/omamobile"
   props=$W/modem-stage/var/lib/omamobile-vendor/modem/props.conf
   for k in ro.boot.cdt_hwid ro.hardware ro.boot.hardware.platform; do
@@ -377,10 +401,7 @@ if [[ $device == raven ]]; then
   # of them into RAM today (all but modem_b, the other slot's modem image,
   # which it never boots), but the file then matches the backup and
   # AGENTS.md's check.
-  grep -E ' (modem_a|modem_b|efs|efs_backup|modem_userdata|persist)\.img$' "$nv_backup/SHA256SUMS" \
-    > "$W/modem-stage/etc/omamobile/modem-nv.sha256"
-  [[ $(wc -l < "$W/modem-stage/etc/omamobile/modem-nv.sha256") == 6 ]] || die "$nv_backup/SHA256SUMS lacks one of the six NV images"
-  chmod 644 "$W/modem-stage/etc/omamobile/modem-nv.sha256"
+  stage_nv_sums "$W/modem-stage/etc/omamobile/modem-nv.sha256"
   note "modem: board id from $(basename "$getprop"), NV checksums from $(basename "$nv_backup")"
   say "Pushing Google's files"
   if ((dry)); then
@@ -467,9 +488,7 @@ if ((first_install)); then
   say "Writing this phone's modem files (--first-install: no phone-config.tar)"
   ((skip_extract)) && note "camera data: none from this run (--skip-extract, and no phone-config.tar to take it from); camera files already on the phone stay"
   mkdir -p "$W/modem-stage/etc/omamobile"
-  nv_re=$(IFS='|'; echo "${nv_images[*]}")
-  grep -E "^[0-9a-f]{64}  ($nv_re)\\.img\$" "$nv_sums" > "$W/modem-stage/etc/omamobile/modem-nv.sha256"
-  chmod 644 "$W/modem-stage/etc/omamobile/modem-nv.sha256"
+  stage_nv_sums "$W/modem-stage/etc/omamobile/modem-nv.sha256"
   note "/etc/omamobile/modem-nv.sha256: the six NV lines of $nv_sums"
   push_tree "$W/modem-stage" / merge
   props_file=/var/lib/omamobile-vendor/modem/props.conf

@@ -99,6 +99,55 @@ git commit -q -am "Fix the thing" -m "Signed-off-by: A Human <human@example.org>
 run "no prefix" 1 "without a subsystem prefix"
 echo "ok - a subject without a subsystem prefix fails"
 
+# L-1147 / kernel #279: mainline PM / devfreq: uses spaces around /.
+# The old character class rejected that spelling while accepting PM/devfreq:.
+branch pm-spaced
+echo x >> drivers/a.c
+python3 -c "open('$t/msg','w').write('PM / ' 'devfreq: scale the MIF\n\nSigned-off-by: A Human <human@example.org>\n')"
+git commit -q -a -F "$t/msg"
+run "spaced slash prefix" 0
+echo "ok - a mainline spaced-slash PM/devfreq subject passes"
+
+branch pm-nospace
+echo x >> drivers/a.c
+git commit -q -am "PM/devfreq: scale the MIF" -m "Signed-off-by: A Human <human@example.org>"
+run "PM/devfreq without spaces" 0
+echo "ok - a PM/devfreq: subject without spaces still passes"
+
+branch pm-spaces-no-slash
+echo x >> drivers/a.c
+python3 -c "open('$t/msg','w').write('PM  ' 'devfreq: spaces without a slash\n\nSigned-off-by: A Human <human@example.org>\n')"
+git commit -q -a -F "$t/msg"
+run "spaces without a slash" 1 "without a subsystem prefix"
+echo "ok - spaces between prefix words without a slash still fail"
+
+branch pm-leading-slash
+echo x >> drivers/a.c
+python3 -c "open('$t/msg','w').write(' / ' 'devfreq: leading slash space\n\nSigned-off-by: A Human <human@example.org>\n')"
+git commit -q -a -F "$t/msg"
+run "leading slash space" 1 "without a subsystem prefix"
+echo "ok - a subject that starts with a spaced slash still fails"
+
+branch nested-prefix
+echo x >> drivers/a.c
+git commit -q -am "drivers: a: still a nested prefix" -m "Signed-off-by: A Human <human@example.org>"
+run "nested colon prefixes" 0
+echo "ok - existing nested subsystem prefixes still pass"
+
+branch empty-slash-segment
+echo x >> drivers/a.c
+python3 -c "open('$t/msg','w').write('PM/: empty after slash\n\nSigned-off-by: A Human <human@example.org>\n')"
+git commit -q -a -F "$t/msg"
+run "empty slash segment" 1 "without a subsystem prefix"
+echo "ok - an empty segment after / still fails"
+
+branch spaced-empty-slash
+echo x >> drivers/a.c
+python3 -c "open('$t/msg','w').write('PM / : empty after spaced slash\n\nSigned-off-by: A Human <human@example.org>\n')"
+git commit -q -a -F "$t/msg"
+run "empty segment after spaced slash" 1 "without a subsystem prefix"
+echo "ok - an empty segment after a spaced / still fails"
+
 branch style
 echo "BADSTYLE" >> drivers/a.c
 git commit -q -am "drivers: a: style" -m "Signed-off-by: A Human <human@example.org>"

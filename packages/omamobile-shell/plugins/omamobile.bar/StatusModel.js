@@ -51,6 +51,9 @@ function cellGlyph(cell) {
   case "no-sim": case "locked": case "failed": return String.fromCodePoint(0xF0783)
   case "searching": return String.fromCodePoint(0xF08BF)
   }
+  // Mobile data off: the crossed-out bars, as quick settings' Mobile data
+  // tile shows it (calls and texts still work; the card says so).
+  if (cell.data === false) return String.fromCodePoint(0xF0783)
   if (cell.strength < 0) return String.fromCodePoint(0xF08BF)
   return cellularIcon(cell.strength)
 }
@@ -71,7 +74,8 @@ function parseCell(line) {
   try { v = JSON.parse(String(line || "")) } catch (e) { return null }
   if (!v || typeof v !== "object") return null
   return { modem: v.modem === true, state: String(v.state || "none"), strength: Number(v.strength),
-           tech: String(v.tech || ""), roaming: v.roaming === true }
+           tech: String(v.tech || ""), roaming: v.roaming === true,
+           data: v.data === true ? true : (v.data === false ? false : null) }
 }
 
 // The call chip: the elapsed time of the call in progress, "" for none.

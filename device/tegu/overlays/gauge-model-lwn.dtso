@@ -15,6 +15,15 @@
  * The driver loads it only while the gauge reports power-on reset (Status
  * bit 1), then clears that bit. The table and the parameters are Copyright
  * 2024 Google LLC, from that file.
+ *
+ * Which pack: our device tree doesn't describe the pack's EEPROM, so read the
+ * size while stock's model is still in the gauge, before the first load of
+ * an overlay: charge_full_design reads 5110000 on an ATL pack and 5120000 on
+ * an LWN pack. A wrong model stays in the gauge until its next power-on
+ * reset, which takes a flat pack, and until then the charge follows the
+ * other pack's curve. After a load the gauge counts cycles from the reset:
+ * cycle_count, and the battery panel's charge cycles, read 0 for an old
+ * pack: Google's driver keeps the pack's own count in that EEPROM.
  */
 /dts-v1/;
 /plugin/;

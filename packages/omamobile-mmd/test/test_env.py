@@ -65,6 +65,19 @@ class PrivateBusStartup(unittest.TestCase):
         self.connect.assert_called_once()
         self.process.terminate.assert_not_called()
 
+    def test_private_bus_uses_relative_socket_for_long_tempdir(self):
+        long_dir = os.path.join(self.directory, 'x' * 110)
+        os.mkdir(long_dir)
+        open(os.path.join(long_dir, 'bus'), 'w').close()
+        self.connect.return_value = self.connection
+        with mock.patch.object(env.subprocess, 'Popen', return_value=self.process) as popen:
+            bus = env.PrivateBus(long_dir)
+        self.assertEqual(bus.address, 'unix:path=bus')
+        self.assertEqual(popen.call_args.kwargs.get('cwd'), long_dir)
+        with open(os.path.join(long_dir, 'bus.conf')) as f:
+            self.assertIn('<listen>unix:path=bus</listen>', f.read())
+        bus.close()
+
 
 if __name__ == '__main__':
     unittest.main()
