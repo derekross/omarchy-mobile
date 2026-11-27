@@ -31,7 +31,7 @@
 # wanted unit says no): omamobile-boot-success runs after multi-user.target
 # and must not wait for a registration that can take minutes.
 [Unit]
-Description=Omarchy Mobile modem, phone service and data at boot
+Description=Omamobile modem, phone service and data at boot
 DefaultDependencies=no
 Conflicts=shutdown.target
 Before=shutdown.target

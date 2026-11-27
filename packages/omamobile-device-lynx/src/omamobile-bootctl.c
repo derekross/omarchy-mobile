@@ -4,7 +4,7 @@
  * the Pixel bootloader (ABL) keeps in the "devinfo" partition on gs101/gs201.
  *
  * This file is a port of Google's Pixel boot-control HAL and is therefore
- * licensed under Apache-2.0, not MIT like the rest of Omarchy Mobile's tools.
+ * licensed under Apache-2.0, not MIT like the rest of Omamobile's tools.
  * The devinfo layout and the slot update rules come from:
  *
  *   https://android.googlesource.com/device/google/gs-common
@@ -24,7 +24,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * Modifications (Omarchy Mobile, 2026): rewritten from C++/AIDL into a standalone C
+ * Modifications (Omamobile, 2026): rewritten from C++/AIDL into a standalone C
  * command-line tool. Only the devinfo path is kept (no GPT-attribute fallback,
  * no virtual A/B misc message, no anti-rollback OTP blowing, no UFS
  * bBootLunEn write). Bitfields are replaced by explicit byte/bit offsets.

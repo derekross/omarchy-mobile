@@ -1,6 +1,6 @@
 # omamessages
 
-Omarchy Mobile's Messages app
+Omamobile's Messages app
 ([TELEPHONY-APPS-PLAN](../../docs/TELEPHONY-APPS-PLAN.md) T6/T7, §10.1b), in
 its own repository, [omamessages](https://github.com/derekross/omamessages)
 (GPL-3.0-or-later). This package builds a pinned release from it.

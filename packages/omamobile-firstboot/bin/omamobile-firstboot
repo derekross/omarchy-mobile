@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# omamobile-firstboot: set up a freshly installed Omarchy Mobile phone, once.
+# omamobile-firstboot: set up a freshly installed Omamobile phone, once.
 #
 # tools/install-phone writes /etc/omamobile/firstboot.conf into the root image
 # it flashes; the desktop installer and the web page put the answers into the

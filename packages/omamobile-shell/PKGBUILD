@@ -3,9 +3,9 @@
 pkgname=omamobile-shell
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile's phone profile for the Omarchy shell: status bar, quick settings, launcher"
+pkgdesc="Omamobile's phone profile for the Omarchy shell: status bar, quick settings, launcher"
 arch=(any)
-url="https://github.com/derekross/omarchy-mobile"
+url="https://github.com/derekross/omamobile"
 license=(MIT GPL-3.0-or-later)  # GPL: the squeekboard layout
 depends=(omarchy omamobile-apps 'omamobile-omarchy>=0.1.11' 'omamobile-owl-widgets>=0.1.2' bash squeekboard bluez wf-recorder python python-dbus python-gobject
          which  # voice input: voxtype finds wtype and wl-copy with which

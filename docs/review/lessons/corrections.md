@@ -3,6 +3,44 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **C-65 (2026-11-25). Round 67 told #998's maintainer that ten Python
+  wrappers would cost 80 to 100 MB, from 8 to 10 MB RSS each;** the author's
+  `RssAnon` and `VmSwap` figures gave about 5 MB each, because the
+  interpreter's shared pages are counted once. *Lesson:* a memory cost we
+  estimate for a contributor's design is counted as the private (anonymous)
+  memory each copy adds, not whole-process RSS: `python3 -c 'import time;
+  time.sleep(60)' & grep -E 'Rss(Anon|File)|Pss' /proc/$!/status
+  /proc/$!/smaps_rollup` before writing a figure, and quote `Pss` or
+  `RssAnon`. Extends C-4. *From:* #998, rounds 67 and 68.
+- **C-64 (2026-11-24). Round 66 told #1009's maintainer that there was no
+  polkit agent on the phone, and offered options on that basis; Omarchy 4.5's
+  shell has one.** `plugins/polkit/PolkitAgent.qml` ships in the signed
+  `omarchy-4.5.0-3`, our patches 0010 and 0011 adapt it to the on-screen
+  keyboard and the PIN pad, and `omamobile-shell`'s
+  `49-omamobile-admin-self.rules` makes it ask the owner for their own PIN;
+  the maintainer's decision used it. *Lesson:* before writing that a phone has
+  no prompt or agent for something, `bsdtar -tf` the pinned Omarchy packages
+  for it and `git grep -n -i '<it>' origin/main --
+  packages/omamobile-omarchy/patches packages/*/polkit`. Extends C-52 and
+  C-36. *From:* #1009, rounds 66 and 67.
+- **C-63 (2026-11-23). Round 64 asked kernel #249 to drop the angle brackets
+  around a 40-hex blob id in its commit message;** checkpatch exempts a 12-40
+  hex word only inside `<...>` or `[...]`, so the change the author made as
+  asked turned the gate red for two pushes. *Lesson:* a wording request on a
+  kernel commit message that touches a hash is run through checkpatch before
+  it is posted: rebuild the commit with the suggested message on its own tree
+  (`git log -1 --format=%B <c> | sed ... | git commit-tree <c>^{tree} -p
+  <c>^`), then `git format-patch -1 --stdout <new> | scripts/checkpatch.pl
+  --strict -`. Extends L-1098, L-743 and C-4. *From:* kernel #249, rounds 64
+  to 66.
+- **C-62 (2026-11-23). Round 63 told #931 that its `depends` entry `libssc`
+  had no provider;** it is in Arch's `extra` (the phone installed it from Arch
+  Linux ARM's), and `iio-sensor-proxy` depends on it. L-639's grep of our tree
+  and open PRs was all the review ran. *Lesson:* a "nothing provides it"
+  finding is checked against the distribution's repositories too: `pacman -Si
+  <name>` on the review laptop, and the Arch Linux ARM index if the package
+  might be aarch64-only, before it is reported. Extends L-639. *From:* #931,
+  rounds 63 and 66.
 - **C-61 (2026-11-21). A round 65 reviewer read 9 of the 25 lesson files to
   save context,** and said so in its report, which is the only reason it is
   known. The index says which areas every review reads, and a lesson that was

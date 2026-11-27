@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: MIT -->
-# Omarchy Mobile plugins
+# Omamobile plugins
 
 Phone surfaces for Omarchy's own shell, written as ordinary third-party
 Omarchy plugins. Nothing in Omarchy is patched: each directory here is a
@@ -13,7 +13,7 @@ logical at scale 3).
 
 | Plugin | Kind | What it is |
 | --- | --- | --- |
-| `omamobile.bar` | `bar` | Status bar: clock, connectivity, battery; tap or pull down for quick settings |
+| `omamobile.bar` | `bar` | Status bar: clock, connectivity, battery; tap or pull down for quick settings, or with `cardsOnTap` a tap on an item for its card |
 | `omamobile.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: up to 21 tiles the user arranges, brightness and volume, a Settings gear, media controls and the notification history; Wi-Fi picker and Bluetooth panel |
 | `omamobile.launcher` | `panel` (keepLoaded) | Home bar: app search, app grid and coding-agent prompt in one input |
 | `omamobile.home` | `panel` (keepLoaded) | Home screens: pages of apps and widgets on the wallpaper, with an edit mode |
@@ -32,7 +32,7 @@ logical at scale 3).
 
 ```json
 {
-  "bar": { "id": "omamobile.bar", "clockFormat": "HH:mm", "showBatteryPercent": true,
+  "bar": { "id": "omamobile.bar", "clockFormat": "HH:mm", "batteryStyle": "icon-percent",
            "quickSettings": "omamobile.quicksettings" },
   "plugins": [
     { "id": "omamobile.quicksettings" },
@@ -50,13 +50,35 @@ The phone has no touch lock yet (below), so idle stays off for now.
 
 A full bar that replaces `omarchy.bar`. It is 44 px tall (or the theme's bar
 size if larger), anchored to the top, and reserves its height so windows tile
-below it. Left: the clock. Right: the unread notification count (when
-there is one), do-not-disturb (when on), Bluetooth (when on), cellular
+below it. Left: the clock, then the unread notification count (when there
+is one). Right: do-not-disturb (when on), Bluetooth (when on), cellular
 signal (when a modem exists), Wi-Fi or Ethernet, battery glyph and
-percentage. The centre is left empty for the camera cutout.
+percentage. The centre is left empty for the camera cutout; the count is on
+the left because the right-hand row grows towards it with every glyph.
 
-The whole strip is one touch target: a tap toggles quick settings, a downward
-pull past ~14 px opens it.
+A downward pull past ~14 px anywhere on the strip opens quick settings, and a
+tap toggles it. With `cardsOnTap` set (off by default), a tap on an item opens
+its card instead, as a click on the same item does in Omarchy's bar, and a tap
+on an empty part does nothing:
+
+| Item | Card |
+| --- | --- |
+| Battery | Omarchy's own power panel (`plugins/panels/power/Panel.qml` from `OMARCHY_PATH`) |
+| Wi-Fi or Ethernet | Omarchy's network panel (`plugins/panels/network`) |
+| Bluetooth | Quick settings' Bluetooth panel, as its tile's chevron opens it: it makes the phone visible while open and shows a pairing's code, which Omarchy's card doesn't |
+| Cellular signal | `CellularPanel.qml`: the carrier, its state, a mobile data switch (`omamobile-sit data on/off`), the signal and whether calls, texts and mobile data work |
+| Clock | `TimePanel.qml`: the day, the date, the time and the time zone |
+
+Omarchy's two panels are loaded unchanged and unseen; only their popups
+show. Omarchy has no card for the clock that fits a phone's width and none for
+a modem, so the two others are built from the same parts (`Panel`,
+`KeyboardPanel`, `ToggleSwitch` and the label/value rows of the power card).
+The bar answers the calls those panels make of Omarchy's bar
+(`requestPopout`/`releasePopout`, `clickTargets`, `run`, the tooltip calls),
+and every item is a click target, so with a card open a tap on another item
+opens that item's card, as in Omarchy. The carrier's name is sitd's operator
+name, or, when the network sends none, `carrier-name.py`'s lookup of the
+network code in mobile-broadband-provider-info.
 
 Sources: `Quickshell.Networking` (NetworkManager) for Wi-Fi/Ethernet,
 `Quickshell.Bluetooth`, `UPower.displayDevice`, and the do-not-disturb flag
@@ -68,8 +90,16 @@ Settings live on the `bar` object in `shell.json`:
 | Key | Default | |
 | --- | --- | --- |
 | `clockFormat` | `"HH:mm"` | Qt date format |
-| `showBatteryPercent` | `true` | |
+| `showBatteryPercent` | `true` | Older switch: `false` is `batteryStyle: "icon"`; used only without `batteryStyle` |
+| `batteryStyle` | `"icon-percent"` | `icon`, `percent`, `icon-percent`, `horizontal`, `horizontal-percent` |
+| `statusIcons` | all shown | `{"bluetooth","wifi","cell","dnd","unread"}`: `false` hides one (Wi-Fi covers Ethernet too) |
 | `quickSettings` | `"omamobile.quicksettings"` | Plugin id the bar opens |
+| `cardsOnTap` | `false` | A tap on an item opens its card (below); a pull opens quick settings |
+
+The charging bolt has no setting: while charging it shows in every battery
+style. Low battery (10 % and under, not charging) takes the urgent colour.
+The call chip has no switch. A hidden mobile signal stops
+`omamobile-cell-watch`.
 
 **Unread notifications:** an accent pill with the number of files in
 Omarchy's notification history (`~/.local/state/omarchy/notifications/history/`,
@@ -283,6 +313,19 @@ long-press opens the panel, the back glyph returns to quick settings.
   six digits with Pair/Cancel; a keyboard shows the passkey to type, lighting
   up digits as they're typed; a PIN or passkey request gets a field above the
   on-screen keyboard. A device pairing *to* the phone gets the same sheets.
+* **When the phone accepts pairing** (BlueZ's `Pairable`): only while the
+  owner pairs a device from the panel, and while the phone is visible with
+  the helper running; it goes off when visibility ends (the countdown, the
+  switch, or BlueZ's `DiscoverableTimeout`), when the panel closes and when
+  the helper exits, and BlueZ ends it on its own after the same two minutes
+  (`PairableTimeout`, which the helper sets and BlueZ keeps in its adapter
+  settings). BlueZ turns `Pairable` on whenever a default agent registers
+  (unless `AlwaysPairable` is set in `/etc/bluetooth/main.conf`; it is off by
+  default), so the helper turns it off again after registering. An adapter
+  that was already pairable when the panel opened (the owner's own agent, or
+  `AlwaysPairable = true`) is left as it was. Omarchy's own auto-accepting
+  agent, `bt-agent.service`, doesn't run on the phone (the package's
+  drop-in; `touch ~/.config/omamobile/bt-agent` runs it anyway).
 
 Quickshell.Bluetooth provides the devices, power, visibility, disconnect,
 forget and rename, but no pairing agent, RSSI, device class or failure
@@ -295,11 +338,13 @@ PINs travel only over stdin and D-Bus and are never printed. If the helper
 can't start, the banner says so and the panel falls back to Quickshell's own
 discovery and Just Works pairing. The pure logic is in `BluetoothModel.js`
 (`test/bluetooth-model.js`); the helper's pure parts are tested by
-`test/bt-agent.py`.
+`test/bt-agent.py`, its pairing window on a private bus against a stand-in
+for BlueZ by `test/bt-agent-bus.py`, and the panel's side of the window, with
+real Qt bindings, by `test/bluetooth-pairable.py`.
 
 Limits: no file transfer or per-profile toggles (media/calls); the panel only
 answers the agent while it is open, so pairing *to* the phone needs the panel
-up (which visibility does anyway).
+up and the phone visible.
 
 IPC:
 

@@ -22,8 +22,8 @@
 # daemon's whole life, which is the link's: the daemon exits when the link
 # closes for the boot or ends.
 [Unit]
-Description=Omarchy Mobile install link
-Documentation=https://github.com/derekross/omarchy-mobile/blob/main/docs/INSTALL-LINK-PLAN.md
+Description=Omamobile install link
+Documentation=https://github.com/derekross/omamobile/blob/main/docs/INSTALL-LINK-PLAN.md
 ConditionPathExists=/etc/omamobile/install-link
 After=omamobile-usb-mac.service omamobile-boot-success.service
 Wants=omamobile-usb-rescue.service

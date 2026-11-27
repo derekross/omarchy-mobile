@@ -3,24 +3,24 @@
 
 Status (2026-11-15): nothing of this has run on the phone, and I have no record that the chip has ever been powered.
 This is the runbook @derekross asked for on
-[linux-omarchy-mobile#239](https://github.com/derekross/linux-omarchy-mobile/pull/239) before the bring-up overlay:
+[linux-omamobile#239](https://github.com/derekross/linux-omamobile/pull/239) before the bring-up overlay:
 what the first boots do, in which order, and what stops them. It changes no device tree and runs nothing.
 Changed on 2026-11-15 after his review on #739: `sec_acpm` is built in, so the late-load stage and its blacklist are
 gone, and stages 2 to 4 run with the SoC watchdog armed, except stage 3's first read, which is before the 30 s cleanup
 and so before the watchdog can be armed (only the panics cover it).
 
 [V] = read in source, in a maintainer's comment or in a capture of mine. [I] = inferred, with the step that would
-settle it. [U] = unknown. References like `linux-omarchy-mobile#210` are the kernel repository; a bare `#578` is
+settle it. [U] = unknown. References like `linux-omamobile#210` are the kernel repository; a bare `#578` is
 this one.
 
 ## Where it stands
 
-- The bus: `linux-omarchy-mobile#210` (merged) added the CMU_HSI0 USI3 clocks and a disabled `spi21` in
+- The bus: `linux-omamobile#210` (merged) added the CMU_HSI0 USI3 clocks and a disabled `spi21` in
   `zuma.dtsi`. [I] the gate offsets are Google's and have not been exercised on hardware; a wrong one can hang the
   phone. The controller's probe in stage 2 and a first transfer settle it, not a clock listing: the published
   bootargs carry `clk_ignore_unused` and `pd_ignore_unused` [V: `zuma-husky.dts`, and `VENDOR_CMDLINE` in
   `device/husky/device.conf`], so the clocks can be on without the controller having enabled them.
-- The rails: `linux-omarchy-mobile#211` (merged) added the S2MPG15 sub-PMIC as `pmic-2`, disabled, with the three
+- The rails: `linux-omamobile#211` (merged) added the S2MPG15 sub-PMIC as `pmic-2`, disabled, with the three
   GNSS rails (LDO9S core 725 to 1300 mV, LDO10S RF and LDO11S AUX 1600 to 1950 mV). [V] zuma-husky.dts on
   `omamobile` says that stock keeps them always on, so nothing sets a voltage at probe and the GNSS driver will
   switch them. [V] `sec_acpm` is built in: `kernel/configs/omamobile.config` has `CONFIG_MFD_SEC_ACPM=y` (since
@@ -30,7 +30,7 @@ this one.
   `modprobe sec_acpm` is a no-op. The 7 Pro is the same (the unused-rails gotcha in `AGENTS.md`), and it is
   harmless there because LDO9S to LDO11S feed only GNSS; the board file's comment names husky's three as the GNSS
   core, RF and AUX rails too.
-- The receiver: `linux-omarchy-mobile#239` (merged) added the BCM4775x node on `spi21`, disabled: the stock pin
+- The receiver: `linux-omamobile#239` (merged) added the BCM4775x node on `spi21`, disabled: the stock pin
   groups, 26 MHz, mode 3, feedback delay 1 and the three rails; nstandby is active high. [V] per derekross's
   comment there, it matches Google's `zuma-board-gps.dtsi`. The driver is `drivers/misc/bcm4775x` on `omamobile`,
   compatible `brcm,bcm4775-gnss`, module `bcm4775x-gnss`.
@@ -54,7 +54,7 @@ this one.
 ## Open questions of mine
 
 - Chip select. [V] stock's `samsung,spi-chip-select-mode = 0` for this bus is not read by this tree, and
-  `google,zuma-spi` uses `manual_native_cs`. [I] `linux-omarchy-mobile#204` (mine, open) acts only for a device on a
+  `google,zuma-spi` uses `manual_native_cs`. [I] `linux-omamobile#204` (mine, open) acts only for a device on a
   GPIO chip select, and the BCM4775x is on the native one, so I don't expect it to matter. The first frames settle
   it.
 - Whether the bootloader leaves the three GNSS rails on is [U]; stage 3 answers it.

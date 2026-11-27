@@ -15,7 +15,9 @@ printf '#!/bin/bash\necho "runuser $*" >>%s/calls\n' "$t" >"$t/bin/runuser"
 chmod +x "$t"/bin/*
 uid=$(id -u); user=$(id -nu)
 mkdir -p "$t/run/$uid/hypr/sigA" "$t/run/$uid/hypr/stale"
-python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$t/run/$uid/hypr/sigA/.socket.sock"
+# bound by its short name from inside its folder: a socket path is limited
+# to about 108 bytes, and the build folder on a phone is longer than that
+(cd "$t/run/$uid/hypr/sigA" && python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.bind(".socket.sock")')
 out=$(PATH="$t/bin:$PATH" OMAMOBILE_RUNTIME_ROOT="$t/run" bash -c 'source "$1"; post_upgrade' sh "$here/omamobile-shell.install")
 grep -c "omamobile-setup-user" <<<"$out" >/dev/null || fail "post_upgrade still says how settings arrive"
 [[ $(cat "$t/calls") == "runuser -u $user -- env XDG_RUNTIME_DIR=$t/run/$uid HYPRLAND_INSTANCE_SIGNATURE=sigA hyprctl reload" ]] \

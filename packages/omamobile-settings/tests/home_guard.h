@@ -50,9 +50,11 @@ inline void check() {
     for (const char *name : {"XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"}) {
         const char *value = std::getenv(name);
         if (!value || !*value) continue;
+        // Resolved, so a ".." can't walk out of the fixture; one that does not
+        // exist is refused (test/all makes all four before it runs anything).
         const std::string path = canonical(value);
-        // A path that does not exist yet is checked as written.
-        if (const char *why = xdg_verdict(path.empty() ? std::string(value) : path, home, real, temp)) refuse(why);
+        if (path.empty()) refuse("an XDG_*_HOME variable points to a directory that does not exist");
+        if (const char *why = xdg_verdict(path, home, real, temp)) refuse(why);
     }
 }
 inline const bool checked = (check(), true);

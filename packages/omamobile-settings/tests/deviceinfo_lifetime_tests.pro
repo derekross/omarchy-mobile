@@ -4,5 +4,5 @@ CONFIG += testcase c++17 console no_include_pwd
 TARGET = settings-deviceinfo-lifetime-tests
 TEMPLATE = app
 INCLUDEPATH += ../app
-SOURCES += deviceinfo_lifetime_tests.cpp ../app/deviceinfocontroller.cpp
-HEADERS += ../app/deviceinfocontroller.h
+SOURCES += home_guard.cpp deviceinfo_lifetime_tests.cpp ../app/deviceinfocontroller.cpp
+HEADERS += home_guard.h ../app/deviceinfocontroller.h

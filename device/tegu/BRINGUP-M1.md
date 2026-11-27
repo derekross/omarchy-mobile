@@ -226,5 +226,5 @@ Keep UFS clock-stop ordering, touch power/ACPM/regulator support and Panthor
 SoC hash data in separate kernel subsystem PRs, each with its own source,
 bindings, checks and measured evidence. Shared SOC_COMPATIBLE packing also
 needs a separate tooling PR with images-layout coverage for zuma and
-zumapro. The device is tracked in [#28](https://github.com/derekross/omarchy-mobile/issues/28),
+zumapro. The device is tracked in [#28](https://github.com/derekross/omamobile/issues/28),
 linked from the WIP matrix row. No release-support claim is made.

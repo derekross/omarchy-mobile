@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Omarchy Mobile's packages in the root image, from [omamobile] (out/repo,
+# Omamobile's packages in the root image, from [omamobile] (out/repo,
 # built by tools/build-packages), for every device. tools/build-rootfs adds
 # the device's own package (PACKAGE in device/<codename>/device.conf) and its
 # board-specific ones (ROOTFS_PACKAGES there: audio, sensors, GNSS,

@@ -1,4 +1,4 @@
-# Omarchy Mobile
+# Omamobile
 
 Native Omarchy on mobile devices: Arch Linux ARM, Hyprland and Omarchy's own packages running directly on the device with a mainline kernel, with Android apps in Waydroid as a later goal. The reference device is the Pixel 7 Pro (cheetah, gs201); community ports cover more Pixels, and the first non-Pixel ports are in review ([docs/DEVICES.md](docs/DEVICES.md)).
 
@@ -18,7 +18,7 @@ What works on each phone, and the notes behind it: [docs/DEVICES.md](docs/DEVICE
 The installer is new: expect rough edges. You need a Pixel 7 Pro with an unlocked bootloader, an Omarchy (Arch) laptop with Docker, `android-tools` and `e2fsprogs`, and Google's factory image for the phone. Stock Android stays on slot A as the way back; installing erases `userdata`.
 
 ```sh
-tools/build-packages                 # Omarchy Mobile's packages for aarch64 (out/repo)
+tools/build-packages                 # Omamobile's packages for aarch64 (out/repo)
 tools/build-rootfs                   # the root image: Arch Linux ARM, Omarchy, our packages
 tools/install-phone --dry-run        # phone in fastboot: checks it, asks for your user, shows every command
 tools/install-phone                  # writes only slot B's boot images and userdata
@@ -47,6 +47,7 @@ The kernel and boot images come from `bin/omamobile kernel`, `modules`, `initram
 | `docker/` | Ubuntu 24.04 build environment |
 | `docs/DEVICES.md` | Supported-devices matrix |
 | `docs/ROADMAP.md` | Where things stand and the plan to a working phone |
+| `docs/POWER-BASELINES.md` | Battery baselines and full discharges, one row per device and run |
 | `docs/DEMO.md` | Fictional demo data, screenshots and screen recordings for the website and videos (`tools/phone-demo`) |
 | `docs/RELEASES.md` | How builds and releases work for several devices: device descriptors, the kernel package, release bundles |
 
@@ -55,7 +56,7 @@ Large trees live outside the repo: the Android-side sources, images and captures
 | Path | Contents |
 | --- | --- |
 | `~/android/omamobile` | LineageOS 24.0 source. Includes Google's GPL Pixel 7 kernel at `out-kernel/google/gs-6.1` |
-| `~/omamobile-kernel/linux` | Our kernel repo: branch `omamobile` on mainline v7.3-rc6 (remote `upstream` is Linus's tree), one commit per subsystem so patches can go upstream. Published to [derekross/linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile) on a squashed upstream base; pull requests and the maintainer's fast-forwards (`tools/publish-kernel`) move it forward, and releases are tags on it |
+| `~/omamobile-kernel/linux` | Our kernel repo: branch `omamobile` on mainline v7.3-rc6 (remote `upstream` is Linus's tree), one commit per subsystem so patches can go upstream. Published to [derekross/linux-omamobile](https://github.com/derekross/linux-omamobile) on a squashed upstream base; pull requests and the maintainer's fast-forwards (`tools/publish-kernel`) move it forward, and releases are tags on it |
 | `~/omamobile-kernel/pmos-tensor` | postmarketOS Tensor kernel, for reference |
 | `~/android/reference` | Captures from the phone. Contains serial numbers and partition backups: never commit |
 | `~/android/factory` | Verified stock factory images, used to restore the phone |
