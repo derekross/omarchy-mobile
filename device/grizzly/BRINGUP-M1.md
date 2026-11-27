@@ -6859,6 +6859,63 @@ cell remains unverified.
 Neither qualification passed offline. No read-only
 diagnostic was built for this word.
 
+##### Offline D1 system, pixel and PHY reset paths
+
+The D1 ABL group-4 descriptors at file offsets `0x1f5220`,
+`0x1f5290` and `0x1f5300` identify the following clock cells.
+Each has reset selector `-1`. If requested, ABL's clock-reset
+dispatch (`0x48e44`–`0x48e90`) uses the direct MMIO helper,
+which waits for bit 12 at the selected cell's offset `0x1c`.
+This establishes the scope of the acknowledgment. The stock
+display sequence has no observed invocation for these cells.
+
+| ABL clock cell | AP acknowledgment word | Stock D1 association |
+| --- | --- | --- |
+| DSI0 system, `0x40009` | `0x0f41973c` | ABL names it for DSI0. Stock Linux describes the host's system clock as a scalar and supplies no separate clock or reset handle. |
+| DSI0 pixel, `0x4000b` | `0x0f41977c` | DPU LPCM `0x23`, clock selector 1, matches `dpu_dsi0_pix_clk` in the merged tree. Its provider phandle has no consumer in that tree. |
+| DSI PHY, `0x4000d` | `0x0f4197bc` | ABL uses an unindexed PHY name. D1 Linux labels DPU LPCM clock selector 3 `dpu_dsi1_phy_clk`. This cell's connection to DSI0 is unverified. |
+
+The host's `phys` phandle resolves to the DSI0 CD-PHY
+supplier, which takes a fixed 38.4 MHz `pllref`. The host
+and PHY share DSI0 genpd `0x203`. This establishes the
+PHY-to-host dependency. The system and pixel descriptors
+identify DSI0 clocks, but the preserved artifacts do not
+show which downstream host blocks their reset signals reach.
+
+For all three words, the AP page has the same `0x30300`
+firewall policy as the APB cell. A search of 35 saved pstore
+text files and the saved stock display bugreport found no
+mention of these addresses or their CPM aliases. The stock
+`clk-cpm.ko` operations lack a hardware enable-state getter.
+`rst-cpm.ko` supplies assert and deassert only. Its debugfs
+files have no read getter. CPM's reset-status handler at
+`0x3859c` uses the lookup at `0x49cf4`, whose allowed
+LPCM IDs exclude DPU `0x23`. CPM's separate clock query
+can compare the gate state for selectors 1 and 3 using bit 8
+at the cell's offset `0x1c`. It does not sample bit 12,
+and the DSI0 system cell has no entry in that clock table.
+Neither that query nor the earlier `GET_RATE` replies
+provide a stock readback of these resets.
+
+The stock CD-PHY driver does expose two read-only debugfs
+fields for its own local reset controls. Under the debugfs
+mount, `f7c0000.dw_mipi_cdphy/phy_ctrl0_rw_phy_rst_n`
+and its sibling `phy_ctrl0_rw_shutdown_n`
+read bits 0 and 1 of the second PHY resource
+(`0x0f7d8800 + 0x28`). The getter calls
+`pm_runtime_get_if_in_use()` and reads only when it acquires
+a reference to an already-active PHY. Stock D1 enables
+debugfs in its kernel config. The saved traces confirm
+the device name but contain no reads of either field.
+Access also depends on the debugfs mount and permissions.
+The driver asserts
+both active-low controls during shutdown and early setup
+and deasserts them during late setup. The getter discards the
+regmap read error, so a reported zero cannot by itself prove
+assertion. These fields report PHY-local control latches.
+External CMU resets and DSI0 host reset coverage remain
+unverified. No direct AP or host read was enabled.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
