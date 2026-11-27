@@ -8227,6 +8227,46 @@ were present only in ramoops. Fastboot returned
 completed boot with enforcing verity and original
 VBMeta.
 
+###### Offline mainline mapping of the stock display power paths
+
+Compared the audited D1 B0 tree and retained genpd
+and runtime PM captures with mainline fixture
+`16a63b142e0b`. The mainline Grizzly DT has no
+display SMMU, DC, CD-PHY or DSI2H node. Its Malibu
+CPM onecell provider has no display domains.
+Wrapper, BE and DSI0 are exercised through the
+diagnostic's explicit MBFS votes.
+
+| Stock path | Mainline mapping and DSI0 relevance |
+| --- | --- |
+| Display SMMU | `f190000.disp_smmu` is a wrapper `0x08` consumer. Its DT client is `f600000.dc9x00`, with streams `0x8000`–`0x801f` and nested translation. Stock's KVM SMMU probe calls `device_link_add` for the DC consumer. The observed resume occurs during DMA configuration and the idle worker releases the wrapper. |
+| Mainline SMMU | The fixture enables `CONFIG_ARM_SMMU_V3`. The upstream `arm_smmu_probe_device` does not add the stock runtime PM link. Its IOMMU core's `iommu_device_link` creates sysfs links. Generic device links and runtime PM can represent a supplier relationship once the bindings exist. Display DMA and SMMU power handling need separate qualification before scanout. |
+| DSI1 | The available PHY at `f7e0000.dw_mipi_cdphy` owns `DpuDsi1.v` (`0x204`), with its own TX and APB resources. DSI0 and DSI1 share the fixed 38.4 MHz reference and the BE → wrapper ancestors. The DSI1 host is disabled. Mainline checks the inherited DSI1 vote and does not drive it in this diagnostic. |
+| DSI0 | The DSI0 PHY and host both reference `DpuDsi0.v` (`0x203`) under BE `0x200` and wrapper `0x08`. The host's only PHY phandle points to `f7c0000.dw_mipi_cdphy`. Neither node has an IOMMU link. The stock host initializes its own PHY before reading ID and version. |
+
+The stock probe has no direct dependency on the
+DSI1 PHY or display SMMU for those register reads.
+The DP-in capture read the expected host ID and
+version even though the display aggregate remained
+unbound and registered no connector. The stock
+captures do not isolate the effect of omitting the
+earlier sibling or SMMU cycles on shared physical
+state. Their observed order does not make explicit
+replay part of a minimal DSI0 host fixture.
+
+The scoped mainline path would hold wrapper, BE
+and DSI0 while the DSI0 PHY and host consumers run.
+Its first host access still needs separate evidence
+for the APB gate and external reset. The SMMU
+pulse establishes wrapper runtime PM, the DSI1
+pulse establishes sibling MBFS activity, and the
+DSI0 PHY init sample reports a PHY-local gating
+control. None is a host APB or reset readback.
+The ABL APB acknowledgment at `0x0f4196fc`
+still lacks qualified EL1 access and its reset bit
+covers only the selected clock cell. No host reads
+or display bindings were enabled.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
