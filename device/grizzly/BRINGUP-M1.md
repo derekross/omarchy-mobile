@@ -8142,6 +8142,46 @@ returned 133 seconds after the B boot request.
 Stock A completed boot with enforcing verity and
 the original VBMeta digest.
 
+###### Offline stock D1 wrapper vote and display runtime PM trace
+
+The latest `pack-stock-inventory.py --dsi0-genpd-trace`
+fixture extends the named genpd capture. The runtime PM
+filter retains `f7d8000.dsi2host` and adds
+`f190000.disp_smmu` and `f600000.dc9x00`. It records
+resume, suspend, idle, return and status events for
+those devices. A tracefs stack trigger on the existing
+`power_controller/send_mail_mbfs` event captures callers
+only for wrapper resource `0x08`. The saved exact D1
+kernel config enables event tracing and stack traces.
+
+Use `check-stock-dsi0-trace.py --require-wrapper TRACE`.
+The decoder matches each stack to its preceding
+wrapper request on the same task and CPU and reports
+the symbolic call path alongside the runtime PM
+events. Compare the wrapper-only ON and OFF stacks
+with the SMMU and DC events to test the supplier
+runtime PM hypothesis. Leave attribution open if the
+stack or device evidence is inconclusive.
+
+The NV guard, sibling MBFS filter, existing DSI0
+`pwr_up` stop trigger and independent 90-second
+return remain in the fixture. It adds no register
+access or display operation. Mock arming verified
+the filters and trigger cleanup. The offline decoder
+replayed the previous hardware capture unchanged and
+accepted synthetic SMMU/DC events and wrapper stacks.
+It rejected a stack on the wrong task, a missing stack
+and a legacy trace in wrapper-required mode.
+
+All five image hashes, AVB, handoff bounds and saved
+slot fit passed. The four baseline images and the
+display module manifest are unchanged. The replacement
+`init_boot` SHA-256 is
+`3f41787eea7c0cdf87e4a13eb9b8a65d5e74d2831bb051aaee7a98d66c97726f`.
+Hardware trigger registration and attribution remain
+pending. A later attended boot requires a fresh
+verified nine-partition NV backup and stock A return.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

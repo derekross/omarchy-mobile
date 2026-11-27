@@ -10,9 +10,10 @@ import re
 
 
 HOST = "f7d8000.dsi2host"
+WRAPPER_RPM_DEVICES = {"f190000.disp_smmu", "f600000.dc9x00"}
 DOMAINS = {"sswrp_dpu_pd", "dpu_be_pd", "dpu_dsi0_pd", "dpu.v", "DpuBe.v", "DpuDsi0.v"}
 ROW = re.compile(
-    r"-(?P<pid>\d+)\s+(?:\([^)]*\)\s+)?\[\d+\]\s+\S+\s+"
+    r"-(?P<pid>\d+)\s+(?:\([^)]*\)\s+)?\[(?P<cpu>\d+)\]\s+\S+\s+"
     r"(?P<time>\d+\.\d+):\s+(?P<event>\w+):\s+(?P<body>.*)"
 )
 REGISTER = re.compile(rf"{re.escape(HOST)}\S* reg=([0-9a-f]+) val=([0-9a-fA-F]+)$")
@@ -40,6 +41,8 @@ PLL_SAMPLE = re.compile(r" bank=(0x[0-9a-fA-F]+) value=(0x[0-9a-fA-F]+)$")
 DSI0_PLL_BANK = 0x0f7d8800
 GENPD_ARM = "DSI0 genpd probes armed"
 GENPD_DEVICES_ARM = "DSI0 genpd device probes armed"
+WRAPPER_STACK_ARM = "DSI0 wrapper stack trace armed"
+WRAPPER_FRAME = re.compile(r"[a-zA-Z_]\w*(?:[.$]\w+)*(?:\+0x[0-9a-f]+/0x[0-9a-f]+)?(?: \[[\w-]+\])?$")
 PHY_LOAD = "DSI0 loading mipi-cdphy.ko"
 HOST_LOAD = "DSI0 loading mipi-dsi2h.ko"
 GENPD_EVENTS = ("dsi0_genpd_sync", "dsi0_genpd_off_begin", "dsi0_genpd_off_end")
@@ -199,6 +202,48 @@ def summarize_genpd_devices(timeline, arm, status):
         raise ValueError("missing DSI0 PHY or host attachment")
 
 
+def summarize_wrapper(trace, required):
+    rows = [match for line in trace.splitlines() if (match := ROW.search(line))]
+    armed = [index for index, row in enumerate(rows)
+             if row["event"] == "tracing_mark_write" and row["body"] == WRAPPER_STACK_ARM]
+    if not armed and not required:
+        return
+    if len(armed) != 1:
+        raise ValueError("expected one wrapper stack arm marker")
+
+    pending = {}
+    paths = []
+    rpm_events = 0
+    for row in rows[armed[0] + 1:]:
+        pid, cpu, timestamp, event, body = row.group("pid", "cpu", "time", "event", "body")
+        task = (pid, cpu)
+        if event == "dsi0_wrapper_frame":
+            if not paths or task != paths[-1][0] or timestamp != paths[-1][1]:
+                raise ValueError("unexpected wrapper stack frame")
+            if WRAPPER_FRAME.fullmatch(body):
+                paths[-1][4].append(body)
+            continue
+        if event == "dsi0_wrapper_stack":
+            if body != "<stack trace>" or task not in pending:
+                raise ValueError("wrapper stack has no matching vote")
+            request_time, on = pending.pop(task)
+            paths.append((task, timestamp, request_time, on, []))
+        elif event == "send_mail_mbfs" and (vote := MBFS.fullmatch(body)) and int(vote[1], 16) == 8:
+            if task in pending:
+                raise ValueError("wrapper vote is missing its stack")
+            pending[task] = (timestamp, vote[2])
+        elif event.startswith("rpm_"):
+            device = body.split(maxsplit=1)[0].rsplit(":", 1)[-1]
+            if device in WRAPPER_RPM_DEVICES:
+                rpm_events += 1
+                print(f"{timestamp} display {event} pid={pid} {body}")
+    if pending or not paths or any(not frames for _, _, _, _, frames in paths):
+        raise ValueError("wrapper vote stack capture incomplete")
+    for (pid, cpu), _, request_time, on, frames in paths:
+        print(f"{request_time} wrapper vote on={on} pid={pid} cpu={cpu} path={' -> '.join(frames)}")
+    print(f"wrapper_vote_stacks={len(paths)} display_rpm_events={rpm_events}")
+
+
 def summarize_phy_reset(timeline, host_status, required):
     rows = [row for row in timeline if row[3] in (PHY_RESET_PM, PHY_RESET_RESULT) or
             (row[3] == "tracing_mark_write" and row[4].startswith(PHY_RESET_PREFIX))]
@@ -345,7 +390,8 @@ def summarize_rmw(trace):
     print(f"phy_rmw_calls={calls} reads={reads} writes={writes} unmatched={unmatched}")
 
 
-def summarize(trace, require_genpd=False, require_phy_reset=False, require_genpd_devices=False):
+def summarize(trace, require_genpd=False, require_phy_reset=False, require_genpd_devices=False,
+              require_wrapper=False):
     check_buffer(trace)
     timeline = []
     reads = []
@@ -483,6 +529,7 @@ def summarize(trace, require_genpd=False, require_phy_reset=False, require_genpd
     summarize_genpd(timeline, (read_time, read_index), require_genpd)
     if genpd_device_markers:
         summarize_genpd_devices(timeline, genpd_device_markers[0], (read_time, read_index))
+    summarize_wrapper(trace, require_wrapper)
     summarize_phy_reset(timeline, (read_time, read_index), require_phy_reset)
     print("APB clock and external reset state require separate evidence.")
     return correlated
@@ -495,6 +542,8 @@ def main():
     mode.add_argument("--require-genpd", action="store_true", help="require the early DSI0 OFF correlation")
     mode.add_argument("--require-genpd-devices", action="store_true",
                       help="require display genpd device samples and the early DSI0 OFF correlation")
+    mode.add_argument("--require-wrapper", action="store_true",
+                      help="require display genpd device samples and wrapper vote call stacks")
     mode.add_argument("--require-phy-reset", action="store_true", help="require the four PHY reset attempts")
     mode.add_argument("--phy-rmw", action="store_true", help="decode the stock PHY register 0x28 trace")
     args = parser.parse_args()
@@ -503,8 +552,9 @@ def main():
         if args.phy_rmw:
             summarize_rmw(trace)
             return 0
-        return 0 if summarize(trace, args.require_genpd or args.require_genpd_devices,
-                              args.require_phy_reset, args.require_genpd_devices) else 1
+        devices = args.require_genpd_devices or args.require_wrapper
+        return 0 if summarize(trace, args.require_genpd or devices, args.require_phy_reset,
+                              devices, args.require_wrapper) else 1
     except (OSError, ValueError) as error:
         parser.exit(1, f"{parser.prog}: {error}\n")
 

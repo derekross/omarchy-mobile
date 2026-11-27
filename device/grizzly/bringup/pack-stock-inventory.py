@@ -536,7 +536,7 @@ def main():
     mode.add_argument("--dsi0-pll-trace", action="store_true",
                       help="also capture stock DSI0 PHY PLL lock if the driver polls it")
     mode.add_argument("--dsi0-genpd-trace", action="store_true",
-                      help="correlate display genpd devices, worker and sibling votes before DSI0 host access")
+                      help="trace display genpd, wrapper vote stacks and runtime PM before DSI0 host access")
     mode.add_argument("--dsi0-phy-reset-trace", action="store_true",
                       help="correlate active-only stock PHY reset readbacks with DSI0 ON and host status")
     mode.add_argument("--dsi0-phy-reset-uic-trace", action="store_true",

@@ -626,9 +626,21 @@ run_stock_dsi0_trace() (
     }
     # Preserve the tracefs header and scoped rows for offline correlation.
     capture=$("$bb" awk -v pll="$dsi0_pll_requested" -v genpd="$dsi0_genpd_requested" -v phy="$dsi0_phy_reset_requested" '
-        BEGIN { limit = genpd == "yes" ? 192 : 128 }
+        BEGIN { limit = genpd == "yes" ? 480 : 128 }
         NR > limit || length($0) > 512 { invalid=1; exit }
-        /entries-in-buffer\/entries-written:|: (regmap_reg_read|power_domain_target|rpm_resume|rpm_return_int|rpm_status|clk_enable|clk_disable|clk_set_rate|send_mail_mbfs|recv_result_mbfs|dsi0_(clk|rst)_(call|result)|dsi0_(pll|genpd|phy_reset)_[a-z_]+|tracing_mark_write): / {
+        genpd == "yes" && /: (kernel_stack: )?<stack trace>$/ {
+            stack=$0
+            sub(/: (kernel_stack: )?<stack trace>$/, ": ", stack)
+            print stack "dsi0_wrapper_stack: <stack trace>"
+            next
+        }
+        genpd == "yes" && /^[[:space:]]*=> / && stack != "" {
+            sub(/^[[:space:]]*=> /, "")
+            print stack "dsi0_wrapper_frame: " $0
+            next
+        }
+        { stack="" }
+        /entries-in-buffer\/entries-written:|LOST EVENTS|: (regmap_reg_read|power_domain_target|rpm_resume|rpm_suspend|rpm_idle|rpm_return_int|rpm_status|clk_enable|clk_disable|clk_set_rate|send_mail_mbfs|recv_result_mbfs|dsi0_(clk|rst)_(call|result)|dsi0_(pll|genpd|phy_reset)_[a-z_]+|tracing_mark_write): / {
             print
         }
         /: regmap_reg_read: f7d8000\.dsi2host[^ ]* reg=0*c val=/ { reads++ }
@@ -636,11 +648,12 @@ run_stock_dsi0_trace() (
         /: tracing_mark_write: DSI0 PLL lock probes armed$/ { pll_armed++ }
         /: tracing_mark_write: DSI0 genpd probes armed$/ { genpd_armed++ }
         /: tracing_mark_write: DSI0 genpd device probes armed$/ { genpd_devices++ }
+        /: tracing_mark_write: DSI0 wrapper stack trace armed$/ { wrapper_armed++ }
         /: tracing_mark_write: DSI0 PHY reset probe armed$/ { phy_armed++ }
         END {
             if (invalid || reads < 1 || armed != 1) exit 1
             if (pll == "yes" ? pll_armed != 1 : reads != 1) exit 1
-            if (genpd == "yes" && (genpd_armed != 1 || genpd_devices != 1)) exit 1
+            if (genpd == "yes" && (genpd_armed != 1 || genpd_devices != 1 || wrapper_armed != 1)) exit 1
             if (phy == "yes" && phy_armed != 1) exit 1
         }
     ' "$instance/trace") || return 1

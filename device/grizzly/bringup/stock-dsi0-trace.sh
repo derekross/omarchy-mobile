@@ -137,6 +137,12 @@ enable_event() {
 "$bb" echo 64 > "$instance/buffer_size_kb"
 
 host='name == "f7d8000.dsi2host"'
+rpm_devices=$host
+rpm_events='rpm_resume rpm_return_int rpm_status'
+if [ "$mode" = --genpd ]; then
+    rpm_devices="$host || name == \"f190000.disp_smmu\" || name == \"f600000.dc9x00\""
+    rpm_events="$rpm_events rpm_suspend rpm_idle"
+fi
 status='name ~ "f7d8000.dsi2host*" && reg == 12'
 domains='name == "sswrp_dpu_pd" || name == "dpu_be_pd" || name == "dpu_dsi0_pd" || name == "dpu.v" || name == "DpuBe.v" || name == "DpuDsi0.v"'
 clocks='name ~ "*dsi*" || name ~ "*dpu*"'
@@ -149,8 +155,8 @@ if [ "$provider_probes" = yes ]; then
     reads="($host_reads) || ($phy_read)"
 fi
 enable_event regmap/regmap_reg_read "$reads"
-for event in rpm_resume rpm_return_int rpm_status; do
-    enable_event "rpm/$event" "$host"
+for event in $rpm_events; do
+    enable_event "rpm/$event" "$rpm_devices"
 done
 enable_event power/power_domain_target "$domains"
 for event in clk_enable clk_disable clk_set_rate; do
@@ -165,6 +171,11 @@ if [ -n "$mode" ]; then
     for event in send_mail_mbfs recv_result_mbfs; do
         enable_event "power_controller/$event" "$resources"
     done
+    if [ "$mode" = --genpd ]; then
+        # Capture the existing request's call path in this trace instance.
+        "$bb" echo 'stacktrace if pm_resource_id == 8' > \
+            "$instance/events/power_controller/send_mail_mbfs/trigger"
+    fi
 fi
 
 if [ "$provider_probes" = yes ]; then
@@ -208,5 +219,6 @@ fi
 if [ "$mode" = --genpd ]; then
     "$bb" echo 'DSI0 genpd probes armed' > "$instance/trace_marker"
     "$bb" echo 'DSI0 genpd device probes armed' > "$instance/trace_marker"
+    "$bb" echo 'DSI0 wrapper stack trace armed' > "$instance/trace_marker"
 fi
 trap - 0
