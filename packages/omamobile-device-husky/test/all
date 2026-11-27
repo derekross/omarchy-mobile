@@ -287,6 +287,7 @@ bash -n test/speaker-cal || fail "test/speaker-cal parses"
 spkunit=vendor/systemd/system/omamobile-husky-speaker-cal.service
 grep -qx 'WantedBy=multi-user.target' "$spkunit" || fail "the speaker calibration can be enabled"
 grep -qx 'ExecStart=/usr/bin/omamobile-husky-speaker-cal' "$spkunit" || fail "the speaker calibration unit runs the script"
+grep -qx 'ExecStopPost=/usr/bin/omamobile-husky-speaker-cal --stop-post' "$spkunit" || fail "the speaker calibration unit puts a killed run's writes back after a SIGKILL"
 grep -qx 'Requires=omamobile-husky-aoc.service' "$spkunit" || fail "the speaker calibration needs the AoC start"
 grep -qE '^After=(.* )?omamobile-husky-aoc\.service( |$)' "$spkunit" || fail "the speaker calibration runs after the AoC start"
 grep -qE '^After=(.* )?alsa-restore\.service( |$)' "$spkunit" || fail "the speaker calibration runs after alsa-restore"

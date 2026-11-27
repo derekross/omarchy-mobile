@@ -100,6 +100,10 @@ case $1 in
     if [[ -n ${TERM_ON_CSET:-} && $n == *"$TERM_ON_CSET" && ! -e $FAKE/termed ]]; then
       touch "$FAKE/termed"; kill -TERM "$PPID"; exit "${FAKE_TERM_RC:-0}"
     fi
+    # KILL_ON_CSET: SIGKILL instead (the unit's stop timeout): no trap runs
+    if [[ -n ${KILL_ON_CSET:-} && $n == *"$KILL_ON_CSET" && ! -e $FAKE/killed ]]; then
+      touch "$FAKE/killed"; kill -KILL "$PPID"; exit 0
+    fi
     if [[ -n ${TERM2_ON_CSET:-} && $n == *"$TERM2_ON_CSET" && -e $FAKE/termed && ! -e $FAKE/termed2 ]]; then
       touch "$FAKE/termed2"; kill -TERM "$PPID"; exit "${FAKE_TERM_RC:-0}"
     fi ;;
@@ -364,6 +368,44 @@ for trc in 0 143; do
   clean "SIGTERM on Preload off, amixer exit $trc"
 done
 pass "a write that stops midway (error, SIGTERM, a second SIGTERM in the cleanup, SIGTERM on a DSP that started) puts back that amplifier's writes; a failed undo says to reboot"
+
+# 8c. SIGKILL during the writes: no cleanup runs, the file with the values
+# to put back stays in /run, and the unit's ExecStopPost= (--stop-post) puts
+# the driver's cache back, so a stream later this boot gets no partial record
+wfile=$T/run/omamobile-husky-speaker-cal.writing
+reset; loaded_and_run; pre
+rc=0; out=$(KILL_ON_CSET="Top DSP1 Protection cd CAL_R" run) || rc=$?
+[[ $rc == 137 ]] || fail "SIGKILL during the writes ends the run (rc $rc): $out"
+[[ -s $wfile && $(stat -c %a "$wfile") == 600 ]] || fail "the values to put back are in a root-only file in /run after a SIGKILL"
+[[ $(<"$F/val/Top_DSP1_Protection_cd_CAL_R") == 0x00,0x12,0x34,0x56 ]] || fail "the SIGKILL came after Top's CAL_R write"
+: > "$F/log"
+rc=0; out=$(TEST_MARKER= run --stop-post) || rc=$?
+[[ $rc == 0 && $out == *"killed during Top's writes"* && $out == *"Top: the writes so far were undone"* ]] || fail "--stop-post puts the cache back: $out"
+back || fail "after SIGKILL and --stop-post Top's CAL_AMBIENT and CAL_R hold what they held before"
+[[ -z $(grep 'Bottom' "$F/log") ]] || fail "--stop-post touches only the amplifier being written"
+[[ -e $st/speaker-cal-started ]] || fail "--stop-post leaves the marker (the next boot skips)"
+rm -f "$st/speaker-cal-started"; clean "SIGKILL then --stop-post"; novalues "$out"
+# a DSP that started during the writes: stopped before the put-back, firmware loaded again
+reset; pre
+rc=0; out=$(START_ON_WRITE=Top KILL_ON_CSET="Top DSP1 Protection cd CAL_R" run) || rc=$?
+[[ $rc == 137 ]] || fail "SIGKILL on a started DSP (rc $rc): $out"
+: > "$F/log"
+rc=0; out=$(TEST_MARKER= run --stop-post) || rc=$?
+[[ $rc == 0 && $out == *"Top: the DSP started during the writes; Preload Switch off"* ]] || fail "--stop-post stops a started DSP: $out"
+off=$(grep -n 'cset Top DSP1 Preload Switch = off' "$F/log" | cut -d: -f1 || true); put=$(grep -n 'cset Top DSP1 Protection cd CAL_AMBIENT = 0x00,0x00,0x00,0x07' "$F/log" | cut -d: -f1 || true)
+[[ -n $off && -n $put && $off -lt $put && $(grep -c '^load Top' "$F/log") == 1 ]] || fail "--stop-post stops Top before the put-back, then its firmware loads again"
+back || fail "after --stop-post on a started DSP Top's values are back"
+rm -f "$st/speaker-cal-started"; clean "SIGKILL on a started DSP then --stop-post"; novalues "$out"
+# the put-back fails: the reboot line, exit 1, the file still goes
+reset; loaded_and_run; pre
+rc=0; out=$(KILL_ON_CSET="Top DSP1 Protection cd CAL_R" run) || rc=$?
+rc=0; out=$(TEST_MARKER= FAIL_CSET=CAL_AMBIENT run --stop-post) || rc=$?
+[[ $rc == 1 && $out == *"putting the cached values back failed"*"reboot before any speaker stream"* && ! -e $wfile ]] || fail "a failed --stop-post put-back says to reboot (rc $rc): $out"
+# no file (a run that finished, or one killed outside the writes): nothing touched
+reset
+rc=0; out=$(TEST_MARKER= run --stop-post) || rc=$?
+[[ $rc == 0 && -z $out && ! -s $F/log ]] || fail "--stop-post without the file does nothing: $out"
+pass "SIGKILL during the writes: the unit's --stop-post puts the cache back (stopping a DSP that started), or says to reboot"
 
 # 9. persist: mounted (under any name), bad checksum, status not 1, R or ambient
 # out of range, short file, dump.f2fs fails

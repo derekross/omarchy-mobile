@@ -11,7 +11,10 @@
 # script then reloads the firmware under PipeWire, or refuses if a stream
 # holds a DSP. TimeoutStopSec=15: after the start timeout's SIGTERM, SIGKILL
 # follows in 15 s instead of the default 90 s, so a stuck run holds the boot
-# back less. SuccessExitStatus=3: the script exits 3 when it skips (a marker
+# back less. ExecStopPost= runs after that SIGKILL too: if the run was killed
+# during an amplifier's writes, it puts that amplifier's driver cache back
+# (from a file in /run), so a stream later this boot does not start the DSP
+# with a partial record. SuccessExitStatus=3: the script exits 3 when it skips (a marker
 # from a run that never finished, or no sound card), so a hand run can tell a
 # skip from a calibration; for the unit a skip is not a failure. The package
 # installs this unit but does not enable it: enable it by hand only after an
@@ -26,6 +29,7 @@ ConditionPathExists=/sys/bus/platform/devices/154b0000.aoc
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/omamobile-husky-speaker-cal
+ExecStopPost=/usr/bin/omamobile-husky-speaker-cal --stop-post
 RemainAfterExit=yes
 TimeoutStartSec=90
 TimeoutStopSec=15
