@@ -3,11 +3,12 @@
 pkgname=omamobile-device-panther
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omamobile support for the Google Pixel 7 (panther): storage guard, USB networking, GPU, haptics, suspend-to-idle, USB after a replug, display brightness, Wi-Fi, charging"
+pkgdesc="Omamobile support for the Google Pixel 7 (panther): storage guard, USB networking, GPU, haptics, suspend-to-idle, USB after a replug, display brightness, Wi-Fi, charging and off-mode charging"
 arch=(aarch64)
 url="https://github.com/derekross/omamobile"
 license=(MIT)
-depends=(bash systemd omamobile-keyring i2c-tools)
+depends=(bash systemd omamobile-keyring i2c-tools
+         python)  # omamobile-charger-mode
 optdepends=('omamobile-audio>=0.5.16: the speakers on the default calibration without speaker.cal')
 provides=(omamobile-device)
 conflicts=(omamobile-device)

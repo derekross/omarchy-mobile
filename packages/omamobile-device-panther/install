@@ -1,7 +1,9 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Stage omamobile-device-panther into DESTDIR. Nothing is enabled that would
-# mark a slot successful or start the modem or the charger. Wi-Fi starts at
+# mark a slot successful or start the modem. The charger driver loads at boot
+# under the policy in omamobile-charger.conf, and omamobile-charger.target
+# runs only when its generator finds a charger boot. Wi-Fi starts at
 # boot only through its hang-safe guard (omamobile-wifi.service). The camera
 # drivers load only from omamobile-camera.timer, 40 s into the boot, behind
 # a hang marker, and only on a DTB with the camera receiver enabled.
@@ -62,6 +64,14 @@ ln -sfn ../omamobile-camera.timer \
   "$destination/usr/lib/systemd/system/timers.target.wants/omamobile-camera.timer"
 install -Dm644 vendor/modprobe.d/omamobile-fingerprint.conf \
   "$destination/usr/lib/modprobe.d/omamobile-fingerprint.conf"
+# Off-mode charging: the generator makes omamobile-charger.target the
+# default of a charger boot only; nothing else starts it.
+install -Dm755 bin/omamobile-charger-mode "$destination/usr/bin/omamobile-charger-mode"
+install -Dm755 vendor/systemd/system-generators/omamobile-charger-mode-generator \
+  "$destination/usr/lib/systemd/system-generators/omamobile-charger-mode-generator"
+for unit in omamobile-charger.service omamobile-charger.target; do
+  install -Dm644 "vendor/systemd/system/$unit" "$destination/usr/lib/systemd/system/$unit"
+done
 install -Dm644 vendor/NetworkManager/conf.d/10-omamobile-usb.conf \
   "$destination/usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf"
 install -Dm644 device.conf \
