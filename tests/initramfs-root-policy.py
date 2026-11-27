@@ -112,6 +112,40 @@ with tempfile.TemporaryDirectory() as tmp:
         assert result.stdout.count('slept') == sleeps and 'pass' not in result.stdout, (value, result)
     print('ok - the userdata wait is off unless the descriptor packs a limit')
 
+    # The case the wait exists for: userdata shows up partway through. Its
+    # uevent appears at the second sleep; the init must then run the guard's
+    # pass before it reads userdata's ro (the spy writes ro only in the pass)
+    # and go on to the same handover as a partition that was there at once.
+    late = p / 'late'
+    (late / 'sda').mkdir(parents=True)
+    waitfile.write_text('5\n')
+    script = arch.replace(str(blocks / 'sda'), str(late / 'sda'))
+    script = script.replace('/etc/omamobile-root-label', str(p / 'absent-label'))
+    script = script.replace('/etc/omamobile-root-mode', str(p / 'absent-mode'))
+    spies = '''
+say() { echo "say $*" >> "$LOG"; }
+sleep() {
+  echo slept >> "$LOG"
+  n=$(($(cat "$LATE/count" 2>/dev/null || echo 0) + 1)); echo $n > "$LATE/count"
+  [ $n -eq 2 ] && { command mkdir -p "$LATE/sda/sda27"; echo PARTNAME=userdata > "$LATE/sda/sda27/uevent"; }
+  :
+}
+ufs_ro_pass() { echo pass >> "$LOG"; echo 0 > "$LATE/sda/sda27/ro"; }
+mkdir() { :; }
+e2fsck() { echo fsck >> "$LOG"; return 0; }
+grow_root() { echo grow >> "$LOG"; }
+mount() { echo mount >> "$LOG"; return 1; }
+'''
+    log = p / 'late-calls'
+    result = subprocess.run(['/bin/sh', '-c', spies + script + 'boot_arch'],
+                            env={**os.environ, 'LOG': str(log), 'LATE': str(late)},
+                            capture_output=True, text=True)
+    assert result.returncode == 1, result
+    assert log.read_text().splitlines() == [
+        'say arch: waiting for the userdata partition (0 s)', 'slept', 'slept',
+        'pass', 'slept', 'fsck', 'grow', 'mount', 'say arch: cannot mount /dev/sda27'], log.read_text()
+    print('ok - a userdata that appears late gets the guard pass, then the handover')
+
     block = p / 'block/sda27'
     block.mkdir(parents=True)
     (block / 'uevent').write_text('PARTNAME=userdata\n')

@@ -571,7 +571,9 @@ boot_arch() {
     waited=$((waited + 1))
   done
   [ -n "$dev" ] || { say "arch: no userdata partition"; return 1; }
-  # the guard sets each new partition read-only first; let it see userdata
+  # Partitions that came up during the wait came up after the guard's last
+  # pass. userdata is on its allowlist and stays writable, but run the pass
+  # once more so the other late partitions are marked before the final check.
   [ $waited -gt 0 ] && { ufs_ro_pass; sleep 1; }
   [ "$(cat /sys/block/sda/${dev#/dev/}/ro)" = 0 ] || { say "arch: userdata is read-only"; return 1; }
   # Strict identification is opt-in: old hand-installed roots may be unlabelled.
