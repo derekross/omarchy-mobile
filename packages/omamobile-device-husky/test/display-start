@@ -114,7 +114,7 @@ chmod +x "$tmp/bin/sleep"
 splash() { reset; touch "$OMAMOBILE_HUSKY_ROOT/plymouth-up"; out=$(OMAMOBILE_HUSKY_SPLASH_WAIT_MS=$1 "$script"); }
 splash 700
 [[ $out == *"plymouthd is running: waiting 700 ms"* ]] || fail "no splash wait: $out"
-w=$(grep -n '^sleep 0.700$' "$TEST_LOG" | cut -d: -f1); m=$(grep -n '^synced$' "$TEST_LOG" | head -1 | cut -d: -f1)
+w=$(grep -n '^sleep 0.700$' "$TEST_LOG" | cut -d: -f1); m=$(grep -n -m1 '^synced$' "$TEST_LOG" | cut -d: -f1)
 [[ -n $w && -n $m && $w -lt $m ]] || fail "the splash wait comes before the marker is written: $(cat "$TEST_LOG")"
 splash 0
 [[ $out != *"plymouthd is running"* ]] && ! grep -q '^sleep 0\.' "$TEST_LOG" || fail "0 still waits"
