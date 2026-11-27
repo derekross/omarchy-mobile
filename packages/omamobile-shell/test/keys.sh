@@ -70,7 +70,7 @@ STUB
 for tool in omarchy-brightness-display omarchy-system-lock omarchy-shell brightnessctl; do
   cat >"$t/bin/$tool" <<STUB
 #!/bin/bash
-[[ "$tool \$*" == "omarchy-shell lock isLocked" ]] && { cat "$t/locked"; exit 0; }
+[[ "$tool \$*" == "omarchy-shell lock isLocked" ]] && { if [[ -f "$t/isLocked-waits" ]]; then for _ in \$(seq 30); do grep -q "display on start" "$log" && break; sleep 0.1; done; fi; cat "$t/locked"; exit 0; }
 [[ "$tool \$*" == "omarchy-shell lock status" ]] && { printf '{"locked":true,"secure":%s}\n' "\$(cat "$t/secure")"; exit 0; }
 echo "$tool \$*" >>"$log"
 STUB
@@ -215,6 +215,55 @@ done
 grep -qE "omarchy-system-lock|lock dark|omamobile-sleepd" "$log" && fail "a double tap never locks or sleeps"
 [[ ! -e $t/run/omamobile-keys/power-wake ]] || fail "a double tap doesn't swallow the next power press"
 echo "ok - double tap: wakes a dark screen, locked or not, and leaves a lit one alone"
+
+# The double tap's order. OMAMOBILE_POWER_KEY_ANDROID=1: the display starts
+# first and the locked check and the lock's wake run beside it; off (the shared
+# default, the Pixel 7 Pro), as before: the lock's wake, then the display. No
+# clock: the display stand-in logs its start and then waits on a FIFO, which
+# the test opens only after it has seen the lock's wake (or, with no lock
+# wake, the display's start); with the switch on, the locked check waits (up to
+# 10 s) for the display's start, so a display started after it shows as a wrong
+# order, never as a race between two process starts.
+mkdir -p "$t/orig2"; cp "$t/bin/omarchy-brightness-display" "$t/orig2/"
+mkfifo "$t/display-go"
+cat >"$t/bin/omarchy-brightness-display" <<STUB
+#!/bin/bash
+echo "omarchy-brightness-display \$* start" >>"$log"
+read -r _ <"$t/display-go"
+echo "omarchy-brightness-display \$* done" >>"$log"
+STUB
+chmod +x "$t/bin/omarchy-brightness-display"
+# tapq LINE: a double tap, letting the display finish once LINE is logged.
+# The handler runs in its own process group (setsid), so a failed check can
+# release the FIFO and kill the whole tree instead of leaving it blocked.
+release() { timeout "$1" bash -c 'echo go >"$1"' _ "$t/display-go"; }
+tapq_fail() { release 1 || true; kill -- -"$1" 2>/dev/null || true; fail "$2"; }
+tapq() {
+  local k _ seen=
+  reset; setsid bash "$here/bin/omamobile-keys" double-tap & k=$!
+  for _ in $(seq 50); do grep -qxF -- "$1" "$log" && { seen=1; break; }; sleep 0.1; done
+  [[ $seen ]] || tapq_fail $k "double tap: no \"$1\" within 5 s (wrong order?)"
+  release 5 || tapq_fail $k "double tap: the display never waited"
+  for _ in $(seq 50); do kill -0 $k 2>/dev/null || break; sleep 0.1; done
+  kill -0 $k 2>/dev/null && tapq_fail $k "double tap: the handler didn't finish within 5 s"
+  wait $k
+}
+if [[ ${OMAMOBILE_POWER_KEY_ANDROID:-} == 1 ]]; then : >"$t/isLocked-waits"; fi
+echo true >"$t/locked"; echo false >"$t/dpms"
+tapq "omarchy-shell lock wake"
+if [[ ${OMAMOBILE_POWER_KEY_ANDROID:-} == 1 ]]; then
+  before "omarchy-brightness-display on start" "omarchy-shell lock wake" || fail "double tap, as Android's: the display starts before the lock's wake"
+  before "omarchy-shell lock wake" "omarchy-brightness-display on done" || fail "double tap, as Android's: the lock's wake runs beside the display"
+else
+  before "omarchy-shell lock wake" "omarchy-brightness-display on start" || fail "double tap, shared default: the lock's wake, then the display, as before"
+fi
+grep -qxF "omarchy-brightness-display on done" "$log" || fail "double tap, locked: the handler waits for the display"
+echo false >"$t/locked"; echo false >"$t/dpms"
+tapq "omarchy-brightness-display on start"
+grep -qxF "omarchy-brightness-display on done" "$log" || fail "double tap, unlocked: the handler waits for the display"
+grep -q "omarchy-shell lock wake" "$log" && fail "double tap, unlocked: still no lock wake"
+rm -f "$t/isLocked-waits" "$t/display-go"; cp "$t/orig2/omarchy-brightness-display" "$t/bin/"
+echo "ok - double tap: the display first as Android's, the lock's wake first otherwise"
 
 # The screen gone dark while unlocked (omamobile-doubletap tells): it locks,
 # and the new lock hears it is dark, so a touch on the dark screen reaches
