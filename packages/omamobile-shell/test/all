@@ -1364,6 +1364,9 @@ bash test/sleepd.sh || fail "omamobile-sleepd"
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-doubletap || fail "omamobile-doubletap parses"
 python3 -B test/doubletap.py >/dev/null || { python3 -B test/doubletap.py | grep -v '^ok'; fail "omamobile-doubletap"; }
 pass "omamobile-doubletap: double taps and the touchscreen by its capabilities"
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-call-proximity || fail "omamobile-call-proximity parses"
+python3 -B test/call-proximity.py >/dev/null || { python3 -B test/call-proximity.py | grep -v '^ok'; fail "omamobile-call-proximity"; }
+pass "omamobile-call-proximity: the call states it guards, the proximity switch, the blanking steps and the marker's lock across a stop or a kill"
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-weather || fail "omamobile-weather parses"
 python3 -B test/weather.py 2>/dev/null || fail "omamobile-weather"
 tmp=$(mktemp -d); trap 'rm -rf -- "$tmp" "$fixture"' EXIT
@@ -1429,6 +1432,11 @@ grep -cx 'ExecStart=/usr/bin/omamobile-sleepd' systemd/user/omamobile-sleepd.ser
    $(readlink "$u/graphical-session.target.wants/omamobile-doubletap.service") == ../omamobile-doubletap.service ]] \
   || fail "the double-tap watcher is staged and runs for every user's session"
 grep -cx 'ExecStart=/usr/bin/omamobile-doubletap' systemd/user/omamobile-doubletap.service >/dev/null || fail "the unit runs the double-tap watcher"
+# The screen off at the ear: for every session, idle outside calls.
+[[ -x $tmp/root/usr/bin/omamobile-call-proximity && -f $u/omamobile-call-proximity.service &&
+   $(readlink "$u/graphical-session.target.wants/omamobile-call-proximity.service") == ../omamobile-call-proximity.service ]] \
+  || fail "the call proximity guard is staged and runs for every user's session"
+grep -cx 'ExecStart=/usr/bin/omamobile-call-proximity' systemd/user/omamobile-call-proximity.service >/dev/null || fail "the unit runs the call proximity guard"
 # The lock screen's weather: a timer for every session, a one-shot service.
 [[ -x $tmp/root/usr/bin/omamobile-weather && -f $u/omamobile-weather.service && -f $u/omamobile-weather.timer &&
    $(readlink "$u/graphical-session.target.wants/omamobile-weather.timer") == ../omamobile-weather.timer ]] \
