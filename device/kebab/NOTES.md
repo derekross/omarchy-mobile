@@ -18,6 +18,7 @@ slot-B install and its §3.1 entry are agreed.
 | --- | --- | --- |
 | slot A (`boot_a`, `dtbo_a`, `vbmeta_a`, `super`) | the third-party Android build | its own installer |
 | `dtbo_b` | erased | `fastboot erase dtbo_b`, 2026-11-27, after a read-only copy of both `dtbo` partitions (kept off the repository): see first light |
+| `userdata` | Omarchy's root image for this port (the Android build's data is gone) | `fastboot flash userdata` of a sparse image, 2026-11-28 |
 | bootloader firmware | untouched by this port | - |
 
 Slot flags are changed by hand with `fastboot --set-active` to move between
@@ -50,6 +51,48 @@ USB 2.0 peripheral on `usb_1`. No modem, camera or IMU nodes. The panel
 runs on the bootloader's framebuffer; there is no DSI panel driver yet.
 
 [tree]: https://gitlab.com/sm8250-mainline/linux
+
+## 2026-11-28: Omarchy from `userdata` (`fastboot boot`, Arch root on `userdata`)
+
+The boot image was sent with `fastboot boot` (slot B active, `dtbo_b`
+erased), so nothing but `userdata` was written; its command line has no
+`omamobile.initramfs`, so the shared init handed over to the root on
+`userdata`. Kernel `6.13.0-rc7-omamobile-push1-gff61dd629750-dirty`.
+
+- **The root image:** `tools/build-rootfs --local kebab`, 11 GB ext4
+  (8.5 GB of files), all 18 `tests/rootfs-smoke` checks passed. The owner's
+  answers (`firstboot.conf`, root's `authorized_keys`, `boot-update.conf`
+  with `AUTO_WRITE=no`) were written into a copy with debugfs as
+  `tools/install-phone` does; the installer refuses this phone
+  (`android-v0`).
+- **Writing `userdata`:** `fastboot flash userdata` of the raw image stops
+  at once with `Failed reading from userdata` (fastboot 37 reads an AVB
+  footer from the end of a raw image smaller than its partition); the
+  Android sparse image from `img2simg` (8.2 GB) went in 12 chunks in
+  4.5 minutes, as the installer does it.
+- **First boot:** the init grew the file system to the whole partition
+  (220.8 GB), `omamobile-firstboot` ran to `firstboot done` and removed
+  `firstboot.conf`, the user exists, `systemctl is-system-running` says
+  `running` with no failed units. ufw is active, and SSH over `usb0`
+  (172.16.42.1, from `omamobile-device-kebab`'s networkd file) worked.
+  SDDM logged the user in and Hyprland and the Omarchy shell run on
+  simpledrm (no GPU yet, so the CPU draws: "Realtime budget exceeded"):
+  Omarchy's lock screen is on the panel.
+- **Clock:** the RTC reads 1970 and nothing syncs time without a network;
+  the system clock came up a month early.
+- systemd-gpt-auto-generator fails at every daemon reload (harmless; the
+  root is not found through a GPT root type).
+
+**Building the image.** Published `hyprland 0.57.0-3.3` wants
+`libhyprgraphics.so=5`, but Arch Linux ARM moved to `hyprgraphics 0.7.0`
+(`.so=6`), so a root image can't be built from the published set today:
+`packages/hyprland` was rebuilt against it (`--local kebab`). That rebuild
+needed two tool fixes (a split package's own names taken as dependencies;
+an aarch64 build host refused) and a case-sensitive build directory: on a
+case-insensitive host file system the source's `VERSION` file answers
+`#include <version>`.
+
+Next: the display (msm DRM and the 8T's DSI panel), then the GPU.
 
 ## 2026-11-27: RAM-only first light (`fastboot boot`, root in the shared initramfs)
 
