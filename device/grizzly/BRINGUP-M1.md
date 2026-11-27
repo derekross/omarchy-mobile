@@ -7731,6 +7731,47 @@ let the timed return run. Issue no display commit.
 Select stock A in Fastboot and verify Android comes
 up with enforcing verity and the original VBMeta.
 
+###### Attended DSI0 discovery with DP encoder excluded
+
+On 2026-11-27 the fresh read-only rescue copied and
+verified all nine NV partitions (3,392,151,552 bytes)
+privately on the Mac. All five diagnostic images
+passed staging checks, including the full
+`vendor_boot_b` readback. The fixture booted once on B
+with no display commit.
+
+| Kernel uptime | Discovery result |
+| ---: | --- |
+| 5.704473 s | The NV guard passed for five parent disks and nine target partitions. |
+| 5.710108 s | The live B0 tree reported the DP encoder disabled, before display module load. |
+| 7.455459 s | DesignWare bound only to `3a1ce000.i2c`. |
+| 7.958986 s | DA9188 registered before CGYDA probed. |
+| 8.037148–8.045574 s | The stock master bound all six components and registered DRM minor 0. |
+| 11.063835 s | The fixture found one connector, `card0-DSI-1`, with cached status `connected`, encoder state `disabled` and zero cached modes. |
+| 45.099683–45.102938 s | The aggregate and all six components were still bound. The DP encoder was absent from the deferred-probe list. |
+| 90.911009 s | The warm return timer requested restart. |
+
+The single-property DT change resolved the aggregate
+block in the stock diagnostic. The connected cached
+status establishes registration. Mode enumeration and
+display output still need verification. The stock
+driver logged that it could not enable the
+`vs_drm/disp_component_reg_switch` trace event, then
+registered the device successfully.
+
+The VDDD capture retained all 31 events, with six
+successful SMBus transfers and no disable invocation.
+Ramoops and `SYSTEM_LAST_KMSG` matched on all 83
+selected lines. Fastboot returned 133 seconds after
+the B boot request. Stock A completed boot with
+enforcing verity and matching VBMeta.
+
+The next offline step is to trace how the stock CGYDA
+connector populates modes. A later discovery fixture
+can enumerate modes without a display commit once
+the connector probe path and its power dependencies
+are understood.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
