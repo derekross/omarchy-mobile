@@ -24,8 +24,12 @@ export OMAMOBILE_MODEM_NV_OVERLAY=$t/var/modem-nv-overlay
 export OMAMOBILE_MODEM_NV_OVERLAY_ENABLE=$t/enable
 export OMAMOBILE_MODEM_NV_OVERLAY_RESET_MARK=$t/runmark/nv-overlay-reset
 export OMAMOBILE_MODEM_NV_OVERLAY_LOCK=$t/runmark/nv-overlay.lock
-mkdir -p "$t/var"
+mkdir -p "$t/var" "$t/proc"
 : > "$t/enable"
+# No boot-update.conf ($t/buc absent), as on every phone today: the modem
+# image is modem_a's, as it was before the slot was read
+export OMAMOBILE_MODEM_PROC=$t/proc OMAMOBILE_MODEM_BOOT_UPDATE_CONF=$t/buc
+printf 'androidboot.slot_suffix = "_a"\n' > "$t/proc/bootconfig"
 ov() { python3 "$tool" "$@"; }
 
 # Synthetic NV filesystems: made-up bytes of the stock sizes' shape (small
@@ -45,7 +49,7 @@ os.makedirs(f'{root}/modem_userdata/state', exist_ok=True)
 open(f'{root}/modem_userdata/state/made-up.dat', 'wb').write(b'x' * 100)
 PY
 sums() { # $1 file, $2 a word that changes every digest
-  for i in efs efs_backup modem_a modem_userdata persist; do
+  for i in efs efs_backup modem_a modem_b modem_userdata persist; do
     printf '%s  %s.img\n' "$(printf '%s-%s' "$2" "$i" | sha256sum | cut -d' ' -f1)" "$i"
   done > "$1"
 }
@@ -266,6 +270,47 @@ for i in 1 2 3 4 5; do
 done
 [[ $(ls -d "$s".set-aside-* | wc -l) -eq 3 ]] || fail "at most three set-aside copies"
 pass "set-aside copies bounded"
+
+# 12b. The modem image is the profile's slot's, bound by role: with no
+#      SLOT= in boot-update.conf or with SLOT=b (every phone today,
+#      whatever slot boots) and with SLOT=a on slot A the binding is the
+#      five-line one it always was, so no overlay is set aside; a SLOT=a
+#      the boot isn't from, or two SLOT= lines, fail.
+oldbind() { # the binding before the slot was read
+  python3 - "$1" <<'PY'
+import hashlib, sys
+old = ('efs.img', 'efs_backup.img', 'modem_a.img', 'modem_userdata.img', 'persist.img')
+lines = {l.split()[1]: l.split()[0] for l in open(sys.argv[1]) if l.strip()}
+print(hashlib.sha256(''.join(f'{lines[n]}  {n}\n' for n in sorted(old)).encode()).hexdigest())
+PY
+}
+newbind() { python3 -c 'import importlib.machinery as m, importlib.util as u, sys
+l = m.SourceFileLoader("ov", sys.argv[1]); s = u.spec_from_loader("ov", l); o = u.module_from_spec(s); l.exec_module(o)
+print(o.binding(sys.argv[2]))' "$tool" "$1"; }
+for bc in '"_b"' '"_a"'; do
+  rm -f "$t/buc"; printf 'androidboot.slot_suffix = %s\n' "$bc" > "$t/proc/bootconfig"
+  [[ $(newbind "$t/sums") == "$(oldbind "$t/sums")" ]] || fail "no SLOT= (boot $bc): the binding is unchanged"
+done
+printf 'AUTO_WRITE=yes\nSLOT=a\n' > "$t/buc"; printf 'androidboot.slot_suffix = "_a"\n' > "$t/proc/bootconfig"
+[[ $(newbind "$t/sums") == "$(oldbind "$t/sums")" ]] || fail "SLOT=a on slot A: the binding is unchanged"
+# SLOT=b is boot-update's documented default: as no line, on either slot,
+# and the overlay made without the line is applied, not set aside
+for bc in '"_b"' '"_a"'; do
+  printf 'SLOT=b\n' > "$t/buc"; printf 'androidboot.slot_suffix = %s\n' "$bc" > "$t/proc/bootconfig"
+  [[ $(newbind "$t/sums") == "$(oldbind "$t/sums")" ]] || fail "SLOT=b (boot $bc): the binding is unchanged"
+done
+rm -rf "$s" "$s".set-aside-*; cp -a "$t/good-store" "$s"
+boot
+printf 'SLOT=b\n' > "$t/buc"; printf 'androidboot.slot_suffix = "_b"\n' > "$t/proc/bootconfig"
+out=$(ov apply --sums "$t/sums" --root "$t/root" --run "$t/run" 2>&1) || fail "apply with SLOT=b on slot B: $out"
+[[ $out != *"set aside"* ]] && [[ -z $(ls -d "$s".set-aside-* 2>/dev/null) ]] || fail "SLOT=b on a slot-B phone must not set the overlay aside: $out"
+printf 'SLOT=a\n' > "$t/buc"
+out=$(ov apply --sums "$t/sums" --root "$t/root" --run "$t/run" 2>&1) && fail "SLOT=a on slot B fails: $out"
+[[ $out == *"which modem image is unknown"* ]] || fail "and says the modem image is unknown: $out"
+printf 'SLOT=a\nSLOT=a\n' > "$t/buc"
+out=$(ov apply --sums "$t/sums" --root "$t/root" --run "$t/run" 2>&1) && fail "two SLOT= lines fail: $out"
+rm -f "$t/buc"; printf 'androidboot.slot_suffix = "_a"\n' > "$t/proc/bootconfig"
+pass "the binding names the modem line by role: unchanged without SLOT=, with SLOT=b and on SLOT=a from slot A; a SLOT=a the boot isn't from fails"
 
 # 13. The profile's order: apply after the RAM copies are mounted and before
 #     the stock checksum check and any daemon; capture in profile_stop after

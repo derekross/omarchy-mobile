@@ -548,6 +548,109 @@ printf 'ro.boot.cdt_hwid=TESTID\n' > "$t/p4"; cdt "$t/p4" || fail "the persist c
 cdt "$t/missing" && fail "a missing props file is refused"
 pass "board id required"
 
+# The modem's slot (ACTIVE-SLOT-PLAN §4): modem_a, exactly as before, with
+# no SLOT= in boot-update.conf or with SLOT=b (boot-update's documented
+# default); with SLOT=a (a format-2 install on slot A) modem_a only while
+# the boot runs from slot A (bootconfig alone when it has the key, else the
+# command line). The rule is written twice, in the profile (shell) and in
+# the NV overlay (Python): one table goes to both, each must give the
+# expected answer, and so they agree. Fake files only.
+slotfiles() { # boot-update.conf content (%b; "none": absent; "dir": a directory), bootconfig content (%b, or none), command line (%b)
+  rm -rf "$t/slot" && mkdir -p "$t/slot/proc"
+  case $1 in none) ;; dir) mkdir "$t/slot/buc" ;; *) printf '%b' "$1" > "$t/slot/buc" ;; esac
+  [[ $2 == none ]] || printf '%b' "$2" > "$t/slot/proc/bootconfig"
+  printf '%b' "$3" > "$t/slot/proc/cmdline"
+}
+slot_sh() {
+  OMAMOBILE_MODEM_PROC=$t/slot/proc OMAMOBILE_MODEM_BOOT_UPDATE_CONF=$t/slot/buc bash -c \
+    'eval "$(sed -n "/^MODEM_PROC=/p; /^MODEM_BOOT_UPDATE_CONF=/p; /^modem_boot_suffix() {/,/^}/p; /^modem_slot_suffix() {/,/^}/p" profiles/modem.conf)"; modem_slot_suffix'
+}
+slot_py() {
+  OMAMOBILE_MODEM_PROC=$t/slot/proc OMAMOBILE_MODEM_BOOT_UPDATE_CONF=$t/slot/buc python3 -c 'import importlib.machinery as m, importlib.util as u, sys
+l = m.SourceFileLoader("ov", sys.argv[1]); s = u.spec_from_loader("ov", l); o = u.module_from_spec(s); l.exec_module(o)
+try:
+    print(o.slot_suffix())
+except o.Invalid:
+    pass' lib/omamobile-modem-nv-overlay
+}
+slotcase() { # expected (_a, or "" for unknown), then slotfiles' three, then what the case is
+  local sh py
+  slotfiles "$2" "$3" "$4"
+  sh=$(slot_sh) || fail "$5: the profile's reader failed"
+  py=$(slot_py) || fail "$5: the overlay's reader failed"
+  [[ $sh == "$1" ]] || fail "$5: the profile says '${sh}', expected '$1'"
+  [[ $py == "$1" ]] || fail "$5: the overlay says '${py}', expected '$1' (the profile says '${sh}')"
+}
+BCA='androidboot.slot_suffix = "_a"\n' BCB='androidboot.slot_suffix = "_b"\n'
+slotcase _a none "$BCB" '\n' "no boot-update.conf (every phone today, on slot B)"
+slotcase _a 'AUTO_WRITE=yes\n' "$BCB" '\n' "a boot-update.conf without SLOT="
+slotcase _a none none '\n' "no SLOT= and no slot named: nothing read"
+slotcase _a 'AUTO_WRITE=yes\nSLOT=a\n' "$BCA" '\n' "SLOT=a on slot A"
+slotcase _a 'SLOT="a"' none 'x androidboot.slot_suffix=_a\n' "SLOT=a, quoted, no final newline, the slot on the command line"
+slotcase _a 'SLOT=a\n' none 'x\tandroidboot.slot_suffix=_a  y androidboot.slot_suffix=_a\n' "the command line names the slot twice alike, split on tabs and spaces"
+slotcase _a 'SLOT=b\n' "$BCB" '\n' "SLOT=b on slot B is boot-update's default, as no line"
+slotcase _a 'SLOT="b"\n' "$BCA" '\n' "SLOT=b reads nothing else, like no line"
+slotcase _a 'SLOT=b\n' none 'console=null\n' "SLOT=b and no slot named"
+slotcase '' 'SLOT=a\n' "$BCB" '\n' "SLOT=a on slot B (a fallback)"
+slotcase '' 'SLOT=a\n' none 'console=null\n' "SLOT=a, no slot named"
+slotcase '' 'SLOT=a\nSLOT=a\n' "$BCA" '\n' "two SLOT= lines"
+slotcase '' 'SLOT=b\nSLOT=a\n' "$BCA" '\n' "SLOT=b and SLOT=a"
+slotcase '' 'SLOT=c\n' "$BCA" '\n' "SLOT=c"
+slotcase '' 'SLOT=\n' "$BCA" '\n' "an empty SLOT="
+slotcase '' 'SLOT=a\r\n' "$BCA" '\n' "SLOT=a with a CRLF"
+slotcase '' 'SLOT=b\r\n' "$BCB" '\n' "SLOT=b with a CRLF"
+slotcase _a 'X=1\rSLOT=c\n' "$BCA" '\n' "a SLOT= after a bare CR is not a line of its own"
+slotcase _a 'X=1\fSLOT=c\n' "$BCA" '\n' "nor after a form feed"
+slotcase _a 'SLOT=b\n\0377\0376\n' "$BCB" '\n' "bytes that are not UTF-8 elsewhere in the file"
+slotcase '' 'SLOT=a\0377\n' "$BCA" '\n' "bytes that are not UTF-8 in the value"
+slotcase '' dir "$BCA" '\n' "a boot-update.conf that is there but can't be read (a directory)"
+slotcase '' 'SLOT=a\n' 'androidboot.slot_suffix = ""\n' 'androidboot.slot_suffix=_a\n' "an empty bootconfig value is unknown, not the command line's"
+slotcase '' 'SLOT=a\n' 'androidboot.slot_suffix = ""\nandroidboot.slot_suffix = "_a"\n' '\n' "an empty bootconfig value beside a good one"
+slotcase '' 'SLOT=a\n' "$BCA$BCB" '\n' "two bootconfig values that disagree"
+slotcase _a 'SLOT=a\n' "$BCA$BCA" '\n' "the same bootconfig value twice"
+slotcase '' 'SLOT=a\n' 'androidboot.slot_suffix = "_a"\r\n' '\n' "a CR after the bootconfig value"
+slotcase '' 'SLOT=a\n' none 'androidboot.slot_suffix=_a\r\n' "a CR after the command line's value"
+slotcase '' 'SLOT=a\n' none 'androidboot.slot_suffix=_a androidboot.slot_suffix=_b\n' "the command line names both slots"
+slotcase '' 'SLOT=a\n' none 'x\nandroidboot.slot_suffix=_a\n' "only the command line's first line counts"
+rm -rf "$t/slot"; mkdir -p "$t/slot/proc"; ln -s nowhere "$t/slot/buc"; printf '%b' "$BCA" > "$t/slot/proc/bootconfig"; : > "$t/slot/proc/cmdline"
+[[ -z $(slot_sh) && -z $(slot_py) ]] || fail "a dangling symlink for boot-update.conf is there but can't be read: unknown in both readers"
+grep -q 'MODEM_SLOT=$(modem_slot_suffix)' profiles/modem.conf && grep -q 'which modem image is unknown' profiles/modem.conf \
+  || fail "the check reads the slot and refuses an unknown one"
+setup=$(sed -n '/^profile_setup() {$/,/^}$/p' profiles/modem.conf)
+grep -q 'for p in "modem$MODEM_SLOT" efs efs_backup modem_userdata persist; do modem_copy "$p"; done' <<<"$setup" \
+  && grep -q 'modem_loop "$NV/modem$MODEM_SLOT.img" ro' <<<"$setup" && grep -q 'by-name/modem$MODEM_SLOT"' <<<"$setup" \
+  && grep -q 'modem_slot_props' <<<"$setup" || fail "setup copies, binds and names the running slot's modem image"
+grep -q 'cbd -t s5100sit -P "by-name/modem$MODEM_SLOT" -s 2 -o r' profiles/modem.conf || fail "cbd boots the running slot's image"
+! grep -qwE 'modem_a|modem_b' <(grep -v '^ *#' profiles/modem.conf | grep -vF 'for p in efs efs_backup modem_userdata modem_a modem_b persist; do') \
+  || fail "no fixed modem_a or modem_b left outside the NV partition check"
+! grep -qE '^(ro\.boot\.slot_suffix|vendor\.cbd\.partition)=' modem/props.conf || fail "props.conf no longer fixes the slot"
+# The property store as the chroot writes it (one file per key, printf %s),
+# then the slot's two: on slot A exactly the values props.conf fixed before
+props() { # slot, per-phone props file or none
+  rm -rf "$t/root" && mkdir -p "$t/root/dev/__omamobile_props__"
+  local line k f
+  for f in modem/props.conf "$2"; do
+    [[ -f $f ]] || continue
+    while IFS= read -r line; do
+      [[ $line =~ ^[[:space:]]*# || $line != *=* ]] && continue
+      k=${line%%=*}; printf '%s' "${line#*=}" > "$t/root/dev/__omamobile_props__/$k"
+    done < "$f"
+  done
+  ROOT=$t/root MODEM_SLOT=$1 bash -c 'die() { echo "$*" >&2; exit 1; }; eval "$(sed -n "/^modem_slot_props() {/,/^}/p" profiles/modem.conf)"; modem_slot_props'
+}
+props _a none || fail "slot A's props are written"
+[[ $(cat "$t/root/dev/__omamobile_props__/ro.boot.slot_suffix") == _a && $(cat "$t/root/dev/__omamobile_props__/vendor.cbd.partition") == modem_a ]] \
+  || fail "on slot A, ro.boot.slot_suffix=_a and vendor.cbd.partition=modem_a, as before"
+[[ $(od -An -c "$t/root/dev/__omamobile_props__/ro.boot.slot_suffix" | tr -d ' ') == _a ]] || fail "written without a newline, as the property store holds every value"
+props _b none || fail "slot B's props are written"
+[[ $(cat "$t/root/dev/__omamobile_props__/ro.boot.slot_suffix") == _b && $(cat "$t/root/dev/__omamobile_props__/vendor.cbd.partition") == modem_b ]] \
+  || fail "on slot B, _b and modem_b"
+printf 'ro.boot.cdt_hwid=TESTID\nvendor.cbd.partition=modem_a\n' > "$t/perphone"
+props _b "$t/perphone" 2>"$t/err" && fail "a per-phone value naming the other slot stops the profile"
+grep -q 'differs from this boot' "$t/err" || fail "and says why"
+props _a "$t/perphone" || fail "a per-phone value that agrees is fine"
+pass "the modem's slot: modem_a as before with no SLOT= or SLOT=b, with SLOT=a only on a boot from slot A, one table through both readers; its image, cbd's -P and the two slot properties follow"
+
 # The on/off switch (the shell's Mobile network page): a fake systemctl
 # records what it's asked. "off" only masks; "on" unmasks and starts the
 # target only when this boot's modem never started and the phone is
