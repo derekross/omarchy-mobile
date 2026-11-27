@@ -7961,6 +7961,18 @@ without opening a DRM file. It does not time
 enumeration or establish transfer and teardown
 behavior.
 
+In the saved stock D1 Composer dump, the CGYDA
+1280×2856 `vscan=1` row is enabled and carries the
+DRM preferred flag `0x8`. Its pixel clock is 497640
+kHz, with horizontal sync start, end and total
+1360/1384/1430 and vertical sync start, end and
+total 2868/2872/2900. These totals give exactly
+120 Hz. Both `vscan=2` rows, including the 995280 kHz
+1280×2856 timing, are disabled in that snapshot. Composer
+reports config 5 (1080×2410 at 358680 kHz) as its
+active and preferred configuration. Preserve the
+distinction when choosing a first native mode.
+
 Leave the exact collector unarmed on stock D1
 unless a supported tracefs context alongside the
 existing client is established. A normal System
@@ -7968,6 +7980,64 @@ Tracing capture can provide a display timeline
 through the events available to that build. The
 current discovery ramdisk has the tracing controls
 but no stock Composer client to observe.
+
+###### Stock CGYDA compression and mainline DSI2 reuse
+
+In the exact D1 `panel-gs-pkcgda.ko`, the two
+1280×2856 120 Hz rows (`.rodata+0x448` and `+0x6a0`)
+both point to the DSC configuration at `.data+0x288`.
+It specifies DSC 1.2, RGB conversion, block prediction,
+8 bits per component, 8 compressed bits per pixel, two
+640×24 slices and a 640-byte slice chunk. Running the
+factory `drm_dsc_pps_payload_pack` as a pure ARM64
+function with those configuration bytes produced a
+128-byte PPS with SHA-256
+`7c52ba59aa85542e0f8a578e11a93fb8306b36fa255bdf00f27840ec724eb8f1`.
+This is an offline reference for the packer.
+
+The panel enable path selects the configuration by
+panel variant and resolution, sends the PPS via
+`gs_dcs_write_dsc_config`, then sends the panel's
+compression-enable command. On the scanout side,
+`vs_dc_display_set_mode` reads the connector state and
+calls `dc_hw_config_dsc` before `dc_hw_setup_display_mode`
+(`vs_drm.ko` text `0x42ac0` and `0x42ad8`). The first
+native pattern at this timing needs the compressed
+stream and a matching panel configuration. The active
+pixel payload alone would be about 10.53 Gbit/s at 24 bpp,
+above the aggregate 5.56 Gbit/s of four 1390 Mbit/s lanes
+before accounting for any protocol overhead.
+
+The local mainline base (`82e3cf0b7f74`) has the
+Synopsys `dw-mipi-dsi2` bridge. It matches the stock
+host power register offset `0x0c` and supplies a
+generic command packet transfer. DRM's DSC helpers
+can pack a PPS and send it as a DSI picture parameter
+set. The bridge itself defines `IPI_FORMAT_DSC` but
+`dw_mipi_dsi2_ipi_color_coding_cfg` always selects
+`IPI_FORMAT_RGB`. Sending the PPS would configure the
+panel decoder. A native compressed stream also needs
+matching DPU encoder and host IPI programming.
+
+The bridge gets `pclk` and `sys` from the platform.
+Its probe can pulse an optional `apb` reset, and its
+mode setup performs host-local soft resets and writes
+`PWR_UP`. Those operations depend on a qualified Malibu
+APB clock and external reset sequence. Keep the bridge
+disabled in Grizzly diagnostics until that prerequisite
+is met. Keep the PHY TX and host read holds in place.
+
+The next stock check needs the Pixel running D1 on A.
+Query the stock Perfetto service over ADB and check
+whether it can collect the driver's existing
+`vs_drm/disp_set_mode` and `vs_drm/disp_frame_done`
+events while the existing Composer client runs. Use
+the capture's setup status to distinguish unavailable
+events from an idle observation window. Open no extra
+DRM file and leave the panel payload events out. This
+would qualify a passive observation path for a stock
+modeset. It cannot establish the mainline APB gate or
+external reset, or supply a DP0 PSM1 sample.
 
 ###### Mainline DSI0 readiness after stock connector registration
 
