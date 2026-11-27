@@ -32,11 +32,14 @@ reported the screen off, but the CRTC never turned off. See
   Hyprland's environment (read once at startup): `omamobile-device-panther`
   sets it in `environment.d`, and the other phones rotate as before until
   it has run on them.
-- `pkgrel=3.3`: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
+- `pkgrel=3.4`: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
   (`extra/hyprland` 0.57.0-3, a rebuild for aquamarine 0.16.0 and
   hyprgraphics 0.6.0) release, plus `.1`, so it sorts above both; `.2` for
   the rotation hold, since 3.1 is published; `.3` for the half turn's
-  383 ms and the alpha-out curve, since 3.2 is published.
+  383 ms and the alpha-out curve, since 3.2 is published; `.4` a rebuild,
+  with no source change, against hyprgraphics 0.7.0 (`libhyprgraphics.so=6`),
+  which replaced 0.6.x in Arch Linux ARM on 2026-11-25: 3.3 needed so=5, and
+  nothing that installs it resolved any more.
 - `arch=(aarch64)` only.
 - `build()` runs the two cmake steps of `make release` itself:
   - with Arch's `-DCMAKE_SKIP_RPATH=ON` (Arch's PKGBUILD seds it into the
