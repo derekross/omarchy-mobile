@@ -7410,6 +7410,52 @@ client. The next guarded milestone is to verify
 the panel I²C supplier and connected DSI0 connector
 before issuing any display commit.
 
+###### Guarded stock CGYDA connector discovery
+
+`pack-stock-inventory.py --dsi0-panel-discovery`
+adds the five factory modules to the guarded display
+manifest. The exact D1 Image's `platform_match`
+(`0xbfc93c`) checks `driver_override` before OF
+matching. The setter changes the override string in
+RAM. The factory driver name is `i2c_designware`.
+
+After the NV guard passes, PID 1 verifies the four
+expected platform-device names, their compatible
+strings and unbound state. It refuses a preexisting
+override or an unexpected DesignWare match. It
+temporarily remounts sysfs writable to write a
+nonmatching override for the three other buses,
+restores read-only sysfs and verifies the overrides
+before loading the driver. The exclusions remain
+in place until reboot. The target and two excluded
+buses share a power domain. The check scopes driver
+binding and leaves shared-domain power behavior to
+the stock driver.
+
+Before loading the regulator and panel, PID 1 checks
+that only `3a1ce000.i2c` bound. It then checks for
+the S2DOS07x02 client at `0x60` under that controller
+and the CGYDA panel under DSI0. The last step reads
+cached DRM connector status, encoder association and
+mode count through sysfs. A missing or unknown
+connector is recorded as incomplete. There is no
+DRM client, connector force-probe or display commit
+in this fixture. The stock kernel drivers still
+perform their normal probe and power-management
+operations. The independent 90-second warm return
+remains armed.
+
+The packed `init_boot` SHA-256 is
+`9d081028c16014659193a8c88c3b4f853129d5a8206136b0e8b30a1976984190`.
+The other four images match the previous D1 display
+fixtures. Image hashes, AVB, archive readback,
+handoff bounds and saved slot fit passed. Offline
+sysfs mocks exercised both the scoped binding and
+refusals for an unexpected match, an existing override,
+failure to restore read-only sysfs, a second binding
+and incomplete connector discovery. Hardware binding
+remains pending.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

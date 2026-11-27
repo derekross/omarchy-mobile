@@ -432,6 +432,17 @@ stock_inventory_modules() (
             fi
             stock_inventory_log "loading module=$module"
             "$bb" insmod "$file" "$@" >/dev/kmsg 2>&1 || return 1
+            if [ "$module" = i2c-designware-platform.ko ] && [ "${dsi0_panel_requested:-no}" = yes ]; then
+                for wait in 1 2 3 4 5; do
+                    stock_panel_check_i2c /sys && break
+                    "$bb" sleep 1 || return 1
+                done
+                stock_panel_check_i2c /sys || {
+                    stock_inventory_log "DSI0 panel I2C bind did not match the scoped controller"
+                    return 1
+                }
+                stock_inventory_log "DSI0 panel I2C driver bound only to $panel_bus"
+            fi
             if [ "$module" = mipi-cdphy.ko ] && [ "${dsi0_pll_arming:-no}" = yes ]; then
                 "$bb" sh "$helper" "$tracefs" "$bb" --pll-probes || return 1
             fi
@@ -814,6 +825,7 @@ dsi0_pll_requested=no
 dsi0_genpd_requested=no
 dsi0_phy_reset_requested=no
 dsi0_rmw_requested=no
+dsi0_panel_requested=no
 dsi0_helper=/grizzly-inventory/stock-dsi0-trace.sh
 dsi0_genpd_marker=/grizzly-inventory/dsi0-genpd-trace
 if [ -e "$dsi0_genpd_marker" ] || [ -L "$dsi0_genpd_marker" ]; then
@@ -847,6 +859,16 @@ if [ -e "$dsi0_rmw_marker" ] || [ -L "$dsi0_rmw_marker" ]; then
     fi
     dsi0_rmw_requested=yes
     dsi0_helper=/grizzly-inventory/stock-dsi0-rmw-trace.sh
+fi
+dsi0_panel_marker=/grizzly-inventory/dsi0-panel-discovery
+if [ -e "$dsi0_panel_marker" ] || [ -L "$dsi0_panel_marker" ]; then
+    if [ "$dsi0_genpd_requested" = yes ] || [ "$dsi0_pll_requested" = yes ] ||
+       [ "$dsi0_phy_reset_requested" = yes ] || [ "$dsi0_rmw_requested" = yes ] ||
+       [ ! -f "$dsi0_panel_marker" ] || [ -L "$dsi0_panel_marker" ] || [ ! -f "$dsi0_manifest" ]; then
+        end_inventory "DSI0 panel discovery fixture is ambiguous or incomplete"
+    fi
+    dsi0_panel_requested=yes
+    dsi0_helper=/grizzly-inventory/stock-dsi0-panel.sh
 fi
 if [ -e "$dsi0_manifest" ] || [ -L "$dsi0_manifest" ]; then
     if [ "$fixture" != inventory ] || [ "$nv_guard_requested" != yes ] ||
@@ -925,6 +947,15 @@ if stock_inventory_scan /sys/class/block yes; then
     if [ "$nv_guard_requested" = yes ]; then
         stock_nv_guard "$bb" /sys/class/block /proc/self/mountinfo /grizzly-inventory/nv-ro "$nv_snapshot_output" ||
             end_inventory "NV guard failed"
+        if [ "$dsi0_panel_requested" = yes ]; then
+            # shellcheck source=stock-dsi0-panel.sh
+            . "$dsi0_helper"
+            stock_panel_scope_i2c /sys || end_inventory "DSI0 panel I2C scope could not be verified"
+            stock_inventory_modules load "$dsi0_manifest" || end_inventory "DSI0 panel module load failed"
+            "$bb" sleep 3 || end_inventory "DSI0 panel settle failed"
+            stock_panel_discover /sys || end_inventory "DSI0 panel discovery incomplete"
+            end_inventory "DSI0 panel discovery and NV guard complete"
+        fi
         if [ "$dsi0_rmw_requested" = yes ]; then
             run_stock_dsi0_rmw_trace || end_inventory "DSI0 PHY register trace unavailable after NV guard"
             end_inventory "DSI0 PHY register trace and NV guard complete"
