@@ -6,6 +6,10 @@
 # re-wants it) do not start it again (6968 starts in one boot on 2026-11-25 without it). StopWhenUnneeded= stops
 # it when the charger device goes away (driver unbind or module reload), so the next add runs it again. A cable
 # replug does not remove the device; the driver keeps the limit across it (checked 2026-11-25).
+# systemd marks the charger active on its first change event, not the add (boot journal 2026-11-27), so
+# that is the start. If that first run fails the unit is left failed, and the next change event wants it
+# again: it is retried, within systemd's default start limit (5 starts in 10 s), not left failed until the
+# next boot. (Read from systemd's behaviour and the 2026-11-25 count; a failing first run is not tested.)
 [Unit]
 Description=Apply the saved charge limit
 After=local-fs.target
