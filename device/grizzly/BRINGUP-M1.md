@@ -7890,6 +7890,59 @@ wrong kernel, a missing symbol, overwritten events
 or missed probes. Live registration and capture
 remain unverified.
 
+###### Stock D1 access for the passive CGYDA trace
+
+The saved D1 Android bugreport identifies a production
+`user` build with `ro.debuggable=0`, `ro.secure=1`
+and enforcing SELinux. The `shell` domain was denied
+read and getattr on tracefs `available_events`.
+The saved kernel config enables kprobes, kretprobes
+and dynamic events. It lacks the function and ftrace
+syscall tracers. Kernel support alone does not grant
+the shell permission to create the collector's
+instance and probes.
+
+The stock bugreport shows the System Tracing app,
+`traced` and `traced_probes`. The probe daemon runs
+in its own SELinux domain and the shell denial
+does not establish what it can access. The
+bugreport's Perfetto command found no session
+eligible for export. It did not attempt to register
+probes. The saved material contains neither a D1
+probe policy nor a successful request for these
+dynamic events, so a supported production Perfetto
+route for the full collector remains unverified.
+
+Exact D1 `gs-panel.ko` defines `panel/dsi_tx`
+and `panel/dsi_rx`. Both event formats include
+packet payloads. They are unsuitable for the
+metadata-only collector. `vs_drm/disp_set_mode`
+and `vs_drm/disp_commit_begin` describe programming
+and commits. The inspected factory display modules
+provide no corresponding native events for
+`gs_panel_get_modes` or `vs_drm_postclose`.
+Stock logged failure to enable the differently
+named `vs_drm/disp_component_reg_switch` event
+during boot. Finding a compiled tracepoint does
+not establish production Perfetto access to it.
+
+The existing stock Composer HAL dump already
+reports six DSI-1 configurations. It lists the
+four 120 Hz timings at 1280×2856 and 1080×2410
+with their two clock variants, and two 30 Hz
+timings. This confirms the reported stock timings
+without opening a DRM file. It does not time
+enumeration or establish transfer and teardown
+behavior.
+
+Leave the exact collector unarmed on stock D1
+unless a supported tracefs context alongside the
+existing client is established. A normal System
+Tracing capture can provide a display timeline
+through the events available to that build. The
+current discovery ramdisk has the tracing controls
+but no stock Composer client to observe.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
