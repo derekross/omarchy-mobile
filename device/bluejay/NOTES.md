@@ -50,6 +50,14 @@ keeps manual GS101 success marking on hold and requires a known-good image
 flash before the boot that would spend B's final try. This note changes no
 tool, guard, package or runbook and performs no phone operation.
 
+## 2026-11-11: physical Back gestures
+
+On November 11, both edges went back one page in Chromium on the Pixel 6a.
+With the keyboard open, the first Back hid it and left the page in place.
+A Qt dialog closed on Escape delivered through `wtype`. The phone ran
+`omamobile-shell 0.2.119-1` from the combined build at `83326ed6`.
+The revised package still needs its own handset run.
+
 ## 2026-11-09: review split and slot-success audit (offline)
 
 The development source remains inspectable in [#543](https://github.com/derekross/omamobile/pull/543).

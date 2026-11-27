@@ -162,6 +162,14 @@ Hyprland transform 1 or 3 gives a 1040x480 logical px output (portrait is 480x10
 
 **What remains after batch 4:** 1.11 (gum prompts as sheets: onboarding, PIN setup), 1.12's Nightlight and Reminder tiles, 2.1's per-token font seeds (the 12 px floor is in; the overrides need a theme-change check), 2.7 contrast (4.5:1 for placeholder and secondary text), 3.1 per-site web-app flags, 3.3's upstreamable `menu.d` patch (the rows are hidden by `omamobile-setup-user` for now), 3.6 haptics, 3.7 polish, and the Omarchy patches 3-6 below.
 
+## Browser history after native Back (1.2)
+
+On November 11, both edges went back one page in Chromium on the Pixel 6a.
+With the keyboard open, the first Back hid it and left the page in place.
+A Qt dialog closed on Escape delivered through `wtype`. The phone ran
+`omamobile-shell 0.2.119-1` from the combined build at `83326ed6`.
+The revised package still needs its own handset run.
+
 ## Suggested order
 
 1. Phase 0 (one `omamobile-omarchy` and firstboot release, plus a `phone-smoke` lock check).
