@@ -793,7 +793,9 @@ code that reads it once PD3 is decided), and the OnePlus 7T Pro's descriptor lin
   from the sixth wrong PIN, no wipe. **Not done:** item 2 (the shells and
   SSH stay, so this is not a release initramfs for a locked phone) and item
   7 (no setup mode: a plain ext4 `userdata` boots as today). The kernel
-  options of §5.3's last paragraph are in, plus `CRYPTO_USER_API_HASH`.
+  options of §5.3's last paragraph are in, except
+  `CRYPTO_USER_API_SKCIPHER`: cryptsetup opens the volume without the
+  kernel's crypto sockets (§11.8, PD14).
 - **§5.4, installing.** Not done as designed. Instead of setup mode with
   the PIN chosen on the pad and a root stream checked against a digest in
   the verified `init_boot`, `tools/phone-encrypt --fresh` formats
@@ -987,14 +989,16 @@ changes every phone's kernel configuration:
 CONFIG_BLK_DEV_DM=y
 CONFIG_DM_CRYPT=y
 CONFIG_CRYPTO_XTS=y
-CONFIG_CRYPTO_USER_API_HASH=y
-CONFIG_CRYPTO_USER_API_SKCIPHER=y
 ```
 
 Built in because most phones' initramfs carry no modules. `BLK_DEV_DM` and
 `CRYPTO_XTS` were modules from the arm64 defconfig, the rest unset
-(`CRYPTO_AES_ARM64_CE_BLK=y` was already in). AF_ALG is what cryptsetup
-uses for the LUKS2 keyslot area and its checks. They are inert without an
+(`CRYPTO_AES_ARM64_CE_BLK=y` was already in). The kernel's crypto sockets
+for userspace (`CRYPTO_USER_API_HASH` and `_SKCIPHER`, AF_ALG), which
+cryptsetup uses for the LUKS2 keyslot area where they exist, stay off:
+they would open the kernel's crypto API to every process on every phone,
+and cryptsetup opened the owner's volume without them (§11.9, 2026-11-27).
+The three that are in are inert without an
 encrypted root: the kernel sets up no device-mapper target by itself, and
 at boot only the `cryptsetup` of an `INITRAMFS_CRYPT` initramfs opens one,
 on a LUKS2 `userdata`. A per-device `kernel.config` can't carry them,
@@ -1078,6 +1082,15 @@ device-neutral `tests/phone-encrypt`.
   ok" being slot A and a root on `/dev/mapper/root`, which the smoke test
   doesn't know yet. The owner then checked on the phone that it boots with
   no cable in ([hotdog BRINGUP-M1](../device/hotdog/BRINGUP-M1.md), in #931).
+- **2026-11-27, the unlock without AF_ALG** (PD14, the maintainer's
+  question; RAM boot, `boot_a` unchanged): kernel
+  `7.3.0-rc6-omamobile-prtest2noalg-gd8605e53486d`, the shared fragment
+  and this phone's own with `CRYPTO_USER_API_HASH` and `_SKCIPHER` off and
+  nothing else changed (`CRYPTO_USER_API=m` for `_RNG`, as the defconfig
+  has it; the initramfs packs no module but the touchscreen's). The pad at
+  2.4 s, the root open at 13.3 s with the owner's PIN on the first try
+  (`pinpad-status` 0), the switch to Arch at 13.4 s. The mapping as before:
+  LUKS2, `aes-xts-plain64`, a 512-bit key, discards and no workqueues.
 - **Not run:** PT3 on its own (it ran inside PM2), PM3 and PM4 (recorded
   as a whole), the recovery key at the pad, `omamobile-pin` on the phone,
   a charging boot.
@@ -1168,7 +1181,9 @@ something to follow; each is one place in the code.
   in this pull request), or in every initramfs, as the contributor first
   built it. And whether `--release` may set it while §5.3 item 2 is open.
 - **PD14. The kernel options** in the shared fragment (as here), for every
-  phone, with the reasons of §11.8.
+  phone, with the reasons of §11.8: device-mapper, dm-crypt and XTS. The
+  two AF_ALG options are out, at the maintainer's request, since the
+  unlock works without them (§11.9, 2026-11-27).
 - **PD15. What follows:** `omamobile-crypt` in the root image,
   `install-phone --encrypt` (or `--fresh` folded into it),
   `tools/phone-smoke` knowing `/dev/mapper/root`, and `omamobile-setup-user`
