@@ -23,16 +23,19 @@ KEEP = os.environ.get('KEEP')
 @unittest.skipUnless(SIM and Path(SIM).exists(), 'no simulator (set SIT_SIM)')
 class SimulatorTests(unittest.TestCase):
     def setUp(self):
+        self._orig_cwd = os.getcwd()
         self.dir = Path(tempfile.mkdtemp(prefix='sit-sim-'))
+        os.chdir(self.dir)
+        self.addCleanup(os.chdir, self._orig_cwd)
         (self.dir / 'run').mkdir(mode=0o700)
         self.env = dict(os.environ,
-                        OMAMOBILE_SIT_RUN=str(self.dir / 'run'),
-                        OMAMOBILE_SIT_STATE=str(self.dir / 'state'),
-                        OMAMOBILE_SIT_CONFIG=str(self.dir / 'modem-sit.conf'),
-                        OMAMOBILE_SIT_DEVICE='unix:' + str(self.dir / 'ipc0'),
-                        OMAMOBILE_SIT_ROUTER='unix:' + str(self.dir / 'router'),
+                        OMAMOBILE_SIT_RUN='run',
+                        OMAMOBILE_SIT_STATE='state',
+                        OMAMOBILE_SIT_CONFIG='modem-sit.conf',
+                        OMAMOBILE_SIT_DEVICE='unix:ipc0',
+                        OMAMOBILE_SIT_ROUTER='unix:router',
                         OMAMOBILE_SIT_BOOT='none', PYTHONDONTWRITEBYTECODE='1',
-                        OMAMOBILE_SIT_BACKLIGHT=str(self.dir / 'backlight'))
+                        OMAMOBILE_SIT_BACKLIGHT='backlight')
         (self.dir / 'modem-sit.conf').write_text(
             '[network]\napn = internet.example\nsim_timeout = 20\nregister_timeout = 30\n'
             '[audio]\ncard = none\n')
@@ -40,16 +43,19 @@ class SimulatorTests(unittest.TestCase):
         self.procs = []
 
     def tearDown(self):
-        for proc in reversed(self.procs):
-            if proc.poll() is None:
-                proc.send_signal(signal.SIGTERM)
-                try:
-                    proc.wait(10)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-        for f in self.files:
-            f.close()
+        try:
+            for proc in reversed(self.procs):
+                if proc.poll() is None:
+                    proc.send_signal(signal.SIGTERM)
+                    try:
+                        proc.wait(10)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
+            for f in self.files:
+                f.close()
+        finally:
+            os.chdir(self._orig_cwd)
         if KEEP:
             print('kept', self.dir, file=sys.stderr)
         else:
@@ -62,16 +68,16 @@ class SimulatorTests(unittest.TestCase):
         daemon_log = open(self.dir / 'daemon.log', 'w')
         self.files = [sim_log, daemon_log]
         self.procs.append(subprocess.Popen(
-            [sys.executable, SIM, '--ipc', str(self.dir / 'ipc0'), '--router', str(self.dir / 'router'),
-             '--transcript', str(self.transcript), '--control', str(self.dir / 'control'), *sim_args],
-            stdout=sim_log, stderr=sim_log))
+            [sys.executable, SIM, '--ipc', 'ipc0', '--router', 'router',
+             '--transcript', 'transcript.jsonl', '--control', 'control', *sim_args],
+            cwd=self.dir, stdout=sim_log, stderr=sim_log))
         deadline = time.monotonic() + 5
         while not (self.dir / 'router').exists() and time.monotonic() < deadline:
             time.sleep(.05)
         if not daemon:
             return
         self.daemon = subprocess.Popen([sys.executable, str(BIN / 'omamobile-sitd')] + (['--bringup'] if bringup else []),
-                                       env=self.env, stdout=daemon_log, stderr=subprocess.STDOUT)
+                                       cwd=self.dir, env=self.env, stdout=daemon_log, stderr=subprocess.STDOUT)
         self.procs.append(self.daemon)
 
     def wait_ready(self, seconds=40):
@@ -85,7 +91,7 @@ class SimulatorTests(unittest.TestCase):
         self.fail('daemon not ready: ' + (self.dir / 'daemon.log').read_text())
 
     def cli(self, *args, check=True):
-        result = subprocess.run([sys.executable, str(BIN / 'omamobile-sit'), *args], env=self.env,
+        result = subprocess.run([sys.executable, str(BIN / 'omamobile-sit'), *args], cwd=self.dir, env=self.env,
                                 capture_output=True, text=True, timeout=60)
         if check and result.returncode:
             self.fail(f'omamobile-sit {args}: {result.stdout}{result.stderr}')
@@ -178,7 +184,7 @@ class SimulatorTests(unittest.TestCase):
 
     def control(self, command):
         with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
-            sock.sendto(command.encode(), str(self.dir / 'control'))
+            sock.sendto(command.encode(), 'control')
 
     def active_call(self):
         call = self.cli('dial', '+12025550199').strip()
@@ -233,7 +239,7 @@ class SimulatorTests(unittest.TestCase):
     def subscribe(self):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(10)
-        sock.connect(str(self.dir / 'run' / 'socket'))
+        sock.connect('run/socket')
         sock.sendall(b'{"action": "subscribe"}\n')
         self.addCleanup(sock.close)
         reader = sock.makefile('r')
@@ -289,7 +295,7 @@ class SimulatorTests(unittest.TestCase):
 
     def test_probe_is_read_only(self):
         self.start(daemon=False)
-        probe = subprocess.run([sys.executable, str(BIN / 'omamobile-sitd'), '--probe'], env=self.env,
+        probe = subprocess.run([sys.executable, str(BIN / 'omamobile-sitd'), '--probe'], cwd=self.dir, env=self.env,
                                capture_output=True, text=True, timeout=30)
         self.assertEqual(probe.returncode, 0, probe.stdout + probe.stderr)
         self.assertIn('SIM card state 1 applications [(2, 5)]', probe.stdout)
@@ -318,7 +324,7 @@ class SimulatorTests(unittest.TestCase):
                          ('running', 'failed', True, False, False))
         self.assertIn('IMS failed', self.cli('status'))
         refused = subprocess.run([sys.executable, str(BIN / 'omamobile-sit'), 'sms', 'send', '+12025550199', 'x'],
-                                 env=self.env, capture_output=True, text=True, timeout=60)
+                                 cwd=self.dir, env=self.env, capture_output=True, text=True, timeout=60)
         self.assertNotEqual(refused.returncode, 0)
         self.assertIn('not registered', refused.stderr)
         ids = [e['id'] for e in self.transcript_entries() if e.get('type') == 'req']
