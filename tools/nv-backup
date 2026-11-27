@@ -35,7 +35,7 @@
 #     copy's size, reads the whole partition again on the phone and compares
 #     that SHA-256 with the copy's;
 #  4. finds the partitions again and refuses a backup if anything changed
-#     meanwhile (a partition writable, mounted or moved);
+#     meanwhile (a partition writable, mounted, moved or a different size);
 #  5. writes SHA256SUMS ("<sha256>  NAME.img", the format tools/phone-provision
 #     --nv-backup reads), partitions.txt and NV-BACKUP (codename, date, which
 #     partitions are checked), the directory mode 700 and every file 600.
@@ -310,13 +310,14 @@ for p in "${parts[@]}"; do
   note "$p.img: copied, verified against the phone"
 done
 
-# The same partitions, still read-only and unmounted, after the copy
+# The same partitions, still read-only, unmounted and the same size, after the copy
 again=$(probe) || die "can't reach the phone after the copy; nothing is kept: run again"
-declare -A before=()
-for p in "${parts[@]}"; do before[$p]=${DEV[$p]}; done
+declare -A before=() before_size=()
+for p in "${parts[@]}"; do before[$p]=${DEV[$p]} before_size[$p]=${SIZE[$p]}; done
 check_probe "$again"
 for p in "${parts[@]}"; do
   [[ ${DEV[$p]} == "${before[$p]}" ]] || die "$p moved from /dev/${before[$p]} to /dev/${DEV[$p]} during the copy; nothing is kept: run again"
+  [[ ${SIZE[$p]} == "${before_size[$p]}" ]] || die "$p changed size from ${before_size[$p]} to ${SIZE[$p]} bytes during the copy; nothing is kept: run again"
 done
 
 written+=("$dir/SHA256SUMS" "$dir/partitions.txt" "$dir/NV-BACKUP")
