@@ -10,7 +10,7 @@ fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 
 for f in install omamobile-omarchy.install lib/update-bin/* lib/lock-pam lib/modules-cleanup test/update.sh \
-         test/lock-pam.sh test/lock-glance test/sleep-lock.sh test/modules-cleanup.sh test/zram.sh test/run-mode.sh; do
+         test/lock-pam.sh test/lock-glance test/sleep-lock.sh test/launch-shell-env.sh test/modules-cleanup.sh test/zram.sh test/run-mode.sh; do
   bash -n "$f" || fail "$f parses"
 done
 for f in bin/omamobile-omarchy-patches bin/omamobile-update test/patches.py; do
@@ -80,17 +80,22 @@ python3 -I test/sleep-lock-family.py || fail "sleep-lock source family"
 pkg=${OMARCHY_PKG:-$(ls ~/.cache/omamobile-rootfs/pkg/omarchy-[0-9]*-aarch64.pkg.tar.* 2>/dev/null | grep -v '\.sig$' | sort | tail -1 || true)}
 if [[ -n $pkg ]] && command -v bsdtar >/dev/null; then
   mkdir -p "$t/omarchy-pkg"
-  bsdtar -xf "$pkg" -C "$t/omarchy-pkg" .PKGINFO usr/bin/omarchy-apply-lock usr/bin/omarchy-system-sleep-lock
+  bsdtar -xf "$pkg" -C "$t/omarchy-pkg" .PKGINFO usr/bin/omarchy-apply-lock usr/bin/omarchy-system-sleep-lock \
+    usr/bin/omarchy-launch-shell
   # The packaged source alias is absolute /usr/bin. Normalize this one test
   # input inside the fake root; never follow it into the host's installed tree.
   install -Dm755 "$t/omarchy-pkg/usr/bin/omarchy-system-sleep-lock" "$t/omarchy-pkg/usr/share/omarchy/bin/omarchy-system-sleep-lock"
   OMARCHY_PKG_ROOT=$t/omarchy-pkg bash test/lock-pam.sh || fail "lock-pam"
   # Patch 0021 run against the real sleep lock, with fakes.
   OMARCHY_PKG_ROOT=$t/omarchy-pkg bash test/sleep-lock.sh || fail "sleep-lock"
+  # Patch 0034 run against the real shell launcher, with fakes.
+  install -Dm755 "$t/omarchy-pkg/usr/bin/omarchy-launch-shell" "$t/omarchy-pkg/usr/share/omarchy/bin/omarchy-launch-shell"
+  OMARCHY_PKG_ROOT=$t/omarchy-pkg bash test/launch-shell-env.sh || fail "launch-shell-env"
 else
   bash test/lock-pam.sh || fail "lock-pam"
   pass "lock-pam against the real omarchy-apply-lock # SKIP no omarchy package or bsdtar"
   pass "the sleep lock turns the display off (0021) # SKIP no omarchy package or bsdtar"
+  pass "the shell's device environment (0034) # SKIP no omarchy package or bsdtar"
 fi
 [[ $(grep -cx '  /usr/lib/omamobile-omarchy/lock-pam || true' omamobile-omarchy.install) == 2 ]] \
   || fail "install and upgrade write the lock's PAM file"

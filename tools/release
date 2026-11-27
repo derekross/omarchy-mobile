@@ -196,6 +196,13 @@ put() {
   { [[ -f $state ]] && grep -v "^$1=" "$state" || true; printf '%s=%s\n' "$1" "$2"; } > "$tmp"
   mv "$tmp" "$state"
 }
+unput() {
+  [[ -f $state ]] || return 0
+  local tmp
+  tmp=$(mktemp "$rel/.state.XXXXXX")
+  { grep -v "^$1=" "$state" || true; } > "$tmp"
+  mv "$tmp" "$state"
+}
 # One release, one kernel: a recorded tag is never swapped under it
 if [[ -n $kernel_tag && -n $(get kernel_tag) && $kernel_tag != "$(get kernel_tag)" ]]; then
   die "$version records $(get kernel_tag); --kernel-tag $kernel_tag differs (another kernel is another version, .1 for a respin)"
@@ -917,7 +924,8 @@ bundle_extra_files() {
 }
 
 st_identifiers() {
-  local dir img manifest notes t f list=()
+  local dir img manifest notes t f initramfs cpio_err cpio_bytes cpio_size list=()
+  ((dry)) || unput identifiers_done
   dir=$(need bundle bundle)
   img=$(need rootfs rootfs)
   manifest=${img%.img.zst}.MANIFEST
@@ -949,8 +957,30 @@ st_identifiers() {
   done
   rm -f "$t/root.img"
   # The release initramfs the boot images carry
+  initramfs=$RELEASE_KERNEL_OUT/initramfs.cpio.lz4
+  [[ -e $initramfs ]] || die "missing release initramfs: $initramfs"
+  [[ -f $initramfs && -r $initramfs ]] || die "unreadable release initramfs: $initramfs"
   mkdir -p "$t/initramfs"
-  lz4 -dc "$RELEASE_KERNEL_OUT/initramfs.cpio.lz4" | (cd "$t/initramfs" && cpio -id --quiet --no-absolute-filenames 2>/dev/null) || true
+  lz4 -dc "$initramfs" > "$t/initramfs.cpio" ||
+    die "could not decompress release initramfs: $initramfs"
+  if ! (cd "$t/initramfs" && cpio -id --no-absolute-filenames) < "$t/initramfs.cpio" 2> "$t/cpio.err"; then
+    cat "$t/cpio.err" >&2
+    die "could not extract release initramfs: $initramfs"
+  fi
+  cpio_err=$(< "$t/cpio.err")
+  if [[ ! $cpio_err =~ ^([1-9][0-9]*)\ blocks?$ ]]; then
+    cat "$t/cpio.err" >&2
+    die "release initramfs $initramfs extracted with cpio warning or unexpected output"
+  fi
+  cpio_bytes=$((BASH_REMATCH[1] * 512))
+  cpio_size=$(wc -c < "$t/initramfs.cpio")
+  if ((cpio_bytes != cpio_size)); then
+    cat "$t/cpio.err" >&2
+    die "release initramfs $initramfs: cpio read $cpio_bytes of its $cpio_size bytes (bytes after the archive's end, or an unpadded stream)"
+  fi
+  rm -f "$t/initramfs.cpio" "$t/cpio.err"
+  [[ ! -L $t/initramfs/init && -f $t/initramfs/init ]] ||
+    die "release initramfs $initramfs unpacked without /init (empty or incomplete archive)"
   # debugfs rdump and cpio -id keep the image's modes, so a mode-0000 file or
   # directory in the image would otherwise be unreadable to the builder
   chmod -R u+rX -- "$t/rootfs" "$t/initramfs"
@@ -1047,7 +1077,7 @@ st_promote() {
 }
 
 st_tag() {
-  local notes krel ktag tag=release-$version head
+  local notes krel ktag idd tag=release-$version head
   need promote_done promote >/dev/null
   krel=$(need kernel_release build)
   ktag=$(need kernel_tag kernel)
@@ -1056,7 +1086,8 @@ st_tag() {
   [[ -f $notes ]] || die "no $notes (start from docs/release-notes/*-DRAFT.md)"
   ! grep -nE 'DRAFT|MM\.DD|TODO|XXX|<[a-z][a-z ._-]*>' "$notes" >&2 || die "$notes still has placeholders (above)"
   grep -qF "$ktag" "$notes" && grep -qF "$krel" "$notes" || die "$notes must name $ktag and uname -r $krel"
-  [[ $(get identifiers_done) != *"notes not yet scanned"* ]] || die "the identifiers stage ran before $notes existed: run it again"
+  idd=$(need identifiers_done identifiers)
+  [[ $idd != *"notes not yet scanned"* ]] || die "the identifiers stage ran before $notes existed: run it again"
   git fetch -q origin main
   head=$(git rev-parse HEAD)
   [[ $head == "$(git rev-parse origin/main)" ]] || die "tag from origin/main: this checkout is ${head:0:12}, origin/main is $(git rev-parse --short=12 origin/main)"

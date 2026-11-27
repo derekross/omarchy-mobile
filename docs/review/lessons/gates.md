@@ -3,6 +3,55 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-1220. A rebuild-only pkgrel bump is shown resolvable on today's indexes,
+  and its version compared with every repository's copy, because a "sorts
+  above" rationale goes stale.** *Check:* a fake-root `pacman -Sp` on today's
+  indexes, the new entry made by editing the published `desc` (copy the old
+  entry, change `%VERSION%` and the one soname, repack), run once with the
+  real index as a control; then `vercmp` the new version against every
+  repository's copy. Extends L-524 and L-512. *From:* #1124, 2026-11-27.
+- **L-1219. A process-list exception added to a "no other X is running" guard
+  is mutation-tested rule by rule, because the rules overlap.** #1063's zombie
+  rule passed its test with the line removed: the fixture's only zombie was
+  the caller's child, which the descendant rule skips first. *Check:* remove
+  each skip rule alone and run the test; a rule whose removal changes nothing
+  either goes or gets a fixture only it covers (here a zombie with another
+  parent). Extends L-1001 and L-684. *From:* #1063, round 69.
+- **L-1218. A package test that fetches its pinned source is a network test
+  even when the PR changes only its socket lines, and it is run offline or
+  left to CI.** `omamobile-install-link/test/all` calls `./fetch-source` (a
+  GitHub archive download) and `cargo build` whenever it can; running it to
+  check #1090's socket change made the review machine fetch, before the
+  reviewer read that far. *Check:* `grep -n 'fetch-source\|curl\|cargo\|git
+  clone\|pip install' packages/<p>/test/all` before the first run, and set the
+  package's offline switches (`OMAMOBILE_LINK_SRC=<an existing tree>`,
+  `OMAMOBILE_LINK_NO_CARGO=1`) or leave that suite to CI. Extends L-681 and
+  L-454. *From:* #1090, round 69, 2026-11-26.
+- **L-1217. A package suite run in a container to reproduce CI is run on
+  main's files in the same container before a red line in it is read as the
+  PR's.** On #1014's merge, `test/sleepd.sh` failed in `omamobile-build:24.04`
+  and passed on the laptop; main's own file failed the same way in the same
+  container, so the line said something about the image, not the PR. *Check:*
+  for each `not ok` in a container run, `docker exec` the same file from a
+  worktree of `origin/main`, and compare with CI's log for that line. Extends
+  L-42 and C-49. *From:* #1014, round 69, 2026-11-26.
+- **L-1216. A new package's "test/all passes" is rerun from a clean checkout,
+  because an ignored or unadded file passes on the author's tree.** #1101's
+  `build` and test need `src/reboot-to.c`, which the commit doesn't contain;
+  the author's run passed and a scratch merge failed at the first `cmp`.
+  *Check:* for a new `packages/<p>/`, `git ls-files packages/<p>` against
+  every path its `build`, `install`, README and `test/all` name (`grep -o
+  'src/[^ "]*\|bin/[^ "]*\|vendor/[^ "]*'`), then run `test/all` on a worktree
+  of the head; `git check-ignore -v` names a rule that hid a file
+  (`packages/.gitignore` ignores `src/`). Extends L-586 and L-1120. *From:*
+  #1101, round 69, 2026-11-26.
+- **L-1215. `tests/grep-q-pipes` doesn't scan `device/*/` scripts either.**
+  #1099's `device/tangorpro/extract-touch-fw` pipes into `grep -qE` under
+  `pipefail` and the lint passed (its `scan` list is `tests
+  'packages/*/test/*' bin tools rootfs`). *Check:* `git grep -nE
+  '\|[[:space:]]*grep[[:space:]]+-[[:alnum:]]*q' <head> -- 'device/*'` on
+  device PRs until the lint covers them. Extends L-817 and L-683. *From:*
+  #1099, round 69, 2026-11-26.
 - **L-1174. A mutation whose replacement text holds an `rm` on a variable is
   kept in a script file, not typed into the shell command.** In #1033's review
   the session's safety check refused a `python3 - <<'PY'` mutation because the
@@ -364,57 +413,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   `HOME=`); before running such a suite in review, note the real folder's
   mtime and compare it afterwards. Extends L-454 and L-681. *From:* #875,
   round 61, 2026-11-18.
-- **L-886. `tools/pr-check BASE HEAD` run from another directory checks the
-  tool's own repository.** Called by its path from inside a review worktree it
-  printed "ok - no commits to check against origin/main" for a head with one
-  commit; it needs `-C <worktree>`. A passing line that means "nothing was
-  checked" is easy to quote. *Check:* the output lists the seven checks by
-  name; the tool could say which repository and range it read, and refuse
-  `HEAD` when the caller's directory is another work tree. Extends L-40 and
-  L-103. *From:* round 61, 2026-11-18.
-- **L-873. A package test that fails when its tool is missing is checked
-  against the CI workflow's package list as well as `checkdepends`.** #880
-  added `glslang` and `lua` as `checkdepends`, which the package builders
-  install, but `checks.yml` installs a fixed list and runs `test/all`
-  directly, so CI failed on the missing tool once the PR's lint failure was
-  out of the way; a red `tests/all` had hidden it. *Check:* for every `command
-  -v X || fail` a test adds, `grep -n '<package>'
-  .github/workflows/checks.yml`; if absent, the maintainer adds it (a workflow
-  change is his) or the test skips visibly, and the review says which. Extends
-  L-589 and L-769. *From:* #880, rounds 61 and 62, 2026-11-18.
-- **L-857. A test file `#include`d into its driver is never compiled by the
-  gate: its config has no `CONFIG_KUNIT`, and since #851 a `.c` built only
-  through an include is a SKIP.** Kernel #265's `max77759_charger_test.c`
-  first turned CI red with "W=1 builds" while the driver was clean; after #851
-  the same PR goes green with the test uncompiled, and its only evidence is
-  the contributor's UML run. *Check:* grep the CI log for `SKIP`; `git grep -n
-  '#include "<file>"'` for the includer, build it at each commit with
-  `scripts/config -e KUNIT -e <the test's symbol>` at W=1 in the gate's own
-  output directory, and say in the review that the suite itself wasn't run and
-  what stands in for it. Extends L-103, L-143 and L-179. *From:* kernel #265
-  and #266 with #851, rounds 60 to 62, 2026-11-18.
-- **L-834. Without the container, a board DTB for an overlay check builds from
-  `git archive` of the dts and `dt-bindings` trees, `cpp`, and a `dtc` from
-  any finished kernel output.** Both sides of #829's comparison (the published
-  kernel and a kernel PR's head) took seconds and touched nobody's build
-  directory. *Check:* `git archive <commit> arch/arm64/boot/dts/exynos
-  include/dt-bindings | tar -x -C <scratch>`, `cpp -nostdinc -I include -I
-  arch/arm64/boot/dts -undef -x assembler-with-cpp <board>.dts | dtc -@ -I dts
-  -O dtb`, then `fdtoverlay`, and confirm both DTBs are non-empty. Extends
-  L-335 and L-679. *From:* #829, round 60, 2026-11-17.
-- **L-833. A red test on a PR that adds one data file is read to its `not ok`
-  line, and a sibling PR pushed at the same time on the same base is the
-  control.** #829's failure was `omamobile-shell`'s `test/keys.sh`: the fake
-  panel acts after 0.4 s, the handler gives up at 1 s, and the CI log's order
-  showed the fake ran late; another PR's run from the same second passed.
-  *Check:* `gh run view <id> --log | grep 'not ok'`, name the package, read
-  the test's own timings against the log's order, and compare with a run on
-  the same base; the margin goes to the maintainer as a test finding. Extends
-  L-42, L-346 and L-768. *From:* #829, round 60, 2026-11-17.
-- **L-827. A new overlay outside `DTB_OVERLAYS` is still applied to the
-  published kernel's DTB, to set the merge order.** #861's `gnss.dtso` applies
-  to kernel #268's DTB and returns `FDT_ERR_NOTFOUND` on the published
-  `omamobile`; CI can't see it. *Check:* `fdtoverlay` against both; if only
-  the PR's kernel takes it, the review says "with or after" and the notes name
-  the kernel PR. Extends L-679. *From:* #861 with kernel #268, round 60,
-  2026-11-17.

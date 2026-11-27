@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Cap husky's CPU and GPU clocks from the SoC temperature (omamobile-husky-thermal).
+[Unit]
+Description=Pixel 8 Pro: thermal guard (CPU and GPU clock caps)
+After=local-fs.target
+# the SoC temperature sensor (gs101-acpm-tmu); without it the guard cannot run
+ConditionPathExists=/sys/bus/platform/devices/firmware:power-management:thermal-sensor
+
+[Service]
+Environment=LC_ALL=C
+Type=simple
+ExecStart=/usr/bin/omamobile-husky-thermal
+ExecStopPost=/usr/bin/omamobile-husky-thermal --restore
+Restart=on-failure
+RestartSec=10
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target
