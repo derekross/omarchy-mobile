@@ -9060,6 +9060,63 @@ no qualified read-only status for them was found.
 Keep PHY TX and DSI0 host reads disabled. This audit
 built no fixture and took no on-device measurements.
 
+###### D1 GPCSR front-end transition controls
+
+The stock Grizzly B0 DT maps `dpu-gpcsr` at AP
+`0x0f790000` with size `0xe004`. Exact D1 CPM uses the
+`0x6f79xxxx` alias. Its FE0 and FE1 descriptors at
+`0x62f38` and `0x62f6c` both select PSM2. The desired
+state passed by the dispatcher at `0x39c20` is 1 for
+FE0 ON, 2 for FE0 OFF, 0 for FE1 ON, and 1 for FE1 OFF.
+This identifies the role of the two GPCSR words in
+the front-end transition sequences.
+
+| AP word | Front-end transition | PSM2 change | CPM callback | GPCSR value |
+| --- | --- | --- | --- | ---: |
+| `0x0f79104c` | FE0 OFF | 1 → 2 | `0x3a79c` | 1 |
+| `0x0f79104c` | FE0 ON | 2 → 1 | `0x3a7d4` | 0 |
+| `0x0f791070` | FE1 OFF | 0 → 1 | `0x3a72c` | 1 |
+| `0x0f791070` | FE1 ON | 1 → 0 | `0x3a764` | 0 |
+
+PSM0 also uses both controls. For `+0x104c`, PSM0
+5 → 6 writes 0 at `0x3a5da` and 6 → 5 writes 1
+at `0x3a64a`. For `+0x1070`, PSM0 0 → 6 writes 1
+at `0x3a534` and 6 → 0 writes 0 at `0x3a612`.
+Writing 1 precedes clearing the matching front-end
+request bit, and writing 0 precedes setting it.
+All eight GPCSR writes use the full-word store helper
+at `0x3b83e`. The store takes place
+before the callback updates the LPCM request word.
+The display power path checks the sequencer later.
+
+The exact FBPK contains four direct address literals for
+each word, all in those CPM callbacks. No direct-literal
+read was identified. This scan leaves computed-address
+access possible. The PSM2 association identifies when
+the controls are used, while electrical effects and
+readback semantics remain unresolved.
+
+In exact D1 `vs_drm.ko`, the identified GPCSR reads at
+`0x3776c`, `0x377ac` and `0x377d8` all read
+`+0x1084` in the BE idle transaction after the write to
+`+0x107c`. The normal and custom display dumps use
+the FE/BE aperture. The custom dump passes that aperture
+at `0x36c08` to `gs_reg_dump_with_skips`. These paths
+supply no readback of either front-end control.
+The saved public source index names generated headers
+for the GPCSR block, but the cached files do not contain
+those headers or their field definitions.
+
+GC policy `0x30303` covers both addresses. It establishes
+the static address rule and leaves EL1 read behavior and
+field semantics unqualified. Both AP words and CPM
+aliases are outside BL31's PMU register read range
+checked at `0x2425c`–`0x2427c`. No safe readback for the
+PHY TX bus clock or external reset was found at either
+word. Keep both GPCSR word reads, PHY TX and DSI0 host
+reads disabled. This audit used only saved artifacts
+and built no fixture.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
