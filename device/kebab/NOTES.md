@@ -54,6 +54,46 @@ peripheral, no panel node and the wrong touch controller (S6SY761).
 [tree72]: https://gitlab.postmarketos.org/soc/qualcomm-sm8250/linux
 [tree]: https://gitlab.com/sm8250-mainline/linux
 
+## 2026-11-28: display, GPU and touch (`fastboot boot`, Arch root on `userdata`)
+
+Kernel `7.2.0-omamobile-push1-00084-g3c5440e9dd3c` with `pd-disable` and
+`typec-power-opmode`. Hyprland and the Omarchy shell draw on the AMB655X
+panel through msm DRM and the Adreno 650 (`Renderer: FD650` in Hyprland's
+log, the GPU's devfreq changing level), and touch works.
+
+What the GPU needed, in order:
+
+1. **Firmware in the root.** Without `qcom/a650_sqe.fw` the GPU can't
+   start, and once msm owns the panel Mesa no longer falls back to
+   software rendering: Hyprland's `eglInitialize` fails and the screen
+   clears. The phone's own vendor partition has `a650_sqe.fw`,
+   `a650_gmu.bin` and the zap shader (`a650_zap.mdt` + `.b00`-`.b02`).
+2. **A new enough SQE.** The vendor's `a650_sqe.fw` is refused: `a650 SQE
+   ucode is too old. Have version 93 need at least 95`. linux-firmware's
+   (`linux-firmware-qcom` 20261124) is accepted. The zap shader must
+   still be the phone's own: its `.mdt` installed as
+   `qcom/sm8250/OnePlus/kebab/a650_zap.mbn` (the name the DTS asks for)
+   with the `.bNN` files beside it, which the MDT loader finds by base
+   name. msm keeps a rejected SQE in memory, so a new file takes a new
+   boot (`modprobe -r msm` refuses: fbcon holds it).
+3. **Mesa with freedreno.** The published `mesa` 26.2.4-1.4 is built for
+   the Pixels' Mali GPUs only (panfrost): `DRI2: failed to load driver`.
+   Arch Linux ARM's own `mesa` 26.3.1 (with `vulkan-freedreno`) works.
+   `packages/mesa` needs `freedreno` in its gallium drivers (and
+   `vulkan-freedreno`) before an image can carry one Mesa for both.
+
+None of these files is in this repository; the firmware came from the
+phone's own partitions and linux-firmware.
+
+**The clock.** The RTC reads 1970 after every boot and nothing syncs time
+without a network, so pacman refuses every package signature ("key
+created ... in the future") until the clock is set by hand.
+
+**`qcom-iris` (video):** `firmware download failed` and `core init
+failed` for `qcom/sm8250/OnePlus/kebab/venus.mbn`, on screen at every
+probe. It is in the phone's `modem` partition (`/image/venus.*`), with
+the ADSP, CDSP and SLPI firmware; not installed yet.
+
 ## 2026-11-28: the 7.2.0 tree (`fastboot boot`, root in the shared initramfs)
 
 Kernel `7.2.0-omamobile-push1-00084-g3c5440e9dd3c`, both the tree's DTB
@@ -96,8 +136,7 @@ and our `omamobile.dtsi`.
   link-local address (found with `ping6 ff02::1%<if>`) needs no address on
   the laptop at all.
 
-Next: the GPU (Adreno 650: `a650_sqe.fw`, `a650_gmu.bin` and the zap
-shader signed for this phone, from its own vendor partition).
+Next: the GPU (done the same day, entry above).
 
 ## 2026-11-28: Omarchy from `userdata` (`fastboot boot`, Arch root on `userdata`)
 
