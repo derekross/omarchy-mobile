@@ -3,7 +3,8 @@
 #
 # The install link's phone side (docs/INSTALL-LINK-PLAN.md §3.3, stage L5):
 # omamobile-linkd, omamobile-link-gadget, omamobile-install-link status|reopen,
-# the units, the login-screen hold and the session's notice. Nothing runs on
+# the units, the login-screen hold, the first-start screen (screen/) and the
+# session's notice. Nothing runs on
 # a phone without the marker /etc/omamobile/install-link, which only a root
 # image built for the link carries (tools/build-rootfs --install-link).
 #
@@ -22,10 +23,13 @@ license=(MIT)
 # systemd: the units, systemctl, systemd-run, systemd-inhibit; util-linux:
 # mount, umount, mountpoint (the gadget script); python: the session agent;
 # libnotify: its notice (notify-send); glib2: gdbus, which closes it.
-depends=(gcc-libs glibc bash coreutils util-linux systemd python libnotify glib2)
+# libdrm, freetype2: the first-start screen (screen/); its font is JetBrains
+# Mono, Omarchy's (Noto Sans or DejaVu Sans if it is missing).
+depends=(gcc-libs glibc bash coreutils util-linux systemd python libnotify glib2
+         libdrm freetype2 ttf-jetbrains-mono-nerd-basic)
 optdepends=('quickshell: the window that shows the pairing code in the session'
             'omamobile-provision: the on-phone provisioning the link runs')
-makedepends=(cargo patch)
+makedepends=(cargo patch gcc make pkgconf)
 # test/all: the agent and the stand-in daemons are Python; systemd-analyze
 checkdepends=(python systemd)
 options=('!debug' '!lto')
@@ -46,6 +50,8 @@ build() {
   cd "omamobile-installer-$_commit"
   export CARGO_TARGET_DIR=target
   cargo build --frozen --release -p omamobile-linkd
+  # The first-start screen, beside the daemon (makepkg's CFLAGS)
+  make -C "$startdir/screen" OUT="$PWD/target/release"
 }
 
 check() {

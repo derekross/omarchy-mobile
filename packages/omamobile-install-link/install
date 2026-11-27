@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: MIT
 # Stage omamobile-install-link into DESTDIR.
 #
-#   ./install DESTDIR SRC BIN
-#     SRC  the installer's source tree at source.conf's commit, patched
-#          (makepkg's, or ./fetch-source's): the gadget script comes from it
-#     BIN  where omamobile-linkd and omamobile-install-link were built
+#   ./install DESTDIR SRC BIN [SCREEN]
+#     SRC     the installer's source tree at source.conf's commit, patched
+#             (makepkg's, or ./fetch-source's): the gadget script comes from it
+#     BIN     where omamobile-linkd and omamobile-install-link were built
+#     SCREEN  the built omamobile-install-screen (screen/; default
+#             BIN/omamobile-install-screen)
 #
 # Nothing it installs runs on a phone without /etc/omamobile/install-link:
 # the daemon's unit, the login-screen hold and the session agent all have
@@ -21,12 +23,14 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 d=${1:?Usage: ./install DESTDIR SRC BIN}
 src=${2:?Usage: ./install DESTDIR SRC BIN}
 bin=${3:?Usage: ./install DESTDIR SRC BIN}
+screen=${4:-$bin/omamobile-install-screen}
 [[ $d == /* && $d != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
 gadget=$src/linkd/gadget/omamobile-link-gadget
 [[ -f $gadget ]] || { echo "omamobile-install-link: no $gadget (SRC is the installer's source tree)" >&2; exit 1; }
 for b in omamobile-linkd omamobile-install-link; do
   [[ -x $bin/$b ]] || { echo "omamobile-install-link: no $bin/$b (BIN is the cargo build's release directory)" >&2; exit 1; }
 done
+[[ -x $screen ]] || { echo "omamobile-install-link: no $screen (make -C screen)" >&2; exit 1; }
 commit=$(sed -n 's/^COMMIT=//p' source.conf)
 # The protocol the daemon speaks, from the crate it is built on: the root
 # image's MANIFEST and the bundle's manifest.json carry it
@@ -44,10 +48,12 @@ install -Dm755 bin/hold-login "$lib/hold-login"
 install -Dm755 bin/has-answers "$lib/has-answers"
 install -Dm755 bin/omamobile-install-link-agent "$lib/omamobile-install-link-agent"
 install -Dm755 bin/screen-text "$lib/screen-text"
+install -Dm755 "$screen" "$lib/omamobile-install-screen"
 install -Dm644 share/code-window/shell.qml "$d/usr/share/omamobile-install-link/code-window/shell.qml"
 
 install -Dm644 systemd/omamobile-install-link.service "$sys/omamobile-install-link.service"
 install -Dm644 systemd/omamobile-install-link-hold.service "$sys/omamobile-install-link-hold.service"
+install -Dm644 systemd/omamobile-install-screen.service "$sys/omamobile-install-screen.service"
 install -d "$sys/graphical.target.wants"
 ln -sfn ../omamobile-install-link.service "$sys/graphical.target.wants/omamobile-install-link.service"
 ln -sfn ../omamobile-install-link-hold.service "$sys/graphical.target.wants/omamobile-install-link-hold.service"
