@@ -9943,8 +9943,11 @@ at `0x6f401000`. GDMC also has a generic LPCM
 descriptor reader at image offset `0x1d068`. The
 identified state request call at image offset
 `0x13f44` supplies base `0x52070000` and writes
-to descriptor-derived control words. None of the
-traced paths writes `0x6f409018`.
+to descriptor-derived control words. The six
+identified state-table set/clear call pairs also
+use other LPCM bases and each targets PSM0
+state 1. None of the traced paths writes
+`0x6f409018`.
 
 The stock log records the DBL boot-sequencer
 wait and the GDMC/CPM boot-argument handoff.
