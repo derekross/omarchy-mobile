@@ -9545,6 +9545,38 @@ on the device.
 | Offline verification, low | Build with `--dsi0-dp0-vote-trace`. Match the five checksums and the original DP-off DTBO. Confirm the NV guard and new trace marker in the archive. | Image, archive or scope mismatch. | Keep the previous verified DP-off bundle. |
 | Attended slot B trial, stock display and storage startup | After a fresh verified nine-partition NV backup and approval, verify the staged images and boot once. Collect the guard, both raw vote replies, the bracketed PHY line and any `0x205` requests and replies from the retained log. | Missing backup or guard, unexpected hardware access, read error, or incomplete trace. | Catch Fastboot with Volume Down at the timed return, select stock A and start Android. Retain the partial log for analysis. |
 
+###### Attended stock D1 DP-off firmware vote trace
+
+On 2026-11-27 the D1 rescue copied and verified all nine
+read-only, unmounted NV partitions (3,392,151,552 bytes)
+privately on the Mac. All five staged trace images passed
+preflight, including the full `vendor_boot_b` readback.
+One diagnostic boot ran on slot B. The NV guard passed for
+five parent disks and nine targets at 4.598048 s, and the
+live tree confirmed the DP encoder disabled at 4.602150 s.
+
+| Monotonic trace time | Observation |
+| ---: | --- |
+| 6.233081 s | The AP client's `DpuDp0.v` pre-load reply was `0`. |
+| 6.376053 s | Stock DSI0 CD-PHY init's existing read at offset `0x7124` returned `0x1cc`. |
+| 6.385419 s | The fixture requested the second DP0 vote sample. |
+| 6.389265 s | The post-init reply was `0`. |
+
+The trace retained all four records (4/4), with no
+`0x205` power-controller requests or replies. Ramoops and
+`SYSTEM_LAST_KMSG` agree. This establishes that stock D1
+reached its DSI0 PHY read with the AP DP0 vote clear at
+both samples and no AP power-controller DP0 transition
+observed between them. Physical DP0 power, votes from
+other clients, and the LPDP clock and external reset
+remain unverified. The trace added no PHY TX or host
+reads and issued no display commit.
+
+Panel discovery and VDDD capture finished at 45.141678 s.
+The timer requested the warm restart at 90.861067 s.
+Fastboot returned and stock D1 Android booted on A with
+enforcing verity and the original VBMeta digest.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
