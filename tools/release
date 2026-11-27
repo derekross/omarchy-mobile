@@ -695,7 +695,9 @@ st_test_install() {
 ext4_has() { grep -qxF -- "$2" "$1"; }
 
 # File list of an ext4 image, one path per line, read with debugfs (no root,
-# no mount): one debugfs run per directory level
+# no mount): one debugfs run per directory level. Fails closed (nonzero exit,
+# diagnostics on stderr) if debugfs exits nonzero, prints anything on stderr
+# besides its leading version banner, or omits any requested directory.
 ext4_list() {
   python3 -I - "$1" <<'PY'
 import subprocess, sys
@@ -704,21 +706,61 @@ level, out = ["/"], []
 while level:
     cmds = "".join('ls -p "%s"\n' % d for d in level)
     r = subprocess.run(["debugfs", "-f", "-", img], input=cmds, capture_output=True, text=True)
-    nxt, cur = [], None
+    err = r.stderr.splitlines()
+    if err and err[0].startswith("debugfs ") and "0" <= err[0][8:9] <= "9":
+        err = err[1:]
+    err = [l for l in err if l.strip()]
+    if r.returncode != 0 or err:
+        sys.exit("\n".join(err) if err else f"debugfs exited {r.returncode}")
+    nxt, seen, cur = [], set(), None
     for line in r.stdout.splitlines():
         if line.startswith("debugfs:"):
             cur = line.split('"')[1] if '"' in line else None
             continue
         f = line.split("/")
-        if cur is None or len(f) < 7 or f[5] in (".", ".."):
+        if cur is None or len(f) < 7 or f[1] == "0":
+            continue
+        if f[5] == "." and f[2].startswith("04"):
+            seen.add(cur)
+            continue
+        if f[5] in ("", ".", ".."):
             continue
         path = cur.rstrip("/") + "/" + f[5]
         out.append(path)
         if f[2].startswith("04"):
             nxt.append(path)
+    missing = [d for d in level if d not in seen]
+    if missing:
+        sys.exit(f"debugfs did not list directory: {', '.join(missing[:5])}")
     level = nxt
 print("\n".join(sorted(out)))
 PY
+}
+
+# Dump one directory from an ext4 image into a host directory with debugfs.
+# Fails closed if debugfs exits nonzero or prints anything on stderr besides
+# its leading version banner and unprivileged ownership notes.
+ext4_rdump() {
+  local img=$1 src=$2 dst=$3 rc=0 line first=1 err="" out
+  out=$(debugfs -R "rdump \"$src\" \"$dst\"" "$img" 2>&1 >/dev/null) || rc=$?
+  while IFS= read -r line; do
+    if ((first)); then
+      first=0
+      [[ $line == "debugfs "[0-9]* ]] && continue
+    fi
+    case $line in
+      "" | \
+      "dump_file: Operation not permitted while changing ownership of "* | \
+      "rdump: Operation not permitted while changing ownership of "* | \
+      "dump_file: Invalid argument while changing ownership of "* | \
+      "rdump: Invalid argument while changing ownership of "*) ;;
+      *) err+=$line$'\n' ;;
+    esac
+  done <<<"$out"
+  if ((rc != 0)) || [[ -n $err ]]; then
+    if [[ -n $err ]]; then printf '%s' "$err" >&2; else printf 'debugfs exited %d\n' "$rc" >&2; fi
+    return 1
+  fi
 }
 
 # Identifier scan (§11.7, AGENTS.md §1) over files, directories and symlink
@@ -925,7 +967,7 @@ bundle_extra_files() {
 
 st_identifiers() {
   local dir img manifest notes t f initramfs cpio_err cpio_bytes cpio_size list=()
-  ((dry)) || unput identifiers_done
+  ((dry)) || { unput identifiers_done; rm -f "$rel/rootfs-files.txt"; }
   dir=$(need bundle bundle)
   img=$(need rootfs rootfs)
   manifest=${img%.img.zst}.MANIFEST
@@ -938,22 +980,23 @@ st_identifiers() {
   t=$(mktemp -d "$rel/.identifiers.XXXXXX")
   cleanup+=("$t")
   say "Reading the root image"
-  zstd -q -d --sparse -f "$img" -o "$t/root.img"
-  ext4_list "$t/root.img" > "$rel/rootfs-files.txt"
-  note "$(wc -l < "$rel/rootfs-files.txt") paths ($rel/rootfs-files.txt)"
+  zstd -q -d --sparse -f "$img" -o "$t/root.img" || die "could not decompress root image: $img"
+  ext4_list "$t/root.img" > "$t/rootfs-files.txt" || die "could not list root image: $img"
+  ext4_has "$t/rootfs-files.txt" /etc || die "root image $img has no /etc directory"
+  cp "$t/rootfs-files.txt" "$t/rootfs-files.pub"
+  mv "$t/rootfs-files.pub" "$rel/rootfs-files.txt"
+  note "$(wc -l < "$t/rootfs-files.txt") paths ($rel/rootfs-files.txt)"
   # What the build wrote rather than a package: configuration and our files
   # at their own paths: rdump puts each directory by its last name under the
   # target, and two "omamobile" under one target made debugfs refuse the
   # second (/var/lib/omamobile went unscanned until 2026-11-09)
   local d
   for d in /etc /root /usr/share/omamobile /var/lib/omamobile; do
-    ext4_has "$rel/rootfs-files.txt" "$d" || continue
+    ext4_has "$t/rootfs-files.txt" "$d" || continue
     mkdir -p "$t/rootfs${d%/*}"
-    printf 'rdump %s %s\n' "$d" "$t/rootfs${d%/*}"
-  done | debugfs -f - "$t/root.img" >/dev/null 2>&1 || true
-  for d in /etc /root /usr/share/omamobile /var/lib/omamobile; do
-    ext4_has "$rel/rootfs-files.txt" "$d" || continue
-    [[ -d $t/rootfs$d ]] || die "debugfs didn't dump $d from the root image, so it can't be scanned"
+    ext4_rdump "$t/root.img" "$d" "$t/rootfs${d%/*}" ||
+      die "could not dump $d from root image: $img"
+    [[ ! -L $t/rootfs$d && -d $t/rootfs$d ]] || die "debugfs didn't dump $d from root image $img, so it can't be scanned"
   done
   rm -f "$t/root.img"
   # The release initramfs the boot images carry
@@ -984,7 +1027,7 @@ st_identifiers() {
   # debugfs rdump and cpio -id keep the image's modes, so a mode-0000 file or
   # directory in the image would otherwise be unreadable to the builder
   chmod -R u+rX -- "$t/rootfs" "$t/initramfs"
-  list=("$dir" "$rel/rootfs-files.txt" "$t/rootfs" "$t/initramfs" "$manifest")
+  list=("$dir" "$t/rootfs-files.txt" "$t/rootfs" "$t/initramfs" "$manifest")
   if [[ -f $notes ]]; then list+=("$notes"); else note "no $notes yet: run this stage again once it is written (the tag stage needs it)"; fi
   say "Scanning the bundle, the root image's file list and configuration, the initramfs, the MANIFESTs$([[ -f $notes ]] && echo ', the notes')"
   scan_identifiers "$ids" "${list[@]}" || scan_fail "$?" release
@@ -992,7 +1035,7 @@ st_identifiers() {
   # No file from a factory image: tools/extract-vendor-firmware's targets,
   # the vendor chroots, Trusty state
   f=$(grep -E '^/usr/lib/firmware/(updates|omamobile/camera)(/|$)|^/usr/lib/omamobile-(fp|vendor/[a-z]+)/root/|/(aoc\.bin|cs40l26[^/]*\.(bin|wmfw)|cs35l41-dsp1-spk-prot[^/]*|BCM\.[^/]*\.hcd|fw_bcmdhd\.bin)$|^/var/lib/omamobile-fp/' \
-      "$rel/rootfs-files.txt" || true)
+      "$t/rootfs-files.txt" || true)
   [[ -z $f ]] || { echo "$f" | sed -n '1,20p' >&2; die "files from a factory image in the root image (above)"; }
   f=$(bundle_extra_files "$dir")
   [[ -z $f ]] || { echo "$f" >&2; die "files in the bundle that make-bundle does not put there (above)"; }
