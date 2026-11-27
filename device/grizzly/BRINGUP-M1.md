@@ -8101,6 +8101,47 @@ a fresh verified NV backup and the usual stock A
 return. This is a passive capture of stock probe
 activity.
 
+###### Attended stock D1 genpd device and sibling trace
+
+On 2026-11-27 the read-only rescue copied all nine
+NV partitions (3,392,151,552 bytes) privately to
+the Mac and verified their SHA-256 hashes. Both
+slot B staging passes matched the full
+`vendor_boot_b` readback. The follow-up booted
+once on B and passed the NV guard.
+
+| Trace time (s) | Observation |
+| --- | --- |
+| 6.461384–6.466466 | `f7c0000.dw_mipi_cdphy` attaches to DSI0, queues its genpd worker and completes the child-to-parent OFF sequence. |
+| 6.466438–6.472364 | `f7e0000.dw_mipi_cdphy` attaches to DSI1. Wrapper → BE → `0x204` ON complete on its attach task. The same named device queues the DSI1 work, which gets `0x204` OFF at 6.471857, then releases BE and wrapper. |
+| 6.543714–6.545605 | The display-module task sends wrapper ON. A worker sends wrapper OFF. No matched display attach or sync names a device for this pulse. |
+| 6.562356–6.566930 | The final rise enables wrapper, BE, DSI0, DSI1, FE0 and FE1, all on the display-module task. |
+| 6.575735–6.577896 | The DSI0 host attaches after those votes. The stock PHY read, expected host ID and version, and `pwr_up=0` follow. |
+
+The first apparent parent-only cycle belongs to the
+sibling DSI1 PHY. The earlier filter hid its
+`0x204` requests and replies. The second pulse is
+still unattributed. It falls after `vs_drm.ko` load
+and before the same task logs the display
+controller's IOMMU attach. The B0 tree places
+`f190000.disp_smmu` on the wrapper domain and
+connects `f600000.dc9x00` to that SMMU. This makes
+display-SMMU runtime PM a candidate. The Linux
+driver core can acquire runtime PM references to
+existing suppliers before configuring DMA during
+probe. The current runtime-PM trace is scoped to
+the DSI0 host. A follow-up should include the
+SMMU and DC device names and capture the wrapper
+vote call path to check this hypothesis.
+
+The capture retained all 104 events, and ramoops
+and `SYSTEM_LAST_KMSG` matched on 144 selected
+lines. The device-aware decoder passed. The warm
+return requested restart at 90.890568 s. Fastboot
+returned 133 seconds after the B boot request.
+Stock A completed boot with enforcing verity and
+the original VBMeta digest.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
