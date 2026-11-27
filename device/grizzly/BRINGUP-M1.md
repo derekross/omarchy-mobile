@@ -9907,6 +9907,53 @@ reset value. The reset value, direct EL1 access
 and status address remain unverified. Keep PSM1,
 PHY TX and host reads disabled.
 
+###### Offline B0 descriptor and early firmware setup
+
+The exact D1 FBPK has no AP or CPM descriptor
+address literal in DBL, GDMC or GC. The audit
+also followed the computed-address paths in
+their DPU setup. DBL checks the optional
+`psm_regs` property at `0x30f84`–`0x30fa4`.
+When present, its three cells supply wrapper-
+relative status and request addresses and the
+expected state. DBL can write `1` to the request
+address at `0x31084` and poll the status nibble.
+The exact GC DPU wrapper has no such property.
+
+The GC image's access-control FDT at `0x52b8`
+describes `dpu_rfw_lpcm` as a firewall at AP
+`0x0f401000` with window length `0x4400`.
+Its `init,trustedfirmware` property specifies rule
+`0x30301` for the protected range
+`0x0f409000`–`0x0f409fff`. DBL decodes range
+triplets at `0x351dc`–`0x3521c` and indexes
+the firewall rule table relative to the protected
+base at `0x33c58`–`0x33d38`. These addresses
+select protected bytes and their permission
+entries. The actual rule stores are to the
+separate firewall block.
+
+GDMC's DPU late-init path at text offset
+`0xe118` walks IRQ, firewall and ICD tables.
+The DPU IRQ words are at `0x6f46f000`–
+`0x6f46f110`. The closest DPU ICD words are at
+`0x6f4094fc`–`0x6f4095f8` and have separate
+interrupt banks. The LPCM firewall entry starts
+at `0x6f401000`. GDMC also has a generic LPCM
+descriptor reader at image offset `0x1d068`. The
+identified state request call at image offset
+`0x13f44` supplies base `0x52070000` and writes
+to descriptor-derived control words. None of the
+traced paths writes `0x6f409018`.
+
+The stock log records the DBL boot-sequencer
+wait and the GDMC/CPM boot-argument handoff.
+It gives no timestamp or value for CPM's first
+DPU descriptor read. The inspected early setup
+supplies no writer for the descriptor. Its origin
+and value at reset remain unverified. Keep PSM1,
+PHY TX and host reads disabled.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
