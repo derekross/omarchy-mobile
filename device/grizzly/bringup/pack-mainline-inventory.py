@@ -47,7 +47,9 @@ def build_read_only_root(output, busybox, loader):
 
 def pack(rescue, output, device_query_only=False, single_lun_only=False,
          single_disk_only=False, gpt_scan_only=False, read_only_test_root=False,
-         dsi0_phy_scaffold=None):
+         dsi0_phy_scaffold=None, require_dsi0_sibling_votes=False):
+    if require_dsi0_sibling_votes and dsi0_phy_scaffold is None:
+        raise ValueError("DSI0 sibling vote checks require the PHY scaffold")
     busybox = arm64_member(rescue, "bin/busybox")
     loader = arm64_member(rescue, LOADER)
     output.mkdir(mode=0o700)
@@ -87,6 +89,8 @@ def pack(rescue, output, device_query_only=False, single_lun_only=False,
             files["grizzly-inventory/phy-google-malibu-cdphy.ko"] = (module, 0o400)
             files["grizzly-inventory/dsi0-phy-scaffold.sh"] = (
                 (HERE / "dsi0-phy-scaffold.sh").read_bytes(), 0o644)
+        if require_dsi0_sibling_votes:
+            files["grizzly-inventory/dsi0-sibling-votes"] = (b"", 0o644)
         libc = "lib/libc.musl-aarch64.so.1"
         for name in dirs:
             path = root / name
@@ -133,12 +137,14 @@ def main():
                       help="add a RAM-backed read-only ext4 smoke test after the v73 read")
     mode.add_argument("--dsi0-phy-scaffold", type=Path, metavar="PHY_MODULE",
                       help="bind the isolated DSI0 PHY module after the v73 storage guard")
+    parser.add_argument("--require-dsi0-sibling-votes", action="store_true",
+                        help="require sibling MBFS samples around the scaffold vote")
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
     try:
         pack(args.rescue_cpio, args.output, args.device_query_only,
              args.single_lun_only, args.single_disk_only, args.gpt_scan_only,
-             args.read_only_test_root, args.dsi0_phy_scaffold)
+             args.read_only_test_root, args.dsi0_phy_scaffold, args.require_dsi0_sibling_votes)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"mainline inventory packaging failed: {error}\n")
 

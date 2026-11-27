@@ -3,16 +3,27 @@
 
 grizzly_dsi0_phy_vote_trace() {
     # shellcheck disable=SC2016
-    "$bb" awk '
+    "$bb" awk -v require_siblings="${1:-0}" '
         BEGIN {
             domain[1] = domain[6] = "wrapper"
             domain[2] = domain[5] = "be"
             domain[3] = domain[4] = "dsi0"
+            phase[1] = "before-on"; position[1] = 4
+            phase[2] = "after-on"; position[2] = 6
+            phase[3] = "before-off"; position[3] = 6
+            phase[4] = "after-off"; position[4] = 8
         }
         /grizzly-mainline-inventory: DSI0 PHY scaffold vote trace start$/ {
             armed = 1
-            count = failed = 0
+            count = failed = samples = 0
             next
+        }
+        armed && require_siblings && /display-dsi0-siblings:/ {
+            samples++
+            if (NF < 5 || $(NF - 4) != "display-dsi0-siblings:" ||
+                $(NF - 3) != phase[samples] || count != position[samples] ||
+                $(NF - 2) != "dsi1=0" || $(NF - 1) != "fe0=0" || $NF != "fe1=0")
+                failed = 1
         }
         armed && /display-(wrapper|be|dsi0): requested=[01] (ack=[0-9]+|readback=[01])$/ {
             step = int(count / 2) + 1
@@ -26,7 +37,7 @@ grizzly_dsi0_phy_vote_trace() {
                 failed = 1
             count++
         }
-        END { exit !(armed && !failed && count == 12) }'
+        END { exit !(armed && !failed && count == 12 && (!require_siblings || samples == 4)) }'
 }
 
 grizzly_dsi0_phy_cycle() (
@@ -51,6 +62,19 @@ grizzly_dsi0_phy_cycle() (
         return 1
     fi
 
+    require_siblings=0
+    marker=/grizzly-inventory/dsi0-sibling-votes
+    if [ -e "$marker" ] || [ -L "$marker" ]; then
+        parameter=/sys/module/clk_google_malibu_cpm/parameters/display_dsi0_siblings
+        if ! { [ -f "$marker" ] && [ ! -L "$marker" ] &&
+               [ -r "$parameter" ] && IFS= read -r enabled < "$parameter" &&
+               [ "$enabled" = Y ]; }; then
+            stock_inventory_log 'DSI0 PHY skipped: sibling vote checks are unavailable'
+            return 1
+        fi
+        require_siblings=1
+    fi
+
     stock_inventory_log 'DSI0 PHY scaffold vote trace start'
     if ! "$bb" insmod "$module"; then
         stock_inventory_log 'DSI0 PHY scaffold module insertion failed'
@@ -66,12 +90,12 @@ grizzly_dsi0_phy_cycle() (
 
     # Platform detach queues genpd power-off work.
     for attempt in 1 2 3 4 5; do
-        if "$bb" dmesg | grizzly_dsi0_phy_vote_trace; then
+        if "$bb" dmesg | grizzly_dsi0_phy_vote_trace "$require_siblings"; then
             stock_inventory_no_scsi_disks /sys/class/block
             return $?
         fi
         "$bb" sleep 1 || return 1
     done
-    stock_inventory_log 'DSI0 PHY scaffold did not complete all six ordered vote acknowledgements and readbacks'
+    stock_inventory_log 'DSI0 PHY scaffold vote trace did not pass'
     return 1
 )

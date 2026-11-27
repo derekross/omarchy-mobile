@@ -8646,6 +8646,41 @@ the TX transaction. Keep direct PHY TX and DSI0 host
 reads disabled. There is no PHY-read fixture from
 this audit.
 
+###### Offline DSI0 sibling MBFS vote fixture
+
+The slot B fixture uses kernel `e9579f8e084af38118ac4f24f67bb1e62a0041e0`
+on `grizzly-dsi0-scaffold`. It enables
+`clk_google_malibu_cpm.display_dsi0_siblings=1` in the fixture's vendor
+command line and pairs `pack-mainline-inventory.py --dsi0-phy-scaffold`
+with `--require-dsi0-sibling-votes`. PID 1 checks the parameter is enabled
+before inserting the scaffold. The normal descriptor and scaffold keep
+their existing defaults.
+
+The CPM driver uses MBFS lookup and read requests for `DpuDsi1.v`,
+`DpuFe0.v`, and `DpuFe1.v`. It samples immediately before and after
+DSI0 ON and before and after DSI0 OFF, with wrapper and BE held. A
+nonzero vote or failed read before ON blocks the DSI0 request. Later
+observations never block release of a vote the fixture owns. The fixture
+requires all four ordered `display-dsi0-siblings` lines to report
+`dsi1=0 fe0=0 fe1=0`, plus the existing acknowledgments and readbacks
+for wrapper → BE → DSI0 and the reverse release. These sequential
+samples establish the reported votes at those checkpoints. Physical
+power, intermediate changes, and PHY TX readiness remain unverified.
+
+The fixture issues no sibling vote writes and makes no DSI0 PHY TX or
+host reads. It runs after the NV guard verifies the 42 read-only,
+unmounted LUN 0 partitions and the disk retires. The 90-second timed
+return remains armed independently of the diagnostics.
+
+Offline checks covered the ARM64 build, the actual packaged command
+line and ramdisk, the PHY-only DT overlay, the signatures on boot and
+init_boot, the ABL handoff, and slot B fit against saved D1 metadata.
+The log checker accepted the required sequence and rejected active
+votes, read errors, missing or misordered samples, and failed release.
+The verified five-image archive has SHA-256
+`2fc9d727eabfa6de261e6f0d659fd620cb0b9b30fa2607a8ee44d791c6e0aaa0`.
+Live MBFS replies are pending a hardware trial.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
