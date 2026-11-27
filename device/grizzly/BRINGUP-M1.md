@@ -9317,6 +9317,67 @@ disabled. The audit used only saved artifacts.
 [gpcsr-20000005-input-masks]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x20000005.h#L541-L703
 [gpcsr-20000005-be-registers]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x20000005.h#L1187-L1306
 
+###### Offline D1 AXI2APB5 clock and reset route
+
+The CID-selected `0x20000005` GPCSR layout identifies two
+wrapper inputs associated with AXI2APB5.
+
+| AP word and bit | What it controls |
+| --- | --- |
+| `0x0f791024` bit 6 | `ACTIVE_MASK_1` excludes the synchronous `axi2apb5` activity input when set. [Activity input][gpcsr-20000005-apb5-active] |
+| `0x0f79102c` bit 15 | `QCH_MASK_0` excludes the `axi2apb5_cg` Q-channel handshake when set. [Handshake input][gpcsr-20000005-apb5-qch] |
+
+Both fields default to zero. Reading either field would
+report its mask configuration. The header supplies no
+live gate, handshake or reset state for the bridge and
+does not assign either input a wrapper debug selector.
+
+The exact B0 tree maps a 4 MiB DPU wrapper at
+`0x0f400000`. It places DSI0 PHY TX
+at `0x0f7c0000` (size `0x18000`), the host at
+`0x0f7d8000` (size `0x800`) and the separate PHY APB
+bank at `0x0f7d8800` (size `0x800`). It supplies a
+fixed `pllref` and the DSI0 power domain to the PHY.
+The tree has no numbered APB bridge node, clock or
+reset provider tying those ranges to AXI2APB5.
+[DPU wrapper and PHY DT][malibu-axi2apb5-dpu-dt]
+
+Exact D1 GC groups the GPCSR mask page, TX init word
+`0x0f7c7124`, host and PHY APB bank under the broad
+`dpu_rfw_brg1` firewall with rule `0x30303`. The TX
+word falls in rule range `0x0f7c3000`–`0x0f7c9fff`.
+The host and PHY APB share the separate page rule
+`0x0f7d8000`–`0x0f7d8fff`. These are address access
+rules. They give no downstream bridge routing or
+clock/reset evidence for the TX interface.
+
+The 19 ABL DPU clock rows at `0x1f5028`–`0x1f5418`
+have no named AXI2APB5 gate. They distinguish
+`dpu_sswrp_clk` at `0x0f419680`, `dpu_dsi0_apb_clk`
+at `0x0f4196e0` and `dpu_dsi_phy_clk` at `0x0f4197a0`.
+The generic acknowledgments at the first two cells'
+`+0x1c` describe those clock cells. Both cells lack a
+CPM clock selector and their AP status words lack a
+qualified stock EL1 read. Of the seven DPU CPM clock
+selectors, selector 5 is FE0 (`0x6f419620`) and selector
+3 is the named DSI PHY cell. Neither lookup establishes
+the AXI2APB5 route. CPM reset status still excludes
+DPU LPCM `0x23`.
+[Stock DPU CPM clock names][malibu-axi2apb5-clock-dt]
+
+The inspected stock modules and exact D1 firmware
+yielded no operation that reads AXI2APB5 gate or reset
+state. No exact mask address or bridge-name witness
+appeared in 84 retained stock log files or the saved
+display bugreport. The AXI2APB5 connection to DSI0
+PHY TX and any safe clock or reset readback remain
+unverified. Keep PHY TX and DSI0 host reads disabled.
+
+[gpcsr-20000005-apb5-active]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x20000005.h#L581-L618
+[gpcsr-20000005-apb5-qch]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x20000005.h#L671-L703
+[malibu-axi2apb5-dpu-dt]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/devices/google/malibu/dts/malibu-dpu.dtsi#L271-L294
+[malibu-axi2apb5-clock-dt]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/devices/google/malibu/dts/malibu-cpm-clk.dtsi#L14-L62
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
