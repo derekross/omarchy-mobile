@@ -3,6 +3,84 @@
 
 Part of [the review lessons](../LESSONS.md), which says how they are used and how they grow.
 
+- **L-433. A shipped default that a working feature needs is checked on a
+  fresh install, not on the reference phone.** modem-sit shipped `[audio]
+  card = none` in its packaged `/etc` file and its built-in default, and
+  pacman keeps an edited `backup=` file, so the maintainer's hand-set `auto`
+  made "calls work" true on one phone only; the release notes and DEVICES
+  said it for everyone. *Check:* for each "works" claim in release notes or
+  DEVICES, `git show origin/main:<package>/etc/...` for the keys the feature
+  needs, and `git grep` the test that pins the default. Extends L-46.
+  *From:* #387 and #405 (commit review), fixed by #416, round 39,
+  2026-11-03.
+- **L-434. "It didn't happen at shutdown" can't be read from the next boot's
+  `dmesg`.** The modem-off UFS error-handler pass follows the CP power-off
+  in the unit's stop, and each check grepped the next boot's fresh log, so a
+  count of 0 was certain. *Check:* for any "count 0 across reboots", find
+  when the event would fire and ask for `journalctl -b -1 -k` (if journald
+  outlives the unit) or pstore. Extends L-85 and L-414. *From:* #398 and
+  #405 (commit review), round 39, 2026-11-03.
+- **L-435. "Tn ran" or "Passed" is checked against the step's own
+  definition, a dated results row, the PR's later fixes and the linked
+  issue's newer results.** FINGERPRINT-PLAN's status said T1-T3 ran with
+  only part of T1 evidenced; #372's step 4 kept "Passed" after a later
+  commit fixed the reboot it described; #395's "Next" had already run and
+  been reported on #77. *Check:* grep the plan for each step's definition
+  and a results row with `uname -r`, grep the record for behaviour each
+  later fix commit changes, and read the linked issue's comments since the
+  last push. Extends L-28, L-188, L-266, L-313 and L-341. *From:* #405,
+  #372, #395, round 39, 2026-11-03.
+- **L-436. A smoke report with a hand-edited package list, or one older than
+  the head, isn't evidence for the head.** #389's report listed
+  "omamobile-modem-sit (number set at merge)-1" and predated two rebases.
+  *Check:* every version in the report can exist; the report is newer than
+  the head's last commit, or the PR names the tested commit and `git diff
+  <tested> <head> -- <files>` is empty. Extends L-358 and L-379. *From:*
+  #389, round 39, 2026-11-03.
+- **L-437. A byte dump of a persistent bootloader record is decoded byte by
+  byte, read after its write path ran, and contradicting runs ask what wrote
+  it in between.** Kernel #176's `00 00 00 80` was read as the bootloader
+  record but is `0x80000000` (VALID | NORMAL, what stock writes for an
+  ordinary reboot), taken before the reboot notifier wrote anything; runs on
+  11-01 and 11-03 disagreed on a record that survives reboots and that stock
+  rewrites on each. *Check:* write the expected value's bytes out (`fc 00 00
+  80` for `0x800000fc`), confirm the read came after the notifier or hook,
+  and for any non-volatile bootloader input ask for a read before the first
+  try and the boots in between. Extends L-29, L-168 and C-12. *From:* kernel
+  #176, round 39, 2026-11-03.
+- **L-438. A DEVICES cell's count is tied to the run that produced it, and a
+  helper it names is checked against the published DT.** #406 put a
+  10-minute session's 538 of 556 fixes on a first boot that only bound the
+  driver, and credited the 8 Pro's USB rescue to a helper whose I2C bus is
+  disabled in the published `zuma-husky.dts`. *Check:* quote the notes
+  sentence around each number with its kernel, and for each helper find the
+  bus or node it opens and its `status` on `github/omamobile`. Extends L-28,
+  L-49 and L-345. *From:* #406, round 39, 2026-11-03.
+- **L-439. When a clean baseline lands, every "value X is always there" it
+  bears on is re-checked, and a guard that compares a field the step itself
+  drives trips on that step.** #282's round 1 accepted "0xb1 in every dump,
+  cable out"; the baseline shows 0xb1 only with a source on CHGIN, which
+  made the 11-01 trip the charger charging from the phone's own boost, and
+  the planned a4 guard compares CHGIN with a cable-out baseline right after
+  the phone puts 5 V on it. *Check:* decode the baseline field by field with
+  the driver's enums next to every value the runbook calls normal, re-read
+  review points built on it, and list a guaranteed trip as the expected
+  first outcome. Extends L-31 and L-147. *From:* #282 with #272, round 39,
+  2026-11-03.
+- **L-440. The test plan for a fix that acts on a late answer needs a late
+  answer.** Kernel #152 releases a timed-out ACPM slot when the answer
+  finally arrives; the planned 9a stall was a channel that stopped
+  answering, where the fix is invisible by design. *Check:* write a Pass
+  that needs the event (a `Timeout!`, then the abandoned bit cleared and no
+  "pool exhausted") and a rule that records "not exercised" when it never
+  comes. Extends L-85. *From:* kernel #152, round 39, 2026-11-03.
+- **L-441. "Stock does this on every chip" is checked by decoding the
+  reference phone's recorded flags through stock's own selector.** On kernel
+  #187, the 7 Pro's `0x70050107` against stock's SEQNUM-then-XORCSUM choice
+  in Google's bcm4389 `dhd_msgbuf.c` (0x20000 clear, 0x40000 set) confirmed
+  stock already uses XORCSUM there. *Check:* fetch the stock file on the
+  board's branch, find the selector, and decode the recorded word bit by
+  bit. Extends L-61 and L-113. *From:* kernel #187, round 39, 2026-11-03.
 - **L-482. A run whose instrument may cause the failure it records is
   counted on its own, and a clean streak is re-computed when the next result
   lands.** #409 counted a no-wake from a run with a module writing the RTC

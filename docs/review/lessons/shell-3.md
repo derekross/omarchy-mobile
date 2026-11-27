@@ -163,7 +163,14 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   every `udevadm trigger` change event; systemd.device(5) says change events
   don't act on `Wants=`. *Check:* read systemd.device(5) before flagging
   repeat starts; a replay with `--action=add` is the test. *From:* #113, round
-  25 (a near miss).
+  25 (a near miss). *Open question (2026-11-26):* #1068's Pixel 8 Pro journal
+  contradicts this: its unit started 6,968 times in a boot from charger change
+  events, and once from a `udevadm trigger --action=change`. This entry will
+  be corrected when a phone's journal settles it; until then, for a rule that
+  wants a unit on a power-supply or other frequently changing device, ask for
+  `journalctl -b -o short-monotonic -u <unit>` next to `udevadm monitor
+  --property` for the same window, and read which event precedes each start
+  before relying on either statement (#1068, round 69).
 - **L-235. An edge-triggered "stop when X" is undone by every other actor
   that restarts the thing.** #99 stops neard polling once on the lit-to-dark
   transition; the sleep hook, its own unblock path and a neard restart all
@@ -397,13 +404,3 @@ Part of [the review lessons](../LESSONS.md), which says how they are used and ho
   helper made to sleep past the press interval, measure when the next press
   acts on main and on the head, and ask for a bound. Extends L-161 (fail
   towards the user being able to act). *From:* #508, round 45, 2026-11-08.
-- **L-573. Deferring a surface's "on open" reads is checked against what the
-  surface shows first and what refreshes it while it's closed.** #518 queued
-  the shade's notification read ninth, behind the reveal, and the shade's
-  periodic read runs only while it's open (`running: root.opened`, first tick
-  at 3 s), so every open showed the previous open's list for about 0.65 s.
-  *Check:* for each read moved off the open path, `grep -n` its function for
-  the timers and watchers that call it, note their `running:` condition, and
-  compute when the first fresh value appears after opening; ask that what the
-  first screen shows goes first. Extends L-235. *From:* #518, round 45,
-  2026-11-08.
