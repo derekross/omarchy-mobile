@@ -7175,6 +7175,39 @@ exercised the path with a passing guard, missing
 partitions, a failed guard, either trace failing and
 an ambiguous fixture. The combined boot remains pending.
 
+###### Attended combined UIC and PHY reset result
+
+On 2026-11-27 the read-only rescue copied and verified all
+nine NV partitions privately on the Mac. It returned
+directly to Fastboot. All five combined-trace images
+were staged to B, the full `vendor_boot_b` readback
+matched, and the combined fixture booted once.
+
+UFS `DME_GET 0x1587` was sent at 1.676837 s. Command
+completion arrived 13 µs later with `IS=0x400` and
+`IE=0x71ef5`. The read returned HS gear 5 with wait
+result 0. The UIC trace retained all 15 rows with no
+missed probes. The NV guard passed before display load.
+
+The stock DSI0 ON reply for host probe arrived at
+5.907836 s. The host then returned ID `0x30313130`,
+version `0x1a000110`, and `pwr_up=0` at 5.919049 s.
+The earlier post-PHY sample pair followed a successful
+DSI0 OFF reply and preceded that host status read by
+90.370 and 90.281 ms. The post-display pair followed
+`pwr_up` by 7.826 and 7.957 ms, while the latest
+recorded DSI0 vote was ON. Neither pair reached
+`regmap_field_read`, so all four values remain
+unobserved. This trace does not distinguish an
+unavailable debugfs file from the getter declining its
+in-use runtime PM reference.
+
+The DSI0 trace retained all 63 rows. Ramoops and
+`SYSTEM_LAST_KMSG` agree on all 124 selected lines.
+The 90-second warm return worked. Fastboot returned
+134 seconds after the trace boot request, and stock A
+completed boot with enforcing verity and matching VBMeta.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
