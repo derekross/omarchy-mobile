@@ -8769,6 +8769,77 @@ the three votes known off. Keep PHY TX and DSI0 host reads
 disabled. This audit used only saved artifacts and built
 no diagnostic image.
 
+###### D1 LPCM selector 3 gate and reset status
+
+Exact D1 ABL group 4 describes separate clock cells at AP
+`0x0f4196e0` (DSI0 APB), `0x0f419720` (DSI0 system),
+`0x0f419760` (DSI0 pixel), `0x0f4197a0` (DSI PHY),
+and `0x0f4197e0` (DPU PHY reference). The DSI PHY cell's
+ABL descriptor at `0x1f5300` has clock selector 3 and
+reset selector `-1`. The CPM record at `0x658c6` binds it
+to LPCM `0x23` at the alias `0x6f4197a0`. The record
+has no downstream consumer information. The two B0 trees
+label selector 3 `dpu_dsi1_phy_clk` and have no clock
+consumer for it. Both PHY nodes use the separate fixed
+`pllref`. ABL's DSI0 controller record identifies the
+TX and PHY APB resources. The inspected display path
+selects the DSI0 power domain and calls the PHY setup
+without tying those resources to selector 3. The firmware
+and DT names leave the physical TX clock route unresolved.
+The saved Malibu binding uses the unindexed constant
+`DPU_DSI_PHY_CLK` for selector 3.
+
+ABL's `0xf26a8` call uses a different selector numbered 3:
+the internal aperture for the DPU wrapper. It writes 1
+to AP `0x0f6b60b4` for DSI0 or `0x0f6b6178` for
+DSI1, with no readback on that path. These words lie in
+the BE register space. Exact D1 `vs_drm.ko` clears both
+in `dc_hw_disable_all_be_interrupts` at `0x32f5c` and
+`0x32f6c`. This is interrupt-control evidence and adds
+no gate or reset status.
+
+Clock operation 2 with argument 1 is the read-only path
+for this cell. The existing LPCM transport to CPM
+destination 8 encodes it as command `0x02032302`.
+The dispatcher at `0x386be` calls `0x383d8`, which
+looks up the descriptor and calls the gate getter at
+`0x18e20`. That getter loads CPM `0x6f4197bc` and
+extracts bit 8. The dispatcher returns 1 if it matches
+the requested set bit, 0 if clear, or a negative
+firmware error. Transport errors are separate. With this
+argument, the path changes no clock or reset control and
+touches neither the PHY nor the host. The established
+UFS diagnostic used the same operation with a different
+selector. Selector 3 has no retained live reply. Either
+gate value would describe that cell and leave its effect on
+the DSI0 TX bus unverified. Stock CCF's rate callback uses
+operation 3 and has no hardware gate-status callback.
+
+The cell's bit 12 is a separate reset acknowledgment.
+Clock operation 2 samples bit 8 for argument 1. The
+other status flags select bit 0 at gate offsets `0x18`
+and `0x08`, leaving bit 12 outside this operation.
+The firmware reset-status lookup at `0x49cf4`
+rejects DPU LPCM `0x23` before reading a reset cell.
+BL31's PMU register service rejects both `0x0f4197bc`
+and `0x6f4197bc` in its address-range check at
+`0x24258`–`0x24278`. The direct AP word is on the
+GC `0x30300` CMU page and has no saved EL1 read witness.
+ABL's direct reset helper polls the bit as part of a
+write transaction and establishes only that cell's
+acknowledgment. The DSI GIA inputs signal device
+interrupts, while the named DPU reset-done inputs cover
+BE and FE. The PHY's separate APB status at offset
+`0x24` describes local PHY ready, PLL lock and PLL VPL
+detect. It has no verified field for the external reset,
+and the stock `reg_dump` touches TX before reaching it.
+No qualified status source covers the external reset
+at the DSI0 PHY TX register interface.
+
+Keep `0x0f7c7124` and the DSI0 host aperture disabled.
+This audit stops at the read-only clock-cell query.
+There is no new fixture and no on-device test.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
