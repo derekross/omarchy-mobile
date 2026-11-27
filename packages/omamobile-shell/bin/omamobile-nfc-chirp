@@ -1,0 +1,141 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""Play a short chirp when the phone finds an NFC tag or device.
+
+A user service in the graphical session. neard (root) publishes each tag or
+peer device it finds as an org.neard.Tag or org.neard.Device object on the
+system bus; this only listens for those InterfacesAdded signals. It never
+calls neard (neard's bus policy lets only root and the console do that) and
+never reads or logs a tag's identity or contents.
+
+No neard, no signals, no sound: it waits quietly. neard finds tags only
+while it polls, and omamobile-nfc-open starts polling only while the screen
+is on.
+
+Settings, read at each tag, in ~/.config/omamobile/nfc.json:
+  {"sound": true, "file": "/home/me/sounds/beep.ogg"}
+"sound" false keeps it silent; "file" (an absolute path to a readable file)
+replaces the built-in chirp. A missing or broken file means the defaults:
+sound on, the built-in chirp. A file that pw-play can't play is silent.
+A custom sound is cut off after PLAY_SECONDS.
+
+One chirp per tap: after a chirp, it chirps again only once no tag has been
+found for RATE_SECONDS, so a card resting on the back, which neard may find
+again and again, chirps once.
+"""
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+
+import gi
+
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib  # noqa: E402
+
+NEARD = "org.neard"
+DETECTED = ("org.neard.Tag", "org.neard.Device")
+DEFAULT_SOUND = "/usr/share/omamobile/sounds/nfc-detect.wav"
+RATE_SECONDS = 3.0
+PLAY_SECONDS = 3  # a longer custom file is cut off here
+
+
+def config_path(env=os.environ):
+    base = env.get("XDG_CONFIG_HOME") or os.path.join(env.get("HOME", "/"), ".config")
+    return os.path.join(base, "omamobile", "nfc.json")
+
+
+def settings(path):
+    """(sound on, file to play) from nfc.json; defaults for anything missing
+    or malformed."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, ValueError, RecursionError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    sound = data.get("sound", True)
+    if not isinstance(sound, bool):
+        sound = True
+    file = data.get("file")
+    if not (isinstance(file, str) and os.path.isabs(file) and os.path.isfile(file)
+            and os.access(file, os.R_OK)):
+        file = DEFAULT_SOUND
+    return sound, file
+
+
+def detected(interfaces):
+    """True when an InterfacesAdded signal is a new tag or device (records
+    and adapters don't chirp)."""
+    return any(name in interfaces for name in DETECTED)
+
+
+class Limiter:
+    """True for an event only after `seconds` with no event at all (over all
+    tags): a tag found again and again counts as one."""
+
+    def __init__(self, seconds=RATE_SECONDS, clock=time.monotonic):
+        self.seconds, self.clock, self.last = seconds, clock, None
+
+    def allow(self):
+        now = self.clock()
+        quiet = self.last is None or now - self.last >= self.seconds
+        self.last = now
+        return quiet
+
+
+def command(file):
+    return ["pw-play", "--media-role", "Notification", "--", file]
+
+
+limiter = Limiter()
+
+
+def play(file):
+    try:
+        child = subprocess.Popen(command(file), stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        return
+    # GLib reaps the child; stop() only signals one it hasn't reaped yet.
+    GLib.child_watch_add(GLib.PRIORITY_DEFAULT, child.pid, reap, child)
+    GLib.timeout_add_seconds(PLAY_SECONDS, stop, child)
+
+
+def stop(child):
+    if child.returncode is None:
+        try:
+            os.kill(child.pid, signal.SIGKILL)
+        except OSError:
+            pass
+    return False
+
+
+def reap(_pid, status, child):
+    child.returncode = status
+
+
+def on_interfaces_added(_conn, _sender, _path, _iface, _signal, params, _data):
+    try:
+        _obj, interfaces = params.unpack()
+    except (TypeError, ValueError):
+        return
+    if not detected(interfaces):
+        return
+    sound, file = settings(config_path())
+    if sound and limiter.allow():
+        play(file)
+
+
+def main():
+    bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    bus.signal_subscribe(NEARD, "org.freedesktop.DBus.ObjectManager", "InterfacesAdded",
+                         None, None, Gio.DBusSignalFlags.NONE, on_interfaces_added, None)
+    GLib.MainLoop().run()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

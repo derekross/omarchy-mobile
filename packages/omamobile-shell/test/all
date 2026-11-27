@@ -1364,6 +1364,9 @@ bash test/sleepd.sh || fail "omamobile-sleepd"
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-doubletap || fail "omamobile-doubletap parses"
 python3 -B test/doubletap.py >/dev/null || { python3 -B test/doubletap.py | grep -v '^ok'; fail "omamobile-doubletap"; }
 pass "omamobile-doubletap: double taps and the touchscreen by its capabilities"
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-nfc-chirp || fail "omamobile-nfc-chirp parses"
+python3 -B test/nfc-chirp.py >/dev/null || { python3 -B test/nfc-chirp.py | grep -v '^ok'; fail "omamobile-nfc-chirp"; }
+pass "omamobile-nfc-chirp: tags chirp once per tap, nfc.json, the generated chirp"
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-weather || fail "omamobile-weather parses"
 python3 -B test/weather.py 2>/dev/null || fail "omamobile-weather"
 tmp=$(mktemp -d); trap 'rm -rf -- "$tmp" "$fixture"' EXIT
@@ -1429,6 +1432,13 @@ grep -cx 'ExecStart=/usr/bin/omamobile-sleepd' systemd/user/omamobile-sleepd.ser
    $(readlink "$u/graphical-session.target.wants/omamobile-doubletap.service") == ../omamobile-doubletap.service ]] \
   || fail "the double-tap watcher is staged and runs for every user's session"
 grep -cx 'ExecStart=/usr/bin/omamobile-doubletap' systemd/user/omamobile-doubletap.service >/dev/null || fail "the unit runs the double-tap watcher"
+# The NFC detect sound: the listener for every session, and its chirp.
+[[ -x $tmp/root/usr/bin/omamobile-nfc-chirp && -f $u/omamobile-nfc-chirp.service &&
+   $(readlink "$u/graphical-session.target.wants/omamobile-nfc-chirp.service") == ../omamobile-nfc-chirp.service &&
+   -f $tmp/root/usr/share/omamobile/sounds/nfc-detect.wav ]] \
+  || fail "the NFC detect sound is staged and runs for every user's session"
+[[ ! -x $tmp/root/usr/bin/make-nfc-chirp ]] || fail "the chirp generator isn't installed as a command"
+grep -cx 'ExecStart=/usr/bin/omamobile-nfc-chirp' systemd/user/omamobile-nfc-chirp.service >/dev/null || fail "the unit runs the NFC sound listener"
 # The lock screen's weather: a timer for every session, a one-shot service.
 [[ -x $tmp/root/usr/bin/omamobile-weather && -f $u/omamobile-weather.service && -f $u/omamobile-weather.timer &&
    $(readlink "$u/graphical-session.target.wants/omamobile-weather.timer") == ../omamobile-weather.timer ]] \

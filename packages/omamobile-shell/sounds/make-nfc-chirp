@@ -1,0 +1,57 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""Write the NFC detect sound: a short bird chirp, synthesized here from
+sine sweeps (no recording, no samples), so it is ours under the package's MIT
+licence and no audio file is kept in the repository.
+
+Three quick rising whistles, the last one longer, 0.33 s in all:
+mono, 48 kHz, 16-bit WAV, peak about -6 dBFS. The output is the same bytes
+on every run; test/nfc-chirp.py pins its sha256 (checked on x86_64).
+
+Usage: make-nfc-chirp OUTPUT.wav
+"""
+import math
+import struct
+import sys
+import wave
+
+RATE = 48000
+PEAK = 0.5  # -6 dBFS
+# (start s, length s, start Hz, end Hz)
+NOTES = ((0.000, 0.055, 2900, 4300),
+         (0.080, 0.055, 3100, 4600),
+         (0.160, 0.160, 3300, 5200))
+
+
+def samples():
+    total = int(RATE * (max(start + length for start, length, _, _ in NOTES) + 0.01))
+    out = [0.0] * total
+    for start, length, f0, f1 in NOTES:
+        first, count = int(start * RATE), int(length * RATE)
+        phase = 0.0
+        for i in range(count):
+            t = i / count
+            # a rising sweep, a smooth swell, a little warble
+            freq = f0 + (f1 - f0) * t * t + 180 * math.sin(2 * math.pi * 38 * i / RATE)
+            phase += 2 * math.pi * freq / RATE
+            envelope = math.sin(math.pi * t) ** 2 * (1 - 0.4 * t)
+            out[first + i] += envelope * (math.sin(phase) + 0.15 * math.sin(2 * phase))
+    top = max(abs(s) for s in out) or 1.0
+    return [s * PEAK / top for s in out]
+
+
+def main():
+    if len(sys.argv) != 2:
+        print(__doc__.strip().splitlines()[-1], file=sys.stderr)
+        return 2
+    data = b"".join(struct.pack("<h", round(s * 32767)) for s in samples())
+    with wave.open(sys.argv[1], "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes(data)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -62,6 +62,13 @@ ln -sfn ../omamobile-sleepd.service "$destination/usr/lib/systemd/user/graphical
 # every user's graphical session.
 install -Dm644 systemd/user/omamobile-doubletap.service "$destination/usr/lib/systemd/user/omamobile-doubletap.service"
 ln -sfn ../omamobile-doubletap.service "$destination/usr/lib/systemd/user/graphical-session.target.wants/omamobile-doubletap.service"
+# The NFC detect sound, for every user's graphical session, and its chirp,
+# made here from sine sweeps (sounds/make-nfc-chirp), so no audio file is kept.
+install -Dm644 systemd/user/omamobile-nfc-chirp.service "$destination/usr/lib/systemd/user/omamobile-nfc-chirp.service"
+ln -sfn ../omamobile-nfc-chirp.service "$destination/usr/lib/systemd/user/graphical-session.target.wants/omamobile-nfc-chirp.service"
+install -d "$destination/usr/share/omamobile/sounds"
+python3 -B sounds/make-nfc-chirp "$destination/usr/share/omamobile/sounds/nfc-detect.wav"
+chmod 644 "$destination/usr/share/omamobile/sounds/nfc-detect.wav"
 # The lock screen's weather, at login and every 30 minutes, for every user's
 # graphical session; it fetches nothing until a place is set.
 install -Dm644 systemd/user/omamobile-weather.service "$destination/usr/lib/systemd/user/omamobile-weather.service"
