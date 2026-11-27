@@ -7583,6 +7583,66 @@ selected lines. Fastboot returned 134 seconds after
 the B boot request. Stock A completed boot with
 enforcing verity and matching VBMeta.
 
+###### Offline stock D1 DRM component discovery
+
+The exact D1 `vs_drm_platform_probe` in `vs_drm.ko`
+(`0x9694`) builds its component match list from
+available OF nodes for DC, BE, FE, WB, DSI2H and DP.
+It registers the master at `0x98f4`. The master
+`vs_drm_bind` calls `component_bind_all` at `0x9a44`
+and `drm_dev_register` at `0x9c14`. The DSI2H
+bridge attach resolves the remote bridge at
+`mipi-dsi2h.ko+0x8978`. The panel's bridge attach
+later calls its connector initializer, which calls
+`drm_connector_init` at `gs-panel.ko+0x8fd4`.
+The panel probe and connector registration are
+separate steps.
+
+The audited B0 DT enables the DP encoder. Its stock
+probe resolves the bridge before calling
+`component_add` (`vs_drm.ko+0x513a4` and
+`+0x513cc`). The remote node is
+`a2b4000.dwc_dptx`, whose stock `dwc_dptx.ko`
+registers the bridge. That module is absent from the
+three fixture manifests. The prior boot's deferred
+`dp-encoder` is consistent with this path holding
+the complete master unbound. The aggregate snapshot
+is needed to check that explanation on hardware.
+
+The diagnostic reports card and DSI connector counts,
+missing or unreadable attributes, and rejected cached
+status and encoder state. It samples after module load
+and retries at the end of the VDDD capture if the first
+sample was incomplete. After exporting VDDD, it takes
+a bounded read from the read-only debugfs component
+report for `sswrp_dpu@f400000:display-subsystem` and
+selects only the DP encoder's deferred-probe entry.
+The exact D1 `component_devices_show`
+(`Image+0xbefbac`) formats cached state under the
+component mutex. The fixture adds no modules,
+forces no connector probe and issues no display commit.
+The NV guard, I²C exclusions and independent 90-second
+return remain in place.
+
+Offline mocks passed nine connector and scope cases
+and three component snapshot cases. The packed helper
+matched source and all module manifests were unchanged.
+All five image hashes, AVB, handoff bounds and saved
+slot fit passed. The revised `init_boot` SHA-256 is
+`754f4eefef48647b493d5f936339a8ac304f880a5d3cf51e8c4087070a1067fe`.
+The other four images match the attended VDDD fixture.
+
+For one attended slot B trial, verify a fresh private
+nine-partition NV backup and all five staged images
+before boot. Confirm the NV guard and single I²C
+binding first. Compare the aggregate and DP deferred
+entry with both connector samples when present. An
+unbound aggregate with unregistered components and a
+deferred DP encoder would support the suspected block.
+Stop at discovery and let the timed return run. Select
+stock A in Fastboot, boot Android and verify the
+captured slot, verity and VBMeta.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

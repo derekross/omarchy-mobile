@@ -5,6 +5,8 @@ panel_bus=3a1ce000.i2c
 panel_other_buses='3a1ca000.i2c 3a1cd000.i2c 3bdcb000.i2c'
 panel_i2c_driver=i2c_designware
 panel_excluded=grizzly-panel-excluded
+panel_drm_master=sswrp_dpu@f400000:display-subsystem
+panel_dp_encoder=sswrp_dpu@f400000:dp-encoder
 
 stock_panel_scope_i2c() (
     sys=$1
@@ -71,10 +73,53 @@ stock_panel_check_i2c() (
     done
 )
 
+stock_panel_drm_components() (
+    debugfs=$1
+    "$bb" mkdir -m 0700 "$debugfs" || return 1
+    if ! "$bb" mount -t debugfs -o ro,nosuid,nodev,noexec,mode=0700 debugfs "$debugfs"; then
+        "$bb" rmdir "$debugfs"
+        stock_inventory_log "DSI0 panel sample=late reason=component-debugfs-unavailable"
+        return 1
+    fi
+    trap '"$bb" umount "$debugfs" && "$bb" rmdir "$debugfs"' 0
+    report=$debugfs/device_component/$panel_drm_master
+    if [ -r "$report" ]; then
+        rows=$("$bb" awk '
+            NR > 64 || length($0) > 160 { bad=1; exit }
+            NF > 1 && /(not registered|not bound|bound)$/ {
+                sub(/[[:space:]]+/, " ")
+                print
+            }
+            END { exit (bad || NR == 0) }
+        ' "$report") || return 1
+        [ -n "$rows" ] || return 1
+        while IFS= read -r row; do
+            stock_inventory_log "DSI0 panel sample=late component=$row" || return 1
+        done <<EOF
+$rows
+EOF
+    else
+        stock_inventory_log "DSI0 panel sample=late reason=component-report-unavailable" || return 1
+    fi
+    deferred=$debugfs/devices_deferred
+    if [ -r "$deferred" ]; then
+        rows=$("$bb" awk -v device="$panel_dp_encoder" '
+            NR > 256 || length($0) > 256 { bad=1; exit }
+            $1 == device { print }
+            END { exit bad }
+        ' "$deferred") || return 1
+        stock_inventory_log "DSI0 panel sample=late dp_encoder_deferred=${rows:-no-entry}"
+    fi
+)
+
 stock_panel_discover() (
     sys=$1
+    sample=$2
     set +f
-    stock_panel_check_i2c "$sys" || return 1
+    if ! stock_panel_check_i2c "$sys"; then
+        stock_inventory_log "DSI0 panel sample=$sample reason=i2c-scope-failed"
+        return 1
+    fi
     supply=
     for device in "$sys"/bus/i2c/devices/*-0060; do
         [ -L "$device/driver" ] || continue
@@ -93,25 +138,54 @@ stock_panel_discover() (
         [ "${driver##*/}" = panel-gs-pkcgda ] && [ -z "$panel" ] || return 1
         panel=${device##*/}
     done
-    stock_inventory_log "DSI0 panel supplier=${supply:-missing} panel=${panel:-missing}" || return 1
+    stock_inventory_log "DSI0 panel sample=$sample supplier=${supply:-missing} panel=${panel:-missing}" || return 1
     [ -n "$supply" ] && [ -n "$panel" ] || return 1
+    drm_class=$sys/class/drm
+    if [ ! -d "$drm_class" ]; then
+        stock_inventory_log "DSI0 panel sample=$sample reason=drm-class-missing"
+        return 1
+    fi
+    cards=0
+    for card in "$drm_class"/card[0-9]*; do
+        [ -d "$card" ] || continue
+        case ${card##*/} in *-*) ;; *) cards=$((cards + 1)) ;; esac
+    done
 
     count=0
-    for connector in "$sys"/class/drm/card*-DSI-*; do
+    accepted=0
+    for connector in "$drm_class"/card[0-9]*-DSI-*; do
         [ -d "$connector" ] || continue
         count=$((count + 1))
-        IFS= read -r status < "$connector/status" &&
-            IFS= read -r enabled < "$connector/enabled" || return 1
-        case $status:$enabled in
-            connected:disabled|unknown:disabled|disconnected:disabled) ;;
-            *) return 1 ;;
-        esac
+        name=${connector##*/}
+        for attr in status enabled modes; do
+            [ -r "$connector/$attr" ] || break
+        done
+        if [ ! -r "$connector/$attr" ]; then
+            stock_inventory_log "DSI0 panel sample=$sample connector=$name reason=attribute-unavailable attribute=$attr" || return 1
+            continue
+        fi
+        if ! IFS= read -r status < "$connector/status"; then
+            stock_inventory_log "DSI0 panel sample=$sample connector=$name reason=attribute-read-failed attribute=status" || return 1
+            continue
+        fi
+        if ! IFS= read -r enabled < "$connector/enabled"; then
+            stock_inventory_log "DSI0 panel sample=$sample connector=$name reason=attribute-read-failed attribute=enabled" || return 1
+            continue
+        fi
         # These sysfs attributes expose cached connector data.
-        modes=$("$bb" awk 'END { print NR }' "$connector/modes") || return 1
-        stock_inventory_log "DSI0 panel connector=${connector##*/} status=$status enabled=$enabled cached_modes=$modes" ||
-            return 1
+        if ! modes=$("$bb" awk 'END { print NR }' "$connector/modes"); then
+            stock_inventory_log "DSI0 panel sample=$sample connector=$name reason=attribute-read-failed attribute=modes" || return 1
+            continue
+        fi
+        state=rejected
+        if [ "$status:$enabled" = connected:disabled ]; then
+            state=accepted
+            accepted=$((accepted + 1))
+        fi
+        stock_inventory_log "DSI0 panel sample=$sample connector=$name status=$status enabled=$enabled cached_modes=$modes state=$state" || return 1
     done
-    [ "$count" -eq 1 ] && [ "$status" = connected ]
+    stock_inventory_log "DSI0 panel sample=$sample drm_cards=$cards dsi_connectors=$count accepted=$accepted" || return 1
+    [ "$count" -eq 1 ] && [ "$accepted" -eq 1 ]
 )
 
 stock_panel_check_gpio() (
@@ -220,21 +294,31 @@ stock_panel_run() (
           fi
           "$bb" umount "$panel_tracefs" && "$bb" rmdir "$panel_tracefs"' 0
     stock_panel_trace_begin || return 1
-    result=0
+    loaded=no
+    discovered=no
     if stock_inventory_modules load "$1"; then
-        "$bb" sleep 3 && stock_panel_discover /sys || result=1
+        loaded=yes
+        if "$bb" sleep 3 && stock_panel_discover /sys initial; then
+            discovered=yes
+        fi
     else
         stock_inventory_log "DSI0 panel module load failed"
-        result=1
     fi
     # The previous disable timed out at 31.92 s. End before the return timer.
     IFS=' .' read -r uptime rest < /proc/uptime || return 1
     if [ "$uptime" -lt 45 ]; then
         "$bb" sleep "$((45 - uptime))" || return 1
     fi
+    trace_ok=yes
     stock_panel_trace_dump || {
         stock_inventory_log "DSI0 panel VDDD capture incomplete"
-        result=1
+        trace_ok=no
     }
-    return "$result"
+    if [ "$loaded:$discovered" = yes:no ] && stock_panel_discover /sys late; then
+        discovered=yes
+    fi
+    if [ "$loaded" = yes ] && ! stock_panel_drm_components /grizzly-inventory/panel-debugfs; then
+        stock_inventory_log "DSI0 panel sample=late reason=component-snapshot-incomplete"
+    fi
+    [ "$discovered:$trace_ok" = yes:yes ]
 )
