@@ -48,6 +48,8 @@ case $1 in
     echo "  : values=$(cat "$FAKE/val/$(key "$n")" 2>/dev/null || echo 0x00,0x00,0x00,0x00)" ;;
   cset)
     n=${2#name=} v=$3; echo "cset $n = $v" >> "$FAKE/log"
+    # FAKE_SLEEP_CSET: a write to that control hangs (amixer stuck)
+    [[ -n ${FAKE_SLEEP_CSET:-} && $n == *"$FAKE_SLEEP_CSET"* ]] && sleep 30
     listed "$n" || { echo "amixer: Cannot find the given element from control hw:0" >&2; exit 1; }
     amp=${n%% *} bad=
     # FAIL_CSET: every write to that control fails (with FAIL_ONCE only the first)
@@ -405,6 +407,36 @@ rc=0; out=$(TEST_MARKER= FAIL_CSET=CAL_AMBIENT run --stop-post) || rc=$?
 reset
 rc=0; out=$(TEST_MARKER= run --stop-post) || rc=$?
 [[ $rc == 0 && -z $out && ! -s $F/log ]] || fail "--stop-post without the file does nothing: $out"
+# the killed run had turned Top's Preload off (stop_if_started): --stop-post turns it on
+reset; loaded_and_run; pre; echo off > "$F/val/Top_DSP1_Preload_Switch"; rm -f "$F/running/Top"
+printf '%s\n' "Top DSP1 Protection cd CAL_AMBIENT=0x00,0x00,0x00,0x07" "Top DSP1 Protection cd CAL_R=0x00,0x11,0x11,0x11" \
+  "Top DSP1 Protection cd CAL_STATUS=0x00,0x00,0x00,0x00" "Top DSP1 Protection cd CAL_CHECKSUM=0x00,0x00,0x00,0x00" > "$wfile"
+echo 0x00,0x12,0x34,0x56 > "$F/val/Top_DSP1_Protection_cd_CAL_R"
+rc=0; out=$(TEST_MARKER= run --stop-post) || rc=$?
+[[ $rc == 0 && $(<"$F/val/Top_DSP1_Preload_Switch") == on && $(grep -c '^load Top' "$F/log") == 1 ]] || fail "--stop-post turns a Preload Switch the killed run left off on again (rc $rc): $out"
+back || fail "--stop-post with Preload off puts Top's values back"
+clean "Preload left off by the killed run"; novalues "$out"
+# a file that is not what the script writes: reboot line, nothing written
+for bad in "garbage" "Top DSP1 Protection cd CAL_R=0x00,0x11,0x11,0x11"; do
+  reset; echo "$bad" > "$wfile"
+  rc=0; out=$(TEST_MARKER= run --stop-post) || rc=$?
+  [[ $rc == 1 && $out == *"reboot before any speaker stream"* && ! -s $F/log && ! -e $wfile ]] || fail "a bad state file is refused (rc $rc): $out"
+done
+# amixer hangs: the whole put-back stays within the budget and says to reboot
+reset; loaded_and_run; pre
+rc=0; out=$(KILL_ON_CSET="Top DSP1 Protection cd CAL_R" run) || rc=$?
+t0=$SECONDS
+rc=0; out=$(TEST_MARKER= FAKE_SLEEP_CSET=CAL_AMBIENT OMAMOBILE_SPK_STOP_BUDGET=3 run --stop-post) || rc=$?
+((SECONDS - t0 <= 6)) || fail "--stop-post stays within its budget with a hung amixer ($((SECONDS - t0)) s)"
+[[ $rc == 1 && $out == *"reboot before any speaker stream"* && ! -e $wfile ]] || fail "a hung amixer in --stop-post says to reboot (rc $rc): $out"
+# the stop timeout's SIGTERM during --stop-post is logged
+reset; loaded_and_run; pre
+rc=0; out=$(KILL_ON_CSET="Top DSP1 Protection cd CAL_R" run) || rc=$?
+( exec env PATH="$T/bin:$PATH" FAKE="$F" OMAMOBILE_STATE_DIR="$st" OMAMOBILE_RUN_DIR="$T/run" FAKE_SLEEP_CSET=CAL_AMBIENT \
+  OMAMOBILE_SPK_STOP_BUDGET=3 bash "$script" --stop-post ) > "$T/sp.out" 2>&1 &
+pid=$!; sleep 1; kill -TERM "$pid"; rc=0; wait "$pid" || rc=$?
+out=$(<"$T/sp.out")
+[[ $rc == 1 && $out == *"putting the cache back was cut short: reboot before any speaker stream"* ]] || fail "SIGTERM during --stop-post is logged (rc $rc): $out"
 pass "SIGKILL during the writes: the unit's --stop-post puts the cache back (stopping a DSP that started), or says to reboot"
 
 # 9. persist: mounted (under any name), bad checksum, status not 1, R or ambient

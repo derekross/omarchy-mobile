@@ -46,7 +46,6 @@
 # Preload Switch off alone would not do: it keeps the cache and every set
 # flag, and each stream start then loads the firmware and copies them in.
 set -uo pipefail
-umask 077
 export LC_ALL=C
 log() { echo "omamobile-husky-speaker-cal: $*"; }
 AMPS=(Top Bottom)
@@ -128,18 +127,41 @@ put_back() {
 
 # The unit's ExecStopPost=: a file left in /run means the run was killed
 # (SIGKILL) during an amplifier's writes, with no cleanup.
+# The unit's TimeoutStopSec= (15 s) bounds this too, so all of it runs
+# within one budget below that (each amixer call gets what is left, at most
+# 4 s), and the stop timeout's SIGTERM is logged. An amixer stuck in the
+# kernel (D state) ignores the time limit; systemd's SIGKILL then ends this
+# without a message.
+STOP_BUDGET=${OMAMOBILE_SPK_STOP_BUDGET:-12}
+# the trap can run inside a `>/dev/null` (fd 3 is stdout, set in stop_post)
+cut_short() { exec 1>&3; log "putting the cache back was cut short: reboot before any speaker stream"; exit 1; }
 stop_post() {
-  local rc=0
-  [[ -s $writing ]] || { rm -f "$writing"; return 0; }
-  # amixer may be what got stuck: each call gets a time limit here
-  ctl() { timeout 4 amixer -c 0 "$@"; }
-  preload_off=
+  local rc=0 a l
+  [[ -e $writing ]] || return 0
+  exec 3>&1
+  trap cut_short TERM INT HUP
+  ctl() {
+    local left=$((STOP_BUDGET - SECONDS))
+    ((left >= 1)) || { log "no time left for amixer $1 within ${STOP_BUDGET}s"; return 1; }
+    timeout -k 1 $((left < 4 ? left : 4)) amixer -c 0 "$@"
+  }
   mapfile -t undo < "$writing"
-  log "the run was killed during ${undo[0]%% *}'s writes; putting the driver's cache back"
-  put_back || rc=1
-  if [[ -n $preload_off ]]; then
-    ctl cset "name=$preload_off DSP1 Preload Switch" on >/dev/null || log "$preload_off: setting DSP1 Preload Switch on again failed"
+  # exactly one amplifier's four controls, each with a 4-byte value
+  a=${undo[0]%% *}
+  [[ $a == Top || $a == Bottom ]] && ((${#undo[@]} == 4)) || a=
+  for l in "${undo[@]}"; do
+    [[ $l =~ ^(Top|Bottom)\ DSP1\ Protection\ cd\ CAL_[A-Z]+=0x[0-9a-f]{2}(,0x[0-9a-f]{2}){3}$ && ${l%% *} == "$a" ]] || a=
+  done
+  if [[ -z $a ]]; then
+    log "$writing is not what this script writes; the driver's cache may hold a partial calibration: reboot before any speaker stream"
+    rm -f "$writing"; return 1
   fi
+  log "the run was killed during $a's writes; putting the driver's cache back"
+  preload_off=
+  put_back || rc=1
+  # always on again: the killed run may have turned it off (stop_if_started);
+  # unchanged it does nothing (wm_adsp.c:985-986)
+  ctl cset "name=$a DSP1 Preload Switch" on >/dev/null || { log "$a: setting DSP1 Preload Switch on again failed"; rc=1; }
   rm -f "$writing"
   return $rc
 }
@@ -291,7 +313,7 @@ for i in 0 1; do
   # on disk before the first write (a value already in the cache is a no-op
   # to put back: cs_dsp.c:828-831)
   k=0
-  for f in "${fs[@]}"; do echo "$(dsp_name "$p" "${f%%:*}")=${old[k++]}"; done > "$writing.new" \
+  (umask 077; for f in "${fs[@]}"; do echo "$(dsp_name "$p" "${f%%:*}")=${old[k++]}"; done > "$writing.new") \
     && mv -f "$writing.new" "$writing" \
     || fail "$p: cannot write $writing"
   k=0
@@ -312,6 +334,9 @@ for i in 0 1; do
     1) fail "$p: the DSP started while the calibration was written (or it cannot tell whether it runs); run again with the speaker PCM closed" ;;
     2) fail "$p: the DSP started while the calibration was written" ;;
   esac
+  # The file stays through that check, so a DSP that started during the
+  # writes is still put back after a SIGKILL. A SIGKILL inside the check
+  # undoes a whole record too: no calibration this boot, never a partial one.
   undo=()
   rm -f "$writing"
   written+=("$p")
