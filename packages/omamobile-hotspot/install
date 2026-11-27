@@ -8,5 +8,6 @@ destination=${1:?Usage: ./install DESTDIR}
 install -Dm755 lib/hotspot-ap "$destination/usr/lib/omamobile-hotspot/hotspot-ap"
 install -Dm755 lib/hotspot-backend "$destination/usr/lib/omamobile-hotspot/hotspot-backend"
 install -Dm644 omamobile-hotspot.service "$destination/usr/lib/systemd/system/omamobile-hotspot.service"
+install -Dm644 omamobile-hotspot-vpn.service "$destination/usr/lib/systemd/system/omamobile-hotspot-vpn.service"
 install -Dm644 50-omamobile-hotspot.rules "$destination/usr/share/polkit-1/rules.d/50-omamobile-hotspot.rules"
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-hotspot/LICENSE"

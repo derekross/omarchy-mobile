@@ -22,6 +22,7 @@ case "$a" in
     if [[ -e $ST/up ]]; then n=$(cat "$ST/up"); echo $((n + 1)) > "$ST/up"; (( n < 2 )) && echo "'$U':ap0"; fi; true ;;
   "connection down uuid '$U'") rm -f "$ST/up" ;;
   "connection up uuid '$W' ifname wlp1s0") touch "$ST/route" ;;
+  "-g IP4.DNS device show wg0") [[ -e $ST/wgdns ]] && echo "10.2.0.1 | 10.2.0.2"; true ;;
   *) echo "unexpected nmcli $a" >&2; exit 1 ;;
 esac'
 cp "$tmp/bin/nmcli" "$tmp/nmcli.orig"
@@ -254,8 +255,71 @@ eq "$(OMAMOBILE_HOTSPOT_RUN="$tmp/run2" OMAMOBILE_HOTSPOT_DEVCONF="$tmp/devconf"
 printf 'interface=wlan8\n' > "$tmp/hotspot.conf"
 eq "$(bash -c 'source <(sed -n "/^conf()/p" "$0"); CONF=$1 DEVCONF=$2; conf interface' "$tmp/hotspot-ap" "$tmp/hotspot.conf" "$tmp/devconf")" wlan8
 rm -f "$tmp/hotspot.conf" "$tmp/devconf"
+# ---- Share VPN: the kill switch's nft table goes in before the profile is up and out after ap0 is deleted
+stub ip '[[ $* == "-4 -o route show scope link" && -e $ST/onlink ]] && { printf "%s\n" "198.51.100.0/24 dev wlp1s0 proto kernel scope link src 198.51.100.7" "203.0.113.9 dev wlp1s0 scope link" "10.42.0.0/24 dev ap0 proto kernel scope link src 10.42.0.1"; exit 0; }
+case "$1 $2" in
+  "-d -o") [[ $* == *"type wireguard"* && -e $ST/wg ]] && echo "7: wg0: <POINTOPOINT,NOARP,UP,LOWER_UP> mtu 1420"; true ;;
+  "-4 -o") echo "10.42.0.0/24 proto kernel scope link src 10.42.0.1" ;;
+  "rule show") cat "$ST/rule" 2>/dev/null; true ;;
+  "rule add") echo "5342: from all iif ap0 lookup 7342" > "$ST/rule" ;;
+  "rule del") [[ -e $ST/rule ]] && rm -f "$ST/rule" ;;
+  "route replace"|"route flush"|"route del") true ;;
+  *) [[ -e $ST/route ]] && echo "default via 10.0.0.1 dev wlp1s0"; true ;;
+esac'
+stub systemctl 'if [[ $1 == show ]]; then if [[ $* == *hotspot-vpn* ]]; then cat "$ST/vpnunit" 2>/dev/null || echo inactive; else cat "$ST/unit" 2>/dev/null || echo inactive; fi; fi; true'
+rm -f "$st/up" "$st/upstart" "$st/rmnet" "$st/linkdown" "$tmp/run/vpn-state"; touch "$st/route"
+# switch off: no VPN table (only the isolation one)
+: > "$st/log"; rm -f "$st"/nft.*; ap run >/dev/null
+(( $(grep -c 'nft-applied omamobile_hotspot_vpn' "$st/log" || true) == 0 )) || { echo "FAIL: VPN table with Share VPN off" >&2; exit 1; }
+ap down >/dev/null
+# switch on, no VPN up: everything from ap0 dropped (forward and DNS), applied before the profile goes up
+echo active > "$st/vpnunit"; : > "$st/log"; rm -f "$st"/nft.*
+ap run >/dev/null
+grep -c 'iifname "ap0" drop' "$st/nft.omamobile_hotspot_vpn" >/dev/null || { echo "FAIL: no blanket drop without a VPN" >&2; exit 1; }
+grep -c 'th dport 53 drop' "$st/nft.omamobile_hotspot_vpn" >/dev/null || { echo "FAIL: DNS not dropped without a VPN" >&2; exit 1; }
+grep -c '^add table inet omamobile_hotspot_vpn$' "$st/nft.omamobile_hotspot_vpn" >/dev/null && grep -c '^delete table inet omamobile_hotspot_vpn$' "$st/nft.omamobile_hotspot_vpn" >/dev/null || { echo "FAIL: not one atomic replace" >&2; exit 1; }
+a=$(grep -n 'nft-applied omamobile_hotspot_vpn' "$st/log" | sed -n 1p | cut -d: -f1); b=$(grep -n "connection up uuid $U" "$st/log" | sed -n 1p | cut -d: -f1)
+(( a < b )) || { echo "FAIL: kill switch after the profile went up" >&2; exit 1; }
+grep -c '^ip rule add iif ap0 lookup 7342 priority 5342' "$st/log" >/dev/null || { echo "FAIL: no policy rule" >&2; exit 1; }
+grep -c '^ip route replace unreachable default metric 4294967295 table 7342' "$st/log" >/dev/null || { echo "FAIL: no unreachable default" >&2; exit 1; }
+[[ -e $tmp/run/vpn-state ]] || { echo "FAIL: no vpn-state while on" >&2; exit 1; }
+: > "$st/log"; ap down >/dev/null
+a=$(grep -n 'iw dev ap0 del' "$st/log" | sed -n 1p | cut -d: -f1); b=$(grep -n '^nft delete table inet omamobile_hotspot_vpn' "$st/log" | sed -n 1p | cut -d: -f1)
+[[ -n $a && -n $b ]] && (( a < b )) || { echo "FAIL: kill switch removed before ap0 was deleted" >&2; exit 1; }
+[[ ! -e $st/rule && ! -e $tmp/run/vpn-state ]] || { echo "FAIL: rule or state left after down" >&2; exit 1; }
+# switch on with wg0 up: only wg0 may carry ap0's traffic, steered into it, masqueraded, forwarding on for wg0
+touch "$st/wg"; rm -f "$st"/nft.*; : > "$st/log"; mkdir -p "$tmp/sysctl/wg0"; echo 0 > "$tmp/sysctl/wg0/forwarding"
+echo 0 > "$st/upstart"; ap run >/dev/null
+grep -c 'iifname "ap0" oifname != "wg0" drop' "$st/nft.omamobile_hotspot_vpn" >/dev/null || { echo "FAIL: no wg0-only rule" >&2; exit 1; }
+grep -c 'oifname "wg0" ip saddr 10.42.0.0/24 masquerade' "$st/nft.omamobile_hotspot_vpn" >/dev/null || { echo "FAIL: no masquerade on wg0" >&2; exit 1; }
+grep -c '^ip route replace default dev wg0 metric 0 table 7342' "$st/log" >/dev/null || { echo "FAIL: not steered into wg0" >&2; exit 1; }
+(( $(grep -c 'dnat' "$st/nft.omamobile_hotspot_vpn" || true) == 0 )) || { echo "FAIL: DNAT without a known VPN DNS" >&2; exit 1; }
+eq "$(cat "$tmp/sysctl/wg0/forwarding")" 1
+ap down >/dev/null
+eq "$(cat "$tmp/sysctl/wg0/forwarding")" 0
+# the VPN's DNS known: client DNS is sent to it (forwarded, under the kill switch)
+touch "$st/wgdns"; rm -f "$st"/nft.*; echo 0 > "$st/upstart"; ap run >/dev/null
+grep -c 'iifname "ap0" meta l4proto { tcp, udp } th dport 53 dnat ip to 10.2.0.1' "$st/nft.omamobile_hotspot_vpn" >/dev/null || { echo "FAIL: no DNS DNAT to the VPN DNS" >&2; exit 1; }
+grep -c 'iifname "ap0" meta l4proto { tcp, udp } th dport 53 drop' "$st/nft.omamobile_hotspot_vpn" >/dev/null || { echo "FAIL: DNS to the phone open while the tunnel's DNS is used" >&2; exit 1; }
+ap down >/dev/null; rm -f "$st/wgdns"
+# nft refuses: no hotspot without its kill switch
+touch "$st/nftfail"; : > "$st/log"
+ap run >/dev/null && { echo "FAIL: started without the kill switch" >&2; exit 1; }
+eq "$(cat "$tmp/run/last-stop")" "failed: share VPN could not be applied"
+(( $(grep -c "connection up uuid $U" "$st/log" || true) == 0 )) || { echo "FAIL: profile up without the kill switch" >&2; exit 1; }
+ap down >/dev/null; rm -f "$st/nftfail" "$st/wg" "$st/vpnunit"
+
+# systemctl that doesn't answer: at the start no hotspot; while running the rules stay
+printf '#!/bin/bash\necho "systemctl $*" >> "$ST/log"\nif [[ $1 == show && $* == *hotspot-vpn* ]]; then [[ -e $ST/sdown ]] && exit 1; cat "$ST/vpnunit" 2>/dev/null || echo inactive; elif [[ $1 == show ]]; then cat "$ST/unit" 2>/dev/null || echo inactive; fi; true\n' > "$tmp/bin/systemctl"
+echo active > "$st/vpnunit"; touch "$st/sdown"; : > "$st/log"
+ap run >/dev/null && { echo "FAIL: started with the switch's state unknown" >&2; exit 1; }
+ap down >/dev/null; rm -f "$st/sdown"
+# the same-name VPN link recreated within a poll: the route is put back on the next sync (reapplied every poll)
+touch "$st/wg"; echo 0 > "$st/upstart"; : > "$st/log"; ap run >/dev/null
+(( $(grep -c '^ip route replace default dev wg0 metric 0 table 7342' "$st/log") >= 2 )) || { echo "FAIL: the VPN route is not reapplied each poll" >&2; exit 1; }
+ap down >/dev/null; rm -f "$st/wg" "$st/vpnunit"
+
 # ---- client isolation: always on, before the profile is up, out after ap0 is deleted; no nft or a refusal = no hotspot
-rm -f "$st/up" "$st/upstart" "$st/rmnet" "$st/linkdown"; touch "$st/route"
 I="$st/nft.omamobile_hotspot_iso"
 rm -f "$st"/nft.* "$tmp/run/iso-state"; echo 0 > "$st/upstart"; : > "$st/log"; ap run >/dev/null
 [[ -e $I ]] || { echo "FAIL: no isolation table" >&2; exit 1; }
@@ -281,6 +345,11 @@ grep -c -- ', 203\.0\.113\.9[,} ]' "$I" >/dev/null || { echo "FAIL: an on-link h
 (( $(grep -c -- '10\.42\.0\.0/24' "$I" || true) == 0 )) || { echo "FAIL: ap0's own subnet in the drop set" >&2; exit 1; }
 grep -c -- 'iifname "ap0" ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/3, 198.51.100.0/24, 203.0.113.9 } drop' "$I" >/dev/null || { echo "FAIL: on-link drop set malformed" >&2; exit 1; }
 ap down >/dev/null; rm -f "$st/onlink"
+# Share VPN on with wg0: the VPN link is exempt from the private-range drop, nothing else changes
+echo active > "$st/vpnunit"; touch "$st/wg"; rm -f "$st"/nft.*; echo 0 > "$st/upstart"; ap run >/dev/null
+grep -c 'iifname "ap0" oifname != "wg0" ip daddr { 0.0.0.0/8' "$I" >/dev/null || { echo "FAIL: VPN link not exempt" >&2; exit 1; }
+grep -c 'iifname "wg0" oifname != "ap0" drop' "$I" >/dev/null || { echo "FAIL: the VPN link may forward elsewhere than ap0" >&2; exit 1; }
+ap down >/dev/null; rm -f "$st/wg" "$st/vpnunit"
 # nft refuses: no hotspot
 touch "$st/nftfail"; : > "$st/log"
 ap run >/dev/null && { echo "FAIL: started without client isolation" >&2; exit 1; }

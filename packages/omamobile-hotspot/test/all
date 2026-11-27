@@ -14,11 +14,21 @@ grep -qx 'ConditionPathExists=/usr/share/omamobile/hotspot.conf' $u || fail "the
 grep -qx 'ExecStart=/usr/lib/omamobile-hotspot/hotspot-ap run' $u || fail "the unit runs the helper"
 grep -qx 'ExecStopPost=/usr/lib/omamobile-hotspot/hotspot-ap down' $u || fail "the unit's stop runs the helper"
 grep -q '"omamobile-hotspot.service"' 50-omamobile-hotspot.rules || fail "the polkit rule names only this unit"
-grep -q '"start") return polkit.Result.AUTH_ADMIN_KEEP' 50-omamobile-hotspot.rules || fail "starting asks for the PIN (auth_admin_keep)"
-grep -q '"stop") return polkit.Result.YES' 50-omamobile-hotspot.rules || fail "stopping does not ask"
-(( $(grep -c 'polkit.Result.YES' 50-omamobile-hotspot.rules) == 1 )) || fail "YES only for stop"
+grep -qx 'ConditionPathExists=/usr/share/omamobile/hotspot.conf' omamobile-hotspot-vpn.service || fail "the Share VPN switch unit only runs where a device opted in"
+node -e '
+const rules=[]; global.polkit={addRule:f=>rules.push(f),Result:{YES:"yes",AUTH_ADMIN_KEEP:"pin"}};
+eval(require("fs").readFileSync("50-omamobile-hotspot.rules","utf8"));
+const ask=(unit,verb,o={})=>rules[0]({id:o.id||"org.freedesktop.systemd1.manage-units",lookup:k=>({unit,verb})[k]},{local:o.local!==false,active:true});
+const want=[["omamobile-hotspot.service","start","pin"],["omamobile-hotspot.service","stop","yes"],
+ ["omamobile-hotspot-vpn.service","start","pin"],["omamobile-hotspot-vpn.service","stop","pin"],
+ ["omamobile-hotspot.service","restart",undefined],["sshd.service","start",undefined]];
+for (const [u,v,r] of want) if (ask(u,v)!==r) { console.error(u,v,ask(u,v)); process.exit(1); }
+if (ask("omamobile-hotspot.service","stop",{local:false})!==undefined) process.exit(1);
+' || fail "polkit: hotspot start and the VPN switch both ways ask for the PIN, hotspot stop does not, nothing else"
+(( $(grep -c "polkit.Result.YES" 50-omamobile-hotspot.rules) == 1 )) || fail "YES only for the hotspot's stop"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 ./install "$tmp/root"
+[[ -f $tmp/root/usr/lib/systemd/system/omamobile-hotspot-vpn.service ]] || fail "the Share VPN switch unit staged"
 for f in usr/lib/omamobile-hotspot/hotspot-ap usr/lib/omamobile-hotspot/hotspot-backend; do
   [[ -x $tmp/root/$f ]] || fail "staged executable: $f"
 done

@@ -1,13 +1,20 @@
 // SPDX-License-Identifier: MIT
 // The shell's Hotspot tile and page (through /etc/omamobile/hotspot-backend): let the active local user start and stop
-// omamobile-hotspot.service, which runs "/usr/lib/omamobile-hotspot/hotspot-ap" as root. Nothing else.
-// Starting opens DHCP, DNS and forwarding on ap0, so it asks for the user's PIN (kept for a few minutes);
-// stopping only closes things, so it does not ask.
+// omamobile-hotspot.service, which runs "/usr/lib/omamobile-hotspot/hotspot-ap" as root, and
+// omamobile-hotspot-vpn.service, the empty unit that is the Share VPN switch. Nothing else.
+// Starting the hotspot opens DHCP, DNS and forwarding on ap0, so it asks for the user's PIN (kept for a few minutes);
+// stopping it only closes things, so it does not ask (Derek's decision on #1001).
+// The Share VPN switch asks for the PIN both ways, like the other privacy and network switches (#1009).
 polkit.addRule(function(action, subject) {
   if (action.id == "org.freedesktop.systemd1.manage-units" &&
-      subject.local && subject.active &&
-      action.lookup("unit") == "omamobile-hotspot.service") {
-    if (action.lookup("verb") == "start") return polkit.Result.AUTH_ADMIN_KEEP;
-    if (action.lookup("verb") == "stop") return polkit.Result.YES;
+      subject.local && subject.active) {
+    var unit = action.lookup("unit"), verb = action.lookup("verb");
+    if (unit == "omamobile-hotspot.service") {
+      if (verb == "start") return polkit.Result.AUTH_ADMIN_KEEP;
+      if (verb == "stop") return polkit.Result.YES;
+    }
+    if (unit == "omamobile-hotspot-vpn.service") {
+      if (verb == "start" || verb == "stop") return polkit.Result.AUTH_ADMIN_KEEP;
+    }
   }
 });

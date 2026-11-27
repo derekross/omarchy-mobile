@@ -10,12 +10,18 @@
 #   hotspot-backend on|off          start or stop the unit (polkit lets the active local user do just that)
 #   hotspot-backend active          "on" or "off" only, cheap (no secrets): the tile's state
 #   hotspot-backend set NAME PASS   new name and password; a running hotspot restarts with them
-#   hotspot-backend share|alltraffic on|off   not available yet
+#   hotspot-backend share on|off    Share VPN: the clients' traffic goes only through the phone's VPN, none without it
+#                                   (hotspot-ap's kill switch; alltraffic is the same switch, the page has one box).
+#                                   The choice is kept in ~/.config/omamobile/hotspot-share-vpn and applied by starting
+#                                   omamobile-hotspot-vpn.service (an empty unit hotspot-ap reads) before the hotspot.
 set -u
 export LC_ALL=C
 UNIT=omamobile-hotspot.service
 RUN=${OMAMOBILE_HOTSPOT_RUN:-/run/omamobile-hotspot}
 CON=Hotspot
+VPNUNIT=omamobile-hotspot-vpn.service
+PREF=${XDG_CONFIG_HOME:-$HOME/.config}/omamobile/hotspot-share-vpn
+DEVCONF=${OMAMOBILE_HOTSPOT_DEVCONF:-/usr/share/omamobile/hotspot.conf}
 # -e no: names and passwords with ':' or '\' come back as they are
 nm() { timeout 10 nmcli -e no "$@"; }
 json_str() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
@@ -29,7 +35,11 @@ hsuuid() {
   done < <(nm -t -f UUID,NAME connection show 2>/dev/null)
   return 1
 }
-unit_state() { timeout 4 systemctl show -p ActiveState --value "$UNIT" 2>/dev/null; }
+unit_state() { timeout 4 systemctl show -p ActiveState --value "${2:-$UNIT}" 2>/dev/null; }
+prefer_share() { [[ $(head -c 3 "$PREF" 2>/dev/null) == on ]]; }
+share_available() { [[ -r $DEVCONF ]] && command -v "${OMAMOBILE_HOTSPOT_NFT:-nft}" >/dev/null 2>&1; }
+# a VPN link up, the way hotspot-ap looks for one (WireGuard or tun)
+vpn_up() { local t; for t in wireguard tun; do [[ -n $(ip -o link show up type "$t" 2>/dev/null) ]] && return 0; done; return 1; }
 # a new profile: 2.4 GHz, shared, PMF required, AP isolation (clients don't reach each other), bound to ap0; never autoconnects (the unit brings it up)
 make_profile() {
   nm connection add type wifi con-name "$CON" ifname ap0 ssid "$1" autoconnect no 802-11-wireless.mode ap \
@@ -40,7 +50,7 @@ make_profile() {
 }
 
 state() {
-  local u ssid='' psk='' hotspot=off clients=0 editable=true
+  local u ssid='' psk='' hotspot=off clients=0 editable=true vpn=off share=off pref=false avail=false note
   if u=$(hsuuid); then
     ssid=$(nm -s -g 802-11-wireless.ssid connection show uuid "$u" 2>/dev/null)
     psk=$(nm -s -g 802-11-wireless-security.psk connection show uuid "$u" 2>/dev/null)
@@ -48,20 +58,61 @@ state() {
   # activating counts as on, so the tile doesn't flip back while the unit comes up
   case $(unit_state) in active|activating) hotspot=on ;; esac
   [[ $hotspot == on && -r $RUN/clients ]] && clients=$(grep -c . "$RUN/clients" 2>/dev/null)
-  printf '{"backend":"hotspot-ap","hotspot":"%s","vpn":"off","share":"off","share_available":false,"prefer_share":false,"all_traffic_available":false,"all_traffic":false,"editable":%s,"ssid":%s,"psk":%s,"clients":%s,"uplink_note":%s}\n' \
-    "$hotspot" "$editable" "$(json_str "$ssid")" "$(json_str "$psk")" "${clients:-0}" \
-    "$(json_str "Shares the phone's connection on 2.4 GHz. Devices need PMF (802.11w) to join.")"
+  vpn_up && vpn=on
+  prefer_share && pref=true
+  share_available && avail=true
+  # on only once hotspot-ap has applied it (its state file), not when the switch's unit has merely started
+  [[ $hotspot == on && $(unit_state x "$VPNUNIT") == active && -e $RUN/vpn-state ]] && share=on
+  note="Shares the phone's connection on 2.4 GHz. Devices need PMF (802.11w) to join."
+  if [[ $share == on && $vpn == on ]]; then note="Devices' traffic goes only through the VPN. Devices need PMF (802.11w) to join."
+  elif [[ $share == on ]]; then note="No VPN is up: devices have no internet until it connects."; fi
+  printf '{"backend":"hotspot-ap","hotspot":"%s","vpn":"%s","share":"%s","share_available":%s,"prefer_share":%s,"all_traffic_available":false,"all_traffic":false,"editable":%s,"ssid":%s,"psk":%s,"clients":%s,"uplink_note":%s}\n' \
+    "$hotspot" "$vpn" "$share" "$avail" "$pref" "$editable" "$(json_str "$ssid")" "$(json_str "$psk")" "${clients:-0}" "$(json_str "$note")"
+}
+
+# the switch: kept for the next start; on a running hotspot the empty unit is started or stopped at once and hotspot-ap
+# follows it within its poll (5 s)
+share() {
+  case ${1:-} in
+    on)
+      share_available || { echo "error: sharing a VPN needs nftables on this phone"; exit 1; }
+      mkdir -p "${PREF%/*}" && printf 'on\n' > "$PREF" || { echo "error: could not save the choice"; exit 1; }
+      case $(unit_state) in
+        active|activating) timeout 10 systemctl start "$VPNUNIT" >/dev/null 2>&1 || { echo "error: could not turn on Share VPN"; exit 1; }
+          # hotspot-ap applies it at its next poll; wait for its state file (up to 12 s) before saying so
+          local i; for ((i = 0; i < 24; i++)); do [[ -e $RUN/vpn-state ]] && break; sleep 0.5; done
+          [[ -e $RUN/vpn-state ]] || { echo "error: Share VPN is on but not applied yet; check again in a moment"; exit 1; }
+          echo "ok: devices' traffic now goes only through the VPN" ;;
+        *) echo "ok: saved; applies when the hotspot is turned on" ;;
+      esac ;;
+    off)
+      # the choice goes only once the stop (which asks for the PIN) went through, so a cancel leaves it on
+      timeout 10 systemctl stop "$VPNUNIT" >/dev/null 2>&1 || { echo "error: could not turn off Share VPN"; exit 1; }
+      rm -f "$PREF"
+      echo "ok: Share VPN off" ;;
+    *) echo "error: share takes on or off"; exit 1 ;;
+  esac
 }
 
 on() {
   # the unit only starts where a device package opted in; say so instead of a start that does nothing
-  [[ -r ${OMAMOBILE_HOTSPOT_DEVCONF:-/usr/share/omamobile/hotspot.conf} ]] || { echo "error: this phone has no hotspot settings"; exit 1; }
+  [[ -r $DEVCONF ]] || { echo "error: this phone has no hotspot settings"; exit 1; }
   if ! hsuuid >/dev/null; then
     # like NetworkManager's own hotspot: a name from the hostname and a generated password, editable on the page
     local pass
     pass=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 12)
     local host; host=$(hostname -s 2>/dev/null) || host=''; host=${host:-omamobile}
     make_profile "Hotspot-${host:0:24}" "$pass" || { echo "error: could not make the Hotspot settings"; exit 1; }
+  fi
+  # Share VPN first, so the kill switch is there before the access point is (hotspot-ap reads the unit at start);
+  # without it no start, never a hotspot that would go around the VPN
+  if prefer_share; then
+    # a start skipped by the unit's condition also returns 0: the unit must read active
+    share_available && timeout 10 systemctl start "$VPNUNIT" >/dev/null 2>&1 && [[ $(unit_state x "$VPNUNIT") == active ]] \
+      || { echo "error: Share VPN is on but could not be applied; the hotspot was not started"; exit 1; }
+  elif [[ $(unit_state x "$VPNUNIT") == active ]]; then
+    # stopping the switch asks for the PIN, so only when it is on
+    timeout 10 systemctl stop "$VPNUNIT" >/dev/null 2>&1 || { echo "error: could not turn off Share VPN; the hotspot was not started"; exit 1; }
   fi
   # waits for the unit to be ready (Type=notify), so a start that fails says so
   timeout 130 systemctl start "$UNIT" >/dev/null 2>&1 || { echo "error: the hotspot did not start"; exit 1; }
@@ -97,6 +148,6 @@ case ${1:-} in
   on) on ;;
   off) off ;;
   set) set_name "${2:-}" "${3:-}" ;;
-  share|alltraffic) echo "error: sharing a VPN isn't available with this hotspot yet" ;;
+  share|alltraffic) share "${2:-}" ;;
   *) echo "usage: hotspot-backend state | active | on | off | set NAME PASSWORD | share|alltraffic on|off" >&2; exit 2 ;;
 esac

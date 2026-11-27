@@ -17,16 +17,19 @@ stub nmcli '[[ $1 == -e && $2 == no ]] || { echo "nmcli without -e no" >&2; exit
   "connection modify uuid '$U' "*) ;;
   *) echo "unexpected nmcli $*" >&2; exit 1 ;;
 esac'
-stub systemctl 'case "$1" in show) cat "$ST/unit" 2>/dev/null || echo inactive ;; esac; [[ ! -e $ST/sysfail ]]'
+stub systemctl 'case "$1" in start) [[ $* == *hotspot-vpn* && ! -e $ST/sysfail ]] && echo active > "$ST/vpnunit" ;; stop) [[ $* == *hotspot-vpn* && ! -e $ST/sysfail ]] && echo inactive > "$ST/vpnunit" ;; show) if [[ $* == *hotspot-vpn* ]]; then cat "$ST/vpnunit" 2>/dev/null || echo inactive; else cat "$ST/unit" 2>/dev/null || echo inactive; fi ;; esac; [[ ! -e $ST/sysfail ]]'
 stub hostname 'echo husky'
+stub ip '[[ $* == *"type wireguard"* && -e $ST/wg ]] && echo "7: wg0: <POINTOPOINT,UP,LOWER_UP>"; true'
 touch "$tmp/devconf"
-be() { PATH="$tmp/bin:/usr/bin" OMAMOBILE_HOTSPOT_RUN="$tmp/run" OMAMOBILE_HOTSPOT_DEVCONF="$tmp/devconf" bash "$src/lib/hotspot-backend" "$@"; }
+be() { PATH="$tmp/bin:/usr/bin" XDG_CONFIG_HOME="$tmp/cfg" OMAMOBILE_HOTSPOT_RUN="$tmp/run" OMAMOBILE_HOTSPOT_DEVCONF="$tmp/devconf" bash "$src/lib/hotspot-backend" "$@"; }
 field() { python3 -c 'import json,sys; v=json.load(sys.stdin)[sys.argv[1]]; print(v if not isinstance(v,bool) else str(v).lower())' "$1"; }
 
 # no profile yet: off, empty name, no VPN boxes, the uplink note
 s=$(be state)
 [[ $(field hotspot <<< "$s") == off && $(field ssid <<< "$s") == "" ]] || fail "state without a profile"
-[[ $(field share_available <<< "$s") == false && $(field all_traffic_available <<< "$s") == false ]] || fail "VPN boxes must stay hidden"
+[[ $(field share_available <<< "$s") == true && $(field all_traffic_available <<< "$s") == false ]] || fail "one VPN box where nft is"
+[[ $(OMAMOBILE_HOTSPOT_NFT=/nonexistent be state | field share_available) == false ]] || fail "no VPN box without nft"
+[[ $(field vpn <<< "$s") == off && $(field prefer_share <<< "$s") == false ]] || fail "no VPN, no choice yet"
 [[ $(field uplink_note <<< "$s") == *802.11w* ]] || fail "the uplink note names the PMF limit"
 # on without a profile: one is made with pmf 3 on ap0, 2.4 GHz, then the unit starts
 : > "$ST/log"; be on
@@ -57,7 +60,37 @@ echo inactive > "$ST/unit"; : > "$ST/log"
 (( $(grep -c "^systemctl \(start\|stop\)" "$ST/log" || true) == 0 )) || fail "set while off must not touch the unit"
 # off stops the unit; the VPN verbs say no
 : > "$ST/log"; be off; grep -c "^systemctl stop --no-block omamobile-hotspot.service" "$ST/log" >/dev/null || fail "off stops the unit"
-[[ $(be share on) == error:* && $(be alltraffic on) == error:* ]] || fail "VPN verbs refused"
+# Share VPN while off: saved only, no unit touched; the next on starts the switch's unit before the hotspot
+: > "$ST/log"; [[ $(be share on) == "ok: saved; applies when the hotspot is turned on" ]] || fail "share on while off"
+[[ $(cat "$tmp/cfg/omamobile/hotspot-share-vpn") == on ]] || fail "choice saved"
+(( $(grep -c "^systemctl start" "$ST/log" || true) == 0 )) || fail "share on while off must not start units"
+[[ $(be state | field prefer_share) == true ]] || fail "prefer_share read back"
+: > "$ST/log"; be on
+[[ $(grep "^systemctl start" "$ST/log" | tr '\n' '|') == "systemctl start omamobile-hotspot-vpn.service|systemctl start omamobile-hotspot.service|" ]] || fail "on: the switch's unit before the hotspot"
+# the switch's unit refuses: no hotspot
+touch "$ST/sysfail"; : > "$ST/log"
+[[ $(be on) == error:* ]] && (( $(grep -c "^systemctl start omamobile-hotspot.service" "$ST/log" || true) == 0 )) || fail "no hotspot without its kill switch"
+rm -f "$ST/sysfail"
+# running with the switch: share on, the note says where traffic goes (VPN up or not)
+echo active > "$ST/unit"; echo active > "$ST/vpnunit"
+[[ $(be state | field share) == off ]] || fail "share on only once hotspot-ap applied it"
+touch "$tmp/run/vpn-state"
+s=$(be state); [[ $(field share <<< "$s") == on && $(field vpn <<< "$s") == off && $(field uplink_note <<< "$s") == "No VPN is up"* ]] || fail "share on without a VPN"
+touch "$ST/wg"; s=$(be state); [[ $(field vpn <<< "$s") == on && $(field uplink_note <<< "$s") == *"only through the VPN"* ]] || fail "share on with wg0"
+# off while running: choice gone, the unit stopped; alltraffic is the same switch
+: > "$ST/log"; [[ $(be share off) == "ok: Share VPN off" ]] || fail "share off"
+[[ ! -e $tmp/cfg/omamobile/hotspot-share-vpn ]] && grep -c "^systemctl stop omamobile-hotspot-vpn.service" "$ST/log" >/dev/null || fail "share off stops the switch's unit"
+: > "$ST/log"; [[ $(be alltraffic on) == "ok: devices' traffic now goes only through the VPN" ]] || fail "alltraffic on while running"
+grep -c "^systemctl start omamobile-hotspot-vpn.service" "$ST/log" >/dev/null || fail "share on while running starts the unit"
+[[ $(be share maybe) == error:* ]] || fail "share takes on or off"
+[[ $(OMAMOBILE_HOTSPOT_NFT=/nonexistent be share on) == error:* ]] || fail "share on without nft"
+be share off >/dev/null; rm -f "$ST/wg" "$ST/vpnunit"; echo inactive > "$ST/unit"
+: > "$ST/log"; be on >/dev/null; (( $(grep -c "^systemctl stop omamobile-hotspot-vpn.service" "$ST/log" || true) == 0 )) || fail "on without the choice stops an inactive switch unit (a needless PIN prompt)"
+echo inactive > "$ST/unit"; echo active > "$ST/vpnunit"
+: > "$ST/log"; be on >/dev/null; grep -c "^systemctl stop omamobile-hotspot-vpn.service" "$ST/log" >/dev/null || fail "on without the choice stops a left switch unit"
+echo inactive > "$ST/unit"; echo active > "$ST/vpnunit"; touch "$ST/sysfail"
+[[ $(be on) == error:* ]] || fail "on goes ahead although the left switch unit could not be stopped"
+rm -f "$ST/sysfail" "$ST/vpnunit"
 [[ $(be bogus 2>&1; echo $?) == *2 ]] || fail "usage"
 # a phone that didn't opt in: on says so and starts nothing
 rm -f "$tmp/devconf"; : > "$ST/log"
