@@ -9254,6 +9254,69 @@ lines. Fastboot returned 134 seconds after the only CID
 boot request. Stock A completed boot with the same D1
 build, enforcing verity and matching VBMeta digest.
 
+###### Offline D1 wrapper Q-channel debug selector
+
+The live DC customer ID selects `0x20000005`. At the
+`dpu-gpcsr` base of `0x0f790000`, that layout places the
+wrapper's debug control and status on the same CSR page.
+
+| AP word | Definition |
+| --- | --- |
+| `0x0f791010` | `DPU_SSWRP_QCHCTL_DBG_STATUS_CTL`. Bit 24 enables debug and bits 23:0 select a signal. Both fields default to zero. [Wrapper debug control][gpcsr-20000005-debug-ctl] |
+| `0x0f79101c` | `DPU_SSWRP_QCHCTL_DBG_STATUS`. The read mask covers 32 bits and the write mask is zero. The result has no named subfields. [Wrapper debug status][gpcsr-20000005-debug-status] |
+
+The header leaves the selector encoding and source list
+undocumented. The four nearby `ACTIVE_MASK_0`,
+`ACTIVE_MASK_1`, `ACTIVE_ASYNC_MASK_0` and `QCH_MASK_0`
+words configure which activity and handshake inputs the
+wrapper considers. Their labels cover AXI/APB paths,
+FE/BE activity, LPCM power-bus activity and
+`dbg_clk_ctrl_wrap`, `lpdp_1to5_clk` and `axi2apb5_cg`.
+Those bit positions describe the masks. There is no
+documented mapping from them to the debug selector, and
+none names the DSI0 PHY TX bus clock or external reset.
+[Wrapper input masks][gpcsr-20000005-input-masks]
+
+Exact D1 `vs_drm.ko` maps GPCSR but has no identified
+access to this pair. Its `0x101c` instruction matches
+form FE/BE offsets in underrun and trigger paths. The
+GPCSR transaction at `0x37754`–`0x377d8` is the
+compiled BE idle check. It writes `0x01000002` to
+`+0x107c` and polls bit 14 at `+0x1084`. The
+`0x20000005` layout identifies those two offsets as
+the BE debounce and bypass controls. The latter has a
+read mask of `0x1`, so per this layout a clear bit 14
+would supply no BE idle evidence. The BE debug pair
+for this layout is `+0x1080` and `+0x108c`. The stock
+sequence provides no selector or status interpretation
+for the wrapper instance.
+[BE idle implementation][gpcsr-be-idle] · [BE registers][gpcsr-20000005-be-registers]
+
+The exact D1 FBPK and CPM image contain no direct AP or
+CPM address literal for either wrapper word. The decoded
+CPM initialization writes also miss both words. A
+wrapper-relative page reference in CPM belongs to an
+access-control save/restore table. Computed-address
+accesses outside the inspected paths remain possible.
+The saved stock bugreport and 84 retained stock log files
+have no exact-address or selector-name witness.
+
+GC `dpu_rfw_brg1` assigns rule `0x30303` to the AP
+page `0x0f791000`–`0x0f791fff`. This is static policy.
+The exact word's EL1 bus response and power prerequisites
+remain unobserved. BL31's PMU read service excludes
+both AP addresses and CPM aliases at its range check
+(`0x2425c`–`0x2427c`). A raw status read
+would have no verified signal interpretation, and
+selecting a signal requires programming the control word.
+Keep the wrapper debug words, PHY TX and DSI0 host reads
+disabled. The audit used only saved artifacts.
+
+[gpcsr-20000005-debug-ctl]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x20000005.h#L441-L469
+[gpcsr-20000005-debug-status]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x20000005.h#L520-L539
+[gpcsr-20000005-input-masks]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x20000005.h#L541-L703
+[gpcsr-20000005-be-registers]: https://github.com/GrapheneOS/kernel_pixel/blob/cbc6305f4ca4f4a63c4e6f476fd0d0aa09fa2122/private/google-modules/display/vsi-drm/verisilicon/9x00/info/sswrp_dpu_gpcsr_pg_9400_0x20000005.h#L1187-L1306
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
