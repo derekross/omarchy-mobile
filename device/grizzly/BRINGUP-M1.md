@@ -9870,6 +9870,43 @@ descriptor at `0x0f409018`. Its inclusion in the
 physical scan chain remains unverified. Keep
 PSM1, PHY TX and host reads disabled.
 
+###### Offline B0 DPU PSM1 descriptor reset-value audit
+
+Exact D1 CPM reads PSM metadata from the controller.
+It checks the count in the hardware header and loads
+the descriptor at LPCM base `+0x10 + 8 * psm`
+(`0x40c0c` and `0x40c80`). For DPU PSM1 the word
+is at AP `0x0f409018`, CPM `0x6f409018`. The
+decoder uses its page, instance and offset fields
+to locate the separate status word. The PSM control
+and state-entry writes at `0x1936c`, `0x193c4`
+and `0x19470` also use descriptor-derived locations.
+
+The initializer dispatcher at `0x39188` resolves
+packed tables through `0x11e0` and applies the
+records through `0x19598`. Expanding all 15
+nonempty tables gave 484 records. The audit used
+the actual write widths of 4, 8 and 16 bytes per
+element, including the full spans of multiword
+writes. None covers the DPU PSM1 descriptor at
+either alias. The DPU table itself has 17 records.
+Its only write in the first `0x40` bytes is at
+base `+0x8`. This is consistent with hardware
+configuration metadata supplied before the CPM
+initializer. The audited write paths do not
+establish that the word is hardwired or immutable.
+
+The saved Malibu LPCM bindings define controller,
+clock, reset and performance-state IDs. The
+generated DPU GPCSR headers give defaults and
+access masks for the GPCSR window at AP
+`0x0f790000`. Their LPCM references describe
+signals crossing that wrapper. Neither header set
+defines the descriptor at `0x0f409018` or its
+reset value. The reset value, direct EL1 access
+and status address remain unverified. Keep PSM1,
+PHY TX and host reads disabled.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
