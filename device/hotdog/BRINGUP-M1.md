@@ -32,7 +32,8 @@ each step below are recorded under [Results](#results).
   package's parts that need it do nothing; its README lists which.
 - **The slot mark is on hold** (the maintainer, #931, 2026-11-24): no
   `slot-a-mark write` or `restore`, and no `fastboot flash boot_a`, until
-  the CONTRIBUTING §3.1 entry is decided. Test kernels are RAM-booted with
+  the CONTRIBUTING §3.1 entry is decided. The tool refuses both on a phone
+  (`HOLD`), so only its read-only `status` and `dump` would merge in use. Test kernels are RAM-booted with
   `fastboot boot` only, and reboots are kept few. A broken `sde` GPT means
   EDL.
 

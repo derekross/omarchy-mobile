@@ -33,6 +33,11 @@ the GPT on the disk is that dump's, or that dump's with boot_a's
 successful bit set. Neither is ever run from a service or at boot
 (AGENTS.md section 1). Both make sde writable for their writes and
 read-only again on every exit.
+
+On hold: write and restore refuse on a phone until CONTRIBUTING section 3.1
+has an entry for the OnePlus 7T Pro (the maintainer, #931, 2026-11-24).
+Only status and dump run there; the test mode keeps both covered on a disk
+image. Lifting the hold is a reviewed change to HOLD below, nothing else.
 """
 import fcntl
 import hashlib
@@ -55,6 +60,10 @@ NAMES = ("boot_a", "boot_b")
 SUCCESSFUL = 1 << 54
 BLKROSET = 0x125D
 BLKFLSBUF = 0x1261
+# write and restore on a phone: on hold until CONTRIBUTING section 3.1 has
+# an entry for this phone (see above). Not an option or a variable on
+# purpose: only a reviewed change to this line lifts it
+HOLD = True
 # Tests only: stop a write after its first copy, as a failure would
 STOP_AFTER_FIRST = TEST and os.environ.get("SLOT_A_MARK_STOP_AFTER_FIRST") == "1"
 
@@ -391,6 +400,13 @@ def restore(path, expect):
 
 
 def main():
+    args = sys.argv[1:]
+    # Before anything reads the phone, so a hold is reported as one, not as
+    # "run as root"
+    if HOLD and not TEST and args[:1] in (["write"], ["restore"]):
+        die(f"{args[0]} is on hold until CONTRIBUTING section 3.1 has an entry for the "
+            "OnePlus 7T Pro (the maintainer, #931): only status and dump run on a phone; "
+            "nothing written")
     if TEST:
         try:
             st = os.lstat(DISK)
@@ -404,7 +420,6 @@ def main():
         compat = open("/proc/device-tree/compatible", "rb").read().split(b"\0")
         if b"oneplus,hotdog" not in compat:
             die("not a OnePlus 7T Pro")
-    args = sys.argv[1:]
     if args == ["status"]:
         status()
     elif args == ["dump"]:

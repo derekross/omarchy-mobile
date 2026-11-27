@@ -8,7 +8,8 @@ stops after the backup copy leaves a split GPT that status reports (exit 2)
 and dump and write refuse; restore with the dump taken before the write
 puts the bytes back, also over a primary header that no longer reads, after
 which write runs again; restore refuses a wrong sha256 and a dump of another
-GPT."""
+GPT. Outside the test mode, write and restore refuse while on hold (#931),
+before anything reads the phone."""
 import hashlib
 import os
 import struct
@@ -170,3 +171,23 @@ with tempfile.TemporaryDirectory() as t:
     if sha(disk) != before:
         fail("a refused symlink wrote through to the image")
     ok("the test mode refuses a device, a symlink and a folder")
+
+    # On hold (#931): outside the test mode write and restore refuse first,
+    # before the root and board checks, and write nothing, even when a disk
+    # image is named; status and dump are not held
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SLOT_A_MARK_")}
+    env["SLOT_A_MARK_DISK"] = disk
+    before = sha(disk)
+    for args in (("write", "--sha256", s), ("restore", tar, "--sha256", s)):
+        r = subprocess.run([sys.executable, "-I", TOOL, *args], env=env, capture_output=True, text=True)
+        if r.returncode != 1 or "is on hold until CONTRIBUTING section 3.1" not in r.stderr:
+            fail(f"{args[0]} refuses while on hold: {r.stdout}{r.stderr}")
+    r = subprocess.run([sys.executable, "-I", TOOL, "status"], env=env, capture_output=True, text=True)
+    if "on hold" in r.stderr:
+        fail(f"status is not held: {r.stderr}")
+    if sha(disk) != before:
+        fail("a held write or restore changed the image")
+    src = open(TOOL).read()
+    if src.count("\nHOLD = True\n") != 1:
+        fail("slot-a-mark holds write and restore (HOLD = True)")
+    ok("outside the test mode write and restore are on hold, status is not")
