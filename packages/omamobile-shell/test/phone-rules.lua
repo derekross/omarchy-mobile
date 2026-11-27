@@ -18,7 +18,10 @@ local noop = function() end
 -- Binds as Hyprland keeps them: a list that hl.unbind empties per key.
 local binds, devices = {}, {}
 local function dsp(name) return function(arg) return { dsp = name, arg = arg } end end
+local handlers, execs = {}, {}
 hl = {
+  on = function(ev, fn) handlers[ev] = handlers[ev] or {}; table.insert(handlers[ev], fn) end,
+  exec_cmd = function(c) execs[#execs + 1] = c end,
   config = function(t) merge(config, t) end,
   window_rule = function(t) rules[#rules + 1] = t end,
   layer_rule = noop,
@@ -43,6 +46,7 @@ o = {
   bind = function(keys, description, dispatcher, opts)
     binds[#binds + 1] = { keys = keys, description = description, dispatcher = dispatcher, opts = opts or {} }
   end,
+  launch = function(c) return "uwsm-app -- " .. c end,
   launch_on_start = noop,
   cmd_present = function(cmd) return cmd == "voxtype" end,
 }
@@ -147,6 +151,17 @@ check(type(move) == "table" and move[1] == "(monitor_w-window_w-8)", "picture-in
 
 local saver = { class = "^org.omarchy.screensaver$" }
 check(effect(saver, "maximize") == false and effect(saver, "fullscreen") == true, "the screensaver stays fullscreen")
+
+-- the refresh rate (an eval'd monitor rule) is applied at session start and again after every config reload
+local function fire(ev)
+  execs = {}
+  for _, fn in ipairs(handlers[ev] or {}) do fn() end
+  return execs
+end
+local at_start, at_reload = fire("hyprland.start"), fire("config.reloaded")
+check(#at_start == 1 and at_start[1]:find("display.sh", 1, true) and at_start[1]:find("apply", 1, true),
+  "the refresh rate is applied at session start")
+check(#at_reload == 1 and at_reload[1] == at_start[1], "the refresh rate is applied again after a config reload")
 
 -- The on-screen keyboard's keys: squeekboard's device resolves binds by
 -- keysym, its action-row keysyms are bound for it alone, and Omarchy's binds

@@ -64,6 +64,9 @@ install -Dm644 vendor/udev/rules.d/75-omamobile-charge-limit.rules \
   "$destination/usr/lib/udev/rules.d/75-omamobile-charge-limit.rules"
 install -Dm644 vendor/systemd/system/omamobile-charge-limit-apply.service \
   "$destination/usr/lib/systemd/system/omamobile-charge-limit-apply.service"
+# a bare number, the refresh rate used while the user has chosen none in Settings (display.sh, autorotate)
+install -Dm644 refresh-rate-default \
+  "$destination/usr/share/omamobile/refresh-rate-default"
 install -Dm644 thermal.conf "$destination/usr/share/omamobile/thermal.conf"
 install -Dm755 bin/omamobile-husky-thermal "$destination/usr/bin/omamobile-husky-thermal"
 install -Dm644 vendor/systemd/system/omamobile-husky-thermal.service \

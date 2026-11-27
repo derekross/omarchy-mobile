@@ -101,10 +101,79 @@ assert len(sent(usf.REQ_STOP_SAMPLING)) == 1
 PY
 pass "gyroscope rates, records, AoC clock and USF backend"
 
+# the refresh rate chosen in Settings survives a rotation; an unlisted or missing one means preferred. The fake
+# hyprctl reports a turned monitor (transform 1, width and height swapped, modes in the panel's orientation) and
+# rejects any mode it does not list. Real Hyprland does not (it tries an unlisted mode as a custom one and
+# falls back); this strict stub is ours, to check that the exact listed token is sent.
+mkdir -p "$tmp/bin" "$tmp/home/.config/omamobile"
+cat > "$tmp/bin/hyprctl" <<'EOT'
+#!/bin/bash
+if [[ $1 == -j ]]; then
+  if [[ -n ${MONJSON:-} ]]; then echo "$MONJSON"; else
+  echo '[{"name":"DSI-1","width":2992,"height":1344,"scale":3.2,"transform":1,"availableModes":["1344x2992@120.00Hz","1344x2992@60.00Hz"]}]'; fi
+elif [[ $1 == eval ]]; then
+  mode=$(sed -n 's/.*mode = "\([^"]*\)".*/\1/p' <<<"$2")
+  if [[ $mode == preferred || $mode == 1344x2992@120.00 || $mode == 1344x2992@60.00 ]]; then echo "$*" >> "$HYPR_LOG"; echo ok
+  else echo "error: bad mode $mode"; fi
+else echo "$*" >> "$HYPR_LOG"; echo ok; fi
+EOT
+chmod +x "$tmp/bin/hyprctl"
+rot() { : > "$tmp/hypr.log"
+  PATH="$tmp/bin:$PATH" HYPR_LOG="$tmp/hypr.log" HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/elsewhere" OMAMOBILE_RATE_DEFAULT_FILE="$tmp/rate-default" PYTHONPATH=lib python3 -c 'import autorotate; autorotate.apply(1)' 2>/dev/null
+  cat "$tmp/hypr.log"; }
+rf=$tmp/home/.config/omamobile/refresh-rate
+rm -f "$rf"
+rot | grep -c 'mode = "preferred".*transform = 1' >/dev/null || fail "autorotate without a saved rate uses preferred"
+echo 60 > "$rf"
+rot | grep -c 'mode = "1344x2992@60.00".*transform = 1' >/dev/null || fail "autorotate keeps the saved rate (exact token, turned monitor) and sets the transform"
+rot | grep -c '^keyword' >/dev/null && fail "autorotate fell back to the keyword path"
+echo 90 > "$rf"
+rot | grep -c 'mode = "preferred"' >/dev/null || fail "autorotate falls back to preferred for an unlisted rate"
+echo junk > "$rf"
+rot | grep -c 'mode = "preferred"' >/dev/null || fail "autorotate ignores a junk rate file"
+# an unparsable mode is skipped, and the size as reported wins over the swapped one
+echo 60 > "$rf"
+HOME="$tmp/home" OMAMOBILE_RATE_DEFAULT_FILE="$tmp/no-default" PYTHONPATH=lib python3 -c '
+import autorotate as a
+m = {"width": 1344, "height": 2992, "availableModes": ["1344x2992@odd", "2992x1344@60.00Hz", "1344x2992@60.50Hz"]}
+assert a.saved_mode(m) == "1344x2992@60.50", a.saved_mode(m)' || fail "autorotate skips an odd mode and prefers the reported size"
+# a device default (husky ships 60) is used with no saved choice, only when listed; a saved choice wins
+rm -f "$rf"; echo 60 > "$tmp/rate-default"
+rot | grep -c 'mode = "1344x2992@60.00".*transform = 1' >/dev/null || fail "autorotate without a saved rate keeps the device default"
+echo 120 > "$rf"
+rot | grep -c 'mode = "1344x2992@120.00"' >/dev/null || fail "a saved rate wins over the device default"
+echo 90 > "$rf"
+rot | grep -c 'mode = "1344x2992@60.00"' >/dev/null || fail "an unlisted saved rate falls back to the device default"
+rm -f "$rf"; echo 90 > "$tmp/rate-default"
+rot | grep -c 'mode = "preferred"' >/dev/null || fail "an unlisted device default means preferred"
+rm -f "$tmp/rate-default"
+# neither a saved rate nor a usable default: a turn keeps the refresh rate the panel has now (never preferred, 120)
+cur='[{"name":"DSI-1","width":2992,"height":1344,"scale":3.2,"transform":1,"refreshRate":60.0,"availableModes":["1344x2992@120.00Hz","1344x2992@60.00Hz"]}]'
+rm -f "$rf"; MONJSON=$cur rot | grep -c 'mode = "1344x2992@60.00"' >/dev/null || fail "autorotate keeps the current rate when none is saved"
+echo junk > "$rf"; MONJSON=$cur rot | grep -c 'mode = "1344x2992@60.00"' >/dev/null || fail "autorotate keeps the current rate when the saved file is junk"
+echo 90 > "$rf"; MONJSON=$cur rot | grep -c 'mode = "1344x2992@60.00"' >/dev/null || fail "autorotate keeps the current rate when the saved rate is unlisted"
+# the rate file is one bare number of 1 to 3 digits and at most one trailing newline
+for bad in '60 ' ' 60' '060x' '0060' '060' '0' '60\r\n' '60\r' '\xff60' '60\xe9\n' '6e1' '60\n\n' '60\nfoo' ''; do
+  printf "$bad" > "$rf"
+  HOME="$tmp/home" OMAMOBILE_RATE_DEFAULT_FILE="$tmp/no-default" PYTHONPATH=lib python3 -c '
+import autorotate as a
+m = {"width": 1344, "height": 2992, "availableModes": ["1344x2992@60.00Hz"]}
+assert a.saved_mode(m) is None, a.saved_mode(m)' || fail "autorotate accepted the odd rate file '$bad'"
+done
+printf '60' > "$rf"; HOME="$tmp/home" OMAMOBILE_RATE_DEFAULT_FILE="$tmp/no-default" PYTHONPATH=lib python3 -c '
+import autorotate as a
+m = {"width": 1344, "height": 2992, "availableModes": ["1344x2992@60.00Hz"]}
+assert a.saved_mode(m) == "1344x2992@60.00"' || fail "autorotate refused a rate file with no newline"
+printf '60\n' > "$rf"; HOME="$tmp/home" OMAMOBILE_RATE_DEFAULT_FILE="$tmp/no-default" PYTHONPATH=lib python3 -c '
+import autorotate as a
+m = {"width": 1344, "height": 2992, "availableModes": ["1344x2992@60.00Hz"]}
+assert a.saved_mode(m) == "1344x2992@60.00"' || fail "autorotate refused a rate file with one newline"
+pass "autorotate keeps the saved refresh rate"
+
 # D-Bus round trip on a private session bus: test backend -> autorotate (dry run)
 if command -v dbus-run-session >/dev/null; then
   # A private state directory: the user's own rotation lock must not apply
-  XDG_STATE_HOME=$tmp/state GIO_USE_VFS=local dbus-run-session -- bash -c '
+  OMAMOBILE_RATE_DEFAULT_FILE=$tmp/no-default XDG_STATE_HOME=$tmp/state GIO_USE_VFS=local dbus-run-session -- bash -c '
     PYTHONPATH=lib python3 lib/sensor_proxy.py --backend test --session & p=$!
     sleep 1
     timeout 8 python3 lib/autorotate.py --session --dry-run 2> '"$tmp"'/rot.log || true

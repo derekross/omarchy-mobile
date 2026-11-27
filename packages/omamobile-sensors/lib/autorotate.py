@@ -25,6 +25,7 @@ portrait or an orientation is waiting.
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -63,24 +64,96 @@ def shell_locked(dry_run=False):
     return r.stdout.strip() == 'true'
 
 
+def rate_path():
+    # a fixed path, the same one Settings writes: a user service may not see a session-only XDG_CONFIG_HOME
+    return os.path.join(os.path.expanduser('~'), '.config', 'omamobile', 'refresh-rate')
+
+
+# A device package's default rate (husky ships 60), used while the user has chosen none; the same file
+# Settings' display.sh reads
+# (OMAMOBILE_RATE_DEFAULT_FILE redirects it, for the tests only)
+DEFAULT_RATE_PATH = os.environ.get('OMAMOBILE_RATE_DEFAULT_FILE', '/usr/share/omamobile/refresh-rate-default')
+
+
+def saved_mode(m):
+    """The exact mode token (without "Hz") for the rate the user chose in Settings, else the device
+    default rate, else None.
+
+    Only a rate the monitor lists is used, in the panel's own orientation or the turned one (hyprctl may
+    report the size either way); a missing, odd or unlisted rate falls through to the next one, so the
+    screen never ends on a mode it lacks."""
+    for path in (rate_path(), DEFAULT_RATE_PATH):
+        mode = _listed_mode(m, path)
+        if mode:
+            return mode
+    return None
+
+
+def current_mode(m):
+    """The monitor's current mode as the exact listed token, so a turn keeps the rate it has; "preferred" only
+    if hyprctl gave no usable current rate (then the mode is left to Hyprland as before)."""
+    try:
+        return _token(m, int(round(float(m['refreshRate'])))) or 'preferred'
+    except (KeyError, ValueError, TypeError):
+        return 'preferred'
+
+
+def _read_rate(path):
+    """A bare number of 1 to 3 digits, no leading zero, with at most one trailing newline, else None; the same
+    rule as read_rate in omamobile-settings' display.sh."""
+    # bytes, not text: text mode would turn "120\r\n" into "120\n" and fail on bytes that are not UTF-8
+    try:
+        with open(path, 'rb') as f:
+            data = f.read()
+    except OSError:
+        return None
+    if data.endswith(b'\n'):
+        data = data[:-1]
+    return int(data) if re.fullmatch(rb'[1-9][0-9]{0,2}', data) else None
+
+
+def _token(m, want):
+    """The exact mode token for the rate WANT at the monitor's size (as reported, then turned), else None."""
+    try:
+        w, h = int(m['width']), int(m['height'])
+        for wanted in (f'{w}x{h}', f'{h}x{w}'):  # the size as reported first, then the swapped one
+            for mode in m.get('availableModes', []):
+                size, _, hz = mode.partition('@')
+                hz = hz.removesuffix('Hz')
+                try:
+                    ok = size == wanted and round(float(hz)) == want
+                except ValueError:
+                    continue  # a mode this parser does not know is skipped
+                if ok and re.fullmatch(r'\d{1,5}x\d{1,5}@\d{1,4}(\.\d{1,6})?', size + '@' + hz):
+                    return size + '@' + hz
+    except (KeyError, ValueError, TypeError):
+        pass
+    return None
+
+
+def _listed_mode(m, path):
+    want = _read_rate(path)
+    return None if want is None else _token(m, want)
+
+
 def monitor(name=None):
-    """(name, scale) of the given monitor, or of the first one."""
+    """(name, scale, mode) of the given monitor, or of the first one."""
     try:
         mons = json.loads(hyprctl('-j', 'monitors').stdout or '[]')
     except json.JSONDecodeError:
         mons = []
     for m in mons:
         if name is None or m.get('name') == name:
-            return m.get('name'), m.get('scale', 1.0)
-    return None, None
+            return m.get('name'), m.get('scale', 1.0), saved_mode(m) or current_mode(m)
+    return None, None, 'preferred'
 
 
 def apply(transform, name=None, dry_run=False):
-    mon, scale = (name or 'DSI-1', 1.0) if dry_run else monitor(name)
+    mon, scale, mode = (name or 'DSI-1', 1.0, saved_mode({}) or 'preferred') if dry_run else monitor(name)
     if mon is None:
         log('no monitor')
         return
-    lua = (f'hl.monitor({{ output = "{mon}", mode = "preferred", position = "auto", '
+    lua = (f'hl.monitor({{ output = "{mon}", mode = "{mode}", position = "auto", '
            f'scale = {scale:g}, transform = {transform} }}); '
            f'hl.config({{ input = {{ touchdevice = {{ transform = {transform}, output = "{mon}" }} }} }})')
     if dry_run:
@@ -89,7 +162,7 @@ def apply(transform, name=None, dry_run=False):
     r = hyprctl('eval', lua)
     if r.returncode != 0 or 'error' in (r.stdout + r.stderr).lower():
         # Older Hyprland: the keyword interface
-        hyprctl('keyword', 'monitor', f'{mon},preferred,auto,{scale:g},transform,{transform}')
+        hyprctl('keyword', 'monitor', f'{mon},{mode},auto,{scale:g},transform,{transform}')
         hyprctl('keyword', 'input:touchdevice:transform', str(transform))
         hyprctl('keyword', 'input:touchdevice:output', mon)
     log(f'{mon}: transform {transform}')

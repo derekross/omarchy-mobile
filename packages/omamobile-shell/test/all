@@ -547,6 +547,7 @@ bash -n hooks/theme-set-keyboard || fail "the theme-set hook parses"
 # The hardware-key binds skip squeekboard's virtual keyboard: its layout's
 # key codes reach 124 (XF86PowerOff in Hyprland's keymap) and share the held
 # state with the real buttons.
+grep -c 'backends/display.sh' hypr/phone.lua >/dev/null && grep -c 'logger -t omamobile-display' hypr/phone.lua >/dev/null || fail "the saved refresh rate is applied at session start, errors logged"
 [[ $(grep -c 'device = hw_keys' hypr/phone.lua) == 5 ]] || fail "the five hardware-key binds are limited to real keyboards"
 grep -c 'local osk_devices = { "hl-virtual-keyboard-squeekboard", "hl-virtual-keyboard-tactus" }' hypr/phone.lua >/dev/null &&
   grep -c 'local hw_keys = { inclusive = false, list = osk_devices }' hypr/phone.lua >/dev/null || fail "squeekboard and Tactus are excluded from the hardware-key binds"

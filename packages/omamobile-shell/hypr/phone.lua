@@ -133,6 +133,24 @@ o.bind("XF86AudioRaiseVolume", "Volume up released", "omamobile-keys volume-up-r
 -- onboarding that Omarchy's installer does on a computer.
 o.launch_on_start("omamobile-onboarding --nudge")
 
+-- The refresh rate chosen in Settings (omamobile-settings' display.sh apply),
+-- applied at each session start and again after every config reload: the rate
+-- is an eval'd monitor rule, which a reload (the shell package's upgrade hook
+-- runs one) drops, and the panel would fall back to Hyprland's own pick (120).
+-- With no saved rate, or one the panel no longer lists, it uses the device
+-- default (/usr/share/omamobile/refresh-rate-default, husky: 60) if the panel
+-- lists it, else does nothing at all; the script may also be absent without the
+-- Settings app (omamobile-apps, a dependency of this package, pulls it in).
+-- apply only evals a monitor rule, so it cannot loop on reload; it sends
+-- nothing when the panel already runs the rate, takes a lock (session start
+-- and the first reload may both run it), waits up to 5 s for the monitor and
+-- reads the rate back. With the screen off Hyprland ignores the rule, so apply
+-- fails then (logged) and the rate comes back at the next reload or rotation.
+local apply_rate = o.launch("bash -c 'f=/usr/lib/omamobile-settings/backends/display.sh; [ -r \"$f\" ] || exit 0; "
+  .. "out=$(bash \"$f\" apply 2>&1) || logger -t omamobile-display \"apply failed: $out\"; exit 0'")
+hl.on("hyprland.start", function() hl.exec_cmd(apply_rate) end)
+hl.on("config.reloaded", function() hl.exec_cmd(apply_rate) end)
+
 -- The screensaver turns the on-screen keyboard off while it runs and back on
 -- when it exits (patches/omarchy/0006). A session restart, a reboot or the
 -- lock can end it before it does, which left the keyboard off for good. No
