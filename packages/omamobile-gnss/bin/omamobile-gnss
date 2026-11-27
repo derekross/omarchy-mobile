@@ -28,10 +28,17 @@ STACK=omamobile-gnss.service
 FORCE=omamobile-gnss-force.service
 AGENT=omamobile-geoclue-agent.service
 LTO_TIMER=omamobile-gnss-lto.timer
-LTO_FILE=/var/lib/omamobile-vendor/gnss/data/vendor/gps/lto2.dat
-ROOT=/usr/lib/omamobile-vendor/gnss/root
+# The OMAMOBILE_GNSS_ROOT, _LTO_FILE and _REGULATORS overrides are for the
+# tests, so they never read the machine they run on
+LTO_FILE=${OMAMOBILE_GNSS_LTO_FILE:-/var/lib/omamobile-vendor/gnss/data/vendor/gps/lto2.dat}
+REGULATORS=${OMAMOBILE_GNSS_REGULATORS:-/sys/class/regulator}
+ROOT=${OMAMOBILE_GNSS_ROOT:-/usr/lib/omamobile-vendor/gnss/root}
 # the Pixel 9a's image (gnss-slsi): no Broadcom orbit predictions there
-[[ ! -d $ROOT && -d /usr/lib/omamobile-vendor/gnss-slsi/root ]] && ROOT=/usr/lib/omamobile-vendor/gnss-slsi/root
+[[ -z ${OMAMOBILE_GNSS_ROOT:-} && ! -d $ROOT && -d /usr/lib/omamobile-vendor/gnss-slsi/root ]] && ROOT=/usr/lib/omamobile-vendor/gnss-slsi/root
+# a Qualcomm phone: the modem's GNSS over QMI LOC, no vendor files
+# (omamobile-gnss-qmi-loc; the device package ships this file)
+QMI_LOC_CONF=${OMAMOBILE_GNSS_QMI_LOC_CONF:-/usr/share/omamobile/gnss/qmi-loc.conf}
+qmi_loc() { [[ -f $QMI_LOC_CONF ]]; }
 
 usage() {
   sed -n '3,17s/^# \{0,1\}//p' "$0" >&2
@@ -55,7 +62,12 @@ state() { systemctl "$1" "$2" 2>/dev/null || true; }
 # vdd_gnss_core regulator means sec_acpm isn't loaded, so the rails are off.
 powered() {
   local r
-  for r in /sys/class/regulator/regulator.*; do
+  # the modem's engine runs while its LOC session does
+  if qmi_loc; then
+    [[ $(state is-active $STACK) == active ]] && echo yes || echo no
+    return
+  fi
+  for r in "$REGULATORS"/regulator.*; do
     [[ $(cat "$r/name" 2>/dev/null) == vdd_gnss_core ]] || continue
     [[ $(cat "$r/state" 2>/dev/null) == enabled ]] && echo yes || echo no
     return
@@ -87,17 +99,23 @@ status() {
   lto=$(lto_age)
   if [[ ${1:-} == --json ]]; then
     printf '{"location":"%s","running":"%s","forced":"%s","powered":"%s","agent":"%s","lto_age_hours":"%s","installed":%s}\n' \
-      "$location" "$running" "$forced" "$powered" "$agent" "$lto" "$([[ -d $ROOT ]] && echo true || echo false)"
+      "$location" "$running" "$forced" "$powered" "$agent" "$lto" "$([[ -d $ROOT ]] || qmi_loc && echo true || echo false)"
   else
     echo "location: $location"
     echo "receiver running: $running$([[ $forced == yes ]] && echo " (forced)")"
-    echo "chip powered: $powered"
+    if qmi_loc; then
+      echo "modem GNSS session: $powered"
+    else
+      echo "chip powered: $powered"
+    fi
     echo "GeoClue agent: $agent"
-    case $lto in
-      none|unknown) echo "orbit predictions (LTO): $lto" ;;
-      *) echo "orbit predictions (LTO): ${lto} h old" ;;
-    esac
-    [[ -d $ROOT ]] || echo "vendor files: missing ($ROOT; tools/extract-vendor-chroot -p gnss, or -p gnss-slsi -d tegu)"
+    if ! qmi_loc; then
+      case $lto in
+        none|unknown) echo "orbit predictions (LTO): $lto" ;;
+        *) echo "orbit predictions (LTO): ${lto} h old" ;;
+      esac
+    fi
+    [[ -d $ROOT ]] || qmi_loc || echo "vendor files: missing ($ROOT; tools/extract-vendor-chroot -p gnss, or -p gnss-slsi -d tegu)"
   fi
 }
 
@@ -105,7 +123,7 @@ case ${1:-} in
   on)
     as_root on
     systemctl enable --now "$SOCKET"
-    [[ $ROOT == */gnss/root ]] && systemctl enable --now "$LTO_TIMER"
+    [[ $ROOT == */gnss/root ]] && ! qmi_loc && systemctl enable --now "$LTO_TIMER"
     systemctl --global enable "$AGENT"
     ;;
   off)

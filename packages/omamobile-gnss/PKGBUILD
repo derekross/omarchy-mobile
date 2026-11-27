@@ -3,7 +3,7 @@
 pkgname=omamobile-gnss
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omamobile GNSS for the Pixel 7 Pro: Broadcom's lhd/gpsd in a vendor chroot, NMEA to GeoClue on demand"
+pkgdesc="Omamobile GNSS: Broadcom's lhd/gpsd in a vendor chroot (Pixel), or a Qualcomm modem's QMI LOC; NMEA to GeoClue on demand"
 arch=(aarch64)
 url="https://github.com/derekross/omamobile"
 license=(MIT)
