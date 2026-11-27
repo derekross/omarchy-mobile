@@ -9737,6 +9737,47 @@ Coverage of a hardware scan chain absent from the
 saved artifacts remains unverified. Keep direct
 PSM1, PHY TX and host reads disabled.
 
+###### Offline D1 power-domain scandump selection and DPU block
+
+The retained stock crash log reports `S2M status:
+Blocked by PD`, `PD status: disabled` and an all-zero
+16-byte PD debug vector. ABL `0x529e0`–`0x52a10`
+obtains the status and vector from GDMC. The vector
+request is command `0x19000003` through ABL
+`0xc7118` and `0xc6e1c`. The GDMC selector 3
+handler copies four words from `0x69920200`.
+Selector 2 reports the separate policy status using
+the enable bit in `0x69920230`. GDMC also checks
+the policy block in its crash-reset scandump
+decision at text offset `0x3898`.
+
+The `disabled (0/27)` line counts set bits in the
+returned policy vector. ABL `0x538dc`–`0x53950`
+walks 27 label/bit-index rows at `0x2084d0`,
+calling `0xc8998` for each. All 27 selected bits
+are zero in the retained vectors. The policy labels include
+`fabdisp_scan_en` at bit `0x44`. They have no
+separate DPU entry and do not describe chain
+contents. The crash log also reports incomplete
+scan preparation. The earlier `scan2mem_init`
+and DDR save/restore messages show setup activity.
+The retained crash provides no completed DPU scan.
+
+ABL's separate block table at `0x236048` has 33
+entries. It names `fabdisp` at ordinal 13 and
+`dpu` at ordinal 22 (`0x2361a8`). The DPU record
+uses layout 8 and validation tags `0xa616` and
+`0xa617`. The validator at `0x56224`–`0x562dc`
+uses indices `0x1c9fe` and `0x1ca10` to decode
+two 16-bit tags from the packed DPU scan data.
+The previously traced DP0 peer indices decode
+link FSM bits. These entries establish a named
+DPU scan block and a few known fields. They give
+no register-to-scan-bit mapping for AP
+`0x0f409018`. Whether the physical chain includes
+the PSM1 descriptor remains unverified. Keep
+direct PSM1, PHY TX and host reads disabled.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
