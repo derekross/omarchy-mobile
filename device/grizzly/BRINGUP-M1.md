@@ -8294,6 +8294,7 @@ DSI0 host node. Host ID, version and `pwr_up`
 remain gated on independent APB and external reset
 qualification.
 
+The full ARM64 Image linked, including both drivers.
 The changed objects and Grizzly DTB compiled with
 `W=1`. Checkpatch passed with its new-file reminder
 suppressed after the paths were added to the
