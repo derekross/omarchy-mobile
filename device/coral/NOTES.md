@@ -44,6 +44,10 @@ entry names the kernel build its results ran on.
 | Suspend | no | Screen DPMS off/on + touch wake work; system `s2idle` / deep sleep is inhibited (`nosleep`) | [NOTES](#2026-10-22-boot-without-a-usb-data-link-guarded-persistence-test-wi-fi-and-sim) |
 | Fingerprint | - | Hardware does not exist on Pixel 4 XL (uses Face IR instead) | — |
 
+## 2026-11-22: libcamera's IMX481 helper and tuning come from the OnePlus 7T Pro
+
+`libcamera` 0.7.2-4.24 (patch 0058, [#934](https://github.com/derekross/omamobile/pull/934)) adds a camera sensor helper and a simple-IPA tuning file for the IMX481, written for the OnePlus 7T Pro's ultrawide. `coral`'s rear telephoto is an IMX481 and its driver names it `imx481`, so from that package on it takes the same helper (black level 64 at 10 bits, Sony's analogue gain) and `imx481.yaml`, whose contrast autofocus is tuned for the 7T Pro's AK7374 lens. Check the telephoto's black level, gain and focus against these values before relying on them.
+
 ## 2026-10-22: boot without a USB data link, guarded persistence test, Wi-Fi and SIM
 
 Kernel: `#30` (installed in `boot_a`; see [BRINGUP-M1 §6](BRINGUP-M1.md#6-evidence-from-the-phone-kernel-build-provenance-and-owner-confirmation)).
