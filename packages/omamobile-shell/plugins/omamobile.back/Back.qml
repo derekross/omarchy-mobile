@@ -67,12 +67,21 @@ Item {
 
   // `shell call omamobile.back state ''`
   function state() {
-    return JSON.stringify({ fullscreen: fullscreenOnScreen, strips: !fullscreenOnScreen, edge: edge, threshold: BackModel.THRESHOLD,
+    return JSON.stringify({ fullscreen: fullscreenOnScreen, strips: !fullscreenOnScreen, edge: edge, topGap: topGap, bottomGap: bottomGap, threshold: BackModel.THRESHOLD,
                             asks: BackLink.names() })
   }
 
   // The touchable strip at each edge, and the width its window draws in.
   readonly property int edge: 14
+  // The strips stop short of the corners, where apps keep their most-used
+  // buttons (a bottom tab bar's first and last tab, a header's menu and
+  // action): a touch on a strip never reaches the app, so a tap there did
+  // nothing, and X's last tab in Chromium took up to ten taps (2026-11-26).
+  // Android's edges let taps through; on Wayland a surface can't, so the
+  // corners are the app's. A bottom bar is about 56-64 px tall, a header
+  // about 56 under the status bar.
+  readonly property int bottomGap: Math.max(88, Style.space(88))
+  readonly property int topGap: Math.max(56, Style.space(56))
   readonly property int arrowSize: Math.max(40, Style.space(40))
   readonly property int reach: arrowSize + 24
 
@@ -156,6 +165,8 @@ Item {
         id: strip
         anchors.top: parent.top
         anchors.bottom: parent.bottom
+        anchors.topMargin: root.topGap
+        anchors.bottomMargin: root.bottomGap
         x: win.rightEdge ? parent.width - width : 0
         width: root.edge
 

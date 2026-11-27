@@ -1361,6 +1361,8 @@ PY
 pass "Mobile network page"
 bash -n bin/omamobile-sleepd || fail "omamobile-sleepd parses"
 bash test/sleepd.sh || fail "omamobile-sleepd"
+bash -n systemd/system-sleep/omamobile-sleepd-race || fail "omamobile-sleepd-race parses"
+bash test/sleepd-race.sh || fail "omamobile-sleepd-race"
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-doubletap || fail "omamobile-doubletap parses"
 python3 -B test/doubletap.py >/dev/null || { python3 -B test/doubletap.py | grep -v '^ok'; fail "omamobile-doubletap"; }
 pass "omamobile-doubletap: double taps and the touchscreen by its capabilities"
@@ -1422,6 +1424,7 @@ grep -cx 'ExecStart=/usr/bin/omamobile-setup-user' systemd/user/omamobile-setup-
    $(readlink "$u/graphical-session.target.wants/omamobile-sleepd.service") == ../omamobile-sleepd.service ]] \
   || fail "the sleep watcher is staged and runs for every user's session"
 grep -cx 'ExecStart=/usr/bin/omamobile-sleepd' systemd/user/omamobile-sleepd.service >/dev/null || fail "the unit runs the watcher"
+[[ -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-sleepd-race ]] || fail "the sleep race hook is staged"
 # Double tap to wake: phone.lua turns Hyprland's wake on touch off, so the
 # watcher must run for every session, or a single touch and a double tap
 # both leave an unlocked phone dark.

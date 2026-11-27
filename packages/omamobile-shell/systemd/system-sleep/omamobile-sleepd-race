@@ -1,0 +1,55 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# A sleep must not go ahead once the owner has woken the phone in the second
+# or so it takes systemd to get there. Two cases, both seen on the Pixel 9a
+# with the modem waking it every 10-30 s (2026-11-26):
+#   - The power key pressed after systemd froze the session: the key's
+#     wakeup event came before the suspend began and nothing counted it, so
+#     the phone slept with the press unseen until the next wake. Writing
+#     wakeup_count back here makes the kernel count wakeup events from now
+#     on, and one before the freeze ends aborts the sleep, as on Android.
+#   - The screen lit (a key or a touch before the freeze) after
+#     omamobile-sleepd asked for this sleep: the session was frozen with the
+#     screen on, touch dead, until the next wake. An alarm timer armed 1.5 s
+#     ahead makes the kernel's alarm timer refuse the suspend (it refuses any
+#     with an alarm due within 2 s) and the session is thawed at once.
+# A sleep someone else asked for with the screen lit (the system menu) goes
+# ahead as before: only omamobile-sleepd's request, marked in its runtime
+# directory, is aborted.
+case "$1/${2:-}" in pre/suspend | pre/suspend-then-hibernate) ;; *) exit 0 ;; esac
+sys=${OMAMOBILE_SLEEP_SYSFS:-/sys}
+run=${OMAMOBILE_SLEEP_RUN:-/run/user}
+
+if c=$(timeout 1 cat "$sys/power/wakeup_count" 2>/dev/null); then
+  echo "$c" > "$sys/power/wakeup_count" 2>/dev/null ||
+    echo "omamobile-sleepd-race: a wakeup event came while the sleep was being set up"
+fi
+
+asked=
+now=$(printf '%(%s)T' -1)
+for f in "$run"/*/omamobile-sleepd.request; do
+  [[ -e $f ]] || continue
+  (( now - $(stat -c %Y "$f") <= 20 )) && asked=$f
+  rm -f "$f"
+done
+[[ -n $asked ]] || exit 0
+
+# Lit: a connected panel enabled and not in DPMS off. Not bl_power: on tegu
+# a DPMS-off panel keeps it at 0 (omamobile-keys).
+lit=
+for c in "$sys"/class/drm/card*-*; do
+  [[ -r $c/enabled && $(<"$c/status") == connected ]] || continue
+  [[ $(<"$c/enabled") == enabled && $(<"$c/dpms") == On ]] && lit=$c
+done
+[[ -n $lit ]] || exit 0
+
+echo "omamobile-sleepd-race: the screen came on after omamobile-sleepd asked for this sleep: refusing it"
+[[ -n ${OMAMOBILE_SLEEP_RACE_DRY:-} ]] && exit 0
+# CLOCK_BOOTTIME_ALARM is 9; the process holds the timer through the freeze.
+setsid python3 -I -c '
+import os, time
+fd = os.timerfd_create(getattr(time, "CLOCK_BOOTTIME_ALARM", 9))
+os.timerfd_settime(fd, initial=1.5)
+time.sleep(5)
+' </dev/null >/dev/null 2>&1 &
+exit 0

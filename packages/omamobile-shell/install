@@ -31,6 +31,9 @@ done < <(find squeekboard/keyboards -type f -name '*.yaml' -print0)
 # Omarchy hook scripts that omamobile-setup-user links into the user's
 # ~/.config/omarchy/hooks/ (the keyboard's theme-set hook)
 install -Dm755 hooks/theme-set-keyboard "$destination/usr/share/omamobile/shell/hooks/theme-set-keyboard"
+# A sleep omamobile-sleepd asked for stops if the owner wakes the phone
+# before systemd gets there.
+install -Dm755 systemd/system-sleep/omamobile-sleepd-race "$destination/usr/lib/systemd/system-sleep/omamobile-sleepd-race"
 install -Dm644 systemd/omamobile-nfc-open.service "$destination/usr/lib/systemd/system/omamobile-nfc-open.service"
 install -Dm644 systemd/user/omarchy-fcitx5-omamobile.conf "$destination/usr/lib/systemd/user/omarchy-fcitx5.service.d/omamobile.conf"
 # squeekboard's user unit runs the keyboard the owner chose (omamobile-osk)

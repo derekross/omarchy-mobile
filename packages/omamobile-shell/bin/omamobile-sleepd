@@ -154,6 +154,14 @@ request() {
   # next wake finds the glance, and a touch that wakes it only wakes it.
   # Bounded: a stuck shell must not hold the watcher up.
   timeout 3 omarchy-shell lock dark >/dev/null 2>&1
+  # The screen may have come on during that: then don't ask at all.
+  screen_off || { log "the screen came on: not sleeping"; return 0; }
+  # Marks this sleep as ours for the system sleep hook
+  # (omamobile-sleepd-race), which refuses it if the screen comes on before
+  # systemd freezes the session. systemctl returns once logind has queued
+  # the sleep, so the hook removes the mark; it counts for 20 s at most.
+  local mark=${XDG_RUNTIME_DIR:-/run/user/$UID}/omamobile-sleepd.request
+  : > "$mark" 2>/dev/null
   systemctl suspend 2>&1 | sed 's/^/omamobile-sleepd: systemctl: /'
 }
 
