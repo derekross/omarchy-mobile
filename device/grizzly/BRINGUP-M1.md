@@ -8417,6 +8417,47 @@ status services audited above offer neither a path to the
 APB cell nor that reset evidence. Leave direct status and
 host reads disabled until these checks pass.
 
+###### D1 APB clock-cell reset scope
+
+ABL resolves `dpu_dsi0_apb_clk` to the group-4 cell at
+`0x0f4196e0`. The direct reset helper at `0x7b5b4`
+temporarily changes the cell's control at offset `0x00`,
+sets the active-low reset request in bit 0 at offset `0x0c`,
+polls bit 12 at offset `0x1c`, and restores the control
+word. For this descriptor the request and acknowledgement
+addresses are `0x0f4196ec` and `0x0f4196fc`. A set bit 12
+is the deasserted acknowledgement for that request.
+The gate uses a separate request at offset `0x04` and a
+separate acknowledgement, bit 8 of the same status word.
+The reset helper touches only the selected clock cell.
+Firmware therefore identifies its reset handshake but
+does not identify the downstream reset nets or where the
+acknowledgement is generated relative to those nets.
+
+CPM's low-level read-only getter at `0x19190` extracts that
+same single bit from the selected cell. The reset-status
+handler at `0x3859c` looks up a reset group and packs one
+acknowledgement bit per listed cell into a reply bitmask.
+The grouping comes from the firmware table. There is no
+implicit whole-block reset indication in the low-level
+getter. The lookup rejects display LPCM `0x23` before
+reading any cell. The seven reset provider children in both
+stock D1 B0 trees with DTBO entry 19 applied also omit
+`0x23`. Neither the DSI0 host nor its CD-PHY has a reset
+phandle in either merge.
+
+The stock host ID and version witness establish that the
+host APB interface responded in the stock sequence.
+The later `pwr_up` read covers an internal host enable
+field. The PHY's reset and shutdown fields cover its
+separate APB bank. None supplies a readback of the external
+host reset boundary. No mapped D1 status source was found
+for that boundary. Before adding a test, obtain a reset
+routing description or a supported readback whose
+documented scope covers the external host reset inputs, and
+qualify the exact access path. DSI0 host and direct LPCM
+status reads stay disabled.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
