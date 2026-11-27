@@ -7144,6 +7144,37 @@ Fastboot returned 134 seconds after the trace boot
 request. Stock A completed boot with enforcing verity
 and the original VBMeta digest.
 
+###### Combined stock D1 UIC and PHY reset trace
+
+`pack-stock-inventory.py --dsi0-phy-reset-uic-trace`
+packages the two existing trace helpers for a single
+attended boot. The UIC probes arm before `ufs.ko` and
+their output reaches ramoops after the bounded inventory
+scan, even if UFS never exposes partitions. PID 1 closes
+the UIC trace before invoking the NV guard. If the guard
+passes, PID 1 attempts the DSI0 trace and reports the
+UIC capture result independently. A missing inventory or
+failed guard prevents display module load. Both traces
+use the monotonic clock, and the independent 90-second
+warm return stays armed.
+
+Check the UIC rows for the `0x1587` request, interrupt
+and wait result. If the display trace runs, use
+`check-stock-dsi0-trace.py --require-phy-reset TRACE`
+to correlate the active-only PHY readbacks with DSI0 ON
+and the host `pwr_up` read. A failed UFS scan leaves
+the PHY fields unobserved.
+
+The packed `init_boot` SHA-256 is
+`ab087582a1dccb2dbf000c5151f49c379b8df51ef35a821812559ecbf7be1383`.
+The four other images and both trace helpers match the
+previous fixtures byte for byte. The NV guard is
+unchanged. All five hashes, AVB, initramfs readback,
+handoff bounds and saved slot fit passed. Offline tests
+exercised the path with a passing guard, missing
+partitions, a failed guard, either trace failing and
+an ambiguous fixture. The combined boot remains pending.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler

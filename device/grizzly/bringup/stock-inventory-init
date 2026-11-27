@@ -804,7 +804,9 @@ if [ -e "$dsi0_phy_reset_marker" ] || [ -L "$dsi0_phy_reset_marker" ]; then
 fi
 if [ -e "$dsi0_manifest" ] || [ -L "$dsi0_manifest" ]; then
     if [ "$fixture" != inventory ] || [ "$nv_guard_requested" != yes ] ||
-       [ "$usb2_requested" = yes ] || [ "$refclk_requested" = yes ] || [ "$ufs_trace_requested" = yes ] ||
+       [ "$usb2_requested" = yes ] || [ "$refclk_requested" = yes ] ||
+       { [ "$ufs_trace_requested" = yes ] &&
+         { [ "$ufs_uic_requested" != yes ] || [ "$dsi0_phy_reset_requested" != yes ]; }; } ||
        [ ! -f "$dsi0_manifest" ] || [ -L "$dsi0_manifest" ] ||
        [ ! -f /grizzly-inventory/stock-dsi0-trace.sh ] || [ -L /grizzly-inventory/stock-dsi0-trace.sh ]; then
         end_inventory "DSI0 trace fixture is ambiguous or incomplete"
@@ -878,6 +880,9 @@ if stock_inventory_scan /sys/class/block yes; then
         stock_nv_guard "$bb" /sys/class/block /proc/self/mountinfo /grizzly-inventory/nv-ro "$nv_snapshot_output" ||
             end_inventory "NV guard failed"
         if [ -f "$dsi0_manifest" ]; then
+            if [ "$ufs_uic_requested" = yes ]; then
+                stock_inventory_log "UFS UIC trace and NV guard finished capture_ok=$ap_trace_ok"
+            fi
             run_stock_dsi0_trace || end_inventory "DSI0 trace unavailable after NV guard"
             end_inventory "DSI0 trace and NV guard complete"
         fi

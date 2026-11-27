@@ -215,7 +215,7 @@ def pack(args):
                 if args.nv_guard_only or args.ufs_refclk_only or power_trace or args.usb2_test or args.dsi0_trace:
                     write_payload(root / "grizzly-inventory/nv-guard.sh",
                                   (HERE / "stock-nv-guard.sh").read_bytes(), 0o644)
-                if args.nv_guard_only or args.dsi0_trace:
+                if args.nv_guard_only or (args.dsi0_trace and not args.ufs_uic_trace):
                     write_payload(root / "grizzly-inventory/nv-guard-only", b"", 0o644)
                 if args.dsi0_trace:
                     display_manifest = "\n".join(DSI0_MODULES) + "\n"
@@ -450,6 +450,8 @@ def main():
                       help="correlate the early DSI0 OFF reply with genpd sync and its worker")
     mode.add_argument("--dsi0-phy-reset-trace", action="store_true",
                       help="correlate active-only stock PHY reset readbacks with DSI0 ON and host status")
+    mode.add_argument("--dsi0-phy-reset-uic-trace", action="store_true",
+                      help="record UFS startup before the guarded stock DSI0 PHY reset trace")
     mode.add_argument("--ufs-refclk-only", action="store_true",
                       help="read the stock UFS device's reference-clock attribute after the NV guard")
     mode.add_argument("--ufs-power-trace", action="store_true",
@@ -474,6 +476,9 @@ def main():
                                help="use the static NV reader in --usb2-test with the verified isolation DTBO")
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
+    if args.dsi0_phy_reset_uic_trace:
+        args.dsi0_phy_reset_trace = True
+        args.ufs_uic_trace = True
     args.dsi0_trace |= args.dsi0_pll_trace or args.dsi0_genpd_trace or args.dsi0_phy_reset_trace
     if (args.usb2_ep0_trace or args.usb2_nv_reader) and not args.usb2_test:
         parser.error("USB2 isolation options require --usb2-test")
