@@ -7456,6 +7456,41 @@ failure to restore read-only sysfs, a second binding
 and incomplete connector discovery. Hardware binding
 remains pending.
 
+###### Attended stock CGYDA connector discovery
+
+On 2026-11-27 the first NV rescue did not enumerate
+over USB. The rescue retry copied and verified all nine
+NV partitions privately on the Mac, with a total of
+3,392,151,552 bytes. After the rescue returned to
+Fastboot, all five discovery images were staged to B.
+The full `vendor_boot_b` readback matched, and the
+discovery fixture booted once.
+
+| Kernel uptime | Discovery result |
+| ---: | --- |
+| 5.574238 s | The NV guard passed for five parent disks and nine target partitions. |
+| 7.123461 s | All three I²C exclusions were verified and sysfs was read-only. |
+| 7.324250 s | DesignWare bound only to `3a1ce000.i2c`. |
+| 10.534273 s | The S2DOS07x02 client `9-0060` was bound. CGYDA was missing, so the fixture stopped before reading cached DRM connector status. |
+| 17.637541 s | Stock CGYDA probe reported `failed to get reset gpio (-EPROBE_DEFER)`. |
+| 31.921332 s | Late regulator cleanup failed to set the disable register after a DesignWare timeout (`-110`). |
+| 90.885854 s | The warm return timer requested restart. |
+
+The Google DSI0 connector platform driver probed but
+also reported a failed device-link creation for `9-0060`.
+That platform probe does not establish a connected DRM
+connector. The packed B0 tree routes the panel's
+`reset-gpios` phandle `0xa1`, line 11, to
+`google,da9188-gpio`. The factory `da9188-gpio.ko`
+is absent from this fixture's manifest. No display
+commit was issued. The late regulator timeout leaves
+the resulting VDDD state unverified.
+
+Ramoops and `SYSTEM_LAST_KMSG` matched on all 40
+selected lines. Fastboot returned 133 seconds after
+the B boot request. Stock A completed boot with
+enforcing verity and matching VBMeta.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
