@@ -113,3 +113,128 @@ stock_panel_discover() (
     done
     [ "$count" -eq 1 ] && [ "$status" = connected ]
 )
+
+stock_panel_check_gpio() (
+    set +f
+    count=0
+    for device in "$1"/bus/platform/drivers/da9188-gpio/*; do
+        [ -L "$device" ] && [ -r "$device/of_node/compatible" ] || continue
+        compatible=$("$bb" tr '\000' '\n' < "$device/of_node/compatible") || return 1
+        [ "$compatible" = google,da9188-gpio ] || continue
+        # The driver link can appear before probe has registered the chip.
+        for chip in "$device"/gpiochip*; do
+            [ -d "$chip" ] || continue
+            count=$((count + 1))
+        done
+    done
+    [ "$count" -eq 1 ]
+)
+
+stock_panel_trace_begin() {
+    [ ! -d "$panel_tracefs/events/grizzly_vddd" ] || return 1
+    "$bb" mkdir "$panel_instance" || return 1
+    panel_instance_owned=yes
+    printf '0\n' > "$panel_instance/tracing_on" &&
+        printf 'mono\n' > "$panel_instance/trace_clock" &&
+        printf '64\n' > "$panel_instance/buffer_size_kb" || return 1
+    for name in smbus_read smbus_reply smbus_write smbus_result; do
+        event=$panel_instance/events/smbus/$name
+        printf '%s\n' 'adapter_nr == 9 && addr == 0x60 && (command == 3 || command == 4)' > "$event/filter" &&
+            printf '1\n' > "$event/enable" || return 1
+    done
+    printf '1\n' > "$panel_instance/tracing_on" &&
+        printf 'VDDD SMBus trace armed\n' > "$panel_instance/trace_marker"
+}
+
+stock_panel_trace_irq() {
+    event=$panel_instance/events/i2c_dw/i2c_dw_isr
+    printf '%s\n' 'label == "3a1ce000.i2c"' > "$event/filter" &&
+        printf '1\n' > "$event/enable"
+}
+
+stock_panel_trace_disable_probe() (
+    events=$panel_instance/events/grizzly_vddd
+    "$bb" awk '
+        $3 == "s2dos07x02_disable" && $4 == "[s2dos07x02_regulator]" { found++ }
+        END { exit !(found == 1) }
+    ' /proc/kallsyms || return 1
+    # w0 holds the SMBus result at +0x34 and the returned status at +0x38.
+    printf '%s\n' 'p:grizzly_vddd/vddd_i2c s2dos07x02_regulator:s2dos07x02_disable+0x34 result=%x0:s32' \
+        >> "$panel_tracefs/kprobe_events" && printf '1\n' > "$events/vddd_i2c/enable" &&
+    printf '%s\n' 'p:grizzly_vddd/vddd_return s2dos07x02_regulator:s2dos07x02_disable+0x38 result=%x0:s32' \
+        >> "$panel_tracefs/kprobe_events" && printf '1\n' > "$events/vddd_return/enable" &&
+    printf 'VDDD disable probes armed\n' > "$panel_instance/trace_marker"
+)
+
+stock_panel_trace_cleanup() {
+    "$bb" rmdir "$panel_instance" || return 1
+    failed=0
+    for name in vddd_i2c vddd_return; do
+        if [ -d "$panel_tracefs/events/grizzly_vddd/$name" ]; then
+            printf '%s\n' "-:grizzly_vddd/$name" >> "$panel_tracefs/kprobe_events" || failed=1
+        fi
+    done
+    [ "$failed" -eq 0 ]
+}
+
+stock_panel_trace_dump() (
+    printf '0\n' > "$panel_instance/tracing_on" || return 1
+    trace=$("$bb" awk '
+        NR > 96 || length($0) > 512 { bad=1; exit }
+        /entries-in-buffer\/entries-written:|LOST EVENTS|: (smbus_(read|reply|write|result)|i2c_dw_isr|vddd_(i2c|return)|tracing_mark_write): / {
+            print
+        }
+        END { exit bad }
+    ' "$panel_instance/trace") || return 1
+    while IFS= read -r line; do
+        stock_inventory_log "DSI0 panel VDDD trace $line" || return 1
+    done <<EOF
+$trace
+EOF
+    profile=$("$bb" awk '
+        $1 ~ /^vddd_(i2c|return)$/ { probes++; missed += $3 }
+        END { printf "probes=%d missed=%d", probes, missed }
+    ' "$panel_tracefs/kprobe_profile") || return 1
+    stock_inventory_log "DSI0 panel VDDD profile $profile" || return 1
+    [ "$profile" = 'probes=2 missed=0' ] || return 1
+    printf '%s\n' "$trace" | "$bb" awk '
+        /LOST EVENTS/ { lost=1 }
+        /entries-in-buffer\/entries-written:/ && match($0, /[0-9]+\/[0-9]+/) {
+            split(substr($0, RSTART, RLENGTH), c, "/")
+        }
+        END { exit !(c[1] != "" && c[1] == c[2] && !lost) }
+    '
+)
+
+stock_panel_run() (
+    panel_tracefs=/grizzly-inventory/panel-tracefs
+    panel_instance=$panel_tracefs/instances/grizzly_vddd
+    panel_instance_owned=no
+    "$bb" mkdir -m 0700 "$panel_tracefs" || return 1
+    if ! "$bb" mount -t tracefs -o nosuid,nodev,noexec,mode=0700 tracefs "$panel_tracefs"; then
+        "$bb" rmdir "$panel_tracefs"
+        return 1
+    fi
+    trap 'if [ "$panel_instance_owned" = yes ]; then
+              stock_panel_trace_cleanup || stock_inventory_log "DSI0 panel VDDD cleanup failed"
+          fi
+          "$bb" umount "$panel_tracefs" && "$bb" rmdir "$panel_tracefs"' 0
+    stock_panel_trace_begin || return 1
+    result=0
+    if stock_inventory_modules load "$1"; then
+        "$bb" sleep 3 && stock_panel_discover /sys || result=1
+    else
+        stock_inventory_log "DSI0 panel module load failed"
+        result=1
+    fi
+    # The previous disable timed out at 31.92 s. End before the return timer.
+    IFS=' .' read -r uptime rest < /proc/uptime || return 1
+    if [ "$uptime" -lt 45 ]; then
+        "$bb" sleep "$((45 - uptime))" || return 1
+    fi
+    stock_panel_trace_dump || {
+        stock_inventory_log "DSI0 panel VDDD capture incomplete"
+        result=1
+    }
+    return "$result"
+)

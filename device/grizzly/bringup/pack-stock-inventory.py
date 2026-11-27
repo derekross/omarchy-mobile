@@ -52,7 +52,7 @@ DSI0_MODULES = (
 )
 DSI0_PANEL_MODULES = (
     "i2c-designware-core.ko", "i2c-designware-platform.ko", "s2dos07x02-regulator.ko",
-    "gs-panel.ko", "panel-gs-pkcgda.ko",
+    "da9188-gpio.ko", "gs-panel.ko", "panel-gs-pkcgda.ko",
 )
 
 

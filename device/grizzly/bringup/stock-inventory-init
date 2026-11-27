@@ -443,6 +443,22 @@ stock_inventory_modules() (
                 }
                 stock_inventory_log "DSI0 panel I2C driver bound only to $panel_bus"
             fi
+            if [ "${dsi0_panel_requested:-no}" = yes ] && [ "$manifest" = "$dsi0_manifest" ]; then
+                case $module in
+                    i2c-designware-core.ko) stock_panel_trace_irq || return 1 ;;
+                    s2dos07x02-regulator.ko) stock_panel_trace_disable_probe || return 1 ;;
+                    da9188-gpio.ko)
+                        for wait in 1 2 3 4 5; do
+                            stock_panel_check_gpio /sys && break
+                            "$bb" sleep 1 || return 1
+                        done
+                        stock_panel_check_gpio /sys || {
+                            stock_inventory_log "DSI0 panel DA9188 GPIO provider did not bind"
+                            return 1
+                        }
+                        stock_inventory_log "DSI0 panel DA9188 GPIO provider bound before CGYDA probe" ;;
+                esac
+            fi
             if [ "$module" = mipi-cdphy.ko ] && [ "${dsi0_pll_arming:-no}" = yes ]; then
                 "$bb" sh "$helper" "$tracefs" "$bb" --pll-probes || return 1
             fi
@@ -951,10 +967,8 @@ if stock_inventory_scan /sys/class/block yes; then
             # shellcheck source=stock-dsi0-panel.sh
             . "$dsi0_helper"
             stock_panel_scope_i2c /sys || end_inventory "DSI0 panel I2C scope could not be verified"
-            stock_inventory_modules load "$dsi0_manifest" || end_inventory "DSI0 panel module load failed"
-            "$bb" sleep 3 || end_inventory "DSI0 panel settle failed"
-            stock_panel_discover /sys || end_inventory "DSI0 panel discovery incomplete"
-            end_inventory "DSI0 panel discovery and NV guard complete"
+            stock_panel_run "$dsi0_manifest" || end_inventory "DSI0 panel discovery incomplete"
+            end_inventory "DSI0 panel discovery, VDDD trace and NV guard complete"
         fi
         if [ "$dsi0_rmw_requested" = yes ]; then
             run_stock_dsi0_rmw_trace || end_inventory "DSI0 PHY register trace unavailable after NV guard"

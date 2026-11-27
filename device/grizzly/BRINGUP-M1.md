@@ -7491,6 +7491,54 @@ selected lines. Fastboot returned 133 seconds after
 the B boot request. Stock A completed boot with
 enforcing verity and matching VBMeta.
 
+###### Revised CGYDA fixture with VDDD timeout trace
+
+The revised `--dsi0-panel-discovery` manifest uses
+the factory `da9188-gpio.ko`. The stock MFD cell
+matches `google,da9188-gpio`. Its probe obtains the
+PMIC mailbox, enables pinctrl and registers the GPIO
+chip at module offset `0x110`. PID 1 verifies the
+bound provider and its registered gpiochip before
+loading CGYDA, whose reset is line 11. The existing
+scoped I²C binding and NV guard remain in place.
+
+The earlier DesignWare timeout dump showed IRQ 419
+pending and unmasked, `IR_STAT=0x200` (STOP detect),
+and `TX_ABRT_SRC=0`. The ISR history contained one
+`0x10` event (TX empty). This is consistent with a
+STOP completion that was still unserviced at the
+deadline. The underlying cause and physical VDDD
+state remain unresolved.
+
+The stock `s2dos07x02_disable` callback clears its
+software enable flag before writing zero to SMBus
+register `0x04`. It logs a transport timeout and
+converts `-110` to success at `0x438`–`0x444`.
+The fixture records both the raw SMBus result at
+`s2dos07x02_disable+0x34` and the regulator return
+at `+0x38`. It also captures native SMBus events
+for adapter 9, address `0x60`, commands `0x03`
+and `0x04`, and native DesignWare ISR events for
+`3a1ce000.i2c`. The trace adds no diagnostic I²C
+transactions or MMIO reads.
+
+The trace starts before the panel suppliers load.
+It dumps at or after 45 seconds of kernel uptime,
+including when module load or connector discovery
+fails. The separate 90-second warm return stays
+armed. The fixture reads cached connector status and
+issues no display commit. The stock drivers still
+perform their normal discovery and regulation.
+
+The packed `init_boot` SHA-256 is
+`554079b5159e6c94ed9b142b1eae0093120c6d48ed47989c2f8e036a722ba36c`.
+The other four images match the attended discovery
+fixture. Offline checks verified archive contents,
+device bounds, all five hashes, GPIO registration
+gating, scoped event setup, timeout export and trace
+loss handling. Probe registration and the revised
+panel binding remain unverified on hardware.
+
 ### Offline stock D1 device reference-clock diagnostic
 
 The exact D1 `reference_clock_frequency_show` handler
