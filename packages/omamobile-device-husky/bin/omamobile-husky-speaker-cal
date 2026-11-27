@@ -117,12 +117,14 @@ stop_if_started() {
 # a DSP that started during the writes is stopped first, so the put-back
 # goes into its cache and turning Preload on loads the firmware again.
 put_back() {
-  local u a bad=
+  local u a bad= held=
   a=${undo[0]%% *}
-  [[ $preload_off == "$a" ]] || stop_if_started "$a"
+  # 2: the DSP still runs (logged with the reboot line); still put back
+  if [[ $preload_off != "$a" ]]; then stop_if_started "$a"; (($? == 2)) && held=1; fi
   for u in "${undo[@]}"; do ctl cset "name=${u%%=*}" "${u#*=}" >/dev/null || bad=1; done
   if [[ -n $bad ]]; then log "$a: putting the cached values back failed; a partial calibration is in the driver's cache: reboot before any speaker stream"; return 1; fi
   log "$a: the writes so far were undone (the driver's cache holds what it held before)"
+  [[ -z $held ]]
 }
 
 # The unit's ExecStopPost=: a file left in /run means the run was killed
@@ -142,12 +144,12 @@ stop_post() {
   trap cut_short TERM INT HUP
   ctl() {
     local left=$((STOP_BUDGET - SECONDS))
-    ((left >= 1)) || { log "no time left for amixer $1 within ${STOP_BUDGET}s"; return 1; }
+    ((left >= 1)) || { log "no time left for amixer $1 within ${STOP_BUDGET}s" >&3; return 1; }
     timeout -k 1 $((left < 4 ? left : 4)) amixer -c 0 "$@"
   }
   mapfile -t undo < "$writing"
   # exactly one amplifier's four controls, each with a 4-byte value
-  a=${undo[0]%% *}
+  a=${undo[0]-}; a=${a%% *}
   [[ $a == Top || $a == Bottom ]] && ((${#undo[@]} == 4)) || a=
   for l in "${undo[@]}"; do
     [[ $l =~ ^(Top|Bottom)\ DSP1\ Protection\ cd\ CAL_[A-Z]+=0x[0-9a-f]{2}(,0x[0-9a-f]{2}){3}$ && ${l%% *} == "$a" ]] || a=
